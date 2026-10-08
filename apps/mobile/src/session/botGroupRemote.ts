@@ -99,7 +99,7 @@ const MEMBER_STATUSES = new Set<BotGroupMemberStatus>(['active', 'paused', 'erro
 const MESSAGE_KINDS = new Set<BotGroupMessageView['kind']>(['message', 'round-end', 'notice', 'plan', 'plan-end']);
 const AUTHOR_KINDS = new Set<BotGroupMessageView['authorKind']>(['user', 'bot', 'system']);
 const NOTICE_CODES = new Set<string>([
-  'member-failed', 'member-timeout', 'member-unavailable', 'plan-failed', 'plan-stopped', 'workdir-unavailable',
+  'member-joined', 'member-failed', 'member-timeout', 'member-unavailable', 'plan-failed', 'plan-stopped', 'workdir-unavailable',
 ]);
 const PLAN_STATUSES = new Set<BotGroupPlanView['status']>([
   'proposed', 'running', 'waiting', 'done', 'stopped', 'dismissed', 'superseded',
@@ -294,6 +294,8 @@ function parseLastMessage(value: unknown): BotGroupLastMessage | null {
     authorKind,
     authorName: text(record.authorName, MAX_NAME) ?? '',
     preview: text(record.preview, 4_096) ?? '',
+    ...(typeof record.noticeCode === 'string' && NOTICE_CODES.has(record.noticeCode)
+      ? { noticeCode: record.noticeCode as BotGroupMessageView['noticeCode'] } : {}),
     createdAt,
   };
 }

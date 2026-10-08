@@ -50,6 +50,7 @@ import { createPortal } from 'react-dom';
 import { Save, Table2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { fileBrowserApiFor } from '@/lib/fileBrowserTransport';
+import { createFileTransferProgressValues } from '@/lib/fileTransferProgress';
 
 import { Spinner } from '@/components/ui/spinner';
 import { acquireFindInPage } from '@/components/find-in-page/findInPageOwnership';
@@ -1415,40 +1416,23 @@ function FetchingProgress({
   phase?: 'upload' | 'download';
 }) {
   const { t } = useTranslation();
-  const sample = useRef<{ t: number; bytes: number; speed: number; phase?: string }>({
-    t: 0,
-    bytes: 0,
-    speed: 0,
-    phase: undefined,
-  });
-  const now = performance.now();
-  const st = sample.current;
-  if (st.phase !== phase) {
-    st.phase = phase;
-    st.t = now;
-    st.bytes = received;
-    st.speed = 0;
-  } else if (now - st.t >= 800) {
-    const inst = Math.max(0, received - st.bytes) / ((now - st.t) / 1000);
-    st.speed = st.speed > 0 ? st.speed * 0.6 + inst * 0.4 : inst;
-    st.t = now;
-    st.bytes = received;
-  }
-  const pct = total > 0 ? Math.floor((received / total) * 100) : 0;
+  const sample = useRef(createFileTransferProgressValues());
+  const values = sample.current({ received, total, phase });
   return (
     <div className="flex h-full w-full flex-col items-center justify-center gap-3">
       <Spinner size={18} className="text-[var(--cmd-palette-item-meta)]" />
       <span className="text-13 text-[var(--cmd-palette-item-meta)]">
         {t(
-          phase === 'upload'
-            ? 'ccAgent.workdirBrowse.fileBody.fetchingRemoteUpload'
-            : 'ccAgent.workdirBrowse.fileBody.fetchingRemote',
-          {
-            percent: pct,
-            received: formatBytes(received),
-            total: formatBytes(total),
-            speed: st.speed > 0 ? `${formatBytes(st.speed)}/s` : '—',
-          },
+          values.preparing
+            ? 'chat.remoteFile.fetching'
+            : total <= 0
+              ? phase === 'upload'
+                ? 'chat.remoteFile.uploadProgressUnknown'
+                : 'chat.remoteFile.downloadProgressUnknown'
+              : phase === 'upload'
+                ? 'ccAgent.workdirBrowse.fileBody.fetchingRemoteUpload'
+                : 'ccAgent.workdirBrowse.fileBody.fetchingRemote',
+          values,
         )}
       </span>
     </div>

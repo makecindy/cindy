@@ -324,6 +324,14 @@ describe('group timeline', () => {
     expect(h.markRead).toHaveBeenLastCalledWith('owner', 'mac', 'g1', 7000);
   });
 
+  it('renders the joined member as a localized system line without a chat bubble', async () => {
+    await render(group({ messages: [message('join', 1, { kind: 'notice', authorKind: 'system',
+      authorName: 'Taylor', authorBotId: null, noticeCode: 'member-joined', content: 'Fallback text' })] }));
+    expect(all('botGroup.notice').map(entry => entry.textContent)).toEqual(['groupChat.notice.memberJoined(name=Taylor)']);
+    expect(all('botGroup.message.user')).toHaveLength(0);
+    expect(all('botGroup.message.bot')).toHaveLength(0);
+  });
+
   it('renders messages, notices, round ends and plan ends like the desktop timeline', async () => {
     await render();
     expect(byId('botGroup.message.user')?.textContent).toBe('@咪咪 帮我做官网');

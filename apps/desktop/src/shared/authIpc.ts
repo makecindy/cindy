@@ -27,9 +27,12 @@ export type DesktopLoginAction =
   | { type: 'request-binding-code'; contact: string }
   | { type: 'verify-binding'; contact: string; code: string };
 
+/** In-memory presentation metadata; never a persisted cooldown or retry budget. */
+export type DesktopLoginState = AuthFlowState & { retryAt?: number };
+
 export type DesktopLoginActionResult =
-  | { success: true; state: AuthFlowState }
-  | { success: false; code: string; state: AuthFlowState | null };
+  | { success: true; state: DesktopLoginState }
+  | { success: false; code: string; state: DesktopLoginState | null; retryAt?: number };
 
 /**
  * 登录准备态(「正在连接登录服务」)最多转圈的时长。
@@ -38,13 +41,19 @@ export type DesktopLoginActionResult =
 export const LOGIN_PREPARING_UNLOCK_TIMEOUT_MS = 30_000;
 
 export type SettledDesktopLoginActionResult =
-  | { success: true; state: AuthFlowState }
-  | { success: false; code: string; state: AuthFlowState };
+  | { success: true; state: DesktopLoginState }
+  | { success: false; code: string; state: DesktopLoginState; retryAt?: number };
 
 export function loginPreparingErrorState(
   code = 'AUTH_SERVICE_UNAVAILABLE',
-): Extract<AuthFlowState, { step: 'error' }> {
-  return { step: 'error', code, recoverTo: 'identifier' };
+  retryAt?: number,
+): Extract<DesktopLoginState, { step: 'error' }> {
+  return {
+    step: 'error',
+    code,
+    recoverTo: 'identifier',
+    ...(code === 'RATE_LIMITED' && retryAt !== undefined ? { retryAt } : {}),
+  };
 }
 
 /** IPC 失败且 `state == null` 时不得让 renderer 停在 preparing。 */
@@ -54,10 +63,10 @@ export function settleDesktopLoginResult(
   if (result.state) {
     return result.success
       ? { success: true, state: result.state }
-      : { success: false, code: result.code, state: result.state };
+      : { ...result, state: result.state };
   }
   const code = result.success === false ? result.code : 'AUTH_SERVICE_UNAVAILABLE';
-  return { success: false, code, state: loginPreparingErrorState(code) };
+  return { ...result, success: false, code, state: loginPreparingErrorState(code) };
 }
 
 /**

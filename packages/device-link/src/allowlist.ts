@@ -25,6 +25,7 @@
  * Renderer 可调用。它由业务 dispatch 拦截,绝不放行通用 UI / shell IPC。
  */
 import { FILE_PEER_CHANNEL } from './filePeer.js';
+import { REMOTE_AGENT_CHANNEL } from './remoteAgent.js';
 import { TASK_MIGRATION_CHANNEL } from './taskMigration.js';
 import { SESSION_ACTIVITY_CHANNEL, SESSION_SYNC_CHANNEL } from './topics.js';
 import { REMOTE_DESKTOP_INVOKE_MS } from './remoteDesktopIce.js';
@@ -182,6 +183,7 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   'maker:input:resume',
   'maker:input:retry-last-error',
   'maker:input:clear-error',
+  'maker:input:cancel-usage-limit-wait',
   'maker:input:remove',
   'maker:input:update-text',
   // 整条内容替换(文本+附件),手机端排队消息复用 composer 编辑;老被控端无 handler →
@@ -259,6 +261,9 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   // 模型供应商目录(只读):远程会话的模型选择器据此 1:1 镜像被控端的「供应商+模型」结构。
   // 被控端 dispatch 在返回前剥离 routing 等执行字段(见 device-link/dispatch.ts),只回显示用字段。
   'maker:provider:list',
+  // 供应商分享(只读):被控电脑收到的、别人分享给它的供应商目录(经被控电脑代读，手机读不到
+  // 另一个账号的电脑)。只回显示用字段，供手机模型列表的远程供应商区域使用。
+  'maker:provider-share:received-catalogs', // PROVIDER_SHARE_RECEIVED_CATALOGS_CHANNEL
   // Git safety 设置(只读):远程 Codex Rewind 入口必须按被控端是否会创建 safety snapshot
   // 决定显隐。SET/RESET 不放行,控制端不能改被控端全局偏好。
   'maker:git-safety:get',
@@ -330,6 +335,10 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   DL_MEDIA_FETCH_CHANNEL,
   FILE_PEER_CHANNEL,
   TASK_MIGRATION_CHANNEL,
+  // 远程 Agent(被控端 dispatch 拦截执行，不落 ipcMain handler)：在被控端用它自己的登录与
+  // 供应商运行 Agent，文件、命令与 Cindy 工具回到控制端执行。准入同 fs:list-dir 的论证：
+  // 同账号 + 被控端显式打开远程控制时，控制端本就能驱动被控端的 Agent；不进共享任务白名单。
+  REMOTE_AGENT_CHANNEL,
   // 出方向语音转写(被控端 dispatch 拦截执行,不落 ipcMain handler;复用被控端 ASR 配置)。
   DL_VOICE_TRANSCRIBE_CHANNEL,
   // 临时 voice credential 同步(被控端 dispatch 拦截执行,不落 ipcMain handler;禁止泛化)。
@@ -428,6 +437,12 @@ const EXTENDED_INVOKE_CHANNELS: readonly string[] = [
   // → 控制端降级空表(面板退化为事件流 + 消息扫描两源)。
   'maker:session-background-tasks:list',
   'maker:session-background-activity',
+  // 后台任务停止(写):单个任务精确停止 / 会话级「全部停止」。handler 只按 sessionId
+  // (+ taskId)操作被控端活跃会话,无 event.sender 依赖、无本机 UI 副作用;任务真身在
+  // 被控端,控制端本机调用只会假成功。仅同账号远控,不进 sharedTask 访客白名单。
+  // 老被控端无此 channel → CHANNEL_NOT_ALLOWED → 控制端提示升级被控端。
+  'maker:agent-task:stop',
+  'maker:session-background-tasks:stop',
   // Durable PI Subagent truth and process handles live on the data-owning device.
   // Reads and exact controls must execute there; the controller must never fall
   // back to its own pi-agent-home for a remote task.
@@ -507,6 +522,8 @@ const EXTENDED_INVOKE_CHANNELS: readonly string[] = [
   'maker:list-customizations',
   'maker:scan-at-resources',
   // —— 插件列表(只读)——
+  // Public composer metadata only; no paths, secrets, lifecycle writes or shared guests.
+  'ghosts:composer-list',
   'maker:plugins:list',
   // 单个插件的启停状态(只读)。与 maker:plugins:list 同类,差别只在它不跳过
   // HOSTED_ELSEWHERE 插件、且按 id 精确查。准入三条:handler 只读 settings + 项目
@@ -588,6 +605,7 @@ const EXTENDED_INVOKE_CHANNELS: readonly string[] = [
   'worktree:suggest-name',
   'worktree:create',
   'worktree:discard-precreated',
+  'worktree:cancel-precreated',
   'worktree:removal-preview',
   // —— 个人 Telegram bot 跨设备上下线(准入论证见上方 DL_TELEGRAM_* 常量注释)——
   // 两条都由被控端 dispatch 拦截执行, 不是 ipcMain handler。
@@ -610,6 +628,7 @@ export const REMOTE_REVIEW_EXTERNAL_INPUT_CHANNELS: ReadonlySet<string> = new Se
   'maker:input:resume',
   'maker:input:retry-last-error',
   'maker:input:clear-error',
+  'maker:input:cancel-usage-limit-wait',
   'maker:input:remove',
   'maker:input:update-text',
   'maker:input:update-content',
@@ -762,6 +781,7 @@ export const INVOKE_TIMEOUT_OVERRIDES_MS: Readonly<Record<string, number>> = {
   'worktree:create': 60_000,
   // 可能先等待同 sessionId 的晚到 create 释放互斥锁，再执行 git worktree remove。
   'worktree:discard-precreated': 60_000,
+  'worktree:cancel-precreated': 60_000,
   // pi 手动压缩调 LLM 生成摘要,大上下文 + 网关排队可达分钟级(core 侧
   // PI_COMPACT_TIMEOUT_MS = 10min);默认 30s 隧道超时会截断远程压缩请求,
   // 用户在控制端看到的就是「无反馈失败」。给足执行预算 + 回程余量:

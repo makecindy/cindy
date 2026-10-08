@@ -21,25 +21,33 @@ export interface TelegramInlineKeyboardButton {
   callback_data: string;
 }
 
-export function buildCardPayload(spec: InteractiveCardSpec): {
-  html: string;
-  replyMarkup: { inline_keyboard: TelegramInlineKeyboardButton[][] } | undefined;
-} {
+/** 交互卡的渲染输入: 标题 + markdown 正文 + 有序按钮(两个 bot 同一形状)。 */
+export interface TelegramCardLayoutInput<B extends { label: string }> {
+  title?: string;
+  body: string;
+  buttons: readonly B[];
+}
+
+/**
+ * 交互卡的渲染与按钮排布(两个 bot 同源)。正文: 粗体标题 + markdown → HTML, 再按
+ * `cardTextMax` 做标签栈安全截断; 按钮: label 截到 `buttonLabelMax`, 短 label
+ * (≤ `pairLabelMax`)两两并排, 长 label 独占一行。
+ *
+ * 只排布、不编码回调 —— 回调怎么落地是传输层的事: 个人 bot 编成内存 ref token
+ * (`buildCardPayload`), 官方 bot 交给服务端铸 callback_data(desktop
+ * `hook-control/telegramCardOps.ts`)。
+ */
+export function layoutTelegramCard<B extends { label: string }>(
+  spec: TelegramCardLayoutInput<B>,
+): { html: string; rows: Array<Array<{ button: B; text: string }>> } {
   const title = spec.title ? `<b>${escapeTitle(spec.title)}</b>\n\n` : '';
   const { html: body } = markdownToTelegramHtml(spec.body);
   const html = capRenderedText(`${title}${body}`, TELEGRAM_CARD_LAYOUT.cardTextMax);
 
-  // 无按钮时必须显式下发空键盘: 省略 reply_markup 只会改文本, Telegram 保留旧键盘,
-  // 于是已收口的卡片(过期/已解决)仍带着可点的按钮。
-  if (spec.buttons.length === 0) return { html, replyMarkup: { inline_keyboard: [] } };
-
-  const rows: TelegramInlineKeyboardButton[][] = [];
-  let pendingPair: TelegramInlineKeyboardButton | null = null;
+  const rows: Array<Array<{ button: B; text: string }>> = [];
+  let pendingPair: { button: B; text: string } | null = null;
   for (const button of spec.buttons) {
-    const rendered: TelegramInlineKeyboardButton = {
-      text: button.label.slice(0, TELEGRAM_CARD_LAYOUT.buttonLabelMax),
-      callback_data: encodeCallbackData(button.id, button.payload ?? {}),
-    };
+    const rendered = { button, text: button.label.slice(0, TELEGRAM_CARD_LAYOUT.buttonLabelMax) };
     if (button.label.length <= TELEGRAM_CARD_LAYOUT.pairLabelMax) {
       if (pendingPair) {
         rows.push([pendingPair, rendered]);
@@ -56,7 +64,27 @@ export function buildCardPayload(spec: InteractiveCardSpec): {
     rows.push([rendered]);
   }
   if (pendingPair) rows.push([pendingPair]);
-  return { html, replyMarkup: { inline_keyboard: rows } };
+  return { html, rows };
+}
+
+export function buildCardPayload(spec: InteractiveCardSpec): {
+  html: string;
+  replyMarkup: { inline_keyboard: TelegramInlineKeyboardButton[][] } | undefined;
+} {
+  const { html, rows } = layoutTelegramCard(spec);
+  // 无按钮时必须显式下发空键盘: 省略 reply_markup 只会改文本, Telegram 保留旧键盘,
+  // 于是已收口的卡片(过期/已解决)仍带着可点的按钮。
+  return {
+    html,
+    replyMarkup: {
+      inline_keyboard: rows.map((row) =>
+        row.map(({ button, text }) => ({
+          text,
+          callback_data: encodeCallbackData(button.id, button.payload ?? {}),
+        })),
+      ),
+    },
+  };
 }
 
 /**

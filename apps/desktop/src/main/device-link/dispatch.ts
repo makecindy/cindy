@@ -2,9 +2,11 @@ import { executeTaskTags, TASK_TAG_CHANNEL } from '../localDb/ipc/taskTags.js';
 import type { TaskTagRequest } from '@cindy/maker-shared';
 import {
   FILE_PEER_CHANNEL,
+  REMOTE_AGENT_CHANNEL,
   TASK_MIGRATION_CHANNEL,
   encodeSessionTagCatalog,
   decodeSessionTagCatalog,
+  scrubSharedProvider,
 } from '@cindy/device-link';
 import { requestFilePeer, stopFilePeers } from './filePeer';
 import { requestTaskMigration } from '../task-migration/service';
@@ -109,7 +111,7 @@ import {
   redactMessageRowForSharedGuest,
   redactSharedGuestPush,
 } from './sharedTaskMessageOrigin';
-import { isSharedTaskPeer, SHARED_TASK_CAPABILITY } from '@cindy/device-link';
+import { isProviderSharePeer, isSharedTaskPeer, PROVIDER_SHARE_RELAY_CAPABILITY, SHARED_TASK_CAPABILITY } from '@cindy/device-link';
 import { captureSharedTaskPeer, captureSharedTaskPush, assertSharedTaskInvoke, sharedTaskMetadataTopic, sharedTaskAccessFailure } from './sharedTaskDispatch.js';
 import { runAsBackgroundDbRpc } from '../localDb/client/rpcAdmission.js';
 import { fetchLocalMediaToOss } from './mediaFetch';
@@ -322,6 +324,46 @@ export function setRemoteWorkingDirGuard(
 
 export function setRemoteReviewInputGuard(guard: RemoteReviewInputGuard | null): void {
   remoteReviewInputGuard = guard;
+}
+
+/**
+ * 远程 Agent(同账号另一台电脑的任务让 Agent 在本机运行)的处理器；maker 就绪后由
+ * remote-agent/host/service.ts 接入。
+ */
+/**
+ * 供应商分享(另一个账号的受邀者)的准入，由 providerShareRuntime 注入。不注入时任何受邀者
+ * 都被拒绝(fail-closed)，也让本模块不必静态依赖账号与分享运行时。
+ */
+export interface ProviderShareAccessPort {
+  guestAccess(controller: string): { shareId: string; memberId: string; providerId: string } | null;
+  /** 不认识的受邀者连进来时按需刷新一次分享快照。 */
+  ensureKnown(controller: string): Promise<void>;
+  hasShares(): boolean;
+}
+let providerShareAccess: ProviderShareAccessPort | null = null;
+
+export function setProviderShareAccess(port: ProviderShareAccessPort | null): void {
+  providerShareAccess = port;
+}
+
+function providerShareGuestAccess(controller: string): ReturnType<ProviderShareAccessPort['guestAccess']> {
+  return providerShareAccess?.guestAccess(controller) ?? null;
+}
+
+export interface RemoteAgentHandler {
+  handle(controller: string, raw: unknown): Promise<unknown>;
+  abortAll(): void;
+  /** 结束匹配控制端的任务(供应商分享被关闭)。 */
+  abortControllers?(match: (controller: string) => boolean): Promise<void>;
+  /** 结束并清理匹配控制端留在本机的数据(供应商分享被删除)。 */
+  purgeControllers?(match: (controller: string) => boolean): Promise<void>;
+  /** 有进行中任务的控制端。 */
+  activeControllers?(): string[];
+}
+let remoteAgentHandler: RemoteAgentHandler | null = null;
+
+export function setRemoteAgentHandler(handler: RemoteAgentHandler | null): void {
+  remoteAgentHandler = handler;
 }
 
 // Local renderer IPC keeps its sender guard; remote mutations enter the shared action here.
@@ -621,6 +663,24 @@ function projectInvokeResultForTunnel(
   if (channel === 'maker:schedule:list-sidebar-index-runs') {
     return capScheduleSidebarIndexForTunnel(result);
   }
+  // Opt-in projection before tunnel serialization: binding badges never need prompts,
+  // scripts or execution config. Calls without this option keep the full list contract.
+  const scheduleOptions = args[1];
+  if (channel === 'maker:schedule:list'
+    && scheduleOptions && typeof scheduleOptions === 'object'
+    && (scheduleOptions as { sessionBindings?: unknown }).sessionBindings === true
+    && Array.isArray(result)) {
+    return result.filter((row) => row.targetSessionId && row.status !== 'expired').map((row) => ({
+      id: row.id,
+      name: row.name,
+      status: row.status,
+      targetSessionId: row.targetSessionId,
+      cronExpr: row.cronExpr,
+      manual: row.manual,
+      recurring: row.recurring,
+      intervalMs: row.intervalMs,
+    }));
+  }
   if (channel !== 'maker:provider:list') return result;
   const r = result as { providers?: unknown; modelVisibilityOverrides?: unknown; providerOrder?: unknown };
   if (!Array.isArray(r.providers)) return result;
@@ -634,6 +694,10 @@ function projectInvokeResultForTunnel(
     : {};
   const providers = (r.providers as Record<string, unknown>[]).map((p) => {
     const rest = { ...p };
+    // 「允许被远程调用」只是标记、不裁剪目录：远程控制与手机仍要看到全部供应商，
+    // 只有远程 Agent 的选择入口按它筛选。只放行布尔值。
+    delete rest.remoteInvocationEnabled;
+    if (typeof p.remoteInvocationEnabled === 'boolean') rest.remoteInvocationEnabled = p.remoteInvocationEnabled;
     const logoKind = typeof p.id === 'string'
       ? resolveProviderLogoKind(p.id, p.routing as ProviderLogoRouting | undefined)
       : null;
@@ -861,6 +925,8 @@ const controllerLinkGenerationByDevice = new Map<string, number>();
 const controllerDisplayNameByDevice = new Map<string, string>();
 /** 控制帧自报名称仅作数据库展示名缺失时的兼容回退。 */
 const reportedControllerNameByDevice = new Map<string, string>();
+/** 旧 relay presence 主机名：最后一级回退，与自报名同生命周期，供被控浮窗读取。 */
+const fallbackControllerNameByDevice = new Map<string, string>();
 
 /** `sessions` 订阅出现时通知 host replay 当前列表级轻量状态。 */
 type SessionsSubscribedListener = (controllerDeviceId: string) => void;
@@ -903,6 +969,7 @@ function resolveControllerName(deviceId: string, reportedName: unknown): string 
 
 function clearReportedControllerName(deviceId: string): void {
   reportedControllerNameByDevice.delete(deviceId);
+  fallbackControllerNameByDevice.delete(deviceId);
 }
 
 function readConnectionEpoch(client: DeviceLinkClient): number | undefined {
@@ -935,6 +1002,8 @@ export function setControllerDisplayName(deviceId: string, name: string): void {
     controllerDisplayNameByDevice.set(deviceId, normalized);
   } else {
     controllerDisplayNameByDevice.delete(deviceId);
+    // An explicit clear also retires the legacy host name, matching the banner.
+    fallbackControllerNameByDevice.delete(deviceId);
   }
   const displayName = normalized
     ?? reportedControllerNameByDevice.get(deviceId)
@@ -948,6 +1017,7 @@ export function setControllerDisplayName(deviceId: string, name: string): void {
  */
 export function setControllerFallbackDisplayName(deviceId: string, name: string): void {
   const normalized = normalizeControllerName(name);
+  if (normalized) fallbackControllerNameByDevice.set(deviceId, normalized);
   if (
     !normalized
     || controllerDisplayNameByDevice.has(deviceId)
@@ -958,10 +1028,20 @@ export function setControllerFallbackDisplayName(deviceId: string, name: string)
   if (subscriptions.updateControllerMetadata(deviceId, normalized)) syncForwarding();
 }
 
+/** 与被控横幅同一优先级的控制端展示名；未知时返回 undefined，由调用方决定兜底。 */
+export function getControllerDisplayName(deviceId: string): string | undefined {
+  return (
+    controllerDisplayNameByDevice.get(deviceId)
+    ?? reportedControllerNameByDevice.get(deviceId)
+    ?? fallbackControllerNameByDevice.get(deviceId)
+  );
+}
+
 /** 账号切换 / 链路 teardown 时清空 presence 展示名，避免串到下一段身份。 */
 export function clearControllerDisplayNames(): void {
   controllerDisplayNameByDevice.clear();
   reportedControllerNameByDevice.clear();
+  fallbackControllerNameByDevice.clear();
 }
 
 export function getActiveControllers(): ActiveController[] {
@@ -1005,6 +1085,8 @@ function shouldAcquireRemoteInvokeBusyLease(
   if (!payload || typeof payload.channel !== 'string') return false;
   if (isSharedTaskPeer(src)) {
     if (!captureSharedTaskPeer(src)?.isCurrent()) return false;
+  } else if (isProviderSharePeer(src)) {
+    if (!providerShareGuestAccess(src)) return false;
   } else if (!readDeviceLinkSettings().remoteControlEnabled) return false;
   if (isControllerRevoked(src)) return false;
   if (!REMOTE_INVOKE_ALLOWLIST.has(payload.channel)) return false;
@@ -2155,6 +2237,7 @@ export function dropAllControllers(
   reason: 'user' | 'toggle-off' | 'shutdown',
 ): void {
   stopFilePeers();
+  remoteAgentHandler?.abortAll();
   remoteDesktop.stop();
   void remoteCredentialHost.closeAll().catch(() => remoteCredentialHost.dispose());
   const controllerIds = new Set([
@@ -2448,6 +2531,45 @@ function handleLinkOpen(
 ): void {
   // 同 src 的新 link-open / 本轮执行顶掉遗留的 accept 重试(requestId 已过时)
   cancelLinkAcceptRetry(src);
+  // Provider-share guests (another account) may only use this computer's remote agent
+  // for the shared provider. They never subscribe, never become a controlled-device
+  // controller and never reach the same-account paths below.
+  if (isProviderSharePeer(src)) {
+    if (!authorityReady) {
+      const attempt = {};
+      const epoch = client.getConnectionEpoch();
+      pendingSharedTaskOpens.set(src, attempt);
+      const current = () => pendingSharedTaskOpens.get(src) === attempt && activeClient === client &&
+        client.getConnectionEpoch() === epoch && client.getStatus() === 'online';
+      void (providerShareAccess?.ensureKnown(src) ?? Promise.resolve()).then(() => {
+        if (current()) handleLinkOpen(client, src, requestId, payload, acceptAttempt, true);
+      }).catch(() => {
+        if (current()) {
+          pendingSharedTaskOpens.delete(src);
+          client.closeLink(src, 'transport-timeout', 'inbound');
+        }
+      });
+      return;
+    }
+    if (!providerShareGuestAccess(src)
+      || !sanitizeControllerCapabilities(payload?.capabilities).includes(PROVIDER_SHARE_RELAY_CAPABILITY)) {
+      client.closeLink(src, 'revoked', 'inbound');
+      return;
+    }
+    try {
+      client.sendLinkAccept(src, requestId, {
+        appVersion: app.getVersion(), allowlistHash: computeAllowlistHash(),
+        capabilities: [DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1, PROVIDER_SHARE_RELAY_CAPABILITY],
+      });
+    } catch {
+      scheduleLinkAcceptRetry(client, src, requestId, payload, acceptAttempt + 1);
+      return;
+    }
+    markControllerLinkActive(client, src);
+    acceptedLinkControllers.add(src);
+    flushRemoteInvokeResultOutbox(src);
+    return;
+  }
   // Cross-account logical peers never enter the same-account legacy wildcard.
   if (isSharedTaskPeer(src)) {
     if (!authorityReady) {
@@ -2870,6 +2992,7 @@ function settleRemoteInvokeWithOrphanDeadline(
 }
 
 function currentRemoteInvokeAdmissionFailure(src: string): InvokeResultPayload | null {
+  if (isProviderSharePeer(src)) return providerShareGuestAccess(src) ? null : PROVIDER_SHARE_ACCESS_FAILURE;
   if (isSharedTaskPeer(src)) return captureSharedTaskPeer(src) ? null : sharedTaskAccessFailure(src);
   if (!readDeviceLinkSettings().remoteControlEnabled) {
     return { ok: false, error: { code: 'REMOTE_DISABLED', message: 'remote control disabled' } };
@@ -3126,7 +3249,9 @@ function sendInvokeResultSafe(
   const attempt = trySendInvokeResult(client, src, requestId, proactive, channel, args);
   // 以真正能上 wire 的结果作为去重真相：超限原结果若被 compact/改成结构化错误，
   // 不能把缓存留在原始大对象上，否则缓存可能自淘汰且重复 requestId 会再次执行。
-  if (fingerprint !== undefined) {
+  // 远程 Agent 的每个 op 自带幂等(poll 按游标、其余按各自 id 去重)，高频的事件流结果不进
+  // 全局去重缓存，免得冲掉其它控制端非幂等调用的去重记录。
+  if (fingerprint !== undefined && channel !== REMOTE_AGENT_CHANNEL) {
     rememberRemoteInvokeResult(key, fingerprint, attempt.result);
   }
   if (attempt.sent) {
@@ -3163,6 +3288,8 @@ function trySendInvokeResult(
       result = sharedTaskAccessFailure(src, sharedTask);
     }
   }
+  // 撤权后迟到的结果(含 outbox 重发)不再带出数据。
+  if (isProviderSharePeer(src) && !providerShareGuestAccess(src)) result = PROVIDER_SHARE_ACCESS_FAILURE;
   let candidate = result;
   try {
     client.sendInvokeResult(src, requestId, candidate);
@@ -3679,6 +3806,8 @@ function isRemoteSubscriptionTopic(value: unknown): value is Topic {
 }
 
 function handleSubscriptionFrame(src: string, payload: InvokePayload): InvokeResultPayload {
+  // Provider-share guests never subscribe: the remote agent is poll-only.
+  if (isProviderSharePeer(src)) return PROVIDER_SHARE_ACCESS_FAILURE;
   if (isSharedTaskPeer(src)) {
     const sharedTask = captureSharedTaskPeer(src);
     try {
@@ -3780,6 +3909,7 @@ export async function runInvoke(
   payload: InvokePayload | undefined,
   timing = new RemoteInvokeTiming(),
 ): Promise<InvokeResultPayload> {
+  if (isProviderSharePeer(src)) return runProviderShareInvoke(src, payload, timing);
   if (!isSharedTaskPeer(src)) return runAuthorizedInvoke(src, payload, timing);
   const sharedTask = captureSharedTaskPeer(src);
   try {
@@ -3794,6 +3924,98 @@ export async function runInvoke(
   } catch {
     return sharedTaskAccessFailure(src, sharedTask);
   }
+}
+
+const PROVIDER_SHARE_ACCESS_FAILURE: InvokeResultPayload = {
+  ok: false,
+  error: { code: 'ACCESS_REVOKED', message: 'provider share is not available' },
+};
+/** The only channels a provider-share guest may invoke. */
+const PROVIDER_SHARE_CHANNELS: ReadonlySet<string> = new Set([REMOTE_AGENT_CHANNEL, 'maker:provider:list']);
+
+/** Keep only the shared provider (and only while it stays open for remote use). */
+function projectProviderListForShare(result: unknown, providerId: string): unknown {
+  if (!result || typeof result !== 'object' || Array.isArray(result)) return result;
+  const value = result as { providers?: unknown; modelVisibilityOverrides?: unknown; providerOrder?: unknown };
+  const providers = Array.isArray(value.providers)
+    ? (value.providers as Array<Record<string, unknown>>).filter((provider) => provider?.id === providerId && provider.remoteInvocationEnabled === true)
+    : [];
+  const overrides = value.modelVisibilityOverrides && typeof value.modelVisibilityOverrides === 'object' && !Array.isArray(value.modelVisibilityOverrides)
+    ? Object.fromEntries(Object.entries(value.modelVisibilityOverrides).filter(([key]) => key.slice(key.indexOf(':') + 1).startsWith(`${providerId}:`)))
+    : {};
+  // Never hand the sharer's account identity (subscription / ChatGPT login) to another account,
+  // nor this computer's data owner scope: the guest side has no use for it.
+  const rest = Object.fromEntries(Object.entries(value).filter(([key]) => key !== 'dataOwnerId' && key !== 'ownerGeneration'));
+  return {
+    ...rest,
+    providers: providers.map(scrubSharedProvider),
+    modelVisibilityOverrides: overrides,
+    providerOrder: providers.map((provider) => provider.id),
+  };
+}
+
+/**
+ * Provider-share guest invoke: the remote agent channel and the provider list filtered to
+ * the shared provider. Everything else is refused before any same-account handler runs.
+ */
+async function runProviderShareInvoke(
+  src: string, payload: InvokePayload | undefined, timing: RemoteInvokeTiming,
+): Promise<InvokeResultPayload> {
+  const access = providerShareGuestAccess(src);
+  if (!access || !payload || typeof payload.channel !== 'string') return PROVIDER_SHARE_ACCESS_FAILURE;
+  if (!PROVIDER_SHARE_CHANNELS.has(payload.channel)) {
+    log.warn(`blocked provider-share channel from ${shortId(src)}: ${payload.channel}`);
+    return { ok: false, error: { code: 'CHANNEL_NOT_ALLOWED', message: `channel '${payload.channel}' not allowed for shared providers` } };
+  }
+  const result = await runAuthorizedInvoke(src, payload, timing);
+  if (!providerShareGuestAccess(src)) return PROVIDER_SHARE_ACCESS_FAILURE;
+  if (payload.channel === 'maker:provider:list' && result.ok) {
+    return { ...result, result: projectProviderListForShare(result.result, access.providerId) };
+  }
+  return result;
+}
+
+/** For diagnostics: whether any provider share is currently known on this computer. */
+export function hasProviderShares(): boolean {
+  return providerShareAccess?.hasShares() ?? false;
+}
+
+/** Provider-share guests with a running remote-agent task (one entry per task). */
+export function providerShareActiveControllers(): string[] {
+  return (remoteAgentHandler?.activeControllers?.() ?? []).filter((controller) => isProviderSharePeer(controller));
+}
+
+/**
+ * A provider share was paused or removed for some guests: drop their links and pending
+ * results, end their remote-agent tasks, and with purge also delete what they left here.
+ * Only provider-share peers can match, so a buggy matcher can never touch same-account
+ * controllers.
+ */
+export async function revokeProviderShareControllers(
+  match: (controller: string) => boolean,
+  purge: boolean,
+): Promise<void> {
+  const guarded = (controller: string) => isProviderSharePeer(controller) && match(controller);
+  const client = activeClient;
+  const ids = new Set([
+    ...acceptedLinkControllers,
+    ...controllerConnectionEpochByDevice.keys(),
+    ...pendingSharedTaskOpens.keys(),
+  ]);
+  for (const id of ids) {
+    if (!guarded(id)) continue;
+    pendingSharedTaskOpens.delete(id);
+    cancelLinkAcceptRetry(id);
+    purgeRevokedController(id);
+    clearRemoteInvokeStateFor(id);
+    try {
+      client?.closeLink(id, 'revoked', 'inbound');
+    } catch (error) {
+      log.warn(`closeLink failed while revoking provider share guest ${shortId(id)}: ${String(error)}`);
+    }
+  }
+  const handler = remoteAgentHandler;
+  await (purge ? handler?.purgeControllers?.(guarded) : handler?.abortControllers?.(guarded));
 }
 
 async function runAuthorizedInvoke(
@@ -3845,6 +4067,33 @@ async function executeRemoteInvoke(src: string, payload: InvokePayload | undefin
     if (payload.args?.length !== 1) return { ok: false, error: { code: 'IPC_ERROR', message: '[INVALID_PARAMS] Invalid OAuth transaction' } };
     try { return { ok: true, result: await requestPluginOauth(src, payload.args[0]) }; }
     catch { return { ok: false, error: { code: 'IPC_ERROR', message: '[PRECONDITION_FAILED] Remote authorization unavailable' } }; }
+  }
+  if (payload.channel === REMOTE_AGENT_CHANNEL) {
+    // 同账号的另一台电脑让 Agent 在本机运行；共享任务访客无权使用本机的 Agent 登录与额度
+    // (共享任务的通道清单里也没有它，这里再兜一层)。
+    if (isSharedTaskPeer(src)) {
+      return { ok: false, error: { code: 'IPC_ERROR', message: '[REMOTE_AGENT_UNSUPPORTED] not available to shared tasks' } };
+    }
+    const handler = remoteAgentHandler;
+    if (!handler) {
+      return { ok: false, error: { code: 'IPC_ERROR', message: '[REMOTE_AGENT_UNAVAILABLE] not ready yet' } };
+    }
+    try {
+      return { ok: true, result: await timing.measure('handler', () => handler.handle(src, payload.args?.[0])) };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return {
+        ok: false,
+        error: {
+          code: 'IPC_ERROR',
+          message: /^\[REMOTE_AGENT_[A-Z_]+\]/.test(message)
+            ? message
+            : message === 'REMOTE_AGENT_INVALID'
+              ? '[REMOTE_AGENT_INVALID] invalid remote agent request'
+              : '[REMOTE_AGENT_UNAVAILABLE] remote agent request failed',
+        },
+      };
+    }
   }
   if (payload.channel === REMOTE_DESKTOP_CHANNEL) {
     try { return { ok: true, result: await timing.measure('handler', () => requestRemoteDesktop(src, payload.args?.[0])) }; }
@@ -4032,6 +4281,8 @@ async function executeRemoteInvoke(src: string, payload: InvokePayload | undefin
         // 平台按 server 盖章的 src 查本机 presence 登记表,不采信控制端自报的任何
         // 帧内字段(allowlist 只挡 channel 不挡 args,见下方 dispatchLocalInvoke 前的说明)。
         controllerPlatform: getControllerPlatform(src),
+        // 来源展示名快照:presence / 目录权威名优先,其次控制帧自报名;只用于归属展示。
+        controllerName: resolveControllerName(src, undefined),
         historyView,
       },
       // provider:list 的首参只承载隧道能力协商，不进入本机 IPC handler。
@@ -4186,6 +4437,7 @@ export const __testing = {
     setBroadcastTapListener(null);
     presenceOfflineCheck = null;
     remoteReviewInputGuard = null;
+    remoteAgentHandler = null;
     remoteTurnChangeAction = null;
     remoteXaiSubscriptionUsageReader = null;
     remoteClaudeSubscriptionUsageReader = null;
@@ -4197,6 +4449,7 @@ export const __testing = {
   optionalControllerCapabilities,
   sendInvokeResultSafe,
   projectInvokeResultForTunnel,
+  projectProviderListForShare,
   capScheduleSidebarIndexForTunnel,
   remoteScheduleIndexMaxBytes: REMOTE_SCHEDULE_INDEX_MAX_BYTES,
   canCoalesceRemoteListing,

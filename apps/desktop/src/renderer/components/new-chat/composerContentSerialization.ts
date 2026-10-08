@@ -39,12 +39,6 @@ export interface SerializedComposerContent {
   agentReferences: AgentInputReference[];
   pastedTextRanges: PastedTextRange[];
   slashCommandRanges: SlashCommandRange[];
-  /** Host capability atoms are routing metadata, not visible prompt text. */
-  hostCapability?: {
-    capability: string;
-    ghostId: string;
-    name: string;
-  };
 }
 
 type OrderedMarker = '.' | ')' | '、';
@@ -110,7 +104,6 @@ function serializeComposerDocument(
   const mentions: MentionedResource[] = [];
   const seenMentions = new Set<string>();
   let hasQuotes = false;
-  let hostCapability: SerializedComposerContent['hostCapability'];
 
   const addMention = (attrs: MentionChipAttrs) => {
     // Slash commands and deep links are represented in the wire text but are
@@ -332,18 +325,8 @@ function serializeComposerDocument(
           }
           return;
         }
-        if (attrs.kind === 'plugin-capability') {
-          // The chip is a structured routing atom. Keeping it out of the
-          // visible body prevents an automatic start sentence from being
-          // duplicated when the user types their own request after the chip.
-          // ChatInput adds a localized default only for chip-only sends.
-          hostCapability ??= {
-            capability: attrs.path,
-            ghostId: attrs.pluginId || attrs.path,
-            name: attrs.sourceLabel || attrs.label,
-          };
-          return;
-        }
+        // Legacy draft atoms no longer describe executable host capabilities.
+        if (attrs.kind === 'plugin-capability') return;
         if (attrs.kind === 'plugin-resource') {
           const label = attrs.label
             .replace(/\s+/g, ' ')
@@ -537,7 +520,6 @@ function serializeComposerDocument(
     ...serializeComposerContentBlocksWithRanges(blocks, { preserveTrailingWhitespace }),
     mentions,
     hasQuotes,
-    ...(hostCapability ? { hostCapability } : {}),
   };
 }
 

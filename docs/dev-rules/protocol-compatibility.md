@@ -11,6 +11,36 @@
 
 > **增量适用原则**：wire protocol 兼容对所有跨端改动生效，不因是小改而豁免。
 
+## Desktop 远程新建菜单
+
+同账号控制端通过新增只读 `ghosts:composer-list(workingDir?)` 异步取得执行主机的插件菜单。
+响应仅含名称、ID、指令、工具声明、图标、Skill 存在标记与目录过滤后的启用状态，不传安装路径、
+批准记录、配置或凭证。无项目时不传参数；共享任务访客不开放此通道。
+远程清单按序列化后的 UTF-8 字节限制为 1 MiB，为传输封装预留空间；保留所有插件的基础信息，
+先容纳工具声明、再容纳图标。超出剩余预算的可选字段整项省略，工具声明缺失时复用现有
+`ghost_list` 按需查询，图标缺失时显示通用图标。基础信息本身超限则明确失败，不截断插件列表；
+本机清单不受此远程预算影响。
+切换设备、目录或账号后丢弃旧响应；打开菜单、重连或点击重试时重读，不阻塞菜单展开。
+旧主机拒绝未知通道时显示读取失败与重试入口，不用控制端清单替代；插件入口需要执行主机支持此通道。
+
+计划模式复用 `maker:create-session` 的既有可选 `planMode` 参数；新主机创建任务记录时将显式值
+与任务元数据一次写入既有 `planModeEnabled` 字段，写入失败复用创建清理路径，不在创建后另行补写。
+控制端临时镜像与首条消息采用同一选择。未携带参数的旧控制端
+保持原行为；旧主机虽接受启动参数，但不保证持久化初始选择，完整行为需更新执行主机。
+附件复用现有出站上传与接收落盘协议，上传完成后才发送远端引用；移除新建页的旧图片限定，
+不增加媒体协议字段、数据库迁移、服务端能力或 Mobile 原生改动。SSH 的附件限制保持原行为。
+
+## 账号用量上限的自动继续
+
+输入投影 `AgentInputProjection` 新增可选字段 `usageLimitWait: { resumeAt } | null`，与 `error`
+同时出现，表示被控端会在 `resumeAt` 自动继续该任务；旧被控端缺省，控制端按无等待处理。
+新增 invoke `maker:input:cancel-usage-limit-wait(sessionId, opts?)`（Desktop preload、Mobile
+transport 与 device-link 的 core / review-input / mobile allowlist 均已登记），只撤等待、保留错误
+与 typed recovery，返回最新投影；控制端只在投影带等待时显示取消入口，因此不会对旧被控端发起
+该调用。自动继续复用既有 `CONTINUE_AFTER_ERROR_PROMPT` 与 `agentMeta.autoResume`，
+`autoResumeInfo.reason` 新值 `usage-limit-reset`，旧客户端按普通自动续跑行显示。
+Claude Code 终态 error 事件可带 `usageResetAt`（unix ms）。服务端无需改动。
+
 ## Agent 跨设备历史发现与搜索
 
 `cindy_helper` 的 `list_history_devices` 使用现有同账号设备目录；`list_sessions` 和
@@ -123,6 +153,24 @@ SSH 保持仅展示经过存在性复核的工具产物，不把 Desktop 消息�
 本次覆盖 Desktop 设备互联；SSH 任务没有本机历史变更快照，仍不显示该卡片；
 Mobile 未新增卡片入口。服务端无需改动。
 
+## 远程任务文件夹下载
+
+聊天里的「下载到本地」把远程文件或文件夹存进控制端的系统下载文件夹。既有
+`file-browser:remote-op` 的 `caps` 追加可选 `dirExport: true`，并新增两段式 op：
+`exportDirStart { workdir, relPath }` 校验目录在工作目录内（含 realpath）后立即返回
+`transferId`，被控端在后台把目录打成 tar（保留符号链接与可执行位），按 2GB 分段推给
+**发起调用的控制端**（目标取自 invoke 上下文的 `controllerDeviceId`，共享任务访客拒绝）：
+每段先试直连附件，失败回落 OSS，与跨电脑复制任务同一套分段描述（`MigrationFile`）。
+`exportDirStatus { transferId }` 幂等返回 `state`（packing / sending / done / error）、
+进度字节、跳过条目数，`done` 时附分段引用；终态保留 10 分钟，控制端 2 分钟不来轮询即视为
+放弃并中止。控制端取件后从直连收件箱移出（不在收件箱滞留）或下载并删除 OSS 对象，再解包。
+
+旧被控端不声明 `dirExport`（或回 `unknown op: caps`），控制端提示更新远程电脑，不退回逐个
+文件拷贝；嵌套 SSH 工作目录回 `REMOTE_UNSUPPORTED`。旧控制端不调用新 op，行为不变。
+SSH 远程不经 file-service，直接在 SSH exec 通道上流式传回远端 `tar` 输出。未新增 channel、
+relay 类型、allowlist 或持久化 schema，服务端无需改动；Mobile 未接入。实现见
+`apps/desktop/src/main/file-browser/chat-download.ts`、`dir-export.ts` 与 `dir-archive.ts`。
+
 ## 任务列表标签目录
 
 `sessions:list` 第三个参数可追加 `tagCatalog: 1`。支持的主机仅对该请求返回
@@ -158,6 +206,9 @@ Mobile 未新增卡片入口。服务端无需改动。
 按原流程拆掉重建。
 旧被控端丢弃不认识的 `keepVideo`，照旧拆掉重建；旧控制端不发 `keepVideo`，新被控端照旧拆掉重建。
 切换失败仍只结束本次远程桌面 lease。不修改 relay、IPC allowlist 或协议版本；先发被控端。
+Mobile 与 Desktop 远程桌面窗口都按上述规则发送 `keepVideo` 并以 `videoKept` 回执为准；两端还按电脑和
+显示器记住上次的系统分辨率或「适配画面」尺寸（各自本地保存，不进协议），下次连接拿到操作权后重新套用，
+选回电脑原分辨率或恢复原始比例时清除。
 实现见 `apps/desktop/src/main/remote-desktop/controller.ts`，回归见同目录 `__tests__/controller.test.ts`
 与 `packages/device-link/src/__tests__/viewerDisplay.test.ts`。
 
@@ -179,7 +230,9 @@ Mobile 未新增卡片入口。服务端无需改动。
 `offer.settings` 的画质由码率改为档位 `quality: "auto" | "saver" | "hd"`（自动／省流／高清）。
 控制端只表达意图，具体的码率上限、降级取舍（`auto`/`saver` 先降分辨率保帧数，`hd` 锁分辨率
 降帧数）、截屏分辨率与 JPEG 预算由被控端 `apps/desktop/src/shared/remoteDesktopQuality.ts`
-决定，调整数值无需两端同时发版。
+决定，调整数值无需两端同时发版。控制端处于后台观看（`presentation` 已开启，如手机画中画）
+期间，被控端临时按 `saver` 档的码率／帧率上限编码，回到前台即恢复所选档位；这是被控端本地
+行为，控制端发送的档位不变，也不新增协议字段。
 
 新控制端经 `remoteDesktopVideoSettingsWire` 同时发送档位与旧 `bitrate`（auto→0、saver→2M、
 hd→20M）：旧被控端只校验 `bitrate` 并忽略 `quality`，无需新增能力声明。新被控端优先读取
@@ -193,6 +246,22 @@ hd→20M）：旧被控端只校验 `bitrate` 并忽略 `quality`，无需新增
 `x-google-min-bitrate` / `x-google-max-bitrate`，避免近静止画面因发送量过低导致带宽估计塌到
 百 kbps 级、分辨率被锁在低档。这些是 libwebrtc 对发送端生效的本地提示，不改变协商出的编解码；
 不识别它们的控制端不受影响，旧控制端（无 `settings`）的 offer 原样使用。
+
+## 远程桌面查看窗口隐藏时暂停视频
+
+被控端以可选能力 `viewerHidden` 声明支持 `{ op: "viewerHidden", lease, hidden }`：控制端窗口
+隐藏、最小化、切换 macOS Space 或被完全遮挡时，被控端截屏页把当前视频发送端的
+`encoding.active` 置为 `false`，原地停发视频；音频、输入、数据通道与 lease 不受影响，
+`hidden: false` 原地恢复，不重新协商。被控端等截屏页确认编码器已应用才回复成功，未应用（含截屏页忙）
+时返回错误，控制端据此重建视频。请求只要求当前 lease，不要求操作权；每次新 offer
+从未暂停开始，控制端在视频重新播放后按当前可见性重发。显示切换期间同样接受该请求。
+
+新版 Desktop 控制端仅在能力为真时发送，并在持续隐藏 1.5 秒后才暂停（macOS 原生全屏切换
+会短暂报告 hide/show），显示时立即恢复；恢复失败时重建视频连接，不让画面停在旧帧。
+截图中转模式在隐藏期间停止拉取，不涉及协议。旧被控端无该能力，控制端不发送、照旧完整推流；
+旧控制端不发送，新被控端行为不变。只走既有 relay 业务请求，不加入媒体数据通道白名单，
+不修改 relay、服务端或 IPC allowlist；Mobile 未接入。实现见
+`apps/desktop/src/renderer/features/remote-desktop/viewerController.ts` 与 `captureHost.ts`。
 
 ## 远程桌面控制请求走媒体数据通道
 
@@ -209,6 +278,26 @@ lease 与当前 lease 一致时才走通道，否则照旧走 relay。被控端�
 其余失败不自动改走 relay 重试，超时按结果未知处理。
 旧控制端不发通道请求，新被控端行为不变。此扩展不修改 relay、服务端或 device-link 帧格式；
 iOS 原生接收器新增 `sendRequest`，属于冷更新。
+Desktop 控制端由主进程决定并校验每个请求（lease、操作权记录、剪贴板权限都不变），白名单内的请求交给
+远程桌面窗口经它的媒体数据通道发出，回复再交回主进程（`remote-desktop-viewer:channel-request` /
+`channel-reply`，仅限该窗口）；窗口没有发出（无视频、能力缺失、lease 或代次不符、通道拒收）时主进程照旧
+走 relay，已发出的请求不经 relay 重发，窗口退场时在途请求按结果未知结束。
+
+## 远程桌面随连接自动给操作权
+
+被控端以可选能力 `autoControl` 声明（仅当本机能注入输入，即 `canControl` 为真）：`start`、`viewerDisplay`、
+`restoreViewerDisplay` 与 `resolution { temporary: true }` 接受 `control: true`（只接受布尔值），被控端在同一个
+请求里启动输入并以 `controlling: true` 回复，控制端不再单独发 `control`。启动输入失败（缺权限、输入不可用）
+时租约照常返回且 `controlling: false`，控制端再发 `control` 取得具体错误。操作权仍由被控端持有：它决定输入
+助手的启停，手机画中画后台观看照旧经 `presentation` 收回，回到前台再取回；Agent 让位仍只看实际输入。
+
+控制端仅在能力为真时发送 `control: true`；会话层只在请求过时接受 `controlling: true` 回复。旧被控端丢弃不认识的
+字段并回复 `controlling: false`，控制端按原流程补发 `control`；旧控制端不发该字段，新被控端行为不变。
+Desktop 控制端主进程把带 `control: true` 的回复与 `control` 回复同样记录，用于本机剪贴板判定。
+
+Mobile 的「仅查看」改为纯本地开关：只停止转发输入、关闭键盘与鼠标按钮，不再向被控端发 `control: false`；
+被控端仍持有操作权。退出仅查看时若被控端已不再给操作权（输入失败、溢出释放、后台观看），才重新请求。
+不修改 relay、服务端或 IPC allowlist；需被控端和控制端都更新才省掉这次往返。
 
 ## 手机首页会话活动快照
 
@@ -258,6 +347,19 @@ raw history 降级。任务列表活动推送不变，当前轮的正文、工�
 位于未枚举到的盘或 UNC 共享时补为当前项。新版手机在至少两项时于「上级」下显示盘符切换；
 旧被控端不回字段时保留原逐级浏览，旧控制端（含 Desktop 添加远程项目对话框）忽略该字段。
 未新增 channel、relay 类型、allowlist、权限或持久化状态，服务端无需改动。
+
+## 远程任务自动跟进绑定
+
+Desktop 的任务行、置顶卡片与任务顶部通过既有 `maker:schedule:list` 读取当前绑定。
+请求第二个参数可带 `{ sessionBindings: true }`；新主机在隧道序列化前只保留未过期且有
+`targetSessionId` 的条目，以及 `id/name/status/targetSessionId/cronExpr/manual/recurring/intervalMs`
+显示字段，避免完整 prompt、脚本和执行配置占用消息预算。第一参数仍是原有列表过滤器。
+不截断绑定列表，投影后仍受原有隧道消息大小限制。
+
+旧主机忽略第二参数，控制端兼容完整数组并在本地投影；旧主机的超大完整列表仍可能超过
+传输限制，此时保留已有镜像，后续既有 push／重连重新读取。旧控制端、Mobile 与本机未声明
+该选项时仍获取原有完整列表，不增加 channel、权限、relay 类型或服务端发布依赖。
+手动、单次与相对间隔优先于兼容 Cron 占位值。远程绑定只显示提示，不跳到本机管理页。
 
 ## 自动化检查恢复投影
 
@@ -361,6 +463,111 @@ schema，服务端无需改动。
 记录里同名可选字段，旧记录缺省。旧源端不下发，控制端只显示错误提示；旧控制端忽略该字段。
 不新增 channel、relay 类型或持久化 schema，服务端无需改动。
 
+## 远程任务的后台任务状态与停止
+
+Desktop 控制端在远程任务的输入框状态栏显示后台任务提示：进入任务、前台 turn 结束、设备重连或
+窗口重新可见时，读取已登记的只读 `maker:session-background-activity` 与
+`maker:session-background-tasks:list`（两者登记为后台 invoke，让位于用户操作），之后在「在线 + 可见 +
+无前台 turn」期间每 15 秒复查；
+不依赖镜像事件，断连或停读时清空提示。读取失败（含旧被控端）按无后台任务处理。
+
+同账号 invoke allowlist 新增写通道 `maker:agent-task:stop`（单个后台任务）与
+`maker:session-background-tasks:stop`（全部停止，关闭被控端会话进程），入参与本机 IPC 相同，
+handler 无 sender 依赖；不加入共享任务访客白名单，不进入自动重试。任务卡、后台任务面板与状态栏
+的停止按归属粘滞路由到被控端，不回退本机。旧被控端回 `CHANNEL_NOT_ALLOWED` 时提示升级远程电脑；
+旧控制端行为不变。Mobile 未接入，服务端无需改动。实现见 `makerTransport.ts` 与
+`useRemoteSessionBackgroundTasks.ts`。
+
+## 远程 Agent：Agent 在另一台电脑运行
+
+同账号的 A(任务、项目文件与命令所在)可以让 B(打开了「允许远程控制」)用 B 自己的 Agent 程序、
+登录(含 Claude 订阅)、供应商与网络运行 Agent。新增 invoke channel `maker:remote-agent:v1`
+(`packages/device-link/src/remoteAgent.ts`)，只进同账号 allowlist，不进共享任务清单；被控端
+`dispatch.ts` 对共享任务访客再拒一次。
+
+- **方向**：A 始终是发起方。`open / call / reply / push / close / upload / caps` 是 A → B 的指令，
+  `poll` 按游标拉取 B 的 NDJSON 事件流：同一台 B 上的全部任务共用一个 poll(一次带上各任务游标，
+  最多 64 个；无新数据时 B 挂起最多 10s)。A 登记新任务时可再发一个覆盖全部任务的 poll，两个 poll
+  返回的数据可能重叠，回包里的 `from` 标明数据起点，A 按 `from` 去重、游标只进不退；B 不认识的任务
+  或超出已写范围的游标回 `missing`。B 需要 A 处理的事(权限确认、执行器与 MCP 的 HTTP 请求、
+  Codex exec-server 的 WebSocket 帧、`cancel`)都作为事件流里的反向请求，A 用 `reply / push` 回传。
+- **幂等**：`poll` 按游标幂等，只有它在 peer reset 后自动重读(`isPeerResetRetryableInvoke`)；
+  `open` 按 runId、`call` 按 callId、`reply` 按 requestId、`push` 按 seq 去重，不自动重放；
+  该 channel 的结果不进全局去重缓存。
+- **大小**：内联载荷 1MB，更大的 gzip 后按 512KB 分段 `upload`(单个载荷 64MB)；单次 `poll`
+  每个任务最多 512KB、合计 1.5MB(B 轮流决定从哪个任务开始取，积压多的任务不会一直挤占额度)；`push` 单帧 1MB、单次合计 3MB，超长 WebSocket 消息拆段(`more: true`)。
+- **前向兼容**：A 解析事件流时忽略不认识的行类型；B 对不认识的 op / 方法回 `REMOTE_AGENT_INVALID`
+  / `REMOTE_AGENT_UNSUPPORTED`。旧版 B 回 `CHANNEL_NOT_ALLOWED`，A 提示对方版本过旧，不回退到本机运行。
+- **凭证**：模型请求只由 B 上的 Agent 用 B 自己的登录与供应商发出，任何凭证不进事件流；B 本机
+  隧道每个任务一个随机令牌，只监听 127.0.0.1。
+- **Codex 依赖**：B 的 Codex 通过 app-server 的实验接口 `environment/add` + `environments` 把 A 注册为
+  exec-server 执行环境，A 为每条连接起本机 `codex exec-server --listen stdio://`。该接口随 Codex 版本
+  可能变化，升级 Codex 时需回归 `remote-agent/__tests__/codexHosted.e2e.test.ts`。
+- **影子目录与配置同步**：`open` 载荷除项目说明文件外还带 `ancestorFiles`(项目上级目录里的
+  `CLAUDE.md` / `CLAUDE.local.md` / `AGENTS.md` / `AGENTS.override.md`，按层级 `up`，最多 24 级)与
+  `personal`(A 的个人配置：Claude Code 的 `~/.claude/CLAUDE.md`、`skills/agents/commands`、`settings.json`
+  里的权限规则；Codex 的 `AGENTS(.override).md`；不含 hooks / env)。两者缺省按空处理。B 把影子目录按
+  A 的真实路径逐级镜像在 `<runs>/workspaces/<控制端>/<任务>/fs/` 下，`open` 回包的 `mirrorRoot` 告诉 A
+  镜像根，A 据此把影子路径逐级映射回真实路径；项目里已有的同名文件以项目为准。
+- **本机虚拟工作区**：A 在 open 前先调用 caps，只有 B 回包声明
+  virtualWorkspace: true 才发送 open；旧 B 或未声明能力的 B 直接提示升级，不能静默降级到
+  暴露 A 真实路径的合同。支持时，B 使用不含 A 真实目录名的固定短父级层级，继续承载最多 24
+  级祖先说明文件，并回显 virtualWorkspace、extraDirs、writableDirs。Agent prompt、文件
+  引用、工具路径诊断与命令输出使用 B 本机虚拟路径；包含本机路径的文本结果会做投影，写回时再
+  还原到 A 的真实路径，二进制内容保持原样。A 的真实目录继续用于权限 gate、执行与变更抓取，
+  路径别名不增加授权。执行平台与 shell 保留 A 的实际值，以免跨 macOS / Windows / Linux 选错
+  命令。此增量不修改 channel、relay、协议版本或服务器，也不是 OS 虚拟化。
+- **执行环境**(2026-10-07 裁决)：A 上的命令(Claude 的 Bash、Pi 的 `exec.run`、Codex exec-server、
+  搜索)沿用 A 的 Desktop 完整环境，与本机 Agent 一致：真实用户目录、临时目录、`SSH_AUTH_SOCK`、
+  git / gh / npm 配置与用户自己的环境变量照常可用，不另造假 HOME，也不剥离凭证类变量。任务由 A 的
+  用户发起，风险与本机 Agent 相同，由 A 的任务权限档与执行器 gate 把关；上面「凭证」一条只指模型
+  登录与供应商凭证，命令输出照常经事件流回到 B 上的 Agent，与本机 Agent 把输出交给模型相同。虚拟化
+  只作用于 Agent 看到的路径文本：用户目录、临时目录已有别名，PATH 里其余目录在设置虚拟根时登记
+  (`executor/workspace.ts` 的 `setVirtualRoot`，回归见 `executor/__tests__/executor.test.ts`)。
+- **回退**：`REMOTE_AGENT_METHODS` 含 `previewRewindFiles` / `commitRewindFiles`，B 在 `describeHandle`
+  里声明支持后 A 才提供回退；文件按 A 本机的保存点链回退，对话由 B 截断。B 不支持时 A 关闭回退并提示
+  升级那台的 Cindy。
+- **持久化**：A 的 `sessions.agent_device_id`(migration 0123)记住 Agent 所在电脑；旧版本读不到该列，
+  按本机任务处理。服务端代码无改动。
+- **供应商授权(「允许被远程调用」)**：B 在模型供应商设置里逐个打开，默认关；B 没开「允许远程控制」时
+  这一行仍显示但开关不可用，并提示先开启远程控制(供应商分享入口也在这一行)。授权按账号存在 B 本地(`remote-provider-access-prefs.json`)，凭证与路由细节不出 B。
+  `maker:provider:list` 每条供应商附带 `remoteInvocationEnabled: boolean`，**只作标记、不裁剪目录**：
+  远程控制与 Mobile 仍看到全部供应商，忽略该字段即可。A 的远程 Agent 入口(模型选择器左侧栏、换模型、
+  协同 Worker、定时任务读的那台目录)只用值为 `true` 的供应商，缺少该字段按未开放。B 是最终裁决方：
+  `open` 时把来源落到已开放的供应商上(A 没指定来源时只在已开放的里按默认规则挑)并以显式来源启动；
+  `setModel` 显式换来源时同样核对；关掉后进行中的这一轮照常结束，下一次 `send` 被拒。拒绝统一回
+  `REMOTE_AGENT_PROVIDER_NOT_ALLOWED`，A 按 `chat.remoteError` 提示去那台电脑打开开关或换模型。
+- **已建任务换 Agent 所在电脑**(2026-10-07)：选模型时可把 Agent 挪到本机或另一台电脑，与任务中途换
+  引擎同一套意图——下一条消息发送时落地，原生会话在原来那台、接不上，一律全量交接 + 全新原生会话，
+  并插 `agent_switch` 边界行。`maker:switch-session-agent` 新增可选第 7 参 `{ agentDeviceId: string | null }`
+  (null = 任务所在电脑)；不带 = 位置不变(旧控制端与内部调用都走这里，A 不做推断)。pending 意图投影与
+  边界行内容只在换电脑时多出 `agentDeviceId` / `fromAgentDeviceId`、`toAgentDeviceId`、
+  `fromAgentDeviceName`、`toAgentDeviceName`，旧端忽略即可(旧端的分隔条显示成「从 X 切换到 X」)。
+  Agent 要落在另一台电脑时，A 在**选择时**就读那台的目录核对(在线、供应商已开放、有这个模型)，不留
+  发送时才在那台失败、且之后每次发送都重试的意图；本机窗口拿到 `REMOTE_AGENT_DEVICE_UNREACHABLE` /
+  `REMOTE_AGENT_MODEL_UNAVAILABLE`，device-link 控制端降级为 `PRECONDITION_FAILED`。Mobile 与桌面同一套
+  模型列表：A 自己的供应商之外，另列其他同账号电脑已开放远程调用的供应商(Mobile 直接经 device-link 读那台的
+  `maker:provider:list`，不新增 A 侧 channel)；同一台电脑内换模型不带位置，换到另一台电脑先二次确认、再带
+  `agentDeviceId`(null = A)。共享任务访客不能换电脑。
+- **供应商分享(另一个账号用 B 的供应商)**：契约见 `docs/provider-sharing-contract.md`，产品规则见
+  `docs/product-rules/provider-sharing.md`。relay 新增 `Envelope.providerShare` 范围与能力 `provider-share-v1`
+  (`packages/device-link-protocol/src/providerShare.ts`，两仓同文件)，与 `sharedTask` 并列、同一帧不能同时带两种范围；
+  客户端只在 relay 的 hello-ack 声明该能力后才发带范围的帧，本地 peer key(`providerSharePeer.ts`)只在 socket 边界编解码、
+  不上 wire。Desktop 在 hello 与控制端 `CONTROLLER_CAPABILITIES` 里追加声明 `provider-share-v1`(append-only)；B 只接受声明了它的
+  受邀者 link-open，并只建后台链路。受邀者只能 invoke `maker:remote-agent:v1` 与 `maker:provider:list`(只返回分享的那个
+  供应商)，订阅与其他 channel 一律拒绝，撤权后迟到的结果改写为 `ACCESS_REVOKED`。受邀者的任务把 `sessions.agent_device_id`
+  记成 `share:<shareId>`(不改 schema)，旧版本读到它按连不上的电脑处理。受邀者对端的 `open` 载荷按白名单复核
+  (hooks / env / apiKeyHelper 剥离、越界 `@` 引用与 `!` 命令语法中和、不加载 B 的个人化与托管 Skill)，只能恢复自己建立的会话；
+  remote-agent wire 本身不变。新错误码 `REMOTE_AGENT_SHARE_PAUSED` / `REMOTE_AGENT_SHARE_REMOVED` / `REMOTE_AGENT_SHARE_UNAVAILABLE`
+  只在受邀者本机产生(分享者电脑回 `ACCESS_REVOKED`、relay 回 `REMOTE_DISABLED` 时改写成 `UNAVAILABLE`)；
+  控制这台电脑的旧版手机没有对应文案，显示通用的发送失败提示。分享出去的 `maker:provider:list` 去掉分享者的账号身份
+  (`subscriptionAccount` / `openAiAccount` 与名称里的登录名、邮箱，`@cindy/device-link` 的 `scrubSharedProvider`)，
+  分享者电脑、受邀者电脑与手机各过一遍。手机经同账号新 channel `maker:provider-share:received-catalogs`(进同账号 allowlist)
+  读取被控电脑收到的分享及其目录；旧版电脑回 `CHANNEL_NOT_ALLOWED`，手机按没有分享处理。跨区域(P3)经服务端开关开放，
+  受邀者用第二条 relay 连接(`ProviderShareGuest` 认证)，见契约 §6。
+- **暂不支持**：分叉、审查、移动项目、复制到其他电脑、导出 `.cshare`(Agent 会话记录在 B)，入口隐藏、
+  主进程拒绝。
+
 ## 事实来源
 
 | 内容                     | 权威来源                                                                                                                                                                                   |
@@ -373,6 +580,51 @@ schema，服务端无需改动。
 | 插件来源                 | 客户端不预装插件；一律通过 SkillHub 或用户手动安装 `.cindy` 包                                                                                                                             |
 
 ## 1. 两仓本地协议演进
+
+### 官方 Telegram 进度消息由客户端渲染（`telegram-progress-ops-v1`）
+
+双向能力，只在 telegram 连接上声明，且必须与 `msg-op-v1` 同时协商。协商后桌面端用与个人
+bot 同一份过程载体与渲染（见 `docs/product-rules/telegram-bot-parity.md` 第一节）经
+`msg.op` 驱动进度消息；服务端只执行，`turn.progress` 照发但只用于续 lease（私聊草稿模式
+例外，仍由服务端按 `turn.progress` 出草稿）。全部为可选字段增量：
+
+- `MessageOpPayload.purpose?: 'turn-progress'`：有它时 `requestId` 必填，只用于
+  `send` / `edit`（parse 强制）。服务端据 requestId 核验设备归属，把新消息登记为该轮进度
+  消息，终稿后照旧清理；本轮不归客户端承载或已收口时回 `PROGRESS_UNAVAILABLE`。
+- `MessageOpResultPayload.errorCode?: string | null`：服务端自判拒绝码（开放集合，常量
+  `MESSAGE_OP_ERROR_*`）；`channelErrorCode?: number | null`：Telegram 原生 error_code
+  原样透传，`error` 放渠道原文。
+- 幂等：服务端按 opId + 内容指纹去重；回执未知（含 `OUTCOME_UNKNOWN`）时客户端原样重发
+  同 opId 同正文，不换号、不换正文。服务端有应答时只回显原结果；也没有应答时每个 opId
+  只重新执行一次，之后回显缓存的 `OUTCOME_UNKNOWN`。卡片与终稿段最多原样重发 2 次，仍未知
+  就放弃（终稿以 `clientFinal.complete=false` 交回）；进度首帧每个节流窗口重发一次。
+
+任一侧缺席时行为与本能力出现前逐字相同；无数据库迁移、Mobile 冷更或部署顺序要求。实现见
+`hook-control/telegramTurnCarrier.ts`、`telegramMsgOp.ts` 与
+`packages/lizi-im/src/telegram/outboundPolicy.ts`。
+
+同一轴上另有三个独立协商的能力（都要求同时协商 `msg-op-v1`，任一缺席该段照旧由服务端
+渲染）：
+
+- `telegram-final-ops-v1`：普通成功轮次的终稿经 `purpose: 'turn-final'`（`send` 带
+  `finalPart`；协议形状仍允许 `media`，但服务端一律拒收，桌面端也不发：带附件的轮次整轮随 `turn.end`
+  交给服务端，因为持久出箱只存终态文本，本端上传附件中途退出会丢附件）发布；
+  `TurnEndPayload.clientFinal?: { complete }` 告诉服务端是否全部确认。complete 时服务端
+  不再渲染、提升续跑锚点并做收口副作用；否则删掉已落地的客户端终稿段并照旧自己发布。
+  私聊草稿模式下服务端对终稿 op 回 `TURN_UNAVAILABLE`（终稿随草稿通道由服务端发布），
+  桌面端按停手码交回。桌面端发布前先把不带 `clientFinal` 的 `turn.end` 写进持久出箱，
+  崩溃重放走「交回服务端」那一版，终稿必达不降级；本进程仍在发布时重连不重放这份兜底帧。
+- `telegram-card-ops-v1`：执行中交互卡经 `purpose: 'interaction-card'`（带
+  `interactionId`；收口 `edit` 带 `interactionClosed` 并清空按钮）发布；按钮 token 即
+  buttonId，回调仍由服务端转成 `interaction.decision`。协商后桌面端不再为这类卡发
+  `interaction.request` / `interaction.cancel`，op 被明确拒绝时才回落旧帧。
+- `telegram-commands-v1`：新增 `provider.commands.set` 帧（默认菜单有且仅有一份，
+  command / description 遵守 Telegram 限制），服务端执行 `setMyCommands`；只管理默认菜单与
+  `zh` / `ja` / `ko`，每次全量重写，其它语言码（含显式 `en`）忽略。菜单只存服务端
+  内存、不落库：desktop 每次握手重发，服务端重启后到桌面重连前用服务端默认菜单。
+
+新增拒绝码 `TURN_UNAVAILABLE`（终稿 / 卡片 op 时这一轮已收口或不属于该设备）。`msg.op`
+各 purpose 允许的动作与附属字段由 parse 强制联动，放错位置一律拒收。
 
 ### X 回复链的结构化输入
 
@@ -552,6 +804,20 @@ X 快照有请求正文时，按原始 triggerMessageId 排除引用列表中的
   开发不应因此失败。
 - 不要重新引入预装／播种机制或私有种子 submodule；需要推荐插件时走 SkillHub 的
   分发与用户主动安装流程。
+
+## 预创建 worktree 的终止确认
+
+同账号设备互联新增 `worktree:cancel-precreated`，参数仍为 `sessionId` 加 `path` 或
+`recoveryKey` 二选一，成功回执沿用严格的 `{ discarded: true, branchDeleted?: boolean }`。
+主机在与创建共用的任务锁内检查任务归属，再按创建 ID 持久标记取消、回收未认领目录。
+迟到的 worktree 创建和任务启动均检查该标记；有内容改动、运行时占用或真实任务时仍保留。
+
+Mobile 对所有预创建恢复记录（含未收到创建回包的 `reserved`）只接受此终止确认，不用一次 `NOT_FOUND` 授权
+旧式删除。旧主机拒绝未知 channel 时保留记录，不回退 `discard-precreated`；旧控制端
+继续使用原 channel。完全恢复需要两端均更新，服务端与 Mobile 原生配置无需改动。
+恢复仅作用于该任务 ID，不重启 peer 或共享 relay，也不将创建请求加入自动重放。
+终止确认后先持久保存草稿的取消状态和原项目目录，再删除回收账本；再次提交使用新任务 ID。
+手机发件箱保留原持久键与附件目录，只原子替换记录中的远端任务 ID，写入失败仍可恢复原草稿。
 
 ## 3. Ghost manifest 与 Cindy 专属界面能力
 

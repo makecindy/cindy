@@ -60,6 +60,7 @@ beforeEach(() => {
   delete (globalThis as { __cindyOutboxFilesInitialized?: Promise<void> }).__cindyOutboxFilesInitialized;
   fs.ledger.clear();
   fs.directories.clear();
+  fs.readDirectoryAsync.mockImplementation(async (uri) => fs.directories.get(uri) ?? []);
   fs.stageExists = true;
   fs.stagePaths.length = 0;
   fs.removeStage.mockReset();
@@ -71,24 +72,53 @@ beforeEach(() => {
   });
 });
 describe("outbox-owned attachment bytes", () => {
+  it('preserves retained bytes when native directory listings decode realm-qualified account names', async () => {
+    const r = { ...record, version: 1, accountId: '["global","qa-user"]', deviceId: 'host',
+      storageSessionId: 'original.id', item: { sessionId: 'new-id', clientId: 'message' },
+      uploads: [{ fileName: 'slot-0.txt' }] } as DurableOutboxRecord;
+    const root = fs.documentDirectory + 'message-outbox/';
+    const parts = [r.accountId, r.deviceId, r.storageSessionId!, r.item.clientId];
+    let uri = root;
+    for (const name of parts) {
+      fs.directories.set(decodeURIComponent(uri), [name]); // Native filesystem names are decoded.
+      uri += encodeURIComponent(name).replace(/\./g, '%2E') + '/';
+    }
+    fs.directories.set(decodeURIComponent(uri), ['slot-0.txt', 'slot-1.txt']);
+    fs.ledger.set('cindy.mobile.outbox.v1.fixture', JSON.stringify(r));
+    fs.readDirectoryAsync.mockImplementation(async (path) => fs.directories.get(decodeURIComponent(path)) ?? []);
+    fs.getInfoAsync.mockImplementation(async (path) => ({ exists: true, isDirectory: fs.directories.has(decodeURIComponent(path)), size: 24 }));
+    await initializeOutboxFiles();
+    expect(fs.deleteAsync).toHaveBeenCalledExactlyOnceWith(uri + 'slot-1.txt', { idempotent: true });
+  });
+  it('keeps retained bytes at the stable location after a cancelled creation rotates session ID', async () => {
+    const replacement = { ...record, storageSessionId: record.item.sessionId,
+      item: { ...record.item, sessionId: 'fresh-session' } };
+    expect(durableOutboxDirectory(replacement)).toBe(durableOutboxDirectory(record));
+    const upload: DurableUpload = { slot: 0, fileName: 'slot-0.jpg', name: 'photo.jpg', kind: 'image', size: 123 };
+    const retained = await retainOutboxFile(replacement, 0, {
+      ...upload, uri: durableOutboxUploadUri(record, upload),
+    });
+    expect(fs.copyAsync).toHaveBeenCalledWith({ from: durableOutboxUploadUri(record, upload), to: durableOutboxUploadUri(replacement, retained) });
+    expect(retained.fileName).not.toBe(upload.fileName);
+  });
   it('reclaims pre-commit and replaced files while preserving every account ledger', async () => {
     const root = fs.documentDirectory + 'message-outbox/';
     fs.directories.set(root, ['alice', 'bob']);
     for (const accountId of ['alice', 'bob']) {
-      const r = { ...record, version: 1, accountId, uploads: [{ fileName: 'slot-0.jpg' }] } as DurableOutboxRecord;
+      const r = { ...record, version: 1, accountId, item: { ...record.item, sessionId: 'session.name' }, uploads: [{ fileName: 'slot-0.jpg' }] } as DurableOutboxRecord;
       const dir = durableOutboxDirectory(r);
       fs.ledger.set(`cindy.mobile.outbox.v1.${accountId}/mac/session/id`, JSON.stringify(r));
       fs.directories.set(root + accountId + '/', ['mac']);
-      fs.directories.set(root + accountId + '/mac/', ['%2E%2E%2Fsession']);
-      fs.directories.set(root + accountId + '/mac/%2E%2E%2Fsession/', ['id', 'uncommitted']);
+      fs.directories.set(root + accountId + '/mac/', ['session.name']);
+      fs.directories.set(root + accountId + '/mac/session%2Ename/', ['id', 'uncommitted']);
       fs.directories.set(dir, ['slot-0.jpg', 'slot-1.jpg']);
       fs.directories.set(dir.replace('/id/', '/uncommitted/'), ['slot-0.jpg']);
     }
     fs.getInfoAsync.mockImplementation(async (uri) => ({ exists: true, isDirectory: fs.directories.has(uri), size: 123 }));
     await initializeOutboxFiles();
     expect(fs.deleteAsync).toHaveBeenCalledTimes(4);
-    expect(fs.deleteAsync.mock.calls.flat()).not.toContain(durableOutboxDirectory({ ...record, accountId: 'alice' }) + 'slot-0.jpg');
-    expect(fs.deleteAsync.mock.calls.flat()).not.toContain(durableOutboxDirectory({ ...record, accountId: 'bob' }) + 'slot-0.jpg');
+    expect(fs.deleteAsync.mock.calls.flat()).not.toContain(durableOutboxDirectory({ ...record, accountId: 'alice', item: { ...record.item, sessionId: 'session.name' } }) + 'slot-0.jpg');
+    expect(fs.deleteAsync.mock.calls.flat()).not.toContain(durableOutboxDirectory({ ...record, accountId: 'bob', item: { ...record.item, sessionId: 'session.name' } }) + 'slot-0.jpg');
     await retainOutboxFile(record, 0, source);
     await initializeOutboxFiles();
     expect(fs.deleteAsync).toHaveBeenCalledTimes(4);

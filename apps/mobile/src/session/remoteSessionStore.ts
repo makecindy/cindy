@@ -116,6 +116,26 @@ export const sessionPendingWrites = createPendingWriteTracker();
 export const sessionMetaWriteGuard = createLatestWriteGuard();
 export const sessionMetaWriteQueue = createSessionWriteQueue();
 
+/**
+ * 会话元数据写的两个设备 id(首页 / 设备详情 / 会话页菜单 / 协同 Worker 归档共用):
+ *  - rpcDeviceId:出网目标,默认取展示用规范 id(re-link 后认领回当前设备);调用方已按
+ *    路由连着某台设备(会话页)时传 preferredRpcDeviceId 沿用它;
+ *  - shardId:乐观 patch 与失败回滚落的**物理** shard(行真实所在)。re-link 后两者可能
+ *    不同:按规范 id 落 shard 会让乐观移行落空、回滚插进另一个 shard 成重复行。
+ * 都解析不到时返回 null(调用方按「找不到设备」处理)。
+ */
+export function resolveSessionWriteDevices(
+  sessionId: string,
+  session: Pick<RemoteSession, 'canonicalDeviceId' | 'deviceLinkDeviceId'> | null | undefined,
+  preferredRpcDeviceId?: string | null,
+): { rpcDeviceId: string; shardId: string } | null {
+  const indexedDeviceId = sessionDeviceIndex.get(sessionId);
+  const rpcDeviceId = preferredRpcDeviceId || session?.canonicalDeviceId || session?.deviceLinkDeviceId
+    || indexedDeviceId;
+  if (!rpcDeviceId) return null;
+  return { rpcDeviceId, shardId: session?.deviceLinkDeviceId || indexedDeviceId || rpcDeviceId };
+}
+
 export interface RemoteSessionRunStatus {
   isRunning: boolean;
   /** Terminal failure remains sticky until the next run, even after read acknowledgement. */
@@ -3305,13 +3325,37 @@ export const remoteSessionStore = {
   upsertDeviceSession(deviceId: string, deviceName: string, rawSession: RemoteSession): void {
     let stamped = stamp(rawSession, deviceId, deviceName);
     const shard = shards.get(deviceId);
+    const existing = shard?.sessions.find((s) => s.id === rawSession.id);
+    // 在途元数据写保护(与 setDeviceSessions 同口径):单条读回(会话页 getSession、资源页、
+    // 发件箱回包)可能是被控端尚未处理本机写的旧值——
+    //  - 行已被本地乐观移出且 status 在途(归档/删除):不插回,终态由该写的结局负责;
+    //  - 行仍在本地:在途字段用本地当前值覆盖,差异留痕由该写的结局 consume 后 reseed。
+    // 写失败的整行回滚必须先 release 自己的在途登记再 upsert,否则会被这里当成旧读回挡掉。
+    const pendingFields = sessionPendingWrites.pendingFields(rawSession.id);
+    if (pendingFields.length > 0) {
+      if (!existing) {
+        if (pendingFields.includes('status')) return;
+      } else {
+        const overlay: Record<string, unknown> = {};
+        for (const field of pendingFields) {
+          const localValue = (existing as unknown as Record<string, unknown>)[field];
+          overlay[field] = localValue;
+          sessionPendingWrites.noteMaskedValue(
+            rawSession.id,
+            field,
+            (stamped as unknown as Record<string, unknown>)[field],
+            localValue,
+          );
+        }
+        stamped = { ...stamped, ...overlay } as RemoteSession;
+      }
+    }
     if (!shard) {
       shards.set(deviceId, { deviceId, deviceName, sessions: [stamped] });
       recomputeSessions();
       return;
     }
     const next = shard.sessions.filter((s) => s.id !== rawSession.id);
-    const existing = shard.sessions.find((s) => s.id === rawSession.id);
     stamped = preserveSessionRuntimeFields(stamped, existing);
     if (
       existing

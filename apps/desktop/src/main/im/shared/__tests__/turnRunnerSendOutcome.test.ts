@@ -66,6 +66,12 @@ const mocks = vi.hoisted(() => ({
   clearPendingTurnChangeSets: vi.fn(),
   noteSilentStopUserSend: vi.fn(),
   noteSilentStopSessionReset: vi.fn(),
+  // 与生产同语义的最小替身: 统一停止按 id 取**当前** runtime 并中止(唯一的一次 abort)。
+  stopSessionTurnExplicitly: vi.fn(async (sessionId: string): Promise<void> => {
+    await (mocks.getMaker() as { getSession(id: string): { abort(): Promise<void> } | undefined })
+      .getSession(sessionId)
+      ?.abort();
+  }),
   onSilentStopSettled: vi.fn(() => vi.fn()),
   installDesktopInteractionListener: vi.fn(),
   takePendingInteractionsForSession: vi.fn(),
@@ -157,6 +163,7 @@ vi.mock('../../../maker-ipc/register', () => ({
   takePendingInteractionsForSession: mocks.takePendingInteractionsForSession,
   noteSilentStopUserSend: mocks.noteSilentStopUserSend,
   noteSilentStopSessionReset: mocks.noteSilentStopSessionReset,
+  stopSessionTurnExplicitly: mocks.stopSessionTurnExplicitly,
   onSilentStopSettled: mocks.onSilentStopSettled,
 }));
 
@@ -185,7 +192,7 @@ vi.mock('../fbotTitle', () => ({
   generateAndPersistFbotTitle: mocks.generateAndPersistFbotTitle,
 }));
 
-import { createTurnRunner, type ImTurnRunner } from '../turnRunner';
+import { createTurnRunner, type ImRunAgentTurnArgs, type ImTurnRunner } from '../turnRunner';
 import {
   readGroupHistoryAccess,
   resetGroupHistoryAccessForTests,
@@ -438,11 +445,14 @@ interface TurnOverrides {
   userMessageId?: string;
   text?: string;
   agentText?: string;
+  channelNoteSource?: ImRunAgentTurnArgs['channelNoteSource'];
   onRouteResolved?: (sessionId: string) => void | Promise<void>;
   protectedContent?: boolean;
   groupHistoryAccess?: GroupHistoryAccessScope;
   prePersistedUserMessage?: { sessionId: string; clientId: string };
   onEarlyReject?: (reason: string, text: string) => Promise<boolean> | boolean;
+  attachments?: ImRunAgentTurnArgs['attachments'];
+  replyContext?: ImRunAgentTurnArgs['replyContext'];
 }
 
 async function runDefaultTurn(onTurnComplete = vi.fn(), overrides: TurnOverrides = {}) {
@@ -458,8 +468,10 @@ async function startDefaultTurn(onTurnComplete = vi.fn(), overrides: TurnOverrid
     userMessageId: overrides.userMessageId ?? 'msg-user',
     text: overrides.text ?? 'PROMPT_SECRET full user message TOKEN_VALUE file body',
     ...(overrides.agentText ? { agentText: overrides.agentText } : {}),
+    ...(overrides.channelNoteSource ? { channelNoteSource: overrides.channelNoteSource } : {}),
     contextSnapshot: overrides.contextSnapshot,
-    attachments: [],
+    attachments: overrides.attachments ?? [],
+    ...(overrides.replyContext ? { replyContext: overrides.replyContext } : {}),
     onTurnComplete,
     ...(overrides.onRouteResolved ? { onRouteResolved: overrides.onRouteResolved } : {}),
     ...(overrides.protectedContent === true ? { protectedContent: true } : {}),
@@ -588,6 +600,37 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
   afterEach(async () => {
     await runner?.disposeAllSessions();
     runner = null;
+  });
+
+  it('keeps child events out of personal IM streaming, attachments and completion', async () => {
+    const handle = { messageId: 'stream-parent', append: vi.fn(), replace: vi.fn(), finalize: vi.fn(), close: vi.fn() };
+    mocks.feishuIm.startStreamingText.mockResolvedValue(handle);
+    const h = setupSession(async () => ({ accepted: true }));
+    const complete = vi.fn();
+    await runDefaultTurn(complete);
+    h.emit({ type: 'text', data: { text: '主代理前半', isFinal: false } });
+    await flushMicrotasks();
+    handle.replace.mockClear();
+    const events: AgentEvent[] = [
+      { type: 'text', data: { text: '内部增量', isFinal: false } },
+      { type: 'text', data: { text: '内部报告', isFinal: true } },
+      { type: 'tool_use', data: { toolName: 'Bash', toolUseId: 'child-tool', input: { command: 'private' } } },
+      { type: 'tool_result_full', data: { fullText: '{"xdt_image_url":"xdt-image://private"}' } },
+      { type: 'error', data: { message: 'child failed', isTerminal: true } },
+      { type: 'done', data: {} },
+    ];
+    for (const event of events) h.emit({ ...event, agentMeta: { parentUuid: 'toolu_child' } });
+    await flushMicrotasks();
+    expect(handle.replace).not.toHaveBeenCalled();
+    expect(handle.finalize).not.toHaveBeenCalled();
+    expect(complete).not.toHaveBeenCalled();
+    expect(mocks.resolveXdtImageUrl).not.toHaveBeenCalled();
+    h.emit({ type: 'text', data: { text: '和最终结论', isFinal: false } });
+    await flushMicrotasks();
+    expect(handle.replace).toHaveBeenLastCalledWith('主代理前半和最终结论');
+    h.emit({ type: 'done', data: {} });
+    await waitForAssertion(() => expect(handle.finalize).toHaveBeenCalledWith('主代理前半和最终结论'));
+    expect(complete).toHaveBeenCalledTimes(1);
   });
 
   it('keeps IM persistence, ack, card, and completion exactly-once when Maker recovery is transparent', async () => {
@@ -801,6 +844,80 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
       origin: { kind: 'im', channel: 'feishu', taskId: 'msg-user' },
       rawChannelText: 'pi install npm:context-mode',
     });
+  });
+
+  describe('Auto-review references', () => {
+    const quotedScreenshot = {
+      attachments: [{ kind: 'image' as const, absPath: '/media/quoted.png', originalName: 'quoted.png', mimeType: 'image/png' }],
+      replyContext: { author: '群友', text: '[图片]', attachmentCount: 1 },
+    };
+    const expected = {
+      attachments: { images: 1, files: 0 },
+      quotedMessages: [{ author: '群友', text: '[图片]', attachmentCount: 1 }],
+    };
+
+    it('stamps the replied-to message and attachments beside the raw channel text', async () => {
+      const h = setupSession(async () => ({ accepted: true }));
+      await runDefaultTurn(vi.fn(), {
+        text: '这啥情况',
+        agentText: '<reply_context>\n[群友] [图片]\n</reply_context>\n这啥情况',
+        ...quotedScreenshot,
+      });
+      expect(h.send.mock.calls[0]?.[1]?.[MAIN_OWNED_SEND_CONTEXT]).toEqual({
+        origin: { kind: 'im', channel: 'feishu', taskId: 'msg-user' },
+        rawChannelText: '这啥情况',
+        autoReviewReferences: expected,
+      });
+    });
+
+    it('keeps the same references when a SESSION_RUNNING race requeues the message', async () => {
+      vi.useFakeTimers();
+      try {
+        const err = Object.assign(new Error('SESSION_RUNNING'), { code: 'SESSION_RUNNING' });
+        const h = setupSession(async () => ({ accepted: true }));
+        h.send.mockRejectedValueOnce(err);
+        await runDefaultTurn(vi.fn(), { text: '这啥情况', ...quotedScreenshot });
+        await flushMicrotasks();
+        await vi.advanceTimersByTimeAsync(600);
+        expect(h.send).toHaveBeenCalledTimes(2);
+        expect(h.send.mock.calls[1]?.[1]?.[MAIN_OWNED_SEND_CONTEXT]).toMatchObject({
+          rawChannelText: '这啥情况',
+          autoReviewReferences: expected,
+        });
+        h.emit({ type: 'done', data: {} });
+        await vi.runOnlyPendingTimersAsync();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
+  it('puts the channel note in the model message only; persisted text and raw channel text stay original', async () => {
+    fakeAdapter.messageSourceIm = () => 'lark';
+    try {
+      mocks.persistUserMessage.mockResolvedValue({ clientId: 'im-anchor-client' });
+      const h = setupSession(async () => ({ accepted: true }));
+
+      await runDefaultTurn(vi.fn(), {
+        text: 'hello',
+        agentText: '<group_chat_context>…</group_chat_context>hello',
+        channelNoteSource: { chatKind: 'group', chatId: 'oc_x', chatName: '产品群', senderId: 'ou_y' },
+      });
+
+      expect(h.send.mock.calls[0]?.[0]).toMatchObject({
+        content:
+          '[渠道说明] 系统追加，不是用户消息。本条来自 Lark 群「产品群」(chat_id: oc_x)，发言人 (user_id: ou_y)。\n\n' +
+          '<group_chat_context>…</group_chat_context>hello',
+      });
+      expect(h.send.mock.calls[0]?.[1]?.[MAIN_OWNED_SEND_CONTEXT]).toMatchObject({
+        rawChannelText: 'hello',
+      });
+      const persisted = JSON.stringify(mocks.persistUserMessage.mock.calls);
+      expect(persisted).not.toContain('渠道说明');
+      expect(persisted).not.toContain('chat_id');
+    } finally {
+      delete fakeAdapter.messageSourceIm;
+    }
   });
 
   it('prepends the goal inactive note to the agent wire message only', async () => {
@@ -3182,7 +3299,10 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
       userId: 'ou_user',
     });
     expect(result.stopped).toBe(true);
-    expect(mocks.noteSilentStopSessionReset).toHaveBeenCalledWith('feishu-session');
+    // 与桌面 Stop 同一套清理: 统一停止入口负责撤续跑守卫与唯一的一次 abort,
+    // turnRunner 自己不再直接 abort(重复中止会向 vendor 发两次 interrupt)。
+    expect(mocks.noteSilentStopSessionReset).not.toHaveBeenCalled();
+    expect(mocks.stopSessionTurnExplicitly).toHaveBeenCalledWith('feishu-session');
     expect(h.abort).toHaveBeenCalledTimes(1);
 
     const settleCb = (mocks.onSilentStopSettled.mock.calls[0] as unknown[])[1] as (

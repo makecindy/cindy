@@ -1,3 +1,5 @@
+import { chunkDiscordText } from "../discord/chunk.js";
+
 const GROUP_LANE_PREFIX = "group/";
 const MAX_MESSAGE_BYTES = 18 * 1024;
 
@@ -38,19 +40,10 @@ export function chunkWecomMarkdown(source: string): string[] {
   const normalized = source.replace(/\r\n?/g, "\n").trim();
   if (!normalized) return ["✅ (本轮无文本输出)"];
 
-  const chunks: string[] = [];
-  let current = "";
-  for (const point of normalized) {
-    const candidate = current + point;
-    if (Buffer.byteLength(candidate, "utf8") > MAX_MESSAGE_BYTES && current) {
-      chunks.push(current);
-      current = point;
-    } else {
-      current = candidate;
-    }
-  }
-  if (current) chunks.push(current);
-  return chunks;
+  if (Buffer.byteLength(normalized, "utf8") <= MAX_MESSAGE_BYTES) return [normalized];
+  // UTF-8 uses at most three bytes per UTF-16 code unit. Include the reopened
+  // fences in this conservative budget while sharing Telegram/Discord's rules.
+  return chunkDiscordText(normalized, Math.floor(MAX_MESSAGE_BYTES / 3));
 }
 
 export function escapeWecomMarkdown(source: string): string {

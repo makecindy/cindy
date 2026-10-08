@@ -63,7 +63,6 @@ import {
   session,
   shell,
   Tray,
-  type WebContents,
 } from 'electron';
 import { resolveVibrancyConfig } from './vibrancyConfig';
 import { getSessionThinkingSnapshots, getHistoryToolName, drainPersistQueue } from './messagePersistBroadcaster';
@@ -433,7 +432,7 @@ import { resolveWorkspacePathCached, resolveWorkspacePathBatchCached } from './p
 import { registerLocalDbIpc } from './localDb/ipc/registerAll';
 import { getActiveCatalog } from './maker-host/active-catalog';
 import { resolveSessionContextWindow } from '../shared/sessionContextWindow';
-import { getSessionRowSnapshot, resumeDeletedPiSubagentCleanup } from './localDb/ipc/sessions';
+import { resumeDeletedPiSubagentCleanup } from './localDb/ipc/sessions';
 import {
   registerLegacyMigrationIpc,
   runLegacyUserDataMigrationForUser,
@@ -518,28 +517,6 @@ import {
 } from '@cindy/maker-core/pi-subagent-runs';
 
 import { onQuit, installQuitHandler } from './lifecycle';
-import {
-  cancelIOSSimulatorSessionOperations,
-  cleanupIOSSimulatorRemovedSession,
-  disposeIOSSimulatorHost,
-  flushIOSSimulatorOwnershipRegistry,
-  getIOSSimulatorSessionStatus,
-  reconcilePersistedIOSSimulatorOwnership,
-} from './mcp-integrations/ios-simulator';
-import { abortIOSSimulatorOperationsForExit } from './mcp-integrations/ios-simulator-exit';
-import {
-  clearIOSSimulatorRendererAccess,
-  configureIOSSimulatorAgentControlConfirmation,
-  configureIOSSimulatorRendererAccessConfirmation,
-  configureIOSSimulatorRendererTargets,
-  inheritIOSSimulatorRendererSessionAccess,
-  syncIOSSimulatorRendererAccessForSessionChange,
-} from './mcp-integrations/ios-simulator-renderer-access';
-import {
-  parseIOSSimulatorReleaseGateArgs,
-  runIOSSimulatorReleaseGate,
-  type IOSSimulatorReleaseGateMode,
-} from './mcp-integrations/ios-simulator-release-gate';
 import { initStartupDiagnostics } from './startup-diagnostics';
 import {
   installPowerEventDiagnostics,
@@ -558,7 +535,7 @@ import {
   clearAllSessionAttention,
   refreshWindowsAppBadge,
 } from './appBadgeService';
-import { initNotificationService } from './notificationService';
+import { initNotificationService, showDeviceSessionDesktopEvent } from './notificationService';
 import { initWecomGroupNotificationIpc } from './wecomGroupNotification';
 import { getAgentIslandService, initAgentIslandService } from './agent-island/service.js';
 import { attachWorkLouderCodexWindowReveal } from './worklouder-codex/index.js';
@@ -579,10 +556,8 @@ import {
   assertTrustedAppRendererEvent,
   isTrustedAppRendererEvent,
   isTrustedCindyRendererWindow,
-  isTrustedAppRendererWindow,
 } from './security/trustedAppRenderer.js';
-import { isMainShellWindowUrl } from './cindy-brain/scheduleSlot.js';
-import { sanitizeGhostNoticeText } from './cindy-brain/notifySlot.js';
+
 import { isIpcError } from '../shared/ipc-errors';
 import { readFileBytesForPreview } from './fileReadBytes.js';
 import { copyPngToClipboard } from './pngClipboard.js';
@@ -600,10 +575,13 @@ import {
   isSharedTaskAvailable,
   releaseDeviceLinkOwnershipBeforeLogout,
   handleDeviceLinkSystemResume,
+  getControllerName,
+  revokeController,
 } from './device-link';
 import { closeSharedTasksBeforeLogout } from './device-link/sharedTaskRuntime.js';
 import { closeSharedTasksBeforeAccountHandover } from './device-link/sharedTaskAccountBoundary.js';
 import { registerSharedTaskIpc } from './device-link/sharedTaskIpc.js';
+import { registerProviderShareIpc } from './device-link/providerShareRuntime.js';
 import {
   getUpdateRelaunchControllers,
   hasInFlightRemoteInvokes,
@@ -774,6 +752,7 @@ import {
   setGoalClearObserver,
   setGoalDeferredResumeCancelObserver,
   setGoalIdleObserver,
+  setGoalOwnsUsageLimitProbe,
   setGoalStopObserver,
   setGoalAskAnswerObserver,
   withSendToSessionLock,
@@ -2237,20 +2216,7 @@ setLoginCaptchaOriginResolver(() => {
 resetRsbWindowSettingsForStartup();
 const rsbWindowController = new RsbWindowController({
   settings: { read: readRsbWindowSettings, writePatch: writeRsbWindowSettingsPatch },
-  createWindow: () => {
-    const window = createRightSidebarWindow();
-    const mainTarget =
-      mainWindowRef && !mainWindowRef.isDestroyed() && !mainWindowRef.webContents.isDestroyed()
-        ? mainWindowRef.webContents
-        : null;
-    if (mainTarget) {
-      inheritIOSSimulatorRendererSessionAccess(mainTarget, window.webContents);
-      // This renderer is still hidden for prewarm. Keep its Viewer buckets,
-      // but pause the inherited active mutation grant until it is shown.
-      syncIOSSimulatorRendererAccessForSessionChange(window.webContents, null);
-    }
-    return window;
-  },
+  createWindow: () => createRightSidebarWindow(),
   getMainWindow: () => mainWindowRef,
   broadcastState: (state) => {
     for (const win of BrowserWindow.getAllWindows()) {
@@ -2269,23 +2235,6 @@ const rsbWindowController = new RsbWindowController({
       // window torn down mid-send — ignore
     }
   },
-  onWindowWillShow: (window) => {
-    const mainTarget =
-      mainWindowRef && !mainWindowRef.isDestroyed() && !mainWindowRef.webContents.isDestroyed()
-        ? mainWindowRef.webContents
-        : null;
-    const inherited = mainTarget
-      ? inheritIOSSimulatorRendererSessionAccess(mainTarget, window.webContents)
-      : false;
-    if (!inherited) {
-      // No authoritative Main snapshot is available. Never leave a cached
-      // sidebar's previous active mutation grant usable when it becomes visible.
-      syncIOSSimulatorRendererAccessForSessionChange(window.webContents, null);
-    }
-  },
-  onWindowHidden: (window) => {
-    syncIOSSimulatorRendererAccessForSessionChange(window.webContents, null);
-  },
   contextChannel: MAKER_PUSH.RSB_WINDOW_CONTEXT_CHANGED,
   commandChannel: MAKER_PUSH.RSB_WINDOW_COMMAND,
   tabHandoffChannel: MAKER_PUSH.RSB_WINDOW_TAB_HANDOFF,
@@ -2293,128 +2242,6 @@ const rsbWindowController = new RsbWindowController({
   canCloseWindow: () => !hasActiveRsbNativePopupSurfaces(),
   resolveHostContext: resolveRsbHostContextFromSession,
   log: createLogger('right-sidebar-window-controller'),
-});
-
-function isIOSSimulatorPluginActive(ghosts = getGhostManager().list()): boolean {
-  return ghosts.some(
-    (ghost) =>
-      ghost.enabled === true &&
-      ghost.manifest.iosSimulator === true &&
-      isGhostAvailableForActiveSession(ghost.manifest.id),
-  );
-}
-
-function resolveIOSSimulatorRendererWindow(
-  target: Parameters<typeof BrowserWindow.fromWebContents>[0],
-): BrowserWindow | null {
-  const owner = BrowserWindow.fromWebContents(target);
-  if (!owner || !isTrustedAppRendererWindow(owner)) return null;
-  const sidebarTarget = rsbWindowController.getVisibleSidebarWebContents();
-  const isSidebar = sidebarTarget === target;
-  if (!isSidebar && !isMainShellWindowUrl(owner.webContents.getURL())) return null;
-  return owner;
-}
-
-configureIOSSimulatorRendererTargets((preferredTarget) => {
-  if (!isIOSSimulatorPluginActive()) return null;
-  const mainTarget =
-    mainWindowRef && !mainWindowRef.isDestroyed() && !mainWindowRef.webContents.isDestroyed()
-      ? mainWindowRef.webContents
-      : null;
-  const sidebarTarget = rsbWindowController.getVisibleSidebarWebContents();
-  const belongsToMainFamily =
-    !preferredTarget || preferredTarget === mainTarget || preferredTarget === sidebarTarget;
-  if (!belongsToMainFamily) {
-    if (!preferredTarget || !resolveIOSSimulatorRendererWindow(preferredTarget as WebContents)) {
-      return null;
-    }
-    return {
-      grantTargets: [preferredTarget],
-      focusTarget: preferredTarget,
-    };
-  }
-  const grantTargets = [mainTarget, sidebarTarget].filter(
-    (target): target is NonNullable<typeof target> => Boolean(target),
-  );
-  const focusTarget = rsbWindowController.getHostWebContents() ?? preferredTarget ?? mainTarget;
-  return focusTarget ? { grantTargets, focusTarget } : null;
-});
-configureIOSSimulatorRendererAccessConfirmation(async (target, sessionId) => {
-  if (!isIOSSimulatorPluginActive()) return false;
-  const owner = resolveIOSSimulatorRendererWindow(target as WebContents);
-  if (!owner) return false;
-  const row = await getSessionRowSnapshot(sessionId);
-  if (!row || row.status !== 'active' || row.remoteHostId) return false;
-
-  const taskLabel =
-    sanitizeGhostNoticeText(row.title ?? '')
-      .replace(/[\u202A-\u202E\u2066-\u2069]/g, '')
-      .replace(/\s+/g, ' ')
-      .slice(0, 120) || t('rightSidebar.iosSimulator.accessDialogUntitledTask');
-  const result = await dialog.showMessageBox(owner, {
-    type: 'question',
-    title: t('rightSidebar.iosSimulator.accessDialogTitle'),
-    message: t('rightSidebar.iosSimulator.accessDialogMessage').replaceAll('{{task}}', taskLabel),
-    detail: t('rightSidebar.iosSimulator.accessDialogDetail'),
-    buttons: [
-      t('rightSidebar.iosSimulator.accessDialogAllow'),
-      t('rightSidebar.iosSimulator.accessDialogCancel'),
-    ],
-    defaultId: 1,
-    cancelId: 1,
-    noLink: true,
-  });
-  if (result.response !== 0 || owner.isDestroyed() || target.isDestroyed()) return false;
-  const current = await getSessionRowSnapshot(sessionId);
-  return Boolean(
-    current && current.status === 'active' && !current.remoteHostId && isIOSSimulatorPluginActive(),
-  );
-});
-configureIOSSimulatorAgentControlConfirmation(async (target, sessionId, instanceId) => {
-  if (!isIOSSimulatorPluginActive()) return false;
-  const owner = resolveIOSSimulatorRendererWindow(target as WebContents);
-  if (!owner) return false;
-  const row = await getSessionRowSnapshot(sessionId);
-  if (!row || row.status !== 'active' || row.remoteHostId) return false;
-  const status = await getIOSSimulatorSessionStatus(sessionId);
-  const instance = status.ok
-    ? status.instances.find((candidate) => candidate.instanceId === instanceId)
-    : undefined;
-  if (!instance) return false;
-
-  const taskLabel =
-    sanitizeGhostNoticeText(row.title ?? '')
-      .replace(/[\u202A-\u202E\u2066-\u2069]/g, '')
-      .replace(/\s+/g, ' ')
-      .slice(0, 120) || t('rightSidebar.iosSimulator.accessDialogUntitledTask');
-  const simulatorLabel = sanitizeGhostNoticeText(instance.simulatorName)
-    .replace(/[\u202A-\u202E\u2066-\u2069]/g, '')
-    .replace(/\s+/g, ' ')
-    .slice(0, 120);
-  const result = await dialog.showMessageBox(owner, {
-    type: 'warning',
-    title: t('rightSidebar.iosSimulator.agentControlDialogTitle'),
-    message: t('rightSidebar.iosSimulator.agentControlDialogMessage').replaceAll(
-      '{{simulator}}',
-      simulatorLabel,
-    ),
-    detail: t('rightSidebar.iosSimulator.agentControlDialogDetail').replaceAll(
-      '{{task}}',
-      taskLabel,
-    ),
-    buttons: [
-      t('rightSidebar.iosSimulator.agentControlDialogAllow'),
-      t('rightSidebar.iosSimulator.agentControlDialogCancel'),
-    ],
-    defaultId: 1,
-    cancelId: 1,
-    noLink: true,
-  });
-  if (result.response !== 0 || owner.isDestroyed() || target.isDestroyed()) return false;
-  const current = await getSessionRowSnapshot(sessionId);
-  return Boolean(
-    current && current.status === 'active' && !current.remoteHostId && isIOSSimulatorPluginActive(),
-  );
 });
 registerRsbWindowIpc({
   controller: rsbWindowController,
@@ -2512,7 +2339,6 @@ remoteDesktopViewerWindows.register();
 
 setGhostsChangedObserver((ghosts) => {
   ghostPanelWindowsController.reconcile(ghosts);
-  if (!isIOSSimulatorPluginActive(ghosts)) clearIOSSimulatorRendererAccess();
 });
 
 const rsbBrowserRegistry = getRsbBrowserBridge();
@@ -4498,6 +4324,11 @@ const registerIpcHandlers = () => {
     onSessionActivityChange: (activity) => {
       updateInputDeviceSessionActivity(activity);
     },
+    onDeviceSessionEvent: (event) => {
+      // 与本机任务同口径:Cindy 在前台时不弹系统通知。
+      if (hasFocusedAppWindow()) return;
+      showDeviceSessionDesktopEvent(() => getWindow() ?? null, event);
+    },
   })?.setAppFocused(hasFocusedAppWindow());
   // 定向 replay:快照只补发给刚完成 sessions 订阅的那一台控制端。若沿默认广播
   // 通道扇出,每次 subscribe 都会把 O(会话数) 的帧重复灌给其它所有控制端,
@@ -5981,8 +5812,11 @@ const registerIpcHandlers = () => {
 
   ipcMain.handle('auth:get-login-state', async () => authManager.getLoginState());
 
-  ipcMain.handle('auth:dispatch-login-action', async (_event, action: unknown) => {
-    return authManager.dispatchLoginAction(action);
+  ipcMain.handle('auth:dispatch-login-action', async (event, action: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    // Login can be the first real credential operation to observe an unavailable
+    // backend. Reuse the bounded, idle-only recovery after the action settles.
+    return authManager.dispatchLoginAction(action).finally(() => authCredentialRecovery.request());
   });
 
   // 登录 captcha 托管挑战页地址(不含 query)。只返回按构建区域拼出的公开 URL,
@@ -6331,6 +6165,11 @@ const registerIpcHandlers = () => {
       });
       setGoalDeferredResumeCancelObserver((sid) => {
         getGoalController()?.cancelDeferredManualResume(sid, { restoreUsageResume: true });
+      });
+      // 目标在管的任务由 goal-host 自己等额度重置,普通任务的限额自动继续让路。
+      setGoalOwnsUsageLimitProbe(async (sid) => {
+        const goal = await getGoalController()?.getStatus(sid);
+        return goal?.status === 'active' || goal?.status === 'usageLimited';
       });
       // 用户 Stop 当前 turn → 暂停 active 目标。返回 Promise 让 ABORT_SESSION 在 abort 前 await,
       // 确保目标先 paused + detach 监听,abort 终止事件不再触发续跑判定。
@@ -8690,7 +8529,7 @@ const registerIpcHandlers = () => {
       await imageCacheStore.removeSession(sessionId);
       // cindy-media refs are removed only by the Main-owned, quiesced session
       // deletion chain. This legacy IPC intentionally cleans xdt-image files
-      // only; deleting ledger refs here could race a late Simulator ingest.
+      // only; deleting ledger refs here could race a late media ingest.
     },
   );
 
@@ -8800,33 +8639,6 @@ async function runSmokeTest(
   }
 }
 
-async function runPackagedIOSSimulatorReleaseGate(
-  mode: IOSSimulatorReleaseGateMode,
-): Promise<void> {
-  try {
-    const report = await runIOSSimulatorReleaseGate({
-      mode,
-      packaged: app.isPackaged,
-      platform: process.platform,
-      architecture: process.arch,
-      hostOsRelease: os.release(),
-      resourcesPath: process.resourcesPath,
-      version: app.getVersion(),
-    });
-    process.stdout.write(`${JSON.stringify(report)}\n`);
-    app.quit();
-  } catch {
-    process.stderr.write(
-      `${JSON.stringify({
-        schemaVersion: 1,
-        ok: false,
-        errorCode: 'IOS_SIMULATOR_RELEASE_GATE_FAILED',
-      })}\n`,
-    );
-    app.exit(1);
-  }
-}
-
 // AUMID 三位一体:必须与 NSIS appId(forge.config 按构建区域从 brandAppId() 取)
 // 与快捷方式 AUMID 逐字符一致。值经 shared/brandRegion 按构建期区域烘焙
 // (cn=com.xd.cindycn / global=com.xd.cindy；未注入 region 时默认 global)。
@@ -8907,23 +8719,6 @@ function cleanupLegacyDevShortcut(): Promise<void> {
 }
 
 app.on('ready', async () => {
-  try {
-    const releaseGate = parseIOSSimulatorReleaseGateArgs(process.argv);
-    if (releaseGate.enabled) {
-      await runPackagedIOSSimulatorReleaseGate(releaseGate.mode);
-      return;
-    }
-  } catch {
-    process.stderr.write(
-      `${JSON.stringify({
-        schemaVersion: 1,
-        ok: false,
-        errorCode: 'IOS_SIMULATOR_RELEASE_GATE_ARGUMENT_INVALID',
-      })}\n`,
-    );
-    app.exit(1);
-    return;
-  }
 
   // Smoke-test flag short-circuit: skip all normal init paths.
   const smoke = parseSmokeArgs();
@@ -9087,8 +8882,6 @@ app.on('ready', async () => {
     readHistoryLiveMessages: getSessionThinkingSnapshots,
     resolveContextWindow: (session) => resolveSessionContextWindow(getActiveCatalog(), session),
     requestWorktreeRecycle,
-    cancelSessionOperations: cancelIOSSimulatorSessionOperations,
-    cleanupRemovedSession: cleanupIOSSimulatorRemovedSession,
     closeIdleSessionForMove: async (sessionId) => {
       const maker = getMakerIfReady();
       if (maker?.getSession(sessionId)?.isTurnRunning()) return false;
@@ -9099,7 +8892,6 @@ app.on('ready', async () => {
       }
       return true;
     },
-    reconcilePersistedSessionRuntimes: reconcilePersistedIOSSimulatorOwnership,
     withSessionLock: withSendToSessionLock,
     // Mirrors exactly what the resume handler requires (`maker-ipc/register.ts`):
     // a loaded session for this task whose agent is PI. Without it a finished
@@ -9700,8 +9492,12 @@ app.on('ready', async () => {
     },
   );
   registerSharedTaskIpc(isSharedTaskAvailable, () => getDeviceLinkStatus() === 'online');
+  registerProviderShareIpc();
   registerFilePeerIpc();
-  registerRemoteDesktopIpc(isGlobalVoiceInputOverlaySender);
+  registerRemoteDesktopIpc(isGlobalVoiceInputOverlaySender, {
+    name: getControllerName,
+    revoke: revokeController,
+  });
   void startupPurgeDrain
     .then(({ purged, pending }) => {
       if (purged > 0 || pending > 0) {
@@ -10156,16 +9952,10 @@ onQuit('html-previews', disposeHtmlPreviews, 'async');
 // 断开 SSH, kill 失败, daemon + env-file(含凭证)残留 30 分钟(R6 审计 M-8/M-11)。
 // 挪到 post-async 串行, 保证 session 级 kill 先完成, pool 最后收尾。
 onQuit('remote-ssh-pool', () => disposeRemoteSshPool(), 'post-async');
-// WDA deleteSession may consume longer than the shared async quit budget. Kill
-// detached WDA/Sidecar process groups synchronously before that budget starts;
-// the lightweight seam is a no-op when Simulator was never initialized.
-onQuit('ios-simulator-exit-abort', abortIOSSimulatorOperationsForExit, 'sync');
 // Hook 连接: 停掉全部 WS transport(含重连 timer), 防句柄阻塞退出。
 onQuit('hook-control', () => disposeHookControl(), 'sync');
 // session-git-pr-context: 取消 .git HEAD 的 parcel watcher 订阅, 防原生句柄阻塞退出。
 onQuit('git-context', () => disposeGitContext(), 'async');
-onQuit('ios-simulator-host', disposeIOSSimulatorHost, 'async');
-onQuit('ios-simulator-ownership-registry', flushIOSSimulatorOwnershipRegistry, 'async');
 
 // Post-async 阶段: 串行跑, 确保依赖 async 阶段产物的清理 (WAL checkpoint by close)。
 onQuit('db-client', async () => {

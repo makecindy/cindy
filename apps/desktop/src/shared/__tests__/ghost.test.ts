@@ -3984,7 +3984,7 @@ describe('ghost · 2026-07-23 通用能力四件套(session-context / pick / pre
     expect(withPreview({ hosts: ['a.example.com'], extra: 1 }).ok).toBe(true);
   });
 
-  it('main-view / session-context / pick / workspace / ios-simulator 槽可装入并生成权限项', () => {
+  it('active slots generate permission items; retired slots only round-trip', () => {
     const r = validateGhostManifest({
       ...goodChipManifest(),
       minCindyVersion: '1.2.3',
@@ -4004,7 +4004,7 @@ describe('ghost · 2026-07-23 通用能力四件套(session-context / pick / pre
     if (!r.ok) return;
     expect(r.manifest.minCindyVersion).toBe('1.2.3');
     expect(ghostContentKeys(r.manifest)).toContain('slotWorkspace');
-    expect(ghostContentKeys(r.manifest)).toContain('slotIOSSimulator');
+    expect(ghostContentKeys(r.manifest)).not.toContain('slotIOSSimulator');
     expect(ghostContentKeys(r.manifest)).toContain('mainView');
     const items = ghostPermissionItems(r.manifest);
     expect(items).toEqual(
@@ -4032,12 +4032,6 @@ describe('ghost · 2026-07-23 通用能力四件套(session-context / pick / pre
           kind: 'workspace',
           labelKey: 'workspace',
           detailKey: 'workspaceDetail',
-        }),
-        expect.objectContaining({
-          key: 'ios-simulator',
-          kind: 'ios-simulator',
-          labelKey: 'iosSimulator',
-          detailKey: 'iosSimulatorDetail',
         }),
       ]),
     );

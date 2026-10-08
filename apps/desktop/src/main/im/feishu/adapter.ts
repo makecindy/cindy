@@ -210,7 +210,7 @@ async function notifyContextFetchFailure(
   );
 }
 
-// ── 群名缓存(群 lane 会话标题用) ──────────────────────────────────────────────
+// ── 群名缓存(群 lane 会话标题 / 渠道说明用) ─────────────────────────────────────
 
 const chatNames = new Map<string, string | null>();
 
@@ -225,6 +225,17 @@ async function resolveChatName(feishuIm: FeishuIM, chatId: string): Promise<stri
   const name = raw ? sanitizeDisplayText(raw) || null : null;
   chatNames.set(chatId, name);
   return name;
+}
+
+/**
+ * 渠道说明里的群名是锦上添花: 只用已缓存的群名, 绝不等待网络。未缓存时后台预取,
+ * 本条只写 chat_id, 之后的消息就带上群名。
+ */
+function cachedChatNameForNote(feishuIm: FeishuIM, chatId: string): string | null {
+  const cached = chatNames.get(chatId);
+  if (cached !== undefined) return cached;
+  void resolveChatName(feishuIm, chatId).catch(() => undefined);
+  return null;
 }
 
 export function buildFeishuAdapter(
@@ -351,6 +362,19 @@ export function buildFeishuAdapter(
     // 防注入过滤/包裹在 prepareAgentTurnText 里独立生效, 不随权限档关闭;
     // acceptEdits 仍保持失败路径(错误 + 私聊修复卡)。
     turnPolicyOptionalForMode: (mode) => mode === 'bypassPermissions',
+    // 渠道说明: 群 lane 用真实群 id + 缓存的群名(拉不到或超时就只写 id), 发言人只有
+    // open_id(飞书事件不带显示名)。私聊写 p2p chat_id。
+    channelNoteSourceFor: async (event) => {
+      const lane = decodeFeishuLaneUserId(event.senderId);
+      if (!lane) return { chatKind: 'direct', ...(event.chatId ? { chatId: event.chatId } : {}) };
+      const chatName = cachedChatNameForNote(feishuIm, lane.chatId);
+      return {
+        chatKind: 'group',
+        chatId: lane.chatId,
+        ...(chatName ? { chatName } : {}),
+        ...(event.speaker?.id ? { senderId: event.speaker.id } : {}),
+      };
+    },
     // 群 lane: 触发时按页回翻群历史拼上下文前缀(含媒体附件), 落库仍是渠道原文。
     prepareAgentTurnText: async (event) => {
       const lane = decodeFeishuLaneUserId(event.senderId);
@@ -374,6 +398,8 @@ export function buildFeishuAdapter(
         return {
           agentText: `${replyPrefix}${event.text}`,
           contextSnapshot: captureImContext({ replyPrefix, replyMessageCount: 1 }),
+          // 审阅器只见过滤后的同一份引用, 被拦下的成员文本不外传给审阅模型。
+          replyContext: safeReply,
         };
       }
       // 群主流 @ 开新话题: 上下文取数 lane 与路由 lane 分离(见
@@ -404,8 +430,9 @@ export function buildFeishuAdapter(
       if (!built) return null;
       return {
         agentText: `${built.prefix}${event.text}`,
+        // 快照用不带 user_id 的展示版: id 只给模型, 不进「群聊背景」展示。
         contextSnapshot: captureImContext({
-          groupPrefix: built.prefix,
+          groupPrefix: built.displayPrefix,
           groupMessageCount: built.messageCount,
         }),
         ...(built.contextAttachments.length > 0

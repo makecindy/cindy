@@ -35,7 +35,7 @@ function setup() {
 
 it.each([
   ['auto', 60, ['60', '0.8', '2560', '1500000']],
-  ['saver', 60, ['30', '0.65', '0', '1000000']],
+  ['saver', 60, ['60', '0.65', '0', '1000000']],
   ['hd', 30, ['30', '0.9', '3840', '3000000']],
 ] as const)('passes the %s tier capture budget to the macOS helper', async (quality, fps, args) => {
   const { owner } = setup();

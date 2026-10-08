@@ -21,6 +21,7 @@ import { BotGenerationLabel } from './BotGenerationLabel';
 import { BotGroupDuoAvatar } from './BotGroupAvatars';
 import { isBotGroupLaneSession } from './botGroupLane';
 import {
+  botGroupNoticeKey,
   botGroupPreviewLine,
   botGroupSidebarPlanPreview,
   isRunningBotGroupSidebarPreview,
@@ -74,6 +75,10 @@ export function BotGroupSidebarRow({
     if (plan?.kind === 'waiting') return t('bots.groupChat.sidebar.planWaitingAnonymous');
     const last = group.lastMessage;
     if (!last) return t('bots.groupChat.sidebar.empty');
+    if (last.authorKind === 'system') {
+      const key = botGroupNoticeKey(last.noticeCode ?? null, false);
+      return key ? t(key, { name: last.authorName }) : botGroupPreviewLine(last.preview);
+    }
     const text = botGroupPreviewLine(last.preview);
     if (last.authorKind === 'user' && last.isSelf !== false) return t('bots.groupChat.sidebar.previewYou', { text });
     if (last.authorName.trim()) {

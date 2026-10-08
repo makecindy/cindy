@@ -15,6 +15,10 @@ import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore'
 import { __resetStickySessionOriginForTest } from '@/features/device-link/stickySessionOrigin';
 import { BotAuthorizationCardView } from '../BotAuthorizationCard';
 
+vi.mock('@/features/device-link/useDeviceLinkDeviceList', () => ({
+  useDeviceLinkDeviceList: () => [],
+}));
+
 // Keep the actual Host snapshot/projection, card, shared form and transport routing.
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 vi.mock('../../../../main/plugin-oauth/runtime', () => ({ supportsRemotePluginOauth: () => true }));

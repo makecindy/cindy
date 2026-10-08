@@ -58,6 +58,14 @@
     "cancel": "取消",
     "confirm": "繼續選擇"
   },
+  "agentRelocation": {
+    "titleOther": "改到「{{device}}」上執行 Agent？",
+    "titleHost": "改回「{{host}}」上執行 Agent？",
+    "titleHostUnnamed": "改回任務所在的電腦執行 Agent？",
+    "message": "原來那台電腦上的對話記錄帶不過來，會整理成交接摘要接上，思考內容等不能保證完美繼承。下一則訊息送出時生效。",
+    "confirm": "換電腦執行",
+    "cancel": "保持不變"
+  },
   "unified": {
       "favoriteConfiguration": "收藏此設定",
       "savedConfiguration": "已收藏 · 點擊取消",
@@ -83,6 +91,7 @@
     "all": "全部模型",
     "recommended": "推薦",
     "source": "來源",
+    "remoteProvider": "{{provider}} · {{device}}",
     "harness": "Harness",
     "restoreRecommended": "恢復推薦",
     "saveFailed": "無法儲存，請重試。",

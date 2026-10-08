@@ -3,9 +3,9 @@
   "dataLicense": "CC0-1.0",
   "SPDXID": "SPDXRef-DOCUMENT",
   "name": "cindy-desktop-win",
-  "documentNamespace": "https://cindy.app/spdx/desktop-win/c6ad71defd76a1904615d1e6e884df1e146cd15fb4e01719cb0aadf9bfb74aa9",
+  "documentNamespace": "https://cindy.app/spdx/desktop-win/046abf82222d2bfe7eea4905777f8ec4441513b411323f0ae7bb889c714ff89b",
   "creationInfo": {
-    "created": "2026-09-18T02:10:31Z",
+    "created": "2026-10-06T01:25:03Z",
     "creators": [
       "Tool: scripts/generate-third-party-notices.mjs"
     ]
@@ -83,8 +83,8 @@
     },
     {
       "name": "OpenAI Codex CLI (runtime-downloaded binary)",
-      "SPDXID": "SPDXRef-Package-4f22132a77577bcb",
-      "versionInfo": "0.145.0",
+      "SPDXID": "SPDXRef-Package-618e13d446a4c6e4",
+      "versionInfo": "0.159.2",
       "downloadLocation": "https://github.com/openai/codex",
       "filesAnalyzed": false,
       "licenseConcluded": "Apache-2.0",
@@ -123,8 +123,8 @@
     },
     {
       "name": "pi coding agent (runtime-downloaded binary)",
-      "SPDXID": "SPDXRef-Package-e7ecfd34000fcb76",
-      "versionInfo": "0.85.1",
+      "SPDXID": "SPDXRef-Package-9a414e8a6f3ff55d",
+      "versionInfo": "1.0.2",
       "downloadLocation": "https://github.com/earendil-works/pi",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
@@ -5191,8 +5191,8 @@
     },
     {
       "name": "@anthropic-ai/sdk",
-      "SPDXID": "SPDXRef-Package-6dd15d27ddf97540",
-      "versionInfo": "0.91.1",
+      "SPDXID": "SPDXRef-Package-28dc3e2c8c9ba29e",
+      "versionInfo": "0.93.0",
       "downloadLocation": "https://github.com/anthropics/anthropic-sdk-typescript",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
@@ -5202,7 +5202,7 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/%40anthropic-ai/sdk@0.91.1"
+          "referenceLocator": "pkg:npm/%40anthropic-ai/sdk@0.93.0"
         }
       ]
     },
@@ -6597,23 +6597,6 @@
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
           "referenceLocator": "pkg:npm/%40img/colour@1.1.0"
-        }
-      ]
-    },
-    {
-      "name": "@img/sharp-win32-x64",
-      "SPDXID": "SPDXRef-Package-08588bf1252714a9",
-      "versionInfo": "0.34.5",
-      "downloadLocation": "https://github.com/lovell/sharp",
-      "filesAnalyzed": false,
-      "licenseConcluded": "Apache-2.0 AND LGPL-3.0-or-later",
-      "licenseDeclared": "Apache-2.0 AND LGPL-3.0-or-later",
-      "copyrightText": "NOASSERTION",
-      "externalRefs": [
-        {
-          "referenceCategory": "PACKAGE-MANAGER",
-          "referenceType": "purl",
-          "referenceLocator": "pkg:npm/%40img/sharp-win32-x64@0.34.5"
         }
       ]
     },
@@ -11939,6 +11922,23 @@
       ]
     },
     {
+      "name": "dotenv",
+      "SPDXID": "SPDXRef-Package-55a09c11de197ec1",
+      "versionInfo": "16.6.1",
+      "downloadLocation": "https://github.com/motdotla/dotenv",
+      "filesAnalyzed": false,
+      "licenseConcluded": "BSD-2-Clause",
+      "licenseDeclared": "BSD-2-Clause",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/dotenv@16.6.1"
+        }
+      ]
+    },
+    {
       "name": "drizzle-orm",
       "SPDXID": "SPDXRef-Package-bc6d5248a7fbabed",
       "versionInfo": "0.45.2",
@@ -14553,6 +14553,23 @@
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
           "referenceLocator": "pkg:npm/json-schema-typed@8.0.2"
+        }
+      ]
+    },
+    {
+      "name": "json5",
+      "SPDXID": "SPDXRef-Package-77423d29c03ab400",
+      "versionInfo": "2.2.3",
+      "downloadLocation": "https://github.com/json5/json5",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/json5@2.2.3"
         }
       ]
     },
@@ -20546,7 +20563,7 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-4f22132a77577bcb"
+      "relatedSpdxElement": "SPDXRef-Package-618e13d446a4c6e4"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -20566,7 +20583,7 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-e7ecfd34000fcb76"
+      "relatedSpdxElement": "SPDXRef-Package-9a414e8a6f3ff55d"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -22071,7 +22088,7 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-6dd15d27ddf97540"
+      "relatedSpdxElement": "SPDXRef-Package-28dc3e2c8c9ba29e"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -22482,11 +22499,6 @@
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-dd0456aa6a2b2248"
-    },
-    {
-      "spdxElementId": "SPDXRef-DOCUMENT",
-      "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-08588bf1252714a9"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -24056,6 +24068,11 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-55a09c11de197ec1"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-bc6d5248a7fbabed"
     },
     {
@@ -24822,6 +24839,11 @@
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-60b0d7ba48b8100a"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-77423d29c03ab400"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",

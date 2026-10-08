@@ -47,7 +47,7 @@ import { isRemoteFileOrigin, toRemoteMediaOrigin } from '@/lib/sessionFileOrigin
 import {
   fetchChatFileWithToasts,
   remotePathVerdictKey,
-  revealRemoteChatFile,
+  downloadRemoteChatEntry,
   subscribeRemotePathVerdictChange,
   type RemotePathVerdict,
   verifyRemotePathCached,
@@ -294,7 +294,7 @@ function GeneratedFileChip({
     }
     if (kind === 'model-local') {
       if (remoteOrigin) {
-        await revealRemoteChatFile(remoteOrigin, fileCtx.workingDir, file.path);
+        await downloadRemoteChatEntry(remoteOrigin, fileCtx.workingDir, file.path);
         return;
       }
       // FBX 无应用内预览且 openPath 有误导弹窗风险(正文链接同款取舍)→ 定位。

@@ -46,7 +46,20 @@ export function chunkDiscordText(text: string, limit = MAX_MESSAGE_LEN): string[
       }
 
       const reserve = inFence ? 4 : 0;
-      const take = Math.max(1, limit - current.length - reserve);
+      let take = Math.max(0, limit - current.length - reserve);
+      const whitespace = /\s+\S*$/u.exec(token.slice(0, take));
+      if (whitespace && whitespace.index > 0) {
+        take = whitespace.index + whitespace[0].length - whitespace[0].trimStart().length;
+      }
+      // Hard fallback is necessary for a long word/code line, but must not
+      // split a UTF-16 surrogate pair (Telegram shares this splitter).
+      if (
+        take < token.length &&
+        /[\uD800-\uDBFF]/.test(token[take - 1] ?? '') &&
+        /[\uDC00-\uDFFF]/.test(token[take] ?? '')
+      )
+        take--;
+      if (take === 0) throw new RangeError('chunk limit cannot fit a code point with its fence');
       current += token.slice(0, take);
       token = token.slice(take);
       flush();

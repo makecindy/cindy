@@ -119,6 +119,8 @@ import {
 } from './provider-route.js';
 import type { CodexSubagentRouteSnapshot } from './codex-subagent-config.js';
 import { getSessionProvider } from './session-provider-store.js';
+import { guestProviderOffersModel, guestProviderRouteForSession } from './guest-provider-route-store.js';
+import { isOpenAiSubscriptionProviderId } from './codex-account-auth.js';
 import { composeResponseObservers } from './claude-rate-limit-headers-observer.js';
 import { createProviderUpstreamErrorObserver, reportProviderUpstreamError } from './provider-upstream-error-observer.js';
 import { createXaiProxyAuthInvalidationObserver } from './xai-auth-invalidation-host.js';
@@ -2461,6 +2463,64 @@ function codexCustomProviderRouteFailure(status: number, code: string): RoutingD
   };
 }
 
+function codexGuestRouteRefusal(): RoutingDecision {
+  return {
+    localHandler: async ({ res }) => {
+      res.writeHead(403, {
+        'content-type': 'application/json; charset=utf-8',
+        'cache-control': 'no-store',
+      });
+      res.end(JSON.stringify({
+        error: {
+          type: 'invalid_request_error',
+          code: 'shared_provider_only',
+          message: 'This request is outside the provider shared with you.',
+        },
+      }));
+    },
+  };
+}
+
+/**
+ * 供应商分享受邀者任务的 proxy 守门(每个受邀者任务独占一个 proxy，鉴权形态与自定义供应商路由都冻结在
+ * 上面，路由只登记了分享的那一个供应商)。返回 undefined = 照常路由；否则直接用返回的决策：
+ *  - 自定义供应商路径：冻结路由已限定为分享的供应商与它的模型，照常；
+ *  - 无 model 的控制面请求(GET /models 等)：按冻结的鉴权形态走，那就是分享的供应商的凭证，照常；
+ *  - 推理请求：模型必须由分享的供应商提供(自动审核按它实际用的模型判断)；
+ *  - 其余请求必须属于登记过的受邀者会话(会话来源就是分享的供应商)。认不出会话时只有分享的是
+ *    网关 / ChatGPT 订阅且鉴权形态一致才按默认路由直达，不做按模型的隐式推断；其余本地拒绝。
+ */
+export function createCodexGuestRoutingGuard(
+  providerId: string,
+  frozenAuthInjection?: CodexProxyAuthInjection,
+): (body: unknown, ctx: RequestTransformCtx) => RoutingDecision | null | undefined {
+  return (body, ctx) => {
+    if (parseCodexCustomProviderPath(ctx.url).kind !== 'not-custom-provider-route') return undefined;
+    const requestModel = isPlainObject(body) && typeof body.model === 'string' ? body.model : '';
+    if (!requestModel) return undefined;
+    const authInjection = frozenAuthInjection ?? getCodexProxyAuthInjection();
+    if (ctx.url.split('?', 1)[0]?.endsWith('/responses')) {
+      const effectiveModel = providerAwareGuardianReviewerModel(body, ctx.headers, authInjection) ?? requestModel;
+      const offered = effectiveModel === CODEX_AUTO_REVIEW_MODEL
+        ? isOpenAiSubscriptionProviderId(providerId)
+        : guestProviderOffersModel(providerId, 'codex', effectiveModel);
+      if (!offered) return codexGuestRouteRefusal();
+    }
+    const sessionId = sessionIdFromHeaders(ctx.headers);
+    if (sessionId) {
+      return guestProviderRouteForSession(sessionId)?.providerId === providerId
+        && getSessionProvider(sessionId) === providerId
+        ? undefined
+        : codexGuestRouteRefusal();
+    }
+    const defaultRouteIsShared = (providerId === 'xd' && authInjection === 'env-key')
+      || (isOpenAiSubscriptionProviderId(providerId) && authInjection === 'oauth-bearer');
+    return defaultRouteIsShared
+      ? decideCodexRoute({ model: requestModel, authInjection, gatewayKey: _readGatewayKey() })
+      : codexGuestRouteRefusal();
+  };
+}
+
 type CodexImageGenerationOperation = 'generation' | 'edit';
 type CodexImageGenerationPathClass = '/images/generations' | '/images/edits';
 interface CodexImageGenerationLogParams {
@@ -3044,6 +3104,8 @@ function createTransformRequestChain(
   frozenAuthInjection?: CodexProxyAuthInjection,
   execAdapter = createCodexResponsesCompatibilityAdapter(),
   pricing: XaiRequestPricing = new Map(),
+  /** 供应商分享受邀者的 proxy：不走视觉桥(视觉后端是本机用户自己的其它供应商)。 */
+  guest = false,
 ): RequestTransform[] {
   const execFunctionAdapterTransform: RequestTransform = (body, ctx) => {
     if (!isPlainObject(body)) return null;
@@ -3137,7 +3199,7 @@ function createTransformRequestChain(
     // 视觉桥透明替换（层 A，Responses 格式）：controller 未注入时短路透传，零干扰；
     // 注入后把纯文本模型请求 input[] 里的 input_image 转成文字描述。放在 strip 之前与
     // Anthropic 链一致，避免未来 strip 扩展覆盖 Responses input_image 时吃掉图。
-    buildVisionBridgeProxyTransform(log),
+    ...(guest ? [] : [buildVisionBridgeProxyTransform(log)]),
     // Run after every provider dialect rewrite: xAI can also turn custom calls into functions.
     // This covers native-custom routes and tool-less /responses/compact without changing call_id.
     normalizeResponsesToolItemIds,
@@ -3244,6 +3306,7 @@ export function withCodexUpstreamRecording(
 async function createCodexProxyHandle(
   frozenAuthInjection?: CodexProxyAuthInjection,
   frozenCustomProviderRoutes?: readonly CodexCustomProviderRoute[],
+  guestProviderId?: string,
 ): Promise<ProxyHandle> {
   const execAdapter = createCodexResponsesCompatibilityAdapter();
   let alive = true;
@@ -3252,8 +3315,16 @@ async function createCodexProxyHandle(
   // identity marker cannot be forged by header values or leak into the next request;
   // it also needs no settlement bookkeeping for cancelled/local-handler requests.
   const crossProviderRequests = new WeakSet<Readonly<Record<string, string>>>();
-  const route = createModelRoutingTransform(frozenAuthInjection, frozenCustomProviderRoutes, () => alive,
+  const modelRoute = createModelRoutingTransform(frozenAuthInjection, frozenCustomProviderRoutes, () => alive,
     ctx => { crossProviderRequests.add(ctx.headers); });
+  // 供应商分享受邀者的任务：先过受邀者守门，只经分享的那一个供应商出站。
+  const guestGuard = guestProviderId ? createCodexGuestRoutingGuard(guestProviderId, frozenAuthInjection) : undefined;
+  const route: RoutingTransform = guestGuard
+    ? (body, ctx) => {
+      const guarded = guestGuard(body, ctx);
+      return guarded !== undefined ? guarded : modelRoute(body, ctx);
+    }
+    : modelRoute;
   const frozenReasoning = createCustomProviderReasoningTransform(frozenCustomProviderRoutes);
   const routeWithUsageEncoding: RoutingTransform = (body, ctx) => {
     const uncompressed = (decision: RoutingDecision | null): RoutingDecision | null => {
@@ -3269,7 +3340,7 @@ async function createCodexProxyHandle(
   const handle = await createAnthropicCompatProxy({
     // 默认上游 = gateway(含 /v1)；普通模型 + oauth 由 routingTransform 覆盖到 ChatGPT。
     upstream: () => buildCodexGatewayBaseUrl(),
-    transformRequest: createTransformRequestChain(frozenAuthInjection, execAdapter, pricing).map(
+    transformRequest: createTransformRequestChain(frozenAuthInjection, execAdapter, pricing, guestProviderId !== undefined).map(
       (transform): RequestTransform => {
         // Namespaced Responses use a frozen Provider route. Preserve its native
         // fields and model. The dedicated transform below reconciles effort
@@ -3513,10 +3584,13 @@ export async function ensureCodexCustomContextProxyReady(
   scopeKey: string,
   authInjection: CodexProxyAuthInjection,
   routes: readonly CodexCustomProviderRoute[],
+  /** 供应商分享受邀者的任务：proxy 只经这个供应商出站(见 createCodexGuestRoutingGuard)。 */
+  guestProviderId?: string,
 ): Promise<void> {
   const key = scopeKey.trim();
   if (!key) throw new Error('custom-context Codex proxy requires a scope key');
-  const routeSignature = codexCustomProviderRoutesSignature(routes);
+  const routeSignature = codexCustomProviderRoutesSignature(routes)
+    + (guestProviderId ? `\u0000guest:${guestProviderId}` : '');
   const current = _customContextHandles.get(key);
   if (
     current?.authInjection === authInjection
@@ -3534,7 +3608,7 @@ export async function ensureCodexCustomContextProxyReady(
   let promise!: Promise<void>;
   promise = (async () => {
     try {
-      const handle = await createCodexProxyHandle(authInjection, [...routes]);
+      const handle = await createCodexProxyHandle(authInjection, [...routes], guestProviderId);
       if (
         disposeGeneration !== _disposeGeneration
         || scopeGeneration !== (_customContextGenerations.get(key) ?? 0)

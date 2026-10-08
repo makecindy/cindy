@@ -163,8 +163,10 @@
     "dispatchBodyFallback": "Create worker",
     "sendTitle": "Message to worker",
     "sendBodyFallback": "Send message",
-    "reportTitle": "Worker report",
-    "reportBodyFallback": "(empty report)"
+    "fromLead": "Message from Lead",
+    "fromWorkerNamed": "Message from Worker “{{role}}”",
+    "fromWorker": "Message from Worker",
+    "emptyMessageBody": "(Empty message)"
   },
   "contextSheet": {
     "backAccessibility": "Back to the context panel",

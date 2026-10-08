@@ -8,6 +8,7 @@ import { readBoundedFileNoFollow } from './utils/readBoundedFile.js';
 import { getClientEndpoint } from './clientEndpointsService.js';
 import { guardedOutboundFetch } from './maker-host/outbound-fetch.js';
 import { throwIpcError } from './utils/ipcValidate.js';
+import { readReferencedClientWallpaperUrls } from './custom-wallpaper-settings.js';
 
 type Scene = keyof typeof manifest;
 type Asset = { sha256: string; bytes: number };
@@ -85,12 +86,9 @@ export async function ensureWallpaperVideo(id: unknown): Promise<string | null> 
       const bytes = await download(asset);
       return await withClientWallpaperLock(async () => {
         const media = await ingestClientWallpaper({ buffer: bytes, mimeType: 'video/mp4' });
-        await recycleClientWallpapers(
-          Object.values(manifest)
-            .filter((item) => item.delivery === 'cdn')
-            .map((item) => blobUrl(item.sha256, '.mp4', 'client-wallpaper')),
-          '.mp4',
-        ).catch(() => undefined);
+        await recycleClientWallpapers(readReferencedClientWallpaperUrls(), '.mp4').catch(
+          () => undefined,
+        );
         return media.url;
       });
     } catch {

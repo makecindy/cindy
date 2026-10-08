@@ -54,6 +54,10 @@ import {
   type DeviceProvidersPayload,
 } from '@/device-link/deviceProvidersCache';
 import {
+  clearAllProviderShareCatalogs,
+  evictProviderShareCatalogs,
+} from '@/device-link/providerShareCatalogCache';
+import {
   evictAgentCapabilitiesForDevice,
   resetAgentCapabilitiesCache,
 } from '@/session/agentCapabilitiesCache';
@@ -482,6 +486,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     revokedDevicesStore.clearAll();
     resetDeviceResponsivenessTracking();
     clearAllDeviceProviders();
+    clearAllProviderShareCatalogs();
     clearAllDeviceModelMeta();
     resetAgentCapabilitiesCache();
     resetComposerPaletteCache();
@@ -2169,6 +2174,7 @@ function markOfflineDeviceMirrors(deviceIds: readonly string[]): void {
   for (const deviceId of deviceIds) {
     invalidateScheduleIndexForDevice(deviceId);
     evictDeviceProviders(deviceId);
+    evictProviderShareCatalogs(deviceId);
     evictDeviceModelMeta(deviceId);
     evictAgentCapabilitiesForDevice(deviceId);
     evictComposerPaletteCacheForDevice(deviceId);
@@ -2186,6 +2192,7 @@ function wipeUnavailableDeviceMirror(deviceId: string): void {
   // Drop the cached provider catalog so a returning/re-granted device re-fetches it
   // instead of serving a list frozen from a previous connection.
   evictDeviceProviders(deviceId);
+  evictProviderShareCatalogs(deviceId);
   evictDeviceModelMeta(deviceId);
   // 能力表与供应商目录同时机驱逐:桌面端重连 / 升级 / 重新授权后必须重取,
   // 否则模型 / 权限 / plan 支持度会先按旧能力渲染并接受点击。

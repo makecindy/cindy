@@ -48,10 +48,30 @@ vi.mock('@/features/right-sidebar/lib/openSubagentsTab', () => ({
 const { getWorkflowProgressForMock } = vi.hoisted(() => ({
   getWorkflowProgressForMock: vi.fn().mockResolvedValue(null),
 }));
+const { stopAgentTaskForMock, reportStopFailureMock, canManageMock } = vi.hoisted(() => ({
+  // 共享任务访客(房主保留后台任务管理权)用 guest- 前缀模拟。
+  canManageMock: vi.fn((sessionId: string) => !sessionId.startsWith('guest-')),
+  // 默认按本机路由:落到 window.electronAPI.maker.stopAgentTask(与真实实现的本机分支一致)。
+  stopAgentTaskForMock: vi.fn((sessionId: string, taskId: string) =>
+    (
+      window as unknown as {
+        electronAPI: { maker: { stopAgentTask: (s: string, t: string) => Promise<unknown> } };
+      }
+    ).electronAPI.maker.stopAgentTask(sessionId, taskId),
+  ),
+  reportStopFailureMock: vi.fn(),
+}));
 vi.mock('@/lib/makerTransport', () => ({
   isRemoteSessionSticky: () => false,
   getWorkflowProgressFor: getWorkflowProgressForMock,
   readBackgroundTaskOutputTailFor: vi.fn().mockResolvedValue({ ok: false, reason: 'unavailable' }),
+}));
+vi.mock('@/lib/backgroundTaskStop', () => ({
+  canManageBackgroundTasks: (sessionId: string) => canManageMock(sessionId),
+  stopBackgroundTask: stopAgentTaskForMock,
+}));
+vi.mock('@/lib/backgroundTaskStopFailure', () => ({
+  reportBackgroundTaskStopFailure: reportStopFailureMock,
 }));
 
 import { AgentTaskCard } from '@/components/chat/AgentTaskCard';
@@ -376,6 +396,32 @@ describe('AgentTaskCard', () => {
     }
   });
 
+  it('routes stop through the session-owner transport and reports failures (remote tasks included)', async () => {
+    const failure = new Error('[DEVICE_LINK_CHANNEL_NOT_ALLOWED] maker:agent-task:stop');
+    stopAgentTaskForMock.mockRejectedValueOnce(failure);
+    reportStopFailureMock.mockClear();
+    const { container } = render(
+      React.createElement(AgentTaskCard, {
+        sessionId: 'remote-session',
+        update: {
+          provider: 'claude-code',
+          taskId: 'bash-remote',
+          status: 'running',
+          taskType: 'local_bash',
+        },
+      }),
+    );
+    const btn = stopButton(container);
+    expect(btn).not.toBeNull();
+    await act(async () => {
+      btn!.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(stopAgentTaskForMock).toHaveBeenCalledWith('remote-session', 'bash-remote');
+    expect(reportStopFailureMock).toHaveBeenCalledWith(failure, expect.any(Function));
+  });
+
   it.each(['cc', 'codex'] as const)(
     'keeps a historical PI durable card inline after the session switches to %s',
     (sessionAgentKind) => {
@@ -442,6 +488,20 @@ describe('AgentTaskCard', () => {
       }),
     );
     expect(stopButton(noSession.container)).toBeNull();
+
+    // 共享任务访客没有后台任务管理权:不给停止入口。
+    const sharedGuest = render(
+      React.createElement(AgentTaskCard, {
+        sessionId: 'guest-session',
+        update: {
+          provider: 'claude-code',
+          taskId: 'bash-1',
+          status: 'running',
+          taskType: 'local_bash',
+        },
+      }),
+    );
+    expect(stopButton(sharedGuest.container)).toBeNull();
   });
 
   it('opens the existing Subagents panel focused on a PI durable run alias', () => {

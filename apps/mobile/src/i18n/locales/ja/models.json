@@ -58,6 +58,14 @@
     "cancel": "キャンセル",
     "confirm": "続けて選択"
   },
+  "agentRelocation": {
+    "titleOther": "Agent を「{{device}}」で実行しますか？",
+    "titleHost": "Agent を「{{host}}」で実行し直しますか？",
+    "titleHostUnnamed": "Agent をセッションのあるパソコンで実行し直しますか？",
+    "message": "元のパソコンにある会話の記録は移せないため、引き継ぎの要約から続けます。思考内容などは完全には引き継がれない場合があります。次のメッセージを送信したときに反映されます。",
+    "confirm": "パソコンを切り替える",
+    "cancel": "このままにする"
+  },
   "unified": {
       "favoriteConfiguration": "この設定をお気に入りに追加",
       "savedConfiguration": "登録済み · タップして解除",
@@ -83,6 +91,7 @@
     "all": "すべてのモデル",
     "recommended": "おすすめ",
     "source": "接続元",
+    "remoteProvider": "{{provider}} · {{device}}",
     "harness": "Harness",
     "restoreRecommended": "推奨設定に戻す",
     "saveFailed": "保存できませんでした。再試行してください。",

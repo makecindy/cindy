@@ -33,6 +33,7 @@ import { SessionShareImportWizard } from '@/components/settings/SessionShareImpo
 import { ControlledBanner } from '@/features/remote-device/ControlledBanner';
 import { CredentialStoreBanner } from '@/components/layout/CredentialStoreBanner';
 import { useDeviceLinkRemoteProjects } from '@/features/device-link/useDeviceLinkRemoteProjects';
+import { useAgentIslandRemoteSessionsSync } from '@/features/device-link/agentIslandRemoteSessions';
 import { pluginScheduleNavigationState } from '@/features/scheduler/lib/pluginScheduleCreateIntent';
 import { ScheduleSessionIndexOwner } from '@/features/scheduler/components/ScheduleSessionIndexOwner';
 import { AppBadgeAttentionSync } from '@/components/layout/AppBadgeAttentionSync';
@@ -104,6 +105,8 @@ import { makeGenericNewMakerRouteState } from '@/features/cc-agent/lib/genericNe
 import { resolveSessionRoute } from '@/lib/orcaSessionIdentity';
 import { ensureBotProfilesLoaded, getBotProfiles } from '@/features/bots/botStore';
 import { createSessionEntryNavigator, resolveBotRouteForSessionEntry } from '@/features/bots/botSessionOwners';
+import { requestProviderShareJoin } from '@/features/provider-share/joinIntent';
+import { ProviderShareGlobalHost } from '@/features/provider-share/ProviderShareGlobalHost';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
 import {
   isAgentIslandVisibleSessionOwnedByWorkdirBrowseRoute,
@@ -486,6 +489,8 @@ export function MainLayout() {
   usePluginRemovalNoticeToast();
   // device-link 跨设备远程控制:同账号在线 + 开了被控的设备,其项目自动并入侧边栏
   useDeviceLinkRemoteProjects();
+  // 范围内的远程任务进本机灵动岛 / 桌面通知(main 只认主窗的这份输入)。
+  useAgentIslandRemoteSessionsSync();
 
   // 系统通知点击回调：主进程把窗口拉到前台后广播 sessionId，这里跳路由。
   // 挂在 MainLayout 而不是 App 顶层——这里在 ProtectedRoute + LocalDbGate 之内，
@@ -632,8 +637,13 @@ export function MainLayout() {
         | { type: 'share-import'; filePath: string }
         | { type: 'provider-import'; importId: string }
         | { type: 'shared-task-join'; invitation: string; server: string }
+        | { type: 'provider-share-join'; link: string }
         | { type: 'settings'; tab: 'voice-input' | 'providers'; connect?: string },
     ) => {
+      if (payload.type === 'provider-share-join') {
+        requestProviderShareJoin(payload.link);
+        return;
+      }
       if (payload.type === 'shared-task-join') {
         setSharedTaskInvitation({ link: buildSharedTaskInvitationLink(payload.invitation, payload.server), id: ++invitationSequence.current });
         return;
@@ -677,9 +687,17 @@ export function MainLayout() {
     },
     [navigate, navigateToSession, openShareImport],
   );
+  useEffect(
+    () =>
+      window.electronAPI.ghosts.onRetirementOpen((id) => {
+        navigate(`/plugins?retired=${encodeURIComponent(id)}`);
+      }),
+    [navigate],
+  );
+
   useEffect(() => {
     const unsubscribe = window.electronAPI.onDeepLinkNavigate((payload) => {
-      if (payload.type !== 'provider-import' && payload.type !== 'shared-task-join') {
+      if (payload.type !== 'provider-import' && payload.type !== 'shared-task-join' && payload.type !== 'provider-share-join') {
         handleDeepLinkPayload(payload);
         return;
       }
@@ -1659,6 +1677,8 @@ export function MainLayout() {
       )}
       {/* FeiShu Bot conflict dialog -- subscribes to main process push and surfaces a global modal */}
       <FeishuConflictDialogHost />
+      {/* 供应商分享：分享者的审批弹窗与受邀者的申请弹窗。只挂在主窗口，副窗不重复弹。 */}
+      {!isSecondaryWindow() && <ProviderShareGlobalHost />}
       {sharedTaskInvitation && <JoinSharedTaskDialog key={sharedTaskInvitation.id} open initialInvitation={sharedTaskInvitation.link}
         onOpenChange={(open) => { if (!open) setSharedTaskInvitation(null); }} />}
       {/* 窗口级拖拽兜底:拖 .cshare 进窗口空白处 → 会话导入向导 */}

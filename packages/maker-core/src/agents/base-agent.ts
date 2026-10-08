@@ -7,7 +7,7 @@
  * - 持有依赖注入的 deps，但具体使用由子类决定
  */
 
-import type { AutoReviewUserIntent } from './shared/auto-review-decision.js';
+import type { AutoReviewUserIntent, AutoReviewUserReferences } from './shared/auto-review-decision.js';
 import { LIBRARY_READ_ROOT } from './shared/library-native-read.js';
 import { canonicalSkillPath, isSkillDisabled } from './shared/skill-activation.js';
 
@@ -63,9 +63,6 @@ import type { McpProvider } from '../interfaces/mcp-provider.js';
 import type { MakerMemoryManager } from '../memory/manager.js';
 import type {
   CodexModelListItem,
-  DynamicToolCallParams,
-  DynamicToolCallResponse,
-  DynamicToolSpec,
   ReasoningEffort,
 } from './codex/app-server/protocol.js';
 import type {
@@ -122,27 +119,6 @@ export interface CodexMcpThreadContextArgs {
   vendorOptions: Record<string, unknown>;
 }
 
-export interface CodexHostDynamicToolContext {
-  sessionId?: string;
-  workingDir: string;
-  remoteHostId?: string;
-  model: string;
-  providerId?: string | null;
-  vendorOptions: Record<string, unknown>;
-}
-
-/**
- * Host-owned dynamic tools that must remain directly callable even when the
- * Codex runtime defers ordinary MCP tool discovery.
- */
-export interface CodexHostDynamicToolProvider {
-  listTools(context: CodexHostDynamicToolContext): readonly DynamicToolSpec[];
-  callTool(
-    params: DynamicToolCallParams,
-    context: CodexHostDynamicToolContext,
-  ): Promise<DynamicToolCallResponse | undefined>;
-}
-
 /** Metadata Codex attaches to an MCP tool approval elicitation. */
 export interface McpToolApprovalContext {
   serverName: string;
@@ -156,12 +132,6 @@ export type McpToolApprovalPolicy =
   | 'auto-approve'
   | 'prompt'
   | 'prompt-each-time';
-
-/** Host-owned copy for an MCP permission request that needs a specific risk disclosure. */
-export interface McpToolApprovalPresentation {
-  title?: string;
-  description?: string;
-}
 
 /** Pi 内 MCP client 的 server 描述；remote 存在时直接访问外部 Streamable HTTP MCP。 */
 export interface PiMcpServerRef {
@@ -360,6 +330,8 @@ export class PiNativeProviderProxyNotReadyError extends Error {
  * sessionId 缺省 → host 不注册、URL 不带 query(匿名会话走无 ctx 兜底,行为同改动前)。
  */
 export interface PiExtraSpawnConfigContext {
+  /** 使用这些工具的 Agent(缺省 pi)。Agent 在另一台电脑上运行的任务也借这套桥身份。 */
+  agentKind?: AgentKind;
   sessionId?: string;
   /** 当前 Maker Session 实例代号；用于阻断旧 bridge 请求借用新实例权限。 */
   sessionInstanceId?: string;
@@ -1069,6 +1041,11 @@ export interface AgentDeps {
       customContextWindow?: number;
       /** Unique app-server Host-generation identity used to scope custom-context resources. */
       customContextHostKey?: string;
+      /**
+       * 受邀者(供应商分享)任务的 app-server，值是分享给它的供应商。host 不开智能 Subagent
+       * 调配、不暴露 spawn 的模型覆写，自定义供应商路由与按模型分流也只保留这个供应商。
+       */
+      deviceHostedGuestProviderId?: string;
     },
   ) => Promise<CodexExtraSpawnConfig>;
 
@@ -1079,6 +1056,8 @@ export interface AgentDeps {
       providerId?: string;
       credentialMode?: AgentCredentialMode;
       hostPurpose?: 'control-plane' | 'review' | 'custom-context';
+      /** 受邀者任务的 app-server 不开智能 Subagent 调配(见 prepareCodexExtraSpawnConfig)。 */
+      deviceHostedGuestProviderId?: string;
     },
   ) => Promise<string>;
 
@@ -1137,6 +1116,12 @@ export interface AgentDeps {
    * only the request supplied here; null/throw is treated as a silent block.
    */
   reviewAutoPermissionAction?: AutoReviewDelegate;
+
+  /**
+   * Claude Code 工具循环疑似命中时的辅助模型复核入口(与 MakerDeps.toolLoopReviewer
+   * 同一实现)。缺省 = 疑似即中断。
+   */
+  toolLoopReviewer?: import('./shared/tool-loop-review.js').ToolLoopReviewer;
 
   /** Scope tools/list during native startup, before a real thread id exists. Never authorizes tools/call. */
   withCodexMcpDiscoveryContext?: <T>(
@@ -1305,39 +1290,6 @@ export interface AgentDeps {
    * Missing or failed classifiers cannot grant a trusted shortcut.
    */
   getMcpToolApprovalPolicy?: (context: McpToolApprovalContext) => McpToolApprovalPolicy;
-
-  /**
-   * Optional host-owned title and description for an MCP approval card.
-   *
-   * This stays separate from the policy mode: a call can remain
-   * `prompt-each-time` while the Host explains a risk the generic MCP client
-   * cannot infer from the outer `call_tool` envelope.
-   */
-  getMcpToolApprovalPresentation?: (
-    context: McpToolApprovalContext,
-  ) => McpToolApprovalPresentation | undefined;
-
-  /**
-   * Codex-only deterministic tool activation for narrow host capabilities.
-   * Definitions are frozen at thread creation and restored handlers are gated
-   * against the same session-start snapshot.
-   */
-  codexHostDynamicToolProvider?: CodexHostDynamicToolProvider;
-
-  /**
-   * Host-owned shell command policy applied before Codex command approval.
-   * Returning `deny` is an unconditional product guard and therefore wins over
-   * the user's broad Full access permission mode. Returning undefined leaves
-   * the normal Codex approval flow unchanged.
-   *
-   * Product-specific command parsing belongs in the host; maker-core only
-   * carries the decision across the app-server boundary.
-   */
-  getShellCommandPolicy?: (context: {
-    agentKind: 'codex';
-    command: string;
-    cwd?: string;
-  }) => { decision: 'deny'; reason: string } | undefined;
 
   /**
    * Codex 专用钩子：resume / fork 外部本地 thread 前由 host 准备底层 session state。
@@ -1787,6 +1739,62 @@ export class TurnDispatchRejectedError extends Error {
   }
 }
 
+/** 设备托管会话的描述(见 StartSessionOptions.deviceHosted)。 */
+export interface DeviceHostedSession {
+  /** Agent 主机上的虚拟工作目录，执行器映射到任务真实目录；旧协议兼容真实路径。 */
+  workingDir: string;
+  extraDirs: string[];
+  writableDirs: string[];
+  /** 任务所在电脑的平台与 shell(写进给模型的环境说明)。 */
+  platform: NodeJS.Platform;
+  /** 虚拟工作区路径采用 Agent 进程所在主机的路径风格；缺省按当前进程判断。 */
+  pathPlatform?: NodeJS.Platform;
+  shell: string;
+  osVersion?: string;
+  homeDir?: string;
+  isGitRepo: boolean;
+  /** 本机 loopback 隧道：Agent 经它访问任务所在电脑的执行器与 Cindy 工具。 */
+  tunnelUrl: string;
+  tunnelToken: string;
+  /** 经隧道可用的 Cindy MCP 服务名(`<tunnelUrl>/mcp/<name>`)。 */
+  mcpServers: string[];
+  /**
+   * 本机虚拟工作区根：父目录层级对应执行端的上级说明文件，Agent 照常向上加载。
+   */
+  mirrorRoot?: string;
+  /** 任务所在电脑上用户的个人说明(该 Agent 的用户级说明文件)，写进给模型的环境说明。 */
+  personalInstructions?: string;
+  /**
+   * 任务属于另一个账号(供应商分享的受邀者)。Agent 不加载本机的 hooks、托管技能，也不读取
+   * 会话目录之外的说明文件；本机用户自己的配置与可执行配置不进入这个会话。
+   */
+  guest?: boolean;
+  /**
+   * 受邀者专用的本机目录(远程 Agent 运行根下按控制端分开，跨任务保留，分享删除时整体清理)。
+   * Codex 的 CODEX_HOME 与 Pi 的会话目录放在这里，不与本机用户自己的历史、配置混在一起。
+   * 只在 guest 时使用；缺省时 Codex 受邀者会话按本机全局说明 fail-closed。
+   */
+  guestHome?: string;
+  /**
+   * 受邀者会话的供应商边界(只在 guest 时提供)：会话只能经分享给受邀者的这一个供应商出站。
+   *  - providerId：分享的供应商(启动与切模都钉在它上面)；
+   *  - modelIds：它为本 Agent 提供的模型(Claude Code 的可选模型只列这些)；
+   *  - routeToken：本机 proxy 认出这条会话请求的令牌(Claude Code 经请求头带上，Pi / Codex 按会话登记)。
+   * Pi / Codex 子代理与按模型分流的路由也只保留这个供应商。
+   */
+  guestProvider?: DeviceHostedGuestProvider;
+}
+
+/** 受邀者会话的供应商边界，见 DeviceHostedSession.guestProvider。 */
+export interface DeviceHostedGuestProvider {
+  providerId: string;
+  modelIds: readonly string[];
+  routeToken: string;
+}
+
+/** 受邀者会话的 Claude Code 请求带上的路由令牌请求头(本机 proxy 据此只走分享的供应商)。 */
+export const DEVICE_HOSTED_GUEST_ROUTE_HEADER = 'x-cindy-guest-route';
+
 export interface StartSessionOptions {
   /**
    * Business 层 session id (host 调用 maker.createSession 时传的 opts.id, 由
@@ -1822,6 +1830,13 @@ export interface StartSessionOptions {
    * 目前仅 Codex 支持; Claude 不消费此字段 (会被忽略)。
    */
   remoteHostId?: string;
+  /**
+   * 设备托管：Agent 进程在本机运行(用本机的程序、登录、供应商与网络)，任务、项目文件与
+   * 命令执行在同账号的另一台电脑上。workingDir 是本机的影子目录(只放同步过来的项目说明，
+   * 供 Agent 照常加载)；文件与命令工具、Cindy 工具全部经 tunnel 回到任务所在电脑执行。
+   * 与 remoteHostId 互斥。
+   */
+  deviceHosted?: DeviceHostedSession;
   model: string;
   /**
    * 本次会话显式选择的供应商来源。maker-core 只用它推导子进程凭证形态;
@@ -1996,6 +2011,12 @@ export interface MainOwnedSendContext {
   readonly origin: TurnPermissionOrigin;
   /** Main-authenticated user text before channel/persona/context decoration. */
   readonly rawChannelText?: string;
+  /**
+   * Host-stamped content this channel message points at (reply/quote and attachment
+   * counts). Auto-review shows it as third-party evidence beside, never inside, the
+   * user's words; it cannot grant authority.
+   */
+  readonly autoReviewReferences?: AutoReviewUserReferences;
 }
 
 /**

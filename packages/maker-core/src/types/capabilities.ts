@@ -247,6 +247,11 @@ export interface ModelDescriptor {
   /** 该模型默认 effort; null = 不支持 effort。 */
   defaultEffort: Effort | null;
   /**
+   * true = 目录里没有任何来源声明过该模型的 effort 能力(自定义来源只填了 id/name 等)。
+   * 这时 `efforts: []` 只是占位,不等于「明确无档位」;准入校验不应据此拒绝显式档位(#5535)。
+   */
+  effortsUnknown?: boolean;
+  /**
    * 该模型是否支持 Fast Mode (Claude 1M context 通道 / Codex priority service tier)。
    * UI 据此显示 / 隐藏 Fast Mode 开关, 不再自己 startsWith 解析 model id。
    */

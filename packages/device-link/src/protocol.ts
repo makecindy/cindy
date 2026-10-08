@@ -26,10 +26,26 @@ import {
   type RelayErrorCode,
   type RelayErrorPayload,
 } from '@cindy/device-link-protocol';
+import { isProviderSharePeer as isProviderSharePeerLocal } from './providerSharePeer.js';
+import { isSharedTaskPeer as isSharedTaskPeerLocal } from './sharedTaskPeer.js';
 
 export { SHARED_TASK_RELAY_CAPABILITY, sharedTaskDeviceId, parseSharedTaskScope, type SharedTaskScope } from '@cindy/device-link-protocol';
 export { sharedTaskHostPeer, sharedTaskGuestPeer, isSharedTaskPeer, parseSharedTaskPeer } from './sharedTaskPeer.js';
 export type { SharedTaskPeer } from './sharedTaskPeer.js';
+export {
+  PROVIDER_SHARE_RELAY_CAPABILITY,
+  parseProviderShareScope,
+  providerShareIdentifier,
+  type ProviderShareEndpoint,
+  type ProviderShareScope,
+} from '@cindy/device-link-protocol';
+export { providerShareHostPeer, providerShareGuestPeer, isProviderSharePeer, parseProviderSharePeer } from './providerSharePeer.js';
+export type { ProviderSharePeer } from './providerSharePeer.js';
+
+/** Any cross-account scoped peer (shared task or provider share): never treat as a same-account device. */
+export function isScopedPeer(value: unknown): boolean {
+  return isSharedTaskPeerLocal(value) || isProviderSharePeerLocal(value);
+}
 
 export {
   MAX_FRAME_BYTES,

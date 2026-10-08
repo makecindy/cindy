@@ -161,7 +161,7 @@ describe('NewMakerDraftRoute CREATE AGENT visual contract', () => {
       'vendorKey={normalizeDbAgentKind(draft.vendor)}',
       // #807 第二十二轮:仍然由调用方显式持有(ChatInput 不 fallback 内部一份),但远程草稿下
       // 包了一层闸门 —— 拒绝路径型附件,因为那是控制端绝对路径,发到对端读不到或读到无关文件。
-      'attachmentState={guardedAttachmentState}',
+      'attachmentState={attachmentState}',
       'draftKey={NEW_MAKER_DRAFT_KEY}',
       'extraDirs={effectiveExtraDirs}',
       // #807 第二十二轮**刻意收窄**原来「+ 始终能加引用目录」这条:远程草稿不下传 onChange,
@@ -170,9 +170,9 @@ describe('NewMakerDraftRoute CREATE AGENT visual contract', () => {
       // 并非真实授予的上下文。本机草稿行为不变;把 picker 路由到对端后恢复,见 issue #1012。
       'onExtraDirsChange={isDeviceLinkDraft ? undefined : handleExtraDirsChange}',
       'onNewGoal={(text) =>',
-      'rememberedEffortByModel={isDeviceLinkDraft ? undefined : draft.effortByModel}',
+      'rememberedEffortByModel={usesDeviceCatalog ? undefined : draft.effortByModel}',
       'onRememberedEffortChange={',
-      'isDeviceLinkDraft ? undefined : handleRememberedEffortChange',
+      'usesDeviceCatalog ? undefined : handleRememberedEffortChange',
       "placeholder={t('newChat.chatInput.createAgentPlaceholder')}",
       // 统一模型选择器(M5):新会话的选中直通 + 收藏锚点选中态。撤掉 AgentSelect 后,
       // 「换引擎」这件事只剩这一条路径 —— 掉了它草稿就再也换不了引擎。

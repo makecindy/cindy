@@ -6,6 +6,10 @@ import i18n from '@/i18n';
 import { PluginSetupPrompt } from '@/components/new-chat/PluginSetupPrompt';
 import type { PendingPluginSetup } from '@/lib/makerChatStore';
 
+vi.mock('@/features/device-link/useDeviceLinkDeviceList', () => ({
+  useDeviceLinkDeviceList: () => [],
+}));
+
 const pending: PendingPluginSetup = {
   requestId: 'connection-card',
   revision: 1,

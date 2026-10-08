@@ -100,3 +100,19 @@ describe('composer reconnect presentation', () => {
     expect(active?.maxAttempts).toBeUndefined();
   });
 });
+
+describe('usage-limit reset continuation', () => {
+  it('is not reported as a reconnect in the composer', () => {
+    expect(
+      findActiveReconnect({
+        ...base,
+        messages: [
+          row({
+            systemCardData: { reason: 'usage-limit-reset', attempt: 1, maxAttempts: 3, sessionTotal: 1 },
+          }),
+        ],
+      }),
+    ).toBeNull();
+  });
+});
+

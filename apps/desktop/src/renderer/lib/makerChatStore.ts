@@ -4,7 +4,7 @@ export type { PluginSetupCommandError } from './pluginSetupCommandError';
 import { emitTaskTagCatalog } from '@/features/task-tags/taskTagEvents';
 import { normalizeTaskTags } from '@cindy/maker-shared';
 import type { ImMessageSource } from '../../shared/imMessageSource';
-import { sharedTaskAuthorName } from '@cindy/maker-shared';
+import { sharedTaskAuthorMemberId, sharedTaskAuthorName } from '@cindy/maker-shared';
 import { readBotAuthorizationCard } from '../../shared/botAuthorization';
 import { applyCindyMakeCardAttention } from './cindyMakeAttention';
 import { confirmRemoteUsers, reserveRemoteUser } from './remoteUserHandoff';
@@ -81,6 +81,12 @@ import { parseToolLoopErrorDetails } from '@cindy/maker-shared/tool-loop-error';
 import type { ToolLoopErrorDetails } from '@cindy/maker-core';
 import type { AgentMeta, MessageRole, Message, MessageAutomationOrigin } from '@/lib/ccAgent.types';
 import { toMessageAutomationOrigin } from '@/lib/messageAutomationOrigin';
+import {
+  readMessageSourceDevice,
+  readMessageSourcePlugin,
+  type MessageSourceDevice,
+  type MessageSourcePlugin,
+} from '@cindy/maker-shared/message-source';
 import {
   type AttachedFile,
   type MentionedResource,
@@ -284,20 +290,35 @@ function isRemoteDeletedSessionSendBlocked(sessionId: string): boolean {
  * session row from a fresh remote snapshot can release that tombstone; an
  * out-of-order `status: active` patch is intentionally ignored and merely
  * requests a reseed through remoteProjectsStore.
+ *
+ * 读分片里的权威行,不读投影:恢复写库仍在途时,乐观叠加层已把行投影成 active,
+ * 写库失败回滚后墓碑却已经没了。
  */
 function releaseArchivedRemoteTerminalTombstones(): void {
   if (remoteTerminalSessionTombstones.size === 0) return;
-  const activeSessions = remoteProjectsStore.getMergedRemoteSessions();
   for (const [sessionId, tombstone] of remoteTerminalSessionTombstones) {
     if (tombstone.status !== 'archived') continue;
-    const active = activeSessions.some(
-      (session) =>
-        session.id === sessionId &&
-        session.deviceLinkDeviceId === tombstone.deviceId &&
-        session.status !== 'archived' &&
-        session.status !== 'deleted',
-    );
+    const active = remoteProjectsStore
+      .getDeviceSessions(tombstone.deviceId)
+      .some(
+        (session) =>
+          session.id === sessionId &&
+          session.status !== 'archived' &&
+          session.status !== 'deleted',
+      );
     if (active) remoteTerminalSessionTombstones.delete(sessionId);
+  }
+}
+
+/**
+ * 本端发起的远程恢复(unarchive)写库已成功:被控端已确认任务回到 active,直接释放
+ * 归档墓碑,后续 patch / 消息帧不再被丢弃,也不必等一次 reseed 快照来解除。
+ * 删除墓碑不可逆,不在此列。
+ */
+function releaseRemoteArchivedTombstone(sessionId: string, deviceId: string): void {
+  const tombstone = remoteTerminalSessionTombstones.get(sessionId);
+  if (tombstone?.status === 'archived' && tombstone.deviceId === deviceId) {
+    remoteTerminalSessionTombstones.delete(sessionId);
   }
 }
 
@@ -475,6 +496,12 @@ export interface ChatMessage {
    */
   automationOrigin?: MessageAutomationOrigin;
   sharedAuthorName?: string;
+  /** 共享任务成员 id(作者行悬停显示,与模型 `[消息来源]` 的 member_id 同源)。 */
+  sharedAuthorMemberId?: string;
+  /** 手机 / 另一台电脑远程发来时的发送设备(读自 agentMeta.sourceDevice)。 */
+  sourceDevice?: MessageSourceDevice;
+  /** 插件任务派发的消息来源(读自 agentMeta.sourcePlugin)。 */
+  sourcePlugin?: MessageSourcePlugin;
   /** user 消息投递方式:普通新 turn 或运行中 steer。 */
   delivery?: 'turn' | 'steer';
   /** Hook 来源元数据(IM 平台 + 用户干净原文 + thread 上下文),UserMessage 据此渲染 Cindy 任务卡片。 */
@@ -2426,6 +2453,11 @@ export interface AgentSwitchIntentRecord {
   providerId: string | null;
   effort?: string;
   fastMode?: boolean;
+  /**
+   * 远程 Agent:这次选择同时换 Agent 所在电脑(null = 任务所在电脑)。缺省 = 位置不变。
+   * 意图期内模型目录、选中态与 trigger 都按这台电脑显示。
+   */
+  agentDeviceId?: string | null;
 }
 
 export type ContinuationInFlightProjectionCapability = 'unknown' | 'supported' | 'legacy';
@@ -2545,6 +2577,11 @@ export interface SessionChatState {
    * 会话挡住;队首保留、结束后 main 自动重发。渲染为等待横幅(非错误)。
    */
   credentialSwitchWait: { clientId?: string; blockedBySessionIds: string[] } | null;
+  /**
+   * 账号限额等待(main projection 透传):错误照常显示,横幅附「将于 X 自动继续 · 取消」。
+   * 只在 error 仍在时有值;老被控端缺省 = null。
+   */
+  usageLimitWait: { resumeAt: number } | null;
   /**
    * Main coordinator 中已经离开 pendingQueue、但仍占有 dispatch/turn 边界的
    * Continue clientId。用于让中断横幅在「离队 → running/session patch」窗口
@@ -2834,6 +2871,7 @@ export type SessionChatLightState = Pick<
   | 'errorPersistId'
   | 'disposedErrorPersistId'
   | 'credentialSwitchWait'
+  | 'usageLimitWait'
   | 'continuationInFlightClientId'
   | 'continuationTurnClientId'
   | 'continuationInFlightProjectionCapability'
@@ -2903,6 +2941,7 @@ function createInitialState(): SessionChatState {
     errorPersistId: null,
     disposedErrorPersistId: null,
     credentialSwitchWait: null,
+    usageLimitWait: null,
     continuationInFlightClientId: null,
     continuationTurnClientId: null,
     continuationInFlightProjectionCapability: 'unknown',
@@ -2984,6 +3023,7 @@ export const EMPTY_SESSION_STATE: SessionChatState = Object.freeze({
   errorPersistId: null,
   disposedErrorPersistId: null,
   credentialSwitchWait: null,
+  usageLimitWait: null,
   continuationInFlightClientId: null,
   continuationTurnClientId: null,
   continuationInFlightProjectionCapability: 'unknown',
@@ -4798,6 +4838,12 @@ function applyInputProjection(
       errorRetryText: projection.errorRetryText,
       errorPersistId: projection.error ? s.errorPersistId : null,
       credentialSwitchWait: projection.credentialSwitchWait ?? null,
+      usageLimitWait:
+        projection.error && projection.usageLimitWait
+          ? s.usageLimitWait?.resumeAt === projection.usageLimitWait.resumeAt
+            ? s.usageLimitWait
+            : { resumeAt: projection.usageLimitWait.resumeAt }
+          : null,
       continuationInFlightClientId: projection.continuationInFlightClientId ?? null,
       continuationTurnClientId: projectedContinuationTurnClientId,
       continuationInFlightProjectionCapability,
@@ -6725,6 +6771,15 @@ export function handleStreamEvent(
       // Guard against malformed events (Minor #6): empty requestId or plan
       // would produce an un-resolvable pending review. Drop on the floor.
       if (!data.requestId || !data.plan) return state;
+      // Host snapshots and duplicate pushes carry the original request, while
+      // remote plan edits only live here. Replaying the same pending request
+      // must preserve its draft and viewer state until a decision or dismissal.
+      const keepPlanProgress = state.pendingPlanReview?.requestId === data.requestId;
+      const pendingPlan = keepPlanProgress ? state.pendingPlanReview! : {
+        requestId: data.requestId,
+        plan: data.plan,
+        planFilePath: data.planFilePath,
+      };
       // F1-a: plan_review 消息的落库(+ 在飞 assistant flush)已收口 main
       // (onInteractionMessage),renderer 只做 UI:finalize + 用 main 下发的 persistId 建
       // plan_review 气泡(onCreated dedup;answered/feedback 回写命中这条 persistId 单行)。
@@ -6743,8 +6798,8 @@ export function handleStreamEvent(
                     ...m,
                     isStreaming: false,
                     planReviewStatus: 'pending' as const,
-                    planReviewPlan: data.plan,
-                    planReviewFilePath: data.planFilePath,
+                    planReviewPlan: pendingPlan.plan,
+                    planReviewFilePath: pendingPlan.planFilePath,
                     planReviewFeedback: undefined,
                   }
                 : m,
@@ -6761,22 +6816,18 @@ export function handleStreamEvent(
                 isStreaming: false,
                 planReviewStatus: 'pending' as const,
                 planReviewRequestId: data.requestId,
-                planReviewPlan: data.plan,
-                planReviewFilePath: data.planFilePath,
+                planReviewPlan: pendingPlan.plan,
+                planReviewFilePath: pendingPlan.planFilePath,
                 createdAt: new Date().toISOString(),
               },
             ];
 
       return {
         ...finalized,
-        pendingPlanReview: {
-          requestId: data.requestId,
-          plan: data.plan,
-          planFilePath: data.planFilePath,
-        },
+        pendingPlanReview: pendingPlan,
         // Default to expanded + remember as the restore target for minimized
-        planViewerState: 'expanded',
-        lastExpandedPlanViewerState: 'expanded',
+        planViewerState: keepPlanProgress ? state.planViewerState : 'expanded',
+        lastExpandedPlanViewerState: keepPlanProgress ? state.lastExpandedPlanViewerState : 'expanded',
         messages: planMessages,
       };
     }
@@ -9581,6 +9632,7 @@ function selectLightState(state: SessionChatState): SessionChatLightState {
     errorPersistId: state.errorPersistId,
     disposedErrorPersistId: state.disposedErrorPersistId,
     credentialSwitchWait: state.credentialSwitchWait,
+    usageLimitWait: state.usageLimitWait,
     continuationInFlightClientId: state.continuationInFlightClientId,
     continuationTurnClientId: state.continuationTurnClientId,
     continuationInFlightProjectionCapability: state.continuationInFlightProjectionCapability,
@@ -9631,6 +9683,7 @@ function lightStateEquals(a: SessionChatLightState, b: SessionChatLightState): b
     a.errorPersistId === b.errorPersistId &&
     a.disposedErrorPersistId === b.disposedErrorPersistId &&
     a.credentialSwitchWait === b.credentialSwitchWait &&
+    a.usageLimitWait === b.usageLimitWait &&
     a.continuationInFlightClientId === b.continuationInFlightClientId &&
     a.continuationTurnClientId === b.continuationTurnClientId &&
     a.continuationInFlightProjectionCapability === b.continuationInFlightProjectionCapability &&
@@ -10228,11 +10281,19 @@ function reconcilePendingInteractions(
       // Permissions also need subtraction after a lost decision receipt.
       const authoritativePluginSetupIds = new Set<string>();
       const authoritativePermissionIds = new Set<string>();
+      const authoritativeQuestionIds = new Set<string>();
+      const authoritativePlanIds = new Set<string>();
       const authoritativeRemoteDesktopConfirmationIds = new Set<string>();
       for (const item of list) {
         const request = item?.request;
         if (request?.kind === 'permission' && typeof request.requestId === 'string') {
           authoritativePermissionIds.add(request.requestId);
+        }
+        if (request?.kind === 'ask_user_question' && typeof request.requestId === 'string') {
+          authoritativeQuestionIds.add(request.requestId);
+        }
+        if (request?.kind === 'plan_review' && typeof request.requestId === 'string') {
+          authoritativePlanIds.add(request.requestId);
         }
         if (
           request?.kind === 'plugin_setup' &&
@@ -10253,6 +10314,28 @@ function reconcilePendingInteractions(
       }
       if (!isCurrentInteractionReconcile()) return 0;
       setState(sessionId, (state) => {
+        // Missing dismissal pushes must not leave old questions blocking the
+        // composer. Only a successful, current Host snapshot can retire them.
+        const nextAskUser = state.pendingAskUser &&
+          authoritativeQuestionIds.has(state.pendingAskUser.requestId)
+          ? state.pendingAskUser : null;
+        const nextPlanReview = state.pendingPlanReview &&
+          authoritativePlanIds.has(state.pendingPlanReview.requestId)
+          ? state.pendingPlanReview : null;
+        let messagesChanged = false;
+        const messages = state.messages.map((message) => {
+          if (message.askUserStatus === 'pending' && message.askUserRequestId &&
+            !authoritativeQuestionIds.has(message.askUserRequestId)) {
+            messagesChanged = true;
+            return { ...message, askUserStatus: 'expired' as const };
+          }
+          if (message.planReviewStatus === 'pending' && message.planReviewRequestId &&
+            !authoritativePlanIds.has(message.planReviewRequestId)) {
+            messagesChanged = true;
+            return { ...message, planReviewStatus: 'expired' as const };
+          }
+          return message;
+        });
         const nextPermission = state.pendingPermission &&
           authoritativePermissionIds.has(state.pendingPermission.requestId)
           ? state.pendingPermission : null;
@@ -10306,6 +10389,9 @@ function reconcilePendingInteractions(
         if (
           !currentChanged &&
           !queueChanged &&
+          !messagesChanged &&
+          nextAskUser === state.pendingAskUser &&
+          nextPlanReview === state.pendingPlanReview &&
           nextPermission === state.pendingPermission &&
           nextCommand === state.pluginSetupCommandInFlight &&
           promotedRemoteDesktopConfirmation === state.pendingRemoteDesktopConfirmation &&
@@ -10315,6 +10401,13 @@ function reconcilePendingInteractions(
         }
         return {
           ...state,
+          messages: messagesChanged ? messages : state.messages,
+          pendingAskUser: nextAskUser,
+          askUserDraft: nextAskUser ? state.askUserDraft : null,
+          askUserViewerState: nextAskUser ? state.askUserViewerState : 'expanded',
+          pendingPlanReview: nextPlanReview,
+          planViewerState: nextPlanReview ? state.planViewerState : 'expanded',
+          lastExpandedPlanViewerState: nextPlanReview ? state.lastExpandedPlanViewerState : 'expanded',
           pendingPermission: nextPermission,
           pendingPluginSetup: nextCurrent,
           pendingPluginSetupQueue: survivingQueue,
@@ -15548,6 +15641,18 @@ function disposeLiveErrorPersist(sessionId: string): void {
   });
 }
 
+/** 取消账号限额重置后的自动继续:错误与手动重试保留,只撤等待。 */
+function cancelUsageLimitWait(sessionId: string): void {
+  if (!sessionId) return;
+  const boundaryOpts = getRemoteInputClearBoundaryOpts(sessionId);
+  runInputProjectionOperation(sessionId, (input) =>
+    boundaryOpts
+      ? input.cancelUsageLimitWait(sessionId, boundaryOpts)
+      : input.cancelUsageLimitWait(sessionId),
+  ).catch((err) => log.warn('cancelUsageLimitWait failed:', err));
+  // 不乐观清除：以主进程返回的投影为准。取消失败时等待仍会到点执行，提示必须留着。
+}
+
 /**
  * Dismiss the error banner without retrying. Also disposes the bound persist row
  * so the same error does not reappear as a tail banner in this view.
@@ -16148,7 +16253,7 @@ function updateSystemCardData(
 }
 
 // Only an accepted Host receipt may commit a question/plan decision. A rejected
-// or lost receipt leaves the existing card and its draft available for retry.
+// or lost receipt rechecks Host state, keeping a still-pending card and draft.
 const questionDecisionsInFlight = new Set<string>();
 
 function submitQuestionDecision(
@@ -16189,6 +16294,24 @@ function submitQuestionDecision(
       if (state?.pendingAskUser?.requestId !== requestId &&
         state?.pendingPlanReview?.requestId !== requestId) return;
       log.warn('Question decision receipt unavailable', error);
+      // A rejection may mean either an ended request or paused execution.
+      // Read the authoritative snapshot; never infer completion or resend the
+      // answer from a missing receipt. Bound this read just like the submission.
+      if (timer) clearTimeout(timer);
+      try {
+        await Promise.race([
+          reconcilePendingInteractions(sessionId, isCurrent),
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(() => reject(new Error('Interaction reconciliation timeout')), 15_000);
+          }),
+        ]);
+      } catch {
+        // A disconnected Host cannot prove that the request has ended.
+      }
+      if (!isCurrent()) return;
+      const current = sessions.get(sessionId);
+      if (current?.pendingAskUser?.requestId !== requestId &&
+        current?.pendingPlanReview?.requestId !== requestId) return;
       toast.warning(i18n.t('newChat.permissionPrompt.submissionFailed'));
     } finally {
       if (timer) clearTimeout(timer);
@@ -16904,7 +17027,10 @@ function closeSessionQuery(sessionId: string): void {
  * message that should NEVER be rendered in the chat bubble list. mapServerMessages
  * filters these out so they stay invisible after a session reload too.
  *
- * The LLM still sees the full prompt (no filtering on the wire). Rationale
+ * Renderer-synthesized triggers (continue prompts) still reach the LLM with the
+ * prefix (no filtering on the wire). Host-built internal messages such as task
+ * receipts keep the prefix only on the persisted/queued text so they stay
+ * hidden; main strips it from the model-facing wire text. Rationale
  * (历史,源自老 mivo 按钮链路,该链路已随 lizi_mivo MCP 退役,2026-07-13;
  * 现存使用方:隐藏续跑指令):
  *   - mivo MJ button clicks (U1/V1/Animate/...) need to flow through agent
@@ -17089,7 +17215,13 @@ function noteAgentSwitched(sessionId: string, agentKind: 'claude-code' | 'codex'
 function noteAgentSwitchIntent(
   sessionId: string,
   target: 'claude-code' | 'codex' | 'pi',
-  opts: { model: string; providerId: string | null; effort?: string; fastMode?: boolean },
+  opts: {
+    model: string;
+    providerId: string | null;
+    effort?: string;
+    fastMode?: boolean;
+    agentDeviceId?: string | null;
+  },
 ): void {
   if (!sessionId) return;
   setState(sessionId, (s) => ({
@@ -17100,6 +17232,7 @@ function noteAgentSwitchIntent(
       providerId: opts.providerId,
       effort: opts.effort,
       fastMode: opts.fastMode,
+      ...(opts.agentDeviceId !== undefined ? { agentDeviceId: opts.agentDeviceId } : {}),
     },
     agentSwitchIntentRev: s.agentSwitchIntentRev + 1,
   }));
@@ -17148,12 +17281,18 @@ function normalizeAgentSwitchIntent(value: unknown): AgentSwitchIntentRecord | n
   if (item.providerId != null && typeof item.providerId !== 'string') return null;
   if (item.effort !== undefined && typeof item.effort !== 'string') return null;
   if (item.fastMode !== undefined && typeof item.fastMode !== 'boolean') return null;
+  // 位置字段只在换 Agent 所在电脑时出现;脏值按「位置不变」处理,不丢掉整份意图。
+  const agentDeviceId =
+    item.agentDeviceId === null || (typeof item.agentDeviceId === 'string' && item.agentDeviceId.length > 0)
+      ? item.agentDeviceId
+      : undefined;
   return {
     target: item.targetAgentKind,
     model: item.model,
     providerId: typeof item.providerId === 'string' ? item.providerId : null,
     ...(typeof item.effort === 'string' && item.effort.length > 0 ? { effort: item.effort } : {}),
     ...(typeof item.fastMode === 'boolean' ? { fastMode: item.fastMode } : {}),
+    ...(agentDeviceId !== undefined ? { agentDeviceId } : {}),
   };
 }
 
@@ -17168,7 +17307,8 @@ function agentSwitchIntentEquals(
     a.model === b.model &&
     a.providerId === b.providerId &&
     a.effort === b.effort &&
-    a.fastMode === b.fastMode
+    a.fastMode === b.fastMode &&
+    a.agentDeviceId === b.agentDeviceId
   );
 }
 
@@ -17203,6 +17343,8 @@ function setSessionRuntime(
     planModeEnabled?: boolean;
     /** Seed before SessionView hydrates the DB row; sendMessage reads this for SSH routing. */
     remoteHostId?: string | null;
+    /** Seed before hydration so a draft-route first send carries the chosen source in createOpts. */
+    sessionProviderId?: string | null;
     /** Disable automatic first-message renaming for product-owned titled sessions. */
     autoTitleDisabled?: boolean;
   },
@@ -17215,12 +17357,16 @@ function setSessionRuntime(
     const nextRemoteHostId = Object.hasOwn(opts, 'remoteHostId')
       ? (opts.remoteHostId ?? null)
       : s.remoteHostId;
+    const nextSessionProviderId = Object.hasOwn(opts, 'sessionProviderId')
+      ? (opts.sessionProviderId ?? null)
+      : s.sessionProviderId;
     const nextAutoTitleDisabled = opts.autoTitleDisabled ?? s.autoTitleDisabled;
     if (
       s.agentKind === nextAgentKind &&
       s.fastMode === nextFastMode &&
       s.planModeEnabled === nextPlanMode &&
       s.remoteHostId === nextRemoteHostId &&
+      s.sessionProviderId === nextSessionProviderId &&
       s.autoTitleDisabled === nextAutoTitleDisabled
     )
       return s;
@@ -17230,6 +17376,7 @@ function setSessionRuntime(
       fastMode: nextFastMode,
       planModeEnabled: nextPlanMode,
       remoteHostId: nextRemoteHostId,
+      sessionProviderId: nextSessionProviderId,
       autoTitleDisabled: nextAutoTitleDisabled,
       ...(s.planModeEnabled !== nextPlanMode ? { planModeRev: s.planModeRev + 1 } : {}),
     };
@@ -17443,6 +17590,7 @@ export const makerChatStore = {
   clearSession,
   /** Dismiss the error banner without retrying. */
   clearError,
+  cancelUsageLimitWait,
   /** Bind live error to persist row as already handled (retry/close). */
   disposeLiveErrorPersist,
   /** Retry the typed recovery target owned by main coordinator. */
@@ -17459,6 +17607,8 @@ export const makerChatStore = {
    * listeners, and any cached base64 images are garbage-collected.
    */
   purgeSession: _purgeSession,
+  /** 远程恢复写库成功后释放归档墓碑(见函数注释)。 */
+  releaseRemoteArchivedTombstone,
   /** Seed runtime-only state before a session view has mounted and loaded DB metadata. */
   setSessionRuntime,
   noteAgentSwitched,
@@ -18535,8 +18685,12 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
       // Both ingress paths share the Desktop card, but local IM must not opt
       // older Mobile clients into legacy Hook/system-card semantics.
       const hookSource = m.agentMeta?.imSource ?? m.agentMeta?.hookSource;
+      // 发送设备 / 插件来源:宽容读取(平台未知等不完整数据不出标签)。
+      const sourceDevice = readMessageSourceDevice(m.agentMeta);
+      const sourcePlugin = readMessageSourcePlugin(m.agentMeta);
       return {
         sharedAuthorName: sharedTaskAuthorName(m.agentMeta),
+        sharedAuthorMemberId: sharedTaskAuthorMemberId(m.agentMeta),
         clientId: m.clientId,
         role: m.role,
         content: parsed.text,
@@ -18557,6 +18711,8 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
           ? { sessionReferences: parsed.sessionReferences }
           : {}),
         ...(automationOrigin && { automationOrigin }),
+        ...(sourceDevice && { sourceDevice }),
+        ...(sourcePlugin && { sourcePlugin }),
         ...(delivery === 'turn' || delivery === 'steer' ? { delivery } : {}),
         ...(goalObjective ? { goalBadge: goalObjective } : {}),
         ...(hookSource ? { hookSource } : {}),

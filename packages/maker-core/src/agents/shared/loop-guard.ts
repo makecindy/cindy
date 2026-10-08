@@ -36,6 +36,25 @@ const STABLE_READ_DISTINCT_LIMIT = 32;
 const STABLE_READ_MIN_REPEATS = 4;
 const READ_ONLY_TOOL_NAMES = new Set(['Read', 'Grep', 'Glob', 'read', 'grep', 'find', 'ls']);
 /**
+ * 节奏判据:本次普通调用距上一次普通调用开始至少这么久,说明模型在等外部进度
+ * (sleep 后再查 CI、命令内自带等待、慢推理),不是快速空转。这类结果不计入
+ * 第 1-3 层的重复判据,只受下方两条最终上限约束。
+ */
+const DEFAULT_PACED_INTERVAL_MS = 30_000;
+/** 最终上限:快速(非节奏)的完全相同调用连续达到此数,不经复核直接判定。 */
+const DEFAULT_FINAL_CONSECUTIVE_LIMIT = 30;
+/** 最终上限:完全相同的结果(含节奏轮询)持续重复超过此时长,不经复核直接判定。 */
+const DEFAULT_FINAL_STREAK_MS = 60 * 60_000;
+/**
+ * 复核材料:保留最近多少次普通调用,以及每段输入/输出截取的原文长度。这里只为
+ * 限制内存截取原文、不做脱敏;发送方必须先脱敏再截断到发送长度(远小于此值),
+ * 跨越发送截断点的凭证在脱敏时才是完整的。
+ */
+const EVIDENCE_SIZE = 12;
+const EVIDENCE_CAPTURE_LIMIT = 4_000;
+const EVIDENCE_MAX_DEPTH = 6;
+const EVIDENCE_MAX_ENTRIES = 50;
+/**
  * 第 4 层(契约错误):同一工具连续多少次因**同类参数契约错误**被拒即止损。
  * 与 1-3 层互补:那三层按 name+input 指纹抓"重复同一调用",而 malformed 参数每次
  * input 都不同(2026-08 实锤:xai/grok 单 session 16 次 Edit 缺 file_path,
@@ -157,6 +176,20 @@ function isPollingTool(name: string, input: unknown, isError: boolean): boolean 
 interface PendingToolUse {
   name: string;
   input: unknown;
+  startedAt: number;
+}
+
+/**
+ * 供复核用的一次普通调用摘要,均为未脱敏原文。input 保留原结构(不序列化,
+ * 发送方在未转义的字符串上逐个脱敏后再序列化),每个字符串最多截取 4000 字符。
+ */
+export interface ToolLoopEvidence {
+  toolName: string;
+  input: unknown;
+  output: string;
+  isError: boolean;
+  startedAt: number;
+  finishedAt: number;
 }
 
 interface ContractObservation {
@@ -177,6 +210,14 @@ export interface ToolLoopGuardOptions {
   rotationDistinctLimit?: number;
   /** 第 4 层:同工具同类契约错误连续多少次判止损。 */
   contractConsecutiveLimit?: number;
+  /** 两次普通调用开始间隔达到此值即视为节奏轮询,不计入重复判据。 */
+  pacedIntervalMs?: number;
+  /** 快速完全相同调用的最终上限(不经复核)。 */
+  finalConsecutiveLimit?: number;
+  /** 完全相同结果持续时长的最终上限(不经复核)。 */
+  finalStreakMs?: number;
+  /** 时钟,供测试注入。 */
+  now?: () => number;
 }
 
 /**
@@ -194,6 +235,11 @@ export type ToolLoopGuardVerdict =
     toolName: string;
     /** 仅 reason='contract' 时存在:命中的契约错误类别。 */
     contractCategory?: ToolContractErrorCategory;
+    /**
+     * true = 证据已足以直接中断(最终上限、长只读轮转);false = 疑似,调用方
+     * 可交给辅助模型复核后再决定。
+     */
+    final: boolean;
   };
 
 /**
@@ -206,7 +252,12 @@ export type ToolLoopGuardVerdict =
  *   4. 同工具同类契约错误连续被拒 —— 抓 input 各不相同、指纹层抓不到的 malformed 重试。
  *
  * 不按调用总数或任意长度的重复序列硬中断:仅凭工具 trace 无法区分合法批处理、
- * 稳定状态轮询与死循环,有限窗口也只能移动误判/漏判边界。
+ * 稳定状态轮询与死循环,有限窗口也只能移动误判/漏判边界。因此 1-4 层的命中
+ * 都是"疑似"(final=false),调用方可交给辅助模型复核;复核放行后由
+ * acceptCurrentPattern() 暂缓疑似判定。距上一次普通调用 ≥ pacedIntervalMs
+ * 才开始的调用视为节奏轮询,不计入重复判据。两条最终上限(快速完全相同
+ * 连续 finalConsecutiveLimit 次、完全相同结果持续 finalStreakMs)与长只读
+ * 轮转不经复核直接判定(final=true)。
  *
  * 类本身不依赖 Electron / SDK / provider, 也不做 IO;调用方决定何时启用和如何中断。
  */
@@ -217,12 +268,30 @@ export class ToolLoopGuard {
   readonly rotationWindowSize: number;
   readonly rotationDistinctLimit: number;
   readonly contractConsecutiveLimit: number;
+  readonly pacedIntervalMs: number;
+  readonly finalConsecutiveLimit: number;
+  readonly finalStreakMs: number;
+  private readonly now: () => number;
 
   private pendingToolUses = new Map<string, PendingToolUse>();
+  /** 最近一次 onToolResult 是否真正参与了判定(未配对结果与等待/轮询工具不算)。 */
+  private lastResultObservedValue = false;
+  /** 最近一次被纳入判定的调用指纹(name+input)。 */
+  private lastResultCallFingerprintValue: string | null = null;
+  /** 最近一次疑似判定所指的调用集合(name+input 指纹),供复核判断模式是否已被替换。 */
+  private lastSuspectPatternValue: ReadonlySet<string> = new Set();
 
-  // 第 1 层状态
+  // 节奏判据与复核材料
+  private lastOrdinaryStartedAt: number | null = null;
+  private evidence: ToolLoopEvidence[] = [];
+  /** 复核放行后,接下来还有多少次普通结果不报疑似。 */
+  private suspicionGraceResults = 0;
+
+  // 第 1 层状态:consecutiveStreak 只计非节奏结果;streakResults/streakStartedAt(首个结果到达时刻)覆盖整段
   private lastFullFingerprint: string | null = null;
   private consecutiveStreak = 0;
+  private streakResults = 0;
+  private streakStartedAt = 0;
 
   // 第 2/3 层共用状态: 最近 max(windowSize, rotationWindowSize) 个 name+input 指纹
   private callWindow: string[] = [];
@@ -247,16 +316,62 @@ export class ToolLoopGuard {
     this.rotationWindowSize = options.rotationWindowSize ?? DEFAULT_ROTATION_WINDOW_SIZE;
     this.rotationDistinctLimit = options.rotationDistinctLimit ?? DEFAULT_ROTATION_DISTINCT_LIMIT;
     this.contractConsecutiveLimit = options.contractConsecutiveLimit ?? DEFAULT_CONTRACT_CONSECUTIVE_LIMIT;
+    this.pacedIntervalMs = options.pacedIntervalMs ?? DEFAULT_PACED_INTERVAL_MS;
+    this.finalConsecutiveLimit = options.finalConsecutiveLimit ?? DEFAULT_FINAL_CONSECUTIVE_LIMIT;
+    this.finalStreakMs = options.finalStreakMs ?? DEFAULT_FINAL_STREAK_MS;
+    this.now = options.now ?? Date.now;
   }
 
   /**
    * 记录工具调用开始。stream_event 可能只有 id, 这种半信息不缓存;
-   * 后续 assistant 完整 tool_use 到达时会用 name/input 补齐。
+   * 后续 assistant 完整 tool_use 到达时会用 name/input 补齐。补齐时保留
+   * 首次开始时间,节奏判据按真实开始时刻计算。
    */
   onToolUse(toolUseId: string, toolName: unknown, input: unknown): void {
     if (toolUseId.length === 0) return;
     if (typeof toolName !== 'string' || toolName.length === 0) return;
-    this.pendingToolUses.set(toolUseId, { name: toolName, input });
+    const startedAt = this.pendingToolUses.get(toolUseId)?.startedAt ?? this.now();
+    this.pendingToolUses.set(toolUseId, { name: toolName, input, startedAt });
+  }
+
+  /** 最近一次结果是否被纳入判定;为 true 且判定为 ok 说明此前的疑似模式已被打破。 */
+  get lastResultObserved(): boolean {
+    return this.lastResultObservedValue;
+  }
+
+  /** 最近一次被纳入判定的调用指纹;复核期间不在被复核模式内即说明模式已被替换。 */
+  get lastResultCallFingerprint(): string | null {
+    return this.lastResultCallFingerprintValue;
+  }
+
+  /**
+   * 是否有在途(已开始、结果未到)的普通调用不属于给定的调用集合。等待/轮询工具不算。
+   * 纯查询,不改判定状态;在途调用的参数以最近一次 onToolUse 补齐后的为准。
+   */
+  hasPendingCallOutside(pattern: ReadonlySet<string>): boolean {
+    for (const call of this.pendingToolUses.values()) {
+      if (isPollingTool(call.name, call.input, false)) continue;
+      if (!pattern.has(fingerprintToolCall(call.name, call.input, null))) return true;
+    }
+    return false;
+  }
+
+  /** 最近一次疑似判定涉及的调用集合。 */
+  get lastSuspectPattern(): ReadonlySet<string> {
+    return this.lastSuspectPatternValue;
+  }
+
+  /** 最近的普通调用摘要(旧→新),供辅助模型复核。 */
+  recentEvidence(): readonly ToolLoopEvidence[] {
+    return [...this.evidence];
+  }
+
+  /**
+   * 复核认定当前模式是在等外部进度:接下来 graceResults 次普通结果不再报疑似,
+   * 之后若模式仍在则重新报。最终上限不受影响。
+   */
+  acceptCurrentPattern(graceResults: number): void {
+    this.suspicionGraceResults = Math.max(this.suspicionGraceResults, graceResults);
   }
 
   /**
@@ -272,8 +387,34 @@ export class ToolLoopGuard {
   ): ToolLoopGuardVerdict {
     const toolUse = this.pendingToolUses.get(toolUseId);
     this.pendingToolUses.delete(toolUseId);
+    this.lastResultObservedValue = false;
+    this.lastResultCallFingerprintValue = null;
     if (!toolUse) return { kind: 'ok' };
     if (isPollingTool(toolUse.name, toolUse.input, isError)) return { kind: 'ok' };
+    this.lastResultObservedValue = true;
+
+    const paced = this.lastOrdinaryStartedAt !== null
+      && toolUse.startedAt - this.lastOrdinaryStartedAt >= this.pacedIntervalMs;
+    this.lastOrdinaryStartedAt = Math.max(this.lastOrdinaryStartedAt ?? toolUse.startedAt, toolUse.startedAt);
+    this.recordEvidence(toolUse, output, isError);
+    const fullFingerprint = fingerprintToolCall(toolUse.name, toolUse.input, output);
+    const callFingerprint = fingerprintToolCall(toolUse.name, toolUse.input, null);
+    this.lastResultCallFingerprintValue = callFingerprint;
+    // 复核放行额度按普通结果计,节奏轮询同样消耗。
+    const inGrace = this.suspicionGraceResults > 0;
+    if (inGrace) this.suspicionGraceResults -= 1;
+    // 节奏轮询只参与完全相同 streak 的续接与最终时长上限,不计入任何疑似判据。
+    if (paced) {
+      // 写入或命令照常打断长只读窗口,节奏本身不改变这一点。
+      if (!READ_ONLY_TOOL_NAMES.has(toolUse.name)) this.stableReadWindow = [];
+      this.observeStreak(fullFingerprint, false);
+      return this.finalVerdict(toolUse.name);
+    }
+    const suspect = (verdict: ToolLoopGuardVerdict, pattern: Iterable<string>): ToolLoopGuardVerdict => {
+      if (inGrace) return { kind: 'ok' };
+      this.lastSuspectPatternValue = new Set(pattern);
+      return verdict;
+    };
 
     // 第 4 层: 同工具同类契约错误连续出现(input 各不相同也计)。放在 1-3 层之前:
     // 它的阈值(3)低于第 1 层(4),同 input 的重复契约错误也应更早止损。
@@ -294,13 +435,14 @@ export class ToolLoopGuard {
             : 1;
           this.contractStreakByKey.set(contractKey, streak);
           if (streak >= this.contractConsecutiveLimit) {
-            return {
+            return suspect({
               kind: 'hard',
               reason: 'contract',
               count: streak,
               toolName: toolUse.name,
               contractCategory,
-            };
+              final: false,
+            }, [callFingerprint]);
           }
         }
       }
@@ -313,13 +455,14 @@ export class ToolLoopGuard {
         this.contractStreak = contractKey === this.lastContractKey ? this.contractStreak + 1 : 1;
         this.lastContractKey = contractKey;
         if (this.contractStreak >= this.contractConsecutiveLimit) {
-          return {
+          return suspect({
             kind: 'hard',
             reason: 'contract',
             count: this.contractStreak,
             toolName: toolUse.name,
             contractCategory,
-          };
+            final: false,
+          }, [callFingerprint]);
         }
       } else {
         this.lastContractKey = null;
@@ -327,8 +470,7 @@ export class ToolLoopGuard {
       }
     }
 
-    // 第 1 层: 连续 name+input+output 完全相同
-    const fullFingerprint = fingerprintToolCall(toolUse.name, toolUse.input, output);
+    // 长只读轮转证据已足够强,不经复核
     if (READ_ONLY_TOOL_NAMES.has(toolUse.name)) {
       this.stableReadWindow.push(fullFingerprint);
       if (this.stableReadWindow.length > STABLE_READ_WINDOW_SIZE) this.stableReadWindow.shift();
@@ -341,29 +483,30 @@ export class ToolLoopGuard {
           sum + (count >= STABLE_READ_MIN_REPEATS ? count : 0), 0);
         if (counts.size <= STABLE_READ_DISTINCT_LIMIT &&
           repeated >= Math.ceil(STABLE_READ_WINDOW_SIZE * 0.9)) {
-          return { kind: 'hard', reason: 'rotation', count: STABLE_READ_WINDOW_SIZE, toolName: toolUse.name };
+          return {
+            kind: 'hard', reason: 'rotation', count: STABLE_READ_WINDOW_SIZE, toolName: toolUse.name, final: true,
+          };
         }
       }
     } else {
       this.stableReadWindow = [];
     }
-    if (fullFingerprint === this.lastFullFingerprint) {
-      this.consecutiveStreak += 1;
-    } else {
-      this.lastFullFingerprint = fullFingerprint;
-      this.consecutiveStreak = 1;
-    }
+
+    // 第 1 层: 连续 name+input+output 完全相同
+    this.observeStreak(fullFingerprint, true);
+    const final = this.finalVerdict(toolUse.name);
+    if (final.kind === 'hard') return final;
     if (this.consecutiveStreak >= this.consecutiveLimit) {
-      return {
+      return suspect({
         kind: 'hard',
         reason: 'consecutive',
         count: this.consecutiveStreak,
         toolName: toolUse.name,
-      };
+        final: false,
+      }, [callFingerprint]);
     }
 
     // 第 2/3 层: name+input 滑动窗口多样性坍缩(指纹不含 output)
-    const callFingerprint = fingerprintToolCall(toolUse.name, toolUse.input, null);
     this.callWindow.push(callFingerprint);
     const bufferSize = Math.max(this.windowSize, this.rotationWindowSize);
     if (this.callWindow.length > bufferSize) this.callWindow.shift();
@@ -373,12 +516,13 @@ export class ToolLoopGuard {
       const recent = this.callWindow.slice(-this.windowSize);
       const distinct = new Set(recent).size;
       if (distinct <= this.windowDistinctLimit) {
-        return {
+        return suspect({
           kind: 'hard',
           reason: 'pingpong',
           count: recent.length,
           toolName: toolUse.name,
-        };
+          final: false,
+        }, recent);
       }
     }
 
@@ -387,12 +531,13 @@ export class ToolLoopGuard {
       const recent = this.callWindow.slice(-this.rotationWindowSize);
       const distinct = new Set(recent).size;
       if (distinct <= this.rotationDistinctLimit) {
-        return {
+        return suspect({
           kind: 'hard',
           reason: 'rotation',
           count: recent.length,
           toolName: toolUse.name,
-        };
+          final: false,
+        }, recent);
       }
     }
 
@@ -405,9 +550,50 @@ export class ToolLoopGuard {
     this.resetPatternState();
   }
 
+  /** 续接或重开完全相同 streak;counted=false 的节奏结果只续接不计数。 */
+  private observeStreak(fingerprint: string, counted: boolean): void {
+    if (fingerprint === this.lastFullFingerprint) {
+      if (counted) this.consecutiveStreak += 1;
+      this.streakResults += 1;
+      return;
+    }
+    this.lastFullFingerprint = fingerprint;
+    this.consecutiveStreak = counted ? 1 : 0;
+    this.streakResults = 1;
+    // 时长上限衡量"相同结果持续了多久",从首个结果到达起算,不含首次调用本身的耗时。
+    this.streakStartedAt = this.now();
+  }
+
+  private finalVerdict(toolName: string): ToolLoopGuardVerdict {
+    if (this.consecutiveStreak >= this.finalConsecutiveLimit) {
+      return { kind: 'hard', reason: 'consecutive', count: this.consecutiveStreak, toolName, final: true };
+    }
+    if (this.streakResults >= this.consecutiveLimit && this.now() - this.streakStartedAt >= this.finalStreakMs) {
+      return { kind: 'hard', reason: 'consecutive', count: this.streakResults, toolName, final: true };
+    }
+    return { kind: 'ok' };
+  }
+
+  private recordEvidence(toolUse: PendingToolUse, output: string, isError: boolean): void {
+    this.evidence.push({
+      toolName: toolUse.name,
+      input: captureEvidenceValue(toolUse.input, 0),
+      output: captureEvidence(output),
+      isError,
+      startedAt: toolUse.startedAt,
+      finishedAt: this.now(),
+    });
+    if (this.evidence.length > EVIDENCE_SIZE) this.evidence.shift();
+  }
+
   private resetPatternState(): void {
     this.lastFullFingerprint = null;
     this.consecutiveStreak = 0;
+    this.streakResults = 0;
+    this.streakStartedAt = 0;
+    this.lastOrdinaryStartedAt = null;
+    this.evidence = [];
+    this.suspicionGraceResults = 0;
     this.callWindow = [];
     this.stableReadWindow = [];
     this.lastContractKey = null;
@@ -439,6 +625,42 @@ export class ToolLoopGuard {
     this.previousContractKeys = new Set<string>();
     this.contractStreakByKey = new Map<string, number>();
   }
+}
+
+/** 复制工具输入的有界副本:字符串按长度截取,嵌套与元素个数设上限,不序列化。 */
+function captureEvidenceValue(value: unknown, depth: number): unknown {
+  if (typeof value === 'string') return captureEvidence(value);
+  if (value === null || typeof value !== 'object') return value;
+  if (depth >= EVIDENCE_MAX_DEPTH) return '[nested]';
+  if (Array.isArray(value)) {
+    return value.slice(0, EVIDENCE_MAX_ENTRIES).map((item) => captureEvidenceValue(item, depth + 1));
+  }
+  const copy: Record<string, unknown> = {};
+  for (const [key, item] of Object.entries(value).slice(0, EVIDENCE_MAX_ENTRIES)) {
+    copy[key] = captureEvidenceValue(item, depth + 1);
+  }
+  return copy;
+}
+
+/** 截取点之前可能被切断的令牌片段:字母数字与令牌常见符号的连续串。 */
+const TRAILING_TOKEN_FRAGMENT_RE = /[A-Za-z0-9_\-+/=.:@%~]+$/;
+
+/**
+ * 截取点可能落在凭证中间,残缺的凭证任何脱敏器都认不出,一律保守丢弃:
+ * 有换行时丢掉被截断的整行(凭证以行为界:赋值、参数、引号串);没有换行时丢掉末尾
+ * 连续串,若还剩未闭合的引号,从该引号起全部丢掉。
+ */
+function captureEvidence(text: string): string {
+  if (text.length <= EVIDENCE_CAPTURE_LIMIT) return text;
+  const cut = text.slice(0, EVIDENCE_CAPTURE_LIMIT);
+  const lastNewline = cut.lastIndexOf('\n');
+  let kept = lastNewline >= 0 ? cut.slice(0, lastNewline + 1) : cut.replace(TRAILING_TOKEN_FRAGMENT_RE, '');
+  if (lastNewline < 0) {
+    for (const quote of ['"', "'"]) {
+      if ((kept.split(quote).length - 1) % 2 === 1) kept = kept.slice(0, kept.lastIndexOf(quote));
+    }
+  }
+  return `${kept}…(+${text.length - kept.length} chars)`;
 }
 
 /**

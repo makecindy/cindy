@@ -45,6 +45,12 @@ export interface InterruptedTurnErrorSignals {
   errorStatus?: number;
   /** Bounded details for the live error projection; never contains raw provider data. */
   toolLoop?: AgentInputToolLoopDetails;
+  /** translator 判定的账号用量 / 限流错误。 */
+  usageLimit?: boolean;
+  /** 上游给出的限额重置时刻(unix ms)。 */
+  usageResetAt?: number;
+  /** Codex app-server 的结构化错误 tag(如 `usageLimitExceeded`)。 */
+  codexErrorInfo?: string;
 }
 
 /**
@@ -203,6 +209,8 @@ export function isInterruptedTurnError(signals: InterruptedTurnErrorSignals): bo
   // Prefer provider status/tags to text compatibility. In particular, an auth,
   // quota or invalid-request rejection must not become retryable just because
   // its explanation mentions temporary unavailability or also carries a 5xx.
+  // 账号限额要等周期重置，秒级重连只会再撞一次（由 usageLimitAutoResume 等到重置后续跑）。
+  if (signals.usageLimit === true || signals.codexErrorInfo === 'usageLimitExceeded') return false;
   const status = signals.errorStatus;
   if (status !== undefined && status >= 400 && status < 500) return false;
   if ([

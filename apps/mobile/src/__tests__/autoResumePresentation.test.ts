@@ -56,3 +56,21 @@ describe('autoResumePresentation', () => {
     expect(toggleMobileAutoResumeExpanded(true, false)).toBe(false);
   });
 });
+
+describe('usage-limit reset continuation', () => {
+  it('is its own row without reconnect attempt details', () => {
+    const presentation = getMobileAutoResumePresentation({
+      reason: 'usage-limit-reset',
+      error: "You've hit your session limit",
+      attempt: 1,
+      maxAttempts: 3,
+      sessionTotal: 1,
+    });
+    expect(presentation.info.usageLimitReset).toBe(true);
+    expect(presentation.state).toBe('neutral');
+    expect(presentation.hasProgress).toBe(false);
+    expect(presentation.info.sessionTotal).toBeUndefined();
+    expect(presentation.canExpand).toBe(true);
+  });
+});
+

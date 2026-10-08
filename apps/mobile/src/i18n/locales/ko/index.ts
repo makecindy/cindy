@@ -19,6 +19,7 @@ import home from './home.json';
 import interaction from './interaction.json';
 import message from './message.json';
 import models from './models.json';
+import providerShare from './providerShare.json';
 import session from './session.json';
 import sharedTask from './sharedTask.json';
 import settings from './settings.json';
@@ -41,6 +42,7 @@ export default {
   interaction,
   message,
   models,
+  providerShare,
   session,
   sharedTask,
   settings,

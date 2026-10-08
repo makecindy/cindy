@@ -5,8 +5,7 @@
  * scheduleSlot(资格审/净化/钳制/限速)→ 广播 → 订阅点导航到自动化页并带上本
  * intent → SchedulerPage 读出来转成表单预填 → 面板打开,用户选模型后**亲手保存**。
  *
- * 形态与 usageLimitScheduleCreateIntent 逐条同构(同一套 navigation state 通道 +
- * Partial<ScheduleFormState> 预填),不另发明一条路。
+ * 走 navigation state 通道 + Partial<ScheduleFormState> 预填,不另发明一条路。
  *
  * 落成的任务是一条**普通 agent 自动化**:执行者是 AI 会话,插件只是这条任务到点
  * 去调用的目标(靠已有的 tool 槽 + ghost_call)。所以这里不碰 executionMode,也
@@ -75,7 +74,7 @@ export function readPluginScheduleCreateIntent(
   return value as PluginScheduleCreateIntent;
 }
 
-/** 本机时区(与 usageLimit 那条同实现,失败兜底 UTC)。 */
+/** 本机时区,失败兜底 UTC。 */
 function systemTimeZone(): string {
   try {
     return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
@@ -104,7 +103,7 @@ function systemTimeZone(): string {
  *   只是占位(见 Schedule.intervalMs 注释);没给建议频率时就用面板默认。
  *
  * `workspaceKind: 'dialogue'` —— 这类任务是"去查点东西再更新插件",不属于任何
- * 项目目录,落 app 管理的对话工作区(与 usageLimit 那条同口径)。
+ * 项目目录,落 app 管理的对话工作区。
  */
 export function buildPluginScheduleFormOverrides(
   intent: PluginScheduleCreateIntent,

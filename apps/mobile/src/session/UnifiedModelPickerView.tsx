@@ -52,6 +52,7 @@ import {
   type ThemeColors,
 } from "@/theme";
 import { MobileModelIconMark, MobileProviderMark } from "./MobileProviderMark";
+import { groupSourceFilters } from "./remoteSourceFilters";
 import { SheetModal } from "./SheetModal";
 import { SheetSurface } from "./SheetSurface";
 import {
@@ -274,7 +275,7 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
     ) : filter.id === "favorites" ? (
       icon(Star, selected || p.filter === "favorites")
     ) : filter.providerMark ? (
-      <MobileProviderMark {...filter.providerMark} />
+      <MobileProviderMark {...filter.providerMark} remote={filter.remote != null} />
     ) : (
       icon(LayoutGrid)
     );
@@ -345,37 +346,51 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
     </View>
   );
 
+  const sourceRow = (item: (typeof p.filters)[number]) => (
+    <Row
+      key={item.id}
+      leading={
+        <View style={styles.sourceLeading}>
+          {filterMark(
+            item,
+            item.id === "favorites" && p.filter === "favorites",
+          )}
+          {item.quota ? (
+            <QuotaBar
+              label={item.quota.label}
+              remaining={item.quota.remaining}
+              testID={`${p.testID}.source.${item.id}.quota`}
+            />
+          ) : null}
+        </View>
+      }
+      onPress={() => {
+        p.onFilter(item.id);
+        setPage(null);
+      }}
+      selected={p.filter === item.id}
+      subtitle={item.quota?.label}
+      testID={`${p.testID}.source.${item.id}`}
+      title={item.remote?.providerLabel ?? item.label}
+    />
+  );
+  // 其他电脑的供应商:每台电脑单独一块,块标题是电脑名。
+  const sourceGroups = groupSourceFilters(p.filters);
   const sourcesPage = (
-    <Group testID={`${p.testID}.sources`}>
-      {p.filters.map((item) => (
-        <Row
-          key={item.id}
-          leading={
-            <View style={styles.sourceLeading}>
-              {filterMark(
-                item,
-                item.id === "favorites" && p.filter === "favorites",
-              )}
-              {item.quota ? (
-                <QuotaBar
-                  label={item.quota.label}
-                  remaining={item.quota.remaining}
-                  testID={`${p.testID}.source.${item.id}.quota`}
-                />
-              ) : null}
-            </View>
-          }
-          onPress={() => {
-            p.onFilter(item.id);
-            setPage(null);
-          }}
-          selected={p.filter === item.id}
-          subtitle={item.quota?.label}
-          testID={`${p.testID}.source.${item.id}`}
-          title={item.label}
-        />
+    <>
+      <Group testID={`${p.testID}.sources`}>
+        {sourceGroups.local.map(sourceRow)}
+      </Group>
+      {sourceGroups.devices.map((device) => (
+        <Group
+          key={device.deviceId}
+          testID={`${p.testID}.sources.device.${device.deviceId}`}
+          title={device.name}
+        >
+          {device.filters.map(sourceRow)}
+        </Group>
       ))}
-    </Group>
+    </>
   );
 
   const harnessPage =
@@ -627,6 +642,7 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
         <Pressable
           accessibilityLabel={[
             row.entry.displayName,
+            row.remoteDevice?.name,
             agentLabel,
             row.subtitle,
             row.config.fast ? t("models.options.fastMode") : null,
@@ -650,6 +666,7 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
               icon={row.entry.icon}
               {...row.providerMark}
               color={colors.textSecondary}
+              remote={row.remoteDevice != null}
             />
           </View>
           <View style={styles.rowMain}>

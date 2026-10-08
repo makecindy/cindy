@@ -60,8 +60,11 @@ function tagTier(models: ModelDescriptor[] | undefined): TaggedModel[] | undefin
 }
 
 export interface ListAvailableModelsDeps {
+  /** 调用方任务(可选)：它的 Agent 在另一台电脑运行时，按那台的模型目录列出。 */
+  getSessionContext?: () => { sessionId?: string };
   listAvailableModels: (params: {
     agent?: 'claude-code' | 'codex' | 'pi';
+    callerSessionId?: string;
   }) => Promise<ControlResult<{
     codex?: ModelDescriptor[];
     claude_code?: ModelDescriptor[];
@@ -107,7 +110,8 @@ export function registerListAvailableModelsTool(
         .describe('可选, 只查某一 agent 的 model 列表; 不传返三者'),
     },
     handler: async ({ agent }) => {
-      const result = await deps.listAvailableModels({ agent });
+      const callerSessionId = deps.getSessionContext?.().sessionId;
+      const result = await deps.listAvailableModels({ agent, ...(callerSessionId ? { callerSessionId } : {}) });
       if (!result.ok) {
         if (result.errorCode === 'HOST_NOT_READY') {
           return errorPayload('HOST_NOT_READY', `${BRAND_NAME} 主进程协同服务尚未就绪。`);

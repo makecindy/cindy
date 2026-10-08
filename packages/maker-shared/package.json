@@ -42,6 +42,7 @@
     "./message-normalize": "./src/messageNormalize.ts",
     "./message-presentation": "./src/messagePresentation.ts",
     "./message-search": "./src/messageSearch.ts",
+    "./message-source": "./src/messageSource.ts",
     "./message-window": "./src/messageWindow.ts",
     "./orca-team": "./src/orcaTeam.ts",
     "./mobile-home": "./src/mobileHome.ts",

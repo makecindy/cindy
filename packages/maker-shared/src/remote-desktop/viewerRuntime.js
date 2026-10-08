@@ -125,9 +125,7 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
     fy = 0.5,
     mode = "pointer",
     control = false,
-    clipboardShortcuts = false,
-    clipboardModifier = "control",
-    deferredClipboardModifier = null,
+    macKeyboard = false,
     pc = null,
     dc = null,
     seq = 0,
@@ -832,8 +830,6 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
   function queue(event) {
     if (!control) return;
     if (!pending.length) pendingSince = performance.now();
-    if (config.desktop && (event.kind === "button" || event.kind === "scroll"))
-      flushClipboardModifier();
     // Remote visibility can remain hidden after synthetic mouse movement. Wake
     // the local touchpad cursor until the host reports a visible cursor again.
     if (event.kind === "move" && mode === "pointer") localCursorAwake = true;
@@ -909,7 +905,6 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
   function release() {
     stopEdgePan();
     desktopPan = null;
-    deferredClipboardModifier = null;
     clearTimeout(hold);
     if (gestureFrame !== null) cancelAnimationFrame(gestureFrame);
     gestureFrame = null;
@@ -1444,19 +1439,33 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
     desktopPan = null;
     if (config.desktop && heldMouse.size) release();
   });
+  let wheelRestX = 0,
+    wheelRestY = 0;
   if (config.desktop)
     listen(
       stage,
       "wheel",
       (e) => {
         e.preventDefault();
-        if (!control) return;
+        if (!control) {
+          wheelRestX = wheelRestY = 0;
+          return;
+        }
         const factor =
           e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? stage.clientHeight : 1;
+        // Hosts inject whole pixels; carry fractions so slow trackpad and
+        // scaled-display deltas still scroll.
+        const sx = wheelRestX + e.deltaX * factor,
+          sy = wheelRestY + e.deltaY * factor,
+          wx = Math.trunc(sx) || 0,
+          wy = Math.trunc(sy) || 0;
+        wheelRestX = sx - wx;
+        wheelRestY = sy - wy;
+        if (!wx && !wy) return;
         queue({
           kind: "scroll",
-          dx: Math.max(-2000, Math.min(2000, e.deltaX * factor)),
-          dy: Math.max(-2000, Math.min(2000, e.deltaY * factor)),
+          dx: Math.max(-2000, Math.min(2000, wx)),
+          dy: Math.max(-2000, Math.min(2000, wy)),
         });
         flush();
       },
@@ -1473,13 +1482,36 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
     /^(Shift|Control|Alt|Meta)Right$/.test(code)
       ? code.replace(/Right$/, "Left")
       : code;
+  // Remote key state: a key is held from its first keydown until its keyup.
+  // macOS sends no keyup for keys first pressed while Command is held (Cmd+C);
+  // only those are released together with Command. Membership is decided once,
+  // on the not-held -> held transition, so auto-repeat never reclassifies a key.
   const hardwareKeys = new Set();
-  function flushClipboardModifier() {
-    if (!deferredClipboardModifier) return;
-    const code = deferredClipboardModifier;
-    deferredClipboardModifier = null;
-    hardwareKeys.add(code);
+  const commandKeys = new Set();
+  const isModifier = (code) => /^(Shift|Control|Alt|Meta)Left$/.test(code);
+  function pressKey(code) {
+    if (!hardwareKeys.has(code)) {
+      if (macKeyboard && hardwareKeys.has("MetaLeft") && !isModifier(code))
+        commandKeys.add(code);
+      hardwareKeys.add(code);
+    }
     queue({ kind: "key", code, down: true });
+  }
+  function releaseKey(code, send) {
+    commandKeys.delete(code);
+    if (!hardwareKeys.delete(code)) return false;
+    if (code === "MetaLeft") {
+      for (const held of commandKeys)
+        if (hardwareKeys.delete(held) && send)
+          queue({ kind: "key", code: held, down: false });
+      commandKeys.clear();
+    }
+    if (send) queue({ kind: "key", code, down: false });
+    return send;
+  }
+  function forgetKeys() {
+    hardwareKeys.clear();
+    commandKeys.clear();
   }
   listen(document, "keydown", (e) => {
     if (config.desktop) {
@@ -1496,39 +1528,6 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
         composing
       )
         return;
-      if ((e.metaKey || e.ctrlKey) && e.code === "KeyW") return; // always retain a local close shortcut
-      if (
-        control &&
-        clipboardShortcuts &&
-        normalizedKey(e.code) ===
-          (clipboardModifier === "meta" ? "MetaLeft" : "ControlLeft")
-      ) {
-        e.preventDefault();
-        if (!hardwareKeys.has(normalizedKey(e.code)))
-          deferredClipboardModifier = normalizedKey(e.code);
-        return;
-      }
-      if (
-        control &&
-        clipboardShortcuts &&
-        (clipboardModifier === "meta"
-          ? e.metaKey && !e.ctrlKey
-          : e.ctrlKey && !e.metaKey) &&
-        !e.altKey &&
-        !e.shiftKey &&
-        (e.code === "KeyC" || e.code === "KeyV")
-      ) {
-        e.preventDefault();
-        if (!e.repeat) {
-          release();
-          hardwareKeys.clear();
-          post({
-            type: "clipboard",
-            action: e.code === "KeyC" ? "copy" : "paste",
-          });
-        }
-        return;
-      }
     }
     // The focused textarea delivers characters through input (and editing
     // keys through beforeinput). Forwarding their keydown too types twice on
@@ -1547,25 +1546,16 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
       return;
     if (control && validKeys.has(normalizedKey(e.code))) {
       e.preventDefault();
-      flushClipboardModifier();
-      hardwareKeys.add(normalizedKey(e.code));
-      queue({ kind: "key", code: normalizedKey(e.code), down: true });
+      pressKey(normalizedKey(e.code));
     }
   });
   listen(document, "keyup", (e) => {
     const code = normalizedKey(e.code);
-    if (config.desktop && control && deferredClipboardModifier === code) {
-      flushClipboardModifier();
-    }
-    if (!hardwareKeys.delete(code)) return;
-    if (control && validKeys.has(code)) {
-      e.preventDefault();
-      queue({ kind: "key", code, down: false });
-    }
+    if (releaseKey(code, control && validKeys.has(code))) e.preventDefault();
   });
   if (config.desktop)
     listen(keyboardInput, "blur", () => {
-      hardwareKeys.clear();
+      forgetKeys();
       release();
     });
   listen(window, "blur", () => {
@@ -2346,7 +2336,9 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
       }
       case "init":
         nativeVideoActive = false;
-        image.style.visibility = "visible";
+        // Clear instead of forcing visible: the stylesheet hides an image with
+        // no frame yet, otherwise the browser paints a broken-image box.
+        image.style.visibility = "";
         desktopScale = null;
         reportedScaleMode = null;
         if (config.desktop) {
@@ -2365,10 +2357,7 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
         sending = false;
         seq = 0;
         epoch = message.epoch;
-        clipboardShortcuts =
-          config.desktop && message.clipboardShortcuts === true;
-        clipboardModifier =
-          message.clipboardModifier === "meta" ? "meta" : "control";
+        macKeyboard = config.desktop && message.macKeyboard === true;
         dw = message.width;
         dh = message.height;
         fillHeight = message.fillHeight === true;
@@ -2381,7 +2370,7 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
       case "nativeVideo":
         if (!config.nativeMedia || message.epoch !== epoch) break;
         nativeVideoActive = message.active === true;
-        image.style.visibility = nativeVideoActive ? "hidden" : "visible";
+        image.style.visibility = nativeVideoActive ? "hidden" : "";
         clipNetworkStatus();
         paintBackground();
         break;
@@ -2424,7 +2413,11 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
         image.src = "data:image/jpeg;base64," + message.jpeg;
         break;
       }
-      case "control":
+      case "control": {
+        // A local view-only switch keeps host control, so its release must
+        // still reach the host even if a batch was waiting for its ACK.
+        const releaseHost =
+          control && message.enabled !== true && message.release === true;
         release();
         // A new control intent abandons the previous relay batch. Advance the
         // existing sequence fence so a late old ACK cannot unlock a new batch.
@@ -2433,9 +2426,15 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
         control = message.enabled;
         if (!control) showKeyboard(false);
         pending = [];
+        if (releaseHost) {
+          pending = [{ kind: "release" }];
+          pendingSince = performance.now();
+          flush();
+        }
         updateMouseButtons();
         render();
         break;
+      }
       case "mode":
         release();
         if (message.mode !== "pointer") followRest = null;
@@ -2509,7 +2508,7 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
         break;
       case "stop":
         nativeVideoActive = false;
-        image.style.visibility = "visible";
+        image.style.visibility = "";
         showKeyboard(false);
         control = false;
         release();
