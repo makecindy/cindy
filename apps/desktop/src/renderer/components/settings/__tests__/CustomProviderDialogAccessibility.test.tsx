@@ -1848,3 +1848,137 @@ it('main provider form contains Tab and blocks dismissal only during the actual 
   await waitFor(() => expect(onSaved).toHaveBeenCalledOnce());
   expect(screen.queryByRole('dialog')).toBeNull();
 });
+
+describe('ProviderConnectionDialog thinking effort for newly added models', () => {
+  async function renderCreateDialogWithModel() {
+    const user = userEvent.setup();
+    render(<ProviderConnectionDialog onSaved={vi.fn()} onClose={vi.fn()} />);
+    await waitForInitialDialogFocus();
+    await user.type(
+      screen.getByPlaceholderText('settings.providers.custom.fields.namePlaceholder'),
+      'Thinking provider',
+    );
+    await user.type(
+      screen.getByPlaceholderText('settings.providers.custom.fields.baseUrlPlaceholder'),
+      'https://thinking.example.test/v1',
+    );
+    await user.type(
+      screen.getByLabelText('settings.providers.custom.fields.apiKey'),
+      'sk-thinking',
+    );
+    await user.type(
+      screen.getByLabelText('settings.providers.connection.manualModel'),
+      'thinking-model',
+    );
+    await user.click(
+      screen.getByRole('button', { name: 'settings.providers.custom.fields.addModel' }),
+    );
+    return { user };
+  }
+
+  it('keeps newly added models undeclared when thinking effort stays off', async () => {
+    const { user } = await renderCreateDialogWithModel();
+    expect(
+      (
+        screen.getByRole('checkbox', {
+          name: 'settings.providers.custom.fields.modelThinkingEnable',
+        }) as HTMLInputElement
+      ).checked,
+    ).toBe(false);
+    await user.click(screen.getByRole('button', { name: 'settings.providers.custom.save' }));
+    await waitFor(() =>
+      expect(customProviderMocks.createCustomProvider).toHaveBeenCalledOnce(),
+    );
+    const payload = customProviderMocks.createCustomProvider.mock.calls[0]?.[0];
+    const model = (Object.values(payload.runtimes) as Array<{
+      models?: Array<{ id: string }>;
+    }>)[0]?.models?.find((m) => m.id === 'thinking-model') as
+      | { reasoning?: boolean; reasoningEfforts?: string[]; reasoningDefaultEffort?: string }
+      | undefined;
+    expect(model?.reasoning).toBeUndefined();
+    expect(model?.reasoningEfforts).toBeUndefined();
+  });
+
+  it('applies the default low–max ladder and default tier when thinking effort is enabled', async () => {
+    const { user } = await renderCreateDialogWithModel();
+    await user.click(
+      screen.getByRole('checkbox', {
+        name: 'settings.providers.custom.fields.modelThinkingEnable',
+      }),
+    );
+    // 默认梯子 low–max(不含 minimal)全选,默认档 medium。
+    for (const tier of ['low', 'medium', 'high', 'xhigh', 'max']) {
+      expect(
+        screen.getByRole('button', { name: `effortLevels.${tier}` }).getAttribute('aria-pressed'),
+      ).toBe('true');
+    }
+    // minimal 可手动补选,但默认梯子不含它。
+    expect(
+      screen.getByRole('button', { name: 'effortLevels.minimal' }).getAttribute('aria-pressed'),
+    ).toBe('false');
+    await user.click(screen.getByRole('button', { name: 'settings.providers.custom.save' }));
+    await waitFor(() =>
+      expect(customProviderMocks.createCustomProvider).toHaveBeenCalledOnce(),
+    );
+    const payload = customProviderMocks.createCustomProvider.mock.calls[0]?.[0];
+    const model = (Object.values(payload.runtimes) as Array<{
+      models?: Array<{ id: string }>;
+    }>)[0]?.models?.find((m) => m.id === 'thinking-model') as
+      | { reasoning?: boolean; reasoningEfforts?: string[]; reasoningDefaultEffort?: string }
+      | undefined;
+    expect(model).toMatchObject({
+      reasoning: true,
+      reasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+      reasoningDefaultEffort: 'medium',
+    });
+  });
+
+  it('does not apply thinking effort when the toggle is turned off after adding models', async () => {
+    // 添加期不再写入设置;保存期按"保存时的开关状态"统一应用——
+    // 先开、加模型、再关,保存的模型必须保持未声明。
+    const { user } = await renderCreateDialogWithModel();
+    const enable = screen.getByRole('checkbox', {
+      name: 'settings.providers.custom.fields.modelThinkingEnable',
+    });
+    await user.click(enable);
+    await user.click(enable); // 再关掉
+    await user.click(screen.getByRole('button', { name: 'settings.providers.custom.save' }));
+    await waitFor(() =>
+      expect(customProviderMocks.createCustomProvider).toHaveBeenCalledOnce(),
+    );
+    const payload = customProviderMocks.createCustomProvider.mock.calls[0]?.[0];
+    const model = (Object.values(payload.runtimes) as Array<{
+      models?: Array<{ id: string }>;
+    }>)[0]?.models?.find((m) => m.id === 'thinking-model') as
+      | { reasoning?: boolean; reasoningEfforts?: string[]; reasoningDefaultEffort?: string }
+      | undefined;
+    expect(model?.reasoning).toBeUndefined();
+    expect(model?.reasoningEfforts).toBeUndefined();
+  });
+
+  it('keeps the declared default tier inside the selected ladder when its tier is deselected', async () => {
+    const { user } = await renderCreateDialogWithModel();
+    await user.click(
+      screen.getByRole('checkbox', {
+        name: 'settings.providers.custom.fields.modelThinkingEnable',
+      }),
+    );
+    // 取消勾选 medium(当前默认档)→ 默认档须回落到梯子内的一档。
+    await user.click(screen.getByRole('button', { name: 'effortLevels.medium' }));
+    expect(
+      screen.getByRole('button', { name: 'effortLevels.medium' }).getAttribute('aria-pressed'),
+    ).toBe('false');
+    await user.click(screen.getByRole('button', { name: 'settings.providers.custom.save' }));
+    await waitFor(() =>
+      expect(customProviderMocks.createCustomProvider).toHaveBeenCalledOnce(),
+    );
+    const payload = customProviderMocks.createCustomProvider.mock.calls[0]?.[0];
+    const model = (Object.values(payload.runtimes) as Array<{
+      models?: Array<{ id: string }>;
+    }>)[0]?.models?.find((m) => m.id === 'thinking-model') as
+      | { reasoning?: boolean; reasoningEfforts?: string[]; reasoningDefaultEffort?: string }
+      | undefined;
+    expect(model?.reasoningEfforts).not.toContain('medium');
+    expect(model?.reasoningEfforts).toContain(model?.reasoningDefaultEffort);
+  });
+});

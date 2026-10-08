@@ -2383,7 +2383,10 @@
           "headerNamePlaceholder": "Header-Name",
           "headerValuePlaceholder": "value",
           "addHeader": "헤더 추가",
-          "removeRow": "이 행 삭제"
+          "removeRow": "이 행 삭제",
+          "modelThinkingEnable": "추가하는 모델에 추론 강도 사용",
+          "modelThinkingDefault": "기본 단계",
+          "modelThinkingHint": "지금 추가하는 모델에만 적용됩니다. 끄면 강도가 미선언 상태로 유지되어 지원하지 않는 엔드포인트로 전송되지 않습니다. 기존 모델 설정은 유지됩니다."
         },
         "wireProtocol": {
           "responses": "OpenAI Responses(네이티브)",

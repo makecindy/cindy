@@ -2385,7 +2385,10 @@
           "headerNamePlaceholder": "Header-Name",
           "headerValuePlaceholder": "value",
           "addHeader": "Add header",
-          "removeRow": "Remove row"
+          "removeRow": "Remove row",
+          "modelThinkingEnable": "Enable thinking effort for newly added models",
+          "modelThinkingDefault": "Default tier",
+          "modelThinkingHint": "Applies only to models added now; when off, effort stays undeclared and no tier is sent to endpoints that lack support. Existing models keep their settings."
         },
         "wireProtocol": {
           "responses": "OpenAI Responses (native)",

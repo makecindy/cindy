@@ -2383,7 +2383,10 @@
           "headerNamePlaceholder": "Header-Name",
           "headerValuePlaceholder": "value",
           "addHeader": "ヘッダーを追加",
-          "removeRow": "この行を削除"
+          "removeRow": "この行を削除",
+          "modelThinkingEnable": "追加するモデルに思考強度を有効にする",
+          "modelThinkingDefault": "デフォルト段階",
+          "modelThinkingHint": "今回追加するモデルにのみ適用されます。オフのままなら段階は未宣言のまま、対応しないエンドポイントには送信されません。既存モデルの設定は変わりません。"
         },
         "wireProtocol": {
           "responses": "OpenAI Responses（ネイティブ）",

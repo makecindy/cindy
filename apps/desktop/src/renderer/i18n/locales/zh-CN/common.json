@@ -2383,7 +2383,10 @@
           "headerNamePlaceholder": "Header-Name",
           "headerValuePlaceholder": "value",
           "addHeader": "添加请求头",
-          "removeRow": "删除该行"
+          "removeRow": "删除该行",
+          "modelThinkingEnable": "为新增的模型启用推理强度",
+          "modelThinkingDefault": "默认档位",
+          "modelThinkingHint": "仅对本次新增的模型生效；关闭则保持未声明，不会向不支持的端点发送档位。已保存模型的设置不受影响。"
         },
         "wireProtocol": {
           "responses": "OpenAI Responses（原生）",
