@@ -24,7 +24,7 @@ function fixture(initial = 'active', afterConfirmation = initial) {
     return create();
   });
   const deps = { service, getCurrentDbClientSnapshot: () => epoch, PluginTaskError, assertPluginTaskResult, startOrcaTeamForCaller: start,
-    isPluginTaskAuthorized: () => true, readGhostErrandConfig: () => ({ permissionMode: 'auto' }) };
+    isPluginTaskAuthorized: () => true, readPluginTaskConfig: () => ({ permissionMode: 'auto' }) };
   const run = new Function(...Object.keys(deps), js)(...Object.values(deps));
   return { run: () => run('plugin', { kind: 'startTeam', taskId: 'task' }), start, create };
 }
@@ -84,7 +84,7 @@ describe('public start_team Full access admission', () => {
         createPluginTaskStore: () => ({ get: async () => state === 'ordinary' ? null
           : { operation: 'create', pluginId: 'plugin', payload: JSON.stringify({ ownershipRevoked: revoked }) } }),
         pluginTaskServiceForCurrentOwner: () => ({ get: async () => task }),
-        isPluginTaskAuthorized: () => state !== 'disabled', readGhostErrandConfig: () => ({ permissionMode: 'auto' }),
+        isPluginTaskAuthorized: () => state !== 'disabled', readPluginTaskConfig: () => ({ permissionMode: 'auto' }),
         assertLeadCollabProjectEnabled: async () => {}, getWorkerPermissionModeFromCreationPrefs: () => preference,
         orcaWorkerPermissionConfirmBridge: { request }, t: (key: string) => key, orcaLifecycleService: lifecycle,
       };
@@ -163,7 +163,7 @@ describe('plugin team activation uses the native lifecycle compensation', () => 
       sendWorkerReadyPlaceholder: vi.fn(), rollbackCreatedWorker: vi.fn(), broadcastSessionCreated: vi.fn(), broadcastOrcaWorkerChanged: vi.fn(),
     };
     const callbacks = { service, getCurrentDbClientSnapshot: () => epoch, PluginTaskError, assertPluginTaskResult,
-      isPluginTaskAuthorized: () => authorized, readGhostErrandConfig: () => ({ ...cfg }),
+      isPluginTaskAuthorized: () => authorized, readPluginTaskConfig: () => ({ ...cfg }),
       assertLeadCollabProjectEnabled: async () => {}, getWorkerPermissionModeFromCreationPrefs: () => 'auto',
       startOrcaTeamWithPermissionGate, orcaWorkerPermissionConfirmBridge: { request: vi.fn() }, t: (key: string) => key,
       orcaLifecycleService: createOrcaLifecycleService(deps) };

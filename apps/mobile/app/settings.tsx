@@ -601,8 +601,12 @@ export default function SettingsScreen() {
     }
   }, [auth.apiFetch, pushBusy, pushEnabled, t]);
 
-  // 调试分组与首页列表共用同一套展开 / 收起过渡(listDisclosureTransition)。
-  const debugDisclosure = useListDisclosureTransition();
+  // Android 10 上快速反向切换这组父卡片 layout + 多行 exiting 时会出现重叠 / 空白。
+  // 设置页在 Android 上同步重排,避免退出视图参与后续布局;保留 iOS 动画与原状态逻辑。
+  const debugDisclosureMotionEnabled = Platform.OS !== 'android';
+  const debugDisclosure = useListDisclosureTransition({
+    motionEnabled: debugDisclosureMotionEnabled,
+  });
   const runDebugDisclosure = debugDisclosure.run;
   const toggleDebug = useCallback(() => {
     runDebugDisclosure(() => setDebugExpanded((value) => !value));
@@ -759,7 +763,10 @@ export default function SettingsScreen() {
       />
 
       <ScrollView {...simpleScrollInsetProps} contentContainerStyle={styles.content} testID="settings.scroll">
-        <ListDisclosureScope controller={debugDisclosure.controller}>
+        <ListDisclosureScope
+          controller={debugDisclosure.controller}
+          motionEnabled={debugDisclosureMotionEnabled}
+        >
           {/* 账号头部:身份 + 连接状态一次性呈现,下面分组不再重复 */}
           <View style={styles.headerCard} testID="settings.accountHeader">
             <MobileUserAvatar imageUrl={auth.user?.avatar} name={overview.header.name} size="large" />

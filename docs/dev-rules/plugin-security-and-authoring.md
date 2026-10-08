@@ -32,7 +32,7 @@
 | 打包限制                                             | `apps/desktop/src/main/cindy-brain/forge.ts` 的 `packGhostDir`                                                                                                                                                                                                                                                    |
 | 运行时、沙箱进程与生命周期                           | `apps/desktop/src/main/cindy-brain/runtime/GhostRuntime.ts`、`GhostManager.ts`                                                                                                                                                                                                                                    |
 | 安装事务状态、内容摘要与技能快照 receipt             | `apps/desktop/src/main/cindy-brain/ghostInstallReceipt.ts`，状态投影见 `shared/ghost.ts` 的 `GhostInstallApproval`                                                                                                                                                                                                |
-| 能力实现（网络／通知／确认／文件系统／技能／宿主等） | `networkSlot.ts`、`notifySlot.ts`、`badgeSlot.ts`、`confirmSlot.ts`、`fsSlot.ts`、`cindySlot.ts`、`skillSlot.ts`、`agentSlot.ts`、`errandSlot.ts`、`iosSimulatorSlot.ts`；持久作品库见 [`plugin-library-storage.md`](plugin-library-storage.md)，主实现在 `libraryVault.ts`、`librarySlot.ts`、`libraryDbCore.ts` |
+| 能力实现（网络／通知／确认／文件系统／技能／宿主等） | `networkSlot.ts`、`notifySlot.ts`、`badgeSlot.ts`、`confirmSlot.ts`、`fsSlot.ts`、`cindySlot.ts`、`skillSlot.ts`、`agentSlot.ts`、`errandSlot.ts`；持久作品库见 [`plugin-library-storage.md`](plugin-library-storage.md)，主实现在 `libraryVault.ts`、`librarySlot.ts`、`libraryDbCore.ts` |
 | 面板供片、注入主题 token 与协议                      | `apps/desktop/src/renderer/cindy-brain/ghostPanelTheme.ts`、`cindy-ghost://` 分支                                                                                                                                                                                                                                 |
 | 插件详情能力说明 UI                                  | `apps/desktop/src/renderer/features/plugin/GhostPluginDetailView.tsx`                                                                                                                                                                                                                                             |
 | 远程／手机版能力准入白名单                           | `packages/device-link/src/allowlist.ts`                                                                                                                                                                                                                                                                           |
@@ -56,7 +56,7 @@
   `tools`、`card`、`panel`、`mainView`、`subscribe`、`skill`、`cindy`、`agent`、`node`、`network`、
   `preview` 等顶层字段本身就是插件贡献项或自主 Host 能力的直接声明。
 - 无配置的布尔能力只接受字面量 `true`：`notify`、`badge`、`confirm`、`fs`、`library`、
-  `sessionContext`、`pick`、`workspace`、`iosSimulator`。不用就省略，写 `false` 是无效清单。
+  `sessionContext`、`pick`、`workspace`。不用就省略，写 `false` 是无效清单。
 - `card: {}` 与 `agent: {}` 分别表示基础卡片能力和由真实用户点击触发 Agent 回合；
   其它对象型能力必须至少包含一项真实能力，不能用空对象占位。
 - v3 未识别的顶层字段，以及能力对象中的未知扩展字段、动作和订阅事件，必须原样保留，
@@ -122,6 +122,11 @@
 ### 3.1 安装与自动更新
 
 插件普通任务创建的 Worker 目录由宿主校验：允许当前任务目录及解析符号链接后仍在其中的子目录、插件 AI 配置目录、用户通过目录选择器授权的确切目录。Library 绑定本身不授予 Agent 工作目录权限，协同计划也不构成目录授权。登记计划和实际创建 Worker 均复核授权；账号、配置或任务归属发生变化时拒绝继续创建。
+同一次 Worker 创建沿用最初的账号与任务归属，在启动 Session、续租完成后、写入 Worker 前再次复核。
+复核失败沿用既有尽力清理路径（关闭、移除运行缓存、归档 Session 与释放预留），不派发初始任务；新团队沿用创建失败收尾。
+卸载后用户新发起的普通 Orca 创建仍可使用旧任务，但在途插件创建不得因卸载转成普通创建。
+此检查不构成跨持久化与派发的事务，也未新增跨账号数据库补偿；实现及回归见
+`apps/desktop/src/main/maker-ipc/orcaWorkerCreationService.ts`、`register.ts` 与 `__tests__/orcaWorkerCreationService.test.ts`。
 插件任务目录在文件系统查询前拒绝 UNC/device 路径，并先按上述宿主目录记录核验候选路径；不通过探测未登记别名发现授权目标。本地 Windows 盘符长路径保留支持。解析后仍复核真实目录；这不构成执行隔离，也不能阻止已授权目录内的链接置换。
 
 - 首次安装只来自明确依据：用户导入本地 `.cindy`、明确要求当前 Agent 调用
@@ -352,15 +357,28 @@
 - `network.secrets[].url` 可由 Host 作为 Setup 字段旁的辅助获取入口展示。该地址必须
   继续满足 manifest 安装期的 `https`、无内嵌凭证校验；它不是 Agent 文案或 plan
   的一部分，插件也不能通过 `settings.js` 动态替换 Setup 卡地址。
-- 模型调用一律走 Cindy 统一通道，不允许插件自建绕过通道的推理请求。两条 AI 代办
-  通道的固定边界（2026-07-31 定案，主机代码强制）：
-  - 快问快答（`cindy.text.oneshot`）只走主机轻量任务模型链，无 agent、无工具、
-    不进会话；选型不在插件手里，链上无候选时返回结构化 `NO_CANDIDATE`。
-  - 派活取件（`agent.errand`）的任务文本**只进普通 user 消息、绝不进 system
-    prompt**；errand 会话侧边栏可见、可旁观可叫停；agent／模型／权限档／工作
-    目录全部由用户在插件详情页配置，权限档只有 `plan`（默认）／`acceptEdits`／
-    `auto` 三档，**`bypassPermissions` 在协议层就不存在**，不得以任何形式放开；
-    工作目录缺省为插件专属对话目录，指向真实项目必须由用户亲手选择。
+- 模型调用一律走 Cindy 统一通道，不允许插件自建绕过通道的推理请求。
+- 插件是沙箱小程序，不等于 AI 代办。模型与任务相关能力必须分别描述：
+  - 快问快答（`cindy.text.oneshot`）不创建任务、没有 Agent 工具；沿用其统一轻量模型通道。
+  - `agent.run` 承接已有用户任务的继续／新建／分叉，保留原任务的交互与权限语义；
+    真实点击票／后台关联授权不因共用模型校验而扩大。
+  - `cindy.tasks` 创建并管理插件自己的普通任务，有独立的 tasks 声明、批准与持久回执；
+    不依赖旧 errand 权限，不把任务完成等同于取到一段文本。
+  - `workspace.ensureSession` 只定位／创建工作区任务入口；不因创建入口就自动执行模型。
+  - `agent.errand` 是旧的派活取件适配器，保留专属任务映射与结果回传，不作为其它能力的产品抽象。
+- 用户界面、Agent 工具、伙伴和插件的新建任务共用普通 Session 创建入口。伙伴的完成回报、
+  时间线与信号留在伙伴层；插件按需查询结果，不默认唤醒伙伴或另一个 Agent。
+- 插件详情「任务设置」是插件新建任务的共用偏好，普通任务、工作区新建与旧 errand 使用
+  同一配置。显式完整模型组合优先；缺省从宿主验证的发起任务继承，面板无发起任务则使用
+  当前新任务的完整选择，不优先翻找 Claude Code 的历史草稿。模型选择不授予权限或目录。
+  保存、新建和插件派发前复用普通独立任务的模型／供应商／Agent 准入，不另建目录或选择器。
+  连接状态不等于额度、网络及远端参数一定可用；执行失败如实返回，不静默换型号或账号。
+- 插件新建普通任务的权限仅来自用户的插件设置或既有宿主确认流程，默认普通任务的 `ask`，允许
+  用户显式选择 `acceptEdits`／`auto`，不新增 `bypassPermissions`；不继承发起任务的权限。
+  旧 errand 适配器保留历史缺省 `plan` 与原 Agent 行为；已有任务及显式历史设置不自动改权。
+  不把历史 `plan` 值宣称为跨 Agent 的只读保证，也不为它改造各 Agent 的权限引擎。
+  旧存储文件名、键及 IPC 保持兼容，升级不丢配置、不重批权限。来源优先级、复用和恢复
+  详见 [插件普通任务接口](plugin-task-api-implementation.md#模型配置与创建来源)。
 - 附件、媒体、目录和保存路径通过归属校验后的 grant／deposit／ledger 交接，**禁止把
   宿主绝对路径或不必要的字节暴露给沙箱**。媒体字节须走
   [`media-storage-and-protocols.md`](media-storage-and-protocols.md) 的统一入库。
@@ -428,13 +446,10 @@
   按 owner × plugin 幂等注册；设置页与同插件其它页面继续共享 browser storage、IndexedDB
   与 `BroadcastChannel`。
 - 面板供片与注入的主题 token 只用 `ghostPanelTheme.ts` 白名单内的值，不扩大暴露面。
-- `iosSimulator` 能力只允许读取 Host 当前台前任务的公开模拟器状态，并请求打开既有
-  Host viewer。请求协议不得出现插件自报 `sessionId`，可选 `instanceId` 必须重新匹配
-  当前任务的公开实例。视频帧、viewer lease、触控、Sidecar／Helper、artifact 路径、进程
-  句柄和私有诊断都不得跨进插件沙箱；Agent 侧构建／安装／控制继续走 Host 注册的
-  `cindy_ios_simulator` MCP。该能力是本机 Desktop 专属，不进入 device-link/mobile，
-  SSH／远程任务 fail closed。状态查询必须走脱敏、短缓存、无副作用的只读投影，不得借
-  panel 轮询执行 ownership reconcile、续租、启动 WDA／Sidecar 或创建 driver。
+- 已下线功能仅保留通用迁移目录与历史清单兼容字段，不提供 Host 能力。
+  `iosSimulator` / v2 `ios-simulator` 只用于旧安装记录往返和下线识别；升级前已装且启用的
+  用户在原插件位置收到迁移引导，旧运行时、MCP、技能入口不再加载。见
+  [`feature-retirements.md`](../product-rules/feature-retirements.md)。
 
 ## 5. 存量插件兼容：升级必须无感（红线）
 
@@ -600,6 +615,14 @@
   正则没放开首字符。
 
 ## 8. 远程与手机版
+
+移动页面契约见 [移动插件接入](plugin-mobile-implementation.md)。可选 `mobile` 声明
+只选择已有能力的页面入口，不改变旧插件批准、凭证或安装布局。逻辑仍由执行电脑运行。
+Host 为页面消息附加 `mobilePageId`，原生弹窗、任务操作、目录选择和预览等必须保留
+该来源；页面覆盖、关闭、账号/连接/安装代次改变后，旧响应不得继续写入或清除未读。
+手机任务配置复用普通任务配置校验。密钥/连接表单走 Host 原生 v3 加密授权通道，
+不得通过 WebView、BroadcastChannel 或通用插件 fetch 传递凭证。
+
 
 插件能力可能运行在 SSH 远程工作区、设备互联远程控制或手机版控制端。新增或修改 IPC
 channel 与推送事件时，若手机／远程控制场景需要用到，必须按

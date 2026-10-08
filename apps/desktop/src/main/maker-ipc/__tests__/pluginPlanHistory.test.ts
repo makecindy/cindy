@@ -31,7 +31,7 @@ it('holds the real send lock from directory validation through plan persistence'
   const epoch={};const task={workingDir:'/root',revision:1};
   let release!:()=>void;const saving=new Promise<void>(resolve=>{release=resolve;});
   const save=vi.fn(async()=>{expect(hasSendToSessionLock('plan-history')).toBe(true);await saving;return {ok:true};});
-  const deps={withSendToSessionLock,getCurrentDbClientSnapshot:()=>epoch,service:{get:async()=>task,setTeamPlan:save},readGhostErrandConfig:()=>({workingDir:'/root'}),isPluginTaskAuthorized:()=>true,isGhostPickedDir:()=>false,PluginTaskError,resolvePluginWorkerDirectory:async()=>{expect(hasSendToSessionLock('plan-history')).toBe(true);}};
+  const deps={withSendToSessionLock,getCurrentDbClientSnapshot:()=>epoch,service:{get:async()=>task,setTeamPlan:save},readPluginTaskConfig:()=>({workingDir:'/root'}),isPluginTaskAuthorized:()=>true,isGhostPickedDir:()=>false,PluginTaskError,resolvePluginWorkerDirectory:async()=>{expect(hasSendToSessionLock('plan-history')).toBe(true);}};
   const run=new Function(...Object.keys(deps),compile(`return async function(pluginId,request){switch(request.kind){${branch}}}`))(...Object.values(deps));
   const pending=run('plugin',{kind:'setTeamPlan',taskId:'plan-history',plan:{items:[{workingDir:'/root'}]}});
   try {await vi.waitFor(()=>expect(save).toHaveBeenCalledOnce());expect(hasSendToSessionLock('plan-history')).toBe(true);}

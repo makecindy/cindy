@@ -39,6 +39,11 @@ export interface ResourceUsageWindowControllerDeps {
   activityPayload?: (active: boolean) => unknown;
   localeChannel?: string;
   prewarmWork?: boolean;
+  /**
+   * 原生 hide / minimize 是否暂停窗口工作；默认 true。只有用户关闭（hideWindow）才应结束
+   * 工作的窗口传 false——macOS 会把切换 Space、原生全屏切换和完全遮挡都报告成 hide / show。
+   */
+  pauseWhenHidden?: boolean;
   onActivityChanged?: (window: BrowserWindow, active: boolean) => void;
   onCloseRequested?: (window: BrowserWindow) => void;
   isOpenSender: (sender: WebContents) => boolean;
@@ -137,7 +142,9 @@ export class ResourceUsageWindowController {
       this.showAndFocus(win);
       return true;
     }
-    if (!this.visible && !this.pendingOpen) this.setSamplingActive(win, false);
+    // 隐藏不暂停的窗口（远程桌面）在隐藏后才就绪时保留会话，只是不再显示。
+    if (!this.visible && !this.pendingOpen && this.deps.pauseWhenHidden !== false)
+      this.setSamplingActive(win, false);
     return true;
   }
 
@@ -447,7 +454,7 @@ export class ResourceUsageWindowController {
   private onNativeVisibilityChanged(win: BrowserWindow, visible: boolean): void {
     if (win !== this.winRef || win.isDestroyed()) return;
     this.visible = visible;
-    this.setSamplingActive(win, visible);
+    if (this.deps.pauseWhenHidden !== false) this.setSamplingActive(win, visible);
     if (!visible && this.pendingOpen) {
       this.pendingOpen = false;
       this.clearOpenTimeout();

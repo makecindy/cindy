@@ -375,25 +375,16 @@ export function SessionTabsBar({
           <DropdownMenuContent
             align="end"
             sideOffset={4}
-            className={cn(
-              // 与 ProjectNode / SessionItem 菜单同款 shadcn 覆盖,统一项目侧
-              // dropdown 视觉。
-              'rounded-xl p-0.5 overflow-hidden min-w-[140px]',
-              'bg-[var(--cmd-palette-bg)]',
-              'border border-[var(--cmd-palette-border)]',
-              'shadow-[var(--shadow-menu)]',
-            )}
+            className="min-w-[140px]"
           >
             <DropdownMenuItem
               onSelect={() => onCreateNew('cc')}
-              className="h-7 px-2.5 rounded-md text-13 text-[var(--msg-assistant-text)] focus:bg-[var(--cmd-palette-item-hover)]"
             >
               <VendorIcon vendor="cc" size={14} className="mr-2 text-foreground" />
               Claude
             </DropdownMenuItem>
             <DropdownMenuItem
               onSelect={() => onCreateNew('codex')}
-              className="h-7 px-2.5 rounded-md text-13 text-[var(--msg-assistant-text)] focus:bg-[var(--cmd-palette-item-hover)]"
             >
               <VendorIcon vendor="codex" size={14} className="mr-2 text-foreground" />
               Codex

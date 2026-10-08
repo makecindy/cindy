@@ -9,10 +9,8 @@ import {
   type GhostLocale,
   type GhostManifestLocales,
 } from '@cindy/plugin-protocol';
-import type { IOSSimulatorMcpErrorCode } from '@cindy/mcps';
 import { findSplitChildByPanelKind, insertRootSplitPane, type Layout } from './layoutTree';
 import { DEFAULT_LOCALE, SUPPORTED_LOCALES, type SupportedLocale } from './locale';
-import type { IOSSimulatorPublicInstance, IOSSimulatorPublicRouteStatus } from './iosSimulatorIpc';
 
 /**
  * 意识(Ghost,.cindy 文件)的清单数据模型与校验 —— main / renderer 共用。
@@ -139,10 +137,7 @@ const GHOST_ID_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
  * 即授权(pick 模式,路径不回沙箱),或 tool-call 语境下带在途 callId + 绝对
  * 路径(目录在该会话 workdir 内自动放行,workdir 外弹确认卡)。远程工作区
  * v1 一律拒(fail closed)。
- * 'ios-simulator' = 内置 iOS 模拟器(2026-08-06):插件只能读取当前台前任务的
- * 脱敏状态摘要并请求 Host 打开既有模拟器面板。视频帧、输入、viewer lease、
- * UDID、Sidecar 路径/进程与任意 sessionId 均不跨插件边界；实际 WDA / Native
- * 路由、生命周期、恢复与 fallback 仍完全由 Host 管理。
+ * 'ios-simulator' is retired; retained only to round-trip legacy approval receipts.
  *
  * 以下名称只用于 schemaVersion 2 的兼容解析。schemaVersion 3 已移除 slots，
  * 运行时统一使用 GhostManifest 上的直接字段；未知 v2 slot 只用于兼容诊断，
@@ -1456,6 +1451,8 @@ export interface GhostManifest {
    * Secret 不得写入 `/kv`。
    */
   settingsHtml?: string;
+  /** Optional mobile page projection; unknown/invalid declarations leave desktop behavior unchanged. */
+  mobile?: { channels: string[]; panel?: string; mainView?: string; settings?: string };
   /**
    * 自定义设置区固定高度(px,可选;160–800)。缺省 = 宿主量 guest 内容
    * 高度自适应(同区间收口);声明本字段 = 固定高度(内容动态增减的设置
@@ -1535,6 +1532,7 @@ export interface GhostManifest {
   sessionContext?: true;
   pick?: true;
   workspace?: true;
+  /** @deprecated Retirement detection only. No runtime capability is granted. */
   iosSimulator?: true;
   /** v3 未知字段为前向兼容原样保留，但 Host 不解释也不授权。 */
   [key: string]: unknown;
@@ -1601,6 +1599,8 @@ export function isGhostInstallApprovalToken(value: unknown): value is string {
 
 /** 已装入主机的插件(批准清单 + 安装位置 + 启用态)。 */
 export interface InstalledGhost {
+  /** Host retirement projection; never supplied by plugin authors. */
+  retirement?: import('./featureRetirements').InstalledFeatureRetirement;
   /** Host receipt fact, not a manifest declaration. Missing means tasks need confirmation. */
   taskCapabilityApproved?: true;
   manifest: GhostManifest;
@@ -1691,7 +1691,6 @@ export function ghostContentKeys(manifest: GhostManifest): string[] {
   // skill 是信任面最高的内容(给主 Agent 灌指令),详情页必须如实露出。
   if (manifest.skill) keys.push('slotSkill');
   if (manifest.workspace === true) keys.push('slotWorkspace');
-  if (manifest.iosSimulator === true) keys.push('slotIOSSimulator');
   return keys;
 }
 
@@ -1799,8 +1798,7 @@ export interface GhostPermissionItem {
     | 'pick'
     | 'preview'
     | 'skill'
-    | 'workspace'
-    | 'ios-simulator';
+    | 'workspace';
   /** i18n key 后缀,消费方拼 `settings.ghosts.perm.<labelKey>`。 */
   labelKey: string;
   /** i18n 插值参数(工具名、指令名、面板标题等)。 */
@@ -2144,15 +2142,6 @@ export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionIt
       kind: 'workspace',
       labelKey: 'workspace',
       detailKey: 'workspaceDetail',
-    });
-  }
-  // 内置模拟器槽只给脱敏状态与 Host 面板入口；视频、输入和进程控制都不授权。
-  if (manifest.iosSimulator === true) {
-    items.push({
-      key: 'ios-simulator',
-      kind: 'ios-simulator',
-      labelKey: 'iosSimulator',
-      detailKey: 'iosSimulatorDetail',
     });
   }
   // session-context 槽:派活时可获知当前会话的项目目录位置(路径信息,
@@ -5958,6 +5947,7 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalTasks: boo
       entry: raw.entry,
       ...(raw.launch !== undefined ? { launch: raw.launch as GhostLaunchMode } : {}),
       ...(raw.settingsHtml !== undefined ? { settingsHtml: raw.settingsHtml as string } : {}),
+      ...(raw.mobile !== undefined ? { mobile: raw.mobile as GhostManifest['mobile'] } : {}),
       ...(raw.settingsHeight !== undefined ? { settingsHeight: raw.settingsHeight as number } : {}),
       ...(tools !== undefined ? { tools } : {}),
       ...(card !== undefined || prepared.v3BaseCard || slots.includes('card')
@@ -6282,11 +6272,11 @@ export const GHOST_ERRAND_MIN_INTERVAL_MS = 10_000;
 export const GHOST_ERRAND_SESSION_KEY_RE = /^[A-Za-z0-9._-]{1,64}$/;
 
 /**
- * errand 会话允许的权限档。plan = 只读默认档;acceptEdits / auto 由用户在
- * 插件详情页显式放开。**bypassPermissions 刻意不在此列**(2026-07-31 定案:
+ * 插件创建普通任务使用 ask；plan 仅保留旧配置兼容，其执行语义由原 Agent 决定。
+ * acceptEdits / auto 由用户显式选择。**bypassPermissions 刻意不在此列**(2026-07-31 定案:
  * 被骗的插件配上不设防会话 = 无人看守的用户全权,风险不可接受)。
  */
-export const GHOST_ERRAND_PERMISSION_MODES = ['plan', 'acceptEdits', 'auto'] as const;
+export const GHOST_ERRAND_PERMISSION_MODES = ['ask', 'plan', 'acceptEdits', 'auto'] as const;
 export type GhostErrandPermissionMode = (typeof GHOST_ERRAND_PERMISSION_MODES)[number];
 
 /** 上行:派活提交与取件查询。 */
@@ -6311,7 +6301,7 @@ export type GhostPipeAgentErrandRequest =
        * 可选:请求把 errand 会话建在这个目录(绝对路径,≤1024 字符)。
        * 只是**转述**,不是授权——主机只认用户此前在 pick 槽系统窗口里
        * 亲手选过的目录(pickGrantsStore 台账);台账里没有 → INVALID_REQUEST。
-       * 用户在「AI 代办」卡里配置了工作目录时以用户配置优先,本字段忽略。
+       * 用户在「任务设置」卡里配置了工作目录时以用户配置优先,本字段忽略。
        */
       workingDir?: string;
       /**
@@ -6527,6 +6517,7 @@ export const GHOST_PICK_MIN_INTERVAL_MS = 3000;
  */
 export interface GhostPipePickRequest {
   type: 'pick-request';
+  mobilePageId?: string;
   /** v1 只支持选目录;将来扩文件类型时在此收窄枚举。 */
   mode: 'directory';
   /** 选择框内的用途说明(净化后随插件名一起展示,让用户知道谁在要、要来干嘛)。 */
@@ -6592,6 +6583,7 @@ export const GHOST_WORKSPACE_MIN_INTERVAL_MS = 3000;
 export type GhostPipeWorkspaceRequest =
   | {
       type: 'workspace-request';
+      mobilePageId?: string;
       kind: 'ensure-session';
       mode: 'pick';
       /** pick 模式选择框里的用途说明(净化后随插件名展示);也用作新会话标题。 */
@@ -6601,6 +6593,7 @@ export type GhostPipeWorkspaceRequest =
     }
   | {
       type: 'workspace-request';
+      mobilePageId?: string;
       kind: 'ensure-session';
       mode: 'dir';
       /** 目标项目目录的本机绝对路径。 */
@@ -6638,83 +6631,6 @@ export type GhostPipeWorkspaceResult =
       message: string;
     };
 
-/** 插件内置模拟器槽协议版本；能力按版本握手，不靠插件自报可用性。 */
-export const GHOST_IOS_SIMULATOR_CAPABILITY_API_VERSION = 1 as const;
-
-/**
- * 插件可见的最小模拟器状态。刻意不含 sessionId、UDID、source fingerprint、
- * lease、device grant、mutation state、路径或诊断；这些值既不是状态面板所需，
- * 也可能被滥用于跨任务控制或设备指纹识别。
- */
-export interface GhostIOSSimulatorStatusSnapshot {
-  environment: {
-    platform: string;
-    supported: boolean;
-    ready: boolean;
-    xcodeVersion: string | null;
-    availableDeviceCount: number;
-  };
-  instances: Array<{
-    instanceId: string;
-    simulatorName: string;
-    generation: number;
-    lifecycleState: IOSSimulatorPublicInstance['lifecycleState'];
-    healthState: IOSSimulatorPublicInstance['healthState'];
-  }>;
-  routeStatuses: Array<{
-    instanceId: string;
-    generation: number;
-    stream: Pick<IOSSimulatorPublicRouteStatus['stream'], 'adapter' | 'encoding' | 'state'>;
-    input: Pick<IOSSimulatorPublicRouteStatus['input'], 'adapter' | 'state'>;
-  }>;
-}
-
-/** Host 内部的只读投影结果；供 capability slot 消费，不直接跨 preload。 */
-export type GhostIOSSimulatorStatusProbeResult =
-  | { ok: true; status: GhostIOSSimulatorStatusSnapshot }
-  | { ok: false; errorCode: IOSSimulatorMcpErrorCode; message: string };
-
-/** 插件只能请求能力摘要、当前台前任务状态，或打开 Host 面板。 */
-export type GhostPipeIOSSimulatorRequest =
-  | { type: 'ios-simulator-request'; kind: 'capabilities' }
-  | { type: 'ios-simulator-request'; kind: 'status' }
-  | { type: 'ios-simulator-request'; kind: 'open-panel'; instanceId?: string };
-
-export type GhostPipeIOSSimulatorErrorCode =
-  | IOSSimulatorMcpErrorCode
-  | 'PERMISSION_DENIED'
-  | 'INVALID_REQUEST'
-  | 'INSTANCE_NOT_OWNED'
-  | 'RATE_LIMITED'
-  | 'HOST_NOT_READY'
-  | 'IOS_SIMULATOR_HOST_ERROR';
-
-export type GhostPipeIOSSimulatorResult =
-  | {
-      ok: true;
-      apiVersion: typeof GHOST_IOS_SIMULATOR_CAPABILITY_API_VERSION;
-      kind: 'capabilities';
-      capabilities: {
-        status: true;
-        openHostPanel: true;
-        pluginVideo: false;
-        pluginInput: false;
-      };
-    }
-  | {
-      ok: true;
-      apiVersion: typeof GHOST_IOS_SIMULATOR_CAPABILITY_API_VERSION;
-      kind: 'status';
-      status: GhostIOSSimulatorStatusSnapshot;
-    }
-  | {
-      ok: true;
-      apiVersion: typeof GHOST_IOS_SIMULATOR_CAPABILITY_API_VERSION;
-      kind: 'open-panel';
-      instanceId?: string;
-    }
-  | { ok: false; errorCode: GhostPipeIOSSimulatorErrorCode; message: string };
-
 /**
  * 上行:preview 槽——请主机在右侧栏内置浏览器打开一个预览标签页。
  * url 必须命中身份卡 preview.hosts 白名单(ghostPreviewUrlAllowed);
@@ -6722,6 +6638,7 @@ export type GhostPipeIOSSimulatorResult =
  */
 export interface GhostPipePreviewRequest {
   type: 'preview-request';
+  mobilePageId?: string;
   url: string;
   sessionId?: string;
 }
@@ -6750,6 +6667,7 @@ export type GhostPipePreviewResult =
  */
 export interface GhostPipeScheduleDraftRequest {
   type: 'schedule-request';
+  mobilePageId?: string;
   /** 预填的自动化名称(净化后按 GHOST_SCHEDULE_DRAFT_NAME_MAX_CHARS 截断)。 */
   name: string;
   /** 预填提示词:这条自动化到点要干什么(净化后按 …PROMPT_MAX_CHARS 截断)。 */
@@ -7045,6 +6963,7 @@ export type GhostNotifyTone = (typeof GHOST_NOTIFY_TONES)[number];
  */
 export interface GhostPipeNotify {
   type: 'notify';
+  mobilePageId?: string;
   /** 提示正文(纯文本,≤ GHOST_NOTIFY_MAX_CHARS;允许 \n 换行)。 */
   text: string;
   /** 语气(图标/配色);缺省 'info'。 */
@@ -7133,6 +7052,8 @@ export const GHOST_NOTIFY_MIN_INTERVAL_MS = 5000;
  */
 export interface GhostPipeConfirm {
   type: 'confirm-request';
+  /** Forward the originating mobile business request's opaque page ID, if present. */
+  mobilePageId?: string;
   /** 问句正文(纯文本,≤ GHOST_CONFIRM_BODY_MAX_CHARS;允许 \n 换行)。 */
   body: string;
   /** 主按钮文案(≤ GHOST_CONFIRM_BUTTON_MAX_CHARS);缺省用主机的「确认」。 */
@@ -8024,6 +7945,8 @@ export type GhostPipeEventPush =
        */
       type: 'event';
       name: 'card-action';
+      /** Opaque origin for host confirmation routing. Forward it to cindy.confirm. */
+      mobilePageId?: string;
       callId: string;
       actionId: string;
       /** 被点卡片所属会话；老卡可能没有归属，缺省时不能唤起 Agent。 */

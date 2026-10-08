@@ -4064,6 +4064,101 @@ describe('GoalController', () => {
     expect(h.session.sends).toHaveLength(1); // 无续轮
   });
 
+  it('reactive: prefers the reset time carried by the error over the account snapshot', async () => {
+    // Claude 订阅:账号快照(LiteLLM 预算)读不到 5h 窗口,只有错误带的重置时刻可用。
+    h.setAccountLimit(null);
+    await startGoal(h);
+    h.session.emitErrorTurn({ sdkError: 'rate_limit', message: "You've hit your session limit", usageResetAt: 7_201_000 });
+    await tick();
+    const st = await h.storage.get('s1');
+    expect(st?.status).toBe('usageLimited');
+    expect(st?.usageResetAt).toBe(7_201_000);
+    expect(h.session.sends).toHaveLength(1);
+  });
+
+  it('reads the account limit of the goal session so the subscription provider is respected', async () => {
+    const getAccountLimit = vi.fn(async () => ({ limited: true, resetAtMs: 3_601_000 }));
+    const local = makeController({ getAccountLimit });
+    try {
+      await startGoal(local);
+      local.session.emitErrorTurn({ sdkError: 'rate_limit', message: 'rate limit reached' });
+      await tick();
+      expect(getAccountLimit).toHaveBeenCalledWith(
+        expect.any(String),
+        's1',
+        expect.objectContaining({ sdkError: 'rate_limit' }),
+      );
+      expect((await local.storage.get('s1'))?.usageResetAt).toBe(3_601_000);
+    } finally {
+      await local.controller.dispose();
+    }
+  });
+
+  it('reactive: ignores the snapshot reset time when the snapshot does not show the limit', async () => {
+    // 未用满窗口的重置时刻与这次限流无关:不排期,留待手动 resume。
+    h.setAccountLimit({ limited: false, resetAtMs: 3_601_000 });
+    await startGoal(h);
+    h.session.emitErrorTurn({ errorStatus: 429, message: 'Too many requests' });
+    await tick();
+    const st = await h.storage.get('s1');
+    expect(st?.status).toBe('usageLimited');
+    expect(st?.usageResetAt).toBeNull();
+  });
+
+  it('leaves the reset time written in the error text to the host (only trusted for subscriptions)', async () => {
+    // 报错原文里的时刻要由注入端按会话订阅家族判定;非订阅来源的 Retry-After 不能直接排期。
+    const getAccountLimit = vi.fn(async () => null);
+    const local = makeController({ getAccountLimit });
+    try {
+      await startGoal(local);
+      const error = { errorStatus: 429, message: 'Too many requests. Try again in ~2 min.' };
+      local.session.emitErrorTurn(error);
+      await tick();
+      expect(getAccountLimit).toHaveBeenCalledWith(expect.any(String), 's1', expect.objectContaining(error));
+      const st = await local.storage.get('s1');
+      expect(st?.status).toBe('usageLimited');
+      expect(st?.usageResetAt).toBeNull();
+    } finally {
+      await local.controller.dispose();
+    }
+  });
+
+  it('shared task: a usage limit stays usageLimited without scheduling an auto resume', async () => {
+    const local = makeController({ isSessionShared: () => true });
+    try {
+      local.setAccountLimit({ limited: true, resetAtMs: 1000 });
+      await startGoal(local);
+      local.session.emitErrorTurn({ sdkError: 'rate_limit', usageResetAt: 1000 });
+      await tick();
+      await tick();
+      const st = await local.storage.get('s1');
+      expect(st?.status).toBe('usageLimited');
+      expect(st?.usageResetAt).toBeNull();
+      expect(local.notices).toEqual([]);
+      expect(local.session.sends).toHaveLength(1);
+    } finally {
+      await local.controller.dispose();
+    }
+  });
+
+  it('shared task: a wait that becomes shared does not auto resume at the reset time', async () => {
+    // 报错时尚未共享(排了恢复),到点时已在共享。
+    const isSessionShared = vi.fn(() => isSessionShared.mock.calls.length > 1);
+    const local = makeController({ isSessionShared });
+    try {
+      local.setAccountLimit({ limited: true, resetAtMs: 1000 });
+      await startGoal(local);
+      local.session.emitErrorTurn({ sdkError: 'rate_limit' });
+      await vi.waitFor(() => expect(isSessionShared).toHaveBeenCalledTimes(2));
+      await tick();
+      expect(local.notices).toEqual([]);
+      expect(await local.storage.get('s1')).toMatchObject({ status: 'usageLimited', usageResetAt: 1000 });
+      expect(local.session.sends).toHaveLength(1);
+    } finally {
+      await local.controller.dispose();
+    }
+  });
+
   it('proactive: a would-be-continue turn flips to usageLimited when the account is limited', async () => {
     h.setAccountLimit({ limited: true, resetAtMs: 3_601_000 });
     await startGoal(h);

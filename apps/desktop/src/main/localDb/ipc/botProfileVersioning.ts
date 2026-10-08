@@ -1,5 +1,5 @@
 import { normalizeBotModelChain, readBotTaskModelOverride } from '../../../shared/botModelChain.js';
-import { reconcileBotCapabilityList } from '../../../shared/botCapabilitySelection.js';
+import { normalizeBotToolCapabilities, reconcileBotCapabilityList } from '../../../shared/botCapabilitySelection.js';
 import { throwIpcError } from '../../utils/ipcValidate.js';
 
 export function botProfileContentChanged(input: {
@@ -27,9 +27,10 @@ export function mergeBotProfileCapabilities(input: {
   hasSkills: boolean;
   capabilityBaseline?: unknown;
 }): Record<string, unknown> {
+  const previous = normalizeBotToolCapabilities(input.previous);
   const next = input.capabilities
-    ? { ...input.previous, ...input.capabilities }
-    : { ...input.previous };
+    ? { ...previous, ...input.capabilities }
+    : { ...previous };
   if (input.hasSkills) {
     next.skills = Array.isArray(input.skills)
       ? input.skills
@@ -59,7 +60,7 @@ export function mergeBotProfileCapabilities(input: {
         Array.isArray(current) ? current.filter((id): id is string => typeof id === 'string') : []);
     }
   }
-  return next;
+  return normalizeBotToolCapabilities(next);
 }
 
 /** Main-owned persistence boundary for the ordered Bot runtime routes. */

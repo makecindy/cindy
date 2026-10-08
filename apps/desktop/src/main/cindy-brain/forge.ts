@@ -1818,7 +1818,7 @@ node secretBindings key、setup kv key——都不能使用 \`__proto__\`、\`co
 v3 直接用顶层字段声明插件贡献项与自主 Host 能力，不再有 \`slots\`。带详单的字段是 \`tools\`、\`cindy\`、
 \`agent\`、\`panel\`、\`mainView\`、\`card\`、\`subscribe\`、\`network\`、\`node\`、\`preview\`、
 \`skill\`；布尔能力写成字面量 \`true\`：\`notify\`、\`badge\`、\`confirm\`、\`fs\`、
-\`library\`、\`sessionContext\`、\`pick\`、\`workspace\`、\`iosSimulator\`。不用的字段直接省略，
+\`library\`、\`sessionContext\`、\`pick\`、\`workspace\`。不用的字段直接省略，
 不能写 \`false\`。\`card: {}\` 与 \`agent: {}\` 分别表示基础聊天卡片能力和用户点击后
 发起 Agent 回合；其它对象型能力必须包含该能力真正需要的详单。
 
@@ -2508,6 +2508,40 @@ const r = await cindy.send({
   「可把文字送去算成向量」并写明单次条数上限。
 
 ## 4.0.3a 只读 Agent 模型目录
+
+### 移动端页面与操作来源（可选扩展）
+
+在身份卡顶层声明 \`mobile: { channels: ["practice-ui"], panel: "mobile/panel.html" }\`。
+\`mainView\` 和 \`settings\` 同样可指定包内 HTML；省略路径时复用原入口。
+这些只是已有 \`panel\` / \`mainView\` / \`settingsHtml\` 的移动呈现，不能授予未声明的能力。
+没有 mobile、字段不合法或旧宿主不支持时，原桌面安装、批准与使用保持不变。
+
+页面经手机隔离 WebView 展示，业务逻辑仍在所选电脑原插件中执行：
+
+- 仅桥接声明的 BroadcastChannel（最多 16 个），每条 JSON 消息至多 48 KiB。
+  请求必须包含业务 requestId；保存、创建任务等写操作沿用同一个 requestId 查询/去重，
+  超时不等于未执行，Host 不替作者盲目重发。
+- 电脑逻辑页收到手机业务消息时，Host 附上不透明 \`mobilePageId\`（覆盖页面自报的值）。
+  异步链显式保留它；confirm、notify、tasks、pick、workspace、preview、schedule 请求均原样附带。
+  卡片动作消息也包含该字段。不要存为全局“最近手机”，也不能在后台复用过期来源。
+- 示例：\`const origin = msg.mobilePageId; const answer = await cindy.confirm({ body: "应用调整？", ...(origin ? { mobilePageId: origin } : {}) });\`
+  只有 \`answer.ok && answer.confirmed\` 才能继续；页面关闭、覆盖、超时或撤权均不能当成同意。
+  普通确认不授予目录、账号、任务或文件权限；任务授权仍由专用 Host 校验链决定。
+- notify 只交给来源页面；后台提醒用原 \`badge\` 能力。badge 是 boolean + summary，
+  没有计数字段。目录、详情及 mainView 不清 panel 未读。panel 用
+  \`window.cindyMobile.onUnread(version => { /* 读取并呈现对应内容后调用 contentRendered(version) */ })\`
+  接收未读版本；读取失败、只收到轮询或页面加载完成都不能确认已读。
+  \`window.cindyMobile.contentRendered(version)\` 在下一帧回报该版本，Host 复核可见性和版本。
+  异步读取必须捕获开始时的 version，不得用读取结束时的新版本代替；前台恢复后重新呈现再回报。
+- 包内静态资源按打开时的文件身份读取，整页资源最多 64 MiB。大媒体用归属明确的
+  \`/media/\` 或 \`/library/\`；不要把课程/用户媒体打进页面启动包。
+- 普通数据端点支持 \`/kv\`、\`/app-context\`、\`/agent-models\`、\`/media-models\`、\`/gallery\`。
+  凭证、OAuth、连接不走页面 fetch 或业务频道，必须使用 Host 原生配置流程。
+- 页面需自行完成触屏布局、Light/Dark 与草稿保存，不依赖桌面 localStorage 同步、Node、
+  悬停或 Electron 桥。当前页面供片要求自包含的脚本/样式资源；模块动态加载须实际验收，
+  不能只添加 mobile 字段就宣称已经完成移动适配。
+- 打开普通任务使用 \`cindy://sessions/<sessionId>\` 链接，由手机 Host 确认并导航；
+  此链接不赋予插件读取或控制该任务的权限。新建/继续/查询任务遵循 tasks 原有归属、版本与回执契约。
 
 设置页、panel、mainView 和电子脑均可 GET 同源 \`/agent-models\`（不接受参数）。
 返回 \`{ok:true,models:[{id,name,agent,providerId,providerName,efforts,defaultEffort,visible}]}\`。
@@ -3771,10 +3805,10 @@ await cindy.agent.run({
 一条 Agent 请求，后台请求之间至少间隔 10 秒。这个能力可能自动产生模型费用，只在
 产品确实需要时申请，不要把 \`sessionId\` 当作任意跨会话控制口。
 
-### 4.11.1 派活取件:让 Agent 替你干活并取回结果(errand)
+### 4.11.1 旧版任务接口:让 Agent 替你干活并取回结果(errand)
 
-\`agent.run\` 把回合发进**用户的会话**,结果是给用户看的;派活(errand)相反:
-任务在**你的专属 errand 会话**里跑,Agent 的最终回复文字交回**你**手里继续用。
+\`agent.run\` 用于用户已关联任务的交互；旧版 \`errand\` 接口提供结果查询适配：
+任务在宿主按 sessionKey 关联的普通任务里运行,Agent 的最终回复文字交回**你**手里继续用。
 需声明 \`"agent": { "errand": true }\`(插件详情高风险单列)。
 
 \`\`\`js
@@ -3782,7 +3816,7 @@ await cindy.agent.run({
 const r = await cindy.agent.errand({
   task: '阅读工作目录下的 README 并总结要点(200 字以内)',
   // context: { anything: '结构化上下文,主机 JSON 化后附在任务消息尾部' },
-  // title: '我的插件 · 代办',   // 仅首次创建对应 errand 会话时用作标题
+  // title: '我的插件任务',   // 仅首次创建对应 errand 会话时用作标题
   // workingDir: repoDir,        // 可选:请求建在某目录(只认用户亲选过的,见下)
   // sessionKey: 'pr-123',       // 可选:分会话钥匙(1–64 位字母/数字/._-)。
   //                             // 不传 = 插件共用一间;同钥匙同间、异钥匙各间,
@@ -3804,16 +3838,22 @@ const q = await cindy.agent.queryErrand({ jobId: r.jobId });
 
 - **任务只进普通 user 消息**,绝不进 system prompt;
 - errand 会话在**侧边栏可见**,用户可随时旁观、叫停——没有隐身会话;
-- 用哪个 agent/模型/思考强度、多大动手权限、在哪个目录干活,全部由**用户**在
-  你的插件详情页「AI 代办」卡里配置;缺省跟随用户新建草稿的选择,权限档缺省
-  **只读**(不能改任何文件),目录缺省是插件专属文件夹。别假设你能写文件——
-  只读档下让 Agent"分析/回答"没问题,"修改"类任务要在文案里引导用户先放开
-  权限档;
+- 这是旧版任务接口，不是插件全部 AI 能力。普通任务管理用 §4.11.3，继续用户任务用 §4.11，
+  快问快答用 §4.0.2；不要把这些能力统一称为代办。
+- 新建任务共用插件详情「任务设置」中的模型组合（Agent、供应商、模型、推理强度、Fast）。
+  没有覆盖时，沿用宿主核实的同插件本机在途 \`callId\` 所属任务；面板直接创建使用当前新任务选择。
+  无显式覆盖的已有专属任务保留自身模型，用户在任务中改选后可继续复用。
+  显式配置发生冲突时，新任务创建成功才替换映射，旧任务与历史保留。
+- 保存、创建与派发前校验真实的模型／Agent／供应商组合；失效时引导用户到任务设置改选，
+  或修复供应商连接。不静默换模型、不从报错猜凭证失效，也不把目录可用当作远端推理一定成功。
+- 权限独立来自用户插件设置；旧接口缺省保留历史 plan 值及原 Agent 行为，不将它宣称为
+  跨 Agent 的只读保证。新插件应使用普通任务接口，其缺省为普通任务的 ask 权限。
+  用户可显式选择 ask / acceptEdits / auto；不继承调用任务的完全访问。工作目录由宿主分配。
 - 目录有一个受控例外:run 请求可带 \`workingDir\`(绝对路径)**转述**一个目录,
   让 errand 会话建在项目里(Agent 能看到代码)。这不是授权——主机只认用户
   此前用 pick 能力(§4.14)在系统选目录窗口里**亲手选过**的目录(主机自己记的
   台账),别的路径一律 \`INVALID_REQUEST\`,此时应引导用户去你的设置页重新
-  选一次目录;用户在「AI 代办」卡里配置了目录时,以用户配置优先、本字段忽略;
+  选一次目录;用户在「任务设置」卡里配置了目录时,以用户配置优先、本字段忽略;
 - 每插件同时 1 单在途、相邻提交至少隔 10 秒;结果超过 64K 字符会截断(尾部带
   标记);完成结果保留 30 分钟,应用重启后查无此单(按可重新提交处理);
   \`sessionKey\` 只是分间,**不放大并发**——不同钥匙的两单同样要排队;
@@ -3897,10 +3937,19 @@ const r = await cindy.agent.requestSchedule({
   "将在此处打开",写"去自动化页确认"之类更准;
 - 一个都没有主窗口时(极端情况)→ \`HOST_NOT_READY\`。
 
-什么时候**不该**用它:一次性的、当场就要结果的事,用快问快答(§4.0.2)或派活取件
-(§4.11.1)。这个加档是给"长期定期刷新"用的,每条任务都会反复产生模型费用。
+什么时候**不该**用它:一次性的事，用快问快答(§4.0.2)或普通任务接口
+(§4.11.3)。这个加档是给"长期定期刷新"用的,每条任务都会反复产生模型费用。
 
-### 4.11.3 普通任务接口（实验性）
+### 4.11.3 新建任务与继续任务（普通 Session）
+
+先按业务选择：
+- 当前 Agent 已在处理你的工具：返回数据让它继续，不新建任务。
+- 用户在稿件面板提交修改：\`cindy.agent.run({mode: 'continue', ...})\` 继续已关联原任务。OpenDesign 当前采用这一方式。
+- 独立完成一项工作：\`cindy.tasks.create\` 新建普通任务，再用 \`send\` 开始执行。保存 taskId 后可继续同一任务。
+- 需要更新插件页面：查询 \`getRun/listRuns\` 与 \`readMessages\`；没有默认回叫，不自动唤醒伙伴或 Agent。
+
+用户界面统一叫「新建任务」「打开任务」「继续任务」。任务能使用什么模型、工具和权限，由普通任务配置与用户授权决定。
+插件身份／业务关联在调用方保存，不把普通任务做成另一种产品对象。伙伴的完成回叫只属于伙伴自己的流程。
 
 声明 \`"agent": { "tasks": true }\` 后，逻辑页可使用 \`cindy.tasks\`。它是独立权限，
 旧 \`errand\` 声明不自动取得该权限；用户仍可在侧边栏查看和接手这些任务。
@@ -3909,14 +3958,22 @@ const r = await cindy.agent.requestSchedule({
 面板通过既有逻辑页通道调用，不获得新的 preload 或内部 IPC 权限。
 
 先调用 \`capabilities()\` 获取实际支持操作。当前仅支持本插件创建的本机普通任务：
-\`create\`、\`get\`、\`list\`、\`send\`、\`getRun\`、\`listRuns\`、\`readMessages\`、\`cancel\`。
+\`models\`、\`create\`、\`get\`、\`setModel\`、\`list\`、\`send\`、\`getRun\`、\`listRuns\`、\`readMessages\`、\`cancel\`。
 可对自有任务调用 \`startTeam({taskId})\` 启用 Orca 主任务，并用 \`getTeam({taskId})\` 读取实际协同状态。协调主任务需经用户授权 Auto，Worker 自动沿用 Auto。
 这些任务及其 Worker 不提供 \`cindy_helper\` 的账号级历史或跨任务控制能力，\`cindy_memory.session_search\` 也拒绝历史检索；协调使用独立 Orca 工具，结果由插件通过 \`readMessages/getTeam\` 读取。旧 errand/workspace 不因来源标记受到限制；明确卸载撤销归属后，调用方已无正在执行的输入或已接受新真人输入时，保留的用户任务恢复普通 helper 与历史检索能力；仍执行旧插件输入时继续受限，自动回报和插件输入重试不构成真人接管。这不恢复插件控制权，也不保证停止已接受执行，不构成通用执行沙箱。
-在首次派发前调用 \`setTeamPlan({taskId,plan:{concurrency,items}})\`，每项包含\`label, workingDir, route\`。计划冻结后不可改写。
+在首次派发前调用 \`setTeamPlan({taskId,plan:{concurrency,task,items}})\`，每项包含
+\`label, workingDir, route, task\`。可选 \`task\` 是插件提供的工作范围（每段最多 8000 字符），
+不是用户原话。Host 核对已批准启用的插件、自有主任务、真实 Worker 归属、模型和目录后，
+将范围单独交给 Auto 审阅。进入 Host 审批的动作逐次核验用户限制、撤权和只读设置。
+首版保留 Codex 原生 Auto；其常规工作区动作可能直接执行，不保证每个动作都经过 Host 范围审批。
+卸载会撤销插件后续 API 控制，但不保证停止已派发的原生工作；需要停止时请使用任务停止入口。
+计划须在首次派发或创建 Worker 前登记，之后不可改写（包括补填 task）；需要不同范围时创建新任务。
+缺少该字段的存量计划继续可读，但 Host 不允许插件任务自动授权或普通 MCP 快捷放行，不会从 Agent 消息推导额外授权；进入 Host 的 Ask/acceptEdits 动作仍可沿原流程逐次确认。
 计划不授予目录权限。Worker 仅可使用宿主任务目录及解析后仍在其中的子目录、插件 AI 配置目录或用户亲选的确切目录；Library 绑定不自动变成 Agent 工作根。宿主在登记和创建时均复核。
 这描述准入检查，不是持续的 OS 目录隔离保证。首版用于可信本地工作区；同权限进程在检查后恶意置换目录对象仍可能改变实际 cwd，不提供此类对抗性沙箱。
 
-暂不支持选择现有任务、远程/伙伴任务、任意更新配置、归档、队列暂停或事件订阅。
+\`models()\` 返回统一目录可选项的完整 route、efforts 和 supportsFastMode。用户明确选择后将 route 原样传给 create，或用 \`setModel({taskId, expectedRevision, route})\` 修改已有自有任务。运行中按普通任务的安全边界切换，不修改应用默认。两方法使用前检查 capabilities.operations。
+暂不支持接管任意现有任务、远程/伙伴任务、其它配置修改、归档、队列暂停或事件订阅。
 旧 \`agent.errand\` 接口不变。
 
 \`\`\`js
@@ -3938,14 +3995,21 @@ SDK 成功返回 data，失败抛出带 code 的错误。原始管子响应为 \
 create/send 的 requestKey 持久去重；同键不同内容拒绝。删除后的记录不自动重建。
 请求键及 taskId/runId 需要由插件保存。取消仅作用于该输入，不能停止用户后来的执行。
 
-省略 route 时在接收时解析用户给本插件的 AI 配置；可显式传
-\`{agentKind:'codex',providerId:'...',model:'...',effort:'high',fastMode:false}\`。
-来源/模型/强度必须当前可用，派发前再次核对，不自动改用其它账号。
+省略 route 时使用用户给本插件的任务模型覆盖；无覆盖则沿用发起任务，面板直接创建时
+沿用当前新任务选择。可显式传
+\`{agentKind:'codex',providerId:'...',model:'...',effort:'high',fastMode:false}\`；无推理档位模型用空 effort。
+先查 \`capabilities().sourceCallContext\`：支持时，Agent 在途调用可在 create 中转传 \`callId\`。
+宿主核对同插件本机调用后读取其模型；不能自报 sourceSessionId 或权限。面板直接创建省略 callId。
+新字段需该能力为 true 才发送，旧客户端不能假定支持；同 requestKey 的重放保留原创建结果。
+来源/模型/强度必须当前可用，派发前再次核对；失败引导改选或修复连接，不自动换模型或账号。
+已有普通任务保留自身配置，用户在任务内修复后继续使用原任务。
 工作目录由宿主分配，或沿用用户已在插件设置中选择的目录；不接受任意路径或权限覆盖。
-权限沿用 AI 代办配置，默认只读，禁止 bypassPermissions。
+权限来自用户的插件任务设置，缺省使用普通任务的 ask 权限；工作区内行为及询问规则与所选
+Agent 的普通任务一致。允许用户显式选择 acceptEdits / auto，禁止 bypassPermissions，
+不继承发起任务的权限。既有任务与显式历史 plan 配置保留原行为，不自动提权；需要改变时由用户选择。
 create 可传 \`isolatedWorkspace:true\`，使用宿主为该任务生成的独立空目录，忽略插件的项目目录偏好。
 返回 workingDir 仅属于本插件创建的任务，可交给插件 Node 进程放入候选项目；不接受插件自报任意目录。
-任务视图同时返回 permissionMode，插件在只读时应明确提示，不能暗中升级权限。
+任务视图同时返回 permissionMode；按实际权限展示，不将历史 plan 值视作跨 Agent 的只读保证，不能暗中升级权限。
 
 run 的 acceptedConfig 是接收配置，execution 是观测到的原生 instance/generation，
 不冒充完整实际用量/重试清单。outputMessageId 来自产品终态，不是文字猜测。
@@ -4500,70 +4564,11 @@ if (r.ok && r.confirmed) {
   直接停用你;
 - 没有「下次不再提示」,也没有三选一和复选框:确认的价值就在于每次都是真点击,
   给了"永久免问"等于没确认;
-- **桌面独占**:本机弹窗不进远程/手机版通道(平台白名单里属永不放行类别)。手机端
-  或远程控制端跑到这里会拿到失败分档,你的逻辑要能接住(当"没同意"处理);
+- **按来源呈现**:未带移动来源时仍使用桌面确认；有效 \`mobilePageId\` 请求由手机 Host
+  原生确认。失效来源不得回退桌面弹窗，按“没同意”处理；不开放通用远程弹窗 IPC;
 - 真正的守门仍在你自己手里:确认只是问一句,**该校验的前置条件(文件在不在、
   工作区干不干净)确认前后都要自己再查一遍**——用户点确认和你真动手之间,
   世界可能已经变了。
-
-## 4.19 内置 iOS 模拟器(iosSimulator 能力)
-
-要给插件提供内置 iOS 模拟器的状态入口或工作流面板时,声明 \`"iosSimulator": true\`。
-电子脑只能读取**当前台前任务**的公开状态,并请求主机打开 Cindy 自己的模拟器面板:
-
-标准产品形态只需 \`manual + iosSimulator\`:Host 会在任务右侧栏提供手动入口,
-Agent 按需读取 \`ghost_manual({ ghost_id: "ios-simulator", path: "ios-simulator" })\`
-获取跨工具工作流,再调用 Host 注册的 \`cindy_ios_simulator\` MCP。插件无需声明 \`tools\`,
-Manual 的发现与读取仍受安装、启用、账号与工作目录门禁约束。
-不要为了重复同一状态再声明 \`panel\`;插件停靠面板的关闭
-语义是停用整份插件,不适合作为模拟器 viewer 的替身。只有确实存在 Host viewer 没有的独立
-工作流 UI 时才额外声明 panel。
-
-如果插件整体离开 \`iosSimulator\` 就无法完成任何工作，应把 \`minCindyVersion\` 提高到首次
-满足整体使用要求的 Cindy 正式版本。不要用最低版本替代下面的运行时 capability 检查。
-
-\`\`\`js
-const caps = await cindy.iosSimulator.request({ kind: 'capabilities' });
-if (caps.ok && caps.kind === 'capabilities') {
-  // caps.apiVersion === 1
-  // caps.capabilities.pluginVideo === false
-  // caps.capabilities.pluginInput === false
-}
-
-const current = await cindy.iosSimulator.request({ kind: 'status' });
-if (current.ok) {
-  const instances = current.status.instances;
-  const routeStatuses = current.status.routeStatuses || [];
-}
-
-const opened = await cindy.iosSimulator.request({
-  kind: 'open-panel',
-  // 可选:只能填上面 status 返回、且仍属于当前任务的 instanceId
-  instanceId: current.ok ? current.status.instances[0]?.instanceId : undefined
-});
-\`\`\`
-
-规则与红线:
-
-- 请求里**没有 sessionId**。台前任务由 Host 现查;自造 \`sessionId\`、其它未知字段
-  或跨任务 instanceId 都会拒绝。切到非任务页、远程/SSH 任务或任务失效时 fail closed;
-- \`status\` 只返回环境是否就绪、可用设备数量、公开实例状态和当前 stream/input 路线。
-  它不续租、不启动 driver,也不返回 UDID、路径、授权、诊断或 ownership 信息;
-- 本能力不是模拟器运行时:WDA、Native Sidecar、H.264、Native HID、生命周期、恢复与
-  fallback 仍由 Cindy Host 独占。插件拿不到视频帧、viewer lease、触控入口、进程句柄、
-  artifact 路径或 Xcode 私有诊断;
-- \`open-panel\` 只打开/聚焦 Host 既有面板。没有绑定实例时可省略 instanceId,让用户
-  在 Host 面板里选择设备;连续请求会限速;
-- panel.html 保持零桥。面板要使用本能力时,按 §5 先 \`/wake\`,再用同源
-  BroadcastChannel 把请求交给 main.js,由 main.js 调 \`cindy.iosSimulator.request\`;
-- Agent 按 Manual 指引选择内嵌路线后,构建、安装、启动与 UI 操作调用 Host 注册的
-  \`cindy_ios_simulator\` MCP,不要重复打包一份 WDA/Sidecar。内嵌能力不存在或不可用时,
-  Agent 可以按用户目标与普通权限规则改走外部 Xcode、Simulator.app、\`simctl\` 或
-  Computer Use;Host 不会把这些外部操作自动转换为内嵌调用;
-- 本能力仅存在于支持并授权 \`iosSimulator\` 字段的 Cindy Desktop。未知 v3 顶层字段会被
-  保留，但不会因此获得 Host 权限；依赖新字段的插件必须用 \`minCindyVersion\` 标明最低版本。
-  Agent 在 MCP 不存在时必须说明内嵌路线不可用;如果用户目标不依赖 Cindy viewer,
-  可以继续使用正常的外部工具链,否则再引导用户升级 Cindy。
 
 ## 4.20 一级主视图(mainView 能力)
 

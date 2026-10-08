@@ -42,8 +42,9 @@ import { readRecycleRecord } from '../worktree/recycleJournal';
 import { inventoryWorktree } from '../worktree/recoveryArchive';
 import { physicalWorktreeKey } from '../worktree/resourceLock';
 import { readWorktreeRuntimePaths } from '../worktree/runtimeLeases';
-import { acquireIOSSimulatorProjectUse } from '../mcp-integrations/ios-simulator-project-source';
+import { releaseWorktreeRuntimeLease } from '../worktree/runtimeLeases';
 import { createLinkedWorktreeMetadata } from './fixtures/linkedWorktree';
+import { seedLegacySharedRuntimeLease } from './fixtures/legacySharedRuntimeLease';
 
 describe('shared worktree recycling', () => {
   let meta: WorktreeMeta;
@@ -151,7 +152,7 @@ describe('shared worktree recycling', () => {
     expect(await recycle()).toBe(false);
     expect(archive).not.toHaveBeenCalled();
   });
-  it('protects a simulator source borrowed by another isolated profile until release', async () => {
+  it('protects a worktree borrowed by another isolated profile until release', async () => {
     const actual = await vi.importActual<typeof import('../worktree/runtimeLeases')>('../worktree/runtimeLeases');
     vi.mocked(readWorktreeRuntimePaths).mockImplementation(actual.readWorktreeRuntimePaths);
     const borrowerProfile = path.join(state.root, 'profile-a');
@@ -160,7 +161,8 @@ describe('shared worktree recycling', () => {
       await fs.mkdir(path.join(profile, '.dev-instances'), { recursive: true });
     }
     state.userData = borrowerProfile;
-    const release = await acquireIOSSimulatorProjectUse('borrower', meta.path, new AbortController());
+    const lease = await seedLegacySharedRuntimeLease(path.join(state.root, 'app-data'), meta.path, path.join(meta.baseRepo, '.git', 'worktrees', 'one', 'locked'));
+    const release = lease ? () => releaseWorktreeRuntimeLease(lease) : null;
     expect(release).not.toBeNull();
     try {
       // The recycler has a different userData and no active database reference.
@@ -169,8 +171,6 @@ describe('shared worktree recycling', () => {
       expect(archive).not.toHaveBeenCalled();
       expect(await fs.readFile(path.join(meta.path, 'draft.txt'), 'utf8')).toBe('uncommitted contents');
       expect(await readWorktreeRuntimePaths()).toEqual(new Set([await physicalWorktreeKey(meta.path)]));
-      // Retain the profile-local evidence that existing readers already consume.
-      expect(await fs.readdir(path.join(borrowerProfile, 'worktree-runtime-leases'))).toHaveLength(1);
 
       await release!();
       expect(await readWorktreeRuntimePaths()).toEqual(new Set());
@@ -191,7 +191,8 @@ describe('shared worktree recycling', () => {
         JSON.parse(await fs.readFile(path.join(directory, name), 'utf8')).path as string)));
     });
     state.userData = borrowerProfile;
-    const release = await acquireIOSSimulatorProjectUse('borrower', meta.path, new AbortController());
+    const lease = await seedLegacySharedRuntimeLease(path.join(state.root, 'app-data'), meta.path, path.join(meta.baseRepo, '.git', 'worktrees', 'one', 'locked'));
+    const release = lease ? () => releaseWorktreeRuntimeLease(lease) : null;
     try {
       state.userData = ownerProfile;
       expect(await readWorktreeRuntimePaths()).toEqual(new Set());
@@ -272,7 +273,7 @@ describe('shared worktree recycling', () => {
     expect(await recycle()).toBe(false);
     expect((await readRecycleRecord(meta.path))?.reason).toBe('directory-replaced');
   });
-  it('partial EBUSY deletion rejects cross-profile borrowing and retries unchanged surviving bytes', async () => {
+  it('partial EBUSY deletion retries unchanged surviving bytes', async () => {
     const actual = await vi.importActual<typeof import('../worktree/runtimeLeases')>('../worktree/runtimeLeases');
     vi.mocked(readWorktreeRuntimePaths).mockImplementation(actual.readWorktreeRuntimePaths);
     const borrowerProfile = path.join(state.root, 'borrower-profile');
@@ -296,17 +297,8 @@ describe('shared worktree recycling', () => {
     expect(state.registry.has(meta.sessionId)).toBe(true);
     await expect(fs.stat(path.join(meta.path, '.git'))).rejects.toMatchObject({ code: 'ENOENT' });
     state.userData = borrowerProfile;
-    let release: (() => Promise<void>) | null = null;
-    try {
-      await expect(acquireIOSSimulatorProjectUse('borrower', meta.path, new AbortController()).then((value) => {
-        release = value; return value;
-      })).rejects.toMatchObject({ code: 'MUTATION_CANCELLED' });
-      expect(await readWorktreeRuntimePaths()).toEqual(new Set());
-      expect(await fs.readFile(path.join(meta.path, 'draft.txt'), 'utf8')).toBe('uncommitted contents');
-    } finally {
-      await (release as (() => Promise<void>) | null)?.();
-      state.userData = '';
-    }
+    expect(await fs.readFile(path.join(meta.path, 'draft.txt'), 'utf8')).toBe('uncommitted contents');
+    state.userData = '';
     fail.mockRestore();
     expect(await recycle()).toBe(true);
     expect(snapshot).toHaveBeenCalledTimes(1);

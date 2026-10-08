@@ -18,6 +18,7 @@ import { and, asc, desc, eq, gt, gte, lt, inArray, isNotNull, isNull, ne, or, sq
 import { getDbClient } from './client/current';
 import { sessions, messages } from './schema';
 import { messageToCamel } from './mapper';
+import { remoteVisibleSessionSql } from './ipc/botRemoteVisibility.js';
 import {
   managedDialogueRootLikePatterns,
   normalizeHistoryWorkingDir,
@@ -163,6 +164,8 @@ export async function listWorkdirsForHistory(
 // ── list_sessions ───────────────────────────────────────────────────────────
 
 export interface ListSessionsParams {
+  /** Set only by the authorized remote history handler, never by tool input. */
+  remoteVisibleOnly?: boolean;
   sessionIds?: string[] | null;
   workdir: string | null;
   fromMs: number | null;
@@ -202,6 +205,7 @@ export async function listSessionsForHistory(
   const orderFn = params.order === 'asc' ? asc : desc;
 
   const conds = [];
+  if (params.remoteVisibleOnly) conds.push(sql.raw(remoteVisibleSessionSql('sessions')));
   if (scopedSessionIds !== null) conds.push(inArray(sessions.id, scopedSessionIds));
   if (!params.includeDeleted) conds.push(ne(sessions.status, 'deleted'));
   if (params.workdir !== null) {

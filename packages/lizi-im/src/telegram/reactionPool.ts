@@ -1,15 +1,18 @@
 /**
- * telegram/reactionPool.ts — expressive 档 reaction 变体池(#1855 L1)。
+ * telegram/reactionPool.ts — 处理中与 expressive 终态的 reaction 变体池。
  * ---------------------------------------------------------------------------
  * 生动档变体池的**单一客户端出处** — Telegram bot 可用标准 reaction 全集按语义
  * 分池(Chris: 能用的都随便用)。正/负分开是底线: 成功不能随机出 💩/🤡。选中
  * 表情在该群被限制时(available_reactions), setMessageReaction 会 400 — 调用方
- * 回落基础款(👍/👎)重试一次。
+ * 回落基础款(👨‍💻/👍/👎)重试一次。
  *
  * emoji 档本身继续由各车道的 TelegramBehaviorConfig.emojiReactions 三字段直接
- * 供给, L1 不为其带默认(#1855 replyQuote 勘误同源纪律): 本模块只提供 expressive
- * 命中时的**变体池数据 + 选取原语**, 不做策略判定。
+ * 供给, L1 不为其带默认(#1855 replyQuote 勘误同源纪律): 本模块只提供
+ * **变体池数据 + 选取原语**, 不做策略判定。
  */
+
+/** 处理中随机选择工作、思考类表情；不混入排队、成功或失败信号。 */
+export { PROCESSING_REACTION_POOL } from '../processingReactions.js';
 
 /** expressive 终态(成功)变体池 — 35 款正向表情。 */
 export const EXPRESSIVE_DONE_POOL = [

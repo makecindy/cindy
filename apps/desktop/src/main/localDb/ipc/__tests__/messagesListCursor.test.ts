@@ -298,6 +298,20 @@ describe('local-db:messages:list cursor', () => {
     } finally { sqlite.close(); }
   });
 
+  it('replays complete authorization history while retaining clear and rewind boundaries', async () => {
+    const sqlite = createDb();
+    try {
+      for(let i=0;i<130;i++) insertCostMessage(sqlite,{id:`human-${i}`,role:'user',createdAt:i+1,
+        agentMeta:{autoReviewUserText:`no-${i}`,delivery:'steer'}});
+      expect(await listMessagesForAgentHandoff('s1',null,undefined,'authorization')).toHaveLength(130);
+      sqlite.prepare('INSERT OR REPLACE INTO sessions (id, cleared_at) VALUES (?, ?)').run('s1',20);
+      sqlite.prepare('UPDATE messages SET rewind_at = 1000 WHERE id = ?').run('human-129');
+      const rows=await listMessagesForAgentHandoff('s1',null,undefined,'authorization');
+      expect(rows).toHaveLength(109);expect(rows[0]?.clientId).toBe('human-20');expect(rows.at(-1)?.clientId).toBe('human-128');
+      expect(await listMessagesForAgentHandoff('s1',100,undefined,'authorization')).toHaveLength(100);
+    } finally { sqlite.close(); }
+  });
+
   it('selects a recently answered old card before limiting authorization history', async () => {
     const sqlite = createDb();
     try {
@@ -322,6 +336,24 @@ describe('local-db:messages:list cursor', () => {
         .toEqual(['owner', 'stop']);
       expect((await listMessagesForAgentHandoff('s1', 1, undefined, 'user')).map(row => row.clientId))
         .toEqual(['run-119']);
+    } finally { sqlite.close(); }
+  });
+
+  it('filters typed continuations but retains empty human resource boundaries and ambiguous rows', async () => {
+    const sqlite = createDb();
+    try {
+      insertCostMessage(sqlite, { id: 'restriction', role: 'user', createdAt: 1,
+        agentMeta: { autoReviewUserText: 'Do not delete files.', delivery: 'turn' } });
+      insertCostMessage(sqlite, { id: 'legacy', role: 'user', createdAt: 2,
+        agentMeta: { autoReviewUserText: '' } });
+      insertCostMessage(sqlite, { id: 'human-resource', role: 'user', createdAt: 2.5,
+        agentMeta: { autoReviewUserText: '', delivery: 'turn', origin: { kind: 'orca' } } });
+      for (let i = 0; i < 120; i++) insertCostMessage(sqlite, { id: `delegated-${i}`, role: 'user', createdAt: i + 3,
+        agentMeta: { autoReviewUserText: { kind: 'delegated-continuation' }, delivery: i % 2 ? 'turn' : 'steer' } });
+      expect((await listMessagesForAgentHandoff('s1', 3, undefined, 'authorization')).map(row => row.clientId))
+        .toEqual(['restriction', 'legacy', 'human-resource']);
+      expect((await listMessagesForAgentHandoff('s1', 1, undefined, 'user')).map(row => row.clientId))
+        .toEqual(['delegated-119']);
     } finally { sqlite.close(); }
   });
 

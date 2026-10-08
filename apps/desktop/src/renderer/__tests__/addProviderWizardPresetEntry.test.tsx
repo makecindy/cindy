@@ -351,13 +351,63 @@ describe('AddProviderWizard — preset 直达', () => {
     expect(window.electronAPI.maker.llamaCppInstall).not.toHaveBeenCalled();
     expect(window.electronAPI.maker.llamaCppStart).not.toHaveBeenCalled();
   });
-  it('uses the same immediate add flow for llama.cpp deep links', async () => {
-    const preset = { id: 'llamacpp', name: 'llama.cpp', authMethod: 'none' as const, runtimes: { pi: { baseUrl: 'http://127.0.0.1:8080/v1', baseUrlEditable: true, wireProtocol: 'openai-chat' as const, models: [] } } };
+  it('keeps the Codex and Pi addresses of an existing llama.cpp server in sync until one is edited separately', async () => {
+    const preset = BUNDLED_CATALOG.presets!.find(p => p.id === 'llamacpp')!;
     vi.mocked(window.electronAPI.maker.listProviderPresets).mockResolvedValue({ presets: [preset] });
+    vi.mocked(window.electronAPI.maker.fetchProviderModels).mockResolvedValue({ ok: true, models: [{ id: 'qwen3-8b', name: 'qwen3-8b' }] });
     renderWizard('llamacpp');
-    await waitFor(() => expect(window.electronAPI.maker.llamaCppEnsure).toHaveBeenCalledOnce());
-    expect(screen.queryByDisplayValue('http://127.0.0.1:8080/v1')).toBeNull();
-    expect(window.electronAPI.maker.llamaCppStart).not.toHaveBeenCalled();
+    const [first] = await screen.findAllByDisplayValue('http://127.0.0.1:8080/v1');
+    fireEvent.change(first!, { target: { value: 'http://127.0.0.1:8081/v1' } });
+    expect(screen.getAllByDisplayValue('http://127.0.0.1:8081/v1').length).toBeGreaterThan(1);
+    expect(screen.queryAllByDisplayValue('http://127.0.0.1:8080/v1')).toHaveLength(0);
+    fireEvent.click(screen.getByText('settings.providers.wizard.next'));
+    fireEvent.click(await screen.findByText('qwen3-8b'));
+    fireEvent.click(screen.getByText('settings.providers.wizard.finish'));
+    await waitFor(() => expect(createCustomProvider).toHaveBeenCalledOnce());
+    const config = vi.mocked(createCustomProvider).mock.calls[0][0];
+    expect(Object.values(config.runtimes).map(rt => rt?.baseUrl)).toEqual(Object.keys(config.runtimes).map(() => 'http://127.0.0.1:8081/v1'));
+    expect(config.runtimes.pi?.baseUrl).toBe('http://127.0.0.1:8081/v1');
+  });
+  it('connects an existing llama.cpp server from the preset deep link without touching the managed runtime', async () => {
+    const preset = BUNDLED_CATALOG.presets!.find(p => p.id === 'llamacpp')!;
+    vi.mocked(window.electronAPI.maker.listProviderPresets).mockResolvedValue({ presets: [preset] });
+    vi.mocked(window.electronAPI.maker.fetchProviderModels).mockResolvedValue({
+      ok: true,
+      models: [{ id: 'qwen3-8b', name: 'qwen3-8b' }, { id: 'gemma-4', name: 'gemma-4' }, { id: 'glm-5-air', name: 'glm-5-air' }],
+    });
+    renderWizard('llamacpp');
+    expect(await screen.findAllByDisplayValue('http://127.0.0.1:8080/v1')).not.toHaveLength(0);
+    fireEvent.click(screen.getByText('settings.providers.wizard.next'));
+    fireEvent.click(await screen.findByText('qwen3-8b'));
+    fireEvent.click(screen.getByText('settings.providers.wizard.finish'));
+    await waitFor(() => expect(createCustomProvider).toHaveBeenCalledOnce());
+    const config = vi.mocked(createCustomProvider).mock.calls[0][0];
+    expect(config.id).not.toBe('cindy-local-llamacpp');
+    expect(config.runtimes.pi?.baseUrl).toBe('http://127.0.0.1:8080/v1');
+    expect(config.runtimes.pi?.models.map(m => m.id)).toContain('qwen3-8b');
+    expect(window.electronAPI.maker.llamaCppEnsure).not.toHaveBeenCalled();
+  });
+  it.each([
+    ['detected', ['llamacpp'], 'settings.providers.wizard.groupDetectedLocal'],
+    ['not detected', [], 'settings.providers.wizard.moreLocal'],
+  ])('lists the existing llama.cpp server entry when %s, even with the managed runtime added', async (_label, detectedLocalPresetIds, group) => {
+    const preset = BUNDLED_CATALOG.presets!.find(p => p.id === 'llamacpp')!;
+    vi.mocked(window.electronAPI.maker.listProviderPresets).mockResolvedValue({ presets: [preset] });
+    vi.mocked(window.electronAPI.maker.localModelList).mockResolvedValue({
+      status: { runtime: 'ollama', kind: 'absent', appInstalled: false },
+      models: [],
+      memoryGb: 0,
+      detectedLocalPresetIds,
+    } as unknown as Awaited<ReturnType<typeof window.electronAPI.maker.localModelList>>);
+    const managed = { ...anthropicProvider, id: 'cindy-local-llamacpp', name: 'llama.cpp', source: 'user' } as ProviderView;
+    render(<AddProviderWizard providers={[managed]} onOpenCustomForm={vi.fn()} onClose={vi.fn()} onDone={vi.fn()} />);
+    const label = await screen.findByText(group);
+    const row = await screen.findByRole('button', { name: /llama\.cpp/ });
+    expect(label.compareDocumentPosition(row) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.queryByText('settings.providers.llamacpp.subtitle')).toBeNull();
+    fireEvent.click(row);
+    expect(await screen.findAllByDisplayValue('http://127.0.0.1:8080/v1')).not.toHaveLength(0);
+    expect(window.electronAPI.maker.llamaCppEnsure).not.toHaveBeenCalled();
   });
   it('官方 API 入口逐一显式声明 Pi 协议，不依赖 Claude runtime 派生', () => {
     expect(OFFICIAL_API_PRESETS.anthropic?.runtimes.pi?.wireProtocol).toBe('anthropic-messages');
@@ -1099,15 +1149,15 @@ it.each(['audioModels', 'embeddingModels'] as const)('opens key setup for a disc
   const store = vi.fn(async () => undefined);
   window.electronAPI.builtinApiKeyStore = store;
   const onDone = vi.fn();
-  const view = render(<AddProviderWizard providers={[mediaProvider]} onOpenCustomForm={vi.fn()} onClose={vi.fn()} onDone={onDone} />);
+  render(<AddProviderWizard providers={[mediaProvider]} onOpenCustomForm={vi.fn()} onClose={vi.fn()} onDone={onDone} />);
   fireEvent.click(await screen.findByText('Media Only'));
   expect(await screen.findByText('settings.providers.wizard.builtinApiKey.subtitle')).toBeTruthy();
-  const keyInput = view.container.querySelector('input[type="password"]');
+  const keyInput = screen.getByRole('dialog').querySelector('input[type="password"]');
   expect(keyInput).not.toBeNull();
   fireEvent.change(keyInput!, { target: { value: 'test-media-key' } });
   fireEvent.click(screen.getByRole('button', { name: 'settings.providers.wizard.finish' }));
   await waitFor(() => expect(store).toHaveBeenCalledWith('gemini', 'test-media-key'));
-  expect(onDone).toHaveBeenCalledWith('gemini');
+  await waitFor(() => expect(onDone).toHaveBeenCalledWith('gemini'));
 });
 
 
@@ -1311,7 +1361,7 @@ it('does not discard the OAuth connection if the wizard closes while finish is s
   await screen.findByText('Test model');
   fireEvent.click(screen.getByRole('button', { name: 'settings.providers.wizard.finish' }));
   await waitFor(() => expect(updateCustomProvider).toHaveBeenCalledOnce());
-  fireEvent.keyDown(window, { key: 'Escape' });
+  fireEvent.keyDown(document.activeElement!, { key: 'Escape' });
   fireEvent.click(screen.getByRole('button', { name: 'settings.providers.wizard.cancel' }));
   expect(onClose).not.toHaveBeenCalled();
   expect(deleteCustomProvider).not.toHaveBeenCalled();

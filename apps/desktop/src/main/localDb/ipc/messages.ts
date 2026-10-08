@@ -2487,7 +2487,7 @@ export async function findForkParentSessionId(sessionId: string): Promise<string
 
 /**
  * session-agent-switch:读取交接素材——本会话未被 rewind、晚于 /clear 边界的
- * 最近 limit 行(时间正序返回),只取交接需要的最小投影。
+ * 最近 limit 行(时间正序返回),只取交接需要的最小投影；null 读取边界内完整历史。
  *
  * `after`(Phase 2 增量交接):只取严格晚于该水位线(createdAt + rowid 决序,
  * 与 findPendingAgentHandoff 同 tie-break 口径)的行——即目标引擎停泊
@@ -2495,7 +2495,7 @@ export async function findForkParentSessionId(sessionId: string): Promise<string
  */
 export async function listMessagesForAgentHandoff(
   sessionId: string,
-  limit = 400,
+  limit: number | null = 400,
   after?: { createdAt: number; rowid: number },
   role?: 'user' | 'authorization',
 ): Promise<
@@ -2532,12 +2532,13 @@ export async function listMessagesForAgentHandoff(
       ELSE ${messages.createdAt} END ELSE ${messages.createdAt} END`;
   // Scheduled executions are not owner messages. Exclude them before LIMIT so
   // a long-running heartbeat cannot push its authorizing request out of history.
+  // Empty human receipts can reset resource authorization; only protected typed continuations are skipped.
   // Keep malformed/unknown rows: restoration must still invalidate ambiguous consent.
   const notScheduledExecution = sql`CASE WHEN ${messages.role} = 'user'
     AND json_valid(${messages.agentMeta}) THEN CASE
-      WHEN json_extract(${messages.agentMeta}, '$.autoReviewUserText.kind') = 'scheduled-continuation'
+      WHEN json_extract(${messages.agentMeta}, '$.autoReviewUserText.kind') IN ('scheduled-continuation', 'delegated-continuation')
       THEN 0 ELSE 1 END ELSE 1 END`;
-  const rows = await db
+  const query = db
     .select({
       rowid: messageRowid,
       clientId: messages.clientId,
@@ -2553,8 +2554,10 @@ export async function listMessagesForAgentHandoff(
         role === 'authorization' ? and(inArray(messages.role, ['user', 'ask_user', 'plan_review']), notScheduledExecution)
           : role ? eq(messages.role, role) : undefined),
     )
-    .orderBy(desc(role === 'authorization' ? authorityTime : messages.createdAt), desc(messageRowid))
-    .limit(limit);
+    .orderBy(desc(role === 'authorization' ? authorityTime : messages.createdAt), desc(messageRowid));
+  // Authority replay must start at the clear/rewind boundary: the shared intent
+  // budget is stateful, so an arbitrary row suffix has a different projection.
+  const rows = await (limit === null ? query : query.limit(limit));
   rows.reverse();
   return rows
     .map((r) => {

@@ -44,7 +44,7 @@ it.each(['none', 'ready', 'auto-only', 'ready-auto', 'real', 'real-auto', 'ready
   expect(result.status).toBe(completed ? 'done' : 'idle');
   expect(result.row.lastTurnEndedAt).toBe(200);
   const branch = source.slice(source.indexOf("      case 'getTeam': {"), source.indexOf("      case 'create': return service.create"));
-  const bindings = {...deps, asc, gte, PluginTaskError, readPluginWorkerCompletion:read,
+  const bindings = {...deps, asc, gte, PluginTaskError, readPluginTaskPlanReceipt:JSON.parse, readPluginWorkerCompletion:read,
     service:{get:async()=>({})},inputCoordinator:{ensureQueueRestored:async()=>{},isQueueRestored:()=>true,getQueueControlSnapshot:()=>({pendingQueue:[]})},
     getOrcaWorkspaceInfoReadOnly:async()=>({ok:true,workers:[{session_id:'worker',status}]}),
     maker:{getSession:()=>undefined},createPluginTaskStore:()=>({get:async()=>({payload:'{}'})}),readCollaborationSettings:()=>({workerHardLimit:4})};
@@ -61,7 +61,7 @@ it.each(['active','archived'])('refuses releasing %s Worker without task complet
  const query={from:()=>query,innerJoin:()=>query,where:()=>query,limit:async()=>[row]};
  const epoch={client:{drizzle:{select:()=>query}}};
  const archive=vi.fn(),settleWorkerLabel=vi.fn();
- const bindings={PluginTaskError,getCurrentDbClientSnapshot:()=>epoch,eq:()=>true,and:()=>true,orcaWorkers:{},orcaTeams:{},sessions:{},
+ const bindings={PluginTaskError,readPluginTaskPlanReceipt:JSON.parse,getCurrentDbClientSnapshot:()=>epoch,eq:()=>true,and:()=>true,orcaWorkers:{},orcaTeams:{},sessions:{},
   service:{completeOperation:(fn:()=>Promise<unknown>)=>fn(),get:async()=>({}),settleWorkerLabel},
   createPluginTaskStore:()=>({get:async()=>({payload:'{"teamPlan":{"items":[{"label":"one"}]}}'})}),
   readPluginWorkerCompletion:async()=>({row,completedAt:null}),

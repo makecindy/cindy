@@ -1,3 +1,5 @@
+import { PluginSetupNativeActions } from '@/plugins/PluginSetupNativeActions';
+import { mobilePluginSetupActions } from '@/plugins/pluginSetupActions';
 import { usePaneViewport } from '@/platform/AdaptiveWindowContext';
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -632,9 +634,8 @@ function InteractionItem({
       />
     );
   }
-  // plugin_setup:配置动作(OAuth / 写本地设置)只能在被控端完成,被控端的 IPC
-  // 边界也只放 cancel 过来。手机侧因此给只读摘要 + 取消出口,让用户至少能把
-  // 会话从等待里放出来,而不是对着一张没有任何按钮的卡干等。
+  // 配置通过独立加密 v3 原生入口；通用交互 resolve 仍只允许取消。
+  // 旧 Host、共享访客及电脑本地回调保留电脑入口。
   if (kind === 'plugin_setup') {
     // 取消入口以共享分类器为准:terminal 快照(被控端 settle 后短暂保留的收尾帧)
     // 归 desktop-only,此时被控端已 complete、不再受理 resolve,给按钮只会让用户点出
@@ -822,6 +823,7 @@ function PermissionEvidence({
         <Text style={styles.companionMetaLabel}>{`${t(`interaction.companion.fields.${key}`)}  `}</Text>{value}
       </Text>)}
       <Text style={styles.companionMeta}><Text style={styles.companionMetaLabel}>{`${t('interaction.companion.operation')}  `}</Text>{presentation.toolName}</Text>
+      {presentation.sourceDescription ? <Text selectable style={styles.body}>{presentation.sourceDescription}</Text> : null}
       {presentation.autoReviewUnavailable ? <Text style={styles.body}>{t('interaction.permission.autoReviewUnavailable')}</Text> : null}
       {riskWarningText ? <View style={[styles.permissionRiskRow, armed && styles.permissionRiskRowArmed]} testID="interaction.permission.riskWarning">
         <Text style={styles.permissionRiskLabel}>{t('interaction.permission.highRisk')}</Text><Text style={styles.permissionRiskText}>{riskWarningText}</Text>
@@ -854,6 +856,9 @@ function PermissionEvidence({
           {presentation.toolName}
         </Text>
       </View>
+      {presentation.sourceDescription ? (
+        <Text selectable style={styles.permissionDescription}>{presentation.sourceDescription}</Text>
+      ) : null}
       {presentation.autoReviewUnavailable || presentation.description ? (
         <Text style={styles.permissionDescription}>
           {presentation.autoReviewUnavailable
@@ -1567,10 +1572,8 @@ function PlanReviewCard({
 /**
  * plugin_setup 的**只读**状态卡。
  *
- * 手机端做不了配置动作(Secret 输入与 OAuth 必须留在被控端,见
- * docs/dev-rules/plugin-security-and-authoring.md §4 与 desktop 的
- * interactionResolveOrigin),所以这张卡的价值全在「看懂」:哪个插件、卡在哪一步、
- * 为什么失败、回电脑端要做什么。可进入目标电脑的远程桌面或取消请求。
+ * 手机原生配置只处理 Host 明确投影的专用加密动作。电脑专属步骤仍使用远程桌面入口；
+ * 普通 interaction resolve 不传 Secret/OAuth 内容。
  */
 export function PluginSetupMessageContent({ request, busy, onCancel, deviceId }: {
   request: PendingInteraction['request']; busy: boolean; onCancel?: () => void; deviceId?: string;
@@ -1606,6 +1609,8 @@ function PluginSetupCard({
     () => buildRemotePluginSetupPresentation(item.request),
     [item.request],
   );
+  const nativeSteps = new Set(deviceId && !isSharedTaskPeer(deviceId) ? mobilePluginSetupActions(item.request).map(action => action.stepId) : []);
+  const nativeSetup = nativeSteps.size > 0;
   const title = presentation.ghostName ?? t('interaction.kinds.plugin_setup.title');
   return (
     <View style={cardStyle(styles, touchLayout, companion)} testID="interaction.pluginSetup.card">
@@ -1622,7 +1627,7 @@ function PluginSetupCard({
           />
         ) : null}
         <View style={styles.compactCardTitleWrap}>
-          <Text style={styles.kind}>{t(presentation.terminal ? 'interaction.kinds.plugin_setup.label' : 'interaction.panel.desktopOnlyKind')}</Text>
+          <Text style={styles.kind}>{t(presentation.terminal || nativeSetup ? 'interaction.kinds.plugin_setup.label' : 'interaction.panel.desktopOnlyKind')}</Text>
           <Text numberOfLines={1} style={styles.compactCardTitle}>{title}</Text>
         </View>
         {presentation.stepCount > 0 && !presentation.terminal ? (
@@ -1643,13 +1648,14 @@ function PluginSetupCard({
             <Text style={styles.pluginSetupGroupHint}>{t('interaction.pluginSetup.chooseOne')}</Text>
           ) : null}
           {group.steps.map((step) => (
-            <PluginSetupStepRow key={step.id} step={step} terminal={presentation.terminal} />
+            <PluginSetupStepRow key={step.id} step={step} terminal={presentation.terminal} native={nativeSteps.has(step.id)} />
           ))}
         </View>
       ))}
+      {deviceId && !isSharedTaskPeer(deviceId) ? <PluginSetupNativeActions request={item.request} deviceId={deviceId} disabled={busy || presentation.terminal} /> : null}
       {/* 收尾帧已经 settle,再让用户「去电脑端完成」是错的引导。 */}
       {presentation.terminal ? null : (
-        <Text style={styles.pluginSetupFootnote}>{t('interaction.pluginSetup.completeOnDesktop')}</Text>
+        <Text style={styles.pluginSetupFootnote}>{t(nativeSetup ? 'plugins.nativeSetupHint' : 'interaction.pluginSetup.completeOnDesktop')}</Text>
       )}
       {!presentation.terminal && deviceId && !isSharedTaskPeer(deviceId) ? (
         <PluginSetupRemoteDesktopButton deviceId={deviceId} busy={busy} />
@@ -1694,7 +1700,7 @@ const PLUGIN_SETUP_RUNNING_PHASES: ReadonlySet<RemotePluginSetupPhase> = new Set
   'verifying',
 ]);
 
-function PluginSetupStepRow({ step, terminal }: { step: RemotePluginSetupStep; terminal: boolean }) {
+function PluginSetupStepRow({ step, terminal, native }: { step: RemotePluginSetupStep; terminal: boolean; native: boolean }) {
   const styles = useInteractionStyles();
   const { colors } = useTheme();
   const { t } = useTranslation();
@@ -1704,7 +1710,7 @@ function PluginSetupStepRow({ step, terminal }: { step: RemotePluginSetupStep; t
       ? colors.statusAccent
       : colors.textTertiary;
   const phaseText = step.phase ? t(`interaction.pluginSetup.phase.${step.phase}`) : null;
-  const actionHint = step.actionKind === 'inline_form'
+  const actionHint = native ? t('plugins.nativeStepHint') : step.actionKind === 'inline_form'
     ? (step.inlineFieldLabel
       ? t('interaction.pluginSetup.inlineFormAction', { label: step.inlineFieldLabel })
       : t('interaction.pluginSetup.inlineFormActionGeneric'))

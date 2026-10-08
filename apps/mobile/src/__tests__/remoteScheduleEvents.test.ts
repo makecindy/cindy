@@ -54,14 +54,16 @@ describe('remote schedule event store', () => {
     expect(remoteScheduleEventStore.getSnapshot('dev-1')).toMatchObject({
       runsVersion: 2,
       scheduleListVersion: 1,
-      sessionIndexVersion: 1,
+      // changed 与 fired 都会重拉侧栏索引(fired:认领清空了下次运行时间并插入运行中)。
+      sessionIndexVersion: 2,
       unreadVersion: 1,
       version: 2,
     });
     expect(remoteScheduleEventStore.getSnapshot('dev-2')).toMatchObject({
       runsVersion: 0,
       scheduleListVersion: 1,
-      sessionIndexVersion: 0,
+      // ready:宿主冷启 / 切账号后重标中断、重算下次运行,索引一并重拉。
+      sessionIndexVersion: 1,
       unreadVersion: 0,
       version: 1,
     });
@@ -143,7 +145,7 @@ describe('remote schedule event store', () => {
     expect(remoteScheduleEventStore.getSnapshot('dev-1')).toMatchObject({
       runsVersion: 1,
       scheduleListVersion: 0,
-      sessionIndexVersion: 0,
+      sessionIndexVersion: 1,
       unreadVersion: 0,
     });
 
@@ -156,7 +158,7 @@ describe('remote schedule event store', () => {
     expect(remoteScheduleEventStore.getSnapshot('dev-1')).toMatchObject({
       runsVersion: 2,
       scheduleListVersion: 0,
-      sessionIndexVersion: 1,
+      sessionIndexVersion: 2,
       unreadVersion: 1,
     });
     expect(remoteScheduleEventStore.getSnapshot('dev-1').lastProjection).toMatchObject({
@@ -172,7 +174,7 @@ describe('remote schedule event store', () => {
     remoteScheduleEventStore.apply('dev-1', { type: 'all-read' });
     expect(remoteScheduleEventStore.getSnapshot('dev-1')).toMatchObject({
       runsVersion: 3,
-      sessionIndexVersion: 2,
+      sessionIndexVersion: 3,
       unreadVersion: 2,
     });
     expect(remoteScheduleEventStore.getSnapshot('dev-1').lastProjection?.refresh.runRefresh).toEqual({ mode: 'all' });

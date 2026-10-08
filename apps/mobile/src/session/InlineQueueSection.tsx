@@ -46,6 +46,8 @@ export interface InlineQueueSectionProps {
   onResume(): void;
   onRetryError(): void;
   onClearError(): void;
+  /** 取消账号限额重置后的自动继续(只在投影带 usageLimitWait 时出现)。 */
+  onCancelUsageLimitWait?(): void;
 }
 
 export function InlineQueueSection({
@@ -56,10 +58,11 @@ export function InlineQueueSection({
   onResume,
   onRetryError,
   onClearError,
+  onCancelUsageLimitWait,
 }: InlineQueueSectionProps) {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
 
   const hasBanner = !!projection.error
     || !!projection.credentialSwitchWait
@@ -85,6 +88,10 @@ export function InlineQueueSection({
       ?? (projectionErrorKey
         ? t(projectionErrorKey)
         : (describeAgentAuthError(projection.error) ?? localizeUnclassifiedAgentError(projection.error, sessionSource)))
+    : null;
+
+  const usageLimitResumeAt = projection.error && projection.usageLimitWait
+    ? formatUsageLimitResumeAt(projection.usageLimitWait.resumeAt, i18n.resolvedLanguage || i18n.language)
     : null;
 
   return (
@@ -116,6 +123,24 @@ export function InlineQueueSection({
             <Text style={styles.disabledHint} testID="queue.inline.errorDisabledReason">
               {retryDisabledReason}
             </Text>
+          ) : null}
+          {usageLimitResumeAt ? (
+            // 额度重置后自动继续(桌面端执行);等待期间重试 / 清除照常可用。
+            <View style={styles.errorActions} testID="queue.inline.usageLimitWait">
+              <Text style={styles.disabledHint}>
+                {t('message.queue.usageLimitAutoContinueAt', { time: usageLimitResumeAt })}
+              </Text>
+              {onCancelUsageLimitWait ? (
+                <ActionPill
+                  busy={busy}
+                  disabled={!!errorDisabledReason}
+                  disabledReason={errorDisabledReason}
+                  label={t('message.queue.usageLimitAutoContinueCancel')}
+                  onPress={onCancelUsageLimitWait}
+                  testID="queue.inline.cancelUsageLimitWaitButton"
+                />
+              ) : null}
+            </View>
           ) : null}
         </View>
       ) : null}
@@ -152,6 +177,19 @@ export function InlineQueueSection({
       ) : null}
     </View>
   );
+}
+
+/** 同一天只显示时刻,跨天带日期(与桌面横幅同口径)。 */
+function formatUsageLimitResumeAt(resumeAt: number, language: string): string | null {
+  if (!Number.isFinite(resumeAt)) return null;
+  const date = new Date(resumeAt);
+  const sameDay = date.toDateString() === new Date().toDateString();
+  return new Intl.DateTimeFormat(
+    language,
+    sameDay
+      ? { hour: '2-digit', minute: '2-digit' }
+      : { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' },
+  ).format(date);
 }
 
 function ActionPill({

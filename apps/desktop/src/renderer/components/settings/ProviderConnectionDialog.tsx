@@ -1,3 +1,5 @@
+import { useDialogExit } from '@/hooks/useDialogExit';
+import { WINDOW_DRAG_STYLE, WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 import { providerEndpointBindings, canonicalProviderEndpoint, BUNDLED_CATALOG, classifyModel, isChatEligible, isAgentSelectableModel, mergeModelMetadata } from '@cindy/model-providers';
 /**
  * Connection credentials and advanced routing only. Model capabilities are imported into the
@@ -117,15 +119,6 @@ type DialogAgentKind = Extract<AgentKind, 'claude-code' | 'codex' | 'pi'>;
 const AGENTS: DialogAgentKind[] = ['claude-code', 'codex', 'pi'];
 
 const VISIBLE_AGENTS: DialogAgentKind[] = AGENTS;
-
-const DIALOG_FOCUSABLE_SELECTOR = [
-  'button:not([disabled])',
-  'input:not([disabled])',
-  'select:not([disabled])',
-  'textarea:not([disabled])',
-  '[href]',
-  '[tabindex]:not([tabindex="-1"])',
-].join(',');
 
 const TAB_META: Record<
   DialogAgentKind,
@@ -407,10 +400,13 @@ export function ProviderConnectionDialog({
   existingIds,
   returnFocusRef,
   focusAgent,
-  onSaved,
-  onClose,
+  onSaved: notifySaved,
+  onClose: notifyClosed,
 }: ProviderConnectionDialogProps) {
   const { t, i18n } = useTranslation();
+  const dialog = useDialogExit(returnFocusRef);
+  const onClose = useCallback(() => dialog.close(notifyClosed), [dialog.close, notifyClosed]);
+  const onSaved = useCallback(() => dialog.close(notifySaved), [dialog.close, notifySaved]);
   const editing = !!initial;
   const initialOAuth = initial?.auth?.method === 'oauth' ? initial.auth.oauth : undefined;
 
@@ -668,24 +664,6 @@ export function ProviderConnectionDialog({
     return () => window.removeEventListener('keydown', onKeyDown, true);
   }, [dismissImageGenerationHelp, dismissTopmostLayer, showImageGenerationHelp]);
 
-  useEffect(() => {
-    const returnFocusElement =
-      document.activeElement instanceof HTMLElement && document.activeElement !== document.body
-        ? document.activeElement
-        : null;
-    const frame = requestAnimationFrame(() => {
-      (
-        dialogPanelRef.current?.querySelector<HTMLInputElement>('input')
-      )?.focus();
-    });
-    return () => {
-      cancelAnimationFrame(frame);
-      const focusTarget = returnFocusElement?.isConnected
-        ? returnFocusElement
-        : returnFocusRef?.current;
-      if (focusTarget?.isConnected) focusTarget.focus();
-    };
-  }, [returnFocusRef]);
   // 最新 runtime 表单状态镜像：拉取响应到达时据此构建弹层行/预勾选，而不是用请求发出时的
   // 闭包快照——在途期间被用户删除的行不得复活。镜像在每个 setRt updater 内**同步**更新
   // （见 setRtSynced），不用被动 useEffect——effect 在 commit 后才跑，IPC 响应若落在
@@ -1991,37 +1969,29 @@ export function ProviderConnectionDialog({
   };
 
   return (
-    <div
-      data-custom-provider-dialog-scrim="true"
-      className="fixed inset-0 z-[10000] flex items-center justify-center bg-[var(--overlay-modal)]"
-      onKeyDown={(event) => {
-        if (childLayer || runtimeFill || imageGenerationReloadConfirmation) return;
-        if (event.key !== 'Tab') return;
-        const focusable = Array.from(
-          dialogPanelRef.current?.querySelectorAll<HTMLElement>(DIALOG_FOCUSABLE_SELECTOR) ?? [],
-        );
-        if (focusable.length === 0) {
-          event.preventDefault();
-          dialogPanelRef.current?.focus();
-          return;
-        }
-        const first = focusable[0];
-        const last = focusable[focusable.length - 1];
-        if (event.shiftKey && document.activeElement === first) {
-          event.preventDefault();
-          last.focus();
-        } else if (!event.shiftKey && document.activeElement === last) {
-          event.preventDefault();
-          first.focus();
-        }
-      }}
-    >
-      <div
+    <Dialog.Root open={dialog.open} onOpenChange={(open) => { if (!open) dismissTopmostLayer(); }}>
+      <Dialog.Portal>
+        <Dialog.Overlay
+          data-custom-provider-dialog-scrim="true"
+          className="modal-scrim fixed inset-0 z-[10000]"
+          style={WINDOW_DRAG_STYLE}
+        />
+      <Dialog.Content
         ref={dialogPanelRef}
-        role="dialog"
-        aria-modal="true"
+        aria-describedby={undefined}
         aria-labelledby="custom-provider-dialog-title"
-        tabIndex={-1}
+        onPointerDownOutside={(event) => event.preventDefault()}
+        onOpenAutoFocus={(event) => {
+          dialog.onOpenAutoFocus();
+          event.preventDefault();
+          dialogPanelRef.current?.querySelector<HTMLInputElement>('input')?.focus();
+        }}
+        onCloseAutoFocus={dialog.onCloseAutoFocus}
+        onEscapeKeyDown={(event) => {
+          // The existing window-capture owner handles child layers and IME first.
+          event.preventDefault();
+        }}
+        style={WINDOW_NO_DRAG_STYLE}
         onChangeCapture={(event) => {
           // 错误清除粒度(review P2/P1 双向约束):
           // - 报错字段自身被编辑时清除——改其它字段(名称/密钥/别的 runtime 行)
@@ -2046,9 +2016,7 @@ export function ProviderConnectionDialog({
           }
         }}
         className={cn(
-          'flex max-h-[88vh] w-[min(600px,calc(100vw-32px))] flex-col rounded-xl outline-none',
-          'border border-[var(--border-default)] bg-[var(--surface-elevated)]',
-          'shadow-[var(--shadow-menu)]',
+          'modal-panel fixed inset-0 z-[10000] m-auto flex h-fit max-h-[88vh] w-[min(600px,calc(100vw-32px))] flex-col outline-none',
           '[&_button:focus-visible]:outline-none [&_button:focus-visible]:ring-2 [&_button:focus-visible]:ring-[var(--focus-ring)]',
         )}
       >
@@ -2056,14 +2024,14 @@ export function ProviderConnectionDialog({
         <div className="flex items-center px-3 py-3">
           <div className="flex items-center gap-2.5 pl-2">
             <Sparkles size={20} className="text-[var(--settings-section-title)]" />
-            <h2
+            <Dialog.Title asChild><h2
               id="custom-provider-dialog-title"
               className="text-18 font-semibold text-[var(--settings-section-title)]"
             >
               {editing
                 ? t('settings.providers.custom.dialog.editTitle')
                 : t('settings.providers.custom.dialog.createTitle')}
-            </h2>
+            </h2></Dialog.Title>
           </div>
         </div>
 
@@ -2780,7 +2748,8 @@ export function ProviderConnectionDialog({
             {t('settings.providers.custom.save')}
           </Button>
         </div>
-      </div>
+      </Dialog.Content>
+      </Dialog.Portal>
 
       {/* 「获取模型列表」勾选弹层：可搜索多选，确认后替换该 runtime 的模型行。 */}
       {picker && (
@@ -2823,7 +2792,7 @@ export function ProviderConnectionDialog({
           }}
         >
           <Dialog.Portal>
-            <Dialog.Overlay className="fixed inset-0 z-[10002] bg-[var(--overlay-modal)] data-[state=open]:animate-confirm-overlay-in data-[state=closed]:animate-confirm-overlay-out" />
+            <Dialog.Overlay className="modal-scrim fixed inset-0 z-[10002]" />
             <Dialog.Content
               aria-describedby="custom-provider-image-generation-reload-description"
               onPointerDownOutside={(event) => event.preventDefault()}
@@ -2839,9 +2808,7 @@ export function ProviderConnectionDialog({
                 if (saving) event.preventDefault();
               }}
               className={cn(
-                'fixed inset-0 z-[10002] m-auto flex h-fit max-h-[85vh] w-[520px] max-w-[calc(100vw-2rem)] flex-col rounded-xl p-4 outline-none',
-                'bg-[var(--confirm-bg)] shadow-[var(--confirm-shadow)]',
-                'data-[state=open]:animate-confirm-content-layout-in data-[state=closed]:animate-confirm-content-layout-out',
+                'modal-panel fixed inset-0 z-[10002] m-auto flex h-fit max-h-[85vh] w-[520px] max-w-[calc(100vw-2rem)] flex-col p-4 outline-none',
               )}
             >
               <button
@@ -2897,7 +2864,7 @@ export function ProviderConnectionDialog({
           </Dialog.Portal>
         </Dialog.Root>
       )}
-    </div>
+    </Dialog.Root>
   );
 }
 
@@ -2944,8 +2911,7 @@ export function ModelPickerOverlay({
       <Dialog.Portal>
         <Dialog.Overlay
           className={cn(
-            'fixed inset-0 z-[10001] bg-[var(--overlay-modal)]',
-            'data-[state=open]:animate-confirm-overlay-in data-[state=closed]:animate-confirm-overlay-out',
+            'modal-scrim fixed inset-0 z-[10001]',
           )}
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         />
@@ -2969,11 +2935,8 @@ export function ModelPickerOverlay({
             returnFocusRef.current?.focus();
           }}
           className={cn(
-            'fixed left-1/2 top-1/2 z-[10001] -translate-x-1/2 -translate-y-1/2',
-            'flex max-h-[72vh] w-[460px] max-w-[calc(100vw-2rem)] flex-col rounded-xl outline-none',
-            'border border-[var(--border-default)] bg-[var(--confirm-bg)]',
-            'shadow-[var(--confirm-shadow)]',
-            'data-[state=open]:animate-confirm-content-in data-[state=closed]:animate-confirm-content-out',
+            'modal-panel fixed left-1/2 top-1/2 z-[10001] -translate-x-1/2 -translate-y-1/2',
+            'flex max-h-[72vh] w-[460px] max-w-[calc(100vw-2rem)] flex-col outline-none',
           )}
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         >

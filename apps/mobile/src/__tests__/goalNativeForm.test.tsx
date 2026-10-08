@@ -4,7 +4,7 @@ import { createRoot } from 'react-dom/client';
 import { afterEach, expect, it, vi } from 'vitest';
 import { ContextSheetGoalCreateForm, ContextSheetGoalView } from '@/session/ContextSheetGoalView.ios';
 
-const bridge = vi.hoisted(() => ({ props: new Map<string, any>() }));
+const bridge = vi.hoisted(() => ({ props: new Map<string, any>(), mode: 'light' }));
 vi.mock('@expo/ui/swift-ui', async () => {
   const React = await import('react');
   const control = (p: any) => {
@@ -19,9 +19,12 @@ vi.mock('@expo/ui/swift-ui', async () => {
   };
 });
 vi.mock('@expo/ui/swift-ui/modifiers', () => Object.fromEntries(
-  ['buttonBorderShape', 'controlSize', 'accessibilityHint', 'accessibilityLabel', 'buttonStyle', 'contentShape', 'disabled', 'font', 'foregroundStyle', 'frame', 'lineLimit', 'pickerStyle', 'tag'].map(key => [key, (value: any) => ({ [key]: value })]).concat([['shapes', { rectangle: () => ({}) }] as any]),
+  ['buttonBorderShape', 'controlSize', 'accessibilityHint', 'accessibilityLabel', 'buttonStyle', 'contentShape', 'disabled', 'font', 'foregroundStyle', 'frame', 'lineLimit', 'pickerStyle', 'tag', 'tint'].map(key => [key, (value: any) => ({ [key]: value })]).concat([['shapes', { rectangle: () => ({}) }] as any]),
 ));
-vi.mock('@/theme', () => ({ navigationChrome: { target: 44 }, useTheme: () => ({ colors: {} }) }));
+vi.mock('@/theme', () => ({ navigationChrome: { target: 44 }, useTheme: () => ({ colors: {
+  cta: bridge.mode === 'dark' ? 'white' : 'black',
+  ctaText: bridge.mode === 'dark' ? 'black' : 'white',
+} }) }));
 vi.mock('@/session/useLiquidGlassAvailable', () => ({ useLiquidGlassAvailable: () => true }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 vi.mock('@/session/ComposerNativeSection', () => ({ ComposerNativeSection: (p: any) => createElement('section', null, p.children) }));
@@ -29,7 +32,7 @@ vi.mock('@/session/goalStatusLabel', () => ({ goalReasonText: () => '', goalStat
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 const cleanup: Array<() => void> = [];
-afterEach(() => { cleanup.splice(0).forEach(fn => fn()); bridge.props.clear(); });
+afterEach(() => { cleanup.splice(0).forEach(fn => fn()); bridge.props.clear(); bridge.mode = 'light'; });
 function mount(props: any = {}, component: any = ContextSheetGoalCreateForm) {
   const root = createRoot(document.createElement('div'));
   const onSetGoal = vi.fn();
@@ -67,4 +70,14 @@ it.each(['active', 'paused', 'blocked', 'usageLimited', 'completed'])('keeps sta
   expect(!!control('goalPauseButton')).toBe(status === 'active');
   expect(!!control('goalResumeButton')).toBe(['paused', 'blocked', 'usageLimited'].includes(status));
   expect(control('goalClearButton')).toBeDefined();
+});
+
+it.each(['light', 'dark'])('pairs the goal label and busy indicator with the CTA in %s', mode => {
+  bridge.mode = mode;
+  const foreground = mode === 'dark' ? 'black' : 'white';
+  mount({ initial: { objective: '目标' } });
+  expect(control('goalStartButton').children.props.modifiers).toContainEqual({ foregroundStyle: foreground });
+  mount({ busy: true, initial: { objective: '目标' } });
+  expect(control('goalStartButton').children.props.modifiers).toContainEqual({ tint: foreground });
+  expect(control('goalStartButton').modifiers).toContainEqual({ disabled: true });
 });

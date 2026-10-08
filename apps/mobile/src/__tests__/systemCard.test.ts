@@ -205,6 +205,43 @@ describe('formatMobileSystemCard — Agent 切换', () => {
       toModel: 'gpt-5.6',
     }).title).toContain('Pi');
   });
+
+  it('describes the new location when the Agent changed computers', () => {
+    const base = { fromAgentKind: 'cc', toAgentKind: 'cc', toModel: 'claude-sonnet-4-6' };
+    // 只有 content 带 toAgentDeviceId 键才算换电脑;没带仍是「已从 X 切换到 Y」。
+    expect(formatMobileSystemCard('agent-switch', base).title).toBe(
+      i18n.t('message.systemCard.agentSwitch', { from: 'Claude Code', to: 'Claude Code' }),
+    );
+    expect(formatMobileSystemCard('agent-switch', {
+      ...base,
+      fromAgentDeviceId: 'device-office-pc',
+      toAgentDeviceId: null,
+      fromAgentDeviceName: 'Office PC',
+      toAgentDeviceName: 'Studio Mac',
+    })).toEqual({
+      title: i18n.t('message.systemCard.agentSwitchLocation', { device: 'Studio Mac' }),
+      rows: [{ label: i18n.t('message.systemCard.modelLabel'), value: 'claude-sonnet-4-6' }],
+    });
+    expect(formatMobileSystemCard('agent-switch', {
+      ...base,
+      toAgentDeviceId: null,
+      toAgentDeviceName: null,
+    }).title).toBe(i18n.t('message.systemCard.agentSwitchLocationThisComputer'));
+    expect(formatMobileSystemCard('agent-switch', {
+      ...base,
+      toAgentDeviceId: 'device-office-pc',
+      toAgentDeviceName: null,
+    }).title).toBe(i18n.t('message.systemCard.agentSwitchLocationOtherComputer'));
+    // 换电脑的同时换了引擎:位置后带上目标引擎。
+    expect(formatMobileSystemCard('agent-switch', {
+      ...base,
+      toAgentKind: 'codex',
+      toAgentDeviceId: null,
+      toAgentDeviceName: 'Studio Mac',
+    }).title).toBe(
+      `${i18n.t('message.systemCard.agentSwitchLocation', { device: 'Studio Mac' })} · Codex`,
+    );
+  });
 });
 
 describe('commandNeedsRemoteSession', () => {

@@ -2633,6 +2633,11 @@ describe('Pi package executable-code boundary', () => {
   );
 
   it('does not run a skipped descendant extension from an unverified ancestor snapshot', async () => {
+    // The aggregate snapshot warning lives in the one-second inspection cache.
+    // Control only Date so slow CI cannot expire it during real filesystem I/O.
+    const now = Date.now();
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(now);
     const ancestorRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-pi-package-approved-overlap-'));
     roots.push(ancestorRoot);
     const descendantRoot = path.join(ancestorRoot, 'extension');
@@ -2705,6 +2710,16 @@ describe('Pi package executable-code boundary', () => {
         { source: descendantRoot, enabled: true, warning: 'inspection-limit' },
       ],
     });
+    // After the cache expires, a fresh inspection clears this transient warning
+    // without disabling either native package or changing the returned snapshot.
+    vi.setSystemTime(now + 2_000);
+    const refreshed = await store.listPiPackages();
+    expect(refreshed.packages).toMatchObject([
+      { source: ancestorRoot, enabled: true },
+      { source: descendantRoot, enabled: true },
+    ]);
+    expect(refreshed.packages[1].warning).toBeUndefined();
+    expect(snapshot.extensions).toEqual([]);
     const state = JSON.parse(await fs.readFile(
       path.join(runtime.userData, 'pi-package-home', 'cindy-package-state.json'),
       'utf8',

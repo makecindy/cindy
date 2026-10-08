@@ -1,3 +1,4 @@
+import { setSessionOpeningModelAdmission } from '../../sessionOpening';
 import { ScriptTarget, transpileModule } from 'typescript';
 import { canResumeAfterRuntimeFallback } from '../../../maker-ipc/botCandidateRecovery';
 import { createDrizzleProxy } from '../../client/drizzleProxy';
@@ -53,7 +54,7 @@ vi.mock('electron-store', () => ({ default: class {
 } }));
 vi.mock('../../../maker-ipc/appDefaultModelControl.js', async importOriginal => ({
   ...await importOriginal<typeof import('../../../maker-ipc/appDefaultModelControl.js')>(),
-  validateBotTaskModel: vi.fn(async () => true),
+  validateTaskModel: vi.fn(async () => true),
 }));
 
 const h = await vi.hoisted(async () => {
@@ -135,6 +136,7 @@ vi.mock('electron', () => ({
   dialog: { showOpenDialog: h.showOpenDialog },
 }));
 vi.mock('../../client/current', () => ({
+  getCurrentDbClientSnapshot: () => h,
   getDbClient: () => ({ drizzle: h.db, tx: h.tx }),
   tryGetDbClient: () => ({ drizzle: h.db, tx: h.tx }),
 }));
@@ -288,6 +290,7 @@ function createDb(filename = ':memory:'): void {
       extra_dirs TEXT NOT NULL DEFAULT '[]',
       writable_dirs TEXT NOT NULL DEFAULT '[]',
       remote_host_id TEXT,
+      agent_device_id TEXT,
       source TEXT NOT NULL DEFAULT 'desktop',
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL,
@@ -481,6 +484,7 @@ const capabilityDeps = {
 const { list: findBotCapabilities, select: selectBotCapability } = createBotCapabilityService(capabilityDeps);
 
 beforeEach(async () => {
+  setSessionOpeningModelAdmission(async body => body);
   setModelVisibilityMirror({}, { fallback: true });
   h.toolsetsAvailable = false;
   h.validateCapabilityAdditions.mockReset().mockResolvedValue(undefined);
@@ -569,6 +573,33 @@ describe('Bot global model restore IPC', () => {
 });
 
 describe('Bot canonical Session lifecycle', () => {
+  it.each(['inherit', 'allowlist'])('omits retired toolsets from the %s companion settings and discovery', async (mode) => {
+    const row = h.sqlite!.prepare('SELECT capabilities_json FROM bot_profile_versions WHERE bot_id = ? AND version = 1')
+      .get('bot-1') as { capabilities_json: string };
+    const config = { ...JSON.parse(row.capabilities_json), toolCapabilityVersion: 1,
+      toolsetMode: mode, toolsets: ['ios-simulator', 'docs', 'missing-tool'], permissions: 'ask' };
+    h.sqlite!.prepare('UPDATE bot_profile_versions SET capabilities_json = ? WHERE bot_id = ? AND version = 1')
+      .run(JSON.stringify(config), 'bot-1');
+    const created = await invoke('local-db:bots:create-canonical-session', {
+      botId: 'bot-1', expectedCanonicalSessionId: null, expectedProfileVersion: 1,
+    });
+    const profile = await invoke('local-db:bots:get', 'bot-1');
+    expect(profile.capabilities).toMatchObject({ toolsetMode: mode, toolsets: ['docs', 'missing-tool'], permissions: 'ask' });
+    const remote = await (await import('../bots')).getBotRemoteSettingsSource('bot-1');
+    expect(remote).toMatchObject({ toolsets: ['docs', 'missing-tool'], permissions: 'ask' });
+    const result = await createBotCapabilityService(capabilityDeps).list({
+      callerSessionId: created.session.id, kind: 'toolset',
+    });
+    expect(result.ok).toBe(true);
+    expect(JSON.stringify(result)).not.toContain('ios-simulator');
+    expect(result).toMatchObject({ capabilities: expect.arrayContaining([
+      expect.objectContaining({ id: 'missing-tool', available: false, joined: true }),
+    ]) });
+    // Reading the upgraded projection must not rewrite historical profile versions.
+    expect(JSON.parse((h.sqlite!.prepare('SELECT capabilities_json FROM bot_profile_versions WHERE bot_id = ? AND version = 1')
+      .get('bot-1') as { capabilities_json: string }).capabilities_json)).toEqual(config);
+  });
+
 
   it.each(['../bot', 'Bot', 'a:b', 'con', 'aux', 'lpt1'])('rejects nonportable new companion ID %s before persistence', async (id) => {
     await expect(invoke('local-db:bots:create', { id, name: 'Unsafe ID' })).rejects.toMatchObject({ code: 'INVALID_PARAMS' });
@@ -664,9 +695,20 @@ describe('Bot canonical Session lifecycle', () => {
       providerId: 'xd',
       effort: 'high',
     });
+    expect(capabilities).toMatchObject({ toolCapabilityVersion: 1, toolsetMode: 'inherit', mcpMode: 'inherit' });
     expect(capabilities.skills).toEqual([]);
     expect(capabilities.toolsets).toEqual([]);
     expect(capabilities.mcpServers).toEqual([]);
+  });
+
+  it('preserves explicit creation selections under the new capability contract', async () => {
+    const created = await invoke('local-db:bots:create', {
+      id: 'selected-bot', name: 'Selected Bot',
+      capabilities: { toolsetMode: 'allowlist', toolsets: [], permissions: 'ask' },
+    });
+    expect(created.capabilities).toMatchObject({ toolsetMode: 'allowlist', toolsets: [], mcpMode: 'inherit', permissions: 'ask' });
+    const row = h.sqlite!.prepare('SELECT capabilities_json FROM bot_profile_versions WHERE bot_id = ? AND version = 1').get('selected-bot') as { capabilities_json: string };
+    expect(JSON.parse(row.capabilities_json)).toMatchObject({ toolCapabilityVersion: 1, toolsetMode: 'allowlist' });
   });
 
   it('persists only bounded welcome hints, not caller-supplied progress or profile identity', async () => {
@@ -1819,7 +1861,7 @@ describe('Bot canonical Session lifecycle', () => {
     expect(opts.botProfileContextPrompt).toContain('ghost_call');
   });
 
-  it('keeps ambient catalogs only as explicit disabled rows under legacy inherit', async () => {
+  it('inherits MCP and tools while preserving the companion Skill selection', async () => {
     const created = await invoke('local-db:bots:create-canonical-session', {
       botId: 'bot-1',
       expectedCanonicalSessionId: null,
@@ -1866,8 +1908,44 @@ describe('Bot canonical Session lifecycle', () => {
         configured: [],
         catalog: [expect.objectContaining({ name: 'research' })],
       },
-      mcpPolicy: { mode: 'allowlist', configured: [] },
-      toolsetPolicy: { mode: 'allowlist', configured: [] },
+      mcpPolicy: { mode: 'allowlist', configured: ['docs'] },
+      toolsetPolicy: { mode: 'allowlist', configured: ['browser'] },
+    });
+  });
+
+  it.each([
+    { versioned: false, selected: true, mode: 'inherit', expectedMcp: ['docs', 'mail'], expectedTools: ['browser', 'contacts'] },
+    { versioned: false, selected: false, mode: 'inherit', expectedMcp: ['docs', 'mail'], expectedTools: ['browser', 'contacts'] },
+    { versioned: true, selected: false, mode: 'allowlist', expectedMcp: [], expectedTools: [] },
+    { versioned: true, selected: true, mode: 'allowlist', expectedMcp: ['docs'], expectedTools: ['browser'] },
+  ])('keeps stored capability selections consistent in settings and runtime: %j', async (entry) => {
+    const row = h.sqlite!.prepare('SELECT capabilities_json FROM bot_profile_versions WHERE bot_id = ? AND version = 1')
+      .get('bot-1') as { capabilities_json: string };
+    const config = { ...JSON.parse(row.capabilities_json),
+      toolsetMode: 'allowlist', toolsets: entry.selected ? ['browser'] : [],
+      mcpMode: 'allowlist', mcpServers: entry.selected ? ['docs'] : [],
+    };
+    if (entry.versioned) config.toolCapabilityVersion = 1;
+    else delete config.toolCapabilityVersion;
+    h.sqlite!.prepare('UPDATE bot_profile_versions SET capabilities_json = ? WHERE bot_id = ? AND version = 1')
+      .run(JSON.stringify(config), 'bot-1');
+    const loaded = await invoke('local-db:bots:get', 'bot-1');
+    expect(loaded.capabilities).toMatchObject({ toolsetMode: entry.mode, mcpMode: entry.mode });
+    const created = await invoke('local-db:bots:create-canonical-session', {
+      botId: 'bot-1', expectedCanonicalSessionId: null, expectedProfileVersion: 1,
+    });
+    const opts: MakerSessionCreateOpts = {
+      id: created.session.id, agentKind: 'pi', workingDir: created.session.workingDir,
+      workspaceKind: 'dialogue', model: 'grok-4.5', permissionMode: 'ask',
+    };
+    await hydrateBotProfileRuntime(opts, {
+      listSkills: async () => [],
+      listMcpServers: async () => ['docs', 'mail'].map(name => ({ name, source: 'custom', available: true })),
+      listToolsets: async () => ['browser', 'contacts'].map(id => ({ id, name: id, available: true })),
+    });
+    expect(opts.botRuntimeProfile).toMatchObject({
+      mcpPolicy: { mode: 'allowlist', configured: entry.expectedMcp },
+      toolsetPolicy: { mode: 'allowlist', configured: entry.expectedTools },
     });
   });
 
@@ -2222,7 +2300,7 @@ describe('Bot canonical Session lifecycle', () => {
     const created = await invoke('local-db:bots:create-canonical-session', { botId: 'bot-1', expectedCanonicalSessionId: null, expectedProfileVersion: 1 });
     const callerSessionId = created.session.id;
     const discovered = await findBotCapabilities({ callerSessionId, kind: 'mcp' });
-    expect(discovered).toMatchObject({ ok: true, capabilities: [{ id: 'shared-docs', joined: false, available: true }] });
+    expect(discovered).toMatchObject({ ok: true, capabilities: [{ id: 'shared-docs', joined: true, available: true }] });
     expect(JSON.stringify(discovered)).not.toMatch(/FAKE_SECRET|example.invalid|Authorization/);
     await expect(selectBotCapability({ callerSessionId, kind: 'mcp', id: 'shared-docs', joined: true })).resolves.toMatchObject({ ok: true, effective: 'next-turn' });
     await expect(findBotCapabilities({ callerSessionId, kind: 'mcp' })).resolves.toMatchObject({ capabilities: [{ id: 'shared-docs', joined: true }] });
@@ -2411,7 +2489,7 @@ describe('Bot canonical Session lifecycle', () => {
   });
 
   it.each(['missing', 'error', 'owner-change'])('does not use the current route when next-turn preview fails: %s', async (reason) => {
-    await invoke('local-db:bots:update', { id: 'bot-1', capabilities: { mcpServers: ['shared-docs'] } });
+    await invoke('local-db:bots:update', { id: 'bot-1', capabilities: { mcpServers: ['shared-docs'], mcpMode: 'allowlist' } });
     const created = await invoke('local-db:bots:create-canonical-session', {
       botId: 'bot-1', expectedCanonicalSessionId: null, expectedProfileVersion: 2,
     });
@@ -2595,7 +2673,7 @@ describe('Bot canonical Session lifecycle', () => {
       .resolves.toMatchObject({ ok: true, joined: false });
   });
 
-  it.each(['contacts', 'lsp'])('rejects gated %s despite registry enablement and keeps joined references removable', async (id) => {
+  it.each(['contacts'])('rejects gated %s despite registry enablement and keeps joined references removable', async (id) => {
     const created = await invoke('local-db:bots:create-canonical-session', { botId: 'bot-1', expectedCanonicalSessionId: null, expectedProfileVersion: 1 });
     const input = { callerSessionId: created.session.id, kind: 'toolset' as const, id };
     await expect(findBotCapabilities(input)).resolves.toMatchObject({
@@ -2693,6 +2771,18 @@ describe('Bot canonical Session lifecycle', () => {
       listToolsets: async () => [{ id: toolset, name: toolset, essential: toolset === 'scheduler', available: true }],
     });
     expect(opts.botRuntimeProfile?.mcpPolicy.configured).toContain(server);
+  });
+
+  it('mounts the baseline scheduler MCP for a local Bot without the toolset being selected', async () => {
+    const created = await invoke('local-db:bots:create-canonical-session', { botId: 'bot-1', expectedCanonicalSessionId: null, expectedProfileVersion: 1 });
+    const opts: MakerSessionCreateOpts = { id: created.session.id, agentKind: 'claude-code', workingDir: created.session.workingDir, workspaceKind: 'dialogue', model: 'test-model', permissionMode: 'auto' };
+    await hydrateBotProfileRuntime(opts, {
+      listMcpServers: async () => [{ name: 'cindy_scheduler', source: 'builtin', available: true }],
+      listToolsets: async () => [{ id: 'scheduler', name: 'Scheduler', essential: true, available: true }],
+    });
+    expect(opts.botRuntimeProfile?.mcpPolicy.configured).toContain('cindy_scheduler');
+    expect(opts.botProfileContextPrompt).toContain('你能建普通自动化');
+    expect(opts.botProfileContextPrompt).toContain('你能看、能管主人的任务');
   });
 
   it('refreshes canonical MCP generations and Toolset versions in place', async () => {
@@ -3614,6 +3704,7 @@ describe('Bot Session task end-to-end runtime', () => {
     getWorktree?: Parameters<typeof createBotDelegationService>[0]['getWorktree'];
     withTransferredWorktree?: Parameters<typeof createBotDelegationService>[0]['withTransferredWorktree'];
     prepareWorktree?: Parameters<typeof createBotDelegationService>[0]['prepareWorktree'];
+    discardUnusedWorktree?: Parameters<typeof createBotDelegationService>[0]['discardUnusedWorktree'];
     taskQueue?: Parameters<typeof createBotDelegationService>[0]['taskQueue'];
     taskRoute?: Parameters<typeof createBotDelegationService>[0]['taskRoute'];
     taskControl?: boolean;
@@ -3859,6 +3950,7 @@ describe('Bot Session task end-to-end runtime', () => {
         : undefined),
       withSessionLock: options.withSessionLock,
       prepareWorktree: options.prepareWorktree,
+      discardUnusedWorktree: options.discardUnusedWorktree,
       getWorktree: options.getWorktree,
       reconcileWorktree: options.reconcileWorktree,
       withTransferredWorktree: options.withTransferredWorktree,
@@ -4163,6 +4255,8 @@ describe('Bot Session task end-to-end runtime', () => {
       readSessionRuntimeProfiles: async () => ({ effective: { providerId: 'openai', model: 'gpt-6-astra' },
         control: { generation: 1, visitedRoutes: [], fallbackHop: 0 } }),
       canApplyAutomaticRuntimeSelection: () => true,
+      // 本机任务(Agent 不在另一台电脑运行)。
+      readSessionAgentDeviceId: async () => null,
       readBotFallbackCandidate: async () => ({ isBot: false, candidate: null }),
       readSessionRuntimeFallbackSettings: () => ({ enabled: true }),
       getDesktopProviderService: () => ({ listProviders: async () => [] }),
@@ -4309,7 +4403,7 @@ describe('Bot Session task end-to-end runtime', () => {
     const runtime = createDelegationRuntime({ readCallerPermission: () => permission });
     const starting = runtime.delegation.startSessionTask({ callerSessionId: 'session-1', objective: 'Run the requested checks.' });
     try {
-      await vi.waitFor(() => expect(h.ensureGit).toHaveBeenCalledWith(expect.objectContaining({ source: 'bot-delegation' })));
+      await vi.waitFor(() => expect(h.ensureGit).toHaveBeenCalledWith(expect.objectContaining({ source: 'session-open' })));
       permission = settledMode;
       finishPreparation();
       const result = await starting;
@@ -4487,6 +4581,12 @@ describe('Bot Session task end-to-end runtime', () => {
       expect(completionRow.role).toBe('user');
       expect(completionRow.content).toContain('结论：三个版本都兼容。');
       expect(completionRow.content.startsWith(UI_ACTION_TRIGGER_PREFIX)).toBe(true);
+      // 发给模型的回执正文不带隐藏前缀;前缀只留在落库 / 排队可见内容上。
+      const completionDispatch = runtime.dispatch.mock.calls
+        .map(([params]) => params)
+        .find((params) => params.clientId === completionClientId);
+      expect(completionDispatch?.message.startsWith('[任务回执]')).toBe(true);
+      expect(completionDispatch?.persistedContent).toBe(`${UI_ACTION_TRIGGER_PREFIX}${completionDispatch?.message}`);
       // 发起方那一侧也真的被唤醒了（否则「结果回到 A 的对话」只是写了一行数据库）。
       expect(runtime.started.some((turn) => turn.sessionId === 'session-1')).toBe(true);
       expect(runtime.changed.at(-1)).toEqual({
@@ -5695,6 +5795,29 @@ describe('Bot Session task end-to-end runtime', () => {
     }
   });
 
+  it('keeps a committed task workspace when a later authority read fails', async () => {
+    await seedPair();
+    const discard = vi.fn(async () => undefined);
+    const runtime = createDelegationRuntime({
+      prepareWorktree: async () => ({ ok: true, sessionId: 'committed-task', workingDir: h.userDataDir }),
+      discardUnusedWorktree: discard,
+      readCallerPermission: () => {
+        if (h.sqlite!.prepare('SELECT id FROM sessions WHERE id = ?').get('committed-task')) {
+          throw new Error('authority temporarily unavailable');
+        }
+        return 'auto';
+      },
+    });
+    try {
+      await expect(runtime.delegation.startSessionTask({ callerSessionId: 'session-1',
+        objective: 'Keep committed history and workspace.', workingDir: h.userDataDir, useWorktree: true }))
+        .rejects.toThrow('authority temporarily unavailable');
+      expect(h.sqlite!.prepare('SELECT id FROM sessions WHERE id = ?').get('committed-task')).toBeTruthy();
+      expect(discard).not.toHaveBeenCalled();
+      expect(runtime.started).toEqual([]);
+    } finally { runtime.dispose(); }
+  });
+
   it('still publishes and dispatches a committed worktree task when its display snapshot fails', async () => {
     await seedPair();
     const runtime = createDelegationRuntime({ prepareWorktree: async () => ({ ok: true,
@@ -5904,6 +6027,8 @@ describe('Bot Session task end-to-end runtime', () => {
         queue[index] = next; return true;
       },
       removeQueuedMessage: (_id, clientId) => { queue = queue.filter(item => item.clientId !== clientId); return true; },
+      steerQueuedMessage: async () => ({ kind: 'gone' }),
+      moveQueuedMessage: () => null,
     });
     const runtime = createDelegationRuntime({ taskControl: true, taskQueue: {
       inspect: async (_id, caller) => queue.filter(item => authorizeSessionQueueItem(item, caller).ok)
@@ -6745,7 +6870,8 @@ describe('Bot Session task end-to-end runtime', () => {
       expect(runtime.dispatch).toHaveBeenCalledWith(expect.objectContaining({
         targetSessionId: started.childSessionId,
         clientId: childClientId,
-        message: `[来自 发起方伙伴 的补充]\n\n${instruction}`,
+        // 来源由 origin 统一表达(派发时主机前置 `[消息来源]`),正文不再手写前缀。
+        message: instruction,
         persistedContent: instruction,
       }));
       const readMessage = (sessionId: string, clientId: string) => h.sqlite!.prepare(

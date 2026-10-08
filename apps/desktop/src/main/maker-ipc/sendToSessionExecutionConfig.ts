@@ -11,6 +11,8 @@ interface ModelCapabilities {
   id: string;
   efforts?: readonly string[];
   defaultEffort?: string | null;
+  /** true = 没有任何来源声明过档位,efforts 只是占位;显式档位交给引擎裁决而不是拒绝(#5535)。 */
+  effortsUnknown?: boolean;
   supportsFastMode?: boolean;
 }
 
@@ -57,6 +59,10 @@ function normalizeEffort(params: {
     };
   }
   if (validEfforts.includes(effort)) return { ok: true, effort };
+  // 未声明档位(#5535):自定义来源的模型只填了 id/name 时,目录与路由快照都没有档位声明,
+  // 这里的 [] 只是占位而不是「valid: none」。显式档位原样放行交给引擎/供应商裁决;
+  // 明确无档位(reasoning:false / 已声明空表)与已声明列表仍按下面的规则校验。
+  if (explicit && model.effortsUnknown === true) return { ok: true, effort };
   if (!explicit) {
     if (effort === 'minimal' && validEfforts.includes('low')) return { ok: true, effort: 'low' };
     if (effort === 'ultra' && validEfforts.includes('max')) return { ok: true, effort: 'max' };
@@ -203,6 +209,7 @@ export function resolveSendToSessionExecutionConfig(params: {
         id: model,
         efforts: routeEffortMeta.efforts,
         defaultEffort: routeEffortMeta.defaultEffort,
+        effortsUnknown: routeEffortMeta.effortsUnknown,
       }
     : modelCapabilities;
   const normalizedEffort = normalizeEffort({

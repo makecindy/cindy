@@ -50,6 +50,12 @@ export interface RemoteSessionHandoffParams {
   nowIso: string;
   /** 日志前缀,用于区分是哪条创建路径(如 'draft send' / 'draft goal')。 */
   logTag: string;
+  /**
+   * 首条会由调用方直接交给发件队列、且调用方负责在未受理 / 投递失败时撤回
+   * (remoteProjectsStore.clearPendingFirstSend)。只有这时才登记侧栏「首条已发出」标记;
+   * 交给 SessionView 的交接(协同 / 斜杠命令 / 新建目标)失败分支不在调用方手里,不登记。
+   */
+  markFirstSend?: boolean;
 }
 
 /**
@@ -70,6 +76,9 @@ export function commitRemoteSessionHandoff(p: RemoteSessionHandoffParams): void 
   remoteProjectsStore.pinSessionOrigin(p.deviceId, p.remoteSessionId);
   // 刚提交的远程任务在对端 isRunning 回流前先按运行中排序,避免先沉底再跳顶。
   markSessionStarting(p.remoteSessionId);
+  // 首条已进入发送链路:被控端收下之前的列表回流里 userSendAt 仍为空,不能让会话先掉进
+  // 项目外的草稿区再跳回项目。必须先于临时行与回流登记。
+  if (p.markFirstSend) remoteProjectsStore.setPendingFirstSend(p.remoteSessionId, p.nowIso);
   // ② 临时行:让 SessionView 的 delayed-create 交接不必等权威快照。
   if (p.workDir) {
     remoteProjectsStore.mergeDeviceSessions(p.deviceId, p.deviceName, [

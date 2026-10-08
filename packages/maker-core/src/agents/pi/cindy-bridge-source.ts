@@ -77,6 +77,28 @@ import {
 } from '@earendil-works/pi-coding-agent';
 import * as piCodingAgent from '@earendil-works/pi-coding-agent';
 
+// 设备托管(CINDY_PI_HOSTED)：Pi 在本机运行，任务、项目文件与命令在同账号另一台电脑上。
+// 文件与命令工具改走本机隧道上的执行器；工具与提示里的路径都是那台电脑的真实工作目录。
+type CindyHostedConfig = { url: string; token: string; cwd: string; platform: string; shell: string; mirrorRoot: string };
+const CINDY_HOSTED: CindyHostedConfig | null = (() => {
+  try {
+    const raw = process.env.CINDY_PI_HOSTED;
+    if (!raw) return null;
+    const value = JSON.parse(raw);
+    if (!value || typeof value.url !== 'string' || typeof value.token !== 'string' || typeof value.cwd !== 'string') return null;
+    return {
+      url: value.url.replace(/\/+$/, ''),
+      token: value.token,
+      cwd: value.cwd,
+      platform: typeof value.platform === 'string' ? value.platform : '',
+      shell: typeof value.shell === 'string' ? value.shell : '',
+      mirrorRoot: typeof value.mirrorRoot === 'string' ? value.mirrorRoot : '',
+    };
+  } catch {
+    return null;
+  }
+})();
+
 const PERMISSION_TITLE = 'cindy:permission';
 const TURN_CHANGE_CAPTURE_TITLE = 'cindy:turn-change-capture';
 const PERMISSION_ALLOW = 'allow';
@@ -120,6 +142,7 @@ const SECRET_ENV_NAMES = new Set<string>([
   MANAGED_RG_PATH_ENV,
   SUBAGENT_RUN_DIR_ENV,
   'PI_CODING_AGENT_DIR',
+  'CINDY_PI_HOSTED',
 ]);
 try {
   const names = JSON.parse(process.env.CINDY_PI_SECRET_ENV_NAMES ?? '[]');
@@ -3674,9 +3697,187 @@ async function nativeFastPayload(payload, model, ctx) {
 
 ${PI_NATIVE_PROVIDER_ADAPTER_SOURCE}
 
+// ─── 设备托管：执行器操作 ───────────────────────────────────────────
+async function cindyHostedCall(op: string, body: unknown, signal?: AbortSignal): Promise<any> {
+  if (!CINDY_HOSTED) throw new Error('Cindy hosted executor is not configured.');
+  const response = await fetch(CINDY_HOSTED.url + '/exec/' + op, {
+    method: 'POST',
+    headers: { authorization: 'Bearer ' + CINDY_HOSTED.token, 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+    signal,
+  });
+  const text = await response.text();
+  let parsed: any;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new Error('The computer running this task returned an invalid response (HTTP ' + String(response.status) + ').');
+  }
+  if (!response.ok || (parsed && parsed.error)) {
+    const error: any = new Error(parsed && parsed.error && typeof parsed.error.message === 'string'
+      ? parsed.error.message
+      : 'Request failed on the computer running this task (HTTP ' + String(response.status) + ').');
+    if (parsed && parsed.error && typeof parsed.error.code === 'string') error.code = parsed.error.code;
+    throw error;
+  }
+  return parsed;
+}
+
+function cindyHostedReadOps() {
+  return {
+    readFile: async (filePath: string) => Buffer.from((await cindyHostedCall('fs.read', { path: filePath })).data, 'base64'),
+    access: async (filePath: string) => {
+      await cindyHostedCall('fs.access', { path: filePath });
+    },
+    detectImageMimeType: async (filePath: string) => {
+      const result = await cindyHostedCall('fs.mime', { path: filePath });
+      return typeof result.mime === 'string' ? result.mime : null;
+    },
+  };
+}
+
+function cindyHostedWriteOps() {
+  return {
+    writeFile: async (filePath: string, content: string) => {
+      await cindyHostedCall('fs.write', { path: filePath, data: Buffer.from(content, 'utf8').toString('base64') });
+    },
+    mkdir: async (dirPath: string) => {
+      await cindyHostedCall('fs.mkdir', { path: dirPath });
+    },
+  };
+}
+
+function cindyHostedEditOps() {
+  const read = cindyHostedReadOps();
+  const write = cindyHostedWriteOps();
+  return {
+    readFile: read.readFile,
+    writeFile: write.writeFile,
+    access: async (filePath: string) => {
+      await cindyHostedCall('fs.access', { path: filePath, mode: 'write' });
+    },
+  };
+}
+
+function cindyHostedExists(filePath: string): Promise<boolean> {
+  return cindyHostedCall('fs.stat', { path: filePath }).then(() => true, () => false);
+}
+
+function cindyHostedLsOps() {
+  return {
+    exists: cindyHostedExists,
+    stat: async (filePath: string) => {
+      const info = await cindyHostedCall('fs.stat', { path: filePath });
+      return {
+        isDirectory: () => info.type === 'directory',
+        isFile: () => info.type === 'file',
+        isSymbolicLink: () => info.type === 'symlink',
+        size: info.size,
+        mtimeMs: info.mtimeMs,
+        mtime: new Date(info.mtimeMs),
+      };
+    },
+    readdir: async (dirPath: string) => (await cindyHostedCall('fs.readdir', { path: dirPath })).entries,
+  };
+}
+
+function cindyHostedFindOps() {
+  return {
+    exists: cindyHostedExists,
+    glob: async (pattern: string, cwd: string, options: { limit: number }) =>
+      (await cindyHostedCall('fs.glob', { pattern, cwd, limit: options && options.limit ? options.limit : 1000 })).paths,
+  };
+}
+
+function cindyHostedBashOps() {
+  return {
+    exec: async (command: string, cwd: string, options: { onData: (data: Buffer) => void; signal?: AbortSignal; timeout?: number }) => {
+      if (options.signal && options.signal.aborted) throw new Error('aborted');
+      let result: any;
+      try {
+        result = await cindyHostedCall('exec.run', { command, cwd, timeout: options.timeout }, options.signal);
+      } catch (error) {
+        if (options.signal && options.signal.aborted) throw new Error('aborted');
+        throw error;
+      }
+      if (typeof result.output === 'string' && result.output.length > 0) options.onData(Buffer.from(result.output, 'base64'));
+      if (result.aborted) throw new Error('aborted');
+      if (result.timedOut) throw new Error('timeout:' + String(options.timeout));
+      return { exitCode: typeof result.exitCode === 'number' ? result.exitCode : null };
+    },
+  };
+}
+
+async function cindyHostedGrep(params: unknown, signal?: AbortSignal) {
+  const result = await cindyHostedCall('pi.grep', { params }, signal);
+  return {
+    content: [{ type: 'text', text: typeof result.text === 'string' ? result.text : '' }],
+    details: result.details,
+  };
+}
+
+/**
+ * 托管时用执行器操作重新注册文件、命令与搜索工具(同一扩展内后注册的同名工具生效)，
+ * 参数说明沿用本机同名工具；并把系统提示里的本机影子目录换成任务所在电脑的真实目录。
+ */
+function registerCindyHostedTools(
+  pi: any,
+  localBash: any,
+  applyBashTimeout: (params: unknown) => Record<string, unknown>,
+): void {
+  if (!CINDY_HOSTED) return;
+  const cwd = CINDY_HOSTED.cwd;
+  // 用工具定义(带提示片段)注册，系统提示里的工具清单与本机任务一致；旧版 Pi 没有定义工厂时退回工具工厂。
+  const agentApi: any = piCodingAgent;
+  // 只在托管时从命名空间取，本机任务加载的导入与原来完全一致。
+  const readFactory = typeof agentApi.createReadToolDefinition === 'function' ? agentApi.createReadToolDefinition : agentApi.createReadTool;
+  const writeFactory = typeof agentApi.createWriteToolDefinition === 'function' ? agentApi.createWriteToolDefinition : agentApi.createWriteTool;
+  const editFactory = typeof agentApi.createEditToolDefinition === 'function' ? agentApi.createEditToolDefinition : agentApi.createEditTool;
+  pi.registerTool(readFactory(cwd, { operations: cindyHostedReadOps() }));
+  pi.registerTool(writeFactory(cwd, { operations: cindyHostedWriteOps() }));
+  pi.registerTool(editFactory(cwd, { operations: cindyHostedEditOps() }));
+  const grepTool = createGrepTool(cwd);
+  pi.registerTool({
+    ...grepTool,
+    execute: async (_id: string, params: unknown, signal: AbortSignal) => cindyHostedGrep(params, signal),
+  });
+  pi.registerTool(createFindTool(cwd, { operations: cindyHostedFindOps() } as any));
+  pi.registerTool(createLsTool(cwd, { operations: cindyHostedLsOps() } as any));
+  const bashTool = createBashTool(cwd, { operations: cindyHostedBashOps() } as any);
+  pi.registerTool({
+    ...bashTool,
+    parameters: localBash && localBash.parameters ? localBash.parameters : bashTool.parameters,
+    description: localBash && typeof localBash.description === 'string' ? localBash.description : bashTool.description,
+    execute: async (id: string, params: unknown, signal: AbortSignal, onUpdate: unknown) =>
+      bashTool.execute(id, applyBashTimeout(params) as any, signal, onUpdate as any),
+  });
+  pi.on('before_agent_start', async (event: any) => {
+    const hosted = CINDY_HOSTED!;
+    const prompt = typeof event.systemPrompt === 'string' ? event.systemPrompt : '';
+    const replaced = prompt;
+    const note = [
+      '',
+      '# Workspace',
+      'The current workspace is ' + hosted.cwd + ' (' + hosted.platform + ', shell: ' + hosted.shell + '). File and shell tools operate in this workspace. Relative paths resolve against it.',
+    ].join('\n');
+    return { systemPrompt: replaced + '\n' + note };
+  });
+}
+
 export default async function cindyBridge(pi: any) {
   installTextOnlyTurnPolicy(pi);
   const nativeProviderAdapters = await registerCindyNativeProviderAdapters(pi);
+  const initialNativeSettings = typeof pi.getSettings === 'function' ? undefined
+    : (() => {
+      try {
+        return JSON.parse(readFileSync(path.join(process.env.PI_CODING_AGENT_DIR, 'settings.json'), 'utf8'));
+      } catch (error) {
+        // Durable child homes may have no settings file: Pi uses its defaults.
+        // Keep malformed/unreadable settings visible instead of hiding them.
+        if (error?.code === 'ENOENT') return {};
+        throw error;
+      }
+    })();
   pi.registerCommand('cindy-native-provider-refresh', {
     description: 'Cindy internal native provider refresh',
     handler: async (args: string, ctx: any) => {
@@ -3684,14 +3885,24 @@ export default async function cindyBridge(pi: any) {
       if (!/^[A-Za-z0-9_-]{16,128}$/.test(nonce)) return;
       let code: 'INVALID_PAYLOAD' | 'APPLY_FAILED' | undefined;
       let mutationStarted = false;
+      let runtimeSettings;
       try {
         const raw = await ctx.ui.input('cindy:provider-refresh', JSON.stringify({ nonce }));
-        const snapshot = parseCindyProviderRefreshSnapshot(raw, nonce);
-        if (!snapshot) {
+        let inspect = false;
+        try { const request = JSON.parse(raw); inspect = request?.nonce === nonce && request?.operation === 'inspect'; }
+        catch { /* The normal snapshot parser rejects invalid JSON. */ }
+        const snapshot = inspect ? undefined : parseCindyProviderRefreshSnapshot(raw, nonce);
+        if (!inspect && !snapshot) {
           code = 'INVALID_PAYLOAD';
-        } else {
+        } else if (snapshot) {
           mutationStarted = true;
           await nativeProviderAdapters.refresh(snapshot, ctx, SECRET_ENV_NAMES);
+        }
+        if (!code) {
+          // getSettings returns a copy. Never reach into Pi's private session or
+          // pretend a settings.json rewrite changed the live SettingsManager.
+          const settings = typeof pi.getSettings === 'function' ? pi.getSettings() : initialNativeSettings;
+          runtimeSettings = { version: piCodingAgent.VERSION, compaction: settings.compaction ?? {} };
         }
       } catch {
         code = mutationStarted ? 'APPLY_FAILED' : 'INVALID_PAYLOAD';
@@ -3700,7 +3911,7 @@ export default async function cindyBridge(pi: any) {
       // explicit, nonce-bound receipt before accepting a refreshed catalog.
       try {
         await ctx.ui.input('cindy:provider-refresh-ack', JSON.stringify(
-          code ? { nonce, ok: false, code } : { nonce, ok: true },
+          code ? { nonce, ok: false, code } : { nonce, ok: true, runtimeSettings },
         ));
       } catch { /* A missing receipt forces the host to retire this process. */ }
     },
@@ -4027,6 +4238,9 @@ export default async function cindyBridge(pi: any) {
     },
   });
 
+  // 设备托管：文件、命令与搜索工具改用任务所在电脑上的执行器(替换上面的本机注册)。
+  registerCindyHostedTools(pi, bashTool, applyCindyBashTimeoutParams);
+
   // ── 权限门 ────────────────────────────────────────────────────────────────
   pi.on('tool_call', async (event: any, ctx: any) => {
     if (toolsDisabledForTurn()) {
@@ -4081,7 +4295,14 @@ export default async function cindyBridge(pi: any) {
     // 漏掉 **symlink 父目录**(agentHome/link/perm.json, link -> /outside)。修:
     // 目标存在 → realpath 目标;目标不存在 → realpath 最近的**存在的父目录**,
     // 用真实父目录判定(父目录链上的 symlink 一并解析)。
-    const writeTargetResolved = resolveFileWriteTargetPath(targetPath);
+    // 设备托管：目标在任务所在电脑上，本机文件系统无从解析，按真实工作目录词法解析
+    // (那台电脑的执行器会按真实路径再守一道凭证与高危上限)。路径实现按那台电脑的平台
+    // 选(path.win32 / path.posix)，与提示改写一致 —— 用本机 path.resolve 解析异构平台
+    // 路径(如 macOS 上解析 C:\project\file)会得到畸形路径，写证据与可写根对不上。
+    const hostedRealPath = CINDY_HOSTED ? path : null;
+    const writeTargetResolved = CINDY_HOSTED && hostedRealPath
+      ? (targetPath ? hostedRealPath.resolve(CINDY_HOSTED.cwd, targetPath) : null)
+      : resolveFileWriteTargetPath(targetPath);
     if (
       targetPath
       && FILE_WRITE_BUILTINS.has(event.toolName)
@@ -4188,7 +4409,9 @@ export default async function cindyBridge(pi: any) {
           ...(FILE_WRITE_BUILTINS.has(event.toolName)
             ? {
                 resolvedWritePath: writeTargetResolved,
-                resolvedWritableRoots: resolveWritableRootsForHost(permission.writableRoots),
+                resolvedWritableRoots: CINDY_HOSTED
+                  ? [...new Set([CINDY_HOSTED.cwd, ...permission.writableRoots])]
+                  : resolveWritableRootsForHost(permission.writableRoots),
                 ...(controlPlaneWrite ? { controlPlaneWrite: true } : {}),
               }
             : {}),

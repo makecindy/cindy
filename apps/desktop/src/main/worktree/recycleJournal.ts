@@ -42,7 +42,7 @@ function sharedJournalLocationsRoot(): string {
   return path.join(app.getPath('appData'), 'Cindy', 'shared-worktree-recycle-journals');
 }
 
-/** Publish a locator, not a second copy of mutable recovery state. */
+/** Keep publishing locators for older clients that may still borrow across profiles. */
 async function publishJournalLocation(root: string): Promise<void> {
   const directory = sharedJournalLocationsRoot();
   const id = createHash('sha256').update(root).digest('hex');
@@ -97,36 +97,6 @@ export async function readRecycleRecord(value: string, sessionId?: string): Prom
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
     throw error;
   }
-}
-
-/** Borrowing reads each profile's authoritative current record; it never owns their recovery. */
-export async function readRecycleRecordsAcrossProfiles(value: string): Promise<WorktreeRecycleRecord[]> {
-  const id = worktreeResourceId(await physicalWorktreeKey(value));
-  const roots = new Set([recycleJournalRoot()]);
-  const directory = sharedJournalLocationsRoot();
-  let names: string[];
-  try { names = await fs.readdir(directory); } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-    names = [];
-  }
-  for (const name of names.filter((name) => /^[a-f0-9]{64}\.json$/.test(name))) {
-    const location = JSON.parse(await fs.readFile(path.join(directory, name), 'utf8')) as { version?: number; root?: string };
-    if (location.version !== 1 || typeof location.root !== 'string' || !path.isAbsolute(location.root)
-      || path.basename(location.root) !== 'worktree-recycle'
-      || createHash('sha256').update(location.root).digest('hex') !== name.slice(0, -5)) {
-      throw new Error('invalid worktree recycle journal location');
-    }
-    roots.add(location.root);
-  }
-  const records: WorktreeRecycleRecord[] = [];
-  for (const root of roots) {
-    try {
-      records.push(parseRecord(await fs.readFile(path.join(root, `${id}.json`), 'utf8'), id));
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-    }
-  }
-  return records;
 }
 
 /** Caller holds the physical resource lock. Atomic per-resource files cannot lose another resource's update. */

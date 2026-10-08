@@ -34,6 +34,7 @@ export type GhostSetupEnsureResult =
         | 'TIMEOUT'
         | 'INTERNAL'
         | 'GHOST_NOT_FOUND'
+        | 'GHOST_RETIRED'
         | 'GHOST_ASLEEP'
         | 'GHOST_DISABLED_IN_WORKDIR'
         | 'TOOL_NOT_FOUND';
@@ -46,7 +47,7 @@ export type GhostSetupTargetValidation =
   | {
       ok: false;
       errorCode:
-        'GHOST_NOT_FOUND' | 'GHOST_ASLEEP' | 'GHOST_DISABLED_IN_WORKDIR' | 'TOOL_NOT_FOUND';
+        'GHOST_NOT_FOUND' | 'GHOST_ASLEEP' | 'GHOST_DISABLED_IN_WORKDIR' | 'GHOST_RETIRED' | 'TOOL_NOT_FOUND';
       message: string;
     };
 

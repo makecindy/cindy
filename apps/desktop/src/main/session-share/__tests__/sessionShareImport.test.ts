@@ -632,9 +632,84 @@ describe('sessionShareImport', () => {
     const nativeId = migrationNativeContext(migrationId, [SID]).id(SID);
     const restored = agentKind === 'cc'
       ? await fsp.readFile(path.join(projectsRoot, sanitizeClaudeProjectKey(newWorkdir), `${nativeId}.jsonl`), 'utf8')
-      : (codexMock.importCalls[0] as { rolloutBuffer: Buffer }).rolloutBuffer.toString();
+      : await (async () => {
+          // A migration streams the rollout through writeRollout instead of a buffer.
+          const call = codexMock.importCalls[0] as {
+            rolloutBuffer: Buffer | null;
+            writeRollout: (target: string) => Promise<void>;
+          };
+          expect(call.rolloutBuffer).toBeNull();
+          const target = path.join(tmpRoot, 'streamed-rollout.jsonl');
+          await call.writeRollout(target);
+          return fsp.readFile(target, 'utf8');
+        })();
     expect(restored).toBe(JSON.stringify(agentKind === 'cc' ? { sessionId: nativeId } : { type: 'session_meta', payload: { id: nativeId } }) + tail);
   });
+  describe('transcripts delivered beside a migration package', () => {
+    const migrationId = '11111111-2222-4333-a444-555555555555';
+    const transcriptPathOf = (agentKind: 'cc' | 'codex' | 'pi') =>
+      agentKind === 'cc'
+        ? `transcripts/claude/${SID}.jsonl`
+        : agentKind === 'codex'
+          ? `transcripts/codex/rollout-x-${SID}.jsonl`
+          : `transcripts/pi/${PI_SID}`;
+    /** The package without its transcript entry, plus the transcript as a separate file. */
+    const external = async (agentKind: 'cc' | 'codex' | 'pi', content: string) => {
+      const zip = await JSZip.loadAsync(await buildBundle({ agentKind }));
+      zip.remove(transcriptPathOf(agentKind));
+      const inspect = await inspectShareFile(await writeBundleFile(await zip.generateAsync({ type: 'nodebuffer' })));
+      if (inspect.encrypted) throw new Error('unexpected encrypted fixture');
+      const file = path.join(tmpRoot, `delivered-${agentKind}.jsonl`);
+      await fsp.writeFile(file, content);
+      return { draftId: inspect.draftId, file };
+    };
+    const commit = (draftId: string, externalTranscripts: Map<string, string>) =>
+      commitShareImport({ draftId, workingDir: newWorkdir, projectsRootOverride: projectsRoot,
+        piSessionsRootOverride: piSessionsRoot, sharedMediaRootOverride: sharedMediaRoot },
+      { sessionId: migrationId, workingDir: newWorkdir, externalTranscripts });
+
+    it.each(['cc', 'codex', 'pi'] as const)('restores a %s transcript from the delivered file', async agentKind => {
+      const header = agentKind === 'cc' ? { sessionId: SID } : agentKind === 'codex'
+        ? { type: 'session_meta', payload: { id: SID } } : { type: 'session' };
+      const content = `${JSON.stringify(header)}\n${'{"type":"event"}\n'.repeat(3)}`;
+      const { draftId, file } = await external(agentKind, content);
+      codexMock.importResult.rolloutPath = path.join(tmpRoot, 'external-rollout.jsonl');
+      const result = await commit(draftId, new Map([[transcriptPathOf(agentKind), file]]));
+      expect(result.fidelity).toBe('full');
+      const nativeId = migrationNativeContext(migrationId, [SID]).id(SID);
+      const rewritten = agentKind === 'pi' ? content
+        : content.replace(JSON.stringify(header), JSON.stringify(
+          agentKind === 'cc' ? { sessionId: nativeId } : { type: 'session_meta', payload: { id: nativeId } }));
+      let restored: string;
+      if (agentKind === 'cc') {
+        restored = await fsp.readFile(path.join(projectsRoot, sanitizeClaudeProjectKey(newWorkdir), `${nativeId}.jsonl`), 'utf8');
+      } else if (agentKind === 'pi') {
+        restored = await fsp.readFile(path.join(piSessionsRoot, migrationId, PI_SID), 'utf8');
+      } else {
+        const call = codexMock.importCalls[0] as { rolloutBuffer: Buffer | null; rolloutFilename: string;
+          writeRollout: (target: string) => Promise<void> };
+        expect(call.rolloutBuffer).toBeNull();
+        expect(call.rolloutFilename).toBe(`rollout-x-${nativeId}.jsonl`);
+        const target = path.join(tmpRoot, 'external-rollout.jsonl');
+        await call.writeRollout(target);
+        restored = await fsp.readFile(target, 'utf8');
+      }
+      expect(restored).toBe(rewritten);
+    });
+
+    it('fails a migration whose transcript was neither packaged nor delivered', async () => {
+      const { draftId } = await external('cc', '{}\n');
+      await expect(commit(draftId, new Map())).rejects.toThrow('MIGRATION_INCOMPLETE_CONTEXT');
+    });
+
+    it('rejects a delivered file that no transcript in the package refers to', async () => {
+      const { draftId, file } = await external('cc', '{}\n');
+      await expect(
+        commit(draftId, new Map([[transcriptPathOf('cc'), file], ['transcripts/claude/other.jsonl', file]])),
+      ).rejects.toThrow('MIGRATION_INVALID_MANIFEST');
+    });
+  });
+
   it.each(['cc', 'pi'] as const)('repairs a partial %s migration transcript on retry', async agentKind => {
     const filePath = await writeBundleFile(await buildBundle({ agentKind }));
     const migration = { sessionId: '11111111-2222-4333-a444-555555555555', workingDir: newWorkdir };

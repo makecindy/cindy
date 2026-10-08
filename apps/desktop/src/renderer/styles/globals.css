@@ -1112,25 +1112,21 @@ body.resizing-pane [data-ghost-webview] {
   }
 }
 
-/* 消息流条目级渲染跳过(Codex Desktop 同款,2026-08-09):视口外的 render
-   item 跳过整棵子树的布局与绘制,只按 contain-intrinsic-size 估高占位
-   (auto 前缀:渲染过一次后记住真实高度,滚回时用真实值,锚点不漂)。
-   切入长 session 时首帧只需布局视口内的几条消息 —— 之前是渲染窗口全量
-   80 条同步布局,几万字的会话切换有数百毫秒长任务(2026-08-09 实测卡顿)。
-   仅作用于 .msg-stream-items 的直接子元素(每条 render item 的根节点):
-   滚动恢复(measureViewportTop/applyRestore)按 children 索引取
-   getBoundingClientRect —— 对 content-visibility 隐藏的条目返回估高盒,
-   量测仍然成立,进入视口后 ResizeObserver 纠偏收敛到真实高度。
-   打印/导出走独立渲染树,不经过本容器,不受影响。 */
+/* #5406: Electron 41 的 Blink 在跳过消息行布局后,正文更新/滚动触发的
+   原生 AX 增量序列化会在 AXBlockFlowData::ComputeNeighborOnLine 断言崩溃。
+   已用真实 MessageStream 复现,不依赖 CDP 查询。消息行必须保持真实布局,
+   不能恢复 content-visibility:auto 的估高占位,也不能靠关闭无障碍规避。
+   逻辑尾窗保留 80 个条目;历史正文按视口挂载,其余用实测高度占位。
+   复现及对照见 scripts/ax5406/COMPONENT-REPRO.md。 */
 .msg-stream-items > * {
-  content-visibility: auto;
-  contain-intrinsic-size: auto 240px;
+  content-visibility: visible;
+  contain-intrinsic-size: none;
 }
 
 /* Fixed-position menu triggers must keep the viewport as their containing
    block. Their menu content is portaled to body, but Radix still measures the
-   zero-size trigger inside the render item. Opt only those items out of the
-   containment boundary; plain text items keep the render-skip optimization. */
+   zero-size trigger inside the render item. Keep this explicit exception when
+   changing message-row layout rules: a containing block would offset the menu. */
 .msg-stream-items > *:has([data-fixed-menu-anchor]) {
   content-visibility: visible;
   contain-intrinsic-size: none;
@@ -1139,7 +1135,7 @@ body.resizing-pane [data-ghost-webview] {
 /* 分享选择模式会在消息 wrapper 左侧动态挂载绝对定位的选择框。该元素需要真实
    消息盒参与布局与绘制；继续使用视口外 intrinsic 占位会让长消息末尾的选择框
    被压缩或裁切。伙伴消息的分享 wrapper 位于含时间分组的条目内部，也必须让
-   外层条目退出隔离；常态和工具类条目继续保留渲染跳过。 */
+   外层条目保持真实布局,包括伙伴消息的嵌套分享 wrapper。 */
 .msg-stream-items[data-share-selection-active] > [data-share-message-id],
 .msg-stream-items[data-share-selection-active] > :has([data-share-message-id]) {
   content-visibility: visible;
@@ -2085,6 +2081,7 @@ mark.doc-search-mark [class] {
 [data-theme='cindy-dark'] .h-screen.bg-content-area {
   background: transparent;
 }
+
 /* 模式1 侧栏(light):半透底,壁纸模糊由原生 vibrancy sidebar 材质提供。
    红渐变覆盖层已拆除(用户裁决 2026-07-18:Figma 该两块渐变矩形按装饰废稿处理,不实现);
    CSS backdrop-filter 已撤(A/B 实证:blur 会把透明窗背衬黑箱)。 */
@@ -2139,10 +2136,100 @@ mark.doc-search-mark [class] {
   -webkit-backdrop-filter: none;
 }
 
+/* 弹窗外框(DESIGN §4 Dialog & Modal):所有模态弹窗的遮罩与面板都用这两个类,不在调用处
+   另写颜色、模糊、圆角、底色、描边或阴影(modalSurfaceContract.test.ts 守护)。
+   - 遮罩:--overlay-modal 压暗 + 背后内容模糊 4px;Windows 不模糊 —— 透明窗口上的 CSS
+     backdrop-filter 可能渲染成黑块,集显 / 软件渲染有性能风险(§15.12,与菜单毛玻璃同口径)。
+   - 面板:12px 容器圆角、--confirm-bg 卡片底、1px Board 描边、与下拉菜单同一个登记浮层阴影 --shadow-menu。
+   - 出现 / 消失(DESIGN §14.4 heavy overlay,参照 Fluid Functionalism chat-message 的入场):
+     遮罩淡入;面板淡入 + 上浮 8px + 0.96→1,--motion-enter / --motion-ease-out。
+     消失只淡出、不倒放入场,--motion-exit / --motion-ease-in。Radix 弹窗按 data-state 走
+     入退场(Presence 等退场动画结束才卸载);手写弹窗没有 data-state,只有挂载时的入场。
+     用 left-1/2 top-1/2 + -translate-x/y-1/2 居中的面板,关键帧要带上 translate(-50%,-50%),
+     否则动画期间会盖掉 Tailwind 的居中位移、整块跳到左上。时长走 motion token,减弱动效时归零。
+   放在 components 层,宽度、定位、内边距等布局类照常由 Tailwind 工具类决定。 */
+@keyframes modal-scrim-in {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes modal-fade-out {
+  to {
+    opacity: 0;
+  }
+}
+@keyframes modal-panel-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.96);
+  }
+}
+@keyframes modal-panel-in-centered {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -50%) translateY(8px) scale(0.96);
+  }
+  to {
+    transform: translate(-50%, -50%);
+  }
+}
+@layer components {
+  .modal-scrim {
+    background-color: var(--overlay-modal);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+    animation: modal-scrim-in var(--motion-enter) var(--motion-ease-out);
+  }
+  .modal-panel.-translate-x-1\/2 {
+    animation-name: modal-panel-in-centered;
+  }
+  .modal-scrim[data-state='closed'],
+  .modal-panel[data-state='closed'] {
+    animation: modal-fade-out var(--motion-exit) var(--motion-ease-in) forwards;
+  }
+  [data-platform='win32'] .modal-scrim {
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+  .modal-panel {
+    border-radius: 0.75rem;
+    border: 1px solid var(--border-default);
+    background-color: var(--confirm-bg);
+    box-shadow: var(--shadow-menu);
+    animation: modal-panel-in var(--motion-enter) var(--motion-ease-out);
+  }
+}
+
+/* MorphPopover 菜单面板(输入框的模型 / 权限 / + 菜单)终态与共享下拉菜单同一材质:面板底色
+   经内联 background-color 从 chip 底色形变过去,所以用变量承接上面两条规则的取值 ——
+   其它主题 = --cmd-palette-bg,Cindy 主题 = 毛玻璃底 + blur 6px,Windows 一律实色、无模糊。 */
+:root {
+  --menu-panel-surface: var(--cmd-palette-bg);
+}
+[data-theme='cindy-light'],
+[data-theme='cindy-dark'] {
+  --menu-panel-surface: var(--surface-translucent-overlay);
+}
+[data-platform='win32'][data-theme='cindy-light'],
+[data-platform='win32'][data-theme='cindy-dark'] {
+  --menu-panel-surface: var(--cmd-palette-bg);
+}
+[data-theme='cindy-light'] [data-menu-surface],
+[data-theme='cindy-dark'] [data-menu-surface] {
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+[data-platform='win32'][data-theme='cindy-light'] [data-menu-surface],
+[data-platform='win32'][data-theme='cindy-dark'] [data-menu-surface] {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
 /* 共享下拉菜单行(components/ui/dropdown-menu.tsx,DESIGN §4):行内 Lucide 图标平时线宽 1.5,
    高亮 / 勾选 / 展开时回到 2。只动默认线宽(stroke-width="2")的图标:显式传了其他 strokeWidth 的
-   不命中;显式传 2 的由组件标上 data-menu-icon-stroke(行内直接子元素与普通标签内可识别)。 */
-[data-menu-row] svg.lucide[stroke-width='2']:not([data-menu-icon-stroke]) {
+   不命中;显式传 2 的由组件标上 data-menu-icon-stroke(行内直接子元素与普通标签内可识别)。
+   data-menu-row="skip" 是面板里的非选项块(开关、价格卡,menu-row.tsx menuSkipAttrs),不变细。 */
+[data-menu-row]:not([data-menu-row='skip']) svg.lucide[stroke-width='2']:not([data-menu-icon-stroke]) {
   stroke-width: 1.5;
   transition: stroke-width var(--motion-instant) var(--motion-ease-out);
 }
@@ -2258,4 +2345,100 @@ mark.doc-search-mark [class] {
   .ghost-bubble:hover .ghost-bubble-face {
     animation: none;
   }
+}
+
+/* Opt-in whole-window wallpaper. Page surfaces share one fixed canvas;
+   elevated controls and external web content keep their readable surfaces. */
+html[data-wallpaper-active='true'] body {
+  isolation: isolate;
+  background: var(--surface);
+}
+html[data-wallpaper-active='true'] body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background-color: var(--surface);
+  background-image: linear-gradient(
+    color-mix(in srgb, var(--surface) var(--app-wallpaper-veil), transparent),
+    color-mix(in srgb, var(--surface) var(--app-wallpaper-veil), transparent)
+  ), var(--app-wallpaper-image);
+  background-size: auto, cover;
+  background-position: center;
+  background-repeat: no-repeat;
+}
+html[data-wallpaper-active='true'] :is(
+  .bg-content-area,
+  .app-wallpaper-surface,
+  main[class~='bg-[var(--surface)]'],
+  [class~='bg-[var(--panel-bg)]'],
+  [class~='bg-[var(--settings-bg)]']
+) {
+  background-color: transparent;
+}
+html[data-wallpaper-active='true'] aside.bg-sidebar:not([data-sidebar-peek-drawer]) {
+  background: transparent;
+}
+/* Fixed attachment uses the same viewport coordinates as the canvas. The
+   footer masks scrolled messages without introducing a differently tinted slab. */
+html[data-wallpaper-active='true'] :is(.wallpaper-composer-zone, .wallpaper-composer-fade) {
+  background-color: var(--surface);
+  background-image: linear-gradient(
+    color-mix(in srgb, var(--surface) var(--app-wallpaper-veil), transparent),
+    color-mix(in srgb, var(--surface) var(--app-wallpaper-veil), transparent)
+  ), var(--app-wallpaper-image);
+  background-size: auto, cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  background-attachment: fixed;
+}
+html[data-wallpaper-active='true'] .wallpaper-composer-fade {
+  mask-image: linear-gradient(transparent, currentColor);
+}
+
+/* Blend video into an opaque theme surface before composing with the UI.
+   A separate translucent veil over a hardware video overlay changes brightness
+   when P3 content switches Windows HDR output to scRGB. Keep visibility on the
+   video itself; the wrapper opacity is reserved for loading/exit crossfades. */
+.app-wallpaper-video {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background: var(--surface);
+  transition: opacity var(--motion-base) var(--motion-ease-move);
+}
+.app-wallpaper-video video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: calc(100% - var(--app-wallpaper-veil));
+}
+/* Fade the message layer itself, so the moving scene remains continuous behind
+   the composer. Repainting a static copy there would create a visible seam. */
+html:is([data-wallpaper-motion='dynamic'], [data-wallpaper-blur='true']) .wallpaper-message-viewport [data-scroll-container] {
+  mask-image: linear-gradient(to bottom, black calc(100% - var(--wallpaper-composer-height)), transparent calc(100% - var(--wallpaper-composer-height) + 32px));
+}
+html:is([data-wallpaper-motion='dynamic'], [data-wallpaper-blur='true']) :is(.wallpaper-composer-zone, .wallpaper-composer-fade) {
+  background: transparent;
+}
+
+/* Opt-in media-only blur. Overscan by three radii before clipping to avoid
+   sampling transparent edges. Static and moving canvases share the same crop;
+   zero blur leaves the original compositor path entirely unchanged. */
+html[data-wallpaper-blur='true'] body::before {
+  inset: calc(-3 * var(--app-wallpaper-blur));
+  filter: blur(var(--app-wallpaper-blur));
+}
+html[data-wallpaper-blur='true'] .app-wallpaper-video {
+  overflow: hidden;
+}
+html[data-wallpaper-blur='true'] .app-wallpaper-video video {
+  position: absolute;
+  inset: calc(-3 * var(--app-wallpaper-blur));
+  width: calc(100% + 6 * var(--app-wallpaper-blur));
+  height: calc(100% + 6 * var(--app-wallpaper-blur));
+  max-width: none;
+  filter: blur(var(--app-wallpaper-blur));
 }

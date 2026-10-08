@@ -96,6 +96,13 @@ const COPY = {
     ja: '{name}：{text}',
     ko: '{name}: {text}',
   },
+  memberJoined: {
+    en: '{name} joined the group',
+    'zh-CN': '{name}加入了群聊',
+    'zh-TW': '{name}加入了群聊',
+    ja: '{name}さんがグループに参加しました',
+    ko: '{name} 님이 그룹에 참여했습니다',
+  },
 } satisfies Record<string, Copy>;
 
 function fill(template: string, vars: Record<string, string | number>): string {
@@ -128,6 +135,8 @@ export function botGroupRemotePreview(group: BotGroupSummary): RemoteLocalizedTe
   }
   const last = group.lastMessage;
   if (!last) return undefined;
+  if (last.authorKind === 'system' && last.noticeCode === 'member-joined')
+    return localized(COPY.memberJoined, { name: last.authorName });
   return last.authorKind === 'bot' && last.authorName
     ? localized(COPY.lastMessage, { name: last.authorName, text: last.preview })
     : last.preview;
@@ -183,7 +192,9 @@ export function botGroupRemoteChatData(detail: BotGroupDetail): BotGroupRemoteCh
 
 function fallbackMarkdown(detail: BotGroupDetail): string {
   const lines = detail.messages
-    .filter((message) => message.kind === 'message' && (message.content.trim() || message.attachments.length > 0))
+    .filter((message) => (message.kind === 'message' || (message.kind === 'notice' && message.authorKind === 'system' &&
+      (message.noticeCode === 'member-joined' || message.noticeCode === null))) &&
+      (message.content.trim() || message.attachments.length > 0))
     .slice(-FALLBACK_MESSAGES)
     .map((message) => {
       // Older phones cannot show attachments; they still see what was attached.
@@ -192,6 +203,7 @@ function fallbackMarkdown(detail: BotGroupDetail): string {
       const clipped = Array.from(text).length > FALLBACK_MESSAGE_CHARS
         ? `${Array.from(text).slice(0, FALLBACK_MESSAGE_CHARS - 1).join('')}…`
         : text;
+      if (message.authorKind === 'system') return clipped;
       return message.authorKind === 'user' ? `> ${clipped}` : `**${message.authorName}**: ${clipped}`;
     });
   return lines.length > 0 ? lines.join('\n\n') : detail.name;
@@ -215,10 +227,11 @@ async function remoteVisibility(botIds: readonly string[]): Promise<Map<string, 
   return new Map(rows.map((row) => [row.id, isBotVisibleRemotely(row)]));
 }
 
-/** A group reaches a phone only while every member is a remotely visible teammate. */
-async function visibleGroups<T extends Pick<BotGroupSummary, 'members'>>(groups: readonly T[]): Promise<T[]> {
-  const visibility = await remoteVisibility(groups.flatMap((group) => group.members.map((member) => member.botId)));
-  return groups.filter((group) => group.members.every((member) => visibility.get(member.botId) === true));
+/** Server membership authorizes human/foreign members; local Bot hiding still applies. */
+async function visibleGroups<T extends Pick<BotGroupSummary, 'members' | 'serverBacked'>>(groups: readonly T[]): Promise<T[]> {
+  const localMembers = (group: T) => group.members.filter(member => !group.serverBacked || (member.actorKind === 'bot' && member.isOwned));
+  const visibility = await remoteVisibility(groups.flatMap(group => localMembers(group).map(member => member.botId)));
+  return groups.filter(group => localMembers(group).every(member => (group.serverBacked && !visibility.has(member.botId)) || visibility.get(member.botId) === true));
 }
 
 /** The same rule for anything else that reaches a phone about a group, such as a step push. */

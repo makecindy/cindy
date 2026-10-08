@@ -45,7 +45,7 @@ import { useTranslation } from 'react-i18next';
 import { Loader2, TriangleAlert } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { formatModelShortLabel } from '@/lib/modelShortLabel';
-import { stripGoalVerdictBlock } from '@/lib/goalVerdict';
+import { stripGoalVerdictBlock } from '@cindy/maker-shared/goal-verdict';
 import { getGhostCardEntry, subscribeGhostCards } from '@/cindy-brain/ghostCardStore';
 import { GhostToolCard } from './GhostToolCard';
 import type { KnownLocalFileRef } from '@/lib/localPathResolver';
@@ -53,6 +53,7 @@ import type { AgentKind as RendererAgentKind } from '@/lib/ccAgent.types';
 import type { TurnUsageDetails } from '../../../shared/turnUsageDetails';
 import type { RegionalMoney } from '../../../shared/regionalMoney';
 import { useAgentCapabilities, type AgentKind as MakerAgentKind } from '@/hooks/useAgentCapabilities';
+import { useAgentOnOtherDevice } from './AgentOnOtherDeviceContext';
 import { useSessionFileOrigin } from './ChatSessionFileContext';
 import { originDeviceId } from '@/lib/sessionFileOrigin';
 import { buildSessionMessageDeepLink } from '@/lib/deepLink';
@@ -271,7 +272,9 @@ export const AssistantMessage = memo(function AssistantMessage({
   );
   const isRemote = Boolean(remoteHostId);
   const sharedGuest = isSharedTaskPeer(originDeviceId(sessionFileOrigin) ?? '');
-  const forkSupported = !isRemote && (!agentKind || (capabilities?.fork?.supported ?? true));
+  const agentOnOtherDevice = useAgentOnOtherDevice();
+  const forkSupported =
+    !isRemote && !agentOnOtherDevice && (!agentKind || (capabilities?.fork?.supported ?? true));
   const handleFork = useForkAtMessage({
     sessionId: currentSessionId,
     messageClientId,

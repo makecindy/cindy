@@ -1,3 +1,4 @@
+import { openSession } from '../sessionOpening.js';
 /**
  * pluginWorkspaceSessions —— workspace 槽的会话判重与创建(main 侧服务)。
  *
@@ -25,10 +26,6 @@ import { and, eq, isNull, isNotNull, ne, or } from 'drizzle-orm';
 
 import { getDbClient } from '../client/current';
 import { sessions } from '../schema';
-import { sessionCreateToRow } from '../mapper';
-import { ensureDialogueWorkspaceDir } from '../dialogueWorkspace';
-import { ensureProjectGitInitialized } from '../../git-snapshot/projectGitBootstrap';
-import { readGitSafetySettings } from '../../maker-host/git-safety-settings-store';
 import { upsertRecentWorkdir } from './recentWorkdirs';
 import { createLogger } from '../../logger';
 import { pickSessionForWorkdir } from '../pluginWorkspaceDedupe';
@@ -72,10 +69,10 @@ export async function createPluginDraftSession(params: {
   /** Existing originating-call predicate; checked before bootstrap and DB submission. */
   shouldContinue?: () => boolean;
   /**
-   * 会话默认值(register 侧从 New Maker 面板缓存解析;缓存未就绪时为空,
-   * 由 mapper 兜底)——让插件建的 draft 跟随用户当前的模型/强度选择。
+   * 由宿主解析的完整模型配置；缺省时交普通 Session 入口读取当前新任务选择。
    */
   defaults?: {
+    permissionMode?: 'ask' | 'plan' | 'acceptEdits' | 'auto';
     agentKind?: 'cc' | 'codex' | 'pi';
     model?: string;
     effort?: string;
@@ -89,47 +86,19 @@ export async function createPluginDraftSession(params: {
   notifySessionCreated?: (info: { sessionId: string; workdir?: string }) => void;
 }): Promise<string | null> {
   if (params.shouldContinue && !params.shouldContinue()) return null;
-  const db = getDbClient().drizzle;
   const now = Date.now();
   const id = randomUUID();
   const workingDir = normalizeWorkingDirForStorage(params.dirAbs) ?? undefined;
-  const insertRow = {
-    ...sessionCreateToRow(
-      id,
-      {
-        workingDir,
-        workspaceKind: 'project',
-        ...(params.defaults?.agentKind ? { agentKind: params.defaults.agentKind } : {}),
-        ...(params.defaults?.model ? { model: params.defaults.model } : {}),
-        ...(params.defaults?.effort ? { effort: params.defaults.effort } : {}),
-        ...(params.defaults?.fastMode !== undefined ? { fastMode: params.defaults.fastMode } : {}),
-        ...(params.defaults?.providerId !== undefined
-          ? { providerId: params.defaults.providerId }
-          : {}),
-      },
-      now,
-    ),
-    // mapper 不透传 source(renderer 面向的 create 不允许自选来源);插件
-    // 会话的来源只在这条 main 侧路径上显式落值。
-    source: 'plugin' as const,
-    ...(params.title ? { title: params.title } : {}),
-  };
-  // 与 local-db:sessions:create 同流程:只有“所有项目”模式才会给空目录 git init,
-  // 已有 Git 项目仍可在“已有 Git 项目”模式下记录保存点。
-  const gitSafety = readGitSafetySettings();
-  await ensureProjectGitInitialized({
-    workingDir: insertRow.workingDir,
-    workspaceKind: insertRow.workspaceKind,
-    remoteHostId: insertRow.remoteHostId,
-    sessionId: id,
-    autoSnapshotEnabled: gitSafety.autoSnapshotEnabled,
-    autoInitProjectGit: gitSafety.autoInitProjectGit,
-    source: 'plugin-workspace-session',
-  });
-  if (params.shouldContinue && !params.shouldContinue()) return null;
-  // Explicit run() submits the async DB request in this synchronous segment.
-  // The worker may queue it; cancellation cannot retract an already submitted write.
-  await db.insert(sessions).values(insertRow).run();
+  let insertRow;
+  try {
+    ({ row: insertRow } = await openSession({ id, now, source: 'plugin',
+      body: { ...params.defaults, workingDir, workspaceKind: 'project', ...(params.title ? { title: params.title } : {}) },
+      assertCurrent: () => { if (params.shouldContinue && !params.shouldContinue()) throw new Error('SESSION_OPEN_CANCELLED'); },
+    }));
+  } catch (error) {
+    if (error instanceof Error && error.message === 'SESSION_OPEN_CANCELLED') return null;
+    throw error;
+  }
   if (insertRow.workingDir) {
     // 用户刚为这个目录做过授权动作(亲选/确认卡),进"最近项目"列表合理;
     // 失败仅日志,不阻断创建流程(与既有 create 同纪律)。
@@ -157,16 +126,13 @@ export async function createPluginDraftSession(params: {
 }
 
 /**
- * 创建 agent 槽「派活取件(errand)」的专属会话行(不拉起 agent 进程)。
- *
- * 与 createPluginDraftSession 的分工:workspace 槽建的是用户项目里的普通
- * draft;errand 会话是插件的干活间——缺省落在专属 dialogue 目录(不碰用户
- * 项目),只有用户在插件详情页亲手选了项目目录才落 project。权限档由调用方
- * (errand runner)按用户配置传入,缺省档 plan(只读,2026-07-31 定案)在
- * runner 侧兜底,这里照传入值落库。source='plugin' 语义同上;Orca 字段
- * 显式排除——errand 会话在侧边栏可见、可旁观,不做隐藏会话。
+ * Persist a visible ordinary local task created by a plugin, without starting an Agent.
+ * The tasks API and legacy errand adapter both use this creator. The caller resolves
+ * and validates the complete model tuple and user permission before reaching here.
+ * No directory preference means a Host-managed dialogue directory; a project root
+ * must have been selected/authorized by the user. This function adds no Orca identity.
  */
-export async function createGhostErrandSession(params: {
+export async function createPluginTaskSession(params: {
   ghostId: string;
   /** Host-allocated durable task identity; never taken directly from plugin payload. */
   sessionId?: string;
@@ -179,52 +145,26 @@ export async function createGhostErrandSession(params: {
   effort?: string;
   fastMode?: boolean;
   providerId?: string | null;
-  permissionMode: 'plan' | 'acceptEdits' | 'auto';
+  permissionMode: 'ask' | 'plan' | 'acceptEdits' | 'auto';
   /** 用户亲选的项目目录(绝对路径);缺省 = 专属 dialogue 目录。 */
   workingDir?: string;
   notifySessionCreated?: (info: { sessionId: string; workdir?: string }) => void;
 }): Promise<string> {
   if (params.shouldContinue && !params.shouldContinue()) throw new Error('Plugin task owner changed');
-  const db = getDbClient().drizzle;
   const now = Date.now();
   const id = params.sessionId ?? randomUUID();
   const projectDir = params.workingDir
     ? (normalizeWorkingDirForStorage(params.workingDir) ?? undefined)
     : undefined;
   const workspaceKind = projectDir ? ('project' as const) : ('dialogue' as const);
-  const workingDir = projectDir ?? ensureDialogueWorkspaceDir(id, now);
-  const insertRow = {
-    ...sessionCreateToRow(
-      id,
-      {
-        workingDir,
-        workspaceKind,
-        permissionMode: params.permissionMode,
-        ...(params.agentKind ? { agentKind: params.agentKind } : {}),
-        ...(params.model ? { model: params.model } : {}),
-        ...(params.effort ? { effort: params.effort } : {}),
-        ...(params.fastMode !== undefined ? { fastMode: params.fastMode } : {}),
-        ...(params.providerId !== undefined ? { providerId: params.providerId } : {}),
-      },
-      now,
-    ),
-    source: 'plugin' as const,
-    ...(params.title ? { title: params.title } : {}),
-  };
-  // 与既有 create 同流程;dialogue 目录由 projectGitBootstrap 自带守卫跳过。
-  const gitSafety = readGitSafetySettings();
-  await ensureProjectGitInitialized({
-    workingDir: insertRow.workingDir,
-    workspaceKind: insertRow.workspaceKind,
-    remoteHostId: insertRow.remoteHostId,
-    sessionId: id,
-    autoSnapshotEnabled: gitSafety.autoSnapshotEnabled,
-    autoInitProjectGit: gitSafety.autoInitProjectGit,
-    source: 'plugin-errand-session',
+  const { row: insertRow } = await openSession({ id, now, source: 'plugin',
+    body: { workingDir: projectDir, workspaceKind, permissionMode: params.permissionMode,
+      agentKind: params.agentKind, model: params.model, effort: params.effort,
+      fastMode: params.fastMode, providerId: params.providerId,
+      ...(params.title ? { title: params.title } : {}) },
+    assertCurrent: () => { if (params.shouldContinue && !params.shouldContinue()) throw new Error('Plugin task owner changed'); },
+    onPersistenceStarted: params.onPersistenceStarted,
   });
-  if (params.shouldContinue && !params.shouldContinue()) throw new Error('Plugin task owner changed');
-  params.onPersistenceStarted?.();
-  await db.insert(sessions).values(insertRow);
   if (params.shouldContinue && !params.shouldContinue()) throw new Error('Plugin task owner changed');
   if (projectDir && insertRow.workingDir) {
     // 项目目录是用户在插件详情页亲手选的,进"最近项目"合理;dialogue 目录
@@ -237,12 +177,12 @@ export async function createGhostErrandSession(params: {
       ...(insertRow.workingDir ? { workdir: insertRow.workingDir } : {}),
     });
   } catch (error) {
-    log.warn('[plugin-errand] notifySessionCreated failed', {
+    log.warn('[plugin-task] notifySessionCreated failed', {
       sessionId: id,
       err: error instanceof Error ? error.message : String(error),
     });
   }
-  log.info('[plugin-errand] errand session created', {
+  log.info('[plugin-task] session created', {
     sessionId: id,
     ghostId: params.ghostId,
     workspaceKind,

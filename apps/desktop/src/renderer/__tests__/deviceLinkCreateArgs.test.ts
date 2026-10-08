@@ -50,6 +50,17 @@ function deviceProvider(id: string, connected: boolean, modelIds: string[]): Pro
 }
 
 describe('buildDeviceLinkCreateArgs', () => {
+  it.each([undefined, '/remote/project'])('carries initial plan mode through creation and provisional UI (%s)', (workingDir) => {
+    const args = resolveDeviceLinkSubmission({
+      agentKind: 'codex', workingDir, capabilityAgentKind: 'codex', deviceProviders: [],
+      candidate: { model: 'gpt-5.4', effort: 'high', permissionMode: 'auto', fastMode: false, planModeEnabled: true },
+    });
+    expect(args.planMode).toBe(true);
+    expect(args).not.toHaveProperty('planModeEnabled');
+    const row = buildProvisionalRemoteSession({ sessionId: 'remote', workDir: workingDir ?? '/dialogue/remote', args, nowIso: '2026-10-08T00:00:00Z' });
+    expect(row.planModeEnabled).toBe(true);
+  });
+
   it('归属一致核心:workspaceKind 恒为 project(被控端据此挂到项目下,不独立)', () => {
     const args = buildDeviceLinkCreateArgs({
       agentKind: 'cc',
@@ -284,14 +295,14 @@ describe('buildProvisionalRemoteSession', () => {
     expect(row.title).toBe('New Maker');
   });
 
-  it('userSendAt 置为当下:用户此刻正在发第一条,侧边栏该立刻浮到顶部(与本机路径同口径)', () => {
+  it('userSendAt 与被控端新行一致为空:「正在发第一条」交给投影层的首条发送叠加层', () => {
     const row = buildProvisionalRemoteSession({
       sessionId: 's-4',
       workDir: '/w',
       args: dialogue,
       nowIso: NOW,
     });
-    expect(row.userSendAt).toBe(NOW);
+    expect(row.userSendAt).toBeNull();
     expect(row.createdAt).toBe(NOW);
     expect(row.updatedAt).toBe(NOW);
   });

@@ -1929,15 +1929,18 @@ export function onInteractionResolved(
   if (kind === 'ask_user_question') {
     const answers = (decision.answers as Record<string, string> | undefined) ?? {};
     const cancelled = decision.dismissed === true;
+    // Match the harness clarification projection, including an empty answer.
+    const lines = Object.entries(answers)
+      .filter(([, answer]) => typeof answer === 'string' && answer.trim())
+      .map(([question, answer]) => question.trim()
+        ? `- ${question.trim()} → ${answer.trim()}` : `- ${answer.trim()}`);
     enqueueWrite(`ask_user_resolved:${sessionId}:${persistId}`, async (ownerScope) => {
       const updated = await updateDbMessageContent(sessionId, persistId, {
         requestId,
         questions: request.questions ?? [],
         status: cancelled ? 'cancelled' : 'answered',
         answers,
-      }, { acceptedAt, text: cancelled ? '' : 'Clarifications:\n' + Object.entries(answers)
-        .filter(([, answer]) => typeof answer === 'string' && answer.trim())
-        .map(([question, answer]) => `- ${question} → ${answer}`).join('\n') });
+      }, { acceptedAt, text: cancelled || !lines.length ? '' : `Clarifications:\n${lines.join('\n')}` });
       if (updated) broadcastMessageRow(sessionId, updated, ownerScope);
     });
     return;
@@ -1965,7 +1968,7 @@ export function onInteractionResolved(
       planFilePath,
       status,
       feedback,
-    }, { acceptedAt, text: behavior === 'allow' ? `Approved plan:\n${plan}`
+    }, { acceptedAt, text: behavior === 'allow' ? (plan.trim() ? `Approved plan:\n${plan.trim()}` : '')
       : dismissed ? '' : feedback ?? '' });
     if (updated) broadcastMessageRow(sessionId, updated, ownerScope);
   });

@@ -38,7 +38,7 @@ function fixture() {
  const slots = new Set<string>();
  const dialog = { showMessageBox: vi.fn(async () => ({ response: 0 })) };
  const write = vi.fn((_id: string, value: Record<string, unknown>) => { cfg = value; });
- const deps = { isPluginTaskPermissionAllowed, withSessionPermissionChange, withSessionRestartLock, drainPersistQueue:drain,messages,sessions,eq:()=>true,and:()=>true,service, getCurrentDbClientSnapshot: () => ownership.current, readGhostErrandConfig: () => cfg, pluginPermissionRequests: slots, PluginTaskError, maker: { getSession: () => cold ? null : live }, inputCoordinator: queue, dialog, t: (x: string) => x, getInstalledGhostName: () => 'fixture', clampErrandPermissionMode: (x: string) => x, writeGhostErrandConfig: write, broadcastSessionPatched: vi.fn() };
+ const deps = { isPluginTaskPermissionAllowed, withSessionPermissionChange, withSessionRestartLock, drainPersistQueue:drain,messages,sessions,eq:()=>true,and:()=>true,service, getCurrentDbClientSnapshot: () => ownership.current, readPluginTaskConfig: () => cfg, pluginPermissionRequests: slots, PluginTaskError, maker: { getSession: () => cold ? null : live }, inputCoordinator: queue, dialog, t: (x: string) => x, getInstalledGhostName: () => 'fixture', clampPluginTaskPermissionMode: (x: string) => x, writePluginTaskConfig: write, broadcastSessionPatched: vi.fn() };
  const allDeps = {...deps, pluginWriteAccessGate:gate, pluginWriteAccessIdentity:()=>identity};
  const run = new Function(...Object.keys(allDeps), js)(...Object.values(allDeps));
  let setMode!: (event: unknown, sessionId: string, mode: string) => Promise<unknown>;

@@ -20,6 +20,7 @@ const plan = (overrides: Partial<BotGroupPlanView> = {}): BotGroupPlanView => ({
 
 describe('bot group copy variants (shared by desktop and phone)', () => {
   it('speaks about a step for member notices inside a plan', () => {
+    expect(botGroupNoticeVariant('member-joined', false)).toBe('memberJoined');
     expect(botGroupNoticeVariant('member-failed', false)).toBe('memberFailed');
     expect(botGroupNoticeVariant('member-failed', true)).toBe('stepFailed');
     expect(botGroupNoticeVariant('plan-stopped', true)).toBe('planStopped');

@@ -4,6 +4,7 @@
  * Recovery helpers remain for legacy direct sends and composer editing.
  */
 import { i18n } from '@/i18n';
+import { isDurableOutboxHandedOff, type DurableOutboxRecord } from '@/session/durableOutbox';
 import type { MobileSessionReference } from '@/session/sessionReferences';
 import type { RemoteSerializedAttachment } from '@/session/types';
 import { isInFlightDeviceLinkError } from '@cindy/device-link';
@@ -50,6 +51,52 @@ export function shouldHoldOutboxDispatchForConnection(
     || state.deviceUnresponsive
     || state.autoRecoveringError
     || state.syncInProgress;
+}
+
+/**
+ * 本会话是否有消息正在交给被控端:已进待发、尚未被被控端历史确认的条目。
+ *
+ * 活动条(「思考中」)用它把「点发送 → 被控端回报运行」整段连起来:本地写入 outbox
+ * 后 sending 就落下,而 enqueue 往返 + 被控端回报运行状态要一次远程往返,远超活动条
+ * 的下降沿去抖,中间会熄灭一次再亮。
+ *
+ * 按投递的真实推进口径判断(records 须保持 store 的 FIFO 顺序):
+ * - 已移交被控端、还没被历史确认的记录算交接中。settledClientIds 里的不再计入:已出现在
+ *   被控端队列里的归队列管(队列暂停时不该显示「思考中」);已回流进历史的已经落定,
+ *   只是 outbox 还没对账清掉。
+ * - 未移交的记录只看会话 FIFO 队首——投递只派发它。队首在正常推进(待发 / enqueue
+ *   在途)才算;队首出错重试 / 待确认 / 失败 / 撤销中 / 挂起时,后面的消息也走不动,
+ *   不能说成「思考中」。
+ * 断线 / 被控端无响应时消息只是在等重连,一律不算。syncInProgress 不算断线——发送后的
+ * 同步很常见,把它算进来会在交接中途再制造一次熄灭。
+ */
+export function hasActiveOutboxHandoff(
+  records: readonly Pick<
+    DurableOutboxRecord,
+    'deviceId' | 'item' | 'state' | 'error' | 'cancelRequested' | 'suspended' | 'retrySafe' | 'cleanupOutcome'
+  >[],
+  target: { deviceId: string; sessionId: string },
+  connection: MobileOutboxConnectionState,
+  settledClientIds: ReadonlySet<string>,
+): boolean {
+  if (
+    !connection.relayOnline
+    || connection.targetAvailable === false
+    || connection.deviceUnresponsive
+    || connection.autoRecoveringError
+  ) return false;
+  const group = records.filter((record) => record.deviceId === target.deviceId
+    && record.item.sessionId === target.sessionId
+    && record.cleanupOutcome === undefined);
+  if (group.some((record) => isDurableOutboxHandedOff(record)
+    && !record.cancelRequested
+    && !settledClientIds.has(record.item.clientId))) return true;
+  const head = group.find((record) => !isDurableOutboxHandedOff(record));
+  return !!head
+    && (head.state === 'queued' || head.state === 'sending')
+    && !head.error
+    && !head.cancelRequested
+    && !head.suspended;
 }
 
 /**

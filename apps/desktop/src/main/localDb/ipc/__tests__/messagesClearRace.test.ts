@@ -1,8 +1,9 @@
 import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { messages, sessions } from '../../schema';
+import { tx as runInprocTx } from '../../worker/opHandlers/tx';
 
 const h = vi.hoisted(() => ({
   db: null as ReturnType<typeof drizzle> | null,
@@ -62,6 +63,9 @@ function createDb(): Database.Database {
   sqlite.exec(`
     CREATE TABLE sessions (
       id TEXT PRIMARY KEY,
+      list_preview TEXT,
+      list_preview_role TEXT,
+      list_message_count INTEGER,
       cleared_at INTEGER,
       status TEXT NOT NULL DEFAULT 'active'
     );
@@ -85,17 +89,20 @@ function createDb(): Database.Database {
   h.db = db;
   h.client = {
     drizzle: db,
-    exec: vi.fn(async (sql: string, params: unknown[] = []) => {
-      // Model /clear winning between the preflight SELECT and the guarded
-      // INSERT. The single SQL statement must then insert zero rows.
-      if (h.raceOnInsert && sql.startsWith('INSERT INTO messages')) {
+    tx: vi.fn(async (name: string, args: unknown) => {
+      if (h.raceOnInsert && name === 'message.insert') {
         sqlite.prepare('UPDATE sessions SET cleared_at = ? WHERE id = ?').run(200, 's1');
       }
+      return runInprocTx(sqlite, { name, args });
+    }),
+    exec: vi.fn(async (sql: string, params: unknown[] = []) => {
       return sqlite.prepare(sql).run(...params);
     }),
   };
   return sqlite;
 }
+
+afterEach(() => { h.sqlite?.close(); });
 
 describe('message persistence clear boundary', () => {
   let sqlite: Database.Database;

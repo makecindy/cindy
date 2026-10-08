@@ -80,9 +80,7 @@ function isWindowsReservedName(name: string): boolean {
  * 即授权(pick 模式,路径不回沙箱),或 tool-call 语境下带在途 callId + 绝对
  * 路径(目录在该会话 workdir 内自动放行,workdir 外弹确认卡)。远程工作区
  * v1 一律拒(fail closed)。
- * 'ios-simulator' = Host 托管的内嵌 iOS 模拟器入口:插件只能读取当前任务的
- * 脱敏状态并请求 Host 打开控制面板。视频帧、输入、设备标识、Native Helper、
- * 生命周期与恢复均不跨插件边界,仍由 Cindy Host 独占管理。
+ * 'ios-simulator' is retired; retained only to round-trip legacy approval receipts.
  *
  * 以下名称只用于 schemaVersion 2 的兼容校验。schemaVersion 3 使用顶层直接
  * 字段声明能力，不再提供 slots。未知 v2 slot 会被保留供兼容诊断，但不会
@@ -918,6 +916,8 @@ export interface GhostManifest {
    * `/kv`；其它自定义参数持久化走同源 `fetch('/kv')`。
    */
   settingsHtml?: string;
+  /** Optional mobile page projection; unknown/invalid declarations leave desktop behavior unchanged. */
+  mobile?: { channels: string[]; panel?: string; mainView?: string; settings?: string };
   /**
    * 自定义设置区固定高度(px,可选;160–800)。缺省 = 宿主量 guest 内容
    * 高度自适应(同区间收口);声明本字段 = 固定高度(内容动态增减的设置
@@ -987,6 +987,7 @@ export interface GhostManifest {
   sessionContext?: true;
   pick?: true;
   workspace?: true;
+  /** @deprecated Retirement detection only. No runtime capability is granted. */
   iosSimulator?: true;
   /**
    * 随包渐进披露手册。它不是能力 slot 或授权项；Host 只把索引投影给模型，
@@ -3734,6 +3735,7 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
         : {}),
       ...(node !== undefined ? { node } : {}),
       ...(raw.settingsHtml !== undefined ? { settingsHtml: raw.settingsHtml as string } : {}),
+      ...(raw.mobile !== undefined ? { mobile: raw.mobile as GhostManifest['mobile'] } : {}),
       ...(raw.settingsHeight !== undefined ? { settingsHeight: raw.settingsHeight as number } : {}),
       ...(prepared.schemaVersion === 2 ? { slots } : {}),
       ...(card !== undefined

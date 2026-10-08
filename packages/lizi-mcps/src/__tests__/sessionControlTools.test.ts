@@ -4,7 +4,9 @@ import { XdtHelperToolRegistry, type XdtHelperToolResult } from '../lizi_xdtHelp
 import {
   registerCancelSessionQueuedMessageTool,
   registerGetSessionRuntimeTool,
+  registerMoveSessionQueuedMessageTool,
   registerSetSessionRuntimeTool,
+  registerSteerSessionQueuedMessageTool,
   registerSteerSessionTool,
   registerStopSessionTurnTool,
   registerUpdateSessionQueuedMessageTool,
@@ -32,6 +34,16 @@ function setup(opts?: { sessionId?: string | undefined }) {
     cancelQueuedMessage: vi.fn(async ({ queuedMessageId }) => ({
       ok: true as const,
       queuedMessageId,
+    })),
+    steerQueuedMessage: vi.fn(async ({ queuedMessageId }) => ({
+      ok: true as const,
+      queuedMessageId,
+      delivery: 'steered' as const,
+    })),
+    moveQueuedMessage: vi.fn(async ({ queuedMessageId }) => ({
+      ok: true as const,
+      queuedMessageId,
+      position: 0,
     })),
     steerSession: vi.fn(async () => ({ ok: true as const, queuedMessageId: 'steer-1' })),
     stopSessionTurn: vi.fn(async () => ({
@@ -72,6 +84,8 @@ function setup(opts?: { sessionId?: string | undefined }) {
   const registry = new XdtHelperToolRegistry();
   registerUpdateSessionQueuedMessageTool(registry, deps);
   registerCancelSessionQueuedMessageTool(registry, deps);
+  registerSteerSessionQueuedMessageTool(registry, deps);
+  registerMoveSessionQueuedMessageTool(registry, deps);
   registerSteerSessionTool(registry, deps);
   registerStopSessionTurnTool(registry, deps);
   registerGetSessionRuntimeTool(registry, deps);
@@ -194,6 +208,8 @@ describe('cindy_helper session control tools', () => {
         session_id: 'target', queued_message_id: 'q', message: 'next',
       }],
       ['cancel_session_queued_message', { session_id: 'target', queued_message_id: 'q' }],
+      ['steer_session_queued_message', { session_id: 'target', queued_message_id: 'q' }],
+      ['move_session_queued_message', { session_id: 'target', queued_message_id: 'q', position: 0 }],
       ['steer_session', { session_id: 'target', message: 'urgent context' }],
     ] as const) {
       expect(parse(await registry.call(name, args))).toMatchObject({
@@ -203,7 +219,88 @@ describe('cindy_helper session control tools', () => {
     }
     expect(deps.updateQueuedMessage).not.toHaveBeenCalled();
     expect(deps.cancelQueuedMessage).not.toHaveBeenCalled();
+    expect(deps.steerQueuedMessage).not.toHaveBeenCalled();
+    expect(deps.moveQueuedMessage).not.toHaveBeenCalled();
     expect(deps.steerSession).not.toHaveBeenCalled();
+  });
+
+  it('converts a queued message to a steer and reports a retained fallback reason', async () => {
+    const { deps, registry } = setup();
+
+    expect(parse(await registry.call('steer_session_queued_message', {
+      session_id: 'target-session',
+      queued_message_id: 'queued-1',
+    }))).toEqual({
+      ok: true,
+      session_id: 'target-session',
+      queued_message_id: 'queued-1',
+      delivery: 'steered',
+    });
+    expect(deps.steerQueuedMessage).toHaveBeenCalledWith({
+      callerSessionId: 'caller-session',
+      targetSessionId: 'target-session',
+      queuedMessageId: 'queued-1',
+    });
+
+    vi.mocked(deps.steerQueuedMessage).mockResolvedValueOnce({
+      ok: true,
+      queuedMessageId: 'queued-2',
+      delivery: 'queued',
+      reason: 'STEER_UNCERTAIN',
+    });
+    expect(parse(await registry.call('steer_session_queued_message', {
+      session_id: 'caller-session',
+      queued_message_id: 'queued-2',
+    }))).toEqual({
+      ok: true,
+      session_id: 'caller-session',
+      queued_message_id: 'queued-2',
+      delivery: 'queued',
+      reason: 'STEER_UNCERTAIN',
+    });
+
+    vi.mocked(deps.steerQueuedMessage).mockResolvedValueOnce({
+      ok: false,
+      errorCode: 'NOT_AUTHORIZED',
+      message: 'user message',
+    });
+    expect(parse(await registry.call('steer_session_queued_message', {
+      session_id: 'target-session',
+      queued_message_id: 'user-1',
+    }))).toMatchObject({ ok: false, errorCode: 'NOT_AUTHORIZED' });
+  });
+
+  it('moves a queued message and returns the final position', async () => {
+    const { deps, registry } = setup();
+    vi.mocked(deps.moveQueuedMessage).mockResolvedValueOnce({
+      ok: true,
+      queuedMessageId: 'queued-1',
+      position: 3,
+    });
+
+    expect(parse(await registry.call('move_session_queued_message', {
+      session_id: 'target-session',
+      queued_message_id: 'queued-1',
+      position: 10,
+    }))).toEqual({
+      ok: true,
+      session_id: 'target-session',
+      queued_message_id: 'queued-1',
+      position: 3,
+    });
+    expect(deps.moveQueuedMessage).toHaveBeenCalledWith({
+      callerSessionId: 'caller-session',
+      targetSessionId: 'target-session',
+      queuedMessageId: 'queued-1',
+      position: 10,
+    });
+
+    expect(parse(await registry.call('move_session_queued_message', {
+      session_id: 'target-session',
+      queued_message_id: 'queued-1',
+      position: -1,
+    }))).toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+    expect(deps.moveQueuedMessage).toHaveBeenCalledTimes(1);
   });
 
   it('steers, requests graceful stop and projects bounded runtime metadata', async () => {

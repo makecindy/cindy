@@ -10,7 +10,7 @@
  *   走透明 RN Modal(独立 Dialog 窗口),返回键由 onRequestClose 接管。
  * 新窗口里要自带 GestureHandlerRootView,左滑关闭才有效。动画遵循 reduce-motion。
  */
-import { Building2, LogOut, Monitor, Search, Settings, UsersRound } from 'lucide-react-native';
+import { Building2, LogOut, Monitor, Puzzle, Search, Settings, UsersRound } from 'lucide-react-native';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AccessibilityInfo,
@@ -59,6 +59,7 @@ import {
   typeScale,
 } from "@/theme/tokens";
 
+import { PluginMenuUnreadDot } from '@/plugins/PluginMenuUnreadDot';
 import { confirmLogout } from './confirmLogout';
 import { HomeModeSwitch } from './HomeModeSwitch';
 import type { HomeMode } from './homeViewPreferenceStore';
@@ -75,6 +76,7 @@ export function HomeChromeDrawer({
   onOpenSearch,
   onOpenAccounts,
   onOpenDevices,
+  onOpenPlugins,
   onOpenSettings,
   onLogout,
   hasRunningTasks = false,
@@ -91,6 +93,7 @@ export function HomeChromeDrawer({
   onOpenSearch(): void;
   onOpenAccounts(): void;
   onOpenDevices(): void;
+  onOpenPlugins?(): void;
   onOpenSettings(): void;
   /** 确认后才调用:抽屉内部先弹 confirmLogout,调用方不要再重复确认。 */
   onLogout(): void;
@@ -346,6 +349,13 @@ export function HomeChromeDrawer({
                 {t("devices.list.menu.search")}
               </Text>
             </Pressable>
+
+            {onOpenPlugins ? <Pressable accessibilityRole="button" accessibilityLabel={t('plugins.title')}
+              onPress={onOpenPlugins} style={({ pressed }) => [styles.menuRow, pressed && styles.pressed]} testID="home.chromeDrawer.plugins">
+              <Puzzle color={colors.textSecondary} size={iconSize.md} strokeWidth={iconStroke.regular} />
+              <Text numberOfLines={1} style={styles.menuLabel}>{t('plugins.title')}</Text>
+              <PluginMenuUnreadDot active={open} />
+            </Pressable> : null}
 
             <Pressable
               accessibilityLabel={t('devices.management.title')}

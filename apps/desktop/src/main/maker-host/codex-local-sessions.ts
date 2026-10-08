@@ -1741,6 +1741,11 @@ export interface ImportSharedCodexThreadParams {
     threadSpawnEdges: Array<Record<string, unknown>>;
   };
   rolloutBuffer: Buffer | null;
+  /**
+   * Migration alternative to `rolloutBuffer` for rollouts too large to hold in memory:
+   * writes the rollout to the given path atomically, replacing an interrupted attempt.
+   */
+  writeRollout?: (target: string) => Promise<void>;
   rolloutFilename: string | null;
   newCwd: string;
   title: string;
@@ -1787,7 +1792,7 @@ export async function importSharedCodexThread(
   const home = getDesktopCodexHome();
   let rolloutPath: string | null = null;
   let rolloutWritten = false;
-  if (params.rolloutBuffer) {
+  if (params.rolloutBuffer || params.writeRollout) {
     const candidate = params.rolloutFilename && /^[\w.-]+\.jsonl$/.test(params.rolloutFilename)
       ? params.rolloutFilename
       : `rollout-imported-${params.threadId}.jsonl`;
@@ -1800,11 +1805,13 @@ export async function importSharedCodexThread(
       // wx 独占写:同名 rollout 已在盘上(典型是删除 Maker 会话后重导同一分享包)
       // 时不覆盖、直接复用——盘上副本可能包含删除前 resume 产生的更新内容。
       try {
-        if (params.migration) atomicWriteFileSync(rolloutPath, params.rolloutBuffer.toString('utf8'));
-        else await fsp.writeFile(rolloutPath, params.rolloutBuffer, { flag: 'wx' });
+        if (params.writeRollout) await params.writeRollout(rolloutPath);
+        else if (params.migration) atomicWriteFileSync(rolloutPath, params.rolloutBuffer!.toString('utf8'));
+        else await fsp.writeFile(rolloutPath, params.rolloutBuffer!, { flag: 'wx' });
         rolloutWritten = true;
       } catch (err) {
-        if (params.migration || (err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+        if (params.migration || params.writeRollout || (err as NodeJS.ErrnoException).code !== 'EEXIST')
+          throw err;
         log.info('import shared codex thread: rollout already on disk, reusing', {
           threadId: params.threadId,
         });

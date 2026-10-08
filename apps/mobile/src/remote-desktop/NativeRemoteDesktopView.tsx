@@ -6,6 +6,8 @@ import { remotePresentation } from "../../modules/cindy-remote-presentation/src"
 export interface NativeRemoteDesktopHandle {
   receive(message: Record<string, unknown>): Promise<void>;
   sendInput(message: Record<string, unknown>): Promise<boolean>;
+  /** Absent on receivers built before channel requests; the relay is used then. */
+  sendRequest?(message: Record<string, unknown>): Promise<boolean>;
 }
 type Props = ViewProps & {
   inlineVisible: boolean;

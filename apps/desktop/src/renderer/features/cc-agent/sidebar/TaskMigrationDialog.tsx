@@ -8,7 +8,7 @@ import {
   type TaskMigrationView,
 } from '@cindy/device-link';
 import type { Session } from '@/lib/ccAgent.types';
-import type { TaskMoveDestination } from './TaskMoveSubmenu';
+import { copyDefaultLabelKey, type TaskMoveDestination } from './TaskMoveSubmenu';
 import { Button } from '@/components/ui/button';
 import { Spinner } from '@/components/ui/spinner';
 import { Select } from '@/components/ui/select';
@@ -19,14 +19,29 @@ import {
   isDataOwnerGenerationCurrent,
 } from '@/contexts/dataOwnerGeneration';
 
+// Same action-button treatment as the shared confirm dialog: this dialog paints the
+// confirmation surface, where the default button palette has almost no contrast.
+const actionButton = {
+  size: 'lg',
+  palette: 'confirmation',
+  className:
+    'h-auto min-h-9 min-w-[96px] max-w-full whitespace-normal [overflow-wrap:anywhere] py-1.5',
+} as const;
+
 export function TaskMigrationDialog({
   session,
   onDismiss,
   destination,
+  initialStatus,
 }: {
   session: Session;
   onDismiss(): void;
   destination?: TaskMoveDestination;
+  /**
+   * The caller's latest status when reopening an existing copy (no `destination`). Without it the
+   * dialog would show the start form until its first poll returns.
+   */
+  initialStatus?: TaskMigrationView | null;
 }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
@@ -34,7 +49,9 @@ export function TaskMigrationDialog({
   const [target, setTarget] = useState(destination?.deviceId ?? '');
   const [projects, setProjects] = useState<string[]>([]);
   const [project, setProject] = useState(destination?.project ?? '');
-  const [status, setStatus] = useState<TaskMigrationView | null>(null);
+  const [status, setStatus] = useState<TaskMigrationView | null>(
+    destination ? null : (initialStatus ?? null),
+  );
   const [busy, setBusy] = useState(false);
   const [starting, setStarting] = useState(false);
   const [readyTarget, setReadyTarget] = useState('');
@@ -275,16 +292,25 @@ export function TaskMigrationDialog({
       ? t('taskMigration.estimateTimeout')
       : estimateError === 'MIGRATION_TOO_MANY_FILES'
         ? t('taskMigration.estimateTooManyFiles', { limit: TASK_MIGRATION_MAX_FILES })
-        : estimateError
+        : estimateError === 'MIGRATION_FAILED'
           ? t('taskMigration.estimateFailed')
-          : estimate
-            ? t('taskMigration.fileSummary', {
-                count: estimate.fileCount,
-                size: bytes(estimate.bytes),
+          : estimateError
+            ? // The source refused for a stated reason (e.g. queued input); never blame the connection.
+              t(`taskMigration.errors.${estimateError}`, {
+                defaultValue: t('taskMigration.estimateFailedWithCode', { code: estimateError }),
               })
-            : t('taskMigration.estimating');
+            : estimate
+              ? t('taskMigration.fileSummary', {
+                  count: estimate.fileCount,
+                  size: bytes(estimate.bytes),
+                })
+              : t('taskMigration.estimating');
   const errorKey =
-    failure && t(`taskMigration.errors.${failure}`, { defaultValue: t('taskMigration.failed') });
+    failure &&
+    t(`taskMigration.errors.${failure}`, {
+      // The code is the only lead once the dialog closes; keep it visible for unmapped errors.
+      defaultValue: t('taskMigration.failed', { code: failure }),
+    });
   return (
     <Dialog.Root
       open
@@ -294,11 +320,11 @@ export function TaskMigrationDialog({
     >
       <Dialog.Portal>
         <Dialog.Overlay
-          className="fixed inset-0 z-[10000] bg-[var(--overlay-modal)]"
+          className="modal-scrim fixed inset-0 z-[10000]"
           onClick={(e) => e.stopPropagation()}
         />
         <Dialog.Content
-          className="fixed left-1/2 top-1/2 z-[10000] w-[calc(100%-32px)] max-w-[480px] -translate-x-1/2 -translate-y-1/2 rounded-xl bg-[var(--confirm-bg)] p-4 shadow-[var(--confirm-shadow)] [-webkit-app-region:no-drag]"
+          className="modal-panel fixed left-1/2 top-1/2 z-[10000] w-[calc(100%-32px)] max-w-[480px] -translate-x-1/2 -translate-y-1/2 p-4 [-webkit-app-region:no-drag]"
           onClick={(e) => e.stopPropagation()}
           onPointerDown={(e) => e.stopPropagation()}
           onKeyDown={(e) => e.stopPropagation()}
@@ -326,6 +352,29 @@ export function TaskMigrationDialog({
                   ? t('taskMigration.failureDescription')
                   : t('taskMigration.description', { name: computerName })}
           </Dialog.Description>
+          {complete && status?.skipped && (
+            <div className="mt-3 text-sm text-[var(--confirm-desc)]">
+              <p>{t('taskMigration.skippedTitle', { count: status.skipped.total })}</p>
+              <ul className="mt-2 max-h-48 space-y-1 overflow-y-auto">
+                {status.skipped.entries.map((entry) => (
+                  <li key={entry.path} className="break-all">
+                    <span className="text-[var(--confirm-title)]">{entry.path}</span>
+                    {' · '}
+                    {t(`taskMigration.skippedReasons.${entry.code}`, {
+                      defaultValue: entry.code,
+                    })}
+                  </li>
+                ))}
+              </ul>
+              {status.skipped.total > status.skipped.entries.length && (
+                <p className="mt-1">
+                  {t('taskMigration.skippedMore', {
+                    count: status.skipped.total - status.skipped.entries.length,
+                  })}
+                </p>
+              )}
+            </div>
+          )}
           {confirming && (
             <p className="mt-2 text-sm text-[var(--confirm-desc)]">
               {t('taskMigration.bindingsNotice')}
@@ -335,7 +384,7 @@ export function TaskMigrationDialog({
             <div className="mt-4 space-y-2 text-sm text-[var(--confirm-title)]">
               <p className="break-all">
                 {t('taskMigration.project')}:{' '}
-                {destination.project ?? t('taskMigration.defaultFolder')}
+                {destination.project ?? t(copyDefaultLabelKey(session))}
               </p>
               <p className="text-[var(--confirm-desc)]">{t('taskMigration.newFolder')}</p>
             </div>
@@ -372,7 +421,7 @@ export function TaskMigrationDialog({
                     value={project || '__default__'}
                     disabled={busy || !target || readyTarget !== target}
                     options={[
-                      { value: '__default__', label: t('taskMigration.defaultFolder') },
+                      { value: '__default__', label: t(copyDefaultLabelKey(session)) },
                       ...projects.map((p) => ({ value: p, label: p })),
                     ]}
                     onValueChange={(value) => setProject(value === '__default__' ? '' : value)}
@@ -439,32 +488,52 @@ export function TaskMigrationDialog({
           {failure && (
             <p className="mt-3 text-sm text-[var(--error-fg)]" role="alert">
               {errorKey}
+              {/* The path belongs to the source's recorded error, never to a local action error. */}
+              {failure === status?.error && status.errorPath && (
+                <span className="mt-1 block break-all">
+                  {t('taskMigration.errorPath', { path: status.errorPath })}
+                </span>
+              )}
+              {failure === status?.error && status.errorSize && (
+                <span className="mt-1 block">
+                  {t('taskMigration.errorSize', {
+                    needed: bytes(status.errorSize.needed),
+                    limit: bytes(status.errorSize.limit),
+                  })}
+                </span>
+              )}
             </p>
           )}
-          <div className="mt-4 flex flex-wrap justify-end gap-2">
+          <div className="mt-6 flex flex-wrap justify-end gap-2.5">
             {copying ? (
               <>
                 {status?.cancellable && (
-                  <Button variant="secondary" disabled={busy} onClick={cancelCopy}>
+                  <Button
+                    {...actionButton}
+                    variant="secondary"
+                    disabled={busy}
+                    onClick={cancelCopy}
+                  >
                     {t('taskMigration.cancelCopy')}
                   </Button>
                 )}
-                <Button variant="secondary" disabled={busy} onClick={dismiss}>
+                <Button {...actionButton} variant="secondary" disabled={busy} onClick={dismiss}>
                   {t('taskMigration.runInBackground')}
                 </Button>
               </>
             ) : (
-              <Button variant="secondary" disabled={busy} onClick={dismiss}>
+              <Button {...actionButton} variant="secondary" disabled={busy} onClick={dismiss}>
                 {t(confirming ? 'taskMigration.cancel' : 'taskMigration.close')}
               </Button>
             )}
             {complete && status?.targetSessionId && (
-              <Button disabled={busy} onClick={() => void openTarget()}>
+              <Button {...actionButton} disabled={busy} onClick={() => void openTarget()}>
                 {t('taskMigration.openTarget')}
               </Button>
             )}
             {confirming && (
               <Button
+                {...actionButton}
                 disabled={!status || !estimate || busy || readyTarget !== target || !target}
                 onClick={() =>
                   void act({

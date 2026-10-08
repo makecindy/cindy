@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { PluginTaskRoute, PluginTaskRun, PluginTaskView, PluginTeamPlan } from '../../shared/pluginTasks.js';
+import { isPluginTeamPlanWithinBudget, PLUGIN_TASK_RECEIPT_MAX_JSON_CHARS } from '../../shared/pluginTasks.js';
 import {
   isSameSessionExecution,
   queuedInputBelongsTo,
@@ -58,13 +59,22 @@ export class PluginTaskError extends Error {
     this.name = 'PluginTaskError';
   }
 }
+/** Bounds legacy receipts before parsing; oversized authority never becomes a missing plan. */
+export function readPluginTaskPlanReceipt(payload: string): { teamPlan?: PluginTeamPlan; settledLabels?: string[]; route?: PluginTaskRoute; [key: string]: unknown } {
+  if (typeof payload !== 'string' || payload.length > PLUGIN_TASK_RECEIPT_MAX_JSON_CHARS)
+    throw new PluginTaskError('INVALID_REQUEST', 'Task receipt exceeds the supported size');
+  const data = JSON.parse(payload);
+  if (data.teamPlan !== undefined && !isPluginTeamPlanWithinBudget(data.teamPlan))
+    throw new PluginTaskError('INVALID_REQUEST', 'Team plan exceeds the supported size');
+  return data;
+}
 /** Service failures must reject the public task API, without exposing internal diagnostics. */
 export function assertPluginTaskResult(result: { ok: boolean; errorCode?: string }, message: string): void {
   if (!result.ok) throw new PluginTaskError(result.errorCode || 'HOST_NOT_READY', message);
 }
 /** A live task cannot exercise more authority than the plugin's current setting. */
 export function isPluginTaskPermissionAllowed(taskMode: unknown, configuredMode: unknown, planModeEnabled = false): boolean {
-  const rank = (mode: unknown) => mode === 'plan' ? 0 : mode === 'acceptEdits' ? 1 : mode === 'auto' ? 2 : -1;
+  const rank = (mode: unknown) => mode === 'plan' ? 0 : mode === 'ask' ? 1 : mode === 'acceptEdits' ? 2 : mode === 'auto' ? 3 : -1;
   const task = rank(taskMode);
   return !planModeEnabled && task >= 0 && task <= Math.max(0, rank(configuredMode));
 }
@@ -87,7 +97,7 @@ export interface PluginTaskServiceDeps {
   assertCurrent(): void;
   assertAuthorized(pluginId: string): void;
   readPermissionMode(pluginId: string): unknown;
-  resolveRoute(pluginId: string, route?: PluginTaskRoute): Promise<PluginTaskRoute>;
+  resolveRoute(pluginId: string, route?: PluginTaskRoute, callId?: string): Promise<PluginTaskRoute>;
   createSession(
     pluginId: string,
     taskId: string,
@@ -96,7 +106,9 @@ export interface PluginTaskServiceDeps {
     isolatedWorkspace: boolean | undefined,
     requestedRoute: PluginTaskRoute | undefined,
     onPersistenceStarted: () => void,
+    callId?: string,
   ): Promise<void>;
+  setModel?(taskId: string, route: PluginTaskRoute, assertCurrent: () => Promise<void>): Promise<{ status: string }>;
   readSession(taskId: string): Promise<PluginTaskView | null>;
   assertTeamPlanUnstarted?(taskId: string): Promise<void>;
   dispatch(
@@ -237,11 +249,11 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
     },
     create: (
       pluginId: string,
-      request: { requestKey: string; title: string; route?: PluginTaskRoute; isolatedWorkspace?: boolean },
+      request: { requestKey: string; title: string; route?: PluginTaskRoute; isolatedWorkspace?: boolean; callId?: string },
     ) =>
       exclusive(async () => {
         deps.assertAuthorized(pluginId);
-        const input = [request.title, request.route ?? null, ...(request.isolatedWorkspace ? [true] : [])];
+        const input = [request.title, request.route ?? null, ...(request.isolatedWorkspace ? [true] : []), ...(request.callId ? [{ callId: request.callId }] : [])];
         const fingerprint = hash(input);
         let row = replay(
           await deps.store.find(pluginId, 'create', '', request.requestKey),
@@ -253,7 +265,7 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
           // Do not recreate a deleted/ambiguous task on replay.
           return ownTask(pluginId, row.id);
         }
-        const route = await deps.resolveRoute(pluginId, request.route);
+        const route = await deps.resolveRoute(pluginId, request.route, request.callId);
         deps.assertCurrent();
         const taskId = id();
         row = newReceipt(
@@ -270,7 +282,7 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
         try {
           deps.assertCurrent();
           await deps.createSession(pluginId, taskId, request.title, route, request.isolatedWorkspace, request.route,
-            () => { persistenceStarted = true; });
+            () => { persistenceStarted = true; }, request.callId);
         } catch (error) {
           // Once INSERT starts, even an error is ambiguous. Never free that key
           // or infer failure from a subsequently deleted/filtered Session.
@@ -280,10 +292,13 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
         return ownTask(pluginId, taskId);
       }),
     setTeamPlan: (pluginId: string, taskId: string, plan: PluginTeamPlan) => exclusive(async () => {
+      if (!isPluginTeamPlanWithinBudget(plan)) return fail('INVALID_REQUEST', 'Team plan exceeds the supported size');
       await ownTask(pluginId,taskId);
       const row = (await deps.store.get(taskId))!;
-      const data = JSON.parse(row.payload);
-      if (data.teamPlan && hash(data.teamPlan) !== hash(plan)) return fail('IDEMPOTENCY_CONFLICT', 'Team plan is immutable');
+      const data = readPluginTaskPlanReceipt(row.payload);
+      if (data.teamPlan && hash(data.teamPlan) !== hash(plan)) {
+        return fail('IDEMPOTENCY_CONFLICT', 'Team plan is immutable');
+      }
       if (data.teamPlan) return {ok:true};
       if ((await deps.store.forSession(taskId)).length) return fail('TASK_BUSY', 'Register the team plan before sending input');
       const observed = await deps.inspect(taskId);
@@ -296,11 +311,24 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
     settleWorkerLabel: (pluginId: string, taskId: string, label: string) => exclusive(async () => {
       await ownTask(pluginId,taskId);
       const row = (await deps.store.get(taskId))!;
-      const data = JSON.parse(row.payload);
+      const data = readPluginTaskPlanReceipt(row.payload);
       if (!data.teamPlan?.items.some((x: {label:string})=>x.label===label)) return fail('INVALID_REQUEST','Worker is not in team plan');
       await save(row,{...data,settledLabels:[...new Set([...(data.settledLabels||[]),label])]});
     }),
     assertDispatch,
+    setModel: (pluginId: string, request: { taskId: string; expectedRevision: number; route: PluginTaskRoute }) => exclusive(async () => {
+      const assertUnchanged = async () => {
+        const task = await ownTask(pluginId, request.taskId);
+        if (task.status !== 'active') return fail('TASK_BUSY', '任务已归档，请先恢复任务');
+        if (task.revision !== request.expectedRevision) return fail('STALE_REVISION', '任务配置已变化，请刷新后重试');
+      };
+      await assertUnchanged();
+      const route = await deps.resolveRoute(pluginId, request.route);
+      await assertUnchanged();
+      if (!deps.setModel) return fail('HOST_NOT_READY', '任务模型服务尚未就绪');
+      const result = await deps.setModel(request.taskId, route, assertUnchanged);
+      return { ...result, task: await ownTask(pluginId, request.taskId) };
+    }),
     get: (pluginId: string, taskId: string) => exclusive(() => ownTask(pluginId, taskId)),
     list: (pluginId: string, after = '', limit = 50) =>
       exclusive(async () => {
@@ -308,7 +336,8 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
         const rows = await deps.store.list(pluginId, 'create', null, after, limit);
         const items = [];
         for (const row of rows) {
-          if (!ownsTaskReceipt(row, pluginId)) continue;
+          // The store projects valid create payloads as empty to avoid loading plans.
+          if (row.payload !== '' && !ownsTaskReceipt(row, pluginId)) continue;
           const view = await deps.readSession(row.id);
           if (view && view.status !== 'deleted') items.push(view);
         }

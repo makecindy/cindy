@@ -1,6 +1,6 @@
 {
   "schemaVersion": 5,
-  "updatedAt": "2026-09-29T19:00:00.002Z",
+  "updatedAt": "2026-10-03T12:00:00.000Z",
   "models": [
     {
       "id": "openai/gpt-6.1-sol",
@@ -5465,7 +5465,7 @@
     },
     {
       "id": "z-ai/glm-5.3",
-      "aliases": [],
+      "aliases": ["glm-5.3"],
       "defaults": {
         "name": "GLM-5.3",
         "description": "Zhipu GLM-5.3 agentic coding model; 1M context",

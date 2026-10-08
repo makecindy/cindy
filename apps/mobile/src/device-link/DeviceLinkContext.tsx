@@ -54,6 +54,10 @@ import {
   type DeviceProvidersPayload,
 } from '@/device-link/deviceProvidersCache';
 import {
+  clearAllProviderShareCatalogs,
+  evictProviderShareCatalogs,
+} from '@/device-link/providerShareCatalogCache';
+import {
   evictAgentCapabilitiesForDevice,
   resetAgentCapabilitiesCache,
 } from '@/session/agentCapabilitiesCache';
@@ -128,6 +132,7 @@ import {
   createDeviceSendCohort,
   DEVICE_RESPONSIVENESS_PROBE_CHANNEL,
   isDeviceProbeDue,
+  noteAppLifecycleState,
   resetDeviceResponsivenessTracking,
   settleDeviceSend,
   unresponsiveDevicesStore,
@@ -481,6 +486,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     revokedDevicesStore.clearAll();
     resetDeviceResponsivenessTracking();
     clearAllDeviceProviders();
+    clearAllProviderShareCatalogs();
     clearAllDeviceModelMeta();
     resetAgentCapabilitiesCache();
     resetComposerPaletteCache();
@@ -1324,7 +1330,10 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       suspendMs: BACKGROUND_SUSPEND_SUSPECT_MS,
       report: (event) => mobileDebugLog('debug', 'device-link', 'background lifecycle', event),
     });
+    noteAppLifecycleState(AppState.currentState);
     const sub = AppState.addEventListener('change', (next) => {
+      // 先于下面的恢复动作记账:回前台后 rehydrate 新发的请求属于新生命周期。
+      noteAppLifecycleState(next);
       if (next === 'active') {
         diagnostics.foreground();
         const resumingFromBackground = backgroundReleaseInFlightRef.current;
@@ -2165,6 +2174,7 @@ function markOfflineDeviceMirrors(deviceIds: readonly string[]): void {
   for (const deviceId of deviceIds) {
     invalidateScheduleIndexForDevice(deviceId);
     evictDeviceProviders(deviceId);
+    evictProviderShareCatalogs(deviceId);
     evictDeviceModelMeta(deviceId);
     evictAgentCapabilitiesForDevice(deviceId);
     evictComposerPaletteCacheForDevice(deviceId);
@@ -2182,6 +2192,7 @@ function wipeUnavailableDeviceMirror(deviceId: string): void {
   // Drop the cached provider catalog so a returning/re-granted device re-fetches it
   // instead of serving a list frozen from a previous connection.
   evictDeviceProviders(deviceId);
+  evictProviderShareCatalogs(deviceId);
   evictDeviceModelMeta(deviceId);
   // 能力表与供应商目录同时机驱逐:桌面端重连 / 升级 / 重新授权后必须重取,
   // 否则模型 / 权限 / plan 支持度会先按旧能力渲染并接受点击。

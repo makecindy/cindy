@@ -47,6 +47,7 @@ import { useClaudeAccountUsageResult } from '@/hooks/useClaudeAccountUsage';
 import { useXdAssetPrimaryAction } from '@/hooks/useXdAssetPrimaryAction';
 import { useReducedMotion } from '@/hooks/useReducedMotion';
 import { Button } from '@/components/ui/button';
+import { Switch } from '@/components/ui/switch';
 import { Tip } from '@/components/ui/tooltip';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { useSignInToCindy } from '@/hooks/useSignInToCindy';
@@ -103,6 +104,15 @@ import { OpenAIMark } from '@/components/icons/OpenAIMark';
 import { XDIncMark } from '@/components/icons/XDIncMark';
 import { hasProviderLogo, ProviderLogoMark } from '@/components/icons/ProviderLogoMark';
 import { SortableList } from '@/components/sidebar/SortableList';
+import { ProviderShareEntryButton } from '@/features/provider-share/ProviderShareEntryButton';
+import { ProviderShareManagePage } from '@/features/provider-share/ProviderShareManagePage';
+import { ProviderShareReceivedSection } from '@/features/provider-share/ProviderShareReceivedSection';
+import {
+  pendingRequestCountByProvider,
+  providerShareGate,
+} from '@/features/provider-share/providerShareFormat';
+import { PROVIDER_SHARE_MANAGE_PARAM } from '@/features/provider-share/providerShareNavigation';
+import { useProviderSharePendingRequests } from '@/features/provider-share/providerShareStore';
 
 import { localCliDisplayName, type LocalCliDetection } from '../../../shared/localCliDetect';
 import { isBuiltinRefreshableProviderId } from '../../../shared/providerModelRefresh';
@@ -136,6 +146,128 @@ function writeProviderDisabled(providerId: string, disabled: boolean, errorText:
   void window.electronAPI.maker
     .setModelDisable({ kind: 'provider', providerId, disabled })
     .catch(() => toast.error(errorText));
+}
+
+/**
+ * 「允许被远程调用」(供应商级远程 Agent 授权)。默认关闭。能力逐级开启(产品规则
+ * docs/product-rules/provider-sharing.md §3)：允许远程控制 → 允许被远程调用 → 分享。
+ * 前两级任一未开启时整行仍显示，但开关或分享入口不可点击，并说明先开启哪一级。
+ * 成功后 main 广播 PROVIDER_CHANGED 刷新快照。
+ */
+function RemoteProviderAccessRow({
+  provider,
+  remoteControlEnabled,
+  pendingShareRequests,
+  onManageShare,
+}: {
+  provider: ProviderView;
+  remoteControlEnabled: boolean;
+  pendingShareRequests: number;
+  onManageShare: () => void;
+}) {
+  const { t } = useTranslation();
+  const navigate = useNavigate();
+  const [enabled, setEnabled] = useState(provider.remoteInvocationEnabled === true);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    setEnabled(provider.remoteInvocationEnabled === true);
+  }, [provider.remoteInvocationEnabled]);
+  const gate = providerShareGate({ remoteControlEnabled, invocationEnabled: enabled });
+  return (
+    <div
+      data-testid="provider-remote-access"
+      data-share-gate={gate}
+      className="flex shrink-0 items-start justify-between gap-3 border-t px-5 py-3"
+      style={{ borderColor: 'var(--settings-theme-card-border)' }}
+    >
+      <div className="flex min-w-0 flex-col gap-1">
+        <span className="text-13 font-medium text-[var(--text-primary)]">
+          {t('settings.providers.detail.remoteAccess.label')}
+        </span>
+        <span className="text-12 leading-[1.4] text-[var(--text-tertiary)]">
+          {gate === 'remote-off' ? (
+            <>
+              {t('providerShare.entry.remoteControlOff')}{' '}
+              <button
+                type="button"
+                onClick={() => navigate('/settings?tab=remote-control')}
+                className="text-[var(--text-secondary)] underline underline-offset-2 transition-colors hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+              >
+                {t('providerShare.entry.openRemoteControl')}
+              </button>
+            </>
+          ) : gate === 'invocation-off' ? (
+            t('providerShare.entry.descriptionOff')
+          ) : (
+            t('settings.providers.detail.remoteAccess.description')
+          )}
+        </span>
+      </div>
+      <div className="flex shrink-0 items-center gap-2">
+        <ProviderShareEntryButton gate={gate} pendingCount={pendingShareRequests} onOpen={onManageShare} />
+        <Switch
+          checked={enabled}
+          disabled={busy || !remoteControlEnabled}
+          aria-label={t('settings.providers.detail.remoteAccess.ariaLabel')}
+          onCheckedChange={(next) => {
+            const previous = enabled;
+            setEnabled(next);
+            setBusy(true);
+            void window.electronAPI.maker
+              .setProviderRemoteAccess({ providerId: provider.id, enabled: next })
+              .catch(() => {
+                setEnabled(previous);
+                toast.error(t('settings.providers.detail.remoteAccess.writeFailed'));
+              })
+              .finally(() => setBusy(false));
+          }}
+        />
+      </div>
+    </div>
+  );
+}
+
+/**
+ * 本机是否允许同账号设备远程控制(「允许被远程调用」与分享的第一级)。设备互联没有单独的
+ * 开关变更事件：relay 状态、持有权变化以及窗口回到前台时重读一次，保持与「远程连接」页一致。
+ */
+function useRemoteControlEnabled(): boolean | null {
+  // null = 还没读到：整行先不出现，避免「未开远程控制」的说明闪一下。
+  const [enabled, setEnabled] = useState<boolean | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    let seq = 0;
+    const read = () => {
+      const current = ++seq;
+      // 读不到(设备互联未就绪等)按未开启处理：开关不可用，不影响供应商页其余部分。
+      void Promise.resolve()
+        .then(() => window.electronAPI.deviceLink.getState())
+        .then((state) => {
+          if (!cancelled && current === seq) setEnabled(state.remoteControlEnabled);
+        })
+        .catch(() => {
+          if (!cancelled && current === seq) setEnabled(false);
+        });
+    };
+    read();
+    // 设备互联预加载不可用(旧窗口 / 测试)时只读一次，不订阅。
+    const deviceLink = (window as Partial<Window>).electronAPI?.deviceLink;
+    const offStatus = deviceLink?.onStatusChanged?.(() => read());
+    const offOwnership = deviceLink?.onOwnershipChanged?.(() => read());
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') read();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    window.addEventListener('focus', read);
+    return () => {
+      cancelled = true;
+      offStatus?.();
+      offOwnership?.();
+      document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('focus', read);
+    };
+  }, []);
+  return enabled;
 }
 
 /** 供应商行图标(内置品牌 mark / 首字母 monogram)。 */
@@ -2260,6 +2392,14 @@ export function ProvidersSection() {
   // OpenAI 的 reconnect-required 是 useCodexAuth 独有状态(目录 connected 此时为 false):
   // 该状态下 OpenAI 行必须留在左栏,否则「重新连接」入口不可达,用户被迫从向导重发现。
   const codexAuth = useCodexAuth();
+  const remoteControlEnabled = useRemoteControlEnabled();
+  // 供应商分享：入口提示点读待审批申请；管理页是本页的子页面(返回回到供应商详情)。
+  const pendingShareRequests = useProviderSharePendingRequests();
+  const pendingShareCounts = useMemo(
+    () => pendingRequestCountByProvider(pendingShareRequests.map((item) => item.share)),
+    [pendingShareRequests],
+  );
+  const [shareManageProviderId, setShareManageProviderId] = useState<string | null>(null);
   const openaiReconnectRequired = codexAuth.state.kind === 'reconnect-required';
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -2548,6 +2688,15 @@ export function ProvidersSection() {
    *   - wizard=1 → 打开向导目录第一步。
    */
   const [searchParams, setSearchParams] = useSearchParams();
+  // 分享管理页深链(?shareProvider=<id>，来自审批通知)：一次性消费并从 URL 摘除。
+  useEffect(() => {
+    const target = searchParams.get(PROVIDER_SHARE_MANAGE_PARAM);
+    if (!target) return;
+    setShareManageProviderId(target);
+    const next = new URLSearchParams(searchParams);
+    next.delete(PROVIDER_SHARE_MANAGE_PARAM);
+    setSearchParams(next, { replace: true });
+  }, [searchParams, setSearchParams]);
   useEffect(() => {
     if (loading) return;
     const connect = searchParams.get('connect');
@@ -2560,6 +2709,8 @@ export function ProvidersSection() {
         : undefined;
     const importId = searchParams.get('import');
     if (!connect && !wizardFlag && !importId) return;
+    // 这些深链要显示供应商主页或弹窗：先离开分享管理页，不能被它挡住。
+    setShareManageProviderId(null);
     // 不用一次性 ref:消费后立即删参(下方 replace)即防重放;组件常驻期间
     // 再次带参导航(如二次深链)仍应生效(review 反馈)。
     if (importId) {
@@ -2819,8 +2970,30 @@ export function ProvidersSection() {
     );
   };
 
+  // 「分享 {供应商}」管理页：设置内的子页面，返回回到该供应商的详情。只替换主体内容，
+  // 下方的添加 / 编辑 / 导入弹窗层保持挂载，不会因打开管理页而丢失正在填写的内容。
+  const shareManageProvider = shareManageProviderId ? byId.get(shareManageProviderId) ?? null : null;
+  const shareManagePage = shareManageProviderId ? (
+    <ProviderShareManagePage
+      key={shareManageProviderId}
+      providerId={shareManageProviderId}
+      providerName={shareManageProvider?.name ?? shareManageProviderId}
+      providerIcon={shareManageProvider ? providerIcon(shareManageProvider, 18) : null}
+      // 供应商还没加载出来时不判「未开放」；生成链接时 main 会再校验。
+      gate={providerShareGate({
+        remoteControlEnabled,
+        invocationEnabled: !shareManageProvider || shareManageProvider.remoteInvocationEnabled === true,
+      })}
+      onBack={() => {
+        setSelectedId(shareManageProviderId);
+        setShareManageProviderId(null);
+      }}
+    />
+  ) : null;
+
   return (
     <div className="flex h-full min-h-0 flex-col gap-[14px]">
+      {shareManagePage ?? (<>
       <div className="flex shrink-0 flex-col gap-1">
         <h2
           className="text-16 font-medium leading-[1.2]"
@@ -3044,6 +3217,21 @@ export function ProvidersSection() {
                         />
                       </div>
                     )}
+                  {/* 允许被远程调用 + 管理分享：供应商已连接且能跑 Agent 时出现。本机未允许
+                      远程控制时整行仍显示，但开关与分享入口不可用(provider-sharing.md §3)。 */}
+                  {remoteControlEnabled !== null &&
+                    !effectiveSelected.suspended &&
+                    effectiveSelected.connected &&
+                    effectiveSelected.agents.length > 0 &&
+                    effectiveSelected.remoteInvocationEnabled !== undefined && (
+                      <RemoteProviderAccessRow
+                        key={effectiveSelected.id}
+                        provider={effectiveSelected}
+                        remoteControlEnabled={remoteControlEnabled}
+                        pendingShareRequests={pendingShareCounts.get(effectiveSelected.id) ?? 0}
+                        onManageShare={() => setShareManageProviderId(effectiveSelected.id)}
+                      />
+                    )}
                   {!effectiveSelected.suspended &&
                     (providerHasModels(effectiveSelected) ||
                       isCustomRoutedProvider(effectiveSelected) ||
@@ -3158,6 +3346,11 @@ export function ProvidersSection() {
           </div>
         </div>
       )}
+
+      {/* 分享给我的供应商(受邀者)：常驻在本页底部，含「粘贴分享链接」入口——分享链接的加入
+          网页在唤起 Cindy 失败时会指引用户到这里粘贴。 */}
+      {!loading && <ProviderShareReceivedSection />}
+      </>)}
 
       {wizard && (
         <AddProviderWizard

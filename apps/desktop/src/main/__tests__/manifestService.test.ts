@@ -107,6 +107,20 @@ describe('manifestService cache channel identity', () => {
     expect(String(netRequest.mock.calls[0]?.[0])).not.toContain('-beta.json');
   });
 
+  it('aborts an unread non-200 response before removing cancellation ownership', async () => {
+    const request = Object.assign(new EventEmitter(), { end: vi.fn(), abort: vi.fn() });
+    const response = Object.assign(new EventEmitter(), { statusCode: 404 });
+    netRequest.mockReturnValueOnce(request);
+    const controller = new AbortController();
+    const service = await import('../manifestService');
+    const pending = service.fetchManifest(1_000, controller.signal);
+    request.emit('response', response);
+    await expect(pending).resolves.toBeNull();
+    expect(request.abort).toHaveBeenCalledTimes(1);
+    controller.abort();
+    expect(request.abort).toHaveBeenCalledTimes(1);
+  });
+
   it('does not cache a fetch that finishes after the shared channel changes', async () => {
     mockManifestResponse(RELEASE_MANIFEST, () => {
       isBetaChannelEnabled.mockReturnValue(true);

@@ -163,8 +163,10 @@
     "dispatchBodyFallback": "建立 Worker",
     "sendTitle": "發訊息給 Worker",
     "sendBodyFallback": "傳送訊息",
-    "reportTitle": "Worker 回報",
-    "reportBodyFallback": "（空回報）"
+    "fromLead": "來自 Lead 的訊息",
+    "fromWorkerNamed": "來自 Worker「{{role}}」的訊息",
+    "fromWorker": "來自 Worker 的訊息",
+    "emptyMessageBody": "（空訊息）"
   },
   "contextSheet": {
     "backAccessibility": "返回上下文面板",

@@ -20,6 +20,23 @@ export interface ImMessageSource {
   contextSnapshot?: ImContextSnapshot;
 }
 
+const IM_CHANNEL_DISPLAY_NAMES: Record<string, string> = {
+  feishu: '飞书',
+  lark: 'Lark',
+  telegram: 'Telegram',
+  wechat: '微信',
+  wecom: '企业微信',
+  dingtalk: '钉钉',
+  discord: 'Discord',
+  slack: 'Slack',
+  x: 'X',
+};
+
+/** 发给模型的来源说明里使用的渠道名（`ImMessageSource.im` 的值域）；未知渠道返回 null。 */
+export function imChannelDisplayName(im: unknown): string | null {
+  return typeof im === 'string' ? IM_CHANNEL_DISPLAY_NAMES[im] ?? null : null;
+}
+
 export function createLocalImSource(
   im: string,
   userText: string,

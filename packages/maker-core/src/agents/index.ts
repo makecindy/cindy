@@ -113,6 +113,7 @@ export {
   appendAutoReviewUserIntent,
   normalizeAutoReviewUserIntent,
   type AutoReviewUserIntent,
+  type AutoReviewUserReferences,
   getAutoReviewActionTextLength,
   getAutoReviewDelegateHardCeilingMs,
   isAutoReviewConfirmUndeliveredNotice,
@@ -128,6 +129,13 @@ export {
 export { toolAutoReviewAction } from './shared/auto-review-decision.js';
 export { AUTO_REVIEW_CONTINUATION_POLICY } from './shared/continuation-policy.js';
 export type { ReviewableAction } from './shared/auto-review.js';
+export { classifyShellCommand } from './shared/auto-review.js';
+export type {
+  ToolLoopReviewDecision,
+  ToolLoopReviewer,
+  ToolLoopReviewRequest,
+} from './shared/tool-loop-review.js';
+export type { ToolLoopEvidence } from './shared/loop-guard.js';
 export {
   ORCA_NESTED_REPORT_DENIAL_REASON,
   ORCA_NESTED_REPORT_ERROR_CODE,

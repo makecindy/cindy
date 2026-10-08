@@ -13,7 +13,7 @@ import {
   type HookMessage,
   type TelegramEmojiReactions,
 } from '@cindy/slack-hook-protocol';
-import { EXPRESSIVE_DONE_POOL, EXPRESSIVE_ERROR_POOL } from '@cindy/im';
+import { PROCESSING_REACTION_POOL, EXPRESSIVE_ERROR_POOL } from '@cindy/im';
 
 import { createAckReactions, type AckReactionTask } from '../ackReactions';
 
@@ -67,7 +67,7 @@ function opOf(message: HookMessage): {
 }
 
 describe('官方 bot ack 表情', () => {
-  it('受理时打 👀, 收口时换 👍 —— 与个人 bot 的 minimal 档同语义', () => {
+  it('受理时打 👀, 收口时撤销 —— 与个人 bot 的 minimal 档同语义', () => {
     const h = harness();
     h.reactions.onAccepted(TASK, h.send);
     h.reactions.onFinished(TASK, 'ok', h.send);
@@ -77,17 +77,27 @@ describe('官方 bot ack 表情', () => {
       targetMessageId: '55',
       emoji: '👀',
     });
-    expect(opOf(h.sent[1]).action).toMatchObject({ emoji: '👍' });
+    expect(opOf(h.sent[1]).action).toMatchObject({ emoji: '' });
   });
 
-  it('失败收口换 👎; 用户主动取消不算失败, 仍是 👍', () => {
+  it('失败收口换 👎; 用户主动取消不算失败, 撤销表情', () => {
     const err = harness();
     err.reactions.onFinished(TASK, 'error', err.send);
     expect(opOf(err.sent[0]).action).toMatchObject({ emoji: '👎' });
 
     const cancelled = harness();
     cancelled.reactions.onFinished(TASK, 'cancelled', cancelled.send);
-    expect(opOf(cancelled.sent[0]).action).toMatchObject({ emoji: '👍' });
+    expect(opOf(cancelled.sent[0]).action).toMatchObject({ emoji: '' });
+  });
+
+  it.each(PROCESSING_REACTION_POOL)('processing uses %s and completion clears it', (emoji) => {
+    const index = PROCESSING_REACTION_POOL.indexOf(emoji);
+    const h = harness([HOOK_FEATURE_MESSAGE_OPS], 'minimal', () => index / 4);
+    h.reactions.onAccepted(TASK, h.send);
+    h.reactions.onStarted(TASK, h.send);
+    h.reactions.onFinished(TASK, 'ok', h.send);
+    expect(h.sent.map((m) => opOf(m).action.emoji)).toEqual(['👀', emoji, '']);
+    expect(opOf(h.sent[1]).opId).toBe('req-1:processing');
   });
 
   it('幂等键由 requestId 派生 —— 断连重发不会重复打表情', () => {
@@ -128,7 +138,7 @@ describe('官方 bot ack 表情', () => {
       expect(h.send).not.toHaveBeenCalled();
     });
 
-    it('minimal: 固定 👀 → 👍 / 👎', () => {
+    it('minimal: 排队 👀，失败 👎', () => {
       const h = harness([HOOK_FEATURE_MESSAGE_OPS], 'minimal');
       h.reactions.onAccepted(TASK, h.send);
       h.reactions.onFinished(TASK, 'error', h.send);
@@ -136,14 +146,14 @@ describe('官方 bot ack 表情', () => {
       expect(opOf(h.sent[1]).action.emoji).toBe('👎');
     });
 
-    it('expressive: 终态取变体池, ack 仍是 👀 且正负池不串', () => {
+    it('expressive: 成功撤销，失败取错误变体池', () => {
       // 生动档也不拿开场表情做文章 —— 与个人 bot 一致。正负分开是底线:
       // 成功不能随机出 👎 一类。
       const ok = harness([HOOK_FEATURE_MESSAGE_OPS], 'expressive', () => 0.5);
       ok.reactions.onAccepted(TASK, ok.send);
       ok.reactions.onFinished(TASK, 'ok', ok.send);
       expect(opOf(ok.sent[0]).action.emoji).toBe('👀');
-      expect(EXPRESSIVE_DONE_POOL).toContain(opOf(ok.sent[1]).action.emoji);
+      expect(opOf(ok.sent[1]).action.emoji).toBe('');
 
       const failed = harness([HOOK_FEATURE_MESSAGE_OPS], 'expressive', () => 0.5);
       failed.reactions.onFinished(TASK, 'error', failed.send);
@@ -160,11 +170,51 @@ describe('官方 bot ack 表情', () => {
         sent.push(m);
         return true;
       });
-      expect(opOf(sent[0]).action.emoji).toBe('👍');
+      expect(opOf(sent[0]).action.emoji).toBe('');
     });
   });
 
   describe('断线与受限表情', () => {
+    it.each(['minimal', 'expressive'] as const)('%s processing falls back once and never replays on reconnect', mode => {
+      const h = harness([HOOK_FEATURE_MESSAGE_OPS], mode, () => 0.5);
+      h.reactions.onAccepted(TASK, h.send);
+      h.reactions.onStarted(TASK, h.send);
+      h.reactions.onResult({ opId: 'req-1:processing', ok: false, error: 'REACTION_INVALID' }, () => h.send);
+      expect(h.sent.map(m => opOf(m).action.emoji)).toEqual(['👀', '🤓', '👨‍💻']);
+      expect(opOf(h.sent[2]).opId).toBe('req-1:processing-fallback');
+      h.reactions.onResult({ opId: 'req-1:processing', ok: false, error: 'REACTION_INVALID' }, () => h.send);
+      h.reactions.onResult({ opId: 'req-1:processing-fallback', ok: false, error: 'REACTION_INVALID' }, () => h.send);
+      h.reactions.onReconnected(CONN, h.send);
+      expect(h.sent).toHaveLength(3);
+      h.reactions.onFinished(TASK, 'ok', h.send);
+      expect(opOf(h.sent[3]).action.emoji).toBe('');
+    });
+
+    it.each(['ok', 'cancelled', 'error', 'teardown', 'reset', 'success', 'off'] as const)(
+      'does not apply a late processing fallback after %s', reason => {
+        const h = harness([HOOK_FEATURE_MESSAGE_OPS], 'minimal', () => 0.5);
+        h.reactions.onStarted(TASK, h.send);
+        if (reason === 'teardown') h.reactions.onAccountTeardown(() => h.send);
+        else if (reason === 'reset') h.reactions.reset();
+        else if (reason === 'success') h.reactions.onResult({ opId: 'req-1:processing', ok: true });
+        else if (reason === 'off') h.setMode('off');
+        else h.reactions.onFinished(TASK, reason, h.send);
+        const count = h.sent.length;
+        h.reactions.onResult({ opId: 'req-1:processing', ok: false, error: 'REACTION_INVALID' }, () => h.send);
+        expect(h.sent).toHaveLength(count);
+      },
+    );
+
+    it('does not retry a base processing emoji or an unsent variant', () => {
+      for (const random of [0, 0.5]) {
+        const h = harness([HOOK_FEATURE_MESSAGE_OPS], 'minimal', () => random);
+        h.reactions.onStarted(TASK, random === 0 ? h.send : () => false);
+        const count = h.sent.length;
+        h.reactions.onResult({ opId: 'req-1:processing', ok: false, error: 'REACTION_INVALID' }, () => h.send);
+        expect(h.sent).toHaveLength(count);
+      }
+    });
+
     it('终态送不出去 → 重连时补发, 不让消息永远挂着 👀', () => {
       const h = harness();
       const offline = vi.fn(() => false);
@@ -174,7 +224,7 @@ describe('官方 bot ack 表情', () => {
 
       h.reactions.onReconnected(CONN, h.send);
       expect(h.sent).toHaveLength(2);
-      expect(opOf(h.sent[1]).action.emoji).toBe('👍');
+      expect(opOf(h.sent[1]).action.emoji).toBe('');
       // 幂等键不变 —— 服务端据此去重, 补发不会打出第二个表情。
       expect(opOf(h.sent[1]).opId).toBe('req-1:final');
     });
@@ -223,18 +273,18 @@ describe('官方 bot ack 表情', () => {
       // 群可以限制 available_reactions, 随机出的那款可能不在名单里。沿用旧
       // opId 会被服务端当成重复直接返回上一次的失败, 所以必须换键。
       const h = harness([HOOK_FEATURE_MESSAGE_OPS], 'expressive', () => 0.5);
-      h.reactions.onFinished(TASK, 'ok', h.send);
+      h.reactions.onFinished(TASK, 'error', h.send);
       const firstOpId = opOf(h.sent[0]).opId;
       h.reactions.onResult({ opId: firstOpId, ok: false, error: 'REACTION_INVALID' }, () => h.send);
       expect(h.sent).toHaveLength(2);
-      expect(opOf(h.sent[1]).action.emoji).toBe('👍');
+      expect(opOf(h.sent[1]).action.emoji).toBe('👎');
       expect(opOf(h.sent[1]).opId).toBe('req-1:final-fallback');
       expect(opOf(h.sent[1]).opId).not.toBe(firstOpId);
     });
 
     it('基础款再被拒就认了 —— 不无限回落', () => {
       const h = harness([HOOK_FEATURE_MESSAGE_OPS], 'expressive', () => 0.5);
-      h.reactions.onFinished(TASK, 'ok', h.send);
+      h.reactions.onFinished(TASK, 'error', h.send);
       const firstOpId = opOf(h.sent[0]).opId;
       h.reactions.onResult({ opId: firstOpId, ok: false, error: 'x' }, () => h.send);
       h.reactions.onResult(
@@ -246,7 +296,7 @@ describe('官方 bot ack 表情', () => {
 
     it('成功回执后出回落表 —— 不让跑完的任务长期占着内存', () => {
       const h = harness([HOOK_FEATURE_MESSAGE_OPS], 'expressive', () => 0.5);
-      h.reactions.onFinished(TASK, 'ok', h.send);
+      h.reactions.onFinished(TASK, 'error', h.send);
       h.reactions.onResult({ opId: 'req-1:final', ok: true, messageId: '55' }, () => h.send);
       // 出表后再来一条同 opId 的失败回执, 不该再触发回落。
       h.reactions.onResult({ opId: 'req-1:final', ok: false, error: 'x' }, () => h.send);
@@ -356,7 +406,7 @@ describe('官方 bot ack 表情', () => {
     h.reactions.onAccountTeardown(() => h.send);
     expect(h.sent).toHaveLength(3);
     expect(opOf(h.sent[2]).opId).toBe('req-1:final'); // 同 opId, 服务端幂等
-    expect(opOf(h.sent[2]).action.emoji).toBe('👍');
+    expect(opOf(h.sent[2]).action.emoji).toBe('');
     h.reactions.reset();
   });
 
@@ -365,7 +415,7 @@ describe('官方 bot ack 表情', () => {
     // 本地表, 那一项永远收不了口。
     const h = harness([HOOK_FEATURE_MESSAGE_OPS], 'expressive', () => 0);
     h.reactions.onAccepted(TASK, h.send);
-    h.reactions.onFinished(TASK, 'ok', h.send);
+    h.reactions.onFinished(TASK, 'error', h.send);
     // expressive 被群限制拒掉 → 回落基础款(此时回落发在待补发表里, 键是 :final-fallback)
     h.reactions.onResult(
       { opId: 'req-1:final', ok: false, messageId: null, error: 'REACTION_INVALID' },
@@ -390,7 +440,7 @@ describe('官方 bot ack 表情', () => {
     for (let i = 0; i < 501; i += 1) {
       const task = { ...TASK, requestId: `bulk-${i}` };
       h.reactions.onAccepted(task, h.send);
-      h.reactions.onFinished(task, 'ok', h.send);
+      h.reactions.onFinished(task, 'error', h.send);
     }
     // 第 0 条被淘汰出待收口表后, 它的回落记录也不能再触发回落发。
     const before = h.sent.length;
@@ -415,7 +465,7 @@ describe('官方 bot ack 表情', () => {
     h.serverFeatures.set(CONN, [HOOK_FEATURE_MESSAGE_OPS]); // 快照到了
     h.reactions.onReconnected(CONN, h.send);
     expect(h.sent).toHaveLength(2);
-    expect(opOf(h.sent[1]).action.emoji).toBe('👍');
+    expect(opOf(h.sent[1]).action.emoji).toBe('');
   });
 
   it('补发时又断了 → 留着下次重连再补, 不丢', () => {
@@ -427,7 +477,7 @@ describe('官方 bot ack 表情', () => {
     expect(h.sent).toHaveLength(1);
     h.reactions.onReconnected(CONN, h.send);
     expect(h.sent).toHaveLength(2);
-    expect(opOf(h.sent[1]).action.emoji).toBe('👍');
+    expect(opOf(h.sent[1]).action.emoji).toBe('');
     expect(opOf(h.sent[1]).opId).toBe('req-1:final');
   });
 

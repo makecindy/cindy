@@ -13,6 +13,7 @@ import {
   AGENT_ISLAND_PREVIEW_SOUND_CHANNEL,
   AGENT_ISLAND_SET_DISPLAY_TARGET_CHANNEL,
   AGENT_ISLAND_SET_MASCOT_SKIN_CHANNEL,
+  AGENT_ISLAND_SET_REMOTE_SESSIONS_CHANNEL,
   AGENT_ISLAND_SET_SOUND_SETTINGS_CHANNEL,
   AGENT_ISLAND_SET_VISIBLE_SESSION_CHANNEL,
   DEFAULT_AGENT_ISLAND_SOUND_SETTINGS,
@@ -523,6 +524,12 @@ describe('Agent Island expanded content height', () => {
 });
 
 describe('AgentIslandService native publishing', () => {
+  beforeEach(async () => {
+    // Load after the outer mock setup, outside the first behavior test's budget.
+    // Cold Vite transforms can otherwise consume its entire 5-second timeout.
+    await import('../service.js');
+  });
+
   it('keeps compact activity broadcasting alive in headless mode', async () => {
     const { AgentIslandService } = await import('../service.js');
     const service = new AgentIslandService({
@@ -559,7 +566,9 @@ describe('AgentIslandService native publishing', () => {
         compactDetail: 'check logs',
       }),
     );
-  });
+    // 首个动态 import('../service.js') 在高并行 worker 下可能超过 vitest 默认 5s，
+    // 显式放宽本用例的超时(用例本身是纯同步断言，不是真长跑)。
+  }, 20_000);
 
   it('exposes the canonical snapshot and emits per-session transition edges', async () => {
     const { AgentIslandService } = await import('../service.js');
@@ -908,6 +917,7 @@ describe('AgentIslandService native publishing', () => {
 
       service.setEnabled(false);
       service.handleUserPrompt({ sessionId: 's1', agentKind: 'codex' }, 'run tests');
+      service.handleAgentEvent({ sessionId: 's1', agentKind: 'codex' }, textEvent('Tests pass.', true));
       service.handleAgentEvent({ sessionId: 's1', agentKind: 'codex' }, doneEvent());
       const sessions = (
         service as unknown as { state: { sessions: Map<string, unknown>; remoteUnreadTerminals: Map<string, unknown> } }
@@ -953,6 +963,7 @@ describe('AgentIslandService native publishing', () => {
 
       service.setEnabled(true);
       service.handleUserPrompt({ sessionId: 's1', agentKind: 'codex' }, 'run tests');
+      service.handleAgentEvent({ sessionId: 's1', agentKind: 'codex' }, textEvent('Tests pass.', true));
       service.handleAgentEvent({ sessionId: 's1', agentKind: 'codex' }, doneEvent());
       expect(publish.mock.calls.at(-1)?.[0]).toMatchObject({
         totalCount: 1,
@@ -1148,6 +1159,34 @@ describe('AgentIslandService native publishing', () => {
       expect.objectContaining({
         sessionId: 's1',
         attention: false,
+      }),
+    );
+  });
+
+  it('relays the last reply as the completion summary for other devices', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const service = new AgentIslandService({
+      getMainWindow: () => null,
+      nativeHost: {
+        failed: false,
+        headless: true,
+        publish: () => true,
+        suspend: () => undefined,
+      },
+    });
+    service.setEnabled(false);
+    const meta = { sessionId: 'summary', agentKind: 'codex' as const };
+
+    service.handleUserPrompt(meta, 'fix the login bug');
+    service.handleAgentEvent(meta, textEvent('Login is fixed.', true));
+    service.handleAgentEvent(meta, doneEvent());
+
+    expect(mocks.tapWindowBroadcast).toHaveBeenLastCalledWith(
+      SESSION_ACTIVITY_CHANNEL,
+      expect.objectContaining({
+        sessionId: 'summary',
+        phase: 'completed',
+        compactDetail: 'Login is fixed.',
       }),
     );
   });
@@ -3567,6 +3606,72 @@ describe('AgentIslandService native publishing', () => {
     expect(onSessionActivityChange.mock.calls.at(-1)?.[0]).toEqual([
       expect.objectContaining({ sessionId: 'lead', phase: 'completed', attention: true }),
     ]);
+  });
+
+  it.each([
+    [false, 'user'], [true, 'user'], [false, 'scheduler'], [true, 'scheduler'],
+  ] as const)('keeps direct IM completions quiet (headless=%s, kind=%s)', async (headless, kind) => {
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn(() => true);
+    const playSound = vi.fn(() => true);
+    const onSessionActivityChange = vi.fn();
+    const service = new AgentIslandService({
+      getMainWindow: () => null,
+      nativeHost: { failed: false, headless, publish, playSound },
+      onSessionActivityChange,
+    });
+    syncEnabledForTest(service, publish);
+    service.setSoundSettings({ enabled: true, sounds: {
+      ...DEFAULT_AGENT_ISLAND_SOUND_SETTINGS.sounds,
+      complete: customSound('complete.wav'),
+    } });
+    const meta = { sessionId: 'im', agentKind: 'codex' as const };
+    const turnOrigin = { kind, surface: 'im' } as const;
+    // Both IM runners send directly without the App's handleUserPrompt path.
+    service.handleAgentEvent(meta, { type: 'status', data: { isRunning: true }, turnOrigin });
+    service.setCompletionDeferResolver(() => true);
+    playSound.mockClear();
+    service.handleAgentEvent(meta, { type: 'status', data: { isRunning: false, status: 'Done' }, turnOrigin });
+    service.handleAgentEvent(meta, { ...doneEvent(), turnOrigin });
+    service.notifyQueueEmptied(meta.sessionId);
+    expect(playSound).not.toHaveBeenCalled();
+    // Quiet completions are removed from the compact activity list, like silent schedules.
+    expect(onSessionActivityChange.mock.calls.at(-1)?.[0]).toEqual([]);
+
+    service.setCompletionDeferResolver(() => false);
+    service.handleUserPrompt(meta, 'App message');
+    service.handleAgentEvent(meta, doneEvent());
+    expect(onSessionActivityChange.mock.calls.at(-1)?.[0]).toEqual([
+      expect.objectContaining({ sessionId: 'im', phase: 'completed', attention: true }),
+    ]);
+    // A later IM reply must not erase the earlier unread App reply.
+    service.handleAgentEvent(meta, { type: 'status', data: { isRunning: true }, turnOrigin });
+    service.handleAgentEvent(meta, { type: 'status', data: { isRunning: false, status: 'Done' }, turnOrigin });
+    service.handleAgentEvent(meta, { ...doneEvent(), turnOrigin });
+    expect(onSessionActivityChange.mock.calls.at(-1)?.[0]).toEqual([
+      expect.objectContaining({ sessionId: 'im', attention: true }),
+    ]);
+    service.resetRuntimeState();
+    syncEnabledForTest(service, publish);
+    service.handleAgentEvent(meta, { type: 'status', data: { isRunning: true }, turnOrigin });
+    service.handleAgentEvent(meta, {
+      type: 'error', data: { message: 'model unavailable' }, turnOrigin,
+    });
+    expect(onSessionActivityChange.mock.calls.at(-1)?.[0]).toEqual([
+      expect.objectContaining({ sessionId: 'im', phase: 'error', attention: true }),
+    ]);
+    service.handleAgentEvent(meta, { type: 'status', data: { isRunning: true }, turnOrigin });
+    service.handleAgentEvent(meta, { ...doneEvent(), turnOrigin });
+    expect(onSessionActivityChange.mock.calls.at(-1)?.[0]).toEqual([
+      expect.objectContaining({ sessionId: 'im', attention: true }),
+    ]);
+    // Reading the old result during the IM turn must not resurrect it on completion.
+    service.handleAgentEvent(meta, { type: 'status', data: { isRunning: true }, turnOrigin });
+    service.handleSessionAttentionCleared(meta.sessionId, 'explicit');
+    service.handleAgentEvent(meta, { type: 'status', data: { isRunning: false, status: 'Done' }, turnOrigin });
+    service.handleAgentEvent(meta, { ...doneEvent(), turnOrigin });
+    expect(onSessionActivityChange.mock.calls.at(-1)?.[0]).toEqual([]);
+    service.resetRuntimeState();
   });
 
   it('does not play a completion sound or reveal card for a silenced scheduler completion', async () => {
@@ -6045,5 +6150,109 @@ describe('会话关闭原因决定条目去留', () => {
       clearAllSessionAttention();
       vi.useRealTimers();
     }
+  });
+});
+
+describe('Agent Island device sessions', () => {
+  function deviceSession(
+    phase: 'running' | 'needs-interaction' | 'completed' | 'error',
+    sessionId = 'remote-1',
+  ) {
+    return {
+      sessionId,
+      deviceId: 'device-a',
+      deviceName: 'Studio Mac',
+      title: 'Fix login',
+      workingDir: '/Users/me/code/cindy',
+      workspaceKind: 'project',
+      agentKind: 'codex',
+      phase,
+      detail: '',
+    };
+  }
+
+  it('stays silent for first-seen remote tasks and sounds on observed completion', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn(() => true);
+    const playSound = vi.fn<(sound: AgentIslandSoundChoice) => boolean>(() => true);
+    const onDeviceSessionEvent = vi.fn();
+    const service = new AgentIslandService({
+      getMainWindow: () => null,
+      nativeHost: { failed: false, publish, playSound },
+      onDeviceSessionEvent,
+    });
+    syncEnabledForTest(service, publish);
+
+    service.setDeviceSessions([deviceSession('running'), deviceSession('completed', 'remote-2')]);
+    expect(publish).toHaveBeenCalled();
+    expect(playSound).not.toHaveBeenCalled();
+
+    service.setDeviceSessions([deviceSession('completed'), deviceSession('completed', 'remote-2')]);
+    expect(playSound).toHaveBeenCalledWith(DEFAULT_AGENT_ISLAND_SOUND_SETTINGS.sounds.complete);
+    // 岛面开启时由岛展示,不再另发桌面通知。
+    expect(onDeviceSessionEvent).not.toHaveBeenCalled();
+    // 不进入本机活动快照,也就不会被 relay 回推给控制端。
+    expect(service.getSessionActivitySnapshots()).toEqual([]);
+    expect(mocks.tapWindowBroadcast).not.toHaveBeenCalledWith(
+      SESSION_ACTIVITY_CHANNEL,
+      expect.objectContaining({ sessionId: 'remote-1' }),
+    );
+  });
+
+  it('keeps first-seen remote tasks silent when they arrive before the island setting syncs', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn(() => true);
+    const playSound = vi.fn<(sound: AgentIslandSoundChoice) => boolean>(() => true);
+    const service = new AgentIslandService({
+      getMainWindow: () => null,
+      nativeHost: { failed: false, publish, playSound },
+    });
+
+    service.setDeviceSessions([deviceSession('running'), deviceSession('completed', 'remote-2')]);
+    service.setEnabled(true);
+    expect(playSound).not.toHaveBeenCalled();
+
+    service.setDeviceSessions([deviceSession('completed'), deviceSession('completed', 'remote-2')]);
+    expect(playSound).toHaveBeenCalledWith(DEFAULT_AGENT_ISLAND_SOUND_SETTINGS.sounds.complete);
+  });
+
+  it('registers the remote-session channel on platforms without the native island', async () => {
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform');
+    Object.defineProperty(process, 'platform', { value: 'linux' });
+    try {
+      const { initAgentIslandService } = await import('../service.js');
+      initAgentIslandService({ getMainWindow: () => null });
+    } finally {
+      if (platform) Object.defineProperty(process, 'platform', platform);
+    }
+
+    const channels = mocks.ipcHandle.mock.calls.map(([channel]) => channel);
+    expect(channels).toContain(AGENT_ISLAND_SET_REMOTE_SESSIONS_CHANNEL);
+    // 原生岛面专属的 IPC 仍只在支持的平台注册。
+    expect(channels).not.toContain(AGENT_ISLAND_SET_SOUND_SETTINGS_CHANNEL);
+  });
+
+  it('hands observed transitions to desktop notifications when the island is off', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn(() => true);
+    const onDeviceSessionEvent = vi.fn();
+    const service = new AgentIslandService({
+      getMainWindow: () => null,
+      nativeHost: { failed: false, publish },
+      onDeviceSessionEvent,
+    });
+    service.setEnabled(false);
+
+    service.setDeviceSessions([deviceSession('running')]);
+    expect(onDeviceSessionEvent).not.toHaveBeenCalled();
+
+    service.setDeviceSessions([deviceSession('completed')]);
+    expect(onDeviceSessionEvent).toHaveBeenCalledTimes(1);
+    expect(onDeviceSessionEvent).toHaveBeenCalledWith({
+      sessionId: 'remote-1',
+      title: 'Fix login',
+      deviceName: 'Studio Mac',
+      kind: 'done',
+    });
   });
 });

@@ -427,7 +427,13 @@
       "needAttention": "확인 필요 {{count}}개",
       "waiting": "확인 대기 {{count}}개",
       "automationRunning": "자동화 실행 중",
-      "totalRuns": "총 {{count}}회 실행"
+      "totalRuns": "총 {{count}}회 실행",
+      "runCount": "총 {{count}}회",
+      "nextRunMinutes": "{{count}}분 후 실행",
+      "nextRunHours": "{{count}}시간 후 실행",
+      "nextRunDays": "{{count}}일 후 실행",
+      "imminent": "곧 실행",
+      "stopped": "중지됨"
     }
   },
   "detail": {

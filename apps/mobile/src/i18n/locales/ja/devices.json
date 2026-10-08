@@ -427,7 +427,13 @@
       "needAttention": "要対応 {{count}} 件",
       "waiting": "対応待ち {{count}} 件",
       "automationRunning": "自動化を実行中",
-      "totalRuns": "全 {{count}} 回の実行"
+      "totalRuns": "全 {{count}} 回の実行",
+      "runCount": "全 {{count}} 回",
+      "nextRunMinutes": "{{count}} 分後に実行",
+      "nextRunHours": "{{count}} 時間後に実行",
+      "nextRunDays": "{{count}} 日後に実行",
+      "imminent": "まもなく実行",
+      "stopped": "停止中"
     }
   },
   "detail": {

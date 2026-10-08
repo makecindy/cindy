@@ -108,3 +108,9 @@ function expectOrder(source: string, before: string, after: string): void {
   expect(beforeIndex).toBeGreaterThanOrEqual(0);
   expect(afterIndex).toBeGreaterThan(beforeIndex);
 }
+
+it('ordinary sessions bypass plugin receipt storage before its first lookup', () => {
+  const loader = registerSource.slice(registerSource.indexOf('setAutoReviewContextResolver(createPluginTaskReviewResolver('));
+  expectOrder(loader, "session.source !== 'plugin' && session.orcaRole !== 'worker'", 'const store = createPluginTaskStore(epoch.client);');
+  expectOrder(loader, "lead.source !== 'plugin'", 'const receipt = await store.get(leadId);');
+});

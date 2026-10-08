@@ -76,6 +76,8 @@ export async function exportDeviceFile(
   workdir: string,
   relPath: string,
   signal?: AbortSignal,
+  /** Host-reported upload bytes; hosts that omit `uploaded` simply report no progress. */
+  onProgress?: (uploaded: number, total: number) => void,
 ): Promise<DeviceFileResult> {
   assertFileReadActive(signal);
   const start = await invoke<{
@@ -94,10 +96,21 @@ export async function exportDeviceFile(
       state: string;
       key?: string;
       message?: string;
+      uploaded?: number;
     }>({ op: "exportFileStatus", workdir, transferId: start.transferId });
     assertFileReadActive(signal);
     if (!status.ok || status.state === "error")
       throw new Error(status.message ?? "FILE_EXPORT_FAILED");
+    if (
+      status.state === "uploading" &&
+      typeof status.uploaded === "number" &&
+      Number.isFinite(status.uploaded) &&
+      start.size > 0
+    )
+      onProgress?.(
+        Math.min(Math.max(0, status.uploaded), start.size),
+        start.size,
+      );
     if (status.state === "done" && status.key)
       return {
         ossKey: status.key,

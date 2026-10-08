@@ -163,10 +163,15 @@ function fetchText(url: string, timeoutMs: number): Promise<string> {
       }, timeoutMs);
 
       request.on('response', (response) => {
+        response.on('error', (err) => {
+          clearTimeout(timer);
+          settle(() => reject(err));
+        });
         if (response.statusCode !== 200) {
           clearTimeout(timer);
-          response.on('data', () => {});
           settle(() => reject(new Error(`catalog fetch HTTP ${response.statusCode}`)));
+          // No error body is needed; draining after clearing the timer can hang.
+          request.abort();
           return;
         }
         response.on('data', (chunk) => {
@@ -175,10 +180,6 @@ function fetchText(url: string, timeoutMs: number): Promise<string> {
         response.on('end', () => {
           clearTimeout(timer);
           settle(() => resolve(body));
-        });
-        response.on('error', (err) => {
-          clearTimeout(timer);
-          settle(() => reject(err));
         });
       });
       request.on('error', (err) => {

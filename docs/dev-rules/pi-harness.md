@@ -94,9 +94,12 @@ Pi 任务时冻结，并写入该任务 `settings.json` 的 `compaction.reserveT
 模型容量用于 Pi 原生请求长度裁剪，不能随小预算缩到 1K；工作预算只调整原生压缩阈值，
 并作为已应用预算进入 Cindy 的用量快照。
 大窗切小窗先由 Desktop 的统一目标窗口事务按目标窗口 90% 固定压力线评估（独立于 Pi
-日常自动压缩百分比），命中时复用既有上下文接续事务；未命中时保留当前原生会话，使用
-`set_compaction_reserve_tokens` 原地更新压缩保留量，再用原生 `set_model` 与 `get_state`
-确认 provider／model／contextWindow。同 ID 模型的目录资料或工作预算改变也属于这条路径。
+日常自动压缩百分比），命中时复用既有上下文接续事务；未命中时，已加载的 Pi 1.0 模型使用启动时写入的
+`compaction.modelOverrides["provider/modelId"].reserveTokens`，再用原生 `set_model` 与
+`get_state` 确认 provider／model／contextWindow。百分比沿用任务启动快照；工作预算按来源和模型解析。
+如果新目录或工作预算要求的保留量与运行中 Pi 实际配置不同，预览返回既有 `rebuild`，
+由宿主恢复流程加载配置；不得谎称文件改写已更新 Pi 内存。旧 Pi 不支持按模型配置时，
+同保留量的选择仍可热切，需变化时走同一预览分支。
 普通切模不得用 `switch_session` 或扩展 `/reload` 重读压缩配置：两者会重建会话或扩展状态，
 不能当成无损配置刷新。忙时选择必须在回合结束后走同一切换与容量事务，不能由延后服务
 直接关闭 Pi。原生校验完成前，子代理 route 保持 pending；确认并持久化目标路由后才放行
@@ -130,8 +133,9 @@ SSH 不套用本机限核值。沿用现有默认值与 override 存储，不新
 ### 运行中的模型目录与凭据更新
 
 模型目录更新沿用 Cindy 的统一目录和 Pi 的原生 provider 配置，不能另建一份模型权威表。
-先预览目标资料和容量，再在现有串行切换边界应用配置；Pi 的 `refresh_models` 只刷新目录，
-即使 provider/model ID 未变也须通过 `set_model` 应用新 descriptor。刷新响应中的
+先预览目标资料和容量，再在现有串行切换边界应用配置；扩展调用公开的
+`ctx.modelRegistry.refresh({ allowNetwork: false })` 刷新目录，
+即使 provider/model ID 未变也须通过 `set_model` 应用新 descriptor。刷新结果中的
 `aborted` 或 provider errors 表示未完整成功，不能仅凭 RPC `success: true` 继续。
 
 新增原生适配器使用 Pi 公开的 `unregisterProvider`／`registerProvider` 与模型目录刷新，
@@ -140,11 +144,14 @@ Pi 内存，不进入 prompt、聊天历史、日志或明文配置文件。交�
 后续子代理的启动配置和来源专用授权；已运行子代理仍保留其独立身份。私有命令的 prompt
 响应不等于配置成功，必须收到对应 nonce 的完成回执。来源一致性检查不可因热切而删除。
 
-`refresh_models` 与 `set_compaction_reserve_tokens` 需要配套 Pi 原生 RPC 支持；当前
-`tools/pi/latest.json` 的版本 pin 不代表这两项接口已经发布。旧 Pi 缺少本次操作所需接口时，
-在改变当前模型前明确反馈，不自动降级为会话重载。开发、单测或本地补丁通过不等于托管
-runtime 已升级；发布须分别核验 Pi 接口、Cindy 接入与实际 runtime 版本。
-接口补丁、重启边界和隔离验证见
+**只适配官方 Pi，不修改 Pi 源码或二进制。** `refresh_models` 与
+`set_compaction_reserve_tokens` 不是官方 RPC，不得作为 Cindy 的运行依赖，也不再维护
+配套补丁。Pi 上游缺陷与 Cindy 适配缺陷分别记录；不得为了使检查变绿而定制 runtime。
+
+同一私有桥接的只读 `inspect` 操作通过运行期 `pi.getSettings()` 返回配置副本与 Pi
+版本；不修改凭据、不重载扩展。旧版没有该 API 时使用启动时读取的私有设置快照。
+Pi action API 不能在扩展加载期间调用。查询命令的归属与 nonce 必须验证，避免未知 slash
+命令变成实际模型输入；设置回执确认后才继续切模。官方接口与恢复边界见
 [`../research/pi-native-model-refresh.md`](../research/pi-native-model-refresh.md)。
 
 
