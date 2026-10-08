@@ -1280,6 +1280,20 @@ describe('Auto review for progressive MCP operations', () => {
     expect(JSON.stringify(intent)).not.toContain('SEND THE REPORT');
     await handle.close();
   });
+  it.each(['send', 'steer'] as const)('%s carries Host references beside the authored channel text', async (method) => {
+    const { handle, canUseTool, reviewAutoPermissionAction } = await startSession('auto', {
+      mcpProviderNames: ['cindy'], mcpToolApprovalPolicy: () => 'prompt', reviewVerdict: 'block',
+    });
+    if (method === 'steer') await handle.send({ type: 'user', content: 'Inspect only.' });
+    const references = { attachments: { images: 1, files: 0 }, quotedMessages: [{ author: '群友', text: '[图片]', attachmentCount: 1 }] };
+    await handle[method]!({ type: 'user', content: '<reply_context>[群友] [图片]</reply_context>这啥情况' }, {
+      [MAIN_OWNED_SEND_CONTEXT]: { origin: { kind: 'im', channel: 'telegram' }, rawChannelText: '这啥情况', autoReviewReferences: references },
+    });
+    await canUseTool('mcp__cindy__ghost_call', { action: 'search' }, { toolUseID: 'references' });
+    expect(reviewedRequest(reviewAutoPermissionAction).userIntent)
+      .toMatchObject({ currentUserMessage: '这啥情况', currentUserReferences: references });
+    await handle.close();
+  });
   it.each(['prompt', 'prompt-each-time'] as const)('uses AI three-way decisions for policy %s', async (policy) => {
     for (const verdict of ['allow', 'block', 'ask'] as const) {
       const { handle, canUseTool, seen, reviewAutoPermissionAction } = await startSession('auto', {

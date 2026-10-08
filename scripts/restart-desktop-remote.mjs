@@ -919,8 +919,6 @@ function devEnvEntries(env) {
     ['XDT_WIRE_DIAGNOSTICS', env.XDT_WIRE_DIAGNOSTICS],
     // 一次性 Grok strict tool spike(dev-only;必须与 wire probe 一起显式开启)。
     ['XDT_WIRE_DIAGNOSTICS_STRICT', env.XDT_WIRE_DIAGNOSTICS_STRICT],
-    ['CINDY_IOS_SIMULATOR_NATIVE_H264', env.CINDY_IOS_SIMULATOR_NATIVE_H264],
-    ['CINDY_IOS_SIMULATOR_NATIVE_HID', env.CINDY_IOS_SIMULATOR_NATIVE_HID],
     ['CINDY_REMOTE_CREDENTIALS_SIGNING_IDENTITY', env.CINDY_REMOTE_CREDENTIALS_SIGNING_IDENTITY],
     ['XDT_TAPDB_DEV', env.XDT_TAPDB_DEV],
     // 端点清单来源覆写:--endpoints-cdn(dev 走线上 CDN)/ local 模式的

@@ -1508,6 +1508,24 @@ describe('netlog 产物事后核对(verifyEndpointNetLogCapture)', () => {
 });
 
 describe('getter / IPC', () => {
+  it('aborts a non-200 endpoint response instead of draining without a deadline', async () => {
+    resetClientEndpointsForTest(TEST_CLIENT_ENDPOINTS, {
+      buildRegion: 'cn',
+      realmManifestBaseUrls: {
+        cn: 'https://manifest.cn.example.com/app',
+        global: 'https://manifest.global.example.com/app',
+      },
+    });
+    const response = Object.assign(new EventEmitter(), { statusCode: 404 });
+    const request = Object.assign(new EventEmitter(), {
+      end: vi.fn(() => request.emit('response', response)),
+      abort: vi.fn(() => response.emit('error', new Error('cancelled'))),
+    });
+    netRequest.mockReturnValueOnce(request);
+    await expect(loadClientEndpointsForRealm('global')).rejects.toThrow('http-404');
+    expect(request.abort).toHaveBeenCalledTimes(1);
+  });
+
   it('默认不是离线缓存启动', () => {
     expect(isUsingCachedClientEndpoints()).toBe(false);
   });

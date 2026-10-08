@@ -42,7 +42,6 @@ export interface ViewerSnapshot {
   target: RemoteViewerState['target'];
   status: string;
   error: string | null;
-  clipboardError?: boolean;
   controlling: boolean;
   controlPending: boolean;
   caps: RemoteDesktopCapabilities | null;
@@ -75,6 +74,23 @@ function connectionBudget(caps: RemoteDesktopCapabilities | null): number {
   return (
     REMOTE_DESKTOP_CONNECTION_TIMEOUT_MS +
     (caps?.displays.some((display) => display.id === 'wayland-portal') ? 120_000 : 0)
+  );
+}
+
+const CLIPBOARD_FAILURE_KEYS: Record<string, string> = {
+  DESKTOP_VIEW_ONLY: 'remoteDesktop.viewer.controlRequired',
+  CLIPBOARD_UNSUPPORTED: 'remoteDesktop.viewer.clipboardUnsupported',
+  CLIPBOARD_EMPTY: 'remoteDesktop.viewer.clipboardEmpty',
+  CLIPBOARD_TOO_LONG: 'remoteDesktop.viewer.clipboardTooLong',
+};
+
+/** Explains a failed manual clipboard transfer (decoded code); same wording as Mobile. */
+export function clipboardFailureKey(error: unknown, action: 'copy' | 'paste'): string {
+  return (
+    CLIPBOARD_FAILURE_KEYS[error instanceof Error ? error.message : ''] ??
+    (action === 'copy'
+      ? 'remoteDesktop.viewer.clipboardCopyFailed'
+      : 'remoteDesktop.viewer.clipboardPasteFailed')
   );
 }
 
@@ -137,6 +153,9 @@ export class DesktopViewerController {
   >();
   /** The computer's own mode at the start of a lease; choosing it again forgets the memory. */
   private hostMode: { lease: string; modeId?: string } | null = null;
+  /** The size last asked of a fitted display. A HiDPI host may report a smaller
+   * logical size; the list still shows the entry the user chose as current. */
+  private fittedRequest: { lease: string; size: Size } | null = null;
   /** The remembered display choice is reapplied once per lease. */
   private rememberedLease: string | null = null;
   /** A remembered choice that failed is not retried in this window, so it cannot loop reconnects. */
@@ -363,7 +382,6 @@ export class DesktopViewerController {
       ready: false,
       transport: '',
       latency: null,
-      clipboardError: false,
       receiveRate: null,
       safety: { privacyActive: false, notice: null, clipboardProgress: null },
       fittedDisplay: null,
@@ -402,11 +420,7 @@ export class DesktopViewerController {
         fillHeight: false,
         trickleIce: caps.trickleIce === true,
         audio: caps.systemAudio && this.state.settings.audio,
-        clipboardShortcuts: caps.clipboardText === true || caps.clipboardContent === true,
-        clipboardModifier:
-          typeof window !== 'undefined' && window.electronAPI?.platform === 'darwin'
-            ? 'meta'
-            : 'control',
+        macKeyboard: typeof window !== 'undefined' && window.electronAPI?.platform === 'darwin',
       });
       this.runtime.receive({ type: 'mode', mode: 'pointer' });
       if (!caps.canControl) throw new Error('DESKTOP_INPUT_UNSUPPORTED');
@@ -676,6 +690,11 @@ export class DesktopViewerController {
     ];
     this.runtime.receive({ type: 'events', events });
   }
+  async workspaceAction(action: 'workspaceLeft' | 'workspaceRight' | 'omarchyMenu'): Promise<void> {
+    const lease = this.session.lease;
+    if (!lease || !this.state.controlling) return;
+    await this.request({ op: 'windowAction', action, lease: lease.lease });
+  }
   async clipboard(action: 'copy' | 'paste'): Promise<void> {
     if (!this.state.controlling) throw new Error('DESKTOP_VIEW_ONLY');
     if (this.clipboardQueued >= 8) throw new Error('CLIPBOARD_BUSY');
@@ -685,7 +704,6 @@ export class DesktopViewerController {
     if (this.clipboardQueued === 0) this.clipboardQueue = Promise.resolve();
     this.clipboardQueued++;
     this.releaseInput();
-    this.publish({ clipboardError: false });
     const transfer = this.clipboardQueue.then(async () => {
       if (
         epoch !== this.epoch ||
@@ -694,7 +712,11 @@ export class DesktopViewerController {
         !this.state.controlling
       )
         throw new Error('DESKTOP_STOPPED');
-      await this.api.clipboard(generation, action);
+      try {
+        await this.api.clipboard(generation, action);
+      } catch (error) {
+        throw new Error(extractIpcError(error)?.message ?? 'DESKTOP_UNAVAILABLE');
+      }
     });
     this.clipboardQueue = transfer;
     try {
@@ -724,7 +746,11 @@ export class DesktopViewerController {
   async resolutionModes(): Promise<RemoteDesktopDisplayMode[]> {
     const lease = this.session.lease;
     if (!lease) return [];
-    if (this.state.fittedDisplay) return fittedDisplayModes(this.state.fittedDisplay, lease.display);
+    if (this.state.fittedDisplay)
+      return fittedDisplayModes(
+        this.state.fittedDisplay,
+        this.fittedRequest?.lease === lease.lease ? this.fittedRequest.size : lease.display,
+      );
     const modes = await this.displayModes();
     // CoreGraphics modes keep their own orientation when Electron's display
     // geometry is rotated. Compare modes in the enumeration's coordinate space.
@@ -750,22 +776,19 @@ export class DesktopViewerController {
     }
     throw new Error('DESKTOP_DISPLAY_MODES_UNAVAILABLE');
   }
-  /** Whether the fit button restores the computer's own display for this viewer size. */
-  viewerDisplayMatched(width: number, height: number): boolean {
+  /** Returns from a fitted picture to the computer's own display and ratio. */
+  async restoreDisplay(): Promise<void> {
     const fitted = this.state.fittedDisplay;
-    return Boolean(
-      fitted &&
-        this.state.caps?.viewerDisplayRestore &&
-        this.session.lease &&
-        sameAspect(fitted, width, height),
-    );
+    if (!fitted || !this.state.caps?.viewerDisplayRestore) return;
+    await this.fitDisplay(fitted.width, fitted.height, false, undefined, { restore: true });
   }
+  /** `ratio` names the picture shape chosen for the same-ratio size list. */
   async fitDisplay(
     width: number,
     height: number,
     exactResolution = false,
     modeId?: string,
-    options: { viewport?: Size; remembered?: boolean } = {},
+    options: { ratio?: Size; remembered?: boolean; restore?: boolean } = {},
   ): Promise<void> {
     if (
       exactResolution &&
@@ -784,10 +807,7 @@ export class DesktopViewerController {
     )
       return;
     const fitted = this.state.fittedDisplay;
-    // Fitting again at the ratio already fitted restores the computer's display.
-    const restore = Boolean(
-      !exactResolution && fitted && caps?.viewerDisplayRestore && sameAspect(fitted, width, height),
-    );
+    const restore = Boolean(options.restore && fitted && caps?.viewerDisplayRestore);
     this.publish({ controlPending: true });
     this.syncControl();
     // A host that can follow display changes keeps the running stream; only a
@@ -817,9 +837,7 @@ export class DesktopViewerController {
             ? { kind: 'mode', modeId, width, height }
             : { kind: 'fit', width: size.width, height: size.height },
       );
-      const fittedBase = options.viewport
-        ? viewerDisplaySize(options.viewport.width, options.viewport.height)
-        : null;
+      this.fittedRequest = modeId || restore ? null : { lease: lease.lease, size: { ...size } };
       this.publish({
         // Keep the physical source as the reconnect target; the temporary
         // display is only the current capture/input surface.
@@ -827,13 +845,15 @@ export class DesktopViewerController {
         // The temporary capture surface is lease state, never a reconnectable
         // display choice in the selector.
         caps,
-        // Same-ratio sizes stay around the plain fit of the viewer.
+        // Keep the chosen ratio rather than a rounded size, so same-ratio
+        // choices do not drift from one resolution change to the next.
         fittedDisplay:
           modeId || restore
             ? null
-            : exactResolution && (fitted ?? fittedBase)
-              ? (fitted ?? fittedBase)
-              : { width: next.display.width, height: next.display.height },
+            : (options.ratio ??
+              (exactResolution && fitted
+                ? fitted
+                : { width: next.display.width, height: next.display.height })),
       });
       const geometry = {
         width: next.display.width,
@@ -910,23 +930,12 @@ export class DesktopViewerController {
       if (!unchanged()) return;
       if (remembered.kind === 'fit') {
         if (!caps.viewerDisplay) return;
-        // Same path as the button: measure this window now, then fit at the
-        // remembered size if it is one of the same-ratio choices.
-        const viewport = { width: this.root.clientWidth, height: this.root.clientHeight };
-        const base = viewerDisplaySize(viewport.width, viewport.height);
-        const edge = Math.max(remembered.width, remembered.height);
-        const exact = base
-          ? fittedDisplayModes(base, base).find((mode) => Math.max(mode.width, mode.height) === edge)
-          : undefined;
-        if (exact)
-          await this.fitDisplay(exact.width, exact.height, true, undefined, {
-            viewport,
-            remembered: true,
-          });
-        else
-          await this.fitDisplay(viewport.width, viewport.height, false, undefined, {
-            remembered: true,
-          });
+        // The ratio is a choice of its own now, not this window's shape.
+        const size = { width: remembered.width, height: remembered.height };
+        await this.fitDisplay(size.width, size.height, true, undefined, {
+          ratio: size,
+          remembered: true,
+        });
         return;
       }
       if (!caps.resolutionRestore) return;
@@ -1021,19 +1030,6 @@ export class DesktopViewerController {
         if (message.mode === 'fit' || message.mode === 'actual' || message.mode === 'custom')
           this.publish({ scaleMode: message.mode });
         break;
-      case 'clipboard': {
-        if (
-          !this.state.controlling ||
-          !this.state.caps?.clipboardText ||
-          (message.action !== 'copy' && message.action !== 'paste')
-        )
-          break;
-        const epoch = this.epoch;
-        void this.clipboard(message.action).catch(() => {
-          if (epoch === this.epoch && !this.disposed) this.publish({ clipboardError: true });
-        });
-        break;
-      }
       case 'streaming':
         this.streaming = true;
         this.publish({ transport: 'video', latency: null });

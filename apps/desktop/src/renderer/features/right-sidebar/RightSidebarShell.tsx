@@ -33,7 +33,6 @@ import { useTranslation } from 'react-i18next';
 import { createLogger } from '@/lib/logger';
 import { toast } from '@/lib/toast';
 import { mapIpcErrorToI18nKey } from '@/utils/ipcError';
-import { isSecondaryWindow } from '@/lib/secondaryWindow';
 import { useAppShortcut } from '@/hooks/useAppShortcut';
 import { useMacFullscreen } from '@/hooks/useMacFullscreen';
 import { RightSidebarDetach } from '@/components/layout/RightSidebarDetach';
@@ -61,15 +60,13 @@ import type { TabKindHostContext, TabKindId, TabState } from './types';
 // getTabKind 查 registry。
 import './plugins';
 import { initRsbBrowserBridge } from './lib/rsbBrowserBridge';
-import { initIOSSimulatorFocusBridge } from './lib/iosSimulatorFocusBridge';
 import { initPopupRouter, setPopupFallbackSession } from './lib/popupRouter';
 import { TabBodyErrorBoundary } from './TabBodyErrorBoundary';
 import { useInstalledGhosts } from '@/cindy-brain/useInstalledGhosts';
 import {
-  isIOSSimulatorPluginAvailable,
   mergeAvailableTabOrder,
   projectAvailableTabs,
-} from './iosSimulatorPluginAvailability';
+} from './tabAvailability';
 
 const log = createLogger('rightSidebar.shell');
 const EMPTY_TAB_ID_SET = new Set<string>();
@@ -178,14 +175,6 @@ export function RightSidebarShell({
       : 0;
   const { t } = useTranslation();
   const installedGhosts = useInstalledGhosts();
-  const iosSimulatorPluginAvailable = useMemo(
-    // Session secondary windows do not own the Main/RSB capability family and
-    // intentionally skip the Host focus bridge. Hide (but preserve) persisted
-    // Simulator tabs there instead of exposing an authorization action that
-    // can never succeed.
-    () => !isSecondaryWindow() && isIOSSimulatorPluginAvailable(installedGhosts),
-    [installedGhosts],
-  );
 
   // RSB browser bridge (Phase 2):在 Shell 整个生命周期内只 init 一次。bridge 内部
   // 自带 idempotent guard,strict-mode 双 effect / 重复挂载都安全。bridge 绑定
@@ -195,7 +184,6 @@ export function RightSidebarShell({
   // 就断了。Shell 真的退出场景在 app quit,进程整体下线无所谓。
   useEffect(() => {
     initRsbBrowserBridge();
-    initIOSSimulatorFocusBridge();
   }, []);
 
   // 订阅当前 sessionId 桶变化 —— useSyncExternalStore 在 sessionId 变化时,
@@ -250,10 +238,10 @@ export function RightSidebarShell({
   // unknown and only converge once we actually know.
   const tabAvailability = useMemo(
     () => ({
-      iosSimulatorAvailable: iosSimulatorPluginAvailable,
+      installedGhosts: remoteHostId || deviceLinkDeviceId !== null ? [] : installedGhosts,
       subagentsAvailable: subagentsEnabled || !subagentsEligibilityKnown,
     }),
-    [iosSimulatorPluginAvailable, subagentsEligibilityKnown, subagentsEnabled],
+    [installedGhosts, remoteHostId, deviceLinkDeviceId, subagentsEligibilityKnown, subagentsEnabled],
   );
   const projectedTabs = useMemo(
     () => projectAvailableTabs(bucket.tabs, bucket.activeTabId, tabAvailability),
@@ -325,9 +313,8 @@ export function RightSidebarShell({
     };
   }, [activeTabId, bucket.hydrated, deferredMountedTabIds, sessionId, tabs]);
 
-  // If a now-hidden simulator tab owned the active marker, move the persisted
-  // marker to a visible tab (or null). The simulator tab itself remains stored
-  // and returns when the plugin is enabled again.
+  // If an unavailable tab owned the active marker, move the persisted marker
+  // to a visible tab (or null), while preserving the hidden tab state.
   //
   // Never write while Subagents eligibility is still unknown: the projection is
   // provisional during that window, so converging it would persist a decision
@@ -336,7 +323,7 @@ export function RightSidebarShell({
     if (!subagentsEligibilityKnown) return;
     if (!bucket.hydrated || !sessionId || bucket.activeTabId === activeTabId) return;
     void setActiveTab(sessionId, activeTabId).catch((err) => {
-      log.error('hidden simulator active-tab reconciliation failed', {
+      log.error('unavailable active-tab reconciliation failed', {
         sessionId,
         activeTabId,
         err,
@@ -361,11 +348,6 @@ export function RightSidebarShell({
       bucket.hydrated &&
       bucket.tabs.length > 0 &&
       tabs.length === 0 &&
-      bucket.tabs.some(
-        (tab) =>
-          (tab.kind === 'ios-simulator' && !iosSimulatorPluginAvailable) ||
-          (tab.kind === 'subagents' && subagentsEligibilityKnown && !subagentsEnabled),
-      ) &&
       prevTabCountRef.current === null;
     if (!shouldCollapse || !sessionId) {
       hiddenOnlyCollapseRef.current = null;
@@ -377,9 +359,6 @@ export function RightSidebarShell({
   }, [
     bucket.hydrated,
     bucket.tabs,
-    iosSimulatorPluginAvailable,
-    subagentsEligibilityKnown,
-    subagentsEnabled,
     onAllTabsClosed,
     sessionId,
     shellVisible,
@@ -429,10 +408,7 @@ export function RightSidebarShell({
         log.warn('handleAdd ignored: sessionId is null', { kind });
         return;
       }
-      if (kind === 'ios-simulator' && !iosSimulatorPluginAvailable) {
-        log.warn('handleAdd ignored: iOS Simulator plugin is unavailable');
-        return;
-      }
+
       if (kind === 'subagents' && !subagentsEnabled) {
         log.warn('handleAdd ignored: Subagents surface is unavailable for this harness');
         return;
@@ -460,7 +436,7 @@ export function RightSidebarShell({
         log.error('handleAdd failed', { sessionId, kind, err });
       });
     },
-    [iosSimulatorPluginAvailable, sessionId, subagentsEnabled, t],
+    [sessionId, subagentsEnabled, t],
   );
 
   const handleClose = useCallback(
@@ -649,7 +625,6 @@ export function RightSidebarShell({
             onCloseAll={handleCloseAll}
             pillVariant="chip"
             addButtonWrapperClassName="h-[30px]"
-            iosSimulatorAvailable={iosSimulatorPluginAvailable}
             subagentsAvailable={subagentsEnabled}
           />
           {/* 面板自属控件始终跟随面板：detach → maximize → 收起。固定唤起入口只在
@@ -704,7 +679,6 @@ export function RightSidebarShell({
           onCloseOthers={handleCloseOthers}
           onCloseAll={handleCloseAll}
           chromeWindowDrag={chromeWindowDrag}
-          iosSimulatorAvailable={iosSimulatorPluginAvailable}
           subagentsAvailable={subagentsEnabled}
         />
       )}

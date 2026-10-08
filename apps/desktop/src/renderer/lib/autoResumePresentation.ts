@@ -1,6 +1,9 @@
+import { USAGE_LIMIT_RESET_AUTO_RESUME_REASON } from '../../shared/agentInputQueue';
 import type { ChatMessage, ContinuationInFlightProjectionCapability } from './makerChatStore';
 
 export interface AutoResumeCardInfo {
+  /** 账号用量上限重置后自动继续（不是重连：不展示重试次数）。 */
+  usageLimitReset?: boolean;
   error?: string;
   attempt?: number;
   maxAttempts?: number;
@@ -11,6 +14,7 @@ export interface AutoResumeCardInfo {
 /** Silent-stop continuations have no interruption context and are not reconnects. */
 export function hasInterruptionContext(info: AutoResumeCardInfo): boolean {
   return (
+    info.usageLimitReset === true ||
     info.error !== undefined ||
     info.attempt !== undefined ||
     info.maxAttempts !== undefined ||
@@ -23,6 +27,7 @@ export function readAutoResumeInfo(data?: Record<string, unknown>): AutoResumeCa
   const num = (value: unknown) =>
     typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : undefined;
   return {
+    ...(data?.reason === USAGE_LIMIT_RESET_AUTO_RESUME_REASON ? { usageLimitReset: true } : {}),
     ...(typeof data?.error === 'string' && data.error.length > 0 ? { error: data.error } : {}),
     ...(num(data?.attempt) !== undefined ? { attempt: num(data?.attempt) } : {}),
     ...(num(data?.maxAttempts) !== undefined ? { maxAttempts: num(data?.maxAttempts) } : {}),
@@ -78,6 +83,8 @@ export function findActiveReconnect(args: {
     if (message.role !== 'user' || message.systemCardType !== 'auto-resume') continue;
     const info = readAutoResumeInfo(message.systemCardData);
     if (
+      // 用量上限重置后的自动继续不是重连：输入框不显示「重新连接中」。
+      !info.usageLimitReset &&
       hasInterruptionContext(info) &&
       info.outcome === undefined &&
       isAutoResumeRowInFlight({

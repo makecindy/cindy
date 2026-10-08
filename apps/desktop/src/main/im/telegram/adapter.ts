@@ -147,6 +147,7 @@ export function buildTelegramAdapter(
         return {
           agentText: `${persona}${replyBlock}${event.text}`,
           contextSnapshot: captureImContext({ replyPrefix: replyBlock, replyMessageCount: 1 }),
+          ...(event.replyContext ? { replyContext: event.replyContext } : {}),
         };
       }
       const { messageId: triggerMessageId } = decodeTelegramMessageId(event.messageId);
@@ -185,6 +186,7 @@ export function buildTelegramAdapter(
           replyPrefix: replyBlock,
           replyMessageCount: 1,
         }),
+        ...(event.replyContext ? { replyContext: event.replyContext } : {}),
         commit: async () => {
           await assembly.commit();
         },

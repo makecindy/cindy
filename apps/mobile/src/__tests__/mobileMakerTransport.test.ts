@@ -393,6 +393,7 @@ describe("mobile maker transport", () => {
       "maker:input:resume",
       "maker:input:retry-last-error",
       "maker:input:clear-error",
+      "maker:input:cancel-usage-limit-wait",
       "maker:input:remove",
       "maker:input:update-text",
       "maker:input:update-content",
@@ -682,6 +683,28 @@ describe("mobile maker transport", () => {
     ]);
   });
 
+  it("sends the remote-Agent location as the 7th switch-session-agent arg only when given", async () => {
+    const { calls, maker } = harness();
+
+    await maker.switchSessionAgent("s1", "claude-code", "claude-sonnet-4-6", "anthropic", "high", false, {
+      agentDeviceId: null,
+    });
+    await maker.switchSessionAgent("s1", "codex", "gpt-5.5", null, undefined, undefined, {
+      agentDeviceId: null,
+    });
+    await maker.switchSessionAgent("s1", "codex", "gpt-5.5", "openai", "high", true, {});
+    await maker.switchSessionAgent("s1", "codex", "gpt-5.5", "openai", "high", true);
+
+    expect(calls.map((call) => call.args)).toEqual([
+      ["s1", "claude-code", "claude-sonnet-4-6", "anthropic", "high", false, { agentDeviceId: null }],
+      ["s1", "codex", "gpt-5.5", null, null, null, { agentDeviceId: null }],
+      // 未给位置 = 位置不变:与旧 6 参 wire 完全一致,旧被控端无感。
+      ["s1", "codex", "gpt-5.5", "openai", "high", true],
+      ["s1", "codex", "gpt-5.5", "openai", "high", true],
+    ]);
+    expect(calls.every((call) => call.channel === "maker:switch-session-agent")).toBe(true);
+  });
+
   it("fails closed when a legacy Desktop returns model-window confirmation data", async () => {
     const invoke: RemoteInvoke = async () =>
       ({
@@ -746,6 +769,7 @@ describe("mobile maker transport", () => {
     await maker.compactSession("s1", "focus on API design");
     await maker.input.retryLastError("s1");
     await maker.input.clearError("s1");
+    await maker.input.cancelUsageLimitWait("s1");
     await maker.input.updateText("s1", "queued-1", "updated");
     await maker.input.updateContent("s1", "queued-1", {
       clientId: "queued-1",
@@ -823,6 +847,7 @@ describe("mobile maker transport", () => {
       ["maker:compact-session", ["s1", "focus on API design"]],
       ["maker:input:retry-last-error", ["s1"]],
       ["maker:input:clear-error", ["s1"]],
+      ["maker:input:cancel-usage-limit-wait", ["s1"]],
       ["maker:input:update-text", ["s1", "queued-1", "updated"]],
       [
         "maker:input:update-content",

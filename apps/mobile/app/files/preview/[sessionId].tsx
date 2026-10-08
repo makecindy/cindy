@@ -41,7 +41,7 @@ import { WebView } from 'react-native-webview';
 import type { WebViewNavigation } from 'react-native-webview/lib/WebViewTypes';
 import { Text } from '@/components/AppText';
 import { goBackGuarded } from '@/utils/backGuard';
-import { errorText, resolvedUrlKind } from '@/debug/fileDiagnostics';
+import { errorText, resolvedUrlKind, sanitizeDiagnosticText } from '@/debug/fileDiagnostics';
 import { mobileDebugLog } from '@/debug/mobileDebugLog';
 import { useAuth } from '@/auth/AuthContext';
 import { DEVICE_LINK_API_BASE_URL } from '@/config/env';
@@ -73,6 +73,13 @@ import { MainWindowActionButton } from '@/components/MobilePrimitives';
 import { FileBrowserSegmentedControl } from '@/session/FileBrowserSegmentedControl';
 import { MarkdownFileReader } from '@/session/MarkdownFileReader';
 import { RemoteMediaPlayerWebView } from '@/session/mediaPlayerWebView';
+import { NativeVideoPlayer } from '@/session/NativeVideoPlayer';
+import {
+  createTransferProgressMeter,
+  formatTransferProgress,
+  transferPercent,
+  type TransferProgress,
+} from '@/session/transferProgress';
 import {
   buildFileBrowserGridItems,
   normalizeRemoteOpDirEntries,
@@ -114,6 +121,13 @@ interface SiblingListing {
   key: string;
   entries: FileBrowserRemoteOpEntry[];
 }
+
+interface ExportToUrlOptions {
+  /** 缺省 true:预览播放要可保留的地址;分享下载传 false。 */
+  stream?: boolean;
+  onProgress?: (uploaded: number, total: number) => void;
+}
+type ExportToUrl = (relPath: string, mtimeMs: number, options?: ExportToUrlOptions) => Promise<string>;
 
 /**
  * **入参必须是 `item.relPath`(真实路径),不能是 `item.name`(展示名)。**
@@ -402,12 +416,21 @@ export default function RemoteFilePreviewScreen() {
    * 外路径一律拒绝),relPath/mtime 参数此时被忽略。
    */
   const exportToUrl = useCallback(
-    (relPath: string, mtimeMs: number, stream = true): Promise<string> => {
+    (relPath: string, mtimeMs: number, options?: ExportToUrlOptions): Promise<string> => {
+      const stream = options?.stream ?? true;
       if (singleAbsPath) {
         return fetchRemoteAbsFileToUrl({ maker, deviceId, openLink, presignGet, stream }, singleAbsPath);
       }
       return exportRemoteFileToUrl(
-        { maker, deviceId, openLink, presignGet, stream, isCancelled: () => unmountedRef.current },
+        {
+          maker,
+          deviceId,
+          openLink,
+          presignGet,
+          stream,
+          isCancelled: () => unmountedRef.current,
+          onProgress: options?.onProgress,
+        },
         workdir,
         relPath,
         mtimeMs,
@@ -489,7 +512,7 @@ export default function RemoteFilePreviewScreen() {
     if (busyLabel) return;
     setBusyLabel(t('files.preview.exporting'));
     try {
-      const url = await exportToUrl(item.relPath, item.mtimeMs, false);
+      const url = await exportToUrl(item.relPath, item.mtimeMs, { stream: false });
       // 传原始文件名:分享单按真实扩展名识别类型(PDF/视频等非图片 mime 不在
       // extOfMime 映射里,不带名字会落成 .img 让接收方无法预览)。
       const mime = shareMimeForFileName(item.name);
@@ -752,7 +775,7 @@ function FilePreviewPage({
 }: {
   absolutePathOf(relPath: string): string;
   active: boolean;
-  exportToUrl(relPath: string, mtimeMs: number): Promise<string>;
+  exportToUrl: ExportToUrl;
   prepareHtmlPreview: PrepareMobileHtmlPreview;
   item: FileBrowserGridItem;
   htmlBrowserActions: HtmlBrowserActions;
@@ -817,7 +840,12 @@ function FilePreviewPage({
   return <UnsupportedPage item={item} onDownload={onDownload} reason={t('files.preview.unsupportedType')} />;
 }
 
-/** 音视频页:导出→presign→复用消息同款播放器(切后台/翻页失活自动暂停,回到本页不自动续播)。 */
+/**
+ * 音视频页:导出→presign→播放(切后台/翻页失活自动暂停,回到本页不自动续播)。
+ * 视频走系统原生播放器;音频、data: 地址,以及原生播放器报错的格式(如 iOS 上的 WebM)
+ * 仍走消息同款 WebView 播放器——原来能在 WebView 里播的文件不能因换播放器而退化。
+ * 电脑上传期间显示真实百分比与速度,旧版电脑不回报字节时只显示转圈。
+ */
 function AvPreviewPage({
   active,
   exportToUrl,
@@ -828,7 +856,7 @@ function AvPreviewPage({
   workdir,
 }: {
   active: boolean;
-  exportToUrl(relPath: string, mtimeMs: number): Promise<string>;
+  exportToUrl: ExportToUrl;
   item: FileBrowserGridItem;
   kind: 'video' | 'audio';
   onDownload(): void;
@@ -840,46 +868,87 @@ function AvPreviewPage({
   const { colors } = useTheme();
   const { t } = useTranslation();
   const [url, setUrl] = useState<string | null>(null);
-  const [failure, setFailure] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
+  const [nativeFailed, setNativeFailed] = useState(false);
+  const [progress, setProgress] = useState<TransferProgress | null>(null);
   const [requestEpoch, setRequestEpoch] = useState(0);
   const requestedRef = useRef(false);
+  const retry = useCallback(() => {
+    requestedRef.current = false;
+    setRequestEpoch((epoch) => epoch + 1);
+  }, []);
+  const handleNativePlaybackError = useCallback((detail: string) => {
+    mobileDebugLog('warn', 'files', 'native video failed, falling back to web player', {
+      error: sanitizeDiagnosticText(detail),
+    });
+    setNativeFailed(true);
+  }, []);
 
   useEffect(() => {
     if (!active || requestedRef.current || !workdir) return undefined;
     requestedRef.current = true;
     let cancelled = false;
     const startedAt = Date.now();
+    const measure = createTransferProgressMeter();
     mobileDebugLog('debug', 'files', 'av preview fetch start', { kind, size: item.sizeBytes });
-    setFailure(null);
-    void exportToUrl(item.relPath, item.mtimeMs)
+    setFailed(false);
+    setProgress(null);
+    void exportToUrl(item.relPath, item.mtimeMs, {
+      onProgress: (uploaded, total) => {
+        if (!cancelled) setProgress(measure(uploaded, total));
+      },
+    })
       .then((next) => {
         mobileDebugLog('debug', 'files', 'av preview fetch done', {
           kind, ms: Date.now() - startedAt, source: resolvedUrlKind(next), left: cancelled,
         });
-        if (!cancelled) setUrl(next);
+        if (cancelled) return;
+        setNativeFailed(false);
+        setUrl(next);
       })
       .catch((err) => {
         mobileDebugLog(cancelled ? 'debug' : 'warn', 'files', 'av preview fetch failed', {
           kind, ms: Date.now() - startedAt, left: cancelled, error: errorText(err),
         });
         if (cancelled) return;
-        setFailure(formatRemoteError(err));
+        setFailed(true);
       });
     return () => {
       cancelled = true;
     };
   }, [active, exportToUrl, item.mtimeMs, item.relPath, item.sizeBytes, kind, requestEpoch, workdir]);
 
-  if (failure) {
-    return <UnsupportedPage item={item} onDownload={onDownload} reason={t('files.preview.readFailed')}
-      onRetry={() => { requestedRef.current = false; setRequestEpoch((epoch) => epoch + 1); }} />;
+  if (failed) {
+    return <UnsupportedPage item={item} onDownload={onDownload} reason={t('files.preview.readFailed')} onRetry={retry} />;
   }
   if (!url) {
     return (
       <View style={styles.centerFill} testID="filePreview.avLoading">
         <ActivityIndicator color={colors.textTertiary} />
         <Text style={styles.hintText}>{kind === 'video' ? t('files.preview.fetchingVideo') : t('files.preview.fetchingAudio')}</Text>
+        {progress ? (
+          <View style={styles.fetchProgress} testID="filePreview.avProgress">
+            <View
+              accessibilityRole="progressbar"
+              accessibilityValue={{ min: 0, max: 100, now: transferPercent(progress) }}
+              style={styles.fetchProgressTrack}
+            >
+              <View style={[styles.fetchProgressFill, { width: `${transferPercent(progress)}%` }]} />
+            </View>
+            <Text style={styles.fetchProgressText}>{formatTransferProgress(progress)}</Text>
+          </View>
+        ) : null}
       </View>
+    );
+  }
+  if (kind === 'video' && !nativeFailed && !url.startsWith('data:')) {
+    return (
+      <NativeVideoPlayer
+        onError={handleNativePlaybackError}
+        testID="filePreview.avPlayer"
+        url={url}
+        visible={visible}
+      />
     );
   }
   return (
@@ -1580,6 +1649,21 @@ const makeStyles = (colors: ThemeColors) => {
     imageFull: { height: '100%', width: '100%' },
     imageStateWrap: { alignItems: 'center', gap: spacing.md, paddingHorizontal: spacing.xl },
     avPage: { flex: 1, justifyContent: 'center', padding: spacing.lg },
+    fetchProgress: { alignItems: 'center', gap: spacing.sm, width: 200 },
+    fetchProgressTrack: {
+      backgroundColor: colors.surfaceChip,
+      borderRadius: radius.pill,
+      height: 4,
+      overflow: 'hidden',
+      width: '100%',
+    },
+    fetchProgressFill: { backgroundColor: colors.textSecondary, borderRadius: radius.pill, height: '100%' },
+    fetchProgressText: {
+      color: colors.textTertiary,
+      fontSize: typeScale.caption,
+      fontVariant: ['tabular-nums'],
+      lineHeight: lineHeight.caption,
+    },
     // The player's WebView fills its wrapper (flex: 1); a width-only wrapper collapses it to 0 pt.
     avPlayer: { flex: 1, width: '100%' },
     imageUpgradeHint: {

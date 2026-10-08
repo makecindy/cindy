@@ -96,6 +96,8 @@
     "downloadFailed": "下載失敗",
     "fetchingVideo": "正在從電腦取回影片…",
     "fetchingAudio": "正在從電腦取回音訊…",
+    "videoBuffering": "正在緩衝…",
+    "videoBufferingPercent": "正在緩衝 {{percent}}%",
     "fetchAvFailed": "取回失敗：{{detail}}",
     "fetchPdfFailed": "取回 PDF 失敗：{{detail}}",
     "fetchingPdf": "正在從電腦取回 PDF…",

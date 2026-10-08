@@ -26,6 +26,7 @@ import {
   pickerStyle,
   shapes,
   tag,
+  tint,
 } from "@expo/ui/swift-ui/modifiers";
 import { useTranslation } from "react-i18next";
 import { View } from "react-native";
@@ -157,6 +158,7 @@ export function ContextSheetRow(props: ContextSheetRowProps) {
   );
 }
 export function ContextSheetFooterButton(props: ContextSheetFooterButtonProps) {
+  const { colors } = useTheme();
   const glassStyle = useNativeGlassButtonStyle({ prominent: true });
   return (
     <Button
@@ -168,7 +170,7 @@ export function ContextSheetFooterButton(props: ContextSheetFooterButtonProps) {
         frame({ maxWidth: Infinity, minHeight: 44 }),
       ]}
     >
-      {props.busy ? <ProgressView /> : <Text>{props.label}</Text>}
+      {props.busy ? <ProgressView modifiers={[tint(colors.ctaText)]} /> : <Text modifiers={[foregroundStyle(colors.ctaText)]}>{props.label}</Text>}
     </Button>
   );
 }

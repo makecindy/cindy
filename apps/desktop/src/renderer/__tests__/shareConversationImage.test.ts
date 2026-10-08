@@ -263,38 +263,77 @@ describe('assertShareImageReadableSize', () => {
 });
 
 describe('expandScrollableBlocks', () => {
-  it('只对实际溢出的候选读取样式并展开', () => {
-    const el = root('<div class="fits"></div><div class="wide"></div>');
-    const fits = el.querySelector<HTMLElement>('.fits')!;
-    const wide = el.querySelector<HTMLElement>('.wide')!;
-    Object.defineProperties(fits, {
-      scrollWidth: { value: 100 },
-      clientWidth: { value: 100 },
-      scrollHeight: { value: 20 },
-      clientHeight: { value: 20 },
+  function withSize(
+    el: HTMLElement,
+    size: { scrollWidth: number; clientWidth: number; scrollHeight: number; clientHeight: number },
+  ): void {
+    Object.defineProperties(el, {
+      scrollWidth: { value: size.scrollWidth },
+      clientWidth: { value: size.clientWidth },
+      scrollHeight: { value: size.scrollHeight },
+      clientHeight: { value: size.clientHeight },
     });
-    Object.defineProperties(wide, {
-      scrollWidth: { value: 200 },
-      clientWidth: { value: 100 },
-      scrollHeight: { value: 20 },
-      clientHeight: { value: 20 },
-    });
-    const getComputedStyle = vi.spyOn(window, 'getComputedStyle').mockReturnValue({
-      overflowX: 'auto',
-      overflowY: 'visible',
-    } as CSSStyleDeclaration);
+  }
 
+  function expandWithOverflow(
+    el: HTMLElement,
+    overflowByClass: Record<string, { overflowX: string; overflowY: string }>,
+  ): void {
+    const getComputedStyle = vi.spyOn(window, 'getComputedStyle').mockImplementation(
+      (target) =>
+        (overflowByClass[(target as HTMLElement).className] ?? {
+          overflowX: 'visible',
+          overflowY: 'visible',
+        }) as CSSStyleDeclaration,
+    );
     try {
       expandScrollableBlocks(el);
-      expect(getComputedStyle).toHaveBeenCalledTimes(1);
     } finally {
       getComputedStyle.mockRestore();
     }
+  }
 
-    expect(fits.style.overflowX).toBe('');
+  it('没溢出的表格滚动容器也去掉滚动,避免产物里冒出系统滚动条', () => {
+    const el = root('<div class="table-scroll"><table></table></div>');
+    const scroller = el.querySelector<HTMLElement>('.table-scroll')!;
+    withSize(scroller, { scrollWidth: 600, clientWidth: 600, scrollHeight: 120, clientHeight: 120 });
+
+    expandWithOverflow(el, { 'table-scroll': { overflowX: 'auto', overflowY: 'auto' } });
+
+    expect(scroller.style.overflowX).toBe('visible');
+    expect(scroller.style.overflowY).toBe('visible');
+    expect(scroller.style.width).toBe('');
+    expect(scroller.style.maxHeight).toBe('');
+  });
+
+  it('横向溢出时按内容宽度展开,且两轴同时改成 visible', () => {
+    const el = root('<div class="wide"></div><div class="plain"></div>');
+    const wide = el.querySelector<HTMLElement>('.wide')!;
+    const plain = el.querySelector<HTMLElement>('.plain')!;
+    withSize(wide, { scrollWidth: 200, clientWidth: 100, scrollHeight: 20, clientHeight: 20 });
+
+    expandWithOverflow(el, { wide: { overflowX: 'auto', overflowY: 'auto' } });
+
     expect(wide.style.overflowX).toBe('visible');
+    expect(wide.style.overflowY).toBe('visible');
     expect(wide.style.width).toBe('max-content');
     expect(wide.style.maxWidth).toBe('none');
+    expect(wide.style.maxHeight).toBe('');
+    expect(plain.style.overflowX).toBe('');
+  });
+
+  it('纵向溢出时解除固定高度与最大高度', () => {
+    const el = root('<pre class="tall"></pre>');
+    const tall = el.querySelector<HTMLElement>('.tall')!;
+    tall.style.height = '96px';
+    withSize(tall, { scrollWidth: 100, clientWidth: 100, scrollHeight: 400, clientHeight: 96 });
+
+    expandWithOverflow(el, { tall: { overflowX: 'visible', overflowY: 'scroll' } });
+
+    expect(tall.style.overflowY).toBe('visible');
+    expect(tall.style.height).toBe('auto');
+    expect(tall.style.maxHeight).toBe('none');
+    expect(tall.style.width).toBe('');
   });
 });
 

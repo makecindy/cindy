@@ -35,7 +35,8 @@ vi.mock('react-i18next', () => ({
         (vars?.name ? `${key}: ${vars.name}` : key),
   }),
 }));
-vi.mock('@/cindy-brain/ghostUnreadStore', () => ({ useAnyGhostUnread: () => false }));
+const unreadMock = vi.hoisted(() => ({ ordinary: false }));
+vi.mock('@/cindy-brain/ghostUnreadStore', () => ({ useAnyGhostUnread: () => unreadMock.ordinary }));
 vi.mock('@/cindy-brain/ghostMainViews', () => ({
   useGhostMainViews: () => ({
     declared: mainViewsMock.routeCapable,
@@ -71,6 +72,7 @@ beforeEach(() => {
   mainViewsMock.sidebarVisible = [];
   authMock.owner = 'owner-1';
   installedMock.ghosts = [{ manifest: { id: 'bundled' } }];
+  unreadMock.ordinary = false;
   localStorage.removeItem('sidebar-navigation:apps:v1');
   navigationTesting.resetArrivals();
   setSidebarNavigationPrefs(OWNER, {
@@ -104,6 +106,54 @@ function Harness({ initialPath, owner = 'one' }: { initialPath: string; owner?: 
     </MainViewHistoryProvider>
   );
 }
+
+describe('Retirement attention across sidebar navigation placements', () => {
+  it.each(['row', 'more', 'rail', 'rail-more'] as const)(
+    'keeps the notice visible in %s and clears only its own unread state',
+    (placement) => {
+      installedMock.ghosts = [{ manifest: { id: 'ios-simulator' }, retirement: { unread: true } }];
+      const inMore = placement.endsWith('more');
+      if (inMore) {
+        setSidebarNavigationPrefs(OWNER, {
+          order: ['automations', 'plugins', 'bots', 'search'],
+          visible: ['automations', 'bots', 'search'],
+        });
+      }
+      const ui = () => (
+        <MainViewHistoryProvider>
+          <MemoryRouter initialEntries={['/cc-agent/session-1']}>
+            {placement.startsWith('rail')
+              ? <SidebarRailNavigation renderSearch={() => null} />
+              : <SidebarTopNav />}
+          </MemoryRouter>
+        </MainViewHistoryProvider>
+      );
+      const view = render(ui());
+      if (inMore) {
+        fireEvent.pointerDown(screen.getByRole('button', { name: 'sidebar.navigation.more' }), {
+          button: 0, ctrlKey: false,
+        });
+      }
+      const entry = () => screen.getByRole(inMore ? 'menuitem' : 'button', { name: 'sidebar.tabs.plugins' });
+      const dot = (tone: string) => Array.from(entry().querySelectorAll('span')).find((span) =>
+        span.className.includes(`--card-status-${tone}`),
+      );
+      expect(dot('awaiting')).toBeTruthy();
+      expect(dot('awaiting')?.className).not.toContain('session-card-dot');
+
+      // Acknowledging retirement must preserve another plugin's ordinary unread dot.
+      installedMock.ghosts = [{ manifest: { id: 'ios-simulator' }, retirement: { unread: false } }];
+      unreadMock.ordinary = true;
+      view.rerender(ui());
+      expect(dot('awaiting')).toBeUndefined();
+      expect(dot('done')).toBeTruthy();
+
+      unreadMock.ordinary = false;
+      view.rerender(ui());
+      expect(dot('done')).toBeUndefined();
+    },
+  );
+});
 
 describe('Sidebar teammate return action', () => {
   const openMore = () => {

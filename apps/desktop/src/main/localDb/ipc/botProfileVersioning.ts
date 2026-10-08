@@ -60,7 +60,7 @@ export function mergeBotProfileCapabilities(input: {
         Array.isArray(current) ? current.filter((id): id is string => typeof id === 'string') : []);
     }
   }
-  return next;
+  return normalizeBotToolCapabilities(next);
 }
 
 /** Main-owned persistence boundary for the ordered Bot runtime routes. */

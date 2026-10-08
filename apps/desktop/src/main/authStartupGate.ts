@@ -1,6 +1,6 @@
 import { AuthApiError } from '@cindy/auth-client';
 
-import { LOGIN_PREPARING_UNLOCK_TIMEOUT_MS } from '../shared/authIpc';
+import { LOGIN_PREPARING_UNLOCK_TIMEOUT_MS, loginPreparingErrorState } from '../shared/authIpc';
 
 /**
  * 冷启动 auth 流程的「限时等待」编排 —— 与 Electron / 网络层解耦的纯逻辑,
@@ -95,13 +95,23 @@ export interface PreparingGateLog {
 export type LoginProvidersLoadFailure = {
   success: false;
   code: string;
-  state: { step: 'error'; code: string; recoverTo: 'identifier' };
+  retryAt?: number;
+  state: ReturnType<typeof loginPreparingErrorState>;
 };
 
 /** 把 getProviders 失败(含准备态超时)映射成既有可重试错误步。 */
 export function mapLoginProvidersLoadFailure(error: unknown): LoginProvidersLoadFailure {
   const code = error instanceof AuthApiError ? error.code : 'AUTH_SERVICE_UNAVAILABLE';
-  return { success: false, code, state: { step: 'error', code, recoverTo: 'identifier' } };
+  const state = loginPreparingErrorState(
+    code,
+    error instanceof AuthApiError ? error.retryAt : undefined,
+  );
+  return {
+    success: false,
+    code,
+    state,
+    ...(state.retryAt !== undefined ? { retryAt: state.retryAt } : {}),
+  };
 }
 
 /**

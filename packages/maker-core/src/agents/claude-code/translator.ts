@@ -66,13 +66,14 @@ export interface TurnState {
   /** 本 turn 是否已收到 compact_boundary；收到后 result usage 不应覆盖 compact 后 context。 */
   sawCompactBoundary: boolean;
   /**
-   * 本 turn 是否已向 UI 推过 text event(assistant text block 或流式 text_delta)。
+   * 本 turn 主代理是否已向 UI 推过 text event(assistant text block 或流式 text_delta)。
    * handleResult 里 result.result 兜底补推的判据:整轮一个 text 都没推过时才补,
    * 避免与已推正文重复。空串不置位(见两处置位点)。
    */
   hasEmittedText: boolean;
   /**
-   * 本 turn 已推给 UI 的全部 text(assistant block + 流式 delta,按到达顺序拼接)。
+   * 本 turn 主代理已推给 UI 的 text(assistant block + 流式 delta,按到达顺序拼接)。
+   * 子代理事件仍照常推送，但不能参与主代理 result 的补发或 silent-stop 判定。
    * turn-end 时与 result.result 做前缀比对,只补 UI 缺失的尾部(末尾截断兜底),绝不重复推。
    * 这是修复 e7ea882b 盲区(末尾截断)的依据:hasEmittedText 是 per-turn 布尔,无法区分
    * "整轮全空"和"前面推过、最后一段被截断";uiEmittedText 让兜底能精确算出缺哪一段。
@@ -117,7 +118,7 @@ export interface TurnState {
   /** interrupt 置位时的 generation 快照(见 generation 注释)。 */
   interruptGeneration: number;
   /**
-   * 最近一条 assistant API 消息是否带「实质内容」(非空 text 或任何非 thinking 块;
+   * 最近一条主代理 assistant API 消息是否带「实质内容」(非空 text 或任何非 thinking 块;
    * thinking / redacted_thinking 不算)。逐条 assistant 消息覆盖写,turn end
    * 时留下的即"最后一条 assistant 消息"的判定,是 silent-stop 观测的核心依据:
    * 上游偶发用一条空内容消息收尾整个 turn(空 thinking + end_turn,或 SSE 流被
@@ -175,7 +176,7 @@ export interface RuntimeState {
   /** 明确属于 local_bash / local_workflow 的 task_id；稀疏后续帧继续排除。 */
   excludedSubagentTaskIds: Set<string>;
   /**
-   * 上一次 SDK assistant 消息提取出来的 agentMeta (uuid / sdkSessionId / model / ...).
+   * 上一次主 agent SDK assistant 消息的 agentMeta (uuid / sdkSessionId / model / ...).
    * 主 agent 的 stream_event 累积时用它补齐 transcript 锚点；subagent stream
    * 则必须按 parent_tool_use_id 隔离，不能共享这份会话级状态。
    * 老链路 agentManager.ts:2214 (session.lastAssistantMeta) 同款。
@@ -211,6 +212,13 @@ export interface RuntimeState {
   toolResultBatchSeq: number;
   usageSegmentSeq: number;
   generation: ClaudeGenerationState;
+  /**
+   * 被拒额度窗口(`rateLimitType`)→ 重置时刻(unix ms)。每条 `rate_limit_event`
+   * 只描述一个窗口,只有同一窗口再报非 rejected 才移除,别的窗口的 allowed 不影响。
+   * 会话级而非 turn 级:CLI 已知被拒后会本地短路后续请求,那些 turn 直接报限额
+   * 错误、不再重发事件,仍要能带上同一个重置时刻。
+   */
+  rateLimitRejectedResetAtMs: Map<string, number>;
 }
 
 export function newRuntimeState(): RuntimeState {
@@ -236,6 +244,7 @@ export function newRuntimeState(): RuntimeState {
     toolResultBatchSeq: 0,
     usageSegmentSeq: 0,
     generation: newClaudeGenerationState(),
+    rateLimitRejectedResetAtMs: new Map(),
   };
 }
 
@@ -801,6 +810,7 @@ export function translateSdkMessage(
           type: 'tool_result_full',
           data: { toolUseId: pair.toolUseId, fullText: pair.fullText },
           source: 'claude-code',
+          ...(parentToolUseId ? { agentMeta: { parentUuid: parentToolUseId } } : {}),
         });
       }
       const subagentResult = extractSubagentToolResult(msg);
@@ -928,6 +938,26 @@ export function translateSdkMessage(
 
     case 'result': {
       handleResult(msg, queue, ctx);
+      return;
+    }
+
+    case 'rate_limit_event': {
+      // 订阅额度快照另由 index.ts 旁路转给 host;这里只记被拒窗口的重置时刻,
+      // 供限额错误带给下游(目标模式据此到点自动续跑)。
+      const info = (rawMsg as {
+        rate_limit_info?: { status?: unknown; resetsAt?: unknown; rateLimitType?: unknown };
+      }).rate_limit_info;
+      if (typeof info?.status !== 'string') return;
+      const windowKey = typeof info.rateLimitType === 'string' ? info.rateLimitType : '';
+      const resetsAt = typeof info.resetsAt === 'number' && info.resetsAt > 0 ? info.resetsAt : null;
+      if (info.status === 'rejected' && resetsAt != null) {
+        // resetsAt 是 epoch 秒;误给毫秒时不再放大。
+        const resetAtMs = resetsAt > 1e12 ? resetsAt : resetsAt * 1000;
+        ctx.rt.rateLimitRejectedResetAtMs.set(windowKey, resetAtMs);
+        ctx.log.info('SDK ▷ rate limit rejected', { rateLimitType: windowKey, resetAtMs });
+      } else if (info.status !== 'rejected') {
+        ctx.rt.rateLimitRejectedResetAtMs.delete(windowKey);
+      }
       return;
     }
 
@@ -1367,6 +1397,13 @@ function assistantBlockHasSubstance(block: Record<string, unknown>): boolean {
   return true;
 }
 
+/** Both envelope and streaming text use the root-only result fallback ledger. */
+function recordRootEmittedText(ctx: TranslateContext, text: string, parentToolUseId?: string): void {
+  if (parentToolUseId || text.length === 0) return;
+  ctx.turn.hasEmittedText = true;
+  ctx.turn.uiEmittedText += text;
+}
+
 function handleAssistant(
   msg: {
     message?: { content?: Array<Record<string, unknown>> };
@@ -1431,11 +1468,12 @@ function handleAssistant(
   // 后续另一次失败误用旧 envelope 的错误详情。错误 envelope 也不能成为
   // lastAssistantMeta，避免恢复后的 fallback text 错绑到错误消息的 transcript 锚点。
   ctx.turn.pendingApiError = null;
-  ctx.rt.lastAssistantMeta = assistantMeta;
-
   const parentToolUseId = typeof msg.parent_tool_use_id === 'string' && msg.parent_tool_use_id
     ? msg.parent_tool_use_id
     : undefined;
+  // Child envelopes interleave with the root stream; they are never its
+  // transcript fallback (including when the next root wrapper omits parent).
+  if (!parentToolUseId) ctx.rt.lastAssistantMeta = assistantMeta;
   const parentStreamKey = parentToolUseId ?? CLAUDE_MAIN_USAGE_PARENT;
   const assistantRequestId = typeof assistantMeta.requestId === 'string'
     ? assistantMeta.requestId
@@ -1501,7 +1539,9 @@ function handleAssistant(
   // silent-stop 观测素材: 本条消息是否带实质内容(非空 text / 非 thinking 块)。
   // 未知块 fail-safe 为有内容，避免 SDK 新 block 被误续跑。
   // 逐条覆盖写, turn end 时留下的就是最后一条 assistant 消息的判定(见 TurnState 字段注释)。
-  ctx.turn.lastAssistantMsgHadSubstance = content.some(assistantBlockHasSubstance);
+  if (!parentToolUseId) {
+    ctx.turn.lastAssistantMsgHadSubstance = content.some(assistantBlockHasSubstance);
+  }
   for (const blockRaw of content) {
     const block = blockRaw as { type?: string; text?: string; name?: string; id?: string; input?: unknown; thinking?: string; signature?: string };
     if (block.type === 'text' && typeof block.text === 'string') {
@@ -1512,10 +1552,9 @@ function handleAssistant(
         }
       }
       const visibleText = stripInternalWebCitations(block.text);
-      ctx.turn.text += visibleText;
+      if (!parentToolUseId) ctx.turn.text += visibleText;
       if (visibleText.length > 0) {
-        ctx.turn.hasEmittedText = true;
-        ctx.turn.uiEmittedText += visibleText;
+        recordRootEmittedText(ctx, visibleText, parentToolUseId);
         queue.push({
           type: 'text',
           data: { text: visibleText, isFinal: true },
@@ -1717,8 +1756,7 @@ function handleStreamEvent(
       const visibleDelta = holdStandaloneStopTokenDelta(buffer, delta.text);
       ctx.rt.streamStopTokenByKey.set(streamKey, buffer);
       if (visibleDelta && visibleDelta.length > 0) {
-        ctx.turn.hasEmittedText = true;
-        ctx.turn.uiEmittedText += visibleDelta;
+        recordRootEmittedText(ctx, visibleDelta, parentToolUseId);
         queue.push({
           type: 'text',
           data: { text: visibleDelta, isFinal: false },
@@ -2356,6 +2394,17 @@ function handleResult(
     const errDetail = redactSensitiveText(rawResult);
     const errorStatus = resultSignals.errorStatus ?? pendingApiError?.errorStatus;
     const usageLimit = pendingApiError?.usageLimit === true || resultSignals.usageLimit;
+    // 多个窗口同时被拒时取最晚的重置,早醒只会再撞一次限额。已过点也照带:
+    // 下游按零延迟立即续跑,丢掉反而只能等手动恢复。但过点的只用一次——到点后
+    // 仍被本地短路拒绝时不会有新事件,反复带同一个过期时刻会让下游无限立即重试。
+    const rejectedResets = [...ctx.rt.rateLimitRejectedResetAtMs.values()];
+    const usageReset = rejectedResets.length > 0
+      ? { usageResetAt: Math.max(...rejectedResets) }
+      : {};
+    const nowMs = Date.now();
+    for (const [windowKey, resetAtMs] of ctx.rt.rateLimitRejectedResetAtMs) {
+      if (resetAtMs <= nowMs) ctx.rt.rateLimitRejectedResetAtMs.delete(windowKey);
+    }
     const errorMessage = pendingApiError?.agentMeta
       ? pendingApiError.message
       : errDetail || pendingApiError?.message;
@@ -2391,6 +2440,7 @@ function handleResult(
             ...classifiedReason,
             ...(errorStatus !== undefined ? { errorStatus } : {}),
             ...(usageLimit ? { usageLimit: true } : {}),
+            ...usageReset,
             ...(pendingApiError.retryAttempt !== undefined
               ? { retryAttempt: pendingApiError.retryAttempt }
               : {}),
@@ -2406,13 +2456,19 @@ function handleResult(
             ...classifiedReason,
             ...(errorStatus !== undefined ? { errorStatus } : {}),
             ...(usageLimit ? { usageLimit: true } : {}),
+            ...usageReset,
             ...modelAccessError,
           }
         // reason 是稳定 key, renderer 按它走 i18n(规则 18); message 仅作非
         // renderer 消费方(IM/orca)的兜底文案。
         : { message: '任务执行失败（模型未返回错误详情）。', isTerminal: true, reason: 'turn-failed' },
       source: 'claude-code',
-      ...(pendingApiError?.agentMeta ? { agentMeta: pendingApiError.agentMeta } : {}),
+      // ResultMessage terminates the whole query. A child API envelope can
+      // explain its failure, but must not turn this terminal event into a child
+      // event or attach the child's transcript anchor to the root error.
+      ...(pendingApiError?.agentMeta && !pendingApiError.agentMeta.parentUuid
+        ? { agentMeta: pendingApiError.agentMeta }
+        : {}),
     });
   }
   // turn end status: isRunning=false + status='Done'; 数值全部走 endSnapshot

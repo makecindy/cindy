@@ -304,6 +304,25 @@ describe('standalone remote viewer authority', () => {
       f.request.mock.calls.filter(([, r]) => r.op === 'clipboard' && r.action === 'paste'),
     ).toHaveLength(1);
   });
+  it('tells an empty text-only clipboard apart from an oversized one', async () => {
+    const f = fixture();
+    await f.connection.request(f.connection.generation, { op: 'start', displayId: 'screen' });
+    f.request.mockResolvedValueOnce({ controlling: true });
+    await f.connection.request(f.connection.generation, {
+      op: 'control',
+      lease: 'lease-a',
+      enabled: true,
+    });
+    const clipboard = (action: 'copy' | 'paste') =>
+      f.connection.clipboard(f.connection.generation, action);
+    f.request.mockResolvedValueOnce({ text: '' });
+    expect(await clipboard('copy')).toEqual({ ok: false, code: 'CLIPBOARD_EMPTY' });
+    f.request.mockResolvedValueOnce({ text: 'x'.repeat(16_385) });
+    expect(await clipboard('copy')).toEqual({ ok: false, code: 'CLIPBOARD_TOO_LONG' });
+    f.readClipboard.mockReturnValueOnce('');
+    expect(await clipboard('paste')).toEqual({ ok: false, code: 'CLIPBOARD_EMPTY' });
+    expect(f.writeClipboard).not.toHaveBeenCalled();
+  });
 });
 
 it.each([true, false])(

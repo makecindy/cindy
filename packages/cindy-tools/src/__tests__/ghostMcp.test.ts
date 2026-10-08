@@ -376,6 +376,7 @@ describe("cindy_ghosts · ghost_info(单插件精准查询)", () => {
   it.each([
     ["GHOST_ASLEEP", "目标插件未启用"],
     ["GHOST_DISABLED_IN_WORKDIR", "当前工作目录已停用"],
+    ["GHOST_RETIRED", "该功能已下线"],
   ] as const)("%s 只返回公开结构化错误字段", async (errorCode, message) => {
     const result = await handleGhostInfo(
       fakeDeps({
@@ -504,6 +505,7 @@ describe("cindy_ghosts · ghost_manual(随包手册按需读取)", () => {
     "GHOST_NOT_FOUND",
     "GHOST_ASLEEP",
     "GHOST_DISABLED_IN_WORKDIR",
+    "GHOST_RETIRED",
   ] as const)("%s 可见性错误保持同一固定信封", async (errorCode) => {
     const result = await handleGhostManual(
       fakeDeps({

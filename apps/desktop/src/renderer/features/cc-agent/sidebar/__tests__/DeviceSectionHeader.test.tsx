@@ -4,6 +4,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { REMOTE_DESKTOP_CHANNEL } from '@cindy/device-link';
 import i18n from '@/i18n';
 import { revokedDevicesStore } from '@/features/device-link/revokedDevicesStore';
+import { unresponsiveDevicesStore } from '@/features/device-link/unresponsiveDevicesStore';
 import { toast } from '@/lib/toast';
 import { DeviceSectionHeader } from '../DeviceSectionHeader';
 
@@ -41,6 +42,7 @@ beforeEach(async () => {
   vi.useFakeTimers();
   vi.clearAllMocks();
   revokedDevicesStore.clearAll();
+  unresponsiveDevicesStore.clearAll();
   fixture.devices = [device()];
   invoke.mockReset().mockResolvedValue(capabilities);
   open.mockReset().mockResolvedValue(undefined);
@@ -50,6 +52,7 @@ beforeEach(async () => {
 afterEach(() => {
   cleanup();
   revokedDevicesStore.clearAll();
+  unresponsiveDevicesStore.clearAll();
   vi.restoreAllMocks();
   vi.useRealTimers();
 });
@@ -185,6 +188,90 @@ it.each(['CHANNEL_NOT_ALLOWED', 'ACCESS_REVOKED', 'INVOKE_TIMEOUT'])(
     expect(toast.error).not.toHaveBeenCalled();
   },
 );
+
+it.each([
+  '[DEVICE_LINK_TIMEOUT] no invoke-result within 12000ms',
+  '[DEVICE_LINK_NOT_CONNECTED] link not open',
+  '[DEVICE_LINK_BUSY] backpressure',
+  '[DEVICE_LINK_DEVICE_UNRESPONSIVE] target device remote is unresponsive (circuit open)',
+])('checks again automatically when an interrupted probe is revealed: %s', async (message) => {
+  invoke.mockRejectedValueOnce(new Error(message));
+  render(header());
+  await act(async () => {});
+  const action = screen.getByRole('button', {
+    name: i18n.t('remoteDesktop.shortcut.unavailable', {
+      reason: i18n.t('remoteDesktop.shortcut.checkInterrupted'),
+    }),
+  });
+  expect(invoke).toHaveBeenCalledOnce();
+  await hover();
+  expect(invoke).toHaveBeenCalledTimes(2);
+  expect(screen.getByRole('button', { name: 'Open remote desktop' })).toBe(action);
+  expect(toast.info).not.toHaveBeenCalled();
+  expect(open).not.toHaveBeenCalled();
+});
+
+it('rechecks an interrupted probe on keyboard focus and keeps retrying while it stays interrupted', async () => {
+  invoke.mockRejectedValue(new Error('[DEVICE_LINK_TIMEOUT] no invoke-result within 12000ms'));
+  render(header());
+  await act(async () => {});
+  act(() => screen.getByRole('button', { name: 'Machine' }).focus());
+  await act(async () => {});
+  expect(invoke).toHaveBeenCalledTimes(2);
+  fireEvent.mouseLeave(row());
+  await hover();
+  expect(invoke).toHaveBeenCalledTimes(3);
+  invoke.mockResolvedValue(capabilities);
+  fireEvent.mouseLeave(row());
+  await hover();
+  expect(invoke).toHaveBeenCalledTimes(4);
+  expect(screen.getByRole('button', { name: 'Open remote desktop' })).toBeTruthy();
+  fireEvent.mouseLeave(row());
+  await hover();
+  expect(invoke).toHaveBeenCalledTimes(4);
+});
+
+it('reports a relay offline reply as offline and checks again when revealed', async () => {
+  invoke.mockRejectedValueOnce(new Error('[DEVICE_LINK_DEVICE_OFFLINE] target device is offline'));
+  render(header());
+  await act(async () => {});
+  expect(
+    screen.getByRole('button', { name: /^Remote desktop unavailable:/ }).getAttribute('aria-label'),
+  ).toContain('This computer is offline.');
+  await hover();
+  expect(invoke).toHaveBeenCalledTimes(2);
+  expect(screen.getByRole('button', { name: 'Open remote desktop' })).toBeTruthy();
+});
+
+it('does not recheck a definitive failure on hover', async () => {
+  invoke.mockResolvedValue({ ...capabilities, enabled: false });
+  render(header());
+  await act(async () => {});
+  await hover();
+  fireEvent.mouseLeave(row());
+  await hover();
+  unavailable();
+  expect(invoke).toHaveBeenCalledOnce();
+});
+
+it('waits for an unresponsive device to recover, then checks automatically', async () => {
+  invoke.mockRejectedValueOnce(
+    new Error('[DEVICE_LINK_DEVICE_UNRESPONSIVE] target device remote is unresponsive'),
+  );
+  render(header());
+  await act(async () => {});
+  expect(invoke).toHaveBeenCalledOnce();
+  act(() => unresponsiveDevicesStore.apply('remote', true));
+  await hover();
+  expect(unavailable().getAttribute('aria-label')).toContain(
+    i18n.t('remoteDesktop.shortcut.unresponsive'),
+  );
+  expect(invoke).toHaveBeenCalledOnce();
+  act(() => unresponsiveDevicesStore.apply('remote', false));
+  await act(async () => {});
+  expect(invoke).toHaveBeenCalledTimes(2);
+  expect(screen.getByRole('button', { name: 'Open remote desktop' })).toBeTruthy();
+});
 
 it('remembers the automatic check across pointer re-entry without polling', async () => {
   render(header());

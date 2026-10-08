@@ -81,10 +81,6 @@ vi.mock('react-i18next', () => ({
         'settings.defaults.restore': 'Restore default',
         'settings.ghosts.detail.oauthScopeStale':
           'This authorization does not include newly added permissions. Reconnect to enable them.',
-        'settings.ghosts.detail.iosSimulatorAutoOpenTitle':
-          'Open the embedded Simulator panel automatically',
-        'settings.ghosts.detail.iosSimulatorAutoOpenDescription':
-          'Automatically reveal the right-side Simulator panel.',
       };
       return labels[key] ?? key;
     },
@@ -150,7 +146,6 @@ const detail: GhostPluginDetail = {
   tabPanel: false,
   hasMainView: false,
   mainViewTitle: null,
-  hostCapability: null,
   author: 'XD',
   contents: ['code'],
   permissions: [],
@@ -173,14 +168,7 @@ beforeEach(() => {
   Object.defineProperty(window, 'electronAPI', {
     configurable: true,
     value: {
-      maker: {
-        iosSimulator: {
-          getPreferences: vi.fn(async () => ({ autoOpenEmbeddedPanel: true })),
-          setAutoOpenEmbeddedPanel: vi.fn(async (enabled: boolean) => ({
-            autoOpenEmbeddedPanel: enabled,
-          })),
-        },
-      },
+
     },
   });
 });
@@ -513,92 +501,6 @@ describe('Ghost plugin detail sections', () => {
     expect(backButton?.className).toContain('-ml-3');
     expect(detailHero?.className).toContain('grid-cols-[64px_minmax(0,1fr)_auto]');
     expect(detailActions?.className).toContain('flex-nowrap');
-  });
-
-  it('renders an enabled Host capability as a conversation action', async () => {
-    vi.stubGlobal(
-      'ResizeObserver',
-      class {
-        observe() {}
-        unobserve() {}
-        disconnect() {}
-      },
-    );
-    const onUse = vi.fn();
-    render(
-      <GhostPluginDetailView
-        ghost={null}
-        detail={{ ...detail, canUse: false, hostCapability: 'ios-simulator' }}
-        panelStatus={null}
-        onBack={vi.fn()}
-        onToggle={vi.fn()}
-        onUse={onUse}
-        onUpdate={vi.fn()}
-        onUpdateFromFile={vi.fn()}
-        onUninstall={vi.fn()}
-        toggleDisabled={false}
-      />,
-    );
-
-    fireEvent.click(screen.getByRole('button', { name: 'settings.ghosts.detail.chatAction' }));
-    expect(onUse).toHaveBeenCalledTimes(1);
-    await waitFor(() => {
-      const preference = screen.getByRole('switch', {
-        name: 'Open the embedded Simulator panel automatically',
-      });
-      expect((preference as HTMLButtonElement).disabled).toBe(false);
-    });
-  });
-
-  it('shows and updates the Host-owned Simulator auto-open preference', async () => {
-    vi.stubGlobal(
-      'ResizeObserver',
-      class {
-        observe() {}
-        unobserve() {}
-        disconnect() {}
-      },
-    );
-    const getPreferences = vi.fn(async () => ({ autoOpenEmbeddedPanel: false }));
-    const setAutoOpenEmbeddedPanel = vi.fn(async (enabled: boolean) => ({
-      autoOpenEmbeddedPanel: enabled,
-    }));
-    Object.defineProperty(window, 'electronAPI', {
-      configurable: true,
-      value: {
-        maker: {
-          iosSimulator: { getPreferences, setAutoOpenEmbeddedPanel },
-        },
-      },
-    });
-
-    render(
-      <GhostPluginDetailView
-        ghost={null}
-        detail={{ ...detail, canUse: false, hostCapability: 'ios-simulator' }}
-        panelStatus={null}
-        onBack={vi.fn()}
-        onToggle={vi.fn()}
-        onUse={vi.fn()}
-        onUpdate={vi.fn()}
-        onUpdateFromFile={vi.fn()}
-        onUninstall={vi.fn()}
-        toggleDisabled={false}
-      />,
-    );
-
-    const toggle = await screen.findByRole('switch', {
-      name: 'Open the embedded Simulator panel automatically',
-    });
-    await waitFor(() => {
-      expect(toggle.getAttribute('data-state')).toBe('unchecked');
-      expect((toggle as HTMLButtonElement).disabled).toBe(false);
-    });
-
-    fireEvent.click(toggle);
-    await waitFor(() => expect(setAutoOpenEmbeddedPanel).toHaveBeenCalledWith(true));
-    await waitFor(() => expect(toggle.getAttribute('data-state')).toBe('checked'));
-    expect(screen.getByText('Automatically reveal the right-side Simulator panel.')).toBeTruthy();
   });
 
   it('routes a projected detail icon failure to market recovery', () => {

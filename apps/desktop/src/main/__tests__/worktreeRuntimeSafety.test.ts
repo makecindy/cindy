@@ -16,10 +16,12 @@ vi.mock('../desktopProcessIdentity', async (importOriginal) => ({
 import { acquireWorktreeRuntimeLease, releaseWorktreeRuntimeLease, readWorktreeRuntimePaths, retryPendingWorktreeRuntimeLeaseReleases } from '../worktree/runtimeLeases';
 import { physicalWorktreeKey, withWorktreeResourceLock } from '../worktree/resourceLock';
 import { createLinkedWorktreeMetadata } from './fixtures/linkedWorktree';
+import { seedLegacySharedRuntimeLease } from './fixtures/legacySharedRuntimeLease';
 
 describe('worktree runtime evidence and physical locks', () => {
   let worktree: string;
   let gitLock: string;
+  const seedLegacyLease = () => seedLegacySharedRuntimeLease(path.join(state.root, 'app-data'), worktree, gitLock);
   const hasGitLock = () => fs.stat(gitLock).then(() => true, () => false);
   const platformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform')!;
   beforeEach(async () => {
@@ -45,6 +47,9 @@ describe('worktree runtime evidence and physical locks', () => {
     await releaseWorktreeRuntimeLease(lease);
     expect(await readWorktreeRuntimePaths()).toEqual(new Set());
     expect(notify).toHaveBeenCalledOnce();
+    expect(await hasGitLock()).toBe(false);
+    await expect(fs.stat(path.join(state.root, 'app-data', 'Cindy', 'shared-worktree-runtime-leases')))
+      .rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('keeps the replacement runtime protected when an older close finishes late', async () => {
@@ -85,15 +90,14 @@ describe('worktree runtime evidence and physical locks', () => {
   });
 
   it('retries a failed shared lease release from another isolated profile', async () => {
-    const lease = (await acquireWorktreeRuntimeLease('borrower', worktree, { crossProfile: true }))!;
+    const lease = await seedLegacyLease();
     const unlink = fs.unlink.bind(fs);
     let blocked = true;
     vi.spyOn(fs, 'unlink').mockImplementation(async (file) => {
-      if (file === lease.sharedFile && blocked) throw Object.assign(new Error('busy'), { code: 'EBUSY' });
+      if (file === lease.file && blocked) throw Object.assign(new Error('busy'), { code: 'EBUSY' });
       return unlink(file);
     });
     await expect(releaseWorktreeRuntimeLease(lease)).rejects.toMatchObject({ code: 'EBUSY' });
-    await expect(fs.stat(lease.file)).rejects.toMatchObject({ code: 'ENOENT' });
     state.userData = path.join(state.root, 'profile-b');
     await fs.mkdir(path.join(state.userData, '.dev-instances'), { recursive: true });
     expect(await readWorktreeRuntimePaths()).toEqual(new Set([await physicalWorktreeKey(worktree)]));
@@ -102,14 +106,14 @@ describe('worktree runtime evidence and physical locks', () => {
     blocked = false;
     expect(await retryPendingWorktreeRuntimeLeaseReleases()).toBe(0);
     expect(await readWorktreeRuntimePaths()).toEqual(new Set());
-    await expect(fs.stat(`${lease.sharedFile}.release`)).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(fs.stat(`${lease.file}.release`)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it.each(['crashed-owner', 'partial-write'] as const)('keeps shared lease evidence protective after %s', async (reason) => {
-    const lease = (await acquireWorktreeRuntimeLease('borrower', worktree, { crossProfile: true }))!;
+    const lease = await seedLegacyLease();
     state.userData = path.join(state.root, 'profile-b');
     await fs.mkdir(path.join(state.userData, '.dev-instances'), { recursive: true });
-    if (reason === 'partial-write') await fs.writeFile(lease.sharedFile!, '{');
+    if (reason === 'partial-write') await fs.writeFile(lease.file!, '{');
     else vi.spyOn(process, 'kill').mockImplementation(() => {
       throw Object.assign(new Error('owner is gone'), { code: 'ESRCH' });
     });
@@ -118,73 +122,21 @@ describe('worktree runtime evidence and physical locks', () => {
     expect(await readWorktreeRuntimePaths()).toEqual(new Set());
   });
 
-  it('cleans a failed shared publication without removing an older profile lease', async () => {
-    const oldLease = (await acquireWorktreeRuntimeLease('borrower', worktree))!;
-    const sharedRoot = path.join(state.root, 'app-data', 'Cindy', 'shared-worktree-runtime-leases');
-    const write = fs.writeFile.bind(fs);
-    vi.spyOn(fs, 'writeFile').mockImplementation(async (...args) => {
-      await write(...args);
-      if (typeof args[0] === 'string' && path.dirname(args[0]) === sharedRoot) {
-        throw Object.assign(new Error('shared publication interrupted'), { code: 'EIO' });
-      }
-    });
-    await expect(acquireWorktreeRuntimeLease('borrower', worktree, { crossProfile: true })).rejects.toThrow('shared publication interrupted');
-    expect(await fs.readdir(path.dirname(oldLease.file))).toEqual([path.basename(oldLease.file)]);
-    expect(await fs.readdir(sharedRoot)).toEqual([]);
-    expect(await readWorktreeRuntimePaths()).toEqual(new Set([await physicalWorktreeKey(worktree)]));
-    await releaseWorktreeRuntimeLease(oldLease);
-  });
-
   it.each(['file', 'directory'] as const)('preserves an existing user Git lock %s', async (kind) => {
     const file = gitLock;
     if (kind === 'file') await fs.writeFile(file, 'user requested retention');
     else await fs.mkdir(file);
-    const lease = (await acquireWorktreeRuntimeLease('borrower', worktree, { crossProfile: true }))!;
-    expect(lease.keepSentinel).toBeUndefined();
+    const lease = (await acquireWorktreeRuntimeLease('ordinary', worktree))!;
     await releaseWorktreeRuntimeLease(lease);
     expect(await hasGitLock()).toBe(true);
     if (kind === 'file') expect(await fs.readFile(file, 'utf8')).toBe('user requested retention');
     else expect(await fs.readdir(file)).toEqual([]);
   });
 
-  it.each(['missing link', 'malformed link', 'foreign backlink', 'metadata inside source'] as const)(
-    'rejects borrowing with %s before publishing an external Git lock', async (kind) => {
-      const link = path.join(worktree, '.git');
-      if (kind === 'missing link') await fs.unlink(link);
-      else if (kind === 'malformed link') await fs.writeFile(link, 'not a Git worktree');
-      else if (kind === 'foreign backlink') {
-        await fs.writeFile(path.join(path.dirname(gitLock), 'gitdir'), path.join(state.root, 'other', '.git'));
-      } else {
-        const gitDir = path.join(worktree, 'metadata', 'worktrees', 'one');
-        await fs.mkdir(gitDir, { recursive: true });
-        await fs.writeFile(path.join(gitDir, 'commondir'), '../..');
-        await fs.writeFile(path.join(gitDir, 'gitdir'), link);
-        await fs.writeFile(link, `gitdir: ${gitDir}\n`);
-        gitLock = path.join(gitDir, 'locked');
-      }
-      await expect(acquireWorktreeRuntimeLease('borrower', worktree, { crossProfile: true })).rejects.toThrow();
-      expect(await readWorktreeRuntimePaths()).toEqual(new Set());
-      expect(await hasGitLock()).toBe(false);
-    },
-  );
-
-  it('accepts relative Git metadata links without creating a keep file in source', async () => {
-    const root = await fs.realpath(worktree);
-    const gitDir = path.dirname(gitLock);
-    const link = path.join(root, '.git');
-    await fs.writeFile(link, `gitdir: ${path.relative(root, gitDir)}\n`);
-    await fs.writeFile(path.join(gitDir, 'gitdir'), `${path.relative(gitDir, link)}\n`);
-    const lease = (await acquireWorktreeRuntimeLease('borrower', worktree, { crossProfile: true }))!;
-    expect(lease.keepSentinel?.file).toBe(await physicalWorktreeKey(gitLock));
-    await expect(fs.stat(path.join(worktree, '.worktree-keep'))).rejects.toMatchObject({ code: 'ENOENT' });
-    await releaseWorktreeRuntimeLease(lease);
-    expect(await hasGitLock()).toBe(false);
-  });
-
   it('keeps legacy protection until the last borrower in either profile finishes', async () => {
-    const first = (await acquireWorktreeRuntimeLease('first', worktree, { crossProfile: true }))!;
+    const first = await seedLegacyLease();
     state.userData = path.join(state.root, 'second-profile');
-    const second = (await acquireWorktreeRuntimeLease('second', worktree, { crossProfile: true }))!;
+    const second = await seedLegacyLease();
     expect(first.keepSentinel).toBeDefined();
     expect(second.keepSentinel).toEqual(first.keepSentinel);
     await releaseWorktreeRuntimeLease(first);
@@ -194,30 +146,8 @@ describe('worktree runtime evidence and physical locks', () => {
     expect(await hasGitLock()).toBe(false);
   });
 
-  it('does not adopt a user marker just because its contents resemble our format', async () => {
-    const file = gitLock;
-    const content = JSON.stringify({ kind: 'cindy-runtime-lock', version: 1, nonce: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee' });
-    await fs.writeFile(file, content);
-    const lease = (await acquireWorktreeRuntimeLease('borrower', worktree, { crossProfile: true }))!;
-    expect(lease.keepSentinel).toBeUndefined();
-    await releaseWorktreeRuntimeLease(lease);
-    expect(await fs.readFile(file, 'utf8')).toBe(content);
-  });
-
-  it('does not let a later borrower adopt a marker edited during an earlier borrow', async () => {
-    const first = (await acquireWorktreeRuntimeLease('first', worktree, { crossProfile: true }))!;
-    const file = gitLock;
-    const content = JSON.stringify({ kind: 'cindy-runtime-lock', version: 1, nonce: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee' });
-    await fs.writeFile(file, content);
-    const second = (await acquireWorktreeRuntimeLease('second', worktree, { crossProfile: true }))!;
-    expect(second.keepSentinel).toBeUndefined();
-    await releaseWorktreeRuntimeLease(first);
-    await releaseWorktreeRuntimeLease(second);
-    expect(await fs.readFile(file, 'utf8')).toBe(content);
-  });
-
   it.each(['edited', 'replaced'] as const)('preserves a runtime marker %s by the user', async (change) => {
-    const lease = (await acquireWorktreeRuntimeLease('borrower', worktree, { crossProfile: true }))!;
+    const lease = await seedLegacyLease();
     const file = gitLock;
     if (change === 'edited') await fs.writeFile(file, 'keep my checkout');
     else {
@@ -232,34 +162,22 @@ describe('worktree runtime evidence and physical locks', () => {
   });
 
   it('does not remove legacy protection when another borrower crashes', async () => {
-    const crashed = (await acquireWorktreeRuntimeLease('crashed', worktree, { crossProfile: true }))!;
-    const active = (await acquireWorktreeRuntimeLease('active', worktree, { crossProfile: true }))!;
+    const crashed = await seedLegacyLease();
+    const active = await seedLegacyLease();
     vi.spyOn(process, 'kill').mockImplementation(() => {
       throw Object.assign(new Error('owner is gone'), { code: 'ESRCH' });
     });
     await releaseWorktreeRuntimeLease(active);
     await retryPendingWorktreeRuntimeLeaseReleases();
     expect(await hasGitLock()).toBe(true);
-    expect(await fs.stat(crashed.sharedFile!)).toBeDefined();
+    expect(await fs.stat(crashed.file!)).toBeDefined();
     // Only confirmed source I/O teardown authorizes the remaining release.
     await releaseWorktreeRuntimeLease(crashed);
     expect(await hasGitLock()).toBe(false);
   });
 
-  it('fails acquisition before source I/O when legacy protection cannot be published', async () => {
-    const write = fs.writeFile.bind(fs);
-    const sentinel = await physicalWorktreeKey(gitLock);
-    vi.spyOn(fs, 'writeFile').mockImplementation(async (...args) => {
-      if (args[0] === sentinel) throw Object.assign(new Error('read only'), { code: 'EACCES' });
-      return write(...args);
-    });
-    await expect(acquireWorktreeRuntimeLease('borrower', worktree, { crossProfile: true })).rejects.toMatchObject({ code: 'EACCES' });
-    expect(await readWorktreeRuntimePaths()).toEqual(new Set());
-    expect(await hasGitLock()).toBe(false);
-  });
-
   it('retries failed sentinel cleanup through the shared durable release intent', async () => {
-    const lease = (await acquireWorktreeRuntimeLease('borrower', worktree, { crossProfile: true }))!;
+    const lease = await seedLegacyLease();
     const unlink = fs.unlink.bind(fs);
     const sentinel = lease.keepSentinel!.file!;
     let blocked = true;
@@ -269,51 +187,37 @@ describe('worktree runtime evidence and physical locks', () => {
     });
     await expect(releaseWorktreeRuntimeLease(lease)).rejects.toMatchObject({ code: 'EBUSY' });
     expect(await hasGitLock()).toBe(true);
-    expect(await fs.stat(lease.sharedFile!)).toBeDefined();
+    expect(await fs.stat(lease.file!)).toBeDefined();
     state.userData = path.join(state.root, 'maintenance-profile');
     expect(await retryPendingWorktreeRuntimeLeaseReleases()).toBe(1);
     blocked = false;
     expect(await retryPendingWorktreeRuntimeLeaseReleases()).toBe(0);
     expect(await hasGitLock()).toBe(false);
-    await expect(fs.stat(lease.sharedFile!)).rejects.toMatchObject({ code: 'ENOENT' });
-    await expect(fs.stat(`${lease.sharedFile}.release`)).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(fs.stat(lease.file!)).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(fs.stat(`${lease.file}.release`)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('still cleans an owned in-tree marker from an older durable release receipt', async () => {
-    const lease = (await acquireWorktreeRuntimeLease('borrower', worktree, { crossProfile: true }))!;
+    const lease = await seedLegacyLease();
     const marker = lease.keepSentinel!;
     const oldFile = path.join(worktree, '.worktree-keep');
     await fs.rename(marker.file!, oldFile);
     // Older receipts carried identity and content, with no explicit marker path.
     const keepSentinel = { identity: marker.identity, content: marker.content };
-    await fs.writeFile(`${lease.sharedFile}.release`, JSON.stringify({
-      version: 1, file: lease.sharedFile, path: lease.physicalPath, keepSentinel,
+    await fs.writeFile(`${lease.file}.release`, JSON.stringify({
+      version: 1, file: lease.file, path: lease.physicalPath, keepSentinel,
     }));
     expect(await retryPendingWorktreeRuntimeLeaseReleases()).toBe(0);
     await expect(fs.stat(oldFile)).rejects.toMatchObject({ code: 'ENOENT' });
-    await expect(fs.stat(lease.sharedFile!)).rejects.toMatchObject({ code: 'ENOENT' });
-    await expect(fs.stat(`${lease.sharedFile}.release`)).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(fs.stat(lease.file!)).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(fs.stat(`${lease.file}.release`)).rejects.toMatchObject({ code: 'ENOENT' });
     await releaseWorktreeRuntimeLease(lease);
   });
 
-  it('cleans its own marker when publishing marker ownership fails', async () => {
-    const write = fs.writeFile.bind(fs);
-    vi.spyOn(fs, 'writeFile').mockImplementation(async (...args) => {
-      if (typeof args[1] === 'string' && args[1].includes('"keepSentinel"')) {
-        await write(args[0], '{');
-        throw Object.assign(new Error('ownership publication interrupted'), { code: 'EIO' });
-      }
-      return write(...args);
-    });
-    await expect(acquireWorktreeRuntimeLease('borrower', worktree, { crossProfile: true })).rejects.toMatchObject({ code: 'EIO' });
-    expect(await readWorktreeRuntimePaths()).toEqual(new Set());
-    expect(await hasGitLock()).toBe(false);
-  });
-
   it('keeps legacy protection while another shared borrower record is unreadable', async () => {
-    const first = (await acquireWorktreeRuntimeLease('first', worktree, { crossProfile: true }))!;
-    const second = (await acquireWorktreeRuntimeLease('second', worktree, { crossProfile: true }))!;
-    await fs.writeFile(second.sharedFile!, '{');
+    const first = await seedLegacyLease();
+    const second = await seedLegacyLease();
+    await fs.writeFile(second.file!, '{');
     await expect(releaseWorktreeRuntimeLease(first)).rejects.toThrow();
     expect(await hasGitLock()).toBe(true);
     expect(await retryPendingWorktreeRuntimeLeaseReleases()).toBe(1);

@@ -115,12 +115,14 @@ import {
 } from './clientEndpointsService.js';
 import {
   parseDesktopLoginAction,
+  loginPreparingErrorState,
   parseDesktopAccountKey,
   type DesktopAccountDeletionChallenge,
   type DesktopAccountSwitcherSnapshot,
   type DesktopSavedAccount,
   type DesktopLoginAction,
   type DesktopLoginActionResult,
+  type DesktopLoginState,
 } from '../shared/authIpc';
 import { LOGIN_CAPTCHA_PAGE_PATH } from '../shared/webviewPartition';
 import {
@@ -403,7 +405,7 @@ function isOwnerChangeShellPending(): boolean {
  */
 const deviceId = process.env.XDT_DEVICE_ID_OVERRIDE?.trim() || machineIdSync();
 
-let loginFlowState: AuthFlowState | null = null;
+let loginFlowState: DesktopLoginState | null = null;
 let providerConfig: ProviderConfig | null = null;
 let discoveredMethods: LoginMethod[] = [];
 // These live only within the current fresh-login flow; no credentials reach Renderer.
@@ -552,7 +554,6 @@ function isCredentialEncryptionAvailable(): boolean {
 export function needsCredentialProcessRecovery(): boolean {
   return (
     credentialEncryptionUnavailable &&
-    credentialStoreHealth.unavailable &&
     accessToken === null &&
     getActiveAppSession().mode === 'signed-out' &&
     !isPassiveSharedUserDataInstance()
@@ -5631,12 +5632,23 @@ async function runLoginAction(action: DesktopLoginAction): Promise<DesktopLoginA
       pendingSsoVerificationTicket = null;
       pendingAuthRealm = null;
     }
-    // Keep the last usable screen so validation/network failures can be retried
-    // without discarding the entered identifier or requesting another code.
-    loginFlowState = flowCannotRetry
-      ? { step: 'error', code, recoverTo: 'identifier' }
-      : (stateBeforeAction ?? { step: 'error', code, recoverTo: 'identifier' });
-    return { success: false, code, state: loginFlowState };
+    // Storage failures need recovery guidance, not another verification-code
+    // submission. Preserve private tickets and saved credentials; only change
+    // the presentation. Ordinary validation/network failures keep their form.
+    const errorState = loginPreparingErrorState(
+      code,
+      error instanceof AuthApiError ? error.retryAt : undefined,
+    );
+    loginFlowState =
+      flowCannotRetry || code === 'CREDENTIAL_STORE_UNAVAILABLE'
+        ? errorState
+        : (stateBeforeAction ?? errorState);
+    return {
+      success: false,
+      code,
+      state: loginFlowState,
+      ...(errorState.retryAt !== undefined ? { retryAt: errorState.retryAt } : {}),
+    };
   }
 }
 

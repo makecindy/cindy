@@ -78,6 +78,7 @@
     "olderOnComputer": "それより前のメッセージはパソコンで確認できます"
   },
   "notice": {
+    "memberJoined": "{{name}}さんがグループに参加しました",
     "memberFailed": "{{name}} は今回返信できませんでした",
     "memberTimeout": "{{name}} の返信に時間がかかりすぎたため、今回はスキップしました",
     "memberUnavailable": "{{name}} は現在利用できないため、今回は発言しませんでした",

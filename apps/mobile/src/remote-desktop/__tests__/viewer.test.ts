@@ -341,13 +341,13 @@ describe("native media overlay", () => {
     expect(v.elements.image.style.visibility).toBe("hidden");
     expect(v.elements.bg.style.display).toBe("none");
     v.send({ type: "stop" });
-    expect(v.elements.image.style.visibility).toBe("visible");
+    expect(v.elements.image.style.visibility).toBe("");
     v.send({ type: "init", epoch: "next", width: 1920, height: 1080 });
     v.send({ type: "nativeVideo", epoch: "first", active: true });
-    expect(v.elements.image.style.visibility).toBe("visible");
+    expect(v.elements.image.style.visibility).toBe("");
     v.send({ type: "nativeVideo", epoch: "next", active: true });
     v.send({ type: "nativeVideo", epoch: "next", active: false });
-    expect(v.elements.image.style.visibility).toBe("visible");
+    expect(v.elements.image.style.visibility).toBe("");
   });
 });
 

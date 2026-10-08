@@ -66,8 +66,15 @@ import { rewriteOutboundMedia, withPeerAttachmentUpload } from './outboundMedia'
 import { withOutboundReviewConfirmation } from '../maker-ipc/reviewOutboundInput.js';
 import { confirmReviewArtifacts } from '../reviewer/confirmReviewArtifacts.js';
 import { tryUploadPeerAttachment } from './filePeer';
-import { parseSharedTaskPeer } from '@cindy/device-link';
+import { parseSharedTaskPeer, scrubSharedProviderCatalog } from '@cindy/device-link';
 import { withSharedTaskMedia } from './sharedTaskMediaContext.js';
+import {
+  isProviderShareRefusal,
+  noteProviderShareAccessFailure,
+  parseProviderShareAgentDeviceId,
+  resolveRemoteAgentTargetWhenReady,
+} from './providerShareGuest.js';
+import { crossRegionInvoke, isCrossRegionProviderShareTarget } from './providerShareCrossRegion.js';
 import {
   outboundSessionReferencesRequested,
   rewriteOutboundSessionReferences,
@@ -728,6 +735,41 @@ export async function handleInvoke(
     throw new Error(result.error.message);
   }
   throwIpcError(DEVICE_LINK_CODE_MAP[result.error.code] ?? 'INTERNAL', result.error.message);
+}
+
+/**
+ * 分享来的供应商(`share:<id>`)：Renderer 只能读那台电脑上分享给自己的模型目录；
+ * Agent 本身由主进程的远程 Agent 客户端连接，不经这里。
+ */
+export async function handleProviderShareInvoke(
+  deps: Pick<DeviceLinkIpcDeps, 'invoke'>,
+  agentDeviceId: string,
+  channel: unknown,
+  args: unknown,
+): Promise<unknown> {
+  if (channel !== 'maker:provider:list') throwIpcError('DEVICE_LINK_CHANNEL_NOT_ALLOWED', 'Not available for shared providers');
+  const target = await resolveRemoteAgentTargetWhenReady(agentDeviceId);
+  const callArgs = Array.isArray(args) ? args : [];
+  let result: InvokeResultPayload;
+  try {
+    result = isCrossRegionProviderShareTarget(target)
+      ? await crossRegionInvoke(target, channel, callArgs)
+      : await deps.invoke(target, channel, callArgs);
+  } catch (err) {
+    if (err instanceof DeviceLinkError && isProviderShareRefusal(err.code, err.message)) refuseProviderShare();
+    rethrowDeviceLinkError(err);
+  }
+  // 分享者电脑已去掉账号身份；受邀者这边再过一遍，旧版本分享者也不会把登录邮箱带进界面。
+  if (result.ok) return scrubSharedProviderCatalog(result.result);
+  // 分享者电脑拒绝了(暂停、关了远程控制或这个供应商的「允许被远程调用」)：分享专属原因。
+  if (isProviderShareRefusal(result.error.code, result.error.message)) refuseProviderShare();
+  if (result.error.code === 'IPC_ERROR') throw new Error(result.error.message);
+  throwIpcError(DEVICE_LINK_CODE_MAP[result.error.code] ?? 'INTERNAL', result.error.message);
+}
+
+function refuseProviderShare(): never {
+  noteProviderShareAccessFailure();
+  throwIpcError('REMOTE_AGENT_SHARE_UNAVAILABLE', 'The shared provider is not available right now');
 }
 
 /** subscribe/unsubscribe 共用:校验 + 解包 invoke-result(失败按隧道错误码抛给 renderer)。 */
@@ -1418,6 +1460,10 @@ export function registerDeviceLinkIpc(deps: DeviceLinkIpcDeps = defaultDeps()): 
   ipcMain.handle(DEVICE_LINK_INVOKE.INVOKE, (e, payload: unknown) => {
     requireDeviceLinkCapability();
     const p = (payload ?? {}) as { deviceId?: unknown; channel?: unknown; args?: unknown };
+    if (typeof p.deviceId === 'string' && parseProviderShareAgentDeviceId(p.deviceId)) {
+      assertTrustedAppRendererEvent(e);
+      return handleProviderShareInvoke(deps, p.deviceId, p.channel, p.args);
+    }
     if (p.channel === 'maker:review:start') {
       assertTrustedAppRendererEvent(e);
       return withOutboundReviewConfirmation(

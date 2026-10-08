@@ -1,3 +1,5 @@
+import { isRetiredBuiltinToolset } from './featureRetirements.js';
+
 /** Editing baseline, sent only for capability lists changed by the settings form. */
 export type BotCapabilityBaseline = Partial<Record<'skills' | 'mcpServers' | 'toolsets', string[]>>;
 
@@ -20,10 +22,17 @@ export function reconcileBotCapabilityList(previous: string[], local: string[], 
 export function normalizeBotToolCapabilities(config: Record<string, unknown>): Record<string, unknown> & {
   toolCapabilityVersion: 1; toolsetMode: 'inherit' | 'allowlist'; mcpMode: 'inherit' | 'allowlist';
 } {
+  // Keep unavailable third-party references removable; only retired built-ins
+  // disappear. Do not mutate historical profiles or change their permissions.
+  const current = { ...config };
+  for (const key of ['toolsets', 'tools']) {
+    const ids = current[key];
+    if (Array.isArray(ids)) current[key] = ids.filter((id) => typeof id !== 'string' || !isRetiredBuiltinToolset(id));
+  }
   if (config.toolCapabilityVersion === 1) return {
-    ...config, toolCapabilityVersion: 1,
+    ...current, toolCapabilityVersion: 1,
     toolsetMode: config.toolsetMode === 'allowlist' ? 'allowlist' : 'inherit',
     mcpMode: config.mcpMode === 'allowlist' ? 'allowlist' : 'inherit',
   };
-  return { ...config, toolCapabilityVersion: 1, toolsetMode: 'inherit', mcpMode: 'inherit' };
+  return { ...current, toolCapabilityVersion: 1, toolsetMode: 'inherit', mcpMode: 'inherit' };
 }

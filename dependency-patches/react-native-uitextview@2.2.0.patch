@@ -238,7 +238,18 @@ index d0c31ed20b4865679ec1397543fc74056e47b978..51594cc1c7587feb5dbc3ce00e745e65
  }
  
  // MARK: - UIGestureRecognizerDelegate
-@@ -328,6 +422,230 @@ - (void)textViewDidChangeSelection:(UITextView *)textView
+@@ -297,4 +391,10 @@
+ - (void)handleLongPressIfNecessary:(UILongPressGestureRecognizer*)sender
+ {
++  // Long presses also report movement and release. Dispatch the action only
++  // once, when recognition begins, without changing native text selection.
++  if (sender.state != UIGestureRecognizerStateBegan) {
++    return;
++  }
++
+   const auto location = [self getLocationOfPress:sender];
+   const auto child = [self getTouchChild:location];
+@@ -328,6 +428,230 @@ - (void)textViewDidChangeSelection:(UITextView *)textView
        static_cast<int>(selectedRange.location),
        static_cast<int>(selectedRange.location + selectedRange.length),
      });

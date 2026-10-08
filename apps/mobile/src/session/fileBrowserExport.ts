@@ -22,6 +22,8 @@ export interface ExportRemoteFileDeps {
   presignGet: (ossKey: string) => Promise<MobileRemoteMediaPresignResult>;
   /** 取消信号(如页面卸载)，转成文件读取接口的 AbortSignal。 */
   isCancelled?: () => boolean;
+  /** 电脑上传到云存储期间的真实字节进度(缓存命中与直连不回调)。 */
+  onProgress?: (uploaded: number, total: number) => void;
 }
 
 export async function exportRemoteFileToUrl(
@@ -50,7 +52,7 @@ export async function exportRemoteFileToUrl(
       relPath,
       abort.signal,
       () => deps.openLink(deps.deviceId),
-      { stream: deps.stream === true },
+      { stream: deps.stream === true, onProgress: deps.onProgress },
     );
     check();
     if (abort.signal.aborted) throw new Error(i18n.t("files.export.leftPage"));

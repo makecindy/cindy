@@ -45,7 +45,6 @@ export * from './session-path-auth.js';
 export * from './lsp/index.js';
 
 export * from './android/index.js';
-export * from './ios-simulator/index.js';
 export * from './browser/index.js';
 export * from './computer/index.js';
 

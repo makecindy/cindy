@@ -122,19 +122,79 @@ describe('authorized file peer source', () => {
                 : { connection: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', sdp: 'v=0' },
         };
       });
-      const transfer = tryPeerFile(peer, 'xdt-file://test', invoke);
+      const progress = vi.fn().mockImplementationOnce(() => {
+        throw new Error('observer failed');
+      });
+      const transfer = tryPeerFile(peer, 'xdt-file://test', invoke, undefined, progress);
       await vi.waitFor(() => expect(mock.receiving).toBeDefined());
+      expect(progress).toHaveBeenLastCalledWith(0, 5);
       mock.replyDelay = delay;
       expect(
         await tryPeerInvoke(peer, 'file-browser:remote-op', [{ op: 'readFile' }], invoke),
       ).toBeNull();
-      await mock.handlers.get('file-peer:host:write')!({}, mock.receiving!.sink, 0, 'aGVsbG8=');
+      await mock.handlers.get('file-peer:host:write')!({}, mock.receiving!.sink, 0, 'aGU=');
+      // Partial writes must reach the UI before EOF, even when diagnostic RPCs fail.
+      expect(progress).toHaveBeenLastCalledWith(2, 5);
+      await mock.handlers.get('file-peer:host:write')!({}, mock.receiving!.sink, 2, 'bGxv');
+      expect(progress).toHaveBeenLastCalledWith(5, 5);
       mock.receiving!.reply();
       const result = await transfer;
       expect(result?.size).toBe(5);
       await result?.dispose();
+      expect(progress.mock.calls.map(([received]) => received)).toEqual([0, 2, 5]);
     },
     20_000,
+  );
+  it.each(['abort', 'owner'] as const)(
+    'stops receive progress after %s invalidation',
+    async (reason) => {
+      const invoke = vi.fn(async (_peer: string, _channel: string, args: unknown[]) => {
+        const action = (args[0] as { action: string }).action;
+        return {
+          ok: true,
+          result:
+            action === 'caps'
+              ? { version: 1, streaming: true }
+              : action === 'open'
+                ? {
+                    ticket: 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
+                    size: 5,
+                    mimeType: 'text/plain',
+                  }
+                : { connection: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', sdp: 'v=0' },
+        };
+      });
+      const abort = new AbortController();
+      const progress = vi.fn();
+      const pending = tryPeerFile(
+        `invalidated-${reason}`,
+        'xdt-file://test',
+        invoke,
+        abort.signal,
+        progress,
+      );
+      const rejected = expect(pending).rejects.toThrow('FILE_PEER_CANCELLED');
+      await vi.waitFor(() => expect(mock.receiving).toBeDefined());
+      const receive = mock.receiving!;
+      await mock.handlers.get('file-peer:host:write')!({}, receive.sink, 0, 'aGU=');
+      if (reason === 'abort') {
+        abort.abort();
+        await expect(
+          mock.handlers.get('file-peer:host:write')!({}, receive.sink, 2, 'bGxv'),
+        ).rejects.toThrow('FILE_PEER_BLOCK');
+      } else {
+        mock.current = false;
+        await expect(
+          mock.handlers.get('file-peer:host:write')!({}, receive.sink, 2, 'bGxv'),
+        ).rejects.toThrow('FILE_PEER_CLOSED');
+        receive.reply();
+      }
+      await rejected;
+      expect(progress.mock.calls).toEqual([
+        [0, 5],
+        [2, 5],
+      ]);
+    },
   );
   it('warms reads, preserves application errors, and retries transport failure only after cooldown', async () => {
     const peer = 'warm-recovery-peer';
