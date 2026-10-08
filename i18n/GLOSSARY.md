@@ -183,6 +183,10 @@ Anthropic Messages API / wire protocol 的用户可见名称。四语统一保�
 
 Cindy 在 X 上发出的那条公开回复。zh-CN 取「回帖」以强调它是**一条公开帖子**而不是私聊消息——这正是 X 与 Slack / Telegram 的性质差异, 也是风险告知的核心。与「消息」区分开: 后者按 task-and-conversation-naming 只用于任务内的单条往来。proposed 同上。
 
+### Workbench
+
+伙伴主任务右侧栏里的标签：主人交给伙伴的项目，以及项目里的任务、自动化与产出（docs/product-rules/cindy-bots-runtime.md「工作台」一节）。只指这个伙伴视图，不泛指任务列表或其它面板。先登记为 proposed，待 Chris 实机试用后再定。
+
 ### Security check
 
 登录邮箱发码前的 CAPTCHA(Cloudflare Turnstile)挑战。中文用「安全验证」(腾讯/阿里系产品的通行叫法,2026-08-19 用户反馈弃用「人机验证」;与「验证码」= verification code 消歧——后者已被 login.codePlaceholder 占用指 6 位数字码);en 用 Security check 而非品牌词 Turnstile 或缩写 CAPTCHA。消费处:login.captcha.* 与 login.errors.CAPTCHA_*(desktop 五语 + mobile 影子 catalog)。
@@ -283,9 +287,21 @@ OAuth 2.0 Device Authorization Grant 中由用户在另一设备验证页输入�
 
 远程桌面操作菜单的安全设置；仅用于可选的本机保存密码自动解锁。
 
+### Group Admin
+
+可管理群资料和成员，但不能替伙伴主人授权工具或私人资料。群设置内可简称管理员 / Admin。
+
 ### Group chat
 
 伙伴群聊：用户把 2–6 位伙伴放进一个群，用户说一句，伙伴们按规则接话（docs/product-rules/bot-group-chat.md）。群是独立对象，不是任务，也不是某位伙伴的主任务；群里的单条往来仍叫「消息」（见 task-and-conversation-naming）。英文分两层：侧栏标题与按钮用 Title Case（Group Chats、New Group Chat），句中用小写 group chat——故 checkCase 为 false。zh-CN 短句里可简称「群」（群名称、群设置）。与企业微信「群机器人」（wecom-group-bot）等 IM 平台的群概念无关。先登记为 proposed：第一阶段刚落地，等 UI 走查后再定。
+
+### Group Nickname
+
+仅在单个群中显示的名字。为空时使用账号显示名；不覆盖个人资料名字或稳定身份。
+
+### Group Owner
+
+Chat Server 的群角色，可由人或伙伴担任；不要与伙伴主人或分工负责人混同。群设置成员行英文可简写 Owner。
 
 ### Harness
 
@@ -301,7 +317,7 @@ OAuth 2.0 Device Authorization Grant 中由用户在另一设备验证页输入�
 
 ### iOS Simulator
 
-Apple Simulator 与 Cindy 内置查看器能力的用户可见名称。iOS 保留官方大小写；中文使用「模拟器」，日语使用「シミュレータ」，韩语使用「시뮬레이터」。先登记为 proposed，待插件与内置面板文案稳定后固化。
+Apple Simulator 的用户可见名称，也用于原内置模拟器的下线说明。Cindy 已移除内置查看器能力。iOS 保留官方大小写；中文使用「模拟器」，日语使用「シミュレータ」，韩语使用「시뮬레이터」。译法仍为 proposed。
 
 ### Lark
 
@@ -383,6 +399,10 @@ issue #882：模型管理/新对话选择器的分类标签，对应 Gateway mod
 
 插件页二级 tab 的总览入口，承载已安装与推荐内容，与「我的发布」并列。该词不重复页面标题「插件」，并保持弱于一级 Plugin / Skill pill 的层级。
 
+### Pairing Code
+
+供应商分享申请的 4 位数字，只在受邀者「等待同意」界面与分享者审批弹窗 / 管理页待处理一栏出现，供双方核对是同一个人；不是密钥，不参与鉴权。与 OAuth 的 Device Code（设备码）是不同概念。
+
 ### Passkey
 
 WebAuthn 可发现凭证的用户可见名称，采用 Apple、Google 与 Microsoft 平台常见译法；先登记为 proposed，待产品术语评审后固化。
@@ -406,6 +426,10 @@ Plugin 声明的应用级完整页面能力；区别于会话内 Panel。V1 由 
 ### Process
 
 OS 进程语境(资源用量面板、浏览器 guest 进程、终端)。注意与 Thread→任务(消息流语境)区分:资源用量面板刻意不展示 OS 线程数,避免「线程」撞上 Thread 的既定裁决;若未来要展示,需为 OS thread 立同形异义条目再谈。
+
+### Provider Sharing
+
+把自己电脑上的某个供应商分享给其他 Cindy 账号使用(docs/product-rules/provider-sharing.md)。中文一律用「分享」，不用「共享」——「共享」留给共享任务，两者是独立的授权关系；ja / ko 两个功能都自然译作「共有 / 공유」，靠「プロバイダー / 제공자」与「セッション / 세션」区分。界面上「管理分享」「分享 {供应商}」「分享给我的供应商」都属于本词。
 
 ### Qwen
 
@@ -499,6 +523,14 @@ Orca Worker 创建卡上的命名字段。它只是派活用的名字，不改�
 
 日志上报文案里对「App 自身运行日志」的用户可见说法。刻意不直接叫「日志」: 设置页同屏已有「日志目录」「Debug 日志」两处指本地文件, 而这里要表达的是被上报的那部分内容(基础设施运行记录, 不含对话)。proposed: 与「日志」的分工尚未产品裁决。
 
+### Share Link
+
+供应商分享的一次性链接：生成后 5 分钟内有效、只能使用一次。与共享任务的「邀请链接 / 邀请码」是不同的东西，不要混用。
+
+### Share Request
+
+受邀者打开分享链接、确认后发给分享者的请求；分享者「同意分享 / 拒绝申请」。受邀者可以「撤回申请」。
+
 ### Shared Session
 
 远程连接的多人版本，按单个任务共享完整上下文和同一 Agent，不作为独立会议产品。
@@ -549,6 +581,18 @@ Cindy 里的**持久 AI 助手实体**（原名 Bot）：有长期身份、自�
 
 语音输入的用户自定义术语表(人名、产品名、代号与其常见误识别写法),在同账号的电脑之间自动同步、手机只读查看。当前先采用四语直译并登记为待讨论术语,避免与「自定义词典」「术语表」「用户词库」等说法混用。
 
+### Wallpaper
+
+Desktop appearance setting for an in-app visual background layer.
+
+### Wallpaper Blur
+
+仅使应用壁纸柔化，不模糊文字或控件；0 为关闭，按用户选择应用于静态图片和视频。
+
+### Wallpaper Visibility
+
+壁纸背景层的实际可见程度，0% 隐藏，100% 原样显示；不改变文字或控件的不透明度。
+
 ### WeChat
 
 个人微信连接的产品名称，沿用微信官方品牌写法；先登记为 proposed，待产品术语评审后再决定是否固化。
@@ -567,7 +611,7 @@ Cindy 里的**持久 AI 助手实体**（原名 Bot）：有长期身份、自�
 
 ### withdraw (a reply)
 
-用户在 X 上让 Cindy 删掉它那条公开回帖的动作(在回帖下回 /delete)。zh-CN 取「撤回」而不是「删除」——「删除」在本仓已大量用于删任务/删会话/删文件, 而这个动作的对象是「已经发出去的公开内容」, 与 IM 里的消息撤回同义。刻意登记为 proposed: X 撤回是新功能(server PR #288 / client 侧告知), 四语只有这一处用例, 等更多用例出现后再定 decided。
+用户在 X 上让 Cindy 删掉它那条公开回帖的动作：原提问者在目标回帖下回复 `@askmycindy /delete`，正文中须手动带上 @askmycindy。中文说明也可展示 `/删除`，但命令本身不翻译为 `/刪除`。zh-CN 取「撤回」而不是「删除」——「删除」在本仓已大量用于删任务/删会话/删文件, 而这个动作的对象是「已经发出去的公开内容」, 与 IM 里的消息撤回同义。刻意登记为 proposed: X 撤回是新功能(server PR #288 / client 侧告知), 五语只有这一处用例, 等更多用例出现后再定 decided。
 
 ### Work split
 

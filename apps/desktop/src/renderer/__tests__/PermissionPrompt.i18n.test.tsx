@@ -113,12 +113,14 @@ describe('PermissionPrompt i18n', () => {
           title: 'Allow Codex to run this command?',
           description: 'Automatic review could not finish, so this action needs your confirmation.',
           autoReviewUnavailable: true,
+          sourceDescription: '来源：Telegram · 开发群\n原消息：检查仓库',
         }}
         onRespond={vi.fn()}
       />,
     );
 
     expect(screen.getByText('自动审批没完成，请确认要不要允许这次操作。')).toBeTruthy();
+    expect(screen.getByText(/来源：Telegram · 开发群/)).toBeTruthy();
     expect(screen.queryByText('Automatic review could not finish, so this action needs your confirmation.')).toBeNull();
   });
 });

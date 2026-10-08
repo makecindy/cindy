@@ -78,6 +78,7 @@
     "olderOnComputer": "更早的訊息請在電腦上查看"
   },
   "notice": {
+    "memberJoined": "{{name}}加入了群聊",
     "memberFailed": "{{name}}這次沒能回覆",
     "memberTimeout": "{{name}}太久沒有回覆，這次先跳過",
     "memberUnavailable": "{{name}}現在無法使用，這次沒有發言",
@@ -110,7 +111,13 @@
     "dismissFailed": "沒能結束這個安排，請再試一次",
     "editFailed": "這一步沒改成，請再試一次",
     "editStepHint": "換人或刪掉這一步",
-    "reassignStepHint": "換人做這一步"
+    "reassignStepHint": "換人做這一步",
+    "eyebrow_one": "分工 · {{count}} 步",
+    "eyebrow_other": "分工 · {{count}} 步",
+    "awaitingStart": "等你開始",
+    "progressRunning": "正在做 {{current}} / {{total}}",
+    "progressDone": "做完 {{done}} / {{total}}",
+    "allDone": "都做完了"
   },
   "speaking": {
     "planning": "正在安排…",
@@ -153,7 +160,8 @@
     "projectDirNone": "沒選",
     "projectDirNote": "分工做事時，夥伴們在這裡工作。不選也行，會用這個群聊自己的資料夾；選了 git 專案，每次分工會新開一個 worktree 和分支，不動你手上的程式碼。",
     "add": "新增夥伴",
-    "projectDirOnComputer": "在電腦上選擇或更換"
+    "projectDirOnComputer": "在電腦上選擇或更換",
+    "memberActions": "{{name}} 的操作"
   },
   "errors": {
     "memberLimit": "一個群聊需要 2–6 位夥伴",
@@ -162,5 +170,9 @@
     "hostNotReady": "Cindy 還在準備中，請稍後重試",
     "planOpen": "正在分工，做完或停止後才能安排新的",
     "planClosed": "這個安排已經結束或更新了"
+  },
+  "followUp": {
+    "next": "分工 · 下一步",
+    "failedStep": "第 {{step}} 步沒做完"
   }
 }

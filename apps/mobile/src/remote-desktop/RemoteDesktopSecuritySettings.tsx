@@ -1,13 +1,13 @@
 import {
   ActivityIndicator,
   Platform,
-  Pressable,
   StyleSheet,
   View,
 } from "react-native";
 import { LockKeyhole, ScanFace } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
 import { Text } from "@/components/AppText";
+import { MainWindowActionButton } from "@/components/MobilePrimitives";
 import { NativeSwitch } from "@/platform/chrome/NativeSwitch";
 import { supportsAutoUnlock } from "./autoUnlockSupport";
 import {
@@ -53,7 +53,9 @@ export function RemoteDesktopSecuritySettings(
 ) {
   const { t } = useTranslation();
   const { colors } = useTheme();
-  const hint = { color: colors.textPrimary, fontSize: typeScale.caption, lineHeight: lineHeight.caption };
+  // 说明档(13/18,二级字色);报错说明同字号改用 errorText。
+  const hint = { color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption };
+  const alertText = { ...hint, color: colors.errorText };
   const switchSlot = {
     width: 56,
     minHeight: 44,
@@ -122,6 +124,7 @@ export function RemoteDesktopSecuritySettings(
               </View>
               <View style={switchSlot}>
                 <NativeSwitch
+                  seedColor={colors.inputCaret}
                   testID="remoteDesktop.autoUnlock"
                   accessibilityLabel={t("remoteDesktop.autoUnlock")}
                   value={props.autoUnlock}
@@ -165,6 +168,7 @@ export function RemoteDesktopSecuritySettings(
                   </View>
                   <View style={switchSlot}>
                     <NativeSwitch
+                      seedColor={colors.inputCaret}
                       testID="remoteDesktop.biometricVerification"
                       accessibilityLabel={biometricLabel}
                       value={props.biometricVerification}
@@ -213,6 +217,7 @@ export function RemoteDesktopSecuritySettings(
         </View>
         <View style={switchSlot}>
           <NativeSwitch
+            seedColor={colors.inputCaret}
             testID="remoteDesktop.lockOnExit"
             accessibilityLabel={t("remoteDesktop.lockOnExit")}
             value={props.lockOnExit === true}
@@ -223,7 +228,7 @@ export function RemoteDesktopSecuritySettings(
       </View>
       {supportsAutoUnlock(props.hostPlatform) &&
         (props.notice || (!props.available && !props.busy)) && (
-          <Text style={hint} accessibilityRole="alert">
+          <Text style={alertText} accessibilityRole="alert">
             {props.notice || t("remoteDesktop.autoUnlockUnavailable")}
           </Text>
         )}
@@ -276,6 +281,7 @@ export function RemoteDesktopSecuritySettings(
           </View>
           <View style={switchSlot}>
             <NativeSwitch
+              seedColor={colors.inputCaret}
               accessibilityLabel={t(`remoteDesktop.${item.key}`)}
               testID={`remoteDesktop.${item.key}`}
               value={item.value === true}
@@ -286,27 +292,18 @@ export function RemoteDesktopSecuritySettings(
         </View>
       ))}
       {props.safetyNotice && (
-        <Text style={hint} accessibilityRole="alert">
+        <Text style={alertText} accessibilityRole="alert">
           {t(`remoteDesktop.${props.safetyNotice}`)}
         </Text>
       )}
       {props.clipboardSync &&
         props.safetyNotice?.startsWith("clipboardSync") && (
-          <Pressable
-            accessibilityRole="button"
-            onPress={props.onClipboardSyncRetry}
-            style={{
-              minHeight: 44,
-              justifyContent: "center",
-              alignItems: "center",
-              borderRadius: radius.pill,
-              backgroundColor: colors.sheetActionSurface,
+          <MainWindowActionButton
+            action={{
+              label: t("remoteDesktop.clipboardSyncRetry"),
+              onPress: props.onClipboardSyncRetry,
             }}
-          >
-            <Text style={{ color: colors.textPrimary }}>
-              {t("remoteDesktop.clipboardSyncRetry")}
-            </Text>
-          </Pressable>
+          />
         )}
     </View>
   );

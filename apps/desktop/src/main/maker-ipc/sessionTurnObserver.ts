@@ -1,4 +1,6 @@
 import type { Session } from '@cindy/maker-core';
+import { MANAGED_LLAMACPP_PROVIDER_ID } from '../../shared/llamaCpp.js';
+import { ensureManagedOllamaReadyForSession } from '../local-model-runtime/preflight.js';
 import { createLogger } from '../logger.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { getSessionProvider } from '../maker-host/session-provider-store.js';
@@ -50,6 +52,12 @@ export function installSessionTurnObserver(deps: InstallSessionTurnObserverDeps,
         if (verdict.kind === 'reject' && verdict.reason === 'explicit-source-unavailable') {
           throwIpcError('INVALID_PARAMS', describeModelRouteRejection(verdict.reason, model, getSessionProvider(session.id)));
         }
+      }
+      // Existing tasks must restore the managed service after a manual stop too.
+      // Reuse the common send boundary so IM/Goal/Scheduler get the same behavior.
+      const providerId = getSessionProvider(session.id);
+      if (providerId === MANAGED_LLAMACPP_PROVIDER_ID) {
+        await ensureManagedOllamaReadyForSession({ providerId, onlyIfStopped: true });
       }
       deps.silentStopTurnLeaseGate.supersede(session.id);
       // Keep Review's exact-instance liveness listener lazy. PID-only turn

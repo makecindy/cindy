@@ -63,17 +63,18 @@ Claude.ai 登录，也不得收集、存储或中转订阅凭证。Cindy 因此�
   端口，它对每个目标重新按系统代理 / PAC 决定直连或走代理（env 作用于整棵进程树，含 Bash
   工具里的 git / npm，内网例外必须照旧直连），明文 HTTP 不下发代理。都是 TCP 隧道，TLS
   端到端，代理、转发端口与 Cindy 都看不到凭证。
-- 订阅会话不设 host 接管标记，CLI 会直接应用工作区 `.claude/settings.json` /
-  `settings.local.json` 的 env（SDK 模式没有工作区信任确认，也不像 Claude Desktop 那样剥掉
-  项目级上游 / 鉴权键）。所以对 CLI 实际加载的项目级设置（工作目录的两份文件，加上主仓库
-  根目录的 `settings.local.json`）设闸（maker-core `workspace-settings-guard`）：
+- 订阅会话不设 host 接管标记；Cindy 的所有 Claude 会话统一使用 `claude-desktop` 入口，
+  CLI 会启用 Desktop 宿主的项目级上游 / 鉴权环境过滤。入口身份不改变凭证来源，普通项目
+  设置、权限与 hooks 仍由 CLI 加载。SDK 模式仍没有终端的工作区信任确认，因此继续对
+  CLI 实际加载的项目级设置（工作目录的两份文件，加上主仓库根目录的 `settings.local.json`）
+  设闸作为纵深防御（maker-core `workspace-settings-guard`），不依赖上游过滤替代宿主检查：
   - 每次拉起 CLI 进程前（含会话中途重建）命中就拒绝启动；
   - 会话运行中，任何设置变更（ConfigChange hook）与 Cindy 触发的 flag settings 应用（切模型 /
     effort / fast）前都整体复查；命中即判会话已污染，阻止这次变更并结束当前 CLI 进程——被拒
     的文件还在磁盘上，CLI 之后任何一次全量重读都会读到它，不能只拦一次；
   - 订阅会话禁用 EnterWorktree（它会把项目根挪到未检查、也不被 watcher 监视的目录）；
   - 解析不了的文件按命中处理（读不懂不等于 CLI 不应用）。
-  命中范围是改写上游、鉴权或 TLS 信任的键，代理、模型、权限与 hooks 不拦。
+    命中范围是改写上游、鉴权或 TLS 信任的键，代理、模型、权限与 hooks 不拦。
 - 未指定来源的会话：有网关 key 走网关；没有时只有 Anthropic 一方模型交给本机登录，其它模型
   仍经 loopback proxy 按模型路由。loopback proxy 从不转发订阅流量：显式订阅会话或无 Cindy
   凭证的 claude-* 请求到了 proxy 一律本地拒绝。
@@ -89,7 +90,9 @@ Claude.ai 登录，也不得收集、存储或中转订阅凭证。Cindy 因此�
 - 实现见 [claude-native-cli.ts](../../apps/desktop/src/main/maker-host/claude-native-cli.ts)、
   [env-builder.ts](../../packages/maker-core/src/agents/claude-code/env-builder.ts)；回归见
   [claudeAuthAdapterOAuthEnv.test.ts](../../apps/desktop/src/main/maker-host/__tests__/claudeAuthAdapterOAuthEnv.test.ts)
-  与 [env-builder.test.ts](../../packages/maker-core/src/agents/claude-code/__tests__/env-builder.test.ts)。
+  与 [env-builder.test.ts](../../packages/maker-core/src/agents/claude-code/__tests__/env-builder.test.ts)；
+  真实 CLI 的入口、项目设置、原生 / SDK hooks 与权限回归见
+  [smoke-claude-sdk.mjs](../../scripts/smoke-claude-sdk.mjs)。
 
 ## Linux Hyprland / Omarchy 凭证后端
 
@@ -136,20 +139,56 @@ Claude.ai 登录，也不得收集、存储或中转订阅凭证。Cindy 因此�
 - 不要在启动路径主动调用 `safeStorage.isEncryptionAvailable()` 做探测——macOS 上探测
   本身可能触发钥匙串授权弹窗，把弹窗时机提前到与用户动作无关的启动期。
 
+### 登录凭证存储异常的恢复
+
+- `CREDENTIAL_STORE_UNAVAILABLE` 不能作为验证码错误继续展示原表单；登录页进入恢复说明，
+  保留凭证与私有票据，允许用户查看解决方法或重新尝试登录。
+- macOS 正式版复用 `authCredentialRecovery.ts` 的单次进程恢复：启动和登录动作结束后均可
+  请求检查，但只针对真实凭证操作已观察到的加密后端不可用；仍须未登录、屏幕解锁、无工作
+  在运行且不是共享数据的被动实例。单个密文损坏或文件访问错误不得因此触发自动重启。
+- 后端故障资格只消费 main 现有的 `credentialEncryptionUnavailable` 观察值，不依赖登录页
+  当前步骤。返回或重置表单不清除已观察故障；后续真实凭证操作观察到后端可用时清除。
+  不增加探针、独立故障标记或恢复次数，实际重启仍经过原恢复器全部门禁。
+- 登录页与已登录警示条共用 `CredentialStoreHelpDialog`。提示说明本机存储问题、按系统给出
+  解锁与完整退出步骤，持续异常时提供错误码、日志目录和私下支持渠道；不承诺重启一定恢复，
+  不建议删除钥匙串、清空凭证或反复获取验证码。打开日志目录不等于上传日志。
+
+### 登录限流指引
+
+- HTTP 429 与本机凭证存储异常分别显示；限流不请求凭证恢复或自动重启。
+- 限流发生在已有登录步骤时，提示页的返回操作仅清除提示，保留原步骤、票据及输入，
+  不派发 reset 或重新取码；初始化失败、没有可返回步骤时才重新初始化登录。
+- auth-client 将有效 `Retry-After`（秒数或 HTTP 日期）转成可选 `retryAt`，经登录 IPC
+  返回并显示本机时间；HTTP 日期有有效 `Date` 头时按服务器时间差换算。缺失或非法时
+  明确提示未提供等待时间，不猜冷却周期。不自动重试、不新增限流持久状态。
+- 主进程现有登录错误步骤保存可选 retryAt，renderer 重载后重放该步骤时仍返回原时间，
+  不重新请求或重新起算。它仅存于当前进程内存，重置流程和退出进程不保留。
+- AuthContext 镜像当前步骤及其等待时间，普通初始化、添加账号及登录操作共用同一投影；
+  useLogin 不另存一份。进入新步骤、其他错误及取消不能沿用上次的等待时间；读取已有
+  错误步骤的成功 IPC 回包不等于登录成功，不清除该步骤的等待时间。
+- 限流帮助不建议重启、重装或切换网络，持续异常时引导用户将日志、版本和出错时间私下
+  提供给支持人员。复用本机日志目录入口，不自动上传。旧响应适配器可省略 headers，
+  旧 IPC 消费者可忽略 retryAt；Mobile 暂不增加等待时间界面。
+
 ## 路径与生命周期
 
-| 数据性质 | 正确位置 |
-|---|---|
-| Cindy 管理的持久数据 | Desktop 使用 `app.getPath('userData')`，共享 package 由宿主注入等价根目录 |
-| 可丢弃的临时数据 | `app.getPath('temp')` 或 `os.tmpdir()` 下的任务专属目录 |
-| 测试生成物 | `os.tmpdir()` 下通过 `mkdtemp` 创建的独立目录，并在测试结束时清理 |
-| Skill 卸载清理回执 | `app.getPath('userData')/skillhub/uninstall-cleanups/<token>.json`，记录操作 owner、旧文件/注册/偏好身份与完成阶段；跨窗口和重启保留，当前 owner 重试完成后删除，不作为授权凭据 |
-| 跨 profile 的 Cindy 内置 Skill 副本 | `app.getPath('appData')/Cindy/shared-system-skills`，只保存随应用发布、可由 bundle 重建的官方 Skill；Global、China、dev 与 isolated profile 共用稳定物理路径，更新和共享发现链接必须持有下述互斥锁 |
-| 跨 profile 的共享 Skill 文件互斥 | `app.getPath('appData')/Cindy/shared-skill-mutation-locks`，仅存文件锁及未完成操作的 token/名称哈希，保证正式版/dev/isolated 共用；短期锁复用既有崩溃回收，持久屏障必须等对应清理完成后删除，读取损坏只阻止相关名称 |
-| 跨 profile 的 worktree 借用租约 | `app.getPath('appData')/Cindy/shared-worktree-runtime-leases`，模拟器工程借用时在原 profile 租约之外发布共享副本；回收器同时读取两处，源目录 I/O 结束后显式释放，释放失败由现有 `.release` 回执重试；不能因进程退出就移除保护 |
-| 旧版 worktree 回收器兼容锁 | 验证 linked worktree 的 Git 元数据与反向链接后，在源目录外的 `<commonGitDir>/worktrees/<id>/locked` 创建 Git 标准锁，避免构建中的 `git clean` 删除保护；旧版删除/池化复用已识别此锁。不覆盖用户锁，仅当最后一个共享借用结束且自建文件身份和内容仍匹配时删除。清理失败在共享租约 `.release` 中保留路径及原文件身份，由现有维护重试；旧回执仍按原身份清理 `.worktree-keep` |
-| 跨 profile 的 worktree 回收日志位置 | `app.getPath('appData')/Cindy/shared-worktree-recycle-journals`，按日志目录哈希登记原 profile 日志位置，启动日志监听和写入回收记录前原子发布；借用方只读目标资源的原始日志，不复制恢复状态、不代替 owner 执行恢复。索引跨重启保留，原日志不存在时不产生回收意图 |
-| 用户明确导出的文件 | 用户选择或任务明确指定的目标路径 |
+| 数据性质                            | 正确位置                                                                                                                                                                                                                                                                                                                                                                                                        |
+| ----------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Cindy 管理的持久数据                | Desktop 使用 `app.getPath('userData')`，共享 package 由宿主注入等价根目录                                                                                                                                                                                                                                                                                                                                       |
+| 预创建 worktree 的取消标记          | `userData/worktree-cancelled-creations/<sessionId 的 SHA-256>`，空文件原子排他创建；不含路径、草稿或关联密钥。保留以拒绝重启后迟到的创建请求，不按超时删除。只在核实未被任务认领后写入。同路径加 `.lock` 是可释放的跨进程操作锁，复用既有锁协议；同一 profile、同一任务的创建登记与取消回收串行，拿不到锁不得确认回收完成。异步创建完成后、登记前再次核对取消标记                                               |
+| Mobile 已取消创建的草稿             | 复用账号隔离的 durable outbox；持久创建流程先保存草稿、原项目目录和附件，再登记 reservation 和发送远端 worktree 创建；创建回包前暂停发件箱投递。回收确认后，`creation.cancelled` 与原项目目录先持久写入，再忘记回收账本。重建使用新远端 ID，`storageSessionId` 保持原 AsyncStorage 键和附件目录，通过单次记录写入提交；写入失败时原草稿仍可读。编辑页恢复目录时重新探测资格，不沿用旧 worktree 的资格或分支偏好 |
+| 可丢弃的临时数据                    | `app.getPath('temp')` 或 `os.tmpdir()` 下的任务专属目录                                                                                                                                                                                                                                                                                                                                                         |
+| 测试生成物                          | `os.tmpdir()` 下通过 `mkdtemp` 创建的独立目录，并在测试结束时清理                                                                                                                                                                                                                                                                                                                                               |
+| Skill 卸载清理回执                  | `app.getPath('userData')/skillhub/uninstall-cleanups/<token>.json`，记录操作 owner、旧文件/注册/偏好身份与完成阶段；跨窗口和重启保留，当前 owner 重试完成后删除，不作为授权凭据                                                                                                                                                                                                                                 |
+| 跨 profile 的 Cindy 内置 Skill 副本 | `app.getPath('appData')/Cindy/shared-system-skills`，只保存随应用发布、可由 bundle 重建的官方 Skill；Global、China、dev 与 isolated profile 共用稳定物理路径，更新和共享发现链接必须持有下述互斥锁                                                                                                                                                                                                              |
+| 跨 profile 的共享 Skill 文件互斥    | `app.getPath('appData')/Cindy/shared-skill-mutation-locks`，仅存文件锁及未完成操作的 token/名称哈希，保证正式版/dev/isolated 共用；短期锁复用既有崩溃回收，持久屏障必须等对应清理完成后删除，读取损坏只阻止相关名称                                                                                                                                                                                             |
+| 旧跨 profile 的 worktree 借用租约   | `app.getPath('appData')/Cindy/shared-worktree-runtime-leases`，内置模拟器下线后不再创建共享租约；回收器仍读取旧证据并重试已有 `.release` 回执，不能因进程退出就移除保护。普通 Agent 的当前 profile 租约照常创建与释放                                                                                                                                                                                           |
+| 旧版 worktree 回收器兼容锁          | 不再创建新的跨 profile Git 锁；保留旧回执对 `<commonGitDir>/worktrees/<id>/locked` 及更早 `.worktree-keep` 的清理。仅当最后一个共享借用结束且自建文件身份和内容仍匹配时删除，不覆盖用户锁；失败沿用 `.release` 重试                                                                                                                                                                                             |
+| 跨 profile 的 worktree 回收日志位置 | `app.getPath('appData')/Cindy/shared-worktree-recycle-journals`，仍按日志目录哈希发布原 profile 日志位置，兼容可能同时运行的旧客户端；新客户端不再读取其他 profile 的日志来借用工程。不复制恢复状态、不代替 owner 执行恢复                                                                                                                                                                                      |
+| 供应商分享：分享者电脑上的受邀者用量 | `userData/remote-agent/provider-share-usage.json`，按（日期、分享、成员、Agent、供应商、模型）聚合 token 与轮次，原子替换写入，保留 400 天；只含服务端生成的分享与成员 id，不含昵称、对话或凭证。成员删除后保留（管理页不再显示），同一人重新加入时接续 |
+| 供应商分享：受邀者会话登记 | `userData/remote-agent/guest-sessions.json`（控制端摘要 → 本机侧任务与原生会话 id），只用来限制受邀者只能恢复自己的会话，并在分享删除时精确清理影子工作区、附件与会话记录 |
+| 供应商分享：跨区域标记 | `userData/remote-agent/provider-share-regions.json`，账号摘要 → 对方区域；**不含凭证**。跨区连接凭证只在内存里，用新身份名片重新换取；没有标记的账号从不联系对方区域 |
+| 用户明确导出的文件                  | 用户选择或任务明确指定的目标路径                                                                                                                                                                                                                                                                                                                                                                                |
 
 - 内置 Skill 的官方身份只授予当前 manifest 已提交且指纹匹配的 bundle：`.active` 必须是
   指向该版本的合法链接，版本目录与 Skill 内容不能经替换的符号链接越界。物化失败或目录
@@ -179,3 +218,34 @@ Claude.ai 登录，也不得收集、存储或中转订阅凭证。Cindy 因此�
 [`desktop-development.md`](desktop-development.md) 或
 [`mobile-development.md`](mobile-development.md) 选择，并为路径回退、清理和秘密不外泄补
 定向测试。
+
+## Cindy 托管的预装技能
+
+内置技能字节仍在 Cindy 的 `shared-system-skills` 中随应用版本管理，当前实例在
+`<userData>/managed-agent-skills/cindy` 中建立私有入口。三套 Harness 分别通过本地
+Claude plugin、Cindy 的 `CODEX_HOME/skills`、Pi 显式 `--skill` 加载；不再安装到
+`~/.agents/skills` 或 `~/.claude/skills`。存量插件技能使用账号隔离的
+`<ghost-install-state>/agent-skills`，继续只指向已批准快照。
+
+运行期清单来自已验证的内置描述符与插件批准快照，不扫描私有投影目录中的占位内容。
+三套 Harness 均加载核验后的物理来源；Codex 在默认及独立账号的 `CODEX_HOME` 中
+逐个挂载这些技能，每次本地任务启动（包括复用 app-server）都刷新实际 home 的入口，
+并通过原生 `skills/list forceReload` 清除旧发现缓存；刷新失败则不提交新线程。
+投影函数统一要求每个托管来源为已建立或保持正确链接；缺失、冲突、扫描环及 I/O 错误
+直接抛出，默认账号、独立账号和复用进程均不能把 warning 当作成功。用户技能兼容根
+仍保留原有 warning 行为，用户实体目录及外来链接不被覆盖。
+不将整个私有目录交给扫描器。Bot 的路径授权与
+Claude/Pi 最终加载使用同一物理来源，目录别名重指不能替换已授权的技能。
+Codex Bot 在刷新原生技能清单后，按启动时冻结的物理路径授权生成线程级开关；
+刷新中新出现或未成功核验的技能默认禁用，无法定位路径的发现错误阻止线程启动。
+
+Pi 将筛选后的物理来源链接到现有会话配置目录内，通过单个 `--skill` 目录参数交给
+原生加载器；技能数量不会增加启动参数长度，`--no-skills` 的 Bot 白名单仍生效。
+入口随会话配置目录一起回收；技能发现、路径解析和建链失败均走同一既有启动失败清理，撤销 MCP 会话路由与
+权限临时文件，不新增全局目录或独立清理机制。
+
+Claude 的插件技能不受 `skillOverrides` 控制，因此每个本地 Query 只将已启用且
+符合 Bot 白名单的技能链接到临时插件入口；关闭 Query 时回收入口，源文件不变。
+
+升级清理只删除可确认由 Cindy 创建的旧软链接，不删除目标内容、不覆盖用户同名
+技能、不修改 Git ignore。旧版本 Cindy 实例仍可能重建旧链接，这是迁移的已知边界。

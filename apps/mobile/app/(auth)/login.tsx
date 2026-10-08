@@ -277,7 +277,7 @@ export function LoginScreen({
   const [ssoVerificationCode, setSsoVerificationCode] = useState('');
   const [bindingContact, setBindingContact] = useState('');
   const [bindingCode, setBindingCode] = useState('');
-  // 42s 重发倒计时(Step 3a 契约):绝对 deadline,进入 verification-code 步骤
+  // 60s 重发倒计时(Step 3a 契约):绝对 deadline,进入 verification-code 步骤
   // (= request-code 成功返回)起算;重发成功重置、失败保持;离开步骤清空。
   const [resendDeadline, setResendDeadline] = useState<number | null>(null);
   const [accountDeletionStatus, setAccountDeletionStatus] =

@@ -1,9 +1,5 @@
 import type { BrowserControlRuntime } from '@cindy/browser-control-runtime';
 import type { AgentKind } from '@cindy/maker-core';
-import type {
-  IOSSimulatorInstanceErrorCode,
-  IOSSimulatorRuntimeErrorCode,
-} from '@cindy/ios-simulator-runtime';
 
 import type { Recipe, SiteGuide } from './browser/recipe-loader.js';
 
@@ -201,6 +197,8 @@ export interface SlackToolBridgeLike {
  * (大结果落盘的钳制根)。
  */
 export interface SlackHookMcpDeps {
+  withAccountDataAccess?: import('./account-data-access.js').AccountDataAccess;
+  getSessionContext?: () => LiziMcpSessionContext;
   getBridge(): SlackToolBridgeLike | null;
   /** 当前会话工作目录(out_file 泄洪根; 空 = 不落盘只截断)。 */
   workingDir?: string;
@@ -229,6 +227,9 @@ export interface RoutineToolService {
  * @cindy/maker-scheduler still has zero runtime deps per Phase 1).
  */
 export interface SchedulerMcpDeps {
+  withAccountDataAccess?: import('./account-data-access.js').AccountDataAccess;
+  /** Live per-call check (Bot main tasks may change automations only on their owner's own turn). */
+  authorizeCall?: import('./tool-call-authority.js').ToolCallAuthorizer;
   getScheduler(): import('@cindy/maker-scheduler').Scheduler;
   /**
    * 前置检查脚本(preRunHook)统一安装服务(host 注入,desktop 实现为
@@ -298,6 +299,10 @@ export interface SchedulerHookScriptService {
  * vCard 序列化, workspace dep 已声明), 依赖方向仍单向 @cindy/mcps → maker-core。
  */
 export interface MemoryMcpDeps {
+  withAccountDataAccess?: import('./account-data-access.js').AccountDataAccess;
+  /** Host captures the source turn before storage; invoked only for a successful write. */
+  beginWrite?: (context: LiziMcpSessionContext | undefined) => ((receipt: { key: string; title: string; action: 'created' | 'updated' }) => void);
+
   getManager(): import('@cindy/maker-core').MakerMemoryManager;
   workdir: string;
   getSessionContext?: () => LiziMcpSessionContext;
@@ -402,8 +407,8 @@ export interface SshMcpDeps {
 /**
  * cindy_contacts(智能通讯录)MCP server 工厂参数。
  *
- * 与 memory 的差异: 通讯录是全局单库(人不属于 workdir), 不需要 workdir /
- * getSessionContext。开关由 host 设置层注入 isEnabled — provider 注册门控 +
+ * 与 memory 的差异: 通讯录是全局单库(人不属于 workdir)，调用上下文仅供 Host
+ * 核验账号数据访问边界。开关由 host 设置层注入 isEnabled — provider 注册门控 +
  * withContacts 工具级双重拦截(Codex host 长生命周期下 server 可能已 spawn,
  * 运行期关闭靠工具级拦截兜底, 跟 memory 的 MAKER_MEMORY_NOT_READY 同模式)。
  *
@@ -411,6 +416,8 @@ export interface SshMcpDeps {
  * vCard 序列化, workspace dep 已声明), 依赖方向仍单向 @cindy/mcps → maker-core。
  */
 export interface ContactsMcpDeps {
+  withAccountDataAccess?: import('./account-data-access.js').AccountDataAccess;
+  getSessionContext?: () => LiziMcpSessionContext;
   getManager(): import('@cindy/maker-core').MakerContactsManager;
   /** host 设置层的功能开关. 缺省视为常开(测试/独立复用场景) */
   isEnabled?: () => boolean;
@@ -488,7 +495,6 @@ export type SessionSearchFn = (
 // 对应宿主内置能力开关 id 'docs'(不是需要安装的外置 .cindy 插件)。
 export type LiziMcpId =
   | 'android'
-  | 'ios_simulator'
   | 'browser'
   | 'computer'
   | 'cindy_feishu_bot'
@@ -778,126 +784,6 @@ export interface AndroidMcpDeps {
   logger?: LiziMcpLogger;
 }
 
-export type IOSSimulatorMcpErrorCode =
-  | IOSSimulatorRuntimeErrorCode
-  | IOSSimulatorInstanceErrorCode
-  | 'SESSION_CONTEXT_REQUIRED'
-  | 'SESSION_NOT_FOUND'
-  | 'UNSUPPORTED_SESSION_KIND'
-  | 'IOS_SIMULATOR_PLUGIN_REQUIRED'
-  | 'IOS_SIMULATOR_PLUGIN_DISABLED'
-  | 'IOS_SIMULATOR_DISABLED'
-  | 'WDA_UNAVAILABLE'
-  | 'XCODE_BUILD_FAILED'
-  | 'DRIVER_DISCONNECTED'
-  | 'ORIENTATION_UNSUPPORTED'
-  | 'IOS_SIMULATOR_HOST_ERROR';
-
-export type IOSSimulatorToolAvailabilityState =
-  | 'available'
-  | 'requires-instance'
-  | 'instance-dependent'
-  | 'unavailable';
-
-export interface IOSSimulatorToolAvailability {
-  state: IOSSimulatorToolAvailabilityState;
-  reasonCode?: string;
-  backend?: 'wda' | 'native-hid' | 'simctl' | 'host';
-}
-
-export interface IOSSimulatorToolAvailabilityReport {
-  ready: boolean;
-  instanceCount: number;
-  runningInstanceCount: number;
-  tools: Record<string, IOSSimulatorToolAvailability>;
-  notice?: {
-    errorCode: IOSSimulatorMcpErrorCode;
-    message: string;
-    data?: Record<string, unknown>;
-  };
-}
-
-export type IOSSimulatorMcpAccessDecision =
-  | { allowed: true }
-  | {
-      allowed: false;
-      errorCode: IOSSimulatorMcpErrorCode;
-      message: string;
-      data?: Record<string, unknown>;
-    };
-
-export type IOSSimulatorMcpToolName =
-  | 'check_environment'
-  | 'doctor'
-  | 'list_devices'
-  | 'list_instances'
-  | 'create_instance'
-  | 'attach_device'
-  | 'detach_device'
-  | 'start_instance'
-  | 'stop_instance'
-  | 'get_screen_map'
-  | 'audit_accessibility'
-  | 'compare_screen_maps'
-  | 'wait_for_ui'
-  | 'tap'
-  | 'swipe'
-  | 'drag'
-  | 'long_press'
-  | 'key_press'
-  | 'batch'
-  | 'touch_path'
-  | 'touch2_path'
-  | 'type_text'
-  | 'press_home'
-  | 'set_orientation'
-  | 'set_appearance'
-  | 'set_increase_contrast'
-  | 'set_content_size'
-  | 'set_location'
-  | 'start_location_route'
-  | 'clear_location'
-  | 'set_privacy'
-  | 'push_notification'
-  | 'set_status_bar'
-  | 'clear_status_bar'
-  | 'lock_screen'
-  | 'unlock_screen'
-  | 'build_app'
-  | 'read_build_diagnostics'
-  | 'install_app'
-  | 'launch_app'
-  | 'terminate_app'
-  | 'open_url'
-  | 'take_screenshot'
-  | 'capture_visual_baseline'
-  | 'visual_diff'
-  | 'capture_state'
-  | 'get_diagnostics'
-  | 'start_recording'
-  | 'stop_recording';
-
-export interface IOSSimulatorMcpCallContext {
-  sessionId?: string;
-  /** Workdir bound by the Host for project-scoped capability policy. */
-  workingDir?: string;
-  /** Host-internal origin. MCP transport always uses agent; renderer IPC uses user. */
-  origin?: 'agent' | 'user';
-}
-
-/** Host adapter used by the reusable iOS Simulator MCP server. */
-export interface IOSSimulatorMcpDeps {
-  callTool(
-    name: IOSSimulatorMcpToolName,
-    args: Record<string, unknown>,
-    context?: IOSSimulatorMcpCallContext,
-  ): Promise<unknown>;
-  describeTools?(
-    context?: IOSSimulatorMcpCallContext,
-  ): Promise<IOSSimulatorToolAvailabilityReport>;
-  logger?: LiziMcpLogger;
-}
-
 export type LiziMcpCallerKind = 'root' | 'descendant' | 'unknown';
 
 export interface LiziMcpSessionContext {
@@ -955,6 +841,12 @@ export interface CodexHttpMcpConfig {
 
 export interface LiziMcpProvider {
   name: string;
+  capability?: {
+    title: string;
+    description: string;
+    source: 'builtin' | 'plugin' | 'custom';
+    discovery?: { tool: string; args?: Record<string, unknown> };
+  };
   isEnabled?(context: LiziMcpSessionContext): boolean;
   toClaudeSdkConfig(context: LiziMcpSessionContext): unknown | null;
   /** Remote MCP config for Codex app-server; SDK instance providers use the host HTTP bridge instead. */

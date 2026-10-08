@@ -40,7 +40,7 @@ vi.mock('lucide-react-native', () => ({
 vi.mock('react-native-svg', () => ({ default: () => null, Circle: () => null }));
 vi.mock('react-native-uitextview', () => ({ UITextView: () => null }));
 vi.mock('expo-image', () => ({ Image: () => null }));
-vi.mock('expo-router', () => ({ useRouter: () => ({ push: vi.fn() }), useFocusEffect: vi.fn() }));
+vi.mock('expo-router', () => ({ useRouter: () => ({ push: vi.fn() }), useFocusEffect: vi.fn(), useNavigation: () => ({ isFocused: () => true, addListener: () => () => {} }) }));
 vi.mock('@/device-link/DeviceLinkContext', () => ({
   useDeviceLink: () => ({ status: 'offline', connectionEpoch: 0, getPresenceAvailability: () => false,
     invoke: vi.fn(), openLink: vi.fn() }),
@@ -194,7 +194,10 @@ describe('companion native read position', () => {
     const acknowledge = vi.fn();
     const items = buildMobileMessageRenderItems([msg('a', 'assistant', 'Task reply')], { isSessionStreaming: false });
     renderClient(<MessageRenderer items={items} onCompanionReadThrough={acknowledge} />);
-    expect(viewportHarness.list.onViewableItemsChanged).toBeUndefined();
+    expect(viewportHarness.list.onViewableItemsChanged).toBeTypeOf('function');
+    viewportHarness.list.onViewableItemsChanged({ viewableItems: items.map(item => ({
+      item, key: item.key, isViewable: true,
+    })) });
     expect(acknowledge).not.toHaveBeenCalled();
   });
 

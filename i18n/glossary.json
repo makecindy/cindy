@@ -5,6 +5,34 @@
   "sourceLocale": "en",
   "punctuationExempt": ["desktop:settings.help.qnaFeedbackBodyTemplate"],
   "terms": [
+    {"id": "wallpaper-blur", "status": "proposed", "en": "Wallpaper Blur", "translations": {"zh-CN": "壁纸模糊", "zh-TW": "桌布模糊", "ja": "壁紙のぼかし", "ko": "배경화면 흐림"}, "note": "仅使应用壁纸柔化，不模糊文字或控件；0 为关闭，按用户选择应用于静态图片和视频。"},
+    {"id": "group-owner", "status": "proposed", "en": "Group Owner", "translations": {"zh-CN": "群主", "zh-TW": "群主", "ja": "グループオーナー", "ko": "그룹 소유자"}, "checkCase": false, "note": "Chat Server 的群角色，可由人或伙伴担任；不要与伙伴主人或分工负责人混同。群设置成员行英文可简写 Owner。"},
+    {"id": "group-admin", "status": "proposed", "en": "Group Admin", "translations": {"zh-CN": "群管理员", "zh-TW": "群管理員", "ja": "グループ管理者", "ko": "그룹 관리자"}, "checkCase": false, "note": "可管理群资料和成员，但不能替伙伴主人授权工具或私人资料。群设置内可简称管理员 / Admin。"},
+    {"id": "group-nickname", "status": "proposed", "en": "Group Nickname", "translations": {"zh-CN": "群昵称", "zh-TW": "群暱稱", "ja": "グループ内の名前", "ko": "그룹에서의 이름"}, "checkCase": false, "note": "仅在单个群中显示的名字。为空时使用账号显示名；不覆盖个人资料名字或稳定身份。"},
+    {
+      "id": "wallpaper-visibility",
+      "status": "proposed",
+      "en": "Wallpaper Visibility",
+      "translations": {
+        "zh-CN": "壁纸可见度",
+        "zh-TW": "桌布可見度",
+        "ja": "壁紙の表示濃度",
+        "ko": "배경화면 표시 강도"
+      },
+      "note": "壁纸背景层的实际可见程度，0% 隐藏，100% 原样显示；不改变文字或控件的不透明度。"
+    },
+    {
+      "id": "wallpaper",
+      "status": "proposed",
+      "en": "Wallpaper",
+      "translations": {
+        "zh-CN": "壁纸",
+        "zh-TW": "桌布",
+        "ja": "壁紙",
+        "ko": "배경화면"
+      },
+      "note": "Desktop appearance setting for an in-app visual background layer."
+    },
     {
       "id": "shared-session",
       "status": "proposed",
@@ -1639,7 +1667,7 @@
         "ja": "iOS シミュレータ",
         "ko": "iOS 시뮬레이터"
       },
-      "note": "Apple Simulator 与 Cindy 内置查看器能力的用户可见名称。iOS 保留官方大小写；中文使用「模拟器」，日语使用「シミュレータ」，韩语使用「시뮬레이터」。先登记为 proposed，待插件与内置面板文案稳定后固化。"
+      "note": "Apple Simulator 的用户可见名称，也用于原内置模拟器的下线说明。Cindy 已移除内置查看器能力。iOS 保留官方大小写；中文使用「模拟器」，日语使用「シミュレータ」，韩语使用「시뮬레이터」。译法仍为 proposed。"
     },
     {
       "id": "lead",
@@ -1884,7 +1912,7 @@
         "ja": "取り消す",
         "ko": "철회"
       },
-      "note": "用户在 X 上让 Cindy 删掉它那条公开回帖的动作(在回帖下回 /delete)。zh-CN 取「撤回」而不是「删除」——「删除」在本仓已大量用于删任务/删会话/删文件, 而这个动作的对象是「已经发出去的公开内容」, 与 IM 里的消息撤回同义。刻意登记为 proposed: X 撤回是新功能(server PR #288 / client 侧告知), 四语只有这一处用例, 等更多用例出现后再定 decided。"
+      "note": "用户在 X 上让 Cindy 删掉它那条公开回帖的动作：原提问者在目标回帖下回复 `@askmycindy /delete`，正文中须手动带上 @askmycindy。中文说明也可展示 `/删除`，但命令本身不翻译为 `/刪除`。zh-CN 取「撤回」而不是「删除」——「删除」在本仓已大量用于删任务/删会话/删文件, 而这个动作的对象是「已经发出去的公开内容」, 与 IM 里的消息撤回同义。刻意登记为 proposed: X 撤回是新功能(server PR #288 / client 侧告知), 五语只有这一处用例, 等更多用例出现后再定 decided。"
     },
     {
       "id": "bot-reply-post",
@@ -2279,6 +2307,70 @@
         "ko": "초대 코드"
       },
       "note": "共享任务加入表单中由房主提供、访客输入的代码；用户要求明确称为邀请码，避免被理解为任意邀请文本。"
+    },
+    {
+      "id": "provider-sharing",
+      "status": "proposed",
+      "en": "Provider Sharing",
+      "translations": {
+        "zh-CN": "供应商分享",
+        "zh-TW": "供應商分享",
+        "ja": "プロバイダー共有",
+        "ko": "제공자 공유"
+      },
+      "checkCase": false,
+      "note": "把自己电脑上的某个供应商分享给其他 Cindy 账号使用(docs/product-rules/provider-sharing.md)。中文一律用「分享」，不用「共享」——「共享」留给共享任务，两者是独立的授权关系；ja / ko 两个功能都自然译作「共有 / 공유」，靠「プロバイダー / 제공자」与「セッション / 세션」区分。界面上「管理分享」「分享 {供应商}」「分享给我的供应商」都属于本词。"
+    },
+    {
+      "id": "share-link",
+      "status": "proposed",
+      "en": "Share Link",
+      "translations": {
+        "zh-CN": "分享链接",
+        "zh-TW": "分享連結",
+        "ja": "共有リンク",
+        "ko": "공유 링크"
+      },
+      "checkCase": false,
+      "note": "供应商分享的一次性链接：生成后 5 分钟内有效、只能使用一次。与共享任务的「邀请链接 / 邀请码」是不同的东西，不要混用。"
+    },
+    {
+      "id": "share-request",
+      "status": "proposed",
+      "en": "Share Request",
+      "translations": {
+        "zh-CN": "分享申请",
+        "zh-TW": "分享申請",
+        "ja": "共有の申請",
+        "ko": "공유 요청"
+      },
+      "checkCase": false,
+      "note": "受邀者打开分享链接、确认后发给分享者的请求；分享者「同意分享 / 拒绝申请」。受邀者可以「撤回申请」。"
+    },
+    {
+      "id": "pairing-code",
+      "status": "proposed",
+      "en": "Pairing Code",
+      "translations": {
+        "zh-CN": "配对码",
+        "zh-TW": "配對碼",
+        "ja": "ペアリングコード",
+        "ko": "페어링 코드"
+      },
+      "checkCase": false,
+      "note": "供应商分享申请的 4 位数字，只在受邀者「等待同意」界面与分享者审批弹窗 / 管理页待处理一栏出现，供双方核对是同一个人；不是密钥，不参与鉴权。与 OAuth 的 Device Code（设备码）是不同概念。"
+    },
+    {
+      "id": "bot-workbench",
+      "status": "proposed",
+      "en": "Workbench",
+      "translations": {
+        "zh-CN": "工作台",
+        "zh-TW": "工作台",
+        "ja": "ワークベンチ",
+        "ko": "작업대"
+      },
+      "note": "伙伴主任务右侧栏里的标签：主人交给伙伴的项目，以及项目里的任务、自动化与产出（docs/product-rules/cindy-bots-runtime.md「工作台」一节）。只指这个伙伴视图，不泛指任务列表或其它面板。先登记为 proposed，待 Chris 实机试用后再定。"
     }
   ]
 }

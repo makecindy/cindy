@@ -88,6 +88,9 @@ export function createStreamingHasher(
     });
   }
 
+  // Observe early prime rejection even if opening the destination fails first.
+  void primed.catch(() => {});
+
   return {
     /**
      * Feed a chunk into the streaming hash.
@@ -108,10 +111,12 @@ export function createStreamingHasher(
      */
     async update(chunk: Buffer): Promise<void> {
       await primed;
+      signal?.throwIfAborted();
       hash.update(chunk);
     },
     async digest(): Promise<string> {
       await primed;
+      signal?.throwIfAborted();
       return hash.digest('hex');
     },
   };

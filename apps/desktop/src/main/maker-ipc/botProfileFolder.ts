@@ -136,6 +136,17 @@ export async function ensureBotWorkspaceDir(
   return workspace;
 }
 
+/** Chat-only grants share neither the Bot Home nor a plan's project directory. */
+export async function ensureBotChatOnlyWorkspaceDir(
+  userDataDir: string,
+  botId: string,
+  routeKey: string,
+): Promise<string> {
+  const workspace = path.join(userDataDir, 'chat-workspaces', createHash('sha256').update(routeKey + ':' + botId).digest('hex'));
+  await fs.mkdir(workspace, { recursive: true });
+  return workspace;
+}
+
 /** Bot 长期记忆与 USER.md 共处一个可浏览目录；存储层会忽略 USER.md。 */
 export function botProfileMemoryDir(userDataDir: string, botId: string): string {
   return path.join(botProfileDir(userDataDir, botId), 'memories');

@@ -376,6 +376,7 @@ describe("cindy_ghosts · ghost_info(单插件精准查询)", () => {
   it.each([
     ["GHOST_ASLEEP", "目标插件未启用"],
     ["GHOST_DISABLED_IN_WORKDIR", "当前工作目录已停用"],
+    ["GHOST_RETIRED", "该功能已下线"],
   ] as const)("%s 只返回公开结构化错误字段", async (errorCode, message) => {
     const result = await handleGhostInfo(
       fakeDeps({
@@ -504,6 +505,7 @@ describe("cindy_ghosts · ghost_manual(随包手册按需读取)", () => {
     "GHOST_NOT_FOUND",
     "GHOST_ASLEEP",
     "GHOST_DISABLED_IN_WORKDIR",
+    "GHOST_RETIRED",
   ] as const)("%s 可见性错误保持同一固定信封", async (errorCode) => {
     const result = await handleGhostManual(
       fakeDeps({
@@ -1147,6 +1149,14 @@ describe("cindy_ghosts · ghost_call(派活透传)", () => {
 });
 
 describe("cindy · media MCP 边界", () => {
+  it("imports existing screenshots without requiring a model or plugin", async () => {
+    const callMedia = vi.fn(async () => ({ ok: true, xdt_image_urls: ['cindy-media://blobs/image.png'] }));
+    const deps = fakeDeps({ callMedia });
+    expect(parsePayload(await handleMedia(deps, { action: 'import_image' }))).toMatchObject({ errorCode: 'INVALID_INPUT' });
+    expect(callMedia).not.toHaveBeenCalled();
+    expect(parsePayload(await handleMedia(deps, { action: 'import_image', path: 'screenshots/actual.png' }))).toMatchObject({ ok: true });
+    expect(callMedia).toHaveBeenCalledWith({ action: 'import_image', path: 'screenshots/actual.png' });
+  });
   it("把 snake_case 输入转换为 Host 稳定类型", async () => {
     const callMedia = vi.fn(async () => ({ ok: true, status: "prepared" }));
     const result = await handleMedia(fakeDeps({ callMedia }), {

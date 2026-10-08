@@ -45,6 +45,16 @@ function chatData(overrides: Record<string, unknown> = {}) {
 }
 
 describe('parseBotGroupChatData', () => {
+  it('preserves a server join notice through the phone projection', () => {
+    const joined = { id: 'joined', sequence: 20, kind: 'notice', authorKind: 'system', authorBotId: null,
+      authorName: 'Taylor', content: 'Taylor joined the group', noticeCode: 'member-joined',
+      planId: null, createdAt: 20 };
+    const parsed = parseBotGroupChatData(chatData({ messages: [joined],
+      lastMessage: { authorKind: 'system', authorName: 'Taylor', preview: joined.content, noticeCode: joined.noticeCode, createdAt: 20 } }))!;
+    expect(parsed.messages[0]).toMatchObject(joined);
+    expect(parsed.lastMessage).toMatchObject({ authorKind: 'system', noticeCode: 'member-joined', authorName: 'Taylor' });
+  });
+
   it('validates the host projection field by field and keeps host paths off the phone', () => {
     const parsed = parseBotGroupChatData(chatData())!;
     expect(parsed.messages.map((message) => message.id)).toEqual(['m1', 'm2', 'm4']);

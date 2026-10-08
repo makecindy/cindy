@@ -1,4 +1,5 @@
 {
+  "selfJoin": "You started this shared task, so you don’t need to join. Open it from “Shared by Me”.",
   "waitingHost": "Waiting for the host to respond. You can continue sending messages.",
   "join": "Join Shared Task",
   "joinHint": "Paste an invitation link to open the shared task.",
@@ -39,7 +40,7 @@
   "joined": "Joined Shared Task",
   "joinedBody": "You can view earlier messages, tool results and attachments, and message the same Agent.",
   "enterTask": "Enter Task",
-  "inviteBoxTitle": "Send the invitation link to your teammates",
+  "inviteBoxTitle": "Send the invitation link to people you want to work with",
   "roleGuest": "Guest",
   "removeShort": "Remove",
   "removeNamedTitle": "Remove {{name}}?",

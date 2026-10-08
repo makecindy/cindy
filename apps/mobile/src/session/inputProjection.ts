@@ -105,7 +105,15 @@ export function normalizeInputProjection(value: unknown, fallbackSessionId = '')
     continuationTurnClientId: readString(record?.continuationTurnClientId),
     continuationInFlightProjectionCapability,
     credentialSwitchWait: readCredentialSwitchWait(record?.credentialSwitchWait),
+    usageLimitWait: readUsageLimitWait(record?.usageLimitWait),
   };
+}
+
+function readUsageLimitWait(value: unknown): InputProjection['usageLimitWait'] {
+  const resumeAt = readRecord(value)?.resumeAt;
+  return typeof resumeAt === 'number' && Number.isFinite(resumeAt) && resumeAt > 0
+    ? { resumeAt }
+    : null;
 }
 
 /** 宽松解析凭证切换等待态:非对象/blockedBySessionIds 缺失或为空一律视作无等待。 */

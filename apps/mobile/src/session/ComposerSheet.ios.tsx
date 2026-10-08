@@ -11,9 +11,15 @@ import {
   Spacer,
   Text,
   VStack,
+  ZStack,
 } from "@expo/ui/swift-ui";
 import {
   accessibilityLabel,
+  accessibilityElement,
+  accessibilityHidden,
+  disabled,
+  opacity,
+  scrollDisabled,
   contentShape,
   shapes,
   buttonStyle,
@@ -46,6 +52,7 @@ export function ComposerSheet({
   testID,
   nativeContent,
   nativeHeader,
+  nativeRoot,
   preventDismiss = false,
 }: ComposerSheetProps) {
   const { mode, colors } = useTheme();
@@ -95,7 +102,7 @@ export function ComposerSheet({
               <Spacer />
               {onBack ? <Spacer modifiers={[frame({ width: 44 })]} /> : null}
             </HStack> : null}
-            {nativeHeader}
+            {!nativeRoot && nativeHeader}
             {aboveContent && aboveContentTitle ? (
               <Text modifiers={[
                 font({ textStyle: "subheadline" }),
@@ -111,7 +118,49 @@ export function ComposerSheet({
                 </View>
               </RNHostView>
             ) : null}
-            {nativeContent ? (
+            {nativeContent && nativeRoot ? (
+              <ZStack
+                modifiers={[frame({ maxWidth: Infinity, maxHeight: Infinity })]}
+              >
+                <VStack
+                  spacing={0}
+                  modifiers={[
+                    frame({ maxWidth: Infinity, maxHeight: Infinity }),
+                    opacity(nativeRoot.active ? 1 : 0),
+                    disabled(!nativeRoot.active),
+                    scrollDisabled(!nativeRoot.active),
+                    accessibilityElement(
+                      nativeRoot.active ? "contain" : "ignore",
+                    ),
+                    accessibilityHidden(!nativeRoot.active),
+                  ]}
+                >
+                  {nativeRoot.header}
+                  <Form
+                    testID={testID ? `${testID}.list` : undefined}
+                    modifiers={[scrollContentBackground("hidden")]}
+                  >
+                    {nativeRoot.content}
+                  </Form>
+                </VStack>
+                {!nativeRoot.active ? (
+                  <VStack
+                    spacing={0}
+                    modifiers={[
+                      frame({ maxWidth: Infinity, maxHeight: Infinity }),
+                    ]}
+                  >
+                    {nativeHeader}
+                    <Form
+                      testID={testID}
+                      modifiers={[scrollContentBackground("hidden")]}
+                    >
+                      {children}
+                    </Form>
+                  </VStack>
+                ) : null}
+              </ZStack>
+            ) : nativeContent ? (
               <Form testID={testID} modifiers={[
                 scrollContentBackground("hidden"),
                 ...(aboveContent ? [padding({ top: -12 })] : []),

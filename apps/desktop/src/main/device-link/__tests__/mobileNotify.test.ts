@@ -4,6 +4,17 @@ import { NOTIFY_TITLE_MAX_LENGTH, NOTIFY_BODY_MAX_LENGTH, NOTIFY_DEEP_LINK_MAX_L
 import { MobileNotifyDeduper, buildBotGroupNotifyPayload, buildSessionNotifyPayload } from '../mobileNotify';
 
 describe('buildSessionNotifyPayload', () => {
+  it('identifies only teammate replies and isolates the same bot on different hosts', () => {
+    const opts = { sessionId: 's1', title: 'Mika', kind: 'done' as const, selfDeviceId: 'd1', fallbackBody: 'Reply', teammateBotId: 'b1', teammateAvatar: { kind: 'symbol' as const, value: '🐸' } };
+    const first = buildSessionNotifyPayload(opts);
+    expect(first.sender?.avatar).toEqual(opts.teammateAvatar);
+    expect(first.sender?.id).toMatch(/^[a-f0-9]{64}$/);
+    expect(buildSessionNotifyPayload({ ...opts, selfDeviceId: 'd2' }).sender?.id).not.toBe(first.sender?.id);
+    expect(buildSessionNotifyPayload({ ...opts, sessionId: 's2' }).sender?.id).toBe(first.sender?.id);
+    expect(buildSessionNotifyPayload({ ...opts, kind: 'needs-reply' }).sender).toBeUndefined();
+    expect(buildSessionNotifyPayload({ ...opts, kind: 'error' }).sender).toBeUndefined();
+    expect(buildSessionNotifyPayload({ ...opts, teammateBotId: undefined }).sender).toBeUndefined();
+  });
   const base = {
     sessionId: 'session-1234',
     title: '修复登录问题',

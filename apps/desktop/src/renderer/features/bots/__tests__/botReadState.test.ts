@@ -105,6 +105,18 @@ describe('Bot read positions', () => {
     expect(pruneBotReadState(['bot-1'])).toBe(false);
   });
 
+  it('counts other humans as incoming, preserves pending replies behind self messages, and seeds old history quietly', () => {
+    const lastMessage = { authorKind: 'user' as const, isSelf: false, authorName: 'Chris', preview: 'Hello', createdAt: 100 };
+    seedBotGroupReadState([{ id: 'g', lastMessage }]);
+    expect(isBotGroupUnread({ id: 'g', lastMessage })).toBe(false);
+    const incoming = { id: 'g', lastMessage: { ...lastMessage, createdAt: 200 } };
+    expect(isBotGroupUnread(incoming)).toBe(true);
+    expect(isBotGroupUnread({ id: 'g', lastMessage: { ...lastMessage, isSelf: true, createdAt: 300 } })).toBe(false);
+    expect(isBotGroupUnread({ id: 'g', lastReplyAt: 200, lastMessage: { ...lastMessage, isSelf: true, createdAt: 300 } })).toBe(true);
+    markBotRead(botGroupReadKey('g'), 200);
+    expect(isBotGroupUnread(incoming)).toBe(false);
+  });
+
   it('notifies subscribers only when the stored state actually changes', () => {
     setBotReadStateOwner('owner-1');
     const listener = vi.fn();
@@ -118,6 +130,17 @@ describe('Bot read positions', () => {
     unsubscribe();
     markBotRead('bot-1', 7_000);
     expect(listener).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not count a system admission as an incoming reply or hide a pending reply', () => {
+    setBotReadStateOwner('owner-1');
+    markBotRead(botGroupReadKey('g'), 100);
+    const lastMessage = { authorKind: 'system' as const, isSelf: false, authorName: 'Taylor',
+      noticeCode: 'member-joined' as const, preview: 'Taylor joined the group', createdAt: 300 };
+    expect(isBotGroupUnread({ id: 'g', lastMessage })).toBe(false);
+    expect(isBotGroupUnread({ id: 'g', lastReplyAt: 100, lastMessage })).toBe(false);
+    expect(isBotGroupUnread({ id: 'g', lastReplyAt: 200, lastMessage })).toBe(true);
+    expect(getBotLastReadAt(botGroupReadKey('g'))).toBe(100);
   });
 
   it('degrades to an empty map when the stored value is corrupt', () => {

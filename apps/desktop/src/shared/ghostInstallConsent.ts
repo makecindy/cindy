@@ -58,6 +58,8 @@ export type GhostInstallConsentFacts =
 
 /** Main 投给确认界面的一次确认请求。 */
 export interface GhostInstallConsentRequest {
+  /** Host-only first-use capability confirmation; does not install/update a package. */
+  purpose?: 'task-capability';
   requestId: string;
   initiator: GhostInstallConsentInitiator;
   origin: GhostInstallConsentOrigin;

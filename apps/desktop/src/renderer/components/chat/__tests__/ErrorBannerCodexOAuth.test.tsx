@@ -147,6 +147,19 @@ describe('ErrorBanner OpenAI connection recovery', () => {
     expect(screen.queryByText(error)).toBeNull();
   });
 
+  it('replaces an unsettled account boundary error with retry guidance', () => {
+    const error =
+      'LAZY_CREATE_FAILED: Ghost skill projection is not stable for the active owner';
+    const onRetry = vi.fn();
+    render(
+      <ErrorBanner error={error} retryText="retry this turn" onRetry={onRetry} agentKind="codex" />,
+    );
+
+    expect(screen.getByText('chat.errorBanner.accountBoundaryPending')).toBeTruthy();
+    expect(screen.queryByText(error)).toBeNull();
+    expect(screen.getByRole('button', { name: 'chat.errorBanner.retry' })).toBeTruthy();
+  });
+
   it('uses cause-neutral Codex app-server retirement copy and does not suggest switching models', () => {
     render(
       <ErrorBanner
@@ -926,33 +939,42 @@ describe('ErrorBanner OpenAI connection recovery', () => {
     expect(screen.queryByText('logic.errors.toolUseLoopDetectedWithCount')).toBeNull();
   });
 
-  it('exposes the explicit Continue After Reset action only when provided', () => {
-    const onContinueAfterUsageReset = vi.fn();
+  it('shows the automatic continuation time and a cancel action only while waiting', () => {
+    const onCancelUsageLimitWait = vi.fn();
     const { rerender } = render(
       <ErrorBanner
         error="usageLimitExceeded"
         retryText="retry this turn"
         onRetry={vi.fn()}
         agentKind="codex"
-        onContinueAfterUsageReset={onContinueAfterUsageReset}
+        usageLimitWait={{ resumeAt: Date.now() + 60 * 60 * 1000 }}
+        onCancelUsageLimitWait={onCancelUsageLimitWait}
         usageLimitRecovery={{ resetAtMs: null, isAccountUsageLimit: true }}
       />,
     );
 
     expect(screen.getByText('chat.errorBanner.codexUsageLimit')).toBeTruthy();
-    expect(screen.queryByText('usageLimitExceeded')).toBeNull();
-    const continueButton = screen.getByRole('button', {
-      name: 'chat.errorBanner.continueAfterReset',
-    });
-    expect(continueButton.getAttribute('data-split-pane-route-action')).toBe('');
-    fireEvent.click(continueButton);
-    expect(onContinueAfterUsageReset).toHaveBeenCalledOnce();
+    expect(screen.getByText('chat.errorBanner.usageLimitAutoContinueAt')).toBeTruthy();
+    // 等待期间手动重试仍可用。
+    expect(screen.getByRole('button', { name: 'chat.errorBanner.retry' })).toBeTruthy();
+    fireEvent.click(
+      screen.getByRole('button', { name: 'chat.errorBanner.usageLimitAutoContinueCancel' }),
+    );
+    expect(onCancelUsageLimitWait).toHaveBeenCalledOnce();
 
     rerender(
-      <ErrorBanner error="A normal failure" retryText="retry this turn" onRetry={vi.fn()} />,
+      <ErrorBanner
+        error="usageLimitExceeded"
+        retryText="retry this turn"
+        onRetry={vi.fn()}
+        agentKind="codex"
+        usageLimitWait={null}
+        onCancelUsageLimitWait={onCancelUsageLimitWait}
+      />,
     );
+    expect(screen.queryByText('chat.errorBanner.usageLimitAutoContinueAt')).toBeNull();
     expect(
-      screen.queryByRole('button', { name: 'chat.errorBanner.continueAfterReset' }),
+      screen.queryByRole('button', { name: 'chat.errorBanner.usageLimitAutoContinueCancel' }),
     ).toBeNull();
   });
 
@@ -1007,7 +1029,6 @@ describe('ErrorBanner OpenAI connection recovery', () => {
         retryText="retry this turn"
         onRetry={vi.fn()}
         agentKind="codex"
-        onContinueAfterUsageReset={vi.fn()}
         usageLimitRecovery={{ resetAtMs: null }}
       />,
     );
@@ -1017,9 +1038,6 @@ describe('ErrorBanner OpenAI connection recovery', () => {
     fireEvent.click(screen.getByText('chat.errorBanner.networkShowRaw'));
     expect(screen.getByText(rawError)).toBeTruthy();
     expect(screen.queryByText('chat.errorBanner.codexUsageLimit')).toBeNull();
-    expect(
-      screen.queryByRole('button', { name: 'chat.errorBanner.continueAfterReset' }),
-    ).toBeNull();
   });
 
   it('rebuilds the organization usage-limit hint for a persisted error tail', () => {

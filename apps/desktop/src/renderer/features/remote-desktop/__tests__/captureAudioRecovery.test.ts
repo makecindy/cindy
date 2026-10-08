@@ -32,10 +32,14 @@ function setup() {
   vi.useFakeTimers();
   const video = media(false);
   const nativeStop = vi.fn();
+  const hold = vi.fn();
+  const resume = vi.fn(() => true);
   vi.mocked(nativeCaptureStream).mockResolvedValue({
     stream: video,
     stop: nativeStop,
     clear: vi.fn(),
+    hold,
+    resume,
   } as any);
   const capture = vi.fn().mockRejectedValue(new Error('NotAllowedError'));
   vi.stubGlobal('navigator', { mediaDevices: { getDisplayMedia: capture } });
@@ -72,8 +76,10 @@ function setup() {
       expect(this.remoteReady).toBe(true);
       return [this.audio];
     }
-    async setRemoteDescription() {
+    remote: { sdp?: string } | undefined;
+    async setRemoteDescription(description?: { sdp?: string }) {
       this.remoteReady = true;
+      this.remote = description;
     }
     async setLocalDescription() {}
     async createAnswer() {
@@ -84,7 +90,12 @@ function setup() {
   let command!: (value: any) => void;
   const reply = vi.fn(async () => {});
   const api = {
+    request: vi.fn(async (_lease: string, _request: unknown): Promise<any> => ({
+      ok: true,
+      result: { ok: true },
+    })),
     stop: vi.fn(async () => {}),
+    input: vi.fn(async (_lease: string, _sequence: number, _events: unknown[]) => {}),
     nativeAudio: vi.fn(async () => new Uint8Array(0)),
     onCommand: (callback: typeof command) => {
       command = callback;
@@ -94,27 +105,56 @@ function setup() {
     reply,
   };
   disposers.push(startDesktopCaptureHost(api as any));
-  const offer = (audio = true, overlay = true, nativeAudio = false) =>
+  const offer = (
+    audio = true,
+    overlay = true,
+    nativeAudio = false,
+    quality?: 'auto' | 'saver' | 'hd',
+    fps: 30 | 60 = 30,
+    sdp = 'offer',
+    background = false,
+  ) =>
     command({
       id: 'offer',
       op: 'offer',
       lease: 'lease',
-      sdp: 'offer',
+      sdp,
       attemptId: 'attempt',
       sourceId: 'screen:1',
       nativeCapture: true,
       nativeAudio,
       cursorOverlay: overlay,
-      settings: { audio, fps: 30 },
+      settings: { audio, fps, ...(quality ? { quality } : {}) },
+      background,
+    });
+  const offerWithoutSettings = (sdp: string) =>
+    command({
+      id: 'offer',
+      op: 'offer',
+      lease: 'lease',
+      sdp,
+      attemptId: 'attempt',
+      sourceId: 'screen:1',
+      nativeCapture: true,
+      cursorOverlay: true,
     });
   return {
     api,
     video,
     nativeStop,
+    hold,
+    resume,
+    pause: (lease = 'lease') => command({ id: 'hold', op: 'display-hold', lease }),
+    swap: (lease = 'lease') => command({ id: 'swap', op: 'display-swap', lease }),
+    hide: (hidden: boolean, lease = 'lease') =>
+      command({ id: 'hide', op: 'viewer-hidden', lease, hidden }),
+    background: (background: boolean, lease = 'lease') =>
+      command({ id: 'background', op: 'background-viewing', lease, background }),
     peers,
     capture,
     reply,
     offer,
+    offerWithoutSettings,
     reset: (resume = false) =>
       command({ op: 'capture-reset', lease: 'lease', nativeAudio: resume }),
     stop: () => command({ op: 'stop' }),
@@ -137,16 +177,74 @@ function nativeSound() {
   return { sound, close };
 }
 
-it('allows congestion-driven resolution and frame-rate reduction without restarting capture', async () => {
+it.each([
+  [undefined, 60, 'maintain-framerate', 60, 20_000_000, ''],
+  ['auto', 60, 'maintain-framerate', 60, 20_000_000, ''],
+  ['saver', 60, 'maintain-framerate', 60, 2_000_000, ''],
+  ['saver', 30, 'maintain-framerate', 30, 2_000_000, ''],
+  ['hd', 60, 'maintain-resolution', 60, 20_000_000, 'text'],
+  ['hd', 30, 'maintain-resolution', 30, 20_000_000, 'text'],
+] as const)(
+  'applies the %s tier at %i fps as sender ceilings without restarting capture',
+  async (quality, fps, degradationPreference, maxFramerate, maxBitrate, contentHint) => {
+    const h = setup();
+    h.offer(false, true, false, quality, fps);
+    await flush();
+    expect(h.peers[0].video.setParameters).toHaveBeenCalledExactlyOnceWith({
+      degradationPreference,
+      encodings: [{ maxFramerate, maxBitrate }],
+    });
+    expect(vi.mocked(nativeCaptureStream).mock.calls.at(-1)?.[4]).toBe(maxFramerate);
+    expect((h.video.video as { contentHint?: string }).contentHint).toBe(contentHint);
+    expect(h.peers).toHaveLength(1);
+    expect(h.reply).toHaveBeenCalledWith('offer', 'answer');
+    expect(h.nativeStop).not.toHaveBeenCalled();
+  },
+);
+
+it('keeps full resolution while the screen is still only for tiers that ask for it', async () => {
   const h = setup();
-  h.offer(false);
+  h.offer(false, true, false, 'auto');
   await flush();
-  expect(h.peers[0].video.setParameters).toHaveBeenCalledExactlyOnceWith({
-    degradationPreference: 'balanced', encodings: [{ maxFramerate: 30 }],
-  });
-  expect(h.peers).toHaveLength(1);
-  expect(h.reply).toHaveBeenCalledWith('offer', 'answer');
-  expect(h.nativeStop).not.toHaveBeenCalled();
+  const onMotion = vi.mocked(nativeCaptureStream).mock.calls.at(-1)?.[5];
+  expect(onMotion).toBeTypeOf('function');
+  const video = h.peers[0].video.setParameters;
+  onMotion!(false);
+  await flush();
+  expect(video).toHaveBeenLastCalledWith(
+    expect.objectContaining({ degradationPreference: 'maintain-resolution' }),
+  );
+  onMotion!(true);
+  await flush();
+  expect(video).toHaveBeenLastCalledWith(
+    expect.objectContaining({ degradationPreference: 'maintain-framerate' }),
+  );
+
+  // HD tracks motion too, since it may switch to the saver tier in the background,
+  // but in the foreground it keeps full resolution either way.
+  const hd = setup();
+  hd.offer(false, true, false, 'hd');
+  await flush();
+  const hdMotion = vi.mocked(nativeCaptureStream).mock.calls.at(-1)?.[5];
+  expect(hdMotion).toBeTypeOf('function');
+  hdMotion!(false);
+  await flush();
+  hdMotion!(true);
+  await flush();
+  for (const [parameters] of hd.peers[0].video.setParameters.mock.calls)
+    expect(parameters).toMatchObject({ degradationPreference: 'maintain-resolution' });
+});
+
+it('passes the tier bandwidth floor to the viewer offer, leaving legacy offers untouched', async () => {
+  const sdp = 'v=0\r\nm=video 9 UDP/TLS/RTP/SAVPF 100\r\na=rtpmap:100 VP8/90000\r\n';
+  const h = setup();
+  h.offer(false, true, false, 'saver', 30, sdp);
+  await flush();
+  expect(h.peers[0].remote?.sdp).toContain('a=fmtp:100 x-google-start-bitrate=1500;');
+  const legacy = setup();
+  legacy.offerWithoutSettings(sdp);
+  await flush();
+  expect(legacy.peers.at(-1)?.remote?.sdp).toBe(sdp);
 });
 
 it('clears locked audio and restores its existing sender after unlock without Chromium capture', async () => {
@@ -373,4 +471,325 @@ it('keeps retrying locally after replaceTrack rejects without dropping the video
   await vi.advanceTimersByTimeAsync(DESKTOP_AUDIO_RETRY_MS[1]);
   expect(h.peers[0].audio.sender.replaceTrack).toHaveBeenLastCalledWith(recovered.sound);
   expect(h.peers[0].close).not.toHaveBeenCalled();
+});
+
+it('answers control requests on the input channel without risking the session', async () => {
+  const h = setup();
+  h.offer(false);
+  await flush();
+  const [peer] = h.peers as any[];
+  const channel: any = {
+    label: 'input-v1',
+    readyState: 'open',
+    bufferedAmount: 0,
+    send: vi.fn(),
+    close: vi.fn(),
+  };
+  peer.ondatachannel({ channel });
+  const replies = () =>
+    channel.send.mock.calls
+      .map(([data]: [string]) => JSON.parse(data))
+      .filter((message: any) => message.type === 'reply');
+  const ask = async (id: string, request: unknown) => {
+    channel.onmessage({ data: JSON.stringify({ type: 'request', id, request }) });
+    await flush();
+  };
+  await ask('mute', { op: 'hostMute', lease: 'lease', enabled: true });
+  expect(h.api.request).toHaveBeenCalledWith('lease', {
+    op: 'hostMute',
+    lease: 'lease',
+    enabled: true,
+  });
+  expect(replies().at(-1)).toEqual({ type: 'reply', id: 'mute', ok: true, result: { ok: true } });
+  h.api.request.mockResolvedValueOnce({ ok: false, error: 'DESKTOP_VIEW_ONLY' });
+  await ask('control', { op: 'control', lease: 'lease', enabled: true });
+  expect(replies().at(-1)).toEqual({
+    type: 'reply',
+    id: 'control',
+    ok: false,
+    error: 'DESKTOP_VIEW_ONLY',
+  });
+  // Operations outside the channel set are refused, not fatal: the viewer
+  // falls back to the relay and the session continues.
+  h.api.request.mockClear();
+  await ask('start', { op: 'start', displayId: '1' });
+  await ask('list', { op: 'windowAction', lease: 'lease', action: 'list' });
+  expect(h.api.request).not.toHaveBeenCalled();
+  expect(
+    replies()
+      .slice(-2)
+      .map((reply: any) => reply.error),
+  ).toEqual(['DESKTOP_CHANNEL_UNSUPPORTED', 'DESKTOP_CHANNEL_UNSUPPORTED']);
+  // A result too large for one channel message is reported, never truncated.
+  h.api.request.mockResolvedValueOnce({ ok: true, result: 'x'.repeat(40_000) });
+  await ask('modes', { op: 'displayModes', lease: 'lease' });
+  expect(replies().at(-1)).toMatchObject({ id: 'modes', error: 'DESKTOP_REPLY_TOO_LARGE' });
+  // Requests have their own bound; overflow is refused, not a session stop.
+  h.api.request.mockImplementation(() => new Promise(() => {}));
+  for (let i = 0; i < 9; i++) await ask(`slow-${i}`, { op: 'clipboardVersion', lease: 'lease' });
+  expect(replies().at(-1)).toMatchObject({ id: 'slow-8', error: 'DESKTOP_CHANNEL_BUSY' });
+  expect(h.api.stop).not.toHaveBeenCalled();
+  expect(peer.close).not.toHaveBeenCalled();
+  expect(channel.close).not.toHaveBeenCalled();
+});
+
+it('answers control requests while input batches fill their own bound', async () => {
+  const h = setup();
+  h.offer(false);
+  await flush();
+  const [peer] = h.peers as any[];
+  const channel: any = {
+    label: 'input-v1',
+    readyState: 'open',
+    bufferedAmount: 0,
+    send: vi.fn(),
+    close: vi.fn(),
+  };
+  peer.ondatachannel({ channel });
+  h.api.input.mockImplementation(() => new Promise(() => {}));
+  const batch = (sequence: number) =>
+    channel.onmessage({ data: JSON.stringify({ sequence, events: [] }) });
+  for (let sequence = 1; sequence <= 8; sequence++) batch(sequence);
+  channel.onmessage({
+    data: JSON.stringify({
+      type: 'request',
+      id: 'mute',
+      request: { op: 'hostMute', lease: 'lease', enabled: true },
+    }),
+  });
+  await flush();
+  expect(JSON.parse(channel.send.mock.calls.at(-1)[0])).toEqual({
+    type: 'reply',
+    id: 'mute',
+    ok: true,
+    result: { ok: true },
+  });
+  expect(h.api.stop).not.toHaveBeenCalled();
+  batch(9);
+  expect(h.api.stop).toHaveBeenCalled();
+});
+
+it('follows a display swap on the same peer without restarting capture', async () => {
+  const h = setup();
+  h.offer(false);
+  await flush();
+  const [peer] = h.peers;
+  h.pause('other-lease');
+  h.swap('other-lease');
+  expect(h.hold).not.toHaveBeenCalled();
+  expect(h.resume).not.toHaveBeenCalled();
+  expect(h.reply).toHaveBeenLastCalledWith('swap', false);
+  h.pause();
+  expect(h.hold).toHaveBeenCalledOnce();
+  h.swap();
+  await flush();
+  expect(h.resume).toHaveBeenCalledOnce();
+  expect(h.reply).toHaveBeenLastCalledWith('swap', true);
+  expect(h.peers).toHaveLength(1);
+  expect(peer.close).not.toHaveBeenCalled();
+  expect(h.nativeStop).not.toHaveBeenCalled();
+  expect(h.api.stop).not.toHaveBeenCalled();
+});
+
+it('reports a browser-captured stream as not kept, so the video is rebuilt', async () => {
+  const h = setup();
+  // No cursor overlay: the browser capture succeeds and native is never used.
+  h.capture.mockResolvedValueOnce(media(false));
+  const nativeStarts = vi.mocked(nativeCaptureStream).mock.calls.length;
+  h.offer(false, false);
+  await flush();
+  expect(h.reply).toHaveBeenCalledWith('offer', 'answer');
+  expect(vi.mocked(nativeCaptureStream).mock.calls).toHaveLength(nativeStarts);
+  h.pause();
+  h.swap();
+  await flush();
+  expect(h.hold).not.toHaveBeenCalled();
+  expect(h.reply).toHaveBeenLastCalledWith('swap', false);
+});
+
+it('reports a native stream that already ended as not kept', async () => {
+  const h = setup();
+  h.offer(false);
+  await flush();
+  h.resume.mockReturnValueOnce(false);
+  h.pause();
+  h.swap();
+  await flush();
+  expect(h.reply).toHaveBeenLastCalledWith('swap', false);
+});
+
+it('pauses and resumes the video encoder in place while the viewer is hidden', async () => {
+  const h = setup();
+  h.offer(false, true, false, 'auto');
+  await flush();
+  const [peer] = h.peers;
+  const tuned = { maxFramerate: 30, maxBitrate: 20_000_000 };
+  let current = { encodings: [{ ...tuned }] } as RTCRtpSendParameters;
+  peer.video.getParameters = () => structuredClone(current) as any;
+  const setParameters = vi.fn(async (next: any) => {
+    current = structuredClone(next);
+  });
+  peer.video.setParameters = setParameters;
+
+  h.hide(true, 'other-lease');
+  await flush();
+  expect(setParameters).not.toHaveBeenCalled();
+  expect(h.reply).toHaveBeenLastCalledWith('hide', false);
+  h.hide(true);
+  await flush();
+  expect(current.encodings).toEqual([{ ...tuned, active: false }]);
+  expect(h.reply).toHaveBeenLastCalledWith('hide', true);
+  // Motion updates keep the pause instead of overwriting it.
+  vi.mocked(nativeCaptureStream).mock.calls.at(-1)?.[5]?.(false);
+  await flush();
+  expect(current).toMatchObject({
+    encodings: [{ active: false }],
+    degradationPreference: 'maintain-resolution',
+  });
+  h.hide(true);
+  await flush();
+  expect(setParameters).toHaveBeenCalledTimes(2);
+  h.hide(false);
+  await flush();
+  expect(current.encodings).toEqual([{ ...tuned, active: true }]);
+  expect(h.peers).toHaveLength(1);
+  expect(peer.close).not.toHaveBeenCalled();
+  expect(h.nativeStop).not.toHaveBeenCalled();
+  expect(h.api.stop).not.toHaveBeenCalled();
+});
+
+it('applies a pause that arrives while the new peer is still being set up', async () => {
+  const h = setup();
+  h.offer(false, true, false, 'auto');
+  h.hide(true);
+  await flush();
+  const [peer] = h.peers;
+  expect(peer.video.setParameters).toHaveBeenLastCalledWith(
+    expect.objectContaining({ encodings: [expect.objectContaining({ active: false })] }),
+  );
+});
+
+it('reports a rejected encoder resume so the viewer rebuilds the video', async () => {
+  const h = setup();
+  h.offer(false, true, false, 'auto');
+  await flush();
+  const [peer] = h.peers;
+  peer.video.setParameters = vi.fn(async () => {
+    throw new Error('InvalidModificationError');
+  });
+  h.hide(false);
+  await flush();
+  expect(h.reply).toHaveBeenLastCalledWith('hide', false);
+  // A rejected update does not block later ones.
+  peer.video.setParameters = vi.fn(async (_parameters: unknown) => {});
+  h.hide(true);
+  await flush();
+  expect(h.reply).toHaveBeenLastCalledWith('hide', true);
+  expect(peer.close).not.toHaveBeenCalled();
+});
+
+it('caps a background viewer at the saver tier in place and restores its own tier', async () => {
+  const h = setup();
+  h.offer(false, true, false, 'hd', 60);
+  await flush();
+  const [peer] = h.peers;
+  let current = structuredClone(peer.video.setParameters.mock.calls[0][0]) as RTCRtpSendParameters;
+  peer.video.getParameters = () => structuredClone(current) as any;
+  const setParameters = vi.fn(async (next: any) => {
+    current = structuredClone(next);
+  });
+  peer.video.setParameters = setParameters;
+
+  h.background(true, 'other-lease');
+  await flush();
+  expect(setParameters).not.toHaveBeenCalled();
+  h.background(true);
+  await flush();
+  expect(current).toEqual({
+    degradationPreference: 'maintain-framerate',
+    encodings: [{ maxFramerate: 30, maxBitrate: 2_000_000 }],
+  });
+  h.background(true);
+  await flush();
+  expect(setParameters).toHaveBeenCalledOnce();
+  h.background(false);
+  await flush();
+  expect(current).toEqual({
+    degradationPreference: 'maintain-resolution',
+    encodings: [{ maxFramerate: 60, maxBitrate: 20_000_000 }],
+  });
+  expect(h.peers).toHaveLength(1);
+  expect(peer.close).not.toHaveBeenCalled();
+  expect(h.nativeStop).not.toHaveBeenCalled();
+});
+
+it('starts a peer negotiated in the background at the saver ceilings, keeping its capture rate', async () => {
+  const h = setup();
+  h.offer(false, true, false, 'auto', 60, 'offer', true);
+  await flush();
+  expect(h.peers[0].video.setParameters).toHaveBeenCalledExactlyOnceWith({
+    degradationPreference: 'maintain-framerate',
+    encodings: [{ maxFramerate: 30, maxBitrate: 2_000_000 }],
+  });
+  // Returning to fullscreen only lifts the encoder ceilings; capture is not rebuilt.
+  expect(vi.mocked(nativeCaptureStream).mock.calls.at(-1)?.[4]).toBe(60);
+});
+
+it('applies a background change that arrives while the new peer is still being set up', async () => {
+  const h = setup();
+  h.offer(false, true, false, 'auto', 60);
+  h.background(true);
+  await flush();
+  expect(h.peers[0].video.setParameters).toHaveBeenLastCalledWith(
+    expect.objectContaining({ encodings: [{ maxFramerate: 30, maxBitrate: 2_000_000 }] }),
+  );
+});
+
+it('keeps a still HD screen sharp under the background saver ceilings', async () => {
+  const h = setup();
+  h.offer(false, true, false, 'hd', 60);
+  await flush();
+  const onMotion = vi.mocked(nativeCaptureStream).mock.calls.at(-1)?.[5];
+  const video = h.peers[0].video.setParameters;
+  h.background(true);
+  await flush();
+  expect(video).toHaveBeenLastCalledWith(
+    expect.objectContaining({ degradationPreference: 'maintain-framerate' }),
+  );
+  onMotion!(false);
+  await flush();
+  expect(video).toHaveBeenLastCalledWith({
+    degradationPreference: 'maintain-resolution',
+    encodings: [{ maxFramerate: 30, maxBitrate: 2_000_000 }],
+  });
+});
+
+it('converges a rejected background retune on the next heartbeat tick', async () => {
+  const h = setup();
+  h.offer(false, true, false, 'hd', 60);
+  await flush();
+  const [peer] = h.peers as any[];
+  let current = structuredClone(peer.video.setParameters.mock.calls[0][0]);
+  peer.video.getParameters = () => structuredClone(current);
+  let reject = true;
+  const setParameters = vi.fn(async (next: any) => {
+    if (reject) throw new Error('InvalidModificationError');
+    current = structuredClone(next);
+  });
+  peer.video.setParameters = setParameters;
+  vi.stubGlobal('crypto', { randomUUID: () => 'challenge' });
+  peer.ondatachannel({
+    channel: { label: 'input-v1', readyState: 'open', bufferedAmount: 0, send: vi.fn() },
+  });
+  h.background(true);
+  await flush();
+  expect(current.encodings).toEqual([{ maxFramerate: 60, maxBitrate: 20_000_000 }]);
+  reject = false;
+  await vi.advanceTimersByTimeAsync(2000);
+  expect(current.encodings).toEqual([{ maxFramerate: 30, maxBitrate: 2_000_000 }]);
+  // A matching encoder is left untouched on later ticks.
+  const calls = setParameters.mock.calls.length;
+  await vi.advanceTimersByTimeAsync(4000);
+  expect(setParameters).toHaveBeenCalledTimes(calls);
+  expect(peer.close).not.toHaveBeenCalled();
 });

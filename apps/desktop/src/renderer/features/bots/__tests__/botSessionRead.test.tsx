@@ -3,6 +3,8 @@
 import { act, cleanup, render, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+// 工作台在右侧栏里有自己的数据订阅，这里只验证伙伴对话的挂载与读位。
+vi.mock('@/features/right-sidebar/lib/openBotWorkbenchTab', () => ({ ensureBotWorkbenchTab: vi.fn(async () => {}) }));
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }));

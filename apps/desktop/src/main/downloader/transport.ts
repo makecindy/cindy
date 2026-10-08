@@ -3,7 +3,7 @@
 import { requestResponse } from './http';
 import fs from 'node:fs';
 import path from 'node:path';
-import { DownloadError, type DownloadOptions, type Logger } from './types';
+import { DownloadError, type DownloadOptions, type DownloadRequest, type Logger } from './types';
 import {
   partPath,
   readMeta,
@@ -45,13 +45,25 @@ export function assertDownloadUrl(url: string, opts: DownloadOptions): void {
   }
 }
 
+const electronRequest: DownloadRequest = async (url, init) => ({
+  response: await requestResponse(url, init),
+});
+
+/** Resume validators come from the server; cap them before persisting or echoing back. */
+function boundedHeader(response: Response, name: string, max: number): string | null {
+  const value = response.headers.get(name);
+  return value !== null && value.length <= max ? value : null;
+}
+
 export async function executeOnce(ctx: TransportContext): Promise<TransportResult> {
   const { opts } = ctx;
   const signal = ctx.signal ?? opts.signal;
+  const send = opts.request ?? electronRequest;
   const controller = new AbortController();
   let timedOut = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let response: Response | undefined;
+  let release: (() => Promise<void>) | undefined;
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
   let file: fs.promises.FileHandle | undefined;
   let meta: MetaJson | undefined;
@@ -76,8 +88,11 @@ export async function executeOnce(ctx: TransportContext): Promise<TransportResul
   const network = async <T>(operation: Promise<T>): Promise<T> => {
     try {
       return await operation;
-    } catch {
+    } catch (error) {
       checkAbort();
+      // An injected request may refuse a hop deliberately (e.g. the owner was revoked
+      // after DNS resolution); keep that decision instead of retrying it as NETWORK.
+      if (error instanceof DownloadError) throw error;
       // Native errors may contain signed URLs. Never expose those to callers/logs.
       throw new DownloadError('NETWORK', 'Download network request failed');
     }
@@ -118,8 +133,8 @@ export async function executeOnce(ctx: TransportContext): Promise<TransportResul
     for (let hops = 0; ; hops++) {
       assertDownloadUrl(url, opts);
       armTimer(opts.timeout?.connectMs ?? 10_000);
-      response = await network(
-        requestResponse(url, {
+      const sent = await network(
+        send(url, {
           method: 'GET',
           cache: 'no-store',
           redirect: opts.redirect === 'error' ? 'error' : 'manual',
@@ -127,12 +142,16 @@ export async function executeOnce(ctx: TransportContext): Promise<TransportResul
           signal: controller.signal,
         }),
       );
+      response = sent.response;
+      release = sent.release;
       clearTimeout(timer);
       checkAbort();
       if (![301, 302, 303, 307, 308].includes(response.status)) break;
       const location = response.headers.get('location');
       await response.body?.cancel();
       response = undefined;
+      await release?.();
+      release = undefined;
       if (opts.redirect === 'error' || !location || hops >= 5) {
         throw new DownloadError('URL_POLICY', 'Download redirect is not allowed');
       }
@@ -209,8 +228,8 @@ export async function executeOnce(ctx: TransportContext): Promise<TransportResul
         expectedSize: opts.expectedSize ?? total,
         expectedSha256: opts.sha256,
         downloadedBytes: loaded,
-        etag: response.headers.get('etag'),
-        lastModified: response.headers.get('last-modified'),
+        etag: boundedHeader(response, 'etag', 1024),
+        lastModified: boundedHeader(response, 'last-modified', 256),
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       };
@@ -249,6 +268,11 @@ export async function executeOnce(ctx: TransportContext): Promise<TransportResul
     clearTimeout(timer);
     if (loaded !== (opts.expectedSize ?? total ?? loaded))
       throw new DownloadError('SIZE', 'Download size mismatch');
+    try {
+      opts.onVerifying?.();
+    } catch {
+      /* observer only */
+    }
     const sha256 = await hasher.digest();
     if (sha256 !== opts.sha256) throw new DownloadError('CHECKSUM', 'Download SHA-256 mismatch');
     await file.close();
@@ -284,6 +308,7 @@ export async function executeOnce(ctx: TransportContext): Promise<TransportResul
     reader?.releaseLock();
     if (!reader) await response?.body?.cancel().catch(() => undefined);
     await file?.close().catch(() => undefined);
+    await release?.().catch(() => undefined);
     if (!complete) {
       if (discard) {
         deletePart(opts.targetPath);

@@ -237,18 +237,19 @@ function fetchTextViaNet(url: string, timeoutMs: number): Promise<ManifestFetchR
       }, timeoutMs);
 
       request.on('response', (response) => {
+        response.on('error', (err) =>
+          finish({ ok: false, detail: describeFetchError(err), raw: rawFetchError(err) }, timeout),
+        );
         if (response.statusCode !== 200) {
-          response.on('data', () => {});
           finish({ ok: false, detail: `http-${response.statusCode}` }, timeout);
+          // A discarded error body may never end; don't drain without a timeout.
+          request.abort();
           return;
         }
         response.on('data', (chunk) => {
           body += chunk.toString();
         });
         response.on('end', () => finish({ ok: true, text: body }, timeout));
-        response.on('error', (err) =>
-          finish({ ok: false, detail: describeFetchError(err), raw: rawFetchError(err) }, timeout),
-        );
       });
       request.on('error', (err) =>
         finish({ ok: false, detail: describeFetchError(err), raw: rawFetchError(err) }, timeout),

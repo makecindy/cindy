@@ -212,7 +212,9 @@ export type RemoteActionEffect =
   | { kind: 'navigate'; target: RemoteLinkTarget }
   | { kind: 'toast'; message: RemoteText };
 
+/** Optional opaque reply for an explicitly negotiated resource primitive. */
 export interface RemoteActionInvokeResponse {
+  result?: unknown;
   effects: RemoteActionEffect[];
 }
 

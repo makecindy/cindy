@@ -20,7 +20,13 @@
     "allowOnceAccessibility": "允許一次權限請求",
     "allowOnceConfirm": "確認允許一次",
     "highRisk": "高風險",
-    "autoReviewUnavailable": "自動審批沒完成，請確認要不要允許這次操作。"
+    "autoReviewUnavailable": "自動審批沒完成，請確認要不要允許這次操作。",
+    "fullAccessConfirm": {
+      "title": "開啟完全訪問？",
+      "description": "完全訪問會關閉工作區沙箱並跳過常規審批。{{appName}} 可以修改工作區外的檔案、執行聯網命令且不再詢問；內建高風險操作仍會要求確認。",
+      "confirm": "開啟完全訪問",
+      "cancel": "保留當前權限"
+    }
   },
   "planMode": {
     "label": "計劃模式",
@@ -37,7 +43,7 @@
     "queuePositionNth": "第 {{index}}",
     "composerBlockedByPending": "先處理電腦端的待處理請求後才能繼續輸入。",
     "missingRequestId": "這個遠端互動缺少 requestId，無法回傳決定。",
-    "desktopConfirmUnsupported": "此確認只能在遠端電腦處理。請回到桌面端繼續。",
+    "desktopConfirmUnsupported": "此確認只能在遠端電腦上處理。請回到電腦端繼續。",
     "unsupportedType": "手機版暫不支援這個遠端互動型別。",
     "unsupportedKind": "暫不支援",
     "desktopOnlyKind": "電腦端處理",
@@ -157,8 +163,10 @@
     "dispatchBodyFallback": "建立 Worker",
     "sendTitle": "發訊息給 Worker",
     "sendBodyFallback": "傳送訊息",
-    "reportTitle": "Worker 回報",
-    "reportBodyFallback": "(空回報)"
+    "fromLead": "來自 Lead 的訊息",
+    "fromWorkerNamed": "來自 Worker「{{role}}」的訊息",
+    "fromWorker": "來自 Worker 的訊息",
+    "emptyMessageBody": "（空訊息）"
   },
   "contextSheet": {
     "backAccessibility": "返回上下文面板",
@@ -194,7 +202,7 @@
     "enablePhotoPermission": "開啟照片權限",
     "enable": "去開啟",
     "icloudTimeout": "照片還在從 iCloud 下載，等待超時了。請檢查網路，稍後重試。",
-    "photoNotReadable": "這張照片暫時無法讀取(可能還沒從 iCloud 下載完成)，請稍後重試。"
+    "photoNotReadable": "這張照片暫時無法讀取（可能還沒從 iCloud 下載完成），請稍後重試。"
   },
   "pluginSetup": {
     "remoteDesktop": "開啟桌面",
@@ -274,7 +282,7 @@
         "ask_user_question": "回答會儲存草稿，提交後電腦端繼續。",
         "issue_confirm": "確認標題和正文後再提交。",
         "plugin_setup": "設定要在電腦端完成，這裡可以取消這次請求。",
-        "fallback": "手機版會按桌面端的請求順序處理。"
+        "fallback": "手機上會按電腦端的請求順序處理。"
       }
     }
   },

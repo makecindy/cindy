@@ -248,6 +248,9 @@ vi.mock('../../cindy-media/ledger.js', () => ({
 vi.mock('../../cindy-media/invocationService.js', () => ({
   callCindyMedia: callCindyMediaMock,
 }));
+// Image ingestion has its own publishImage tests; keep this permission-gate
+// fixture isolated from the real blob store and database dependency graph.
+vi.mock('../../cindy-media/publishImage.js', () => ({ publishImage: vi.fn() }));
 vi.mock('../../cindy-media/attachmentGrantGate.js', () => ({ chatAttachmentOrigin: vi.fn() }));
 vi.mock('../ghostAttachmentResolve.js', () => ({
   resolveGhostAttachmentUrl: resolveGhostAttachmentUrlMock,
@@ -278,23 +281,22 @@ function chipGhost(
   };
 }
 
-/** Slot-only plugin fixture: the simulator tools belong to the Host MCP. */
+/** A manual-only plugin has no executable tools. */
 function manualOnlyGhost(): InstalledGhost {
   return {
     enabled: true,
-    dir: path.join(tmpUserData, 'ios-simulator'),
+    dir: path.join(tmpUserData, 'workflow-guide'),
     approval: { state: 'approved', revision: '00000000-0000-4000-8000-000000000001' },
     manifest: {
       schemaVersion: 3,
-      id: 'ios-simulator',
-      name: 'iOS Simulator',
+      id: 'workflow-guide',
+      name: 'Workflow Guide',
       version: '1.0.0',
       kind: 'chip',
       entry: 'main.js',
-      iosSimulator: true,
-      whenToUse: 'Build and test an iOS app in Cindy',
+      whenToUse: 'Read project build instructions',
       manual: {
-        items: [{ dir: 'docs/workflow', name: 'ios-simulator', description: 'Simulator workflow' }],
+        items: [{ dir: 'docs/workflow', name: 'workflow-guide', description: 'Build workflow' }],
       },
     },
   };
@@ -331,7 +333,7 @@ function makeDeps(
 function clearAllPrefs(): void {
   // 把测试涉及的目录 × id 全部清一遍(幂等;清空后 store 自动删文件)。
   for (const dir of [WORKDIR, `${WORKDIR} `, '/proj/beta', 'E:/Repo']) {
-    for (const id of ['art', 'other', 'missing', 'sleeping', 'account', 'ios-simulator']) {
+    for (const id of ['art', 'other', 'missing', 'sleeping', 'account', 'workflow-guide']) {
       setGhostDisabledForWorkdir(dir, id, false);
     }
   }
@@ -1506,6 +1508,24 @@ describe('花名册 / ghost_list 过滤', () => {
   });
 });
 
+describe('Retired plugin discovery', () => {
+  it.each(['claude-code', 'codex', 'pi'] as const)('%s hides retired plugins and rejects stale calls without spawning', async (agentKind) => {
+    const ghost = manualOnlyGhost();
+    ghost.enabled = false;
+    ghost.retirement = { id: 'embedded-ios-simulator', eligible: true, unread: true };
+    listMock.mockReturnValue([ghost]);
+    const deps = makeDeps(agentKind);
+    expect(deps.getRosterItems?.()).toEqual([]);
+    expect(getGhostRosterPrompt({ workingDir: WORKDIR })).toBe('');
+    await expect(deps.listAwakeGhosts()).resolves.toEqual([]);
+    await expect(deps.getAwakeGhost(ghost.manifest.id)).resolves.toMatchObject({ ok: false, errorCode: 'GHOST_RETIRED' });
+    await expect(deps.readGhostManual({ ghostId: ghost.manifest.id })).resolves.toMatchObject({ ok: false, errorCode: 'GHOST_RETIRED' });
+    await expect(deps.callGhostTool({ ghostId: ghost.manifest.id, tool: 'run', args: {} })).resolves.toMatchObject({ ok: false, errorCode: 'GHOST_RETIRED' });
+    expect(ensureReadyMock).not.toHaveBeenCalled();
+    expect(dispatchMock).not.toHaveBeenCalled();
+  });
+});
+
 describe('Manual-only Ghost discovery and read gates', () => {
   it.each(['claude-code', 'codex', 'pi'] as const)(
     '%s discovers Manual-only plugins through both rosters, list and info',
@@ -1514,19 +1534,19 @@ describe('Manual-only Ghost discovery and read gates', () => {
       listMock.mockReturnValue([ghost, chipGhost('art')]);
       const deps = makeDeps(agentKind);
       const roster = deps.getRosterItems?.() ?? [];
-      expect(roster.map(({ id }) => id)).toEqual(['ios-simulator', 'art']);
+      expect(roster.map(({ id }) => id)).toEqual(['workflow-guide', 'art']);
       expect(roster[0]).toEqual({
-        id: 'ios-simulator', name: 'iOS Simulator', recall: ghost.manifest.whenToUse,
+        id: 'workflow-guide', name: 'Workflow Guide', recall: ghost.manifest.whenToUse,
       });
       const ghosts = await deps.listAwakeGhosts();
       expect(ghosts).toHaveLength(2);
       expect(ghosts[0]).toEqual({
         ...roster[0],
         tools: [],
-        manual: [{ name: 'ios-simulator', description: 'Simulator workflow' }],
+        manual: [{ name: 'workflow-guide', description: 'Build workflow' }],
         setup: { state: 'ready', revision: 0, groups: [] },
       });
-      await expect(deps.getAwakeGhost('ios-simulator')).resolves.toEqual({ ok: true, ghost: ghosts[0] });
+      await expect(deps.getAwakeGhost('workflow-guide')).resolves.toEqual({ ok: true, ghost: ghosts[0] });
       const prompt = getGhostRosterPrompt({ workingDir: WORKDIR });
       const server = createCindyGhostsMcpServer(deps) as unknown as {
         _registeredTools: Record<string, { description?: string }>;
@@ -1535,7 +1555,7 @@ describe('Manual-only Ghost discovery and read gates', () => {
       expect(promptItems).toContainEqual({ ...roster[0], command: '' });
       expect(server._registeredTools.ghost_list.description).toContain(prompt);
       expect(getGhostRosterPrompt({ workingDir: WORKDIR })).toBe(prompt);
-      expect(prompt).not.toContain('Simulator workflow');
+      expect(prompt).not.toContain('Build workflow');
       expect(JSON.stringify(ghosts)).not.toContain('docs/workflow');
       expect(dispatchMock).not.toHaveBeenCalled();
     },
@@ -1546,18 +1566,18 @@ describe('Manual-only Ghost discovery and read gates', () => {
     if (tools !== undefined) ghost.manifest.tools = tools;
     const unitDir = path.join(ghost.dir, 'docs', 'workflow');
     await fs.promises.mkdir(path.join(unitDir, 'references'), { recursive: true });
-    await fs.promises.writeFile(path.join(unitDir, 'MANUAL.md'), '# Simulator workflow');
+    await fs.promises.writeFile(path.join(unitDir, 'MANUAL.md'), '# Build workflow');
     await fs.promises.writeFile(path.join(unitDir, 'references', 'build.md'), '# Build guide');
     listMock.mockReturnValue([ghost]);
     const deps = makeDeps();
-    await expect(deps.readGhostManual({ ghostId: 'ios-simulator' })).resolves.toEqual({
-      ok: true, manual: [{ name: 'ios-simulator', description: 'Simulator workflow' }], content: '',
+    await expect(deps.readGhostManual({ ghostId: 'workflow-guide' })).resolves.toEqual({
+      ok: true, manual: [{ name: 'workflow-guide', description: 'Build workflow' }], content: '',
     });
     for (const [manualPath, content] of [
-      ['ios-simulator', '# Simulator workflow'],
-      ['ios-simulator/references/build.md', '# Build guide'],
+      ['workflow-guide', '# Build workflow'],
+      ['workflow-guide/references/build.md', '# Build guide'],
     ]) {
-      await expect(deps.readGhostManual({ ghostId: 'ios-simulator', path: manualPath })).resolves.toEqual({
+      await expect(deps.readGhostManual({ ghostId: 'workflow-guide', path: manualPath })).resolves.toEqual({
         ok: true, manual: [], content,
       });
     }
@@ -1577,10 +1597,10 @@ describe('Manual-only Ghost discovery and read gates', () => {
     expect(deps.getRosterItems?.()).toEqual([]);
     expect(getGhostRosterPrompt({ workingDir: WORKDIR })).toBe('');
     await expect(deps.listAwakeGhosts()).resolves.toEqual([]);
-    await expect(deps.getAwakeGhost('ios-simulator')).resolves.toMatchObject({
+    await expect(deps.getAwakeGhost('workflow-guide')).resolves.toMatchObject({
       ok: false, errorCode: 'GHOST_NOT_FOUND',
     });
-    await expect(deps.readGhostManual({ ghostId: 'ios-simulator' })).resolves.toMatchObject({
+    await expect(deps.readGhostManual({ ghostId: 'workflow-guide' })).resolves.toMatchObject({
       ok: false, errorCode: 'GHOST_NOT_FOUND', manual: [], content: '',
     });
     expect(dispatchMock).not.toHaveBeenCalled();
@@ -1603,23 +1623,23 @@ describe('Manual-only Ghost discovery and read gates', () => {
     const ghost = manualOnlyGhost();
     listMock.mockReturnValue([ghost]);
     const deps = makeDeps();
-    await expect(deps.getAwakeGhost('ios-simulator')).resolves.toMatchObject({ ok: true });
+    await expect(deps.getAwakeGhost('workflow-guide')).resolves.toMatchObject({ ok: true });
     ghost.enabled = state.enabled;
     listMock.mockReturnValue(state.exists ? [ghost] : []);
     activeSessionAvailableMock.mockReturnValue(state.available);
-    setGhostDisabledForWorkdir(WORKDIR, 'ios-simulator', state.disabled);
+    setGhostDisabledForWorkdir(WORKDIR, 'workflow-guide', state.disabled);
     expect(deps.getRosterItems?.()).toEqual([]);
     expect(getGhostRosterPrompt({ workingDir: WORKDIR })).toBe('');
     await expect(deps.listAwakeGhosts()).resolves.toEqual([]);
-    await expect(deps.getAwakeGhost('ios-simulator')).resolves.toMatchObject({
+    await expect(deps.getAwakeGhost('workflow-guide')).resolves.toMatchObject({
       ok: false, errorCode: state.errorCode,
     });
-    for (const manualPath of [undefined, 'ios-simulator']) {
-      await expect(deps.readGhostManual({ ghostId: 'ios-simulator', path: manualPath })).resolves.toMatchObject({
+    for (const manualPath of [undefined, 'workflow-guide']) {
+      await expect(deps.readGhostManual({ ghostId: 'workflow-guide', path: manualPath })).resolves.toMatchObject({
         ok: false, errorCode: state.errorCode, manual: [], content: '',
       });
     }
-    await expect(deps.callGhostTool({ ghostId: 'ios-simulator', tool: 'check_environment', args: {} })).resolves.toMatchObject({
+    await expect(deps.callGhostTool({ ghostId: 'workflow-guide', tool: 'check_environment', args: {} })).resolves.toMatchObject({
       ok: false, errorCode: state.errorCode,
     });
     expect(ensureReadyMock).not.toHaveBeenCalled();
@@ -1635,7 +1655,7 @@ describe('Manual-only Ghost discovery and read gates', () => {
   it.each(['run', 'list_tools', 'check_environment'])('does not grant the Manual-only plugin tool %s or start setup/handoffs', async (tool) => {
     listMock.mockReturnValue([manualOnlyGhost()]);
     await expect(makeDeps().callGhostTool({
-      ghostId: 'ios-simulator', tool, args: {},
+      ghostId: 'workflow-guide', tool, args: {},
       attachments: [path.join(outsideDir, 'input.png')], dir: outsideDir, saveDir: outsideDir,
     })).resolves.toMatchObject({ ok: false, errorCode: 'TOOL_NOT_FOUND' });
     expect(ensureReadyMock).not.toHaveBeenCalled();

@@ -7,7 +7,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const sheet = vi.hoisted(() => ({ onClosed: undefined as (() => void) | undefined }));
 
+vi.mock('@/hooks/useReduceMotion', () => ({ useReduceMotionEnabled: () => false, getCachedReduceMotionEnabled: () => false }));
 vi.mock('react-native', () => ({
+  Platform: { OS: 'android' },
   ActivityIndicator: () => null,
   Pressable: ({ children, onPress, testID }: { children?: ReactNode; onPress?: () => void; testID?: string }) =>
     createElement('button', { 'data-testid': testID, onClick: onPress }, children as ReactNode),
@@ -27,6 +29,7 @@ vi.mock('@/theme', () => ({
   useThemedStyles: () => new Proxy({}, { get: () => ({}) }),
 }));
 vi.mock('@/session/contextSheetModel', () => ({ computeContextSheetSnapHeights: () => ({}) }));
+vi.mock('@/components/MobilePrimitives', () => ({ MainWindowActionButton: () => null }));
 vi.mock('@/session/SheetModal', () => ({
   SheetModal: ({ children, onClosed, visible }: { children?: ReactNode; onClosed?: () => void; visible: boolean }) => {
     sheet.onClosed = onClosed;

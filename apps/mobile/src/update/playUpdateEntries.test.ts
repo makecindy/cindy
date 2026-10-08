@@ -102,7 +102,7 @@ describe('Google Play update entry points', () => {
     expect(settings).toContain('isGooglePlayInstallation: playManagedUpdates,');
     expect(settings).toContain('checkBundleUpdate: bundleCheckEnabled ? checkBundleUpdate : undefined,');
     expect(settings).toContain('const updateCheckEnabled = bundleCheckEnabled || updatesEnabled;');
-    expect(settings).toContain("? 'settings.version.googlePlayContentUpdateUnavailable'");
+    expect(settings).toContain("t('settings.version.googlePlayContentUpdateUnavailable')");
     await expect(runManualUpdateCheck({
       checkBundleUpdate: undefined,
       otaEnabled: true,

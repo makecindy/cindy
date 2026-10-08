@@ -651,14 +651,21 @@ export async function removeMobileSavedAccount(accountKey: string): Promise<void
 }
 
 export async function removeMobilePassport(realm: AuthRegion, passportId: string): Promise<void> {
-  await mutateMobileAccountVault((vault) => {
-    delete vault.passports[passportVaultKey(realm, passportId)];
+  const { clearClipboardInvitationHistory } = await import('../device-link/clipboardInvitationHistory');
+  await mutateMobileAccountVault(async (vault) => {
+    const passportKey = passportVaultKey(realm, passportId);
+    const invitationAccounts = new Set((vault.passports[passportKey]?.memberships ?? [])
+      .map(membership => accountVaultKey(realm, membership.membershipId)));
     for (const [key, resource] of Object.entries(vault.resources)) {
       if (resource.realm === realm && resource.metadata.passportId === passportId) {
+        invitationAccounts.add(key);
         delete vault.resources[key];
         if (vault.activeAccountKey === key) vault.activeAccountKey = null;
       }
     }
+    // Also runs when deletion completes after switching to another Passport.
+    await Promise.all([...invitationAccounts].map(key => clearClipboardInvitationHistory(key).catch(() => undefined)));
+    delete vault.passports[passportKey];
   });
 }
 

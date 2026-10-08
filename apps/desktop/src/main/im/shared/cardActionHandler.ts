@@ -34,6 +34,7 @@ import {
   setSessionProvider,
 } from '../../maker-host/session-provider-store';
 import {
+  applyPiImModelSelectionUnderLock,
   cancelPendingAgentSwitchForSession,
   clearPendingCredentialSwitchForSession,
   getPendingCredentialSwitchTarget,
@@ -43,6 +44,7 @@ import {
   wakeSessionInputAfterCredentialSwitch,
 } from '../../maker-ipc/register';
 import { applyRuntimeSetModelChange } from '../../maker-ipc/runtimeSetModel';
+import { cancelPendingSessionRuntimeMutation } from '../../maker-ipc/sessionRuntimeControl';
 import { getDesktopCcPrefs, type DesktopCcPrefs } from '../index';
 import {
   captureImAccountGeneration,
@@ -342,6 +344,10 @@ export function createCardActionHandler(
       const previousProviderId = previousRoute
         ? previousRoute.providerId
         : getSessionProvider(sessionId);
+      const liveBeforePick = turnRunner.getMakerSessionById(sessionId);
+      const sessionAgentKind = liveBeforePick?.agentKind ??
+        (await getMaker().getSessionMeta?.(sessionId))?.agentKind;
+      const isPiSession = sessionAgentKind === 'pi';
       const restorePersistentRoute = async (reason: string): Promise<void> => {
         if (!previousRoute) return;
         try {
@@ -359,12 +365,17 @@ export function createCardActionHandler(
       const rollbackRuntimeChange = async (reason: string): Promise<void> => {
         setSessionProvider(sessionId, previousProviderId);
         const liveForRollback = turnRunner.getMakerSessionById(sessionId);
-        if (!liveForRollback || !previousRoute) return;
+        if (!previousRoute) return;
         try {
-          await liveForRollback.setModel(previousRoute.model, {
-            providerId: previousRoute.providerId,
-          });
-          if (effort) {
+          if (isPiSession) {
+            await applyPiImModelSelectionUnderLock(sessionId, previousRoute.model,
+              previousRoute.providerId, { model: modelId, providerId: providerId ?? previousProviderId });
+          } else if (liveForRollback) {
+            await liveForRollback.setModel(previousRoute.model, {
+              providerId: previousRoute.providerId,
+            });
+          }
+          if (liveForRollback && effort) {
             await liveForRollback.setEffort(previousRoute.effort);
           }
         } catch (rollbackErr) {
@@ -375,16 +386,28 @@ export function createCardActionHandler(
       };
 
       // 持久化与运行态切换必须和 send / agent switch 共用 session 锁，保证后选覆盖先选。
-      try {
-        await updateModelEffort(sessionId, modelId, effort ?? 'high', providerId);
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        log.error(`model:pick DB update failed: ${msg}`);
-        return msg;
+      if (!isPiSession) {
+        try {
+          await updateModelEffort(sessionId, modelId, effort ?? 'high', providerId);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          log.error(`model:pick DB update failed: ${msg}`);
+          return msg;
+        }
       }
 
+      let piDeferredGeneration: number | undefined;
+      const rollbackPiSelection = async (reason: string): Promise<void> => {
+        if (piDeferredGeneration !== undefined) {
+          cancelPendingSessionRuntimeMutation(sessionId, piDeferredGeneration);
+          return;
+        }
+        await rollbackRuntimeChange(reason);
+      };
       try {
-        const runtimeChange = await applyRuntimeSetModelChange({
+        const runtimeChange = isPiSession
+          ? await applyPiImModelSelectionUnderLock(sessionId, modelId, providerId, previousRoute)
+          : await applyRuntimeSetModelChange({
           maker: getMaker(),
           sessionId,
           model: modelId,
@@ -395,7 +418,25 @@ export function createCardActionHandler(
           wakeSessionInputQueue: wakeSessionInputAfterCredentialSwitch,
           getPendingCredentialSwitch: getPendingCredentialSwitchTarget,
           logger: log,
-        });
+          });
+        if (isPiSession && runtimeChange.status === 'deferred' && 'generation' in runtimeChange) {
+          piDeferredGeneration = runtimeChange.generation;
+        }
+
+        if (isPiSession) {
+          try {
+            // The Pi host transaction reads the old DB route to protect native
+            // history and register a correct rollback snapshot while busy.
+            await updateModelEffort(sessionId, modelId, effort ?? 'high',
+              'effectiveProviderId' in runtimeChange ? runtimeChange.effectiveProviderId : providerId);
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            log.error(`model:pick DB update failed after Pi selection: ${msg}`);
+            await restorePersistentRoute('Pi DB update');
+            await rollbackPiSelection('Pi DB update');
+            return msg;
+          }
+        }
 
         const liveAfterModel = turnRunner.getMakerSessionById(sessionId);
         if (runtimeChange.status !== 'deferred' && liveAfterModel && effort) {
@@ -405,7 +446,7 @@ export function createCardActionHandler(
             const msg = err instanceof Error ? err.message : String(err);
             log.warn(`model:pick live setEffort failed: ${msg}`);
             await restorePersistentRoute('setEffort');
-            await rollbackRuntimeChange('setEffort');
+            await rollbackPiSelection('setEffort');
             return msg;
           }
         }
@@ -433,7 +474,8 @@ export function createCardActionHandler(
         // (PR #5155 review P2)。
         clearPendingCredentialSwitchForSession(sessionId);
         await restorePersistentRoute('manual override marker');
-        await rollbackRuntimeChange('manual override marker');
+        if (isPiSession) await rollbackPiSelection('manual override marker');
+        else await rollbackRuntimeChange('manual override marker');
         return msg;
       }
       // 这次 IM 选择晚于 renderer 登记的跨引擎 intent；只有整条 route 更新成功后
@@ -1604,6 +1646,7 @@ export function createCardActionHandler(
           // 授权卡保留原始正文(工具名 + 参数预览)再追加决策结果 — 用户要能
           // 回看自己批准的是什么; 其它交互卡维持整卡替换的旧形态。
           const resolvedLabel = describeDecision(decision);
+          if (resolved.shared) return; // Shared presenter updates every surface once.
           const spec = resolved.permissionCard
             ? cards.buildResolvedPermissionCard(resolved.permissionCard, resolvedLabel)
             : cards.buildResolvedCard(resolvedLabel);

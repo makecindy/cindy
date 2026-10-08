@@ -23,7 +23,9 @@ import { Button } from '@/components/ui/button';
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
+import * as Dialog from '@radix-ui/react-dialog';
+import { useDialogExit } from '@/hooks/useDialogExit';
+import { WINDOW_DRAG_STYLE, WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
@@ -87,14 +89,8 @@ function MermaidSourceEditor({
 }: MermaidSourceEditorProps) {
   const { t } = useTranslation();
   const [draft, setDraft] = useState(initialSource);
-  const [isVisible, setIsVisible] = useState(false);
-  const isClosingRef = useRef(false);
+  const dialog = useDialogExit();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-
-  useEffect(() => {
-    const raf = requestAnimationFrame(() => setIsVisible(true));
-    return () => cancelAnimationFrame(raf);
-  }, []);
 
   // Tell window-capture shortcut handlers (e.g. FileBodyView's Cmd+F /
   // Cmd+S) to bail while this modal is open. Capture-phase listeners on
@@ -111,35 +107,16 @@ function MermaidSourceEditor({
     };
   }, []);
 
-  // Autofocus textarea so the user can start editing without clicking.
-  useEffect(() => {
-    textareaRef.current?.focus();
-    textareaRef.current?.setSelectionRange(0, 0);
-  }, []);
-
-  const close = useCallback(
-    (commit: boolean) => {
-      if (isClosingRef.current) return;
-      isClosingRef.current = true;
-      setIsVisible(false);
-      // Match the lightbox's 200ms fade-out so the two modals feel related.
-      setTimeout(() => {
-        if (commit) onSave(draft);
-        else onCancel();
-      }, 200);
-    },
-    [draft, onSave, onCancel],
-  );
+  const close = useCallback((commit: boolean) => {
+    dialog.close(() => {
+      if (commit) onSave(draft);
+      else onCancel();
+    });
+  }, [dialog.close, draft, onSave, onCancel]);
 
   const dirty = draft !== initialSource;
 
-  useEffect(() => {
-    const onKey = (ev: KeyboardEvent) => {
-      if (ev.key === 'Escape') {
-        ev.preventDefault();
-        close(false);
-        return;
-      }
+  const onKeyDown = (ev: React.KeyboardEvent) => {
       // Cmd/Ctrl+Enter saves — quick exit for users who edited and want out.
       // Gate on `dirty` so a stale shortcut press on an unchanged diagram
       // doesn't fire a no-op `view.dispatch`. The dispatch would still
@@ -163,35 +140,31 @@ function MermaidSourceEditor({
       //     modal is open, it writes the SAME bytes already on disk (the
       //     modal draft hasn't been dispatched), so there's no real data
       //     loss — only a no-op write.
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [close, dirty]);
+  };
 
-  const overlay = (
-    <div
-      className={cn(
-        'fixed inset-0 z-[60] flex items-center justify-center',
-        'transition-opacity duration-200',
-        isVisible ? 'opacity-100' : 'opacity-0',
-      )}
-    >
-      <div
-        className={cn('absolute inset-0', 'bg-[var(--overlay-modal)]')}
-        onClick={() => close(false)}
-      />
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-label={t('ccAgent.workdirBrowse.mermaidEditor.title', '编辑 mermaid 源码')}
+  return (
+    <Dialog.Root open={dialog.open} onOpenChange={(open) => { if (!open) close(false); }}>
+      <Dialog.Portal>
+        <Dialog.Overlay className="modal-scrim fixed inset-0 z-[60]" style={WINDOW_DRAG_STYLE} />
+      {/* The scrim does not dismiss: a stray click outside must not discard the
+          draft. Cancel and Escape remain the ways out (DESIGN §4 Dialog). */}
+      <Dialog.Content
+        aria-describedby={undefined}
+        onPointerDownOutside={(event) => event.preventDefault()}
+        onOpenAutoFocus={(event) => {
+          dialog.onOpenAutoFocus();
+          event.preventDefault();
+          textareaRef.current?.focus();
+          textareaRef.current?.setSelectionRange(0, 0);
+        }}
+        onCloseAutoFocus={dialog.onCloseAutoFocus}
+        onKeyDown={onKeyDown}
+        style={WINDOW_NO_DRAG_STYLE}
         className={cn(
-          'relative z-[61] flex flex-col',
+          'modal-panel fixed inset-0 z-[61] m-auto flex flex-col outline-none',
           'w-[min(880px,90vw)] h-[min(640px,80vh)]',
-          'rounded-[14px] overflow-hidden',
-          'bg-[var(--surface-elevated)] border border-[var(--border-default)]',
-          'shadow-[var(--shadow-menu)]',
+          'overflow-hidden',
         )}
-        onClick={(e) => e.stopPropagation()}
       >
         <div
           className={cn(
@@ -199,9 +172,9 @@ function MermaidSourceEditor({
             'px-5 py-3 border-b border-[var(--border-default)]',
           )}
         >
-          <div className="text-14 font-medium text-[var(--text-primary)]">
+          <Dialog.Title asChild><div className="text-14 font-medium text-[var(--text-primary)]">
             {t('ccAgent.workdirBrowse.mermaidEditor.title')}
-          </div>
+          </div></Dialog.Title>
           <div className="text-11 text-[var(--text-tertiary)]">
             {t('ccAgent.workdirBrowse.mermaidEditor.shortcuts')}
           </div>
@@ -244,9 +217,8 @@ function MermaidSourceEditor({
             {t('ccAgent.workdirBrowse.mermaidEditor.save')}
           </Button>
         </div>
-      </div>
-    </div>
+      </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
   );
-
-  return createPortal(overlay, document.body);
 }

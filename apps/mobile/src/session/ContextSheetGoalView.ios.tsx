@@ -2,7 +2,7 @@ import { useNativeGlassButtonStyle } from "@/platform/chrome/nativeGlassButtonSt
 import { useState, type ComponentProps } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button, DisclosureGroup, Picker, ProgressView, Text, TextField, useNativeState } from '@expo/ui/swift-ui';
-import { accessibilityHint, accessibilityLabel, buttonStyle, contentShape, disabled as disable, font, foregroundStyle, frame, lineLimit, pickerStyle, shapes, tag } from '@expo/ui/swift-ui/modifiers';
+import { accessibilityHint, accessibilityLabel, buttonStyle, contentShape, disabled as disable, font, foregroundStyle, frame, lineLimit, pickerStyle, shapes, tag, tint } from '@expo/ui/swift-ui/modifiers';
 import { useTheme } from '@/theme';
 import type { MobileGoalLimitsInput } from '@cindy/maker-shared/device-link-contract';
 import type { ContextSheetGoalViewProps, ContextSheetGoalCreateForm as GoalCreateForm } from './ContextSheetGoalView';
@@ -53,7 +53,7 @@ export function ContextSheetGoalCreateForm({ busy, disabled = false, disabledHin
         disable(busy || disabled || !objective.trim()),
         ...(disabled && disabledHint ? [accessibilityHint(disabledHint)] : []),
         accessibilityLabel(t('interaction.contextSheet.startGoal')),
-      ]}>{busy ? <ProgressView /> : <Text>{t('interaction.contextSheet.startGoal')}</Text>}</Button>
+      ]}>{busy ? <ProgressView modifiers={[tint(colors.ctaText)]} /> : <Text modifiers={[foregroundStyle(colors.ctaText)]}>{t('interaction.contextSheet.startGoal')}</Text>}</Button>
     </Section>
   </>;
 }
@@ -84,7 +84,7 @@ export function ContextSheetGoalView(props: ContextSheetGoalViewProps) {
   const action = (label: string, onPress: () => void, testID: string, destructive = false) =>
     <Button onPress={onPress} testID={testID} modifiers={[
       buttonStyle('plain'), disable(busy),
-      ...(destructive ? [foregroundStyle(colors.statusRecording)] : []),
+      ...(destructive ? [foregroundStyle(colors.destructive)] : []),
     ]}><Text modifiers={[frame({ maxWidth: Infinity, minHeight: 44, alignment: 'leading' }), contentShape(shapes.rectangle())]}>{label}</Text></Button>;
   return <>
     <Section title={goalStatusLabel(goal.status, goal.lastReason)}>

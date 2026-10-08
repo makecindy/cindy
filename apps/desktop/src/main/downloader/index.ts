@@ -8,7 +8,8 @@
  *
  * Contract invariants (re-stated; full version in tech spec):
  *   1. download() resolves DownloadResult or rejects DownloadError, no other types.
- *   2. Progress describes the current attempt (a fresh retry may restart at zero).
+ *   2. onProgress reports raw transport bytes; callers normalize display progress
+ *      across retries (a server may reject resume and restart from zero).
  *   3. resolve implies SHA256 already verified — no need to re-check.
  */
 
@@ -48,6 +49,17 @@ function validate(opts: DownloadOptions): void {
   }
 }
 
+function normalize(opts: DownloadOptions): DownloadOptions {
+  validate(opts);
+  return { ...opts, targetPath: path.resolve(opts.targetPath), sha256: opts.sha256.toLowerCase() };
+}
+
+/** A consumer-owned queue; bulk plugin downloads never queue ahead of app updates. */
+export function createDownloader() {
+  const scheduler = new Scheduler({ maxConcurrent: 1 });
+  return (opts: DownloadOptions): Promise<DownloadResult> => scheduler.enqueue(normalize(opts));
+}
+
 /**
  * Download a file with single-flight dedupe, resume, retry, and SHA256 verify.
  *
@@ -55,13 +67,7 @@ function validate(opts: DownloadOptions): void {
  * resolves only after the file is at `targetPath` and verified.
  */
 export function download(opts: DownloadOptions): Promise<DownloadResult> {
-  validate(opts);
-  const normalized = {
-    ...opts,
-    targetPath: path.resolve(opts.targetPath),
-    sha256: opts.sha256.toLowerCase(),
-  };
-  return getScheduler().enqueue(normalized);
+  return getScheduler().enqueue(normalize(opts));
 }
 
 /**
@@ -94,5 +100,6 @@ export type {
   RetryConfig,
   TimeoutConfig,
   Logger,
+  DownloadRequest,
 } from './types';
 export { DownloadError } from './types';

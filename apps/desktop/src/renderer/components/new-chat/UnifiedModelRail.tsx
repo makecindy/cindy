@@ -12,6 +12,7 @@ import { useProviderWeeklyQuota, type ProviderUsageScope } from './useProviderWe
 import { formatQuotaResetCountdown } from '../status/usageCardModel';
 import { agentOptionOf } from './agentOptions';
 import { ProviderRailMark } from './UnifiedFlyoutHost';
+import { RemoteSourceMark } from '@/components/icons/RemoteSourceMark';
 import {
   engineOfAgentKind,
   railItemKey,
@@ -23,7 +24,8 @@ import {
  * UnifiedModelRail —— 统一面板左侧的视图筛选栏(model-selector-unified §1.2 / §1.6)。
  *
  * 格位由数据派生(见 `buildUnifiedRail`),这里只负责画:
- *   ★收藏 → 同引擎(仅会话内,图标 = 当前会话引擎的品牌 mark)→ ──分隔── → 全部 → 各来源。
+ *   ★收藏 → 同引擎(仅会话内,图标 = 当前会话引擎的品牌 mark)→ ──分隔── → 全部 → 各来源
+ *   → (新任务草稿)──分隔── → 其他电脑上的供应商(带信号波纹的 Logo,每台电脑一段)。
  * rail 常驻(2026-08-13 裁决),分隔线与设计稿 .rail-sep 同构:「个人钉的」与
  * 「目录本身的视图」两段之间画一条 22px 细线。
  */
@@ -35,6 +37,7 @@ export function UnifiedModelRail({
   providerLabel,
   interactionDisabled = false,
   providerUsage = null,
+  remoteSources,
 }: {
   items: readonly UnifiedRailItem[];
   active: UnifiedRailFilter;
@@ -44,6 +47,16 @@ export function UnifiedModelRail({
   interactionDisabled?: boolean;
   /** Whose account usage the directory may show; null hides it. */
   providerUsage?: ProviderUsageScope | null;
+  /**
+   * 远程供应商格的数据(只有可选远程 Agent 的新任务草稿传)。传了它,本机供应商格的
+   * 图标 / 名字 / 用量一律按本机读 —— 面板此刻可能正列着某台电脑的目录。
+   */
+  remoteSources?: {
+    localProviders: readonly ProviderView[];
+    localProviderLabel: (providerId: string) => string;
+    providersOf: (deviceId: string) => readonly ProviderView[];
+    labelOf: (deviceId: string, providerId: string) => string;
+  };
 }) {
   const { t } = useTranslation();
   // rail 常驻,不做「项数少就整条隐藏」——设计稿的分类栏在单来源时也在(★/全部/来源),
@@ -53,17 +66,33 @@ export function UnifiedModelRail({
     // 设计稿 .rail:宽 48(含 6px 侧距 + 1px 右分隔线)、纵向 8px、格间 2px。
     // 与侧栏窄图标栏一致：滚动条不占宽度，避免挤压按钮并触发横向溢出。
     <div className="flex min-h-0 w-12 shrink-0 flex-col items-center gap-0.5 overflow-x-hidden overflow-y-auto scrollbar-hide border-r border-[var(--model-dropdown-border)] px-1.5 py-2">
-      {items.map((item) => {
+      {items.map((item, index) => {
         const key = railItemKey(item);
         const isActive = activeKey === key;
-        // 设计稿 .rail-sep:「★/同引擎」与「全部/来源」两段之间的 22px 细线。
-        const separatorBefore = item.kind === 'all';
+        // 设计稿 .rail-sep:「★/同引擎」与「全部/来源」两段之间的 22px 细线;
+        // 远程供应商每台电脑一段,段首同样一条细线。
+        const previous = index > 0 ? items[index - 1] : undefined;
+        const separatorBefore =
+          item.kind === 'all' ||
+          (item.kind === 'remote-provider' &&
+            (previous?.kind !== 'remote-provider' || previous.deviceId !== item.deviceId));
         const engineOption =
           item.kind === 'engine' ? agentOptionOf(engineOfAgentKind(item.agent)) : null;
+        const railProviders =
+          item.kind === 'remote-provider'
+            ? (remoteSources?.providersOf(item.deviceId) ?? [])
+            : (remoteSources?.localProviders ?? providers);
         const provider =
-          item.kind === 'provider'
-            ? providers.find((entry) => entry.id === item.providerId)
+          item.kind === 'provider' || item.kind === 'remote-provider'
+            ? railProviders.find((entry) => entry.id === item.providerId)
             : undefined;
+        // 用量跟随该格目录的归属:远程格读那台电脑的镜像,本机格在远程 Agent 模式下恒读本机。
+        const usageDeviceId =
+          item.kind === 'remote-provider'
+            ? item.deviceId
+            : remoteSources
+              ? null
+              : (providerUsage?.deviceId ?? null);
         const accountIdentity =
           provider?.openAiAccount?.identity?.trim() ||
           provider?.subscriptionAccount?.identity?.trim();
@@ -76,7 +105,9 @@ export function UnifiedModelRail({
                 })
               : item.kind === 'all'
                 ? t('newChat.modelSelector.unified.railAll')
-                : providerLabel(item.providerId);
+                : item.kind === 'remote-provider'
+                  ? (remoteSources?.labelOf(item.deviceId, item.providerId) ?? item.providerId)
+                  : (remoteSources?.localProviderLabel ?? providerLabel)(item.providerId);
         return (
           <div key={key} className="contents">
             {separatorBefore && (
@@ -93,7 +124,7 @@ export function UnifiedModelRail({
               onClick={() => onSelect(item)}
               disabled={interactionDisabled}
               provider={providerUsage ? provider : undefined}
-              usageDeviceId={providerUsage?.deviceId ?? null}
+              usageDeviceId={usageDeviceId}
             >
               {item.kind === 'favorites' ? (
                 // ☆ 未激活与其它格同灰(hover 提亮)—— 常亮金色会在没进收藏视图时也
@@ -106,7 +137,11 @@ export function UnifiedModelRail({
               ) : item.kind === 'all' ? (
                 <LayoutGrid size={16} />
               ) : item.kind === 'provider' ? (
-                <ProviderRailMark providerId={item.providerId} providers={providers} />
+                <ProviderRailMark providerId={item.providerId} providers={railProviders} />
+              ) : item.kind === 'remote-provider' ? (
+                <RemoteSourceMark>
+                  <ProviderRailMark providerId={item.providerId} providers={railProviders} />
+                </RemoteSourceMark>
               ) : null}
             </RailButton>
           </div>

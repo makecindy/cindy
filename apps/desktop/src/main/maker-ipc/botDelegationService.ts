@@ -1,3 +1,5 @@
+import { openSession } from '../localDb/sessionOpening.js';
+import { controlOwnedSessionExecution, isSameSessionExecution, withdrawOwnedSessionInputs } from './sessionExecutionOwnership.js';
 import { existsSync, statSync } from 'node:fs';
 import type { AgentInputCoordinator } from './agent-input-coordinator.js';
 import path from 'node:path';
@@ -6,7 +8,6 @@ import { createHash, randomUUID } from 'node:crypto';
 import { app } from 'electron';
 import { and, desc, eq, inArray, isNull, or, sql } from 'drizzle-orm';
 
-import { ensureProjectGitInitialized } from '../git-snapshot/projectGitBootstrap.js';
 import { getDbClient } from '../localDb/client/current.js';
 import type { BotsFinishDelegationResult } from '../localDb/client/tx/types.js';
 import { visibleMessageTextForConversationSearch } from '../localDb/conversationSearch.pure.js';
@@ -17,11 +18,11 @@ import { sessionCreateToRow } from '../localDb/mapper.js';
 import {
   botDelegations,
   botProfiles,
+  botProfileVersions,
   botSessionLinks,
   messages,
   sessions,
 } from '../localDb/schema.js';
-import { readGitSafetySettings } from '../maker-host/git-safety-settings-store.js';
 import type { InteractionDecision, InteractionRequest } from '@cindy/maker-core';
 import { permissionModeOrAsk } from '@cindy/maker-shared/permission-mode';
 import { UI_ACTION_TRIGGER_PREFIX } from '../../shared/interruptedTurn.js';
@@ -49,6 +50,8 @@ import { ensureBotWorkspaceDir } from './botProfileFolder.js';
 import type { SessionQueuedMessageControlResult, SessionSteerResult, SessionStopResult } from './sessionControlService.js';
 import { ownerScopedUserDataPath } from '../appSessionState.js';
 import type { SessionRuntimeProfile } from './sessionRuntimeControl.js';
+import { readBotTaskModelOverride, type BotModelRoute } from '../../shared/botModelChain.js';
+import { validateTaskModel, resolveTaskModelSelection, type TaskModelSelection } from './appDefaultModelControl.js';
 
 const ACTIVE_DELEGATION_STATUSES = ['queued', 'running', 'waiting'] as const;
 /** 一条补充消息的正文上限：够写清「先别做 X，改做 Y」，又不至于变成另一项任务。 */
@@ -94,15 +97,10 @@ export async function discardDelegationQueuedInputs(
   delegationId: string,
   flush: (sessionId: string) => Promise<void>,
 ): Promise<void> {
-  await queue.ensureQueueRestored(sessionId);
-  for (const item of queue.getQueueControlSnapshot(sessionId).pendingQueue) {
-    if (isDelegationQueuedInput(delegationId, item.clientId)
-      || (item.supersedesUserClientId && isDelegationQueuedInput(delegationId, item.supersedesUserClientId))
-      || (item.retrySourceClientId && isDelegationQueuedInput(delegationId, item.retrySourceClientId))) {
-      queue.remove(sessionId, item.clientId);
-    }
-  }
-  await flush(sessionId);
+  await withdrawOwnedSessionInputs({
+    sessionId, queue, flush,
+    owns: clientId => isDelegationQueuedInput(delegationId, clientId),
+  });
 }
 
 export interface BotDelegationServiceDeps {
@@ -177,6 +175,8 @@ export interface BotDelegationServiceDeps {
     typeof sessions.$inferSelect,
     'model' | 'agentKind' | 'providerId' | 'fastMode'
   > & { effort?: (typeof sessions.$inferSelect)['effort'] }) | null;
+  validateTaskModel?: typeof validateTaskModel;
+  resolveTaskModelSelection?: typeof resolveTaskModelSelection;
   /** null means the live permission is changing or the caller is closing. */
   readCallerPermission?: (sessionId: string) => string | { mode: string; generation: number } | null;
   /** Narrow, owner-checked bridge to the ordinary Session runtime controller. */
@@ -197,6 +197,8 @@ export interface BotDelegationServiceDeps {
 
 /** Start one tracked Cindy Session task from a persistent Bot task. */
 export interface SessionTaskInput {
+  /** One task only; the catalog id includes source and Harness. */
+  modelSelection?: TaskModelSelection;
   callerSessionId: string;
   objective: string;
   contextRefs?: string[];
@@ -236,6 +238,16 @@ function parseRecord(value: string | null | undefined): Record<string, unknown> 
   } catch {
     return {};
   }
+}
+
+/** Use the creation snapshot, not today's companion settings, during recovery. */
+export async function hasExplicitSessionTaskModel(sessionId: string): Promise<boolean> {
+  const [row] = await getDbClient().drizzle
+    .select({ permissionSnapshotJson: botDelegations.permissionSnapshotJson })
+    .from(botDelegations)
+    .where(eq(botDelegations.childSessionId, sessionId))
+    .limit(1);
+  return !!parseRecord(row?.permissionSnapshotJson).taskModelOverride;
 }
 
 /** Mutable execution hold lives beside the frozen plan, without changing its authority fields. */
@@ -472,7 +484,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
   const sameExecution = (sessionId: string, expected: DelegationExecutionReceipt | null | undefined): boolean => {
     if (!deps.readSessionExecution) return true;
     const current = deps.readSessionExecution(sessionId);
-    return !!expected && current?.instanceId === expected.instanceId && current.generation === expected.generation;
+    return isSameSessionExecution(current, expected);
   };
 
   const matchesDelegatedExecution = (row: DelegationRow, allowIdle = false): boolean => {
@@ -487,16 +499,13 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
   };
 
   const controlDelegatedExecution = async (row: DelegationRow, operation: () => Promise<void>, allowIdle = false): Promise<boolean> => {
-    if (!row.childSessionId || !matchesDelegatedExecution(row, allowIdle)) return false;
-    let applied = false;
-    const guarded = async () => {
-      if (!matchesDelegatedExecution(row, allowIdle)) return;
-      await operation();
-      applied = true;
-    };
-    if (deps.withSessionLock) await deps.withSessionLock(row.childSessionId, guarded);
-    else await guarded();
-    return applied;
+    if (!row.childSessionId) return false;
+    return controlOwnedSessionExecution({
+      sessionId: row.childSessionId,
+      matches: () => matchesDelegatedExecution(row, allowIdle),
+      withSessionLock: deps.withSessionLock,
+      operation,
+    });
   };
 
   // Store only a native turn actually accepted for this delegation run. A later
@@ -747,16 +756,6 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
     };
   };
 
-  const requesterDisplayName = async (botId: string): Promise<string> => {
-    const db = getDbClient().drizzle;
-    const [profile] = await db
-      .select({ displayName: botProfiles.displayName })
-      .from(botProfiles)
-      .where(eq(botProfiles.id, botId))
-      .limit(1);
-    return profile?.displayName || botId;
-  };
-
   /**
    * 冻结这次协作双方的展示身份。名字后来改了不回填历史消息——消息流讲的是
    * 「当时谁把活交给了谁」，不是「他们现在叫什么」。
@@ -884,8 +883,10 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
             ? '已超时'
             : '失败了';
     const artifacts = params.artifacts ?? [];
+    // 发给模型的回执正文不带 [UI_ACTION_TRIGGER] 前缀;前缀只留在落库 / 排队可见内容上,
+    // 让这条主机内部消息在时间线与排队区保持隐藏(同 botDirectMessageService 的私信)。
     const completionMessage = [
-      `${UI_ACTION_TRIGGER_PREFIX}[任务回执] ${taskSubject}${statusLine}。task_id: ${params.id}`,
+      `[任务回执] ${taskSubject}${statusLine}。task_id: ${params.id}`,
       `目标事项: ${params.objective.slice(0, 400)}`,
       params.resultSummary ? `结果:\n${params.resultSummary}` : '',
       artifacts.length
@@ -980,7 +981,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
       const dispatched = await deps.dispatch({
         targetSessionId,
         message: completionMessage,
-        persistedContent: completionMessage,
+        persistedContent: `${UI_ACTION_TRIGGER_PREFIX}${completionMessage}`,
         clientId: BOT_DELEGATION_CLIENT_ID.completionRun(params.id, params.runSequence),
       });
       if (!dispatched.ok) {
@@ -1400,8 +1401,9 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
       && !pendingInteractions.get(row.id)?.decisionApplied;
     if (!stillPending()
       || (row.childSessionId && heldSessionIds.has(row.childSessionId))) return;
+    // 同任务回执:模型正文不带隐藏前缀,落库 / 排队可见内容保留它。
     const message = [
-      `${UI_ACTION_TRIGGER_PREFIX}[任务需要你处理] task_id: ${row.id}`,
+      `[任务需要你处理] task_id: ${row.id}`,
       `类型: ${pending.request.kind}`,
       pending.summary,
       pending.request.kind === 'permission' ? `请求工具: ${pending.request.toolName}` : '',
@@ -1414,7 +1416,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
         ? await deps.dispatch({
             targetSessionId: requesterSessionId,
             message,
-            persistedContent: message,
+            persistedContent: `${UI_ACTION_TRIGGER_PREFIX}${message}`,
             clientId: `bot-delegation-interaction:${row.id}:${pending.requestId}`,
           })
         : null;
@@ -2092,6 +2094,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
     objective: string;
     contextRefs: string[];
     plan: Omit<BotDelegationPlanSnapshot, 'permission'>;
+    taskModelOverride?: BotModelRoute;
     useWorktree?: boolean;
     session: {
       workingDir: string;
@@ -2119,107 +2122,88 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
       childSessionId = prepared.sessionId;
       input.session = { ...input.session, workingDir: prepared.workingDir, workspaceKind: 'project' };
     }
-    const gitSafety = readGitSafetySettings();
-    await ensureProjectGitInitialized({
-      workingDir: input.session.workingDir,
-      workspaceKind: input.session.workspaceKind ?? 'dialogue',
-      remoteHostId: null,
-      sessionId: childSessionId,
-      autoSnapshotEnabled: gitSafety.autoSnapshotEnabled,
-      autoInitProjectGit: gitSafety.autoInitProjectGit,
-      source: 'bot-delegation',
-    }).catch(async error => {
-      if (input.useWorktree) await deps.discardUnusedWorktree?.(childSessionId);
-      throw error;
-    });
-    // Read stable authority after asynchronous preparation, with no await before
-    // submitting creation. Both persisted records must use this same snapshot.
-    const callerPermission = deps.readCallerPermission
-      ? deps.readCallerPermission(input.callerSessionId)
-      : input.caller.permissionMode;
-    if (callerPermission === null) {
-      if (input.useWorktree) await deps.discardUnusedWorktree?.(childSessionId);
-      return { ok: false, errorCode: 'CALLER_PERMISSION_UNAVAILABLE', message: '伙伴权限正在切换或任务正在关闭，请稍后重试' };
-    }
-    const permissionMode = permissionModeOrAsk(typeof callerPermission === 'string' ? callerPermission : callerPermission.mode);
-    const isCreationPermissionCurrent = (): boolean => {
-      if (!deps.readCallerPermission) return true;
-      const current = deps.readCallerPermission(input.callerSessionId);
-      if (current === null) return false;
-      if (typeof callerPermission === 'string') return current === callerPermission;
-      return typeof current !== 'string' && current.mode === callerPermission.mode
-        && current.generation === callerPermission.generation;
-    };
-    const plan: BotDelegationPlanSnapshot = {
-      ...input.plan,
-      permission: {
-        mode: permissionMode,
-        requesterMode: permissionMode,
-        // Legacy target-profile field; the effective child permission is mode.
-        targetConfigured: 'ask',
-      },
-    };
-    const createdAt = plan.createdAt;
-    const permissionSnapshotJson = JSON.stringify({ ...plan,
-      taskInput: { runSequence: 1, originalObjective: input.objective, followUp: null } satisfies SessionTaskInputSnapshot,
-    });
-    const childRow = {
-      ...sessionCreateToRow(
-        childSessionId,
-        {
-          workspaceKind: input.session.workspaceKind ?? 'dialogue',
-          workingDir: input.session.workingDir,
-          model: input.session.model,
-          // 后台任务沿用发起伙伴当前任务的模型、来源和执行档位。
-          ...(input.session.effort !== undefined ? { effort: input.session.effort } : {}),
-          ...(input.session.fastMode !== undefined ? { fastMode: input.session.fastMode } : {}),
-          ...(input.session.providerId !== undefined
-            ? { providerId: input.session.providerId }
-            : {}),
-          agentKind: input.session.agentKind,
-          permissionMode,
-          parentSessionId: input.callerSessionId,
-        },
-        createdAt,
-      ),
-      title: input.session.title,
-      source: input.session.source,
-    };
+    let creationCommitted = false;
+    let permissionMode: ReturnType<typeof permissionModeOrAsk>;
+    let isCreationPermissionCurrent!: () => boolean;
+    let plan!: BotDelegationPlanSnapshot;
+    let permissionSnapshotJson!: string;
+    const createdAt = input.plan.createdAt;
+    const { source: taskSource, ...sessionBody } = input.session;
     try {
-      await getDbClient().tx('bots.createDelegation', {
-        maxActiveChildren,
-        session: {
-          id: childRow.id,
-          title: childRow.title,
-          workingDir: childRow.workingDir ?? null,
-          workspaceKind: childRow.workspaceKind,
-          model: childRow.model,
-          effort: childRow.effort,
-          fastMode: childRow.fastMode,
-          permissionMode: childRow.permissionMode,
-          agentKind: childRow.agentKind,
-          remoteHostId: null,
-          providerId: childRow.providerId ?? null,
-          parentSessionId: input.callerSessionId,
-          extraDirs: childRow.extraDirs,
-          source: childRow.source,
-          createdAt: childRow.createdAt,
-          updatedAt: childRow.updatedAt,
+      await openSession({ id: childSessionId, now: createdAt, source: taskSource,
+        body: { ...sessionBody, workspaceKind: input.session.workspaceKind ?? 'dialogue' },
+        finalize: () => {
+          // Read stable authority after asynchronous preparation, with no await before
+          // submitting creation. Both persisted records must use this same snapshot.
+          const callerPermission = deps.readCallerPermission
+            ? deps.readCallerPermission(input.callerSessionId)
+            : input.caller.permissionMode;
+          if (callerPermission === null) {
+            throw new Error('CALLER_PERMISSION_UNAVAILABLE');
+          }
+          permissionMode = permissionModeOrAsk(typeof callerPermission === 'string' ? callerPermission : callerPermission.mode);
+          isCreationPermissionCurrent = (): boolean => {
+            if (!deps.readCallerPermission) return true;
+            const current = deps.readCallerPermission(input.callerSessionId);
+            if (current === null) return false;
+            if (typeof callerPermission === 'string') return current === callerPermission;
+            return typeof current !== 'string' && current.mode === callerPermission.mode
+              && current.generation === callerPermission.generation;
+          };
+          plan = {
+            ...input.plan,
+            permission: {
+              mode: permissionMode,
+              requesterMode: permissionMode,
+              // Legacy target-profile field; the effective child permission is mode.
+              targetConfigured: 'ask',
+            },
+          };
+
+          permissionSnapshotJson = JSON.stringify({ ...plan,
+            ...(input.taskModelOverride ? { taskModelOverride: input.taskModelOverride } : {}),
+            taskInput: { runSequence: 1, originalObjective: input.objective, followUp: null } satisfies SessionTaskInputSnapshot,
+          });
+
+          return { permissionMode, parentSessionId: input.callerSessionId };
         },
-        delegation: {
-          id: delegationId,
-          requestingBotId: input.caller.botId,
-          targetBotId: null,
-          parentSessionId: input.callerSessionId,
-          childSessionId,
-          objective: input.objective,
-          contextRefsJson: JSON.stringify(input.contextRefs),
-          permissionSnapshotJson,
-          lineageJson: JSON.stringify([input.caller.botId]),
-          targetProfileVersion: null,
-          depth: 1,
-          createdAt,
-        },
+      }, async childRow => {
+        await getDbClient().tx('bots.createDelegation', {
+          maxActiveChildren,
+          session: {
+            id: childRow.id,
+            title: childRow.title,
+            workingDir: childRow.workingDir ?? null,
+            workspaceKind: childRow.workspaceKind,
+            model: childRow.model,
+            effort: childRow.effort,
+            fastMode: childRow.fastMode,
+            permissionMode: childRow.permissionMode,
+            agentKind: childRow.agentKind,
+            remoteHostId: null,
+            providerId: childRow.providerId ?? null,
+            parentSessionId: input.callerSessionId,
+            extraDirs: childRow.extraDirs,
+            source: childRow.source,
+            createdAt: childRow.createdAt,
+            updatedAt: childRow.updatedAt,
+          },
+          delegation: {
+            id: delegationId,
+            requestingBotId: input.caller.botId,
+            targetBotId: null,
+            parentSessionId: input.callerSessionId,
+            childSessionId,
+            objective: input.objective,
+            contextRefsJson: JSON.stringify(input.contextRefs),
+            permissionSnapshotJson,
+            lineageJson: JSON.stringify([input.caller.botId]),
+            targetProfileVersion: null,
+            depth: 1,
+            createdAt,
+          },
+        });
+        creationCommitted = true;
       });
       // The worktree store and workingDir already own the binding. A failed
       // display snapshot must not strand the committed task before dispatch.
@@ -2240,7 +2224,10 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
         status: 'queued',
       });
     } catch (error) {
-      if (input.useWorktree) await deps.discardUnusedWorktree?.(childSessionId);
+      if (input.useWorktree && !creationCommitted) await deps.discardUnusedWorktree?.(childSessionId);
+      if (error instanceof Error && error.message === 'CALLER_PERMISSION_UNAVAILABLE') {
+        return { ok: false, errorCode: 'CALLER_PERMISSION_UNAVAILABLE', message: '伙伴权限正在切换或任务正在关闭，请稍后重试' };
+      }
       // The Profile workspace is durable and shared across the Bot's Sessions.
       // A failed child creation never owns it and must not compensate by deleting it.
       if (error instanceof Error && error.message === 'BOT_DELEGATION_CONCURRENCY_LIMIT') {
@@ -2302,6 +2289,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
   const startSessionTask = async (
     input: SessionTaskInput,
   ): Promise<BotDelegationResult<{
+    modelRoute: BotModelRoute;
     delegationId: string;
     childSessionId: string;
     /**
@@ -2329,7 +2317,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
     const createdAt = now();
     const deadlineAt = createdAt + timeoutMs;
 
-    // 子任务承接发起伙伴的实际路由与权限档；一次性工具批准仍只属于原请求。
+    // No override inherits the live route (including fallback), never a stale creation snapshot.
     const [callerSession] = await db
       .select({
         model: sessions.model,
@@ -2345,6 +2333,29 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
       return { ok: false, errorCode: 'NOT_A_BOT_SESSION', message: '当前任务不属于任何伙伴' };
     }
     const callerRuntime = deps.readCallerRuntime?.(input.callerSessionId) ?? callerSession;
+    const [profile] = await db.select({ config: botProfileVersions.capabilitiesJson })
+      .from(botProfiles)
+      .innerJoin(botProfileVersions, and(eq(botProfileVersions.botId, botProfiles.id),
+        eq(botProfileVersions.version, botProfiles.currentVersion)))
+      .where(eq(botProfiles.id, caller.botId)).limit(1);
+    let taskModel: BotModelRoute | null;
+    try {
+      taskModel = input.modelSelection !== undefined
+        ? await (deps.resolveTaskModelSelection ?? resolveTaskModelSelection)(input.modelSelection)
+        : readBotTaskModelOverride(parseRecord(profile?.config).taskModelOverride);
+      if (input.modelSelection === undefined && taskModel && !await (deps.validateTaskModel ?? validateTaskModel)(taskModel)) {
+        return { ok: false, errorCode: 'TASK_MODEL_UNAVAILABLE', message: '任务模型不可用，请在伙伴模型设置中重新选择后重试' };
+      }
+    } catch {
+      return { ok: false, errorCode: 'TASK_MODEL_UNAVAILABLE', message: '无法确认任务模型或参数，请重新查询可用模型并检查伙伴模型设置后重试' };
+    }
+    const taskRuntime = taskModel ? {
+      agentKind: taskModel.harness === 'claude' ? 'cc' : taskModel.harness,
+      model: taskModel.model,
+      providerId: taskModel.providerId,
+      effort: taskModel.effort as typeof callerRuntime.effort,
+      fastMode: taskModel.fastMode,
+    } : callerRuntime;
     let workingDir = input.workingDir?.trim() || '';
     if (workingDir) {
       const isDirectory = (() => {
@@ -2382,17 +2393,18 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
       objective,
       contextRefs: contextRefs.refs,
       plan,
+      taskModelOverride: taskModel ?? undefined,
       useWorktree: input.useWorktree,
       session: {
         workingDir,
         workspaceKind: input.workingDir?.trim() ? 'project' : 'dialogue',
-        model: callerRuntime.model,
-        ...(callerRuntime.effort ? { effort: callerRuntime.effort } : {}),
-        ...(callerRuntime.fastMode !== null && callerRuntime.fastMode !== undefined
-          ? { fastMode: callerRuntime.fastMode }
+        model: taskRuntime.model,
+        ...(taskRuntime.effort ? { effort: taskRuntime.effort } : {}),
+        ...(taskRuntime.fastMode !== null && taskRuntime.fastMode !== undefined
+          ? { fastMode: taskRuntime.fastMode }
           : {}),
-        ...(callerRuntime.providerId ? { providerId: callerRuntime.providerId } : {}),
-        agentKind: callerRuntime.agentKind as 'cc' | 'codex' | 'pi',
+        ...(taskRuntime.providerId ? { providerId: taskRuntime.providerId } : {}),
+        agentKind: taskRuntime.agentKind as 'cc' | 'codex' | 'pi',
         title: input.title?.trim() || objective.split('\n')[0]!.slice(0, 60),
         source: 'desktop',
       },
@@ -2404,6 +2416,13 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
       childSessionId: started.childSessionId,
       status: started.status,
       deadlineAt: started.deadlineAt,
+      modelRoute: {
+        harness: taskRuntime.agentKind === 'codex' ? 'codex' : taskRuntime.agentKind === 'pi' ? 'pi' : 'claude',
+        model: taskRuntime.model,
+        providerId: taskRuntime.providerId ?? null,
+        effort: taskRuntime.effort ?? '',
+        fastMode: Boolean(taskRuntime.fastMode),
+      },
     };
   };
 
@@ -2713,12 +2732,11 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
     // token 只做幂等键，不进正文；限死字符集免得脏值污染 clientId 空间。
     const token = (idempotencyToken ?? createId()).replace(/[^A-Za-z0-9_-]/g, '').slice(0, 64)
       || createId();
-    const requesterName = await requesterDisplayName(caller.botId);
     const recovered = await dispatchTrackedInput(row, {
       dispatcherSessionId: callerSessionId,
-      // 前缀只给子任务里的 AI 看；界面上的来源由消息的来源标签（伙伴头像 + 名字）表达，
-      // 落库正文不再重复。
-      message: [`[来自 ${requesterName} 的补充]`, trimmed].join('\n\n'),
+      // 来源由消息 origin 统一表达:界面渲染来源标签(伙伴头像 + 名字),派发时主机前置
+      // `[消息来源]` 说明给子任务里的 AI;正文不再手写来源前缀。
+      message: trimmed,
       persistedContent: trimmed,
       clientId: BOT_DELEGATION_CLIENT_ID.interjection(delegationId, row.runSequence > 1 ? `${row.runSequence}:${token}` : token),
     });
@@ -3197,6 +3215,11 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
         return { ok: false as const, errorCode: 'TASK_ACTIVE', message: 'Finish or stop the current execution before changing its model' };
       }
       const inspected = await deps.taskRoute.inspect(callerSessionId, found.row.childSessionId);
+      // An explicit task model has no backup chain. Freeze this at creation so a later
+      // profile edit cannot offer the primary chain to an already-created task.
+      if (inspected.ok && parseRecord(found.row.permissionSnapshotJson).taskModelOverride) {
+        return { ...inspected, next: null, selectionToken: null };
+      }
       return inspected.ok ? { ...inspected, selectionToken: inspected.next
         ? createHash('sha256').update(JSON.stringify([inspected.generation, inspected.next])).digest('hex')
         : null } : inspected;
@@ -3223,7 +3246,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
       if (inspected.generation !== expectedGeneration) {
         return { ok: false as const, errorCode: 'CONFLICT', message: 'Task model changed; inspect it again before retrying' };
       }
-      if (!inspected.next) {
+      if (!inspected.next || parseRecord(row.permissionSnapshotJson).taskModelOverride) {
         return { ok: false as const, errorCode: 'NO_CONFIGURED_ROUTE', message: 'No further configured model route is available' };
       }
       const currentToken = createHash('sha256')

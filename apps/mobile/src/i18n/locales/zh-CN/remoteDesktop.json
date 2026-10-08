@@ -124,10 +124,9 @@
   "fps": "{{count}} 帧",
   "quality": "画质",
   "automatic": "自动",
-  "clear": "清晰",
-  "highDefinition": "高清",
-  "original": "原画",
-  "qualityHint": "自动会根据网络调整画质。画质越高，需要的网络带宽越大；实际流畅度取决于电脑和网络。",
+  "saver": "省流",
+  "hd": "高清",
+  "qualityHint": "自动优先流畅，省流少用流量，高清优先文字清晰。",
   "resolution": "电脑分辨率",
   "settingUnsupported": "当前电脑端暂不支持此设置",
   "loadingSettings": "读取中…",
@@ -159,7 +158,7 @@
   "lockOnExit": "退出后锁定电脑",
   "lockOnExitHint": "退出远程桌面时锁屏。重连或切换 App 不会触发。",
   "lockOnExitFailed": "未能确认电脑已锁屏，请检查电脑的锁屏状态。",
-  "hostMute": "被控端静音",
-  "hostMuteHint": "连接期间将被控电脑静音",
-  "hostMuteFailed": "无法修改被控端静音状态"
+  "hostMute": "远程电脑静音",
+  "hostMuteHint": "连接期间将远程电脑静音",
+  "hostMuteFailed": "无法修改远程电脑的静音状态"
 }

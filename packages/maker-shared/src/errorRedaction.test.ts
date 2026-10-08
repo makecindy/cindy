@@ -260,7 +260,7 @@ describe('isGatewayProxyTokenInvalidError', () => {
 
 
 describe('agent error envelopes shared by desktop and mobile', () => {
-  it.each(['REMOTE_LOCAL_ONLY_PROVIDER', 'DEVICE_LINK_MEDIA_TRANSFER_FAILED', 'MCP_APPROVAL_CONFIRMATION_TIMEOUT', 'AUTO_REVIEW_UNAVAILABLE'])(
+  it.each(['REMOTE_LOCAL_ONLY_PROVIDER', 'DEVICE_LINK_MEDIA_TRANSFER_FAILED', 'DEVICE_LINK_BUSY', 'MCP_APPROVAL_CONFIRMATION_TIMEOUT', 'AUTO_REVIEW_UNAVAILABLE'])(
     'parses %s directly and inside an IPC error', code => {
       for (const prefix of ['', "Error invoking remote method 'maker:send': Error: "]) {
         expect(parseAgentErrorCode(`${prefix}[${code}] first line\nsecond line`)).toEqual({ code, fallback: 'first line\nsecond line' });

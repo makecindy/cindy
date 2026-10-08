@@ -23,7 +23,6 @@
     "@cindy/browser-control-runtime": "workspace:*",
     "@cindy/github-client": "workspace:*",
     "@cindy/gitlab-client": "workspace:*",
-    "@cindy/ios-simulator-runtime": "workspace:*",
     "@cindy/maker-core": "workspace:*",
     "@cindy/maker-scheduler": "workspace:*",
     "@cindy/maker-shared": "workspace:*",

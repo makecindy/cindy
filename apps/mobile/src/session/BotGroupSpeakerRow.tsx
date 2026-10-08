@@ -9,15 +9,14 @@
 import { useCallback, useSyncExternalStore } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { useFocusEffect } from 'expo-router';
-import { CircleAlert, Sparkles } from 'lucide-react-native';
 import { useTranslation } from 'react-i18next';
 import { readWorkingPhase } from '@cindy/maker-shared';
 import type { BotGroupSpeakerActivity } from '@cindy/maker-shared/botGroupChat';
 import { Text } from '@/components/AppText';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import { startFocusedTopicSubscription } from '@/device-link/focusedTopicSubscription';
-import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
-import { fontWeight, iconSize, lineHeight, spacing, typeScale } from '@/theme/tokens';
+import { useThemedStyles, type ThemeColors } from '@/theme';
+import { fontWeight, lineHeight, spacing, typeScale } from '@/theme/tokens';
 import {
   BOT_GROUP_INLINE_AVATAR_SIZE,
   BOT_GROUP_MESSAGE_AVATAR_SIZE,
@@ -28,6 +27,8 @@ import { InteractionPanel } from './InteractionPanel';
 import { remoteSessionStore, useSessionPendingInteractions } from './remoteSessionStore';
 import type { PendingInteraction } from './types';
 import { useCompanionGenerationCopy } from './useCompanionGenerationCopy';
+import { CompanionPresenceRing } from './CompanionPresenceRing';
+import { ThinkingDots } from './ThinkingDots';
 import { WorkingStatusText } from './WorkingStatusText';
 
 export function BotGroupSpeakerRow({ deviceId, identity, sessionId, activity, online, onError }: {
@@ -39,7 +40,6 @@ export function BotGroupSpeakerRow({ deviceId, identity, sessionId, activity, on
   onError(message: string | null): void;
 }) {
   const { t } = useTranslation();
-  const { colors } = useTheme();
   const styles = useThemedStyles(makeStyles);
   const { invoke, subscribe, unsubscribe } = useDeviceLink();
   const lane = sessionId ?? '';
@@ -68,19 +68,22 @@ export function BotGroupSpeakerRow({ deviceId, identity, sessionId, activity, on
   const label = activity === 'planning'
     ? t('groupChat.speaking.planning')
     : copy ?? (activity === 'step' ? t('groupChat.speaking.step') : t('devices.companions.working.thinking'));
+  // G4: the same working vocabulary as the 1:1 chat — breathing portrait, three dots, paced copy.
   return <View style={styles.row} testID="botGroup.speaking" accessibilityLabel={`${identity.name}, ${waiting ? t('groupChat.waitingConfirm', { name: identity.name }) : label}`}>
-    <BotGroupAvatar deviceId={deviceId} identity={identity} size={BOT_GROUP_MESSAGE_AVATAR_SIZE} online={online} />
+    <View style={styles.avatar}>
+      <BotGroupAvatar deviceId={deviceId} identity={identity} size={BOT_GROUP_MESSAGE_AVATAR_SIZE} online={online} />
+      <CompanionPresenceRing active={!waiting} width={1.5} />
+    </View>
     <View style={styles.column}>
-      <Text numberOfLines={1} style={styles.name}>{identity.name}</Text>
+      <View style={styles.nameRow}><Text numberOfLines={1} style={styles.name}>{identity.name}</Text></View>
       {!waiting ? <View style={styles.status} accessibilityLiveRegion="polite" testID={`botGroup.speaking.${activity}`}>
-        <Sparkles size={iconSize.sm} color={colors.statusAccent} />
+        <ThinkingDots />
         <WorkingStatusText key={`${lane}:${activity}`} text={label} style={styles.statusText} />
       </View> : null}
       {pending.length > 0 && lane ? <InteractionPanel embedded companion
         companionIdentity={{ name: identity.name, avatar: <BotGroupAvatar deviceId={deviceId} identity={identity} size={BOT_GROUP_INLINE_AVATAR_SIZE} online={online} /> }}
         deviceId={deviceId} sessionId={lane} interactions={pending} onError={onError} />
         : waiting ? <View style={styles.status} testID="botGroup.speaking.waiting">
-          <CircleAlert size={iconSize.sm} color={colors.warningFg} />
           <Text style={styles.waitingText}>{t('groupChat.waitingConfirm', { name: identity.name })}</Text>
         </View> : null}
     </View>
@@ -88,10 +91,14 @@ export function BotGroupSpeakerRow({ deviceId, identity, sessionId, activity, on
 }
 
 const makeStyles = (colors: ThemeColors) => StyleSheet.create({
-  row: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing.sm },
+  // The group message row: 28 portrait 2pt down, 10 to the text, name row as tall as the portrait.
+  row: { flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
+  avatar: { marginTop: 2, width: BOT_GROUP_MESSAGE_AVATAR_SIZE, height: BOT_GROUP_MESSAGE_AVATAR_SIZE },
   column: { flex: 1, minWidth: 0, gap: spacing.xs },
+  nameRow: { minHeight: BOT_GROUP_MESSAGE_AVATAR_SIZE, justifyContent: 'center' },
   name: { color: colors.textPrimary, fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodySmall, fontWeight: fontWeight.medium },
-  status: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs },
+  status: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
   statusText: { flexShrink: 1, color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
-  waitingText: { flexShrink: 1, color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
+  // Waiting on you reads like the list's 「等你确认」 prefix: body color, medium — no warning icon.
+  waitingText: { flexShrink: 1, color: colors.textPrimary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption, fontWeight: fontWeight.medium },
 });

@@ -6,6 +6,7 @@
     "dismissTitle": "Dismiss past failure notice"
   },
   "common": {
+    "modelHiddenReselect": "{{model}} is turned off. Choose an enabled model before sending.",
     "cancel": "Cancel",
     "dismissRecommendation": "Dismiss recommendation",
     "delete": "Delete",
@@ -29,7 +30,7 @@
     "openMicPermission": "Open microphone settings",
     "maxAttachments": "You can add up to {{max}} attachments.",
     "voiceStopRecording": "Stop Recording",
-    "capabilitiesUnsupported": "Unsupported remote capability format"
+    "capabilitiesUnsupported": "Couldn't load commands and resources from your computer. Update Cindy on your computer and try again."
   },
   "presentation": {
     "collaboration": {
@@ -199,6 +200,7 @@
     "retry": "Retry",
     "firstMessageNotSent": "The first message wasn't sent; its content has been restored to the input box.",
     "attachmentsNotCarriedBack": "{{count}} attachment(s) couldn't be brought back — please add them again.",
+    "localStorageFull": "Cindy's local storage on this phone is full, so the message couldn't be saved. Please try again.",
     "commandWaitsForSession": "The session is still being created — this command needs the session to be ready. Please try again shortly.",
     "locateMessageNotFound": "Couldn't find the message to jump to.",
     "shareNoLocalImage": "Couldn't get the local image file",
@@ -207,7 +209,7 @@
     "shareUnsupported": "This app version doesn't support sharing yet; update to the latest version and try again.",
     "downloadFailed": "Download failed",
     "voiceNoRemoteDevice": "No remote device available; can't start voice input.",
-    "voiceSenderNotReady": "The message sender isn't ready.",
+    "voiceSenderNotReady": "Messages can't be sent right now. Go back and reopen the session.",
     "voiceStopAndSend": "End voice input and send",
     "sendMessage": "Send remote message",
     "voiceStartInput": "Start voice input",
@@ -327,7 +329,7 @@
     "selectDir": "Select directory {{name}}",
     "select": "Select",
     "noModelSelected": "No model selected",
-    "assignedDialogueDir": "Directory assigned by the computer",
+    "assignedDialogueDir": "Working directory assigned by the computer",
     "extraDirsSuffix": "+{{num}} extra dirs",
     "noProjectPath": "No project path selected",
     "dialogueWorkspace": "Chat workspace",
@@ -358,7 +360,7 @@
     "worktreeNotGitRepo": "Current directory is not a git repository",
     "worktreeAlreadyInWorktree": "Already inside a worktree, nesting is not allowed",
     "worktreeDetectFailed": "Could not check this directory — reselect it later and try again",
-    "worktreeUnsupported": "This desktop cannot safely create worktrees. Turn worktree off to continue, or update the desktop app.",
+    "worktreeUnsupported": "Cindy on your computer can't safely create worktrees. Turn worktree off to continue, or update Cindy on your computer.",
     "worktreeCreateFailed": "Failed to create worktree: {{message}}",
     "worktreeRecoveryStateFailed": "Could not save the worktree recovery state. Try again.",
     "worktreeCleanupPending": "The previous worktree is still awaiting cleanup. Reconnect the device and try again."
@@ -419,13 +421,17 @@
       "hours": "{{count}} hours",
       "minutes": "{{count}} minutes",
       "remaining": "{{percent}}% remaining",
-      "resets": "Resets {{time}}",
       "awaitingRefresh": "Awaiting refresh",
       "balance": "Available balance",
       "cycle": "Used this cycle",
       "today": "Used today",
       "unavailable": "Unavailable",
       "quotaUnavailable": "Account quota unavailable",
+      "credits": "Credits",
+      "creditsRemaining": "{{credits}} remaining",
+      "creditsUnlimited": "Unlimited",
+      "creditsDepleted": "Depleted",
+      "creditsAvailable": "Available",
       "lastUpdated": "Last updated {{time}}",
       "taskUsage": "Task usage",
       "taskValue": "Task value",
@@ -449,7 +455,6 @@
     "contextLabel": "Context",
     "accountLimits": "Account limits",
     "quotaExhaustedResettable": "Your quota is used up. Resetting uses 1 reset immediately and can't be undone.",
-    "resetting": "Resetting…",
     "resetCodexUsage": "Reset Codex usage",
     "quotaExhaustedNoCredit": "Your quota is used up, but you have no reset credits available.",
     "openDir": "Open Directory",
@@ -467,7 +472,8 @@
     "noSubDirs": "This directory has no subdirectories to open.",
     "dirLimitNotice": "Showing the first 30 directories only; open a more specific directory to keep choosing.",
     "confirmRename": "Confirm rename",
-    "confirm": "Confirm",
+    "renameSubmit": "Rename",
+    "confirm": "Rename",
     "cancelRename": "Cancel rename",
     "backToMenu": "Back to session menu"
   },
@@ -493,8 +499,8 @@
     "toolUseLoopDetectedConsecutiveWithCount": "The model repeated the same tool call {{count}} times, so Cindy stopped this turn to prevent an infinite loop. Send a new message to continue.",
     "toolUseLoopDetectedPingPongWithCount": "The model kept cycling between tool calls, so Cindy stopped this turn after detecting {{count}} calls in the loop. Send a new message to continue.",
     "toolUseLoopDetectedRotationWithCount": "The model kept rotating through tool calls, so Cindy stopped this turn after detecting {{count}} calls in the loop. Send a new message to continue.",
-    "codexThreadLost": "The Codex auth mode changed, so this session can't continue — start a new session to apply it.",
-    "encryptedContentInvalid": "Switching providers made the encryption unavailable, so this session works only under the original provider. Handle it on the computer (you can Fork to drop the encrypted protocol content and continue in a new session)."
+    "codexThreadLost": "The Codex auth mode changed, so this session can't continue. Start a new session.",
+    "encryptedContentInvalid": "Switching providers made the encryption unavailable, so this session works only under the original provider. Handle it on the computer (use “Start new session from here” to drop the encrypted protocol content and continue in a new session)."
   },
   "row": {
     "moreOptions": "More options",
@@ -511,6 +517,8 @@
     "authGateHint": "{{agent}} has no connected model provider on this computer, so sending will fail. Set it up in {{appName}} on the computer under Settings → Model Providers."
   },
   "outbox": {
+    "deleteConfirmTitle": "Delete this message?",
+    "deleteConfirmBody": "This message wasn't sent. Deleting it can't be undone.",
     "legacyPlanRecovery": "This computer cannot restore saved messages in Plan mode. Turn off Plan mode or update Cindy on the computer, then retry.",
     "creationRecoveryRequired": "Retry creating this task before deleting its first message. That message keeps the recovery details for your later messages.",
     "confirmationRequired": "This computer cannot confirm whether the message was received. Check its history or update Cindy before retrying.",
@@ -522,15 +530,16 @@
   "remoteError": {
     "REMOTE_DAEMON_CLOSED": "The remote connection dropped, possibly during an update. This turn has ended. Send the message again.",
     "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "Local file/image attachments aren't accessible in remote sessions. Paste the content directly instead.",
-    "AUTO_REVIEW_UNAVAILABLE": "Auto-review could not reach a decision, so actions that need review now need your confirmation. Switch this task to Full access if you would rather not be interrupted. That mode is higher risk.",
-    "AUTO_REVIEW_UNAVAILABLE_WECHAT": "Auto-review could not reach a decision, so actions that need review now need your confirmation. Personal WeChat cannot use Full access. Confirm this action directly.",
-    "AUTO_REVIEW_CONFIRM_UNDELIVERED": "Automatic review was unavailable, and the confirmation request was not completed. This is not a user rejection.",
+    "AUTO_REVIEW_UNAVAILABLE": "Auto approve could not reach a decision, so actions that need approval now need your confirmation. Switch this session to Full access if you would rather not be interrupted. That mode is higher risk.",
+    "AUTO_REVIEW_UNAVAILABLE_WECHAT": "Auto approve could not reach a decision, so actions that need approval now need your confirmation. Personal WeChat cannot use Full access. Confirm this action directly.",
+    "AUTO_REVIEW_CONFIRM_UNDELIVERED": "Auto approve was unavailable, and the confirmation request was not completed. This is not a user rejection.",
     "REMOTE_COMPAT_MODE_UNSUPPORTED": "Remote tasks cannot use this computer’s compatibility route. Switch to Cindy AI, or continue in a local task.",
-    "REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE": "Cindy AI credentials are not ready yet (issued automatically after sign-in). Please retry shortly; if this persists, check the Cindy AI status in Settings → Model Providers.",
+    "REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE": "Cindy AI credentials are not ready yet (issued automatically after sign-in). Try again shortly. If this persists, check the Cindy AI status in Settings → Model Providers.",
     "REMOTE_LOCAL_ONLY_PROVIDER": "This model provider is a local-only service (e.g. Ollama) that a remote SSH task cannot reach. Switch to the Cindy AI gateway, or pick a provider reachable from the remote host.",
     "DEVICE_LINK_CONTROL_DISABLED": "Control for this device is off; the message was not sent.",
+    "DEVICE_LINK_BUSY": "The remote computer is busy. Please try again shortly.",
     "DEVICE_LINK_MEDIA_TRANSFER_FAILED": "Attachment transfer failed; the message was not sent. Please try again.",
-    "MCP_APPROVAL_AUTO_BLOCKED": "Automatic approval review blocked this tool call. No manual rejection was received.",
+    "MCP_APPROVAL_AUTO_BLOCKED": "Auto approve blocked this tool call. No manual rejection was received.",
     "MCP_APPROVAL_CONFIRMATION_TIMEOUT": "The permission request timed out without a confirmed decision. A timeout does not show whether you clicked a button.",
     "MCP_APPROVAL_CONFIRMATION_UNAVAILABLE": "Permission confirmation could not be completed. No manual rejection was received.",
     "REMOTE_HOST_PROXY_FORWARD_UNAVAILABLE": "This model needs this computer to forward requests, and the remote connection cannot do that yet. Switch to Cindy AI, or use this model in a local task.",
@@ -540,7 +549,18 @@
     "REMOTE_PROVIDER_UNSUPPORTED": "Remote tasks cannot use this model provider yet. Pick another provider, or use it in a local task.",
     "REMOTE_PROVIDER_UPDATING": "This model provider’s credentials are updating. Try again in a moment.",
     "REMOTE_WORKDIR_UNAVAILABLE": "The remote working directory is unavailable. Check that the folder still exists on that computer, then try again.",
-    "REMOTE_OPTIMISTIC_SESSION_STATE_UNAVAILABLE": "The computer cannot yet confirm whether this message was sent. Wait a moment and try again. Do not send the same message twice."
+    "REMOTE_OPTIMISTIC_SESSION_STATE_UNAVAILABLE": "The computer cannot yet confirm whether this message was sent. Wait a moment and try again. Do not send the same message twice.",
+    "REMOTE_AGENT_UNAVAILABLE": "Can't reach the computer running the Agent. Make sure it's online and allows remote control, then try again.",
+    "REMOTE_AGENT_PEER_TOO_OLD": "Cindy on the other computer is too old to run the Agent for this one. Update Cindy there first.",
+    "REMOTE_AGENT_EXPIRED": "This session already ended on the computer running the Agent. Send your message again.",
+    "REMOTE_AGENT_NOT_FOUND": "This session already ended on the computer running the Agent. Send your message again.",
+    "REMOTE_AGENT_BUSY": "Too many sessions are running on the other computer. End some of them and try again.",
+    "REMOTE_AGENT_UNSUPPORTED": "This Agent isn't available on the other computer. Install or sign in to it there, or pick another Agent.",
+    "REMOTE_AGENT_INVALID": "Something went wrong talking to the computer running the Agent. Try again; if it keeps happening, update Cindy on both computers.",
+    "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "That computer hasn’t allowed remote use of this provider. On that computer, turn on “Allow remote use” in Settings → Providers, or pick another model.",
+    "REMOTE_AGENT_SHARE_PAUSED": "The owner has paused this share for you, so these models can’t be used until it’s resumed. Switch to another model to continue.",
+    "REMOTE_AGENT_SHARE_REMOVED": "This share is no longer available (the owner removed it or you left). Switch to another model to continue.",
+    "REMOTE_AGENT_SHARE_UNAVAILABLE": "The shared provider is temporarily unavailable. The owner's computer may be offline, or sharing is turned off for now. Try again later, or switch to another model to continue."
   },
   "collab": {
     "modeLabel": "Collaboration mode",
@@ -570,7 +590,6 @@
     "workerCountSummary_other": "{{count}} Workers · {{running}} running",
     "loading": "Loading Workers…",
     "noWorkers": "No Workers yet",
-    "focused": "Focused",
     "manageGroup": "Manage",
     "hardLimitHint": "Hard limit of {{limit}} reached · Archive a Worker to create more",
     "softLimitHint": "Over the soft limit of {{limit}} · More Workers use more memory",

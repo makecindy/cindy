@@ -416,6 +416,28 @@ export async function createOrcaWorker(
   throw new Error('[DUPLICATE_LABEL] no unique worker label available');
 }
 
+/**
+ * 归档 Worker(协同面板长按与 Worker 自身菜单共用)。隧道超时不是权威失败:只读回查一次
+ * 团队,Worker 已不在列表里即归档已生效,按成功返回;仍在或回查失败时抛
+ * ORCA_ACTION_UNCONFIRMED(提示以列表为准),由调用方回滚乐观状态。
+ */
+export async function archiveOrcaWorker(
+  maker: MobileMakerTransport,
+  leadSessionId: string,
+  workerId: string,
+): Promise<void> {
+  try {
+    await maker.orca.archiveWorker(leadSessionId, workerId);
+  } catch (error) {
+    if (!isAmbiguousTimeout(error)) throw error;
+    const archived = await maker.orca.listWorkers(leadSessionId)
+      .then((raw) => !parseOrcaTeamWorkers(raw).some((worker) => worker.workerId === workerId))
+      .catch(() => false);
+    if (archived) return;
+    throw new Error('[ORCA_ACTION_UNCONFIRMED] worker archive timed out and could not be confirmed');
+  }
+}
+
 /** 新建页协同草稿所属目标(设备 + 工作区):目标变了草稿作废。 */
 export function orcaCollabDraftTargetKey(
   deviceId: string | null | undefined,

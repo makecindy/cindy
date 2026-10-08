@@ -29,7 +29,7 @@ const accountApi = createSharedTaskApi({
         logLabel: '/api/device-link/shared-tasks',
         redactErrorDetails: true,
         allowedRedactedErrorCodes: ['NOT_FOUND', 'CONFLICT', 'PERMISSION_DENIED', 'INVALID_PARAMS', 'RATE_LIMITED',
-          'SHARED_TASK_HOST_LIMIT', 'SHARED_TASK_JOIN_LIMIT', 'SHARED_TASK_GUEST_LIMIT'],
+          'SHARED_TASK_HOST_LIMIT', 'SHARED_TASK_JOIN_LIMIT', 'SHARED_TASK_GUEST_LIMIT', 'SHARED_TASK_SELF_JOIN'],
       });
     } catch (error) {
       const code = error && typeof error === 'object' ? (error as { code?: unknown }).code : undefined;
@@ -38,7 +38,7 @@ const accountApi = createSharedTaskApi({
       }
       // Error properties do not survive Electron serialization. Preserve only
       // actionable codes, never the server response or invitation details.
-      if (code === 'NOT_FOUND' || code === 'PERMISSION_DENIED' || code === 'INVALID_PARAMS') {
+      if (code === 'NOT_FOUND' || code === 'PERMISSION_DENIED' || code === 'INVALID_PARAMS' || code === 'SHARED_TASK_SELF_JOIN') {
         throwIpcError(code, 'Shared task request rejected');
       }
       if (code === 'NETWORK_ERROR') throwIpcError('DEVICE_LINK_NOT_CONNECTED', 'Shared task service unreachable');

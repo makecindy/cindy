@@ -8,7 +8,7 @@
  *   5. watch 订阅生命周期:onFsWatchSubscribed → 真实 fs 变更 → push 出口收到事件
  */
 
-import { mkdtemp, mkdir, rm, writeFile as fsWriteFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, realpath, rm, writeFile as fsWriteFile } from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
@@ -94,6 +94,13 @@ vi.mock('../../localDb/client/current.js', () => ({
     },
   }),
 }));
+const startDirExportMock = vi.hoisted(() => vi.fn<(...args: unknown[]) => string>(() => 'dir_1'));
+vi.mock('../dir-export.js', () => ({
+  createDirExportDeps: () => ({}),
+  startDirExport: startDirExportMock,
+  getDirExportStatus: (id: string) =>
+    id === 'dir_1' ? { state: 'packing', packed: 10, sent: 0, total: 0, skipped: 0 } : null,
+}));
 vi.mock('../../maker-host/runtime-configs.js', () => ({
   getRipgrepBinaryPath: () => '/nonexistent/rg',
 }));
@@ -118,6 +125,7 @@ vi.mock('../remote-deps.js', () => ({
 }));
 
 import { __deviceOpTesting } from '../device-op.js';
+import { runDeviceLinkInvokeContext } from '../../device-link/invoke-context.js';
 
 const { handleRemoteOp, onFsWatchSubscribed, onFsWatchReleased } = __deviceOpTesting;
 
@@ -883,11 +891,76 @@ describe('file-browser device-op', () => {
       gzip: true,
       completeDirectoryListing: true,
       fileRead: true,
+      dirExport: true,
     });
     // 控制端把 unknown op 当"老端不支持压缩"的确定性负信号,形状不能漂。
     expect(await handleRemoteOp({ op: 'nope', workdir })).toEqual({
       ok: false,
       message: 'unknown op: nope',
+    });
+  });
+
+  // ── 文件夹下载(exportDirStart / exportDirStatus)──────────────────────
+
+  it('exportDirStart 只接受来自同账号控制端的目录导出,并把推送目标定为该控制端', async () => {
+    // 没有 device-link 调用上下文(不知道推给谁)→ 拒绝。
+    expect(await handleRemoteOp({ op: 'exportDirStart', workdir, relPath: 'src' })).toEqual({
+      ok: false,
+      message: 'REMOTE_UNSUPPORTED',
+    });
+    const asController = <T>(fn: () => Promise<T>) =>
+      runDeviceLinkInvokeContext(
+        { controllerDeviceId: 'ctrl-1', channel: 'file-browser:remote-op' },
+        fn,
+      );
+    expect(
+      await asController(() => handleRemoteOp({ op: 'exportDirStart', workdir, relPath: 'src' })),
+    ).toEqual({ ok: true, transferId: 'dir_1' });
+    expect(startDirExportMock).toHaveBeenCalledWith(
+      path.join(await realpath(workdir), 'src'),
+      'ctrl-1',
+      expect.anything(),
+    );
+    // 文件不是目录;共享任务访客不放行。
+    expect(
+      await asController(() =>
+        handleRemoteOp({ op: 'exportDirStart', workdir, relPath: 'src/a.ts' }),
+      ),
+    ).toEqual({ ok: false, message: 'not a directory' });
+    expect(
+      await runDeviceLinkInvokeContext(
+        {
+          controllerDeviceId: 'guest',
+          channel: 'file-browser:remote-op',
+          sharedTask: {} as never,
+        },
+        () => handleRemoteOp({ op: 'exportDirStart', workdir, relPath: 'src' }),
+      ),
+    ).toEqual({ ok: false, message: 'REMOTE_UNSUPPORTED' });
+    // 工作目录本身(relPath 为空)也可导出。
+    expect(
+      await asController(() => handleRemoteOp({ op: 'exportDirStart', workdir, relPath: '' })),
+    ).toEqual({ ok: true, transferId: 'dir_1' });
+    expect(startDirExportMock).toHaveBeenLastCalledWith(
+      await realpath(workdir),
+      'ctrl-1',
+      expect.anything(),
+    );
+    expect(startDirExportMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('exportDirStatus 幂等返回进度,未知 transfer 明确失败', async () => {
+    expect(await handleRemoteOp({ op: 'exportDirStatus', workdir, transferId: 'dir_1' })).toEqual({
+      ok: true,
+      state: 'packing',
+      packed: 10,
+      sent: 0,
+      total: 0,
+      skipped: 0,
+    });
+    expect(await handleRemoteOp({ op: 'exportDirStatus', workdir, transferId: 'x' })).toEqual({
+      ok: false,
+      message: 'unknown transfer: x',
     });
   });
 

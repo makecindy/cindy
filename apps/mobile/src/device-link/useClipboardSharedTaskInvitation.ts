@@ -8,24 +8,31 @@ import {
   getPendingSharedTaskInvitationIntent, getSharedTaskInvitationIntentSequence,
   receiveSharedTaskInvitationIntent, subscribeSharedTaskInvitationIntent,
 } from './sharedTaskInvitationIntent';
+import { hasSeenClipboardInvitation, invitationDigest, rememberClipboardInvitation } from './clipboardInvitationHistory';
 
-/** Clipboard contents stay in memory. Only a valid link for this service opens admission. */
+/** Only account-scoped invitation digests persist; clipboard contents stay in memory. */
 export function useClipboardSharedTaskInvitation(enabled: boolean, joining: boolean): void {
   const joiningRef = useRef(joining);
   joiningRef.current = joining;
-  const seenInvitations = useRef(new Set<string>());
   useEffect(() => {
+    let disposed = false;
     const rememberExplicitInvitation = () => {
+      if (disposed) return;
       const intent = getPendingSharedTaskInvitationIntent();
-      if (intent?.source === 'link' && intent.server === sharedTaskInvitationServer(DEVICE_LINK_API_BASE_URL)) {
-        seenInvitations.current.add(intent.invitation);
+      const owner = getMobileAuthOwner();
+      if (!owner.switching && owner.accountKey && intent?.source === 'link'
+          && intent.server === sharedTaskInvitationServer(DEVICE_LINK_API_BASE_URL)) {
+        void rememberClipboardInvitation(owner.accountKey, invitationDigest(intent.invitation));
       }
     };
     // Observe even before login enables clipboard reads, and before admission clears
     // the pending intent. Explicit links remain usable; only clipboard offers dedupe.
     const stopWatching = subscribeSharedTaskInvitationIntent(rememberExplicitInvitation);
+    // First login may claim an unsigned link without notifying intent listeners.
+    // Wait until the intent store has retired any previous account's invitation.
+    const stopWatchingOwner = subscribeMobileAuthOwner(() => queueMicrotask(rememberExplicitInvitation));
     rememberExplicitInvitation();
-    return stopWatching;
+    return () => { disposed = true; stopWatching(); stopWatchingOwner(); };
   }, []);
   useEffect(() => {
     if (!enabled) return;
@@ -48,7 +55,9 @@ export function useClipboardSharedTaskInvitation(enabled: boolean, joining: bool
         // Bare codes could be unrelated clipboard data; automatic detection accepts links only.
         if (!/https?:\/\//.test(text)) return;
         const parsed = parseSharedTaskInvitation(text, DEVICE_LINK_API_BASE_URL);
-        if (!parsed.ok || seenInvitations.current.has(parsed.invitation)) return;
+        if (!parsed.ok) return;
+        const digest = invitationDigest(parsed.invitation);
+        if (await hasSeenClipboardInvitation(owner.accountKey, digest)) return;
         const offer = () => {
           if (disposed || captured !== activation || joiningRef.current || !isMobileAuthOwnerCurrent(owner)
               || sequence !== getSharedTaskInvitationIntentSequence() || getPendingSharedTaskInvitationIntent()) {
@@ -59,7 +68,8 @@ export function useClipboardSharedTaskInvitation(enabled: boolean, joining: bool
           if (AppState.currentState !== 'active') { deferredOffer = offer; return; }
           const url = 'cindy://shared-session?invitation=' + encodeURIComponent(parsed.invitation)
             + '&server=' + encodeURIComponent(DEVICE_LINK_API_BASE_URL);
-          if (receiveSharedTaskInvitationIntent(url, 'clipboard')) seenInvitations.current.add(parsed.invitation);
+          // The prompt records the digest only after its native dialog is shown.
+          receiveSharedTaskInvitationIntent(url, 'clipboard');
         };
         offer();
       } catch {

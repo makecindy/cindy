@@ -9,6 +9,7 @@ import {
 import {
   abortAllGhostInstallConsentPrompts,
   assertGhostInstallConsent,
+  confirmedTaskCapability,
   isGhostInstallConsentRequiredError,
   obtainGhostInstallConsent,
   trackGhostInstallConsentPrompt,
@@ -51,6 +52,20 @@ const userPrompt = (answer: boolean | Error) =>
   });
 
 const reviewedDigest = 'a'.repeat(64);
+it('records tasks only when that capability was included in explicit install/update consent', async () => {
+  const next = {...manifest(['api.weather.test']),agent:{tasks:true as const}};
+  const policy = {mode:'prompt' as const,prompt:userPrompt(true),initiator:'user' as const,origin:'market' as const};
+  const decision = await obtainGhostInstallConsent(policy,null,next,reviewedDigest);
+  assertGhostInstallConsent(decision,null,next,reviewedDigest);
+  expect(confirmedTaskCapability(decision,null,next)).toBe(true);
+  expect(confirmedTaskCapability({mode:'exempt',reason:'server-default-install'},null,next)).toBeUndefined();
+  expect(confirmedTaskCapability({mode:'unprompted'},null,next)).toBeUndefined();
+  const old = installed(next);
+  const expanded = {...next,network:{hosts:['api.weather.test','other.test']}};
+  const unrelated = await obtainGhostInstallConsent(policy,old,expanded,reviewedDigest);
+  assertGhostInstallConsent(unrelated,old,expanded,reviewedDigest);
+  expect(confirmedTaskCapability(unrelated,old,expanded)).toBeUndefined();
+});
 const replacedDigest = 'b'.repeat(64);
 
 describe('obtainGhostInstallConsent', () => {

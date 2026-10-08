@@ -84,7 +84,7 @@ export class GhostCardActionDispatcher {
    * (IPC 层对 renderer 恒可回,reason 仅诊断)。prompt 仅 data-ghost-prompt
    * 类动作有(宿主输入框收集的用户文字),可选;非法形状整次拒。
    */
-  async dispatch(callId: unknown, actionId: unknown, prompt?: unknown): Promise<CardActionResult> {
+  async dispatch(callId: unknown, actionId: unknown, prompt?: unknown, mobilePageId?: string): Promise<CardActionResult> {
     if (typeof callId !== 'string' || callId.length === 0 || callId.length > MAX_CALL_ID_LEN) {
       return { ok: false, reason: 'bad-call-id' };
     }
@@ -167,6 +167,7 @@ export class GhostCardActionDispatcher {
       this.deps.sendToGhost(ghostId, {
         type: 'event',
         name: 'card-action',
+        ...(mobilePageId ? { mobilePageId } : {}),
         callId,
         actionId,
         ...(sessionId ? { sessionId } : {}),

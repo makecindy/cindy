@@ -1,5 +1,5 @@
 import { Button, Image, Picker, ProgressView, Text, Toggle } from '@expo/ui/swift-ui';
-import { disabled, font, foregroundStyle, frame, pickerStyle, tag } from '@expo/ui/swift-ui/modifiers';
+import { disabled, font, foregroundStyle, frame, pickerStyle, tag, tint } from '@expo/ui/swift-ui/modifiers';
 import { useTranslation } from 'react-i18next';
 import { iconSize, useTheme } from '@/theme';
 import { ComposerSheet } from './ComposerSheet';
@@ -33,7 +33,7 @@ export function NewTaskSelectionSheet(p: NewTaskSelectionSheetProps) {
           modifiers={[...glassStyle, disabled(unavailable || !p.path || !!p.error)]}
           testID="newSession.remoteBrowseSelectCurrent"
         >
-          <Text modifiers={[frame({ maxWidth: Infinity, minHeight: 44 })]}>{t('session.new.useCurrent')}</Text>
+          <Text modifiers={[foregroundStyle(colors.ctaText), frame({ maxWidth: Infinity, minHeight: 44 })]}>{t('session.new.useCurrent')}</Text>
         </Button>
       ) : undefined}
     >
@@ -72,7 +72,7 @@ export function NewTaskSelectionSheet(p: NewTaskSelectionSheetProps) {
             {p.drives.map(drive => <Text key={drive.path} modifiers={[tag(drive.path)]}>{drive.name}</Text>)}
           </Picker> : null}
           <Toggle label={newSessionText('showHiddenDirectories')} isOn={p.showHidden}
-            onIsOnChange={p.onShowHidden} modifiers={[disabled(p.busy)]} testID="newSession.remoteBrowseShowHidden" />
+            onIsOnChange={p.onShowHidden} modifiers={[disabled(p.busy), tint(colors.inputCaret)]} testID="newSession.remoteBrowseShowHidden" />
         </Section>
         {p.loading ? <Section><ProgressView /></Section> : null}
         {p.error ? <Section><Text modifiers={[foregroundStyle(colors.errorText)]}>{p.error}</Text></Section> : null}

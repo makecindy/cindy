@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   TASK_MIGRATION_CHANNEL,
   TASK_MIGRATION_LOCAL_CHANNEL,
+  TASK_MIGRATION_MAX_TRANSCRIPTS,
   parseTaskMigrationRequest,
 } from "../taskMigration.js";
 import { REMOTE_INVOKE_ALLOWLIST } from "../allowlist.js";
@@ -154,5 +155,66 @@ describe("task copy protocol", () => {
     expect(() =>
       parseTaskMigrationRequest({ ...receive, targetProject: "bad\0path" }),
     ).toThrow();
+  });
+  it("validates native transcripts sent beside the package", () => {
+    const file = { ref: "reference", size: 100, sha256: "a".repeat(64) };
+    const receive = {
+      action: "receive",
+      id: "01234567-0123-4123-a123-012345678901",
+      sourceSessionId: "source",
+      targetProject: null,
+      files: { session: file, manifest: file, workspace: file },
+    };
+    const large = {
+      size: 4 * 1024 ** 3,
+      parts: [
+        { ...file, size: 2 * 1024 ** 3 },
+        { ...file, size: 2 * 1024 ** 3 },
+      ],
+    };
+    expect(
+      parseTaskMigrationRequest({
+        ...receive,
+        files: { ...receive.files, transcripts: [file, large] },
+      }),
+    ).toMatchObject({ files: { transcripts: [file, large] } });
+    for (const transcripts of [
+      null,
+      {},
+      [null],
+      [{ ...file, size: 0 }],
+      [{ size: 101, parts: [file] }],
+      Array.from({ length: TASK_MIGRATION_MAX_TRANSCRIPTS + 1 }, () => file),
+    ])
+      expect(() =>
+        parseTaskMigrationRequest({
+          ...receive,
+          files: { ...receive.files, transcripts },
+        }),
+      ).toThrow();
+    const resources = {
+      transferBytes: 1,
+      unpackedBytes: 1,
+      contextBytes: 1,
+      manifestBytes: 1,
+      repositoryBytes: 0,
+      entries: 1,
+    };
+    for (const transcriptBytes of [undefined, 0, 900 * 1024 ** 2])
+      expect(
+        parseTaskMigrationRequest({
+          action: "preflight",
+          targetProject: null,
+          resources: { ...resources, transcriptBytes },
+        }),
+      ).toBeDefined();
+    for (const transcriptBytes of [-1, 1.5, "1"])
+      expect(() =>
+        parseTaskMigrationRequest({
+          action: "preflight",
+          targetProject: null,
+          resources: { ...resources, transcriptBytes },
+        }),
+      ).toThrow();
   });
 });

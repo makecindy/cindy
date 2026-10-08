@@ -27,7 +27,9 @@ describe('Orca provider routing snapshot wiring', () => {
     expect(wiring).toContain('providerService: getDesktopProviderService()');
     expect(wiring).toContain('getCatalog: getActiveCatalog');
     expect(routingSource).toContain('waitForDiscovery: true');
-    expect(registerSource).toContain('getProviderRoutingContext: async (agent, remoteHostId)');
+    expect(registerSource).toContain('getProviderRoutingContext: async (agent, remoteHostId, agentDeviceId) => agentDeviceId && !remoteHostId');
+    // lead 的 Agent 在另一台电脑运行时按那台的目录；其余与原来一致。
+    expect(registerSource).toContain("deviceWorkerRoutingContext(await readDeviceProviderViews(remoteBackgroundInvoke, agentDeviceId), agent ?? 'claude-code')");
     expect(registerSource).toContain('sshCodexWorkerRoutingContext(await readSshCodexModelList({ id: remoteHostId }, listSshCodexProviders))');
   });
 

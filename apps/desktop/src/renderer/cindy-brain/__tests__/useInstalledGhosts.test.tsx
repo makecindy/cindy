@@ -9,7 +9,7 @@
  * 2. 所有消费者读到同一引用(getSnapshot 引用稳定);
  * 3. ghosts:changed 推送后全体刷新,仍不重扫(payload 自带全量清单)。
  */
-import { act, cleanup, render, screen } from '@testing-library/react';
+import { act, cleanup, render, renderHook, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { InstalledGhost } from '../../../shared/ghost';
@@ -68,6 +68,18 @@ function Probe({ label }: { label: string }) {
 }
 
 describe('useInstalledGhosts(窗口级共享缓存)', () => {
+  it('remote composers can opt out of local synchronous IPC and subscriptions', () => {
+    const { result, rerender } = renderHook(({ enabled }) => useInstalledGhosts(enabled), {
+      initialProps: { enabled: false },
+    });
+    expect(result.current).toEqual([]);
+    expect(listSync).not.toHaveBeenCalled();
+    expect(onChanged).not.toHaveBeenCalled();
+    rerender({ enabled: true });
+    expect(result.current[0].manifest.id).toBe('cindy-art');
+    rerender({ enabled: false });
+    expect(result.current).toEqual([]);
+  });
   it('多个消费者只触发一次 listSync,清单一致', () => {
     render(
       <>

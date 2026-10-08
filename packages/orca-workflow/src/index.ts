@@ -1,5 +1,4 @@
 export {
-  __testing,
   createOrcaWorkerBridgeMcpProvider,
   formatAgentMessage,
   formatOrcaCommunicationMessage,
@@ -8,7 +7,9 @@ export {
   type OrcaLeadHistoryMessage,
   type OrcaLeadHistoryPage,
   type OrcaLeadVendorOptions,
+  type OrcaMessageDelivery,
   type OrcaPersistedSession,
+  type OrcaSteerFallbackReason,
   type OrcaTeamStore,
   type OrcaWorkerLink,
   type OrcaWorkerStatus,

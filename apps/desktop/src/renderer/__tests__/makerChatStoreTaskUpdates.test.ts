@@ -821,6 +821,32 @@ describe('getRunningSnapshot 后台 subagent 折算(真 store)', () => {
     }
   });
 
+  it('远程会话的后台任务残留在离开五分钟后仍按旧兜底清空,本机会话不受影响', () => {
+    vi.useFakeTimers();
+    const remote = `remote-heal-${Math.random().toString(36).slice(2, 8)}`;
+    const local = `local-heal-${Math.random().toString(36).slice(2, 8)}`;
+    try {
+      for (const sid of [remote, local]) {
+        makerChatStore.enterView(sid)();
+        applyTask(sid, { taskId: 't1', status: 'running', taskType: 'local_agent' });
+        makerChatStore.insertSystemCard(sid, 'status', { label: sid });
+      }
+      vi.advanceTimersByTime(4 * 60_000 + 30_000);
+      expect(makerChatStore.getSnapshot(remote).taskUpdates?.size).toBeGreaterThan(0);
+      vi.advanceTimersByTime(60_000);
+      // 终态事件丢失时的唯一自愈:清窗口连带 taskUpdates,重开时从历史重建。
+      expect(makerChatStore.getSnapshot(remote).taskUpdates?.size ?? 0).toBe(0);
+      expect(makerChatStore.getSnapshot(remote).messages).toHaveLength(0);
+      // 本机会话的后台任务算 busy,不被清。
+      expect(makerChatStore.getSnapshot(local).messages).toHaveLength(1);
+      expect(makerChatStore.getSnapshot(local).taskUpdates?.get('t1')?.status).toBe('running');
+    } finally {
+      makerChatStore.purgeSession(remote);
+      makerChatStore.purgeSession(local);
+      vi.useRealTimers();
+    }
+  });
+
   it('codex 会话的 agent_task_update 不参与折算(provider gate)', async () => {
     const sid = `codex-${Math.random().toString(36).slice(2, 8)}`;
     try {

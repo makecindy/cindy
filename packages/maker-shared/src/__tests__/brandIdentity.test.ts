@@ -182,7 +182,7 @@ describe('派生 helper', () => {
       ...BRAND_IDENTITY,
       primaryScheme: 'xdt-maker',
       legacySchemes: [],
-      userDataDirNameByRegion: { cn: 'xdt-maker', global: 'xdt-maker' },
+      userDataDirNameByRegion: { cn: 'xdt-maker', global: 'xdt-maker', dev: 'xdt-maker' },
       legacyUserDataDirNames: [],
       legacyUserDataDirNamesByRegion: { cn: [], global: [], dev: [] },
       legacyDialogueUserDataDirNamesByRegion: { cn: [], global: [], dev: [] },

@@ -6,7 +6,7 @@
     "footerConnecting": "连接中…",
     "folderEmpty": "文件夹为空。",
     "noWorkdir": "该任务没有工作目录，无法浏览文件。",
-    "rootDir": "(根目录)",
+    "rootDir": "（根目录）",
     "copyPath": "复制路径",
     "sendToSession": "发送到对话",
     "exportShare": "导出 / 分享",
@@ -58,11 +58,11 @@
     },
     "preview": {
       "nonText": {
-        "pdf": "PDF 文件暂不支持在手机版内嵌预览；请复制路径，在桌面端或系统 PDF 阅读器中打开。",
-        "drawio": "Draw.io 文件暂不支持在手机版内嵌预览；请复制路径，在桌面端继续查看或编辑。",
-        "office": "Office 文件暂不支持在手机版内嵌预览；请复制路径，在桌面端或系统应用中打开。",
-        "binary": "当前文件不是文本格式，手机版暂不读取内容；可复制路径到桌面端打开。",
-        "unknown": "当前文件类型无法确认，手机版暂不读取内容；可复制路径到桌面端打开。",
+        "pdf": "PDF 文件暂不支持在手机版内嵌预览；请复制路径，在电脑端或系统 PDF 阅读器中打开。",
+        "drawio": "Draw.io 文件暂不支持在手机版内嵌预览；请复制路径，在电脑端继续查看或编辑。",
+        "office": "Office 文件暂不支持在手机版内嵌预览；请复制路径，在电脑端或系统应用中打开。",
+        "binary": "当前文件不是文本格式，手机版暂不读取内容；可复制路径到电脑端打开。",
+        "unknown": "当前文件类型无法确认，手机版暂不读取内容；可复制路径到电脑端打开。",
         "text": "可以按需加载文本预览。"
       },
       "pathOnly": "当前文件只有路径信息，无法从远程电脑读取预览。",
@@ -96,11 +96,13 @@
     "downloadFailed": "下载失败",
     "fetchingVideo": "正在从电脑取回视频…",
     "fetchingAudio": "正在从电脑取回音频…",
+    "videoBuffering": "正在缓冲…",
+    "videoBufferingPercent": "正在缓冲 {{percent}}%",
     "fetchAvFailed": "取回失败：{{detail}}",
     "fetchPdfFailed": "取回 PDF 失败：{{detail}}",
     "fetchingPdf": "正在从电脑取回 PDF…",
     "unsupportedType": "此类型暂不支持在手机上预览",
-    "oversize": "文件超过预览上限({{size}})，可下载原文件查看",
+    "oversize": "文件超过预览上限（{{size}}），可下载原文件查看",
     "oversizeUnknown": "过大",
     "binaryFile": "二进制文件，无法以文本预览",
     "readFailed": "读取失败",
@@ -131,6 +133,7 @@
     "browserCancelAddress": "取消编辑",
     "browserReturnToFile": "返回文件",
     "browserCopyAddress": "复制网址",
+    "browserCopiedAddress": "已复制网址",
     "browserInvalidAddress": "请输入有效的 http 或 https 网址。",
     "browserWebsiteFailed": "无法打开网页，请尝试重新加载。"
   },
@@ -140,6 +143,6 @@
     "exportTimeout": "导出超时，请重试"
   },
   "gallery": {
-    "cacheMiss": "远程媒体缓存未命中(cachedOnly)"
+    "cacheMiss": "这个媒体还没有缓存到手机上，请在连上电脑后重新打开"
   }
 }

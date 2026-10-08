@@ -2,18 +2,34 @@ import { stripTrailingPathSeparators } from '@cindy/maker-shared/path-text';
 import { i18n } from '@/i18n';
 import type { RemoteFileRef, RemoteImageRef, RemoteSerializedAttachment } from '@/session/types';
 import { buildLegacyAttachmentOssRef } from '@/session/attachmentOssRef';
-import { parsePeerAttachmentRef } from '@cindy/device-link';
+import { OSS_ATTACHMENT_MAX_BYTES, parsePeerAttachmentRef } from '@cindy/device-link';
 
 export type MobileAttachmentCategory = RemoteSerializedAttachment['category'];
 
 export const MOBILE_MAX_ATTACHMENTS = 20;
-export const MOBILE_MAX_ATTACHMENT_BYTES = 30 * 1024 * 1024;
+
+/**
+ * 与桌面一致,附件不设产品层体积上限。直连只受电脑磁盘空间约束;只有 OSS 保底中转有
+ * 服务端单对象上限,超过它的附件没有保底、只能直连发送。
+ */
+export function isWithinMobileOssAttachmentLimit(size: number): boolean {
+  return size <= OSS_ATTACHMENT_MAX_BYTES;
+}
+
+/** 走 OSS 中转前的体积校验:超限时说明只能直连发送。 */
+export function assertMobileOssAttachmentSize(size: number): void {
+  if (!isWithinMobileOssAttachmentLimit(size)) {
+    throw new Error(i18n.t('composer.upload.fileTooLarge', {
+      limit: `${Math.round(OSS_ATTACHMENT_MAX_BYTES / 1024 ** 3)} GB`,
+    }));
+  }
+}
 
 const SUPPORTED_IMAGE_EXTS = new Set(['.jpeg', '.jpg', '.png', '.gif', '.webp']);
 const SUPPORTED_DOC_EXTS = new Set(['.pdf']);
 const SUPPORTED_OFFICE_EXTS = new Set(['.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx']);
 
-// Mirrors desktop shared/textFileExts.ts for the mobile remote-path attachment path.
+// Mirrors desktop shared/textFileExts.ts; only refines the category, never gates sending.
 const SUPPORTED_TEXT_EXTS = new Set([
   '.js', '.ts', '.tsx', '.jsx', '.mjs', '.cjs', '.py', '.go', '.rs', '.java',
   '.c', '.cpp', '.cc', '.cxx', '.h', '.hpp', '.hh', '.cs', '.rb', '.php',
@@ -83,13 +99,10 @@ export function mergeAttachmentsWithinLimit(
   return { merged, dropped };
 }
 
-/** 本机文件附件的体积校验(乐观上传后台任务里执行,超限 throw 由失败回调呈现)。 */
+/** 本机文件附件的空文件校验(乐观上传后台任务里执行,throw 由失败回调呈现)。 */
 export function assertMobileDocumentSize(size: number): void {
   if (!Number.isFinite(size) || size <= 0) {
     throw new Error(i18n.t('composer.upload.emptyFile'));
-  }
-  if (size > MOBILE_MAX_ATTACHMENT_BYTES) {
-    throw new Error(i18n.t('composer.upload.fileTooLarge', { size: Math.round(MOBILE_MAX_ATTACHMENT_BYTES / 1024 / 1024) }));
   }
 }
 
@@ -115,20 +128,22 @@ export function extractRemoteFileExt(name: string): string {
   return lower.slice(dotIdx);
 }
 
-export function categorizeMobileAttachment(name: string): MobileAttachmentCategory | null {
+/** 与桌面 fileTypes 同口径:认不出的类型归为通用 'file',不拒收。 */
+export function categorizeMobileAttachment(name: string): MobileAttachmentCategory {
   const ext = extractRemoteFileExt(name);
   if (SUPPORTED_IMAGE_EXTS.has(ext)) return 'image';
   if (SUPPORTED_DOC_EXTS.has(ext)) return 'pdf';
   if (SUPPORTED_OFFICE_EXTS.has(ext)) return 'office';
   if (SUPPORTED_TEXT_EXTS.has(ext)) return 'text';
   if (!ext && KNOWN_TEXT_FILENAMES.has(name.toLowerCase())) return 'text';
-  return null;
+  return 'file';
 }
 
 export function mimeTypeForMobileAttachment(
   ext: string,
   category: MobileAttachmentCategory,
 ): string {
+  if (category === 'file') return 'application/octet-stream';
   if (category === 'pdf') return 'application/pdf';
   if (category === 'text') return 'text/plain';
   if (category === 'office') {
@@ -158,7 +173,6 @@ export function buildMobileRemoteFileAttachment(
   const name = basenameRemotePath(path);
   if (!name) return null;
   const category = categorizeMobileAttachment(name);
-  if (!category) return null;
   const ext = extractRemoteFileExt(name);
   return {
     id: opts.id ?? `mobile-remote-file:${path}`,
@@ -181,11 +195,11 @@ export function buildMobileUploadedAttachment(input: {
   id?: string;
 }): RemoteSerializedAttachment | null {
   if (input.peerRef ? !parsePeerAttachmentRef(input.peerRef) : !input.ossKey?.trim()) return null;
-  if (!Number.isFinite(input.size) || input.size <= 0 || input.size > MOBILE_MAX_ATTACHMENT_BYTES) return null;
+  if (!Number.isSafeInteger(input.size) || input.size <= 0) return null;
+  if (!input.peerRef && !isWithinMobileOssAttachmentLimit(input.size)) return null;
   const name = basenameRemotePath(input.name).trim();
   if (!name) return null;
   const category = categorizeMobileAttachment(name);
-  if (!category) return null;
   const ext = extractRemoteFileExt(name);
   const mimeType = input.mimeType?.trim() || mimeTypeForMobileAttachment(ext, category);
   const ref = input.peerRef ?? buildLegacyAttachmentOssRef({

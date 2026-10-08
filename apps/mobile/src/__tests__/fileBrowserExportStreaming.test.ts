@@ -36,4 +36,36 @@ describe('file browser playback and download', () => {
       } finally { uninstall(); clearPeerMedia(); }
     }
   });
+
+  it('reports host upload progress while a video is staged for streaming', async () => {
+    const statuses = [
+      { ok: true, state: 'uploading', uploaded: 0 },
+      { ok: true, state: 'uploading', uploaded: 400 },
+      { ok: true, state: 'uploading', uploaded: 5000 },
+      { ok: true, state: 'done', key: 'stream/key', uploaded: 1000 },
+    ];
+    const invoke = vi.fn(async (_device, _channel, args) => {
+      if (args[0].op === 'caps') return { fileRead: true };
+      if (args[0].op === 'fileUrl') return { ok: true, url: 'xdt-file://open?path=/movie' };
+      if (args[0].op === 'exportFileStart') return { ok: true, transferId: 'export', size: 1000 };
+      if (args[0].op === 'exportFileStatus') return statuses.shift();
+      return { ossKey: '', size: 1000, mimeType: 'video/mp4', transferRequired: true };
+    });
+    const onProgress = vi.fn();
+    vi.useFakeTimers();
+    try {
+      const pending = exportRemoteFileToUrl({
+        deviceId: 'progress-device',
+        maker: createMobileMakerTransport({ deviceId: 'progress-device', invoke: invoke as RemoteInvoke }),
+        openLink: vi.fn(async () => {}),
+        presignGet: vi.fn(async () => ({ getUrl: 'https://example.test/movie', expiresAt: new Date(Date.now() + 3_600_000).toISOString() })),
+        stream: true,
+        onProgress,
+      }, '/p', 'movie.mp4', 1);
+      await vi.runAllTimersAsync();
+      expect(await pending).toBe('https://example.test/movie');
+    } finally { vi.useRealTimers(); }
+    // Old hosts without `uploaded` stay silent; values are clamped to the file size.
+    expect(onProgress.mock.calls).toEqual([[0, 1000], [400, 1000], [1000, 1000]]);
+  });
 });

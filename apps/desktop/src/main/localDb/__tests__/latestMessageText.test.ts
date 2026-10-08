@@ -4,7 +4,7 @@ import { drizzle } from 'drizzle-orm/better-sqlite3';
 
 import type { DbClient } from '../client/DbClient.js';
 import { clearCurrentDbClient, setCurrentDbClient } from '../client/current.js';
-import { regenerateTitleMaterial } from '../latestMessageText.js';
+import { latestNonEmptyMessageText, regenerateTitleMaterial } from '../latestMessageText.js';
 import * as schema from '../schema.js';
 
 interface Harness {
@@ -254,5 +254,36 @@ describe('regenerateTitleMaterial hook user text', () => {
     const material = await regenerateTitleMaterial('s1', 8, false, { preferHookUserText: true });
     expect(material.opening.text).toBe('原始用户正文');
     expect(material.recent.map((m) => m.text)).toEqual(['原始用户正文']);
+  });
+});
+
+describe('latestNonEmptyMessageText', () => {
+  it('skips empty-body records and respects rewind and clear boundaries', async () => {
+    const { sqlite } = createHarness();
+    sqlite.prepare('INSERT INTO sessions (id, cleared_at) VALUES (?, ?)').run('s1', 1500);
+    const insert = sqlite.prepare(`
+      INSERT INTO messages (
+        id, client_id, session_id, role, content, tool_use_id, agent_meta, created_at, rewind_at
+      ) VALUES (?, ?, 's1', 'assistant', ?, NULL, ?, ?, ?)
+    `);
+    insert.run('m1', 'c1', JSON.stringify('清空前的回复'), null, 1000, null);
+    insert.run('m2', 'c2', JSON.stringify('真正的上一条回复'), null, 2000, null);
+    insert.run('m3', 'c3', JSON.stringify('已回退的回复'), null, 3000, 3500);
+    insert.run('m4', 'c4', '', JSON.stringify({ goalCompletion: { turnsUsed: 3 } }), 4000, null);
+
+    await expect(latestNonEmptyMessageText('s1', 'assistant')).resolves.toBe('真正的上一条回复');
+  });
+
+  it('returns an empty string when nothing visible has text', async () => {
+    const { sqlite } = createHarness();
+    sqlite.prepare('INSERT INTO sessions (id, cleared_at) VALUES (?, NULL)').run('s1');
+    sqlite
+      .prepare(
+        `INSERT INTO messages (id, client_id, session_id, role, content, created_at)
+         VALUES ('m1', 'c1', 's1', 'assistant', '', 1000)`,
+      )
+      .run();
+
+    await expect(latestNonEmptyMessageText('s1', 'assistant')).resolves.toBe('');
   });
 });

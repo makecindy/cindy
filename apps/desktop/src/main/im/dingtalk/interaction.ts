@@ -2,18 +2,33 @@ import type { InteractionDecision, InteractionRequest } from '@cindy/maker-core'
 import type { DingTalkIM } from '@cindy/im';
 
 import { autoReviewUnavailablePromptLine } from '../shared/autoReviewUnavailablePrompt';
+import type { SharedPermission } from '../../maker-ipc/sharedPermission';
+import { permissionOutcomeText } from '../shared/permissionPresentation';
 
 export function handleDingTalkTextInteraction(
   im: DingTalkIM,
   userId: string,
   request: InteractionRequest,
+  options?: { timeoutMs?: number; sharedPermission?: SharedPermission },
 ): Promise<InteractionDecision> {
+  const shared = options?.sharedPermission;
+  if (shared?.decision) return shared.result;
   if (request.kind === 'ask_user_question') {
     return answerQuestions(im, userId, request);
   }
-  return im.requestTextReply(userId, formatInteractionPrompt(request), (text) =>
+  const result = im.requestTextReply(userId, formatInteractionPrompt(request), (text) =>
     parseInteractionReply(request, text),
-  );
+    options?.timeoutMs,
+    shared,
+  ).catch((error) => {
+    if (!shared) throw error;
+    shared.decide({ kind: 'permission', behavior: 'deny', reason: 'dingtalk_interaction_timeout_or_cancelled' });
+    return shared.result;
+  });
+  if (shared) void result.then((decision) => im.sendText(userId,
+    permissionOutcomeText(decision, request.kind === 'permission' ? request.toolName : undefined),
+  )).catch(() => {});
+  return result;
 }
 
 async function answerQuestions(
@@ -37,6 +52,7 @@ function formatInteractionPrompt(request: InteractionRequest): string {
     const unavailable = autoReviewUnavailablePromptLine(request);
     return [
       `需要确认操作：${request.toolName}`,
+      ...(request.description ? [request.description] : []),
       ...(unavailable ? [unavailable] : []),
       '回复“允许”继续，或回复“拒绝”取消。',
     ].join('\n');

@@ -33,10 +33,57 @@ export async function worktreeContentBaselineMatches(
     && (snapshot.headRef === undefined || await readWorktreeHeadRef(worktreePath) === snapshot.headRef);
 }
 
-/** Snapshot the actual HEAD, index and file tree without stashing or changing the live checkout. */
+/** Staged content of the live index, read from a copy so the live index is never locked or rewritten. */
+async function stagedTree(worktreePath: string): Promise<string | null> {
+  const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-worktree-index-'));
+  const index = path.join(temp, 'index');
+  try {
+    const { stdout: indexPath } = await gitExec(['rev-parse', '--path-format=absolute', '--git-path', 'index'], worktreePath);
+    await fs.copyFile(indexPath.trim(), index);
+    const { stdout } = await gitExec(['write-tree'], worktreePath, {
+      extraEnv: { GIT_INDEX_FILE: index, GIT_OPTIONAL_LOCKS: '0' },
+    });
+    return stdout.trim();
+  } catch (error) {
+    // An index that no longer yields a tree (e.g. new merge conflicts) has changed.
+    if (error instanceof GitExecError) return null;
+    throw error;
+  } finally {
+    await fs.rm(temp, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Same HEAD and staged content as the baseline. Unlike the byte hash above, this tolerates
+ * stat-cache refreshes (`git status` from another task rewrites the index without changing it),
+ * so a long snapshot of a repository in active use is not discarded for nothing.
+ */
+export async function worktreeStagedContentMatches(
+  worktreePath: string,
+  snapshot: NonNullable<WorktreeRecycleRecord['snapshot']>,
+): Promise<boolean> {
+  const { stdout } = await gitExec(['rev-parse', 'HEAD'], worktreePath);
+  return stdout.trim() === snapshot.head
+    && (snapshot.headRef === undefined || await readWorktreeHeadRef(worktreePath) === snapshot.headRef)
+    && await stagedTree(worktreePath) === snapshot.indexTree;
+}
+
+/** HEAD or the index moved while a snapshot was being captured. */
+export class WorktreeChangedDuringSnapshotError extends Error {
+  constructor() {
+    super('worktree HEAD or index changed during snapshot');
+  }
+}
+
+/**
+ * Snapshot the actual HEAD, index and file tree without stashing or changing the live checkout.
+ * `stagedContentOnly` checks consistency like {@link worktreeStagedContentMatches}, for callers
+ * that only need the captured content; the default byte comparison suits destructive recycling.
+ */
 export async function captureWorktreeContent(
   worktreePath: string,
   ref: string,
+  { stagedContentOnly = false }: { stagedContentOnly?: boolean } = {},
 ): Promise<NonNullable<WorktreeRecycleRecord['snapshot']>> {
   const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-worktree-index-'));
   const index = path.join(temp, 'index');
@@ -70,7 +117,10 @@ export async function captureWorktreeContent(
     const commit = commitOutput.trim();
     await gitExec(['update-ref', ref, commit], worktreePath);
     const snapshot = { head, headRef, tree, indexTree, commit, ref, indexHash: originalIndexHash };
-    if (!(await worktreeContentBaselineMatches(worktreePath, snapshot))) throw new Error('worktree HEAD or index changed during snapshot');
+    const unchanged = stagedContentOnly
+      ? await worktreeStagedContentMatches(worktreePath, snapshot)
+      : await worktreeContentBaselineMatches(worktreePath, snapshot);
+    if (!unchanged) throw new WorktreeChangedDuringSnapshotError();
     return snapshot;
   } finally {
     await fs.rm(temp, { recursive: true, force: true });

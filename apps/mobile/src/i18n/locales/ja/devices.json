@@ -12,6 +12,10 @@
     "deleteFailed": "デバイスを削除できませんでした。",
     "deleteOnline": "デバイスがオンラインです。オフラインにしてから削除してください。",
     "currentlyOnline": "現在オンライン",
+    "availableSection": "オンラインのデバイス",
+    "offlineSection": "オフラインのデバイス",
+    "showAllOffline": "すべて表示（{{count}} 台）",
+    "showFewerOffline": "表示を減らす",
     "nameTooLong": "デバイス名は {{limit}} 文字以内で入力してください。",
     "fields": {
       "name": "名前",
@@ -29,9 +33,7 @@
   "common": {
     "cancel": "キャンセル",
     "save": "保存",
-    "saving": "保存中",
     "delete": "削除",
-    "deleting": "削除中",
     "create": "新規"
   },
   "resources": {
@@ -47,7 +49,8 @@
     "openFailed": "セッションを開けませんでした",
     "resolving": "最新のセッションを開いています…",
     "retry": "もう一度試す",
-    "hostCount": "{{count}} 台のコンピュータ"
+    "hostCount": "{{count}} 台のコンピュータ",
+    "stale": "内容が古い可能性があります。更新できません。"
   },
   "presentation": {
     "deviceList": {
@@ -177,10 +180,10 @@
     },
     "home": {
       "allDevices": "すべて",
-      "allComputers": "すべてのコンピューター",
+      "allComputers": "すべてのデバイス",
       "waitingCount": "保留中 {{count}} 件",
       "synced": "同期済み",
-      "unknownComputer": "不明なコンピューター",
+      "unknownComputer": "不明なデバイス",
       "uncategorizedProject": "未分類のプロジェクト",
       "cindyMake": "Cindy Make",
       "empty": {
@@ -314,7 +317,7 @@
       "syncing": "再同期中",
       "sync": "再同期",
       "pinnedConversations": "ピン留めしたセッション {{count}} 件",
-      "newRemoteConversation": "新しいリモートセッション",
+      "newRemoteConversation": "新しいセッション",
       "renameDevice": "{{label}} の名前を変更",
       "project": "プロジェクト {{title}}",
       "dialogue": "チャット",
@@ -424,7 +427,13 @@
       "needAttention": "要対応 {{count}} 件",
       "waiting": "対応待ち {{count}} 件",
       "automationRunning": "自動化を実行中",
-      "totalRuns": "全 {{count}} 回の実行"
+      "totalRuns": "全 {{count}} 回の実行",
+      "runCount": "全 {{count}} 回",
+      "nextRunMinutes": "{{count}} 分後に実行",
+      "nextRunHours": "{{count}} 時間後に実行",
+      "nextRunDays": "{{count}} 日後に実行",
+      "imminent": "まもなく実行",
+      "stopped": "停止中"
     }
   },
   "detail": {
@@ -528,6 +537,7 @@
     "viewAllRuns": "すべての実行 {{count}} 回を表示"
   },
   "companions": {
+    "noCreateHosts": "対応するコンピュータを利用できません。パソコンで Cindy を開き、同じアカウントでログインするとチームメイトを新規作成できます。",
     "taskAttentionCount": "確認が必要なタスク：{{count}}",
     "unreadChatCount": "未読のチャット：{{count}}",
     "messageSent": "バックグラウンドタスクにメッセージを送信しました",
@@ -554,18 +564,18 @@
     "messages": "メッセージ",
     "readOnly": "閲覧のみ",
     "directEmpty": "表示できるメッセージはまだありません。",
-    "directLimitReached": "今回の会話は上限に達し、双方がそれぞれのメインタスクに戻りました",
-    "directUnavailable": "この仲間同士の会話は利用できません。",
+    "directLimitReached": "今回の会話は上限に達し、双方がそれぞれのメインセッションに戻りました",
+    "directUnavailable": "このチームメイト同士の会話は利用できません。",
     "unread": "新しい返信",
     "status": {
       "queued": "開始しています",
-      "running": "作業中",
+      "running": "実行中",
       "waiting": "対応待ち",
       "completed": "完了",
       "failed": "失敗",
       "cancelled": "停止済み",
       "timed-out": "タイムアウト",
-      "unknown": "タスクの状況を確認できません"
+      "unknown": "状態不明"
     },
     "title": "チームメイト",
     "tasks": "セッション",
@@ -624,7 +634,14 @@
     },
     "viewResult": "結果を見る",
     "noWrittenResult": "テキストの結果はありません。",
-    "errorDetails": "エラー詳細"
+    "errorDetails": "エラー詳細",
+    "createTeammate": "新しい仲間",
+    "createMenu": "新規作成",
+    "searchWithGroups": "仲間とグループを検索",
+    "awaiting": "確認待ち",
+    "emptyCopyCreate": "仲間は話した内容を覚えていて、パソコンで作業も手伝えます。",
+    "taskResult": "タスクの結果",
+    "collapseResult": "結果を閉じる"
   },
   "companionProfile": {
     "avatar": "アバター",
@@ -651,7 +668,7 @@
     "memorySaveFailed": "保存できませんでした。編集内容は保持されています。",
     "memoryMissing": "この記憶はもう存在しません。",
     "memoryDeleteFailed": "削除できませんでした",
-    "create": "新しいチームメイト",
+    "create": "チームメイトを新規作成",
     "createFailed": "作成結果を確認できていません。再試行して確認してください。",
     "title": "チームメイト",
     "profile": "プロフィールと性格",
@@ -673,6 +690,8 @@
     "artifactsEmpty": "成果物はまだありません。チームメイトに作成を頼んでみましょう。",
     "openSourceTask": "元のセッションを開く",
     "modelFollowsDefault": "現在のデフォルトモデル候補を使用",
+    "taskModel": "セッション用モデル",
+    "taskInheritsPrimary": "メインモデルを継承",
     "modelOverride": "このチームメイト固有のモデル候補を使用",
     "modelsUnavailable": "利用可能なモデルがありません。パソコンでこのチームメイトのモデル設定を確認し、更新してください。",
     "artifactsRecovery": "メッセージカードからファイルを開くか、{{deviceName}} でファイルを参照してください。",

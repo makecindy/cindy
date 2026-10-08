@@ -68,6 +68,9 @@ import {
   type RemoteDesktopRequest,
   type RemoteDesktopVideoSettings,
   type RemoteDesktopDisplayMode,
+  isRemoteDesktopChannelRequest,
+  parseRemoteDesktopChannelReply,
+  REMOTE_DESKTOP_CHANNEL_TIMEOUT_MS,
 } from "@cindy/device-link";
 import { useDeviceLink } from "@/device-link/DeviceLinkContext";
 import { BACKGROUND_TRANSITION_TIMEOUT_MS } from "@/device-link/backgroundConnection";
@@ -79,6 +82,7 @@ import {
   resolveDesktopIceServers,
 } from "@cindy/device-link";
 import { Text } from "@/components/AppText";
+import { mobileInteractionStyles } from "@/components/mobileInteractionStyles";
 import { useScreenEdgePadding } from "@/components/screenEdgeInsets";
 import { goBackGuarded } from "@/utils/backGuard";
 import { mobileDebugEnabled, mobileDebugLog } from "@/debug/mobileDebugLog";
@@ -120,6 +124,11 @@ import { RemoteDesktopWindows } from "./RemoteDesktopWindows";
 import { RemoteDesktopNetworkStatus } from "./RemoteDesktopNetworkStatus";
 import type { DesktopNetworkStats } from "./networkStats";
 import {
+  findRememberedMode,
+  readRememberedResolution,
+  rememberResolution,
+} from "./resolutionMemory";
+import {
   RemoteDesktopControls,
   RemoteDesktopDisconnect,
 } from "./RemoteDesktopControls";
@@ -129,6 +138,11 @@ import {
 } from "./RemoteDesktopChrome";
 
 type Mode = "pointer" | "touch" | "pan";
+/** How a data-channel request ended; "relay" means it was never executed. */
+type ChannelOutcome =
+  | { kind: "result"; value: unknown }
+  | { kind: "relay" }
+  | { kind: "error"; code: string };
 const MODIFIERS = ["ControlLeft", "ShiftLeft", "AltLeft", "MetaLeft"];
 const KEY_PAGES = [
   [
@@ -247,6 +261,28 @@ export function RemoteDesktopSession({
   );
   const securityRef = useRef(security);
   securityRef.current = security;
+  // Display changes stop host input, so they wait for the unlock attempt.
+  const unlockAttempt = useRef<Promise<void>>(Promise.resolve());
+  // A remembered fitted size waiting for this lease's viewport measurement.
+  const rememberedFit = useRef<{ lease: string; edge: number } | null>(null);
+  // The computer's own system mode for a lease, read before this phone changes
+  // it. Choosing it again forgets the remembered resolution.
+  const hostMode = useRef<{ lease: string; modeId?: string } | null>(null);
+  const noteHostMode = (lease: string, modes: RemoteDesktopDisplayMode[]) => {
+    if (hostMode.current?.lease !== lease)
+      hostMode.current = {
+        lease,
+        modeId: modes.find((mode) => mode.current)?.id,
+      };
+  };
+  // Assigned each render below; `connect` runs it before the first video offer.
+  const applyRememberedDisplay = useRef(
+    async (
+      _lease: RemoteDesktopLease,
+      _caps: RemoteDesktopCapabilities,
+      _isCurrent: () => boolean,
+    ) => false,
+  );
   const [lockOnExit, setLockOnExit, lockOnExitLoaded] =
     useLockOnExitPreference(deviceId);
   const exitLock = useRef(false);
@@ -301,7 +337,12 @@ export function RemoteDesktopSession({
   const [viewerReadyRevision, setViewerReadyRevision] = useState(0);
   const active = useRef<RemoteDesktopLease | null>(null);
   const wantsControl = useRef(true);
+  // View only is a local guard against stray touches. The host keeps control
+  // and its input helper, so switching never waits for the computer.
   const [viewOnlySelected, setViewOnlySelected] = useState(false);
+  const viewOnlyRef = useRef(false);
+  /** Input reaches the computer only with host control and outside view only. */
+  const inputAllowed = (controlling: boolean) => controlling && !viewOnlyRef.current;
   // Last control bit we asked the host for but have not confirmed. Overflow and
   // take-control can time out after the local bit already moved; heartbeats use
   // this to retry a release or restore local control instead of ignoring host-true.
@@ -345,6 +386,10 @@ export function RemoteDesktopSession({
     height: number;
   } | null>(null);
   const [viewerViewport, setViewerViewport] = useState({ width: 0, height: 0 });
+  const viewerViewportRef = useRef(viewerViewport);
+  viewerViewportRef.current = viewerViewport;
+  const windowSizeRef = useRef(windowSize);
+  windowSizeRef.current = windowSize;
   const viewportGeneration = useRef(0);
   const matchesViewer = (
     display: { width: number; height: number },
@@ -403,7 +448,8 @@ export function RemoteDesktopSession({
   );
   const [busy, setBusy] = useState(false);
   const [inputMode, setInputMode] = useInputModePreference();
-  const mode: Mode = lease?.controlling ? inputMode : "pan";
+  const canInput = Boolean(lease?.controlling) && !viewOnlySelected;
+  const mode: Mode = canInput ? inputMode : "pan";
   const [operations, setOperations] = useState(false);
   const [controlPage, setControlPage] = useState<
     "controls" | "display" | "security"
@@ -517,8 +563,7 @@ export function RemoteDesktopSession({
     (event: { nativeEvent: { data: string } }) => void
   >(() => {});
   useEffect(() => {
-    const enabled =
-      keyboard && !fullKeys && focused && Boolean(lease?.controlling);
+    const enabled = keyboard && !fullKeys && focused && canInput;
     if (!enabled) {
       send({ type: "keyboard", enabled: false });
       Keyboard.dismiss();
@@ -528,20 +573,86 @@ export function RemoteDesktopSession({
     // focus to a web animation frame loses WebKit's user-interaction context.
     webview.current?.requestFocus();
     send({ type: "keyboard", enabled: true });
-  }, [
-    keyboard,
-    fullKeys,
-    focused,
-    lease?.controlling,
-    keyboardFocusRequest,
-    send,
-  ]);
-  const request = useCallback(
-    <T,>(message: RemoteDesktopRequest, preSend?: () => void) =>
-      linkRef.current.invoke<T>(deviceId, REMOTE_DESKTOP_CHANNEL, [message], {
-        preSend,
+  }, [keyboard, fullKeys, focused, canInput, keyboardFocusRequest, send]);
+  // Small control requests ride the media data channel when the host supports
+  // it: a direct peer avoids the relay round trip and keeps their order with
+  // input. Anything the channel did not take uses the relay; once sent, the
+  // outcome belongs to the channel and is never replayed over the relay.
+  const channelRequests = useRef(
+    new Map<
+      string,
+      {
+        op: RemoteDesktopRequest["op"];
+        settle(outcome: ChannelOutcome): void;
+      }
+    >(),
+  );
+  const channelRequestId = useRef(0);
+  // Requests ride the media peer. Once it is gone their outcome is unknown, so
+  // settle them now instead of waiting out the timeout or replaying on the relay.
+  const abandonChannelRequests = useCallback(() => {
+    for (const pending of [...channelRequests.current.values()])
+      pending.settle({ kind: "error", code: "INVOKE_TIMEOUT" });
+  }, []);
+  const sendOverChannel = useCallback(
+    (message: RemoteDesktopRequest & { lease: string }, preSend?: () => void) =>
+      new Promise<ChannelOutcome>((resolve) => {
+        preSend?.();
+        const id = `${Date.now().toString(36)}-${++channelRequestId.current}`;
+        const timer = setTimeout(
+          () => settle({ kind: "error", code: "INVOKE_TIMEOUT" }),
+          REMOTE_DESKTOP_CHANNEL_TIMEOUT_MS,
+        );
+        const settle = (outcome: ChannelOutcome) => {
+          if (channelRequests.current.get(id)?.settle !== settle) return;
+          channelRequests.current.delete(id);
+          clearTimeout(timer);
+          resolve(outcome);
+        };
+        channelRequests.current.set(id, { op: message.op, settle });
+        const viaWebView = () => {
+          // The viewer answers with channelRequestState / channelReply.
+          send({ type: "channelRequest", id, request: message });
+        };
+        // iOS media runs in the native receiver; it owns the channel there.
+        const native = NativeRemoteDesktopView ? nativeViewer.current : null;
+        if (!native?.sendRequest) {
+          viaWebView();
+          return;
+        }
+        void native
+          .sendRequest({ epoch: message.lease, id, request: message })
+          .catch(() => false)
+          .then((sent) => {
+            if (!sent && channelRequests.current.has(id)) viaWebView();
+          });
       }),
-    [deviceId],
+    [send],
+  );
+  const request = useCallback(
+    async <T,>(message: RemoteDesktopRequest, preSend?: () => void) => {
+      const relay = () =>
+        linkRef.current.invoke<T>(deviceId, REMOTE_DESKTOP_CHANNEL, [message], {
+          preSend,
+        });
+      const lease = active.current;
+      const hostCaps = capsRef.current;
+      if (
+        !lease ||
+        !streaming.current ||
+        hostCaps?.deviceId !== deviceId ||
+        hostCaps.value.channelRequests !== true ||
+        !("lease" in message) ||
+        message.lease !== lease.lease ||
+        !isRemoteDesktopChannelRequest(message)
+      )
+        return relay();
+      const outcome = await sendOverChannel(message, preSend);
+      if (outcome.kind === "result") return outcome.value as T;
+      if (outcome.kind === "relay") return relay();
+      throw Object.assign(new Error(outcome.code), { code: outcome.code });
+    },
+    [deviceId, sendOverChannel],
   );
   const viewerSession = useMemo(
     () => ({ current: new RemoteDesktopViewerSession(request) }),
@@ -549,31 +660,39 @@ export function RemoteDesktopSession({
   );
   const authRef = useRef(auth);
   authRef.current = auth;
+  const loadIceServers = (attemptId: string) =>
+    resolveDesktopIceServers(
+      () =>
+        authRef.current.apiFetch(REMOTE_DESKTOP_ICE_CONFIG_PATH, {
+          baseUrl: DEVICE_LINK_API_BASE_URL,
+          timeoutMs: REMOTE_DESKTOP_ICE_CONFIG_TIMEOUT_MS,
+          cache: "no-store",
+        }),
+      (result) =>
+        mobileDebugLog("info", "device-link", "remote desktop ICE config", {
+          revision: RTC_DIAGNOSTIC_REVISION,
+          attempt: attemptId.slice(0, 8),
+          ...result,
+        }),
+    );
+  // An ICE lookup started alongside a display change or a connection, so the
+  // next media attempt does not wait for the server after it. One-shot.
+  const icePrefetch = useRef<{
+    at: number;
+    servers: ReturnType<typeof resolveDesktopIceServers>;
+  } | null>(null);
   const viewerMedia = useMemo(
     () =>
       new RemoteDesktopViewerMedia({
         request,
         send,
-        loadIce: (attemptId) =>
-          resolveDesktopIceServers(
-            () =>
-              authRef.current.apiFetch(REMOTE_DESKTOP_ICE_CONFIG_PATH, {
-                baseUrl: DEVICE_LINK_API_BASE_URL,
-                timeoutMs: REMOTE_DESKTOP_ICE_CONFIG_TIMEOUT_MS,
-                cache: "no-store",
-              }),
-            (result) =>
-              mobileDebugLog(
-                "info",
-                "device-link",
-                "remote desktop ICE config",
-                {
-                  revision: RTC_DIAGNOSTIC_REVISION,
-                  attempt: attemptId.slice(0, 8),
-                  ...result,
-                },
-              ),
-          ),
+        loadIce: (attemptId) => {
+          const prefetched = icePrefetch.current;
+          icePrefetch.current = null;
+          return prefetched && Date.now() - prefetched.at < 30_000
+            ? prefetched.servers
+            : loadIceServers(attemptId);
+        },
         current: () => {
           const lease = active.current,
             caps = capsRef.current?.value;
@@ -723,6 +842,8 @@ export function RemoteDesktopSession({
       finishBackgroundTransition.current?.();
       finishBackgroundTransition.current = null;
       const previous = active.current;
+      abandonChannelRequests();
+      icePrefetch.current = null;
       setExitLockPending(Boolean(previous && exiting && exitLock.current));
       active.current = null;
       pendingVideoSettings.current = null;
@@ -882,7 +1003,7 @@ export function RemoteDesktopSession({
     // The shared session may already have mutated this lease before returning.
     // Always publish the confirmation to React's separate snapshot as well.
     if (alive.current) setLease({ ...current });
-    send({ type: "control", enabled: controlling });
+    send({ type: "control", enabled: inputAllowed(controlling) });
   };
   const requestHostControl = (
     current: RemoteDesktopLease,
@@ -985,6 +1106,8 @@ export function RemoteDesktopSession({
             displayId: displayId ?? recovery.current.displayId,
             resume: resuming,
             takeover,
+            // Hosts with `autoControl` grant control with the lease.
+            control: wantsControl.current,
             onStart: () => {
               recovery.current.resuming = true;
             },
@@ -1008,21 +1131,28 @@ export function RemoteDesktopSession({
                 const firstFrame = new Promise<boolean>((resolve) => {
                   unlockFrame.current = resolve;
                 });
-                void securityRef.current.maybeUnlock(async () => {
-                  if (
-                    !(await firstFrame) ||
-                    current !== generation.current ||
-                    !focusedRef.current ||
-                    !recovery.current.enabled
-                  )
-                    throw new Error("CREDENTIAL_CANCELLED");
-                });
+                unlockAttempt.current = securityRef.current.maybeUnlock(
+                  async () => {
+                    if (
+                      !(await firstFrame) ||
+                      current !== generation.current ||
+                      !focusedRef.current ||
+                      !recovery.current.enabled
+                    )
+                      throw new Error("CREDENTIAL_CANCELLED");
+                  },
+                );
               }
             },
           });
         const display = next.display;
         recovery.current.displayId = display.id;
         mark("capture-started");
+        // Overlaps control and the remembered display; video needs it next.
+        icePrefetch.current = {
+          at: Date.now(),
+          servers: loadIceServers("connect"),
+        };
         active.current = next;
         receiveWindow.current = {
           since: Date.now(),
@@ -1050,12 +1180,24 @@ export function RemoteDesktopSession({
           }
           if (current !== generation.current) return;
         }
+        // Switch to the remembered display before the viewer asks for video,
+        // so the first frame already has the chosen size.
+        if (
+          await applyRememberedDisplay.current(
+            next,
+            result,
+            () => current === generation.current && active.current === next,
+          )
+        ) {
+          if (current !== generation.current) return;
+          setLease({ ...next });
+        }
         send({
           type: "init",
           trickleIce: result.trickleIce === true,
           epoch: next.lease,
-          width: display.width,
-          height: display.height,
+          width: next.display.width,
+          height: next.display.height,
           fillHeight: landscape,
           audio:
             result.systemAudio &&
@@ -1065,14 +1207,15 @@ export function RemoteDesktopSession({
         send({ type: "mode", mode });
         // Entering remote desktop is the user's intent to control. The existing
         // host permission and ownership gates still decide whether it is allowed.
-        if (result.canControl && wantsControl.current) {
+        if (next.controlling) send({ type: "control", enabled: inputAllowed(true) });
+        else if (result.canControl && wantsControl.current) {
           try {
             const control = await viewerSession.current!.control(true);
             if (current !== generation.current) return;
             // Control changes keep the same session identity for in-flight replies.
             next.controlling = control.controlling;
             setLease({ ...next });
-            send({ type: "control", enabled: control.controlling });
+            send({ type: "control", enabled: inputAllowed(control.controlling) });
           } catch (cause) {
             if (current === generation.current) resolveControlFailure(cause);
           }
@@ -1501,7 +1644,7 @@ export function RemoteDesktopSession({
         focused &&
         !operations &&
         !keyboard &&
-        Boolean(lease?.controlling),
+        canInput,
       labels: {
         left: t("remoteDesktop.leftClick"),
         right: t("remoteDesktop.rightClick"),
@@ -1524,7 +1667,7 @@ export function RemoteDesktopSession({
     operations,
     keyboard,
     lease?.lease,
-    lease?.controlling,
+    canInput,
     send,
     t,
   ]);
@@ -1624,12 +1767,62 @@ export function RemoteDesktopSession({
           );
         }
         break;
+      case "channelRequestState":
+        // The WebView channel could not take it: nothing ran, use the relay.
+        if (typeof message.id === "string" && message.sent !== true)
+          channelRequests.current.get(message.id)?.settle({ kind: "relay" });
+        break;
+      case "channelReply": {
+        const reply = parseRemoteDesktopChannelReply({
+          ...message,
+          type: "reply",
+        });
+        const pending = reply && channelRequests.current.get(reply.id);
+        if (!reply || !pending) break;
+        if (reply.ok) pending.settle({ kind: "result", value: reply.result });
+        else
+          pending.settle(
+            // Refused before running, or a read-only result that did not fit.
+            reply.error === "DESKTOP_CHANNEL_UNSUPPORTED" ||
+              reply.error === "DESKTOP_CHANNEL_BUSY" ||
+              (reply.error === "DESKTOP_REPLY_TOO_LARGE" &&
+                (pending.op === "displayModes" ||
+                  pending.op === "clipboardVersion"))
+              ? { kind: "relay" }
+              : { kind: "error", code: reply.error },
+          );
+        break;
+      }
       case "viewportSize":
         if (
           typeof message.width === "number" &&
           typeof message.height === "number"
-        )
-          void fitViewerDisplay(message.width, message.height);
+        ) {
+          const pending = rememberedFit.current;
+          rememberedFit.current = null;
+          const base = viewerDisplaySize(message.width, message.height);
+          // Reapply the remembered fitted size at this phone's current ratio.
+          const remembered =
+            pending?.lease === current.lease && pending.edge && base
+              ? fittedDisplayModes(base, base).find(
+                  (mode) => Math.max(mode.width, mode.height) === pending.edge,
+                )
+              : undefined;
+          if (remembered) {
+            // An exact size skips the viewport bookkeeping of a plain fit;
+            // record this measurement so restore still recognizes the fit.
+            const viewport = { width: message.width, height: message.height };
+            setViewerViewport(viewport);
+            void fitViewerDisplay(
+              remembered.width,
+              remembered.height,
+              true,
+              undefined,
+              viewport,
+              true,
+            );
+          } else void fitViewerDisplay(message.width, message.height);
+        }
         break;
       case "reconnecting":
         if (message.attemptId === mediaAttempt.current)
@@ -1902,6 +2095,7 @@ export function RemoteDesktopSession({
         setCanPip(false);
         setSettingBusy(false);
         streaming.current = false;
+        abandonChannelRequests();
         receiveWindow.current = {
           since: Date.now(),
           bytes: 0,
@@ -1944,9 +2138,18 @@ export function RemoteDesktopSession({
           epoch: current.lease,
           sequence: message.sequence,
         };
+        // Entering view only sends one release batch: it must reach the host
+        // (which keeps control) even while an older batch is still in flight.
+        const releaseOnly =
+          Array.isArray(message.events) &&
+          message.events.length > 0 &&
+          message.events.every(
+            (event) => isDesktopInput(event) && event.kind === "release",
+          );
         if (
           !current.controlling ||
-          inputBusy.current?.lease === current.lease ||
+          (viewOnlyRef.current && !releaseOnly) ||
+          (!releaseOnly && inputBusy.current?.lease === current.lease) ||
           !Number.isSafeInteger(message.sequence) ||
           !Array.isArray(message.events) ||
           message.events.length > 64 ||
@@ -1956,8 +2159,10 @@ export function RemoteDesktopSession({
           return;
         }
         const batch = { lease: current.lease };
-        inputBusy.current = batch;
-        const ownsBatch = () => active.current === current && inputBusy.current === batch;
+        if (!releaseOnly) inputBusy.current = batch;
+        const ownsBatch = () =>
+          active.current === current &&
+          (releaseOnly || inputBusy.current === batch);
         const events = message.events;
         void (async () => {
           if (
@@ -1965,7 +2170,13 @@ export function RemoteDesktopSession({
             (await nativeViewer.current?.sendInput(message).catch(() => false))
           )
             return;
-          if (!ownsBatch() || !current.controlling) return;
+          // View only may have started while the native attempt was pending.
+          if (
+            !ownsBatch() ||
+            !current.controlling ||
+            (viewOnlyRef.current && !releaseOnly)
+          )
+            return;
           await request({
             op: "input",
             lease: current.lease,
@@ -1979,7 +2190,7 @@ export function RemoteDesktopSession({
           })
           .finally(() => {
             if (!ownsBatch()) return;
-            inputBusy.current = null;
+            if (!releaseOnly) inputBusy.current = null;
             send(ack);
           });
         break;
@@ -1996,9 +2207,26 @@ export function RemoteDesktopSession({
       presentationTimer.current
     )
       return;
-    setBusy(true);
     setError(null);
-    controlInFlight.current = true;
+    const viewOnly = !viewOnlySelected;
+    viewOnlyRef.current = viewOnly;
+    setViewOnlySelected(viewOnly);
+    if (viewOnly) {
+      // Local only: stop forwarding and release held keys and buttons on the
+      // host, which keeps control and its input helper.
+      heldKeys.current.clear();
+      setModifiers([]);
+      setKeyboard(false);
+      send({ type: "control", enabled: false, release: true });
+      return;
+    }
+    if (current.controlling) {
+      send({ type: "control", enabled: true });
+      return;
+    }
+    // The host dropped control meanwhile (input failure, overflow or
+    // background viewing): leaving view only asks for it again.
+    setBusy(true);
     try {
       pipPrepared.current = false;
       presentationGeneration.current++;
@@ -2007,11 +2235,8 @@ export function RemoteDesktopSession({
         presentation.current = false;
         send({ type: "presentation", enabled: false });
       }
-      send({ type: "control", enabled: false });
-      const enabled = viewOnlySelected;
-      setViewOnlySelected(!enabled);
-      wantsControl.current = enabled;
-      if (pendingHostControl.current === false && enabled) {
+      wantsControl.current = true;
+      if (pendingHostControl.current === false) {
         // Overflow timed out with an unconfirmed host release. Taking control
         // first would skip stopInput while a key/button may still be held.
         const released = await request<{ controlling: boolean }>({
@@ -2023,21 +2248,13 @@ export function RemoteDesktopSession({
         applyConfirmedControl(current, released.controlling);
         if (released.controlling) return;
       }
-      pendingHostControl.current = enabled;
-      const result = await request<{ controlling: boolean }>({
-        op: "control",
-        lease: current.lease,
-        enabled,
-      });
-      if (active.current !== current) return;
-      applyConfirmedControl(current, result.controlling);
+      await requestHostControl(current, true);
     } catch (cause) {
       // Taking control can fail because this computer cannot inject input right
-      // now. Stay in view only and let the user retry; a session rebuild would
-      // cost the picture and the lease for a control-only fault.
+      // now. Stay usable for viewing and let the user retry; a session rebuild
+      // would cost the picture and the lease for a control-only fault.
       if (active.current === current) resolveControlFailure(cause);
     } finally {
-      controlInFlight.current = false;
       if (alive.current) setBusy(false);
     }
   };
@@ -2097,6 +2314,7 @@ export function RemoteDesktopSession({
       setVideoSettings(latest);
       pendingVideoSettings.current = null;
       streaming.current = false;
+      abandonChannelRequests();
       setCanPip(false);
       send({ type: "videoSettings", audio: settings.audio });
     } catch {
@@ -2339,6 +2557,7 @@ export function RemoteDesktopSession({
       op: "displayModes",
       lease: current.lease,
     });
+    noteHostMode(current.lease, modes);
     // CoreGraphics modes keep their own orientation when Electron's display
     // geometry is rotated. Compare modes in the enumeration's coordinate space.
     const reference = modes.find((mode) => mode.current) ?? { width, height };
@@ -2346,35 +2565,24 @@ export function RemoteDesktopSession({
       matchesViewer(mode, reference.width, reference.height),
     );
   };
-  const changeResolution = async (modeId: string) => {
+  // The settings list was just read from the host; reusing its entry saves a
+  // round trip. The host still rejects a mode that no longer exists.
+  const changeResolution = async (mode: RemoteDesktopDisplayMode) => {
     const current = active.current;
     if (!current?.controlling || settingInFlight.current) return;
     if (
-      caps?.resolutionRestore ||
-      (caps?.viewerDisplay && caps.viewerDisplayRestore)
+      (caps?.resolutionRestore ||
+        (caps?.viewerDisplay && caps.viewerDisplayRestore)) &&
+      (caps?.resolutionRestore ||
+        [mode.width, mode.height].every((size) => size >= 320 && size <= 2560))
     ) {
-      try {
-        const modes = await readResolutionModes();
-        if (active.current !== current) return;
-        const mode = modes.find((item) => item.id === modeId);
-        if (!mode) throw new Error("DESKTOP_DISPLAY_MODE_MISSING");
-        if (
-          caps?.resolutionRestore ||
-          [mode.width, mode.height].every((size) => size >= 320 && size <= 2560)
-        ) {
-          await fitViewerDisplay(
-            mode.width,
-            mode.height,
-            true,
-            !fittedDisplay && caps?.resolutionRestore ? mode.id : undefined,
-          );
-          return;
-        }
-      } catch {
-        if (active.current === current)
-          setSettingNotice(t("remoteDesktop.settingFailed"));
-        return;
-      }
+      await fitViewerDisplay(
+        mode.width,
+        mode.height,
+        true,
+        !fittedDisplay && caps?.resolutionRestore ? mode.id : undefined,
+      );
+      return;
     }
     setSettingNotice(t("remoteDesktop.settingUnsupported"));
   };
@@ -2383,6 +2591,8 @@ export function RemoteDesktopSession({
     height: number,
     exactResolution = false,
     modeId?: string,
+    viewport?: { width: number; height: number },
+    remembered = false,
   ) => {
     const current = active.current;
     if (
@@ -2412,8 +2622,11 @@ export function RemoteDesktopSession({
     setSettingNotice(null);
     const sourceDisplayId = recovery.current.displayId || current.display.id;
     send({ type: "control", enabled: false });
+    // A host that can follow display changes keeps the running stream; only a
+    // response without `videoKept` falls back to rebuilding it.
+    const keepVideo = caps?.liveDisplaySwitch === true;
     try {
-      viewerMedia.reset();
+      if (!keepVideo) viewerMedia.reset();
       const restore = Boolean(
         !exactResolution &&
         fittedDisplay &&
@@ -2421,38 +2634,93 @@ export function RemoteDesktopSession({
         matchesViewer(fittedDisplay, width, height),
       );
       const requestGeneration = viewportGeneration.current;
-      const next = await viewerSession.current.fitDisplay(
+      if (!keepVideo)
+        icePrefetch.current = {
+          at: Date.now(),
+          servers: loadIceServers("display"),
+        };
+      const { videoKept, ...next } = await viewerSession.current.fitDisplay(
         size.width,
         size.height,
         restore,
         modeId,
+        keepVideo,
+        caps?.autoControl === true,
       );
       if (active.current !== current) return;
       // Reconnect the physical source display after the temporary mirror ends.
       recovery.current.displayId = sourceDisplayId;
+      // The next connection reapplies this choice; restoring or choosing the
+      // computer's own mode again forgets it.
+      const fittedTo =
+        viewport ??
+        (exactResolution ? viewerViewportRef.current : { width, height });
+      const ownMode =
+        hostMode.current?.lease === current.lease &&
+        hostMode.current.modeId === modeId;
+      void rememberResolution(
+        deviceId,
+        sourceDisplayId,
+        restore || (modeId && ownMode)
+          ? null
+          : modeId
+            ? { kind: "mode", modeId, width, height }
+            : fittedTo.width > 0 && fittedTo.height > 0
+              ? {
+                  // The requested size, not the host's logical one: a HiDPI
+                  // host may answer with a smaller mode of the same ratio,
+                  // which must not shrink the request on every reconnect.
+                  kind: "fit",
+                  width: size.width,
+                  height: size.height,
+                  viewport: { ...fittedTo },
+                  window: {
+                    width: Math.round(windowSizeRef.current.width),
+                    height: Math.round(windowSizeRef.current.height),
+                  },
+                }
+              : null,
+      );
       if (!exactResolution && viewportGeneration.current === requestGeneration)
         setViewerViewport({ width, height });
+      // Fitted sizes are offered around the plain fit of the viewport.
+      const fittedBase = viewport
+        ? viewerDisplaySize(viewport.width, viewport.height)
+        : null;
       setFittedDisplay((previous) =>
         modeId || restore
           ? null
-          : exactResolution && previous
-            ? previous
+          : exactResolution && (previous ?? fittedBase)
+            ? (previous ?? fittedBase)
             : { width: next.display.width, height: next.display.height },
       );
       setLease({ ...next });
-      streaming.current = false;
-      setCanPip(false);
-      send({
-        type: "videoSettings",
+      const geometry = {
         width: next.display.width,
         height: next.display.height,
         restore: restore || Boolean(modeId),
-        audio: Boolean(caps?.systemAudio && videoSettingsRef.current.audio),
-      });
-      const control = await viewerSession.current.control(true);
+      };
+      if (videoKept) send({ type: "displayGeometry", ...geometry });
+      else {
+        if (keepVideo) viewerMedia.reset();
+        streaming.current = false;
+        abandonChannelRequests();
+        setCanPip(false);
+        send({
+          type: "videoSettings",
+          ...geometry,
+          audio: Boolean(caps?.systemAudio && videoSettingsRef.current.audio),
+        });
+      }
+      // A host with `autoControl` already restarted input on the new geometry.
+      const control = next.controlling
+        ? { controlling: true }
+        : await viewerSession.current.control(true);
       if (active.current === current)
         applyConfirmedControl(current, control.controlling);
     } catch (cause) {
+      // A reconnect must not retry a remembered choice that just failed.
+      if (remembered) rememberedDisplayGaveUp.current = true;
       if (active.current === current) {
         setSettingNotice(t("remoteDesktop.settingFailed"));
         if ((cause as { code?: string })?.code === "INVOKE_TIMEOUT")
@@ -2464,6 +2732,173 @@ export function RemoteDesktopSession({
       setSettingBusy(false);
     }
   };
+  // The host restores its own mode when a viewer leaves. Reapply this phone's
+  // last choice once per lease: before the first video offer when possible,
+  // otherwise after control and the first frame are ready.
+  const rememberedResolutionLease = useRef<string | null>(null);
+  // One early failure (for example a locked computer refusing the change)
+  // leaves later connections in this screen to the after-frame path.
+  const earlyDisplayFailed = useRef(false);
+  // A remembered change that failed once and rebuilt the connection is not
+  // retried in this screen, so a persistent failure cannot loop reconnects.
+  const rememberedDisplayGaveUp = useRef(false);
+  // The early change is optional: a failure keeps the connection going and the
+  // after-frame path retries. Once the display change was sent, the host ends
+  // the lease on any failure except a refusal before touching the display;
+  // a lost reply leaves the geometry unknown, as for a manual change.
+  const earlyDisplayFailureEndsConnection = (
+    cause: unknown,
+    displayChangeSent: boolean,
+  ) => {
+    const code = remoteDesktopErrorCode(cause);
+    if (code === "DESKTOP_LEASE_EXPIRED" || code === "DESKTOP_STOPPED")
+      return true;
+    return (
+      displayChangeSent &&
+      code !== "DESKTOP_VIEW_ONLY" &&
+      code !== "DESKTOP_DISPLAY_BUSY" &&
+      code !== "DESKTOP_INPUT_BUSY"
+    );
+  };
+  applyRememberedDisplay.current = async (current, hostCaps, isCurrent) => {
+    if (
+      earlyDisplayFailed.current ||
+      rememberedDisplayGaveUp.current ||
+      !hostCaps.canControl ||
+      !wantsControl.current
+    )
+      return false;
+    const remembered = await readRememberedResolution(
+      deviceId,
+      current.display.id,
+    );
+    if (!remembered || !isCurrent()) return false;
+    const fit = remembered.kind === "fit";
+    if (fit ? !hostCaps.viewerDisplay : !hostCaps.resolutionRestore)
+      return false;
+    // The viewer cannot measure its picture area before video, so reuse the
+    // fitted size only in the same app window. Rotation, folding, split view
+    // or a resize changes it; the after-frame path then measures this view.
+    if (
+      fit &&
+      (remembered.window?.width !== Math.round(windowSize.width) ||
+        remembered.window?.height !== Math.round(windowSize.height))
+    )
+      return false;
+    let displayChangeSent = false;
+    try {
+      let modeId: string | undefined;
+      if (!fit) {
+        const modes = await request<RemoteDesktopDisplayMode[]>({
+          op: "displayModes",
+          lease: current.lease,
+        });
+        if (!isCurrent()) return false;
+        noteHostMode(current.lease, modes);
+        const mode = findRememberedMode(modes, remembered);
+        if (!mode) return false;
+        rememberedResolutionLease.current = current.lease;
+        if (mode.current) return false;
+        modeId = mode.id;
+      }
+      const control = current.controlling
+        ? { controlling: true }
+        : await viewerSession.current.control(true);
+      if (!isCurrent() || !control.controlling) return false;
+      displayChangeSent = true;
+      await viewerSession.current.fitDisplay(
+        remembered.width,
+        remembered.height,
+        false,
+        modeId,
+        false,
+        hostCaps.autoControl === true,
+      );
+      if (!isCurrent()) return false;
+      rememberedResolutionLease.current = current.lease;
+      if (fit) {
+        // Same bookkeeping as fitting by hand, so restore is offered.
+        setFittedDisplay(
+          viewerDisplaySize(
+            remembered.viewport.width,
+            remembered.viewport.height,
+          ) ?? { width: current.display.width, height: current.display.height },
+        );
+        setViewerViewport(remembered.viewport);
+      }
+      return true;
+    } catch (cause) {
+      earlyDisplayFailed.current = true;
+      // Let the after-frame path reapply the choice for this lease.
+      if (rememberedResolutionLease.current === current.lease)
+        rememberedResolutionLease.current = null;
+      if (
+        isCurrent() &&
+        earlyDisplayFailureEndsConnection(cause, displayChangeSent)
+      ) {
+        rememberedDisplayGaveUp.current = true;
+        throw cause;
+      }
+      return false;
+    }
+  };
+  useEffect(() => {
+    const current = active.current;
+    if (
+      !current?.controlling ||
+      !controlReady ||
+      !frameReady ||
+      !(caps?.resolutionRestore || caps?.viewerDisplay) ||
+      fittedDisplay ||
+      rememberedDisplayGaveUp.current ||
+      rememberedResolutionLease.current === current.lease
+    )
+      return;
+    rememberedResolutionLease.current = current.lease;
+    const displayId = recovery.current.displayId || current.display.id;
+    const { id, width, height } = current.display;
+    // A display change the user made meanwhile wins over the remembered one.
+    const unchanged = () =>
+      active.current === current &&
+      current.display.id === id &&
+      current.display.width === width &&
+      current.display.height === height;
+    void (async () => {
+      const remembered = await readRememberedResolution(deviceId, displayId);
+      if (!remembered) return;
+      await unlockAttempt.current;
+      if (!unchanged()) return;
+      if (remembered.kind === "fit") {
+        // Same path as the button: measure this phone now, then fit.
+        if (!caps?.viewerDisplay) return;
+        rememberedFit.current = {
+          lease: current.lease,
+          edge: Math.max(remembered.width, remembered.height),
+        };
+        send({ type: "measureViewport" });
+        return;
+      }
+      if (!caps?.resolutionRestore) return;
+      const mode = findRememberedMode(await readResolutionModes(), remembered);
+      if (!mode || mode.current || !unchanged()) return;
+      await fitViewerDisplay(
+        mode.width,
+        mode.height,
+        true,
+        mode.id,
+        undefined,
+        true,
+      );
+    })().catch(() => {});
+  }, [
+    controlReady,
+    frameReady,
+    lease?.lease,
+    lease?.controlling,
+    caps?.resolutionRestore,
+    caps?.viewerDisplay,
+    fittedDisplay,
+  ]);
   const shortcut = (keys: string[]) =>
     send({
       type: "events",
@@ -2477,7 +2912,7 @@ export function RemoteDesktopSession({
   const workspaceAction = (
     action: "workspaceLeft" | "workspaceRight" | "omarchyMenu",
   ) => {
-    if (!lease?.controlling) return;
+    if (!lease || !canInput) return;
     const current = active.current;
     void request({ op: "windowAction", action, lease: lease.lease }).catch(
       () => {
@@ -2542,7 +2977,7 @@ export function RemoteDesktopSession({
         pressed && styles.keyPressed,
       ]}
       onPressIn={() => {
-        if (!active.current?.controlling) return;
+        if (!inputAllowed(Boolean(active.current?.controlling))) return;
         const alreadyHeld = new Set([...heldKeys.current.values()].flat());
         const keys = comboMode ? [...modifiers, code] : [code];
         heldKeys.current.set(code, keys);
@@ -2678,7 +3113,7 @@ export function RemoteDesktopSession({
             focused &&
             !operations &&
             !keyboard &&
-            lease?.controlling && (
+            canInput && (
               <RemoteDesktopMouseControls
                 send={send}
                 bottom={landscape ? 0 : toolbarSize.height}
@@ -2825,7 +3260,8 @@ export function RemoteDesktopSession({
           )}
           {windowsOpen &&
             focused &&
-            lease?.controlling &&
+            lease &&
+            canInput &&
             caps?.windowActions && (
               <RemoteDesktopWindows
                 key={lease.lease}
@@ -2964,8 +3400,8 @@ export function RemoteDesktopSession({
           <View testID="remoteDesktop.foldControls" style={{ position: 'absolute', left: foldControls.x,
             top: foldControls.y, width: foldControls.width, height: foldControls.height,
             paddingBottom: toolbarSize.height + (showMouseButtons ? 80 : 0) }}>
-            <FoldTouchpad send={send} enabled={Boolean(lease?.controlling)} />
-            {showMouseButtons && lease?.controlling ? <RemoteDesktopMouseControls send={send}
+            <FoldTouchpad send={send} enabled={canInput} />
+            {showMouseButtons && canInput ? <RemoteDesktopMouseControls send={send}
               bottom={toolbarSize.height} right={0} compact labels={{ left: t("remoteDesktop.leftClick"),
                 right: t("remoteDesktop.rightClick"), wheel: t("remoteDesktop.mouseWheel") }} /> : null}
           </View>
@@ -3055,7 +3491,7 @@ export function RemoteDesktopSession({
                   ? () => workspaceAction("omarchyMenu")
                   : undefined
               }
-              canControl={Boolean(lease?.controlling)}
+              canControl={canInput}
               keyboard={keyboard}
               operations={operations}
               onWindows={() => {
@@ -3073,7 +3509,7 @@ export function RemoteDesktopSession({
                 );
               }}
               onDesktop={() =>
-                caps?.windowActions && lease?.controlling
+                caps?.windowActions && lease && canInput
                   ? void request({
                       op: "windowAction",
                       action: "desktop",
@@ -3169,7 +3605,7 @@ export function RemoteDesktopSession({
         >
           <View style={styles.keyboardHeader}>
             <RemoteDesktopClipboardButton
-              enabled={!connectionPending && Boolean(lease?.controlling)}
+              enabled={!connectionPending && canInput}
               supported={caps?.clipboardText === true}
               transfer={transferClipboard}
             />
@@ -3202,7 +3638,7 @@ export function RemoteDesktopSession({
                     style={({ pressed }) => [
                       styles.modeTab,
                       fullKeys === computer && styles.modeTabSelected,
-                      pressed && styles.keyPressed,
+                      pressed && mobileInteractionStyles.pressed,
                     ]}
                   >
                     <Text
@@ -3269,7 +3705,7 @@ export function RemoteDesktopSession({
                     onPressIn={() => {
                       if (
                         comboMode ||
-                        !active.current?.controlling ||
+                        !inputAllowed(Boolean(active.current?.controlling)) ||
                         heldKeys.current.has(code)
                       )
                         return;
@@ -3288,7 +3724,8 @@ export function RemoteDesktopSession({
                       });
                     }}
                     onPress={() => {
-                      if (!comboMode || !active.current?.controlling) return;
+                      if (!comboMode || !inputAllowed(Boolean(active.current?.controlling)))
+                        return;
                       setModifiers((previous) =>
                         previous.includes(code)
                           ? previous.filter((v) => v !== code)
@@ -3520,7 +3957,7 @@ const makeStyles = (colors: ThemeColors) =>
       flex: 1,
       flexDirection: "row",
       backgroundColor: colors.surfaceChip,
-      borderRadius: radius.container,
+      borderRadius: radius.pill,
       padding: spacing.xs,
     },
     modeTab: {
@@ -3528,7 +3965,7 @@ const makeStyles = (colors: ThemeColors) =>
       minHeight: 36,
       alignItems: "center",
       justifyContent: "center",
-      borderRadius: radius.control,
+      borderRadius: radius.pill,
     },
     modeTabSelected: { backgroundColor: colors.surfaceElevated },
     modeText: {
@@ -3537,9 +3974,9 @@ const makeStyles = (colors: ThemeColors) =>
       fontWeight: fontWeight.regular,
       color: colors.textTertiary,
     },
+    // 选中只换色,字重保持与未选一致。
     modeTextSelected: {
       color: colors.textPrimary,
-      fontWeight: fontWeight.medium,
     },
     closeKey: {
       width: 44,

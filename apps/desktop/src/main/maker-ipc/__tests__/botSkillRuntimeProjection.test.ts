@@ -8,6 +8,16 @@ import { botSkillRootDir, parseBotSkillFile, saveBotSkill, seedBotSkillIfMissing
 import { buildBotSkillIndex } from '../botSystemPrompt';
 import { applyPiBotSkillPolicy } from '../../../../../../packages/maker-core/src/agents/pi/bot-skill-policy';
 import { buildCodexBotSkillConfigOverrides } from '../../../../../../packages/maker-core/src/agents/codex/capability-routing';
+import * as runtimeSource from '../botSkillRuntimeSource';
+
+const observation = vi.hoisted(() => ({ native: true }));
+vi.mock('node:fs', async importOriginal => {
+  const actual = await importOriginal<typeof import('node:fs')>();
+  return { ...actual, watch: (...args: Parameters<typeof actual.watch>) => {
+    if (observation.native) return actual.watch(...args);
+    return { close() {}, on() { return this; } };
+  } };
+});
 
 // Windows inherits the existing 60s I/O budget from vitest.config.ts.
 // Other platforms retain the large-fixture 30s allowance.
@@ -16,7 +26,7 @@ const largeFixtureTimeout = process.platform === 'win32' ? undefined : 30_000;
 let userDataDir: string;
 const botId = 'imported-bot';
 beforeEach(async () => { userDataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-skill-projection-')); });
-afterEach(async () => { vi.restoreAllMocks(); await fs.rm(userDataDir, { recursive: true, force: true }); });
+afterEach(async () => { observation.native = true; vi.restoreAllMocks(); await fs.rm(userDataDir, { recursive: true, force: true }); });
 const deps = () => ({ userDataDir, resolveBotId: async () => ({ ok: true as const, botId }) });
 
 async function writeSkill(slug: string, source: string, disabled = false) {
@@ -109,6 +119,10 @@ describe('complete personal Skills with bounded startup projection', () => {
     // phases. Each follows the platform budget; none asserts total latency.
     // Each test gets a fresh real shelf, so it can also run independently.
     beforeEach(async () => {
+      // This shelf is immutable. Delayed native notifications from fixture
+      // creation can invalidate its index during the cold scan on Windows.
+      // Native hand-edit notifications remain covered by the mutation test below.
+      observation.native = false;
       // Bounded filesystem concurrency; these are real files consumed by the store.
       for (let start = 0; start < count; start += 32) {
         await Promise.all(Array.from({ length: 32 }, (_, offset) => {
@@ -136,14 +150,19 @@ describe('complete personal Skills with bounded startup projection', () => {
       expect(opens.mock.calls.filter(([file]) => String(file).includes('catalog.jsonl'))).toHaveLength(0);
       expect((await fs.stat(path.join(mounts.pluginRoot, 'catalog.jsonl'))).mtimeMs).toBe(catalogTime);
       reads.mockRestore(); opens.mockRestore();
-    }, largeFixtureTimeout);
+    // This includes a cold scan/open of all 2,048 real files. Under the full
+    // Windows worker pool it can exceed the default 60s I/O allowance; this
+    // is a completeness/cache test, not a wall-clock performance assertion.
+    }, process.platform === 'win32' ? 120_000 : largeFixtureTimeout);
 
     it('keeps every Skill discoverable through the final query page', async () => {
+      const scans = vi.spyOn(runtimeSource, 'iterateBotSkillQuerySummaries');
       const firstPage = await listBotSkillsForSession({ callerSessionId: 'session', query: 'workflow' }, deps());
       expect(firstPage).toMatchObject({ ok: true, total: count, nextOffset: 20 });
       const lastPage = await listBotSkillsForSession({ callerSessionId: 'session', query: 'workflow', offset: count - 1 }, deps());
       expect(lastPage).toMatchObject({ ok: true, skills: [{ slug: 'skill-02047' }] });
       expect(lastPage).not.toHaveProperty('nextOffset');
+      expect(scans).toHaveBeenCalledTimes(1);
     }, largeFixtureTimeout);
   });
 

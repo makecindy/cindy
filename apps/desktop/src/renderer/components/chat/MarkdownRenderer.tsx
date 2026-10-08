@@ -19,7 +19,7 @@ import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkCjkFriendly from 'remark-cjk-friendly';
 import remarkMath from 'remark-math';
-import rehypeHighlight from 'rehype-highlight';
+import { rehypeHighlightShared } from './rehypeHighlightShared';
 import rehypeKatex from 'rehype-katex';
 import rehypeSlug from 'rehype-slug';
 import 'katex/dist/katex.min.css';
@@ -92,7 +92,7 @@ import {
   peekRemotePathVerdict,
   peekRemotePathVerdictForRender,
   remotePathVerdictKey,
-  revealRemoteChatFile,
+  downloadRemoteChatEntry,
   subscribeRemotePathVerdictChange,
   verifyRemotePathCached,
 } from '@/lib/remoteFileOpen';
@@ -113,6 +113,8 @@ import { ProjectLinkChip } from './ProjectLinkChip';
 import { ImageLightbox } from './ImageLightbox';
 import { ImageHoverPreview } from './ImageHoverPreview';
 import { ImageMissingPlaceholder } from './ImageMissingPlaceholder';
+import { ChatVideoView } from './ChatVideoView';
+import { isManagedMarkdownVideoUrl, markdownMediaFilename } from './markdownMedia';
 import { MarkdownDiffBlock } from './MarkdownDiffBlock';
 import { MarkdownMermaidBlock } from './MarkdownMermaidBlock';
 import { TextLightbox } from './TextLightbox';
@@ -246,7 +248,7 @@ const REHYPE_PLUGINS: PluggableList = [
   rehypeSlug,
   [rehypeKatex, { strict: 'ignore', errorColor: 'inherit' }],
   rehypeMathBlockMarker,
-  rehypeHighlight,
+  rehypeHighlightShared,
   rehypeFencedCodeMarker,
 ];
 
@@ -294,14 +296,16 @@ const INLINE_CODE_CLASS = 'font-mono text-14 rounded-[6px] px-[0.4em] py-[0.2em]
 const WINDOWS_ABSOLUTE_HREF_RE = /^[A-Za-z]:[\\/]/;
 
 // react-markdown's defaultUrlTransform whitelists only http(s)/ircs/mailto/xmpp
-// and strips everything else to "" (broken <img>). We render local-cache images
-// via the privileged xdt-image:// and xdt-file:// schemes registered in main.
+// and strips everything else to "" (broken <img>). We render local-cache media
+// via the privileged xdt-image:// / xdt-video:// and xdt-file:// schemes
+// registered in main.
 // cindy:// (+ 历史 xdt-maker://) is our internal deep-link protocol (session /
 // project navigation), handled in-renderer by the <a> onClick below — must pass
 // through unsanitized so href reaches the click handler intact.
 const trustedUrlTransform: UrlTransform = (url, key) => {
   if (
     url.startsWith('xdt-image://') ||
+    url.startsWith('xdt-video://') ||
     url.startsWith('cindy-media://') ||
     url.startsWith('xdt-file://') ||
     url.startsWith('xdt-audio://') ||
@@ -1407,9 +1411,9 @@ async function activateResolvedLocalTarget(
   // 会弹"文件已损坏"的误导弹窗,定位到文件让用户拖进 DCC 才是本意。
   if (target.localKind === 'model') {
     if (remoteOrigin) {
-      // 3D 远程本期不做(xdt-model:// 无远程管线):下载缓存副本并在文件管理
-      // 器定位,不误开本机同路径文件。
-      await revealRemoteChatFile(remoteOrigin, ctx.workingDir, target.absPath);
+      // 3D 远程本期不做(xdt-model:// 无远程管线):下载到本地并在文件管理器
+      // 定位,不误开本机同路径文件。
+      await downloadRemoteChatEntry(remoteOrigin, ctx.workingDir, target.absPath);
       return;
     }
     if (/\.fbx(\?.*)?$/i.test(target.absPath)) {
@@ -1763,6 +1767,18 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
           workingDir,
           allowPrivilegedLinks,
         );
+        if (isManagedMarkdownVideoUrl(normalized)) {
+          // 远程会话里视频 URL 同样指向远端机器，先按来源改写到 cindy-remote-media://
+          // 再交给 ChatVideoView(与下面的图片分支同一条改写路径)。
+          return (
+            <ChatVideoView
+              src={rewriteToRemoteMediaOrigin(normalized, remoteMediaOrigin)}
+              filename={markdownMediaFilename(normalized, alt)}
+              variant="tool-output"
+              sessionId={currentSessionId}
+            />
+          );
+        }
         const imageProps = { ...props };
         delete (imageProps as Record<string, unknown>)[RAW_LOCAL_IMAGE_SRC_PROP];
         return (

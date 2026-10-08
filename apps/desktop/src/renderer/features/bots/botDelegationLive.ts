@@ -172,6 +172,21 @@ export function useBotDelegation(
   return live;
 }
 
+/** 本会话发起的全部委派（伙伴工作台的进度卡用），与协作卡共用同一份订阅。 */
+export function useBotDelegations(sessionId: string | null): readonly BotDelegationView[] {
+  const [rows, setRows] = useState<readonly BotDelegationView[]>([]);
+  useEffect(() => {
+    if (!sessionId) {
+      setRows([]);
+      return;
+    }
+    const read = () => setRows(sessions.get(sessionId)?.rows ?? []);
+    read();
+    return subscribe(sessionId, read);
+  }, [sessionId]);
+  return rows;
+}
+
 /** 测试用：清掉进程内缓存，避免用例之间互相看到对方的订阅。 */
 export function __resetBotDelegationLiveForTest(): void {
   for (const entry of sessions.values()) entry.unsubscribe?.();

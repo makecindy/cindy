@@ -35,6 +35,11 @@ import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { isImAccountScopeClosedError } from '../accountBoundary';
 import { bindRuntimeRecoveryNotice } from './runtimeRecoveryNotice';
+import { isImSubagentEvent } from './agentEventScope';
+import { isExpiredPermissionDecision, type SharedPermission } from '../../maker-ipc/sharedPermission';
+import { presentSharedPermissionCard } from './permissionPresentation';
+import { describeInteractionSource } from './interactionSource';
+import { hasSessionPermissionUpdates } from '@cindy/maker-core';
 
 /**
  * 群里的授权卡改投宿主私聊时, 加在卡片正文顶部的说明。
@@ -88,19 +93,23 @@ import type {
 } from '@cindy/maker-core';
 import type {
   IMAttachment,
+  IMMessageEvent,
   InteractiveCardSpec,
   StreamingTextHandle,
 } from '@cindy/im';
+import type { AutoReviewUserReferences } from '@cindy/maker-shared/auto-review-intent';
 
 import { persistUserMessage } from '../messagePersistence';
+import { imAutoReviewReferences } from './autoReviewReferences';
 import { bindingStore } from '../binding';
 import { buildImUserMessage } from './inboundMessage';
+import { buildImChannelNote, type ImChannelNoteSource } from './channelNote';
 import {
   beginTurnChangeSetAtDispatch,
   wireSessionToIpcExternal,
   takePendingInteractionsForSession,
   noteSilentStopUserSend,
-  noteSilentStopSessionReset,
+  stopSessionTurnExplicitly,
   onSilentStopSettled,
 } from '../../maker-ipc/register';
 import { clearPendingTurnChangeSets } from '../../turn-change-set/store';
@@ -112,6 +121,7 @@ import { beginGroupHistoryAccess, type GroupHistoryAccessScope } from './groupHi
 import { agentHandoffPending } from '../../maker-ipc/agentHandoffPendingSingleton';
 import { prependHandoffToUserMessage, prependNoteToWireUserMessage } from '../../maker-ipc/agentHandoff';
 import { buildPlanReconcileNote, summarizeOpenPlan } from '../../maker-ipc/planReconcile';
+import { peekGoalInactiveNote } from '../../goal-host/inactiveNote';
 import { listMessagesForAgentHandoff } from '../../localDb/ipc/messages';
 import {
   enqueueDurableWrite,
@@ -197,6 +207,7 @@ interface TurnState {
   /** thread = session 模型的会话维度键(slack thread root ts);feishu undefined。 */
   scopeKey?: string;
   initialMessageText: string;
+  sourceDescription?: string;
   reusesExistingSession?: boolean;
   notificationReply?: boolean;
   revalidateNotificationReply?: () => Promise<void>;
@@ -291,6 +302,8 @@ interface TurnState {
  */
 interface QueuedSend {
   contextSnapshot?: ImContextSnapshot;
+  /** Auto 审阅的引用证据, 入队时按本条消息算好, 排队重派与直发同一份。 */
+  autoReviewReferences?: AutoReviewUserReferences;
   turn: TurnState;
   userMessage: UserMessage;
   rowId: string;
@@ -396,6 +409,12 @@ type DefaultRouteTargetResolution =
   | { target: null; missingAuth: ImAuthRouteStatus & { agentKind: AgentKind; model: string } };
 
 export interface ImRunAgentTurnArgs {
+  sourceDescription?: string;
+  /**
+   * 本条消息的渠道来源事实。turnRunner 按 adapter 的展示渠道（飞书 / Lark …）
+   * 拼成 `[渠道说明]` 一行, 只进模型正文；落库、rawChannelText、imSource 不变。
+   */
+  channelNoteSource?: ImChannelNoteSource;
   contextSnapshot?: ImContextSnapshot;
   /** Main-owned, resolved from an authenticated provider notification receipt. */
   notificationSessionId?: string;
@@ -406,6 +425,11 @@ export interface ImRunAgentTurnArgs {
   userMessageId: string;
   text: string;
   attachments: IMAttachment[];
+  /**
+   * 渠道 adapter 给出的被回复消息(IMMessageEvent.replyContext)。只用于 Auto 审阅的
+   * 引用证据(见 imAutoReviewReferences), 不改模型正文与落库。
+   */
+  replyContext?: IMMessageEvent['replyContext'];
   /** thread = session 模型的会话维度键(slack);feishu 不传。 */
   scopeKey?: string;
   /**
@@ -896,6 +920,9 @@ export function createTurnRunner(
       userId,
       scopeKey: target.scopeKey,
       initialMessageText: text,
+      sourceDescription: args.sourceDescription ?? describeInteractionSource({
+        channelName: channel, chatId: userId, text, protectedContent: args.protectedContent,
+      }),
       reusesExistingSession: target.attached || target.notificationReply,
       notificationReply: target.notificationReply,
       revalidateNotificationReply: args.revalidateNotificationReply,
@@ -1050,8 +1077,13 @@ export function createTurnRunner(
       );
     }
 
+    const autoReviewReferences = imAutoReviewReferences({
+      attachments,
+      replyContext: args.replyContext,
+    });
     const item: QueuedSend = {
       contextSnapshot: args.contextSnapshot,
+      ...(autoReviewReferences ? { autoReviewReferences } : {}),
       turn,
       // contextAttachments 只进模型消息(跟在用户自己附件后面), 不进
       // item.attachments —— persistUserMessage 落库的只有触发用户发的附件。
@@ -1059,6 +1091,9 @@ export function createTurnRunner(
         args.agentText ?? text,
         [...attachments, ...(args.contextAttachments ?? [])],
         target.attached || target.notificationReply === true,
+        args.channelNoteSource
+          ? buildImChannelNote(adapter.messageSourceIm?.() ?? channel, args.channelNoteSource)
+          : null,
       ),
       rowId: row.id,
       text,
@@ -1170,6 +1205,9 @@ export function createTurnRunner(
     // 过程区耗时基准取真实派发时刻 — TurnState 创建时可能还要在 sendQueue 里
     // 等上一轮跑完, 排队等待不该计入"第 N 步 · 耗时"显示
     item.turn.presenter.activity.startedAt = Date.now();
+    if (item.notified && adapter.queuedEmoji) {
+      replaceAckReaction(item.turn, adapter.processingEmoji);
+    }
     state.queue.push(item.turn);
     log.info(
       `enqueued turn for session=${rowId.slice(-8)} queueDepth=${state.queue.length} pendingSends=${state.sendQueue.length}`,
@@ -1263,12 +1301,23 @@ export function createTurnRunner(
           return null;
         }
       })();
-      const outgoingMessage = planReconcileNote
+      const withPlanReconcile = planReconcileNote
         ? prependNoteToWireUserMessage(
             withHandoff as Parameters<typeof prependNoteToWireUserMessage>[0],
             planReconcileNote,
           )
         : withHandoff;
+      // 目标状态说明:与 makerSendTransaction 同语义,目标已不在运行时提醒模型别再
+      // 吐裁决块、别承诺自动续跑。读库失败静默跳过。
+      const goalInactiveNote = await enqueueDurableWrite(`goal-inactive-read:${rowId}`, () =>
+        peekGoalInactiveNote(rowId),
+      ).catch(() => null);
+      const outgoingMessage = goalInactiveNote
+        ? prependNoteToWireUserMessage(
+            withPlanReconcile as Parameters<typeof prependNoteToWireUserMessage>[0],
+            goalInactiveNote,
+          )
+        : withPlanReconcile;
 
       // 群护栏取缔: 按会话当前权限档决定是否真正挂强确认策略, 见
       // resolveEffectiveTurnPolicy。不挂时走与 DM 轮次相同的无策略路径。
@@ -1299,12 +1348,15 @@ export function createTurnRunner(
 
       const sendResult = await state.makerSession.send(outgoingMessage as typeof item.userMessage, {
         planMode: false,
+        // IM owns successful replies, including turns in an attached desktop task.
+        origin: { kind: 'user', surface: 'im' },
         // The channel adapter and routing state live in Main. A symbol-keyed
         // context survives the in-process Session → Agent handoff but cannot be
         // fabricated by Renderer/device-link structured-clone input.
         [MAIN_OWNED_SEND_CONTEXT]: {
           origin: { kind: 'im', channel, taskId: item.turn.userMessageId ?? undefined },
           rawChannelText: item.text,
+          ...(item.autoReviewReferences ? { autoReviewReferences: item.autoReviewReferences } : {}),
         },
         ...(effectiveTurnPolicy ? { turnPermissionPolicy: effectiveTurnPolicy } : {}),
         beforeProviderStart: async () => {
@@ -1354,6 +1406,7 @@ export function createTurnRunner(
                     turnId: item.turn.turnId,
                     origin: effectiveTurnPolicy?.origin ?? { kind: 'im', channel },
                     interactionSurface: 'channel-card',
+                    sourceDescription: item.turn.sourceDescription,
                     ...(effectiveTurnPolicy?.confirmationTimeoutMs
                       ? { timeoutMs: effectiveTurnPolicy.confirmationTimeoutMs }
                       : {}),
@@ -1367,6 +1420,12 @@ export function createTurnRunner(
                     item.turn.scopeKey,
                     effectiveTurnPolicy?.confirmationTimeoutMs,
                   ),
+                  permissionGuard: (request) => {
+                    const guard = checkChannelDestructiveToolCall(request.toolName, request.input);
+                    return guard.destructive
+                      ? { kind: 'permission', behavior: 'deny', reason: `[destructiveGuard] ${guard.reason}` }
+                      : null;
+                  },
                   // 文本渠道自己认领掉的不动卡片(它本来就没有卡);其余走
                   // dropInteractionCard —— 作废 pending 的同时把那张卡收口。
                   onCancel: (requestId, decision) =>
@@ -1655,12 +1714,18 @@ export function createTurnRunner(
     }, DISPATCH_RETRY_MS);
   }
 
-  /** 入队提示 — 每条消息只发一次(竞态 requeue 不重复提示)。失败 swallow。 */
+  /** 入队反馈：表情跟随排队状态，文字提示每条消息只发一次。 */
   async function notifyQueuedPosition(
     userId: string,
     item: QueuedSend,
     position: number,
   ): Promise<void> {
+    if (adapter.silentQueue) return;
+    if (adapter.queuedEmoji) {
+      item.notified = true;
+      replaceAckReaction(item.turn, adapter.queuedEmoji);
+      return;
+    }
     if (item.notified) return;
     item.notified = true;
     try {
@@ -1917,6 +1982,7 @@ export function createTurnRunner(
    */
   async function publishMigratedInteraction(
     entry: {
+      sharedPermission?: SharedPermission;
       requestId: string;
       request: InteractionRequest;
       resolve: (decision: InteractionDecision) => void;
@@ -1926,6 +1992,11 @@ export function createTurnRunner(
     scopeKey?: string,
   ): Promise<void> {
     const { request: req, resolve } = entry;
+    if (entry.sharedPermission) {
+      const decision = await handleInteractionFor(localSessionId, userId, scopeKey)(req, entry.sharedPermission);
+      entry.sharedPermission.decide(decision);
+      return;
+    }
     log.info(
       `publishMigrated kind=${req.kind} requestId=...${req.requestId.slice(-8)} session=...${localSessionId.slice(-8)}`,
     );
@@ -2231,6 +2302,31 @@ export function createTurnRunner(
     }
   }
 
+  /** 复用 ack 句柄串接状态切换，迟到的表情仍由现有终态清理接管。 */
+  function replaceAckReaction(turn: TurnState, emoji: string): void {
+    const messageId = turn.userMessageId;
+    if (!messageId) return;
+    const previous = turn.ackReactionIdPromise;
+    const next = Promise.resolve(previous)
+      .catch(() => null)
+      .then(async (reactionId) => {
+        // 已被下一次状态切换或收口接管：把现有 token 交给接管者清理。
+        if (turn.ackReactionIdPromise !== next) return reactionId;
+        try {
+          if (reactionId) await im.removeMessageReaction?.(messageId, reactionId);
+        } catch {
+          return reactionId;
+        }
+        if (turn.ackReactionIdPromise !== next) return null;
+        try {
+          return (await im.reactToMessage?.(messageId, emoji)) ?? null;
+        } catch {
+          return null;
+        }
+      });
+    turn.ackReactionIdPromise = next;
+  }
+
   /**
    * 撤掉**调用方交进来的** ack 表情 —— 只用在 TurnState 还没建起来就 rejected
    * 的路径上(missing_auth)。那个表情是调用方在 dispatch 之前打的, 这里不撤就
@@ -2287,6 +2383,7 @@ export function createTurnRunner(
 
   function handleEventFor(localSessionId: string, userId: string) {
     return (event: AgentEvent) => {
+      if (isImSubagentEvent(event)) return;
       const state = sessionStates.get(localSessionId);
       if (!state) return;
       const turn = state.queue[0];
@@ -3390,7 +3487,7 @@ export function createTurnRunner(
     scopeKey?: string,
     confirmationTimeoutMs?: number,
   ) {
-    return async (rawReq: InteractionRequest): Promise<InteractionDecision> => {
+    return async (rawReq: InteractionRequest, sharedPermission?: SharedPermission): Promise<InteractionDecision> => {
       // Redact BEFORE anything channel-facing sees the request. This listener
       // replaces the Desktop handler, which does its own redaction, so without
       // this the card builders (interactionCardModel copies `input` verbatim)
@@ -3425,6 +3522,7 @@ export function createTurnRunner(
             }
           }
           return adapter.handleTextInteraction(userId, req, {
+            sharedPermission,
             ...(confirmationTimeoutMs ? { timeoutMs: confirmationTimeoutMs } : {}),
           });
         }
@@ -3491,6 +3589,38 @@ export function createTurnRunner(
           return { kind, answers: {} };
         }
         return { kind, behavior: 'deny', reason: denyReason ?? 'no_card' };
+      }
+
+      if (req.kind === 'permission' && sharedPermission) {
+        const permissionSpec = spec;
+        const permissionUi = adapter.ui.cards.permission;
+        return presentSharedPermissionCard({
+          requestId: req.requestId,
+          toolName: req.toolName,
+          owner: pendingOwner,
+          permission: sharedPermission,
+          send: async () => {
+            await finalizeActiveStream(localSessionId);
+            const sent = await output.im.sendInteractiveCard(userId, permissionSpec, {
+              threadTs: scopeKey,
+              deliverToOwnerDm: true,
+            });
+            if (!sharedPermission.decision && userId.startsWith('g/') && permissionUi.dmRoutedNotice) {
+              const notice = permissionUi.dmRoutedNotice;
+              void im.sendText(userId, typeof notice === 'function' ? notice(req.toolName) : notice, { threadTs: scopeKey })
+                .catch(() => log.warn('shared permission source notice failed'));
+            }
+            return sent;
+          },
+          resolved: (decision) => cards.buildResolvedPermissionCard(
+            { title: permissionSpec.title ?? '', body: permissionSpec.body },
+            decision.kind === 'permission' && decision.behavior === 'allow'
+              ? hasSessionPermissionUpdates(decision) ? permissionUi.resolvedAllowAlways : permissionUi.resolvedAllowOnce
+              : isExpiredPermissionDecision(decision) ? '⌛ 本次确认已失效' : permissionUi.resolvedDeny,
+          ),
+          update: (messageId, card) => output.im.updateInteractiveCard(messageId, card),
+          onError: () => log.warn('shared permission card delivery/update failed'),
+        });
       }
 
       // Finalize any in-flight streaming card BEFORE sending the interaction
@@ -3795,9 +3925,9 @@ export function createTurnRunner(
       }
       const active = state.queue[0];
       if (!active || !matches(active)) return { stopped: removed.length > 0, droppedQueued: removed.length };
-      noteSilentStopSessionReset(state.makerSession.id);
       active.terminalKind = 'aborted';
-      await current?.abort();
+      // 与桌面 Stop 同一套清理(撤续跑 / 取消恢复 / 暂停 Goal / 停输入队列并中止当前一轮)。
+      await stopSessionTurnExplicitly(state.makerSession.id);
       return { stopped: true, droppedQueued: removed.length };
     }
     const running =
@@ -3807,13 +3937,12 @@ export function createTurnRunner(
     // 先清排队再 abort — abort 触发的 done/error 会走 maybeDispatchNextQueued,
     // 队列不清空的话下一条排队消息会在中止后立刻自动派发。
     clearPendingSends(state);
-    // 重置 silent-stop 守卫(与 desktop ABORT_SESSION handler 同源): turn 若正
-    // 挂在 silentStop 的 1.5s 决策窗里, abort 对早已收尾的 SDK turn 是 no-op、
-    // 不产生任何事件,不重置的话守卫照样自动续跑,用户喊停后 agent 原地复活。
-    // 重置后守卫判 superseded → settle('skip') → 挂起 turn 经现有订阅按 done 收口。
-    noteSilentStopSessionReset(state.makerSession.id);
     if (state.queue[0]) state.queue[0].terminalKind = 'aborted';
-    await current?.abort();
+    // 与桌面 Stop 同一套清理(docs/dev-rules/im-turn-flow.md 不变量 9): 撤 silent-stop /
+    // 中断续跑守卫(turn 若正挂在 silentStop 的决策窗里, abort 对早已收尾的 SDK turn 是
+    // no-op, 不重置的话守卫照样自动续跑, 用户喊停后 agent 原地复活)、取消上下文溢出恢复、
+    // 暂停 Goal、停输入队列并中止当前一轮(唯一的一次 abort)。
+    await stopSessionTurnExplicitly(state.makerSession.id);
     log.info(
       `!stop aborted turn for session=...${state.makerSession.id.slice(-8)} droppedQueued=${droppedQueued}`,
     );

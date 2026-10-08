@@ -38,6 +38,8 @@ export interface ReadBoundedFileOptions {
   rejectHardLinks?: boolean;
   /** 复读同一句柄并比较字节；内容或版本变化时抛出可重试错误。 */
   verifyContentStability?: boolean;
+  /** Optionally lower the size limit using up to 4 KiB from the same verified handle. */
+  maxBytesForPrefix?: (prefix: Buffer) => number;
 }
 
 type ReadBoundedFileNoFollowSyncOptions = Pick<
@@ -239,6 +241,12 @@ export async function readBoundedFileNoFollowWithStat(
     }
     if (options?.containWithin !== undefined) {
       if (!(await verifyStillWithinRoot(stat, filePath, options.containWithin))) return null;
+    }
+    if (options?.maxBytesForPrefix) {
+      const prefix = await readToLength(handle, Math.min(Number(stat.size), 4096));
+      const limit = options.maxBytesForPrefix(prefix);
+      if (!Number.isFinite(limit) || limit < 0 || Number(stat.size) > Math.min(maxBytes, limit))
+        return null;
     }
     const bytes = await readToLength(handle, Number(stat.size));
     const after = await handle.stat({ bigint: true });

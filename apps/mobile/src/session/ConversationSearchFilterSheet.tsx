@@ -9,6 +9,7 @@ import { useTranslation } from 'react-i18next';
 import { Text } from '@/components/AppText';
 import { HomeGlassMenuPanel, HomeMenuScrim } from '@/session/HomeGlassMenuPanel';
 import { useModalFadeLifecycle } from '@/session/useModalFadeLifecycle';
+import { useHomeMenuFadeTiming } from '@/session/homeMenuFadeTiming';
 import {
   nextConversationSearchProjectSelection,
   type ConversationSearchProjectOption,
@@ -70,9 +71,9 @@ export function ConversationSearchFilterSheet({
   const { height: screenHeight } = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const scrollMaxHeight = Math.max(200, screenHeight - topOffset - insets.bottom - 24);
+  const menuFadeTiming = useHomeMenuFadeTiming();
   const { mounted, progress, onShowStartIn } = useModalFadeLifecycle(visible, {
-    inMs: 140,
-    outMs: 110,
+    ...menuFadeTiming,
   });
   const selectedProjects = projectSelection === 'all' ? null : new Set(projectSelection);
   const showProjectDevice = new Set(projects.map((project) => project.deviceId)).size > 1;

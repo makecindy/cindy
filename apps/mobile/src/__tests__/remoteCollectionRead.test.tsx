@@ -19,6 +19,9 @@ vi.mock('react-native', async () => {
     FlatList: ({ data, renderItem, ListEmptyComponent }: any) => el('div', { 'data-list': true }, data.length ? data.map((item: any) => el(Fragment, { key: item.key }, renderItem({ item }))) : ListEmptyComponent),
     StyleSheet: { create: (styles: unknown) => styles },
     AppState: { currentState: 'active', addEventListener: () => ({ remove() {} }) },
+    Animated: { Value: class { setValue() {} stopAnimation() {} interpolate() { return 0; } }, View: view,
+      timing: () => ({ start() {}, stop() {} }), loop: () => ({ start() {}, stop() {} }), sequence: () => ({ start() {}, stop() {} }) },
+    Easing: { bezier: () => () => 0, inOut: () => () => 0, ease: () => 0 },
   };
 });
 vi.mock('expo-router', async () => {
@@ -29,12 +32,16 @@ vi.mock('@/session/useHomeMode', () => ({ useHomeMode: () => ({ selectTeammate: 
 vi.mock('react-i18next', () => ({ useTranslation: () => h.translation }));
 vi.mock('@/i18n', () => ({ i18n: { t: (key: string) => key } }));
 vi.mock('react-native-safe-area-context', () => ({ SafeAreaView: 'div' }));
-vi.mock('lucide-react-native', () => ({ ChevronRight: () => null, RefreshCw: () => null, TriangleAlert: () => null }));
+vi.mock('lucide-react-native', () => ({ ChevronRight: () => null, RefreshCw: () => null, Search: () => null, TriangleAlert: () => null, X: () => null }));
+vi.mock('@/hooks/useReduceMotion', () => ({ useReduceMotionEnabled: () => true }));
 vi.mock('@/session/WorkingStatusText', () => ({ WorkingStatusText: ({ text }: any) => text }));
-vi.mock('@/components/AppText', () => ({ Text: 'span', TextInput: 'input' }));
+vi.mock('@/components/AppText', async () => {
+  const { createElement: el } = await import('react');
+  return { Text: ({ children }: any) => el('span', null, children), TextInput: ({ testID }: any) => el('input', { 'data-testid': testID }) };
+});
 vi.mock('@/components/RemoteCompanionAvatar', () => ({ RemoteCompanionAvatar: () => null }));
-vi.mock('@/components/MobilePrimitives', () => ({ MainWindowEmptyState: () => null, StatusDot: () => null }));
-vi.mock('@/platform/chrome', () => ({ SimpleStackHeader: () => null, simpleScreenSafeAreaEdges: () => [] }));
+vi.mock('@/components/MobilePrimitives', () => ({ MainWindowEmptyState: () => null, StatusDot: () => null, RemoteListSyncingPlaceholder: () => null }));
+vi.mock('@/platform/chrome', () => ({ SimpleStackHeader: () => null, simpleScreenSafeAreaEdges: () => [], simpleScrollInsetProps: {}, simpleScrollScreenSafeAreaEdges: () => [] }));
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => ({ user: { id: 'owner' }, accountGeneration: 1 }) }));
 vi.mock('@/device-link/remoteStatus', () => ({ formatRemoteError: String }));
 vi.mock('@/device-link/DeviceLinkContext', () => ({ useDeviceLink: () => h.link }));

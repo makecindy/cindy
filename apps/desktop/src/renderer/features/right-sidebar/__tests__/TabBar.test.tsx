@@ -39,7 +39,6 @@ function renderStrip(overrides?: {
   onClose?: () => void;
   onActivate?: () => void;
   onReorder?: (orderedIds: string[]) => void;
-  iosSimulatorAvailable?: boolean;
   subagentsAvailable?: boolean;
 }) {
   const onClose = vi.fn(overrides?.onClose);
@@ -53,22 +52,24 @@ function renderStrip(overrides?: {
       onClose={onClose}
       onReorder={onReorder}
       onAdd={vi.fn()}
-      iosSimulatorAvailable={overrides?.iosSimulatorAvailable}
       subagentsAvailable={overrides?.subagentsAvailable}
     />,
   );
   return { onClose, onActivate, onReorder };
 }
 
-describe('TabStrip iOS Simulator plugin gate', () => {
+describe('TabStrip retired feature boundary', () => {
   it('does not expose the Host viewer before the product plugin is enabled', () => {
     renderStrip();
-    fireEvent.click(screen.getByRole('button', { name: 'rightSidebar.tabs.addAria' }));
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'rightSidebar.tabs.addAria' }), {
+      button: 0,
+      ctrlKey: false,
+    });
     expect(screen.queryByText('rightSidebar.tabs.kinds.iosSimulator')).toBeNull();
   });
 
-  it('exposes the Host viewer menu item for the enabled product plugin', () => {
-    renderStrip({ iosSimulatorAvailable: true });
+  it('does not offer the removed viewer in the add menu', () => {
+    renderStrip();
     const addButton = screen.getByRole('button', { name: 'rightSidebar.tabs.addAria' });
     vi.spyOn(addButton.parentElement as HTMLElement, 'getBoundingClientRect').mockReturnValue({
       x: 20,
@@ -81,15 +82,18 @@ describe('TabStrip iOS Simulator plugin gate', () => {
       height: 24,
       toJSON: () => ({}),
     });
-    fireEvent.click(addButton);
-    expect(screen.getByText('rightSidebar.tabs.kinds.iosSimulator')).toBeTruthy();
+    fireEvent.pointerDown(addButton, { button: 0, ctrlKey: false });
+    expect(screen.queryByText('rightSidebar.tabs.kinds.iosSimulator')).toBeNull();
   });
 });
 
 describe('TabStrip Pi Subagents gate', () => {
   it('does not expose Subagents for Claude Code or Codex tasks', () => {
     renderStrip();
-    fireEvent.click(screen.getByRole('button', { name: 'rightSidebar.tabs.addAria' }));
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'rightSidebar.tabs.addAria' }), {
+      button: 0,
+      ctrlKey: false,
+    });
     expect(screen.queryByText('rightSidebar.tabs.kinds.subagents')).toBeNull();
   });
 
@@ -107,7 +111,7 @@ describe('TabStrip Pi Subagents gate', () => {
       height: 24,
       toJSON: () => ({}),
     });
-    fireEvent.click(addButton);
+    fireEvent.pointerDown(addButton, { button: 0, ctrlKey: false });
     expect(screen.getByText('rightSidebar.tabs.kinds.subagents')).toBeTruthy();
   });
 });

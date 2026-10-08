@@ -92,6 +92,7 @@ describe('pickSlot · 授权 = 用户亲选', () => {
       dir_deposit: { token: 't' },
     });
     expect(deps.showDirectoryDialog).toHaveBeenCalledWith({
+      ghostId: 'pick-ghost',
       ghostName: 'Pick Ghost',
       purpose: '选择项目父目录',
     });

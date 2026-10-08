@@ -1,3 +1,5 @@
+import { requestSessionArchiveSync } from './sessionArchiveSync.js';
+
 type SessionRuntimeCleanup = (sessionId: string) => void;
 
 let sessionRuntimeCleanup: SessionRuntimeCleanup | null = null;
@@ -16,4 +18,5 @@ export function setSessionRuntimeCleanup(cleanup: SessionRuntimeCleanup | null):
 export function cleanupSessionRuntimeForTerminalStatus(sessionId: string, status: unknown): void {
   if (status !== 'deleted' && status !== 'archived') return;
   sessionRuntimeCleanup?.(sessionId);
+  requestSessionArchiveSync();
 }

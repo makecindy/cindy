@@ -165,6 +165,7 @@ export function isBotGroupDivisionBlocked(state: BotGroupComposerPlanState | nul
 
 /** Copy variant for a timeline notice; plan-scoped member notices speak about a step. */
 export type BotGroupNoticeVariant =
+  | 'memberJoined'
   | 'memberFailed'
   | 'memberTimeout'
   | 'memberUnavailable'
@@ -176,6 +177,7 @@ export type BotGroupNoticeVariant =
   | 'stepUnavailable';
 
 const NOTICE_VARIANTS: ReadonlyMap<string, BotGroupNoticeVariant> = new Map<BotGroupNoticeCode, BotGroupNoticeVariant>([
+  ['member-joined', 'memberJoined'],
   ['member-failed', 'memberFailed'],
   ['member-timeout', 'memberTimeout'],
   ['member-unavailable', 'memberUnavailable'],

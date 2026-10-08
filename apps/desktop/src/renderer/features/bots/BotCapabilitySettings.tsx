@@ -1,4 +1,5 @@
 import { Button } from '@/components/ui/button';
+import { Switch } from '@/components/ui/switch';
 import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
 import { ChevronDown, Search } from 'lucide-react';
@@ -20,8 +21,8 @@ import {
 } from '@/contexts/dataOwnerGeneration';
 
 type Kind = 'skill' | 'mcp' | 'toolset';
-type Entry = { id: string; name: string; available: boolean };
-const kinds: Kind[] = ['skill', 'mcp', 'toolset'];
+type Entry = { id: string; name: string; description?: string; available: boolean; personal?: boolean };
+const kinds: Kind[] = ['toolset', 'mcp', 'skill'];
 
 /** References are edited per companion; shared installations and connections stay host-owned. */
 export function BotCapabilitySettings({
@@ -30,8 +31,10 @@ export function BotCapabilitySettings({
   skills,
   onChange,
   expanded,
+  onConfigure,
 }: {
   expanded?: boolean;
+  onConfigure?: (kind: Kind, id?: string) => void;
   bot: BotProfile;
   capabilities: BotCapabilities;
   skills: string[];
@@ -133,6 +136,7 @@ export function BotCapabilitySettings({
         const agentKind = mcpResult.agentKind;
         if (!agentKind) throw new Error('Missing next-turn route');
         const results = await Promise.allSettled([
+          window.electronAPI.localDb.bots.listSkills(bot.id),
           api.listAgentSkills(agentKind, {
             forceReload: true,
             workingDir: session.workingDir ?? undefined,
@@ -145,14 +149,19 @@ export function BotCapabilitySettings({
           }),
         ]);
         if (!isCurrent()) return;
-        const [skillResult, toolsetResult] = results;
+        const [personalResult, skillResult, toolsetResult] = results;
         const next: Partial<Record<Kind, Entry[]>> = {};
         if (skillResult.status === 'fulfilled' && skillResult.value.success)
           next.skill = (skillResult.value.skills ?? []).map((item) => ({
             id: item.name,
             name: item.name,
+            description: item.description,
             available: item.enabled !== false && item.runtimeStatus !== 'failed',
           }));
+        if (personalResult.status === 'fulfilled') next.skill = [
+          ...personalResult.value.map(item => ({ id: `personal:${item.slug}`, name: item.name, available: item.enabled !== false, personal: true })),
+          ...(next.skill ?? []),
+        ];
         next.mcp = mcpResult.servers.map((item) => ({
           id: item.id,
           name: item.name,
@@ -160,10 +169,11 @@ export function BotCapabilitySettings({
         }));
         if (toolsetResult.status === 'fulfilled')
           next.toolset = toolsetResult.value
-            .filter((item) => !['memory', 'xdt_helper', 'collab'].includes(item.id))
+            .filter((item) => !['memory', 'xdt_helper', 'scheduler', 'lsp'].includes(item.id))
             .map((item) => ({
               id: item.id,
               name: item.name,
+              description: item.description,
               available: item.available === true,
             }));
         setCatalog({ key: catalogKey, entries: next });
@@ -199,7 +209,8 @@ export function BotCapabilitySettings({
         {t('bots.capabilities.title')}
         <ChevronDown size={15} aria-hidden className="shrink-0 group-open:rotate-180" />
       </summary>
-      <div className={cn('space-y-4', expanded === undefined ? 'px-3 pt-4' : 'pt-3')}>
+      <div className={cn('space-y-5', expanded === undefined ? 'px-3 pt-4' : 'pt-3')}>
+        <p className="text-12 leading-5 text-[var(--text-secondary)]">{t('bots.capabilities.accessHint')}</p>
         <div className="relative">
           <Search
             size={14}
@@ -231,53 +242,54 @@ export function BotCapabilitySettings({
           </Button>
         ) : null}
         {kinds.map((kind) => {
-          const rows = [...(entries[kind] ?? [])];
+          const rows = (entries[kind] ?? []).map(item => kind === 'toolset' ? {
+            ...item,
+            name: t(`settings.builtinTools.plugins.${item.id}.name`, { defaultValue: item.name }),
+            description: t(`settings.builtinTools.plugins.${item.id}.description`, { defaultValue: item.description ?? '' }),
+          } : item);
           for (const id of selected[kind])
             if (!rows.some((item) => item.id === id)) rows.push({ id, name: id, available: false });
+          const mode = kind === 'mcp' ? capabilities.mcpMode : kind === 'toolset' ? capabilities.toolsetMode : 'allowlist';
+          // Inheritance can only become an explicit selection from a complete
+          // catalog of this kind. Missing/refreshing entries must not drop tools.
+          const canEdit = mode !== 'inherit' || entries[kind] !== undefined;
+          const selectedIds = mode === 'inherit'
+            ? [...new Set([...selected[kind], ...rows.filter((item) => item.available).map((item) => item.id)])]
+            : selected[kind];
           const matching = rows.filter((item) =>
-            `${item.id} ${item.name}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()),
+            `${item.id} ${item.name} ${item.description ?? ''}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()),
           );
           return (
             <fieldset key={kind} className="min-w-0">
               <legend className="mb-2 text-12 font-medium text-[var(--text-primary)]">
                 {t(`bots.capabilities.${kind}`)}
               </legend>
-              <div className="max-h-48 space-y-1 overflow-y-auto">
-                {matching.map((item) => (
-                  <label
-                    key={item.id}
-                    className="flex min-h-9 items-center gap-3 rounded-lg px-2 text-12 text-[var(--text-primary)] hover:bg-[var(--surface-hover)]"
-                  >
-                    <input
-                      type="checkbox"
-                      className="accent-[var(--text-primary)]"
-                      checked={selected[kind].includes(item.id)}
-                      disabled={!item.available && !selected[kind].includes(item.id)}
-                      onChange={(event) =>
-                        onChange(
-                          kind,
-                          event.target.checked
-                            ? [...selected[kind], item.id]
-                            : selected[kind].filter((id) => id !== item.id),
-                        )
-                      }
-                    />
-                    <span className="min-w-0 flex-1 truncate" title={item.name}>
-                      {item.name}
-                    </span>
-                    {!item.available ? (
-                      <span className="text-11 text-[var(--text-tertiary)]">
-                        {t('bots.capabilities.unavailable')}
-                      </span>
-                    ) : null}
-                  </label>
-                ))}
-                {!busy && !error && matching.length === 0 ? (
-                  <p className="text-12 text-[var(--text-tertiary)]">
-                    {t('bots.capabilities.empty')}
-                  </p>
-                ) : null}
+              {kind !== 'skill' && <p className="mb-3 text-12 leading-5 text-[var(--text-secondary)]">
+                {t(mode === 'inherit' ? 'bots.capabilities.inheritedHint' : 'bots.capabilities.selectedHint')}
+              </p>}
+              <div className="divide-y divide-[var(--border-default)]">
+                {matching.map(item => {
+                  const checked = item.personal ? item.available : selectedIds.includes(item.id);
+                  return <div key={item.id} className="flex items-start gap-3 py-3">
+                    <div className="min-w-0 flex-1">
+                      <p className="text-13 font-medium text-[var(--text-primary)]">{item.name}</p>
+                      {item.description && <p className="mt-1 text-12 leading-5 text-[var(--text-secondary)]">{item.description}</p>}
+                      {item.personal && <p className="mt-1 text-12 text-[var(--text-secondary)]">{t('bots.capabilities.personalHint')}</p>}
+                      {!item.available && <p className="mt-1 text-12 leading-5 text-[var(--text-secondary)]">{t('bots.capabilities.unavailableHint')}</p>}
+                      {kind === 'toolset' && onConfigure && <Button type="button" size="sm" variant="secondary" className="mt-2"
+                        onClick={() => onConfigure(kind, item.id)}>{t('bots.capabilities.configure')}</Button>}
+                    </div>
+                    <Switch aria-label={item.name} className="mt-0.5 shrink-0" checked={checked}
+                      disabled={!canEdit || item.personal || (!item.available && !checked)}
+                      onCheckedChange={value => canEdit && onChange(kind, value
+                        ? [...selectedIds, item.id] : selectedIds.filter(id => id !== item.id))} />
+                  </div>;
+                })}
               </div>
+              {!busy && !error && matching.length === 0 && <div className="space-y-2 py-2">
+                <p className="text-12 text-[var(--text-secondary)]">{t(query.trim() ? 'bots.capabilities.empty' : `bots.capabilities.empty_${kind}`)}</p>
+                {onConfigure && !query.trim() && <Button type="button" size="sm" variant="secondary" onClick={() => onConfigure(kind)}>{t('bots.capabilities.configure')}</Button>}
+              </div>}
             </fieldset>
           );
         })}

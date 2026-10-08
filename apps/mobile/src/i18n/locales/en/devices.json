@@ -12,6 +12,10 @@
     "deleteFailed": "Could not delete the device.",
     "deleteOnline": "This device is online. Take it offline before deleting it.",
     "currentlyOnline": "Currently online",
+    "availableSection": "Online",
+    "offlineSection": "Offline",
+    "showAllOffline": "Show All ({{count}})",
+    "showFewerOffline": "Show Less",
     "nameTooLong": "Device names must be {{limit}} characters or fewer.",
     "fields": {
       "name": "Name",
@@ -29,9 +33,7 @@
   "common": {
     "cancel": "Cancel",
     "save": "Save",
-    "saving": "Saving",
     "delete": "Delete",
-    "deleting": "Deleting",
     "create": "New"
   },
   "resources": {
@@ -47,7 +49,8 @@
     "openFailed": "Couldn’t open the session",
     "resolving": "Opening the latest session…",
     "retry": "Try again",
-    "hostCount": "{{count}} computers"
+    "hostCount": "{{count}} computers",
+    "stale": "These items may be outdated. Unable to refresh."
   },
   "presentation": {
     "deviceList": {
@@ -177,10 +180,10 @@
     },
     "home": {
       "allDevices": "All",
-      "allComputers": "All computers",
+      "allComputers": "All devices",
       "waitingCount": "{{count}} pending",
       "synced": "Synced",
-      "unknownComputer": "Unknown computer",
+      "unknownComputer": "Unknown device",
       "uncategorizedProject": "Uncategorized project",
       "cindyMake": "Cindy Make",
       "empty": {
@@ -314,7 +317,7 @@
       "syncing": "Syncing",
       "sync": "Sync again",
       "pinnedConversations": "{{count}} pinned sessions",
-      "newRemoteConversation": "New remote session",
+      "newRemoteConversation": "New session",
       "renameDevice": "Rename {{label}}",
       "project": "Project {{title}}",
       "dialogue": "Chat",
@@ -424,7 +427,13 @@
       "needAttention": "{{count}} need attention",
       "waiting": "{{count}} waiting",
       "automationRunning": "Automation running",
-      "totalRuns": "{{count}} runs total"
+      "totalRuns": "{{count}} runs total",
+      "runCount": "{{count}} runs",
+      "nextRunMinutes": "Runs in {{count}}m",
+      "nextRunHours": "Runs in {{count}}h",
+      "nextRunDays": "Runs in {{count}}d",
+      "imminent": "Running soon",
+      "stopped": "Stopped"
     }
   },
   "detail": {
@@ -528,6 +537,7 @@
     "viewAllRuns": "View all {{count}} runs"
   },
   "companions": {
+    "noCreateHosts": "No compatible computer is available. Open Cindy on a computer and sign in with the same account to create a teammate.",
     "taskAttentionCount": "Tasks needing attention: {{count}}",
     "unreadChatCount": "Unread chats: {{count}}",
     "messageSent": "Message sent to background task",
@@ -559,13 +569,13 @@
     "unread": "New reply",
     "status": {
       "queued": "Getting started",
-      "running": "Working on it",
+      "running": "Running",
       "waiting": "Waiting for input",
-      "completed": "Done",
+      "completed": "Completed",
       "failed": "Failed",
       "cancelled": "Stopped",
       "timed-out": "Timed out",
-      "unknown": "Task status unavailable"
+      "unknown": "Unknown status"
     },
     "title": "Teammates",
     "tasks": "Sessions",
@@ -624,7 +634,14 @@
     },
     "viewResult": "View Result",
     "noWrittenResult": "No written result.",
-    "errorDetails": "Error details"
+    "errorDetails": "Error details",
+    "createTeammate": "New teammate",
+    "createMenu": "New",
+    "searchWithGroups": "Search teammates and groups",
+    "awaiting": "Needs your OK",
+    "emptyCopyCreate": "Teammates remember what you talked about and can get things done on your computer.",
+    "taskResult": "Task result",
+    "collapseResult": "Hide result"
   },
   "companionProfile": {
     "avatar": "Avatar",
@@ -673,6 +690,8 @@
     "artifactsEmpty": "No artifacts yet. Ask your teammate to create something.",
     "openSourceTask": "Open Source Session",
     "modelFollowsDefault": "Follow the default model chain",
+    "taskModel": "Task Model",
+    "taskInheritsPrimary": "Inherit Primary Model",
     "modelOverride": "Using this teammate’s own model chain",
     "modelsUnavailable": "No usable models. Check this teammate’s model settings on your computer, then refresh.",
     "artifactsRecovery": "Open files from the message cards, or browse them on {{deviceName}}.",

@@ -103,13 +103,17 @@ static NSDictionary *readCursor(CGDirectDisplayID display) {
 
 int main(int argc, const char *argv[]) {
   @autoreleasepool {
-    BOOL overlay = (argc == 5 || argc == 6) && strcmp(argv[2], "cursor-overlay") == 0;
+    // Overlay: <display> cursor-overlay <fps> <quality> <physical max edge, 0 = logical> <max JPEG bytes> [excluded]
+    BOOL overlay = (argc == 7 || argc == 8) && strcmp(argv[2], "cursor-overlay") == 0;
     if (argc != 2 && argc != 3 && !overlay) return 2;
-    NSString *excluded = (overlay && argc == 6) || (!overlay && argc == 3)
+    NSString *excluded = (overlay && argc == 8) || (!overlay && argc == 3)
       ? [NSString stringWithUTF8String:argv[argc - 1]] : @"";
     int fps = overlay && strcmp(argv[3], "60") == 0 ? 60 : (overlay ? 30 : 15);
     double quality = overlay ? atof(argv[4]) : 0.55;
     if (quality < 0.1 || quality > 1) return 2;
+    long physicalEdge = overlay ? atol(argv[5]) : 0;
+    long frameLimit = overlay ? atol(argv[6]) : 180000;
+    if (physicalEdge < 0 || physicalEdge > 8192 || frameLimit < 100000 || frameLimit > 4000000) return 2;
     char *end = NULL;
     unsigned long value = strtoul(argv[1], &end, 10);
     if (!*argv[1] || *end || value > UINT32_MAX || !CGDisplayIsOnline((uint32_t)value)) return 2;
@@ -127,13 +131,27 @@ int main(int argc, const char *argv[]) {
     CGDirectDisplayID display = (uint32_t)value;
     size_t width = CGDisplayPixelsWide(display), height = CGDisplayPixelsHigh(display);
     if (!width || !height) return 2;
+    // CGDisplayPixelsWide reports logical points on HiDPI modes. Higher tiers
+    // capture backing pixels instead, bounded by the requested long edge.
+    double edgeLimit = overlay ? 4096.0 : 1280.0;
+    if (physicalEdge) {
+      CGDisplayModeRef mode = CGDisplayCopyDisplayMode(display);
+      if (mode) {
+        size_t pixelWidth = CGDisplayModeGetPixelWidth(mode), pixelHeight = CGDisplayModeGetPixelHeight(mode);
+        CGDisplayModeRelease(mode);
+        if (pixelWidth > width && pixelHeight > height) { width = pixelWidth; height = pixelHeight; }
+      }
+      // Never below what the logical capture would have produced.
+      double logicalEdge = (double)MAX(CGDisplayPixelsWide(display), CGDisplayPixelsHigh(display));
+      edgeLimit = MAX((double)physicalEdge, MIN(edgeLimit, logicalEdge));
+    }
     // This is a negotiated capture mode, not a snapshot of cursor availability.
     // A temporarily hidden/unreadable cursor must not permanently bake the
     // cursor into video or stop subsequent shape/visibility polling.
     BOOL separateCursor = overlay;
     // Preserve full selected display resolution for the cursor-overlay path.
     // The legacy compatibility path retains its original inexpensive bounds.
-    double scale = MIN(1.0, (overlay ? 4096.0 : 1280.0) / MAX(width, height));
+    double scale = MIN(1.0, edgeLimit / MAX(width, height));
     width = MAX(1, (size_t)(width * scale)); height = MAX(1, (size_t)(height * scale));
     dispatch_queue_t queue = dispatch_queue_create("cindy.desktop.capture", DISPATCH_QUEUE_SERIAL);
     CIContext *context = [CIContext contextWithOptions:@{ kCIContextCacheIntermediates: @NO }];
@@ -172,7 +190,7 @@ int main(int argc, const char *argv[]) {
           CIImage *image = [CIImage imageWithIOSurface:surface];
           NSData *jpeg = [context JPEGRepresentationOfImage:image colorSpace:color
             options:@{(__bridge NSString *)kCGImageDestinationLossyCompressionQuality: @(quality)}];
-          NSUInteger limit = overlay ? 1000000 : 180000;
+          NSUInteger limit = (NSUInteger)frameLimit;
           if (overlay) {
             for (NSNumber *q in @[@0.45, @0.25, @0.1]) {
               if (jpeg.length <= limit) break;

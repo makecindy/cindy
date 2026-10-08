@@ -15,9 +15,15 @@ import {
   type LocalCatalogModel,
   type LocalModelVariant,
 } from '@cindy/model-providers';
+import { MANAGED_LLAMACPP_PROVIDER_ID } from './llamaCpp.js';
 
 export const MANAGED_OLLAMA_PROVIDER_ID = 'cindy-local-ollama';
 export const MANAGED_LMSTUDIO_PROVIDER_ID = 'cindy-local-lmstudio';
+
+/** These connections are owned by runtime onboarding, never generic forms/imports. */
+export function isManagedSidecarProviderId(id: string): boolean {
+  return id === MANAGED_OLLAMA_PROVIDER_ID || id === MANAGED_LLAMACPP_PROVIDER_ID;
+}
 
 export const OLLAMA_LOOPBACK_ORIGIN = 'http://127.0.0.1:11434';
 export const OLLAMA_OPENAI_BASE_URL = `${OLLAMA_LOOPBACK_ORIGIN}/v1`;
@@ -33,6 +39,7 @@ export const LOCAL_CONNECT_PRESET_IDS = ['lmstudio'] as const;
 export const LOCAL_ADVANCED_PRESET_IDS = ['llamacpp', 'vllm', 'litellm'] as const;
 
 const LOCAL_RUNTIME_BETA_IDS = new Set<string>([
+  MANAGED_LLAMACPP_PROVIDER_ID,
   MANAGED_OLLAMA_PROVIDER_ID,
   MANAGED_LMSTUDIO_PROVIDER_ID,
   'ollama',
@@ -380,7 +387,11 @@ export function resolveManagedOllamaAgents(input: {
 }
 
 export function isManagedLocalProviderId(id: string): boolean {
-  return id === MANAGED_OLLAMA_PROVIDER_ID || id === MANAGED_LMSTUDIO_PROVIDER_ID;
+  return (
+    id === MANAGED_OLLAMA_PROVIDER_ID ||
+    id === MANAGED_LMSTUDIO_PROVIDER_ID ||
+    id === MANAGED_LLAMACPP_PROVIDER_ID
+  );
 }
 
 export function isAppleSilicon(
@@ -443,7 +454,7 @@ function fits(model: CuratedOllamaModel, memoryGb: number): boolean {
 }
 
 export type LocalRecommendReason =
-  'apple-mxfp8' | 'apple-mlx' | 'generic-27b' | 'compact' | 'unknown';
+  'apple-mxfp8' | 'apple-mlx' | 'generic-27b' | 'high-memory' | 'compact' | 'unknown';
 
 export interface HostModelRecommendation {
   primary: CuratedOllamaModel | null;
@@ -468,6 +479,7 @@ export function recommendForHost(
       ? (spec.featuredIds.map(byId).find((entry) => entry && fits(entry, memoryGb)) ?? null)
       : null;
   let reason: LocalRecommendReason = memoryGb > 0 ? 'compact' : 'unknown';
+  if (primary?.id === 'qwen38-flash-next') reason = 'high-memory';
   if (primary?.id === 'qwen38-27b') {
     reason = !appleSilicon
       ? 'generic-27b'

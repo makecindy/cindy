@@ -4,7 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MainWindowActionButton, ScreenBackButton, type MainWindowAction } from '@/components/MobilePrimitives';
 import { Text } from '@/components/AppText';
-import { SimpleStackHeader, simpleScreenSafeAreaEdges } from '@/platform/chrome/SimpleStackHeader';
+import { SimpleStackHeader, simpleScrollInsetProps, simpleScrollScreenSafeAreaEdges } from '@/platform/chrome/SimpleStackHeader';
 import { useThemedStyles, type ThemeColors } from '@/theme';
 import { fontWeight, lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
 
@@ -14,10 +14,10 @@ export function SharedTaskScreen({ title, onClose, children, management = false 
 }) {
   const { t } = useTranslation();
   const styles = useThemedStyles(makeStyles);
-  return <SafeAreaView edges={simpleScreenSafeAreaEdges()} style={styles.root}>
-    {(!management || Platform.OS === 'ios') && <SimpleStackHeader title={management ? t('settings.title') : title} onBack={onClose} />}
+  return <SafeAreaView edges={simpleScrollScreenSafeAreaEdges()} style={styles.root}>
+    {(!management || Platform.OS === 'ios') && <SimpleStackHeader scrollEdge title={management ? t('settings.title') : title} onBack={onClose} />}
     <KeyboardAvoidingView style={styles.body} enabled={Platform.OS === 'ios'} behavior="padding">
-      <ScrollView contentContainerStyle={[styles.content, management && styles.managementContent]} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag">
+      <ScrollView {...simpleScrollInsetProps} contentContainerStyle={[styles.content, management && styles.managementContent]} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag">
         {management && Platform.OS !== 'ios' && <View style={styles.managementNavigation}>
           <ScreenBackButton onPress={onClose} style={styles.managementBack} testID="sharedTask.backToSettings" />
           <Text style={styles.navigationLabel}>{t('settings.title')}</Text>

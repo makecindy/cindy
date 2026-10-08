@@ -51,11 +51,7 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import {
-  MENU_ITEM_CLASS,
-  MENU_ROW_CLASS,
-  MENU_SUB_CONTENT_CLASS,
-} from './menuStyles';
+import { MENU_ITEM_CLASS, MENU_ROW_CLASS } from './menuStyles';
 import { toast } from '@/lib/toast';
 import { buildSessionDeepLink } from '@/lib/deepLink';
 import { createLogger } from '@/lib/logger';
@@ -88,6 +84,7 @@ import { useRemoteSessionActivity } from '@/features/device-link/remoteSessionAc
 import { useSessionBoundSchedules } from '@/features/scheduler/lib/scheduleSessionBinding';
 import { projectSidebarSessionActivity, resolveSidebarRightStatus } from './sidebarRightStatus';
 import { Tip } from '@/components/ui/tooltip';
+import { BotFollowMark, useSessionFollowers } from '@/features/bots/BotFollowMark';
 import { SidebarRightStatusIndicator } from './SidebarRightStatusIndicator';
 import { shouldPrefetchSessionOnPointerDown } from './sessionSwitchPrefetch';
 import { useCindyMakeActivity } from './useCindyMakeActivity';
@@ -161,6 +158,9 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
   sharedTaskRole,
 }: SessionCardProps & SidebarNavigationProps) {
   const { t } = useTranslation();
+  const followers = useSessionFollowers(session);
+  // 标题后常显的标记:任务标签色球与「伙伴在跟进」头像。浮出操作钮与归档确认胶囊按它让位。
+  const hasTitleMarks = !!session.tags?.length || followers.length > 0;
   const cindyMakeActivity = useCindyMakeActivity(session);
   const cindyMakePreparing = cindyMakeActivity === 'building' ? undefined : cindyMakeActivity;
   // mod+1..9 序号徽标:模块 store 按 sessionId 精准订阅,非按住态恒为 null。
@@ -214,7 +214,7 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
   );
   const remoteWritesBlocked = isRemoteSessionWriteBlocked(session);
   const isAutomationGenerated = isAutomationGeneratedSession(session);
-  const boundSchedules = useSessionBoundSchedules(session.id);
+  const boundSchedules = useSessionBoundSchedules(session.id, session.deviceLinkDeviceId);
   const showScheduleBindingBadge = boundSchedules.length > 0;
   const showAutomationTimer = !showScheduleBindingBadge && isAutomationGenerated;
   const displayTitle = getSessionDisplayTitle(
@@ -544,7 +544,9 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
     !isEmpty &&
     !session.remoteHostId &&
     session.orcaRole !== 'worker' &&
-    !session.deviceLinkDeviceId;
+    !session.deviceLinkDeviceId &&
+    // Agent 在另一台电脑运行：转录在那台，本机打包不全。
+    !session.agentDeviceId;
 
   const exportShareMenuItem = canExportShare ? (
     <DropdownMenuItem onSelect={handleExportShareSelect} className={MENU_ITEM_CLASS}>
@@ -558,6 +560,8 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
     !isEmpty &&
     !session.remoteHostId &&
     !session.deviceLinkDeviceId &&
+    // Agent 在另一台电脑运行：它的会话记录按项目路径存在那台，移动后无法继续。
+    !session.agentDeviceId &&
     session.status !== 'archived';
 
   const moveToProjectSubmenu = canMoveToProject ? (
@@ -590,6 +594,7 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
     showScheduleBindingBadge ? (
       <ScheduleBindingBadge
         schedules={boundSchedules}
+        deviceLinkDeviceId={session.deviceLinkDeviceId}
         size={iconSize}
         activeForeground={isActive}
       />
@@ -797,6 +802,7 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
                   </SidebarTitleMarquee>
                   {/* 任务标签常显、紧跟标题，不属于任务信息复选。 */}
                   <TaskTagDots tags={session.tags} />
+                  <BotFollowMark followers={followers} />
                   {remoteIconKind && (
                     <RemoteProjectIcon
                       kind={remoteIconKind}
@@ -810,6 +816,7 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
                       }
                     />
                   )}
+                  {/* Agent 在另一台电脑运行(任务在本机)的标识在 Agent 图标上(信号波纹)。 */}
                   {sourceLabel ? (
                     <span
                       title={sourceLabel}
@@ -964,7 +971,7 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
               !navigationOnly &&
                 !isEditing &&
                 !archivePending &&
-                !!session.tags?.length &&
+                hasTitleMarks &&
                 (menuPos !== null
                   ? 'pr-14'
                   : 'group-hover/card:pr-14 peer-focus-within/card-actions:pr-14'),
@@ -990,15 +997,16 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
                   })
                 : displayTitle}
             </div>
-            {/* 任务标签常显、紧跟标题首行；标题两行截断时色球不被裁掉。 */}
-            {!isEditing && session.tags?.length ? (
-              <span className="flex h-[1.22em] shrink-0 items-center text-12">
+            {/* 任务标签与「伙伴在跟进」常显、紧跟标题首行；标题两行截断时不被裁掉。 */}
+            {!isEditing && hasTitleMarks ? (
+              <span className="flex h-[1.22em] shrink-0 items-center gap-1.5 text-12">
                 <TaskTagDots tags={session.tags} />
+                <BotFollowMark followers={followers} />
               </span>
             ) : null}
             {/* 归档确认胶囊的隐形同款占位:与胶囊同文案同样式,按实际宽度让位。
                 外包零高度容器只取宽度,不撑高单行标题,确认态卡片高度与瀑布流不动。 */}
-            {!isEditing && canQuickArchive && archivePending && session.tags?.length ? (
+            {!isEditing && canQuickArchive && archivePending && hasTitleMarks ? (
               <span aria-hidden className="h-0 shrink-0 overflow-hidden">
                 <Button
                   variant="secondary"

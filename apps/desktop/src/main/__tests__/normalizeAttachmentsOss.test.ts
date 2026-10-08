@@ -80,7 +80,7 @@ vi.mock('../logger.js', () => ({
 import {
   materializeDirectSendOssAttachments,
   normalizeUserMessage,
-  materializeQueuedOssAttachments,
+  materializeQueuedOssAttachmentsDeferred,
 } from '../maker-ipc/normalizeAttachments';
 import { buildAttachmentOssRef } from '../../shared/attachmentOssRef';
 import { buildPeerAttachmentRef } from '@cindy/device-link';
@@ -91,10 +91,11 @@ describe('peer attachment materialization', () => {
   it('ingests a staged image through existing media ownership without touching OSS', async () => {
     const metadata = { ticket: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', size: 11, sha256: ATTACHMENT_SHA256, mimeType: 'image/png' };
     const ref = buildPeerAttachmentRef(metadata);
-    const result = await materializeQueuedOssAttachments('sess-1', {
+    const materialized = await materializeQueuedOssAttachmentsDeferred('sess-1', {
       files: [{ path: ref, url: ref, mimeType: 'image/png', category: 'image', ext: '.png' }],
       persistedContent: JSON.stringify({ images: [{ url: ref }] }),
-    }) as { files: Array<{ url: string }>; persistedContent: string };
+    });
+    const result = materialized.item as { files: Array<{ url: string }>; persistedContent: string };
     expect(copyPeerAttachment).toHaveBeenCalledWith(metadata, expect.any(String));
     expect(copyPeerAttachment).toHaveBeenCalledTimes(1);
     expect(result.files[0].url).toBe(BLOB_URL);
@@ -106,7 +107,7 @@ describe('peer attachment materialization', () => {
 });
 
 describe('queued attachment cleanup regression', () => {
-  it('cleans earlier materialized OSS objects when a later integrity ref rejects the queue', async () => {
+  it('keeps earlier OSS objects retryable when a later integrity ref rejects the queue', async () => {
     const first = buildAttachmentOssRef({ ossKey: 'oss/first.png', mimeType: 'image/png' });
     const second = buildAttachmentOssRef({
       ossKey: 'oss/second.pdf',
@@ -115,18 +116,23 @@ describe('queued attachment cleanup regression', () => {
       sha256: ATTACHMENT_SHA256,
     });
     downloadToFile.mockImplementation(async (...args: unknown[]) => {
-      if (args[0] === 'oss/second.pdf') throw new Error('integrity mismatch');
+      if (args[0] === 'oss/second.pdf') {
+        throw Object.assign(new Error('integrity mismatch'), { name: 'AttachmentIntegrityError' });
+      }
     });
 
     await expect(
-      materializeQueuedOssAttachments('sess-1', {
+      materializeQueuedOssAttachmentsDeferred('sess-1', {
         files: [
           { path: first, mimeType: 'image/png' },
           { path: second, mimeType: 'application/pdf' },
         ],
       }),
     ).rejects.toThrow();
-    expect(removeRemote).toHaveBeenCalledWith('oss/first.png');
+    // 拒绝路径清掉本地物化(cindy-media 引用),已成功的 OSS 保持可重试;坏对象本身立即删。
+    expect(removeRefById).toHaveBeenCalledWith('ref-1');
+    expect(removeRemote).toHaveBeenCalledWith('oss/second.pdf');
+    expect(removeRemote).not.toHaveBeenCalledWith('oss/first.png');
   });
 });
 
@@ -226,7 +232,7 @@ describe('normalizeUserMessage — device-link 出方向 OSS 引用物化', () =
   });
 });
 
-describe('materializeQueuedOssAttachments — 出方向 files[] + persistedContent 一次性物化', () => {
+describe('materializeQueuedOssAttachmentsDeferred — 出方向 files[] + persistedContent 一次性物化', () => {
   it('files[] 与 persistedContent 共用同一 OSS 引用 → 只下载/入库一次,删 OSS 一次;图片入总仓、非媒体走老缓存', async () => {
     // 同一张图,控制端给 files[].url/path 与 persistedContent.images[].url 用了同一个 OSS 引用串。
     const imgRef = buildAttachmentOssRef({
@@ -261,11 +267,15 @@ describe('materializeQueuedOssAttachments — 出方向 files[] + persistedConte
       }),
     };
 
-    const out = (await materializeQueuedOssAttachments('sess-1', item)) as typeof item;
+    const materialized = await materializeQueuedOssAttachmentsDeferred('sess-1', item);
+    const out = materialized.item as typeof item;
 
     // 每个 OSS 对象只下载一次(2 个),即使 files[] 与 persistedContent 各引用一次。
     expect(downloadToFile).toHaveBeenCalledTimes(2);
-    // 用后删:每个 ossKey 删一次。
+    // 真实入口接受前不删 OSS:删除延迟到 cleanupAfterAcceptance。
+    expect(removeRemote).not.toHaveBeenCalled();
+    expect(typeof materialized.cleanupAfterAcceptance).toBe('function');
+    materialized.cleanupAfterAcceptance?.();
     expect(removeRemote).toHaveBeenCalledTimes(2);
     expect(removeRemote).toHaveBeenCalledWith('oss/img.png');
     expect(removeRemote).toHaveBeenCalledWith('oss/doc.pdf');
@@ -304,7 +314,7 @@ describe('materializeQueuedOssAttachments — 出方向 files[] + persistedConte
         files: [],
       }),
     };
-    const out = await materializeQueuedOssAttachments('sess-1', item);
+    const { item: out } = await materializeQueuedOssAttachmentsDeferred('sess-1', item);
     expect(out).toBe(item); // 引用相等:零改动
     expect(downloadToFile).not.toHaveBeenCalled();
     expect(copyFromPath).not.toHaveBeenCalled();
@@ -326,7 +336,8 @@ describe('materializeQueuedOssAttachments — 出方向 files[] + persistedConte
       }),
     };
 
-    const out = (await materializeQueuedOssAttachments('sess-1', item)) as typeof item;
+    const materialized = await materializeQueuedOssAttachmentsDeferred('sess-1', item);
+    const out = materialized.item as typeof item;
 
     // 读源文件字节 → 总仓 ingest(带 session-attachment 引用);老缓存零参与。
     expect(readFile).toHaveBeenCalledWith('/workdir/assets/photo.png');
@@ -360,9 +371,8 @@ describe('materializeQueuedOssAttachments — 出方向 files[] + persistedConte
         files: [],
       }),
     };
-    const out = (await materializeQueuedOssAttachments('sess-1', item)) as {
-      persistedContent: string;
-    };
+    const materialized = await materializeQueuedOssAttachmentsDeferred('sess-1', item);
+    const out = materialized.item as { persistedContent: string };
     const pc = JSON.parse(out.persistedContent) as { images: Array<{ url: string }> };
     expect(pc.images[0].url).toBe('/gone/missing.png');
   });
@@ -378,7 +388,7 @@ describe('materializeQueuedOssAttachments — 出方向 files[] + persistedConte
         files: [{ name: 'notes.txt', path: '/workdir/notes.txt' }],
       }),
     };
-    const out = await materializeQueuedOssAttachments('sess-1', item);
+    const { item: out } = await materializeQueuedOssAttachmentsDeferred('sess-1', item);
     expect(out).toBe(item); // 无需物化:引用相等原样返回
     expect(copyFromPath).not.toHaveBeenCalled();
   });
@@ -391,7 +401,8 @@ describe('materializeQueuedOssAttachments — 出方向 files[] + persistedConte
       files: [{ url: imgRef, path: imgRef, mimeType: 'image/png' }],
       persistedContent: '{"text":"hi"}',
     };
-    const out = (await materializeQueuedOssAttachments('sess-1', item)) as typeof item;
+    const materialized = await materializeQueuedOssAttachmentsDeferred('sess-1', item);
+    const out = materialized.item as typeof item;
     const f = out.files as Array<{ url: string }>;
     expect(f[0].url).toBe(imgRef); // 原引用保留
     expect(removeRemote).not.toHaveBeenCalled();
@@ -408,7 +419,7 @@ describe('materializeQueuedOssAttachments — 出方向 files[] + persistedConte
     downloadToFile.mockRejectedValue(new Error('附件完整性校验失败'));
 
     await expect(
-      materializeQueuedOssAttachments('sess-1', {
+      materializeQueuedOssAttachmentsDeferred('sess-1', {
         clientId: 'c1',
         files: [{ path: ref, mimeType: 'application/pdf' }],
         persistedContent: JSON.stringify({

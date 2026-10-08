@@ -1,6 +1,11 @@
 import type { ContinuationInFlightProjectionCapability } from '@/session/types';
 
+/** 对齐桌面 USAGE_LIMIT_RESET_AUTO_RESUME_REASON(apps/desktop/src/shared/agentInputQueue.ts)。 */
+const USAGE_LIMIT_RESET_REASON = 'usage-limit-reset';
+
 export interface MobileAutoResumeInfo {
+  /** 账号用量上限重置后自动继续(不是重连:不展示重试次数)。 */
+  usageLimitReset?: boolean;
   error?: string;
   attempt?: number;
   maxAttempts?: number;
@@ -21,10 +26,12 @@ export interface MobileAutoResumePresentation {
 export function readMobileAutoResumeInfo(data?: Record<string, unknown>): MobileAutoResumeInfo {
   const number = (value: unknown) =>
     typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : undefined;
-  const attempt = number(data?.attempt);
-  const maxAttempts = number(data?.maxAttempts);
-  const sessionTotal = number(data?.sessionTotal);
+  const usageLimitReset = data?.reason === USAGE_LIMIT_RESET_REASON;
+  const attempt = usageLimitReset ? undefined : number(data?.attempt);
+  const maxAttempts = usageLimitReset ? undefined : number(data?.maxAttempts);
+  const sessionTotal = usageLimitReset ? undefined : number(data?.sessionTotal);
   return {
+    ...(usageLimitReset ? { usageLimitReset: true } : {}),
     ...(typeof data?.error === 'string' && data.error.trim() ? { error: data.error } : {}),
     ...(attempt !== undefined ? { attempt } : {}),
     ...(maxAttempts !== undefined ? { maxAttempts } : {}),
@@ -58,6 +65,7 @@ export function getMobileAutoResumePresentation(
   const info = readMobileAutoResumeInfo(data);
   const hasProgress = info.attempt !== undefined && info.maxAttempts !== undefined;
   const hasInterruptionContext =
+    info.usageLimitReset === true ||
     data?.live === true ||
     info.error !== undefined ||
     hasProgress ||

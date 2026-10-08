@@ -1,6 +1,6 @@
 import { sharedTaskGuestPeer } from '@cindy/device-link';
 import { afterEach, describe, expect, it } from 'vitest';
-import { assertSharedTaskInvoke, assertSharedTaskReferences, captureSharedTaskPush, setSharedTaskQueueReader, type SharedTaskPeerCapture } from '../sharedTaskDispatch.js';
+import { assertSharedTaskInteractionResolveCurrent, assertSharedTaskInvoke, assertSharedTaskReferences, captureSharedTaskPush, setSharedTaskInteractionReader, setSharedTaskQueueReader, type SharedTaskInteractionCapture, type SharedTaskPeerCapture } from '../sharedTaskDispatch.js';
 
 function capture(): SharedTaskPeerCapture {
   return {
@@ -9,7 +9,7 @@ function capture(): SharedTaskPeerCapture {
     authorize: (operation, item) => operation !== 'input.edit' && operation !== 'input.withdraw' || item?.authorAccountId === 'guest',
   };
 }
-afterEach(() => setSharedTaskQueueReader(null));
+afterEach(() => { setSharedTaskQueueReader(null); setSharedTaskInteractionReader(null); });
 describe('sharedTask dispatch scope', () => {
   it('reads subagent context only through the shared parent task', () => {
     for (const channel of ['local-db:subagent-runs:list', 'local-db:subagent-runs:detail', 'local-db:subagent-runs:transcript']) {
@@ -44,6 +44,99 @@ describe('sharedTask dispatch scope', () => {
       expect(() => assertSharedTaskInvoke(capture(), { channel, args: ['task'] })).not.toThrow();
       expect(() => assertSharedTaskInvoke(capture(), { channel, args: ['other'] })).toThrow();
     }
+  });
+  it('allows guests to resolve generic Agent interaction cards for the shared task', () => {
+    const permissionSuggestion = { type: 'addRules', behavior: 'allow', destination: 'session', rules: [{ toolName: 'Bash', ruleContent: 'git status' }] };
+    const interactions: Record<string, SharedTaskInteractionCapture> = {
+      'permission-1': { sessionId: 'task', kind: 'permission', toolName: 'Bash', suggestions: [permissionSuggestion] },
+      'question-1': { sessionId: 'task', kind: 'ask_user_question' },
+      'plan-1': { sessionId: 'task', kind: 'plan_review' },
+    };
+    setSharedTaskInteractionReader((requestId) => interactions[requestId]);
+    for (const [requestId, decision] of [
+      ['permission-1', { kind: 'permission', behavior: 'allow' }],
+      ['question-1', { kind: 'ask_user_question', answers: { choice: 'A' } }],
+      ['plan-1', { kind: 'plan_review', behavior: 'deny', reason: 'change scope' }],
+    ]) {
+      expect(() => assertSharedTaskInvoke(capture(), {
+        channel: 'maker:resolve-interaction', args: [requestId, decision],
+      })).not.toThrow();
+    }
+    for (const decision of [
+      { kind: 'plugin_setup', action: 'run_action' },
+      { kind: 'issue_confirm', behavior: 'allow' },
+      { kind: 'permission', behavior: 'maybe' },
+    ]) {
+      expect(() => assertSharedTaskInvoke(capture(), {
+        channel: 'maker:resolve-interaction', args: ['permission-1', decision],
+      })).toThrow('PERMISSION_DENIED');
+    }
+    expect(() => assertSharedTaskInvoke(capture(), {
+      channel: 'maker:resolve-interaction', args: ['other-task', { kind: 'permission', behavior: 'allow' }],
+    })).toThrow('PERMISSION_DENIED');
+    expect(() => assertSharedTaskInvoke(capture(), {
+      channel: 'maker:resolve-interaction',
+      args: ['permission-1', { kind: 'permission', behavior: 'allow', permissionUpdates: [{ type: 'setMode', mode: 'bypassPermissions', destination: 'session' }] }],
+    })).toThrow('PERMISSION_DENIED');
+    expect(() => assertSharedTaskInvoke(capture(), {
+      channel: 'maker:resolve-interaction',
+      args: ['permission-1', { kind: 'permission', behavior: 'allow', permissionUpdates: [{ ...permissionSuggestion, rules: [{ toolName: 'Write' }] }] }],
+    })).toThrow('PERMISSION_DENIED');
+    expect(() => assertSharedTaskInvoke(capture(), {
+      channel: 'maker:resolve-interaction',
+      args: ['permission-1', { kind: 'permission', behavior: 'allow', permissionUpdates: [permissionSuggestion] }],
+    })).not.toThrow();
+  });
+  it.each([{ command: 'different-command' }, {}, null])('rejects guest replacement input %j at admission and consumption', (updatedInput) => {
+    setSharedTaskInteractionReader(() => ({ sessionId: 'task', kind: 'permission', toolName: 'Bash' }));
+    const args = ['permission-1', { kind: 'permission', behavior: 'allow', updatedInput }];
+    expect(() => assertSharedTaskInvoke(capture(), { channel: 'maker:resolve-interaction', args })).toThrow('PERMISSION_DENIED');
+    expect(() => assertSharedTaskInteractionResolveCurrent(capture(), args)).toThrow('PERMISSION_DENIED');
+  });
+  it('accepts the host-provided Codex session approval, but rejects an unsolicited one', () => {
+    const update = { type: 'codexSessionApproval', destination: 'session' };
+    const request: SharedTaskInteractionCapture = { sessionId: 'task', kind: 'permission', toolName: 'Shell', suggestions: [update] };
+    setSharedTaskInteractionReader(() => request);
+    const args = ['permission-1', { kind: 'permission', behavior: 'allow', permissionUpdates: [update] }];
+    expect(() => assertSharedTaskInvoke(capture(), { channel: 'maker:resolve-interaction', args })).not.toThrow();
+    expect(() => assertSharedTaskInteractionResolveCurrent(capture(), args)).not.toThrow();
+    request.suggestions = [];
+    expect(() => assertSharedTaskInvoke(capture(), { channel: 'maker:resolve-interaction', args })).toThrow('PERMISSION_DENIED');
+    expect(() => assertSharedTaskInteractionResolveCurrent(capture(), args)).toThrow('PERMISSION_DENIED');
+  });
+  it.each([
+    { type: 'codexSessionApproval', destination: 'userSettings' },
+    { type: 'codexSessionApproval', destination: 'session', mode: 'bypassPermissions' },
+    { type: 'codexSessionApproval', destination: 'session', rules: [{ toolName: 'Write' }] },
+    { type: 'setMode', destination: 'session', mode: 'bypassPermissions' },
+  ])('rejects unsafe session approval shapes even when suggested: %j', (update) => {
+    setSharedTaskInteractionReader(() => ({ sessionId: 'task', kind: 'permission', toolName: 'Shell', suggestions: [update] }));
+    const args = ['permission-1', { kind: 'permission', behavior: 'allow', permissionUpdates: [update] }];
+    expect(() => assertSharedTaskInvoke(capture(), { channel: 'maker:resolve-interaction', args })).toThrow('PERMISSION_DENIED');
+    expect(() => assertSharedTaskInteractionResolveCurrent(capture(), args)).toThrow('PERMISSION_DENIED');
+  });
+  it('rejects a request that disappeared before consumption', () => {
+    let active = true;
+    setSharedTaskInteractionReader(() => active
+      ? { sessionId: 'task', kind: 'permission', toolName: 'Bash' }
+      : undefined);
+    const args: unknown[] = ['request-1', { kind: 'permission', behavior: 'allow' }];
+    expect(() => assertSharedTaskInvoke(capture(), { channel: 'maker:resolve-interaction', args })).not.toThrow();
+    active = false;
+    expect(() => assertSharedTaskInteractionResolveCurrent(capture(), args)).toThrow('PERMISSION_DENIED');
+  });
+  it.each(['permission', 'ask_user_question', 'plan_review'] as const)('rejects a revoked guest with a still-pending %s request', (kind) => {
+    const pending = { sessionId: 'task', kind, toolName: 'Bash' };
+    setSharedTaskInteractionReader(() => pending);
+    let memberActive = true;
+    const peer = { ...capture(), isCurrent: () => memberActive, authorize: () => memberActive };
+    const decision = kind === 'ask_user_question'
+      ? { kind, answers: { choice: 'A' } } : { kind, behavior: 'allow' };
+    const args = ['request-1', decision];
+    assertSharedTaskInvoke(peer, { channel: 'maker:resolve-interaction', args });
+    memberActive = false;
+    expect(() => assertSharedTaskInteractionResolveCurrent(peer, args)).toThrow('PERMISSION_DENIED');
+    expect(() => assertSharedTaskInteractionResolveCurrent(capture(), args)).not.toThrow();
   });
   it('lets a guest read running command output only for the shared task, under history.read', () => {
     const channel = 'maker:background-task:output-tail';

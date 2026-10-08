@@ -20,7 +20,13 @@
     "allowOnceAccessibility": "권한 요청 한 번 허용",
     "allowOnceConfirm": "한 번 허용 확인",
     "highRisk": "고위험",
-    "autoReviewUnavailable": "자동 리뷰를 끝내지 못했습니다. 이 작업을 허용할지 확인해 주세요."
+    "autoReviewUnavailable": "자동 리뷰를 끝내지 못했습니다. 이 작업을 허용할지 확인해 주세요.",
+    "fullAccessConfirm": {
+      "title": "전체 접근을 활성화할까요?",
+      "description": "전체 접근은 작업 공간 샌드박스를 비활성화하고 일반 승인을 건너뜁니다. {{appName}}가 작업 공간 밖의 파일을 수정하고 네트워크 명령을 묻지 않고 실행할 수 있습니다. 기본 제공 고위험 작업은 계속 확인을 요청합니다.",
+      "confirm": "전체 접근 활성화",
+      "cancel": "현재 권한 유지"
+    }
   },
   "planMode": {
     "label": "플랜 모드",
@@ -157,8 +163,10 @@
     "dispatchBodyFallback": "Worker 생성",
     "sendTitle": "Worker에게 메시지 전송",
     "sendBodyFallback": "메시지 전송",
-    "reportTitle": "Worker 보고",
-    "reportBodyFallback": "(빈 보고)"
+    "fromLead": "Lead에서 온 메시지",
+    "fromWorkerNamed": "Worker 「{{role}}」에서 온 메시지",
+    "fromWorker": "Worker에서 온 메시지",
+    "emptyMessageBody": "(빈 메시지)"
   },
   "contextSheet": {
     "backAccessibility": "컨텍스트 패널로 돌아가기",
