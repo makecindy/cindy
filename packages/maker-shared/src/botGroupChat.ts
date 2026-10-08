@@ -44,6 +44,19 @@ export interface BotGroupMention {
 }
 
 export interface BotGroupMemberView {
+  /** Present for Chat Server members; botId remains the composer mention key. */
+  actorId?: string;
+  role?: 'owner' | 'admin' | 'member' | 'guest';
+  displayName?: string;
+  nickname?: string | null;
+  ownerActorId?: string;
+  ownerName?: string;
+  isOwned?: boolean;
+  avatarUrl?: string | null;
+  guestAccess?: 'none' | 'chat' | 'tools';
+  accessRevision?: number;
+  actorKind?: 'human' | 'bot' | 'integration';
+  isSelf?: boolean;
   botId: string;
   name: string;
   avatar: string;
@@ -52,6 +65,10 @@ export interface BotGroupMemberView {
 }
 
 export interface BotGroupMessageView {
+  isSelf?: boolean;
+  threadRootId?: string | null;
+  replyCount?: number;
+  reactions?: Array<{ emoji: string; count: number; me: boolean }>;
   id: string;
   sequence: number;
   kind: BotGroupMessageKind;
@@ -160,6 +177,7 @@ export function isBotGroupPlanOpen(status: BotGroupPlanStatus): boolean {
 }
 
 export interface BotGroupLastMessage {
+  isSelf?: boolean;
   authorKind: BotGroupAuthorKind;
   authorName: string;
   preview: string;
@@ -185,6 +203,14 @@ export interface BotGroupRoundView {
 }
 
 export interface BotGroupSummary {
+  serverBacked?: boolean;
+  archived?: boolean;
+  migrationPending?: boolean;
+  canInvite?: boolean;
+  selfActorId?: string;
+  topic?: string;
+  description?: string;
+  revision?: number;
   id: string;
   name: string;
   replyMode: BotGroupReplyMode;
@@ -195,7 +221,7 @@ export interface BotGroupSummary {
   /** 项目文件夹; null means the group's own folder. */
   projectDir: string | null;
   lastMessage: BotGroupLastMessage | null;
-  /** Latest visible Bot reply, independent of user messages and runtime activity. Older hosts omit it. */
+  /** Latest visible incoming message (Bot or another human), excluding self and runtime activity. Older hosts omit it. */
   lastReplyAt?: number;
   speakingBotIds: string[];
   /** The organizer while it works out a plan (sidebar 「正在安排」). */
@@ -372,6 +398,15 @@ export function isBotGroupClientId(clientId: string | null | undefined): boolean
   return typeof clientId === 'string' && clientId.startsWith(BOT_GROUP_CLIENT_ID_PREFIX);
 }
 
+/** The server chooses the grant. Different grants never reuse private model context. */
+export interface ChatLaneAccess { mode: 'owner' | 'chat' | 'tools'; revision: number }
+export function chatGroupLaneRouteKey(groupId: string, access: ChatLaneAccess): string {
+  return `group:${groupId}:access:${access.mode}:${access.revision}`;
+}
+export function isChatOnlyGroupLane(routeKey: string | null | undefined): boolean {
+  return /^group:[^:]+:access:chat:[1-9][0-9]*(?::plan:[^:]+)?$/.test(routeKey ?? '');
+}
+
 export function botGroupLaneRouteKey(groupId: string): string {
   return `group:${groupId}`;
 }
@@ -387,6 +422,34 @@ export function botGroupPlanRouteKeyPrefix(groupId: string): string {
 
 /** Plan id of a 分工 Session route key, or null for lanes and other routes. */
 export function parseBotGroupPlanRouteKey(routeKey: string | null | undefined): { groupId: string; planId: string } | null {
-  const match = typeof routeKey === 'string' ? /^group:([^:]+):plan:([^:]+)$/.exec(routeKey) : null;
+  const match = typeof routeKey === 'string' ? /^group:([^:]+)(?::access:(?:owner|tools|chat):[1-9][0-9]*)?:plan:([^:]+)$/.exec(routeKey) : null;
   return match ? { groupId: match[1]!, planId: match[2]! } : null;
+}
+
+
+/** Named, credential-free Desktop chat capabilities. Older/local-only hosts omit them. */
+export type ChatServerResult<T> = ({ ok: true } & T) | { ok: false; errorCode: string };
+export interface ChatInvitePreview {
+  groupId: string; name: string; inviterName: string; expiresAt: string; joined: boolean;
+}
+export type ChatGroupAction =
+  | { type: 'update'; name: string; topic: string; description: string; expectedRevision: number; responseMode?: BotGroupReplyMode; speakingMode?: BotGroupSpeakingMode }
+  | { type: 'nickname'; actorId: string; nickname: string | null }
+  | { type: 'member'; actorId: string; action: 'invite' | 'leave' | 'remove' | 'ban' | 'unban' | 'role'; role?: 'admin' | 'member' }
+  | { type: 'transfer'; actorId: string }
+  | { type: 'botAccess'; actorId: string; access: 'none' | 'chat' | 'tools'; expectedRevision: number }
+  | { type: 'archive'; archived: boolean; expectedRevision: number };
+export interface ChatServerApi {
+  manage(input: { groupId: string; action: ChatGroupAction }): Promise<ChatServerResult<Record<never, never>>>;
+  ownedBots(): Promise<ChatServerResult<{ bots: Array<{ actorId: string; name: string }> }>>;
+  refreshProfile(): Promise<ChatServerResult<Record<never, never>>>;
+  status(): Promise<{ enabled: boolean; connected: boolean }>;
+  thread(input: { groupId: string; rootId: string; before?: number }): Promise<ChatServerResult<{
+    root: BotGroupMessageView; replies: BotGroupMessageView[]; hasMore: boolean;
+  }>>;
+  reply(input: { groupId: string; rootId: string; text: string; clientId: string; mentions: BotGroupMention }): Promise<ChatServerResult<{ messageId: string }>>;
+  react(input: { groupId: string; messageId: string; emoji: string; present: boolean }): Promise<ChatServerResult<Record<never, never>>>;
+  createInvite(input: { groupId: string; clientId: string }): Promise<ChatServerResult<{ link: string; expiresAt: string }>>;
+  previewInvite(input: { link: string }): Promise<ChatServerResult<ChatInvitePreview>>;
+  acceptInvite(input: { link: string; clientId: string }): Promise<ChatServerResult<{ groupId: string }>>;
 }

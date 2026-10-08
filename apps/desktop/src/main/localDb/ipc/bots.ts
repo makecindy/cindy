@@ -7,6 +7,7 @@ import { listBotSkillsForBot } from '../../maker-ipc/botSkillService.js';
 import { provisionDefaultBot } from '../../maker-ipc/botDefaultProvisioning.js';
 import { BOT_TEMPLATE_PRESET_AVATARS, CINDY_DEFAULT_IDENTITY } from '../../../shared/botTemplatePreset.js';
 import fs from 'node:fs/promises';
+import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 
 import { app, BrowserWindow, dialog, ipcMain } from 'electron';
@@ -44,6 +45,7 @@ import {
   writeBotModelChainSettings,
 } from '../../maker-host/bot-model-chain-settings-store.js';
 import { extractMessagePreview, sessionCreateToRow, sessionToCamel } from '../mapper.js';
+import { normalizeBotToolCapabilities } from '../../../shared/botCapabilitySelection.js';
 import {
   botProfileContentChanged,
   botProfileModelSelectionChanged,
@@ -52,6 +54,7 @@ import {
 } from './botProfileVersioning.js';
 import {
   botProfileDir,
+  ensureBotChatOnlyWorkspaceDir,
   ensureBotWorkspaceDir,
   migrateBotProfileFolder,
   readBotProfileFolder,
@@ -101,7 +104,7 @@ import { BOT_DELEGATION_CLIENT_ID } from '../../../shared/botCollaboration.js';
 
 import { generateBotCreationDraft, readBotCreationDraft, generateBotCreationAvatar } from '../../maker-ipc/botCreationDraft.js';
 import { botInvitationProgress, type BotInvitationProgress } from '../../../shared/botInvitation.js';
-import { botGroupLaneRouteKey, botGroupPlanRouteKey } from '../../../shared/botGroupChat.js';
+import { botGroupLaneRouteKey, botGroupPlanRouteKey, chatGroupLaneRouteKey, type ChatLaneAccess } from '../../../shared/botGroupChat.js';
 import { queueBotInvitation as enqueueBotInvitation } from '../../maker-ipc/botInvitation.js';
 import { getMakerIfReady, validateBotCapabilityAdditions } from '../../maker-host/index.js';
 import type { BotCapabilityUpdate } from '../../maker-ipc/botCapabilityService.js';
@@ -307,14 +310,15 @@ export async function ensureBotGroupLaneSession(input: {
   botId: string;
   groupId: string;
   title: string;
+  chatAccess?: ChatLaneAccess;
   plan?: { planId: string; workDir: string; sessionId?: string };
 }): Promise<EnsureBotGroupLaneResult> {
   const owner = captureBotOperationOwner();
   const client = getDbClient();
   const db = client.drizzle;
   const routeKey = input.plan
-    ? botGroupPlanRouteKey(input.groupId, input.plan.planId)
-    : botGroupLaneRouteKey(input.groupId);
+    ? input.chatAccess ? `${chatGroupLaneRouteKey(input.groupId, input.chatAccess)}:plan:${input.plan.planId}` : botGroupPlanRouteKey(input.groupId, input.plan.planId)
+    : input.chatAccess ? chatGroupLaneRouteKey(input.groupId, input.chatAccess) : botGroupLaneRouteKey(input.groupId);
   const [existing] = await db
     .select({ sessionId: botSessionLinks.sessionId })
     .from(botSessionLinks)
@@ -345,10 +349,10 @@ export async function ensureBotGroupLaneSession(input: {
   const config = parseJson(profileVersion.capabilitiesJson);
   const primaryRoute = (await readEffectiveBotModelChain(config))[0] ?? null;
   if (!primaryRoute) return { ok: false, errorCode: 'NO_MODEL', message: '伙伴还没有可用模型' };
-  const workspaceKind = input.plan ? ('project' as const) : ('dialogue' as const);
-  const workingDir = input.plan
-    ? input.plan.workDir
-    : await ensureBotWorkspaceDir(owner.userDataDir, input.botId, app.getPath('userData'));
+  const workspaceKind = input.plan && input.chatAccess?.mode !== 'chat' ? ('project' as const) : ('dialogue' as const);
+  const workingDir = input.chatAccess?.mode === 'chat'
+    ? await ensureBotChatOnlyWorkspaceDir(owner.userDataDir, input.botId, routeKey)
+    : input.plan ? input.plan.workDir : await ensureBotWorkspaceDir(owner.userDataDir, input.botId, app.getPath('userData'));
   const now = Date.now();
   const sessionId = resolveBusinessSessionId(input.plan?.sessionId);
   const row = {
@@ -801,7 +805,7 @@ async function readProfile(
     canonicalClearedAt,
     lastReadAt,
   );
-  const config = parseJson(version?.capabilitiesJson ?? '{}');
+  const config = normalizeBotToolCapabilities(parseJson(version?.capabilitiesJson ?? '{}'));
   const modelChain = await readEffectiveBotModelChain(config);
   const primaryModelRoute = modelChain[0];
   const invitation = botInvitationProgress(config.invitation);
@@ -886,11 +890,11 @@ async function readProfile(
       skillsExcluded: Array.isArray(config.skillsExcluded)
         ? config.skillsExcluded.filter((item): item is string => typeof item === 'string')
         : [],
-      toolsetMode: 'allowlist',
+      toolsetMode: config.toolsetMode,
       toolsets: Array.isArray(config.toolsets)
         ? config.toolsets.filter((item): item is string => typeof item === 'string')
         : [],
-      mcpMode: 'allowlist',
+      mcpMode: config.mcpMode,
       mcpServers: Array.isArray(config.mcpServers)
         ? config.mcpServers.filter((item): item is string => typeof item === 'string')
         : [],
@@ -1111,7 +1115,7 @@ export async function getBotRemoteSettingsSource(botId: string) {
   const [version] = await client.drizzle.select().from(botProfileVersions).where(and(
     eq(botProfileVersions.botId, botId), eq(botProfileVersions.version, source.currentVersion),
   )).limit(1);
-  const config = parseJson(version?.capabilitiesJson ?? '{}');
+  const config = normalizeBotToolCapabilities(parseJson(version?.capabilitiesJson ?? '{}'));
   const modelChain = await readEffectiveBotModelChain(config);
   owner.assertCurrent();
   const strings = (value: unknown) => Array.isArray(value)
@@ -1184,9 +1188,10 @@ async function defaultNewBotCapabilities(): Promise<Record<string, unknown>> {
     modelChainOverride: null,
     skillMode: 'allowlist',
     skillsExcluded: [],
-    toolsetMode: 'allowlist',
+    toolCapabilityVersion: 1,
+    toolsetMode: 'inherit',
     toolsets: [],
-    mcpMode: 'allowlist',
+    mcpMode: 'inherit',
     mcpServers: [],
     memory: true,
     permissions: 'auto',
@@ -1336,10 +1341,13 @@ export async function createBotProfile(raw: unknown) {
   }
   const persistedCapabilities = normalizeBotModelCapabilitiesOrThrow({
     permissions: 'auto',
+    toolsetMode: 'inherit',
+    mcpMode: 'inherit',
     ...(hasRequestedCapabilities ? {} : await defaultNewBotCapabilities()),
     ...requestedCapabilities,
+    toolCapabilityVersion: 1,
     skills,
-    ...(draftEntry ? { skillMode: 'allowlist', mcpMode: 'allowlist', mcpServers: draftEntry.draft.mcpRefs, toolsetMode: 'allowlist', toolsets: draftEntry.draft.toolsetRefs } : {}),
+    ...(draftEntry ? { skillMode: 'allowlist', mcpMode: 'inherit', mcpServers: draftEntry.draft.mcpRefs, toolsetMode: 'inherit', toolsets: draftEntry.draft.toolsetRefs } : {}),
     userContextSource,
     ...(gender ? { gender } : {}),
   });

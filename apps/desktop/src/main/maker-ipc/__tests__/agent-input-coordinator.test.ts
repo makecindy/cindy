@@ -32,6 +32,7 @@ import type {
   AgentInputProjection,
   AgentInputQueuedMessage,
 } from '../../../shared/agentInputQueue.js';
+import { USAGE_LIMIT_RESET_AUTO_RESUME_REASON } from '../../../shared/agentInputQueue.js';
 import {
   CONTINUE_AFTER_APP_EXIT_PROMPT,
   CONTINUE_AFTER_ERROR_PROMPT,
@@ -221,6 +222,44 @@ describe('AgentInputCoordinator Orca priority queue transactions', () => {
       expect.anything(),
       expect.objectContaining({ fromDeviceLinkClient: true }),
     );
+  });
+
+  it('carries host-stamped message sources through drain (device top-level, plugin to the user row)', async () => {
+    const h = createHarness();
+    const sid = 'source-drain';
+    await h.coordinator.ensureQueueRestored(sid);
+    const sourceDevice = { deviceId: 'phone-1', name: 'iPhone', platform: 'mobile' as const };
+    const sourcePlugin = { pluginId: 'gh-1', name: 'Reviewer' };
+    h.coordinator.enqueue(sid, makeItem('source-input', 'hello', { sourceDevice, sourcePlugin }));
+    await flush();
+    const sendOpts = h.sendToAgent.mock.calls[0]?.[3];
+    expect(sendOpts).toMatchObject({ sourceDevice, persistUserMessage: { sourcePlugin } });
+    // 来源不是 maker-core turn origin。
+    expect(sendOpts).not.toHaveProperty('origin');
+  });
+
+  it('carries message sources through steer delivery and the steer user row', async () => {
+    const h = createHarness();
+    const sid = 'source-steer';
+    h.setRunning(true);
+    const sourceDevice = { deviceId: 'pc-1', platform: 'desktop' as const };
+    const origin = { kind: 'session' as const, senderSessionId: 'sender', displayText: 'hello' };
+    const projection = h.coordinator.enqueue(sid, makeItem('source-steer-input', 'hello', {
+      sourceDevice,
+      sourcePlugin: { pluginId: 'gh-1' },
+      origin,
+    }));
+    await expect(h.coordinator.steer(sid, projection.pendingQueue[0]!, { removeFromQueue: true })).resolves.toBe(true);
+    await flush();
+    expect(h.steerToAgent.mock.calls[0]?.[2]).toMatchObject({
+      sourceDevice,
+      sourcePlugin: { pluginId: 'gh-1' },
+      sourceOrigin: origin,
+    });
+    expect(h.steerToAgent.mock.calls[0]?.[2]).not.toHaveProperty('origin');
+    const row = mocks.createMessage.mock.calls.find((call) => (call[1] as { clientId?: string }).clientId === 'source-steer-input')?.[1] as
+      { agentMeta: Record<string, unknown> } | undefined;
+    expect(row?.agentMeta).toMatchObject({ sourceDevice, sourcePlugin: { pluginId: 'gh-1' }, origin });
   });
 
   it('retains host-stamped sharedTask attribution when the queue drains outside the original invoke', async () => {
@@ -444,7 +483,6 @@ describe('AgentInputCoordinator Orca priority queue transactions', () => {
       },
       markWorkerIdleIfStatus: async () => false,
       restoreWorkerDoneIfIdle: async () => false,
-      cancelWorkerSessionOperations: async () => {},
       closeWorkerSession: async () => {},
       closeWorkerSessionIfIdle: async () => true,
       hasPendingWorkerInput: async () => false,
@@ -512,6 +550,8 @@ describe('AgentInputCoordinator Orca priority queue transactions', () => {
       ensureWorkerQueueRestored: async () => true,
       removeQueuedMessage: () => false,
       replaceQueuedMessage: () => false,
+      steerStoredQueuedMessage: async () => ({ kind: 'gone' as const }),
+      moveQueuedMessage: () => null,
       mergeQueuedMessages: () => false,
       log: mocks.logger,
     } satisfies OrcaTeamServiceDeps;
@@ -865,6 +905,9 @@ function createHarness(opts?: {
   const onAcceptedQueuedMessage = vi.fn<
     NonNullable<AgentInputCoordinatorDeps['onAcceptedQueuedMessage']>
   >(() => {});
+  const onSteerAccepted = vi.fn<NonNullable<AgentInputCoordinatorDeps['onSteerAccepted']>>(
+    () => {},
+  );
   const onDispatchedUserTurn = vi.fn<
     NonNullable<AgentInputCoordinatorDeps['onDispatchedUserTurn']>
   >(() => {});
@@ -891,6 +934,9 @@ function createHarness(opts?: {
   >((signals) => resumableTurnErrorCandidate(signals));
   const onResumableTurnErrorDiscarded = vi.fn<
     NonNullable<AgentInputCoordinatorDeps['onResumableTurnErrorDiscarded']>
+  >(() => {});
+  const onUsageLimitedTurnError = vi.fn<
+    NonNullable<AgentInputCoordinatorDeps['onUsageLimitedTurnError']>
   >(() => {});
   const noteSessionClearBoundary =
     vi.fn<NonNullable<AgentInputCoordinatorDeps['noteSessionClearBoundary']>>();
@@ -993,10 +1039,12 @@ function createHarness(opts?: {
     onUserMessageQueryable,
     onUserMessagePersistenceFailed,
     onAcceptedQueuedMessage,
+    onSteerAccepted,
     onDispatchedUserTurn,
     onResumableTurnError,
     isResumableTurnErrorCandidate,
     onResumableTurnErrorDiscarded,
+    onUsageLimitedTurnError,
     noteSessionClearBoundary,
     resolveSessionReferences,
     refreshAgentReferencesBeforeDispatch,
@@ -1034,10 +1082,12 @@ function createHarness(opts?: {
     onUserMessageQueryable,
     onUserMessagePersistenceFailed,
     onAcceptedQueuedMessage,
+    onSteerAccepted,
     onDispatchedUserTurn,
     onResumableTurnError,
     isResumableTurnErrorCandidate,
     onResumableTurnErrorDiscarded,
+    onUsageLimitedTurnError,
     noteSessionClearBoundary,
     resolveSessionReferences,
     refreshAgentReferencesBeforeDispatch,
@@ -1139,6 +1189,132 @@ function createHarness(opts?: {
     },
   };
 }
+
+describe('agent-chosen control steering', () => {
+  const sid = 'lead-report';
+  function expected(h: ReturnType<typeof createHarness>) {
+    return { session: h.getTurnSessionIdentity(), turnGeneration: 0 };
+  }
+  it('joins a running turn even though ordinary new turns must queue', async () => {
+    const h = createHarness();
+    h.setRunning(true);
+    expect(h.coordinator.shouldQueueNewTurn(sid)).toBe(true);
+    const item = makeItem('report', 'worker result');
+    expect(await h.coordinator.steerControlInput(sid, { item }, expected(h))).toBe('steered');
+    expect(h.steerToAgent).toHaveBeenCalledOnce();
+    expect(h.sendToAgent).not.toHaveBeenCalled();
+    expect(h.coordinator.hasPendingQueueItem(sid, 'report')).toBe(false);
+    expect(h.onSteerAccepted).toHaveBeenCalledWith(sid, expect.objectContaining({ clientId: 'report' }));
+  });
+  it('may pass earlier queued rows because the sender chose to steer', async () => {
+    const h = createHarness();
+    h.setRunning(true);
+    await h.coordinator.ensureQueueRestored(sid);
+    h.coordinator.enqueue(sid, makeItem('human', 'user instruction'));
+    expect(await h.coordinator.steerControlInput(sid, { item: makeItem('report', 'r') }, expected(h)))
+      .toBe('steered');
+    expect(h.coordinator.getQueueControlSnapshot(sid).pendingQueue.map((item) => item.clientId))
+      .toEqual(['human']);
+  });
+  it.each(['pause', 'stop-pause', 'interaction', 'credential', 'generation', 'identity', 'idle', 'restore'])
+    ('does not bypass the %s boundary', async boundary => {
+      const h = createHarness();
+      h.setRunning(true);
+      const turn = expected(h);
+      await h.coordinator.ensureQueueRestored(sid);
+      if (boundary === 'pause') h.coordinator.setExecutionPaused(sid, true);
+      if (boundary === 'stop-pause') {
+        h.coordinator.enqueue(sid, makeItem('human', 'user instruction'));
+        h.coordinator.pausePendingQueueForRewind(sid);
+      }
+      if (boundary === 'interaction') h.setPendingInteraction(true);
+      if (boundary === 'credential') h.setHasPendingCredentialSwitch(() => true);
+      if (boundary === 'generation') h.setTurnGeneration(1);
+      if (boundary === 'identity') h.setTurnSessionIdentity({ instanceId: 'replacement' });
+      if (boundary === 'idle') h.setRunning(false);
+      if (boundary === 'restore') {
+        // A different session has not successfully restored its authoritative queue.
+        h.setLoadQueueSnapshot(async () => { throw new Error('queue unavailable'); });
+      }
+      expect(await h.coordinator.steerControlInput(boundary === 'restore' ? 'unrestored' : sid,
+        { item: makeItem('report', 'result') }, turn)).toBe('not-attempted');
+      expect(h.steerToAgent).not.toHaveBeenCalled();
+    });
+  it('re-checks the boundary after async screening, before provider dispatch', async () => {
+    const h = createHarness();
+    h.setRunning(true);
+    h.setScreenUserMessage(async () => {
+      h.setPendingInteraction(true);
+      return { action: 'allow' };
+    });
+    // Not delivered and nothing retained: safe for ordinary delivery, unlike a screening block.
+    expect(await h.coordinator.steerControlInput(sid, { item: makeItem('report', 'r') }, expected(h)))
+      .toBe('not-attempted');
+    expect(h.steerToAgent).not.toHaveBeenCalled();
+    expect(h.onSteerAccepted).not.toHaveBeenCalled();
+  });
+  it('retains one paused report after an uncertain ACK, including when the turn ends', async () => {
+    const h = createHarness();
+    h.setAgentKind('codex');
+    h.setRunning(true);
+    h.steerToAgent.mockImplementationOnce(async () => {
+      h.setRunning(false);
+      throw new Error('Codex turn/steer did not acknowledge within 10000ms');
+    });
+    expect(await h.coordinator.steerControlInput(sid, { item: makeItem('report', 'result') }, expected(h)))
+      .toBe('queued');
+    const queue = h.coordinator.getQueueControlSnapshot(sid).pendingQueue;
+    expect(queue.map(item => item.clientId)).toEqual(['report']);
+    expect(h.coordinator.isQueuePaused(sid)).toBe(true);
+    h.coordinator.onTurnEvent(sid, 'done');
+    await flush();
+    expect(h.sendToAgent).not.toHaveBeenCalled();
+  });
+  it('reports screened rejection without reviving blocked content as ordinary input', async () => {
+    const h = createHarness();
+    h.setRunning(true);
+    h.setScreenUserMessage(async () => ({ action: 'block', ghostId: 'guard', ghostName: 'guard', reason: 'blocked' }));
+    expect(await h.coordinator.steerControlInput(sid, { item: makeItem('report', 'result') }, expected(h)))
+      .toBe('rejected');
+    expect(h.steerToAgent).not.toHaveBeenCalled();
+    expect(h.coordinator.hasPendingQueueItem(sid, 'report')).toBe(false);
+  });
+  it('promotes a stored queued row without releasing the rest of the queue', async () => {
+    const h = createHarness();
+    h.setRunning(true);
+    await h.coordinator.ensureQueueRestored(sid);
+    h.coordinator.enqueue(sid, makeItem('human', 'user instruction'));
+    h.coordinator.enqueue(sid, makeItem('report', 'worker result'));
+    expect(await h.coordinator.steerControlInput(sid, { queuedClientId: 'report' }, expected(h)))
+      .toBe('steered');
+    expect(h.steerToAgent).toHaveBeenCalledOnce();
+    expect(h.coordinator.getQueueControlSnapshot(sid).pendingQueue.map((item) => item.clientId))
+      .toEqual(['human']);
+    expect(h.onSteerAccepted).toHaveBeenCalledWith(sid, expect.objectContaining({ clientId: 'report' }));
+  });
+  it('leaves an edit-locked or missing stored row alone', async () => {
+    const h = createHarness();
+    h.setRunning(true);
+    await h.coordinator.ensureQueueRestored(sid);
+    h.coordinator.enqueue(sid, makeItem('report', 'worker result'));
+    h.coordinator.setEditLock(sid, 'report', true);
+    expect(await h.coordinator.steerControlInput(sid, { queuedClientId: 'report' }, expected(h)))
+      .toBe('not-attempted');
+    expect(await h.coordinator.steerControlInput(sid, { queuedClientId: 'missing' }, expected(h)))
+      .toBe('rejected');
+    expect(h.steerToAgent).not.toHaveBeenCalled();
+    expect(h.coordinator.hasPendingQueueItem(sid, 'report')).toBe(true);
+  });
+  it('notifies the host when an ordinary UI steer is accepted', async () => {
+    const h = createHarness();
+    h.setRunning(true);
+    await h.coordinator.ensureQueueRestored(sid);
+    h.coordinator.enqueue(sid, makeItem('queued', 'q'));
+    const [queued] = h.coordinator.getQueueControlSnapshot(sid).pendingQueue;
+    expect(await h.coordinator.steer(sid, queued!, { removeFromQueue: true })).toBe(true);
+    expect(h.onSteerAccepted).toHaveBeenCalledOnce();
+  });
+});
 
 function latestSnapshotClientIds(
   persistQueueSnapshot: ReturnType<typeof createHarness>['persistQueueSnapshot'],
@@ -6822,6 +6998,7 @@ describe('AgentInputCoordinator steer transaction', () => {
         fallbackToTurn: false, expectedTurnSession: expected.session, expectedTurnGeneration: expected.turnGeneration,
       }),
       getQueueSnapshot: vi.fn(), replaceQueuedMessage: vi.fn(), removeQueuedMessage: vi.fn(),
+      steerStoredQueuedMessage: vi.fn(), moveQueuedMessage: vi.fn(),
       createId: () => `unexpected-random-ID-${++allocatedIds}`,
     });
     const input = { callerSessionId: 'caller', targetSessionId: sid, message: 'urgent', queuedMessageId: 'stable-ID' };
@@ -6895,6 +7072,7 @@ describe('AgentInputCoordinator steer transaction', () => {
         fallbackToTurn: false, expectedTurnSession: expected.session, expectedTurnGeneration: expected.turnGeneration,
       }),
       getQueueSnapshot: vi.fn(), replaceQueuedMessage: vi.fn(), removeQueuedMessage: vi.fn(),
+      steerStoredQueuedMessage: vi.fn(), moveQueuedMessage: vi.fn(),
       createId: () => `unexpected-random-ID-${++allocatedIds}`,
     });
     const input = { callerSessionId: 'caller', targetSessionId: sid, message: 'urgent', queuedMessageId: 'stable-ID' };
@@ -13114,5 +13292,262 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
       expect.objectContaining({ surfaceError: true, owner: expect.any(Object) }),
     );
     expect(h.onResumableTurnError, '落库失败就没有可续跑的目标,不该消耗额度').not.toHaveBeenCalled();
+  });
+});
+
+describe('usage-limit wait (ordinary tasks)', () => {
+  const LIMIT_SIGNALS = { sdkError: 'rate_limit', usageResetAt: 5_000_000 };
+  const INFO = {
+    reason: USAGE_LIMIT_RESET_AUTO_RESUME_REASON,
+    attempt: 1,
+    maxAttempts: 3,
+    sessionTotal: 0,
+  };
+
+  async function failWithLimit(sid: string, progress: boolean) {
+    const h = createHarness();
+    h.setHasAssistantProgressAfter(async () => progress);
+    h.coordinator.enqueue(sid, makeItem('q-first', 'original long task'));
+    await flush();
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(sid, 'error', "You've hit your session limit", LIMIT_SIGNALS);
+    await flush();
+    const candidate = h.onUsageLimitedTurnError.mock.calls.at(-1)?.[3] as number;
+    return { h, candidate };
+  }
+
+  it('reports the limit error with a candidate token and keeps the normal error banner', async () => {
+    const sid = 'usage-wait-notify';
+    const { h, candidate } = await failWithLimit(sid, true);
+    expect(h.onUsageLimitedTurnError).toHaveBeenCalledWith(
+      sid,
+      expect.objectContaining({ message: "You've hit your session limit", ...LIMIT_SIGNALS }),
+      expect.objectContaining({ clientId: 'q-first' }),
+      expect.any(Number),
+    );
+    expect(typeof candidate).toBe('number');
+    const projection = latestProjection(h.projections);
+    expect(projection.error).toBe("You've hit your session limit");
+    // 候选还没排期,不显示等待。
+    expect(projection.usageLimitWait).toBeNull();
+  });
+
+  it('projects the wait alongside the error and continues with the hidden prompt when it fires', async () => {
+    const sid = 'usage-wait-continue';
+    const { h, candidate } = await failWithLimit(sid, true);
+    expect(h.coordinator.armUsageLimitWait(sid, candidate, 9_000_000)).toBe(true);
+    const projection = latestProjection(h.projections);
+    expect(projection.error).not.toBeNull();
+    expect(projection.usageLimitWait).toEqual({ resumeAt: 9_000_000 });
+
+    expect(await h.coordinator.continueAfterUsageLimitReset(sid, candidate, INFO)).toBe('resumed');
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+    expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({
+      type: 'user',
+      content: CONTINUE_AFTER_ERROR_PROMPT,
+    });
+    const persist = h.sendToAgent.mock.calls[1]?.[3]?.persistUserMessage;
+    expect(persist?.autoResume).toBe(true);
+    expect(persist?.autoResumeInfo).toMatchObject({
+      ...INFO,
+      error: "You've hit your session limit",
+    });
+    // 自动动作不冒充用户点击。
+    expect(h.onUiRetry).toHaveBeenLastCalledWith(sid, expect.any(String), 'auto', undefined);
+    expect(latestProjection(h.projections).usageLimitWait).toBeNull();
+  });
+
+  it('restores the error and manual retry if the continuation is dropped before dispatch', async () => {
+    const sid = 'usage-wait-dropped';
+    const { h, candidate } = await failWithLimit(sid, true);
+    expect(h.coordinator.armUsageLimitWait(sid, candidate, 9_000_000)).toBe(true);
+    expect(await h.coordinator.continueAfterUsageLimitReset(sid, candidate, INFO)).toBe('resumed');
+    const clientId = h.onUiRetry.mock.calls.at(-1)?.[1] as string;
+    // 中断自愈的令牌对不上额度续跑项。
+    expect(h.coordinator.restoreAutoResumeRecovery(sid, clientId, 7)).toBe(false);
+    expect(h.coordinator.restoreAutoResumeRecovery(sid, clientId, null)).toBe(true);
+    const projection = h.coordinator.getProjection(sid);
+    expect(projection.error).toBe("You've hit your session limit");
+    expect(projection.recovery?.kind).toBe('active-turn');
+
+    // 已交给 vendor 的续跑不再回滚。
+    const sent = await failWithLimit('usage-wait-dispatched', true);
+    expect(sent.h.coordinator.armUsageLimitWait('usage-wait-dispatched', sent.candidate, 9_000_000)).toBe(true);
+    await sent.h.coordinator.continueAfterUsageLimitReset('usage-wait-dispatched', sent.candidate, INFO);
+    await flush();
+    const sentClientId = sent.h.onUiRetry.mock.calls.at(-1)?.[1] as string;
+    expect(sent.h.coordinator.restoreAutoResumeRecovery('usage-wait-dispatched', sentClientId, null)).toBe(false);
+  });
+
+  it('does not offer a retry when the continuation may already have reached the vendor', async () => {
+    const sid = 'usage-wait-unconfirmed';
+    const { h, candidate } = await failWithLimit(sid, true);
+    expect(h.coordinator.armUsageLimitWait(sid, candidate, 9_000_000)).toBe(true);
+    h.sendToAgent.mockImplementationOnce(async (sessionId, _message, _createOpts, sendOpts) => {
+      await persistQueuedUserMessage(sessionId, sendOpts);
+      throw turnDispatchUnconfirmedError(`Session ${sessionId} terminated before provider acceptance`);
+    });
+    expect(await h.coordinator.continueAfterUsageLimitReset(sid, candidate, INFO)).toBe('resumed');
+    await flush();
+    const clientId = h.onUiRetry.mock.calls.at(-1)?.[1] as string;
+    // 可能已被 vendor 接住:按已派发提交,不回滚成可重试错误。
+    expect(h.onDiscardedQueuedMessage).not.toHaveBeenCalled();
+    expect(h.onUnconfirmedAutoResumeTurn).toHaveBeenCalledTimes(1);
+    expect(h.coordinator.restoreAutoResumeRecovery(sid, clientId, null)).toBe(false);
+    const projection = h.coordinator.getProjection(sid);
+    expect(projection.error).toContain('terminated before provider acceptance');
+    expect(projection.recovery).toBeNull();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+  });
+
+  it('re-sends the original input when the failed turn made no progress', async () => {
+    const sid = 'usage-wait-clone';
+    const { h, candidate } = await failWithLimit(sid, false);
+    expect(h.coordinator.armUsageLimitWait(sid, candidate, 9_000_000)).toBe(true);
+    expect(await h.coordinator.continueAfterUsageLimitReset(sid, candidate, INFO)).toBe('resumed');
+    await flush();
+    expect(h.sendToAgent.mock.calls[1]?.[3]?.persistUserMessage?.autoResume).toBe(true);
+    expect(h.sendToAgent.mock.calls[1]?.[3]?.persistUserMessage?.content).toBe('original long task');
+  });
+
+  it('is invalidated by user actions, an explicit cancel and closing the task', async () => {
+    const cleared = await failWithLimit('usage-wait-clear', true);
+    expect(cleared.h.coordinator.armUsageLimitWait('usage-wait-clear', cleared.candidate, 9_000_000)).toBe(true);
+    cleared.h.coordinator.clearError('usage-wait-clear');
+    expect(latestProjection(cleared.h.projections).usageLimitWait).toBeNull();
+    expect(cleared.h.coordinator.isUsageLimitWaitCurrent('usage-wait-clear', cleared.candidate)).toBe(false);
+    expect(
+      await cleared.h.coordinator.continueAfterUsageLimitReset('usage-wait-clear', cleared.candidate, INFO),
+    ).toBe('superseded');
+
+    const sent = await failWithLimit('usage-wait-user-send', true);
+    expect(sent.h.coordinator.armUsageLimitWait('usage-wait-user-send', sent.candidate, 9_000_000)).toBe(true);
+    sent.h.coordinator.enqueue('usage-wait-user-send', makeItem('q-second', 'do something else'));
+    await flush();
+    expect(sent.h.coordinator.isUsageLimitWaitCurrent('usage-wait-user-send', sent.candidate)).toBe(false);
+
+    const cancelled = await failWithLimit('usage-wait-cancel', true);
+    expect(cancelled.h.coordinator.armUsageLimitWait('usage-wait-cancel', cancelled.candidate, 9_000_000)).toBe(true);
+    const projection = cancelled.h.coordinator.cancelUsageLimitWait('usage-wait-cancel');
+    expect(projection.usageLimitWait).toBeNull();
+    // 错误与手动重试入口保留。
+    expect(projection.error).not.toBeNull();
+    expect(projection.recovery?.kind).toBe('active-turn');
+    expect(
+      await cancelled.h.coordinator.continueAfterUsageLimitReset('usage-wait-cancel', cancelled.candidate, INFO),
+    ).toBe('superseded');
+    expect(cancelled.h.sendToAgent).toHaveBeenCalledTimes(1);
+
+    const closed = await failWithLimit('usage-wait-closed', true);
+    expect(closed.h.coordinator.armUsageLimitWait('usage-wait-closed', closed.candidate, 9_000_000)).toBe(true);
+    closed.h.coordinator.onSessionClosed('usage-wait-closed');
+    expect(closed.h.coordinator.getProjection('usage-wait-closed').usageLimitWait).toBeNull();
+    expect(
+      await closed.h.coordinator.continueAfterUsageLimitReset('usage-wait-closed', closed.candidate, INFO),
+    ).toBe('superseded');
+  });
+
+  it('does not offer a wait for a shared-task guest turn', async () => {
+    const h = createHarness();
+    const sid = 'usage-wait-guest';
+    h.coordinator.enqueue(sid, {
+      ...makeItem('q-guest', 'guest instruction'),
+      sharedTaskAuthor: {
+        sharedTaskId: 'st-1',
+        sessionId: sid,
+        memberId: 'm-1',
+        accountId: 'a-1',
+        displayName: 'Guest',
+      },
+    });
+    await flush();
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(sid, 'error', "You've hit your session limit", LIMIT_SIGNALS);
+    await flush();
+    // 授权可能在等待期间被撤销:不自动续,错误与房主手动处理保留。
+    expect(h.onUsageLimitedTurnError).not.toHaveBeenCalled();
+    expect(latestProjection(h.projections).error).toBe("You've hit your session limit");
+  });
+
+  // 访客 steer 的两种时序都不得挂等待:ACK 先到时本轮归属换成访客 steer 项(被访客判据挡住);
+  // 终态先到时 steer 仍在途、不形成可续的 recovery,也就不会报告候选。
+  it('does not offer a wait once a guest steer joined the turn, even before its ack', async () => {
+    const guest = (sid: string, clientId: string) => ({
+      ...makeItem(clientId, 'guest steer'),
+      sharedTaskAuthor: {
+        sharedTaskId: 'st-1',
+        sessionId: sid,
+        memberId: 'm-1',
+        accountId: 'a-1',
+        displayName: 'Guest',
+      },
+    });
+    for (const ackBeforeError of [true, false]) {
+      const h = createHarness();
+      const sid = `usage-wait-guest-steer-${ackBeforeError}`;
+      h.sendToAgent.mockImplementationOnce(async () => {
+        h.setRunning(true);
+        return sendSuccess();
+      });
+      h.coordinator.enqueue(sid, makeItem('owner', 'owner task'));
+      await flush();
+      let ack!: () => void;
+      h.steerToAgent.mockImplementationOnce(() => new Promise<void>((resolve) => { ack = resolve; }));
+      const steering = h.coordinator.steer(sid, guest(sid, 'guest-steer'));
+      await flush();
+      if (ackBeforeError) {
+        ack();
+        await steering;
+      }
+      h.setRunning(false);
+      h.coordinator.onTurnEvent(sid, 'error', "You've hit your session limit", LIMIT_SIGNALS);
+      await flush();
+      if (!ackBeforeError) {
+        ack();
+        await steering;
+        await flush();
+      }
+      expect(h.onUsageLimitedTurnError).not.toHaveBeenCalled();
+    }
+
+    // 房主自己的 steer 不影响。
+    const owner = createHarness();
+    const ownerSid = 'usage-wait-owner-steer';
+    owner.sendToAgent.mockImplementationOnce(async () => {
+      owner.setRunning(true);
+      return sendSuccess();
+    });
+    owner.coordinator.enqueue(ownerSid, makeItem('owner', 'owner task'));
+    await flush();
+    await owner.coordinator.steer(ownerSid, makeItem('owner-steer', 'more detail'));
+    await flush();
+    owner.setRunning(false);
+    owner.coordinator.onTurnEvent(ownerSid, 'error', "You've hit your session limit", LIMIT_SIGNALS);
+    await flush();
+    expect(owner.onUsageLimitedTurnError).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects an arm for a superseded candidate even if a newer error is showing', async () => {
+    const sid = 'usage-wait-stale';
+    const { h, candidate } = await failWithLimit(sid, true);
+    // 用户手动重试,随后新的一轮以非限额错误结束。
+    await h.coordinator.retryLastError(sid);
+    await flush();
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(sid, 'error', 'some other failure');
+    await flush();
+    expect(h.coordinator.armUsageLimitWait(sid, candidate, 9_000_000)).toBe(false);
+    expect(latestProjection(h.projections).usageLimitWait).toBeNull();
+  });
+
+  it('only cancels the matching wait when a token is given', async () => {
+    const sid = 'usage-wait-token-cancel';
+    const { h, candidate } = await failWithLimit(sid, true);
+    expect(h.coordinator.armUsageLimitWait(sid, candidate, 9_000_000)).toBe(true);
+    expect(h.coordinator.cancelUsageLimitWait(sid, candidate + 1000).usageLimitWait).toEqual({
+      resumeAt: 9_000_000,
+    });
+    expect(h.coordinator.cancelUsageLimitWait(sid, candidate).usageLimitWait).toBeNull();
   });
 });

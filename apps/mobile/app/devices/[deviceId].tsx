@@ -1,4 +1,5 @@
 import { useIsFocused, useLocalSearchParams, useRouter } from 'expo-router';
+import { useHeaderHeight } from 'expo-router/react-navigation';
 import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { useSharedValue } from 'react-native-reanimated';
 import {
@@ -34,6 +35,7 @@ import {
   SimpleStackHeader,
   simpleScrollInsetProps,
   simpleScrollScreenSafeAreaEdges,
+  usesNativeStackHeader,
 } from '@/platform/chrome';
 import { buildMainWindowLayout } from '@/components/mainWindowLayout';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
@@ -203,6 +205,7 @@ function DeviceDetailScreenContent() {
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchFilterOpen, setSearchFilterOpen] = useState(false);
   const insets = useSafeAreaInsets();
+  const headerHeight = useHeaderHeight();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // 熔断 open(电脑端未响应):relay 可能仍 online,可见性与 banner 文案单独入参。
@@ -757,9 +760,23 @@ function DeviceDetailScreenContent() {
   // 整台电脑模式(无 workingDir)继续走下面完整的 console 布局。
   if (projectWorkingDir) {
     const projectItems = sections.flatMap((section) => section.data);
+    const connectionBanner = showConnectionBanner ? (
+      <ConnectionBanner
+        deviceUnresponsive={deviceUnresponsive}
+        error={error}
+        issue={connectionIssue}
+        lastSyncedAt={lastSyncedAt}
+        loading={loading}
+        onSync={() => void loadSessions()}
+        status={status}
+      />
+    ) : null;
+    // iOS 顶栏透明、内容铺到顶栏下:搜索入口放进列表头,由列表让出顶栏高度;不透明顶栏在
+    // iOS 26+ 会被 react-native-screens 再垫一层顶部安全区,标题栏下方出现大块空白。
     return (
       <SafeAreaView edges={simpleScrollScreenSafeAreaEdges()} style={styles.safeArea} testID="deviceDetail.screen">
         <SimpleStackHeader
+          scrollEdge
           syncing={!showConnectionBanner && (loading || status === 'connecting')}
           action={{
             label: t('devices.common.create'),
@@ -780,53 +797,10 @@ function DeviceDetailScreenContent() {
           title={projectName ?? deviceName}
           titleTestID="deviceDetail.title"
         />
-        {showConnectionBanner ? (
-          <ConnectionBanner
-            deviceUnresponsive={deviceUnresponsive}
-            error={error}
-            issue={connectionIssue}
-            lastSyncedAt={lastSyncedAt}
-            loading={loading}
-            onSync={() => void loadSessions()}
-            status={status}
-          />
-        ) : null}
-        <View style={styles.projectSearchChrome}>
-          {searchOpen || !!searchQuery.trim() ? (
-            <HomeSearchBar
-              autoFocus={searchOpen && !searchQuery}
-              filterA11y={searchFilterA11y}
-              filterActions={searchFilterMenu.filterActions}
-              filterActive={indexedSearch.activeFilterCount > 0}
-              onChangeQuery={setSearchQuery}
-              onDismiss={() => setSearchOpen(false)}
-              onFilterAction={searchFilterMenu.onFilterAction}
-              onOpenFilter={() => setSearchFilterOpen(true)}
-              padded={false}
-              query={searchQuery}
-              testIDs={{
-                clear: 'deviceDetail.projectSearchCloseButton',
-                filter: 'deviceDetail.projectSearchFilterButton',
-                input: 'deviceDetail.projectSearchInput',
-                row: 'deviceDetail.projectSearchRow',
-              }}
-            />
-          ) : (
-            <MainWindowActionGroup
-              density="compact"
-              secondaryActions={[
-                {
-                  accessibilityLabel: t('devices.detail.search.openA11y'),
-                  active: false,
-                  label: t('devices.detail.search.label'),
-                  onPress: () => setSearchOpen(true),
-                  testID: 'deviceDetail.projectSearchToggleButton',
-                },
-              ]}
-              testID="deviceDetail.projectSearchActions"
-            />
-          )}
-        </View>
+        {/* 连接提示只是零高度锚点;iOS 内容区从屏幕顶开始,锚点挪到顶栏下沿。 */}
+        {usesNativeStackHeader()
+          ? <View pointerEvents="box-none" style={[styles.projectConnectionAnchor, { top: headerHeight }]}>{connectionBanner}</View>
+          : connectionBanner}
         <ListDisclosureScope controller={disclosure.controller}>
           <SectionList
             CellRendererComponent={DeviceListCell}
@@ -843,6 +817,42 @@ function DeviceDetailScreenContent() {
             renderSectionHeader={() => null}
             contentContainerStyle={[styles.listContent, { paddingBottom: spacing.xxl }]}
             testID="deviceDetail.projectSessionList"
+            ListHeaderComponent={<View style={styles.projectSearchChrome}>
+              {searchOpen || !!searchQuery.trim() ? (
+                <HomeSearchBar
+                  autoFocus={searchOpen && !searchQuery}
+                  filterA11y={searchFilterA11y}
+                  filterActions={searchFilterMenu.filterActions}
+                  filterActive={indexedSearch.activeFilterCount > 0}
+                  onChangeQuery={setSearchQuery}
+                  onDismiss={() => setSearchOpen(false)}
+                  onFilterAction={searchFilterMenu.onFilterAction}
+                  onOpenFilter={() => setSearchFilterOpen(true)}
+                  padded={false}
+                  query={searchQuery}
+                  testIDs={{
+                    clear: 'deviceDetail.projectSearchCloseButton',
+                    filter: 'deviceDetail.projectSearchFilterButton',
+                    input: 'deviceDetail.projectSearchInput',
+                    row: 'deviceDetail.projectSearchRow',
+                  }}
+                />
+              ) : (
+                <MainWindowActionGroup
+                  density="compact"
+                  secondaryActions={[
+                    {
+                      accessibilityLabel: t('devices.detail.search.openA11y'),
+                      active: false,
+                      label: t('devices.detail.search.label'),
+                      onPress: () => setSearchOpen(true),
+                      testID: 'deviceDetail.projectSearchToggleButton',
+                    },
+                  ]}
+                  testID="deviceDetail.projectSearchActions"
+                />
+              )}
+            </View>}
             renderItem={({ item, index, section }) => (
               <DeviceDetailSessionRow
                 asBlock
@@ -1445,10 +1455,8 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     fontWeight: fontWeight.regular,
     minWidth: 0,
   },
-  projectSearchChrome: {
-    paddingHorizontal: spacing.lg,
-    paddingTop: spacing.sm,
-  },
+  projectConnectionAnchor: { left: 0, position: 'absolute', right: 0 },
+  projectSearchChrome: { paddingBottom: spacing.sm },
   segmentScroll: {
     marginHorizontal: -spacing.lg,
   },

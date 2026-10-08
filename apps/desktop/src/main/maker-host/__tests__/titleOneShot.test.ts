@@ -884,7 +884,7 @@ describe('generateTitleViaProvider — xd(网关 chat-completions)', () => {
       expect(init.headers.authorization).toBe('Bearer gk-1');
       expect(JSON.parse(init.body)).toMatchObject({
         model: 'deepseek/deepseek-v4-flash',
-        max_tokens: 32,
+        max_tokens: 160,
         thinking: { type: 'disabled' },
         reasoning_effort: 'low',
       });

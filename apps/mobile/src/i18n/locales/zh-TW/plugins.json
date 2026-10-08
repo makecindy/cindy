@@ -78,7 +78,7 @@
   "returnToPlugin": "返回插件",
   "computerPreview": "來自電腦的網頁預覽",
   "previewFailed": "預覽載入失敗，請檢查電腦連線和網頁服務。",
-  "simulatorOnComputer": "模擬器由這台電腦承載，請進入電腦畫面查看和操作。",
+  "unsupportedOperation": "目前版本不支援此操作。請在電腦上的插件詳情中查看可用操作。",
   "nativeStepHint": "在下方完成此項設定",
   "shareMedia": "分享或儲存",
   "frequency_daily": "每天",

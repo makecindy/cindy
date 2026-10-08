@@ -69,6 +69,8 @@ export interface AgentErrorEventData {
   willRetry?: boolean;
   sdkError?: string;
   reason?: string;
+  /** 账号用量受限时上游给出的重置时刻(unix ms)；未知时省略。 */
+  usageResetAt?: number;
   /** Structured details for reason='tool_use_loop_detected'. */
   toolLoop?: ToolLoopErrorDetails;
   [key: string]: unknown;
@@ -138,6 +140,8 @@ export interface AgentTaskUpdateEventData {
  */
 export interface SendOrigin {
   kind: 'user' | 'scheduler' | 'goal';
+  /** IM user turns deliver their successful replies on that surface, without App completion alerts. */
+  surface?: 'im';
   /** scheduler 来源时的任务标识(供 IM 转播时显示"哪个自动任务")。 */
   scheduleId?: string;
   scheduleName?: string;

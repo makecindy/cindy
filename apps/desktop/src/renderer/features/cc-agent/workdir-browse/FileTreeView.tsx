@@ -389,12 +389,6 @@ export const FileTreeView = forwardRef<FileTreeViewHandle, FileTreeViewProps>(fu
         <DropdownMenuContent
           align="start"
           sideOffset={2}
-          className={cn(
-            'rounded-xl p-0.5 overflow-hidden',
-            'bg-[var(--cmd-palette-bg)]',
-            'border border-[var(--cmd-palette-border)]',
-            'shadow-[var(--shadow-menu)]',
-          )}
         >
           {isFolderMenu && menu ? (
             <>
@@ -405,10 +399,9 @@ export const FileTreeView = forwardRef<FileTreeViewHandle, FileTreeViewProps>(fu
                     close();
                     onNewFile(parent);
                   }}
-                  className="h-7 px-2.5 rounded-md text-13 leading-none text-[var(--msg-assistant-text)] focus:bg-[var(--cmd-palette-item-hover)]"
                 >
                   <FilePlus className="mr-2 h-3.5 w-3.5 shrink-0" />
-                  <span className="relative top-px">{t('ccAgent.workdirBrowse.treeMenu.newFile')}</span>
+                  {t('ccAgent.workdirBrowse.treeMenu.newFile')}
                 </DropdownMenuItem>
               )}
               {onNewFolder && (
@@ -418,10 +411,9 @@ export const FileTreeView = forwardRef<FileTreeViewHandle, FileTreeViewProps>(fu
                     close();
                     onNewFolder(parent);
                   }}
-                  className="h-7 px-2.5 rounded-md text-13 leading-none text-[var(--msg-assistant-text)] focus:bg-[var(--cmd-palette-item-hover)]"
                 >
                   <FolderPlus className="mr-2 h-3.5 w-3.5 shrink-0" />
-                  <span className="relative top-px">{t('ccAgent.workdirBrowse.treeMenu.newFolder')}</span>
+                  {t('ccAgent.workdirBrowse.treeMenu.newFolder')}
                 </DropdownMenuItem>
               )}
               {onRename && (
@@ -431,10 +423,9 @@ export const FileTreeView = forwardRef<FileTreeViewHandle, FileTreeViewProps>(fu
                     close();
                     onRename(entry);
                   }}
-                  className="h-7 px-2.5 rounded-md text-13 leading-none text-[var(--msg-assistant-text)] focus:bg-[var(--cmd-palette-item-hover)]"
                 >
                   <Pencil className="mr-2 h-3.5 w-3.5 shrink-0" />
-                  <span className="relative top-px">{t('ccAgent.workdirBrowse.treeMenu.rename')}</span>
+                  {t('ccAgent.workdirBrowse.treeMenu.rename')}
                 </DropdownMenuItem>
               )}
               {/* remote 会话不传 onRevealInFolder(文件在远端,本机文件管理器
@@ -446,10 +437,9 @@ export const FileTreeView = forwardRef<FileTreeViewHandle, FileTreeViewProps>(fu
                     close();
                     onRevealInFolder(entry);
                   }}
-                  className="h-7 px-2.5 rounded-md text-13 leading-none text-[var(--msg-assistant-text)] focus:bg-[var(--cmd-palette-item-hover)]"
                 >
                   <FolderOpen className="mr-2 h-3.5 w-3.5 shrink-0" />
-                  <span className="relative top-px">{t('ccAgent.workdirBrowse.treeMenu.showInFolder')}</span>
+                  {t('ccAgent.workdirBrowse.treeMenu.showInFolder')}
                 </DropdownMenuItem>
               )}
             </>
@@ -462,10 +452,9 @@ export const FileTreeView = forwardRef<FileTreeViewHandle, FileTreeViewProps>(fu
                     close();
                     onOpenInFileBrowser(entry);
                   }}
-                  className="h-7 px-2.5 rounded-md text-13 leading-none text-[var(--msg-assistant-text)] focus:bg-[var(--cmd-palette-item-hover)]"
                 >
                   <FolderTree className="mr-2 h-3.5 w-3.5 shrink-0" />
-                  <span className="relative top-px">{t('ccAgent.workdirBrowse.treeMenu.openInFileBrowser')}</span>
+                  {t('ccAgent.workdirBrowse.treeMenu.openInFileBrowser')}
                 </DropdownMenuItem>
               )}
               {canOpenEntryInSidebarBrowser(menu.entry) && (
@@ -475,10 +464,9 @@ export const FileTreeView = forwardRef<FileTreeViewHandle, FileTreeViewProps>(fu
                     close();
                     onOpenInSidebarBrowser?.(entry);
                   }}
-                  className="h-7 px-2.5 rounded-md text-13 leading-none text-[var(--msg-assistant-text)] focus:bg-[var(--cmd-palette-item-hover)]"
                 >
                   <PanelRight className="mr-2 h-3.5 w-3.5 shrink-0" />
-                  <span className="relative top-px">{t('chat.markdownRenderer.openInSidebarBrowser')}</span>
+                  {t('chat.markdownRenderer.openInSidebarBrowser')}
                 </DropdownMenuItem>
               )}
               {onCopyFilePath && (
@@ -488,10 +476,9 @@ export const FileTreeView = forwardRef<FileTreeViewHandle, FileTreeViewProps>(fu
                     close();
                     onCopyFilePath(entry);
                   }}
-                  className="h-7 px-2.5 rounded-md text-13 leading-none text-[var(--msg-assistant-text)] focus:bg-[var(--cmd-palette-item-hover)]"
                 >
                   <Clipboard className="mr-2 h-3.5 w-3.5 shrink-0" />
-                  <span className="relative top-px">{t('ccAgent.workdirBrowse.treeMenu.copyFilePath')}</span>
+                  {t('ccAgent.workdirBrowse.treeMenu.copyFilePath')}
                 </DropdownMenuItem>
               )}
               {onRename && (
@@ -501,10 +488,9 @@ export const FileTreeView = forwardRef<FileTreeViewHandle, FileTreeViewProps>(fu
                     close();
                     onRename(entry);
                   }}
-                  className="h-7 px-2.5 rounded-md text-13 leading-none text-[var(--msg-assistant-text)] focus:bg-[var(--cmd-palette-item-hover)]"
                 >
                   <Pencil className="mr-2 h-3.5 w-3.5 shrink-0" />
-                  <span className="relative top-px">{t('ccAgent.workdirBrowse.treeMenu.rename')}</span>
+                  {t('ccAgent.workdirBrowse.treeMenu.rename')}
                 </DropdownMenuItem>
               )}
               {/* remote 会话不传 onRevealInFolder(文件在远端,本机文件管理器
@@ -516,10 +502,9 @@ export const FileTreeView = forwardRef<FileTreeViewHandle, FileTreeViewProps>(fu
                     close();
                     onRevealInFolder(entry);
                   }}
-                  className="h-7 px-2.5 rounded-md text-13 leading-none text-[var(--msg-assistant-text)] focus:bg-[var(--cmd-palette-item-hover)]"
                 >
                   <FolderOpen className="mr-2 h-3.5 w-3.5 shrink-0" />
-                  <span className="relative top-px">{t('ccAgent.workdirBrowse.treeMenu.showInFolder')}</span>
+                  {t('ccAgent.workdirBrowse.treeMenu.showInFolder')}
                 </DropdownMenuItem>
               )}
               {canOpenEntryInBrowser(menu.entry) && (
@@ -529,10 +514,9 @@ export const FileTreeView = forwardRef<FileTreeViewHandle, FileTreeViewProps>(fu
                     close();
                     onOpenInBrowser?.(entry);
                   }}
-                  className="h-7 px-2.5 rounded-md text-13 leading-none text-[var(--msg-assistant-text)] focus:bg-[var(--cmd-palette-item-hover)]"
                 >
                   <Globe className="mr-2 h-3.5 w-3.5 shrink-0" />
-                  <span className="relative top-px">{t('chat.markdownRenderer.openInBrowser')}</span>
+                  {t('chat.markdownRenderer.openInBrowser')}
                 </DropdownMenuItem>
               )}
               {onDeleteFile && (
@@ -542,10 +526,10 @@ export const FileTreeView = forwardRef<FileTreeViewHandle, FileTreeViewProps>(fu
                     close();
                     onDeleteFile(entry);
                   }}
-                  className="h-7 px-2.5 rounded-md text-13 leading-none text-red-500 dark:text-red-400 focus:bg-red-50 dark:focus:bg-red-500/10"
+                  variant="danger"
                 >
                   <Trash2 className="mr-2 h-3.5 w-3.5 shrink-0" />
-                  <span className="relative top-px">{t('ccAgent.workdirBrowse.treeMenu.deleteFile')}</span>
+                  {t('ccAgent.workdirBrowse.treeMenu.deleteFile')}
                 </DropdownMenuItem>
               )}
             </>

@@ -643,6 +643,7 @@ export function normalizeMarkdownImageSrc(
     src.startsWith('http://') ||
     src.startsWith('https://') ||
     src.startsWith('xdt-image://') ||
+    src.startsWith('xdt-video://') ||
     src.startsWith('cindy-media://') ||
     src.startsWith('cindy-remote-media://')
   ) {

@@ -1,3 +1,7 @@
+import * as AlertDialog from '@radix-ui/react-alert-dialog';
+import { useCallback } from 'react';
+import { useDialogExit } from '@/hooks/useDialogExit';
+import { WINDOW_DRAG_STYLE, WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 /**
  * 插件卡片(GhostToolCard)的两个宿主交互面:
  *   - GhostCardPromptPanel:data-ghost-prompt 动作的提示词输入面板(与老基座
@@ -15,10 +19,11 @@ import { useTranslation } from 'react-i18next';
 
 import { GHOST_CARD_ACTION_PROMPT_MAX_LEN } from '@/../shared/ghost';
 
-function BlockingScrim() {
+/** 吞掉卡片外的点击。锚定在卡片上的输入浮层保持透明;居中的确认框是模态弹窗,用统一遮罩(DESIGN §4)。 */
+function BlockingScrim({ modal = false }: { modal?: boolean }) {
   return (
     <div
-      className="fixed inset-0 z-40"
+      className={modal ? 'modal-scrim fixed inset-0 z-40' : 'fixed inset-0 z-40'}
       data-testid="ghost-card-scrim"
       onMouseDown={(e) => e.preventDefault()}
     />
@@ -117,8 +122,8 @@ export function GhostCardPromptPanel({
 export function GhostCardLinkConfirm({
   url,
   host,
-  onConfirm,
-  onCancel,
+  onConfirm: notifyConfirmed,
+  onCancel: notifyCanceled,
 }: {
   url: string;
   /** 醒目域名;解析失败传空串,正文仍展示全串。 */
@@ -127,28 +132,30 @@ export function GhostCardLinkConfirm({
   onCancel: () => void;
 }) {
   const { t } = useTranslation();
+  const dialog = useDialogExit();
+  const onCancel = useCallback(() => dialog.close(notifyCanceled), [dialog.close, notifyCanceled]);
+  const onConfirm = useCallback(() => dialog.close(notifyConfirmed), [dialog.close, notifyConfirmed]);
   return (
-    <>
-      <BlockingScrim />
-      <div
-        className="fixed left-1/2 top-1/2 z-50 w-80 -translate-x-1/2 -translate-y-1/2 rounded-lg border p-3.5"
-        role="alertdialog"
-        aria-label={t('chat.ghostCall.linkConfirmTitle')}
-        onKeyDown={(e) => {
-          if (e.key === 'Escape') onCancel();
-        }}
-        style={{
-          backgroundColor: 'var(--surface-elevated)',
-          borderColor: 'var(--border-default)',
-          boxShadow: 'var(--shadow-menu)',
-        }}
+    <AlertDialog.Root open={dialog.open} onOpenChange={(open) => { if (!open) onCancel(); }}>
+      <AlertDialog.Portal>
+        <AlertDialog.Overlay
+          className="modal-scrim fixed inset-0 z-40"
+          style={WINDOW_DRAG_STYLE}
+          data-testid="ghost-card-scrim"
+          onMouseDown={(event) => event.preventDefault()}
+        />
+      <AlertDialog.Content
+        className="modal-panel fixed inset-0 z-50 m-auto h-fit w-80 p-3.5 outline-none"
+        style={WINDOW_NO_DRAG_STYLE}
+        onOpenAutoFocus={dialog.onOpenAutoFocus}
+        onCloseAutoFocus={dialog.onCloseAutoFocus}
       >
-        <div className="text-13 font-semibold" style={{ color: 'var(--text-primary)' }}>
+        <AlertDialog.Title asChild><div className="text-13 font-semibold" style={{ color: 'var(--text-primary)' }}>
           {t('chat.ghostCall.linkConfirmTitle')}
-        </div>
-        <div className="mt-1.5 text-xs" style={{ color: 'var(--text-secondary)' }}>
+        </div></AlertDialog.Title>
+        <AlertDialog.Description asChild><div className="mt-1.5 text-xs" style={{ color: 'var(--text-secondary)' }}>
           {t('chat.ghostCall.linkConfirmHint')}
-        </div>
+        </div></AlertDialog.Description>
         {host ? (
           <div
             className="mt-1.5 break-all text-13 font-semibold"
@@ -164,22 +171,21 @@ export function GhostCardLinkConfirm({
           {url}
         </div>
         <div className="mt-2.5 flex items-center justify-end gap-1.5">
-          <Button
+          <AlertDialog.Cancel asChild><Button
             variant="secondary"
             tone="quiet"
             size="xs"
             compact
             type="button"
-            autoFocus
-            onClick={onCancel}
           >
             {t('chat.ghostCall.linkConfirmCancel')}
-          </Button>
+          </Button></AlertDialog.Cancel>
           <Button variant="secondary" size="xs" compact type="button" onClick={onConfirm}>
             {t('chat.ghostCall.linkConfirmOpen')}
           </Button>
         </div>
-      </div>
-    </>
+      </AlertDialog.Content>
+      </AlertDialog.Portal>
+    </AlertDialog.Root>
   );
 }

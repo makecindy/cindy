@@ -69,7 +69,7 @@ the whole host application: title bar, navigation, messages, tool-pane chrome,
 settings and other host pages share continuous viewport-aligned artwork. This
 opt-in setting supersedes the CINDY sidebar-only backdrop treatment while active;
 disabling it restores the original theme without modifying theme files or tokens.
-Use a theme-surface veil, never a fixed black overlay in Light mode. Image opacity
+Blend wallpaper with the theme surface, never a fixed black overlay in Light mode. Image opacity
 must not affect text or icons. Elevated controls, menus, dialogs and embedded web
 or editor content keep their readable surfaces. Composer scroll masking must
 align with the same wallpaper instead of introducing an opaque footer rectangle.
@@ -78,10 +78,11 @@ Verify actual Light/Dark screenshots across host pages and the expanded tool pan
 
 The built-in wallpaper catalog contains only Window Companion, Future Atelier and Dream
 Wander, plus None to restore the theme canvas (user decision, 2026-10-01).
-Custom wallpaper is available through Choose image, Replace image and Remove image
-in the same section (user addition, 2026-10-01). Accept local PNG/JPEG/WebP up to
+Custom wallpaper is available through Choose Wallpaper, Replace Wallpaper and Remove Wallpaper
+in the same section (user addition, 2026-10-01; video support, 2026-10-05). Accept local PNG/JPEG/WebP up to
 20 MB and 40 megapixels, store a metadata-free static image up to 3840 pixels
-in the managed media store. Wallpaper selection and the custom image reference
+in the managed media store. Also accept local MP4 videos up to 100 MB, preserving their bytes;
+H.264 is recommended for playback compatibility. Wallpaper selection and the custom media reference
 are shared within the Desktop profile, just like theme preferences (user decision,
 2026-10-02). Import, replacement, removal and recycling are client-wide as well:
 no account database, account-bound operation guard or pre-release owner migration.
@@ -90,9 +91,36 @@ switching accounts (or signing out) keeps the same wallpaper. Font-only utility 
 custom media URLs.
 Detached sidebar and plugin-panel host chrome use the same wallpaper provider;
 embedded plugin webviews retain their own surfaces and permission boundary.
-Cancellation and import failures retain the existing image. Switching to a built-in
-or None keeps the imported image available; Remove image forgets it. Custom imagery
-shares the continuous cover-fit canvas and readability veil; no dynamic toggle.
+Cancellation and import failures retain the existing media. Switching to a built-in
+or None keeps the imported media available; Remove Wallpaper forgets it. Custom imagery
+shares the continuous cover-fit canvas and readability veil. Custom MP4 exposes the existing
+Static / Dynamic choice: Static and reduced motion show a paused frame; Dynamic loops silently
+and pauses when hidden/minimized. Playback failure releases the decoder, leaves the theme surface
+visible and shows an actionable error in wallpaper settings. The custom video tile uses a film icon
+instead of opening a second decoder for a thumbnail.
+Wallpaper Visibility ranges from 0% (hidden) to 100% (fully visible), in 1% steps
+(user decision, 2026-10-05). Static images use the theme-surface veil with opacity equal to
+100% minus visibility. Video uses visibility directly as the video element's opacity over
+an opaque theme-surface backing, without a separate translucent veil; this avoids the
+observed Windows HDR brightness shift when P3 content changes the output composition.
+The video wrapper's opacity is reserved for loading/exit crossfades. Never reduce text
+or control opacity. Release video playback at 0%. Blend-mode controls remain out of scope.
+Optional Wallpaper Blur (user addition, 2026-10-06) ranges from 0 (off, default) to 20
+in whole steps, applying a CSS-pixel radius only to the wallpaper image/video. No UI,
+theme backing, or text is blurred; video opacity remains on the video itself. At zero,
+retain the existing filter-free rendering path. Overscan the artwork by three radii
+and clip the video at the viewport to avoid transparent edges; static and video crops
+must match. For blurred static scenes, reuse the moving-scene message fade instead
+of repainting a sharp wallpaper behind the composer. Persist only explicit overrides;
+Reset removes the blur override. Reuse the settings Slider with a localized accessible
+label and hint, disable it for None, and explain the additional GPU cost for video.
+Dragging previews blur locally; only a committed pointer/keyboard value is saved and
+broadcast. Cancelled gestures or leaving settings discard the preview.
+Existing preferences without an explicit visibility override keep the previous Light/Dark veil
+mapping and display its equivalent visibility. The unchanged soft default is 37% visible in
+Light and 27% in Dark. Adjusting the slider saves literal visibility, shared across themes;
+Reset removes that override and restores the theme-dependent default. Do not rewrite old
+preferences just because they were read or a theme changed.
 Remove the previous arrow, standalone portrait, gradient and paper
 options and assets. Retired saved selections normalize to None; unrelated theme
 and font preferences remain unchanged. All three scenes use the same cover fit,
@@ -450,7 +478,7 @@ Ordinary confirmations opt into standard buttons with `presentation="standard"` 
 - **Menu hover highlight** (`components/ui/dropdown-menu-highlight.ts`): one `--sidebar-item-hover` surface (8px) per `DropdownMenuContent` / `DropdownMenuSubContent` glides between rows with `transform`; the row nearest the pointer anywhere in the panel wins, and separators do not interrupt the glide. Entering fades in from the checked row (or the target), leaving fades out; keyboard follows Radix's highlighted item, and an open SubTrigger stays highlighted while its submenu is in use. Motion: `transform` / `opacity` on `--motion-instant` / `--motion-ease-out` (fade-out `--motion-ease-in`), size snaps, no slide under reduced motion. Danger rows use the same grey layer. Rows whose caller sets its own `focus:` / `hover:` / `data-[highlighted]:` / `data-[state=open]:` background keep it and get no layer; `hoverHighlight={false}` restores per-row fills. Sidebar menus (`features/cc-agent/sidebar/menuStyles.ts`: `MENU_ITEM_CLASS` / `MENU_ROW_CLASS` = `h-8 gap-2`, triggers `cursor-pointer`) use the same highlight.
 - **Panel width must bind to the trigger width** — never narrower or wider than the control that opened it. Radix Select: `position="popper"` + `width: var(--radix-select-trigger-width)`; other primitives measure the trigger. (A repeatedly-tripped rule: dropdown width must match the control above.)
 - **Select listbox option rows** (Select only; dropdown menu rows follow the Menu entries above): selected / hovered highlight fills use the **8px inner radius** (see §5 — the panel is a 12px container, the row highlight is the inner 8px tier; the inner radius must be smaller than the container's to nest cleanly). Highlight bg via `--surface-hover` / Radix `data-[highlighted]`; selected rows get the chip fill, unselected rows stay transparent.
-- **Composer dropdown rows (the model / permission / + MorphPopover menus) — one unified contract** (2026-07-22): every option row in these three menus must match **verbatim** — horizontal padding `px-3`, radius `rounded-[8px]`, and both hover and selected fills on the **same token `--model-item-hover`**; the selected state is additionally marked only by a check + `font-medium` (danger-tier orange / blue tints **text only**, never the fill). **Why not `--surface-chip` for the selected fill**: the cindy default skins tune `--surface-hover` / `--surface-chip` to sit-on-page values that are darker than the lifted panel (`--surface-elevated`), which would make row highlights invisible; so menu-row hover resolves to the component-level token `--model-item-hover`, overridden in cindy-dark / cindy-light to "one step above the panel" (dark lifts lighter, light presses darker). When touching any of these three menus' row styles, change all three in sync — never just one.
+- **Composer dropdown rows — one contract with the shared menu** (2026-10-04, supersedes 2026-07-22): the composer menus keep their own shells — MorphPopover (model / permission / + / agent; §14.4 container transform unchanged), the / and @ lists, the bot-chat @ list and the settings search results — but use the shared menu row parts from `components/ui/menu-row.tsx`: `COMPOSER_MENU_ROW` (8px radius, menu text / weight / motion), `menuRowAttrs`, `withMenuLabels`, and one glide highlight per panel (`useMenuPanel` + `MenuHighlightLayer`, the same `--sidebar-item-hover` layer as the shared menu). Rows inside a glide panel set no `hover:` / `focus:` fill of their own (rows that sit outside any glide panel — the model config card's engine rows, the legacy follow-session and "manage providers" rows — keep a `hover:bg-sidebar-item-hover` fill in the same grey). The selected row is marked by a check + 500 and never by a fill — permission, + and agent menus. **The model menu is the one exception** (owner ruling 2026-10-04, keeping the 2026-08-13 ruling): its chosen row keeps a whole-row `--sidebar-item-hover` fill with no check (`data-[menu-active]:bg-transparent`, so the fill steps aside while the glide layer covers that row instead of stacking two translucent layers), the model name stays 500, and the effort / follow-session rows keep their fill and existing check; it still takes the shared glide highlight and the glass panel. Danger-tier orange / blue tints the **text only**. Lists that keep focus in a text input (/, @, bot @, settings search) stay focus-in-input: the highlight follows their own current index (`data-menu-current` or `aria-selected`) through `attachMenuHighlight`'s `current` option, never Radix focus. Panels: MorphPopover ends on `--menu-panel-surface` (the shared menu's glass under Cindy themes, opaque on Windows) with `--cmd-palette-border` and `--shadow-menu`; the / and @ lists and the model config flyout use the same 12px panel and `--shadow-menu` (the softer `--cmd-palette-shadow` stays for the command palette and the / tooltip). Group labels use the shared label (12 / 500 / `--cmd-palette-item-meta`). When touching any composer menu's row styles, change them through `menu-row.tsx` — never one menu alone.
 
 FormField → Select forwards descriptions, required/error semantics, and the semantic error border; native browser required validation remains opt-in by the business form.
 
@@ -464,9 +492,9 @@ Reference implementation: `apps/desktop/src/renderer/components/ui/confirm-dialo
 
 **Cindy Make preflight exception (owner decision, 2026-09-20):** this progress dialog uses a top-right × instead of a footer Cancel. The header stays visible while the report scrolls. The ×, Esc and scrim all open the same confirmation, with live copy distinguishing environment preparation, source preparation, upstream search and finished checks. Explain that stopping shared preparation also stops its Settings projection and that prepared resources are kept. Creating the build session temporarily disables dismissal. This exception supersedes the general closing-affordance rule below only for `CindyMakePreflightDialog`; the request form keeps its existing footer.
 
-- **Overlay**: the full-screen scrim uses the `--overlay-modal` token (ConfirmDialog's current `neutral-900/40` hardcoded pair is legacy — **new dialogs always use the token**; do not copy the legacy pair).
+- **Overlay** (blur added 2026-10-04): every modal scrim — Radix `Dialog.Overlay` / `AlertDialog.Overlay`, hand-built scrims and the Radix side drawers — uses the shared `.modal-scrim` class (`styles/globals.css`): `--overlay-modal` (Light `rgba(0,0,0,0.5)` / Dark `rgba(0,0,0,0.7)`) plus a 4px `backdrop-filter` blur of whatever is behind; on Windows (`html[data-platform='win32']`) there is no blur, the same reason as the opaque Windows menus (§15.12). Never write a scrim colour, `bg-black/…`, `backdrop-blur-*` or an inline background at the call site; to change depth or blur, change the token or the class, never one component. Not dialogs and therefore not covered: the lighter whole-window closing dim in `WindowControls.tsx`, the tap-to-close drawer scrims in `DiffPanelShell.tsx`, lightboxes (`--overlay-lightbox`), the login brand canvas (§16) and the transparent click blocker behind anchored plugin-card prompts.
 - **Tooltips opened inside the modal** (2026-09-08, DS-6 review fix): the shared `Tip` portals its content to `document.body` on the default `z-[60]` layer — **below** the `z-[10000]` modal overlay, so an unraised tooltip is covered by its own dialog. Any `Tip` whose trigger lives inside a modal must raise its content above the host dialog: pass `contentClassName="z-[10001]"` to `Tip`, and `secretTipContentClassName="z-[10001]"` on `Input` for the password reveal button (both DS-6 forms do). This mirrors the existing `z-[10001]` popover/dropdown convention inside `z-[10000]` dialogs.
-- **Container**: a container — 12px radius (`rounded-xl`), `--confirm-bg`, `--confirm-shadow`, 16px padding (`p-4`), centered. Width: confirm/notice dialogs ≈ 400px (`max-w-[400px]`); dialogs with inputs/forms may widen to ≈ 460px and shrink with the viewport (`min(460px, 100vw-32px)`). The DS-6 multi-runtime provider and MCP forms use 600px with the same 16px viewport gutters and a scrollable body capped within 88vh.
+- **Container**: every centered modal panel uses the shared `.modal-panel` class — 12px radius, `--confirm-bg` Card fill, 1px Board (`--border-default`) outline and the registered floating-layer shadow `--shadow-menu` — the same shadow as menu panels (2026-10-04 unification; user ruling the same day). Bot dialogs share this panel; the Bot zero-shadow rule covers in-page Bot surfaces, not modal panels. Call sites never add their own radius, background, border colour or shadow, nor glass `--cmd-palette-bg`; they set only width, position, padding (16px `p-4` by default) and layout. Radix side drawers keep their own edge-anchored panel and share only the scrim. Guard: `__tests__/modalSurfaceContract.test.ts`. Width: confirm/notice dialogs ≈ 400px (`max-w-[400px]`); dialogs with inputs/forms may widen to ≈ 460px and shrink with the viewport (`min(460px, 100vw-32px)`). The DS-6 multi-runtime provider and MCP forms use 600px with the same 16px viewport gutters and a scrollable body capped within 88vh.
 - **Title / description**: `--confirm-title` / `--confirm-desc`, medium weight.
 - **Buttons**: pill (9999px); primary = inverse neutral (`--confirm-btn-primary-*`, not an automatic CTA assignment), secondary/cancel = outlined (`--confirm-btn-secondary-*`, transparent fill + Board border); footer `justify-end`.
 - **Focus on open**: dismissible forms focus their primary input. Ordinary AlertDialog confirmation retains Cancel by default; explicit `autoFocusConfirm` focuses the primary action, while a required typed confirmation takes precedence. Preserve primary → optional third → Cancel DOM order (DS-6 decision).
@@ -660,7 +688,7 @@ Making something clickable never moves a layer between Step 1 and Step 2.
 | Bordered (Level 1) | `1px solid` Board (`#d7d7d4` Light / `#3c3c3a` Dark)                      | Cards, code blocks, dividers, section outlines |
 | Lifted (Card)      | Card fill (`#ffffff` Light / `#2c2c2a` Dark) + optional 1px Board outline | Login cards, modals, raised panels             |
 
-**Shadow Philosophy**: Cindy's base visual language uses **zero shadows**. This is not an oversight — it's a deliberate design decision. The flat, shadowless approach creates a paper-like experience where elements are distinguished purely by background color and single-pixel borders. Depth is communicated through **content hierarchy and typography weight**, not visual layering. (The only shadows in the system are the mobile home drawer exception above and the token-gated floating-layer exceptions and the Slider thumb (§15.18) / Segmented selected-pill (§4) exceptions registered in §10 — `--shadow-menu` / `--cmd-palette-shadow` / `--confirm-shadow` / `--segmented-selected-shadow`; never add ad-hoc shadows to in-page elements. A Switch-knob shadow was trialed and explicitly rejected — user ruling 2026-08-05: the legacy `shadow-lg` on the 16px thumb was invisible in practice, and a visible replacement read as noise; the knob is flat by decision, don't re-add it.)
+**Shadow Philosophy**: Cindy's base visual language uses **zero shadows**. This is not an oversight — it's a deliberate design decision. The flat, shadowless approach creates a paper-like experience where elements are distinguished purely by background color and single-pixel borders. Depth is communicated through **content hierarchy and typography weight**, not visual layering. (The only shadows in the system are the mobile home drawer exception above and the token-gated floating-layer exceptions and the Slider thumb (§15.18) / Segmented selected-pill (§4) exceptions registered in §10 — `--shadow-menu` (menus, popovers and modal panels, §4) / `--cmd-palette-shadow` / `--segmented-selected-shadow` (`--confirm-shadow` stays registered for theme compatibility but is no longer consumed by dialogs); never add ad-hoc shadows to in-page elements. A Switch-knob shadow was trialed and explicitly rejected — user ruling 2026-08-05: the legacy `shadow-lg` on the 16px thumb was invisible in practice, and a visible replacement read as noise; the knob is flat by decision, don't re-add it.)
 
 ## 7. Do's and Don'ts
 
@@ -724,7 +752,7 @@ Cindy Mobile (React Native) has its own device-class rules (phone / pad portrait
 - "Build a tab bar with pill-shaped tabs (9999px radius). Active tab: Light Gray (#e5e5e5) background, Near Black (#262626) text. Inactive: transparent background, Stone (#737373) text."
 - "Build a chat composer: a Card-colored (--surface-elevated) 12px-radius container; inside, pill control chips (9999px) that are borderless at rest and gain a --border-default outline on hover."
 - "Design a confirm dialog: 12px-radius container, max-width 400px, pill buttons — inverse neutral primary, optional outlined third action, then outlined Cancel; Cancel receives initial focus unless the caller explicitly selects primary focus or requires typed confirmation."
-- "Create a dropdown: pill trigger; panel width bound to the trigger; 12px-radius Card panel with 1px Board border; option rows highlighted with 8px inner radius via --model-item-hover."
+- "Create a dropdown: pill trigger; panel width bound to the trigger; 12px-radius Card panel with 1px Board border; option rows highlighted with 8px inner radius via the shared menu highlight (--sidebar-item-hover)."
 
 ### Iteration Guide
 
@@ -934,6 +962,7 @@ Cindy's product voice matches its visuals: **restrained, direct, never self-cong
 - **zh-TW**: likewise has no Title Case; use Traditional Chinese characters and punctuation, while keeping English terms as-is in mixed text. No full stop at the end of toasts / labels.
 - **ja / ko**: likewise no Title Case; follow each language's particle / politeness conventions, and verify terminology when unsure (per `docs/dev-rules/engineering-conventions.md` §5: no improvised ja/ko).
 - **Numbers / units**: Arabic numerals + half-width in all five languages; number-to-unit spacing per language convention.
+- **Task elapsed time**: promote long durations to hours/minutes at one hour and days/hours/minutes at one day. Always retain the minute field, including zero (for example, `1h 0m` or `2d 0h 5m`). Apply this to work summaries, thinking, live counters, task cards and usage details on Desktop and Mobile. Keep existing sub-hour precision; live counters may retain a zero-padded remainder. Stored durations and rate calculations keep their original precision.
 
 ### 11.3 Self-Check (when touching copy)
 
@@ -1029,7 +1058,7 @@ long duration to leak into any other hover or transition.
 | Semantic                                    | Spec                                                                                                                                                                                                                                                                                         | Reference implementation                        |
 | ------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------- |
 | Light overlay (menu / popover / tooltip)    | In: `animate-float-in` (opacity + scale 0.97→1, fast/ease-out; pure-opacity tooltips use `animate-fade-in`). Out: `animate-float-out` (opacity only, instant/ease-in). **Exit is always faster than enter, and never scales** (a scaling exit reads as "sucked away" — paper fades in place) | `components/ui/dropdown-menu.tsx`               |
-| Heavy overlay (modal / confirm)             | In: 250ms fade + scale 0.95→1; out: 150ms                                                                                                                                                                                                                                                    | `components/ui/confirm-dialog.tsx`              |
+| Heavy overlay (modal / confirm)             | Every modal, from the shared `.modal-scrim` / `.modal-panel` (2026-10-04): scrim fades in; panel fades in + rises 8px + scale 0.96→1 on `--motion-enter` / `--motion-ease-out` (entrance borrowed from Fluid Functionalism's chat-message). Out: fade only on `--motion-exit` / `--motion-ease-in` — a dismissal does not replay the entrance. Radix dialogs animate by `data-state`; hand-built dialogs have the entrance only. Call sites add no `animate-*` classes | `styles/globals.css`, `__tests__/modalSurfaceContract.test.ts` |
 | Expand / collapse                           | base/ease-move, grid `0fr↔1fr` height + opacity                                                                                                                                                                                                                                              | `features/cc-agent/sidebar/SectionCollapse.tsx` |
 | List reorder                                | FLIP, transform translation                                                                                                                                                                                                                                                                  | `components/ui/toast/ToastContainer.tsx`        |
 | Press                                       | Shared Desktop Button / ChromeIconButton / SidebarIconButton: paint-only 1px inset, instant/ease-out, stable text and hitbox (§4). Legacy frames retain their existing `active:scale-[0.98]` until separately migrated. Registered shapes follow §5; a button tag does not authorize scaling a contained data mark or its data mapping. | `components/ui/button.css` |
@@ -1661,7 +1690,7 @@ The execution rulebook for subsequent desktop / mobile UI updates. Sources: the 
 ### 15.14 Running / Collaboration Orange (finalized 2026-07-20)
 
 - **Running breathing icons are always Thinking Orange** (`--warning-accent` `#EA6B17`, all themes): VendorIcon, SessionStatusIcon (Puzzle/RadioTower), AutomationSessionGroupItem (Clock); the selected state stays orange — priority: running > selected inverse foreground > rest. Mobile `statusAccent` mirrors value and priority (glyphColor same).
-- **Collaboration menu row ON state is orange**: the collaboration item inside the composer「+」menu sits beside Goal and Plan. Its active text + UsersRound icon use `warning-accent`; the row background remains the standard `--model-item-hover`, and the OFF state stays neutral. This is an explicit carve-out from the 2026-07-17 neutral composer-menu rule for the ON state only.
+- **Collaboration menu row ON state is orange**: the collaboration item inside the composer「+」menu sits beside Goal and Plan. Its active text + UsersRound icon use `warning-accent`; the row highlight remains the shared menu glide, and the OFF state stays neutral. This is an explicit carve-out from the 2026-07-17 neutral composer-menu rule for the ON state only.
 - **SVG persistent-animation red line**: breathing-type persistent animation sits on an HTML wrapper (span); SVG stays static.
 
 ### 15.15 Create-Page Content Position + Titlebar Hover Discipline (finalized 2026-07-21)

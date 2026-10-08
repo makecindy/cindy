@@ -1818,7 +1818,7 @@ node secretBindings key、setup kv key——都不能使用 \`__proto__\`、\`co
 v3 直接用顶层字段声明插件贡献项与自主 Host 能力，不再有 \`slots\`。带详单的字段是 \`tools\`、\`cindy\`、
 \`agent\`、\`panel\`、\`mainView\`、\`card\`、\`subscribe\`、\`network\`、\`node\`、\`preview\`、
 \`skill\`；布尔能力写成字面量 \`true\`：\`notify\`、\`badge\`、\`confirm\`、\`fs\`、
-\`library\`、\`sessionContext\`、\`pick\`、\`workspace\`、\`iosSimulator\`。不用的字段直接省略，
+\`library\`、\`sessionContext\`、\`pick\`、\`workspace\`。不用的字段直接省略，
 不能写 \`false\`。\`card: {}\` 与 \`agent: {}\` 分别表示基础聊天卡片能力和用户点击后
 发起 Agent 回合；其它对象型能力必须包含该能力真正需要的详单。
 
@@ -2522,7 +2522,7 @@ const r = await cindy.send({
   请求必须包含业务 requestId；保存、创建任务等写操作沿用同一个 requestId 查询/去重，
   超时不等于未执行，Host 不替作者盲目重发。
 - 电脑逻辑页收到手机业务消息时，Host 附上不透明 \`mobilePageId\`（覆盖页面自报的值）。
-  异步链显式保留它；confirm、notify、tasks、pick、workspace、preview、schedule、iosSimulator 请求均原样附带。
+  异步链显式保留它；confirm、notify、tasks、pick、workspace、preview、schedule 请求均原样附带。
   卡片动作消息也包含该字段。不要存为全局“最近手机”，也不能在后台复用过期来源。
 - 示例：\`const origin = msg.mobilePageId; const answer = await cindy.confirm({ body: "应用调整？", ...(origin ? { mobilePageId: origin } : {}) });\`
   只有 \`answer.ok && answer.confirmed\` 才能继续；页面关闭、覆盖、超时或撤权均不能当成同意。
@@ -4569,65 +4569,6 @@ if (r.ok && r.confirmed) {
 - 真正的守门仍在你自己手里:确认只是问一句,**该校验的前置条件(文件在不在、
   工作区干不干净)确认前后都要自己再查一遍**——用户点确认和你真动手之间,
   世界可能已经变了。
-
-## 4.19 内置 iOS 模拟器(iosSimulator 能力)
-
-要给插件提供内置 iOS 模拟器的状态入口或工作流面板时,声明 \`"iosSimulator": true\`。
-电子脑只能读取**当前台前任务**的公开状态,并请求主机打开 Cindy 自己的模拟器面板:
-
-标准产品形态只需 \`manual + iosSimulator\`:Host 会在任务右侧栏提供手动入口,
-Agent 按需读取 \`ghost_manual({ ghost_id: "ios-simulator", path: "ios-simulator" })\`
-获取跨工具工作流,再调用 Host 注册的 \`cindy_ios_simulator\` MCP。插件无需声明 \`tools\`,
-Manual 的发现与读取仍受安装、启用、账号与工作目录门禁约束。
-不要为了重复同一状态再声明 \`panel\`;插件停靠面板的关闭
-语义是停用整份插件,不适合作为模拟器 viewer 的替身。只有确实存在 Host viewer 没有的独立
-工作流 UI 时才额外声明 panel。
-
-如果插件整体离开 \`iosSimulator\` 就无法完成任何工作，应把 \`minCindyVersion\` 提高到首次
-满足整体使用要求的 Cindy 正式版本。不要用最低版本替代下面的运行时 capability 检查。
-
-\`\`\`js
-const caps = await cindy.iosSimulator.request({ kind: 'capabilities' });
-if (caps.ok && caps.kind === 'capabilities') {
-  // caps.apiVersion === 1
-  // caps.capabilities.pluginVideo === false
-  // caps.capabilities.pluginInput === false
-}
-
-const current = await cindy.iosSimulator.request({ kind: 'status' });
-if (current.ok) {
-  const instances = current.status.instances;
-  const routeStatuses = current.status.routeStatuses || [];
-}
-
-const opened = await cindy.iosSimulator.request({
-  kind: 'open-panel',
-  // 可选:只能填上面 status 返回、且仍属于当前任务的 instanceId
-  instanceId: current.ok ? current.status.instances[0]?.instanceId : undefined
-});
-\`\`\`
-
-规则与红线:
-
-- 请求里**没有 sessionId**。台前任务由 Host 现查;自造 \`sessionId\`、其它未知字段
-  或跨任务 instanceId 都会拒绝。切到非任务页、远程/SSH 任务或任务失效时 fail closed;
-- \`status\` 只返回环境是否就绪、可用设备数量、公开实例状态和当前 stream/input 路线。
-  它不续租、不启动 driver,也不返回 UDID、路径、授权、诊断或 ownership 信息;
-- 本能力不是模拟器运行时:WDA、Native Sidecar、H.264、Native HID、生命周期、恢复与
-  fallback 仍由 Cindy Host 独占。插件拿不到视频帧、viewer lease、触控入口、进程句柄、
-  artifact 路径或 Xcode 私有诊断;
-- \`open-panel\` 只打开/聚焦 Host 既有面板。没有绑定实例时可省略 instanceId,让用户
-  在 Host 面板里选择设备;连续请求会限速;
-- panel.html 保持零桥。面板要使用本能力时,按 §5 先 \`/wake\`,再用同源
-  BroadcastChannel 把请求交给 main.js,由 main.js 调 \`cindy.iosSimulator.request\`;
-- Agent 按 Manual 指引选择内嵌路线后,构建、安装、启动与 UI 操作调用 Host 注册的
-  \`cindy_ios_simulator\` MCP,不要重复打包一份 WDA/Sidecar。内嵌能力不存在或不可用时,
-  Agent 可以按用户目标与普通权限规则改走外部 Xcode、Simulator.app、\`simctl\` 或
-  Computer Use;Host 不会把这些外部操作自动转换为内嵌调用;
-- 本能力仅存在于支持并授权 \`iosSimulator\` 字段的 Cindy Desktop。未知 v3 顶层字段会被
-  保留，但不会因此获得 Host 权限；依赖新字段的插件必须用 \`minCindyVersion\` 标明最低版本。
-  Agent 在 MCP 不存在时必须说明内嵌路线不可用;如果用户目标不依赖 Cindy viewer,
-  可以继续使用正常的外部工具链,否则再引导用户升级 Cindy。
 
 ## 4.20 一级主视图(mainView 能力)
 

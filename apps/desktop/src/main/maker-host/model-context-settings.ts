@@ -1,4 +1,4 @@
-import type { AgentKind, Catalog } from '@cindy/model-providers';
+import type { AgentKind, Catalog, Effort } from '@cindy/model-providers';
 
 import { desktopCodexAuthAdapter, readClaudeApiKey } from './auth-adapters.js';
 import { hasClaudeNativeLogin } from './claude-native-auth.js';
@@ -26,6 +26,22 @@ export function resolveDesktopModelContextProviderId(
         : desktopCodexAuthAdapter.hasCodexOAuthLoginReadOnly() ? 'openai' : 'xd'
       : null;
   return resolveModelContextProviderId(catalog, agent, providerId, modelId, defaultSource);
+}
+
+/**
+ * Efforts declared by the route this session actually uses. Same-ID models from different
+ * providers can declare different efforts; null means the route is unknown or ambiguous.
+ */
+export function resolveDesktopModelEfforts(
+  catalog: Pick<Catalog, 'providers'>,
+  agent: AgentKind,
+  providerId: string | null | undefined,
+  modelId: string,
+): readonly Effort[] | null {
+  const source = resolveDesktopModelContextProviderId(catalog, agent, providerId, modelId);
+  if (!source) return null;
+  return catalog.providers.find((provider) => provider.id === source)
+    ?.models[agent]?.find((model) => model.id === modelId)?.efforts ?? null;
 }
 
 /** Working budgets can tighten history protection, but never raise its verified ceiling. */

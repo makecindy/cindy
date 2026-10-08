@@ -47,6 +47,7 @@ import { useClaudeAccountUsageResult } from '@/hooks/useClaudeAccountUsage';
 import { useXdAssetPrimaryAction } from '@/hooks/useXdAssetPrimaryAction';
 import { useReducedMotion } from '@/hooks/useReducedMotion';
 import { Button } from '@/components/ui/button';
+import { Switch } from '@/components/ui/switch';
 import { Tip } from '@/components/ui/tooltip';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { useSignInToCindy } from '@/hooks/useSignInToCindy';
@@ -136,6 +137,71 @@ function writeProviderDisabled(providerId: string, disabled: boolean, errorText:
   void window.electronAPI.maker
     .setModelDisable({ kind: 'provider', providerId, disabled })
     .catch(() => toast.error(errorText));
+}
+
+/**
+ * 「允许被远程调用」(供应商级远程 Agent 授权)。默认关闭；只在本机允许远程控制时出现，
+ * 由调用方判定。成功后 main 广播 PROVIDER_CHANGED 刷新快照。
+ */
+function RemoteProviderAccessRow({ provider }: { provider: ProviderView }) {
+  const { t } = useTranslation();
+  const [enabled, setEnabled] = useState(provider.remoteInvocationEnabled === true);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    setEnabled(provider.remoteInvocationEnabled === true);
+  }, [provider.remoteInvocationEnabled]);
+  return (
+    <div
+      data-testid="provider-remote-access"
+      className="flex shrink-0 items-start justify-between gap-3 border-t px-5 py-3"
+      style={{ borderColor: 'var(--settings-theme-card-border)' }}
+    >
+      <div className="flex min-w-0 flex-col gap-1">
+        <span className="text-13 font-medium text-[var(--text-primary)]">
+          {t('settings.providers.detail.remoteAccess.label')}
+        </span>
+        <span className="text-12 leading-[1.4] text-[var(--text-tertiary)]">
+          {t('settings.providers.detail.remoteAccess.description')}
+        </span>
+      </div>
+      <Switch
+        checked={enabled}
+        disabled={busy}
+        aria-label={t('settings.providers.detail.remoteAccess.ariaLabel')}
+        onCheckedChange={(next) => {
+          const previous = enabled;
+          setEnabled(next);
+          setBusy(true);
+          void window.electronAPI.maker
+            .setProviderRemoteAccess({ providerId: provider.id, enabled: next })
+            .catch(() => {
+              setEnabled(previous);
+              toast.error(t('settings.providers.detail.remoteAccess.writeFailed'));
+            })
+            .finally(() => setBusy(false));
+        }}
+      />
+    </div>
+  );
+}
+
+/** 本机是否允许同账号设备远程控制。「允许被远程调用」只在它打开时有意义。 */
+function useRemoteControlEnabled(): boolean {
+  const [enabled, setEnabled] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    // 读不到(设备互联未就绪等)按未开启处理：开关不出现，不影响供应商页其余部分。
+    void Promise.resolve()
+      .then(() => window.electronAPI.deviceLink.getState())
+      .then((state) => {
+        if (!cancelled) setEnabled(state.remoteControlEnabled);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  return enabled;
 }
 
 /** 供应商行图标(内置品牌 mark / 首字母 monogram)。 */
@@ -2260,6 +2326,7 @@ export function ProvidersSection() {
   // OpenAI 的 reconnect-required 是 useCodexAuth 独有状态(目录 connected 此时为 false):
   // 该状态下 OpenAI 行必须留在左栏,否则「重新连接」入口不可达,用户被迫从向导重发现。
   const codexAuth = useCodexAuth();
+  const remoteControlEnabled = useRemoteControlEnabled();
   const openaiReconnectRequired = codexAuth.state.kind === 'reconnect-required';
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -3043,6 +3110,17 @@ export function ProvidersSection() {
                           disabled={rediscovering}
                         />
                       </div>
+                    )}
+                  {/* 允许被远程调用：只在本机允许远程控制、供应商已连接且能跑 Agent 时出现。 */}
+                  {remoteControlEnabled &&
+                    !effectiveSelected.suspended &&
+                    effectiveSelected.connected &&
+                    effectiveSelected.agents.length > 0 &&
+                    effectiveSelected.remoteInvocationEnabled !== undefined && (
+                      <RemoteProviderAccessRow
+                        key={effectiveSelected.id}
+                        provider={effectiveSelected}
+                      />
                     )}
                   {!effectiveSelected.suspended &&
                     (providerHasModels(effectiveSelected) ||

@@ -28,6 +28,10 @@ vi.mock('@/lib/makerTransport', () => ({
   isRemoteSessionSticky: () => remoteState.value,
   readBackgroundTaskOutputTailFor: readTailMock,
 }));
+vi.mock('@/lib/backgroundTaskStop', () => ({
+  canManageBackgroundTasks: () => true,
+  stopBackgroundTask: vi.fn(async () => {}),
+}));
 
 vi.mock('@/features/right-sidebar/lib/openBackgroundTasksTab', () => ({
   openBackgroundTasksTab: vi.fn(),
@@ -229,7 +233,8 @@ describe('background command formatting', () => {
   it('pads elapsed seconds so the running label does not jitter', () => {
     expect(formatTaskElapsed(9_400)).toBe('9s');
     expect(formatTaskElapsed(309_000)).toBe('5m 09s');
-    expect(formatTaskElapsed(7_509_000)).toBe('2h 05m 09s');
+    expect(formatTaskElapsed(7_509_000)).toBe('2h 05m');
+    expect(formatTaskElapsed(183_845_000)).toBe('2d 03h 04m');
   });
 
   it('keeps only the last lines and trims trailing blank lines', () => {

@@ -48,9 +48,13 @@ export function groupWorkRuns<TItem, TChild extends TItem>(
     if (activeTail && isSessionStreaming) {
       // A new run's status can arrive before its user row. A durable done seal still
       // closes the loaded work before it; only subsequent content may stay active.
-      const completedIndex = turn.findLastIndex(
-        (item) => adapter.isAnswer(item) && adapter.isSealedAnswer(item),
-      );
+      let completedIndex = -1;
+      for (let index = turn.length - 1; index >= 0; index--) {
+        if (adapter.isAnswer(turn[index]) && adapter.isSealedAnswer(turn[index])) {
+          completedIndex = index;
+          break;
+        }
+      }
       const activeStart =
         completedIndex >= 0
           ? adapter.boundaryTimestamp(turn[completedIndex])

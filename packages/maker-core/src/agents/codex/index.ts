@@ -20,6 +20,7 @@
  *  - renderer 不感知 thread_id / app-server 任何概念
  */
 
+import { deviceHostedEnvironmentNote, stripTrailingSlashes } from '../shared/device-hosted.js';
 import { LIBRARY_READ_ROOT, withLibraryNativeReadContext } from '../shared/library-native-read.js';
 import os from 'node:os';
 import path from 'node:path';
@@ -328,50 +329,6 @@ function statusTextForItem(item: { type?: string; command?: string; tool?: strin
     case 'imageGeneration':      return 'Generating image...';
     case 'contextCompaction':    return 'Compacting...';
     default:                     return null;
-  }
-}
-
-/**
- * Codex normally reports shell work as a `commandExecution` item. Some
- * Responses/proxy paths surface it as a raw `function_call(exec_command)`
- * without an approval callback. Normalize both shapes for the host policy.
- */
-function shellCommandFromCodexItem(
-  item: unknown,
-): { command: string; cwd?: string } | null {
-  if (!item || typeof item !== 'object' || Array.isArray(item)) return null;
-  const record = item as Record<string, unknown>;
-  if (record.type === 'commandExecution' && typeof record.command === 'string') {
-    return { command: record.command };
-  }
-  if (
-    record.type !== 'function_call' ||
-    record.name !== 'exec_command' ||
-    typeof record.arguments !== 'string'
-  ) {
-    return null;
-  }
-  try {
-    const args = JSON.parse(record.arguments) as unknown;
-    if (!args || typeof args !== 'object' || Array.isArray(args)) return null;
-    const parsed = args as Record<string, unknown>;
-    const command =
-      typeof parsed.cmd === 'string'
-        ? parsed.cmd
-        : typeof parsed.command === 'string'
-          ? parsed.command
-          : null;
-    if (!command) return null;
-    return {
-      command,
-      ...(typeof parsed.workdir === 'string'
-        ? { cwd: parsed.workdir }
-        : typeof parsed.cwd === 'string'
-          ? { cwd: parsed.cwd }
-          : {}),
-    };
-  } catch {
-    return null;
   }
 }
 
@@ -900,30 +857,6 @@ function supportsCodexDynamicTools(
   if (CODEX_DYNAMIC_TOOL_UNSUPPORTED_PROVIDER_IDS.has(providerId)) return false;
   if (!providerId && opts.model.startsWith('xai/')) return false;
   return true;
-}
-
-function dynamicToolKey(tool: Pick<DynamicToolSpec, 'name'>): string {
-  return `\u0000${tool.name}`;
-}
-
-function dynamicToolCallKey(
-  params: Pick<DynamicToolCallParams, 'namespace' | 'tool'>,
-): string {
-  return `${params.namespace ?? ''}\u0000${params.tool}`;
-}
-
-function dynamicToolApprovalIdentity(
-  params: Pick<DynamicToolCallParams, 'namespace' | 'tool'>,
-): { serverName: string; toolName: string } {
-  if (params.namespace) return { serverName: params.namespace, toolName: params.tool };
-  const separatorIndex = params.tool.lastIndexOf('__');
-  if (separatorIndex > 0 && separatorIndex < params.tool.length - 2) {
-    return {
-      serverName: params.tool.slice(0, separatorIndex),
-      toolName: params.tool.slice(separatorIndex + 2),
-    };
-  }
-  return { serverName: 'host_dynamic_tool', toolName: params.tool };
 }
 
 function truncateUserInputText(value: string): string {
@@ -3601,7 +3534,13 @@ assertRouteCurrent();
           if (!signal.aborted && error instanceof CodexRouteSelectionChangedError && error.retryable && attempt < 7) continue;
           throw new AgentStartupStoppedError(signal.aborted ? signal.reason : error);
         }
-        await startup.customContext?.();
+        if (startup.customContext) {
+          await startup.customContext();
+          // Retirement of this isolated local host proves the failed startup
+          // cannot keep using its workdir. Propagate that proof to Maker so its
+          // onStartFailed hook releases the directory lease.
+          if (!opts.remoteHostId) throw new AgentStartupStoppedError(error);
+        }
         throw error;
       }
     }
@@ -3617,6 +3556,11 @@ assertRouteCurrent();
     const sid = opts.sessionId ?? '';
     const log = this.deps.logger.child(sid ? `s:${sid}/codex` : 'codex');
     const reviewMode = opts.reviewMode === true;
+    // 设备托管：Codex 在本机运行(本机的登录与供应商)，项目、文件与命令在任务所在电脑上。
+    // 那台电脑经隧道提供 Codex 原生的 exec-server 环境，命令、读写与补丁都在那里执行；
+    // Cindy 工具也经隧道。opts.workingDir 是本机影子目录。
+    const hosted = opts.deviceHosted && !opts.remoteHostId && !reviewMode ? opts.deviceHosted : undefined;
+    const hostedEnvironmentId = hosted ? `cindy-device-${randomUUID()}` : undefined;
     const botSkillGrants = !opts.remoteHostId && !reviewMode
       ? snapshotManagedSkillGrants(opts.botRuntimeProfile?.skillPolicy) : undefined;
     let refreshedBotSkillConfig: Record<string, unknown> | undefined;
@@ -3664,11 +3608,12 @@ assertRouteCurrent();
     // This per-session injection flag must not mutate the shared manager.
     if (makerMemoryEnabled && makerMemory) {
       try {
-        const store = await makerMemory.getStore(memoryScopeKey);
+        // 设备托管：记忆在任务所在电脑上，只用随启动选项带来的快照，不打开本机记忆库。
+        const store = hosted ? null : await makerMemory.getStore(memoryScopeKey);
         makerMemoryRules = opts.makerMemoryScopeKey?.startsWith('bot:')
           ? ''
           : MAKER_MEMORY_RULES;
-        makerMemoryIndex = opts.makerMemoryIndexSnapshot ?? await store.getIndex();
+        makerMemoryIndex = opts.makerMemoryIndexSnapshot ?? (store ? await store.getIndex() : '');
         memoryFlushController = new MemoryFlushController({
           logger: log.child('memory-flush'),
           workdir: memoryScopeKey,
@@ -4272,46 +4217,8 @@ assertRouteCurrent();
     // turn id 在同一 thread 内唯一;墓碑随 session handle 释放,不跨 session 泄漏。
     const completedTurnIds = new Set<string>();
     const terminalErroredTurnIds = new Set<string>();
-    // Keep one authoritative interrupt origin per turn until turn/completed.
-    // A host-policy ACK proves only request acceptance, not that the command
-    // stopped; explicit user Stop overrides that provenance and cannot be
-    // reclassified by late blocked-item notifications. Failed policy ACKs stay
-    // provenance-only so output remains visible until completion decides.
-    const turnInterruptOrigins = new Map<
-      string,
-      | {
-          source: 'host-policy';
-          reason: string;
-          itemId: string;
-          acknowledgement: 'pending' | 'acknowledged' | 'failed';
-        }
-      | { source: 'user-stop' }
-    >();
-    // Approval can be declined before execution starts. Codex may still recover
-    // and complete the turn, so this reason only owns abort-shaped completions.
-    // Keep every declined item id: app-server can emit several approval
-    // requests for one turn and may still complete each declined item after the
-    // decline. A single item id would let a later denial overwrite an earlier
-    // one, then make that earlier completion look like recovery progress.
-    const approvalPolicyDeniedTurnReasons = new Map<
-      string,
-      {
-        reason: string;
-        itemIds: Set<string>;
-        // A sibling item may already be running when the denied approval
-        // arrives. Its later update/completion is not recovery progress: the
-        // turn is still in the abort caused by the denial. Snapshot the item
-        // ids seen before the first denial so only genuinely new work clears
-        // the policy attribution.
-        preexistingItemIds: Set<string>;
-      }
-    >();
-    // Item ids observed before an approval-path denial. A turn may have
-    // parallel work in flight when one command is declined; that sibling can
-    // emit updated/completed after the denial without representing a
-    // replacement continuation. The snapshot is per-turn and is discarded
-    // with the turn's denial state at terminal completion.
-    const observedModelItemIdsByTurn = new Map<string, Set<string>>();
+    // Preserve explicit user Stop until the authoritative turn completion.
+    const turnInterruptOrigins = new Map<string, { source: 'user-stop' }>();
     // turn → assistant 正文候选。app-server 对新模型提供 phase，final_answer
     // 优先；旧模型/旧 provider 不带 phase 时回退本 turn 最后一条 agentMessage。
     // turn/completed 把选中的正文放进 done.result，供出口 hook 与 worker 终态消费。
@@ -4965,32 +4872,11 @@ assertRouteCurrent();
     // Fast mode choice made while the request was in flight.
     let serviceTierMutationGeneration = 0;
     const vo: Record<string, unknown> = { ...(opts.vendorOptions ?? {}) };
-    const hostDynamicToolContext = {
-      sessionId: opts.sessionId,
-      workingDir: opts.workingDir,
-      remoteHostId: opts.remoteHostId,
-      model: opts.model,
-      providerId: opts.providerId,
-      vendorOptions: vo,
-    };
-    const hostDynamicToolProvider = this.deps.codexHostDynamicToolProvider;
-    let hostDynamicTools: DynamicToolSpec[] = [];
-    if (!opts.remoteHostId && supportsCodexDynamicTools(opts) && hostDynamicToolProvider) {
-      try {
-        hostDynamicTools = [...hostDynamicToolProvider.listTools(hostDynamicToolContext)];
-      } catch (error) {
-        log.error('host dynamic tool registration failed closed', {
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
-    }
-    const registeredHostDynamicToolKeys = new Set(hostDynamicTools.map(dynamicToolKey));
     const sessionDynamicTools = [
       // Windows Review requires 0.156+ and exposes flat function tools. The legacy
-      // provider gate above concerns namespace tools, not these scoped reads.
+      // ordinary provider gate concerns namespace tools, not these scoped reads.
       ...(reviewMode && process.platform === 'win32' ? REVIEW_READ_TOOLS : []),
       ...(!reviewMode && shouldRegisterAskUserDynamicTool(opts) ? [ASK_USER_DYNAMIC_TOOL] : []),
-      ...(!reviewMode ? hostDynamicTools : []),
     ];
     const accountProviderId = this.deps.isCodexAccountProvider?.(opts.providerId) ? opts.providerId! : undefined;
     const accountSessionHost = !opts.remoteHostId && (accountProviderId !== undefined || this.deps.isolateCodexAccountSessions === true);
@@ -5136,7 +5022,7 @@ assertRouteCurrent();
     })();
     const hostGeneration = this.hostGenerations.get(currentHostKey) ?? 0;
     const capturedHostWasRegistered = this.hosts.get(currentHostKey) === host;
-    const retireSingleSessionHost = async (): Promise<void> => {
+    const retireSingleSessionHost = async (throwOnShutdownFailure = accountSessionHost): Promise<void> => {
       if (!reviewMode && !usesCustomContextHost && !accountSessionHost && !sessionSqliteHome) return;
       const purpose = reviewMode ? 'Review' : accountSessionHost ? 'account' : 'custom context';
       const reason = `Cindy ${purpose} host is single-session`;
@@ -5145,9 +5031,9 @@ assertRouteCurrent();
         logPrefix: `codex ${purpose.toLowerCase()} host cleanup`,
         ...(capturedHostWasRegistered ? { expectedHost: host } : {}),
         expectedGeneration: hostGeneration,
-        throwOnShutdownFailure: accountSessionHost,
+        throwOnShutdownFailure,
       }).catch((error) => {
-        if (accountSessionHost) throw error;
+        if (throwOnShutdownFailure) throw error;
         log.warn(`${purpose} host retire failed`, {
           error: error instanceof Error ? error.message : String(error),
         });
@@ -5156,7 +5042,11 @@ assertRouteCurrent();
     if (usesCustomContextHost || accountSessionHost) {
       registerFailedCustomContextStartupCleanup(async () => {
         releaseHostBindingLeaseIfNeeded();
-        await retireSingleSessionHost();
+        await retireSingleSessionHost(true);
+        // retireHostKey may skip an already-replaced generation, or preserve a
+        // shutdown error for retry. Only confirmed retirement of our captured
+        // host may authorize releasing this startup's workdir guard.
+        await host.retire('Codex isolated startup failed', { throwOnTransportError: true });
       });
     }
     startup.cleanup = async () => {
@@ -5487,7 +5377,23 @@ assertRouteCurrent();
         );
       }
     }
+    // 设备托管：本机 MCP 一律停用，只用任务所在电脑经隧道提供的 Cindy 工具(令牌放在隧道路径里，
+    // 本机 MCP 的 bearer 令牌对隧道无效)。
+    let hostedLocalMcpNames: string[] = [];
+    const readHostedMcpConfig = (): Record<string, unknown> => {
+      const out: Record<string, unknown> = {};
+      for (const name of hostedLocalMcpNames) {
+        if (!hosted!.mcpServers.includes(name)) out[`mcp_servers.${name}.enabled`] = false;
+      }
+      const base = `${stripTrailingSlashes(hosted!.tunnelUrl)}/t/${encodeURIComponent(hosted!.tunnelToken)}/mcp/`;
+      for (const name of hosted!.mcpServers) {
+        out[`mcp_servers.${name}.url`] = `${base}${encodeURIComponent(name)}`;
+        out[`mcp_servers.${name}.enabled`] = true;
+      }
+      return out;
+    };
     const readSessionMcpConfig = (): Record<string, unknown> => {
+      if (hosted) return readHostedMcpConfig();
       const config = host.getSessionMcpConfig(opts.sessionInstanceId, { vendorOptions: vo });
       if (opts.remoteHostId && opts.botRuntimeProfile?.mcpPolicy
         && typeof config['mcp_servers.cindy_helper.url'] !== 'string') {
@@ -5642,17 +5548,18 @@ assertRouteCurrent();
     const codexExtraWritableRoots = reviewMode || !sessionCodexHome
       ? []
       : [joinCodexHome('memories')];
+    // 设备托管：工作区在任务所在电脑上，根目录用那台电脑的真实路径(随 exec-server 环境下发)。
     const runtimeWorkspaceRoots = (): string[] =>
       reviewMode
         ? [opts.workingDir]
-        : [...new Set([opts.workingDir, ...mutableExtraDirs, ...mutableWritableDirs])];
+        : [...new Set([hosted?.workingDir ?? opts.workingDir, ...mutableExtraDirs, ...mutableWritableDirs])];
     const runtimeWritableRoots = (): string[] =>
-      reviewMode ? [] : [...new Set([opts.workingDir, ...mutableWritableDirs])];
+      reviewMode ? [] : [...new Set([hosted?.workingDir ?? opts.workingDir, ...mutableWritableDirs])];
     // Auto-review 传给 core 的会话平台(决定是否抹平 macOS /private firmlink)。远端会话的 host
     // process.platform 不代表远端 OS(host 可能 macOS、远端 Linux)——远端 OS 未接入前保守传 'linux'
     // 关掉抹平 → fail-closed(不把远端 /private/tmp 误当 /tmp 区内)。本地用真实 process.platform。
     // 定义在此(startSession 作用域,opts=session)以避开 awaitApprovalDecision 内层 opts 的遮蔽。
-    const sessionReviewPlatform: NodeJS.Platform = opts.remoteHostId ? 'linux' : process.platform;
+    const sessionReviewPlatform: NodeJS.Platform = opts.remoteHostId ? 'linux' : hosted ? hosted.platform : process.platform;
     const reviewAutoAction = (action: ReviewableAction, hostAutoApprove = false, hostShortcutOnly = false): Promise<AutoReviewDecision> => {
       const directoryGeneration = autoReviewDirectoryGeneration;
       const request = {
@@ -6296,7 +6203,6 @@ assertRouteCurrent();
       reason,
       cleanup: () => host.unsubscribeThread(detachedThreadId),
     });
-    const hasHostShellCommandPolicy = Boolean(this.deps.getShellCommandPolicy);
     function currentApprovalConfig(): CodexPermissionConfig {
       if (reviewMode) {
         return { approvalPolicy: 'never', sandbox: 'read-only' };
@@ -6306,12 +6212,6 @@ assertRouteCurrent();
         approvalsReviewerProtocolSupported,
         approvalsReviewerRouteSupported,
       );
-      // `never` may bypass command approval callbacks. With a Host shell
-      // policy, route execution through Codex's trusted-command gate so broad
-      // Full access remains prompt-free while product denials stay enforceable.
-      if (config.approvalPolicy === 'never' && hasHostShellCommandPolicy) {
-        return { ...config, approvalPolicy: 'untrusted' };
-      }
       return config;
     }
 
@@ -6351,6 +6251,18 @@ assertRouteCurrent();
     let appliedContextLimit = currentContextLimit();
     activeTurnContextLimit = effectiveThreadContextWindow(appliedContextLimit);
 
+    /** 设备托管：线程与每轮都选中任务所在电脑上的 exec-server 环境(工作目录与根都是那台电脑的路径)。 */
+    function hostedEnvironmentParams(): { environments?: Array<Record<string, unknown>> } {
+      if (!hosted || !hostedEnvironmentId) return {};
+      return {
+        environments: [{
+          environmentId: hostedEnvironmentId,
+          cwd: hosted.workingDir,
+          runtimeWorkspaceRoots: runtimeWorkspaceRoots(),
+        }],
+      };
+    }
+
     function currentThreadWorkspaceConfig(contextLimit = currentContextLimit()): Pick<
       ThreadStartParams,
       | 'approvalPolicy'
@@ -6371,12 +6283,13 @@ assertRouteCurrent();
         // Install while the thread is created/resumed: a later switch to Auto
         // changes the turn reviewer without rebuilding this thread config.
         ...nativeContinuationConfig,
-        // Bot memory and delegation belong to its Cindy Profile and Session
-        // tasks, not the shared native home or hidden harness child threads.
+        // Cindy owns goal dispatch, budgets and pause/resume. A native goal
+        // starts a second continuation loop whose turns bypass Session.send
+        // and lose the Host origin after the first terminal event.
+        'features.goals': false,
+        // Keep companion memory in its own Home. Native delegation uses the
+        // same feature settings and permissions as an ordinary task.
         ...(opts.botRuntimeProfile ? {
-          'features.multi_agent': false,
-          'features.multi_agent_v2': false,
-          'agents.enabled': false,
           'memories.generate_memories': false,
           'memories.use_memories': false,
         } : {}),
@@ -6415,7 +6328,6 @@ assertRouteCurrent();
               } : {}),
               web_search: 'disabled',
               'features.apps': false,
-              'features.goals': false,
               'features.hooks': false,
               'features.multi_agent': false,
               'features.remote_plugin': false,
@@ -6424,7 +6336,9 @@ assertRouteCurrent();
         // Review disables only transport-bearing entries discovered above.
         // Its host omits Cindy's MCP bridge, so a bare memory override would
         // create an invalid transport even though the entry is disabled.
+        // 设备托管：只停用本机确实配置了的 cindy_memory(没有传输配置的空条目会让 Codex 拒绝配置)。
         ...(!reviewMode && !makerMemoryEnabled && !opts.botRuntimeProfile
+          && (!hosted || hostedLocalMcpNames.includes('cindy_memory'))
           ? { 'mcp_servers.cindy_memory.enabled': false }
           : {}),
         // Configure the native window and its 90% compaction budget together.
@@ -6442,11 +6356,13 @@ assertRouteCurrent();
       const shared = {
         approvalPolicy,
         ...(approvalsReviewer ? { approvalsReviewer } : {}),
-        ...(readonlyReferenceDirsSupported
+        // 设备托管：工作区根随 exec-server 环境下发，本机线程不设本地根。
+        ...(readonlyReferenceDirsSupported && !hosted
           ? {
               runtimeWorkspaceRoots: runtimeWorkspaceRoots(),
             }
           : {}),
+        ...(hostedEnvironmentParams()),
         ...(Object.keys(config).length > 0 ? { config } : {}),
       };
       if (permissionProfile) {
@@ -6480,9 +6396,10 @@ assertRouteCurrent();
       const shared = {
         approvalPolicy,
         ...(approvalsReviewer ? { approvalsReviewer } : {}),
-        ...(readonlyReferenceDirsSupported
+        ...(readonlyReferenceDirsSupported && !hosted
           ? { runtimeWorkspaceRoots: runtimeWorkspaceRoots() }
           : {}),
+        ...(hostedEnvironmentParams()),
       };
       if (
         currentWorkspacePermissionProfile() !== undefined &&
@@ -6836,9 +6753,15 @@ assertRouteCurrent();
       makerMemoryRules,
       contactsRules,
       ghostRosterPrompt,
-      runtimeSystemPrompt: opts.botRuntimeProfile
-        ? undefined
-        : this.deps.runtimeConfig.systemPrompt,
+      // 本机任务逐字保持原值；设备托管时在末尾加上「项目在哪台电脑」的说明。
+      runtimeSystemPrompt: hosted
+        ? [
+            opts.botRuntimeProfile ? undefined : this.deps.runtimeConfig.systemPrompt,
+            deviceHostedEnvironmentNote(hosted, opts.workingDir),
+          ].filter((part): part is string => !!part && part.trim().length > 0).join('\n\n')
+        : opts.botRuntimeProfile
+          ? undefined
+          : this.deps.runtimeConfig.systemPrompt,
       makerMemoryIndex,
       botProfilePrompt: reviewMode ? undefined : opts.botProfilePrompt,
       botProfileContextPrompt: reviewMode ? undefined : opts.botProfileContextPrompt,
@@ -6864,7 +6787,7 @@ assertRouteCurrent();
     let codexProductPromptDelivery: AgentSessionHandle['codexProductPromptDelivery'];
 
     const withMcpDiscoveryContext = <T>(run: () => Promise<T>): Promise<T> => {
-      if (reviewMode || !sid || !opts.sessionInstanceId || !this.deps.withCodexMcpDiscoveryContext) return run();
+      if (hosted || reviewMode || !sid || !opts.sessionInstanceId || !this.deps.withCodexMcpDiscoveryContext) return run();
       return this.deps.withCodexMcpDiscoveryContext({
         sessionId: sid, sessionInstanceId: opts.sessionInstanceId,
         workingDir: opts.workingDir, vendorOptions: vo,
@@ -6972,6 +6895,25 @@ assertRouteCurrent();
       settingsUpdateChain = run;
       return run;
     };
+    if (hosted && hostedEnvironmentId) {
+      // 设备托管：本机 MCP 名单(全部停用，只留隧道提供的)，再把任务所在电脑的 exec-server 接成环境。
+      try {
+        const response = await host.request<{ config?: Record<string, unknown> }>(
+          Method.ConfigRead, { includeLayers: false },
+          { timeoutMs: CRITICAL_THREAD_RPC_TIMEOUT_MS },
+        );
+        hostedLocalMcpNames = Object.keys(asRecord(asRecord(response.config).mcp_servers));
+      } catch (error) {
+        log.warn('codex: hosted session could not list local MCP servers', { error: String(error) });
+      }
+      assertCurrentHost('environment/add');
+      await host.request(Method.EnvironmentAdd, {
+        environmentId: hostedEnvironmentId,
+        execServerUrl: `${stripTrailingSlashes(hosted.tunnelUrl.replace(/^http/, 'ws'))}/ws/exec-server`,
+        authBearerToken: hosted.tunnelToken,
+      }, { timeoutMs: CRITICAL_THREAD_RPC_TIMEOUT_MS });
+      assertCurrentHost('environment/add');
+    }
     if (opts.resumeSessionId && isLikelyValidThreadId(opts.resumeSessionId)) {
       // Phase 3: thread/resume is the historical-session path. Only the exact
       // provider "no rollout found" response below may fall back to thread/start.
@@ -8950,48 +8892,6 @@ assertRouteCurrent();
       const turnGate = gateServerRequestTurn(params.turnId, params.threadId);
       if (turnGate === false) return { decision: 'decline' };
       if (turnGate instanceof Promise && !(await turnGate)) return { decision: 'decline' };
-      const hostPolicy = this.deps.getShellCommandPolicy?.({
-        agentKind: 'codex',
-        command: params.command ?? '',
-        cwd: params.cwd ?? undefined,
-      });
-      if (hostPolicy?.decision === 'deny') {
-        log.warn('command execution denied by host policy', {
-          requestId: params.approvalId ?? params.itemId,
-          reason: hostPolicy.reason,
-        });
-        // The decline is followed by an abort-shaped turn completion. Keep the
-        // policy reason attached to this turn so completion cannot replace it
-        // with a generic cancellation/error message.
-        const existingDenial = approvalPolicyDeniedTurnReasons.get(params.turnId);
-        if (existingDenial) {
-          existingDenial.reason = hostPolicy.reason;
-          existingDenial.itemIds.add(params.itemId);
-        } else {
-          const preexistingItemIds = new Set(
-            observedModelItemIdsByTurn.get(params.turnId) ?? [],
-          );
-          for (const pending of pendingApprovals.values()) {
-            if (pending.turnId === params.turnId && pending.itemId) {
-              preexistingItemIds.add(pending.itemId);
-            }
-          }
-          approvalPolicyDeniedTurnReasons.set(params.turnId, {
-            reason: hostPolicy.reason,
-            itemIds: new Set([params.itemId]),
-            preexistingItemIds,
-          });
-        }
-        // Declining without ever showing the user why renders as a bare failed
-        // command, which is indistinguishable from a cancellation. Surface the
-        // product reason so the denial is attributed to the policy, not the user.
-        eventQueue.push({
-          type: 'error',
-          data: { message: hostPolicy.reason, isTerminal: false },
-          source: 'codex',
-        });
-        return { decision: 'decline' };
-      }
       // requestId: approvalId 优先 (zsh-exec-bridge 多 callback 场景); 否则用 itemId
       const requestId = params.approvalId ?? params.itemId;
       const decision = await awaitApprovalDecision(params.threadId, params.turnId, requestId, 'commandExecution', {
@@ -9209,22 +9109,6 @@ assertRouteCurrent();
     const mcpToolApprovalPolicy = (params: McpServerElicitationRequestParams) =>
       classifyMcpToolApprovalPolicy(mcpToolApprovalContext(params));
 
-    const mcpToolApprovalPresentation = (
-      context: Parameters<NonNullable<AgentDeps['getMcpToolApprovalPolicy']>>[0],
-    ) => {
-      const presenter = this.deps.getMcpToolApprovalPresentation;
-      if (!presenter) return undefined;
-      try {
-        return presenter(context);
-      } catch (error) {
-        log.error('MCP approval presentation threw -> vendor copy', {
-          serverName: context.serverName,
-          error: error instanceof Error ? error.message : String(error),
-        });
-        return undefined;
-      }
-    };
-
     const mcpServerElicitation = async (
       params: McpServerElicitationRequestParams,
     ): Promise<McpServerElicitationRequestResponse> => {
@@ -9306,9 +9190,6 @@ assertRouteCurrent();
       // Host policy 可在 outer call_tool 的 metadata 中识别渐进式 server 的
       // inner action。查询继续静默，高风险 action 逐次确认且不得持久化授权。
       const approvalPolicy = mcpToolApprovalPolicy(params);
-      const hostApprovalPresentation = mcpToolApprovalPresentation(
-        mcpToolApprovalContext(params),
-      );
       const policyPermissionInput = mcpElicitationPermissionInput(params);
       const turnPolicyForcePrompt = forceTurnConfirmation(
         `mcp:${params.serverName}`,
@@ -9330,10 +9211,8 @@ assertRouteCurrent();
           ...(toolUseId ? { toolUseId } : {}),
           toolName: `mcp:${params.serverName}`,
           input: policyPermissionInput,
-          title:
-            hostApprovalPresentation?.title ??
-            `Allow Codex to use ${innerToolName ?? toolTitle ?? params.serverName}?`,
-          description: hostApprovalPresentation?.description ?? params.message,
+          title: `Allow Codex to use ${innerToolName ?? toolTitle ?? params.serverName}?`,
+          description: params.message,
           suggestions:
             approvalPolicy !== 'prompt-each-time' && mcpElicitationAllowsSession(params)
               ? codexSessionApprovalSuggestions()
@@ -9909,79 +9788,10 @@ assertRouteCurrent();
         );
       }
 
-      if (
-        !hostDynamicToolProvider ||
-        !registeredHostDynamicToolKeys.has(dynamicToolCallKey(params))
-      ) {
-        return {
-          contentItems: [{ type: 'inputText', text: `Unsupported dynamic tool: ${params.tool}` }],
-          success: false,
-        };
-      }
-
-      const { serverName, toolName } = dynamicToolApprovalIdentity(params);
-      const approvalContext = {
-        serverName,
-        toolName,
-        toolParams: params.arguments,
+      return {
+        contentItems: [{ type: 'inputText', text: `Unsupported dynamic tool: ${params.tool}` }],
+        success: false,
       };
-      const approvalPolicy = classifyMcpToolApprovalPolicy(approvalContext);
-      const hostApprovalPresentation = mcpToolApprovalPresentation(approvalContext);
-      {
-        const requestId = `dynamic-tool:${serverName}:${params.turnId}:${params.callId}`;
-        const decision = await awaitApprovalDecision(
-          params.threadId,
-          params.turnId,
-          requestId,
-          'mcpServerElicitation',
-          {
-            kind: 'permission',
-            requestId,
-            ...(toolUseId ? { toolUseId } : {}),
-            toolName: `dynamic:${serverName}:${toolName}`,
-            input: { serverName, toolName, toolParams: params.arguments },
-            title: hostApprovalPresentation?.title ?? `Allow Codex to use ${serverName}?`,
-            description:
-              hostApprovalPresentation?.description ??
-              `Codex requested ${serverName}.${toolName}.`,
-          },
-          {
-            forcePrompt: approvalPolicy === 'prompt-each-time',
-            hostAutoApprove: approvalPolicy === 'auto-approve',
-            ...(toolUseId ? { itemId: toolUseId } : {}),
-          },
-        );
-        if (decision.decision !== 'accept' && decision.decision !== 'acceptForSession') {
-          return {
-            contentItems: [{ type: 'inputText', text: decision.reason ?? formatPermissionDenial('system') }],
-            success: false,
-          };
-        }
-      }
-
-      try {
-        const response = await hostDynamicToolProvider.callTool(params, hostDynamicToolContext);
-        if (response) return response;
-        return {
-          contentItems: [{ type: 'inputText', text: `Unsupported dynamic tool: ${params.tool}` }],
-          success: false,
-        };
-      } catch (error) {
-        log.error('host dynamic tool failed', {
-          namespace: params.namespace,
-          tool: params.tool,
-          error: error instanceof Error ? error.message : String(error),
-        });
-        return {
-          contentItems: [
-            {
-              type: 'inputText',
-              text: `Host dynamic tool failed: ${error instanceof Error ? error.message : String(error)}`,
-            },
-          ],
-          success: false,
-        };
-      }
     };
 
     function handleServerRequestResolved(params: ServerRequestResolvedNotification['params']): void {
@@ -10732,20 +10542,12 @@ assertRouteCurrent();
         text?: unknown;
       } | null | undefined;
       if (!candidate || candidate.type !== 'plan') return false;
-      noteObservedModelItem(turnId, candidate);
-      if (typeof candidate.id === 'string') {
-        clearApprovalPolicyDenialOnProgress(turnId, candidate.id);
-      }
       if (typeof candidate.text === 'string') proposedPlanText = candidate.text;
       return true;
     }
 
     function handleTurnCompleted(params: TurnCompletedParams): void {
       const turn = params.turn;
-      // Every branch below represents an authoritative terminal notification,
-      // including the paths that defer UI settlement or return early. Item
-      // history is only needed while approval attribution is still mutable.
-      observedModelItemIdsByTurn.delete(turn.id);
       if (reconnectStallCleanupTurnId === turn.id) {
         // Retain the authoritative terminal and its reply until the interrupt
         // handshake settles; do not consume data needed by normal completion.
@@ -10759,45 +10561,7 @@ assertRouteCurrent();
       const assistantReply = assistantReplyByTurn.get(turn.id);
       assistantReplyByTurn.delete(turn.id);
       const finalAssistantText = assistantReply?.finalText ?? assistantReply?.lastText ?? '';
-      const interruptOrigin = turnInterruptOrigins.get(turn.id);
       turnInterruptOrigins.delete(turn.id);
-      if (
-        interruptOrigin?.source === 'host-policy'
-        && !terminalErroredTurnIds.has(turn.id)
-        && !completedTurnIds.has(turn.id)
-        && turn.status === 'interrupted'
-      ) {
-        // The provider completion is the first proof that the denied command is
-        // actually finished. Close the turn with the policy error and Codex's
-        // required idle tail; the tombstone keeps interrupted from becoming a
-        // user-Stop done(cancelled:true). Completed/failed fall through to the
-        // provider-authoritative path regardless of interrupt ACK state.
-        // This path deliberately tombstones the provider completion, so the
-        // normal interrupted-turn branch below cannot end a plan cycle for us.
-        // Clear it here before the next send inherits stale Plan Mode state.
-        if (currentTurnPlanModeActive) {
-          proposedPlanText = null;
-          planCycleActive = false;
-          currentTurnPlanModeActive = false;
-        }
-        terminalErroredTurnIds.add(turn.id);
-        eventQueue.push({
-          type: 'error',
-          data: {
-            message: interruptOrigin.reason,
-            isTerminal: true,
-            reason: 'host-shell-command-blocked',
-          },
-          source: 'codex',
-        });
-        handleTurnCompleted(params);
-        eventQueue.push({
-          type: 'status',
-          data: { status: 'Done', ...usageTracker.snapshot(), isRunning: false },
-          source: 'codex',
-        });
-        return;
-      }
       if (reconnectStallTurnId === turn.id) clearReconnectStall();
       let recoveryState = overloadRetry;
       let pendingRecovery =
@@ -11042,29 +10806,12 @@ assertRouteCurrent();
       // 已经 return, 所以退避中的正常重投(死 turn 恒有墓碑)不会被误撤。
       revokeOverloadRetryOnTerminalSettle(`turn_${turn.status}`);
 
-      const approvalPolicyDenialReason = approvalPolicyDeniedTurnReasons.get(turn.id)?.reason;
-      const policyDenialReason =
-        (turn.status === 'failed' || turn.status === 'interrupted')
-          ? approvalPolicyDenialReason
-          : undefined;
-      approvalPolicyDeniedTurnReasons.delete(turn.id);
-      if (policyDenialReason !== undefined) {
-        eventQueue.push({
-          type: 'error',
-          data: { message: policyDenialReason, isTerminal: true },
-          source: 'codex',
-        });
-      }
-
       if (turn.status === 'failed' || turn.status === 'interrupted') {
         // 失败 / 中断的 plan turn 不发审批 — 半截计划没有审批意义, 循环就此结束。
         proposedPlanText = null;
         planCycleActive = false;
         currentTurnPlanModeActive = false;
-        if (policyDenialReason !== undefined) {
-          // Already reported above as the authoritative terminal outcome; the
-          // interrupt-derived message must not overwrite it.
-        } else if (turn.error?.message) {
+        if (turn.error?.message) {
           const classified = classifyCodexError(turn.error);
           eventQueue.push({
             type: 'error',
@@ -11282,43 +11029,6 @@ assertRouteCurrent();
       current.lastText = text;
       if (item.phase === 'final_answer') current.finalText = text;
       assistantReplyByTurn.set(turnId, current);
-    };
-
-    const noteObservedModelItem = (
-      turnId: string,
-      item: { id?: unknown; type?: unknown } | null | undefined,
-    ): void => {
-      if (
-        !item
-        || !itemRepresentsModelWork(item)
-        || typeof item.id !== 'string'
-        || item.id.length === 0
-      ) {
-        return;
-      }
-      const itemIds = observedModelItemIdsByTurn.get(turnId) ?? new Set<string>();
-      itemIds.add(item.id);
-      observedModelItemIdsByTurn.set(turnId, itemIds);
-    };
-
-    // An approval decline is only attributable to the immediate abort it
-    // causes. Work that was already observed before the denial may still emit
-    // progress while that abort settles; only model work first observed after
-    // the denial clears the policy attribution as a genuine continuation.
-    const clearApprovalPolicyDenialOnProgress = (turnId: string, itemId?: string): void => {
-      const denial = approvalPolicyDeniedTurnReasons.get(turnId);
-      if (!denial) return;
-      // Turn-level progress (diffs, plans, or text deltas without an item id)
-      // cannot prove that a replacement item started after the denial. Keep
-      // the attribution until an item lifecycle event identifies new work.
-      if (itemId === undefined) return;
-      if (
-        denial.itemIds.has(itemId)
-        || denial.preexistingItemIds.has(itemId)
-      ) {
-        return;
-      }
-      approvalPolicyDeniedTurnReasons.delete(turnId);
     };
 
     /** 取消挂起的过载重投（会话关闭 / 用户打断 / 新 turn 覆盖时调用）。 */
@@ -12397,83 +12107,6 @@ assertRouteCurrent();
           discardPendingSpawnLineageIds(reservedChildThreadIds);
           return;
         }
-        if (itemRepresentsModelWork(params.item)) {
-          noteObservedModelItem(params.turnId, params.item);
-          clearApprovalPolicyDenialOnProgress(params.turnId, params.item.id);
-        }
-        const shellCommand = shellCommandFromCodexItem(params.item);
-        if (shellCommand) {
-          const hostPolicy = this.deps.getShellCommandPolicy?.({
-            agentKind: 'codex',
-            command: shellCommand.command,
-            cwd: shellCommand.cwd,
-          });
-          if (hostPolicy?.decision === 'deny') {
-            discardPendingSpawnLineageIds(reservedChildThreadIds);
-            const existingInterruptOrigin = turnInterruptOrigins.get(params.turnId);
-            // Explicit user Stop owns the terminal attribution until the
-            // authoritative completion. Late blocked items must not reclassify
-            // that cancellation as a policy interruption.
-            if (existingInterruptOrigin?.source === 'user-stop') return;
-            // Deduplicate only the same blocked item while its interrupt RPC is
-            // still in flight. A different blocked item is fresh proof that the
-            // turn is still executing and must issue another bounded interrupt,
-            // even if the previous request has not acknowledged yet.
-            if (
-              existingInterruptOrigin?.acknowledgement === 'pending' &&
-              existingInterruptOrigin.itemId === params.item.id
-            ) {
-              return;
-            }
-            log.warn('command execution interrupted by host policy', {
-              turnId: params.turnId,
-              reason: hostPolicy.reason,
-            });
-            const pendingInterrupt: {
-              source: 'host-policy';
-              reason: string;
-              itemId: string;
-              acknowledgement: 'pending' | 'acknowledged' | 'failed';
-            } = {
-              source: 'host-policy',
-              reason: hostPolicy.reason,
-              itemId: params.item.id,
-              acknowledgement: 'pending',
-            };
-            turnInterruptOrigins.set(params.turnId, pendingInterrupt);
-            // Keep the task visibly running until provider completion proves the
-            // command stopped. This non-terminal warning survives the ACK window
-            // without arming Session's terminal-error drain.
-            eventQueue.push({
-              type: 'error',
-              data: {
-                message: pendingInterrupt.reason,
-                isTerminal: false,
-                reason: 'host-shell-command-blocked',
-              },
-              source: 'codex',
-            });
-            void (async () => {
-              const interrupted = await interruptTurnForPermissionTighten(params.turnId, {
-                suppressFailureEvent: true,
-              });
-              if (turnInterruptOrigins.get(params.turnId) !== pendingInterrupt) return;
-              if (interrupted) {
-                pendingInterrupt.acknowledgement = 'acknowledged';
-                return;
-              }
-              pendingInterrupt.acknowledgement = 'failed';
-              if (closed) return;
-              // The command may still be running. This provenance marker is not
-              // a tombstone, so later output remains visible; completion status
-              // decides whether the interrupt actually took effect.
-              log.error('host policy could not interrupt running command', {
-                turnId: params.turnId,
-              });
-            })();
-            return;
-          }
-        }
         // 模型已开始产出 → 本 turn 不再适合被过载重投整体重放。SDK echo 类 item
         // (userMessage 等)不算产出, 见 itemRepresentsModelWork。
         if (itemRepresentsModelWork(params.item)) {
@@ -12518,8 +12151,6 @@ assertRouteCurrent();
           return;
         }
         if (itemRepresentsModelWork(params.item)) {
-          noteObservedModelItem(params.turnId, params.item);
-          clearApprovalPolicyDenialOnProgress(params.turnId, params.item.id);
           producedOutputTurnIds.add(params.turnId);
           noteRecoveryModelWork(params.turnId, params.item);
         }
@@ -12589,8 +12220,6 @@ assertRouteCurrent();
           }
         }
         if (itemRepresentsModelWork(params.item)) {
-          noteObservedModelItem(params.turnId, params.item);
-          clearApprovalPolicyDenialOnProgress(params.turnId, params.item.id);
           producedOutputTurnIds.add(params.turnId);
           noteRecoveryModelWork(params.turnId, params.item);
         }
@@ -12664,7 +12293,6 @@ assertRouteCurrent();
           modelWork: true,
         })) return;
         if (shouldIgnoreStaleTurnEvent(params.turnId)) return;
-        clearApprovalPolicyDenialOnProgress(params.turnId, params.itemId);
         producedOutputTurnIds.add(params.turnId);
         noteRecoveryModelWork(params.turnId);
         translateAgentMessageDelta(params, eventQueue, { rt: translatorRt, log });
@@ -12680,7 +12308,6 @@ assertRouteCurrent();
         if (enqueueIfBufferedTurn(params.turnId, () => handlers.reasoningSummaryTextDelta?.(params), { modelWork: true })) return;
         if (shouldIgnoreStaleTurnEvent(params.turnId)) return;
         // thinking 流也算产出：模型已经在这一轮里工作了，整体重放不再等价。
-        clearApprovalPolicyDenialOnProgress(params.turnId, params.itemId);
         producedOutputTurnIds.add(params.turnId);
         noteRecoveryModelWork(params.turnId);
         translateReasoningSummaryTextDelta(params, eventQueue, { rt: translatorRt, log });
@@ -12689,7 +12316,6 @@ assertRouteCurrent();
         // thinking 流同样算产出(与非缓冲路径一致)。
         if (enqueueIfBufferedTurn(params.turnId, () => handlers.reasoningSummaryPartAdded?.(params), { modelWork: true })) return;
         if (shouldIgnoreStaleTurnEvent(params.turnId)) return;
-        clearApprovalPolicyDenialOnProgress(params.turnId, params.itemId);
         producedOutputTurnIds.add(params.turnId);
         noteRecoveryModelWork(params.turnId);
         translateReasoningSummaryPartAdded(params, eventQueue, { rt: translatorRt, log });
@@ -12698,7 +12324,6 @@ assertRouteCurrent();
         // thinking 流同样算产出(与非缓冲路径一致)。
         if (enqueueIfBufferedTurn(params.turnId, () => handlers.reasoningTextDelta?.(params), { modelWork: true })) return;
         if (shouldIgnoreStaleTurnEvent(params.turnId)) return;
-        clearApprovalPolicyDenialOnProgress(params.turnId, params.itemId);
         producedOutputTurnIds.add(params.turnId);
         noteRecoveryModelWork(params.turnId);
         translateReasoningTextDelta(params, eventQueue, { rt: translatorRt, log });

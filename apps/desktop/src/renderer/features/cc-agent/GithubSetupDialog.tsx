@@ -145,10 +145,10 @@ export function GithubSetupDialog({
       }}
     >
       <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 z-[10000] bg-[var(--overlay-modal)]" />
+        <Dialog.Overlay className="modal-scrim fixed inset-0 z-[10000]" />
         <Dialog.Content
           onInteractOutside={(event) => event.preventDefault()}
-          className="fixed left-1/2 top-1/2 z-[10001] flex max-h-[85vh] w-[min(400px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 flex-col gap-4 overflow-y-auto rounded-xl bg-[var(--confirm-bg)] p-4 shadow-[var(--confirm-shadow)] outline-none"
+          className="modal-panel fixed left-1/2 top-1/2 z-[10001] flex max-h-[85vh] w-[min(400px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 flex-col gap-4 overflow-y-auto p-4 outline-none"
         >
           <div className="flex items-center gap-2" aria-live="polite">
             {completed ? (

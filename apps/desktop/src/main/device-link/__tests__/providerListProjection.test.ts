@@ -18,6 +18,8 @@ import { describe, it, expect, vi } from 'vitest';
 import { connectedProvidersForAgent, pickRecommendedAgent, type ProviderView } from '@cindy/model-providers';
 import { TEST_XD_GATEWAY_BASE_URL as XD_GATEWAY_BASE_URL } from '../../../test/vitest/clientEndpointsFixture';
 
+// The projection never reads persistence; avoid loading Electron through transitive stores.
+vi.mock('electron-store', () => ({ default: class {} }));
 vi.mock('electron', () => ({
   app: {
     getAppPath: () => '/tmp/xdt-maker-test/app',
@@ -97,6 +99,52 @@ function xdProviderWithFullRouting() {
 }
 
 describe('projectInvokeResultForTunnel — maker:provider:list 投影', () => {
+  it('applies owner visibility per provider and runtime before transport, preserving enabled model options', () => {
+    const models = [
+      { id: 'default-on', defaultEnabled: true, supportsFastMode: true },
+      { id: 'manual-on', defaultEnabled: false, efforts: ['low', 'high'], contextWindow: 272000 },
+      { id: 'manual-off', defaultEnabled: true },
+      { id: 'default-off', defaultEnabled: false },
+      { id: 'legacy-default' },
+    ];
+    const providers = ['a', 'b'].map(id => ({ id, agents: ['codex', 'pi'],
+      models: { codex: models, pi: models }, imageModels: models, videoModels: models,
+      audioModels: models, embeddingModels: models }));
+    const input = { providers, providerOrder: ['b', 'a'], modelVisibilityOverrides: {
+      'codex:a:manual-on': true, 'codex:a:manual-off': false,
+    } };
+    const output = project(input);
+    const a = output.providers[0];
+    const expected = [models[0], models[1], models[4]];
+    expect(a.models).toEqual({ codex: expected, pi: [models[0], models[2], models[4]] });
+    expect(output.providers[1].models).toEqual({ codex: [models[0], models[2], models[4]], pi: [models[0], models[2], models[4]] });
+    for (const field of ['imageModels', 'videoModels', 'audioModels', 'embeddingModels']) expect(a[field]).toEqual(expected);
+    expect(output.providerOrder).toEqual(['b', 'a']);
+    expect(output.modelVisibilityOverrides).toMatchObject({
+      ...input.modelVisibilityOverrides, 'codex:a:default-off': false, 'pi:b:default-on': true,
+    });
+    expect(input.modelVisibilityOverrides).not.toHaveProperty('codex:a:default-off');
+    expect(input.providers[0].models.codex).toHaveLength(5);
+    expect(project({ ...input, modelVisibilityOverrides: { 'codex:a:manual-on': false } }).providers[0].models)
+      .toEqual({ codex: [models[0], models[2], models[4]], pi: [models[0], models[2], models[4]] });
+  });
+
+  it('fits a catalog dominated by hidden models into the unchanged legacy response without truncating enabled rows', () => {
+    const enabled = Array.from({ length: 150 }, (_, i) => ({
+      id: `enabled-${i}`, defaultEnabled: true, efforts: ['medium', 'high'], supportsFastMode: true,
+    }));
+    const hidden = Array.from({ length: 900 }, (_, i) => ({
+      id: `hidden-${i}`, defaultEnabled: false, description: 'metadata '.repeat(600),
+    }));
+    const input = { providers: [{ id: 'large', models: { codex: [...enabled, ...hidden] } }] };
+    expect(Buffer.byteLength(JSON.stringify(input))).toBeGreaterThan(4 * 1024 * 1024);
+    const output = project(input); // No capability negotiation, same path as an old phone.
+    expect(output.providers[0].models).toEqual({ codex: enabled });
+    expect(Buffer.byteLength(JSON.stringify(output))).toBeLessThan(64 * 1024);
+    expect(output).not.toHaveProperty('format');
+    expect(output).not.toHaveProperty('data');
+  });
+
   it('keeps the remote native Codex preference after stripping OAuth execution details', () => {
     const model = {
       id: 'gpt-6-astra', name: 'GPT-6 Astra', contextWindow: 400000,
@@ -334,6 +382,21 @@ describe('projectInvokeResultForTunnel — maker:provider:list 投影', () => {
 
     expect(providers[0]).not.toHaveProperty('logoKind');
     expect(providers[0].routing).toEqual({ codex: {}, 'claude-code': {} });
+  });
+
+  it('「允许被远程调用」只作标记透传，不裁剪目录(远程控制与手机仍看到全部供应商)', () => {
+    const base = xdProviderWithFullRouting();
+    const { providers } = project({
+      providers: [
+        { ...base, id: 'shared', remoteInvocationEnabled: true },
+        { ...base, id: 'private', remoteInvocationEnabled: false },
+        { ...base, id: 'odd', remoteInvocationEnabled: 'yes' },
+        { ...base, id: 'legacy' },
+      ],
+    });
+    expect(providers.map((p) => p.id)).toEqual(['shared', 'private', 'odd', 'legacy']);
+    expect(providers.map((p) => p.remoteInvocationEnabled)).toEqual([true, false, undefined, undefined]);
+    expect(providers[2]).not.toHaveProperty('remoteInvocationEnabled');
   });
 
   it('非 maker:provider:list 通道 → 原样返回不改', () => {

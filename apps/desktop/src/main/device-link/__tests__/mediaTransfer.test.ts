@@ -14,7 +14,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createHash } from 'node:crypto';
-import { PassThrough, Readable } from 'node:stream';
+import { PassThrough, Readable, addAbortSignal } from 'node:stream';
 
 /** Electron net.fetch(Chromium 网络栈):OSS GET / range,以及 PUT 的回退跳。 */
 const netFetchMock = vi.hoisted(() => vi.fn());
@@ -167,6 +167,65 @@ describe('uploadLocalFile — 小文件整体 PUT', () => {
     expect(netFetchMock).not.toHaveBeenCalled();
   });
 
+  it('取消上传 → 立刻中止 PUT,不换传输栈重试,并删除已签发的对象', async () => {
+    const abort = new AbortController();
+    undiciFetchMock.mockImplementation(
+      (_url: string, init: RequestInit) =>
+        new Promise((_, reject) => {
+          init.signal?.addEventListener('abort', () =>
+            reject(new DOMException('aborted', 'AbortError')),
+          );
+          abort.abort();
+        }),
+    );
+    await expect(uploadLocalFile('/tmp/a.png', { signal: abort.signal })).rejects.toThrow(
+      'UPLOAD_CANCELLED',
+    );
+    expect(undiciFetchMock).toHaveBeenCalledTimes(1);
+    expect(netFetchMock).not.toHaveBeenCalled();
+    expect(apiFetch.mock.calls.map(([path]) => path)).toEqual([PUT_PATH, DEL_PATH]);
+    // Already cancelled: nothing is presigned or sent.
+    apiFetch.mockClear();
+    undiciFetchMock.mockClear();
+    await expect(uploadLocalFile('/tmp/a.png', { signal: abort.signal })).rejects.toThrow();
+    expect(apiFetch).not.toHaveBeenCalled();
+    expect(undiciFetchMock).not.toHaveBeenCalled();
+  });
+
+  it('预签名无响应时取消 → 立即中止,不发 PUT;清理删除有期限且取消不等它', async () => {
+    const abort = new AbortController();
+    apiFetch.mockImplementation((path: string) =>
+      path === PUT_PATH ? new Promise(() => {}) : Promise.resolve({ deleted: true }),
+    );
+    const upload = uploadLocalFile('/tmp/a.png', { signal: abort.signal });
+    await vi.waitFor(() => expect(apiFetch).toHaveBeenCalled());
+    abort.abort();
+    await expect(upload).rejects.toThrow('UPLOAD_CANCELLED');
+    expect(undiciFetchMock).not.toHaveBeenCalled();
+    // A cancelled PUT does not wait for the (possibly hanging) delete; the delete itself is bounded.
+    apiFetch.mockClear();
+    apiFetch.mockImplementation((path: string) =>
+      path === PUT_PATH
+        ? Promise.resolve({ putUrl: 'https://oss.example/put', key: KEY, expiresAt: 'x' })
+        : new Promise(() => {}),
+    );
+    const second = new AbortController();
+    undiciFetchMock.mockImplementation(
+      (_url: string, init: RequestInit) =>
+        new Promise((_, reject) => {
+          init.signal?.addEventListener('abort', () =>
+            reject(new DOMException('aborted', 'AbortError')),
+          );
+          second.abort();
+        }),
+    );
+    await expect(uploadLocalFile('/tmp/a.png', { signal: second.signal })).rejects.toThrow(
+      'UPLOAD_CANCELLED',
+    );
+    const deleteCall = apiFetch.mock.calls.find(([path]) => path === DEL_PATH);
+    expect(deleteCall?.[1]).toMatchObject({ method: 'DELETE', timeoutMs: 15_000 });
+  });
+
   it('路径不是文件 → 抛错', async () => {
     statMock.mockResolvedValue({ isFile: () => false, size: 0 });
     await expect(uploadLocalFile('/tmp/dir')).rejects.toThrow();
@@ -234,6 +293,106 @@ describe('uploadLocalFile — bounded snapshots', () => {
     expect(createReadStreamMock).toHaveBeenCalledWith('/tmp/a.bin', { end: size });
     expect(netFetchMock).not.toHaveBeenCalled();
     expect(apiFetch).toHaveBeenCalledWith(DEL_PATH, expect.objectContaining({ method: 'DELETE' }));
+  });
+});
+
+describe('uploadLocalFile — 流式上传取消', () => {
+  it('取消时等源文件流真正关闭后才返回(Windows 删除暂存目录前文件必须已关闭)', async () => {
+    const size = __testing.STREAM_THRESHOLD + 1;
+    statMock.mockResolvedValue({ isFile: () => true, size });
+    // Slow close, like a busy disk: a caller that settles early would observe `closed === false`.
+    const source = new Readable({
+      read() {
+        this.push(Buffer.alloc(1024, 1));
+      },
+      destroy(error, callback) {
+        setTimeout(() => callback(error), 30);
+      },
+    });
+    createReadStreamMock.mockImplementation(() => source);
+    const abort = new AbortController();
+    undiciFetchMock.mockImplementation(
+      (_url: string, init: RequestInit) =>
+        new Promise((_, reject) => {
+          init.signal?.addEventListener('abort', () =>
+            reject(new DOMException('aborted', 'AbortError')),
+          );
+          abort.abort();
+        }),
+    );
+    const settled = await uploadLocalFile('/tmp/big.mp4', { signal: abort.signal }).then(
+      () => ({ error: '', closed: source.closed }),
+      (error: Error) => ({ error: error.message, closed: source.closed }),
+    );
+    expect(settled).toEqual({ error: 'UPLOAD_CANCELLED', closed: true });
+  });
+});
+
+describe('uploadLocalFile — 小文件预读取消', () => {
+  it('预读卡在慢盘时取消 → 立即停止读取,等读流关闭后返回,不发 PUT', async () => {
+    statMock.mockResolvedValue({ isFile: () => true, size: 100 });
+    let source!: Readable;
+    // A read that never completes, honouring the signal the way fs streams do.
+    createReadStreamMock.mockImplementation((_path: string, options: { signal?: AbortSignal }) => {
+      source = new Readable({
+        read() {},
+        destroy(error, callback) {
+          setTimeout(() => callback(error), 30);
+        },
+      });
+      return options.signal ? addAbortSignal(options.signal, source) : source;
+    });
+    const abort = new AbortController();
+    const upload = uploadLocalFile('/tmp/a.png', { maxBytes: 100, signal: abort.signal });
+    await vi.waitFor(() => expect(createReadStreamMock).toHaveBeenCalled());
+    abort.abort();
+    const settled = await upload.then(
+      () => ({ failed: false, closed: source.closed }),
+      () => ({ failed: true, closed: source.closed }),
+    );
+    expect(settled).toEqual({ failed: true, closed: true });
+    expect(undiciFetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('uploadLocalFile — 换栈重试后取消', () => {
+  it('等所有尝试打开过的源文件流都关闭后才返回', async () => {
+    const size = __testing.STREAM_THRESHOLD + 1;
+    statMock.mockResolvedValue({ isFile: () => true, size });
+    // The first attempt's stream closes more slowly than the retry's.
+    const slowSource = (closeMs: number) =>
+      new Readable({
+        read() {
+          this.push(Buffer.alloc(1024, 1));
+        },
+        destroy(error, callback) {
+          setTimeout(() => callback(error), closeMs);
+        },
+      });
+    const sources = [slowSource(60), slowSource(10)];
+    const opened: Readable[] = [];
+    createReadStreamMock.mockImplementation(() => {
+      const source = sources.shift()!;
+      opened.push(source);
+      return source;
+    });
+    // undici fails at the network layer → retry via Electron net, which the user cancels.
+    undiciFetchMock.mockRejectedValue(new TypeError('fetch failed'));
+    const abort = new AbortController();
+    netFetchMock.mockImplementation(
+      (_url: string, init: RequestInit) =>
+        new Promise((_, reject) => {
+          init.signal?.addEventListener('abort', () =>
+            reject(new DOMException('aborted', 'AbortError')),
+          );
+          abort.abort();
+        }),
+    );
+    const settled = await uploadLocalFile('/tmp/big.mp4', { signal: abort.signal }).then(
+      () => ({ error: '', closed: opened.map((source) => source.closed) }),
+      (error: Error) => ({ error: error.message, closed: opened.map((source) => source.closed) }),
+    );
+    expect(settled).toEqual({ error: 'UPLOAD_CANCELLED', closed: [true, true] });
   });
 });
 

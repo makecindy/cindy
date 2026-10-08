@@ -19,26 +19,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import {
-  Activity,
-  Bot,
-  FolderTree,
-  Globe,
-  Smartphone,
-  Terminal,
-  GitPullRequestArrow,
-  UsersRound,
-  LayoutGrid,
-  ListTodo,
-  Plus,
-  Puzzle,
-  X,
-  Maximize2,
-  Minimize2,
-  PanelRightClose,
-  PictureInPicture2,
-  Wrench,
-} from 'lucide-react';
+import { Activity, Bot, FolderTree, Globe, Terminal, GitPullRequestArrow, UsersRound, LayoutGrid, ListTodo, Plus, Puzzle, X, Maximize2, Minimize2, PanelRightClose, PictureInPicture2, Wrench } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { TFunction } from 'i18next';
 import { useTranslation } from 'react-i18next';
@@ -97,7 +78,6 @@ interface TabBarProps {
    *  detached 子窗口等其它宿主不传,默认 true 维持经典拖窗行为。 */
   chromeWindowDrag?: boolean;
   /** Whether the installed product plugin currently exposes the Host viewer. */
-  iosSimulatorAvailable?: boolean;
   subagentsAvailable?: boolean;
 }
 
@@ -129,14 +109,13 @@ interface TabStripProps {
   addButtonWrapperClassName?: string;
   addButtonClassName?: string;
   /** Whether the installed product plugin currently exposes the Host viewer. */
-  iosSimulatorAvailable?: boolean;
   subagentsAvailable?: boolean;
 }
 
 const KIND_ICON: Record<BuiltinTabKindId, LucideIcon> = {
   'file-browser': FolderTree,
   'web-browser': Globe,
-  'ios-simulator': Smartphone,
+  'retired-feature': Puzzle,
   terminal: Terminal,
   review: GitPullRequestArrow,
   'orca-workers': UsersRound,
@@ -151,7 +130,7 @@ const KIND_ICON: Record<BuiltinTabKindId, LucideIcon> = {
 const KIND_LABEL_KEY: Record<BuiltinTabKindId, string> = {
   'file-browser': 'rightSidebar.tabs.kinds.fileBrowser',
   'web-browser': 'rightSidebar.tabs.kinds.browser',
-  'ios-simulator': 'rightSidebar.tabs.kinds.iosSimulator',
+  'retired-feature': 'settings.ghosts.retirement.status',
   terminal: 'rightSidebar.tabs.kinds.terminal',
   review: 'rightSidebar.tabs.kinds.review',
   'orca-workers': 'rightSidebar.tabs.kinds.collaboration',
@@ -223,7 +202,6 @@ export function TabBar({
   onCloseAll,
   onDetach,
   chromeWindowDrag = true,
-  iosSimulatorAvailable = false,
   subagentsAvailable = false,
 }: TabBarProps) {
   const { t } = useTranslation();
@@ -249,7 +227,6 @@ export function TabBar({
         onCloseAll={onCloseAll}
         addButtonWrapperClassName="h-[36px]"
         addButtonClassName="mt-[3px]"
-        iosSimulatorAvailable={iosSimulatorAvailable}
         subagentsAvailable={subagentsAvailable}
       />
 
@@ -317,12 +294,12 @@ export function TabStrip({
   pillVariant = 'flush',
   addButtonWrapperClassName,
   addButtonClassName,
-  iosSimulatorAvailable = false,
   subagentsAvailable = false,
 }: TabStripProps) {
   const { t } = useTranslation();
   const reducedMotion = useReducedMotion();
   const [dropdownOpen, setDropdownOpen] = useState(false);
+  const closeDropdown = useCallback(() => setDropdownOpen(false), []);
   const tabsScrollRef = useRef<HTMLDivElement | null>(null);
   const addButtonWrapperRef = useRef<HTMLDivElement | null>(null);
   const existingKinds = useMemo(() => new Set<TabKindId>(tabs.map((t) => t.kind)), [tabs]);
@@ -442,45 +419,41 @@ export function TabStrip({
           )}
         />
       </div>
-      {/* 「+」按钮 wrapper:scroll 容器外、shrink-0 永远可见。dropdown portal 到
-          body(fixed 定位,以本 wrapper 为 anchor),不被面板 overflow-hidden 切。 */}
+      {/* 「+」按钮 wrapper:scroll 容器外、shrink-0 永远可见。菜单 portal 到 body,
+          不被面板 overflow-hidden 切;非 modal,点菜单外的控件照常生效。 */}
       <div
         ref={addButtonWrapperRef}
         className={cn('relative flex shrink-0 items-center', addButtonWrapperClassName)}
         style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
       >
-        <Tip text={t('rightSidebar.tabs.addAria')} side="bottom">
-          <button
-            type="button"
-            aria-label={t('rightSidebar.tabs.addAria')}
-            aria-haspopup="menu"
-            aria-expanded={dropdownOpen}
-            onClick={() => setDropdownOpen((v) => !v)}
-            className={cn(
-              'inline-flex h-6 w-6 items-center justify-center rounded-full transition-colors',
-              addButtonClassName,
-              dropdownOpen
-                ? 'bg-[var(--surface-chip)] text-[var(--text-primary)]'
-                : 'text-[var(--titlebar-icon)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]',
-            )}
-          >
-            <Plus size={13} />
-          </button>
-        </Tip>
-        {dropdownOpen && (
+        <DropdownMenu open={dropdownOpen} onOpenChange={setDropdownOpen} modal={false}>
+          <DropdownMenuTrigger asChild>
+            <Tip text={t('rightSidebar.tabs.addAria')} side="bottom">
+              <button
+                type="button"
+                aria-label={t('rightSidebar.tabs.addAria')}
+                className={cn(
+                  'inline-flex h-6 w-6 items-center justify-center rounded-full transition-colors',
+                  addButtonClassName,
+                  dropdownOpen
+                    ? 'bg-[var(--surface-chip)] text-[var(--text-primary)]'
+                    : 'text-[var(--titlebar-icon)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]',
+                )}
+              >
+                <Plus size={13} />
+              </button>
+            </Tip>
+          </DropdownMenuTrigger>
           <AddTabDropdown
+            open={dropdownOpen}
             anchorRef={addButtonWrapperRef}
             sessionId={sessionId}
-            onClose={() => setDropdownOpen(false)}
-            onSelect={(kind) => {
-              onAdd(kind);
-              setDropdownOpen(false);
-            }}
+            onClose={closeDropdown}
+            onSelect={onAdd}
             existingKinds={existingKinds}
-            iosSimulatorAvailable={iosSimulatorAvailable}
             subagentsAvailable={subagentsAvailable}
           />
-        )}
+        </DropdownMenu>
       </div>
 
       {/* Tab pill 右键菜单 —— 虚拟 trigger 在右键位置弹 DropdownMenu(跟
@@ -508,12 +481,6 @@ export function TabStrip({
         <DropdownMenuContent
           align="start"
           sideOffset={2}
-          className={cn(
-            'rounded-xl p-0.5 overflow-hidden',
-            'bg-[var(--cmd-palette-bg)]',
-            'border border-[var(--cmd-palette-border)]',
-            'shadow-[var(--shadow-menu)]',
-          )}
         >
           {contextMenu && (
             <>
@@ -523,7 +490,6 @@ export function TabStrip({
                   closeContextMenu();
                   onClose(id);
                 }}
-                className="h-7 px-2.5 rounded-md text-13 leading-none text-[var(--msg-assistant-text)] focus:bg-[var(--cmd-palette-item-hover)]"
               >
                 {t('rightSidebar.tabs.contextMenu.close')}
               </DropdownMenuItem>
@@ -535,7 +501,6 @@ export function TabStrip({
                   closeContextMenu();
                   onCloseOthers?.(id);
                 }}
-                className="h-7 px-2.5 rounded-md text-13 leading-none text-[var(--msg-assistant-text)] focus:bg-[var(--cmd-palette-item-hover)] data-[disabled]:opacity-50"
               >
                 {t('rightSidebar.tabs.contextMenu.closeOthers')}
               </DropdownMenuItem>
@@ -544,7 +509,6 @@ export function TabStrip({
                   closeContextMenu();
                   onCloseAll?.();
                 }}
-                className="h-7 px-2.5 rounded-md text-13 leading-none text-[var(--msg-assistant-text)] focus:bg-[var(--cmd-palette-item-hover)]"
               >
                 {t('rightSidebar.tabs.contextMenu.closeAll')}
               </DropdownMenuItem>

@@ -33,6 +33,7 @@ import { SessionShareImportWizard } from '@/components/settings/SessionShareImpo
 import { ControlledBanner } from '@/features/remote-device/ControlledBanner';
 import { CredentialStoreBanner } from '@/components/layout/CredentialStoreBanner';
 import { useDeviceLinkRemoteProjects } from '@/features/device-link/useDeviceLinkRemoteProjects';
+import { useAgentIslandRemoteSessionsSync } from '@/features/device-link/agentIslandRemoteSessions';
 import { pluginScheduleNavigationState } from '@/features/scheduler/lib/pluginScheduleCreateIntent';
 import { ScheduleSessionIndexOwner } from '@/features/scheduler/components/ScheduleSessionIndexOwner';
 import { AppBadgeAttentionSync } from '@/components/layout/AppBadgeAttentionSync';
@@ -486,6 +487,8 @@ export function MainLayout() {
   usePluginRemovalNoticeToast();
   // device-link 跨设备远程控制:同账号在线 + 开了被控的设备,其项目自动并入侧边栏
   useDeviceLinkRemoteProjects();
+  // 范围内的远程任务进本机灵动岛 / 桌面通知(main 只认主窗的这份输入)。
+  useAgentIslandRemoteSessionsSync();
 
   // 系统通知点击回调：主进程把窗口拉到前台后广播 sessionId，这里跳路由。
   // 挂在 MainLayout 而不是 App 顶层——这里在 ProtectedRoute + LocalDbGate 之内，
@@ -677,6 +680,14 @@ export function MainLayout() {
     },
     [navigate, navigateToSession, openShareImport],
   );
+  useEffect(
+    () =>
+      window.electronAPI.ghosts.onRetirementOpen((id) => {
+        navigate(`/plugins?retired=${encodeURIComponent(id)}`);
+      }),
+    [navigate],
+  );
+
   useEffect(() => {
     const unsubscribe = window.electronAPI.onDeepLinkNavigate((payload) => {
       if (payload.type !== 'provider-import' && payload.type !== 'shared-task-join') {

@@ -582,6 +582,24 @@ describe('turnRunner 自动任务转播(scheduler turn → 远程控制 thread)'
   const withOrigin = (e: Partial<AgentEvent>): AgentEvent =>
     ({ ...e, turnOrigin: schedulerOrigin }) as AgentEvent;
 
+  it('does not forward child output or settle on a child terminal during scheduled turns', async () => {
+    const stub = streamingHandleStub();
+    mocks.slackIm.startStreamingText.mockResolvedValue(stub);
+    const h = await attachAndIdle();
+    const child = { parentUuid: 'toolu_scheduled_child' };
+    h.emit(withOrigin({ type: 'text', data: { text: 'internal report', isFinal: true }, agentMeta: child }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(mocks.slackIm.startStreamingText).not.toHaveBeenCalled();
+    h.emit(withOrigin({ type: 'text', data: { text: 'public result', isFinal: true } }));
+    await vi.waitFor(() => expect(stub.replace).toHaveBeenCalled());
+    h.emit(withOrigin({ type: 'done', data: {}, agentMeta: child }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(stub.finalize).not.toHaveBeenCalled();
+    h.emit(withOrigin({ type: 'done', data: {} }));
+    await vi.waitFor(() => expect(stub.finalize).toHaveBeenCalledWith(expect.stringContaining('public result')));
+    expect(JSON.stringify(stub.replace.mock.calls)).not.toContain('internal report');
+  });
+
   it('scheduler stray 事件 → 在接管 thread 开转播卡,带任务名 + 步骤 + 流式结果', async () => {
     const stub = streamingHandleStub();
     mocks.slackIm.startStreamingText.mockResolvedValue(stub);

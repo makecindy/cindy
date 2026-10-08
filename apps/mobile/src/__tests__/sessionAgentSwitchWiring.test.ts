@@ -18,6 +18,66 @@ describe('session Agent switch UI wiring', () => {
     expect(source).toContain('...(agentSwitchIntent ? { agentSwitchIntent: null } : {})');
   });
 
+  it('lists other computers in the model sheet and moves the Agent only after confirmation', () => {
+    const source = readSource('app/sessions/[sessionId].tsx');
+    const writerStart = source.indexOf('const writeSessionAgentSwitchIntent = useCallback');
+    const writer = source.slice(writerStart, source.indexOf('// Context 面板', writerStart));
+    // 唯一写出口把 intent 的位置作为第 7 参转给被控端;没有位置时不发(旧 6 参 wire)。
+    expect(writer).toContain('nextIntent.agentDeviceId !== undefined');
+    expect(writer).toContain('? { agentDeviceId: nextIntent.agentDeviceId }');
+    // 共享任务访客不能挪 Agent 位置,SSH / Orca 不支持切换,旧被控端不投影位置字段。
+    expect(source).toContain('const agentLocationMovable = sessionAgentSwitchSupported');
+    expect(source).toContain("&& !isSharedTaskPeer(deviceId)");
+    expect(source).toContain("Object.prototype.hasOwnProperty.call(currentSession, 'agentDeviceId')");
+    // 模型列表另列其他电脑的供应商,选中态跟着下一条消息时 Agent 所在的电脑。
+    expect(source).toContain(
+      '? { remote: { catalogs: remoteAgentCatalogs, selectedDeviceId: nextAgentDeviceId } }',
+    );
+    // 顶部常驻说明已去掉,由换电脑前的二次确认代替。
+    expect(source).not.toContain('notice={agentLocationNotice}');
+
+    const rowSelector = source.slice(
+      source.indexOf('const selectComposerModelRow'),
+      source.indexOf('const selectUnifiedComposerModel'),
+    );
+    const unifiedSelector = source.slice(
+      source.indexOf('const selectUnifiedComposerModel'),
+      source.indexOf('const selectComposerFlatModel'),
+    );
+    const flatSelector = source.slice(
+      source.indexOf('const selectComposerFlatModel'),
+      source.indexOf('const browseComposerModelAgent'),
+    );
+    for (const selector of [rowSelector, unifiedSelector, flatSelector]) {
+      expect(selector).toContain('await confirmAgentLocationForPick({');
+      expect(selector).toContain('intent: agentSwitchIntent,');
+      // 换电脑的选择走切换意图,而且必须在 setModel 之前分流;取消 = 什么都不改。
+      expect(selector).toMatch(/if \(!location(?: \|\| deviceIdRef\.current !== deviceId)?\) return/);
+      expect(selector.indexOf('writeSessionAgentSwitchIntent(')).toBeGreaterThan(-1);
+      expect(selector.indexOf('writeSessionAgentSwitchIntent(')).toBeLessThan(
+        selector.indexOf('setComposerModel('),
+      );
+    }
+    // 被控电脑自己的列表(旧版 / 扁平)只来自被控电脑。
+    expect(rowSelector).toContain('catalogDeviceId: null,');
+    expect(flatSelector).toContain('catalogDeviceId: null,');
+    expect(unifiedSelector).toContain('const catalogDeviceId = source?.deviceId ?? null;');
+
+    // 已登记换位置时,推理强度 / Fast 改的是 intent 本身(带着位置),不是 setEffort / setFastMode。
+    const toggles = source.slice(
+      source.indexOf('const changeComposerSelectedEffort'),
+      source.indexOf('const toggleComposerModelPicker'),
+    );
+    expect(toggles.match(
+      /\(modelSheetAgentKind !== sessionAgentKind \|\| intentChangesAgentLocation\(agentSwitchIntent\)\)/g,
+    )).toHaveLength(2);
+
+    // 模型药丸按 Agent 所在电脑的目录显示,带远程标记;读屏标签读出那台电脑。
+    expect(source).toContain('providers: composerAgentCatalog.providers,');
+    expect(source).toContain('remote={Boolean(nextAgentDeviceId)}');
+    expect(source).toContain('accessibilityLabel={composerRuntimeAccessibilityLabel}');
+  });
+
   it('uses the browsed Agent capabilities and selection in the shared model sheet', () => {
     const source = readSource('app/sessions/[sessionId].tsx');
     expect(source).toContain('agentKind={modelSheetAgentKind}');

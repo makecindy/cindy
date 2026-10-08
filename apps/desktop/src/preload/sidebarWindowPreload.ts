@@ -1,3 +1,4 @@
+import { createAccessibilitySupportBridge } from './accessibilitySupport';
 import { invokeOpenPath } from './openPath';
 import { COPY_PNG_TO_CLIPBOARD_CHANNEL, type CopyPngToClipboardParams } from '../shared/pngClipboard';
 /**
@@ -74,6 +75,7 @@ const fanOutFullscreenChange = (cb: (isFullscreen: boolean) => void): (() => voi
 
 contextBridge.exposeInMainWorld('electronAPI', {
   platform: process.platform,
+  accessibilitySupport: createAccessibilitySupportBridge(),
   onWindowHiddenChange: (cb: (hidden: boolean) => void): (() => void) => {
     const off = onPayload('window-hidden-change', cb);
     cb(windowHidden);
@@ -221,6 +223,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     onTransferProgress: (cb: (event: unknown) => void): (() => void) => onPayload('maker:file-browser:transfer', cb),
     previewHtml: (params: unknown): Promise<unknown> => ipcRenderer.invoke('maker:html-preview:open', params),
     chatFetch: (params: unknown): Promise<unknown> => ipcRenderer.invoke('maker:chat-file:fetch', params),
+    chatDownload: (params: unknown): Promise<unknown> => ipcRenderer.invoke('maker:chat-file:download', params),
     chatStat: (params: unknown): Promise<unknown> => ipcRenderer.invoke('maker:chat-file:stat', params),
   },
   terminal: {
@@ -281,6 +284,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   ghosts: {
     listSync: (): { ghosts: unknown[] } => ipcRenderer.sendSync('ghosts:list'),
     reload: (id: string): Promise<{ state: string }> => ipcRenderer.invoke('ghosts:reload', id),
+    openRetirement: (id: string): Promise<{ ok: true }> =>
+      ipcRenderer.invoke('ghosts:open-retirement', id),
+    acknowledgeRetirement: (id: string): Promise<{ ok: true }> =>
+      ipcRenderer.invoke('ghosts:acknowledge-retirement', id),
     setEnabled: (id: string, enabled: boolean): Promise<{ ok: true }> =>
       ipcRenderer.invoke('ghosts:set-enabled', id, enabled),
     resolvePanelMedia: (
@@ -556,36 +563,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('maker:pi-subagent:control', input),
     getPendingInteractions: (sessionId: string): Promise<unknown> =>
       ipcRenderer.invoke('maker:get-pending-interactions', sessionId),
-    iosSimulator: {
-      requestAccess: (request: unknown): Promise<unknown> =>
-        ipcRenderer.invoke('maker:ios-simulator:request-access', request),
-      status: (request: unknown): Promise<unknown> =>
-        ipcRenderer.invoke('maker:ios-simulator:status', request),
-      call: (request: unknown): Promise<unknown> =>
-        ipcRenderer.invoke('maker:ios-simulator:call', request),
-      setAgentControl: (request: unknown): Promise<unknown> =>
-        ipcRenderer.invoke('maker:ios-simulator:set-agent-control', request),
-      setMutationControl: (request: unknown): Promise<unknown> =>
-        ipcRenderer.invoke('maker:ios-simulator:set-mutation-control', request),
-      setViewerVisibility: (request: unknown): Promise<unknown> =>
-        ipcRenderer.invoke('maker:ios-simulator:set-viewer-visibility', request),
-      retryNativeRoute: (request: unknown): Promise<unknown> =>
-        ipcRenderer.invoke('maker:ios-simulator:retry-native-route', request),
-      latestFrame: (request: unknown): Promise<unknown> =>
-        ipcRenderer.invoke('maker:ios-simulator:latest-frame', request),
-      copyScreenshot: (request: unknown): Promise<unknown> =>
-        ipcRenderer.invoke('maker:ios-simulator:copy-screenshot', request),
-      setStreamProfile: (request: unknown): Promise<unknown> =>
-        ipcRenderer.invoke('maker:ios-simulator:set-stream-profile', request),
-      liveTouch: (request: unknown): Promise<unknown> =>
-        ipcRenderer.invoke('maker:ios-simulator:live-touch', request),
-      onH264Frame: (cb: (payload: unknown) => void): (() => void) =>
-        onPayload('maker:ios-simulator:h264-frame', cb),
-      onRouteStatus: (cb: (payload: unknown) => void): (() => void) =>
-        onPayload('maker:ios-simulator:route-status', cb),
-      onFocusRequest: (cb: (payload: unknown) => void): (() => void) =>
-        onPayload('maker:ios-simulator:focus-request', cb),
-    },
   },
   /** 涓荤獥鎺ㄩ€?RSB 娴忚鍣ㄦ寜閿懡浠?鈱樷嚙鈫?绛?鍒板瓙绐楀彛銆?*/
   search: {

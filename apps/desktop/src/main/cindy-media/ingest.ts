@@ -62,7 +62,7 @@ export type IngestMediaParams = blobStore.BlobSource & {
    * compensated after the DbClient worker disappears before its ACK.
    */
   refCompensationScope?: MediaRefCompensationScope;
-}
+};
 
 export interface IngestedMedia {
   /** SHA-256 指纹(64 位小写十六进制)。 */
@@ -154,13 +154,14 @@ export const supportedMime = blobStore.supportedMime;
 
 /**
  * Client UI media has no account owner. Its reference is the client appearance
- * setting (custom WebP) or bundled catalog (optional CDN MP4), not an account DB.
+ * setting (custom WebP/MP4) or bundled catalog (optional CDN MP4), not an account DB.
  * Reuse the same atomic byte store in an isolated deletion scope; callers must
  * serialize publication and recycling with the client wallpaper operation lock.
  */
-export async function ingestClientWallpaper(
-  params: { buffer: Uint8Array; mimeType: 'image/webp' | 'video/mp4' },
-): Promise<blobStore.WrittenBlob> {
+export async function ingestClientWallpaper(params: {
+  buffer: Uint8Array;
+  mimeType: 'image/webp' | 'video/mp4';
+}): Promise<blobStore.WrittenBlob> {
   if (params.mimeType !== 'image/webp' && params.mimeType !== 'video/mp4')
     throw new Error('cindy-media: unsupported client wallpaper type');
   return blobStore.writeBlob({ ...params, scope: 'client-wallpaper' });

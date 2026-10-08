@@ -52,7 +52,6 @@ import {
 } from '../../../shared/ghost';
 import { type GhostPluginDetail } from './lib/ghostPluginViewModel';
 import { GhostPluginIcon } from './GhostPluginIcon';
-import { IOSSimulatorPreferences } from './IOSSimulatorPreferences';
 import { ghostPluginSummary } from './lib/ghostPluginDetailModel';
 import { ghostPrimaryAction } from './lib/ghostPluginViewModel';
 import { permissionItemIcon } from './lib/permissionItemIcon';
@@ -136,7 +135,6 @@ export function GhostPluginDetailView({
   const primaryEnabled =
     enabled &&
     (primaryAction === 'panel' ||
-      primaryAction === 'capability' ||
       (primaryAction === 'command' && detail.canUse));
   const cindyCapabilities = detail.cindyCapabilities;
   // Local imports with the same id cannot use the host gh credential. Match the
@@ -153,7 +151,6 @@ export function GhostPluginDetailView({
     hasGithubConnection ||
     detail.hasMainView ||
     detail.hasSettingsUi ||
-    detail.hostCapability === 'ios-simulator' ||
     cindyCapabilities.length > 0 ||
     detail.hasTaskPreferences;
   const summary = hasGithubConnection
@@ -290,7 +287,7 @@ export function GhostPluginDetailView({
                   title={!enabled ? t('settings.ghosts.detail.useDisabled') : undefined}
                   className="plugin-detail-primary-action min-w-[88px] whitespace-nowrap"
                 >
-                  {primaryAction === 'command' || primaryAction === 'capability' ? (
+                  {primaryAction === 'command' ? (
                     <MessageCircle size={14} aria-hidden="true" />
                   ) : null}
                   {t(
@@ -343,13 +340,12 @@ export function GhostPluginDetailView({
                 <DropdownMenuContent
                   align="end"
                   sideOffset={8}
-                  className="w-56 rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-1.5 text-[var(--text-primary)] shadow-[var(--shadow-menu)]"
+                  className="w-56 p-1.5"
                 >
                   {localUpdateAvailable ? (
                     <DropdownMenuItem
                       onSelect={onUpdateFromFile}
                       disabled={updateBusy}
-                      className="h-10 rounded-lg px-3 text-13 focus:bg-[var(--surface-hover-soft)]"
                     >
                       {t('settings.ghosts.detail.updateFromFile')}
                     </DropdownMenuItem>
@@ -357,18 +353,19 @@ export function GhostPluginDetailView({
                   {onExport ? (
                     <DropdownMenuItem
                       onSelect={onExport}
-                      className="h-10 gap-2.5 rounded-lg px-3 text-13 focus:bg-[var(--surface-hover-soft)]"
+                      className="gap-2.5"
                     >
                       <Download size={15} aria-hidden="true" />
                       {t('settings.ghosts.detail.exportPackage')}
                     </DropdownMenuItem>
                   ) : null}
                   {hasAdditionalActions ? (
-                    <DropdownMenuSeparator className="mx-2 my-1 h-px bg-[var(--border-default)]" />
+                    <DropdownMenuSeparator />
                   ) : null}
                   <DropdownMenuItem
                     onSelect={onUninstall}
-                    className="h-10 gap-2.5 rounded-lg px-3 text-13 text-[var(--error-fg)] focus:bg-[var(--error-bg)] focus:text-[var(--error-fg-strong)]"
+                    variant="danger"
+                    className="gap-2.5"
                   >
                     <Trash2 size={15} aria-hidden="true" />
                     {t('settings.ghosts.uninstall')}
@@ -439,7 +436,6 @@ export function GhostPluginDetailView({
                 'space-y-3',
               )}
             >
-              {detail.hostCapability === 'ios-simulator' ? <IOSSimulatorPreferences /> : null}
               {detail.hasMainView ? (
                 <div
                   className={cn(
@@ -1024,12 +1020,12 @@ function DialogFrame({ children }: { children: ReactNode }) {
   return (
     <Dialog.Portal>
       <Dialog.Overlay
-        className="fixed inset-0 z-[10000] bg-[var(--overlay-modal)]"
+        className="modal-scrim fixed inset-0 z-[10000]"
         style={WINDOW_NO_DRAG_STYLE}
       />
       <Dialog.Content
         onPointerDownOutside={(event) => event.preventDefault()}
-        className="fixed left-1/2 top-1/2 z-[10000] flex max-h-[70vh] w-[calc(100vw-48px)] max-w-[560px] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] text-[var(--text-primary)] shadow-[var(--shadow-menu)] focus:outline-none"
+        className="modal-panel fixed left-1/2 top-1/2 z-[10000] flex max-h-[70vh] w-[calc(100vw-48px)] max-w-[560px] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden text-[var(--text-primary)] focus:outline-none"
         style={WINDOW_NO_DRAG_STYLE}
       >
         {children}

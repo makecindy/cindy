@@ -45,6 +45,7 @@ import { routinePermissionSnapshot } from '../maker-host/routinePermission.js';
 import { randomUUID } from 'node:crypto';
 
 import { isTerminalAgentErrorEvent } from '@cindy/maker-core';
+import { formatSourceRef } from '@cindy/maker-shared/message-source';
 import {
   restoreAutoReviewUserIntent,
   type AutoReviewHistoryMessage,
@@ -285,6 +286,11 @@ export interface MakerScheduleRunnerDeps {
   /** 可选:撞忙排队桥。未注入时心跳撞忙回退为顺延(deferFire)旧行为。 */
   schedulerQueue?: SchedulerQueueDeps;
   /**
+   * 任务的 Agent 在同账号另一台电脑上运行：模型与来源属于那台的目录，本机停用轴不裁决
+   * (由那台在启动 / 切换时裁决)。缺省 = 都按本机任务处理。
+   */
+  isAgentOnOtherDevice?: (sessionId: string) => Promise<boolean>;
+  /**
    * 停用轴裁决(生产 = maker-host/model-route-guard-live 的 verdictForModelRoute)。
    * scheduler 的每次 fire 都是新的付费调用,不属于「运行中的会话不打断」豁免:
    * 保存过的路由若已被用户停用,新建会话必须拒绝、心跳的模型切换必须跳过 ——
@@ -405,6 +411,22 @@ export class MakerScheduleRunner implements ScheduleRunner {
   /** scheduler-host/index.ts 在 startScheduler 内调一次，让 runner 反向 pause schedule */
   attachScheduler(scheduler: Scheduler): void {
     this.scheduler = scheduler;
+  }
+
+  /**
+   * 停用轴裁决。Agent 在另一台电脑运行的任务用那台的模型目录，本机不裁决(那台启动 / 切换时
+   * 会自己拒绝不可用的路由)；其余任务与原来完全一致。只在 checkModelRoute 已注入时调用。
+   */
+  private async checkRouteFor(
+    sessionId: string | undefined,
+    agent: AgentKind,
+    model: string,
+    providerId: string | null,
+  ): ReturnType<NonNullable<MakerScheduleRunnerDeps['checkModelRoute']>> {
+    if (sessionId && (await this.deps.isAgentOnOtherDevice?.(sessionId).catch(() => false))) {
+      return { kind: 'pass' };
+    }
+    return this.deps.checkModelRoute!(agent, model, providerId);
   }
 
   private async retireHeartbeat(
@@ -1050,7 +1072,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
     // 可见),不能继续经停用路由扣费;隐式默认落点被停用而有启用替代拷贝时改路由过去。
     let reroutedProviderId: string | null = null;
     if (this.deps.checkModelRoute) {
-      const verdict = await this.deps.checkModelRoute(effectiveAgentKind, model, createProviderId);
+      const verdict = await this.checkRouteFor(isHeartbeat ? sessionId : undefined, effectiveAgentKind, model, createProviderId);
       if (verdict.kind === 'reject') {
         throw new Error(
           `schedule route unavailable: ${describeModelRouteRejection(verdict.reason, model, createProviderId)} (${verdict.reason})`,
@@ -1593,7 +1615,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
     // state bind to the Session instance. The transaction may retire it.
     if (effectiveAgentKind === 'pi' && this.deps.checkModelRoute) {
       const currentProviderId = getSessionProvider(session.id);
-      const verdict = await this.deps.checkModelRoute('pi', runtimeModel, currentProviderId);
+      const verdict = await this.checkRouteFor(session.id, 'pi', runtimeModel, currentProviderId);
       if (verdict.kind === 'reject') {
         throw new Error(`schedule route unavailable: ${describeModelRouteRejection(verdict.reason, runtimeModel, currentProviderId)} (${verdict.reason})`);
       }
@@ -1699,7 +1721,8 @@ export class MakerScheduleRunner implements ScheduleRunner {
       // reject 即失败收口,不发出这次新的付费调用。
       if (this.deps.checkModelRoute) {
         const dispatchProviderId = getSessionProvider(session.id);
-        const verdict = await this.deps.checkModelRoute(
+        const verdict = await this.checkRouteFor(
+          session.id,
           effectiveAgentKind,
           runtimeModel,
           dispatchProviderId,
@@ -2677,7 +2700,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
     const routeProviderId = explicitProviderId ?? currentProviderId;
     let providerId = routeProviderId;
     if (this.deps.checkModelRoute) {
-      const verdict = await this.deps.checkModelRoute('pi', model, routeProviderId);
+      const verdict = await this.checkRouteFor(sessionId, 'pi', model, routeProviderId);
       if (verdict.kind === 'reject') {
         throw new QueuedRouteDisabledError(
           `schedule route unavailable: ${describeModelRouteRejection(verdict.reason, model, routeProviderId)} (${verdict.reason})`,
@@ -2741,7 +2764,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
       // 误按隐式默认裁决放行,随后照旧沿停用来源派发(PR #744 review 第八轮)。
       // 两者都缺才是真正的隐式默认(reroute 才有意义)。
       const routeProviderId = explicitProviderId ?? currentProviderId;
-      const verdict = await this.deps.checkModelRoute(live.agentKind, targetModel, routeProviderId);
+      const verdict = await this.checkRouteFor(live.id, live.agentKind, targetModel, routeProviderId);
       if (verdict.kind === 'reject') {
         throw new QueuedRouteDisabledError(
           `schedule route unavailable: ${describeModelRouteRejection(verdict.reason, targetModel, routeProviderId)} (${verdict.reason})`,
@@ -2815,7 +2838,8 @@ export class MakerScheduleRunner implements ScheduleRunner {
       // 目标来源启用但需要凭证切换、而**当前**来源在排队等待期间被停用时,不裁决
       // 就成了绕过口,照发等于继续经停用路由扣费(PR #744 review 第十轮)。
       if (this.deps.checkModelRoute) {
-        const retained = await this.deps.checkModelRoute(
+        const retained = await this.checkRouteFor(
+          live.id,
           live.agentKind,
           live.model,
           currentProviderId,
@@ -2908,7 +2932,8 @@ export class MakerScheduleRunner implements ScheduleRunner {
     // (runtimeModel, 落地来源) 重新裁决,reject 即中止派发(与上方同语义,由排队
     // onAccepted 在 vendor dispatch 之前收口)。
     if (this.deps.checkModelRoute && runtimeModel !== targetModel) {
-      const actual = await this.deps.checkModelRoute(
+      const actual = await this.checkRouteFor(
+        live.id,
         live.agentKind,
         runtimeModel,
         applyProviderId ?? currentProviderId,
@@ -3454,12 +3479,16 @@ function buildScheduledRunPrompt(schedule: Schedule, ctx: FireContext, checkOutp
 }
 
 /**
- * 每次 fire 注入的权威时间上下文。UI / DB 仍展示用户原始 prompt；这里只让 agent
- * 明确知道本轮 run.firedAt；具体查询时间范围仍由任务 prompt 决定。
+ * 每次 fire 注入的权威运行上下文。UI / DB 仍展示用户原始 prompt；这里只让 agent
+ * 明确知道是哪条定时任务（名字 + schedule_id）触发了本轮、以及本轮 run.firedAt；
+ * 具体查询时间范围仍由任务 prompt 决定。
  * 采用 epoch ms + UTC ISO，避免 UTC 日期与任务时区的壁钟日期被直接比较。
+ * 名字一律配 schedule_id（伙伴 routine 也一样：id 用于区分同名任务、与界面和交接摘要
+ * 同源，与伙伴工具是否接受 scheduleId 无关）。名字是用户输入，按不可信展示文本处理。
+ * 这一段是 per-fire user message 后缀，不进 system 段，不影响 prompt cache 前缀。
  */
 function buildScheduledRunContextInstruction(
-  schedule: Pick<Schedule, 'timezone'>,
+  schedule: Pick<Schedule, 'id' | 'name' | 'source' | 'timezone'>,
   ctx: Pick<FireContext, 'firedAt'>,
 ): string {
   const zonedParts = Object.fromEntries(
@@ -3484,11 +3513,17 @@ function buildScheduledRunContextInstruction(
     '',
     '---',
     '[Scheduled run context]',
+    ...buildScheduleRefLine(schedule),
     `firedAtEpochMs: ${ctx.firedAt}`,
     `firedAtUtc: ${new Date(ctx.firedAt).toISOString()}`,
     `firedAtInScheduleTimezone: ${firedAtInScheduleTimezone}`,
     'These timestamps identify when this run was triggered, not when a queued run started processing. Use the task instructions to determine the requested time range.',
   ].join('\n');
+}
+
+function buildScheduleRefLine(schedule: Pick<Schedule, 'id' | 'name'>): string[] {
+  const ref = formatSourceRef(schedule.name, 'schedule_id', schedule.id).trim();
+  return ref ? [`schedule: ${ref}`] : [];
 }
 
 /**

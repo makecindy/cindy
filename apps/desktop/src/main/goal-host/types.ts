@@ -227,12 +227,22 @@ export interface GoalControllerDeps {
    */
   persistGoalCompletion?: (sessionId: string, summary: GoalCompletionSummary) => Promise<void>;
   /**
-   * 读某 agent 当前账号用量是否受限 + 何时重置(主动检测)。注入端读对应配额快照:
-   * codex → readCodexAccountUsageSnapshot(rateLimitReachedType / resetsAt);
-   * claude → readClaudeAccountUsageSnapshot(spend>=maxBudget / budgetResetAt)。
+   * 该任务当前是否在共享中。共享中的目标撞上账号限额不排自动恢复(访客可能已影响本目标,
+   * 等待期间撤权后到点续跑不安全),停在 usageLimited 由房主手动恢复;过载短窗口不受影响。
+   */
+  isSessionShared?: (sessionId: string) => boolean;
+  /**
+   * 读该会话所用账号当前是否受限 + 何时重置(主动检测)。注入端按会话 provider 所属的订阅
+   * 家族读对应快照(ChatGPT / Claude / SuperGrok,见 usage/accountUsageLimit.ts);非订阅的
+   * Claude Code 会话退回 Cindy 网关预算快照。`turnError` 为本轮限额报错(被动检测时传入):
+   * 会话属于订阅账号时优先用报错原文里写明的重置时刻。
    * 返回 null = 拿不到快照(按"未受限"处理)。
    */
-  getAccountLimit?: (agentKind: AgentKind) => Promise<AccountLimitInfo | null>;
+  getAccountLimit?: (
+    agentKind: AgentKind,
+    sessionId: string,
+    turnError?: unknown,
+  ) => Promise<AccountLimitInfo | null>;
   /**
    * 持久化一条 goal 提示记录(注入 createMessage,role:'assistant' + agentMeta.goalNotice)。
    * 目前用于 usageLimited 到点自动续跑时落一条"用量已恢复,继续目标"。

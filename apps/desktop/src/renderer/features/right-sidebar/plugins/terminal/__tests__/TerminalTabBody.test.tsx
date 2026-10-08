@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, render } from '@testing-library/react';
+import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { TabKindHostContext } from '../../../types';
@@ -41,15 +41,17 @@ class TestResizeObserver {
   unobserve() {}
 }
 
-function makeContext(): TabKindHostContext {
+function makeContext(overrides: Partial<TabKindHostContext> = {}): TabKindHostContext {
   return {
     tabId: 'terminal-1',
     sessionId: 'session-1',
     workdir: '/workspace',
     remoteHostId: null,
+    deviceLinkDeviceId: null,
     patchState: vi.fn(),
     onVisibilityChange: vi.fn(),
     setCloseInterceptor: vi.fn(() => vi.fn()),
+    ...overrides,
   };
 }
 
@@ -145,5 +147,63 @@ describe('TerminalTabBody sidebar visibility', () => {
     frame?.(0);
 
     expect(resize).not.toHaveBeenCalled();
+  });
+});
+
+describe('TerminalTabBody remote ownership', () => {
+  it('continues to create a PTY for a confirmed local session', async () => {
+    render(
+      <TerminalTabBody
+        state={{ created: false, exited: null, title: '', shellId: '', shellDisplayName: '' }}
+        ctx={makeContext()}
+        active
+      />,
+    );
+
+    await waitFor(() => expect(window.electronAPI.terminal.create).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'terminal-1', cwd: '/workspace' }),
+    ));
+  });
+
+  it('creates the local PTY after device-link ownership resolves from unknown to local', async () => {
+    const unresolvedContext = makeContext({ deviceLinkDeviceId: undefined });
+    const state = { created: false, exited: null, title: '', shellId: '', shellDisplayName: '' };
+    const view = render(<TerminalTabBody state={state} ctx={unresolvedContext} active />);
+
+    expect(screen.getByText('rightSidebar.terminal.remoteUnavailableTitle')).toBeTruthy();
+    expect(window.electronAPI.terminal.create).not.toHaveBeenCalled();
+
+    view.rerender(
+      <TerminalTabBody
+        state={state}
+        ctx={{ ...unresolvedContext, deviceLinkDeviceId: null }}
+        active
+      />,
+    );
+
+    await waitFor(() => expect(window.electronAPI.terminal.create).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'terminal-1', cwd: '/workspace' }),
+    ));
+    expect(screen.queryByText('rightSidebar.terminal.remoteUnavailableTitle')).toBeNull();
+  });
+
+  it.each([
+    ['an SSH session', { remoteHostId: 'ssh-host-1', deviceLinkDeviceId: null }],
+    ['a device-link session', { remoteHostId: null, deviceLinkDeviceId: 'device-1' }],
+    ['unresolved device-link ownership', { remoteHostId: null, deviceLinkDeviceId: undefined }],
+  ])('fails closed for %s without creating a local PTY', (_label, ownership) => {
+    const ctx = makeContext(ownership);
+    render(
+      <TerminalTabBody
+        state={{ created: false, exited: null, title: '', shellId: '', shellDisplayName: '' }}
+        ctx={ctx}
+        active
+      />,
+    );
+
+    expect(screen.getByText('rightSidebar.terminal.remoteUnavailableTitle')).toBeTruthy();
+    expect(screen.getByText('rightSidebar.terminal.remoteUnavailableDescription')).toBeTruthy();
+    expect(window.electronAPI.terminal.create).not.toHaveBeenCalled();
+    expect(entry.terminal.open).not.toHaveBeenCalled();
   });
 });

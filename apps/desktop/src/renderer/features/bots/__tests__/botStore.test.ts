@@ -545,6 +545,20 @@ describe('保存失败只回滚自己那一行', () => {
     expect(getBotProfiles().find((item) => item.id === bot.id)).toMatchObject({ skills: ['external', 'local'] });
   });
 
+  it.each(['inherit', 'allowlist'] as const)('preserves the Host’s %s tool and MCP grant modes after a save', async mode => {
+    const bot = addBotProfile({ name: 'Capability modes', description: '' });
+    createdIds.push(bot.id);
+    stubDeferredUpdates();
+    const api = (globalThis as unknown as { window: { electronAPI: { localDb: { bots: { update: unknown } } } } }).window.electronAPI.localDb.bots;
+    api.update = vi.fn(async () => ({ ...bot, capabilities: { ...bot.capabilities,
+      toolsetMode: mode, toolsets: [], mcpMode: mode, mcpServers: [],
+    } }));
+    await updateBotProfile(bot.id, { description: 'Updated' });
+    expect(getBotProfiles().find(item => item.id === bot.id)?.capabilities).toMatchObject({
+      toolsetMode: mode, toolsets: [], mcpMode: mode, mcpServers: [],
+    });
+  });
+
   it('另一个伙伴在同期保存的修改不被撤销', async () => {
     const failing = addBotProfile({ name: 'Failing', description: '' });
     const other = addBotProfile({ name: 'Other', description: '' });

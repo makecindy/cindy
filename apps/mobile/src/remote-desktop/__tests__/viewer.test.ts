@@ -264,6 +264,42 @@ function viewer(rtc = false, frameCallback = true, nativeMedia = false) {
   };
 }
 
+describe("display change with a kept stream", () => {
+  it("only re-lays out the desktop without reconnecting media", () => {
+    const v = viewer(true);
+    v.send({ type: "init", epoch: "one", width: 1920, height: 1080 });
+    const negotiations = () =>
+      v.messages.filter((m) => m.type === "iceConfig").length;
+    const before = negotiations();
+    expect(before).toBe(1);
+    v.send({ type: "mouseButtons", topInset: 0, bottomInset: 100 });
+    v.send({ type: "displayGeometry", width: 800, height: 1000 });
+    expect(v.elements.video.style).toMatchObject({
+      width: "400px",
+      height: "500px",
+    });
+    expect(negotiations()).toBe(before);
+    // Invalid geometry is ignored rather than distorting the layout.
+    v.send({ type: "displayGeometry", width: 100, height: 1000 });
+    expect(v.elements.video.style).toMatchObject({ width: "400px" });
+  });
+
+  it("moves the native video frame to the new geometry", () => {
+    const v = viewer(true, true, true);
+    v.send({ type: "init", epoch: "native", width: 1920, height: 1080 });
+    const viewport = () =>
+      v.messages.findLast((m) => m.type === "nativeViewport") as unknown as {
+        width: number;
+        height: number;
+      };
+    const wide = viewport();
+    v.send({ type: "displayGeometry", width: 900, height: 1600 });
+    const tall = viewport();
+    expect(tall.width / tall.height).toBeCloseTo(900 / 1600, 2);
+    expect(wide.width / wide.height).toBeCloseTo(1920 / 1080, 2);
+  });
+});
+
 describe("native media overlay", () => {
   it("leaves RTC negotiation to native and shares the exact input geometry", () => {
     const v = viewer(true, true, true);
@@ -305,13 +341,13 @@ describe("native media overlay", () => {
     expect(v.elements.image.style.visibility).toBe("hidden");
     expect(v.elements.bg.style.display).toBe("none");
     v.send({ type: "stop" });
-    expect(v.elements.image.style.visibility).toBe("visible");
+    expect(v.elements.image.style.visibility).toBe("");
     v.send({ type: "init", epoch: "next", width: 1920, height: 1080 });
     v.send({ type: "nativeVideo", epoch: "first", active: true });
-    expect(v.elements.image.style.visibility).toBe("visible");
+    expect(v.elements.image.style.visibility).toBe("");
     v.send({ type: "nativeVideo", epoch: "next", active: true });
     v.send({ type: "nativeVideo", epoch: "next", active: false });
-    expect(v.elements.image.style.visibility).toBe("visible");
+    expect(v.elements.image.style.visibility).toBe("");
   });
 });
 
@@ -402,6 +438,52 @@ describe("remote desktop viewport", () => {
     v.flush();
     expect(v.dataChannel.send).toHaveBeenCalledOnce();
     expect(v.messages.filter((m) => m.type === 'inputOverflow')).toHaveLength(1);
+  });
+  it("carries control requests over the live data channel and relays the reply", () => {
+    const v = viewer(true);
+    v.send({ type: "init", epoch: "one", width: 1920, height: 1080 });
+    v.playVideo();
+    const request = { op: "hostMute", lease: "one", enabled: true };
+    v.send({ type: "channelRequest", id: "r1", request });
+    expect(JSON.parse(v.dataChannel.send.mock.calls.at(-1)![0])).toEqual({
+      type: "request",
+      id: "r1",
+      request,
+    });
+    expect(
+      v.messages.findLast((m) => m.type === "channelRequestState"),
+    ).toMatchObject({
+      id: "r1",
+      sent: true,
+      epoch: "one",
+    });
+    (v.dataChannel as any).onmessage({
+      data: JSON.stringify({
+        type: "reply",
+        id: "r1",
+        ok: true,
+        result: { ok: true },
+      }),
+    });
+    expect(v.messages.findLast((m) => m.type === "channelReply")).toMatchObject(
+      {
+        id: "r1",
+        ok: true,
+        result: { ok: true },
+        epoch: "one",
+      },
+    );
+    // A congested channel does not take it: the parent uses the relay instead.
+    v.dataChannel.bufferedAmount = 16384;
+    const sends = v.dataChannel.send.mock.calls.length;
+    v.send({ type: "channelRequest", id: "r2", request });
+    expect(v.dataChannel.send.mock.calls).toHaveLength(sends);
+    expect(
+      v.messages.findLast((m) => m.type === "channelRequestState"),
+    ).toMatchObject({
+      id: "r2",
+      sent: false,
+    });
   });
   it('does not replay a batch through the relay if a data-channel send throws', () => {
     const v = viewer(true);

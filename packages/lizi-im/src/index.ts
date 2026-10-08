@@ -56,6 +56,7 @@ export { TelegramIM, createTelegramIM } from './telegram/index.js';
 // expressive 档变体池 —— 官方 bot 的 ack 表情复用同一份, 两个 bot 的表情语义
 // 不该各说各话(#1855)。
 export {
+  PROCESSING_REACTION_POOL,
   EXPRESSIVE_DONE_POOL,
   EXPRESSIVE_ERROR_POOL,
   pickExpressiveReaction,

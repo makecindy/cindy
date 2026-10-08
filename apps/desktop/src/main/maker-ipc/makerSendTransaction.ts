@@ -34,10 +34,12 @@ import {
   prependNoteToWireUserMessage,
   type HandoffWireMessage,
 } from './agentHandoff.js';
+import type { MessageSourceDevice, MessageSourceHostDevice } from '@cindy/maker-shared/message-source';
 import {
-  buildMobileClientPromptNote,
+  buildClientEnvironmentNote,
   shouldPrependMobileClientPromptNote,
 } from './mobileClientPromptNote.js';
+import { buildWireMessageSourceNote, readWireSourceDevice, readWireSourcePlugin } from './messageSourceNote.js';
 import { buildCindyMakeTaskNote } from '../cindy-make/taskNote.js';
 import { getResolvedMainLocale } from '../i18n.js';
 import { buildUiLanguageErrorNote, turnUiLanguageFromSendOpts } from './uiLanguageErrorNote.js';
@@ -197,14 +199,23 @@ export function stampTrustedDesktopQueuedOrigin(
  * Stamp device-link provenance at the trusted input IPC boundary.  The queue
  * drains after that AsyncLocalStorage context has ended, so the marker must
  * travel with the main-owned item into the send transaction.
+ *
+ * 消息来源字段同样在这里无条件覆盖:wire 带来的 `sourceDevice` / `sourcePlugin` /
+ * `agentOmitsTriggerPrefix` 一律剥掉,`sourceDevice` 只写入 main 从 invoke context
+ * 读到的同账号控制端(共享任务访客、未知平台、本机输入都不写)。
  */
 export function stampTrustedDeviceLinkQueuedOrigin(
   item: AgentInputQueuedMessage,
   deviceLinkInvoke: boolean,
+  sourceDevice?: MessageSourceDevice,
 ): AgentInputQueuedMessage {
   const stamped = { ...item };
   if (deviceLinkInvoke) stamped.fromDeviceLinkClient = true;
   else delete stamped.fromDeviceLinkClient;
+  delete stamped.sourceDevice;
+  delete stamped.sourcePlugin;
+  delete stamped.agentOmitsTriggerPrefix;
+  if (deviceLinkInvoke && sourceDevice) stamped.sourceDevice = { ...sourceDevice };
   return stamped;
 }
 
@@ -272,8 +283,16 @@ type MakerSendOptions = {
   uiLanguage?: string;
   /** Coordinator-transmitted provenance for device-link input.enqueue. */
   fromDeviceLinkClient?: boolean;
+  /**
+   * 远程设备来源(coordinator 从队列项透传,或直连 maker:send 的 IPC 边界按 invoke
+   * context 盖章;wire 值在 stripMainOnlySendOpts 剥掉)。驱动 `[客户端说明]` 与
+   * 落库 agentMeta.sourceDevice;只用于归属,不是权限判据。
+   */
+  sourceDevice?: MessageSourceDevice;
   persistUserMessage?: {
     sharedTaskAuthor?: AgentInputQueuedMessage['sharedTaskAuthor'];
+    /** 插件来源(只写入 agentMeta.sourcePlugin 并生成 `[消息来源]`,不传给 maker-core)。 */
+    sourcePlugin?: unknown;
     clientId?: unknown;
     content?: unknown;
     agentFacingWireContent?: unknown;
@@ -495,6 +514,11 @@ export interface MakerSendTransactionDeps {
   } | null>;
   consumeSealedPlanReconcileNote?(sessionId: string, turnId: string): void | Promise<void>;
   /**
+   * 目标状态说明:会话没有运行中的目标、上一条回复却仍以 goal_status 裁决块收尾时,
+   * 返回一段只进 wire payload 的说明(见 goal-host/inactiveNote.ts);无需注入返回 null。
+   */
+  peekGoalInactiveNote?(sessionId: string): Promise<string | null>;
+  /**
    * 本次调用是否来自手机控制端(缺省 = 否)。**纯体验分流,不是安全判据。**
    *
    * 注入而非直接 import `isMobileControllerInvoke`,是为了可单测(同
@@ -506,6 +530,11 @@ export interface MakerSendTransactionDeps {
    * 完整可信度说明见 device-link/invoke-context.ts。
    */
   isMobileClientInvoke?(): boolean;
+  /**
+   * 被控电脑自身的 device-link 身份(id + 名字),写进 `[客户端说明]` 的「本机」。
+   * 缺省时说明只写控制端设备。
+   */
+  readHostDeviceIdentity?(): MessageSourceHostDevice;
   /**
    * 个人版制作任务(sessions.source='cindy-make')判定,由 host 按持久化来源现读。
    * 命中时每轮把任务说明追加到 wire 用户消息(不落库、不显示),见 cindy-make/taskNote.ts。
@@ -530,6 +559,7 @@ type ResolveSessionResult =
 
 function readPersistUserMessageOption(sendOpts: MakerSendOptions): {
   sharedTaskAuthor?: AgentInputQueuedMessage['sharedTaskAuthor'];
+  sourcePlugin?: AgentInputQueuedMessage['sourcePlugin'];
   clientId: string;
   content: unknown;
   agentFacingWireContent?: IpcUserMessage;
@@ -548,8 +578,10 @@ function readPersistUserMessageOption(sendOpts: MakerSendOptions): {
 } | null {
   const persist = sendOpts.persistUserMessage;
   if (!persist || typeof persist.clientId !== 'string') return null;
+  const sourcePlugin = readWireSourcePlugin(persist.sourcePlugin);
   return {
     ...(persist.sharedTaskAuthor ? { sharedTaskAuthor: persist.sharedTaskAuthor } : {}),
+    ...(sourcePlugin ? { sourcePlugin } : {}),
     clientId: persist.clientId,
     content: persist.content,
     ...(persist.agentFacingWireContent && typeof persist.agentFacingWireContent === 'object'
@@ -1242,21 +1274,53 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       const withPlanReconcile = planReconcile
         ? prependNoteToWireUserMessage(withHandoff as HandoffWireMessage, planReconcile.note)
         : withHandoff;
+      // 目标状态说明:用户的普通新轮次与自动任务轮次都要带上,模型才不会照着历史继续
+      // 吐裁决块、承诺自动续跑。原生命令必须留在消息开头,同手机说明的占位规则。
+      const goalInactiveNote =
+        (isOrdinaryUserTurn || soForReconcile.origin?.kind === 'scheduler') &&
+        shouldPrependMobileClientPromptNote(normalized, sess.agentKind)
+          ? ((await deps.peekGoalInactiveNote?.(sessionId).catch(() => null)) ?? null)
+          : null;
+      const withGoalInactiveNote = goalInactiveNote
+        ? prependNoteToWireUserMessage(withPlanReconcile as HandoffWireMessage, goalInactiveNote)
+        : withPlanReconcile;
       const so = (outgoingSendOpts ?? {}) as MakerSendOptions;
-      // 手机客户端说明:同样只进 wire payload,落库/显示内容(persistUserMessage.content)
+      // 消息来源说明(任务 / 伙伴 / 插件 / 共享任务成员):读落库 agentMeta 同一份主机
+      // 盖章数据,只进 wire payload。排队 → 事务这条路只在这里加一次(coordinator 不加)。
+      const messageSourceNote = shouldPrependMobileClientPromptNote(normalized, sess.agentKind)
+        ? buildWireMessageSourceNote(
+            {
+              origin: soForReconcile.persistUserMessage?.origin,
+              sourcePlugin: soForReconcile.persistUserMessage?.sourcePlugin,
+              sharedTaskAuthor: soForReconcile.persistUserMessage?.sharedTaskAuthor,
+            },
+            {
+              visibleText: reconcilePersistText,
+              autoResume: soForReconcile.persistUserMessage?.autoResume === true,
+            },
+          )
+        : null;
+      const withSourceNote = messageSourceNote
+        ? prependNoteToWireUserMessage(withGoalInactiveNote as HandoffWireMessage, messageSourceNote)
+        : withGoalInactiveNote;
+      // 客户端说明(远程设备):同样只进 wire payload,落库/显示内容(persistUserMessage.content)
       // 不含它。位置在交接段**之前** —— 交接正文自带「以下是用户的新消息」结束标记,
       // 排在它后面会让说明插到那句话之后(顺序推导同 agentHandoff.composeForkOriginHandoff:
       // 元信息在前、交接正文在后、由交接自带的标记统一收尾)。
-      // 两个来源:直连 maker:send 走 async context(deps 注入);排队 / 插入路径走
-      // coordinator 从队列项透传的 so.fromMobileClient(drain 时 context 已结束)。
-      const mobileClientNote =
-        (deps.isMobileClientInvoke?.() === true || so.fromMobileClient === true) &&
-        shouldPrependMobileClientPromptNote(normalized, sess.agentKind)
-          ? buildMobileClientPromptNote()
-          : null;
+      // 设备来源只认主机盖章的 so.sourceDevice(排队项透传,或直连 IPC 边界按 async
+      // context 盖章);没有设备信息时沿用旧的手机判据(直连走 deps 注入的 async context,
+      // 排队走 so.fromMobileClient)。
+      const sourceDevice = readWireSourceDevice(so.sourceDevice);
+      const mobileClientNote = shouldPrependMobileClientPromptNote(normalized, sess.agentKind)
+        ? buildClientEnvironmentNote({
+            device: sourceDevice,
+            host: sourceDevice ? deps.readHostDeviceIdentity?.() : undefined,
+            legacyMobile: deps.isMobileClientInvoke?.() === true || so.fromMobileClient === true,
+          })
+        : null;
       const withMobileNote = mobileClientNote
-        ? prependNoteToWireUserMessage(withPlanReconcile as HandoffWireMessage, mobileClientNote)
-        : withPlanReconcile;
+        ? prependNoteToWireUserMessage(withSourceNote as HandoffWireMessage, mobileClientNote)
+        : withSourceNote;
       // 个人版制作任务说明:与手机说明同层、同占位规则(原生命令必须留在消息开头)。
       const cindyMakeNote =
         (await deps.isCindyMakeSession?.(sessionId).catch(() => false)) === true &&
@@ -1549,6 +1613,9 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
                       content: persistUserMessage.content,
                       agentMeta: {
                         ...(persistUserMessage.sharedTaskAuthor ? { sharedTaskAuthor: persistUserMessage.sharedTaskAuthor } : {}),
+                        // 来源标签数据(只用于归属展示,不是权限判据)。
+                        ...(sourceDevice ? { sourceDevice } : {}),
+                        ...(persistUserMessage.sourcePlugin ? { sourcePlugin: persistUserMessage.sourcePlugin } : {}),
                         uuid: so.messageUuid,
                         ...(so.origin?.kind === 'scheduler'
                           ? { autoReviewUserText: { kind: 'scheduled-continuation' } }

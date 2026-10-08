@@ -34,6 +34,7 @@ import { evictTaskTagCatalog } from '../task-tags/taskTagEvents';
 
 import { useEffect, useRef } from 'react';
 import { isSharedTaskPeer } from '@cindy/device-link';
+import { projectScheduleEvent } from '@cindy/maker-shared/schedule-events';
 import { useAuth } from '@/contexts/AuthContext';
 import { isDeviceLinkRemotePushCurrent } from '@/lib/remoteDataOwnerPushFence';
 import { createLogger } from '@/lib/logger';
@@ -792,6 +793,10 @@ export function useDeviceLinkRemoteProjects(
         const watching =
           periodicReconcileActiveRef.current && (mainPresenceRef.current?.isActive() ?? true);
         if (!watching) return;
+        // 与手机同一份事件投影：运行诊断、静默提醒这类不改索引的事件不重拉，
+        // 否则 run 进行期间高频推送会反复取消在途的列表 / 索引读取。
+        const { refresh } = projectScheduleEvent(push.payload);
+        if (!refresh.sessionIndex && !refresh.scheduleList && !refresh.unreadSummary) return;
         void refreshRemoteDeviceSessions(push.deviceId, eligible.get(push.deviceId), { scope: 'schedule' }).then((result) => {
           if (result === 'revoked' && !disposed) handleRevoked(push.deviceId);
         });

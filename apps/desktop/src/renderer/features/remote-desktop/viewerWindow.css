@@ -149,21 +149,6 @@
   font-size: var(--text-12);
   white-space: nowrap;
 }
-.remote-viewer-notice {
-  position: absolute;
-  bottom: var(--space-4);
-  left: 50%;
-  transform: translateX(-50%);
-  max-width: calc(100% - 32px);
-  border: 1px solid var(--border-default);
-  border-radius: var(--radius-xl);
-  padding: var(--space-3) var(--space-4);
-  background: var(--surface);
-  color: var(--text-primary);
-  font-size: var(--text-13);
-  pointer-events: none;
-  z-index: 4;
-}
 .remote-viewer-latency {
   color: var(--text-secondary);
   font-variant-numeric: tabular-nums;
@@ -235,34 +220,6 @@
 .remote-viewer-panel-section:empty {
   display: none;
 }
-.remote-viewer-toolgroup {
-  display: flex;
-  flex: none;
-  align-items: center;
-  gap: var(--space-1);
-  padding-inline: var(--space-2);
-  border-right: 1px solid var(--border-default);
-  -webkit-app-region: no-drag;
-}
-.remote-viewer-icon {
-  width: var(--space-9);
-  height: var(--space-9);
-  padding: 0;
-}
-.remote-viewer-panel-trigger {
-  position: relative;
-  width: var(--space-9);
-  padding: 0;
-}
-.remote-viewer-active-dot {
-  position: absolute;
-  right: var(--space-1);
-  bottom: var(--space-1);
-  width: var(--space-1);
-  height: var(--space-1);
-  border-radius: var(--radius-full);
-  background: var(--text-primary);
-}
 .remote-viewer-feedback {
   position: absolute;
   bottom: var(--space-4);
@@ -284,15 +241,19 @@
     display: none;
   }
 }
-@media (max-width: 900px) {
-  .remote-viewer-toolgroup {
-    padding-inline: var(--space-1);
-  }
-}
 .remote-viewer-field {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, var(--space-40));
   align-items: center;
+}
+/* Ratio and size labels carry more than one word; give them the row's width. */
+.remote-viewer-field-wide {
+  grid-template-columns: auto minmax(0, 1fr);
+  column-gap: var(--space-3);
+}
+/* Hints and errors sit below the label/control row and use its full width. */
+.remote-viewer-field > :nth-child(n + 3) {
+  grid-column: 1 / -1;
 }
 .remote-viewer-display-select {
   flex: none;
@@ -314,8 +275,10 @@
   inset: 0 0 auto;
   transition: transform 150ms ease-out;
   transform: translateY(calc(-100% + 8px));
+  /* Drag regions never receive pointer events; fullscreen has no window to drag. */
+  -webkit-app-region: no-drag;
 }
-.remote-viewer-fullscreen .remote-viewer-toolbar:hover,
+.remote-viewer-fullscreen .remote-viewer-toolbar[data-revealed='true'],
 .remote-viewer-fullscreen .remote-viewer-toolbar:focus-within,
 .remote-viewer-fullscreen .remote-viewer-toolbar[data-settings-open='true'],
 .remote-viewer-fullscreen .remote-viewer-toolbar[data-select-open='true'] {
@@ -327,36 +290,42 @@
   }
 }
 
+/* Each group is one borderless track (same recipe as SegmentedControl); the
+   tools inside stay flat, so the toolbar never nests a frame inside a frame. */
+.remote-viewer-toolgroup,
 .remote-viewer-zoom-group,
 .remote-viewer-panels {
-  box-sizing: border-box;
-  height: var(--space-9);
   display: flex;
   flex: none;
   align-items: center;
-  gap: var(--space-1);
-  padding: 0 var(--space-1);
-  border: 1px solid var(--border-default);
+  gap: 2px;
+  padding: 2px;
   border-radius: var(--radius-full);
-  background: var(--surface-elevated);
+  background: var(--segmented-track);
   -webkit-app-region: no-drag;
 }
-.remote-viewer-zoom-group .remote-viewer-icon,
-.remote-viewer-panels .remote-viewer-panel-trigger {
-  height: var(--space-7);
-  border: 0;
-  border-radius: var(--radius-full);
-  background: transparent;
-  box-shadow: none;
+/* Toolbar tools and popover/feedback close buttons (the popover is portaled
+   outside the window root). .cindy-button outranks Button's own utilities. */
+.cindy-button.remote-viewer-tool {
+  width: var(--space-8);
+  height: var(--space-8);
+  padding: 0;
+  color: var(--segmented-option-fg);
 }
-.remote-viewer-zoom-group .remote-viewer-icon:enabled:hover,
-.remote-viewer-zoom-group .remote-viewer-icon[aria-pressed='true'],
-.remote-viewer-panels .remote-viewer-panel-trigger:enabled:hover,
-.remote-viewer-panels .remote-viewer-panel-trigger[aria-pressed='true'] {
-  background: var(--button-secondary-hover);
+.cindy-button.remote-viewer-tool:enabled:hover,
+.cindy-button.remote-viewer-tool[aria-pressed='true'] {
+  color: var(--text-primary);
+}
+/* Like a selected segment, a pressed tool keeps its face on hover and press. */
+.cindy-button.remote-viewer-tool[aria-pressed='true'],
+.cindy-button.remote-viewer-tool[aria-pressed='true']:enabled:is(:hover, :active) {
+  --button-face-bg: var(--segmented-selected-bg);
+  --button-face-border: var(--segmented-selected-border);
 }
 .remote-viewer-zoom-divider {
   width: 1px;
-  height: var(--space-5);
-  background: var(--border-default);
+  height: var(--space-4);
+  margin-inline: 2px;
+  /* --border-default nearly matches the Light track; derive from the tool ink instead. */
+  background: color-mix(in srgb, var(--segmented-option-fg) 35%, transparent);
 }

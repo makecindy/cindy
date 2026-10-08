@@ -213,6 +213,7 @@ import {
 } from './project-resource-assembly.js';
 import { applyPiBotSkillPolicy } from './bot-skill-policy.js';
 import { resolveAllowedManagedSkills, snapshotManagedSkillGrants } from '../shared/managed-skill-policy.js';
+import { DEVICE_HOSTED_PI_ENV, deviceHostedPiEnvValue, deviceHostedPiMcpBridge } from '../shared/device-hosted.js';
 import {
   assertPiSpawnArgvFitsPlatform,
   collectPiProjectResourceCliPaths,
@@ -1629,7 +1630,7 @@ function piExtraDirsPrompt(readOnlyDirs: readonly string[], writableDirs: readon
 }
 
 interface FailedPiStartupCleanup {
-  proc: PiRpcProcess;
+  proc: Pick<PiRpcProcess, 'close'>;
   promise: Promise<void> | null;
   cleanupLocal?: () => void;
   confirmStopped: () => void;
@@ -2474,7 +2475,7 @@ export class PiAgent extends BaseAgent {
 
   override async startSession(opts: StartSessionOptions): Promise<AgentSessionHandle> {
     if (this.disposeStarted) {
-      throw new Error('Pi agent is disposing; refusing to start a new session');
+      throw new AgentStartupStoppedError(new Error('Pi agent is disposing; refusing to start a new session'));
     }
     const startup = this.startSessionWhileRunning(opts);
     this.inFlightStartups.add(startup);
@@ -2486,11 +2487,32 @@ export class PiAgent extends BaseAgent {
   }
 
   private async startSessionWhileRunning(opts: StartSessionOptions): Promise<AgentSessionHandle> {
-    const startupTraceId = randomBytes(8).toString('hex');
     const startupCleanupKey = opts.sessionId ?? '<anonymous>';
     // A previous pre-publication Pi process for this business session must be
     // confirmed dead before another spawn can begin.
     await this.retryFailedStartupCleanup(startupCleanupKey);
+    let runtimeStartAttempted = false;
+    try {
+      return await this.startSessionPrepared(opts, () => { runtimeStartAttempted = true; });
+    } catch (error) {
+      // Keep a previous quarantined process outside this boundary. Only this
+      // attempt's pre-spawn failures are proof that it has no workdir writer.
+      if (!runtimeStartAttempted
+        && !(error instanceof AgentNotAuthenticatedError)
+        && !(error instanceof AgentStartupCleanupPendingError)
+        && !(error instanceof AgentStartupStoppedError)) {
+        throw new AgentStartupStoppedError(error);
+      }
+      throw error;
+    }
+  }
+
+  private async startSessionPrepared(
+    opts: StartSessionOptions,
+    onRuntimeStartAttempted: () => void,
+  ): Promise<AgentSessionHandle> {
+    const startupTraceId = randomBytes(8).toString('hex');
+    const startupCleanupKey = opts.sessionId ?? '<anonymous>';
     // 轮 22 LOW-6:空串 remoteHostId 规范化 —— Boolean('') 是 false 会让会话
     // 被判定本地但后续仍把 '' 传给 resolvePiNativeProviders 等, 行为分裂。
     if (opts.remoteHostId === '') opts.remoteHostId = undefined;
@@ -2507,10 +2529,12 @@ export class PiAgent extends BaseAgent {
     const sessionMemoryEnabled = !reviewMode
       && (opts.makerMemoryEnabled ?? this.deps.runtimeConfig.makerMemoryEnabled ?? false) === true
       && (botMemoryScope || (this.memoryOverride ?? true));
-    const compactionMemoryEnabled = sessionMemoryEnabled && !!this.deps.makerMemory;
+    // 设备托管：记忆存在任务所在的电脑上(经 Cindy 工具读写)，本机记忆库不参与；提示里的
+    // 记忆索引只用对方随启动选项带来的快照。
+    const compactionMemoryEnabled = sessionMemoryEnabled && !!this.deps.makerMemory && !opts.deviceHosted;
     const makerMemoryPromptEnabled =
       sessionMemoryEnabled &&
-      (opts.makerMemoryIndexSnapshot !== undefined || !!this.deps.makerMemory);
+      (opts.makerMemoryIndexSnapshot !== undefined || (!!this.deps.makerMemory && !opts.deviceHosted));
     // Maker Memory 关闭时跳过 git 探测 (Codex #2399 P1): 解析结果不会被用。
     // 解析必须发生在 MCP ctx 注册之前, 并把结果冻进 ctx, 避免工具侧 60s TTL
     // 后再解析漂移到 raw worktree 路径 (Codex #2399 P2)。
@@ -2518,6 +2542,10 @@ export class PiAgent extends BaseAgent {
       ? (opts.makerMemoryScopeKey ?? (await resolveMemoryScopeKey(opts.workingDir, opts.remoteHostId)))
       : (opts.makerMemoryScopeKey ?? opts.workingDir);
     const remote = Boolean(opts.remoteHostId);
+    // 设备托管：Pi 在本机运行，文件与命令在任务所在电脑。权限判断、提示里的路径都按那台
+    // 电脑的真实工作目录；opts.workingDir 只是本机影子目录(进程 cwd 与项目说明)。
+    const hosted = opts.deviceHosted && !remote ? opts.deviceHosted : undefined;
+    const logicalWorkingDir = hosted?.workingDir ?? opts.workingDir;
     const sessionPiAutoCompactPct = this.deps.runtimeConfig.piAutoCompactThresholdPct;
 
     // BYOM:host 解析当前会话可用的原生 provider(用户自定义/本地模型)+ 需注入的 env(keys)。
@@ -3155,13 +3183,11 @@ export class PiAgent extends BaseAgent {
     // the remote host while Cindy observes and controls an unrelated local
     // directory. Keep the capability absent until the wire protocol owns those
     // files remotely end-to-end.
-    // Bot sessions are a product persona, not a coding harness: the native
-    // subagent surface must stay invisible to them. Their tracked work goes
-    // through Cindy Session tasks instead.
     const localSubagentSupported = Boolean(
       !reviewMode
       && !remote
-      && !opts.botRuntimeProfile
+      // 设备托管：子代理进程继承 CINDY_PI_HOSTED 与同一份 cindy-bridge，文件与命令工具同样经
+      // 隧道回到任务所在电脑(隧道随任务关闭，任务结束后仍在后台跑的子代理会失去工具)。
       && this.deps.spawnPiSubagentRunner,
     );
     if (localSubagentSupported) {
@@ -3504,7 +3530,12 @@ export class PiAgent extends BaseAgent {
       opts.remoteHostId && this.deps.remotePiSkipMcpBridge?.(opts.remoteHostId));
     const mcpReadyStartedAt = Date.now();
     let mcpReadyStatus: 'ok' | 'degraded' | 'skipped' = 'skipped';
-    if (!reviewMode && !remoteSkipMcpBridge && this.deps.preparePiExtraSpawnConfig) {
+    if (hosted) {
+      // 设备托管：Cindy 工具都在任务所在电脑上，经隧道访问；本机的 MCP 桥不参与。
+      mcpBridge = deviceHostedPiMcpBridge(hosted);
+      for (const server of mcpBridge.servers) registeredMcpServerNames.add(server.name);
+      mcpReadyStatus = 'ok';
+    } else if (!reviewMode && !remoteSkipMcpBridge && this.deps.preparePiExtraSpawnConfig) {
       try {
         const extra = await this.deps.preparePiExtraSpawnConfig(
           // The Desktop bridge is generation-cached, so it must be built from the
@@ -4047,8 +4078,9 @@ export class PiAgent extends BaseAgent {
         precedingBlockedActions: autoReviewActionContext.precedingBlockedActions,
         ...(currentAutoReviewAuthority ? { authorizationContext: currentAutoReviewAuthority } : {}),
         action,
-        workspaceRoots: [opts.workingDir, ...mutableExtraDirs, ...mutableWritableDirs],
-        writableRoots: [opts.workingDir, ...mutableWritableDirs],
+        // 设备托管：路径在任务所在电脑上，以那台电脑的真实工作目录为准。
+        workspaceRoots: [opts.deviceHosted?.workingDir ?? opts.workingDir, ...mutableExtraDirs, ...mutableWritableDirs],
+        writableRoots: [opts.deviceHosted?.workingDir ?? opts.workingDir, ...mutableWritableDirs],
         platform: opts.remoteHostId ? ('linux' as const) : process.platform,
       };
       let cacheKey: string | undefined;
@@ -4626,9 +4658,9 @@ export class PiAgent extends BaseAgent {
             normalizePiToolForAutoReview({
               toolName,
               input,
-              workspaceRoots: [opts.workingDir],
-              readRoots: [opts.workingDir, ...mutableExtraDirs, ...mutableWritableDirs],
-              writableRoots: [opts.workingDir, ...mutableWritableDirs],
+              workspaceRoots: [logicalWorkingDir],
+              readRoots: [logicalWorkingDir, ...mutableExtraDirs, ...mutableWritableDirs],
+              writableRoots: [logicalWorkingDir, ...mutableWritableDirs],
             }),
             Boolean(opts.remoteHostId),
           );
@@ -4889,6 +4921,7 @@ export class PiAgent extends BaseAgent {
     const runPiCompact = (instructions?: string): Promise<ManualCompactResult> =>
       runExclusivePiRpc(() => requestPiCompact(instructions));
     let sessionTransport: PiTransport | undefined;
+    let localProcessSpawned = false;
     let runtimeCapabilityManifest: PiRuntimeCapabilityManifest | undefined;
     let runtimeCapabilityGeneration = 0;
     let piAgentLifecycleSequence = 0;
@@ -5228,6 +5261,7 @@ export class PiAgent extends BaseAgent {
         ...Object.keys(nativeEnv),
         ...Object.keys(mcpEnv),
         ...(mcpBridge && mcpBridge.servers.length > 0 ? [PI_MCP_BRIDGE_ENV] : []),
+        ...(hosted ? [DEVICE_HOSTED_PI_ENV] : []),
         // 子代理路由快照:虽然不是凭证,但它是**控制面** —— 一次获批的 bash 拿到路径就能改写
         // provider/model,让后续每次委派都打到攻击者选定的 endpoint(提示词与代码随之外泄)。
         // 与 CINDY_PI_PERMISSION_FILE 同一类:靠改写受信文件给后续调用永久换向(review)。
@@ -5274,6 +5308,7 @@ export class PiAgent extends BaseAgent {
         PI_CODING_AGENT_DIR: configHome,
         [PI_BASH_PACKAGE_HOME_ENV]: bashPackageHome,
         CINDY_PI_PERMISSION_FILE: permissionFile,
+        ...(hosted ? { [DEVICE_HOSTED_PI_ENV]: deviceHostedPiEnvValue(hosted) } : {}),
         ...(fastModels.length > 0 ? { CINDY_PI_FAST_MODELS: JSON.stringify(fastModels) } : {}),
         CINDY_PI_TURN_TOOL_POLICY: remote ? '' : runtimeInstanceId,
         ...(allowPiPackageManagement ? { [PI_PACKAGE_MANAGEMENT_ENV]: piPackageManagementToken } : {}),
@@ -5332,6 +5367,9 @@ export class PiAgent extends BaseAgent {
       const initialHostProxyForward = nativeProviderById.get(initialProvider)?.hostProxyForward;
       companionEnvironment?.assertCurrent?.();
       piSpawnStartedAt = Date.now();
+      // A remote rejection may lose the reply after spawning. Local spawning is
+      // synchronous and its process observer marks the boundary before returning.
+      if (remote) onRuntimeStartAttempted();
       const { transport } = await this.createTransport(
         {
           args,
@@ -5340,16 +5378,20 @@ export class PiAgent extends BaseAgent {
           sessionId: opts.sessionId,
           hostProxyForwards: initialHostProxyForward ? [initialHostProxyForward] : [],
         },
-        (pid) =>
-          this.deps.registerLocalAgentProcess?.({
+        (pid) => {
+          localProcessSpawned = true;
+          onRuntimeStartAttempted();
+          return this.deps.registerLocalAgentProcess?.({
             pid,
             kind: 'pi',
             role: 'task-host',
-          }),
+          });
+        },
         opts.remoteHostId,
         effectivePiBinaryPath,
       );
       sessionTransport = transport;
+      onRuntimeStartAttempted();
       proc = new PiRpcProcess({
         transport,
         logger: this.deps.logger,
@@ -5394,9 +5436,9 @@ export class PiAgent extends BaseAgent {
               currentModelIds: [mutableModel, mutableWireModel],
               readNativeFast: (provider, model) => !requestPrefsClosed && nativeFastEnabled &&
                 fastModels.some(candidate => candidate.provider === provider && candidate.id === model),
-              workspaceRoots: [opts.workingDir],
-              readRoots: [opts.workingDir, ...mutableExtraDirs, ...mutableWritableDirs],
-              writableRoots: [opts.workingDir, ...mutableWritableDirs],
+              workspaceRoots: [logicalWorkingDir],
+              readRoots: [logicalWorkingDir, ...mutableExtraDirs, ...mutableWritableDirs],
+              writableRoots: [logicalWorkingDir, ...mutableWritableDirs],
               reviewAutoAction,
               recordUserClarification: (question, answer) => setAutoReviewIntent(composeAutoReviewIntentWithClarification(currentAutoReviewIntent, [{ question, answer }])),
               notifyAutoReviewUnavailable: () => autoReviewUnavailableNotice.notify(),
@@ -5409,6 +5451,7 @@ export class PiAgent extends BaseAgent {
               sessionId: opts.sessionId ?? '',
               workingDir: opts.workingDir ?? '',
               remote: Boolean(opts.remoteHostId),
+              deviceHosted: Boolean(hosted),
               allowPiPackageManagement,
               piPackageManagementToken,
               controlSubagentRunner: async (action, runId) => {
@@ -5604,12 +5647,44 @@ export class PiAgent extends BaseAgent {
       } catch {
         /* best-effort:注销失败不掩盖原始构造错误 */
       }
+      // The transport can exist even if constructing its RPC wrapper throws.
+      // Reuse the same quarantine as RPC startup failures until close is proven.
+      if (sessionTransport) {
+        const transport = sessionTransport;
+        const cleanup = { close: async () => {
+          try { await transport.killRemoteSession?.(); }
+          finally { await transport.close(); }
+        } };
+        try {
+          await cleanup.close();
+        } catch (closeError) {
+          if (!remote) configHomeCleanupDeferredToQuarantine = true;
+          let confirmStopped!: () => void;
+          const whenStopped = new Promise<void>((resolve) => { confirmStopped = resolve; });
+          this.failedStartupCleanups.set(startupCleanupKey, {
+            proc: cleanup, promise: null, confirmStopped,
+            ...(!remote ? { cleanupLocal: () => {
+              void cleanupConfigHome();
+              cleanupRuntimeFiles();
+            } } : {}),
+          });
+          throw new AgentStartupCleanupPendingError(
+            `pi startup failed and transport cleanup remains unconfirmed: ${String(closeError)}`,
+            { cause: err, whenStopped },
+          );
+        }
+      } else if (remote || localProcessSpawned) {
+        // No handle after dispatch/spawn is not proof of exit. Keep runtime
+        // files too: an unpublished local writer may still be reading them.
+        if (!remote) configHomeCleanupDeferredToQuarantine = true;
+        throw err;
+      }
       // 轮 42 P1:远端失败也不清理 runtime 文件(可能与并发存活会话共享/复用)。
       if (!remote) {
         await cleanupConfigHome();
         cleanupRuntimeFiles();
       }
-      throw err;
+      throw new AgentStartupStoppedError(err);
     }
 
     let localSessionScanCache:
@@ -8105,6 +8180,8 @@ export class PiAgent extends BaseAgent {
       sessionId: string;
       workingDir: string;
       remote: boolean;
+      /** 设备托管会话：文件改动由任务所在电脑的执行器抓取。 */
+      deviceHosted?: boolean;
       allowPiPackageManagement: boolean;
       piPackageManagementToken?: string;
       controlSubagentRunner: (
@@ -8458,7 +8535,8 @@ export class PiAgent extends BaseAgent {
       }
       const context = getPermissionCtx();
       void (async () => {
-        if (!context.sessionId || !context.workingDir) return;
+        // 设备托管：改动在任务所在电脑上由执行器抓取，本机不抓影子目录。
+        if (!context.sessionId || !context.workingDir || context.deviceHosted) return;
         const targetPath = typeof input.path === 'string' ? input.path : null;
         if (targetPath && (toolName === 'edit' || toolName === 'write')) {
           await this.deps.turnChangeCapture?.beforeKnownFileWrite({
@@ -8614,23 +8692,6 @@ export class PiAgent extends BaseAgent {
         }
       })();
       const mcpTarget = resolveMcpToolTarget(toolName, registeredMcpServerNames);
-      const hostApprovalPresentation = (() => {
-        const presenter = this.deps.getMcpToolApprovalPresentation;
-        if (!presenter || !mcpTarget) return undefined;
-        try {
-          return presenter({
-            serverName: mcpTarget.serverName,
-            toolName: mcpTarget.toolName,
-            toolParams: input,
-          });
-        } catch (err) {
-          this.deps.logger.error('MCP approval presentation threw -> generic copy', {
-            serverName: mcpTarget.serverName,
-            message: err instanceof Error ? err.message : String(err),
-          });
-          return undefined;
-        }
-      })();
       /**
        * 向用户要一次表态。`decided` 区分「用户明确表态」与「压根拿不到决策」(无 resolver /
        * resolver 抛错 / kind 不匹配) —— 调用方对后者才允许按 Full access 语义放行,
@@ -8676,12 +8737,6 @@ export class PiAgent extends BaseAgent {
             toolUseId: id,
             toolName,
             input,
-            ...(hostApprovalPresentation?.title
-              ? { title: hostApprovalPresentation.title }
-              : {}),
-            ...(hostApprovalPresentation?.description
-              ? { description: hostApprovalPresentation.description }
-              : {}),
           };
           Promise.resolve().then(() => resolver(
             opts.unavailableHandoff
@@ -8810,7 +8865,7 @@ export class PiAgent extends BaseAgent {
         }
         try {
           const action = mcpTarget || toolName === 'cindy_pi_extension' || toolName === 'cindy_pi_command'
-            ? toolAutoReviewAction(toolName, input, hostApprovalPresentation?.description)
+            ? toolAutoReviewAction(toolName, input)
             : constrainPiDestructivePathResolution(
             normalizePiToolForAutoReview({
               toolName,
@@ -8827,7 +8882,7 @@ export class PiAgent extends BaseAgent {
             action.resolvedWritableRoots = resolvedWritableRoots;
           }
           const decision = await reviewAutoAction(turnPolicyForcePrompt
-            ? toolAutoReviewAction(toolName, input, hostApprovalPresentation?.description, action)
+            ? toolAutoReviewAction(toolName, input, undefined, action)
             : action, hostAutoApprove, permissionMode !== 'auto');
           // 权限热切换:reviewAutoAction 是 async 的,期间用户可能改档。按**最新**档位收口,
           // 不能用进入审查前捕获的旧 auto 档直接放行(Pi 明确支持热切换,codex review P1):

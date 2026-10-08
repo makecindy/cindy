@@ -92,11 +92,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
     onActive: (cb) => onPayload(REMOTE_VIEWER.ACTIVE, cb),
     onLocale: (cb) => onPayload(REMOTE_VIEWER.LOCALE, cb),
     onCloseRequested: (cb) => onPayload(REMOTE_VIEWER.CLOSE_REQUESTED, cb),
+    onHidden: (cb) => onPayload(REMOTE_VIEWER.HIDDEN, cb),
     inputFocus: (generation, focused) =>
       ipcRenderer.invoke(REMOTE_VIEWER.INPUT_FOCUS, generation, focused),
     preferences: (generation, patch) =>
       ipcRenderer.invoke(REMOTE_VIEWER.PREFERENCES, generation, patch),
     safety: (generation, retry) => ipcRenderer.invoke(REMOTE_VIEWER.SAFETY, generation, retry),
+    resolution: (generation, displayId, value) =>
+      ipcRenderer.invoke(REMOTE_VIEWER.RESOLUTION, generation, displayId, value),
+    onChannelRequest: (cb) => onPayload(REMOTE_VIEWER.CHANNEL_REQUEST, cb),
+    channelReply: (generation, id, outcome) =>
+      ipcRenderer.invoke(REMOTE_VIEWER.CHANNEL_REPLY, generation, id, outcome),
     credential: (generation, action, enabled) =>
       ipcRenderer.invoke(REMOTE_VIEWER.CREDENTIAL, generation, action, enabled),
   } satisfies RemoteDesktopViewerApi,

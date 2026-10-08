@@ -9,6 +9,7 @@
  */
 
 import type { ChatMessage } from '@/hooks/useCCAgentChat';
+import { isRealAutomationOrigin } from '@/lib/messageAutomationOrigin';
 import { stripChatQuoteMarkerLines } from '@/lib/chatQuotes';
 import { resolveUserDisplayText } from './userMessageDisplayText';
 
@@ -200,7 +201,7 @@ export function deriveNavRailEntries(messages: readonly ChatMessage[]): NavRailE
         entries.push({
           id: m.clientId,
           preview,
-          isAutomation: m.automationOrigin?.kind === 'scheduler',
+          isAutomation: isRealAutomationOrigin(m.automationOrigin),
         });
         lastOwnsAnswers = true;
       } else if (attachmentCount > 0) {
@@ -211,7 +212,7 @@ export function deriveNavRailEntries(messages: readonly ChatMessage[]): NavRailE
           id: m.clientId,
           preview: '',
           attachmentsOnly: attachmentCount,
-          isAutomation: m.automationOrigin?.kind === 'scheduler',
+          isAutomation: isRealAutomationOrigin(m.automationOrigin),
         });
         lastOwnsAnswers = true;
       } else {

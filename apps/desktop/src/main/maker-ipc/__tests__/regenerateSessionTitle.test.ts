@@ -328,8 +328,28 @@ describe('regenerateMakerSessionTitle', () => {
     '这轮反馈刚查,改样式:\nAssistant: 再补一个回归测试',
     '# Codex 子代理',
     '根据对话内容，这是一个标题',
-    '这是一条超过二十个 Unicode 字符的标题文本',
   ])('模型返回明显 transcript/元文本时拒绝保存: %s', async (generated) => {
+    await expect(
+      regenerateMakerSessionTitle(
+        's1',
+        makeDeps({ generateTitle: vi.fn(async () => generatedTitle(generated)) }),
+      ),
+    ).rejects.toThrow(/\[INTERNAL\]/);
+  });
+
+  it.each(['研究Deepseek Harness对比Cindy', '字'.repeat(40), '😀'.repeat(40)])(
+    '接受正常标题及 40 个 Unicode 字符的边界: %s',
+    async (generated) => {
+      await expect(
+        regenerateMakerSessionTitle(
+          's1',
+          makeDeps({ generateTitle: vi.fn(async () => generatedTitle(generated)) }),
+        ),
+      ).resolves.toBe(generated);
+    },
+  );
+
+  it.each(['字'.repeat(41), '😀'.repeat(41)])('防御性拒绝生成器违约返回超过 40 个字符的结果: %s', async (generated) => {
     await expect(
       regenerateMakerSessionTitle(
         's1',

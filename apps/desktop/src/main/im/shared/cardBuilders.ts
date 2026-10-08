@@ -202,7 +202,7 @@ export function createCardBuilders(
       const unavailable = autoReviewUnavailablePromptLine(req);
       return {
         title: ui.cards.permission.title(model.toolName),
-        body: unavailable ? `${unavailable}\n\n${params}` : params,
+        body: [req.description, unavailable, params].filter(Boolean).join('\n\n'),
         buttons: [
           {
             id: 'permission:allow:once',

@@ -1,5 +1,5 @@
 /**
- * SidebarInlineSearch —— SidebarTopNav 顶部导航列表末尾的「搜索」行。
+ * SidebarInlineSearch —— SidebarTopNav 顶部导航中可排序的「搜索」行。
  * ---------------------------------------------------------------------------
  * 渲染为一条裸行(无外层 padding),融入 SidebarTopNav 的 gap-0.5 列表,与 新建/自动任务/
  * 插件等入口同款。两态一体、图标位置恒定:
@@ -43,6 +43,8 @@ export interface SidebarInlineSearchProps {
    * 故一旦 query 非空就切回 cc-agent(同视图时宿主内部去重、为 no-op)。
    */
   onSearchActive?: () => void;
+  /** Let a search opened from More leave the sidebar again after focus moves away. */
+  onFocusLeave?: () => void;
 }
 
 export function SidebarInlineSearch({
@@ -50,6 +52,7 @@ export function SidebarInlineSearch({
   allKnownProjects,
   openSignal,
   onSearchActive,
+  onFocusLeave,
 }: SidebarInlineSearchProps) {
   const { t } = useTranslation();
   const inputRef = useRef<HTMLInputElement>(null);
@@ -121,6 +124,7 @@ export function SidebarInlineSearch({
         if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
         setFocusWithin(false);
         setForceOpen(false);
+        if (!menuOpen) onFocusLeave?.();
       }}
       className={cn(
         'flex h-8 w-full items-center gap-2.5 rounded-full border pl-3 transition-colors',

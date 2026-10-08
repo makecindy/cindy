@@ -126,6 +126,25 @@ describe('Pi-owned transport for Cindy harnesses', () => {
     if (providerId === 'together') expect(sent).toMatchObject({ reasoning: { enabled: true } });
     expect(sent!.max_tokens ?? sent!.max_completion_tokens).toBe(1024);
   });
+
+  it('does not ask an always-thinking GLM-5.3 to disable thinking when the request has no effort (#5402)', async () => {
+    const glm = PROVIDER_MODEL_CATALOG.providers['zai-coding-cn'].find(row => row.id === 'glm-5.3')!;
+    const { off: _off, ...optionalOffLevels } = glm.execution.pi.thinkingLevelMap ?? {};
+    const optionalOff = { ...glm, execution: { pi: { ...glm.execution.pi, thinkingLevelMap: optionalOffLevels } } };
+    const sentFor = async (row: typeof glm) => {
+      let sent: Record<string, unknown> | undefined;
+      const send = createPiProviderFetch({ row, providerId: 'zai-coding-cn', apiKey: 'fixture-provider-key', fetchImpl: async (_url, init) => {
+        sent = JSON.parse(String(init?.body));
+        return new Response(reply, { headers: { 'content-type': 'text/event-stream' } });
+      } });
+      await (await send('https://unused.invalid', { body: JSON.stringify({ model: row.id, input: 'hello', stream: true }) })).text();
+      return sent;
+    };
+
+    expect(glm.execution.pi.thinkingLevelMap?.off).toBeNull();
+    expect(await sentFor(glm)).toMatchObject({ thinking: { type: 'enabled' }, reasoning_effort: 'high' });
+    expect(await sentFor(optionalOff)).toMatchObject({ thinking: { type: 'disabled' } });
+  });
 });
 
 it('keeps native Gemini tool signatures across two turns through Responses history', async () => {

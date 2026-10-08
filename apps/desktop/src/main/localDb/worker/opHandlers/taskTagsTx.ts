@@ -6,7 +6,7 @@ export function runTaskTagsTransaction(db: Database.Database, raw: unknown): Tas
   const fail = (code: string): never => {
     throw new Error(`[${code}] Task tag operation failed`);
   };
-  const body = raw as TaskTagRequest & { newId?: string; callerSessionId?: string; callerIsTrustedBot?: boolean };
+  const body = raw as TaskTagRequest & { newId?: string; callerSessionId?: string };
   const text = (value: unknown, max = 128): string => {
     if (typeof value !== 'string' || !value.trim() || value.trim().length > max)
       return fail('INVALID_PARAMS');
@@ -76,26 +76,9 @@ export function runTaskTagsTransaction(db: Database.Database, raw: unknown): Tas
     }));
   return db.transaction(() => {
     if (!body || typeof body !== 'object') return fail('INVALID_PARAMS');
-    if (body.callerSessionId && body.callerIsTrustedBot) {
-      // The host already decided this is a Bot main task on its owner's own turn.
-      if (
-        !db
-          .prepare(
-            "SELECT s.id FROM sessions s JOIN bot_session_links b ON b.session_id=s.id WHERE s.id=? AND s.status='active' AND s.source='bot' AND b.role='canonical' AND b.archived_at IS NULL",
-          )
-          .get(body.callerSessionId)
-      )
-        return fail('NOT_FOUND');
-    } else if (body.callerSessionId) {
-      if (
-        !db
-          .prepare(
-            "SELECT id FROM sessions WHERE id=? AND status <> 'deleted' AND coalesce(source,'') <> 'bot' AND NOT EXISTS (SELECT 1 FROM bot_session_links b WHERE b.session_id=sessions.id)",
-          )
-          .get(body.callerSessionId)
-      )
-        return fail('NOT_FOUND');
-    }
+    if (body.callerSessionId && !db.prepare(
+      "SELECT id FROM sessions WHERE id=? AND status <> 'deleted'",
+    ).get(body.callerSessionId)) return fail('NOT_FOUND');
     let affected: string[] = [];
     let deletion: TaskTagResult['deletion'];
     let hasMore: boolean | undefined;

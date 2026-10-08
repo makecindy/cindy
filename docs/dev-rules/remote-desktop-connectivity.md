@@ -367,6 +367,9 @@ guests continue using their existing OSS scope. New peer references are sent onl
 to a capable host. The receiving Main process checks size and SHA-256 before returning
 the reference, then normal message acceptance materializes it through the existing
 media/file ownership logic. Message acceptance itself remains on WSS.
+Hosts that also advertise `caps.streamAttachments` accept up to three 1 MiB blocks in
+flight, sent as raw RPC bodies instead of base64 fields; other hosts keep the
+one-block-at-a-time base64 upload ([protocol-compatibility.md](protocol-compatibility.md)).
 
 The host inbox lives under the current owner's userData namespace. Tickets bind to
 the source controller and are rechecked when materialized. Completed staging survives

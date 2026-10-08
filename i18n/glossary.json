@@ -5,6 +5,22 @@
   "sourceLocale": "en",
   "punctuationExempt": ["desktop:settings.help.qnaFeedbackBodyTemplate"],
   "terms": [
+    {"id": "wallpaper-blur", "status": "proposed", "en": "Wallpaper Blur", "translations": {"zh-CN": "壁纸模糊", "zh-TW": "桌布模糊", "ja": "壁紙のぼかし", "ko": "배경화면 흐림"}, "note": "仅使应用壁纸柔化，不模糊文字或控件；0 为关闭，按用户选择应用于静态图片和视频。"},
+    {"id": "group-owner", "status": "proposed", "en": "Group Owner", "translations": {"zh-CN": "群主", "zh-TW": "群主", "ja": "グループオーナー", "ko": "그룹 소유자"}, "checkCase": false, "note": "Chat Server 的群角色，可由人或伙伴担任；不要与伙伴主人或分工负责人混同。群设置成员行英文可简写 Owner。"},
+    {"id": "group-admin", "status": "proposed", "en": "Group Admin", "translations": {"zh-CN": "群管理员", "zh-TW": "群管理員", "ja": "グループ管理者", "ko": "그룹 관리자"}, "checkCase": false, "note": "可管理群资料和成员，但不能替伙伴主人授权工具或私人资料。群设置内可简称管理员 / Admin。"},
+    {"id": "group-nickname", "status": "proposed", "en": "Group Nickname", "translations": {"zh-CN": "群昵称", "zh-TW": "群暱稱", "ja": "グループ内の名前", "ko": "그룹에서의 이름"}, "checkCase": false, "note": "仅在单个群中显示的名字。为空时使用账号显示名；不覆盖个人资料名字或稳定身份。"},
+    {
+      "id": "wallpaper-visibility",
+      "status": "proposed",
+      "en": "Wallpaper Visibility",
+      "translations": {
+        "zh-CN": "壁纸可见度",
+        "zh-TW": "桌布可見度",
+        "ja": "壁紙の表示濃度",
+        "ko": "배경화면 표시 강도"
+      },
+      "note": "壁纸背景层的实际可见程度，0% 隐藏，100% 原样显示；不改变文字或控件的不透明度。"
+    },
     {
       "id": "wallpaper",
       "status": "proposed",
@@ -1651,7 +1667,7 @@
         "ja": "iOS シミュレータ",
         "ko": "iOS 시뮬레이터"
       },
-      "note": "Apple Simulator 与 Cindy 内置查看器能力的用户可见名称。iOS 保留官方大小写；中文使用「模拟器」，日语使用「シミュレータ」，韩语使用「시뮬레이터」。先登记为 proposed，待插件与内置面板文案稳定后固化。"
+      "note": "Apple Simulator 的用户可见名称，也用于原内置模拟器的下线说明。Cindy 已移除内置查看器能力。iOS 保留官方大小写；中文使用「模拟器」，日语使用「シミュレータ」，韩语使用「시뮬레이터」。译法仍为 proposed。"
     },
     {
       "id": "lead",
@@ -1896,7 +1912,7 @@
         "ja": "取り消す",
         "ko": "철회"
       },
-      "note": "用户在 X 上让 Cindy 删掉它那条公开回帖的动作(在回帖下回 /delete)。zh-CN 取「撤回」而不是「删除」——「删除」在本仓已大量用于删任务/删会话/删文件, 而这个动作的对象是「已经发出去的公开内容」, 与 IM 里的消息撤回同义。刻意登记为 proposed: X 撤回是新功能(server PR #288 / client 侧告知), 四语只有这一处用例, 等更多用例出现后再定 decided。"
+      "note": "用户在 X 上让 Cindy 删掉它那条公开回帖的动作：原提问者在目标回帖下回复 `@askmycindy /delete`，正文中须手动带上 @askmycindy。中文说明也可展示 `/删除`，但命令本身不翻译为 `/刪除`。zh-CN 取「撤回」而不是「删除」——「删除」在本仓已大量用于删任务/删会话/删文件, 而这个动作的对象是「已经发出去的公开内容」, 与 IM 里的消息撤回同义。刻意登记为 proposed: X 撤回是新功能(server PR #288 / client 侧告知), 五语只有这一处用例, 等更多用例出现后再定 decided。"
     },
     {
       "id": "bot-reply-post",

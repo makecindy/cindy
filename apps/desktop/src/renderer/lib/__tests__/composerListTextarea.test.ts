@@ -91,11 +91,13 @@ describe('computeTextareaContinuation', () => {
 });
 
 describe('computeTextareaBackspace', () => {
-  it('空列表项在行尾退格:连同前面的换行整删,回到上一行行尾', () => {
+  it('空列表项在行尾退格:只删前缀、保留换行,停在空行行首', () => {
     // "1. a\n2. " 第二行是空项,光标在末尾。
     const value = '1. a\n2. ';
     const c = value.length;
-    expect(computeTextareaBackspace(value, c, c)).toEqual({ value: '1. a', caret: 4 });
+    expect(computeTextareaBackspace(value, c, c)).toEqual({ value: '1. a\n', caret: 5 });
+    // 空行上再退格不再拦截,交给默认退格回到上一行。
+    expect(computeTextareaBackspace('1. a\n', 5, 5)).toBeNull();
   });
 
   it('首行空列表项退格:只删前缀', () => {
@@ -117,10 +119,10 @@ describe('computeTextareaBackspace', () => {
     expect(backspace('plain|')).toBeNull();
   });
 
-  it('空项后紧跟换行(非文本末尾)也整删:非首行连同前面的换行删掉', () => {
+  it('空项后紧跟换行(非文本末尾)也退出:只删前缀、保留前后换行', () => {
     // "x\n- \nnext" 光标在第二行(空 bullet)行尾,其后是 \n(非 EOF)。
     const value = 'x\n- \nnext';
-    expect(computeTextareaBackspace(value, 4, 4)).toEqual({ value: 'x\nnext', caret: 1 });
+    expect(computeTextareaBackspace(value, 4, 4)).toEqual({ value: 'x\n\nnext', caret: 2 });
   });
 
   it('有选区 → null', () => {

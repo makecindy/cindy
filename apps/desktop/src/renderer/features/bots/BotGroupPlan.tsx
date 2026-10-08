@@ -179,7 +179,7 @@ function EditableStepRow({
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="w-56">
-        <DropdownMenuLabel className="px-2 pb-1 pt-1.5 text-12 font-normal text-[var(--text-tertiary)]">
+        <DropdownMenuLabel>
           {t('bots.groupChat.plan.stepMenuTitle')}
         </DropdownMenuLabel>
         {candidates.map((member) => {
@@ -209,7 +209,7 @@ function EditableStepRow({
             >
               <span className="min-w-0 flex-1 truncate">{t('bots.groupChat.plan.removeStep')}</span>
               {lastStep ? (
-                <span className="shrink-0 text-12 text-[var(--text-tertiary)]">
+                <span className="shrink-0 text-12 leading-[1.33] text-[var(--cmd-palette-item-meta)]">
                   {t('bots.groupChat.plan.keepOneStep')}
                 </span>
               ) : null}

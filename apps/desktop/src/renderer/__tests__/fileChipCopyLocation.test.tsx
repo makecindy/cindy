@@ -29,7 +29,7 @@ vi.mock('@/features/right-sidebar/lib/openInSidebarFileBrowser', () => ({
   openExternalFileInSidebarFileBrowser: vi.fn(),
   openFileInSidebarFileBrowser: vi.fn(),
 }));
-vi.mock('@/lib/remoteFileOpen', () => ({ copyRemoteChatFile: vi.fn(), revealRemoteChatFile: vi.fn() }));
+vi.mock('@/lib/remoteFileOpen', () => ({ copyRemoteChatFile: vi.fn(), downloadRemoteChatEntry: vi.fn() }));
 
 import { useFileChipContextMenu } from '../components/chat/useFileChipContextMenu';
 import type { FileLocation } from '../lib/fileLocation';

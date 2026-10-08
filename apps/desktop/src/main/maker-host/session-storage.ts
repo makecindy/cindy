@@ -61,6 +61,7 @@ function rowToMeta(row: SessionRow): SessionMeta {
     sdkSessionId: row.sdkSessionId ?? undefined,
     parentSessionId: row.parentSessionId ?? undefined,
     remoteHostId: row.remoteHostId ?? undefined,
+    ...(row.agentDeviceId ? { agentDeviceId: row.agentDeviceId } : {}),
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -89,6 +90,7 @@ export class DesktopSessionStorage implements SessionStorage {
       // 避免 maker.createSession (maker:create-session / scheduler / Feishu / Orca 等入口)
       // 把空白 host 原样入库,导致 renderer 按 local 分组、maker 按 remote-like 处理的分裂。
       remoteHostId: normalizeRemoteHostId(meta.remoteHostId),
+      agentDeviceId: normalizeRemoteHostId(meta.remoteHostId) ? null : normalizeRemoteHostId(meta.agentDeviceId),
       source: meta.reviewMode === true ? 'review' : 'desktop',
       createdAt: now,
       updatedAt: now,

@@ -322,6 +322,33 @@ it('keeps transfer progress in the dialog until the target completes, including 
   expect(screen.getAllByRole('button')).toHaveLength(2);
 });
 
+it('reopening a running copy shows its progress at once, never the start form', async () => {
+  const running = {
+    supported: true,
+    deviceId: 'A',
+    stage: 'transferring',
+    running: true,
+    targetDeviceId: 'B',
+    progress: { phase: 'sending', sentBytes: 1, totalBytes: 2, bytesPerSecond: 1 },
+  } as const;
+  // The first poll is still in flight when the dialog opens.
+  state.request.mockImplementation(() => new Promise(() => {}));
+  render(
+    <MemoryRouter>
+      <TaskMigrationDialog session={source} initialStatus={running} onDismiss={state.dismiss} />
+    </MemoryRouter>,
+  );
+  expect(screen.getByText('taskMigration.copyingTitle')).toBeTruthy();
+  expect(screen.getByText('taskMigration.transferProgress')).toBeTruthy();
+  expect(screen.queryByText('taskMigration.title')).toBeNull();
+  expect(screen.queryByText('taskMigration.start')).toBeNull();
+  expect(screen.queryByText('taskMigration.bindingsNotice')).toBeNull();
+  expect(
+    state.request.mock.calls.some(
+      ([, command]) => (command as { action: string }).action === 'estimate',
+    ),
+  ).toBe(false);
+});
 it('cancels a running copy and closes once the source has stopped it', async () => {
   let snapshot: Record<string, unknown> = {
     stage: 'transferring',
@@ -555,3 +582,42 @@ it('ignores clicks outside and only closes through Cancel or Escape', async () =
   fireEvent.keyDown(dialog, { key: 'Escape' });
   await waitFor(() => expect(state.dismiss).toHaveBeenCalledOnce());
 });
+// The dialog paints the confirmation surface; the default Button palette has almost
+// no contrast on it, so every footer action must use the confirmation palette.
+it.each([
+  ['confirming', undefined, ['taskMigration.start'], ['taskMigration.cancel']],
+  [
+    'copying',
+    { stage: 'transferring', running: true, cancellable: true },
+    [],
+    ['taskMigration.cancelCopy', 'taskMigration.runInBackground'],
+  ],
+  [
+    'complete',
+    { stage: 'complete', running: false, targetDeviceId: 'B', targetSessionId: 'migrated' },
+    ['taskMigration.openTarget'],
+    ['taskMigration.close'],
+  ],
+])(
+  'paints %s footer actions with the confirmation palette',
+  async (_stage, status, primary, secondary) => {
+    if (status)
+      state.request.mockImplementation(
+        async (device: string | null, command: { action: string }) =>
+          command.action === 'status'
+            ? status
+            : { supported: true, deviceId: device ?? 'local', projects: [] },
+      );
+    mount();
+    for (const name of primary) {
+      const button = await screen.findByRole('button', { name });
+      expect(button.className).toContain('[--button-face-bg:var(--confirm-btn-primary-bg)]');
+    }
+    for (const name of secondary) {
+      const button = await screen.findByRole('button', { name });
+      expect(button.className).toContain(
+        '[--button-face-border:var(--confirm-btn-secondary-border)]',
+      );
+    }
+  },
+);

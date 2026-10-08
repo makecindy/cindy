@@ -559,8 +559,9 @@ describe('Shared create project picker', () => {
 
     // 路由以被控端(deviceId)为准计算 hidden。不可用性变化只收窄可选入口；不得由
     // 监听旧 draft 的 effect 再写回选中值，否则会覆盖同轮刚应用的新默认组合。
+    // 目录所在电脑:远程任务的被控端,或 Agent 在另一台电脑运行时的那台。
     expect(newMakerDraftRouteSource).toMatch(
-      /useAvailableAgents\(\s*effectiveDeviceLinkDeviceId,?\s*\)/,
+      /useAvailableAgents\(\s*catalogDeviceId,?\s*\)/,
     );
     expect(newMakerDraftRouteSource).not.toMatch(
       /hiddenSwitcherVendors\.includes\(draft\.vendor\)/,
@@ -571,7 +572,7 @@ describe('Shared create project picker', () => {
     // 常态路径的门禁。**门禁没放松,只是换了承载物**:ChatInput 按同一个 runtime 注册
     // 结果算出 unifiedAgents 交给联合列表,未注册的引擎连行都不出现。
     expect(newMakerDraftRouteSource).toContain('hiddenVendors={hiddenSwitcherVendors}');
-    expect(chatInputSource).toMatch(/useAvailableAgents\(deviceLinkDeviceId\)/);
+    expect(chatInputSource).toMatch(/useAvailableAgents\(catalogDeviceId\)/);
     expect(chatInputSource).toContain('unifiedAgents={effectiveUnifiedAgents}');
     // fail-open:注册结果没回来之前不隐藏任何引擎;当前引擎恒在列。
     expect(chatInputSource).toContain('if (!runtimeAgentsLoaded) return undefined;');
@@ -936,7 +937,8 @@ describe('Shared create project picker', () => {
     expect(newMakerDraftRouteSource).toContain(
       'capabilitiesError || (deviceProvidersError && !deviceProvidersUnsupported)',
     );
-    expect(newMakerDraftRouteSource.match(/remoteModelListStatus !== 'ready'/g)).toHaveLength(2);
+    // 发送 + 远程任务的新建目标 + Agent 在另一台电脑时的新建目标。
+    expect(newMakerDraftRouteSource.match(/remoteModelListStatus !== 'ready'/g)).toHaveLength(3);
     expect(newMakerDraftRouteSource).toContain(
       "toast.error(t('newChat.modelSelector.remoteLoadFailed'))",
     );
@@ -1173,11 +1175,15 @@ describe('Shared create project picker', () => {
     expect(remoteSessionHandoffSource).not.toContain('await refreshRemoteDeviceSessions(');
     // 两处调用点都不得 await 它 —— await 一个同步函数不报错,但会把「不要等」这个意图悄悄改回去。
     expect(newMakerDraftRouteSource).not.toContain('await commitRemoteSessionHandoff(');
-    // 而 setPending / setPendingGoal 必须在各自的 handoff 之后仍然发生(交接本体没被搬走)。
+    // 而首条交接必须在各自的 handoff 之后仍然发生(交接本体没被搬走):发送路径先把普通首条
+    // 直接交给 store 发件队列再导航;协同 / 斜杠命令 / 未受理时退回 setPending 再导航。
     const sendPart = newMakerDraftRouteSource.slice(
       newMakerDraftRouteSource.indexOf("logTag: 'draft send'"),
     );
-    expect(sendPart.slice(0, sendPart.indexOf('navigate('))).toContain(
+    const directNavigate = sendPart.indexOf('navigate(');
+    expect(sendPart.slice(0, directNavigate)).toContain('makerChatStore.sendMessage(');
+    const fallbackNavigate = sendPart.indexOf('navigate(', directNavigate + 1);
+    expect(sendPart.slice(directNavigate, fallbackNavigate)).toContain(
       'setPending(remoteSessionId',
     );
     const goalPart = newMakerDraftRouteSource.slice(
@@ -1276,6 +1282,7 @@ describe('Shared create project picker', () => {
   it('routes every draft-target transition through the single action', () => {
     // 五条路径:设备 pill、设备域浏览器选项目、工作区 picker、所选设备失效后的自动回落、
     // “对话”分组导航请求。声明本身是 `= useCallback(` 不匹配这个模式,所以数出来的就是调用点。
+    // (远程 Agent 由模型选择器选择、只在本机任务出现,不再经设备菜单转移草稿目标。)
     const calls = newMakerDraftRouteSource.match(/applyDraftTarget\(\{/g) ?? [];
     expect(calls.length).toBe(5);
     // 组件里不得再有任何一处手写这些副作用 —— 手写一处就等于又开了一条绕过推导的路。
@@ -1665,7 +1672,7 @@ describe('Shared create project picker', () => {
     expect(seed).toContain('capabilitiesChanged,');
     expect(seed).toContain('if (!capabilities || capabilitiesLoading');
     expect(seed).toContain('controllerTouched: dlRuntimeTouchedRef.current,');
-    expect(seed).toContain('remoteModelChosenByUser: remoteDraftState.value?.modelChosenByUser,');
+    expect(seed).toContain('remoteModelChosenByUser: deviceDraftDefaults?.modelChosenByUser,');
     expect(seed).toContain('modelChosenByUser: true,');
     expect(seed).toContain('current.model,');
 
@@ -1676,7 +1683,9 @@ describe('Shared create project picker', () => {
     // 5 → 6:统一模型选择器(M5)新增 handleUnifiedDraftSelect —— 它同样是一次
     // 控制端对远程运行配置的显式编辑,漏打这个标记的话下一次 capabilities 刷新
     // 会把用户刚选的模型重种回被控端默认。
-    expect((runtimeHandlers.match(/dlRuntimeTouchedRef\.current = true;/g) ?? []).length).toBe(6);
+    // 6 → 7:同一处理器里「选到另一台电脑上的模型」(远程 Agent 换落点)也是显式编辑,
+    // 那台的 capabilities 到达时同样只能夹紧、不能重种。
+    expect((runtimeHandlers.match(/dlRuntimeTouchedRef\.current = true;/g) ?? []).length).toBe(7);
   });
 
   /**
@@ -1694,7 +1703,7 @@ describe('Shared create project picker', () => {
       newMakerDraftRouteSource.indexOf('// 远程草稿展示用:'),
     );
     // 播种 effect 侧的 key 构造(正本)。
-    expect(seed).toContain('const key = `${effectiveDeviceLinkDeviceId}:${capabilityAgentKind}`;');
+    expect(seed).toContain('const key = `${catalogDeviceId}:${capabilityAgentKind}`;');
 
     const unified = newMakerDraftRouteSource.slice(
       newMakerDraftRouteSource.indexOf('const handleUnifiedDraftSelect = useCallback('),
@@ -1702,7 +1711,7 @@ describe('Shared create project picker', () => {
     );
     // 选择侧:同一构造,agent 一维换成**目标引擎**(selection.vendor),且必须在 setDlSel 之前。
     expect(unified).toContain(
-      'dlSeedKeyRef.current = `${effectiveDeviceLinkDeviceId}:${dbToMakerAgentKind(',
+      'dlSeedKeyRef.current = `${catalogDeviceId}:${dbToMakerAgentKind(',
     );
     expect(unified).toContain('normalizeDbAgentKind(selection.vendor),');
     expect(unified.indexOf('dlSeedKeyRef.current =')).toBeLessThan(
@@ -1735,7 +1744,7 @@ describe('Shared create project picker', () => {
     );
     const body = derive.slice(0, derive.indexOf('}, ['));
     // 本机分支行为不变。
-    expect(body).toContain('if (!isDeviceLinkDraft) return localProviderIdForDraft;');
+    expect(body).toContain('if (!usesDeviceCatalog) return localProviderIdForDraft;');
     // 远程分支按**被控端**目录 + 草稿当前模型复算,用与 main 同源的解析函数。
     expect(body).toContain('effectiveSourceIdForModel(');
     expect(body).toContain('deviceProviders,');
@@ -1772,9 +1781,9 @@ describe('New Maker 草稿的 wire model id 口径', () => {
       handlerStart,
       newMakerDraftRouteSource.indexOf('// ─── 用户改 workingDir', handlerStart),
     );
-    // 本地草稿落 lastByVendor(→ createSession)、device-link 草稿落 dlSel —— 两条都用
-    // selection.modelId(wire id),一处都不能换成行 id。
-    expect((handler.match(/model: selection\.modelId,/g) ?? []).length).toBe(2);
+    // 本地草稿落 lastByVendor(→ createSession)、device-link 草稿落 dlSel、远程 Agent 换落点
+    // 时播种那台电脑的 dlSel —— 三条都用 selection.modelId(wire id),一处都不能换成行 id。
+    expect((handler.match(/model: selection\.modelId,/g) ?? []).length).toBe(3);
     // 归一化行 id 不进草稿层,连字段都不该出现在写入实参里。
     expect(handler).not.toContain('rowModelId');
   });

@@ -63,9 +63,6 @@ import type { McpProvider } from '../interfaces/mcp-provider.js';
 import type { MakerMemoryManager } from '../memory/manager.js';
 import type {
   CodexModelListItem,
-  DynamicToolCallParams,
-  DynamicToolCallResponse,
-  DynamicToolSpec,
   ReasoningEffort,
 } from './codex/app-server/protocol.js';
 import type {
@@ -122,27 +119,6 @@ export interface CodexMcpThreadContextArgs {
   vendorOptions: Record<string, unknown>;
 }
 
-export interface CodexHostDynamicToolContext {
-  sessionId?: string;
-  workingDir: string;
-  remoteHostId?: string;
-  model: string;
-  providerId?: string | null;
-  vendorOptions: Record<string, unknown>;
-}
-
-/**
- * Host-owned dynamic tools that must remain directly callable even when the
- * Codex runtime defers ordinary MCP tool discovery.
- */
-export interface CodexHostDynamicToolProvider {
-  listTools(context: CodexHostDynamicToolContext): readonly DynamicToolSpec[];
-  callTool(
-    params: DynamicToolCallParams,
-    context: CodexHostDynamicToolContext,
-  ): Promise<DynamicToolCallResponse | undefined>;
-}
-
 /** Metadata Codex attaches to an MCP tool approval elicitation. */
 export interface McpToolApprovalContext {
   serverName: string;
@@ -156,12 +132,6 @@ export type McpToolApprovalPolicy =
   | 'auto-approve'
   | 'prompt'
   | 'prompt-each-time';
-
-/** Host-owned copy for an MCP permission request that needs a specific risk disclosure. */
-export interface McpToolApprovalPresentation {
-  title?: string;
-  description?: string;
-}
 
 /** Pi 内 MCP client 的 server 描述；remote 存在时直接访问外部 Streamable HTTP MCP。 */
 export interface PiMcpServerRef {
@@ -360,6 +330,8 @@ export class PiNativeProviderProxyNotReadyError extends Error {
  * sessionId 缺省 → host 不注册、URL 不带 query(匿名会话走无 ctx 兜底,行为同改动前)。
  */
 export interface PiExtraSpawnConfigContext {
+  /** 使用这些工具的 Agent(缺省 pi)。Agent 在另一台电脑上运行的任务也借这套桥身份。 */
+  agentKind?: AgentKind;
   sessionId?: string;
   /** 当前 Maker Session 实例代号；用于阻断旧 bridge 请求借用新实例权限。 */
   sessionInstanceId?: string;
@@ -997,6 +969,17 @@ export interface AgentDeps {
     modelId: string,
   ) => number | null;
 
+  /**
+   * Resolve the declared efforts of a concrete (provider, model) route, used to
+   * narrow an outgoing effort to what that route accepts. Return null for unknown
+   * or ambiguous routes. Same-ID models from different providers can declare
+   * different efforts, so do not use capabilities.availableModels for this.
+   */
+  resolveModelEfforts?: (
+    providerId: string | null | undefined,
+    modelId: string,
+  ) => readonly Effort[] | null;
+
   /** Local disk-auth policy, independent of the actual Provider credential mode. */
   resolveCodexLocalAuthPolicy?: (
     providerId: string | null | undefined,
@@ -1126,6 +1109,12 @@ export interface AgentDeps {
    * only the request supplied here; null/throw is treated as a silent block.
    */
   reviewAutoPermissionAction?: AutoReviewDelegate;
+
+  /**
+   * Claude Code 工具循环疑似命中时的辅助模型复核入口(与 MakerDeps.toolLoopReviewer
+   * 同一实现)。缺省 = 疑似即中断。
+   */
+  toolLoopReviewer?: import('./shared/tool-loop-review.js').ToolLoopReviewer;
 
   /** Scope tools/list during native startup, before a real thread id exists. Never authorizes tools/call. */
   withCodexMcpDiscoveryContext?: <T>(
@@ -1294,39 +1283,6 @@ export interface AgentDeps {
    * Missing or failed classifiers cannot grant a trusted shortcut.
    */
   getMcpToolApprovalPolicy?: (context: McpToolApprovalContext) => McpToolApprovalPolicy;
-
-  /**
-   * Optional host-owned title and description for an MCP approval card.
-   *
-   * This stays separate from the policy mode: a call can remain
-   * `prompt-each-time` while the Host explains a risk the generic MCP client
-   * cannot infer from the outer `call_tool` envelope.
-   */
-  getMcpToolApprovalPresentation?: (
-    context: McpToolApprovalContext,
-  ) => McpToolApprovalPresentation | undefined;
-
-  /**
-   * Codex-only deterministic tool activation for narrow host capabilities.
-   * Definitions are frozen at thread creation and restored handlers are gated
-   * against the same session-start snapshot.
-   */
-  codexHostDynamicToolProvider?: CodexHostDynamicToolProvider;
-
-  /**
-   * Host-owned shell command policy applied before Codex command approval.
-   * Returning `deny` is an unconditional product guard and therefore wins over
-   * the user's broad Full access permission mode. Returning undefined leaves
-   * the normal Codex approval flow unchanged.
-   *
-   * Product-specific command parsing belongs in the host; maker-core only
-   * carries the decision across the app-server boundary.
-   */
-  getShellCommandPolicy?: (context: {
-    agentKind: 'codex';
-    command: string;
-    cwd?: string;
-  }) => { decision: 'deny'; reason: string } | undefined;
 
   /**
    * Codex 专用钩子：resume / fork 外部本地 thread 前由 host 准备底层 session state。
@@ -1776,6 +1732,33 @@ export class TurnDispatchRejectedError extends Error {
   }
 }
 
+/** 设备托管会话的描述(见 StartSessionOptions.deviceHosted)。 */
+export interface DeviceHostedSession {
+  /** Agent 主机上的虚拟工作目录，执行器映射到任务真实目录；旧协议兼容真实路径。 */
+  workingDir: string;
+  extraDirs: string[];
+  writableDirs: string[];
+  /** 任务所在电脑的平台与 shell(写进给模型的环境说明)。 */
+  platform: NodeJS.Platform;
+  /** 虚拟工作区路径采用 Agent 进程所在主机的路径风格；缺省按当前进程判断。 */
+  pathPlatform?: NodeJS.Platform;
+  shell: string;
+  osVersion?: string;
+  homeDir?: string;
+  isGitRepo: boolean;
+  /** 本机 loopback 隧道：Agent 经它访问任务所在电脑的执行器与 Cindy 工具。 */
+  tunnelUrl: string;
+  tunnelToken: string;
+  /** 经隧道可用的 Cindy MCP 服务名(`<tunnelUrl>/mcp/<name>`)。 */
+  mcpServers: string[];
+  /**
+   * 本机虚拟工作区根：父目录层级对应执行端的上级说明文件，Agent 照常向上加载。
+   */
+  mirrorRoot?: string;
+  /** 任务所在电脑上用户的个人说明(该 Agent 的用户级说明文件)，写进给模型的环境说明。 */
+  personalInstructions?: string;
+}
+
 export interface StartSessionOptions {
   /**
    * Business 层 session id (host 调用 maker.createSession 时传的 opts.id, 由
@@ -1811,6 +1794,13 @@ export interface StartSessionOptions {
    * 目前仅 Codex 支持; Claude 不消费此字段 (会被忽略)。
    */
   remoteHostId?: string;
+  /**
+   * 设备托管：Agent 进程在本机运行(用本机的程序、登录、供应商与网络)，任务、项目文件与
+   * 命令执行在同账号的另一台电脑上。workingDir 是本机的影子目录(只放同步过来的项目说明，
+   * 供 Agent 照常加载)；文件与命令工具、Cindy 工具全部经 tunnel 回到任务所在电脑执行。
+   * 与 remoteHostId 互斥。
+   */
+  deviceHosted?: DeviceHostedSession;
   model: string;
   /**
    * 本次会话显式选择的供应商来源。maker-core 只用它推导子进程凭证形态;

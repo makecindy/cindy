@@ -49,7 +49,7 @@ export interface GhostPluginListItem {
   /** 本地化后的主视图标题；未声明时为 null。 */
   mainViewTitle: string | null;
   /** 声明了由 Host 承载、但可从插件 UI 主动进入的能力。 */
-  hostCapability: 'ios-simulator' | null;
+  retirement?: InstalledGhost['retirement'];
   oauthAuthorizationExpired?: boolean;
   trust?: GhostTrustInfo;
   iconDataUrl?: string;
@@ -63,14 +63,13 @@ export interface GhostPluginListItem {
  * - `manage`:纯工具型(Agent 对话中自动调用)→ 无主按钮。
  * 停靠形态(left/right)的面板由布局树承载,不算 panel 主动作。
  */
-export type GhostPrimaryAction = 'panel' | 'command' | 'capability' | 'manage';
+export type GhostPrimaryAction = 'panel' | 'command' | 'manage';
 
 export function ghostPrimaryAction(
-  item: Pick<GhostPluginListItem, 'tabPanel' | 'canUse' | 'hostCapability'>,
+  item: Pick<GhostPluginListItem, 'tabPanel' | 'canUse'>,
 ): GhostPrimaryAction {
   if (item.tabPanel) return 'panel';
   if (item.canUse) return 'command';
-  if (item.hostCapability) return 'capability';
   return 'manage';
 }
 export interface GhostPluginDetail extends GhostPluginListItem {
@@ -177,7 +176,7 @@ export function filterGhostPluginItems<T extends GhostPluginListItem>(
  * Orders installed shortcuts by host-recorded recency while keeping never-used items stable.
  * Unknown/stale ids are ignored, so uninstall or migration residue cannot hide an item.
  */
-export function sortGhostPluginItemsByRecentUse<T extends Pick<GhostPluginListItem, 'id'>>(
+export function sortGhostPluginItemsByRecentUse<T extends Pick<GhostPluginListItem, 'id' | 'retirement'>>(
   items: readonly T[],
   recentIds: readonly string[],
 ): T[] {
@@ -207,7 +206,7 @@ export function sortGhostPluginItemsByRecentUse<T extends Pick<GhostPluginListIt
  * so letting them jump the row would only bury the unread signal.
  * Pure and reactive — recompute freely from current signals; there is no frozen snapshot to go stale.
  */
-export function sortInstalledForDisplay<T extends Pick<GhostPluginListItem, 'id'>>(
+export function sortInstalledForDisplay<T extends Pick<GhostPluginListItem, 'id' | 'retirement'>>(
   items: readonly T[],
   {
     recentIds,
@@ -219,8 +218,8 @@ export function sortInstalledForDisplay<T extends Pick<GhostPluginListItem, 'id'
     .map((item, stableIndex) => ({ item, stableIndex }))
     .sort((a, b) => {
       // Tier 1 — unread notifications, newest badge first.
-      const aAt = unreadAtById.get(a.item.id);
-      const bAt = unreadAtById.get(b.item.id);
+      const aAt = a.item.retirement?.unread ? Number.MAX_SAFE_INTEGER : unreadAtById.get(a.item.id);
+      const bAt = b.item.retirement?.unread ? Number.MAX_SAFE_INTEGER : unreadAtById.get(b.item.id);
       if ((aAt !== undefined) !== (bAt !== undefined)) return aAt !== undefined ? -1 : 1;
       if (aAt !== undefined && bAt !== undefined && aAt !== bAt) return bAt - aAt;
       // Tier 2 — recently used, newest first.
@@ -244,12 +243,12 @@ export function sortInstalledForDisplay<T extends Pick<GhostPluginListItem, 'id'
  * when the user has many plugins. Updatable-but-read plugins can still fold (the banner surfaces
  * updates).
  */
-export function installedVisibleCount<T extends Pick<GhostPluginListItem, 'id'>>(
+export function installedVisibleCount<T extends Pick<GhostPluginListItem, 'id' | 'retirement'>>(
   items: readonly T[],
   unreadAtById: ReadonlyMap<string, number>,
   cap: number,
 ): number {
-  const unreadCount = items.reduce((count, item) => count + (unreadAtById.has(item.id) ? 1 : 0), 0);
+  const unreadCount = items.reduce((count, item) => count + ((item.retirement?.unread || unreadAtById.has(item.id)) ? 1 : 0), 0);
   return Math.max(cap, unreadCount);
 }
 
@@ -281,7 +280,7 @@ export function toGhostPluginListItem(
     tabPanel: manifest.panel?.position === 'tab',
     hasMainView: manifest.mainView !== undefined,
     mainViewTitle: manifest.mainView ? (manifest.mainView.title ?? manifest.name) : null,
-    hostCapability: manifest.iosSimulator === true ? 'ios-simulator' : null,
+    retirement: ghost.retirement,
     oauthAuthorizationExpired: ghost.oauthAuthorizationExpired !== undefined,
     trust: ghost.trust ?? {
       level: 'unverified',

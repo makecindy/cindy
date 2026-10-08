@@ -138,6 +138,8 @@ export function createGitSnapshotCoordinator(
         agentKind: meta.agentKind as AgentKind,
         workspaceKind: meta.workspaceKind,
         remoteHostId: meta.remoteHostId,
+        // Agent 在另一台电脑运行：文件回退统一走本机保存点链(含 Claude Code)。
+        ...(meta.agentDeviceId ? { savepointRewind: true } : {}),
       };
     },
     resolveAnchor: async (sessionId) => (await getLatestUserMessageOnce(sessionId))?.clientId,

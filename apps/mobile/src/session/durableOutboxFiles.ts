@@ -16,11 +16,11 @@ function segment(value: string): string {
   return encodeURIComponent(value).replace(/\./g, "%2E");
 }
 export function durableOutboxDirectory(
-  record: Pick<DurableOutboxRecord, "accountId" | "deviceId" | "item">,
+  record: Pick<DurableOutboxRecord, "accountId" | "deviceId" | "item" | "storageSessionId">,
 ): string {
   if (!FileSystem.documentDirectory)
     throw new Error("OUTBOX_STORAGE_UNAVAILABLE");
-  return `${FileSystem.documentDirectory}message-outbox/${[record.accountId, record.deviceId, record.item.sessionId, record.item.clientId].map(segment).join("/")}/`;
+  return `${FileSystem.documentDirectory}message-outbox/${[record.accountId, record.deviceId, record.storageSessionId ?? record.item.sessionId, record.item.clientId].map(segment).join("/")}/`;
 }
 export function durableOutboxUploadUri(
   record: DurableOutboxRecord,
@@ -109,7 +109,10 @@ export function initializeOutboxFiles(): Promise<void> {
       if (!info.exists || !info.isDirectory) return;
       for (const name of await FileSystem.readDirectoryAsync(directory)) {
         if (!name || name === '.' || name === '..' || /[\\/]/.test(name)) continue;
-        const uri = directory + name;
+        // Native listings return decoded names, while the ledger contains URI-encoded
+        // segments. Re-encode before comparison or a realm-qualified account's retained
+        // files look unreferenced after restart. Keep the same encoding as the writer.
+        const uri = directory + (depth < 4 ? segment(name) : encodeURIComponent(name));
         if (depth < 4) await visit(uri + '/', depth + 1);
         else if (/^slot-\d+(?:-[a-z0-9]+)?\.[a-z0-9]{1,12}$/.test(name) && !retained.has(uri)) {
           await FileSystem.deleteAsync(uri, { idempotent: true });

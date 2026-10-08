@@ -198,13 +198,12 @@ export function ModelPriceOverrideDialog({ provider, row, open, onOpenChange }: 
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 z-[10001] bg-[var(--overlay-modal)]" />
+        <Dialog.Overlay className="modal-scrim fixed inset-0 z-[10001]" />
         <Dialog.Content
           onPointerDownOutside={(event) => event.preventDefault()}
           className={cn(
-            'fixed left-1/2 top-1/2 z-[10001] w-[520px] max-w-[92vw]',
-            '-translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-xl',
-            'border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)]',
+            'modal-panel fixed left-1/2 top-1/2 z-[10001] w-[520px] max-w-[92vw]',
+            '-translate-x-1/2 -translate-y-1/2 overflow-hidden',
           )}
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
           onOpenAutoFocus={(event) => {

@@ -1,3 +1,4 @@
+import { readAgentCapabilityCatalog, RUNTIME_MCP_NAMES_KEY, type AgentCapabilityQuery } from './agentCapabilityCatalog.js';
 import { listCindyManagedSkills, prepareCindyCodexSkills } from './managed-skills.js';
 import { createCompanionImportProvider } from '../bot-import/importProvider.js';
 import { createCompanionConnectionsProvider } from '../bot-import/connectionProvider.js';
@@ -29,6 +30,7 @@ import { getActiveAuthRealm } from '../authManager.js';
 import { getCustomProvider, updateCustomProviderIfUnchanged } from './custom-provider-store.js';
 import { refreshCustomProvidersIntoCatalog } from './createDesktopProviderService.js';
 import { acquireWorktreeRuntimeLease, releaseWorktreeRuntimeLease, type WorktreeRuntimeLease } from '../worktree/runtimeLeases';
+import { assertPrecreatedSessionNotCancelled } from '../worktree/precreatedCancellation';
 import { readCodexContextWindowInfo } from './codex-context-window.js';
 import { app, BrowserWindow } from 'electron';
 import { createHash, randomUUID } from 'node:crypto';
@@ -39,6 +41,7 @@ import path from 'node:path';
 
 import {
   Maker,
+  isBotMcpServerAllowed,
   ClaudeCodeAgent,
   CodexAgent,
   configureDefaultImageResizer,
@@ -60,7 +63,7 @@ import {
   type CodexModelBackfillCoordinator,
 } from './codex-model-backfill.js';
 import { createOrcaWorkerBridgeMcpProvider, type OrcaBridgeMcpDeps } from '@cindy/orca-workflow';
-import { LspServerPool, type IOSSimulatorMcpCallContext } from '@cindy/mcps';
+import { LspServerPool } from '@cindy/mcps';
 import { effectiveXdGatewayBaseUrl } from '../model-access/effectiveEndpoint.js';
 import { listCustomMcpRuntimeGenerations } from './custom-mcp-store.js';
 
@@ -114,13 +117,14 @@ import {
 } from '../maker-ipc/register.js';
 import { MAKER_PUSH } from '../maker-ipc/channels.js';
 import { tapWindowBroadcast } from '../device-link/broadcast-tap.js';
-import { remoteInvoke } from '../device-link/index.js';
+import { remoteBackgroundInvoke, remoteInvoke } from '../device-link/index.js';
+import { handleListDevices, defaultDeps as deviceDirectoryDeps } from '../device-link/ipc.js';
+import { createHistoryRemoteDeps } from '../mcp-integrations/historyDevices.js';
 import { WorktreePool } from '../worktree/index.js';
 import { getReadyBinaryPath, getCachedBinaryStatus } from '../agent-binaries/index.js';
 import {
   ownerScopedUserDataPath,
 } from '../appSessionState.js';
-import { getIOSSimulatorPluginAccessDecision } from '../cindy-brain/index.js';
 import {
   desktopClaudeAuthAdapter,
   desktopCodexAuthAdapter,
@@ -182,7 +186,7 @@ import {
   resolveModelDefaultContextWindow,
 } from './catalog-to-descriptors.js';
 import { readModelContextLimit } from './model-context-limit-store.js';
-import { resolveDesktopModelContextProviderId } from './model-context-settings.js';
+import { resolveDesktopModelContextProviderId, resolveDesktopModelEfforts } from './model-context-settings.js';
 import {
   prepareCodexCustomContextCatalog,
 } from './codex-custom-context-catalog.js';
@@ -209,7 +213,11 @@ import {
   buildDesktopClaudeRuntimeConfig,
   desktopCodexRuntimeConfig,
   ensureBundledRipgrepReady,
+  getRipgrepBinaryPath,
 } from './runtime-configs.js';
+import { createDeviceAgentStarter } from '../remote-agent/controller/service.js';
+import { extractReviewPdfTextInChild } from '../reviewer/reviewPdfProcess.js';
+import { disposeRemoteAgentHost, installRemoteAgentHost } from '../remote-agent/host/service.js';
 import {
   getClaudeEndpoint,
   setClaudeProxyGatewayKeyReader,
@@ -218,6 +226,8 @@ import { resolveRemoteClaudeRoute } from './remote-claude-route.js';
 import { resolveDesktopClaudeSubagentModelAccess } from './subagent-model-access.js';
 import { claudeSubagentUsageBridge } from './claude-subagent-usage-bridge.js';
 import { createAutoPermissionReviewer } from './auto-permission-reviewer.js';
+import { createToolLoopReviewer } from './tool-loop-reviewer.js';
+import { requestUtilityText } from '../utility-model/oneShotCandidates.js';
 import {
   AUTO_REVIEW_ROUTER_GUARD_TIMEOUT_MS,
   createAutoReviewModelRouter,
@@ -250,10 +260,8 @@ import {
 } from './codex-proxy-host.js';
 import { createDesktopMcpProviders } from '../mcp-integrations/mcp-providers.js';
 import { getGhostRosterPrompt } from '../mcp-integrations/ghost.js';
-import { invalidatePiEnvironment } from '../mcp-integrations/piEnvironment.js';
-import { getIOSSimulatorMcpDeps } from '../mcp-integrations/ios-simulator.js';
+import { getPiExtraSpawnConfig, invalidatePiEnvironment } from '../mcp-integrations/piEnvironment.js';
 import { readContactsSettings } from './contacts-settings-store.js';
-import { createIOSSimulatorCodexDynamicToolProvider } from './ios-simulator-codex-dynamic-tools.js';
 import { captureKnownFileBefore, noteOpaqueTurnChange } from '../turn-change-set/store.js';
 
 /**
@@ -285,7 +293,7 @@ import {
   setCodexEnvironmentShutdownHook,
   unregisterCodexMcpThreadContext,
 } from '../mcp-integrations/codexEnvironment.js';
-import type { CodexHttpBridge } from '../mcp-integrations/codexHttpBridge.js';
+import { REMOTE_ALLOWED_SERVER_NAMES, type CodexHttpBridge } from '../mcp-integrations/codexHttpBridge.js';
 import { setRemoteMcpBridgeTokenRotatedHook } from '../mcp-integrations/remoteMcpBridgeToken.js';
 import type { BotToolsetContext } from '../../shared/botRemoteCapabilities.js';
 import { isBotToolsetProviderAvailable } from './botToolsetAvailability.js';
@@ -362,7 +370,6 @@ import { broadcastOrcaWorkerChanged } from './orcaWorkerBroadcast.js';
 import {
   getDesktopClaudeReadOnlyAllowedTools,
   getDesktopMcpToolApprovalPolicy,
-  getDesktopMcpToolApprovalPresentation,
 } from './mcp-tool-approval-policy.js';
 import { mapCodexAppServerModelsToCatalog } from './codex-model-discovery.js';
 import { prepareSharedProjectSkillLinks } from './shared-global-skills.js';
@@ -421,6 +428,11 @@ export const reviewAutoPermissionAction: AutoReviewDelegate = createAutoPermissi
   resolveRequestTimeoutMs: () => AUTO_REVIEW_ROUTER_GUARD_TIMEOUT_MS,
   requestText: (_request, prompt, { signal }) => requestAutoReviewText(prompt, signal),
 });
+/** 工具循环疑似命中时走共享辅助模型链复核;Claude Code 与 Pi/Codex 共用。 */
+const reviewToolLoop = createToolLoopReviewer({
+  requestText: (prompt, opts) => requestUtilityText(getMaker(), prompt, opts),
+});
+
 reviewAutoPermissionAction.prepareRequest = async request => {
   if (!autoReviewContextResolver) throw new Error('Authorization context is not ready');
   return autoReviewContextResolver(request);
@@ -541,6 +553,9 @@ const staleInvalidatedCcSessions = new Set<string>();
  * ensureRemoteForward 顺延探测,断线重连由 RemoteHost re-arm 保持。
  */
 const PI_MCP_FORWARD_PORT_START = 47981;
+/** Agent 在另一台电脑运行的任务里 Read 读 PDF：抽取进程超时与输入上限(与执行器的 PDF 上限一致)。 */
+const REMOTE_AGENT_PDF_TIMEOUT_MS = 30_000;
+const REMOTE_AGENT_PDF_MAX_BYTES = 32 * 1024 * 1024;
 /**
  * 本进程见过的 bridge 实例 — ensureCodexMcpBridgeStartedForRemote 据此检测
  * bridge 重建并清空 forcedFreshCcBridgeSessions (旧 bridge 的
@@ -780,7 +795,7 @@ function getLspPool(): LspServerPool {
 
 /** Same Desktop provider instances used by the runtimes, evaluated for this Bot. */
 export function isBotToolsetAvailable(input: BotToolsetContext & { toolsetId: string }): boolean {
-  return isBotToolsetProviderAvailable(_mcpProviders.codex ?? [], input);
+  return isBotToolsetProviderAvailable(_mcpProviders[input.agentKind] ?? [], input);
 }
 
 /** Shared by Bot tools, settings and hydration; never infer registration from raw DB rows. */
@@ -924,14 +939,37 @@ export function getMaker(): Maker {
     // 和项目 .claude/settings.json, mtime-based 缓存, 只在 session start 时同步检查。
     const pluginRegistry = createPluginRegistry();
 
-    const resolveIOSSimulatorAccess = (context?: IOSSimulatorMcpCallContext) => {
-      const workingDir = context?.workingDir?.trim() ? context.workingDir : null;
-      // Product access is the installed plugin (enable + workdir disable).
-      // Leftover Tools-page `builtinTools['ios-simulator']` must not gate runtime.
-      return getIOSSimulatorPluginAccessDecision(workingDir);
-    };
-
     const makerMemoryProviderDeps = {
+      runtimeCapabilities: async (context: import('@cindy/mcps').LiziMcpSessionContext, query: AgentCapabilityQuery) => {
+        const session = context.sessionId ? _maker?.getSession(context.sessionId) : undefined;
+        if (!session || (context.sessionInstanceId && session.instanceId !== context.sessionInstanceId))
+          return { ok: false, errorCode: 'CALLER_UNAVAILABLE' };
+        const agentKind = context.agentKind;
+        if (agentKind !== 'claude-code' && agentKind !== 'codex' && agentKind !== 'pi')
+          return { ok: false, errorCode: 'UNKNOWN_AGENT' };
+        const catalog = await listBotRuntimeMcpServers({ agentKind, remoteHostId: context.remoteHostId });
+        const providers = (_mcpProviders[agentKind] ?? []).map((provider) => ({
+          ...provider,
+          capability: provider.capability ?? {
+            title: provider.name, description: '',
+            source: catalog.find((entry) => entry.name === provider.name)?.source ?? 'custom',
+          },
+        }));
+        const result = await readAgentCapabilityCatalog(providers,
+          { ...context, agentKind, getSessionContext: undefined }, query,
+          (provider) => {
+            const entry = catalog.find((item) => item.name === provider.name);
+            const remoteBridgeMissing = context.remoteHostId && agentKind !== 'pi'
+              && entry?.source === 'builtin' && !REMOTE_ALLOWED_SERVER_NAMES.has(provider.name);
+            return entry?.available === false || remoteBridgeMissing
+              ? 'transport-unavailable-for-current-runtime' : null;
+          });
+        if (_maker?.getSession(session.id) !== session) return { ok: false, errorCode: 'CALLER_UNAVAILABLE' };
+        return { ...result, permission: session.stablePermissionModeState,
+          hostCapabilities: Object.fromEntries(Object.entries(session.capabilities)
+            .filter(([, value]) => value && typeof value === 'object' && 'supported' in value)),
+          hostCapabilitiesNote: '宿主支持的交互能力，不等于有同名 Agent 工具。Cindy 应用安装更新和重启须通过内置更新界面；check_app_update 仅检查更新。' };
+      },
       botCapabilities: createDesktopBotCapabilityService(),
       createMediaDownloadContext: (sessionId: string, sessionInstanceId: string) => {
         const session = _maker?.getSession(sessionId);
@@ -942,8 +980,19 @@ export function getMaker(): Maker {
       getMakerMemoryManager: () => makerMemoryManager,
       lspPool: getLspPool(),
       pluginRegistry,
-      resolveIOSSimulatorAccess,
       invokeRemote: remoteInvoke,
+      historyRemote: createHistoryRemoteDeps({
+        listDevices: () => handleListDevices(deviceDirectoryDeps()),
+        invoke: remoteInvoke,
+        captureAccess: () => {
+          const owner = captureDataOwnerBroadcastScope();
+          const assertCurrent = () => {
+            if (!isDataOwnerBroadcastScopeCurrent(owner)) throw new Error('History owner changed');
+          };
+          assertCurrent();
+          return assertCurrent;
+        },
+      }),
       isCurrentLocalSessionInstance: (
         sessionId: string,
         sessionInstanceId: string | undefined,
@@ -1195,6 +1244,7 @@ export function getMaker(): Maker {
       },
       registerLocalAgentProcess: ({ pid, kind, role }) => registerAgentProcess(pid, kind, role),
       reviewAutoPermissionAction,
+      toolLoopReviewer: reviewToolLoop,
       // 每个 session 的 cc 子进程 debug 写到 sessions/<id>/cc-debug.raw.log (logger 拼路径
       // + mkdir), tailer 再归一化汇入该 session 的 <date>.ndjson。
       resolveCcDebugFile: resolveSessionCcDebugFile,
@@ -1224,7 +1274,6 @@ export function getMaker(): Maker {
       // 行时, Claude 只剩上面那份静态只读白名单, 可信第一方 server 的 call_tool
       // (浏览器自动化等高频入口)会逐次弹窗, 与 Codex 侧的静默执行行为分叉。
       getMcpToolApprovalPolicy: getDesktopMcpToolApprovalPolicy,
-      getMcpToolApprovalPresentation: getDesktopMcpToolApprovalPresentation,
       resolveClaudeSubagentModelAccess: resolveDesktopClaudeSubagentModelAccess,
       // 模型清单 SSoT = 目录（providers.json，OSS 运行时真源 / bundled 兜底）。maker-core 的
       // CLAUDE_MODELS 已删、availableModels 起始为空；host 从账号可选目录派生 cc 列表注入
@@ -1242,6 +1291,8 @@ export function getMaker(): Maker {
       resolveVerifiedContextWindow: (providerId, modelId) =>
         resolveVerifiedContextWindow(getDesktopSelectableCatalog(), 'claude-code',
           resolveDesktopModelContextProviderId(getDesktopSelectableCatalog(), 'claude-code', providerId, modelId), modelId),
+      resolveModelEfforts: (providerId, modelId) =>
+        resolveDesktopModelEfforts(getDesktopSelectableCatalog(), 'claude-code', providerId, modelId),
       // SDK PreToolUse / PostToolUse 等 in-process hook 注入点。host 自己定义 hook
       // 实现 (./claude-hooks/*.ts), maker-core 不感知具体逻辑。
       //
@@ -1559,9 +1610,6 @@ export function getMaker(): Maker {
         });
       },
       makerMemory: makerMemoryManager,
-      codexHostDynamicToolProvider: createIOSSimulatorCodexDynamicToolProvider({
-        deps: getIOSSimulatorMcpDeps({ resolveAccess: resolveIOSSimulatorAccess }),
-      }),
       // 通讯录 prompt 段有效状态(codex 版): 在 claude 的判定链之上再与「实际应用
       // 到 running app-server 的 spawn 快照」对齐 —— 开关切换后失效失败(busy,
       // contacts-ipc 折成 codexMcpRefreshed:false)时 stale 桥里没有新工具面,
@@ -2050,7 +2098,6 @@ export function getMaker(): Maker {
       // 未知或高风险 action 逐次弹卡且禁止“本会话允许”。
       // 详见 AgentDeps.getMcpToolApprovalPolicy。
       getMcpToolApprovalPolicy: getDesktopMcpToolApprovalPolicy,
-      getMcpToolApprovalPresentation: getDesktopMcpToolApprovalPresentation,
       // 远端 Codex (P2): 给 session 标 remoteHostId 的, CodexAgent 通过这个钩子拿
       // 远端 transport — SSH 连接已有 ConnectionPool (remote-ssh feature 起的) 管,
       // 这里包一层把 RemoteHost + SshDaemonTransport 装起来。
@@ -2626,13 +2673,47 @@ export function getMaker(): Maker {
       agents: makerAgents,
       storage: desktopSessionStorage,
       logger: desktopMakerLogger,
+      // Agent 在同账号另一台电脑上运行、任务与文件留在本机(见 remote-agent/)。
+      startDeviceAgentSession: createDeviceAgentStarter({
+        remoteInvoke: remoteBackgroundInvoke,
+        rgPath: getRipgrepBinaryPath,
+        // 对方的 Codex 把本机当 exec-server 执行环境：用本机随包的同一个 codex。
+        codexPath: () => getCachedBinaryStatus('codex').binaryPath ?? undefined,
+        mcpProviders: () => _mcpProviders.pi ?? _mcpProviders.codex ?? [],
+        prepareMcpBridge: getPiExtraSpawnConfig,
+        makerMemory: () => makerMemoryManager,
+        captureKnownFileBefore,
+        noteOpaqueTurnChange,
+        // 与审查读 PDF 交付物同一个一次性抽取进程。
+        extractPdfText: (data, lastPage, maxChars) => extractReviewPdfTextInChild(data, maxChars, {
+          timeoutMs: REMOTE_AGENT_PDF_TIMEOUT_MS,
+          maxPages: lastPage,
+          maxInputBytes: REMOTE_AGENT_PDF_MAX_BYTES,
+        }),
+        logger: desktopMakerLogger,
+      }),
       makerMemory: makerMemoryManager,
       visionBridge: _visionBridgeInstance.hook,
+      toolLoopReviewer: reviewToolLoop,
       // Desktop-specific session 生命周期副作用钩子。maker-core 不知道文件系统细节，
       // 启动前的 Skill 共享与关闭后的清理都由 desktop host 注入。
       lifecycleHooks: {
         prepareStartOptions: async (sessionId, opts) => {
           pendingBotRuntimeSnapshots.delete(sessionId);
+          // Agent 在另一台电脑上运行的任务：所有入口(界面、定时任务、IM、协同等)恢复时都以任务
+          // 记录为准，Agent 回到原来那台电脑。读失败按本机任务处理(本机任务的启动与原来完全一致；
+          // 另一台电脑上的任务这时用的是那台的模型来源，本机没有，会在路由上明确报错)。
+          if (opts.agentDeviceId === undefined && !opts.remoteHostId) {
+            try {
+              const persisted = await desktopSessionStorage.get(sessionId);
+              if (persisted?.agentDeviceId) opts.agentDeviceId = persisted.agentDeviceId;
+            } catch (error) {
+              desktopMakerLogger.warn('session agent device lookup failed; starting the task here', {
+                sessionId,
+                error: error instanceof Error ? error.message : String(error),
+              });
+            }
+          }
           const providerReady = await ensureCurrentAccountProviderReadiness();
           if (!providerReady) {
             // 未登录 / 正在切账号时这里恒 false。主机通路只把失败压成 errorCode +
@@ -2671,6 +2752,9 @@ export function getMaker(): Maker {
           if (!createOpts.remoteHostId && createOpts.workingDir) {
             const lease = await acquireWorktreeRuntimeLease(sessionId, createOpts.workingDir);
             if (lease) worktreeRuntimeLeases.set(opts, lease);
+            // Recheck after acquiring the directory lease: cancellation may have
+            // arrived during preparation or through another local instance.
+            assertPrecreatedSessionNotCancelled(sessionId);
           }
           let skillLinksChanged = false;
           if (!createOpts.remoteHostId && createOpts.workingDir) {
@@ -2714,6 +2798,9 @@ export function getMaker(): Maker {
             [CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY]: disabledPluginIds,
             ...(botRuntimeSnapshot
               ? {
+                  [RUNTIME_MCP_NAMES_KEY]: (_mcpProviders[createOpts.agentKind] ?? [])
+                    .filter((provider) => isBotMcpServerAllowed(createOpts.botRuntimeProfile?.mcpPolicy, provider.name))
+                    .map((provider) => provider.name),
                   [CODEX_ALLOWED_BUILTIN_PLUGIN_IDS_KEY]: [
                     ...resolveBotAllowedBuiltinPluginIds(
                       createOpts.botRuntimeProfile?.toolsetPolicy.catalog ?? [],
@@ -2825,6 +2912,8 @@ export function getMaker(): Maker {
         },
       },
     });
+    // 本机作为「Agent 运行的电脑」：同账号另一台电脑的任务可让 Agent 在这里运行。
+    installRemoteAgentHost({ getMaker: () => getMaker(), userDataDir: app.getPath('userData') });
     botRuntimeResourcePreflight = async (opts) => {
       const preflightOpts = { ...opts };
       return hydrateBotProfileRuntime(preflightOpts, buildBotRuntimeDeps(), {
@@ -3014,6 +3103,7 @@ export async function preflightBotRuntimeResources(
  * 重置 Maker 单例（切账号 / 测试用）。
  */
 export function resetMaker(): void {
+  disposeRemoteAgentHost();
   _sessionArchiveSync?.stop();
   _sessionArchiveSync = null;
   setSessionArchiveSyncRequester(null);

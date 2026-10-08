@@ -312,7 +312,6 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     /** 本会话「已注册」的桥接 MCP server 名(经 preparePiExtraSpawnConfig 下发)。 */
     serverNames?: string[];
     policy?: AgentDeps['getMcpToolApprovalPolicy'];
-    presentation?: AgentDeps['getMcpToolApprovalPresentation'];
   }
 
   function buildDeps(
@@ -322,9 +321,6 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
   ): AgentDeps {
     return {
       ...(mcp?.policy ? { getMcpToolApprovalPolicy: mcp.policy } : {}),
-      ...(mcp?.presentation
-        ? { getMcpToolApprovalPresentation: mcp.presentation }
-        : {}),
       ...(mcp?.serverNames
         ? {
           preparePiExtraSpawnConfig: async (_providers, context) => {
@@ -3232,12 +3228,10 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
         arg === '--extension' ? [captured.args[index + 1]] : []);
       expect(extensionPaths).toEqual(expect.arrayContaining([
         path.posix.join(captured.env.PI_CODING_AGENT_DIR!, 'internal-extensions', 'cindy-bridge.ts'),
-      ]));
-      // Bot 会话是产品人格,不是 coding harness:pi 原生 subagent 面必须不可见,
-      // 项目/全局 AGENTS.md 也不得从 cwd 链被吸进上下文。
-      expect(extensionPaths).not.toEqual(expect.arrayContaining([
         path.posix.join(captured.env.PI_CODING_AGENT_DIR!, 'internal-extensions', 'cindy-subagent.ts'),
       ]));
+      // Bot 共享普通任务的子代理能力，但仍保留独立人格和记忆，
+      // 不从 cwd 链加载项目/全局 AGENTS.md。
       expect(captured.args).toContain('--no-context-files');
       expect(deps.resolvePiGlobalContextHome).not.toHaveBeenCalled();
       const promptIndex = captured.args.indexOf('--append-system-prompt');
@@ -4762,38 +4756,6 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       id: 'r21',
       confirmed: true,
     });
-  });
-
-  it('uses the host security disclosure for progressive MCP approvals', async () => {
-    const disclosure = {
-      title: 'Allow Xcode to build this project?',
-      description: 'Build scripts may access files outside the project, and output is returned to the Agent.',
-    };
-    const handle = await start('auto', async () => ({ verdict: 'ask' as const }), false, {
-      serverNames: ['cindy_ios_simulator'],
-      policy: () => 'prompt-each-time',
-      presentation: () => disclosure,
-    });
-    const resolver = vi.fn(async () => ({ kind: 'permission', behavior: 'deny' }) as const);
-    handle.setInteractionResolver?.(resolver as never);
-
-    firePermissionRequest('r-build', 'mcp__cindy_ios_simulator__call_tool', {
-      name: 'build_app',
-      args: {},
-    });
-
-    expect(await waitForResponse('r-build')).toEqual({
-      type: 'extension_ui_response',
-      id: 'r-build',
-      confirmed: false,
-    });
-    expect(resolver).toHaveBeenCalledWith(
-      expect.objectContaining({
-        kind: 'permission',
-        title: disclosure.title,
-        description: disclosure.description,
-      }),
-    );
   });
 
   /**

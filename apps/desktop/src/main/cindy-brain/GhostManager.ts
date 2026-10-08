@@ -1,3 +1,5 @@
+import { findFeatureRetirement } from '../../shared/featureRetirements.js';
+import { FeatureRetirementStore } from './featureRetirementStore.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -248,6 +250,7 @@ export interface GhostPackageCommitPreparation {
 }
 
 export type UninstallRejection =
+  | { code: 'feature-retired'; reason: string }
   | { code: 'invalid-id'; reason: string }
   | { code: 'not-installed'; reason: string }
   | { code: 'approval-required'; reason: string }
@@ -503,6 +506,7 @@ export function ghostManifestHostUnsupportedReason(raw: unknown): string | null 
  */
 export class GhostManager {
   private readonly receiptStore: GhostInstallReceiptStore;
+  private readonly retirements = new FeatureRetirementStore(() => this.receiptStore.rootDir());
   private ownerContextKey: string;
   private mutationTail: Promise<void> = Promise.resolve();
   private activeMutationContext: {
@@ -1800,14 +1804,38 @@ export class GhostManager {
       if (approvalResult.state === 'approved') {
         const receipt = approvalResult.receipt;
         const localizedManifest = this.localizeApprovedManifest(receipt);
+        const retired = findFeatureRetirement(receipt.manifest);
+        let retirement: InstalledGhost['retirement'];
+        if (retired) {
+          try {
+            retirement = this.retirements.observe(
+              retired.id,
+              receipt.id,
+              this.effectiveEnabled(dir, receipt.enabled),
+            );
+          } catch (error) {
+            // Do not consume the observation on failed IO. The original receipt
+            // remains intact and the next scan retries, while execution stays off.
+            this.options.log?.warn('feature retirement record unavailable; will retry', {
+              id: receipt.id,
+              error: String(error),
+            });
+            retirement = {
+              id: retired.id,
+              eligible: this.effectiveEnabled(dir, receipt.enabled),
+              unread: false,
+            };
+          }
+        }
         result.push({
           manifest: localizedManifest,
           dir,
-          enabled: this.effectiveEnabled(dir, receipt.enabled),
+          enabled: !retired && this.effectiveEnabled(dir, receipt.enabled),
+          ...(retirement ? { retirement } : {}),
           approval: { state: 'approved', revision: receipt.revision },
           ...(receipt.taskCapabilityApproved === true ? { taskCapabilityApproved: true as const } : {}),
           trust: receipt.trust,
-          ...(receipt.manifest.skill?.items.length
+          ...(!retired && receipt.manifest.skill?.items.length
             ? {
                 approvedSkillRoot: this.receiptStore.skillSnapshotRoot(
                   receipt.id,
@@ -1869,6 +1897,7 @@ export class GhostManager {
       // 历史 manifest / receipt 中可能保留已移除的资源搜索元数据；它不参与当前
       // 运行时入口，插件本体与已批准的其它能力仍按现有授权照常可用。
       const manifest = v.manifest;
+      const retired = findFeatureRetirement(manifest);
       // icon 读失败只降级为无图标(warn),不影响意识本体可用。
       // receipt 模型:无有效批准的安装一律 enabled:false + approval:{state},不按
       // .disabled 镜像判运行(那是被 revert 的旧模型、#636 漏洞路径)。trust 只在
@@ -1880,6 +1909,7 @@ export class GhostManager {
         dir,
         enabled: false,
         approval: { state: approvalResult.state },
+        ...(retired ? { retirement: { id: retired.id, eligible: false, unread: false } } : {}),
         // 未批准安装目录里的 trust 镜像是可变字节，不能作为可信展示事实。
         trust: {
           level: 'unverified',
@@ -1915,6 +1945,13 @@ export class GhostManager {
         approvedSkillRoot: undefined,
       } satisfies InstalledGhost);
     return { ghost, list };
+  }
+
+  acknowledgeRetirement(id: string): void {
+    const ghost = this.list().find((item) => item.manifest.id === id);
+    if (!ghost?.retirement) throw new Error('Retired plugin is not installed');
+    this.retirements.acknowledge(ghost.retirement.id, id);
+    this.options.onChanged?.(this.list());
   }
 
   /** receipt 内的 base manifest + 已批准 locale 资源；不再读取可变安装目录。 */
@@ -2039,6 +2076,18 @@ export class GhostManager {
       return { rejection: { code: 'not-installed', reason: `意识 ${id} 未装入` } };
     }
     const receiptResult = this.readApproval(id);
+    if (
+      enabled &&
+      receiptResult.state === 'approved' &&
+      findFeatureRetirement(receiptResult.receipt.manifest)
+    ) {
+      return {
+        rejection: {
+          code: 'feature-retired',
+          reason: '该功能已下线，请在插件详情页查看替代插件。',
+        },
+      };
+    }
     if (receiptResult.state !== 'approved' && enabled) {
       return {
         rejection: {
@@ -2344,6 +2393,14 @@ export class GhostManager {
     const v = validateGhostManifest(manifestRaw);
     if (!v.ok) {
       return { rejection: { code: 'file-invalid', reason: `清单不合格:${v.reason}` } };
+    }
+    if (findFeatureRetirement(v.manifest)) {
+      return {
+        rejection: {
+          code: 'host-unsupported',
+          reason: '该插件依赖的内置功能已下线，请使用替代插件。',
+        },
+      };
     }
     if (!v.manifest.node && buf.byteLength > MAX_BASIC_CINDY_FILE_BYTES) {
       return {

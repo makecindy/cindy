@@ -49,7 +49,8 @@ import { captureWorktreeContent } from '../worktree/contentSnapshot';
 import { GitExecError, gitExec } from '../worktree/gitExec';
 import { acquireWorktree, releaseWorktree, parkAll } from '../worktree/WorktreePool';
 import { extractRecoveryArchive } from '../worktree/recoveryArchive';
-import { acquireWorktreeRuntimeLease, releaseWorktreeRuntimeLease } from '../worktree/runtimeLeases';
+import { releaseWorktreeRuntimeLease } from '../worktree/runtimeLeases';
+import { seedLegacySharedRuntimeLease } from './fixtures/legacySharedRuntimeLease';
 
 const exec = promisify(execFile);
 describe('worktree recovery with real Git and encrypted archives', () => {
@@ -81,9 +82,10 @@ describe('worktree recovery with real Git and encrypted archives', () => {
     return meta;
   };
 
-  it('protects a borrowed source from old recyclers after build scripts clean the worktree', async () => {
+  it('preserves a legacy borrowed source after build scripts clean the worktree', async () => {
     const meta = await createFixture('borrowed-clean');
-    const lease = (await acquireWorktreeRuntimeLease('borrower', meta.path, { crossProfile: true }))!;
+    const gitDir = await git(meta.path, 'rev-parse', '--absolute-git-dir');
+    const lease = await seedLegacySharedRuntimeLease(state.root, meta.path, path.join(gitDir, 'locked'));
     try {
       await git(meta.path, 'clean', '-fdx');
       await expect(fs.stat(path.join(meta.path, 'draft.txt'))).rejects.toMatchObject({ code: 'ENOENT' });
