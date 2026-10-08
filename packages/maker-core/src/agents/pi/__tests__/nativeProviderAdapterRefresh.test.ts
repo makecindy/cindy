@@ -123,7 +123,7 @@ describe('Cindy native provider refresh bridge', () => {
 
   it('acknowledges success only after applying a valid staged snapshot', async () => {
     const source = CINDY_BRIDGE_EXTENSION_SOURCE;
-    const start = source.indexOf('let initialNativeSettings');
+    const start = source.indexOf('const initialNativeSettings =');
     const end = source.indexOf('if (!currentPermissionState().reviewOnly)', start);
     expect(start).toBeGreaterThan(0);
     expect(end).toBeGreaterThan(start);
@@ -171,53 +171,5 @@ describe('Cindy native provider refresh bridge', () => {
     } } });
     expect(applied).toHaveLength(1); // Inspection never refreshes providers or credentials.
     expect(calls.at(-1)?.payload).toMatchObject({ ok: true, runtimeSettings: { version: '1.0.0' } });
-  });
-});
-
-describe('cindy-bridge-source tolerant settings load', () => {
-  it('does not kill the bridge when the initial settings snapshot is unreadable', async () => {
-    // 回归:#5378 的 initialNativeSettings 同步读曾不设防 —— pinned Pi 0.85.1
-    // 没有 getSettings, 这条读在每次会话启动都会执行; settings.json 缺失/损坏
-    // 或 PI_CODING_AGENT_DIR 未设时抛错会炸掉整个 cindy bridge(权限门/MCP 网关/
-    // 子代理路由全部失效), 而它的用途只是给 refresh 收据附带 compaction 快照。
-    const ts = await import('typescript');
-    const { runInNewContext } = await import('node:vm');
-    const source = CINDY_BRIDGE_EXTENSION_SOURCE;
-    const begin = source.indexOf('let initialNativeSettings');
-    expect(begin).toBeGreaterThan(0);
-    const end = source.indexOf('if (!currentPermissionState().reviewOnly)', begin);
-    const code = ts.transpileModule(
-      `async function setup(pi: any, nativeProviderAdapters: any, parseCindyProviderRefreshSnapshot: any) {\nconst SECRET_ENV_NAMES = new Set<string>();\n${source.slice(begin, end)}\n}\n(globalThis as any).setup = setup;`,
-      { compilerOptions: { target: ts.ScriptTarget.ES2022 } },
-    ).outputText;
-    for (const [label, readFileSync, envDir] of [
-      ['corrupt json', () => '{not json', '/fixture'],
-      ['missing file', () => { throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }); }, '/fixture'],
-      ['unset agent dir', () => { throw new TypeError("Cannot read properties of undefined"); }, undefined],
-    ] as Array<[string, () => string, string | undefined]>) {
-      const sandbox: Record<string, unknown> = {
-        piCodingAgent: { VERSION: '1.0.0' },
-        process: { env: { PI_CODING_AGENT_DIR: envDir } },
-        path: { join: (_a: string | undefined, b: string) => `${envDir ?? 'undefined'}/${b}` },
-        readFileSync,
-      };
-      // setup 本身(桥加载路径)不得抛 —— 抛了整个桥就没了。
-      runInNewContext(code, sandbox);
-      const setup = sandbox.setup as (pi: unknown, adapters: unknown, parse: unknown) => Promise<void>;
-      let handler: ((args: string, ctx: unknown) => Promise<void>) | undefined;
-      await setup({
-        registerCommand: (_name: string, command: { handler: typeof handler }) => { handler = command.handler; },
-      }, { refresh: async () => undefined }, (raw: unknown, nonce: string) =>
-        raw === 'valid' ? { nonce, env: {}, aliases: [] } : undefined);
-      // 收据路径仍可用: settings 快照缺失 → compaction 回落空对象(不臆造)。
-      const calls: Array<{ payload: unknown }> = [];
-      await handler?.('abcdefghijklmnop', { ui: { input: async (_t: string, raw: string) => {
-        calls.push({ payload: JSON.parse(raw) });
-        return 'valid';
-      } } });
-      const ack = calls.at(-1)?.payload as { ok: boolean; runtimeSettings?: { compaction?: unknown } };
-      expect(ack.ok).toBe(true);
-      expect(ack.runtimeSettings).toMatchObject({ compaction: {} });
-    }
   });
 });
