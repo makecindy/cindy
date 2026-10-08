@@ -219,6 +219,7 @@ import { isGlobalDropIntercepted } from '@/lib/globalDropIntercept';
 import { classifyUnclassifiedDroppedItems, getDroppedFileItems } from '@/lib/fileDrop';
 import { createLogger } from '@/lib/logger';
 import { getRemoteWorkingDirErrorMessage } from './remoteWorkingDirErrors';
+import { patchRemoteAutoTitle } from './patchRemoteAutoTitle';
 import {
   createRemoteSessionWithPrecreatedWorktree,
   forgetPendingRemotePrecreatedWorktree,
@@ -4950,6 +4951,16 @@ export function NewMakerDraftRoute() {
           const titleAgentKind = persistedAgentKind === 'cc' ? 'claude-code' : persistedAgentKind;
           // 先折叠空白并 trim 再截断,避免前导空白吃满 40 字符得到空占位(PR #296 review)。
           const placeholderTitle = objective.replace(/\s+/g, ' ').trim().slice(0, 40).trimEnd();
+          // 自动起名写回带 titleSource: 'auto'，不冒充手动改名(批量重命名只挑 auto 来源)。
+          // 旧被控端不认识该字段(会以 INVALID_PARAMS 拒绝未知 key)时退回旧口径只写标题。
+          const patchMetaAsAuto = (title: string, expectedTitle: string): Promise<void> =>
+            patchRemoteAutoTitle(
+              window.electronAPI.deviceLink.invoke,
+              deviceId,
+              remoteSessionId,
+              title,
+              expectedTitle,
+            );
           void (async () => {
             try {
               // 无文本目标(理论不可达,goal 对话框必填)不起名:被控端旧版本的
@@ -4975,11 +4986,7 @@ export function NewMakerDraftRoute() {
               // 占位写入失败(旧被控端无此窄口径 / 瞬时通道错误)单独吞掉,不中断
               // 后续智能起名——生成与写回不依赖占位成功(PR #296 review P1)。
               try {
-                await window.electronAPI.deviceLink.invoke(
-                  deviceId,
-                  'local-db:sessions:patch-meta',
-                  [remoteSessionId, { title: placeholderTitle }],
-                );
+                await patchMetaAsAuto(placeholderTitle, DEFAULT_DRAFT_SESSION_TITLE);
               } catch {
                 // 占位失败仅暂留默认名,智能标题仍会尝试生成并写回。
               }
@@ -5008,10 +5015,7 @@ export function NewMakerDraftRoute() {
               ) {
                 return;
               }
-              await window.electronAPI.deviceLink.invoke(deviceId, 'local-db:sessions:patch-meta', [
-                remoteSessionId,
-                { title },
-              ]);
+              await patchMetaAsAuto(title, current?.title ?? DEFAULT_DRAFT_SESSION_TITLE);
             } catch {
               // 起名失败不影响目标流程,侧边栏保留占位/默认名。
             }

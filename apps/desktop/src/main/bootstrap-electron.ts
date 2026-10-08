@@ -909,6 +909,7 @@ import {
 import { registerWorkingStatusIpc } from './maker-ipc/workingStatus.js';
 import { registerMakerTitleIpc } from './maker-ipc/title.js';
 import { registerAuxiliaryModelSettingsIpc } from './maker-ipc/auxiliary-model-settings.js';
+import { registerSessionTitleSettingsIpc } from './maker-ipc/retitleRecentSessions.js';
 import { registerContactsIpc } from './maker-ipc/contacts-ipc.js';
 import { disposeDesktopContactsManager } from './maker-host/maker-contacts-host.js';
 import { registerMakerHelpIpc } from './maker-ipc/help.js';
@@ -6078,7 +6079,8 @@ const registerIpcHandlers = () => {
         waitForAccountProviderModelsReady: waitForCurrentAccountProviderModelsReady,
         onProviderModelAutoRefreshConfigured: markMakerProviderRefreshConfigured,
       });
-      registerMakerTitleIpc({ isSessionTurnPendingCompletion });
+     registerMakerTitleIpc({ isSessionTurnPendingCompletion });
+      registerSessionTitleSettingsIpc();
       registerWorkingStatusIpc();
       registerAuxiliaryModelSettingsIpc();
       registerMakerHelpIpc(ipcMaker);

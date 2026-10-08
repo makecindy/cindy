@@ -48,6 +48,7 @@ import {
   getOverwritableAutoTitle,
   isUntitledSessionAwaitingAutoTitle,
   persistSessionTitleIfStillDraft,
+  patchSessionMetaInDb,
 } from '../sessions';
 
 const SESSION_ID = 's1';
@@ -72,6 +73,7 @@ function createDb(initialTitle: string): void {
     CREATE TABLE sessions (
       id TEXT PRIMARY KEY NOT NULL,
       title TEXT NOT NULL DEFAULT 'New Maker',
+      title_source TEXT,
       working_dir TEXT,
       model TEXT NOT NULL DEFAULT 'claude-sonnet-4-6',
       effort TEXT NOT NULL DEFAULT 'high',
@@ -145,9 +147,21 @@ function createDb(initialTitle: string): void {
 }
 
 function currentTitle(): string {
-  return (h.sqlite!.prepare('SELECT title FROM sessions WHERE id = ?').get(SESSION_ID) as {
-    title: string;
-  }).title;
+  return (
+    h.sqlite!.prepare('SELECT title FROM sessions WHERE id = ?').get(SESSION_ID) as {
+      title: string;
+    }
+  ).title;
+}
+
+function currentTitleSource(): string | null {
+  return (
+    h
+      .sqlite!.prepare('SELECT title_source AS titleSource FROM sessions WHERE id = ?')
+      .get(SESSION_ID) as {
+      titleSource: string | null;
+    }
+  ).titleSource;
 }
 
 // normalizeAutoTitle 的用例随实现搬到 packages/maker-shared/src/__tests__/sessionTitle.test.ts
@@ -159,13 +173,19 @@ describe('persistSessionTitleIfStillDraft — 条件写', () => {
   it('标题仍是草稿占位时写入成功', async () => {
     expect(await persistSessionTitleIfStillDraft(SESSION_ID, '帮我排查登录失败')).toBe(true);
     expect(currentTitle()).toBe('帮我排查登录失败');
+    expect(currentTitleSource()).toBe('auto');
   });
 
   it('用户已手动改名 → 期望值不匹配,拒绝写入(user rename wins)', async () => {
-    h.sqlite!.prepare('UPDATE sessions SET title = ? WHERE id = ?').run('我自己起的名字', SESSION_ID);
+    h.sqlite!.prepare('UPDATE sessions SET title = ?, title_source = ? WHERE id = ?').run(
+      '我自己起的名字',
+      'user',
+      SESSION_ID,
+    );
 
     expect(await persistSessionTitleIfStillDraft(SESSION_ID, '帮我排查登录失败')).toBe(false);
     expect(currentTitle()).toBe('我自己起的名字');
+    expect(currentTitleSource()).toBe('user');
   });
 
   it('用显式期望值覆盖上一次写的占位', async () => {
@@ -178,7 +198,11 @@ describe('persistSessionTitleIfStillDraft — 条件写', () => {
   });
 
   it('目标值等于期望值且库里确实是它 → 无需写入,报成功', async () => {
-    h.sqlite!.prepare('UPDATE sessions SET title = ? WHERE id = ?').run('设计稿-v3.png', SESSION_ID);
+    h.sqlite!.prepare('UPDATE sessions SET title = ?, title_source = ? WHERE id = ?').run(
+      '设计稿-v3.png',
+      'auto',
+      SESSION_ID,
+    );
 
     expect(
       await persistSessionTitleIfStillDraft(SESSION_ID, '设计稿-v3.png', '设计稿-v3.png'),
@@ -188,7 +212,11 @@ describe('persistSessionTitleIfStillDraft — 条件写', () => {
 
   it('目标值等于期望值但期望值已过期 → 如实报失败,不谎称已写入', async () => {
     // 资格检查之后、写入之前用户手动改了名:期望值 '设计稿-v3.png' 已不是库里的值。
-    h.sqlite!.prepare('UPDATE sessions SET title = ? WHERE id = ?').run('我自己起的名字', SESSION_ID);
+    h.sqlite!.prepare('UPDATE sessions SET title = ?, title_source = ? WHERE id = ?').run(
+      '我自己起的名字',
+      'user',
+      SESSION_ID,
+    );
 
     expect(
       await persistSessionTitleIfStillDraft(SESSION_ID, '设计稿-v3.png', '设计稿-v3.png'),
@@ -205,6 +233,93 @@ describe('persistSessionTitleIfStillDraft — 条件写', () => {
   it('写入前归一化:折叠空白并截断 40 字', async () => {
     await persistSessionTitleIfStillDraft(SESSION_ID, `  ${'排'.repeat(60)}  `);
     expect(currentTitle()).toBe('排'.repeat(40));
+    expect(currentTitleSource()).toBe('auto');
+  });
+
+  it('title_source=user 时即使标题仍等于期望值也拒绝覆盖', async () => {
+    h.sqlite!.prepare('UPDATE sessions SET title = ?, title_source = ? WHERE id = ?').run(
+      '帮我排查登录失败',
+      'user',
+      SESSION_ID,
+    );
+
+    expect(
+      await persistSessionTitleIfStillDraft(SESSION_ID, '登录失败排查', '帮我排查登录失败'),
+    ).toBe(false);
+    expect(currentTitle()).toBe('帮我排查登录失败');
+    expect(currentTitleSource()).toBe('user');
+  });
+});
+
+describe('remote automatic title metadata writes', () => {
+  beforeEach(() => createDb('New Maker'));
+
+  it('marks placeholder and smart titles as auto', async () => {
+    await patchSessionMetaInDb(SESSION_ID, {
+      title: 'placeholder',
+      titleSource: 'auto',
+      expectedTitle: 'New Maker',
+    });
+    expect(currentTitleSource()).toBe('auto');
+
+    await patchSessionMetaInDb(SESSION_ID, {
+      title: 'smart title',
+      titleSource: 'auto',
+      expectedTitle: 'placeholder',
+    });
+    expect(currentTitle()).toBe('smart title');
+    expect(currentTitleSource()).toBe('auto');
+  });
+
+  it('keeps a manual title even when it matches the expected placeholder', async () => {
+    h.sqlite!.prepare('UPDATE sessions SET title_source = ? WHERE id = ?').run('user', SESSION_ID);
+
+    await patchSessionMetaInDb(SESSION_ID, {
+      title: 'automatic title',
+      titleSource: 'auto',
+      expectedTitle: 'New Maker',
+    });
+
+    expect(currentTitle()).toBe('New Maker');
+    expect(currentTitleSource()).toBe('user');
+  });
+
+  it('does not overwrite a title that changed after the remote read', async () => {
+    h.sqlite!.prepare('UPDATE sessions SET title = ?, title_source = ? WHERE id = ?').run(
+      'newer title',
+      'auto',
+      SESSION_ID,
+    );
+
+    await patchSessionMetaInDb(SESSION_ID, {
+      title: 'stale title',
+      titleSource: 'auto',
+      expectedTitle: 'New Maker',
+    });
+
+    expect(currentTitle()).toBe('newer title');
+  });
+
+  it('continues to mark ordinary remote renames as user', async () => {
+    await patchSessionMetaInDb(SESSION_ID, { title: 'manual title' });
+
+    expect(currentTitle()).toBe('manual title');
+    expect(currentTitleSource()).toBe('user');
+  });
+
+  it.each([
+    { title: 'title', titleSource: 'auto' },
+    { title: 'title', expectedTitle: 'New Maker' },
+    { title: 'title', titleSource: 'user', expectedTitle: 'New Maker' },
+    { title: 'title', titleSource: 'auto', expectedTitle: 1 },
+    { title: 'title', titleSource: 'auto', expectedTitle: 'New Maker', status: 'deleted' },
+    { title: 'title', titleSource: 'auto', expectedTitle: 'New Maker', pinnedAt: null },
+  ])('rejects malformed automatic metadata writes: %j', async (patch) => {
+    await expect(
+      patchSessionMetaInDb(SESSION_ID, patch as Parameters<typeof patchSessionMetaInDb>[1]),
+    ).rejects.toThrow(/\[INVALID_PARAMS\]/);
+    expect(currentTitle()).toBe('New Maker');
+    expect(currentTitleSource()).toBeNull();
   });
 });
 
@@ -212,12 +327,10 @@ describe('isUntitledSessionAwaitingAutoTitle — 资格', () => {
   it('标题仍是草稿占位 → 有资格(不看消息数与 userSendAt)', async () => {
     createDb('New Maker');
     h.sqlite!.prepare('UPDATE sessions SET user_send_at = 123 WHERE id = ?').run(SESSION_ID);
-    h.sqlite!
-      .prepare(
-        `INSERT INTO messages (id, client_id, session_id, role, content, created_at)
+    h.sqlite!.prepare(
+      `INSERT INTO messages (id, client_id, session_id, role, content, created_at)
          VALUES ('m1', 'c1', ?, 'user', '{}', 1)`,
-      )
-      .run(SESSION_ID);
+    ).run(SESSION_ID);
 
     expect(await isUntitledSessionAwaitingAutoTitle(SESSION_ID)).toBe(true);
   });
@@ -231,6 +344,7 @@ describe('isUntitledSessionAwaitingAutoTitle — 资格', () => {
 
   it('用户手动改过名 → 无资格', async () => {
     createDb('我自己起的名字');
+    h.sqlite!.prepare('UPDATE sessions SET title_source = ? WHERE id = ?').run('user', SESSION_ID);
 
     expect(await isUntitledSessionAwaitingAutoTitle(SESSION_ID, '设计稿-v3.png')).toBe(false);
   });
@@ -243,7 +357,10 @@ describe('isUntitledSessionAwaitingAutoTitle — 资格', () => {
 
   it('fork 会话的 [Fork 占位仍有资格(带 parentSessionId)', async () => {
     createDb('[Fork] 源会话标题');
-    h.sqlite!.prepare('UPDATE sessions SET parent_session_id = ? WHERE id = ?').run('src', SESSION_ID);
+    h.sqlite!.prepare('UPDATE sessions SET parent_session_id = ? WHERE id = ?').run(
+      'src',
+      SESSION_ID,
+    );
 
     expect(await isUntitledSessionAwaitingAutoTitle(SESSION_ID)).toBe(true);
   });
@@ -259,7 +376,10 @@ describe('getOverwritableAutoTitle — 覆写目标', () => {
   it('返回当前标题本身,而不是草稿默认值', async () => {
     // fork 与合成占位都不等于草稿默认;猜期望值会让条件写直接落空。
     createDb('[Fork] 源会话标题');
-    h.sqlite!.prepare('UPDATE sessions SET parent_session_id = ? WHERE id = ?').run('src', SESSION_ID);
+    h.sqlite!.prepare('UPDATE sessions SET parent_session_id = ? WHERE id = ?').run(
+      'src',
+      SESSION_ID,
+    );
     expect(await getOverwritableAutoTitle(SESSION_ID)).toMatchObject({
       title: '[Fork] 源会话标题',
       isDefaultDraftTitle: false,
@@ -291,7 +411,10 @@ describe('getOverwritableAutoTitle — 覆写目标', () => {
 
   it('用它当期望值就能覆写 fork 占位(端到端条件写)', async () => {
     createDb('[Fork] 源会话标题');
-    h.sqlite!.prepare('UPDATE sessions SET parent_session_id = ? WHERE id = ?').run('src', SESSION_ID);
+    h.sqlite!.prepare('UPDATE sessions SET parent_session_id = ? WHERE id = ?').run(
+      'src',
+      SESSION_ID,
+    );
 
     const target = await getOverwritableAutoTitle(SESSION_ID);
     expect(
@@ -302,7 +425,15 @@ describe('getOverwritableAutoTitle — 覆写目标', () => {
 
   it('用户改过名 → null(调用方据此停止尝试)', async () => {
     createDb('我自己起的名字');
+    h.sqlite!.prepare('UPDATE sessions SET title_source = ? WHERE id = ?').run('user', SESSION_ID);
 
     expect(await getOverwritableAutoTitle(SESSION_ID, '设计稿-v3.png')).toBeNull();
+  });
+
+  it('title_source=user 时默认草稿标题也不再有资格', async () => {
+    createDb('New Maker');
+    h.sqlite!.prepare('UPDATE sessions SET title_source = ? WHERE id = ?').run('user', SESSION_ID);
+
+    expect(await getOverwritableAutoTitle(SESSION_ID)).toBeNull();
   });
 });

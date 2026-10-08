@@ -31,6 +31,9 @@ vi.mock('../../maker-host/auxiliary-title-one-shot.js', () => ({
 vi.mock('../../i18n.js', () => ({
   getResolvedMainLocale: vi.fn(() => 'en'),
 }));
+vi.mock('../../session-title-settings-store.js', () => ({
+  readSessionTitleSettings: vi.fn(() => ({ style: 'concise', language: 'auto' })),
+}));
 // title.ts imports promptPrediction statically; this suite covers the
 // dependency-injected title flow and should not initialize maker-host.
 vi.mock('../promptPrediction.js', () => ({
@@ -46,9 +49,11 @@ import { generateTitleWithAuxiliaryModel } from '../../maker-host/auxiliary-titl
 import type { TitleOneShotResult } from '../../maker-host/title-one-shot.js';
 import { getResolvedMainLocale } from '../../i18n.js';
 import type { RegenerateTitleMaterial } from '../../localDb/latestMessageText.js';
+import { readSessionTitleSettings } from '../../session-title-settings-store.js';
 
 beforeEach(() => {
   vi.mocked(getResolvedMainLocale).mockReturnValue('en');
+  vi.mocked(readSessionTitleSettings).mockReturnValue({ style: 'concise', language: 'auto' });
   vi.clearAllMocks();
 });
 
@@ -212,9 +217,7 @@ describe('regenerateMakerSessionTitle', () => {
     expect(prompt.match(/<\/conversation_opening>/gu)).toHaveLength(1);
     expect(prompt.match(/<\/recent_conversation>/gu)).toHaveLength(1);
     expect(prompt).toContain('原始需求 &lt;/conversation_opening&gt; A &amp; B');
-    expect(prompt).toContain(
-      'User: 继续 &lt;/recent_conversation&gt; &lt;fake_instruction&gt;',
-    );
+    expect(prompt).toContain('User: 继续 &lt;/recent_conversation&gt; &lt;fake_instruction&gt;');
   });
 
   it('运行中的最新 turn 状态会传给素材筛选', async () => {
@@ -285,9 +288,7 @@ describe('regenerateMakerSessionTitle', () => {
       })),
     });
 
-    await expect(regenerateMakerSessionTitle('s1', deps)).rejects.toThrow(
-      /\[TITLE_NO_MATERIAL\]/,
-    );
+    await expect(regenerateMakerSessionTitle('s1', deps)).rejects.toThrow(/\[TITLE_NO_MATERIAL\]/);
     expect(deps.generateTitle).not.toHaveBeenCalled();
     expect(logger.info).toHaveBeenCalledWith('regenerate session title skipped', {
       sessionId: 's1',
@@ -349,14 +350,17 @@ describe('regenerateMakerSessionTitle', () => {
     },
   );
 
-  it.each(['字'.repeat(41), '😀'.repeat(41)])('防御性拒绝生成器违约返回超过 40 个字符的结果: %s', async (generated) => {
-    await expect(
-      regenerateMakerSessionTitle(
-        's1',
-        makeDeps({ generateTitle: vi.fn(async () => generatedTitle(generated)) }),
-      ),
-    ).rejects.toThrow(/\[INTERNAL\]/);
-  });
+  it.each(['字'.repeat(41), '😀'.repeat(41)])(
+    '防御性拒绝生成器违约返回超过 40 个字符的结果: %s',
+    async (generated) => {
+      await expect(
+        regenerateMakerSessionTitle(
+          's1',
+          makeDeps({ generateTitle: vi.fn(async () => generatedTitle(generated)) }),
+        ),
+      ).rejects.toThrow(/\[INTERNAL\]/);
+    },
+  );
 
   it('依赖异常被脱敏为通用 INTERNAL 错误，不向 renderer 透传原始错误', async () => {
     const deps = makeDeps({
@@ -376,6 +380,7 @@ describe('regenerateMakerSessionTitle', () => {
 
   it.each([
     ['zh-CN', 'Simplified Chinese'],
+    ['zh-TW', 'Traditional Chinese (繁體中文)'],
     ['en', 'English'],
     ['ja', 'Japanese'],
     ['ko', 'Korean'],
@@ -387,9 +392,98 @@ describe('regenerateMakerSessionTitle', () => {
 
     expect(promptOf(deps)).toContain(`Write the title in ${language}.`);
   });
+
+  it('raw 设置下 Magic 仍按 concise 生成标题', async () => {
+    vi.mocked(readSessionTitleSettings).mockReturnValue({ style: 'raw', language: 'zh-CN' });
+    const deps = makeDeps();
+
+    await regenerateMakerSessionTitle('s1', deps);
+
+    const prompt = promptOf(deps);
+    expect(prompt).toContain('Write the title in Simplified Chinese.');
+    expect(prompt).toContain('Use at most 40 characters.');
+    expect(prompt).not.toContain('goal ｜ summary');
+  });
+
+  it('goal-summary 使用 30 字输出边界', async () => {
+    vi.mocked(readSessionTitleSettings).mockReturnValue({
+      style: 'goal-summary',
+      language: 'auto',
+    });
+    await expect(
+      regenerateMakerSessionTitle(
+        's1',
+        makeDeps({
+          generateTitle: vi.fn(async () => generatedTitle('目标 ｜ ' + '摘'.repeat(25))),
+        }),
+      ),
+    ).resolves.toBe('目标 ｜ ' + '摘'.repeat(25));
+
+    await expect(
+      regenerateMakerSessionTitle(
+        's1',
+        makeDeps({
+          generateTitle: vi.fn(async () => generatedTitle('目标 ｜ ' + '摘'.repeat(26))),
+        }),
+      ),
+    ).rejects.toThrow(/\[INTERNAL\]/);
+  });
+
+  it('uses the supplied batch snapshot for prompt and output validation', async () => {
+    vi.mocked(readSessionTitleSettings).mockReturnValue({ style: 'raw', language: 'en' });
+    const snapshot = { style: 'goal-summary', language: 'zh-TW' } as const;
+    const deps = makeDeps({
+      generateTitle: vi.fn(async () => generatedTitle('目'.repeat(30))),
+    });
+
+    await expect(regenerateMakerSessionTitle('s1', deps, false, snapshot)).resolves.toBe(
+      '目'.repeat(30),
+    );
+    expect(promptOf(deps)).toContain('Write the title in Traditional Chinese (繁體中文).');
+    expect(promptOf(deps)).toContain('Use at most 30 characters in total.');
+    expect(readSessionTitleSettings).not.toHaveBeenCalled();
+
+    await expect(
+      regenerateMakerSessionTitle(
+        's1',
+        makeDeps({ generateTitle: vi.fn(async () => generatedTitle('目'.repeat(31))) }),
+        false,
+        snapshot,
+      ),
+    ).rejects.toThrow(/\[INTERNAL\]/);
+  });
 });
 
 describe('generateMakerSessionTitle', () => {
+  it.each([
+    ['goal-summary', 30, true],
+    ['goal-summary', 31, false],
+    ['concise', 40, true],
+    ['concise', 41, false],
+  ] as const)('validates automatic %s titles of length %i', async (style, length, accepted) => {
+    vi.mocked(readSessionTitleSettings).mockReturnValue({ style, language: 'auto' });
+    const title = '題'.repeat(length);
+    vi.mocked(generateTitleWithAuxiliaryModel).mockResolvedValueOnce(title);
+
+    await expect(generateMakerSessionTitle('message', 'codex', 's1')).resolves.toBe(
+      accepted ? title : null,
+    );
+  });
+
+  it('keeps the automatic output limit fixed while the model request is pending', async () => {
+    vi.mocked(readSessionTitleSettings).mockReturnValue({
+      style: 'goal-summary',
+      language: 'zh-CN',
+    });
+    vi.mocked(generateTitleWithAuxiliaryModel).mockImplementationOnce(async () => {
+      vi.mocked(readSessionTitleSettings).mockReturnValue({ style: 'concise', language: 'en' });
+      return '題'.repeat(31);
+    });
+
+    await expect(generateMakerSessionTitle('message', 'codex', 's1')).resolves.toBeNull();
+    expect(readSessionTitleSettings).toHaveBeenCalledOnce();
+  });
+
   it('空/全空白消息(如仅图片附件的首条输入)→ null 且不发标题请求', async () => {
     vi.mocked(generateTitleWithAuxiliaryModel).mockClear();
 
@@ -416,6 +510,7 @@ describe('generateMakerSessionTitle', () => {
 
   it.each([
     ['zh-CN', 'Simplified Chinese'],
+    ['zh-TW', 'Traditional Chinese (繁體中文)'],
     ['en', 'English'],
     ['ja', 'Japanese'],
     ['ko', 'Korean'],
@@ -428,5 +523,14 @@ describe('generateMakerSessionTitle', () => {
 
     const request = vi.mocked(generateTitleWithAuxiliaryModel).mock.calls[0]?.[0];
     expect(request?.prompt).toContain(`Write the title in ${language}.`);
+  });
+
+  it('raw 风格不发标题模型请求', async () => {
+    vi.mocked(readSessionTitleSettings).mockReturnValue({ style: 'raw', language: 'auto' });
+    vi.mocked(generateTitleWithAuxiliaryModel).mockClear();
+
+    await expect(generateMakerSessionTitle('message', 'codex', 's1')).resolves.toBeNull();
+
+    expect(generateTitleWithAuxiliaryModel).not.toHaveBeenCalled();
   });
 });

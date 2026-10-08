@@ -26,6 +26,7 @@ import { SharedTaskDialog } from '@/features/device-link/SharedTaskDialog';
 import { NotificationSection } from './NotificationSection';
 import { WindowBehaviorSection } from './WindowBehaviorSection';
 import { ComposerSendShortcutSection } from './ComposerSendShortcutSection';
+import { SessionTitleSection } from './SessionTitleSection';
 import { KeyboardShortcutsSection } from './KeyboardShortcutsSection';
 import { AgentIslandSection } from './AgentIslandSection';
 import { LanguageSection } from './LanguageSection';
@@ -411,6 +412,15 @@ export function SettingsView() {
                       aria-label={t('settings.sections.composer')}
                     >
                       <ComposerSendShortcutSection />
+                    </section>
+
+                    {/* Section — Session automatic naming preferences. */}
+                    <section
+                      id="settings-session-title"
+                      className="py-[18px]"
+                      aria-label={t('settings.sections.sessionTitle')}
+                    >
+                      <SessionTitleSection />
                     </section>
 
                     {/* Section — Collaboration. */}

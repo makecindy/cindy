@@ -55,6 +55,8 @@ const SESSION_SOURCES = [
   'cindy-make-merge',
 ] as const satisfies readonly SessionSource[];
 
+const SESSION_TITLE_SOURCES = ['auto', 'user'] as const;
+
 export const sessions = sqliteTable(
   'sessions',
   {
@@ -195,6 +197,12 @@ export const sessions = sqliteTable(
      * NULL = 无记录(非 IM 任务或本列上线前建的任务)。
      */
     imDefaultRoute: text('im_default_route'),
+    /**
+     * 标题写入来源:'auto'=系统自动起名/占位,'user'=用户手动改名。
+     * NULL=本列上线前的存量会话(来源未知)。批量重命名只处理 'auto',
+     * NULL 与 'user' 永不触碰——宁可少改,不冒覆盖用户手改名的险。
+     */
+    titleSource: text('title_source', { enum: SESSION_TITLE_SOURCES }),
     /**
      * 本 session 创建时是否注入了 project-context 知识（来自 .cindy/project-knowledge/）。
      * 仅在创建瞬间由 main IPC 写入；后续不变。

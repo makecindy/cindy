@@ -291,6 +291,11 @@ export const MAKER_INVOKE = {
   AUTO_TITLE: 'maker:auto-title',
   // 重命名输入框 Magic 按钮:按会话最新对话内容重新生成标题(读 DB 素材,失败返 null)
   REGENERATE_TITLE: 'maker:regenerate-title',
+  /** 会话自动命名风格与语言偏好,以及按当前偏好批量整理最近会话。 */
+  SESSION_TITLE_SETTINGS_GET: 'maker:session-title-settings:get',
+  SESSION_TITLE_SETTINGS_SET: 'maker:session-title-settings:set',
+  SESSION_TITLE_SETTINGS_RESET: 'maker:session-title-settings:reset',
+  RETITLE_RECENT_SESSIONS: 'maker:retitle-recent-sessions',
   /** 输入框推荐提示词:turn 结束后预测用户下一步输入(走 titleModel 轻量 one-shot)。 */
   PREDICT_PROMPT: 'maker:predict-prompt',
   WORKING_STATUS: 'maker:working-status',

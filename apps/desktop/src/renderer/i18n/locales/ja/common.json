@@ -778,7 +778,8 @@
       "windowBehavior": "アプリの動作",
       "shortcuts": "キーボードショートカット",
       "mcpServers": "カスタム MCP",
-      "bots": "パートナー"
+      "bots": "パートナー",
+      "sessionTitle": "タスク命名"
     },
     "remote": {
       "title": "リモートマシン",
@@ -3669,6 +3670,50 @@
         "cindyHy3": "Hy3",
         "cindyDeepseekV4Flash": "DeepSeek v4 flash",
         "cindyQwen38Flash": "Qwen 3.8 Flash"
+      }
+    },
+    "sessionTitle": {
+      "title": "タスク命名",
+      "styleLabel": "自動命名スタイル",
+      "styleHint": "最初のメッセージから新しいタスクのタイトルを作る方法を選びます。",
+      "languageLabel": "タイトルの言語",
+      "languageHint": "スマート命名で使います。原文切り詰めでは元の言語を保ちます。",
+      "retitleLabel": "最近のタスクを再命名",
+      "retitleHint": "Cindy が自動命名したタスクだけが対象です。手動タイトルと由来不明の古いタイトルはスキップします。",
+      "retitleAction": "最近を再命名",
+      "styles": {
+        "concise": {
+          "label": "スマート・簡潔",
+          "description": "現在と同じ短いトピックタイトルを生成します。"
+        },
+        "goal-summary": {
+          "label": "スマート・目的｜要約",
+          "description": "十分な情報がある場合、短い目的と要約の構造で出力します。"
+        },
+        "raw": {
+          "label": "原文切り詰め",
+          "description": "命名モデルを呼ばず、最初のメッセージをそのまま使います。"
+        }
+      },
+      "languages": {
+        "auto": "インターフェイスに従う",
+        "zh-CN": "简体中文",
+        "zh-TW": "繁體中文",
+        "en": "English",
+        "ja": "日本語",
+        "ko": "한국어"
+      },
+      "dialog": {
+        "title": "最近のタスクを再命名しますか？",
+        "description": "現在のスタイルと言語で、最近自動命名されたタスクを再命名できます。手動タイトルは変更されません。",
+        "sevenDays": "過去 7 日",
+        "thirtyDays": "過去 30 日",
+        "notNow": "今はしない"
+      },
+      "toast": {
+        "saveFailed": "タスク命名設定を保存できませんでした",
+        "renamed": "{{total}} 件中 {{renamed}} 件を再命名しました",
+        "retitleFailed": "最近のタスクを再命名できませんでした"
       }
     },
     "compaction": {

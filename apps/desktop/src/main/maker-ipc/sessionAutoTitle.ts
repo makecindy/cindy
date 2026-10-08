@@ -19,7 +19,8 @@
  *
  * `isUserText=false`(纯附件消息合成的描述,如文件名 /「图片」)只写占位、**绝不
  * 调用标题模型**:模型拿不到实质内容会返回「我没有看到用户消息的内容」这类回复,
- * 线上出现过。这类占位记进归属表,等用户真正打字时再替换成他写的内容。
+ * 线上出现过。占位写入会落 `title_source='auto'`,等用户真正打字时再替换成
+ * 他写的内容。
  */
 
 import type { AgentKind } from '@cindy/maker-core';
@@ -29,7 +30,6 @@ import {
   getOverwritableAutoTitle,
   isUntitledSessionAwaitingAutoTitle,
   persistSessionTitleIfStillDraft,
-  setOnUserSessionTitleWritten,
   type OverwritableAutoTitleTarget,
 } from '../localDb/ipc/sessions.js';
 import { createLogger } from '../logger.js';
@@ -86,10 +86,9 @@ const defaultDeps: SessionAutoTitleDeps = {
 /**
  * 纯附件消息合成的占位标题(sessionId → 写进 DB 的那个串)。
  *
- * `sessions` 表只有一个 title 字段、不记录「谁写的」,所以在内存里记住哪些标题是
- * 系统合成的:用户后来真正打字时才能安全覆盖它,而他手动改的名不会被冲掉。
- * 重启后记忆丢失 → 合成占位固化为正式标题(用户仍可手动改名)。这是刻意选择的
- * 失败模式,换来不动 schema migration。
+ * DB 的 `title_source` 能稳定挡住用户手动改名；这张短期表只负责记录「上一条
+ * 纯附件占位的具体文本」,让紧随其后的用户文字能用它做条件写期望值。重启后
+ * 这条内存提示丢失,但批量重命名仍只认 DB 里的 `title_source='auto'`。
  */
 const synthesizedPlaceholders = new Map<string, string>();
 
@@ -118,17 +117,6 @@ function enqueuePerSession<T>(sessionId: string, task: () => Promise<T>): Promis
 }
 
 /**
- * 用户手动改过名的会话(本进程内)。
- *
- * 条件写只能挡住「标题变了」的改名:用户把标题保存成与占位**逐字相同**的串时
- * `WHERE title = 期望值` 依然命中,随后的智能标题会盖掉他刚保存的名字
- * (PR #510 review P1)。`sessions` 表没有「谁写的」这一列,所以由改名出口显式
- * 通知,这里记下来直接收手。重启后遗忘 —— 那时标题早已不是系统占位,资格检查
- * 本身就会拦住,不需要持久化。
- */
-const manuallyRenamed = new Set<string>();
-
-/**
  * 是否装有启用中的 will-user-message 拦截意识。由 register 注入(避免
  * maker-ipc → cindy-brain 的额外静态依赖),未注入时按"没有"处理。
  */
@@ -141,10 +129,6 @@ let isUserMessageScreeningActive: (() => boolean) | null = null;
 export function registerSessionAutoTitleHooks(hooks?: {
   isUserMessageScreeningActive?: () => boolean;
 }): void {
-  setOnUserSessionTitleWritten((sessionId) => {
-    manuallyRenamed.add(sessionId);
-    synthesizedPlaceholders.delete(sessionId);
-  });
   if (hooks?.isUserMessageScreeningActive) {
     isUserMessageScreeningActive = hooks.isUserMessageScreeningActive;
   }
@@ -153,13 +137,11 @@ export function registerSessionAutoTitleHooks(hooks?: {
 /** 测试专用:清空归属表与串行队列。 */
 export function __resetSessionAutoTitleStateForTest(): void {
   synthesizedPlaceholders.clear();
-  manuallyRenamed.clear();
   queues.clear();
 }
 
 /** 会话是否还需要自动起名(标题仍是系统占位、且用户没手动改过名)。 */
 export async function isSessionAutoTitleEligible(sessionId: string): Promise<boolean> {
-  if (manuallyRenamed.has(sessionId)) return false;
   const eligible = await isUntitledSessionAwaitingAutoTitle(
     sessionId,
     synthesizedPlaceholders.get(sessionId),
@@ -177,10 +159,6 @@ async function runUnsynchronized(
 ): Promise<SessionAutoTitleResult> {
   const seedText = request.text.trim();
   if (!seedText) return { applied: false, done: false };
-
-  // 用户已经手动给过名字 —— 条件写挡不住"同值改名"(WHERE title = 期望值 仍命中),
-  // 只能靠这条显式记号收手(review P1)。
-  if (manuallyRenamed.has(request.sessionId)) return { applied: false, done: true };
 
   const remembered = synthesizedPlaceholders.get(request.sessionId);
 
@@ -246,10 +224,6 @@ async function runUnsynchronized(
   // 这中间隔着一次模型调用,用户完全来得及在这段时间里改名。改成别的串时条件写
   // 自然落空;改成与占位**逐字相同**的串时条件写仍会命中,所以每次落笔前都要再
   // 看一眼这条记号(review P1)。
-  if (manuallyRenamed.has(request.sessionId)) {
-    return { applied: placeholderPersisted, done: true };
-  }
-
   // 占位写入没被确认时重读一次权威标题。`persistSessionTitleIfStillDraft` 的 UPDATE
   // 与回读是两次 worker RPC:回读那一跳失败时更新其实已经提交,这里却只看到 false。
   // 不重读的话,智能标题会拿着过期的期望值去写、必然落空,而库里那个已提交的占位
@@ -311,10 +285,6 @@ async function runUnsynchronized(
   // 第二句话 —— 标题就不再对应会话的开头了,那才是 bug。真正的瞬时失败是"占位也
   // 没写进去",那时 placeholderLive 为 false,照旧可重试。
   if (!generated) return { applied: placeholderLive, done: placeholderLive };
-  if (manuallyRenamed.has(request.sessionId)) {
-    return { applied: placeholderLive, done: true };
-  }
-
   let smartPersisted = false;
   try {
     smartPersisted = await deps.persistTitle(request.sessionId, generated, expectedForSmart);
