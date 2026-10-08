@@ -19,6 +19,7 @@ import {
  */
 
 export type ComposerSuggestionActionId =
+  | 'retry-plugins'
   | 'attach-files'
   | 'new-goal'
   | 'plan-mode'

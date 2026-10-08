@@ -34,7 +34,7 @@ it.each(['caller cancelled', 'target disabled', 'link closed', 'still valid'])(
       openLinkCloseEpochs: epochs,
       ensureOnlineForRequest: async () => {},
       client: { invoke },
-      parseSharedTaskPeer: () => null,
+      isScopedPeer: () => false,
       tryPeerInvoke: async () => null,
       resolveRemoteInvokeTimeoutMs: () => undefined,
       openRemoteLink: reopen,

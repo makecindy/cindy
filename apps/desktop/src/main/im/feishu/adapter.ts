@@ -398,6 +398,8 @@ export function buildFeishuAdapter(
         return {
           agentText: `${replyPrefix}${event.text}`,
           contextSnapshot: captureImContext({ replyPrefix, replyMessageCount: 1 }),
+          // 审阅器只见过滤后的同一份引用, 被拦下的成员文本不外传给审阅模型。
+          replyContext: safeReply,
         };
       }
       // 群主流 @ 开新话题: 上下文取数 lane 与路由 lane 分离(见

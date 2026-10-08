@@ -78,7 +78,7 @@
   "returnToPlugin": "プラグインに戻る",
   "computerPreview": "パソコンからのウェブプレビュー",
   "previewFailed": "プレビューを読み込めません。パソコンの接続とウェブサービスを確認してください。",
-  "simulatorOnComputer": "シミュレータはこのパソコンで実行されています。パソコンの画面に移動して確認・操作してください。",
+  "unsupportedOperation": "このバージョンではこの操作に対応していません。パソコンのプラグイン詳細で利用可能な操作を確認してください。",
   "nativeStepHint": "下でこの設定を完了できます",
   "shareMedia": "共有または保存",
   "frequency_daily": "毎日",

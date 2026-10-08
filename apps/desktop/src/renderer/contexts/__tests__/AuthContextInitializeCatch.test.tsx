@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
-import { act, cleanup, render, screen } from '@testing-library/react';
+import { act, cleanup, render, renderHook, screen, waitFor } from '@testing-library/react';
+import type { DesktopLoginActionResult } from '@/lib/authService';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
@@ -17,8 +18,10 @@ const mocks = vi.hoisted(() => ({
     initialize: vi.fn<() => Promise<unknown>>(),
     onAuthStateChange: vi.fn(() => () => {}),
     dispose: vi.fn(),
-    getLoginState: vi.fn(async () => ({ ok: true, state: null })),
-    dispatchLoginAction: vi.fn(async () => ({ ok: true, state: null })),
+    getLoginState: vi.fn<() => Promise<DesktopLoginActionResult>>(),
+    dispatchLoginAction: vi.fn<() => Promise<DesktopLoginActionResult>>(),
+    beginAddAccount: vi.fn<() => Promise<DesktopLoginActionResult>>(),
+    cancelAddAccount: vi.fn(async () => {}),
     logout: vi.fn(async () => {}),
   },
   logError: vi.fn(),
@@ -50,6 +53,7 @@ vi.mock('@/lib/logger', () => ({
 }));
 
 import { AuthProvider, useAuth } from '../AuthContext';
+import { useLogin } from '@/hooks/useLogin';
 
 function AuthProbe() {
   const { isInitializing, isAuthenticated, user, loginState } = useAuth();
@@ -83,6 +87,103 @@ afterEach(() => {
 });
 
 describe('AuthContext initialize .catch 归一未登录', () => {
+  it.each(['load', 'add-account', 'dispatch'] as const)(
+    'keeps Retry-After with the %s result through retries, success, rejection and cancellation',
+    async (entry) => {
+      mocks.service.initialize.mockResolvedValue({ isAuthenticated: false, isCanary: false });
+      const failure: DesktopLoginActionResult = {
+        success: false,
+        code: 'RATE_LIMITED',
+        retryAt: 1_800_000_000_000,
+        state: { step: 'error', code: 'RATE_LIMITED', recoverTo: 'identifier' },
+      };
+      const result = renderHook(
+        () => ({
+          auth: useAuth(),
+          login: useLogin({ autoLoad: false }),
+        }),
+        { wrapper: AuthProvider },
+      );
+      await waitFor(() => expect(result.result.current.auth.isInitializing).toBe(false));
+      const invoke = () =>
+        entry === 'load'
+          ? result.result.current.auth.loadLoginState()
+          : entry === 'add-account'
+            ? result.result.current.auth.beginAddAccount()
+            : result.result.current.login.dispatch({ type: 'reset' });
+      const service =
+        entry === 'load'
+          ? mocks.service.getLoginState
+          : entry === 'add-account'
+            ? mocks.service.beginAddAccount
+            : mocks.service.dispatchLoginAction;
+      service.mockResolvedValue(failure);
+      await act(async () => {
+        await invoke();
+      });
+      expect(result.result.current.login.retryAt).toBe(failure.retryAt);
+      // A renderer reload receives main's already-cached screen as success,
+      // with no top-level error envelope. It must preserve the original deadline.
+      mocks.service.getLoginState.mockResolvedValue({
+        success: true,
+        state: { ...failure.state!, retryAt: failure.retryAt },
+      });
+      await act(async () => {
+        await result.result.current.auth.loadLoginState();
+      });
+      expect(result.result.current.login.retryAt).toBe(failure.retryAt);
+      // A later response with no header must not inherit the earlier deadline.
+      service.mockResolvedValue({ ...failure, retryAt: undefined });
+      await act(async () => {
+        await invoke();
+      });
+      expect(result.result.current.login.retryAt).toBeUndefined();
+      service.mockResolvedValue(failure);
+      await act(async () => {
+        await invoke();
+      });
+      mocks.service.dispatchLoginAction.mockResolvedValue({
+        success: false,
+        code: 'CREDENTIAL_STORE_UNAVAILABLE',
+        state: { step: 'error', code: 'CREDENTIAL_STORE_UNAVAILABLE', recoverTo: 'identifier' },
+      });
+      await act(async () => {
+        await result.result.current.login.dispatch({ type: 'reset' });
+      });
+      expect(result.result.current.login.retryAt).toBeUndefined();
+      service.mockResolvedValue(failure);
+      await act(async () => {
+        await invoke();
+      });
+      mocks.service.dispatchLoginAction.mockResolvedValue({
+        success: true,
+        state: { step: 'browser-redirect', label: 'Example SSO' },
+      });
+      await act(async () => {
+        await result.result.current.login.dispatch({ type: 'reset' });
+      });
+      expect(result.result.current.login.retryAt).toBeUndefined();
+      service.mockResolvedValue(failure);
+      await act(async () => {
+        await invoke();
+      });
+      mocks.service.dispatchLoginAction.mockRejectedValueOnce(new Error('IPC unavailable'));
+      await act(async () => {
+        await result.result.current.login.dispatch({ type: 'reset' });
+      });
+      expect(result.result.current.login.retryAt).toBeUndefined();
+      service.mockResolvedValue(failure);
+      await act(async () => {
+        await invoke();
+      });
+      await act(async () => {
+        await result.result.current.auth.cancelAddAccount();
+      });
+      expect(result.result.current.auth.loginState).toBeNull();
+      expect(result.result.current.login.retryAt).toBeUndefined();
+    },
+  );
+
   it('service.initialize 真实 reject → 无 unhandled rejection,统一 logger 记录,落 unauthenticated snapshot', async () => {
     const boom = new Error('main auth channel exploded');
     mocks.service.initialize.mockRejectedValue(boom);

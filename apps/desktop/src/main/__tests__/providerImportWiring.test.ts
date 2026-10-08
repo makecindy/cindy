@@ -10,7 +10,7 @@ const mainLayout = readFileSync(new URL('../../renderer/components/layout/MainLa
 
 describe('provider import wiring', () => {
   it('consumes the main pending slot when an import wake-up reaches MainLayout', () => {
-    expect(mainLayout).toMatch(/onDeepLinkNavigate\(\(payload\) => \{\s*if \(payload.type !== 'provider-import' && payload.type !== 'shared-task-join'\) \{\s*handleDeepLinkPayload\(payload\);\s*return;\s*\}[\s\S]*?takePendingDeepLink\(\)\.then\(\(pending\) => \{\s*if \(pending\) handleDeepLinkPayload\(pending\);/);
+    expect(mainLayout).toMatch(/onDeepLinkNavigate\(\(payload\) => \{\s*if \(payload.type !== 'provider-import' && payload.type !== 'shared-task-join' && payload.type !== 'provider-share-join'\) \{\s*handleDeepLinkPayload\(payload\);\s*return;\s*\}[\s\S]*?takePendingDeepLink\(\)\.then\(\(pending\) => \{\s*if \(pending\) handleDeepLinkPayload\(pending\);/);
   });
   it('passes sanitized JS argv explicitly instead of replaying Electron native startup arguments', () => {
     for (const source of [bootstrap, updateService]) {

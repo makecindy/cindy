@@ -232,7 +232,11 @@ export function annotatePermissionRequestForUnavailableReview<
   };
 }
 
-/** 有界用户原话与宿主动作事实；不含助手历史、工具结果、Skill 或 Memory。 */
+/**
+ * 有界用户原话与宿主动作事实；不含助手历史、工具结果、Skill 或 Memory。
+ * `userIntent.currentUserReferences` 是宿主盖章的「用户本条明确指向的内容」（被回复／引用的消息、
+ * 附件数），只作低信任证据，审阅器单独呈现，不算用户原话、不构成授权。
+ */
 export interface AutoReviewRequest {
   sessionId?: string;
   agentKind: AgentKind;
@@ -553,7 +557,7 @@ export async function resolveAutoReviewDecision(
   };
 }
 
-export type { AutoReviewUserIntent } from '@cindy/maker-shared/auto-review-intent';
+export type { AutoReviewUserIntent, AutoReviewUserReferences } from '@cindy/maker-shared/auto-review-intent';
 const intentProjection = createAutoReviewIntentProjection();
 const compactCurrentUserIntent = intentProjection.compact;
 function userIntentText(content: UserMessage['content']): string {
@@ -586,7 +590,11 @@ export function appendAutoReviewUserIntent(previous: AutoReviewUserIntent | unde
   const latest = userIntentText(sendOpts?.[MAIN_OWNED_SEND_CONTEXT]?.rawChannelText ?? sourceContent);
   // A new attachment changes what "send this" refers to; it cannot renew an earlier grant.
   const hasAttachments = Array.isArray(sourceContent) && sourceContent.some((block) => block.type !== 'text');
-  return intentProjection.append(hasAttachments ? '' : previous, latest);
+  // References belong to this message only and travel with Main's Symbol, never a wire field.
+  return intentProjection.withReferences(
+    intentProjection.append(hasAttachments ? '' : previous, latest),
+    sendOpts?.[MAIN_OWNED_SEND_CONTEXT]?.autoReviewReferences,
+  );
 }
 
 /** Keep actual denied actions across one user follow-up, without assistant explanations or grants. */

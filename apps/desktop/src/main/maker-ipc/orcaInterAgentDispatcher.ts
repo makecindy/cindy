@@ -22,12 +22,16 @@ import { resolveCollabDispatchResult } from './collabSendOutcome.js';
 import type {
   AgentInputSendOpts,
   AgentInputSendResult,
+  ControlSteerOutcome,
 } from './agent-input-coordinator.js';
 import { runAcceptedCallback, runAcceptedRollback } from './acceptedCallbackRunner.js';
 
 const defaultLog = createLogger('maker-ipc');
 
-type OrcaInterAgentDispatchMode = 'dispatched' | 'queued';
+type OrcaInterAgentDispatchMode = 'dispatched' | 'queued' | 'steered';
+
+/** 请求插话但消息进了队列的原因；目标空闲直发时没有原因。 */
+export type OrcaSteerFallbackReason = 'STEER_UNSUPPORTED' | 'INPUT_BOUNDARY_BUSY' | 'STEER_UNCERTAIN';
 
 /** Orca lead/worker 派发结果，保留底层 dispatch outcome 供 MCP/IPC 区分排队、直发和失败根因。 */
 export type DispatchOrcaInterAgentMessageResult =
@@ -38,6 +42,7 @@ export type DispatchOrcaInterAgentMessageResult =
       dispatchOutcome: CollabDispatchSuccessOutcome | CollabDispatchQueuedOutcome;
       targetTitle?: string | null;
       targetLastUserSendAt?: string | null;
+      steerFallbackReason?: OrcaSteerFallbackReason;
     }
   | {
       ok: false;
@@ -54,6 +59,8 @@ export interface DispatchOrcaInterAgentMessageParams {
   source: OrcaInterAgentMessageSource;
   senderLabel: string;
   workerId?: string;
+  /** 发送方显式选择；缺省排队。steer 只在目标正在运行时插进当前 turn。 */
+  delivery?: 'queue' | 'steer';
   /** Synchronous reserve boundary hook; must return before drain is scheduled. */
   onReserved?: () => void;
   beforeReserve?: () => Promise<void>;
@@ -71,6 +78,9 @@ interface PersistedUserMessageSession {
   id: string;
   agentKind?: AgentKind;
   isTurnRunning?: () => boolean;
+  getTurnGeneration?: () => number;
+  capabilities?: { sameTurnSteer: { supported: boolean } };
+  remoteHostId?: string | null;
   send: (
     message: UserMessage,
     opts?: SessionSendOptions,
@@ -142,6 +152,12 @@ export interface OrcaInterAgentDispatcherDeps<TSessionMeta> {
   getSessionMeta: (sessionId: string) => Promise<TSessionMeta | null>;
   getSessionRowSnapshot: (sessionId: string) => Promise<OrcaInterAgentSessionRowSnapshot | null>;
   getLiveSession: (sessionId: string) => PersistedUserMessageSession | null | undefined;
+  /** Uses the input coordinator's steer guards and preserves uncertain-delivery ownership. */
+  steerControlInput?: (
+    sessionId: string,
+    item: AgentInputQueuedMessage,
+    expectedTurn: { session: object; turnGeneration: number },
+  ) => Promise<ControlSteerOutcome>;
   shouldQueueNewTurn: (sessionId: string) => boolean;
   hasSendToSessionLock: (sessionId: string) => boolean;
   /**
@@ -386,6 +402,12 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
         ...(senderSessionId ? { senderSessionId } : {}),
       };
     };
+    let steerFallbackReason: OrcaSteerFallbackReason | undefined;
+    // 请求了插话却落进队列时，回执必须说明原因；没请求插话时不带。
+    const queuedSteerFallback = (): { steerFallbackReason?: OrcaSteerFallbackReason } =>
+      params.delivery === 'steer'
+        ? { steerFallbackReason: steerFallbackReason ?? 'INPUT_BOUNDARY_BUSY' }
+        : {};
     const enqueueQueuedMessage = async (logEvent: string): Promise<DispatchOrcaInterAgentMessageResult> => {
       const createOpts = await deps.buildCreateOptsForQueuedSession(params.targetSessionId, meta);
       const queued = buildQueuedOrcaInterAgentMessage({
@@ -416,9 +438,77 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
         mode: 'queued',
         clientId,
         dispatchOutcome: makeQueuedDispatchOutcome(params.meta.source),
+        ...queuedSteerFallback(),
         ...dispatchReceipt,
       };
     };
+
+    // 插话只由发送方显式选择（delivery=steer），且只对正在运行的目标尝试；空闲目标照常直发。
+    const liveTurn = deps.getLiveSession(params.targetSessionId);
+    if (params.delivery === 'steer' && liveTurn?.isTurnRunning?.() === true) {
+      if (
+        !deps.steerControlInput || !liveTurn.capabilities?.sameTurnSteer.supported ||
+        !liveTurn.getTurnGeneration || liveTurn.remoteHostId
+      ) {
+        steerFallbackReason = 'STEER_UNSUPPORTED';
+      } else if (!deps.hasSendToSessionLock(params.targetSessionId)) {
+        const expectedTurn = { session: liveTurn, turnGeneration: liveTurn.getTurnGeneration() };
+        const trySteer = async (): Promise<DispatchOrcaInterAgentMessageResult | null> => {
+          // Async item preparation and lock acquisition can cross a turn replacement.
+          const createOpts = await deps.buildCreateOptsForQueuedSession(params.targetSessionId, meta);
+          const item = buildQueuedOrcaInterAgentMessage({
+            clientId,
+            agentMessageText: await buildAgentMessageText(),
+            persistedContent,
+            origin: await resolveOrigin(),
+            createOpts,
+          });
+          if (
+            deps.getLiveSession(params.targetSessionId) !== liveTurn ||
+            !liveTurn.isTurnRunning?.() ||
+            liveTurn.getTurnGeneration?.() !== expectedTurn.turnGeneration
+          ) return null;
+          const outcome = await deps.steerControlInput!(params.targetSessionId, item, expectedTurn);
+          if (outcome === 'steered') {
+            // The message joined the running turn. Accepted/commit callbacks claim a new
+            // turn's running/auto-bridge identity, so they deliberately never run here.
+            return { ok: true, mode: 'steered', clientId,
+              dispatchOutcome: { kind: 'session-dispatch', source: params.meta.source, dispatched: true },
+              ...dispatchReceipt };
+          }
+          if (outcome === 'rejected') {
+            // Input screening discarded it. Re-queueing would retry refused content.
+            return failureResult({
+              ...createHostSendFailure('SEND_FAILED', 'Orca message was blocked by input screening'),
+              source: params.meta.source, context: params.meta.context,
+            });
+          }
+          if (outcome === 'queued') {
+            // The coordinator already owns this exact clientId in a paused queue. Enqueuing
+            // again would duplicate it; its later drain starts a turn, so register there.
+            if (params.onAccepted) registerQueuedOrcaInterAgentAcceptedCallback(
+              clientId, params.onAccepted, params.onAcceptedRollback, params.onAcceptedCommit,
+            );
+            return { ok: true, mode: 'queued', clientId,
+              dispatchOutcome: makeQueuedDispatchOutcome(params.meta.source),
+              steerFallbackReason: 'STEER_UNCERTAIN', ...dispatchReceipt };
+          }
+          // Not delivered and nothing retained: the ordinary send/queue path is still safe.
+          return null;
+        };
+        try {
+          const steered = deps.withSendToSessionLock
+            ? await deps.withSendToSessionLock(params.targetSessionId, trySteer)
+            : await trySteer();
+          if (steered) return steered;
+        } catch (err) {
+          return failureResult({
+            ...createHostSendFailure('SEND_FAILED', err instanceof Error ? err.message : String(err)),
+            source: params.meta.source, context: params.meta.context,
+          });
+        }
+      }
+    }
 
     const shouldQueue = deps.shouldQueueNewTurn(params.targetSessionId)
       || deps.hasSendToSessionLock(params.targetSessionId)
@@ -465,6 +555,7 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
                   source: params.meta.source,
                   dispatched: true,
                 },
+            ...(result.wakeKind === 'queued' ? queuedSteerFallback() : {}),
             targetTitle: result.targetTitle,
             targetLastUserSendAt: result.targetLastUserSendAt,
           };

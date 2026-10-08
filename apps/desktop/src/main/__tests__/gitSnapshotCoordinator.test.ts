@@ -513,6 +513,26 @@ describe('GitSnapshotCoordinator', () => {
     });
   });
 
+  it('marks Claude Code turns as rewind-blocked when its agent runs on another computer', async () => {
+    // 那台没有本机的文件检查点，文件回退走保存点链，缺口必须像 Codex / Pi 一样记下。
+    const deps = makeDeps({
+      getSessionContext: vi.fn().mockResolvedValue({ workingDir: '/repo', agentKind: 'claude-code', savepointRewind: true }),
+      createShadowSavepoint: vi.fn()
+        .mockResolvedValueOnce(savepointResult('hash1'))
+        .mockRejectedValueOnce(new Error('index locked')),
+    });
+    const coordinator = new GitSnapshotCoordinator(deps);
+
+    await coordinator.onTurnStart('s1');
+    await coordinator.onTurnEnd('s1');
+
+    expect(deps.createShadowMarker).toHaveBeenCalledWith('/repo', {
+      sessionId: 's1',
+      label: 'File rewind gap: after-edit savepoint failed',
+      meta: { kind: 'rewind-blocked', anchor: 'msg-1' },
+    });
+  });
+
   it('skips the rewind gap marker for agents that do not consume the savepoint chain', async () => {
     // 默认 agentKind 为 claude-code:缺基线只打 debug 日志,不建 marker,
     // 也不提前解析可选 metadata。

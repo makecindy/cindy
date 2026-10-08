@@ -16,6 +16,7 @@
 - [模型资料优先级](model-metadata-precedence.md)：公共资料、默认/实报/用户覆盖、多账号身份与成员空值语义。
 - [本地模型筛选](local-model-selection.md)：候选、推荐、量化包装和硬件证据。
 - [供应商设置](provider-settings.md)：连接身份、状态、操作与用量展示。
+- [供应商分享](provider-sharing.md)：把远程供应商分享给其他账号的一次性链接、双方确认、管理页与跨区域规则（跨区域默认关闭）。
 - [V4 全类型规范](../model-registry-v4-media.md)：媒体字段、成员投影及额外发布条件。
 
 - [`core-product-principles.md`](core-product-principles.md)：Cindy 的目的、连接本质、

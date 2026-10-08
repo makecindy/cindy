@@ -5,6 +5,7 @@ import {
   TASK_MIGRATION_RECEIVE_TIMEOUT_MS,
 } from './taskMigration.js';
 import type { InvokePayload } from './protocol.js';
+import { isRemoteAgentReadInvoke } from './remoteAgent.js';
 
 /** These reads may wait behind current-task work. Not a retry or authorization policy.
  * sessions:list also serves initial loading and recovery probes, so it stays foreground.
@@ -168,6 +169,14 @@ const PEER_RESET_RETRYABLE_READ_CHANNELS = new Set([
 ]);
 
 /** Safe to retry after a peer reset; this does not grant permission or allow coalescing. */
+/**
+ * peer reset 后可重试的边界(按 op 判断)。远程 Agent 的 poll 按游标幂等，重拉不会重复执行；
+ * 它的其它 op(open / call / reply / push / close)仍不可重试。
+ */
+export function isPeerResetRetryableInvoke(channel: string, args?: unknown[]): boolean {
+  return isPeerResetRetryableReadChannel(channel) || isRemoteAgentReadInvoke(channel, args);
+}
+
 export function isPeerResetRetryableReadChannel(channel: string): boolean {
   return PEER_RESET_RETRYABLE_READ_CHANNELS.has(channel);
 }

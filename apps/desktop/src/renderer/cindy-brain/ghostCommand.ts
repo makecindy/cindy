@@ -19,7 +19,8 @@
  * 追加文本对用户可见(气泡里如实显示),不做暗改。
  */
 
-import type { GhostToolDecl, InstalledGhost } from '../../shared/ghost';
+import type { GhostToolDecl } from '../../shared/ghost';
+import type { GhostCommandSource } from '../../shared/ghostComposer';
 
 /**
  * `$` 后紧跟指令词(与 ghost.json command 约束同宽:无空白,≤32 字符)。
@@ -36,10 +37,10 @@ export function parseGhostCommandWord(text: string): string | null {
 }
 
 /** 按指令词(大小写折叠)找已唤醒的意识;找不到 → null(消息原样发送)。 */
-export function findGhostByCommand(
-  ghosts: InstalledGhost[],
+export function findGhostByCommand<T extends GhostCommandSource>(
+  ghosts: T[],
   word: string,
-): InstalledGhost | null {
+): T | null {
   const fold = word.toLowerCase();
   return (
     ghosts.find(
@@ -54,10 +55,10 @@ export function findGhostByCommand(
  * 仅用于编辑器内替换旧 `$command` 的结构识别；真正发送仍必须走
  * findGhostByCommand，所以停用 Plugin 不会因此被误调用。
  */
-export function findGhostByCommandIncludingDisabled(
-  ghosts: InstalledGhost[],
+export function findGhostByCommandIncludingDisabled<T extends GhostCommandSource>(
+  ghosts: T[],
   word: string,
-): InstalledGhost | null {
+): T | null {
   const fold = word.toLowerCase();
   return (
     ghosts.find(
@@ -286,7 +287,7 @@ const buildMentionDirective = (roster: string): string => `${MENTION_HEAD}${rost
  *   (agent 免 ghost_list 直接调),超体积闸回落"先 ghost_list"旧形态;
  * - 未命中(没这个指令 / 意识沉睡 / 非 `$` 开头)原样返回——绝不吞掉用户的字。
  */
-export function expandGhostCommand(text: string, ghosts: InstalledGhost[]): string {
+export function expandGhostCommand(text: string, ghosts: GhostCommandSource[]): string {
   const word = parseGhostCommandWord(text);
   if (!word) return text;
   const ghost = findGhostByCommand(ghosts, word);

@@ -433,6 +433,7 @@ describe('orcaTeamStore', () => {
         extra_dirs TEXT NOT NULL DEFAULT '[]',
         writable_dirs TEXT NOT NULL DEFAULT '[]',
         remote_host_id TEXT,
+        agent_device_id TEXT,
         provider_id TEXT,
         active_turn_started_at INTEGER,
         active_turn_pid INTEGER,

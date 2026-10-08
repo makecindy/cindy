@@ -47,7 +47,7 @@ it('keeps the sheet and preferences unchanged after cancelled selection',async()
 it('only closes after selection succeeds and passes the full wire configuration',async()=>{
   const {onSelect,onClose}=await mount();
   await act(async()=>test.view.onSelect(test.view.groups[0].rows[0]));
-  expect(onSelect).toHaveBeenCalledWith({providerId:'account',modelId:'codex/model',agent:'codex',effort:'medium',fast:false});
+  expect(onSelect).toHaveBeenCalledWith({providerId:'account',modelId:'codex/model',agent:'codex',effort:'medium',fast:false},{deviceId:null});
   expect(onClose).toHaveBeenCalledOnce();
 });
 it('shows favorites before recommendations, with selected mark only on the model',async()=>{
@@ -538,4 +538,70 @@ it('explains a closed current model without changing it and still allows choosin
   expect(test.view.busy).toBe(false);
   await act(async () => test.view.onSelect(test.view.groups[0].rows[0]));
   expect(onSelect).toHaveBeenCalledOnce();
+});
+
+// 远程 Agent:其他电脑上开放了远程调用的供应商接在被控电脑自己的之后,每个供应商一段、标题带电脑名。
+const studioCatalog = {
+  deviceId:'device-studio-mac', name:'Studio Mac', status:'ready',
+  providers:[{id:'account',name:'Studio Provider',models:{},connected:true,logoKind:'anthropic'}],
+};
+const remoteId = 'remote:["device-studio-mac","account"]';
+async function mountRemote(selectedDeviceId:string|null,onSelect=vi.fn(async()=>true)) {
+  const onClose=vi.fn();
+  await act(async()=>root.render(createElement(UnifiedModelPickerSheet,{
+    visible:true,onClose,providers:[{id:'account',name:'Provider',models:{},connected:true}],agentKind:'codex',capabilities:{hasFastMode:true},
+    activeModelId:'codex/model',selectedProviderId:'account',selectedEffort:'medium',selectedFastMode:false,
+    existingSessionRoute:true,modelMemory:{getEffort:()=>undefined,getFast:()=>undefined,setEffort:vi.fn(),setFast:vi.fn()},
+    unified:{scope:'user-device',agents:['codex','claude-code'],loadCapabilities:async()=>({hasFastMode:true}),onSelect,
+      remote:{catalogs:[studioCatalog],selectedDeviceId}},
+  } as any)));
+  return {onSelect,onClose};
+}
+it('lists another computer\'s providers after the controlled computer\'s own',async()=>{
+  await mountRemote(null);
+  expect(test.view.groups.map((g:any)=>g.key)).toEqual(['recommended',remoteId]);
+  expect(test.view.groups[1].title).toBe('models.unified.remoteProvider');
+  const remoteRow = test.view.groups[1].rows[0];
+  expect(remoteRow.remoteDevice).toEqual({deviceId:'device-studio-mac',name:'Studio Mac'});
+  expect(remoteRow.providerMark).toMatchObject({name:'Studio Provider',logoKind:'anthropic'});
+  // 选中态只在 Agent 所在的那份目录里。
+  expect(remoteRow.selected).toBe(false);
+  expect(test.view.groups[0].rows[0].selected).toBe(true);
+  expect(test.view.filters.at(-1)).toMatchObject({
+    id:remoteId,
+    remote:{deviceId:'device-studio-mac',deviceName:'Studio Mac',providerLabel:'Studio Provider'},
+  });
+  // 只看被控电脑的某个供应商 / 收藏时,不夹带其他电脑。
+  await act(async()=>test.view.onFilter('account'));
+  expect(test.view.groups.map((g:any)=>g.key)).toEqual(['account']);
+  await act(async()=>test.view.onFilter(remoteId));
+  expect(test.view.groups.map((g:any)=>g.key)).toEqual([remoteId]);
+});
+it('passes the computer of the picked row with the selection',async()=>{
+  const {onSelect}=await mountRemote(null);
+  await act(async()=>test.view.onSelect(test.view.groups[1].rows[0]));
+  expect(onSelect).toHaveBeenCalledWith(expect.objectContaining({providerId:'account',agent:'codex'}),{deviceId:'device-studio-mac'});
+});
+it('opens on the Agent\'s computer and marks the current model there',async()=>{
+  await mountRemote('device-studio-mac');
+  expect(test.view.filter).toBe(remoteId);
+  expect(test.view.groups.map((g:any)=>g.key)).toEqual([remoteId]);
+  expect(test.view.groups[0].rows[0].selected).toBe(true);
+  await act(async()=>test.view.onFilter('all'));
+  expect(test.view.groups.find((g:any)=>g.key==='recommended')?.rows.some((row:any)=>row.selected)??false).toBe(false);
+});
+it('keeps settings of another computer\'s rows out of this phone\'s preferences',async()=>{
+  const {onSelect}=await mountRemote(null);
+  await act(async()=>test.view.onOptions(test.view.groups[1].rows[0]));
+  expect(test.view.options.favoritesDisabled).toBe(true);
+  expect(test.view.options.canReset).toBe(false);
+  await act(async()=>test.view.options.onChange({...test.view.options.row.config,effort:'high'}));
+  expect(test.save).not.toHaveBeenCalled();
+  expect(onSelect).not.toHaveBeenCalled();
+  // 调好的档位跟着这一行,选中时一并带上。
+  expect(test.view.options.row.config.effort).toBe('high');
+  expect(test.view.options.canReset).toBe(true);
+  await act(async()=>test.view.onBack());
+  await act(async()=>test.view.onSelect(test.view.groups[1].rows[0]));
+  expect(onSelect).toHaveBeenCalledWith(expect.objectContaining({effort:'high'}),{deviceId:'device-studio-mac'});
 });

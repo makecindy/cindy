@@ -454,7 +454,7 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
   const isAutomationGenerated = isAutomationGeneratedSession(session);
   // heartbeat schedule 绑定标识(targetSessionId 指向本会话);schedule 删除/过期后
   // schedulesStore 'changed' 刷新 → 列表为空 → 徽章消失。
-  const boundSchedules = useSessionBoundSchedules(session.id);
+  const boundSchedules = useSessionBoundSchedules(session.id, session.deviceLinkDeviceId);
   const hasAutomationMeta = boundSchedules.length > 0 || isAutomationGenerated;
   // 单个 automation-generated 会话行的「schedule 反查」:sessionId → scheduleId 走
   // sidebar-index-runs(Session 上没有 scheduleId 字段)。用于两处:
@@ -808,6 +808,8 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
     !isEmpty &&
     !session.remoteHostId &&
     !session.deviceLinkDeviceId &&
+    // Agent 在另一台电脑运行：它的会话记录按项目路径存在那台，移动后无法继续。
+    !session.agentDeviceId &&
     session.status !== 'archived';
 
   // 导出 .cshare 的可见性:draft 无内容、remote 转录在远端、device-link 数据在
@@ -817,7 +819,9 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
     !isEmpty &&
     !session.remoteHostId &&
     session.orcaRole !== 'worker' &&
-    !session.deviceLinkDeviceId;
+    !session.deviceLinkDeviceId &&
+    // Agent 在另一台电脑运行：转录在那台，本机打包不全。
+    !session.agentDeviceId;
 
   const exportShareMenuItem = canExportShare ? (
     <DropdownMenuItem onSelect={handleExportShareSelect} className={MENU_ITEM_CLASS}>
@@ -1054,7 +1058,11 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
           {/* 绑定徽章优先于普通自动化 Timer:persistentSession 会话两者皆真,
               主图标统一为 Timer，绑定态额外承载频率/暂停信息。 */}
           {boundSchedules.length > 0 ? (
-            <ScheduleBindingBadge schedules={boundSchedules} activeForeground={isActive} />
+            <ScheduleBindingBadge
+              schedules={boundSchedules}
+              deviceLinkDeviceId={session.deviceLinkDeviceId}
+              activeForeground={isActive}
+            />
           ) : isAutomationGenerated ? (
             <AutomationSessionButton sessionId={session.id} size={10} activeForeground={isActive} />
           ) : null}
@@ -1079,6 +1087,7 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
               )}
             />
           )}
+          {/* Agent 在另一台电脑运行(任务在本机)的标识在左侧 Agent 图标上(信号波纹)。 */}
           {sourceLabel ? (
             <span
               title={sourceLabel}

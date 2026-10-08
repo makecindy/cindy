@@ -18,6 +18,7 @@ import {
   isTrustedCindyRendererWindow,
 } from '../security/trustedAppRenderer.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
+import { createLogger } from '../logger.js';
 import { ResourceUsageWindowController } from '../resource-usage-window/controller.js';
 import { createResourceUsageWindow } from '../resource-usage-window/window.js';
 import type { SupportedLocale } from '../../shared/locale.js';
@@ -31,6 +32,8 @@ import { readViewerResolution, writeViewerResolution } from './resolutionMemory.
 import { resolveDesktopInputBinary } from '../remote-desktop/inputHost.js';
 import { ClipboardCounter } from '../remote-desktop/clipboardCounter.js';
 import { transferDesktopClipboardContent } from '../remote-desktop/clipboard.js';
+
+const log = createLogger('remote-viewer');
 
 async function requestRemote<T>(device: string, request: unknown, check: () => void): Promise<T> {
   check();
@@ -323,7 +326,14 @@ export class RemoteDesktopViewerWindows {
     });
     ipcMain.handle(REMOTE_VIEWER.CLIPBOARD, async (event, generation, action) => {
       const result = await this.entry(event).connection.clipboard(generation, action);
-      if (!result.ok) throwIpcError('PRECONDITION_FAILED', result.code);
+      if (!result.ok) {
+        // Code only: clipboard contents never reach logs.
+        log.warn('clipboard transfer failed', {
+          action: action === 'copy' || action === 'paste' ? action : 'invalid',
+          code: result.code,
+        });
+        throwIpcError('PRECONDITION_FAILED', result.code);
+      }
     });
     ipcMain.handle(REMOTE_VIEWER.CREDENTIAL, async (event, generation, action, enabled) => {
       try {

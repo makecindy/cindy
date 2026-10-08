@@ -146,8 +146,6 @@ function compactTerminalSessionToolResults(
   });
 }
 type OwnerScope = ReturnType<typeof broadcastTap.captureDataOwnerBroadcastScope> | null;
-type SessionRemovalCancelOperations = (sessionId: string) => Promise<void>;
-type SessionRemovalCleanup = (sessionId: string) => Promise<void>;
 type SessionWorktreeRecycle = (sessionId: string, resources?: readonly string[]) => Promise<void>;
 export interface SessionRecycleScope {
   ownerScope: OwnerScope;
@@ -160,24 +158,7 @@ export interface RegisterSessionIpcOpts {
   /** Close a local Pi/Codex runtime only if its current turn is idle. */
   closeIdleSessionForMove?: (sessionId: string) => Promise<boolean>;
 }
-
-let sessionRemovalCancelOperations: SessionRemovalCancelOperations | null = null;
-let sessionRemovalCleanup: SessionRemovalCleanup | null = null;
 let sessionWorktreeRecycle: SessionWorktreeRecycle | null = null;
-
-/** Composition-root injection for Host-owned operations that must stop before worktree recycle. */
-export function setSessionRemovalCancelOperations(
-  cancelOperations: SessionRemovalCancelOperations | null,
-): void {
-  sessionRemovalCancelOperations = cancelOperations;
-}
-
-/** Composition-root injection for destructive cleanup after removal is revalidated. */
-export function setSessionRemovalCleanup(
-  cleanupRemovedSession: SessionRemovalCleanup | null,
-): void {
-  sessionRemovalCleanup = cleanupRemovedSession;
-}
 
 /** Composition-root injection keeps the localDb IPC layer independent of worktree implementation modules. */
 export function setSessionWorktreeRecycle(recycle: SessionWorktreeRecycle | null): void {
@@ -476,8 +457,7 @@ function broadcastWorktreeChanged(sessionId: string): void {
  * fire-and-forget:回收失败不影响状态写库(启动期 reconcile 兜底 deleted 场景)。
  * 先关子进程再回收——Windows 下 CLI 子进程 cwd 在 worktree 内会锁目录。
  * 既有动态 import 避免 localDb → maker-host / worktree 的静态模块环(worktreeStore
- * 反向 import 本文件的 setWorktreePathInDb)。Simulator 清理由启动组合层静态注入，
- * 避免在回收临界路径上延迟加载带原生副作用的 Host 模块。
+ * 反向 import 本文件的 setWorktreePathInDb)。
  *
  * 只为真正进入低层 worktree 回收的 session 广播。普通通知任务没有 worktree，仍会
  * 完成 runtime / media / owner 扫描，但不会让 renderer 扫描全部 worktree。共享路径
@@ -512,11 +492,6 @@ async function recycleSessionWorktreeInQueue(
     const ownerIsCurrent = (): boolean =>
       isOwnerScopeCurrent(ownerScope) && getDbClient().drizzle === mediaDb;
     if (!ownerIsCurrent()) return;
-    const cancelOperations = sessionRemovalCancelOperations;
-    const cleanupRemovedSession = sessionRemovalCleanup;
-    if (!cancelOperations || !cleanupRemovedSession) {
-      throw new Error('iOS Simulator session cleanup is not configured');
-    }
     const [mh, recycle] = await Promise.all([
       import('../../maker-host/index.js'),
       import('../../worktree/sessionRemovalRecycle.js'),
@@ -531,8 +506,6 @@ async function recycleSessionWorktreeInQueue(
         const shouldRecycle = await quiesceSessionBeforeWorktreeRecycle(targetSessionId, {
           isOwnerCurrent: ownerIsCurrent,
           isSessionStillRemovable: isStillRemovable,
-          cancelSessionOperations: cancelOperations,
-          cleanupRemovedSession,
           closeSession: async (id) => {
             await mh
               .getMakerIfReady()
@@ -584,7 +557,7 @@ async function recycleSessionWorktreeInQueue(
   }
 }
 
-function scheduleWorktreeRecycleForStatusChange(
+export function scheduleWorktreeRecycleForStatusChange(
   sessionId: string,
   status: unknown,
   capturedScope?: SessionRecycleScope,
@@ -671,6 +644,8 @@ export async function applyAgentSwitchToSessionRow(
     effort?: string;
     fastMode?: boolean;
     contextWindow?: number | null;
+    /** 远程 Agent 换电脑:undefined = 不动,null = 改回任务所在电脑。 */
+    agentDeviceId?: string | null;
   },
 ): Promise<void> {
   const ownerScope = captureOwnerScope();
@@ -683,6 +658,7 @@ export async function applyAgentSwitchToSessionRow(
     updatedAt: Date.now(),
   };
   if (patch.providerId !== undefined) setObj.providerId = patch.providerId;
+  if (patch.agentDeviceId !== undefined) setObj.agentDeviceId = patch.agentDeviceId;
   // effort 值域由 renderer 按目标引擎 capabilities 解析(schema 列是字面量联合,
   // 跨层传输后此处以 string 到达;非法值与直改 DB 同级,运行时由引擎侧收敛)。
   // 固定 effort 模型运行时为 null；sessions.effort NOT NULL，省略该字段。
@@ -709,6 +685,7 @@ export async function applyAgentSwitchToSessionRow(
       model: patch.model,
       sdkSessionId: nextSdkSessionId,
       ...(patch.providerId !== undefined ? { providerId: patch.providerId } : {}),
+      ...(patch.agentDeviceId !== undefined ? { agentDeviceId: patch.agentDeviceId } : {}),
       ...(persistableEffort !== undefined ? { effort: persistableEffort } : {}),
       ...(patch.fastMode !== undefined ? { fastMode: patch.fastMode } : {}),
       ...(typeof patch.contextWindow === 'number' && patch.contextWindow > 0
@@ -856,6 +833,10 @@ export interface SessionRowSnapshot {
   orcaRole?: 'lead' | 'worker' | null;
   /** Collab policy gate: remote session 的 codex / claude-code 均放行。 */
   agentKind?: string | null;
+  /** 会话来源(`bot` = 伙伴会话);限额自动继续据此排除伙伴。 */
+  source?: string | null;
+  /** 会话当前模型;限额判定据此只看该模型的额度窗口。 */
+  model?: string | null;
   /** Authoritative `/clear` visibility boundary (unix ms). */
   clearedAt?: number | null;
 }
@@ -878,6 +859,8 @@ async function selectSessionRowSnapshot(id: string): Promise<SessionRowSnapshot 
       remoteHostId: sessions.remoteHostId,
       orcaRole: sessions.orcaRole,
       agentKind: sessions.agentKind,
+      source: sessions.source,
+      model: sessions.model,
     })
     .from(sessions)
     .where(eq(sessions.id, id))
@@ -1387,6 +1370,14 @@ export function registerSessionIpc(
       !ALLOWED_ORCA_ROLES.has(bodyObj.orcaRole as string)
     ) {
       throwIpcError('INVALID_PARAMS', `invalid orcaRole: ${String(bodyObj.orcaRole)}`);
+    }
+    // Agent 在同账号另一台电脑运行：只接受设备 id 形态的值(与 maker:create-session 同一规则)。
+    if (
+      bodyObj.agentDeviceId !== undefined &&
+      bodyObj.agentDeviceId !== null &&
+      (typeof bodyObj.agentDeviceId !== 'string' || !/^[A-Za-z0-9_.:-]{1,128}$/.test(bodyObj.agentDeviceId))
+    ) {
+      throwIpcError('INVALID_PARAMS', 'agentDeviceId must be a device id');
     }
     const workspaceKind =
       (createBody?.workspaceKind as 'project' | 'dialogue' | undefined) ?? 'project';

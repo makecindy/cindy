@@ -58,6 +58,14 @@
     "cancel": "取消",
     "confirm": "继续选择"
   },
+  "agentRelocation": {
+    "titleOther": "改到「{{device}}」上运行 Agent？",
+    "titleHost": "改回「{{host}}」上运行 Agent？",
+    "titleHostUnnamed": "改回任务所在的电脑运行 Agent？",
+    "message": "原来那台电脑上的对话记录带不过来，会整理成交接摘要接上，思考内容等不能保证完美继承。下一条消息发出时生效。",
+    "confirm": "换电脑运行",
+    "cancel": "保持不变"
+  },
   "unified": {
       "favoriteConfiguration": "收藏此配置",
       "savedConfiguration": "已收藏 · 点击取消",
@@ -83,6 +91,7 @@
     "all": "全部模型",
     "recommended": "推荐",
     "source": "来源",
+    "remoteProvider": "{{provider}} · {{device}}",
     "harness": "Harness",
     "restoreRecommended": "恢复推荐",
     "saveFailed": "未能保存，请重试。",

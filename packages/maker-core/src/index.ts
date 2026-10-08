@@ -25,7 +25,7 @@ export {
   resolveReviewReadPath,
   type ReviewReadGrant,
 } from './agents/shared/review-read-scope.js';
-export { isReviewSensitiveCredentialPath } from './agents/shared/sensitive-credential-paths.js';
+export { isReviewSensitiveCredentialPath, isSensitiveCredentialPath } from './agents/shared/sensitive-credential-paths.js';
 
 // codex app-server transport interface — host 实现自定义 transport (e.g. SSH-bridged
 // for remote codex) 时需要这个接口形状。

@@ -40,6 +40,23 @@ describe('mobile settings overview', () => {
     expect(source).not.toContain('LanguageOptionRow');
   });
 
+  it('keeps Android debug disclosure synchronous so repeated toggles cannot retain exiting rows', () => {
+    const source = readTextLf(resolve(process.cwd(), 'app/settings.tsx'), 'utf8');
+
+    expect(source).toContain("const debugDisclosureMotionEnabled = Platform.OS !== 'android';");
+    expect(source).toContain([
+      'useListDisclosureTransition({',
+      '    motionEnabled: debugDisclosureMotionEnabled,',
+      '  })',
+    ].join('\n'));
+    expect(source).toContain([
+      '<ListDisclosureScope',
+      '          controller={debugDisclosure.controller}',
+      '          motionEnabled={debugDisclosureMotionEnabled}',
+    ].join('\n'));
+    expect(source).toContain('runDebugDisclosure(() => setDebugExpanded((value) => !value));');
+  });
+
   it('shows the server switch only in CindyDev and clears the old session before reloading', () => {
     const settingsSource = readTextLf(
       resolve(process.cwd(), 'app/settings.tsx'),

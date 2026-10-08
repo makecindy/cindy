@@ -14,7 +14,6 @@ import {
   createLiziMcpProviders,
   resolveLiziMcpSessionContext,
   setSessionPathAuthorizer,
-  type IOSSimulatorMcpAccessDecision,
   type LiziMcpProvider,
   type LiziMcpSessionContext,
   type LspServerPool,
@@ -36,7 +35,6 @@ import { renderHtmlToPdf } from '../doc-tools/htmlPdfRenderer.js';
 import { writeDocsOutput } from '../doc-tools/docsOutputWriter.js';
 import { inspectPdf } from '../doc-tools/pdfInspector.js';
 import { getAndroidMcpDeps } from './android.js';
-import { getIOSSimulatorMcpDeps } from './ios-simulator.js';
 import { getBrowserMcpDeps } from './browser.js';
 import { getComputerMcpDeps } from './computer.js';
 import { feishuIm, wechatIm } from '../im';
@@ -115,10 +113,6 @@ export interface DesktopMcpProvidersDeps {
   lspPool: LspServerPool;
   /** 按会话控制启用状态的 plugin registry。 */
   pluginRegistry: PluginRegistry;
-  /** Live installed/enabled plugin gate; evaluated again for every tool call. */
-  resolveIOSSimulatorAccess: (
-    context?: { workingDir?: string },
-  ) => IOSSimulatorMcpAccessDecision;
   /** Device-link transport stays host-injected so provider tests do not load Electron runtime services. */
   invokeRemote: ChatHistoryReaderDeps['invokeRemote'];
   historyRemote?: import('@cindy/mcps').HistoryRemoteDeps;
@@ -232,9 +226,6 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         // Keep that snapshot for a busy turn when a disable refresh is deferred;
         // a successfully rebuilt bridge omits this provider via the outer gate.
         context?.agentKind === 'codex' || pluginRegistry.isEnabled('android'),
-    }),
-    iosSimulator: getIOSSimulatorMcpDeps({
-      resolveAccess: deps.resolveIOSSimulatorAccess,
     }),
     browser: getBrowserMcpDeps(),
     computer: getComputerMcpDeps({
@@ -611,6 +602,8 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       sessionControl: {
         updateQueuedMessage: wrap((service, params) => service.updateSessionQueuedMessage(params)),
         cancelQueuedMessage: wrap((service, params) => service.cancelSessionQueuedMessage(params)),
+        steerQueuedMessage: wrap((service, params) => service.steerSessionQueuedMessage(params)),
+        moveQueuedMessage: wrap((service, params) => service.moveSessionQueuedMessage(params)),
         steerSession: wrap((service, params) => service.steerSession(params)),
         stopSessionTurn: wrap((service, params) => service.stopSessionTurn(params)),
         getSessionRuntime: wrap((service, params) => service.getSessionRuntime(params)),
@@ -962,6 +955,8 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       updateWorkerQueuedMessage: wrap((s, params) => s.updateWorkerQueuedMessage(params)),
       cancelWorkerQueuedMessage: wrap((s, params) => s.cancelWorkerQueuedMessage(params)),
       mergeWorkerQueuedMessages: wrap((s, params) => s.mergeWorkerQueuedMessages(params)),
+      steerWorkerQueuedMessage: wrap((s, params) => s.steerWorkerQueuedMessage(params)),
+      moveWorkerQueuedMessage: wrap((s, params) => s.moveWorkerQueuedMessage(params)),
       idleWorker: wrap((s, params) => s.idleWorker(params)),
       endTeam: wrap((s, params) => s.endTeam(params)),
       archiveWorker: wrap((s, params) => s.archiveWorker(params)),
@@ -1001,10 +996,6 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         // Orca 工具面必须在会话生命周期内保持稳定：Claude query 不会在项目策略
         // 动态启用后重建 MCP。创建入口仍由 Main 按调用时的项目策略 fail closed。
         const keepOrcaProviderStable = pluginId === 'collab';
-        // Keep the lightweight gateway visible even before the public plugin
-        // is installed. Its live call gate returns an actionable install/enable
-        // result, while every runtime mutation remains blocked in Main.
-        const keepIOSSimulatorGatewayStable = pluginId === 'ios-simulator';
         // Stable providers may ignore a live global/project toggle so an
         // already-running ordinary task can recover, but a Bot Profile is an
         // immutable per-runtime capability boundary and must always win.
@@ -1014,7 +1005,6 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         // Plugin gate：registry 负责 essential / machine / project / user / default 判定。
         if (
           !keepOrcaProviderStable &&
-          !keepIOSSimulatorGatewayStable &&
           !deferOrdinaryGate &&
           !pluginRegistry.isEnabled(pluginId, ctx.workingDir)
         ) {

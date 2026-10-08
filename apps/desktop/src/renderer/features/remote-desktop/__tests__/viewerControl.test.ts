@@ -4,7 +4,11 @@ import type {
   RemoteDesktopViewerApi,
   RemoteViewerChannelRequest,
 } from '../../../../shared/remoteDesktopViewer';
-import { DesktopViewerController, type ViewerSnapshot } from '../viewerController';
+import {
+  clipboardFailureKey,
+  DesktopViewerController,
+  type ViewerSnapshot,
+} from '../viewerController';
 
 const runtime = vi.hoisted(() => ({
   post: null as ((message: Record<string, unknown>) => void) | null,
@@ -57,11 +61,7 @@ async function fixture(
   }));
   let remembered = options.remembered ?? null;
   const memory = vi.fn(
-    async (
-      _generation: number,
-      _displayId: string,
-      value?: RememberedViewerResolution | null,
-    ) => {
+    async (_generation: number, _displayId: string, value?: RememberedViewerResolution | null) => {
       if (value !== undefined) remembered = value;
       return remembered;
     },
@@ -137,13 +137,9 @@ async function fixture(
     resolution: memory,
     ...options.api,
   } satisfies RemoteDesktopViewerApi;
-  controller = new DesktopViewerController(
-    api,
-    (options.root ?? {}) as HTMLElement,
-    (state) => {
-      snapshot = state;
-    },
-  );
+  controller = new DesktopViewerController(api, (options.root ?? {}) as HTMLElement, (state) => {
+    snapshot = state;
+  });
   await vi.advanceTimersByTimeAsync(0);
   return { control, heartbeat, clipboard, resolution, memory, api };
 }
@@ -205,51 +201,79 @@ it('changes portrait resolution using the same temporary screen lease', async ()
   expect(runtime.receive.mock.calls.filter(([m]) => m.type === 'init')).toHaveLength(1);
 });
 
-it('orders quick copy/paste shortcuts and reports transfer failure without reconnecting', async () => {
+it('orders manual copy/paste transfers and reports failure without reconnecting', async () => {
   const current = await fixture();
   present();
   const gate = deferred<void>();
   current.clipboard.mockImplementationOnce(() => gate.promise);
-  runtime.post?.({ type: 'clipboard', action: 'copy', epoch: 'lease' });
-  runtime.post?.({ type: 'clipboard', action: 'paste', epoch: 'lease' });
+  const copy = controller.clipboard('copy');
+  const paste = controller.clipboard('paste');
   await vi.advanceTimersByTimeAsync(0);
   expect(current.clipboard).toHaveBeenCalledExactlyOnceWith(1, 'copy');
   gate.resolve();
-  await vi.advanceTimersByTimeAsync(0);
+  await Promise.all([copy, paste]);
   expect(current.clipboard).toHaveBeenLastCalledWith(1, 'paste');
-  current.clipboard.mockRejectedValueOnce(new Error('CLIPBOARD_UNAVAILABLE'));
-  runtime.post?.({ type: 'clipboard', action: 'copy', epoch: 'lease' });
-  runtime.post?.({ type: 'clipboard', action: 'paste', epoch: 'lease' });
-  await vi.advanceTimersByTimeAsync(0);
-  expect(current.clipboard).toHaveBeenCalledTimes(3);
-  expect(snapshot).toMatchObject({
-    clipboardError: true,
-    controlling: true,
-    ready: true,
-    error: null,
-  });
-  runtime.post?.({ type: 'clipboard', action: 'copy', epoch: 'lease' });
-  await vi.advanceTimersByTimeAsync(0);
-  expect(snapshot.clipboardError).toBe(false);
+  // Electron rebuilds the IPC error; the controller decodes it to the stable code.
+  current.clipboard.mockRejectedValueOnce(
+    new Error(
+      "Error invoking remote method 'remote-viewer:clipboard': Error: [PRECONDITION_FAILED] CLIPBOARD_UNSUPPORTED",
+    ),
+  );
+  await expect(controller.clipboard('paste')).rejects.toThrow(/^CLIPBOARD_UNSUPPORTED$/);
+  expect(snapshot).toMatchObject({ controlling: true, ready: true, error: null });
+  await controller.clipboard('copy');
   expect(current.clipboard).toHaveBeenCalledTimes(4);
 });
 
-it('drops queued clipboard work after host control is lost and ignores stale shortcut epochs', async () => {
+it('ignores clipboard messages from the picture; shortcuts reach the host as keys', async () => {
+  const current = await fixture();
+  present();
+  runtime.post?.({ type: 'clipboard', action: 'copy', epoch: 'lease' });
+  runtime.post?.({ type: 'clipboard', action: 'paste', epoch: 'lease' });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(current.clipboard).not.toHaveBeenCalled();
+  const init = runtime.receive.mock.calls.find(([m]) => m.type === 'init')?.[0];
+  expect(init).not.toHaveProperty('clipboardShortcuts');
+  expect(init).toMatchObject({ macKeyboard: false });
+});
+
+it('tells the picture when the controller keyboard follows macOS Command rules', async () => {
+  vi.stubGlobal('window', { electronAPI: { platform: 'darwin' } });
+  try {
+    await fixture();
+    expect(runtime.receive.mock.calls.find(([m]) => m.type === 'init')?.[0]).toMatchObject({
+      macKeyboard: true,
+    });
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});
+
+it('drops queued clipboard work after host control is lost', async () => {
   const current = await fixture();
   present();
   const gate = deferred<void>();
   current.clipboard.mockImplementationOnce(() => gate.promise);
-  runtime.post?.({ type: 'clipboard', action: 'copy', epoch: 'old-lease' });
-  runtime.post?.({ type: 'clipboard', action: 'invalid', epoch: 'lease' });
-  expect(current.clipboard).not.toHaveBeenCalled();
-  runtime.post?.({ type: 'clipboard', action: 'copy', epoch: 'lease' });
-  runtime.post?.({ type: 'clipboard', action: 'paste', epoch: 'lease' });
+  const copy = controller.clipboard('copy');
+  const paste = controller.clipboard('paste').catch((error: Error) => error.message);
   await vi.advanceTimersByTimeAsync(0);
   current.heartbeat.mockResolvedValue({ controlling: false });
   await vi.advanceTimersByTimeAsync(3000);
   gate.resolve();
-  await vi.advanceTimersByTimeAsync(0);
+  await copy;
+  expect(await paste).toBe('DESKTOP_STOPPED');
   expect(current.clipboard).toHaveBeenCalledExactlyOnceWith(1, 'copy');
+});
+
+it.each([
+  ['DESKTOP_VIEW_ONLY', 'copy', 'remoteDesktop.viewer.controlRequired'],
+  ['CLIPBOARD_UNSUPPORTED', 'paste', 'remoteDesktop.viewer.clipboardUnsupported'],
+  ['CLIPBOARD_EMPTY', 'paste', 'remoteDesktop.viewer.clipboardEmpty'],
+  ['CLIPBOARD_TOO_LONG', 'copy', 'remoteDesktop.viewer.clipboardTooLong'],
+  ['DESKTOP_CLIPBOARD_COPY_FAILED', 'copy', 'remoteDesktop.viewer.clipboardCopyFailed'],
+  ['DESKTOP_CLIPBOARD_UNAVAILABLE', 'paste', 'remoteDesktop.viewer.clipboardPasteFailed'],
+] as const)('explains %s on %s', (code, action, key) => {
+  expect(clipboardFailureKey(new Error(code), action)).toBe(key);
 });
 
 it.each([true, false])(
@@ -293,6 +317,33 @@ it('shows a reconnectable error when host input is busy during control acquisiti
   present();
   expect(f.control).toHaveBeenCalledTimes(2);
   expect(snapshot).toMatchObject({ ready: true, controlling: true, error: null });
+});
+
+it('sends workspace actions on the current lease only while controlling', async () => {
+  const f = await fixture();
+  present();
+  const request = vi.spyOn(f.api, 'request');
+  const sent = () =>
+    request.mock.calls.flatMap(([, value]) => (value.op === 'windowAction' ? [value] : []));
+  await controller.workspaceAction('workspaceLeft');
+  await controller.workspaceAction('omarchyMenu');
+  expect(sent()).toEqual([
+    { op: 'windowAction', action: 'workspaceLeft', lease: 'lease' },
+    { op: 'windowAction', action: 'omarchyMenu', lease: 'lease' },
+  ]);
+  request.mockRejectedValueOnce(new Error('[PRECONDITION_FAILED] DESKTOP_INPUT_UNSUPPORTED'));
+  await expect(controller.workspaceAction('workspaceRight')).rejects.toThrow(
+    'DESKTOP_INPUT_UNSUPPORTED',
+  );
+  controller.dispose();
+
+  // The lease is live but control is still pending: nothing may reach the host.
+  const pending = await fixture(deferred<{ controlling: boolean }>().promise);
+  present();
+  expect(snapshot).toMatchObject({ controlling: false, controlPending: true });
+  const pendingRequest = vi.spyOn(pending.api, 'request');
+  await controller.workspaceAction('workspaceRight');
+  expect(pendingRequest.mock.calls.some(([, value]) => value.op === 'windowAction')).toBe(false);
 });
 
 it('stops input and viewing after input queue overflow', async () => {
@@ -482,6 +533,9 @@ it('passes actual logical geometry to rendering and reacquires control after fit
   });
   expect(snapshot.controlling).toBe(true);
   expect(f.control).toHaveBeenLastCalledWith(true);
+  // The list keeps the size the user asked for as current, not the host's logical size.
+  const current = (await controller.resolutionModes()).filter((mode) => mode.current);
+  expect(current).toMatchObject([{ width: 1920, height: 1420 }]);
 });
 
 const sent = (type: string) =>
@@ -531,11 +585,8 @@ it('offers same-ratio choices after fitting and restores the original display', 
   present();
   // Host modes keep the monitor's ratio: the portrait mode is not offered.
   expect((await controller.resolutionModes()).map((mode) => mode.id)).toEqual(['4k']);
-  expect(controller.viewerDisplayMatched(500, 1000)).toBe(false);
   await controller.fitDisplay(500, 1000);
   expect(snapshot.fittedDisplay).toEqual({ width: 960, height: 1920 });
-  expect(controller.viewerDisplayMatched(500, 1000)).toBe(true);
-  expect(controller.viewerDisplayMatched(1000, 500)).toBe(false);
   const fitted = await controller.resolutionModes();
   expect(fitted.every((mode) => Math.abs(mode.width / mode.height - 0.5) < 0.003)).toBe(true);
   expect(fitted.find((mode) => mode.current)).toMatchObject({ width: 960, height: 1920 });
@@ -546,7 +597,10 @@ it('offers same-ratio choices after fitting and restores the original display', 
     undefined,
   );
   expect(snapshot.fittedDisplay).toEqual({ width: 960, height: 1920 });
+  // Fitting the same ratio again is a fit, not a restore; restoring is explicit.
   await controller.fitDisplay(500, 1000);
+  expect(request.mock.calls.some(([, r]) => r.op === 'restoreViewerDisplay')).toBe(false);
+  await controller.restoreDisplay();
   expect(request.mock.calls.some(([, r]) => r.op === 'restoreViewerDisplay')).toBe(true);
   expect(snapshot.fittedDisplay).toBeNull();
   expect(f.memory).toHaveBeenLastCalledWith(1, 'one', null);
@@ -557,7 +611,10 @@ it('remembers system modes per monitor and forgets the computer’s own mode', a
   const original = f.api.request;
   vi.spyOn(f.api, 'request').mockImplementation(async (generation, r) =>
     r.op === 'displayModes'
-      ? [{ ...mode4k, current: true }, { id: 'hd', width: 1920, height: 1080, current: false }]
+      ? [
+          { ...mode4k, current: true },
+          { id: 'hd', width: 1920, height: 1080, current: false },
+        ]
       : original(generation, r),
   );
   present();
@@ -587,7 +644,7 @@ it('reapplies a remembered system mode once control and the first frame are read
   expect(f.resolution).toHaveBeenCalledOnce();
 });
 
-it('refits a remembered fit to the current window at the remembered size', async () => {
+it('reapplies a remembered fit at its own size and ratio', async () => {
   const f = await fixture(undefined, false, {
     remembered: { kind: 'fit', width: 1280, height: 960 },
     root: { clientWidth: 1000, clientHeight: 500 },
@@ -597,10 +654,28 @@ it('refits a remembered fit to the current window at the remembered size', async
   await vi.advanceTimersByTimeAsync(0);
   expect(request).toHaveBeenCalledWith(
     1,
-    expect.objectContaining({ op: 'viewerDisplay', width: 1280, height: 640 }),
+    expect.objectContaining({ op: 'viewerDisplay', width: 1280, height: 960 }),
     undefined,
   );
-  expect(snapshot.fittedDisplay).toEqual({ width: 1920, height: 960 });
+  expect(snapshot.fittedDisplay).toEqual({ width: 1280, height: 960 });
+});
+
+it('switches the fitted ratio and keeps it across same-ratio sizes', async () => {
+  const f = await fixture();
+  const request = vi.spyOn(f.api, 'request');
+  present();
+  await controller.fitDisplay(500, 1000);
+  const screenRatio = { width: 1512, height: 982 };
+  await controller.fitDisplay(1512, 982, true, undefined, { ratio: screenRatio });
+  expect(request).toHaveBeenCalledWith(
+    1,
+    expect.objectContaining({ op: 'viewerDisplay', width: 1512, height: 982 }),
+    undefined,
+  );
+  expect(snapshot.fittedDisplay).toEqual(screenRatio);
+  await controller.resolution({ id: 'fitted:1210x786', width: 1210, height: 786, current: false });
+  expect(snapshot.fittedDisplay).toEqual(screenRatio);
+  expect(f.memory).toHaveBeenLastCalledWith(1, 'one', { kind: 'fit', width: 1210, height: 786 });
 });
 
 it('does not retry a remembered choice that failed in this window', async () => {
@@ -663,17 +738,38 @@ it('maps channel refusals to the relay and real failures to errors', async () =>
   const f = await channelFixture();
   present();
   f.ask(control, 'busy');
-  runtime.post?.({ type: 'channelReply', epoch: 'lease', id: 'busy', ok: false, error: 'DESKTOP_CHANNEL_BUSY' });
+  runtime.post?.({
+    type: 'channelReply',
+    epoch: 'lease',
+    id: 'busy',
+    ok: false,
+    error: 'DESKTOP_CHANNEL_BUSY',
+  });
   f.ask({ op: 'displayModes', lease: 'lease' }, 'large');
-  runtime.post?.({ type: 'channelReply', epoch: 'lease', id: 'large', ok: false, error: 'DESKTOP_REPLY_TOO_LARGE' });
+  runtime.post?.({
+    type: 'channelReply',
+    epoch: 'lease',
+    id: 'large',
+    ok: false,
+    error: 'DESKTOP_REPLY_TOO_LARGE',
+  });
   f.ask(control, 'failed');
-  runtime.post?.({ type: 'channelReply', epoch: 'lease', id: 'failed', ok: false, error: 'DESKTOP_VIEW_ONLY' });
+  runtime.post?.({
+    type: 'channelReply',
+    epoch: 'lease',
+    id: 'failed',
+    ok: false,
+    error: 'DESKTOP_VIEW_ONLY',
+  });
   f.ask(control, 'unsent');
   runtime.post?.({ type: 'channelRequestState', epoch: 'lease', id: 'unsent', sent: false });
   await vi.advanceTimersByTimeAsync(0);
   expect(f.channelReply).toHaveBeenCalledWith(1, 'busy', { kind: 'relay' });
   expect(f.channelReply).toHaveBeenCalledWith(1, 'large', { kind: 'relay' });
-  expect(f.channelReply).toHaveBeenCalledWith(1, 'failed', { kind: 'error', code: 'DESKTOP_VIEW_ONLY' });
+  expect(f.channelReply).toHaveBeenCalledWith(1, 'failed', {
+    kind: 'error',
+    code: 'DESKTOP_VIEW_ONLY',
+  });
   expect(f.channelReply).toHaveBeenCalledWith(1, 'unsent', { kind: 'relay' });
 });
 

@@ -11,6 +11,10 @@ import {
   type IosActionSheetSpec,
 } from "@/platform/chrome/actionMenuModel";
 
+// 所有入口共用同一个原生 presenter。菜单关闭前忽略重复请求,也不把动作结果
+// 共享给重复调用方,否则一次选择会执行多次预览/分享等副作用。
+let actionMenuPresented = false;
+
 /** iOS 无附着点的纯动作菜单走系统路径;其它端继续自绘。 */
 export function usesSystemActionMenu(): boolean {
   return Platform.OS === "ios";
@@ -59,16 +63,21 @@ function presentIosActionSheet(spec: IosActionSheetSpec): Promise<number> {
  * 当前包尚未编进原生模块时回退 ActionSheetIOS。
  * 从用户手势回调里调用,不要从 useEffect 里调,避免 Strict Mode 弹两次。
  */
-export function showActionMenu<K extends string>(
+export async function showActionMenu<K extends string>(
   request: ChromeActionMenuRequest<K>,
 ): Promise<ChromeActionMenuResult<K>> {
-  if (Platform.OS !== "ios") {
-    return Promise.resolve({ kind: "cancel" });
+  if (Platform.OS !== "ios" || actionMenuPresented) {
+    return { kind: "cancel" };
   }
-  const spec = buildIosActionSheetSpec(request);
-  return presentIosActionSheet(spec).then((buttonIndex) =>
-    resolveIosActionSheetResult(spec, buttonIndex),
-  );
+  actionMenuPresented = true;
+  try {
+    const spec = buildIosActionSheetSpec(request);
+    // 原生 Sheet 的 promise 在关闭动画完成后才结算;异常也必须释放占用。
+    const buttonIndex = await presentIosActionSheet(spec);
+    return resolveIosActionSheetResult(spec, buttonIndex);
+  } finally {
+    actionMenuPresented = false;
+  }
 }
 
 /** 确认框两端都用系统 Alert,这里只做统一入口。 */

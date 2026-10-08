@@ -30,6 +30,7 @@ function stubElectron() {
     disableOrca: vi.fn(),
     regenerateSessionTitle: vi.fn().mockResolvedValue({ title: 'local title' }),
     predictNextPrompt: vi.fn().mockResolvedValue({ prompt: 'local prompt' }),
+    getSessionTurnActive: vi.fn().mockResolvedValue({ inTurn: false }),
     plugins: { getState: vi.fn().mockResolvedValue({ effectiveEnabled: true }) },
     input: { clearSession: vi.fn(), compact: vi.fn() },
   };
@@ -444,6 +445,27 @@ describe('makerApiFor 路由(完整对等会话级操作)', () => {
     invoke.mockClear();
     // 未注册 → 本机会话:直接 false,不经隧道(看门狗对本机会话整体不生效)
     await expect(isSessionTurnRunningFor('local-sess')).resolves.toBe(false);
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it('getSessionTurnActiveOn:远程问被控端 maker:session-in-turn,本机问本机 main', async () => {
+    const { invoke, makerSpies } = stubElectron();
+    invoke.mockResolvedValue(true);
+    const { getSessionTurnActiveOn } = await import('@/lib/makerTransport');
+
+    // 远程:控制端本机 main 没有这个 turn,必须问被控端,不能拿本机的 false 当真值。
+    await expect(getSessionTurnActiveOn('rs', 'dev-1')).resolves.toBe(true);
+    expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:session-in-turn', ['rs']);
+    expect(makerSpies.getSessionTurnActive).not.toHaveBeenCalled();
+
+    // 隧道失败原样抛出,由调用方按「未确认」处理(不显示中断横幅)。
+    invoke.mockRejectedValueOnce(new Error('[DEVICE_OFFLINE]'));
+    await expect(getSessionTurnActiveOn('rs', 'dev-1')).rejects.toThrow('DEVICE_OFFLINE');
+
+    invoke.mockClear();
+    makerSpies.getSessionTurnActive.mockResolvedValueOnce({ inTurn: true });
+    await expect(getSessionTurnActiveOn('local-sess', null)).resolves.toBe(true);
+    expect(makerSpies.getSessionTurnActive).toHaveBeenCalledWith('local-sess');
     expect(invoke).not.toHaveBeenCalled();
   });
 

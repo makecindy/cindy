@@ -151,6 +151,7 @@ export interface RoutableMaker {
     | 'updateText'
     | 'updateContent'
     | 'clearError'
+    | 'cancelUsageLimitWait'
     | 'retryLastError'
     | 'clearSession'
     | 'persistTurnErrorDeferred'
@@ -265,6 +266,7 @@ function remoteMakerApi(deviceId: string): RoutableMaker {
       updateText: t('maker:input:update-text') as FullMaker['input']['updateText'],
       updateContent: t('maker:input:update-content') as FullMaker['input']['updateContent'],
       clearError: t('maker:input:clear-error') as FullMaker['input']['clearError'],
+      cancelUsageLimitWait: t('maker:input:cancel-usage-limit-wait') as FullMaker['input']['cancelUsageLimitWait'],
       retryLastError: t('maker:input:retry-last-error') as FullMaker['input']['retryLastError'],
       clearSession: t('maker:input:clear-session') as FullMaker['input']['clearSession'],
       // device-link:auth error 重试失败/放弃时在被控端落库,经隧道路由到被控端 main。
@@ -408,6 +410,23 @@ export function isSessionTurnRunningFor(sessionId: string): Promise<boolean> {
   const deviceId = getSessionDeviceId(sessionId);
   if (!deviceId) return Promise.resolve(false);
   return invokeRemote(deviceId, 'maker:session-in-turn', [sessionId]) as Promise<boolean>;
+}
+
+/**
+ * 「应用退出中断」横幅的运行态真值:时间戳来自哪台设备的 session 行,就问哪台设备。
+ * 远程会话的 turn 只在被控端跑,控制端本机 main 永远答「不在 turn 中」,拿它当真值会把
+ * 被控端正在跑的任务误判成中断。deviceId 由调用方显式传入(视图的粘滞归属),不在这里
+ * 重新解析易失的 session origin —— 重连窗口内退回本机同样会得到错误的 false。
+ */
+export async function getSessionTurnActiveOn(
+  sessionId: string,
+  deviceId: string | null | undefined,
+): Promise<boolean> {
+  if (!deviceId) {
+    const result = await window.electronAPI.maker.getSessionTurnActive(sessionId);
+    return result?.inTurn === true;
+  }
+  return (await invokeRemote(deviceId, 'maker:session-in-turn', [sessionId])) === true;
 }
 
 /**

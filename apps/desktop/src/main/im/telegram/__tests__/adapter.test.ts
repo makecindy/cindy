@@ -24,6 +24,8 @@ describe('Telegram group history access scope', () => {
     } as IMMessageEvent);
     expect(result?.agentText).toContain('Private instructions');
     expect(result?.contextSnapshot).toEqual({ replyContext: '[Alice] quoted text', replyMessageCount: 1 });
+    // The same reply the model sees is the one Auto-review may use.
+    expect(result?.replyContext).toEqual({ author: 'Alice', text: 'quoted text' });
   });
 
   it('only lets owner-triggered group turns omit the policy in Full access', () => {

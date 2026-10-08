@@ -41,7 +41,7 @@
 
 import { app, BrowserWindow } from 'electron';
 import path from 'node:path';
-import { parseSharedTaskInvitationIntent } from '@cindy/device-link';
+import { parseProviderShareInvitationIntent, parseSharedTaskInvitationIntent } from '@cindy/device-link';
 import { createLogger } from './logger';
 import { registerWindowsDeepLinkName } from './deepLinkWindowsRegistration';
 import {
@@ -66,6 +66,8 @@ export const OPEN_SHARE_FILE_FLAG = '--open-share-file';
 
 export type DeepLinkPayload =
   | { type: 'shared-task-join'; invitation: string; server: string }
+  /** 供应商分享链接：原样交给 Renderer 的申请弹窗，由主进程命令再解析与核对区域。 */
+  | { type: 'provider-share-join'; link: string }
   | { type: 'session'; id: string; messageClientId?: string }
   | { type: 'project'; workingDir: string }
   /**
@@ -105,6 +107,7 @@ export function parseDeepLink(url: string): DeepLinkPayload | null {
   if (typeof url !== 'string') return null;
   const invitation = parseSharedTaskInvitationIntent(url);
   if (invitation) return { type: 'shared-task-join', ...invitation };
+  if (parseProviderShareInvitationIntent(url)) return { type: 'provider-share-join', link: url };
   const prefix = matchDeepLinkPrefix(url);
   if (prefix === null) return null;
   const rest = url.slice(prefix.length);
@@ -412,7 +415,8 @@ export function sendMainWindowMessage(channel: string, payload: unknown): boolea
 }
 
 function safeDeepLinkLog(payload: DeepLinkPayload) {
-  return payload.type === 'shared-task-join' ? { type: payload.type } : payload;
+  // 口令不进日志。
+  return payload.type === 'shared-task-join' || payload.type === 'provider-share-join' ? { type: payload.type } : payload;
 }
 
 function dispatchDeepLink(payload: DeepLinkPayload, shouldFocus = true): void {
@@ -425,7 +429,7 @@ function dispatchDeepLink(payload: DeepLinkPayload, shouldFocus = true): void {
   const windowReady = win && !win.isDestroyed() && win.webContents && !win.webContents.isLoading();
   // A loaded login/LocalDbGate page has no MainLayout listener yet. Imports stay
   // in the existing pending slot until the authenticated consumer takes them.
-  if (!windowReady || payload.type === 'provider-import' || payload.type === 'shared-task-join') {
+  if (!windowReady || payload.type === 'provider-import' || payload.type === 'shared-task-join' || payload.type === 'provider-share-join') {
     // 保留"用户最后意图"语义:同一次冷启动如果先后入站多条 (例如 argv 同时含
     // deep link URL 和 --open-folder, 现实场景极罕见但 bootstrap 两条 scan 都
     // 会触发),后到的覆盖前者。但 warn log 留下排查线索,事后能从日志识别这种
@@ -495,7 +499,7 @@ export function redactConsumedDeepLinkInArgv(argv: string[], deepLink?: string):
   for (let i = argv.length - 1; i >= 0; i -= 1) {
     const arg = argv[i];
     const prefix = typeof arg === 'string' ? matchDeepLinkPrefix(arg) : null;
-    if (arg !== deepLink && !(prefix && /^(provider\/|shared-task\/|shared-session\?)/.test(arg.slice(prefix.length)))) continue;
+    if (arg !== deepLink && !(prefix && /^(provider\/|provider-share\/|shared-task\/|shared-session\?)/.test(arg.slice(prefix.length)))) continue;
     argv[i] = `${DEEP_LINK_PRIMARY_SCHEME}://consumed`;
   }
 }

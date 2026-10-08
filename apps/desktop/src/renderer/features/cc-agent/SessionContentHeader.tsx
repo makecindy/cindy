@@ -68,6 +68,7 @@ import { SessionRenameInput } from './SessionRenameInput';
 import { useSessionBoundSchedules } from '@/features/scheduler/lib/scheduleSessionBinding';
 import { ScheduleBindingBadge } from './sidebar/ScheduleBindingBadge';
 import { RemoteProjectIcon } from './sidebar/RemoteProjectIcon';
+import { VendorIcon, agentKindToVendor } from '@/components/sidebar/VendorIcon';
 import { MENU_ITEM_CLASS, MENU_ROW_CLASS } from './sidebar/menuStyles';
 import { SessionProjectMoveSubmenu } from './sidebar/SessionProjectMoveSubmenu';
 import type { SessionMoveTarget } from './sidebar/sessionMoveTarget';
@@ -77,8 +78,55 @@ import { isRemoteSessionWriteBlocked } from './lib/remoteSessionWriteGuard';
 import { Tip } from '@/components/ui/tooltip';
 import { TaskTagDots, TaskTagMenuSection, TaskTagEditor } from '@/features/task-tags/TaskTags';
 import { isSharedTaskPeer } from '@cindy/device-link';
+import { useDeviceLinkDeviceList } from '@/features/device-link/useDeviceLinkDeviceList';
+import { useProviderShareAgentDevices } from '@/features/provider-share/useProviderShareAgentDevices';
 
 const log = createLogger('SessionContentHeader');
+
+/**
+ * 任务在本机、Agent 在同账号另一台电脑上运行:标明那台电脑，离线时如实提示(不自动改在本机跑)。
+ * 图标与侧栏同款:Agent 图标 + 右上信号波纹。
+ */
+function AgentDeviceIndicator({
+  deviceId,
+  agentKind,
+}: {
+  deviceId: string;
+  agentKind: Session['agentKind'];
+}) {
+  const { t } = useTranslation();
+  const devices = useDeviceLinkDeviceList();
+  // 分享来的供应商(`share:<id>`)不在同账号设备列表里，名字取自已收到的分享。
+  const { nameFor: providerShareDeviceName } = useProviderShareAgentDevices();
+  const device = devices?.find((item) => item.deviceId === deviceId);
+  const name = device?.name || providerShareDeviceName(deviceId) || deviceId;
+  const offline = device ? !device.online : false;
+  const vendor = agentKindToVendor(agentKind);
+  return (
+    <Tip
+      text={t(
+        offline ? 'ccAgent.sessionHeader.agentDeviceOffline' : 'ccAgent.sessionHeader.agentDevice',
+        { device: name },
+      )}
+    >
+      <span
+        role="img"
+        aria-label={t('ccAgent.sessionHeader.agentDevice', { device: name })}
+        className="inline-flex"
+        style={WINDOW_NO_DRAG_STYLE}
+      >
+        {/* 波纹向右上溢出约 3px,右边距比其它标题前缀图标多留一些。 */}
+        <VendorIcon
+          vendor={vendor}
+          size={vendor === 'cc' ? 14 : 13}
+          remote
+          colorClassName="text-[var(--cmd-palette-item-meta)]"
+          className={cn('mr-2', offline && 'opacity-75')}
+        />
+      </span>
+    </Tip>
+  );
+}
 
 /**
  * 注册器组件：由路由直挂的 CCAgentSessionView 条件渲染（仅当该实例"拥有"
@@ -142,7 +190,8 @@ export function SessionContentHeader({
   const sharedGuest = isSharedTaskPeer(session.deviceLinkDeviceId ?? '');
   const { runningSessionIds } = useSessionRunningStatus(session.id);
   const { confirm: confirmDialog } = useConfirmDialog();
-  const { runSessionAction, unarchiveSession } = useSessionLifecycleActions();
+  const { runSessionAction, unarchiveSession, beginRemoteArchive, cancelRemoteArchive } =
+    useSessionLifecycleActions();
 
   const isPinned = session.pinnedAt != null;
   const isArchived = session.status === 'archived';
@@ -161,7 +210,7 @@ export function SessionContentHeader({
     !session.deviceLinkDeviceId;
   const projectOptions = useProjectPickerOptions();
   // heartbeat schedule 绑定标识,与 SessionItem 同源数据;删除/过期后自动消失。
-  const boundSchedules = useSessionBoundSchedules(session.id);
+  const boundSchedules = useSessionBoundSchedules(session.id, session.deviceLinkDeviceId);
   const displayTitle =
     getSessionDisplayTitle(session, t('ccAgent.common.unnamedSession'), t)?.trim() ||
     t('ccAgent.sessionHeader.untitled');
@@ -430,6 +479,11 @@ export function SessionContentHeader({
     // 一起等,dirty 先返回 clean、接管查询还在飞的那段时间就是 clean 结论的失效窗口。
     // 改成接管结算之后再 resolve —— clean 一律重查(见 worktreeRemovalWarning),
     // 拿到的是此刻的结论;菜单打开时的 prefetch 仍然热了 git cache。
+    // 远程任务的预检是一次完整隧道往返:先乐观隐藏行并跳离,预检干净则沿用同一叠加层
+    // 写库,需要确认时取消再让行回来(与 sidebar 同口径,见 handleActionClick)。
+    const remoteArchiveToken = session.deviceLinkDeviceId
+      ? beginRemoteArchive(session.id, session.deviceLinkDeviceId, session.id)
+      : null;
     const preflight = await resolveWorktreeRemovalPreflight(session.id, session.deviceLinkDeviceId);
     // 归档不弹确认框 —— 可逆操作(菜单里就有「恢复」),与 sidebar 同口径。
     // 免确认的判据是「**确认**干净」:worktree 脏、或预检失败拿不到结论('unknown')
@@ -446,10 +500,18 @@ export function SessionContentHeader({
         confirmText: t('ccAgent.sidebar.confirmArchive.confirm'),
         cancelText: t('ccAgent.sidebar.confirmArchive.cancel'),
       });
-      if (!ok) return;
+      if (!ok) {
+        if (remoteArchiveToken) cancelRemoteArchive(remoteArchiveToken);
+        return;
+      }
     }
-    await runSessionAction(session.id, 'archive', { activeSessionId: session.id });
+    await runSessionAction(session.id, 'archive', {
+      activeSessionId: session.id,
+      remoteArchiveToken,
+    });
   }, [
+    beginRemoteArchive,
+    cancelRemoteArchive,
     confirmDialog,
     remoteWritesBlocked,
     runSessionAction,
@@ -523,7 +585,12 @@ export function SessionContentHeader({
       )}
       {boundSchedules.length > 0 && (
         <span style={WINDOW_NO_DRAG_STYLE}>
-          <ScheduleBindingBadge schedules={boundSchedules} size={13} className="mr-1 size-4" />
+          <ScheduleBindingBadge
+            schedules={boundSchedules}
+            deviceLinkDeviceId={session.deviceLinkDeviceId}
+            size={13}
+            className="mr-1 size-4"
+          />
         </span>
       )}
       {!isEditing && remoteIconKind && (
@@ -538,6 +605,9 @@ export function SessionContentHeader({
             className="mr-1 text-[var(--cmd-palette-item-meta)]"
           />
         </Tip>
+      )}
+      {!isEditing && !remoteIconKind && session.agentDeviceId && (
+        <AgentDeviceIndicator deviceId={session.agentDeviceId} agentKind={session.agentKind} />
       )}
 
       {isEditing ? (

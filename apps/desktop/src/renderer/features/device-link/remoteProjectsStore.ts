@@ -17,10 +17,11 @@ import { normalizeTaskTags, reconcileTaskTags } from '@cindy/maker-shared';
  *      · 增量(`applyPatch`):收到被控端 `local-db:sessions:patched` push 时就地幂等合并;
  *        status=deleted → 移出分片；active/archived → 在状态桶间迁移。
  *      · 新建(`requestRemoteReseed`):`sessions:created` push 无 row 数据 → 触发该设备重拉。
- *    唯一例外是**投影层**的两个叠加层:标题预览(`setPendingTitlePreview`)只在权威
+ *    唯一例外是**投影层**的三个叠加层:标题预览(`setPendingTitlePreview`)只在权威
  *    标题仍是系统占位(默认名 / fork 占位 / 本端登记过的合成占位)时顶替显示;首条发送
  *    时刻(`setPendingFirstSend`)只在权威 userSendAt 仍为空时补上。被控端写下真实值
- *    一到就自动让位。分片数据仍是纯镜像。
+ *    一到就自动让位。归档 / 恢复(`beginPendingStatus`)在写库往返期间先把行换桶,
+ *    失败回滚、成功后由写库之后的新列表确认让位。分片数据仍是纯镜像。
  *  - **复用本地渲染管线**:每条 session 注入 `deviceLinkDeviceId/Name/ConnectionStatus`
  *    后喂给 `groupSessions`。
  *  - **origin 注册表**:`sessionId → deviceId`(`getSessionDeviceId`),供传输层 / SessionView 用。
@@ -41,6 +42,7 @@ import { DEFAULT_DRAFT_SESSION_TITLE } from '@cindy/maker-shared/session-title';
 import type { DeviceLinkConnectionStatus, Session } from '@/lib/ccAgent.types';
 import type { ListStatusFilter } from '@/lib/sessionService';
 import type { AutomationScheduleSessionInfo } from '../cc-agent/lib/automationSidebarGrouping';
+import { buildBindingMap, type ScheduleBinding } from '../scheduler/lib/scheduleBindingIndex';
 import { clearCachedMessages } from './mirrorCacheClient';
 
 export type RemoteSessionStatus = Exclude<ListStatusFilter, 'all'>;
@@ -55,8 +57,10 @@ interface DeviceShard {
   /** 已拿到过权威列表的状态桶；空数组同样需要被记住，避免每次渲染都重复拉取。 */
   loadedStatuses: Set<RemoteSessionStatus>;
   scheduleIndex?: ReadonlyMap<string, AutomationScheduleSessionInfo>;
+  scheduleBindings?: ReadonlyMap<string, ScheduleBinding[]>;
 }
 
+const EMPTY_SCHEDULE_BINDINGS: readonly ScheduleBinding[] = Object.freeze([]);
 const shards = new Map<string, DeviceShard>();
 let mergedScheduleIndex: ReadonlyMap<string, AutomationScheduleSessionInfo> = new Map();
 function recomputeScheduleIndex(): void {
@@ -360,6 +364,84 @@ function dropSessionOverlays(sessionId: string): void {
   pendingFirstSendAt.delete(sessionId);
 }
 
+/**
+ * 一次远程归档 / 恢复的乐观状态迁移凭据(按对象身份比较,调用方只透传)。
+ * 同一任务以最后一次 begin 为准,被取代的旧凭据 complete / rollback 一律 no-op。
+ */
+export interface RemotePendingStatusToken {
+  readonly deviceId: string;
+  readonly sessionId: string;
+  readonly status: RemoteSessionStatus;
+}
+
+interface PendingStatusEntry {
+  token: RemotePendingStatusToken;
+  /**
+   * 写库成功那一刻两个状态桶的 snapshot epoch;null = 写库仍在途。
+   * 只有 epoch 大于栅栏的列表(写库确认之后才发出的 sessions:list)落地,才算权威确认。
+   */
+  fence: Record<RemoteSessionStatus, number> | null;
+  /** 已容忍过一份内容对不上的写库后列表(可能是被控端合并进写库前查询的旧结果)。 */
+  toleratedMismatch: boolean;
+}
+
+/**
+ * 「状态迁移中」叠加层 —— 远程任务归档 / 恢复的乐观投影,与标题预览同一性质,**不写分片**。
+ *
+ * 远程归档要等 patch-meta 往返 + 被控端 `sessions:patched` 回流,行才会离开 active 桶;
+ * 本机任务早已靠 sessionsStore 的状态事务即时迁移。这里在投影层先把 status 顶成目标值,
+ * 行当帧换桶;分片里的权威行一个字节不动。
+ *
+ * 生命周期:
+ *  - begin:登记叠加层(同一任务后来者覆盖先来者);
+ *  - rollback:写库失败 / 用户取消 → 撤掉,行照权威数据回到原位;
+ *  - complete:写库成功 → 用被控端返回的行就地 applyPatch(不等 push 回流),叠加层
+ *    **继续保留**到写库确认后才发出的列表(epoch 栅栏)落地为止。写库前已在途的列表
+ *    (含 10s 周期对账)被栅栏挡住;写库后的列表还可能被被控端并进写库前的查询、带着
+ *    旧值回来 —— 内容(行在目标桶 / 不在另一桶)对不上的**第一份**容忍一次,之后的
+ *    写库后列表无论内容一律让位:被控端状态写不推进 updatedAt,分不清「合并的旧结果」
+ *    和「另一控制端随后又改了」,只容忍一次才不会把后者永远顶住。
+ *    不让在途列表 superseded,是为了不连带打断 bootstrap / 归档桶按需读取的收尾。
+ *  - 状态 push 同样分不清迟到的旧推送和之后的新改动,一律不撤叠加层,交给上面的列表
+ *    判定;只有 status=deleted、设备移除、整体清空立即回收。
+ */
+const pendingStatuses = new Map<string, PendingStatusEntry>();
+
+function withPendingStatus(session: Session, deviceId: string): Session {
+  const entry = pendingStatuses.get(session.id);
+  if (!entry || entry.token.deviceId !== deviceId) return session;
+  const { status } = entry.token;
+  // 归档一并 unpin(与被控端写库、本机 sessionsStore 乐观补丁同口径)。
+  const unpin = status === 'archived' && session.pinnedAt != null;
+  if (session.status === status && !unpin) return session;
+  return { ...session, status, ...(unpin ? { pinnedAt: null } : {}) };
+}
+
+/**
+ * 该设备该状态桶的列表落地时,撤掉被它确认过的叠加层:必须是写库后才发出的列表(epoch
+ * 越过栅栏);内容与写库结果对不上的第一份容忍一次(见 {@link pendingStatuses})。
+ */
+function settlePendingStatuses(
+  deviceId: string,
+  status: RemoteSessionStatus,
+  incoming: readonly Session[],
+): boolean {
+  if (pendingStatuses.size === 0) return false;
+  const epoch = snapshotEpoch.get(snapshotEpochKey(deviceId, status)) ?? 0;
+  let settled = false;
+  for (const [sessionId, entry] of pendingStatuses) {
+    if (entry.token.deviceId !== deviceId || !entry.fence || epoch <= entry.fence[status]) continue;
+    const listed = incoming.some((session) => session.id === sessionId);
+    if (listed !== (status === entry.token.status) && !entry.toleratedMismatch) {
+      entry.toleratedMismatch = true;
+      continue;
+    }
+    pendingStatuses.delete(sessionId);
+    settled = true;
+  }
+  return settled;
+}
+
 /** 重算扁平快照 + origin 注册表,然后通知订阅者。所有 mutation 走这里。 */
 function recompute(): void {
   recomputeScheduleIndex();
@@ -374,7 +456,10 @@ function recompute(): void {
     const flat: Session[] = [];
     for (const shard of shards.values()) {
       for (const s of shard.sessions) {
-        const projected = withPendingFirstSend(withPendingTitle(s));
+        const projected = withPendingStatus(
+          withPendingFirstSend(withPendingTitle(s)),
+          shard.deviceId,
+        );
         flat.push(projected);
         sessionDeviceIndex.set(s.id, shard.deviceId);
         if (projected.title) sessionTitleIndex.set(s.id, projected.title);
@@ -467,6 +552,17 @@ function stamp(
 }
 
 const actions = {
+  setDeviceScheduleBindings(deviceId: string, bindings: readonly ScheduleBinding[]): void {
+    const shard = shards.get(deviceId);
+    if (!shard) return;
+    const next = buildBindingMap(bindings);
+    if (JSON.stringify([...(shard.scheduleBindings ?? [])]) === JSON.stringify([...next])) return;
+    shard.scheduleBindings = next;
+    subs.forEach((fn) => fn());
+  },
+  getSessionScheduleBindings(deviceId: string, sessionId: string): readonly ScheduleBinding[] {
+    return shards.get(deviceId)?.scheduleBindings?.get(sessionId) ?? EMPTY_SCHEDULE_BINDINGS;
+  },
   setDeviceScheduleIndex(
     deviceId: string,
     index: ReadonlyMap<string, AutomationScheduleSessionInfo>,
@@ -508,6 +604,8 @@ const actions = {
     const failedStateCleared =
       status === 'active' ? false : setSessionStatusFailed(deviceId, 'archived', false);
     const statusWasLoaded = existing?.loadedStatuses.has(status) ?? false;
+    // 写库确认之后才发出的列表(epoch 越过栅栏)落地 = 状态迁移叠加层的权威确认。
+    const pendingStatusSettled = settlePendingStatuses(deviceId, status, stamped);
     const incomingIds = new Set(stamped.map((session) => session.id));
     const preserved =
       existing?.sessions
@@ -536,7 +634,9 @@ const actions = {
         existing.loadedStatuses.add(status);
         recomputeArchivedLoadedDeviceIds();
       }
-      if (loadingStateCleared || failedStateCleared || !statusWasLoaded) {
+      if (pendingStatusSettled) {
+        recompute();
+      } else if (loadingStateCleared || failedStateCleared || !statusWasLoaded) {
         subs.forEach((fn) => fn());
       }
       return;
@@ -559,6 +659,7 @@ const actions = {
       connectionStatus,
       sessions: nextSessions,
       scheduleIndex: existing?.scheduleIndex,
+      scheduleBindings: existing?.scheduleBindings,
       loadedStatuses,
     });
     recompute();
@@ -707,6 +808,11 @@ const actions = {
     // 「别的控制端刚删掉的会话」的正文一直留在盘上,直到 LRU 逐出 / 设备移除 / 登出
     // (review: codex P1)。归档仍可从 Archived / All 打开，必须保留缓存供离线查看。
     if (deleted) clearCachedMessages(deviceId, sessionId);
+    // 状态迁移叠加层:删除一律让位。active / archived 推送不带 updatedAt,可能是写库前
+    // 迟到的旧推送,不动叠加层,交给写库后的列表按内容确认(见 pendingStatuses)。
+    if (deleted && pendingStatuses.get(sessionId)?.token.deviceId === deviceId) {
+      pendingStatuses.delete(sessionId);
+    }
     const shard = shards.get(deviceId);
     if (!shard) return;
     const idx = shard.sessions.findIndex((s) => s.id === sessionId);
@@ -849,6 +955,10 @@ const actions = {
     for (const session of shards.get(deviceId)?.sessions ?? []) {
       dropSessionOverlays(session.id);
     }
+    // 状态迁移叠加层按设备回收(行可能已不在分片里);在途写库之后的 complete / rollback 随之 no-op。
+    for (const [sessionId, entry] of pendingStatuses) {
+      if (entry.token.deviceId === deviceId) pendingStatuses.delete(sessionId);
+    }
     const shardDeleted = shards.delete(deviceId);
     const bootstrapStateCleared = setBootstrapState(deviceId, 'idle');
     const archivedLoadingCleared = setSessionStatusLoading(deviceId, 'archived', false);
@@ -871,6 +981,7 @@ const actions = {
     landedSystemTitles.clear();
     synthesizedPreviewSessions.clear();
     pendingFirstSendAt.clear();
+    pendingStatuses.clear();
     const bootstrapStateChanged =
       bootstrapLoadingDeviceIds.size > 0 ||
       archivedLoadingDeviceIds.size > 0 ||
@@ -959,12 +1070,67 @@ const actions = {
     recompute();
   },
 
-  /** 测试专用:清空标题预览与首条发送叠加层。 */
+  /**
+   * 远程归档 / 恢复的乐观起点(见 {@link pendingStatuses}):投影层立即换桶,分片不动。
+   * 同一任务再次 begin 会取代前一次;返回的凭据交给 complete / rollback 收尾。
+   */
+  beginPendingStatus(
+    deviceId: string,
+    sessionId: string,
+    status: RemoteSessionStatus,
+  ): RemotePendingStatusToken {
+    const token: RemotePendingStatusToken = { deviceId, sessionId, status };
+    pendingStatuses.set(sessionId, { token, fence: null, toleratedMismatch: false });
+    recompute();
+    return token;
+  },
+
+  /**
+   * 写库成功:用被控端返回的行(status / pinnedAt / updatedAt)就地落进分片,不等
+   * `sessions:patched` 回流;叠加层留到写库后的新列表确认为止。凭据已被取代 / 设备
+   * 已移除时 no-op —— 旧写库的结果不能盖过更新的一次迁移,权威值交给 push 回流。
+   */
+  completePendingStatus(
+    token: RemotePendingStatusToken,
+    persisted?: Partial<Session> | null,
+  ): boolean {
+    const entry = pendingStatuses.get(token.sessionId);
+    if (entry?.token !== token) return false;
+    entry.fence = {
+      active: snapshotEpoch.get(snapshotEpochKey(token.deviceId, 'active')) ?? 0,
+      archived: snapshotEpoch.get(snapshotEpochKey(token.deviceId, 'archived')) ?? 0,
+    };
+    const patch: Record<string, unknown> = { status: token.status };
+    if (persisted && Object.prototype.hasOwnProperty.call(persisted, 'pinnedAt')) {
+      patch.pinnedAt = persisted.pinnedAt ?? null;
+    } else if (token.status === 'archived') {
+      patch.pinnedAt = null;
+    }
+    if (typeof persisted?.updatedAt === 'string') patch.updatedAt = persisted.updatedAt;
+    actions.applyPatch(token.deviceId, token.sessionId, patch);
+    return true;
+  },
+
+  /** 凭据仍是该任务最新的一次迁移(未被后来的 begin 取代、未被删除 / 设备移除回收)。 */
+  isPendingStatusCurrent(token: RemotePendingStatusToken): boolean {
+    return pendingStatuses.get(token.sessionId)?.token === token;
+  },
+
+  /** 写库失败 / 用户取消:撤掉叠加层,行回到权威位置。凭据已被取代时 no-op。 */
+  rollbackPendingStatus(token: RemotePendingStatusToken): boolean {
+    if (pendingStatuses.get(token.sessionId)?.token !== token) return false;
+    pendingStatuses.delete(token.sessionId);
+    recompute();
+    return true;
+  },
+
+  /** 测试专用:清空标题预览、首条发送与状态迁移叠加层。 */
   __resetPendingTitlePreviewForTest(): void {
     pendingTitlePreview.clear();
     landedSystemTitles.clear();
     synthesizedPreviewSessions.clear();
     pendingFirstSendAt.clear();
+    pendingStatuses.clear();
   },
 
   /** 测试专用:清空 origin 钉子(生产期刻意不清,见 pinnedOrigins)。 */
@@ -1292,5 +1458,16 @@ export function useRemoteScheduleIndex(): ReadonlyMap<string, AutomationSchedule
     subscribe,
     () => mergedScheduleIndex,
     () => mergedScheduleIndex,
+  );
+}
+
+export function useRemoteSessionScheduleBindings(
+  deviceId: string | null | undefined,
+  sessionId: string,
+): readonly ScheduleBinding[] {
+  return useSyncExternalStore(
+    subscribe,
+    () => deviceId ? actions.getSessionScheduleBindings(deviceId, sessionId) : EMPTY_SCHEDULE_BINDINGS,
+    () => EMPTY_SCHEDULE_BINDINGS,
   );
 }

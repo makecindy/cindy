@@ -115,7 +115,8 @@ describe('model Orca cleanup authority', () => {
       deps.listWorkersByLead = vi.fn(async id => { const result = await list(id); if (phase === 'lookup') allowed = false; return result; });
       const mark = deps.markWorkerIdle;
       deps.markWorkerIdle = vi.fn(async id => { await mark(id); if (phase === 'after-write') allowed = false; });
-      deps.cancelWorkerSessionOperations = vi.fn(async () => { if (phase === 'after-write') allowed = false; });
+      const forget = deps.forgetWorkerSession;
+      deps.forgetWorkerSession = vi.fn(id => { forget?.(id); if (phase === 'after-write') allowed = false; });
       const focus = vi.fn(async () => { if (phase === 'after-write') allowed = false; });
       const resume = vi.fn(async () => undefined);
       const api = compile({
@@ -143,9 +144,8 @@ describe('model Orca cleanup authority', () => {
         getSessionOrcaRole: async () => { if (phase === 'lookup') allowed = false; return 'lead'; },
         listWorkersByLead: async () => { if (phase === 'lookup') allowed = false; return [createWorker()]; },
         maker: { getSession: () => ({ isTurnRunning: () => false, setVendorOptions: vi.fn() }), closeSession: close },
-        orcaTeamService: { clearAutoBridgeState: vi.fn() },
-        cancelIOSSimulatorSessionOperations: async () => { if (phase === 'before-close') allowed = false; },
-        setSessionOrcaRole: vi.fn(), knownNonOrcaSessionIds: new Set(),
+        orcaTeamService: { clearAutoBridgeState: vi.fn(() => { if (phase === 'before-close') allowed = false; }) },
+                setSessionOrcaRole: vi.fn(), knownNonOrcaSessionIds: new Set(),
         reconcileInactiveTeamWorkersForLead: vi.fn(async () => { if (phase === 'before-close') allowed = false; return ['worker-session-1']; }),
         recycleSessionWorktreeForStatusChange: vi.fn(), captureSessionRecycleScope: vi.fn(),
         cleanupPendingInteractionsForSession: vi.fn(), forgetKnownOrcaWorkerSession: vi.fn(),
@@ -290,9 +290,6 @@ function createDeps(overrides: Partial<OrcaTeamServiceDeps> = {}) {
       );
       return true;
     }),
-    cancelWorkerSessionOperations: vi.fn(async (sessionId) => {
-      calls.push(`cancelWorkerSessionOperations:${sessionId}`);
-    }),
     closeWorkerSession: vi.fn(async (sessionId) => {
       calls.push(`closeWorkerSession:${sessionId}`);
     }),
@@ -366,6 +363,8 @@ function createDeps(overrides: Partial<OrcaTeamServiceDeps> = {}) {
     removeQueuedMessage: vi.fn(() => true),
     replaceQueuedMessage: vi.fn(() => true),
     mergeQueuedMessages: vi.fn(() => true),
+    steerStoredQueuedMessage: vi.fn(async () => ({ kind: 'steered' as const })),
+    moveQueuedMessage: vi.fn(() => 0),
     log: {
       warn: vi.fn(),
       info: vi.fn(),
@@ -624,6 +623,45 @@ describe('OrcaTeamService', () => {
       'updateWorkerStatus:running',
       'broadcastOrcaWorkerChanged',
     ]);
+  });
+
+  it('passes an explicit steer choice through and reports steered or queued receipts', async () => {
+    const { deps, service, setWorker } = createDeps();
+    setWorker(createWorker({ status: 'running' }));
+    vi.mocked(deps.dispatchWorkerMessage).mockImplementationOnce(async (params) => {
+      await params.onAccepted?.();
+      return {
+        ok: true,
+        mode: 'steered',
+        clientId: 'client-1',
+        dispatchOutcome: { kind: 'session-dispatch', source: params.dispatchMeta.source, dispatched: true },
+        targetTitle: 'Worker',
+        targetLastUserSendAt: null,
+      };
+    });
+    const base = { callerLeadSessionId: 'lead-1', targetSessionId: 'worker-1', message: '改用方案 B' };
+    await expect(service.sendToWorker({ ...base, delivery: 'steer' }))
+      .resolves.toMatchObject({ ok: true, wakeKind: 'steered' });
+    expect(deps.dispatchWorkerMessage).toHaveBeenLastCalledWith(expect.objectContaining({ delivery: 'steer' }));
+
+    vi.mocked(deps.dispatchWorkerMessage).mockImplementationOnce(async (params) => ({
+      ok: true,
+      mode: 'queued',
+      clientId: 'client-2',
+      dispatchOutcome: { kind: 'session-dispatch', source: params.dispatchMeta.source, dispatched: true, wakeKind: 'queued' },
+      targetTitle: 'Worker',
+      targetLastUserSendAt: null,
+      steerFallbackReason: 'STEER_UNSUPPORTED',
+    }));
+    await expect(service.sendToWorker({ ...base, delivery: 'steer' })).resolves.toMatchObject({
+      ok: true,
+      wakeKind: 'queued',
+      queuedMessageId: 'client-2',
+      steerFallbackReason: 'STEER_UNSUPPORTED',
+    });
+
+    await service.sendToWorker(base);
+    expect(vi.mocked(deps.dispatchWorkerMessage).mock.calls.at(-1)?.[0]).not.toHaveProperty('delivery');
   });
 
   it('routes normal and interrupt tools through the shared ownership boundary with distinct modes', async () => {
@@ -2628,10 +2666,8 @@ describe('OrcaTeamService', () => {
     });
 
     expect(calls).toEqual([
-      'cancelWorkerSessionOperations:worker-session-1',
       'closeWorkerSession:worker-session-1',
       'archiveWorkerSession:worker-session-1',
-      'cancelWorkerSessionOperations:worker-session-1',
       'updateWorkerStatus:done',
       'broadcastOrcaWorkerChanged',
     ]);
@@ -2653,10 +2689,8 @@ describe('OrcaTeamService', () => {
 
     expect(deps.updateWorkerStatus).toHaveBeenCalledWith('worker-1', 'done');
     expect(calls).toEqual([
-      'cancelWorkerSessionOperations:worker-session-1',
       'closeWorkerSession:worker-session-1',
       'archiveWorkerSession:worker-session-1',
-      'cancelWorkerSessionOperations:worker-session-1',
       'updateWorkerStatus:done',
       'broadcastOrcaWorkerChanged',
     ]);
@@ -2752,10 +2786,8 @@ describe('OrcaTeamService', () => {
     });
 
     expect(calls).toEqual([
-      'cancelWorkerSessionOperations:worker-session-1',
       'closeWorkerSession:worker-session-1',
       'archiveWorkerSession:worker-session-1',
-      'cancelWorkerSessionOperations:worker-session-1',
       'updateWorkerStatus:done',
       'broadcastOrcaWorkerChanged',
     ]);
@@ -3052,6 +3084,69 @@ describe('OrcaTeamService worker queued message control', () => {
     ).resolves.toMatchObject({ ok: false, errorCode: 'QUEUED_MESSAGE_NOT_FOUND' });
   });
 
+  it('steers or moves lead entries in a worker queue and reports why a steer stayed queued', async () => {
+    const steerStoredQueuedMessage = vi.fn(async () => ({ kind: 'steered' as const }));
+    const moveQueuedMessage = vi.fn(() => 0);
+    const { service } = createDeps({
+      getSessionQueueSnapshot: vi.fn(async () => ({
+        pendingQueue: [queuedItem('q-user'), queuedItem('q-lead', leadOrigin)],
+        steeringClientIds: [],
+        consumingClientIds: [],
+        isWorking: true,
+        willQueue: true,
+        queuePaused: false,
+      })),
+      steerStoredQueuedMessage,
+      moveQueuedMessage,
+    });
+    const base = { callerLeadSessionId: 'lead-1', workerRef: 'worker-1' };
+
+    await expect(service.steerWorkerQueuedMessage({ ...base, queuedMessageId: 'q-lead' }))
+      .resolves.toEqual({ ok: true, workerId: 'worker-1', queuedMessageId: 'q-lead', delivery: 'steered' });
+    expect(steerStoredQueuedMessage).toHaveBeenCalledWith('worker-session-1', 'q-lead');
+    steerStoredQueuedMessage.mockResolvedValueOnce({ kind: 'queued', reason: 'STEER_UNSUPPORTED' } as never);
+    await expect(service.steerWorkerQueuedMessage({ ...base, queuedMessageId: 'q-lead' }))
+      .resolves.toMatchObject({ ok: true, delivery: 'queued', reason: 'STEER_UNSUPPORTED' });
+    await expect(service.moveWorkerQueuedMessage({ ...base, queuedMessageId: 'q-lead', position: 0 }))
+      .resolves.toEqual({ ok: true, workerId: 'worker-1', queuedMessageId: 'q-lead', position: 0 });
+    expect(moveQueuedMessage).toHaveBeenCalledWith('worker-session-1', 'q-lead', 0);
+
+    await expect(service.steerWorkerQueuedMessage({ ...base, queuedMessageId: 'q-user' }))
+      .resolves.toMatchObject({ ok: false, errorCode: 'NOT_LEAD_MESSAGE' });
+    await expect(service.moveWorkerQueuedMessage({ ...base, queuedMessageId: 'q-user', position: 1 }))
+      .resolves.toMatchObject({ ok: false, errorCode: 'NOT_LEAD_MESSAGE' });
+    expect(steerStoredQueuedMessage).toHaveBeenCalledTimes(2);
+    expect(moveQueuedMessage).toHaveBeenCalledOnce();
+  });
+
+  it('reads and steers collaboration messages in the caller\'s own queue when worker_id is omitted', async () => {
+    const workerReport = { kind: 'orca' as const, senderLabel: 'reviewer', displayText: '回报' };
+    const steerStoredQueuedMessage = vi.fn(async () => ({ kind: 'steered' as const }));
+    const { deps, service } = createDeps({
+      getSessionQueueSnapshot: vi.fn(async () => ({
+        pendingQueue: [queuedItem('q-report', workerReport), queuedItem('q-user')],
+        steeringClientIds: [],
+        consumingClientIds: [],
+        isWorking: true,
+        willQueue: true,
+        queuePaused: false,
+      })),
+      steerStoredQueuedMessage,
+    });
+
+    const listed = await service.listWorkerQueuedMessages({ callerLeadSessionId: 'lead-1' });
+    expect(listed).toMatchObject({ ok: true, workerId: null, workerSessionId: 'lead-1', status: 'lead' });
+    if (!listed.ok) throw new Error('unreachable');
+    expect(listed.messages.map((entry) => entry.source)).toEqual(['worker', 'user']);
+    expect(deps.getSessionQueueSnapshot).toHaveBeenCalledWith('lead-1');
+
+    await expect(service.steerWorkerQueuedMessage({ callerLeadSessionId: 'lead-1', queuedMessageId: 'q-report' }))
+      .resolves.toEqual({ ok: true, workerId: null, queuedMessageId: 'q-report', delivery: 'steered' });
+    expect(steerStoredQueuedMessage).toHaveBeenCalledWith('lead-1', 'q-report');
+    await expect(service.steerWorkerQueuedMessage({ callerLeadSessionId: 'lead-1', queuedMessageId: 'q-user' }))
+      .resolves.toMatchObject({ ok: false, errorCode: 'NOT_ORCA_MESSAGE' });
+  });
+
   it('merges consecutive lead messages through one atomic coordinator call', async () => {
     let queue = [
       queuedItem('q1', leadOrigin, 'one'),
@@ -3184,7 +3279,7 @@ describe('OrcaTeamService worker queued message control', () => {
   });
 });
 
-it('idle-only archive preserves queued input',async()=>{const {deps,service,setWorker}=createDeps();setWorker(createWorker({status:'done'}));vi.mocked(deps.hasPendingWorkerInput).mockResolvedValue(true);expect((await service.archiveWorker({callerLeadSessionId:'lead-1',workerId:'worker-1',onlyIfIdle:true})).ok).toBe(false);expect(deps.cancelWorkerSessionOperations).not.toHaveBeenCalled();expect(deps.archiveWorkerSession).not.toHaveBeenCalled();});
+it('idle-only archive preserves queued input',async()=>{const {deps,service,setWorker}=createDeps();setWorker(createWorker({status:'done'}));vi.mocked(deps.hasPendingWorkerInput).mockResolvedValue(true);expect((await service.archiveWorker({callerLeadSessionId:'lead-1',workerId:'worker-1',onlyIfIdle:true})).ok).toBe(false);expect(deps.archiveWorkerSession).not.toHaveBeenCalled();});
 it('idle-only archive preserves active runtime',async()=>{const {deps,service,setWorker}=createDeps();setWorker(createWorker({status:'done'}));vi.mocked(deps.closeWorkerSessionIfIdle!).mockResolvedValue(false);expect((await service.archiveWorker({callerLeadSessionId:'lead-1',workerId:'worker-1',onlyIfIdle:true})).ok).toBe(false);expect(deps.archiveWorkerSession).not.toHaveBeenCalled();});
 
 it('idle-only archive rechecks the execution stamp after waiting for the send fence',async()=>{
@@ -3193,7 +3288,7 @@ it('idle-only archive rechecks the execution stamp after waiting for the send fe
  deps.withSessionSendLock=async (_id,operation)=>{current=false;return operation();};
  const beforeArchive=async()=>{if(!current)throw new Error('stale completion');};
  await expect(service.archiveWorker({callerLeadSessionId:'lead-1',workerId:'worker-1',onlyIfIdle:true,beforeArchive})).rejects.toThrow('stale completion');
- expect(deps.archiveWorkerSession).not.toHaveBeenCalled();expect(deps.cancelWorkerSessionOperations).not.toHaveBeenCalled();
+ expect(deps.archiveWorkerSession).not.toHaveBeenCalled();
 });
 
 it('release refuses an occupied send fence without waiting for it',async()=>{

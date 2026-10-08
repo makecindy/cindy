@@ -377,9 +377,12 @@ describe('ChatInput model source switching wiring', () => {
     // device-link 老被控端 capabilities-only:联合列表的数据源是供应商目录,没有目录
     // 就是一张空列表。判据必须是结构化的 unsupported,不是 providers.length===0
     // (后者在加载中恒成立,会让面板每次打开先闪一下旧布局)。
+    // 目录所在电脑 = 远程任务的被控端,或 Agent 在另一台电脑运行时的那台。
     expect(chatInputSource).toContain(
-      'const unifiedModelPanelEnabled = !deviceLinkDeviceId || !remoteProviders.unsupported;',
+      'const unifiedModelPanelEnabled = !catalogDeviceId || !remoteProviders.unsupported;',
     );
+    // 已建任务换电脑的意图期内,目录跟随意图里的电脑(effectiveAgentDeviceId)。
+    expect(chatInputSource).toContain('const catalogDeviceId = deviceLinkDeviceId ?? effectiveAgentDeviceId ?? undefined;');
   });
 
   /**
@@ -487,7 +490,7 @@ describe('ChatInput model source switching wiring', () => {
     const draftBlock = chatInputSource.slice(
       draftStart,
       chatInputSource.indexOf(
-        '[sessionId, settingsLocked, modelMemory, onUnifiedDraftSelect]',
+        '[sessionId, settingsLocked, modelMemory, onUnifiedDraftSelect, agentDeviceId]',
         draftStart,
       ),
     );
@@ -495,11 +498,16 @@ describe('ChatInput model source switching wiring', () => {
     // rowModelId 只在类型声明与注释里出现,**不得**出现在任何写入实参上。
     expect(draftBlock).not.toContain('selection.rowModelId');
     for (const write of [
-      'modelMemory?.setEffort(',
-      'modelMemory?.setFast(targetKind, selection.providerId, selection.modelId, selection.fast)',
+      'targetMemory?.setEffort(',
+      'targetMemory?.setFast(targetKind, selection.providerId, selection.modelId, selection.fast)',
     ]) {
       expect(draftBlock).toContain(write);
     }
+    // 远程 Agent 换落点:记忆按目标目录写(回本机写本机预设,去另一台电脑写本机为那台记的
+    // 一份),落点原样交给草稿层。
+    expect(draftBlock).toContain('? agentDeviceModelMemoryAccessors(selection.agentDevice.deviceId)');
+    expect(draftBlock).toContain(': LOCAL_MODEL_MEMORY;');
+    expect(draftBlock).toContain('agentDevice: selection.agentDevice');
     // 「恢复推荐」已先删除记忆键；直通草稿时不得把推荐档位重新写成 override。
     expect(draftBlock).toContain('!selection.resetToRecommended');
     expect(draftBlock).toContain(
@@ -510,7 +518,7 @@ describe('ChatInput model source switching wiring', () => {
   it('keeps a new conversation model pick on the draft path', () => {
     const draftStart = chatInputSource.indexOf('const handleUnifiedDraftSelect = useCallback(');
     const draftEnd = chatInputSource.indexOf(
-      '[sessionId, settingsLocked, modelMemory, onUnifiedDraftSelect]',
+      '[sessionId, settingsLocked, modelMemory, onUnifiedDraftSelect, agentDeviceId]',
       draftStart,
     );
     const draftHandler = chatInputSource.slice(draftStart, draftEnd);

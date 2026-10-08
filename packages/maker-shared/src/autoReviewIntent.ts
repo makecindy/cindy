@@ -5,7 +5,60 @@ export type AutoReviewUserIntent =
       readonly currentUserMessage: string;
       /** Omitted history may contain standing restrictions; never silently treat it as unrestricted. */
       readonly historyOmitted?: true;
+      /**
+       * Host-stamped content the current message explicitly points at. Belongs to
+       * `currentUserMessage` only: appending a newer message drops it.
+       */
+      readonly currentUserReferences?: AutoReviewUserReferences;
     };
+
+/**
+ * What the current channel message points at, captured by the Host from channel
+ * adapter / Hook source facts (never from wire-reported fields): its attachments
+ * and the message(s) it replies to or quotes. Quoted text is third-party data —
+ * it can show what "this" refers to, but it is not user-authored and never grants.
+ */
+export interface AutoReviewUserReferences {
+  /** Everything delivered with this message, including attachments a channel merged in from the quote. */
+  readonly attachments?: { readonly images: number; readonly files: number };
+  readonly quotedMessages?: readonly AutoReviewQuotedMessage[];
+}
+
+export interface AutoReviewQuotedMessage {
+  readonly author: string;
+  readonly text: string;
+  readonly isBot?: true;
+  /** How many of `attachments` came from this quoted message; absent when the channel cannot tell. */
+  readonly attachmentCount?: number;
+}
+
+/**
+ * The single projection for review references. Channels map their Host-owned
+ * reply/attachment facts into this shape; anything malformed is dropped and all
+ * text is bounded independently of the user-intent budget. Returns undefined
+ * when nothing is referenced, so unreferenced messages keep their exact intent.
+ */
+export function projectAutoReviewUserReferences(
+  value: unknown,
+): AutoReviewUserReferences | undefined {
+  return sharedProjection().projectReferences(value);
+}
+
+/**
+ * Separate references from user-authored intent before showing either to a
+ * reviewer: references must never be presented as text the user wrote.
+ */
+export function splitAutoReviewUserReferences(intent: AutoReviewUserIntent): {
+  intent: AutoReviewUserIntent;
+  references?: AutoReviewUserReferences;
+} {
+  return sharedProjection().splitReferences(intent);
+}
+
+let sharedProjectionInstance: ReturnType<typeof createAutoReviewIntentProjection> | undefined;
+function sharedProjection(): ReturnType<typeof createAutoReviewIntentProjection> {
+  return (sharedProjectionInstance ??= createAutoReviewIntentProjection());
+}
 
 export interface AutoReviewHistoryMessage {
   clientId: string;
@@ -30,7 +83,116 @@ export function createAutoReviewIntentProjection() {
     return OMITTED_USER_INTENT;
   }
 
+  // Kept inside the factory: the database worker evaluates this function's source.
+  const MAX_REFERENCED_QUOTES = 3;
+  const MAX_REFERENCED_AUTHOR_CHARS = 80;
+  const MAX_REFERENCED_QUOTE_CHARS = 600;
+  const MAX_REFERENCED_QUOTES_TOTAL_CHARS = 1_200;
+  const MAX_REFERENCED_COUNT = 99;
+  const REFERENCE_TRUNCATED = "…[truncated]";
+
+  function boundedReferenceText(value: string, maxChars: number): string {
+    const text = value.trim();
+    return text.length <= maxChars
+      ? text
+      : `${text.slice(0, Math.max(0, maxChars - REFERENCE_TRUNCATED.length))}${REFERENCE_TRUNCATED}`;
+  }
+
+  function referenceCount(value: unknown): number {
+    return typeof value === "number" && Number.isFinite(value) && value > 0
+      ? Math.min(Math.floor(value), MAX_REFERENCED_COUNT)
+      : 0;
+  }
+
+  function projectAutoReviewUserReferences(
+    value: unknown,
+  ): AutoReviewUserReferences | undefined {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+    const input = value as Record<string, unknown>;
+    const rawAttachments =
+      input.attachments && typeof input.attachments === "object" && !Array.isArray(input.attachments)
+        ? (input.attachments as Record<string, unknown>)
+        : {};
+    const images = referenceCount(rawAttachments.images);
+    const files = referenceCount(rawAttachments.files);
+    const quotedMessages: AutoReviewQuotedMessage[] = [];
+    let remaining = MAX_REFERENCED_QUOTES_TOTAL_CHARS;
+    // The newest quotes are the ones nearest the user's words.
+    const rawQuotes = Array.isArray(input.quotedMessages)
+      ? input.quotedMessages.slice(-MAX_REFERENCED_QUOTES)
+      : [];
+    for (const raw of rawQuotes) {
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) continue;
+      const quote = raw as Record<string, unknown>;
+      if (typeof quote.text !== "string" || !quote.text.trim() || remaining <= REFERENCE_TRUNCATED.length) continue;
+      const text = boundedReferenceText(quote.text, Math.min(MAX_REFERENCED_QUOTE_CHARS, remaining));
+      remaining -= text.length;
+      const attachmentCount = referenceCount(quote.attachmentCount);
+      quotedMessages.push({
+        author: boundedReferenceText(
+          typeof quote.author === "string" ? quote.author : "",
+          MAX_REFERENCED_AUTHOR_CHARS,
+        ),
+        text,
+        ...(quote.isBot === true ? { isBot: true as const } : {}),
+        ...(attachmentCount > 0 ? { attachmentCount } : {}),
+      });
+    }
+    if (images === 0 && files === 0 && quotedMessages.length === 0) return undefined;
+    return {
+      ...(images > 0 || files > 0 ? { attachments: { images, files } } : {}),
+      ...(quotedMessages.length > 0 ? { quotedMessages } : {}),
+    };
+  }
+
+  function splitAutoReviewUserReferences(intent: AutoReviewUserIntent): {
+    intent: AutoReviewUserIntent;
+    references?: AutoReviewUserReferences;
+  } {
+    if (typeof intent === "string") return { intent };
+    const { currentUserReferences, ...authored } = intent;
+    const references = projectAutoReviewUserReferences(currentUserReferences);
+    if (!references) return { intent: authored };
+    // Attaching references may have promoted a plain string intent to object form.
+    return {
+      intent:
+        authored.earlierUserMessages.length === 0 && !authored.historyOmitted
+          ? authored.currentUserMessage
+          : authored,
+      references,
+    };
+  }
+
+  /** References have their own budget; they never displace authored history or restrictions. */
+  function withAutoReviewUserReferences(
+    intent: AutoReviewUserIntent,
+    references: unknown,
+  ): AutoReviewUserIntent {
+    const projected = projectAutoReviewUserReferences(references);
+    if (!projected) return intent;
+    return typeof intent === "string"
+      ? { earlierUserMessages: [], currentUserMessage: intent, currentUserReferences: projected }
+      : { ...intent, currentUserReferences: projected };
+  }
+
   function normalizeAutoReviewUserIntent(
+    intent: AutoReviewUserIntent,
+  ): AutoReviewUserIntent {
+    if (typeof intent === "string") return compactCurrentUserIntent(intent);
+    const { currentUserReferences, ...authored } = intent;
+    if (currentUserReferences === undefined) return normalizeAuthoredUserIntent(authored);
+    // A wrapper that only carries references must not count against the authored budget.
+    const base =
+      authored.earlierUserMessages.length === 0 && !authored.historyOmitted
+        ? authored.currentUserMessage
+        : authored;
+    return withAutoReviewUserReferences(
+      normalizeAuthoredUserIntent(base),
+      currentUserReferences,
+    );
+  }
+
+  function normalizeAuthoredUserIntent(
     intent: AutoReviewUserIntent,
   ): AutoReviewUserIntent {
     if (typeof intent === "string") return compactCurrentUserIntent(intent);
@@ -294,6 +456,9 @@ export function createAutoReviewIntentProjection() {
   return {
     compact: compactCurrentUserIntent,
     normalize: normalizeAutoReviewUserIntent,
+    withReferences: withAutoReviewUserReferences,
+    projectReferences: projectAutoReviewUserReferences,
+    splitReferences: splitAutoReviewUserReferences,
     append: appendAutoReviewUserIntent,
     readText: readAutoReviewUserText,
     restore: restoreAutoReviewUserIntent,

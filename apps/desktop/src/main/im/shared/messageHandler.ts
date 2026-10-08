@@ -435,6 +435,8 @@ export function createMessageHandler(
             }
           : {}),
         attachments: event.attachments,
+        // 只取 adapter 实际交给模型的回复投影(可能已被过滤成占位), 不用 event 原值。
+        ...(prepared?.replyContext ? { replyContext: prepared.replyContext } : {}),
         // threadScoped 渠道: scopeKey = thread root ts(thread = session 路由键)
         scopeKey: notificationSessionId || threadScoped ? event.scopeKey : undefined,
         // Title generation and similar detached work must stay visible to the
