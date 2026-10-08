@@ -3,6 +3,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  createGhostConfirmDialogMainWindowSender,
   GhostConfirmDialogBridge,
   type GhostConfirmPush,
   type GhostConfirmDialogBridgeDeps,
@@ -29,6 +30,44 @@ function makeBridge(overrides: Partial<GhostConfirmDialogBridgeDeps> = {}) {
   };
   return { bridge: new GhostConfirmDialogBridge(deps), sent };
 }
+
+describe('createGhostConfirmDialogMainWindowSender', () => {
+  it('只把确认请求投给主 App 窗口,不依赖焦点辅助窗', () => {
+    const mainWindow = { kind: 'main' };
+    const focusedAuxiliaryWindow = { kind: 'auxiliary' };
+    const payload: GhostConfirmPush = { requestId: 'request-1', ...ASK };
+    const send = vi.fn();
+    const sender = createGhostConfirmDialogMainWindowSender({
+      getMainWindow: () => mainWindow,
+      isTrustedMainWindow: (window) => window === mainWindow,
+      send,
+    });
+
+    expect(sender(payload)).toBe(true);
+    expect(send).toHaveBeenCalledOnce();
+    expect(send).toHaveBeenCalledWith(mainWindow, payload);
+    expect(send).not.toHaveBeenCalledWith(focusedAuxiliaryWindow, payload);
+  });
+
+  it('主 App 窗口缺失或不可信时失败关闭', () => {
+    const mainWindow = { kind: 'main' };
+    const send = vi.fn();
+    const missingWindowSender = createGhostConfirmDialogMainWindowSender({
+      getMainWindow: () => null,
+      isTrustedMainWindow: vi.fn(() => true),
+      send,
+    });
+    const untrustedWindowSender = createGhostConfirmDialogMainWindowSender({
+      getMainWindow: () => mainWindow,
+      isTrustedMainWindow: () => false,
+      send,
+    });
+
+    expect(missingWindowSender({ requestId: 'request-1', ...ASK })).toBe(false);
+    expect(untrustedWindowSender({ requestId: 'request-2', ...ASK })).toBe(false);
+    expect(send).not.toHaveBeenCalled();
+  });
+});
 
 describe('ghostConfirmDialogBridge · 正常往返', () => {
   it('投出去 → renderer 回包 → resolve 用户的点击', async () => {

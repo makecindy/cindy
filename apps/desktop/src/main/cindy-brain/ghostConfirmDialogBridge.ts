@@ -11,7 +11,7 @@
  * 1. **只投一个窗口,不 broadcast**。过户确认卡是聊天流里的卡片,广播到多窗口
  *    再靠 DISMISSED 收卡没问题;模态确认框广播出去会在每个窗口各弹一个、收回
  *    多份答案(preview 槽注释里踩过同类坑)。所以这里由 deps.sendToWindow 精确
- *    投递单个窗口(focused ?? 第一个),投不出去就 reject 让槽回 UNAVAILABLE。
+ *    投递给挂载确认 Host 的可信主 App 窗口,投不出去就 reject 让槽回 UNAVAILABLE。
  * 2. **不挂会话**。它可能来自面板点击、也可能来自工具调用链,不一定有 sessionId;
  *    清理靠超时与显式 cancelAll(窗口关闭/插件沉睡时调)。
  *
@@ -48,6 +48,23 @@ export interface GhostConfirmDialogBridgeDeps {
   timeoutMs?: number;
   now?(): number;
   log?: { warn: (msg: string, meta?: Record<string, unknown>) => void };
+}
+
+/**
+ * 创建确认请求的单窗口投递器。确认 Host 位于主 App renderer,因此不应使用
+ * 当前焦点或窗口列表顺序选择目标;没有可信主 App 窗口时必须失败关闭。
+ */
+export function createGhostConfirmDialogMainWindowSender<TWindow>(deps: {
+  getMainWindow(): TWindow | null;
+  isTrustedMainWindow(window: TWindow): boolean;
+  send(window: TWindow, payload: GhostConfirmPush): void;
+}): (payload: GhostConfirmPush) => boolean {
+  return (payload) => {
+    const mainWindow = deps.getMainWindow();
+    if (!mainWindow || !deps.isTrustedMainWindow(mainWindow)) return false;
+    deps.send(mainWindow, payload);
+    return true;
+  };
 }
 
 interface PendingConfirmEntry {
