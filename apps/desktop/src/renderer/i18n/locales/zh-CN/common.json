@@ -349,9 +349,7 @@
     },
     "received": {
       "title": "分享给我的供应商",
-      "description": "别人分享给你的供应商会出现在模型列表的远程供应商里。",
-      "empty": "还没有人分享供应商给你。收到分享链接后，点开它或粘贴到这里。",
-      "paste": "粘贴分享链接",
+      "enterLink": "输入分享链接…",
       "fromOwner": "来自 {{name}} 的分享",
       "providerOnDevice": "{{provider}} · {{device}}",
       "statusActive": "正常",
@@ -367,18 +365,29 @@
       },
       "left": "已退出 {{name}} 分享的 {{provider}}",
       "pasteDialog": {
-        "title": "粘贴分享链接",
+        "title": "输入分享链接",
         "description": "把对方发给你的供应商分享链接粘贴到这里，看过说明后再决定是否申请。",
         "label": "分享链接",
         "placeholder": "在这里粘贴链接",
         "empty": "请先粘贴分享链接",
         "open": "打开链接",
         "cancel": "取消"
-      }
+      },
+      "detailNote": "Agent 在 {{name}} 的电脑上运行，用的是对方的登录和配额。新建任务时在模型列表里选择它就能用。",
+      "modelsTitle": "可用的模型",
+      "modelsLoading": "正在读取对方开放的模型…",
+      "modelsRefused": "对方电脑暂时不让读取这个分享：可能没有允许远程控制、关了这个供应商的「允许被远程调用」，也可能对方的 Cindy 刚启动、还没准备好。请稍后重试，或让对方检查这两项设置。",
+      "modelsFailedWithCode": "暂时读不到对方开放的模型，请稍后重试。（错误代码：{{code}}）",
+      "retryModels": "重新读取模型",
+      "modelsEmpty": "对方还没有开放可用的模型。",
+      "pausedNote": "对方暂停了这个分享，恢复后才能使用。",
+      "offlineNote": "对方电脑不在线，上线后就能继续使用。",
+      "needsUpdateNote": "对方的 Cindy 更新后才能使用这个分享。"
     },
     "picker": {
       "deviceName": "{{device}} · 来自 {{owner}} 的分享",
-      "unavailable": "已不可用的分享"
+      "unavailable": "已不可用的分享",
+      "hostOutdated": "分享者电脑上的 Cindy 版本太旧，读不到这些模型。请让对方更新 Cindy 后再试。"
     },
     "notification": {
       "requestTitle": "新的分享申请",
@@ -2703,6 +2712,13 @@
           "reset": "恢复默认选择",
           "connectionRequired": "连接后可用，已选模型会保留。"
         }
+      },
+      "remote": {
+        "rowLabel": "{{provider}} · {{device}}",
+        "statusReady": "可用",
+        "detailNote": "Agent 在 {{device}} 上运行，用的是那台电脑的登录和配额。新建任务时在模型列表里选择它就能用；要修改这个供应商，请到那台电脑的「设置 → 模型供应商」。",
+        "modelsTitle": "可用的模型",
+        "modelsEmpty": "这个供应商在那台电脑上还没有开放可用的模型。"
       },
       "genericOAuth": {
         "subtitle": "订阅账号",
@@ -8559,6 +8575,7 @@
         "copied": "邀请链接已复制",
         "createLink": "生成邀请链接",
         "accept": "接受并加入",
+        "openGroup": "打开群聊",
         "previewInvite": "查看邀请",
         "invalidInvite": "邀请无效、已使用或已过期，请获取新的邀请链接。",
         "notAllowed": "当前账号没有权限，请检查账号或联系群主。",
@@ -13903,6 +13920,7 @@
       "failedTitle": "套餐变更失败",
       "failedBody": "套餐变更未完成，当前套餐保持不变。",
       "requestFailed": "套餐变更请求未完成，请刷新订阅状态后重试。",
+      "renewalPrepaid": "下一期费用已提前支付，请等待本期结束后再进行升级。",
       "quoteRejected": "当前订阅无法切换到这个套餐，请选择其他套餐。",
       "chooseAnotherPlan": "选择其他套餐",
       "resyncHint": "确认结果暂时无法核实，正在重新确认最新状态…",

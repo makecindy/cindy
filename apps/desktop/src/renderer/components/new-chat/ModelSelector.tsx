@@ -106,11 +106,13 @@ import {
 } from '@/lib/providerModels';
 import type { Effort } from '@/lib/userPreferences.types';
 import type { SessionRuntimeProfileProjection } from '@/lib/ccAgent.types';
+import { isProviderShareAgentDeviceId } from '../../../shared/providerShare';
 import {
   CHATGPT_MODEL_PREFIX,
   XAI_MODEL_PREFIX,
   isSubscriptionDirectModel,
 } from '../../../shared/subscriptionModels';
+import { extractIpcError } from '@/utils/ipcError';
 import { isModelEnabled, useModelVisibilityVersion } from '@/state/modelVisibilityPrefs';
 import { seedDefaultFavorite } from '@/state/modelFavorites';
 import { useProviderModelMemoryVersion } from '@/state/providerModelMemory';
@@ -559,10 +561,13 @@ function RemoteModelLoadNotice({
   status,
   onRetry,
   compact = false,
+  message,
 }: {
   status: 'loading' | 'error';
   onRetry: () => void;
   compact?: boolean;
+  /** 失败时代替笼统的「读取失败」，说明具体原因(例如分享者需要更新 Cindy)。 */
+  message?: string;
 }) {
   const { t } = useTranslation();
   if (status === 'loading') {
@@ -591,7 +596,7 @@ function RemoteModelLoadNotice({
       <CircleAlert size={14} className="mt-0.5 shrink-0" />
       <div className="min-w-0 flex-1">
         <p className={cn(compact ? 'text-11 leading-[1.45]' : 'text-xs leading-[1.45]')}>
-          {t('newChat.modelSelector.remoteLoadFailed')}
+          {message ?? t('newChat.modelSelector.remoteLoadFailed')}
         </p>
         <Button
           variant="secondary"
@@ -1334,6 +1339,17 @@ function ModelSelectorContentView({
     pi,
     providers: remoteProviders,
   });
+  // 分享来的供应商：分享者电脑上的 Cindy 太旧，只答得了模型目录、答不了 Agent 能力
+  // (新版受邀者才会读它)。如实说要对方更新，不报笼统的「读取失败」。
+  const remoteFailureMessage =
+    isProviderShareAgentDeviceId(deviceId) &&
+    [cc.error, codex.error, pi.error].some(
+      (error) =>
+        error != null &&
+        extractIpcError(new Error(error))?.code === 'DEVICE_LINK_CHANNEL_NOT_ALLOWED',
+    )
+      ? t('providerShare.picker.hostOutdated')
+      : undefined;
   const retryRemoteModels = useCallback(() => {
     if (!deviceId) return;
     evictDeviceCapabilities(deviceId);
@@ -3211,6 +3227,7 @@ function ModelSelectorContentView({
                               status="error"
                               onRetry={retryRemoteModels}
                               compact
+                              message={remoteFailureMessage}
                             />
                           ),
                         }
@@ -3488,7 +3505,11 @@ function ModelSelectorContentView({
           // 发现还在途、且用户没在搜索时不摆「无结果」:那句话和下方的「正在获取」自相矛盾,
           // 而用户看到「没有模型」就会走。搜索无命中是本地过滤的确定结论,照常显示。
           remoteStatusInList && trimmedQuery.length === 0 ? (
-            <RemoteModelLoadNotice status={remoteStatusInList} onRetry={retryRemoteModels} />
+            <RemoteModelLoadNotice
+              status={remoteStatusInList}
+              onRetry={retryRemoteModels}
+              message={remoteFailureMessage}
+            />
           ) : discoveringModels && trimmedQuery.length === 0 ? null : (
             <div className="px-3 py-6 text-center text-13 text-[var(--text-tertiary)]">
               {t(
@@ -3531,7 +3552,12 @@ function ModelSelectorContentView({
       </div>
 
       {showRemoteStatusFooter && remoteStatusInList && (
-        <RemoteModelLoadNotice status={remoteStatusInList} onRetry={retryRemoteModels} compact />
+        <RemoteModelLoadNotice
+          status={remoteStatusInList}
+          onRetry={retryRemoteModels}
+          compact
+          message={remoteFailureMessage}
+        />
       )}
 
       {/* 发现在途提示 —— 追加在列表下方,不接管列表(见 discoveringModels 注释)。

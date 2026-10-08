@@ -6497,6 +6497,7 @@ export default function NewRemoteSessionScreen() {
                   }}
                   testID="newSession.contextSheetPlanRow"
                   trailing={planModeOn ? <Check color={colors.textPrimary} size={iconSize.md} strokeWidth={iconStroke.bold} /> : null}
+                  trailingSize={iconSize.md}
                 />
               ) : null}
               <ContextSheetRow

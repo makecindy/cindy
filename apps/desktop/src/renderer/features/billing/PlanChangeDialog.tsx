@@ -630,9 +630,11 @@ export function PlanChangeStatusDialog({
                   </div>
                   <p className="mt-4 max-w-[340px] text-sm text-[var(--text-secondary)]">
                     {state.error
-                      ? state.quoteFailureReason === 'TARGET_NOT_ALLOWED'
-                        ? t('billing.planChange.quoteRejected')
-                        : t('billing.planChange.requestFailed')
+                      ? state.quoteFailureReason === 'RENEWAL_PREPAID'
+                        ? t('billing.planChange.renewalPrepaid')
+                        : state.quoteFailureReason === 'TARGET_NOT_ALLOWED'
+                          ? t('billing.planChange.quoteRejected')
+                          : t('billing.planChange.requestFailed')
                       : state.phase === 'CANCELED'
                         ? t('billing.planChange.canceledBody')
                         : state.phase === 'EXPIRED'
