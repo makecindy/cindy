@@ -109,6 +109,7 @@ import {
 
 export {
   registerTelegramBotConfigIpc,
+  registerDingTalkBotConfigIpc,
   im,
   feishuIm,
   discordIm,

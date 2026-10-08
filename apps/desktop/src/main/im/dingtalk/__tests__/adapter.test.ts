@@ -1,7 +1,7 @@
 import { Buffer } from 'node:buffer';
 import { describe, expect, it } from 'vitest';
 
-import type { DingTalkIM, IMMessageEvent } from '@cindy/im';
+import type { DingTalkChannelIM, IMMessageEvent } from '@cindy/im';
 import {
   buildDingTalkAdapter,
   dingtalkManagedWorkingDirName,
@@ -63,7 +63,10 @@ describe('dingtalk session identity', () => {
 });
 
 describe('dingtalk turn permission boundary', () => {
-  const adapter = buildDingTalkAdapter({} as DingTalkIM, CONFIG);
+  const adapter = buildDingTalkAdapter(
+    { getMode: () => 'robot' } as unknown as DingTalkChannelIM,
+    CONFIG,
+  );
   const baseEvent = {
     channelName: 'dingtalk',
     senderId: 'owner-user',

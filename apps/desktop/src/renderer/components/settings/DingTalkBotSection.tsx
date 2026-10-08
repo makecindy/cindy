@@ -4,8 +4,13 @@ import { useTranslation } from 'react-i18next';
 import { Check, ChevronDown, ChevronRight, Eye, EyeOff, Loader2, Trash2 } from 'lucide-react';
 
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
+import { SegmentedControl } from '@/components/ui/segmented-control';
 import { useDingTalkBot } from '@/hooks/useDingTalkBot';
+import { useDingTalkDws, type DingTalkTransportMode } from '@/hooks/useDingTalkDws';
 import { cn } from '@/lib/utils';
+import { DingTalkDwsPanel } from './DingTalkDwsPanel';
+import { DingTalkGuestAccessSetting } from './DingTalkGuestAccessSetting';
+import { DingTalkPersonaSettings } from './DingTalkPersonaSettings';
 import { ImChannelSettingsCard, useImChannelSettingsSummary } from './ImChannelSettingsCard';
 import { ImDefaultSettingsSection } from './ImDefaultSettingsSection';
 
@@ -34,6 +39,7 @@ export function DingTalkBotSection({
   onToggle: () => void;
 }) {
   const bot = useDingTalkBot();
+  const dws = useDingTalkDws();
   const { confirm } = useConfirmDialog();
   const { t } = useTranslation();
   const [showSecret, setShowSecret] = useState(false);
@@ -56,6 +62,10 @@ export function DingTalkBotSection({
   }, [bot, confirm, t]);
 
   const connected = bot.status.kind === 'connected';
+  const mode: DingTalkTransportMode = dws.mode ?? 'robot';
+  // 卡片头部状态跟随当前连接方式；「钉钉账号」方式未开启时视为待配置。
+  const headerStatus: DingTalkBotTransportStatus =
+    mode === 'dws' ? (dws.state.enabled ? dws.state.status : { kind: 'idle' }) : bot.status;
 
   return (
     <ImChannelSettingsCard
@@ -76,191 +86,218 @@ export function DingTalkBotSection({
             'border border-[var(--settings-badge-border)] bg-[var(--settings-badge-bg)]',
             'text-11 font-medium tracking-[0.12px]',
           )}
-          style={{ color: statusColor(bot.status) }}
+          style={{ color: statusColor(headerStatus) }}
           role="status"
           aria-live="polite"
         >
           <span
             className="h-1.5 w-1.5 rounded-full"
-            style={{ backgroundColor: statusColor(bot.status) }}
+            style={{ backgroundColor: statusColor(headerStatus) }}
             aria-hidden
           />
-          {t(statusKey[bot.status.kind])}
+          {t(statusKey[headerStatus.kind])}
         </span>
       }
     >
       <ImDefaultSettingsSection channel="dingtalk" embedded onSummaryChange={setRouteSummary} />
       <div className="h-px w-full bg-[var(--border-default)]" />
+      <DingTalkPersonaSettings />
+      <div className="h-px w-full bg-[var(--border-default)]" />
 
-      {connected ? (
-        <div
-          className={cn(
-            'flex flex-col gap-3 rounded-xl p-5',
-            'border border-[var(--settings-theme-card-border)] bg-[var(--settings-theme-card-bg)]',
-          )}
-        >
-          <div className="flex items-start gap-3">
-            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-[var(--settings-badge-border)] bg-[var(--settings-badge-bg)] text-[var(--settings-badge-connected)]">
-              <Check size={16} />
-            </div>
-            <div>
-              <div className="text-13 font-medium text-[var(--settings-section-title)]">
-                {t('settings.dingtalkBot.connected.heading')}
-              </div>
-              <div className="mt-1 text-12 text-[var(--settings-section-desc)]">
-                {bot.ownerUserId
-                  ? t('settings.dingtalkBot.connected.ownerBound')
-                  : t('settings.dingtalkBot.connected.waitingOwner')}
-              </div>
-            </div>
-          </div>
-          <InfoRow label={t('settings.dingtalkBot.appKeyLabel')} value={bot.appKey} />
-          <InfoRow
-            label={t('settings.dingtalkBot.connected.ownerLabel')}
-            value={bot.ownerUserId || t('settings.dingtalkBot.connected.notBound')}
-          />
-          <Button
-            variant="secondary"
-            size="lg"
-            loading={bot.isClearing}
-            type="button"
-            onClick={() => void clear()}
-            disabled={bot.isClearing}
-          >
-            <Trash2 size={13} />
-            {t('settings.dingtalkBot.disconnect')}
-          </Button>
-        </div>
+      <div className="flex flex-col gap-2">
+        <span className="text-12 font-medium text-[var(--settings-section-desc)]">
+          {t('settings.dingtalkBot.mode.label')}
+        </span>
+        <SegmentedControl<DingTalkTransportMode>
+          value={dws.mode}
+          disabled={dws.isSwitching}
+          aria-label={t('settings.dingtalkBot.mode.label')}
+          onValueChange={(next) => void dws.setMode(next)}
+          options={[
+            { value: 'robot', label: t('settings.dingtalkBot.mode.robot') },
+            { value: 'dws', label: t('settings.dingtalkBot.mode.dws') },
+          ]}
+        />
+      </div>
+
+      {mode === 'dws' ? (
+        <>
+          <DingTalkDwsPanel dws={dws} />
+          <DingTalkGuestAccessSetting />
+        </>
       ) : (
-        <div className="flex flex-col gap-3">
-          <FieldLabel>{t('settings.dingtalkBot.appKeyLabel')}</FieldLabel>
-          <TextInput
-            value={bot.appKey}
-            onChange={bot.setAppKey}
-            placeholder={t('settings.dingtalkBot.appKeyPlaceholder')}
-          />
-          <FieldLabel>{t('settings.dingtalkBot.appSecretLabel')}</FieldLabel>
-          <div className="relative">
-            <TextInput
-              type={showSecret ? 'text' : 'password'}
-              value={bot.appSecret}
-              onChange={bot.setAppSecret}
-              placeholder={
-                bot.hasSecret
-                  ? t('settings.dingtalkBot.appSecretSavedPlaceholder')
-                  : t('settings.dingtalkBot.appSecretPlaceholder')
-              }
-              className="pr-10"
-            />
-            <button
-              type="button"
-              onClick={() => setShowSecret((value) => !value)}
-              className="absolute right-3.5 top-1/2 -translate-y-1/2 text-[var(--settings-eye-icon)]"
-              aria-label={
-                showSecret
-                  ? t('settings.dingtalkBot.hideSecret')
-                  : t('settings.dingtalkBot.showSecret')
-              }
+        <>
+          {connected ? (
+            <div
+              className={cn(
+                'flex flex-col gap-3 rounded-xl p-5',
+                'border border-[var(--settings-theme-card-border)] bg-[var(--settings-theme-card-bg)]',
+              )}
             >
-              {showSecret ? <EyeOff size={18} /> : <Eye size={18} />}
-            </button>
-          </div>
-          <div className="min-h-[18px] text-12">
-            {bot.validationError ? (
-              <span className="text-[var(--settings-error-text)]" role="alert">
-                {bot.validationError}
-              </span>
-            ) : bot.status.kind === 'error' ? (
-              <span className="text-[var(--settings-error-text)]" role="alert">
-                {t('settings.dingtalkBot.errorHint')}
-              </span>
-            ) : (
-              <span className="text-[var(--settings-source-meta)]">
-                {t('settings.dingtalkBot.formHint')}
-              </span>
-            )}
-          </div>
-          <div className="flex gap-2">
-            {bot.hasSecret && !bot.appSecret.trim() ? (
+              <div className="flex items-start gap-3">
+                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-[var(--settings-badge-border)] bg-[var(--settings-badge-bg)] text-[var(--settings-badge-connected)]">
+                  <Check size={16} />
+                </div>
+                <div>
+                  <div className="text-13 font-medium text-[var(--settings-section-title)]">
+                    {t('settings.dingtalkBot.connected.heading')}
+                  </div>
+                  <div className="mt-1 text-12 text-[var(--settings-section-desc)]">
+                    {bot.ownerUserId
+                      ? t('settings.dingtalkBot.connected.ownerBound')
+                      : t('settings.dingtalkBot.connected.waitingOwner')}
+                  </div>
+                </div>
+              </div>
+              <InfoRow label={t('settings.dingtalkBot.appKeyLabel')} value={bot.appKey} />
+              <InfoRow
+                label={t('settings.dingtalkBot.connected.ownerLabel')}
+                value={bot.ownerUserId || t('settings.dingtalkBot.connected.notBound')}
+              />
               <Button
-                variant="cta"
+                variant="secondary"
                 size="lg"
-                loading={bot.isSaving}
-                type="button"
-                onClick={() => void bot.reconnect()}
-                disabled={bot.isSaving}
-                className="flex-1"
-              >
-                {bot.isSaving && (
-                  <Loader2 size={14} className="animate-spin motion-reduce:animate-none" />
-                )}
-                {t('settings.dingtalkBot.reconnect')}
-              </Button>
-            ) : (
-              <Button
-                variant="cta"
-                size="lg"
-                loading={bot.isSaving}
-                type="button"
-                onClick={() => void bot.connect()}
-                disabled={!bot.canConnect}
-                className="flex-1"
-              >
-                {bot.isSaving && (
-                  <Loader2 size={14} className="animate-spin motion-reduce:animate-none" />
-                )}
-                {t('settings.dingtalkBot.connect')}
-              </Button>
-            )}
-            {bot.hasSecret && (
-              <button
+                loading={bot.isClearing}
                 type="button"
                 onClick={() => void clear()}
                 disabled={bot.isClearing}
-                className="flex h-[42px] w-[42px] shrink-0 items-center justify-center rounded-full border border-[var(--settings-btn-secondary-border)] text-[var(--settings-trash-icon)]"
-                aria-label={t('settings.dingtalkBot.disconnect')}
               >
-                <Trash2 size={16} />
-              </button>
-            )}
-          </div>
-        </div>
-      )}
-
-      <div className="border-t border-[var(--settings-theme-card-border)] pt-3">
-        <button
-          type="button"
-          onClick={() => setGuideOpen((value) => !value)}
-          className="flex w-full items-center justify-between bg-transparent p-0 text-left"
-          aria-expanded={guideOpen}
-        >
-          <span className="text-13 font-medium text-[var(--settings-section-title)]">
-            {t('settings.dingtalkBot.guide.title')}
-          </span>
-          <span className="text-[var(--settings-section-desc)]">
-            {guideOpen ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
-          </span>
-        </button>
-        {guideOpen && (
-          <div className="mt-3 flex flex-col gap-2 text-12 leading-[1.6] text-[var(--settings-section-desc)]">
-            {guideSteps.map((step, index) => (
-              <div key={step} className="flex gap-2">
-                <span className="font-medium text-[var(--settings-section-title)]">
-                  {index + 1}.
-                </span>
-                <span>{step}</span>
+                <Trash2 size={13} />
+                {t('settings.dingtalkBot.disconnect')}
+              </Button>
+            </div>
+          ) : (
+            <div className="flex flex-col gap-3">
+              <FieldLabel>{t('settings.dingtalkBot.appKeyLabel')}</FieldLabel>
+              <TextInput
+                value={bot.appKey}
+                onChange={bot.setAppKey}
+                placeholder={t('settings.dingtalkBot.appKeyPlaceholder')}
+              />
+              <FieldLabel>{t('settings.dingtalkBot.appSecretLabel')}</FieldLabel>
+              <div className="relative">
+                <TextInput
+                  type={showSecret ? 'text' : 'password'}
+                  value={bot.appSecret}
+                  onChange={bot.setAppSecret}
+                  placeholder={
+                    bot.hasSecret
+                      ? t('settings.dingtalkBot.appSecretSavedPlaceholder')
+                      : t('settings.dingtalkBot.appSecretPlaceholder')
+                  }
+                  className="pr-10"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowSecret((value) => !value)}
+                  className="absolute right-3.5 top-1/2 -translate-y-1/2 text-[var(--settings-eye-icon)]"
+                  aria-label={
+                    showSecret
+                      ? t('settings.dingtalkBot.hideSecret')
+                      : t('settings.dingtalkBot.showSecret')
+                  }
+                >
+                  {showSecret ? <EyeOff size={18} /> : <Eye size={18} />}
+                </button>
               </div>
-            ))}
+              <div className="min-h-[18px] text-12">
+                {bot.validationError ? (
+                  <span className="text-[var(--settings-error-text)]" role="alert">
+                    {bot.validationError}
+                  </span>
+                ) : bot.status.kind === 'error' ? (
+                  <span className="text-[var(--settings-error-text)]" role="alert">
+                    {t('settings.dingtalkBot.errorHint')}
+                  </span>
+                ) : (
+                  <span className="text-[var(--settings-source-meta)]">
+                    {t('settings.dingtalkBot.formHint')}
+                  </span>
+                )}
+              </div>
+              <div className="flex gap-2">
+                {bot.hasSecret && !bot.appSecret.trim() ? (
+                  <Button
+                    variant="cta"
+                    size="lg"
+                    loading={bot.isSaving}
+                    type="button"
+                    onClick={() => void bot.reconnect()}
+                    disabled={bot.isSaving}
+                    className="flex-1"
+                  >
+                    {bot.isSaving && (
+                      <Loader2 size={14} className="animate-spin motion-reduce:animate-none" />
+                    )}
+                    {t('settings.dingtalkBot.reconnect')}
+                  </Button>
+                ) : (
+                  <Button
+                    variant="cta"
+                    size="lg"
+                    loading={bot.isSaving}
+                    type="button"
+                    onClick={() => void bot.connect()}
+                    disabled={!bot.canConnect}
+                    className="flex-1"
+                  >
+                    {bot.isSaving && (
+                      <Loader2 size={14} className="animate-spin motion-reduce:animate-none" />
+                    )}
+                    {t('settings.dingtalkBot.connect')}
+                  </Button>
+                )}
+                {bot.hasSecret && (
+                  <button
+                    type="button"
+                    onClick={() => void clear()}
+                    disabled={bot.isClearing}
+                    className="flex h-[42px] w-[42px] shrink-0 items-center justify-center rounded-full border border-[var(--settings-btn-secondary-border)] text-[var(--settings-trash-icon)]"
+                    aria-label={t('settings.dingtalkBot.disconnect')}
+                  >
+                    <Trash2 size={16} />
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+
+          <div className="border-t border-[var(--settings-theme-card-border)] pt-3">
             <button
               type="button"
-              onClick={() => window.electronAPI.openExternal?.(DEVELOPER_PORTAL_URL)}
-              className="mt-1 w-fit bg-transparent p-0 text-12 font-medium text-[var(--settings-source-link)] underline underline-offset-2"
+              onClick={() => setGuideOpen((value) => !value)}
+              className="flex w-full items-center justify-between bg-transparent p-0 text-left"
+              aria-expanded={guideOpen}
             >
-              {t('settings.dingtalkBot.guide.openPortal')}
+              <span className="text-13 font-medium text-[var(--settings-section-title)]">
+                {t('settings.dingtalkBot.guide.title')}
+              </span>
+              <span className="text-[var(--settings-section-desc)]">
+                {guideOpen ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+              </span>
             </button>
+            {guideOpen && (
+              <div className="mt-3 flex flex-col gap-2 text-12 leading-[1.6] text-[var(--settings-section-desc)]">
+                {guideSteps.map((step, index) => (
+                  <div key={step} className="flex gap-2">
+                    <span className="font-medium text-[var(--settings-section-title)]">
+                      {index + 1}.
+                    </span>
+                    <span>{step}</span>
+                  </div>
+                ))}
+                <button
+                  type="button"
+                  onClick={() => window.electronAPI.openExternal?.(DEVELOPER_PORTAL_URL)}
+                  className="mt-1 w-fit bg-transparent p-0 text-12 font-medium text-[var(--settings-source-link)] underline underline-offset-2"
+                >
+                  {t('settings.dingtalkBot.guide.openPortal')}
+                </button>
+              </div>
+            )}
           </div>
-        )}
-      </div>
+        </>
+      )}
     </ImChannelSettingsCard>
   );
 }

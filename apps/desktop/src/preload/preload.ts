@@ -643,6 +643,21 @@ const fanOutDiscordBotStatusChange = createIpcFanOut('discordBot:status-change')
 const fanOutTelegramBotStatusChange = createIpcFanOut('telegramBot:status-change');
 const fanOutDingTalkBotStatusChange = createIpcFanOut('dingtalkBot:status-change');
 const fanOutDingTalkBotOwnerChange = createIpcFanOut('dingtalkBot:owner-change');
+// 钉钉「钉钉账号（dws CLI）」方式：main 推送不含凭证的状态快照。
+type DingTalkDwsStateSnapshot = {
+  status:
+    | { kind: 'idle' }
+    | { kind: 'connecting' }
+    | { kind: 'connected'; appId: string }
+    | { kind: 'conflict'; appId: string }
+    | { kind: 'error'; reason: string };
+  enabled: boolean;
+  installed: boolean;
+  identity: { corpName: string; userName: string } | null;
+  ownerName: string | null;
+  pairingCode: string | null;
+};
+const fanOutDingTalkDwsStateChange = createIpcFanOut('dingtalkBot:dws-state-change');
 const fanOutWecomBotStatusChange = createIpcFanOut('wecomBot:status-changed');
 // Personal WeChat: main owns auth/polling and broadcasts a credential-free state snapshot.
 const fanOutWechatBotStateChange = createIpcFanOut('wechatBot:state-changed');
@@ -2383,6 +2398,33 @@ contextBridge.exposeInMainWorld('electronAPI', {
     clear: (): Promise<{ ok: true }> => ipcRenderer.invoke('dingtalkBot:clear'),
     onStatusChange: fanOutDingTalkBotStatusChange,
     onOwnerChange: fanOutDingTalkBotOwnerChange,
+    // 连接方式二选一：机器人应用 / 钉钉账号（dws CLI）。dws 的登录凭证由 dws
+    // 自己保管，这里只返回账号显示名与连接状态。
+    getMode: (): Promise<{ mode: 'robot' | 'dws' }> => ipcRenderer.invoke('dingtalkBot:get-mode'),
+    setMode: (mode: 'robot' | 'dws'): Promise<{ mode: 'robot' | 'dws' }> =>
+      ipcRenderer.invoke('dingtalkBot:set-mode', { mode }),
+    getDwsState: (): Promise<DingTalkDwsStateSnapshot> =>
+      ipcRenderer.invoke('dingtalkBot:dws-get-state'),
+    connectDws: (): Promise<DingTalkDwsStateSnapshot> =>
+      ipcRenderer.invoke('dingtalkBot:dws-connect'),
+    disconnectDws: (): Promise<DingTalkDwsStateSnapshot> =>
+      ipcRenderer.invoke('dingtalkBot:dws-disconnect'),
+    clearDwsOwner: (): Promise<DingTalkDwsStateSnapshot> =>
+      ipcRenderer.invoke('dingtalkBot:dws-clear-owner'),
+    onDwsStateChange: fanOutDingTalkDwsStateChange,
+    // 人格（名字 + soul），两种连接方式共用。
+    getPersona: (): Promise<{ botName: string; soul: string }> =>
+      ipcRenderer.invoke('dingtalkBot:get-persona'),
+    setPersona: (payload: {
+      botName?: string;
+      soul?: string;
+    }): Promise<{ botName: string; soul: string }> =>
+      ipcRenderer.invoke('dingtalkBot:set-persona', payload),
+    // 「钉钉账号」方式：群任务完全访问时是否也放行群成员。
+    getAccess: (): Promise<{ guestFullAccess: boolean }> =>
+      ipcRenderer.invoke('dingtalkBot:get-access'),
+    setAccess: (payload: { guestFullAccess: boolean }): Promise<{ guestFullAccess: boolean }> =>
+      ipcRenderer.invoke('dingtalkBot:set-access', payload),
   },
 
   // ── WeCom intelligent bot (Settings → IM Bot → Personal) ──

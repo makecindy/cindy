@@ -1,12 +1,15 @@
 import type { InteractionDecision, InteractionRequest } from '@cindy/maker-core';
 import type { DingTalkIM } from '@cindy/im';
 
+/** 文字交互只需要「发一段提示、等一句回复」两项能力；机器人与 dws 方式都满足。 */
+export type DingTalkTextTransport = Pick<DingTalkIM, 'requestTextReply' | 'sendText'>;
+
 import { autoReviewUnavailablePromptLine } from '../shared/autoReviewUnavailablePrompt';
 import type { SharedPermission } from '../../maker-ipc/sharedPermission';
 import { permissionOutcomeText } from '../shared/permissionPresentation';
 
 export function handleDingTalkTextInteraction(
-  im: DingTalkIM,
+  im: DingTalkTextTransport,
   userId: string,
   request: InteractionRequest,
   options?: { timeoutMs?: number; sharedPermission?: SharedPermission },
@@ -32,7 +35,7 @@ export function handleDingTalkTextInteraction(
 }
 
 async function answerQuestions(
-  im: DingTalkIM,
+  im: DingTalkTextTransport,
   userId: string,
   request: Extract<InteractionRequest, { kind: 'ask_user_question' }>,
 ): Promise<InteractionDecision> {

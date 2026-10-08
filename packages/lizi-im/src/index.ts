@@ -130,6 +130,22 @@ export {
   decodeLaneUserId as decodeDingTalkLaneUserId,
   encodeLaneUserId as encodeDingTalkLaneUserId,
 } from './dingtalk/codec.js';
+export { DingTalkChannelIM, createDingTalkChannelIM } from './dingtalk/channel.js';
+export type { DingTalkTransportMode } from './dingtalk/channel.js';
+export {
+  DingTalkDwsIM,
+  createDingTalkDwsIM,
+  DwsCommandError,
+  DWS_NOT_INSTALLED,
+  DINGTALK_DWS_ERROR,
+  parseDwsJsonOutput,
+} from './dingtalk-dws/index.js';
+export type {
+  DingTalkDwsPublicState,
+  DwsRunner,
+  DwsStreamProcess,
+  GroupHistoryMessage,
+} from './dingtalk-dws/index.js';
 
 export type {
   IdentityKey,

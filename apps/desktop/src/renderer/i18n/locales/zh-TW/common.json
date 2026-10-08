@@ -3347,6 +3347,64 @@
         "step3": "從應用憑證頁複製 Client ID 和 Client Secret，填入上方。",
         "step4": "連線成功後先私聊機器人完成主人繫結；群聊中需要 @ 機器人。",
         "openPortal": "開啟釘釘開放平臺 ↗"
+      },
+      "guestFullAccess": {
+        "label": "群組成員也使用「完全存取」",
+        "description": "群組任務開著「完全存取」時，預設只有主人能直接使用，其他人會被拒絕。開啟後，群組裡任何人 @ 你都會以這台電腦的完整權限執行，不再逐次確認。僅對「釘釘帳號」方式生效。",
+        "confirm": {
+          "title": "允許群組成員使用完全存取？",
+          "description": "開啟後，群組裡任何成員都能讓 AI 以你的電腦權限執行指令、讀寫檔案，且不會再請你確認。人格裡的規則只是軟性約束，可能被誘導繞過，本機的金鑰、憑證和私人檔案都可能因此外洩。只在你信任群組裡所有人時開啟。",
+          "confirm": "仍要開啟",
+          "cancel": "取消"
+        }
+      },
+      "persona": {
+        "title": "人格",
+        "description": "定義它是誰、怎麼說話、該做和不該做什麼。機器人應用與釘釘帳號兩種連線方式共用，每次回覆都會帶上。",
+        "nameLabel": "名字",
+        "namePlaceholder": "幫它取個名字",
+        "soulLabel": "Soul（基礎人格）",
+        "soulPlaceholder": "寫下 TA 的身分、職責、語氣、口頭禪、邊界……例如：你是團隊的專案助手，回答簡潔，只根據團隊資料作答，不確定就直說。"
+      },
+      "mode": {
+        "label": "連線方式",
+        "robot": "機器人應用",
+        "dws": "釘釘帳號（CLI）"
+      },
+      "dws": {
+        "intro": "透過釘釘官方命令列工具 dws，以一個釘釘帳號的身分收發訊息，並能讀取群聊上下文。私聊只回應綁定的主人；群組裡任何人 @ 它都能提問，但修改檔案、執行指令等操作需要主人確認。自己傳給自己的訊息不會觸發，建議為 {{appName}} 準備一個專用釘釘帳號。",
+        "recheck": "重新偵測",
+        "openRepo": "查看 dws 安裝說明 ↗",
+        "copyCommand": "複製指令",
+        "accountLabel": "釘釘帳號",
+        "orgLabel": "所屬組織",
+        "ownerLabel": "主人",
+        "pairingCodeLabel": "配對碼",
+        "clearOwner": "解除主人綁定",
+        "errorHint": "連線失敗，請確認 dws 已登入、組織已開通 CLI 存取權限，然後重試。",
+        "notInstalled": {
+          "title": "未偵測到 dws",
+          "description": "在終端機執行下面的指令安裝 dws，裝好後點「重新偵測」。"
+        },
+        "notLoggedIn": {
+          "title": "dws 尚未登入",
+          "description": "在終端機執行下面的指令，用要給 {{appName}} 使用的釘釘帳號完成授權，然後點「重新偵測」。"
+        },
+        "ready": {
+          "title": "已偵測到登入的釘釘帳號",
+          "description": "連線後，{{appName}} 會以這個帳號的身分接收私聊和群組裡 @ 它的訊息並回覆。"
+        },
+        "connected": {
+          "heading": "已透過釘釘帳號連線",
+          "ownerBound": "主人已綁定。主人私聊這個帳號即可開始；群組裡任何人 @ 它都能提問，需要動手的操作仍要主人確認。",
+          "waitingOwner": "請用你本人的釘釘帳號私聊這個帳號，傳送下方配對碼完成主人綁定。在此之前收到的訊息都會被忽略。"
+        },
+        "disconnectConfirm": {
+          "title": "中斷釘釘帳號連線？",
+          "description": "中斷後不再接收和回覆釘釘訊息。dws 的登入狀態和主人綁定會保留，之後可直接重新連線。",
+          "confirm": "中斷",
+          "cancel": "取消"
+        }
       }
     },
     "logout": {
@@ -4119,6 +4177,10 @@
           "name": "個人微信",
           "description": "向已知的微信聯絡人傳送訊息。"
         },
+        "dingtalk_bot": {
+          "name": "釘釘",
+          "description": "把檔案傳到目前的釘釘單聊或群組（釘釘帳號連線方式）。"
+        },
         "slack": {
           "name": "Slack",
           "description": "使用已連接的 Slack 帳號搜尋、讀取和傳送訊息。"
@@ -4541,7 +4603,9 @@
           "pi": "Pi"
         },
         "groupPermissionLabel": "群聊新建任務權限檔",
-        "groupPermissionDescription": "群組裡新建任務時統一使用的權限檔（@bot 開話題、/new、/ctr 都算），預設「自動審批」；上面那個權限檔只管私聊。群組上下文裡有成員可控制的內容，設成「完全存取」後將直接執行、不再逐項確認，請確認群組成員都可信。變更只影響之後新建的任務，已有任務在群組裡用 /permission 單獨切換。"
+        "groupPermissionDescription": "群組裡新建任務時統一使用的權限檔（@bot 開話題、/new、/ctr 都算），預設「自動審批」；上面那個權限檔只管私聊。群組上下文裡有成員可控制的內容，設成「完全存取」後將直接執行、不再逐項確認，請確認群組成員都可信。變更只影響之後新建的任務，已有任務在群組裡用 /permission 單獨切換。",
+        "dingtalkPermissionLabel": "新建任務權限檔",
+        "dingtalkPermissionDescription": "在釘釘裡新建任務時使用的權限檔，私聊和群聊相同，預設「自動審批」。設成「完全訪問」後，主人發起的任務將直接執行、不再逐條確認。變更只影響之後新建的任務，既有任務請在 Cindy 桌面端切換。"
       }
     },
     "shortcuts": {
@@ -13042,7 +13106,13 @@
       "dingtalkBotNetworkFailed": "無法訪問釘釘開放平臺，請檢查網路或 Proxy 後重試",
       "dingtalkBotStreamFailed": "憑證有效，但 Stream 連線未建立；請確認已啟用機器人、選擇 Stream 模式併發布應用版本",
       "dingtalkBotDisconnected": "已解綁釘釘機器人",
-      "dingtalkBotDisconnectFailed": "釘釘機器人解綁失敗"
+      "dingtalkBotDisconnectFailed": "釘釘機器人解綁失敗",
+      "dingtalkDwsConnected": "已透過釘釘帳號連線",
+      "dingtalkDwsConnectFailed": "釘釘帳號連線失敗，請確認 dws 已登入且組織已開通 CLI 存取權限",
+      "dingtalkDwsNotInstalled": "找不到 dws，請先安裝後重新偵測",
+      "dingtalkDwsNotLoggedIn": "dws 尚未登入或登入已失效，請在終端機執行 dws auth login",
+      "dingtalkDwsDisconnected": "已中斷釘釘帳號連線",
+      "dingtalkModeSwitchFailed": "切換釘釘連線方式失敗"
     },
     "errors": {
       "openFileFailed": "無法在系統中開啟檔案",

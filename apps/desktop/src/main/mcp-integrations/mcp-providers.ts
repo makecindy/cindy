@@ -37,7 +37,7 @@ import { inspectPdf } from '../doc-tools/pdfInspector.js';
 import { getAndroidMcpDeps } from './android.js';
 import { getBrowserMcpDeps } from './browser.js';
 import { getComputerMcpDeps } from './computer.js';
-import { feishuIm, wechatIm } from '../im';
+import { dingtalkIm, feishuIm, wechatIm } from '../im';
 import { sendFeishuSessionNotification } from '../im/feishu/notificationOrigin';
 import { getSlackToolBridge } from '../hook-control/slackToolBridge.js';
 import { createLogger } from '../logger.js';
@@ -324,6 +324,23 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         return result;
       },
       logger: createLogger('mcp/cindy_wechat'),
+    },
+    dingtalkBot: {
+      // 目标由 provider 从会话 vendorOptions.dingtalkChatId 解析;这里只负责投递。
+      // 机器人应用方式发不了文件,给出明确的 UNSUPPORTED,让模型如实告知用户。
+      sendFile: async (chatId, absPath) => {
+        if (dingtalkIm.getMode() !== 'dws') return { ok: false, reason: 'UNSUPPORTED' };
+        const result = await dingtalkIm.sendFile(chatId, absPath);
+        if (!result.ok) {
+          createLogger('mcp/cindy_dingtalk').warn(
+            'sendFile failed target=...%s reason=%s',
+            chatId.slice(-8),
+            result.reason ?? 'unknown',
+          );
+        }
+        return result;
+      },
+      logger: createLogger('mcp/cindy_dingtalk'),
     },
     // cindy_slack(2026-07-19): Slack 网关工具。桥经 hook-control 的零依赖
     // 注册表取用(静态 import ipc.ts 会与 maker-host 闭环, 见 slackToolBridge

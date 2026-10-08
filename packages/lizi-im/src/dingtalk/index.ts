@@ -35,6 +35,7 @@ import {
   collectRemoteMarkdownImages,
   replaceUploadedRemoteImages,
 } from "./outbound.js";
+import { PendingReplies } from "./pendingReplies.js";
 
 const APP_KEY_SECRET = "dingtalk-bot-app-key";
 const APP_SECRET_SECRET = "dingtalk-bot-app-secret";
@@ -88,20 +89,16 @@ interface Credentials {
   appSecret: string;
 }
 
-interface PendingReply<T = unknown> {
-  parse(text: string): T | null;
-  resolve(value: T): void;
-  reject(error: Error): void;
-  timer: ReturnType<typeof setTimeout>;
-}
-
 export class DingTalkIM extends BaseIM implements ChannelIM {
   private readonly messageHandlers = new Set<MessageHandler>();
   private readonly statusHandlers = new Set<StatusHandler>();
   private readonly targetByUserId = new Map<string, DingTalkOutboundTarget>();
   private readonly laneQueues = new Map<string, Promise<void>>();
   private readonly seenMessageIds = new Map<string, number>();
-  private readonly pendingReplies = new Map<string, PendingReply>();
+  private readonly pendingReplies = new PendingReplies({
+    alreadyPending: "DINGTALK_INTERACTION_ALREADY_PENDING",
+    timeout: "DINGTALK_INTERACTION_TIMEOUT",
+  });
 
   private status: IMStatus = { kind: "idle" };
   private client: DingTalkStreamClient | null = null;
@@ -355,42 +352,14 @@ export class DingTalkIM extends BaseIM implements ChannelIM {
     timeoutMs = INTERACTION_TIMEOUT_MS,
     shared?: { result: Promise<T>; decide(value: T): boolean },
   ): Promise<T> {
-    if (this.pendingReplies.has(userId)) {
-      throw new Error("DINGTALK_INTERACTION_ALREADY_PENDING");
-    }
-    let resolveReply!: (value: T) => void;
-    let rejectReply!: (error: Error) => void;
-    const reply = new Promise<T>((resolve, reject) => {
-      resolveReply = resolve;
-      rejectReply = reject;
-    });
-    const timer = setTimeout(() => {
-      this.pendingReplies.delete(userId);
-      rejectReply(new Error("DINGTALK_INTERACTION_TIMEOUT"));
-    }, timeoutMs);
-    const pending: PendingReply<T> = {
+    return this.pendingReplies.request(
+      userId,
+      prompt,
       parse,
-      resolve: (value) => { if (shared) shared.decide(value); else resolveReply(value); },
-      reject: rejectReply,
-      timer,
-    };
-    this.pendingReplies.set(userId, pending as PendingReply);
-    if (shared) void shared.result.then((value) => {
-      if (this.pendingReplies.get(userId) === pending) this.pendingReplies.delete(userId);
-      clearTimeout(timer);
-      resolveReply(value);
-    });
-    try {
-      await this.sendText(userId, prompt);
-    } catch (error) {
-      if (this.pendingReplies.get(userId) === pending) {
-        this.pendingReplies.delete(userId);
-      }
-      clearTimeout(pending.timer);
-      if (shared) return shared.result;
-      throw error;
-    }
-    return reply;
+      timeoutMs,
+      shared,
+      (text) => this.sendText(userId, text),
+    );
   }
 
   private async saveAndConnect(
@@ -698,16 +667,13 @@ export class DingTalkIM extends BaseIM implements ChannelIM {
     senderId: string,
     text: string,
   ): boolean {
-    const pending = this.pendingReplies.get(userId);
-    if (!pending) return false;
+    // 群 lane 里只有主人能回答；其他成员的回复被吞掉，不落成普通消息。
     const lane = decodeLaneUserId(userId);
-    if (lane && senderId !== this.ownerUserId) return true;
-    const value = pending.parse(text);
-    if (value === null) return true;
-    this.pendingReplies.delete(userId);
-    clearTimeout(pending.timer);
-    pending.resolve(value);
-    return true;
+    return this.pendingReplies.tryResolve(
+      userId,
+      text,
+      !(lane && senderId !== this.ownerUserId),
+    );
   }
 
   private claimOwner(senderId: string): boolean {
@@ -810,11 +776,7 @@ export class DingTalkIM extends BaseIM implements ChannelIM {
   }
 
   private rejectPendingReplies(code: string): void {
-    for (const pending of this.pendingReplies.values()) {
-      clearTimeout(pending.timer);
-      pending.reject(new Error(code));
-    }
-    this.pendingReplies.clear();
+    this.pendingReplies.rejectAll(code);
   }
 
   private async runInAccountScope<T>(operation: () => Promise<T>): Promise<T> {

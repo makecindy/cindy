@@ -3347,6 +3347,64 @@
         "step3": "从应用凭证页复制 Client ID 和 Client Secret，填入上方。",
         "step4": "连接成功后先私聊机器人完成主人绑定；群聊中需要 @ 机器人。",
         "openPortal": "打开钉钉开放平台 ↗"
+      },
+      "guestFullAccess": {
+        "label": "群成员也使用「完全访问」",
+        "description": "群任务开着「完全访问」时，默认只有主人能直接使用，其他人会被拒绝。打开后，群里任何人 @ 你都会以这台电脑的完整权限执行，不再逐次确认。仅对「钉钉账号」方式生效。",
+        "confirm": {
+          "title": "允许群成员使用完全访问？",
+          "description": "打开后，群里任何成员都能让 AI 以你的电脑权限执行命令、读写文件，且不会再请你确认。人格里的规则只是软约束，可能被诱导绕过，本机的密钥、凭证和私人文件都可能因此泄露。只在你信任群里所有人时打开。",
+          "confirm": "仍要打开",
+          "cancel": "取消"
+        }
+      },
+      "persona": {
+        "title": "人格",
+        "description": "定义它是谁、怎么说话、该做和不该做什么。机器人应用与钉钉账号两种连接方式共用，每次回复都会带上。",
+        "nameLabel": "名字",
+        "namePlaceholder": "给它起个名字",
+        "soulLabel": "Soul（基础人格）",
+        "soulPlaceholder": "写下 TA 的身份、职责、语气、口头禅、边界……例如：你是团队的项目助手，回答简洁，只基于团队资料作答，不确定就直说。"
+      },
+      "mode": {
+        "label": "连接方式",
+        "robot": "机器人应用",
+        "dws": "钉钉账号（CLI）"
+      },
+      "dws": {
+        "intro": "通过钉钉官方命令行工具 dws，以一个钉钉账号的身份收发消息，并能读取群聊上下文。私聊只响应绑定的主人；群里任何人 @ 它都能提问，但改文件、执行命令等操作需要主人确认。自己发给自己的消息不会触发，建议为 {{appName}} 准备一个专用钉钉账号。",
+        "recheck": "重新检测",
+        "openRepo": "查看 dws 安装说明 ↗",
+        "copyCommand": "复制命令",
+        "accountLabel": "钉钉账号",
+        "orgLabel": "所属组织",
+        "ownerLabel": "主人",
+        "pairingCodeLabel": "配对码",
+        "clearOwner": "解除主人绑定",
+        "errorHint": "连接失败，请确认 dws 已登录、组织已开通 CLI 访问权限，然后重试。",
+        "notInstalled": {
+          "title": "未检测到 dws",
+          "description": "在终端运行下面的命令安装 dws，装好后点「重新检测」。"
+        },
+        "notLoggedIn": {
+          "title": "dws 尚未登录",
+          "description": "在终端运行下面的命令，用要给 {{appName}} 使用的钉钉账号完成授权，然后点「重新检测」。"
+        },
+        "ready": {
+          "title": "已检测到登录的钉钉账号",
+          "description": "连接后，{{appName}} 会以这个账号的身份接收私聊和群里 @ 它的消息并回复。"
+        },
+        "connected": {
+          "heading": "已通过钉钉账号连接",
+          "ownerBound": "主人已绑定。主人私聊这个账号即可开始；群里任何人 @ 它都能提问，需要动手的操作仍要主人确认。",
+          "waitingOwner": "请用你本人的钉钉账号私聊这个账号，发送下方配对码完成主人绑定。在此之前收到的消息都会被忽略。"
+        },
+        "disconnectConfirm": {
+          "title": "断开钉钉账号连接？",
+          "description": "断开后不再接收和回复钉钉消息。dws 的登录状态和主人绑定会保留，之后可直接重新连接。",
+          "confirm": "断开",
+          "cancel": "取消"
+        }
       }
     },
     "logout": {
@@ -4119,6 +4177,10 @@
           "name": "个人微信",
           "description": "向已知的微信联系人发送消息。"
         },
+        "dingtalk_bot": {
+          "name": "钉钉",
+          "description": "把文件发到当前钉钉单聊或群（钉钉账号连接方式）。"
+        },
         "slack": {
           "name": "Slack",
           "description": "使用已连接的 Slack 账号搜索、读取和发送消息。"
@@ -4541,7 +4603,9 @@
           "pi": "Pi"
         },
         "groupPermissionLabel": "群聊新建任务权限档",
-        "groupPermissionDescription": "群里新建任务时统一使用的权限档（@bot 开话题、/new、/ctr 都算），默认「自动审批」；上面那个权限档只管私聊。群上下文里有成员可控的内容，设成「完全访问」后将直接执行、不再逐条确认，请确认群里的人都可信。改动只影响之后新建的任务，已有任务在群里用 /permission 单独切换。"
+        "groupPermissionDescription": "群里新建任务时统一使用的权限档（@bot 开话题、/new、/ctr 都算），默认「自动审批」；上面那个权限档只管私聊。群上下文里有成员可控的内容，设成「完全访问」后将直接执行、不再逐条确认，请确认群里的人都可信。改动只影响之后新建的任务，已有任务在群里用 /permission 单独切换。",
+        "dingtalkPermissionLabel": "新建任务权限档",
+        "dingtalkPermissionDescription": "钉钉里新建任务时使用的权限档，私聊和群聊相同，默认「自动审批」。设成「完全访问」后，主人发起的任务将直接执行、不再逐条确认。改动只影响之后新建的任务，已有任务请在 Cindy 桌面端切换。"
       }
     },
     "shortcuts": {
@@ -13042,7 +13106,13 @@
       "dingtalkBotNetworkFailed": "无法访问钉钉开放平台，请检查网络或 Proxy 后重试",
       "dingtalkBotStreamFailed": "凭证有效，但 Stream 连接未建立；请确认已启用机器人、选择 Stream 模式并发布应用版本",
       "dingtalkBotDisconnected": "已解绑钉钉机器人",
-      "dingtalkBotDisconnectFailed": "钉钉机器人解绑失败"
+      "dingtalkBotDisconnectFailed": "钉钉机器人解绑失败",
+      "dingtalkDwsConnected": "已通过钉钉账号连接",
+      "dingtalkDwsConnectFailed": "钉钉账号连接失败，请确认 dws 已登录且组织已开通 CLI 访问权限",
+      "dingtalkDwsNotInstalled": "未找到 dws，请先安装后重新检测",
+      "dingtalkDwsNotLoggedIn": "dws 尚未登录或登录已失效，请在终端运行 dws auth login",
+      "dingtalkDwsDisconnected": "已断开钉钉账号连接",
+      "dingtalkModeSwitchFailed": "切换钉钉连接方式失败"
     },
     "errors": {
       "openFileFailed": "无法在系统中打开文件",

@@ -3348,6 +3348,64 @@
         "step3": "Copy the Client ID and Client Secret from App Credentials and enter them above.",
         "step4": "After connecting, DM the bot once to link the owner. @mention it in group chats.",
         "openPortal": "Open DingTalk developer portal ↗"
+      },
+      "guestFullAccess": {
+        "label": "Let group members use Full access",
+        "description": "When a group task is on Full access, only the owner can use it directly by default and other members are rejected. Turning this on lets anyone who @mentions you in the group run with this computer's full permissions, without per-action confirmation. Applies to the DingTalk account connection only.",
+        "confirm": {
+          "title": "Let group members use Full access?",
+          "description": "Any member of the group will be able to make the AI run commands and read or write files with your computer's permissions, without asking you. Persona rules are only soft guidance and can be talked around, so keys, credentials and private files on this computer could leak. Only turn this on if you trust everyone in the group.",
+          "confirm": "Turn on anyway",
+          "cancel": "Cancel"
+        }
+      },
+      "persona": {
+        "title": "Persona",
+        "description": "Define who it is, how it talks, and what it should and should not do. Shared by both the bot app and DingTalk account connection methods, and applied to every reply.",
+        "nameLabel": "Name",
+        "namePlaceholder": "Give it a name",
+        "soulLabel": "Soul (base persona)",
+        "soulPlaceholder": "Describe its role, duties, tone, catchphrases, boundaries… For example: You are the team project assistant. Keep answers brief, rely only on team materials, and say so when unsure."
+      },
+      "mode": {
+        "label": "Connection method",
+        "robot": "Bot app",
+        "dws": "DingTalk account (CLI)"
+      },
+      "dws": {
+        "intro": "Uses the official DingTalk command-line tool dws to send and receive messages as a DingTalk account, with access to group chat context. In DMs it responds only to the linked owner; in groups anyone can @mention it to ask questions, but actions such as editing files or running commands need the owner’s confirmation. Messages you send to yourself are not delivered, so set up a dedicated DingTalk account for {{appName}}.",
+        "recheck": "Check again",
+        "openRepo": "dws installation guide ↗",
+        "copyCommand": "Copy command",
+        "accountLabel": "DingTalk account",
+        "orgLabel": "Organization",
+        "ownerLabel": "Owner",
+        "pairingCodeLabel": "Pairing code",
+        "clearOwner": "Unlink owner",
+        "errorHint": "Connection failed. Make sure dws is signed in and CLI access is enabled for the organization, then retry.",
+        "notInstalled": {
+          "title": "dws not found",
+          "description": "Run the command below in a terminal to install dws, then select Check again."
+        },
+        "notLoggedIn": {
+          "title": "dws is not signed in",
+          "description": "Run the command below in a terminal and authorize the DingTalk account {{appName}} should use, then select Check again."
+        },
+        "ready": {
+          "title": "Signed-in DingTalk account found",
+          "description": "Once connected, {{appName}} receives DMs and group @mentions as this account and replies to them."
+        },
+        "connected": {
+          "heading": "Connected through DingTalk account",
+          "ownerBound": "The owner is linked. The owner can DM this account to begin; anyone in a group can @mention it to ask questions, and actions still need the owner’s confirmation.",
+          "waitingOwner": "DM this account from your own DingTalk account and send the pairing code below to link yourself as the owner. Messages received before that are ignored."
+        },
+        "disconnectConfirm": {
+          "title": "Disconnect DingTalk account?",
+          "description": "{{appName}} will stop receiving and replying to DingTalk messages. The dws sign-in and owner link are kept, so you can reconnect later.",
+          "confirm": "Disconnect",
+          "cancel": "Cancel"
+        }
       }
     },
     "logout": {
@@ -4120,6 +4178,10 @@
           "name": "Personal WeChat",
           "description": "Send messages to known WeChat contacts."
         },
+        "dingtalk_bot": {
+          "name": "DingTalk",
+          "description": "Send files into the current DingTalk chat or group (DingTalk account connection)."
+        },
         "slack": {
           "name": "Slack",
           "description": "Search, read and send messages using the connected Slack account."
@@ -4542,7 +4604,9 @@
           "pi": "Pi"
         },
         "groupPermissionLabel": "Permission mode for new group tasks",
-        "groupPermissionDescription": "Permission mode used for every task created in a group chat — @bot opening a topic, /new, and /ctr all use it; the permission mode above applies to direct messages only. Defaults to Auto approval. Group context can contain member-controlled content — choosing Full access executes actions without per-step confirmation, so only pick it for groups you trust. Changes apply to tasks created afterwards; switch an existing task with /permission in the group."
+        "groupPermissionDescription": "Permission mode used for every task created in a group chat — @bot opening a topic, /new, and /ctr all use it; the permission mode above applies to direct messages only. Defaults to Auto approval. Group context can contain member-controlled content — choosing Full access executes actions without per-step confirmation, so only pick it for groups you trust. Changes apply to tasks created afterwards; switch an existing task with /permission in the group.",
+        "dingtalkPermissionLabel": "Permission mode for new tasks",
+        "dingtalkPermissionDescription": "Used for new DingTalk tasks in both DMs and groups. Default: Auto-review. With Full access, tasks started by the owner run without per-action confirmation. Changes apply only to tasks created afterward; switch existing tasks in Cindy desktop."
       }
     },
     "shortcuts": {
@@ -13069,7 +13133,13 @@
       "dingtalkBotNetworkFailed": "Cannot reach DingTalk Open Platform. Check your network or proxy and try again",
       "dingtalkBotStreamFailed": "Credentials are valid, but the Stream connection was not established. Enable the bot, select Stream mode, and publish the app version",
       "dingtalkBotDisconnected": "DingTalk bot unbound",
-      "dingtalkBotDisconnectFailed": "Failed to unbind DingTalk bot"
+      "dingtalkBotDisconnectFailed": "Failed to unbind DingTalk bot",
+      "dingtalkDwsConnected": "Connected through DingTalk account",
+      "dingtalkDwsConnectFailed": "DingTalk account connection failed. Make sure dws is signed in and CLI access is enabled for the organization",
+      "dingtalkDwsNotInstalled": "dws not found. Install it, then check again",
+      "dingtalkDwsNotLoggedIn": "dws is not signed in or the sign-in expired. Run dws auth login in a terminal",
+      "dingtalkDwsDisconnected": "DingTalk account disconnected",
+      "dingtalkModeSwitchFailed": "Failed to switch the DingTalk connection method"
     },
     "errors": {
       "openFileFailed": "Cannot open file in system",

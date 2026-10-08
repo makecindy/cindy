@@ -4,6 +4,7 @@ import type {
   ComputerMcpDeps,
   FeishuBotMcpHostDeps,
   WechatBotMcpHostDeps,
+  DingTalkBotMcpHostDeps,
   LiziMcpId,
   LiziMcpProvider,
   LiziMcpSessionContext,
@@ -16,6 +17,7 @@ import type {
 } from './types.js';
 import { createFeishuBotMcpServer } from './cindy_feishuBotMcpServer.js';
 import { createWechatMcpServer } from './cindy_wechatMcpServer.js';
+import { createDingTalkMcpServer } from './cindy_dingtalkMcpServer.js';
 import { createSlackMcpGatewayServer } from './cindy_slackMcpServer.js';
 import { createSchedulerMcpServer } from './cindy_schedulerMcpServer.js';
 import { createSshMcpServer } from './cindy_sshMcpServer.js';
@@ -43,6 +45,8 @@ export interface CreateLiziMcpProvidersOptions {
   computer?: ComputerMcpDeps;
   feishuBot?: FeishuBotMcpHostDeps;
   wechatBot?: WechatBotMcpHostDeps;
+  /** cindy_dingtalk: 把文件发到当前钉钉对话(钉钉账号方式)。对应可关插件 id 'dingtalk_bot'。 */
+  dingtalkBot?: DingTalkBotMcpHostDeps;
   /**
    * cindy_slack: Slack 网关工具(经 hook 通道由 slack-hook-server 以托管
    * user token 调 Slack 官方 MCP, 接替退役的 cindy-slack 意识)。
@@ -105,6 +109,11 @@ function selected(
 
 function readFeishuChatId(ctx: LiziMcpSessionContext): string | null {
   const raw = ctx.vendorOptions?.feishuChatId;
+  return typeof raw === 'string' && raw.length > 0 ? raw : null;
+}
+
+function readDingTalkChatId(ctx: LiziMcpSessionContext): string | null {
+  const raw = ctx.vendorOptions?.dingtalkChatId;
   return typeof raw === 'string' && raw.length > 0 ? raw : null;
 }
 
@@ -284,6 +293,22 @@ export function createLiziMcpProviders(
             );
           },
           workingDir: ctx.workingDir,
+        }),
+      }),
+    });
+  }
+
+  if (opts.dingtalkBot && selected(enabled, 'cindy_dingtalk')) {
+    providers.push({
+      name: 'cindy_dingtalk',
+      toClaudeSdkConfig: (ctx) => ({
+        type: 'sdk',
+        name: 'cindy_dingtalk',
+        instance: createDingTalkMcpServer({
+          ...opts.dingtalkBot!,
+          // 目标只取会话自身的钉钉 lane;不像微信那样回落到「最近联系人」,
+          // 非钉钉会话一律拒绝,避免把文件发进无关的群。
+          getChatId: () => readDingTalkChatId(resolveLiziMcpSessionContext(ctx)),
         }),
       }),
     });

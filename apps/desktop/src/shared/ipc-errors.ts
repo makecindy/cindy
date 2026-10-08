@@ -268,6 +268,9 @@ export type IpcErrorCode =
   | 'DINGTALK_AUTH_FAILED' // Client ID / Client Secret 被钉钉拒绝
   | 'DINGTALK_NETWORK_FAILED' // 钉钉凭证校验接口不可达
   | 'DINGTALK_STREAM_CONNECTION_FAILED' // 凭证有效，但 Stream WebSocket 未建立
+  | 'DINGTALK_DWS_NOT_INSTALLED' // 「钉钉账号」方式：本机找不到 dws CLI
+  | 'DINGTALK_DWS_NOT_LOGGED_IN' // 「钉钉账号」方式：dws 未登录或登录已失效
+  | 'DINGTALK_DWS_STREAM_FAILED' // 「钉钉账号」方式：dws 事件长连接未就绪
   // 个人资料自助修改(settings → 用户卡片;服务端直写)
   | 'PROFILE_AVATAR_UPLOAD_FAILED' // 头像经 oss-server 预签名直传失败(presign 或 PUT 阶段)
   | 'PROFILE_UPDATE_FAILED' // PATCH /api/me/profile 失败(网络 / 服务端拒绝)
@@ -463,6 +466,9 @@ const IPC_ERROR_CODES: ReadonlySet<IpcErrorCode> = new Set<IpcErrorCode>([
   'DINGTALK_AUTH_FAILED',
   'DINGTALK_NETWORK_FAILED',
   'DINGTALK_STREAM_CONNECTION_FAILED',
+  'DINGTALK_DWS_NOT_INSTALLED',
+  'DINGTALK_DWS_NOT_LOGGED_IN',
+  'DINGTALK_DWS_STREAM_FAILED',
   'PROFILE_AVATAR_UPLOAD_FAILED',
   'PROFILE_UPDATE_FAILED',
   'PROFILE_LOCKED',

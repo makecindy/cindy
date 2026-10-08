@@ -156,6 +156,19 @@ export interface WechatBotMcpHostDeps {
   logger?: LiziMcpLogger;
 }
 
+// ── cindy_dingtalk(钉钉「钉钉账号」方式发文件) ──────────────────────────────
+
+export interface DingTalkBotSendFileResult {
+  ok: boolean;
+  /** UNSUPPORTED = 当前连接方式不能发文件(机器人应用)。 */
+  reason?: string;
+}
+
+export interface DingTalkBotMcpHostDeps {
+  sendFile(chatId: string, absPath: string): Promise<DingTalkBotSendFileResult>;
+  logger?: LiziMcpLogger;
+}
+
 // ── cindy_slack(Slack 网关工具, 2026-07 并轨 hook 通道) ──────────────────────
 
 /** Slack 网关工具的结构化错误(hook-control manager 定义的同构形状)。 */
@@ -499,6 +512,7 @@ export type LiziMcpId =
   | 'computer'
   | 'cindy_feishu_bot'
   | 'cindy_wechat'
+  | 'cindy_dingtalk'
   | 'cindy_slack'
   | 'cindy_scheduler'
   | 'cindy_ssh'

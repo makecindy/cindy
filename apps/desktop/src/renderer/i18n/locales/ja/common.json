@@ -3347,6 +3347,64 @@
         "step3": "アプリ認証情報から Client ID と Client Secret をコピーして入力します。",
         "step4": "接続後、最初にボットへ DM してオーナーを連携します。グループではメンションしてください。",
         "openPortal": "DingTalk 開発者ポータルを開く ↗"
+      },
+      "guestFullAccess": {
+        "label": "グループメンバーにも「フルアクセス」を許可",
+        "description": "グループのタスクが「フルアクセス」のとき、既定ではオーナーだけが直接使え、他のメンバーは拒否されます。オンにすると、グループで @ した誰もがこのコンピューターの全権限で実行でき、操作ごとの確認もなくなります。「DingTalk アカウント」接続にのみ適用されます。",
+        "confirm": {
+          "title": "グループメンバーにフルアクセスを許可しますか？",
+          "description": "グループの誰もが、あなたのコンピューターの権限で AI にコマンド実行やファイルの読み書きをさせられるようになり、確認も求められません。ペルソナのルールは強制力がなく回避されることがあり、このコンピューターの鍵・認証情報・個人ファイルが漏れるおそれがあります。グループの全員を信頼できる場合にのみオンにしてください。",
+          "confirm": "オンにする",
+          "cancel": "キャンセル"
+        }
+      },
+      "persona": {
+        "title": "ペルソナ",
+        "description": "誰であるか、どう話すか、何をして何をしないかを定義します。ボットアプリと DingTalk アカウントの両方の接続方法で共有され、毎回の返信に反映されます。",
+        "nameLabel": "名前",
+        "namePlaceholder": "名前を付けてください",
+        "soulLabel": "Soul（基本人格）",
+        "soulPlaceholder": "役割・担当・口調・口ぐせ・境界線などを書きます。例：あなたはチームのプロジェクトアシスタントです。簡潔に答え、チームの資料だけを根拠にし、分からないときはそう伝えてください。"
+      },
+      "mode": {
+        "label": "接続方法",
+        "robot": "ボットアプリ",
+        "dws": "DingTalk アカウント（CLI）"
+      },
+      "dws": {
+        "intro": "DingTalk 公式のコマンドラインツール dws を使い、DingTalk アカウントとしてメッセージを送受信し、グループチャットのコンテキストも読み取ります。DM ではリンクされたオーナーにのみ応答し、グループでは誰でも @メンションで質問できますが、ファイルの編集やコマンドの実行などの操作にはオーナーの確認が必要です。自分宛てに送ったメッセージは届かないため、{{appName}} 専用の DingTalk アカウントを用意してください。",
+        "recheck": "再確認",
+        "openRepo": "dws のインストール手順 ↗",
+        "copyCommand": "コマンドをコピー",
+        "accountLabel": "DingTalk アカウント",
+        "orgLabel": "組織",
+        "ownerLabel": "オーナー",
+        "pairingCodeLabel": "ペアリングコード",
+        "clearOwner": "オーナーのリンクを解除",
+        "errorHint": "接続に失敗しました。dws にサインインし、組織で CLI アクセスが有効になっていることを確認してから再試行してください。",
+        "notInstalled": {
+          "title": "dws が見つかりません",
+          "description": "ターミナルで以下のコマンドを実行して dws をインストールし、「再確認」を選択してください。"
+        },
+        "notLoggedIn": {
+          "title": "dws にサインインしていません",
+          "description": "ターミナルで以下のコマンドを実行し、{{appName}} に使わせる DingTalk アカウントで認可してから「再確認」を選択してください。"
+        },
+        "ready": {
+          "title": "サインイン済みの DingTalk アカウントが見つかりました",
+          "description": "接続すると、{{appName}} はこのアカウントとして DM とグループでの @メンションを受信し、返信します。"
+        },
+        "connected": {
+          "heading": "DingTalk アカウントで接続済み",
+          "ownerBound": "オーナーはリンク済みです。オーナーがこのアカウントに DM すると開始できます。グループでは誰でも @メンションで質問できますが、操作には引き続きオーナーの確認が必要です。",
+          "waitingOwner": "ご自身の DingTalk アカウントからこのアカウントに DM し、下のペアリングコードを送信してオーナーとしてリンクしてください。それまでに届いたメッセージは無視されます。"
+        },
+        "disconnectConfirm": {
+          "title": "DingTalk アカウントの接続を解除しますか？",
+          "description": "解除すると DingTalk メッセージの受信と返信を停止します。dws のサインインとオーナーのリンクは保持されるため、後で再接続できます。",
+          "confirm": "接続解除",
+          "cancel": "キャンセル"
+        }
       }
     },
     "logout": {
@@ -4119,6 +4177,10 @@
           "name": "個人用 WeChat",
           "description": "既知の WeChat 連絡先にメッセージを送信します。"
         },
+        "dingtalk_bot": {
+          "name": "DingTalk",
+          "description": "現在の DingTalk の個別チャットまたはグループにファイルを送信します（DingTalk アカウント接続）。"
+        },
         "slack": {
           "name": "Slack",
           "description": "接続済みの Slack アカウントでメッセージを検索、閲覧、送信します。"
@@ -4541,7 +4603,9 @@
           "pi": "Pi"
         },
         "groupPermissionLabel": "グループで新規タスクを作成するときの権限モード",
-        "groupPermissionDescription": "グループで新規タスクを作成するときに共通で使う権限モード（@bot でトピックを開く場合、/new、/ctr のいずれも対象）。初期値は「自動承認」で、上の権限モードは個人チャット専用です。グループの文脈にはメンバーが操作できる内容が含まれるため、「フルアクセス」を選ぶと確認なしで直接実行されます。信頼できるグループでのみ選択してください。変更は以後に作成するタスクにのみ適用され、既存のタスクはグループ内で /permission を使って個別に切り替えます。"
+        "groupPermissionDescription": "グループで新規タスクを作成するときに共通で使う権限モード（@bot でトピックを開く場合、/new、/ctr のいずれも対象）。初期値は「自動承認」で、上の権限モードは個人チャット専用です。グループの文脈にはメンバーが操作できる内容が含まれるため、「フルアクセス」を選ぶと確認なしで直接実行されます。信頼できるグループでのみ選択してください。変更は以後に作成するタスクにのみ適用され、既存のタスクはグループ内で /permission を使って個別に切り替えます。",
+        "dingtalkPermissionLabel": "新規タスクの権限モード",
+        "dingtalkPermissionDescription": "DingTalk で新しいタスクを作成するときの権限モードです。DM とグループで共通、既定は「自動レビュー」です。「フルアクセス」にすると、オーナーが開始したタスクは操作ごとの確認なしで実行されます。変更はこれ以降に作成するタスクにのみ適用され、既存のタスクは Cindy デスクトップで切り替えてください。"
       }
     },
     "shortcuts": {
@@ -13042,7 +13106,13 @@
       "dingtalkBotNetworkFailed": "DingTalk オープンプラットフォームに接続できません。ネットワークまたはプロキシを確認して再試行してください",
       "dingtalkBotStreamFailed": "認証情報は有効ですが、Stream 接続を確立できません。ボットを有効化し、Stream モードを選択してアプリのバージョンを公開してください",
       "dingtalkBotDisconnected": "DingTalk ボットの連携を解除しました",
-      "dingtalkBotDisconnectFailed": "DingTalk ボットの連携解除に失敗しました"
+      "dingtalkBotDisconnectFailed": "DingTalk ボットの連携解除に失敗しました",
+      "dingtalkDwsConnected": "DingTalk アカウントで接続しました",
+      "dingtalkDwsConnectFailed": "DingTalk アカウントの接続に失敗しました。dws にサインインし、組織で CLI アクセスが有効か確認してください",
+      "dingtalkDwsNotInstalled": "dws が見つかりません。インストールしてから再確認してください",
+      "dingtalkDwsNotLoggedIn": "dws にサインインしていないか、サインインの有効期限が切れています。ターミナルで dws auth login を実行してください",
+      "dingtalkDwsDisconnected": "DingTalk アカウントの接続を解除しました",
+      "dingtalkModeSwitchFailed": "DingTalk の接続方法を切り替えられませんでした"
     },
     "errors": {
       "openFileFailed": "システムでファイルを開けません",

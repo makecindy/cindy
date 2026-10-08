@@ -3347,6 +3347,64 @@
         "step3": "앱 자격 증명에서 Client ID와 Client Secret을 복사해 입력합니다.",
         "step4": "연결 후 봇에게 먼저 DM을 보내 소유자를 연결합니다. 그룹에서는 멘션하세요.",
         "openPortal": "DingTalk 개발자 포털 열기 ↗"
+      },
+      "guestFullAccess": {
+        "label": "그룹 멤버도 「전체 액세스」 사용",
+        "description": "그룹 작업이 「전체 액세스」일 때 기본적으로 소유자만 바로 사용할 수 있고 다른 멤버는 거부됩니다. 켜면 그룹에서 @한 누구나 이 컴퓨터의 전체 권한으로 실행하며, 작업마다 확인하지 않습니다. 「DingTalk 계정」 연결 방식에만 적용됩니다.",
+        "confirm": {
+          "title": "그룹 멤버에게 전체 액세스를 허용할까요?",
+          "description": "그룹의 누구든 내 컴퓨터 권한으로 AI가 명령을 실행하고 파일을 읽고 쓰게 할 수 있으며, 확인도 요청하지 않습니다. 페르소나 규칙은 강제력이 없어 우회될 수 있으므로, 이 컴퓨터의 키·자격 증명·개인 파일이 유출될 수 있습니다. 그룹의 모든 사람을 신뢰할 때만 켜세요.",
+          "confirm": "그래도 켜기",
+          "cancel": "취소"
+        }
+      },
+      "persona": {
+        "title": "페르소나",
+        "description": "누구인지, 어떻게 말하는지, 무엇을 하고 하지 말아야 하는지 정의합니다. 봇 앱과 DingTalk 계정 두 연결 방식에서 함께 쓰이며 모든 답장에 반영됩니다.",
+        "nameLabel": "이름",
+        "namePlaceholder": "이름을 지어 주세요",
+        "soulLabel": "Soul(기본 인격)",
+        "soulPlaceholder": "역할, 담당 업무, 말투, 입버릇, 경계를 적습니다. 예: 당신은 팀의 프로젝트 도우미입니다. 간결하게 답하고 팀 자료만 근거로 삼으며, 확실하지 않으면 그렇다고 말하세요."
+      },
+      "mode": {
+        "label": "연결 방식",
+        "robot": "봇 앱",
+        "dws": "DingTalk 계정(CLI)"
+      },
+      "dws": {
+        "intro": "DingTalk 공식 명령줄 도구 dws를 사용해 DingTalk 계정으로 메시지를 주고받고 그룹 채팅 맥락도 읽습니다. DM에서는 연결된 소유자에게만 응답하고, 그룹에서는 누구나 @멘션으로 질문할 수 있지만 파일 수정이나 명령 실행 같은 작업에는 소유자의 확인이 필요합니다. 자기 자신에게 보낸 메시지는 전달되지 않으므로 {{appName}} 전용 DingTalk 계정을 준비하세요.",
+        "recheck": "다시 확인",
+        "openRepo": "dws 설치 안내 ↗",
+        "copyCommand": "명령 복사",
+        "accountLabel": "DingTalk 계정",
+        "orgLabel": "조직",
+        "ownerLabel": "소유자",
+        "pairingCodeLabel": "페어링 코드",
+        "clearOwner": "소유자 연결 해제",
+        "errorHint": "연결하지 못했습니다. dws에 로그인되어 있고 조직에서 CLI 액세스가 활성화되어 있는지 확인한 후 다시 시도하세요.",
+        "notInstalled": {
+          "title": "dws를 찾을 수 없음",
+          "description": "터미널에서 아래 명령을 실행해 dws를 설치한 후 「다시 확인」을 선택하세요."
+        },
+        "notLoggedIn": {
+          "title": "dws에 로그인되어 있지 않음",
+          "description": "터미널에서 아래 명령을 실행하고 {{appName}}에서 사용할 DingTalk 계정으로 승인한 후 「다시 확인」을 선택하세요."
+        },
+        "ready": {
+          "title": "로그인된 DingTalk 계정을 찾았습니다",
+          "description": "연결하면 {{appName}}이 이 계정으로 DM과 그룹의 @멘션을 받고 답장합니다."
+        },
+        "connected": {
+          "heading": "DingTalk 계정으로 연결됨",
+          "ownerBound": "소유자가 연결되었습니다. 소유자가 이 계정에 DM을 보내면 시작되고, 그룹에서는 누구나 @멘션으로 질문할 수 있지만 작업에는 여전히 소유자의 확인이 필요합니다.",
+          "waitingOwner": "본인 DingTalk 계정에서 이 계정으로 DM을 보내 아래 페어링 코드를 전송하면 소유자로 연결됩니다. 그 전에 받은 메시지는 무시됩니다."
+        },
+        "disconnectConfirm": {
+          "title": "DingTalk 계정 연결을 해제할까요?",
+          "description": "해제하면 DingTalk 메시지 수신과 답장이 중지됩니다. dws 로그인과 소유자 연결은 유지되므로 나중에 다시 연결할 수 있습니다.",
+          "confirm": "연결 해제",
+          "cancel": "취소"
+        }
       }
     },
     "logout": {
@@ -4119,6 +4177,10 @@
           "name": "개인 WeChat",
           "description": "알고 있는 WeChat 연락처에 메시지를 보냅니다."
         },
+        "dingtalk_bot": {
+          "name": "DingTalk",
+          "description": "현재 DingTalk 개인 채팅 또는 그룹에 파일을 보냅니다(DingTalk 계정 연결)."
+        },
         "slack": {
           "name": "Slack",
           "description": "연결된 Slack 계정으로 메시지를 검색하고 읽고 보냅니다."
@@ -4541,7 +4603,9 @@
           "pi": "Pi"
         },
         "groupPermissionLabel": "그룹에서 새 작업을 만들 때의 권한 모드",
-        "groupPermissionDescription": "그룹 채팅에서 새 작업을 만들 때 공통으로 사용하는 권한 모드입니다(@bot으로 스레드 열기, /new, /ctr 모두 해당). 기본값은 자동 승인이며, 위의 권한 모드는 개인 채팅에만 적용됩니다. 그룹 컨텍스트에는 멤버가 조작할 수 있는 내용이 포함되므로 전체 액세스를 선택하면 확인 없이 바로 실행됩니다. 신뢰할 수 있는 그룹에서만 선택하세요. 변경은 이후에 만드는 작업에만 적용되며, 기존 작업은 그룹에서 /permission으로 개별 전환합니다."
+        "groupPermissionDescription": "그룹 채팅에서 새 작업을 만들 때 공통으로 사용하는 권한 모드입니다(@bot으로 스레드 열기, /new, /ctr 모두 해당). 기본값은 자동 승인이며, 위의 권한 모드는 개인 채팅에만 적용됩니다. 그룹 컨텍스트에는 멤버가 조작할 수 있는 내용이 포함되므로 전체 액세스를 선택하면 확인 없이 바로 실행됩니다. 신뢰할 수 있는 그룹에서만 선택하세요. 변경은 이후에 만드는 작업에만 적용되며, 기존 작업은 그룹에서 /permission으로 개별 전환합니다.",
+        "dingtalkPermissionLabel": "새 작업 권한 모드",
+        "dingtalkPermissionDescription": "DingTalk에서 새 작업을 만들 때 쓰는 권한 모드로, DM과 그룹에 동일하게 적용되며 기본값은 「자동 리뷰」입니다. 「전체 접근」으로 설정하면 소유자가 시작한 작업은 작업별 확인 없이 바로 실행됩니다. 변경 사항은 이후 새로 만드는 작업에만 적용되며, 기존 작업은 Cindy 데스크톱에서 전환하세요."
       }
     },
     "shortcuts": {
@@ -13042,7 +13106,13 @@
       "dingtalkBotNetworkFailed": "DingTalk 오픈 플랫폼에 연결할 수 없습니다. 네트워크 또는 프록시를 확인한 후 다시 시도하세요",
       "dingtalkBotStreamFailed": "자격 증명은 유효하지만 Stream 연결이 설정되지 않았습니다. 봇을 활성화하고 Stream 모드를 선택한 뒤 앱 버전을 게시하세요",
       "dingtalkBotDisconnected": "DingTalk 봇 연동이 해제됨",
-      "dingtalkBotDisconnectFailed": "DingTalk 봇 연동 해제 실패"
+      "dingtalkBotDisconnectFailed": "DingTalk 봇 연동 해제 실패",
+      "dingtalkDwsConnected": "DingTalk 계정으로 연결했습니다",
+      "dingtalkDwsConnectFailed": "DingTalk 계정 연결에 실패했습니다. dws 로그인과 조직의 CLI 액세스 활성화를 확인하세요",
+      "dingtalkDwsNotInstalled": "dws를 찾을 수 없습니다. 설치한 후 다시 확인하세요",
+      "dingtalkDwsNotLoggedIn": "dws에 로그인되어 있지 않거나 로그인이 만료되었습니다. 터미널에서 dws auth login을 실행하세요",
+      "dingtalkDwsDisconnected": "DingTalk 계정 연결을 해제했습니다",
+      "dingtalkModeSwitchFailed": "DingTalk 연결 방식을 전환하지 못했습니다"
     },
     "errors": {
       "openFileFailed": "시스템에서 파일을 열 수 없습니다",

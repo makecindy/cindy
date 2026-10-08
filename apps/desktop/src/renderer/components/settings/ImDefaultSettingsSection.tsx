@@ -387,6 +387,32 @@ export function ImDefaultSettingsSection({
         </div>
       )}
 
+      {/* 钉钉: 新建任务的权限档(私聊与群聊同一份) —— 两种连接方式都只有主人能
+          触发任务; 选「完全访问」后主人触发的轮次直接执行、不再逐条确认。只影响
+          之后新建的任务, 已有任务在 Cindy 桌面端切换。 */}
+      {channel === 'dingtalk' && (
+        <div className="flex flex-col gap-2">
+          <span className="text-12 font-medium text-[var(--text-secondary)]">
+            {t('settings.imBot.defaults.dingtalkPermissionLabel')}
+          </span>
+          <PermissionSelector
+            permissionMode={settings.permissionMode}
+            vendorKey={vendorKeyFor(settings.agentKind)}
+            triggerVariant="field"
+            disabled={pending}
+            ariaContext={t('settings.imBot.defaults.dingtalkPermissionLabel')}
+            onPermissionModeChange={(mode) => {
+              if (isImDefaultPermissionMode(mode)) {
+                void persist({ permissionMode: mode });
+              }
+            }}
+          />
+          <p className="text-11 leading-[1.45] text-[var(--text-secondary)]">
+            {t('settings.imBot.defaults.dingtalkPermissionDescription')}
+          </p>
+        </div>
+      )}
+
       {turnPolicyWarning && (
         <div
           role="status"
