@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode, type Ref } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ChevronLeft } from 'lucide-react-native';
 import {
@@ -12,19 +12,39 @@ import {
   type AccessibilityState,
   type PressableProps,
   type StyleProp,
+  type TextStyle,
   type ViewStyle,
 } from 'react-native';
 import { Text } from '@/components/AppText';
 import { QuietSyncIndicator } from '@/components/QuietSyncIndicator';
+import { useReduceMotionEnabled } from '@/hooks/useReduceMotion';
 import { mobileInteractionStyles } from './mobileInteractionStyles';
 import { fontWeight, iconSize, iconStroke, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
 
 type PillTone = 'default' | 'primary' | 'attention';
-type MainWindowActionTone = 'danger' | 'primary' | 'secondary';
+
+type MainWindowActionTone = 'danger' | 'danger-solid' | 'primary' | 'secondary';
 type MainWindowActionDensity = 'compact' | 'default';
 
+/** iOS HIG 最小点击目标(pt)。可见框小于它的控件用 hitSlop 把命中区补足,不改可见尺寸。 */
+const MIN_TOUCH_TARGET = 44;
+/** 可见最小高度 → 补足到 44pt 的上下 hitSlop。 */
+function touchTargetSlop(visibleHeight: number) {
+  const inset = Math.max(0, (MIN_TOUCH_TARGET - visibleHeight) / 2);
+  return inset > 0 ? { bottom: inset, top: inset } : undefined;
+}
+const BACK_BUTTON_SIZE = 44;
+const BACK_BUTTON_COMPACT_SIZE = 36;
+const ACTION_BUTTON_COMPACT_HEIGHT = 38;
+const ACTION_PILL_HEIGHT = 38;
+const OPTION_BUTTON_HEIGHT = 36;
+const OPTION_BUTTON_COMPACT_HEIGHT = 32;
+/** StatusDot 脉冲半程(ms):常驻「忙碌」状态信号,非交互过渡;减弱动态效果下静止。 */
+const STATUS_DOT_PULSE_HALF_CYCLE_MS = 680;
+
 export interface MainWindowAction {
+  accessibilityHint?: string;
   accessibilityLabel?: string;
   active?: boolean;
   busy?: boolean;
@@ -39,6 +59,7 @@ export function MainWindowOptionButton({
   accessibilityLabel,
   accessibilityRole = 'button',
   accessibilityState,
+  badge,
   density = 'compact',
   disabled = false,
   label,
@@ -51,6 +72,8 @@ export function MainWindowOptionButton({
   accessibilityLabel?: string;
   accessibilityRole?: AccessibilityRole;
   accessibilityState?: AccessibilityState;
+  /** Neutral count after the label (e.g. the drawer's 「任务 3」); keep the full number in accessibilityLabel. */
+  badge?: string;
   density?: MainWindowActionDensity;
   disabled?: boolean;
   label: string;
@@ -69,11 +92,13 @@ export function MainWindowOptionButton({
       accessibilityRole={accessibilityRole}
       accessibilityState={{ ...accessibilityState, disabled: interactionDisabled, selected }}
       disabled={interactionDisabled}
+      hitSlop={touchTargetSlop(compact ? OPTION_BUTTON_COMPACT_HEIGHT : OPTION_BUTTON_HEIGHT)}
       onPress={interactionDisabled ? undefined : onPress}
       style={({ pressed }) => [
         styles.mainOptionButton,
         compact && styles.mainOptionButtonCompact,
         variant === 'segmented' && styles.mainOptionButtonSegmented,
+        badge ? styles.mainOptionButtonWithBadge : null,
         selected && styles.mainOptionButtonSelected,
         pressed && styles.pressed,
         interactionDisabled && styles.disabled,
@@ -85,11 +110,17 @@ export function MainWindowOptionButton({
         numberOfLines={1}
         style={[
           styles.mainOptionButtonText,
+          compact && styles.mainOptionButtonTextCompact,
           selected && styles.mainOptionButtonTextSelected,
         ]}
       >
         {label}
       </Text>
+      {badge ? (
+        <View style={[styles.mainOptionBadge, selected && styles.mainOptionBadgeSelected]} testID={testID ? `${testID}.badge` : undefined}>
+          <Text numberOfLines={1} style={[styles.mainOptionBadgeText, selected && styles.mainOptionBadgeTextSelected]}>{badge}</Text>
+        </View>
+      ) : null}
     </Pressable>
   );
 }
@@ -199,22 +230,24 @@ export function StatusDot({
 }) {
   const styles = useThemedStyles(makeStyles);
   const pulse = useRef(new Animated.Value(1)).current;
+  const reduceMotion = useReduceMotionEnabled();
+  const animatePulse = pulsing && reduceMotion === false;
 
   useEffect(() => {
-    if (!pulsing) {
+    if (!animatePulse) {
       pulse.setValue(1);
       return undefined;
     }
     const loop = Animated.loop(
       Animated.sequence([
         Animated.timing(pulse, {
-          duration: 680,
+          duration: STATUS_DOT_PULSE_HALF_CYCLE_MS,
           easing: Easing.inOut(Easing.ease),
           toValue: 0.42,
           useNativeDriver: true,
         }),
         Animated.timing(pulse, {
-          duration: 680,
+          duration: STATUS_DOT_PULSE_HALF_CYCLE_MS,
           easing: Easing.inOut(Easing.ease),
           toValue: 1,
           useNativeDriver: true,
@@ -225,7 +258,7 @@ export function StatusDot({
     return () => {
       loop.stop();
     };
-  }, [pulse, pulsing]);
+  }, [animatePulse, pulse]);
 
   return (
     <Animated.View
@@ -280,6 +313,7 @@ export function ActionPill({
       accessibilityRole="button"
       accessibilityState={{ disabled: interactionDisabled, selected: active || undefined }}
       disabled={interactionDisabled}
+      hitSlop={touchTargetSlop(ACTION_PILL_HEIGHT)}
       onPress={interactionDisabled ? undefined : onPress}
       style={({ pressed }) => [
         styles.actionPill,
@@ -404,7 +438,8 @@ export function ScreenBackButton({
       accessibilityRole="button"
       accessibilityState={{ disabled: interactionDisabled }}
       disabled={interactionDisabled}
-      hitSlop={hitSlop}
+      // 调用方传入的 hitSlop 优先;compact 档(36pt)默认四周补足到 44pt。
+      hitSlop={hitSlop ?? (compact ? (MIN_TOUCH_TARGET - BACK_BUTTON_COMPACT_SIZE) / 2 : undefined)}
       onPress={interactionDisabled ? undefined : onPress}
       style={({ pressed }) => [
         styles.backButton,
@@ -586,12 +621,19 @@ export function MainWindowActionButton({
   action,
   density = 'default',
   grow = false,
+  hitSlop,
   style,
+  textStyle,
+  buttonRef,
 }: {
   action: MainWindowAction;
   density?: MainWindowActionDensity;
   grow?: boolean;
+  /** Compact buttons (38pt) inside content rows extend their touch target to 44pt this way. */
+  hitSlop?: PressableProps['hitSlop'];
   style?: StyleProp<ViewStyle>;
+  textStyle?: StyleProp<TextStyle>;
+  buttonRef?: Ref<View>;
 }) {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
@@ -600,6 +642,8 @@ export function MainWindowActionButton({
   const disabled = action.disabled || action.busy || !action.onPress;
   return (
     <Pressable
+      ref={buttonRef}
+      accessibilityHint={action.accessibilityHint}
       accessibilityLabel={action.accessibilityLabel ?? action.label}
       accessibilityRole="button"
       accessibilityState={{
@@ -608,6 +652,7 @@ export function MainWindowActionButton({
         selected: action.active || undefined,
       }}
       disabled={disabled}
+      hitSlop={hitSlop ?? (compact ? touchTargetSlop(ACTION_BUTTON_COMPACT_HEIGHT) : undefined)}
       onPress={disabled ? undefined : action.onPress}
       style={({ pressed }) => [
         styles.mainActionButton,
@@ -616,6 +661,7 @@ export function MainWindowActionButton({
         action.active && tone === 'secondary' && styles.mainActionButtonActive,
         tone === 'primary' && styles.mainActionButtonPrimary,
         tone === 'danger' && styles.mainActionButtonDanger,
+        tone === 'danger-solid' && { backgroundColor: colors.sharedTaskConfirmBackground, borderColor: colors.sharedTaskConfirmBackground },
         pressed && styles.pressed,
         disabled && styles.disabled,
         style,
@@ -623,7 +669,7 @@ export function MainWindowActionButton({
       testID={action.testID}
     >
       {action.busy ? (
-        <ActivityIndicator color={tone === 'primary' ? colors.ctaText : colors.textSecondary} size="small" />
+        <ActivityIndicator color={tone === 'danger-solid' ? colors.sharedTaskConfirmForeground : tone === 'primary' ? colors.ctaText : colors.textSecondary} size="small" />
       ) : (
         <Text
           numberOfLines={1}
@@ -632,6 +678,8 @@ export function MainWindowActionButton({
             compact && styles.mainActionButtonTextCompact,
             tone === 'primary' && styles.mainActionButtonPrimaryText,
             tone === 'danger' && styles.mainActionButtonDangerText,
+            tone === 'danger-solid' && { color: colors.sharedTaskConfirmForeground },
+            textStyle,
           ]}
         >
           {action.label}
@@ -711,14 +759,14 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   backButton: {
     alignItems: 'center',
     borderRadius: radius.pill,
-    height: 44,
+    height: BACK_BUTTON_SIZE,
     justifyContent: 'center',
     marginLeft: -spacing.sm,
-    width: 44,
+    width: BACK_BUTTON_SIZE,
   },
   backButtonCompact: {
-    height: 36,
-    width: 36,
+    height: BACK_BUTTON_COMPACT_SIZE,
+    width: BACK_BUTTON_COMPACT_SIZE,
   },
   headerText: {
     flex: 1,
@@ -726,21 +774,24 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   },
   eyebrow: {
     color: colors.textTertiary,
-    fontSize: typeScale.caption,
-    fontWeight: fontWeight.medium,
+    fontSize: typeScale.footnote,
+    lineHeight: lineHeight.caption,
+    fontWeight: fontWeight.semibold,
     textTransform: 'uppercase',
   },
   headerTitle: {
     color: colors.textPrimary,
     fontSize: typeScale.title,
-    fontWeight: fontWeight.medium,
+    lineHeight: lineHeight.title,
+    fontWeight: fontWeight.semibold,
   },
   headerTitleCompact: {
     fontSize: typeScale.subtitle,
+    lineHeight: lineHeight.subtitle,
   },
   headerSubtitle: {
     color: colors.textSecondary,
-    fontSize: typeScale.caption,
+    fontSize: typeScale.footnote,
     lineHeight: lineHeight.caption,
     marginTop: 2,
   },
@@ -754,7 +805,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     borderRadius: radius.pill,
     borderWidth: StyleSheet.hairlineWidth,
     justifyContent: 'center',
-    minHeight: 38,
+    minHeight: ACTION_PILL_HEIGHT,
     minWidth: 0,
     paddingHorizontal: spacing.md,
   },
@@ -762,9 +813,11 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     backgroundColor: colors.surfaceChip,
     borderColor: colors.borderStrong,
   },
+  // 紧凑按钮文字:§3 没有单列「紧凑按钮」角色,取最接近的已登记角色「面板操作项」15/20 500。
   actionPillText: {
     color: colors.textPrimary,
-    fontSize: typeScale.caption,
+    fontSize: typeScale.bodySmall,
+    lineHeight: lineHeight.bodySmall,
     fontWeight: fontWeight.medium,
   },
   infoPill: {
@@ -792,6 +845,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   infoPillText: {
     color: colors.textSecondary,
     fontSize: typeScale.caption,
+    lineHeight: lineHeight.caption,
     fontWeight: fontWeight.medium,
   },
   infoPillTextStrong: {
@@ -810,11 +864,11 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     borderRadius: radius.pill,
     borderWidth: StyleSheet.hairlineWidth,
     justifyContent: 'center',
-    minHeight: 36,
+    minHeight: OPTION_BUTTON_HEIGHT,
     paddingHorizontal: spacing.lg,
   },
   mainOptionButtonCompact: {
-    minHeight: 32,
+    minHeight: OPTION_BUTTON_COMPACT_HEIGHT,
     paddingHorizontal: spacing.md,
   },
   mainOptionButtonSegmented: {
@@ -825,10 +879,46 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     backgroundColor: colors.cta,
     borderColor: colors.cta,
   },
+  mainOptionButtonWithBadge: {
+    flexDirection: 'row',
+    gap: spacing.xs + 2,
+  },
+  // Neutral count chip (desktop NavigationCountBadge): raised on the unselected segment, inverse on the selected one.
+  mainOptionBadge: {
+    alignItems: 'center',
+    backgroundColor: colors.surfaceElevated,
+    borderColor: colors.border,
+    borderRadius: radius.pill,
+    borderWidth: StyleSheet.hairlineWidth,
+    justifyContent: 'center',
+    minWidth: 18,
+    height: 18,
+    paddingHorizontal: spacing.xs + 1,
+  },
+  mainOptionBadgeSelected: {
+    backgroundColor: colors.ctaText,
+    borderColor: colors.ctaText,
+  },
+  mainOptionBadgeText: {
+    color: colors.textPrimary,
+    fontSize: typeScale.micro,
+    lineHeight: lineHeight.micro,
+    fontWeight: fontWeight.semibold,
+    fontVariant: ['tabular-nums'],
+  },
+  mainOptionBadgeTextSelected: {
+    color: colors.cta,
+  },
+  // 选项文字按 §3「行标题、选项、按钮」16/22 500;紧凑档取「面板操作项」15/20 500。选中只换色。
   mainOptionButtonText: {
     color: colors.textSecondary,
-    fontSize: typeScale.caption,
+    fontSize: typeScale.body,
+    lineHeight: lineHeight.body,
     fontWeight: fontWeight.medium,
+  },
+  mainOptionButtonTextCompact: {
+    fontSize: typeScale.bodySmall,
+    lineHeight: lineHeight.bodySmall,
   },
   mainOptionButtonTextSelected: {
     color: colors.ctaText,
@@ -921,7 +1011,8 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   mainMetricLabel: {
     color: colors.textSecondary,
     fontSize: typeScale.caption,
-    fontWeight: fontWeight.medium,
+    lineHeight: lineHeight.caption,
+    fontWeight: fontWeight.regular,
   },
   mainMetricTextInverted: {
     color: colors.ctaText,
@@ -942,6 +1033,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   mainEmptyTitle: {
     color: colors.textPrimary,
     fontSize: typeScale.body,
+    lineHeight: lineHeight.body,
     fontWeight: fontWeight.medium,
   },
   mainEmptyCopy: {
@@ -960,6 +1052,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   remoteSyncingText: {
     color: colors.textTertiary,
     fontSize: typeScale.body,
+    lineHeight: lineHeight.body,
   },
   mainActionGroup: {
     gap: spacing.sm,
@@ -988,7 +1081,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     paddingHorizontal: spacing.lg,
   },
   mainActionButtonCompact: {
-    minHeight: 38,
+    minHeight: ACTION_BUTTON_COMPACT_HEIGHT,
     minWidth: 72,
     paddingHorizontal: spacing.md,
   },
@@ -1008,10 +1101,13 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   mainActionButtonText: {
     color: colors.textPrimary,
     fontSize: typeScale.body,
+    lineHeight: lineHeight.body,
     fontWeight: fontWeight.medium,
   },
+  // §3 无「紧凑按钮」角色,取最接近的「面板操作项」15/20(字重沿用按钮 500)。
   mainActionButtonTextCompact: {
-    fontSize: typeScale.caption,
+    fontSize: typeScale.bodySmall,
+    lineHeight: lineHeight.bodySmall,
   },
   mainActionButtonPrimaryText: {
     color: colors.ctaText,

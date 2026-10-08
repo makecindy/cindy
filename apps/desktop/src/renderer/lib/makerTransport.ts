@@ -33,8 +33,62 @@ import * as messageService from '@/lib/messageService';
 import * as sessionService from '@/lib/sessionService';
 import { extractIpcError } from '@/utils/ipcError';
 import type { TurnChangeSetUpdatedPayload } from '../../shared/turnChangeSet';
+import type { LocalPluginOauthRequest, LocalPluginSecretRequest, LocalPluginConnectionRequest } from '../../shared/pluginOauth';
 
 type FullMaker = typeof window.electronAPI.maker;
+
+export type RemoteCredentialSwitchOutcome =
+  | { kind: 'applied'; sessionId: string }
+  | { kind: 'failed'; sessionId: string; reason: 'apply-failed' | 'rollback-failed' };
+
+/** A deferred model choice settles on its owning device after the invoke has returned. */
+export function subscribeRemoteCredentialSwitchOutcome(
+  sessionId: string,
+  deviceId: string | undefined,
+  callback: (outcome: RemoteCredentialSwitchOutcome) => void,
+): () => void {
+  if (!sessionId) return () => {};
+  return window.electronAPI.deviceLink.onRemotePush((push, ownerStamp) => {
+    const sourceDeviceId = deviceId ?? getStickySessionDeviceId(sessionId);
+    if (!sourceDeviceId || push.deviceId !== sourceDeviceId || !isDeviceLinkRemotePushCurrent(push, ownerStamp)) return;
+    const payload = push.payload;
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return;
+    const value = payload as Record<string, unknown>;
+    if (value.sessionId !== sessionId) return;
+    if (push.channel === 'maker:session-credential-switch-applied') {
+      callback({ kind: 'applied', sessionId });
+    } else if (push.channel === 'maker:session-credential-switch-failed' &&
+      (value.reason === 'apply-failed' || value.reason === 'rollback-failed')) {
+      callback({ kind: 'failed', sessionId, reason: value.reason });
+    }
+  });
+}
+
+/** The dedicated local Main API owns the browser and encrypted callback; Renderer sees status only. */
+export function assistRemotePluginOauth(
+  sessionId: string,
+  request: Omit<LocalPluginOauthRequest, 'deviceId'>,
+): Promise<{ accepted: boolean }> {
+  const deviceId = getStickySessionDeviceId(sessionId);
+  if (!deviceId) return Promise.reject(new Error('Remote authorization unavailable'));
+  return window.electronAPI.maker.assistPluginOauth({ deviceId, ...request });
+}
+
+/** This local call goes straight to Main's signed bridge, never makerApiFor/device-link invoke. */
+export function submitRemotePluginSecret(
+  sessionId: string,
+  request: Omit<LocalPluginSecretRequest, 'deviceId'>,
+): Promise<{ accepted: boolean }> {
+  const deviceId = getStickySessionDeviceId(sessionId);
+  if (!deviceId) return Promise.reject(new Error('Remote authorization unavailable'));
+  return window.electronAPI.maker.submitRemotePluginSecret({ deviceId, ...request });
+}
+
+export function submitRemotePluginConnection(sessionId: string, request: Omit<LocalPluginConnectionRequest, 'deviceId'>): Promise<{ accepted: boolean }> {
+  const deviceId = getStickySessionDeviceId(sessionId);
+  if (!deviceId) return Promise.reject(new Error('Remote authorization unavailable'));
+  return window.electronAPI.maker.submitRemotePluginConnection({ deviceId, ...request });
+}
 
 /**
  * makerChatStore / ChatInput 经传输层调用的会话操作子集。本地直接复用
@@ -69,6 +123,7 @@ export interface RoutableMaker {
   forkStripEncrypted: FullMaker['forkStripEncrypted'];
   rewindPreview: FullMaker['rewindPreview'];
   rewindCommit: FullMaker['rewindCommit'];
+  applyTurnChangeSet: FullMaker['applyTurnChangeSet'];
   getContextUsage: FullMaker['getContextUsage'];
   setExtraDirs: FullMaker['setExtraDirs'];
   setWritableDirs: FullMaker['setWritableDirs'];
@@ -94,7 +149,9 @@ export interface RoutableMaker {
     | 'move'
     | 'remove'
     | 'updateText'
+    | 'updateContent'
     | 'clearError'
+    | 'cancelUsageLimitWait'
     | 'retryLastError'
     | 'clearSession'
     | 'persistTurnErrorDeferred'
@@ -149,6 +206,7 @@ function remoteMakerApi(deviceId: string): RoutableMaker {
     listBotDelegations: t('maker:bot-delegations:list') as FullMaker['listBotDelegations'],
     cancelBotDelegation: t('maker:bot-delegation:cancel') as FullMaker['cancelBotDelegation'],
     getBotDirectMessageThread: t('maker:bot-direct-message-thread:get') as FullMaker['getBotDirectMessageThread'],
+    applyTurnChangeSet: t('maker:turn-change-set:apply') as FullMaker['applyTurnChangeSet'],
     send: t('maker:send') as FullMaker['send'],
     setModel: (async (...args: SetModelArgs) =>
       invokeRemote(
@@ -206,7 +264,9 @@ function remoteMakerApi(deviceId: string): RoutableMaker {
       move: t('maker:input:move') as FullMaker['input']['move'],
       remove: t('maker:input:remove') as FullMaker['input']['remove'],
       updateText: t('maker:input:update-text') as FullMaker['input']['updateText'],
+      updateContent: t('maker:input:update-content') as FullMaker['input']['updateContent'],
       clearError: t('maker:input:clear-error') as FullMaker['input']['clearError'],
+      cancelUsageLimitWait: t('maker:input:cancel-usage-limit-wait') as FullMaker['input']['cancelUsageLimitWait'],
       retryLastError: t('maker:input:retry-last-error') as FullMaker['input']['retryLastError'],
       clearSession: t('maker:input:clear-session') as FullMaker['input']['clearSession'],
       // device-link:auth error 重试失败/放弃时在被控端落库,经隧道路由到被控端 main。
@@ -263,7 +323,7 @@ export function makerApiForSticky(sessionId: string): RoutableMaker {
   return deviceId ? makerApiForDevice(deviceId) : window.electronAPI.maker;
 }
 
-/** Subscribe to local exact-turn updates; remote sessions deliberately fail closed in this phase. */
+/** Subscribe to summaries from the owning device; exact patches are fetched on demand. */
 export function subscribeTurnChangeSetUpdated(
   sessionId: string,
   cb: (payload: TurnChangeSetUpdatedPayload) => void,
@@ -277,9 +337,13 @@ export function subscribeTurnChangeSetUpdated(
         cb(payload as TurnChangeSetUpdatedPayload);
       });
     }
-    // Exact patches can exceed the 2 MiB device-link frame. This phase fails closed for
-    // controlled sessions instead of truncating a patch and presenting it as exact.
-    return () => {};
+    return window.electronAPI.deviceLink.onRemotePush((push, localOwnerStamp) => {
+      if (push.deviceId !== deviceId || push.channel !== 'maker:turn-change-set:updated') return;
+      if (!isDeviceLinkRemotePushCurrent(push, localOwnerStamp)) return;
+      const payload = push.payload as Partial<TurnChangeSetUpdatedPayload> | null;
+      if (payload?.sessionId !== sessionId || payload.summary?.sessionId !== sessionId) return;
+      cb(payload as TurnChangeSetUpdatedPayload);
+    });
   };
 
   let currentDeviceId = getStickySessionDeviceId(sessionId);
@@ -349,6 +413,23 @@ export function isSessionTurnRunningFor(sessionId: string): Promise<boolean> {
 }
 
 /**
+ * 「应用退出中断」横幅的运行态真值:时间戳来自哪台设备的 session 行,就问哪台设备。
+ * 远程会话的 turn 只在被控端跑,控制端本机 main 永远答「不在 turn 中」,拿它当真值会把
+ * 被控端正在跑的任务误判成中断。deviceId 由调用方显式传入(视图的粘滞归属),不在这里
+ * 重新解析易失的 session origin —— 重连窗口内退回本机同样会得到错误的 false。
+ */
+export async function getSessionTurnActiveOn(
+  sessionId: string,
+  deviceId: string | null | undefined,
+): Promise<boolean> {
+  if (!deviceId) {
+    const result = await window.electronAPI.maker.getSessionTurnActive(sessionId);
+    return result?.inTurn === true;
+  }
+  return (await invokeRemote(deviceId, 'maker:session-in-turn', [sessionId])) === true;
+}
+
+/**
  * 读历史消息:远程走隧道 local-db:messages:list,返回形状与本地一致(camelCase Message[])。
  *
  * 远程会话取回**最新一页**(没有 before / beforeTs 游标)时顺手写进冷缓存
@@ -411,6 +492,44 @@ export function listMessagesFor(
   return promise;
 }
 
+const BACKGROUND_TASK_OUTPUT_TAIL_UNSUPPORTED_TTL_MS = 10 * 60 * 1000;
+const backgroundTaskOutputTailUnsupportedUntil = new Map<string, number>();
+
+/**
+ * 运行中后台命令的输出文件末尾一段(只读,best-effort):任务登记与 `.output` 文件都在会话归属端,
+ * 远程会话隧道到被控端读。老被控端无此 channel → CHANNEL_NOT_ALLOWED → 带 TTL
+ * 短路(与 workflow 进度同款);其余错误一律按 read_failed 返回,调用方不显示最近输出。
+ */
+export function readBackgroundTaskOutputTailFor(
+  sessionId: string,
+  taskId: string,
+): Promise<import('../../shared/backgroundTaskOutput').BackgroundTaskOutputTailResult> {
+  const deviceId = getStickySessionDeviceId(sessionId);
+  if (!deviceId) {
+    return window.electronAPI.maker
+      .readBackgroundTaskOutputTail(sessionId, taskId)
+      .catch(() => ({ ok: false, reason: 'read_failed' }) as const);
+  }
+  const blockedUntil = backgroundTaskOutputTailUnsupportedUntil.get(deviceId);
+  if (blockedUntil !== undefined && blockedUntil > Date.now()) {
+    return Promise.resolve({ ok: false, reason: 'unavailable' });
+  }
+  return (
+    invokeRemote(deviceId, 'maker:background-task:output-tail', [sessionId, taskId]) as Promise<
+      import('../../shared/backgroundTaskOutput').BackgroundTaskOutputTailResult
+    >
+  ).catch((err) => {
+    if (extractIpcError(err)?.code === 'DEVICE_LINK_CHANNEL_NOT_ALLOWED') {
+      backgroundTaskOutputTailUnsupportedUntil.set(
+        deviceId,
+        Date.now() + BACKGROUND_TASK_OUTPUT_TAIL_UNSUPPORTED_TTL_MS,
+      );
+      return { ok: false, reason: 'unavailable' } as const;
+    }
+    return { ok: false, reason: 'read_failed' } as const;
+  });
+}
+
 // 已确认不支持 maker:get-workflow-progress 的被控设备(收到过 CHANNEL_NOT_ALLOWED):
 // 短路一段时间不再空耗隧道往返。带 TTL 而非进程级永久 —— deviceId 跨升级稳定,
 // 被控端升级到支持版本后负缓存到期自动重探,无需重启控制端。
@@ -466,6 +585,60 @@ export function listSessionBackgroundTasksFor(
       typeof window.electronAPI.maker.listSessionBackgroundTasks
     >
   ).catch(() => ({ tasks: [] }));
+}
+
+/**
+ * 会话后台活动快照(只读,best-effort):「turn 已结束但子进程仍在调模型」的信号
+ * 由被控端 loopback proxy 观察,远程会话必须隧道读(控制端本机查恒为 false)。
+ * 隧道失败一律按无活动降级,与 listSessionBackgroundTasksFor 同口径。
+ */
+export async function sessionBackgroundActivityFor(sessionId: string): Promise<{ active: boolean }> {
+  const deviceId = getStickySessionDeviceId(sessionId);
+  if (!deviceId) return window.electronAPI.maker.getSessionBackgroundActivity(sessionId);
+  return (
+    invokeRemote(deviceId, 'maker:session-background-activity', [sessionId]) as Promise<{
+      active: boolean;
+    }>
+  ).catch(() => ({ active: false }));
+}
+
+/**
+ * 停止类操作的执行端:远程 → 被控设备 id(粘滞解析,relay 瞬断窗口内不退回本机);
+ * 本机 → null,但仅当本机库确有该会话。两者都不是即归属未解析(冷启动时远程注册表
+ * 尚未就绪),拒绝执行 —— 本机停止对不存在的会话会幂等「成功」,任务却在被控端继续跑。
+ */
+async function resolveStopOwner(sessionId: string): Promise<string | null> {
+  const deviceId = getStickySessionDeviceId(sessionId);
+  if (deviceId) return deviceId;
+  try {
+    await sessionService.get(sessionId);
+  } catch {
+    throw new Error('[DEVICE_LINK_NOT_CONNECTED] Background task ownership is unresolved');
+  }
+  // 本机查询在途期间远程注册表可能完成水合(恢复 / 复制的本机库可含同 id 会话):
+  // 查询落地后再核验一次,远程归属优先,停止不落到同 id 的本机会话。
+  return getStickySessionDeviceId(sessionId) ?? null;
+}
+
+/**
+ * 精确停止单个后台任务,在会话归属端执行(见 resolveStopOwner)。错误原样透传:
+ * 老被控端回 DEVICE_LINK_CHANNEL_NOT_ALLOWED,调用方据此提示升级。
+ */
+export async function stopAgentTaskFor(sessionId: string, taskId: string): Promise<{ ok: true }> {
+  const deviceId = await resolveStopOwner(sessionId);
+  if (!deviceId) return window.electronAPI.maker.stopAgentTask(sessionId, taskId);
+  return invokeRemote(deviceId, 'maker:agent-task:stop', [sessionId, taskId]) as Promise<{
+    ok: true;
+  }>;
+}
+
+/** 会话级「全部停止」(关闭归属端常驻 agent 进程);路由与错误语义同 stopAgentTaskFor。 */
+export async function stopSessionBackgroundTasksFor(sessionId: string): Promise<{ ok: true }> {
+  const deviceId = await resolveStopOwner(sessionId);
+  if (!deviceId) return window.electronAPI.maker.stopSessionBackgroundTasks(sessionId);
+  return invokeRemote(deviceId, 'maker:session-background-tasks:stop', [sessionId]) as Promise<{
+    ok: true;
+  }>;
 }
 
 /**

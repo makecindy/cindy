@@ -70,7 +70,7 @@ describe("iOS chrome presenters stay on the system menu path", () => {
       "utf8",
     );
     const home = readTextLf(
-      resolve(process.cwd(), "app/devices/index.tsx"),
+      resolve(process.cwd(), "src/session/HomeSurface.tsx"),
       "utf8",
     );
     const pullDown = readTextLf(
@@ -86,11 +86,14 @@ describe("iOS chrome presenters stay on the system menu path", () => {
       resolve(process.cwd(), "src/session/SessionOptionsExpoSheet.tsx"),
       "utf8",
     );
-    expect(expoSheet).toMatch(/from ['"]@expo\/ui['"]/);
-    expect(expoSheet).toContain("<BottomSheet");
-    expect(expoSheet).toContain("<List>");
-    expect(expoSheet).toContain("<ListItem");
-    expect(expoSheet).toContain("onClosed?.()");
+    expect(expoSheet).toMatch(/from ['"]@expo\/ui\/swift-ui['"]/);
+    expect(expoSheet).toContain("<ComposerSheet");
+    expect(expoSheet).toContain("<Section>");
+    expect(expoSheet).toContain("<ComposerNativeRow");
+    expect(expoSheet).toContain("onClosed={onClosed}");
+    const nativeSheet = readTextLf(resolve(process.cwd(), "src/session/ComposerSheet.ios.tsx"), "utf8");
+    expect(nativeSheet).toContain("<BottomSheet");
+    expect(nativeSheet).toContain("onDismiss={onClosed}");
     expect(expoSheet).not.toContain("snapPoints");
     expect(home).toContain("<SessionOptionsPresenter");
     const actionMenu = readTextLf(
@@ -124,8 +127,9 @@ describe("iOS chrome presenters stay on the system menu path", () => {
     expect(iosTitle).toContain("{title}");
     expect(iosTitle).not.toContain("eyebrow");
     expect(iosTitle).not.toContain("subtitle");
-    expect(simpleHeader).toContain("eyebrow={eyebrow}");
-    expect(simpleHeader).toContain("subtitle={subtitle}");
+    // Android 自绘 ScreenHeader 跟随 iOS:同样不显示 eyebrow / subtitle。
+    expect(simpleHeader).not.toContain("eyebrow={eyebrow}");
+    expect(simpleHeader).not.toContain("subtitle={subtitle}");
   });
 
   it("keeps Android fallback sheets and Maestro header anchors", () => {
@@ -149,30 +153,35 @@ describe("iOS chrome presenters stay on the system menu path", () => {
       resolve(process.cwd(), "app/account-deletion.tsx"),
       "utf8",
     );
-    const automations = readTextLf(
-      resolve(process.cwd(), "app/automations/[deviceId].tsx"),
-      "utf8",
-    );
     const deviceDetail = readTextLf(
       resolve(process.cwd(), "app/devices/[deviceId].tsx"),
       "utf8",
     );
 
-    expect(sessionSheet).toContain('testID="home.sessionActions"');
+    expect(sessionSheet).toContain("<SessionActionSheetFrame");
+    for (const file of [
+      "SessionActionSheetFrame.tsx",
+      "SessionActionSheetFrame.android.tsx",
+    ]) {
+      expect(
+        readTextLf(resolve(process.cwd(), "src/session", file), "utf8"),
+      ).toContain('testID="home.sessionActions"');
+    }
     expect(messageSheet).toContain("<SheetModal");
     expect(chipSheet).toContain('testID="session.chipMenu"');
     expect(settings).toContain('backTestID="settings.backButton"');
     expect(settings).toContain('titleTestID="settings.title"');
     expect(settings).toContain("<SimpleStackHeader");
     expect(settings).not.toContain("ScreenHeader");
-    expect(settings).toContain('backTestID="settings.voiceDictionary.backButton"');
-    expect(settings).toContain('backTestID="settings.renameSelfDevice.backButton"');
+    expect(readTextLf(resolve(process.cwd(), "app/settings/voice-dictionary.tsx"), "utf8"))
+      .toContain('backTestID="settings.voiceDictionary.backButton"');
+    expect(readTextLf(resolve(process.cwd(), "app/settings/device-name.tsx"), "utf8"))
+      .toContain('backTestID="settings.renameSelfDevice.backButton"');
     expect(accountDeletion).toContain("<SimpleStackHeader");
     expect(accountDeletion).toContain(
       'backTestID="accountDeletion.backButton"',
     );
-    expect(automations).toContain("<SimpleStackHeader");
-    expect(automations).toContain('backTestID="automations.backButton"');
+    expect(deviceDetail).not.toContain('eyebrow=');
     expect(deviceDetail).toContain("<SimpleStackHeader");
     expect(deviceDetail).toContain('backTestID="deviceDetail.backButton"');
     expect(deviceDetail).toContain("<SessionOptionsPresenter");

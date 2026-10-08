@@ -38,6 +38,7 @@ interface LatestUserMessage {
 /** Optional dependency overrides used by focused main-process unit tests. */
 export interface GitSnapshotCoordinatorHostDeps {
   readAutoSnapshotEnabled?: () => boolean;
+  readAutoInitProjectGit?: () => boolean;
   detectRepoRoot?: (workingDir: string) => Promise<string | null>;
   initializeProjectGit?: ConstructorParameters<
     typeof GitSnapshotCoordinator
@@ -103,6 +104,8 @@ export function createGitSnapshotCoordinator(
   return new GitSnapshotCoordinator({
     readAutoSnapshotEnabled:
       deps.readAutoSnapshotEnabled ?? (() => readGitSafetySettings().autoSnapshotEnabled),
+    readAutoInitProjectGit:
+      deps.readAutoInitProjectGit ?? (() => readGitSafetySettings().autoInitProjectGit),
     detectRepoRoot: deps.detectRepoRoot ?? defaultDetectRepoRoot,
     initializeProjectGit:
       deps.initializeProjectGit ??
@@ -113,6 +116,7 @@ export function createGitSnapshotCoordinator(
           remoteHostId: context.remoteHostId,
           sessionId,
           autoSnapshotEnabled: opts.autoSnapshotEnabled,
+          autoInitProjectGit: opts.autoInitProjectGit,
           source: 'git-snapshot:on-turn',
         })),
     getSessionContext: async (sessionId) => {
@@ -134,6 +138,8 @@ export function createGitSnapshotCoordinator(
         agentKind: meta.agentKind as AgentKind,
         workspaceKind: meta.workspaceKind,
         remoteHostId: meta.remoteHostId,
+        // Agent 在另一台电脑运行：文件回退统一走本机保存点链(含 Claude Code)。
+        ...(meta.agentDeviceId ? { savepointRewind: true } : {}),
       };
     },
     resolveAnchor: async (sessionId) => (await getLatestUserMessageOnce(sessionId))?.clientId,

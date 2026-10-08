@@ -5,6 +5,7 @@ import type { AgentRuntimeConfig } from '../../../interfaces/runtime-config.js';
 import {
   EXPLORE_INHERIT_CAP_DISABLE_ENV,
   SENSITIVE_ANTHROPIC_ENV_KEYS,
+  applyClaudeDesktopEntrypoint,
   applyExploreInheritCapEnv,
   applySubagentModelEnv,
   buildClaudeEnv,
@@ -68,6 +69,22 @@ describe('buildClaudeEnv', () => {
     const env = await buildClaudeEnv(createAuthAdapter(), {});
 
     expect(env.CLAUDE_CODE_DISABLE_CRON).toBe('1');
+  });
+
+  it.each(['local', 'remote'] as const)('pins the Desktop entrypoint after auth and behavior flags in %s mode', async (mode) => {
+    const env = await buildClaudeEnv(
+      createAuthAdapter({ ANTHROPIC_API_KEY: 'session-key', CLAUDE_CODE_ENTRYPOINT: 'cli' }),
+      { behaviorFlags: { CLAUDE_CODE_ENTRYPOINT: 'sdk-ts' } },
+      { mode },
+    );
+    expect(env.CLAUDE_CODE_ENTRYPOINT).toBe('claude-desktop');
+    expect(env.ANTHROPIC_API_KEY).toBe('session-key');
+  });
+
+  it('reapplies the Desktop entrypoint after remote route materialization without changing credentials', () => {
+    const env = { CLAUDE_CODE_ENTRYPOINT: 'sdk-ts', ANTHROPIC_AUTH_TOKEN: 'route-token' };
+    applyClaudeDesktopEntrypoint(env);
+    expect(env).toEqual({ CLAUDE_CODE_ENTRYPOINT: 'claude-desktop', ANTHROPIC_AUTH_TOKEN: 'route-token' });
   });
 
   it('pins ANTHROPIC_SMALL_FAST_MODEL to the session wire model when provided (#3557)', async () => {
@@ -647,7 +664,7 @@ describe('buildClaudeEnv', () => {
       for (const [k, v] of origMetadata) restore(k, v);
     });
 
-    it('oauth-spawn:强制 ENTRYPOINT=claude-vscode(覆盖继承值)+ 防御性 IDE_SKIP', async () => {
+    it('oauth-spawn: uses the Desktop entrypoint without IDE-specific defaults', async () => {
       // cc 的 401 续命回调有 entrypoint 白名单(claude-desktop/local-agent/claude-vscode),
       // SDK 默认 sdk-ts 不在其中;dev 下 Electron 由终端 cc 启动继承来的 sdk-ts 同样会
       // 关掉闸门 —— 必须硬覆盖,否则回调静默失效(不报错不打日志)。
@@ -660,19 +677,19 @@ describe('buildClaudeEnv', () => {
         {},
       );
       expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBe('at-live');
-      expect(env.CLAUDE_CODE_ENTRYPOINT).toBe('claude-vscode');
-      expect(env.CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL).toBe('1');
+      expect(env.CLAUDE_CODE_ENTRYPOINT).toBe('claude-desktop');
+      expect(env.CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL).toBeUndefined();
       expect(env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST).toBe('1');
     });
 
-    it('无订阅 token(gateway-key):不动 ENTRYPOINT,保持 SDK 默认语义', async () => {
+    it('gateway-key: uses the same Desktop entrypoint without OAuth or IDE defaults', async () => {
       delete process.env.CLAUDE_CODE_ENTRYPOINT;
       // 宿主环境(如 Claude Code IDE 会话)可能自带 IDE_SKIP=1,不清会经 process.env
       // 继承进 buildClaudeEnv 输出,让下面的 toBeUndefined 断言只在特定环境失败。
       delete process.env.CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL;
       const env = await buildClaudeEnv(createAuthAdapter({ ANTHROPIC_API_KEY: 'sk-gw' }), {});
       expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
-      expect(env.CLAUDE_CODE_ENTRYPOINT).toBeUndefined();
+      expect(env.CLAUDE_CODE_ENTRYPOINT).toBe('claude-desktop');
       expect(env.CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL).toBeUndefined();
     });
 
@@ -727,6 +744,89 @@ describe('buildClaudeEnv', () => {
       expect(env.ANTHROPIC_API_KEY).toBe('sk-gw');
       // remote 从空字典起,不继承本机 OS env
       expect(env.HOME).toBeUndefined();
+    });
+  });
+
+  // Claude 订阅会话只用 CLI 自己的登录:host 不接管连接、不递任何凭证。
+  describe('native CLI auth (Claude subscription)', () => {
+    const LOOPBACK = 'http://127.0.0.1:54321';
+    const origManaged = process.env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST;
+    const origEntrypoint = process.env.CLAUDE_CODE_ENTRYPOINT;
+
+    afterEach(() => {
+      if (origManaged === undefined) delete process.env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST;
+      else process.env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST = origManaged;
+      if (origEntrypoint === undefined) delete process.env.CLAUDE_CODE_ENTRYPOINT;
+      else process.env.CLAUDE_CODE_ENTRYPOINT = origEntrypoint;
+    });
+
+    it('neither routes through the loopback proxy nor marks the provider as host-managed', async () => {
+      const env = await buildClaudeEnv(
+        createAuthAdapter({}),
+        { endpoint: LOOPBACK, behaviorFlags: { ANTHROPIC_BASE_URL: 'https://flag.example.com' } },
+        { credentialMode: 'oauth-bearer', nativeCliAuth: true },
+      );
+      expect(env.ANTHROPIC_BASE_URL).toBeUndefined();
+      expect(env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST).toBeUndefined();
+      expect(env.CLAUDE_CODE_DISABLE_CRON).toBe('1');
+    });
+
+    it('drops every host-provided credential even if the adapter returns one', async () => {
+      delete process.env.CLAUDE_CODE_ENTRYPOINT;
+      const env = await buildClaudeEnv(
+        createAuthAdapter({
+          CLAUDE_CODE_OAUTH_TOKEN: 'at-host',
+          CLAUDE_CODE_SUBSCRIPTION_TYPE: 'max',
+          ANTHROPIC_API_KEY: 'sk-gw',
+          ANTHROPIC_AUTH_TOKEN: 'tok',
+          ANTHROPIC_CUSTOM_HEADERS: 'Authorization: Bearer x',
+          HTTPS_PROXY: 'http://127.0.0.1:7890',
+        }),
+        { endpoint: LOOPBACK },
+        { credentialMode: 'oauth-bearer', nativeCliAuth: true },
+      );
+      for (const key of [
+        'CLAUDE_CODE_OAUTH_TOKEN',
+        'CLAUDE_CODE_SUBSCRIPTION_TYPE',
+        'ANTHROPIC_API_KEY',
+        'ANTHROPIC_AUTH_TOKEN',
+        'ANTHROPIC_CUSTOM_HEADERS',
+      ]) {
+        expect(env[key]).toBeUndefined();
+      }
+      // 网络配置不是凭证,照常下发。
+      expect(env.HTTPS_PROXY).toBe('http://127.0.0.1:7890');
+      // 本机 CLI 自己读取登录凭证,入口仍与 Desktop Code 对齐。
+      expect(env.CLAUDE_CODE_ENTRYPOINT).toBe('claude-desktop');
+    });
+
+    it('strips an inherited host-managed marker so the CLI can read its own login', async () => {
+      process.env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST = '1';
+      const native = await buildClaudeEnv(createAuthAdapter({}), {}, { nativeCliAuth: true });
+      expect(native.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST).toBeUndefined();
+      expect(SENSITIVE_ANTHROPIC_ENV_KEYS).toContain('CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST');
+    });
+
+    it('leaves gateway / provider sessions unchanged', async () => {
+      const gateway = await buildClaudeEnv(
+        createAuthAdapter({ ANTHROPIC_API_KEY: 'sk-gw' }),
+        { endpoint: LOOPBACK },
+        { credentialMode: 'gateway-key' },
+      );
+      expect(gateway.ANTHROPIC_BASE_URL).toBe(LOOPBACK);
+      expect(gateway.ANTHROPIC_API_KEY).toBe('sk-gw');
+      expect(gateway.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST).toBe('1');
+    });
+
+    it('is ignored for remote spawns', async () => {
+      const env = await buildClaudeEnv(
+        createAuthAdapter({ ANTHROPIC_API_KEY: 'sk-gw' }),
+        { endpoint: LOOPBACK, remoteEndpoint: 'https://gw.example.com' },
+        { mode: 'remote', credentialMode: 'gateway-key', nativeCliAuth: true },
+      );
+      expect(env.ANTHROPIC_BASE_URL).toBe('https://gw.example.com');
+      expect(env.ANTHROPIC_API_KEY).toBe('sk-gw');
+      expect(env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST).toBe('1');
     });
   });
 });

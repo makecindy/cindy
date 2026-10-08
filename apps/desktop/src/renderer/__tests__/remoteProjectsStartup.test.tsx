@@ -40,7 +40,7 @@ afterEach(() => {
   Reflect.deleteProperty(window, 'electronAPI');
 });
 
-it.each(['connecting', 'unknown', 'late-subscribe', 'late-snapshot'])('handles initial %s state without redundant bootstrap', async (initialStatus) => {
+it.each(['connecting', 'unknown', 'late-subscribe', 'late-snapshot', 'circuit-subscribe', 'circuit-snapshot'])('handles initial %s state without redundant bootstrap', async (initialStatus) => {
   vi.useFakeTimers();
   const listeners: Record<string, (...args: any[]) => void> = {};
   let release!: () => void;
@@ -56,7 +56,7 @@ it.each(['connecting', 'unknown', 'late-subscribe', 'late-snapshot'])('handles i
     getState: async () => {
       if (initialStatus.startsWith('late-')) return initialState;
       if (initialStatus === 'unknown') throw new Error('temporary IPC failure');
-      return { linkStatus: initialStatus };
+      return { linkStatus: initialStatus.startsWith('circuit-') ? 'online' : initialStatus };
     },
     listDevices: async () => ({
       devices: [
@@ -82,6 +82,24 @@ it.each(['connecting', 'unknown', 'late-subscribe', 'late-snapshot'])('handles i
   await act(async () => {
     await vi.advanceTimersByTimeAsync(0);
   });
+  if (initialStatus.startsWith('circuit-')) {
+    let finishRead: (() => void) | undefined;
+    if (initialStatus === 'circuit-snapshot') {
+      state.refresh.mockImplementationOnce(() => new Promise<string>((resolve) => { finishRead = () => resolve('gave-up'); }));
+      await act(async () => { release(); await vi.advanceTimersByTimeAsync(0); });
+    }
+    expect(remoteProjectsStore.getBootstrapLoadingDeviceIds().has('peer')).toBe(true);
+    await act(async () => {
+      listeners.Responsiveness({ deviceId: 'peer', unresponsive: true });
+      finishRead?.();
+      release();
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(remoteProjectsStore.getBootstrapLoadingDeviceIds().has('peer')).toBe(false);
+    expect(state.refresh).toHaveBeenCalledTimes(initialStatus === 'circuit-snapshot' ? 1 : 0);
+    unmount();
+    return;
+  }
   if (initialStatus.startsWith('late-')) {
     await act(async () => {
       listeners.Presence({ deviceId: 'peer', deviceName: 'Peer', online: true, remoteControlEnabled: true });

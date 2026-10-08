@@ -5,8 +5,21 @@ import {
   isPayloadDirectPreviewableUrl,
 } from "@cindy/maker-shared/payload-summary";
 import { i18n } from "@/i18n";
+import { errorText } from "@/debug/fileDiagnostics";
+import { mobileDebugLog } from "@/debug/mobileDebugLog";
 
 const EXPIRY_SAFETY_WINDOW_MS = 60 * 1000;
+
+/** Match stable Host/transport codes, never expose raw errors containing local paths. */
+export function mediaLoadFailureKey(error: unknown): 'message.lightbox.sourceMissing' | 'message.lightbox.deviceOffline' | 'message.lightbox.loadFailed' {
+  const code = error && typeof error === 'object' && 'code' in error ? error.code : undefined;
+  const message = error instanceof Error ? error.message : String(error ?? '');
+  if (code === 'MEDIA_SOURCE_MISSING' || message.includes('[MEDIA_SOURCE_MISSING]')) return 'message.lightbox.sourceMissing';
+  const offlineCodes = ['NOT_CONNECTED', 'DEVICE_LINK_NOT_CONNECTED', 'DEVICE_OFFLINE', 'PEER_OFFLINE'];
+  if ((typeof code === 'string' && offlineCodes.includes(code))
+    || /\b(?:NOT_CONNECTED|DEVICE_LINK_NOT_CONNECTED|DEVICE_OFFLINE|PEER_OFFLINE)\b/.test(message)) return 'message.lightbox.deviceOffline';
+  return 'message.lightbox.loadFailed';
+}
 
 export interface MobileRemoteMediaFetchResult {
   /** inline 缩略图回包(新被控端)时为空串。 */
@@ -211,10 +224,26 @@ export async function resolveMobileRemoteMedia(
   if (!isValidFetchResult(fetched)) {
     throw new Error(i18n.t("composer.attachments.mediaResultInvalid"));
   }
-  const signed = await deps.presignGet(fetched.ossKey);
+  // Image thumbnails are high-volume; trace presign timing for full files, failures always.
+  const presignStartedAt = Date.now();
+  const signed = await deps.presignGet(fetched.ossKey).catch((error: unknown) => {
+    mobileDebugLog("warn", "files", "remote media presign failed", {
+      kind: media.kind,
+      ms: Date.now() - presignStartedAt,
+      error: errorText(error),
+    });
+    throw error;
+  });
   if (!isValidPresignResult(signed)) {
+    mobileDebugLog("warn", "files", "remote media presign invalid", { kind: media.kind });
     throw new Error(i18n.t("composer.attachments.mediaUrlInvalid"));
   }
+  if (media.kind !== "image")
+    mobileDebugLog("debug", "files", "remote media presigned", {
+      kind: media.kind,
+      ms: Date.now() - presignStartedAt,
+      size: fetched.size,
+    });
   return {
     url: signed.getUrl,
     ossKey: fetched.ossKey,

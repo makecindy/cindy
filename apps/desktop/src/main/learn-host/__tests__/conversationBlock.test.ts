@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   CONVERSATION_TOTAL_CHAR_BUDGET,
   formatConversationBlock,
+  isBareLearnInvocationText,
 } from '../evidence.pure';
 
 describe('formatConversationBlock', () => {
@@ -26,5 +27,14 @@ describe('formatConversationBlock', () => {
     // 最新一条必在,最早一条必不在
     expect(block).toContain('msg-39');
     expect(block).not.toContain('msg-0 ');
+  });
+});
+
+describe('isBareLearnInvocationText', () => {
+  it('recognizes only bare Learn triggers regardless of later history rows', () => {
+    expect(isBareLearnInvocationText('/learn')).toBe(true);
+    expect(isBareLearnInvocationText('  /SKILL:Learn  ')).toBe(true);
+    expect(isBareLearnInvocationText('/learn preserve the release flow')).toBe(false);
+    expect(isBareLearnInvocationText('please run /learn')).toBe(false);
   });
 });

@@ -311,6 +311,22 @@ try {
     ),
     'menu keyboard navigation never reaches the remote computer',
   );
+  // Fixed short choices use the shared segmented control; reselecting the current
+  // option keeps the fixture's negotiated settings unchanged.
+  const checkSegmented = async (name, option, screenshot) => {
+    const group = settings.getByRole('radiogroup', { name, exact: true });
+    const choice = group.getByRole('radio', { name: option, exact: true });
+    await choice.click();
+    assert((await choice.getAttribute('aria-checked')) === 'true', `${name} keeps ${option}`);
+    const bounds = await group.boundingBox();
+    const viewport = viewer.viewportSize();
+    assert(bounds && viewport, `${name} is visible`);
+    assert(
+      bounds.x >= 0 && bounds.x + bounds.width <= viewport.width,
+      `${name} stays within horizontal bounds`,
+    );
+    await viewer.screenshot({ animations: 'disabled', path: path.join(artifacts, screenshot) });
+  };
   const checkExitDialog = async (theme) => {
     const labels = await viewer.evaluate(async () => {
       const catalog = (await import('/i18n/index.ts')).default;
@@ -335,10 +351,38 @@ try {
   await checkExitDialog('light');
   await viewer.locator('#stage').click();
   const modifier = controllerPlatform === 'darwin' ? 'Meta' : 'Control';
+  const shortcutCodes = [modifier + 'Left', 'KeyC', 'KeyV'];
+  const shortcutStart = await host.evaluate(() => window.inputs.length);
   await viewer.keyboard.press(modifier + '+c');
   await viewer.keyboard.press(modifier + '+v');
-  await viewer.waitForFunction(() => window.clipboardActions.length === 2);
-  assert.deepEqual(await viewer.evaluate(() => window.clipboardActions), ['copy', 'paste']);
+  // Shortcuts act on the remote clipboard as complete key combos; only panel
+  // actions transfer content between computers.
+  const shortcutKeys = () =>
+    host.evaluate(
+      ({ start, codes }) =>
+        window.inputs
+          .slice(start)
+          .filter((event) => event.kind === 'key' && codes.includes(event.code))
+          .map((event) => (event.down ? '+' : '-') + event.code),
+      { start: shortcutStart, codes: shortcutCodes },
+    );
+  await host.waitForFunction(
+    ({ start, codes }) =>
+      window.inputs
+        .slice(start)
+        .filter((event) => event.kind === 'key' && codes.includes(event.code)).length >= 8,
+    { start: shortcutStart, codes: shortcutCodes },
+  );
+  assert.deepEqual(
+    await shortcutKeys(),
+    ['KeyC', 'KeyV'].flatMap((code) => [
+      '+' + shortcutCodes[0],
+      '+' + code,
+      '-' + code,
+      '-' + shortcutCodes[0],
+    ]),
+  );
+  assert.deepEqual(await viewer.evaluate(() => window.clipboardActions), []);
   await viewer.evaluate(async () => {
     const { themeService } = await import('/themes/theme-service.ts');
     const { cindyDark } = await import('/themes/builtin/cindy-dark.ts');
@@ -401,7 +445,7 @@ try {
     animations: 'disabled',
     path: path.join(artifacts, 'settings-zh-dark.png'),
   });
-  await checkSelect(settings.getByRole('combobox').first(), 'fps-select-zh-dark.png');
+  await checkSegmented('帧率', '30 fps', 'fps-segmented-zh-dark.png');
   await viewer.evaluate(async () => {
     const { themeService } = await import('/themes/theme-service.ts');
     const { cindyLight } = await import('/themes/builtin/cindy-light.ts');
@@ -411,18 +455,9 @@ try {
     animations: 'disabled',
     path: path.join(artifacts, 'settings-zh-light.png'),
   });
-  await checkSelect(settings.getByRole('combobox').nth(1), 'quality-select-zh-light.png');
-  const releaseLabel = await viewer.evaluate(async () =>
-    (await import('/i18n/index.ts')).default.t('remoteDesktop.releaseControl'),
-  );
-  await viewer.getByRole('button', { name: releaseLabel, exact: true }).click();
+  await checkSegmented('画质', '自动', 'quality-segmented-zh-light.png');
   const desktopButton = settings.getByRole('button', { name: '桌面', exact: true });
-  assert(await desktopButton.isDisabled(), 'view-only actions explain why control is required');
-  await settings.getByText('当前仅查看，取得控制权后可使用剪贴板和桌面操作。').waitFor();
-  const takeLabel = await viewer.evaluate(async () =>
-    (await import('/i18n/index.ts')).default.t('remoteDesktop.takeControl'),
-  );
-  await settings.getByRole('button', { name: takeLabel, exact: true }).click();
+  assert(await desktopButton.isEnabled(), 'desktop viewer opens with control');
   await viewer.waitForFunction(() => {
     const button = [...document.querySelectorAll('aside button')].find(
       (item) => item.textContent === '桌面',
@@ -460,7 +495,7 @@ try {
     toolbar && settingsBounds && settingsBounds.y >= toolbar.y + toolbar.height,
     'settings follow the wrapped toolbar',
   );
-  await checkSelect(settings.getByRole('combobox').first(), 'fps-select-narrow.png');
+  await checkSegmented('帧率', '30 fps', 'fps-segmented-narrow.png');
   await viewer.setViewportSize({ width: 720, height: 420 });
   if (controllerPlatform === 'darwin') {
     await viewer.getByRole('button', { name: '关闭', exact: true }).click();
@@ -501,7 +536,7 @@ try {
       mouse: true,
       dataChannelInput: true,
       bridgeInput: true,
-      clipboardShortcuts: true,
+      remoteClipboardShortcuts: true,
       exitConfirmation: true,
       controllerPlatform,
       mediaRecovery: true,

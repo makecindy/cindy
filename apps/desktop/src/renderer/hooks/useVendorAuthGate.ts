@@ -31,6 +31,7 @@ import {
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { useVendorReadiness, type Readiness } from '@/hooks/useVendorReadiness';
 import {
+  getCachedDeviceProviders,
   isDeviceProvidersUnsupportedError,
   parseDeviceProvidersPayload,
 } from '@/hooks/useDeviceProviders';
@@ -244,7 +245,8 @@ export function useVendorAuthGate(): UseVendorAuthGateReturn {
       options?: { purpose?: GatePurpose; deviceId?: string; existingSessionRoute?: boolean },
     ): Promise<GateResult> => {
       if (options?.purpose === 'voice-input') {
-        const readiness = await window.electronAPI.voiceInput.getReadiness();
+        const cached = window.electronAPI.voiceInput.getReadinessCached();
+        const readiness = cached?.ok ? cached : await window.electronAPI.voiceInput.getReadiness();
         if (readiness.ok) return { proceed: true };
 
         const dialogCopy = pickVoiceInputDialogCopy(copy, readiness);
@@ -272,16 +274,30 @@ export function useVendorAuthGate(): UseVendorAuthGateReturn {
       if (deviceId) {
         const providerAgent: ProviderAgentKind =
           vendor === 'codex' ? 'codex' : vendor === 'pi' ? 'pi' : 'claude-code';
+        const includeSuspended = options?.existingSessionRoute === true;
+        // 模型选择器已读到的来源快照(被控端来源变化推送会令其失效)显示已有可用来源时直接复用:
+        // provider:list 经隧道实测 1–5 秒,重拉一遍会整段挡在远程新建任务的第一步。
+        // 快照缺失或显示未就绪时仍实时探测,旧快照只能放行、不能误弹「未连接」。
+        // cc 不看 binary 轴,有来源结论即可;codex / pi 仍需 agent:status 查二进制。
+        const cachedProviders = getCachedDeviceProviders(deviceId);
+        const cachedSourceReady =
+          cachedProviders !== null &&
+          sourceReadyFromProviderList(cachedProviders, providerAgent, { includeSuspended }) ===
+            true;
         const [statusRes, providersRes] = await Promise.allSettled([
-          window.electronAPI.deviceLink.invoke(deviceId, 'maker:agent:status', [providerAgent]),
-          window.electronAPI.deviceLink.invoke(deviceId, 'maker:provider:list', []),
+          cachedSourceReady && vendor === 'cc'
+            ? Promise.resolve(null)
+            : window.electronAPI.deviceLink.invoke(deviceId, 'maker:agent:status', [providerAgent]),
+          cachedSourceReady
+            ? Promise.resolve(cachedProviders)
+            : window.electronAPI.deviceLink.invoke(deviceId, 'maker:provider:list', []),
         ]);
         const status =
           statusRes.status === 'fulfilled'
-            ? (statusRes.value as { binaryReady: boolean; authReady: boolean })
+            ? (statusRes.value as { binaryReady: boolean; authReady: boolean } | null)
             : null;
         const providerProbe = resolveRemoteProviderProbe(providersRes, providerAgent, {
-          includeSuspended: options?.existingSessionRoute === true,
+          includeSuspended,
         });
         const statusUnsupported =
           statusRes.status === 'rejected' &&

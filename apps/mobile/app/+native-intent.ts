@@ -8,22 +8,51 @@
 // 实际的 PKCE code 交换**不依赖路由**:由 src/auth/AuthContext.tsx 的 Linking.addEventListener /
 // getInitialURL 监听器独立捕获原始 URL 并完成(见其 handleDeepLink)。本文件只负责别让路由 404。
 //
-// 背景(为何 Android 暴露、iOS 不会):iOS 的系统认证会话通常会在会话内捕获
-// 自定义 scheme 并 inline 完成,router 不会导航到 /auth;Android 上服务器 302 到自定义
-// scheme 常以新 intent 冷启 App,expo-router 就撞上无路由的 /auth。此拦截让两端一致落到 index。
+// 系统浏览器认证与微信原生授权的回跳都可能同时送到 Router；微信 SDK 的
+// oauth / refreshToken 及 Universal Link 校验回跳由原生 delegate 消费，也不对应页面。本文件仅控制导航，
+// 不交换或解析授权票据，不更改原生 SDK 的 state 校验。
 //
 // 纯 JS(不进 @expo/fingerprint / 不改 runtimeVersion),可随热更下发。
 
-export function redirectSystemPath({ path }: { path: string; initial: boolean }): string {
+import { clearSharedTaskInvitationIntent, receiveSharedTaskInvitationIntent } from '@/device-link/sharedTaskInvitationIntent';
+import {
+  isProviderShareLinkPath,
+  PROVIDER_SHARE_LINK_ROUTE,
+  receiveProviderShareLinkIntent,
+} from '@/device-link/providerShareLinkIntent';
+import { WECHAT_APP_ID, WECHAT_UNIVERSAL_LINK } from '@/config/env';
+import { isWechatSdkCallback } from '@/auth/wechatCallback';
+
+export function redirectSystemPath({ path, initial }: { path: string; initial: boolean }): string {
   try {
+    // OpenSDK 的授权及 Universal Link 校验回调也会被 Expo Linking 广播给 Router。
+    // 它们由原生 delegate 消费，不能当页面显示（更不能在 404 中展示 code）。
+    // 不把微信 code 交给 auth-server 的 /auth PKCE 交换：两者不是同一种票据。
+    if (isWechatSdkCallback(path, {
+      appId: WECHAT_APP_ID,
+      universalLink: WECHAT_UNIVERSAL_LINK,
+    })) return '/';
+    // 供应商分享链接只能在电脑上申请:手机只显示「请在电脑上打开」的提示页。口令不进路由
+    // 状态与诊断(提示页从内存取走可复制的链接),不合法的链接同样落到提示页、什么都不留。
+    if (receiveProviderShareLinkIntent(path)) return PROVIDER_SHARE_LINK_ROUTE;
+    const invitationUrl = /^\/(?:shared-session|shared-task\/join)\?/.test(path) ? `cindy:/${path}` : path;
+    if (receiveSharedTaskInvitationIntent(invitationUrl)) return '/shared-session';
     // path 可能是完整 URL('cindycn://auth?code=...')或路径('/auth?code=...'),统一取出 pathname。
     const noScheme = path.replace(/^[a-zA-Z][\w+.-]*:\/\//, '/');
     const pathname = noScheme.split('?')[0].split('#')[0].replace(/\/+$/, '') || '/';
     // 命中 OAuth 回调 → 回首页；Share Extension → 新建任务；其余深链原样放行。
     if (pathname === '/auth') return '/';
-    if (pathname === '/expo-sharing') return '/sessions/new';
+    // A restored launch URL is not proof of an unconsumed share. On cold start,
+    // let IncomingShareBridge navigate only after reading an actual pending batch.
+    if (pathname === '/expo-sharing') return initial ? '/' : '/sessions/new';
+    // Invalid invitations must not leave secrets in router state or diagnostics.
+    if (pathname === '/shared-session' || pathname === '/shared-task/join') {
+      clearSharedTaskInvitationIntent();
+      return '/shared-session';
+    }
     return path;
   } catch {
-    return path;
+    // 分享口令绝不随原始链接进路由状态。
+    return isProviderShareLinkPath(path) ? PROVIDER_SHARE_LINK_ROUTE : path;
   }
 }

@@ -80,6 +80,13 @@
     }
   },
   "preview": {
+    "browserBack": "뒤로",
+    "browserForward": "앞으로",
+    "browserMore": "추가 작업",
+    "browserShowSource": "소스 보기",
+    "browserShowPage": "웹페이지로 돌아가기",
+    "browserAddToTask": "현재 작업에 추가",
+    "browserFileInfo": "파일 정보",
     "done": "완료",
     "a11yShare": "내보내 공유",
     "copyPath": "경로 복사",
@@ -89,6 +96,8 @@
     "downloadFailed": "다운로드에 실패했습니다",
     "fetchingVideo": "컴퓨터에서 동영상을 가져오는 중…",
     "fetchingAudio": "컴퓨터에서 오디오를 가져오는 중…",
+    "videoBuffering": "버퍼링 중…",
+    "videoBufferingPercent": "버퍼링 중 {{percent}}%",
     "fetchAvFailed": "가져오기에 실패했습니다: {{detail}}",
     "fetchPdfFailed": "PDF 가져오기에 실패했습니다: {{detail}}",
     "fetchingPdf": "컴퓨터에서 PDF를 가져오는 중…",
@@ -119,7 +128,14 @@
     "originalFailedThumb": "원본 가져오기에 실패했습니다. 현재는 썸네일입니다",
     "fetchingOriginalHint": "썸네일 · 원본 가져오는 중…",
     "a11yExportShareFile": "원본 파일 내보내 공유",
-    "exportShare": "내보내기 / 공유"
+    "exportShare": "내보내기 / 공유",
+    "browserAddress": "주소",
+    "browserCancelAddress": "편집 취소",
+    "browserReturnToFile": "파일로 돌아가기",
+    "browserCopyAddress": "주소 복사",
+    "browserCopiedAddress": "주소를 복사했습니다",
+    "browserInvalidAddress": "올바른 http 또는 https 주소를 입력하세요.",
+    "browserWebsiteFailed": "웹페이지를 열 수 없습니다. 다시 로드해 주세요."
   },
   "export": {
     "exportFailed": "내보내기에 실패했습니다",
@@ -127,6 +143,6 @@
     "exportTimeout": "내보내기 시간이 초과되었습니다. 다시 시도하세요."
   },
   "gallery": {
-    "cacheMiss": "원격 미디어 캐시 미스(cachedOnly)"
+    "cacheMiss": "이 미디어는 아직 휴대폰에 캐시되지 않았습니다. 컴퓨터에 연결되면 다시 여세요"
   }
 }

@@ -17,6 +17,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import ts from 'typescript';
+import { sharedTaskHostPeer } from '@cindy/device-link';
+import { isRemoteSessionSticky } from '@/lib/makerTransport';
+import { bindSharedTaskPushOwner, resetRemoteDataOwnerPushFence } from '@/lib/remoteDataOwnerPushFence';
 
 import type { Session } from '@/lib/ccAgent.types';
 import {
@@ -206,6 +210,29 @@ function emptyProjection(sessionId: string) {
 }
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
+
+// Execute the hook's real edit callback with the real store and transport,
+// without mounting unrelated hook effects or starting Electron.
+function planEditor(sessionId: string) {
+  const source = readFileSync(resolve(__dirname, '../hooks/useCCAgentChat.ts'), 'utf8');
+  const ast = ts.createSourceFile('hook.ts', source, ts.ScriptTarget.ES2022, true);
+  let callback = '';
+  function visit(node: ts.Node): void {
+    if (ts.isVariableDeclaration(node) && node.name.getText(ast) === 'updatePlanContent'
+      && node.initializer && ts.isCallExpression(node.initializer)) {
+      callback = node.initializer.arguments[0].getText(ast);
+    }
+    ts.forEachChild(node, visit);
+  }
+  visit(ast);
+  if (!callback) throw new Error('Plan edit callback missing');
+  const compiled = ts.transpileModule(`return (${callback});`, {
+    compilerOptions: { target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  return new Function('sessionId', 'makerChatStore', 'isRemoteSessionSticky', 'planWriteTimerRef', 'log', compiled)(
+    sessionId, makerChatStore, isRemoteSessionSticky, { current: null }, { error: vi.fn() },
+  ) as (requestId: string, path: string, content: string) => void;
+}
 const DEVICE_ID = 'dev-int-scn';
 let n = 0;
 const sid = () => `int-scn-${n++}`;
@@ -230,6 +257,7 @@ beforeEach(() => {
 
 afterEach(() => {
   makerChatStore.__teardownGlobalListeners();
+  resetRemoteDataOwnerPushFence();
   remoteProjectsStore.clear();
   delete (globalThis as { window?: unknown }).window;
   vi.clearAllMocks();
@@ -314,6 +342,64 @@ describe('device-link 远程交互往返 — permission', () => {
 });
 
 describe('device-link 远程交互往返 — plan_review', () => {
+  it('shared guest edits stay in memory and approval sends the edited plan to the host', async () => {
+    const peer = sharedTaskHostPeer('plan-share', 'host');
+    makerChatStore.__teardownGlobalListeners();
+    host = makeFakeHost(peer);
+    local = stubElectronApi(host);
+    makerChatStore.initGlobalListeners();
+    const s = sid();
+    remoteProjectsStore.setDeviceSessions(peer, 'Host', [{ id: s } as Session]);
+    bindSharedTaskPushOwner(peer, TEST_OWNER_STAMP.dataOwnerId);
+    host.hostInteraction(s, { kind: 'plan_review', requestId: 'guest-plan', plan: 'Original', planFilePath: '/host/plan.md' });
+    await flush();
+    const write = vi.fn(async () => ({ success: true }));
+    window.electronAPI.maker.writePlanFile = write;
+    vi.useFakeTimers();
+    try {
+      const edit = planEditor(s);
+      edit('guest-plan', '/host/plan.md', 'Edited');
+      // A reconnect clears the mirror but must not turn a host path local.
+      remoteProjectsStore.clear();
+      edit('guest-plan', '/host/plan.md', 'Final draft');
+      await vi.advanceTimersByTimeAsync(600);
+      expect(write).not.toHaveBeenCalled();
+      expect(makerChatStore.getSnapshot(s).pendingPlanReview?.plan).toBe('Final draft');
+    } finally {
+      vi.useRealTimers();
+    }
+    remoteProjectsStore.setDeviceSessions(peer, 'Host', [{ id: s } as Session]);
+    makerChatStore.respondToPlanReview(s, 'guest-plan', true);
+    await flush();
+    expect(host.resolved).toEqual([{ requestId: 'guest-plan', decision: {
+      kind: 'plan_review', behavior: 'allow', editedPlan: 'Final draft',
+    } }]);
+    expect(local.localResolveInteraction).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])('local autosave respects remote origin discovered during debounce: %s', async (becomesRemote) => {
+    const s = sid();
+    const write = vi.fn(async () => ({ success: true }));
+    window.electronAPI.maker.writePlanFile = write;
+    vi.useFakeTimers();
+    try {
+      const edit = planEditor(s);
+      edit('local-plan', '/local/plan.md', 'First draft');
+      edit('local-plan', '/local/plan.md', 'Final draft');
+      if (becomesRemote) {
+        remoteProjectsStore.setDeviceSessions(DEVICE_ID, 'Host', [{ id: s } as Session]);
+      }
+      await vi.advanceTimersByTimeAsync(600);
+      if (becomesRemote) expect(write).not.toHaveBeenCalled();
+      else {
+        expect(write).toHaveBeenCalledTimes(1);
+        expect(write).toHaveBeenCalledWith({ requestId: 'local-plan', planFilePath: '/local/plan.md', content: 'Final draft' });
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('plan approve → behavior=allow + editedPlan(用户当前 plan)', async () => {
     const s = openRemoteSession();
     host.hostInteraction(
@@ -720,6 +806,185 @@ describe('device-link 远程交互 — dismissed / 顺序 / 本机零回归', ()
   });
 });
 
+describe('device-link 失效问题与计划收口', () => {
+  const ask = {
+    kind: 'ask_user_question', requestId: 'stale-ask',
+    questions: [{ question: 'X?', header: 'h', options: [{ label: 'A' }], multiSelect: false }],
+  };
+  const plan = { kind: 'plan_review', requestId: 'stale-plan', plan: '# Plan', planFilePath: '' };
+
+  it.each(['rejected', 'lost', 'timeout', 'snapshot', 'push'] as const)(
+    '%s 后同一计划保留本地编辑，再次批准发送草稿', async (trigger) => {
+      vi.useFakeTimers();
+      try {
+        const s = openRemoteSession();
+        host.hostInteraction(s, plan, 'persist-edited-plan');
+        host.seedPending(s, plan, 'persist-edited-plan');
+        makerChatStore.updatePendingPlanReviewContent(s, plan.requestId, '# My edited plan');
+        makerChatStore.setPlanViewerState(s, 'edit');
+        if (trigger === 'snapshot') await makerChatStore.reconcilePendingInteractions(s);
+        else if (trigger === 'push') host.hostInteraction(s, plan, 'persist-edited-plan');
+        else {
+          if (trigger === 'rejected') host.invoke.mockResolvedValueOnce({ accepted: false });
+          if (trigger === 'lost') host.invoke.mockRejectedValueOnce(new Error('receipt lost'));
+          if (trigger === 'timeout') host.invoke.mockImplementationOnce(() => new Promise(() => {}));
+          makerChatStore.respondToPlanReview(s, plan.requestId, true);
+          await vi.advanceTimersByTimeAsync(trigger === 'timeout' ? 15_001 : 0);
+        }
+        const state = makerChatStore.getSnapshot(s);
+        expect(state.pendingPlanReview?.plan).toBe('# My edited plan');
+        expect(state.planViewerState).toBe('edit');
+        expect(state.lastExpandedPlanViewerState).toBe('edit');
+        expect(state.messages.find(m => m.planReviewRequestId === plan.requestId)?.planReviewPlan).toBe('# My edited plan');
+        makerChatStore.respondToPlanReview(s, plan.requestId, true);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(host.resolved).toEqual([{ requestId: plan.requestId, decision: {
+          kind: 'plan_review', behavior: 'allow', editedPlan: '# My edited plan',
+        } }]);
+        expect(makerChatStore.getSnapshot(s).pendingPlanReview).toBeNull();
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it('本机重查保留收起的编辑草稿，新请求不会继承草稿或显示状态', async () => {
+    const s = sid();
+    local.localGetPendingInteractions.mockResolvedValue([{ request: plan, persistId: 'local-plan' }]);
+    await makerChatStore.reconcilePendingInteractions(s);
+    makerChatStore.updatePendingPlanReviewContent(s, plan.requestId, '# Local draft');
+    makerChatStore.setPlanViewerState(s, 'edit');
+    makerChatStore.setPlanViewerState(s, 'minimized');
+    await makerChatStore.reconcilePendingInteractions(s);
+    expect(makerChatStore.getSnapshot(s)).toMatchObject({
+      pendingPlanReview: { plan: '# Local draft' }, planViewerState: 'minimized', lastExpandedPlanViewerState: 'edit',
+    });
+    local.localGetPendingInteractions.mockResolvedValue([{ request: { ...plan, requestId: 'new-plan', plan: '# New plan' }, persistId: 'new-plan' }]);
+    await makerChatStore.reconcilePendingInteractions(s);
+    expect(makerChatStore.getSnapshot(s)).toMatchObject({
+      pendingPlanReview: { requestId: 'new-plan', plan: '# New plan' }, planViewerState: 'expanded', lastExpandedPlanViewerState: 'expanded',
+    });
+    expect(makerChatStore.getSnapshot(s).messages.find(m => m.planReviewRequestId === plan.requestId)?.planReviewStatus).toBe('expired');
+  });
+
+  it('重连后的空快照清掉错过撤回通知的卡片、草稿和历史待回答状态', async () => {
+    const s = openRemoteSession();
+    host.hostInteraction(s, ask, 'persist-stale-ask');
+    host.hostInteraction(s, plan, 'persist-stale-plan');
+    makerChatStore.setAskUserDraft(s, { requestId: ask.requestId, currentIndex: 0, answers: { 'X?': 'A' } });
+    makerChatStore.setAskUserViewerState(s, 'minimized');
+    makerChatStore.setPlanViewerState(s, 'minimized');
+
+    await makerChatStore.reconcilePendingInteractions(s);
+
+    const state = makerChatStore.getSnapshot(s);
+    expect(state.pendingAskUser).toBeNull();
+    expect(state.pendingPlanReview).toBeNull();
+    expect(state.askUserDraft).toBeNull();
+    expect(state.askUserViewerState).toBe('expanded');
+    expect(state.planViewerState).toBe('expanded');
+    expect(state.messages.find(m => m.askUserRequestId === ask.requestId)?.askUserStatus).toBe('expired');
+    expect(state.messages.find(m => m.planReviewRequestId === plan.requestId)?.planReviewStatus).toBe('expired');
+    expect(host.resolved).toEqual([]);
+  });
+
+  it.each(['rejected', 'lost'] as const)('%s 回执后重查主机，过期问题不再卡住跳过', async (failure) => {
+    const s = openRemoteSession();
+    host.hostInteraction(s, ask, 'persist-stale-ask');
+    if (failure === 'rejected') host.invoke.mockResolvedValueOnce({ accepted: false });
+    else host.invoke.mockRejectedValueOnce(new Error('receipt lost'));
+
+    makerChatStore.answerUserQuestion(s, ask.requestId, { 'X?': '' });
+    await flush();
+
+    expect(host.invoke).toHaveBeenCalledWith(DEVICE_ID, 'maker:get-pending-interactions', [s]);
+    expect(makerChatStore.getSnapshot(s).pendingAskUser).toBeNull();
+    expect(makerChatStore.getSnapshot(s).messages.find(m => m.askUserRequestId === ask.requestId)?.askUserStatus).toBe('expired');
+    expect(host.invoke.mock.calls.filter(([, channel]) => channel === 'maker:resolve-interaction')).toHaveLength(1);
+    expect(local.localResolveInteraction).not.toHaveBeenCalled();
+  });
+
+  it('计划拒绝回执也重查并清掉失效确认', async () => {
+    const s = openRemoteSession();
+    host.hostInteraction(s, plan, 'persist-stale-plan');
+    host.invoke.mockResolvedValueOnce({ accepted: false });
+    makerChatStore.respondToPlanReview(s, plan.requestId, true);
+    await flush();
+    expect(makerChatStore.getSnapshot(s).pendingPlanReview).toBeNull();
+    expect(makerChatStore.getSnapshot(s).messages.find(m => m.planReviewRequestId === plan.requestId)?.planReviewStatus).toBe('expired');
+  });
+
+  it.each(['pending', 'unreachable'] as const)('主机 %s 时保留问题和草稿，可再次提交', async (hostState) => {
+    const s = openRemoteSession();
+    host.hostInteraction(s, ask, 'persist-stale-ask');
+    host.seedPending(s, ask, 'persist-stale-ask');
+    const draft = { requestId: ask.requestId, currentIndex: 0, answers: { 'X?': 'A' } };
+    makerChatStore.setAskUserDraft(s, draft);
+    host.invoke.mockResolvedValueOnce({ accepted: false });
+    if (hostState === 'unreachable') host.invoke.mockRejectedValueOnce(new Error('offline'));
+    makerChatStore.answerUserQuestion(s, ask.requestId, draft.answers);
+    await flush();
+    expect(makerChatStore.getSnapshot(s).pendingAskUser?.requestId).toBe(ask.requestId);
+    expect(makerChatStore.getSnapshot(s).askUserDraft).toEqual(draft);
+    makerChatStore.answerUserQuestion(s, ask.requestId, draft.answers);
+    await flush();
+    expect(makerChatStore.getSnapshot(s).pendingAskUser).toBeNull();
+    expect(host.resolved).toHaveLength(1);
+  });
+
+  it('旧快照不能删除读取期间新到的问题或覆盖已回答的历史', async () => {
+    const s = openRemoteSession();
+    host.hostInteraction(s, ask, 'persist-stale-ask');
+    let finish!: () => void;
+    host.invoke.mockReturnValueOnce(new Promise(resolve => { finish = () => resolve([]); }));
+    const reconcile = makerChatStore.reconcilePendingInteractions(s);
+    host.hostDismiss(s, ask.requestId, 'resolved', { kind: 'ask_user_question', answers: { 'X?': 'A' } });
+    const nextAsk = { ...ask, requestId: 'next-ask' };
+    host.hostInteraction(s, nextAsk, 'persist-next-ask');
+    finish();
+    await reconcile;
+    expect(makerChatStore.getSnapshot(s).pendingAskUser?.requestId).toBe(nextAsk.requestId);
+    host.seedPending(s, nextAsk, 'persist-next-ask');
+    await makerChatStore.reconcilePendingInteractions(s);
+    expect(makerChatStore.getSnapshot(s).messages.find(m => m.askUserRequestId === ask.requestId)).toMatchObject({ askUserStatus: 'answered', askUserAnswers: { 'X?': 'A' } });
+  });
+
+  it('提交和重查都无响应时恢复可提交状态，迟到快照不能删除新问题', async () => {
+    vi.useFakeTimers();
+    try {
+      const s = openRemoteSession();
+      host.hostInteraction(s, ask, 'persist-stale-ask');
+      let finish!: () => void;
+      host.invoke.mockImplementationOnce(() => new Promise(() => {}));
+      host.invoke.mockImplementationOnce(() => new Promise(resolve => { finish = () => resolve([]); }));
+      makerChatStore.answerUserQuestion(s, ask.requestId, { 'X?': '' });
+      await vi.advanceTimersByTimeAsync(30_001);
+      expect(makerChatStore.getSnapshot(s).pendingAskUser?.requestId).toBe(ask.requestId);
+      makerChatStore.answerUserQuestion(s, ask.requestId, { 'X?': 'A' });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(makerChatStore.getSnapshot(s).pendingAskUser).toBeNull();
+      const nextAsk = { ...ask, requestId: 'after-timeout' };
+      host.hostInteraction(s, nextAsk, 'persist-after-timeout');
+      finish();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(makerChatStore.getSnapshot(s).pendingAskUser?.requestId).toBe(nextAsk.requestId);
+      expect(host.invoke.mock.calls.filter(([, channel]) => channel === 'maker:resolve-interaction')).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('本机也按成功快照收口，不向其它设备发请求', async () => {
+    const s = sid();
+    local.localGetPendingInteractions.mockResolvedValueOnce([{ request: ask }]);
+    await makerChatStore.reconcilePendingInteractions(s);
+    expect(makerChatStore.getSnapshot(s).pendingAskUser?.requestId).toBe(ask.requestId);
+    await makerChatStore.reconcilePendingInteractions(s);
+    expect(makerChatStore.getSnapshot(s).pendingAskUser).toBeNull();
+    expect(host.invoke).not.toHaveBeenCalled();
+  });
+});
+
 describe('device-link 交互快照重建 — 窗口在交互挂起之后才打开(无 live push)', () => {
   it('本机 issue_confirm:无 push → 快照重建确认卡，重复重放保留用户草稿', async () => {
     const s = sid();
@@ -935,8 +1200,8 @@ describe('远程交互接线不变式', () => {
       'await sessionService.update(sessionId, { permissionMode: newMode });',
     );
     expect(runtimeSet).toBeGreaterThan(-1);
-    expect(persistSet).toBeGreaterThan(runtimeSet);
-    expect(src).toContain(
+    expect(persistSet).toBe(-1);
+    expect(src).not.toContain(
       'await window.electronAPI.maker.setPermissionMode(sessionId, previousMode);',
     );
     expect(src).toContain('requiresFullAccessConfirmation(previousMode, newMode)');
@@ -1452,6 +1717,6 @@ describe('远程交互接线不变式', () => {
 
     const start = src.indexOf('function handleSubscriptionFrame');
     expect(start).toBeGreaterThan(-1);
-    expect(src.slice(start, start + 900)).toContain('o.topics.filter(isRemoteSubscriptionTopic)');
+    expect(src.slice(start, src.indexOf("const name = resolveControllerName", start))).toContain('o.topics.filter(isRemoteSubscriptionTopic)');
   });
 });

@@ -32,7 +32,9 @@ import {
   resolveImSessionDefaults,
   type ResolvedImSessionDefaults,
 } from '../defaultSessionSettings';
+import { buildImDefaultRouteRecord } from './channelDefaultRoute';
 import { broadcastSessionCreated, broadcastSessionPatched } from './sessionBroadcast';
+import { captureChannelAccount, openChannelSession } from './openChannelSession';
 import type { ImOrchestratorConfig, ImSessionNamespace } from './types';
 
 const log = createLogger('im:repo');
@@ -73,6 +75,11 @@ export interface ImSessionRow {
    * 只读路径按需带出, 建会话路径不填(那时归属由 ns.workspaceKind 决定)。
    */
   workspaceKind?: 'project' | 'dialogue' | null;
+  /**
+   * 仅 prepareNewSession 产出的行带: 解析这组默认值时所读渠道设置的指纹。
+   * 建任务 / `/new` 把它连同路由写进 `im_default_route`(跟随记录)。
+   */
+  defaultRouteFingerprint?: string;
 }
 
 export interface SessionModelRouteSnapshot {
@@ -139,6 +146,13 @@ export interface ImSessionRepo {
    */
   getDefaultEffortFor(modelId: string, agentKind?: AgentKind): Effort;
 }
+
+/**
+ * prepareNewSession 产出的默认路由 → 读取它们之前捕获的账号复核函数。调用方常先 prepare
+ * (查凭证 / 回显配置)再 createSession, 账号代次要从 prepare 那一刻算起。只按对象身份
+ * 关联, 不持有引用(WeakMap), 不需要清理。
+ */
+const preparedAccounts = new WeakMap<ImSessionRow, () => void>();
 
 export function createImSessionRepo(
   config: ImOrchestratorConfig,
@@ -373,6 +387,7 @@ export function createImSessionRepo(
     },
 
     async prepareNewSession(botContextId, userId, scopeKey, providerSnapshot) {
+      const assertAccount = captureChannelAccount();
       const id = ns.sessionIdFor(botContextId, userId, scopeKey);
       const workingDir = ns.ensureWorkingDir(botContextId);
       const row = rowFromDefaults(
@@ -384,6 +399,7 @@ export function createImSessionRepo(
       // feishu 群 lane → 渠道设置「群聊新建任务权限档」)。
       const overridden = ns.permissionModeFor?.(userId) ?? null;
       if (overridden) row.permissionMode = overridden;
+      preparedAccounts.set(row, assertAccount);
       return row;
     },
 
@@ -397,66 +413,91 @@ export function createImSessionRepo(
      * 与设置原样保留,绝不让 UNIQUE(sessions.id) 冒泡成用户可见报错(#748)。
      */
     async createSession(botContextId, userId, scopeKey, prepared) {
+      // 账号代次从读取默认配置那一刻算起(调用方先 prepare 的, 沿用 prepare 时捕获的)。
+      const defaults = prepared ?? (await this.prepareNewSession(botContextId, userId, scopeKey));
+      const assertAccount = preparedAccounts.get(defaults) ?? captureChannelAccount();
+      assertAccount();
       const db = getDbClient().drizzle;
-      const row = prepared ?? (await this.prepareNewSession(botContextId, userId, scopeKey));
       const now = Date.now();
-      const persisted = await withSessionRouteLock(row.id, async () => {
-        const priorRows = await db
-          .select({ status: sessions.status })
-          .from(sessions)
-          .where(eq(sessions.id, row.id))
-          .limit(1);
-        if (priorRows[0]?.status === 'deleted') {
-          await retireDeletedPiSubagentState(row.id);
-        }
-        const isFreshInsert = priorRows.length === 0;
-        await db
-          .insert(sessions)
-          .values({
-            id: row.id,
-            title: ns.defaultTitle(userId),
-            ...(row.workspaceKind ?? ns.workspaceKind
-              ? { workspaceKind: row.workspaceKind ?? ns.workspaceKind }
-              : {}),
-            workingDir: row.workingDir,
-            model: row.model,
-            effort: row.effort,
-            permissionMode: row.permissionMode,
-            fastMode: row.fastMode,
-            status: 'active',
-            agentKind: toDbAgentKind(row.agentKind),
-            providerId: row.providerId,
-            source: ns.source,
-            ...ns.extraInsertColumns(botContextId, userId),
-            createdAt: now,
-            updatedAt: now,
-            // IM 会话由用户消息触发创建,插入时即设 userSendAt,
-            // 避免广播后 renderer 重拉到 userSendAt=null 的行被误判为草稿。
-            userSendAt: now,
-          })
-          .onConflictDoUpdate({
-            target: sessions.id,
-            set: {
+      // 新任务经公共入口 openSession(与桌面新建任务同一套模型准入 / Git 初始化 / 账号代次
+      // 校验); 建行仍是下面这段确定性 id 的 upsert。准入可能规范化来源 / 推理强度 / Fast,
+      // 新插入的行写准入后的路由; 冲突分支(并发建出 / 残留行)照旧不碰路由列。
+      let row = defaults;
+      const persisted = await openChannelSession(defaults.id, {
+        agentKind: defaults.agentKind,
+        model: defaults.model,
+        providerId: defaults.providerId,
+        effort: defaults.effort,
+        fastMode: defaults.fastMode,
+        permissionMode: defaults.permissionMode,
+        workingDir: defaults.workingDir,
+        ...((defaults.workspaceKind ?? ns.workspaceKind)
+          ? { workspaceKind: (defaults.workspaceKind ?? ns.workspaceKind) as 'project' | 'dialogue' }
+          : {}),
+        title: ns.defaultTitle(userId),
+      }, (admitted, assertCurrent) => {
+        row = { ...defaults, ...admitted };
+        return withSessionRouteLock(row.id, async () => {
+          // 等锁期间可能换了账号: 写库前就地复核, 不把旧账号的任务写进新账号的库。
+          assertCurrent();
+          const priorRows = await db
+            .select({ status: sessions.status })
+            .from(sessions)
+            .where(eq(sessions.id, row.id))
+            .limit(1);
+          if (priorRows[0]?.status === 'deleted') {
+            await retireDeletedPiSubagentState(row.id);
+          }
+          const isFreshInsert = priorRows.length === 0;
+          await db
+            .insert(sessions)
+            .values({
+              id: row.id,
+              title: ns.defaultTitle(userId),
+              ...(row.workspaceKind ?? ns.workspaceKind
+                ? { workspaceKind: row.workspaceKind ?? ns.workspaceKind }
+                : {}),
+              workingDir: row.workingDir,
+              model: row.model,
+              effort: row.effort,
+              permissionMode: row.permissionMode,
+              fastMode: row.fastMode,
               status: 'active',
+              agentKind: toDbAgentKind(row.agentKind),
+              providerId: row.providerId,
+              imDefaultRoute: defaultRouteRecordFor(row),
               source: ns.source,
-              // 冲突分支撞的是残留行 —— 同 findActiveSession, 用户 `/project`
-              // 切出去的归属不能被渠道默认值刷掉。
-              ...correctedWorkspaceKind(botContextId),
               ...ns.extraInsertColumns(botContextId, userId),
+              createdAt: now,
               updatedAt: now,
+              // IM 会话由用户消息触发创建,插入时即设 userSendAt,
+              // 避免广播后 renderer 重拉到 userSendAt=null 的行被误判为草稿。
               userSendAt: now,
-            },
-          });
-        // upsert 可能走冲突分支(残留行的 sdkSessionId / 模型 / 权限被刻意保留),
-        // 返回值必须以 DB 持久化结果为准——直接返回 prepared 默认值会让 turn 拿
-        // sdkSessionId=null 新开对话,而 DB 里旧上下文仍标记 active,两边失配。
-        const persistedRows = await db
-          .select()
-          .from(sessions)
-          .where(eq(sessions.id, row.id))
-          .limit(1);
-        return { row: persistedRows[0], isFreshInsert };
-      });
+            })
+            .onConflictDoUpdate({
+              target: sessions.id,
+              set: {
+                status: 'active',
+                source: ns.source,
+                // 冲突分支撞的是残留行 —— 同 findActiveSession, 用户 `/project`
+                // 切出去的归属不能被渠道默认值刷掉。
+                ...correctedWorkspaceKind(botContextId),
+                ...ns.extraInsertColumns(botContextId, userId),
+                updatedAt: now,
+                userSendAt: now,
+              },
+            });
+          // upsert 可能走冲突分支(残留行的 sdkSessionId / 模型 / 权限被刻意保留),
+          // 返回值必须以 DB 持久化结果为准——直接返回 prepared 默认值会让 turn 拿
+          // sdkSessionId=null 新开对话,而 DB 里旧上下文仍标记 active,两边失配。
+          const persistedRows = await db
+            .select()
+            .from(sessions)
+            .where(eq(sessions.id, row.id))
+            .limit(1);
+          return { row: persistedRows[0], isFreshInsert };
+        });
+      }, assertAccount);
       const persistedRow = persisted?.row;
       const result: ImSessionRow = persistedRow
         ? {
@@ -506,6 +547,9 @@ export function createImSessionRepo(
         throw new Error(`${ns.source} does not create a new task for /new`);
       }
       const routeId = ns.sessionIdFor(botContextId, userId, scopeKey);
+      // 账号代次在读旧任务 / 默认配置之前捕获(调用方先 prepare 的, 沿用 prepare 时的):
+      // 中途换账号时不拿旧账号读到的 previous / 默认值去新账号的库里轮换。
+      const assertAccount = (prepared && preparedAccounts.get(prepared)) || captureChannelAccount();
       return withSessionRouteLock(routeId, async () => {
         const previous = await this.peekSession(botContextId, userId, scopeKey);
         const defaults = prepared ?? (await this.prepareNewSession(botContextId, userId, scopeKey));
@@ -518,10 +562,33 @@ export function createImSessionRepo(
           workspaceKind: previous?.workspaceKind ?? defaults.workspaceKind,
           sdkSessionId: null,
         };
-        const rotate = async (): Promise<{
+        const rotateAdmitted = async (): Promise<{
+          current: ImSessionRow;
+          previous: ImSessionRow | null;
+        }> =>
+          // /new 建的是一条新任务: 同样经公共入口 openSession 准入, 轮换事务写准入后的路由。
+          openChannelSession(fresh.id, {
+            agentKind: fresh.agentKind,
+            model: fresh.model,
+            providerId: fresh.providerId,
+            effort: fresh.effort,
+            fastMode: fresh.fastMode,
+            permissionMode: fresh.permissionMode,
+            workingDir: fresh.workingDir,
+            workspaceKind: (fresh.workspaceKind ?? ns.workspaceKind ?? 'project') as 'project' | 'dialogue',
+            title: ns.defaultTitle(userId),
+          }, (admitted, assertCurrent) => {
+            Object.assign(fresh, admitted);
+            return rotate(assertCurrent);
+          }, assertAccount);
+        const rotate = async (
+          assertCurrent: () => void,
+        ): Promise<{
           current: ImSessionRow;
           previous: ImSessionRow | null;
         }> => {
+          // 轮换事务写的是当前账号的库: 取库前就地复核账号代次。
+          assertCurrent();
           const client = getDbClient();
           const now = Date.now();
           const markers = ns.extraInsertColumns(botContextId, userId);
@@ -552,6 +619,7 @@ export function createImSessionRepo(
               fastMode: fresh.fastMode,
               agentKind: toDbAgentKind(fresh.agentKind),
               providerId: fresh.providerId,
+              imDefaultRoute: defaultRouteRecordFor(fresh),
               source: ns.source,
               imBotContextId,
               imUserId,
@@ -573,9 +641,9 @@ export function createImSessionRepo(
         // The deterministic lane lock serializes Telegram messages; the
         // current UUID lock also serializes against Desktop archive/delete.
         if (previous && previous.id !== routeId) {
-          return withSessionRouteLock(previous.id, rotate);
+          return withSessionRouteLock(previous.id, rotateAdmitted);
         }
-        return rotate();
+        return rotateAdmitted();
       });
     },
   };
@@ -597,7 +665,19 @@ function rowFromDefaults(
     sdkSessionId: null,
     remoteHostId: null,
     providerId: defaults.providerId,
+    defaultRouteFingerprint: defaults.fingerprint,
   };
+}
+
+/** 按渠道默认建出 / 重置的行对应的跟随记录; 非默认来源的行返回 null。 */
+function defaultRouteRecordFor(row: ImSessionRow): string | null {
+  if (!row.defaultRouteFingerprint) return null;
+  return buildImDefaultRouteRecord(row.defaultRouteFingerprint, {
+    agentKind: row.agentKind,
+    model: row.model,
+    providerId: row.providerId,
+    effort: row.effort,
+  });
 }
 
 // ── sessionId 维度的更新操作(渠道无关, 无需工厂) ─────────────────────────────
@@ -662,6 +742,7 @@ export async function resetSessionToDefaults(
       providerId: defaults.providerId,
       permissionMode: defaults.permissionMode,
       fastMode: defaults.fastMode,
+      imDefaultRoute: defaultRouteRecordFor(defaults),
       // Personal WeChat exposes a user-selected channel working directory.
       // It applies only at the explicit `/new` boundary; existing context is
       // never moved silently.
@@ -735,6 +816,9 @@ export async function readModelRouteSnapshot(
  *   - string    → 显式选定该供应商(路由按它走);
  *   - null      → 清除显式选择,回落默认路由。
  * 显式传入(含 null)时一并写列,使 IM 选模型与应用内一样能锁定路由源、跨重启 hydrate 仍生效。
+ *
+ * 只写路由列 —— 「脱离跟随」墓碑由调用方在**选择真正落地后**写(PR #5155 review P2):
+ * 本函数也被失败回滚复用, 在这里立碑会让失败的选择永久脱离默认跟随。
  */
 export async function updateModelEffort(
   sessionId: string,

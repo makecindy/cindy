@@ -10,6 +10,20 @@ function source(path: string): string {
 }
 
 describe("mobile account deletion", () => {
+  it('invalidates invitation history before asynchronous terminal cleanup, without clearing it on account switches', () => {
+    const context = source('src/auth/AuthContext.tsx');
+    const start = context.indexOf('const clearLocalSession = useCallback');
+    const body = context.slice(start, context.indexOf('const terminateSession', start));
+    const capture = body.indexOf('const invitationHistoryOwner = getMobileAuthOwner();');
+    const invalidate = body.indexOf('setMobileAuthOwner(null);');
+    const clear = body.indexOf('clearClipboardInvitationHistory(invitationHistoryAccountKey)');
+    expect(capture).toBeGreaterThan(-1);
+    expect(invalidate).toBeGreaterThan(capture);
+    expect(clear).toBeGreaterThan(invalidate);
+    expect(clear).toBeLessThan(body.indexOf('await unregisterPushTokenBestEffort'));
+    expect(body).toContain('await clearInvitationHistory;');
+    expect(context.slice(0, start)).not.toContain('clearClipboardInvitationHistory(');
+  });
   it("lets auth-server eligibility exclusively control settings visibility", () => {
     const settings = source("app/settings.tsx");
     const visibilityBlock = settings.slice(

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { UnifiedCommand } from '@cindy/maker-core';
 import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
+import { i18n } from '@/i18n';
 
 const h = vi.hoisted(() => ({ ensureTask: vi.fn(), start: vi.fn(), load: vi.fn() }));
 vi.mock('@/lib/cindyMakeDoctorStream', () => ({
@@ -42,7 +43,10 @@ beforeEach(() => {
   h.start.mockReturnValue('run');
   h.load.mockResolvedValue(commands);
 });
-afterEach(() => setDataOwnerGeneration(null));
+afterEach(async () => {
+  setDataOwnerGeneration(null);
+  await i18n.changeLanguage('en');
+});
 
 describe('explicit Make command ownership', () => {
   it.each([
@@ -169,6 +173,19 @@ describe('native environment-check entry', () => {
       }
     },
   );
+
+  it.each([
+    ['en', 'Cindy Make · Environment'],
+    ['zh-CN', 'Cindy Make · 环境检查'],
+    ['zh-TW', 'Cindy Make · 環境檢查'],
+    ['ja', 'Cindy Make · 環境チェック'],
+    ['ko', 'Cindy Make · 환경 검사'],
+  ])('uses the selected language for a new Doctor title, keeping Cindy Make fixed: %s', async (locale, title) => {
+    await i18n.changeLanguage(locale);
+    await tryStartCindyMakeCommand(input({ text: '/cindy-make-doctor', sessionId: undefined }));
+    expect(h.ensureTask).toHaveBeenCalledWith(expect.objectContaining({ title, sessionId: undefined }));
+    expect(h.start).toHaveBeenCalledExactlyOnceWith('source-task', { command: 'cindy-make-doctor' });
+  });
 
   it('returns home preferences for the preflight without creating a task', async () => {
     h.ensureTask.mockResolvedValue('home-task');

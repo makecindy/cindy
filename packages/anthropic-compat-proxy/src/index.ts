@@ -44,6 +44,8 @@ export {
   createEmptyThinkingRecoveryRule,
   createEncryptedContentRecoveryRule,
   createImageGenerationIdRecoveryRule,
+  createResponsesItemIdPrefixRecoveryRule,
+  createResponsesItemIdLengthRecoveryRule,
   createToolExchangeAdjacencyRecoveryRule,
   compactOversizedImageHistory,
   createToolUseProviderSpecificFieldsRecoveryRule,
@@ -59,6 +61,9 @@ export {
   stripEncryptedContentFromBody,
   stripImageGenerationItemsWithoutIdFromBody,
   stripNonAnthropicFields,
+  stripNonCanonicalResponsesItemIdsFromBody,
+  shortenOversizedResponsesItemIdsFromBody,
+  shortenResponsesItemId,
   stripToolUseProviderSpecificFields,
   stripToolUseProviderSpecificFieldsFromBody,
 } from './transform.js';
@@ -72,6 +77,7 @@ export {
   xaiBareModelId,
 } from './xai-model-input.js';
 export { createVllmResponsesCompatibilityRule } from './vllm-responses-compatibility.js';
+export { createAnthropicEffortCompatibilityRule } from './anthropic-effort-compatibility.js';
 export { createVisionBridgeTransform } from './vision-bridge-transform.js';
 export { createThreadStripController } from './thread-strip-controller.js';
 export type { ThreadStripController } from './thread-strip-controller.js';

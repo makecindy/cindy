@@ -20,7 +20,7 @@ const SHARE_TMP_DIR_NAME = "remote-media-share";
 
 async function copyRemoteFile(url: string, target: File): Promise<File> {
   if (url.startsWith("file://")) {
-    new File(url).copy(target);
+    await new File(url).copy(target);
     return target;
   }
   if (url.startsWith("data:")) {

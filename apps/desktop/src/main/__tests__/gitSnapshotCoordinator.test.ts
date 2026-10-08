@@ -138,7 +138,7 @@ describe('GitSnapshotCoordinator', () => {
         workspaceKind: 'project',
         remoteHostId: null,
       }),
-      { autoSnapshotEnabled: true },
+      { autoSnapshotEnabled: true, autoInitProjectGit: true },
     );
     expect(deps.detectRepoRoot).toHaveBeenCalledOnce();
     expect(deps.createShadowSavepoint).toHaveBeenCalledWith(
@@ -510,6 +510,26 @@ describe('GitSnapshotCoordinator', () => {
       sessionId: 's1',
       label: 'File rewind gap: turn-start baseline unavailable',
       meta: { kind: 'rewind-blocked' },
+    });
+  });
+
+  it('marks Claude Code turns as rewind-blocked when its agent runs on another computer', async () => {
+    // 那台没有本机的文件检查点，文件回退走保存点链，缺口必须像 Codex / Pi 一样记下。
+    const deps = makeDeps({
+      getSessionContext: vi.fn().mockResolvedValue({ workingDir: '/repo', agentKind: 'claude-code', savepointRewind: true }),
+      createShadowSavepoint: vi.fn()
+        .mockResolvedValueOnce(savepointResult('hash1'))
+        .mockRejectedValueOnce(new Error('index locked')),
+    });
+    const coordinator = new GitSnapshotCoordinator(deps);
+
+    await coordinator.onTurnStart('s1');
+    await coordinator.onTurnEnd('s1');
+
+    expect(deps.createShadowMarker).toHaveBeenCalledWith('/repo', {
+      sessionId: 's1',
+      label: 'File rewind gap: after-edit savepoint failed',
+      meta: { kind: 'rewind-blocked', anchor: 'msg-1' },
     });
   });
 

@@ -1,3 +1,5 @@
+import { FileTypeTile } from '@/components/ui/file-type-tile';
+import { Button } from '@/components/ui/button';
 /**
  * GhostGrantConfirmCard
  * ---------------------------------------------------------------------------
@@ -17,7 +19,7 @@
  */
 
 import { useCallback, useEffect, useState } from 'react';
-import { Check, File, FileAudio, FileVideo, Folder, X } from 'lucide-react';
+import { Check, Folder, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
@@ -131,7 +133,7 @@ export function GhostGrantConfirmCard({ pending, onRespond }: GhostGrantConfirmC
               />
             ) : (
               <span className="flex size-12 shrink-0 items-center justify-center rounded-[6px] border border-[var(--chat-input-border)] text-[var(--status-bar-meta)]">
-                <ItemIcon isDirectory={item.isDirectory} mimeType={item.mimeType} />
+                {item.isDirectory ? <Folder className="size-5" /> : <FileTypeTile name={item.name} mimeType={item.mimeType} />}
               </span>
             )}
             <div className="min-w-0">
@@ -167,45 +169,21 @@ export function GhostGrantConfirmCard({ pending, onRespond }: GhostGrantConfirmC
       ) : null}
 
       <div className="mt-4 flex items-center justify-end gap-2">
-        <button
-          type="button"
-          onClick={handleDeny}
-          className={cn(
-            'flex items-center gap-2 rounded-[8px] border px-3 py-[7px]',
-            'border-[var(--chat-input-border)] bg-transparent',
-            'text-13 font-medium text-[var(--chat-input-text)]',
-            'transition-colors hover:bg-[var(--perm-code-bg)]',
-          )}
-        >
+        <Button variant="secondary" size="md" compact type="button" onClick={handleDeny}>
           <X className="size-4" />
           <span>{t('ghostGrant.confirm.deny')}</span>
-        </button>
-        <button
-          type="button"
-          onClick={handleAllow}
-          className={cn(
-            'flex items-center gap-2 rounded-[8px] border px-3 py-[7px]',
-            'border-[var(--chat-input-border)]',
-            'bg-[var(--perm-allow-btn-bg)] text-[var(--perm-allow-btn-text)]',
-            'text-13 font-medium transition-colors hover:opacity-90',
-          )}
-        >
+        </Button>
+        <Button variant="cta"
+          palette="permission" size="md" compact type="button" onClick={handleAllow}>
           <Check className="size-4" />
           <span>{t('ghostGrant.confirm.allow')}</span>
           <kbd className="rounded-[4px] border border-[var(--perm-allow-kbd-border)] bg-[var(--perm-allow-kbd-bg)] px-1.5 py-[1px] text-11 font-normal text-[var(--perm-allow-btn-text)] opacity-70">
             {window.electronAPI?.platform === 'darwin' ? '⌘↵' : 'Ctrl+Enter'}
           </kbd>
-        </button>
+        </Button>
       </div>
     </div>
   );
-}
-
-function ItemIcon({ isDirectory, mimeType }: { isDirectory?: boolean; mimeType?: string }) {
-  if (isDirectory) return <Folder className="size-5" />;
-  if (mimeType?.startsWith('video/')) return <FileVideo className="size-5" />;
-  if (mimeType?.startsWith('audio/')) return <FileAudio className="size-5" />;
-  return <File className="size-5" />;
 }
 
 function formatBytes(bytes: number): string {

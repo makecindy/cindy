@@ -15,13 +15,13 @@ describe('model row cost tiers',()=>{
 describe('account weekly quota',()=>{
   it('selects account quota instead of model promotion and converts used into remaining',()=>{
     const generic={limitId:'codex',primary:{windowMinutes:300,usedPercent:95,resetsAt:200},secondary:{windowMinutes:10080,usedPercent:20,resetsAt:1000}};
-    expect(mobileWeeklyQuota('codex',{rateLimits:generic,rateLimitsByLimitId:{codex:generic}},100000)).toEqual({remaining:80,resetsAt:1000});
+    expect(mobileWeeklyQuota('codex',{rateLimits:generic,rateLimitsByLimitId:{codex:generic}},100000)).toEqual({remaining:80,resetsAt:1000,windowMinutes:10080});
   });
   it('hides expired windows, missing percentages and stale xAI snapshots',()=>{
     expect(mobileWeeklyQuota('claude',{sevenDay:{utilization:20,resetsAt:10}},10000)).toBeNull();
     expect(mobileWeeklyQuota('claude',{sevenDay:{resetsAt:1000}},10000)).toBeNull();
     expect(mobileWeeklyQuota('xai',{creditUsagePercent:20,updatedAt:1},31*60000)).toBeNull();
-    expect(mobileWeeklyQuota('xai',{creditUsagePercent:20,updatedAt:100,resetsAt:1000},10000)).toEqual({remaining:80,resetsAt:1000});
+    expect(mobileWeeklyQuota('xai',{creditUsagePercent:20,updatedAt:100,resetsAt:1000},10000)).toEqual({remaining:80,resetsAt:1000,windowMinutes:null});
   });
   it('does not use same-brand API accounts as subscription accounts',()=>{
     expect(mobileQuotaSource(provider({id:'openai'}))).toBeNull();
@@ -38,10 +38,30 @@ it.each([[86400,'1d'],[86399,'24h'],[3600,'1h'],[3599,'60m'],[60,'1m'],[59,'59s'
   expect(quotaCountdown(reset as number,0)).toBe(expected);
 });
 
+it('caps the countdown at the known window right after a reset',()=>{
+  const week=mobileWeeklyQuota('claude',{sevenDay:{utilization:0,resetsAt:7*86400+30}},0)!;
+  expect(week.windowMinutes).toBe(10080);
+  expect(quotaCountdown(week.resetsAt!,0,undefined,week.windowMinutes)).toBe('7d');
+  expect(quotaCountdown(6*86400+60,0,undefined,10080)).toBe('7d');
+  expect(quotaCountdown(5*86400+60,0,undefined,10080)).toBe('6d');
+  // xAI resetsAt may be a non-weekly period end: never cap it
+  const xai=mobileWeeklyQuota('xai',{creditUsagePercent:0,updatedAt:1,resetsAt:25*86400},2)!;
+  expect(quotaCountdown(xai.resetsAt!,2,undefined,xai.windowMinutes)).toBe('25d');
+});
+
 it('localizes all countdown units using the supplied language',()=>{
   const unit=(name:string)=>({day:'天',hour:'小时',minute:'分钟',second:'秒'})[name]!;
   expect(quotaCountdown(273600,0,unit)).toBe('4天');
   expect(quotaCountdown(3700,0,unit)).toBe('2小时');
   expect(quotaCountdown(70,0,unit)).toBe('2分钟');
   expect(quotaCountdown(20,0,unit)).toBe('20秒');
+});
+
+import { mobileProviderAccountTitle } from '@/session/mobileModelRowPresentation';
+it('names independently connected accounts without duplicating generated identity labels', () => {
+  const identity = 'account@example.com';
+  expect(mobileProviderAccountTitle(provider({ name: 'OpenAI', openAiAccount: { identity } }))).toBe(`OpenAI · ${identity}`);
+  expect(mobileProviderAccountTitle(provider({ name: `OpenAI · ${identity} (2)`, openAiAccount: { identity } }))).toBe(`OpenAI · ${identity} (2)`);
+  expect(mobileProviderAccountTitle(provider({ name: 'Work', subscriptionAccount: { identity } }))).toBe(`Work · ${identity}`);
+  expect(mobileProviderAccountTitle(provider({ name: 'My API' }))).toBe('My API');
 });

@@ -1,5 +1,7 @@
 # Cindy Mobile Remote Control Plan
 
+> 自动化范围修订（2026-09-27）：手机已移除旧 Scheduler 管理页和 Routines，包括「所有任务」下拉及伙伴资料入口；不再把查看、创建、编辑或运行规则列为手机交付、后续计划或验收项。PC 管理与执行、已有任务数据和运行历史保留。本文所有旧自动化管理实现、原型验证和计划记录仅作历史背景，不代表待恢复功能；当前边界以[伙伴运行时合同](../../../docs/product-rules/cindy-bots-runtime.md)为准。
+
 > 版本: 2026-06-16
 > 范围: 手机版作为 `device-link` 控制端,远程连接同账号电脑,控制电脑上的 Cindy。
 > 分支前提: 手机版工作基于 `feat/device-link-remote-control`;该分支已经实现远程连接必需的桌面端、服务端和 `device-link` 基础能力。
@@ -36,7 +38,7 @@
 第一版建议定义为两个连续里程碑:
 
 - V1A: 桌面左侧会话列表 + 单会话控制体验完整可用。首页直接按桌面侧边栏逻辑展示所有可控电脑的会话,不先让用户选择电脑,不额外拆出桌面端没有的 Projects / Chats / Relay 信息层;会话页包含消息流、发送/停止/排队、权限确认、Ask User、Plan Review、基础会话管理;`issue_confirm` 只做桌面端处理提示。
-- V1B: 非协作的桌面附属能力以“按需进入详情”的方式补齐。包含 diff/媒体/上下文用量、fork/rewind、模型/权限/fast mode、自动化 schedules 的查看和基础管理;所有附属能力默认不增加主会话页常驻信息。
+- V1B: 非协作的桌面附属能力以“按需进入详情”的方式补齐。包含 diff/媒体/上下文用量、fork/rewind、模型/权限/fast mode;所有附属能力默认不增加主会话页常驻信息。
 
 协作模式 / Orca 单独做 V2,因为它不是单会话控制,而是 Lead + Worker + focus + split/toggle pane 的多会话编排,移动端需要重新设计。
 
@@ -85,7 +87,7 @@
 | A | 已完成第一轮 | Shared core completion pass | automation/schedule model、device-link controller contract、shared fixture baseline、raw desktop-like message parity、schedule/file raw payload parity 已迁;保留 mobile re-export 兼容。 | `@cindy/maker-shared` build/test;mobile adapter 测试全绿;desktop parity 单测覆盖 schedule/file;shared 不依赖 RN/Electron/DOM。 |
 | B | iOS baseline 已完成 | Mobile IA and shell baseline | RN primitives、Session Action Strip、会话页 chrome/main/bottom 层级、Queue/Search/Controls sheet、Usage 直达入口、debug/local path 分离、pending bottom surface、payload full-screen viewer shell 已完成;Session 六态 visual scenario / Maestro flow / baseline checker 已落地;payload modal 已补 `visual_session_payload.yaml` flow,Settings 已进入 `visual_smoke.yaml` 截图 flow。 | `ios-iphone-17-pro-expo-go` 下 12 张截图基线已接受并通过 hash 校验,包括设备列表、Settings、设备详情、会话、控制面板、payload full-screen viewer 和 idle/running/pending/queue/offline/revoked;revoked flow 已真实等待到“访问已撤销”。Android 当前只保留 profile/脚本护栏,不阻塞 iOS 高标准 polish。 |
 | C | 当前进行 | Home and session desktop-first polish | 在视觉基线保护下先修首页和会话页:首页回到桌面左侧会话列表;会话页重做消息层级、消息动作、可见文本选择、composer、pending、payload/diff/media/file viewer、context/cost、queue/controls 的触控节奏。所有手机端额外统计、说明和调试信息先默认删除或收进详情。新展示语义先进入 shared model,手机只做承载。 | 首页常驻信息不超过桌面左侧栏;长消息可直接选择复制;消息动作在消息结束处且视觉轻量;composer icon-first;长消息、长工具、大 diff、媒体、键盘、sheet 打开/关闭在 iPhone SE 宽度无重叠、无空白帧、消息列表不被卸载。 |
-| D | C 后收口 | Desktop parity pruning and hardening | 回到桌面源码矩阵,逐项补 new session、media/file、automations、fork/rewind、settings 的细节缺口;同时删除或下沉手机端比桌面端更多的状态表达。协作模式继续只读安全降级。 | 每个缺口必须有桌面来源、shared model 判断、mobile 承载说明和 unit / E2E / parity fixture 中至少一层验证;每个新增 UI 必须说明为什么没有让手机端更复杂。 |
+| D | C 后收口 | Desktop parity pruning and hardening | 回到桌面源码矩阵,逐项补 new session、media/file、fork/rewind、settings 的细节缺口;同时删除或下沉手机端比桌面端更多的状态表达。协作模式继续只读安全降级。 | 每个缺口必须有桌面来源、shared model 判断、mobile 承载说明和 unit / E2E / parity fixture 中至少一层验证;每个新增 UI 必须说明为什么没有让手机端更复杂。 |
 | E | 发布前 | Release-grade test and tuning | iOS profile 先固定 native flow、visual baseline、reconnect、1000 message/session、性能和残留进程清理;Android 在最终 release 前补同级 baseline 和 smoke。 | 本地 orchestrator 一键跑;失败输出日志、截图、profile、mock host/relay 线索和残留进程检查结果。 |
 
 阶段 gate:
@@ -118,7 +120,7 @@
 - **正式路径**:Home(Desktop Sidebar Session List) -> Session Detail -> New Session -> Automations -> Files -> Settings;Devices 只作为 filter/debug/connection context,除非用户明确需要进入设备详情。
 - **辅助面板**:queue、session controls、pending interaction、payload、diff、media、file preview、context/cost 统一进入 sheet 或 full-screen route。
 - **调试路径**:mock login、本地联调、fixture 切换、protocol debug 只保留在 dev/debug panel,不进入正式用户操作路径。
-- **视觉基线**:先锁首页列表、会话消息流、底部 composer、pending/queue、payload/detail 五类状态,再扩到自动化和文件页。
+- **视觉基线**:先锁首页列表、会话消息流、底部 composer、pending/queue、payload/detail 五类状态,再扩到文件页。
 
 ### 1.4 2026-06-18 当前执行快照
 
@@ -141,7 +143,7 @@
 3. **底部输入器**:对齐桌面 `ChatInput` 的语义,附件、语音、发送、停止用图标;输入框是主入口,额外状态只在异常或处理中出现。
 4. **Pending / Queue / Controls**:全部作为辅助 sheet 或 full-screen route,不在主会话页常驻展开;只显示当前决策必须的信息。
 5. **Payload / Diff / Media / File**:按需打开详情,主消息流只放可识别的轻量预览和入口。
-6. **Automations / Files / Settings**:作为二级能力补齐桌面已有语义,不抢首页和会话页优先级。
+6. **Files / Settings**:作为二级能力补齐桌面已有语义,不抢首页和会话页优先级。
 7. **Android**:iOS 先跑到可验收质量;所有代码保持平台中立,不写死 iOS-only app id、safe area、深链或模拟器行为。
 
 这个优先级意味着接下来每轮实现都先问:这件事是否让首页或会话页更像桌面版、更少信息、更好操作。答案不是“是”的功能,排到后面。
@@ -279,7 +281,7 @@
 | Issue Confirm | `IssueConfirmCard` 属于桌面端 `/issue` 反馈提交确认。 | 手机版 V1 不提供 Issue 编辑/提交表单;遇到 `issue_confirm` 只显示“请回到桌面端处理”的 unsupported card。 | shared 协议兼容单测;不纳入 mobile 主流程 E2E。 |
 | 会话控制 | `ChatInput` model/effort/permission/fast/extraDirs 是 server-first;远程会话 await 隧道 setX,被控端 patch 回流为真相;跨厂商切换有历史兼容确认。 | 手机 `SessionControlsPanel` 不做乐观最终态;调用 setX 后等待 sessions patch;已通过被控端 `maker:get-capabilities` 渲染模型、effort、permission 和 fast 支持状态;已有历史消息且模型类别不兼容时会先显示跨厂商确认卡;Claude 项目会话支持 extraDirs 文本编辑,提交后以被控端校验结果为准;触控布局由 `sessionControlsTouchLayout.ts` 根据屏宽和控件密度输出,controls sheet 动作由局部 `ControlActionButton` 统一 tone/active/disabled/pressed,inline 入口、section tabs 和远程目录进入行分别由局部 primitive 承载 pressed / expanded / selected / disabled state,Android 后续复用同一模型。 | set model/effort/permission/fast/extraDirs 回流 smoke;能力列表 mock;`sessionControlsTouchLayout.test` 覆盖 320/393/未就绪宽度和 dense controls。 |
 | Fork / Rewind | `MessageActionBar` + `useForkAtMessage` + `RewindPreviewDialog`;首条 user 不显示 rewind;commit 后用被控端快照替换。 | 消息动作行;fork 成功 upsert 并跳转;rewind preview 显示风险,commit 后替换消息并回填 composer draft。`rewindPreviewLayout.ts` 按屏宽控制 preview 面板 padding、可见文件行数和 40px action 触控高度,`RewindActionButton` 统一取消/确认/关闭反馈。 | fork/rewind 单测和 smoke;`rewindPreviewLayout.test` 覆盖 320/393/未就绪宽度。 |
-| 自动化 | `SchedulerPage` 是 master-detail;`TaskListPane` 按 workingDir/dialogue 分组;active 包含 expired;`RunHistoryPane` 折叠同 session runs;`ScheduleFormDialog` 包含模板、fresh/persistent/bound、project automation。 | V1B 已做任务列表/详情/runs/run now/pause/resume/delete/mark read/open session、新建/编辑普通 schedule、模板创建、生成会话删除三选项;fresh/persistent/bound 运行会话编辑第一刀已对齐桌面状态机;project automation 完整编辑后续继续对齐桌面。 | scheduleModel/remote event/form 单测;Maestro run now/pause/open session/create-edit flow。 |
+| 自动化 | `SchedulerPage` 是 master-detail;`TaskListPane` 按 workingDir/dialogue 分组;active 包含 expired;`RunHistoryPane` 折叠同 session runs;`ScheduleFormDialog` 包含模板、fresh/persistent/bound、project automation。 | 手机不再提供自动化管理；PC 功能及已有运行历史保留。 | 不再要求手机管理页或对应 Maestro 流程。 |
 | 远程设置 | `ControlThisMacPanel` / `ControllableDevicesPanel` / `RemoteControlSection` 管本机允许被控、可控设备、撤销/重命名。 | 手机 Settings 显示登录、当前手机设备名、relay 状态、调试和退出;被控端允许开关仍在电脑端。 | `settings.yaml` + settings model 单测。 |
 | 协作 / Orca | `ExtraDirsButton` 的协同模式项、`OrcaSplitView`、`CreateWorkerPopover` 支持 lead/worker split/toggle、worker focus、attention、create/archive/stop;远程 Orca 合并 local + remote sessions。 | V1 只识别 lead/worker 和 worker 通信,只读安全显示,不提供创建/切 focus/停止协作;V2 做手机专属 lead/worker toggle pane。 | V1 Orca fixture 不崩;V2 另建 E2E。 |
 
@@ -308,7 +310,7 @@ Worktree 补充:
 | Ask User | `AskUserQuestionPrompt` 是多步 wizard;单选点击前进、多选 JSON array string、skip 空字符串、draft 跨 session 保留。 | 手机用底部/全屏 wizard,答案编码必须严格一致。 | V1 已完成。 |
 | Plan Review | `PlanViewerCard` 有 expanded/half/minimized/edit 四态,outline 从 h1-h3 生成,编辑后由 hook 写回 plan file;`PlanActionCard` 负责 approve/feedback。 | 手机可用半屏/全屏替代桌面四态,但要保留 outline、编辑、approve with `editedPlan`、feedback。 | V1 已完成核心协议和 UI。 |
 | Issue Confirm | `IssueConfirmCard` 可编辑 title/body/type,确认结果附 `uiLanguage`,取消是 `{ confirmed: false }`。 | 桌面反馈链路,手机版 V1 不做表单;只识别 `issue_confirm` 并提示回桌面端处理。 | Deferred / desktop-only。 |
-| 自动化 | `SchedulerPage` 是 master-detail;切换任务时 RunHistoryPane 不 remount,旧 runs 保留到新数据回来防空白帧;排序是 active/expired 同 rank、paused 下沉、lastFiredAt desc。 | 手机自动化页切换任务也要保留旧数据直到新 runs 到达;排序/筛选/删除生成会话策略照桌面。 | V1B 已完成基础管理和删除三选项;project automation 完整编辑留后续。 |
+| 自动化 | `SchedulerPage` 是 master-detail;切换任务时 RunHistoryPane 不 remount,旧 runs 保留到新数据回来防空白帧;排序是 active/expired 同 rank、paused 下沉、lastFiredAt desc。 | 手机不再提供自动化管理；PC 功能及已有运行历史保留。 | 不再要求手机管理页或对应 Maestro 流程。 |
 | 远程设备 | `useDeviceLinkRemoteProjects` 是 subscribe sessions 后 bootstrap,created push 只触发 reseed;不把远程 session 写本地 SQLite。 | 手机只做镜像 store,按设备分片;所有 invoke 经 `mobileMakerTransport`;重连必须 replay topic registry。 | V1 已完成核心镜像和重连。 |
 | 协作 / Orca | `CCAgentSessionView` 会自动把 lead 导到 Orca 路由;`ChatInput` 的 collaboration toggle 只负责入口;worker 管理由 `OrcaSplitView` / `CreateWorkerPopover` / `orcaWorkflowsFor` 接管。 | 手机第一版不能半吊子做 split/focus/worker 编排;只识别并安全只读显示。 | V2 独立设计。 |
 
@@ -316,10 +318,10 @@ Worktree 补充:
 
 第一版的目标不是“把桌面 UI 缩小”,而是“完整控制一台电脑上的单会话 Cindy”。因此:
 
-- 必做:设备发现、会话列表、新建会话、消息流、发送/停止/队列、pending interactions、会话控制、fork/rewind、context/spend、媒体/diff、基础 automations、断线重连和撤权。
+- 必做:设备发现、会话列表、新建会话、消息流、发送/停止/队列、pending interactions、会话控制、fork/rewind、context/spend、媒体/diff、断线重连和撤权。
 - 必须按桌面源码统一:协议 shape、队列语义、interaction decision、session patch 回流、scheduler 排序和删除策略、远程媒体取件链路。
 - 手机优化只允许发生在交互承载层:桌面右栏改全屏面板、hover action 改长按/轻量动作行、master-detail 改 stack、TipTap 复杂 toolbar 改 bottom sheet。
-- 暂不做:完整 Orca 协作编排、project automation 完整编辑器、worktree 创建、手机触发被控端升级、请求电脑 reveal/open 的远程执行入口。
+- 暂不做:完整 Orca 协作编排、worktree 创建、手机触发被控端升级、请求电脑 reveal/open 的远程执行入口。
 - 暂不做不等于忽略:遇到协作会话、project automation、worktree、upgrade/error 时必须可识别、可读、安全退化,不能崩溃或误操作。
 
 ## 3. 桌面端远程控制语义
@@ -396,10 +398,10 @@ Worktree 补充:
 
 - `Devices`: 可控制电脑和远程设备状态。
 - `Sessions`: 当前可控制会话,默认按设备和项目分组。
-- `Automations`: V1B 引入,查看自动化任务和运行记录。
+- `Automations`: 手机入口已移除；已有任务与运行历史保留。
 - `Settings`: 登录态、当前手机设备名、调试、退出。
 
-V1A 可以先只有 `Devices/Sessions/Settings`,但路由结构要给 `Automations` 留位置。
+手机入口保留 `Devices/Sessions/Settings`；`Automations` 只保留旧链接兼容跳转，不预留管理页面。
 
 ### 4.2 侧边栏 / 会话列表
 
@@ -893,7 +895,7 @@ V1A 可以先只有 `Devices/Sessions/Settings`,但路由结构要给 `Automatio
 
 - 如果安全模型确认,再支持手机端触发被控端升级。
 
-## 8. 自动化 Schedules
+## 8. 自动化 Schedules（桌面能力与手机历史方案）
 
 桌面自动化能力:
 
@@ -911,7 +913,7 @@ V1A 可以先只有 `Devices/Sessions/Settings`,但路由结构要给 `Automatio
 - pause / resume / delete / rename / promote to project / clone to user / reload project config。
 - schedule 生成的会话会在聊天侧边栏有绑定和未读标识。
 
-手机版 V1B:
+历史手机版 V1B 方案（已退役，不是当前要求）:
 
 - `Automations` tab。
 - 查看任务列表、状态、最近运行、未读、累计费用。
@@ -923,7 +925,7 @@ V1A 可以先只有 `Devices/Sessions/Settings`,但路由结构要给 `Automatio
 - 模板 gallery 基础创建:列出被控端模板,选择模板后预填字段和参数,保存走被控端 `maker:schedule:create-from-template`。
 - 查看绑定会话并跳转到会话。
 
-手机版 V1 后续:
+已取消的手机后续计划（不再安排）:
 
 - project automation 管理。
 - 参数化模板编辑增强:复杂 select/boolean 参数、模板分类筛选、模板 prompt 手动编辑后的差异提示。
@@ -1019,9 +1021,6 @@ apps/mobile/src/
       IssueConfirmSheet.tsx
   devices/
     DeviceListScreen.tsx
-  automations/
-    AutomationListScreen.tsx
-    AutomationRunsScreen.tsx
   theme/
     tokens.ts
 ```
@@ -1071,7 +1070,7 @@ apps/mobile/src/
   - 默认 flow 只覆盖 mock login + device list;`remote_session_smoke.yaml` 覆盖打开会话和发送消息。它可跑真实桌面 dev,也可通过 `test:e2e:local:fixture` 跑 mock host。
   - 已新增 `fixture_controls_smoke.yaml` + `pnpm --filter mobile test:e2e:local:controls`:mock host 使用 `controls` 场景,一次制造 pending queue、permission、ask_user、plan_review,并按真实 Maestro 流程验证队列编辑、交互处理和最终继续发送。
   - 已新增 `media_smoke.yaml` + `pnpm --filter mobile test:e2e:local:media`:mock host 在会话里制造 direct image / xdt-video / xdt-audio 媒体消息,Maestro 打开图片 payload 并验证缩放控件。
-  - 已新增 `pnpm --filter mobile test:e2e:local:full`:mock host 默认使用 `controls` 场景,把 create、remote session、pending controls、media、file preview、fork/rewind、automations 串进同一个 full flow suite;`--check-only` 可在未安装 Maestro 时验证 local server + relay + mock host preflight。
+  - 已新增 `pnpm --filter mobile test:e2e:local:full`:mock host 默认使用 `controls` 场景,把 create、remote session、pending controls、media、file preview、fork/rewind 串进同一个 full flow suite;`--check-only` 可在未安装 Maestro 时验证 local server + relay + mock host preflight。
 - 当前验证命令已通过:
   - `pnpm --filter @cindy/maker-shared build`
   - `pnpm --filter @cindy/maker-shared test`
@@ -1299,7 +1298,7 @@ apps/mobile/src/
 - media lightbox。已完成首版:HTTP/data image 可全屏预览,`xdt-*://` 打开详情后自动取件,失败显示可重试占位和原始 URL。
 - tool payload full-screen。已完成首版:tool_result、媒体 URL、文件路径/文本预览、diff 全量内容统一走 `MessagePayloadModal`。
 - diff viewer。已完成移动端结构化版:全屏分段展示完整 Edit / Write / MultiEdit payload,每段保留旧内容 / 新内容两栏横向对照;后续再补桌面同级 line-level context folding 和更细的语法增强。
-- 附件上传:已完成真实发送链路——手机端输入被控电脑上的文件路径,通过被控端 `fs:stat-path` 校验为文件后,构造桌面兼容队列项并随消息发送。手机本机文件已接 `expo-document-picker` + presign-put / OSS PUT / `cindy-oss-attach://` 链路;图片附件现在会写入 `persistedContent.images[]` / `chatMessage.images`,非图片文件写入 `persistedContent.files[]` / `chatMessage.files`,顶层 `files[]` 仍保留全部附件供被控端 `materializeQueuedOssAttachments` 一次性物化和去重。photo/library/share sheet 作为更好的原生入口仍留后续。
+- 附件上传:已完成真实发送链路——手机端输入被控电脑上的文件路径,通过被控端 `fs:stat-path` 校验为文件后,构造桌面兼容队列项并随消息发送。手机本机文件已接 `expo-document-picker` + presign-put / OSS PUT / `cindy-oss-attach://` 链路;图片附件现在会写入 `persistedContent.images[]` / `chatMessage.images`,非图片文件写入 `persistedContent.files[]` / `chatMessage.files`,顶层 `files[]` 仍保留全部附件供被控端 `materializeQueuedOssAttachmentsDeferred` 一次性物化和去重。photo/library/share sheet 作为更好的原生入口仍留后续。
 
 验收:
 
@@ -1311,7 +1310,9 @@ apps/mobile/src/
 
 ### Phase 7: Automations
 
-当前进展:
+当前范围调整：手机版已移除独立自动化管理页、设备详情的「计划」入口，以及「所有任务」下拉和伙伴资料页中的例行任务管理。以下为该阶段的历史实现记录，不代表当前手机入口；任务运行历史与桌面管理继续保留。当前可用资源过滤见 `src/device-link/remoteResources.ts`，回归见 `remoteResources.test.ts` 与 `remoteResourceCache.test.ts`。
+
+历史进展:
 
 - 已确认 `feat/device-link-remote-control` 分支在 `packages/device-link/src/allowlist.ts` 开放 `maker:schedule:*`,且 `maker:schedule:event` 已进入 push forward allowlist;手机版不需要另起私有协议。
 - 已在 `mobileMakerTransport` 增加 `schedule.list/get/listTemplates/createFromTemplate/create/update/listRuns/runNow/pause/resume/delete/markRunRead/markScheduleRunsRead`,参数顺序对齐桌面 preload 的 `window.electronAPI.maker.schedule.*`。
@@ -1440,13 +1441,11 @@ pnpm test:device-link
 
 当前进展:
 
-- 已新增 `pnpm --filter mobile test:web-smoke`,用 Expo Web export 编译整套 mobile route bundle,并断言 `Device Link` / `Remote Device` / `Remote Session` / `Remote Automations` / `maker:schedule:delete` 等关键路由和能力 marker 存在。它不是替代真机点击 E2E,但能在无模拟器、无 Maestro 的机器上先拦住 route import、bundle compile、关键页面被 tree-shake/路由遗漏这类回归。
+- 已新增 `pnpm --filter mobile test:web-smoke`,用 Expo Web export 编译整套 mobile route bundle,并断言 `Device Link` / `Remote Device` / `Remote Session` / `maker:schedule:delete` 等关键路由和能力 marker 存在。它不是替代真机点击 E2E,但能在无模拟器、无 Maestro 的机器上先拦住 route import、bundle compile、关键页面被 tree-shake/路由遗漏这类回归。
 - 已接入 Maestro 第一层真实点击流:默认 `remote_control_smoke.yaml` 覆盖 mock login 和设备列表;`remote_session_smoke.yaml` 覆盖打开会话和发送消息;`create_session_smoke.yaml` 覆盖从手机新建 dialogue 会话并发送首条消息;`fixture_controls_smoke.yaml` 覆盖队列和 pending interactions;`media_smoke.yaml` 覆盖媒体图片 payload 和缩放;`file_preview.yaml` 覆盖远程文件文本预览、PDF/drawio 降级、路径复制和 diff 当前文件预览;`test:e2e:local:fixture` / `test:e2e:local:create` / `test:e2e:local:controls` / `test:e2e:local:file` / `test:e2e:local:media` 用 mock host 让它进入可自动回归状态。
-- 已新增 native E2E doctor 和 `test:e2e:local:full`:doctor 在真实 Maestro 前统一检查 CLI/模拟器/API base;full suite 用 controls mock host 串起 create、session、pending controls、media、file、fork/rewind、automations,并支持 `--check-only` 先验证本地 relay 和 mock host。
+- 已新增 native E2E doctor 和 `test:e2e:local:full`:doctor 在真实 Maestro 前统一检查 CLI/模拟器/API base;full suite 用 controls mock host 串起 create、session、pending controls、media、file、fork/rewind,并支持 `--check-only` 先验证本地 relay 和 mock host。
 - 已新增 `visual_smoke.yaml`、`visual_session_idle.yaml`、`visual_session_running.yaml`、`visual_session_queue.yaml`、`visual_session_pending.yaml`、`visual_session_payload.yaml`、`visual_session_revoked.yaml`、`visual_session_offline.yaml` 和 `pnpm --filter mobile test:e2e:visual`,用 Maestro `takeScreenshot` 自动采集设备列表、Settings、设备详情、会话、会话控制面板、payload full-screen viewer、idle/running/pending/queue/offline/revoked 十二张关键截图;同时新增 `pnpm --filter mobile test:e2e:visual:update-baseline -- --profile <profile> --actual-dir <dir>` 和 `pnpm --filter mobile test:e2e:visual:baseline -- --profile <profile> --actual-dir <dir>`。local visual suite 会隔离每个 state flow 的 mock host 生命周期并清理 stale e2e 设备记录,避免长 flow 连续切 session 造成同步竞态或设备列表计数漂移。当前 `ios-iphone-17-pro-expo-go` baseline 已接受 12 张并通过裁掉顶部 120px 后的 sha256 严格比对;Android profile 需要单独目录保存。
 - 已新增 `fork_rewind.yaml`,覆盖发送一条消息后执行 rewind preview/confirm,再 fork 会话并进入 forked session。
-- 已新增 `automations.yaml`,覆盖进入远程自动化页、Run now、pause/resume、打开自动化 run 对应会话。
-- 已新增 `automations_create_edit.yaml`,覆盖远程自动化页里的 template gallery 和 create/edit 基础表单锚点。
 - `pnpm --filter mobile test:e2e:reconnect:local` 现与根 `pnpm test:device-link` 共用正式客户端的真实 WebSocket 集成套件，不再依赖拆仓前的 server/dev-login。默认使用本仓 contract fixture；独立测试 relay 的显式互操作入口与覆盖边界见 [Device Link 测试说明](../../../packages/device-link/TESTING.md)。
 
 优先用 Maestro 做第一版黑盒流程,原因是脚本短、可读、适合 AI 维护。Detox 留给后面需要深层 native assertion 时再引入。
@@ -1469,8 +1468,6 @@ apps/mobile/e2e/maestro/
   plan_review.yaml
   visual_smoke.yaml
   fork_rewind.yaml
-  automations.yaml
-  automations_create_edit.yaml
 ```
 
 流程:
@@ -1488,8 +1485,6 @@ apps/mobile/e2e/maestro/
 - `e2e/maestro/plan_review.yaml`
 - `e2e/maestro/visual_smoke.yaml`
 - `e2e/maestro/fork_rewind.yaml`
-- `e2e/maestro/automations.yaml`
-- `e2e/maestro/automations_create_edit.yaml`
 
 每条 flow 都要输出截图、失败时的 app 日志、relay/desktop/device-link 日志切片。视觉截图先用 `visual_smoke.yaml` / `visual_session_idle.yaml` / `visual_session_running.yaml` / `visual_session_queue.yaml` / `visual_session_pending.yaml` / `visual_session_revoked.yaml` / `visual_session_offline.yaml` 采集,确认目标设备 profile 后运行 `test:e2e:visual:update-baseline`,之后每次回归运行 `test:e2e:visual:baseline`;当前 iOS profile 已把 `visual-settings` 写入 manifest 并纳入普通 baseline check。当前基线脚本使用严格文件 hash,只有在固定模拟器 / 固定系统版本下才应作为阻断门禁,跨设备 profile 必须分目录保存。CI 或本机跑不过模拟器时,至少要跑 `test:web-smoke` 作为降级门禁,但不能把它当最终 E2E。Reconnect 已先用 headless relay smoke 覆盖真实断连补账;后续如果要做 native `reconnect.yaml`,必须复用同样的断连 fixture,不要写一个只点“重新同步”的伪断线 flow。
 
@@ -1558,7 +1553,7 @@ V1B 完成标准:
 - 手机能 fork/rewind。
 - 手机能查看 context/spend/diff。
 - 手机能预览图片/视频/音频。
-- 手机能查看和基础管理 automations。
+- 手机不出现 Scheduler / Routines 管理入口；旧管理链接安全返回设备页，已有任务与运行历史保留。
 - 1000 条消息和媒体 fixture 通过性能测试。
 
 V2 完成标准:

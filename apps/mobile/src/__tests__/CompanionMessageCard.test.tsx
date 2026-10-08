@@ -4,6 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 const h = vi.hoisted(() => ({
   invoke: vi.fn(),
+  openLink: vi.fn(),
   push: vi.fn(),
   openURL: vi.fn(),
   changed: null as any,
@@ -29,43 +30,67 @@ vi.mock('react-native', () => ({
     });
     return createElement('div', {}, children);
   },
-  Pressable: ({ children, onPress, disabled }: any) =>
+  Pressable: ({ children, onPress, disabled, testID }: any) =>
     createElement(
       'button',
-      { onClick: onPress, disabled },
+      { onClick: onPress, disabled, 'data-testid': testID },
       typeof children === 'function' ? children({ pressed: false }) : children,
     ),
   StyleSheet: { create: (v: any) => v, hairlineWidth: 1 },
+  ActivityIndicator: () => createElement('i', { 'data-testid': 'spinner' }),
+  Animated: {
+    Value: class { setValue() {} stopAnimation() {} interpolate() { return 0; } },
+    View: ({ children, testID }: any) => createElement('div', { 'data-testid': testID }, children),
+    timing: () => ({ start() {}, stop() {} }),
+    sequence: () => ({ start() {}, stop() {} }),
+    loop: () => ({ start() {}, stop() {} }),
+  },
+  Easing: { inOut: () => () => 0, ease: () => 0, bezier: () => () => 0 },
 }));
+vi.mock('@/utils/useGuardedPush', () => ({ useGuardedPush: () => h.push }));
 vi.mock('expo-router', () => ({
   useFocusEffect: (cb: () => void) => useEffect(cb, [cb]),
   useLocalSearchParams: () => ({ deviceId: 'home' }),
   useRouter: () => ({ push: h.push }),
 }));
-vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (key: string) => key }),
+vi.mock('react-i18next', async (importOriginal) => ({
+  ...await importOriginal<typeof import('react-i18next')>(),
+  useTranslation: () => ({ t: (key: string) => key, i18n: { language: 'en' } }),
 }));
 vi.mock('@/components/AppText', () => ({
   Text: ({ children }: any) => createElement('span', {}, children),
 }));
-vi.mock('@/theme', () => ({
-  useThemedStyles: () => ({}),
+vi.mock('@/theme', async () => ({
+  ...await vi.importActual<typeof import('@/theme/tokens')>('@/theme/tokens'),
+  useThemedStyles: () => ({ note: {} }),
   useTheme: () => ({ colors: {} }),
 }));
 vi.mock('lucide-react-native', () => ({
   FileText: () => null,
+  ArrowLeftRight: () => null,
+  ChevronRight: () => null,
   GitPullRequest: () => null,
   Square: () => null,
   GitMerge: () => createElement('i', { 'data-testid': 'merged-pr' }),
   GitPullRequestClosed: () => null,
   GitPullRequestDraft: () => null,
+  Megaphone: () => null,
+  TriangleAlert: () => null,
+  Layers: () => null,
+  CircleAlert: () => null,
+  CircleCheck: () => null,
+  ChevronDown: () => null,
 }));
 vi.mock('@/auth/AuthContext', () => ({
-  useAuth: () => ({ accountGeneration: h.accountGeneration }),
+  useAuth: () => ({ accountGeneration: h.accountGeneration, user: { id: 'owner' } }),
+}));
+vi.mock('@/components/RemoteCompanionAvatar', () => ({
+  RemoteCompanionAvatar: ({ name }: any) => createElement('i', { 'data-testid': 'peer-avatar' }, name),
 }));
 vi.mock('@/device-link/DeviceLinkContext', () => ({
   useDeviceLink: () => ({
     invoke: h.invoke,
+    openLink: h.openLink,
     status: h.status,
     connectionEpoch: h.epoch,
     getPresenceAvailability: () => true,
@@ -80,7 +105,9 @@ vi.mock('@/device-link/DeviceLinkContext', () => ({
     };
   },
 }));
+vi.mock('@/hooks/useReduceMotion', () => ({ useReduceMotionEnabled: () => true }));
 import { CompanionMessageCard } from '@/session/CompanionMessageCard';
+import { _clearRemotePathVerdictCache } from '@/session/remotePathVerdict';
 import type { NormalizedRemoteMessage } from '@/session/messageNormalize';
 const message = {
   source: { sessionId: 'parent' },
@@ -109,6 +136,7 @@ beforeEach(() => {
   h.epoch = 1;
   h.status = 'online';
   h.invoke.mockReset();
+  h.openLink.mockReset().mockResolvedValue({});
   h.push.mockReset();
   h.openURL.mockReset().mockResolvedValue(undefined);
   h.invoke.mockResolvedValue({
@@ -125,12 +153,15 @@ beforeEach(() => {
 });
 afterEach(async () => {
   await act(async () => root.unmount());
+  _clearRemotePathVerdictCache();
   node.remove();
   vi.useRealTimers();
 });
-it('survives recycled layout events when measuring equal-width task actions', async () => {
+const openEntry = () => node.querySelector<HTMLButtonElement>('[data-testid="companion.taskCard.open"]');
+it('opens the task from the whole card and keeps stop as a small action while it runs', async () => {
   await render();
-  expect(node.textContent).toContain('devices.companions.openTask');
+  expect(openEntry()?.disabled).toBe(false);
+  expect(node.textContent).not.toContain('devices.companions.openTask');
   expect(node.textContent).toContain('devices.companions.stopTask');
 });
 
@@ -145,7 +176,7 @@ it('keeps the task card when the host omits delegations or sends a broken status
   });
   await render();
   expect(node.textContent).toContain('devices.companions.status.unknown');
-  expect(node.textContent).toContain('devices.companions.openTask');
+  expect(openEntry()?.disabled).toBe(false);
 });
 
 it('isolates a broken private-chat card so the session can keep rendering', async () => {
@@ -165,7 +196,7 @@ it('reads, opens and stops the task on its source computer, then disables stop o
   expect(h.invoke).toHaveBeenCalledWith('home', 'maker:bot-delegations:list', ['parent']);
   const button = (label: string) =>
     [...node.querySelectorAll('button')].find((b) => b.textContent === label)!;
-  await act(async () => button('devices.companions.openTask').click());
+  await act(async () => openEntry()!.click());
   expect(h.push).toHaveBeenCalledWith({
     pathname: '/sessions/[sessionId]',
     params: { deviceId: 'home', sessionId: 'child' },
@@ -513,4 +544,207 @@ it('shows only delivery status even when a legacy task trace contains full instr
   await act(async () => root.render(createElement(CompanionMessageCard, { message: trace })));
   expect(node.textContent).toBe('devices.companions.messageSent');
   expect(h.invoke).not.toHaveBeenCalled();
+});
+
+it('opens a stable completed result inline and routes its artifact to the child task', async () => {
+  h.invoke.mockImplementation(async (_device, channel) => channel === 'fs:stat-path'
+    ? { kind: 'file', resolvedPath: '/reports/result.pdf' } : { ok: true });
+  const resultMessage = {
+    ...message,
+    key: 'receipt-2',
+    companion: { kind: 'task', meta: { ...message.companion!.meta,
+      role: 'delegation-result', result: { runSequence: 2, status: 'completed', text: 'Second execution result', artifacts: [{ absolutePath: '/reports/result.pdf' }] },
+    } },
+  } as NormalizedRemoteMessage;
+  await act(async () => root.render(createElement(CompanionMessageCard, { message: resultMessage })));
+  // Collapsed: a short preview only; the files come with the full result.
+  const fileButton = () => [...node.querySelectorAll('button')].find(button => button.textContent === 'result.pdf');
+  expect(node.textContent).toContain('Second execution result');
+  expect(fileButton()).toBeUndefined();
+  await act(async () => node.querySelector<HTMLButtonElement>('[data-testid="companion.taskResult.toggle"]')!.click());
+  expect(fileButton()).toBeDefined();
+  const file = [...node.querySelectorAll('button')].find(button => button.textContent === 'result.pdf')!;
+  await act(async () => file.click());
+  expect(h.push).toHaveBeenCalledWith({ pathname: '/files/preview/[sessionId]', params: { sessionId: 'child', deviceId: 'home', absPath: '/reports/result.pdf' } });
+  expect(h.invoke).not.toHaveBeenCalledWith('home', 'maker:bot-delegations-list', expect.anything());
+});
+
+it('renders the frozen result with the conversation Markdown, resolving links in the child task', async () => {
+  h.invoke.mockImplementation(async (_device, channel, args) => channel === 'fs:stat-path'
+    ? { kind: 'file', resolvedPath: args[0].path } : { ok: true });
+  const { CompanionTaskResultCard } = await import('@/session/CompanionTaskResultCard');
+  const { ChatFilePathContext } = await import('@/session/chatFilePathContext');
+  const seen: any[] = [];
+  function MarkdownProbe({ text }: { text: string }) {
+    const { useContext } = require('react') as typeof import('react');
+    const ctx = useContext(ChatFilePathContext);
+    seen.push(ctx);
+    return createElement('article', { 'data-testid': 'result-markdown' }, text);
+  }
+  const meta = { ...message.companion!.meta, role: 'delegation-result', childSessionId: 'child',
+    result: { runSequence: 1, status: 'completed', workingDir: '/child-task',
+      text: '![chart](./chart.png) [Report](https://example.com/report.pdf)', artifacts: [] } } as any;
+  // The chat's long-press menu is reused, but every action must target the child task.
+  const onLongPressPath = vi.fn();
+  const parent = { deviceId: 'home', sessionId: 'chat', workdir: '/chat', statPath: vi.fn(), onOpenPath: vi.fn(), onLongPressPath };
+  await act(async () => root.render(createElement(ChatFilePathContext.Provider, { value: parent },
+    createElement(CompanionTaskResultCard, {
+      meta, deviceId: 'home', renderMarkdown: (text: string) => createElement(MarkdownProbe, { text }),
+    }))));
+  // Collapsed: status + view result only; the body is not rendered until opened.
+  expect(node.querySelector('[data-testid="result-markdown"]')).toBeNull();
+  await act(async () => node.querySelector('button')!.click());
+  expect(node.querySelector('[data-testid="result-markdown"]')?.textContent)
+    .toBe('![chart](./chart.png) [Report](https://example.com/report.pdf)');
+  // No second, duplicated link list below the Markdown (Desktop MarkdownRenderer parity).
+  expect([...node.querySelectorAll('button')].some(button => ['chart', 'Report'].includes(button.textContent ?? ''))).toBe(false);
+  const ctx = seen.at(-1);
+  expect(ctx).toMatchObject({ deviceId: 'home', sessionId: 'child', workdir: '/child-task' });
+  await expect(ctx.statPath('/child-task/chart.png')).resolves.toMatchObject({ kind: 'file' });
+  expect(h.openLink).toHaveBeenCalledWith('home');
+  ctx.onOpenPath({ kind: 'file', relPath: 'chart.png', absPath: '/child-task/chart.png', line: 3 });
+  expect(h.push).toHaveBeenCalledWith({ pathname: '/files/preview/[sessionId]', params: {
+    sessionId: 'child', deviceId: 'home', relPath: 'chart.png', line: '3',
+  } });
+  ctx.onOpenPath({ kind: 'directory', relPath: 'out', absPath: '/child-task/out' });
+  expect(h.push).toHaveBeenCalledWith({ pathname: '/files/[sessionId]', params: {
+    sessionId: 'child', deviceId: 'home', relPath: 'out',
+  } });
+  ctx.onLongPressPath({ kind: 'file', relPath: 'chart.png', absPath: '/child-task/chart.png' });
+  expect(onLongPressPath).toHaveBeenCalledWith({ kind: 'file', relPath: 'chart.png', absPath: '/child-task/chart.png',
+    scope: { sessionId: 'child', workdir: '/child-task' } });
+  expect(parent.onOpenPath).not.toHaveBeenCalled();
+});
+
+it('does not offer an artifact file until the child file is verified', async () => {
+  let completeStat!: (result: { kind: 'file'; resolvedPath: string }) => void;
+  h.invoke.mockImplementation(async (_device, channel) => channel === 'fs:stat-path'
+    ? new Promise((resolve) => { completeStat = resolve; }) : { ok: true });
+  const { CompanionTaskResultCard } = await import('@/session/CompanionTaskResultCard');
+  const meta = { ...message.companion!.meta, role: 'delegation-result', childSessionId: 'child',
+    result: { runSequence: 1, status: 'completed', workingDir: '/child-task',
+      text: '', artifacts: [{ absolutePath: '/child-task/chart.png' }] } } as any;
+  await act(async () => root.render(createElement(CompanionTaskResultCard, { meta, deviceId: 'home' })));
+  await act(async () => node.querySelector('button')!.click());
+  expect(node.textContent).toContain('devices.companions.noWrittenResult');
+  expect(node.textContent).toContain('chart.png');
+  expect([...node.querySelectorAll('button')].some(button => button.textContent === 'chart.png')).toBe(false);
+  await act(async () => completeStat({ kind: 'file', resolvedPath: '/child-task/chart.png' }));
+  const chart = [...node.querySelectorAll('button')].find(button => button.textContent === 'chart.png')!;
+  await act(async () => chart.click());
+  expect(h.push).toHaveBeenCalledWith({ pathname: '/files/preview/[sessionId]', params: {
+    sessionId: 'child', deviceId: 'home', absPath: '/child-task/chart.png',
+  } });
+});
+
+it('keeps missing and offline result files readable without dead preview actions', async () => {
+  h.invoke.mockImplementation(async (_device, channel, args) => {
+    if (channel !== 'fs:stat-path') return { ok: true };
+    if (args[0].path.endsWith('offline.png')) throw new Error('offline');
+    return { kind: 'missing', resolvedPath: args[0].path };
+  });
+  const { CompanionTaskResultCard } = await import('@/session/CompanionTaskResultCard');
+  const meta = { ...message.companion!.meta, role: 'delegation-result', childSessionId: 'child',
+    result: { runSequence: 1, status: 'completed', workingDir: '/child-task',
+      text: '[Missing](./missing.png) [Offline](./offline.png)',
+      artifacts: [{ absolutePath: '/child-task/gone.pdf' }] } } as any;
+  await act(async () => root.render(createElement(CompanionTaskResultCard, { meta, deviceId: 'home' })));
+  await act(async () => node.querySelector('button')!.click());
+  expect(node.textContent).toContain('Missing');
+  expect(node.textContent).toContain('Offline');
+  expect(node.textContent).toContain('gone.pdf');
+  expect([...node.querySelectorAll('button')].some(button => ['Missing', 'Offline', 'gone.pdf'].includes(button.textContent ?? ''))).toBe(false);
+  expect(h.push).not.toHaveBeenCalled();
+});
+
+it('reveals frozen failure details only after opening the result and its details', async () => {
+  const { CompanionTaskResultCard } = await import('@/session/CompanionTaskResultCard');
+  const meta = { result: { status: 'timed-out', text: '', error: 'TIMEOUT: upstream did not finish', artifacts: [] }, objective: 'Report' } as any;
+  await act(async () => root.render(createElement(CompanionTaskResultCard, { meta, deviceId: 'home' })));
+  expect(node.textContent).toContain('devices.companions.status.timed-out');
+  expect(node.textContent).not.toContain('TIMEOUT:');
+  await act(async () => node.querySelector('button')!.click());
+  expect(node.textContent).not.toContain('TIMEOUT:');
+  const details = Array.from(node.querySelectorAll('button')).find(button => button.textContent === 'devices.companions.errorDetails');
+  await act(async () => details!.click());
+  expect(node.textContent).toContain('TIMEOUT: upstream did not finish');
+});
+
+it.each(['sent', 'received'] as const)('keeps a compact %s private-message entry without leaking its body', async (direction) => {
+  const direct = { ...message, key: 'trace', companion: { kind: 'direct', meta: {
+    direction, peerBotName: 'Aster', peerBotId: 'peer', viewerBotId: 'viewer', threadId: 'thread',
+    preview: 'Synthetic private transport body',
+  } } } as NormalizedRemoteMessage;
+  await act(async () => root.render(createElement(CompanionMessageCard, { message: direct })));
+  expect(node.textContent).toContain(`devices.companions.${direction === 'sent' ? 'sentTo' : 'receivedFrom'}`);
+  expect(node.textContent).not.toContain('Synthetic private transport body');
+  await act(async () => node.querySelector('button')!.click());
+  expect(h.push).toHaveBeenCalledWith({ pathname: '/companions/direct/[threadId]', params: {
+    deviceId: 'home', threadId: 'thread', botId: 'viewer',
+  } });
+});
+
+it('shows the starting state until the first read settles, then the background-task title fallback', async () => {
+  let finish!: (value: unknown) => void;
+  h.invoke.mockReturnValue(new Promise((resolve) => { finish = resolve; }));
+  const untitled = { ...message, companion: { kind: 'task', meta: { ...message.companion!.meta, objective: '  ' } } } as NormalizedRemoteMessage;
+  await act(async () => root.render(createElement(CompanionMessageCard, { message: untitled })));
+  expect(node.textContent).toContain('devices.companions.status.queued');
+  expect(node.textContent).not.toContain('devices.companions.status.unknown');
+  expect(node.textContent).toContain('devices.companions.backgroundTask');
+  // A settled read without this task is unverifiable, not still starting.
+  await act(async () => finish({ ok: true, delegations: [] }));
+  expect(node.textContent).toContain('devices.companions.status.unknown');
+});
+
+it('does not claim an unread task is starting while its computer is offline', async () => {
+  h.status = 'offline';
+  await render();
+  expect(h.invoke).not.toHaveBeenCalledWith('home', 'maker:bot-delegations:list', expect.anything());
+  expect(node.textContent).toContain('devices.companions.status.unknown');
+  expect(node.textContent).not.toContain('devices.companions.status.queued');
+});
+
+it('shows the peer portrait and current name from the cached roster in the private-message entry', async () => {
+  const cache = await import('@/device-link/remoteResourceCache');
+  await cache.cacheRemoteResourceItems('owner', 'teammates', [{ key: 'k', host: { deviceId: 'home', deviceName: 'Mac' },
+    item: { ref: { collectionId: 'teammates', kind: 'bot', id: 'peer' }, revision: '1', links: [],
+      display: { title: 'Aster Renamed', avatar: { kind: 'text', value: '', fallbackText: 'A' } } } } as any]);
+  const direct = { ...message, key: 'trace-peer', companion: { kind: 'direct', meta: {
+    direction: 'sent', peerBotName: 'Aster', peerBotId: 'peer', viewerBotId: 'viewer', threadId: 'thread', preview: '',
+  } } } as NormalizedRemoteMessage;
+  await act(async () => root.render(createElement(CompanionMessageCard, { message: direct })));
+  expect(node.querySelector('[data-testid="peer-avatar"]')?.textContent).toBe('Aster Renamed');
+  await cache.clearRemoteResourceCache();
+});
+
+it.each([false, true])('uses the %s receipt title source without replacing frozen results with live state', async (frozen) => {
+  const receipt = { ...message, companion: { kind: 'task', meta: { ...message.companion!.meta,
+    role: 'delegation-result', objective: 'Full execution instructions',
+    result: { ...(frozen ? { title: 'Original title' } : {}), runSequence: 1, status: 'completed',
+      text: 'Original result', artifacts: [] },
+  } } } as NormalizedRemoteMessage;
+  h.invoke.mockResolvedValue({ ok: true, delegations: [{ id: 'job', title: 'Known task title', status: 'running', resultSummary: 'New output' }] });
+  await act(async () => root.render(createElement(CompanionMessageCard, { message: receipt })));
+  expect(node.textContent).toContain(frozen ? 'Original title' : 'Known task title');
+  expect(node.textContent).not.toContain('Full execution instructions');
+  expect(node.textContent).toContain('devices.companions.status.completed');
+  expect(node.textContent).not.toContain('devices.companions.status.running');
+  await act(async () => node.querySelector('button')!.click());
+  expect(node.textContent).toContain('Original result');
+  expect(node.textContent).not.toContain('New output');
+  if (frozen) expect(h.invoke).not.toHaveBeenCalled();
+});
+
+it('keeps legacy results available when their task cannot be read', async () => {
+  const receipt = { ...message, companion: { kind: 'task', meta: { ...message.companion!.meta,
+    role: 'delegation-result', objective: 'First line\nOther instructions',
+    result: { runSequence: 1, status: 'failed', text: 'Saved result', artifacts: [] },
+  } } } as NormalizedRemoteMessage;
+  h.invoke.mockRejectedValue(new Error('offline'));
+  await act(async () => root.render(createElement(CompanionMessageCard, { message: receipt })));
+  expect(node.textContent).toContain('First line');
+  expect(node.textContent).not.toContain('Other instructions');
+  await act(async () => node.querySelector('button')!.click());
+  expect(node.textContent).toContain('Saved result');
 });

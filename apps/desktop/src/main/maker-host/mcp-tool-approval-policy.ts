@@ -22,11 +22,9 @@
 import type {
   McpToolApprovalContext,
   McpToolApprovalPolicy,
-  McpToolApprovalPresentation,
 } from '@cindy/maker-core';
-import { canAutoApproveContactsMcpTool, canonicalIOSSimulatorToolName } from '@cindy/mcps';
+import { canAutoApproveContactsMcpTool } from '@cindy/mcps';
 
-import { t } from '../i18n.js';
 
 /**
  * 精确到工具的只读放行表，键为 `<server>::<tool>`。
@@ -57,7 +55,6 @@ const READ_ONLY_MCP_TOOLS: ReadonlySet<string> = new Set([
   'cindy::ghost_forge_guide',
   'cindy_browser::list_tools',
   'cindy_android::list_tools',
-  'cindy_ios_simulator::list_tools',
   'cindy_computer::list_tools',
   'cindy_feishu_bot::list_tools',
   'cindy_scheduler::list_tools',
@@ -126,60 +123,6 @@ function readJsonObject(value: unknown): Record<string, unknown> | undefined {
   return undefined;
 }
 
-/**
- * 取 iOS Simulator progressive 调用的内层动作。
- *
- * 内层名一律过 canonical 化：改名后旧名仍是可调用的隐藏别名，别名必须命中与新名
- * 完全相同的审批判定，否则旧名就成了绕过设备授权的口子。
- */
-function readIOSSimulatorInnerCall(
-  context: McpToolApprovalContext,
-): { name: string | undefined; args: unknown } | undefined {
-  if (context.serverName !== 'cindy_ios_simulator') return undefined;
-  // Some Codex app-server versions omit the outer tool name but retain the
-  // validated progressive payload. Preserve the inner action's stricter policy
-  // instead of falling back to a persistable generic server prompt.
-  if (context.toolName !== 'call_tool' && context.toolName !== undefined) {
-    return undefined;
-  }
-  const params = readJsonObject(context.toolParams);
-  const rawName = typeof params?.name === 'string' ? params.name.trim() : '';
-  return {
-    name: rawName ? canonicalIOSSimulatorToolName(rawName) : undefined,
-    args: params?.args,
-  };
-}
-
-/**
- * 设备级动作必须自带它要操作的那条 owned instance 路由。
- */
-function hasIOSSimulatorInstanceRoute(args: Record<string, unknown>): boolean {
-  const { instanceId, generation, leaseId } = args;
-  return (
-    typeof instanceId === 'string' &&
-    instanceId.trim() !== '' &&
-    typeof generation === 'number' &&
-    Number.isInteger(generation) &&
-    generation > 0 &&
-    typeof leaseId === 'string' &&
-    leaseId.trim() !== ''
-  );
-}
-
-/**
- * 只有「能确凿读出、且确实没有 owned 路由」的调用才免掉设备授权卡：那种调用到不了
- * 任何设备（registry 的严格参数校验先拒，Host 收不到），弹窗纯属噪音 —— 无关任务把
- * 「打开一个网址」误路由到模拟器时正是这个形状。
- *
- * 读不出形状时一律 fail closed 照旧弹窗：判定不能依赖「传输层此刻恰好也会拒」这种
- * 外部前提，否则哪天入口多加一层 coercion，读不懂就会变成静默放行。
- */
-function skipsRoutelessDeviceApproval(args: unknown): boolean {
-  const parsed = readJsonObject(args);
-  if (!parsed) return false;
-  return !hasIOSSimulatorInstanceRoute(parsed);
-}
-
 /** 第一方 Cindy Art 的媒体生成工具。风险是额度而非越权，用户点名作图即授权。 */
 const CINDY_ART_MEDIA_TOOLS: ReadonlySet<string> = new Set([
   'gen_image',
@@ -223,12 +166,20 @@ export function getDesktopMcpToolApprovalPolicy(
   context: McpToolApprovalContext,
 ): McpToolApprovalPolicy {
   const { serverName, toolName, toolParams } = context;
-  // Codex 的 elicitation 不总是带 toolName（0.142.5 / 0.144.1 会省略），拿不到工具名
-  // 时这条精确规则自然不命中，回落到下面的 server 级判定，与改动前行为一致。
+  // Codex 的 elicitation 不总是带 toolName（0.142.5 / 0.144.1 会省略）。
+  // 精确只读规则此时不命中；helper 等敏感 server 在下方按 payload 单独判定。
   if (toolName && READ_ONLY_MCP_TOOLS.has(`${serverName}::${toolName}`)) {
     return 'auto-approve';
   }
   if (serverName === 'cindy' && toolName === 'ghost_market_install') return 'prompt-each-time';
+  // This bridge multiplexes independent imported connections and commands with
+  // their credentials. A server-wide grant for one tool must not authorize other
+  // tools/connections. Use the existing per-call policy, including when Codex
+  // omits toolName; Auto and Full Access retain their normal mode semantics.
+  if (serverName === 'companion_connections') return 'prompt-each-time';
+  // sources/preview/start share one native tool identity. Never persist a grant
+  // from discovery that could bypass the policy callback for a later import.
+  if (serverName === 'companion_import') return 'prompt-each-time';
   if (serverName === 'cindy_contacts') {
     return canAutoApproveContactsMcpTool({ toolName, toolParams })
       ? 'auto-approve'
@@ -237,15 +188,28 @@ export function getDesktopMcpToolApprovalPolicy(
   if (canAutoApproveCindyArtGhostCall(context)) {
     return 'auto-approve';
   }
-  // Rebinding another task's workspace delegates its execution root. Review
-  // the specific move, never reuse the trusted helper server shortcut/grant.
+  // Rebinding a task's workspace delegates its execution root; publishing a Skill
+  // uploads local files under the signed-in account. Review each action instead
+  // of reusing the trusted helper server shortcut/grant. Session modes still apply.
   if (serverName === 'cindy_helper') {
-    if (toolName === 'move_session') return 'prompt-each-time';
-    if (!toolName || toolName === 'call_tool') {
-      const params = readJsonObject(toolParams);
-      const innerName = typeof params?.name === 'string' ? params.name.trim() : '';
-      if (!innerName || innerName === 'move_session') return 'prompt-each-time';
+    const params = readJsonObject(toolParams);
+    const progressive = toolName === 'call_tool' || !toolName;
+    const innerName = typeof params?.name === 'string' ? params.name.trim() : '';
+    const args = progressive ? readJsonObject(params?.args) : params;
+    // Codex can omit tool_name when same-server calls overlap. A direct tool's
+    // input may also have a `name` field (routine_save does), so only treat an
+    // exact name/args envelope as a progressive call without the outer name.
+    if (!toolName && (!params || !innerName || !args ||
+      Object.keys(params).some((key) => key !== 'name' && key !== 'args'))) {
+      return 'prompt-each-time';
     }
+    const action = progressive ? innerName : toolName;
+    if (toolName === 'call_tool' && (!innerName || !args)) return 'prompt-each-time';
+    // Installing or saving a host command uses the session's existing approval flow.
+    if (action === 'schedule_set_pre_run_hook' || (action === 'routine_save' && args?.preRunHook != null)) {
+      return 'prompt-each-time';
+    }
+    if (action === 'move_session' || action === 'publish_skill') return 'prompt-each-time';
   }
   // Choosing a new Worker root delegates filesystem access. Do not let the
   // trusted-server shortcut or a cached server grant authorize another root.
@@ -266,50 +230,8 @@ export function getDesktopMcpToolApprovalPolicy(
         return 'prompt-each-time';
     }
   }
-  const iosSimulatorCall = readIOSSimulatorInnerCall(context);
-  if (iosSimulatorCall) {
-    const innerName = iosSimulatorCall.name;
-    // Taking control of a device is itself the authorization step, so it asks
-    // even before any route exists.
-    if (innerName === 'create_instance' || innerName === 'attach_device') {
-      return 'prompt-each-time';
-    }
-    if (innerName === 'build_app' || innerName === 'open_simulator_url') {
-      return skipsRoutelessDeviceApproval(iosSimulatorCall.args)
-        ? 'auto-approve'
-        : 'prompt-each-time';
-    }
-    return 'auto-approve';
-  }
   if (TRUSTED_MCP_SERVERS.has(serverName)) {
     return 'auto-approve';
   }
   return 'prompt';
-}
-
-/**
- * Host-owned security copy for progressive MCP actions whose outer
- * `call_tool` description cannot explain the inner action's real authority.
- */
-export function getDesktopMcpToolApprovalPresentation(
-  context: McpToolApprovalContext,
-): McpToolApprovalPresentation | undefined {
-  const innerName = readIOSSimulatorInnerCall(context)?.name;
-  if (innerName === 'build_app') {
-    return {
-      title: t('rightSidebar.iosSimulator.buildApproval.title'),
-      description: t('rightSidebar.iosSimulator.buildApproval.description'),
-    };
-  }
-  if (innerName === 'attach_device' || innerName === 'create_instance') {
-    return {
-      title: t(
-        innerName === 'attach_device'
-          ? 'rightSidebar.iosSimulator.agentControlApproval.attachTitle'
-          : 'rightSidebar.iosSimulator.agentControlApproval.createTitle',
-      ),
-      description: t('rightSidebar.iosSimulator.agentControlApproval.description'),
-    };
-  }
-  return undefined;
 }

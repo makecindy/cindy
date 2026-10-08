@@ -1,3 +1,6 @@
+import { BotLearningFooter } from '@/features/bots/BotLearningFooter';
+import { BotSessionTaskResultCard } from '@/features/bots/BotSessionTaskResultCard';
+import { botTaskResultKey, type BotCollaborationMeta } from '@cindy/maker-shared/botCollaboration';
 /**
  * AssistantMessage
  * ---------------------------------------------------------------------------
@@ -42,7 +45,7 @@ import { useTranslation } from 'react-i18next';
 import { Loader2, TriangleAlert } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { formatModelShortLabel } from '@/lib/modelShortLabel';
-import { stripGoalVerdictBlock } from '@/lib/goalVerdict';
+import { stripGoalVerdictBlock } from '@cindy/maker-shared/goal-verdict';
 import { getGhostCardEntry, subscribeGhostCards } from '@/cindy-brain/ghostCardStore';
 import { GhostToolCard } from './GhostToolCard';
 import type { KnownLocalFileRef } from '@/lib/localPathResolver';
@@ -50,6 +53,7 @@ import type { AgentKind as RendererAgentKind } from '@/lib/ccAgent.types';
 import type { TurnUsageDetails } from '../../../shared/turnUsageDetails';
 import type { RegionalMoney } from '../../../shared/regionalMoney';
 import { useAgentCapabilities, type AgentKind as MakerAgentKind } from '@/hooks/useAgentCapabilities';
+import { useAgentOnOtherDevice } from './AgentOnOtherDeviceContext';
 import { useSessionFileOrigin } from './ChatSessionFileContext';
 import { originDeviceId } from '@/lib/sessionFileOrigin';
 import { buildSessionMessageDeepLink } from '@/lib/deepLink';
@@ -193,6 +197,8 @@ interface AssistantMessageProps {
   showActionBar?: boolean;
   /** 伙伴对话使用常显、无费用、无 Fork 的轻量消息操作栏。 */
   simplifiedBotConversation?: boolean;
+  botLearning?: unknown;
+  botTaskResults?: BotCollaborationMeta[];
   /** Per-turn 费用 (USD) — 仅该轮最后一条 assistant 有值, action bar 时间旁显示。 */
   turnMoney?: RegionalMoney;
   turnCostUsd?: number;
@@ -229,6 +235,8 @@ export const AssistantMessage = memo(function AssistantMessage({
   sessionRunning,
   showActionBar = false,
   simplifiedBotConversation = false,
+  botTaskResults,
+  botLearning,
   turnMoney,
   turnCostUsd,
   turnCostIsEstimate,
@@ -263,7 +271,10 @@ export const AssistantMessage = memo(function AssistantMessage({
     currentSessionId ? originDeviceId(sessionFileOrigin) : undefined,
   );
   const isRemote = Boolean(remoteHostId);
-  const forkSupported = !isRemote && (!agentKind || (capabilities?.fork?.supported ?? true));
+  const sharedGuest = isSharedTaskPeer(originDeviceId(sessionFileOrigin) ?? '');
+  const agentOnOtherDevice = useAgentOnOtherDevice();
+  const forkSupported =
+    !isRemote && !agentOnOtherDevice && (!agentKind || (capabilities?.fork?.supported ?? true));
   const handleFork = useForkAtMessage({
     sessionId: currentSessionId,
     messageClientId,
@@ -399,6 +410,13 @@ export const AssistantMessage = memo(function AssistantMessage({
           </div>
         )}
       </div>
+      {simplifiedBotConversation && !isStreaming && content.trim() && <BotLearningFooter receipts={botLearning} />}
+      {simplifiedBotConversation && !isStreaming && botTaskResults?.length ? (
+        <div className="w-full max-w-[440px] min-w-0 space-y-2" data-bot-task-results>
+          {botTaskResults.map(card => <BotSessionTaskResultCard key={botTaskResultKey(card)}
+            data={{ ...card }} sessionId={currentSessionId} attached />)}
+        </div>
+      ) : null}
       {/* Streaming → bar not mounted at all (V1.2 验收 "流式期间不挂载");
           非 turn 收尾正文(showActionBar=false)同样不挂,消息流保持紧凑 */}
       {!isStreaming && showActionBar && (
@@ -409,10 +427,10 @@ export const AssistantMessage = memo(function AssistantMessage({
           align="left"
           hovered={hovered}
           simplifiedBotConversation={simplifiedBotConversation}
-          onFork={canFork ? handleFork : undefined}
+          onFork={!sharedGuest && canFork ? handleFork : undefined}
           onAddToChat={messageDeepLink ? handleAddToChat : undefined}
           onShareAsImage={handleShareAsImage}
-          onDelete={currentSessionId && messageClientId ? handleDelete : undefined}
+          onDelete={!sharedGuest && currentSessionId && messageClientId ? handleDelete : undefined}
           turnMoney={turnMoney}
           turnCostUsd={turnCostUsd}
           turnCostIsEstimate={turnCostIsEstimate}
@@ -425,3 +443,4 @@ export const AssistantMessage = memo(function AssistantMessage({
     </div>
   );
 });
+import { isSharedTaskPeer } from '@cindy/device-link';

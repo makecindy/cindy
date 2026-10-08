@@ -99,6 +99,10 @@ describe('SessionItem activity time', () => {
     );
     expect(sessionItemSource).toContain('<SessionInfoMeta');
     expect(sessionItemSource).toContain('pieces={infoPieces}');
+    // 任务标签常显、紧跟标题，不再作为任务信息复选项进右侧信息槽。
+    expect(sessionItemSource).toMatch(
+      /<\/SidebarTitleMarquee>\s*\{\/\*[^*]*\*\/\}\s*<TaskTagDots tags=\{session\.tags\} \/>/,
+    );
     expect(sessionInfoMetaSource).toContain('formatSidebarTime(activityIso, t)');
     expect(sessionInfoMetaSource).toContain('text-sidebar-action-icon');
     expect(sessionItemSource).toContain('transition-opacity');
@@ -115,7 +119,7 @@ describe('SessionItem activity time', () => {
     expect(sessionItemSource).toContain('worktree={infoWorktree ?? undefined}');
     expect(sessionItemSource).toContain('canQuickArchive && archivePending &&');
     expect(sessionItemSource).toContain(
-      "!archivePending && 'group-hover:opacity-0 group-focus-within/slot:opacity-0'",
+      "group-hover:opacity-0 group-hover:w-0 group-hover:overflow-hidden group-focus-within/slot:opacity-0 group-focus-within/slot:w-0 group-focus-within/slot:overflow-hidden",
     );
     expect(sessionItemSource).toContain('group/slot relative ml-auto');
     expect(sessionItemSource).toContain(

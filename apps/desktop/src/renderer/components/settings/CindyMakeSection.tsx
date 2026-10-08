@@ -1,14 +1,5 @@
 import { useEffect, useId, useRef, useState } from 'react';
-import {
-  ChevronDown,
-  ChevronRight,
-  FolderOpen,
-  GitBranch,
-  Download,
-  Plus,
-  Trash2,
-  Wrench,
-} from 'lucide-react';
+import { FolderOpen, Download, Trash2, Wrench } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { Switch } from '@/components/ui/switch';
@@ -22,19 +13,25 @@ import { CindyMakeCreateDialog } from '@/components/cindy-make/CindyMakeCreateDi
 import { CindyMakeDependencyProgress } from '@/components/cindy-make/CindyMakeDependencyProgress';
 import { CindyMakeHistoryPanel } from '@/components/cindy-make/CindyMakeHistoryPanel';
 import { CindyMakeVersionsPanel } from '@/components/cindy-make/CindyMakeVersionsPanel';
-import { CindyMakeMergeNotice } from '@/components/cindy-make/CindyMakeMergeNotice';
+import {
+  CindyMakeMergeActions,
+  CindyMakeMergeNotice,
+} from '@/components/cindy-make/CindyMakeMergeNotice';
+import { useCindyMakeMergeResolution } from '@/components/cindy-make/useCindyMakeMergeResolution';
 import {
   getDataOwnerGeneration,
   isDataOwnerGenerationCurrent,
 } from '@/contexts/dataOwnerGeneration';
 import type { CindyMakeMergeState } from '../../../shared/cindyMakeMerge';
 import type { CindyMakeHistoryState } from '../../../shared/cindyMakeHistory';
+import type { CindyVersionsState } from '../../../shared/cindyVersions';
 import { useCindyMakeState } from '@/lib/cindyMakeState';
 import { cancelMakeDoctor, startMakeDoctor } from '@/lib/cindyMakeDoctor';
 import { useCindyMakeSettings } from '@/lib/cindyMakeSettings';
 import { isSelectableVendor } from '@/lib/agentVendors';
 import { getDraft, getFastModeForModel } from '@/state/newMakerDraft';
 import { toast } from '@/lib/toast';
+import { extractIpcError } from '@/utils/ipcError';
 import type { MakeDoctorReport, MakeSourceStatus } from '../../../shared/cindyMakeDoctor';
 
 const CINDY_MAKE_SETTINGS_TABS = ['versions', 'environment'] as const;
@@ -46,10 +43,18 @@ export function CindyMakeSection() {
   const tabId = useId();
   const tabButtons = useRef<Array<HTMLButtonElement | null>>([]);
   const { forceManagedTools, setForceManagedTools } = useCindyMakeSettings();
+  const [syncLatestBeforeBuild, setSyncLatestBeforeBuild] = useState(false);
+  const [syncLatestSettingLoaded, setSyncLatestSettingLoaded] = useState(false);
+  const [syncLatestSettingPending, setSyncLatestSettingPending] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [report, setReport] = useState<MakeDoctorReport>();
   const makeState = useCindyMakeState();
   const [historyState, setHistoryState] = useState<CindyMakeHistoryState>();
+  const buildRunning =
+    !!historyState?.build && !['ready', 'failed'].includes(historyState.build.status);
+  const buildRunningRef = useRef(buildRunning);
+  buildRunningRef.current = buildRunning;
+  const [versionsState, setVersionsState] = useState<CindyVersionsState>();
   const [dismissedPreparationId, setDismissedPreparationId] = useState<string>();
   const [trackedPreparationId, setTrackedPreparationId] = useState<string>();
   const [checkVersion, setCheckVersion] = useState(0);
@@ -62,15 +67,20 @@ export function CindyMakeSection() {
   const sourceStatus = makeState.source;
   const [sourceRunPending, setSourceRunPending] = useState(false);
   const { confirm } = useConfirmDialog();
+  const { resolveMerge } = useCindyMakeMergeResolution();
   const mergeSubmitting = useRef(false);
+  const previousMergeId = useRef<string | undefined>(undefined);
   const [mergePending, setMergePending] = useState(false);
   const operation = makeState.upstreamMerge;
   const merge = operation?.feature ? undefined : operation;
   const mergeActive = !!operation && ['fetching', 'merging', 'checking'].includes(operation.status);
   const mergeBlocked =
-    mergePending || mergeActive || (!!operation?.hasWorkspace && operation.status !== 'merged');
+    mergePending ||
+    mergeActive ||
+    !!operation?.cancellationRequested ||
+    (!!operation?.hasWorkspace && operation.status !== 'merged');
   const updateSource = async () => {
-    if (mergeSubmitting.current || mergeBlocked) return;
+    if (mergeSubmitting.current || mergeBlocked || buildRunningRef.current) return;
     const owner = getDataOwnerGeneration();
     mergeSubmitting.current = true;
     try {
@@ -80,26 +90,48 @@ export function CindyMakeSection() {
         confirmText: t('cindyMake.merge.confirm'),
         cancelText: t('settings.cindyMake.source.resetConfirm.cancel'),
       });
-      if (!confirmed || !isDataOwnerGenerationCurrent(owner)) return;
+      if (!confirmed || !isDataOwnerGenerationCurrent(owner) || buildRunningRef.current) return;
+      previousMergeId.current = operation?.id;
       setMergePending(true);
       const draft = getDraft();
       const vendor = isSelectableVendor(draft.vendor) ? draft.vendor : 'cc';
       const prefs = draft.lastByVendor[vendor];
-      await window.electronAPI.cindyMakeMerge({
+      const createOptions = {
+        agentKind: vendor,
+        model: prefs.model,
+        effort: prefs.effort,
+        providerId: prefs.providerId,
+        permissionMode: prefs.permissionMode,
+        fastMode: getFastModeForModel(prefs.model),
+        planModeEnabled: false,
+      };
+      const result = await window.electronAPI.cindyMakeMerge({
         action: 'update',
-        createOptions: {
-          agentKind: vendor,
-          model: prefs.model,
-          effort: prefs.effort,
-          providerId: prefs.providerId,
-          permissionMode: prefs.permissionMode,
-          fastMode: getFastModeForModel(prefs.model),
-          planModeEnabled: false,
-        },
+        createOptions,
       });
-      if (isDataOwnerGenerationCurrent(owner)) await window.electronAPI.getCindyMakeSourceStatus();
-    } catch {
-      if (isDataOwnerGenerationCurrent(owner)) toast.error(t('cindyMake.merge.errors.unavailable'));
+      if (!isDataOwnerGenerationCurrent(owner)) return;
+      if (result?.status === 'conflict' && !result.sessionId && !result.feature)
+        await resolveMerge(result, createOptions);
+      if (result?.status === 'merged') toast.success(t('cindyMake.merge.status.merged'));
+      else if (result?.status === 'failed')
+        toast.error(
+          t(
+            result.error
+              ? `cindyMake.merge.errors.${result.error}`
+              : 'cindyMake.merge.status.failed',
+          ),
+        );
+      // Refresh failure must not turn a completed update into a second, failure toast.
+      await window.electronAPI.getCindyMakeSourceStatus().catch(() => undefined);
+    } catch (error) {
+      if (isDataOwnerGenerationCurrent(owner))
+        toast.error(
+          t(
+            extractIpcError(error)?.message?.replace(/^\[PRECONDITION_FAILED\]\s*/, '') === 'busy'
+              ? 'cindyMake.merge.errors.busy'
+              : 'cindyMake.merge.errors.unavailable',
+          ),
+        );
     } finally {
       mergeSubmitting.current = false;
       setMergePending(false);
@@ -107,6 +139,25 @@ export function CindyMakeSection() {
   };
   useEffect(() => {
     void window.electronAPI.getCindyMakeSourceStatus?.().catch(() => undefined);
+  }, []);
+  useEffect(() => {
+    const load = window.electronAPI.getCindyMakeSettings;
+    if (!load) {
+      setSyncLatestSettingLoaded(true);
+      return;
+    }
+    let current = true;
+    void load()
+      .then((settings) => {
+        if (current) setSyncLatestBeforeBuild(settings.syncLatestBeforeBuild);
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        if (current) setSyncLatestSettingLoaded(true);
+      });
+    return () => {
+      current = false;
+    };
   }, []);
   const previousSourceStatus = useRef(sourceStatus?.status);
   useEffect(() => {
@@ -184,7 +235,11 @@ export function CindyMakeSection() {
           {t('settings.cindyMake.title')}
         </h2>
         <p className="mt-2 text-13 leading-[1.45] text-[var(--settings-section-desc)]">
-          {t('settings.cindyMake.description')}
+          {t(
+            activeTab === 'versions'
+              ? 'cindyMake.overview.description'
+              : 'settings.cindyMake.description',
+          )}
         </p>
       </div>
       {createOpen && <CindyMakeCreateDialog onOpenChange={setCreateOpen} />}
@@ -318,41 +373,6 @@ export function CindyMakeSection() {
               {t('settings.cindyMake.checking')}
             </div>
           )}
-          <CindyMakeSourceStatusCard
-            status={sourceStatus}
-            preparing={sourceBusy}
-            merge={merge}
-            mergeBlocked={mergeBlocked}
-            onPrepare={() => {
-              if (!sourceStatus || sourceBusy) return;
-              if (sourceStatus.status === 'ready') {
-                void updateSource();
-                return;
-              }
-              setSourceRunPending(true);
-              setSourceRun({ makeAction: 'prepare-source', forceManagedTools });
-            }}
-            onStop={() => {
-              void Promise.resolve(window.electronAPI.cancelCindyMakeSource?.())
-                .then((result) => {
-                  if (result && !result.success) setSourceRunPending(false);
-                })
-                .catch(() => toast.error(t('cindyMakeDoctor.failed')));
-            }}
-            onClear={async () => {
-              if (!sourceStatus || sourceBusy || mergeBlocked) return;
-              const confirmed = await confirm({
-                title: t('settings.cindyMake.source.resetConfirm.title'),
-                description: t('settings.cindyMake.source.resetConfirm.description'),
-                confirmText: t('settings.cindyMake.source.resetConfirm.confirm'),
-                cancelText: t('settings.cindyMake.source.resetConfirm.cancel'),
-                confirmVariant: 'destructive',
-              });
-              if (!confirmed) return;
-              setSourceRunPending(true);
-              setSourceRun({ makeAction: 'clear-source', forceManagedTools });
-            }}
-          />
         </div>
       </div>
       <div
@@ -363,12 +383,44 @@ export function CindyMakeSection() {
       >
         <div className="flex flex-col gap-[18px]">
           <Button className="self-start" onClick={() => setCreateOpen(true)}>
-            <Plus size={14} aria-hidden="true" />
             {t('settings.cindyMake.create.title')}
           </Button>
+          <div className="flex items-start justify-between gap-4 rounded-xl border border-[var(--settings-theme-card-border)] bg-[var(--settings-theme-card-bg)] p-5">
+            <div className="min-w-0">
+              <p id="settings-search-settings-cindyMake-syncBeforeBuild-title" className="text-13 font-medium text-[var(--settings-section-sublabel)]">
+                {t('settings.cindyMake.syncBeforeBuild.title')}
+              </p>
+              <p className="mt-1 text-12 leading-[1.45] text-[var(--settings-section-desc)]">
+                {t('settings.cindyMake.syncBeforeBuild.description')}
+              </p>
+            </div>
+            <Switch
+              checked={syncLatestBeforeBuild}
+              disabled={!syncLatestSettingLoaded || syncLatestSettingPending}
+              onCheckedChange={(checked) => {
+                if (syncLatestSettingPending) return;
+                const previous = syncLatestBeforeBuild;
+                setSyncLatestBeforeBuild(checked);
+                setSyncLatestSettingPending(true);
+                void window.electronAPI
+                  .setCindyMakeSyncLatestBeforeBuild(checked)
+                  .then((settings) => {
+                    setSyncLatestBeforeBuild(settings.syncLatestBeforeBuild);
+                  })
+                  .catch(() => {
+                    setSyncLatestBeforeBuild(previous);
+                    toast.error(t('settings.cindyMake.syncBeforeBuild.saveFailed'));
+                  })
+                  .finally(() => setSyncLatestSettingPending(false));
+              }}
+              aria-label={t('settings.cindyMake.syncBeforeBuild.ariaLabel')}
+            />
+          </div>
           <CindyMakeVersionsPanel
             active={activeTab === 'versions'}
-            busy={historyState?.busy}
+            busy={historyState?.activeWork ?? historyState?.busy}
+            buildRunning={buildRunning}
+            onState={setVersionsState}
             refreshKey={
               historyState?.build?.status === 'ready'
                 ? String(
@@ -378,8 +430,52 @@ export function CindyMakeSection() {
                   )
                 : undefined
             }
+          >
+            <CindyMakeSourceStatusCard
+              status={sourceStatus}
+              preparing={sourceBusy}
+              merge={mergePending && merge?.id === previousMergeId.current ? undefined : merge}
+              mergeBlocked={mergeBlocked}
+              buildRunning={buildRunning}
+              updating={mergePending || (mergeActive && !!merge)}
+              onPrepare={() => {
+                if (!sourceStatus || sourceBusy) return;
+                if (sourceStatus.status === 'ready') {
+                  void updateSource();
+                  return;
+                }
+                setSourceRunPending(true);
+                setSourceRun({ makeAction: 'prepare-source', forceManagedTools });
+              }}
+              onStop={() => {
+                void Promise.resolve(window.electronAPI.cancelCindyMakeSource?.())
+                  .then((result) => {
+                    if (result && !result.success) setSourceRunPending(false);
+                  })
+                  .catch(() => toast.error(t('cindyMakeDoctor.failed')));
+              }}
+              onClear={async () => {
+                if (!sourceStatus || sourceBusy || mergeBlocked) return;
+                const confirmed = await confirm({
+                  title: t('settings.cindyMake.source.resetConfirm.title'),
+                  description: t('settings.cindyMake.source.resetConfirm.description'),
+                  confirmText: t('settings.cindyMake.source.resetConfirm.confirm'),
+                  cancelText: t('settings.cindyMake.source.resetConfirm.cancel'),
+                  confirmVariant: 'destructive',
+                });
+                if (!confirmed) return;
+                setSourceRunPending(true);
+                setSourceRun({ makeAction: 'clear-source', forceManagedTools });
+              }}
+            />
+          </CindyMakeVersionsPanel>
+          <CindyMakeHistoryPanel
+            active={activeTab === 'versions'}
+            hasPersonalVersion={versionsState?.versions.some(
+              (version) => version.kind === 'personal',
+            )}
+            onState={setHistoryState}
           />
-          <CindyMakeHistoryPanel active={activeTab === 'versions'} onState={setHistoryState} />
         </div>
       </div>
     </div>
@@ -394,6 +490,8 @@ function CindyMakeSourceStatusCard({
   onClear,
   merge,
   mergeBlocked = false,
+  buildRunning = false,
+  updating = false,
 }: {
   status?: MakeSourceStatus;
   preparing?: boolean;
@@ -402,18 +500,32 @@ function CindyMakeSourceStatusCard({
   onClear?: () => void | Promise<void>;
   merge?: CindyMakeMergeState;
   mergeBlocked?: boolean;
+  buildRunning?: boolean;
+  updating?: boolean;
 }) {
   const { t } = useTranslation();
-  const [expanded, setExpanded] = useState(true);
   const displayStatus = preparing ? 'preparing' : status?.status;
   // A click is pending before Main publishes the new run. Never reuse the last
   // run's phase, counters or error in that window.
   const activeStatus = preparing && status?.status === 'preparing' ? status : undefined;
-  const statusClass =
-    displayStatus === 'ready'
+  const displayMerge =
+    !preparing &&
+    (updating ||
+      !status ||
+      status.status === 'ready' ||
+      merge?.hasWorkspace ||
+      merge?.cancellationRequested ||
+      merge?.error === 'cancelFailed')
+      ? merge?.status === 'merged' || merge?.status === 'cancelled'
+        ? undefined
+        : merge
+      : undefined;
+  const statusClass = updating
+    ? 'text-[var(--text-secondary)]'
+    : displayStatus === 'ready'
       ? 'text-[var(--status-success)]'
       : displayStatus === 'failed'
-        ? 'text-[var(--status-danger)]'
+        ? 'text-[var(--error-fg)]'
         : 'text-[var(--text-secondary)]';
   const openSourceDir = () => {
     void Promise.resolve(window.electronAPI.openCindyMakeSourceDir?.())
@@ -424,100 +536,102 @@ function CindyMakeSourceStatusCard({
       .catch(() => toast.error(t('cindyMakeDoctor.failed')));
   };
   return (
-    <section
-      className="rounded-[12px] border border-[var(--border-default)] bg-[var(--surface-elevated)] text-14 text-[var(--text-primary)]"
+    <section id="settings-search-settings-cindyMake-source-title"
+      className="min-w-0 text-14 text-[var(--text-primary)]"
       aria-label={t('settings.cindyMake.source.title')}
     >
-      <div className="flex items-center gap-2 px-4 py-3">
-        <GitBranch size={16} className="shrink-0 text-[var(--text-secondary)]" aria-hidden />
-        <button
-          type="button"
-          className="flex min-w-0 flex-1 items-center gap-2 text-left"
-          onClick={() => setExpanded((value) => !value)}
-          aria-expanded={expanded}
-        >
-          <span className="flex-1 font-medium">{t('settings.cindyMake.source.title')}</span>
-          {preparing && <Spinner size={14} />}
-          {expanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
-        </button>
-      </div>
-      {expanded && (
-        <div className="space-y-3 border-t border-[var(--border-default)] px-4 py-3">
-          <p className="text-13 text-[var(--text-secondary)]">
-            {t('settings.cindyMake.source.description')}
-          </p>
-          {status && (
-            <>
-              {(status.branch || status.commit || status.status === 'ready') && (
+      <h4 className="sr-only">{t('cindyMake.overview.personalCode')}</h4>
+      <p className="sr-only">{t('settings.cindyMake.source.description')}</p>
+      <div className="space-y-3 px-4 pb-4 pt-1">
+        <div className="flex flex-wrap items-start gap-3">
+          <div className="min-w-0 flex-[1_1_320px]">
+            {status &&
+              (status.branch || status.commit || status.status === 'ready') &&
+              !preparing && (
                 <CindyMakeSourceDetails
                   source={status}
                   latestVersion={status.latestVersion}
-                  updateAction={
-                    status.status === 'ready' && onPrepare ? (
-                      <Tip text={t('cindyMake.merge.updateHint')}>
-                        <button
-                          type="button"
-                          aria-label={t('cindyMake.merge.getLatest')}
-                          disabled={preparing || mergeBlocked}
-                          onClick={onPrepare}
-                          className="inline-flex h-6 w-6 items-center justify-center rounded-full text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)] active:bg-[var(--surface-chip)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-50"
-                        >
-                          <Download size={14} aria-hidden />
-                        </button>
-                      </Tip>
-                    ) : undefined
-                  }
+                  showComparison={!updating && !displayMerge && status.status === 'ready'}
                 />
               )}
-              <dl className="grid gap-1 text-12 text-[var(--text-tertiary)]">
-                <div className="flex min-w-0 items-center gap-1">
-                  <dt className="shrink-0 font-medium">{t('settings.cindyMake.source.path')}:</dt>
-                  <dd className="flex min-w-0 flex-1 items-center gap-3">
-                    <span className="min-w-0 flex-1 break-all font-mono">{status.path}</span>
-                    <span className="inline-flex shrink-0 items-center gap-1">
-                      <Tip text={t('settings.cindyMake.source.openDir')}>
-                        <button
-                          type="button"
-                          onClick={openSourceDir}
-                          aria-label={t('settings.cindyMake.source.openDir')}
-                          className="inline-flex h-6 w-6 items-center justify-center rounded-full text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)] active:bg-[var(--surface-chip)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
-                        >
-                          <FolderOpen size={14} aria-hidden />
-                        </button>
-                      </Tip>
-                      {/* Failed or cancelled preparation can leave a checkout to clear. */}
-                      {onClear && !preparing && status.status !== 'missing' && (
-                        <Tip text={t('settings.cindyMake.source.reset')}>
-                          <button
-                            type="button"
-                            onClick={() => void onClear()}
-                            disabled={mergeBlocked}
-                            aria-label={t('settings.cindyMake.source.reset')}
-                            className="inline-flex h-6 w-6 items-center justify-center rounded-full text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)] active:bg-[var(--surface-chip)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
-                          >
-                            <Trash2 size={14} aria-hidden />
-                          </button>
-                        </Tip>
-                      )}
-                    </span>
-                  </dd>
-                </div>
-              </dl>
-              {activeStatus?.progress?.message && (
-                <p className="break-all font-mono text-11 text-[var(--text-tertiary)]">
-                  {activeStatus.progress.message}
-                </p>
+          </div>
+          <div className="ml-auto flex flex-wrap justify-end gap-2">
+            <CindyMakeMergeActions state={displayMerge} busy={updating}>
+              {status?.status === 'ready' && onPrepare && (
+                <Tip
+                  text={t(buildRunning ? 'cindyMake.merge.buildingHint' : 'cindyMake.merge.updateHint')}
+                >
+                  <Button
+                    variant="secondary"
+                    className="gap-2"
+                    disabled={preparing || mergeBlocked || buildRunning}
+                    loading={updating}
+                    onClick={onPrepare}
+                  >
+                    {!updating && <Download size={14} aria-hidden />}
+                    <span className="relative top-px">{t('cindyMake.merge.getLatest')}</span>
+                  </Button>
+                </Tip>
               )}
-            </>
-          )}
+            </CindyMakeMergeActions>
+          </div>
         </div>
-      )}
-      {merge && <CindyMakeMergeNotice state={merge} />}
-      {status && (
+        {status && (
+          <div className="border-t border-[var(--border-default)] pt-3">
+            <p className="text-12 text-[var(--text-secondary)]">
+              {t('settings.cindyMake.source.path')}
+            </p>
+            <div className="flex items-center gap-3">
+              <p className="min-w-0 flex-1 break-all font-mono text-12 text-[var(--text-secondary)]">
+                {status.path}
+              </p>
+              <div className="ml-auto flex shrink-0 items-center gap-1">
+                {status && status.status !== 'missing' && (
+                  <Tip text={t('settings.cindyMake.source.openDir')}>
+                    <Button
+                      variant="secondary"
+                      className="w-8 border-transparent bg-transparent px-0 text-[var(--text-tertiary)]"
+                      aria-label={t('settings.cindyMake.source.openDir')}
+                      onClick={openSourceDir}
+                    >
+                      <FolderOpen size={14} aria-hidden />
+                    </Button>
+                  </Tip>
+                )}
+                {onClear && status && !preparing && status.status !== 'missing' && (
+                  <Tip text={t('settings.cindyMake.source.reset')}>
+                    <Button
+                      variant="secondary"
+                      onClick={() => void onClear()}
+                      disabled={mergeBlocked}
+                      aria-label={t('settings.cindyMake.source.reset')}
+                      className="w-8 border-transparent bg-transparent px-0 text-[var(--text-tertiary)]"
+                    >
+                      <Trash2 size={14} aria-hidden />
+                    </Button>
+                  </Tip>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+        {activeStatus?.progress?.message && (
+          <p className="break-all font-mono text-11 text-[var(--text-tertiary)]">
+            {activeStatus.progress.message}
+          </p>
+        )}
+      </div>
+      {displayMerge ? (
+        <CindyMakeMergeNotice state={displayMerge} showActions={false} />
+      ) : status && (preparing || updating || status.status !== 'ready') ? (
         <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--border-default)] px-4 py-3">
           <div className={`min-w-0 flex-1 space-y-1 text-13 ${statusClass}`} role="status">
             <div>
-              {t(`settings.cindyMake.source.status.${displayStatus}`)}
+              {t(
+                updating
+                  ? 'cindyMake.merge.status.fetching'
+                  : `settings.cindyMake.source.status.${displayStatus}`,
+              )}
               {activeStatus?.phase ? ` · ${t(`cindyMake.source.phase.${activeStatus.phase}`)}` : ''}
               {activeStatus?.progress && (
                 <>
@@ -529,7 +643,9 @@ function CindyMakeSourceStatusCard({
                 </>
               )}
             </div>
-            {!preparing && status.error && <p>{t(`cindyMake.source.errors.${status.error}`)}</p>}
+            {!preparing && !updating && status.error && (
+              <p>{t(`cindyMake.source.errors.${status.error}`)}</p>
+            )}
             {(activeStatus?.phase === 'installing' || activeStatus?.phase === 'caching') && (
               <CindyMakeDependencyProgress
                 progress={activeStatus.dependencies}
@@ -557,7 +673,7 @@ function CindyMakeSourceStatusCard({
             )}
           </div>
         </div>
-      )}
+      ) : null}
     </section>
   );
 }

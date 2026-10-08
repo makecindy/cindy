@@ -300,6 +300,8 @@ function installElectronBridge(): void {
         send: vi.fn(async () => ({ accepted: true })),
         resolveInteraction: vi.fn(async () => ({ accepted: true })),
         submitPluginSetupInline: vi.fn(async () => {}),
+        assistPluginOauth: vi.fn(async () => ({ accepted: true })),
+        submitRemotePluginSecret: vi.fn(async () => ({ accepted: true })),
         getPendingInteractions,
         steer: vi.fn(async () => true),
         generateTitle: vi.fn(async () => ({ title: 't' })),
@@ -511,6 +513,29 @@ const flushPromises = async () => {
 };
 
 describe('makerChatStore text delta batching', () => {
+  it.each(['local', 'remote'])('retains IM completion provenance through %s ingress and resets it for App turns', (source) => {
+    if (source === 'remote') remoteProjectsStore.pinSessionOrigin('device-1', SESSION_ID);
+    const emit = (event: unknown) => {
+      const payload = { sessionId: SESSION_ID, event };
+      if (source === 'remote') onRemotePush?.({ deviceId: 'device-1', channel: 'maker:event', payload });
+      else onEvent?.(payload);
+    };
+    const turnOrigin = { kind: 'user', surface: 'im' };
+    emit({ type: 'status', data: { isRunning: true }, turnOrigin });
+    emit({ type: 'status', data: { isRunning: false, status: 'Done' }, turnOrigin });
+    expect(makerChatStore.wasLastStopQuietCompletion(SESSION_ID)).toBe(true);
+    emit({ type: 'done', data: {}, turnOrigin });
+    expect(makerChatStore.wasLastStopQuietCompletion(SESSION_ID)).toBe(true);
+    emit({ type: 'done', data: {} });
+    expect(makerChatStore.wasLastStopQuietCompletion(SESSION_ID)).toBe(true);
+    emit({ type: 'status', data: { isRunning: false } });
+    expect(makerChatStore.wasLastStopQuietCompletion(SESSION_ID)).toBe(true);
+    emit({ type: 'status', data: { isRunning: true } });
+    expect(makerChatStore.wasLastStopQuietCompletion(SESSION_ID)).toBe(false);
+    emit({ type: 'done', data: {} });
+    expect(makerChatStore.wasLastStopQuietCompletion(SESSION_ID)).toBe(false);
+  });
+
   it('repairs remote text before new deltas and ignores a repair after durable takeover', () => {
     remoteProjectsStore.pinSessionOrigin('device-1', SESSION_ID);
     const send = (channel: string, payload: unknown, deviceId = 'device-1') => onRemotePush?.({ deviceId, channel, payload });
@@ -623,6 +648,55 @@ describe('makerChatStore text delta batching', () => {
     makerChatStore.ensureInitialMessages(SESSION_ID);
     await flushPromises();
     assertReply();
+  });
+
+  it('keeps durable Pi notices separate before, during and after a streamed answer and history reload', async () => {
+    const notice = (clientId: string, content: string, createdAt: string) => serverMessage({
+      id: `${clientId}-row`, clientId, sessionId: SESSION_ID, role: 'assistant', content,
+      agentMeta: null, createdAt,
+    });
+    const enabled = notice('plan-enabled', 'Plan mode enabled.', '2026-09-20T00:00:01Z');
+    const user = serverMessage({
+      id: 'user-row', clientId: 'user-input', sessionId: SESSION_ID, role: 'user',
+      content: JSON.stringify({ text: 'Discuss the report' }), createdAt: '2026-09-20T00:00:02Z',
+    });
+    const during = notice('extension-warning', 'Extension warning', '2026-09-20T00:00:04Z');
+    const after = notice('extension-finished', 'Extension finished', '2026-09-20T00:00:05Z');
+    const reply = serverMessage({
+      id: 'reply-row', clientId: 'reply', sessionId: SESSION_ID, role: 'assistant',
+      content: 'Complete answer', createdAt: '2026-09-20T00:00:03Z',
+      agentMeta: { model: 'test-model', stopReason: 'stop', turnCompleted: true },
+    });
+    for (const message of [enabled, user]) onDbMessageCreated?.({ sessionId: SESSION_ID, message });
+    const sendText = (text: string, isFinal: boolean) => onEvent?.({
+      sessionId: SESSION_ID, persistId: 'reply', event: {
+        type: 'text', source: 'pi', data: { text, isFinal, ...(isFinal ? { isFullText: true } : {}) },
+      },
+    });
+    sendText('Complete ', false);
+    vi.advanceTimersByTime(32);
+    onDbMessageCreated?.({ sessionId: SESSION_ID, message: during });
+    sendText('answer', false);
+    vi.advanceTimersByTime(32);
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages.find((row) => row.clientId === 'reply')?.content)
+      .toBe('Complete answer');
+    sendText('Complete answer', true);
+    onDbMessageCreated?.({ sessionId: SESSION_ID, message: reply });
+    onDbMessageCreated?.({ sessionId: SESSION_ID, message: after });
+    onEvent?.({ sessionId: SESSION_ID, event: {
+      type: 'done', source: 'pi', data: { status: 'completed', result: 'Complete answer' },
+    } });
+    const assertRows = () => {
+      const rows = makerChatStore.getSnapshot(SESSION_ID).messages;
+      expect(rows.map((row) => row.clientId)).toEqual(['plan-enabled', 'user-input', 'reply', 'extension-warning', 'extension-finished']);
+      expect(rows.find((row) => row.clientId === 'reply')).toMatchObject({ content: 'Complete answer', isStreaming: false });
+    };
+    assertRows();
+    makerChatStore.purgeSession(SESSION_ID);
+    vi.mocked(messageService.list).mockResolvedValueOnce([enabled, user, reply, during, after]);
+    makerChatStore.ensureInitialMessages(SESSION_ID);
+    await flushPromises();
+    assertRows();
   });
 
   it('coalesces consecutive text deltas into one store notification', () => {
@@ -1563,6 +1637,68 @@ describe('makerChatStore text delta batching', () => {
     emitInteractionRequest(pluginSetupRequest(2));
     expect(makerChatStore.getSnapshot(SESSION_ID).pluginSetupCommandInFlight).toBeNull();
     await flushPromises();
+  });
+
+  it.each([
+    ['UNSUPPORTED_CAPABILITY', 'REMOTE_UNSUPPORTED'],
+    ['PRECONDITION_FAILED', 'REMOTE_FAILED'],
+  ])('keeps %s visible on the current remote card without retaining private error details', async (code, expected) => {
+    deviceLinkInvoke.mockResolvedValue(null);
+    remoteProjectsStore.pinSessionOrigin('device-1', SESSION_ID);
+    emitInteractionRequest({ ...pluginSetupRequest(1), remoteOauth: true });
+    const api = vi.mocked(window.electronAPI.maker.assistPluginOauth);
+    api.mockRejectedValueOnce(new Error(`Error invoking remote method: Error: [${code}] private-provider-payload`));
+    makerChatStore.respondToPluginSetup(SESSION_ID, 'plugin-setup-1', 'run_action', 'oauth:google-account');
+    await flushPromises();
+    let state = makerChatStore.getSnapshot(SESSION_ID);
+    expect(api).toHaveBeenCalledOnce();
+    expect(state.pluginSetupCommandInFlight).toBeNull();
+    expect(state.pluginSetupCommandError).toEqual({ requestId: 'plugin-setup-1', revision: 1, code: expected });
+    expect(state.pendingPluginSetup?.steps[0].phase).toBe('pending');
+    expect(JSON.stringify(state)).not.toContain('private-provider-payload');
+    let finish!: (result: { accepted: boolean }) => void;
+    api.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    makerChatStore.respondToPluginSetup(SESSION_ID, 'plugin-setup-1', 'run_action', 'oauth:google-account');
+    makerChatStore.respondToPluginSetup(SESSION_ID, 'plugin-setup-1', 'run_action', 'oauth:google-account');
+    state = makerChatStore.getSnapshot(SESSION_ID);
+    expect(api).toHaveBeenCalledTimes(2);
+    expect(state.pluginSetupCommandError).toBeNull();
+    expect(state.pluginSetupCommandInFlight?.action).toBe('run_action');
+    finish({ accepted: true });
+    await flushPromises();
+  });
+
+  it.each(['cancel', 'revision', 'owner'])('discards a remote authorization failure after %s changes', async (change) => {
+    deviceLinkInvoke.mockResolvedValue(null);
+    remoteProjectsStore.pinSessionOrigin('device-1', SESSION_ID);
+    emitInteractionRequest({ ...pluginSetupRequest(1), remoteOauth: true });
+    let reject!: (error: Error) => void;
+    vi.mocked(window.electronAPI.maker.assistPluginOauth).mockImplementationOnce(() => new Promise((_, fail) => { reject = fail; }));
+    makerChatStore.respondToPluginSetup(SESSION_ID, 'plugin-setup-1', 'run_action', 'oauth:google-account');
+    if (change === 'cancel') makerChatStore.respondToPluginSetup(SESSION_ID, 'plugin-setup-1', 'cancel');
+    if (change === 'revision') emitInteractionRequest({ ...pluginSetupRequest(2), remoteOauth: true });
+    if (change === 'owner') setDataOwnerGeneration('owner-b');
+    const before = makerChatStore.getSnapshot(SESSION_ID).pluginSetupCommandInFlight;
+    reject(new Error('[UNSUPPORTED_CAPABILITY] private-provider-payload'));
+    await flushPromises();
+    const state = makerChatStore.getSnapshot(SESSION_ID);
+    expect(state.pluginSetupCommandError).toBeNull();
+    expect(state.pluginSetupCommandInFlight).toBe(before);
+  });
+
+  it('reports remote secret submission failure without retaining the input or provider payload', async () => {
+    deviceLinkInvoke.mockResolvedValue(null);
+    remoteProjectsStore.pinSessionOrigin('device-1', SESSION_ID);
+    emitInteractionRequest({ ...inlinePluginSetupRequest(1), remoteSecret: true });
+    const api = vi.mocked(window.electronAPI.maker.submitRemotePluginSecret);
+    api.mockRejectedValueOnce(new Error('[UNSUPPORTED_CAPABILITY] synthetic-private-token'));
+    makerChatStore.respondToPluginSetup(SESSION_ID, 'plugin-setup-1', 'submit_form', 'inline:api-key', { value: 'synthetic-private-token' });
+    await flushPromises();
+    const state = makerChatStore.getSnapshot(SESSION_ID);
+    expect(api).toHaveBeenCalledOnce();
+    expect(state.pluginSetupCommandError?.code).toBe('REMOTE_UNSUPPORTED');
+    expect(state.pluginSetupCommandInFlight).toBeNull();
+    expect(JSON.stringify(state)).not.toContain('synthetic-private-token');
   });
 
   it('submits an inline Secret only through the local narrow API without retaining it', async () => {
@@ -3499,6 +3635,22 @@ describe('makerChatStore text delta batching', () => {
     expect(messages.filter((m) => m.role === 'user' && m.content === 'accepted')).toHaveLength(1);
   });
 
+  it('soft eviction skips a left window that still holds an unconfirmed local bubble', async () => {
+    input.enqueue.mockImplementationOnce(async (sessionId: string) => projection(sessionId));
+    makerChatStore.sendMessage(SESSION_ID, 'unconfirmed', MODEL, EFFORT, PERMISSION_MODE, WORKING_DIR);
+    await flushPromises();
+    makerChatStore.enterView(SESSION_ID)();
+    try {
+      makerChatStore.__activeViewTest.setSoftEvictionBudget({ messages: 0, characters: 0 });
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(makerChatStore.getSnapshot(SESSION_ID).messages).toEqual([
+        expect.objectContaining({ content: 'unconfirmed', isPendingPersist: true }),
+      ]);
+    } finally {
+      makerChatStore.__activeViewTest.setSoftEvictionBudget(null);
+    }
+  });
+
   it('shows a device-link busy send before remote preflight and enqueue settle', async () => {
     remoteProjectsStore.pinSessionOrigin('device-1', SESSION_ID);
     makerChatStore.__applyStatusUpdateForTest(SESSION_ID, {
@@ -5095,6 +5247,9 @@ describe('makerChatStore text delta batching', () => {
     expect(makerChatStore.getSnapshot(SESSION_ID).queueInteractionLocks).toEqual([
       'new-owner-lock',
     ]);
+    // This session remains sticky-remote even after the local remote-project
+    // projection is cleared. Account teardown must not finalize it locally:
+    // the controlled Desktop owns the running task and its steer marker.
     expect(makerChatStore.getSnapshot(SESSION_ID).steeringQueueClientIds).toEqual([
       'already-steering',
     ]);
@@ -5573,6 +5728,54 @@ describe('makerChatStore text delta batching', () => {
       }
     },
   );
+
+  it('keeps the archived tombstone through an optimistic unarchive until the write confirms', () => {
+    remoteProjectsStore.pinSessionOrigin('device-1', SESSION_ID);
+    remoteProjectsStore.setDeviceSessions(
+      'device-1',
+      'Test Mac',
+      [{ id: SESSION_ID, status: 'archived', title: 'Archived task' } as Session],
+      'archived',
+    );
+    onRemotePush?.({
+      deviceId: 'device-1',
+      channel: 'local-db:sessions:patched',
+      payload: { sessionId: SESSION_ID, patch: { status: 'archived' } },
+    });
+    const lateMessage = (id: string) => ({
+      deviceId: 'device-1',
+      channel: 'local-db:messages:created',
+      payload: {
+        sessionId: SESSION_ID,
+        message: serverMessage({
+          id,
+          sessionId: SESSION_ID,
+          clientId: `${id}-client`,
+          role: 'user',
+          content: id,
+          createdAt: '2026-08-02T00:00:00.000Z',
+        }),
+      },
+    });
+
+    // 恢复写库仍在途:投影已是 active,但墓碑只认分片里的权威行,迟到帧照旧丢弃。
+    const token = remoteProjectsStore.beginPendingStatus('device-1', SESSION_ID, 'active');
+    expect(
+      remoteProjectsStore.getMergedRemoteSessions().find((s) => s.id === SESSION_ID)?.status,
+    ).toBe('active');
+    onRemotePush?.(lateMessage('during-write'));
+    expect(makerChatStore.__hasSessionForTest(SESSION_ID)).toBe(false);
+
+    // 写库失败回滚 —— 墓碑仍在。
+    remoteProjectsStore.rollbackPendingStatus(token);
+    onRemotePush?.(lateMessage('after-rollback'));
+    expect(makerChatStore.__hasSessionForTest(SESSION_ID)).toBe(false);
+
+    // 写库成功:显式释放墓碑,后续帧不再被丢弃,不必等 reseed。
+    makerChatStore.releaseRemoteArchivedTombstone(SESSION_ID, 'device-1');
+    onRemotePush?.(lateMessage('after-restore'));
+    expect(makerChatStore.__hasSessionForTest(SESSION_ID)).toBe(true);
+  });
 
   it('cancels a remote optimistic send that is still in preflight when the session is cleared', async () => {
     remoteProjectsStore.pinSessionOrigin('device-1', SESSION_ID);

@@ -139,13 +139,10 @@ describe('Cindy Make mobile host adapter', () => {
     const card = await get();
     expect(card.actions?.[0].id).toMatch(/^resume:/);
     await invoke(card.actions![0].id);
-    expect(h.send).toHaveBeenCalledWith(
-      'task',
-      'ja:cindyMake.test.resume.request',
-      expect.objectContaining({ model: 'chosen', agentKind: 'codex', workingDir: '/managed/task' }),
-      expect.any(Function),
-      expect.any(String),
-    );
+    expect(h.test).toHaveBeenCalledWith('task', 'reply', 'resume-start');
+    await invoke(card.actions![1].id);
+    expect(h.test).toHaveBeenCalledWith('task', 'reply', 'resume-build');
+    expect(h.send).not.toHaveBeenCalled();
     h.rows[0].agentMeta = JSON.stringify({ turnCompleted: false });
     expect((await get()).actions).toEqual([]);
   });
@@ -192,14 +189,26 @@ describe('Cindy Make mobile host adapter', () => {
       task: { sessionId: 'task', phase: 'dependencies' },
     };
     expect((await get()).actions?.[0].id).toBe('prepare:run:retry');
-    h.history.mockResolvedValue({ items: [{
-      runId: 'run', sessionId: 'task', request: 'original request', title: 'Original task',
-      actions: ['retry-prepare'],
-    }] });
+    h.history.mockResolvedValue({
+      items: [
+        {
+          runId: 'run',
+          sessionId: 'task',
+          request: 'original request',
+          title: 'Original task',
+          actions: ['retry-prepare'],
+        },
+      ],
+    });
     await invoke('prepare:run:retry');
-    expect(h.start).toHaveBeenCalledWith({
-      runId: 'run', request: 'original request', title: 'Original task',
-    }, 0);
+    expect(h.start).toHaveBeenCalledWith(
+      {
+        runId: 'run',
+        request: 'original request',
+        title: 'Original task',
+      },
+      0,
+    );
     h.history.mockImplementationOnce(async () => {
       h.owner += 1;
       return { items: [] };

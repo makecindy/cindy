@@ -1,4 +1,4 @@
-import { IOS_SIMULATOR_ROUTE_STATUS_CHANNEL } from '../../shared/iosSimulatorIpc.js';
+
 
 /**
  * maker:* IPC channel 名常量。统一收口，禁止 hardcode 字符串。
@@ -45,6 +45,8 @@ export const MAKER_INVOKE = {
   INPUT_RESUME: 'maker:input:resume',
   INPUT_RETRY_LAST_ERROR: 'maker:input:retry-last-error',
   INPUT_CLEAR_ERROR: 'maker:input:clear-error',
+  /** 取消账号限额重置后的自动继续(只撤等待,错误与手动重试保留)。 */
+  INPUT_CANCEL_USAGE_LIMIT_WAIT: 'maker:input:cancel-usage-limit-wait',
   /**
    * Renderer 侧 auth-retry 放弃（catch 或 guard fall-through）时调用，告知 main 补落持久化。
    * main 侧在相同 isRemoteAuthRetry 条件下跳过了 onTurnErrorEvent；此 IPC 覆盖"未重试/重试失败"两路。
@@ -116,6 +118,13 @@ export const MAKER_INVOKE = {
    * 读不到 / 解析失败一律返回 null,renderer 据此回退到 workflow 级卡片。
    */
   GET_WORKFLOW_PROGRESS: 'maker:get-workflow-progress',
+  /**
+   * 读取后台命令(local_bash 任务)输出文件的末尾一段 + mtime,供任务卡展开区显示
+   * 「最近输出」,让用户确认任务仍在推进。只读;入参 (sessionId, taskId),输出路径由主进程
+   * 从该会话仍在运行的后台任务登记中取,调用方不能传路径。任务已终态 / SSH 远程工作区
+   * 会话返回 unavailable。
+   */
+  READ_BACKGROUND_TASK_OUTPUT_TAIL: 'maker:background-task:output-tail',
   GET_CAPABILITIES: 'maker:get-capabilities',
   /**
    * device-link 远程草稿镜像:控制端为被控设备新建项目草稿时,经隧道读被控端**当前
@@ -244,6 +253,8 @@ export const MAKER_INVOKE = {
    * **不进 device-link allowlist**(远程改被控端全局设置越权,见 allowlist.ts 准入判据)。
    */
   MODEL_DISABLE_SET: 'maker:model-disable:set',
+  /** 本机供应商是否允许同账号另一台电脑的远程 Agent 调用；仅本机可信 renderer 可写。 */
+  PROVIDER_REMOTE_ACCESS_SET: 'maker:provider:remote-access:set',
   /**
    * Owner-scoped provider display-order override.
    * Input = { dataOwnerId: string | null; ownerGeneration: number; providerIds: string[] }.
@@ -324,6 +335,8 @@ export const MAKER_INVOKE = {
   AGENT_STATUS: 'maker:agent:status',
   // Agent 二进制 --version 输出 (About 面板用) —— spawn binary, 进程内缓存
   AGENT_BINARY_VERSION: 'maker:agent:binary-version',
+  PI_KERNEL_STATE: 'maker:agent:pi-kernel-state',
+  PI_KERNEL_INSTALL: 'maker:agent:pi-kernel-install',
   // Agent 今日累计 (取代老 codex:usage:today) —— 走 host 的 readAgentTodayUsage
   USAGE_TODAY: 'maker:usage:today',
   USAGE_ACCOUNT: 'maker:usage:account',
@@ -342,6 +355,9 @@ export const MAKER_INVOKE = {
   USAGE_REFERENCE_MODEL_PRICING: 'maker:usage:reference-model-pricing',
   // 用量历史聚合 (daily_spend + daily_model_usage, main 侧算好 streak/异常/估算) — 首页仪表盘用
   USAGE_HISTORY: 'maker:usage:history',
+  // 本机原始用量行 (daily_spend + daily_model_usage) — 仅供同账号其它电脑经 device-link
+  // 拉取后合并进它们的用量历史; 本机 renderer 不调用。wire 契约见 usage/usageDeviceRows.ts
+  USAGE_DEVICE_ROWS: 'maker:usage:device-rows',
   // Memory 控制 — 走 Maker.{getAgentMemoryStatus/setAgentMemory/resetAgentMemory},
   // 各 agent 子类落地 (Claude 改 SDK Settings.autoMemoryEnabled, Codex 调 app-server
   // experimentalFeature/enablement/set + memory/reset RPC)。
@@ -419,8 +435,9 @@ export const MAKER_INVOKE = {
   CHAT_EMBEDDING_SET: 'maker:chat-embedding:set',
   CHAT_EMBEDDING_RESET: 'maker:chat-embedding:reset',
   /**
-   * Git safety workflow: automatic XDT snapshot commits and the dependent
-   * Codex file rewind entry. Default false; SET writes a user override.
+   * Git safety workflow: three-state automatic XDT savepoint policy. File
+   * rewind remains available as conversation-only rewind when no savepoint
+   * exists; SET writes a user override.
    */
   GIT_SAFETY_GET: 'maker:git-safety:get',
   GIT_SAFETY_SET: 'maker:git-safety:set',
@@ -474,13 +491,12 @@ export const MAKER_INVOKE = {
    */
   CLAUDE_SESSION_ROUTE_GET: 'maker:claude-session-route:get',
   /**
-   * Claude.ai 订阅 OAuth 登录 —— 浏览器 OAuth(移植自 cc),凭证落系统 ~/.claude 凭证库
-   * (mac Keychain `Claude Code-credentials` / 其它 .credentials.json),与本地 claude 共用、
-   * 自动兼容已登录态。与鉴权模式开关正交(像 Codex 的 OAuth 登录独立于 API 模式)。
-   *  - STATUS: 返回 { authorized }(系统凭证库是否有 Claude.ai OAuth 登录)
-   *  - LOGIN: 拉起浏览器 OAuth,成功后写凭证 + 广播;返回 { authorized }
-   *  - LOGOUT: 清凭证(⚠️ 同时登出本地 claude)+ 广播
-   *  - CANCEL: 取消进行中的浏览器登录流
+   * Claude.ai 订阅 —— 登录由内置 Claude Code CLI 自己完成(`claude auth login`),凭证落在
+   * CLI 的默认凭证库(与终端里的 claude 共用);Cindy 不读取、不保存凭证,只记使用许可。
+   *  - STATUS: 返回 { authorized }(CLI 已登录且 Cindy 获准使用)
+   *  - LOGIN: CLI 已登录则直接授权;否则拉起 CLI 登录,完成后授权 + 广播;返回 { ok, reason?, authorized }
+   *  - LOGOUT: 撤销 Cindy 的使用许可 + 广播(不登出 CLI)
+   *  - CANCEL: 取消进行中的 CLI 登录
    */
   CLAUDE_OAUTH_STATUS: 'maker:claude-oauth:status',
   CLAUDE_OAUTH_LOGIN: 'maker:claude-oauth:login',
@@ -493,7 +509,7 @@ export const MAKER_INVOKE = {
   XAI_OAUTH_CANCEL: 'maker:xai-oauth:cancel',
   /**
    * 模型供应商目录（@cindy/model-providers）—— 只读聚合：内置目录元数据 + 各供应商
-   * 实时连接状态（XD=gateway key / Anthropic=Claude.ai OAuth / OpenAI=Codex OAuth）。
+   * 实时连接状态（XD=gateway key / Anthropic=本机 Claude Code 登录 / OpenAI=Codex OAuth）。
    * 供应商的「连接 / 断开」复用各 agent 已有的鉴权通道（CLAUDE_OAUTH_* / AUTH_* / 登录托管），
    * 不另立重复通道。
    */
@@ -530,6 +546,14 @@ export const MAKER_INVOKE = {
   /** 在 Cindy 数据目录安装官方 Ollama 运行时。renderer 只传 consent=true，不传 URL。 */
   LOCAL_MODEL_INSTALL: 'maker:local-model:install',
   LOCAL_MODEL_INSTALL_ABORT: 'maker:local-model:install-abort',
+  LLAMACPP_ENSURE: 'maker:llamacpp:ensure',
+  LLAMACPP_STATUS: 'maker:llamacpp:status',
+  LLAMACPP_INSTALL: 'maker:llamacpp:install',
+  LLAMACPP_FILES: 'maker:llamacpp:files',
+  LLAMACPP_DOWNLOAD: 'maker:llamacpp:download',
+  LLAMACPP_START: 'maker:llamacpp:start',
+  LLAMACPP_STOP: 'maker:llamacpp:stop',
+  LLAMACPP_CANCEL: 'maker:llamacpp:cancel',
   PROVIDER_IMPORT_PREVIEW: 'maker:provider:import:preview',
   PROVIDER_IMPORT_CONFIRM: 'maker:provider:import:confirm',
   PROVIDER_IMPORT_CANCEL: 'maker:provider:import:cancel',
@@ -673,21 +697,6 @@ export const MAKER_INVOKE = {
   ANDROID_SET_DEFAULT_DEVICE: 'maker:android:set-default-device',
   ANDROID_SET_ADB_PATH: 'maker:android:set-adb-path',
   ANDROID_PREPARE_ADB: 'maker:android:prepare-adb',
-  // iOS Simulator presentation preference. Owner-scoped and independent from task grants.
-  IOS_SIMULATOR_GET_PREFERENCES: 'maker:ios-simulator:get-preferences',
-  IOS_SIMULATOR_SET_AUTO_OPEN_EMBEDDED_PANEL: 'maker:ios-simulator:set-auto-open-embedded-panel',
-  // iOS Simulator pane and Agent discovery. Session id is required and checked in main.
-  IOS_SIMULATOR_REQUEST_ACCESS: 'maker:ios-simulator:request-access',
-  IOS_SIMULATOR_STATUS: 'maker:ios-simulator:status',
-  IOS_SIMULATOR_CALL: 'maker:ios-simulator:call',
-  IOS_SIMULATOR_SET_AGENT_CONTROL: 'maker:ios-simulator:set-agent-control',
-  IOS_SIMULATOR_SET_MUTATION_CONTROL: 'maker:ios-simulator:set-mutation-control',
-  IOS_SIMULATOR_SET_VIEWER_VISIBILITY: 'maker:ios-simulator:set-viewer-visibility',
-  IOS_SIMULATOR_RETRY_NATIVE_ROUTE: 'maker:ios-simulator:retry-native-route',
-  IOS_SIMULATOR_LATEST_FRAME: 'maker:ios-simulator:latest-frame',
-  IOS_SIMULATOR_COPY_SCREENSHOT: 'maker:ios-simulator:copy-screenshot',
-  IOS_SIMULATOR_SET_STREAM_PROFILE: 'maker:ios-simulator:set-stream-profile',
-  IOS_SIMULATOR_LIVE_TOUCH: 'maker:ios-simulator:live-touch',
   // Local desktop computer-use driver detection for Settings →「电脑使用」
   COMPUTER_STATUS: 'maker:computer:status',
   // Read-only Composer `@` candidates: current-task browser tabs + OS windows.
@@ -770,6 +779,31 @@ export const MAKER_INVOKE = {
   BOT_DELEGATION_CANCEL: 'maker:bot-delegation:cancel',
   /** Read one hidden Bot-to-Bot conversation after a timeline trace is opened. */
   BOT_DIRECT_MESSAGE_THREAD_GET: 'maker:bot-direct-message-thread:get',
+  /** 伙伴群聊：列表、详情、创建、修改、成员、删除、发言、继续讨论与停止。 */
+  CHAT_SERVER_MANAGE: 'maker:chat-server:manage',
+  CHAT_SERVER_OWNEDBOTS: 'maker:chat-server:ownedBots',
+  CHAT_SERVER_REFRESHPROFILE: 'maker:chat-server:refreshProfile',
+  CHAT_SERVER_STATUS: 'maker:chat-server:status',
+  CHAT_SERVER_THREAD: 'maker:chat-server:thread',
+  CHAT_SERVER_REPLY: 'maker:chat-server:reply',
+  CHAT_SERVER_REACT: 'maker:chat-server:react',
+  CHAT_SERVER_CREATEINVITE: 'maker:chat-server:createInvite',
+  CHAT_SERVER_PREVIEWINVITE: 'maker:chat-server:previewInvite',
+  CHAT_SERVER_ACCEPTINVITE: 'maker:chat-server:acceptInvite',
+  BOT_GROUP_LIST: 'maker:bot-group:list',
+  BOT_GROUP_GET: 'maker:bot-group:get',
+  BOT_GROUP_CREATE: 'maker:bot-group:create',
+  BOT_GROUP_UPDATE: 'maker:bot-group:update',
+  BOT_GROUP_SET_MEMBERS: 'maker:bot-group:set-members',
+  BOT_GROUP_DELETE: 'maker:bot-group:delete',
+  BOT_GROUP_SEND: 'maker:bot-group:send',
+  BOT_GROUP_CONTINUE: 'maker:bot-group:continue',
+  BOT_GROUP_STOP: 'maker:bot-group:stop',
+  BOT_GROUP_PLAN_START: 'maker:bot-group:plan-start',
+  BOT_GROUP_PLAN_DISMISS: 'maker:bot-group:plan-dismiss',
+  BOT_GROUP_PLAN_CONTINUE: 'maker:bot-group:plan-continue',
+  BOT_GROUP_PLAN_RETRY: 'maker:bot-group:plan-retry',
+  BOT_GROUP_PLAN_EDIT: 'maker:bot-group:plan-edit',
   BOT_LIFECYCLE_ACTION: 'maker:bot-lifecycle:action',
 } as const;
 
@@ -891,6 +925,8 @@ export const MAKER_PUSH = {
    * 会话内轻提示。
    */
   SESSION_CREDENTIAL_SWITCH_APPLIED: 'maker:session-credential-switch-applied',
+  /** A deferred Pi model switch failed; the previous route remains authoritative. */
+  SESSION_CREDENTIAL_SWITCH_FAILED: 'maker:session-credential-switch-failed',
   /** cc 默认路由会话的生效计费路由变化 (payload: { sessionId, route })。 */
   CLAUDE_SESSION_ROUTE_CHANGED: 'maker:claude-session-route-changed',
   /**
@@ -920,8 +956,12 @@ export const MAKER_PUSH = {
   BOT_DELEGATION_CHANGED: 'maker:bot-delegation:changed',
   /** Hidden Bot pair conversation accepted another message or reached its limit. */
   BOT_DIRECT_MESSAGE_CHANGED: 'maker:bot-direct-message:changed',
+  /** A Bot group, its members, messages or running round changed. */
+  BOT_GROUP_CHANGED: 'maker:bot-group:changed',
   /** Bot 档案经主进程创建或更新后变化；renderer 收到后重拉伙伴列表。 */
   BOT_PROFILE_CHANGED: 'maker:bot-profile:changed',
+  /** 伙伴工作台已接手的项目变化(payload: { botId });renderer 收到后重读项目列表。 */
+  BOT_WORKBENCH_CHANGED: 'maker:bot-workbench:changed',
   BOT_LIFECYCLE_CHANGED: 'maker:bot-lifecycle:changed',
   /**
    * 被控端「当前 New Maker 草稿」全量变更广播。SYNC_NEW_MAKER_DRAFT 落 main 缓存后随即发,
@@ -980,10 +1020,6 @@ export const MAKER_PUSH = {
   RSB_WINDOW_COMMAND: 'maker:rsb-window:command',
   /** 子窗口合并回主窗口前交接不可持久化 session 的 tab 快照，只发主窗口。 */
   RSB_WINDOW_TAB_HANDOFF: 'maker:rsb-window:tab-handoff',
-  /** Main-owned H.264 access unit pushed without Renderer polling. */
-  IOS_SIMULATOR_H264_FRAME: 'maker:ios-simulator:h264-frame',
-  /** Main-owned public route selection/status for the iOS Simulator viewer. */
-  IOS_SIMULATOR_ROUTE_STATUS: IOS_SIMULATOR_ROUTE_STATUS_CHANNEL,
   /**
    * 插件面板独立窗口状态广播(全量 GhostPanelWindowsState)——发所有窗口
    * (主窗布局过滤 + 各子窗口自身都消费)。

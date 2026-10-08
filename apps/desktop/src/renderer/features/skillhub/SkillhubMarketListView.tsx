@@ -1,3 +1,4 @@
+import { buildMarketSkillRoute } from './lib/detailRoutes';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
@@ -21,17 +22,15 @@ import {
 } from './hooks/useMarketList';
 import { refresh as refreshSkillhub } from './hooks/useSkillhub';
 import { MarketManagementDialogs, useMarketManagement } from './hooks/useMarketManagement';
-import { getMarketSelected, setMarketSelected } from './hooks/useMarketSelection';
+import { MarketListError } from './components/MarketListError';
 import { MarketCard } from './components/MarketCard';
 import { InstallTargetPicker } from './components/InstallTargetPicker';
-import { SkillhubMarketPreviewPanel } from './SkillhubMarketPreviewPanel';
 import { marketCardPrimaryAction } from './lib/marketDetailViewModel';
 import { groupMineByOwner } from './lib/mineGrouping';
-import { nextMarketPreviewName } from './lib/marketPreviewSelection';
-import { syncMarketPreviewSelection } from './lib/marketPreviewSync';
 import { useAuth } from '@/contexts/AuthContext';
 import { CATEGORY_ALL } from '../../../shared/skillhubCategory';
 import { useSkillhubIdentityPolicy } from './hooks/useSkillhubIdentityPolicy';
+import { useMarketSkillUpdate } from './hooks/useMarketSkillUpdate';
 
 // Must match the global native scrollbar width in styles/globals.css.
 const MARKET_SCROLLBAR_GUTTER_PX = 12;
@@ -51,10 +50,12 @@ function SkillhubMarketListViewInner() {
   const { t } = useTranslation();
   const { user, isInitializing } = useAuth();
   const identityPolicy = useSkillhubIdentityPolicy(user);
+  const { update, updatingNames, isUpdating } = useMarketSkillUpdate();
   const location = useLocation();
   const navigate = useNavigate();
+  const initialSearch = new URLSearchParams(location.search);
   const marketState = location.state as { freshEntry?: boolean; initialVisibility?: Visibility } | null;
-  const initialVisibility = marketState?.initialVisibility === 'all' ||
+  const initialVisibility = initialSearch.get('visibility') === 'mine' ? 'mine' : marketState?.initialVisibility === 'all' ||
     marketState?.initialVisibility === 'mine'
     ? marketState.initialVisibility
     : undefined;
@@ -74,7 +75,12 @@ function SkillhubMarketListViewInner() {
     setVisibility,
     loadMore,
     reload,
-  } = useMarketList(initialVisibility, { initialScope: 'market' });
+  } = useMarketList(initialVisibility, {
+    initialScope: 'market',
+    initialSort: SORT_OPTIONS.find((option) => option.value === initialSearch.get('sort'))?.value,
+    initialSearchQuery: initialSearch.get('q') ?? '',
+    initialCategoryFilter: initialSearch.get('category') ?? CATEGORY_ALL,
+  });
   const { categories } = useCategoryList();
 
   // 「我的发布」按归属(个人 / 各团队)分组渲染;空组不显示(groupMineByOwner 只对有 item 的 owner 建组)。
@@ -87,29 +93,9 @@ function SkillhubMarketListViewInner() {
   const marketScrollRef = useRef<HTMLDivElement | null>(null);
   const [marketHasVerticalOverflow, setMarketHasVerticalOverflow] = useState(false);
 
-  // freshEntry = true(顶部 Market 按钮显式点击)→ 清空 selection,回到状态 A
-  // 不带这个标记(detail goBack → navigate(fromRoute='/skillhub/market'))→
-  // 保留上次的 module-level selection,sidebar panel + 卡片选中态都自然恢复。
-  const isFreshEntry = marketState?.freshEntry === true;
-
-  // 当前选中的 Market skill —— 初始值取自模块级 store(detail goBack 回来的场景),
-  // freshEntry 时强制 null。
-  const [selectedName, setSelectedName] = useState<string | null>(() =>
-    isFreshEntry ? null : getMarketSelected()?.name ?? null,
-  );
-  const [previewSkill, setPreviewSkill] = useState<MarketSkill | null>(null);
-
   useEffect(() => {
     if (!isInitializing && !user && visibility === 'mine') setVisibility('all');
   }, [isInitializing, setVisibility, user, visibility]);
-
-  useEffect(() => {
-    if (isFreshEntry) {
-      setPreviewSkill(null);
-      setMarketSelected(null);
-    }
-    // 仅 mount 时跑一次:freshEntry 是入口时刻的一次性信号。
-  }, []);
 
   // Infinite scroll sentinel
   const sentinelRef = useRef<HTMLDivElement | null>(null);
@@ -153,15 +139,6 @@ function SkillhubMarketListViewInner() {
     };
   }, [error, hasMore, items.length, loading, loadingMore, visibility]);
 
-  useEffect(() => {
-    if (!previewSkill && !selectedName) return;
-    const next = syncMarketPreviewSelection({ previewSkill, selectedName }, items);
-    if (next.previewSkill === previewSkill && next.selectedName === selectedName) return;
-    setPreviewSkill(next.previewSkill);
-    setSelectedName(next.selectedName);
-    setMarketSelected(next.previewSkill);
-  }, [items, previewSkill, selectedName]);
-
   // Picker 状态 — Clone 按钮触发
   const [pickerOpen, setPickerOpen] = useState(false);
   const [pickerSkill, setPickerSkill] = useState<MarketSkill | null>(null);
@@ -172,7 +149,8 @@ function SkillhubMarketListViewInner() {
       if (event.phase === 'done') {
         void refreshSkillhub();
       } else if (event.phase === 'failed') {
-        if (event.errorCode !== 'CANCELLED') {
+        // Direct updates report their own result; avoid a second toast from the broadcast.
+        if (event.errorCode !== 'CANCELLED' && !isUpdating(event.name)) {
           toast.error(t('skillhub.market.installFailedToast', {
             name: event.name,
             message: event.message ?? event.errorCode ?? t('skillhub.market.installError'),
@@ -181,24 +159,14 @@ function SkillhubMarketListViewInner() {
       }
     });
     return unsubscribe;
-  }, [t]);
+  }, [isUpdating, t]);
 
   const sortLabel = useMemo(() => {
     return t(SORT_OPTIONS.find((option) => option.value === sortBy)?.labelKey ?? 'skillhub.market.sortLatest');
   }, [sortBy, t]);
 
-  const handleCardClick = (skill: MarketSkill) => {
-    const newName = nextMarketPreviewName(previewSkill?.name ?? null, skill.name);
-    setSelectedName(newName);
-    setMarketSelected(newName ? skill : null);
-    setPreviewSkill(newName ? skill : null);
-  };
-
-  const handlePreviewClose = () => {
-    setSelectedName(null);
-    setMarketSelected(null);
-    setPreviewSkill(null);
-  };
+  const returnTo = `/skillhub/market?${new URLSearchParams({ q: searchQuery, sort: sortBy, category: categoryFilter, visibility })}`;
+  const handleCardClick = (skill: MarketSkill) => navigate(buildMarketSkillRoute(skill, returnTo));
 
   const handleClone = (skill: MarketSkill) => {
     setPickerSkill(skill);
@@ -208,12 +176,6 @@ function SkillhubMarketListViewInner() {
     active: isMineView,
     reload,
     onClone: handleClone,
-    onDeleted: (skill) => {
-      if (previewSkill?.name !== skill.name && selectedName !== skill.name) return;
-      setPreviewSkill(null);
-      setSelectedName(null);
-      setMarketSelected(null);
-    },
   });
 
   const renderCard = (skill: MarketSkill) => (
@@ -232,24 +194,25 @@ function SkillhubMarketListViewInner() {
         : 'none'}
       allowPrivateVisibilityLabel={visibility === 'mine'}
       onClone={handleClone}
+      onUpdate={user ? update : undefined}
+      updating={updatingNames.has(skill.name)}
       onManageAction={management.handleManageAction}
       onClick={handleCardClick}
-      selected={skill.name === selectedName}
     />
   );
 
   return (
-    <div className="relative flex h-full w-full flex-col overflow-hidden bg-[hsl(var(--content-area))]">
+    <div className="app-wallpaper-surface relative flex h-full w-full flex-col overflow-hidden bg-[hsl(var(--content-area))]">
       {/* market-toolbar — h56, padding 0 24
           mac 上本页不渲染通用 ContentHeader,工具栏行承担窗口拖拽,行内交互
           元素各自 no-drag(windowDrag.tsx 约定) */}
       <div
-        className="flex items-center justify-between bg-[hsl(var(--content-area))]"
+        className="app-wallpaper-surface flex items-center justify-between bg-[hsl(var(--content-area))]"
         style={{
           height: '56px',
           padding: '0 24px',
           gap: '12px',
-          ...(previewSkill ? WINDOW_NO_DRAG_STYLE : WINDOW_DRAG_STYLE),
+          ...WINDOW_DRAG_STYLE,
         }}
       >
         {/* back-to-home — 技能首页(/skillhub/local)。原"返回本地"在已移除的侧栏里,
@@ -300,13 +263,12 @@ function SkillhubMarketListViewInner() {
             <DropdownMenuContent
               align="start"
               sideOffset={4}
-              className="w-32 overflow-hidden rounded-xl border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] p-1 shadow-[var(--shadow-menu)]"
+              className="w-32"
             >
               {SORT_OPTIONS.map((option) => (
                 <DropdownMenuItem
                   key={option.value}
                   onSelect={() => setSortBy(option.value)}
-                  className="h-8 rounded-md px-3 text-sm text-[var(--msg-assistant-text)] focus:bg-[var(--cmd-palette-item-hover)]"
                 >
                   {t(option.labelKey)}
                 </DropdownMenuItem>
@@ -331,12 +293,12 @@ function SkillhubMarketListViewInner() {
               <DropdownMenuContent
                 align="start"
                 sideOffset={4}
-                className="w-44 overflow-hidden rounded-xl border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] p-1 shadow-[var(--shadow-menu)]"
+                className="w-44"
                 style={{ maxWidth: '200px' }}
               >
                 <DropdownMenuItem
                   onSelect={() => setCategoryFilter(CATEGORY_ALL)}
-                  className="flex h-8 items-center justify-between gap-2 rounded-md px-3 text-sm text-[var(--msg-assistant-text)] focus:bg-[var(--cmd-palette-item-hover)]"
+                  className="justify-between gap-2"
                 >
                   <span className="truncate">{t('skillhub.market.categoryAll')}</span>
                 </DropdownMenuItem>
@@ -344,7 +306,7 @@ function SkillhubMarketListViewInner() {
                   <DropdownMenuItem
                     key={category.slug}
                     onSelect={() => setCategoryFilter(category.slug as CategoryFilter)}
-                    className="flex h-8 items-center justify-between gap-2 rounded-md px-3 text-sm text-[var(--msg-assistant-text)] focus:bg-[var(--cmd-palette-item-hover)]"
+                    className="justify-between gap-2"
                   >
                     <span className="truncate">{category.name}</span>
                   </DropdownMenuItem>
@@ -383,15 +345,12 @@ function SkillhubMarketListViewInner() {
             }
             : { width: '100%' }}
         >
-          {error ? (
-            <div className="flex h-full items-center justify-center">
-              <p className="text-sm text-[var(--error-fg)]">{t('skillhub.market.loadFailed', { error })}</p>
-            </div>
-          ) : loading && items.length === 0 ? (
+          <MarketListError error={error} loading={loading} onRetry={reload} />
+          {loading && items.length === 0 ? (
             <div className="flex h-full items-center justify-center">
               <p className="text-sm text-[var(--cmd-palette-item-meta)]">{t('skillhub.market.loading')}</p>
             </div>
-          ) : items.length === 0 ? (
+          ) : error && items.length === 0 ? null : items.length === 0 ? (
             <div className="flex h-full items-center justify-center">
               <p className="text-sm text-[var(--cmd-palette-item-meta)]">{t('skillhub.market.noResults')}</p>
             </div>
@@ -464,23 +423,6 @@ function SkillhubMarketListViewInner() {
           void refreshSkillhub();
           setPickerOpen(false);
         }}
-      />
-      <SkillhubMarketPreviewPanel
-        open={previewSkill !== null}
-        skill={previewSkill}
-        onClose={handlePreviewClose}
-        primaryAction={previewSkill && user
-          ? (() => {
-              const action = marketCardPrimaryAction({
-                isMine: previewSkill.isMine,
-                listVisibility: visibility,
-                cardState: previewSkill.cardState,
-              });
-              return action === 'manage' && !identityPolicy.canWrite ? 'clone' : action;
-            })()
-          : 'none'}
-        onClone={handleClone}
-        onManageAction={management.handleManageAction}
       />
       <MarketManagementDialogs controller={management} />
     </div>

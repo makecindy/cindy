@@ -21,6 +21,9 @@ import { isModelVisible, visibleModelUnion } from '@cindy/model-providers';
 import { BRAND_NAME } from '@cindy/maker-shared/branding';
 
 import { createLogger } from '../logger.js';
+import { t } from '../i18n.js';
+import { buildOfficialBotCommandMenus } from '../im/shared/botCommands.js';
+import { stopSessionTurnExplicitly } from '../maker-ipc/register.js';
 import { getMaker, restartCodexAfterAuthModeChange } from '../maker-host/index.js';
 import { shutdownCodexEnvironment } from '../mcp-integrations/codexEnvironment.js';
 import { getDesktopProviderService } from '../maker-host/createDesktopProviderService.js';
@@ -536,6 +539,9 @@ function ensureInstances(): { store: SlackHookStore; manager: HookControlManager
         }
         await session.abort();
       },
+      // 渠道 /stop(task.cancel): 与桌面 Stop 同一套清理(撤续跑 / 取消恢复 / 暂停 Goal /
+      // 停输入队列并中止当前一轮), 见 docs/dev-rules/im-turn-flow.md 不变量 9。
+      stopSessionExplicitly: (sessionId) => stopSessionTurnExplicitly(sessionId),
       // session.archive 的归档出口: 与 device-link 远程归档同一条
       // patchSessionMetaInDb 路径(落库 + sessions:patched 广播, sidebar 即时移出)
       archiveSessionRow: async (sessionId) => {
@@ -550,6 +556,9 @@ function ensureInstances(): { store: SlackHookStore; manager: HookControlManager
       subscribeUiTurnDispatching: onUiTurnDispatching,
       subscribeUiTurnUndispatched: onUiTurnUndispatched,
       accountInitiallyActive: false,
+      // 官方 Telegram 命令菜单以 desktop 注册表为准(telegram-commands-v1), 按 Telegram
+      // 用户语言各渲染一份。
+      telegramCommandMenus: () => buildOfficialBotCommandMenus((key, locale) => t(key, locale)),
       log,
     });
     manager = createHookControlManager({

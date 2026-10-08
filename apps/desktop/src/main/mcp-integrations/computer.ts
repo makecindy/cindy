@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { desktopInputRevision, hasRemoteDesktopInput, isHumanDesktopInputActive, withAgentDesktopInput } from '../remote-desktop/inputOwnership';
+import { agentDesktopInputRevision, desktopInputRevision, hasRemoteDesktopInput, isAgentDesktopInputActive, isHumanDesktopInputActive, withAgentDesktopInput } from '../remote-desktop/inputOwnership';
 import os from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { spawn, type ChildProcess } from 'node:child_process';
@@ -350,9 +350,8 @@ export interface ComputerDriverInstallResult {
 }
 
 /**
- * cua-driver 更新检查结果。查询型数据:任何一步失败(本地未装 / 网络不通 /
- * API 限流 / tag 解析不出)都静默落到 updateAvailable=false,renderer 直接
- * 不渲染更新入口,绝不打扰用户。
+ * cua-driver 更新检查结果。检查状态和已知可安装版本分别保留，网络失败
+ * 不能伪装成“已是最新”，也不能抹掉此前已发现的更新。
  * updating 表示 main 侧此刻有一个更新安装在跑(设置面板关闭不影响它),
  * renderer 重新打开面板时据此恢复「更新中」态并 join 完成时刻。
  */
@@ -361,6 +360,9 @@ export interface ComputerDriverUpdateCheck {
   latestVersion: string | null;
   updateAvailable: boolean;
   updating: boolean;
+  /** Optional on the wire for older desktop peers. */
+  checkStatus?: 'success' | 'error';
+  checkedAt?: number;
 }
 
 export interface ComputerDriverPermissionGrantResult {
@@ -2229,8 +2231,9 @@ async function callCuaMcpTool(
     args.delivery_mode === undefined &&
     Object.hasOwn(entry.toolSchemas.get(name)?.properties ?? {}, 'delivery_mode')
   ) {
-    // Older drivers may not accept delivery_mode at all; adapt only advertised capabilities.
-    args = { ...args, delivery_mode: 'foreground' };
+    // Never implicitly take foreground input from the person using this Mac.
+    // Older drivers may not accept delivery_mode; adapt only advertised capabilities.
+    args = { ...args, delivery_mode: 'background' };
   }
   const driverArgs = adaptComputerDriverArgs(name, args, entry.toolSchemas);
   const result = await withTimeout(
@@ -2280,23 +2283,26 @@ async function callCuaMcpToolWithTypeTextChunks(
   signal?: AbortSignal,
   assertActive: () => void = () => {},
   settleFailedInput: () => Promise<void> = async () => {},
+  onDispatch: () => void = () => {},
 ): Promise<unknown> {
   signal?.throwIfAborted();
   assertActive();
-  const dispatch = (input: Record<string, unknown>) => getComputerTool(name)?.readOnly === true
-    ? callCuaMcpTool(entry, name, input, timeoutMs, signal)
-    : withAgentDesktopInput(async () => {
-      try {
-        return await callCuaMcpTool(entry, name, input, timeoutMs, signal);
-      } catch (error) {
-        // Cancellation/timeout is not proof that native input stopped. Keep
-        // remote input waiting through the existing driver-session teardown.
-        if (signal?.aborted || shouldCleanupCuaMcpSessionAfterError(error)) {
-          await settleFailedInput();
-        }
-        throw error;
+  const dispatch = async (input: Record<string, unknown>) => {
+    signal?.throwIfAborted();
+    assertActive();
+    onDispatch();
+    try {
+      return await callCuaMcpTool(entry, name, input, timeoutMs, signal);
+    } catch (error) {
+      // Cancellation/timeout is not proof that native input stopped. Keep
+      // all competing input waiting through the existing driver-session teardown.
+      if (getComputerTool(name)?.readOnly !== true
+        && (signal?.aborted || shouldCleanupCuaMcpSessionAfterError(error))) {
+        await settleFailedInput();
       }
-    });
+      throw error;
+    }
+  };
   if (name !== 'type_text' || typeof args.text !== 'string') {
     return dispatch(args);
   }
@@ -2315,9 +2321,24 @@ async function callCuaMcpToolWithTypeTextChunks(
   let processedChunks = 0;
   for (let index = 0; index < chunks.length; index += 1) {
     const chunk = chunks[index];
-    signal?.throwIfAborted();
-    assertActive();
-    lastResult = await dispatch({ ...args, text: chunk });
+    let attempted = false;
+    try {
+      signal?.throwIfAborted();
+      assertActive();
+      attempted = true;
+      lastResult = await dispatch({ ...args, text: chunk });
+    } catch (error) {
+      // A completed prefix must survive cancellation/yield/transport errors.
+      // Never encourage replay of the whole string or guess the in-flight chunk.
+      throw Object.assign(error instanceof Error ? error : new Error(String(error)), {
+        outcomeUnknown: attempted || inserted > 0,
+        inputProgress: {
+          completed_chars: inserted,
+          attempted_chars: attempted ? Array.from(chunk).length : 0,
+          remaining_chars: Array.from(chunks.slice(index + (attempted ? 1 : 0)).join('')).length,
+        },
+      });
+    }
     const resultObject = objectValue(lastResult);
     processedChunks += 1;
     const outcome = computerResultOutcome(name, lastResult);
@@ -2726,6 +2747,13 @@ export async function installComputerDriver(
   const res = await runInstallCommand(onSpawn, targetVersion);
   const status = await getComputerDriverStatus();
   if (res.exitCode !== 0 || !status.installed) {
+    logger.warn('cua-driver install did not complete cleanly', {
+      exitCode: res.exitCode,
+      signal: res.signal,
+      installed: status.installed,
+      installedVersion: status.version,
+      statusError: status.error,
+    });
     throw new ComputerDriverError(
       res.stderr.trim() || res.stdout.trim() || `cua-driver installer exited ${res.exitCode}`,
     );
@@ -2946,7 +2974,7 @@ let driverUpdateCheckInFlight: Promise<Omit<ComputerDriverUpdateCheck, 'updating
 let driverUpdateInstallInFlight: Promise<ComputerDriverInstallResult> | null = null;
 // 最新 release 的 asset 列表(name + size),供更新进度采样换算总字节数。
 let cachedDriverReleaseAssets: CuaDriverReleaseAsset[] = [];
-// 上次检查(成功或失败)完成时刻,SWR 后台刷新节流用。
+// 上次检查(成功或失败)完成时刻,自动检查节流用。
 let driverUpdateCheckLastFetchAt = 0;
 
 /** 测试隔离用:清空更新检查缓存与 in-flight 状态。 */
@@ -3054,7 +3082,7 @@ async function fetchDriverUpdateCheck(
     cachedDriverReleaseAssets = [];
     return { currentVersion, latestVersion: currentVersion, updateAvailable: false };
   } catch (err) {
-    logger.debug('cua-driver update check failed (silently ignored)', {
+    logger.debug('cua-driver update check failed', {
       message: err instanceof Error ? err.message : String(err),
     });
     return { currentVersion, latestVersion: null, updateAvailable: false };
@@ -3071,7 +3099,26 @@ function commitDriverUpdateCheck(
 ): void {
   if (result.latestVersion !== null || result.currentVersion === null || !cachedDriverUpdateCheck) {
     cachedDriverUpdateCheck = result;
+  } else {
+    cachedDriverUpdateCheck = {
+      ...cachedDriverUpdateCheck,
+      currentVersion: result.currentVersion,
+      updateAvailable: cachedDriverUpdateCheck.updateAvailable && cachedDriverUpdateCheck.latestVersion !== null
+        && compareSemver(result.currentVersion, cachedDriverUpdateCheck.latestVersion) < 0,
+      checkStatus: result.checkStatus,
+      checkedAt: result.checkedAt,
+    };
   }
+}
+
+function completedDriverUpdateCheck(
+  result: Omit<ComputerDriverUpdateCheck, 'updating'>,
+): Omit<ComputerDriverUpdateCheck, 'updating'> {
+  return {
+    ...result,
+    checkStatus: result.currentVersion && result.latestVersion ? 'success' : 'error',
+    checkedAt: Date.now(),
+  };
 }
 
 function startDriverUpdateCheck(fetchImpl: typeof fetch): Promise<Omit<ComputerDriverUpdateCheck, 'updating'>> {
@@ -3079,41 +3126,47 @@ function startDriverUpdateCheck(fetchImpl: typeof fetch): Promise<Omit<ComputerD
     const knownVerifiedTarget = cachedDriverUpdateCheck?.updateAvailable
       ? cachedDriverUpdateCheck.latestVersion
       : null;
-    driverUpdateCheckInFlight = fetchDriverUpdateCheck(fetchImpl, new Set(), knownVerifiedTarget)
+    const pending: Promise<Omit<ComputerDriverUpdateCheck, 'updating'>> = fetchDriverUpdateCheck(fetchImpl, new Set(), knownVerifiedTarget)
       .then((result) => {
-        commitDriverUpdateCheck(result);
-        return result;
+        const completed = completedDriverUpdateCheck(result);
+        // An installation can invalidate a check that started against the old binary.
+        if (driverUpdateCheckInFlight === pending) {
+          commitDriverUpdateCheck(completed);
+          return cachedDriverUpdateCheck!;
+        }
+        // Existing callers must also receive the post-install state, not only
+        // callers of a later check. Reuse the current check/cache when available.
+        return driverUpdateCheckInFlight ?? cachedDriverUpdateCheck ?? startDriverUpdateCheck(fetchImpl);
       })
       .finally(() => {
-        driverUpdateCheckInFlight = null;
-        driverUpdateCheckLastFetchAt = Date.now();
+        if (driverUpdateCheckInFlight === pending) {
+          driverUpdateCheckInFlight = null;
+          driverUpdateCheckLastFetchAt = Date.now();
+        }
       });
+    driverUpdateCheckInFlight = pending;
   }
   return driverUpdateCheckInFlight;
 }
 
 /**
- * 检查 cua-driver 是否有新版本。刻意保持"安静"语义:仅在用户打开设置页
- * 时由 renderer 触发,不做启动检查、不做后台轮询;任何失败都返回
- * updateAvailable=false 而不是抛错(查询型,失败时 renderer 静默隐藏入口)。
- *
- * 缓存语义(stale-while-revalidate):有缓存时立即返回缓存——用户第二次
- * 打开面板不必等网络往返;同时后台静默刷新,结果供下次读取。更新安装
- * 进行中不发起刷新(装完缓存会被清)。fetchImpl 可注入用于测试。
+ * 打开设置时自动检查，十分钟内复用结果；手动检查绕过节流。
+ * 到期后等待共享的检查 Promise，让当前页面收到新结果，无需轮询或重开。
+ * 安装期间只返回已有状态，避免对正在替换的二进制发起检查。
  */
 export async function checkComputerDriverUpdate(
   // 默认吃系统代理:api.github.com / raw.githubusercontent.com 都是境外端点。
   fetchImpl: typeof fetch = outboundFetch,
+  options?: { force?: boolean },
 ): Promise<ComputerDriverUpdateCheck> {
   const updating = driverUpdateInstallInFlight !== null;
   if (cachedDriverUpdateCheck) {
-    // 后台刷新节流:面板频繁开合时不重复打 GitHub API(未鉴权限额有限)。
+    // 自动检查节流:面板频繁开合时不重复打 GitHub API(未鉴权限额有限)。
     const refreshDue =
       Date.now() - driverUpdateCheckLastFetchAt >= UPDATE_CHECK_REFRESH_MIN_INTERVAL_MS;
-    if (!updating && refreshDue) {
-      void startDriverUpdateCheck(fetchImpl);
+    if (updating || (!options?.force && !refreshDue && !driverUpdateCheckInFlight)) {
+      return { ...cachedDriverUpdateCheck, updating };
     }
-    return { ...cachedDriverUpdateCheck, updating };
   }
   const result = await startDriverUpdateCheck(fetchImpl);
   return { ...result, updating: driverUpdateInstallInFlight !== null };
@@ -3139,7 +3192,7 @@ async function revalidateComputerDriverUpdateTarget(fetchImpl: typeof fetch): Pr
 
     const refreshed = await fetchDriverUpdateCheck(fetchImpl, new Set([cachedTarget]));
     // 已确认 cachedTarget 不可安装,即使 fallback 刷新失败也不能保留旧入口。
-    cachedDriverUpdateCheck = refreshed;
+    cachedDriverUpdateCheck = completedDriverUpdateCheck(refreshed);
     if (!refreshed.updateAvailable) cachedDriverReleaseAssets = [];
     return refreshed.updateAvailable ? refreshed.latestVersion : null;
   } finally {
@@ -3247,7 +3300,7 @@ function startInstallProgressSampler(
  * 执行 cua-driver 更新(复用官方安装脚本,装最新版覆盖旧版)。
  * in-flight 复用:更新过程托管在 main,设置面板关闭它照常跑完;面板重开
  * 后再调用本函数会 join 同一个安装 Promise,不会重复起安装进程。
- * 成功后清掉更新检查缓存(本地版本已变,旧结果作废)。
+ * 安装尝试结束后清掉更新检查缓存(报错时也可能已经替换了本地版本)。
  * onProgress 只在发起安装的那次调用被采纳(进度经 IPC 广播给所有窗口,
  * join 的调用方天然共享),结束时保证发一条 phase='done'。
  * opts.joinOnly:仅 join 既有安装,绝不起新安装——renderer 的 resume 路径
@@ -3271,18 +3324,24 @@ export async function updateComputerDriver(
       if (!targetVersion) {
         throw new ComputerDriverError('no verified installable cua-driver update is available');
       }
-      const result = await installComputerDriver((pid) => {
-        if (onProgress) stopSampler = startInstallProgressSampler(pid, onProgress);
-      }, targetVersion);
-      const installedVersion = extractDriverSemver(result.status.version);
-      if (!installedVersion || compareSemver(installedVersion, targetVersion) < 0) {
-        throw new ComputerDriverError(
-          `cua-driver update did not reach v${targetVersion} (installed: ${result.status.version ?? 'unknown'})`,
-        );
+      try {
+        const result = await installComputerDriver((pid) => {
+          if (onProgress) stopSampler = startInstallProgressSampler(pid, onProgress);
+        }, targetVersion);
+        const installedVersion = extractDriverSemver(result.status.version);
+        if (!installedVersion || compareSemver(installedVersion, targetVersion) < 0) {
+          throw new ComputerDriverError(
+            `cua-driver update did not reach v${targetVersion} (installed: ${result.status.version ?? 'unknown'})`,
+          );
+        }
+        return result;
+      } finally {
+        // Failed installers can still replace the binary. The next check must
+        // read it again, including when the settings panel was closed meanwhile.
+        cachedDriverUpdateCheck = null;
+        cachedDriverReleaseAssets = [];
+        driverUpdateCheckInFlight = null;
       }
-      cachedDriverUpdateCheck = null;
-      cachedDriverReleaseAssets = [];
-      return result;
     })().finally(() => {
       driverUpdateInstallInFlight = null;
       stopSampler();
@@ -3420,9 +3479,9 @@ export async function grantComputerDriverPermissions(
   };
 }
 
-// Remote input invalidates previously observed targets even after its short
-// ownership window ends. Never resume typing into a stale focus implicitly.
-const inputObservations = new Map<string, { windows: Map<string, number | symbol> }>();
+// Human input and other tasks invalidate observed targets after ownership ends.
+// Own sequential primitives retain their observations; overlapping reads do not.
+const inputObservations = new Map<string, { windows: Map<string, number | symbol>; requiresObservation: boolean }>();
 
 export async function callComputerDriverTool(
   name: ComputerMcpToolName,
@@ -3433,16 +3492,18 @@ export async function callComputerDriverTool(
   const revision = desktopInputRevision();
   let observations = sessionId ? inputObservations.get(sessionId) : undefined;
   if (sessionId && !observations) {
-    observations = { windows: new Map() };
+    observations = { windows: new Map(), requiresObservation: agentDesktopInputRevision() > 0 };
     inputObservations.set(sessionId, observations);
   }
   const window = `${args.pid}:${args.window_id}`;
   if (getComputerTool(name)?.readOnly === true) {
-    const startedIdle = !isHumanDesktopInputActive();
+    const agentRevision = agentDesktopInputRevision();
+    const startedIdle = !isHumanDesktopInputActive() && !isAgentDesktopInputActive();
     const explicitObservation = name === 'get_window_state' && context?.observationPurpose !== 'recovery';
     const observation = Symbol('pending observation');
     const app = `${args.pid}:undefined`;
     if (explicitObservation) {
+      if (observations) observations.requiresObservation = true;
       // Revoke old permission and prevent an older concurrent read from
       // restoring it after this read fails or is cancelled.
       observations?.windows.set(window, observation);
@@ -3451,7 +3512,8 @@ export async function callComputerDriverTool(
     const result = await callComputerDriverToolImpl(name, args, context);
     if (explicitObservation && startedIdle && !context?.signal?.aborted
       && !isUnavailableWindowObservation(result, args) && computerResultOutcome(name, result).ok
-      && revision === desktopInputRevision() && !isHumanDesktopInputActive()) {
+      && revision === desktopInputRevision() && !isHumanDesktopInputActive()
+      && agentRevision === agentDesktopInputRevision() && !isAgentDesktopInputActive()) {
       if (observations?.windows.get(window) === observation) observations.windows.set(window, revision);
       // App-scoped actions may omit window_id; a successful observation of
       // that app also refreshes its focus, without refreshing other windows.
@@ -3460,7 +3522,7 @@ export async function callComputerDriverTool(
     return result;
   }
   // Preparation can be slow and does not inject input. Reserve ownership only
-  // around each driver primitive, and recheck this observation before dispatch.
+  // around the logical input, and recheck this observation after queue admission.
   const assertCurrent = () => {
     if (desktopInputRevision() !== revision) {
       throw new ComputerDriverError('Remote desktop input arrived. Agent yielded before further input; previous input may have completed. Get fresh window state before continuing.', 'DESKTOP_INPUT_YIELDED');
@@ -3468,12 +3530,12 @@ export async function callComputerDriverTool(
     if (isHumanDesktopInputActive()) {
       throw new ComputerDriverError('Remote desktop input is active. Yield briefly, then get fresh window state before retrying; the remote connection can stay open.', 'DESKTOP_INPUT_BUSY');
     }
+    if (args.pid !== undefined && observations && (revision > 0 || observations.requiresObservation)
+      && observations.windows.get(window) !== revision) {
+      throw new ComputerDriverError('Desktop input or a newer observation invalidated this target. Get fresh state for this window before acting again.', 'STALE_SNAPSHOT');
+    }
   };
   assertCurrent();
-  if (args.pid !== undefined && observations && revision > 0
-    && observations.windows.get(window) !== revision) {
-    throw new ComputerDriverError('Remote desktop input changed the desktop. Get fresh state for this window before acting again.', 'STALE_SNAPSHOT');
-  }
   return callComputerDriverToolImpl(name, args, context, assertCurrent);
 }
 
@@ -3514,10 +3576,20 @@ async function callComputerDriverToolImpl(
   const entry = await getCuaMcpSession(sessionId, signal);
   const driverArgs = applyDriverSessionArgs(name, normalizedArgs, entry.driverSessionId, entry.toolSchemas);
   const timeoutMs = getCuaMcpToolTimeoutMs(name);
+  let inputDispatched = false;
   try {
     await initializeDefaultCursorStyle(name, driverArgs, entry, entry.driverSessionId, sessionCloseVersion, signal, assertActive);
-    const result = await callCuaMcpToolWithTypeTextChunks(entry, name, driverArgs, timeoutMs, signal, assertActive,
-      () => cleanupCuaMcpSessionAfterError(sessionId, entry));
+    const invoke = () => callCuaMcpToolWithTypeTextChunks(entry, name, driverArgs, timeoutMs, signal, assertActive,
+      () => cleanupCuaMcpSessionAfterError(sessionId, entry), () => { inputDispatched = true; });
+    const result = getComputerTool(name)?.readOnly === true ? await invoke()
+      : await withAgentDesktopInput(() => {
+        for (const [otherSessionId, observation] of inputObservations) {
+          if (otherSessionId === sessionId) continue;
+          observation.requiresObservation = true;
+          observation.windows.clear();
+        }
+        return invoke();
+      }, { signal, assertCurrent: assertActive });
     return name === 'list_windows' ? enrichAndFilterListWindowsResult(result, rawArgs) : result;
   } catch (err) {
     logger.warn('cua-driver MCP tool call failed', {
@@ -3527,14 +3599,19 @@ async function callComputerDriverToolImpl(
       error: err instanceof Error ? err.message : String(err),
     });
     if (signal?.aborted) {
-      await cleanupCuaMcpSessionAfterError(sessionId, entry).catch(() => undefined);
-      throw new ComputerDriverError('Computer Use cancelled. An action already dispatched may have taken effect; observe before acting again.', 'REQUEST_CANCELLED', getComputerTool(name)?.readOnly !== true);
+      if (inputDispatched) await cleanupCuaMcpSessionAfterError(sessionId, entry).catch(() => undefined);
+      throw Object.assign(new ComputerDriverError(
+        inputDispatched ? 'Computer Use cancelled. An action already dispatched may have taken effect; observe before acting again.'
+          : 'Computer Use cancelled before dispatch; no input was sent.',
+        'REQUEST_CANCELLED', inputDispatched && getComputerTool(name)?.readOnly !== true),
+      { inputProgress: (err as { inputProgress?: unknown })?.inputProgress });
     }
     if (shouldCleanupCuaMcpSessionAfterError(err)) {
       const cleanup = cleanupCuaMcpSessionAfterError(sessionId, entry);
       if (getComputerTool(name)?.readOnly !== true) {
         await cleanup.catch(() => undefined);
-        throw new ComputerDriverError('Driver connection failed during an action. Its outcome is unknown; the action was not replayed. Take fresh state before continuing.', 'ACTION_OUTCOME_UNKNOWN', true);
+        throw Object.assign(new ComputerDriverError('Driver connection failed during an action. Its outcome is unknown; the action was not replayed. Take fresh state before continuing.', 'ACTION_OUTCOME_UNKNOWN', true),
+          { inputProgress: (err as { inputProgress?: unknown })?.inputProgress });
       }
       if (shouldUseCliFallbackAfterError(name, err)) {
         try {

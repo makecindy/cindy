@@ -53,6 +53,21 @@ describe('shared Skill mutation lease', () => {
     } finally { await successor(); }
   });
 
+  it('honors a bounded wait while another profile releases the same Skill', async () => {
+    const first = (await acquireSharedSkillMutationLease(['startup-projection']))!;
+    const released = new Promise<void>((resolve) => {
+      setTimeout(() => { void first().then(resolve); }, 50);
+    });
+    const next = await acquireSharedSkillMutationLease(
+      ['startup-projection'],
+      undefined,
+      { waitMs: 500 },
+    );
+    await released;
+    expect(next).not.toBeNull();
+    await next!();
+  });
+
   it('contains a damaged durable barrier to its own resource name', async () => {
     const token = randomUUID();
     const key = createHash('sha256').update('damaged-receipt').digest('hex');

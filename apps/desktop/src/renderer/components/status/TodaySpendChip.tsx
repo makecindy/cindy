@@ -1,4 +1,8 @@
-import { formatCompactTimeUntilReset } from '@/lib/compactQuotaCountdown';
+import {
+  FIVE_HOUR_WINDOW_MINUTES,
+  formatCompactTimeUntilReset,
+  WEEKLY_WINDOW_MINUTES,
+} from '@/lib/compactQuotaCountdown';
 import { isOpenAiSubscriptionProvider } from '@cindy/model-providers';
 import { useDeviceProviders } from '@/hooks/useDeviceProviders';
 import { useProviders } from '@/hooks/useProviders';
@@ -63,6 +67,7 @@ import {
 } from '@/hooks/useRemoteDeviceUsage';
 import {
   isClaudeSubscriptionAlerting,
+  isClaudeUsageWindowAlerting,
   matchScopedWindowForModel,
   type ClaudeUsageWindow,
 } from '../../../shared/claudeSubscriptionUsage';
@@ -267,6 +272,8 @@ interface ChipWindowSegment extends ChipWindowSlot {
    * 而不是僵住的旧百分比, 新快照落地时由重置滚动动画揭晓。
    */
   resetPending: boolean;
+  /** 本窗口自身达到告警条件:chip 只把这一段的剩余百分比染红, 其余段保持常色。 */
+  alerting: boolean;
 }
 
 // 悬念期上限常量在 quotaResetRollup.ts(tick 节奏要踩着超时边界调度, 判定与
@@ -297,7 +304,12 @@ function formatWindowLabel(
   // chip 模式: label 直接用距 reset 的剩余时长(所有限额窗口都算给用户);
   // 无 reset 数据时回退下面的窗口名派生链。tooltip 模式不进这个分支(窗口名 + 精确时间)。
   if (options?.preferResetCountdown) {
-    const countdown = formatCompactTimeUntilReset(window?.resetsAt, nowMs, t);
+    const countdown = formatCompactTimeUntilReset(
+      window?.resetsAt,
+      nowMs,
+      t,
+      window?.windowMinutes,
+    );
     if (countdown !== null) return countdown;
   }
 
@@ -337,6 +349,7 @@ function toCodexChipWindow(
     remainingPercent: 100 - clampPercent(window.usedPercent),
     resetsAtMs,
     resetPending: isResetPending(resetsAtMs, nowMs),
+    alerting: false,
   };
 }
 
@@ -430,7 +443,12 @@ function getClaudeChipWindows(
     typeof fiveHour.utilization === 'number' &&
     Number.isFinite(fiveHour.utilization)
   ) {
-    const countdown = formatCompactTimeUntilReset(fiveHour.resetsAt, nowMs, t);
+    const countdown = formatCompactTimeUntilReset(
+      fiveHour.resetsAt,
+      nowMs,
+      t,
+      FIVE_HOUR_WINDOW_MINUTES,
+    );
     const resetsAtMs = toEpochMs(fiveHour.resetsAt);
     windows.push({
       key: 'claude-5h',
@@ -438,6 +456,7 @@ function getClaudeChipWindows(
       remainingPercent: 100 - clampPercent(fiveHour.utilization),
       resetsAtMs,
       resetPending: isResetPending(resetsAtMs, nowMs),
+      alerting: isClaudeUsageWindowAlerting(fiveHour),
     });
   }
   const weekly = resolveClaudeWeeklyWindow(snapshot, modelId, t);
@@ -446,7 +465,12 @@ function getClaudeChipWindows(
     typeof weekly.window.utilization === 'number' &&
     Number.isFinite(weekly.window.utilization)
   ) {
-    const countdown = formatCompactTimeUntilReset(weekly.window.resetsAt, nowMs, t);
+    const countdown = formatCompactTimeUntilReset(
+      weekly.window.resetsAt,
+      nowMs,
+      t,
+      WEEKLY_WINDOW_MINUTES,
+    );
     const label = countdown
       ? weekly.modelDisplayName
         ? `${weekly.modelDisplayName} ${countdown}`
@@ -462,6 +486,7 @@ function getClaudeChipWindows(
       remainingPercent: 100 - clampPercent(weekly.window.utilization),
       resetsAtMs,
       resetPending: isResetPending(resetsAtMs, nowMs),
+      alerting: isClaudeUsageWindowAlerting(weekly.window),
     });
   }
   return windows.map((window) => ({
@@ -655,6 +680,7 @@ function getXaiChipWindows(
 ): ChipWindowSegment[] {
   if (!isXaiWeeklyUsageCurrent(snapshot, nowMs) || !snapshot) return [];
   const used = snapshot.creditUsagePercent ?? 0;
+  // xAI 的 resetsAt 可能回退到非周窗口 / 月度账期结束时间, 不按周长封顶。
   const countdown = formatCompactTimeUntilReset(snapshot.resetsAt ?? undefined, nowMs, t);
   const resetsAtMs = toEpochMs(snapshot.resetsAt ?? undefined);
   return [
@@ -664,8 +690,24 @@ function getXaiChipWindows(
       remainingPercent: 100 - clampPercent(used),
       resetsAtMs,
       resetPending: isResetPending(resetsAtMs, nowMs),
+      alerting: isXaiSubscriptionAlerting(snapshot, nowMs),
     },
   ];
+}
+
+/** 文案里剩余百分比的占位符: 先整句翻译, 再把它换成独立节点, 语序跟随各语言。 */
+const REMAINING_PLACEHOLDER = '\uE000';
+
+function interpolateRemaining(text: string, remaining: React.ReactNode): React.ReactNode {
+  const index = text.indexOf(REMAINING_PLACEHOLDER);
+  if (index < 0) return text;
+  return (
+    <>
+      {text.slice(0, index)}
+      {remaining}
+      {text.slice(index + REMAINING_PLACEHOLDER.length)}
+    </>
+  );
 }
 
 function renderSegmentedLabel(segments: React.ReactNode[]): React.ReactNode {
@@ -799,8 +841,7 @@ export function TodaySpendChip({
   //   - xai/    → SuperGrok 账号周用量(cli-chat-proxy billing) + 尽力显示限流头。
   // 优先级高于 Claude 订阅形态(model 前缀决定实际消耗的额度)。
   const isOpenAiAccount =
-    providerId === 'openai' ||
-    isOpenAiSubscriptionProvider(quotaProviders.find((provider) => provider.id === providerId));
+    providerId === 'openai' || isOpenAiSubscriptionProvider(selectedQuotaProvider);
   const isChatgptBridge =
     (vendorKey === 'cc' || vendorKey === 'pi') &&
     (providerId == null || isOpenAiAccount) &&
@@ -819,8 +860,9 @@ export function TodaySpendChip({
     isCodexBudgetModel && (providerId == null || providerId === 'xd');
   const isCodexXaiProvider =
     vendorKey === 'codex' && (isXaiAccount || (providerId == null && isXaiPrefixedModel));
-  // codex 走订阅价值估算:ChatGPT 订阅需要 oauth-bearer + OpenAI 来源;xAI 由 proxy 注入
-  // SuperGrok OAuth。显式自定义供应商优先于共享 host 的 authInjection 和模型名前缀。
+  // 显式 OpenAI 订阅连接在执行端固定走该账号的 OAuth（独立账号有自己的 host）。
+  // 全局 authInjection 只用于未指定来源的旧任务，不能因本机 Codex 断开或其它
+  // API host 的状态隐藏所选账号的额度。xAI 由 proxy 注入 SuperGrok OAuth。
   // 远端 Codex 的事实在远端 daemon 上,本机只记录 token 价值估算,不写本地 gateway cost。
   // device-link 远程 codex 与 SSH 远程同口径:非 xai / 非折扣模型 / 非显式 XD 即按订阅
   // 形态处理(本机 runtime route 观察对远程关闭,窗口数据走被控端镜像;被控端若是
@@ -836,9 +878,8 @@ export function TodaySpendChip({
     !isCodexXaiProvider &&
     (isRemoteCodexSession ||
       isDeviceLinkRemoteCodexOauth ||
-      (codexAuthInjection === 'oauth-bearer' &&
-        !isCodexGatewayBudgetModel &&
-        (providerId == null || isOpenAiAccount)));
+      (!isCodexGatewayBudgetModel &&
+        (isOpenAiAccount || (providerId == null && codexAuthInjection === 'oauth-bearer'))));
   const isCodexSubscription = isCodexOauth || isCodexXaiProvider;
   const isCodexApi = vendorKey === 'codex' && !isCodexSubscription;
   const isPiGateway =
@@ -1227,11 +1268,9 @@ export function TodaySpendChip({
         : usesXaiQuotaForm
           ? 'todaySpend.xai.windowSegment'
           : 'todaySpend.claude.windowSegment',
-      {
-        label: window.label,
-        remaining: formatPercent(rollup?.percent ?? window.remainingPercent),
-      },
+      { label: window.label, remaining: REMAINING_PLACEHOLDER },
     );
+    const remaining = formatPercent(rollup?.percent ?? window.remainingPercent);
     // 段落包一层 span 并登记元素: 撒花以「正在揭晓的这一段」的矩形为迸发范围
     // (粒子沿整段文字宽度散布, 而非集中在 chip 中心一点)。
     return (
@@ -1241,7 +1280,10 @@ export function TodaySpendChip({
           segmentElsRef.current[window.key] = el;
         }}
       >
-        {text}
+        {interpolateRemaining(
+          text,
+          window.alerting ? <span className="text-[var(--error-fg)]">{remaining}</span> : remaining,
+        )}
       </span>
     );
   });
@@ -1500,21 +1542,24 @@ export function TodaySpendChip({
     account.emptyText = t('todaySpend.codex.noUsageDetail');
   }
 
-  // Claude 订阅告警态: 影响当前会话的窗口 (5h / 总周限 / 当前模型 scoped) 任一逼近 /
-  // 打满, 或 headers 报 rejected → chip 变 error 色 (语义豁免色, 跨主题一致)。
-  // 其它模型的周限吃紧不染红 —— chip 上没有那一段, 红了也无从解释 (见
-  // isClaudeSubscriptionAlerting 对 allowed_warning 的取舍)。
-  const claudeSubscriptionAlerting =
-    isClaudeSubscription && isClaudeSubscriptionAlerting(claudeSubscriptionUsage, modelId);
-  const xaiSubscriptionAlerting =
-    usesXaiQuotaForm && isXaiSubscriptionAlerting(xaiSubscriptionUsage);
+  // 告警态: 达到条件的窗口只把它自己的剩余百分比染 error 色 (语义豁免色, 跨主题一致),
+  // 其它窗口段、分隔线与任务价值保持常色。其它模型的周限吃紧不染红 —— chip 上没有
+  // 那一段, 红了也无从解释 (见 isClaudeSubscriptionAlerting 对 allowed_warning 的取舍)。
+  // 兜底: 当前会话确实受限 (headers 报 rejected, 或 scoped 周限占位时总周限告警) 但
+  // chip 上没有任何一个窗口达到条件 → 仍整条变红, 不丢受限信号。悬念期的告警窗口也算
+  // 「chip 上有」: 它的旧数据已失真, 段上显示「重置中…」不染红, 也不借兜底把整条染红。
+  const hasAlertingChipWindow = chipWindows.some((window) => window.alerting);
+  const chipAlertingFallback =
+    !hasAlertingChipWindow &&
+    ((isClaudeSubscription && isClaudeSubscriptionAlerting(claudeSubscriptionUsage, modelId)) ||
+      (usesXaiQuotaForm && isXaiSubscriptionAlerting(xaiSubscriptionUsage)));
 
   // 与 ContextCapacityRing 视觉对齐 (h-5 = 20px) + reset button UA 默认 padding/border。
   // tabular-nums 让 "$306 / $1.2k" 这类数字段的字符宽度等宽, 段间数字落点对齐。
   const buttonClass = cn(
     'inline-flex h-5 shrink-0 items-center',
     'text-12 font-medium leading-none tabular-nums',
-    claudeSubscriptionAlerting || xaiSubscriptionAlerting
+    chipAlertingFallback
       ? 'text-[var(--error-fg)] hover:text-[var(--error-fg-strong)]'
       : 'text-[var(--msg-tool-card-chevron)] hover:text-foreground',
     'border-0 bg-transparent p-0 m-0',

@@ -60,6 +60,8 @@ interface UseCCSessionsReturn {
     extraDirs?: string[];
     writableDirs?: string[];
     remoteHostId?: string;
+    /** Agent 在同账号另一台电脑上运行(任务与文件在本机)。 */
+    agentDeviceId?: string;
     /** per-session 来源(供应商)显式选择; null/undefined = 跟随默认路由。透传到 sessionService.create。 */
     providerId?: string | null;
     /** Only the Cindy Make purpose may be requested from the renderer; Main validates it. */
@@ -163,6 +165,8 @@ export function useCCSessions(options?: UseCCSessionsOptions): UseCCSessionsRetu
       /** 远端 host alias (Codex P2)。设置后 session.workingDir 必须是远端绝对路径,
        *  agent 跑在远端 SSH 机器上, 本地不 spawn codex 子进程。 */
       remoteHostId?: string;
+      /** Agent 在同账号另一台电脑上运行(任务与文件在本机)。 */
+      agentDeviceId?: string;
       /** per-session 来源(供应商)显式选择; null/undefined = 跟随默认路由。透传到 sessionService.create → mapper 落盘。 */
       providerId?: string | null;
       source?: 'cindy-make';

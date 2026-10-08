@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 /**
  * PublishDialog — 发布到市场的统一入口,合并了 Empty/Working/Failure 三种 state。
  *
@@ -22,7 +23,6 @@ import * as Select from '@radix-ui/react-select';
 import { X, CloudUpload, Globe, Users, Lock, RefreshCw, CircleAlert, Check, ChevronDown, ChevronUp } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
-import { Spinner } from '@/components/ui/spinner';
 import { toast } from '@/lib/toast';
 import { useAuth } from '@/contexts/AuthContext';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent, isDataOwnerIdCurrent } from '@/contexts/dataOwnerGeneration';
@@ -202,19 +202,12 @@ function WhitePillButton({
   onClick: () => void;
 }) {
   return (
-    <button
+    <Button variant="secondary" size="md" compact
       type="button"
       onClick={onClick}
-      className={cn(
-        'inline-flex h-8 items-center justify-center rounded-full px-4',
-        'text-sm font-normal border bg-[var(--cmd-palette-bg)]',
-        'border-[var(--confirm-btn-secondary-border)] text-[var(--settings-btn-secondary-text)]',
-        'hover:bg-[var(--surface-hover)]',
-        'transition-colors',
-      )}
     >
       {children}
-    </button>
+    </Button>
   );
 }
 
@@ -222,29 +215,25 @@ function BlackPillButton({
   children,
   onClick,
   disabled,
+  loading,
 }: {
   children: React.ReactNode;
   onClick?: () => void;
   disabled?: boolean;
+  loading?: boolean;
 }) {
   return (
-    <button
+    <Button
+      variant="cta"
+      size="md"
+      compact
       type="button"
       onClick={onClick}
+      loading={loading}
       disabled={disabled}
-      className={cn(
-        'inline-flex h-8 items-center justify-center gap-1.5 rounded-full px-4',
-        'text-sm font-medium leading-none',
-        // 视觉对齐:lucide icon 视觉重心偏上,把 icon 抬 0.5px 让它和文字 baseline 看齐
-        '[&>svg]:-translate-y-px',
-        'bg-[var(--lightbox-cta-bg)] text-[var(--lightbox-cta-fg)]',
-        'hover:bg-[var(--lightbox-cta-hover)]',
-        'transition-colors',
-        'disabled:cursor-not-allowed disabled:opacity-50',
-      )}
     >
       {children}
-    </button>
+    </Button>
   );
 }
 
@@ -524,8 +513,11 @@ export function PublishDialog({
   const dialogOwner = useMemo(() => getDataOwnerGeneration(), [open]);
   const isDialogOwnerCurrent = isDataOwnerGenerationCurrent(dialogOwner);
 
-  // refresh/sync 延迟到 dialog 关闭后才触发，isFirstPublish 在 dialog 生命周期内不会翻转
-  const effectiveFirstPublish = isFirstPublish;
+  // A name conflict can turn an update into a new publication under another name.
+  const [renameAfterFailure, setRenameAfterFailure] = useState(false);
+  const effectiveFirstPublish = isFirstPublish || renameAfterFailure;
+  const canRename = autoCleanName || renameAfterFailure;
+  useEffect(() => { if (!open) setRenameAfterFailure(false); }, [open]);
   const { t } = useTranslation();
 
   // 本地改名后保存新 absolutePath / name。Publish 链路里所有引用 skill.absolutePath
@@ -808,17 +800,16 @@ export function PublishDialog({
     });
     if (!ok || !isDataOwnerGenerationCurrent(dialogOwner)) return;
 
-    // ── autoCleanName(撞名后改名)流程:先在本地改名,再走 publish ──────────
-    // 不改名(autoCleanName=false 或新旧名一致)时跳过这一步。
+    // Rename the local folder and manifest together before publishing the new name.
     // 一旦本地改名成功,renamedToRef 就被填上新的 path/name,后续整个 publish
     // 链路(失败重试、cancel 关闭、done 回调)都从 effectiveSkill() 读,
     // 永远不会再回到旧路径。
     let publishAbsolutePath = eff.absolutePath;
-    if (autoCleanName && !renamedToRef.current && submitName !== eff.name) {
+    if (canRename && submitName !== eff.name) {
       const renameRes = await window.electronAPI.skillhub.renameLocal({
         // Keep the lexical discovery path for lstat: canonical absolutePath may
         // point at a symlink target and would bypass the rename safety gate.
-        absolutePath: skill.discoveredPath ?? eff.absolutePath,
+        absolutePath: renamedToRef.current ? eff.absolutePath : skill.discoveredPath ?? eff.absolutePath,
         newName: submitName,
       });
       if (!renameRes.success) {
@@ -849,7 +840,7 @@ export function PublishDialog({
     form,
     effectiveSkill,
     effectiveFirstPublish,
-    autoCleanName,
+    canRename,
     confirm,
     t,
     buildCurrentPublishParams,
@@ -934,6 +925,7 @@ export function PublishDialog({
         case 'rename':
           activePublishNameRef.current = null;
           failedProgressNameRef.current = null;
+          setRenameAfterFailure(true);
           dispatch({ type: 'REPUBLISH' });
           break;
         case 'close':
@@ -971,7 +963,7 @@ export function PublishDialog({
   // Failure 文案
   const errorCopy =
     isFailure && pubState.failurePayload
-      ? getPublishErrorCopy(pubState.failurePayload.errorCode)
+      ? getPublishErrorCopy(pubState.failurePayload.errorCode, pubState.failurePayload.message)
       : null;
 
   // dlg-head subtitle — 优先 frontmatter displayName，fallback 到目录名
@@ -995,22 +987,17 @@ export function PublishDialog({
       >
         <Dialog.Portal>
           <Dialog.Overlay
-            className="fixed inset-0 z-[10000] bg-[var(--overlay-modal)]"
+            className="modal-scrim fixed inset-0 z-[10000]"
             style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
           />
           <Dialog.Content
-            // working 时禁止 outside-click / Escape 直接关——走 cancel confirm 流程
-            onPointerDownOutside={(e) => {
-              if (isWorking && pubState.phase !== 'scanning') e.preventDefault();
-            }}
+            onPointerDownOutside={(event) => event.preventDefault()}
             onEscapeKeyDown={(e) => {
               if (isWorking && pubState.phase !== 'scanning') e.preventDefault();
             }}
             className={cn(
-              'fixed left-1/2 top-1/2 z-[10000] -translate-x-1/2 -translate-y-1/2',
-              'w-full max-w-[480px] rounded-xl',
-              'border bg-[var(--cmd-palette-bg)]',
-              'border-[var(--cmd-palette-border)]',
+              'modal-panel fixed left-1/2 top-1/2 z-[10000] -translate-x-1/2 -translate-y-1/2',
+              'w-full max-w-[480px]',
               'max-h-[90vh] overflow-y-auto',
             )}
             style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
@@ -1044,8 +1031,8 @@ export function PublishDialog({
             <div
               className={cn('flex flex-col gap-4 px-5 pt-5 pb-1', isWorking && 'pointer-events-none opacity-50')}
             >
-              {/* SkillName — only shown in rename flow (after NAME_TAKEN) */}
-              {autoCleanName && (
+              {/* SkillName — available after a name conflict, including a deleted Skill. */}
+              {canRename && (
                 <div className="flex flex-col gap-1.5">
                   <FieldLabel>{t('skillhub.publishDialog.skillNameLabel')}</FieldLabel>
                   <TextInput
@@ -1254,22 +1241,11 @@ export function PublishDialog({
                         {errorCopy.message}
                       </span>
                     )}
-                    {/*
-                     * 只在 failurePayload.message 含有明显额外信息时才展示原文
-                     * (多行,或者比静态文案长很多)
-                     */}
-                    {(() => {
-                      const detail = pubState.failurePayload?.message?.trim();
-                      if (!detail || detail === errorCopy.message) return null;
-                      const hasMultiline = detail.includes('\n');
-                      const isMuchLonger = detail.length > (errorCopy.message?.length ?? 0) + 40;
-                      if (!hasMultiline && !isMuchLonger) return null;
-                      return (
-                        <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap rounded bg-[hsl(var(--content-area))] p-2 font-mono text-[length:calc(var(--app-code-font-size)_-_3px)] leading-[1.4] text-[var(--settings-section-desc)] select-text">
-                          {detail}
-                        </pre>
-                      );
-                    })()}
+                    {errorCopy.detail && errorCopy.detail !== errorCopy.message && (
+                      <span className="whitespace-pre-wrap break-words text-xs leading-[1.5] text-[var(--cmd-palette-item-meta)] select-text">
+                        {errorCopy.detail}
+                      </span>
+                    )}
                   </div>
                 </div>
               </div>
@@ -1284,10 +1260,7 @@ export function PublishDialog({
                       {t('skillhub.publishDialog.cancelReview')}
                     </WhitePillButton>
                   )}
-                  <BlackPillButton disabled>
-                    <span className="inline-flex -translate-y-px">
-                      <Spinner size={14} strokeWidth={1.75} />
-                    </span>
+                  <BlackPillButton loading={true} disabled>
                     {workingLabel}
                   </BlackPillButton>
                 </>

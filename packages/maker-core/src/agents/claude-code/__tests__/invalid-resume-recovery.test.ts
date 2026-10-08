@@ -147,6 +147,7 @@ async function startHarness(args: {
   resumeSessionId?: string;
   transcriptExists: boolean;
   onInvalidResumeSession: StartSessionOptions['onInvalidResumeSession'];
+  forkSession?: boolean;
 }) {
   const configDir = await makeTempDir();
   const workingDir = await makeTempDir();
@@ -177,7 +178,9 @@ async function startHarness(args: {
     return queries[index];
   });
 
-  const agent = new ClaudeCodeAgent(createDeps());
+  const deps = createDeps();
+  const debug = vi.spyOn(deps.logger!, 'debug');
+  const agent = new ClaudeCodeAgent(deps);
   const handle = await agent.startSession({
     sessionId: 'local-session',
     model: 'claude-opus-4-6',
@@ -185,6 +188,7 @@ async function startHarness(args: {
     permissionMode: 'acceptEdits',
     resumeSessionId: args.resumeSessionId,
     onInvalidResumeSession: args.onInvalidResumeSession,
+    vendorOptions: args.forkSession ? { forkSession: true } : undefined,
   });
   const events: AgentEvent[] = [];
   const collected = (async () => {
@@ -198,6 +202,7 @@ async function startHarness(args: {
     consumedInputs,
     events,
     collected,
+    debug,
   };
 }
 
@@ -215,6 +220,182 @@ afterEach(async () => {
 });
 
 describe('Claude invalid-resume recovery', () => {
+  it('binds a new native session before SDK init so its first request can resolve the provider', async () => {
+    const h = await startHarness({ transcriptExists: false, onInvalidResumeSession: undefined });
+    const sessionId = h.queryOptions[0].sessionId;
+    expect(sessionId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+    expect(h.handle.id).toBe(sessionId);
+    expect(h.queryOptions[0]).not.toHaveProperty('resume');
+    h.streams[0].emit({ type: 'system', subtype: 'init', session_id: sessionId });
+    await vi.waitFor(() => expect(h.events).toContainEqual({
+      type: 'session_id', data: sessionId, source: 'claude-code',
+    }));
+    await h.handle.close();
+    h.streams[0].end();
+    await h.collected;
+    expect(h.events.filter((event) => event.type === 'session_id')).toHaveLength(1);
+  });
+
+  it('keeps the durable source while prebinding an initial fork request', async () => {
+    for (const forkSession of [false, true]) {
+      const h = await startHarness({
+        resumeSessionId: 'sdk-source', transcriptExists: true,
+        onInvalidResumeSession: undefined, forkSession,
+      });
+      expect(h.queryOptions[0].resume).toBe('sdk-source');
+      if (forkSession) {
+        expect(h.queryOptions[0].forkSession).toBe(true);
+        expect(h.queryOptions[0].sessionId).toEqual(expect.any(String));
+        expect(h.handle.id).toBe('sdk-source');
+        expect(h.handle.requestSessionId).toBe(h.queryOptions[0].sessionId);
+        expect(h.handle.requestSessionId).not.toBe('sdk-source');
+      } else {
+        expect(h.queryOptions[0]).not.toHaveProperty('sessionId');
+        expect(h.handle.id).toBe('sdk-source');
+      }
+      await h.handle.close();
+      h.streams[0].end();
+      await h.collected;
+    }
+  });
+
+  it.each(['constructor', 'cancel-after-build', 'conversion', 'cancel-during-conversion', 'cancel-after-init'] as const)(
+    'retries the source after an unaccepted fork fails at %s', async (failure) => {
+      const clear = vi.fn(async () => true);
+      const h = await startHarness({ resumeSessionId: 'sdk-source', transcriptExists: true, onInvalidResumeSession: clear });
+      await h.handle.commitRewindFiles?.('user-anchor', 'assistant-anchor');
+      const controller = new AbortController();
+      if (failure === 'constructor') {
+        sdkMock.query.mockImplementationOnce(() => { throw new Error('fixture query construction failed'); });
+      } else if (failure === 'cancel-after-build') {
+        const createQuery = sdkMock.query.getMockImplementation()!;
+        sdkMock.query.mockImplementationOnce((...args) => {
+          const result = createQuery(...args);
+          controller.abort();
+          return result;
+        });
+      } else if (failure === 'conversion') {
+        imageResizerMock.process.mockRejectedValueOnce(new Error('fixture conversion failed'));
+      } else {
+        imageResizerMock.process.mockImplementationOnce(async p => {
+          if (failure === 'cancel-after-init') {
+            const destination = sdkMock.query.mock.calls.at(-1)?.[0]?.options?.sessionId;
+            h.streams[1].emit({ type: 'system', subtype: 'init', session_id: destination });
+            await vi.waitFor(() => expect(h.debug).toHaveBeenCalledWith(
+              'SDK ▶ turn start (system init)', expect.objectContaining({ sdkSessionId: destination }),
+            ));
+          }
+          controller.abort();
+          return p;
+        });
+      }
+      await expect(h.handle.send({
+        type: 'user', content: failure === 'conversion' || failure.startsWith('cancel-during') || failure === 'cancel-after-init'
+          ? [{ type: 'image', path: path.join(os.tmpdir(), 'fixture-fork-image.png') }]
+          : 'cancelled input',
+      }, { signal: controller.signal })).rejects.toThrow(/fixture|cancelled/);
+      expect(h.handle.id).toBe('sdk-source');
+      expect(h.events.filter(e => e.type === 'session_id' && e.data !== 'sdk-source')).toEqual([]);
+      await h.handle.send({ type: 'user', content: 'retry with original context' });
+      const retry = sdkMock.query.mock.calls.at(-1)?.[0]?.options;
+      expect(retry).toMatchObject({ resume: 'sdk-source', resumeSessionAt: 'assistant-anchor', forkSession: true });
+      expect(retry.sessionId).not.toBe('sdk-source');
+      expect(clear).not.toHaveBeenCalled();
+      await h.handle.close();
+      for (const stream of h.streams) stream.end();
+      await h.collected;
+    },
+  );
+
+  it('keeps a directory grant retry as a full-source fork after cancellation', async () => {
+    const clear = vi.fn(async () => true);
+    const h = await startHarness({ resumeSessionId: 'sdk-source', transcriptExists: true, onInvalidResumeSession: clear });
+    await h.handle.setExtraDirs?.([await makeTempDir()]);
+    const controller = new AbortController();
+    const createQuery = sdkMock.query.getMockImplementation()!;
+    sdkMock.query.mockImplementationOnce((...args) => {
+      const result = createQuery(...args);
+      controller.abort();
+      return result;
+    });
+    await expect(h.handle.send({ type: 'user', content: 'cancelled grant' }, { signal: controller.signal })).rejects.toThrow('cancelled');
+    expect(h.handle.id).toBe('sdk-source');
+    await h.handle.send({ type: 'user', content: 'retry grant with context' });
+    const retry = sdkMock.query.mock.calls.at(-1)?.[0]?.options;
+    expect(retry).toMatchObject({ resume: 'sdk-source', forkSession: true });
+    expect(retry).not.toHaveProperty('resumeSessionAt');
+    expect(clear).not.toHaveBeenCalled();
+    await h.handle.close();
+    for (const stream of h.streams) stream.end();
+    await h.collected;
+  });
+
+  it.each([false, true])('does not publish an unaccepted fork before close (initial fork %s)', async (initialFork) => {
+    const h = await startHarness({
+      resumeSessionId: 'sdk-source', transcriptExists: true,
+      onInvalidResumeSession: undefined, forkSession: initialFork,
+    });
+    if (!initialFork) await h.handle.commitRewindFiles?.('user-anchor', 'assistant-anchor');
+    let releaseConversion!: (value: string) => void;
+    imageResizerMock.process.mockImplementationOnce(p => new Promise<string>(resolve => { releaseConversion = resolve; void p; }));
+    const sending = h.handle.send({ type: 'user', content: [{ type: 'image', path: path.join(os.tmpdir(), 'fixture-pending-fork.png') }] });
+    const rejected = expect(sending).rejects.toThrow(/closed|cancelled/);
+    await vi.waitFor(() => expect(releaseConversion).toEqual(expect.any(Function)));
+    const destination = h.handle.requestSessionId;
+    expect(destination).not.toBe('sdk-source');
+    const currentStream = h.streams[initialFork ? 0 : 1];
+    currentStream.emit({ type: 'system', subtype: 'init', session_id: destination });
+    await vi.waitFor(() => expect(h.debug).toHaveBeenCalledWith(
+      'SDK ▶ turn start (system init)', expect.objectContaining({ sdkSessionId: destination }),
+    ));
+    expect(h.handle.id).toBe('sdk-source');
+    expect(h.events.filter(e => e.type === 'session_id')).toEqual([]);
+    await h.handle.close();
+    releaseConversion(path.join(os.tmpdir(), 'fixture-pending-fork.png'));
+    await rejected;
+    for (const stream of h.streams) stream.end();
+    await h.collected;
+    expect(h.handle.id).toBe('sdk-source');
+    expect(h.events.filter(e => e.type === 'session_id')).toEqual([]);
+  });
+
+  it('commits an initial fork exactly once after accepting input, even if init arrived first', async () => {
+    const h = await startHarness({ resumeSessionId: 'sdk-source', transcriptExists: true, onInvalidResumeSession: undefined, forkSession: true });
+    const destination = h.handle.requestSessionId;
+    h.streams[0].emit({ type: 'system', subtype: 'init', session_id: destination });
+    await vi.waitFor(() => expect(h.debug).toHaveBeenCalledWith(
+      'SDK ▶ turn start (system init)', expect.objectContaining({ sdkSessionId: destination }),
+    ));
+    expect(h.handle.id).toBe('sdk-source');
+    expect(h.events.filter(e => e.type === 'session_id')).toEqual([]);
+    await h.handle.send({ type: 'user', content: 'accepted fork input' });
+    await vi.waitFor(() => expect(h.events.filter(e => e.type === 'session_id')).toEqual([
+      { type: 'session_id', data: destination, source: 'claude-code' },
+    ]));
+    expect(h.handle.id).toBe(destination);
+    h.streams[0].emit({ type: 'system', subtype: 'init', session_id: destination });
+    await h.handle.close();
+    for (const stream of h.streams) stream.end();
+    await h.collected;
+    expect(h.events.filter(e => e.type === 'session_id')).toHaveLength(1);
+  });
+
+  it('rebuilds an unaccepted initial fork from the durable source after a directory change', async () => {
+    const clear = vi.fn(async () => true);
+    const h = await startHarness({ resumeSessionId: 'sdk-source', transcriptExists: true, onInvalidResumeSession: clear, forkSession: true });
+    const initialDestination = h.handle.requestSessionId;
+    await h.handle.setExtraDirs?.([await makeTempDir()]);
+    await h.handle.send({ type: 'user', content: 'accept after changing directories' });
+    expect(h.queryOptions[1]).toMatchObject({ resume: 'sdk-source', forkSession: true });
+    expect(h.queryOptions[1]).not.toHaveProperty('resumeSessionAt');
+    expect(h.queryOptions[1].sessionId).not.toBe(initialDestination);
+    expect(h.handle.id).toBe(h.queryOptions[1].sessionId);
+    expect(clear).not.toHaveBeenCalled();
+    await h.handle.close();
+    for (const stream of h.streams) stream.end();
+    await h.collected;
+  });
+
   it('preflight missing clears the old id and starts fresh before any turn is sent', async () => {
     const clear = vi.fn(async () => true);
     const h = await startHarness({
@@ -226,6 +407,8 @@ describe('Claude invalid-resume recovery', () => {
     expect(clear).toHaveBeenCalledWith('sdk-missing');
     expect(h.queryOptions).toHaveLength(1);
     expect(h.queryOptions[0]).not.toHaveProperty('resume');
+    expect(h.handle.id).toBe(h.queryOptions[0].sessionId);
+    expect(h.handle.id).not.toBe('sdk-missing');
     await h.handle.close();
     h.streams[0].end();
     await h.collected;
@@ -256,6 +439,8 @@ describe('Claude invalid-resume recovery', () => {
     // 失效 id 被清;重建的 query 不带 resume;没有 surface 任何终态错误。
     expect(clear).toHaveBeenCalledWith('sdk-orphan');
     expect(h.queryOptions[1]).not.toHaveProperty('resume');
+    expect(h.handle.id).toBe(h.queryOptions[1].sessionId);
+    expect(h.handle.id).not.toBe('sdk-orphan');
     expect(h.events.filter((event) => event.type === 'error')).toHaveLength(0);
     expect(h.events.some((event) => event.type === 'done')).toBe(false);
     // idle 重建:首个 query 在失败前没消费任何输入,新 query 也还没有输入在跑。

@@ -10,6 +10,8 @@ const secureStorage = vi.hoisted(() => ({
     secureStorage.value = value;
   }),
 }));
+const invitationHistory = vi.hoisted(() => ({ clear: vi.fn(async (_key: string) => undefined) }));
+vi.mock('@/device-link/clipboardInvitationHistory', () => ({ clearClipboardInvitationHistory: invitationHistory.clear }));
 
 vi.mock('../secureStorage', () => ({
   deleteSecureItem: secureStorage.delete,
@@ -31,6 +33,7 @@ import {
   parseMobileAccountVault,
   reconcileMobileActiveAuthSession,
   removeMobilePassportSessionIfCurrent,
+  removeMobilePassport,
   removeMobileResourceSessionIfCurrent,
   replaceMobilePassportSessionIfCurrent,
   replaceMobileResourceSessionIfCurrent,
@@ -55,6 +58,42 @@ describe('mobile account vault', () => {
     secureStorage.value = null;
     secureStorage.readError = null;
     vi.clearAllMocks();
+    invitationHistory.clear.mockReset().mockResolvedValue(undefined);
+  });
+
+  it('cleans every invitation history belonging to a deleted Passport, preserving another active account and realm', async () => {
+    const deleted = JSON.stringify(['global', metadata.membershipId]);
+    const memberOnly = JSON.stringify(['global', 'member-only']);
+    const other = JSON.stringify(['global', 'other']);
+    const cn = JSON.stringify(['cn', metadata.membershipId]);
+    await mutateMobileAccountVault(vault => {
+      vault.resources[deleted] = { realm: 'global', refreshToken: 'fake-deleted', metadata, lastUsedAt: 1 };
+      vault.resources[cn] = { realm: 'cn', refreshToken: 'fake-cn', metadata, lastUsedAt: 1 };
+      vault.resources[other] = { realm: 'global', refreshToken: 'fake-other', metadata: { ...metadata, membershipId: 'other', passportId: 'other-passport' }, lastUsedAt: 1 };
+      vault.passports[JSON.stringify(['global', metadata.passportId])] = {
+        realm: 'global', passportId: metadata.passportId, accountRefreshToken: 'fake-passport',
+        memberships: [metadata, { ...metadata, membershipId: 'member-only' }],
+      };
+      vault.activeAccountKey = other;
+    });
+    await removeMobilePassport('global', metadata.passportId);
+    expect(invitationHistory.clear.mock.calls.map(([key]) => key).sort()).toEqual([deleted, memberOnly].sort());
+    const vault = parseMobileAccountVault(secureStorage.value);
+    expect(vault.activeAccountKey).toBe(other);
+    expect(Object.keys(vault.resources).sort()).toEqual([cn, other].sort());
+    expect(vault.passports).toEqual({});
+  });
+
+  it('still removes revoked credentials when invitation-history deletion fails', async () => {
+    const key = JSON.stringify(['global', metadata.membershipId]);
+    await mutateMobileAccountVault(vault => {
+      vault.resources[key] = { realm: 'global', refreshToken: 'fake-token', metadata, lastUsedAt: 1 };
+      vault.activeAccountKey = key;
+    });
+    invitationHistory.clear.mockRejectedValueOnce(new Error('storage unavailable'));
+    await removeMobilePassport('global', metadata.passportId);
+    expect(invitationHistory.clear).toHaveBeenCalledWith(key);
+    expect(parseMobileAccountVault(secureStorage.value).resources).toEqual({});
   });
 
   it('falls back to an empty read-only projection for malformed encrypted content', () => {

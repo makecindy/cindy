@@ -1,3 +1,11 @@
+import { isSubagentParentToolUseId } from '@cindy/maker-shared/message-render';
+import {
+  isCompactingWorkingStatus,
+  publicToolPhase,
+  publicToolResultPhase,
+  readWorkingPhase,
+  type WorkingPhase,
+} from '@cindy/maker-shared';
 import {
   parseReconnectAttemptMessage,
   type AgentEvent,
@@ -6,6 +14,7 @@ import {
 import { DEFAULT_TOOL_ROW_WORDING, type ToolRowWording } from '@cindy/maker-shared/message-presentation';
 import { isTurnContinuationBoundaryEvent } from '@cindy/maker-shared/turn-continuation';
 
+import { dbToMakerAgentKind } from '../../shared/agentKindConversion';
 import { LIVE_TASK_PRIORITY, liveTaskPriorityRank } from '../../shared/liveTaskPriority';
 import { stripTrailingPathSeparators } from '../../shared/pathText';
 
@@ -30,6 +39,7 @@ import {
   type AgentIslandLayoutMode,
   type AgentIslandNotchStatus,
   type AgentIslandPillSnapshot,
+  type AgentIslandRemoteSessionInput,
   type AgentIslandStrings,
   type AgentIslandSessionPhase,
   type AgentIslandSessionSnapshot,
@@ -119,6 +129,8 @@ interface AgentIslandSessionState {
   detailSource: 'tool' | 'status' | 'interaction' | null;
   /** Localized transient reconnect progress; kept separate from tool/interaction detail. */
   reconnectStatus: string | null;
+  workingPhase?: WorkingPhase;
+  workingTools: Map<string, WorkingPhase>;
   currentToolUseId: string | null;
   toolDetailUntil: number | null;
   phase: AgentIslandSessionPhase;
@@ -160,6 +172,11 @@ interface AgentIslandSessionState {
    */
   sortActivityAt: number;
   lastActivityAt: number;
+  /**
+   * 非 null = 镜像另一台设备(device-link「我控制它」)上运行的任务,生命周期由
+   * {@link syncAgentIslandDeviceSessions} 的输入决定;本机 Maker 事件不会触达它。
+   */
+  sourceDeviceId: string | null;
 }
 
 export interface AgentIslandUserPromptRollbackToken {
@@ -482,6 +499,8 @@ export function applyAgentIslandUserPrompt(
   applyMeta(session, meta);
   markSessionRunning(state, session, now);
   session.phase = 'running';
+  session.workingPhase = 'thinking';
+  session.workingTools.clear();
   session.interactionKind = undefined;
   session.detail = '';
   session.detailSource = null;
@@ -570,17 +589,35 @@ export function applyAgentIslandEvent(
   // still running, so do not create/update an island entry or trigger any
   // completion transition here; the unclaimed terminal tail will do that.
   if (isTurnContinuationBoundaryEvent(event)) return false;
+  const parentToolUseId = asRecord(event.data)?.parentToolUseId;
+  const foreground = event.turnScope !== 'background' && !(typeof parentToolUseId === 'string' && isSubagentParentToolUseId(parentToolUseId));
+  if (event.type === 'thinking' && !foreground) return false;
   const assistantText = event.type === 'text' ? assistantTextFromEvent(event) : null;
   if (event.type === 'text' && !assistantText) return false;
 
   const session = getOrCreateSession(state, meta, now);
   applyMeta(session, meta);
+  if (event.type === 'compact_boundary') {
+    if (!foreground || !session.running || session.workingPhase !== 'compacting') return false;
+    session.workingPhase = 'thinking';
+    session.lastActivityAt = now;
+    return true;
+  }
+  if (event.type === 'thinking') {
+    // Observe only the event kind. Repeated reasoning deltas neither change
+    // public status nor wake the roster/resource subscribers.
+    if (!session.running || session.workingPhase === 'thinking' || session.workingPhase?.startsWith('reviewing-')) return false;
+    session.workingPhase = 'thinking';
+    session.lastActivityAt = now;
+    return true;
+  }
   if (event.type !== 'error') {
     session.reconnectStatus = null;
   }
   session.lastActivityAt = now;
 
   if (event.type === 'text') {
+    if (foreground) session.workingPhase = 'replying';
     clearToolDetail(session);
     const isFinal = asRecord(event.data)?.isFinal === true;
     const line = applyAssistantTextLine(session, assistantText ?? '', isFinal);
@@ -603,6 +640,9 @@ export function applyAgentIslandEvent(
       return true;
     }
     if (isRunning === true) {
+      if (!session.running) { session.workingPhase = 'thinking'; session.workingTools.clear(); }
+      if (isCompactingWorkingStatus(status)) session.workingPhase = 'compacting';
+      else if (status && session.workingPhase === 'compacting') session.workingPhase = 'thinking';
       markSessionRunning(state, session, now);
       if (session.pendingInteractionIds.size === 0) {
         session.phase = 'running';
@@ -638,6 +678,10 @@ export function applyAgentIslandEvent(
     const toolName = firstNonEmptyString(data?.toolName, data?.name);
     const toolUseId = toolUseIdsFromEvent(event)[0] ?? null;
     const toolInput = data?.input;
+    if (foreground) {
+      session.workingPhase = publicToolPhase(toolName, toolInput);
+      if (toolUseId) session.workingTools.set(toolUseId, session.workingPhase);
+    }
     const toolDescription = toolName
       ? formatIslandToolDetail(toolName, toolInput, { wording: state.toolWording }, data ?? undefined)
       : firstNonEmptyString(data?.description, data?.toolDescription);
@@ -663,6 +707,12 @@ export function applyAgentIslandEvent(
 
   if (event.type === 'tool_result') {
     const toolUseIds = toolUseIdsFromEvent(event);
+    const phase = toolUseIds.map(id => session.workingTools.get(id)).find(Boolean);
+    if (foreground) for (const id of toolUseIds) session.workingTools.delete(id);
+    if (foreground && session.workingPhase !== 'compacting') {
+      session.workingPhase = [...session.workingTools.values()].at(-1)
+        ?? publicToolResultPhase(phase ?? session.workingPhase ?? 'processing');
+    }
     if (
       session.currentToolUseId
       && (toolUseIds.length === 0 || toolUseIds.includes(session.currentToolUseId))
@@ -941,7 +991,8 @@ export function acknowledgeAgentIslandSessionRead(
   if (session.phase === 'completed') session.completedUntil = null;
   if (session.phase === 'error') session.errorUntil = null;
 
-  if (!isSessionVisible(session, now)) {
+  // 其它设备的任务只随同步输入增删;这里删掉的话,下一次同步会把它当作新条目重新挂回未读。
+  if (session.sourceDeviceId === null && !isSessionVisible(session, now)) {
     state.sessions.delete(sessionId);
     return 'cleared';
   }
@@ -986,7 +1037,7 @@ export function markAgentIslandSessionAttention(
   sessionId: string,
 ): boolean {
   const session = state.sessions.get(sessionId);
-  if (!session || session.unread) return false;
+  if (!session || session.unread || session.sourceDeviceId !== null) return false;
   session.unread = true;
   syncRemoteUnreadTerminal(state, session);
   return true;
@@ -1017,6 +1068,204 @@ function forgetAgentIslandSession(state: AgentIslandState, sessionId: string): v
 export function removeAgentIslandSession(state: AgentIslandState, sessionId: string): void {
   clearRemoteUnreadTerminal(state, sessionId);
   forgetAgentIslandSession(state, sessionId);
+}
+
+export type AgentIslandDeviceSessionEventKind = 'done' | 'error' | 'needs-reply';
+
+export interface AgentIslandDeviceSessionEvent {
+  sessionId: string;
+  title: string | null;
+  deviceName: string | null;
+  kind: AgentIslandDeviceSessionEventKind;
+}
+
+export interface AgentIslandDeviceSessionSyncResult {
+  changed: boolean;
+  /** 本次首次出现的条目(连接时补发 / 范围刚扩大):只进列表,不弹出、不响铃。 */
+  baselineSessionIds: string[];
+  /** 本次观察到的真实状态跃迁,供关闭灵动岛时的桌面通知使用。 */
+  events: AgentIslandDeviceSessionEvent[];
+}
+
+const DEVICE_SESSION_INTERACTION_ID = 'device-session-interaction';
+
+export function isAgentIslandDeviceSession(state: AgentIslandState, sessionId: string): boolean {
+  return (state.sessions.get(sessionId)?.sourceDeviceId ?? null) !== null;
+}
+
+/**
+ * 用其它设备任务的完整镜像覆盖岛上的设备条目(输入已按侧栏「任务范围」裁剪)。
+ *
+ * 只有观察到的跃迁(running / needs-interaction → completed / error,或进入
+ * needs-interaction)才弹出并产出通知事件;首次出现的条目按当前状态静默挂上,
+ * 避免连接设备或切换范围时把对方已有的未读一次性弹出来。
+ */
+export function syncAgentIslandDeviceSessions(
+  state: AgentIslandState,
+  inputs: readonly AgentIslandRemoteSessionInput[],
+  now: number,
+): AgentIslandDeviceSessionSyncResult {
+  const result: AgentIslandDeviceSessionSyncResult = { changed: false, baselineSessionIds: [], events: [] };
+  const incoming = new Map(inputs.map((input) => [input.sessionId, input]));
+  for (const [sessionId, session] of [...state.sessions]) {
+    if (session.sourceDeviceId === null) continue;
+    if (incoming.get(sessionId)?.deviceId === session.sourceDeviceId) continue;
+    forgetAgentIslandSession(state, sessionId);
+    result.changed = true;
+  }
+  for (const input of inputs) {
+    const existing = state.sessions.get(input.sessionId);
+    // 同一 id 已是本机任务时以本机事件流为准。
+    if (existing && existing.sourceDeviceId === null) continue;
+    const previous = existing ? existing.phase : null;
+    const session = existing ?? getOrCreateSession(state, { sessionId: input.sessionId }, now);
+    if (!existing) {
+      session.sourceDeviceId = input.deviceId;
+      result.baselineSessionIds.push(input.sessionId);
+      result.changed = true;
+    }
+    if (applyDeviceSessionMeta(session, input)) result.changed = true;
+    const transition = applyDeviceSessionPhase(state, session, input, previous, now);
+    if (transition.changed) result.changed = true;
+    if (transition.event) {
+      result.events.push({
+        sessionId: input.sessionId,
+        title: input.title,
+        deviceName: input.deviceName,
+        kind: transition.event,
+      });
+    }
+  }
+  return result;
+}
+
+function applyDeviceSessionMeta(
+  session: AgentIslandSessionState,
+  input: AgentIslandRemoteSessionInput,
+): boolean {
+  const project = projectNameFromWorkingDir(input.workingDir, input.workspaceKind);
+  const projectName = [project, input.deviceName].filter(Boolean).join(' · ') || null;
+  const agentKind = dbToMakerAgentKind(input.agentKind);
+  const changed = session.title !== input.title
+    || session.projectName !== projectName
+    || session.agentKind !== agentKind;
+  session.title = input.title;
+  session.projectName = projectName;
+  session.agentKind = agentKind;
+  return changed;
+}
+
+function applyDeviceSessionPhase(
+  state: AgentIslandState,
+  session: AgentIslandSessionState,
+  input: AgentIslandRemoteSessionInput,
+  previous: AgentIslandSessionPhase | null,
+  now: number,
+): { changed: boolean; event: AgentIslandDeviceSessionEventKind | null } {
+  const observed = previous === 'running' || previous === 'needs-interaction';
+  switch (input.phase) {
+    case 'running': {
+      const workingPhase = readWorkingPhase(input.workingPhase) ?? 'thinking';
+      const entering = previous !== 'running' || !session.running;
+      if (entering) {
+        clearDeviceSessionInteraction(session);
+        markSessionRunning(state, session, now);
+        session.phase = 'running';
+        session.sortActivityAt = now;
+      }
+      const changed = entering || session.detail !== input.detail || session.workingPhase !== workingPhase;
+      session.workingPhase = workingPhase;
+      session.detail = input.detail;
+      session.detailSource = input.detail ? 'status' : null;
+      if (changed) session.lastActivityAt = now;
+      return { changed, event: null };
+    }
+    case 'needs-interaction': {
+      const entering = previous !== 'needs-interaction';
+      if (entering) {
+        clearDeviceSessionInteraction(session);
+        markSessionRunning(state, session, now);
+        session.pendingInteractionIds.add(DEVICE_SESSION_INTERACTION_ID);
+        session.phase = 'needs-interaction';
+        session.lastActivityAt = now;
+        if (previous !== null) {
+          deferActiveTransientReveal(state, 'queued');
+          requestAttentionReveal(state, session, now, AGENT_ISLAND_REVEAL_DWELL_MS);
+        } else {
+          // 首次出现时已在等待:按「已收起」挂进列表,不自动展开交互卡。
+          session.interactionRevealDismissed = true;
+        }
+      }
+      const changed = entering
+        || session.interactionKind !== input.interactionKind
+        || session.detail !== input.detail;
+      session.interactionKind = input.interactionKind;
+      session.detail = input.detail;
+      session.detailSource = 'interaction';
+      if (entering) syncVisibleInteractionSuppression(state, now);
+      return { changed, event: entering && previous !== null ? 'needs-reply' : null };
+    }
+    case 'completed': {
+      if (previous === 'completed') {
+        return { changed: mirrorDeviceSessionSummary(session, input.detail), event: null };
+      }
+      clearDeviceSessionInteraction(session);
+      session.running = false;
+      session.lastActivityAt = now;
+      // 先换掉上一轮的摘要,且必须先于 complete:有摘要可显示时就不再补「完成」占位。
+      session.activityLines = [];
+      mirrorDeviceSessionSummary(session, input.detail);
+      // 对方设备已经仲裁过终态,这里不再套本机「报错后的配对 done」保护。
+      session.completionAllowedAfterTerminalError = true;
+      completeAgentIslandSession(state, session, now, observed
+        ? { suppressAttention: false, preserveAttention: false }
+        : { suppressAttention: true, preserveAttention: true });
+      return { changed: true, event: observed ? 'done' : null };
+    }
+    case 'error': {
+      if (previous === 'error') return { changed: false, event: null };
+      clearDeviceSessionInteraction(session);
+      session.running = false;
+      session.phase = 'error';
+      session.detail = input.detail;
+      session.detailSource = input.detail ? 'status' : null;
+      session.completedUntil = null;
+      session.lastActivityAt = now;
+      if (observed) {
+        session.errorUntil = now + AGENT_ISLAND_ERROR_DWELL_MS;
+        requestAttentionReveal(state, session, now, AGENT_ISLAND_ERROR_REVEAL_DWELL_MS, { forceUnread: true });
+      } else {
+        session.unread = true;
+      }
+      return { changed: true, event: observed ? 'error' : null };
+    }
+  }
+}
+
+/**
+ * 设备任务不同步对话,只带对方岛上算好的一行摘要,不带消息角色。记成状态行(不冒充
+ * 回复):完成卡片取它当文案,连续更新原地替换;没有摘要时才退回「完成」。
+ */
+function mirrorDeviceSessionSummary(session: AgentIslandSessionState, detail: string): boolean {
+  const text = normalizeActivityText(detail);
+  const last = session.activityLines.at(-1);
+  if (!text || (last?.kind === 'status' && last.text === text)) return false;
+  appendActivityLine(session, 'status', text);
+  return true;
+}
+
+function clearDeviceSessionInteraction(session: AgentIslandSessionState): void {
+  // 与本机交互撤销同口径:等待交互的注意力随交互结束一起放下。
+  if (session.pendingInteractionIds.size > 0) session.unread = false;
+  session.pendingInteractionIds.clear();
+  clearPendingInteractionMetadata(session);
+  session.interactionKind = undefined;
+  session.visibleInteractionSuppressedUntil = null;
+  session.interactionRevealDismissed = false;
+  if (session.detailSource === 'interaction') {
+    session.detail = '';
+    session.detailSource = null;
+  }
 }
 
 /**
@@ -1174,6 +1423,9 @@ export function pruneAgentIslandSessions(state: AgentIslandState, now: number): 
   updateFocusVerificationLifecycle(state, now);
   const preserveExpiredTransient = isPointerInsideIsland(state) || state.hoverExpanded || isCollapsePending(state, now);
   for (const [sessionId, session] of state.sessions.entries()) {
+    // 其它设备的任务不按岛面 TTL 删除:展示面已按 isSessionVisible 隐藏,删掉反而会在
+    // 下一次同步时被当作新条目重新出现。
+    if (session.sourceDeviceId !== null) continue;
     if (isSessionVisible(session, now, preserveExpiredTransient)) continue;
     // 过了岛面 TTL 的未读终态先写入独立账本,再删岛 state。远程绿/红点订账本,
     // 不再跟完整 AgentIslandSessionState(含活动文本)绑在一起。
@@ -1262,7 +1514,10 @@ export function buildAgentIslandDisplayState(
 export function buildAllSessionActivitySnapshots(
   state: AgentIslandState,
 ): AgentIslandSessionSnapshot[] {
-  const snapshots = Array.from(state.sessions.values()).map((session) => toSnapshot(session));
+  // 其它设备的任务不进入本机活动快照:否则会被 relay 当作本机任务再推给控制端。
+  const snapshots = Array.from(state.sessions.values())
+    .filter((session) => session.sourceDeviceId === null)
+    .map((session) => toSnapshot(session));
   const seen = new Set(snapshots.map((snapshot) => snapshot.sessionId));
   for (const unread of state.remoteUnreadTerminals.values()) {
     if (seen.has(unread.sessionId)) continue;
@@ -2143,6 +2398,23 @@ function compactDetailForSession(session: AgentIslandSessionState): string {
   return detail ? truncateInlineText(detail, AGENT_ISLAND_COMPACT_DETAIL_MAX_LENGTH) : '';
 }
 
+/**
+ * 同步给其它设备的完成摘要:只取本轮(最后一条用户消息之后)的最后一条回复。驻留中的
+ * 用户提问、「完成」占位、工具状态和上一轮的回复都不算结果;没有回复时给空串,由接收端
+ * 用自己的语言显示「完成」。
+ */
+export function completedReplySummary(
+  snapshot: Pick<AgentIslandSessionSnapshot, 'activityLines'>,
+): string {
+  for (const line of snapshot.activityLines.slice().reverse()) {
+    if (line.kind === 'user') break;
+    if (line.kind === 'assistant') {
+      return truncateInlineText(line.text, AGENT_ISLAND_COMPACT_DETAIL_MAX_LENGTH);
+    }
+  }
+  return '';
+}
+
 function messagePreviewTextForSession(session: AgentIslandSessionState): string | null {
   if (session.phase === 'needs-interaction' || session.phase === 'error') return null;
   const line = session.messagePreview?.line;
@@ -2201,6 +2473,8 @@ function getOrCreateSession(
     currentToolUseId: null,
     toolDetailUntil: null,
     phase: 'running',
+    workingPhase: 'thinking',
+    workingTools: new Map(),
     agentKind: meta.agentKind ?? 'agent',
     pendingInteractionIds: new Set(),
     pendingInteractionKinds: new Map(),
@@ -2228,6 +2502,7 @@ function getOrCreateSession(
     startedAt: now,
     sortActivityAt: now,
     lastActivityAt: now,
+    sourceDeviceId: null,
   };
   state.sessions.set(meta.sessionId, session);
   return session;
@@ -2236,6 +2511,7 @@ function getOrCreateSession(
 function cloneSession(session: AgentIslandSessionState): AgentIslandSessionState {
   return {
     ...session,
+    workingTools: new Map(session.workingTools),
     pendingInteractionIds: new Set(session.pendingInteractionIds),
     pendingInteractionKinds: new Map(session.pendingInteractionKinds),
     pendingInteractionDetails: new Map(session.pendingInteractionDetails),
@@ -2307,6 +2583,7 @@ function toSnapshot(session: AgentIslandSessionState): AgentIslandSessionSnapsho
     compactDetail: compactDetailForSession(session),
     messagePreview: session.messagePreview?.line ?? null,
     phase: session.phase,
+    workingPhase: session.running && session.phase === 'running' ? session.workingPhase : undefined,
     agentKind: session.agentKind,
     interactionKind: session.interactionKind,
     permissionAction: session.permissionRequestId
@@ -2328,7 +2605,9 @@ function isAttentionSession(session: AgentIslandSessionState): boolean {
 }
 
 function isIslandRelevantEvent(event: AgentEvent): boolean {
-  return event.type === 'status'
+  return event.type === 'compact_boundary'
+    || event.type === 'thinking'
+    || event.type === 'status'
     || event.type === 'text'
     || event.type === 'tool_use'
     || event.type === 'tool_result'
@@ -2353,6 +2632,8 @@ function isUnreadTerminalLedger(
 }
 
 function syncRemoteUnreadTerminal(state: AgentIslandState, session: AgentIslandSessionState): void {
+  // 账本只服务本机任务的对外 relay;其它设备的任务由它自己的设备负责未读。
+  if (session.sourceDeviceId !== null) return;
   if (isUnreadTerminalLedger(session)) {
     state.remoteUnreadTerminals.set(session.sessionId, {
       sessionId: session.sessionId,

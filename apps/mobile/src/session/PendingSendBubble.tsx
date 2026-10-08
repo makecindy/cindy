@@ -24,21 +24,32 @@ import { shareSelectionTapMoved, shouldCommitShareSelectionTap, type ShareSelect
 import {
   AlertCircle,
   ArrowUp,
+  Bot,
+  Ghost,
   ListEnd,
+  Monitor,
   Paperclip,
   Pencil,
   RotateCcw,
+  Send,
+  Smartphone,
+  Timer,
   Trash2,
   type LucideIcon,
 } from 'lucide-react-native';
+import { shouldShowSourceDevice } from '@cindy/maker-shared/message-source';
+import { sourceDeviceLabel } from '@/session/messageSourceLabels';
+import { useRemoteDeviceIdentity } from '@/session/remoteSessionStore';
 import {
   getSentAttachmentThumbUri,
   useSentAttachmentThumbsVersion,
 } from '@/session/sentAttachmentThumbStore';
 import {
+  isPendingSendItemInteractive,
   isPendingSendItemSelected,
   pendingSendSpins,
   type MobilePendingSendItem,
+  type MobilePendingSendSourceKind,
 } from '@/session/pendingSendItems';
 import {
   isDesktopLocalMediaUrl,
@@ -55,6 +66,16 @@ import {
   type ThemeColors,
 } from '@/theme';
 import { radius, spacing, typeScale } from '@/theme/tokens';
+
+/** 与已发送消息上的来源标签同一组图标(自动化 Timer / 任务 Send / Orca Bot / 插件 Ghost)。 */
+function sourceIcon(kind: MobilePendingSendSourceKind): LucideIcon {
+  switch (kind) {
+    case 'automation': return Timer;
+    case 'orca': return Bot;
+    case 'plugin': return Ghost;
+    default: return Send;
+  }
+}
 
 export interface PendingSendBubbleActions {
   /** 展开 / 收起操作行的条目;null = 全收起。 */
@@ -191,7 +212,10 @@ export function PendingSendBubble({
   renderText,
   renderFile,
   screenWidth,
+  viewerDeviceId,
 }: {
+  /** 当前查看设备:排队消息就是本机发的时不显示设备标签(与已发送消息同一规则)。 */
+  viewerDeviceId?: string | null;
   renderImage: (uri: string | null, sourceUri: string | null, onError: () => void) => ReactNode;
   renderText: (text: string, index: number) => ReactNode;
   renderFile: (name: string, index: number) => ReactNode;
@@ -207,7 +231,12 @@ export function PendingSendBubble({
   const spinning = pendingSendSpins(item.phase);
   const editing = item.phase === 'editing';
   const failed = item.phase === 'failed';
-  const interactive = item.actions !== null || failed;
+  // Local outbox rows have not reached the desktop queue yet, but users must
+  // still be able to cancel them while upload/enqueue is in flight. Settling
+  // rows deliberately remain non-interactive: they have already left the
+  // queue and use the existing recovery path instead.
+  const interactive = isPendingSendItemInteractive(item);
+  const outbox = interactive && item.actions === null;
   const selected = isPendingSendItemSelected(item, actions.selectedClientId);
   const bubbleLabel = item.text || t('message.queue.attachmentMessage');
   const uploadsPending = item.phase === 'uploading';
@@ -273,19 +302,78 @@ export function PendingSendBubble({
   };
   const badgePosition = badgeAnchor?.clientId === item.clientId
     ? { left: badgeAnchor.left } : { right: 0 };
+  const statusLabel = failed
+    ? t('message.queue.sendFailedMessage', { text: bubbleLabel })
+    : spinning
+      ? t('message.queue.sendingMessage', { text: bubbleLabel })
+      : item.queueIndex !== null
+        ? t('message.queue.queuedMessageLabel', { index: item.queueIndex, text: bubbleLabel })
+        : t('message.queue.sendingMessage', { text: bubbleLabel });
+  const SourceIcon = item.source ? sourceIcon(item.source.kind) : null;
+  const [sourceIdVisible, setSourceIdVisible] = useState(false);
+  const [deviceIdVisible, setDeviceIdVisible] = useState(false);
+  const directory = useRemoteDeviceIdentity();
+  const showDevice = shouldShowSourceDevice(item.sourceDevice, viewerDeviceId);
+  const deviceLabel = showDevice && item.sourceDevice ? sourceDeviceLabel(item.sourceDevice, directory) : null;
+  const deviceIdText = showDevice && item.sourceDevice
+    ? t('message.renderer.sourceDeviceId', { id: item.sourceDevice.deviceId })
+    : null;
+  const DeviceIcon = item.sourceDevice?.platform === 'mobile' ? Smartphone : Monitor;
 
   return (
     <View style={styles.rowWrap} testID={`pendingSend.row.${item.clientId}`}>
+      {item.source && SourceIcon ? (
+        // 非本人输入的排队条目:气泡上方的来源标签(对齐桌面排队面板与已发送消息的来源标签)。
+        // 有来源 ID 时长按就地显示(可选中复制),读屏提示读出 ID;脱敏来源保持静态。
+        <View style={styles.sourceStack}>
+          <Pressable
+            accessibilityHint={item.source.idText}
+            accessibilityLabel={item.source.label}
+            accessibilityRole="text"
+            disabled={!item.source.idText}
+            hitSlop={8}
+            onLongPress={item.source.idText ? () => setSourceIdVisible((visible) => !visible) : undefined}
+            style={styles.sourceRow}
+            testID={`pendingSend.source.${item.clientId}`}
+          >
+            <SourceIcon color={colors.textTertiary} size={iconSize.xs} strokeWidth={iconStroke.thin} />
+            <Text numberOfLines={1} style={styles.sourceText}>{item.source.label}</Text>
+          </Pressable>
+          {sourceIdVisible && item.source.idText ? (
+            <Text selectable style={styles.sourceText} testID={`pendingSend.sourceId.${item.clientId}`}>
+              {item.source.idText}
+            </Text>
+          ) : null}
+        </View>
+      ) : null}
+      {deviceLabel && deviceIdText ? (
+        // 别的设备发来的本人排队消息:标出设备,长按显示设备 ID;仍可编辑 / 插话。
+        <View style={styles.sourceStack}>
+          <Pressable
+            accessibilityHint={deviceIdText}
+            accessibilityLabel={deviceLabel}
+            accessibilityRole="text"
+            hitSlop={8}
+            onLongPress={() => setDeviceIdVisible((visible) => !visible)}
+            style={styles.sourceRow}
+            testID={`pendingSend.sourceDevice.${item.clientId}`}
+          >
+            <DeviceIcon color={colors.textTertiary} size={iconSize.xs} strokeWidth={iconStroke.thin} />
+            <Text numberOfLines={1} style={styles.sourceText}>{deviceLabel}</Text>
+          </Pressable>
+          {deviceIdVisible ? (
+            <Text selectable style={styles.sourceText} testID={`pendingSend.sourceDeviceId.${item.clientId}`}>
+              {deviceIdText}
+            </Text>
+          ) : null}
+        </View>
+      ) : null}
       <View style={styles.bubbleRow}>
         <Pressable
           accessibilityHint={item.hint ?? undefined}
-          accessibilityLabel={failed
-            ? t('message.queue.sendFailedMessage', { text: bubbleLabel })
-            : spinning
-              ? t('message.queue.sendingMessage', { text: bubbleLabel })
-              : item.queueIndex !== null
-                ? t('message.queue.queuedMessageLabel', { index: item.queueIndex, text: bubbleLabel })
-                : t('message.queue.sendingMessage', { text: bubbleLabel })}
+          accessibilityLabel={item.source
+            ? t('message.queue.withSource', { source: item.source.label, message: statusLabel })
+            : statusLabel}
           accessibilityRole="button"
           accessibilityState={{ expanded: selected, disabled: !interactive }}
           disabled={!interactive}
@@ -441,23 +529,23 @@ export function PendingSendBubble({
           />
         </View>
       ) : null}
-      {selected && failed ? (
+      {selected && outbox ? (
         <View style={styles.actionRow} testID={`pendingSend.outboxActions.${item.clientId}`}>
           <ActionPill
             busy={actions.busy}
             icon={Trash2}
-            label={t('message.queue.delete')}
+            label={t(failed ? 'message.queue.delete' : 'message.queue.cancel')}
             onPress={() => actions.onRemoveOutbox(item.clientId)}
             testID={`pendingSend.outboxRemove.${item.clientId}`}
           />
-          <ActionPill
+          {failed ? <ActionPill
             busy={actions.busy}
             cta
             icon={RotateCcw}
             label={t('message.queue.retry')}
             onPress={() => actions.onRetryOutbox(item.clientId)}
             testID={`pendingSend.outboxRetry.${item.clientId}`}
-          />
+          /> : null}
         </View>
       ) : null}
     </View>
@@ -510,6 +598,10 @@ function ActionPill({
 
 const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   rowWrap: { alignItems: 'flex-end', gap: spacing.sm, width: '100%' },
+  // 来源标签:与已发送消息上方的来源标签同款(12/18 三级色)。
+  sourceStack: { alignItems: 'flex-end', gap: 2, maxWidth: '86%' },
+  sourceRow: { alignItems: 'center', flexDirection: 'row', gap: spacing.xs },
+  sourceText: { color: colors.textTertiary, flexShrink: 1, fontSize: typeScale.caption, lineHeight: lineHeight.caption },
   bubbleRow: {
     alignItems: 'center',
     flexDirection: 'row',
@@ -546,7 +638,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     lineHeight: lineHeight.bodyLarge,
   },
   attachmentLine: { alignItems: 'center', flexDirection: 'row', gap: 4 },
-  attachmentLineText: { color: colors.textTertiary, fontSize: typeScale.footnote },
+  attachmentLineText: { color: colors.textTertiary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
   attachmentStrip: { alignItems: 'flex-end', marginBottom: spacing.xs, maxWidth: '100%' },
   thumbStrip: { alignItems: 'flex-end', maxWidth: '100%' },
   thumbCell: { borderRadius: radius.container, overflow: 'hidden' },
@@ -560,7 +652,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     right: 0,
     top: 0,
   },
-  editingHint: { color: colors.textTertiary, fontSize: typeScale.footnote },
+  editingHint: { color: colors.textTertiary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
   errorText: { color: colors.errorText, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
   rowHint: {
     color: colors.textTertiary,
@@ -582,7 +674,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     paddingHorizontal: spacing.md,
   },
   actionPillCta: { backgroundColor: colors.cta, borderColor: colors.cta },
-  actionPillText: { color: colors.textPrimary, fontSize: typeScale.caption, fontWeight: fontWeight.medium },
+  actionPillText: { color: colors.textPrimary, fontSize: typeScale.caption, lineHeight: lineHeight.caption, fontWeight: fontWeight.medium },
   actionPillTextCta: { color: colors.ctaText },
   pressed: { opacity: 0.72 },
   disabled: { opacity: 0.42 },

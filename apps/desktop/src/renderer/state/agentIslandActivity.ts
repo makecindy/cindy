@@ -26,6 +26,7 @@ function emit(): void {
 function sameActivity(a: AgentIslandSessionActivity, b: AgentIslandSessionActivity): boolean {
   return (
     a.phase === b.phase &&
+    a.workingPhase === b.workingPhase &&
     a.recordStatus === b.recordStatus &&
     a.compactDetail === b.compactDetail &&
     a.currentActionSummary === b.currentActionSummary &&
@@ -76,6 +77,26 @@ function ensureSubscribed(): void {
   } catch {
     // preload 不可用(异常环境)——保持空 Map,卡片回退到现状显示。
   }
+}
+
+/** Start mirroring before a non-React reader needs the latest snapshot. */
+export function ensureAgentIslandActivitySubscribed(): void {
+  ensureSubscribed();
+}
+
+/**
+ * Whether Main still keeps this session running after its turn ended.
+ *
+ * Agent Island defers an Orca Lead's completion while Workers still owe it
+ * reports, so the Lead stays `running` here. A paused input queue also holds the
+ * island completion; it keeps its existing renderer completion and is excluded.
+ */
+export function isSessionCompletionHeldByAgentIsland(
+  sessionId: string,
+  hasPausedQueue: boolean,
+): boolean {
+  if (hasPausedQueue) return false;
+  return activityMap.get(sessionId)?.phase === 'running';
 }
 
 function subscribe(cb: () => void): () => void {

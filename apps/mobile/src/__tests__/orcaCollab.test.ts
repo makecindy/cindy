@@ -5,9 +5,10 @@ import { i18n } from '@/i18n';
 import {
   buildOrcaDispatchCard,
   classifyOrcaDispatchTool,
-  parseOrcaWorkerReport,
+  parseOrcaPersistedMessage,
+  readOrcaPersistedSource,
 } from '@/session/orcaCollab';
-import { excludeOrcaWorkerSessions } from '@/session/mobileHome';
+import { excludeOrcaWorkerSessions, selectVisibleDeviceSessions } from '@/session/mobileHome';
 import { normalizeRemoteMessages } from '@/session/messageNormalize';
 import type { RemoteMessage, RemoteSession } from '@/session/types';
 
@@ -107,22 +108,39 @@ describe('buildOrcaDispatchCard', () => {
   });
 });
 
-describe('parseOrcaWorkerReport', () => {
-  it('parses the DB JSON report shape (string content)', () => {
-    expect(parseOrcaWorkerReport('{"orcaSource":"worker","content":"任务完成"}'))
-      .toEqual({ variant: 'report', title: 'Worker 回报', body: '任务完成' });
+describe('parseOrcaPersistedMessage', () => {
+  it('parses the DB JSON worker report shape (string content) with the stamped worker role', () => {
+    expect(parseOrcaPersistedMessage('{"orcaSource":"worker","content":"任务完成"}', 'frontend'))
+      .toEqual({ variant: 'report', title: '来自 Worker「frontend」的消息', body: '任务完成' });
   });
 
-  it('parses an already-object report', () => {
-    expect(parseOrcaWorkerReport({ orcaSource: 'worker', content: '已修复' }))
-      .toEqual({ variant: 'report', title: 'Worker 回报', body: '已修复' });
+  it('parses an already-object report and falls back to the generic Worker title', () => {
+    expect(parseOrcaPersistedMessage({ orcaSource: 'worker', content: '已修复' }))
+      .toEqual({ variant: 'report', title: '来自 Worker 的消息', body: '已修复' });
+    // 主机反查不到 role 时退回的通用值不当角色名显示。
+    expect(parseOrcaPersistedMessage({ orcaSource: 'worker', content: 'x' }, 'Worker')?.title)
+      .toBe('来自 Worker 的消息');
+  });
+
+  it('parses a Lead → Worker message into a lead card, never exposing raw JSON', () => {
+    const card = parseOrcaPersistedMessage('{"orcaSource":"lead","content":"请补测试"}', 'Lead');
+    expect(card).toEqual({ variant: 'lead', title: '来自 Lead 的消息', body: '请补测试' });
+    expect(JSON.stringify(card)).not.toContain('orcaSource');
+    expect(parseOrcaPersistedMessage('{"orcaSource":"lead","content":""}')?.body).toBe('（空消息）');
   });
 
   it('returns null for normal user content / malformed JSON (fallback to plain text)', () => {
-    expect(parseOrcaWorkerReport('{"text":"hello"}')).toBeNull();
-    expect(parseOrcaWorkerReport('just a plain message')).toBeNull();
-    expect(parseOrcaWorkerReport('{not json')).toBeNull();
-    expect(parseOrcaWorkerReport({ text: 'hi', images: [] })).toBeNull();
+    expect(parseOrcaPersistedMessage('{"text":"hello"}')).toBeNull();
+    expect(parseOrcaPersistedMessage('{"orcaSource":"other","content":"x"}')).toBeNull();
+    expect(parseOrcaPersistedMessage('just a plain message')).toBeNull();
+    expect(parseOrcaPersistedMessage('{not json')).toBeNull();
+    expect(parseOrcaPersistedMessage({ text: 'hi', images: [] })).toBeNull();
+  });
+
+  it('reads only the Orca direction marker', () => {
+    expect(readOrcaPersistedSource('{"orcaSource":"lead","content":"x"}')).toBe('lead');
+    expect(readOrcaPersistedSource('{"orcaSource":"worker","content":"x"}')).toBe('worker');
+    expect(readOrcaPersistedSource('plain')).toBeNull();
   });
 });
 
@@ -139,6 +157,7 @@ describe('normalizeRemoteMessages with orca collaboration', () => {
         id: 'report',
         role: 'user',
         content: '{"orcaSource":"worker","content":"接口完成"}',
+        agentMeta: { origin: { kind: 'orca', senderLabel: 'api', senderSessionId: 'worker-1' } },
         createdAt: '2026-01-01T00:00:02.000Z',
       }),
     ]);
@@ -150,7 +169,27 @@ describe('normalizeRemoteMessages with orca collaboration', () => {
     const report = items.find((item) => item.source.id === 'report');
     expect(report?.kind).toBe('user');
     expect(report?.body).toBe('接口完成');
-    expect(report?.orcaCard).toEqual({ variant: 'report', title: 'Worker 回报', body: '接口完成' });
+    expect(report?.orcaCard).toEqual({ variant: 'report', title: '来自 Worker「api」的消息', body: '接口完成' });
+  });
+
+  it('renders a persisted Lead → Worker message in the worker session as a lead card', () => {
+    const [item] = normalizeRemoteMessages([
+      message({
+        id: 'lead-message',
+        role: 'user',
+        content: '{"orcaSource":"lead","content":"先跑一遍测试"}',
+        agentMeta: { origin: { kind: 'orca', senderLabel: 'Lead', senderSessionId: 'lead-1' } },
+      }),
+    ]);
+    expect(item).toMatchObject({
+      kind: 'user',
+      // Lead 的消息在 worker 任务里是新一轮输入,仍是 turn 边界。
+      label: 'user',
+      body: '先跑一遍测试',
+      align: 'agent',
+      orcaCard: { variant: 'lead', title: '来自 Lead 的消息', body: '先跑一遍测试' },
+      sessionOrigin: { senderSessionId: 'lead-1' },
+    });
   });
 
   it('renders create_workers tool_use as an Orca dispatch card', () => {
@@ -208,13 +247,73 @@ describe('excludeOrcaWorkerSessions', () => {
   });
 });
 
+describe('selectVisibleDeviceSessions', () => {
+  it('drops workers and keeps lead/normal rows in the same device and project', () => {
+    const rows = selectVisibleDeviceSessions([
+      session({
+        id: 'lead',
+        orcaRole: 'lead',
+        deviceLinkDeviceId: 'dev-a',
+        workingDir: '/repo/cindy',
+      }),
+      session({
+        id: 'worker',
+        orcaRole: 'worker',
+        deviceLinkDeviceId: 'dev-a',
+        workingDir: '/repo/cindy',
+      }),
+      session({
+        id: 'other-device',
+        orcaRole: null,
+        deviceLinkDeviceId: 'dev-b',
+        workingDir: '/repo/cindy',
+      }),
+      session({
+        id: 'other-project',
+        orcaRole: null,
+        deviceLinkDeviceId: 'dev-a',
+        workingDir: '/repo/infra',
+      }),
+      session({
+        id: 'canonical-match',
+        orcaRole: null,
+        canonicalDeviceId: 'dev-a',
+        deviceLinkDeviceId: 'stale-id',
+        workingDir: '/repo/cindy',
+      }),
+    ], 'dev-a', '/repo/cindy');
+    expect(rows.map((item) => item.id)).toEqual(['lead', 'canonical-match']);
+  });
+
+  it('keeps all non-worker rows for a device when no project dir is set', () => {
+    const rows = selectVisibleDeviceSessions([
+      session({ id: 'keep', orcaRole: null, deviceLinkDeviceId: 'dev-a', workingDir: '/repo/one' }),
+      session({ id: 'worker', orcaRole: 'worker', deviceLinkDeviceId: 'dev-a', workingDir: '/repo/one' }),
+      session({ id: 'other', orcaRole: 'lead', deviceLinkDeviceId: 'dev-b', workingDir: '/repo/one' }),
+    ], 'dev-a');
+    expect(rows.map((item) => item.id)).toEqual(['keep']);
+  });
+
+  it('feeds the derived rows into the device/project list sections', () => {
+    const detail = readFileSync(resolve(process.cwd(), 'app/devices/[deviceId].tsx'), 'utf8');
+    expect(detail).toContain('selectVisibleDeviceSessions(allSessions, deviceId, projectWorkingDir)');
+    expect(detail).toContain('buildRemoteSessionSections(sessions,');
+    expect(detail).toContain('summarizeRemoteSessionOverview(sessions,');
+  });
+});
+
 describe('MessageRenderer wires the orca card', () => {
   it('routes message items carrying an orcaCard to OrcaCollabCard', () => {
     const source = readFileSync(resolve(process.cwd(), 'src/session/MessageRenderer.tsx'), 'utf8');
     expect(source).toContain('item.message.orcaCard');
     // F4:透传 screenWidth,使 CollabCardShell layout 随屏宽响应(与 SubagentCard 一致)。
-    expect(source).toContain('<OrcaCollabCard card={item.message.orcaCard} screenWidth={actions.screenWidth} />');
-    expect(source).toContain('function OrcaCollabCard({ card, screenWidth }: { card: OrcaCollabCardModel; screenWidth?: number })');
+    expect(source).toContain('<OrcaCollabCard card={item.message.orcaCard} screenWidth={actions.screenWidth}');
+    expect(source).toContain('blockKey={JSON.stringify([actions.remoteDeviceId, item.key])}');
+    expect(source).toContain('controlledExpanded={expanded}');
+    // Legacy `orca-toggled-` entries meant "collapsed" for dispatch cards; do not read them.
+    expect(source).toContain('`orca-expanded-${JSON.stringify([accountGeneration, blockKey, card.variant])}`');
+    expect(source).not.toContain('`orca-toggled-');
+    expect(source).toContain('onControlledToggle={toggleExpanded}');
     expect(source).toContain('testID={`message.orcaCard.${card.variant}`}');
   });
 });

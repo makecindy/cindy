@@ -18,6 +18,8 @@ import { setProviderPresentation, retainProviderPresentationAfterAuthChange } fr
 import type { CodexContextWindowInfo } from '@cindy/maker-core';
 import {
   PI_MODEL_APIS,
+  mergeDiscoveredRuntimeModels,
+  isByokProviderId,
   isLoopbackProviderUrl,
   isProviderRequestPath,
   runtimeCustomProviderId,
@@ -30,13 +32,15 @@ import {
 } from '@cindy/model-providers';
 
 import type { LocalCliDetection } from '../../shared/localCliDetect.js';
-import { MANAGED_OLLAMA_PROVIDER_ID } from '../../shared/localModelRuntime.js';
+import { MANAGED_OLLAMA_PROVIDER_ID, isManagedSidecarProviderId } from '../../shared/localModelRuntime.js';
 import type {
   CodexImageGenerationRestartPolicy,
   CustomProviderUpdateOptions,
   CustomProviderUpdateResult,
 } from '../../shared/customProviderUpdate.js';
 import { notifyManagedOllamaRemoved } from '../local-model-runtime/ipc.js';
+import { stopManagedLlamaCppService } from '../local-model-runtime/llamaCppService.js';
+import { MANAGED_LLAMACPP_PROVIDER_ID } from '../../shared/llamaCpp.js';
 import { isIpcError } from '../../shared/ipc-errors.js';
 import type {
   ModelPriceOverrideDesiredQuote,
@@ -132,10 +136,18 @@ function requireProviderOAuthOwnerId(value: unknown, required = false): string |
   return value;
 }
 
-function requireProviderOAuthLoginOptions(value: unknown): { ownerId?: string } {
+function requireProviderOAuthLoginOptions(value: unknown): {
+  ownerId?: string;
+  method?: 'browser' | 'device';
+} {
   if (value === undefined) return {};
   const options = providerOAuthOptions(value);
-  return { ownerId: requireProviderOAuthOwnerId(options.ownerId) };
+  if (options.method !== undefined && options.method !== 'browser' && options.method !== 'device')
+    throwIpcError('INVALID_PARAMS', 'method must be browser or device');
+  return {
+    ownerId: requireProviderOAuthOwnerId(options.ownerId),
+    method: options.method as 'browser' | 'device' | undefined,
+  };
 }
 
 function requireProviderOAuthCancelOptions(value: unknown): {
@@ -258,6 +270,8 @@ export interface ProviderHandlerDeps {
    * 是本机主页面时才放行副作用（PR #548 review）。
    */
   listProviders(opts?: { allowSideEffects?: boolean }): Promise<ProviderView[]>;
+  /** Synchronous catalog ownership check; injected to keep this IPC module free of Host cycles. */
+  isOrganizationManagedProviderId(providerId: string): boolean;
   /**
    * 「模型显示/隐藏」override 快照(renderer → main 镜像,生产 = getModelVisibilityMirrorSnapshot)。
    * PROVIDER_LIST 附带回传,供 device-link 控制端(手机)按被控端用户开关过滤模型列表;
@@ -330,6 +344,8 @@ export interface ProviderHandlerDeps {
     providerId: string,
     isCurrent: () => boolean,
     onBrowserUrl?: (url: string | null) => void,
+    method?: 'browser' | 'device',
+    onDeviceCode?: (code: { userCode: string; verificationUrl: string; expiresAt: number }) => void,
   ): Promise<{
     ok: boolean;
     reason?: string;
@@ -394,6 +410,9 @@ export interface ProviderHandlerDeps {
    */
   setModelsDisabled(providerId: string, modelIds: readonly string[], disabled: boolean): void;
   setProviderDisabled(providerId: string, disabled: boolean): void;
+  /** Per-provider opt-in for remote Agent use; absent means disabled. */
+  getRemoteProviderInvocationEnabled?(providerId: string): boolean;
+  setRemoteProviderInvocationEnabled?(providerId: string, enabled: boolean): void;
   /**
    * 「恢复默认」= 删除该供应商的整组停用 override(供应商级 + 全部逐模型条目,含
    * 指向已下架模型的陈旧条目)。语义遵循 docs/dev-rules/configuration-and-overrides.md
@@ -1070,6 +1089,9 @@ export function registerProviderHandlers(
       }
       assertProviderMutationOwner(ownerAtIngress);
       const providerOrder = deps.getProviderOrder();
+      const remoteAccess = deps.getRemoteProviderInvocationEnabled
+        ? (providerId: string) => deps.getRemoteProviderInvocationEnabled!(providerId)
+        : null;
       // 运行期鉴权请求头(Authorization / x-api-key 等)一律不经 provider:list 下发任何
       // Renderer——即使本机主页面 trusted:任何 Renderer 注入(XSS)都能读走这些长期凭证
       // (codex review)。头凭证是 main-only 密文,renderer 从不回读:编辑时未显式改动
@@ -1077,7 +1099,12 @@ export function registerProviderHandlers(
       return {
         dataOwnerId,
         ownerGeneration: ownerAtIngress?.generation ?? 0,
-        providers: providers.map(withoutProviderHeaderCredentials),
+        providers: providers.map((provider) => {
+          const safe = withoutProviderHeaderCredentials(provider);
+          return remoteAccess
+            ? { ...safe, remoteInvocationEnabled: remoteAccess(provider.id) }
+            : safe;
+        }),
         providerOrder,
         modelVisibilityOverrides,
       };
@@ -1285,7 +1312,7 @@ export function registerProviderHandlers(
               });
               if (fetched.ok && fetched.models?.length) {
                 assertProviderImportModels(fetched.models);
-                config.runtimes[agent] = { ...runtime, models: fetched.models };
+                config.runtimes[agent] = { ...runtime, models: mergeDiscoveredRuntimeModels([], fetched.models) };
               } else modelsPending = true;
             } catch {
               modelsPending = true;
@@ -1363,6 +1390,9 @@ export function registerProviderHandlers(
     assertRequestedProviderOwner(value.dataOwnerId as string | null, value.ownerGeneration);
     if (!provider || provider.id === 'xd') {
       throwIpcError('INVALID_PARAMS', 'Provider does not support presentation overrides');
+    }
+    if (provider.source === 'organization') {
+      throwIpcError('PERMISSION_DENIED', 'Enterprise connections are managed by your organization');
     }
     if (value.action === 'rename' && typeof value.name === 'string' && value.name.trim() && value.name.length <= 128) {
       if (provider.source === 'builtin') {
@@ -1574,6 +1604,38 @@ export function registerProviderHandlers(
     return enqueueDisableWrite(run);
   });
 
+  registry.handle(MAKER_INVOKE.PROVIDER_REMOTE_ACCESS_SET, async (event, input: unknown) => {
+    assertTrustedProviderMutationSender(event);
+    const ownerAtIngress = captureProviderOwnerSession();
+    if (!deps.getRemoteProviderInvocationEnabled || !deps.setRemoteProviderInvocationEnabled) {
+      throwIpcError('INTERNAL', 'remote provider access is not wired');
+    }
+    if (!input || typeof input !== 'object' || Array.isArray(input)) {
+      throwIpcError('INVALID_PARAMS', 'invalid input');
+    }
+    const value = input as Record<string, unknown>;
+    if (typeof value.providerId !== 'string' || value.providerId.length === 0 || value.providerId.length > 256) {
+      throwIpcError('INVALID_PARAMS', 'providerId required');
+    }
+    if (typeof value.enabled !== 'boolean') throwIpcError('INVALID_PARAMS', 'enabled required');
+    const providers = await deps.listProviders({ allowSideEffects: false });
+    assertProviderMutationOwner(ownerAtIngress);
+    const provider = providers.find((item) => item.id === value.providerId);
+    if (!provider) throwIpcError('INVALID_PARAMS', `unknown providerId "${value.providerId}"`);
+    assertProviderMutationOwner(ownerAtIngress, 'active account changed before persisting remote provider access');
+    try {
+      deps.setRemoteProviderInvocationEnabled(value.providerId, value.enabled);
+    } catch (err) {
+      log.warn('remote provider access persist failed', {
+        providerId: value.providerId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      throwIpcError('INTERNAL', 'failed to persist remote provider access');
+    }
+    deps.broadcastChanged();
+    return { ok: true, enabled: value.enabled };
+  });
+
   const parsePriceTarget = (value: unknown): ModelPriceOverrideTarget => {
     if (!value || typeof value !== 'object' || Array.isArray(value)) {
       throwIpcError('INVALID_PARAMS', 'price override target must be an object');
@@ -1664,6 +1726,9 @@ export function registerProviderHandlers(
       if (target.providerId === 'xd') {
         throwIpcError('INVALID_PARAMS', 'Cindy AI Gateway pricing is server-controlled');
       }
+      if (deps.isOrganizationManagedProviderId(target.providerId)) {
+        throwIpcError('PERMISSION_DENIED', 'Enterprise pricing is managed by your organization');
+      }
       if (desired.currency === 'CNY' && deps.getLedgerCurrency() === 'USD') {
         throwIpcError('INVALID_PARAMS', 'CNY price overrides cannot project into a USD ledger');
       }
@@ -1696,6 +1761,9 @@ export function registerProviderHandlers(
   registry.handle(MAKER_INVOKE.MODEL_PRICE_OVERRIDE_RESET, async (event, input: unknown) => {
     assertTrustedProviderMutationSender(event);
     const target = parsePriceTarget(input);
+    if (deps.isOrganizationManagedProviderId(target.providerId)) {
+      throwIpcError('PERMISSION_DENIED', 'Enterprise pricing is managed by your organization');
+    }
     const ownerAtIngress = captureProviderOwnerSession();
     return withProviderConfigMutation(target.providerId, () =>
       enqueuePriceMutation(async () => {
@@ -1871,7 +1939,10 @@ export function registerProviderHandlers(
     const options = parseCustomProviderUpdateOptions(optionsInput);
     if (!options) throwIpcError('INVALID_PARAMS', 'invalid custom provider create options');
     const config = input as CustomProviderConfig;
-    if (config.id === MANAGED_OLLAMA_PROVIDER_ID) {
+    if (isByokProviderId(config.id) || deps.isOrganizationManagedProviderId(config.id)) {
+      throwIpcError('PERMISSION_DENIED', 'Enterprise connections are managed by your organization');
+    }
+    if (isManagedSidecarProviderId(config.id)) {
       throwIpcError(
         'PERMISSION_DENIED',
         'managed local providers cannot be created from the custom form',
@@ -1944,7 +2015,10 @@ export function registerProviderHandlers(
     const options = parseCustomProviderUpdateOptions(optionsInput);
     if (!options) throwIpcError('INVALID_PARAMS', 'invalid custom provider update options');
     let config = input as CustomProviderConfig;
-    if (config.id === MANAGED_OLLAMA_PROVIDER_ID) {
+    if (deps.isOrganizationManagedProviderId(config.id)) {
+      throwIpcError('PERMISSION_DENIED', 'Enterprise connections are managed by your organization');
+    }
+    if (isManagedSidecarProviderId(config.id)) {
       throwIpcError(
         'PERMISSION_DENIED',
         'managed local providers cannot be edited from the custom form',
@@ -2086,6 +2160,9 @@ export function registerProviderHandlers(
     if (typeof providerId !== 'string' || providerId.length === 0) {
       throwIpcError('INVALID_PARAMS', 'providerId required');
     }
+    if (deps.isOrganizationManagedProviderId(providerId)) {
+      throwIpcError('PERMISSION_DENIED', 'Enterprise connections are managed by your organization');
+    }
     const runtimeProviderId = runtimeCustomProviderId(providerId);
     const ownerAtIngress = captureProviderOwnerSession();
     return withProviderConfigMutation(providerId, async (commitRouteMutation) => {
@@ -2110,72 +2187,83 @@ export function registerProviderHandlers(
           await deps.retireCodexAccount?.(providerId);
           assertProviderMutationOwner(ownerAtIngress);
         }
-        deps.oauthCancel(providerId);
-        const credentialSnapshots = stageProviderCredentials(
-          providerId,
-          (VALID_AGENTS as readonly AgentKind[]).map((agent) => ({
-            agent,
-            replacement: null,
-          })),
-          planProviderHeaderMutations(
-            { id: providerId, name: providerId, runtimes: {} },
-            {},
-            'delete',
-          ),
-          commitRouteMutation,
-        );
-        // OAuth 形态自定义供应商的凭证 blob 一并清掉（apiKey 形态无 blob，幂等无害）。
-        let restoreOAuthCredentials: (() => boolean) | null = null;
-        let restoreDisableOverrides: (() => boolean) | null = null;
-        let restorePriceOverrides: (() => boolean) | null = null;
-        // 整个删除事务(清 override → 删凭证 → 删配置 → 刷目录)在 disable 写队列**内**
-        // 执行,持队列直到 afterChange 刷完 active-catalog:只把清理入队的话,清理落盘
-        // 后队列即释放,「删除完成前」的窗口里并发 MODEL_DISABLE_SET 仍能从未刷新的
-        // listProviders() 里找到该 provider、预埋新 override,同 id 重建照旧复活停用
-        // 状态。整体持锁后,并发写会排到目录刷新之后,成员校验自然拒绝
-        // (PR #744 review 第二十二轮)。队列内不得再调 enqueueDisableWrite(自等死锁),
-        // 清理与恢复都直接调用。
-        await enqueueDisableWrite(async () => {
-          // 进入 disable 全局队列后可能再次换号；以下会写 owner-scoped override/OAuth blob。
+        const deleteConnection = async () => {
+          // Stop first: no owner-scoped settings or credentials may be staged while waiting.
           assertProviderMutationOwner(ownerAtIngress);
+          deps.oauthCancel(providerId);
+          // OAuth 形态自定义供应商的凭证 blob 一并清掉（apiKey 形态无 blob，幂等无害）。
+          let restoreOAuthCredentials: (() => boolean) | null = null;
+          let restoreDisableOverrides: (() => boolean) | null = null;
+          let restorePriceOverrides: (() => boolean) | null = null;
+          // 整个删除事务(清 override → 删凭证 → 删配置 → 刷目录)在 disable 写队列**内**
+          // 执行,持队列直到 afterChange 刷完 active-catalog:只把清理入队的话,清理落盘
+          // 后队列即释放,「删除完成前」的窗口里并发 MODEL_DISABLE_SET 仍能从未刷新的
+          // listProviders() 里找到该 provider、预埋新 override,同 id 重建照旧复活停用
+          // 状态。整体持锁后,并发写会排到目录刷新之后,成员校验自然拒绝
+          // (PR #744 review 第二十二轮)。队列内不得再调 enqueueDisableWrite(自等死锁),
+          // 清理与恢复都直接调用。
+          await enqueueDisableWrite(async () => {
+            // 进入 disable 全局队列后可能再次换号；以下会写 owner-scoped override/OAuth blob。
+            assertProviderMutationOwner(ownerAtIngress);
+            const credentialSnapshots = stageProviderCredentials(
+              providerId,
+              (VALID_AGENTS as readonly AgentKind[]).map((agent) => ({
+                agent,
+                replacement: null,
+              })),
+              planProviderHeaderMutations(
+                { id: providerId, name: providerId, runtimes: {} },
+                {},
+                'delete',
+              ),
+              commitRouteMutation,
+            );
+            try {
+              // 停用 override 清理进事务(第二十轮):放在配置删除之前,后续任一步失败
+              // 由恢复函数把停用状态原样写回;清理自身抛错时事务未产生破坏,删除中止,
+              // 不再出现「配置删了、override 残留」让同 id 重建复活旧停用状态。
+              restoreDisableOverrides =
+                deps.stageClearProviderDisableOverrides?.(runtimeProviderId) ?? null;
+              restorePriceOverrides =
+                deps.stageClearProviderModelPriceOverrides?.(runtimeProviderId) ?? null;
+              assertProviderMutationOwner(ownerAtIngress);
+              restoreOAuthCredentials = deps.removeOAuthCredentials(providerId);
+              if (!restoreOAuthCredentials) {
+                throwIpcError('INTERNAL', 'failed to remove existing OAuth credentials');
+              }
+              await deleteCustomProvider(providerId);
+              if (providerId === MANAGED_OLLAMA_PROVIDER_ID) notifyManagedOllamaRemoved();
+              assertProviderMutationOwner(ownerAtIngress);
+            } catch (err) {
+              assertProviderMutationOwner(ownerAtIngress);
+              const overridesRestored = !restoreDisableOverrides || restoreDisableOverrides();
+              const pricesRestored = !restorePriceOverrides || restorePriceOverrides();
+              const oauthRestored = !restoreOAuthCredentials || restoreOAuthCredentials();
+              const credentialsRestored = restoreProviderCredentials(providerId, credentialSnapshots);
+              if (!oauthRestored || !credentialsRestored || !overridesRestored || !pricesRestored) {
+                commitRouteMutation();
+                throwIpcError(
+                  'INTERNAL',
+                  'provider deletion failed and existing credentials could not be restored',
+                );
+              }
+              throw err;
+            }
+            // 在队列内尝试刷新目录；刷新失败不撤销已经提交的删除。
+            // 凭证/override 的恢复只覆盖删除本身失败的场景。
+            assertProviderMutationOwner(ownerAtIngress);
+            await afterChange(codexHostPrepared, commitRouteMutation);
+            assertProviderMutationOwner(ownerAtIngress);
+            deps.broadcastPricingChanged();
+          });
+        };
+        if (providerId === MANAGED_LLAMACPP_PROVIDER_ID) {
           try {
-            // 停用 override 清理进事务(第二十轮):放在配置删除之前,后续任一步失败
-            // 由恢复函数把停用状态原样写回;清理自身抛错时事务未产生破坏,删除中止,
-            // 不再出现「配置删了、override 残留」让同 id 重建复活旧停用状态。
-            restoreDisableOverrides =
-              deps.stageClearProviderDisableOverrides?.(runtimeProviderId) ?? null;
-            restorePriceOverrides =
-              deps.stageClearProviderModelPriceOverrides?.(runtimeProviderId) ?? null;
-            assertProviderMutationOwner(ownerAtIngress);
-            restoreOAuthCredentials = deps.removeOAuthCredentials(providerId);
-            if (!restoreOAuthCredentials) {
-              throwIpcError('INTERNAL', 'failed to remove existing OAuth credentials');
-            }
-            await deleteCustomProvider(providerId);
-            if (providerId === MANAGED_OLLAMA_PROVIDER_ID) notifyManagedOllamaRemoved();
-            assertProviderMutationOwner(ownerAtIngress);
-          } catch (err) {
-            assertProviderMutationOwner(ownerAtIngress);
-            const overridesRestored = !restoreDisableOverrides || restoreDisableOverrides();
-            const pricesRestored = !restorePriceOverrides || restorePriceOverrides();
-            const oauthRestored = !restoreOAuthCredentials || restoreOAuthCredentials();
-            const credentialsRestored = restoreProviderCredentials(providerId, credentialSnapshots);
-            if (!oauthRestored || !credentialsRestored || !overridesRestored || !pricesRestored) {
-              commitRouteMutation();
-              throwIpcError(
-                'INTERNAL',
-                'provider deletion failed and existing credentials could not be restored',
-              );
-            }
-            throw err;
+            await stopManagedLlamaCppService(deleteConnection);
+          } catch {
+            throwIpcError('PRECONDITION_FAILED', 'LLAMACPP_STOP_FAILED');
           }
-          // 在队列内尝试刷新目录；刷新失败不撤销已经提交的删除。
-          // 凭证/override 的恢复只覆盖删除本身失败的场景。
-          assertProviderMutationOwner(ownerAtIngress);
-          await afterChange(codexHostPrepared, commitRouteMutation);
-          assertProviderMutationOwner(ownerAtIngress);
-          deps.broadcastPricingChanged();
-        });
+        } else await deleteConnection();
         return { ok: true };
       } finally {
         if (codexHostPrepared) deps.cancelCodexCustomProviderHostChange?.();
@@ -2311,8 +2399,13 @@ export function registerProviderHandlers(
     async (event, providerId: unknown, rawOptions?: unknown) => {
       assertTrustedProviderMutationSender(event);
       const id = requireProviderId(providerId);
-      const { ownerId } = requireProviderOAuthLoginOptions(rawOptions);
+      if (deps.isOrganizationManagedProviderId(id)) {
+        throwIpcError('PERMISSION_DENIED', 'Enterprise connections are managed by your organization');
+      }
+      const { ownerId, method } = requireProviderOAuthLoginOptions(rawOptions);
       const sender = providerOAuthRendererSender(event);
+      if (method === 'device' && !ownerId)
+        throwIpcError('INVALID_PARAMS', 'device login requires an initiating window');
       if (ownerId && !sender) {
         throwIpcError('INVALID_PARAMS', 'ownerId requires an Electron sender');
       }
@@ -2348,6 +2441,14 @@ export function registerProviderHandlers(
               providerId: id, ownerId, phase: 'browser-url', url,
             });
           } catch { /* A closed renderer must not interrupt credential cleanup. */ }
+        }, method, (code) => {
+          if (!ownerId || !sender || !isOAuthMutationCurrent(id, generation) ||
+              !providerMutationOwnerMatches(ownerAtIngress)) return;
+          try {
+            sender.send?.(MAKER_PUSH.PROVIDER_OAUTH_PROGRESS, {
+              providerId: id, phase: 'device-code', ...code,
+            });
+          } catch { /* The login still runs if its initiating window closes. */ }
         });
         if (isOAuthMutationCurrent(id, generation)) {
           if (result.ok) {
@@ -2388,6 +2489,9 @@ export function registerProviderHandlers(
     const options = parseCustomProviderUpdateOptions(optionsInput);
     if (!options) throwIpcError('INVALID_PARAMS', 'Invalid provider change options');
     const id = storedCustomProviderId(requireProviderId(providerId));
+    if (deps.isOrganizationManagedProviderId(id)) {
+      throwIpcError('PERMISSION_DENIED', 'Enterprise connections are managed by your organization');
+    }
     const owner = captureProviderOwnerSession();
     return withProviderConfigMutation(id, async (commitRouteMutation) => {
       assertProviderMutationOwner(owner);
@@ -2420,6 +2524,9 @@ export function registerProviderHandlers(
     const options = parseCustomProviderUpdateOptions(optionsInput);
     if (!options) throwIpcError('INVALID_PARAMS', 'Invalid provider change options');
     const id = requireProviderId(providerId);
+    if (deps.isOrganizationManagedProviderId(id)) {
+      throwIpcError('PERMISSION_DENIED', 'Enterprise connections are managed by your organization');
+    }
     const ownerAtIngress = captureProviderOwnerSession();
     let generation: symbol | null = null;
     try {

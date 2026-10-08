@@ -26,6 +26,74 @@ function session(id: string, patch: Partial<MobileHomeSessionLike> = {}): Mobile
 }
 
 describe('mobileHome', () => {
+  it('groups Cindy Make creation and merge tasks by source without changing their working directories', () => {
+    const sessions = [
+      session('make-a', { source: 'cindy-make', workingDir: 'C:\\Cindy\\tasks\\random-a' }),
+      session('make-b', { source: 'cindy-make', workingDir: '/data/cindy/tasks/random-b' }),
+      session('merge', { source: 'cindy-make-merge', workingDir: '/data/cindy/merge/random-c' }),
+      session('no-dir', { source: 'cindy-make', workspaceKind: 'dialogue', workingDir: null }),
+      session('ordinary', { title: 'Cindy Make', workingDir: '/data/cindy/tasks/random-b' }),
+    ].map((item) => ({ ...item, deviceLinkDeviceId: 'pc', deviceLinkDeviceName: 'My PC' }));
+    const home = buildMobileHomePresentation({
+      sessions,
+      pendingInteractionIndex: new Map([['make-a', 1], ['merge', 2]]),
+    });
+
+    expect(home.chats).toEqual([]);
+    expect(home.projects).toHaveLength(2);
+    const make = home.projects.find((project) => project.kind === 'cindy-make');
+    expect(make).toMatchObject({
+      key: 'cindy-make:pc',
+      title: 'Cindy Make',
+      subtitle: 'My PC',
+      workingDir: '',
+      sessionCount: 4,
+      pendingInteractionCount: 3,
+    });
+    expect(make?.sessions.map((item) => item.session.id).sort()).toEqual(['make-a', 'make-b', 'merge', 'no-dir']);
+    for (const item of make?.sessions ?? []) {
+      expect(item.session.workingDir).toBe(sessions.find((original) => original.id === item.session.id)?.workingDir);
+    }
+    expect(home.projects.find((project) => !project.kind)?.sessions.map((item) => item.session.id)).toEqual(['ordinary']);
+  });
+
+  it('keeps Cindy Make folders scoped to the selected computer and stable across task directory changes', () => {
+    const sessions = ['pc-a', 'pc-b'].map((deviceLinkDeviceId) => session(deviceLinkDeviceId, {
+      deviceLinkDeviceId,
+      source: 'cindy-make',
+    }));
+    const devices = sessions.map((item) => ({ deviceId: item.id, name: item.id }));
+    const home = buildMobileHomePresentation({ devices, sessions });
+    expect(home.projects.map((project) => project.key).sort()).toEqual(['cindy-make:pc-a', 'cindy-make:pc-b']);
+
+    const selected = buildMobileHomePresentation({ devices, sessions, selectedDeviceId: 'pc-a' });
+    expect(selected.projects).toHaveLength(1);
+    expect(selected.projects[0].sessions.map((item) => item.session.id)).toEqual(['pc-a']);
+    const moved = buildMobileHomePresentation({
+      devices,
+      sessions: [{ ...sessions[0], workingDir: '/another/checkout' }],
+    });
+    expect(moved.projects[0].key).toBe(selected.projects[0].key);
+  });
+
+  it('preserves pinning, archive filters and search when grouping Cindy Make tasks', () => {
+    const sessions = [
+      session('pinned', { source: 'cindy-make', pinnedAt: '2026-01-01T00:00:00.000Z' }),
+      session('active', { source: 'cindy-make' }),
+      session('archived', { source: 'cindy-make-merge', status: 'archived' }),
+      session('deleted', { source: 'cindy-make', status: 'deleted' }),
+    ];
+    const home = buildMobileHomePresentation({ sessions });
+    expect(home.pinned.map((item) => item.session.id)).toEqual(['pinned']);
+    expect(home.projects[0].sessions.map((item) => item.session.id)).toEqual(['active']);
+    const archived = buildMobileHomePresentation({ sessions, statusFilter: 'archived' });
+    expect(archived.pinned).toEqual([]);
+    expect(archived.projects[0].sessions.map((item) => item.session.id)).toEqual(['archived']);
+    const searched = buildMobileHomePresentation({ sessions, searchQuery: 'active' });
+    expect(searched.projects[0].sessions.map((item) => item.session.id)).toEqual(['active']);
+    expect(buildMobileHomePresentation({ sessions, searchQuery: 'absent' }).projects).toEqual([]);
+  });
+
   it('builds a unified home without merging same project path across devices', () => {
     const home = buildMobileHomePresentation({
       devices: [

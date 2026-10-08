@@ -80,6 +80,13 @@
     }
   },
   "preview": {
+    "browserBack": "戻る",
+    "browserForward": "進む",
+    "browserMore": "その他の操作",
+    "browserShowSource": "ソースを表示",
+    "browserShowPage": "ウェブページに戻る",
+    "browserAddToTask": "現在のタスクに追加",
+    "browserFileInfo": "ファイル情報",
     "done": "完了",
     "a11yShare": "書き出して共有",
     "copyPath": "パスをコピー",
@@ -89,6 +96,8 @@
     "downloadFailed": "ダウンロードに失敗しました",
     "fetchingVideo": "パソコンから動画を取得中…",
     "fetchingAudio": "パソコンから音声を取得中…",
+    "videoBuffering": "バッファリング中…",
+    "videoBufferingPercent": "バッファリング中 {{percent}}%",
     "fetchAvFailed": "取得に失敗しました：{{detail}}",
     "fetchPdfFailed": "PDF の取得に失敗しました：{{detail}}",
     "fetchingPdf": "パソコンから PDF を取得中…",
@@ -119,7 +128,14 @@
     "originalFailedThumb": "オリジナルの取得に失敗しました。現在はサムネイルです",
     "fetchingOriginalHint": "サムネイル · オリジナルを取得中…",
     "a11yExportShareFile": "オリジナルファイルを書き出して共有",
-    "exportShare": "書き出し / 共有"
+    "exportShare": "書き出し / 共有",
+    "browserAddress": "アドレス",
+    "browserCancelAddress": "編集をキャンセル",
+    "browserReturnToFile": "ファイルに戻る",
+    "browserCopyAddress": "アドレスをコピー",
+    "browserCopiedAddress": "アドレスをコピーしました",
+    "browserInvalidAddress": "有効な http または https アドレスを入力してください。",
+    "browserWebsiteFailed": "ウェブページを開けません。再読み込みしてください。"
   },
   "export": {
     "exportFailed": "書き出しに失敗しました",
@@ -127,6 +143,6 @@
     "exportTimeout": "書き出しがタイムアウトしました。もう一度お試しください。"
   },
   "gallery": {
-    "cacheMiss": "リモートメディアのキャッシュミス（cachedOnly）"
+    "cacheMiss": "このメディアはまだスマートフォンにキャッシュされていません。パソコンに接続できるときにもう一度開いてください"
   }
 }

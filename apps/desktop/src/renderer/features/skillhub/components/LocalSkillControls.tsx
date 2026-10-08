@@ -82,12 +82,16 @@ export function LocalSkillControls({ skill, disabled = false, onUninstalled }: {
             <MoreHorizontal size={14} />
           </Button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="rounded-xl border-[var(--border-default)] bg-[var(--surface-elevated)] p-1.5 shadow-none">
-          <DropdownMenuItem disabled={!skill.canUninstall} onSelect={() => { void uninstall(); }}
-            className="gap-2 rounded-lg text-13">
+        <DropdownMenuContent align="end" className="p-1.5">
+          <DropdownMenuItem variant="danger" disabled={!skill.canUninstall} onSelect={() => { void uninstall(); }}
+            className="gap-2">
             <Trash2 size={14} />{t('skillhub.detail.uninstall')}
           </DropdownMenuItem>
-          {!skill.canUninstall && <p className="max-w-56 px-2 py-1 text-11 text-[var(--text-secondary)]">{t(skill.managedByPlugin ? 'skillhub.management.managedByPlugin' : 'skillhub.management.managedElsewhere')}</p>}
+          {!skill.canUninstall && <p className="max-w-56 px-2 py-1 text-11 text-[var(--text-secondary)]">{t(skill.managedByPlugin
+            ? 'skillhub.management.managedByPlugin'
+            : skill.builtIn
+              ? 'skillhub.management.builtInManaged'
+              : 'skillhub.management.managedElsewhere')}</p>}
         </DropdownMenuContent>
       </DropdownMenu>
     </div>

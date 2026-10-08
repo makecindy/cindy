@@ -33,6 +33,33 @@ function createDeps(overrides: Record<string, unknown> = {}) {
 }
 
 describe('maker session CREATE_SESSION IPC handler', () => {
+  it.each([true, false])('passes initial plan mode %s to the creation transaction', async (planMode) => {
+    const harness = new IpcHarness();
+    const deps = createDeps();
+    registerMakerSessionCreateHandler(harness, deps);
+    await harness.invoke(MAKER_INVOKE.CREATE_SESSION, {
+      agentKind: 'codex', workingDir: 'C:\\repo', model: 'gpt-5.4', planMode,
+    });
+    expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({ planMode }));
+    expect(deps.bootstrapSession.mock.invocationCallOrder[0]).toBeLessThan(
+      deps.broadcastSessionCreated.mock.invocationCallOrder[0],
+    );
+  });
+
+  it('rejects invalid plan flags before creation and propagates persistence failures', async () => {
+    const harness = new IpcHarness();
+    const deps = createDeps();
+    registerMakerSessionCreateHandler(harness, deps);
+    const args = { agentKind: 'codex', workingDir: 'C:\\repo', model: 'gpt-5.4' };
+    await expect(harness.invoke(MAKER_INVOKE.CREATE_SESSION, { ...args, planMode: 'true' }))
+      .rejects.toMatchObject({ code: 'INVALID_PARAMS' });
+    expect(deps.bootstrapSession).not.toHaveBeenCalled();
+    deps.bootstrapSession.mockRejectedValue(new Error('storage unavailable'));
+    await expect(harness.invoke(MAKER_INVOKE.CREATE_SESSION, { ...args, planMode: true }))
+      .rejects.toThrow('storage unavailable');
+    expect(deps.broadcastSessionCreated).not.toHaveBeenCalled();
+  });
+
   it('bootstraps a session and returns the public create-session payload', async () => {
     const harness = new IpcHarness();
     const deps = createDeps();
@@ -155,6 +182,7 @@ describe('maker session CREATE_SESSION IPC handler', () => {
     ['[REMOTE_PROVIDER_UPDATING] provider "p" credentials are being updated; retry in a moment', 'REMOTE_PROVIDER_UPDATING'],
     ['[REMOTE_PROVIDER_UNSUPPORTED] provider "p" has no claude-code route on this desktop', 'REMOTE_PROVIDER_UNSUPPORTED'],
     ['[REMOTE_NATIVE_OAUTH_UNAVAILABLE] Anthropic subscription is not connected on this desktop', 'REMOTE_NATIVE_OAUTH_UNAVAILABLE'],
+    ['[CLAUDE_SUBSCRIPTION_WORKSPACE_OVERRIDE] /repo/.claude/settings.json sets ANTHROPIC_BASE_URL', 'CLAUDE_SUBSCRIPTION_WORKSPACE_OVERRIDE'],
     // 轮 40-w4-t3 HIGH:远端 Pi 会话启动时 Cindy AI gateway 未就绪 —— 必须映射
     // 到 IPC code, renderer 走 5 语言可行动文案, 不显示 raw 英文。
     ['[REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE] Remote Pi sessions need the XD gateway endpoint issued after sign-in (runtimeConfig.remoteEndpoint is empty)', 'REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE'],

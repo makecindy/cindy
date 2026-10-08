@@ -90,7 +90,7 @@ els.btnRetry.addEventListener("click", async () => {
   els.btnRetry.hidden = true;
   els.btnRetry.disabled = true;
   // Hide Close until the worker reports a terminal state. retry_update returns
-  // before hashing the ZIP; quitting here would kill an in-flight install.
+  // before the worker finishes; quitting here would kill an in-flight install.
   els.btnQuit.hidden = true;
 
   try {

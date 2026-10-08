@@ -4,6 +4,7 @@ import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { shell } from 'electron';
+import { prepareCodexGlobalSkillsLinks } from '../codex-global-skills.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const state = vi.hoisted(() => ({
@@ -66,6 +67,7 @@ import {
   loginCodexAccount,
   logoutCodexAccount,
   parseCodexAccountIdentity,
+  prepareCodexAccountHome,
   setCodexAccountRetirement,
 } from '../codex-account-auth';
 
@@ -95,6 +97,36 @@ afterEach(() => {
 });
 
 describe('native Codex account credentials', () => {
+  it('mounts private built-in and plugin skills in every independent account home', async () => {
+    const real = await vi.importActual<typeof import('../codex-global-skills.js')>('../codex-global-skills.js');
+    vi.mocked(prepareCodexGlobalSkillsLinks).mockImplementationOnce((home, options) =>
+      real.prepareCodexGlobalSkillsLinks(home, { ...options, homeDir: path.join(state.root, 'user-home') }),
+    ).mockImplementationOnce((home, options) =>
+      real.prepareCodexGlobalSkillsLinks(home, { ...options, homeDir: path.join(state.root, 'user-home') }),
+    );
+    const roots = [path.join(state.root, 'shared-system-skills', 'version'), path.join(state.root, 'owner-a', 'ghost-install-state', 'skill-snapshots', 'example', 'rev')];
+    for (const [index, root] of roots.entries()) {
+      const skill = path.join(root, 'skills', index === 0 ? 'learn' : 'example--demo');
+      fs.mkdirSync(skill, { recursive: true });
+      fs.writeFileSync(path.join(skill, 'SKILL.md'), `skill-${index}`);
+    }
+    const homes: string[] = [];
+    const managedSkills = roots.map((root, index) => ({
+      kind: 'agent-skill' as const, source: 'skill' as const, name: index === 0 ? 'learn' : 'demo',
+      path: path.join(root, 'skills', index === 0 ? 'learn' : 'example--demo', 'SKILL.md'),
+      claudeCommandName: index === 0 ? 'cindy:learn' : 'cindy-plugin-example:demo',
+    }));
+    for (const provider of ['account-a', 'account-b']) {
+      expect((await loginCodexAccount(provider, () => true)).ok).toBe(true);
+      const home = await prepareCodexAccountHome(provider, [state.root], managedSkills);
+      homes.push(home);
+      expect(fs.readFileSync(path.join(home, 'skills', real.codexManagedSkillLinkName('cindy:learn'), 'SKILL.md'), 'utf8')).toBe('skill-0');
+      expect(fs.readFileSync(path.join(home, 'skills', real.codexManagedSkillLinkName('cindy-plugin-example:demo'), 'SKILL.md'), 'utf8')).toBe('skill-1');
+    }
+    expect(homes[0]).not.toBe(homes[1]);
+    expect(fs.existsSync(path.join(state.root, 'user-home'))).toBe(false);
+  });
+
   it('leaves opening the authorization page to Codex even when both streams print its URL', async () => {
     const progress = vi.fn();
     expect((await loginCodexAccount('account-a', () => true, progress)).ok).toBe(true);

@@ -24,6 +24,20 @@ describe('mediaPlayerWebView', () => {
     expect(lifecycle.consumeReloadOnActive()).toBe(true);
   });
 
+  it('pauses when its page becomes inactive and never auto-resumes on return', () => {
+    const lifecycle = createMediaPlayerWebViewLifecycle();
+
+    // 翻到本页 / 重复可见:无动作 —— 不代用户播放。
+    expect(lifecycle.onVisibilityChange(true)).toBe(false);
+    // 滑到相邻页 / 屏被压栈:暂停一次。
+    expect(lifecycle.onVisibilityChange(false)).toBe(true);
+    // 持续失活不重复发暂停。
+    expect(lifecycle.onVisibilityChange(false)).toBe(false);
+    // 回到本页不自动续播(播放权交还用户),下次失活再暂停。
+    expect(lifecycle.onVisibilityChange(true)).toBe(false);
+    expect(lifecycle.onVisibilityChange(false)).toBe(true);
+  });
+
   it('builds a video player document with controls and source metadata', () => {
     const html = buildMediaPlayerWebViewHtml({
       kind: 'video',

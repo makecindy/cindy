@@ -114,7 +114,7 @@ export function buildQueuePanelSummary(
 
 export function buildQueueRowPresentation(input: {
   busy?: boolean;
-  item: Pick<{ clientId: string; origin?: unknown; text?: string }, 'clientId' | 'origin' | 'text'>;
+  item: { clientId: string; origin?: unknown; text?: string; sourcePlugin?: unknown };
   originalIndex: number;
   projection: QueueRowProjectionLike;
   queueLength: number;
@@ -131,7 +131,6 @@ export function buildQueueRowPresentation(input: {
     busy: input.busy === true,
     editLocked,
     interactionLocked,
-    orcaOrigin,
     readOnlyReason: input.readOnlyReason,
     steering,
   }, localizer);
@@ -140,20 +139,28 @@ export function buildQueueRowPresentation(input: {
   const syntheticEditReason = syntheticKind
     ? presentationText(localizer, 'message.queuePresentation.row.syntheticEditDisabled', '系统指令消息不支持编辑或插话发送。')
     : null;
+  // 自动化 / 其他任务经工具 / 插件排进来的消息(对齐桌面 canEdit / canSteer=false):改写后
+  // 落库气泡的来源标签就不再属实;删除与排序照常。
+  const autoSentReason = !orcaOrigin && isAutoSentQueueItem(input.item)
+    ? presentationText(localizer, 'message.queuePresentation.row.autoSentEditDisabled', '自动发送的消息不支持编辑或插话发送。')
+    : null;
+  // 协同成员发来的消息不能改写(对齐桌面 canEdit=false),但可以插话:插话不改正文与来源。
+  const orcaEditReason = orcaOrigin
+    ? presentationText(localizer, 'message.queuePresentation.row.orcaEditDisabled', '协同消息不支持编辑。')
+    : null;
 
   return {
     actions: {
       moveUp: queueRowAction(baseDisabledReason, moveUpTarget, presentationText(localizer, 'message.queuePresentation.row.first', '已经是队列第一条。')),
       moveDown: queueRowAction(baseDisabledReason, moveDownTarget, presentationText(localizer, 'message.queuePresentation.row.last', '已经是队列最后一条。')),
-      steer: queueRowAction(baseDisabledReason ?? syntheticEditReason),
-      edit: queueRowAction(baseDisabledReason ?? syntheticEditReason),
+      steer: queueRowAction(baseDisabledReason ?? syntheticEditReason ?? autoSentReason),
+      edit: queueRowAction(baseDisabledReason ?? syntheticEditReason ?? autoSentReason ?? orcaEditReason),
       remove: queueRowAction(baseDisabledReason),
     },
     editLocked,
     hint: queueRowHint({
       editLocked,
       interactionLocked,
-      orcaOrigin,
       readOnlyReason: input.readOnlyReason,
       steering,
       syntheticKind,
@@ -186,6 +193,48 @@ export function isOrcaQueueItem(
 ): boolean {
   const origin = readRecord(item.origin);
   return origin?.kind === 'orca';
+}
+
+/**
+ * 自动化(scheduler)、其他任务经工具(session)或插件任务(主机盖章的 sourcePlugin)
+ * 排进来的消息。Orca 消息另有来源标题与文案。
+ */
+export function isAutoSentQueueItem(
+  item: { origin?: unknown; sourcePlugin?: unknown },
+): boolean {
+  const kind = readRecord(item.origin)?.kind;
+  if (kind === 'scheduler' || kind === 'session') return true;
+  const plugin = readRecord(item.sourcePlugin);
+  return typeof plugin?.pluginId === 'string' && plugin.pluginId.trim().length > 0;
+}
+
+/**
+ * 排队条目给人看的正文。自动化调度或其他任务经工具发来（origin.kind 为 scheduler /
+ * session）的条目，`text` 是发给 Agent 的原文——可能带静默运行协议等只给 Agent 的内容
+ * （来源身份不再写进正文，而是派发时在 wire 消息上另加统一的 `[消息来源]` 说明）——
+ * 可见正文以落库的 `persistedContent` 为准；带附件时落库是主机构造的
+ * `{text, images, files}` 信封，取其中 text（只在确有附件时解包，正文本身是 JSON 的消息
+ * 原样显示）。其它条目沿用 `text`。桌面排队面板、手机待发送气泡与共享访客投影共用此判据。
+ */
+export function queueItemVisibleText(item: {
+  text?: string;
+  persistedContent?: string;
+  files?: readonly unknown[];
+  origin?: unknown;
+  sourcePlugin?: unknown;
+}): string {
+  const text = item.text ?? '';
+  if (!isAutoSentQueueItem(item)) return text;
+  const persisted = item.persistedContent || text;
+  if (!item.files?.length) return persisted;
+  try {
+    const envelope = JSON.parse(persisted) as unknown;
+    const envelopeText = readRecord(envelope)?.text;
+    if (typeof envelopeText === 'string') return envelopeText;
+  } catch {
+    // Not an envelope: the persisted row is already the visible text.
+  }
+  return persisted;
 }
 
 function readRecord(value: unknown): Record<string, unknown> | null {
@@ -224,12 +273,10 @@ function queueRowBaseDisabledReason(input: {
   busy: boolean;
   editLocked: boolean;
   interactionLocked: boolean;
-  orcaOrigin: boolean;
   readOnlyReason?: string | null;
   steering: boolean;
 }, localizer?: PresentationLocalizer): string | null {
   if (input.readOnlyReason) return input.readOnlyReason;
-  if (input.orcaOrigin) return presentationText(localizer, 'message.queuePresentation.row.orcaReadOnly', '协同消息由桌面端编排，手机端只读显示。');
   if (input.busy) return presentationText(localizer, 'message.queuePresentation.row.busy', '队列操作同步中，完成后再继续操作。');
   if (input.steering) return presentationText(localizer, 'message.queuePresentation.row.steeringDisabled', '插话正在发送到当前 turn，等待桌面端回流后再操作。');
   if (input.editLocked) return presentationText(localizer, 'message.queuePresentation.row.editLocked', '这条队列消息正在编辑中，完成后再操作。');
@@ -240,13 +287,11 @@ function queueRowBaseDisabledReason(input: {
 function queueRowHint(input: {
   editLocked: boolean;
   interactionLocked: boolean;
-  orcaOrigin: boolean;
   readOnlyReason?: string | null;
   steering: boolean;
   syntheticKind?: 'continue' | 'generic' | null;
 }, localizer?: PresentationLocalizer): string | null {
   if (input.readOnlyReason) return input.readOnlyReason;
-  if (input.orcaOrigin) return presentationText(localizer, 'message.queuePresentation.row.orcaReadOnly', '协同消息由桌面端编排，手机端只读显示。');
   if (input.syntheticKind) return presentationText(localizer, 'message.queuePresentation.row.syntheticHint', '这是系统自动生成的指令，可以取消，但不能编辑或插话发送。');
   if (input.steering) return presentationText(localizer, 'message.queuePresentation.row.steeringHint', '插话正在发送到当前 turn，暂时不能编辑或移动。');
   if (input.editLocked) return presentationText(localizer, 'message.queuePresentation.row.editHint', '这条消息正在编辑中，桌面端会暂停自动发送。');

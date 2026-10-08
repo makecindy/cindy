@@ -36,8 +36,21 @@ vi.mock('react-i18next', () => ({
 }));
 vi.mock('@/features/device-link/remoteProjectsStore', () => ({
   useRemoteProjectSessions: () => [],
+  useRemoteSessionTitle: () => null,
+  getSessionDeviceId: () => undefined,
+  remoteProjectsStore: {
+    getSessionDeviceId: () => undefined,
+    pinSessionOrigin: () => undefined,
+  },
 }));
 vi.mock('@/lib/sessionService', () => ({ get: mocks.getSession }));
+vi.mock('@/contexts/AuthContext', () => ({ useOptionalAuthDeviceId: () => 'this-mac' }));
+vi.mock('@/features/device-link/useDeviceLinkDeviceList', () => ({
+  useDeviceLinkDeviceList: () => [
+    { deviceId: 'this-mac', name: 'Studio Mac', isSelf: true },
+    { deviceId: 'phone-1', name: 'Dash iPhone', isSelf: false },
+  ],
+}));
 vi.mock('@/lib/sessionMessageText', () => ({
   resolveSessionMessageText: mocks.resolveSessionMessageText,
 }));
@@ -53,6 +66,7 @@ import {
 } from '@/features/cc-agent/embeddedSessionNavigation';
 import { tryHandleNavigationCommand } from '@/lib/navigationCommands';
 import { AutomationOriginBadge } from '../AutomationOriginBadge';
+import { MessageSourceLabels } from '../MessageSourceLabels';
 import { SessionHandoffCard } from '../SessionHandoffCard';
 import { SessionLinkChip } from '../SessionLinkChip';
 
@@ -323,6 +337,32 @@ describe('sidebar-embedded session navigation boundary', () => {
 
     expect(screen.queryByRole('button')).toBeNull();
     expect(screen.getByText('Nightly')).toBeTruthy();
+    expect(mocks.navigate).not.toHaveBeenCalled();
+  });
+
+  it('renders device, plugin and hook source labels as static content', () => {
+    render(
+      embedded(
+        <>
+          <MessageSourceLabels
+            sourcePlugin={{ pluginId: 'ghost.notes', name: 'Notes' }}
+            sourceDevice={{ deviceId: 'phone-1', platform: 'mobile' }}
+          />
+          <MessageSourceLabels
+            automationOrigin={{
+              kind: 'scheduler',
+              scheduleId: 'hook:slack-1',
+              scheduleName: 'Hook · Team Slack',
+            }}
+          />
+        </>,
+      ),
+    );
+
+    expect(screen.queryByRole('button')).toBeNull();
+    expect(screen.getByText('Notes')).toBeTruthy();
+    expect(screen.getByText('Dash iPhone')).toBeTruthy();
+    expect(screen.queryByText('Hook · Team Slack')).toBeNull();
     expect(mocks.navigate).not.toHaveBeenCalled();
   });
 

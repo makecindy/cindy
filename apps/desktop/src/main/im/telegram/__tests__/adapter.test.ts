@@ -10,6 +10,12 @@ vi.mock('../behaviorStore', () => ({
 describe('Telegram group history access scope', () => {
   const adapter = buildTelegramAdapter({} as never, {} as never);
 
+  it('clears successful and cancelled status reactions but retains an error signal', () => {
+    expect(adapter.terminalReactionEmoji?.('done')).toBeNull();
+    expect(adapter.terminalReactionEmoji?.('aborted')).toBeNull();
+    expect(adapter.terminalReactionEmoji?.('error')).toBe('👎');
+  });
+
   it('saves the actual quoted text but excludes persona and technical instructions', async () => {
     const result = await adapter.prepareAgentTurnText?.({
       senderId: '123',
@@ -18,6 +24,8 @@ describe('Telegram group history access scope', () => {
     } as IMMessageEvent);
     expect(result?.agentText).toContain('Private instructions');
     expect(result?.contextSnapshot).toEqual({ replyContext: '[Alice] quoted text', replyMessageCount: 1 });
+    // The same reply the model sees is the one Auto-review may use.
+    expect(result?.replyContext).toEqual({ author: 'Alice', text: 'quoted text' });
   });
 
   it('only lets owner-triggered group turns omit the policy in Full access', () => {
@@ -109,5 +117,21 @@ describe('Telegram group history access scope', () => {
       provider: 'telegram-personal:bot-1',
       lane: null,
     });
+  });
+
+  it('names the group in the channel note but leaves the speaker to the existing [发言人] line', async () => {
+    expect(
+      await adapter.channelNoteSourceFor?.({
+        contextId: 'bot-1',
+        senderId: 'g/-1001',
+        messageId: 'm-3',
+        chatId: '-1001',
+        text: 'hi',
+        speaker: { id: '7', name: 'Ann', isOwner: false },
+        interactionSource: { chatName: 'Dev Group', senderName: 'Ann' },
+        attachments: [],
+        unsupported: [],
+      } as never),
+    ).toEqual({ chatKind: 'group', chatId: '-1001', chatName: 'Dev Group' });
   });
 });

@@ -50,6 +50,7 @@ describe('device-link shared contract', () => {
     expect(MOBILE_REMOTE_INVOKE_CHANNELS).toContain('maker:apply-new-maker-worktree-branch-pref');
     expect(MOBILE_REMOTE_INVOKE_CHANNELS).toContain('worktree:list-branches');
     expect(MOBILE_REMOTE_INVOKE_CHANNELS).toContain('worktree:discard-precreated');
+    expect(MOBILE_REMOTE_INVOKE_CHANNELS).toContain('worktree:cancel-precreated');
     expect(MOBILE_REMOTE_INVOKE_CHANNELS).not.toContain(DEVICE_LINK_VOICE_CREDENTIAL_SYNC_CHANNEL);
     expect(MOBILE_REMOTE_INVOKE_CHANNELS).toContain(DEVICE_LINK_VOICE_DICTIONARY_LEARNING_CHANNEL);
     expect(MOBILE_REMOTE_INVOKE_CHANNELS).toContain('text-file:read-preview');
@@ -160,6 +161,7 @@ describe('device-link shared contract', () => {
     expect(isTransientRemoteError(Object.assign(new Error('buffer is full'), { code: 'BACKPRESSURE' }))).toBe(true);
     expect(isTransientRemoteError(Object.assign(new Error('target offline'), { code: 'DEVICE_OFFLINE' }))).toBe(true);
     expect(isTransientRemoteError('[DEVICE_LINK_TIMEOUT] no result')).toBe(true);
+    expect(isTransientRemoteError('[DEVICE_LINK_BUSY] queue full')).toBe(true);
     // HTTP 层弱网错误(超时 / 离线 / RN 原生 fetch 原文)同属瞬时,必须可重试
     expect(isTransientRemoteError(Object.assign(new Error('请求超时，请稍后重试'), { code: 'REQUEST_TIMEOUT' }))).toBe(true);
     expect(isTransientRemoteError(Object.assign(new Error('网络连接不可用'), { code: 'NETWORK_UNAVAILABLE' }))).toBe(true);

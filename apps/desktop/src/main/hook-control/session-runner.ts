@@ -75,6 +75,7 @@ import {
 } from '../maker-ipc/agentHandoff.js';
 import { agentHandoffPending } from '../maker-ipc/agentHandoffPendingSingleton.js';
 import { summarizeOpenPlan, buildPlanReconcileNote } from '../maker-ipc/planReconcile.js';
+import { peekGoalInactiveNote } from '../goal-host/inactiveNote.js';
 import { listMessagesForAgentHandoff } from '../localDb/ipc/messages.js';
 import { enqueueDurableWrite } from '../messagePersistBroadcaster.js';
 import { toDesktopSessionDispatchOutcome } from '../maker-host/send-outcome.js';
@@ -109,6 +110,14 @@ import { beginHeadlessGhostSetupTurn } from '../mcp-integrations/ghostSetupInter
 import { observeHookTurn, type HookTurnObserver } from './turnObserver.js';
 import { bindRuntimeRecoveryNotice } from '../im/shared/runtimeRecoveryNotice.js';
 import { beginGroupHistoryAccess } from '../im/shared/groupHistoryAccess.js';
+import {
+  captureChannelAccount,
+  openChannelSession,
+  type ChannelSessionRoute,
+} from '../im/shared/openChannelSession.js';
+import { describeInteractionSource } from '../im/shared/interactionSource';
+import { hookAutoReviewReferences } from '../im/shared/autoReviewReferences.js';
+import { groupLaneOf } from './groupWindow';
 
 import type {
   HookContinuationWatchRequest,
@@ -123,6 +132,8 @@ import {
   registerHookInteraction,
 } from './interactions.js';
 import { collectOutboundAttachments, buildHookPromptNote, hasOutboundRefs } from './outbound.js';
+import { getResolvedMainLocale } from '../i18n.js';
+import { buildUiLanguageErrorNote } from '../maker-ipc/uiLanguageErrorNote.js';
 
 type MainOwnedImChannel = Extract<TurnPermissionOrigin, { kind: 'im' }>['channel'];
 
@@ -499,6 +510,18 @@ export function createMakerHookSessionRunner(deps: {
     async run(req) {
       const startedAt = Date.now();
       const maker = getMaker();
+      // 新任务的账号代次从读取偏好 / 默认配置之前算起(与个人 IM 同一判据): 中途换账号时
+      // 不拿旧账号读到的配置去新账号的库里建任务。
+      const assertAccount = req.isNew ? captureChannelAccount() : undefined;
+      /** 新任务建行后的补写(来源、发送时间、worktree)同样只写入口账号的库。 */
+      const accountStillCurrent = (): boolean => {
+        try {
+          assertAccount?.();
+          return true;
+        } catch {
+          return false;
+        }
+      };
 
       // 新建: 按「偏好 > 草稿默认」合成; 复用/接管: session meta 权威, 下方覆盖
       const resolved = req.isNew
@@ -651,6 +674,21 @@ export function createMakerHookSessionRunner(deps: {
           : {}),
         resumeSessionId,
       };
+      // 新任务经公共入口 openSession(与桌面新建任务同一套模型准入 / Git 初始化 / 账号代次
+      // 校验, docs/dev-rules/im-turn-flow.md 批次 2); 建行本身仍是下面各自既有的路径。
+      // 准入可能规范化来源 / 推理强度, 新任务用准入后的路由。复用 / 接管不经过这里。
+      const newSessionRoute: ChannelSessionRoute = {
+        agentKind: effectiveAgentKind,
+        model: effectiveModel,
+        providerId,
+        ...(effort !== undefined ? { effort } : {}),
+        permissionMode,
+        workingDir,
+        ...(req.workspaceKind !== undefined ? { workspaceKind: req.workspaceKind } : {}),
+        ...(req.title ? { title: req.title } : {}),
+      };
+      /** 这一轮会话实际使用的来源(新任务取准入后的值)。 */
+      let sessionProviderId = providerId;
       if (req.createOnly) {
         if (!req.isNew) return fail('create-only requires a new task');
         try {
@@ -659,30 +697,47 @@ export function createMakerHookSessionRunner(deps: {
           // into a slow websocket RPC and can leave server/client state split
           // if the response times out. The first real message cold-opens this
           // same row through the ordinary reuse path.
-          await desktopSessionStorage.create({
-            id: req.sessionId,
-            agentKind: effectiveAgentKind,
-            workDir: workingDir,
-            title: req.title ?? 'New task',
-            model: effectiveModel,
-            ...(req.workspaceKind !== undefined ? { workspaceKind: req.workspaceKind } : {}),
-            ...(effort !== undefined ? { effort } : {}),
-            permissionMode,
-          });
-          if (providerId) {
-            setSessionProvider(req.sessionId, providerId);
-            await setSessionProviderIdInDb(req.sessionId, providerId);
+          const admittedProviderId = await openChannelSession(
+            req.sessionId,
+            newSessionRoute,
+            async (admitted) => {
+              await desktopSessionStorage.create({
+                id: req.sessionId,
+                agentKind: effectiveAgentKind,
+                workDir: workingDir,
+                title: req.title ?? 'New task',
+                model: admitted.model,
+                ...(req.workspaceKind !== undefined ? { workspaceKind: req.workspaceKind } : {}),
+                ...(admitted.effort !== undefined ? { effort: admitted.effort } : {}),
+                permissionMode,
+              });
+              return admitted.providerId;
+            },
+            assertAccount,
+          );
+          // 建行之后的补写同样按入口账号复核: 中途换了账号就报失败, 不把补写落进新账号的库,
+          // 也不向服务端谎报创建成功。
+          if (admittedProviderId) {
+            assertAccount?.();
+            setSessionProvider(req.sessionId, admittedProviderId);
+            await setSessionProviderIdInDb(req.sessionId, admittedProviderId);
           }
           if (req.source?.im === 'telegram' || req.source?.im === 'x') {
+            assertAccount?.();
             await setSessionSourceInDb(req.sessionId, req.source.im);
           }
+          assertAccount?.();
           await touchUserSendInDb(req.sessionId).catch((err) => {
             log.warn(
               `hook create-only touchUserSend failed: ${err instanceof Error ? err.message : String(err)}`,
             );
           });
           const wtMeta = worktreeStore.get(req.sessionId);
-          if (wtMeta) await setWorktreePathInDb(req.sessionId, wtMeta.path);
+          if (wtMeta) {
+            assertAccount?.();
+            await setWorktreePathInDb(req.sessionId, wtMeta.path);
+          }
+          assertAccount?.();
           broadcastSessionCreated(req.sessionId);
           return {
             status: 'ok',
@@ -699,7 +754,17 @@ export function createMakerHookSessionRunner(deps: {
       }
       try {
         await prepareUnhealthySessionForSend(req.sessionId);
-        session = await maker.createSession(createOpts);
+        session = req.isNew
+          ? await openChannelSession(req.sessionId, newSessionRoute, (admitted) => {
+              sessionProviderId = admitted.providerId;
+              return maker.createSession({
+                ...createOpts,
+                model: admitted.model,
+                ...(admitted.providerId !== null ? { providerId: admitted.providerId } : {}),
+                ...(admitted.effort !== undefined ? { effort: admitted.effort } : {}),
+              });
+            }, assertAccount)
+          : await maker.createSession(createOpts);
       } catch (err) {
         // session 未建成: 若有预建 worktree 则回收(同 maker-ipc/register.ts
         // 的 shouldRecycleHandoffWorktreeOnFailure 判据), 防孤儿泄漏
@@ -746,7 +811,9 @@ export function createMakerHookSessionRunner(deps: {
       // 新建显式 set(与 scheduler 4.4.2 的显式 providerId 分支同款); 复用走
       // hydrate —— 仅内存无条目时写入, 不覆盖运行中会话刚在聊天里切的更新值。
       if (req.isNew) {
-        if (providerId) setSessionProvider(session.id, providerId);
+        if (sessionProviderId && accountStillCurrent()) {
+          setSessionProvider(session.id, sessionProviderId);
+        }
       } else {
         hydrateSessionProvider(session.id, rowProviderId);
       }
@@ -778,7 +845,7 @@ export function createMakerHookSessionRunner(deps: {
       // 前向引用: 交互回调只在 turn 跑起来之后才可能被调用, 那时 observer 已就位。
       // 用它给过程区挂「等待授权」, 不新增任何渠道消息。
       let activeObserver: HookTurnObserver | null = null;
-      const handleHookInteraction: InteractionHandler = async (ireq) => {
+      const handleHookInteraction: InteractionHandler = async (ireq, sharedPermission) => {
         if (req.onInteraction) {
           const sendCard = req.onInteraction;
           const sendCancel = req.onInteractionCancel;
@@ -804,7 +871,6 @@ export function createMakerHookSessionRunner(deps: {
             return { kind: 'ask_user_question', answers: {} };
           }
           ownInteractionIds.add(ireq.requestId);
-          sendCard({ interactionId: ireq.requestId, ...composed.card });
           // 等授权期间没有任何 agent 事件 —— 渠道那条进度消息会彻底静止, 而卡片
           // 可能根本不在这个会话里(Telegram 群里的授权卡改投宿主私聊)。挂一行状态,
           // 收口后摘掉; 全程只改已经在发的那条快照, 不新增群消息。
@@ -812,11 +878,14 @@ export function createMakerHookSessionRunner(deps: {
           activeObserver?.markInteractionBoundary();
           activeObserver?.setNotice(awaitingInteractionNotice(ireq.kind));
           try {
-            const decision = await registerHookInteraction({
+            const pendingDecision = registerHookInteraction({
+              sharedPermission,
               interactionId: ireq.requestId,
               composed,
               onFallback: (reason) => sendCancel?.(ireq.requestId, reason),
             });
+            sendCard({ interactionId: ireq.requestId, ...composed.card });
+            const decision = await pendingDecision;
             ownInteractionIds.delete(ireq.requestId);
             return decision;
           } finally {
@@ -858,7 +927,8 @@ export function createMakerHookSessionRunner(deps: {
         pendingInteractionNotices.clear();
       };
       // 新建会话广播 -> 侧边栏实时出现(复用/接管的会话本来就在列表里, 不用发)
-      if (req.isNew) {
+      // 换了账号就不再补写(会落进新账号的库); 这一轮的出站本就按账号代次作废。
+      if (req.isNew && accountStillCurrent()) {
         // hook 会话由用户消息(Slack / Telegram DM、群组或 topic)触发创建,
         // 与 IM 同语义(53b999601):
         // 广播前先落 userSendAt, 否则 renderer 重拉到 userSendAt=null && 0 消息的行
@@ -872,18 +942,19 @@ export function createMakerHookSessionRunner(deps: {
         // 来源落库也在广播前: DesktopSessionStorage.create 不写 provider_id,
         // 不补的话 renderer 重拉 / 冷 resume 的 hydrate funnel 读到的来源恒空
         // (issue #854)。失败仅 warn(helper 内部吞错), 运行时路由不受影响。
-        if (providerId) {
-          await setSessionProviderIdInDb(session.id, providerId);
+        // 每个 await 之后都可能换了账号: 每次补写与广播前就地复核, 账号变了就停下。
+        if (sessionProviderId && accountStillCurrent()) {
+          await setSessionProviderIdInDb(session.id, sessionProviderId);
         }
-        if (req.source?.im === 'telegram' || req.source?.im === 'x') {
+        if ((req.source?.im === 'telegram' || req.source?.im === 'x') && accountStillCurrent()) {
           await setSessionSourceInDb(session.id, req.source.im);
         }
-        broadcastSessionCreated(session.id);
+        if (accountStillCurrent()) broadcastSessionCreated(session.id);
       }
       // worktree 场景补写 sessions.worktree_path(同 send_to_session 做法):
       // prepareHandoffWorktree 时 session 行不存在, worktreeStore.set 的 DB
       // 同步落空; session 行建好后补一次, 失败非致命(store 是 source of truth)。
-      if (req.isNew) {
+      if (req.isNew && accountStillCurrent()) {
         const wtMeta = worktreeStore.get(session.id);
         if (wtMeta) {
           void setWorktreePathInDb(session.id, wtMeta.path);
@@ -916,6 +987,7 @@ export function createMakerHookSessionRunner(deps: {
         kind: 'scheduler',
         scheduleId: `hook:${req.origin.connectionId}`,
         scheduleName: `Hook · ${req.origin.connectionName}`,
+        ...(req.source?.im ? { surface: 'im' as const } : {}),
       } as const;
 
       // 入站附件: 解码后图片/文件分流(server 2026-07 起全 MIME 转发) ->
@@ -1045,7 +1117,7 @@ export function createMakerHookSessionRunner(deps: {
       // 渲染层展示的用户消息保持来源 IM 原话。逐 turn 追加固定文本,教模型
       // 用 xdt-file 引用回传文件而非误用 cindy_feishu_bot(规则 9,实踩背景
       // 见 outbound.ts 的常量注释)。
-      const promptWithNote = `${req.prompt}\n\n${buildHookPromptNote(req.source?.im)}`;
+      const promptWithNote = `${req.prompt}\n\n${buildHookPromptNote(req.source?.im)}\n\n${buildUiLanguageErrorNote(getResolvedMainLocale())}`;
       let replacementHandoff: string | null = null;
       if (req.isNew && req.replacementOfSessionId && req.source?.im === 'slack') {
         try {
@@ -1157,10 +1229,29 @@ export function createMakerHookSessionRunner(deps: {
             return null;
           }
         })() : null;
-        const outgoingMessage: UserMessage = planReconcileNote
+        const withPlanReconcile: UserMessage = planReconcileNote
           ? (prependNoteToWireUserMessage(withHandoff, planReconcileNote) as UserMessage)
           : withHandoff;
+        // 目标状态说明:与 makerSendTransaction 同语义,读库失败静默跳过。
+        const goalInactiveNote = await enqueueDurableWrite(`goal-inactive-read:${session.id}`, () =>
+          peekGoalInactiveNote(session.id),
+        ).catch(() => null);
+        const outgoingMessage: UserMessage = goalInactiveNote
+          ? (prependNoteToWireUserMessage(withPlanReconcile, goalInactiveNote) as UserMessage)
+          : withPlanReconcile;
         const trustedChannelOrigin = mainOwnedChannelOrigin(req.source?.im);
+        // 新任务从入口起绑定账号: 建行后的补写、附件与上下文准备期间换了账号, 就终止这次
+        // 派发(下面的 catch 统一收尾并回失败), 不让迟到的 send 在 teardown 之后重新启动
+        // 旧账号的请求。
+        assertAccount?.();
+        // Same projection as personal IM: the server-stamped reply target (captured before
+        // display bounding) and the attachments actually delivered, never parsed from the prompt.
+        const autoReviewReferences = trustedChannelOrigin
+          ? hookAutoReviewReferences(req.autoReviewReplyTarget, {
+              images: imageRefs.length,
+              files: fileRefs.length,
+            })
+          : undefined;
         const sendResult = await session.send(outgoingMessage, {
           origin,
           planMode: false,
@@ -1174,6 +1265,7 @@ export function createMakerHookSessionRunner(deps: {
                   // package commands; only older servers that omit the field
                   // fall back to the decorated prompt.
                   rawChannelText: req.source?.userText ?? req.prompt,
+                  ...(autoReviewReferences ? { autoReviewReferences } : {}),
                 },
               }
             : {}),
@@ -1206,6 +1298,23 @@ export function createMakerHookSessionRunner(deps: {
                 turnId: randomUUID(),
                 origin: routeOrigin,
                 interactionSurface: req.onInteraction ? 'channel-card' : 'headless',
+                sourceDescription: describeInteractionSource({
+                  channelName: req.source?.im ?? req.origin.connectionName,
+                  chatId: req.source?.channelName ?? req.title ?? req.source?.im ?? 'IM',
+                  text: req.source?.userText ?? '',
+                  interactionSource: {
+                    senderName: req.source?.threadContext?.find((message) =>
+                      message.messageId === req.source?.triggerMessageId && !!message.messageId)?.author,
+                    ...(() => {
+                      const lane = groupLaneOf(req.origin.externalKey);
+                      const id = req.source?.triggerMessageId;
+                      return lane && /^-100\d+$/.test(lane.chatId) && id && /^\d+$/.test(id)
+                        ? { messageUrl: `https://t.me/c/${lane.chatId.slice(4)}/${id}`,
+                            ...(lane.threadId ? { threadName: lane.threadId } : {}) }
+                        : {};
+                    })(),
+                  },
+                }),
               },
               handle: handleHookInteraction,
               onCancel: (requestId) => {

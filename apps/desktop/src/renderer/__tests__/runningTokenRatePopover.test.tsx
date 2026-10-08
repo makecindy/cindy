@@ -20,6 +20,31 @@ vi.mock('react-i18next', () => ({
 }));
 afterEach(cleanup);
 
+it('expires the displayed rate without losing history, including after remount', () => {
+  vi.useFakeTimers();
+  try {
+    clearRateHistoryCache();
+    function Probe({ tokens }: { tokens: number }) {
+      const history = useRunningTokenRateHistory({ sessionKey: 'freshness', startedAt: 1,
+        outputTokens: tokens, generationDurationMs: tokens * 10, generationReliable: true });
+      return <div data-testid="rate">{history.latestRate ?? 'waiting'}:{history.samples.length}</div>;
+    }
+    const view = render(<Probe tokens={0} />);
+    view.rerender(<Probe tokens={100} />);
+    expect(screen.getByTestId('rate').textContent).toBe('100:1');
+    act(() => vi.advanceTimersByTime(59_999));
+    expect(screen.getByTestId('rate').textContent).toBe('100:1');
+    act(() => vi.advanceTimersByTime(1));
+    expect(screen.getByTestId('rate').textContent).toBe('waiting:1');
+    view.unmount();
+    const again = render(<Probe tokens={100} />);
+    expect(screen.getByTestId('rate').textContent).toBe('waiting:1');
+    again.rerender(<Probe tokens={200} />);
+    expect(screen.getByTestId('rate').textContent).toBe('100:2');
+    again.unmount();
+  } finally { clearRateHistoryCache(); vi.useRealTimers(); }
+});
+
 it('distinguishes an unobserved peak from measured zero throughput', () => {
   const props = {
     elapsedText: '1s',
@@ -218,7 +243,7 @@ it('keeps the pinned card across turns while awaiting a fresh rate', async () =>
   expect(nextLine?.match(/[ML]/g)).toHaveLength(3);
 });
 
-it('keeps a clicked panel open through outside clicks, focus changes and repeated trigger clicks', async () => {
+it('keeps a clicked panel open through outside clicks and focus changes, and closes from the trigger', async () => {
   const onPinnedChange = vi.fn();
   render(
     <>
@@ -254,10 +279,8 @@ it('keeps a clicked panel open through outside clicks, focus changes and repeate
   expect(screen.getByRole('dialog')).toBe(dialog);
   fireEvent.click(trigger);
   fireEvent.pointerLeave(trigger);
-  expect(screen.getByRole('dialog')).toBe(dialog);
-  expect(screen.queryByRole('tooltip')).toBeNull();
-  fireEvent.click(screen.getByRole('button', { name: 'titleBar.close' }));
   await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  expect(screen.queryByRole('tooltip')).toBeNull();
   expect(onPinnedChange).toHaveBeenLastCalledWith(false);
 });
 

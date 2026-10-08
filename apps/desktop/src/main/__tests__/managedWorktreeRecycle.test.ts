@@ -42,8 +42,9 @@ import { readRecycleRecord } from '../worktree/recycleJournal';
 import { inventoryWorktree } from '../worktree/recoveryArchive';
 import { physicalWorktreeKey } from '../worktree/resourceLock';
 import { readWorktreeRuntimePaths } from '../worktree/runtimeLeases';
-import { acquireIOSSimulatorProjectUse } from '../mcp-integrations/ios-simulator-project-source';
+import { releaseWorktreeRuntimeLease } from '../worktree/runtimeLeases';
 import { createLinkedWorktreeMetadata } from './fixtures/linkedWorktree';
+import { seedLegacySharedRuntimeLease } from './fixtures/legacySharedRuntimeLease';
 
 describe('shared worktree recycling', () => {
   let meta: WorktreeMeta;
@@ -92,6 +93,8 @@ describe('shared worktree recycling', () => {
   it('limits simultaneous recycling of distinct resources to one', async () => {
     let release!: () => void;
     const gate = new Promise<void>((resolve) => { release = resolve; });
+    let markEntered!: () => void;
+    const entered = new Promise<void>((resolve) => { markEntered = resolve; });
     let active = 0;
     let peak = 0;
     let checked = 0;
@@ -100,13 +103,23 @@ describe('shared worktree recycling', () => {
       state.registry.set(candidate.sessionId, candidate);
       return recycleManagedWorktree(candidate, { canRemove: async () => {
         active++; peak = Math.max(peak, active); checked++;
+        markEntered();
         try { await gate; return false; } finally { active--; }
       } });
     });
+    // Observe every job immediately and drain them before fixture cleanup,
+    // including when an assertion or filesystem operation fails.
+    const settled = Promise.allSettled(jobs);
     try {
-      await vi.waitFor(() => expect(active).toBe(1));
+      // Journal/lock I/O can exceed waitFor's default 1s on Windows CI.
+      // Synchronize on entry instead; the suite timeout still bounds a hang.
+      await Promise.race([entered, settled]);
+      expect(active).toBe(1);
       expect(checked).toBe(1);
-    } finally { release(); }
+    } finally {
+      release();
+      await settled;
+    }
     expect(await Promise.all(jobs)).toEqual(Array(12).fill(false));
     expect(checked).toBe(12); expect(peak).toBe(1);
   });
@@ -139,7 +152,7 @@ describe('shared worktree recycling', () => {
     expect(await recycle()).toBe(false);
     expect(archive).not.toHaveBeenCalled();
   });
-  it('protects a simulator source borrowed by another isolated profile until release', async () => {
+  it('protects a worktree borrowed by another isolated profile until release', async () => {
     const actual = await vi.importActual<typeof import('../worktree/runtimeLeases')>('../worktree/runtimeLeases');
     vi.mocked(readWorktreeRuntimePaths).mockImplementation(actual.readWorktreeRuntimePaths);
     const borrowerProfile = path.join(state.root, 'profile-a');
@@ -148,7 +161,8 @@ describe('shared worktree recycling', () => {
       await fs.mkdir(path.join(profile, '.dev-instances'), { recursive: true });
     }
     state.userData = borrowerProfile;
-    const release = await acquireIOSSimulatorProjectUse('borrower', meta.path, new AbortController());
+    const lease = await seedLegacySharedRuntimeLease(path.join(state.root, 'app-data'), meta.path, path.join(meta.baseRepo, '.git', 'worktrees', 'one', 'locked'));
+    const release = lease ? () => releaseWorktreeRuntimeLease(lease) : null;
     expect(release).not.toBeNull();
     try {
       // The recycler has a different userData and no active database reference.
@@ -157,8 +171,6 @@ describe('shared worktree recycling', () => {
       expect(archive).not.toHaveBeenCalled();
       expect(await fs.readFile(path.join(meta.path, 'draft.txt'), 'utf8')).toBe('uncommitted contents');
       expect(await readWorktreeRuntimePaths()).toEqual(new Set([await physicalWorktreeKey(meta.path)]));
-      // Retain the profile-local evidence that existing readers already consume.
-      expect(await fs.readdir(path.join(borrowerProfile, 'worktree-runtime-leases'))).toHaveLength(1);
 
       await release!();
       expect(await readWorktreeRuntimePaths()).toEqual(new Set());
@@ -179,7 +191,8 @@ describe('shared worktree recycling', () => {
         JSON.parse(await fs.readFile(path.join(directory, name), 'utf8')).path as string)));
     });
     state.userData = borrowerProfile;
-    const release = await acquireIOSSimulatorProjectUse('borrower', meta.path, new AbortController());
+    const lease = await seedLegacySharedRuntimeLease(path.join(state.root, 'app-data'), meta.path, path.join(meta.baseRepo, '.git', 'worktrees', 'one', 'locked'));
+    const release = lease ? () => releaseWorktreeRuntimeLease(lease) : null;
     try {
       state.userData = ownerProfile;
       expect(await readWorktreeRuntimePaths()).toEqual(new Set());
@@ -260,7 +273,7 @@ describe('shared worktree recycling', () => {
     expect(await recycle()).toBe(false);
     expect((await readRecycleRecord(meta.path))?.reason).toBe('directory-replaced');
   });
-  it('partial EBUSY deletion rejects cross-profile borrowing and retries unchanged surviving bytes', async () => {
+  it('partial EBUSY deletion retries unchanged surviving bytes', async () => {
     const actual = await vi.importActual<typeof import('../worktree/runtimeLeases')>('../worktree/runtimeLeases');
     vi.mocked(readWorktreeRuntimePaths).mockImplementation(actual.readWorktreeRuntimePaths);
     const borrowerProfile = path.join(state.root, 'borrower-profile');
@@ -284,17 +297,8 @@ describe('shared worktree recycling', () => {
     expect(state.registry.has(meta.sessionId)).toBe(true);
     await expect(fs.stat(path.join(meta.path, '.git'))).rejects.toMatchObject({ code: 'ENOENT' });
     state.userData = borrowerProfile;
-    let release: (() => Promise<void>) | null = null;
-    try {
-      await expect(acquireIOSSimulatorProjectUse('borrower', meta.path, new AbortController()).then((value) => {
-        release = value; return value;
-      })).rejects.toMatchObject({ code: 'MUTATION_CANCELLED' });
-      expect(await readWorktreeRuntimePaths()).toEqual(new Set());
-      expect(await fs.readFile(path.join(meta.path, 'draft.txt'), 'utf8')).toBe('uncommitted contents');
-    } finally {
-      await (release as (() => Promise<void>) | null)?.();
-      state.userData = '';
-    }
+    expect(await fs.readFile(path.join(meta.path, 'draft.txt'), 'utf8')).toBe('uncommitted contents');
+    state.userData = '';
     fail.mockRestore();
     expect(await recycle()).toBe(true);
     expect(snapshot).toHaveBeenCalledTimes(1);

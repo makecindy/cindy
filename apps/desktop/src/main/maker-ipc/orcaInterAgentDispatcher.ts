@@ -2,6 +2,8 @@ import {
   formatAgentMessage,
   formatOrcaCommunicationMessage,
 } from '@cindy/orca-workflow';
+import { AUTO_REVIEW_DELEGATED_CONTINUATION, AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT } from '@cindy/maker-core';
+import { restoreAutoReviewUserIntent, type AutoReviewHistoryMessage } from './autoReviewUserIntent.js';
 import type { AgentKind, SessionSendOptions, SessionSendResult, UserMessage } from '@cindy/maker-core';
 
 import type {
@@ -20,12 +22,16 @@ import { resolveCollabDispatchResult } from './collabSendOutcome.js';
 import type {
   AgentInputSendOpts,
   AgentInputSendResult,
+  ControlSteerOutcome,
 } from './agent-input-coordinator.js';
 import { runAcceptedCallback, runAcceptedRollback } from './acceptedCallbackRunner.js';
 
 const defaultLog = createLogger('maker-ipc');
 
-type OrcaInterAgentDispatchMode = 'dispatched' | 'queued';
+type OrcaInterAgentDispatchMode = 'dispatched' | 'queued' | 'steered';
+
+/** 请求插话但消息进了队列的原因；目标空闲直发时没有原因。 */
+export type OrcaSteerFallbackReason = 'STEER_UNSUPPORTED' | 'INPUT_BOUNDARY_BUSY' | 'STEER_UNCERTAIN';
 
 /** Orca lead/worker 派发结果，保留底层 dispatch outcome 供 MCP/IPC 区分排队、直发和失败根因。 */
 export type DispatchOrcaInterAgentMessageResult =
@@ -36,6 +42,7 @@ export type DispatchOrcaInterAgentMessageResult =
       dispatchOutcome: CollabDispatchSuccessOutcome | CollabDispatchQueuedOutcome;
       targetTitle?: string | null;
       targetLastUserSendAt?: string | null;
+      steerFallbackReason?: OrcaSteerFallbackReason;
     }
   | {
       ok: false;
@@ -52,8 +59,11 @@ export interface DispatchOrcaInterAgentMessageParams {
   source: OrcaInterAgentMessageSource;
   senderLabel: string;
   workerId?: string;
+  /** 发送方显式选择；缺省排队。steer 只在目标正在运行时插进当前 turn。 */
+  delivery?: 'queue' | 'steer';
   /** Synchronous reserve boundary hook; must return before drain is scheduled. */
   onReserved?: () => void;
+  beforeReserve?: () => Promise<void>;
   onAccepted?: () => void | Promise<void>;
   onAcceptedRollback?: () => void | Promise<void>;
   onAcceptedCommit?: () => void | Promise<void>;
@@ -68,6 +78,9 @@ interface PersistedUserMessageSession {
   id: string;
   agentKind?: AgentKind;
   isTurnRunning?: () => boolean;
+  getTurnGeneration?: () => number;
+  capabilities?: { sameTurnSteer: { supported: boolean } };
+  remoteHostId?: string | null;
   send: (
     message: UserMessage,
     opts?: SessionSendOptions,
@@ -115,6 +128,7 @@ export type OrcaInterAgentSendToSessionInternalResult =
 
 /** 通过既有 sendToSessionInternal 重建或排队目标 session 时传入的最小参数。 */
 export interface OrcaInterAgentSendToSessionInternalParams {
+  autoReviewUserText: { kind: 'delegated-continuation' };
   targetSessionId: string;
   message: string;
   persistedContent: string;
@@ -133,10 +147,17 @@ export interface OrcaInterAgentDispatcherLogger {
 
 /** Orca dispatcher 的 I/O 边界，register.ts 只负责注入 DB、Maker、queue 和 role 解析能力。 */
 export interface OrcaInterAgentDispatcherDeps<TSessionMeta> {
+  readAutoReviewHistory?: (sessionId: string) => Promise<AutoReviewHistoryMessage[]>;
   createId: () => string;
   getSessionMeta: (sessionId: string) => Promise<TSessionMeta | null>;
   getSessionRowSnapshot: (sessionId: string) => Promise<OrcaInterAgentSessionRowSnapshot | null>;
   getLiveSession: (sessionId: string) => PersistedUserMessageSession | null | undefined;
+  /** Uses the input coordinator's steer guards and preserves uncertain-delivery ownership. */
+  steerControlInput?: (
+    sessionId: string,
+    item: AgentInputQueuedMessage,
+    expectedTurn: { session: object; turnGeneration: number },
+  ) => Promise<ControlSteerOutcome>;
   shouldQueueNewTurn: (sessionId: string) => boolean;
   hasSendToSessionLock: (sessionId: string) => boolean;
   /**
@@ -156,6 +177,7 @@ export interface OrcaInterAgentDispatcherDeps<TSessionMeta> {
     sessionId: string,
     item: AgentInputQueuedMessage,
     onReserved?: () => void,
+    beforeReserve?: () => Promise<void>,
   ) => Promise<boolean>;
   sendToSessionInternal: (
     params: OrcaInterAgentSendToSessionInternalParams,
@@ -171,7 +193,18 @@ export interface OrcaInterAgentDispatcherDeps<TSessionMeta> {
   ) => Promise<unknown>;
   beginDirectTurnChangeSet: (sessionId: string, clientId: string) => Promise<void>;
   abortDirectTurnChangeSet: (sessionId: string) => void;
+  /**
+   * 反查 worker 的 role，查不到返回 fallback。dispatcher 以空串作 fallback 区分「未知」，
+   * role 同时用于来源标签与发给 lead 的 `[From Orca Worker <role> (worker_id: …)]` 前缀。
+   */
   resolveWorkerSenderLabel: (workerId: string, fallback: string) => Promise<string>;
+  /**
+   * 反查 worker 所在的 Lead / Worker 会话，给消息来源标签定位发送方会话。
+   * 缺省或查不到时消息仍照常投递，只是来源不可点击跳转。
+   */
+  resolveWorkerSessionLink?: (
+    workerId: string,
+  ) => Promise<{ leadSessionId: string; workerSessionId: string } | null>;
   isSessionRunningError: (err: unknown) => boolean;
   log?: OrcaInterAgentDispatcherLogger;
 }
@@ -179,7 +212,7 @@ export interface OrcaInterAgentDispatcherDeps<TSessionMeta> {
 /** queued 消息的 accepted 副作用状态，用于派发失败时只回滚已经执行过的副作用。 */
 interface QueuedOrcaInterAgentAcceptedCallback {
   accepted: () => void | Promise<void>;
-  rollback?: () => void | Promise<void>;
+  rollback?: (reason?: 'cancelled-before-dispatch') => void | Promise<void>;
   commit?: () => void | Promise<void>;
   didRun: boolean;
 }
@@ -196,7 +229,7 @@ export interface OrcaInterAgentDispatcher {
   registerQueuedOrcaInterAgentAcceptedCallback: (
     clientId: string,
     accepted: () => void | Promise<void>,
-    rollback?: () => void | Promise<void>,
+    rollback?: (reason?: 'cancelled-before-dispatch') => void | Promise<void>,
     commit?: () => void | Promise<void>,
   ) => void;
   runQueuedOrcaInterAgentAcceptedCallback: (
@@ -224,7 +257,7 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
   const registerQueuedOrcaInterAgentAcceptedCallback = (
     clientId: string,
     accepted: () => void | Promise<void>,
-    rollback?: () => void | Promise<void>,
+    rollback?: (reason?: 'cancelled-before-dispatch') => void | Promise<void>,
     commit?: () => void | Promise<void>,
   ): void => {
     queuedOrcaInterAgentAcceptedCallbacks.set(clientId, {
@@ -264,7 +297,16 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
     }
     if (callback.didRun) {
       queuedOrcaInterAgentAcceptedCallbacks.delete(clientId);
-      await runAcceptedRollback(callback.rollback, sessionId, clientId, log);
+      const reason =
+        result.kind === 'session-dispatch' && result.reason === 'cancelled-before-dispatch'
+          ? result.reason
+          : undefined;
+      await runAcceptedRollback(
+        () => callback.rollback?.(reason),
+        sessionId,
+        clientId,
+        log,
+      );
     }
   };
 
@@ -311,7 +353,12 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
     }
 
     const clientId = deps.createId();
-    const agentMessageText = formatAgentMessage(params.source, params.rawContent, params.workerId);
+    // worker 回报的前缀要带发件 worker 的 role,需要反查;只查一次,文本与来源标签共用。
+    let workerRolePromise: Promise<string | undefined> | undefined;
+    const resolveRole = (): Promise<string | undefined> =>
+      (workerRolePromise ??= resolveOrcaWorkerRole(deps, params));
+    const buildAgentMessageText = async (): Promise<string> =>
+      formatAgentMessage(params.source, params.rawContent, params.workerId, await resolveRole());
     const persistedContent = formatOrcaCommunicationMessage(params.source, params.rawContent);
     let acceptedDidRun = false;
     const runAccepted = async (): Promise<void> => {
@@ -341,22 +388,33 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
         : null,
     };
     // senderLabel 口径 = worker 的 role。包侧路径只有 workerId 可传, host 这里反查 role 覆盖。
-    const resolveSenderLabel = async (): Promise<string> => {
-      if (params.source !== 'worker' || !params.workerId) return params.senderLabel;
-      try {
-        return await deps.resolveWorkerSenderLabel(params.workerId, params.senderLabel);
-      } catch {
-        return params.senderLabel;
-      }
+    const resolveSenderLabel = async (): Promise<string> =>
+      (await resolveRole()) ?? params.senderLabel;
+    const resolveOrigin = async (): Promise<NonNullable<AgentInputQueuedMessage['origin']>> => {
+      const [senderLabel, senderSessionId] = await Promise.all([
+        resolveSenderLabel(),
+        resolveOrcaSenderSessionId(deps, params),
+      ]);
+      return {
+        kind: 'orca',
+        senderLabel,
+        displayText: params.rawContent,
+        ...(senderSessionId ? { senderSessionId } : {}),
+      };
     };
+    let steerFallbackReason: OrcaSteerFallbackReason | undefined;
+    // 请求了插话却落进队列时，回执必须说明原因；没请求插话时不带。
+    const queuedSteerFallback = (): { steerFallbackReason?: OrcaSteerFallbackReason } =>
+      params.delivery === 'steer'
+        ? { steerFallbackReason: steerFallbackReason ?? 'INPUT_BOUNDARY_BUSY' }
+        : {};
     const enqueueQueuedMessage = async (logEvent: string): Promise<DispatchOrcaInterAgentMessageResult> => {
       const createOpts = await deps.buildCreateOptsForQueuedSession(params.targetSessionId, meta);
       const queued = buildQueuedOrcaInterAgentMessage({
         clientId,
-        agentMessageText,
+        agentMessageText: await buildAgentMessageText(),
         persistedContent,
-        rawContent: params.rawContent,
-        senderLabel: await resolveSenderLabel(),
+        origin: await resolveOrigin(),
         createOpts,
       });
       if (params.onAccepted) {
@@ -380,9 +438,77 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
         mode: 'queued',
         clientId,
         dispatchOutcome: makeQueuedDispatchOutcome(params.meta.source),
+        ...queuedSteerFallback(),
         ...dispatchReceipt,
       };
     };
+
+    // 插话只由发送方显式选择（delivery=steer），且只对正在运行的目标尝试；空闲目标照常直发。
+    const liveTurn = deps.getLiveSession(params.targetSessionId);
+    if (params.delivery === 'steer' && liveTurn?.isTurnRunning?.() === true) {
+      if (
+        !deps.steerControlInput || !liveTurn.capabilities?.sameTurnSteer.supported ||
+        !liveTurn.getTurnGeneration || liveTurn.remoteHostId
+      ) {
+        steerFallbackReason = 'STEER_UNSUPPORTED';
+      } else if (!deps.hasSendToSessionLock(params.targetSessionId)) {
+        const expectedTurn = { session: liveTurn, turnGeneration: liveTurn.getTurnGeneration() };
+        const trySteer = async (): Promise<DispatchOrcaInterAgentMessageResult | null> => {
+          // Async item preparation and lock acquisition can cross a turn replacement.
+          const createOpts = await deps.buildCreateOptsForQueuedSession(params.targetSessionId, meta);
+          const item = buildQueuedOrcaInterAgentMessage({
+            clientId,
+            agentMessageText: await buildAgentMessageText(),
+            persistedContent,
+            origin: await resolveOrigin(),
+            createOpts,
+          });
+          if (
+            deps.getLiveSession(params.targetSessionId) !== liveTurn ||
+            !liveTurn.isTurnRunning?.() ||
+            liveTurn.getTurnGeneration?.() !== expectedTurn.turnGeneration
+          ) return null;
+          const outcome = await deps.steerControlInput!(params.targetSessionId, item, expectedTurn);
+          if (outcome === 'steered') {
+            // The message joined the running turn. Accepted/commit callbacks claim a new
+            // turn's running/auto-bridge identity, so they deliberately never run here.
+            return { ok: true, mode: 'steered', clientId,
+              dispatchOutcome: { kind: 'session-dispatch', source: params.meta.source, dispatched: true },
+              ...dispatchReceipt };
+          }
+          if (outcome === 'rejected') {
+            // Input screening discarded it. Re-queueing would retry refused content.
+            return failureResult({
+              ...createHostSendFailure('SEND_FAILED', 'Orca message was blocked by input screening'),
+              source: params.meta.source, context: params.meta.context,
+            });
+          }
+          if (outcome === 'queued') {
+            // The coordinator already owns this exact clientId in a paused queue. Enqueuing
+            // again would duplicate it; its later drain starts a turn, so register there.
+            if (params.onAccepted) registerQueuedOrcaInterAgentAcceptedCallback(
+              clientId, params.onAccepted, params.onAcceptedRollback, params.onAcceptedCommit,
+            );
+            return { ok: true, mode: 'queued', clientId,
+              dispatchOutcome: makeQueuedDispatchOutcome(params.meta.source),
+              steerFallbackReason: 'STEER_UNCERTAIN', ...dispatchReceipt };
+          }
+          // Not delivered and nothing retained: the ordinary send/queue path is still safe.
+          return null;
+        };
+        try {
+          const steered = deps.withSendToSessionLock
+            ? await deps.withSendToSessionLock(params.targetSessionId, trySteer)
+            : await trySteer();
+          if (steered) return steered;
+        } catch (err) {
+          return failureResult({
+            ...createHostSendFailure('SEND_FAILED', err instanceof Error ? err.message : String(err)),
+            source: params.meta.source, context: params.meta.context,
+          });
+        }
+      }
+    }
 
     const shouldQueue = deps.shouldQueueNewTurn(params.targetSessionId)
       || deps.hasSendToSessionLock(params.targetSessionId)
@@ -394,18 +520,15 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
     try {
       const sendToInternal = async (): Promise<DispatchOrcaInterAgentMessageResult> => {
         const result = await deps.sendToSessionInternal({
+          autoReviewUserText: { kind: 'delegated-continuation' },
           targetSessionId: params.targetSessionId,
-          message: agentMessageText,
+          message: await buildAgentMessageText(),
           persistedContent,
           clientId,
           onAccepted: runAccepted,
           onAcceptedRollback: params.onAcceptedRollback,
           onAcceptedCommit: params.onAcceptedCommit,
-          origin: {
-            kind: 'orca',
-            senderLabel: await resolveSenderLabel(),
-            displayText: params.rawContent,
-          },
+          origin: await resolveOrigin(),
         });
         if (result.ok) {
           if (result.wakeKind === 'queued') {
@@ -432,6 +555,7 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
                   source: params.meta.source,
                   dispatched: true,
                 },
+            ...(result.wakeKind === 'queued' ? queuedSteerFallback() : {}),
             targetTitle: result.targetTitle,
             targetLastUserSendAt: result.targetLastUserSendAt,
           };
@@ -446,7 +570,10 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
         await deps.prepareUnhealthySession?.(params.targetSessionId);
         const live = deps.getLiveSession(params.targetSessionId);
         if (!live) return null;
-        const senderLabel = await resolveSenderLabel();
+        const [origin, agentMessageText] = await Promise.all([
+          resolveOrigin(),
+          buildAgentMessageText(),
+        ]);
         const result = await sendPersistedUserMessageToSession(deps, {
           session: live,
           dbContent: persistedContent,
@@ -454,11 +581,7 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
           clientId,
           source: params.meta.source,
           context: params.meta.context,
-          origin: {
-            kind: 'orca',
-            senderLabel,
-            displayText: params.rawContent,
-          },
+          origin,
           onAccepted: runAccepted,
         });
         if (result.dispatched) {
@@ -525,20 +648,19 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
 
     const clientId = deps.createId();
     const createOpts = await deps.buildCreateOptsForQueuedSession(params.targetSessionId, meta);
-    let senderLabel = params.senderLabel;
-    if (params.source === 'worker' && params.workerId) {
-      try {
-        senderLabel = await deps.resolveWorkerSenderLabel(params.workerId, params.senderLabel);
-      } catch {
-        senderLabel = params.senderLabel;
-      }
-    }
+    const workerRole = await resolveOrcaWorkerRole(deps, params);
+    const senderLabel = workerRole ?? params.senderLabel;
+    const senderSessionId = await resolveOrcaSenderSessionId(deps, params);
     const queued = buildQueuedOrcaInterAgentMessage({
       clientId,
-      agentMessageText: formatAgentMessage(params.source, params.rawContent, params.workerId),
+      agentMessageText: formatAgentMessage(params.source, params.rawContent, params.workerId, workerRole),
       persistedContent: formatOrcaCommunicationMessage(params.source, params.rawContent),
-      rawContent: params.rawContent,
-      senderLabel,
+      origin: {
+        kind: 'orca',
+        senderLabel,
+        displayText: params.rawContent,
+        ...(senderSessionId ? { senderSessionId } : {}),
+      },
       createOpts,
     });
     const callbackAlreadyRegistered = queuedOrcaInterAgentAcceptedCallbacks.has(clientId);
@@ -556,6 +678,7 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
         params.targetSessionId,
         queued,
         params.onReserved,
+        params.beforeReserve,
       );
     } catch (err) {
       if (!callbackAlreadyRegistered) {
@@ -612,6 +735,38 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
   };
 }
 
+/**
+ * worker 发出的消息反查其 role（lead 发出的消息不需要）。查不到或出错返回 undefined，
+ * 消息照常投递：前缀退回只带 worker_id，来源标签退回调用方给的 senderLabel。
+ */
+async function resolveOrcaWorkerRole<TSessionMeta>(
+  deps: OrcaInterAgentDispatcherDeps<TSessionMeta>,
+  params: Pick<DispatchOrcaInterAgentMessageParams, 'source' | 'workerId'>,
+): Promise<string | undefined> {
+  if (params.source !== 'worker' || !params.workerId) return undefined;
+  try {
+    const role = (await deps.resolveWorkerSenderLabel(params.workerId, '')).trim();
+    return role || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Lead 发出的消息来源是 Lead 会话，Worker 发出的是 Worker 会话；都以 workerId 反查。 */
+async function resolveOrcaSenderSessionId<TSessionMeta>(
+  deps: OrcaInterAgentDispatcherDeps<TSessionMeta>,
+  params: Pick<DispatchOrcaInterAgentMessageParams, 'source' | 'workerId'>,
+): Promise<string | undefined> {
+  if (!params.workerId || !deps.resolveWorkerSessionLink) return undefined;
+  try {
+    const link = await deps.resolveWorkerSessionLink(params.workerId);
+    if (!link) return undefined;
+    return params.source === 'lead' ? link.leadSessionId : link.workerSessionId;
+  } catch {
+    return undefined;
+  }
+}
+
 async function sendPersistedUserMessageToSession<TSessionMeta>(
   deps: OrcaInterAgentDispatcherDeps<TSessionMeta>,
   params: {
@@ -627,17 +782,21 @@ async function sendPersistedUserMessageToSession<TSessionMeta>(
 ): Promise<CollabDirectDispatchResult> {
   const { session, dbContent, agentMessage, clientId = deps.createId(), source, context, origin, onAccepted } = params;
   let turnChangeSetStarted = false;
+  const humanIntent = restoreAutoReviewUserIntent(await deps.readAutoReviewHistory?.(session.id) ?? []);
   const result = await resolveCollabDispatchResult(
     () => session.send(agentMessage, {
       planMode: false,
       throwOnStartFailure: true,
+      [AUTO_REVIEW_SOURCE_CONTENT]: '',
+      [AUTO_REVIEW_USER_INTENT]: humanIntent,
+      [AUTO_REVIEW_DELEGATED_CONTINUATION]: true,
       onAccepted: async () => {
         // maker-core 会在 vendor handle.send 前 await 此 hook；必须先落库，再运行 accepted 副作用。
         await deps.createDbMessage(session.id, {
           clientId,
           role: 'user',
           content: dbContent,
-          ...(origin ? { agentMeta: { origin } } : {}),
+          agentMeta: { ...(origin ? { origin } : {}), autoReviewUserText: { kind: 'delegated-continuation' }, delivery: 'turn' },
         });
         await deps.beginDirectTurnChangeSet(session.id, clientId);
         turnChangeSetStarted = true;
@@ -693,14 +852,14 @@ function buildQueuedOrcaInterAgentMessage(params: {
   clientId: string;
   agentMessageText: string;
   persistedContent: string;
-  rawContent: string;
-  senderLabel: string;
+  origin: NonNullable<AgentInputQueuedMessage['origin']>;
   createOpts: AgentInputCreateOpts;
 }): AgentInputQueuedMessage {
   const createdAt = new Date().toISOString();
   return {
     clientId: params.clientId,
     text: params.agentMessageText,
+    autoReviewUserText: { kind: 'delegated-continuation' },
     persistedContent: params.persistedContent,
     model: params.createOpts.model,
     effort: params.createOpts.effort ?? '',
@@ -714,10 +873,6 @@ function buildQueuedOrcaInterAgentMessage(params: {
       createdAt,
     },
     createOpts: params.createOpts,
-    origin: {
-      kind: 'orca',
-      senderLabel: params.senderLabel,
-      displayText: params.rawContent,
-    },
+    origin: params.origin,
   };
 }

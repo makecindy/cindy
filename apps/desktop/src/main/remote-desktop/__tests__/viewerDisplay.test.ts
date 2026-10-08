@@ -349,6 +349,7 @@ describe('viewer-sized desktop ownership', () => {
       lease: lease.lease,
       display: { id: '2', name: 'Viewer', width: 900, height: 1600 },
       controlling: false,
+      viewerDisplayRequest: { width: 900, height: 1600 },
     });
     expect(f.host.hasLease(lease.lease)).toBe(true);
     await expect(
@@ -482,4 +483,59 @@ describe('viewer-sized desktop ownership', () => {
     expect(f.handle.dispose).toHaveBeenCalledOnce();
     expect(f.host.state).toBeNull();
   });
+});
+
+it('acknowledges requested dimensions separately from actual host geometry', async () => {
+  const f = fixture();
+  const { lease } = await f.start();
+  vi.mocked(f.handle.resize).mockResolvedValue({
+    id: '2',
+    name: 'Viewer',
+    width: 960,
+    height: 710,
+  });
+  await expect(
+    f.host.request('phone', { op: 'viewerDisplay', lease, width: 1920, height: 1420 }),
+  ).resolves.toEqual({
+    lease,
+    controlling: false,
+    display: { id: '2', name: 'Viewer', width: 960, height: 710 },
+    viewerDisplayRequest: { width: 1920, height: 1420 },
+  });
+  expect(f.host.hasLease(lease)).toBe(true);
+  await f.host.request('phone', { op: 'control', lease, enabled: true });
+  expect(f.deps.startInput).toHaveBeenLastCalledWith('2');
+  f.host.stop('phone');
+});
+
+describe('viewer-sized desktop with live video', () => {
+  it.each(['viewerDisplay', 'restoreViewerDisplay'] as const)(
+    '%s keeps the stream on the changed display when requested',
+    async (op) => {
+      const f = fixture();
+      f.deps.pauseVideo = vi.fn(() => true);
+      f.deps.resumeVideo = vi.fn(async () => true);
+      const { lease } = await f.start();
+      if (op === 'restoreViewerDisplay') {
+        await f.host.request('phone', { op: 'viewerDisplay', lease, width: 900, height: 1600 });
+        await f.host.request('phone', { op: 'control', lease, enabled: true });
+      }
+      vi.mocked(f.deps.stopVideo).mockClear();
+      vi.mocked(f.deps.resumeVideo!).mockClear();
+      const result = (await f.host.request('phone', {
+        op,
+        lease,
+        width: 900,
+        height: 1600,
+        keepVideo: true,
+      })) as RemoteDesktopLease;
+      expect(result.videoKept).toBe(true);
+      expect(f.deps.stopVideo).not.toHaveBeenCalled();
+      expect(f.deps.resumeVideo).toHaveBeenCalledWith(
+        op === 'viewerDisplay'
+          ? { id: '2', name: 'Viewer', width: 900, height: 1600 }
+          : { id: '1', name: 'Main', width: 1920, height: 1080 },
+      );
+    },
+  );
 });

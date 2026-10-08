@@ -82,6 +82,83 @@ function createSymlinkedSkill() {
 }
 
 describe('scanAllSkills', () => {
+  it('always projects the bundled Skill as non-uninstallable and keeps a user same-name copy distinct', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'skillhub-built-in-'));
+    tempRoots.push(root);
+    const builtIn = path.join(root, 'user-data', 'system-skills', 'cindy-skill-creator');
+    const userSkill = path.join(root, 'home', '.agents', 'skills', 'cindy-skill-creator');
+    for (const [skillPath, description] of [[builtIn, 'Cindy copy'], [userSkill, 'User copy']] as const) {
+      fs.mkdirSync(skillPath, { recursive: true });
+      fs.writeFileSync(path.join(skillPath, 'SKILL.md'), `---\nname: cindy-skill-creator\ndescription: ${description}\n---\nBody\n`);
+    }
+    const maker = { listCustomizations: vi.fn(async () => ({ errors: [], items: [{
+      engine: 'codex' as const,
+      kind: 'skill',
+      scope: 'user',
+      name: 'cindy-skill-creator',
+      description: 'User copy',
+      absolutePath: userSkill,
+      mdPath: path.join(userSkill, 'SKILL.md'),
+      files: [],
+    }] })) } as unknown as Maker;
+
+    const result = await scanAllSkills({}, maker, [], [{
+      name: 'cindy-skill-creator',
+      absolutePath: builtIn,
+      nativeClaudePath: path.join(root, 'user-data', 'claude-home', 'skills', 'cindy-skill-creator'),
+    }]);
+
+    expect(result.skills).toHaveLength(2);
+    expect(result.skills.find((skill) => skill.builtIn)).toMatchObject({
+      name: 'cindy-skill-creator',
+      description: 'Cindy copy',
+      builtIn: true,
+      canUninstall: false,
+      cindyEnabled: true,
+      linkedEngines: [],
+    });
+    expect(result.skills.find((skill) => !skill.builtIn)).toMatchObject({
+      description: 'User copy',
+      canUninstall: true,
+    });
+  });
+
+  it('lists only engines that actually discover the bundled Skill path', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'skillhub-built-in-engines-'));
+    tempRoots.push(root);
+    const builtIn = path.join(root, 'shared-system-skills', 'learn');
+    fs.mkdirSync(builtIn, { recursive: true });
+    fs.writeFileSync(path.join(builtIn, 'SKILL.md'), '---\nname: learn\ndescription: Learn\n---\nBody\n');
+    const items = (['codex', 'pi'] as const).map((engine) => ({
+      engine,
+      kind: 'skill' as const,
+      scope: 'user' as const,
+      name: 'learn',
+      description: 'Learn',
+      absolutePath: builtIn,
+      mdPath: path.join(builtIn, 'SKILL.md'),
+      files: [],
+    }));
+    const maker = {
+      listCustomizations: vi.fn(async () => ({ errors: [], items })),
+    } as unknown as Maker;
+
+    const result = await scanAllSkills({}, maker, [], [{
+      name: 'learn',
+      absolutePath: builtIn,
+      nativeClaudePath: path.join(root, 'claude-home', 'skills', 'learn'),
+    }]);
+
+    expect(result.skills).toHaveLength(1);
+    expect(result.skills[0]).toMatchObject({
+      builtIn: true,
+      linkedEngines: [
+        { engine: 'codex', label: 'Codex' },
+        { engine: 'pi', label: 'Pi' },
+      ],
+    });
+  });
+
   it('projects the registry slug joined by physical path without replacing native directory names', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'skillhub-registry-slug-'));
     tempRoots.push(root);
@@ -461,6 +538,45 @@ describe('scanAllSkills', () => {
       success: true,
     });
     expect(fs.readFileSync(skillMd, 'utf-8')).toBe('# Updated Pi Demo\n');
+  });
+
+  it('allows attested built-in reads outside discovery roots without following escaping children', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'skillhub-attested-built-in-'));
+    tempRoots.push(root);
+    const builtInRoot = path.join(root, 'shared-system-skills', 'learn');
+    const skillMd = path.join(builtInRoot, 'SKILL.md');
+    const notes = path.join(builtInRoot, 'notes.txt');
+    const outside = path.join(root, 'outside.txt');
+    fs.mkdirSync(builtInRoot, { recursive: true });
+    fs.writeFileSync(skillMd, '---\nname: learn\n---\n\n# Learn\n', 'utf-8');
+    fs.writeFileSync(notes, 'notes\n', 'utf-8');
+    fs.writeFileSync(outside, 'private\n', 'utf-8');
+
+    await expect(readSkillContent({ mdPath: skillMd, attestedRoot: builtInRoot })).resolves.toMatchObject({
+      success: true,
+      content: '\n# Learn\n',
+    });
+    await expect(listSkillFolderChildren({ dirPath: builtInRoot, attestedRoot: builtInRoot })).resolves.toMatchObject({
+      success: true,
+      entries: expect.arrayContaining([{ name: 'SKILL.md', kind: 'file' }]),
+    });
+    await expect(readSkillSiblingFile({ filePath: notes, attestedRoot: builtInRoot })).resolves.toMatchObject({
+      success: true,
+      content: 'notes\n',
+    });
+    await expect(readSkillRawFile({ filePath: skillMd, attestedRoot: builtInRoot })).resolves.toMatchObject({
+      success: true,
+      content: expect.stringContaining('# Learn'),
+    });
+
+    if (canLinkFile) {
+      const escape = path.join(builtInRoot, 'escape.txt');
+      fs.symlinkSync(outside, escape, 'file');
+      await expect(readSkillSiblingFile({ filePath: escape, attestedRoot: builtInRoot })).resolves.toMatchObject({
+        success: false,
+        error: 'path is not under a recognized skills directory',
+      });
+    }
   });
 
   it('filters sensitive entries from the initial skill files snapshot', async () => {

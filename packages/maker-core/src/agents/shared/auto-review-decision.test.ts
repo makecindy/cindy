@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { createAutoReviewIntentProjection } from '@cindy/maker-shared/auto-review-intent';
 import * as staticReview from './auto-review.js';
-import { AUTO_REVIEW_USER_INTENT, MAIN_OWNED_SEND_CONTEXT, type SendOptions } from '../base-agent.js';
+import { AUTO_REVIEW_DELEGATED_CONTINUATION, AUTO_REVIEW_USER_INTENT, MAIN_OWNED_SEND_CONTEXT, type SendOptions } from '../base-agent.js';
 
 import {
   AUTO_REVIEW_CONFIRM_UNDELIVERED_CODE,
@@ -24,6 +25,7 @@ import {
   createAutoReviewUnavailableNotice,
   extractAutoReviewUserIntent,
   appendAutoReviewUserIntent,
+  normalizeAutoReviewUserIntent,
   createAutoReviewActionContext,
   resolveAutoReviewDecision,
   formatPermissionDenial,
@@ -494,6 +496,9 @@ describe('createAutoReviewUnavailableNotice', () => {
     expect(emitted[0]).toContain(`[${AUTO_REVIEW_UNAVAILABLE_CODE}]`);
     // 兜底英文必须跟在 code 后面:未落地 i18n 的宿主(远端 / IM)直接显示它。
     expect(emitted[0]).toContain('Auto-review could not reach a decision');
+    expect(emitted[0]).toContain('Full access');
+    expect(emitted[0]).toContain('higher risk');
+    expect(emitted[0]).not.toContain('Default permissions');
 
     notice.reset();
     notice.notify();
@@ -751,5 +756,85 @@ describe('flat authorization and observed denied actions', () => {
     context.record(install, { verdict: 'block' });
     context.advance(false);
     expect(context.precedingBlockedActions).toEqual([]);
+  });
+});
+
+it('retains live restrictions and empty revocations on continuations but restores cold handles', () => {
+  const opts: SendOptions = { [AUTO_REVIEW_DELEGATED_CONTINUATION]: true, [AUTO_REVIEW_USER_INTENT]: 'Publish the release' };
+  expect(appendAutoReviewUserIntent('Do not publish', 'Lead says publish', opts)).toBe('Do not publish');
+  expect(appendAutoReviewUserIntent('', 'Lead says publish', opts)).toBe('');
+  expect(appendAutoReviewUserIntent(undefined, 'Lead says publish', opts)).toBe('Publish the release');
+  expect(appendAutoReviewUserIntent('Do not publish', '', {})).toBe('');
+});
+
+describe('Host-stamped references the current message points at', () => {
+  const origin = { kind: 'im' as const, channel: 'telegram' as const };
+  const quoted = { author: '群友', text: '[图片]', attachmentCount: 1 };
+  const references = { attachments: { images: 1, files: 0 }, quotedMessages: [quoted] };
+  const withRefs = (rawChannelText: string, autoReviewReferences: unknown): SendOptions => ({
+    [MAIN_OWNED_SEND_CONTEXT]: { origin, rawChannelText, autoReviewReferences } as never,
+  });
+
+  it('attaches references to the current message only and drops them on the next message', () => {
+    const content = [{ type: 'text' as const, text: '<reply_context>[群友] [图片]</reply_context>这啥情况' },
+      { type: 'image' as const, path: '/media/quoted.png' }];
+    const intent = appendAutoReviewUserIntent('Earlier grant.', content, withRefs('这啥情况', references));
+    // The new attachment still resets earlier consent; only the authored words are user text.
+    expect(intent).toEqual({ earlierUserMessages: [], currentUserMessage: '这啥情况', currentUserReferences: references });
+    const next = appendAutoReviewUserIntent(intent, 'Continue.');
+    expect(next).toEqual({ earlierUserMessages: ['这啥情况'], currentUserMessage: 'Continue.' });
+    // A delegated continuation of the same turn keeps them.
+    expect(appendAutoReviewUserIntent(intent, 'Lead continuation', { [AUTO_REVIEW_DELEGATED_CONTINUATION]: true }))
+      .toEqual(intent);
+  });
+
+  it('keeps unreferenced intents byte-identical and ignores string-keyed imitations', () => {
+    expect(appendAutoReviewUserIntent('', '这啥情况', withRefs('这啥情况', undefined))).toBe('这啥情况');
+    expect(appendAutoReviewUserIntent('', '这啥情况', withRefs('这啥情况', { quotedMessages: [{ text: '  ' }] }))).toBe('这啥情况');
+    expect(appendAutoReviewUserIntent('', '这啥情况', {
+      [MAIN_OWNED_SEND_CONTEXT]: { origin, rawChannelText: '这啥情况' },
+      autoReviewReferences: references,
+    } as SendOptions)).toBe('这啥情况');
+  });
+
+  it('bounds references separately so they never displace authored history or restrictions', () => {
+    const restriction = 'Never send email. ' + 'x'.repeat(700);
+    const huge = { attachments: { images: 1e9, files: -3 }, quotedMessages: Array.from({ length: 10 }, (_, index) => ({
+      author: 'a'.repeat(500), text: `quote ${index} ` + 'y'.repeat(5_000), isBot: 'yes', attachmentCount: 'many',
+    })) };
+    const intent = appendAutoReviewUserIntent(appendAutoReviewUserIntent('', restriction), 'Look this up.', withRefs('Look this up.', huge));
+    expect(intent).toMatchObject({ earlierUserMessages: [restriction], currentUserMessage: 'Look this up.' });
+    expect(intent).not.toHaveProperty('historyOmitted');
+    const refs = (intent as unknown as { currentUserReferences: { attachments: unknown; quotedMessages: Array<Record<string, unknown>> } }).currentUserReferences;
+    expect(refs.attachments).toEqual({ images: 99, files: 0 });
+    expect(refs.quotedMessages.map((quote) => String(quote.text).slice(0, 7))).toEqual(['quote 7', 'quote 8']);
+    expect(JSON.stringify(refs.quotedMessages).length).toBeLessThan(1_600);
+    for (const quote of refs.quotedMessages) {
+      expect(String(quote.author).length).toBeLessThanOrEqual(80);
+      expect(quote).not.toHaveProperty('isBot');
+      expect(quote).not.toHaveProperty('attachmentCount');
+    }
+    expect(normalizeAutoReviewUserIntent(intent)).toEqual(intent);
+  });
+
+  it('does not let the reference wrapper push a near-budget message over its limit', () => {
+    for (const latest of ['x'.repeat(2_000), '"'.repeat(1_999)]) {
+      const intent = appendAutoReviewUserIntent('', latest, withRefs(latest, references));
+      expect(intent).toEqual({ earlierUserMessages: [], currentUserMessage: latest, currentUserReferences: references });
+      expect(normalizeAutoReviewUserIntent(intent)).toEqual(intent);
+    }
+    // Over budget is still omitted exactly as without references.
+    const over = appendAutoReviewUserIntent('', 'y'.repeat(2_001), withRefs('y'.repeat(2_001), references));
+    expect(over).toMatchObject({ currentUserMessage: expect.stringContaining('cannot establish authorization') });
+    expect(over).not.toHaveProperty('historyOmitted');
+  });
+
+  it('keeps the projection self-contained for the database worker', () => {
+    // WorkerThreadTransport evaluates the factory's source text in a worker.
+    const source = createAutoReviewIntentProjection.toString();
+    const factory = new Function(`return (${source});`)() as typeof createAutoReviewIntentProjection;
+    expect(factory().withReferences('这啥情况', references)).toEqual({
+      earlierUserMessages: [], currentUserMessage: '这啥情况', currentUserReferences: references,
+    });
   });
 });

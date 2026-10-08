@@ -55,6 +55,20 @@ const SESSION_ID = 's1';
 function createDb(initialTitle: string): void {
   const sqlite = new Database(':memory:');
   sqlite.exec(`
+    CREATE TABLE task_tags (
+      id TEXT PRIMARY KEY NOT NULL,
+      name TEXT NOT NULL,
+      name_customized INTEGER NOT NULL DEFAULT 0,
+      color TEXT NOT NULL,
+      favorite_order INTEGER,
+      sort_order INTEGER,
+      revision INTEGER NOT NULL DEFAULT 1
+    );
+    CREATE TABLE session_task_tags (
+      session_id TEXT NOT NULL,
+      tag_id TEXT NOT NULL,
+      PRIMARY KEY (session_id, tag_id)
+    );
     CREATE TABLE sessions (
       id TEXT PRIMARY KEY NOT NULL,
       title TEXT NOT NULL DEFAULT 'New Maker',
@@ -92,10 +106,12 @@ function createDb(initialTitle: string): void {
       workspace_kind TEXT NOT NULL DEFAULT 'project',
       orca_role TEXT,
       remote_host_id TEXT,
+      agent_device_id TEXT,
       codex_history_has_product_prompt INTEGER,
       codex_plan_json TEXT,
       im_bot_context_id TEXT,
       im_user_id TEXT,
+      im_default_route TEXT,
       summary TEXT,
       provider_id TEXT,
       plan_mode_enabled INTEGER NOT NULL DEFAULT 0,

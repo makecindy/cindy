@@ -81,10 +81,97 @@ pnpm --filter mobile test:smoke
 
 ## 专项入口
 
+### 消息缓存与首页偏好
+
+- iOS、Android 的最近消息窗口统一写入私有 `cache/session-messages-v1/` 文件，
+  不设总容量或按时间淘汰；分页、内存窗口、消息净化与显式删除语义不变。
+  该目录属于可再生缓存，系统低空间回收后会从主机重新获取，不作为消息权威副本。
+- 旧 AsyncStorage 消息按需迁移：仅在文件缺失时读取旧条目，成功原子写入后再删除旧值；
+  失败保留旧条目。回退到旧版不会读取新文件，会重新从主机获取消息。
+  迁移与同一任务的写入／删除共用队列，退出账号等待在途迁移后清理两种存储。
+- 每次启动把剩余旧 AsyncStorage 消息条目逐条迁成文件（走同一按需迁移与按 key 队列，
+  成功后才删旧值；同 key 已有文件时以文件为准，只删旧值）：未打开会话的旧副本会占满 Android AsyncStorage 的 6 MiB 库，使发件箱、
+  草稿写入报 `SQLITE_FULL`（#5403）。旧副本含没有服务端副本的 `mobile-system-*` 卡片，
+  不能直接丢弃。
+- 发件箱写入遇到 `SQLITE_FULL` 时先执行上述迁移再重试一次；仍失败提示「手机本地存储已满」，
+  不把原始 SQLite 报错直接给用户，也不清理草稿、发件箱或其他非缓存数据。
+- 删除逐项尝试旧条目和文件，不依赖新增文件写入；任一后端失败不阻止另一后端清理，
+  单个文件失败也不阻止后续文件删除，全部尝试结束后统一报告失败。清理报错时可能仍有
+  无法删除的残留，不能视为清理成功。新登录或切换账号必须在持久化
+  新身份前完成缓存清理；清理失败沿用登录错误与回滚路径，不能激活下一账号。
+  退出账号仍完成凭证清除；若缓存清理失败，下次登录会先重试。无有效账号期间禁止
+  读取或写入消息缓存，避免退出后的卸载回调重新落盘。
+- 首页分组等偏好继续使用 AsyncStorage。合并保存时读失败不得当成空配置；写失败
+  必须向用户提示，不能把未落盘的选择当成已保存。
+- 文件写入失败（含磁盘空间不足）会提示检查剩余空间，并说明离线内容可能不完整。
+  同一次启动最多提示一次，后台失败延后到前台提示；不把所有 I/O 错误都断言为磁盘已满。
+
+实现见 `src/session/messageCacheStorage.ts`、`mobileSessionMessageCache.ts`、
+`homeViewPreferenceStore.ts`，回归见 `src/__tests__/` 下对应测试。
+
+### 中国大陆版微信个人登录
+
+- 仅 iOS 中国大陆版登录页恢复微信入口；开关位于
+  `src/auth/mobileSocialLoginMode.ts`。入口要求构建包含微信 AppID 与 Universal Link，
+  并由 OpenSDK 确认已安装微信；Global 与 Android 均不显示。开关只影响 JS 行为，
+  不额外触发原生冷更。
+- iOS 复用 `xdt-wechat-login` 拉起微信取临时 code，再由 auth-server 交换；Android
+  原生能力保留，但本轮不显示入口。PC 使用同一服务端的网站应用扫码入口。登录结果
+  统一进入手机号补绑或身份选择流程。
+- 在 Mobile `.env`（本地）或打包机环境中成对填写
+  `EXPO_PUBLIC_CINDY_WECHAT_APP_ID` 与 `EXPO_PUBLIC_CINDY_WECHAT_UNIVERSAL_LINK`，
+  说明与空值占位见 `apps/mobile/.env.example`。AppID 必须匹配服务端
+  `WECHAT_MOBILE_APPID`；服务端两组 Secret 不进入客户端。自建构建继续继承这两个
+  公开环境变量，不从服务端环境文件读取密钥。
+- 仅 cn 和显式配置的 dev 构建消费微信配置；Global 忽略残留值。全空关闭入口，
+  半配置或非法 Universal Link 在原生配置生成前报错。首次启用需重新出原生包，
+  仅 OTA 无法添加回调配置；按下方冷更规则比对 fingerprint。
+- iOS config plugin 按[微信官方接入说明](https://developers.weixin.qq.com/doc/oplatform/Mobile_App/Access_Guide/iOS.html)
+  生成 `weixin`、`weixinULAPI`、`weixinURLParamsAPI` 三项查询白名单，并保留 AppID URL Scheme
+  与 Universal Link 的 Associated Domains。遗漏白名单需重建原生包，不能通过 JS 热更补齐。
+- 真机验收需验证 iOS Universal Link/AASA，覆盖
+  同意授权、取消、未安装微信、回到前台超时后重试。iOS Simulator 不支持微信授权。
+  iOS 登录页在回到前台时重新检查安装状态；凭据获取前仍须二次检查，不能只依赖页面显隐。
+  未绑手机号须短信验证，已绑用户免短信；用同一微信在 PC 和 iPhone 上确认账号一致。
+
+- 微信 OpenSDK 的 `oauth` / `refreshToken` 回调会同时到达原生 delegate 与 Expo Router；
+  Universal Link 校验还会回跳配置路径下的 `<AppID>/?_wechat_sdk_biz_data=…`，Router 可能
+  将 HTTPS 链接转成 Cindy scheme 或路径形式，这些形式也必须识别；仅按路径与参数名分类，
+  不解析 SDK 的不透明 payload。
+  `app/+native-intent.ts` 只负责将这些非页面链接送回首页，避免 404 展示授权参数。
+  微信 code/state 仍只由原生 SDK 校验，不得复用 auth-server `/auth` 的 PKCE 交换。
+  真机回归需分别覆盖微信已在后台与微信冷启动，确认回跳后继续完成登录而非进入错误页。
+
 - 模拟器与真机排错：
   [`simulator-debugging.md`](../../apps/mobile/docs/simulator-debugging.md)。
 
+## iOS 入站分享的消费与取消
+
+- 分享副本使用每次分享独立的 `cindy-share-<UUID>` 目录。新建页领取前保留原生
+  记录；领取必须先完成持久确认，之后才把附件交给上传管线。
+- 原生记录清除失败时保留待接收批次，在既有附件错误行说明失败，重新进入页面可重试。
+  不写每文件处理标记，不尝试部分领取，避免回滚失败隐藏尚未领取的附件。
+  已领取附件的原生记录已清除，因此用户移除附件后，即使副本清理失败也不会重放。
+- 仅经可读目录列表确认不存在的副本才过滤；目录暂不可读不能视为文件已删除。
+  主动重新分享同一文件仍可领取。临时副本沿用原有取消及七天过期回收流程。
+- 冷启动分享链接先进入首页，由信箱确认待接收内容后跳转，旧启动链接本身不能再次打开
+  新建页。原生异常的具体原因只写无文件内容的诊断状态，不把路径或文件名写入日志。
+
+实现：`src/session/incomingShareNative.ts`、`incomingShare.ts`、`incomingShareCleanup.ts`
+与 `IncomingShareBridge.tsx`。回归：`src/__tests__/incomingShare*.test.ts` 和
+`nativeIntent.test.ts`。上述 TS 层修复不修改原生配置或模块，不需要为此改变 runtime fingerprint。
+
 ## 原生配置与 runtime fingerprint(冷更边界)
+
+### 伙伴通信通知
+
+`plugins/with-communication-notifications.js` 为当前 bundle identity 生成
+`CindyNotificationService` 扩展，启用 Communication Notifications，并向 EAS 登记扩展签名。
+扩展仅消费伙伴回复的可选 `sender` 数据；保留正文、深链和系统隐私设置，任何处理失败或
+系统超时都回退原通知，且只交付一次。头像不发起网络请求、不读取用户账号存储。
+Swift 源码和打包头像显式进入 fingerprint。首次发布需要原生新包和重新生成的签名配置；
+服务端须先支持可选发送者透传和 `aps.mutable-content = 1`，未升级双方保持普通推送。
+这不是 OTA 可独立交付的功能，仍受下述冷更审核门约束。
 
 Mobile 用 `runtimeVersion.policy: "fingerprint"`:OTA 热更只在**指纹一致**的装机上生效,
 指纹一旦变化就必须**冷更出包**(新商店包 / 自建重装),存量装机拿不到该次热更。
@@ -113,6 +200,13 @@ Mobile 用 `runtimeVersion.policy: "fingerprint"`:OTA 热更只在**指纹一致
 
 ### 判断哪些改动会动指纹
 
+- 远控凭证共享目录默认参与指纹，但 `fingerprint.config.cjs` 明确列出的六个
+  `#if os(macOS)` 文件及三个桌面入口目录不参与。共享 Swift、手机密码表单、资源、
+  podspec 和未列出的新文件仍参与；不要按 `Mac*` 文件名通配排除。
+  `fingerprintConfig.test.ts` 校验排除文件的完整 macOS 编译保护，并使用 Expo 哈希器
+  验证两端的排除项与保留项。移除平台保护或让手机依赖这些文件前，必须同步移除排除项。
+  **首次采用此边界仍改变旧指纹**，须随计划内原生发版迁移；它只避免迁移后桌面专用
+  修改反复触发手机冷更，不为旧安装包伪造兼容 runtime，也不豁免上面的冷更确认门。
 - 改 `app.json` / `app.config.js` 前先判断是否会动指纹。被哈希的是**解析后的
   ExpoConfig**(app.config.js 的输出),不是源文件本身:凡进入 resolved config 的字段,
   改了值就会变指纹;只有被 app.config.js **覆写 / 剥离、传不到 resolved config** 的值才指纹
@@ -137,7 +231,17 @@ Mobile 用 `runtimeVersion.policy: "fingerprint"`:OTA 热更只在**指纹一致
 
 启动检查、设置页与强制更新屏共用 `src/update/useBundleUpdatePrompt.ts` 的安装出口。
 Android 8 及以上的新原生包优先应用内下载 HTTPS APK；Android 7、旧包缺少
-`CindyAppInstaller`，或安装地址是网页时，继续使用浏览器。权限只由自建构建的 `app.config.js` 声明，商店构建不声明。
+`CindyAppInstaller`，或安装地址是网页时，继续使用浏览器。权限由自建构建的
+`app.config.js` 声明；同流程生成的官网 APK 和 Google Play AAB 当前共享这一原生配置，
+EAS 商店构建不声明。
+
+Global 自建 APK 与 Google Play AAB 共用自建 OTA 配置和原生构建流程，不能仅凭
+`IS_OTA_SELFHOST` 判断整包更新渠道。Android 原生安装桥读取系统记录的 installer：
+Google Play 安装跳过官网 `/latest` APK 整包提示，由 Google Play 管理原生包更新；
+JS OTA 仍按现有通道检查，设置页手动检查只报告内容更新。遗留强更目标的安装按钮也
+只能打开该应用在 Google Play 的页面。官网 APK 安装继续使用下述应用内更新流程。
+这项原生查询改变 Android runtime fingerprint，旧 Play 包必须经一次 Play 冷更后才具备
+可靠的安装来源识别能力；不能把 JS OTA 当作旧包已经修复。
 
 - 已授权直接下载；未授权先显示说明与「去授权 / 浏览器下载 / 稍后」，用户点「去授权」
   才打开系统设置。返回后读取实际权限；拒绝不会循环申请，可选择浏览器下载。

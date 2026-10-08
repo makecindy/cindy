@@ -10,6 +10,8 @@ import {
 import type { InputProjection, QueuedRemoteMessage, RemoteImageRef, RemoteSession } from '@/session/types';
 import type { RemoteSerializedAttachment } from '@/session/types';
 import { parseMobileToolLoopErrorDetails } from '@/session/agentErrorI18n';
+import { i18n } from '@/i18n';
+import { resolveSystemLocale } from '@/i18n/locale';
 import { permissionModeOrAsk } from '@cindy/maker-shared/permission-mode';
 import {
   composerDocumentsEqual,
@@ -103,7 +105,15 @@ export function normalizeInputProjection(value: unknown, fallbackSessionId = '')
     continuationTurnClientId: readString(record?.continuationTurnClientId),
     continuationInFlightProjectionCapability,
     credentialSwitchWait: readCredentialSwitchWait(record?.credentialSwitchWait),
+    usageLimitWait: readUsageLimitWait(record?.usageLimitWait),
   };
+}
+
+function readUsageLimitWait(value: unknown): InputProjection['usageLimitWait'] {
+  const resumeAt = readRecord(value)?.resumeAt;
+  return typeof resumeAt === 'number' && Number.isFinite(resumeAt) && resumeAt > 0
+    ? { resumeAt }
+    : null;
 }
 
 /** 宽松解析凭证切换等待态:非对象/blockedBySessionIds 缺失或为空一律视作无等待。 */
@@ -127,6 +137,7 @@ export function buildQueuedTextMessage(
   clientId = createUuid(),
   options: {
     attachments?: readonly RemoteSerializedAttachment[];
+    planMode?: boolean;
     quotesEncoded?: boolean;
     agentReferences?: AgentInputReference[];
     pastedTextRanges?: Array<{ start: number; end: number; display: string }>;
@@ -153,10 +164,12 @@ export function buildQueuedTextMessage(
     options.agentReferences,
   );
   const createdAt = now.toISOString();
+  const uiLanguage = resolveSystemLocale(i18n.resolvedLanguage || i18n.language);
 
   return {
     clientId,
     text: trimmed,
+    uiLanguage,
     persistedContent,
     ...(attachments.length > 0 ? { files: [...attachments] } : {}),
     ...(options.agentReferences?.length ? { agentReferences: options.agentReferences } : {}),
@@ -178,6 +191,7 @@ export function buildQueuedTextMessage(
     },
     createOpts: {
       agentKind,
+      ...(options.planMode !== undefined ? { planMode: options.planMode } : {}),
       workingDir,
       model: session.model,
       effort,

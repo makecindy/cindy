@@ -52,6 +52,11 @@ describe.each(MANIFESTS)('config/endpoint*.json 守门($label)', ({ filePath, le
     expect(result).toMatchObject({ ok: true });
   });
 
+  it('国内外共用同一聊天服务，跨区邀请不进入不同数据库', () => {
+    const parsed = JSON.parse(rawText) as Record<string, unknown>;
+    expect(parsed.chatApiBaseUrl).toBe('https://chat.cindy.app');
+  });
+
   it('schemaVersion 与客户端支持版本一致', () => {
     const parsed = JSON.parse(rawText) as { schemaVersion?: number };
     expect(parsed.schemaVersion).toBe(CLIENT_ENDPOINTS_SCHEMA_VERSION);

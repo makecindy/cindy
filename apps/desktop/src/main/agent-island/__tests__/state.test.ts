@@ -17,6 +17,7 @@ import {
   buildAgentIslandDisplayState,
   buildAllSessionActivitySnapshots,
   closeAgentIslandSessionPreservingUnread,
+  completedReplySummary,
   createAgentIslandState,
   dismissAgentIslandActiveReveal,
   getNextAgentIslandTimerAt,
@@ -874,6 +875,32 @@ describe('Agent Island display state', () => {
     );
     expect(afterAssistantDwell.sessions[0]?.messagePreview).toBeNull();
     expect(afterAssistantDwell.sessions[0]?.compactDetail).toBe('运行测试');
+  });
+
+  it('summarizes a completion for other devices with the last reply only', () => {
+    const state = createAgentIslandState();
+    setAgentIslandStrings(state, { ...DEFAULT_AGENT_ISLAND_STRINGS, done: '完成' });
+    const start = 1_000;
+
+    // 用户提问预览仍在驻留时完成:取回复,不取提问。
+    applyAgentIslandUserPrompt(state, { sessionId: 'reply', title: 'Task' }, 'fix the login bug', start);
+    applyAgentIslandEvent(state, { sessionId: 'reply' }, finalTextEvent('登录问题已修复。'), start + 100);
+    applyAgentIslandEvent(state, { sessionId: 'reply' }, doneEvent(), start + 200);
+    // 本轮没有回复:不取上一轮的回复,也不把本机语言的占位当摘要发出去。
+    applyAgentIslandUserPrompt(state, { sessionId: 'silent', title: 'Task' }, 'first turn', start - 500);
+    applyAgentIslandEvent(state, { sessionId: 'silent' }, finalTextEvent('第一轮的回复'), start - 400);
+    applyAgentIslandEvent(state, { sessionId: 'silent' }, doneEvent(), start - 300);
+    applyAgentIslandUserPrompt(state, { sessionId: 'silent', title: 'Task' }, 'run it', start);
+    applyAgentIslandEvent(state, { sessionId: 'silent' }, doneEvent(), start + 200);
+
+    const sessions = buildAgentIslandDisplayState(state, start + 300).sessions;
+    const reply = sessions.find((session) => session.sessionId === 'reply');
+    const silent = sessions.find((session) => session.sessionId === 'silent');
+    expect(reply?.messagePreview?.kind).toBe('user');
+    expect(reply?.compactDetail).toBe('fix the login bug');
+    expect(reply && completedReplySummary(reply)).toBe('登录问题已修复。');
+    expect(silent?.activityLines.at(-1)?.text).toBe('完成');
+    expect(silent && completedReplySummary(silent)).toBe('');
   });
 
   it('does not display managed dialogue workspace folders as projects', () => {
@@ -2607,4 +2634,80 @@ describe('会话进程关闭不该抹掉正在展示的通知', () => {
 
     expect(buildAgentIslandDisplayState(state, 3_200).totalCount).toBe(0);
   });
+});
+
+describe('public generation phase independent of island prose', () => {
+  it('is available without an open chat and closes at stop/error/done', () => {
+    const state = createAgentIslandState();
+    const meta = { sessionId: 'teammate' };
+    const phase = () => buildAllSessionActivitySnapshots(state)[0]?.workingPhase;
+    applyAgentIslandUserPrompt(state, meta, 'Help', 100);
+    expect(phase()).toBe('thinking');
+    applyAgentIslandEvent(state, meta, { type: 'tool_use', data: { toolName: 'bot_memory', toolUseId: 't', input: { action: 'read', path: 'private' } } }, 101);
+    expect(phase()).toBe('reading-memory');
+    applyAgentIslandEvent(state, meta, { type: 'tool_result', data: { toolUseId: 't' } }, 102);
+    expect(phase()).toBe('reviewing-memory');
+    applyAgentIslandEvent(state, meta, { type: 'thinking', data: {} }, 103);
+    expect(phase()).toBe('reviewing-memory');
+    applyAgentIslandEvent(state, meta, textDeltaEvent('Public progress'), 104);
+    expect(phase()).toBe('replying');
+    applyAgentIslandEvent(state, meta, statusEvent(false, 'Stopped'), 105);
+    expect(phase()).toBeUndefined();
+    applyAgentIslandUserPrompt(state, meta, 'Retry', 106);
+    applyAgentIslandEvent(state, meta, terminalErrorEvent('Model unavailable'), 107);
+    expect(phase()).toBeUndefined();
+    applyAgentIslandUserPrompt(state, meta, 'Again', 108);
+    applyAgentIslandEvent(state, meta, doneEvent(), 109);
+    expect(phase()).toBeUndefined();
+  });
+});
+
+
+describe('teammate conversation compaction status', () => {
+  it.each(['Compacting...', 'Compacting context…'])('projects %s above preceding activity and resumes on the real boundary', (status) => {
+    const state = createAgentIslandState();
+    const meta = { sessionId: 'compact-chat', title: 'Chat', agentKind: 'pi' as const };
+    const phase = () => buildAgentIslandDisplayState(state, 2000).sessions[0]?.workingPhase;
+    applyAgentIslandEvent(state, meta, statusEvent(true, 'Working'), 1000);
+    applyAgentIslandEvent(state, meta, { type: 'text', data: { text: 'Public preamble' } }, 1100);
+    expect(phase()).toBe('replying');
+    applyAgentIslandEvent(state, meta, statusEvent(true, status), 1200);
+    expect(phase()).toBe('compacting');
+    applyAgentIslandEvent(state, meta, { type: 'tool_result', data: { toolUseId: 'earlier' } }, 1250);
+    expect(phase()).toBe('compacting');
+    applyAgentIslandEvent(state, meta, { type: 'compact_boundary', data: { trigger: 'auto' } }, 1300);
+    expect(phase()).toBe('thinking');
+    applyAgentIslandEvent(state, meta, { type: 'text', data: { text: 'Resumed' } }, 1400);
+    expect(phase()).toBe('replying');
+    applyAgentIslandEvent(state, meta, doneEvent(), 1500);
+    expect(phase()).toBeUndefined();
+  });
+  it.each(['stop', 'failure', 'resume'])('clears compaction after %s without leaving the old phase in the next turn', (end) => {
+    const state = createAgentIslandState();
+    const meta = { sessionId: 'compact-tail', title: 'Chat', agentKind: 'codex' as const };
+    const phase = () => buildAgentIslandDisplayState(state, 2000).sessions[0]?.workingPhase;
+    applyAgentIslandEvent(state, meta, statusEvent(true, 'Compacting...'), 1000);
+    if (end === 'stop') applyAgentIslandEvent(state, meta, statusEvent(false, 'Done'), 1100);
+    else if (end === 'failure') applyAgentIslandEvent(state, meta, { type: 'error', data: { message: 'Compaction failed' } }, 1100);
+    else applyAgentIslandEvent(state, meta, statusEvent(true, 'Thinking...'), 1100);
+    expect(phase()).not.toBe('compacting');
+    applyAgentIslandEvent(state, meta, doneEvent(), 1200);
+    applyAgentIslandEvent(state, meta, statusEvent(true, 'Working'), 1300);
+    expect(phase()).toBe('thinking');
+  });
+});
+
+
+it.each([['read', 'test'], ['test', 'read']])('keeps the remaining parallel tool active when %s finishes before %s', (first, last) => {
+  const state = createAgentIslandState();
+  const meta = { sessionId: 'parallel-tools' };
+  const phase = () => buildAllSessionActivitySnapshots(state)[0]?.workingPhase;
+  applyAgentIslandUserPrompt(state, meta, 'Check', 100);
+  applyAgentIslandEvent(state, meta, { type: 'tool_use', data: { toolName: 'Read', toolUseId: 'read', input: { file_path: 'sample.txt' } } }, 101);
+  applyAgentIslandEvent(state, meta, { type: 'tool_use', data: { toolName: 'Bash', toolUseId: 'test', input: { command: 'pnpm test' } } }, 102);
+  expect(phase()).toBe('testing');
+  applyAgentIslandEvent(state, meta, { type: 'tool_result', data: { toolUseId: first } }, 103);
+  expect(phase()).toBe(last === 'test' ? 'testing' : 'reading-file');
+  applyAgentIslandEvent(state, meta, { type: 'tool_result', data: { toolUseId: last } }, 104);
+  expect(phase()).toBe(last === 'test' ? 'reviewing-checks' : 'reviewing-files');
 });

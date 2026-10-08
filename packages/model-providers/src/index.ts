@@ -7,6 +7,21 @@
  * - registry：连接状态合成、按 agent 算可见性、resolveRoute 解析路由素材
  */
 
+export {
+  BYOK_CREDENTIALS_PATH,
+  BYOK_PROVIDERS_PATH,
+  isByokImageMode,
+  isByokProviderId,
+  parseByokCredentialsResponse,
+  parseByokProvidersResponse,
+} from './byok.js';
+export type {
+  ByokCredential,
+  ByokModel,
+  ByokProvider,
+  ByokProvidersResponse,
+} from './byok.js';
+
 export type {
   AgentKind,
   ProviderWireProtocol,
@@ -29,6 +44,7 @@ export type {
   ProviderRuntimeModelConfig,
   PiReasoningEffort,
   PiModelApi,
+  NativeSubscriptionAuth,
   ProviderPreset,
   ProviderPresetRuntime,
   PresetSortRegion,
@@ -37,9 +53,10 @@ export type {
   OAuthProviderDescriptor,
 } from "./types.js";
 
-export { PI_MODEL_APIS, PI_REASONING_EFFORTS } from "./types.js";
-export { isLocalOnlyProviderForAgent, isOpenAiSubscriptionProvider, providerCatalogId } from './provider-identity.js';
+export { NATIVE_SUBSCRIPTION_AUTHS, NATIVE_SUBSCRIPTION_DEFAULT_PROVIDER_IDS, PI_MODEL_APIS, PI_REASONING_EFFORTS } from "./types.js";
+export { isLocalOnlyProviderForAgent, isOpenAiSubscriptionProvider, providerCatalogId, isCustomRoutedProvider, isOrganizationManagedProvider } from './provider-identity.js';
 export { sourceProviderForPreset } from './providerPresetIdentity.js';
+export { isMimoTokenPlanPreset } from './mimoPresentation.js';
 
 export {
   effectivePiWireProtocol,
@@ -55,11 +72,13 @@ export { modelProtocolComparison, nativeModelAgents } from "./modelProtocol.js";
 export {
   BUNDLED_CATALOG,
   BUILTIN_PROVIDERS,
+  claudeSubscriptionOnlyForClaudeCode,
   parseCatalog,
   presetDisplayName,
   sanitizePresets,
   sortPresetsForRegion,
 } from "./catalog.js";
+export { expandPresetModels } from "./presetModels.js";
 
 export {
   buildUserProvider,
@@ -94,6 +113,7 @@ export {
   decideModelRegistrySnapshot,
   findModelRegistryRoute,
   resolveModelNativeApi,
+  resolveCatalogModelNativeApi,
   resolveModelReferencePrice,
   resolveBaseModelReferencePrice,
 } from "./modelRegistry.js";
@@ -271,6 +291,7 @@ export type {
   LocalModelCatalog,
   LocalCatalogModel,
   LocalModelVariant,
+  LocalGgufVariant,
 } from "./localModelCatalog.js";
 
 export {
@@ -279,6 +300,7 @@ export {
   registryEntryDefaults,
   expandedRegistryEntries,
   pickModelMetadata,
+  MODEL_METADATA_FIELDS,
   validModelMetadata,
   mergeModelMetadata,
 } from "./modelMetadataLayers.js";
@@ -296,7 +318,7 @@ export { runtimeUserModelMetadata } from "./modelMetadataLayers.js";
 
 export { PROVIDER_MEDIA_FIELDS, providerMediaField, projectProviderMediaModels } from "./providerMediaModels.js";
 
-export { PROVIDER_MODEL_CATALOG, providerModelRecord, providerModelAdapterId, providerPresetModelRecord, providerModelMetadata, providerCatalogForPi, providerModelsForRoute } from "./providerModelCatalog.js";
+export { PROVIDER_MODEL_CATALOG, providerModelRecord, providerModelGenerationRecord, providerModelAdapterId, providerPresetModelRecord, providerModelMetadata, providerCatalogForPi, providerModelsForRoute } from "./providerModelCatalog.js";
 
 export { parseModelsListResponse, isOpenRouterModelsUrl } from "./modelDiscovery.js";
 

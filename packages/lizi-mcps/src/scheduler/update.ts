@@ -66,7 +66,7 @@ export function registerScheduleUpdateTool(
         .min(1)
         .nullable()
         .optional()
-        .describe('显式绑定到某条已存 session。跟进**当前对话**请改用 bindToCurrentSession,不要自己查 / 抄 session id。传 null = 解绑(清除会话绑定,比如把已绑定任务切成 script 模式前必须先解绑);省略 = 不修改。'),
+        .describe('显式绑定到某条已存 session。跟进**当前对话**请改用 bindToCurrentSession,不要自己查 / 抄 session id。传 null = 解绑；省略 = 不修改。script 模式同样可绑定，绑定为生命周期归属及唯一投递目标，归档或删除后停止。'),
       bindToCurrentSession: z
         .boolean()
         .optional()
@@ -79,7 +79,7 @@ export function registerScheduleUpdateTool(
       executionMode: z
         .enum(EXECUTION_MODE)
         .optional()
-        .describe('执行方式：agent / script（仅运行脚本，零 token），语义见 schedule_create 同名字段。切到 script 时任务须已有（或本次 patch 同时带）scriptConfig，且 workingDir 是本地项目目录、未绑会话未开 worktree，否则报 INVALID_PARAMS'),
+        .describe('执行方式：agent / script（仅运行脚本，零 token），语义见 schedule_create 同名字段。切到 script 时任务须已有（或本次 patch 同时带）scriptConfig，且 workingDir 是本地项目目录、未开 worktree 或 persistentSession，否则报 INVALID_PARAMS'),
       scriptConfig: z
         .object({
           command: z.string().min(1),

@@ -46,12 +46,12 @@ describe('codexImageClient', () => {
       fetchImplementation: doFetch,
     });
     await channel.generateImage({ model: 'openai-account-a/gpt-image-2', prompt: 'p' });
-    expect(JSON.parse(String(doFetch.mock.calls[0]?.[1]?.body)).tools[0].model).toBe('gpt-image-2');
+    expect(JSON.parse(String(doFetch.mock.calls[0]?.[1]?.body)).tools[0]).not.toHaveProperty('model');
     expect(doFetch.mock.calls[0]?.[1]?.headers).toMatchObject({ Authorization: 'Bearer account-a-token', 'ChatGPT-Account-Id': 'account-a' });
     await expect(channel.generateImage({ model: 'openai/gpt-image-2', prompt: 'p' })).rejects.toThrow('不支持模型');
     expect(doFetch).toHaveBeenCalledTimes(1);
   });
-  it('用 Codex OAuth hosted image_generation tool 生成 gpt-image-2', async () => {
+  it('uses the hosted image tool without an image model selector', async () => {
     const doFetch = vi.fn<typeof fetch>(async () =>
       sseResponse([
         {
@@ -79,11 +79,12 @@ describe('codexImageClient', () => {
     expect(body.tools).toContainEqual(
       expect.objectContaining({
         type: 'image_generation',
-        model: 'gpt-image-2',
         size: '1536x1024',
         quality: 'medium',
       }),
     );
+    expect(body.tools[0]).not.toHaveProperty('model');
+    expect(body).toMatchObject({ model: 'gpt-5.5' });
     expect(body.tool_choice).toBeUndefined();
   });
 
@@ -121,11 +122,11 @@ describe('codexImageClient', () => {
     expect(doFetch).toHaveBeenCalledTimes(1);
   });
 
-  it('目录新增的同协议型号原样发送，不固定旧图像模型', async () => {
+  it('keeps legacy catalog handles local and checks availability before dispatch', async () => {
     const doFetch = vi.fn<typeof fetch>(async () => sseResponse([{ type: 'image_generation_call', result: 'aW1hZ2U=' }]));
     const beforeDispatch = vi.fn();
     await makeChannel(doFetch, beforeDispatch).generateImage({ model: 'openai/future-image', prompt: 'p' });
-    expect(JSON.parse(String(doFetch.mock.calls[0]?.[1]?.body)).tools[0].model).toBe('future-image');
+    expect(JSON.parse(String(doFetch.mock.calls[0]?.[1]?.body)).tools[0]).not.toHaveProperty('model');
     expect(beforeDispatch).toHaveBeenCalledWith('openai/future-image');
   });
 

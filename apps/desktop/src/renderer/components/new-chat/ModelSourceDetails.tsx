@@ -2,11 +2,11 @@ import { createContext, useContext, useEffect, useMemo, useState, type ReactNode
 import { useTranslation } from 'react-i18next';
 import type { ProviderView } from '@cindy/model-providers';
 import { matchCodexBucketForModel } from '@cindy/maker-shared/codex-usage-buckets';
-import { useCodexRateLimits } from '@/hooks/useCodexRateLimits';
-import { useAccountUsage } from '@/hooks/useAccountUsage';
-import { useClaudeSubscriptionUsage } from '@/hooks/useClaudeSubscriptionUsage';
-import { useXaiSubscriptionUsage } from '@/hooks/useXaiSubscriptionUsage';
-import { formatCompactTimeUntilReset } from '@/lib/compactQuotaCountdown';
+import {
+  FIVE_HOUR_WINDOW_MINUTES,
+  formatCompactTimeUntilReset,
+  WEEKLY_WINDOW_MINUTES,
+} from '@/lib/compactQuotaCountdown';
 import {
   formatClaudeSubscriptionPlanLabel,
   formatCodexPlanLabel,
@@ -15,15 +15,16 @@ import { matchScopedWindowForModel } from '../../../shared/claudeSubscriptionUsa
 import { isXaiWeeklyUsageCurrent } from '../../../shared/xaiSubscriptionUsage';
 import { CHATGPT_MODEL_PREFIX } from '../../../shared/subscriptionModels';
 import { RESET_PENDING_MAX_MS } from '../status/quotaResetRollup';
-import { providerWeeklyQuotaSource } from './useProviderWeeklyQuota';
+import {
+  providerWeeklyQuotaSource,
+  useProviderUsageSnapshots,
+  type ProviderUsageScope,
+  type ProviderUsageSnapshots,
+} from './useProviderWeeklyQuota';
 
-interface SourceUsage {
-  source: 'codex' | 'claude' | 'xai';
-  codex: ReturnType<typeof useCodexRateLimits>['snapshot'];
-  web: ReturnType<typeof useAccountUsage>;
-  claude: ReturnType<typeof useClaudeSubscriptionUsage>;
-  xai: ReturnType<typeof useXaiSubscriptionUsage>;
-}
+type SourceUsage = ProviderUsageSnapshots & {
+  source: NonNullable<ProviderUsageSnapshots['source']>;
+};
 const UsageContext = createContext<ReadonlyMap<string, SourceUsage>>(new Map());
 const ClockContext = createContext(0);
 
@@ -31,55 +32,55 @@ const ClockContext = createContext(0);
  * account-scoped hooks own fetching and invalidation; this context only composes views. */
 function SourceUsageProvider({
   provider,
-  source,
+  scope,
   children,
 }: {
   provider: ProviderView;
-  source: SourceUsage['source'];
+  scope: ProviderUsageScope;
   children: ReactNode;
 }) {
   const parent = useContext(UsageContext);
-  const { snapshot: codex } = useCodexRateLimits(source === 'codex', provider.id);
-  const web = useAccountUsage(
-    undefined,
-    source === 'codex' ? 'codex' : undefined,
-    'openai-web',
-    undefined,
-    provider.id,
-  );
-  const claude = useClaudeSubscriptionUsage(source === 'claude', provider.id);
-  const xai = useXaiSubscriptionUsage(source === 'xai', provider.id);
+  const { source, codex, claude, xai } = useProviderUsageSnapshots(provider, scope, { web: true });
   const value = useMemo(() => {
+    if (!source) return parent;
     const next = new Map(parent);
-    next.set(provider.id, { source, codex, web, claude, xai });
+    next.set(provider.id, { source, codex, claude, xai });
     return next;
-  }, [parent, provider.id, source, codex, web, claude, xai]);
+  }, [parent, provider.id, source, codex, claude, xai]);
   return <UsageContext.Provider value={value}>{children}</UsageContext.Provider>;
 }
 
 export function ModelSourceUsageProvider({
   providers,
-  enabled,
+  scope,
   children,
 }: {
   providers: readonly ProviderView[];
-  enabled: boolean;
+  /** null: this directory may not show any account's usage. */
+  scope: ProviderUsageScope | null;
   children: ReactNode;
 }) {
   const [nowMs, setNowMs] = useState(Date.now);
+  const enabled = scope !== null;
+  const deviceId = scope?.deviceId ?? null;
   useEffect(() => {
     if (!enabled) return;
     const timer = setInterval(() => setNowMs(Date.now()), 1000);
     return () => clearInterval(timer);
   }, [enabled]);
-  // Remote directories never mount local account readers, even for matching IDs.
+  // Readers follow the directory's owner: remote directories read the device's mirrors,
+  // never this desktop's accounts, even for matching IDs.
   const content = enabled
     ? providers.reduce<ReactNode>((content, provider) => {
         if (provider.auth?.method !== 'oauth') return content;
         const source = providerWeeklyQuotaSource(provider);
         if (!source || provider.subscriptionAccount?.reconnectRequired) return content;
         return (
-          <SourceUsageProvider key={provider.id} provider={provider} source={source}>
+          <SourceUsageProvider
+            key={`${deviceId ?? ''}:${provider.id}`}
+            provider={provider}
+            scope={{ deviceId }}
+          >
             {content}
           </SourceUsageProvider>
         );
@@ -91,6 +92,7 @@ export function ModelSourceUsageProvider({
 interface QuotaWindow {
   usedPercent: number;
   resetsAt?: number | null;
+  windowMinutes?: number | null;
 }
 
 function modelSourceQuota(
@@ -106,21 +108,13 @@ function modelSourceQuota(
     const data = usage.codex;
     // ChatGPT bridge and Codex CLI consume different slots; never cross-fallback.
     const bucket = modelId.startsWith(CHATGPT_MODEL_PREFIX)
-      ? usage.web
-      : data
-        ? matchCodexBucketForModel(
-            data.rateLimitsByLimitId ?? {
-              [data.rateLimits.limitId ?? 'codex']: data.rateLimits,
-            },
-            modelId,
-            nowMs,
-          )
-        : null;
+      ? data?.web
+      : matchCodexBucketForModel(data?.buckets, modelId, nowMs);
     return {
       plan: formatCodexPlanLabel(
         modelId.startsWith(CHATGPT_MODEL_PREFIX)
           ? bucket?.planType
-          : (bucket?.planType ?? data?.account.planType),
+          : (bucket?.planType ?? data?.planType),
       ),
       windows: [bucket?.primary, bucket?.secondary].filter((w): w is NonNullable<typeof w> => !!w),
     };
@@ -130,12 +124,20 @@ function modelSourceQuota(
     const weekly = data && (matchScopedWindowForModel(data.scoped, modelId) ?? data.sevenDay);
     return {
       plan: formatClaudeSubscriptionPlanLabel(data?.subscriptionType),
-      windows: [data?.fiveHour, weekly]
+      windows: [
+        data?.fiveHour && { window: data.fiveHour, windowMinutes: FIVE_HOUR_WINDOW_MINUTES },
+        weekly && { window: weekly, windowMinutes: WEEKLY_WINDOW_MINUTES },
+      ]
         .filter((w): w is NonNullable<typeof w> => !!w)
-        .map((w) => ({ usedPercent: w.utilization, resetsAt: w.resetsAt })),
+        .map(({ window, windowMinutes }) => ({
+          usedPercent: window.utilization,
+          resetsAt: window.resetsAt,
+          windowMinutes,
+        })),
     };
   }
   const data = usage.xai;
+  // xAI resetsAt may fall back to a non-weekly period end, so it is not capped.
   return {
     plan: data?.planLabel ?? null,
     windows:
@@ -161,7 +163,12 @@ export function ModelSourceDetails({
   const parts = windows
     .filter((window) => Number.isFinite(window.usedPercent))
     .map((window) => {
-      const countdown = formatCompactTimeUntilReset(window.resetsAt, nowMs, t);
+      const countdown = formatCompactTimeUntilReset(
+        window.resetsAt,
+        nowMs,
+        t,
+        window.windowMinutes,
+      );
       // Do not present the previous period's percentage as a fresh quota.
       const expired =
         typeof window.resetsAt === 'number' &&
@@ -179,49 +186,49 @@ export function ModelSourceDetails({
           : [countdown, t('quotaCard.remainingPercent', { percent: remaining })]
               .filter(Boolean)
               .join(' · '),
-        used: expired ? 0 : window.usedPercent,
+        // Expired windows rank below every live one, even a live window at 0% used.
+        used: expired ? -1 : window.usedPercent,
       };
     });
+  // The row only has room for one window: show the tightest live one (later window wins
+  // ties); the title keeps every window.
+  const tightest = parts.reduce<(typeof parts)[number] | undefined>(
+    (best, part) => (!best || part.used >= best.used ? part : best),
+    undefined,
+  );
   const source = [label, plan].filter(Boolean).join(' · ');
   return (
     <div
       data-model-source-details
       title={[source, ...parts.map((part) => part.title)].join(' · ')}
-      className="flex w-0 min-w-full items-center gap-1 whitespace-nowrap pl-[26px] pt-px text-12 leading-[1.4] text-[var(--text-secondary)]"
+      className="flex w-0 min-w-full items-center gap-1 whitespace-nowrap pl-[26px] pt-px text-12 font-normal leading-[1.4] text-[var(--text-secondary)]"
     >
       <span className="min-w-0 truncate">{source}</span>
-      {parts.length > 0 && (
+      {tightest && (
         <span aria-hidden className="shrink-0">
           ·
         </span>
       )}
-      {parts.length > 0 && (
+      {tightest && (
         <span className="min-w-0 max-w-[70%] truncate tabular-nums">
-          <span className="inline-flex items-center gap-1">
-            {parts.map((part, index) => (
-              <span key={index} className="inline-flex items-center gap-1">
-                {index > 0 && <span aria-hidden>/</span>}
-                <span>
-                  {part.countdown}
-                  {part.percentage !== null && (
-                    <>
-                      {' '}
-                      <span
-                        className={
-                          part.used >= 90
-                            ? 'text-[var(--quota-bar-crit)]'
-                            : part.used > 70
-                              ? 'text-[var(--quota-bar-warn)]'
-                              : undefined
-                        }
-                      >
-                        {part.percentage}
-                      </span>
-                    </>
-                  )}
+          <span>
+            {tightest.countdown}
+            {tightest.percentage !== null && (
+              <>
+                {' '}
+                <span
+                  className={
+                    tightest.used >= 90
+                      ? 'text-[var(--quota-bar-crit)]'
+                      : tightest.used > 70
+                        ? 'text-[var(--quota-bar-warn)]'
+                        : undefined
+                  }
+                >
+                  {tightest.percentage}
                 </span>
-              </span>
-            ))}
+              </>
+            )}
           </span>
         </span>
       )}

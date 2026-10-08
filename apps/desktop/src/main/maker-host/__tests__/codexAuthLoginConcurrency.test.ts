@@ -20,6 +20,12 @@ vi.mock('electron', () => ({
   safeStorage: { isEncryptionAvailable: () => false },
 }));
 
+// Skill discovery is covered separately; keep cold plugin transforms out of login timing.
+vi.mock('../managed-skills.js', () => ({
+  listCindyManagedSkills: async () => [],
+  cindyManagedSkillRoots: async () => [],
+}));
+
 vi.mock('@cindy/maker-core', () => ({}));
 
 describe('DesktopCodexAuthAdapter login single-flight', () => {

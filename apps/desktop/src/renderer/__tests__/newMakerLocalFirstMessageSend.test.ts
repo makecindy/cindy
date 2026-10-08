@@ -116,6 +116,6 @@ describe('NewMakerDraftRoute local first-message send', () => {
     expect(sessionViewSource).toContain('const pending = consumePending(sessionId);');
     expect(sessionViewSource).toContain('maybeDispatchDesktopSlashCommand');
     expect(sessionViewSource).toContain('leadingSlashInvocation(message)');
-    expect(sessionViewSource).toContain('本机普通文本已在草稿路由发出');
+    expect(sessionViewSource).toContain('本机与远程的普通文本已在草稿路由发出');
   });
 });

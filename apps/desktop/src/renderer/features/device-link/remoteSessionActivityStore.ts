@@ -12,7 +12,8 @@
  *     会重发 attention=false 的收尾包)
  *   - 其余(已读收尾包)→ 删除条目,行回落时间显示
  *
- * 不喂系统级 attention(dock 角标 / 通知)—— 通知职责归被控端本机,控制端只做行内可视。
+ * 不喂 dock 角标——未读归被控端。灵动岛与桌面通知由 agentIslandRemoteSessions 按侧栏
+ * 「任务范围」裁剪后另行同步给 main。
  *
  * ⚠️ 性能不变量(与 sessionAttentionStore 同款):SessionItem 逐行挂载,订阅必须是
  * 按 deviceId + sessionId 的稳定引用精准订阅(条目对象未替换时快照引用不变),禁止整表订阅。
@@ -27,6 +28,7 @@ export interface RemoteSessionActivity {
   sessionId: string;
   phase: RemoteSessionActivityPhase;
   compactDetail: string;
+  workingPhase?: string;
   interactionKind?: string;
   attention: boolean;
 }
@@ -62,6 +64,7 @@ function sameActivity(a: RemoteSessionActivity, b: RemoteSessionActivity): boole
   return (
     a.phase === b.phase &&
     a.compactDetail === b.compactDetail &&
+    a.workingPhase === b.workingPhase &&
     a.interactionKind === b.interactionKind &&
     a.attention === b.attention
   );
@@ -151,6 +154,7 @@ export function applyRemoteSessionActivity(deviceId: string, payload: unknown): 
     sessionId,
     phase: p.phase,
     compactDetail: typeof p.compactDetail === 'string' ? p.compactDetail : '',
+    workingPhase: typeof p.workingPhase === 'string' ? p.workingPhase : undefined,
     interactionKind: typeof p.interactionKind === 'string' ? p.interactionKind : undefined,
     attention,
   };

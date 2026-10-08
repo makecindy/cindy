@@ -17,7 +17,9 @@ import {
   shouldRebuildForModelWindowSwitch,
   shouldRebuildPiNativeSession,
   type OverflowSourceMessage,
+  withReplaySourceNotes,
 } from '../contextOverflowRollover';
+import { buildHandoffText } from '../agentHandoff';
 
 function msg(
   role: string,
@@ -228,6 +230,29 @@ describe('planContextOverflowRollover', () => {
       msg('error', 'context overflow', 'e1'),
     ]);
     expect(plan.action).toBe('rebuild');
+  });
+
+  it('keeps per-row source metadata so the rebuilt handoff still names who sent each message', () => {
+    const plan = planContextOverflowRollover([
+      {
+        ...msg('user', JSON.stringify({ orcaSource: 'worker', content: '报告完成' }), 'u1', 1),
+        agentMeta: { origin: { kind: 'orca', senderLabel: 'Backend', senderSessionId: 'ws-1' } },
+      },
+      msg('assistant', '收到', 'a1', 2),
+      {
+        ...msg('user', '早报', 'u2', 3),
+        agentMeta: { origin: { kind: 'scheduler', scheduleId: 'sch-1', scheduleName: '每日早报' } },
+      },
+    ]);
+    if (plan.action !== 'rebuild') throw new Error('expected rebuild');
+    const handoff = buildHandoffText(plan.handoffMessages, {
+      fromLabel: 'Codex',
+      toLabel: 'Codex',
+      reason: 'context-overflow',
+    });
+    expect(handoff).toContain('[User · 来自 Orca Worker「Backend」(session_id: ws-1)]\n报告完成');
+    // 溢出那一条留给 wire 重放, 不进交接。
+    expect(handoff).not.toContain('每日早报');
   });
 
   it('refuses a second rollover of the same user message', () => {
@@ -1097,6 +1122,24 @@ describe('createContextOverflowRollover', () => {
     expect(deps.replayUserMessage).not.toHaveBeenCalled();
   });
 
+  it.each(['pi compact failed: 413', 'pi rpc timeout after 1000ms: compact', 'pi compact failed: upstream connection closed'])(
+    'recovers a persisted Pi byte-limit compaction failure after its runtime closed: %s', async error => {
+    const deps = makeDeps([
+      msg('user', 'Continue', 'u1'),
+      msg('error', JSON.stringify({ message: `PI_REQUEST_BODY_RECOVERY_EXHAUSTED: ${error}` }), 'e1'),
+    ]);
+    deps.getSessionRow.mockResolvedValue({
+      status: 'active', agentKind: 'pi', remoteHostId: null, clearedAt: null,
+      sdkSessionId: '/tmp/pi-session', contextTokens: 0, contextWindow: 1_000_000,
+      model: 'test-model', providerId: 'local-test',
+    });
+    deps.getLiveSession.mockReturnValue(undefined);
+    const rollover = createContextOverflowRollover(deps);
+    await expect(rollover.prepareUnhealthySession('s1')).resolves.toBe(true);
+    expect(deps.commitRebuild).toHaveBeenCalled();
+    expect(deps.replayUserMessage).not.toHaveBeenCalled();
+  });
+
   it('rebuilds before send when host auto-compact has latched a deterministic failure', async () => {
     const deps = makeDeps([msg('user', '继续', 'u1'), msg('assistant', '好', 'a1')]);
     deps.getSessionRow.mockResolvedValue({
@@ -1679,3 +1722,38 @@ describe('persistedUserContentToWireMessage', () => {
     );
   });
 });
+
+describe('withReplaySourceNotes', () => {
+  it('rebuilds the source notes from agentMeta so replayed plugin / shared-member / remote input keeps its attribution', () => {
+    const plugin = withReplaySourceNotes('run the report', {
+      sourcePlugin: { pluginId: 'ghost-gh', name: 'GitHub' },
+    });
+    expect(plugin).toEqual({
+      type: 'user',
+      content: expect.stringContaining('[消息来源] 本条由插件「GitHub」(plugin_id: ghost-gh) 发送'),
+    });
+    const member = withReplaySourceNotes({ type: 'user', content: [{ type: 'text', text: 'hi' }] }, {
+      sharedTaskAuthor: { memberId: 'm-1', displayName: '张三' },
+      sourceDevice: { deviceId: 'phone-1', name: 'iPhone', platform: 'mobile' },
+    });
+    const text = JSON.stringify(member);
+    expect(text).toContain('本条由共享任务成员「张三」(member_id: m-1) 发送');
+    expect(text).toContain('[客户端说明]');
+    expect(text).toContain('phone-1');
+  });
+
+  it('leaves local input untouched and never hands a bare string back for re-parsing', () => {
+    const wire = '{"a":1}';
+    expect(withReplaySourceNotes(wire, {})).toBe(wire);
+    expect(withReplaySourceNotes(wire, null)).toBe(wire);
+    const withNote = withReplaySourceNotes(wire, { sourcePlugin: { pluginId: 'p' } });
+    expect(typeof withNote).toBe('object');
+  });
+
+  it('adds no source note to hidden host instructions or auto-resume rows', () => {
+    expect(
+      withReplaySourceNotes('继续', { sourcePlugin: { pluginId: 'p' }, autoResume: true }),
+    ).toBe('继续');
+  });
+});
+

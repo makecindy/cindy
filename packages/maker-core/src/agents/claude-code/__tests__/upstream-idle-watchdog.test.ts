@@ -25,6 +25,7 @@ import type { AgentDeps } from '../../base-agent.js';
 import type { AuthAdapter } from '../../../interfaces/auth-adapter.js';
 import type { AgentEvent } from '../../../types/events.js';
 import type { Logger } from '../../../interfaces/logger.js';
+import type { ToolLoopReviewer } from '../../shared/tool-loop-review.js';
 
 const sdkMock = vi.hoisted(() => ({
   forkSession: vi.fn(),
@@ -57,7 +58,7 @@ function createNoopLogger(): Logger {
   return logger;
 }
 
-function createDeps(): AgentDeps {
+function createDeps(toolLoopReviewer?: ToolLoopReviewer): AgentDeps {
   const auth: AuthAdapter = {
     async getState() {
       return { authenticated: true };
@@ -75,6 +76,7 @@ function createDeps(): AgentDeps {
     runtimeConfig: {},
     binaryPath: process.execPath,
     logger: createNoopLogger(),
+    toolLoopReviewer,
   };
 }
 
@@ -83,7 +85,7 @@ function createControlledStream() {
   const items: unknown[] = [];
   let waiter: { resolve: (r: IteratorResult<unknown>) => void; reject: (e: unknown) => void } | null = null;
   let ended = false;
-  let failure: unknown = null;
+  const failure: unknown = null;
 
   function pump(): void {
     if (!waiter) return;
@@ -141,7 +143,7 @@ async function makeTempDir(): Promise<string> {
   return dir;
 }
 
-async function startSessionWithStream(model = 'claude-opus-4-6') {
+async function startSessionWithStream(model = 'claude-opus-4-6', toolLoopReviewer?: ToolLoopReviewer) {
   const configDir = await makeTempDir();
   process.env.CLAUDE_CONFIG_DIR = configDir;
   const workingDir = await makeTempDir();
@@ -153,14 +155,14 @@ async function startSessionWithStream(model = 'claude-opus-4-6') {
     if (prompt) {
       void (async () => {
         try {
-          for await (const _ of prompt) { /* discard — 只对齐 pending 语义 */ }
+          for await (const item of prompt) { void item; /* discard — 只对齐 pending 语义 */ }
         } catch { /* end / abort 都算正常收尾 */ }
       })();
     }
     return fakeQuery;
   });
 
-  const agent = new ClaudeCodeAgent(createDeps());
+  const agent = new ClaudeCodeAgent(createDeps(toolLoopReviewer));
   const handle = await agent.startSession({
     sessionId: 'session-idle-watchdog',
     model,
@@ -282,7 +284,7 @@ async function runStableAbabLoop(
         assistantToolUse(
           id,
           isA
-            ? 'grep -R "getShellCommandPolicy" packages apps'
+            ? 'grep -R "getMcpToolApprovalPolicy" packages apps'
             : 'grep -R "shell-command-policy" packages apps',
           sidechain?.parentToolUseId,
           sidechain?.model,
@@ -418,6 +420,262 @@ describe('upstream-response-idle watchdog suspend awareness', () => {
 });
 
 describe('Claude Code tool-loop guard runtime integration', () => {
+  const editErrors = [
+    'The required parameter `file_path` is missing',
+    'String to replace not found in file.',
+    'Found 2 matches of the string to replace, but replace_all is false.',
+    'No changes to make: old_string and new_string are exactly the same.',
+  ];
+
+  it.each(editErrors.flatMap(output => [
+    { output, parentToolUseId: undefined },
+    { output, parentToolUseId: 'toolu_edit_agent' },
+  ]))('allows changing Edit inputs after repeated errors: $output, parent=$parentToolUseId', async ({ output, parentToolUseId }) => {
+    const { handle, stream, events, fakeQuery, collected } = await startSessionWithStream();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    try {
+      await handle.send({ type: 'user', content: 'correct the edit and continue' });
+      for (let i = 0; i < 20; i++) {
+        const id = `edit-${i}`;
+        // Keep the file fixed (or consistently absent for missing-field
+        // errors). Each corrected attempt/result is a separate SDK batch.
+        stream.emit({
+          type: 'assistant', parent_tool_use_id: parentToolUseId ?? null,
+          message: { role: 'assistant', content: [{
+            type: 'tool_use', id, name: 'Edit',
+            input: {
+              ...(output === editErrors[0] ? {} : { file_path: 'electron-main.mjs' }),
+              old_string: `before-${i}`,
+              new_string: output === editErrors[3] ? `before-${i}` : `after-${i}`,
+            },
+          }] },
+        });
+        stream.emit({
+          type: 'user', parent_tool_use_id: parentToolUseId ?? null,
+          message: { role: 'user', content: [{
+            type: 'tool_result', tool_use_id: id, content: output, is_error: true,
+          }] },
+        });
+        await pumpUntil(() => events.filter(e => e.type === 'tool_result_full').length === i + 1, 'failed edit delivered');
+        expect(toolLoopError(events)).toBeUndefined();
+        expect(fakeQuery.interrupt).not.toHaveBeenCalled();
+        expect(handle.isTurnRunning?.()).toBe(true);
+      }
+      expect(events.filter(e => e.type === 'tool_result_full').map(e => e.data)).toEqual(
+        Array.from({ length: 20 }, (_, i) => expect.objectContaining({
+          toolUseId: `edit-${i}`, fullText: output,
+        })),
+      );
+      stream.emit(successResult());
+      await pumpUntil(() => handle.isTurnRunning?.() === false, 'correcting turn completed');
+      expect(toolLoopError(events)).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+      stream.end();
+      await handle.close().catch(() => undefined);
+      await collected;
+    }
+  });
+
+  it.each([undefined, 'toolu_edit_agent'])('still interrupts four identical failed edits, parent=%s', async (parentToolUseId) => {
+    const { handle, stream, events, fakeQuery, collected } = await startSessionWithStream();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    try {
+      await handle.send({ type: 'user', content: 'edit the file' });
+      for (let i = 0; i < 4; i++) {
+        const id = `same-edit-${i}`;
+        stream.emit({
+          type: 'assistant', parent_tool_use_id: parentToolUseId ?? null,
+          message: { role: 'assistant', content: [{
+            type: 'tool_use', id, name: 'Edit',
+            input: { file_path: 'electron-main.mjs', old_string: 'same', new_string: 'same' },
+          }] },
+        });
+        stream.emit({
+          type: 'user', parent_tool_use_id: parentToolUseId ?? null,
+          message: { role: 'user', content: [{
+            type: 'tool_result', tool_use_id: id, content: editErrors[3], is_error: true,
+          }] },
+        });
+        await pumpUntil(() => events.filter(e => e.type === 'tool_result_full').length === i + 1, 'identical edit delivered');
+        if (i < 3) {
+          expect(toolLoopError(events)).toBeUndefined();
+          expect(fakeQuery.interrupt).not.toHaveBeenCalled();
+        }
+      }
+      await pumpUntil(() => fakeQuery.interrupt.mock.calls.length === 1, 'identical edit interrupted');
+      expect(toolLoopError(events)).toMatchObject({ data: {
+        reason: 'tool_use_loop_detected', loopKind: 'consecutive', loopCount: 4,
+      } });
+    } finally {
+      vi.useRealTimers();
+      stream.end();
+      await handle.close().catch(() => undefined);
+      await collected;
+    }
+  });
+
+  it('复核放行时相同调用不中断;复核 stop 后才中断', async () => {
+    const decisions: Array<(decision: 'continue' | 'stop') => void> = [];
+    const reviewer = vi.fn<ToolLoopReviewer>(() => new Promise((resolve) => decisions.push(resolve)));
+    const { handle, stream, events, fakeQuery, collected } = await startSessionWithStream('claude-opus-4-6', reviewer);
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    const emitSameBash = async (i: number) => {
+      const id = `same-bash-${i}`;
+      stream.emit({
+        type: 'assistant', parent_tool_use_id: null,
+        message: { role: 'assistant', content: [{
+          type: 'tool_use', id, name: 'Bash', input: { command: 'gh run view 1' },
+        }] },
+      });
+      stream.emit({
+        type: 'user', parent_tool_use_id: null,
+        message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: 'in_progress' }] },
+      });
+      await pumpUntil(() => events.filter(e => e.type === 'tool_result_full').length === i + 1, 'bash delivered');
+    };
+    try {
+      await handle.send({ type: 'user', content: 'wait for the run' });
+      for (let i = 0; i < 4; i++) await emitSameBash(i);
+      expect(reviewer).toHaveBeenCalledOnce();
+      expect(reviewer.mock.calls[0]?.[0]).toMatchObject({
+        sessionId: 'session-idle-watchdog', agentKind: 'claude-code', model: 'claude-opus-4-6',
+        verdict: { reason: 'consecutive', count: 4, toolName: 'Bash' },
+      });
+      decisions[0]?.('continue');
+      await vi.advanceTimersByTimeAsync(0);
+      for (let i = 4; i < 10; i++) await emitSameBash(i);
+      expect(toolLoopError(events)).toBeUndefined();
+      expect(fakeQuery.interrupt).not.toHaveBeenCalled();
+
+      for (let i = 10; i < 25; i++) await emitSameBash(i);
+      expect(reviewer).toHaveBeenCalledTimes(2);
+      expect(toolLoopError(events)).toBeUndefined();
+      decisions[1]?.('stop');
+      await pumpUntil(() => fakeQuery.interrupt.mock.calls.length === 1, 'reviewed loop interrupted');
+      expect(toolLoopError(events)).toMatchObject({ data: {
+        reason: 'tool_use_loop_detected', loopKind: 'consecutive', loopCount: 25,
+      } });
+    } finally {
+      vi.useRealTimers();
+      stream.end();
+      await handle.close().catch(() => undefined);
+      await collected;
+    }
+  });
+
+  it('等待用户确认期间丢弃迟到的复核 stop', async () => {
+    let decide!: (decision: 'continue' | 'stop') => void;
+    const reviewer = vi.fn<ToolLoopReviewer>(() => new Promise((resolve) => { decide = resolve; }));
+    const { handle, stream, events, fakeQuery, collected } = await startSessionWithStream('claude-opus-4-6', reviewer);
+    type CanUseTool = (tool: string, input: Record<string, unknown>, opts: { toolUseID: string; signal?: AbortSignal }) => Promise<unknown>;
+    const canUseTool = (sdkMock.query.mock.calls.at(-1)?.[0] as { options?: { canUseTool?: CanUseTool } } | undefined)
+      ?.options?.canUseTool;
+    expect(canUseTool).toBeTypeOf('function');
+    handle.setInteractionResolver?.(() => new Promise(() => {}));
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    try {
+      await handle.send({ type: 'user', content: 'wait for the run' });
+      for (let i = 0; i < 4; i++) {
+        const id = `ask-${i}`;
+        stream.emit({
+          type: 'assistant', parent_tool_use_id: null,
+          message: { role: 'assistant', content: [{ type: 'tool_use', id, name: 'Bash', input: { command: 'gh run view 1' } }] },
+        });
+        stream.emit({
+          type: 'user', parent_tool_use_id: null,
+          message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: 'in_progress' }] },
+        });
+        await pumpUntil(() => events.filter(e => e.type === 'tool_result_full').length === i + 1, 'bash delivered');
+      }
+      expect(reviewer).toHaveBeenCalledOnce();
+      // 复核未返回时进入权限确认,用户正在看确认卡。
+      void canUseTool!('Bash', { command: 'rm -rf build' }, { toolUseID: 'needs-approval' });
+      await vi.advanceTimersByTimeAsync(0);
+      decide('stop');
+      await vi.advanceTimersByTimeAsync(1);
+      expect(fakeQuery.interrupt).not.toHaveBeenCalled();
+      expect(toolLoopError(events)).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+      stream.end();
+      await handle.close().catch(() => undefined);
+      await collected;
+    }
+  });
+
+  it('子代理结束后丢弃其迟到的复核 stop,不中断父 turn', async () => {
+    let decide!: (decision: 'continue' | 'stop') => void;
+    const reviewer = vi.fn<ToolLoopReviewer>(() => new Promise((resolve) => { decide = resolve; }));
+    const { handle, stream, events, fakeQuery, collected } = await startSessionWithStream('claude-opus-4-6', reviewer);
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    try {
+      await handle.send({ type: 'user', content: 'delegate the check' });
+      stream.emit({
+        type: 'assistant', parent_tool_use_id: null,
+        message: { role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_task', name: 'Agent', input: { prompt: 'check' } }] },
+      });
+      for (let i = 0; i < 4; i++) {
+        stream.emit(assistantToolUse(`sub-${i}`, 'gh run view 1', 'toolu_task'));
+        stream.emit(userToolResult(`sub-${i}`, 'in_progress', 'toolu_task'));
+      }
+      await pumpUntil(() => reviewer.mock.calls.length === 1, 'sidechain review started');
+      // 子代理先结束:父 Agent 调用拿到结果。
+      stream.emit(userToolResult('toolu_task', 'subagent finished'));
+      await pumpUntil(() => events.some(e => e.type === 'tool_result_full'
+        && (e.data as { toolUseId?: string }).toolUseId === 'toolu_task'), 'task result delivered');
+      decide('stop');
+      await vi.advanceTimersByTimeAsync(1);
+      expect(fakeQuery.interrupt).not.toHaveBeenCalled();
+      expect(toolLoopError(events)).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+      stream.end();
+      await handle.close().catch(() => undefined);
+      await collected;
+    }
+  });
+
+  it('同一 turn 中途切换模型不重置复核次数', async () => {
+    const reviewer = vi.fn<ToolLoopReviewer>(async () => 'continue');
+    const { handle, stream, events, fakeQuery, collected } = await startSessionWithStream('claude-opus-4-6', reviewer);
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    let delivered = 0;
+    const emitBash = async (id: string, command: string) => {
+      stream.emit({
+        type: 'assistant', parent_tool_use_id: null,
+        message: { role: 'assistant', content: [{ type: 'tool_use', id, name: 'Bash', input: { command } }] },
+      });
+      stream.emit({
+        type: 'user', parent_tool_use_id: null,
+        message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: 'in_progress' }] },
+      });
+      delivered += 1;
+      await pumpUntil(() => events.filter(e => e.type === 'tool_result_full').length === delivered, 'bash delivered');
+    };
+    try {
+      await handle.send({ type: 'user', content: 'wait for the runs' });
+      const models = ['claude-opus-5', 'claude-opus-4-6', 'claude-opus-5'];
+      for (let round = 0; round < 3; round++) {
+        for (let i = 0; i < 4; i++) await emitBash(`r${round}-${i}`, `gh run view ${round}`);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(reviewer).toHaveBeenCalledTimes(round + 1);
+        await handle.setModel?.(models[round]!);
+      }
+      expect(toolLoopError(events)).toBeUndefined();
+      // 切模型只清检测轨迹;本 turn 已用完 3 次复核,新的疑似直接中断。
+      for (let i = 0; i < 4; i++) await emitBash(`r3-${i}`, 'gh run view 3');
+      await pumpUntil(() => fakeQuery.interrupt.mock.calls.length === 1, 'loop interrupted without a fourth review');
+      expect(reviewer).toHaveBeenCalledTimes(3);
+      expect(toolLoopError(events)).toMatchObject({ data: { reason: 'tool_use_loop_detected', loopCount: 4 } });
+    } finally {
+      vi.useRealTimers();
+      stream.end();
+      await handle.close().catch(() => undefined);
+      await collected;
+    }
+  });
+
   it('并发 subagent 的相同调用按 parent 隔离，不会聚合成会话级死循环', async () => {
     const { handle, stream, events, fakeQuery, collected } = await startSessionWithStream(
       'claude-opus-5',
@@ -474,8 +732,17 @@ describe('Claude Code tool-loop guard runtime integration', () => {
       'deepseek/deepseek-v4-flash',
     );
     await session.handle.setModel?.('claude-opus-5');
+    const rebuiltStream = createControlledStream();
+    const rebuiltQuery = createFakeQuery(rebuiltStream);
+    sdkMock.query.mockImplementationOnce((options: { prompt: AsyncIterable<unknown> }) => {
+      session.stream.end();
+      void (async () => {
+        for await (const item of options.prompt) { void item; }
+      })();
+      return rebuiltQuery;
+    });
     const result = await runStableAbabLoop(
-      session,
+      { ...session, stream: rebuiltStream, fakeQuery: rebuiltQuery },
       'find the missing implementation after switching models',
       'toolu_issue_2721_switch',
     );
@@ -495,19 +762,19 @@ describe('Claude Code tool-loop guard runtime integration', () => {
     expect(result.interruptCalls).toBe(1);
   });
 
-  it('未确认的 provider-routed 模型不扩展自动硬中断范围', async () => {
+  it.each(['codex/gpt-5.5', 'google/gemini-3.8-flash', 'kimi/k2.8'])(
+    '%s provider-routed 模型同样检测工具循环', async (model) => {
     const result = await runStableAbabLoop(
-      await startSessionWithStream('codex/gpt-5.5'),
+      await startSessionWithStream(model),
       'run a provider-routed investigation',
       'toolu_provider_boundary',
     );
 
-    expect(result.loopError).toBeUndefined();
-    expect(result.interruptCalls).toBe(0);
+    expect(result.loopError).toMatchObject({ data: { reason: 'tool_use_loop_detected', model } });
+    expect(result.interruptCalls).toBe(1);
   });
 
-  it('claude 会话下 provider-routed 模型 sidechain 的稳定 ABAB 循环不触发硬中断', async () => {
-    // sidechain 流内消息报的是 SDK 原始 id(无 codex/ 前缀),guard 适用性按它判。
+  it('provider-routed sidechain 同样中断循环并保留真实模型归属', async () => {
     const result = await runStableAbabLoop(
       await startSessionWithStream('claude-opus-5'),
       'delegate the investigation to a codex subagent',
@@ -515,8 +782,8 @@ describe('Claude Code tool-loop guard runtime integration', () => {
       { parentToolUseId: 'toolu_agent_codex', model: 'gpt-5.6-sol' },
     );
 
-    expect(result.loopError).toBeUndefined();
-    expect(result.interruptCalls).toBe(0);
+    expect(result.loopError).toMatchObject({ data: { reason: 'tool_use_loop_detected', model: 'gpt-5.6-sol' } });
+    expect(result.interruptCalls).toBe(1);
   });
 
   it('provider-routed 会话下 claude 模型 sidechain 的稳定 ABAB 循环仍会中断', async () => {

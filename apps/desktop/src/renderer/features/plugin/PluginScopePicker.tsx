@@ -81,7 +81,7 @@ export function PluginScopePicker({
           />
           <div className="flex items-center gap-1.5">
             <Globe size={13} className="shrink-0 text-[var(--text-secondary)]" />
-            <span className="whitespace-nowrap text-13 font-medium">
+            <span className="whitespace-nowrap">
               {t('settings.ghosts.scopePicker.global')}
             </span>
           </div>
@@ -103,8 +103,8 @@ export function PluginScopePicker({
                   className={cn('shrink-0', isCurrent ? 'opacity-100' : 'opacity-0')}
                 />
                 <div className="flex min-w-0 flex-col gap-0.5">
-                  <span className="truncate text-13 font-medium">{basename(dir)}</span>
-                  <span title={dir} className="truncate text-11 text-[var(--text-secondary)]">
+                  <span className="truncate">{basename(dir)}</span>
+                  <span title={dir} className="truncate text-12 leading-[1.33] text-[var(--cmd-palette-item-meta)]">
                     {dir}
                   </span>
                 </div>
@@ -124,7 +124,7 @@ export function PluginScopePicker({
           <span aria-hidden className="w-[14px]" />
           <div className="flex items-center gap-1.5">
             <FolderOpen size={13} className="shrink-0 text-[var(--text-secondary)]" />
-            <span className="whitespace-nowrap text-13 font-medium">
+            <span className="whitespace-nowrap">
               {t('settings.ghosts.scopePicker.browse')}
             </span>
           </div>

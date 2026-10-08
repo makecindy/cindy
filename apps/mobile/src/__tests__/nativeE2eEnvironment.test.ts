@@ -127,8 +127,6 @@ describe('native e2e environment', () => {
     expect(runner).toContain("process.env.XDT_MOBILE_E2E_EXPO_TERMINATE_BEFORE_OPEN ?? 'true'");
     expect(runner).toContain("process.env.XDT_MOBILE_E2E_EXPO_OPEN_BEFORE_TEST ?? 'true'");
     expect(runner).toContain("if (expoUrl && expoTerminateBeforeOpen === 'true') terminateExpoApp(platform);");
-    expect(runner).toContain('function expoUrlWithRoute(url, route)');
-    expect(runner).toContain('XDT_MOBILE_E2E_HOST_AUTOMATIONS_URL');
     expect(runner).toContain('function terminateExpoApp(platform)');
     expect(runner).toContain('function terminateApp(targetAppId, platform)');
     expect(runner).toContain('function launchNativeApp(targetAppId, platform)');
@@ -213,7 +211,7 @@ describe('native e2e environment', () => {
     expect(localSmoke).toContain('async function assertExpoReady(url');
     expect(localSmoke).toContain('Expo Go native E2E needs Metro before Maestro opens the app.');
     expect(localSmoke).toContain('EXPO_PUBLIC_XDT_API_BASE_URL: apiBase');
-    expect(localSmoke).toContain("&& (flowSuite === 'visual' || flowSuite === 'full' || flowSuite === 'file' || flowSuite === 'automations')");
+    expect(localSmoke).toContain("&& (flowSuite === 'visual' || flowSuite === 'full' || flowSuite === 'file')");
     expect(localSmoke).toContain("flowSuite === 'visual' ? `${mockHostDeviceId}-${flowSlug(flow)}` : mockHostDeviceId");
     expect(localSmoke).toContain("if (flowSuite === 'full' && flow === 'fixture_controls_smoke.yaml') return 'controls';");
     expect(localSmoke).toContain("if (suite === 'controls') return 'controls';");
@@ -295,12 +293,40 @@ describe('native e2e environment', () => {
     expect(missingCredentials.stderr).toContain('isolated test environment');
   });
 
+  it.each([true, false])('probes Java only for real Maestro runs (dryRun=%s)', (dryRun) => {
+    const source = readFileSync(resolve(process.cwd(), 'scripts/maestro-e2e.mjs'), 'utf8');
+    const start = source.indexOf('const options = parseArgs(');
+    expect(start).toBeGreaterThan(0);
+    const resolveJavaRuntimeEnv = vi.fn(() => { throw new Error('java-probe'); });
+    const probeMetroOwnership = vi.fn();
+    const spawn = vi.fn();
+    const log = vi.fn();
+    const execute = () => runInNewContext(source.slice(start), {
+      resolve, existsSync: () => true, readFileSync: () => 'appId: test',
+      resolveJavaRuntimeEnv, probeMetroOwnership, spawnSync: spawn,
+      resolveMobileE2eProfile: () => undefined,
+      mobileRoot: '/mobile', flowRoot: '/mobile/flows', doctorScript: '/mobile/doctor.mjs',
+      defaultAppId: 'com.xd.cindy', loginScenario: 'providers:email-only',
+      console: { log },
+      process: {
+        argv: ['node', 'maestro-e2e.mjs', ...(dryRun ? ['--dry-run'] : [])],
+        env: {}, exit: (code: number) => { throw new Error('exit:' + code); },
+      },
+    });
+    expect(execute).toThrow(dryRun ? 'exit:0' : 'java-probe');
+    expect(resolveJavaRuntimeEnv).toHaveBeenCalledTimes(dryRun ? 0 : 1);
+    expect(probeMetroOwnership).not.toHaveBeenCalled();
+    expect(spawn).not.toHaveBeenCalled();
+    if (dryRun) expect(log).toHaveBeenCalledWith('maestro dry run: APP_ID=com.xd.cindy');
+  });
+
   it('keeps Maestro dry runs independent of Metro ownership', () => {
     const script = resolve(process.cwd(), 'scripts/maestro-e2e.mjs');
     const result = spawnSync(process.execPath, [script, '--dry-run', '--flow', 'login_mock_no_clear.yaml'], {
       cwd: process.cwd(), encoding: 'utf8', timeout: 10_000,
       env: { ...process.env, EXPO_PUBLIC_LOGIN_SCENARIO: '' },
     });
+    expect(result.error).toBeUndefined();
     expect(result.status).toBe(0);
     expect(result.stdout).toContain('maestro dry run: APP_ID=');
     expect(result.stderr).not.toContain('Active Metro');

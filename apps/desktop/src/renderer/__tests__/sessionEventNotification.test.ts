@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   botOwnedSessionNotificationTitle,
+  findSessionNotificationSession,
   sendSessionEventNotification,
 } from '@/lib/sessionEventNotification';
 
@@ -74,6 +75,21 @@ describe('shared session event notifications', () => {
     );
   });
 
+  it('leaves the desktop toast of a remote device task to the main-process scope filter', () => {
+    gates.feishu = true;
+
+    sendSessionEventNotification('remote-1', 'Fix login', 'done', { remoteDevice: true });
+
+    // 未读归属那台设备:本机 Dock 角标两条标记路径都不记。
+    expect(markAttention).not.toHaveBeenCalled();
+    expect(showSessionEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        markAttention: false,
+        channels: { desktop: false, feishu: true, mobile: true },
+      }),
+    );
+  });
+
   it('does not send external notifications while the user is already looking at Cindy', () => {
     vi.mocked(document.hasFocus).mockReturnValue(true);
 
@@ -94,5 +110,28 @@ describe('shared session event notifications', () => {
       'LiZi · 修复登录',
     );
     await expect(botOwnedSessionNotificationTitle('missing')).resolves.toBeNull();
+  });
+
+  it('looks up a notification session across complete and remote snapshots', () => {
+    const localVisible = [{ id: 'visible', title: 'Visible' }];
+    const allLocal = [{ id: 'archived', title: 'Renamed archived task' }];
+    const remote = [{ id: 'remote', title: 'Renamed remote task' }];
+
+    expect(findSessionNotificationSession('archived', [localVisible, allLocal, remote])).toEqual(
+      allLocal[0],
+    );
+    expect(findSessionNotificationSession('remote', [localVisible, allLocal, remote])).toEqual(
+      remote[0],
+    );
+    expect(findSessionNotificationSession('missing', [localVisible, allLocal, remote])).toBeNull();
+  });
+
+  it('prefers a named snapshot when the visible snapshot still has the draft title', () => {
+    const visible = [{ id: 'same-session', title: 'New Maker' }];
+    const complete = [{ id: 'same-session', title: 'Renamed task' }];
+
+    expect(findSessionNotificationSession('same-session', [visible, complete])).toEqual(
+      complete[0],
+    );
   });
 });

@@ -48,9 +48,13 @@ export function groupWorkRuns<TItem, TChild extends TItem>(
     if (activeTail && isSessionStreaming) {
       // A new run's status can arrive before its user row. A durable done seal still
       // closes the loaded work before it; only subsequent content may stay active.
-      const completedIndex = turn.findLastIndex(
-        (item) => adapter.isAnswer(item) && adapter.isSealedAnswer(item),
-      );
+      let completedIndex = -1;
+      for (let index = turn.length - 1; index >= 0; index--) {
+        if (adapter.isAnswer(turn[index]) && adapter.isSealedAnswer(turn[index])) {
+          completedIndex = index;
+          break;
+        }
+      }
       const activeStart =
         completedIndex >= 0
           ? adapter.boundaryTimestamp(turn[completedIndex])
@@ -166,17 +170,22 @@ function groupAnsweredTurn<TItem, TChild extends TItem>(
   adapter: WorkRunGroupingAdapter<TItem, TChild>,
 ): TItem[] | null {
   const answers = new Set<number>();
+  const sealed: number[] = [];
   let lastAnswer = -1;
   for (let index = 0; index < items.length; index++) {
     if (!adapter.isAnswer(items[index])) continue;
     lastAnswer = index;
-    if (adapter.isSealedAnswer(items[index])) answers.add(index);
+    if (adapter.isSealedAnswer(items[index])) sealed.push(index);
   }
   if (lastAnswer < 0) return null;
 
-  if (answers.size > 0) {
+  if (sealed.length > 0) {
+    // Background wake-ups (async agents, background shells) seal several SDK turns under
+    // one user row. The last seal is the turn's answer; an earlier seal stays visible only
+    // when its contiguous answer run carries a delivery (a non-archivable answer), and then
+    // the whole run stays together so an intro is never split from its report.
     let segmentStart = 0;
-    for (const sealedIndex of [...answers]) {
+    for (const sealedIndex of sealed) {
       let lastActivity = -1;
       for (let index = sealedIndex - 1; index >= segmentStart; index--) {
         if (adapter.isActivity(items[index])) {
@@ -192,8 +201,15 @@ function groupAnsweredTurn<TItem, TChild extends TItem>(
       ) {
         answerStart--;
       }
-      for (let index = answerStart; index <= sealedIndex; index++) {
-        if (adapter.isAnswer(items[index])) answers.add(index);
+      let keep = sealedIndex === sealed[sealed.length - 1];
+      for (let index = answerStart; index <= sealedIndex && !keep; index++) {
+        keep =
+          adapter.isAnswer(items[index]) && !adapter.isArchivable(items[index]);
+      }
+      if (keep) {
+        for (let index = answerStart; index <= sealedIndex; index++) {
+          if (adapter.isAnswer(items[index])) answers.add(index);
+        }
       }
       segmentStart = sealedIndex + 1;
     }

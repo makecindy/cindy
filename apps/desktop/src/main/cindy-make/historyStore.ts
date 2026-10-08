@@ -8,10 +8,23 @@ import type {
   MakeHistoryVersion,
 } from '../../shared/cindyMakeHistory.js';
 import type { CindyMakePersonalBuildState } from '../../shared/cindyMakeSession.js';
-import { parseCindyMakeBuildError } from '../../shared/cindyMakeSession.js';
+import {
+  parseCindyMakeBuildError,
+  parseCindyMakeBuildLogs,
+} from '../../shared/cindyMakeSession.js';
+import {
+  parseCindyMakeBuildDiagnostic,
+  parseCindyMakeBuildOutput,
+} from '../../shared/cindyMakeBuildDiagnostic.js';
 
 const ID = /^[a-zA-Z0-9-]{1,128}$/;
 const HASH = /^[a-f0-9]{40,64}$/i;
+/** Pending source recovery is retained until both Git and history agree again. */
+export interface MakeBuildRollbackEntry {
+  runId: string;
+  receipt: MakeFeatureReceipt;
+  previousTaskTree?: string;
+}
 export function validFeatureReceipt(value: MakeFeatureReceipt): boolean {
   return (
     !!value &&
@@ -63,6 +76,7 @@ export class CindyMakeHistoryStore {
       typeof value.request !== 'string' ||
       !Number.isFinite(value.createdAt) ||
       !Number.isFinite(value.updatedAt) ||
+      (value.hiddenAt !== undefined && !Number.isFinite(value.hiddenAt)) ||
       !Array.isArray(value.completions) ||
       !Array.isArray(value.receipts) ||
       !value.receipts.every(validFeatureReceipt) ||
@@ -113,14 +127,41 @@ export class CindyMakeHistoryStore {
     const value = JSON.parse(raw);
     if (
       !value ||
-      !['waiting', 'checking', 'merging', 'packaging', 'publishing', 'ready', 'failed'].includes(
+      ![
+        'waiting',
+        'syncing',
+        'checking',
+        'merging',
+        'packaging',
+        'publishing',
+        'ready',
+        'failed',
+      ].includes(
         value.status,
       )
     )
       throw new Error('Invalid build state');
+    const logs = parseCindyMakeBuildLogs(value.logs);
+    const outputLine = !['ready', 'failed'].includes(value.status)
+      ? parseCindyMakeBuildOutput(value.outputLine)
+      : undefined;
+    const diagnostic =
+      value.status === 'failed' ? parseCindyMakeBuildDiagnostic(value.diagnostic) : undefined;
     // The renderer needs status and version identity, never arbitrary fields read from disk.
     return {
       status: value.status,
+      ...(typeof value.mergeSessionId === 'string' && ID.test(value.mergeSessionId)
+        ? { mergeSessionId: value.mergeSessionId }
+        : {}),
+      ...(value.status === 'merging' && ['conflicts', 'cleanup'].includes(value.mergeStep)
+        ? { mergeStep: value.mergeStep }
+        : {}),
+      ...(value.status === 'waiting' && ['environment', 'original'].includes(value.preparationStep)
+        ? { preparationStep: value.preparationStep }
+        : {}),
+      ...(typeof value.syncLatestSource === 'boolean'
+        ? { syncLatestSource: value.syncLatestSource }
+        : {}),
       ...(value.stopping === true ? { stopping: true } : {}),
       ...(Number.isFinite(value.startedAt) && value.startedAt > 0
         ? { startedAt: value.startedAt }
@@ -129,6 +170,9 @@ export class CindyMakeHistoryStore {
       ['dependencies', 'tests', 'types'].includes(value.checkStep)
         ? { checkStep: value.checkStep }
         : {}),
+      ...(logs ? { logs } : {}),
+      ...(outputLine ? { outputLine } : {}),
+      ...(diagnostic ? { diagnostic } : {}),
       ...(typeof value.buildId === 'string' && ID.test(value.buildId)
         ? { buildId: value.buildId }
         : {}),
@@ -190,6 +234,7 @@ export class CindyMakeHistoryStore {
         personal: completion.personal ?? previous.personal,
         test: completion.test ?? previous.test,
         lastAction: completion.lastAction ?? previous.lastAction,
+        prompt: completion.prompt ?? previous.prompt,
       };
     if (index < 0) record.completions.push(completion);
     else if (JSON.stringify(record.completions[index]) === JSON.stringify(completion)) return;
@@ -204,6 +249,49 @@ export class CindyMakeHistoryStore {
     if (record.receipts.some((entry) => entry.id === receipt.id)) return;
     record.receipts.push(receipt);
     record.updatedAt = Math.max(record.updatedAt, receipt.at);
+    this.save(record);
+  }
+  readBuildRollback(): MakeBuildRollbackEntry[] {
+    this.assertDirectories();
+    const file = path.join(this.directory, 'build-rollback.json');
+    for (const candidate of [file, file + '.bak']) {
+      try {
+        const info = fs.lstatSync(candidate);
+        if (!info.isFile() || info.isSymbolicLink()) throw new Error('Invalid build rollback file');
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      }
+    }
+    const raw = readAtomicFileSync(file);
+    if (raw === null) return [];
+    const entries = JSON.parse(raw) as MakeBuildRollbackEntry[];
+    if (
+      !Array.isArray(entries) ||
+      !entries.every(
+        (entry) =>
+          !!entry &&
+          typeof entry.runId === 'string' &&
+          ID.test(entry.runId) &&
+          validFeatureReceipt(entry.receipt) &&
+          (entry.previousTaskTree === undefined || HASH.test(entry.previousTaskTree)),
+      )
+    )
+      throw new Error('Invalid build rollback');
+    return entries;
+  }
+  saveBuildRollback(entries: MakeBuildRollbackEntry[]): void {
+    this.assertDirectories();
+    atomicWriteFileSync(path.join(this.directory, 'build-rollback.json'), JSON.stringify(entries));
+  }
+  rollbackReceipt(runId: string, receiptId: string): void {
+    const record = this.read(runId);
+    if (!record || !record.receipts.some((entry) => entry.id === receiptId)) return;
+    if (
+      record.receipts.at(-1)?.id !== receiptId ||
+      record.versions.some((version) => version.operationId === receiptId)
+    )
+      throw new Error('Integration changed during build rollback');
+    record.receipts.pop();
     this.save(record);
   }
   verifyCompletionFacts(
@@ -245,5 +333,9 @@ export class CindyMakeHistoryStore {
   end(runId: string, at = Date.now()): void {
     const record = this.read(runId);
     if (record && !record.endedAt) this.save({ ...record, endedAt: at, updatedAt: at });
+  }
+  hide(runId: string, at = Date.now()): void {
+    const record = this.read(runId);
+    if (record && !record.hiddenAt) this.save({ ...record, hiddenAt: at, updatedAt: at });
   }
 }

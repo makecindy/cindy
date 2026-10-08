@@ -6,6 +6,7 @@
 
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { parse } from 'postcss';
 import { describe, expect, it } from 'vitest';
 
 const readRendererSource = (relativePath: string): string =>
@@ -13,10 +14,14 @@ const readRendererSource = (relativePath: string): string =>
 
 const messageStreamSource = readRendererSource('components/chat/MessageStream.tsx');
 const globalsSource = readRendererSource('styles/globals.css');
+const globalsCss = parse(globalsSource);
 
 function cssRuleBody(selector: string): string {
-  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return globalsSource.match(new RegExp(`${escaped}\\s*\\{([\\s\\S]*?)\\}`))?.[1] ?? '';
+  let body = '';
+  globalsCss.walkRules((rule) => {
+    if (rule.selectors.includes(selector)) body += rule.toString();
+  });
+  return body;
 }
 
 describe('分享选择模式的消息布局隔离', () => {
@@ -26,17 +31,26 @@ describe('分享选择模式的消息布局隔离', () => {
     );
   });
 
-  it('常态消息仍保留 content-visibility 性能优化', () => {
+  it('#5406: 常态消息也保持真实布局，避免 Blink AX 遍历跳过布局的文本', () => {
     const rule = cssRuleBody('.msg-stream-items > *');
 
-    expect(rule).toContain('content-visibility: auto;');
-    expect(rule).toContain('contain-intrinsic-size: auto 240px;');
+    expect(rule).toContain('content-visibility: visible;');
+    expect(rule).toContain('contain-intrinsic-size: none;');
+    // Any later, more specific message-row rule must not restore the unsafe
+    // optimization (including ordinary assistant and nested Bot message rows).
+    globalsCss.walkRules((candidate) => {
+      if (!candidate.selector.includes('.msg-stream-items')) return;
+      candidate.walkDecls('content-visibility', (declaration) => {
+        expect(declaration.value).toBe('visible');
+      });
+    });
   });
 
-  it('分享模式下仅让可分享消息使用真实布局盒', () => {
-    const rule = cssRuleBody(
-      '.msg-stream-items[data-share-selection-active] > [data-share-message-id]',
-    );
+  it.each([
+    '.msg-stream-items[data-share-selection-active] > [data-share-message-id]',
+    '.msg-stream-items[data-share-selection-active] > :has([data-share-message-id])',
+  ])('分享模式下可分享消息使用真实布局盒：%s', (selector) => {
+    const rule = cssRuleBody(selector);
 
     expect(rule).toContain('content-visibility: visible;');
     expect(rule).toContain('contain-intrinsic-size: none;');

@@ -30,10 +30,12 @@ export interface FileChange {
 export function FileChangeGroup({
   change,
   defaultExpanded = false,
+  summaryOnly = false,
 }: {
   change: FileChange;
   /** 默认展开(learn 提案审查这类"内容即主体"的场景传 true;快照 diff 保持折叠)。 */
   defaultExpanded?: boolean;
+  summaryOnly?: boolean;
 }) {
   const { t } = useTranslation();
   // 默认折叠 — 用户先扫一眼哪些文件变了,再展开关心的那个
@@ -94,7 +96,7 @@ export function FileChangeGroup({
         <span className="flex shrink-0 items-center gap-2 text-xs tabular-nums">
           {change.isBinary ? (
             <span className="rounded bg-muted px-1.5 py-0.5 text-10 text-muted-foreground">
-              {t('skillhub.diffPanel.binaryBadge')}
+              {t(summaryOnly ? 'skillhub.publishComparison.summaryBadge' : 'skillhub.diffPanel.binaryBadge')}
             </span>
           ) : stats ? (
             <>
@@ -108,7 +110,7 @@ export function FileChangeGroup({
       {expanded && (
         <div className="border-t border-border p-2">
           {change.isBinary ? (
-            <BinaryChangedView change={change} />
+            <BinaryChangedView change={change} summaryOnly={summaryOnly} />
           ) : (
             // contextLines=3:整文件对比时只显示变化前后 3 行,中间折叠,
             // 避免一改一行铺出整屏。
@@ -124,7 +126,7 @@ export function FileChangeGroup({
   );
 }
 
-function BinaryChangedView({ change }: { change: FileChange }) {
+function BinaryChangedView({ change, summaryOnly }: { change: FileChange; summaryOnly: boolean }) {
   const { t } = useTranslation();
   const fmtSize = (n: number) => {
     if (n < 1024) return `${n} B`;
@@ -133,7 +135,7 @@ function BinaryChangedView({ change }: { change: FileChange }) {
   };
   return (
     <div className="flex flex-col gap-1 px-2 py-3 text-xs text-muted-foreground">
-      <span>{t('skillhub.diffPanel.binaryNote')}</span>
+      <span>{t(summaryOnly ? 'skillhub.publishComparison.summaryNote' : 'skillhub.diffPanel.binaryNote')}</span>
       <span className="tabular-nums">
         {change.kind === 'added'
           ? t('skillhub.diffPanel.binarySizeNew', { size: fmtSize(change.newSize) })

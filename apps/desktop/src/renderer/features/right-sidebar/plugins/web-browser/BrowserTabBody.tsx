@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 /**
  * BrowserTabBody —— web-browser tab 的 TabBody。
  *
@@ -528,16 +529,19 @@ export function BrowserTabBody({ state, ctx, active, shellVisible }: BrowserTabB
           >
             <Gauge size={12} strokeWidth={2} className="shrink-0 text-[var(--warning-fg)]" />
             <span>{t('rightSidebar.browser.resourceAlert.cpuHint')}</span>
-            <button
+            <Button
+              variant="secondary"
+              size="xxs"
+              compact
+              tone="danger"
               type="button"
               onClick={() => {
                 browser.dismissResourceAlert();
                 void forceKillBrowserTab(tabId);
               }}
-              className="rounded-full px-2 py-0.5 text-11 font-medium text-[var(--error-fg)] hover:bg-[var(--surface-hover)]"
             >
               {t('rightSidebar.browser.resourceAlert.terminate')}
-            </button>
+            </Button>
             <Tip text={t('rightSidebar.browser.resourceAlert.dismiss')} side="bottom">
               <button
                 type="button"
@@ -625,28 +629,20 @@ function BrowserCrashBanner({
           ? 'rightSidebar.browser.crash.unresponsiveDesc'
           : 'rightSidebar.browser.crash.crashedDesc';
   return (
-    <div className="absolute inset-0 flex items-center justify-center bg-[var(--overlay-modal)] backdrop-blur-sm">
-      <div className="flex max-w-xs flex-col items-center gap-3 rounded-lg border border-[var(--border-default)] bg-[var(--surface-elevated)] px-6 py-5 text-center">
+    <div className="modal-scrim absolute inset-0 flex items-center justify-center">
+      <div className="modal-panel flex max-w-xs flex-col items-center gap-3 px-6 py-5 text-center">
         <AlertTriangle size={28} strokeWidth={1.5} className="text-[var(--error-fg)]" />
         <div className="text-13 font-medium text-[var(--text-primary)]">{t(titleKey)}</div>
         <div className="text-12 text-[var(--text-secondary)]">{t(descKey)}</div>
         <div className="mt-1 flex items-center gap-2">
-          <button
-            type="button"
-            onClick={onRecover}
-            className="flex h-7 items-center gap-1.5 rounded-md bg-[var(--accent-cta-bg)] px-3 text-12 font-medium text-[var(--accent-pure-cta-fg)] hover:bg-[var(--accent-hover)]"
-          >
+          <Button variant="cta" size="sm" compact type="button" onClick={onRecover}>
             <RotateCw size={12} strokeWidth={2.5} />
             {t('rightSidebar.browser.crash.reload')}
-          </button>
+          </Button>
           {onForceKill && (
-            <button
-              type="button"
-              onClick={onForceKill}
-              className="flex h-7 items-center rounded-md border border-[var(--border-default)] px-3 text-12 font-medium text-[var(--error-fg)] hover:bg-[var(--surface-hover)]"
-            >
+            <Button variant="secondary" size="sm" compact tone="danger" type="button" onClick={onForceKill}>
               {t('rightSidebar.browser.crash.forceKill')}
-            </button>
+            </Button>
           )}
         </div>
       </div>

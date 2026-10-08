@@ -354,6 +354,7 @@ function scheduleInfoEqual(a: RemoteSessionScheduleInfo, b: RemoteSessionSchedul
     && a.running === b.running
     && a.latestRunAt === b.latestRunAt
     && a.scheduleStatus === b.scheduleStatus
+    && a.nextFireAt === b.nextFireAt
     && a.allSchedulesStopped === b.allSchedulesStopped
     && stringListsEqual(a.unreadRunIds, b.unreadRunIds);
 }
@@ -390,7 +391,7 @@ function buildLightweightSessionScheduleIndex(raw: LightweightScheduleSnapshot, 
     if (!value || typeof value !== 'object') throw new Error('Invalid schedule index row');
     const row = value as Record<string, unknown>;
     if (typeof row.scheduleId !== 'string' || typeof row.runId !== 'string' || typeof row.scheduleName !== 'string') throw new Error('Invalid schedule index row');
-    const schedule = normalizeScheduleList([{ id: row.scheduleId, name: row.scheduleName, status: row.scheduleStatus }])[0];
+    const schedule = normalizeScheduleList([{ id: row.scheduleId, name: row.scheduleName, status: row.scheduleStatus, nextFireAt: row.nextFireAt }])[0];
     // The host omits older running rows' binding to preserve latest ownership.
     // Restore only that missing input; the shared builder still owns binding and recency rules.
     const sessionId = row.sessionId || (row.status === 'running' ? inflightSessions.get(row.runId) : undefined);

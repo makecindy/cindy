@@ -35,6 +35,7 @@ import type { AttachmentIntegrity } from '@cindy/device-link';
 import { serverApiFetch } from '../serverApiClient.js';
 import { requireAppCapability } from '../appCapabilities.js';
 import { deviceLinkApiBase } from './index.js';
+import { sharedTaskMediaId } from './sharedTaskMediaContext.js';
 import { describeErrorChain } from '../utils/errorChain.js';
 import { createLogger } from '../logger.js';
 
@@ -47,7 +48,7 @@ const STREAM_THRESHOLD = 64 * 1024 * 1024;
  * content-length,故在客户端(本机 main = 实际上传方)按真实字节数自校并拒绝超限,
  * 让大小上限对正常上传路径真实生效(server 端再校验声称的 size 作第二道)。
  */
-const MAX_MEDIA_BYTES = 2 * 1024 * 1024 * 1024;
+export const MAX_MEDIA_BYTES = 2 * 1024 * 1024 * 1024;
 
 const PRESIGN_PUT_PATH = '/api/device-link/media/presign-put';
 const PRESIGN_GET_PATH = '/api/device-link/media/presign-get';
@@ -119,10 +120,22 @@ async function presignPut(
   requireAppCapability('canUseDeviceLink', 'Device Link requires a Cindy account.');
   return serverApiFetch<PresignPutResponse>(PRESIGN_PUT_PATH, {
     method: 'POST',
-    body: { size, ext, contentType },
+    body: { size, ext, contentType, ...(sharedTaskMediaId() ? { sharedTaskId: sharedTaskMediaId() } : {}) },
     baseUrl: deviceLinkApiBase,
   });
 }
+
+/** Rejects as soon as `signal` aborts; the abandoned promise's result is ignored. */
+function abortable<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return promise;
+  return new Promise<T>((resolve, reject) => {
+    const abort = () => reject(new Error('UPLOAD_CANCELLED'));
+    if (signal.aborted) abort();
+    else signal.addEventListener('abort', abort, { once: true });
+    promise.then(resolve, reject).finally(() => signal.removeEventListener('abort', abort));
+  });
+}
+const REMOVE_REMOTE_TIMEOUT_MS = 15_000;
 
 /** 向 relay server 申请下载预签名(server 校验请求方 == key 内嵌 userId)。 */
 async function presignGet(key: string): Promise<PresignGetResponse> {
@@ -276,6 +289,7 @@ async function putBytesToOss(
   putUrl: string,
   bodySource: OssPutBodySource,
   contentType: string,
+  signal?: AbortSignal,
 ): Promise<void> {
   const host = hostOf(putUrl);
   const headers: Record<string, string> = {
@@ -292,7 +306,12 @@ async function putBytesToOss(
     } catch (err) {
       throw new NonRetriableOssPutError(err);
     }
-    const init: RequestInit & { duplex?: 'half' } = { method: 'PUT', headers, body };
+    const init: RequestInit & { duplex?: 'half' } = {
+      method: 'PUT',
+      headers,
+      body,
+      ...(signal ? { signal } : {}),
+    };
     // 流式 body 必须带 duplex:'half'(标准 fetch 要求),Buffer body 无需。
     if (body instanceof ReadableStream) init.duplex = 'half';
     const resp = await impl(putUrl, init as RequestInit);
@@ -319,8 +338,14 @@ async function putBytesToOss(
   const hints: string[] = [];
   for (const transport of order) {
     try {
+      signal?.throwIfAborted();
       await attempt(transport.impl);
     } catch (err) {
+      // A cancelled upload is final: never retry it through the other transport.
+      if (signal?.aborted) {
+        bodySource.dispose?.();
+        throw new Error('UPLOAD_CANCELLED');
+      }
       if (err instanceof NonRetriableOssPutError) {
         const retriableCacheArtifact =
           cachedFallbackFirst && transport.name === 'electron-net' && err.httpStatus !== undefined;
@@ -390,6 +415,8 @@ export async function uploadLocalFile(
     maxBytes?: number;
     /** 可选上传进度(已送入 HTTP 栈的字节数,略超前于真实网络进度)。 */
     onProgress?: (uploadedBytes: number) => void;
+    /** Aborting stops the PUT at once (no transport retry) and deletes the staged object. */
+    signal?: AbortSignal;
   } = {},
 ): Promise<UploadResult> {
   const st = await stat(localPath);
@@ -407,8 +434,12 @@ export async function uploadLocalFile(
   const ext =
     opts.extHint !== undefined ? opts.extHint.replace(/^\.+/, '').toLowerCase() : extOf(localPath);
   const contentType = opts.contentType ?? mimeOf(ext);
-  const { putUrl, key } = await presignPut(size, ext, contentType);
+  opts.signal?.throwIfAborted();
+  // A presign creates no object, so a result that arrives after cancellation needs no cleanup.
+  const { putUrl, key } = await abortable(presignPut(size, ext, contentType), opts.signal);
   let sha256: string;
+  // One per streaming attempt (a transport retry opens the file again): all must release it.
+  const sourcesClosed: Promise<void>[] = [];
 
   try {
     if (size <= STREAM_THRESHOLD) {
@@ -419,14 +450,20 @@ export async function uploadLocalFile(
         // One extra byte detects growth without reading an arbitrarily enlarged file.
         const chunks: Buffer[] = [];
         let received = 0;
-        for await (const chunk of createReadStream(localPath, { end: size })) {
+        // Cancellation stops the pre-read too; the catch below waits for this stream to close.
+        const source = createReadStream(localPath, {
+          end: size,
+          ...(opts.signal ? { signal: opts.signal } : {}),
+        });
+        sourcesClosed.push(new Promise((resolve) => source.once('close', () => resolve())));
+        for await (const chunk of source) {
           received += chunk.length;
           if (received > size) throw new Error('REMOTE_FILE_TOO_LARGE');
           chunks.push(chunk);
         }
         buf = Buffer.concat(chunks);
       } else {
-        buf = await readFile(localPath);
+        buf = await readFile(localPath, opts.signal ? { signal: opts.signal } : undefined);
       }
       if (buf.byteLength !== size) {
         throw new Error(`文件在上传前发生变化:预期 ${size} 字节,实际 ${buf.byteLength} 字节`);
@@ -434,7 +471,12 @@ export async function uploadLocalFile(
       sha256 = createHash('sha256').update(buf).digest('hex');
       // Buffer body 可重放:换栈重试直接复用同一份字节(fetch 不 transfer ArrayBuffer),
       // 也没有需要释放的底层资源。
-      await putBytesToOss(putUrl, { create: () => exactArrayBuffer(buf) }, contentType);
+      await putBytesToOss(
+        putUrl,
+        { create: () => exactArrayBuffer(buf) },
+        contentType,
+        opts.signal,
+      );
       opts.onProgress?.(size);
     } else {
       // 大媒体:磁盘流式 PUT,避免整文件进内存;经计数 Transform 上报进度。
@@ -454,6 +496,7 @@ export async function uploadLocalFile(
             localPath,
             opts.maxBytes !== undefined ? { end: size } : undefined,
           );
+          sourcesClosed.push(new Promise((resolve) => source.once('close', () => resolve())));
           const hasher = createHash('sha256');
           const current: StreamAttempt = {
             sent: 0,
@@ -499,7 +542,7 @@ export async function uploadLocalFile(
         // 已缓冲的数据,每次换栈上传都漏一个。
         dispose: () => attempts.at(-1)?.dispose(),
       };
-      await putBytesToOss(putUrl, bodySource, contentType);
+      await putBytesToOss(putUrl, bodySource, contentType, opts.signal);
       const uploadedAttempt = attempts.at(-1);
       if (!uploadedAttempt || uploadedAttempt.sent !== size) {
         // Cleanup is centralized below so transport and source-stream errors use the same path.
@@ -511,8 +554,12 @@ export async function uploadLocalFile(
       sha256 = uploadedAttempt.sha256;
     }
   } catch (error) {
-    // Cleanup is best-effort after every post-presign transfer failure.
-    await removeRemote(key);
+    // Cleanup is best-effort after every post-presign transfer failure; a cancelled upload
+    // does not wait for it.
+    const removing = removeRemote(key);
+    // A cancelled upload skips the network wait but still returns only after the file is closed,
+    // so the caller can delete it at once (Windows cannot remove an open file).
+    await (opts.signal?.aborted ? Promise.all(sourcesClosed) : removing);
     throw error;
   }
   log.debug(`uploaded key=${key} size=${size} ct=${contentType} integrity=sha256`);
@@ -622,6 +669,10 @@ export async function downloadToFile(
   const counter = new Transform({
     transform(chunk: Buffer, _enc, cb) {
       size += chunk.length;
+      if (expected && size > expected.size) {
+        cb(new AttachmentIntegrityError('size', '附件下载超出声明大小。'));
+        return;
+      }
       hasher.update(chunk);
       onProgress?.(size);
       cb(null, chunk);
@@ -662,6 +713,9 @@ export async function removeRemote(key: string): Promise<void> {
       method: 'DELETE',
       body: { key },
       baseUrl: deviceLinkApiBase,
+      // Best-effort (the OSS lifecycle rule is the backstop): never let an unresponsive relay
+      // hold up the upload failure or copy cancellation waiting on it.
+      timeoutMs: REMOVE_REMOTE_TIMEOUT_MS,
     });
     log.debug(`removed key=${key}`);
   } catch (err) {

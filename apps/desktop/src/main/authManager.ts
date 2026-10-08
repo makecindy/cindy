@@ -115,12 +115,14 @@ import {
 } from './clientEndpointsService.js';
 import {
   parseDesktopLoginAction,
+  loginPreparingErrorState,
   parseDesktopAccountKey,
   type DesktopAccountDeletionChallenge,
   type DesktopAccountSwitcherSnapshot,
   type DesktopSavedAccount,
   type DesktopLoginAction,
   type DesktopLoginActionResult,
+  type DesktopLoginState,
 } from '../shared/authIpc';
 import { LOGIN_CAPTCHA_PAGE_PATH } from '../shared/webviewPartition';
 import {
@@ -288,6 +290,8 @@ export interface AuthState {
   dataOwnerId: string | null;
   /** Main-owned owner boundary generation used to fence late renderer pushes. */
   ownerGeneration: number;
+  /** True only for the transient signed-out projection published before an owner boundary commits. */
+  ownerBoundaryPending?: boolean;
   /** Local and cloud sessions may enter the main application. */
   canEnterApp: boolean;
   isAuthenticated: boolean;
@@ -401,7 +405,7 @@ function isOwnerChangeShellPending(): boolean {
  */
 const deviceId = process.env.XDT_DEVICE_ID_OVERRIDE?.trim() || machineIdSync();
 
-let loginFlowState: AuthFlowState | null = null;
+let loginFlowState: DesktopLoginState | null = null;
 let providerConfig: ProviderConfig | null = null;
 let discoveredMethods: LoginMethod[] = [];
 // These live only within the current fresh-login flow; no credentials reach Renderer.
@@ -550,7 +554,6 @@ function isCredentialEncryptionAvailable(): boolean {
 export function needsCredentialProcessRecovery(): boolean {
   return (
     credentialEncryptionUnavailable &&
-    credentialStoreHealth.unavailable &&
     accessToken === null &&
     getActiveAppSession().mode === 'signed-out' &&
     !isPassiveSharedUserDataInstance()
@@ -3460,13 +3463,14 @@ function snapshotAuthState(): AuthState {
 }
 
 /** Logged-out projection used by stale/timeout paths that must not expose newer auth state. */
-function snapshotLoggedOutAuthState(): AuthState {
+function snapshotLoggedOutAuthState(ownerBoundaryPending = false): AuthState {
   const appSession = getActiveAppSession();
   return {
     user: null,
     mode: 'signed-out',
     dataOwnerId: null,
     ownerGeneration: appSession.generation,
+    ownerBoundaryPending,
     canEnterApp: false,
     isAuthenticated: false,
     isCanary: false,
@@ -3484,7 +3488,7 @@ function notifyRenderer(): void {
 }
 
 function notifyRendererAuthBoundaryPending(): void {
-  broadcastToRenderers('auth:state-change', snapshotLoggedOutAuthState());
+  broadcastToRenderers('auth:state-change', snapshotLoggedOutAuthState(true));
 }
 
 /**
@@ -4469,6 +4473,12 @@ export async function updateServerProfile(
 }
 
 export async function initialize(options: AuthInitializeOptions = {}): Promise<AuthState> {
+  // A renderer can mount after the boundary-pending broadcast. Keep startup
+  // fail-closed until the serialized owner transition settles instead of
+  // restoring the outgoing owner's credentials and turns from disk.
+  if (isOwnerChangeShellPending()) {
+    return snapshotLoggedOutAuthState(true);
+  }
   // Local mode is a committed account-free session. It must win before any
   // persisted cloud refresh token is inspected or any auth network call runs.
   if (getActiveAppSession().mode === 'local') {
@@ -5622,12 +5632,23 @@ async function runLoginAction(action: DesktopLoginAction): Promise<DesktopLoginA
       pendingSsoVerificationTicket = null;
       pendingAuthRealm = null;
     }
-    // Keep the last usable screen so validation/network failures can be retried
-    // without discarding the entered identifier or requesting another code.
-    loginFlowState = flowCannotRetry
-      ? { step: 'error', code, recoverTo: 'identifier' }
-      : (stateBeforeAction ?? { step: 'error', code, recoverTo: 'identifier' });
-    return { success: false, code, state: loginFlowState };
+    // Storage failures need recovery guidance, not another verification-code
+    // submission. Preserve private tickets and saved credentials; only change
+    // the presentation. Ordinary validation/network failures keep their form.
+    const errorState = loginPreparingErrorState(
+      code,
+      error instanceof AuthApiError ? error.retryAt : undefined,
+    );
+    loginFlowState =
+      flowCannotRetry || code === 'CREDENTIAL_STORE_UNAVAILABLE'
+        ? errorState
+        : (stateBeforeAction ?? errorState);
+    return {
+      success: false,
+      code,
+      state: loginFlowState,
+      ...(errorState.retryAt !== undefined ? { retryAt: errorState.retryAt } : {}),
+    };
   }
 }
 

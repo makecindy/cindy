@@ -55,6 +55,20 @@ export const PI_MODEL_APIS = [
 ] as const;
 export type PiModelApi = (typeof PI_MODEL_APIS)[number];
 
+/**
+ * Cindy 自带鉴权的订阅账号家族(ChatGPT / Claude / SuperGrok)。新增订阅家族只在这里加一项:
+ * 各端按家族读取账号余量的入口都以 `Record<NativeSubscriptionAuth, …>` 声明,漏接会直接
+ * 编译失败(mobile 任务菜单见 readSessionMenuAccountUsage)。
+ */
+export const NATIVE_SUBSCRIPTION_AUTHS = ["codex", "claude", "xai"] as const;
+export type NativeSubscriptionAuth = (typeof NATIVE_SUBSCRIPTION_AUTHS)[number];
+/** 每个订阅家族的内置默认账号 providerId(独立账号另有自己的 id,以 auth.native 标识家族)。 */
+export const NATIVE_SUBSCRIPTION_DEFAULT_PROVIDER_IDS = {
+  codex: "openai",
+  claude: "anthropic",
+  xai: "xai",
+} as const satisfies Record<NativeSubscriptionAuth, string>;
+
 /** Provider runtime 上游实际接受的推理 wire protocol。 */
 export type ProviderWireProtocol =
   "anthropic-messages" | "openai-responses" | "openai-chat" | "google-generative-ai";
@@ -65,8 +79,8 @@ export type CodexCompatibilityWireProtocol = Extract<
   "anthropic-messages" | "openai-chat"
 >;
 
-/** 供应商来源：内置 vs 用户自定义（自定义本轮不实现，类型先留位）。 */
-export type ProviderSource = "builtin" | "user";
+/** 供应商来源：内置 / 用户自定义 / 企业下发。企业连接走自定义路由，但不能当个人连接编辑。 */
+export type ProviderSource = "builtin" | "user" | "organization";
 
 /** 用户连接该供应商的鉴权方式（决定设置页的连接 UI）。
  *  - oauth   : 走 OAuth 登录（Claude.ai 订阅 / Codex 订阅）
@@ -185,6 +199,8 @@ export interface RoutingDescriptor {
    * 缺省按 false 处理；它与模型图片输入能力独立，也不得从模型名推断。
    */
   supportsImageGeneration?: boolean;
+  /** Enterprise BYOK image model binding used by the Codex Images route. */
+  imageModel?: { wireModel: string; litellmModel: string; supportsEdit: boolean };
   /** 真实上游 base URL（direct 时是供应商自家；gateway 时是 XD 网关 base）。 */
   upstream: string;
   /**
@@ -263,6 +279,14 @@ export interface ModelCost {
   output?: number;
   cacheRead?: number;
   cacheWrite?: number;
+  /** Pi-compatible rates used when input tokens strictly exceed this threshold. */
+  tiers?: Array<{
+    inputTokensAbove: number;
+    input?: number;
+    output?: number;
+    cacheRead?: number;
+    cacheWrite?: number;
+  }>;
 }
 
 /**
@@ -370,6 +394,14 @@ export interface CatalogModel {
   effortDisplayNames?: Partial<Record<Effort, string>>;
   /** 默认 effort；null = 不支持。 */
   defaultEffort: Effort | null;
+  /**
+   * true = 该 (provider, agent) 下没有任何来源声明过推理档位：用户/运行时没填 reasoning，
+   * 目录、发现元数据与用户元数据也都没有 efforts。此时 `efforts: []` 只是占位，不等于
+   * 「明确无档位」（reasoning:false 或已声明空列表）；准入校验不得据此把显式档位判成
+   * valid: none（#5535）。Pi 不标记：Pi 运行时按 efforts 物化 reasoning，自定义 Pi 模型
+   * 在显式开启前就是非推理模型，放行的档位不会生效。
+   */
+  effortsUnknown?: boolean;
   /** 思考只有开/关两档时，选择器显示开关而不是档位列表。 */
   thinkingToggle?: boolean;
   /**
@@ -387,6 +419,10 @@ export interface CatalogModel {
    * 不能读跨 provider 拍平去重后的列表（那只保留首个 provider 的值，会错）。
    */
   supportsFastMode?: boolean;
+  /** Same-provider, same-harness catalog model used for Fast. null explicitly disables mapping.
+   * Unlike a service tier, this changes the upstream model; availability must be checked per account.
+   */
+  fastModelId?: string | null;
   /**
    * 该模型在 Codex 下使用的模型级兼容 bridge 协议。
    *
@@ -489,7 +525,7 @@ export interface Provider {
   id: string;
   /** 展示名。 */
   name: string;
-  /** 内置 vs 用户自定义。 */
+  /** 内置 / 用户自定义 / 企业下发。企业连接走自定义路由，但不能当个人连接编辑。 */
   source: ProviderSource;
   /** ★这家能用在哪些 agent；决定它出现在哪个 agent 的来源列表里 + 路由按哪个 agent 取。 */
   agents: AgentKind[];
@@ -498,7 +534,7 @@ export interface Provider {
    * OAuth Runner（generic-oauth）；不带描述符的 oauth 供应商 = host bespoke 鉴权
    * （anthropic / openai / xai 现状）。
    */
-  auth: { method: AuthMethod; oauth?: OAuthProviderDescriptor; native?: "codex" | "claude" | "xai" };
+  auth: { method: AuthMethod; oauth?: OAuthProviderDescriptor; native?: NativeSubscriptionAuth };
   /** 用户使用该供应商时的额度来源；旧目录可缺省，由 source 从 bundled 同 id 条目补齐。 */
   access?: ProviderAccess;
   /**
@@ -576,10 +612,7 @@ export interface Provider {
  * contextWindow 缺省时由 `buildUserProvider` 使用保守默认；预设可显式携带厂商文档确认的值，
  * 并随用户配置持久化，避免已知长上下文模型被错误降级。
  */
-export interface ProviderRuntimeModelConfig extends Pick<
-  ModelMetadata,
-  "mode" | "modalities" | "officialDocs"
-> {
+export interface ProviderRuntimeModelConfig extends ModelMetadata {
   discoveredMetadata?: ModelMetadata;
   discoveredCost?: ModelCost;
   nameExplicit?: boolean;
@@ -607,6 +640,17 @@ export interface ProviderRuntimeModelConfig extends Pick<
   reasoningDefaultEffort?: PiReasoningEffort;
   /** 思考只有开/关时走开关 UI。 */
   thinkingToggle?: boolean;
+}
+
+/**
+ * 预设推荐模型：三个引擎共用一份清单，数组顺序即推荐顺序（见 `expandPresetModels`）。
+ * 引擎间确有差异时用 `engines` / `engineOverrides` 显式声明，不再为每个引擎各写一份。
+ */
+export interface ProviderPresetModel extends ProviderRuntimeModelConfig {
+  /** 只在这些引擎可用（如协议限制）；缺省 = 预设声明的全部引擎。 */
+  engines?: AgentKind[];
+  /** 引擎专属字段（如 Pi 的推理档位、按模型路由），展开时覆盖共用字段。 */
+  engineOverrides?: Partial<Record<AgentKind, Partial<ProviderRuntimeModelConfig>>>;
 }
 
 /**
@@ -678,6 +722,11 @@ export interface ProviderPreset {
    * 创建后会快照进 CustomProviderConfig，不随预设后续更新。
    */
   authMethod?: "apiKey" | "none";
+  /**
+   * 目录源数据里的共用推荐模型清单。加载时由 `expandPresetModels` 展开进各
+   * `runtimes[agent].models` 并删除本字段；下游始终只读展开后的形状，旧格式照常可用。
+   */
+  models?: ProviderPresetModel[];
   /** per-runtime 预填数据（至少一个）。 */
   runtimes: Partial<Record<AgentKind, ProviderPresetRuntime>>;
 }
@@ -767,7 +816,7 @@ export interface CustomProviderConfig {
   auth?:
     | { method: "apiKey"; oauth?: never; native?: never }
     | { method: "oauth"; oauth: OAuthProviderDescriptor; native?: never }
-    | { method: "oauth"; native: "codex" | "claude" | "xai"; oauth?: never }
+    | { method: "oauth"; native: NativeSubscriptionAuth; oauth?: never }
     | { method: "none"; oauth?: never; native?: never };
   /** per-runtime 独立配置（键为 agent，只含已配置的 runtime；至少一个）。 */
   runtimes: Partial<Record<AgentKind, CustomProviderRuntimeConfig>>;

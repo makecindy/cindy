@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 /**
  * AppCrashScreen — 渲染崩溃兜底页的纯展示层。
  *
@@ -66,26 +67,20 @@ export function AppCrashScreen({
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <button
+          <Button variant="cta" size="md" compact
             type="button"
             onClick={handleReload}
-            className="inline-flex h-8 items-center gap-1.5 rounded-full px-4 text-13 font-medium transition-opacity hover:opacity-90"
-            style={{
-              backgroundColor: 'var(--accent-cta-bg)',
-              color: 'var(--accent-pure-cta-fg)',
-            }}
           >
             <RotateCcw size={13} />
             {t('appError.reload')}
-          </button>
-          <button
+          </Button>
+          <Button variant="secondary" size="md" compact
             type="button"
             onClick={handleBackHome}
-            className="inline-flex h-8 items-center gap-1.5 rounded-full border border-[var(--border-default)] px-4 text-13 font-medium text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover)]"
           >
             <House size={13} />
             {t('appError.backHome')}
-          </button>
+          </Button>
         </div>
         {(stack ?? message) && (
           <details className="w-full">

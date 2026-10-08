@@ -54,7 +54,7 @@ export const ui = {
       const message = `⚠️ 当前 Discord 对话使用供应商「${provider}」（${model}），${reason}。`;
       return attached
         ? `${message}\n请在 desktop 的 Settings → 模型供应商中修复认证后，直接继续发送消息。`
-        : `${message}\n“新对话配置”只影响新对话；修改后请发送 \`/new\`，再继续聊天。`;
+        : `${message}\n修改“新对话配置”后直接继续发送消息即可；若当前对话单独选过模型，请发送 \`/model\` 重新选择。`;
     },
     controlInProgress:
       '🎮 你 /ctr 还在选择中呢 — 先把上面那张卡片操作完（或点 🚪 退出），再来发别的~',
@@ -189,4 +189,4 @@ export const ui = {
   },
 } satisfies ImUiTextPack;
 
-export const PROCESSING_EMOJI = '👀';
+export const PROCESSING_EMOJI = '👨‍💻';

@@ -6,7 +6,9 @@
  * 重新出现」。改成消息流项后靠两点保证连续:key 与正式消息一致(`message-${clientId}`)、
  * 已回流的 clientId 立刻不再产出气泡(避免同一句话双显)。
  */
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { CONTINUE_AFTER_ERROR_PROMPT, UI_ACTION_TRIGGER_PREFIX } from '@cindy/maker-shared/synthetic-trigger';
+import { i18n } from '@/i18n';
 import { formatQuoteForSend } from '@cindy/maker-shared/chat-quotes';
 import {
   appendPendingSendItems,
@@ -345,6 +347,12 @@ describe('buildPendingSendItems', () => {
     expect(items[2].actions).toBeNull();
   });
 
+  it('keeps a first-message creation row non-interactive until creation recovery is available', () => {
+    const [item] = build({ outbox: [outboxItem('first', { canCancel: false })] });
+    expect(item.canCancel).toBe(false);
+    expect(isPendingSendItemSelected(item, 'first')).toBe(false);
+  });
+
   it('never exposes queue actions for items that left the queue', () => {
     const [settling] = build({ settling: [queued('gone')] });
     expect(settling.actions).toBeNull();
@@ -474,5 +482,112 @@ describe('pendingSendSpins', () => {
     expect(pendingSendSpins('queued')).toBe(false);
     expect(pendingSendSpins('editing')).toBe(false);
     expect(pendingSendSpins('failed')).toBe(false);
+  });
+});
+
+describe('pending bubbles for inputs sent by another task', () => {
+  it('show the persisted visible body, not the agent-facing teammate prefix', () => {
+    const interjection = {
+      ...queued('interject', '[来自 Cindy 的补充]\n\nplease review'),
+      persistedContent: 'please review',
+      origin: { kind: 'session', senderSessionId: 'bot-task', displayText: '[来自 Cindy 的补充]\n\nplease review' },
+    } as QueuedRemoteMessage;
+    const [queuedBubble] = build({ queue: [interjection] });
+    const [settlingBubble] = build({ settling: [interjection] });
+    expect(queuedBubble.text).toBe('please review');
+    expect(settlingBubble.text).toBe('please review');
+    expect(JSON.stringify(queuedBubble.sentInlineTokens)).not.toContain('来自 Cindy');
+  });
+
+  it('keeps ordinary composer items on their own text', () => {
+    const [bubble] = build({ queue: [queued('plain', 'hello')] });
+    expect(bubble.text).toBe('hello');
+  });
+});
+
+describe('pending bubble source labels', () => {
+  let previousLanguage = 'en';
+  beforeAll(async () => {
+    previousLanguage = i18n.language;
+    await i18n.changeLanguage('zh-CN');
+  });
+  afterAll(async () => {
+    await i18n.changeLanguage(previousLanguage);
+  });
+
+  const withOrigin = (clientId: string, origin: Record<string, unknown>, text = 'body', persisted = text) => ({
+    ...queued(clientId, text),
+    persistedContent: persisted,
+    origin,
+  }) as QueuedRemoteMessage;
+
+  it('labels automation, task, teammate, Orca and plugin rows like the desktop queue panel', () => {
+    const items = build({
+      queue: [
+        withOrigin('auto', { kind: 'scheduler', scheduleId: 'sch-1', scheduleName: 'PR 心跳' }),
+        withOrigin('auto-redacted', { kind: 'scheduler' }),
+        // Hook 渠道消息复用 scheduler 形态:不是自动化,与历史消息一致不出自动化标签。
+        withOrigin('hook', { kind: 'scheduler', scheduleId: 'hook:conn-1', scheduleName: 'Hook · Team Slack' }),
+        withOrigin('task', { kind: 'session', senderSessionId: 's1', senderSessionTitle: '发布清单', displayText: 'body' }),
+        withOrigin('task-redacted', { kind: 'session', senderSessionId: '', displayText: 'body' }),
+        withOrigin('mate', { kind: 'session', senderSessionId: 's2', senderBotId: 'b1', senderBotName: 'Cindy', displayText: 'body' }),
+        withOrigin('lead', { kind: 'orca', senderLabel: 'Lead', displayText: '先跑测试' },
+          '[From Orca Lead] 先跑测试', '{"orcaSource":"lead","content":"先跑测试"}'),
+        withOrigin('worker', { kind: 'orca', senderLabel: 'frontend' },
+          '[From Orca Worker frontend] 完成', '{"orcaSource":"worker","content":"完成"}'),
+        { ...queued('plugin'), sourcePlugin: { pluginId: 'pl-1', name: '日报' } } as QueuedRemoteMessage,
+        queued('mine', 'hello'),
+      ],
+    });
+    expect(items.map((item) => [item.clientId, item.source?.kind ?? null, item.source?.label ?? null])).toEqual([
+      ['auto', 'automation', '由自动化「PR 心跳」发送'],
+      ['auto-redacted', 'automation', '由自动化发送'],
+      ['hook', null, null],
+      ['task', 'session', '由任务「发布清单」发送'],
+      ['task-redacted', 'session', '由其他任务发送'],
+      ['mate', 'teammate', '由伙伴「Cindy」发送'],
+      ['lead', 'orca', '来自 Lead 的消息'],
+      ['worker', 'orca', '来自 Worker「frontend」的消息'],
+      ['plugin', 'plugin', '由插件「日报」发送'],
+      ['mine', null, null],
+    ]);
+    // 来源 ID 随标签保留(长按显示);脱敏来源与 Orca 没有。
+    expect(Object.fromEntries(items.map((item) => [item.clientId, item.source?.idText ?? null]))).toMatchObject({
+      auto: '自动化 ID：sch-1',
+      'auto-redacted': null,
+      task: '任务 ID：s1',
+      'task-redacted': null,
+      // 伙伴来源与模型说明一致:伙伴 ID + 来源任务 ID。
+      mate: '伙伴 ID：b1\n任务 ID：s2',
+      plugin: '插件 ID：pl-1',
+      mine: null,
+    });
+    // Orca 条目显示正文,不显示发给 Agent 的前缀或落库 JSON。
+    expect(items.find((item) => item.clientId === 'lead')?.text).toBe('先跑测试');
+    expect(items.find((item) => item.clientId === 'worker')?.text).toBe('完成');
+    for (const item of items) expect(item.text).not.toMatch(/orcaSource|\[From Orca/);
+  });
+
+  it('never shows the stored text of synthetic UI-action rows, only a label', () => {
+    const hidden = `${UI_ACTION_TRIGGER_PREFIX} regenerate image 42`;
+    const items = build({
+      queue: [
+        queued('synthetic', hidden),
+        // 发给 Agent 的 text 带前缀、落库正文不带:仍按 text 判定为合成指令。
+        withOrigin('synthetic-auto', { kind: 'scheduler', scheduleId: 'sch-1', scheduleName: '巡检' }, hidden, 'regenerate image 42'),
+        queued('continue', CONTINUE_AFTER_ERROR_PROMPT),
+      ],
+    });
+    expect(items.map((item) => item.text)).toEqual(['系统指令', '系统指令', '继续未完成的任务（系统指令）']);
+    for (const item of items) {
+      expect(item.sentInlineTokens).toEqual([]);
+      expect(JSON.stringify(item)).not.toContain('regenerate image 42');
+    }
+    expect(items[1].source?.label).toBe('由自动化「巡检」发送');
+  });
+
+  it('keeps local outbox rows unlabeled', () => {
+    const [bubble] = build({ outbox: [outboxItem('o1')] });
+    expect(bubble.source).toBeNull();
   });
 });

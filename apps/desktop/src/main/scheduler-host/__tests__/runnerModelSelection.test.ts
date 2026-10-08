@@ -17,6 +17,17 @@
  */
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 
+vi.mock('electron', () => ({ app: { getPath: () => '/tmp/cindy-scheduler-test' } }));
+vi.mock('electron-store', () => ({ default: class {
+  get(): unknown { return undefined; }
+  set(): void {}
+  delete(): void {}
+} }));
+vi.mock('original-fs', async () => {
+  const fs = await import('node:fs');
+  return { ...fs, default: fs };
+});
+
 import type { AgentEvent, Maker, Session, SessionSendResult } from '@cindy/maker-core';
 import type { FireContext, Logger, Notifier, Schedule } from '@cindy/maker-scheduler';
 import {
@@ -202,6 +213,7 @@ const schedulerImageGenerationRoutes: readonly CodexCustomProviderRoute[] = [
       authStrategy: 'none',
     },
     responseRoutingByModel: {},
+    responseEffortsByModel: {},
     credentialRevision: 1,
   },
   {
@@ -216,6 +228,7 @@ const schedulerImageGenerationRoutes: readonly CodexCustomProviderRoute[] = [
       authStrategy: 'none',
     },
     responseRoutingByModel: {},
+    responseEffortsByModel: {},
     credentialRevision: 1,
   },
 ];
@@ -233,6 +246,7 @@ function createRunnerHarness(
   opts: {
     sessionAlive?: boolean;
     acquirePendingAgentSwitch?: ConstructorParameters<typeof MakerScheduleRunner>[0]['acquirePendingAgentSwitch'];
+    applyPiModelSelectionUnderLock?: ConstructorParameters<typeof MakerScheduleRunner>[0]['applyPiModelSelectionUnderLock'];
     resolveModelSelection?: ConstructorParameters<typeof MakerScheduleRunner>[0]['resolveModelSelection'];
     activeSessions?: Session[];
     availableModels?: Array<{
@@ -241,19 +255,21 @@ function createRunnerHarness(
       defaultEffort?: string | null;
     }>;
     checkModelRoute?: ConstructorParameters<typeof MakerScheduleRunner>[0]['checkModelRoute'];
+    isAgentOnOtherDevice?: ConstructorParameters<typeof MakerScheduleRunner>[0]['isAgentOnOtherDevice'];
     resolveRouteCopyCapabilities?: ConstructorParameters<
       typeof MakerScheduleRunner
     >[0]['resolveRouteCopyCapabilities'];
     resolveDefaultModelRoute?: ConstructorParameters<
       typeof MakerScheduleRunner
     >[0]['resolveDefaultModelRoute'];
+    getSessionMeta?: () => Promise<typeof meta>;
   } = {},
 ): RunnerHarness {
   const createSession = vi.fn(async () => h.session);
   const closeSession = vi.fn(async () => undefined);
   const maker = {
     createSession,
-    getSessionMeta: vi.fn(async () => meta),
+    getSessionMeta: vi.fn(opts.getSessionMeta ?? (async () => meta)),
     getSession: vi.fn(() => h.session),
     listActiveSessions: vi.fn(() => opts.activeSessions ?? [h.session]),
     closeSession,
@@ -270,7 +286,12 @@ function createRunnerHarness(
     notifier,
     logger: createLogger(),
     checkModelRoute: opts.checkModelRoute,
+    ...(opts.isAgentOnOtherDevice ? { isAgentOnOtherDevice: opts.isAgentOnOtherDevice } : {}),
     acquirePendingAgentSwitch: opts.acquirePendingAgentSwitch,
+    applyPiModelSelectionUnderLock: opts.applyPiModelSelectionUnderLock ?? (async (_id, targetModel, providerId) => {
+      await h.session.setModel(targetModel, { providerId });
+      return { status: 'applied' as const };
+    }),
     resolveModelSelection: opts.resolveModelSelection,
     resolveRouteCopyCapabilities: opts.resolveRouteCopyCapabilities,
     resolveDefaultModelRoute: opts.resolveDefaultModelRoute,
@@ -479,9 +500,10 @@ describe('MakerScheduleRunner model selection', () => {
   });
 
   describe('Pi 派发前路由重裁决', () => {
-    it('晚到 reroute 跨 Pi proxy 身份时本轮失败，留给下次 fire 关进程重建', async () => {
+    it('Pi 完成准备后来源再变化时拒绝本次发送，保留当前会话', async () => {
       const checkModelRoute = vi
         .fn()
+        .mockResolvedValueOnce({ kind: 'pass' as const })
         .mockResolvedValueOnce({ kind: 'pass' as const })
         .mockResolvedValueOnce({ kind: 'reroute' as const, providerId: 'byom-b' });
       const h = createSessionHarness();
@@ -495,11 +517,67 @@ describe('MakerScheduleRunner model selection', () => {
           createFireContext(),
         ),
       ).rejects.toThrow(/Session send failed before dispatch/);
-      expect(checkModelRoute).toHaveBeenCalledTimes(2);
+      expect(checkModelRoute).toHaveBeenCalledTimes(3);
       expect(h.setModel).not.toHaveBeenCalled();
       expect(mocks.setSessionProvider).not.toHaveBeenCalled();
       expect(h.send).not.toHaveBeenCalled();
     });
+  });
+
+  it('leaves route decisions for a task whose agent runs on another computer to that computer', async () => {
+    const h = createSessionHarness();
+    (h.session as { agentKind: string }).agentKind = 'pi';
+    (h.session as { model: string }).model = 'spark/qwen';
+    const transaction = vi.fn(async () => ({ status: 'applied' as const }));
+    const checkModelRoute = vi.fn()
+      .mockResolvedValueOnce({ kind: 'pass' as const })
+      .mockResolvedValue({ kind: 'reject' as const, reason: 'model-unavailable' });
+    const isAgentOnOtherDevice = vi.fn(async (sessionId: string) => sessionId === 'scheduler-session');
+    const harness = createRunnerHarness(h, null, {
+      checkModelRoute, isAgentOnOtherDevice, applyPiModelSelectionUnderLock: transaction,
+    });
+    await fireToCompletion(harness, h, baseSchedule({ agentKind: 'pi', model: h.session.model }));
+    // 新建任务时的那一次照常裁决(定时任务新建的任务在本机运行)；绑定到这个任务之后不再用本机目录裁决。
+    expect(checkModelRoute).toHaveBeenCalledTimes(1);
+    expect(isAgentOnOtherDevice).toHaveBeenCalledWith('scheduler-session');
+    expect(transaction).not.toHaveBeenCalled();
+    expect(h.send).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps deciding routes here when the lookup fails', async () => {
+    const h = createSessionHarness();
+    (h.session as { agentKind: string }).agentKind = 'pi';
+    (h.session as { model: string }).model = 'chatgpt/gpt-5.6-sol';
+    const checkModelRoute = vi.fn(async () => ({ kind: 'pass' as const }));
+    const harness = createRunnerHarness(h, null, {
+      checkModelRoute,
+      isAgentOnOtherDevice: vi.fn(async () => {
+        throw new Error('db closed');
+      }),
+    });
+    await fireToCompletion(harness, h, baseSchedule({ agentKind: 'pi', model: h.session.model }));
+    expect(checkModelRoute.mock.calls.length).toBeGreaterThan(1);
+  });
+
+  it('prepares a late Pi reroute before binding the result listener or sending', async () => {
+    const h = createSessionHarness();
+    (h.session as { agentKind: string }).agentKind = 'pi';
+    (h.session as { model: string }).model = 'chatgpt/gpt-5.6-sol';
+    const listener = vi.spyOn(h.session, 'onEvent');
+    const transaction = vi.fn(async () => ({ status: 'applied' as const }));
+    const checkModelRoute = vi.fn()
+      .mockResolvedValueOnce({ kind: 'pass' as const })
+      .mockResolvedValueOnce({ kind: 'reroute' as const, providerId: 'byom-b' })
+      .mockResolvedValue({ kind: 'pass' as const });
+    const harness = createRunnerHarness(h, null, {
+      checkModelRoute, applyPiModelSelectionUnderLock: transaction,
+    });
+    await fireToCompletion(harness, h, baseSchedule({ agentKind: 'pi', model: h.session.model }));
+    expect(transaction).toHaveBeenCalledWith('scheduler-session', h.session.model, 'byom-b',
+      { model: h.session.model, providerId: null }, { refreshPiConfiguration: true, source: 'agent' });
+    expect(transaction.mock.invocationCallOrder[0]).toBeLessThan(listener.mock.invocationCallOrder[0]);
+    expect(transaction.mock.invocationCallOrder[0]).toBeLessThan(h.send.mock.invocationCallOrder[0]);
+    expect(harness.closeSession).not.toHaveBeenCalledWith('scheduler-session', 'runtime-refresh');
   });
 
   describe('non-heartbeat (每次新建 session)', () => {
@@ -1210,6 +1288,38 @@ describe('MakerScheduleRunner model selection', () => {
   //   - 留空 + heartbeat → hydrate 绑定会话的 provider_id(只在内存无条目时写,不覆盖)。
   //   - 显式设置 → setSessionProvider 覆盖 + backfill 落 sessions.provider_id。
   describe('provider (来源) 注入', () => {
+    it('cold Pi heartbeat verifies the target window before resuming native history', async () => {
+      mocks.getSessionRowSnapshot.mockResolvedValue({ status: 'active', providerId: 'byom-a' });
+      mocks.getSessionProvider.mockReturnValue('byom-a');
+      const h = createSessionHarness();
+      (h.session as { agentKind: string }).agentKind = 'pi';
+      const transaction = vi.fn(async () => ({ status: 'applied' as const }));
+      const previous = {
+        agentKind: 'pi' as const, model: 'old-model', effort: 'high', workDir: '/work',
+        sdkSessionId: 'old-native-history',
+      };
+      const harness = createRunnerHarness(h, previous, {
+        sessionAlive: false,
+        applyPiModelSelectionUnderLock: transaction,
+        getSessionMeta: vi.fn()
+          .mockResolvedValueOnce(previous)
+          .mockResolvedValue({ ...previous, sdkSessionId: 'prepared-native-history' }),
+      });
+
+      await fireToCompletion(harness, h, baseSchedule({
+        agentKind: 'pi', model: 'new-model', providerId: 'byom-b',
+        targetSessionId: 'scheduler-session',
+      }));
+      expect(transaction).toHaveBeenCalledWith('scheduler-session', 'new-model', 'byom-b',
+        { model: 'old-model', providerId: 'byom-a' },
+        { refreshPiConfiguration: true, source: 'agent' });
+      expect(transaction.mock.invocationCallOrder[0]).toBeLessThan(
+        harness.createSession.mock.invocationCallOrder[0]);
+      expect(harness.createSession).toHaveBeenCalledWith(expect.objectContaining({
+        model: 'new-model', providerId: 'byom-b', resumeSessionId: 'prepared-native-history',
+      }));
+      expect(h.setModel).not.toHaveBeenCalled();
+    });
     it('非 heartbeat Claude + 留空 providerId → 物化当前 Claude 订阅来源并落库', async () => {
       const h = createSessionHarness();
       const resolveDefaultModelRoute = vi.fn(async () => ({
@@ -1341,7 +1451,7 @@ describe('MakerScheduleRunner model selection', () => {
       );
     });
 
-    it('heartbeat 复用 Pi 跨 proxy 身份时先关闭再按新来源重建', async () => {
+    it('heartbeat 复用 Pi 跨 proxy 身份时在同一会话上热切来源', async () => {
       mocks.getSessionRowSnapshot.mockResolvedValue({ status: 'active', providerId: 'byom-a' });
       mocks.getSessionProvider.mockReturnValue('byom-a');
       const h = createSessionHarness();
@@ -1368,14 +1478,9 @@ describe('MakerScheduleRunner model selection', () => {
         }),
       );
 
-      expect(harness.closeSession).toHaveBeenCalledWith('scheduler-session', 'runtime-refresh');
-      expect(harness.closeSession.mock.invocationCallOrder[0]).toBeLessThan(
-        harness.createSession.mock.invocationCallOrder[0],
-      );
-      expect(h.setModel).not.toHaveBeenCalled();
-      expect(harness.createSession).toHaveBeenCalledWith(
-        expect.objectContaining({ providerId: 'byom-b', model: 'gpt-5.6-sol' }),
-      );
+      expect(harness.closeSession).not.toHaveBeenCalled();
+      expect(h.setModel).toHaveBeenCalledWith('gpt-5.6-sol', { providerId: 'byom-b' });
+      expect(harness.createSession).toHaveBeenCalledTimes(1);
     });
 
     it('heartbeat 复用 Pi 同身份时即使模型不变也把 provider-model 原子同步到原生进程', async () => {

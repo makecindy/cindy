@@ -30,7 +30,12 @@ export const MOBILE_MESSAGE_LIST_BOTTOM_PADDING = 132;
 export const MOBILE_NEAR_BOTTOM_THRESHOLD =
   DEFAULT_NEAR_BOTTOM_THRESHOLD + MOBILE_MESSAGE_LIST_BOTTOM_PADDING;
 
-export function mobileMessageListBottomPadding(bottomOverlayHeight?: number): number {
+export function mobileMessageListBottomPadding(bottomOverlayHeight?: number, contentBottomInset?: number): number {
+  // An inline interaction replaces the composer; an explicit inset must not
+  // retain the fallback space reserved for that now-hidden composer.
+  if (typeof contentBottomInset === 'number' && Number.isFinite(contentBottomInset)) {
+    return Math.max(0, Math.ceil(contentBottomInset));
+  }
   if (typeof bottomOverlayHeight !== 'number' || !Number.isFinite(bottomOverlayHeight)) {
     return MOBILE_MESSAGE_LIST_BOTTOM_PADDING;
   }
@@ -499,35 +504,6 @@ export function shouldAutoLoadEarlier(input: MobileAutoLoadEarlierDecisionInput)
   return input.lastAttemptedProgressKey !== input.progressKey;
 }
 
-export interface MobilePreviousUserJumpTarget {
-  clientId: string;
-  index: number;
-  itemKey: string;
-  preview: string;
-}
-
-export function previousUserMessageJumpTarget(
-  items: readonly MobileMessageRenderItem[],
-  firstVisibleIndex: number,
-): MobilePreviousUserJumpTarget | null {
-  if (!Number.isFinite(firstVisibleIndex)) return null;
-  const startIndex = Math.min(items.length - 1, Math.floor(firstVisibleIndex) - 1);
-  if (startIndex < 0) return null;
-  for (let index = startIndex; index >= 0; index -= 1) {
-    const item = items[index];
-    if (item.type !== 'message' || item.message.kind !== 'user') continue;
-    const clientId = mobileMessageClientId(item.message);
-    if (!clientId) continue;
-    return {
-      clientId,
-      index,
-      itemKey: item.key,
-      preview: firstNonEmptyMessageLine(item.message.body),
-    };
-  }
-  return null;
-}
-
 export function findMobileRenderItemKeyByClientId(
   items: readonly MobileMessageRenderItem[],
   clientId: string | null | undefined,
@@ -538,10 +514,6 @@ export function findMobileRenderItemKeyByClientId(
     if (key) return key;
   }
   return null;
-}
-
-export function firstNonEmptyMessageLine(raw: string): string {
-  return raw.split('\n').find((line) => line.trim().length > 0)?.trim() ?? '';
 }
 
 function findClientIdInRenderItem(

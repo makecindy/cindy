@@ -4,6 +4,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import zhCNCommon from '@/i18n/locales/zh-CN/common.json';
 import type { UnifiedCommand } from '@/lib/slashCommands';
+import { CINDY_LEARN_SOURCE_DESCRIPTION } from '../../../../shared/cindyBuiltInSkills';
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
@@ -148,5 +149,99 @@ describe('SlashCommandPalette project Skill rows', () => {
     fireEvent.mouseDown(screen.getByRole('button', { name: 'demo' }));
 
     expect(onSelect).toHaveBeenCalledWith(loaded);
+  });
+
+  it('localizes the built-in Skill Creator description in the input palette', () => {
+    const skillCreator: UnifiedCommand = {
+      kind: 'agent-skill',
+      name: 'cindy-skill-creator',
+      description: 'Create or update a Cindy Skill',
+      builtIn: true,
+      source: 'skill',
+      scope: 'user',
+    };
+
+    render(
+      <SlashCommandPalette
+        query=""
+        commands={[skillCreator]}
+        focusedIndex={0}
+        onFocusedIndexChange={vi.fn()}
+        onSelect={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('skillhub.builtIn.skillCreator.description')).toBeTruthy();
+    expect(screen.getByText('skillhub.builtIn.official')).toBeTruthy();
+    expect(screen.queryByText(skillCreator.description!)).toBeNull();
+  });
+
+  it('keeps a user-owned Skill Creator description unchanged', () => {
+    const userSkillCreator: UnifiedCommand = {
+      kind: 'agent-skill',
+      name: 'cindy-skill-creator',
+      description: 'Create Skills for my private workflow',
+      source: 'skill',
+      scope: 'user',
+    };
+
+    render(
+      <SlashCommandPalette
+        query=""
+        commands={[userSkillCreator]}
+        focusedIndex={0}
+        onFocusedIndexChange={vi.fn()}
+        onSelect={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText(userSkillCreator.description!)).toBeTruthy();
+    expect(screen.queryByText('skillhub.builtIn.skillCreator.description')).toBeNull();
+    expect(screen.queryByText('skillhub.builtIn.official')).toBeNull();
+  });
+
+  it('localizes and marks the built-in Learn Skill as official', () => {
+    render(
+      <SlashCommandPalette
+        query=""
+        commands={[{
+          kind: 'agent-skill',
+          name: 'learn',
+          description: CINDY_LEARN_SOURCE_DESCRIPTION,
+          builtIn: true,
+          source: 'skill',
+          scope: 'user',
+        }]}
+        focusedIndex={0}
+        onFocusedIndexChange={vi.fn()}
+        onSelect={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('skillhub.builtIn.official')).toBeTruthy();
+    expect(screen.getByText('skillhub.builtIn.learn.description')).toBeTruthy();
+  });
+
+  it('does not mark a user Skill named learn as official', () => {
+    render(
+      <SlashCommandPalette
+        query=""
+        commands={[{
+          kind: 'agent-skill',
+          name: 'learn',
+          description: 'My Learn workflow',
+          source: 'skill',
+        }]}
+        focusedIndex={0}
+        onFocusedIndexChange={vi.fn()}
+        onSelect={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByText('skillhub.builtIn.official')).toBeNull();
   });
 });

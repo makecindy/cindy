@@ -60,6 +60,7 @@ const h = vi.hoisted(() => {
     createSessionRow: vi.fn(async () => undefined),
     peekPendingHandoff: vi.fn(async () => null as string | null),
     consumePendingHandoff: vi.fn(),
+    peekGoalInactiveNote: vi.fn(async () => null as string | null),
     listProviders: vi.fn(async (): Promise<unknown[]> => []),
     getModelVisibilityOverride: vi.fn(() => undefined),
     readImDefaultSettings: vi.fn(),
@@ -86,6 +87,30 @@ const h = vi.hoisted(() => {
   };
 });
 
+// 账号快照: 同一引用 = 账号没变(新任务从入口起按它复核账号代次)。测试可换引用模拟换账号。
+const dbAccount = vi.hoisted(() => ({ current: {} as object }));
+vi.mock('../../localDb/client/current', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../localDb/client/current')>()),
+  getCurrentDbClientSnapshot: () => dbAccount.current,
+}));
+
+// 新任务经公共入口 openSession(模型准入)—— 准入本身由 sessionOpening 的测试覆盖, 这里
+// 只把准入前的路由原样透传给建行回调。
+vi.mock('../../localDb/sessionOpening.js', () => ({
+  openSession: vi.fn(
+    async (
+      input: { body: Record<string, unknown> },
+      commit?: (row: Record<string, unknown>, assertCurrent: () => void) => Promise<unknown>,
+    ) => {
+      const row = {
+        ...input.body,
+        providerId: input.body.providerId ?? null,
+        fastMode: !!input.body.fastMode,
+      };
+      return { row, value: commit ? await commit(row, () => undefined) : undefined };
+    },
+  ),
+}));
 vi.mock('electron', () => ({
   BrowserWindow: { getAllWindows: () => [] },
 }));
@@ -97,6 +122,7 @@ vi.mock('@cindy/maker-core', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@cindy/maker-core')>();
   return {
     Session: actual.Session,
+    hasSessionPermissionUpdates: actual.hasSessionPermissionUpdates,
     isAutoReviewUnavailableNotice: actual.isAutoReviewUnavailableNotice,
     isAutoReviewConfirmUndeliveredNotice: actual.isAutoReviewConfirmUndeliveredNotice,
     isTerminalAgentErrorEvent: actual.isTerminalAgentErrorEvent,
@@ -153,6 +179,9 @@ vi.mock('../../maker-ipc/agentHandoffPendingSingleton.js', () => ({
     peek: h.peekPendingHandoff,
     consume: h.consumePendingHandoff,
   },
+}));
+vi.mock('../../goal-host/inactiveNote.js', () => ({
+  peekGoalInactiveNote: h.peekGoalInactiveNote,
 }));
 vi.mock('../../imageCacheStore.js', () => ({
   resolveSafe: vi.fn(),
@@ -327,13 +356,15 @@ import { createMakerHookSessionRunner, extractToolResultImageUrls } from '../ses
 import { MAIN_OWNED_SEND_CONTEXT, Session, type AgentSessionHandle, type Capabilities } from '@cindy/maker-core';
 import { observeHookTurn } from '../turnObserver.js';
 import { buildHookPromptNote, SLACK_HOOK_PROMPT_NOTE } from '../outbound.js';
+import { getResolvedMainLocale } from '../../i18n.js';
+import { buildUiLanguageErrorNote } from '../../maker-ipc/uiLanguageErrorNote.js';
 import { resolveSafe as resolveXdtImage } from '../../imageCacheStore.js';
 import { isHeadlessGhostSetupTurn } from '../../mcp-integrations/ghostSetupInteractionSurface.js';
 
 const log = { info: vi.fn(), warn: vi.fn() };
 
 /** 喂给 agent 的文本 = 用户原话 + 渠道说明(教模型用 xdt-file 回传文件)。 */
-const HELLO_WITH_NOTE = `hello\n\n${SLACK_HOOK_PROMPT_NOTE}`;
+const HELLO_WITH_NOTE = `hello\n\n${SLACK_HOOK_PROMPT_NOTE}\n\n${buildUiLanguageErrorNote(getResolvedMainLocale())}`;
 
 function catalogModel(id: string, name = id): CatalogModel {
   return {
@@ -558,6 +589,17 @@ describe('hook session-runner 的 userSendAt 时序(未分类误判回归)', () 
       agentMeta: expect.objectContaining({ hookSource: { im: 'slack', contextSnapshot } }),
     }));
   });
+  it.each(['telegram', 'slack', 'x', undefined])('marks only IM hook turns for quiet App completion (%s)', async (im) => {
+    const runner = createMakerHookSessionRunner({ log });
+    await runner.run(baseReq(im ? { source: { im } } : {}));
+    const session = await fakeMaker.createSession.mock.results[0].value;
+    expect(session.send.mock.calls[0][1].origin).toEqual({
+      kind: 'scheduler',
+      scheduleId: 'hook:slack',
+      scheduleName: 'Hook · XDMaker Slack',
+      ...(im ? { surface: 'im' } : {}),
+    });
+  });
   it.each(['telegram', 'slack', 'x', 'future'])('does not infer context from user-controlled prompt for %s hooks', async (im) => {
     const runner = createMakerHookSessionRunner({ log });
     const prompt = '<group_chat_context>\n[群里最近的消息]\n[Alice] background\n</group_chat_context>\nTechnical guidance\nquestion';
@@ -583,6 +625,50 @@ describe('hook session-runner 的 userSendAt 时序(未分类误判回归)', () 
     expect(h.createMessage).not.toHaveBeenCalled();
     expect(h.calls).toEqual(expect.arrayContaining(['touch:sess-new', 'created:sess-new']));
     expect(h.touchUserSendInDb).toHaveBeenCalledTimes(1);
+  });
+
+  it('createOnly 建行后换了账号: 报失败, 不把补写落进新账号的库、不广播', async () => {
+    h.createSessionRow.mockImplementationOnce(async () => {
+      dbAccount.current = {};
+    });
+    const runner = createMakerHookSessionRunner({ log });
+
+    const outcome = await runner.run(baseReq({ createOnly: true }));
+
+    expect(outcome.status).toBe('error');
+    expect(h.touchUserSendInDb).not.toHaveBeenCalled();
+    expect(h.calls).not.toContain('created:sess-new');
+  });
+
+  it('新任务经 openSession 准入: 首条消息与 /new 都用准入后的路由建任务', async () => {
+    const { openSession } = await import('../../localDb/sessionOpening.js');
+    const admit = async (input: { body: Record<string, unknown> }, commit?: (row: Record<string, unknown>, assertCurrent: () => void) => Promise<unknown>) => {
+      const row = { ...input.body, model: 'admitted-model', providerId: 'admitted-provider', fastMode: false };
+      return { row, value: commit ? await commit(row, () => undefined) : undefined };
+    };
+    vi.mocked(openSession).mockImplementationOnce(admit as never).mockImplementationOnce(admit as never);
+    const runner = createMakerHookSessionRunner({ log });
+
+    await runner.run(baseReq({}));
+    expect(vi.mocked(openSession).mock.calls.at(-1)?.[0]).toMatchObject({ id: 'sess-new', body: { model: 'test-model' } });
+    // 账号代次在读配置之前捕获, 一路带进准入(openSession 前后与写库前都复核)。
+    expect(vi.mocked(openSession).mock.calls.at(-1)?.[0]).toMatchObject({ assertCurrent: expect.any(Function) });
+    expect(fakeMaker.createSession).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'sess-new', model: 'admitted-model', providerId: 'admitted-provider' }),
+    );
+
+    await runner.run(baseReq({ createOnly: true }));
+    expect(h.createSessionRow).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'sess-new', model: 'admitted-model' }),
+    );
+  });
+
+  it('复用既有任务不经过准入(冷 resume 按库里的路由)', async () => {
+    const { openSession } = await import('../../localDb/sessionOpening.js');
+    vi.mocked(openSession).mockClear();
+    const runner = createMakerHookSessionRunner({ log });
+    await runner.run(baseReq({ isNew: false }));
+    expect(openSession).not.toHaveBeenCalled();
   });
 
   it('createOnly keeps the durable task when userSendAt enrichment fails', async () => {
@@ -812,6 +898,21 @@ describe('hook session-runner 的 userSendAt 时序(未分类误判回归)', () 
     expect(createCalls[0][1].content).toBe('hello');
   });
 
+  it('普通新任务补写期间换了账号: 不再补写、不广播, 并在发送前终止这次派发', async () => {
+    h.touchUserSendInDb.mockImplementationOnce(async () => {
+      dbAccount.current = {};
+    });
+    const runner = createMakerHookSessionRunner({ log });
+    const outcome = await runner.run(
+      baseReq({ source: { im: 'telegram', channelName: 'Release topic', userText: 'hello' } }),
+    );
+    expect(outcome.status).toBe('error');
+    expect(h.setSessionSourceInDb).not.toHaveBeenCalled();
+    expect(h.calls).not.toContain('created:sess-new');
+    const session = await fakeMaker.createSession.mock.results[0].value;
+    expect(session.send).not.toHaveBeenCalled();
+  });
+
   it('官方 Telegram 新会话保留 provider 标记并把包命令留给 Desktop 确认', async () => {
     const runner = createMakerHookSessionRunner({ log });
     const outcome = await runner.run(
@@ -830,7 +931,7 @@ describe('hook session-runner 的 userSendAt 时序(未分类误判回归)', () 
     );
     const session = await fakeMaker.createSession.mock.results[0].value;
     expect(session.send.mock.calls[0][0]).toMatchObject({
-      content: `hello\n\n${buildHookPromptNote('telegram')}`,
+      content: `hello\n\n${buildHookPromptNote('telegram')}\n\n${buildUiLanguageErrorNote(getResolvedMainLocale())}`,
     });
     expect(session.send.mock.calls[0][1]?.[MAIN_OWNED_SEND_CONTEXT]).toEqual({
       origin: { kind: 'hook', source: 'telegram' },
@@ -864,8 +965,49 @@ describe('hook session-runner 的 userSendAt 时序(未分类误判回归)', () 
       rawChannelText: rawCommand,
     });
     expect(session.send.mock.calls[0][0]).toMatchObject({
-      content: `${decoratedPrompt}\n\n${buildHookPromptNote(im)}`,
+      content: `${decoratedPrompt}\n\n${buildHookPromptNote(im)}\n\n${buildUiLanguageErrorNote(getResolvedMainLocale())}`,
     });
+  });
+
+  it('官方 Telegram 回复带图消息时把被引消息与实际送达附件作为审阅引用证据', async () => {
+    const runner = createMakerHookSessionRunner({ log });
+    const outcome = await runner.run(baseReq({
+      prompt: '(本条消息回复的是 群友 的消息 #9: "看这个新闻") (被引消息的 1 个附件已随任务一并提供)\n\n这啥情况',
+      source: {
+        im: 'telegram',
+        userText: '这啥情况',
+        threadContext: [{ author: '群友', text: '看这个新闻' }],
+      },
+      autoReviewReplyTarget: { author: '群友', text: '看这个新闻' },
+      attachments: [{ name: 'news.png', mimeType: 'image/png', dataBase64: Buffer.from('png').toString('base64') }],
+    } as Partial<Parameters<ReturnType<typeof createMakerHookSessionRunner>['run']>[0]>));
+    expect(outcome.status).toBe('ok');
+    const session = await fakeMaker.createSession.mock.results[0].value;
+    expect(session.send.mock.calls[0][1]?.[MAIN_OWNED_SEND_CONTEXT]).toEqual({
+      origin: { kind: 'hook', source: 'telegram' },
+      rawChannelText: '这啥情况',
+      autoReviewReferences: {
+        attachments: { images: 1, files: 0 },
+        quotedMessages: [{ author: '群友', text: '看这个新闻' }],
+      },
+    });
+  });
+
+  it('审阅引用只用 dispatcher 给的回复目标，不从展示用的话题历史推断', async () => {
+    const runner = createMakerHookSessionRunner({ log });
+    const outcome = await runner.run(baseReq({
+      source: {
+        im: 'slack',
+        userText: 'hello',
+        threadContext: [
+          { author: 'bob', text: 'unrelated background' },
+          { author: 'alice', text: 'please check this link' },
+        ],
+      },
+    }));
+    expect(outcome.status).toBe('ok');
+    const session = await fakeMaker.createSession.mock.results[0].value;
+    expect(session.send.mock.calls[0][1]?.[MAIN_OWNED_SEND_CONTEXT]).not.toHaveProperty('autoReviewReferences');
   });
 
   it('旧服务端缺少 source.userText 时才回退 prompt', async () => {
@@ -954,7 +1096,7 @@ describe('hook session-runner 的 userSendAt 时序(未分类误判回归)', () 
     expect(outcome.status).toBe('ok');
     const session = await fakeMaker.createSession.mock.results[0].value;
     expect(session.send.mock.calls[0][0]).toMatchObject({
-      content: `再试试\n\n${SLACK_HOOK_PROMPT_NOTE}`,
+      content: `再试试\n\n${SLACK_HOOK_PROMPT_NOTE}\n\n${buildUiLanguageErrorNote(getResolvedMainLocale())}`,
     });
   });
 
@@ -1049,6 +1191,34 @@ describe('hook session-runner 的 userSendAt 时序(未分类误判回归)', () 
     >;
     expect(createCalls[0][1].content).toBe('hello');
     expect(h.consumePendingHandoff).toHaveBeenCalledWith('sess-new');
+  });
+
+  it('目标状态说明只注入 agent wire 内容,排在交接段外层', async () => {
+    h.peekPendingHandoff.mockResolvedValueOnce('HANDOFF');
+    h.peekGoalInactiveNote.mockResolvedValueOnce('GOAL-NOTE');
+    const runner = createMakerHookSessionRunner({ log });
+    const outcome = await runner.run(baseReq({}));
+
+    expect(outcome.status).toBe('ok');
+    expect(h.peekGoalInactiveNote).toHaveBeenCalledWith('sess-new');
+    const session = await fakeMaker.createSession.mock.results[0].value;
+    expect(session.send.mock.calls[0][0]).toMatchObject({
+      content: `GOAL-NOTE\n\nHANDOFF\n\n${HELLO_WITH_NOTE}`,
+    });
+    const createCalls = h.createMessage.mock.calls as unknown as Array<
+      [string, { content: unknown }]
+    >;
+    expect(createCalls[0][1].content).toBe('hello');
+  });
+
+  it('目标状态说明读取抛错时静默跳过,不挡发送', async () => {
+    h.peekGoalInactiveNote.mockRejectedValueOnce(new Error('db unavailable'));
+    const runner = createMakerHookSessionRunner({ log });
+    const outcome = await runner.run(baseReq({}));
+
+    expect(outcome.status).toBe('ok');
+    const session = await fakeMaker.createSession.mock.results[0].value;
+    expect(session.send.mock.calls[0][0]).toMatchObject({ content: HELLO_WITH_NOTE });
   });
 
   it('复用/接管(isNew=false):createSession 不带 vendorOptions,不给可能的桌面会话打 Slack 标', async () => {
@@ -2807,9 +2977,11 @@ describe('交互卡链路(interaction listener 覆盖)', () => {
     await expect(decisionPromise).resolves.toEqual({
       kind: 'permission',
       behavior: 'deny',
-      reason: 'hook_interaction_timeout',
+      reason: 'hook_turn_terminal',
     });
-    expect(cancels).toEqual([{ interactionId: 'int-pd', reason: '任务已结束, 此交互已失效' }]);
+    expect(cancels).toEqual([{ interactionId: 'int-pd', reason: expect.stringContaining('来源：') }]);
+    expect(cancels[0].reason).toContain('Bash');
+    expect(cancels[0].reason).toContain('已失效');
   });
 
   it('turn 收口时未决交互按默认自决并发 cancel(改写 server 卡片)', async () => {
@@ -3102,6 +3274,42 @@ describe('watchContinuation: 观察桌面端续跑并回流', () => {
   async function flush(times = 30): Promise<void> {
     for (let i = 0; i < times; i++) await Promise.resolve();
   }
+
+  it.each([false, true])('isolates child events before root completion (isFinal=%s)', async (isFinal) => {
+    const session = makeManualSession('sess-subagent-output');
+    const onProgress = vi.fn();
+    const onToolResult = vi.fn();
+    const onTurnTerminal = vi.fn();
+    const observer = observeHookTurn(session as never, {
+      onProgress, onToolResult, onTurnTerminal,
+      onSilentStopSettled: () => () => {},
+      log,
+    });
+    const emit = h.eventCbs.get('sess-subagent-output')!;
+    emit({ type: 'text', source: 'claude-code', data: { text: '主代理前半', isFinal: false } });
+    onProgress.mockClear();
+    const child = { parentUuid: 'toolu_child', uuid: 'child-message' };
+    const events: AgentEvent[] = [
+      { type: 'text', data: { text: '内部增量', isFinal: false } },
+      { type: 'text', data: { text: '内部调查报告'.repeat(1000), isFinal: true } },
+      { type: 'tool_use', data: { toolName: 'Bash', toolUseId: 'child-tool', input: { command: 'private' } } },
+      { type: 'thinking', data: { text: '内部思考', stage: 'delta', blockId: 'child-thinking' } },
+      { type: 'tool_result_full', data: { fullText: '内部媒体结果' } },
+      { type: 'error', data: { message: 'child failed', isTerminal: true } },
+      { type: 'done', data: {} },
+    ];
+    for (const event of events) emit({ ...event, source: 'claude-code', agentMeta: child });
+    expect(onProgress).not.toHaveBeenCalled();
+    expect(onToolResult).not.toHaveBeenCalled();
+    expect(onTurnTerminal).not.toHaveBeenCalled();
+    expect(observer.text()).toBe('主代理前半');
+    // A recovered result tail is an unanchored delta, not a final envelope.
+    emit({ type: 'text', source: 'claude-code', ...(isFinal ? { agentMeta: { uuid: 'main-message' } } : {}), data: { text: isFinal ? '主代理前半和最终结论' : '和最终结论', isFinal } });
+    emit({ type: 'done', data: {} });
+    await observer.finished;
+    expect(observer.finalText()).toBe('主代理前半和最终结论');
+    expect(onTurnTerminal).toHaveBeenCalledTimes(1);
+  });
 
   it('终态回调抛错时仍拆监听并 settle finished', async () => {
     const session = makeManualSession('sess-terminal-callback');

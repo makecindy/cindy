@@ -1,11 +1,13 @@
 import { useCallback, useRef, useState } from 'react';
-import { AppState } from 'react-native';
-import { useFocusEffect } from 'expo-router';
+import { Alert, AppState } from 'react-native';
+import { useFocusEffect, useRouter } from 'expo-router';
 import { useTranslation } from 'react-i18next';
 import {
+  isSharedTaskPeer,
   resolveRemoteText,
   type RemoteCollectionDescriptor,
   type RemoteResource,
+  type RemoteResourceLink,
 } from '@cindy/device-link';
 import { useAuth } from '@/auth/AuthContext';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
@@ -14,6 +16,7 @@ import {
   getRemoteResource,
   invokeRemoteResourceAction,
 } from '@/device-link/remoteResources';
+import { humanizeRemoteError } from '@/device-link/remoteStatus';
 import { startFocusedTopicSubscription } from '@/device-link/focusedTopicSubscription';
 
 export function sessionResourceInputBlocked(
@@ -45,6 +48,7 @@ export function useSessionResourceCards(
   source: string | undefined,
   running: boolean,
 ) {
+  const router = useRouter();
   const {
     invoke,
     status,
@@ -54,7 +58,7 @@ export function useSessionResourceCards(
     onRemoteResourceChanged,
   } = useDeviceLink();
   const { accountGeneration } = useAuth();
-  const { i18n } = useTranslation();
+  const { t, i18n } = useTranslation();
   const binding = JSON.stringify([
     accountGeneration,
     deviceId,
@@ -68,11 +72,12 @@ export function useSessionResourceCards(
   const refresh = useRef<() => void>(() => undefined);
   const [state, setState] = useState<Snapshot>();
   const [pending, setPending] = useState<{ binding: string; id: string }>();
-  const [actionError, setActionError] = useState<string>();
   const request = useRef<{ binding: string } | null>(null);
   useFocusEffect(
     useCallback(() => {
-      if (!deviceId || !sessionId || !source || status !== 'online') return;
+      // These cards discover device-wide workflows. A shared guest uses the
+      // existing single-task history/input APIs, never the host resource catalog.
+      if (!deviceId || isSharedTaskPeer(deviceId) || !sessionId || !source || status !== 'online') return;
       let disposed = false;
       let reading = false;
       let dirty = false;
@@ -151,7 +156,11 @@ export function useSessionResourceCards(
           generation += 1;
           setState((previous) =>
             previous?.binding === binding
-              ? { ...previous, stale: true, scope: blockInput ? '' : previous.scope }
+              ? {
+                  ...previous,
+                  stale: true,
+                  scope: blockInput ? '' : previous.scope,
+                }
               : previous,
           );
         }
@@ -197,9 +206,10 @@ export function useSessionResourceCards(
               : previous,
           );
       });
-      // Poll only discovered cards in the foreground; a slow read is never superseded by a timer.
+      // Poll discovered cards, or a manifest read that failed, in the foreground;
+      // a slow read is never superseded by a timer.
       const poll = setInterval(() => {
-        if (collections?.length) schedule(false);
+        if (!collections || collections.length) schedule(false);
       }, 5000);
       return () => {
         disposed = true;
@@ -229,23 +239,89 @@ export function useSessionResourceCards(
 
   const visible = state?.binding === binding ? state : undefined;
   const fresh =
-    visible?.scope === scope && status === 'online' && !visible.failed && !visible.stale;
+    visible?.scope === scope &&
+    status === 'online' &&
+    !visible.failed &&
+    !visible.stale;
   const pendingId = pending?.binding === binding ? pending.id : null;
+  const latest = useRef({ visible, fresh });
+  latest.current = { visible, fresh };
+  const focused = useRef(false);
+  useFocusEffect(
+    useCallback(() => {
+      focused.current = true;
+      return () => {
+        focused.current = false;
+      };
+    }, [scope]),
+  );
   const act = async (resource: RemoteResource, actionId: string) => {
+    const action = resource.actions?.find(
+      (item) => item.id === actionId && !item.disabled,
+    );
     if (
       !fresh ||
       current.current !== scope ||
       request.current?.binding === binding ||
-      !resource.actions?.some(
-        (action) => action.id === actionId && !action.disabled,
-      )
+      !action ||
+      !visible?.resources.includes(resource)
     )
       return;
     const token = { binding };
     request.current = token;
     setPending({ binding, id: actionId });
-    setActionError(undefined);
     try {
+      if (action.confirmation) {
+        const confirmation = action.confirmation;
+        const accepted = await new Promise<boolean>((resolve) =>
+          Alert.alert(
+            resolveRemoteText(confirmation.title, i18n.language),
+            confirmation.body
+              ? resolveRemoteText(confirmation.body, i18n.language)
+              : undefined,
+            [
+              {
+                text: t('session.common.cancel'),
+                style: 'cancel',
+                onPress: () => resolve(false),
+              },
+              {
+                text: resolveRemoteText(
+                  confirmation.confirmLabel ?? action.label,
+                  i18n.language,
+                ),
+                style:
+                  action.tone === 'destructive' ? 'destructive' : 'default',
+                onPress: () => resolve(true),
+              },
+            ],
+            { cancelable: true, onDismiss: () => resolve(false) },
+          ),
+        );
+        if (
+          !accepted ||
+          !focused.current ||
+          current.current !== scope ||
+          AppState.currentState !== 'active' ||
+          !latest.current.fresh
+        )
+          return;
+        const next = latest.current.visible?.resources.find(
+          (item) =>
+            item.ref.collectionId === resource.ref.collectionId &&
+            item.ref.kind === resource.ref.kind &&
+            item.ref.id === resource.ref.id,
+        );
+        const nextAction = next?.actions?.find(
+          (item) => item.id === actionId && !item.disabled,
+        );
+        if (
+          !nextAction ||
+          JSON.stringify(nextAction.confirmation) !==
+            JSON.stringify(confirmation)
+        )
+          return;
+      }
       await invokeRemoteResourceAction(
         invoke,
         { deviceId, deviceName },
@@ -256,8 +332,14 @@ export function useSessionResourceCards(
         },
         i18n.language,
       );
-    } catch {
-      if (current.current === scope) setActionError(binding);
+    } catch (error) {
+      // Only surface the failure where the user still is; the card itself recovers by polling.
+      if (
+        current.current === scope &&
+        focused.current &&
+        AppState.currentState === 'active'
+      )
+        Alert.alert(t('session.screen.operationFailed'), humanizeRemoteError(error));
     } finally {
       if (request.current === token) {
         request.current = null;
@@ -268,13 +350,23 @@ export function useSessionResourceCards(
   };
   return {
     resources: visible?.resources ?? [],
-    failed: visible?.failed === true || actionError === binding,
+    failed: visible?.failed === true,
     fresh: !!fresh,
     pending: pendingId,
     act,
-    refresh: () => {
-      setActionError(undefined);
-      refresh.current();
+    openLink: (resource: RemoteResource, link: RemoteResourceLink) => {
+      if (
+        !fresh ||
+        current.current !== scope ||
+        !visible?.resources.includes(resource) ||
+        !resource.links.includes(link) ||
+        link.target.kind !== 'session'
+      )
+        return;
+      router.push({
+        pathname: '/sessions/[sessionId]',
+        params: { deviceId, sessionId: link.target.sessionId },
+      });
     },
     blocked:
       sessionResourceInputBlocked(visible?.resources ?? []) ||

@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 /**
  * UpdateBanner — F4: Sidebar update notification banner.
  * ---------------------------------------------------------------------------
@@ -69,6 +70,9 @@ interface UpdateBannerProps {
    */
   onOpenVersionNotice?: (version: string) => void;
 }
+
+const UPDATE_BUTTON_TREATMENT =
+  '[--button-face-bg:var(--update-btn-bg)] [--button-face-border:var(--update-btn-border)] text-[var(--update-btn-text)] enabled:hover:[--button-face-bg:var(--update-btn-hover)] enabled:hover:[--button-face-border:var(--update-btn-border)] enabled:active:[--button-face-bg:var(--update-btn-hover)] enabled:active:[--button-face-border:var(--update-btn-border)]';
 
 export function UpdateBanner({ isCollapsed, onOpenVersionNotice }: UpdateBannerProps) {
   const { status, version, errorCode } = useUpdateStatus();
@@ -557,67 +561,57 @@ export function UpdateBanner({ isCollapsed, onOpenVersionNotice }: UpdateBannerP
           )}
         </div>
 
-        {/* Actions.
-            - superseding: disabled pill + spinner.
-            - confirming:  竖排 —— 主按钮「仍要重启」占入口按钮原位(鼠标零位移),
-                           「取消」在其下,次级 ghost,需刻意移动 → 打断任务前的最后一道闸。
-            - ready:       单个「立即重启」入口 pill,点击后按 busy 探针决定直接重启还是
-                           先进中断警告态。 */}
+        {/* X dismiss —— 右上角。error 态 body 本就隐藏,superseding 允许 dismiss。
+            hover 前 muted、hover 后主色,不抢主视觉;绝对定位保证不影响居中主内容。 */}
         {isPreparing ? (
-          <button
+          <Button
+            variant="cta"
+            size="md"
+            compact
+            loading={true}
             disabled
             aria-label={t('update.banner.preparingAria')}
-            className={cn(
-              'flex w-full items-center justify-center gap-2 rounded-full border py-2',
-              'text-13 font-medium',
-              'bg-[var(--update-btn-bg)] border-[var(--update-btn-border)] text-[var(--update-btn-text)]',
-              'cursor-default opacity-70',
-            )}
+            className={cn('w-full', UPDATE_BUTTON_TREATMENT)}
           >
-            <Spinner size={14} />
             {t('update.banner.preparingButton')}
-          </button>
+          </Button>
         ) : confirming ? (
           <div className="flex w-full flex-col gap-2">
-            <button
+            <Button
+              variant="cta"
+              size="md"
+              compact
               onClick={handleRelaunch}
               aria-label={t('update.banner.confirmAria')}
-              className={cn(
-                'flex w-full items-center justify-center gap-2 rounded-full border py-2',
-                'text-13 font-medium transition-colors',
-                'bg-[var(--update-btn-bg)] border-[var(--update-btn-border)] text-[var(--update-btn-text)]',
-                'hover:bg-[var(--update-btn-hover)]',
-              )}
+              className={cn('w-full', UPDATE_BUTTON_TREATMENT)}
             >
               {t('update.banner.confirmButton')}
-            </button>
-            <button
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              tone="quiet"
+              compact
               ref={cancelBtnRef}
               onClick={handleCancelConfirm}
               aria-label={t('update.banner.cancelAria')}
-              className={cn(
-                'flex w-full items-center justify-center rounded-full py-1.5',
-                'text-13 font-medium text-sidebar-muted transition-colors',
-                'hover:bg-sidebar-item-hover',
-              )}
+              className="w-full"
             >
               {t('update.banner.cancel')}
-            </button>
+            </Button>
           </div>
         ) : (
-          <button
+          <Button
+            variant="cta"
+            size="md"
+            compact
             ref={relaunchTriggerRef}
             onClick={() => { void handleRelaunchClick(); }}
             aria-label={t('update.banner.ariaExpanded', { version: version ?? '' })}
-            className={cn(
-              'flex w-full items-center justify-center gap-2 rounded-full border py-2',
-              'text-13 font-medium transition-colors',
-              'bg-[var(--update-btn-bg)] border-[var(--update-btn-border)] text-[var(--update-btn-text)]',
-              'hover:bg-[var(--update-btn-hover)]',
-            )}
+            className={cn('w-full', UPDATE_BUTTON_TREATMENT)}
           >
             {t('update.banner.button')}
-          </button>
+          </Button>
         )}
       </div>
     </div>,

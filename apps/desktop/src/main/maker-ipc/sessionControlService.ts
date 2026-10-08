@@ -15,7 +15,12 @@ import {
   updateQueuedMessageText,
   type AgentInputQueuedMessage,
 } from '../../shared/agentInputQueue.js';
-import { createSessionQueueControlService } from './sessionQueueControl.js';
+import {
+  createSessionQueueControlService,
+  type QueuedSteerOutcome,
+  type SessionQueueMoveResult,
+  type SessionQueueSteerResult,
+} from './sessionQueueControl.js';
 
 type Failure<Code extends string> = { ok: false; errorCode: Code; message: string };
 
@@ -90,7 +95,7 @@ export interface SessionControlServiceDeps {
       harness?: AgentKind;
       model?: string;
       providerId?: string | null;
-      effort?: Effort;
+      effort?: Effort | null;
       fastMode?: boolean;
     };
   }): Promise<SessionRuntimeSetResult>;
@@ -110,8 +115,10 @@ export interface SessionControlServiceDeps {
     pendingQueue: AgentInputQueuedMessage[];
     consumingClientIds: string[];
   }>;
-  replaceQueuedMessage(sessionId: string, clientId: string, next: AgentInputQueuedMessage): boolean;
-  removeQueuedMessage(sessionId: string, clientId: string): boolean;
+  replaceQueuedMessage(sessionId: string, clientId: string, next: AgentInputQueuedMessage, expected?: AgentInputQueuedMessage): boolean;
+  removeQueuedMessage(sessionId: string, clientId: string, expected?: AgentInputQueuedMessage): boolean;
+  steerStoredQueuedMessage(sessionId: string, clientId: string): Promise<QueuedSteerOutcome>;
+  moveQueuedMessage(sessionId: string, clientId: string, position: number): number | null | 'locked';
   createId(): string;
 }
 
@@ -120,6 +127,8 @@ export function createSessionControlService(deps: SessionControlServiceDeps) {
     getSnapshot: deps.getQueueSnapshot,
     replaceQueuedMessage: deps.replaceQueuedMessage,
     removeQueuedMessage: deps.removeQueuedMessage,
+    steerQueuedMessage: deps.steerStoredQueuedMessage,
+    moveQueuedMessage: deps.moveQueuedMessage,
   });
 
   async function ensureTarget(sessionId: string): Promise<Failure<'NOT_FOUND'> | null> {
@@ -160,6 +169,38 @@ export function createSessionControlService(deps: SessionControlServiceDeps) {
         sessionId: params.targetSessionId,
         queuedMessageId: params.queuedMessageId,
         authorize: (item) => authorizeSessionQueueItem(item, params.callerSessionId),
+      });
+    },
+
+    async steerQueuedMessage(params: {
+      callerSessionId: string;
+      targetSessionId: string;
+      queuedMessageId: string;
+    }): Promise<SessionQueueSteerResult | Failure<'NOT_FOUND'>> {
+      const missing = await ensureTarget(params.targetSessionId);
+      if (missing) return missing;
+      return queueControl.steer({
+        sessionId: params.targetSessionId,
+        queuedMessageId: params.queuedMessageId,
+        authorize: (item) =>
+          authorizeSessionQueueReorder(item, params.callerSessionId, params.targetSessionId),
+      });
+    },
+
+    async moveQueuedMessage(params: {
+      callerSessionId: string;
+      targetSessionId: string;
+      queuedMessageId: string;
+      position: number;
+    }): Promise<SessionQueueMoveResult | Failure<'NOT_FOUND'>> {
+      const missing = await ensureTarget(params.targetSessionId);
+      if (missing) return missing;
+      return queueControl.move({
+        sessionId: params.targetSessionId,
+        queuedMessageId: params.queuedMessageId,
+        position: params.position,
+        authorize: (item) =>
+          authorizeSessionQueueReorder(item, params.callerSessionId, params.targetSessionId),
       });
     },
 
@@ -285,7 +326,7 @@ export function createSessionControlService(deps: SessionControlServiceDeps) {
         harness?: AgentKind;
         model?: string;
         providerId?: string | null;
-        effort?: Effort;
+        effort?: Effort | null;
         fastMode?: boolean;
       };
     }): Promise<SessionRuntimeSetResult> {
@@ -305,6 +346,30 @@ export function authorizeSessionQueueItem(
     : { ok: false, message: 'queued message was not sent by the current session' };
 }
 
+/**
+ * 插话 / 排序不改正文：除了自己投递的消息，任务还可以处理自己队列里由其它任务或协同
+ * 成员发来的机器消息。用户手打、伙伴委派、插件与定时任务的条目有各自的接受簿记，不开放。
+ */
+export function authorizeSessionQueueReorder(
+  item: AgentInputQueuedMessage,
+  callerSessionId: string,
+  targetSessionId: string,
+): { ok: true } | { ok: false; message: string } {
+  const plainMachineMessage =
+    !item.sourcePlugin &&
+    (item.origin?.kind === 'orca' ||
+      (item.origin?.kind === 'session' && !item.origin.senderBotId));
+  const owned =
+    authorizeSessionQueueItem(item, callerSessionId).ok || callerSessionId === targetSessionId;
+  return plainMachineMessage && owned
+    ? { ok: true }
+    : {
+        ok: false,
+        message:
+          'queued message is neither sent by the current session nor a task/collaboration message in its own queue',
+      };
+}
+
 export function rebuildSessionQueueItem(
   item: AgentInputQueuedMessage,
   message: string,
@@ -314,8 +379,10 @@ export function rebuildSessionQueueItem(
     // send_to_session owns raw user text, not a renderer composer envelope.
     // A valid JSON object/array is still literal message content, so editing it
     // must replace the persisted history row wholesale instead of merging a
-    // synthetic `text` property into the old JSON value.
-    updated.persistedContent = message;
+    // synthetic `text` property into the old JSON value. Attachment items are
+    // the exception: their persisted row is the host-built `{text, images, files}`
+    // envelope, which updateQueuedMessageText already rewrote in place.
+    if (!item.files?.length) updated.persistedContent = message;
     updated.origin = { ...updated.origin, displayText: message };
   }
   return updated;
@@ -323,14 +390,23 @@ export function rebuildSessionQueueItem(
 
 export function sessionQueueOriginForDispatcher(params: {
   dispatcherSessionId?: string;
+  /** 来源会话当前标题快照；缺失时接收方 renderer 回退实时查询或通用文案。 */
+  dispatcherSessionTitle?: string | null;
+  /** 来源会话所属伙伴；有则接收方标签显示「由伙伴「X」发送」。 */
+  dispatcherBot?: { id: string; name: string } | null;
   message: string;
   explicitOrigin?: AgentInputQueuedMessage['origin'];
 }): AgentInputQueuedMessage['origin'] | undefined {
   if (params.explicitOrigin) return params.explicitOrigin;
   if (!params.dispatcherSessionId) return undefined;
+  const senderSessionTitle = params.dispatcherSessionTitle?.trim();
   return {
     kind: 'session',
     senderSessionId: params.dispatcherSessionId,
     displayText: params.message,
+    ...(senderSessionTitle ? { senderSessionTitle } : {}),
+    ...(params.dispatcherBot
+      ? { senderBotId: params.dispatcherBot.id, senderBotName: params.dispatcherBot.name }
+      : {}),
   };
 }

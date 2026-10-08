@@ -54,6 +54,10 @@ import {
   isSessionDoneSilenced,
 } from '@/lib/silencedSessionDoneStore';
 import { noteSessionTurnStartedForAlerts } from '@/hooks/usePendingAlertAttention';
+import {
+  ensureAgentIslandActivitySubscribed,
+  isSessionCompletionHeldByAgentIsland,
+} from '@/state/agentIslandActivity';
 
 // Codex maker 化后, codex session 也走 makerChatStore;
 // 不再需要双 store 合并 —— 直接订阅 makerChatStore 即可。
@@ -118,6 +122,10 @@ export function useSessionRunningStatus(
     onSessionErrorRef.current = options?.onSessionError;
     onSessionNeedsReplyRef.current = options?.onSessionNeedsReply;
   }, [options?.onSessionDone, options?.onSessionError, options?.onSessionNeedsReply]);
+  // The done debounce reads Main's completion hold; mirror it from mount.
+  useEffect(() => {
+    ensureAgentIslandActivitySubscribed();
+  }, []);
 
   // Track previous running set to detect running -> done transitions
   const prevRunningRef = useRef(new Set<string>());
@@ -202,7 +210,7 @@ export function useSessionRunningStatus(
         // 把系统通知发出去。标记的清除只由 scheduler 事件驱动,见
         // silencedSessionDoneStore 的文件头注释。
         const isSilencedDone = !hasError && (isSessionDoneSilenced(sessionId)
-          || makerChatStore.wasLastStopPrivateReply(sessionId));
+          || makerChatStore.wasLastStopQuietCompletion(sessionId));
         // Scheduler 已按 schedule.notify 接管这次终态的桌面 / 飞书通知。这里只
         // 抑制 callback。成功绿点改认 schedule 未读,不再从这条 running→done 点
         // `done` attention;失败红点仍立即挂。debounce 落地还会再读一次标记,
@@ -212,6 +220,9 @@ export function useSessionRunningStatus(
         // error 立刻处理:队列会被 abort,不存在"下一条自动接着跑"的场景;红角标 +
         // 系统通知(onSessionError,由 renderer 侧 gate focus)都马上触发,不走
         // debounce。出错永不静默:失败的后台 turn 不能伪装成正常完成或悄无声息消失。
+        // 伙伴群专线的回合由群聊承接:回复进群,失败在群里显示轻提示。这条隐藏
+        // Session 不在任何列表里,挂上的角标用户永远点不掉(docs/product-rules/bot-group-chat.md §3)。
+        if (makerChatStore.wasLastStopGroupLane(sessionId)) continue;
         if (hasError) {
           // 即使是当前活跃会话也挂红角标:红点跟随「告警未处理」而非「是否看到」,
           // 横幅就在眼前时列表同样亮点(2026-07 统一决策)。不能沿用「活跃会话不亮」
@@ -242,12 +253,24 @@ export function useSessionRunningStatus(
           pendingDoneTimersRef.current.delete(sessionId);
           // Recovery may have been projected after this timer was scheduled.
           if (makerChatStore.hasSessionRecoveryPending(sessionId)) return;
+          // Orca Lead 只是派完活结束本轮:Worker 还欠回报,Main 让灵动岛保持运行中,
+          // 这一轮不算完成。判据只认 Main 的同一份结论;Worker 回报唤起的那一轮
+          // done 才发完成通知、亮完成角标。
+          if (
+            isSessionCompletionHeldByAgentIsland(
+              sessionId,
+              makerChatStore.hasPausedQueue(sessionId),
+            )
+          ) {
+            return;
+          }
+          const runningSnapshot = makerChatStore.getRunningSnapshot();
           // 落地前重查一次当前状态:若此刻会话正等待用户输入(ask-user / permission /
           // plan-review),不要用 done 橙角标覆盖 section 3 已亮的 awaiting 黄角标 ——
           // 否则「需要处理的交互」被降级成「已完成」,用户看不到。非 debounce 版本里
           // section 3 在 section 2 之后跑、awaiting 天然覆盖 done;debounce 把 done 推迟到
           // section 3 之后,必须显式让 awaiting 优先。done 系统通知仍照常发(与原行为一致)。
-          const cur = makerChatStore.getRunningSnapshot().get(sessionId);
+          const cur = runningSnapshot.get(sessionId);
           const isActive = sessionId === activeSessionIdRef.current;
           const isRunning = cur?.isRunning === true;
           // debounce 期间下一轮可能在真正进入 running 前失败并写入 terminal error。
@@ -263,7 +286,7 @@ export function useSessionRunningStatus(
               cur.hasPendingPluginSetup);
           // silenced 可能在 debounce 窗口内才到:转换当时没静默、进了 debounce,落地必须再读。
           if (!hasTerminalError && (isSessionDoneSilenced(sessionId)
-            || makerChatStore.wasLastStopPrivateReply(sessionId))) return;
+            || makerChatStore.wasLastStopQuietCompletion(sessionId))) return;
           const ownedNow = isSessionTerminalNotificationOwnedByScheduler(sessionId);
           if (
             !wasActiveAtCompletion &&
@@ -271,6 +294,7 @@ export function useSessionRunningStatus(
             !isRunning &&
             !hasTerminalError &&
             !stillPending &&
+            getSessionAttentionKind(sessionId) !== 'error' &&
             !ownedNow
           ) {
             addSessionAttention(sessionId, 'done');
@@ -317,22 +341,19 @@ export function useSessionRunningStatus(
     }
 
     // --- 4. Auto-clear notifications when pending state disappears ---
-    // If a session previously had a pending state but no longer does, and
-    // it's not running (i.e. the notification wasn't from a done transition),
-    // remove the notification. We only auto-clear for sessions that were
-    // in the previous pending set — done notifications are sticky until clicked.
+    // If a session previously had a pending state but no longer does, remove
+    // the matching awaiting notification. Do this even when resolving the card
+    // immediately starts a continuation: otherwise the pending falling edge is
+    // consumed while running, and no later snapshot can clear the stale badge.
+    // Done/error notifications have separate owners and remain sticky.
     for (const sessionId of prevPendingRef.current) {
       if (
         !currentPendingSet.has(sessionId) &&
-        !currentRunningSet.has(sessionId) &&
-        hasSessionAttention(sessionId)
+        hasSessionAttention(sessionId) &&
+        getSessionAttentionKind(sessionId) === 'awaiting'
       ) {
-        // The pending state is gone — the session was answered/resolved elsewhere.
-        // Only auto-clear if it's not also a done-transition notification.
-        // Since we can't distinguish, we clear it: if it truly just finished,
-        // the done transition would have re-added it above.
-        // 默认 passive:store 会保住 'error' 红角标(pending 消失往往正是 run 以
-        // error 终止,branch 2 刚挂上的红角标不能被这条自动清理吞掉)。
+        // 默认 passive 即可：这里只会命中 awaiting，且 clear 通知仍需同步给
+        // Main / 远端，使 Windows 任务栏角标与任务行一起收敛。
         clearSessionAttention(sessionId);
       }
     }

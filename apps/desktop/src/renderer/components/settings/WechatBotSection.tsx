@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 import { Check, FolderOpen, Loader2, RotateCw, Trash2, Unplug } from 'lucide-react';
 import { useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -171,13 +172,14 @@ export function WechatBotSection({
               {t('settings.wechatBot.waiting.note')}
             </p>
           </div>
-          <button
+          <Button
+            variant="secondary"
+            size="lg"
             type="button"
             onClick={() => void cancelAuthorization()}
-            className="h-9 rounded-full border border-[var(--settings-btn-secondary-border)] bg-[var(--settings-btn-secondary-bg)] px-5 text-12 font-medium text-[var(--settings-btn-secondary-text)]"
           >
             {t('settings.wechatBot.waiting.cancel')}
-          </button>
+          </Button>
         </div>
       ) : state.bound ? (
         <div className="flex flex-col gap-4 rounded-xl border border-[var(--settings-theme-card-border)] bg-[var(--settings-theme-card-bg)] p-5">
@@ -199,42 +201,30 @@ export function WechatBotSection({
             </div>
           </div>
           <div className="flex flex-wrap gap-2">
-            <button
+            <Button
+              variant="secondary"
+              size="lg"
+              loading={isAuthorizing}
               type="button"
               onClick={() => void handleAuthorize()}
               disabled={isAuthorizing || disabledByPolicy}
-              className={cn(
-                'flex h-9 flex-1 items-center justify-center gap-1.5 rounded-full',
-                'border border-[var(--settings-btn-secondary-border)] bg-[var(--settings-btn-secondary-bg)]',
-                'px-4 text-12 font-medium text-[var(--settings-btn-secondary-text)]',
-                (isAuthorizing || disabledByPolicy) && 'cursor-not-allowed opacity-40',
-              )}
+              className="flex-1"
             >
-              {isAuthorizing ? (
-                <Loader2 size={13} className="animate-spin motion-reduce:animate-none" />
-              ) : (
-                <RotateCw size={13} />
-              )}
+              <RotateCw size={13} />
               {t('settings.wechatBot.actions.rebind')}
-            </button>
-            <button
+            </Button>
+            <Button
+              variant="secondary"
+              size="lg"
+              loading={isUnbinding}
               type="button"
               onClick={() => void handleUnbind()}
               disabled={isUnbinding}
-              className={cn(
-                'flex h-9 flex-1 items-center justify-center gap-1.5 rounded-full',
-                'border border-[var(--settings-btn-secondary-border)] bg-[var(--settings-btn-secondary-bg)]',
-                'px-4 text-12 font-medium text-[var(--settings-btn-secondary-text)]',
-                isUnbinding && 'cursor-not-allowed opacity-40',
-              )}
+              className="flex-1"
             >
-              {isUnbinding ? (
-                <Loader2 size={13} className="animate-spin motion-reduce:animate-none" />
-              ) : (
-                <Trash2 size={13} />
-              )}
+              <Trash2 size={13} />
               {t('settings.wechatBot.actions.unbind')}
-            </button>
+            </Button>
           </div>
         </div>
       ) : (
@@ -250,23 +240,17 @@ export function WechatBotSection({
               )}
             </p>
           </div>
-          <button
+          <Button
+            variant="cta"
+            size="lg"
+            loading={isAuthorizing}
             type="button"
             onClick={() => void handleAuthorize()}
             disabled={isAuthorizing || disabledByPolicy}
-            className={cn(
-              'flex h-[42px] w-full items-center justify-center gap-1.5 rounded-full',
-              'border border-[var(--settings-btn-primary-border)] bg-[var(--settings-btn-primary-bg)]',
-              'text-13 font-medium text-[var(--settings-btn-primary-text)]',
-              'transition-colors hover:bg-[var(--settings-btn-primary-hover-bg)]',
-              (isAuthorizing || disabledByPolicy) && 'cursor-not-allowed opacity-40',
-            )}
+            className="w-full"
           >
-            {isAuthorizing && (
-              <Loader2 size={14} className="animate-spin motion-reduce:animate-none" />
-            )}
             {t('settings.wechatBot.actions.connect')}
-          </button>
+          </Button>
         </div>
       )}
     </ImChannelSettingsCard>
@@ -298,31 +282,30 @@ function WechatWorkingDirectory({
         </p>
       </div>
       <div className="flex min-w-0 items-center gap-2">
-        <button
+        <Button
+          variant="secondary"
+          size="lg"
           type="button"
           onClick={onChoose}
           disabled={pending}
-          className={cn(
-            'flex h-10 min-w-0 flex-1 items-center gap-2 rounded-full px-3 text-left',
-            'border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)]',
-            'text-12 text-[var(--settings-input-text)]',
-            pending && 'cursor-not-allowed opacity-50',
-          )}
+          className="min-w-0 flex-1"
         >
           <FolderOpen size={15} className="shrink-0 text-[var(--text-tertiary)]" />
           <span className="truncate" title={configured ?? undefined} dir="auto">
             {configured ?? t('settings.wechatBot.workingDir.managed')}
           </span>
-        </button>
+        </Button>
         {configured && (
-          <button
+          <Button
+            variant="secondary"
+            size="lg"
             type="button"
             onClick={onReset}
             disabled={pending}
-            className="h-10 shrink-0 rounded-full border border-[var(--settings-btn-secondary-border)] bg-[var(--settings-btn-secondary-bg)] px-4 text-12 font-medium text-[var(--settings-btn-secondary-text)] disabled:cursor-not-allowed disabled:opacity-50"
+            className="shrink-0"
           >
             {t('settings.wechatBot.workingDir.reset')}
-          </button>
+          </Button>
         )}
       </div>
       {settings && !settings.workingDirAvailable && (

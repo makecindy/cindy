@@ -466,8 +466,8 @@ const GENERATED_DEFAULTS = {
     "dark": "var(--text-tertiary-hsl)"
   },
   "login-bg-base": {
-    "light": "#EDEDED",
-    "dark": "#1F1F1E"
+    "light": "#F2F2ED",
+    "dark": "#181818"
   },
   "login-panel-border": {
     "light": "#D4D4D4",
@@ -2144,6 +2144,58 @@ const GENERATED_DEFAULTS = {
   "segmented-hover-bg": {
     "light": "var(--surface-hover)",
     "dark": "var(--surface-hover)"
+  },
+  "task-tag-red": {
+    "light": "#ed615f",
+    "dark": "#ed615f"
+  },
+  "task-tag-orange": {
+    "light": "#eea34e",
+    "dark": "#eea34e"
+  },
+  "task-tag-yellow": {
+    "light": "#e5c744",
+    "dark": "#e5c744"
+  },
+  "task-tag-green": {
+    "light": "#70b568",
+    "dark": "#70b568"
+  },
+  "task-tag-blue": {
+    "light": "#609bd4",
+    "dark": "#609bd4"
+  },
+  "task-tag-purple": {
+    "light": "#ab7bc6",
+    "dark": "#ab7bc6"
+  },
+  "task-tag-gray": {
+    "light": "#969696",
+    "dark": "#969696"
+  },
+  "task-tag-pink": {
+    "light": "#df83b0",
+    "dark": "#e79fc1"
+  },
+  "task-tag-coral": {
+    "light": "#de8970",
+    "dark": "#e6a08c"
+  },
+  "task-tag-teal": {
+    "light": "#53a89d",
+    "dark": "#75bfb4"
+  },
+  "task-tag-indigo": {
+    "light": "#7c83cf",
+    "dark": "#999fdf"
+  },
+  "task-tag-white": {
+    "light": "#ffffff",
+    "dark": "#ffffff"
+  },
+  "task-tag-white-check": {
+    "light": "#525252",
+    "dark": "#525252"
   }
 } as const;
 
@@ -2370,7 +2422,10 @@ registerColor('welcome-text', GENERATED_DEFAULTS["welcome-text"], 'Stone #737373
 // (= PR #104 白底机制在 cindy-light 下的实际渲染值)。2026-07-20 的
 // 「消费 var(--surface)」改判作废——var(--surface) 随主题,cindy-dark 下取
 // #2A2828,登录页背景变深且与 slogan #2A2828 同色隐形(沙盒手测 MT-1/2/5)。
-registerColor('login-bg-base', GENERATED_DEFAULTS["login-bg-base"], 'Login — 画布底(亮色 #EDEDED / 暗色 #1F1F1E,figma 532:585 暗色帧实测;纯平,红渐变两层随 PR#104 拍板撤除,暗色沿用纯平口径)');
+// 2026-10-01 对齐 CINDY 皮肤页底:#2571 把 cindy-light/cindy-dark 的 surface 改为
+// #F2F2ED / #181818 时登录链路按豁免族未跟进,登录前后背景色不一致;本 token 同步为
+// 这两个值,仍写固定值而非 var(--surface),扩展主题照旧不染色登录页。
+registerColor('login-bg-base', GENERATED_DEFAULTS["login-bg-base"], 'Login — 画布底(亮色 #F2F2ED / 暗色 #181818,与 CINDY 皮肤页底 surface 同值、固定不随扩展主题;纯平,红渐变两层随 PR#104 拍板撤除,暗色沿用纯平口径)');
 // 两层品牌红渐变(379:518 径向 / 379:520 线性,代码复现非资产)。图层 opacity
 // 已合入色标 alpha(6%/5%)。CSS 取值为 figma 参数的最近似翻译;PR1 落码时以
 // wave4 帧(368:1375)截图对照为准,允许微调本 token 值,名称与语义冻结。
@@ -3101,3 +3156,60 @@ registerColor('segmented-selected-border', GENERATED_DEFAULTS["segmented-selecte
 registerColor('segmented-selected-shadow', GENERATED_DEFAULTS["segmented-selected-shadow"], 'Desktop segmented control: selected pill elevation');
 registerColor('segmented-option-fg', GENERATED_DEFAULTS["segmented-option-fg"], 'Desktop segmented control: unselected label');
 registerColor('segmented-hover-bg', GENERATED_DEFAULTS["segmented-hover-bg"], 'Desktop segmented control: hover plate');
+
+registerColor(
+  'task-tag-red',
+  GENERATED_DEFAULTS["task-tag-red"],
+  'Task label identity color; independent of runtime status',
+);
+
+registerColor(
+  'task-tag-orange',
+  GENERATED_DEFAULTS["task-tag-orange"],
+  'Task label identity color; independent of runtime status',
+);
+
+registerColor(
+  'task-tag-yellow',
+  GENERATED_DEFAULTS["task-tag-yellow"],
+  'Task label identity color; independent of runtime status',
+);
+
+registerColor(
+  'task-tag-green',
+  GENERATED_DEFAULTS["task-tag-green"],
+  'Task label identity color; independent of runtime status',
+);
+
+registerColor(
+  'task-tag-blue',
+  GENERATED_DEFAULTS["task-tag-blue"],
+  'Task label identity color; independent of runtime status',
+);
+
+registerColor(
+  'task-tag-purple',
+  GENERATED_DEFAULTS["task-tag-purple"],
+  'Task label identity color; independent of runtime status',
+);
+
+registerColor(
+  'task-tag-gray',
+  GENERATED_DEFAULTS["task-tag-gray"],
+  'Task label identity color; independent of runtime status',
+);
+
+registerColor('task-tag-pink', GENERATED_DEFAULTS["task-tag-pink"], 'Task label identity color');
+registerColor('task-tag-coral', GENERATED_DEFAULTS["task-tag-coral"], 'Task label identity color');
+registerColor('task-tag-teal', GENERATED_DEFAULTS["task-tag-teal"], 'Task label identity color');
+registerColor(
+  'task-tag-indigo',
+  GENERATED_DEFAULTS["task-tag-indigo"],
+  'Task label identity color',
+);
+registerColor('task-tag-white', GENERATED_DEFAULTS["task-tag-white"], 'Task label identity color');
+registerColor(
+  'task-tag-white-check',
+  GENERATED_DEFAULTS["task-tag-white-check"],
+  'Task label identity color',
+);

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { projectHistoryView } from '../historyViewProjection.js';
-import { isHistoryViewUnavailable, readHistoryWorkDetails, type HistoryMessageSource } from '../historyView.js';
+import { historyWorkSummaries, isHistoryViewUnavailable, readHistoryWorkDetails, type HistoryMessageSource } from '../historyView.js';
 
 function row(id: number, role: string, content: unknown): HistoryMessageSource {
   return { id: String(id), clientId: `c${id}`, role, content,
@@ -39,6 +39,22 @@ describe('history reading projection', () => {
     const projected = projectHistoryView(rows, false);
     const visible = projected.flatMap((item) => item.type === 'messages' ? item.messages : []);
     expect(visible.map((item) => item.id)).toEqual(['0', '2', '3', '4', '5', '6']);
+  });
+
+  it('keeps file artifacts on leaf summaries only, once per nesting level', () => {
+    const tool = (id: number, toolUseId: string, path: string): HistoryMessageSource[] => [
+      { ...row(id, 'tool_use', { toolName: 'Bash', toolUseId, input: { command: `echo > ${path}` } }), toolUseId,
+        historyArtifacts: [{ path, source: 'command', createdAt: row(id, '', '').createdAt, toolUseId }] },
+      { ...row(id + 1, 'tool_result', ''), toolUseId }];
+    const rows = [row(0, 'user', 'Work'), row(1, 'thinking', 'plan'), ...tool(2, 'a', '/work/a.txt'),
+      row(4, 'assistant', 'Halfway there'), row(5, 'thinking', 'more'), ...tool(6, 'b', '/work/b.txt'),
+      { ...row(8, 'assistant', 'Done'), agentMeta: { turnCompleted: true } }];
+    const projected = projectHistoryView(rows, false, true);
+    const outer = projected.find((item) => item.type === 'work' && item.children);
+    expect(outer?.type).toBe('work');
+    expect(outer?.type === 'work' && 'artifacts' in outer.summary).toBe(false);
+    expect(historyWorkSummaries(projected).flatMap((summary) => summary.artifacts ?? []).map((file) => file.path))
+      .toEqual(['/work/a.txt', '/work/b.txt']);
   });
 
   it('keeps sealed history completed when a new active tail arrives before its user row', () => {
@@ -85,6 +101,26 @@ describe('automatic process detail reading', () => {
 
 import { HistoryViewController } from '../historyViewController.js';
 import { renderHistoryView } from '../historyViewRender.js';
+
+it('does not bind subagent detail fetching to a desktop summary-only enclosing group', async () => {
+  const source = [row(0, 'user', 'Question'), row(1, 'tool_use', { toolName: 'Agent', toolUseId: 'toolu_a', input: {} }),
+    { ...row(2, 'thinking', 'Internal'), agentMeta: { parentUuid: 'toolu_a' } }, row(3, 'assistant', 'Answer')];
+  const details = vi.fn();
+  const view = new HistoryViewController<HistoryMessageSource>({
+    page: async () => ({ version: 1, items: projectHistoryView(source, false, true), hasMore: false, nextCursor: null }),
+    details, expanded: async () => undefined,
+  });
+  await view.refresh();
+  type Item = { ids: string[]; children?: Item[]; deferred?: unknown };
+  const rendered = renderHistoryView<HistoryMessageSource, Item>({ view, snapshot: view.getSnapshot(), liveMessages: [], streaming: false,
+    build: () => [{ ids: [], children: [{ ids: ['c1'] }] }],
+    structure: { placeholder: () => source[0], children: (item) => item.children, sourceIds: (item) => item.ids,
+      rebuild: (item, children, deferred) => ({ ...item, children, deferred }) },
+  });
+  expect(rendered[0].deferred).toBeUndefined();
+  expect(details).not.toHaveBeenCalled();
+  view.setActive(false);
+});
 import type { HistoryViewPage } from '../historyView.js';
 const ungroupedStructure = {
   placeholder: (summary: import('../historyView.js').HistoryWorkSummary) => ({ ...row(1, 'thinking', ''),
@@ -372,8 +408,9 @@ describe('shared history view lifecycle', () => {
     const detail = snapshot.details.get(key)!;
     // A refreshed subrange can temporarily reuse a wider cache. Both endpoints
     // must still clip correctly after the live rows acquire persistent IDs.
-    snapshot.details.set(key, { ...detail, messages: [row(0, 'thinking', 'before'), ...persisted, row(3, 'thinking', 'after')] });
-    const rendered = renderHistoryView({ view, snapshot, liveMessages: [], streaming: true,
+    const details = new Map(snapshot.details);
+    details.set(key, { ...detail, messages: [row(0, 'thinking', 'before'), ...persisted, row(3, 'thinking', 'after')] });
+    const rendered = renderHistoryView({ view, snapshot: { ...snapshot, details }, liveMessages: [], streaming: true,
       build: messages => messages.map(message => message.content), structure: ungroupedStructure });
     if (mode === 'stored') expect(rendered).not.toContain('first');
     else expect(rendered).toEqual(['first', 'last']);
@@ -436,6 +473,33 @@ describe('shared history view lifecycle', () => {
       build: rows => [...rows], structure: ungroupedStructure });
     expect(output).toEqual([known, users[0], first, users[1], users[2], second, users[3]]);
     expect(liveMessages).toEqual([known, users[0], second, users[1], users[2], first, users[3]]);
+    view.setActive(false);
+  });
+
+  it('keeps ephemeral cards in local order without reviving removed history or duplicating persisted rows', async () => {
+    type Message = HistoryMessageSource & { localCard?: boolean };
+    const source = [row(10, 'assistant', 'history'), row(11, 'user', 'next question')];
+    const view = new HistoryViewController<Message>({
+      page: async () => ({ version: 1, items: projectHistoryView(source, false), hasMore: false, nextCursor: null }),
+      details: async () => ({ version: 1, messages: [], hasMore: false, nextCursor: null }),
+      expanded: async () => undefined,
+    });
+    await view.refresh();
+    // Local cards may be older than remote history; timestamps cannot locate them.
+    const help = { ...row(1, 'assistant', 'help'), localCard: true };
+    const cost = { ...row(2, 'assistant', 'cost'), localCard: true };
+    const render = (liveMessages: Message[]) => renderHistoryView<Message, unknown>({
+      view, snapshot: view.getSnapshot(), liveMessages, streaming: false,
+      isLocalMessage: (message) => message.localCard === true,
+      build: (rows) => [...rows], structure: ungroupedStructure,
+    });
+    expect(render([source[0], help, cost, source[1], row(20, 'assistant', 'stale history')]))
+      .toEqual([source[0], help, cost, source[1]]);
+    source.splice(1, 0, help);
+    await view.refresh();
+    expect(render([source[0], { ...help, content: 'stale local copy' }, cost, source[2]]))
+      .toEqual([source[0], help, cost, source[2]]);
+    expect(render(source)).toEqual(source);
     view.setActive(false);
   });
 

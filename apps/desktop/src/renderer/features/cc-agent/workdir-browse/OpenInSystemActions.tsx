@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 import { shouldShowOpenPathError } from '../../../../shared/openPathResult';
 import { ExternalLink, FolderOpen } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -49,29 +50,14 @@ export function OpenInSystemActions({
 
   return (
     <div className={cn('flex items-center gap-2', className)}>
-      <button
-        type="button"
-        onClick={onOpenFile}
-        className={cn(
-          'flex h-8 items-center justify-center gap-1.5 rounded-lg px-3.5 text-13 font-medium',
-          'bg-[var(--lightbox-cta-bg)] text-[var(--lightbox-cta-fg)] hover:bg-[var(--lightbox-cta-hover)]',
-        )}
-      >
+      <Button variant="cta" size="md" compact type="button" onClick={onOpenFile}>
         <ExternalLink size={14} />
         {t('ccAgent.workdirBrowse.unrenderable.openInSystem')}
-      </button>
-      <button
-        type="button"
-        onClick={onOpenFolder}
-        className={cn(
-          'flex h-8 items-center justify-center gap-1.5 rounded-lg px-3.5 text-13 font-medium',
-          'bg-[var(--settings-menu-bg-hover)] text-foreground hover:bg-[var(--surface-hover)]',
-          'border border-[var(--cmd-palette-border)]',
-        )}
-      >
+      </Button>
+      <Button variant="secondary" size="md" compact type="button" onClick={onOpenFolder}>
         <FolderOpen size={14} />
         {t('ccAgent.workdirBrowse.unrenderable.revealFolder')}
-      </button>
+      </Button>
     </div>
   );
 }

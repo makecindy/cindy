@@ -1,3 +1,4 @@
+import { resetTaskTagCatalogCache } from '@/features/task-tags/taskTagEvents';
 import {
   createContext,
   useCallback,
@@ -21,7 +22,6 @@ import {
   createAuthService,
   type AuthService,
   type AuthState,
-  type AuthFlowState,
   type DesktopLoginAction,
   type DesktopLoginActionResult,
   type DesktopAccountSwitcherSnapshot,
@@ -29,6 +29,7 @@ import {
 } from '@/lib/authService';
 import {
   cancelRemoteOptimisticSendsForDataOwnerBoundary,
+  reconcileSessionsAfterDataOwnerRollback,
   setCurrentUserName,
 } from '@/lib/makerChatStore';
 import { isSecondaryWindow } from '@/lib/secondaryWindow';
@@ -45,6 +46,7 @@ import { isGhostPanelWindow } from '@/lib/ghostPanelWindow';
 import { setModelEnginePrefsOwner } from '@/state/modelEnginePrefs';
 import { setModelFavoritesOwner } from '@/state/modelFavorites';
 import { setProviderModelMemoryOwner } from '@/state/providerModelMemory';
+import { setAgentDeviceModelMemoryOwner } from '@/state/agentDeviceModelMemory';
 import { setFavoriteAnchorMemoryOwner } from '@/state/favoriteAnchorMemory';
 import { setNewMakerDraftOwner } from '@/state/newMakerDraft';
 import { setModelVisibilityOwner } from '@/state/modelVisibilityPrefs';
@@ -55,8 +57,21 @@ import { rememberSsoOrgIdentifier } from '@/state/ssoOrgHistory';
 import { setDeferredUiAssignmentOwner } from '@/features/cc-agent/deferredUiAssignment';
 import { invalidateProvidersSnapshot } from '@/lib/providersSnapshotStore';
 import { preloadLocalCatalogSnapshot } from '@/lib/localCatalogSnapshot';
-import { awaitDesktopLoginStateLoad } from '../../shared/authIpc';
+import { awaitDesktopLoginStateLoad, type DesktopLoginState } from '../../shared/authIpc';
 import { getDataOwnerGeneration, setDataOwnerGeneration } from './dataOwnerGeneration';
+
+/** Keep response metadata attached to the exact screen it describes. */
+function presentLoginResult(result: DesktopLoginActionResult): DesktopLoginState | null {
+  if (!result.state) return null;
+  return {
+    ...result.state,
+    retryAt: result.success
+      ? result.state.retryAt
+      : result.code === 'RATE_LIMITED'
+        ? (result.retryAt ?? result.state.retryAt)
+        : undefined,
+  };
+}
 
 /**
  * 登录态上下文：user / isAuthenticated / isCanary / deviceId 全部来自 main 的
@@ -72,6 +87,13 @@ export interface AuthContextValue {
   dataOwnerId: string | null;
   /** Failed auth boundaries remount owner-scoped routes so stale generations can rehydrate. */
   dataOwnerRecoveryEpoch: number;
+  /**
+   * Main-owned owner generation as last pushed. It advances on every owner commit,
+   * including same-owner repairs that keep `dataOwnerId` and never touch
+   * `dataOwnerRecoveryEpoch`; owner-stamped mirrors in main are fenced on it, so a
+   * consumer that pushes such a mirror must re-push when this changes (#4469).
+   */
+  dataOwnerGeneration: number;
   canEnterApp: boolean;
   isAuthenticated: boolean;
   /** 当前账号是否加入 Canary 发布通道。 */
@@ -80,7 +102,7 @@ export interface AuthContextValue {
   /** SkillHub 跨设备识别：本机 deviceId（machineIdSync），登录前后都有值；初始化前为 null */
   deviceId: string | null;
   /** Renderer-safe login screen state; auth tickets remain in main. */
-  loginState: AuthFlowState | null;
+  loginState: DesktopLoginState | null;
   loadLoginState: () => Promise<DesktopLoginActionResult>;
   dispatchLoginAction: (action: DesktopLoginAction) => Promise<DesktopLoginActionResult>;
   logout: () => Promise<void>;
@@ -113,10 +135,21 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 
 const log = createLogger('AuthContext');
 
-function publishDataOwnerGeneration(dataOwnerId: string | null, ownerGeneration?: number): void {
+function publishDataOwnerGeneration(
+  dataOwnerId: string | null,
+  ownerGeneration?: number,
+  options?: { finalizeSessions?: boolean },
+): void {
   const previousOwnerId = getDataOwnerGeneration().dataOwnerId;
-  if (previousOwnerId !== dataOwnerId) {
-    cancelRemoteOptimisticSendsForDataOwnerBoundary();
+  const ownerChanged = previousOwnerId !== dataOwnerId;
+  if (ownerChanged) {
+    resetTaskTagCatalogCache();
+  }
+  // The pre-commit fence may already publish null. A committed owner change
+  // must still close sessions even when that published owner stays null.
+  if (ownerChanged || options?.finalizeSessions === true) {
+    if (options) cancelRemoteOptimisticSendsForDataOwnerBoundary(options);
+    else cancelRemoteOptimisticSendsForDataOwnerBoundary();
   }
   setDataOwnerGeneration(dataOwnerId, ownerGeneration);
   recentWorkdirsStore.setDataOwner(getDataOwnerGeneration());
@@ -136,6 +169,7 @@ export function AuthProvider({
   const [mode, setMode] = useState<'signed-out' | 'local' | 'cloud'>('signed-out');
   const [dataOwnerId, setDataOwnerId] = useState<string | null>(null);
   const [dataOwnerRecoveryEpoch, setDataOwnerRecoveryEpoch] = useState(0);
+  const [dataOwnerGeneration, setDataOwnerGenerationState] = useState(0);
   const [canEnterApp, setCanEnterApp] = useState(false);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [isCanary, setIsCanary] = useState(false);
@@ -144,7 +178,7 @@ export function AuthProvider({
   const [hasAccountDeletionReceipt, setHasAccountDeletionReceipt] = useState(false);
   const [accountDeletionRestored, setAccountDeletionRestored] = useState(false);
   const [credentialStoreUnavailable, setCredentialStoreUnavailable] = useState(false);
-  const [loginState, setLoginState] = useState<AuthFlowState | null>(null);
+  const [loginState, setLoginState] = useState<DesktopLoginState | null>(null);
   const { confirm } = useConfirmDialog();
   const { t } = useTranslation();
 
@@ -157,14 +191,24 @@ export function AuthProvider({
   const activeDataOwnerIdRef = useRef<string | null>(null);
   const activeDataOwnerGenerationRef = useRef(0);
   const authStateVersionRef = useRef(0);
+  const hasAppliedAuthStateRef = useRef(false);
+  // Main broadcasts pending projections to every renderer. Keep this marker
+  // tied to the authoritative owner snapshots rather than local IPC promises:
+  // another window may have started a second boundary before this renderer's
+  // first operation settles.
+  const pendingOwnerProjectionRef = useRef(false);
 
   // Auth mutations invalidate owner-bound in-flight reads before crossing IPC. If Main rejects
   // the transition, restore the single authoritative owner ref (which successful siblings and
   // newer pushes both update), then rebuild the cache because React state may never have changed.
   const runDataOwnerBoundary = useCallback(async <T,>(operation: () => Promise<T>): Promise<T> => {
-    publishDataOwnerGeneration(null);
+    // Invalidate old-owner ingress before crossing IPC, but defer stopping the
+    // cached turn until the new owner has committed. On failure, reconcile
+    // against Main: an early rejection keeps the runtime, a late one may not.
+    publishDataOwnerGeneration(null, undefined, { finalizeSessions: false });
     try {
-      return await operation();
+      const result = await operation();
+      return result;
     } catch (error) {
       // Restore the exact main-owned generation. Recomputing it locally would
       // make every stamped push from the still-active owner look stale after a
@@ -172,7 +216,13 @@ export function AuthProvider({
       publishDataOwnerGeneration(
         activeDataOwnerIdRef.current,
         activeDataOwnerGenerationRef.current,
+        { finalizeSessions: false },
       );
+      const rollbackNeedsReconcile = pendingOwnerProjectionRef.current;
+      if (rollbackNeedsReconcile) {
+        void reconcileSessionsAfterDataOwnerRollback();
+      }
+      setDataOwnerGenerationState(activeDataOwnerGenerationRef.current);
       setDataOwnerRecoveryEpoch((epoch) => epoch + 1);
       void preloadLocalCatalogSnapshot();
       throw error;
@@ -193,16 +243,110 @@ export function AuthProvider({
 
   const applyIncomingState = useCallback(
     (state: AuthState) => {
-      const ownerChanged = activeDataOwnerIdRef.current !== state.dataOwnerId;
-      publishDataOwnerGeneration(state.dataOwnerId, state.ownerGeneration);
-      if (ownerChanged) {
+      // Main briefly projects signed-out while an owner transition is pending.
+      // It keeps the old owner generation, so retain the authoritative owner
+      // refs until the commit or rollback arrives; otherwise the rollback is
+      // mistaken for a new owner and finalizes the task that should resume.
+      const rendererOwnerGeneration = getDataOwnerGeneration();
+      const signedOutProjection =
+        state.dataOwnerId === null
+        && state.mode === 'signed-out'
+        && !state.canEnterApp;
+      const initialBoundaryPendingProjection =
+        !hasAppliedAuthStateRef.current
+        && activeDataOwnerIdRef.current === null
+        && signedOutProjection
+        && (
+          state.ownerBoundaryPending === true
+          ||
+          (rendererOwnerGeneration.dataOwnerId !== null
+            && state.ownerGeneration === rendererOwnerGeneration.generation)
+          // A newly opened renderer has no synchronous owner stamp. Main's
+          // pending projection keeps the outgoing owner's generation, so a
+          // positive generation above the fresh renderer's zero baseline is
+          // the only boundary evidence available before the rollback push.
+          || (rendererOwnerGeneration.dataOwnerId === null
+            && rendererOwnerGeneration.generation === 0
+            && state.ownerGeneration > rendererOwnerGeneration.generation)
+        );
+      const pendingSignedOutProjection =
+        signedOutProjection
+        && (
+          (activeDataOwnerIdRef.current !== null
+            && state.ownerGeneration === activeDataOwnerGenerationRef.current)
+          || initialBoundaryPendingProjection
+        );
+      if (initialBoundaryPendingProjection && pendingSignedOutProjection) {
+        // A newly mounted renderer may receive the transient signed-out
+        // projection before it has hydrated its refs. Seed the known owner
+        // and generation (or just the generation for a fresh renderer) so the
+        // following rollback cannot finalize the running task.
+        if (rendererOwnerGeneration.dataOwnerId !== null) {
+          activeDataOwnerIdRef.current = rendererOwnerGeneration.dataOwnerId;
+        }
+        activeDataOwnerGenerationRef.current = state.ownerGeneration;
+      }
+      const initialOwnerHydration =
+        !hasAppliedAuthStateRef.current
+        && !pendingSignedOutProjection
+        && !pendingOwnerProjectionRef.current;
+      const unknownOwnerRollbackProjection =
+        pendingOwnerProjectionRef.current
+        && !pendingSignedOutProjection
+        && activeDataOwnerIdRef.current === null
+        && state.dataOwnerId !== null
+        && state.ownerGeneration === activeDataOwnerGenerationRef.current;
+      const ownerChanged =
+        !pendingSignedOutProjection
+        && !unknownOwnerRollbackProjection
+        && activeDataOwnerIdRef.current !== state.dataOwnerId;
+      const ownerRollbackProjection =
+        pendingOwnerProjectionRef.current
+        && !pendingSignedOutProjection
+        && (
+          unknownOwnerRollbackProjection
+          || (activeDataOwnerIdRef.current !== null && !ownerChanged)
+        );
+      // A fresh renderer starts with a null owner. When it observes the
+      // transient signed-out projection first, the successful null-owner
+      // commit keeps the same owner id but advances the generation. Treat
+      // that generation advance as the boundary commit so the renderer still
+      // finalizes the outgoing session cache and rehydrates owner-scoped data.
+      const committedNullOwnerProjection =
+        pendingOwnerProjectionRef.current
+        && !pendingSignedOutProjection
+        && state.dataOwnerId === null
+        && state.ownerGeneration !== activeDataOwnerGenerationRef.current;
+      const ownerBoundaryCommitted = ownerChanged || committedNullOwnerProjection;
+      if (pendingSignedOutProjection) pendingOwnerProjectionRef.current = true;
+      // A same-owner push can arrive while an auth boundary is still waiting
+      // for IPC. The pre-commit fence temporarily publishes null, so letting
+      // that push use the default finalizer would stop the current owner's
+      // task even when the boundary later rejects. Only a committed owner
+      // change may finalize the previous owner's sessions.
+      publishDataOwnerGeneration(
+        state.dataOwnerId,
+        state.ownerGeneration,
+        { finalizeSessions: ownerBoundaryCommitted && !initialOwnerHydration },
+      );
+      if (ownerBoundaryCommitted) {
+        pendingOwnerProjectionRef.current = false;
         sessionsStore.reset();
         clearWorkersCache();
       }
-      activeDataOwnerIdRef.current = state.dataOwnerId;
-      activeDataOwnerGenerationRef.current = state.ownerGeneration;
+      // Any renderer may receive the rollback projection before the initiating
+      // IPC promise rejects. Reconcile without consuming the operation marker;
+      // listActive keeps a still-running old-owner turn resumable.
+      if (ownerRollbackProjection) void reconcileSessionsAfterDataOwnerRollback();
+      if (!pendingSignedOutProjection) {
+        activeDataOwnerIdRef.current = state.dataOwnerId;
+        activeDataOwnerGenerationRef.current = state.ownerGeneration;
+        hasAppliedAuthStateRef.current = true;
+      }
+      setDataOwnerGenerationState(state.ownerGeneration);
       setNewMakerDraftOwner(state.dataOwnerId);
       setProviderModelMemoryOwner(state.dataOwnerId);
+      setAgentDeviceModelMemoryOwner(state.dataOwnerId);
       // 模型选择器的持久记忆与 newMakerDraft 同待遇:同一处、同一个 dataOwnerId、
       // 登出时同样传 null(state.dataOwnerId 在 signed-out 快照里就是 null,分区键退回
       // 无后缀的默认槽)。漏接 = 多账号串号(providerModelMemory 的旧教训)。
@@ -224,7 +368,7 @@ export function AuthProvider({
           && state.user?.membershipKind === 'org',
       );
       if (chatEmbeddingOwnerChanged) void refreshChatEmbeddingFromMain();
-      if (ownerChanged) {
+      if (ownerBoundaryCommitted || ownerRollbackProjection) {
         setMemorySettingsOwner(state.dataOwnerId);
         void bootstrapMemorySettingsFromMain();
       }
@@ -246,7 +390,7 @@ export function AuthProvider({
           applyIncomingUser(state.user);
         }
       } else {
-        activeUserIdRef.current = null;
+        if (!pendingSignedOutProjection) activeUserIdRef.current = null;
         setUser(null);
         // Both signed-out and local sessions have no Cindy user. Clear any
         // in-progress SSO/OTP step so returning to /login always starts fresh.
@@ -363,10 +507,8 @@ export function AuthProvider({
     // preparing 只允许在 load 进行中出现。settle / throw / 30s 超时都必须落到
     // identifier 或既有 error 步,避免 AUTH_FLOW_SUPERSEDED + state=null 或 IPC
     // 挂起把「正在连接登录服务」变成永不结束。
-    const result = await awaitDesktopLoginStateLoad(() =>
-      authServiceRef.current!.getLoginState(),
-    );
-    setLoginState(result.state);
+    const result = await awaitDesktopLoginStateLoad(() => authServiceRef.current!.getLoginState());
+    setLoginState(presentLoginResult(result));
     return result;
   }, []);
 
@@ -404,7 +546,7 @@ export function AuthProvider({
           const captchaToken = captchaGate ? await captchaGate() : undefined;
           if (captchaToken === null) {
             // 用户取消挑战：停在 method-choice，个人行可再次发起（会重新过闸）
-            setLoginState(result.state);
+            setLoginState(presentLoginResult(result));
             return result;
           }
           return dispatchLoginAction({
@@ -415,7 +557,7 @@ export function AuthProvider({
           });
         }
       }
-      setLoginState(result.state);
+      setLoginState(presentLoginResult(result));
       return result;
     },
     [],
@@ -439,7 +581,7 @@ export function AuthProvider({
 
   const beginAddAccount = useCallback(async () => {
     const result = await authServiceRef.current!.beginAddAccount();
-    setLoginState(result.state);
+    setLoginState(presentLoginResult(result));
     return result;
   }, []);
 
@@ -505,6 +647,7 @@ export function AuthProvider({
       mode,
       dataOwnerId,
       dataOwnerRecoveryEpoch,
+      dataOwnerGeneration,
       canEnterApp,
       isAuthenticated,
       isCanary,
@@ -536,6 +679,7 @@ export function AuthProvider({
       mode,
       dataOwnerId,
       dataOwnerRecoveryEpoch,
+      dataOwnerGeneration,
       canEnterApp,
       isAuthenticated,
       isCanary,
@@ -565,6 +709,15 @@ export function AuthProvider({
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+}
+
+/**
+ * 本机设备 id（与 device-link 的本机 deviceId 同源）；不在 AuthProvider 内（独立预览、
+ * 单测）或尚未初始化时为 null。只读展示用途（如判断一条消息是不是本机发出的），
+ * 不抛错，便于在任意聊天视图里调用。
+ */
+export function useOptionalAuthDeviceId(): string | null {
+  return useContext(AuthContext)?.deviceId ?? null;
 }
 
 export function useAuth(): AuthContextValue {

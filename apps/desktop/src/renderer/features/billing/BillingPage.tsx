@@ -1086,7 +1086,11 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
           <h2 className="text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]">
             {t('billing.settings.title')}
           </h2>
-          <button
+          <Button
+            variant="secondary"
+            size="md"
+            compact
+            loading={loadingCatalog || loadingSubscription || loadingBalance}
             type="button"
             onClick={() => void loadBillingState()}
             disabled={
@@ -1097,15 +1101,11 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
               resumingSubscription ||
               openingSubscriptionPortal
             }
-            className="inline-flex h-8 shrink-0 items-center gap-2 rounded-full border border-[var(--border-default)] px-3.5 text-12 font-medium text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-hover-soft)] disabled:opacity-45"
+            className="shrink-0"
           >
-            {loadingCatalog || loadingSubscription || loadingBalance ? (
-              <Spinner size={13} />
-            ) : (
-              <RefreshCcw size={13} />
-            )}
+            <RefreshCcw size={13} />
             {t('billing.actions.refreshCatalog')}
-          </button>
+          </Button>
         </div>
 
         <div className="mt-6 flex flex-col gap-8">
@@ -1408,33 +1408,32 @@ function SubscriptionOverviewCard({
           {facts ? (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <button
+                <Button
+                  variant="primary"
+                  size="md"
+                  compact
+                  loading={canceling || resuming || openingPortal}
                   type="button"
                   disabled={actionDisabled}
-                  className="group inline-flex h-8 min-w-[9.5rem] select-none items-center justify-center gap-1.5 rounded-full border border-[var(--border-default)] px-3.5 text-12 font-medium text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover-soft)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] data-[state=open]:bg-[var(--surface-chip)] disabled:cursor-not-allowed disabled:opacity-40"
+                  className="group min-w-[9.5rem] select-none data-[state=open]:[--button-face-bg:var(--surface-chip)]"
                 >
                   {t('billing.settings.subscriptionCard.manageAction')}
-                  {canceling || resuming || openingPortal ? (
-                    <Spinner size={13} />
-                  ) : (
                     <ChevronDown
                       size={13}
                       strokeWidth={1.75}
                       className="transition-transform duration-150 group-data-[state=open]:rotate-180 motion-reduce:transition-none"
                       aria-hidden="true"
                     />
-                  )}
-                </button>
+                </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent
                 align="end"
                 sideOffset={8}
-                className="w-[var(--radix-dropdown-menu-trigger-width)] rounded-[12px] border border-[var(--border-default)] bg-[var(--surface-elevated)] p-1.5 text-[var(--text-primary)] shadow-none"
+                className="w-[var(--radix-dropdown-menu-trigger-width)] p-1.5"
               >
                 <DropdownMenuItem
                   onSelect={showPlanChangeEntry ? onChangePlan : onPurchase}
                   disabled={actionDisabled}
-                  className="h-9 rounded-lg px-3 text-12 focus:bg-[var(--surface-hover)] focus:text-[var(--text-primary)]"
                 >
                   {showPlanChangeEntry
                     ? t('billing.settings.subscriptionCard.changeAction')
@@ -1444,7 +1443,7 @@ function SubscriptionOverviewCard({
                   <DropdownMenuItem
                     onSelect={onOpenPortal}
                     disabled={actionDisabled}
-                    className="h-9 gap-2 rounded-lg px-3 text-12 focus:bg-[var(--surface-hover)] focus:text-[var(--text-primary)]"
+                    className="gap-2"
                   >
                     <ExternalLink size={14} aria-hidden="true" />
                     {t('billing.settings.subscriptionCard.portalAction')}
@@ -1453,11 +1452,11 @@ function SubscriptionOverviewCard({
                 {!facts.cancelAtPeriodEnd &&
                   SUBSCRIPTION_CANCELLABLE_STATUSES.includes(facts.status) && (
                     <>
-                      <DropdownMenuSeparator className="mx-2 my-1 h-px bg-[var(--border-default)]" />
+                      <DropdownMenuSeparator />
                       <DropdownMenuItem
                         onSelect={onCancelSubscription}
                         disabled={actionDisabled}
-                        className="h-9 rounded-lg px-3 text-12 text-[var(--error-fg)] focus:bg-[var(--error-bg)] focus:text-[var(--error-fg)]"
+                        variant="danger"
                       >
                         {canceling ? (
                           <Spinner size={13} />
@@ -1469,11 +1468,10 @@ function SubscriptionOverviewCard({
                   )}
                 {facts.cancelAtPeriodEnd && facts.resumable && (
                   <>
-                    <DropdownMenuSeparator className="mx-2 my-1 h-px bg-[var(--border-default)]" />
+                    <DropdownMenuSeparator />
                     <DropdownMenuItem
                       onSelect={onResumeSubscription}
                       disabled={actionDisabled}
-                      className="h-9 rounded-lg px-3 text-12 focus:bg-[var(--surface-hover)] focus:text-[var(--text-primary)]"
                     >
                       {resuming ? (
                         <Spinner size={13} />
@@ -1486,14 +1484,17 @@ function SubscriptionOverviewCard({
               </DropdownMenuContent>
             </DropdownMenu>
           ) : (
-            <button
+            <Button
+              variant="secondary"
+              size="md"
+              compact
               type="button"
               onClick={onPurchase}
               disabled={actionDisabled}
-              className="h-8 select-none rounded-full border border-[var(--border-default)] px-3.5 text-12 font-medium text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover-soft)] disabled:cursor-not-allowed disabled:opacity-40"
+              className="select-none"
             >
               {t('billing.settings.subscriptionCard.action')}
-            </button>
+            </Button>
           )}
         </div>
       </div>
@@ -1535,14 +1536,17 @@ function PendingPlanChangeBanner({
           date: effectiveDate,
         })}
       </p>
-      <button
+      <Button
+        variant="secondary"
+        size="md"
+        compact
         type="button"
         onClick={onUndo}
         disabled={disabled}
-        className="h-8 shrink-0 select-none rounded-full border border-[var(--border-default)] px-3.5 text-12 font-medium text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover-soft)] disabled:cursor-not-allowed disabled:opacity-40"
+        className="shrink-0 select-none"
       >
         {t('billing.planChange.undo')}
-      </button>
+      </Button>
     </div>
   );
 }
@@ -1631,13 +1635,16 @@ function BalanceOverviewCard({
             </p>
           )}
         </div>
-        <button
+        <Button
+          variant="secondary"
+          size="md"
+          compact
           type="button"
           onClick={onPurchase}
-          className="h-8 shrink-0 select-none rounded-full border border-[var(--border-default)] px-3.5 text-12 font-medium text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover-soft)]"
+          className="shrink-0 select-none"
         >
           {t('billing.settings.topupCard.action')}
-        </button>
+        </Button>
       </div>
     </section>
   );
@@ -2238,16 +2245,16 @@ function BillingOfferDialog({
   return (
     <Dialog.Root open={open} onOpenChange={(nextOpen) => !nextOpen && onClose()}>
       <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 z-[9990] bg-[var(--overlay-modal)]" />
+        <Dialog.Overlay className="modal-scrim fixed inset-0 z-[9990]" />
         <Dialog.Content
           onPointerDownOutside={(event) => event.preventDefault()}
           aria-describedby={undefined}
           className={cn(
-            'fixed left-1/2 top-1/2 z-[9991] flex max-h-[min(720px,calc(100vh-48px))]',
+            'modal-panel fixed left-1/2 top-1/2 z-[9991] flex max-h-[min(720px,calc(100vh-48px))]',
             'w-[calc(100vw-48px)] -translate-x-1/2 -translate-y-1/2 flex-col',
             comparingPlans ? 'max-w-[1120px]' : 'max-w-[600px]',
-            'overflow-hidden rounded-xl border border-[var(--border-default)]',
-            'bg-[var(--surface-elevated)] text-[var(--text-primary)] focus:outline-none',
+            'overflow-hidden',
+            'text-[var(--text-primary)] focus:outline-none',
           )}
           onOpenAutoFocus={(event) => {
             event.preventDefault();
@@ -2307,14 +2314,16 @@ function BillingOfferDialog({
                 )}
                 description={subscriptionError ? undefined : t('billing.catalog.errorDescription')}
                 action={
-                  <button
+                  <Button
+                    variant="secondary"
+                    size="lg"
                     ref={primaryFocusRef}
                     type="button"
                     onClick={onRetry}
-                    className="mt-4 h-9 rounded-full border border-[var(--border-default)] px-4 text-12 font-medium hover:bg-[var(--surface-hover-soft)]"
+                    className="mt-4"
                   >
                     {t('billing.actions.retry')}
-                  </button>
+                  </Button>
                 }
               />
             ) : offers.length === 0 ? (
@@ -2360,7 +2369,7 @@ function BillingOfferDialog({
                       }),
                     )}
                     freeAction={t('billing.comparison.topup')}
-                    freeHint={t('billing.comparison.topupUnlock')}
+                    onViewModels={onClose}
                     onFreeAction={() => onTopup?.()}
                   />
                 )}

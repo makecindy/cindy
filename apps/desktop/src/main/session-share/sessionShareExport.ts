@@ -22,13 +22,16 @@
  * 写盘用「同目录 .tmp + rename」保证目标文件原子出现。
  */
 import { createHash, randomBytes } from 'node:crypto';
-import { promises as fsp } from 'node:fs';
+import { createWriteStream, promises as fsp } from 'node:fs';
 import path from 'node:path';
+import { Transform } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 import { setImmediate as yieldToEventLoop } from 'node:timers/promises';
 
 import JSZip from 'jszip';
 import { findClaudeSessionJsonl } from '@cindy/maker-core';
 
+import { activeOwnerScopeKey } from '../appSessionState.js';
 import { getDbClient } from '../localDb/client/current.js';
 import { getActiveTeamByLead } from '../localDb/orcaTeamStore.js';
 import { createLogger } from '../logger.js';
@@ -37,6 +40,7 @@ import {
   dumpCodexThreadStateRows,
   type CodexThreadStateDump,
 } from '../maker-host/codex-local-sessions.js';
+import { readCodexThreadStorageReadOnly } from '../maker-host/codex-thread-storage.js';
 import { defaultClaudeConfigDirCandidates } from '../maker-orchestration/claudeTranscriptAnchors.js';
 import { resolveSafe as resolveImageUrl } from '../imageCacheStore.js';
 import { resolveSafe as resolveVideoUrl } from '../videoCacheStore.js';
@@ -79,23 +83,57 @@ export interface SessionShareExportOptions {
   password?: string | null;
   /** 超限重试时由 renderer 显式传入:跳过全部媒体,只保消息文本与转录。 */
   excludeMedia?: boolean;
-  /** 仅测试用:覆盖体积上限(默认 SHARE_EXPORT_SIZE_LIMIT_BYTES)。 */
+  /** Host resource budget override; ordinary sharing retains its default limit. */
   sizeLimitBytes?: number;
+  /** Host-only migration includes archived members without reviving them. */
+  migration?: boolean;
+  /**
+   * Migration only: vendor transcripts of at least `minBytes` are streamed into `dir` instead
+   * of the in-memory zip, so their size is bounded by disk rather than memory or V8 strings.
+   * Their refs keep the zip path, which the importer resolves to the delivered file.
+   */
+  externalTranscripts?: { dir: string; minBytes: number };
+}
+
+/** A transcript left out of the zip (see `externalTranscripts`). */
+export interface ExternalTranscript {
+  /** The transcript ref path it stands for. */
+  path: string;
+  /** File name inside `externalTranscripts.dir`. */
+  file: string;
+  bytes: number;
+  sha256: string;
 }
 
 export type SessionShareExportOutcome =
   | {
       status: 'ok';
+      unpackedBytes: number;
       filePath: string;
+      /** Present when `externalTranscripts` was requested. */
+      externalTranscripts?: ExternalTranscript[];
       fidelity: XdtshareFidelity;
       /** 导出端没找到转录的 sdkSessionId 列表(cc fork 链部分缺失时非空)。 */
       missingTranscripts: string[];
       /** 引用了但文件已不存在的媒体数。 */
       mediaMissing: number;
+      /** 其中源机器上仍存在、只是没能打进包的媒体数(迁移据此判定会丢内容)。 */
+      mediaDropped: number;
       /** 随包携带的协同 Worker 会话数(非协同包为 0)。 */
       orcaWorkers: number;
     }
-  | { status: 'oversize'; totalBytes: number; mediaBytes: number; limitBytes: number };
+  | {
+      status: 'oversize';
+      totalBytes: number;
+      mediaBytes: number;
+      limitBytes: number;
+      /** Breakdown for diagnostics; transcript bytes count only those kept in the zip. */
+      messagesBytes?: number;
+      transcriptBytes?: number;
+      /** Each in-zip transcript's size, so callers can tell which ones a threshold would move. */
+      transcriptFileBytes?: number[];
+      externalTranscriptBytes?: number;
+    };
 
 /** media-map.json 的条目(导入端按它落位与重写 URL)。 */
 export interface MediaMapEntry {
@@ -159,8 +197,12 @@ function portablePiSessionId(buffer: Buffer): string {
   // ID 与真正打包的同一份冻结字节计算，避免“先 hash、后文件继续写、再 read”
   // 的 TOCTOU 让清单 id 与包内内容不一致。读失败时不再用绝对路径摘要兜底：
   // 那会复活 path-only 冲突，并把不可验证的转录伪装成可恢复。
-  const basis = createHash('sha256').update(buffer).digest('hex').slice(0, 32);
-  return `pi-${basis}.jsonl`;
+  return piSessionIdFromDigest(createHash('sha256').update(buffer).digest('hex'));
+}
+
+/** Same id as {@link portablePiSessionId}, from a digest computed while streaming. */
+function piSessionIdFromDigest(sha256: string): string {
+  return `pi-${sha256.slice(0, 32)}.jsonl`;
 }
 
 /** Pi 的 agentMeta 不能把源机绝对 sessionFile 路径带进分享包。 */
@@ -189,6 +231,57 @@ interface TranscriptCandidate {
   zipPath: string;
   absPath: string;
   bytes: number;
+  /** Streamed to disk rather than read into the zip (migration, large files). */
+  external?: boolean;
+}
+
+/** Where external transcripts are staged, and the ones staged so far across all members. */
+interface ExternalStaging {
+  dir: string;
+  staged: ExternalTranscript[];
+}
+
+/**
+ * Copy a transcript into `dest` while hashing it, never holding it in memory. A failure to read
+ * the source returns null, so the caller degrades exactly as for an unreadable in-zip transcript;
+ * a failure to write the copy (e.g. ENOSPC) is a real error and throws.
+ */
+async function stageTranscript(
+  absPath: string,
+  dest: string,
+): Promise<{ bytes: number; sha256: string } | null> {
+  const handle = await fsp.open(absPath, 'r').catch(() => null);
+  if (!handle) return null;
+  const hash = createHash('sha256');
+  let bytes = 0;
+  // pipeline() destroys every stream with the first error, so only the first one tells the side.
+  let failedSide: 'read' | 'write' | null = null;
+  const source = handle.createReadStream();
+  source.on('error', () => (failedSide ??= 'read'));
+  const destination = createWriteStream(dest, { flags: 'wx', mode: 0o600 });
+  destination.on('error', () => (failedSide ??= 'write'));
+  try {
+    await pipeline(
+      source,
+      new Transform({
+        transform(chunk: Buffer, _encoding, done) {
+          hash.update(chunk);
+          bytes += chunk.length;
+          done(null, chunk);
+        },
+      }),
+      destination,
+    );
+  } catch (err) {
+    await fsp.rm(dest, { force: true });
+    if (failedSide === 'read') return null;
+    throw err;
+  }
+  if (bytes === 0) {
+    await fsp.rm(dest, { force: true });
+    return null;
+  }
+  return { bytes, sha256: hash.digest('hex') };
 }
 
 /** 单会话的阶段 A 收集结果(lead 与协同 Worker 复用同一套流程)。 */
@@ -264,7 +357,7 @@ async function collectSessionPhaseA(
       sdkSessionIds = sdkSessionIds.filter((id) => allowed.has(id));
     }
     // 与 loadClaudeTranscriptAnchorIndex 同口径:遍历全部候选目录
-    // (CLAUDE_CONFIG_DIR → XDT_USER_DATA_DIR/claude-home → ~/.claude),
+    // (CLAUDE_CONFIG_DIR → ~/.claude → 旧版 dev 的 XDT_USER_DATA_DIR/claude-home),
     // 只查第一个会把落在后续候选的 jsonl 误记缺失(review bot P1)。
     const projectsRoots = defaultClaudeConfigDirCandidates().map((dir) =>
       path.join(dir, 'projects'),
@@ -312,7 +405,21 @@ async function collectSessionPhaseA(
     activeSdkSessionId = session.sdkSessionId;
     sdkSessionIds = session.sdkSessionId ? [session.sdkSessionId] : [];
     if (session.sdkSessionId) {
-      codexState = await dumpCodexThreadStateRows(session.sdkSessionId);
+      // 多账号线程的 state/rollout 在 codex-accounts 下,只有 thread-index 记着位置;
+      // 与 resume 共用只读定位,没有记录时才走旧的 desktop/外部 HOME 查找。记录存在
+      // 却读不出时不回退:旧 HOME 里可能留着同一线程的过期副本,按缺转录降档。
+      let lookupFailed = false;
+      const storage = await readCodexThreadStorageReadOnly(session.sdkSessionId).catch((err) => {
+        log.warn('codex thread storage lookup failed, exporting without its history', {
+          sessionId: session.id,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        lookupFailed = true;
+        return undefined;
+      });
+      codexState = lookupFailed
+        ? { threads: [], threadDynamicTools: [], threadSpawnEdges: [], rolloutPath: null }
+        : await dumpCodexThreadStateRows(session.sdkSessionId, storage);
       const bytes = codexState.rolloutPath ? await statSize(codexState.rolloutPath) : null;
       if (codexState.rolloutPath && bytes) {
         const zipPath = `${zipPrefix}transcripts/codex/${path.basename(codexState.rolloutPath)}`;
@@ -337,7 +444,10 @@ async function collectSessionPhaseA(
  * 不让单文件问题炸掉整次导出;转录读失败同步把 ref 回落 null,保真度按
  * 实际落包结果判。
  */
-async function readSessionPhaseB(a: SessionPhaseA): Promise<SessionPhaseB> {
+async function readSessionPhaseB(
+  a: SessionPhaseA,
+  external?: ExternalStaging,
+): Promise<SessionPhaseB> {
   const { session, zipPrefix } = a;
   const sdkSessionIds = [...a.sdkSessionIds];
   const refs = a.refs.map((r) => ({ ...r }));
@@ -347,20 +457,39 @@ async function readSessionPhaseB(a: SessionPhaseA): Promise<SessionPhaseB> {
   const piPortableIds = new Map<string, string>();
   const seenPiPortableIds = new Set<string>();
   for (const candidate of a.candidates) {
-    const buffer = await fsp.readFile(candidate.absPath).catch(() => null);
-    if (buffer && buffer.length > 0) {
+    let content: { buffer: Buffer } | { file: string; bytes: number; sha256: string } | null;
+    if (candidate.external && external) {
+      const file = `transcript-${external.staged.length}-${randomBytes(4).toString('hex')}.jsonl`;
+      const staged = await stageTranscript(candidate.absPath, path.join(external.dir, file));
+      content = staged && { file, ...staged };
+    } else {
+      const buffer = await fsp.readFile(candidate.absPath).catch(() => null);
+      content = buffer && buffer.length > 0 ? { buffer } : null;
+    }
+    // In-zip entries carry their bytes; external ones are listed for the transfer.
+    const keep = (zipPath: string) => {
+      if (!content) return;
+      if ('buffer' in content) transcriptFiles.push({ zipPath, buffer: content.buffer });
+      else external!.staged.push({ path: zipPath, ...content });
+    };
+    if (content) {
       if (session.agentKind === 'pi') {
-        const portableId = portablePiSessionId(buffer);
+        const portableId =
+          'buffer' in content
+            ? portablePiSessionId(content.buffer)
+            : piSessionIdFromDigest(content.sha256);
         piPortableIds.set(candidate.absPath, portableId);
         if (!seenPiPortableIds.has(portableId)) {
           seenPiPortableIds.add(portableId);
           const zipPath = `${zipPrefix}transcripts/pi/${portableId}`;
           sdkSessionIds.push(portableId);
           refs.push({ sdkSessionId: portableId, path: zipPath });
-          transcriptFiles.push({ zipPath, buffer });
+          keep(zipPath);
+        } else if ('file' in content) {
+          await fsp.rm(path.join(external!.dir, content.file), { force: true });
         }
       } else {
-        transcriptFiles.push({ zipPath: candidate.zipPath, buffer });
+        keep(candidate.zipPath);
       }
     } else {
       // Pi 读失败时没有内容可生成安全便携 id，直接省略该转录并把 message meta
@@ -386,6 +515,7 @@ async function readSessionPhaseB(a: SessionPhaseA): Promise<SessionPhaseB> {
 /** lead 的 active team + Worker 会话收集;无 active team 返回 null(按普通会话导出)。 */
 async function collectOrcaWorkerSources(
   leadSessionId: string,
+  includeArchived = false,
 ): Promise<{ teamStatus: XdtshareOrcaManifest['teamStatus']; workers: OrcaWorkerSource[] } | null> {
   // 与运行期使用同一个 active team 选择与去重入口。历史 migration / drift
   // 可能留下多个 active team；直接 LIMIT 1 会导出用户当前看不到的旧 Worker 图。
@@ -415,7 +545,7 @@ async function collectOrcaWorkerSources(
         `orca worker session is missing or deleted: ${record.sessionId}`,
       );
     }
-    if (workerSession.status === 'archived') {
+    if (workerSession.status === 'archived' && !includeArchived) {
       log.info('archived orca worker excluded from export', {
         workerSessionId: record.sessionId,
       });
@@ -443,6 +573,9 @@ async function collectOrcaWorkerSources(
 export async function exportSessionShare(
   opts: SessionShareExportOptions,
 ): Promise<SessionShareExportOutcome> {
+  // 会话行、消息与 Codex thread-index 都按当前账号读取;中途换账号会把两个账号
+  // 的数据拼进同一个包,落盘前复核(scope 含代次,A→B→A 同样能识别)。
+  const ownerScope = activeOwnerScopeKey();
   const session = await readSessionRow(opts.sessionId);
   if (!session) throw codedError('NOT_FOUND', `session not found: ${opts.sessionId}`);
   if (session.status === 'deleted') {
@@ -453,6 +586,10 @@ export async function exportSessionShare(
   // 不能单独导出——它脱离 team 关系图没有意义,入口应是所属 lead。
   if (session.remoteHostId) {
     throw codedError('PRECONDITION_FAILED', 'remote sessions cannot be exported');
+  }
+  // Agent 在另一台电脑运行的任务：转录在那台，本机打包不全。
+  if (await sessionAgentRunsOnOtherDevice(opts.sessionId)) {
+    throw codedError('PRECONDITION_FAILED', 'tasks whose agent runs on another computer cannot be exported');
   }
   if (session.orcaRole === 'worker') {
     throw codedError(
@@ -472,7 +609,7 @@ export async function exportSessionShare(
   // ── 协同收集:lead 的 active team 全部 Worker 随包(stale lead 无 active
   //    team 时按普通会话导出)。Worker 允许 0 条消息(刚创建未派活)。──
   const orcaSources =
-    session.orcaRole === 'lead' ? await collectOrcaWorkerSources(session.id) : null;
+    session.orcaRole === 'lead' ? await collectOrcaWorkerSources(session.id, opts.migration) : null;
   const workerSources = orcaSources?.workers ?? [];
 
   // ── 阶段 A(lead + 每个 Worker) ──
@@ -488,6 +625,12 @@ export async function exportSessionShare(
     );
   }
   const allA = [leadA, ...workersA];
+  const externalOption = opts.migration ? opts.externalTranscripts : undefined;
+  if (externalOption) {
+    for (const a of allA)
+      for (const candidate of a.candidates)
+        candidate.external = candidate.bytes >= externalOption.minBytes;
+  }
 
   const mediaMap: MediaMapEntry[] = [];
   const mediaCandidates: Array<{
@@ -496,6 +639,9 @@ export async function exportSessionShare(
     folder: string;
     bytes: number;
   }> = [];
+  // 源机器上存在却没进包的媒体(受管区外的 loose 文件、读失败)。源端本就缺失
+  // 的引用(文件已删、正文里仅以文字出现的地址)不计入:复制不会让它们更缺。
+  let mediaDropped = 0;
   if (!opts.excludeMedia) {
     // loose(xdt-file/xdt-audio)的 ?path= 指向本机任意绝对路径。为防被塞进消息
     // 文本的 URL 把无关本地文件(如凭证)静默打进分享包,只放行 userData/cc-agent
@@ -525,6 +671,16 @@ export async function exportSessionShare(
       const stat = await fsp.stat(absPath).catch(() => null);
       return stat?.isFile() && stat.size > 0 ? stat.size : null;
     };
+    // 只有确认源端没有内容才算「本就缺失」;权限/IO 错误读不到状态时按未打包计。
+    const confirmedAbsent = async (absPath: string): Promise<boolean> => {
+      try {
+        const stat = await fsp.stat(absPath);
+        return !stat.isFile() || stat.size === 0;
+      } catch (err) {
+        const code = (err as NodeJS.ErrnoException).code;
+        return code === 'ENOENT' || code === 'ENOTDIR';
+      }
+    };
     const seenUrls = new Set<string>();
     // 协同包:媒体收集覆盖 lead 与全部 Worker 的消息(URL 全局去重,media-map
     // 仍是包级单份——xdt-image 按 URL host 解析,与展示会话无关)。
@@ -540,6 +696,9 @@ export async function exportSessionShare(
             (!resolved.absPath || !(await isManagedMediaPath(resolved.absPath)));
           const bytes = !looseBlocked && resolved.absPath ? await statSize(resolved.absPath) : null;
           if (!bytes) {
+            if (resolved.absPath && !(await confirmedAbsent(resolved.absPath))) {
+              mediaDropped += 1;
+            }
             mediaMap.push({ ...resolved.entry, zipPath: null });
             continue;
           }
@@ -560,21 +719,41 @@ export async function exportSessionShare(
     (sum, a) => sum + a.messages.reduce((s, m) => s + Buffer.byteLength(m.content), 0),
     0,
   );
-  const transcriptBytes = allA.reduce(
-    (sum, a) => sum + a.candidates.reduce((s, f) => s + f.bytes, 0),
-    0,
-  );
+  const transcriptBytesOf = (external: boolean) =>
+    allA.reduce(
+      (sum, a) =>
+        sum + a.candidates.reduce((s, f) => s + (!!f.external === external ? f.bytes : 0), 0),
+      0,
+    );
+  // External transcripts are streamed to disk and never held in memory.
+  const transcriptBytes = transcriptBytesOf(false);
+  const externalTranscriptBytes = transcriptBytesOf(true);
   const mediaBytes = mediaCandidates.reduce((sum, f) => sum + f.bytes, 0);
   const totalBytes = messagesBytes + transcriptBytes + mediaBytes;
   const limitBytes = opts.sizeLimitBytes ?? SHARE_EXPORT_SIZE_LIMIT_BYTES;
+  const transcriptFileBytes = allA.flatMap((a) =>
+    a.candidates.filter((f) => !f.external).map((f) => f.bytes),
+  );
+  const sizes = {
+    mediaBytes,
+    limitBytes,
+    messagesBytes,
+    transcriptBytes,
+    transcriptFileBytes,
+    externalTranscriptBytes,
+  };
   if (totalBytes > limitBytes) {
-    return { status: 'oversize', totalBytes, mediaBytes, limitBytes };
+    return { status: 'oversize', totalBytes, ...sizes };
   }
 
   // ── 阶段 B(lead + 每个 Worker) ──
-  const leadB = await readSessionPhaseB(leadA);
+  const external: ExternalStaging | undefined = externalOption
+    ? { dir: externalOption.dir, staged: [] }
+    : undefined;
+  if (external) await fsp.mkdir(external.dir, { recursive: true });
+  const leadB = await readSessionPhaseB(leadA, external);
   const workersB: SessionPhaseB[] = [];
-  for (const a of workersA) workersB.push(await readSessionPhaseB(a));
+  for (const a of workersA) workersB.push(await readSessionPhaseB(a, external));
   const allB = [leadB, ...workersB];
 
   const mediaFiles: Array<{ zipPath: string; buffer: Buffer }> = [];
@@ -582,6 +761,7 @@ export async function exportSessionShare(
   for (const candidate of mediaCandidates) {
     const buffer = await fsp.readFile(candidate.absPath).catch(() => null);
     if (!buffer || buffer.length === 0) {
+      mediaDropped += 1;
       mediaMap.push({ ...candidate.entry, zipPath: null });
       continue;
     }
@@ -624,7 +804,14 @@ export async function exportSessionShare(
   const addSessionEntries = async (a: SessionPhaseA, b: SessionPhaseB): Promise<void> => {
     await addEntry(
       `${a.zipPrefix}session.json`,
-      JSON.stringify(buildSessionSnapshot(a.session, b.activeSdkSessionId), null, 2),
+      JSON.stringify(
+        {
+          ...buildSessionSnapshot(a.session, b.activeSdkSessionId),
+          ...(opts.migration ? { migrationSourceId: a.session.id, status: a.session.status } : {}),
+        },
+        null,
+        2,
+      ),
     );
     await addEntry(
       `${a.zipPrefix}messages.jsonl`,
@@ -693,6 +880,11 @@ export async function exportSessionShare(
   };
   zip.file('manifest.json', JSON.stringify(manifest, null, 2));
 
+  const unpackedBytes = entries.reduce((sum, entry) => sum + entry.bytes, 0) +
+    Buffer.byteLength(JSON.stringify(manifest, null, 2));
+  if (opts.sizeLimitBytes !== undefined && unpackedBytes > limitBytes)
+    return { status: 'oversize', totalBytes: unpackedBytes, ...sizes };
+
   const zipBytes = await zip.generateAsync({
     type: 'nodebuffer',
     compression: 'DEFLATE',
@@ -706,6 +898,9 @@ export async function exportSessionShare(
   // tmp 名带随机段 + 'wx' 独占创建:固定 `${target}.tmp` 可被共享目录里预先
   // 种下的同名 symlink 劫持(writeFile 跟随链接覆盖任意目标,review bot 指出),
   // 随机名不可预测,wx 在路径已存在(含 symlink)时直接 EEXIST 拒写。
+  if (activeOwnerScopeKey() !== ownerScope) {
+    throw codedError('SHARE_EXPORT_FAILED', 'account changed during export');
+  }
   const tmpPath = `${opts.targetPath}.${randomBytes(8).toString('hex')}.tmp`;
   try {
     await fsp.writeFile(tmpPath, fileBytes, { flag: 'wx' });
@@ -724,18 +919,24 @@ export async function exportSessionShare(
     messages: messages.length,
     orcaWorkers: workerSources.length,
     transcripts: allB.reduce((sum, b) => sum + b.transcriptFiles.length, 0),
+    externalTranscripts: external?.staged.length ?? 0,
+    externalTranscriptBytes: external?.staged.reduce((sum, t) => sum + t.bytes, 0) ?? 0,
     missingTranscripts: missingTranscripts.length,
     media: mediaFiles.length,
     mediaMissing,
+    mediaDropped,
     encrypted: !!opts.password,
     fileBytes: fileBytes.length,
   });
   return {
     status: 'ok',
+    unpackedBytes,
     filePath: opts.targetPath,
+    ...(external ? { externalTranscripts: external.staged } : {}),
     fidelity,
     missingTranscripts,
     mediaMissing,
+    mediaDropped,
     orcaWorkers: workerSources.length,
   };
 }
@@ -843,6 +1044,14 @@ function resolveMediaFile(
     // resolveSafe 对未知 host / 越界路径抛错:该 URL 不可解析,当缺失处理。
     return null;
   }
+}
+
+async function sessionAgentRunsOnOtherDevice(sessionId: string): Promise<boolean> {
+  const row = await getDbClient().queryOne<{ agentDeviceId: string | null }>(
+    'SELECT agent_device_id AS agentDeviceId FROM sessions WHERE id = ? LIMIT 1',
+    [sessionId],
+  );
+  return Boolean(row?.agentDeviceId);
 }
 
 async function readSessionRow(sessionId: string): Promise<SessionRow | null> {

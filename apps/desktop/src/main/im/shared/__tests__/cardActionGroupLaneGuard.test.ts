@@ -37,6 +37,7 @@ vi.mock('electron', () => ({
   },
   BrowserWindow: { getAllWindows: () => [] },
 }));
+vi.mock('electron-store', () => ({ default: class ElectronStore {} }));
 vi.mock('../../../logger', () => ({ createLogger: () => mocks.logger }));
 vi.mock('../../../maker-host', () => ({ getMaker: mocks.getMaker }));
 vi.mock('../../../maker-host/model-route-guard-live', () => ({
@@ -78,6 +79,7 @@ vi.mock('../../../maker-ipc/runtimeSetModel', () => ({
   applyRuntimeSetModelChange: vi.fn(async () => ({ status: 'applied' })),
 }));
 vi.mock('../../../maker-ipc/register', () => ({
+  applyPiImModelSelectionUnderLock: vi.fn(async () => ({ status: 'applied' })),
   cancelPendingAgentSwitchForSession: vi.fn(),
   isSessionInTurn: vi.fn(() => false),
   registerPendingCredentialSwitchForSession: vi.fn(),
@@ -85,6 +87,9 @@ vi.mock('../../../maker-ipc/register', () => ({
   wakeSessionInputAfterCredentialSwitch: vi.fn(),
   getPendingCredentialSwitchTarget: vi.fn(() => undefined),
   withSendToSessionLock: vi.fn(async (_sessionId: string, task: () => Promise<unknown>) => task()),
+}));
+vi.mock('../../../maker-ipc/sessionRuntimeControl', () => ({
+  cancelPendingSessionRuntimeMutation: vi.fn(() => true),
 }));
 vi.mock('../pendingInteractions', () => ({
   resolvePending: vi.fn(() => false),

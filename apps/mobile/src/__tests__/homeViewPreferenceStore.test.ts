@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const store = vi.hoisted(() => new Map<string, string>());
 
@@ -25,6 +26,39 @@ const defaultPrefs = {
 } as const;
 
 describe('homeViewPreferenceStore', () => {
+  it('does not overwrite saved grouping when the merge read fails', async () => {
+    const { saveHomeViewPreferences, readHomeViewPreferences } = await import('@/session/homeViewPreferenceStore');
+    await saveHomeViewPreferences({ groupByProject: false, groupDialogue: true });
+    vi.mocked(AsyncStorage.getItem).mockRejectedValueOnce(new Error('read failed'));
+    await expect(saveHomeViewPreferences({ selectedDevice: null })).rejects.toThrow('read failed');
+    expect(await readHomeViewPreferences()).toMatchObject({ groupByProject: false, groupDialogue: true });
+  });
+
+  it('reports a failed write and lets a subsequent save succeed', async () => {
+    const { saveHomeViewPreferences, readHomeViewPreferences } = await import('@/session/homeViewPreferenceStore');
+    await saveHomeViewPreferences({ groupDialogue: false });
+    vi.mocked(AsyncStorage.setItem).mockRejectedValueOnce(new Error('disk full'));
+    await expect(saveHomeViewPreferences({ groupDialogue: true })).rejects.toThrow('disk full');
+    expect((await readHomeViewPreferences()).groupDialogue).toBe(false);
+    await saveHomeViewPreferences({ groupDialogue: true });
+    expect((await readHomeViewPreferences()).groupDialogue).toBe(true);
+  });
+
+  it('replaces corrupt stored JSON so a later device switch can still save', async () => {
+    const { __testing, readHomeViewPreferences, saveHomeViewPreferences } = await import('@/session/homeViewPreferenceStore');
+    store.set(__testing.storageKey, 'broken');
+    await saveHomeViewPreferences({ sortBy: 'priority', selectedDevice: { deviceId: 'devA', name: 'Mac A' } });
+    await expect(readHomeViewPreferences()).resolves.toMatchObject({
+      sortBy: 'priority',
+      selectedDevice: { deviceId: 'devA', name: 'Mac A' },
+    });
+    await saveHomeViewPreferences({
+      selectedDevice: { deviceId: 'devB', name: 12 as unknown as string },
+    });
+    await expect(readHomeViewPreferences()).resolves.toMatchObject({
+      selectedDevice: { deviceId: 'devB', name: 'devB' },
+    });
+  });
   beforeEach(async () => {
     vi.clearAllMocks();
     store.clear();

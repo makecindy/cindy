@@ -1,10 +1,11 @@
+import { MAX_RECENT_TASKS, rememberRecentTask } from '@/session/recentTasks';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { HistoryViewController, projectHistoryView, type HistoryViewSnapshot, type HistoryWorkSummary } from '@cindy/maker-shared/message-window';
 import { setMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import { clearHistoryDisk, historyDiskAuthority, readHistoryDisk, writeHistoryDisk } from '@/session/remoteHistoryDiskCache';
 import type { RemoteMessage } from '@/session/types';
 import { clearRemoteHistoryViews, findRemoteHistoryView, getRemoteHistoryView,
-  mountRemoteHistoryView, MAX_INACTIVE_HISTORY_VIEWS } from '@/session/remoteHistoryViews';
+  mountRemoteHistoryView } from '@/session/remoteHistoryViews';
 
 const files = vi.hoisted(() => new Map<string, string>());
 vi.mock('@/session/historyDiskStoreExpo', () => ({ createHistoryDiskIO: () => ({
@@ -22,6 +23,7 @@ const snapshot = (text: string): HistoryViewSnapshot<RemoteMessage> => ({
 });
 const releases: Array<() => void> = [];
 function mount(entry: ReturnType<typeof getRemoteHistoryView>, source: ReturnType<typeof transport>) {
+  rememberRecentTask({ pathname: '/sessions/[sessionId]', params: { deviceId: entry.deviceId, sessionId: entry.sessionId, deviceName: 'PC' } });
   const release = mountRemoteHistoryView(entry, source, true);
   releases.push(release);
   return () => { releases.splice(releases.indexOf(release), 1); release(); };
@@ -35,6 +37,29 @@ function transport() {
 }
 afterEach(async () => { releases.splice(0).forEach(release => release()); clearRemoteHistoryViews(); await clearHistoryDisk(); setMobileAuthOwner(null); });
 describe('persistent history integration', () => {
+  it('restores an evicted sixth task from disk without a network request', async () => {
+    setMobileAuthOwner('five-task-cache');
+    const source = transport();
+    const entry = getRemoteHistoryView('d', 'saved-task', source);
+    const leave = mount(entry, source);
+    await entry.view.refresh();
+    leave();
+    for (let i = 0; i < MAX_RECENT_TASKS; i++) {
+      rememberRecentTask({ pathname: '/sessions/[sessionId]', params: {
+        deviceId: 'd', deviceName: 'PC', sessionId: `recent-${i}`,
+      } });
+    }
+    expect(findRemoteHistoryView('d', 'saved-task')).toBeUndefined();
+    expect(await readHistoryDisk(historyDiskAuthority('d', 'saved-task'))).not.toBeNull();
+    const offline = transport();
+    const reopened = getRemoteHistoryView('d', 'saved-task', offline);
+    expect(reopened.view).not.toBe(entry.view);
+    reopened.view.setNetworkAvailable(false);
+    mount(reopened, offline);
+    await vi.waitFor(() => expect(reopened.view.getSnapshot().ready).toBe(true));
+    expect(JSON.stringify(reopened.view.getSnapshot().items)).toContain('network');
+    expect(offline.readHistoryView).not.toHaveBeenCalled();
+  });
   it.each(['UNSUPPORTED_CAPABILITY', 'CHANNEL_NOT_ALLOWED'])('removes %s disk projection before LRU recreation and fences old writes', async (code) => {
     setMobileAuthOwner('a');
     const old = historyDiskAuthority('d', 's');
@@ -51,7 +76,7 @@ describe('persistent history integration', () => {
     expect(old.current()).toBe(false);
     release();
     await writeHistoryDisk(old, snapshot('late old write'));
-    for (let n = 0; n < MAX_INACTIVE_HISTORY_VIEWS; n++) {
+    for (let n = 0; n < MAX_RECENT_TASKS; n++) {
       const nextSource = transport();
       const next = getRemoteHistoryView('d', `other-${n}`, nextSource);
       const leave = mount(next, nextSource);

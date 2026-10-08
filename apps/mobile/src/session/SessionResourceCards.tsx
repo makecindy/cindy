@@ -10,7 +10,7 @@ import { resolveRemoteText } from '@cindy/device-link';
 import { Text } from '@/components/AppText';
 import { MainWindowActionButton } from '@/components/MobilePrimitives';
 import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
-import { radius, spacing, typeScale, fontWeight } from '@/theme/tokens';
+import { fontWeight, lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
 import type { useSessionResourceCards } from './useSessionResourceCards';
 
 /** Native presentation of bounded host resource primitives; action ids stay opaque. */
@@ -26,14 +26,15 @@ export function SessionResourceCards({
   const cards = state.resources.filter(
     (resource) => resource.blocks?.length || resource.actions?.length,
   );
-  if (!cards.length && !state.failed && !state.blocked) return null;
+  // Failed reads keep polling, so they present as syncing instead of a manual retry.
+  if (!cards.length && !state.blocked) return null;
   return (
     <ScrollView
       style={{ maxHeight: height * 0.4 }}
       contentContainerStyle={styles.stack}
       keyboardShouldPersistTaps="handled"
     >
-      {!cards.length && state.blocked && !state.failed ? (
+      {!cards.length && state.blocked ? (
         <View style={[styles.card, styles.heading]}>
           <ActivityIndicator color={colors.textSecondary} />
           <Text style={styles.body}>{t('shared.syncing')}</Text>
@@ -58,12 +59,12 @@ export function SessionResourceCards({
             testID="session.resourceCard"
           >
             <View style={styles.heading}>
-              {(busy && state.fresh) || (!state.fresh && !state.failed) ? (
+              {busy || !state.fresh ? (
                 <ActivityIndicator color={colors.textSecondary} />
               ) : null}
               <Text style={styles.title}>{title}</Text>
             </View>
-            {!state.fresh && !state.failed ? (
+            {!state.fresh ? (
               <Text style={styles.body}>{t('shared.syncing')}</Text>
             ) : null}
             {body ? (
@@ -76,6 +77,23 @@ export function SessionResourceCards({
               </Text>
             ) : null}
             <View style={styles.actions}>
+              {resource.links
+                .filter(
+                  (link) =>
+                    link.rel !== 'conversation' &&
+                    link.label &&
+                    link.target.kind === 'session',
+                )
+                .map((link) => (
+                  <MainWindowActionButton
+                    key={link.rel}
+                    action={{
+                      label: resolveRemoteText(link.label!, i18n.language),
+                      disabled: !state.fresh,
+                      onPress: () => state.openLink(resource, link),
+                    }}
+                  />
+                ))}
               {resource.actions?.map((action) => (
                 <MainWindowActionButton
                   key={action.id}
@@ -92,17 +110,6 @@ export function SessionResourceCards({
           </View>
         );
       })}
-      {state.failed ? (
-        <View style={styles.card}>
-          <Text style={styles.body}>{t('session.screen.operationFailed')}</Text>
-          <MainWindowActionButton
-            action={{
-              label: t('devices.resources.retry'),
-              onPress: state.refresh,
-            }}
-          />
-        </View>
-      ) : null}
     </ScrollView>
   );
 }
@@ -122,8 +129,9 @@ const makeStyles = (colors: ThemeColors) =>
       flex: 1,
       color: colors.textPrimary,
       fontSize: typeScale.body,
+      lineHeight: lineHeight.body,
       fontWeight: fontWeight.medium,
     },
-    body: { color: colors.textSecondary, fontSize: typeScale.footnote },
+    body: { color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
     actions: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
   });

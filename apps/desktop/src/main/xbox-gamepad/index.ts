@@ -105,20 +105,39 @@ const host = createXboxGamepadHost((message) => {
 });
 let previewFamily: GamepadFamily | null = null;
 let taskSlotsSuspended = false;
+let hostWanted = false;
+let disposed = false;
 const layoutPreviewLease = createLayoutPreviewLease((active) => {
   if (!active) previewFamily = null;
   controller.setLayoutPreviewActive(active, active ? previewFamily : null);
-  syncSwitch2Usb();
+  syncHost();
 });
 
-function syncSwitch2Usb(): void {
+function syncHost(): void {
+  if (disposed) return;
+  if (process.platform !== 'darwin' && process.platform !== 'win32') {
+    controller.markUnavailable();
+    return;
+  }
+  const accessories = controller.getAccessories();
+  const wanted =
+    previewFamily !== null ||
+    (!taskSlotsSuspended &&
+      GAMEPAD_FAMILIES.some((family) => accessories[family].settings.deviceEnabled));
   host.setSwitch2UsbWanted(
     computeSwitch2UsbWanted({
       taskSlotsSuspended,
-      nintendoDeviceEnabled: controller.getAccessories().nintendo.settings.deviceEnabled,
+      nintendoDeviceEnabled: accessories.nintendo.settings.deviceEnabled,
       previewFamily,
     }),
   );
+  if (wanted === hostWanted) return;
+  hostWanted = wanted;
+  if (wanted) host.start();
+  else {
+    host.stop();
+    controller.resetHostState();
+  }
 }
 
 let inputDeviceRegistered = false;
@@ -138,7 +157,7 @@ export function registerXboxGamepadInputDevice(): void {
       resumeTaskSlots: async () => {
         taskSlotsSuspended = false;
         controller.applySettings(family, readXboxGamepadSettings(family));
-        syncSwitch2Usb();
+        syncHost();
       },
       suspendTaskSlots: () => {
         taskSlotsSuspended = true;
@@ -146,9 +165,11 @@ export function registerXboxGamepadInputDevice(): void {
           ...readXboxGamepadSettings(family),
           deviceEnabled: false,
         });
-        syncSwitch2Usb();
+        syncHost();
       },
       dispose: async () => {
+        disposed = true;
+        hostWanted = false;
         host.stop();
       },
     });
@@ -162,8 +183,7 @@ export function registerXboxGamepadSettingsIpc(): void {
     controller.applySettings(family, readXboxGamepadSettings(family));
   }
   if (process.platform === 'darwin' || process.platform === 'win32') {
-    host.start();
-    syncSwitch2Usb();
+    syncHost();
   } else {
     controller.markUnavailable();
   }
@@ -176,7 +196,7 @@ export function registerXboxGamepadSettingsIpc(): void {
     resetSettings: resetXboxGamepadSettings,
     applySettings: (family, settings) => {
       controller.applySettings(family, settings);
-      syncSwitch2Usb();
+      syncHost();
     },
     probeDevice: () => host.probe(),
     setLayoutPreviewActive: (active, family, event) => {
@@ -186,7 +206,7 @@ export function registerXboxGamepadSettingsIpc(): void {
         previewFamily = family;
         layoutPreviewLease.setActive(true, owner);
         controller.setLayoutPreviewActive(true, family);
-        syncSwitch2Usb();
+        syncHost();
         return;
       }
       layoutPreviewLease.setActive(false, owner);

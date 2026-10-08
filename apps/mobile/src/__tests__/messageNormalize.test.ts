@@ -106,6 +106,23 @@ describe('normalizeRemoteMessages', () => {
     ]);
   });
 
+  it('hides the trailing /goal verdict block from assistant text like desktop', () => {
+    const verdict = '```json\n{"goal_status":"continue","reason":"下一步补齐合并检查。"}\n```';
+    const [assistant, user] = normalizeRemoteMessages([
+      message({ id: 'goal-a', role: 'assistant', content: `已核对现有 CI。\n\n${verdict}` }),
+      message({
+        id: 'goal-u',
+        role: 'user',
+        content: { text: `看这段\n${verdict}`, images: [] },
+        createdAt: '2026-01-01T00:00:01.000Z',
+      }),
+    ]);
+
+    expect(assistant).toMatchObject({ kind: 'assistant', body: '已核对现有 CI。' });
+    expect(buildMobileMessageCopyText(assistant!)).not.toContain('goal_status');
+    expect(user?.body).toContain('goal_status');
+  });
+
   it('extracts assistant turn cost from desktop agentMeta', () => {
     const items = normalizeRemoteMessages([
       message({
@@ -542,9 +559,9 @@ describe('normalizeRemoteMessages', () => {
       }),
     ]);
 
-    expect(item.secondaryBody).toBe('Full tool output was released (original size 128 KB)');
+    expect(item.secondaryBody).toBe('完整工具输出已释放（原始大小 128 KB）');
     expect(buildMobileMessageCopyText(item)).toContain(
-      'Full tool output was released (original size 128 KB)',
+      '完整工具输出已释放（原始大小 128 KB）',
     );
     expect(buildMobileMessageCopyText(item)).not.toContain('tool_result_compacted');
   });
@@ -1035,8 +1052,9 @@ describe('normalizeRemoteMessages', () => {
     expect(items[0]).toMatchObject({ kind: 'system', label: 'error' });
     expect(items[0].body).toContain('还没有配置可用的 API Key');
     expect(items[0].body).toContain('设置 → 模型供应商');
-    // 非鉴权错误维持原文
-    expect(items[1].body).toBe('something exploded');
+    // 未分类错误使用本地化摘要，技术原文留给详情。
+    expect(items[1].body).toBe(i18n.t('session.tail.replyFailed'));
+    expect(items[1].rawError).toBe('something exploded');
   });
 
   it('localizes a persisted output limit in message history', () => {
@@ -1109,10 +1127,16 @@ describe('normalizeRemoteMessages', () => {
         agentMeta: { origin: { kind: 'something-else', scheduleId: 'sch-3' } },
       }),
       message({
-        id: 'missing-id',
+        id: 'redacted-for-guest',
         role: 'user',
-        content: 'broken origin',
+        content: 'shared-task guest view',
         agentMeta: { origin: { kind: 'scheduler' } },
+      }),
+      message({
+        id: 'name-without-id',
+        role: 'user',
+        content: 'not host-redaction shaped',
+        agentMeta: { origin: { kind: 'scheduler', scheduleName: 'leaked name' } },
       }),
       message({
         id: 'assistant-ignored',
@@ -1126,13 +1150,139 @@ describe('normalizeRemoteMessages', () => {
       ['scheduled', { scheduleId: 'sch-1', scheduleName: 'PR 心跳' }],
       ['scheduled-unnamed', { scheduleId: 'sch-2' }],
       ['other-origin', undefined],
-      ['missing-id', undefined],
+      // 共享任务访客收到的脱敏来源:仍是自动化消息(「由自动化发送」+ 自动化收起阈值),不带 id / 名字。
+      ['redacted-for-guest', {}],
+      ['name-without-id', {}],
       ['assistant-ignored', undefined],
     ]);
   });
 
-  it.each(['telegram', 'slack', 'feishu', 'lark', 'discord', 'wechat', 'wecom', 'dingtalk'])(
-    'ignores additive local %s context metadata and retains ordinary user presentation',
+  it('keeps redacted scheduler messages on the automation path (labels, plugin header exclusion)', () => {
+    const [item] = normalizeRemoteMessages([
+      message({
+        id: 'redacted',
+        role: 'user',
+        content: 'heartbeat',
+        agentMeta: { origin: { kind: 'scheduler' } },
+      }),
+    ]);
+    expect(item.automationOrigin).toEqual({});
+    expect(item.pluginInvocations).toBeUndefined();
+    expect(isShareableMessage(item)).toBe(true);
+  });
+
+  it('never labels hook channel messages (hook:<conn> scheduler origins) as automation', () => {
+    const items = normalizeRemoteMessages([
+      message({
+        id: 'hook-legacy',
+        role: 'user',
+        content: 'from slack',
+        agentMeta: { origin: { kind: 'scheduler', scheduleId: 'hook:conn-1', scheduleName: 'Hook · Team Slack' } },
+      }),
+      message({
+        id: 'hook-redacted-for-guest',
+        role: 'user',
+        content: 'from slack',
+        agentMeta: { origin: { kind: 'scheduler', scheduleId: 'hook:' } },
+      }),
+    ]);
+    expect(items.map((item) => item.automationOrigin)).toEqual([undefined, undefined]);
+  });
+
+  it('reads host-stamped device, plugin and shared-task author sources', () => {
+    const items = normalizeRemoteMessages([
+      message({
+        id: 'from-phone',
+        role: 'user',
+        content: 'sent from my phone',
+        agentMeta: {
+          sourceDevice: { deviceId: 'phone-1', name: 'Dash 的\niPhone', platform: 'mobile' },
+          sourcePlugin: { pluginId: 'plugin-1', name: '日报' },
+          sharedTaskAuthor: { displayName: '访客甲', memberId: 'm1' },
+        },
+      }),
+      message({
+        id: 'unknown-platform',
+        role: 'user',
+        content: 'x',
+        agentMeta: { sourceDevice: { deviceId: 'tv-1', platform: 'tv' }, sourcePlugin: { name: 'no id' } },
+      }),
+      message({
+        id: 'assistant-ignored',
+        role: 'assistant',
+        content: 'reply',
+        agentMeta: { sourceDevice: { deviceId: 'phone-1', platform: 'mobile' } },
+      }),
+    ]);
+    expect(items.map((item) => [item.source.id, item.sourceDevice, item.sourcePlugin, item.sharedAuthorName]))
+      .toEqual([
+        ['from-phone', { deviceId: 'phone-1', name: 'Dash 的 iPhone', platform: 'mobile' }, { pluginId: 'plugin-1', name: '日报' }, '访客甲'],
+        ['unknown-platform', undefined, undefined, undefined],
+        ['assistant-ignored', undefined, undefined, undefined],
+      ]);
+  });
+
+  it('reads the sending session of tool-sent and Orca messages without mixing it into automation', () => {
+    const items = normalizeRemoteMessages([
+      message({
+        id: 'tool-sent',
+        role: 'user',
+        content: 'please review',
+        agentMeta: {
+          origin: {
+            kind: 'session',
+            senderSessionId: 'caller',
+            displayText: 'please review',
+            senderSessionTitle: 'Release checklist',
+          },
+        },
+      }),
+      message({
+        id: 'orca-report',
+        role: 'user',
+        content: JSON.stringify({ orcaSource: 'worker', content: 'Done' }),
+        agentMeta: { origin: { kind: 'orca', senderLabel: 'Reviewer', senderSessionId: 'worker-1' } },
+      }),
+      message({
+        id: 'teammate-sent',
+        role: 'user',
+        content: 'please sort feedback',
+        agentMeta: {
+          origin: {
+            kind: 'session',
+            senderSessionId: 'bot-task',
+            displayText: 'please sort feedback',
+            senderSessionTitle: 'Weekly feedback',
+            senderBotId: 'bot-1',
+            senderBotName: 'Cindy',
+          },
+        },
+      }),
+      message({
+        id: 'shared-guest',
+        role: 'user',
+        content: 'redacted by host',
+        agentMeta: { origin: { kind: 'session' } },
+      }),
+      message({
+        id: 'legacy-orca',
+        role: 'user',
+        content: 'legacy',
+        agentMeta: { origin: { kind: 'orca', senderLabel: 'Lead' } },
+      }),
+    ]);
+
+    expect(items.map((item) => [item.source.id, item.sessionOrigin, item.automationOrigin])).toEqual([
+      ['tool-sent', { senderSessionId: 'caller', senderSessionTitle: 'Release checklist' }, undefined],
+      ['orca-report', { senderSessionId: 'worker-1' }, undefined],
+      ['teammate-sent', { senderSessionId: 'bot-task', senderSessionTitle: 'Weekly feedback', senderBotName: 'Cindy' }, undefined],
+      ['shared-guest', {}, undefined],
+      ['legacy-orca', undefined, undefined],
+    ]);
+  });
+
+  it.each(['telegram', 'slack', 'x', 'feishu', 'lark', 'discord', 'wechat', 'wecom', 'dingtalk'])(
+    'renders local %s IM source as a Cindy card while keeping ordinary user actions and content',
     (im) => {
       const text = 'a'.repeat(20_100);
       const url = 'https://example.invalid/image.png';
@@ -1147,12 +1297,38 @@ describe('normalizeRemoteMessages', () => {
           },
         },
       })]);
-      expect(item).toMatchObject({ body: text, kind: 'user', align: 'user' });
-      expect(item.hookSource).toBeUndefined();
+      // 正文保持完整落库内容(不按 hook 的 20k 上限截断),分叉 / 回退据此恢复草稿;
+      // kind 仍是 user,渲染层保留复制 / 分叉 / 回退 / 删除 / 分享等普通用户操作。
+      expect(item).toMatchObject({ body: text, kind: 'user', label: 'user', align: 'agent' });
+      expect(item.hookSource).toMatchObject({ im, userTextContent: true });
       expect(item.attachments).toEqual(expect.arrayContaining([expect.objectContaining({ uri: url })]));
       expect(isShareableMessage(item)).toBe(true);
     },
   );
+
+  it('prefers imSource over hookSource and fails closed on unknown IM providers', () => {
+    const [both, unknown] = normalizeRemoteMessages([
+      message({
+        id: 'both',
+        role: 'user',
+        content: 'clean text',
+        agentMeta: {
+          imSource: { im: 'feishu', userText: 'clean text', contentFormat: 'user-text' },
+          hookSource: { im: 'slack', userText: 'legacy' },
+        },
+      }),
+      message({
+        id: 'unknown-im',
+        role: 'user',
+        content: 'plain',
+        agentMeta: { imSource: { im: 'myspace', userText: 'spoofed', contentFormat: 'user-text' } },
+      }),
+    ]);
+    expect(both.hookSource).toMatchObject({ im: 'feishu', userTextContent: true });
+    expect(both.body).toBe('clean text');
+    expect(unknown.hookSource).toBeUndefined();
+    expect(unknown).toMatchObject({ body: 'plain', align: 'user' });
+  });
 
   it('normalizes Telegram hook source into a left-aligned Cindy card payload', () => {
     const [item, unknown] = normalizeRemoteMessages([
@@ -1187,6 +1363,7 @@ describe('normalizeRemoteMessages', () => {
         im: 'telegram',
         channelName: 'Release topic',
         userText: 'Please ship the release',
+        userTextContent: false,
         threadContext: [
           { author: 'Chris', text: 'Use the staging checklist' },
           { author: 'Cindy', text: 'Ready', isBot: true },

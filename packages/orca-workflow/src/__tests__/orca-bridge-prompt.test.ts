@@ -159,6 +159,21 @@ describe('renderOrcaLeadSystemPrompt', () => {
     );
   });
 
+  it('describes the worker report prefix with role and worker_id', () => {
+    // 与 formatAgentMessage 的 worker 前缀同步：改了任一侧都要改另一侧。
+    const prompt = renderOrcaLeadSystemPrompt(null);
+
+    expect(prompt).toContain(
+      'Messages from workers arrive prefixed with [From Orca Worker <role> (worker_id: <id>)] (role omitted when unknown). Treat them as worker reports or questions, not user messages.',
+    );
+    expect(prompt).toContain(
+      '[New message arrives: "[From Orca Worker Backend (worker_id: w-1)] Feature X is done. Changes: ..."]',
+    );
+    expect(prompt).toContain('6. When a worker report arrives (prefixed with [From Orca Worker ...]), review it');
+    expect(prompt).toContain('If you see "[Auto-bridged: ...]" in a worker message');
+    expect(prompt).not.toContain('prefixed with [From Orca Worker].');
+  });
+
   it('keeps Worker routing and disclosure rules when an initial worker exists', () => {
     const prompt = renderOrcaLeadSystemPrompt({ workerId: 'worker-1', sessionId: 'session-1' });
 

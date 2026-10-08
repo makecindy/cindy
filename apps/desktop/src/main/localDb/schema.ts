@@ -20,6 +20,21 @@ import {
 
 import type { SessionSource } from '../../shared/sessionSource.js';
 
+/** Per-profile authority journal. Snapshots are recovery/audit data, not offline grants. */
+export const sharedTaskEvents = sqliteTable('shared_task_events', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  sharedTaskId: text('shared_task_id').notNull(),
+  sessionId: text('session_id').notNull().references((): AnySQLiteColumn => sessions.id, { onDelete: 'cascade' }),
+  revision: integer('revision').notNull(),
+  kind: text('kind', { enum: ['authority', 'local-close'] }).notNull(),
+  terminal: integer('terminal', { mode: 'boolean' }).notNull(),
+  snapshot: text('snapshot'),
+  recordedAt: integer('recorded_at').notNull(),
+}, (table) => ({
+  uniqueRevision: uniqueIndex('shared_task_events_revision_idx').on(table.sharedTaskId, table.kind, table.revision),
+  bySession: index('shared_task_events_session_idx').on(table.sessionId, table.id),
+}));
+
 const SESSION_SOURCES = [
   'desktop',
   'feishu',
@@ -175,6 +190,12 @@ export const sessions = sqliteTable(
     imBotContextId: text('im_bot_context_id'),
     imUserId: text('im_user_id'),
     /**
+     * 个人 IM 渠道任务「跟随渠道默认」的记录(JSON,见 im/shared/channelDefaultRoute.ts)。
+     * 渠道建任务 / `/new` / 跟随切换成功时写入;当前路由与记录不一致 = 用户单独改过。
+     * NULL = 无记录(非 IM 任务或本列上线前建的任务)。
+     */
+    imDefaultRoute: text('im_default_route'),
+    /**
      * 本 session 创建时是否注入了 project-context 知识（来自 .cindy/project-knowledge/）。
      * 仅在创建瞬间由 main IPC 写入；后续不变。
      * Render 端用此字段决定 sidebar stripe / chat header chip 显示。
@@ -209,6 +230,11 @@ export const sessions = sqliteTable(
      * daemon);两端 in-process MCP 都经 SSH remote-forward 回本机 HTTP bridge。
      */
     remoteHostId: text('remote_host_id'),
+    /**
+     * Agent 在同账号另一台电脑上运行时，那台电脑的设备 id(任务、项目文件与命令仍在本机)。
+     * NULL = Agent 在本机(或 SSH 远端，见 remote_host_id)。与 remote_host_id 互斥。
+     */
+    agentDeviceId: text('agent_device_id'),
     /**
      * interrupted-turn-resume: 最近一次 turn 的启动时刻(unix ms)。与
      * lastTurnEndedAt 配对做「疑似中断」纯读判定(startedAt > endedAt),两个
@@ -323,7 +349,10 @@ export const botProfileVersions = sqliteTable(
   }),
 );
 
-/** Canonical, delegation-linked and archived/history Session projections for a Bot. */
+/**
+ * Canonical, delegation-linked, group-lane and archived/history Session projections for a Bot.
+ * A `group` link is the Bot's hidden lane in one Bot group (`route_key = group:<groupId>`).
+ */
 export const botSessionLinks = sqliteTable(
   'bot_session_links',
   {
@@ -336,7 +365,7 @@ export const botSessionLinks = sqliteTable(
       .references(() => sessions.id, { onDelete: 'cascade' }),
     /** ProfileVersion pinned when this Session became canonical/delegation-linked. */
     profileVersion: integer('profile_version').notNull().default(1),
-    role: text('role', { enum: ['canonical', 'history', 'delegation'] }).notNull(),
+    role: text('role', { enum: ['canonical', 'history', 'delegation', 'group'] }).notNull(),
     routeKey: text('route_key'),
     createdAt: integer('created_at').notNull(),
     archivedAt: integer('archived_at'),
@@ -471,7 +500,7 @@ export const botDirectMessageThreads = sqliteTable(
   'bot_direct_message_threads',
   {
     id: text('id').primaryKey(),
-    /** Local Bot ids or deviceId::botId addresses, lexically ordered. Lifecycle deletion guards shared history. */
+    /** Local Bot ids or deviceId::botId addresses, lexically ordered. Deletion keeps these rows. */
     botAId: text('bot_a_id').notNull(),
     botBId: text('bot_b_id').notNull(),
     status: text('status', { enum: ['active', 'closed'] })
@@ -529,6 +558,144 @@ export const botDirectMessages = sqliteTable(
       t.sequence,
     ),
     idxThreadCreated: index('idx_bot_direct_messages_thread_created').on(t.threadId, t.createdAt),
+  }),
+);
+
+/** A user-owned group chat of local Bots (docs/product-rules/bot-group-chat.md). */
+export const botGroups = sqliteTable(
+  'bot_groups',
+  {
+    id: text('id').primaryKey(),
+    name: text('name').notNull(),
+    /** Who answers a user message without @mentions: every member or nobody. */
+    replyMode: text('reply_mode', { enum: ['all', 'mentioned'] })
+      .notNull()
+      .default('all'),
+    /** `auto`: broadcast rounds think in parallel first; `sequential`: always one at a time. */
+    speakingMode: text('speaking_mode', { enum: ['auto', 'sequential'] })
+      .notNull()
+      .default('auto'),
+    /** Chosen 负责人; not a foreign key, an unavailable choice falls back to the first member. */
+    organizerBotId: text('organizer_bot_id'),
+    /** 项目文件夹 for 分工 steps; null uses the group's own folder under userData. */
+    projectDir: text('project_dir'),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (t) => ({
+    idxUpdated: index('idx_bot_groups_updated').on(t.updatedAt),
+  }),
+);
+
+/** Ordered membership. Deleting a Bot profile removes its memberships. */
+export const botGroupMembers = sqliteTable(
+  'bot_group_members',
+  {
+    groupId: text('group_id')
+      .notNull()
+      .references(() => botGroups.id, { onDelete: 'cascade' }),
+    botId: text('bot_id')
+      .notNull()
+      .references(() => botProfiles.id, { onDelete: 'cascade' }),
+    position: integer('position').notNull(),
+    /** Highest group message sequence already delivered to this Bot's group lane. */
+    lastSeenSequence: integer('last_seen_sequence').notNull().default(0),
+    joinedAt: integer('joined_at').notNull(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.groupId, t.botId] }),
+    idxBot: index('idx_bot_group_members_bot').on(t.botId),
+  }),
+);
+
+/** The group's authoritative multi-author timeline. Author names are snapshots. */
+export const botGroupMessages = sqliteTable(
+  'bot_group_messages',
+  {
+    id: text('id').primaryKey(),
+    groupId: text('group_id')
+      .notNull()
+      .references(() => botGroups.id, { onDelete: 'cascade' }),
+    sequence: integer('sequence').notNull(),
+    kind: text('kind', { enum: ['message', 'round-end', 'notice', 'plan', 'plan-end'] })
+      .notNull()
+      .default('message'),
+    authorKind: text('author_kind', { enum: ['user', 'bot', 'system'] }).notNull(),
+    /** Not a foreign key: messages outlive the authoring Bot. */
+    authorBotId: text('author_bot_id'),
+    authorName: text('author_name').notNull().default(''),
+    content: text('content').notNull().default(''),
+    mentionsJson: text('mentions_json').notNull().default('{"all":false,"botIds":[]}'),
+    noticeCode: text('notice_code'),
+    /** Renderer idempotency key for user messages. */
+    clientId: text('client_id'),
+    /** 分工 plan this message belongs to (安排卡, step hand-off, plan end). */
+    planId: text('plan_id'),
+    /** Step hand-off files relative to the plan's work directory. */
+    filesJson: text('files_json').notNull().default('[]'),
+    attachmentsJson: text('attachments_json').notNull().default('[]'),
+    createdAt: integer('created_at').notNull(),
+  },
+  (t) => ({
+    uniqGroupSequence: uniqueIndex('uniq_bot_group_messages_group_sequence').on(
+      t.groupId,
+      t.sequence,
+    ),
+    uniqGroupClient: uniqueIndex('uniq_bot_group_messages_group_client')
+      .on(t.groupId, t.clientId)
+      .where(sql`${t.clientId} IS NOT NULL`),
+  }),
+);
+
+/** A 分工 plan: the organizer's steps and where they run (docs/product-rules/bot-group-chat.md §7). */
+export const botGroupPlans = sqliteTable(
+  'bot_group_plans',
+  {
+    id: text('id').primaryKey(),
+    groupId: text('group_id')
+      .notNull()
+      .references(() => botGroups.id, { onDelete: 'cascade' }),
+    status: text('status', {
+      enum: ['proposed', 'running', 'waiting', 'done', 'stopped', 'dismissed', 'superseded'],
+    }).notNull(),
+    /** The user's request the plan answers; step inputs quote it. */
+    requestText: text('request_text').notNull(),
+    attachmentsJson: text('attachments_json').notNull().default('[]'),
+    organizerBotId: text('organizer_bot_id').notNull(),
+    organizerName: text('organizer_name').notNull(),
+    currentStep: integer('current_step'),
+    /** Resolved at 开始: the group folder, the project folder or the plan's worktree. */
+    workDir: text('work_dir'),
+    branch: text('branch'),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (t) => ({
+    idxGroupCreated: index('idx_bot_group_plans_group_created').on(t.groupId, t.createdAt),
+  }),
+);
+
+export const botGroupPlanSteps = sqliteTable(
+  'bot_group_plan_steps',
+  {
+    planId: text('plan_id')
+      .notNull()
+      .references(() => botGroupPlans.id, { onDelete: 'cascade' }),
+    position: integer('position').notNull(),
+    /** Not a foreign key: the plan keeps the name snapshot when a Bot is removed. */
+    botId: text('bot_id').notNull(),
+    botName: text('bot_name').notNull(),
+    task: text('task').notNull(),
+    status: text('status', { enum: ['pending', 'running', 'done', 'failed'] })
+      .notNull()
+      .default('pending'),
+    /** Latest hand-off message of this step (a redo replaces it). */
+    resultMessageId: text('result_message_id'),
+    startedAt: integer('started_at'),
+    finishedAt: integer('finished_at'),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.planId, t.position] }),
   }),
 );
 
@@ -861,6 +1028,19 @@ export const migrationMeta = sqliteTable('migration_meta', {
   key: text('key').primaryKey(),
   value: text('value'),
 });
+
+/** Host-only bounded authority projections; transcript mutations invalidate their revision. */
+export const autoReviewProjections = sqliteTable('auto_review_projections', {
+  sessionId: text('session_id').notNull().references(() => sessions.id, { onDelete: 'cascade' }),
+  leadId: text('lead_id').notNull().references(() => sessions.id, { onDelete: 'cascade' }),
+  revision: integer('revision').notNull().default(0),
+  projectedRevision: integer('projected_revision').notNull().default(-1),
+  version: integer('version').notNull().default(1),
+  payload: text('payload'),
+}, (t) => ({
+  pk: primaryKey({ columns: [t.sessionId, t.leadId] }),
+  byLead: index('auto_review_projections_lead_idx').on(t.leadId),
+}));
 
 /**
  * schema-drift-detection (#37)：每条已 apply 的 migration 的指纹记录。
@@ -1604,6 +1784,26 @@ export const dailyModelUsage = sqliteTable(
   }),
 );
 
+/**
+ * 每日按任务 token 用量 (daily_session_usage) — 支撑用量历史「最耗 token 的任务」按所选
+ * 时间范围统计。与 daily_model_usage 同一处写入 (每个 turn done 后, 三个 harness 共用),
+ * 只记 token 合计。历史数据不 backfill: 上线后从 0 开始积累。
+ */
+export const dailySessionUsage = sqliteTable(
+  'daily_session_usage',
+  {
+    /** 本地时区 YYYY-MM-DD 字符串 (localDayKey)。 */
+    day: text('day').notNull(),
+    sessionId: text('session_id').notNull(),
+    tokens: integer('tokens').notNull().default(0),
+    /** 最后一次更新的 unix ms。 */
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.day, t.sessionId] }),
+  }),
+);
+
 /** Skill 使用分析的原始 transcript 扫描缓存。 */
 export const skillUsageSources = sqliteTable(
   'skill_usage_sources',
@@ -2069,3 +2269,50 @@ export const hookGroupContextCursors = sqliteTable(
     byUpdatedAt: index('hook_group_context_cursors_updated_at_idx').on(t.updatedAt),
   }),
 );
+
+/** Finder-style task label directory; scoped by the profile database. */
+export const taskTags = sqliteTable(
+  'task_tags',
+  {
+    id: text('id').primaryKey(),
+    name: text('name').notNull(),
+    nameCustomized: integer('name_customized', { mode: 'boolean' }).notNull().default(false),
+    color: text('color').notNull(),
+    favoriteOrder: integer('favorite_order'),
+    sortOrder: integer('sort_order'),
+    revision: integer('revision').notNull().default(1),
+  },
+  (t) => ({ nameUnique: uniqueIndex('task_tags_name_idx').on(t.name) }),
+);
+
+export const sessionTaskTags = sqliteTable(
+  'session_task_tags',
+  {
+    sessionId: text('session_id')
+      .notNull()
+      .references(() => sessions.id, { onDelete: 'cascade' }),
+    tagId: text('tag_id')
+      .notNull()
+      .references(() => taskTags.id, { onDelete: 'cascade' }),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.sessionId, t.tagId] }),
+    byTag: index('session_task_tags_tag_idx').on(t.tagId),
+  }),
+);
+
+/** Plugin attribution/idempotency receipts. Survive Session deletion as tombstones. */
+export const pluginTaskRequests = sqliteTable('plugin_task_requests', {
+  id: text('id').primaryKey(),
+  pluginId: text('plugin_id').notNull(),
+  operation: text('operation', { enum: ['create', 'send'] }).notNull(),
+  targetId: text('target_id').notNull(),
+  requestKey: text('request_key').notNull(),
+  fingerprint: text('fingerprint').notNull(),
+  payload: text('payload').notNull(),
+  revision: integer('revision').notNull().default(0),
+  createdAt: integer('created_at').notNull(),
+}, table => [
+  uniqueIndex('plugin_task_request_key').on(table.pluginId, table.operation, table.targetId, table.requestKey),
+  index('plugin_task_target').on(table.targetId, table.pluginId),
+]);

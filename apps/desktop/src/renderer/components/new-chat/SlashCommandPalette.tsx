@@ -18,13 +18,25 @@ import { useTranslation } from 'react-i18next';
 import { ArrowUpRight } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Tip } from '@/components/ui/tooltip';
+import { MENU_CURRENT_ROW_ATTR, currentMarkedRow } from '@/components/ui/dropdown-menu-highlight';
+import {
+  COMPOSER_MENU_ROW,
+  MenuHighlightLayer,
+  menuPanelAttrs,
+  menuRowAttrs,
+  useMenuPanel,
+  withMenuLabels,
+} from '@/components/ui/menu-row';
 
 import { cn } from '@/lib/utils';
 import {
   filterSlashCommands,
+  isCindyOfficialSlashCommand,
   isSlashCommandUnavailable,
   type UnifiedCommand,
 } from '@/lib/slashCommands';
+import { builtInSkillDescriptionKey } from '@/features/skillhub/lib/builtInSkillPresentation';
+import { OfficialSkillBadge } from '@/features/skillhub/components/OfficialSkillBadge';
 
 const TOOLTIP_W = 280;
 const TOOLTIP_GAP = 8;
@@ -81,7 +93,16 @@ export function SlashCommandPalette({
   const { t } = useTranslation();
   const filtered = useMemo(() => filterSlashCommands(commands, query), [commands, query]);
   const rootRef = useRef<HTMLDivElement>(null);
-  const panelRef = useRef<HTMLDivElement>(null);
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  // Glide highlight on the focused index; arrow keys are pressed in the editor.
+  const highlightPanelRef = useMenuPanel(panelRef, {
+    lockWidth: false,
+    options: {
+      current: currentMarkedRow,
+      currentAttributes: [MENU_CURRENT_ROW_ATTR],
+      keyboardSource: document,
+    },
+  });
   const tooltipRef = useRef<HTMLDivElement>(null);
   // Track panel scroll so the tooltip follows the focused row's visual position.
   const [panelScroll, setPanelScroll] = useState(0);
@@ -126,8 +147,14 @@ export function SlashCommandPalette({
   }, [focusedIndex]);
 
   const focusedCmd = filtered[focusedIndex];
+  const focusedDescriptionKey = focusedCmd?.kind === 'agent-skill'
+    ? builtInSkillDescriptionKey(focusedCmd)
+    : undefined;
+  const focusedDescription = focusedDescriptionKey
+    ? t(focusedDescriptionKey)
+    : focusedCmd?.description;
   const tooltipKey = focusedCmd
-    ? `${focusedCmd.kind}:${focusedCmd.name}:${focusedCmd.description ?? ''}`
+    ? `${focusedCmd.kind}:${focusedCmd.name}:${focusedDescription ?? ''}`
     : null;
   const tooltipHeight = tooltipMeasure.key === tooltipKey
     ? tooltipMeasure.height
@@ -213,10 +240,11 @@ export function SlashCommandPalette({
     >
       {/* Panel */}
       <div
-        ref={panelRef}
+        ref={highlightPanelRef}
         onScroll={(e) => setPanelScroll(e.currentTarget.scrollTop)}
+        {...menuPanelAttrs}
         className={cn(
-          'w-[320px] overflow-y-auto',
+          'relative w-[320px] overflow-y-auto',
           'rounded-[12px] border p-[6px]',
           'bg-[var(--cmd-palette-bg)]',
           'border-[var(--cmd-palette-border)]',
@@ -224,8 +252,10 @@ export function SlashCommandPalette({
           // §14.4 轻浮层原型);输入过滤只重渲不重挂,动画不会重放。
           'origin-bottom-left animate-float-in',
         )}
-        style={{ boxShadow: 'var(--cmd-palette-shadow)', maxHeight }}
+        // Registered floating-layer shadow, as on the shared menus (DESIGN §4 / §6).
+        style={{ boxShadow: 'var(--shadow-menu)', maxHeight }}
       >
+        <MenuHighlightLayer />
         {filtered.length === 0 ? (
           <div
             className={cn(
@@ -240,6 +270,7 @@ export function SlashCommandPalette({
           filtered.map((cmd, idx) => {
             const focused = idx === focusedIndex;
             const unavailable = isSlashCommandUnavailable(cmd);
+            const official = isCindyOfficialSlashCommand(cmd);
             return (
               <button
                 key={cmd.name}
@@ -256,18 +287,20 @@ export function SlashCommandPalette({
                   onSelect(cmd);
                 }}
                 onMouseEnter={() => onFocusedIndexChange(idx)}
+                // Shared menu row: the panel's glide highlight follows the focused index
+                // (focus stays in the editor), no own fill.
+                {...menuRowAttrs({ current: focused, disabled: unavailable })}
                 className={cn(
+                  COMPOSER_MENU_ROW,
                   'flex w-full items-center justify-between',
-                  'h-[36px] px-[10px] rounded-[6px]',
-                  'text-left text-14 font-medium',
-                  'text-[var(--cmd-palette-item-text)]',
-                  'outline-none transition-colors',
-                  focused && 'bg-[var(--cmd-palette-item-hover)]',
+                  'h-[36px] px-[10px] text-left',
                   unavailable && 'cursor-not-allowed opacity-50',
                 )}
               >
-                <span className="truncate">{cmd.name}</span>
-                {metaLabel(cmd) && (
+                {withMenuLabels(<span className="truncate">{cmd.name}</span>)}
+                {official ? (
+                  <OfficialSkillBadge />
+                ) : metaLabel(cmd) && (
                   <span className="shrink-0 text-12 font-normal text-[var(--cmd-palette-item-meta)]">
                     {metaLabel(cmd)}
                   </span>
@@ -305,8 +338,8 @@ export function SlashCommandPalette({
               && focusedCmd.source === 'skill' && focusedCmd.path && focusedCmd.origin !== 'package'
               && (allowProjectSkillDetails || focusedCmd.scope === 'global' || focusedCmd.scope === 'user') && (
               <Tip text={t('commandPalette.viewSkillDetails')}>
-                <Button variant="secondary"
-                  className="w-8 border-transparent bg-transparent p-0 text-[var(--cmd-palette-item-meta)]"
+                <Button variant="secondary" pressFeedback={false}
+                  className="w-8 [--button-face-border:transparent] [--button-face-bg:transparent] p-0 text-[var(--cmd-palette-item-meta)]"
                   aria-label={t('commandPalette.viewSkillDetails')}
                   onMouseDown={(event) => event.preventDefault()}
                   onClick={(event) => {
@@ -322,7 +355,7 @@ export function SlashCommandPalette({
           <div className="mt-[8px] text-13 leading-[1.5] text-[var(--cmd-palette-tooltip-body)]">
             {isSlashCommandUnavailable(focusedCmd)
               ? t('commandPalette.projectSkillNotLoaded')
-              : focusedCmd.description}
+              : focusedDescription}
           </div>
         </div>,
         document.body,

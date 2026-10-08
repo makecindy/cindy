@@ -27,18 +27,25 @@ export interface GitSnapshotSessionContext {
   agentKind: AgentKind;
   workspaceKind?: string | null;
   remoteHostId?: string | null;
+  /**
+   * 文件回退走保存点链(与 Codex / Pi 一样，需要记录缺口标记)。Agent 在另一台电脑运行的
+   * Claude Code 任务没有原生文件检查点，也走保存点链；本机 Claude Code 任务不走。
+   */
+  savepointRewind?: boolean;
 }
 
 export interface GitSnapshotCoordinatorDeps {
   /** Global auto-snapshot switch; turn-start decisions are reused at matching turn end. */
   readAutoSnapshotEnabled: () => boolean;
+  /** Whether an empty local project may be initialized as Git during resolution. */
+  readAutoInitProjectGit?: () => boolean;
   /** Resolves a working directory to a Git repo root, or null for non-Git dirs. */
   detectRepoRoot: (workingDir: string) => Promise<string | null>;
   /** Best-effort bootstrap for local empty project dirs that are not Git repos yet. */
   initializeProjectGit?: (
     sessionId: string,
     context: GitSnapshotSessionContext,
-    opts: { autoSnapshotEnabled: boolean },
+    opts: { autoSnapshotEnabled: boolean; autoInitProjectGit?: boolean },
   ) => Promise<{ repoRoot?: string | null } | null>;
   /** Session lookup used for workingDir detection and label-agent routing. */
   getSessionContext: (sessionId: string) => Promise<GitSnapshotSessionContext | null>;
@@ -64,6 +71,8 @@ export interface GitSnapshotCoordinatorDeps {
 interface ResolvedSnapshotSession {
   repoRoot: string;
   agentKind: AgentKind;
+  /** 文件回退走保存点链(Codex / Pi，以及另一台电脑上运行的 Claude Code)。 */
+  savepointRewind: boolean;
 }
 
 interface TurnStartState {
@@ -77,6 +86,7 @@ interface TurnStartState {
 
 interface TurnStartRecord extends Partial<TurnStartState> {
   autoSnapshotEnabled: boolean;
+  autoInitProjectGit: boolean;
   promise: Promise<void>;
   /** Owning session, for same-repo concurrency checks across sessions. */
   ownerSessionId?: string;
@@ -109,8 +119,10 @@ export class GitSnapshotCoordinator {
    * shadow savepoint chain as the baseline for this turn's file rewind.
    */
   async onTurnStart(sessionId: string): Promise<void> {
+    const autoSnapshotEnabled = this.deps.readAutoSnapshotEnabled();
     const record: TurnStartRecord = {
-      autoSnapshotEnabled: this.deps.readAutoSnapshotEnabled(),
+      autoSnapshotEnabled,
+      autoInitProjectGit: this.deps.readAutoInitProjectGit?.() ?? autoSnapshotEnabled,
       promise: Promise.resolve(),
       ownerSessionId: sessionId,
     };
@@ -129,7 +141,11 @@ export class GitSnapshotCoordinator {
         return;
       }
 
-      const resolved = await this.resolveSession(sessionId, record.autoSnapshotEnabled);
+      const resolved = await this.resolveSession(
+        sessionId,
+        record.autoSnapshotEnabled,
+        record.autoInitProjectGit,
+      );
       if (!resolved) {
         return;
       }
@@ -165,12 +181,19 @@ export class GitSnapshotCoordinator {
     const turnStart = this.shiftTurnStartRecord(sessionId);
     try {
       const autoSnapshotEnabled = turnStart?.autoSnapshotEnabled ?? this.deps.readAutoSnapshotEnabled();
+      const autoInitProjectGit = turnStart
+        ? turnStart.autoInitProjectGit
+        : this.deps.readAutoInitProjectGit?.() ?? autoSnapshotEnabled;
       if (!autoSnapshotEnabled) return;
       if (turnStart && !turnStart.repoRoot) {
         await turnStart.promise;
       }
 
-      const resolved = await this.resolveSession(sessionId, autoSnapshotEnabled);
+      const resolved = await this.resolveSession(
+        sessionId,
+        autoSnapshotEnabled,
+        autoInitProjectGit,
+      );
       if (!resolved) return;
 
       await enqueueGitRepoWrite(resolved.repoRoot, async () => {
@@ -209,6 +232,7 @@ export class GitSnapshotCoordinator {
   private async resolveSession(
     sessionId: string,
     autoSnapshotEnabled: boolean = this.deps.readAutoSnapshotEnabled(),
+    autoInitProjectGit: boolean = this.deps.readAutoInitProjectGit?.() ?? autoSnapshotEnabled,
   ): Promise<ResolvedSnapshotSession | null> {
     const cached = this.sessionCache.get(sessionId);
     if (cached) return cached;
@@ -217,8 +241,11 @@ export class GitSnapshotCoordinator {
     if (!ctx?.workingDir) return null;
 
     let repoRoot = await this.deps.detectRepoRoot(ctx.workingDir);
-    if (!repoRoot && this.deps.initializeProjectGit) {
-      const bootstrap = await this.deps.initializeProjectGit?.(sessionId, ctx, { autoSnapshotEnabled });
+    if (!repoRoot && autoInitProjectGit && this.deps.initializeProjectGit) {
+      const bootstrap = await this.deps.initializeProjectGit?.(sessionId, ctx, {
+        autoSnapshotEnabled,
+        autoInitProjectGit,
+      });
       repoRoot = bootstrap?.repoRoot ?? null;
       if (!repoRoot) {
         repoRoot = await this.deps.detectRepoRoot(ctx.workingDir);
@@ -226,14 +253,18 @@ export class GitSnapshotCoordinator {
     }
     if (!repoRoot) return null;
 
-    const resolved = { repoRoot, agentKind: ctx.agentKind };
+    const resolved = {
+      repoRoot,
+      agentKind: ctx.agentKind,
+      savepointRewind: ctx.agentKind === 'codex' || ctx.agentKind === 'pi' || ctx.savepointRewind === true,
+    };
     this.sessionCache.set(sessionId, resolved);
     return resolved;
   }
 
   private async snapshotAfterEdit(
     sessionId: string,
-    { repoRoot, agentKind }: ResolvedSnapshotSession,
+    { repoRoot, agentKind, savepointRewind }: ResolvedSnapshotSession,
     turnStart: TurnStartRecord | undefined,
   ): Promise<void> {
     const baseline =
@@ -246,7 +277,7 @@ export class GitSnapshotCoordinator {
       // Without a baseline this turn's delta is unrecoverable; append a gap
       // marker so the file-rewind planner truncates ranges that cross it.
       // Only codex/pi consume the savepoint chain for file rewind.
-      if (agentKind === 'codex' || agentKind === 'pi') {
+      if (savepointRewind) {
         await this.createRewindBlockedMarker(
           sessionId,
           repoRoot,
@@ -268,7 +299,7 @@ export class GitSnapshotCoordinator {
         sessionId,
         repoRoot,
       });
-      if (agentKind === 'codex' || agentKind === 'pi') {
+      if (savepointRewind) {
         await this.createRewindBlockedMarker(
           sessionId,
           repoRoot,
@@ -308,7 +339,7 @@ export class GitSnapshotCoordinator {
       // This turn's delta is unrecorded; without a gap marker a later rewind
       // across this turn would restore to a newer baseline and silently keep
       // the failed turn's file changes while dropping its conversation.
-      if (agentKind === 'codex' || agentKind === 'pi') {
+      if (savepointRewind) {
         await this.createRewindBlockedMarker(
           sessionId,
           repoRoot,
@@ -340,7 +371,7 @@ export class GitSnapshotCoordinator {
     // - 两端都被过滤但 lstat 指纹(大小/mtime,不含内容)变化:文件本轮被
     //   改写(如超限文件被 Agent 重写后仍超限),同样没有任何快照可恢复。
     // 指纹完全一致的常驻过滤文件不打 gap,否则文件回退会被永久禁用。
-    if (agentKind === 'codex' || agentKind === 'pi') {
+    if (savepointRewind) {
       const baseline = new Map(
         (turnStart?.turnStartSkippedFingerprints ?? []).map((fp) => [fp.path, fp]),
       );

@@ -24,13 +24,14 @@ import type { TabCloseInterceptor } from './store';
 export type BuiltinTabKindId =
   | 'file-browser'
   | 'web-browser'
-  | 'ios-simulator'
+  | 'retired-feature'
   | 'terminal'
   | 'review'
   | 'orca-workers'
   | 'subagents'
   | 'background-tasks'
   | 'routines'
+  | 'bot-workbench'
   | 'resource-usage'
   | 'cindy-make';
 export type TabKindId = BuiltinTabKindId | `ghost:${string}`;

@@ -87,14 +87,9 @@ import type {
   UseSidebarFilterReturn,
 } from '../hooks/useSidebarFilter';
 import { DIALOGUE_FILTER_KEY, projectFilterIncludes } from '../hooks/helpers/sidebarFilterCore';
+import { DEFAULT_TASK_INFO_FIELDS } from '../hooks/helpers/sidebarFilterCore';
 import { useTaskInfoFields, type TaskInfoField } from '../hooks/useTaskInfoFields';
-import {
-  MENU_CONTENT_CLASS,
-  MENU_ITEM_CLASS,
-  MENU_ROW_CLASS,
-  MENU_SEPARATOR_CLASS,
-  MENU_SUB_CONTENT_CLASS,
-} from './menuStyles';
+import { MENU_ITEM_CLASS, MENU_ROW_CLASS } from './menuStyles';
 
 type Option<T extends string> = {
   value: T;
@@ -269,7 +264,7 @@ function MenuSubRow({
         </span>
         <ChevronRight size={14} className="shrink-0 text-[var(--cmd-palette-item-meta)]" />
       </DropdownMenuSubTrigger>
-      <DropdownMenuSubContent sideOffset={8} className={cn(MENU_SUB_CONTENT_CLASS, 'w-[220px]')}>
+      <DropdownMenuSubContent sideOffset={8} className="w-[220px]">
         {children}
       </DropdownMenuSubContent>
     </DropdownMenuSub>
@@ -530,7 +525,8 @@ export function SidebarFilterPopover({
           )
           .join(t('ccAgent.sidebar.taskInfoSummarySeparator'))
       : t('ccAgent.sidebar.taskInfoSummaryNone');
-  const taskInfoIsDefault = taskInfoFields.length === 1 && taskInfoFields[0] === 'time';
+  const taskInfoIsDefault = taskInfoFields.length === DEFAULT_TASK_INFO_FIELDS.length &&
+    DEFAULT_TASK_INFO_FIELDS.every((field, index) => taskInfoFields[index] === field);
 
   const ariaLabel = t('ccAgent.sidebar.filterAria', {
     status: statusValue,
@@ -595,7 +591,7 @@ export function SidebarFilterPopover({
         sideOffset={isContextMode ? 2 : 8}
         // 与窗口边缘留白:菜单向上翻转时不顶死在标题栏上(仓库既有 8~16 的先例)。
         collisionPadding={8}
-        className={cn(MENU_CONTENT_CLASS, 'w-[248px]')}
+        className="w-[248px]"
       >
         {/* 菜单自身的标题行已去掉(2026-08-12 用户裁决,节约高度;与远程机器菜单
             2026-07 的「无标题行」同规)——触发按钮的 tooltip 已经说明这是什么。
@@ -670,7 +666,7 @@ export function SidebarFilterPopover({
                   ))}
                 </MenuSubRow>
               )}
-              <DropdownMenuSeparator className={MENU_SEPARATOR_CLASS} />
+              <DropdownMenuSeparator />
               <MenuSubRow
                 label={t('ccAgent.sidebar.taskStatusHeading')}
                 value={statusValue}
@@ -713,7 +709,7 @@ export function SidebarFilterPopover({
                       />
                     )}
                   </DropdownMenuItem>
-                  <DropdownMenuSeparator className={MENU_SEPARATOR_CLASS} />
+                  <DropdownMenuSeparator />
                   <div className="max-h-[256px] overflow-y-auto">
                     <DropdownMenuItem
                       onSelect={(event) => {
@@ -815,7 +811,7 @@ export function SidebarFilterPopover({
                   ))}
                 </MenuSubRow>
 
-                <DropdownMenuSeparator className={MENU_SEPARATOR_CLASS} />
+                <DropdownMenuSeparator />
                 <DropdownMenuItem
                   onSelect={(event) => {
                     event.preventDefault();
@@ -831,7 +827,7 @@ export function SidebarFilterPopover({
                 </DropdownMenuItem>
               </MenuSubRow>
 
-              <DropdownMenuSeparator className={MENU_SEPARATOR_CLASS} />
+              <DropdownMenuSeparator />
 
               <MenuSubRow
                 label={t('ccAgent.sidebar.displayHeading')}

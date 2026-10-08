@@ -1,27 +1,42 @@
 /**
- * Regression coverage for Plugin detail section content and interaction behavior.
+ * Regression coverage for Plugin detail sections, shared Switch wiring and interaction behavior.
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  * @vitest-environment jsdom
  */
 
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { InstalledGhost } from '../../../../shared/ghost';
 
 const toastMocks = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
 
-vi.mock('@/hooks/useModelPricing', () => ({ useGatewayModelPricing: () => null, useReferenceModelPricing: () => null }));
-vi.mock('@/hooks/useProviders', () => ({ useProviders: () => ({ providers: [], providerOrder: [], loading: false }) }));
-vi.mock('@/hooks/useDeviceProviders', () => ({ useDeviceProviders: () => ({ providers: [], loading: false, unsupported: false }) }));
+vi.mock('@/hooks/useModelPricing', () => ({
+  useGatewayModelPricing: () => null,
+  useReferenceModelPricing: () => null,
+}));
+vi.mock('@/hooks/useProviders', () => ({
+  useProviders: () => ({ providers: [], providerOrder: [], loading: false }),
+}));
+vi.mock('@/hooks/useDeviceProviders', () => ({
+  useDeviceProviders: () => ({ providers: [], loading: false, unsupported: false }),
+}));
 vi.mock('@/hooks/useAgentCapabilities', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/hooks/useAgentCapabilities')>()),
   useAgentCapabilities: () => ({ capabilities: null, loading: false }),
 }));
 vi.mock('@/hooks/useApiKey', () => ({ useApiKey: () => ({ hasSavedKey: true }) }));
-vi.mock('@/hooks/useConnectedSource', () => ({ useConnectedSource: () => ({ hasConnectedSource: true, loading: false }) }));
+vi.mock('@/hooks/useConnectedSource', () => ({
+  useConnectedSource: () => ({ hasConnectedSource: true, loading: false }),
+}));
 
 vi.mock('@/lib/toast', () => ({ toast: toastMocks }));
 vi.mock('@/cindy-brain/GhostSettingsWebview', () => ({
-  GhostSettingsWebview: () => <div data-testid="ghost-settings-webview" />,
+  GhostSettingsWebview: ({ account, reloadKey }: any) => (
+    <>
+      {account}
+      <div key={reloadKey} data-testid="ghost-settings-webview" />
+    </>
+  ),
 }));
 
 vi.mock('react-i18next', () => ({
@@ -66,10 +81,6 @@ vi.mock('react-i18next', () => ({
         'settings.defaults.restore': 'Restore default',
         'settings.ghosts.detail.oauthScopeStale':
           'This authorization does not include newly added permissions. Reconnect to enable them.',
-        'settings.ghosts.detail.iosSimulatorAutoOpenTitle':
-          'Open the embedded Simulator panel automatically',
-        'settings.ghosts.detail.iosSimulatorAutoOpenDescription':
-          'Automatically reveal the right-side Simulator panel.',
       };
       return labels[key] ?? key;
     },
@@ -135,14 +146,13 @@ const detail: GhostPluginDetail = {
   tabPanel: false,
   hasMainView: false,
   mainViewTitle: null,
-  hostCapability: null,
   author: 'XD',
   contents: ['code'],
   permissions: [],
   tools: [],
   hasSettingsUi: false,
   cindyCapabilities: [],
-  hasErrand: false,
+  hasTaskPreferences: false,
   panelMinWidth: 320,
   installDir: '/tmp/cindy-brain/builtin.example',
   trust: {
@@ -158,14 +168,7 @@ beforeEach(() => {
   Object.defineProperty(window, 'electronAPI', {
     configurable: true,
     value: {
-      maker: {
-        iosSimulator: {
-          getPreferences: vi.fn(async () => ({ autoOpenEmbeddedPanel: true })),
-          setAutoOpenEmbeddedPanel: vi.fn(async (enabled: boolean) => ({
-            autoOpenEmbeddedPanel: enabled,
-          })),
-        },
-      },
+
     },
   });
 });
@@ -179,6 +182,146 @@ afterEach(() => {
 });
 
 describe('Ghost plugin detail sections', () => {
+  it('does not advertise host login for a locally imported unverified GitHub plugin', () => {
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+    const verify = vi.fn();
+    Object.assign(window.electronAPI, { gitContext: { githubConnection: verify } });
+    render(
+      <GhostPluginDetailView
+        ghost={
+          { manifest: { id: 'cindy-github' }, enabled: true, trust: { level: 'unverified' } } as any
+        }
+        detail={{ ...detail, id: 'cindy-github', hasSettingsUi: true }}
+        panelStatus={null}
+        onBack={vi.fn()}
+        onToggle={vi.fn()}
+        onUse={vi.fn()}
+        onUpdate={vi.fn()}
+        onUpdateFromFile={vi.fn()}
+        onUninstall={vi.fn()}
+        toggleDisabled={false}
+      />,
+    );
+    expect(verify).not.toHaveBeenCalled();
+  });
+  it.each([{ status: 'missing' }, { status: 'auth', source: 'token' }])(
+    'connects GitHub from $status and reloads the installed plugin settings after authorization',
+    async (connection) => {
+      vi.stubGlobal(
+        'ResizeObserver',
+        class {
+          observe() {}
+          unobserve() {}
+          disconnect() {}
+        },
+      );
+      Object.assign(window.electronAPI, {
+        gitContext: {
+          githubConnection: async () => connection,
+          onGithubConnected: () => () => {},
+          githubSetupStatus: async () => ({ phase: 'connected' }),
+          startGithubSetup: async () => ({ phase: 'connected' }),
+        },
+      });
+      const { unmount } = render(
+        <GhostPluginDetailView
+          ghost={
+            {
+              manifest: { id: 'cindy-github' },
+              enabled: true,
+              trust: { ...detail.trust, publisherName: 'Cindy Plugin Market' },
+            } as any
+          }
+          detail={{ ...detail, id: 'cindy-github', hasSettingsUi: true }}
+          panelStatus={null}
+          onBack={vi.fn()}
+          onToggle={vi.fn()}
+          onUse={vi.fn()}
+          onUpdate={vi.fn()}
+          onUpdateFromFile={vi.fn()}
+          onUninstall={vi.fn()}
+          toggleDisabled={false}
+        />,
+      );
+      const previousSettings = screen.getByTestId('ghost-settings-webview');
+      fireEvent.click(await screen.findByText('ccAgent.gitContext.pr.setup.stages.login.title'));
+      fireEvent.click(await screen.findByText('ccAgent.gitContext.pr.setup.connect'));
+      await waitFor(() =>
+        expect(screen.getByTestId('ghost-settings-webview')).not.toBe(previousSettings),
+      );
+      expect(screen.getByText('ccAgent.gitContext.pr.setup.done')).toBeTruthy();
+      unmount();
+    },
+  );
+  it('lets the user retry task permission, disables duplicate clicks, and hides after approval', async () => {
+    vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
+    let finish!: (value: { granted: boolean }) => void;
+    const requestTaskApproval = vi.fn(() => new Promise<{ granted: boolean }>(resolve => { finish = resolve; }));
+    Object.assign(window.electronAPI, { ghosts: { requestTaskApproval } });
+    const ghost = { manifest: { agent: { tasks: true } }, enabled: true } as InstalledGhost;
+    const view = (approved = false) => <GhostPluginDetailView ghost={{ ...ghost, ...(approved ? { taskCapabilityApproved: true as const } : {}) }} detail={detail} panelStatus="Docked" onBack={vi.fn()} onToggle={vi.fn()} onUse={vi.fn()} onUpdate={vi.fn()} onUpdateFromFile={vi.fn()} onUninstall={vi.fn()} toggleDisabled={false} />;
+    const { rerender } = render(view());
+    const button = screen.getByRole('button', { name: 'settings.ghosts.perm.agentTasksRequest' }) as HTMLButtonElement;
+    fireEvent.click(button); fireEvent.click(button);
+    expect(requestTaskApproval).toHaveBeenCalledOnce();
+    expect(requestTaskApproval).toHaveBeenCalledWith(detail.id);
+    expect(button.disabled).toBe(true);
+    finish({ granted: false });
+    await waitFor(() => expect(button.disabled).toBe(false));
+    rerender(view(true));
+    expect(screen.queryByRole('button', { name: 'settings.ghosts.perm.agentTasksRequest' })).toBeNull();
+  });
+  it('uses the shared Cindy Switch for the plugin enabled control', () => {
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+    const onToggle = vi.fn();
+    const view = (disabled = false) => (
+      <GhostPluginDetailView
+        ghost={null}
+        detail={detail}
+        panelStatus="Docked"
+        onBack={vi.fn()}
+        onToggle={onToggle}
+        onUse={vi.fn()}
+        onUpdate={vi.fn()}
+        onUpdateFromFile={vi.fn()}
+        onUninstall={vi.fn()}
+        toggleDisabled={disabled}
+      />
+    );
+    const { rerender } = render(view());
+
+    const toggle = screen.getByRole('switch', {
+      name: 'settings.ghosts.enableAria',
+    });
+    expect(toggle.className).toContain('cindy-switch');
+    expect(toggle.className).toContain('data-[state=checked]:bg-[var(--switch-track-on)]');
+    expect(toggle.firstElementChild?.className).toContain(
+      'data-[state=checked]:bg-[var(--switch-thumb-on)]',
+    );
+    fireEvent.click(toggle);
+    expect(onToggle.mock.calls).toEqual([[false]]);
+    fireEvent.click(screen.getByText('settings.ghosts.detail.enabledLabel'));
+    expect(onToggle.mock.calls).toEqual([[false], [false]]);
+    rerender(view(true));
+    fireEvent.click(toggle);
+    fireEvent.click(screen.getByText('settings.ghosts.detail.enabledLabel'));
+    expect(onToggle).toHaveBeenCalledTimes(2);
+  });
+
   it('shows the main-view preference alongside the plugin settings UI', () => {
     vi.stubGlobal(
       'ResizeObserver',
@@ -360,92 +503,6 @@ describe('Ghost plugin detail sections', () => {
     expect(detailActions?.className).toContain('flex-nowrap');
   });
 
-  it('renders an enabled Host capability as a conversation action', async () => {
-    vi.stubGlobal(
-      'ResizeObserver',
-      class {
-        observe() {}
-        unobserve() {}
-        disconnect() {}
-      },
-    );
-    const onUse = vi.fn();
-    render(
-      <GhostPluginDetailView
-        ghost={null}
-        detail={{ ...detail, canUse: false, hostCapability: 'ios-simulator' }}
-        panelStatus={null}
-        onBack={vi.fn()}
-        onToggle={vi.fn()}
-        onUse={onUse}
-        onUpdate={vi.fn()}
-        onUpdateFromFile={vi.fn()}
-        onUninstall={vi.fn()}
-        toggleDisabled={false}
-      />,
-    );
-
-    fireEvent.click(screen.getByRole('button', { name: 'settings.ghosts.detail.chatAction' }));
-    expect(onUse).toHaveBeenCalledTimes(1);
-    await waitFor(() => {
-      const preference = screen.getByRole('switch', {
-        name: 'Open the embedded Simulator panel automatically',
-      });
-      expect((preference as HTMLButtonElement).disabled).toBe(false);
-    });
-  });
-
-  it('shows and updates the Host-owned Simulator auto-open preference', async () => {
-    vi.stubGlobal(
-      'ResizeObserver',
-      class {
-        observe() {}
-        unobserve() {}
-        disconnect() {}
-      },
-    );
-    const getPreferences = vi.fn(async () => ({ autoOpenEmbeddedPanel: false }));
-    const setAutoOpenEmbeddedPanel = vi.fn(async (enabled: boolean) => ({
-      autoOpenEmbeddedPanel: enabled,
-    }));
-    Object.defineProperty(window, 'electronAPI', {
-      configurable: true,
-      value: {
-        maker: {
-          iosSimulator: { getPreferences, setAutoOpenEmbeddedPanel },
-        },
-      },
-    });
-
-    render(
-      <GhostPluginDetailView
-        ghost={null}
-        detail={{ ...detail, canUse: false, hostCapability: 'ios-simulator' }}
-        panelStatus={null}
-        onBack={vi.fn()}
-        onToggle={vi.fn()}
-        onUse={vi.fn()}
-        onUpdate={vi.fn()}
-        onUpdateFromFile={vi.fn()}
-        onUninstall={vi.fn()}
-        toggleDisabled={false}
-      />,
-    );
-
-    const toggle = await screen.findByRole('switch', {
-      name: 'Open the embedded Simulator panel automatically',
-    });
-    await waitFor(() => {
-      expect(toggle.getAttribute('data-state')).toBe('unchecked');
-      expect((toggle as HTMLButtonElement).disabled).toBe(false);
-    });
-
-    fireEvent.click(toggle);
-    await waitFor(() => expect(setAutoOpenEmbeddedPanel).toHaveBeenCalledWith(true));
-    await waitFor(() => expect(toggle.getAttribute('data-state')).toBe('checked'));
-    expect(screen.getByText('Automatically reveal the right-side Simulator panel.')).toBeTruthy();
-  });
-
   it('routes a projected detail icon failure to market recovery', () => {
     vi.stubGlobal(
       'ResizeObserver',
@@ -565,7 +622,7 @@ describe('Ghost plugin detail sections', () => {
         ).disabled,
       ).toBe(true);
 
-      // 启用区域是单个 switch 按钮；点文字或轨道都由同一交互处理。
+      // 共享 Switch 和关联文字标签遵循同一禁用门控。
       const toggle = screen.getByRole('switch', {
         name: 'settings.ghosts.enableAria',
       }) as HTMLButtonElement;
@@ -952,24 +1009,38 @@ describe('Ghost plugin detail sections', () => {
     expect(within(listbox).getByRole('group', { name: 'OpenAI' })).toBeTruthy();
     expect(listbox.querySelector('[data-row-customize]')).not.toBeNull();
     expect(listbox.querySelector('[data-agent-kind]')).toBeNull();
-    const plainRow = within(listbox).getByText('GPT 5.5', { exact: true }).closest<HTMLElement>('[role="option"]')!;
+    const plainRow = within(listbox)
+      .getByText('GPT 5.5', { exact: true })
+      .closest<HTMLElement>('[role="option"]')!;
     expect(within(plainRow).queryByText('settings.providers.models.subscription')).toBeNull();
     fireEvent.click(plainRow);
-    await waitFor(() => expect(setCindyPref).toHaveBeenCalledWith(
-      'xdt-knowledge', 'text.oneshot', 'cat:openai:codex:gpt-5.5',
-    ));
+    await waitFor(() =>
+      expect(setCindyPref).toHaveBeenCalledWith(
+        'xdt-knowledge',
+        'text.oneshot',
+        'cat:openai:codex:gpt-5.5',
+      ),
+    );
     // A different supported Harness must remain reachable after replacing the old Agent step.
-    fireEvent.click(screen.getByRole('button', { name: /settings.ghosts.detail.cindyPrefs.cap.text.oneshot/ }));
+    fireEvent.click(
+      screen.getByRole('button', { name: /settings.ghosts.detail.cindyPrefs.cap.text.oneshot/ }),
+    );
     const reopened = await screen.findByRole('listbox');
-    const routeRow = within(reopened).getByText('GPT 5.5', { exact: true }).closest<HTMLElement>('[role="option"]')!;
+    const routeRow = within(reopened)
+      .getByText('GPT 5.5', { exact: true })
+      .closest<HTMLElement>('[role="option"]')!;
     fireEvent.click(routeRow.querySelector('[data-row-customize]')!);
     const flyout = await screen.findByTestId('unified-model-config-flyout');
     expect(flyout.querySelector('[role="slider"], [data-fast-toggle]')).toBeNull();
     fireEvent.click(flyout.querySelector('[data-engine-capsule="cc"]')!);
     fireEvent.click(routeRow);
-    await waitFor(() => expect(setCindyPref).toHaveBeenLastCalledWith(
-      'xdt-knowledge', 'text.oneshot', 'cat:openai:claude-code:chatgpt/gpt-5.5',
-    ));
+    await waitFor(() =>
+      expect(setCindyPref).toHaveBeenLastCalledWith(
+        'xdt-knowledge',
+        'text.oneshot',
+        'cat:openai:claude-code:chatgpt/gpt-5.5',
+      ),
+    );
 
     vi.unstubAllEnvs();
   });
@@ -1090,11 +1161,16 @@ describe('Ghost plugin detail sections', () => {
     );
     const listbox = await screen.findByRole('listbox');
     // Retired pins remain visible on the trigger, but never become selectable routes.
-    expect(screen.getByRole('button', { name: /settings.ghosts.detail.cindyPrefs.cap.text.oneshot/ }).textContent).toContain('retired-model');
+    expect(
+      screen.getByRole('button', { name: /settings.ghosts.detail.cindyPrefs.cap.text.oneshot/ })
+        .textContent,
+    ).toContain('retired-model');
     expect(within(listbox).queryByText('cat:gone:codex:retired-model')).toBeNull();
     expect(setCindyPref).not.toHaveBeenCalled();
     fireEvent.click(within(listbox).getAllByRole('option')[0]!);
-    await waitFor(() => expect(setCindyPref).toHaveBeenCalledWith('xdt-knowledge', 'text.oneshot', null));
+    await waitFor(() =>
+      expect(setCindyPref).toHaveBeenCalledWith('xdt-knowledge', 'text.oneshot', null),
+    );
     vi.unstubAllEnvs();
   });
 

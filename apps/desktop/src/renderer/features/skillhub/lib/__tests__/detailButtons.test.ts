@@ -62,6 +62,57 @@ function makeDetailState(overrides: Partial<DetailState> = {}): DetailState {
 }
 
 describe('deriveDetailState — null guards', () => {
+  it('uses verified remote differences without needing a registry', () => {
+    const state = makeDetailState({ canManage: true, isMine: true, latestVersion: '2.0.0' });
+    expect(deriveDetailActionState(state, null, null, 'approved', true, state,
+      { status: 'different', version: '2.0.0', pending: false })).toMatchObject({
+      isMineDirty: true, status: { kind: 'publish-new-version' },
+    });
+  });
+
+  it('suppresses duplicate updates when a pending remote version already matches', () => {
+    const state = makeDetailState({ origin: 'imported', canManage: true, localVersion: '3.0.0', latestVersion: '2.0.0' });
+    expect(deriveDetailActionState(state, makeRegistryEntry(), 'changed-hash', 'pending', true, state,
+      { status: 'same', version: '3.0.0', pending: true })).toMatchObject({
+      isMineDirty: false, status: { kind: 'published-tag' },
+    });
+  });
+
+  it.each(['not-owner', 'unavailable', 'checking'] as const)('does not automatically remind %s, while preserving manual management', (status) => {
+    const state = makeDetailState({ canManage: true, latestVersion: '2.0.0' });
+    expect(deriveDetailActionState(state, makeRegistryEntry(), 'changed-hash', 'approved', true, state,
+      { status })).toMatchObject({ isMineDirty: false, status: { kind: 'publish-new-version' } });
+  });
+
+  it('keeps the remote download choice when local content differs from a newer release', () => {
+    const state = makeDetailState({ origin: 'installed', canManage: true, localVersion: '1.0.0', latestVersion: '2.0.0' });
+    expect(deriveDetailActionState(state, makeRegistryEntry(), 'abc123', 'approved', true, state,
+      { status: 'different', version: '2.0.0', pending: false })).toMatchObject({
+      isOutdated: true, isMineDirty: true, status: { kind: 'publish-new-version' },
+    });
+  });
+  it.each(['unchanged', 'unknown'] as const)('offers download without a publish reminder for %s older content', (localChanges) => {
+    const state = makeDetailState({ origin: 'installed', canManage: true, localVersion: '1.0.0', latestVersion: '2.0.0' });
+    expect(deriveDetailActionState(state, makeRegistryEntry(), 'abc123', 'approved', true, state,
+      { status: 'different', version: '2.0.0', pending: false, localChanges })).toMatchObject({
+      isOutdated: true, isMineDirty: false, status: { kind: 'update', latestVersion: '2.0.0' },
+    });
+  });
+
+  it('preserves manual publication of known local edits when the historical manifest is unavailable', () => {
+    const state = makeDetailState({ origin: 'installed', canManage: true, localVersion: '1.0.0', latestVersion: '2.0.0' });
+    expect(deriveDetailActionState(state, makeRegistryEntry(), 'locally-modified', 'approved', true, state,
+      { status: 'different', version: '2.0.0', pending: false, localChanges: 'unknown' })).toMatchObject({
+      isMineDirty: false, status: { kind: 'publish-new-version' },
+    });
+  });
+
+  it.each(['learned', 'imported'] as const)('keeps %s content outside the download-update path', (origin) => {
+    const state = makeDetailState({ origin, canManage: true, localVersion: '1.0.0', latestVersion: '2.0.0' });
+    expect(deriveDetailActionState(state, makeRegistryEntry(), 'abc123', 'approved', true, state,
+      { status: 'different', version: '2.0.0', pending: false, localChanges: 'unchanged' })?.status.kind).not.toBe('update');
+  });
+
   it('returns null when entry is null', () => {
     expect(deriveDetailState(null, null, false)).toBeNull();
   });

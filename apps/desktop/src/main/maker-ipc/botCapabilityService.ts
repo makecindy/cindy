@@ -6,6 +6,7 @@ import { getDbClient } from '../localDb/client/current.js';
 import { updateBotProfile } from '../localDb/ipc/bots.js';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
 import { listCustomMcpServers } from '../maker-host/custom-mcp-store.js';
+import { normalizeBotToolCapabilities } from '../../shared/botCapabilitySelection.js';
 import { BOT_BASELINE_PLUGIN_IDS } from '../maker-host/plugins/types.js';
 import type { AgentKind, Maker } from '@cindy/maker-core';
 import type { PluginRegistry } from '../maker-host/plugins/plugin-registry.js';
@@ -97,7 +98,7 @@ async function context(callerSessionId: string, opts?: { allowPaused?: boolean }
     parsed && typeof parsed === 'object' && !Array.isArray(parsed)
       ? (parsed as Record<string, unknown>)
       : {};
-  return { ...row, config, assertOwner };
+  return { ...row, config: normalizeBotToolCapabilities(config), assertOwner };
 }
 
 async function catalog(input: Input, ctx: Pick<Awaited<ReturnType<typeof context>>, 'config' | 'workingDir' | 'remoteHostId' | 'botId' | 'assertOwner'>, deps: BotCapabilityServiceDeps,
@@ -143,7 +144,7 @@ async function catalog(input: Input, ctx: Pick<Awaited<ReturnType<typeof context
     items = await Promise.all(
       registry
         .getPlugins()
-        .filter((plugin) => plugin.id !== 'collab' && !BOT_BASELINE_PLUGIN_IDS.has(plugin.id))
+        .filter((plugin) => !BOT_BASELINE_PLUGIN_IDS.has(plugin.id))
         .map(async (plugin) => ({
           id: plugin.id,
           name: plugin.name,
@@ -161,7 +162,8 @@ async function catalog(input: Input, ctx: Pick<Awaited<ReturnType<typeof context
     );
   }
   ctx.assertOwner();
-  const result = items.map((item) => ({ ...item, joined: joined.has(item.id) }));
+  const inherit = input.kind !== 'skill' && ctx.config[fields[input.kind].mode] === 'inherit';
+  const result = items.map((item) => ({ ...item, joined: joined.has(item.id) || (inherit && item.available) }));
   // Uninstalled references remain removable, instead of silently disappearing.
   for (const id of joined)
     if (!result.some((item) => item.id === id))
@@ -198,7 +200,9 @@ async function selectBotCapability(input: Input & { id: string; joined: boolean 
       };
     }
     const field = fields[input.kind];
-    const previous = strings(ctx.config[field.list]);
+    const previous = input.kind !== 'skill' && ctx.config[field.mode] === 'inherit'
+      ? (await catalog(input, ctx, deps)).filter((item) => item.joined).map((item) => item.id)
+      : strings(ctx.config[field.list]);
     if (input.joined) {
       const item = (await catalog(input, ctx, deps, { forceReload: true })).find((entry) => entry.id === input.id);
       if (!item?.available)
@@ -314,13 +318,18 @@ export function createBotCapabilityService(deps: BotCapabilityServiceDeps) {
     },
     /** Read the same metadata before a profile exists; this never joins or executes a capability. */
     async forCreation(input: { botId: string; workingDir: string; agentKind: AgentKind; assertOwner: () => void }) {
-      const ctx = { ...input, remoteHostId: null, config: {} };
+      const ctx = { ...input, remoteHostId: null, config: normalizeBotToolCapabilities({}) };
       const result = {} as Record<Kind, Entry[]>;
       for (const kind of ['skill', 'mcp', 'toolset'] as const)
         result[kind] = (await catalog({ callerSessionId: '', kind }, ctx, deps, { agentKind: input.agentKind })).filter(entry => entry.available);
       return result;
     },
     list: (input: Input & { query?: string }) => findBotCapabilities(input, deps),
+    /** Settings use the complete catalog, including removable unavailable references. */
+    async forSettings(input: Input) {
+      const ctx = await context(input.callerSessionId, { allowPaused: true });
+      return catalog(input, ctx, deps);
+    },
     select: (input: Input & { id: string; joined: boolean }) => selectBotCapability(input, deps),
     /** Renderer saves may contain stale selections; validate only new references before persistence. */
     async validateAdditions(update: BotCapabilityUpdate): Promise<void> {

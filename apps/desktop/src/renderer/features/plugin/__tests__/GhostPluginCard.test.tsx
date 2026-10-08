@@ -173,7 +173,6 @@ const commandPlugin: GhostPluginListItem = {
   tabPanel: false,
   hasMainView: false,
   mainViewTitle: null,
-  hostCapability: null,
   oauthAuthorizationExpired: false,
 };
 
@@ -191,12 +190,6 @@ const toolPlugin: GhostPluginListItem = {
   canUse: false,
 };
 
-const simulatorPlugin: GhostPluginListItem = {
-  ...toolPlugin,
-  id: 'ios-simulator',
-  name: 'iOS Simulator',
-  hostCapability: 'ios-simulator',
-};
 
 const mainViewPlugin: GhostPluginListItem = {
   ...panelPlugin,
@@ -298,17 +291,6 @@ describe('GhostPluginCard', () => {
     expect(onPrimary).not.toHaveBeenCalled();
   });
 
-  it('offers a conversation entry for a Host capability plugin', () => {
-    const onPrimary = vi.fn();
-    const onManage = vi.fn();
-    render(<GhostPluginCard item={simulatorPlugin} onPrimary={onPrimary} onManage={onManage} />);
-
-    fireEvent.click(screen.getByRole('button', { name: 'settings.ghosts.page.chatAria' }));
-    expect(onPrimary).toHaveBeenCalledTimes(1);
-    expect(onManage).not.toHaveBeenCalled();
-    expect(screen.queryByText('settings.ghosts.page.agentInvoked')).toBeNull();
-  });
-
   it('keeps the tab-panel action when the plugin also declares main-view', () => {
     const onPrimary = vi.fn();
     render(<GhostPluginCard item={mainViewPlugin} onPrimary={onPrimary} onManage={vi.fn()} />);
@@ -401,7 +383,7 @@ describe('GhostPluginCard', () => {
     ).toBe(true);
   });
 
-  it('replaces the update pill with a spinner while this card is pending', () => {
+  it('keeps the update label accessible while the shared button shows loading feedback', () => {
     render(
       <GhostPluginCard
         item={commandPlugin}
@@ -419,7 +401,8 @@ describe('GhostPluginCard', () => {
     });
     expect(update.getAttribute('aria-busy')).toBe('true');
     expect(update.querySelector('.animate-spinner')).toBeTruthy();
-    expect(update.textContent).toBe('');
+    expect(update.querySelector('.opacity-0')?.textContent).toContain('settings.ghosts.page.updateTo');
+    expect((update as HTMLButtonElement).disabled).toBe(true);
   });
 
   it('sends a tool-only plugin to manage and renders no primary button', () => {
@@ -738,7 +721,8 @@ describe('MarketPluginCard', () => {
     });
     expect(install.getAttribute('aria-busy')).toBe('true');
     expect(install.querySelector('.animate-spinner')).toBeTruthy();
-    expect(install.textContent).toBe('');
+    expect(install.querySelector('.opacity-0')?.textContent).toBe('settings.ghosts.market.install');
+    expect((install as HTMLButtonElement).disabled).toBe(true);
   });
 });
 

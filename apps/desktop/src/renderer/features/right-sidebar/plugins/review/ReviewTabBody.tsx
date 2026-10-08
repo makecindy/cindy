@@ -1,3 +1,4 @@
+import { FileTypeIcon } from '@/components/ui/file-type-icon';
 import { SegmentedControl } from '@/components/ui/segmented-control';
 /**
  * ReviewTabBody — unified workspace and recorded-message review panel.
@@ -72,6 +73,7 @@ import { gitReviewApiFor, isReviewRemoteOversizeError } from '@/lib/gitReviewTra
 import { makerChatStore } from '@/lib/makerChatStore';
 import { extractIpcError } from '@/utils/ipcError';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
+import { Button } from '@/components/ui/button';
 import { Spinner } from '@/components/ui/spinner';
 import {
   DropdownMenu,
@@ -1460,7 +1462,7 @@ export function ReviewTabBody({ state, ctx }: ReviewTabBodyProps) {
             desc={
               error === REVIEW_TURN_LOCAL_ONLY_ERROR
                 ? t('rightSidebar.review.turn.localOnly')
-                : error
+                : localizeReviewError(error)
             }
             actionLabel={t('rightSidebar.review.refresh')}
             onAction={refreshAll}
@@ -1918,24 +1920,46 @@ function CommitOrPushDropdown({
     >
       <DropdownMenuTrigger asChild>
         <Tip text={triggerTooltip}>
-          <button
-            type="button"
-            aria-disabled={triggerDisabled}
-            aria-label={t('rightSidebar.review.topAction.label')}
-            onClick={() => {
-              if (!triggerDisabled) setOpen(true);
-            }}
-            className={cn(
-              'inline-flex h-6 shrink-0 items-center rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] text-10 font-medium text-[var(--text-primary)] hover:bg-[var(--surface-hover)]',
-              iconOnly ? 'w-6 justify-center px-0' : 'gap-1 px-2.5',
-              triggerDisabled && 'cursor-not-allowed opacity-50',
-            )}
-          >
-            {pending ? <Spinner size={12} /> : <Check size={12} />}
-            <span className={cn(iconOnly && 'sr-only')}>
-              {t('rightSidebar.review.topAction.label')}
-            </span>
-          </button>
+          {iconOnly ? (
+            <button
+              type="button"
+              aria-disabled={triggerDisabled}
+              aria-label={t('rightSidebar.review.topAction.label')}
+              onClick={() => {
+                if (!triggerDisabled) setOpen(true);
+              }}
+              className={cn(
+                'inline-flex h-6 shrink-0 items-center rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] text-10 font-medium text-[var(--text-primary)] hover:bg-[var(--surface-hover)]',
+                'w-6 justify-center px-0',
+                triggerDisabled && 'cursor-not-allowed opacity-50',
+              )}
+            >
+              {pending ? <Spinner size={12} /> : <Check size={12} />}
+              <span className={cn(iconOnly && 'sr-only')}>
+                {t('rightSidebar.review.topAction.label')}
+              </span>
+            </button>
+          ) : (
+            <Button
+              variant="secondary"
+              size="xs"
+              compact
+              loading={pending}
+              allowWhileLoading
+              type="button"
+              aria-disabled={triggerDisabled}
+              aria-label={t('rightSidebar.review.topAction.label')}
+              onClick={() => {
+                if (!triggerDisabled) setOpen(true);
+              }}
+              className={cn(triggerDisabled && 'cursor-not-allowed opacity-50')}
+            >
+              {pending ? <Spinner size={12} /> : <Check size={12} />}
+              <span className={cn(iconOnly && 'sr-only')}>
+                {t('rightSidebar.review.topAction.label')}
+              </span>
+            </Button>
+          )}
         </Tip>
       </DropdownMenuTrigger>
       <DropdownMenuContent
@@ -1943,7 +1967,7 @@ function CommitOrPushDropdown({
         sideOffset={6}
         collisionPadding={8}
         onKeyDown={handleKeyDown}
-        className="w-[min(22rem,calc(100vw-24px))] rounded-[10px] border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] p-2 shadow-[var(--shadow-menu)]"
+        className="w-[min(22rem,calc(100vw-24px))] p-2"
       >
         <div className="flex min-w-0 items-center gap-2 rounded-[8px] bg-[var(--surface-chip)] px-2.5 py-2 text-12">
           <GitBranch size={13} className="shrink-0 text-[var(--text-tertiary)]" />
@@ -1974,7 +1998,7 @@ function CommitOrPushDropdown({
             event.preventDefault();
             setIncludeUnstaged((current) => !current);
           }}
-          className="mt-1 flex h-8 items-center gap-2 rounded-[6px] px-2 text-12 text-[var(--text-primary)] focus:bg-[var(--cmd-palette-item-hover)]"
+          className="mt-1 gap-2"
         >
           <span className="flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-[3px] border border-[var(--border-default)] bg-[var(--surface-elevated)] text-[var(--text-primary)]">
             {includeUnstaged && <Check size={10} />}
@@ -1983,7 +2007,7 @@ function CommitOrPushDropdown({
             {t('rightSidebar.review.commit.includeUnstaged')}
           </span>
         </DropdownMenuItem>
-        <DropdownMenuSeparator className="my-1 bg-[var(--border-default)]" />
+        <DropdownMenuSeparator />
         <CommitDropdownAction
           label={t('rightSidebar.review.commit.submit')}
           icon={pending && !push.pending ? <Spinner size={12} /> : <Check size={12} />}
@@ -2049,7 +2073,7 @@ function CommitDropdownAction({
         onSelect();
       }}
       className={cn(
-        'flex h-8 items-center gap-2 rounded-[6px] px-2 text-12 text-[var(--text-primary)] focus:bg-[var(--cmd-palette-item-hover)]',
+        'gap-2',
         disabled && 'cursor-not-allowed opacity-50',
       )}
     >
@@ -2355,7 +2379,7 @@ export function ReviewMoreMenu({
         onCopyGitApply();
       }}
       className={cn(
-        'flex h-8 items-center gap-2 rounded-[6px] px-2 text-12 text-[var(--text-primary)] focus:bg-[var(--cmd-palette-item-hover)]',
+        'gap-2',
         !canCopyGitApply && 'cursor-not-allowed opacity-50',
       )}
     >
@@ -2379,7 +2403,7 @@ export function ReviewMoreMenu({
       <DropdownMenuContent
         align="end"
         sideOffset={6}
-        className="min-w-[13rem] rounded-[8px] border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] p-1 shadow-[var(--shadow-menu)]"
+        className="min-w-[13rem]"
       >
         {overflowItems.length > 0 && (
           <>
@@ -2396,12 +2420,12 @@ export function ReviewMoreMenu({
                 onToggle={fileTreeOverflow.onToggle}
               />
             )}
-            <DropdownMenuSeparator className="my-1 bg-[var(--border-default)]" />
+            <DropdownMenuSeparator />
           </>
         )}
         <DropdownMenuItem
           onSelect={() => onWordWrapChange(!wordWrap)}
-          className="flex h-8 items-center gap-2 rounded-[6px] px-2 text-12 text-[var(--text-primary)] focus:bg-[var(--cmd-palette-item-hover)]"
+          className="gap-2"
         >
           {wordWrap ? (
             <WrapText size={12} className="text-[var(--text-secondary)]" />
@@ -2418,7 +2442,7 @@ export function ReviewMoreMenu({
         </DropdownMenuItem>
         <DropdownMenuItem
           onSelect={() => onWordDiffChange(!wordDiff)}
-          className="flex h-8 items-center gap-2 rounded-[6px] px-2 text-12 text-[var(--text-primary)] focus:bg-[var(--cmd-palette-item-hover)]"
+          className="gap-2"
         >
           {wordDiff ? (
             <Diff size={12} className="text-[var(--text-secondary)]" />
@@ -2435,7 +2459,7 @@ export function ReviewMoreMenu({
         </DropdownMenuItem>
         <DropdownMenuItem
           onSelect={() => onHideWhitespaceChange(!hideWhitespace)}
-          className="flex h-8 items-center gap-2 rounded-[6px] px-2 text-12 text-[var(--text-primary)] focus:bg-[var(--cmd-palette-item-hover)]"
+          className="gap-2"
         >
           {hideWhitespace ? (
             <EyeOff size={12} className="text-[var(--text-secondary)]" />
@@ -2450,7 +2474,7 @@ export function ReviewMoreMenu({
             )}
           </span>
         </DropdownMenuItem>
-        <DropdownMenuSeparator className="my-1 bg-[var(--border-default)]" />
+        <DropdownMenuSeparator />
         {canCopyGitApply || !copyGitApplyDisabledTooltip ? (
           copyItem
         ) : (
@@ -2482,7 +2506,7 @@ function DiffExpansionMenuItem({ action, onToggle }: DiffExpansionOverflowProps)
         onToggle();
       }}
       className={cn(
-        'flex h-8 items-center gap-2 rounded-[6px] px-2 text-12 text-[var(--text-primary)] focus:bg-[var(--cmd-palette-item-hover)]',
+        'gap-2',
         disabled && 'cursor-not-allowed opacity-50',
       )}
     >
@@ -2518,7 +2542,7 @@ function FileTreeMenuItem({
   return (
     <DropdownMenuItem
       onSelect={onToggle}
-      className="flex h-8 items-center gap-2 rounded-[6px] px-2 text-12 text-[var(--text-primary)] focus:bg-[var(--cmd-palette-item-hover)]"
+      className="gap-2"
     >
       {preferenceVisible ? (
         <FolderOpen size={12} className="text-[var(--text-secondary)]" />
@@ -2616,7 +2640,7 @@ export function SourceDropdown({
       <DropdownMenuContent
         align="start"
         sideOffset={4}
-        className="w-[var(--radix-dropdown-menu-trigger-width)] min-w-[12rem] rounded-[8px] border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] p-1 shadow-[var(--shadow-menu)]"
+        className="w-[var(--radix-dropdown-menu-trigger-width)] min-w-[12rem]"
       >
         {turnOption && (
           <SourceDropdownItem
@@ -2639,7 +2663,7 @@ export function SourceDropdown({
             if (open) onRefreshCommits?.();
           }}
         >
-          <DropdownMenuSubTrigger className="flex h-8 items-center gap-2 rounded-[6px] px-2 text-12 text-[var(--text-primary)] focus:bg-[var(--cmd-palette-item-hover)] data-[state=open]:bg-[var(--cmd-palette-item-hover)]">
+          <DropdownMenuSubTrigger className="gap-2">
             <span className="min-w-0 flex-1 truncate">
               {t('rightSidebar.review.source.commit')}
             </span>
@@ -2651,13 +2675,13 @@ export function SourceDropdown({
           <DropdownMenuSubContent
             sideOffset={6}
             collisionPadding={8}
-            className="max-h-80 w-[min(20rem,calc(100vw-24px))] overflow-y-auto rounded-[8px] border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] p-1 shadow-[var(--shadow-menu)]"
+            className="max-h-80 w-[min(20rem,calc(100vw-24px))] overflow-y-auto"
           >
             {commitsError ? (
               <>
                 <DropdownMenuItem
                   disabled
-                  className="flex h-8 items-center gap-2 rounded-[6px] px-2 text-12 text-[var(--text-secondary)]"
+                  className="gap-2"
                 >
                   <AlertTriangle size={12} />
                   <span>{t('rightSidebar.review.commitMenu.error')}</span>
@@ -2667,7 +2691,7 @@ export function SourceDropdown({
                     event.preventDefault();
                     onRefreshCommits?.();
                   }}
-                  className="flex h-8 items-center gap-2 rounded-[6px] px-2 text-12 text-[var(--text-primary)] focus:bg-[var(--cmd-palette-item-hover)]"
+                  className="gap-2"
                 >
                   <Spinner
                     icon={RefreshCw}
@@ -2681,7 +2705,7 @@ export function SourceDropdown({
             ) : !commitMenuLoaded || (commitsLoading && commitList.length === 0) ? (
               <DropdownMenuItem
                 disabled
-                className="flex h-8 items-center gap-2 rounded-[6px] px-2 text-12 text-[var(--text-secondary)]"
+                className="gap-2"
               >
                 <Spinner icon={RefreshCw} size={12} />
                 <span>{t('rightSidebar.review.commitMenu.loading')}</span>
@@ -2689,7 +2713,7 @@ export function SourceDropdown({
             ) : commitList.length === 0 ? (
               <DropdownMenuItem
                 disabled
-                className="flex h-8 items-center gap-2 rounded-[6px] px-2 text-12 text-[var(--text-secondary)]"
+                className="gap-2"
               >
                 <FileDiffIcon size={12} />
                 <span>{t('rightSidebar.review.commitMenu.empty')}</span>
@@ -2702,13 +2726,10 @@ export function SourceDropdown({
                   <Tip key={commit.oid} text={title} side="left">
                     <DropdownMenuItem
                       onSelect={() => onSelectCommit?.(commit.oid)}
-                      className={cn(
-                        'flex h-8 min-w-0 items-center gap-2 rounded-[6px] px-2 text-12 text-[var(--text-primary)] focus:bg-[var(--cmd-palette-item-hover)]',
-                        active && 'bg-[var(--surface-chip)]',
-                      )}
+                      className="min-w-0 gap-2"
                     >
                       <span className="min-w-0 flex-1 truncate">{title}</span>
-                      <span className="shrink-0 text-10 text-[var(--text-tertiary)]">
+                      <span className="shrink-0 text-12 leading-[1.33] text-[var(--cmd-palette-item-meta)]">
                         {t('rightSidebar.review.commitMenu.relativeTime', {
                           time: formatSidebarTime(
                             new Date(commit.authorTime * 1000).toISOString(),
@@ -2774,7 +2795,7 @@ function SourceDropdownItem({
         }
         onChange(option.source);
       }}
-      className="flex h-8 items-center gap-2 rounded-[6px] px-2 text-12 text-[var(--text-primary)] focus:bg-[var(--cmd-palette-item-hover)]"
+      className="gap-2"
     >
       <span className="min-w-0 flex-1 truncate">{option.label}</span>
       <SourceCountBadge count={option.count} />
@@ -3501,8 +3522,9 @@ function ReviewFileTreeRow({
           'flex h-7 w-full min-w-0 items-center pr-2 text-left text-12 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]',
           active && 'bg-[var(--surface-chip)] text-[var(--text-primary)]',
         )}
-        style={{ paddingLeft: paddingLeft + 18 }}
+        style={{ paddingLeft }}
       >
+        <FileTypeIcon name={node.path} size={12} className="mr-1 shrink-0" />
         <span className="min-w-0 truncate">{node.name}</span>
       </button>
     </Tip>
@@ -3536,7 +3558,12 @@ export function BatchActionPill({
           disabled={!writeAction.canWrite || discardAllPending}
           disabledTooltip={!writeAction.canWrite ? writeAction.disabledTooltip : undefined}
           onClick={writeAction.onSectionDiscard}
-          className="pointer-events-auto border-transparent bg-transparent px-2 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
+          quiet
+          className={cn(
+            'pointer-events-auto',
+            iconOnly &&
+              'border-transparent bg-transparent px-2 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]',
+          )}
           iconOnly={iconOnly}
         />
       )}
@@ -3548,7 +3575,12 @@ export function BatchActionPill({
           disabled={!writeAction.canWrite || allPending}
           disabledTooltip={!writeAction.canWrite ? writeAction.disabledTooltip : undefined}
           onClick={writeAction.onSectionAction}
-          className="pointer-events-auto border-transparent bg-transparent px-2 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
+          quiet
+          className={cn(
+            'pointer-events-auto',
+            iconOnly &&
+              'border-transparent bg-transparent px-2 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]',
+          )}
           iconOnly={iconOnly}
         />
       )}
@@ -4193,13 +4225,13 @@ export function BranchBaseDropdown({
       <DropdownMenuContent
         align="start"
         sideOffset={4}
-        className="max-h-72 w-[var(--radix-dropdown-menu-trigger-width)] min-w-[14rem] overflow-y-auto rounded-[8px] border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] p-1 shadow-[var(--shadow-menu)]"
+        className="max-h-72 w-[var(--radix-dropdown-menu-trigger-width)] min-w-[14rem] overflow-y-auto"
       >
         {candidates.map((candidate) => (
           <DropdownMenuItem
             key={candidate.refName}
             onSelect={() => onSelectBase(candidate.refName)}
-            className="flex h-8 items-center gap-2 rounded-[6px] px-2 text-12 text-[var(--text-primary)] focus:bg-[var(--cmd-palette-item-hover)]"
+            className="gap-2"
           >
             <span className="flex h-4 w-4 items-center justify-center text-[var(--text-secondary)]">
               {candidate.refName === selectedBaseRef && <Check size={12} />}
@@ -4262,13 +4294,9 @@ function CenteredState({
       <p className="text-13 font-medium text-[var(--text-primary)]">{title}</p>
       <p className="max-w-[260px] text-11 leading-relaxed text-[var(--text-tertiary)]">{desc}</p>
       {actionLabel && onAction && (
-        <button
-          type="button"
-          onClick={onAction}
-          className="mt-1 rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 py-1.5 text-11 font-medium text-[var(--text-primary)] hover:bg-[var(--surface-hover)]"
-        >
+        <Button variant="secondary" size="md" compact type="button" onClick={onAction} className="mt-1">
           {actionLabel}
-        </button>
+        </Button>
       )}
     </div>
   );
@@ -4283,6 +4311,7 @@ function ActionButton({
   onClick,
   className,
   iconOnly = false,
+  quiet = false,
 }: {
   label: string;
   icon: ReactNode;
@@ -4292,8 +4321,9 @@ function ActionButton({
   onClick: () => void;
   className?: string;
   iconOnly?: boolean;
+  quiet?: boolean;
 }) {
-  const button = (
+  const button = iconOnly ? (
     <button
       type="button"
       aria-label={label}
@@ -4305,12 +4335,32 @@ function ActionButton({
       className={cn(
         'inline-flex h-6 items-center justify-center rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] text-10 font-medium text-[var(--text-primary)] hover:bg-[var(--surface-hover)] disabled:cursor-not-allowed disabled:opacity-50',
         className,
-        iconOnly ? 'w-6 px-0' : 'gap-1 px-2',
+        'w-6 px-0',
       )}
     >
       {pending ? <Spinner size={12} /> : icon}
       <span className={cn(iconOnly && 'sr-only')}>{label}</span>
     </button>
+  ) : (
+    <Button
+      variant="secondary"
+      tone={quiet ? 'quiet' : 'default'}
+      size="xs"
+      compact
+      loading={pending}
+      allowWhileLoading
+      type="button"
+      aria-label={label}
+      disabled={disabled}
+      onClick={(event) => {
+        event.stopPropagation();
+        onClick();
+      }}
+      className={className}
+    >
+      {pending ? <Spinner size={12} /> : icon}
+      <span className={cn(iconOnly && 'sr-only')}>{label}</span>
+    </Button>
   );
   if (!iconOnly && (!disabled || !disabledTooltip)) return button;
   return (
@@ -4548,6 +4598,7 @@ function FileRow({
           ) : (
             <ChevronRight size={12} className="shrink-0 text-[var(--text-tertiary)]" />
           )}
+          <FileTypeIcon name={diff.path} size={14} className="shrink-0 text-[var(--text-secondary)]" />
           <span className="min-w-0 flex-1">
             <span className="block truncate text-13 font-medium text-[var(--text-primary)]">
               {fileName}

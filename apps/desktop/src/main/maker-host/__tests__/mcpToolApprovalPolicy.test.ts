@@ -3,9 +3,8 @@ import { describe, expect, it } from 'vitest';
 import {
   getDesktopClaudeReadOnlyAllowedTools,
   getDesktopMcpToolApprovalPolicy,
-  getDesktopMcpToolApprovalPresentation,
 } from '../mcp-tool-approval-policy.js';
-import { setMainLocale } from '../../i18n.js';
+
 
 describe('desktop Claude read-only allowlist', () => {
   it('allows only explicitly reviewed read-only tools', () => {
@@ -17,7 +16,6 @@ describe('desktop Claude read-only allowlist', () => {
         'mcp__cindy__ghost_info',
         'mcp__cindy__ghost_manual',
         'mcp__cindy__ghost_forge_guide',
-        'mcp__cindy_ios_simulator__list_tools',
         'mcp__cindy_helper__list_tools',
         'mcp__cindy_slack__slack_status',
       ]),
@@ -54,7 +52,6 @@ describe('desktop Claude read-only allowlist', () => {
       'mcp__cindy__ghost_forge_guide',
       'mcp__cindy_browser__list_tools',
       'mcp__cindy_android__list_tools',
-      'mcp__cindy_ios_simulator__list_tools',
       'mcp__cindy_computer__list_tools',
       'mcp__cindy_feishu_bot__list_tools',
       'mcp__cindy_scheduler__list_tools',
@@ -88,6 +85,36 @@ describe('desktop Claude read-only allowlist', () => {
 });
 
 describe('desktop MCP approval policy', () => {
+  it('never lets import discovery grant reusable approval to start a migration', () => {
+    for (const operation of ['sources', 'preview', 'status', 'start', undefined]) {
+      for (const toolName of ['import_agent', undefined]) {
+        expect(getDesktopMcpToolApprovalPolicy({ serverName: 'companion_import', toolName,
+          toolParams: { operation, selection: { takeover: true } },
+        })).toBe('prompt-each-time');
+      }
+    }
+    expect(getDesktopClaudeReadOnlyAllowedTools()).not.toContain('mcp__companion_import__import_agent');
+  });
+
+  it('does not let a server grant authorize later imported credential-bearing commands', () => {
+    for (const command of ['python scripts/report.py', 'printf "$TOKEN" | base64', 'env > credentials.txt']) {
+      expect(getDesktopMcpToolApprovalPolicy({ serverName: 'companion_connections', toolName: 'run_command', toolParams: { command } })).toBe('prompt-each-time');
+    }
+    expect(getDesktopMcpToolApprovalPolicy({ serverName: 'companion_connections', toolParams: { command: 'python scripts/report.py' } })).toBe('prompt-each-time');
+    expect(getDesktopClaudeReadOnlyAllowedTools()).not.toContain('mcp__companion_connections__run_command');
+  });
+
+  it('does not share imported connection approvals across tools or connections', () => {
+    for (const toolName of ['c_example_read_data', 'c_example_delete_data', 'c_other_send_message', undefined]) {
+      expect(getDesktopMcpToolApprovalPolicy({
+        serverName: 'companion_connections', toolName, toolParams: { id: 'item-1' },
+      })).toBe('prompt-each-time');
+    }
+    expect(getDesktopClaudeReadOnlyAllowedTools().some((tool) => tool.startsWith('mcp__companion_connections__'))).toBe(false);
+    // The restriction belongs to the multiplexed import bridge, not every MCP.
+    expect(getDesktopMcpToolApprovalPolicy({ serverName: 'third_party', toolName: 'read_data' })).toBe('prompt');
+  });
+
   it('keeps known safe contacts calls trusted', () => {
     expect(
       getDesktopMcpToolApprovalPolicy({
@@ -168,181 +195,6 @@ describe('desktop MCP approval policy', () => {
     expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_ssh' })).toBe('prompt');
     expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_future_tool' })).toBe('prompt');
     expect(getDesktopMcpToolApprovalPolicy({ serverName: 'third_party' })).toBe('prompt');
-  });
-
-  it('prompts for simulator setup actions while device-gated actions stay trusted', () => {
-    expect(
-      getDesktopMcpToolApprovalPolicy({
-        serverName: 'cindy_ios_simulator',
-        toolName: 'list_tools',
-      }),
-    ).toBe('auto-approve');
-    // Taking control of a device is itself the authorization step.
-    for (const name of ['attach_device', 'create_instance']) {
-      expect(
-        getDesktopMcpToolApprovalPolicy({
-          serverName: 'cindy_ios_simulator',
-          toolName: 'call_tool',
-          toolParams: { name, args: {} },
-        }),
-      ).toBe('prompt-each-time');
-    }
-    const route = { instanceId: 'instance-a', generation: 2, leaseId: 'lease-a' };
-    for (const name of ['build_app', 'open_simulator_url']) {
-      expect(
-        getDesktopMcpToolApprovalPolicy({
-          serverName: 'cindy_ios_simulator',
-          toolName: 'call_tool',
-          toolParams: { name, args: { ...route } },
-        }),
-      ).toBe('prompt-each-time');
-      // No owned route means the Host rejects it on route validation, so asking
-      // the user to authorize a device this task never attached is pure noise —
-      // the shape a mis-routed "open a web URL" call takes.
-      expect(
-        getDesktopMcpToolApprovalPolicy({
-          serverName: 'cindy_ios_simulator',
-          toolName: 'call_tool',
-          toolParams: { name, args: { url: 'https://example.com' } },
-        }),
-      ).toBe('auto-approve');
-    }
-    // A superseded name must not become a way around the same gate.
-    expect(
-      getDesktopMcpToolApprovalPolicy({
-        serverName: 'cindy_ios_simulator',
-        toolName: 'call_tool',
-        toolParams: { name: 'open_url', args: { ...route, url: 'https://example.com' } },
-      }),
-    ).toBe('prompt-each-time');
-    expect(
-      getDesktopMcpToolApprovalPolicy({
-        serverName: 'cindy_ios_simulator',
-        toolParams: { name: 'build_app', args: { ...route } },
-      }),
-    ).toBe('prompt-each-time');
-    expect(
-      getDesktopMcpToolApprovalPolicy({
-        serverName: 'cindy_ios_simulator',
-        toolName: 'call_tool',
-        toolParams: { name: 'tap', args: {} },
-      }),
-    ).toBe('auto-approve');
-  });
-
-  it('judges a stringified simulator payload the way the Host will receive it', () => {
-    const route = { instanceId: 'instance-a', generation: 2, leaseId: 'lease-a' };
-    // Claude Code's in-process bridge stringifies nested payloads (issue #350) and
-    // jsonObjectArg parses them back before dispatch, so a policy that judged the
-    // raw string would let a routed device action run unapproved.
-    expect(
-      getDesktopMcpToolApprovalPolicy({
-        serverName: 'cindy_ios_simulator',
-        toolName: 'call_tool',
-        toolParams: { name: 'build_app', args: JSON.stringify(route) },
-      }),
-    ).toBe('prompt-each-time');
-    expect(
-      getDesktopMcpToolApprovalPolicy({
-        serverName: 'cindy_ios_simulator',
-        toolName: 'call_tool',
-        toolParams: JSON.stringify({ name: 'build_app', args: route }),
-      }),
-    ).toBe('prompt-each-time');
-    // The noise case still resolves through the same representation.
-    expect(
-      getDesktopMcpToolApprovalPolicy({
-        serverName: 'cindy_ios_simulator',
-        toolName: 'call_tool',
-        toolParams: {
-          name: 'open_simulator_url',
-          args: JSON.stringify({ url: 'https://example.com' }),
-        },
-      }),
-    ).toBe('auto-approve');
-    // Anything whose arguments cannot be read fails closed and keeps asking.
-    for (const args of [undefined, 'not json', 42, [route]]) {
-      expect(
-        getDesktopMcpToolApprovalPolicy({
-          serverName: 'cindy_ios_simulator',
-          toolName: 'call_tool',
-          toolParams: { name: 'open_simulator_url', args },
-        }),
-      ).toBe('prompt-each-time');
-    }
-  });
-
-  it('keeps external project builds on the existing task permission policy', () => {
-    const route = { instanceId: 'instance-a', generation: 2, leaseId: 'lease-a' };
-    for (const projectDir of [undefined, '/projects/worktree-b', '../worktree-b']) {
-      expect(getDesktopMcpToolApprovalPolicy({
-        serverName: 'cindy_ios_simulator', toolName: 'call_tool',
-        toolParams: { name: 'build_app', args: { ...route, projectDir } },
-      })).toBe('prompt-each-time');
-    }
-  });
-
-  it('discloses host file access before an agent starts an Xcode build', () => {
-    setMainLocale('en');
-    expect(
-      getDesktopMcpToolApprovalPresentation({
-        serverName: 'cindy_ios_simulator',
-        toolName: 'call_tool',
-        toolParams: { name: 'build_app', args: {} },
-      }),
-    ).toEqual({
-      title: 'Allow Xcode to build this project?',
-      description: expect.stringMatching(
-        /macOS user.*outside the project.*returned to the Agent.*trust this project/i,
-      ),
-    });
-    expect(
-      getDesktopMcpToolApprovalPresentation({
-        serverName: 'cindy_ios_simulator',
-        toolName: 'call_tool',
-        toolParams: { name: 'tap', args: {} },
-      }),
-    ).toBeUndefined();
-    expect(
-      getDesktopMcpToolApprovalPresentation({
-        serverName: 'cindy_ios_simulator',
-        toolParams: { name: 'build_app', args: {} },
-      })?.description,
-    ).toContain('outside the project');
-  });
-
-  it('discloses the task-scoped control lease before an agent creates or attaches a simulator', () => {
-    setMainLocale('en');
-    for (const [name, title] of [
-      ['attach_device', /connect to and control this simulator/i],
-      ['create_instance', /create and control a simulator/i],
-    ] as const) {
-      const presentation = getDesktopMcpToolApprovalPresentation({
-        serverName: 'cindy_ios_simulator',
-        toolName: 'call_tool',
-        toolParams: { name, args: {} },
-      });
-      expect(presentation?.title).toMatch(title);
-      expect(presentation?.description).toMatch(
-        /current Cindy task.*start or stop.*install or launch.*tap.*swipe.*type.*screenshots.*settings.*without another device-control prompt.*disconnect.*revoke Agent control.*sensitive actions.*separate approval/i,
-      );
-    }
-
-    // Codex app-server versions that omit the outer progressive tool name
-    // must receive the same Host-owned disclosure from the validated payload.
-    expect(
-      getDesktopMcpToolApprovalPresentation({
-        serverName: 'cindy_ios_simulator',
-        toolParams: { name: 'attach_device', args: {} },
-      })?.description,
-    ).toContain('without another device-control prompt');
-    expect(
-      getDesktopMcpToolApprovalPresentation({
-        serverName: 'cindy_ios_simulator',
-        toolName: 'call_tool',
-        toolParams: { name: 'open_url', args: {} },
-      }),
-    ).toBeUndefined();
   });
 
   it('auto-approves read-only discovery entries even on untrusted servers', () => {
@@ -451,9 +303,30 @@ describe('Cindy market action authorization', () => {
   });
 });
 
-describe('helper task workspace authorization', () => {
+describe('helper task workspace and SkillHub publication authorization', () => {
   const policy = (toolName: string | undefined, toolParams?: unknown) =>
     getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_helper', toolName, toolParams });
+
+  it.each([
+    { mode: 'create', visibility: 'public' },
+    { mode: 'create', visibility: 'private' },
+    { mode: 'create', visibility: 'shared', visible_slugs: ['engineering'] },
+    { mode: 'update' },
+  ])('reviews each publication with %j across payload representations', (publication) => {
+    const input = { ...publication, path: 'skills/release-notes', name: 'release-notes' };
+    for (const args of [input, JSON.stringify(input)]) {
+      expect(policy('publish_skill', args)).toBe('prompt-each-time');
+      for (const name of ['publish_skill', ' publish_skill ']) {
+        const params = { name, args };
+        for (const toolName of ['call_tool', undefined]) {
+          expect(policy(toolName, params)).toBe('prompt-each-time');
+          expect(policy(toolName, JSON.stringify(params))).toBe('prompt-each-time');
+        }
+      }
+    }
+    expect(getDesktopClaudeReadOnlyAllowedTools()).not.toContain('mcp__cindy_helper__publish_skill');
+    expect(getDesktopClaudeReadOnlyAllowedTools()).not.toContain('mcp__cindy_helper__call_tool');
+  });
 
   it('reviews each move across progressive payload representations', () => {
     for (const working_dir of ['/project', null]) {
@@ -489,8 +362,13 @@ describe('helper task workspace authorization', () => {
       'rename_project',
       'remove_project',
       'send_to_session',
+      'search_skills',
+      'list_my_published_skills',
+      'get_skill_publish_status',
     ]) {
+      expect(policy(name, {})).toBe('auto-approve');
       expect(policy('call_tool', { name, args: {} })).toBe('auto-approve');
+      expect(policy(undefined, JSON.stringify({ name, args: {} }))).toBe('auto-approve');
     }
   });
 });
@@ -532,5 +410,27 @@ describe('Orca Worker directory authorization', () => {
     }
     expect(policy('create_workers', {})).toBe('prompt-each-time');
     expect(policy('create_workers', { workers: [null] })).toBe('prompt-each-time');
+  });
+});
+
+
+describe('teammate pre-run command approval', () => {
+  it.each(['schedule_set_pre_run_hook', 'routine_save'])('reviews %s through direct and progressive calls', (name) => {
+    const args = { preRunHook: { command: 'node check.mjs' } };
+    expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_helper', toolName: name, toolParams: args })).toBe('prompt-each-time');
+    expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_helper', toolName: 'call_tool', toolParams: { name, args } })).toBe('prompt-each-time');
+    expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_helper', toolParams: { name, args } })).toBe('prompt-each-time');
+    expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_helper', toolParams: JSON.stringify({ name, args: JSON.stringify(args) }) })).toBe('prompt-each-time');
+    expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_helper', toolName: 'routine_list', toolParams: {} })).toBe('auto-approve');
+  });
+
+  it('does not mistake an unnamed direct script or routine input for a safe progressive call', () => {
+    const policy = (toolParams: unknown) =>
+      getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_helper', toolParams });
+    expect(policy({ script: 'process.exit(2)' })).toBe('prompt-each-time');
+    expect(policy({ name: 'routine_list', prompt: 'Check PRs', enabled: true,
+      triggers: [], preRunHook: { command: 'node check.mjs' } })).toBe('prompt-each-time');
+    expect(policy({ name: 'routine_list', args: {}, preRunHook: { command: 'node check.mjs' } })).toBe('prompt-each-time');
+    expect(policy({ name: 'routine_list', args: {} })).toBe('auto-approve');
   });
 });

@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 /**
  * ContactsImportDialog — 通讯录批量导入流程(三步: 选来源 → 预览勾选 → 结果)。
  *
@@ -158,16 +159,15 @@ export function ContactsImportDialog({ open, onOpenChange }: Props) {
     <Dialog.Root open={open} onOpenChange={handleOpenChange}>
       <Dialog.Portal>
         <Dialog.Overlay
-          className="fixed inset-0 z-[10001] bg-[var(--overlay-modal)]"
+          className="modal-scrim fixed inset-0 z-[10001]"
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         />
         <Dialog.Content
           aria-describedby={undefined}
           onPointerDownOutside={(e) => e.preventDefault()}
           className={cn(
-            'fixed left-1/2 top-1/2 z-[10001] -translate-x-1/2 -translate-y-1/2',
-            'flex max-h-[76vh] w-[560px] max-w-[92vw] flex-col overflow-hidden rounded-xl',
-            'border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)]',
+            'modal-panel fixed left-1/2 top-1/2 z-[10001] -translate-x-1/2 -translate-y-1/2',
+            'flex max-h-[76vh] w-[560px] max-w-[92vw] flex-col overflow-hidden',
           )}
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         >
@@ -285,20 +285,19 @@ export function ContactsImportDialog({ open, onOpenChange }: Props) {
                       'text-[var(--settings-input-text)] placeholder:text-[var(--settings-section-desc)]',
                     )}
                   />
-                  <button
+                  <Button
+                    variant="cta"
+                    size="md"
+                    compact
+                    loading={loading}
                     type="button"
                     disabled={loading || checkedCount === 0}
                     onClick={() => void runImport()}
-                    className={cn(
-                      'h-8 shrink-0 rounded-lg px-3.5 text-13 font-medium',
-                      'bg-[var(--accent-cta-bg)] text-[var(--accent-pure-cta-fg)]',
-                      'disabled:cursor-not-allowed disabled:opacity-40',
-                    )}
                   >
                     {loading
                       ? t('settings.contacts.import.running')
                       : t('settings.contacts.import.run', { count: checkedCount })}
-                  </button>
+                  </Button>
                 </div>
               </>
             )}
@@ -341,13 +340,16 @@ export function ContactsImportDialog({ open, onOpenChange }: Props) {
                     {t('settings.contacts.import.skipped', { count: summary.skipped.length })}
                   </p>
                 )}
-                <button
+                <Button
+                  variant="secondary"
+                  size="md"
+                  compact
                   type="button"
                   onClick={() => handleOpenChange(false)}
-                  className="h-8 self-end rounded-lg bg-[var(--settings-input-bg)] px-3.5 text-13 text-[var(--settings-section-title)]"
+                  className="self-end"
                 >
                   {t('settings.contacts.manager.closeAria')}
-                </button>
+                </Button>
               </div>
             )}
           </div>

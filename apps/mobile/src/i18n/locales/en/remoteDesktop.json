@@ -124,10 +124,9 @@
   "fps": "{{count}} fps",
   "quality": "Quality",
   "automatic": "Auto",
-  "clear": "Clear",
-  "highDefinition": "HD",
-  "original": "Original",
-  "qualityHint": "Auto adjusts picture quality to your connection. Higher quality needs more bandwidth; smoothness depends on your computer and network.",
+  "saver": "Data saver",
+  "hd": "HD",
+  "qualityHint": "Automatic favors smoothness, Data saver uses less data, HD favors sharp text.",
   "resolution": "Computer resolution",
   "settingUnsupported": "This computer does not support this setting yet",
   "loadingSettings": "Loading…",
@@ -159,7 +158,7 @@
   "lockOnExit": "Lock Computer on Exit",
   "lockOnExitHint": "Locks when you leave remote desktop. Reconnecting or switching apps does not lock the computer.",
   "lockOnExitFailed": "Could not confirm that the computer locked. Check the computer before leaving it unattended.",
-  "hostMute": "Mute controlled computer",
-  "hostMuteHint": "Mute the controlled computer while connected",
-  "hostMuteFailed": "Unable to change controlled computer mute state"
+  "hostMute": "Mute remote computer",
+  "hostMuteHint": "Mute the remote computer while connected",
+  "hostMuteFailed": "Couldn't change the remote computer's mute setting"
 }

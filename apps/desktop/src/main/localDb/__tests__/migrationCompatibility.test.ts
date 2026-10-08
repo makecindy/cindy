@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   checkMigrationCompatibility,
   hashMigrationFile,
+  MigrationRuntimeManifestError,
   prepareMigrationRuntimeManifest,
 } from '../migrationRunner';
 
@@ -210,6 +211,26 @@ describe('checkMigrationCompatibility', () => {
     expect(() => prepareMigrationRuntimeManifest(dbFilePath, drizzleDir, 1)).toThrow(
       /applied migration runtime identity changed at seq 1/,
     );
+  });
+
+  it('classifies an application missing an applied migration without weakening the guard', () => {
+    const drizzleDir = createDrizzleDir();
+    const dbFilePath = path.join(drizzleDir, 'shared.db');
+    prepareMigrationRuntimeManifest(dbFilePath, drizzleDir, 1);
+    rmSync(path.join(drizzleDir, '0001_second.sql'));
+
+    try {
+      prepareMigrationRuntimeManifest(dbFilePath, drizzleDir, 1);
+      throw new Error('expected a missing applied migration failure');
+    } catch (error) {
+      expect(error).toBeInstanceOf(MigrationRuntimeManifestError);
+      expect(error).toMatchObject({
+        code: 'applied-migration-missing-from-application',
+        seq: 1,
+        fileName: '0001_second.sql',
+      });
+      expect((error as Error).message).toContain('current application is missing applied migration');
+    }
   });
 
   it('normalizes the known bad 0062 companion identity back to canonical', () => {

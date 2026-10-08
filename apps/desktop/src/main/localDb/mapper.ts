@@ -92,11 +92,17 @@ type ProjectAutomationConsentInsert = typeof projectAutomationConsents.$inferIns
 type ScheduleRunRow = typeof scheduleRuns.$inferSelect;
 type ScheduleRunInsert = typeof scheduleRuns.$inferInsert;
 
-type SessionRuntimeProjector = (session: Session) => Partial<Session>;
+type SessionRuntimeFields = Pick<Session, 'id' | 'agentKind' | 'model' | 'providerId' | 'effort' | 'fastMode'>;
+type SessionRuntimeProjector = (session: SessionRuntimeFields) => Partial<Session>;
 let sessionRuntimeProjector: SessionRuntimeProjector | null = null;
 
 export function setSessionRuntimeProjector(projector: SessionRuntimeProjector | null): void {
   sessionRuntimeProjector = projector;
+}
+
+/** Full reads and committed route patches must publish the same runtime snapshot. */
+export function projectSessionRuntimeFields(session: SessionRuntimeFields): Partial<Session> {
+  return sessionRuntimeProjector?.(session) ?? {};
 }
 
 /**
@@ -113,6 +119,7 @@ export function setSessionRuntimeProjector(projector: SessionRuntimeProjector | 
  * preview 落 null，渲染端兜底隐藏。
  */
 export type SessionRowWithCount = SessionRow & {
+  tags?: import('@cindy/maker-shared').TaskTag[];
   messageCount: number;
   latestMessageContent?: string | null;
   latestMessageExtract?: string | null;
@@ -229,6 +236,7 @@ export function sessionToCamel(row: SessionRowWithCount): Session {
     row.totalCostUsd + (row.totalCostCurrency === 'USD' ? row.totalCostAmount : 0);
   const base: Session = {
     id: row.id,
+    ...(row.tags ? { tags: row.tags } : {}),
     userId: '', // 本地 db 已按 user 隔离，无需冗余存储
     title: row.title,
     workingDir: row.workingDir,
@@ -259,6 +267,7 @@ export function sessionToCamel(row: SessionRowWithCount): Session {
     extraDirs: safeParseStringArray(row.extraDirs),
     writableDirs: safeParseStringArray(row.writableDirs),
     remoteHostId: row.remoteHostId ?? null,
+    agentDeviceId: row.agentDeviceId ?? null,
     // interrupted-turn-resume:「疑似中断」判定的两个时间戳(unix ms 原样透出,
     // renderer 打开会话时比较 startedAt > endedAt,见 sessionActiveTurn.ts)。
     activeTurnStartedAt: row.activeTurnStartedAt ?? null,
@@ -290,7 +299,7 @@ export function sessionToCamel(row: SessionRowWithCount): Session {
     hasPendingSessionInterruption(candidate)
       ? base.activeTurnStartedAt
       : null;
-  return sessionRuntimeProjector ? { ...base, ...sessionRuntimeProjector(base) } : base;
+  return { ...base, ...projectSessionRuntimeFields(base) };
 }
 
 export function messageToCamel(row: MessageRow): Message {
@@ -364,6 +373,8 @@ export function sessionCreateToRow(
         writableDirs?: string[];
         /** Remote codex (P2): 远端 SSH host alias; null/undefined = 本地。 */
         remoteHostId?: string | null;
+        /** Agent 在同账号另一台电脑上运行时那台电脑的 deviceId; null/undefined = Agent 在本机。 */
+        agentDeviceId?: string | null;
         /**
          * per-session 来源(供应商)显式选择,落盘 sessions.provider_id(与 update 同列)。
          * null/undefined = 不显式选,跟随该 agent 的原生默认路由(no-break)。草稿态首次
@@ -408,6 +419,8 @@ export function sessionCreateToRow(
     extraDirs: safeStringify(body?.extraDirs ?? []),
     writableDirs: safeStringify(body?.writableDirs ?? []),
     remoteHostId: normalizeRemoteHostId(body?.remoteHostId),
+    // Agent 运行在另一台电脑时与 SSH 远端互斥：两者同时给出时以 SSH 远端为准、不记录设备。
+    agentDeviceId: normalizeRemoteHostId(body?.remoteHostId) ? null : normalizeRemoteHostId(body?.agentDeviceId),
     // 显式来源:trim 后非空才入库,其余(undefined / null / 空串 / 纯空白)一律落 null,
     // 与 session-provider-store 的 null 语义对齐(null → 回落默认路由,字节级不变)。
     providerId:

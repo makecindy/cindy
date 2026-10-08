@@ -62,6 +62,7 @@ describe('killProcessTree win32 PID identity safety', () => {
     expect(spawnMock.mock.calls.every(([command]) => command === 'taskkill')).toBe(true);
     expect(child.kill).not.toHaveBeenCalled();
     expect(onSettled).toHaveBeenCalledTimes(1);
+    expect(onSettled).toHaveBeenCalledWith(true);
   });
 
   it('普通模式重试耗尽后只 kill Node 直接子进程', async () => {
@@ -84,6 +85,7 @@ describe('killProcessTree win32 PID identity safety', () => {
     expect(spawnMock).toHaveBeenCalledTimes(3);
     expect(spawnMock.mock.calls.every(([command]) => command === 'taskkill')).toBe(true);
     expect(onSettled).toHaveBeenCalledTimes(1);
+    expect(onSettled).toHaveBeenCalledWith(false);
   });
 
   it('普通模式重试间隙父进程退出，不再向可复用 PID 发 taskkill', async () => {
@@ -100,7 +102,27 @@ describe('killProcessTree win32 PID identity safety', () => {
     expect(spawnMock).toHaveBeenCalledTimes(1);
     expect(child.kill).not.toHaveBeenCalled();
     expect(onSettled).toHaveBeenCalledTimes(1);
+    expect(onSettled).toHaveBeenCalledWith(false);
   });
+
+  it.each(['already-exited', 'exit-during-failure', 'spawn-throws'])(
+    'reports unconfirmed tree termination for %s', (scenario) => {
+      const child = fakeProcess(scenario !== 'already-exited');
+      const killer = new EventEmitter();
+      spawnMock.mockImplementation(() => {
+        if (scenario === 'spawn-throws') throw new Error('spawn failed');
+        return killer;
+      });
+      const onSettled = vi.fn();
+      killProcessTree(123, child as unknown as ChildProcess, onSettled);
+      if (scenario === 'exit-during-failure') {
+        child.exitCode = 0;
+        killer.emit('error', new Error('taskkill failed'));
+        killer.emit('exit', 1);
+      }
+      expect(onSettled).toHaveBeenCalledExactlyOnceWith(false);
+    },
+  );
 
   it('严格模式只终止原始 ChildProcess 句柄，不向裸 PID 发 taskkill 并保持 fail closed', () => {
     const child = fakeProcess();

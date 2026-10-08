@@ -107,6 +107,72 @@ describe('createRemoteDeviceUsageMirror', () => {
     expect(mocks.invoke).toHaveBeenCalledWith('device-1', 'maker:usage:account', ['codex']);
     expect(result.current).toMatchObject({ primary: { usedPercent: 3 } });
   });
+
+  it('shares one device read between concurrent consumers of the same account', async () => {
+    mocks.invoke.mockImplementation(async (_deviceId, _channel, args) => ({
+      providerId: args[1],
+      primary: { usedPercent: 3 },
+    }));
+    const chip = renderHook(() => useRemoteCodexAccountUsage('device-1', 'account-2'));
+    await flushMicrotasks();
+    // A second consumer (model picker) mounting beside a live consumer reuses its fresh snapshot.
+    vi.advanceTimersByTime(59_000);
+    const picker = renderHook(() => useRemoteCodexAccountUsage('device-1', 'account-2'));
+    await flushMicrotasks();
+    expect(mocks.invoke).toHaveBeenCalledTimes(1);
+    expect(picker.result.current).toMatchObject({ primary: { usedPercent: 3 } });
+
+    act(() =>
+      emitPush({
+        deviceId: 'device-1',
+        channel: 'usage:codex-provider-account-changed',
+        payload: { providerId: 'account-2', snapshot: { primary: { usedPercent: 7 } } },
+      }),
+    );
+    expect(chip.result.current).toMatchObject({ primary: { usedPercent: 7 } });
+    expect(picker.result.current).toMatchObject({ primary: { usedPercent: 7 } });
+    // Other accounts on the same device keep their own entry and read.
+    renderHook(() => useRemoteCodexAccountUsage('device-1', 'account-3'));
+    await flushMicrotasks();
+    expect(mocks.invoke).toHaveBeenCalledTimes(2);
+  });
+
+  it('re-reads beside a live consumer once its snapshot is older than the reuse window', async () => {
+    // Pushes are lost while the link is down; a long-lived chip must not pin a stale snapshot.
+    mocks.invoke.mockResolvedValue({ primary: { usedPercent: 3 } });
+    renderHook(() => useRemoteCodexAccountUsage('device-1'));
+    await flushMicrotasks();
+    vi.advanceTimersByTime(61_000);
+    mocks.invoke.mockResolvedValue({ primary: { usedPercent: 9 } });
+    const picker = renderHook(() => useRemoteCodexAccountUsage('device-1'));
+    await flushMicrotasks();
+    expect(mocks.invoke).toHaveBeenCalledTimes(2);
+    expect(picker.result.current).toMatchObject({ primary: { usedPercent: 9 } });
+  });
+
+  it('always re-reads on mount when no consumer was listening for pushes', async () => {
+    // A logout/account-switch clear pushed while nobody listened must not leave the old quota.
+    mocks.invoke.mockResolvedValue({ primary: { usedPercent: 3 } });
+    renderHook(() => useRemoteCodexAccountUsage('device-1')).unmount();
+    await flushMicrotasks();
+    mocks.invoke.mockResolvedValue(null);
+    const reopened = renderHook(() => useRemoteCodexAccountUsage('device-1'));
+    await flushMicrotasks();
+    expect(mocks.invoke).toHaveBeenCalledTimes(2);
+    expect(reopened.result.current).toBeNull();
+  });
+
+  it('keeps retrying mounts after a failed read', async () => {
+    mocks.invoke.mockRejectedValueOnce(new Error('offline'));
+    const first = renderHook(() => useRemoteCodexAccountUsage('device-1'));
+    await flushMicrotasks();
+    first.unmount();
+    mocks.invoke.mockResolvedValue({ primary: { usedPercent: 3 } });
+    const second = renderHook(() => useRemoteCodexAccountUsage('device-1'));
+    await flushMicrotasks();
+    expect(mocks.invoke).toHaveBeenCalledTimes(2);
+    expect(second.result.current).toMatchObject({ primary: { usedPercent: 3 } });
+  });
 });
 
 describe('selectRemoteCodexAccountUsage', () => {

@@ -1,3 +1,5 @@
+import type { TFunction } from 'i18next';
+import { formatSessionDuration } from '@/lib/sessionDurationFormat';
 import { Fragment, useEffect, useMemo, useCallback, useState } from 'react';
 import {
   AlertCircle,
@@ -14,14 +16,23 @@ import {
 import { useTranslation } from 'react-i18next';
 import {
   deriveAgentTaskStatus,
-  formatAgentTaskTitle,
+
+  type AgentTaskStatus,
+
   type AgentTaskTerminalStatus,
 } from '@cindy/maker-shared/agent-task';
 
 import { useExpandedBlockMemory } from '@/hooks/useExpandedBlockMemory';
+import {
+  BackgroundCommandDetails,
+  RunningElapsed,
+  parseTaskTimestamp,
+} from './AgentTaskLiveDetails';
 import { Collapse } from '@/components/ui/collapse';
 import { Spinner } from '@/components/ui/spinner';
 import type { AgentTaskUpdate, ChatMessage } from '@/hooks/useCCAgentChat';
+import { canManageBackgroundTasks, stopBackgroundTask } from '@/lib/backgroundTaskStop';
+import { reportBackgroundTaskStopFailure } from '@/lib/backgroundTaskStopFailure';
 import { getWorkflowProgressFor, isRemoteSessionSticky } from '@/lib/makerTransport';
 import { openBackgroundTasksTab } from '@/features/right-sidebar/lib/openBackgroundTasksTab';
 import { openSubagentsTab } from '@/features/right-sidebar/lib/openSubagentsTab';
@@ -38,6 +49,9 @@ import { formatCompactTokens } from '@/lib/usageFormat';
 import { CODEX_SUBAGENT_EFFORTS } from '../../../shared/subagentModelSettings';
 import {
   PI_SUBAGENT_TOOL_NAME,
+  formatAgentTaskTitle,
+  isClaudeSubagentToolName,
+  isSubagentResultError,
   subagentSpawnReceiptName,
   subagentSpawnResultIndicatesRunning,
 } from '@cindy/maker-shared/agent-task';
@@ -51,6 +65,8 @@ interface AgentTaskCardProps {
   update?: AgentTaskUpdate;
   result?: string;
   persistedStatus?: AgentTaskTerminalStatus;
+  /** Host `subagent_runs` status for this call; see deriveAgentTaskStatus. */
+  durableStatus?: AgentTaskStatus;
   /**
    * subagent-model-chip: 子代理实际跑的模型 raw id,由 MessageStream 用
    * parentToolUseId→model 映射(从子消息 agentMeta 反查)解析后传入,作为
@@ -99,14 +115,10 @@ function detailText(...values: Array<string | undefined>): string | undefined {
   return undefined;
 }
 
-function formatDuration(ms: number | undefined): string | undefined {
+function formatDuration(ms: number | undefined, t?: TFunction): string | undefined {
   if (typeof ms !== 'number' || !Number.isFinite(ms) || ms < 0) return undefined;
   if (ms < 1000) return `${ms}ms`;
-  const seconds = Math.round(ms / 1000);
-  if (seconds < 60) return `${seconds}s`;
-  const minutes = Math.floor(seconds / 60);
-  const rest = seconds % 60;
-  return rest > 0 ? `${minutes}m ${rest}s` : `${minutes}m`;
+  return formatSessionDuration(ms, t);
 }
 
 function statusIcon(status: AgentTaskUpdate['status']) {
@@ -157,6 +169,7 @@ export function AgentTaskCard({
   update,
   result,
   persistedStatus,
+  durableStatus,
   subagentModel,
   sessionId,
   sessionAgentKind,
@@ -232,19 +245,8 @@ export function AgentTaskCard({
     };
   }, [isWorkflow, update?.status, sessionId, workflowTaskId]);
 
-  const status = isWorkflow
-    ? (update?.status ?? historyFileStatus ?? (result ? 'completed' : 'running'))
-    : deriveAgentTaskStatus(update?.status, result, {
-        persistedStatus,
-        resultIsLaunchReceipt:
-          subagentSpawnReceiptName(toolCall?.toolName, toolCall?.toolInput, result) !== undefined
-          || subagentSpawnResultIndicatesRunning(toolCall?.toolName, result),
-      });
-  const StatusIcon = statusIcon(status);
-  const statusIconClassName = cn(
-    'text-[var(--text-secondary)]',
-    status === 'failed' && 'text-[var(--error-fg)]',
-  );
+
+
   // bash-task-card: 后台 Bash(run_in_background)与子 Agent 共用本卡,但视觉上
   // 是「后台命令」—— 终端图标 + shell provider 标签,避免用户把跑测试的 bash
   // 误读成一个子 Agent。
@@ -254,6 +256,31 @@ export function AgentTaskCard({
     ?? (toolCall?.toolName?.startsWith('collab:')
       ? 'codex'
       : toolCall?.toolName === PI_SUBAGENT_TOOL_NAME ? 'pi' : 'claude-code');
+  // `<tool_use_error>` 是 Claude SDK 协议级标记,只对 Claude 子任务(Agent/Task)的
+  // 结果有意义。后台 Bash、PI subagent 与 Codex `collab:*` 的成功产物可能合法地以
+  // 该前缀开头,无条件判定会把成功任务误标成 failed。工具名已知时按工具名收窄,
+  // 只有历史回放(update 卡无 toolCall)才退回 provider 判定。
+  const claudeProtocolResult =
+    isSubagent
+    && (toolCall?.toolName !== undefined
+      ? isClaudeSubagentToolName(toolCall.toolName)
+      : provider === 'claude-code');
+
+  const status = isWorkflow
+    ? (update?.status ?? historyFileStatus ?? (result ? 'completed' : 'running'))
+    : deriveAgentTaskStatus(update?.status, result, {
+        persistedStatus,
+        durableStatus,
+        resultIsLaunchReceipt:
+          subagentSpawnReceiptName(toolCall?.toolName, toolCall?.toolInput, result) !== undefined
+          || subagentSpawnResultIndicatesRunning(toolCall?.toolName, result),
+        resultIsError: claudeProtocolResult && isSubagentResultError(result),
+      });
+  const StatusIcon = statusIcon(status);
+  const statusIconClassName = cn(
+    'text-[var(--text-secondary)]',
+    status === 'failed' && 'text-[var(--error-fg)]',
+  );
   const AvatarIcon = isWorkflow ? Workflow : isBash ? SquareTerminal : Bot;
   const title = compactText(
     formatAgentTaskTitle(provider, (isWorkflow ? update?.workflowName : undefined) ??
@@ -272,6 +299,11 @@ export function AgentTaskCard({
   const spawnReceiptName = subagentSpawnReceiptName(toolCall?.toolName, toolCall?.toolInput, result);
   const resultIsPiLaunchReceipt = isPiDurableSubagent
     && subagentSpawnResultIndicatesRunning(toolCall?.toolName, result);
+  // Claude's async receipt is internal metadata addressed to the model (agentId,
+  // output file); it is never the task's summary.
+  const resultIsClaudeLaunchReceipt = !isPiDurableSubagent
+    && provider === 'claude-code'
+    && subagentSpawnResultIndicatesRunning(toolCall?.toolName, result);
   // 判据与抑制规则同 maker-shared 的 buildAgentTaskCardModel:有 live update 时不显示
   // 「已启动」句子(title + 状态已表达),否则 codex 卡会比 Claude 卡多一行冗余文案。
   // PI/Claude detached tool_result 也是启动回执；终态卡必须优先显示后续 durable
@@ -282,13 +314,37 @@ export function AgentTaskCard({
         : t('chat.agentTask.subagentStarted', { name: formatAgentTaskTitle(provider, spawnReceiptName) }))
     : resultIsPiLaunchReceipt
       ? detailText(update?.summary, result)
-      : detailText(result, update?.summary);
+      : resultIsClaudeLaunchReceipt
+        ? detailText(update?.summary)
+        : detailText(result, update?.summary);
   const piResultNeedsCollapse = Boolean(
     isPiDurableSubagent
       && summary
       && (summary.length > 320 || summary.split(/\r?\n/).length > 4),
   );
-  const duration = formatDuration(update?.usage?.durationMs);
+  // 任务开始时间:本机会话优先取发起它的工具调用消息时间(重载后仍是真实启动时刻),
+  // 孤儿 update(workflow / 子 agent 内部启动)回退到 renderer 首次收到事件的时间。
+  // 远程会话的消息时间来自被控端时钟,与本机 Date.now() 相减会被两台电脑的时钟差放大,
+  // 改为优先用本机收到任务事件的时间(update.createdAt 由本机 store 盖章)。
+  const toolCallStartedAtMs = parseTaskTimestamp(toolCall?.createdAt);
+  const updateStartedAtMs = parseTaskTimestamp(update?.createdAt);
+  const startedAtMs = sessionId && isRemoteSessionSticky(sessionId)
+    ? updateStartedAtMs ?? toolCallStartedAtMs
+    : toolCallStartedAtMs ?? updateStartedAtMs;
+  // 终态用时:provider 给了 durationMs 就用它;后台命令没有 usage,用首末事件时间差兜底。
+  // 运行中有开始时间时改为每秒刷新的「已运行」,不再显示 provider 上一帧的静态时长。
+  const showLiveElapsed = status === 'running' && startedAtMs !== undefined;
+  const endedAtMs = status === 'running' ? undefined : parseTaskTimestamp(update?.updatedAt);
+  const duration = showLiveElapsed
+    ? undefined
+    : formatDuration(
+        update?.usage?.durationMs
+          ?? (startedAtMs !== undefined && endedAtMs !== undefined && endedAtMs >= startedAtMs
+            ? endedAtMs - startedAtMs
+            : undefined),
+        t,
+      );
+  const bashCommand = isBash ? readInputString(toolCall?.toolInput, ['command']) : undefined;
   const providerLabel = isWorkflow
     ? t('chat.agentTask.provider.workflow')
     : isBash
@@ -302,8 +358,9 @@ export function AgentTaskCard({
   // 停止按钮:Claude 后台任务沿用 SDK stopTask；PI 只开放 Cindy durable runner
   // 明确标成 taskType=pi_subagent 的异步任务。普通 PI 前台委派没有 durable 控制面，
   // 不能仅凭 provider 猜测可停止。Codex 仍无 stopTask 通道。
-  // 点击后交给 main 的 stopAgentTask;成功与否都由 task_notification / durable status
-  // 事件流收口(状态翻 stopped → 按钮自然消失),这里只管在飞态防连点。
+  // 点击后交给会话归属端的 stopAgentTask(device-link 远程会话隧道到被控端);成功与否
+  // 都由 task_notification / durable status 事件流收口(状态翻 stopped → 按钮自然消失),
+  // 这里只管在飞态防连点。
   const [stopping, setStopping] = useState(false);
   const providerCanStop = update?.provider === 'claude-code'
     || (update?.provider === 'pi' && update.taskType === 'pi_subagent');
@@ -312,20 +369,17 @@ export function AgentTaskCard({
     Boolean(sessionId) &&
     Boolean(update?.taskId) &&
     providerCanStop &&
-    // device-link 镜像会话:session 活在被控端,本地 stopAgentTask 会假成功 —— 不给
-    // 按钮。粘滞判定:relay 瞬断清空注册表的窗口内不误判为本机(与面板同口径)。
-    !(sessionId && isRemoteSessionSticky(sessionId));
+    Boolean(sessionId && canManageBackgroundTasks(sessionId));
   const handleStop = useCallback(() => {
-    const api = window.electronAPI?.maker;
-    if (!sessionId || !update?.taskId || !api?.stopAgentTask) return;
+    if (!sessionId || !update?.taskId) return;
     setStopping(true);
-    void api
-      .stopAgentTask(sessionId, update.taskId)
-      .catch(() => {
-        // 静默:失败时卡片仍显示 running,用户可重试;不弹打断式错误。
+    void stopBackgroundTask(sessionId, update.taskId)
+      .catch((error: unknown) => {
+        // 失败时卡片仍显示 running,用户可重试;只有远程电脑版本过旧时提示升级。
+        reportBackgroundTaskStopFailure(error, t);
       })
       .finally(() => setStopping(false));
-  }, [sessionId, update?.taskId]);
+  }, [sessionId, update?.taskId, t]);
 
   // workflow 卡整卡点击 → 打开右栏后台任务面板并定位本任务(workflowTaskId 在
   // 组件顶部与状态修正共用同一次推导)。三者缺一就退回传统展开交互,让
@@ -463,6 +517,7 @@ export function AgentTaskCard({
                   )}
                 </Fragment>
               ))}
+              {showLiveElapsed && startedAtMs !== undefined && <RunningElapsed startedAtMs={startedAtMs} />}
             </span>
             {workflowSummary && (
               <span
@@ -547,6 +602,16 @@ export function AgentTaskCard({
         {!(isWorkflow && canOpenInPanel) && (
           <Collapse open={expanded}>
             <div className="mt-2 border-l-2 border-[var(--agent-actions-rail)] pl-3 text-13 leading-5 text-[var(--text-secondary)]">
+              {isBash && (
+                <BackgroundCommandDetails
+                  sessionId={sessionId}
+                  command={bashCommand}
+                  startedAtMs={startedAtMs}
+                  taskId={update?.taskId}
+                  running={status === 'running'}
+                  expanded={expanded}
+                />
+              )}
               {description && <p className="mb-1">{description}</p>}
               {summary && (
                 <>
@@ -564,7 +629,7 @@ export function AgentTaskCard({
                       type="button"
                       aria-expanded={piResultExpanded}
                       onClick={() => setPiResultExpanded((current) => !current)}
-                      className="mb-1 rounded-full text-12 text-[var(--accent-fg)] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+                      className="mb-1 rounded-full text-12 text-[var(--accent-emphasis)] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
                     >
                       {t(piResultExpanded
                         ? 'chat.agentTask.hideFullResult'

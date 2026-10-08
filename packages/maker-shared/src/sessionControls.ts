@@ -131,6 +131,12 @@ export function summarizeAccountRateLimits(
   value: unknown,
   nowMs: number,
   localizer?: PresentationLocalizer,
+  /**
+   * Label a window by its reset (e.g. a countdown) instead of its duration; null keeps
+   * the duration label. Without it, rows name the window and append the reset time.
+   * windowMinutes lets a countdown cap at the window length.
+   */
+  resetLabel?: (resetsAt: number, windowMinutes: number | null) => string | null,
 ): {
   rows: Array<{ label: string; value: string }>;
 } | null {
@@ -159,14 +165,24 @@ export function summarizeAccountRateLimits(
         percent: formatRateLimitPercent(used),
       }),
     ];
-    const resetText = formatRateLimitResetAt(readNumber(window.resetsAt), nowMs, localizer);
-    if (resetText) {
-      parts.push(presentationText(localizer, 'session.presentation.controls.rateLimit.resetsAt', `${resetText} 重置`, {
-        time: resetText,
-      }));
+    const resetsAt = readNumber(window.resetsAt);
+    // Countdown mode never presents a window whose reset has passed: its percentage
+    // belongs to the previous period until a new snapshot arrives.
+    if (resetLabel && resetsAt !== null && resetsAt > 0 && resetsAt * 1000 <= nowMs) continue;
+    const countdownLabel =
+      resetLabel && resetsAt !== null && resetsAt > 0
+        ? resetLabel(resetsAt, readNumber(window.windowMinutes))
+        : null;
+    if (!resetLabel) {
+      const resetText = formatRateLimitResetAt(resetsAt, nowMs, localizer);
+      if (resetText) {
+        parts.push(presentationText(localizer, 'session.presentation.controls.rateLimit.resetsAt', `${resetText} 重置`, {
+          time: resetText,
+        }));
+      }
     }
     rows.push({
-      label: rateLimitWindowLabel(readNumber(window.windowMinutes), localizer),
+      label: countdownLabel ?? rateLimitWindowLabel(readNumber(window.windowMinutes), localizer),
       value: parts.join(' · '),
     });
   }

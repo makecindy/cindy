@@ -30,6 +30,7 @@ import type { XdtHelperToolRegistry } from '../lizi_xdtHelperToolRegistry.js';
 import type { XdtHelperHistoryDeps, HistoryRole } from './_history_types.js';
 import { okPayload, errorPayload } from './_payload.js';
 import { resolveHistoryScope } from './_history_scope.js';
+import { historyDeviceShape, HISTORY_DEVICE_DESCRIPTION, queryHistoryDevices } from './_history_devices.js';
 
 const ROLE_VALUES = [
   'user',
@@ -45,6 +46,7 @@ const ROLE_VALUES = [
 const DEFAULT_QA_ROLES = ['user', 'assistant', 'ask_user', 'plan_review'] as const satisfies readonly HistoryRole[];
 
 const DESCRIPTION = [
+  HISTORY_DEVICE_DESCRIPTION,
   '跨所有 session 用自然语言语义检索历史聊天记录, 返回相关命中 + 上下文窗口的原始数据。',
   '',
   '【何时调用】用户"我之前聊过 X / 上次怎么解决那个 bug / 关于 Y 我们讨论过啥"等',
@@ -84,6 +86,7 @@ export function registerSearchChatHistoryTool(
     category: 'history',
     description: DESCRIPTION,
     inputShape: {
+      ...historyDeviceShape,
       query: z.string().min(1).max(256).describe('自然语言查询(必填, 最长 256)。例: "上次怎么修的语音输入授权问题"。'),
       session_ids: z
         .array(z.string().min(1))
@@ -114,18 +117,21 @@ export function registerSearchChatHistoryTool(
       limit: z.number().int().min(1).max(50).default(10).describe('融合后返回命中条数, 1-50, 默认 10。'),
       cursor: z.string().optional().describe('上次响应的 nextCursor; 不传 = 第一页。坏 cursor 自动回第一页。'),
     },
-    handler: async ({
-      query,
-      session_ids,
-      workdir,
-      from,
-      to,
-      agent_kind,
-      roles,
-      context_radius,
-      limit,
-      cursor,
-    }) => {
+    handler: async (args) => {
+      if (args.device !== 'local') return queryHistoryDevices(registry, deps, 'search_chat_history', args);
+      if (args.session_ids?.some((id) => id.includes('::'))) return errorPayload('INVALID_ARGS', '远程 session_ids 必须指定对应 device，不能作为本机 ID 查询。');
+      const {
+        query,
+        session_ids,
+        workdir,
+        from,
+        to,
+        agent_kind,
+        roles,
+        context_radius,
+        limit,
+        cursor,
+      } = args;
       const scope = await resolveHistoryScope(
         deps.history,
         deps.getSessionContext,

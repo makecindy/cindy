@@ -12,6 +12,12 @@
 
 import type { AutoReviewUserIntent } from './agents/shared/auto-review-decision.js';
 import { randomUUID } from 'node:crypto';
+import { ToolLoopGuard } from './agents/shared/loop-guard.js';
+import {
+  ToolLoopMonitor,
+  type HardToolLoopVerdict,
+  type ToolLoopReviewer,
+} from './agents/shared/tool-loop-review.js';
 import type { ReviewableAction } from './agents/shared/auto-review.js';
 import type { AutoReviewDecision } from './agents/shared/auto-review-decision.js';
 
@@ -51,6 +57,7 @@ import type { ContextUsageData } from './types/context-usage.js';
 import type { PiRuntimeCapabilityManifest } from './types/pi-runtime-capabilities.js';
 import type {
   AgentSessionHandle,
+  PiModelSwitchPreview,
   AgentSessionTeardownOptions,
   BackgroundTaskSnapshot,
   SendOptions,
@@ -181,6 +188,11 @@ export interface SessionOptions {
    * （见 docs/vision-bridge-design.md 层 B）。
    */
   visionBridge?: VisionBridgeHook;
+  /**
+   * 可选：工具循环疑似命中时的辅助模型复核入口（host 注入）。缺省 = 疑似即中断，
+   * 与未接入复核前一致。
+   */
+  toolLoopReviewer?: ToolLoopReviewer;
 }
 
 function redactEventForListeners(event: AgentEvent): AgentEvent {
@@ -361,6 +373,10 @@ export type SessionGracefulStopResult =
 
 type TurnControlState = {
   generation: number;
+  toolLoopMonitor: ToolLoopMonitor | null;
+  pendingToolLoop: { toolUseId: string; verdict: HardToolLoopVerdict } | null;
+  /** 已送达完整结果、尚未送达结果摘要的工具;终态错误必须排在它们的摘要之后。 */
+  awaitingToolResultSummaries: Set<string>;
   activeToolIds: Set<string>;
   anonymousActiveTools: number;
   pendingInteractionToolIds: Map<string, number>;
@@ -415,6 +431,7 @@ export class Session {
   private readonly logger: Logger;
   /** 视觉桥钩子（层 B）。缺省 = 未启用，send 完全跳过。 */
   private readonly visionBridge: VisionBridgeHook | undefined;
+  private readonly toolLoopReviewer: ToolLoopReviewer | undefined;
   private permissionModeStateValue: PermissionModeState;
   private permissionModeChangeChain: Promise<void> = Promise.resolve();
   private permissionModeChangesInFlight = 0;
@@ -507,6 +524,8 @@ export class Session {
   // ── turn 零事件看门狗（见 DEFAULT_TURN_STALL_MS）────────────────────────
   private readonly turnStallMs: number;
   private turnStallTimer: ReturnType<typeof setTimeout> | null = null;
+  private turnStallDiagnosticState = 'idle';
+  private turnStallLastDiagnosticAt = 0;
   /** 还需要"清醒地"静默多久才判卡死;按分片递减(见 armTurnStallSlice)。 */
   private turnStallRemainingMs = 0;
   /** 当前分片的起始壁钟时刻;片尾据此识别系统挂起。 */
@@ -550,6 +569,7 @@ export class Session {
     this.turnStallMs =
       opts.turnStallMs ?? parseTurnStallMs(process.env.XDT_SESSION_TURN_STALL_MS);
     this.visionBridge = opts.visionBridge;
+    this.toolLoopReviewer = opts.toolLoopReviewer;
 
     // 注入 InteractionResolver 到底层 handle, 转发到 host 维护的 listener。
     // 没接 listener 时按 kind 给出安全默认: 都视作 deny(host 必须接 listener 才能交互)。
@@ -1352,6 +1372,8 @@ export class Session {
     if (this.status === 'closed') return Promise.resolve();
 
     this.terminationStarted = true;
+    // 拆除开始即作废进行中的工具循环复核,迟到结论不得再中断。
+    this.turnControlState?.toolLoopMonitor?.dispose();
     // Reserve before synchronous terminal listeners run, but begin transport
     // shutdown now: a pending send must see its cancellation in this tick.
     let resolve!: () => void;
@@ -1462,6 +1484,7 @@ export class Session {
       this.unacceptedSendGeneration = null;
       this.currentTurnOrigin = null;
       this.currentTurnAttemptToken = null;
+      this.turnControlState?.toolLoopMonitor?.dispose();
       this.turnControlState = null;
       this.eventListeners.clear();
       this.runtimeRecoveryListeners.clear();
@@ -1499,6 +1522,8 @@ export class Session {
     const teardown: AgentSessionTeardownOptions = opts ?? { reason: 'account-boundary' };
     if (this.status === 'closed') return;
     this.terminationStarted = true;
+    // 拆除开始即作废进行中的工具循环复核,迟到结论不得再中断。
+    this.turnControlState?.toolLoopMonitor?.dispose();
     // 与 performClose() 对齐：进入拆离立即 abort 未完成的 pre-dispatch reservation
     // （vision bridge 等前置 hook 的 fetch），而不是等 handle.detach()/视觉通道超时——
     // 否则 handle.detach() 慢/挂起时，in-flight 视觉请求会继续拖住退出链。
@@ -1516,6 +1541,7 @@ export class Session {
       this.unacceptedSendGeneration = null;
       this.currentTurnOrigin = null;
       this.currentTurnAttemptToken = null;
+      this.turnControlState?.toolLoopMonitor?.dispose();
       this.turnControlState = null;
       this.clearTerminalErrorDrain();
       this.eventListeners.clear();
@@ -1579,17 +1605,26 @@ export class Session {
   }
 
   /**
-   * 底层 agent handle 的会话 id —— cc = SDK session id(也是出站请求的 `x-claude-code-session-id`
-   * header 值);SDK 尚未回填时为 '<pending>'。只读、不触发任何行为,供 host 把 loopback proxy
-   * 看到的请求归属回本会话做 per-session 路由(见 maker-host/anthropic-compat-proxy-host.ts)。
+   * Native identity safe to persist for resume. An unaccepted fork retains its source.
+   * Request routing uses requestSessionId, which may already identify the destination.
    */
   get sdkSessionId(): string {
     return this.handle.id;
   }
 
+  /** Live request identity, which may precede a fork's durable resume identity. */
+  get requestSessionId(): string {
+    return this.handle.requestSessionId ?? this.handle.id;
+  }
+
   /** 当前运行时模型。底层 handle 的 getter 会随 setModel 成功更新。 */
   get model(): string {
     return this.handle.model;
+  }
+
+  /** Codex-only: 当前会话实际绑定的本地 host 身份。 */
+  get codexHostKey(): string | undefined {
+    return this.handle.codexHostKey;
   }
 
   /** Codex-only: 当前会话绑定的 app-server host 是否经 loopback proxy 出口。 */
@@ -1710,6 +1745,13 @@ export class Session {
       throw new NotSupportedError('switchModel', { supported: false, reason: 'not-implemented' });
     }
     await this.handle.setModel(model, opts);
+  }
+
+  async previewModelSwitch(
+    model: string,
+    opts?: { providerId?: string | null },
+  ): Promise<PiModelSwitchPreview | undefined> {
+    return this.handle.previewModelSwitch?.(model, opts);
   }
 
   async requiresModelSwitchRebuild(
@@ -2099,7 +2141,7 @@ export class Session {
   ): Promise<InteractionDecision> {
     this.pendingInteractions += 1;
     const runtime = this.observeInteractionStarted(request);
-    this.clearTurnStallWatchdog();
+    this.armTurnStallWatchdog();
     try {
       return await resolve();
     } finally {
@@ -2147,8 +2189,25 @@ export class Session {
   }
 
   private beginTurnControl(generation: number): void {
+    this.turnControlState?.toolLoopMonitor?.dispose();
     this.turnControlState = {
       generation,
+      // Claude owns per-sidechain guards before translation. Pi/Codex share
+      // the same detector here, paired with this product turn's lifecycle.
+      toolLoopMonitor: this.agentKind === 'claude-code' ? null : new ToolLoopMonitor(new ToolLoopGuard({
+        // These normalized events do not identify model-response batches.
+        // Distinct malformed calls can belong to one parallel attempt, so do
+        // not enable the retry-count rule without that evidence. Claude also
+        // disables category-only retries; repetition rules stay active.
+        contractConsecutiveLimit: Number.POSITIVE_INFINITY,
+      }), {
+        reviewer: this.toolLoopReviewer,
+        context: () => ({ sessionId: this.id, agentKind: this.agentKind, model: this.handle.model }),
+        onReviewedStop: (verdict) => this.interruptReviewedToolLoop(verdict, generation),
+        logger: this.logger,
+      }),
+      pendingToolLoop: null,
+      awaitingToolResultSummaries: new Set(),
       activeToolIds: new Set(),
       anonymousActiveTools: 0,
       pendingInteractionToolIds: new Map(),
@@ -2159,7 +2218,9 @@ export class Session {
   }
 
   private clearTurnControl(generation: number): void {
-    if (this.turnControlState?.generation === generation) this.turnControlState = null;
+    if (this.turnControlState?.generation !== generation) return;
+    this.turnControlState.toolLoopMonitor?.dispose();
+    this.turnControlState = null;
   }
 
   /**
@@ -2729,15 +2790,111 @@ export class Session {
     } else if (isCurrentGeneration && isTurnWatchdogLivenessEvent(event)) {
       this.armTurnStallWatchdog();
     }
+    // Deliver the completed tool result before the loop error; never discard
+    // evidence or count both full and summary projections of the same result.
+    if (isCurrentGeneration) this.observeToolLoop(event, resolvedGeneration);
   }
 
-  private clearTurnStallWatchdog(): void {
+  /**
+   * 工具循环检测与中断的唯一会话级前提:同步观察与后台复核结论共用,避免两处判据分叉。
+   * 同一 turn、会话仍活跃且未进入拆除、没有等人确认、没有优雅停止。
+   */
+  private toolLoopControlFor(generation: number): TurnControlState | null {
+    const control = this.turnControlState;
+    if (!control?.toolLoopMonitor || control.generation !== generation ||
+      generation !== this.turnGeneration || this.status !== 'active' || this.closePromise ||
+      this.terminationStarted || this.pendingInteractions > 0 ||
+      control.gracefulStopState !== 'none') return null;
+    return control;
+  }
+
+  private observeToolLoop(event: AgentEvent, generation: number): void {
+    if (event.type !== 'tool_use' && event.type !== 'tool_result_full' && event.type !== 'tool_result') return;
+    if (event.turnScope === 'background' || event.sessionInstanceId !== this.instanceId) return;
+    const data = event.data && typeof event.data === 'object'
+      ? event.data as Record<string, unknown> : {};
+    if (data.runtimeActivity === 'snapshot') return;
+    // 摘要配对记账不受检测暂停(等人确认等)影响,否则复核终态可能等一个早已送达的摘要。
+    this.trackToolResultSummaries(event, data, generation);
+    const control = this.toolLoopControlFor(generation);
+    if (!control?.toolLoopMonitor) return;
+    if (event.type === 'tool_result') {
+      const pending = control.pendingToolLoop;
+      if (!pending || !Array.isArray(data.toolUseIds) || !data.toolUseIds.includes(pending.toolUseId)) return;
+      control.pendingToolLoop = null;
+      this.interruptToolLoop(pending.verdict, generation);
+      return;
+    }
+    if (typeof data.toolUseId !== 'string' || control.pendingToolLoop) return;
+    if (event.type === 'tool_use') {
+      control.toolLoopMonitor.onToolUse(data.toolUseId, data.toolName, data.input);
+      return;
+    }
+    if (event.type !== 'tool_result_full' || typeof data.fullText !== 'string') return;
+    const verdict = control.toolLoopMonitor.onToolResult(data.toolUseId, data.fullText, data.isError === true);
+    if (verdict.kind !== 'hard') return;
+    // Both translators enqueue full text before its summary. Let listeners
+    // consume both projections before terminal cleanup clears their pairing.
+    // This belongs to TurnControlState so termination/takeover discards it.
+    control.pendingToolLoop = { toolUseId: data.toolUseId, verdict };
+  }
+
+  private trackToolResultSummaries(event: AgentEvent, data: Record<string, unknown>, generation: number): void {
+    const control = this.turnControlState;
+    if (!control || control.generation !== generation) return;
+    if (event.type === 'tool_result_full' && typeof data.toolUseId === 'string') {
+      control.awaitingToolResultSummaries.add(data.toolUseId);
+    } else if (event.type === 'tool_result' && Array.isArray(data.toolUseIds)) {
+      for (const id of data.toolUseIds) if (typeof id === 'string') control.awaitingToolResultSummaries.delete(id);
+    }
+  }
+
+  /**
+   * 后台复核判定 stop 时,结果可能晚于 turn 结束、接管或关闭到达。只有同一 turn
+   * 仍满足 observeToolLoop 的全部前提时才中断;否则丢弃。
+   */
+  private interruptReviewedToolLoop(verdict: HardToolLoopVerdict, generation: number): void {
+    const control = this.toolLoopControlFor(generation);
+    if (!control || control.pendingToolLoop) return;
+    // 与同步判定同一顺序约束:还有完整结果未配上摘要时,等最后一个摘要送达再发终态。
+    const awaiting = [...control.awaitingToolResultSummaries].at(-1);
+    if (awaiting !== undefined) {
+      control.pendingToolLoop = { toolUseId: awaiting, verdict };
+      return;
+    }
+    this.interruptToolLoop(verdict, generation);
+  }
+
+  private interruptToolLoop(verdict: HardToolLoopVerdict, generation: number): void {
+    this.fanOutEvent({
+      type: 'error',
+      data: {
+        message: `Repeated tool calls (${verdict.count}) indicate a tool loop; this turn was interrupted. You can send the next message to continue.`,
+        isTerminal: true,
+        reason: 'tool_use_loop_detected',
+        toolLoop: { kind: verdict.reason, count: verdict.count },
+      },
+      source: this.agentKind,
+    });
+    // A listener can synchronously take over. Never interrupt its replacement.
+    if (generation !== this.turnGeneration) return;
+    // abort() already owns confirmation/rebuild fallback; no second watchdog.
+    void this.abort().catch((error) => {
+      this.logger.warn('tool loop interrupt failed', { error: String(error) });
+    });
+  }
+
+  private clearTurnStallWatchdog(refresh = false): void {
     if (this.turnStallTimer) {
       clearTimeout(this.turnStallTimer);
       this.turnStallTimer = null;
     }
     this.turnStallRemainingMs = 0;
     this.turnStallSliceStartedAt = 0;
+    if (!refresh && this.turnStallDiagnosticState === 'armed') {
+      this.logger.info('turn stall watchdog disarmed', { status: this.status });
+      this.turnStallDiagnosticState = 'idle';
+    }
   }
 
   private clearTerminalErrorDrain(): void {
@@ -2776,14 +2933,33 @@ export class Session {
    * 后两条是误杀防护(见 DEFAULT_TURN_STALL_MS)。
    */
   private armTurnStallWatchdog(): void {
-    this.clearTurnStallWatchdog();
-    if (this.turnStallMs <= 0) return;
-    if (this.status !== 'active') return;
-    if (this.closePromise) return;
-    if (!this.isTurnRunning() && !this.hasUnsettledTurn()) return;
-    if (this.pendingInteractions > 0) return;
-    if (this.hasRunningBackgroundTasks()) return;
+    this.clearTurnStallWatchdog(true);
+    const reason = this.turnStallMs <= 0 ? 'disabled'
+      : this.status !== 'active' ? this.status
+      : this.closePromise ? 'closing'
+      : !this.isTurnRunning() && !this.hasUnsettledTurn() ? 'no-active-turn'
+      : this.pendingInteractions > 0 ? 'pending-interaction'
+      : this.hasRunningBackgroundTasks() ? 'background-task' : null;
+    if (reason) {
+      if (this.turnStallDiagnosticState !== reason) {
+        this.logger.info('turn stall watchdog suspended', { reason });
+        this.turnStallDiagnosticState = reason;
+      }
+      return;
+    }
     this.turnStallRemainingMs = this.turnStallMs;
+    const now = Date.now();
+    // Bound refresh diagnostics to once per minute, independent of token volume.
+    if (this.turnStallDiagnosticState !== 'armed' || now - this.turnStallLastDiagnosticAt >= 60_000) {
+      this.logger.info(this.turnStallDiagnosticState !== 'armed'
+        ? 'turn stall watchdog armed' : 'turn stall watchdog refreshed', {
+        timeoutMs: this.turnStallMs,
+        lastActivityAt: now,
+        deadlineWithoutSuspendAt: now + this.turnStallMs,
+      });
+      this.turnStallLastDiagnosticAt = now;
+    }
+    this.turnStallDiagnosticState = 'armed';
     this.armTurnStallSlice();
   }
 
@@ -3079,6 +3255,7 @@ export class Session {
     this.unacceptedSendGeneration = null;
     this.currentTurnOrigin = null;
     this.currentTurnAttemptToken = null;
+    this.turnControlState?.toolLoopMonitor?.dispose();
     this.turnControlState = null;
     this.setStatus('closed');
     this.eventListeners.clear();

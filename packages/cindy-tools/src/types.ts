@@ -142,6 +142,7 @@ export interface CindyGhostInfo {
 export type CindyGhostCallErrorCode =
   | 'GHOST_NOT_FOUND' // 未装入或已抽离
   | 'GHOST_ASLEEP' // 沉睡中(用户可在主界面侧边栏「插件」中唤醒)
+  | 'GHOST_RETIRED' // 功能已下线，不可唤醒或重试
   | 'GHOST_DISABLED_IN_WORKDIR' // 用户在当前工作目录停用了该意识(不要重试)
   | 'TOOL_NOT_FOUND' // 该意识没有这个工具
   | 'GHOST_CRASHED' // 电子脑执行中崩溃
@@ -154,10 +155,10 @@ export type CindyGhostCallErrorCode =
 
 export type CindyGhostInfoErrorCode = Extract<
   CindyGhostCallErrorCode,
-  'GHOST_NOT_FOUND' | 'GHOST_ASLEEP' | 'GHOST_DISABLED_IN_WORKDIR'
+  'GHOST_NOT_FOUND' | 'GHOST_ASLEEP' | 'GHOST_DISABLED_IN_WORKDIR' | 'GHOST_RETIRED'
 >;
 
-/** host 可见性判序回调(getAwakeGhost)的返回:只产可见性三码,不产 INTERNAL。 */
+/** host 可见性判序回调(getAwakeGhost)的返回:只产可见性错误,不产 INTERNAL。 */
 export type CindyGhostInfoHostResult =
   | { ok: true; ghost: CindyGhostInfo }
   | { ok: false; errorCode: CindyGhostInfoErrorCode; message: string };
@@ -337,6 +338,7 @@ export type CindyMediaCapability =
 export type CindyMediaToolRequest =
   | { action: 'list_models'; capability?: CindyMediaCapability }
   | { action: 'resolve_local_path'; url: string }
+  | { action: 'import_image'; path: string }
   | {
       action: 'prepare';
       /** 精确执行来源；插件配置返回 providerId 时必须原样传入。 */
@@ -353,7 +355,7 @@ export interface CindyGhostsMcpDeps {
   searchMarket?(query: string): Promise<Record<string, unknown>>;
   installMarket?(request: { pluginId: string; releaseId: string }, signal?: AbortSignal): Promise<Record<string, unknown>>;
   /** Host-owned connection card. No URLs or credentials may be supplied by the model. */
-  connectAccount?(target: { kind: 'plugin'; id: string; reauthorize?: boolean } | { kind: 'host'; id: 'grok'; reauthorize?: boolean }): Promise<Record<string, unknown>>;
+  connectAccount?(target: { kind: 'plugin'; id: string; reauthorize?: boolean } | { kind: 'host'; id: 'grok'; reauthorize?: boolean }, signal?: AbortSignal): Promise<Record<string, unknown>>;
   /** Cindy Core 原生媒体调用器；能力本身不依赖任何插件。 */
   callMedia?(request: CindyMediaToolRequest): Promise<Record<string, unknown>>;
   /**
@@ -381,6 +383,8 @@ export interface CindyGhostsMcpDeps {
     ghostId: string;
     tool: string;
     args: Record<string, unknown>;
+    /** Host-only cancellation from the MCP request; never enters plugin args. */
+    signal?: AbortSignal;
     /**
      * 媒体过户(可选):会话里用户媒体或当前 Agent / Core 工具生成结果的
      * 地址(xdt-image:// / cindy-media://blobs/ / 本机绝对路径,主机归一化并验归属)。

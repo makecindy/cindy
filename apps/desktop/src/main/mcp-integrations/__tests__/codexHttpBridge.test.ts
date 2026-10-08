@@ -270,11 +270,17 @@ describe('codexHttpBridge', () => {
     }));
     expect(result).toMatchObject({ result: { content: [{ type: 'text', text: expect.stringContaining('remote-task') }] } });
     expect(start).toHaveBeenCalledWith(expect.objectContaining({ callerSessionId: 'remote-bot', objective: 'Build the report' }));
-    // The bridge is shared: a live surface change must not reveal ordinary helper controls.
+    // The ordinary remote surface retains Cindy introspection, but not local controls or Bot-only tasks.
     surface = 'default';
     expect((await list()).result.tools.map(t => t.name).sort()).toEqual(['call_tool', 'list_tools']);
-    const categories = await readRpcResponse(await request('tools/call', { name: 'list_tools', arguments: {} }));
-    expect(categories).toMatchObject({ result: { content: [{ text: expect.stringContaining('"categories":[]') }] } });
+    const categories = await readRpcResponse(await request('tools/call', { name: 'list_tools', arguments: {} })) as {
+      result: { content: Array<{ text: string }> };
+    };
+    expect(JSON.parse(categories.result.content[0]!.text).categories).toEqual([{ name: 'cindy', tool_count: 2 }]);
+    const introspection = await readRpcResponse(await request('tools/call', {
+      name: 'call_tool', arguments: { name: 'get_current_session_id', args: {} },
+    }));
+    expect(introspection).toMatchObject({ result: { content: [{ text: expect.stringContaining('remote-bot') }] } });
     await request('tools/call', { name: 'start_session_task', arguments: { instruction: 'denied' } }).then(readRpcResponse);
     expect(start).toHaveBeenCalledTimes(1);
     if (agentKind === 'codex') {

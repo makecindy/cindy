@@ -70,13 +70,15 @@ describe('mobile message list container', () => {
     expect(source).not.toContain('visibleMessageKeys');
     expect(source).toContain("const MESSAGE_LIST_VIEWABILITY_CONFIG_ID = 'message-heavy-content';");
     expect(source).toContain('id: MESSAGE_LIST_VIEWABILITY_CONFIG_ID');
-    expect(source).toContain('useViewability<MobileMessageRenderItem>(');
-    expect(source).toContain('MESSAGE_LIST_VIEWABILITY_CONFIG_ID,');
-    expect(source).toContain('const [isViewable, setIsViewable] = useRecyclingState(false);');
-    expect(source).toContain('if (token.key !== itemKeyRef.current) return;');
+    expect(source).toContain('useMessageListItemVisible(item.key)');
+    expect(source).toContain('useMemo(() => new MessageListVisibility(), [scrollResetKey])');
+    expect(source).toContain('messageListVisibility.update(info.viewableItems)');
     expect(source).toContain('maxTextRunInlineFragments: ANDROID_SELECTABLE_TEXT_RUN_MAX_INLINE_FRAGMENTS');
-    expect(listSource).toContain('onFirstVisibleItemChanged={handleFirstVisibleItemChangedRef.current}');
-    expect(listSource).not.toContain('onViewableItemsChanged=');
+    expect(listSource).not.toContain('onFirstVisibleItemChanged');
+    // Companion receipts observe visible rows through a ref, without broadcasting cell visibility.
+    // Both modes publish visibility, but only companion chats acknowledge read receipts.
+    expect(listSource).toContain('onViewableItemsChanged={handleViewableItemsChanged}');
+    expect(source).toContain('if (companion) handleCompanionViewableItems(info)');
     // 上滑加载:LegendList 近顶阈值触发自动预取(替代手搓的滚动 metric 判定)。
     expect(listSource).toContain('onStartReached={handleStartReached}');
     // 自动预取必须是电平判定(shouldAutoLoadEarlier + 多时机重评估),不许退回只吃 onStartReached
@@ -212,7 +214,8 @@ describe('mobile message list container', () => {
     const focusEffectStart = source.indexOf('// 深链/搜索:滚到指定消息');
     const focusEffectEnd = source.indexOf('// 新消息红点', focusEffectStart);
     const focusEffectSource = source.slice(focusEffectStart, focusEffectEnd);
-    expect(focusEffectSource).toContain('if (!listRevealed) return;');
+    // Entry/focus ordering is executed in messageEntryPositioning.test.ts:
+    // a linked row now positions before reveal, without a preceding tail seek.
     expect(focusEffectSource).toContain('userScrollForOlderRef.current = true');
     expect(focusEffectSource).toContain('lastAutoLoadEarlierKeyRef.current = null');
   });
@@ -235,10 +238,7 @@ describe('mobile message list container', () => {
 
     expect(source).toContain('key={scrollResetKey}');
     expect(source).not.toContain('tailWindowAnchor');
-    expect(source).toContain('previousUserMessageJumpTarget(listDataRef.current, firstVisibleIndexRef.current)');
-    expect(source).toContain('firstVisibleIndexRef.current = info.index;');
-    expect(source).not.toContain('setFirstVisibleIndex');
-    expect(source).toContain('refreshPreviousUserTarget();');
+    expect(source).not.toContain('previousUserButton');
     // 首次校正仍会命令式落底，但 opacity 揭示必须立即交给 UI-thread native driver；
     // 复杂消息占满 JS 时不能把 300ms 隐藏窗拖成长达数秒的白屏。
     expect(source).not.toContain('onLoad={handleListLoad}');
@@ -280,7 +280,24 @@ describe('mobile message list container', () => {
     expect(bubbleSource).toContain('useRecyclingState<{');
     expect(bubbleSource).toContain('useRecyclingState<string | null>(null)');
     expect(source).toContain('const [contentWidth, setContentWidth] = useRecyclingState(0);');
-    expect(source).toContain('const [resolveState, setResolveState] = useRecyclingState<MediaThumbnailResolveState>');
+    // 普通列表仍默认使用回收态；只有群聊的普通 ScrollView 注入 React 状态。
+    // 同时守住逐层传递，避免嵌套缩略图漏接后恢复原来的群聊崩溃。
+    for (const component of ['AttachmentStrip', 'MediaPreview', 'PendingAttachmentImage']) {
+      const componentStart = source.indexOf(`function ${component}(`);
+      const propsEnd = source.indexOf('}: {', componentStart);
+      expect(componentStart).toBeGreaterThan(-1);
+      expect(propsEnd).toBeGreaterThan(componentStart);
+      expect(source.slice(componentStart, propsEnd)).toContain('usePreviewState = useRecyclingState');
+    }
+    expect(source).toContain('const [resolveState, setResolveState] = usePreviewState<MediaThumbnailResolveState>');
+    expect(source).toContain('const [failedLocalUris, setFailedLocalUris] = usePreviewState<readonly string[]>([]);');
+    expect(source.match(/const \[intrinsicSize, setIntrinsicSize\] = usePreviewState</g)).toHaveLength(2);
+    expect(source.match(/usePreviewState=\{usePreviewState\}/g)).toHaveLength(2);
+    expect(source).not.toContain('usePreviewState={useState}');
+    const groupSource = readFileSync(
+      resolve(process.cwd(), 'src/session/BotGroupMessageAttachments.tsx'), 'utf8',
+    );
+    expect(groupSource).toContain('usePreviewState={useState}');
     expect(source).toContain('const [recycledLocalExpanded, setRecycledLocalExpanded] = useRecyclingState(defaultExpanded);');
     expect(expandedStateSource).toContain('blockId ? store.subscribe(listener) : () => {}');
   });
@@ -290,7 +307,7 @@ describe('mobile message list container', () => {
     const effectStart = source.indexOf('// Sending and the jump button');
     const effectEnd = source.indexOf('// 自动加载更早', effectStart);
     expect(source.slice(effectStart, effectEnd)).toContain('scrollToBottom();');
-    const jump = source.slice(source.indexOf('const scrollToBottom'), source.indexOf('const jumpToPreviousUserMessage'));
+    const jump = source.slice(source.indexOf('const scrollToBottom'), source.indexOf('// A retained list must not replay requests'));
     expect(jump.indexOf('userScrollForOlderRef.current = false')).toBeLessThan(
       jump.indexOf("scrollToEndProgrammatically(true, 'explicit')"),
     );
@@ -299,7 +316,7 @@ describe('mobile message list container', () => {
   it('routes manual jump-to-latest through the controller that owns seek and verification', () => {
     const source = readFileSync(resolve(process.cwd(), 'src/session/MessageRenderer.tsx'), 'utf8');
     const callbackStart = source.indexOf('const scrollToBottom = useCallback');
-    const callbackEnd = source.indexOf('const jumpToPreviousUserMessage', callbackStart);
+    const callbackEnd = source.indexOf('// A retained list must not replay requests', callbackStart);
     const callbackSource = source.slice(callbackStart, callbackEnd);
     const scrollAt = callbackSource.indexOf("scrollToEndProgrammatically(true, 'explicit');");
 

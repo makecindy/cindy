@@ -3,6 +3,7 @@ import {
   deriveAgentTaskStatus,
   subagentSpawnReceiptName,
   subagentSpawnResultIndicatesRunning,
+  type AgentTaskStatus,
   type AgentTaskTerminalStatus,
 } from '@cindy/maker-shared/agent-task';
 import {
@@ -51,6 +52,8 @@ export type AgentTaskRenderItem = {
   update?: AgentTaskUpdate;
   result?: string;
   persistedStatus?: AgentTaskTerminalStatus;
+  /** Host `subagent_runs` status for this call (local tasks); see deriveAgentTaskStatus. */
+  durableStatus?: AgentTaskStatus;
   /** 对应 tool_result 的 createdAt(ms)。历史会话没有 live taskUpdates 时,item 的结束
    *  时间只能靠它 —— 否则跑了半小时以上的 Agent/Task 会让紧随其后的最终答复被空洞守卫
    *  误判(#676 review)。与 tool_segment 的 resultTsMap 同源。 */
@@ -188,6 +191,7 @@ function isRunningAgentTask(it: RenderItem): boolean {
   if (it.type !== 'agent_task') return false;
   const status = deriveAgentTaskStatus(it.update?.status, it.result, {
     persistedStatus: it.persistedStatus,
+    durableStatus: it.durableStatus,
     resultIsLaunchReceipt:
       subagentSpawnReceiptName(it.toolCall?.toolName, it.toolCall?.toolInput, it.result) !==
         undefined || subagentSpawnResultIndicatesRunning(it.toolCall?.toolName, it.result),
@@ -227,15 +231,16 @@ function isWorkActivityItem(it: RenderItem): it is WorkChildItem {
  * 元数据留在消息流里(实例:2026-07-31 定时巡检的产品决策简报 3250 字被折,
  * 外面只剩 110 字的「已触发通知」)。
  *
- * 判据(长度 / 块级 markdown 结构)由 maker-shared 的 isDeliveryProseText 单一
- * 提供,两端不各写一份。
+ * 正文判据(长度 / 块级 markdown 结构 / 内嵌图片)由 maker-shared 的 isDeliveryProseText
+ * 单一提供,两端不各写一份;桌面消息另带 images / files 附件,附件本身就是交付成果。
  */
 function isDeliveryProseItem(it: RenderItem): boolean {
   return (
     it.type === 'message' &&
     it.message.role === 'assistant' &&
     !it.message.systemCardType &&
-    isDeliveryProseText(it.message.content)
+    (Boolean(it.message.images?.length || it.message.files?.length) ||
+      isDeliveryProseText(it.message.content))
   );
 }
 

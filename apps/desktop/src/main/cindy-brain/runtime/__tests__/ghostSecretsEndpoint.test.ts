@@ -132,7 +132,7 @@ describe('cindy-brain · ghostSecretsEndpoint(user 凭证只写通道,意识收�
       readBodyText: () => Promise.resolve(''),
       userSecretKeys: ['github_pat'],
       hostCredentialStates: [
-        { key: 'github_pat', source: 'gh-cli' as const, available: true },
+        { key: 'github_pat', source: 'gh-cli' as const, available: true, managedSetup: true },
       ],
       vault,
       ghostId: 'cindy-github',
@@ -145,6 +145,7 @@ describe('cindy-brain · ghostSecretsEndpoint(user 凭证只写通道,意识收�
         tail: '1234',
         hostSource: 'gh-cli',
         hostAvailable: true,
+        hostManagedSetup: true,
       },
     ]);
     expect(list.body).not.toContain('github_pat_abcdefgh');
@@ -217,7 +218,12 @@ describe('cindy-brain · ghostSecretsEndpoint(user 凭证只写通道,意识收�
 
     // 写失败 → 不触发
     const onStoredFail = vi.fn();
-    const failing: GhostSecretsVault = { saved: () => false, tail: () => null, store: () => false, remove: () => {} };
+    const failing: GhostSecretsVault = {
+      saved: () => false,
+      tail: () => null,
+      store: () => false,
+      remove: () => {},
+    };
     await handleGhostSecretsRequest({
       method: 'PUT',
       pathname: '/secrets/api_key',
@@ -259,7 +265,10 @@ describe('cindy-brain · ghostSecretsEndpoint(user 凭证只写通道,意识收�
 
   it('未声明 / 带子路径的 key → 统一 404,不给区分面', async () => {
     for (const pathname of ['/secrets/unknown', '/secrets/', '/secrets/a/b']) {
-      expect((await call({ method: 'PUT', pathname, body: '{"value":"x"}' })).status, pathname).toBe(404);
+      expect(
+        (await call({ method: 'PUT', pathname, body: '{"value":"x"}' })).status,
+        pathname,
+      ).toBe(404);
     }
   });
 
@@ -272,7 +281,9 @@ describe('cindy-brain · ghostSecretsEndpoint(user 凭证只写通道,意识收�
 
   it('值超长 → 413;有界读取器抛 TOO_LARGE → 413', async () => {
     const long = JSON.stringify({ value: 'x'.repeat(GHOST_SECRET_VALUE_MAX_CHARS + 1) });
-    expect((await call({ method: 'PUT', pathname: '/secrets/api_key', body: long })).status).toBe(413);
+    expect((await call({ method: 'PUT', pathname: '/secrets/api_key', body: long })).status).toBe(
+      413,
+    );
 
     const out = await handleGhostSecretsRequest({
       method: 'PUT',
@@ -287,12 +298,18 @@ describe('cindy-brain · ghostSecretsEndpoint(user 凭证只写通道,意识收�
 
   it('DELETE → 204 幂等;方法不符 → 405', async () => {
     const vault = memVault({ api_key: 'v' });
-    expect((await call({ method: 'DELETE', pathname: '/secrets/api_key', vault })).status).toBe(204);
+    expect((await call({ method: 'DELETE', pathname: '/secrets/api_key', vault })).status).toBe(
+      204,
+    );
     expect(vault.data.api_key).toBeUndefined();
-    expect((await call({ method: 'DELETE', pathname: '/secrets/api_key', vault })).status).toBe(204);
+    expect((await call({ method: 'DELETE', pathname: '/secrets/api_key', vault })).status).toBe(
+      204,
+    );
 
     expect((await call({ method: 'POST', pathname: '/secrets' })).status).toBe(405);
-    expect((await call({ method: 'PATCH', pathname: '/secrets/api_key', body: '{"value":"x"}' })).status).toBe(405);
+    expect(
+      (await call({ method: 'PATCH', pathname: '/secrets/api_key', body: '{"value":"x"}' })).status,
+    ).toBe(405);
     expect((await call({ method: 'GET', pathname: '/secrets/api_key' })).status).toBe(405);
   });
 
@@ -304,7 +321,14 @@ describe('cindy-brain · ghostSecretsEndpoint(user 凭证只写通道,意识收�
       remove: () => {},
     };
     expect(
-      (await call({ method: 'PUT', pathname: '/secrets/api_key', body: '{"value":"x"}', vault: failing })).status,
+      (
+        await call({
+          method: 'PUT',
+          pathname: '/secrets/api_key',
+          body: '{"value":"x"}',
+          vault: failing,
+        })
+      ).status,
     ).toBe(500);
 
     const boom: GhostSecretsVault = {
@@ -325,8 +349,17 @@ describe('cindy-brain · ghostSecretsEndpoint(user 凭证只写通道,意识收�
     expect(got.status).toBe(500);
     expect(got.body).toBeUndefined();
     expect(
-      (await call({ method: 'PUT', pathname: '/secrets/api_key', body: '{"value":"x"}', vault: boom })).status,
+      (
+        await call({
+          method: 'PUT',
+          pathname: '/secrets/api_key',
+          body: '{"value":"x"}',
+          vault: boom,
+        })
+      ).status,
     ).toBe(500);
-    expect((await call({ method: 'DELETE', pathname: '/secrets/api_key', vault: boom })).status).toBe(500);
+    expect(
+      (await call({ method: 'DELETE', pathname: '/secrets/api_key', vault: boom })).status,
+    ).toBe(500);
   });
 });

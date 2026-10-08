@@ -44,8 +44,10 @@ export interface BotLifecycleServiceDeps {
   restartRuntime?: (sessionId: string, assertOwnerCurrent: () => void) => Promise<void>;
   now?: () => number;
   onPaused?: (botId: string) => void | Promise<void>;
-  /** Cleanup must finish before the owning profile disappears. Failure leaves deletion retryable. */
+  /** Stop external work and stage cleanup before deletion; retain data until the DB commits. */
   onBeforeDelete?: (botId: string) => void | Promise<void>;
+  /** Runs only after profile deletion; failures must retain a durable cleanup intent. */
+  onDeleted?: (botId: string, assertOwnerCurrent: () => void) => void | Promise<void>;
   /** Resume durable work owned by the Bot after lifecycle state is active. */
   onResumed?: (botId: string) => void | Promise<void>;
   /** Refresh hidden runtime services after any lifecycle ownership change. */
@@ -312,10 +314,10 @@ export function createBotLifecycleService(deps: BotLifecycleServiceDeps) {
     if (profile.status === 'deleting') {
       throwIpcError('PRECONDITION_FAILED', 'Bot 已在永久删除流程中');
     }
-    // Reject known shared history before pausing live work or archiving its canonical link.
-    // The profile lock excludes concurrent shared-history writers until deletion finishes.
-    // The final transaction retains its own guard as the database safety boundary.
-    await getDbClient().tx('bots.assertNoSharedHistory', { botId: request.botId });
+    // Hold the profile lock before pausing so a concurrent message cannot land halfway.
+    // Active delegations are cancelled while their target id is still intact. Historical
+    // foreign keys are detached only inside the final delete transaction.
+    await getDbClient().tx('bots.prepareProfileDeletion', { botId: request.botId });
     assertOwnerUnchanged();
     let preparationWarnings: string[] = [];
     if (profile.status !== 'archived') {
@@ -348,6 +350,15 @@ export function createBotLifecycleService(deps: BotLifecycleServiceDeps) {
       sessionIds,
       request.keepTaskHistory === true,
     );
+    try {
+      assertOwnerUnchanged();
+      await deps.onDeleted?.(request.botId, assertOwnerUnchanged);
+    } catch {
+      // The DB is already committed. Keep the deletion result truthful; the
+      // owner-scoped cleanup journal retries credential removal after restart.
+      preparationWarnings.push('IMPORTED_ENVIRONMENT_CLEANUP_PENDING');
+      log.warn('Imported companion environment cleanup remains pending', { botId: request.botId });
+    }
 
     /*
       伙伴的家一起走 —— `<userData>/bots/<botId>/` 里躺着 SOUL.md、用户画像、
@@ -378,9 +389,12 @@ export function createBotLifecycleService(deps: BotLifecycleServiceDeps) {
     return result;
   };
 
-  const run = (request: BotLifecycleActionRequest): Promise<BotLifecycleActionResult> => {
+  const run = (request: BotLifecycleActionRequest, beforeRun?: () => Promise<void>): Promise<BotLifecycleActionResult> => {
     const owner = activeOwnerScopeKey();
     return withBotLifecycleLock(request.botId, request.action, async () => {
+      if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== owner) throwIpcError('PRECONDITION_FAILED', 'Account changed');
+      await beforeRun?.();
+      if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== owner) throwIpcError('PRECONDITION_FAILED', 'Account changed');
       if (request.action === 'pause') return pause(request.botId);
       if (request.action === 'resume') return resume(request.botId);
       if (request.action === 'restart') return restart(request.botId, owner);
@@ -392,8 +406,16 @@ export function createBotLifecycleService(deps: BotLifecycleServiceDeps) {
   return { run };
 }
 
+let registeredLifecycleService: ReturnType<typeof createBotLifecycleService> | null = null;
+/** Remote settings use the same coordinator and preserve task history/worktrees. */
+export function runRegisteredBotLifecycleAction(request: BotLifecycleActionRequest, beforeRun: () => Promise<void>) {
+  if (!registeredLifecycleService) throwIpcError('PRECONDITION_FAILED', 'Lifecycle unavailable');
+  return registeredLifecycleService.run(request, beforeRun);
+}
+
 export function registerBotLifecycleHandlers(deps: BotLifecycleServiceDeps): void {
   const service = createBotLifecycleService(deps);
+  registeredLifecycleService = service;
   ipcMain.handle(MAKER_INVOKE.BOT_LIFECYCLE_ACTION, async (event, raw: unknown) => {
     assertTrustedAppRendererEvent(event);
     const body = requireObject(raw, 'request');

@@ -12,6 +12,10 @@
     "deleteFailed": "Could not delete the device.",
     "deleteOnline": "This device is online. Take it offline before deleting it.",
     "currentlyOnline": "Currently online",
+    "availableSection": "Online",
+    "offlineSection": "Offline",
+    "showAllOffline": "Show All ({{count}})",
+    "showFewerOffline": "Show Less",
     "nameTooLong": "Device names must be {{limit}} characters or fewer.",
     "fields": {
       "name": "Name",
@@ -29,12 +33,11 @@
   "common": {
     "cancel": "Cancel",
     "save": "Save",
-    "saving": "Saving",
     "delete": "Delete",
-    "deleting": "Deleting",
     "create": "New"
   },
   "resources": {
+    "connectionUnknown": "Connection unknown",
     "hostOffline": "Offline",
     "titleFallback": "Resources",
     "loading": "Loading…",
@@ -46,7 +49,8 @@
     "openFailed": "Couldn’t open the session",
     "resolving": "Opening the latest session…",
     "retry": "Try again",
-    "hostCount": "{{count}} computers"
+    "hostCount": "{{count}} computers",
+    "stale": "These items may be outdated. Unable to refresh."
   },
   "presentation": {
     "deviceList": {
@@ -90,13 +94,19 @@
       }
     },
     "sessionList": {
-      "section": { "pinned": "Pinned", "dialogue": "Chat" },
+      "section": {
+        "pinned": "Pinned",
+        "dialogue": "Chat"
+      },
       "filterWithCount": "{{label}} {{count}}",
       "controlsSummary": "{{filter}} · Grouped by {{group}}",
       "automation": "Automation",
       "sessionCount": "{{count}} sessions",
       "messageCount": "{{count}} messages",
-      "status": { "archived": "Archived", "deleted": "Deleted" },
+      "status": {
+        "archived": "Archived",
+        "deleted": "Deleted"
+      },
       "preview": {
         "permission": "Waiting for permission",
         "planReview": "Waiting for plan review",
@@ -130,11 +140,26 @@
         }
       },
       "empty": {
-        "search": { "title": "No matching sessions", "copy": "Try another title, project path, model, or message keyword." },
-        "waiting": { "title": "No pending requests", "copy": "Permission prompts, plan reviews, and questions will appear here." },
-        "automation": { "title": "No automation sessions", "copy": "Sessions created by automations will be grouped here after a run." },
-        "archived": { "title": "No archived sessions", "copy": "Touch and hold a session to archive or delete it in bulk." },
-        "active": { "title": "No active sessions on this computer", "copy": "Create or continue a session on your computer and it will appear here." }
+        "search": {
+          "title": "No matching sessions",
+          "copy": "Try another title, project path, model, or message keyword."
+        },
+        "waiting": {
+          "title": "No pending requests",
+          "copy": "Permission prompts, plan reviews, and questions will appear here."
+        },
+        "automation": {
+          "title": "No automation sessions",
+          "copy": "Sessions created by automations will be grouped here after a run."
+        },
+        "archived": {
+          "title": "No archived sessions",
+          "copy": "Touch and hold a session to archive or delete it in bulk."
+        },
+        "active": {
+          "title": "No active sessions on this computer",
+          "copy": "Create or continue a session on your computer and it will appear here."
+        }
       },
       "time": {
         "unknown": "Recent activity time unknown",
@@ -155,27 +180,61 @@
     },
     "home": {
       "allDevices": "All",
-      "allComputers": "All computers",
+      "allComputers": "All devices",
       "waitingCount": "{{count}} pending",
       "synced": "Synced",
-      "unknownComputer": "Unknown computer",
+      "unknownComputer": "Unknown device",
       "uncategorizedProject": "Uncategorized project",
+      "cindyMake": "Cindy Make",
       "empty": {
-        "search": { "title": "No matches", "copy": "Try another project name, session title, computer name, or message keyword." },
-        "waiting": { "title": "No pending requests", "copy": "Permission prompts, plan reviews, and questions will appear here." },
-        "automation": { "title": "No automation sessions", "copy": "Sessions created by automations will be grouped here by project." },
-        "archived": { "title": "No archived sessions", "copy": "Switch to All or Active to keep browsing your current projects and sessions." },
-        "noSession": { "title": "No sessions yet", "copy": "Create or continue a session on your computer and its project will appear here." }
+        "search": {
+          "title": "No matches",
+          "copy": "Try another project name, session title, computer name, or message keyword."
+        },
+        "waiting": {
+          "title": "No pending requests",
+          "copy": "Permission prompts, plan reviews, and questions will appear here."
+        },
+        "automation": {
+          "title": "No automation sessions",
+          "copy": "Sessions created by automations will be grouped here by project."
+        },
+        "archived": {
+          "title": "No archived sessions",
+          "copy": "Switch to All or Active to keep browsing your current projects and sessions."
+        },
+        "noSession": {
+          "title": "No sessions yet",
+          "copy": "Create or continue a session on your computer and its project will appear here."
+        }
       },
       "noDevice": {
-        "accessRevoked": { "title": "Access revoked", "copy": "{{names}} revoked this phone’s remote access. Retry access, or allow it again on the computer to reconnect automatically." },
-        "remoteDisabled": { "title": "Allow remote control on your computer", "copy": "{{names}} is online. One step remains: enable phone control on the computer." },
-        "offline": { "title": "Open Cindy on your computer", "copy": "Your connected computers are offline. Open Cindy and stay signed in; your phone will reconnect automatically." },
-        "firstRun": { "title": "Connect Cindy on your computer", "copy": "Cindy currently runs on your computer. The mobile app uses remote access so you can work with the Agents on that computer." }
+        "accessRevoked": {
+          "title": "Access revoked",
+          "copy": "{{names}} revoked this phone’s remote access. Retry access, or allow it again on the computer to reconnect automatically."
+        },
+        "remoteDisabled": {
+          "title": "Allow remote control on your computer",
+          "copy": "{{names}} is online. One step remains: enable phone control on the computer."
+        },
+        "offline": {
+          "title": "Open Cindy on your computer",
+          "copy": "Your connected computers are offline. Open Cindy and stay signed in; your phone will reconnect automatically."
+        },
+        "firstRun": {
+          "title": "Connect Cindy on your computer",
+          "copy": "Cindy currently runs on your computer. The mobile app uses remote access so you can work with the Agents on that computer."
+        }
       }
     },
     "bulk": {
-      "action": { "archive": "Archive", "delete": "Delete", "pin": "Pin", "restore": "Restore", "unpin": "Unpin" },
+      "action": {
+        "archive": "Archive",
+        "delete": "Delete",
+        "pin": "Pin",
+        "restore": "Restore",
+        "unpin": "Unpin"
+      },
       "title": "{{action}} {{count}} sessions",
       "description": "Apply {{action}} to the {{count}} selected sessions.",
       "descriptionWithSkipped": "Apply {{action}} to {{count}} selected sessions; {{skippedCount}} inapplicable sessions will be skipped."
@@ -241,6 +300,8 @@
       "noDevice": "No device available. Turn on remote control on the desktop, then sync again."
     },
     "alert": {
+      "cacheSaveFailed": "Could not save offline cache",
+      "cacheSaveFailedDetail": "Check the available storage on your phone. You can continue online, but some content may be unavailable offline.",
       "actionFailed": "Action failed",
       "renameFailed": "Rename failed",
       "deleteTitle": "Delete session?",
@@ -256,7 +317,7 @@
       "syncing": "Syncing",
       "sync": "Sync again",
       "pinnedConversations": "{{count}} pinned sessions",
-      "newRemoteConversation": "New remote session",
+      "newRemoteConversation": "New session",
       "renameDevice": "Rename {{label}}",
       "project": "Project {{title}}",
       "dialogue": "Chat",
@@ -366,7 +427,13 @@
       "needAttention": "{{count}} need attention",
       "waiting": "{{count}} waiting",
       "automationRunning": "Automation running",
-      "totalRuns": "{{count}} runs total"
+      "totalRuns": "{{count}} runs total",
+      "runCount": "{{count}} runs",
+      "nextRunMinutes": "Runs in {{count}}m",
+      "nextRunHours": "Runs in {{count}}h",
+      "nextRunDays": "Runs in {{count}}d",
+      "imminent": "Running soon",
+      "stopped": "Stopped"
     }
   },
   "detail": {
@@ -392,8 +459,6 @@
       "waitingA11y": "Filter pending sessions",
       "automationA11y": "Filter automation sessions"
     },
-    "plan": "Schedule",
-    "automationsButtonA11y": "Open remote automations",
     "search": {
       "openA11y": "Search remote sessions",
       "closeA11y": "Close remote session search",
@@ -471,288 +536,13 @@
     },
     "viewAllRuns": "View all {{count}} runs"
   },
-  "automations": {
-    "heading": {
-      "delete": "Delete Automation",
-      "pause": "Pause Automation",
-      "deleteRun": "Delete Run"
-    },
-    "runNow": "Run now",
-    "error": {
-      "projectMissingConfig": "This project automation is missing projectConfigId. Delete it on the desktop.",
-      "deletePartial": "Automation deleted, but {{count}} generated sessions couldn't be updated. Check them on the desktop."
-    },
-    "subtitle": "{{active}} running · {{total}} tasks",
-    "metric": {
-      "running": "Running",
-      "unreadResults": "Unread Results",
-      "executing": "In Progress"
-    },
-    "summary": {
-      "paused": "{{count}} tasks paused. Select a task to run, pause, edit, or open its latest session.",
-      "default": "Select a task to run, pause, edit, or open its latest session."
-    },
-    "empty": {
-      "copy": "Create your first automation right from your phone, or create one on the desktop and sync it here.",
-      "title": "No automations on this device"
-    },
-    "createAutomation": "New Automation",
-    "recentRuns": "Recent Runs",
-    "runs": {
-      "emptyCopy": "After you tap {{runNow}}, new runs show up here.",
-      "emptyTitle": "No runs yet"
-    },
-    "form": {
-      "title": {
-        "create": "New Automation",
-        "edit": "Edit Automation"
-      },
-      "sessionMode": {
-        "bound": "Once bound to an existing session, the directory, worktree, Agent, and Fast mode follow that session.",
-        "persistent": "The first trigger creates a persistent session; later triggers continue in the same one.",
-        "fresh": "Each trigger creates a new session."
-      },
-      "field": {
-        "name": "Name",
-        "prompt": "Prompt",
-        "trigger": "Trigger",
-        "runSession": "Run Session",
-        "boundSession": "Bound Session",
-        "intervalMinutes": "Interval (minutes)",
-        "workspace": "Workspace",
-        "projectDir": "Project Directory",
-        "model": "Model",
-        "effort": "Reasoning Effort",
-        "timezone": "Time Zone"
-      },
-      "namePlaceholder": "e.g. Daily project check",
-      "scriptHint": "This is a script-only task; its script config can only be edited on the desktop. Here you can change the name, trigger, notifications, and other fields.",
-      "promptPlaceholder": "Describe clearly what {{appName}} should do on each run",
-      "trigger": {
-        "recurring": "Recurring",
-        "manual": "Manual"
-      },
-      "session": {
-        "fresh": "New Session",
-        "persistent": "Persistent",
-        "bound": "Bound"
-      },
-      "boundSessionA11y": "Bind session {{name}}",
-      "intervalPlaceholder": "Leave empty to use cron",
-      "workspace": {
-        "project": "Project",
-        "dialogue": "Chat"
-      },
-      "useWorktree": "Use worktree",
-      "modelPlaceholderBound": "Follow session",
-      "modelPlaceholderPiDefault": "Leave blank for default model",
-      "fastMode": "Fast Mode",
-      "notifyDesktop": "Desktop Notifications",
-      "notifyFeishu": "Feishu Notifications",
-      "savingA11y": "Saving automation",
-      "saveA11y": "Save automation",
-      "cancelA11y": "Cancel editing automation"
-    },
-    "delete": {
-      "counting": "Counting the sessions this automation generated…",
-      "confirmDeleteBoth": "Delete Task and Sessions",
-      "confirmArchive": "Delete Task and Archive Sessions",
-      "confirmTaskOnly": "Delete Task Only",
-      "title": "Delete {{name}}",
-      "copy": "Deleting an automation task doesn't interrupt runs already in progress. Generated sessions are handled by the option below, matching the desktop.",
-      "optionsA11y": "Choose how to handle generated sessions",
-      "keepDesc": "Delete only this automation task; past sessions stay in their original list.",
-      "keepLabel": "Keep Generated Sessions",
-      "archiveDesc": "After deleting the task, move its generated sessions to the archive, still searchable later.",
-      "archiveLabel": "Archive Generated Sessions",
-      "deleteDesc": "After deleting the task, also mark its generated sessions as deleted. This can't be undone from your phone.",
-      "deleteLabel": "Delete Generated Sessions",
-      "cancelA11y": "Cancel deleting automation",
-      "confirmA11y": "Confirm deleting automation"
-    },
-    "pause": {
-      "title": "Pause {{name}}",
-      "detailFallback": "Pausing stops this automation from triggering.",
-      "previewFallback": "No runs in progress",
-      "confirmA11y": "Confirm pausing automation",
-      "pausing": "Pausing",
-      "confirm": "Confirm Pause",
-      "cancelA11y": "Cancel pausing automation"
-    },
-    "runDelete": {
-      "title": "Delete this run record",
-      "copy": "This deletes only this automation run record. It won't delete the sessions it opened, and it won't affect future automatic triggers.",
-      "confirmA11y": "Confirm deleting run record",
-      "confirm": "Delete Record",
-      "cancelA11y": "Cancel deleting run record"
-    },
-    "template": {
-      "label": "Template",
-      "loadingA11y": "Loading templates",
-      "refreshA11y": "Refresh automation templates",
-      "loading": "Loading",
-      "refresh": "Refresh",
-      "cardA11y": "Automation template {{name}}",
-      "manualConfig": "Manual config",
-      "builtin": {
-        "nightly-test-heal": {
-          "name": "Nightly test self-healing",
-          "description": "Run tests every night and attempt minimal fixes for failures in an isolated worktree",
-          "prompt": "Run the project's test suite. If there are failures, attempt a minimal fix in an isolated worktree.\nConstraints:\n- Determine the standard test command from the repo docs or package scripts before running the full suite\n- Only fix issues backed by clear failing evidence; prefer the smallest possible change and avoid drive-by refactoring\n- Re-run the affected tests after fixing to confirm they pass, and review the full diff\n- Deliver fixes through the repo's workflow (e.g. create a branch and open a PR); never commit directly to the main branch\n- For failures that cannot be fixed safely, report the cause, suspicious files, and suggested next steps"
-        },
-        "pr-gatekeeper": {
-          "name": "PR gatekeeper",
-          "description": "Pre-review new changes on open PRs each weekday and report risks by severity",
-          "prompt": "Review the repository's open PRs and pre-screen their new changes.\nConstraints:\n- Go through open PRs with new commits in the past 24 hours (on Monday, look back over the whole weekend), citing PR numbers, file paths, and concrete diffs\n- Focus on correctness, security, data-loss, and compatibility issues, graded by severity\n- Only report issues backed by evidence and describe the failure scenario; do not nitpick on style preferences\n- Unless explicitly authorized, only output review conclusions; do not comment on PRs or change code"
-        },
-        "domain-radar": {
-          "name": "Domain radar",
-          "description": "Periodically collect the latest updates in a topic you follow and deliver an opinionated digest",
-          "prompt": "Collect the latest developments about \"{{topic}}\" from the past 24 hours (on Monday, look back over the whole weekend) and produce an opinionated digest.\nConstraints:\n- Use web search, cross-check multiple sources before trusting a claim, and cite the source link for every item\n- Prefer substantive developments (releases, research, policy, notable discussions); filter out marketing fluff and reposts\n- For each item, add a one-line judgement on why it matters instead of dumping links\n- When information is scarce or sources are questionable, say so honestly; never fabricate",
-          "params": {
-            "topic": {
-              "label": "Topic to follow",
-              "placeholder": "e.g. AI agents, EV market, frontend frameworks"
-            }
-          }
-        },
-        "competitor-watch": {
-          "name": "Competitor watch",
-          "description": "Weekly roundup of competitors' product and market moves, with impact analysis",
-          "prompt": "Track the past week's activity of these competitors: {{competitors}}.\nConstraints:\n- Use web search to cover product updates, releases, pricing changes, market moves, and user sentiment, citing sources\n- Distinguish official information from third-party accounts; clearly mark unverified rumors\n- For each significant update, analyze what it means for us and suggest a response\n- If nothing substantive happened, say so honestly instead of padding the report",
-          "params": {
-            "competitors": {
-              "label": "Competitors",
-              "placeholder": "e.g. Notion, Linear, Figma"
-            }
-          }
-        },
-        "weekly-work-draft": {
-          "name": "Weekly report drafter",
-          "description": "Compile this week's work from documents in the working directory into a report draft",
-          "prompt": "Based on this week's changes to documents, notes, and deliverables in the working directory, compile a weekly report draft.\nConstraints:\n- Only use content with actual modification traces in the working directory as evidence, citing the files\n- Organize as \"Done this week / In progress / Next week / Needs coordination\", concise enough to submit directly\n- Separate substantive progress from routine chores and highlight valuable output\n- Leave placeholders with notes where the material is insufficient so the user can fill them in"
-        },
-        "knowledge-freshness": {
-          "name": "Knowledge base freshness check",
-          "description": "Monthly health check of working-directory docs for outdated or conflicting content",
-          "prompt": "Health-check the documents in the working directory and find content that needs updating.\nConstraints:\n- Look for outdated information (stale dates, dead links, deprecated processes or tools), contradictions, and duplication\n- Cite the file path and location for every issue and explain the reasoning\n- Categorize as \"update / merge / delete\" suggestions and produce a revision checklist\n- Only output the report; do not modify the documents"
-        }
-      }
-    },
-    "scheduleRowA11y": "Automation task {{title}}",
-    "detail": {
-      "promptScriptFallback": "Script-only task; config can only be edited on the desktop",
-      "promptEmpty": "No task prompt saved",
-      "deleteA11y": "Delete automation",
-      "runNowA11y": "Run automation now",
-      "running": "Running",
-      "resumeA11y": "Resume automation",
-      "pauseA11y": "Pause automation",
-      "resume": "Resume",
-      "pause": "Pause",
-      "editA11y": "Edit automation",
-      "edit": "Edit"
-    },
-    "run": {
-      "openSessionA11y": "Open automation session",
-      "opening": "Opening",
-      "session": "Session",
-      "restartA11y": "Re-run automation",
-      "restarting": "Re-running",
-      "restart": "Re-run",
-      "markReadA11y": "Mark run record as read",
-      "marking": "Marking",
-      "markRead": "Read",
-      "deleteA11y": "Delete run record"
-    },
-    "presentation": {
-      "validation": {
-        "templateParameter": "Enter the template parameter: {{label}}",
-        "name": "Enter a task name",
-        "prompt": "Enter a task prompt",
-        "timezone": "Enter a time zone",
-        "boundSession": "Choose a task to bind",
-        "cron": "Enter a cron expression",
-        "workingDir": "Enter a project directory",
-        "effort": "Reasoning effort must be one of: {{values}}",
-        "intervalPositiveInteger": "The interval in minutes must be a positive integer",
-        "intervalUnsupported": "Minute intervals support 1–59 minutes, or whole-hour intervals from 1–23 hours"
-      },
-      "schedule": {
-        "paused": "Paused",
-        "manual": "Manual trigger",
-        "once": "One-time task",
-        "waitingFirstRun": "Waiting for the first run",
-        "every": "Every {{duration}}",
-        "recurring": "Recurring task",
-        "dialogueWorkspace": "Chat workspace",
-        "noDirectory": "No directory set",
-        "lastRun": "Last run {{relative}}",
-        "imminent": "Running soon",
-        "nextRun": "In {{duration}}",
-        "status": {
-          "active": "Running",
-          "paused": "Paused",
-          "expired": "Completed"
-        },
-        "session": {
-          "persistent": "Persistent task",
-          "bound": "Bound task",
-          "fresh": "New task",
-          "persistentWithId": "Persistent task {{id}}",
-          "persistentDetail": "Reuse the same task after the first trigger",
-          "boundWithId": "Bound to {{id}}"
-        }
-      },
-      "run": {
-        "session": "Task {{id}}",
-        "delete": "Delete",
-        "markRead": "Read",
-        "canRestart": "Can run again",
-        "noSession": "No task created",
-        "open": "Open",
-        "restart": "Re-run",
-        "durationUnknown": "Duration unknown",
-        "runningFor": "Running for {{duration}}",
-        "duration": "Duration {{duration}}",
-        "unknownTime": "Unknown time",
-        "status": {
-          "running": "Running",
-          "success": "Succeeded",
-          "failed": "Failed",
-          "aborted": "Aborted",
-          "interrupted": "Interrupted",
-          "skipped": "Skipped"
-        }
-      },
-      "pause": {
-        "title": "Pause {{name}}",
-        "detail": "This automation currently has {{count}} runs in progress. Pausing stops future triggers immediately and stops these active runs.",
-        "preview": "Runs in progress: {{count}}"
-      },
-      "delete": {
-        "noSessions": "No tasks generated by this automation were found",
-        "sessions": "Found {{count}} tasks generated by this automation",
-        "withInflight": "{{sessions}}, with {{count}} runs still in progress"
-      },
-      "duration": {
-        "seconds": "{{count}} sec",
-        "minutesSeconds": "{{minutes}} min {{seconds}} sec",
-        "minutes": "{{count}} min",
-        "hours": "{{count}} hr",
-        "days": "{{count}} days"
-      },
-      "relative": {
-        "justNow": "just now",
-        "minutesAgo": "{{count}} min ago",
-        "hoursAgo": "{{count}} hr ago",
-        "daysAgo": "{{count}} days ago"
-      }
-    }
-  },
   "companions": {
-    "messageSent": "Message sent",
-    "privateChat": "Private chat with {{name}}",
+    "noCreateHosts": "No compatible computer is available. Open Cindy on a computer and sign in with the same account to create a teammate.",
+    "taskAttentionCount": "Tasks needing attention: {{count}}",
+    "unreadChatCount": "Unread chats: {{count}}",
+    "messageSent": "Message sent to background task",
+    "sentTo": "Sent a message to {{name}}",
+    "receivedFrom": "Message from {{name}}",
     "backgroundTask": "Background task",
     "openTask": "Open task",
     "viewPr": "View PR",
@@ -763,22 +553,221 @@
     "artifactCount_other": "{{count}} files",
     "prCount_one": "{{count}} PR",
     "prCount_other": "{{count}} PRs",
-    "duration": {"seconds": "{{n}}s", "minutes": "{{n}} min", "hoursMinutes": "{{h}} h {{m}} min"},
+    "duration": {
+      "seconds": "{{n}}s",
+      "minutes": "{{n}} min",
+      "hoursMinutes": "{{h}} h {{m}} min"
+    },
     "retrying": "Hasn't started yet — retrying…",
     "stopTask": "Stop task",
     "actionFailed": "Unable to load or complete this action",
     "messages": "Messages",
     "readOnly": "Read only",
+    "directEmpty": "There are no messages to view yet.",
+    "directLimitReached": "This teammate conversation reached its limit; both teammates returned to their main tasks",
+    "directUnavailable": "This teammate conversation is no longer available.",
     "unread": "New reply",
     "status": {
-      "queued": "Queued",
+      "queued": "Getting started",
       "running": "Running",
-      "waiting": "Waiting for reply",
+      "waiting": "Waiting for input",
       "completed": "Completed",
       "failed": "Failed",
-      "cancelled": "Cancelled",
+      "cancelled": "Stopped",
       "timed-out": "Timed out",
-      "unknown": "Status unavailable"
-    }
+      "unknown": "Unknown status"
+    },
+    "title": "Teammates",
+    "tasks": "Sessions",
+    "search": "Search Teammates",
+    "emptyTitle": "No Teammates Yet",
+    "emptyCopy": "Create a teammate in Cindy on your computer.",
+    "noResults": "No Matching Teammates",
+    "startChat": "Start the conversation",
+    "preferenceSaveFailed": "Couldn’t save your view preference. Try switching views again.",
+    "automation": {
+      "unsavedTitle": "Discard Changes?",
+      "unsavedBody": "Your changes haven’t been saved.",
+      "discard": "Discard Changes"
+    },
+    "openNavigation": "Open navigation",
+    "openProfile": "View {{name}}'s profile",
+    "switchCompanion": "Switch teammate",
+    "activity": {
+      "thinking": "Thinking",
+      "typing": "Typing",
+      "helping": "Working on it"
+    },
+    "working": {
+      "thinking": "Thinking…",
+      "replying": "Replying…",
+      "processing": "Working…",
+      "compacting": "Organizing the conversation…",
+      "reading-memory": "Reading memory…",
+      "saving-memory": "Saving memory…",
+      "deleting-memory": "Deleting memory…",
+      "organizing-memory": "Organizing memory…",
+      "reading-file": "Reading files…",
+      "saving-file": "Updating files…",
+      "searching": "Searching the web…",
+      "reading-web": "Reading web pages…",
+      "searching-files": "Searching files…",
+      "testing": "Running tests…",
+      "checking": "Checking code…",
+      "reviewing-memory": "Checking memory…",
+      "reviewing-files": "Reviewing files…",
+      "reviewing-sources": "Checking web sources…",
+      "reviewing-checks": "Reviewing check results…"
+    },
+    "invitation": {
+      "title": "Getting ready to meet",
+      "waiting": "See you soon, {{name}}",
+      "background": "Feel free to step away. Preparation continues in the background.",
+      "profile": "Writing a personal story",
+      "skills": "Preparing a computer for {{name}}",
+      "avatar": "{{name}} is choosing a new portrait",
+      "welcome": "Getting a first hello ready",
+      "failed": "Preparation paused. Everything completed so far is saved. You can try again.",
+      "retryFailed": "Couldn’t retry just now. Please try again shortly.",
+      "leave": "Step away",
+      "avatarSkipped": "Using the default portrait for now. You can change it anytime."
+    },
+    "viewResult": "View Result",
+    "noWrittenResult": "No written result.",
+    "errorDetails": "Error details",
+    "createTeammate": "New teammate",
+    "createMenu": "New",
+    "searchWithGroups": "Search teammates and groups",
+    "awaiting": "Needs your OK",
+    "emptyCopyCreate": "Teammates remember what you talked about and can get things done on your computer.",
+    "taskResult": "Task result",
+    "collapseResult": "Hide result"
+  },
+  "companionProfile": {
+    "avatar": "Avatar",
+    "emptyEditor": "Nothing here yet.",
+    "searchOptions": "Search",
+    "changed": "Changed elsewhere. Your unsaved edits are retained.",
+    "discardAndReload": "Discard edits and reload",
+    "memoryEntries": "Saved Memories",
+    "memorySearch": "Search memories",
+    "memoryEmpty": "No memories yet",
+    "memoryNoResults": "No matching memories",
+    "memoryDisabled": "Memory is off. Your teammate won’t read or save memories; saved ones can still be viewed and deleted.",
+    "memoryLoadFailed": "Memories couldn’t be loaded",
+    "memoryToday": "Today",
+    "memoryUpdated": "Updated {{time}}",
+    "memoryEdit": "Edit",
+    "memoryDone": "Done",
+    "memoryTooLong": "Too long. Shorten it to save.",
+    "memoryRequired": "A title and content are required.",
+    "memoryChanged": "{{name}} just updated this memory",
+    "memoryUseLatest": "Use latest",
+    "memoryKeepMine": "Keep my changes",
+    "memorySaved": "Saved",
+    "memorySaveFailed": "Not saved. Your edits are retained.",
+    "memoryMissing": "This memory no longer exists.",
+    "memoryDeleteFailed": "The memory couldn’t be deleted",
+    "create": "New Teammate",
+    "createFailed": "Creation is not confirmed yet. Retry to check.",
+    "title": "Teammate",
+    "profile": "Profile & Personality",
+    "memory": "Memory",
+    "skills": "Skills & Connections",
+    "artifacts": "Artifacts",
+    "direct": "Teammate Messages",
+    "settings": "Models & Permissions",
+    "search": "Search Messages",
+    "models": "Model Chain",
+    "permissions": "Operation Permissions",
+    "personalSkills": "Personal Skills",
+    "connections": "Referenced Skills & Connections",
+    "save": "Save Changes",
+    "offline": "Reconnect to {{deviceName}} to continue. Your edits are retained.",
+    "hostUpgrade": "Update Cindy on {{deviceName}} and retry, or edit this teammate’s settings there.",
+    "readFailed": "Couldn’t confirm the latest state. Refresh before retrying; the action may already have completed. Your edits are retained.",
+    "deleteFailed": "The teammate was not deleted.",
+    "artifactsEmpty": "No artifacts yet. Ask your teammate to create something.",
+    "openSourceTask": "Open Source Session",
+    "modelFollowsDefault": "Follow the default model chain",
+    "taskModel": "Task Model",
+    "taskInheritsPrimary": "Inherit Primary Model",
+    "modelOverride": "Using this teammate’s own model chain",
+    "modelsUnavailable": "No usable models. Check this teammate’s model settings on your computer, then refresh.",
+    "artifactsRecovery": "Open files from the message cards, or browse them on {{deviceName}}.",
+    "directRecovery": "Couldn’t load teammate messages. Update Cindy on {{deviceName}} and retry.",
+    "directEmpty": "No teammate messages yet.",
+    "skillsEmpty": "No personal skills yet. Ask your teammate to remember a way of working.",
+    "connectionsEmpty": "No skills or connections selected.",
+    "largeProfileRecovery": "This profile is too long to edit here. Edit the full profile on {{deviceName}}.",
+    "addModel": "Add fallback model",
+    "removeModel": "Remove model",
+    "moveModelUp": "Move model up",
+    "backupModels": "Backup models ({{count}})",
+    "settingsTitle": "Teammate settings",
+    "name": "Name",
+    "portraitNumber": "Portrait {{number}}",
+    "uploadAvatar": "Upload Avatar",
+    "avatarFailed": "Could not open this image. Try another.",
+    "nameTaken": "That name is already in use. Choose another."
+  },
+  "companionImport": {
+    "title": "Import a teammate",
+    "entry": "Import an Agent",
+    "description": "Choose what to bring from Hermes or OpenClaw.",
+    "empty": "No installed Agent was found on this computer.",
+    "personality": "Personality and habits",
+    "memory": "Memories",
+    "skills": "Skills",
+    "connections": "Environment and connections",
+    "automations": "Automations",
+    "paused": "Keep paused",
+    "itemAttention": "Needs attention",
+    "takeover": "Check and take over automations after import",
+    "takeoverNote": "Source tasks pause only after their data connections are verified. Unselected dependencies keep the source task running.",
+    "submit": "Import",
+    "back": "Back",
+    "open": "Open teammate",
+    "running": "Importing and checking connections…",
+    "complete": "Import saved",
+    "attention": "Some items need attention. See the details below.",
+    "error": "Import could not finish. Retry with the same selection.",
+    "keptAtSource": "Takeover is not complete",
+    "retry": "Retry checks",
+    "missingSelection": "A required item was not selected.",
+    "authRefresh": "The original authorization needs a compatible refresh connection.",
+    "toolMapping": "The original tool restrictions need to be mapped before takeover.",
+    "modelMapping": "The original model configuration needs to be mapped.",
+    "contextMapping": "The original working context needs to be mapped.",
+    "deliveryFailed": "The original delivery destination has not been verified.",
+    "sourceChanged": "The source task changed. Reload its preview.",
+    "credentialFailed": "Credentials could not be saved securely.",
+    "scriptMissing": "A required script is missing.",
+    "sourceCommand": "The original Agent command is unavailable.",
+    "readFailed": "The required data query has not been verified.",
+    "search": "Search",
+    "selectAll": "Select all",
+    "previous": "Previous",
+    "next": "Next",
+    "chatSetup": "Your imported information is saved. We can start talking. Some items still need a login or a check; we can finish those whenever you are ready. Source automations stay unchanged until takeover.",
+    "chatReady": "Your information has been imported. We can start talking.",
+    "partial": "Some content was not fully imported",
+    "details": "View import details",
+    "partlySaved": "Partially saved",
+    "savedNeedsSetup": "Saved; setup or activation remains",
+    "notSaved": "Not saved",
+    "databaseDriver": "The database driver could not load. Update or repair Cindy, then retry.",
+    "databaseUnavailable": "The source database could not be read. Original data is unchanged; retry after repair.",
+    "fileTooLarge": "A file or this import exceeds the read limit. Content was not truncated.",
+    "memoryMetadata": "The memory summary or title exceeds storage requirements.",
+    "memoryWrite": "Memory writing or integrity verification failed. You can retry.",
+    "memoryChanged": "The saved memory was changed and has not been overwritten.",
+    "attachmentUnsupported": "This attachment format is not supported yet. The original remains at the source.",
+    "diskFull": "Disk space is insufficient. Free space, then retry.",
+    "permissionDenied": "Permission to read or save this item is missing. Fix permissions, then retry.",
+    "setupDeferred": "Continue sign-in and verification in the teammate chat.",
+    "automationInvalid": "The automation definition could not be converted; it was not created.",
+    "itemFailed": "This item is unfinished. Retry or view import details.",
+    "chatPartial": "Your teammate is created, but some content was not fully saved. The items below still need attention; other content and chat remain available."
   }
 }

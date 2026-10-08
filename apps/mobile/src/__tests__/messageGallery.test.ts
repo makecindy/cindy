@@ -5,6 +5,8 @@ import {
   lightboxImagesForPayload,
 } from '@/session/messageGallery';
 import type { MobileMessageRenderItem } from '@/session/messageRenderModel';
+import { mobileMarkdownImageUrlForWorkdir, mobileMarkdownManagedImagePreviewUrl } from '@/session/messageMarkdown';
+import { buildMediaPayload } from '@/session/messagePayload';
 
 function messageItem(key: string, message: Partial<MobileMessageRenderItem & { message: unknown }>['message']): MobileMessageRenderItem {
   return {
@@ -25,13 +27,52 @@ function messageItem(key: string, message: Partial<MobileMessageRenderItem & { m
 }
 
 describe('message gallery', () => {
+  it.each(['', ' "title"', " 'title'"])(
+    'excludes out-of-workdir Markdown images from neighbor prefetch with title suffix %s', (title) => {
+      const outside = 'xdt-file://open?path=%2Fprivate%2Fphoto.png&baseDir=%2F';
+      const gallery = collectMobileMessageGalleryImages([messageItem('m1', {
+        body: `![ok](https://example.com/ok.png)\n\n![private](${outside}${title})`,
+      })], '/repo');
+      expect(gallery.map((image) => image.url)).toEqual(['https://example.com/ok.png']);
+      // Explicitly clicking the external text chip still opens just that image.
+      const url = mobileMarkdownImageUrlForWorkdir(outside, '/repo', 'm1')!;
+      const payload = buildMediaPayload({ kind: 'image', url, previewable: false }, 'private');
+      if (payload.kind !== 'media') throw new Error('Expected media payload');
+      expect(lightboxImagesForPayload(gallery, payload).map((image) => image.url)).toEqual([url]);
+    },
+  );
+
+  it('binds local gallery pages to the task root and retains their shared preview identity', () => {
+    const source = 'xdt-file://open?path=%2Frepo%2Flink%2Fphoto.png&baseDir=%2F';
+    const gallery = collectMobileMessageGalleryImages([messageItem('m1', {
+      body: `![first](${source} "title")\n\n![second](second.png)`,
+    })], '/repo');
+    const previewUrl = mobileMarkdownManagedImagePreviewUrl(source, '/repo', 'm1')!;
+    expect(gallery[0].url).toBe(previewUrl);
+    expect(gallery).toHaveLength(2);
+    for (const image of gallery) expect(new URL(image.url).searchParams.getAll('baseDir')).toEqual(['/repo']);
+    expect(lightboxImagesForPayload(gallery, gallery[0].payload)).toEqual(gallery);
+    expect(collectMobileMessageGalleryImages([messageItem('m1', { body: `![missing context](${source})` })])).toEqual([]);
+  });
+
+  it('uses the same SVG file attachment URL as the thumbnail and includes it in the image gallery', () => {
+    const gallery = collectMobileMessageGalleryImages([
+      messageItem('m-svg', { attachments: [
+        { kind: 'file', name: 'diagram.svg', path: '/repo/diagram.svg', previewable: false },
+      ] }),
+    ], '/repo', 'ssh-host', 'session-1');
+    expect(gallery).toHaveLength(1);
+    expect(gallery[0].payload.media).toMatchObject({ kind: 'image', previewable: false });
+    expect(gallery[0].url).toBe('xdt-file://open?path=%2Frepo%2Fdiagram.svg&sessionId=session-1&remoteHostId=ssh-host&workdir=%2Frepo&v=m-svg');
+  });
+
   it('resolves relative markdown images against the remote session workdir', () => {
     const gallery = collectMobileMessageGalleryImages([
       messageItem('m-local', { body: '![构建图](artifacts/build result.png)' }),
     ], 'C:\\repo');
     expect(gallery).toHaveLength(1);
     expect(gallery[0].url).toBe(
-      'xdt-file://open?path=C%3A%5Crepo%5Cartifacts%5Cbuild%20result.png&v=m-local',
+      'xdt-file://open?path=C%3A%5Crepo%5Cartifacts%5Cbuild+result.png&v=m-local&baseDir=C%3A%5Crepo',
     );
     expect(gallery[0].payload).toMatchObject({
       media: { previewable: false },
@@ -45,8 +86,8 @@ describe('message gallery', () => {
     ], '/repo');
 
     expect(gallery.map((item) => item.url)).toEqual([
-      'xdt-file://open?path=%2Frepo%2Fartifacts%2Fplot.png&v=m1',
-      'xdt-file://open?path=%2Frepo%2Fartifacts%2Fplot.png&v=m2',
+      'xdt-file://open?path=%2Frepo%2Fartifacts%2Fplot.png&v=m1&baseDir=%2Frepo',
+      'xdt-file://open?path=%2Frepo%2Fartifacts%2Fplot.png&v=m2&baseDir=%2Frepo',
     ]);
   });
 
@@ -60,9 +101,9 @@ describe('message gallery', () => {
 
     expect(gallery.map((item) => item.url)).toEqual([
       'xdt-file://open?path=%2Fhome%2Fu%2Fproj%2Fartifacts%2Fplot.png'
-        + '&sessionId=session-ssh&remoteHostId=ssh-host-1&workdir=%2Fhome%2Fu%2Fproj&v=m-ssh',
+        + '&sessionId=session-ssh&remoteHostId=ssh-host-1&workdir=%2Fhome%2Fu%2Fproj&v=m-ssh&baseDir=%2Fhome%2Fu%2Fproj',
       'xdt-file://open?path=%2Fhome%2Fu%2Fproj%2Fexisting.png'
-        + '&sessionId=session-ssh&remoteHostId=ssh-host-1&workdir=%2Fhome%2Fu%2Fproj&v=m-xdt',
+        + '&sessionId=session-ssh&remoteHostId=ssh-host-1&workdir=%2Fhome%2Fu%2Fproj&v=m-xdt&baseDir=%2Fhome%2Fu%2Fproj',
     ]);
   });
 

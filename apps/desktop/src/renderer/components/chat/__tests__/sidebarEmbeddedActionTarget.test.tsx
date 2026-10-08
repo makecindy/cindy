@@ -38,7 +38,7 @@ vi.mock('@/features/right-sidebar/lib/openInSidebarFileBrowser', () => ({
 
 vi.mock('@/lib/remoteFileOpen', () => ({
   copyRemoteChatFile: vi.fn(),
-  revealRemoteChatFile: vi.fn(),
+  downloadRemoteChatEntry: vi.fn(),
 }));
 
 vi.mock('@/lib/toast', () => ({

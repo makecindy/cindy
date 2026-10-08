@@ -30,6 +30,7 @@
 
 import {
   TELEGRAM_PERSONAL_CAPABILITIES,
+  TELEGRAM_PROGRESS_FRAME_MAX_CHARS,
   type TelegramDriverCapabilities,
 } from '@cindy/im';
 import type { AgentEvent } from '@cindy/maker-core';
@@ -58,9 +59,10 @@ import { turnRetryNotice } from './turnRetryNotice.js';
 export const PROGRESS_THROTTLE_MS = 1500;
 /** 无新事件时的低频刷新(过程区耗时行"第 N 步 · 42s"不冻结)。 */
 export const PROGRESS_TICK_MS = 5000;
-/** 单帧快照长度上限: 头部截断 —— server 侧占位消息本就 3900 上限, 中间帧
- *  开头(过程区 + 正文起始)信息量最大, 收口后 turn.end 会带完整文本。 */
-export const PROGRESS_SNAPSHOT_MAX_CHARS = 3800;
+/** 单帧快照长度上限: 头部截断 —— 中间帧开头(过程区 + 正文起始)信息量最大,
+ *  收口后 turn.end 会带完整文本。数值取自 @cindy/im 的 Telegram 过程帧上限,
+ *  个人 driver 停止编辑的阈值是同一个常量(两侧唯一出处); Slack / X 沿用同值。 */
+export const PROGRESS_SNAPSHOT_MAX_CHARS = TELEGRAM_PROGRESS_FRAME_MAX_CHARS;
 
 /**
  * 纯呈现策略(#1855 L1)。无 IO —— 只放 presenter 能自己兑现的项, 两消费方共用
@@ -311,6 +313,8 @@ export interface TurnPresenterOptions {
   progressBodyMode?: ProgressBodyMode;
   /** 纯呈现策略(节流/长度上限/惰性占位); 省略 = DEFAULT_PRESENTER_POLICY(两侧同值)。 */
   policy?: PresenterPolicy;
+  /** 渠道 id。个人微信不能建议切到完全访问。 */
+  channel?: string;
 }
 
 export interface TurnPresenter {
@@ -709,7 +713,7 @@ export function createTurnPresenter(options: TurnPresenterOptions): TurnPresente
       return pushThinkingStep(activity, ev.data);
     },
     applyRetryNotice(ev: AgentEvent): boolean {
-      const notice = turnRetryNotice(ev.data);
+      const notice = turnRetryNotice(ev.data, { channel: options.channel });
       if (notice === null) return false;
       return setActivityNotice(activity, notice);
     },

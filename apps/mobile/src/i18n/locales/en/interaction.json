@@ -20,7 +20,13 @@
     "allowOnceAccessibility": "Allow permission request once",
     "allowOnceConfirm": "Confirm allow once",
     "highRisk": "High risk",
-    "autoReviewUnavailable": "Automatic review could not finish. Confirm whether to allow this action."
+    "autoReviewUnavailable": "Automatic review could not finish. Confirm whether to allow this action.",
+    "fullAccessConfirm": {
+      "title": "Enable Full access?",
+      "description": "Full access disables the workspace sandbox and skips routine approvals. {{appName}} can modify files outside the workspace and run network commands without asking; built-in high-risk operations will still require confirmation.",
+      "confirm": "Enable Full access",
+      "cancel": "Keep current permissions"
+    }
   },
   "planMode": {
     "label": "Plan mode",
@@ -127,7 +133,9 @@
   },
   "rewind": {
     "readError": "Couldn't read the rewind preview. Sync again and retry.",
-    "noFilesNote": "No files to roll back; only the chat after this message will be truncated.",
+    "noFilesNote": "No project file changes were detected after this message. Continuing will remove the later chat.",
+    "conversationOnlyNote": "Project files cannot be restored because no Git savepoint is available. Continuing will remove the chat after this message; files will not return to their earlier state.",
+    "gitSafetyDisabledNote": "Git safety savepoints are disabled, so project files cannot be restored. Enable them in Settings on your computer; continuing will remove the chat after this message.",
     "moreFiles": "{{count}} more files",
     "stats": "{{count}} files · +{{insertions}} / -{{deletions}} lines",
     "gotIt": "Got it",
@@ -141,7 +149,8 @@
     "titleError": "Can't rewind",
     "detailLoading": "Reading the file rewind preview from your computer.",
     "detailDefault": "This rolls back the files below and truncates the chat after this message.",
-    "detailEmpty": "No files to roll back; confirming truncates only the chat after this message.",
+    "detailEmpty": "No project file changes were detected after this message.",
+    "detailConversationOnly": "Project files will not return to their earlier state.",
     "detailError": "Your computer declined this rewind."
   },
   "collab": {
@@ -154,8 +163,10 @@
     "dispatchBodyFallback": "Create worker",
     "sendTitle": "Message to worker",
     "sendBodyFallback": "Send message",
-    "reportTitle": "Worker report",
-    "reportBodyFallback": "(empty report)"
+    "fromLead": "Message from Lead",
+    "fromWorkerNamed": "Message from Worker “{{role}}”",
+    "fromWorker": "Message from Worker",
+    "emptyMessageBody": "(Empty message)"
   },
   "contextSheet": {
     "backAccessibility": "Back to the context panel",
@@ -194,7 +205,8 @@
     "photoNotReadable": "This photo can't be read right now (it may not have finished downloading from iCloud). Try again later."
   },
   "pluginSetup": {
-    "completeOnDesktop": "Complete this setup on the controlled desktop. This card will update automatically.",
+    "remoteDesktop": "Open Desktop",
+    "completeOnDesktop": "Use remote desktop to complete setup on the computer. Login, authorization and credentials stay on that computer; this card updates automatically.",
     "chooseOne": "Choose one setup method",
     "progress": "{{satisfied}}/{{total}} completed",
     "desktopActionHint": "On your computer: {{action}}",
@@ -233,7 +245,9 @@
     "inlineFormActionGeneric": "Enter one setting on your computer"
   },
   "presentation": {
-    "action": { "submitting": "Submitting" },
+    "action": {
+      "submitting": "Submitting"
+    },
     "permission": {
       "highRiskTitle": "High-risk permission needs confirmation",
       "highRiskDetail": "Review the command, then confirm again to allow it. Deny it if you're unsure.",
@@ -261,7 +275,6 @@
     },
     "queue": {
       "count": "{{count}} requests",
-      "readOnlyHint": "Collaboration is read-only; requests from the computer are shown here.",
       "empty": "No pending requests",
       "hint": {
         "plan_review": "Review the plan and request changes if needed. The computer continues only after approval.",
@@ -271,6 +284,19 @@
         "plugin_setup": "Setup must be completed on the computer; you can cancel this request here.",
         "fallback": "Mobile handles remote requests in the order sent by the desktop."
       }
+    }
+  },
+  "companion": {
+    "permissionRequest": "{{name}} needs your go-ahead",
+    "operation": "Operation",
+    "details": "Details",
+    "fields": {
+      "path": "File",
+      "file_path": "File",
+      "url": "Address",
+      "command": "Command",
+      "ghost_id": "Plugin",
+      "tool": "Tool"
     }
   }
 }

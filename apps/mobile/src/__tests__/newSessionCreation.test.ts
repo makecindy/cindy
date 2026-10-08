@@ -8,9 +8,16 @@
  *  - retry(同 id 幂等)与 dismiss(返回编辑)收口。
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import ts from 'typescript';
 import type { MobileMakerTransport } from '@/device-link/mobileMakerTransport';
+import { isDurableOutboxSettled, type DurableOutboxRecord } from '@/session/durableOutbox';
+import { buildOutboxItem, outboxItemAttachments } from '@/session/sessionOutbox';
 
 const recoveryStorage = vi.hoisted(() => new Map<string, string>());
+const persistCancelledDraft = vi.hoisted(() => vi.fn(async () => {}));
+vi.mock('@/session/mobileDurableOutbox', () => ({ persistCancelledCreationDraft: persistCancelledDraft }));
 const recoveryAsyncStorage = vi.hoisted(() => ({
   getItem: vi.fn(async (key: string) => recoveryStorage.get(key) ?? null),
   setItem: vi.fn(async (key: string, value: string) => {
@@ -32,6 +39,7 @@ vi.mock('expo-crypto', () => ({
 }));
 import {
   dismissNewSessionCreation,
+  dismissRecoveredPrecreatedSession,
   drainStashedNewSessionDraft,
   getNewSessionCreationTask,
   prepareNewSessionCreationForEdit,
@@ -42,6 +50,7 @@ import {
   type NewSessionCreationParams,
 } from '@/session/newSessionCreation';
 import { remoteSessionStore } from '@/session/remoteSessionStore';
+import { takeOrcaStartFailure } from '@/session/orcaTeam';
 import { sessionFromCreateResult, type NewSessionDraft } from '@/session/newSession';
 import {
   __testing as recoveryTesting,
@@ -61,6 +70,41 @@ const DRAFT: NewSessionDraft = {
   firstMessage: 'hello world',
 };
 
+// Execute the bridge's actual refresh callback with the real session store.
+// This includes hydration, cancellation cleanup and message-work lease release.
+const bridgeSource = ts.createSourceFile('MobileOutboxBridge.tsx', readFileSync(resolve(
+  process.cwd(), 'src/session/MobileOutboxBridge.tsx'), 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+let refreshSource = '';
+function findRefresh(node: ts.Node) {
+  if (ts.isVariableDeclaration(node) && node.name.getText(bridgeSource) === 'refreshLeases') {
+    refreshSource = node.initializer!.getText(bridgeSource);
+  }
+  ts.forEachChild(node, findRefresh);
+}
+findRefresh(bridgeSource);
+if (!refreshSource) throw new Error('Missing outbox lease refresh callback');
+function outboxLeaseHarness(initial: DurableOutboxRecord[]) {
+  let records = initial;
+  const leases = new Map<string, ReturnType<typeof remoteSessionStore.acquireSessionMessageWork>>();
+  const bindings = { isCurrent: () => true, mobileDurableOutbox: { getSnapshot: () => records },
+    isDurableOutboxSettled, remoteSessionStore, sessionFromCreateResult, outboxItemAttachments,
+    dismissRecoveredPrecreatedSession, leases,
+    leaseKey: (record: DurableOutboxRecord) => JSON.stringify([record.deviceId, record.item.sessionId]) };
+  const compiled = ts.transpileModule(`function create(bindings) {
+    const { ${Object.keys(bindings).join(', ')} } = bindings;
+    return ${refreshSource};
+  }`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+  const create = new Function(`${compiled}; return create;`)() as (values: typeof bindings) => () => void;
+  return { refresh: create(bindings), leases, setRecords: (next: DurableOutboxRecord[]) => { records = next; } };
+}
+function recoveryOutboxRecord(sessionId: string): DurableOutboxRecord {
+  return { version: 1, accountId: 'owner-a', deviceId: 'dev-1', createdAt: 1, state: 'failed', uploads: [],
+    creation: { draft: DRAFT, deviceName: 'PC', planModeArm: false, restorePermissionMode: null },
+    item: buildOutboxItem({ clientId: `message-${sessionId}`, sessionId, text: DRAFT.firstMessage,
+      quotesEncoded: false, agentReferences: [], pastedTextRanges: [], slashCommandRanges: [],
+      permissionModeAtSend: DRAFT.permissionMode, readyAttachments: [], readyPreviews: [], claimedUploads: [] }) };
+}
+
 interface MakerMock {
   createSession: ReturnType<typeof vi.fn>;
   getSession: ReturnType<typeof vi.fn>;
@@ -69,6 +113,7 @@ interface MakerMock {
   setPermissionMode: ReturnType<typeof vi.fn>;
   worktree: {
     discardPrecreated: ReturnType<typeof vi.fn>;
+    cancelPrecreated?: ReturnType<typeof vi.fn>;
   };
   input: {
     enqueue: ReturnType<typeof vi.fn>;
@@ -131,6 +176,7 @@ async function flushPipeline(): Promise<void> {
 
 describe('newSessionCreation pipeline', () => {
   beforeEach(async () => {
+    persistCancelledDraft.mockReset();
     await recoveryTesting.drainMutations();
     recoveryStorage.clear();
     recoveryTesting.resetVolatileLedgers();
@@ -795,6 +841,115 @@ describe('newSessionCreation pipeline', () => {
     }]);
   });
 
+  it('returns the original draft after an uncertain create is cancelled by the host', async () => {
+    const record = { sessionId: 'cancel-me', deviceId: 'dev-1', path: '/repo/.cindy-worktrees/orphan', recoveryKey: 'recovery-cancel-key', createdAt: Date.now(), phase: 'precreated' as const };
+    await registerPendingPrecreatedWorktree('owner-a', record);
+    const maker = makeMaker({
+      createSession: vi.fn(async () => { throw new Error('INVOKE_TIMEOUT'); }),
+      worktree: { discardPrecreated: vi.fn(), cancelPrecreated: vi.fn(async () => ({ discarded: true })) },
+    });
+    startNewSessionCreation(makeParams(record.sessionId, maker, {
+      draft: { ...DRAFT, workingDir: record.path },
+      precreatedWorktree: { path: record.path, recoveryKey: record.recoveryKey, originalWorkingDir: '/repo', createdAt: record.createdAt },
+      precreatedWorktreeAccountId: 'owner-a',
+    }));
+    await flushPipeline();
+    const task = await prepareNewSessionCreationForEdit(record.sessionId);
+    expect(task?.draft.firstMessage).toBe(DRAFT.firstMessage);
+    expect(task?.precreatedWorktree?.originalWorkingDir).toBe('/repo');
+    expect(maker.worktree.cancelPrecreated).toHaveBeenCalledWith({ sessionId: record.sessionId, recoveryKey: record.recoveryKey });
+    expect(maker.worktree.discardPrecreated).not.toHaveBeenCalled();
+    expect(persistCancelledDraft).toHaveBeenCalledWith({ sessionId: record.sessionId, deviceId: record.deviceId, originalWorkingDir: '/repo' });
+    expect(await listPendingPrecreatedWorktrees('owner-a')).toEqual([]);
+  });
+
+  it('retry reconciles a late exact-id success without another create', async () => {
+    const maker = makeMaker({ createSession: vi.fn(async () => { throw new Error('INVOKE_TIMEOUT'); }) });
+    startNewSessionCreation(makeParams('late-success', maker, {
+      precreatedWorktree: { path: '/repo/worktree', recoveryKey: 'late-recovery-key', originalWorkingDir: '/repo' },
+      precreatedWorktreeAccountId: 'owner-a',
+    }));
+    await flushPipeline();
+    expect(getNewSessionCreationTask('late-success')?.status).toBe('create-failed');
+    maker.getSession.mockResolvedValue(sessionFromCreateResult({ sessionId: 'late-success', workDir: '/repo/worktree' }, DRAFT));
+    retryNewSessionCreation('late-success');
+    await flushPipeline();
+    expect(maker.createSession).toHaveBeenCalledTimes(1);
+    expect(maker.input.enqueue).toHaveBeenCalledTimes(1);
+    expect(getNewSessionCreationTask('late-success')).toBeNull();
+  });
+
+  it('keeps the edit recovery obligation when persisting the cancelled draft fails', async () => {
+    const record = { sessionId: 'cancel-save-fails', deviceId: 'dev-1', path: '/repo/.cindy-worktrees/orphan',
+      recoveryKey: 'recovery-cancel-save-key', createdAt: Date.now(), phase: 'precreated' as const };
+    await registerPendingPrecreatedWorktree('owner-a', record);
+    const maker = makeMaker({ createSession: vi.fn(async () => { throw new Error('INVOKE_TIMEOUT'); }),
+      worktree: { discardPrecreated: vi.fn(), cancelPrecreated: vi.fn(async () => ({ discarded: true })) } });
+    startNewSessionCreation(makeParams(record.sessionId, maker, {
+      draft: { ...DRAFT, workingDir: record.path }, precreatedWorktreeAccountId: 'owner-a',
+      precreatedWorktree: { path: record.path, recoveryKey: record.recoveryKey, originalWorkingDir: '/repo', createdAt: record.createdAt },
+    }));
+    await flushPipeline();
+    persistCancelledDraft.mockRejectedValueOnce(new Error('disk full'));
+    await expect(prepareNewSessionCreationForEdit(record.sessionId)).rejects.toThrow('disk full');
+    expect(await listPendingPrecreatedWorktrees('owner-a')).toHaveLength(1);
+    expect(getNewSessionCreationTask(record.sessionId)?.status).toBe('create-failed');
+    await prepareNewSessionCreationForEdit(record.sessionId);
+    expect(await listPendingPrecreatedWorktrees('owner-a')).toEqual([]);
+    dismissNewSessionCreation(record.sessionId);
+  });
+
+  it.each([true, false, undefined])('removes the host-confirmed cancelled row on the matching device (pendingLocalCreation=%s)', (pendingLocalCreation) => {
+    const row = { ...sessionFromCreateResult({ sessionId: 'orphan' }, DRAFT), pendingLocalCreation };
+    remoteSessionStore.upsertDeviceSession('dev-1', 'PC', row);
+    dismissRecoveredPrecreatedSession({ sessionId: 'orphan', deviceId: 'other-device' });
+    expect(remoteSessionStore.getSessions()).toHaveLength(1);
+    dismissRecoveredPrecreatedSession({ sessionId: 'orphan', deviceId: 'dev-1' });
+    expect(remoteSessionStore.getSessions()).toHaveLength(0);
+  });
+
+  it('does not dismiss a row still owned by a live creation pipeline', async () => {
+    const maker = makeMaker({ createSession: vi.fn(async () => { throw new Error('failed startup'); }) });
+    startNewSessionCreation(makeParams('s1', maker));
+    dismissRecoveredPrecreatedSession({ sessionId: 's1', deviceId: 'dev-1' });
+    expect(remoteSessionStore.getSessions().find((row) => row.id === 's1')).toBeDefined();
+    expect(getNewSessionCreationTask('s1')).not.toBeNull();
+    await flushPipeline();
+    dismissNewSessionCreation('s1');
+  });
+
+  it('removes a cold-hydrated cancelled row and releases only its lease without resurrecting it', () => {
+    const orphan = recoveryOutboxRecord('cold-orphan');
+    const other = recoveryOutboxRecord('other-draft');
+    const bridge = outboxLeaseHarness([orphan, other]);
+    bridge.refresh();
+    expect(remoteSessionStore.getSessions().find((row) => row.id === 'cold-orphan')?.pendingLocalCreation).toBeUndefined();
+    expect(bridge.leases.size).toBe(2);
+    const releaseOrphan = vi.spyOn(bridge.leases.get(JSON.stringify(['dev-1', 'cold-orphan']))!, 'release');
+    const releaseOther = vi.spyOn(bridge.leases.get(JSON.stringify(['dev-1', 'other-draft']))!, 'release');
+    const cancelled = { ...orphan, suspended: true, creation: { ...orphan.creation!, cancelled: true as const } };
+    bridge.setRecords([cancelled, other]);
+    bridge.refresh();
+    expect(remoteSessionStore.getSessions().map((row) => row.id)).toEqual(['other-draft']);
+    expect(releaseOrphan).toHaveBeenCalledOnce();
+    expect(releaseOther).not.toHaveBeenCalled();
+    bridge.refresh();
+    expect(remoteSessionStore.getSessions().map((row) => row.id)).toEqual(['other-draft']);
+    expect(cancelled.item.text).toBe(DRAFT.firstMessage);
+    expect(cancelled.creation.cancelled).toBe(true);
+    bridge.setRecords([]);
+    bridge.refresh();
+  });
+
+  it('does not materialize an already cancelled draft on cold startup', () => {
+    const orphan = recoveryOutboxRecord('cancelled-before-restart');
+    const bridge = outboxLeaseHarness([{ ...orphan, creation: { ...orphan.creation!, cancelled: true } }]);
+    bridge.refresh();
+    bridge.refresh();
+    expect(remoteSessionStore.getSessions()).toEqual([]);
+    expect(bridge.leases.size).toBe(0);
+  });
+
   it.each([
     ['null', null],
     ['empty object', {}],
@@ -835,7 +990,7 @@ describe('newSessionCreation pipeline', () => {
     retryNewSessionCreation('s20');
     await flushPipeline();
     expect(maker.createSession).toHaveBeenCalledTimes(1);
-    expect(maker.getSession).toHaveBeenCalledTimes(1);
+    expect(maker.getSession).toHaveBeenCalledTimes(2);
     await expect(prepareNewSessionCreationForEdit('s20')).rejects.toThrow('worktree');
     expect(maker.worktree.discardPrecreated).not.toHaveBeenCalled();
     await expect(listPendingPrecreatedWorktrees('owner-a')).resolves.toEqual([{
@@ -922,5 +1077,83 @@ describe('newSessionCreation pipeline', () => {
       ...record,
       phase: 'session-create-started',
     }]);
+  });
+  it('hands the persisted first message to the outbox without issuing a competing enqueue', async () => {
+    const maker = makeMaker();
+    const params = makeParams('durable-first', maker, { firstMessageClientId: 'persisted-first-id', planModeArm: true });
+    const handoff = vi.fn(async () => undefined);
+    params.transport.handoffFirstMessage = handoff;
+    startNewSessionCreation(params);
+    await flushPipeline();
+    expect(handoff).toHaveBeenCalledWith(expect.objectContaining({ clientId: 'persisted-first-id', text: DRAFT.firstMessage }));
+    expect(maker.input.enqueue).not.toHaveBeenCalled();
+    expect(maker.setPlanMode).not.toHaveBeenCalled();
+    expect(getNewSessionCreationTask('durable-first')).toBeNull();
+    expect(remoteSessionStore.getSessions().find((session) => session.id === 'durable-first')?.pendingLocalCreation).toBe(false);
+  });
+  it('keeps the creation task recoverable when saving the first-message handoff fails', async () => {
+    const maker = makeMaker(); const params = makeParams('durable-first-failed', maker, { firstMessageClientId: 'saved-id' });
+    params.transport.handoffFirstMessage = async () => { throw new Error('disk full'); };
+    startNewSessionCreation(params); await flushPipeline();
+    expect(maker.input.enqueue).not.toHaveBeenCalled();
+    expect(getNewSessionCreationTask('durable-first-failed')).toMatchObject({ status: 'enqueue-failed', firstMessageClientId: 'saved-id' });
+  });
+
+  describe('collaboration on create', () => {
+    const orcaEnable = { workerAgent: 'codex' as const, role: 'developer', label: 'developer', workerPermissionMode: 'auto' as const };
+    function withOrca(maker: MakerMock, enable: ReturnType<typeof vi.fn>) {
+      return Object.assign(maker, {
+        getCapabilities: vi.fn(async () => ({ supportsOrcaWorkerPermissionMode: true })),
+        orca: { enable, listWorkers: vi.fn(async () => []) },
+      });
+    }
+
+    it('brings the collaboration draft back with the draft when a failed create returns to editing', async () => {
+      const maker = withOrca(makeMaker({
+        createSession: vi.fn(async () => { throw new Error('INVALID_PARAMS: cannot create session'); }),
+      }), vi.fn());
+      const collabDraft = {
+        role: 'reviewer', agent: 'codex' as const, model: null, permissionMode: 'auto' as const, initialTask: 'check tests',
+      };
+      startNewSessionCreation(makeParams('orca-edit', maker, { orcaEnable, collabDraft }));
+      await flushPipeline();
+      expect(getNewSessionCreationTask('orca-edit')?.status).toBe('create-failed');
+      const prepared = await prepareNewSessionCreationForEdit('orca-edit');
+      stashNewSessionDraftForEdit(prepared!);
+      expect(drainStashedNewSessionDraft()?.collabDraft).toEqual(collabDraft);
+    });
+
+    it('starts collaboration after createSession and before the first message is queued', async () => {
+      const enable = vi.fn(async () => ({ workerSessionId: 'worker-1' }));
+      const maker = withOrca(makeMaker(), enable);
+      startNewSessionCreation(makeParams('orca-ok', maker, { orcaEnable }));
+      await flushPipeline();
+      expect(enable).toHaveBeenCalledWith('orca-ok', orcaEnable);
+      expect(enable.mock.invocationCallOrder[0]).toBeGreaterThan(maker.createSession.mock.invocationCallOrder[0]!);
+      expect(enable.mock.invocationCallOrder[0]).toBeLessThan(maker.input.enqueue.mock.invocationCallOrder[0]!);
+      expect(remoteSessionStore.getSessions().find((session) => session.id === 'orca-ok')?.orcaRole).toBe('lead');
+      expect(takeOrcaStartFailure('orca-ok')).toBeNull();
+    });
+
+    it('continues as a single task and hands the reason to the session page when collaboration fails', async () => {
+      const enable = vi.fn(async () => { throw new Error('[PRECONDITION_FAILED] disabled'); });
+      const maker = withOrca(makeMaker(), enable);
+      startNewSessionCreation(makeParams('orca-fail', maker, { orcaEnable }));
+      await flushPipeline();
+      expect(maker.input.enqueue).toHaveBeenCalledTimes(1);
+      expect(getNewSessionCreationTask('orca-fail')).toBeNull();
+      expect(takeOrcaStartFailure('orca-fail')).toBeTruthy();
+    });
+
+    it('does not start collaboration twice when the authoritative row is already a Lead', async () => {
+      const enable = vi.fn(async () => ({}));
+      const maker = withOrca(makeMaker({
+        getSession: vi.fn(async () => ({ ...sessionFromCreateResult({ sessionId: 'orca-lead' }, DRAFT), orcaRole: 'lead' })),
+      }), enable);
+      startNewSessionCreation(makeParams('orca-lead', maker, { orcaEnable }));
+      await flushPipeline();
+      expect(enable).not.toHaveBeenCalled();
+      expect(maker.input.enqueue).toHaveBeenCalledTimes(1);
+    });
   });
 });

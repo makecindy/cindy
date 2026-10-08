@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 /**
  * TerminalTabBody —— terminal tab 的 TabBody。
  *
@@ -18,7 +19,7 @@
  */
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { RotateCw, AlertTriangle } from 'lucide-react';
+import { RotateCw, AlertTriangle, ServerOff } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { Spinner } from '@/components/ui/spinner';
@@ -34,6 +35,8 @@ interface Props {
   state: TerminalState;
   ctx: TabKindHostContext;
   active?: boolean;
+  /** Keep the PTY at its last usable dimensions while the sidebar is collapsed. */
+  shellVisible?: boolean;
 }
 
 interface RuntimeError {
@@ -42,7 +45,33 @@ interface RuntimeError {
   detail: string;
 }
 
-export function TerminalTabBody({ state, ctx, active }: Props) {
+export function TerminalTabBody({ state, ctx, active, shellVisible = true }: Props) {
+  // The PTY IPC always executes on this Desktop instance. Remote workdirs must
+  // fail closed, including while device-link ownership is still unresolved.
+  const isLocalSession = ctx.remoteHostId === null && ctx.deviceLinkDeviceId === null;
+  if (!isLocalSession) return <RemoteTerminalUnavailable />;
+
+  return <LocalTerminalTabBody state={state} ctx={ctx} active={active} shellVisible={shellVisible} />;
+}
+
+function RemoteTerminalUnavailable() {
+  const { t } = useTranslation();
+  return (
+    <div className="flex h-full min-w-0 select-none items-center justify-center gap-2.5 bg-[var(--panel-bg)] p-6 text-left text-[var(--text-tertiary)]">
+      <ServerOff aria-hidden size={18} strokeWidth={1.6} />
+      <div className="max-w-[300px]">
+        <div className="text-13 font-medium leading-[1.384615] text-[var(--text-primary)]">
+          {t('rightSidebar.terminal.remoteUnavailableTitle')}
+        </div>
+        <div className="mt-[3px] text-12 leading-[1.5] text-[var(--text-secondary)]">
+          {t('rightSidebar.terminal.remoteUnavailableDescription')}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function LocalTerminalTabBody({ state, ctx, active, shellVisible = true }: Props) {
   const { tabId, workdir, patchState } = ctx;
   const { t } = useTranslation();
 
@@ -52,6 +81,8 @@ export function TerminalTabBody({ state, ctx, active }: Props) {
   const onDataDisposerRef = useRef<{ dispose(): void } | null>(null);
   /** 标记本组件实例是否还活着,异步 callback 里检查。 */
   const aliveRef = useRef(true);
+  const shellVisibleRef = useRef(shellVisible);
+  shellVisibleRef.current = shellVisible;
 
   const [runtimeError, setRuntimeError] = useState<RuntimeError | null>(null);
   const [restarting, setRestarting] = useState(false);
@@ -95,8 +126,9 @@ export function TerminalTabBody({ state, ctx, active }: Props) {
       patchState({ exited: ex.exit });
     });
 
-    // 首次 fit + 拿到尺寸
-    fitNow(entry);
+    // 折叠侧栏时 FitAddon 会把 0 宽折成极窄尺寸；不要把它写进
+    // lastSize 或下发给 PTY，恢复可见后由 active effect 再同步。
+    if (shellVisibleRef.current) fitNow(entry);
 
     return () => {
       aliveRef.current = false;
@@ -162,7 +194,7 @@ export function TerminalTabBody({ state, ctx, active }: Props) {
     if (!slot) return;
     const ro = new ResizeObserver(() => {
       const entry = entryRef.current;
-      if (!entry || !aliveRef.current) return;
+      if (!entry || !aliveRef.current || !shellVisibleRef.current) return;
       fitAndPushSize(entry, tabId);
     });
     ro.observe(slot);
@@ -171,16 +203,16 @@ export function TerminalTabBody({ state, ctx, active }: Props) {
 
   // ─── 4. active 切换时 fit + focus(避免后台 layout 抖动)───
   useEffect(() => {
-    if (!active) return;
+    if (!active || !shellVisible) return;
     const entry = entryRef.current;
     if (!entry) return;
     // 切到本 tab 时 fit 一下,因为后台 tab 的 layout 可能没跟上侧栏宽度变化
     requestAnimationFrame(() => {
-      if (!aliveRef.current || !entryRef.current) return;
+      if (!aliveRef.current || !entryRef.current || !shellVisibleRef.current) return;
       fitAndPushSize(entryRef.current, tabId);
       entryRef.current.terminal.focus();
     });
-  }, [active, tabId]);
+  }, [active, shellVisible, tabId]);
 
   // ─── 5. Restart 按钮 handler ───
   const onRestart = useCallback(async () => {
@@ -285,15 +317,18 @@ function ExitedOverlay({
     <div className="pointer-events-none absolute inset-0 flex items-end justify-center pb-6">
       <div className="pointer-events-auto flex items-center gap-3 rounded-md border border-white/15 bg-black/80 px-4 py-2 text-sm text-white shadow-lg backdrop-blur">
         <span>{message}</span>
-        <button
+        <Button
+          variant="secondary"
+          size="xs"
+          compact
+          loading={restarting}
           type="button"
           onClick={onRestart}
           disabled={restarting}
-          className="inline-flex items-center gap-1 rounded border border-white/20 px-2 py-0.5 text-xs hover:bg-white/10 disabled:opacity-50"
         >
           <Spinner icon={RotateCw} size={12} spinning={restarting} />
           {t('rightSidebar.terminal.restart')}
-        </button>
+        </Button>
       </div>
     </div>
   );
@@ -317,15 +352,18 @@ function ErrorOverlay({
           <AlertTriangle size={14} />
           <span>{message}</span>
         </div>
-        <button
+        <Button
+          variant="secondary"
+          size="xs"
+          compact
+          loading={restarting}
           type="button"
           onClick={onRetry}
           disabled={restarting}
-          className="inline-flex items-center gap-1 rounded border border-white/20 px-2 py-0.5 text-xs hover:bg-white/10 disabled:opacity-50"
         >
           <Spinner icon={RotateCw} size={12} spinning={restarting} />
           {t('rightSidebar.terminal.restart')}
-        </button>
+        </Button>
       </div>
     </div>
   );

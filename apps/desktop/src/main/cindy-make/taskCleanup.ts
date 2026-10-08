@@ -1,4 +1,5 @@
-import { lstat, realpath, rm } from 'node:fs/promises';
+import { lstat, realpath } from 'node:fs/promises';
+import originalFs from 'original-fs';
 import path from 'node:path';
 import { contentRef, snapshotContent, taskContentRef } from './sourceContent.js';
 import { runSourceGit } from './sourceGit.js';
@@ -191,7 +192,14 @@ export async function manageCindyMakeWorkspace(
     check();
     signal.throwIfAborted();
     try {
-      await rm(target, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+      // Electron's patched fs opens nested ASARs (including default_app.asar),
+      // locking the files it is trying to remove on Windows. Delete physical files.
+      await originalFs.promises.rm(target, {
+        recursive: true,
+        force: true,
+        maxRetries: 3,
+        retryDelay: 100,
+      });
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
       if (['EBUSY', 'EPERM', 'EACCES', 'ENOTEMPTY'].includes(code ?? ''))

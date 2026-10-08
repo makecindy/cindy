@@ -33,6 +33,22 @@ async function harness(dispatch: ComputerMcpDeps["callTool"]) {
 }
 
 describe("bounded Computer Use recovery", () => {
+  it("preserves interrupted typing progress without replaying input", async () => {
+    const inputProgress = { completed_chars: 400, attempted_chars: 0, remaining_chars: 450 };
+    const dispatch = vi.fn(async (name: string) => {
+      if (name === "type_text") throw Object.assign(new Error("Agent yielded"), {
+        code: "DESKTOP_INPUT_YIELDED", outcomeUnknown: true, inputProgress,
+      });
+      return { ok: true };
+    });
+    const call = await harness(dispatch);
+    expect(await call("type_text", { pid: 1, window_id: 2, text: "hello" })).toMatchObject({
+      ok: false, errorCode: "DESKTOP_INPUT_YIELDED",
+      data: { outcome_unknown: true, input_progress: inputProgress },
+    });
+    expect(dispatch.mock.calls.map(([name]) => name)).toEqual(["type_text", "get_window_state"]);
+  });
+
   it("observes unknown input exactly once, preserving uncertainty and session provenance", async () => {
     const raw = { effect: "unverifiable", remaining_chars: 450 };
     const dispatch = vi.fn(async (name: string) =>

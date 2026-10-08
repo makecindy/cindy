@@ -13,7 +13,8 @@
  * updater / release-notes、被控端全局设置写(maker:compat-mode:set 等 *_SET 设置类——
  * 远程改被控端全局设置越权)、local-db 裸写(sessions:create/update、messages:create——
  * 写库必须经业务 handler,不开裸写)、maker:execute-desktop-command(UI 副作用)、
- * migration / session-import、skillhub 写操作。
+ * 通用 migration / session-import、skillhub 写操作。任务迁移仅放行下述受限业务通道，
+ * 不开放通用导入、任意路径写入或裸数据库迁移。
  *
  * 双层校验:控制端发送前(快速失败)+ 被控端执行前(权威)。
  * 新增 channel 不进表即天然不可远程调用(代码保证确定性)。
@@ -24,6 +25,8 @@
  * Renderer 可调用。它由业务 dispatch 拦截,绝不放行通用 UI / shell IPC。
  */
 import { FILE_PEER_CHANNEL } from './filePeer.js';
+import { REMOTE_AGENT_CHANNEL } from './remoteAgent.js';
+import { TASK_MIGRATION_CHANNEL } from './taskMigration.js';
 import { SESSION_ACTIVITY_CHANNEL, SESSION_SYNC_CHANNEL } from './topics.js';
 import { REMOTE_DESKTOP_INVOKE_MS } from './remoteDesktopIce.js';
 import {
@@ -49,6 +52,8 @@ export const DL_UNSUBSCRIBE_CHANNEL = 'device-link:unsubscribe';
  * 不出被控端。老被控端响应无此字段 → 控制端按无终态降级。
  */
 export const DL_HISTORY_MESSAGES_CHANNEL = 'local-db:history:messages';
+/** Same-account, linked, read-only history discovery/search. No shared-task or unlinked access. */
+export const DL_HISTORY_QUERY_CHANNEL = 'local-db:history:query';
 
 /**
  * 会话引用消费能力探针。控制端在发送含引用快照的队列消息前必须先调用；
@@ -160,6 +165,10 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   'maker:list-active',
   'maker:any-session-in-turn',
   'maker:session-in-turn',
+  // Review evidence and the Reviewer session are created on the data-owning
+  // device. The handler remains host-owned; this only permits the explicit
+  // start request to cross the device-link tunnel.
+  'maker:review:start',
   // —— 输入队列(input queue 全集,无本机副作用)——
   DL_SESSION_REFERENCE_CAPABILITY_CHANNEL,
   'maker:input:get-projection',
@@ -174,6 +183,7 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   'maker:input:resume',
   'maker:input:retry-last-error',
   'maker:input:clear-error',
+  'maker:input:cancel-usage-limit-wait',
   'maker:input:remove',
   'maker:input:update-text',
   // 整条内容替换(文本+附件),手机端排队消息复用 composer 编辑;老被控端无 handler →
@@ -251,6 +261,9 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   // 模型供应商目录(只读):远程会话的模型选择器据此 1:1 镜像被控端的「供应商+模型」结构。
   // 被控端 dispatch 在返回前剥离 routing 等执行字段(见 device-link/dispatch.ts),只回显示用字段。
   'maker:provider:list',
+  // 供应商分享(只读):被控电脑收到的、别人分享给它的供应商目录(经被控电脑代读，手机读不到
+  // 另一个账号的电脑)。只回显示用字段，供手机模型列表的远程供应商区域使用。
+  'maker:provider-share:received-catalogs', // PROVIDER_SHARE_RECEIVED_CATALOGS_CHANNEL
   // Git safety 设置(只读):远程 Codex Rewind 入口必须按被控端是否会创建 safety snapshot
   // 决定显隐。SET/RESET 不放行,控制端不能改被控端全局偏好。
   'maker:git-safety:get',
@@ -265,6 +278,7 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   ...REMOTE_RESOURCE_CHANNELS,
   // —— 读模型(被控端本地 DB 是数据真相)——
   'local-db:sessions:list',
+  'local-db:task-tags:execute',
   'local-db:sessions:get',
   // Bounded metadata reconciliation. Old hosts reject this; controllers fall back to GET.
   'local-db:sessions:get-many',
@@ -274,6 +288,7 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   // projection.
   'local-db:conversations:search',
   DL_HISTORY_MESSAGES_CHANNEL,
+  DL_HISTORY_QUERY_CHANNEL,
   'local-db:messages:list',
   // Read-only visible history and recoverable work ranges; same session authorization as list.
   'local-db:messages:view',
@@ -319,6 +334,11 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   // 入方向媒体取件(被控端 dispatch 拦截执行,不落 ipcMain handler;契约登记 + 能力探测)。
   DL_MEDIA_FETCH_CHANNEL,
   FILE_PEER_CHANNEL,
+  TASK_MIGRATION_CHANNEL,
+  // 远程 Agent(被控端 dispatch 拦截执行，不落 ipcMain handler)：在被控端用它自己的登录与
+  // 供应商运行 Agent，文件、命令与 Cindy 工具回到控制端执行。准入同 fs:list-dir 的论证：
+  // 同账号 + 被控端显式打开远程控制时，控制端本就能驱动被控端的 Agent；不进共享任务白名单。
+  REMOTE_AGENT_CHANNEL,
   // 出方向语音转写(被控端 dispatch 拦截执行,不落 ipcMain handler;复用被控端 ASR 配置)。
   DL_VOICE_TRANSCRIBE_CHANNEL,
   // 临时 voice credential 同步(被控端 dispatch 拦截执行,不落 ipcMain handler;禁止泛化)。
@@ -389,6 +409,8 @@ const EXTENDED_INVOKE_CHANNELS: readonly string[] = [
   // —— Rewind / Fork / Title / Context ——
   'maker:rewind:preview',
   'maker:rewind:commit',
+  // Shared action via dispatch injection; local IPC retains its trusted-renderer guard.
+  'maker:turn-change-set:apply',
   'maker:fork',
   'maker:fork-strip-encrypted',
   'maker:generate-title',
@@ -404,11 +426,23 @@ const EXTENDED_INVOKE_CHANNELS: readonly string[] = [
   // 老被控端无此 channel → CHANNEL_NOT_ALLOWED → 控制端降级为无数据(回退 workflow 级
   // 卡片)。不进 INVOKE_TIMEOUT_OVERRIDES_MS:读小 JSON,默认 30s 足够。
   'maker:get-workflow-progress',
+  // 后台命令输出尾部(只读):入参 (sessionId, taskId),handler 按被控端活跃会话的
+  // 后台任务登记解析 SDK `.output` 路径并只读末尾一段,控制端无法指定路径;
+  // 无 event.sender 依赖、无副作用;输出文件真相在被控端(控制端本机读必落空)。
+  // 老被控端无此 channel → CHANNEL_NOT_ALLOWED → 控制端不显示「最近输出」。
+  'maker:background-task:output-tail',
   // 会话仍在运行的后台任务快照(只读):handler 只查活跃会话内存句柄的任务列表,
   // 无 event.sender 依赖、无副作用;任务真身在被控端(控制端 main 无该会话 handle,
   // 本机查必空)。后台任务面板挂载水合用。老被控端无此 channel → CHANNEL_NOT_ALLOWED
   // → 控制端降级空表(面板退化为事件流 + 消息扫描两源)。
   'maker:session-background-tasks:list',
+  'maker:session-background-activity',
+  // 后台任务停止(写):单个任务精确停止 / 会话级「全部停止」。handler 只按 sessionId
+  // (+ taskId)操作被控端活跃会话,无 event.sender 依赖、无本机 UI 副作用;任务真身在
+  // 被控端,控制端本机调用只会假成功。仅同账号远控,不进 sharedTask 访客白名单。
+  // 老被控端无此 channel → CHANNEL_NOT_ALLOWED → 控制端提示升级被控端。
+  'maker:agent-task:stop',
+  'maker:session-background-tasks:stop',
   // Durable PI Subagent truth and process handles live on the data-owning device.
   // Reads and exact controls must execute there; the controller must never fall
   // back to its own pi-agent-home for a remote task.
@@ -456,6 +490,12 @@ const EXTENDED_INVOKE_CHANNELS: readonly string[] = [
   // 被控端视角的单价(与被控端桌面 tooltip 同源)。无 sender 依赖、无副作用;老被控端无此 channel
   // → CHANNEL_NOT_ALLOWED → 控制端隐藏价格(与桌面「无价不显示」口径一致)。
   'maker:usage:model-pricing',
+  // 用量历史跨设备合并(只读):同账号另一台电脑读取被控端 daily_spend / daily_model_usage
+  // 原始行,合并进它自己的「所有设备」用量历史。数据真相在被控端;只含按天 × 模型聚合的
+  // token 与金额,不含会话、消息或凭证。入参仅可选 sinceDay(YYYY-MM-DD),无 sender 依赖、
+  // 无副作用;响应 gzip 编码,超帧预算回结构化 oversize。老被控端无此 channel →
+  // CHANNEL_NOT_ALLOWED → 控制端把该设备标为「版本过旧」,不影响其它设备。
+  'maker:usage:device-rows',
   // 网关 API key **presence-only** 探测:只回 { present: boolean },不回、也永不扩展为读取
   // 密钥材料 —— 这是「账号与密钥永不放行」大类下的窄口径例外(同 DL_VOICE_CREDENTIAL_SYNC
   // 的例外定位,禁止泛化)。用途:控制端模型选择器判断折扣版(codex/)是否该置灰,判定依据
@@ -482,6 +522,8 @@ const EXTENDED_INVOKE_CHANNELS: readonly string[] = [
   'maker:list-customizations',
   'maker:scan-at-resources',
   // —— 插件列表(只读)——
+  // Public composer metadata only; no paths, secrets, lifecycle writes or shared guests.
+  'ghosts:composer-list',
   'maker:plugins:list',
   // 单个插件的启停状态(只读)。与 maker:plugins:list 同类,差别只在它不跳过
   // HOSTED_ELSEWHERE 插件、且按 id 精确查。准入三条:handler 只读 settings + 项目
@@ -563,6 +605,7 @@ const EXTENDED_INVOKE_CHANNELS: readonly string[] = [
   'worktree:suggest-name',
   'worktree:create',
   'worktree:discard-precreated',
+  'worktree:cancel-precreated',
   'worktree:removal-preview',
   // —— 个人 Telegram bot 跨设备上下线(准入论证见上方 DL_TELEGRAM_* 常量注释)——
   // 两条都由被控端 dispatch 拦截执行, 不是 ipcMain handler。
@@ -585,6 +628,7 @@ export const REMOTE_REVIEW_EXTERNAL_INPUT_CHANNELS: ReadonlySet<string> = new Se
   'maker:input:resume',
   'maker:input:retry-last-error',
   'maker:input:clear-error',
+  'maker:input:cancel-usage-limit-wait',
   'maker:input:remove',
   'maker:input:update-text',
   'maker:input:update-content',
@@ -597,6 +641,10 @@ export const REMOTE_REVIEW_EXTERNAL_INPUT_CHANNELS: ReadonlySet<string> = new Se
 
 /** 远程可调用的 invoke channel 全集(被控端 dispatch 前的权威校验依据) */
 export const REMOTE_INVOKE_ALLOWLIST: ReadonlySet<string> = new Set([
+  // Same-account owner controls only; guest task dispatch has its own deny-by-default gate.
+  'maker:shared-task',
+  // Dedicated Host-only OAuth transaction. Args/replies are never forwarded to Renderer.
+  'device-link:plugin-oauth:v3',
   'device-link:remote-desktop:v1',
   ...CORE_INVOKE_CHANNELS,
   ...EXTENDED_INVOKE_CHANNELS,
@@ -622,6 +670,10 @@ export const PUSH_FORWARD_ALLOWLIST: ReadonlySet<string> = new Set([
   'maker:interaction-dismissed',
   // Claude Auto classifier 故障后降级到 ask;payload 带 sessionId,控制端显示同款提示。
   'maker:auto-permission:fallback',
+  // Deferred model-provider outcome. Both payloads contain only task identity
+  // and selected route or a bounded failure code; no native error text.
+  'maker:session-credential-switch-applied',
+  'maker:session-credential-switch-failed',
   // 被控端 active-catalog revision 变化：控制端按 deviceId 驱逐并重拉 provider 目录。
   'maker:provider:changed',
   // 注:maker:auth:state-changed 曾在此 —— 但发射点不 tap、控制端也不消费(被控端 agent 鉴权
@@ -631,6 +683,8 @@ export const PUSH_FORWARD_ALLOWLIST: ReadonlySet<string> = new Set([
   'maker:orca:worker-changed',
   // goal 状态变化(payload 顶层 sessionId → 路由到 session:<id> topic,打开该会话的控制端可见)
   'maker:goal:status-changed',
+  // Bounded historical-turn summary only; full patches are fetched through git-review:remote-op.
+  'maker:turn-change-set:updated',
   'usage:message-turn-cost',
   // 本轮模型降级标记(payload 顶层 sessionId → 默认路由到 session:<id> topic):
   // 控制端把 agent_meta.modelMismatch 实时 patch 进已打开的远程会话消息流。
@@ -667,6 +721,7 @@ export const PUSH_FORWARD_ALLOWLIST: ReadonlySet<string> = new Set([
   'maker:claude-session-route-changed',
   // local-db 推送(读模型增量)
   'local-db:sessions:created',
+  'local-db:task-tags:changed',
   'local-db:sessions:patched',
   SESSION_ACTIVITY_CHANNEL,
   SESSION_SYNC_CHANNEL,
@@ -711,6 +766,11 @@ export const PUSH_FORWARD_ALLOWLIST: ReadonlySet<string> = new Set([
  * client-agnostic:mobile/web 控制端应使用同一映射(与 allowlist 同为协议契约)。
  */
 export const INVOKE_TIMEOUT_OVERRIDES_MS: Readonly<Record<string, number>> = {
+  // Evidence collection may include git diff and bounded artifact reads before
+  // the host can acknowledge the newly-created Reviewer session.
+  'maker:review:start': 90_000,
+  // Two Git preflight/apply stages each allow 30s, plus snapshot and queue overhead.
+  'maker:turn-change-set:apply': 90_000,
   [FILE_PEER_CHANNEL]: 30_000,
   // Capture renderer readiness + source enumeration + offer, then reply delivery.
   "device-link:remote-desktop:v1": REMOTE_DESKTOP_INVOKE_MS,
@@ -721,6 +781,7 @@ export const INVOKE_TIMEOUT_OVERRIDES_MS: Readonly<Record<string, number>> = {
   'worktree:create': 60_000,
   // 可能先等待同 sessionId 的晚到 create 释放互斥锁，再执行 git worktree remove。
   'worktree:discard-precreated': 60_000,
+  'worktree:cancel-precreated': 60_000,
   // pi 手动压缩调 LLM 生成摘要,大上下文 + 网关排队可达分钟级(core 侧
   // PI_COMPACT_TIMEOUT_MS = 10min);默认 30s 隧道超时会截断远程压缩请求,
   // 用户在控制端看到的就是「无反馈失败」。给足执行预算 + 回程余量:

@@ -20,13 +20,33 @@ import { createInterface } from 'node:readline';
 import { runInNewContext } from 'node:vm';
 
 import ts from 'typescript';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   CINDY_BRIDGE_EXTENSION_SOURCE,
   CINDY_PI_BASH_DEFAULT_TIMEOUT_SECONDS,
   CINDY_PI_BASH_MAX_TIMEOUT_SECONDS,
 } from '../cindy-bridge-source.js';
+
+it('strips Fast control paths from shell environments without mutating the runner environment', () => {
+  const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+  const start = source.indexOf('const SECRET_ENV_NAMES =');
+  const end = source.indexOf('function isolatedBashEnvironment', start);
+  const compiled = ts.transpileModule(source.slice(start, end) + '\nresult = withoutPiSecrets(input);', {
+    compilerOptions: { target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  const input = { PATH: '/fixture/bin', CINDY_PI_MODEL_REQUEST_PREFS_FILE: '/fixture/prefs.json' };
+  const sandbox = {
+    process: { env: {} }, input, result: undefined,
+    PI_PACKAGE_MANAGEMENT_ENV: 'CINDY_PI_PACKAGE_MANAGEMENT',
+    PI_BASH_PACKAGE_HOME_ENV: 'CINDY_PI_BASH_PACKAGE_HOME',
+    MANAGED_RG_PATH_ENV: 'CINDY_PI_MANAGED_RG_PATH',
+    SUBAGENT_RUN_DIR_ENV: 'CINDY_PI_SUBAGENT_RUN_DIR',
+  };
+  runInNewContext(compiled, sandbox);
+  expect(sandbox.result).toEqual({ PATH: '/fixture/bin' });
+  expect(input.CINDY_PI_MODEL_REQUEST_PREFS_FILE).toBe('/fixture/prefs.json');
+});
 
 it('keeps text-only policy local and ordinary tools independent of host UI failures', async () => {
   const source = CINDY_BRIDGE_EXTENSION_SOURCE;
@@ -126,11 +146,15 @@ function loadBashIsolationHelper(
   home: string | undefined,
 ) => Record<string, string | undefined> {
   const source = CINDY_BRIDGE_EXTENSION_SOURCE;
-  const start = source.indexOf('function withoutPiSecrets');
+  const constantsStart = source.indexOf('const MANAGED_RG_PATH_ENV');
+  const constantsEnd = source.indexOf('const PI_PACKAGE_MANAGEMENT_TITLE');
+  const start = source.indexOf('const SECRET_ENV_NAMES');
   const end = source.indexOf('function managedRipgrepPath');
-  if (start < 0 || end <= start) throw new Error('bash isolation helper was not found');
+  if (constantsStart < 0 || constantsEnd <= constantsStart || start < 0 || end <= start) {
+    throw new Error('bash isolation helper was not found');
+  }
   const executableSource = [
-    "const SECRET_ENV_NAMES = new Set(['PI_CODING_AGENT_DIR', 'CINDY_PI_PACKAGE_MANAGEMENT', 'CINDY_PI_BASH_PACKAGE_HOME']);",
+    source.slice(constantsStart, constantsEnd),
     source.slice(start, end),
     '(globalThis as any).isolatedBashEnvironment = isolatedBashEnvironment;',
   ].join('\n');
@@ -140,7 +164,7 @@ function loadBashIsolationHelper(
       target: ts.ScriptTarget.ES2022,
     },
   }).outputText;
-  const context: Record<string, unknown> = { path: pathImpl };
+  const context: Record<string, unknown> = { path: pathImpl, process: { env: {} } };
   runInNewContext(compiled, context);
   return context.isolatedBashEnvironment as (
     env: Record<string, string | undefined>,
@@ -1772,6 +1796,30 @@ describe('cindy-bridge extension source', () => {
     expect(() => isolateWindows({}, 'relative\\home')).toThrow(/unavailable/);
   });
 
+  it.each([
+    ['POSIX', path.posix, '/isolated/pi-home'],
+    ['Windows', path.win32, 'D:\\isolated\\pi-home'],
+  ] as const)('hides Fast preferences from %s shells without mutating the runtime', (_platform, pathImpl, home) => {
+    const isolate = loadBashIsolationHelper(pathImpl);
+    const runtimeEnv = {
+      CINDY_PI_MODEL_REQUEST_PREFS_FILE: pathImpl.join(home, 'request-prefs.json'),
+      CINDY_PI_FAST_MODELS: '[]',
+      PATH: 'ordinary-shell-path',
+      SHELL_CANARY: 'preserved',
+    };
+    const shellEnv = isolate(runtimeEnv, home);
+    expect(shellEnv).not.toHaveProperty('CINDY_PI_MODEL_REQUEST_PREFS_FILE');
+    expect(shellEnv).not.toHaveProperty('CINDY_PI_FAST_MODELS');
+    expect(shellEnv).toMatchObject({
+      PATH: runtimeEnv.PATH,
+      SHELL_CANARY: runtimeEnv.SHELL_CANARY,
+      PI_CODING_AGENT_DIR: home,
+    });
+    expect(runtimeEnv.CINDY_PI_MODEL_REQUEST_PREFS_FILE).toBe(
+      pathImpl.join(home, 'request-prefs.json'),
+    );
+  });
+
   it('routes both Pi command names to the single host permission service', () => {
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain(
       "if (event.toolName === 'cindy_pi_extension' || event.toolName === 'cindy_pi_command') return;",
@@ -1790,9 +1838,9 @@ describe('cindy-bridge extension source', () => {
     expect(source).toContain('const controlPlaneWrite = Boolean(');
     expect(source).toContain('...(controlPlaneWrite ? { controlPlaneWrite: true } : {})');
     expect(source).toContain('resolvedWritePath: writeTargetResolved');
-    expect(source).toContain(
-      'resolvedWritableRoots: resolveWritableRootsForHost(permission.writableRoots)',
-    );
+    // 设备托管会话改用任务所在电脑的真实工作目录作可写根(见 CINDY_HOSTED)，其余照旧。
+    expect(source).toContain('resolvedWritableRoots: CINDY_HOSTED');
+    expect(source).toContain(': resolveWritableRootsForHost(permission.writableRoots)');
     expect(source).toContain('event.input.path = writeTargetResolved');
     expect(source).toContain('Cindy could not verify the real file-write target.');
   });
@@ -2244,13 +2292,16 @@ it('routes Bot shortcuts through the scoped helper entry without exposing them t
 
   const bot: any[] = [];
   gateway.register({ registerTool: (tool: unknown) => bot.push(tool) }, { botMemoryFacade: true });
-  for (const name of ['start_session_task', 'check_session_task', 'message_session_task', 'stop_session_task', 'send_to_agent', 'check_agent_message', 'list_agents', 'create_teammate', 'routine_list', 'routine_save', 'routine_sources', 'routine_history', 'routine_delete', 'routine_run_now']) {
+  for (const name of ['start_session_task', 'check_session_task', 'message_session_task', 'stop_session_task', 'send_to_agent', 'check_agent_message', 'list_agents', 'create_teammate', 'routine_list', 'routine_save', 'routine_sources', 'routine_history', 'routine_delete', 'routine_run_now', 'schedule_notify_current_run', 'schedule_set_pre_run_hook']) {
     const tool = bot.find((item) => item.name === name);
     expect(tool).toBeDefined();
     const args = name === 'routine_save' ? {
-      name: 'Rest', prompt: 'Remind me to rest', enabled: true,
-      triggers: [{ id: 'minute', kind: 'interval', intervalMs: 60000 }],
-    } : name === 'check_agent_message' ? { message_id: 'message-1' } : name === 'list_agents' || name === 'routine_list' || name === 'routine_sources' ? {}
+      name: 'Rest', prompt: 'Remind me to rest', enabled: true, silentWhenIdle: false, preRunHook: { command: 'node check.mjs' },
+      triggers: [
+        { id: 'minute', kind: 'interval', intervalMs: 60000, anchorMs: 30000 },
+        { id: 'one-shot', kind: 'once', at: 90000 },
+      ],
+    } : name === 'schedule_notify_current_run' ? {} : name === 'schedule_set_pre_run_hook' ? { script: 'process.exit(2)' } : name === 'check_agent_message' ? { message_id: 'message-1' } : name === 'list_agents' || name === 'routine_list' || name === 'routine_sources' ? {}
       : name.startsWith('routine_') ? { id: 'routine-1' }
       : name === 'start_session_task' ? { instruction: 'Prepare a report' }
       : name === 'send_to_agent' ? { target_id: 'd'.repeat(80) + '::' + 'b'.repeat(128), message: 'Please review' }
@@ -2260,7 +2311,16 @@ it('routes Bot shortcuts through the scoped helper entry without exposing them t
     if (name === 'routine_save') {
       expect(tool.parameters.required).toEqual(['name', 'prompt', 'enabled', 'triggers']);
       expect(tool.parameters.properties.botId).toBeUndefined();
-      expect(tool.parameters.properties.triggers.items.anyOf[0].properties.intervalMs.minimum).toBe(60000);
+      const variants = tool.parameters.properties.triggers.items.anyOf;
+      const interval = variants.find((item: any) => item.properties.kind.enum.includes('interval'));
+      expect(interval.properties.intervalMs.minimum).toBe(60000);
+      expect(interval.properties.anchorMs).toMatchObject({ type: 'integer', minimum: 0, maximum: Number.MAX_SAFE_INTEGER });
+      expect(interval.required).not.toContain('anchorMs');
+      const once = variants.find((item: any) => item.properties.kind.enum.includes('once'));
+      expect(once).toMatchObject({
+        required: ['id', 'kind', 'at'], additionalProperties: false,
+        properties: { at: { type: 'integer', minimum: 0, maximum: Number.MAX_SAFE_INTEGER } },
+      });
     }
     if (name === 'send_to_agent') expect(tool.parameters.properties.target_id.maxLength).toBe(210);
     const resolved = gateway.resolveDirectHelperTool(name, args);
@@ -2306,4 +2366,35 @@ describe('Pi same-turn library native mapping', () => {
     permission = { ...permission, reviewOnly: true };
     expect(await callback!(event)).toBeUndefined();
   });
+});
+
+
+it('applies native Fast only to the exact declared connection and fails closed on invalid host replies', async () => {
+  const start = CINDY_BRIDGE_EXTENSION_SOURCE.indexOf('async function nativeFastPayload(');
+  const end = CINDY_BRIDGE_EXTENSION_SOURCE.indexOf('export default async function cindyBridge');
+  const helpers = ts.transpileModule(CINDY_BRIDGE_EXTENSION_SOURCE.slice(start, end), {
+    compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  let reply: unknown = JSON.stringify({ fast: true });
+  const adapt = new Function('process', `${helpers}; return nativeFastPayload;`)({ env: {
+    CINDY_PI_FAST_MODELS: JSON.stringify([{ provider: 'relay-a', id: 'gpt-6-sol' }]),
+  } });
+  const ctx = { ui: { input: async () => { if (reply instanceof Error) throw reply; return reply; } } };
+  const original = { model: 'gpt-6-sol', reasoning: { effort: 'high' }, input: 'hello' };
+  const model = { provider: 'relay-a', id: 'gpt-6-sol', api: 'openai-responses' };
+  expect(await adapt(original, model, ctx)).toEqual({ ...original, service_tier: 'priority' });
+  expect(await adapt(original, { ...model, provider: 'relay-b' }, ctx)).toBeUndefined();
+  expect(await adapt(original, { ...model, id: 'other-model' }, ctx)).toBeUndefined();
+  expect(await adapt(original, { ...model, api: 'anthropic-messages' }, ctx)).toBeUndefined();
+  for (reply of [JSON.stringify({ fast: false }), JSON.stringify({ fast: 'true' }), undefined, 'broken', new Error('closed')]) {
+    expect(await adapt({ ...original, service_tier: 'priority' }, model, ctx)).toEqual(original);
+  }
+  vi.useFakeTimers();
+  try {
+    const pending = adapt({ ...original, service_tier: 'priority' }, model,
+      { ui: { input: () => new Promise(() => {}) } });
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(await pending).toEqual(original);
+  } finally { vi.useRealTimers(); }
+  expect(original).not.toHaveProperty('service_tier');
 });

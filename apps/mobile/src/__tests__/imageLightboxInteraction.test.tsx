@@ -2,6 +2,10 @@
 import { act, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { buildAttachmentPayload } from '@/session/messagePayload';
+import { svgAttachmentForDisplay } from '@/session/messageAttachments';
+import { collectMobileMessageGalleryImages, lightboxImagesForPayload } from '@/session/messageGallery';
+import type { MobileMessageRenderItem } from '@/session/messageRenderModel';
 import {
   ImageLightbox,
   type ImageLightboxProps,
@@ -23,16 +27,15 @@ const runtime = vi.hoisted(() => ({
   dimensions: { width: 400, height: 800 },
   insets: { top: 40, bottom: 20, left: 0, right: 0 },
   gesture: null as GestureNode | null,
+  alerts: [] as Array<[string, string, Array<{ text: string; style?: string; onPress?: () => void }>]>,
 }));
 
 vi.mock("expo-router", () => ({
   useNavigation: () => ({ setOptions: () => undefined }),
 }));
-vi.mock("react-i18next", () => ({
+vi.mock("react-i18next", async (importOriginal) => ({
+  ...await importOriginal<typeof import('react-i18next')>(),
   useTranslation: () => ({ t: (key: string) => key }),
-}));
-vi.mock("@/session/remoteMedia", () => ({
-  isDesktopLocalMediaUrl: (uri: string) => uri.startsWith("cindy-media:"),
 }));
 vi.mock("react-native-safe-area-context", () => ({
   useSafeAreaInsets: () => runtime.insets,
@@ -59,6 +62,7 @@ vi.mock("react-native", async () => {
     Text: view("Text"),
     ActivityIndicator: view("ActivityIndicator"),
     StatusBar: () => null,
+    Alert: { alert: (...args: any[]) => runtime.alerts.push(args as any) },
     Image: view("Image"),
     Platform: { OS: "android" },
     StyleSheet: {
@@ -80,6 +84,9 @@ vi.mock("react-native", async () => {
 });
 vi.mock("@/components/AppText", async () => ({
   Text: (await import("react-native")).Text,
+}));
+vi.mock("expo-image", async () => ({
+  Image: (await import("react-native")).Image,
 }));
 vi.mock("@/platform/gestureHandler", async () => {
   const { View } = await import("react-native");
@@ -141,7 +148,7 @@ vi.mock("react-native-reanimated", async () => {
     done?: Animation["done"],
   ) => ({ target, done });
   return {
-    default: { View: native.View, Image: native.Image },
+    default: { View: native.View, createAnimatedComponent: (component: unknown) => component },
     useSharedValue: (initial: number) => {
       const ref = useRef<Value | null>(null);
       if (!ref.current) {
@@ -185,6 +192,7 @@ beforeEach(() => {
   runtime.immediate = false;
   runtime.dimensions = { width: 400, height: 800 };
   runtime.insets = { top: 40, bottom: 20, left: 0, right: 0 };
+  runtime.alerts = [];
   root = createRoot(document.createElement("div"));
 });
 afterEach(() => act(() => root.unmount()));
@@ -214,6 +222,96 @@ function mount(overrides: Partial<ImageLightboxProps> = {}) {
   render();
   return { props, render };
 }
+
+describe('Markdown gallery prefetch boundaries', () => {
+  it('does not fetch a titled outside-workdir image when a neighboring image is opened', async () => {
+    const items = [{
+      type: 'message', key: 'm1',
+      message: {
+        key: 'm1', kind: 'assistant', role: 'assistant', align: 'agent', label: 'assistant',
+        source: { clientId: 'm1', role: 'assistant', content: '', createdAt: '2026-10-01T00:00:00Z' },
+        body: '![ok](https://example.invalid/ok.png)\n\n![private](xdt-file://open?path=%2Fprivate%2Fphoto.png "title")',
+      },
+    }] as MobileMessageRenderItem[];
+    const gallery = collectMobileMessageGalleryImages(items, '/repo');
+    const images = lightboxImagesForPayload(gallery, gallery[0].payload);
+    const resolver = vi.fn(async () => ({
+      url: 'file:///download.png', previewable: true, ossKey: 'download.png',
+      mimeType: 'image/png', size: 1, expiresAt: '2099-01-01T00:00:00Z',
+    }));
+    await act(async () => { mount({ images, initialUrl: images[0].url, onResolveRemoteMedia: resolver }); });
+    expect(resolver).not.toHaveBeenCalled();
+    expect(images.map((image) => image.url)).toEqual(['https://example.invalid/ok.png']);
+  });
+
+  it('prefetches an inside-workdir neighbor with the Host realpath constraint', async () => {
+    const items = [{
+      type: 'message', key: 'm1',
+      message: {
+        key: 'm1', kind: 'assistant', role: 'assistant', align: 'agent', label: 'assistant',
+        source: { clientId: 'm1', role: 'assistant', content: '', createdAt: '2026-10-01T00:00:00Z' },
+        body: '![ok](https://example.invalid/ok.png)\n\n![local](xdt-file://open?path=%2Frepo%2Fphoto.png&baseDir=%2F "title")',
+      },
+    }] as MobileMessageRenderItem[];
+    const gallery = collectMobileMessageGalleryImages(items, '/repo');
+    const images = lightboxImagesForPayload(gallery, gallery[0].payload);
+    const resolver = vi.fn(async (_media: { url: string }) => ({
+      url: 'file:///download.png', previewable: true, ossKey: 'download.png',
+      mimeType: 'image/png', size: 1, expiresAt: '2099-01-01T00:00:00Z',
+    }));
+    await act(async () => { mount({ images, initialUrl: images[0].url, onResolveRemoteMedia: resolver }); });
+    expect(images).toHaveLength(2);
+    expect(resolver).toHaveBeenCalledTimes(2);
+    for (const [media] of resolver.mock.calls) {
+      expect(new URL(media.url).searchParams.get('path')).toBe('/repo/photo.png');
+      expect(new URL(media.url).searchParams.getAll('baseDir')).toEqual(['/repo']);
+    }
+  });
+});
+
+describe('SVG images in the shared lightbox', () => {
+  it.each([
+    { name: 'diagram', mimeType: 'image/svg+xml; charset=utf-8' },
+    { name: 'diagram.svg' },
+  ])('keeps opaque SVG attachment URLs unannotatable: %j', async (metadata) => {
+    const url = 'https://example.invalid/download?id=1';
+    const attachment = svgAttachmentForDisplay({
+      kind: 'file', path: url, previewable: false, ...metadata,
+    });
+    const payload = buildAttachmentPayload(attachment);
+    if (payload.kind !== 'media') throw new Error('Expected an image payload');
+    const onShareImage = vi.fn();
+    mount({
+      images: [{ key: 'svg', title: attachment.name, url, payload }], initialUrl: url,
+      annotation: { submitLabel: 'Send', onSubmit: vi.fn() }, onShareImage,
+    });
+    expect(runtime.nodes.has('message.imageLightboxAnnotateButton')).toBe(false);
+    await act(async () => runtime.nodes.get('message.imageLightboxShareButton').onPress());
+    expect(onShareImage).toHaveBeenCalledWith(payload.media, url, 'image/svg+xml', undefined);
+  });
+
+  it.each([
+    'https://example.invalid/diagram.svg?version=2',
+    'data:image/svg+xml;base64,PHN2Zy8+',
+    'file:///cache/diagram.svg',
+  ])('loads %s with image gestures and without raster annotation', (url) => {
+    const image = {
+      key: 'svg', title: 'Diagram', url,
+      payload: { kind: 'media', media: { kind: 'image', url, previewable: true } },
+    } as ImageLightboxProps['images'][number];
+    mount({ images: [image], initialUrl: url, annotation: { submitLabel: 'Send', onSubmit: vi.fn() } });
+    const props = runtime.nodes.get('Image');
+    expect(props.source.uri).toBe(url);
+    expect(props.contentFit).toBe('contain');
+    act(() => props.onLoad({ source: { width: 1600, height: 900 } }));
+    doubleTapAtCorner();
+    finishAnimations();
+    expect(transform().scale).toBe(2.5);
+    expect(transform().y).toBe(0);
+    expect(runtime.nodes.has('message.imageLightboxAnnotateButton')).toBe(false);
+  });
+});
+
 function gestures(node = runtime.gesture!): GestureNode[] {
   return node.children ? node.children.flatMap(gestures) : [node];
 }
@@ -319,7 +417,7 @@ describe("image viewer gesture lifecycle", () => {
     act(() =>
       runtime.nodes
         .get("Image")
-        .onLoad({ nativeEvent: { source: { width: 1600, height: 900 } } }),
+        .onLoad({ source: { width: 1600, height: 900 } }),
     );
     finishAnimations();
     expect(transform().y).toBe(0);
@@ -348,7 +446,7 @@ describe("image viewer actions", () => {
 
   it('reclamps zoom after rotation and still returns to the centered image', () => {
     const harness = mount();
-    act(() => runtime.nodes.get('Image').onLoad({ nativeEvent: { source: { width: 400, height: 800 } } }));
+    act(() => runtime.nodes.get('Image').onLoad({ source: { width: 400, height: 800 } }));
     doubleTapAtCorner(); finishAnimations();
     runtime.dimensions = { width: 800, height: 400 };
     runtime.insets = { top: 0, bottom: 20, left: 59, right: 0 };
@@ -375,7 +473,7 @@ describe("image viewer actions", () => {
     let complete!: () => void;
     const onSubmit = vi.fn(() => new Promise<void>((resolve) => { complete = resolve; }));
     mount({ annotation: { submitLabel: 'Send', onSubmit } });
-    act(() => runtime.nodes.get('Image').onLoad({ nativeEvent: { source: { width: 400, height: 800 } } }));
+    act(() => runtime.nodes.get('Image').onLoad({ source: { width: 400, height: 800 } }));
     press('message.imageLightboxAnnotateButton');
     const draw = gestures().find(g => g.kind === 'Pan' && g.options.minDistance === 0)!;
     fire(draw, 'onStart', { x: 100, y: 200 });
@@ -393,7 +491,7 @@ describe("image viewer actions", () => {
     let reject!: (error: Error) => void;
     const onSubmit = vi.fn(() => new Promise<void>((_resolve, fail) => { reject = fail; }));
     mount({ annotation: { submitLabel: 'Send', onSubmit } });
-    act(() => runtime.nodes.get('Image').onLoad({ nativeEvent: { source: { width: 400, height: 800 } } }));
+    act(() => runtime.nodes.get('Image').onLoad({ source: { width: 400, height: 800 } }));
     press('message.imageLightboxAnnotateButton');
     const draw = () => gestures().find(g => g.kind === 'Pan' && g.options.minDistance === 0)!;
     fire(draw(), 'onStart', { x: 100, y: 200 });
@@ -433,7 +531,7 @@ describe("image viewer actions", () => {
     act(() =>
       runtime.nodes
         .get("Image")
-        .onLoad({ nativeEvent: { source: { width: 400, height: 800 } } }),
+        .onLoad({ source: { width: 400, height: 800 } }),
     );
     expect(props.onClose).not.toHaveBeenCalled();
     expect(runtime.nodes.get("Image").source.uri).toBe(props.initialUrl);
@@ -478,7 +576,11 @@ describe("image viewer actions", () => {
       const { props } = mount({
         annotation: { allowDirectSubmit: true, submitLabel: "Send", onSubmit },
       });
-      if (annotating) press("message.imageLightboxAnnotateButton");
+      if (annotating) {
+        // 画笔要等自然尺寸就位才可用(坐标换算基准)。
+        act(() => runtime.nodes.get("Image").onLoad({ source: { width: 400, height: 800 } }));
+        press("message.imageLightboxAnnotateButton");
+      }
       const submitId = annotating
         ? "message.imageLightboxAnnotationSubmit"
         : "message.imageLightboxSendToChatButton";
@@ -517,5 +619,175 @@ describe("image viewer actions", () => {
       runtime.nodes.get("message.imageLightboxSendToChatButton").disabled,
     ).toBe(false);
     expect(runtime.nodes.get("FlatList").scrollEnabled).toBe(true);
+  });
+});
+
+describe("annotation drawing", () => {
+  const drawGesture = () => gestures().find((g) => g.kind === "Pan" && g.options.minDistance === 0)!;
+  const load = () => act(() => runtime.nodes.get("Image").onLoad({ source: { width: 400, height: 800 } }));
+  // 标注模式锁翻页:FlatList 每次渲染都会重新登记,比「节点是否存在」更可靠(卸载节点不会从登记表移除)。
+  const annotating = () => runtime.nodes.get("FlatList").scrollEnabled === false;
+  const submittedStrokes = async (onSubmit: ReturnType<typeof vi.fn>) => {
+    press("message.imageLightboxAnnotationSubmit");
+    await act(async () => { await Promise.resolve(); });
+    return onSubmit.mock.calls.at(-1)?.[2];
+  };
+
+  it("disables the pen until the image size is known, then enters annotate mode", () => {
+    mount({ annotation: { submitLabel: "Send", onSubmit: vi.fn() } });
+    expect(runtime.nodes.get("message.imageLightboxAnnotateButton").disabled).toBe(true);
+    press("message.imageLightboxAnnotateButton");
+    expect(annotating()).toBe(false);
+    load();
+    expect(runtime.nodes.get("message.imageLightboxAnnotateButton").disabled).toBe(false);
+    press("message.imageLightboxAnnotateButton");
+    expect(annotating()).toBe(true);
+  });
+
+  it("explains why the pen is unavailable when the host blocks annotation (pending replacement)", () => {
+    let reason: string | undefined = "Still uploading";
+    mount({ annotation: { submitLabel: "Save", onSubmit: vi.fn(), annotationBlockedReason: () => reason } });
+    load();
+    const pen = () => runtime.nodes.get("message.imageLightboxAnnotateButton");
+    // 置灰但可点:点按说明原因,不进入标注。
+    expect(pen().disabled).toBe(false);
+    expect(pen().accessibilityLabel).toBe("message.lightbox.annotateImageUnavailable");
+    expect(pen().accessibilityHint).toBe("Still uploading");
+    press("message.imageLightboxAnnotateButton");
+    expect(runtime.alerts).toEqual([["message.lightbox.annotateUnavailableTitle", "Still uploading"]]);
+    expect(annotating()).toBe(false);
+    // 阻塞解除后(下次渲染)恢复正常。
+    reason = undefined;
+    act(() => runtime.nodes.get("Image").onLoad({ source: { width: 401, height: 800 } }));
+    expect(pen().accessibilityLabel).toBe("message.lightbox.annotateImage");
+    press("message.imageLightboxAnnotateButton");
+    expect(annotating()).toBe(true);
+  });
+
+  it("drops the stray dot left when a second finger starts a pinch, but keeps taps and real strokes", async () => {
+    const onSubmit = vi.fn(() => new Promise<void>(() => undefined));
+    mount({ annotation: { submitLabel: "Send", onSubmit } });
+    load();
+    press("message.imageLightboxAnnotateButton");
+    // 捏合起手:第一根手指落下开始一笔,第二根手指落下让画笔手势被取消。
+    fire(drawGesture(), "onStart", { x: 100, y: 200 });
+    fire(drawGesture(), "onUpdate", { x: 104, y: 203 });
+    fire(drawGesture(), "onFinalize", {}, false);
+    expect(runtime.nodes.get("message.imageLightboxAnnotationUndo").disabled).toBe(true);
+    // 单指点按(正常结束)= 圆点,保留。
+    fire(drawGesture(), "onStart", { x: 200, y: 400 });
+    fire(drawGesture(), "onFinalize", {}, true);
+    // 画了一段后第二根手指落下:保留已画的半笔。
+    fire(drawGesture(), "onStart", { x: 100, y: 100 });
+    fire(drawGesture(), "onUpdate", { x: 140, y: 100 });
+    fire(drawGesture(), "onFinalize", {}, false);
+    const strokes = await submittedStrokes(onSubmit);
+    expect(strokes).toEqual([
+      { points: [{ x: 0.5, y: 0.5 }] },
+      { points: [{ x: 0.25, y: 0.125 }, { x: 0.35, y: 0.125 }] },
+    ]);
+  });
+
+  it("ignores drawing before the image size is known", async () => {
+    const onSubmit = vi.fn(() => new Promise<void>(() => undefined));
+    mount({ annotation: { submitLabel: "Send", onSubmit }, autoAnnotate: true });
+    fire(drawGesture(), "onStart", { x: 100, y: 200 });
+    fire(drawGesture(), "onFinalize", {}, true);
+    expect(await submittedStrokes(onSubmit)).toEqual([]);
+  });
+
+  it("samples points by screen distance so zoomed drawing keeps precision", async () => {
+    const onSubmit = vi.fn(() => new Promise<void>(() => undefined));
+    mount({ annotation: { submitLabel: "Send", onSubmit } });
+    load();
+    press("message.imageLightboxAnnotateButton");
+    fire(drawGesture(), "onStart", { x: 100, y: 200 });
+    // 显示矩形 400×800:阈值 = 1.5 / 800(长边),纵向 1px 不记录、2px 记录。
+    fire(drawGesture(), "onUpdate", { x: 100, y: 201 });
+    fire(drawGesture(), "onUpdate", { x: 100, y: 202 });
+    fire(drawGesture(), "onFinalize", {}, true);
+    expect(await submittedStrokes(onSubmit)).toEqual([
+      { points: [{ x: 0.25, y: 0.25 }, { x: 0.25, y: 0.2525 }] },
+    ]);
+  });
+
+  it("asks before discarding changed strokes and exits immediately when unchanged", () => {
+    mount({ annotation: { submitLabel: "Send", onSubmit: vi.fn() } });
+    load();
+    press("message.imageLightboxAnnotateButton");
+    press("message.imageLightboxAnnotationCancel");
+    expect(runtime.alerts).toHaveLength(0);
+    expect(annotating()).toBe(false);
+
+    press("message.imageLightboxAnnotateButton");
+    fire(drawGesture(), "onStart", { x: 100, y: 200 });
+    fire(drawGesture(), "onFinalize", {}, true);
+    press("message.imageLightboxAnnotationCancel");
+    expect(runtime.alerts).toHaveLength(1);
+    const [title, , buttons] = runtime.alerts[0];
+    expect(title).toBe("message.lightbox.discardAnnotationTitle");
+    expect(buttons.map((b) => b.style)).toEqual(["cancel", "destructive"]);
+    act(() => buttons[0].onPress?.()); // 继续标注
+    expect(annotating()).toBe(true);
+    // Android 返回键走同一确认。
+    act(() => runtime.nodes.get("Modal").onRequestClose());
+    expect(runtime.alerts).toHaveLength(2);
+    act(() => runtime.alerts[1][2][1].onPress?.()); // 放弃
+    expect(annotating()).toBe(false);
+    // 笔迹已恢复:再次进入标注时没有可撤销的笔迹。
+    press("message.imageLightboxAnnotateButton");
+    expect(runtime.nodes.get("message.imageLightboxAnnotationUndo").disabled).toBe(true);
+  });
+
+  it("does not ask when the only change was undone back to the existing strokes", () => {
+    const existing = [{ points: [{ x: 0.1, y: 0.1 }] }];
+    mount({ annotation: { submitLabel: "Save", onSubmit: vi.fn(), initialStrokesFor: () => existing } });
+    load();
+    press("message.imageLightboxAnnotateButton");
+    fire(drawGesture(), "onStart", { x: 100, y: 200 });
+    fire(drawGesture(), "onFinalize", {}, true);
+    press("message.imageLightboxAnnotationUndo");
+    press("message.imageLightboxAnnotationCancel");
+    expect(runtime.alerts).toHaveLength(0);
+    expect(annotating()).toBe(false);
+  });
+
+  it("autoAnnotate opens in annotate mode and discarding closes the viewer", () => {
+    const { props } = mount({ annotation: { submitLabel: "Send", onSubmit: vi.fn() }, autoAnnotate: true });
+    expect(runtime.nodes.has("message.imageLightboxAnnotationCancel")).toBe(true);
+    press("message.imageLightboxAnnotationCancel");
+    expect(props.onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("autoAnnotate confirms before closing when strokes were drawn", () => {
+    const { props } = mount({ annotation: { submitLabel: "Send", onSubmit: vi.fn() }, autoAnnotate: true });
+    load();
+    fire(drawGesture(), "onStart", { x: 100, y: 200 });
+    fire(drawGesture(), "onFinalize", {}, true);
+    act(() => runtime.nodes.get("message.imageLightbox").onAccessibilityEscape());
+    expect(props.onClose).not.toHaveBeenCalled();
+    act(() => runtime.alerts[0][2][1].onPress?.());
+    expect(props.onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("prewarms the host while annotating and releases it on exit", () => {
+    const release = vi.fn();
+    const prewarm = vi.fn(() => release);
+    mount({ annotation: { submitLabel: "Send", onSubmit: vi.fn(), prewarm } });
+    load();
+    expect(prewarm).not.toHaveBeenCalled();
+    press("message.imageLightboxAnnotateButton");
+    expect(prewarm).toHaveBeenCalledTimes(1);
+    press("message.imageLightboxAnnotationCancel");
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("passes the decoded image size with the submission", async () => {
+    const onSubmit = vi.fn((..._args: unknown[]) => new Promise<void>(() => undefined));
+    mount({ annotation: { submitLabel: "Send", allowDirectSubmit: true, onSubmit } });
+    load();
+    press("message.imageLightboxSendToChatButton");
+    await act(async () => { await Promise.resolve(); });
+    expect(onSubmit.mock.calls[0][3]).toMatchObject({ naturalWidth: 400, naturalHeight: 800 });
   });
 });

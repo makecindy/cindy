@@ -28,7 +28,7 @@ async function resolveBinary(): Promise<string> {
     const hash = createHash('sha256')
       .update(process.execPath)
       .update(process.arch)
-      .update('credential-host-signed-v1')
+      .update('credential-host-signed-v2-resources')
       .update(signingIdentity);
     async function digest(directory: string): Promise<void> {
       for (const entry of (await fs.readdir(directory, { withFileTypes: true })).sort((a, b) =>
@@ -51,6 +51,7 @@ async function resolveBinary(): Promise<string> {
     const binary = path.join(directory, binaryName);
     try {
       await fs.access(binary);
+      await fs.access(path.join(directory, 'CindyRemoteCredentials_CindyRemoteCredentials.bundle'));
       await exec('/usr/bin/codesign', credentialVerificationArguments(binary, signingIdentity));
       return binary;
     } catch {
@@ -88,7 +89,21 @@ async function resolveBinary(): Promise<string> {
         { timeout: 240_000, maxBuffer: 1024 * 1024 },
       );
       const temporary = `${binary}.${process.pid}.tmp`;
-      await fs.copyFile(path.join(source, '.build/release', binaryName), temporary);
+      const location = await exec('swift', [
+        'build',
+        '--package-path',
+        source,
+        '-c',
+        'release',
+        '--show-bin-path',
+      ]);
+      const outputDirectory = location.stdout.trim();
+      await fs.copyFile(path.join(outputDirectory, binaryName), temporary);
+      await fs.cp(
+        path.join(outputDirectory, 'CindyRemoteCredentials_CindyRemoteCredentials.bundle'),
+        path.join(directory, 'CindyRemoteCredentials_CindyRemoteCredentials.bundle'),
+        { recursive: true },
+      );
       await fs.chmod(temporary, 0o755);
       await exec('/usr/bin/codesign', credentialSigningArguments(signingIdentity, temporary));
       await exec('/usr/bin/codesign', credentialVerificationArguments(temporary, signingIdentity));
@@ -109,7 +124,7 @@ type Pending = {
   timer: ReturnType<typeof setTimeout>;
 };
 /** Stdio is authenticated in native code. This class never receives a password. */
-class RemoteCredentialHost {
+export class RemoteCredentialHost {
   private child: ChildProcessWithoutNullStreams | null = null;
   private starting: Promise<void> | null = null;
   private pending = new Map<string, Pending>();
@@ -130,6 +145,26 @@ class RemoteCredentialHost {
       } | null)
     | undefined;
   onInvalidated: (() => void) | undefined;
+
+  /** Dedicated controller instances use the same signed pipe, never the host singleton. */
+  async viewerCall(
+    realm: 'global' | 'cn',
+    method: string,
+    args: Record<string, unknown> = {},
+  ): Promise<unknown> {
+    if (
+      !/^viewer(?:Settings|Configure|Begin|Accept|Receive|Password|AuthenticationStatus|Forget|Biometric|End|Reset)$/.test(
+        method,
+      )
+    )
+      throw new Error('CREDENTIAL_INVALID_MESSAGE');
+    this.configuredRealm = realm;
+    return this.call(
+      method,
+      args,
+      ['viewerPassword', 'viewerBiometric'].includes(method) ? 120_000 : 50_000,
+    );
+  }
 
   authenticationSession(peer: string): string | null {
     return performance.now() < this.validUntil ? (this.sessions[peer] ?? null) : null;

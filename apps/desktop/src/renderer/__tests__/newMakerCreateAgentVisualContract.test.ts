@@ -121,7 +121,9 @@ describe('NewMakerDraftRoute CREATE AGENT visual contract', () => {
     expect(source).toContain('absolute right-0 top-[22px]');
     // 快捷入口与输入框同宽(w-full 跟随父列 inputWidth),左右两缘对齐 ChatInput;
     // 旧 800px 封顶在宽窗口下右缘短一截,2026-07-24 用户反馈后摘除。
-    expect(source).toMatch(/<HomeSuggestionList[\s\S]*?narrow=\{isDraftNarrow\}[\s\S]*?onSelect=\{handleHomeSuggestion\}[\s\S]*?onPluginSelect=\{handlePluginSuggestion\}/);
+    expect(source).toMatch(
+      /<HomeSuggestionList[\s\S]*?narrow=\{isDraftNarrow\}[\s\S]*?onSelect=\{handleHomeSuggestion\}[\s\S]*?onPluginSelect=\{handlePluginSuggestion\}/,
+    );
     expect(source).toContain('<HomeZeroModelAction');
     expect(source).not.toContain('ConnectProviderCard');
     expect(source).not.toMatch(/data-testid="create-agent-quick-starts"/);
@@ -159,7 +161,7 @@ describe('NewMakerDraftRoute CREATE AGENT visual contract', () => {
       'vendorKey={normalizeDbAgentKind(draft.vendor)}',
       // #807 第二十二轮:仍然由调用方显式持有(ChatInput 不 fallback 内部一份),但远程草稿下
       // 包了一层闸门 —— 拒绝路径型附件,因为那是控制端绝对路径,发到对端读不到或读到无关文件。
-      'attachmentState={guardedAttachmentState}',
+      'attachmentState={attachmentState}',
       'draftKey={NEW_MAKER_DRAFT_KEY}',
       'extraDirs={effectiveExtraDirs}',
       // #807 第二十二轮**刻意收窄**原来「+ 始终能加引用目录」这条:远程草稿不下传 onChange,
@@ -168,9 +170,9 @@ describe('NewMakerDraftRoute CREATE AGENT visual contract', () => {
       // 并非真实授予的上下文。本机草稿行为不变;把 picker 路由到对端后恢复,见 issue #1012。
       'onExtraDirsChange={isDeviceLinkDraft ? undefined : handleExtraDirsChange}',
       'onNewGoal={(text) =>',
-      'rememberedEffortByModel={isDeviceLinkDraft ? undefined : draft.effortByModel}',
+      'rememberedEffortByModel={usesDeviceCatalog ? undefined : draft.effortByModel}',
       'onRememberedEffortChange={',
-      'isDeviceLinkDraft ? undefined : handleRememberedEffortChange',
+      'usesDeviceCatalog ? undefined : handleRememberedEffortChange',
       "placeholder={t('newChat.chatInput.createAgentPlaceholder')}",
       // 统一模型选择器(M5):新会话的选中直通 + 收藏锚点选中态。撤掉 AgentSelect 后,
       // 「换引擎」这件事只剩这一条路径 —— 掉了它草稿就再也换不了引擎。
@@ -190,17 +192,29 @@ describe('NewMakerDraftRoute CREATE AGENT visual contract', () => {
     expect(source).not.toContain('boxShadow');
   });
 
-  it('sends suggestions without first writing into the visible home composer', () => {
+  it('fills suggestions into the home composer instead of sending them', () => {
     const suggestionBlock = source.slice(
-      source.indexOf('const handleHomeSuggestion'),
+      source.indexOf('const [suggestionPreview, setSuggestionPreview]'),
       source.indexOf('// 注意:不要给 ChatInput 加 key 强制 remount'),
     );
 
-    expect(suggestionBlock).toContain('if (sendInFlightRef.current) return;');
-    expect(suggestionBlock).toMatch(/void handleSend\(\s*prompt,/);
-    expect(suggestionBlock).toContain('recoveryDraftDoc: plainTextToTiptapDoc(prompt)');
-    expect(suggestionBlock).not.toContain('saveComposerDraft(');
-    expect(suggestionBlock).not.toContain('quickStartTextToTiptapDoc(');
+    expect(suggestionBlock).toContain('saveComposerDraft(NEW_MAKER_DRAFT_KEY, {');
+    expect(suggestionBlock).toContain('text: plainTextToTiptapDoc(prompt)');
+    expect(suggestionBlock).not.toContain('handleSend(');
+    // 悬停预览只走 ChatInput 的只读 overlay,不写草稿。
+    expect(source).toContain('previewPrompt={suggestionPreview}');
+    expect(source).toContain('onPreviewChange={handleSuggestionPreview}');
+    // 视觉预览与读屏描述共用同一个「点击后会填入的文字」计算。
+    expect(source).toContain('composerTextFor={suggestionComposerText}');
+    expect(suggestionBlock).toContain(
+      'setSuggestionPreview(suggestion ? suggestionComposerText(suggestion) : null)',
+    );
+    // 语音占用 / 发送中时不填入,且预览与填入共用同一份插件文字计算。
+    expect(suggestionBlock).toContain(
+      'if (sendInFlightRef.current || composerMutationLockedRef.current) return false;',
+    );
+    expect(source).toContain('onMutationLockChange={handleComposerMutationLockChange}');
+    expect(suggestionBlock.match(/pluginSuggestionComposerText\(/g)).toHaveLength(2);
     // 普通发送直接使用输入内容，不再经过可能残留推荐内容的中转 ref。
     expect(source).toContain('onSend={handleSend}');
     expect(source).not.toContain('pendingHomePromptRef');
@@ -265,12 +279,12 @@ describe('NewMakerDraftRoute CREATE AGENT visual contract', () => {
     expect(vendorSwitcherSource).not.toContain('create-agent-segment-track-bg');
 
     // 引擎下拉:trigger 是描边控件(与协同按钮同族,区别于裸态的权限/模型 trigger),
-    // 面板走 model dropdown 规格;定宽 h-30,引擎数量增加不改工具条布局。
+    // 面板行走共享菜单行(DESIGN §4 Composer dropdown rows);定宽 h-30,引擎数量增加不改工具条布局。
     expect(agentSelectSource).toContain("'h-[30px]'");
     expect(agentSelectSource).toContain('border-[var(--create-agent-control-border)]');
     expect(agentSelectSource).toContain('bg-[var(--create-agent-control-bg)]');
-    expect(agentSelectSource).toContain('text-[var(--model-item-text)]');
-    expect(agentSelectSource).toContain('text-[var(--model-section-label)]');
+    expect(agentSelectSource).toContain('COMPOSER_MENU_ROW');
+    expect(agentSelectSource).toContain('text-[var(--cmd-palette-item-meta)]');
     // 选项表来自单一来源,新增引擎不需要改控件;隐藏未注册引擎的语义与分段器一致
     expect(agentSelectSource).toContain('visibleOptions.map');
     expect(agentSelectSource).toContain('hiddenVendors');
@@ -306,8 +320,12 @@ describe('NewMakerDraftRoute CREATE AGENT visual contract', () => {
     expect(colorsSource).toContain("'create-agent-send-disabled-icon'");
     expect(colorRegistry.resolveDefault('create-agent-send-disabled-icon', 'dark')).toBe('#585555');
     expect(colorsSource).toContain("'create-agent-segment-inactive-text'");
-    expect(colorRegistry.resolveDefault('create-agent-segment-inactive-text', 'light')).toBe('#9A9DA3');
-    expect(colorRegistry.resolveDefault('create-agent-segment-inactive-text', 'dark')).toBe('#6F6F6F');
+    expect(colorRegistry.resolveDefault('create-agent-segment-inactive-text', 'light')).toBe(
+      '#9A9DA3',
+    );
+    expect(colorRegistry.resolveDefault('create-agent-segment-inactive-text', 'dark')).toBe(
+      '#6F6F6F',
+    );
     expect(colorsSource).toContain("'create-agent-control-border'");
     expect(colorRegistry.resolveDefault('create-agent-control-border', 'light')).toBe('#DCDFE3');
     expect(colorRegistry.resolveDefault('create-agent-control-border', 'dark')).toBe('#434343');
@@ -354,8 +372,8 @@ describe('NewMakerDraftRoute CREATE AGENT visual contract', () => {
     expect(modelSelectorSource).toContain("? 'truncate'");
     expect(modelSelectorSource).toContain('<ChevronDown');
     expect(modelSelectorSource).toContain("'shrink-0'");
-    expect(chatInputSource).toContain(
-      "className={isCreateAgentVariant && !useNarrowToolbar ? 'ml-[7px]' : undefined}",
+    expect(chatInputSource).toMatch(
+      /className=\{\s*isCreateAgentVariant && !useNarrowToolbar\s*\? 'ml-\[7px\]' : undefined\s*\}/,
     );
     // 本机会话可选附件,但远程或身份尚未回流的已建会话不能摄入控制端绝对路径。
     expect(chatInputSource).toContain('const localAttachmentPickerEnabled =');

@@ -88,6 +88,11 @@ function createLocalDb(): Database.Database {
       feishu_bot_app_id TEXT,
       used_project_context INTEGER NOT NULL DEFAULT 0,
       extra_dirs TEXT NOT NULL DEFAULT '[]',
+      writable_dirs TEXT NOT NULL DEFAULT '[]',
+      remote_host_id TEXT,
+      list_preview TEXT,
+      list_preview_role TEXT,
+      list_message_count INTEGER,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
     );
@@ -373,6 +378,39 @@ describe('parseClaudeCodeMessageLine', () => {
 
     expect(rows).toHaveLength(1);
     expect(rows[0].agentMeta).toMatchObject({ model: 'claude-opus-4-8' });
+  });
+
+  it.each([
+    'claude-opus-5-5',
+    'claude-opus-5-5-20260922',
+    'claude-opus-5-5[1m]',
+    'claude-opus-5-5-20260922[1m]',
+  ])('preserves %s in imported session and message models', async (model) => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-opus55-import-'));
+    const projectDir = path.join(home, '.claude', 'projects', '-tmp-project');
+    fs.mkdirSync(projectDir, { recursive: true });
+    fs.writeFileSync(path.join(projectDir, `${sdkSessionId}.jsonl`), line({
+      type: 'assistant', uuid: 'assistant-opus55', cwd: '/tmp/project',
+      message: { role: 'assistant', model, content: [{ type: 'text', text: 'ok' }] },
+    }) + '\n');
+    const db = createLocalDb();
+    const homedir = vi.spyOn(os, 'homedir').mockReturnValue(home);
+    setLocalDb(db);
+    try {
+      expect(await importExternalClaudeCodeSessions([sdkSessionId])).toMatchObject({ inserted: 1 });
+      expect(db.prepare('SELECT model FROM sessions WHERE id = ?').get(`claude-${sdkSessionId}`))
+        .toEqual({ model: 'claude-opus-5-5' });
+      await importExternalClaudeCodeMessagesForSession(`claude-${sdkSessionId}`);
+      const rows = db.prepare('SELECT agent_meta AS agentMeta FROM messages WHERE session_id = ?')
+        .all(`claude-${sdkSessionId}`) as { agentMeta: string }[];
+      expect(rows).toHaveLength(1);
+      expect(JSON.parse(rows[0].agentMeta)).toMatchObject({ model: 'claude-opus-5-5' });
+    } finally {
+      homedir.mockRestore();
+      resetLocalDb();
+      db.close();
+      fs.rmSync(home, { recursive: true, force: true });
+    }
   });
 
   it('normalizes opus-5 [1m] wire model id to catalog id', () => {
@@ -977,6 +1015,14 @@ describe('parseClaudeCodeMessageLine', () => {
       expect(result).toMatchObject({ scanned: 1, inserted: 1, updated: 0 });
       const rows = db.prepare('SELECT id, title FROM sessions ORDER BY id').all();
       expect(rows).toEqual([{ id: `claude-${sdkSessionId}`, title: 'import me' }]);
+      db.prepare(`UPDATE sessions SET status='archived', working_dir='/moved-project',
+        extra_dirs='["/reference"]', writable_dirs='["/output"]', updated_at=1`).run();
+      expect((await scanExternalClaudeCodeSessions()).candidates.find(item => item.id === sdkSessionId))
+        .toMatchObject({ archived: true, cwd: '/moved-project', extraDirs: ['/reference'], writableDirs: ['/output'] });
+      await importExternalClaudeCodeSessions([sdkSessionId]);
+      expect(db.prepare('SELECT status, working_dir, extra_dirs, writable_dirs FROM sessions').get()).toEqual({
+        status: 'archived', working_dir: '/moved-project', extra_dirs: '["/reference"]', writable_dirs: '["/output"]',
+      });
     } finally {
       homedir.mockRestore();
       resetLocalDb();

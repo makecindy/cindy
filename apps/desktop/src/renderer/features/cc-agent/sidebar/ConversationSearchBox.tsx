@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 import {
   Fragment,
   useCallback,
@@ -34,6 +35,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { cn } from '@/lib/utils';
+import { MENU_ITEM_CLASS, MENU_ROW_CLASS } from './menuStyles';
 import { searchConversations } from '@/lib/conversationSearchService';
 import {
   mergeConversationSearchFanout,
@@ -148,27 +150,6 @@ const LAST_ACTIVITY_OPTIONS: ReadonlyArray<Option<ConversationSearchLastActivity
   { value: '30d', labelKey: 'ccAgent.sidebar.filterLastActivity.30d' },
   { value: 'all', labelKey: 'ccAgent.sidebar.filterLastActivity.all' },
 ];
-
-const MENU_CONTENT_CLASS = cn(
-  'w-[248px] rounded-xl border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] p-1',
-  'text-[var(--cmd-palette-item-text)] shadow-[var(--shadow-menu)]',
-);
-
-const SUB_CONTENT_CLASS = cn(
-  'w-[240px] rounded-xl border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] p-1',
-  'text-[var(--cmd-palette-item-text)] shadow-[var(--shadow-menu)]',
-);
-
-const MENU_ROW_CLASS = cn(
-  'flex h-8 cursor-pointer select-none items-center gap-2 rounded-lg px-2 text-sm outline-none',
-  'text-[var(--cmd-palette-item-text)] transition-colors focus:bg-[var(--cmd-palette-item-hover)] data-[state=open]:bg-[var(--cmd-palette-item-hover)]',
-);
-
-const MENU_ITEM_CLASS = cn(
-  'flex h-8 cursor-pointer select-none items-center gap-2 rounded-lg px-2 text-sm outline-none',
-  'text-[var(--cmd-palette-item-text)] transition-colors focus:bg-[var(--cmd-palette-item-hover)]',
-  'data-[disabled]:pointer-events-none data-[disabled]:opacity-50',
-);
 
 export interface UseConversationSearchParams {
   /** 是否驱动搜索:popover 传 open,内联恒为 true。gate 掉搜索 effect 与结果重算。 */
@@ -672,6 +653,8 @@ export interface ConversationSearchBoxProps {
   triggerClassName?: string;
   /** Popover open 态变化上报(供 SidebarActionBar 的 openChildCount 守卫;含程序化打开)。 */
   onOpenChange?: (open: boolean) => void;
+  /** 挂载即打开:rail 从「更多」打开未勾选的搜索时,图标随打开一起出现。 */
+  defaultOpen?: boolean;
 }
 
 /**
@@ -689,9 +672,10 @@ export function ConversationSearchBox({
   searchDevices = EMPTY_SEARCH_DEVICES,
   triggerClassName,
   onOpenChange,
+  defaultOpen = false,
 }: ConversationSearchBoxProps) {
   const { t } = useTranslation();
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(defaultOpen);
   const inputRef = useRef<HTMLInputElement>(null);
 
   // search.reset 在 search 声明后才拿得到,但 handleResultChosen 需先于 search 定义(要作为
@@ -981,23 +965,26 @@ export function SearchFilterMenu({
           )}
         </button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent side="bottom" align="start" sideOffset={6} className={MENU_CONTENT_CLASS}>
+      <DropdownMenuContent side="bottom" align="start" sideOffset={6} className="w-[248px]">
         <div className="flex items-center gap-2 px-2 py-1.5">
           <span className="min-w-0 flex-1 truncate text-xs font-medium text-[var(--cmd-palette-item-meta)]">
             {t('ccAgent.search.filter.label')}
           </span>
           {activeCount > 0 && (
-            <button
+            <Button
+              variant="secondary"
+              size="xxs"
+              compact
+              tone="quiet"
               type="button"
               onClick={(event) => {
                 event.preventDefault();
                 event.stopPropagation();
                 onReset();
               }}
-              className="shrink-0 rounded-full px-2 py-0.5 text-xs text-[var(--text-tertiary)] hover:bg-[var(--cmd-palette-item-hover)] hover:text-[var(--text-primary)]"
             >
               {t('ccAgent.search.filter.reset')}
-            </button>
+            </Button>
           )}
         </div>
 
@@ -1129,7 +1116,7 @@ function MenuSubRow({
         </span>
         <ChevronDown size={14} className="-rotate-90 shrink-0 text-[var(--cmd-palette-item-meta)]" />
       </DropdownMenuSubTrigger>
-      <DropdownMenuSubContent sideOffset={8} className={SUB_CONTENT_CLASS}>
+      <DropdownMenuSubContent sideOffset={8} className="w-[240px]">
         {children}
       </DropdownMenuSubContent>
     </DropdownMenuSub>

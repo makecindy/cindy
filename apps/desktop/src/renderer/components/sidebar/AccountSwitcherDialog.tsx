@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 import * as Dialog from '@radix-ui/react-dialog';
 import { useEffect, useRef, useState, type CSSProperties, type RefObject } from 'react';
 import { Building2, Check, Plus, UserRound, X } from 'lucide-react';
@@ -146,16 +147,16 @@ export function AccountSwitcherDialog({
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
         <Dialog.Overlay
-          className="fixed inset-0 z-[10000] bg-[var(--overlay-modal)] data-[state=open]:animate-confirm-overlay-in data-[state=closed]:animate-confirm-overlay-out"
+          className="modal-scrim fixed inset-0 z-[10000]"
           style={{ WebkitAppRegion: 'no-drag' } as CSSProperties}
         />
         <Dialog.Content
+          onPointerDownOutside={(event) => event.preventDefault()}
           ref={contentRef}
           tabIndex={-1}
           className={cn(
-            'fixed left-1/2 top-1/2 z-[10000] w-[420px] max-w-[calc(100vw-32px)] -translate-x-1/2 -translate-y-1/2',
-            'select-none rounded-xl bg-[var(--confirm-bg)] p-5 shadow-[var(--confirm-shadow)]',
-            'data-[state=open]:animate-confirm-content-in data-[state=closed]:animate-confirm-content-out',
+            'modal-panel fixed left-1/2 top-1/2 z-[10000] w-[420px] max-w-[calc(100vw-32px)] -translate-x-1/2 -translate-y-1/2',
+            'select-none p-5',
           )}
           style={{ WebkitAppRegion: 'no-drag' } as CSSProperties}
           onOpenAutoFocus={(event) => {
@@ -247,15 +248,19 @@ export function AccountSwitcherDialog({
           </div>
 
           <div className="mt-4 border-t border-[var(--border-default)] pt-4">
-            <button
+            <Button
+              variant="secondary"
+              size="lg"
+              compact
+              loading={addingAccount}
               type="button"
               disabled={!mutationAllowed || switchingKey !== null || addingAccount}
               onClick={() => void handleAddAccount()}
-              className="flex w-full items-center justify-center gap-2 rounded-lg border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-2.5 text-14 font-medium text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-60"
+              className="w-full"
             >
               <Plus className="h-4 w-4" aria-hidden="true" />
               {t('sidebar.accountSwitcher.addAccount')}
-            </button>
+            </Button>
           </div>
         </Dialog.Content>
       </Dialog.Portal>

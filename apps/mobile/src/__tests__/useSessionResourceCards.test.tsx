@@ -6,11 +6,14 @@ import type {
   RemoteResource,
   RemoteResourceChangedPayload,
 } from '@cindy/device-link';
+import { sharedTaskHostPeer } from '@cindy/device-link';
 
 const h = vi.hoisted(() => ({
   get: vi.fn(),
   manifest: vi.fn(),
   action: vi.fn(),
+  navigate: vi.fn(),
+  alert: vi.fn(),
   changes: new Set<
     (device: string, payload: RemoteResourceChangedPayload) => void
   >(),
@@ -25,6 +28,7 @@ const h = vi.hoisted(() => ({
   },
 }));
 vi.mock('react-native', () => ({
+  Alert: { alert: h.alert },
   AppState: {
     get currentState() {
       return h.app.currentState;
@@ -38,12 +42,13 @@ vi.mock('react-native', () => ({
 vi.mock('expo-router', async () => {
   const { useEffect } = await import('react');
   return {
+    useRouter: () => ({ push: h.navigate }),
     useFocusEffect: (effect: () => void | (() => void)) =>
       useEffect(effect, [effect]),
   };
 });
 vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ i18n: { language: 'en' } }),
+  useTranslation: () => ({ t: (key: string) => key, i18n: { language: 'en' } }),
 }));
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => h.auth }));
 const onChange = (
@@ -59,6 +64,9 @@ vi.mock('@/device-link/remoteResources', () => ({
   getRemoteResource: h.get,
   loadRemoteResourceManifest: h.manifest,
   invokeRemoteResourceAction: h.action,
+}));
+vi.mock('@/device-link/remoteStatus', () => ({
+  humanizeRemoteError: (error: unknown) => String(error),
 }));
 vi.mock('@/device-link/focusedTopicSubscription', () => ({
   startFocusedTopicSubscription: () => () => {},
@@ -139,6 +147,18 @@ function foreground(next: string) {
     h.app.listeners.forEach((listener) => listener(next));
   });
 }
+it('does not discover host-wide cards or retry them for a shared-task guest', async () => {
+  const peer = sharedTaskHostPeer('shared-task', 'desktop');
+  root = createRoot(document.createElement('div'));
+  await act(async () => root!.render(createElement(Probe, { device: peer })));
+  expect(h.manifest).not.toHaveBeenCalled();
+  expect(views.get(peer)).toMatchObject({ resources: [], failed: false, blocked: false });
+  foreground('background'); foreground('active');
+  await advance(10_000);
+  expect(h.manifest).not.toHaveBeenCalled();
+  expect(h.get).not.toHaveBeenCalled();
+  expect(h.link.subscribe).not.toHaveBeenCalled();
+});
 beforeEach(() => {
   vi.useFakeTimers();
   vi.resetAllMocks();
@@ -166,6 +186,92 @@ afterEach(() => {
 });
 
 describe('host task cards on Mobile', () => {
+  it.each([
+    'confirm',
+    'cancel',
+    'owner',
+    'session',
+    'reconnect',
+    'disabled',
+    'background',
+    'unmount',
+  ])(
+    'handles a resource confirmation with %s without replaying stale actions',
+    async (choice) => {
+      const card = resource();
+      card.actions = [
+        {
+          id: 'stop:build',
+          label: 'Stop making',
+          tone: 'destructive',
+          confirmation: {
+            title: 'Stop?',
+            body: 'Discard temporary conflict edits',
+          },
+        },
+      ];
+      h.get.mockResolvedValue(card);
+      await render();
+      let pending!: Promise<void>;
+      act(() => {
+        pending = views.get('mac')!.act(card, 'stop:build');
+      });
+      act(() => {
+        void views.get('mac')!.act(card, 'stop:build');
+      });
+      expect(h.alert).toHaveBeenCalledOnce();
+      expect(h.action).not.toHaveBeenCalled();
+      if (choice === 'owner') {
+        h.auth.accountGeneration++;
+        await render();
+      }
+      if (choice === 'session') await render('another');
+      if (choice === 'reconnect') {
+        h.link.connectionEpoch++;
+        await render();
+      }
+      if (choice === 'background') foreground('background');
+      if (choice === 'disabled') {
+        h.get.mockResolvedValue({
+          ...card,
+          actions: [{ ...card.actions[0], disabled: true }],
+        });
+        push();
+        await advance();
+      }
+      if (choice === 'unmount') {
+        await act(async () => root!.unmount());
+        root = undefined;
+      }
+      await act(async () => {
+        h.alert.mock.calls[0][2][choice === 'cancel' ? 0 : 1].onPress();
+        await pending;
+      });
+      expect(h.action).toHaveBeenCalledTimes(choice === 'confirm' ? 1 : 0);
+    },
+  );
+  it('opens the retained merge task on the same device without invoking a build action', async () => {
+    const card = resource();
+    const link = {
+      rel: 'merge-task',
+      label: 'Open merge task',
+      target: { kind: 'session' as const, sessionId: 'resolver' },
+    };
+    card.links = [link];
+    h.get.mockResolvedValue(card);
+    await render();
+    views.get('mac')!.openLink(card, link);
+    expect(h.navigate).toHaveBeenCalledExactlyOnceWith({
+      pathname: '/sessions/[sessionId]',
+      params: { deviceId: 'mac', sessionId: 'resolver' },
+    });
+    expect(h.action).not.toHaveBeenCalled();
+    const previous = views.get('mac')!;
+    h.auth.accountGeneration += 1;
+    await render();
+    previous.openLink(card, link);
+    expect(h.navigate).toHaveBeenCalledOnce();
+  });
   it('keeps available input mounted during progress refresh but blocks after a failed read', async () => {
     h.get.mockResolvedValue(resource('1', 'available'));
     await render();
@@ -182,7 +288,9 @@ describe('host task cards on Mobile', () => {
   it('holds input after an action until the host has confirmed its resulting state', async () => {
     h.get.mockResolvedValue(resource('1', 'available'));
     await render();
-    await act(async () => views.get('mac')!.act(resource(), 'start'));
+    await act(async () =>
+      views.get('mac')!.act(views.get('mac')!.resources[0], 'start'),
+    );
     expect(views.get('mac')?.blocked).toBe(true);
     h.get.mockResolvedValue(resource('2', 'available'));
     await advance();
@@ -224,7 +332,7 @@ describe('host task cards on Mobile', () => {
     await act(async () => slow.resolve(resource('slow')));
     expect(views.get('mac')?.fresh).toBe(true);
   });
-  it('keeps another device usable when one read fails; retries reads only', async () => {
+  it('keeps another device usable when one read fails; polls reads only', async () => {
     await render('task', true);
     h.get.mockImplementation(async (_invoke, target) => {
       if (target.deviceId === 'mac') throw new Error('timeout');
@@ -237,9 +345,17 @@ describe('host task cards on Mobile', () => {
     expect(views.get('pc')?.blocked).toBe(false);
     expect(h.action).not.toHaveBeenCalled();
     h.get.mockResolvedValue(resource('recovered', 'available'));
-    act(() => views.get('mac')?.refresh());
-    await advance();
+    await advance(5_200);
     expect(views.get('mac')?.failed).toBe(false);
+  });
+  it('retries a failed manifest read without a manual retry', async () => {
+    h.manifest.mockRejectedValueOnce(new Error('timeout'));
+    await render();
+    expect(views.get('mac')).toMatchObject({ resources: [], failed: true, blocked: false });
+    await advance(5_200);
+    expect(h.manifest).toHaveBeenCalledTimes(2);
+    expect(views.get('mac')?.failed).toBe(false);
+    expect(views.get('mac')?.resources).toHaveLength(1);
   });
   it.each(['account', 'session', 'reconnect'])(
     'ignores late results after %s changes',
@@ -255,12 +371,33 @@ describe('host task cards on Mobile', () => {
       expect(views.get('mac')?.resources[0].revision).toBe('current');
     },
   );
+  it('does not alert an action failure that settles after the app left the foreground', async () => {
+    await render();
+    const pending = deferred<{ effects: [] }>();
+    h.action.mockReturnValueOnce(pending.promise);
+    let run!: Promise<void>;
+    act(() => {
+      run = views.get('mac')!.act(views.get('mac')!.resources[0], 'start');
+    });
+    foreground('background');
+    await act(async () => {
+      pending.reject(new Error('timeout'));
+      await run;
+    });
+    expect(h.alert).not.toHaveBeenCalled();
+  });
   it('refreshes after foreground and reconnect without replaying a timed-out action', async () => {
     await render();
     h.action.mockRejectedValueOnce(new Error('timeout after host accepted'));
-    await act(async () => views.get('mac')!.act(resource(), 'start'));
+    await act(async () =>
+      views.get('mac')!.act(views.get('mac')!.resources[0], 'start'),
+    );
     await advance();
-    expect(views.get('mac')?.failed).toBe(true);
+    expect(h.alert).toHaveBeenCalledExactlyOnceWith(
+      'session.screen.operationFailed',
+      expect.any(String),
+    );
+    expect(views.get('mac')?.failed).toBe(false);
     expect(h.action).toHaveBeenCalledOnce();
     foreground('background');
     const before = h.get.mock.calls.length;
@@ -275,9 +412,8 @@ describe('host task cards on Mobile', () => {
     h.link.connectionEpoch += 1;
     await render();
     expect(h.action).toHaveBeenCalledOnce();
-    act(() => views.get('mac')!.refresh());
-    await advance();
-    expect(views.get('mac')?.failed).toBe(false);
+    await advance(5_200);
+    expect(views.get('mac')?.fresh).toBe(true);
   });
   it('prevents a double tap and does not carry its pending state to another task', async () => {
     await render();
@@ -285,8 +421,8 @@ describe('host task cards on Mobile', () => {
     h.action.mockReturnValueOnce(pending.promise);
     let first!: Promise<void>;
     act(() => {
-      first = views.get('mac')!.act(resource(), 'start');
-      void views.get('mac')!.act(resource(), 'start');
+      first = views.get('mac')!.act(views.get('mac')!.resources[0], 'start');
+      void views.get('mac')!.act(views.get('mac')!.resources[0], 'start');
     });
     expect(h.action).toHaveBeenCalledOnce();
     await render('other');

@@ -1,5 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { normalizeRemoteCollectionItems, parseRemoteResourceTargets, type HostedRemoteCollectionItem, type RemoteHomeCollection } from './remoteResources';
+import { isMobileRemoteCollectionSupported, normalizeRemoteCollectionItems, parseRemoteResourceTargets, type HostedRemoteCollectionItem, type RemoteHomeCollection } from './remoteResources';
 
 const PREFIX = 'cindy.remoteResources.v1.';
 const MAX_CHARS = 256 * 1024;
@@ -8,6 +8,8 @@ const empty = (): Snapshot => ({ home: [], items: {}, read: {} });
 let epoch = 0;
 const writes = new Map<string, Promise<void>>();
 const snapshots = new Map<string, Snapshot>();
+// Users whose last disk write failed; the next update retries it even when unchanged.
+const unsaved = new Set<string>();
 const listeners = new Set<() => void>();
 let revision = 0;
 export const subscribeRemoteResourceCache = (fn: () => void) => { listeners.add(fn); return () => { listeners.delete(fn); }; };
@@ -21,10 +23,11 @@ function normalize(raw: unknown): Snapshot {
   const value = raw as Partial<Snapshot>;
   if (Array.isArray(value.home)) for (const row of value.home.slice(0, 32)) {
     if (!row || typeof row.id !== 'string' || row.id.length > 160 || typeof row.title !== 'string' || typeof row.resourceKind !== 'string') continue;
+    if (!isMobileRemoteCollectionSupported(row.id)) continue;
     out.home.push({ id: row.id, title: row.title.slice(0, 512), resourceKind: row.resourceKind.slice(0,160), placement: 'home-scope', targets: parseRemoteResourceTargets(JSON.stringify(row.targets)) });
   }
   if (value.items && typeof value.items === 'object') for (const [id, rows] of Object.entries(value.items).slice(0, 32)) {
-    if (id.length > 160 || !Array.isArray(rows)) continue;
+    if (id.length > 160 || !Array.isArray(rows) || !isMobileRemoteCollectionSupported(id)) continue;
     out.items[id] = rows.slice(0, 200).flatMap((row) => {
       if (!row) return [];
       const [host] = parseRemoteResourceTargets(JSON.stringify([row.host]));
@@ -58,13 +61,19 @@ async function update(userId: string, change: (snapshot: Snapshot) => void): Pro
   const next = previous.then(async () => {
     const snapshot = await readRemoteResourceSnapshot(userId);
     if (expected !== epoch) return;
+    const before = JSON.stringify(snapshot);
     change(snapshot);
     const cleaned = normalize(snapshot);
-    snapshots.set(userId, cleaned); emit();
     const raw = JSON.stringify(cleaned);
+    snapshots.set(userId, cleaned);
+    // An unchanged cache must stay silent: subscribers re-render on every emit, and an
+    // open companion chat re-acknowledges its read position on render (a JS render loop).
+    if (raw === before && !unsaved.has(userId)) return;
+    if (raw !== before) emit();
     if (raw.length > MAX_CHARS) return;
-    await AsyncStorage.setItem(PREFIX + userId, raw).catch(() => undefined);
-    if (expected !== epoch) await AsyncStorage.removeItem(PREFIX + userId).catch(() => undefined);
+    const saved = await AsyncStorage.setItem(PREFIX + userId, raw).then(() => true, () => false);
+    if (expected !== epoch) { await AsyncStorage.removeItem(PREFIX + userId).catch(() => undefined); return; }
+    if (saved) unsaved.delete(userId); else unsaved.add(userId);
   });
   writes.set(userId, next);
   await next.finally(() => { if (writes.get(userId) === next) writes.delete(userId); });
@@ -75,7 +84,7 @@ export const cacheRemoteResourceItems = (userId: string, collectionId: string, i
   s.items[collectionId] = items;
   for (const row of items) {
     const key = remoteResourceReadKey(row.host.deviceId, row.item.ref.id);
-    if (row.item.ref.kind === 'bot' && s.read[key] === undefined) s.read[key] = row.item.display.lastReplyAt ?? 0;
+    if ((row.item.ref.kind === 'bot' || row.item.ref.kind === 'bot-group') && s.read[key] === undefined) s.read[key] = row.item.display.lastReplyAt ?? 0;
   }
 });
 export const markRemoteResourceRead = (userId: string, deviceId: string, resourceId: string, at: number) => update(userId, (s) => {
@@ -86,8 +95,20 @@ export function isRemoteResourceUnread(userId: string, deviceId: string, resourc
   const read = snapshots.get(userId)?.read[remoteResourceReadKey(deviceId, resourceId)];
   return at !== undefined && read !== undefined && at > read;
 }
+/** Name the cached Bot whose conversation link is this task. Presentation only; access stays live. */
+export function cachedBotIdForSession(userId: string, collectionId: string, deviceId: string, sessionId: string): string {
+  const row = snapshots.get(userId)?.items[collectionId]?.find(({ host, item }) => host.deviceId === deviceId
+    && item.ref.kind === 'bot' && item.links.some(({ rel, target }) => rel === 'conversation'
+      && target.kind === 'session' && target.sessionId === sessionId));
+  return row?.item.ref.id ?? '';
+}
+/** A cached roster row for display (name/avatar) only; never an authorization or availability signal. */
+export function cachedBotItem(userId: string, collectionId: string, deviceId: string, botId: string) {
+  return snapshots.get(userId)?.items[collectionId]?.find(({ host, item }) => host.deviceId === deviceId
+    && item.ref.kind === 'bot' && item.ref.id === botId)?.item ?? null;
+}
 export async function clearRemoteResourceCache(): Promise<void> {
-  epoch += 1; snapshots.clear(); emit();
+  epoch += 1; snapshots.clear(); unsaved.clear(); emit();
   await Promise.allSettled([...writes.values()]);
   const keys = await AsyncStorage.getAllKeys().catch(() => []);
   await AsyncStorage.multiRemove(keys.filter((key) => key.startsWith(PREFIX))).catch(() => undefined);

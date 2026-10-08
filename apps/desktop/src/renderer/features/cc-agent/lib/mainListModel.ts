@@ -25,6 +25,11 @@
 
 import type { Session } from '@/lib/ccAgent.types';
 import { isCindyMakeFamilySource } from '../../../../shared/cindyMakeMerge';
+import {
+  MACHINE_ALL,
+  MACHINE_LOCAL,
+  type MachineSelection,
+} from '@/features/device-link/selectedMachineStore';
 
 import { LIVE_TASK_PRIORITY, liveTaskPriorityRank } from '../../../../shared/liveTaskPriority';
 import type { FilterProjectOrder, FilterSortBy } from '../hooks/helpers/sidebarFilterCore';
@@ -243,7 +248,9 @@ export function sortSessionsForMainList(
       .map((session, index) => ({ session, index, createdAt: sessionCreatedMs(session) }))
       .sort(
         (a, b) =>
-          b.createdAt - a.createdAt || a.session.id.localeCompare(b.session.id) || a.index - b.index,
+          b.createdAt - a.createdAt ||
+          a.session.id.localeCompare(b.session.id) ||
+          a.index - b.index,
       )
       .map(({ session }) => session);
   }
@@ -450,6 +457,9 @@ function sortMainListEntries(
   manualProjectOrder: readonly string[],
   ctx: MainListPriorityContext,
 ): MainListEntry[] {
+  // Cindy Make stays above ordinary entries in every sort mode and device section.
+  const makeGroups = entries.filter((entry) => entry.kind === 'cindy-make-group');
+  entries = entries.filter((entry) => entry.kind !== 'cindy-make-group');
   if (projectOrder === 'custom') {
     // 自定义项目序:项目行按 manualProjectOrder;不在序的新项目由 normalize
     // 追加到已排序列之后。非项目条目排在项目之后,仍按当前任务排序。
@@ -460,7 +470,7 @@ function sortMainListEntries(
       .map((entry) => entry.project.projectKey);
     const normalized = normalizeManualProjectOrder(manualProjectOrder, projectKeys);
     const rank = new Map(normalized.map((key, index) => [key, index]));
-    return entries.slice().sort((a, b) => {
+    const sorted = entries.slice().sort((a, b) => {
       const aProject = a.kind === 'project';
       const bProject = b.kind === 'project';
       if (aProject !== bProject) return aProject ? -1 : 1;
@@ -474,9 +484,13 @@ function sortMainListEntries(
       }
       return compareEntriesBySortBy(a, b, sortBy, ctx);
     });
+    return [...makeGroups, ...sorted];
   }
 
-  return entries.slice().sort((a, b) => compareEntriesBySortBy(a, b, sortBy, ctx));
+  return [
+    ...makeGroups,
+    ...entries.slice().sort((a, b) => compareEntriesBySortBy(a, b, sortBy, ctx)),
+  ];
 }
 
 /* ============================== 设备分组(E 期) ============================== */
@@ -486,6 +500,34 @@ export interface MainListDeviceSection {
   /** null = 本机。 */
   deviceId: string | null;
   entries: MainListEntry[];
+}
+
+/** Online device headers remain visible independently of task filters. */
+export function onlineDeviceSectionIds(
+  devices: ReadonlyMap<string, { online: boolean }> | null | undefined,
+  selection: MachineSelection,
+): Array<string | null> {
+  const ids: Array<string | null> = [];
+  if (selection === MACHINE_ALL || selection.includes(MACHINE_LOCAL)) ids.push(null);
+  for (const [id, device] of devices ?? []) {
+    if (device.online && (selection === MACHINE_ALL || selection.includes(id))) ids.push(id);
+  }
+  return ids;
+}
+
+/**
+ * 在线设备空段能否算作「侧栏已有内容」:本机段恒算;远程段只在其任务快照已就绪时算。
+ * 首次读取中 / 失败的远程设备只有一个空段头,不能遮掉整屏的加载或失败提示
+ * (单机范围选中一台正在加载的远程设备时尤其如此)。
+ */
+export function hasSettledOnlineDeviceSection(
+  devices: ReadonlyMap<string, { online: boolean }> | null | undefined,
+  selection: MachineSelection,
+  unsettledDeviceIds: ReadonlySet<string>,
+): boolean {
+  return onlineDeviceSectionIds(devices, selection).some(
+    (id) => id === null || !unsettledDeviceIds.has(id),
+  );
 }
 
 function entryDeviceId(entry: MainListEntry): string | null {
@@ -514,6 +556,7 @@ export function splitEntriesByDevice(
   entries: readonly MainListEntry[],
   deviceOrder: readonly string[],
   options: {
+    onlineDeviceIds?: readonly (string | null)[];
     sortBy?: FilterSortBy;
     projectOrder?: FilterProjectOrder;
     manualProjectOrder?: readonly string[];
@@ -545,7 +588,9 @@ export function splitEntriesByDevice(
     }
   }
 
-  const sections = new Map<string | null, MainListEntry[]>();
+  const sections = new Map<string | null, MainListEntry[]>(
+    (options.onlineDeviceIds ?? []).map((id) => [id, []]),
+  );
   for (const entry of flattened) {
     const key = entryDeviceId(entry);
     const list = sections.get(key);
@@ -557,7 +602,7 @@ export function splitEntriesByDevice(
   const result: MainListDeviceSection[] = [];
   for (const id of orderedIds) {
     const sectionEntries = sections.get(id);
-    if (sectionEntries && sectionEntries.length > 0) {
+    if (sectionEntries) {
       result.push({
         deviceId: id,
         entries: sortSectionEntries(sectionEntries, options),

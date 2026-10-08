@@ -6,6 +6,7 @@ import {
   createPendingAgentSwitchRegistry,
   performSessionAgentSwitch,
   registerMakerSessionAgentSwitchHandler,
+  settleSystemRouteSwitchIntent,
   type AgentSwitchSessionRow,
   type MakerSessionAgentSwitchHandlerDeps,
   type PendingAgentSwitchIntent,
@@ -167,6 +168,44 @@ describe('same-engine selection at send', () => {
 });
 
 describe('performSessionAgentSwitch', () => {
+  it('keeps the config-staged identity through resume-fallback recovery re-entry', async () => {
+    // 渠道默认触发的跨引擎切换若走 resume 回落恢复, 恢复意图必须保留 configStaged ——
+    // 否则被通用路径消费时当成用户选择打上 manual 墓碑, 任务永久脱离跟随
+    // (chatgpt-codex-connector P2, PR #5155)。
+    let row = makeRow();
+    let failFallback = true;
+    const onUserRouteSelectionLanded = vi.fn();
+    const pending = createPendingAgentSwitchRegistry();
+    const { deps } = makeDeps({
+      pendingSwitches: pending,
+      onUserRouteSelectionLanded,
+      getSessionRow: async () => ({ ...row }),
+      findParkedEngineSession: async (_id, kind) =>
+        kind === 'codex' ? { sdkSessionId: 'broken-codex', watermarkCreatedAt: 0, watermarkRowid: 0 } : null,
+      applyAgentSwitchToDb: async (_id, patch) => {
+        row = { ...row, ...patch, providerId: patch.providerId ?? null, sdkSessionId: patch.sdkSessionId ?? null };
+      },
+      insertBoundaryMessage: async () => 'boundary-1',
+      bootstrapSwitchedSession: async () => {
+        throw new Error('resume failed');
+      },
+      applyResumeFallbackAtomically: async () => {
+        if (failFallback) throw new Error('db locked');
+        row.sdkSessionId = null;
+      },
+    });
+    await performSessionAgentSwitch(deps, { ...validParams, configStaged: true });
+    await applyPendingAgentSwitchIfIdle(deps, 's1');
+    expect(pending.get('s1')?.resumeFallbackRecovery).toBeDefined();
+    expect(onUserRouteSelectionLanded).not.toHaveBeenCalled();
+
+    // 恢复尾段重试成功后被消费: 仍然是系统配置切换, 不立碑。
+    failFallback = false;
+    await applyPendingAgentSwitchIfIdle(deps, 's1');
+    expect(onUserRouteSelectionLanded).not.toHaveBeenCalled();
+    expect(pending.get('s1')).toBeUndefined();
+  });
+
   it('cycles Claude → Codex → Pi → Claude → Codex and recovers a broken parked thread once', async () => {
     let row = makeRow();
     const parked = new Map<string, string>();
@@ -450,6 +489,16 @@ describe('performSessionAgentSwitch', () => {
     });
     expect(pendingSwitches.revision?.('s1')).toBe(3);
     expect(onPendingSwitchChanged).not.toHaveBeenCalled();
+  });
+
+  it('passes the switched task to the route check so a task whose agent runs elsewhere is judged there', async () => {
+    const assertModelRouteUsable = vi.fn(async () => undefined);
+    const { deps } = makeDeps({ assertModelRouteUsable });
+    await performSessionAgentSwitch(deps, validParams);
+    expect(assertModelRouteUsable).toHaveBeenCalled();
+    for (const call of assertModelRouteUsable.mock.calls as unknown[][]) {
+      expect(call[3]).toBe(validParams.sessionId);
+    }
   });
 
   it('turn 进行中抛 SESSION_RUNNING,不触碰任何状态', async () => {
@@ -1017,5 +1066,279 @@ describe('Phase 2:切回停泊引擎(resume + 增量交接)', () => {
 
     const pending = await registry.peek('s1');
     expect(pending).toContain('最早的问题');
+  });
+});
+
+describe('settleSystemRouteSwitchIntent', () => {
+  const intent = { targetAgentKind: 'codex', model: 'gpt-5.5', providerId: 'openai' };
+
+  it('reports applied once the intent is gone', () => {
+    expect(
+      settleSystemRouteSwitchIntent({ stagedIntent: intent, remainingIntent: undefined, sessionIdle: true }),
+    ).toBe('applied');
+  });
+
+  it('keeps a post-commit resume fallback tail staged for the next message', () => {
+    const recovery = { ...intent, resumeFallbackRecovery: { boundaryClientId: null } };
+    expect(
+      settleSystemRouteSwitchIntent({ stagedIntent: recovery, remainingIntent: recovery, sessionIdle: true }),
+    ).toBe('staged');
+  });
+
+  it('treats a busy session or a superseding pick as staged', () => {
+    expect(
+      settleSystemRouteSwitchIntent({ stagedIntent: intent, remainingIntent: intent, sessionIdle: false }),
+    ).toBe('staged');
+    const newer = { ...intent, model: 'gpt-5.6' };
+    expect(
+      settleSystemRouteSwitchIntent({ stagedIntent: intent, remainingIntent: newer, sessionIdle: true }),
+    ).toBe('staged');
+  });
+
+  it('flags a swallowed apply failure so the caller withdraws the intent', () => {
+    // fail-continue 的跨引擎应用失败会把意图原样留着 —— 不能当「任务正忙」上报,
+    // 否则后续消息会反复重试同一个必然失败的切换(PR #5155 review P1)。
+    expect(
+      settleSystemRouteSwitchIntent({ stagedIntent: intent, remainingIntent: intent, sessionIdle: true }),
+    ).toBe('failed');
+  });
+});
+
+describe('landed user route selection', () => {
+  function pickHarness() {
+    const pending = createPendingAgentSwitchRegistry();
+    const landed: string[] = [];
+    const { deps } = makeDeps({
+      pendingSwitches: pending,
+      selectSameAgentModel: async (id, choice, applyNow) => {
+        if (!applyNow) {
+          pending.set(id, choice);
+          return { deferred: true };
+        }
+        return { deferred: false };
+      },
+      onUserRouteSelectionLanded: (id) => {
+        landed.push(id);
+      },
+    });
+    return { deps, landed };
+  }
+
+  it('reports a user pick when it lands — 同值重选也要永久脱离跟随', async () => {
+    const h = pickHarness();
+    // 同引擎 picker 选择(sameAgentSelection)。
+    await performSessionAgentSwitch(h.deps, {
+      sessionId: 's1',
+      targetAgentKind: 'claude-code',
+      model: 'claude-fable-5',
+      providerId: 'xd',
+    });
+    await applyPendingAgentSwitchIfIdle(h.deps, 's1');
+    expect(h.landed).toEqual(['s1']);
+  });
+
+  it('reports a cross-engine user pick but not system-staged or agent selections', async () => {
+    const h = pickHarness();
+    await performSessionAgentSwitch(h.deps, { ...validParams });
+    await applyPendingAgentSwitchIfIdle(h.deps, 's1');
+    expect(h.landed).toEqual(['s1']);
+
+    h.landed.length = 0;
+    // 系统配置对齐(IM 渠道默认跟随 / 伙伴模型对齐)的意图落地不算用户改路由。
+    await performSessionAgentSwitch(h.deps, { ...validParams, configStaged: true });
+    await applyPendingAgentSwitchIfIdle(h.deps, 's1');
+    expect(h.landed).toEqual([]);
+
+    // Agent 自选同样由默认变化覆盖, 不得脱离。
+    await performSessionAgentSwitch(h.deps, {
+      ...validParams,
+      model: 'gpt-6',
+      runtimeSource: 'agent',
+    });
+    await applyPendingAgentSwitchIfIdle(h.deps, 's1');
+    expect(h.landed).toEqual([]);
+  });
+
+  it('keeps the intent when the manual-override marker cannot be persisted', async () => {
+    // 同值重选的唯一证据就是墓碑: 写入失败不得把选择当成功消费 —— 意图保留、
+    // 下一条消息重试(PR #5155 review P2)。
+    const pending = createPendingAgentSwitchRegistry();
+    const { deps } = makeDeps({
+      pendingSwitches: pending,
+      selectSameAgentModel: async (id, choice, applyNow) => {
+        if (!applyNow) {
+          pending.set(id, choice);
+          return { deferred: true };
+        }
+        return { deferred: false };
+      },
+      onUserRouteSelectionLanded: async () => {
+        throw new Error('db closed');
+      },
+    });
+    await performSessionAgentSwitch(deps, {
+      sessionId: 's1',
+      targetAgentKind: 'claude-code',
+      model: 'claude-fable-5',
+      providerId: 'xd',
+    });
+
+    await expect(applyPendingAgentSwitchIfIdle(deps, 's1')).rejects.toThrow('db closed');
+    expect(pending.get('s1')).toBeDefined();
+  });
+
+  it('blocks the send for a cross-engine pick too when the marker cannot be persisted', async () => {
+    // 跨引擎用户意图的 fail-continue 不适用于墓碑失败: 发送继续 + 进程退出会把
+    // 同值重选的唯一证据一起丢掉(PR #5155 review P2)。
+    const pending = createPendingAgentSwitchRegistry();
+    const { deps } = makeDeps({
+      pendingSwitches: pending,
+      onUserRouteSelectionLanded: async () => {
+        throw new Error('db closed');
+      },
+    });
+    await performSessionAgentSwitch(deps, { ...validParams });
+
+    await expect(applyPendingAgentSwitchIfIdle(deps, 's1')).rejects.toThrow('db closed');
+    expect(pending.get('s1')).toBeDefined();
+  });
+});
+
+describe('远程 Agent:选模型时换 Agent 所在电脑', () => {
+  function relocationHarness(rowOverrides: Partial<AgentSwitchSessionRow> = {}) {
+    const pending = createPendingAgentSwitchRegistry();
+    const row = makeRow({ agentDeviceId: 'studio-mac', providerId: 'anthropic', ...rowOverrides });
+    const selectSameAgentModel = vi.fn(async (id: string, intent: PendingAgentSwitchIntent) => {
+      pending.set(id, intent);
+      return { deferred: true };
+    });
+    const assertAgentDeviceRouteUsable = vi.fn(async () => undefined);
+    const findParkedEngineSession = vi.fn(async () => ({
+      sdkSessionId: 'sdk-parked',
+      watermarkCreatedAt: 1,
+      watermarkRowid: 1,
+    }));
+    const { deps, calls } = makeDeps({
+      pendingSwitches: pending,
+      getSessionRow: vi.fn(async () => row),
+      selectSameAgentModel,
+      assertAgentDeviceRouteUsable,
+      findParkedEngineSession,
+      describeAgentDevice: (deviceId) => (deviceId ? 'Studio Mac' : 'Office PC'),
+    });
+    return { deps, calls, pending, selectSameAgentModel, assertAgentDeviceRouteUsable, findParkedEngineSession };
+  }
+
+  const backToTaskComputer = {
+    sessionId: 's1',
+    targetAgentKind: 'claude-code',
+    model: 'anthropic/claude-opus-5-5[1m]',
+    providerId: 'xd',
+    agentDeviceId: null,
+  };
+
+  it('同引擎改回任务所在电脑:登记带位置的完整切换意图,不走同引擎换模型', async () => {
+    const h = relocationHarness();
+    const result = await performSessionAgentSwitch(h.deps, backToTaskComputer);
+    expect(result).toMatchObject({ deferred: true, switched: false });
+    expect(h.selectSameAgentModel).not.toHaveBeenCalled();
+    // 改回本机不需要问那台电脑。
+    expect(h.assertAgentDeviceRouteUsable).not.toHaveBeenCalled();
+    expect(h.pending.get('s1')).toMatchObject({ model: 'anthropic/claude-opus-5-5[1m]', targetAgentDeviceId: null });
+    expect(h.calls).toEqual([]);
+  });
+
+  it('发送时落地:全量交接、不续接停泊会话、写入新位置并在分隔条记下两台电脑', async () => {
+    const h = relocationHarness();
+    await performSessionAgentSwitch(h.deps, backToTaskComputer);
+    await applyPendingAgentSwitchIfIdle(h.deps, 's1');
+
+    expect(h.findParkedEngineSession).not.toHaveBeenCalled();
+    expect(h.calls).toEqual(['close', 'db', 'provider', 'boundary', 'pending']);
+    expect(h.deps.applyAgentSwitchToDb).toHaveBeenCalledWith('s1', expect.objectContaining({
+      agentKind: 'cc',
+      model: 'anthropic/claude-opus-5-5[1m]',
+      providerId: 'xd',
+      sdkSessionId: null,
+      agentDeviceId: null,
+    }));
+    const boundary = vi.mocked(h.deps.insertBoundaryMessage).mock.calls[0][1];
+    expect(boundary).toMatchObject({
+      fromAgentKind: 'cc',
+      toAgentKind: 'cc',
+      fromAgentDeviceId: 'studio-mac',
+      toAgentDeviceId: null,
+      fromAgentDeviceName: 'Studio Mac',
+      toAgentDeviceName: 'Office PC',
+      resumed: false,
+    });
+    expect(boundary.handoff).toContain('Claude Code (on a different computer)');
+    expect(h.pending.get('s1')).toBeUndefined();
+  });
+
+  it('挪到另一台电脑:登记前与落地前都按那台的目录校验', async () => {
+    const h = relocationHarness({ agentDeviceId: null, providerId: 'xd' });
+    await performSessionAgentSwitch(h.deps, {
+      ...backToTaskComputer,
+      model: 'claude-opus-5-5',
+      providerId: 'anthropic',
+      agentDeviceId: 'studio-mac',
+    });
+    expect(h.assertAgentDeviceRouteUsable).toHaveBeenCalledWith('studio-mac', 'claude-code', 'claude-opus-5-5', 'anthropic');
+    expect(h.pending.get('s1')).toMatchObject({ targetAgentDeviceId: 'studio-mac' });
+
+    await applyPendingAgentSwitchIfIdle(h.deps, 's1');
+    expect(h.assertAgentDeviceRouteUsable).toHaveBeenCalledTimes(2);
+    expect(h.deps.applyAgentSwitchToDb).toHaveBeenCalledWith('s1', expect.objectContaining({ agentDeviceId: 'studio-mac' }));
+  });
+
+  it('那台电脑没有这个模型:选择时直接拒绝,不留意图', async () => {
+    const h = relocationHarness({ agentDeviceId: null });
+    h.assertAgentDeviceRouteUsable.mockRejectedValueOnce(new Error('not offered'));
+    await expect(performSessionAgentSwitch(h.deps, {
+      ...backToTaskComputer,
+      agentDeviceId: 'studio-mac',
+    })).rejects.toThrow('not offered');
+    expect(h.pending.get('s1')).toBeUndefined();
+  });
+
+  it('不带位置(旧控制端 / 内部调用)保持原位置,同引擎仍走换模型', async () => {
+    const h = relocationHarness();
+    const { agentDeviceId: _omit, ...withoutLocation } = backToTaskComputer;
+    await performSessionAgentSwitch(h.deps, withoutLocation);
+    expect(h.selectSameAgentModel).toHaveBeenCalledTimes(1);
+    expect(h.pending.get('s1')?.targetAgentDeviceId).toBeUndefined();
+  });
+
+  it('换位置在发送时失败:挡住这次发送并保留意图,不悄悄留在原来那台继续', async () => {
+    const h = relocationHarness({ agentDeviceId: null });
+    await performSessionAgentSwitch(h.deps, { ...backToTaskComputer, agentDeviceId: 'studio-mac' });
+    h.assertAgentDeviceRouteUsable.mockRejectedValueOnce(new Error('offline'));
+    await expect(applyPendingAgentSwitchIfIdle(h.deps, 's1')).rejects.toThrow('offline');
+    expect(h.pending.get('s1')).toMatchObject({ targetAgentDeviceId: 'studio-mac' });
+    expect(h.calls).toEqual([]);
+  });
+
+  it('非法位置参数被拒绝', async () => {
+    const h = relocationHarness();
+    await expect(performSessionAgentSwitch(h.deps, { ...backToTaskComputer, agentDeviceId: 'bad id!' }))
+      .rejects.toThrow(/INVALID_PARAMS/);
+    await expect(performSessionAgentSwitch(h.deps, { ...backToTaskComputer, agentDeviceId: 42 }))
+      .rejects.toThrow(/INVALID_PARAMS/);
+  });
+
+  it('IPC 第 7 参带位置透传;意图投影带上位置', async () => {
+    const h = relocationHarness();
+    const ipc = new IpcHarness();
+    registerMakerSessionAgentSwitchHandler(ipc, h.deps);
+    await ipc.invoke(
+      MAKER_INVOKE.SWITCH_SESSION_AGENT,
+      's1', 'claude-code', 'anthropic/claude-opus-5-5[1m]', 'xd', undefined, undefined,
+      { agentDeviceId: null },
+    );
+    await expect(ipc.invoke(MAKER_INVOKE.GET_SESSION_AGENT_SWITCH_INTENT, 's1')).resolves.toMatchObject({
+      model: 'anthropic/claude-opus-5-5[1m]',
+      agentDeviceId: null,
+    });
   });
 });

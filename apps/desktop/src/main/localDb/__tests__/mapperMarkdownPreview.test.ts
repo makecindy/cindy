@@ -14,6 +14,13 @@ describe('sidebar Markdown preview', () => {
     expect(extractMessagePreview(JSON.stringify({ text: markdown }), 'user')).toBe(plain);
   });
 
+  it('handles bracketed code spans that made the old link lexer backtrack', () => {
+    const markdown = '[' + '`````a`````'.repeat(15) + ']';
+    const expected = ('[' + ('a' + '`'.repeat(10)).repeat(14) + 'a]').slice(0, 140);
+    expect(finalizePlainPreview(markdown, 'user')).toBe(expected);
+    expect(extractMessagePreview(JSON.stringify({ text: markdown }), 'user')).toBe(expected);
+  });
+
   it('normalizes existing raw cached previews on read', () => {
     const session = sessionToCamel({
       createdAt: 1,
@@ -59,6 +66,8 @@ describe('sidebar Markdown preview', () => {
     ['<img src="javascript:alert(1)" alt="不支持的图片">', null],
     ['<img src="https://example.com/image.png">', null],
     ['<script><img src="https://example.com/image.png" alt="隐藏内容"></script>', null],
+    ['![reference alt][image]\n\n[image]: https://example.com/image.png', 'reference alt'],
+    ['&amp; &#x1f600; &lt;tag&gt;', '& 😀 <tag>'],
     ['---', null],
   ])('extracts readable content from %s', (text, expected) => {
     expect(finalizePlainPreview(text, 'assistant')).toBe(expected);

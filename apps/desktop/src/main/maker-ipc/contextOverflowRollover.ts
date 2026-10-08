@@ -8,6 +8,7 @@
 import {
   CODEX_HISTORY_OVERSIZED_REASON,
   CONTEXT_OVERFLOW_REASON,
+  PI_REQUEST_BODY_RECOVERY_EXHAUSTED,
   isContextOverflowErrorMessage,
   isRemoteCompactEncryptedContentError,
 } from '@cindy/maker-core';
@@ -22,7 +23,16 @@ import {
   shouldHandoffAfterContextAssessment,
 } from '../../shared/modelSwitchAssessment.js';
 import { decideCindyCompression } from './cindyContextCompression.js';
-import { buildHandoffText, extractPlainText, type HandoffSourceMessage } from './agentHandoff.js';
+import {
+  buildHandoffText,
+  extractPlainText,
+  prependNoteToWireUserMessage,
+  type HandoffSourceMessage,
+  type HandoffWireMessage,
+} from './agentHandoff.js';
+import { readMessageSourceDevice } from '@cindy/maker-shared/message-source';
+import { buildClientEnvironmentNote } from './mobileClientPromptNote.js';
+import { buildWireMessageSourceNote } from './messageSourceNote.js';
 
 const SYNTHETIC_TRIGGER_PREFIX = '[UI_ACTION_TRIGGER]';
 
@@ -46,6 +56,8 @@ export type OverflowRolloverPlan =
       sourceUserClientId: string;
       sourceUserContent: unknown;
       sourceUserAgentFacingWireContent?: unknown;
+      /** 被重放消息的来源元数据：重放时重新生成 `[消息来源]` / `[客户端说明]`。 */
+      sourceUserAgentMeta?: Record<string, unknown> | null;
       skipGenericReplay: boolean;
       handoffMessages: OverflowSourceMessage[];
     }
@@ -84,9 +96,16 @@ export function isPiPromptRpcTimeoutError(data: unknown): boolean {
   );
 }
 
+function isPiRequestBodyRecoveryExhausted(data: unknown): boolean {
+  if (!data || typeof data !== 'object') return false;
+  const rec = data as { message?: unknown; sdkError?: unknown };
+  return [rec.message, rec.sdkError].some(value =>
+    typeof value === 'string' && value.includes(PI_REQUEST_BODY_RECOVERY_EXHAUSTED));
+}
+
 /** PI 原生会话已经无法继续：超限，或 prompt RPC 超时（巨大 jsonl resume 卡死）。 */
 export function shouldRebuildPiNativeSession(data: unknown): boolean {
-  return isContextOverflowErrorData(data) || isPiPromptRpcTimeoutError(data);
+  return isContextOverflowErrorData(data) || isPiPromptRpcTimeoutError(data) || isPiRequestBodyRecoveryExhausted(data);
 }
 
 const GROK_4_CONTEXT_CAP = 500_000;
@@ -246,11 +265,48 @@ export function planContextOverflowRollover(
     ...(sourceUser.agentMeta?.agentFacingWireContent !== undefined
       ? { sourceUserAgentFacingWireContent: sourceUser.agentMeta.agentFacingWireContent }
       : {}),
+    ...(sourceUser.agentMeta ? { sourceUserAgentMeta: sourceUser.agentMeta } : {}),
     skipGenericReplay: isExternalDispatchOwner(sourceUser.agentMeta),
     handoffMessages: continueFromHistory
       ? messages.filter((message) => message.role !== 'error')
       : messages.slice(0, lastUserIndex),
   };
+}
+
+/**
+ * 重放的是落库前的 Agent 原文（不含派发时追加的说明）：按同一份来源元数据重新生成
+ * `[消息来源]`（插件 / 共享任务成员）与 `[客户端说明]`（远程设备），重建后的模型才不会把
+ * 插件或共享成员的话当成任务所有者本人输入。没有来源时原样返回。
+ */
+export function withReplaySourceNotes(
+  wire: OverflowReplayWireMessage,
+  agentMeta: Record<string, unknown> | null | undefined,
+): OverflowReplayWireMessage {
+  if (!agentMeta) return wire;
+  const sourceNote = buildWireMessageSourceNote(
+    { origin: agentMeta.origin, sourcePlugin: agentMeta.sourcePlugin, sharedTaskAuthor: agentMeta.sharedTaskAuthor },
+    {
+      visibleText: typeof wire === 'string' ? wire : extractPlainText(wire.content),
+      autoResume: agentMeta.autoResume === true,
+    },
+  );
+  const device = readMessageSourceDevice(agentMeta);
+  const clientNote = device ? buildClientEnvironmentNote({ device }) : null;
+  if (!sourceNote && !clientNote) return wire;
+  let next = wire as HandoffWireMessage;
+  if (sourceNote) next = prependNoteToWireUserMessage(next, sourceNote);
+  if (clientNote) next = prependNoteToWireUserMessage(next, clientNote);
+  // 以结构化 wire 交给重放：纯字符串会被当作落库内容再解析一次（`{` 开头的正文会被误读）。
+  return typeof next === 'string' ? { type: 'user', content: next } : (next as OverflowReplayWireMessage);
+}
+
+/** 没有来源说明时沿用原有的 agentFacingWireContent（行为不变），有则交带说明的 wire。 */
+function replayWireWithSourceNotes(
+  sourceWire: OverflowReplayWireMessage,
+  plan: Extract<OverflowRolloverPlan, { action: 'rebuild' }>,
+): unknown {
+  const withNotes = withReplaySourceNotes(sourceWire, plan.sourceUserAgentMeta);
+  return withNotes === sourceWire ? plan.sourceUserAgentFacingWireContent : withNotes;
 }
 
 function isExternalDispatchOwner(agentMeta: Record<string, unknown> | null | undefined): boolean {
@@ -302,6 +358,7 @@ export function findLatestRebuildableError(
       const data = errorContentToData(message.content);
       if (isContextOverflowErrorData(data)) return data;
       if (allowPiPromptTimeout && isPiPromptRpcTimeoutError(data)) return data;
+      if (allowPiPromptTimeout && isPiRequestBodyRecoveryExhausted(data)) return data;
       if (isOversizedHistoryErrorData(data)) return data;
       return null;
     }
@@ -555,7 +612,7 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
       const replay = await deps.replayUserMessage(
         sessionId,
         oversized ? CODEX_HISTORY_CONTINUE_MESSAGE : plan.sourceUserContent,
-        oversized ? undefined : plan.sourceUserAgentFacingWireContent,
+        oversized ? undefined : replayWireWithSourceNotes(sourceWire, plan),
         oversized ? {
           signal,
           continueFromHistory: true,
@@ -620,6 +677,7 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
         return requiresRemoteRebuild ? 'remote-unsupported' : 'not-needed';
       }
       if (!deps.rehydrateColdPiRuntimeForWindowVerification) return 'unknown-context';
+      target.assertCanCommit?.();
       try {
         await deps.rehydrateColdPiRuntimeForWindowVerification(sessionId);
       } catch (error) {
@@ -775,6 +833,7 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
     const window = effectiveContextWindow(sessionRow.model, reportedWindow, verified);
     const pressure = shouldRebuildForContextPressure(usedTokens, window);
     const compactFailed = liveUsage?.needsRollover === true;
+    const piByteRecoveryFailed = sessionRow.agentKind === 'pi' && isPiRequestBodyRecoveryExhausted(lastError);
     const tokenViolated =
       isContextOverflowErrorData(lastError) ||
       isPiPromptRpcTimeoutError(lastError) ||
@@ -786,7 +845,7 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
       : undefined;
     const action = decideCindyCompression({
       local: true,
-      bytes: oversized && historyHealth !== 'healthy' ? 'violated' : 'unknown',
+      bytes: piByteRecoveryFailed || (oversized && historyHealth !== 'healthy') ? 'violated' : 'unknown',
       tokens: tokenViolated ? 'violated' : 'unknown',
     });
     if (action !== 'rebuild') return false;

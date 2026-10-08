@@ -9,14 +9,14 @@ let revokedControllers: string[] = [];
 vi.mock('../device-link/settings-store', () => ({
   readDeviceLinkSettings: () => ({ remoteControlEnabled, revokedControllers }),
 }));
-vi.mock('../logger', () => ({
-  createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
-}));
+const diagnosticLog = vi.hoisted(() => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }));
+vi.mock('../logger', () => ({ createLogger: () => diagnosticLog }));
 vi.mock('electron', () => ({
   ipcMain: { handle: vi.fn(), removeHandler: vi.fn() },
   app: { getVersion: () => '1.0.0' },
 }));
 // This suite exercises dispatch authorization, not authenticated ICE HTTP setup.
+vi.mock('../task-migration/service', () => ({ requestTaskMigration: vi.fn() }));
 vi.mock('../remote-desktop/iceConfig', () => ({ loadDesktopIceServers: vi.fn(async () => []) }));
 // media:fetch 拦截走 mediaFetch.fetchLocalMediaToOss;mock 掉避免拉起 OSS/cache-store 真实依赖。
 const fetchLocalMediaToOssMock = vi.hoisted(() => vi.fn());
@@ -48,6 +48,11 @@ import {
 } from '../device-link/invoke-context';
 import * as subscriptions from '../device-link/subscriptions';
 import { createDesktopOnlyConfirmationRequestId } from '../cindy-brain/desktopOnlyConfirmationProjection';
+import { PLUGIN_OAUTH_CHANNEL } from '@cindy/device-link';
+import { initializePluginOauthHost, invalidatePluginOauth, publishedPluginOauthIdentity } from '../plugin-oauth/runtime';
+import { OauthBox } from '../plugin-oauth/box';
+import { testOauthSigningKey } from '../plugin-oauth/__tests__/fixtures';
+import { authenticateOauthController } from '../plugin-oauth/authentication';
 
 beforeEach(() => {
   remoteControlEnabled = true;
@@ -63,6 +68,31 @@ beforeEach(() => {
 });
 
 describe('runInvoke 双层校验', () => {
+  it('routes OAuth with the authenticated src and applies revocation before its private handler', async () => {
+    initializePluginOauthHost({
+      owner: () => 'member:g1', available: () => true,
+      bind: async () => ({ ghostId: 'p', current: () => true }), run: () => true,
+    }, () => ({deviceId:'cloud',membershipId:'member',realm:'global'}), testOauthSigningKey);
+    try {
+      const now=Date.now(), action={requestId:'card',actionId:'oauth_connect:x',expectedRevision:1};
+      let last: unknown;
+      const exchange=await authenticateOauthController({
+        target:{...(await publishedPluginOauthIdentity())!,realm:'global',deviceId:'cloud',membershipId:'member',observedAtMs:now,expiresAtMs:now+60000},
+        peer:'ctrl-a',action,ghostId:'p',assertCurrent:()=>{},trustIdentity:async()=>{},
+        invoke:async raw=>{last=raw;const reply=await runInvoke('ctrl-a',{channel:PLUGIN_OAUTH_CHANNEL,args:[raw]});
+          if(!reply.ok)throw Error('rejected');return reply.result;},
+      });
+      const started=await exchange({op:'start',...action,publicKey:new OauthBox().publicKey}) as {id:string};
+      const id=started.id;expect(id).toBeTruthy();
+      expect((await runInvoke('ctrl-b',{channel:PLUGIN_OAUTH_CHANNEL,args:[last]})).ok).toBe(false);
+      expect((await runInvoke('ctrl-a',{channel:'device-link:plugin-oauth:v1',args:[{op:'capabilities'}]}))).toMatchObject({ok:false,error:{code:'CHANNEL_NOT_ALLOWED'}});
+      revokedControllers = ['ctrl-a'];
+      await expect(runInvoke('ctrl-a', { channel: PLUGIN_OAUTH_CHANNEL, args: [{ op: 'status', id }] })).resolves.toMatchObject({
+        ok: false, error: { code: 'ACCESS_REVOKED' },
+      });
+      expect((await runInvoke('ctrl-b', { channel: PLUGIN_OAUTH_CHANNEL, args: [{ op: 'capabilities', src: 'ctrl-a' }] })).ok).toBe(false);
+    } finally { invalidatePluginOauth(); }
+  });
   it('开关关闭 → REMOTE_DISABLED', async () => {
     remoteControlEnabled = false;
     const r = await runInvoke('ctrl', { channel: 'maker:list-active', args: [] });
@@ -1202,6 +1232,10 @@ describe('被控端控制链路生命周期', () => {
           message: 'remote invoke execution queue is full',
         },
       },
+    }));
+    expect(diagnosticLog.debug).toHaveBeenCalledWith('remote invoke admission busy', expect.objectContaining({
+      executing: limit, pendingResults: 0, controllerAtLimit: true, globalAtLimit: false,
+      channels: { 'local-db:sessions:list': limit },
     }));
     resolveList?.([{ id: 's1' }]);
     await vi.waitFor(() => {
@@ -2831,6 +2865,19 @@ describe('远程 set-* 持久化回流', () => {
     });
 
     expect(r).toEqual({ ok: true, result: handlerResult });
+    expect(persist).not.toHaveBeenCalled();
+  });
+
+  it.each([['maker:set-permission-mode','ask'],['maker:set-plan-mode',true]])('%s commits inside the handler without a later duplicate write', async (channel,value) => {
+    const persist = vi.fn();
+    setRemoteSettingsPersist(persist);
+    const response = {};
+    markRemoteSettingPersistedInsideHandler(response);
+    registry.register(channel as string, () => response);
+    const result = await runInvoke('ctrl-a', {
+      channel: channel as string, args: ['sess-1', value],
+    });
+    expect(result).toEqual({ ok: true, result: response });
     expect(persist).not.toHaveBeenCalled();
   });
 

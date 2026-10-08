@@ -13,6 +13,7 @@
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { PluginRegistry } from '../../maker-host/plugins/plugin-registry';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { getLiziMcpSessionContext } from '@cindy/mcps';
 import { createOrcaWorkerBridgeMcpProvider } from '@cindy/orca-workflow';
@@ -24,6 +25,7 @@ vi.mock('electron', () => ({
 import type { Logger, McpProvider } from '@cindy/maker-core';
 import { CustomMcpProvider } from '../custom-mcp-provider.js';
 import { buildBotMcpCatalog } from '../../maker-host/botMcpCatalog.js';
+import { readAgentCapabilityCatalog, RUNTIME_MCP_NAMES_KEY } from '../../maker-host/agentCapabilityCatalog.js';
 import {
   CODEX_ALLOWED_BUILTIN_PLUGIN_IDS_KEY,
   CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY,
@@ -320,6 +322,54 @@ describe('piEnvironment per-session identity', () => {
     config?.disposeSessionCtx?.();
   });
 
+  it('reports the actual mounted Pi capabilities through the live bridge context', async () => {
+    const isEnabled = vi.spyOn(PluginRegistry.prototype, 'isEnabled')
+      .mockImplementation((pluginId) => pluginId !== 'collab');
+    const providers = ['cindy_helper', 'cindy_memory', 'cindy_docs', 'cindy_computer',
+      'cindy_make', 'cindy_orca', 'custom_probe'].map((name) => makeProvider(name));
+    const vendorOptions: Record<string, unknown> = {
+      [RUNTIME_MCP_NAMES_KEY]: providers.map((provider) => provider.name),
+      [CODEX_ALLOWED_BUILTIN_PLUGIN_IDS_KEY]: ['xdt_helper', 'memory', 'docs', 'collab'],
+      [CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY]: ['docs'],
+    };
+    try {
+      const config = await getPiExtraSpawnConfig(providers, noopLogger(), {
+        sessionId: 'pi-capability-catalog', workingDir: '/repo', memoryEnabled: false,
+        vendorOptions,
+        botMcpPolicy: { mode: 'allowlist', configured: ['custom_probe'],
+          catalog: [{ name: 'custom_probe', source: 'custom', available: true }] },
+      });
+      expect(config?.mcpBridge?.servers.map((server) => server.name))
+        .toEqual(['cindy_helper', 'custom_probe']);
+      const probe = config!.mcpBridge!.servers.find((server) => server.name === 'custom_probe')!;
+      const headers = { authorization: `Bearer ${config!.mcpBridge!.token}`,
+        accept: 'application/json, text/event-stream', 'content-type': 'application/json' };
+      const initialized = await fetch(probe.url, { method: 'POST', headers, body: INIT_BODY(1) });
+      const mcpSessionId = initialized.headers.get('mcp-session-id')!;
+      await initialized.text();
+      const response = await fetch(probe.url, {
+        method: 'POST', headers: { ...headers, 'mcp-session-id': mcpSessionId },
+        body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/call',
+          params: { name: 'current_vendor_options', arguments: {} } }),
+      });
+      const result = await readRpcText(response) as { result: { content: Array<{ text: string }> } };
+      const runtimeOptions = JSON.parse(result.result.content[0]!.text);
+      expect(runtimeOptions[RUNTIME_MCP_NAMES_KEY]).toEqual(['cindy_helper', 'custom_probe']);
+      expect(await readAgentCapabilityCatalog(providers, {
+        agentKind: 'pi', workingDir: '/repo', vendorOptions: runtimeOptions,
+      }, {})).toMatchObject({ capabilities: [
+        { server: 'cindy_helper', status: 'registered' },
+        ...['cindy_memory', 'cindy_docs', 'cindy_computer', 'cindy_make', 'cindy_orca'].map((server) => ({
+          server, status: 'unavailable', reason: 'not-mounted-in-current-runtime',
+        })),
+        { server: 'custom_probe', status: 'registered' },
+      ] });
+      config?.disposeSessionCtx?.();
+    } finally {
+      isEnabled.mockRestore();
+    }
+  });
+
   it('keeps native companion helpers available when memory is disabled', async () => {
     const config = await getPiExtraSpawnConfig([
       makeProvider('cindy_memory'), makeProvider('cindy_helper'),
@@ -383,6 +433,73 @@ describe('piEnvironment per-session identity', () => {
     });
     expect(config?.mcpBridge?.servers).toEqual([]);
     config?.disposeSessionCtx?.();
+  });
+
+  it('keeps collab servers for a session already inside an active Team when the global toggle is off (issue 4734)', async () => {
+    const isEnabled = vi
+      .spyOn(PluginRegistry.prototype, 'isEnabled')
+      .mockImplementation((pluginId) => pluginId !== 'collab');
+    const collabNames = (config: Awaited<ReturnType<typeof getPiExtraSpawnConfig>>) =>
+      (config?.mcpBridge?.servers ?? [])
+        .map((server) => server.name)
+        .filter((name) => name === 'cindy_orca' || name === 'orca_worker_bridge');
+    // 真实的 Worker 通信 server(issue #4734 报的就是它丢了 → send_to_lead UNKNOWN_SERVER)
+    const logger = noopLogger();
+    const providers = [
+      makeProvider(),
+      createOrcaWorkerBridgeMcpProvider({
+        logger,
+        getMaker: () => {
+          throw new Error('not called while registering the MCP server');
+        },
+        persistUserMessage: async () => {},
+        wireSession: () => undefined,
+      }),
+    ];
+    try {
+      // 普通会话: 全局关闭后不再拿到协同 server(后续新建任务不协同)
+      const plain = await getPiExtraSpawnConfig(providers, logger, {
+        sessionId: 'pi-4734-plain',
+        workingDir: '/repo',
+        vendorOptions: {},
+      });
+      expect(collabNames(plain)).toEqual([]);
+      plain?.disposeSessionCtx?.();
+
+      // 已属于 active Team 的 Worker: 下一轮重建描述时仍保留 cindy_orca 与 orca_worker_bridge
+      const worker = await getPiExtraSpawnConfig(providers, logger, {
+        sessionId: 'pi-4734-worker',
+        workingDir: '/repo',
+        vendorOptions: {
+          orcaRole: 'worker',
+          orcaWorkflowId: 'team-1',
+          orcaLeadSessionId: 'lead-1',
+          orcaWorkerId: 'worker-1',
+          orcaWorkerSessionId: 'pi-4734-worker',
+        },
+      });
+      expect(collabNames(worker)).toEqual(['cindy_orca', 'orca_worker_bridge']);
+      worker?.disposeSessionCtx?.();
+
+      const lead = await getPiExtraSpawnConfig(providers, logger, {
+        sessionId: 'pi-4734-lead',
+        workingDir: '/repo',
+        vendorOptions: { orcaRole: 'lead', orcaWorkflowId: 'team-1', orcaLeadSessionId: 'pi-4734-lead' },
+      });
+      expect(collabNames(lead)).toEqual(['cindy_orca', 'orca_worker_bridge']);
+      lead?.disposeSessionCtx?.();
+
+      // 项目级 / 冻结伙伴的显式停用仍优先于 active Team 豁免
+      const frozen = await getPiExtraSpawnConfig(providers, logger, {
+        sessionId: 'pi-4734-frozen',
+        workingDir: '/repo',
+        vendorOptions: { orcaRole: 'worker', [CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY]: ['collab'] },
+      });
+      expect(collabNames(frozen)).toEqual([]);
+      frozen?.disposeSessionCtx?.();
+    } finally {
+      isEnabled.mockRestore();
+    }
   });
 
   it('keeps the registered Pi MCP vendorOptions live for start_team Lead activation', async () => {
@@ -638,13 +755,14 @@ describe('piEnvironment per-session identity', () => {
     });
     const allowedSecret = 'allowed-remote-secret';
     const excludedSecret = 'excluded-remote-secret';
+    const vendorOptions: Record<string, unknown> = { [CODEX_ALLOWED_BUILTIN_PLUGIN_IDS_KEY]: [] };
     const config = await getPiExtraSpawnConfig([
       remoteProvider('allowed_remote', 'ALLOWED_REMOTE_TOKEN', allowedSecret),
       remoteProvider('excluded_remote', 'EXCLUDED_REMOTE_TOKEN', excludedSecret),
     ], noopLogger(), {
       sessionId: 'pi-bot-remote-allowlist',
       workingDir: '/repo',
-      vendorOptions: { [CODEX_ALLOWED_BUILTIN_PLUGIN_IDS_KEY]: [] },
+      vendorOptions,
       botMcpPolicy: {
         mode: 'allowlist',
         configured: ['allowed_remote'],
@@ -658,6 +776,7 @@ describe('piEnvironment per-session identity', () => {
     expect(config?.mcpBridge?.servers.map((server) => server.name)).toEqual([
       'allowed_remote',
     ]);
+    expect(vendorOptions[RUNTIME_MCP_NAMES_KEY]).toEqual(['allowed_remote']);
     expect(Object.values(config?.mcpEnv ?? {})).toContain(`Bearer ${allowedSecret}`);
     expect(Object.values(config?.mcpEnv ?? {})).not.toContain(`Bearer ${excludedSecret}`);
     config?.disposeSessionCtx?.();

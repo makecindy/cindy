@@ -98,7 +98,8 @@ export class CindyMakeManager {
   private readonly sourceJobs = new Map<string, SharedSourceJob>();
   private readonly projectJobs = new Map<string, Promise<unknown>>();
   private readonly projectUsers = new Map<string, number>();
-  private personalBuild: object | undefined;
+  private personalBuild: { sessionIds: string[]; isCurrent: () => boolean } | undefined;
+  private manualSourceSync = false;
   private readonly reports = new Map<
     string,
     { report: MakeDoctorReport; isCurrent: () => boolean }
@@ -114,20 +115,38 @@ export class CindyMakeManager {
   >();
   private sourceRevision = 0;
   private isProjectBusy: (root: string) => boolean = () => false;
+  private versionSwitching: () => boolean = () => false;
   private mergeSessionCurrent: () => boolean = () => true;
 
   setProjectBusyProbe(probe: (root: string) => boolean): void {
     this.isProjectBusy = probe;
   }
 
+  setVersionSwitchingProbe(probe: () => boolean): void {
+    this.versionSwitching = probe;
+  }
+
+  isVersionSwitching(): boolean {
+    return this.versionSwitching();
+  }
+
+  private hasPendingUpstreamMerge(): boolean {
+    const merge = this.states.upstreamMerge;
+    return !!(
+      merge &&
+      merge.status !== 'merged' &&
+      merge.status !== 'cancelled' &&
+      (merge.hasWorkspace === true ||
+        merge.cancellationRequested === true ||
+        merge.status !== 'failed')
+    );
+  }
+
   private projectInUse(root: string): boolean {
     return (
       (this.projectUsers.get(root) ?? 0) > 0 ||
       this.isProjectBusy(root) ||
-      (!!this.states.upstreamMerge &&
-        this.states.upstreamMerge.status !== 'merged' &&
-        (this.states.upstreamMerge.hasWorkspace === true ||
-          this.states.upstreamMerge.status !== 'failed'))
+      this.hasPendingUpstreamMerge()
     );
   }
   /** Active preparation/cleanup must finish before a local application version switch. */
@@ -138,19 +157,50 @@ export class CindyMakeManager {
       this.preparingTasks.size > 0 ||
       this.runningTaskActions.size > 0 ||
       this.projectUsers.size > 0 ||
+      this.manualSourceSync ||
       !!this.personalBuild ||
       this.projectJobs.size > 0
     );
   }
 
+  isPersonalBuildRunning(): boolean {
+    return !!this.personalBuild;
+  }
+
+  /** Reserve a manual source update before its first asynchronous step. */
+  claimManualSourceSync(): () => void {
+    if (this.personalBuild || this.manualSourceSync)
+      throw Object.assign(new Error('personal build or source sync is running'), { code: 'busy' });
+    this.manualSourceSync = true;
+    this.notify();
+    return () => {
+      this.manualSourceSync = false;
+      this.notify();
+    };
+  }
+
   /** Both entry points reserve synchronously, before any asynchronous build work. */
-  claimPersonalBuild(): () => void {
+  claimPersonalBuild(
+    sessionIds: readonly string[] = [],
+    isCurrent: () => boolean = () => true,
+  ): () => void {
+    if (this.versionSwitching())
+      throw Object.assign(new Error('version switch is running'), { code: 'busy' });
+    if (this.manualSourceSync)
+      throw Object.assign(new Error('manual source sync is running'), { code: 'busy' });
+    if (this.hasPendingUpstreamMerge())
+      throw Object.assign(new Error('upstream merge is pending'), { code: 'busy' });
+    if (this.projectUsers.size > 0)
+      throw Object.assign(new Error('source work is running'), { code: 'busy' });
     if (this.personalBuild)
       throw Object.assign(new Error('personal build is running'), { code: 'busy' });
-    const claim = {};
+    const claim = { sessionIds: [...new Set(sessionIds)], isCurrent };
     this.personalBuild = claim;
+    this.notify();
     return () => {
-      if (this.personalBuild === claim) this.personalBuild = undefined;
+      if (this.personalBuild !== claim) return;
+      this.personalBuild = undefined;
+      this.notify();
     };
   }
 
@@ -261,7 +311,10 @@ export class CindyMakeManager {
       );
     }
     if (input.signal.aborted) return input.cancelled();
-    if (this.states.upstreamMerge?.hasWorkspace && this.states.upstreamMerge.status !== 'merged')
+    if (
+      this.states.upstreamMerge?.cancellationRequested ||
+      (this.states.upstreamMerge?.hasWorkspace && this.states.upstreamMerge.status !== 'merged')
+    )
       throw Object.assign(new Error('upstream merge is pending'), { code: 'busy' });
     if (
       input.clearOnly &&
@@ -631,6 +684,9 @@ export class CindyMakeManager {
     };
     return structuredClone({
       ...this.states,
+      personalBuildSessionIds: this.personalBuild?.isCurrent()
+        ? this.personalBuild.sessionIds
+        : undefined,
       ...(this.states.upstreamMerge && !this.mergeSessionCurrent()
         ? {
             upstreamMerge: {

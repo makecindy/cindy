@@ -49,9 +49,9 @@ it.skipIf(!binary).each([false, true])('native full-access welcome refuses rogue
     await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
     const upstream = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
     proxy = await createAnthropicCompatProxy({ upstream, transformRequest: [],
-      requestGuard: ctx => codexTextOnlyRequestGuard(isCodexTextOnly(selectedHeaderValue(ctx.headers, STABLE_THREAD_ID_HEADERS) ?? ''), ctx),
+      requestGuard: ctx => codexTextOnlyRequestGuard(isCodexTextOnly(selectedHeaderValue(ctx.headers, STABLE_THREAD_ID_HEADERS) ?? ''), ctx, base => base === upstream),
       resolveWebSocketUpstream: () => upstream,
-      webSocketTransforms: ctx => codexTextOnlyWebSocketTransforms(() => isCodexTextOnly(selectedHeaderValue(ctx.headers, STABLE_THREAD_ID_HEADERS) ?? '')),
+      webSocketTransforms: ctx => codexTextOnlyWebSocketTransforms(() => isCodexTextOnly(selectedHeaderValue(ctx.headers, STABLE_THREAD_ID_HEADERS) ?? ''), true),
     });
     host = new AppServerHost({ logger, clientInfo: { name: 'cindy-native-text-only', version: '1' },
       createTransport: () => createStdioTransport({ binaryPath: binary!, cwd: root,

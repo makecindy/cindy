@@ -30,6 +30,7 @@ import { registerProviderHandlers, type ProviderHandlerDeps } from '../providerH
 import { clearModelVisibilityMirror, waitForModelVisibilityMirror, getModelVisibilityMirrorSnapshot } from '../../maker-host/model-visibility-mirror.js';
 import { extractIpcError } from '../../../renderer/utils/ipcError';
 import * as providerPresentation from '../../maker-host/provider-presentation-store.js';
+import * as llamaCppService from '../../local-model-runtime/llamaCppService.js';
 import { IpcHarness } from './helpers/ipcHarness.js';
 
 /** 最小 ProviderView 桩（只放断言要用的字段；handler 不解读结构，原样透传）。 */
@@ -114,6 +115,7 @@ function mountDb(): void {
 function makeDeps(over: Partial<ProviderHandlerDeps> = {}): ProviderHandlerDeps {
   return {
     listProviders: async () => [],
+    isOrganizationManagedProviderId: () => false,
     getModelVisibilityOverrides: () => ({}),
     refreshCatalog: vi.fn(async () => {}),
     codexCustomProviderConfigSignature,
@@ -1285,13 +1287,13 @@ describe('provider:custom:* CRUD handlers', () => {
     const saved = await listCustomProviders();
     expect(saved).toHaveLength(1);
     expect(saved[0]?.runtimes.codex?.models).toEqual([
-      { id: 'fetched-model', name: 'Fetched Model' },
+      { id: 'fetched-model', name: 'Fetched Model', discoveredMetadata: { name: 'Fetched Model' } },
     ]);
   });
 
   it.each([
     { ok: false, models: [] },
-    { ok: true, models: Array.from({ length: 257 }, (_, i) => ({ id: `m${i}`, name: 'Model' })) },
+    { ok: true, models: Array.from({ length: 10001 }, (_, i) => ({ id: `m${i}`, name: 'Model' })) },
     { ok: true, models: [{ id: 'x'.repeat(257), name: 'Model' }] },
     { ok: true, models: [{ id: 'model', name: 'x'.repeat(257) }] },
   ])('saves only the connection and key when discovery fails or exceeds bounds ($models.length models)', async (fetched) => {
@@ -2409,7 +2411,7 @@ describe('provider:custom:* CRUD handlers', () => {
     expect(deps.refreshCatalog).not.toHaveBeenCalled();
   });
 
-  it('rejects managed local provider ids on the generic create/update path', async () => {
+  it.each(['cindy-local-ollama', 'cindy-local-llamacpp'])('rejects %s on the generic create/update path', async (id) => {
     mountDb();
     const harness = new IpcHarness();
     const deps = makeDeps();
@@ -2418,16 +2420,105 @@ describe('provider:custom:* CRUD handlers', () => {
     await expect(
       harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_CREATE, {
         ...validConfig,
-        id: 'cindy-local-ollama',
+        id,
       }),
     ).rejects.toThrow(/PERMISSION_DENIED/);
     await expect(
       harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, {
         ...validConfig,
-        id: 'cindy-local-ollama',
+        id,
       }),
     ).rejects.toThrow(/PERMISSION_DENIED/);
     expect(await listCustomProviders()).toEqual([]);
+  });
+
+  it('reserves an active enterprise connection across every local mutation surface', async () => {
+    mountDb();
+    const harness = new IpcHarness();
+    const managed = {
+      id: 'byok-reserved', name: 'Enterprise', source: 'organization' as const,
+      auth: { method: 'managed' as const }, access: { kind: 'managed' as const },
+      agents: [], models: {}, routing: {},
+    };
+    const deps = makeDeps({
+      listProviders: async () => [{ ...managed, connected: false } as ProviderView],
+      currentOwnerSession: () => ({ dataOwnerId: 'owner-a', generation: 1 }),
+    });
+    registerProviderHandlers(harness, deps);
+    const config = { ...validConfig, id: managed.id };
+    deps.isOrganizationManagedProviderId = (providerId) => providerId === managed.id;
+
+    try {
+      await expect(
+        harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_CREATE, config),
+      ).rejects.toThrow(/PERMISSION_DENIED/);
+      await expect(
+        harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, config),
+      ).rejects.toThrow(/PERMISSION_DENIED/);
+      await expect(
+        harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_DELETE, config.id),
+      ).rejects.toThrow(/PERMISSION_DENIED/);
+      await expect(
+        harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_DISCONNECT, config.id),
+      ).rejects.toThrow(/PERMISSION_DENIED/);
+      await expect(
+        harness.invoke(MAKER_INVOKE.PROVIDER_OAUTH_LOGIN, config.id),
+      ).rejects.toThrow(/PERMISSION_DENIED/);
+      await expect(
+        harness.invoke(MAKER_INVOKE.PROVIDER_OAUTH_LOGOUT, config.id),
+      ).rejects.toThrow(/PERMISSION_DENIED/);
+      await expect(
+        harness.invoke(MAKER_INVOKE.PROVIDER_PRESENTATION_SET, {
+          providerId: config.id,
+          action: 'rename',
+          name: 'Must not persist',
+          dataOwnerId: 'owner-a',
+          ownerGeneration: 1,
+        }),
+      ).rejects.toThrow(/PERMISSION_DENIED/);
+      const priceTarget = {
+        providerId: config.id,
+        agent: 'codex' as const,
+        modelId: 'managed-model',
+      };
+      await expect(
+        harness.invoke(MAKER_INVOKE.MODEL_PRICE_OVERRIDE_SET, priceTarget, {
+          currency: 'USD',
+          inputPerMtok: 1,
+          outputPerMtok: 2,
+        }),
+      ).rejects.toThrow(/PERMISSION_DENIED/);
+      await expect(
+        harness.invoke(MAKER_INVOKE.MODEL_PRICE_OVERRIDE_RESET, priceTarget),
+      ).rejects.toThrow(/PERMISSION_DENIED/);
+      expect(await listCustomProviders()).toEqual([]);
+      expect(deps.refreshCatalog).not.toHaveBeenCalled();
+      expect(deps.oauthLogin).not.toHaveBeenCalled();
+      expect(deps.oauthLogout).not.toHaveBeenCalled();
+      expect(deps.writeModelPriceOverride).not.toHaveBeenCalled();
+      expect(deps.clearModelPriceOverride).not.toHaveBeenCalled();
+    } finally {
+      deps.isOrganizationManagedProviderId = () => false;
+    }
+  });
+
+  it('keeps a legacy personal byok-prefixed Provider editable and removable', async () => {
+    mountDb();
+    const harness = new IpcHarness();
+    const deps = makeDeps();
+    registerProviderHandlers(harness, deps);
+    const legacy = { ...validConfig, id: 'byok-legacy-personal' };
+    await createCustomProvider(legacy);
+
+    await expect(harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, {
+      ...legacy,
+      name: 'Updated legacy Provider',
+    })).resolves.toEqual({ ok: true });
+    expect((await getCustomProvider(legacy.id))?.name).toBe('Updated legacy Provider');
+    await expect(
+      harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_DELETE, legacy.id),
+    ).resolves.toEqual({ ok: true });
+    expect(await getCustomProvider(legacy.id)).toBeNull();
   });
 
   it('reserves xai for new providers while preserving edits to an existing legacy row', async () => {
@@ -3257,6 +3348,65 @@ describe('provider:custom:* CRUD handlers', () => {
     );
   });
 
+  it.each(['switch-account', 'stop-failed', 'success'] as const)(
+    'stages llama.cpp deletion only after stopping with the same owner (%s)', async (outcome) => {
+      mountDb();
+      const harness = new IpcHarness();
+      const owner = { dataOwnerId: 'owner-a', generation: 1 };
+      const deps = makeDeps({
+        currentOwnerSession: () => ({ ...owner }),
+        stageClearProviderDisableOverrides: vi.fn(() => () => true),
+        stageClearProviderModelPriceOverrides: vi.fn(() => () => true),
+      });
+      registerProviderHandlers(harness, deps);
+      const id = 'cindy-local-llamacpp';
+      await createCustomProvider({ ...validConfig, id });
+      let release!: () => void;
+      const stop = vi.spyOn(llamaCppService, 'stopManagedLlamaCppService').mockImplementation(async (remove) => {
+        await new Promise<void>((resolve) => { release = resolve; });
+        if (outcome === 'stop-failed') throw new Error('STOP_TIMEOUT');
+        await remove();
+      });
+      const deletion = harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_DELETE, id).catch(error => error);
+      await vi.waitFor(() => expect(stop).toHaveBeenCalledOnce());
+      const writes = [deps.stageClearProviderDisableOverrides, deps.stageClearProviderModelPriceOverrides,
+        deps.removeOAuthCredentials, deps.removeCustomProviderKey, deps.removeCustomProviderHeaders];
+      for (const write of writes) expect(write).not.toHaveBeenCalled();
+      if (outcome === 'switch-account') owner.generation++;
+      release();
+      const result = await deletion;
+      if (outcome === 'success') {
+        expect(result).toEqual({ ok: true });
+        expect(await getCustomProvider(id)).toBeNull();
+        expect(deps.stageClearProviderDisableOverrides).toHaveBeenCalledOnce();
+        expect(deps.stageClearProviderModelPriceOverrides).toHaveBeenCalledOnce();
+      } else {
+        expect(result).toEqual(expect.objectContaining({ message: expect.stringContaining('LLAMACPP_STOP_FAILED') }));
+        for (const write of writes) expect(write).not.toHaveBeenCalled();
+        expect(await getCustomProvider(id)).not.toBeNull();
+      }
+    },
+  );
+
+  it('waits for llama.cpp cleanup before deletion and retains the connection on failure', async () => {
+    mountDb();
+    const harness = new IpcHarness();
+    registerProviderHandlers(harness, makeDeps());
+    const id = 'cindy-local-llamacpp';
+    await createCustomProvider({ ...validConfig, id });
+    const stop = vi.spyOn(llamaCppService, 'stopManagedLlamaCppService').mockRejectedValueOnce(new Error('STOP_TIMEOUT'));
+    await expect(harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_DELETE, id)).rejects.toThrow('LLAMACPP_STOP_FAILED');
+    expect(await getCustomProvider(id)).not.toBeNull();
+    let release!: () => void;
+    stop.mockImplementation(async (remove) => { await new Promise<void>((resolve) => { release = resolve; }); await remove(); });
+    const deletion = harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_DELETE, id);
+    await vi.waitFor(() => expect(stop).toHaveBeenCalledTimes(2));
+    expect(await getCustomProvider(id)).not.toBeNull();
+    release();
+    await deletion;
+    expect(await getCustomProvider(id)).toBeNull();
+  });
+
   it('does not delete a provider when OAuth credential removal fails', async () => {
     mountDb();
     const harness = new IpcHarness();
@@ -3958,6 +4108,41 @@ describe('provider:oauth mutation ordering', () => {
     owner.generation--;
     await harness.invokeFrom(101, MAKER_INVOKE.PROVIDER_OAUTH_CANCEL, 'account-a', { releaseOwner: true, ownerId: 'attempt-a' });
     progress('https://auth.openai.com/authorize?late=1');
+    expect(send).toHaveBeenCalledTimes(1);
+    finish({ ok: false });
+    await login;
+  });
+
+  it('routes Grok device codes only to the owning renderer', async () => {
+    const harness = new IpcHarness();
+    const send = vi.fn();
+    let progress!: (code: { userCode: string; verificationUrl: string; expiresAt: number }) => void;
+    let finish!: (result: { ok: boolean }) => void;
+    let receivedMethod: string | undefined;
+    const owner = { dataOwnerId: 'owner-a', generation: 1 };
+    registerProviderHandlers(harness, makeDeps({
+      currentOwnerSession: () => ({ ...owner }),
+      assertTrustedSender: (event: any) => { event.sender.send = send; },
+      oauthLogin: async (_id, _current, _onBrowserUrl, method, onDeviceCode) => {
+        receivedMethod = method;
+        progress = onDeviceCode!;
+        return new Promise(resolve => { finish = resolve; });
+      },
+    }));
+    await expect(harness.invokeFrom(101, MAKER_INVOKE.PROVIDER_OAUTH_LOGIN,
+      'grok-account', { method: 'device' })).rejects.toThrow(/INVALID_PARAMS/);
+    const login = harness.invokeFrom(101, MAKER_INVOKE.PROVIDER_OAUTH_LOGIN, 'grok-account', {
+      ownerId: 'attempt-grok', method: 'device',
+    });
+    await vi.waitFor(() => expect(progress).toBeDefined());
+    expect(receivedMethod).toBe('device');
+    progress({ userCode: 'ABCD-1234', verificationUrl: 'https://auth.x.ai/device', expiresAt: 12345 });
+    expect(send).toHaveBeenCalledExactlyOnceWith(MAKER_PUSH.PROVIDER_OAUTH_PROGRESS, {
+      providerId: 'grok-account', phase: 'device-code', userCode: 'ABCD-1234',
+      verificationUrl: 'https://auth.x.ai/device', expiresAt: 12345,
+    });
+    owner.generation++;
+    progress({ userCode: 'LATE-1234', verificationUrl: 'https://auth.x.ai/device', expiresAt: 12345 });
     expect(send).toHaveBeenCalledTimes(1);
     finish({ ok: false });
     await login;

@@ -6,41 +6,41 @@
  * 只锁「token 表达式 / 圆角 / 字号字重 / 尺寸档 / 禁用态」这些设计合同，不锁实现细节。
  * 状态值本身是否在各主题下可区分由 themes/__tests__/buttonStateContrast.test.ts 守。
  */
-import { cleanup, render, screen } from '@testing-library/react';
-import { afterEach, describe, expect, it } from 'vitest';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { Button, type ButtonVariant } from '../button';
 
 /** 合同表：每个变体必须出现的 token 表达式。改绑 token 会在这里红。 */
 const CONTRACT: Record<ButtonVariant, string[]> = {
   primary: [
-    'bg-[var(--surface-chip)]',
+    '[--button-face-bg:var(--surface-chip)]',
     'text-[var(--text-primary)]',
-    'enabled:hover:bg-[var(--button-primary-hover)]',
-    'enabled:active:bg-[var(--button-primary-pressed)]',
+    'enabled:[&:not([aria-disabled=true])]:hover:[--button-face-bg:var(--button-primary-hover)]',
+    'enabled:[&:not([aria-disabled=true])]:active:[--button-face-bg:var(--button-primary-pressed)]',
   ],
   secondary: [
-    'bg-[var(--surface-elevated)]',
-    'border-[var(--border-default)]',
+    '[--button-face-bg:var(--surface-elevated)]',
+    '[--button-face-border:var(--border-default)]',
     'text-[var(--text-primary)]',
-    'enabled:hover:bg-[var(--button-secondary-hover)]',
-    'enabled:active:bg-[var(--button-secondary-pressed)]',
+    'enabled:[&:not([aria-disabled=true])]:hover:[--button-face-bg:var(--button-secondary-hover)]',
+    'enabled:[&:not([aria-disabled=true])]:active:[--button-face-bg:var(--button-secondary-pressed)]',
   ],
   cta: [
-    'bg-[var(--accent-cta-bg-pure)]',
+    '[--button-face-bg:var(--accent-cta-bg-pure)]',
     'text-[var(--accent-pure-cta-fg)]',
-    'enabled:hover:bg-[var(--button-cta-hover)]',
-    'enabled:active:bg-[var(--button-cta-pressed)]',
+    'enabled:[&:not([aria-disabled=true])]:hover:[--button-face-bg:var(--button-cta-hover)]',
+    'enabled:[&:not([aria-disabled=true])]:active:[--button-face-bg:var(--button-cta-pressed)]',
   ],
 };
 
 /** 一律禁止出现的写法。 */
 const FORBIDDEN = [
-  'hover:opacity',        // G2：禁用透明度 hover
+  'hover:opacity', // G2：禁用透明度 hover
   'settings-btn-secondary', // G5：不继承设置页域 alias
-  'h-10',                 // G1：按钮不设 40px 档
+  'h-10', // G1：按钮不设 40px 档
   'h-[40px]',
-  'rounded-lg',           // §5：按钮一律胶囊
+  'rounded-lg', // §5：按钮一律胶囊
   'rounded-xl',
 ];
 
@@ -70,13 +70,15 @@ describe('Button 样式合同', () => {
     });
   }
 
-  it('尺寸只有 32 / 36 两档', () => {
+  it('尺寸为 28 / 32 / 36 三档', () => {
     render(
       <>
+        <Button size="sm">Sm</Button>
         <Button size="md">Md</Button>
         <Button size="lg">Lg</Button>
       </>,
     );
+    expect(classOf('Sm')).toContain('h-7');
     expect(classOf('Md')).toContain('h-8');
     expect(classOf('Lg')).toContain('h-9');
   });
@@ -89,16 +91,80 @@ describe('Button 样式合同', () => {
     expect(cls).toContain('disabled:opacity-60');
   });
 
+  it('loading retains the action name, hides its label and blocks duplicate submission', () => {
+    const onClick = vi.fn();
+    const { rerender } = render(
+      <Button loading onClick={onClick}>
+        Save
+      </Button>,
+    );
+    const button = screen.getByRole('button', { name: 'Save' }) as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+    expect(button.getAttribute('aria-busy')).toBe('true');
+    expect(button.querySelector('.opacity-0')?.textContent).toBe('Save');
+    fireEvent.click(button);
+    expect(onClick).not.toHaveBeenCalled();
+    rerender(<Button onClick={onClick}>Save</Button>);
+    fireEvent.click(button);
+    expect(onClick).toHaveBeenCalledOnce();
+    expect(button.querySelector('.opacity-0')).toBeNull();
+  });
+
+  it('a progress-view action remains usable while busy, unless explicitly disabled', () => {
+    const onClick = vi.fn();
+    const { rerender } = render(
+      <Button loading allowWhileLoading onClick={onClick}>
+        View progress
+      </Button>,
+    );
+    const button = screen.getByRole('button', { name: 'View progress' }) as HTMLButtonElement;
+    fireEvent.click(button);
+    expect(onClick).toHaveBeenCalledOnce();
+    expect(button.querySelector('.opacity-0')?.textContent).toBe('View progress');
+    rerender(
+      <Button loading allowWhileLoading disabled onClick={onClick}>
+        View progress
+      </Button>,
+    );
+    fireEvent.click(button);
+    expect(onClick).toHaveBeenCalledOnce();
+  });
+
+  it('compact exceptions and danger treatments share the same Button contract', () => {
+    render(
+      <>
+        <Button size="xxs" compact>
+          Resume
+        </Button>
+        <Button size="xs" tone="danger">
+          Delete
+        </Button>
+        <Button palette="confirmation" tone="danger-solid">
+          Confirm
+        </Button>
+      </>,
+    );
+    expect(classOf('Resume')).toContain('h-[22px]');
+    expect(classOf('Delete')).toContain('h-6');
+    expect(classOf('Delete')).toContain('text-[var(--text-danger)]');
+    expect(classOf('Confirm')).toContain('[--button-face-bg:hsl(var(--destructive))]');
+    expect(classOf('Confirm')).not.toContain('[--button-face-bg:var(--confirm-btn-primary-bg)]');
+  });
+
   it('禁用态不得再触发 hover / active 换色（hover 一律带 enabled: 前缀）', () => {
     // CSS 的 :hover 对 disabled 元素照样匹配。不带 enabled: 前缀时，禁用按钮
     // 鼠标悬停仍会换底色——旧 PillButton 根本没有 hover，属迁移引入的行为回归。
     for (const variant of Object.keys(CONTRACT) as ButtonVariant[]) {
       cleanup();
-      render(<Button variant={variant} disabled>{variant}</Button>);
+      render(
+        <Button variant={variant} disabled>
+          {variant}
+        </Button>,
+      );
       const cls = classOf(variant);
       const bare = cls
         .split(/\s+/)
-        .filter((c) => (c.startsWith('hover:') || c.startsWith('active:')));
+        .filter((c) => c.startsWith('hover:') || c.startsWith('active:'));
       expect(bare, `${variant} 存在无 enabled: 前缀的交互态`).toEqual([]);
     }
   });

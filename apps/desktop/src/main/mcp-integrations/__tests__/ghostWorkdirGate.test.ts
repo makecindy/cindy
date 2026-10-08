@@ -24,7 +24,8 @@ import type {
 } from '../../cindy-brain/ghostSetupCoordinator';
 import { t } from '../../i18n';
 import type { CindyGhostsHostDeps } from '../ghost';
-import type { InstalledGhost } from '../../../shared/ghost';
+import type { GhostInstallConsentPrompt } from '../../cindy-brain/ghostInstallConsent';
+import type { InstalledGhost, GhostSetupAssessment } from '../../../shared/ghost';
 
 const tmpUserData = fs.mkdtempSync(path.join(os.tmpdir(), 'ghost-workdir-gate-'));
 const prefsFile = () => path.join(tmpUserData, 'ghost-workdir-prefs.json');
@@ -149,7 +150,7 @@ const WORKDIR = '/proj/alpha';
 const listMock = vi.fn<() => unknown[]>(() => []);
 const activeSessionAvailableMock = vi.fn<(ghostId: string) => boolean>(() => true);
 const dispatchMock = vi.fn(async () => ({ ok: true as const, result: 'done' }));
-const setupAssessmentMock = vi.fn((_ghostId: string) => {
+const setupAssessmentMock = vi.fn((_ghostId: string): GhostSetupAssessment => {
   void _ghostId;
   return {
     state: 'ready' as const,
@@ -247,6 +248,9 @@ vi.mock('../../cindy-media/ledger.js', () => ({
 vi.mock('../../cindy-media/invocationService.js', () => ({
   callCindyMedia: callCindyMediaMock,
 }));
+// Image ingestion has its own publishImage tests; keep this permission-gate
+// fixture isolated from the real blob store and database dependency graph.
+vi.mock('../../cindy-media/publishImage.js', () => ({ publishImage: vi.fn() }));
 vi.mock('../../cindy-media/attachmentGrantGate.js', () => ({ chatAttachmentOrigin: vi.fn() }));
 vi.mock('../ghostAttachmentResolve.js', () => ({
   resolveGhostAttachmentUrl: resolveGhostAttachmentUrlMock,
@@ -277,23 +281,22 @@ function chipGhost(
   };
 }
 
-/** Slot-only plugin fixture: the simulator tools belong to the Host MCP. */
+/** A manual-only plugin has no executable tools. */
 function manualOnlyGhost(): InstalledGhost {
   return {
     enabled: true,
-    dir: path.join(tmpUserData, 'ios-simulator'),
+    dir: path.join(tmpUserData, 'workflow-guide'),
     approval: { state: 'approved', revision: '00000000-0000-4000-8000-000000000001' },
     manifest: {
       schemaVersion: 3,
-      id: 'ios-simulator',
-      name: 'iOS Simulator',
+      id: 'workflow-guide',
+      name: 'Workflow Guide',
       version: '1.0.0',
       kind: 'chip',
       entry: 'main.js',
-      iosSimulator: true,
-      whenToUse: 'Build and test an iOS app in Cindy',
+      whenToUse: 'Read project build instructions',
       manual: {
-        items: [{ dir: 'docs/workflow', name: 'ios-simulator', description: 'Simulator workflow' }],
+        items: [{ dir: 'docs/workflow', name: 'workflow-guide', description: 'Build workflow' }],
       },
     },
   };
@@ -307,6 +310,7 @@ function makeDeps(
   sessionInstanceId: string | null = sessionId ? `${sessionId}-instance` : null,
   vendorOptions: Record<string, unknown> = {},
   pluginMarket?: CindyGhostsHostDeps['pluginMarket'],
+  requestHostPermission?: CindyGhostsHostDeps['requestHostPermission'],
 ) {
   const ctx = {
     agentKind,
@@ -322,13 +326,14 @@ function makeDeps(
     pluginMarket,
     getAppVersion: appVersionMock,
     getLiveSessionGrantState: liveGrantStateMock,
+    ...(requestHostPermission ? { requestHostPermission } : {}),
   });
 }
 
 function clearAllPrefs(): void {
   // 把测试涉及的目录 × id 全部清一遍(幂等;清空后 store 自动删文件)。
   for (const dir of [WORKDIR, `${WORKDIR} `, '/proj/beta', 'E:/Repo']) {
-    for (const id of ['art', 'other', 'missing', 'sleeping', 'account', 'ios-simulator']) {
+    for (const id of ['art', 'other', 'missing', 'sleeping', 'account', 'workflow-guide']) {
       setGhostDisabledForWorkdir(dir, id, false);
     }
   }
@@ -547,6 +552,9 @@ describe('Forge session workdir gate', () => {
     expect(forgeInstallPackageMock).toHaveBeenCalledWith(cindyPath, {
       ghostId: 'demo',
       packageSha256: createHash('sha256').update(bytes).digest('hex'),
+      // Agent 安装的插件确认投给调用所在的任务。
+      consentPrompt: expect.any(Function),
+      mutationOwner: { mode: 'local', dataOwnerId: 'test', generation: 0 },
     });
     expect(result).toMatchObject({
       ok: true,
@@ -555,6 +563,23 @@ describe('Forge session workdir gate', () => {
       enabled: true,
     });
     expect(completeForgePackStagingMock).not.toHaveBeenCalled();
+  });
+
+  it('releases the owner lease before waiting for install confirmation', async () => {
+    const waiting = new Promise<never>(() => undefined);
+    packGhostDirMock.mockResolvedValueOnce({
+      ok: true,
+      buf: Buffer.from('packed'),
+      cindyPath: path.join(WORKDIR, 'plugin-src', 'demo-1.0.0.cindy'),
+      manifest: { id: 'demo', name: 'Demo', version: '1.0.0' },
+    });
+    forgeInstallPackageMock.mockImplementationOnce(() => waiting);
+
+    void makeDeps().forgeInstall({ dir: path.join(WORKDIR, 'plugin-src') });
+    await vi.waitFor(() => {
+      expect(forgeInstallPackageMock).toHaveBeenCalledOnce();
+    });
+    expect(releaseMutationMock).toHaveBeenCalledOnce();
   });
 
   it('does not suggest organization publishing to a personal account after default pack', async () => {
@@ -1171,6 +1196,7 @@ describe('写路径 roundtrip(真实存储,tmp userData)', () => {
 
 describe('connect_account shares Host live plugin policy', () => {
   it('passes dynamically discovered plugins to Host without treating builtin toolsets as plugin grants', async () => {
+    isAuthorizationSessionMock.mockResolvedValueOnce(true);
     const deps = makeDeps('claude-code', 'bot-session', 'bot-instance', {
       __cindyAllowedBuiltinPluginIds: ['memory', 'xdt_helper'],
     });
@@ -1178,6 +1204,88 @@ describe('connect_account shares Host live plugin policy', () => {
     expect(authorizationRequestMock).toHaveBeenCalledWith('bot-session', { kind: 'plugin', id: 'art' });
     await deps.connectAccount!({ kind: 'host', id: 'grok' });
     expect(authorizationRequestMock).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('connect_account ordinary task entry', () => {
+  it('keeps Host-derived GitHub login on its existing path without a cloud-only adapter', async () => {
+    listMock.mockReturnValue([chipGhost('cindy-github')]);
+    const signal = new AbortController().signal;
+    expect(await makeDeps().connectAccount!({ kind: 'plugin', id: 'cindy-github', reauthorize: true }, signal))
+      .toMatchObject({ ok: false, errorCode: 'PLUGIN_CONNECTION_METHOD_REQUIRED' });
+    expect(ensureReadyMock).not.toHaveBeenCalled();
+    expect(dispatchMock).not.toHaveBeenCalled();
+    expect(grantAttachmentsMock).not.toHaveBeenCalled();
+  });
+  it('blocks disabled GitHub before offering its existing connection method', async () => {
+    listMock.mockReturnValue([chipGhost('cindy-github')]);
+    setGhostDisabledForWorkdir(WORKDIR, 'cindy-github', true);
+    expect(await makeDeps().connectAccount!({ kind: 'plugin', id: 'cindy-github' }))
+      .toMatchObject({ ok: false });
+    setGhostDisabledForWorkdir(WORKDIR, 'cindy-github', false);
+    expect(await makeDeps().connectAccount!({ kind: 'plugin', id: 'cindy-github' }))
+      .toMatchObject({ ok: false, errorCode: 'PLUGIN_CONNECTION_METHOD_REQUIRED' });
+    expect(dispatchMock).not.toHaveBeenCalled();
+  });
+
+  const configured = {
+    state: 'ready' as const, revision: 1,
+    groups: [{ id: 'account', mode: 'any_of' as const, items: [{
+      ref: 'secret:account', kind: 'oauth' as const, label: 'Account', state: 'satisfied' as const,
+      actions: [{ id: 'oauth_connect:secret:account', kind: 'oauth_connect' as const }],
+    }] }],
+  };
+
+  it('uses the normal setup card without a teammate, business call, or attachment grant', async () => {
+    setupAssessmentMock.mockReturnValue(configured);
+    const signal = new AbortController().signal;
+    await expect(makeDeps().connectAccount!({ kind: 'plugin', id: 'art' }, signal))
+      .resolves.toMatchObject({ ok: true, status: 'ready', ghostId: 'art' });
+    expect(ensureReadyMock).toHaveBeenCalledWith(expect.objectContaining({
+      ghostId: 'art', workingDir: WORKDIR, signal,
+    }));
+    expect(ensureReadyMock.mock.calls[0][0].tool).toBeUndefined();
+    expect(authorizationRequestMock).not.toHaveBeenCalled();
+    expect(dispatchMock).not.toHaveBeenCalled();
+    expect(grantAttachmentsMock).not.toHaveBeenCalled();
+  });
+
+  it('passes explicit reconnect and cancellation through the normal waiter', async () => {
+    setupAssessmentMock.mockReturnValue(configured);
+    ensureReadyMock.mockResolvedValueOnce({ ok: false, errorCode: 'SETUP_CANCELLED', message: 'Cancelled' });
+    await expect(makeDeps().connectAccount!({ kind: 'plugin', id: 'art', reauthorize: true }))
+      .resolves.toMatchObject({ ok: false, errorCode: 'SETUP_CANCELLED' });
+    expect(ensureReadyMock.mock.calls[0][0].reauthorize).toBe(true);
+  });
+
+  it('rejects an already aborted request before opening a card', async () => {
+    const controller = new AbortController(); controller.abort();
+    await expect(makeDeps().connectAccount!({ kind: 'plugin', id: 'art' }, controller.signal))
+      .resolves.toMatchObject({ ok: false, errorCode: 'SETUP_CANCELLED' });
+    expect(ensureReadyMock).not.toHaveBeenCalled();
+  });
+
+  it('keeps unavailable plugins outside the connection entry', async () => {
+    setGhostDisabledForWorkdir(WORKDIR, 'art', true);
+    await expect(makeDeps().connectAccount!({ kind: 'plugin', id: 'art' }))
+      .resolves.toMatchObject({ ok: false, errorCode: 'GHOST_DISABLED_IN_WORKDIR' });
+    expect(ensureReadyMock).not.toHaveBeenCalled();
+  });
+
+  it('rechecks visibility after the user completes setup', async () => {
+    setupAssessmentMock.mockReturnValue(configured);
+    ensureReadyMock.mockImplementationOnce(async () => {
+      setGhostDisabledForWorkdir(WORKDIR, 'art', true);
+      return { ok: true, assessment: configured };
+    });
+    await expect(makeDeps().connectAccount!({ kind: 'plugin', id: 'art' }))
+      .resolves.toMatchObject({ ok: false, errorCode: 'GHOST_DISABLED_IN_WORKDIR' });
+  });
+
+  it('does not claim Host-managed platform login from an empty ready assessment', async () => {
+    await expect(makeDeps().connectAccount!({ kind: 'plugin', id: 'art' }))
+      .resolves.toMatchObject({ ok: false, errorCode: 'PLUGIN_CONNECTION_METHOD_REQUIRED' });
+    expect(ensureReadyMock).not.toHaveBeenCalled();
   });
 });
 
@@ -1400,6 +1508,24 @@ describe('花名册 / ghost_list 过滤', () => {
   });
 });
 
+describe('Retired plugin discovery', () => {
+  it.each(['claude-code', 'codex', 'pi'] as const)('%s hides retired plugins and rejects stale calls without spawning', async (agentKind) => {
+    const ghost = manualOnlyGhost();
+    ghost.enabled = false;
+    ghost.retirement = { id: 'embedded-ios-simulator', eligible: true, unread: true };
+    listMock.mockReturnValue([ghost]);
+    const deps = makeDeps(agentKind);
+    expect(deps.getRosterItems?.()).toEqual([]);
+    expect(getGhostRosterPrompt({ workingDir: WORKDIR })).toBe('');
+    await expect(deps.listAwakeGhosts()).resolves.toEqual([]);
+    await expect(deps.getAwakeGhost(ghost.manifest.id)).resolves.toMatchObject({ ok: false, errorCode: 'GHOST_RETIRED' });
+    await expect(deps.readGhostManual({ ghostId: ghost.manifest.id })).resolves.toMatchObject({ ok: false, errorCode: 'GHOST_RETIRED' });
+    await expect(deps.callGhostTool({ ghostId: ghost.manifest.id, tool: 'run', args: {} })).resolves.toMatchObject({ ok: false, errorCode: 'GHOST_RETIRED' });
+    expect(ensureReadyMock).not.toHaveBeenCalled();
+    expect(dispatchMock).not.toHaveBeenCalled();
+  });
+});
+
 describe('Manual-only Ghost discovery and read gates', () => {
   it.each(['claude-code', 'codex', 'pi'] as const)(
     '%s discovers Manual-only plugins through both rosters, list and info',
@@ -1408,19 +1534,19 @@ describe('Manual-only Ghost discovery and read gates', () => {
       listMock.mockReturnValue([ghost, chipGhost('art')]);
       const deps = makeDeps(agentKind);
       const roster = deps.getRosterItems?.() ?? [];
-      expect(roster.map(({ id }) => id)).toEqual(['ios-simulator', 'art']);
+      expect(roster.map(({ id }) => id)).toEqual(['workflow-guide', 'art']);
       expect(roster[0]).toEqual({
-        id: 'ios-simulator', name: 'iOS Simulator', recall: ghost.manifest.whenToUse,
+        id: 'workflow-guide', name: 'Workflow Guide', recall: ghost.manifest.whenToUse,
       });
       const ghosts = await deps.listAwakeGhosts();
       expect(ghosts).toHaveLength(2);
       expect(ghosts[0]).toEqual({
         ...roster[0],
         tools: [],
-        manual: [{ name: 'ios-simulator', description: 'Simulator workflow' }],
+        manual: [{ name: 'workflow-guide', description: 'Build workflow' }],
         setup: { state: 'ready', revision: 0, groups: [] },
       });
-      await expect(deps.getAwakeGhost('ios-simulator')).resolves.toEqual({ ok: true, ghost: ghosts[0] });
+      await expect(deps.getAwakeGhost('workflow-guide')).resolves.toEqual({ ok: true, ghost: ghosts[0] });
       const prompt = getGhostRosterPrompt({ workingDir: WORKDIR });
       const server = createCindyGhostsMcpServer(deps) as unknown as {
         _registeredTools: Record<string, { description?: string }>;
@@ -1429,7 +1555,7 @@ describe('Manual-only Ghost discovery and read gates', () => {
       expect(promptItems).toContainEqual({ ...roster[0], command: '' });
       expect(server._registeredTools.ghost_list.description).toContain(prompt);
       expect(getGhostRosterPrompt({ workingDir: WORKDIR })).toBe(prompt);
-      expect(prompt).not.toContain('Simulator workflow');
+      expect(prompt).not.toContain('Build workflow');
       expect(JSON.stringify(ghosts)).not.toContain('docs/workflow');
       expect(dispatchMock).not.toHaveBeenCalled();
     },
@@ -1440,18 +1566,18 @@ describe('Manual-only Ghost discovery and read gates', () => {
     if (tools !== undefined) ghost.manifest.tools = tools;
     const unitDir = path.join(ghost.dir, 'docs', 'workflow');
     await fs.promises.mkdir(path.join(unitDir, 'references'), { recursive: true });
-    await fs.promises.writeFile(path.join(unitDir, 'MANUAL.md'), '# Simulator workflow');
+    await fs.promises.writeFile(path.join(unitDir, 'MANUAL.md'), '# Build workflow');
     await fs.promises.writeFile(path.join(unitDir, 'references', 'build.md'), '# Build guide');
     listMock.mockReturnValue([ghost]);
     const deps = makeDeps();
-    await expect(deps.readGhostManual({ ghostId: 'ios-simulator' })).resolves.toEqual({
-      ok: true, manual: [{ name: 'ios-simulator', description: 'Simulator workflow' }], content: '',
+    await expect(deps.readGhostManual({ ghostId: 'workflow-guide' })).resolves.toEqual({
+      ok: true, manual: [{ name: 'workflow-guide', description: 'Build workflow' }], content: '',
     });
     for (const [manualPath, content] of [
-      ['ios-simulator', '# Simulator workflow'],
-      ['ios-simulator/references/build.md', '# Build guide'],
+      ['workflow-guide', '# Build workflow'],
+      ['workflow-guide/references/build.md', '# Build guide'],
     ]) {
-      await expect(deps.readGhostManual({ ghostId: 'ios-simulator', path: manualPath })).resolves.toEqual({
+      await expect(deps.readGhostManual({ ghostId: 'workflow-guide', path: manualPath })).resolves.toEqual({
         ok: true, manual: [], content,
       });
     }
@@ -1471,10 +1597,10 @@ describe('Manual-only Ghost discovery and read gates', () => {
     expect(deps.getRosterItems?.()).toEqual([]);
     expect(getGhostRosterPrompt({ workingDir: WORKDIR })).toBe('');
     await expect(deps.listAwakeGhosts()).resolves.toEqual([]);
-    await expect(deps.getAwakeGhost('ios-simulator')).resolves.toMatchObject({
+    await expect(deps.getAwakeGhost('workflow-guide')).resolves.toMatchObject({
       ok: false, errorCode: 'GHOST_NOT_FOUND',
     });
-    await expect(deps.readGhostManual({ ghostId: 'ios-simulator' })).resolves.toMatchObject({
+    await expect(deps.readGhostManual({ ghostId: 'workflow-guide' })).resolves.toMatchObject({
       ok: false, errorCode: 'GHOST_NOT_FOUND', manual: [], content: '',
     });
     expect(dispatchMock).not.toHaveBeenCalled();
@@ -1497,23 +1623,23 @@ describe('Manual-only Ghost discovery and read gates', () => {
     const ghost = manualOnlyGhost();
     listMock.mockReturnValue([ghost]);
     const deps = makeDeps();
-    await expect(deps.getAwakeGhost('ios-simulator')).resolves.toMatchObject({ ok: true });
+    await expect(deps.getAwakeGhost('workflow-guide')).resolves.toMatchObject({ ok: true });
     ghost.enabled = state.enabled;
     listMock.mockReturnValue(state.exists ? [ghost] : []);
     activeSessionAvailableMock.mockReturnValue(state.available);
-    setGhostDisabledForWorkdir(WORKDIR, 'ios-simulator', state.disabled);
+    setGhostDisabledForWorkdir(WORKDIR, 'workflow-guide', state.disabled);
     expect(deps.getRosterItems?.()).toEqual([]);
     expect(getGhostRosterPrompt({ workingDir: WORKDIR })).toBe('');
     await expect(deps.listAwakeGhosts()).resolves.toEqual([]);
-    await expect(deps.getAwakeGhost('ios-simulator')).resolves.toMatchObject({
+    await expect(deps.getAwakeGhost('workflow-guide')).resolves.toMatchObject({
       ok: false, errorCode: state.errorCode,
     });
-    for (const manualPath of [undefined, 'ios-simulator']) {
-      await expect(deps.readGhostManual({ ghostId: 'ios-simulator', path: manualPath })).resolves.toMatchObject({
+    for (const manualPath of [undefined, 'workflow-guide']) {
+      await expect(deps.readGhostManual({ ghostId: 'workflow-guide', path: manualPath })).resolves.toMatchObject({
         ok: false, errorCode: state.errorCode, manual: [], content: '',
       });
     }
-    await expect(deps.callGhostTool({ ghostId: 'ios-simulator', tool: 'check_environment', args: {} })).resolves.toMatchObject({
+    await expect(deps.callGhostTool({ ghostId: 'workflow-guide', tool: 'check_environment', args: {} })).resolves.toMatchObject({
       ok: false, errorCode: state.errorCode,
     });
     expect(ensureReadyMock).not.toHaveBeenCalled();
@@ -1529,7 +1655,7 @@ describe('Manual-only Ghost discovery and read gates', () => {
   it.each(['run', 'list_tools', 'check_environment'])('does not grant the Manual-only plugin tool %s or start setup/handoffs', async (tool) => {
     listMock.mockReturnValue([manualOnlyGhost()]);
     await expect(makeDeps().callGhostTool({
-      ghostId: 'ios-simulator', tool, args: {},
+      ghostId: 'workflow-guide', tool, args: {},
       attachments: [path.join(outsideDir, 'input.png')], dir: outsideDir, saveDir: outsideDir,
     })).resolves.toMatchObject({ ok: false, errorCode: 'TOOL_NOT_FOUND' });
     expect(ensureReadyMock).not.toHaveBeenCalled();
@@ -2884,14 +3010,18 @@ it.each([false, true])('only marks a teammate setup plan as reauthorization with
 });
 
 describe('market install live authority', () => {
-  function marketHarness(agentKind: TestAgentKind = 'claude-code') {
+  type InstallContext = { consent: { prompt: GhostInstallConsentPrompt; initiator: string }; assertCurrent?: () => void };
+  function marketHarness(
+    agentKind: TestAgentKind = 'claude-code',
+    requestHostPermission?: CindyGhostsHostDeps['requestHostPermission'],
+  ) {
     const ghost = { manifest: { id: 'mail-suite', name: 'Mail', version: '1' }, enabled: true };
     const market = {
       snapshot: vi.fn(async () => ({ items: [], unavailableReason: null, customSourceNames: [], unavailableCustomSourceNames: [] })),
       detail: vi.fn(async () => ({ ghostId: 'mail-suite', releaseId: 'r1', manifest: ghost.manifest })),
-      install: vi.fn(async (_id: string, _options: unknown, guard?: () => void) => { guard?.(); return { ghost }; }),
+      install: vi.fn(async (_id: string, _options: unknown, context: InstallContext) => { context.assertCurrent?.(); return { ghost }; }),
     };
-    const deps = makeDeps(agentKind, 's1', 's1-instance', {}, market as unknown as CindyGhostsHostDeps['pluginMarket']);
+    const deps = makeDeps(agentKind, 's1', 's1-instance', {}, market as unknown as CindyGhostsHostDeps['pluginMarket'], requestHostPermission);
     return { deps, market };
   }
 
@@ -2902,7 +3032,8 @@ describe('market install live authority', () => {
     expect(market.install).not.toHaveBeenCalled();
     expect(await deps.installMarket!({ pluginId: 'p1', releaseId: 'r1' })).toMatchObject({ status: 'installed', ghost_id: 'mail-suite' });
     expect(liveGrantStateMock).toHaveBeenCalledWith('s1', 's1-instance');
-    expect(releaseMutationMock).toHaveBeenCalledOnce();
+    expect(acquireMutationLeaseMock).not.toHaveBeenCalled();
+    expect(releaseMutationMock).not.toHaveBeenCalled();
     expect(authorizationRequestMock).not.toHaveBeenCalled();
     expect(dispatchMock).not.toHaveBeenCalled();
   });
@@ -2915,20 +3046,48 @@ describe('market install live authority', () => {
     expect(acquireMutationLeaseMock).not.toHaveBeenCalled();
   });
 
-  it.each(['cancel', 'permission-change'])('rechecks %s at placement and releases the owner lease', async (change) => {
+  it.each(['cancel', 'permission-change'])('rechecks %s at placement without holding an owner lease', async (change) => {
     let current = true;
     const controller = new AbortController();
     liveGrantStateMock.mockReturnValue({ permissionMode: 'auto', isCurrent: () => current });
     const { deps, market } = marketHarness();
     const place = vi.fn();
-    market.install.mockImplementation(async (_id, _options, guard) => {
+    market.install.mockImplementation(async (_id, _options, context) => {
       if (change === 'cancel') controller.abort(); else current = false;
-      guard?.(); place();
+      context.assertCurrent?.(); place();
       throw new Error('unreachable');
     });
     expect(await deps.installMarket!({ pluginId: 'p1', releaseId: 'r1' }, controller.signal)).toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
     expect(place).not.toHaveBeenCalled();
-    expect(releaseMutationMock).toHaveBeenCalledOnce();
+    expect(acquireMutationLeaseMock).not.toHaveBeenCalled();
+    expect(releaseMutationMock).not.toHaveBeenCalled();
+  });
+
+  it('asks the calling task to confirm the install as a host-owned permission card', async () => {
+    liveGrantStateMock.mockReturnValue({ permissionMode: 'bypassPermissions', isCurrent: () => true });
+    const requestHostPermission = vi.fn(async () => ({ kind: 'permission' as const, behavior: 'allow' as const }));
+    const { deps, market } = marketHarness('codex', requestHostPermission);
+    market.install.mockImplementation(async (_id, _options, context) => {
+      expect(context.consent.initiator).toBe('agent');
+      const confirmed = await context.consent.prompt({
+        initiator: 'agent',
+        origin: 'market',
+        facts: { kind: 'install', ghostId: 'mail-suite', name: 'Mail', version: '1', permissions: [] },
+      });
+      expect(confirmed).toBe(true);
+      return { ghost: { manifest: { id: 'mail-suite', name: 'Mail', version: '1' }, enabled: true } };
+    });
+    expect(await deps.installMarket!({ pluginId: 'p1', releaseId: 'r1' })).toMatchObject({ status: 'installed' });
+    expect(requestHostPermission).toHaveBeenCalledWith(
+      's1',
+      's1-instance',
+      expect.objectContaining({
+        kind: 'permission',
+        toolName: 'cindy.plugin.install',
+        metadata: { hostOwnedConfirmation: 'plugin_install' },
+      }),
+      expect.any(AbortSignal),
+    );
   });
 
   it('rejects an already cancelled request before catalog access', async () => {

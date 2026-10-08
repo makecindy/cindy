@@ -1,3 +1,5 @@
+vi.mock('../botTaskReplyResults.js', () => ({ readTaskResultsForReply: vi.fn(async () => []) }));
+import { readTaskResultsForReply } from '../botTaskReplyResults.js';
 /**
  * messagePersistBroadcaster.test.ts
  * ---------------------------------------------------------------------------
@@ -82,6 +84,8 @@ import {
   onToolResultFullEvent,
   prepareSyntheticToolEventForBroadcast,
   onAssistantTextEvent,
+  drainPersistQueue,
+  onStandaloneTextEvent,
   getSessionTextSnapshot,
   onInteractionMessage,
   onInteractionResolved,
@@ -2143,6 +2147,232 @@ describe('event timestamp persistence', () => {
     );
   });
 
+  it('stamps a pre-turn assistant block with the turn start when the turn writes into it', async () => {
+    const attachAt = Date.parse('2026-06-20T11:00:00.000Z');
+    const turnStartAt = Date.parse('2026-06-20T11:00:04.000Z');
+    const nowSpy = vi.spyOn(Date, 'now');
+    // 运行时就绪 / 重连时到达的非 final text（扩展 notify、宿主机提示）不属于本轮，
+    // 却会先建一个 block；它的 createdAt 早于本轮 user 行。
+    nowSpy.mockReturnValue(attachAt);
+    onAssistantTextEvent(SESSION, { text: 'runtime notice', isFinal: false }, null);
+    nowSpy.mockReturnValue(turnStartAt);
+    let persistId: string | undefined;
+    try {
+      noteTurnStarted(SESSION);
+      persistId = onAssistantTextEvent(SESSION, { text: 'reply', isFinal: false }, null);
+      flushAssistantBlock(SESSION, null);
+      await flushWrites();
+    } finally {
+      nowSpy.mockRestore();
+    }
+
+    expect(createMessage).toHaveBeenCalledWith(
+      SESSION,
+      expect.objectContaining({
+        clientId: persistId,
+        role: 'assistant',
+        createdAt: turnStartAt,
+      }),
+      broadcastGuard(),
+    );
+  });
+
+  it('keeps the block own start when the turn created it', async () => {
+    const turnStartAt = Date.parse('2026-06-20T11:01:30.000Z');
+    const firstDeltaAt = Date.parse('2026-06-20T11:01:31.000Z');
+    const nowSpy = vi.spyOn(Date, 'now');
+    nowSpy.mockReturnValue(turnStartAt);
+    try {
+      noteTurnStarted(SESSION);
+      nowSpy.mockReturnValue(firstDeltaAt);
+      onAssistantTextEvent(SESSION, { text: 'reply', isFinal: false }, null);
+      flushAssistantBlock(SESSION, null);
+      await flushWrites();
+    } finally {
+      nowSpy.mockRestore();
+    }
+
+    expect(createMessage).toHaveBeenCalledWith(
+      SESSION,
+      expect.objectContaining({ role: 'assistant', createdAt: firstDeltaAt }),
+      broadcastGuard(),
+    );
+  });
+
+  it('keeps a pre-turn block the turn never wrote to before the turn start', async () => {
+    const noticeAt = Date.parse('2026-06-20T11:01:00.000Z');
+    const turnStartAt = Date.parse('2026-06-20T11:01:04.000Z');
+    const nowSpy = vi.spyOn(Date, 'now');
+    nowSpy.mockReturnValue(noticeAt);
+    onAssistantTextEvent(SESSION, { text: 'runtime notice', isFinal: false }, null);
+    nowSpy.mockReturnValue(turnStartAt);
+    try {
+      noteTurnStarted(SESSION);
+      flushAssistantBlock(SESSION, null);
+      await flushWrites();
+    } finally {
+      nowSpy.mockRestore();
+    }
+
+    expect(createMessage).toHaveBeenCalledWith(
+      SESSION,
+      expect.objectContaining({ role: 'assistant', createdAt: noticeAt }),
+      broadcastGuard(),
+    );
+  });
+
+  it('stamps a pre-turn block when the turn writes its authoritative full text', async () => {
+    const attachAt = Date.parse('2026-06-20T11:02:00.000Z');
+    const turnStartAt = Date.parse('2026-06-20T11:02:04.000Z');
+    const fullTextAt = Date.parse('2026-06-20T11:02:09.000Z');
+    const nowSpy = vi.spyOn(Date, 'now');
+    nowSpy.mockReturnValue(attachAt);
+    onAssistantTextEvent(SESSION, { text: 'runtime notice', isFinal: false }, null);
+    nowSpy.mockReturnValue(turnStartAt);
+    try {
+      noteTurnStarted(SESSION);
+      nowSpy.mockReturnValue(fullTextAt);
+      onAssistantTextEvent(SESSION, { text: 'reply', isFinal: true, isFullText: true }, null);
+      flushAssistantBlock(SESSION, null);
+      await flushWrites();
+    } finally {
+      nowSpy.mockRestore();
+    }
+
+    expect(createMessage).toHaveBeenCalledWith(
+      SESSION,
+      expect.objectContaining({ role: 'assistant', createdAt: turnStartAt }),
+      broadcastGuard(),
+    );
+  });
+
+  it('does not stamp a pre-turn block from an unrelated non-full-text final', async () => {
+    const attachAt = Date.parse('2026-06-20T11:06:00.000Z');
+    const turnStartAt = Date.parse('2026-06-20T11:06:04.000Z');
+    const nowSpy = vi.spyOn(Date, 'now');
+    nowSpy.mockReturnValue(attachAt);
+    onAssistantTextEvent(SESSION, { text: 'runtime notice', isFinal: false }, null);
+    nowSpy.mockReturnValue(turnStartAt);
+    try {
+      noteTurnStarted(SESSION);
+      // 内容不同、且不是更长前缀的 final 可能属于相邻 text block，不能归到当前提示上。
+      onAssistantTextEvent(SESSION, { text: 'different reply', isFinal: true }, null);
+      flushAssistantBlock(SESSION, null);
+      await flushWrites();
+    } finally {
+      nowSpy.mockRestore();
+    }
+
+    expect(createMessage).toHaveBeenCalledWith(
+      SESSION,
+      expect.objectContaining({
+        role: 'assistant',
+        content: 'runtime notice',
+        createdAt: attachAt,
+      }),
+      broadcastGuard(),
+    );
+  });
+
+  it('stamps a pre-turn block when an accepted longer-prefix final completes it', async () => {
+    const attachAt = Date.parse('2026-06-20T11:07:00.000Z');
+    const turnStartAt = Date.parse('2026-06-20T11:07:04.000Z');
+    const nowSpy = vi.spyOn(Date, 'now');
+    nowSpy.mockReturnValue(attachAt);
+    onAssistantTextEvent(SESSION, { text: 'reply', isFinal: false }, null);
+    nowSpy.mockReturnValue(turnStartAt);
+    try {
+      noteTurnStarted(SESSION);
+      onAssistantTextEvent(SESSION, { text: 'reply continued', isFinal: true }, null);
+      flushAssistantBlock(SESSION, null);
+      await flushWrites();
+    } finally {
+      nowSpy.mockRestore();
+    }
+
+    expect(createMessage).toHaveBeenCalledWith(
+      SESSION,
+      expect.objectContaining({
+        role: 'assistant',
+        content: 'reply continued',
+        createdAt: turnStartAt,
+      }),
+      broadcastGuard(),
+    );
+  });
+
+  it('stamps a pre-turn block on an equal-length final without isFullText', async () => {
+    const attachAt = Date.parse('2026-06-20T11:04:00.000Z');
+    const turnStartAt = Date.parse('2026-06-20T11:04:04.000Z');
+    const nowSpy = vi.spyOn(Date, 'now');
+    nowSpy.mockReturnValue(attachAt);
+    onAssistantTextEvent(SESSION, { text: 'reply', isFinal: false }, null);
+    nowSpy.mockReturnValue(turnStartAt);
+    try {
+      noteTurnStarted(SESSION);
+      // Claude Code 重连 / delta 丢失后可能补发等长的 final 全文，不重写 block。
+      onAssistantTextEvent(SESSION, { text: 'reply', isFinal: true }, null);
+      flushAssistantBlock(SESSION, null);
+      await flushWrites();
+    } finally {
+      nowSpy.mockRestore();
+    }
+
+    expect(createMessage).toHaveBeenCalledWith(
+      SESSION,
+      expect.objectContaining({ role: 'assistant', createdAt: turnStartAt }),
+      broadcastGuard(),
+    );
+  });
+
+  it('does not stamp a pre-turn block from a background turn text', async () => {
+    const attachAt = Date.parse('2026-06-20T11:05:00.000Z');
+    const turnStartAt = Date.parse('2026-06-20T11:05:04.000Z');
+    const nowSpy = vi.spyOn(Date, 'now');
+    nowSpy.mockReturnValue(attachAt);
+    onAssistantTextEvent(SESSION, { text: 'runtime notice', isFinal: false }, null);
+    nowSpy.mockReturnValue(turnStartAt);
+    try {
+      noteTurnStarted(SESSION);
+      onAssistantTextEvent(SESSION, { text: 'reply', isFinal: false }, null, 'background');
+      flushAssistantBlock(SESSION, null);
+      await flushWrites();
+    } finally {
+      nowSpy.mockRestore();
+    }
+
+    expect(createMessage).toHaveBeenCalledWith(
+      SESSION,
+      expect.objectContaining({ role: 'assistant', createdAt: attachAt }),
+      broadcastGuard(),
+    );
+  });
+
+  it('does not lift a pre-/clear block above the clear boundary', async () => {
+    const preClearAt = Date.parse('2026-06-20T11:03:00.000Z');
+    const clearedAt = Date.parse('2026-06-20T11:03:02.000Z');
+    const turnStartAt = Date.parse('2026-06-20T11:03:04.000Z');
+    const nowSpy = vi.spyOn(Date, 'now');
+    nowSpy.mockReturnValue(preClearAt);
+    onAssistantTextEvent(SESSION, { text: 'runtime notice', isFinal: false }, null);
+    nowSpy.mockReturnValue(turnStartAt);
+    try {
+      noteSessionClearBoundary(SESSION, clearedAt);
+      noteTurnStarted(SESSION);
+      onAssistantTextEvent(SESSION, { text: 'reply', isFinal: false }, null);
+      flushAssistantBlock(SESSION, null);
+      await flushWrites();
+    } finally {
+      nowSpy.mockRestore();
+    }
+
+    expect(createMessage).toHaveBeenCalledWith(
+      SESSION,
+      expect.objectContaining({ role: 'assistant', createdAt: preClearAt }),
+      broadcastGuard(),
+    );
+  });
+
   it('captures non-thinking create timestamps before queued writes drain', async () => {
     const eventAt = Date.parse('2026-06-20T10:01:00.000Z');
     const delayedWriteTime = Date.parse('2026-06-20T10:01:07.000Z');
@@ -3609,7 +3839,23 @@ describe('媒体 echo 兜底:flushOrphanToolResults 从 fallback 池认领', () 
 
 describe('ask_user persist first-write-wins', () => {
   it.each([
+    [{ ' Scope? ': ' only inspect ' }, 'Clarifications:\n- Scope? → only inspect'],
+    [{ ' ': ' only inspect ' }, 'Clarifications:\n- only inspect'],
+    [{ Scope: ' ' }, ''],
+    [{}, ''],
+  ])('matches runtime clarification text for %j', async (answers, text) => {
+    const request = {kind: 'ask_user_question', requestId: 'answer-projection', questions: []};
+    const persistId = onInteractionMessage(SESSION, request);
+    onInteractionResolved(SESSION, persistId, 'ask_user_question', request, {answers});
+    await flushWrites();
+    expect(updateMessageContent).toHaveBeenCalledWith(SESSION, persistId, expect.any(Object), {
+      text, acceptedAt: expect.any(Number),
+    });
+  });
+  it.each([
     [{ behavior: 'allow', editedPlan: 'Only change build.' }, 'Approved plan:\nOnly change build.'],
+    [{ behavior: 'allow', editedPlan: '  Only change build. \n' }, 'Approved plan:\nOnly change build.'],
+    [{ behavior: 'allow', editedPlan: '  \n' }, ''],
     [{ behavior: 'deny', reason: 'Never change src.' }, 'Never change src.'],
     [{ behavior: 'deny', dismissed: true, reason: 'session_closed' }, ''],
   ])('records only the accepted plan or user feedback: %j', async (decision, text) => {
@@ -3686,4 +3932,88 @@ describe('resolved interactions publish authoritative history rows', () => {
     await flushWrites();
     expect(broadcastMessageRow).not.toHaveBeenCalled();
   });
+});
+
+describe('Pi extension notification and assistant reply isolation', () => {
+  it('keeps plan toggles before the input from backdating the next answer', async () => {
+    const clock = vi.spyOn(Date, 'now');
+    try {
+      clock.mockReturnValue(1000);
+      const enabled = onStandaloneTextEvent(SESSION, 'Plan mode enabled.');
+      clock.mockReturnValue(2000);
+      const disabled = onStandaloneTextEvent(SESSION, 'Plan mode disabled.');
+      expect(getSessionTextSnapshot(SESSION)).toBeNull();
+      expect(consumeLastAssistantPersistId(SESSION)).toBeUndefined();
+      clock.mockReturnValue(3000); // User input precedes model output.
+      noteTurnStarted(SESSION);
+      clock.mockReturnValue(4000);
+      const reply = onAssistantTextEvent(SESSION, { text: 'Complete ', isFinal: false }, null);
+      onAssistantTextEvent(SESSION, { text: 'answer', isFinal: false }, null);
+      onAssistantTextEvent(SESSION, { text: 'Complete answer', isFinal: true, isFullText: true }, null);
+      flushAssistantBlock(SESSION);
+      await flushWrites();
+      expect(new Set([enabled, disabled, reply]).size).toBe(3);
+      const rows = vi.mocked(createMessage).mock.calls.map((call) => call[1]);
+      expect(rows.map(({ content, createdAt }) => ({ content, createdAt }))).toEqual([
+        { content: 'Plan mode enabled.', createdAt: 1000 },
+        { content: 'Plan mode disabled.', createdAt: 2000 },
+        { content: 'Complete answer', createdAt: 4000 },
+      ]);
+      expect(consumeLastAssistantPersistId(SESSION)).toBe(reply);
+      expect(consumeLastTopLevelAssistantPersistId(SESSION)).toBe(reply);
+      for (const call of vi.mocked(createMessage).mock.calls) {
+        expect(call[2]).toMatchObject({ shouldBroadcast: expect.any(Function) });
+        expect(call[2]?.shouldBroadcast?.()).toBe(true);
+      }
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it('preserves a streaming reply and its terminal ownership across interleaved notices', async () => {
+    const reply = onAssistantTextEvent(SESSION, { text: 'First ', isFinal: false }, null);
+    const before = getSessionTextSnapshot(SESSION);
+    const notice = onStandaloneTextEvent(SESSION, 'Extension warning');
+    expect(getSessionTextSnapshot(SESSION)).toEqual(before);
+    expect(onAssistantTextEvent(SESSION, { text: 'second', isFinal: false }, null)).toBe(reply);
+    expect(onAssistantTextEvent(SESSION, {
+      text: 'First second', isFinal: true, isFullText: true,
+    }, { model: 'test-model' })).toBe(reply);
+    flushAssistantBlock(SESSION);
+    const after = onStandaloneTextEvent(SESSION, 'Extension finished');
+    expect(getSessionTextSnapshot(SESSION)).toBeNull();
+    expect(consumeLastAssistantPersistId(SESSION)).toBe(reply);
+    expect(consumeLastTopLevelAssistantPersistId(SESSION)).toBe(reply);
+    await flushWrites();
+    const rows = vi.mocked(createMessage).mock.calls.map((call) => call[1]);
+    expect(rows.map(({ clientId, content }) => ({ clientId, content }))).toEqual([
+      { clientId: notice, content: 'Extension warning' },
+      { clientId: reply, content: 'First second' },
+      { clientId: after, content: 'Extension finished' },
+    ]);
+    resetTurnPersistState(SESSION);
+    const next = onAssistantTextEvent(SESSION, { text: 'First second', isFinal: true }, null);
+    expect(next).not.toBe(reply);
+    await flushWrites();
+    expect(vi.mocked(createMessage).mock.calls.at(-1)?.[1].content).toBe('First second');
+  });
+});
+
+
+it('retains explicit commentary/final phases in durable assistant metadata for notification selection', async () => {
+  onAssistantTextEvent('notification-phases', { text: 'Checking…', isFinal: true, phase: 'commentary', agentMessageId: 'commentary' }, null);
+  onAssistantTextEvent('notification-phases', { text: 'Finished.', isFinal: true, phase: 'final_answer', agentMessageId: 'answer' }, null);
+  await drainPersistQueue();
+  expect(createMessage).toHaveBeenCalledWith('notification-phases', expect.objectContaining({ content: 'Checking…', agentMeta: expect.objectContaining({ assistantPhase: 'commentary' }) }), expect.anything());
+  expect(createMessage).toHaveBeenCalledWith('notification-phases', expect.objectContaining({ content: 'Finished.', agentMeta: expect.objectContaining({ assistantPhase: 'final_answer' }) }), expect.anything());
+});
+
+it('persists bound results with the final seal, and a failed result lookup cannot suppress the reply', async () => {
+  const results = [{ delegationId: 'job' }] as any;
+  vi.mocked(readTaskResultsForReply).mockResolvedValueOnce(results);
+  await markAssistantTurnCompleted(SESSION, 'summary', undefined, ['bot-delegation-completion:job']);
+  expect(patchMessageAgentMetaWithResult).toHaveBeenCalledWith(SESSION, 'summary', { turnCompleted: true, botTaskResults: results });
+  vi.mocked(readTaskResultsForReply).mockRejectedValueOnce(new Error('DB unavailable'));
+  await expect(markAssistantTurnCompleted(SESSION, 'other', undefined, ['bot-delegation-completion:job'])).resolves.toBe(true);
+  expect(patchMessageAgentMetaWithResult).toHaveBeenCalledWith(SESSION, 'other', { turnCompleted: true });
 });

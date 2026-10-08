@@ -1,0 +1,29 @@
+{
+  "cindy-window": {
+    "delivery": "bundled",
+    "sha256": "10d72d8ab0f39a5ceec6f8746396c36bb6d7dd345ac18af209069678a90d010d",
+    "bytes": 6091872,
+    "width": 2304,
+    "height": 1440,
+    "fps": 24,
+    "duration": 12.041666666666666
+  },
+  "cindy-studio": {
+    "delivery": "bundled",
+    "sha256": "b33f9b527584ae8c8b085536a0823a346e4879fa845e62e5ac41ae1b7b0097b1",
+    "bytes": 3606656,
+    "width": 2304,
+    "height": 1440,
+    "fps": 24,
+    "duration": 12.041666666666666
+  },
+  "cindy-dream": {
+    "delivery": "bundled",
+    "sha256": "de9e0dc2235310bdbee30f1bf951d94ce8299b18ba674463df407b76bb162def",
+    "bytes": 6312719,
+    "width": 2304,
+    "height": 1440,
+    "fps": 24,
+    "duration": 12.041666666666666
+  }
+}

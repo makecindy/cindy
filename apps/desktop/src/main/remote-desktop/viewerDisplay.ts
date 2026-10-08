@@ -143,9 +143,10 @@ export async function createViewerDisplay(
     },
     async resize(width, height, current) {
       if (closed || !current()) throw new Error('DESKTOP_LEASE_EXPIRED');
-      const result = await new Promise<{ id: number }>((resolve, reject) => {
+      type DisplayReply = { id: number; logicalWidth: number; logicalHeight: number };
+      const result = await new Promise<DisplayReply>((resolve, reject) => {
         let text = '';
-        const finish = (error?: Error, value?: { id: number }) => {
+        const finish = (error?: Error, value?: DisplayReply) => {
           clearTimeout(timer);
           child.stdout.off('data', receive);
           child.off('exit', exited);
@@ -163,7 +164,15 @@ export async function createViewerDisplay(
               !Number.isSafeInteger(value.id) ||
               value.id <= 0 ||
               value.width !== width ||
-              value.height !== height
+              value.height !== height ||
+              !Number.isSafeInteger(value.logicalWidth) ||
+              value.logicalWidth <= 0 ||
+              value.logicalWidth > 4096 ||
+              !Number.isSafeInteger(value.logicalHeight) ||
+              value.logicalHeight <= 0 ||
+              value.logicalHeight > 4096 ||
+              Math.abs(value.logicalWidth * height - value.logicalHeight * width) >
+                Math.max(width, height)
             )
               return exited();
             finish(undefined, value);
@@ -182,12 +191,15 @@ export async function createViewerDisplay(
       for (let attempt = 0; attempt < 40; attempt++) {
         if (closed || !current()) throw new Error('DESKTOP_LEASE_EXPIRED');
         const actual = screen.getAllDisplays().find((d) => d.id === result.id);
-        if (actual?.size.width === width && actual.size.height === height)
+        if (
+          actual?.size.width === result.logicalWidth &&
+          actual.size.height === result.logicalHeight
+        )
           return {
             id: String(actual.id),
             name: actual.label || 'Cindy Remote Desktop',
-            width,
-            height,
+            width: actual.size.width,
+            height: actual.size.height,
           };
         await new Promise((resolve) => setTimeout(resolve, 50));
       }

@@ -14,7 +14,11 @@ import {
 
 export type SessionMenuUsageReader = Pick<
   MobileMakerTransport,
-  "getSessionEstimatedValue" | "getCodexRateLimits" | "getAccountUsage"
+  | "getSessionEstimatedValue"
+  | "getCodexRateLimits"
+  | "getAccountUsage"
+  | "getSubscriptionUsage"
+  | "getClaudeSessionRoute"
 >;
 
 interface UsageState {

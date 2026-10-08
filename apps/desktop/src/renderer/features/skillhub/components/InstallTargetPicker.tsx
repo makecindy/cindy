@@ -237,12 +237,11 @@ export function InstallTargetPicker({
   return (
     <Dialog.Root open={open} onOpenChange={(next) => { if (!next && !installingRef.current) onClose(); }}>
       <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 z-[9000] bg-[var(--overlay-modal)]" />
+        <Dialog.Overlay className="modal-scrim fixed inset-0 z-[9000]" />
         <Dialog.Content
           aria-labelledby={INSTALL_PICKER_TITLE_ID}
           className={cn(
-            'fixed inset-0 z-[9000] m-auto flex h-fit max-h-[88vh] w-[min(480px,calc(100vw-32px))] flex-col overflow-y-auto rounded-xl outline-none',
-            'bg-[var(--cmd-palette-bg)] shadow-[var(--shadow-menu)] border border-[var(--cmd-palette-border)]',
+            'modal-panel fixed inset-0 z-[9000] m-auto flex h-fit max-h-[88vh] w-[min(480px,calc(100vw-32px))] flex-col overflow-y-auto outline-none',
             '[&_button:focus-visible]:outline-none [&_button:focus-visible]:ring-2 [&_button:focus-visible]:ring-inset [&_button:focus-visible]:ring-[var(--focus-ring-soft)]',
           )}
           onOpenAutoFocus={(event) => {
@@ -264,7 +263,7 @@ export function InstallTargetPicker({
             event.stopPropagation();
             if (installingRef.current || event.isComposing || event.keyCode === 229) event.preventDefault();
           }}
-          onPointerDownOutside={(event) => { if (installingRef.current) event.preventDefault(); }}
+          onPointerDownOutside={(event) => event.preventDefault()}
         >
         <div
           className="flex items-start justify-between gap-3"
@@ -286,23 +285,19 @@ export function InstallTargetPicker({
               })}
             </Dialog.Description>
           </div>
-          <button
+          <Button
+            variant="secondary"
+            size="md"
+            compact
             type="button"
             onClick={() => {
               void handleOtherDirectory();
             }}
             disabled={installing}
-            className={cn(
-              'flex shrink-0 items-center gap-[6px] rounded-full transition-colors',
-              'border border-[var(--confirm-btn-secondary-border)] bg-[var(--cmd-palette-bg)] text-[var(--settings-btn-secondary-text)]',
-              'enabled:hover:bg-[var(--surface-hover)]',
-              'disabled:opacity-60 disabled:cursor-default',
-            )}
-            style={{ height: '32px', padding: '0 12px', fontSize: 'var(--text-12)', fontWeight: 500 }}
           >
             <FolderOpen size={14} className="shrink-0 text-[var(--settings-section-desc)]" />
             {t('skillhub.installPicker.otherDirectory')}
-          </button>
+          </Button>
         </div>
 
         {bannerError && (

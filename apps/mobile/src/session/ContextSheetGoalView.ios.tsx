@@ -1,7 +1,8 @@
+import { useNativeGlassButtonStyle } from "@/platform/chrome/nativeGlassButtonStyle.ios";
 import { useState, type ComponentProps } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button, DisclosureGroup, Picker, ProgressView, Text, TextField, useNativeState } from '@expo/ui/swift-ui';
-import { accessibilityHint, accessibilityLabel, buttonStyle, contentShape, disabled as disable, font, foregroundStyle, frame, lineLimit, pickerStyle, shapes, tag } from '@expo/ui/swift-ui/modifiers';
+import { accessibilityHint, accessibilityLabel, buttonStyle, contentShape, disabled as disable, font, foregroundStyle, frame, lineLimit, pickerStyle, shapes, tag, tint } from '@expo/ui/swift-ui/modifiers';
 import { useTheme } from '@/theme';
 import type { MobileGoalLimitsInput } from '@cindy/maker-shared/device-link-contract';
 import type { ContextSheetGoalViewProps, ContextSheetGoalCreateForm as GoalCreateForm } from './ContextSheetGoalView';
@@ -12,6 +13,7 @@ export { GOAL_STATUS_LABEL, goalReasonText, goalStatusLabel } from './goalStatus
 export function ContextSheetGoalCreateForm({ busy, disabled = false, disabledHint, error, initial, onSetGoal, testID }: ComponentProps<typeof GoalCreateForm>) {
   const { t } = useTranslation();
   const { colors } = useTheme();
+  const glassStyle = useNativeGlassButtonStyle({ prominent: true });
   const text = useNativeState(initial?.objective ?? '');
   const [objective, setObjective] = useState(initial?.objective ?? '');
   const [limits, setLimits] = useState<MobileGoalLimitsInput>(initial?.limits ?? { maxTurns: null, budgetTokens: null, noProgressLimit: 3 });
@@ -47,11 +49,11 @@ export function ContextSheetGoalCreateForm({ busy, disabled = false, disabledHin
     {error || (disabled && disabledHint) ? <Section><Text modifiers={[foregroundStyle(error ? colors.errorText : colors.textSecondary)]}>{error || disabledHint}</Text></Section> : null}
     <Section>
       <Button onPress={submit} testID="contextSheet.goalStartButton" modifiers={[
-        buttonStyle('glassProminent'), frame({ maxWidth: Infinity, minHeight: 44 }),
+        ...glassStyle, frame({ maxWidth: Infinity, minHeight: 44 }),
         disable(busy || disabled || !objective.trim()),
         ...(disabled && disabledHint ? [accessibilityHint(disabledHint)] : []),
         accessibilityLabel(t('interaction.contextSheet.startGoal')),
-      ]}>{busy ? <ProgressView /> : <Text>{t('interaction.contextSheet.startGoal')}</Text>}</Button>
+      ]}>{busy ? <ProgressView modifiers={[tint(colors.ctaText)]} /> : <Text modifiers={[foregroundStyle(colors.ctaText)]}>{t('interaction.contextSheet.startGoal')}</Text>}</Button>
     </Section>
   </>;
 }
@@ -82,7 +84,7 @@ export function ContextSheetGoalView(props: ContextSheetGoalViewProps) {
   const action = (label: string, onPress: () => void, testID: string, destructive = false) =>
     <Button onPress={onPress} testID={testID} modifiers={[
       buttonStyle('plain'), disable(busy),
-      ...(destructive ? [foregroundStyle(colors.statusRecording)] : []),
+      ...(destructive ? [foregroundStyle(colors.destructive)] : []),
     ]}><Text modifiers={[frame({ maxWidth: Infinity, minHeight: 44, alignment: 'leading' }), contentShape(shapes.rectangle())]}>{label}</Text></Button>;
   return <>
     <Section title={goalStatusLabel(goal.status, goal.lastReason)}>

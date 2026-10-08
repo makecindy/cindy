@@ -29,6 +29,7 @@ import {
   createToolUseProviderSpecificFieldsRecoveryRule,
   createXaiModelInputRecoveryRule,
   createXaiModelInputSanitizeTransform,
+  createAnthropicEffortCompatibilityRule,
   dedupeDuplicateToolUseIds,
   repairToolExchangeAdjacency,
   sanitizeXaiModelInputFromBody,
@@ -45,14 +46,14 @@ import {
 } from '@cindy/anthropic-compat-proxy';
 import { buildVisionBridgeProxyTransform } from '../vision-bridge/vision-bridge-controller.js';
 
-import { ANTHROPIC_DIRECT_UPSTREAM, CLAUDE_PROVIDER_AUTH_PLACEHOLDER_KEY, anthropicCatalogModelIds, isAnthropicWireModel } from './claude-gateway-config.js';
+import { CLAUDE_PROVIDER_AUTH_PLACEHOLDER_KEY, anthropicCatalogModelIds, isAnthropicWireModel } from './claude-gateway-config.js';
 import { getActiveCatalog } from './active-catalog.js';
 import { providerModelRecord } from '@cindy/model-providers';
 import { outboundFetch } from './outbound-fetch.js';
 import { invocationModelRecord, requiresNativeProviderAuth } from './pi-provider-transport.js';
 import { createClaudeProviderBridge } from './claude-provider-bridge.js';
 import { isOpenAiSubscriptionProviderId } from './codex-account-auth.js';
-import { isXaiSubscriptionProviderId } from './subscription-account-auth.js';
+import { isClaudeSubscriptionProviderId, isXaiSubscriptionProviderId } from './subscription-account-auth.js';
 import {
   getPiNativeSubscriptionHandler,
   getResponsesBridgeHandler,
@@ -80,6 +81,13 @@ import {
 import { createClaudeGatewayErrorObserver } from './claude-gateway-error-observer.js';
 import { shouldApplyExclusiveProviderReroute } from './model-route-guard.js';
 import { getSessionProvider } from './session-provider-store.js';
+import {
+  GUEST_ROUTE_HEADER,
+  guestProviderOffersModel,
+  guestProviderRouteForSession,
+  guestProviderRouteForToken,
+  type GuestProviderRoute,
+} from './guest-provider-route-store.js';
 import {
   buildRouteDecision,
   providerRoutingForModel,
@@ -156,7 +164,9 @@ function attachClaudeProviderBridge(route: RoutingDecision, providerId: string, 
     const handler = createClaudeProviderBridge({
       url: `${base.replace(/\/+$/, '')}/${requestPath.replace(/^\/+/, '')}`,
       protocol, headers: route.headerOverride ?? {}, efforts: model.efforts,
+      supportsFastMode: model.supportsFastMode === true,
       providerId: provider.id,
+      catalogPresetId: model.catalogPresetId,
       ...(row && (protocol === 'openai-chat' || model.api) ? { model: row, nativeUpstream: base } : {}),
       capabilities: {
         ...(model.supportsImageInput ? { imageInput: 'image_url' as const } : {}),
@@ -177,10 +187,10 @@ export function setClaudeProxyGatewayKeyReader(fn: () => string | null): void {
   _readGatewayKey = fn;
 }
 
-// cc 是否处于 oauth-spawn —— 由 host 注入(hasClaudeAiOAuth)。退役全局 authMode 后,cc 的 spawn
-// 凭证形态完全由「是否连了 Claude.ai 订阅」决定(见 auth-adapters.getAuthEnv):连了 = oauth-spawn
-// (带 OAuth bearer,默认须换网关 key),否则 = gateway-spawn(自带网关 key,默认 passthrough)。
-// 默认 false:未注入时按 gateway-spawn 处理(passthrough),与未连订阅用户字节级一致。
+// cc 是否处于 oauth-spawn(带订阅 OAuth bearer 经过本 proxy)。Claude 订阅会话现由内置 CLI
+// 用它自己的登录直连 Anthropic、不经本 proxy(见 claude-native-cli),desktop 不再注入 checker:
+// 经 proxy 的 cc 进程一律带网关 key / 占位 key,恒按 gateway-spawn 处理(passthrough)。
+// 保留注入口只为兼容单测与其它 host。
 let _isOAuthSpawn: () => boolean = () => false;
 export function setClaudeProxyOAuthSpawnChecker(fn: () => boolean): void {
   _isOAuthSpawn = fn;
@@ -258,6 +268,72 @@ function refuseExclusiveXaiDefaultGateway(wireModel: string): RoutingDecision {
   };
 }
 
+/**
+ * Claude 订阅只由 CLI 用自己的登录直连 Anthropic(env-builder nativeCliAuth),从不经本 proxy。
+ * 请求走到需要订阅凭证的分支说明子进程 env 不对:本地拒绝,绝不把请求(可能带着 CLI 的
+ * 订阅凭证)转发到 Anthropic。
+ */
+function refuseClaudeSubscriptionViaProxy(): RoutingDecision {
+  return {
+    localHandler: async ({ res }) => {
+      const payload = JSON.stringify({
+        type: 'error',
+        error: {
+          type: 'permission_error',
+          code: 'anthropic_subscription_cli_only',
+          message: 'The Claude subscription is only used by Claude Code with its own login.',
+        },
+      });
+      res.writeHead(403, {
+        'content-type': 'application/json; charset=utf-8',
+        'cache-control': 'no-store',
+      });
+      res.end(payload);
+    },
+  };
+}
+
+/**
+ * 供应商分享的受邀者会话只能经分享的那一个供应商、用它提供的模型；其余请求本地拒绝，
+ * 不改道到本机用户的其它供应商或默认网关(见 guest-provider-route-store)。
+ */
+function refuseGuestProviderRoute(status: 401 | 403, code: string, message: string): RoutingDecision {
+  return {
+    localHandler: async ({ res }) => {
+      const payload = JSON.stringify({
+        type: 'error',
+        error: { type: status === 401 ? 'authentication_error' : 'permission_error', code, message },
+      });
+      res.writeHead(status, {
+        'content-type': 'application/json; charset=utf-8',
+        'cache-control': 'no-store',
+      });
+      res.end(payload);
+    },
+  };
+}
+
+function refuseGuestForeignRoute(wireModel: string): RoutingDecision {
+  return refuseGuestProviderRoute(
+    403,
+    'shared_provider_only',
+    `model '${wireModel}' is not available from the provider shared with you`,
+  );
+}
+
+/**
+ * 受邀者 Pi 会话的请求只能落在分享的供应商上(令牌只为它签发；这里再按登记复核一次)。
+ * Cindy 网关(xd)以「无供应商 / xd」两种写法出现。
+ */
+function piRequestStaysOnGuestProvider(
+  guest: GuestProviderRoute,
+  headerProviderId: string | null,
+  registeredProviderId: string | null,
+): boolean {
+  const normalize = (id: string | null) => (id === null || id === 'xd' ? 'xd' : id);
+  return normalize(headerProviderId) === guest.providerId && normalize(registeredProviderId) === guest.providerId;
+}
+
 function refuseAmbiguousImplicitProviderRoute(wireModel: string): RoutingDecision {
   return {
     localHandler: async ({ res }) => {
@@ -285,6 +361,13 @@ function bridgedSubscriptionModel(wireModel: string): string {
     return wireModel;
   }
   return `${XAI_MODEL_PREFIX}${wireModel.replace(/\[1m\]$/i, '')}`;
+}
+
+/** 供应商分享受邀者的请求：Claude Code 带路由令牌头，Pi 按会话 id 找到受邀者登记。 */
+function isGuestProviderShareRequest(ctx: RequestTransformCtx): boolean {
+  if (headerValue(ctx.headers, GUEST_ROUTE_HEADER) !== null) return true;
+  const piSessionId = headerValue(ctx.headers, 'x-cindy-pi-session-id');
+  return piSessionId !== null && guestProviderRouteForSession(piSessionId) !== null;
 }
 
 /** 大小写不敏感取 header 值;缺失或空串 → null。 */
@@ -504,7 +587,7 @@ function unavailablePiProviderRoute(providerId: string): RoutingDecision {
  *      - 带 x-api-key(= gateway-spawn,cc 自带网关 key)→ passthrough,字节级不变。
  *      - 不带 x-api-key(= oauth-spawn,cc 带订阅 OAuth bearer)→ 默认全量换网关 key
  *        (覆盖 bearer + 删 anthropic-beta,防订阅 token 泄漏到网关);要走订阅须 per-session 选 Anthropic。
- *   **为什么看请求头而非 hasClaudeAiOAuth() live 读**:cc 进程的凭证在 spawn 时冻结,而 OAuth 连接态
+ *   **为什么看请求头而非连接态 live 读**:cc 进程的凭证在 spawn 时冻结,而 OAuth 连接态
  *   可能在会话中途变化(用户在供应商页连/断);live 读(还会每请求 shell-out 读 keychain,慢且与并发的
  *   keychain 写竞争)会与 cc 实际持有的凭证发散,导致 OAuth bearer 被误判 passthrough 泄漏到网关 → 401。
  *   请求头反映的就是 cc 此刻真正握着的凭证,稳健且零 syscall(规则 10 热路径)。
@@ -514,7 +597,13 @@ function unavailablePiProviderRoute(providerId: string): RoutingDecision {
  * chip 用全局活性状态重算会与 child 真实路由发散。export 仅供单测。
  */
 export function createModelRoutingTransform(): RoutingTransform {
-  const route: RoutingTransform = (body, ctx) => {
+  // guest：供应商分享受邀者的 Claude Code 请求(带路由令牌，已核对模型)，按其会话显式来源路由，
+  // 不走隐式推断与默认网关(分享的就是网关时除外)。缺省 = 本机用户自己的请求，路由不变。
+  const route = (
+    body: unknown,
+    ctx: RequestTransformCtx,
+    guest?: GuestProviderRoute,
+  ): RoutingDecision | null | Promise<RoutingDecision | null> => {
     const claimedPiSessionId = headerValue(ctx.headers, 'x-cindy-pi-session-id');
     const claimedPiSessionToken = headerValue(ctx.headers, 'x-cindy-pi-session-token');
     if (
@@ -593,6 +682,11 @@ export function createModelRoutingTransform(): RoutingTransform {
         },
       };
     }
+    // 供应商分享受邀者的 Pi 会话：令牌只为分享的供应商签发，这里按登记再复核一次(含子代理令牌)。
+    const piGuest = piSessionId ? guestProviderRouteForSession(piSessionId) : null;
+    if (piGuest && !piRequestStaysOnGuestProvider(piGuest, piProviderId, registeredPiProviderId)) {
+      return refuseGuestProviderRoute(403, 'shared_provider_only', 'This request is outside the provider shared with you.');
+    }
     if (piSessionId && piProviderId && (isOpenAiSubscriptionProviderId(piProviderId) || isXaiSubscriptionProviderId(piProviderId))) {
       return {
         // PI has already built the provider-native request. The local handler
@@ -622,7 +716,8 @@ export function createModelRoutingTransform(): RoutingTransform {
     const ccSessionId = sdkSessionId && _resolveCcSessionId
       ? _resolveCcSessionId(sdkSessionId)
       : null;
-    const sessionId = piSessionId ?? ccSessionId;
+    // 受邀者的托管会话不在活跃会话表里：会话由路由令牌的登记给出。
+    const sessionId = piSessionId ?? (guest ? guest.sessionId : ccSessionId);
     if (sdkSessionId) {
       recordClaudeApiActivity(
         sdkSessionId,
@@ -638,6 +733,7 @@ export function createModelRoutingTransform(): RoutingTransform {
     if (pendingRoute) return pendingRoute;
 
     const selectedProviderId = sessionId ? getSessionProvider(sessionId) : null;
+    if (guest && selectedProviderId !== guest.providerId) return refuseGuestForeignRoute(wireModel);
     const applyExclusiveReroute = shouldApplyExclusiveProviderReroute(
       selectedProviderId,
       getActiveCatalog().providers,
@@ -672,6 +768,10 @@ export function createModelRoutingTransform(): RoutingTransform {
       && isSubscriptionDirectRoute(wireModel)
       && !(explicitCustomProvider && !isXaiSubscriptionProviderId(selectedProviderId) && isExclusiveXaiModelId(wireModel) && !wireModel.startsWith(XAI_MODEL_PREFIX))
     ) {
+      // 受邀者只能走分享给它的那份订阅，不能凭模型前缀用到本机用户的其它订阅。
+      if (guest && !isOpenAiSubscriptionProviderId(selectedProviderId) && !isXaiSubscriptionProviderId(selectedProviderId)) {
+        return refuseGuestForeignRoute(wireModel);
+      }
       const bridgeHandler = getResponsesBridgeHandler((isOpenAiSubscriptionProviderId(selectedProviderId) || isXaiSubscriptionProviderId(selectedProviderId)) ? selectedProviderId! : undefined);
       if (!bridgeHandler) {
         if (isExclusiveXaiModelId(wireModel)) {
@@ -680,6 +780,7 @@ export function createModelRoutingTransform(): RoutingTransform {
           });
           return refuseExclusiveXaiDefaultGateway(wireModel);
         }
+        if (guest) return refuseGuestForeignRoute(wireModel);
         log.warn('订阅前缀模型但 responses handler 不可用,passthrough(该请求预期会 400)', { wireModel });
         return null;
       }
@@ -735,6 +836,9 @@ export function createModelRoutingTransform(): RoutingTransform {
     // ① 该会话显式选了供应商 → 据 catalog 统一路由。
     //    x-claude-code-session-id = cc sdkSessionId,经注入的 resolver 反解成 xdt sessionId。
     if (sessionId) {
+      if (requestAgent === 'claude-code' && selectedProviderId && isClaudeSubscriptionProviderId(selectedProviderId)) {
+        return refuseClaudeSubscriptionViaProxy();
+      }
       // wireModel 传给 scope 门:cc 内部辅助调用(权限 auto 分类器等 claude-* 小模型请求)
       // 不在订阅直连供应商(xai / openai-cc)声明的 modelPrefixes 范围内 → 返回 null,
       // 落到下方 ② 段 spawn 默认路由,分类器照常走网关/直连(issue #886)。
@@ -773,6 +877,9 @@ export function createModelRoutingTransform(): RoutingTransform {
         return sanitizePiGatewayDecision(null, ctx.url);
       }
     }
+
+    // 受邀者请求不按模型推断来源：分享的就是网关(默认上游)时走 ② 默认路由，否则本地拒绝。
+    if (guest) return guest.providerId === 'xd' ? decideDefaultRoute() : refuseGuestForeignRoute(wireModel);
 
     // ①.5 隐式来源(sessionId 未反解出/未绑定供应商,或 ① 段 scope 门放行下来):按模型
     //     推断路由,必须先于 ② 默认网关 —— 裸 catalog id(如用户智谱来源的 glm-5.3)不是
@@ -882,15 +989,15 @@ export function createModelRoutingTransform(): RoutingTransform {
         log.warn('provider-oauth cc spawn 占位 key 且无网关 key; passthrough (预期 401)', { wireModel });
         return null;
       }
-      // 没网关 key:Anthropic 模型只能直连(唯一出路),其余 passthrough + 记一条诊断。
-      // 判据 = 前缀地板 ∪ 目录 anthropic 供应商模型集合(新家族改 OSS 目录即可,无需发版)。
+      // 没有任何 Cindy 注入的凭证:Anthropic 模型只剩「带着 CLI 自己的订阅凭证直连」一条路,
+      // 而订阅会话从不经本 proxy —— 本地拒绝,不中转。判据 = 前缀地板 ∪ 目录 anthropic 模型集合。
       if (isAnthropicWireModel(wireModel, anthropicCatalogModelIds(getActiveCatalog()))) {
-        recordResolvedDefaultRoute('subscription');
-        return { upstreamOverride: ANTHROPIC_DIRECT_UPSTREAM };
+        log.warn('claude request without Cindy credentials refused (subscription is CLI-only)', { wireModel });
+        return refuseClaudeSubscriptionViaProxy();
       }
       if (wireModel) {
         // 无 key 的非 Anthropic 模型 passthrough 大概率 401 —— 路由归属不明确, 不记录。
-        log.warn('claude oauth-spawn but no gateway key; non-anthropic passthrough (可能 401)', { wireModel });
+        log.warn('claude request without key or gateway key; non-anthropic passthrough (可能 401)', { wireModel });
       }
       return null;
     }
@@ -930,12 +1037,40 @@ export function createModelRoutingTransform(): RoutingTransform {
       // 切换在 await 里完整完成时两端 pending 都是 false。
       if (ownerBoundDispatchUnsafe(ctx)) return ownerBoundaryPendingRoute();
       return withOwnerBoundaryDispatchGate(
-        refuseUnsafePlaceholderPassthrough(stripInternalPiHeaders(resolved), ctx),
+        refuseUnsafePlaceholderPassthrough(stripGuestRouteHeader(stripInternalPiHeaders(resolved)), ctx),
         ctx,
       );
     };
+    // 供应商分享受邀者的 Claude Code 请求(带路由令牌)：令牌无效、带着 Pi 会话头、或分享的
+    // 供应商不提供这个模型时本地拒绝；无 body 的控制面请求只在分享的就是网关(默认上游)时放行。
+    // 令牌不随请求发往上游。
+    const guestToken = headerValue(ctx.headers, GUEST_ROUTE_HEADER);
+    const stripGuestRouteHeader = (resolved: RoutingDecision | null): RoutingDecision | null => {
+      if (guestToken === null || resolved?.localHandler) return resolved;
+      return {
+        ...(resolved ?? {}),
+        headerDelete: [...new Set([...(resolved?.headerDelete ?? []), GUEST_ROUTE_HEADER])],
+      };
+    };
+    const routeGuest = (token: string): ReturnType<typeof route> => {
+      const guest = guestProviderRouteForToken(token);
+      if (!guest) {
+        return refuseGuestProviderRoute(401, 'invalid_guest_route', 'Invalid or expired shared-provider session.');
+      }
+      if (hasInternalPiHeader) {
+        return refuseGuestProviderRoute(403, 'shared_provider_only', 'This request is outside the provider shared with you.');
+      }
+      if (!isPlainObject(body)) {
+        return guest.providerId === 'xd'
+          ? route(body, ctx, guest)
+          : refuseGuestProviderRoute(403, 'shared_provider_only', 'This request is outside the provider shared with you.');
+      }
+      const wireModel = typeof body.model === 'string' ? body.model : '';
+      if (!guestProviderOffersModel(guest.providerId, 'claude-code', wireModel)) return refuseGuestForeignRoute(wireModel);
+      return route(body, ctx, guest);
+    };
     try {
-      const decision = route(body, ctx);
+      const decision = guestToken !== null ? routeGuest(guestToken) : route(body, ctx);
       return decision instanceof Promise
         ? decision.then(finalize, (err: unknown) => routingTransformThrew(err, ctx))
         : finalize(decision);
@@ -1061,7 +1196,9 @@ export async function ensureAnthropicCompatProxyReady(): Promise<void> {
         // A 层无图可转描述，文档承诺的「A 层覆盖 tool_result 内嵌」落空。视觉桥只替换
         // image block、不碰 tool_use 结构，位于 repair/dedupe 之后安全；未命中时返回 null，
         // 旧 #794 strip 继续兜底。
-        buildVisionBridgeProxyTransform(log),
+        // 供应商分享受邀者的请求不走视觉桥：视觉后端是本机用户自己配的其它供应商，
+        // 受邀者只能用分享给它的那一个(图片照原样交给分享的模型)。
+        buildVisionBridgeProxyTransform(log, isGuestProviderShareRequest),
         createXdToolResultImageNoticeTransform(claudeUpstreamEndpoint),
         // PI / Claude 走本 proxy 的 /responses 时（Gateway grok、自定义 LiteLLM）
         // 不会经过 Codex 的 xAI 订阅 transform，必须在这里洗 ModelInput。
@@ -1113,6 +1250,10 @@ export async function ensureAnthropicCompatProxyReady(): Promise<void> {
         createXaiModelInputRecoveryRule({
           onRetry: (threadId, model) => xaiModelInputStripController.markActive(threadId, model),
         }),
+        // 自定义 Anthropic 兼容网关不认 Claude Code 默认档位的精确 400(#5032)→ 省略
+        // output_config.effort 重发一次。只在该文本命中时生效,官方 Claude / 订阅直连
+        // 不会返回它;能力未声明的模型本就不该收到客户端偏好(#4860 出站不变量)。
+        createAnthropicEffortCompatibilityRule(),
       ],
       logger: log,
       // 请求体 dump 默认关(dev trace 级别 + agent 高并发会刷爆 main event loop
