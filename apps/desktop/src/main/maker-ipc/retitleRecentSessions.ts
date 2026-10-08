@@ -10,6 +10,7 @@ import { and, eq, gte } from 'drizzle-orm';
 import { normalizeAutoTitle } from '@cindy/maker-shared/session-title';
 
 import { getDbClient } from '../localDb/client/current.js';
+import { notifyAgentIslandSessionPatch } from '../localDb/agentIslandSessionPatch.js';
 import { broadcastSessionPatched } from '../localDb/ipc/sessions.js';
 import {
   regenerateTitleMaterial,
@@ -84,11 +85,13 @@ async function listRecentAutoTitleCandidates(
     .orderBy(sessions.updatedAt);
 }
 
-async function generateTitleWithSnapshot(
+export async function generateTitleWithSnapshot(
   sessionId: string,
   settings: SessionTitleSettings,
 ): Promise<string | null> {
-  if (settings.style !== 'raw') return regenerateMakerSessionTitle(sessionId);
+  if (settings.style !== 'raw') {
+    return regenerateMakerSessionTitle(sessionId, undefined, false, settings);
+  }
   const { opening } = await regenerateTitleMaterial(
     sessionId,
     RETITLE_RECENT_WINDOW,
@@ -98,7 +101,7 @@ async function generateTitleWithSnapshot(
   return normalizeAutoTitle(opening.text) || null;
 }
 
-async function writeTitleIfStillAuto(
+export async function writeTitleIfStillAuto(
   sessionId: string,
   expectedTitle: string,
   nextTitle: string,
@@ -117,6 +120,7 @@ async function writeTitleIfStillAuto(
     )
     .run();
   if (result.changes !== 1) return false;
+  notifyAgentIslandSessionPatch(sessionId, { title: nextTitle });
   broadcastSessionPatched(sessionId, { title: nextTitle });
   return true;
 }

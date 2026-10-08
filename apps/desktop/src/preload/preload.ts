@@ -7529,18 +7529,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
     // 重命名输入框 Magic 按钮:按会话最新对话内容重新生成标题(素材由 main 读 DB)
     regenerateSessionTitle: (sessionId: string): Promise<{ title: string | null }> =>
       ipcRenderer.invoke('maker:regenerate-title', { sessionId }),
-    sessionTitleSettingsGet: (): Promise<{
+    getSessionTitleSettings: (): Promise<{
       value: { style: 'concise' | 'goal-summary' | 'raw'; language: 'auto' | 'zh-CN' | 'zh-TW' | 'en' | 'ja' | 'ko' };
       isCustomized: boolean;
     }> => ipcRenderer.invoke('maker:session-title-settings:get'),
-    sessionTitleSettingsSet: (patch: {
+    setSessionTitleSettings: (patch: {
       style?: 'concise' | 'goal-summary' | 'raw';
       language?: 'auto' | 'zh-CN' | 'zh-TW' | 'en' | 'ja' | 'ko';
     }): Promise<{
       style: 'concise' | 'goal-summary' | 'raw';
       language: 'auto' | 'zh-CN' | 'zh-TW' | 'en' | 'ja' | 'ko';
     }> => ipcRenderer.invoke('maker:session-title-settings:set', patch),
-    sessionTitleSettingsReset: (): Promise<{
+    resetSessionTitleSettings: (): Promise<{
       style: 'concise' | 'goal-summary' | 'raw';
       language: 'auto' | 'zh-CN' | 'zh-TW' | 'en' | 'ja' | 'ko';
     }> => ipcRenderer.invoke('maker:session-title-settings:reset'),

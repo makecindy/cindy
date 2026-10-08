@@ -2083,13 +2083,33 @@ export async function patchSessionMetaInDb(
     status?: 'active' | 'archived' | 'deleted';
     title?: string;
     pinnedAt?: string | null;
+    /** 仅允许 'auto':自动起名（截断占位 / 智能标题）写回用，落库不冒充手动改名。缺省仍标 'user'。 */
+    titleSource?: 'auto';
+    expectedTitle?: string;
   },
 ): Promise<ReturnType<typeof sessionToCamel>> {
   const ownerScope = captureOwnerScope();
   for (const k of Object.keys(patch)) {
+    if (k === 'titleSource' || k === 'expectedTitle') continue;
     if (!REMOTE_EDITABLE_META.has(k)) {
       throwIpcError('INVALID_PARAMS', `field not allowed in patch-meta: ${k}`);
     }
+  }
+  if (patch.titleSource !== undefined) {
+    if (patch.title === undefined) {
+      throwIpcError('INVALID_PARAMS', 'titleSource requires title');
+    }
+    if (patch.titleSource !== 'auto') {
+      throwIpcError('INVALID_PARAMS', 'titleSource must be auto');
+    }
+    if (typeof patch.expectedTitle !== 'string') {
+      throwIpcError('INVALID_PARAMS', 'automatic title requires expectedTitle');
+    }
+    if (patch.status !== undefined || patch.pinnedAt !== undefined) {
+      throwIpcError('INVALID_PARAMS', 'automatic title cannot change other metadata');
+    }
+  } else if (patch.expectedTitle !== undefined) {
+    throwIpcError('INVALID_PARAMS', 'expectedTitle requires automatic title');
   }
   if (
     patch.status !== undefined &&
@@ -2105,6 +2125,12 @@ export async function patchSessionMetaInDb(
 
   const dbClient = getDbClient();
   const db = dbClient.drizzle;
+  if (patch.titleSource === 'auto') {
+    await persistSessionTitleIfStillDraft(sessionId, patch.title!, patch.expectedTitle!);
+    const row = await selectSessionWithCount(db, sessionId);
+    if (!row) throwIpcError('NOT_FOUND', 'Session 不存在');
+    return sessionToCamel(row);
+  }
   const setObj = sessionPatchToRow(patch, { bumpUpdatedAt: false });
   if (patch.title !== undefined) setObj.titleSource = 'user';
   const updated = await withStatusWriteLock(db, sessionId, patch.status, async () => {

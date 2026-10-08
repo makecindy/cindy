@@ -54,6 +54,20 @@ device-link 授权、撤权与 owner fence；仅有归属范围权限的调用�
 SSH 主机不自动成为设备目录成员。实现与回归见 `mcp-integrations/historyDevices.ts`、
 `localDb/ipc/historyQuery.ts` 和 `packages/lizi-mcps/src/__tests__/historyDevices.test.ts`。
 
+## 远程自动标题写入
+
+既有 `local-db:sessions:patch-meta` 的自动命名请求追加可选字段
+`titleSource: 'auto'` 和 `expectedTitle`，两者必须同时携带 `title`，且不能混入
+状态或置顶修改。被控端复用 `persistSessionTitleIfStillDraft`：在同一 SQL 写入中
+检查原标题与标题来源，`title_source='user'` 永不被自动标题覆盖，即使标题与占位相同。
+未携带这些字段的旧控制端仍按手动改名处理，接口返回形状不变。
+
+新控制端仅在旧主机明确以 `INVALID_PARAMS` 拒绝未知的 `titleSource` 或
+`expectedTitle` 字段时回落旧请求；超时、断链与其它写入错误不重放。旧主机继续保留
+原有写入行为，不具备新来源标记与条件写保证；完整保护需要被控端更新。
+不新增 channel、IPC allowlist、relay 消息或协议版本，服务端与 Mobile 无需改动。
+回归见 `sessionAutoTitlePersist.test.ts` 与 `patchRemoteAutoTitle.test.ts`。
+
 ## Desktop 设备互联 Review
 
 桌面控制端的 /review 通过 maker:review:start 请求被控 Desktop 执行。证据收集、Reviewer

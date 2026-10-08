@@ -47,7 +47,10 @@ import {
   buildRegenerateTitlePrompt,
   SESSION_TITLE_MAX_CHARS_BY_STYLE,
 } from './title-prompt.js';
-import { readSessionTitleSettings } from '../session-title-settings-store.js';
+import {
+  readSessionTitleSettings,
+  type SessionTitleSettings,
+} from '../session-title-settings-store.js';
 
 import { MAKER_INVOKE } from './channels.js';
 import {
@@ -123,7 +126,7 @@ export async function generateMakerSessionTitle(
   const settings = readSessionTitleSettings();
   // 'raw' opts out of model naming entirely; callers keep the local placeholder.
   if (settings.style === 'raw') return null;
-  return generateTitleWithAuxiliaryModel(
+  const generated = await generateTitleWithAuxiliaryModel(
     {
       sessionId: sessionId ?? '',
       agentKind,
@@ -137,6 +140,13 @@ export async function generateMakerSessionTitle(
       readSessionProviderId: readSessionProviderIdFromDb,
       listConnectedProviders: listConnectedProvidersForAgent,
     },
+  );
+  if (generated == null) return null;
+  return validateTitleOutput(
+    generated,
+    settings.style === 'goal-summary'
+      ? SESSION_TITLE_MAX_CHARS_BY_STYLE['goal-summary']
+      : AUTO_TITLE_MAX_CHARS,
   );
 }
 
@@ -192,6 +202,8 @@ export async function regenerateMakerSessionTitle(
   sessionId: string,
   deps: RegenerateTitleDeps = defaultRegenerateDeps,
   latestTurnIsInFlight: boolean | (() => boolean) = false,
+  /** 批量重命名用：固定用批量开始时的设置快照，不重读全局设置。缺省读全局。 */
+  settingsOverride?: SessionTitleSettings,
 ): Promise<string> {
   if (!sessionId) throwIpcError('INVALID_PARAMS', 'sessionId is required');
   try {
@@ -229,7 +241,7 @@ export async function regenerateMakerSessionTitle(
           : `Assistant: ${m.text.slice(0, REGENERATE_ASSISTANT_SLICE)}`,
       )
       .join('\n');
-    const settings = readSessionTitleSettings();
+    const settings = settingsOverride ?? readSessionTitleSettings();
     const regenerateStyle = settings.style === 'raw' ? 'concise' : settings.style;
     const generated = await deps.generateTitle(
       sessionId,
