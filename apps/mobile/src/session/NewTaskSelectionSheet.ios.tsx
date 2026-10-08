@@ -33,7 +33,7 @@ export function NewTaskSelectionSheet(p: NewTaskSelectionSheetProps) {
           modifiers={[...glassStyle, disabled(unavailable || !p.path || !!p.error)]}
           testID="newSession.remoteBrowseSelectCurrent"
         >
-          <Text modifiers={[frame({ maxWidth: Infinity, minHeight: 44 })]}>{t('session.new.useCurrent')}</Text>
+          <Text modifiers={[foregroundStyle(colors.ctaText), frame({ maxWidth: Infinity, minHeight: 44 })]}>{t('session.new.useCurrent')}</Text>
         </Button>
       ) : undefined}
     >

@@ -72,11 +72,18 @@ import {
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { uploadLocalFile } from '../device-link/mediaTransfer.js';
 import { pushToTopicSubscribers } from '../device-link/dispatch.js';
+import { getDeviceLinkInvokeContext } from '../device-link/invoke-context.js';
 import { getSafeDataOwnerPushStamp } from '../device-link/broadcast-tap.js';
 import * as subscriptions from '../device-link/subscriptions.js';
 import { getRipgrepBinaryPath } from '../maker-host/runtime-configs.js';
 import { getRemoteFileBrowser } from './remote-deps.js';
 import { generateFileThumbnail } from './thumbnail.js';
+import {
+  createDirExportDeps,
+  getDirExportStatus,
+  startDirExport,
+  type DirExportDeps,
+} from './dir-export.js';
 
 const log = createLogger('file-browser/device-op');
 
@@ -256,6 +263,7 @@ interface ExportJob {
   uploaded: number;
 }
 const exportJobs = new Map<string, ExportJob>();
+let dirExportDeps: DirExportDeps | undefined;
 
 /** 终态 job 保留时长:覆盖控制端轮询间隔(1.5s)+ 瞬断容忍窗口(~40s)富余。 */
 const EXPORT_JOB_LINGER_MS = 10 * 60 * 1000;
@@ -403,6 +411,7 @@ async function handleRemoteOp(args: RemoteOpArgs): Promise<unknown> {
       gzip: true as const,
       completeDirectoryListing: true as const,
       fileRead: true as const,
+      dirExport: true as const,
     };
   }
   const guardResult = await checkRemoteWorkingDir(args.workdir);
@@ -523,6 +532,9 @@ async function handleRemoteOp(args: RemoteOpArgs): Promise<unknown> {
         // 嵌套(device-link 套 SSH)的大文件导出要先经 daemon 分片拉回被控端再
         // 上传 OSS,本期不做——控制端对嵌套会话维持 OVERSIZE 占位。
         return bad('exportFile is not supported for nested SSH workdirs yet');
+      case 'exportDirStart':
+      case 'exportDirStatus':
+        return bad('REMOTE_UNSUPPORTED: nested SSH workdir');
       case 'thumbnail':
         // 嵌套 SSH 的缩略图要先分片拉回原图再缩放,成本与收益不成比例,本期
         // 不做——控制端(手机网格)对嵌套会话回退类型占位图。
@@ -693,6 +705,36 @@ async function handleRemoteOp(args: RemoteOpArgs): Promise<unknown> {
         size: job.size,
         uploaded: job.uploaded,
       };
+    }
+    case 'exportDirStart': {
+      // 文件夹下载(两段式第一段):路径安全与 exportFileStart 同源;打包 + 推送在后台
+      // 跑(dir-export.ts),字节直接推给发起下载的控制端,不经 relay。
+      const ctx = getDeviceLinkInvokeContext();
+      if (!ctx?.controllerDeviceId || ctx.sharedTask) return bad('REMOTE_UNSUPPORTED');
+      try {
+        // relPath 为空 = 下载工作目录本身(statEntry 不接受根,根是目录由 guard 保证)。
+        const relPath = args.relPath ?? '';
+        if (relPath && (await statEntry(workdir, relPath)).type !== 'directory') {
+          return bad('not a directory');
+        }
+        const realAbs = await fsp.realpath(path.resolve(workdir, relPath));
+        const realRoot = await fsp.realpath(workdir);
+        if (realAbs !== realRoot && !realAbs.startsWith(realRoot + path.sep)) {
+          return bad(`path escapes workdir: ${relPath}`);
+        }
+        dirExportDeps ??= createDirExportDeps();
+        return {
+          ok: true as const,
+          transferId: startDirExport(realAbs, ctx.controllerDeviceId, dirExportDeps),
+        };
+      } catch (err) {
+        return bad(String(err));
+      }
+    }
+    case 'exportDirStatus': {
+      const status = getDirExportStatus(args.transferId ?? '');
+      if (!status) return bad(`unknown transfer: ${args.transferId ?? '<none>'}`);
+      return { ok: true as const, ...status };
     }
     case 'searchCollect':
       return localSearchCollect({

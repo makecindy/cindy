@@ -35,7 +35,7 @@ interface Member { id: string; kind: 'human' | 'bot' | 'integration'; name: stri
   guestAccess: 'none' | 'chat' | 'tools'; accessRevision: number }
 interface Message {
   id: string; seq: string; authorId: string; replyCount?: number; reactions?: Array<{ emoji: string; count: number; me: boolean }>; author: { kind: string; name: string };
-  content: Array<{ type: string; text?: string; fallback?: string; namespace?: string; data?: Record<string, unknown>; mediaId?: string; caption?: string }>;
+  content: Array<{ type: string; text?: string; fallback?: string; namespace?: string; schemaRevision?: number; data?: Record<string, unknown>; mediaId?: string; caption?: string }>;
   origin?: string; createdAt: string; deleted: boolean; threadRootId: string | null;
 }
 interface Room {
@@ -390,6 +390,17 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     return profiles.find(p => p.id === actor?.externalId);
   }
   function messageView(m: Message, members: Member[]): BotGroupMessageView {
+    // Only the server-owned origin establishes a system event. A user-supplied
+    // card with the same namespace must remain an ordinary chat message.
+    if (m.origin === 'system') {
+      const joined = !m.deleted && m.threadRootId === null ? m.content.find(b => b.type === 'card' &&
+        b.namespace === 'cindy.membership' && b.schemaRevision === 1 && b.data?.type === 'member.joined' &&
+        id.safeParse(b.data.actorId).success && typeof b.data.displayName === 'string' && b.data.displayName.trim()) : undefined;
+      return { id: m.id, sequence: Number(m.seq), kind: 'notice', authorKind: 'system', isSelf: false,
+        authorBotId: null, authorName: joined ? String(joined.data!.displayName) : '', content: bodyText(m),
+        threadRootId: m.threadRootId, replyCount: 0, reactions: [], mentions: { all: false, botIds: [] },
+        noticeCode: joined ? 'member-joined' : null, planId: null, files: [], attachments: [], createdAt: Date.parse(m.createdAt) };
+    }
     const member = members.find(member => member.id === m.authorId);
     const planCard = m.content.find(b => b.namespace === 'cindy.plan');
     const legacy = m.origin === 'import' ? m.content.find(b => b.namespace === 'cindy.local-history')?.data : undefined;
@@ -440,6 +451,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     // Sidebar refresh must not download every attachment in every group's history.
     const messages = summaryOnly ? [] : (await messageViews(roomId, page, s.members)).sort((a, b) => a.sequence - b.sequence);
     const last = s.messages[0];
+    const lastView = last ? messageView(last, s.members) : null;
     return { serverBacked: true, migrationPending: [...upgradeErrors.keys()].some(source => upgradedGroups.get(source) === roomId), archived: s.room.archived, selfActorId: selfId, topic: s.room.topic, description: s.room.description, revision: s.room.revision, canInvite: s.members.some(m => m.ownerActorId === selfId && m.state === 'joined' && ['owner', 'admin'].includes(m.role)), id: s.room.id, name: s.room.name, replyMode: s.room.response_mode, speakingMode: s.room.speaking_mode,
       members: s.members.filter(m => m.state === 'joined').map(m => {
         const p = localBot(m.id);
@@ -448,15 +460,15 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
           isOwned: m.ownerActorId === selfId, guestAccess: m.guestAccess, accessRevision: m.accessRevision,
           avatarUrl: m.avatar?.startsWith('https://') ? m.avatar : null,
           name: memberName(m), avatar: p?.avatar ?? (m.avatar?.startsWith('https://') ? '' : m.avatar) ?? '', avatarColor: p?.avatarColor ?? 'violet', status: p?.status ?? 'active' };
-      }), organizerBotId: s.room.organizer_id ? localBot(s.room.organizer_id)?.id ?? s.room.organizer_id : s.members.find(m => m.kind === 'bot' && m.state === 'joined')?.id ?? null, projectDir: workspace?.projectDir ?? null, lastMessage: last ? {
-        isSelf: last.authorId === selfId, authorKind: last.author.kind === 'human' ? 'user' : 'bot', authorName: messageView(last, s.members).authorName,
-        preview: bodyText(last).slice(0, 80), createdAt: Date.parse(last.createdAt),
+      }), organizerBotId: s.room.organizer_id ? localBot(s.room.organizer_id)?.id ?? s.room.organizer_id : s.members.find(m => m.kind === 'bot' && m.state === 'joined')?.id ?? null, projectDir: workspace?.projectDir ?? null, lastMessage: lastView ? {
+        isSelf: lastView.isSelf, authorKind: lastView.authorKind, authorName: lastView.authorName, noticeCode: lastView.noticeCode,
+        preview: lastView.content.slice(0, 80), createdAt: lastView.createdAt,
       } : null, speakingBotIds: speakers.map(s => s.botId), planningBotId: planning.get(roomId)?.botId ?? null, openPlan: open ? { id: open.id, status: open.status, currentStep: open.currentStep, stepCount: open.steps.length, currentBotName: open.steps[open.currentStep ?? 0]?.botName ?? null, currentStepStatus: open.steps[open.currentStep ?? 0]?.status ?? null } : null,
-      lastReplyAt: s.messages.reduce((latest, m) => !m.deleted && m.authorId !== selfId
+      lastReplyAt: s.messages.reduce((latest, m) => !m.deleted && m.origin !== 'system' && m.authorId !== selfId
         ? Math.max(latest, Date.parse(m.createdAt)) : latest, 0),
       createdAt: Date.parse(s.room.created_at), updatedAt: Date.parse(s.room.updated_at ?? s.room.created_at),
       messages, hasMoreBefore: page.length === (o.limit ?? 100), plans,
-      round: { status: executions.some(e => ['queued', 'running'].includes(e.status)) ? 'running' : 'idle', speakers, canContinue: !open && !planning.has(roomId) && (executions.some(e => !e.plan_id) || s.messages.some(m => !m.deleted && m.author.kind === 'human' && !m.content.some(b => b.namespace === 'cindy.plan'))) && !executions.some(e => ['queued','running','stopping','needs_input'].includes(e.status)) } };
+      round: { status: executions.some(e => ['queued', 'running'].includes(e.status)) ? 'running' : 'idle', speakers, canContinue: !open && !planning.has(roomId) && (executions.some(e => !e.plan_id) || s.messages.some(m => !m.deleted && m.origin !== 'system' && m.author.kind === 'human' && !m.content.some(b => b.namespace === 'cindy.plan'))) && !executions.some(e => ['queued','running','stopping','needs_input'].includes(e.status)) } };
   }
   function planView(plan: ServerPlan, members: Member[], workspace: ReturnType<ReturnType<typeof chatServerWorkspaces>['read']>): BotGroupPlanView {
     return { id: plan.id, status: plan.status, organizerBotId: localBot(plan.organizer_id)?.id ?? plan.organizer_id,
@@ -894,7 +906,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       const room = await resolveGroup(id.parse(groupId));
       const history = await api<Message[]>(`/conversations/${room}/messages?limit=100`);
       const executions = await api<Execution[]>(`/conversations/${room}/executions`);
-      const sourceId = executions.find(e => !e.plan_id)?.source_message_id ?? history.find(m => !m.deleted && m.author.kind === 'human' && !m.content.some(b => b.namespace === 'cindy.plan'))?.id;
+      const sourceId = executions.find(e => !e.plan_id)?.source_message_id ?? history.find(m => !m.deleted && m.origin !== 'system' && m.author.kind === 'human' && !m.content.some(b => b.namespace === 'cindy.plan'))?.id;
       if (!sourceId) throw new Error('MESSAGE_NOT_FOUND');
       await api(`/conversations/${room}/messages/${sourceId}/continue`, 'POST', { operationId: randomUUID() });
       changed(room); return { ok: true as const };

@@ -233,37 +233,6 @@ describe('统一 composer 建议入口', () => {
     expect(onRemove).toHaveBeenCalledWith('/repo-shared');
   });
 
-  it('Host capability 插件由统一建议面板交给 composer 处理，不伪造 command', () => {
-    const entries = buildComposerSuggestionEntries({
-      query: '',
-      actions: [],
-      resources: [],
-      plugins: [iosSimulatorPluginSuggestion],
-    });
-    const onSelect = vi.fn();
-    render(
-      createElement(AtMentionPanel, {
-        query: '',
-        state: { kind: 'ready', items: [], truncated: false },
-        entries,
-        focusedIndex: 0,
-        onFocusedIndexChange: vi.fn(),
-        onSelect,
-        onClose: vi.fn(),
-        onRetry: vi.fn(),
-        embedded: true,
-      }),
-    );
-
-    const pluginRow = screen.getByRole('button', { name: 'iOS Simulator' });
-    expect((pluginRow as HTMLButtonElement).disabled).toBe(false);
-    fireEvent.click(pluginRow);
-    expect(onSelect).toHaveBeenCalledWith({
-      kind: 'resource',
-      item: iosSimulatorPluginSuggestion.item,
-    });
-  });
-
   it('已停用优先显示停用状态；可用但无直接入口的 Skill 标为 Agent 自动调用', () => {
     const disabledEntries = buildComposerSuggestionEntries({
       query: '',

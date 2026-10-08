@@ -1,8 +1,9 @@
-import { isPeerResetRetryableReadChannel, isBackgroundInvoke, bypassInvokeScheduling } from './invokePolicy.js';
+import { isPeerResetRetryableInvoke, isBackgroundInvoke, bypassInvokeScheduling } from './invokePolicy.js';
 import { InvokeScheduler } from './invokeScheduler.js';
-import { encodeSharedTaskEnvelope, decodeSharedTaskEnvelope } from './sharedTaskEnvelope.js';
+import { decodeScopedEnvelope, encodeScopedEnvelope, type ScopeSupport } from './providerShareEnvelope.js';
+import { isProviderSharePeer } from './providerSharePeer.js';
 import { isSharedTaskPeer } from './sharedTaskPeer.js';
-import { ROUTED_KINDS, SHARED_TASK_RELAY_CAPABILITY } from '@cindy/device-link-protocol';
+import { PROVIDER_SHARE_RELAY_CAPABILITY, ROUTED_KINDS, SHARED_TASK_RELAY_CAPABILITY } from '@cindy/device-link-protocol';
 import {
   requestSessionTagCatalog,
   decodeSessionTagCatalog,
@@ -54,6 +55,9 @@ import {
   byteLength,
 } from './transport.js';
 import { MAKER_EVENT_BATCH_CHANNEL } from './topics.js';
+
+/** Budget measurement: physical wire envelope size regardless of relay announcement. */
+const ALL_SCOPES: ScopeSupport = { sharedTask: true, providerShare: true };
 const DUPLICATE_CONNECTION_CLOSE_CODE = 4409;
 /** RFC 6455 1013 Try Again Later:relay 因拥塞主动断连(如 inbound backpressure)。 */
 const RELAY_TRY_AGAIN_LATER_CLOSE_CODE = 1013;
@@ -221,6 +225,11 @@ export interface DeviceLinkClientOptions {
   getWsUrl(): string;
   /** 每次(重)连前取新鲜 token;null = 当前无登录态,跳过本轮并按退避重试 */
   getToken(): Promise<string | null>;
+  /**
+   * WebSocket 升级的认证方案。默认 `Bearer`(账号 Access Token);供应商分享的跨区域受邀者
+   * 连接对方区域时用 `ProviderShareGuest`(只限分享的凭证，契约 §6.3)。
+   */
+  authorizationScheme?: 'Bearer' | 'ProviderShareGuest';
   /** 每次(重)连时的 hello payload(host 持有 deviceName / 开关 / busy 的真相) */
   getHello(): HelloPayload;
   createWebSocket: WsFactory;
@@ -508,8 +517,8 @@ interface PendingRequest {
 
 function isPeerResetRetryableRead(env: Omit<Envelope, 'id'>): boolean {
   if (env.kind !== 'invoke') return false;
-  const channel = (env.payload as InvokePayload | undefined)?.channel;
-  return typeof channel === 'string' && isPeerResetRetryableReadChannel(channel);
+  const payload = env.payload as InvokePayload | undefined;
+  return typeof payload?.channel === 'string' && isPeerResetRetryableInvoke(payload.channel, payload.args);
 }
 
 interface PendingReliableMessage {
@@ -1233,6 +1242,14 @@ export class DeviceLinkClient {
   }
 
   /** 最近一次 hello-ack 声明的 server 能力(如 SERVER_CAPABILITY_NOTIFY);老 server = 空集。 */
+  /** Cross-account scopes this relay has announced; scoped frames are only sent after announcement. */
+  private scopeSupport(): ScopeSupport {
+    return {
+      sharedTask: this.hasServerCapability(SHARED_TASK_RELAY_CAPABILITY),
+      providerShare: this.hasServerCapability(PROVIDER_SHARE_RELAY_CAPABILITY),
+    };
+  }
+
   hasServerCapability(capability: string): boolean {
     return this.serverCapabilities.includes(capability);
   }
@@ -1823,7 +1840,7 @@ export class DeviceLinkClient {
     let ws: WsLike;
     try {
       ws = await this.opts.createWebSocket(this.opts.getWsUrl(), {
-        authorization: `Bearer ${token}`,
+        authorization: `${this.opts.authorizationScheme ?? 'Bearer'} ${token}`,
       });
     } catch (err) {
       // 异步工厂可能在更新的一轮 connect 已经起来之后才 reject —— 那是过期尝试的失败,
@@ -2137,7 +2154,7 @@ export class DeviceLinkClient {
       this.log.warn('dropping invalid device-link frame');
       return;
     }
-    const env = decodeSharedTaskEnvelope(parsed, this.hasServerCapability(SHARED_TASK_RELAY_CAPABILITY));
+    const env = decodeScopedEnvelope(parsed, this.scopeSupport());
     if (!env) { this.log.warn('dropping invalid device-link routing scope'); return; }
     const validForHeartbeat = isValidInboundEnvelope(env);
     // 畸形 invoke / link-close 仍须进入 Desktop 业务层：前者生成结构化拒绝，后者
@@ -2397,7 +2414,8 @@ export class DeviceLinkClient {
         );
         const pending = env.id ? this.pending.get(env.id) : undefined;
         if (pending && ((payload.dst !== undefined && payload.dst !== pending.dst)
-          || (isSharedTaskPeer(pending.dst) && env.sharedTask === undefined))) return true;
+          || (isSharedTaskPeer(pending.dst) && env.sharedTask === undefined)
+          || (isProviderSharePeer(pending.dst) && env.providerShare === undefined))) return true;
         const routeDeviceId = payload.dst ?? pending?.dst;
         const rememberedGeneration = env.id
           ? this.consumeOutboundRouteGeneration(env.id, routeDeviceId)
@@ -3138,7 +3156,7 @@ export class DeviceLinkClient {
         // pending 可在 link down 时入队，并在后续 link generation 才首次上网；
         // 路由错误必须归属每次真实物理发送，而不是逻辑消息的入队代次。
         this.sendRoutedEnvelope(frame, peer.linkGeneration);
-        writtenBytes += byteLength(JSON.stringify(encodeSharedTaskEnvelope(frame, true)));
+        writtenBytes += byteLength(JSON.stringify(encodeScopedEnvelope(frame, ALL_SCOPES)));
         pending.sent = true;
         sent += 1;
       }
@@ -3217,7 +3235,7 @@ export class DeviceLinkClient {
 
   private measureReliableFrames(frames: readonly Envelope[]): number {
     // Budget the physical wire envelope, not the local scoped connection handle.
-    return frames.reduce((sum, frame) => sum + byteLength(JSON.stringify(encodeSharedTaskEnvelope(frame, true))), 0);
+    return frames.reduce((sum, frame) => sum + byteLength(JSON.stringify(encodeScopedEnvelope(frame, ALL_SCOPES))), 0);
   }
 
   /**
@@ -3245,7 +3263,7 @@ export class DeviceLinkClient {
   private sendEnvelope(env: Envelope): void {
     const ws = this.ws;
     if (!ws) throw new DeviceLinkError('NOT_CONNECTED', 'no active connection');
-    const text = JSON.stringify(encodeSharedTaskEnvelope(env, this.hasServerCapability(SHARED_TASK_RELAY_CAPABILITY)));
+    const text = JSON.stringify(encodeScopedEnvelope(env, this.scopeSupport()));
     // 按 UTF-8 字节数判定,与服务端 MAX_FRAME_BYTES(Buffer.byteLength)一致。
     // 用 text.length(UTF-16 码元)会与服务端不符:CJK 等多字节内容客户端自检通过、
     // 服务端却 PAYLOAD_TOO_LARGE 丢帧,invoke 只能等 30s 超时而非快速失败。

@@ -341,6 +341,22 @@ describe('RightSidebarShell empty state', () => {
     expect(tabsIpc.setActive).toHaveBeenCalledWith({ sessionId: 's1', id: null });
   });
 
+  it('collapses an unavailable retired-only sidebar without deleting its history', async () => {
+    const onAllTabsClosed = vi.fn();
+    tabsIpc.list.mockResolvedValueOnce({
+      tabs: [{ id: 'old-simulator', kind: 'ios-simulator', state: null }],
+      activeTabId: 'old-simulator',
+    });
+    const view = render(createElement(RightSidebarShell, {
+      sessionId: 's1', workdir: '/tmp/repo', remoteHostId: null,
+      shellVisible: true, isMac: true, subagentsAvailable: false, onAllTabsClosed,
+    }));
+    await waitFor(() => expect(onAllTabsClosed).toHaveBeenCalledTimes(1));
+    expect(tabsIpc.close).not.toHaveBeenCalled();
+    expect(getBucket('s1').tabs.map(tab => tab.id)).toEqual(['old-simulator']);
+    view.unmount();
+  });
+
   it('keeps a persisted Subagents-only sidebar intact while Pi eligibility is loading', async () => {
     const onAllTabsClosed = vi.fn();
     tabsIpc.list.mockResolvedValueOnce({

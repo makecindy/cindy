@@ -11,7 +11,7 @@
 
 import './file-browser';
 import './web-browser';
-import './ios-simulator';
+import './retired-feature';
 import './terminal';
 import './review';
 import './orca-workers';

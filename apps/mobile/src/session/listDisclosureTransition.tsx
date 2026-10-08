@@ -78,16 +78,18 @@ const motionAllowed = () => getCachedReduceMotionEnabled() === false;
  * layout effect 里)立刻执行 apply;窗口在动画结束后自动收回。系统「减弱动态效果」
  * 开启、或列表不在屏上时直接执行。窗口逻辑见 listDisclosureController.ts。
  */
-export function useListDisclosureTransition() {
+export function useListDisclosureTransition({
+  motionEnabled = true,
+}: { motionEnabled?: boolean } = {}) {
   const controller = useRef<DisclosureController>(createDisclosureController()).current;
   /** nested:要切换的分组嵌在另一个分组块里(项目里的自动化组),块内的行也要让位。 */
   const run = useCallback((apply: () => void, options?: { nested?: boolean }) => {
-    runDisclosure(controller, apply, options?.nested ? 2 : 1, motionAllowed());
-  }, [controller]);
+    runDisclosure(controller, apply, options?.nested ? 2 : 1, motionEnabled && motionAllowed());
+  }, [controller, motionEnabled]);
   /** 分组标题的 onPressIn:手指按下即提前挂上动画,松手时直接执行。 */
   const prepare = useCallback(() => {
-    openDisclosureWindow(controller, 1, motionAllowed());
-  }, [controller]);
+    openDisclosureWindow(controller, 1, motionEnabled && motionAllowed());
+  }, [controller, motionEnabled]);
   useEffect(() => () => {
     if (controller.timer) clearTimeout(controller.timer);
   }, [controller]);
@@ -95,7 +97,15 @@ export function useListDisclosureTransition() {
 }
 
 /** 包住列表:持有开关状态,开关变化只重渲染挂动画的行。 */
-export function ListDisclosureScope({ children, controller }: { children: ReactNode; controller: DisclosureController }) {
+export function ListDisclosureScope({
+  children,
+  controller,
+  motionEnabled = true,
+}: {
+  children: ReactNode;
+  controller: DisclosureController;
+  motionEnabled?: boolean;
+}) {
   const [level, setLevel] = useState<DisclosureLevel>(0);
   useLayoutEffect(() => {
     controller.setLevel = setLevel;
@@ -106,8 +116,8 @@ export function ListDisclosureScope({ children, controller }: { children: ReactN
     commitRegisteredLevel(controller, level);
   }, [level, controller]);
   const prepare = useCallback((nested?: boolean) => {
-    openDisclosureWindow(controller, nested ? 2 : 1, motionAllowed());
-  }, [controller]);
+    openDisclosureWindow(controller, nested ? 2 : 1, motionEnabled && motionAllowed());
+  }, [controller, motionEnabled]);
   return (
     <DisclosurePrepareContext.Provider value={prepare}>
       <DisclosureLevelContext.Provider value={level}>{children}</DisclosureLevelContext.Provider>

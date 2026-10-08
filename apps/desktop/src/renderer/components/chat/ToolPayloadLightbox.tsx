@@ -29,7 +29,7 @@ import {
 } from './chatChrome';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Copy, FileText, Folder, X } from 'lucide-react';
+import { Copy, Download, FileText, Folder, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { cn, basename } from '@/lib/utils';
@@ -42,7 +42,7 @@ import { MarkdownDiffBlock } from './MarkdownDiffBlock';
 import type { DiffDetails } from '@/lib/agent-actions/diffStats';
 import { isRemoteFileOrigin } from '@/lib/sessionFileOrigin';
 import { resolveToolFilePath } from '@/lib/localPathResolver';
-import { revealRemoteChatFile } from '@/lib/remoteFileOpen';
+import { downloadRemoteChatEntry } from '@/lib/remoteFileOpen';
 import { useChatSessionFile } from './ChatSessionFileContext';
 
 export type ToolDiffSegment =
@@ -256,15 +256,20 @@ export function ToolPayloadLightbox({
     }
   }
 
+  const remoteFile = isRemoteFileOrigin(fileCtx.origin);
+  const revealLabel = remoteFile
+    ? t('chat.remoteFile.downloadToLocal')
+    : t('chat.lightbox.openInExplorer');
+
   async function showInFolder() {
     if (payload.kind !== 'diff' || payload.files.length !== 1) return;
     // 模型可能给相对路径(Claude file_path / Codex change path)—— 先按会话
     // workingDir 补成绝对路径,show-item-in-folder 只接受绝对路径。
     const filePath = resolveToolFilePath(payload.files[0].filePath, fileCtx.workingDir);
     // remote 会话:远端路径本机不存在(或更糟,存在同路径本机文件)——
-    // 下载缓存副本后定位副本。
+    // 下载到本地后定位下载的文件。
     if (isRemoteFileOrigin(fileCtx.origin)) {
-      await revealRemoteChatFile(fileCtx.origin, fileCtx.workingDir, filePath);
+      await downloadRemoteChatEntry(fileCtx.origin, fileCtx.workingDir, filePath);
       return;
     }
     const res = await window.electronAPI.showItemInFolder({ filePath });
@@ -371,12 +376,16 @@ export function ToolPayloadLightbox({
                     type="button"
                     onClick={showInFolder}
                     className={CHAT_LIGHTBOX_ICON_BUTTON_CLASS}
-                    aria-label={t('chat.lightbox.openInExplorer')}
+                    aria-label={revealLabel}
                   >
-                    <Folder size={18} className="text-[var(--msg-tool-card-chevron)]" />
+                    {remoteFile ? (
+                      <Download size={18} className="text-[var(--msg-tool-card-chevron)]" />
+                    ) : (
+                      <Folder size={18} className="text-[var(--msg-tool-card-chevron)]" />
+                    )}
                   </button>
                 </Tooltip.Trigger>
-                <Tooltip.Content>{t('chat.lightbox.openInExplorer')}</Tooltip.Content>
+                <Tooltip.Content>{revealLabel}</Tooltip.Content>
               </Tooltip.Root>
             )}
             <Tooltip.Root>

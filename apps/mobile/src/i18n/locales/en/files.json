@@ -96,6 +96,8 @@
     "downloadFailed": "Download failed",
     "fetchingVideo": "Fetching video from your computer…",
     "fetchingAudio": "Fetching audio from your computer…",
+    "videoBuffering": "Buffering…",
+    "videoBufferingPercent": "Buffering {{percent}}%",
     "fetchAvFailed": "Fetch failed: {{detail}}",
     "fetchPdfFailed": "PDF fetch failed: {{detail}}",
     "fetchingPdf": "Fetching PDF from your computer…",

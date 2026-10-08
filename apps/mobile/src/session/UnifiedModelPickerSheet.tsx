@@ -29,6 +29,10 @@ import { UnifiedModelPickerView } from "./UnifiedModelPickerView";
 import { budgetRowDisabled, presentPickerPrice } from "./modelPickerRows";
 import { mobileWeeklyQuota } from "./mobileModelRowPresentation";
 import { mobileAgentLabel } from "./sessionAgentSwitch";
+import type { RemoteAgentCatalog } from "./remoteAgentCatalogs";
+import { remoteFilterId } from "./remoteSourceFilters";
+
+const NO_REMOTE_CATALOGS: readonly RemoteAgentCatalog[] = [];
 
 function createFavoriteUid(): string {
   const cryptoWithUuid = globalThis.crypto as Crypto | undefined;
@@ -60,7 +64,20 @@ export interface UnifiedMobilePickerOptions {
   scope: string;
   agents: readonly AgentKind[];
   loadCapabilities(agent: AgentKind): Promise<MobileAgentCapabilities>;
-  onSelect(configuration: MobileModelConfiguration): Promise<boolean>;
+  /**
+   * 远程 Agent(已建任务):同账号其他电脑上开放了远程调用的供应商,接在被控电脑自己的供应商
+   * 之后,每个供应商一段、标题带电脑名(与桌面模型面板同口径)。缺省 = 只列被控电脑的目录。
+   */
+  remote?: {
+    catalogs: readonly RemoteAgentCatalog[];
+    /** 当前选中态(下一条消息时 Agent 所在电脑)属于哪份目录;null = 被控电脑。 */
+    selectedDeviceId: string | null;
+  };
+  /** source.deviceId = 这一行来自哪台电脑的目录(null / 缺省 = 被控电脑)。 */
+  onSelect(
+    configuration: MobileModelConfiguration,
+    source?: { deviceId: string | null },
+  ): Promise<boolean>;
 }
 export interface UnifiedMobileRow {
   key: string;
@@ -74,6 +91,8 @@ export interface UnifiedMobileRow {
   effortLabel: string;
   quotaLabel: string | null;
   providerMark: MobileProviderMarkProps;
+  /** 这一行来自哪台其他电脑的目录(图标带远程标记);缺省 = 被控电脑自己的。 */
+  remoteDevice?: { deviceId: string; name: string };
 }
 export interface UnifiedMobileGroup {
   key: string;
@@ -96,6 +115,11 @@ export interface UnifiedMobilePickerViewProps {
     label: string;
     providerMark?: MobileProviderMarkProps;
     quota?: { remaining: number; label: string };
+    /**
+     * 另一台电脑上的供应商:来源页里每台电脑单独一块(块标题 = 电脑名,行标题 = providerLabel),
+     * 图标带远程标记;label 是带电脑名的完整说法,用在搜索栏旁的来源按钮上。
+     */
+    remote?: { deviceId: string; deviceName: string; providerLabel: string };
   }[];
   groups: UnifiedMobileGroup[];
   busy: boolean;
@@ -144,7 +168,16 @@ export function UnifiedModelPickerSheet(
     modelId: string;
     uid?: string;
     config?: MobileModelConfiguration;
+    /** 另一台电脑目录里的行;缺省 = 被控电脑的。 */
+    deviceId?: string;
   } | null>(null);
+  // 另一台电脑目录里的行:手机这边的偏好与档位记忆都按被控电脑的供应商记,不写给它们;
+  // 详情页里调的档位 / 引擎只在这次打开期间跟着那一行。
+  const [remoteConfigs, setRemoteConfigs] = useState<
+    ReadonlyMap<string, MobileModelConfiguration>
+  >(new Map());
+  // 打开时 Agent 在另一台电脑:目录读到后停在那台电脑的当前供应商上(用户先手动换过就不再跳)。
+  const initialRemoteFilter = useRef(false);
   const [favoriteEdit, setFavoriteEdit] = useState<{
     original: MobileModelFavorite;
     config: MobileModelConfiguration;
@@ -162,7 +195,9 @@ export function UnifiedModelPickerSheet(
     opening.current += 1;
     setQuery("");
     setFilter("all");
+    initialRemoteFilter.current = true;
     setTarget(null);
+    setRemoteConfigs(new Map());
     setFavoriteEdit(null);
     setNotice(null);
     setError(null);
@@ -183,6 +218,17 @@ export function UnifiedModelPickerSheet(
       opening.current += 1;
     };
   }, [p.visible, p.unified.scope]);
+  const remoteCatalogs = p.unified.remote?.catalogs ?? NO_REMOTE_CATALOGS;
+  /** 选中态属于哪台其他电脑的目录;null = 被控电脑自己的(含没有远程 Agent 的情况)。 */
+  const selectedDeviceId = p.unified.remote?.selectedDeviceId ?? null;
+  const keepModel = useMemo(
+    () => ({
+      providerId: p.selectedProviderId,
+      modelId: p.activeModelId,
+      agent: p.agentKind,
+    }),
+    [p.selectedProviderId, p.activeModelId, p.agentKind],
+  );
   const entries = useMemo(
     () =>
       mobileUnifiedEntries(
@@ -190,30 +236,68 @@ export function UnifiedModelPickerSheet(
         p.unified.agents,
         p.modelVisibilityOverrides,
         !!p.existingSessionRoute,
-        {
-          providerId: p.selectedProviderId,
-          modelId: p.activeModelId,
-          agent: p.agentKind,
-        },
+        selectedDeviceId === null ? keepModel : undefined,
       ),
     [
       p.providers,
       p.unified.agents,
       p.modelVisibilityOverrides,
       p.existingSessionRoute,
+      keepModel,
+      selectedDeviceId,
+    ],
+  );
+  // 另一台电脑的目录:每台按自己的供应商与可见性派生,选中态只落在 Agent 所在那台。
+  const remoteDirectories = useMemo(
+    () =>
+      remoteCatalogs.flatMap((catalog) => {
+        if (catalog.providers.length === 0) return [];
+        const selectedHere = catalog.deviceId === selectedDeviceId;
+        return [
+          {
+            catalog,
+            entries: mobileUnifiedEntries(
+              catalog.providers,
+              p.unified.agents,
+              catalog.modelVisibilityOverrides,
+              !!p.existingSessionRoute,
+              selectedHere ? keepModel : undefined,
+            ),
+            sourceId: selectedHere
+              ? buildMobileModelSections({
+                  providers: catalog.providers,
+                  agentKind: p.agentKind,
+                  selectedModelId: p.activeModelId,
+                  selectedProviderId: p.selectedProviderId,
+                  existingSessionRoute: p.existingSessionRoute,
+                  visibilityOverrides: catalog.modelVisibilityOverrides,
+                }).activeSourceId
+              : null,
+          },
+        ];
+      }),
+    [
+      remoteCatalogs,
+      selectedDeviceId,
+      keepModel,
+      p.unified.agents,
+      p.existingSessionRoute,
       p.selectedProviderId,
       p.activeModelId,
       p.agentKind,
     ],
   );
-  const sourceId = buildMobileModelSections({
-    providers: p.providers,
-    agentKind: p.agentKind,
-    selectedModelId: p.activeModelId,
-    selectedProviderId: p.selectedProviderId,
-    existingSessionRoute: p.existingSessionRoute,
-    visibilityOverrides: p.modelVisibilityOverrides,
-  }).activeSourceId;
+  const sourceId =
+    selectedDeviceId === null
+      ? buildMobileModelSections({
+          providers: p.providers,
+          agentKind: p.agentKind,
+          selectedModelId: p.activeModelId,
+          selectedProviderId: p.selectedProviderId,
+          existingSessionRoute: p.existingSessionRoute,
+          visibilityOverrides: p.modelVisibilityOverrides,
+        }).activeSourceId
+      : null;
   const selection: MobileModelConfiguration = {
     providerId: sourceId ?? "",
     modelId: p.activeModelId,
@@ -242,24 +326,22 @@ export function UnifiedModelPickerSheet(
       }
     : selection;
   const fastCapable = (agent: AgentKind) => caps[agent]?.hasFastMode === true;
+  const effortText = (config: MobileModelConfiguration) =>
+    config.effort
+      ? t(`models.options.effortLevels.${config.effort}`, {
+          defaultValue: config.effort,
+        })
+      : "";
   const describe = (
     entry: UnifiedModelEntry,
     config: MobileModelConfiguration,
+    providers: readonly (typeof p.providers)[number][] = p.providers,
   ) => {
-    const provider = p.providers.find((item) => item.id === entry.providerId);
+    const provider = providers.find((item) => item.id === entry.providerId);
     const identity =
       provider?.openAiAccount?.identity?.trim() ||
       provider?.subscriptionAccount?.identity?.trim();
-    return [
-      identity,
-      config.effort
-        ? t(`models.options.effortLevels.${config.effort}`, {
-            defaultValue: config.effort,
-          })
-        : null,
-    ]
-      .filter(Boolean)
-      .join(" · ");
+    return [identity, effortText(config)].filter(Boolean).join(" · ");
   };
   const makeRow = (
     entry: UnifiedModelEntry,
@@ -296,11 +378,7 @@ export function UnifiedModelPickerSheet(
         !caps[config.agent] ||
         budgetRowDisabled(config.modelId, p.apiKeyStatus ?? "unknown"),
       subtitle: describe(entry, config),
-      effortLabel: config.effort
-        ? t(`models.options.effortLevels.${config.effort}`, {
-            defaultValue: config.effort,
-          })
-        : "",
+      effortLabel: effortText(config),
       costMarks: mobileCostMarks(
         p.providers.find((item) => item.id === entry.providerId),
         config.modelId,
@@ -344,9 +422,80 @@ export function UnifiedModelPickerSheet(
     if (!provider) return id;
     return mobileProviderAccountTitle(provider);
   };
+  // 另一台电脑目录里的供应商,说法带电脑名(「Claude 订阅 · 工作室 Mac」)。
+  const remoteProviderName = (catalog: RemoteAgentCatalog, id: string) => {
+    const provider = catalog.providers.find((item) => item.id === id);
+    return provider ? mobileProviderAccountTitle(provider) : id;
+  };
+  const remoteProviderLabel = (catalog: RemoteAgentCatalog, id: string) =>
+    t("models.unified.remoteProvider", {
+      provider: remoteProviderName(catalog, id),
+      device: catalog.name,
+    });
+  const makeRemoteRow = (
+    directory: (typeof remoteDirectories)[number],
+    entry: UnifiedModelEntry,
+  ): UnifiedMobileRow => {
+    const { catalog } = directory;
+    const selected =
+      directory.sourceId !== null &&
+      entry.providerId === directory.sourceId &&
+      matchesEntry(entry, p.activeModelId);
+    const key = `remote:${catalog.deviceId}:${modelKey(entry.providerId, entry.modelId)}`;
+    const provider = catalog.providers.find(
+      (item) => item.id === entry.providerId,
+    );
+    // 不用手机这边按被控电脑供应商记的引擎偏好与档位记忆:同 id 的供应商在两台电脑上不是同一个。
+    const config =
+      (!selected ? remoteConfigs.get(key) : undefined) ??
+      resolveMobileModelConfig(entry, {
+        live: selected
+          ? { ...selection, providerId: directory.sourceId ?? "" }
+          : undefined,
+        pinned: p.existingSessionRoute ? p.agentKind : undefined,
+        fastCapable,
+      });
+    return {
+      key,
+      entry,
+      config,
+      providerMark: {
+        providerId: entry.providerId,
+        name: provider?.name ?? entry.providerId,
+        routing: provider?.routing,
+        logoKind: provider?.logoKind,
+      },
+      remoteDevice: { deviceId: catalog.deviceId, name: catalog.name },
+      selected,
+      disabled: !caps[config.agent],
+      subtitle: describe(entry, config, catalog.providers),
+      effortLabel: effortText(config),
+      costMarks: mobileCostMarks(
+        provider,
+        config.modelId,
+        config.agent,
+        p.pricing,
+      ),
+      // 用量镜像按被控电脑的供应商取,另一台电脑的不在这里显示。
+      quotaLabel: null,
+    };
+  };
+  const remoteRows = remoteDirectories.map((directory) => ({
+    catalog: directory.catalog,
+    rows: directory.entries.map((entry) => makeRemoteRow(directory, entry)),
+  }));
+  const rowProviderName = (row: UnifiedMobileRow) => {
+    const device = row.remoteDevice;
+    const catalog = device
+      ? remoteCatalogs.find((item) => item.deviceId === device.deviceId)
+      : undefined;
+    return catalog
+      ? remoteProviderLabel(catalog, row.entry.providerId)
+      : providerName(row.entry.providerId);
+  };
   const matches = (row: UnifiedMobileRow) =>
     !query.trim() ||
-    `${row.entry.displayName} ${row.entry.modelId} ${row.entry.description ?? ""} ${providerName(row.entry.providerId)}`
+    `${row.entry.displayName} ${row.entry.modelId} ${row.entry.description ?? ""} ${rowProviderName(row)}`
       .toLocaleLowerCase()
       .includes(query.trim().toLocaleLowerCase());
   const all = query.trim() || filter === "all";
@@ -386,11 +535,35 @@ export function UnifiedModelPickerSheet(
           rows: group,
         });
     }
+  // 其他电脑的供应商接在后面:每个供应商一段,标题带电脑名;「收藏」与本机供应商视图里不出现。
+  for (const { catalog, rows: deviceRows } of remoteRows)
+    for (const provider of catalog.providers) {
+      const id = remoteFilterId(catalog.deviceId, provider.id);
+      if (!all && filter !== id) continue;
+      const group = deviceRows.filter(
+        (row) => row.entry.providerId === provider.id && matches(row),
+      );
+      if (group.length)
+        groups.push({
+          key: id,
+          title: remoteProviderLabel(catalog, provider.id),
+          rows: group,
+        });
+    }
   const sourceRow = target
-    ? rows.find(
+    ? (target.deviceId
+        ? remoteRows.find((item) => item.catalog.deviceId === target.deviceId)
+            ?.rows
+        : rows
+      )?.find(
         (row) =>
           row.entry.providerId === target.providerId &&
           row.entry.modelId === target.modelId,
+      )
+    : undefined;
+  const sourceRemoteCatalog = sourceRow?.remoteDevice
+    ? remoteCatalogs.find(
+        (item) => item.deviceId === sourceRow.remoteDevice!.deviceId,
       )
     : undefined;
   const originFavorite = target?.uid
@@ -406,8 +579,10 @@ export function UnifiedModelPickerSheet(
   };
   // A source model can have several saved configurations. Match the complete
   // configuration without applying capability fallbacks to the saved values.
+  // 收藏按被控电脑的供应商记;另一台电脑目录里的行不参与(同 id 供应商不是同一个)。
   const matchingFavorite =
     row &&
+    !row.remoteDevice &&
     prefs.value.favorites.find(
       (item) =>
         matchesEntry(row.entry, item.modelId) &&
@@ -422,7 +597,7 @@ export function UnifiedModelPickerSheet(
   const resetAgents = row
     ? [...new Set([row.config.agent, recommendedConfig!.agent])]
     : [];
-  const canReset =
+  const localCanReset =
     !!row &&
     (!sameConfiguration(row.config, recommendedConfig!) ||
       prefs.value.engines[modelKey(row.entry.providerId, row.entry.modelId)] !==
@@ -450,6 +625,10 @@ export function UnifiedModelPickerSheet(
           (fast !== undefined && (!!p.modelMemory?.clearFast || fast))
         );
       }));
+  // 另一台电脑目录里的行:只有这次打开期间调过档位 / 引擎才能恢复推荐。
+  const canReset = row?.remoteDevice
+    ? !row.selected && remoteConfigs.has(row.key)
+    : localCanReset;
   useEffect(() => {
     if (target && !row) {
       setTarget(null);
@@ -480,7 +659,9 @@ export function UnifiedModelPickerSheet(
   const select = (row: UnifiedMobileRow) => {
     if (row.disabled) return;
     void transact(async (isCurrent) => {
-      if ((await p.unified.onSelect(row.config)) && isCurrent()) p.onClose();
+      const source = { deviceId: row.remoteDevice?.deviceId ?? null };
+      if ((await p.unified.onSelect(row.config, source)) && isCurrent())
+        p.onClose();
     });
   };
   const change = (config: MobileModelConfiguration, reset = false) => {
@@ -488,6 +669,27 @@ export function UnifiedModelPickerSheet(
     if (favoriteEdit) {
       if (!lock.current && !p.disabled)
         setFavoriteEdit({ ...favoriteEdit, config });
+      return;
+    }
+    const remoteDevice = row.remoteDevice;
+    if (remoteDevice) {
+      // 另一台电脑目录里的行:正在用的那行直接生效;其余只在这次打开期间跟着该行,
+      // 不写手机的引擎偏好与档位记忆(那些按被控电脑的供应商记)。
+      const key = row.key;
+      void transact(async (isCurrent) => {
+        if (
+          row.selected &&
+          !(await p.unified.onSelect(config, { deviceId: remoteDevice.deviceId }))
+        )
+          return;
+        if (!isCurrent() || row.selected) return;
+        setRemoteConfigs((current) => {
+          const next = new Map(current);
+          if (reset) next.delete(key);
+          else next.set(key, config);
+          return next;
+        });
+      });
       return;
     }
     void transact(async (isCurrent) => {
@@ -565,7 +767,10 @@ export function UnifiedModelPickerSheet(
   };
   const cap = row?.entry.capabilities[row.config.agent];
   const provider =
-    row && p.providers.find((item) => item.id === row.entry.providerId);
+    row &&
+    (sourceRemoteCatalog?.providers ?? p.providers).find(
+      (item) => item.id === row.entry.providerId,
+    );
   const price = row
     ? presentPickerPrice({
         pricing: p.pricing ?? null,
@@ -574,6 +779,48 @@ export function UnifiedModelPickerSheet(
         agentKind: row.config.agent,
       })
     : null;
+  // 来源页:其他电脑的供应商按电脑分块(一个都没开放的电脑没有行,整块不出现)。
+  const remoteFilters = remoteDirectories.flatMap(({ catalog, entries }) =>
+    catalog.providers
+      .filter((provider) => entries.some((e) => e.providerId === provider.id))
+      .map((provider) => ({
+        id: remoteFilterId(catalog.deviceId, provider.id),
+        label: remoteProviderLabel(catalog, provider.id),
+        providerMark: {
+          providerId: provider.id,
+          name: provider.name,
+          routing: provider.routing,
+          logoKind: provider.logoKind,
+        },
+        remote: {
+          deviceId: catalog.deviceId,
+          deviceName: catalog.name,
+          providerLabel: remoteProviderName(catalog, provider.id),
+        },
+      })),
+  );
+  const selectedDirectory = remoteDirectories.find(
+    (directory) => directory.catalog.deviceId === selectedDeviceId,
+  );
+  const selectedCatalogStatus = remoteCatalogs.find(
+    (catalog) => catalog.deviceId === selectedDeviceId,
+  )?.status;
+  const selectedRemoteFilter =
+    selectedDeviceId && selectedDirectory?.sourceId
+      ? remoteFilterId(selectedDeviceId, selectedDirectory.sourceId)
+      : null;
+  useEffect(() => {
+    if (!p.visible || !initialRemoteFilter.current) return;
+    if (selectedDeviceId === null) {
+      initialRemoteFilter.current = false;
+      return;
+    }
+    // 那台电脑的目录还没读到:等一等再定;读不到就留在「全部模型」。
+    if (selectedCatalogStatus === undefined || selectedCatalogStatus === "loading")
+      return;
+    initialRemoteFilter.current = false;
+    if (selectedRemoteFilter) setFilter(selectedRemoteFilter);
+  }, [p.visible, selectedDeviceId, selectedCatalogStatus, selectedRemoteFilter]);
   return (
     <UnifiedModelPickerView
       visible={p.visible}
@@ -599,7 +846,10 @@ export function UnifiedModelPickerSheet(
       query={query}
       onQuery={setQuery}
       filter={filter}
-      onFilter={setFilter}
+      onFilter={(value) => {
+        initialRemoteFilter.current = false;
+        setFilter(value);
+      }}
       filters={[
         { id: "all", label: t("models.unified.all") },
         ...(prefs.favoritesReady
@@ -638,10 +888,11 @@ export function UnifiedModelPickerSheet(
               logoKind: provider.logoKind,
             },
           })),
+        ...remoteFilters,
       ]}
       groups={groups}
       busy={busy || !!p.disabled || !prefs.ready}
-      error={error ?? (p.providersReady && modelNeedsReselection(p.modelVisibilityOverrides, p.agentKind, p.activeModelId, p.selectedProviderId)
+      error={error ?? (selectedDeviceId === null && p.providersReady && modelNeedsReselection(p.modelVisibilityOverrides, p.agentKind, p.activeModelId, p.selectedProviderId)
         ? t('session.common.modelHiddenReselect', { model: p.activeModelId }) : null)}
       loading={!!p.loading}
       emptyHint={p.emptyHint ?? t("models.picker.noResults")}
@@ -656,6 +907,7 @@ export function UnifiedModelPickerSheet(
           modelId: row.entry.modelId,
           uid: row.favorite?.uid,
           config: row.favorite ? { ...row.config } : undefined,
+          ...(row.remoteDevice ? { deviceId: row.remoteDevice.deviceId } : {}),
         });
       }}
       options={
@@ -669,7 +921,7 @@ export function UnifiedModelPickerSheet(
                 !!cap?.supportsFastMode && fastCapable(row.config.agent),
               onChange: change,
               context: [
-                providerName(row.entry.providerId),
+                rowProviderName(row),
                 cap?.contextWindow
                   ? t("models.picker.contextSuffix", {
                       size: `${Math.round(cap.contextWindow / 1000)}K`,
@@ -679,7 +931,7 @@ export function UnifiedModelPickerSheet(
                 .filter(Boolean)
                 .join(" · "),
               price: price ? `${price.title}\n${price.amountsLine}` : null,
-              favoritesDisabled: !prefs.favoritesReady,
+              favoritesDisabled: !prefs.favoritesReady || !!row.remoteDevice,
               isFavorite: !!matchingFavorite,
               canReset,
               configurationSummary: [
@@ -756,7 +1008,8 @@ export function UnifiedModelPickerSheet(
                 });
               },
               onFavorite: () => {
-                if (!prefs.favoritesReady || favoriteEdit) return;
+                if (!prefs.favoritesReady || favoriteEdit || row.remoteDevice)
+                  return;
                 void transact(async (isCurrent) => {
                   if (matchingFavorite) {
                     await prefs.save({

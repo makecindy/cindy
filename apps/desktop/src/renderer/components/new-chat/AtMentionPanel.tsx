@@ -47,6 +47,7 @@ import {
   Monitor,
   Paperclip,
   Plug,
+  RotateCw,
   Sparkles,
   Target,
   UsersRound,
@@ -118,6 +119,7 @@ interface AtMentionPanelProps {
 }
 
 const ACTION_ICONS: Record<ComposerSuggestionAction['id'], typeof Paperclip> = {
+  'retry-plugins': RotateCw,
   'attach-files': Paperclip,
   'new-goal': Target,
   'plan-mode': ClipboardList,

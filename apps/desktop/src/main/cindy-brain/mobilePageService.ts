@@ -207,7 +207,6 @@ export class MobilePluginPages {
       | { kind: 'task'; taskId: string }
       | { kind: 'preview'; url: string }
       | { kind: 'schedule'; name: string; prompt: string; intervalMs?: number }
-      | { kind: 'simulator' }
       | { kind: 'media'; path: string; mediaKind: 'image' | 'video' },
   ): boolean {
     try {

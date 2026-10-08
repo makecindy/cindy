@@ -6,7 +6,8 @@
  *  - useSessionOrcaCollab:会话页 + 面板「协同模式」二级视图、团队操作与 Lead / Worker 导航。
  *
  * 真身在被控端;所有写操作完成后以被控端列表为准(整表重拉),本地只在开启 / 结束协同时
- * 乐观改 orcaRole,权威值随 sessions 推送回流。
+ * 乐观改 orcaRole、归档 Worker 时乐观移出 Worker 任务(见 beginOptimisticWorkerArchive),
+ * 权威值随 sessions 推送回流。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert } from 'react-native';
@@ -15,6 +16,7 @@ import type { AgentKind } from '@cindy/model-providers/types';
 import type { MobileModelOption } from '@/session/agentCapabilities';
 import { confirmFullAccessChange } from '@/session/fullAccessConfirmation';
 import {
+  archiveOrcaWorker,
   buildOrcaEnableOptions,
   convergeOrcaWorkerModel,
   createOrcaWorker,
@@ -52,7 +54,13 @@ import {
   rememberOrcaWorkerChoice,
   type OrcaWorkerCreationPrefs,
 } from '@/session/orcaWorkerPrefs';
-import { remoteSessionStore } from '@/session/remoteSessionStore';
+import {
+  remoteSessionStore,
+  resolveSessionWriteDevices,
+  sessionMetaWriteGuard,
+  sessionPendingWrites,
+} from '@/session/remoteSessionStore';
+import { writeGuardFields } from '@/session/swipeRowRegistry';
 import { i18n } from '@/i18n';
 import type { MobileMakerTransport } from '@/device-link/mobileMakerTransport';
 import type { MobileModelConfiguration } from '@/session/unifiedMobileModels';
@@ -83,6 +91,51 @@ const EMPTY_TEAM: OrcaTeamSnapshot = {
   error: null,
 };
 
+/** Worker 任务有 status 在途写(乐观归档中):团队视图不展示它。 */
+function isWorkerArchivePending(worker: OrcaTeamWorker): boolean {
+  return sessionPendingWrites.pendingFields(worker.sessionId).includes('status');
+}
+
+/**
+ * Worker 归档的乐观落地(协同面板长按与 Worker 自身菜单共用),写序与在途登记复用任务列表
+ * 归档那一套 app 级单例(sessionMetaWriteGuard / sessionPendingWrites):
+ *  - 先登记 status 在途写,再按物理 shard 把 Worker 任务移出 store——在途期间 sessions 推送、
+ *    全量对账与单条 upsert 都不会把它复活,useOrcaTeam 也据此把它从团队视图藏起;
+ *  - 返回 settle(ok):成功释放登记并主动对账该 shard(防归档前发出的读取迟到复活);
+ *    失败先释放登记(否则回滚的 upsert 会被在途保护挡掉),仍是最新写才把原会话整行插回
+ *    同一 shard,并一律 reseed——被同会话后续写取代时终态由新写负责。
+ */
+export function beginOptimisticWorkerArchive(
+  workerSessionId: string,
+  routeDeviceId: string | null,
+): (ok: boolean) => void {
+  const session = remoteSessionStore.getSessions().find((item) => item.id === workerSessionId) ?? null;
+  const devices = resolveSessionWriteDevices(workerSessionId, session, routeDeviceId);
+  const patch = { status: 'archived' } as const;
+  const write = sessionMetaWriteGuard.begin(workerSessionId, writeGuardFields(patch));
+  const releasePending = sessionPendingWrites.track(workerSessionId, ['status']);
+  if (devices) remoteSessionStore.applySessionPatch(devices.shardId, workerSessionId, patch);
+  return (ok) => {
+    releasePending();
+    if (!devices) return;
+    const { shardId } = devices;
+    if (ok) {
+      // 归档 RPC 不回行:释放在途登记后,归档前已发出、成功后才落地的列表 / 单条读取
+      // 可能把旧 active 行插回。主动对账一次该 shard,以写库后的权威列表收敛。
+      remoteSessionStore.requestReseed(shardId);
+      return;
+    }
+    if (write.isLatest() && session) {
+      const shardName = remoteSessionStore.getSessions()
+        .find((item) => item.deviceLinkDeviceId === shardId)?.deviceLinkDeviceName
+        ?? session.deviceLinkDeviceName
+        ?? shardId;
+      remoteSessionStore.upsertDeviceSession(shardId, shardName, session);
+    }
+    remoteSessionStore.requestReseed(shardId);
+  };
+}
+
 /**
  * Lead 任务的 Worker 列表 + 协同设置。`leadSessionId` 为 null 时不拉取。被控端推送
  * worker-changed(需会话页持有 `session:<leadId>` topic)或调用 refresh 时整表重拉;
@@ -94,12 +147,20 @@ export function useOrcaTeam(params: {
   leadSessionId: string | null;
   /** 隧道重连代次:断线期间可能漏掉 worker-changed 推送,重连后整表重拉一次。 */
   connectionEpoch?: number;
-}): OrcaTeamSnapshot & { refresh(): Promise<void> } {
+}): OrcaTeamSnapshot & {
+  refresh(): Promise<void>;
+  /** 乐观归档:把 Worker 从本地视图摘掉;返回的 restore 在失败时把它插回原位(团队没换时)。 */
+  dropWorker(worker: OrcaTeamWorker): () => void;
+} {
   const { maker, deviceId, leadSessionId, connectionEpoch } = params;
   const [snapshot, setSnapshot] = useState<OrcaTeamSnapshot>(EMPTY_TEAM);
   const generationRef = useRef(0);
   const makerRef = useRef(maker);
   makerRef.current = maker;
+  const snapshotRef = useRef(snapshot);
+  snapshotRef.current = snapshot;
+  const teamKeyRef = useRef(`${deviceId ?? ''}\n${leadSessionId ?? ''}`);
+  teamKeyRef.current = `${deviceId ?? ''}\n${leadSessionId ?? ''}`;
 
   const refresh = useCallback(async () => {
     const generation = ++generationRef.current;
@@ -150,7 +211,28 @@ export function useOrcaTeam(params: {
     });
   }, [deviceId, leadSessionId, refresh]);
 
-  return { ...snapshot, refresh };
+  const dropWorker = useCallback((worker: OrcaTeamWorker) => {
+    const teamKey = teamKeyRef.current;
+    const index = snapshotRef.current.workers.findIndex((item) => item.workerId === worker.workerId);
+    setSnapshot((current) => (current.workers.some((item) => item.workerId === worker.workerId)
+      ? { ...current, workers: current.workers.filter((item) => item.workerId !== worker.workerId) }
+      : current));
+    return () => {
+      if (index < 0 || teamKeyRef.current !== teamKey) return;
+      setSnapshot((current) => {
+        if (current.workers.some((item) => item.workerId === worker.workerId)) return current;
+        const workers = [...current.workers];
+        workers.splice(Math.min(index, workers.length), 0, worker);
+        return { ...current, workers };
+      });
+    };
+  }, []);
+
+  // 归档在途的 Worker 不展示:在途期间迟到的整表重拉、其它页面加载过的旧快照都不得把它带回来。
+  const workers = snapshot.workers.some(isWorkerArchivePending)
+    ? snapshot.workers.filter((worker) => !isWorkerArchivePending(worker))
+    : snapshot.workers;
+  return { ...snapshot, workers, refresh, dropWorker };
 }
 
 /** Worker 任务 → 所属 Lead(被控端团队记录为准;查不到 = null,「返回 Lead」入口不出现)。 */
@@ -530,6 +612,7 @@ export function useSessionOrcaCollab(params: {
 
   // 协同视图展示中时顺带刷新一次团队(推送之外的兜底)。
   const refreshTeam = team.refresh;
+  const dropTeamWorker = team.dropWorker;
   useEffect(() => {
     if (sheetOpen && sheetView === 'collab' && isLead) void refreshTeam();
   }, [sheetOpen, sheetView, isLead, refreshTeam]);
@@ -609,6 +692,32 @@ export function useSessionOrcaCollab(params: {
     }
   }, [refreshTeam]);
 
+  /**
+   * 乐观归档 Worker(面板与 Worker 自身菜单共用):当帧从团队视图摘掉并把 Worker 任务移出
+   * store,RPC 在后台跑。成功后再摘一次(在途期间迟到的整表重拉可能把它带回快照)并以被控端
+   * 列表收敛;失败(含超时回查仍未确认)回滚 store 与团队视图并整表重拉。返回失败原因,null = 成功。
+   */
+  const runWorkerArchive = useCallback(async (
+    leadId: string,
+    worker: OrcaTeamWorker,
+    view: { dropWorker(worker: OrcaTeamWorker): () => void; refresh(): Promise<void> },
+  ): Promise<unknown> => {
+    const restoreView = view.dropWorker(worker);
+    const settle = beginOptimisticWorkerArchive(worker.sessionId, deviceId);
+    try {
+      await archiveOrcaWorker(makerRef.current, leadId, worker.workerId);
+      settle(true);
+      view.dropWorker(worker);
+      void view.refresh();
+      return null;
+    } catch (err) {
+      settle(false);
+      restoreView();
+      void view.refresh();
+      return err;
+    }
+  }, [deviceId]);
+
   const openWorker = useCallback((worker: OrcaTeamWorker) => {
     setSheetOpen(false);
     // 看到「已完成」即确认(对齐桌面:可见的 done Worker 自动 acknowledge);状态已变则忽略。
@@ -628,15 +737,16 @@ export function useSessionOrcaCollab(params: {
           text: i18n.t('session.collab.archiveConfirm'),
           style: 'destructive',
           onPress: () => {
-            void runTeamAction(
-              () => makerRef.current.orca.archiveWorker(sessionId, worker.workerId),
-              'session.collab.errors.archiveFailed',
-            );
+            setError(null);
+            void runWorkerArchive(sessionId, worker, { dropWorker: dropTeamWorker, refresh: refreshTeam })
+              .then((err) => {
+                if (err) setError(describeOrcaError(err, 'session.collab.errors.archiveFailed'));
+              });
           },
         },
       ],
     );
-  }, [runTeamAction, sessionId]);
+  }, [dropTeamWorker, refreshTeam, runWorkerArchive, sessionId]);
 
   /**
    * 长按 Worker 行:管理操作(点按直接打开 Worker,不弹窗)。手机上只提供归档;「焦点」只决定
@@ -685,8 +795,12 @@ export function useSessionOrcaCollab(params: {
 
   // ─── Worker 任务自身的操作(详情菜单) ─────────────────────────────────────
   const refreshWorkerTeam = workerTeam.refresh;
+  const dropWorkerTeamWorker = workerTeam.dropWorker;
 
-  /** 归档自身:确认弹窗在调用方的面板上直接弹出;用户确认后先调 onConfirmed(如收起详情面板)再归档。 */
+  /**
+   * 归档自身:确认弹窗在调用方的面板上直接弹出;用户确认后先调 onConfirmed(如收起详情面板),
+   * 立即回到 Lead(这个 Worker 任务即将不可用)并乐观归档;失败时 Worker 任务已插回,弹窗提示。
+   */
   const confirmArchiveSelf = useCallback((onConfirmed?: () => void) => {
     if (!workerLeadSessionId || !workerSelf) return;
     const leadId = workerLeadSessionId;
@@ -701,34 +815,16 @@ export function useSessionOrcaCollab(params: {
           style: 'destructive',
           onPress: () => {
             onConfirmed?.();
-            void (async () => {
-              try {
-                await makerRef.current.orca.archiveWorker(leadId, worker.workerId);
-                // 归档后这个 Worker 任务不再可用,回到 Lead。
-                openSession(leadId);
-              } catch (err) {
-                if (isOrcaAmbiguousTimeout(err)) {
-                  // 超时不是权威失败:只读回查一次,Worker 已不在团队里就说明归档已生效,照样回到 Lead。
-                  const archived = await makerRef.current.orca.listWorkers(leadId)
-                    .then((raw) => !parseOrcaTeamWorkers(raw).some((item) => item.workerId === worker.workerId))
-                    .catch(() => false);
-                  if (archived) {
-                    openSession(leadId);
-                    return;
-                  }
-                }
-                Alert.alert(describeOrcaError(
-                  isOrcaAmbiguousTimeout(err) ? new Error('[ORCA_ACTION_UNCONFIRMED] timed out') : err,
-                  'session.collab.errors.archiveFailed',
-                ));
-                void refreshWorkerTeam();
-              }
-            })();
+            openSession(leadId);
+            void runWorkerArchive(leadId, worker, { dropWorker: dropWorkerTeamWorker, refresh: refreshWorkerTeam })
+              .then((err) => {
+                if (err) Alert.alert(describeOrcaError(err, 'session.collab.errors.archiveFailed'));
+              });
           },
         },
       ],
     );
-  }, [openSession, refreshWorkerTeam, workerLeadSessionId, workerSelf]);
+  }, [dropWorkerTeamWorker, openSession, refreshWorkerTeam, runWorkerArchive, workerLeadSessionId, workerSelf]);
 
   return {
     eligible,

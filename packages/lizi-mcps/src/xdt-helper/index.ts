@@ -62,7 +62,9 @@ export {
 } from './switch_focus.js';
 export {
   registerSendToWorkerTool,
+  type OrcaMessageDelivery,
   type SendToWorkerDeps,
+  type SteerFallbackReason,
 } from './send_to_worker.js';
 export {
   registerGetWorkerQueueStatusTool,
@@ -82,6 +84,15 @@ export {
   registerMergeQueuedMessagesTool,
   type MergeQueuedMessagesDeps,
 } from './merge_queued_messages.js';
+export {
+  registerSteerQueuedMessageTool,
+  type QueuedMessageSteerReason,
+  type SteerQueuedMessageDeps,
+} from './steer_queued_message.js';
+export {
+  registerMoveQueuedMessageTool,
+  type MoveQueuedMessageDeps,
+} from './move_queued_message.js';
 export {
   registerIdleWorkerTool,
   type IdleWorkerDeps,
@@ -119,11 +130,14 @@ export {
   registerUpdateSessionQueuedMessageTool,
   registerCancelSessionQueuedMessageTool,
   registerSteerSessionTool,
+  registerSteerSessionQueuedMessageTool,
+  registerMoveSessionQueuedMessageTool,
   registerStopSessionTurnTool,
   registerGetSessionRuntimeTool,
   registerSetSessionRuntimeTool,
   type SessionControlDeps,
   type SessionQueueControlErrorCode,
+  type SessionQueueSteerReason,
   type SessionRuntimeProfile,
   type SessionRuntimeSnapshot,
   type SessionSteerErrorCode,

@@ -49,6 +49,33 @@ const projectForCurrentController = (result: unknown) =>
     modelVisibilityOverrides?: Record<string, boolean>;
   };
 
+describe('schedule binding list projection', () => {
+  const fields = {
+    id: 'heartbeat', name: 'Heartbeat', status: 'paused', targetSessionId: 'task',
+    cronExpr: '*/5 * * * *', manual: false, recurring: true, intervalMs: 600_000,
+  };
+  it('removes execution payload before tunnel serialization, preserving every current binding', () => {
+    const full = [
+      { ...fields, prompt: 'x'.repeat(5 * 1024 * 1024), script: { code: 'private' } },
+      { ...fields, id: 'second', recurring: false },
+      { ...fields, id: 'expired', status: 'expired' },
+      { ...fields, id: 'unbound', targetSessionId: undefined },
+    ];
+    const projected = __testing.projectInvokeResultForTunnel(
+      'maker:schedule:list', full, false, [null, { sessionBindings: true }],
+    );
+    expect(projected).toEqual([fields, { ...fields, id: 'second', recurring: false }]);
+    expect(Buffer.byteLength(JSON.stringify(full))).toBeGreaterThan(4 * 1024 * 1024);
+    expect(Buffer.byteLength(JSON.stringify(projected))).toBeLessThan(1024);
+  });
+  it('keeps existing local/mobile/old-controller list responses intact without explicit opt-in', () => {
+    const full = [{ ...fields, prompt: 'execution config' }];
+    for (const args of [[], [null], [null, { sessionBindings: false }]]) {
+      expect(__testing.projectInvokeResultForTunnel('maker:schedule:list', full, false, args)).toBe(full);
+    }
+  });
+});
+
 describe('controller capability metadata', () => {
   it('distinguishes an absent subscribe field from an explicit empty capability set', () => {
     expect(__testing.optionalControllerCapabilities({})).toBeUndefined();
@@ -382,6 +409,21 @@ describe('projectInvokeResultForTunnel — maker:provider:list 投影', () => {
 
     expect(providers[0]).not.toHaveProperty('logoKind');
     expect(providers[0].routing).toEqual({ codex: {}, 'claude-code': {} });
+  });
+
+  it('「允许被远程调用」只作标记透传，不裁剪目录(远程控制与手机仍看到全部供应商)', () => {
+    const base = xdProviderWithFullRouting();
+    const { providers } = project({
+      providers: [
+        { ...base, id: 'shared', remoteInvocationEnabled: true },
+        { ...base, id: 'private', remoteInvocationEnabled: false },
+        { ...base, id: 'odd', remoteInvocationEnabled: 'yes' },
+        { ...base, id: 'legacy' },
+      ],
+    });
+    expect(providers.map((p) => p.id)).toEqual(['shared', 'private', 'odd', 'legacy']);
+    expect(providers.map((p) => p.remoteInvocationEnabled)).toEqual([true, false, undefined, undefined]);
+    expect(providers[2]).not.toHaveProperty('remoteInvocationEnabled');
   });
 
   it('非 maker:provider:list 通道 → 原样返回不改', () => {

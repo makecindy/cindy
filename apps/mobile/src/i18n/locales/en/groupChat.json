@@ -78,6 +78,7 @@
     "olderOnComputer": "Earlier messages are on your computer"
   },
   "notice": {
+    "memberJoined": "{{name}} joined the group",
     "memberFailed": "{{name}} couldn’t reply this time",
     "memberTimeout": "{{name}} took too long to reply and was skipped this time",
     "memberUnavailable": "{{name}} is unavailable and didn’t speak this time",

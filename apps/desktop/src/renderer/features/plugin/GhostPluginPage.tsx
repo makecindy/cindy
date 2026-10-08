@@ -1,3 +1,5 @@
+import { featureRetirementById } from '../../../shared/featureRetirements';
+import { RetiredFeatureDetail } from './RetiredFeatureDetail';
 import { Button } from '@/components/ui/button';
 /**
  * Plugin catalog and detail coordinator backed by the latest Ghost host APIs.
@@ -722,7 +724,7 @@ export function GhostPluginPage({
             origin: pluginPresentationOrigin(marketItem),
             // 同版本展示刷新由 main 标成 installed;legacy-unresolved 仍保留
             // update-available,以便用户用市场包替换未验证的本地字节。
-            marketUpdate: pluginUpdateForInstalledVersion(marketItem),
+            marketUpdate: ghost.retirement ? null : pluginUpdateForInstalledVersion(marketItem),
           };
         }),
     [ghosts, marketByGhostId],
@@ -1203,9 +1205,7 @@ export function GhostPluginPage({
     async (id: string, displayName: string) => {
       const ghost = ghosts.find((candidate) => candidate.manifest.id === id);
       if (!ghost) return;
-      const opensIOSSimulator = ghost.manifest.iosSimulator === true;
-      if (!ghost.manifest.command && !opensIOSSimulator) return;
-      const usesHostCapabilityEntry = !ghost.manifest.command && opensIOSSimulator;
+      if (!ghost.manifest.command || ghost.retirement) return;
       // 使用前置门:点击时现查配置就绪度(main 侧确定性判定),未就绪先
       // 弹窗引导去配置。查询失败不拦——运行期 networkSlot 仍会兜底报错,
       // 这里拦不住只是少了一次前置提醒,不能因此把能用的插件挡在门外。
@@ -1234,7 +1234,6 @@ export function GhostPluginPage({
         quotes: existing?.quotes ?? [],
         browserComments: existing?.browserComments ?? [],
         ...(ghost.manifest.command ? { pendingGhostId: ghost.manifest.id } : {}),
-        ...(usesHostCapabilityEntry ? { pendingHostCapabilityGhostId: ghost.manifest.id } : {}),
         focusAtEnd: existing?.focusAtEnd === true,
       });
       resetDraftWorkspaceTargets();
@@ -1245,13 +1244,13 @@ export function GhostPluginPage({
 
   /** 卡片胶囊/详情主动作分发:面板型开页面内面板,指令/Host 能力起对话。 */
   const handlePrimaryAction = useCallback(
-    (item: Pick<GhostPluginListItem, 'id' | 'name' | 'tabPanel' | 'canUse' | 'hostCapability'>) => {
+    (item: Pick<GhostPluginListItem, 'id' | 'name' | 'tabPanel' | 'canUse'>) => {
       const action = ghostPrimaryAction(item);
       if (action === 'panel') {
         setOpenPanelId(item.id);
         return;
       }
-      if (action === 'command' || action === 'capability') {
+      if (action === 'command') {
         void handleUseGhost(item.id, item.name);
         return;
       }
@@ -1513,11 +1512,63 @@ export function GhostPluginPage({
         releaseMarketBusy(marketBusyLease);
         return;
       }
+      if (!isMarketBusyLeaseActive(marketBusyLease)) return;
       releaseMarketBusy(marketBusyLease);
       await runMarketInstallFlow(detail);
     },
     [acquireMarketBusy, isMarketBusyLeaseActive, releaseMarketBusy, runMarketInstallFlow, t],
   );
+
+  useEffect(() => {
+    const id = searchParams.get('retired');
+    if (!id) return;
+    if (ghosts.some((ghost) => ghost.manifest.id === id && ghost.retirement)) {
+      // The detached sidebar can navigate here while market details are still open/loading.
+      marketDetailRequestRef.current += 1;
+      setMarketDetail(null);
+      setSelectedId(id);
+    }
+    const next = new URLSearchParams(searchParams);
+    next.delete('retired');
+    setSearchParams(next, { replace: true });
+  }, [ghosts, searchParams, setSearchParams]);
+
+  useEffect(() => {
+    // Market details render first; selecting a hidden notice does not make it read.
+    if (marketDetail || !selectedGhost?.retirement?.unread) return;
+    void window.electronAPI.ghosts
+      .acknowledgeRetirement(selectedGhost.manifest.id)
+      .catch(() => toast.error(t('settings.ghosts.retirement.saveFailed')));
+  }, [marketDetail, selectedGhost?.manifest.id, selectedGhost?.retirement?.unread, t]);
+
+  const handleReplaceRetiredFeature = async () => {
+    const descriptor =
+      selectedGhost?.retirement && featureRetirementById(selectedGhost.retirement.id);
+    const target = descriptor?.replacement;
+    if (!target || !selectedGhost?.retirement?.eligible) return;
+    const replacement = window.electronAPI.ghosts
+      .listSync()
+      .ghosts.find((ghost) => ghost.manifest.id === target.ghostId);
+    if (replacement) {
+      if (replacement.enabled) {
+        setSelectedId(replacement.manifest.id);
+        handlePrimaryAction(toGhostPluginListItem(replacement));
+      } else {
+        const lease = acquireMarketBusy(target.marketId);
+        if (!lease) return;
+        try {
+          await window.electronAPI.ghosts.setEnabled(target.ghostId, true);
+          if (isMarketBusyLeaseActive(lease)) setSelectedId(target.ghostId);
+        } catch (error) {
+          if (isMarketBusyLeaseActive(lease)) await showPluginMarketActionError(error);
+        } finally {
+          releaseMarketBusy(lease);
+        }
+      }
+      return;
+    }
+    await handleInstallMarketItem(target.marketId);
+  };
 
   // 面板收束:aside 只挂在插件页语境里(列表/详情/市场详情共用),
   // 路由离开本页组件整体卸载 → webview 一并回收,绝不残留到别的界面。
@@ -1552,6 +1603,26 @@ export function GhostPluginPage({
         </div>
         {panelAside}
       </div>
+    );
+  }
+
+  if (selectedGhost?.retirement) {
+    const target = featureRetirementById(selectedGhost.retirement.id)?.replacement;
+    return (
+      <RetiredFeatureDetail
+        ghost={selectedGhost}
+        replacement={ghosts.find((ghost) => ghost.manifest.id === target?.ghostId)}
+        busy={marketBusyId !== null}
+        onBack={() => setSelectedId(null)}
+        onReplace={() => void handleReplaceRetiredFeature()}
+        onDismiss={() => {
+          void window.electronAPI.ghosts
+            .acknowledgeRetirement(selectedGhost.manifest.id)
+            .then(() => setSelectedId(null))
+            .catch(() => toast.error(t('settings.ghosts.retirement.saveFailed')));
+        }}
+        onUninstall={() => void handleUninstall()}
+      />
     );
   }
 
@@ -2293,7 +2364,9 @@ export function GhostPluginCard({
     onManage();
   };
   let primaryControl: ReactNode;
-  if (!enabled) {
+  if (item.retirement) {
+    primaryControl = <CardPillButton onClick={onManage} label={t('settings.ghosts.retirement.view')} />;
+  } else if (!enabled) {
     primaryControl = (
       <CardPillButton onClick={onManage} label={t('settings.ghosts.page.manageAction')} />
     );
@@ -2305,7 +2378,7 @@ export function GhostPluginCard({
         ariaLabel={t('settings.ghosts.page.useAria', { name: item.name })}
       />
     );
-  } else if (primary === 'command' || primary === 'capability') {
+  } else if (primary === 'command') {
     primaryControl = (
       <CardPillButton
         onClick={onPrimary}
@@ -2336,7 +2409,7 @@ export function GhostPluginCard({
         'active:translate-y-0 active:scale-[0.992]',
         'motion-reduce:transform-none motion-reduce:transition-none',
         'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-        !enabled && 'opacity-60',
+        !enabled && !item.retirement && 'opacity-60',
       )}
     >
       <GhostPluginIcon
@@ -2350,11 +2423,13 @@ export function GhostPluginCard({
           <span className="truncate text-15 font-medium text-[var(--text-primary)]">
             {item.name}
           </span>
-          {unread ? <AttentionDot breathing size={6} className="mt-px" /> : null}
+          {item.retirement?.unread ? <AttentionDot tone="awaiting" size={6} className="mt-px" /> : unread ? <AttentionDot breathing size={6} className="mt-px" /> : null}
         </span>
         <span className="mt-1 block min-w-0 truncate text-11 text-[var(--text-tertiary)]">
           {sourceLabel ? `${sourceLabel} · ` : ''}v{item.version}
-          {item.oauthAuthorizationExpired ? (
+          {item.retirement ? (
+            <span> · {t('settings.ghosts.retirement.status')}</span>
+          ) : item.oauthAuthorizationExpired ? (
             <span className="inline-flex items-center gap-1 text-[var(--warning-fg)]">
               {' · '}
               <AlertTriangle size={11} className="inline" aria-hidden="true" />
@@ -2373,7 +2448,7 @@ export function GhostPluginCard({
               {t('settings.ghosts.installConsent.updateNeedsConsent')}
             </span>
           ) : null}
-          {!enabled ? ` · ${t('settings.ghosts.disabledTag')}` : ''}
+          {!enabled && !item.retirement ? ` · ${t('settings.ghosts.disabledTag')}` : ''}
         </span>
         {/* 未读摘要顶替静态描述:静态描述用户早读过了,"新内容是什么"才是这一刻
             的信息。摘要文字提到 primary 档以区别于常态描述(不另加色,颜色语义
@@ -2384,7 +2459,7 @@ export function GhostPluginCard({
             unreadSummary ? 'text-[var(--text-primary)]' : 'text-[var(--text-secondary)]',
           )}
         >
-          {unreadSummary || item.description || item.id}
+          {item.retirement ? t('settings.ghosts.retirement.cardNotice') : unreadSummary || item.description || item.id}
         </span>
       </span>
       {/* 右列只在真实控件上拦截冒泡;空白与「由 Agent 调用」提示仍走整卡进详情。 */}

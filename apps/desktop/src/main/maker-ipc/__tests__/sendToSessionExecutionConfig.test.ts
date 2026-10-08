@@ -276,6 +276,62 @@ describe('resolveSendToSessionExecutionConfig', () => {
     })).toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
   });
 
+  it('keeps an explicit effort for a custom model whose capabilities were never declared (#5535)', () => {
+    // 自定义来源只填了 id/name:目录与路由快照都没有档位声明,[] 只是占位,不是 valid: none。
+    const undeclared = { id: 'custom/step-5-preview', efforts: [], defaultEffort: null, effortsUnknown: true };
+    const routing: OrcaWorkerProviderRoutingContext = {
+      availability: {
+        codex: [], pi: [],
+        'claude-code': [{
+          id: 'custom-anthropic',
+          name: 'Custom Anthropic Messages',
+          models: [undeclared.id],
+          effortMetaByModel: { [undeclared.id]: { efforts: [], defaultEffort: null, effortsUnknown: true } },
+          requiresExplicitRoute: true,
+        }],
+      },
+      resolveDefaultProviderIdForModel: (agent, model) =>
+        agent === 'claude-code' && model === undeclared.id ? 'custom-anthropic' : null,
+    };
+    expect(resolveSendToSessionExecutionConfig({
+      source: { agentKind: 'claude-code', model: undeclared.id, fastMode: false, providerId: 'custom-anthropic' },
+      overrides: { effort: 'medium' },
+      availableModels: [undeclared],
+      providerRouting: routing,
+      hasCindyAiApiKey: false,
+    })).toEqual({
+      ok: true,
+      config: {
+        agentKind: 'claude-code',
+        model: undeclared.id,
+        effort: 'medium',
+        fastMode: false,
+        providerId: 'custom-anthropic',
+      },
+    });
+
+    // 明确无档位(已声明空表,无 effortsUnknown)仍按原规则拒绝显式档位。
+    const declaredNone = { id: 'custom/no-reasoning', efforts: [], defaultEffort: null };
+    expect(resolveSendToSessionExecutionConfig({
+      source: { agentKind: 'claude-code', model: declaredNone.id, fastMode: false, providerId: 'custom-anthropic' },
+      overrides: { effort: 'medium' },
+      availableModels: [declaredNone],
+      providerRouting: {
+        ...routing,
+        availability: {
+          ...routing.availability,
+          'claude-code': [{
+            ...routing.availability['claude-code'][0]!,
+            models: [declaredNone.id],
+            effortMetaByModel: { [declaredNone.id]: { efforts: [], defaultEffort: null } },
+          }],
+        },
+        resolveDefaultProviderIdForModel: () => 'custom-anthropic',
+      },
+      hasCindyAiApiKey: false,
+    })).toMatchObject({ ok: false, errorCode: 'INVALID_ARGS', message: expect.stringContaining('valid: none') });
+  });
+
   it('keeps the legacy inherited route when no Agent/model change is requested', () => {
     expect(resolveSendToSessionExecutionConfig({
       source: fableSource(),

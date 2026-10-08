@@ -34,6 +34,11 @@ export interface OrcaLeadSessionSnapshot {
    * 本机目录。null = 本地 lead,worker 也是本地。
    */
   remoteHostId: string | null;
+  /**
+   * lead 的 Agent 在同账号另一台电脑上运行时那台电脑的设备 id。worker 继承它(Agent 同样在
+   * 那台运行，模型与来源按那台的目录选)；任务与文件都在本机。缺省 = Agent 在本机。
+   */
+  agentDeviceId?: string | null;
 }
 
 /** worker limit 与 duplicate label 校验只需要 worker 的身份、label 与占槽状态。 */
@@ -77,7 +82,10 @@ export interface OrcaWorkerProviderSnapshot {
    * 元数据,effort 归一保留拍平清单解析(兼容旧组装方)。
    */
   effortMetaByModel?: Readonly<
-    Record<string, { efforts: readonly string[]; defaultEffort: string | null }>
+    Record<
+      string,
+      { efforts: readonly string[]; defaultEffort: string | null; effortsUnknown?: boolean }
+    >
   >;
   /** true 表示该来源必须写入 session provider store 才能注入自己的 API key/OAuth token。 */
   requiresExplicitRoute?: boolean;
@@ -99,8 +107,13 @@ export function providerRouteRequiresExplicitSelection(
 
 /** 同一次 provider registry 快照派生出的可用性与默认模型路由，避免两次读取产生竞态。 */
 export interface OrcaWorkerProviderRoutingContext {
-  /** SSH catalogs own both admission and defaults; never mix controller capabilities. */
+  /**
+   * SSH catalogs own both admission and defaults; never mix controller capabilities.
+   * 运行 Agent 的另一台电脑的目录同理(本机目录里没有那台的模型)。
+   */
   remoteCodexModels?: OrcaWorkerModelCapabilities[];
+  /** 远端目录的 worker 默认值(缺省时沿用 SSH Codex 的默认规则)。 */
+  remoteWorkerDefaults?: (lead: OrcaLeadSessionSnapshot, agent: AgentKind) => OrcaWorkerDefaultsSnapshot;
   availability: Record<AgentKind, OrcaWorkerProviderSnapshot[]>;
   resolveDefaultProviderIdForModel(agent: AgentKind, model: string): string | null;
 }
@@ -110,6 +123,8 @@ export interface OrcaWorkerModelCapabilities {
   id: string;
   efforts?: readonly string[];
   defaultEffort?: string | null;
+  /** true = 没有任何来源声明过档位,efforts 只是占位;显式档位交给引擎裁决而不是拒绝(#5535)。 */
+  effortsUnknown?: boolean;
   supportsFastMode?: boolean;
 }
 
@@ -229,7 +244,12 @@ export interface OrcaWorkerCreationDeps {
    * availability 只保留已连接 provider 的最小视图；显式 model 的默认来源解析复用
    * model-providers 的 effectiveSourceIdForModel，避免在创建服务里复制供应商优先级。
    */
-  getProviderRoutingContext(agent?: AgentKind, remoteHostId?: string | null): Promise<OrcaWorkerProviderRoutingContext>;
+  getProviderRoutingContext(
+    agent?: AgentKind,
+    remoteHostId?: string | null,
+    /** lead 的 Agent 在另一台电脑运行时，按那台的目录。 */
+    agentDeviceId?: string | null,
+  ): Promise<OrcaWorkerProviderRoutingContext>;
   readClaudeApiKey(): string | null;
   reserveWorkerCreation(input: {
     reservationId: string;
@@ -469,6 +489,9 @@ function normalizeResolvedEffort(params: {
   const defaultEffort = model.defaultEffort ?? null;
   if (effort == null) return { ok: true, effort: defaultEffort };
   if (validEfforts.includes(effort)) return { ok: true, effort };
+  // 未声明档位(#5535):目录与路由来源都没说过这个模型支持什么,[] 只是占位。显式档位
+  // 原样交给引擎/供应商裁决,不再以 valid: none 拒绝;明确无档位(已声明空表)仍走下方拒绝。
+  if (explicit && model.effortsUnknown === true) return { ok: true, effort };
   if (effort === 'minimal' && !explicit && validEfforts.includes('low')) {
     return { ok: true, effort: 'low' };
   }
@@ -665,7 +688,9 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
       typeof params.providerId === 'string' && params.providerId.trim().length > 0
         ? params.providerId.trim()
         : null;
-    const providerRouting = await deps.getProviderRoutingContext(params.agent, lead.remoteHostId);
+    const providerRouting = lead.agentDeviceId
+      ? await deps.getProviderRoutingContext(params.agent, lead.remoteHostId, lead.agentDeviceId)
+      : await deps.getProviderRoutingContext(params.agent, lead.remoteHostId);
     const availableModels = providerRouting.remoteCodexModels ?? deps.getAvailableModels(params.agent);
     const providerAvailability = providerRouting.availability;
     const agentProviders = providerAvailability[params.agent] ?? [];
@@ -727,10 +752,12 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
     // workingDir), ensureRemoteReadyForSessionStart 对 pi 已支持 silent install +
     // pi-manager 预上传, orca_worker_bridge 工具面经 SSH remote-forward 隧道注入。
     // 与 CC/Codex remote worker 同构;此闸会让 remote pi lead 完全无法使用 pi worker。
-    const defaults: OrcaWorkerDefaultsSnapshot = providerRouting.remoteCodexModels
-      ? { model: lead.agentKind === 'codex' && availableModels.some((model) => model.id === lead.model)
-          ? lead.model : availableModels[0]?.id, providerId: 'openai' }
-      : deps.getWorkerDefaults(params.agent);
+    const defaults: OrcaWorkerDefaultsSnapshot = providerRouting.remoteWorkerDefaults
+      ? providerRouting.remoteWorkerDefaults(lead, params.agent)
+      : providerRouting.remoteCodexModels
+        ? { model: lead.agentKind === 'codex' && availableModels.some((model) => model.id === lead.model)
+            ? lead.model : availableModels[0]?.id, providerId: 'openai' }
+        : deps.getWorkerDefaults(params.agent);
     const workerDefaultProviderId =
       typeof defaults.providerId === 'string' && defaults.providerId.trim()
         ? defaults.providerId.trim()
@@ -884,6 +911,7 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
           id: resolved.model,
           efforts: routeEffortMeta.efforts,
           defaultEffort: routeEffortMeta.defaultEffort,
+          effortsUnknown: routeEffortMeta.effortsUnknown,
         },
         effort: params.effort ?? defaults.effort ?? lead.effort,
         explicit: params.effort !== undefined,
@@ -1076,6 +1104,8 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
         // remote lead 的 worker 继承 remoteHostId:在同一台远端主机上 spawn,
         // workingDir 在该远端校验；本地 lead 不带此字段（本地 worker）。
         ...(lead.remoteHostId ? { remoteHostId: lead.remoteHostId } : {}),
+        // lead 的 Agent 在另一台电脑运行：worker 的 Agent 也在那台(任务与文件在本机)。
+        ...(lead.agentDeviceId && !lead.remoteHostId ? { agentDeviceId: lead.agentDeviceId } : {}),
         model: resolved.model,
         providerId: resolved.providerId,
         effort: resolved.effort as MakerSessionCreateOpts['effort'],

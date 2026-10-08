@@ -12,7 +12,7 @@ function runtimeRoot(): string {
   return path.join(app.getPath('userData'), 'worktree-runtime-leases');
 }
 
-/** Source borrowing can cross release/dev/isolated profiles on the same machine. */
+/** Older clients may still hold cross-profile leases; keep reading/retrying them. */
 function sharedRuntimeRoot(): string {
   return path.join(app.getPath('appData'), 'Cindy', 'shared-worktree-runtime-leases');
 }
@@ -47,42 +47,17 @@ interface RuntimeKeepSentinel {
 export interface WorktreeRuntimeLease {
   readonly file: string;
   readonly physicalPath: string;
-  readonly sharedFile?: string;
   readonly keepSentinel?: RuntimeKeepSentinel;
 }
 
 export async function acquireWorktreeRuntimeLease(
   sessionId: string,
   cwd: string,
-  options: { crossProfile?: boolean } = {},
 ): Promise<WorktreeRuntimeLease | null> {
   const root = managedWorktreeRoot(cwd);
   if (!root) return null;
   return withWorktreeResourceLock(root, async () => {
-    const lease = await publishRuntimeLease(sessionId, await physicalWorktreeKey(root), runtimeRoot());
-    if (!options.crossProfile) return lease;
-    let shared: WorktreeRuntimeLease | undefined;
-    let keepSentinel: RuntimeKeepSentinel | undefined;
-    try {
-      // Publish both under the deletion lock. Keep the original profile copy
-      // readable by existing clients sharing this userData.
-      shared = await publishRuntimeLease(sessionId, lease.physicalPath, sharedRuntimeRoot());
-      // Older profiles already check Git's external worktree lock before
-      // recycling or pool reset. Build-time git clean cannot remove this file.
-      keepSentinel = await acquireRuntimeKeepSentinel(shared);
-      if (keepSentinel) {
-        // Ownership lives with a real borrower, not merely in a recognizable
-        // marker body that a user could have copied or edited. Existing v1
-        // readers ignore the additional field; a partial write fails closed.
-        await fs.writeFile(shared.file, JSON.stringify({
-          version: 1, pid: process.pid, path: lease.physicalPath, keepSentinel,
-        }));
-      }
-      return { ...lease, sharedFile: shared.file, keepSentinel };
-    } catch (error) {
-      await releaseWorktreeRuntimeLease({ ...lease, sharedFile: shared?.file, keepSentinel }).catch(() => undefined);
-      throw error;
-    }
+    return publishRuntimeLease(sessionId, await physicalWorktreeKey(root), runtimeRoot());
   });
 }
 
@@ -102,56 +77,6 @@ async function publishRuntimeLease(sessionId: string, physicalPath: string, dire
     throw error;
   }
   return lease;
-}
-
-/** Validate Git's linked-worktree metadata before writing outside the source. */
-async function runtimeGitLockFile(root: string): Promise<string> {
-  const link = path.join(root, '.git');
-  const linkStat = await fs.lstat(link);
-  if (!linkStat.isFile() || linkStat.isSymbolicLink()) throw new Error('project requires a linked Git worktree');
-  const match = /^gitdir: (.+)$/.exec((await fs.readFile(link, 'utf8')).trim());
-  if (!match) throw new Error('invalid worktree Git link');
-  const gitDir = await physicalWorktreeKey(path.resolve(root, match[1]!));
-  const common = await physicalWorktreeKey(path.resolve(gitDir, (await fs.readFile(path.join(gitDir, 'commondir'), 'utf8')).trim()));
-  const backlink = await physicalWorktreeKey(path.resolve(gitDir, (await fs.readFile(path.join(gitDir, 'gitdir'), 'utf8')).trim()));
-  if (path.dirname(gitDir) !== path.join(common, 'worktrees') || backlink !== link
-    || gitDir === root || gitDir.startsWith(`${root}${path.sep}`)) {
-    throw new Error('worktree Git metadata must belong to the source and remain outside it');
-  }
-  return path.join(gitDir, 'locked');
-}
-
-async function acquireRuntimeKeepSentinel(lease: WorktreeRuntimeLease): Promise<RuntimeKeepSentinel | undefined> {
-  const file = await runtimeGitLockFile(lease.physicalPath);
-  const newContent = JSON.stringify({ kind: 'cindy-runtime-lock', version: 1, nonce: randomUUID() });
-  let created = false;
-  try {
-    await fs.writeFile(file, newContent, { flag: 'wx', mode: 0o600 });
-    created = true;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-  }
-  // Never overwrite a user's existing Git lock, including files/directories.
-  await fs.stat(file);
-  const identity = await fs.lstat(file);
-  if (!identity.isFile() || identity.isSymbolicLink()) return undefined;
-  let content: string;
-  try { content = await fs.readFile(file, 'utf8'); } catch { return undefined; }
-  const marker = { file, content, identity: `${identity.dev}:${identity.ino}:${identity.birthtimeMs}` };
-  if (created) return content === newContent ? marker : undefined;
-  const directory = path.dirname(lease.file);
-  for (const name of await fs.readdir(directory)) {
-    if (!leaseNamePattern.test(name) || name === path.basename(lease.file)) continue;
-    try {
-      const other = JSON.parse(await fs.readFile(path.join(directory, name), 'utf8'));
-      if (other.version !== 1 || typeof other.path !== 'string') throw new Error('unreadable worktree lease');
-      if (other.path === lease.physicalPath && other.keepSentinel?.file === file && other.keepSentinel?.content === content
-        && other.keepSentinel?.identity === marker.identity) return marker;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-    }
-  }
-  return undefined;
 }
 
 /** Called under the same physical lock as acquisition and old owner recyclers. */
@@ -187,11 +112,7 @@ async function releaseRuntimeKeepSentinel(lease: WorktreeRuntimeLease): Promise<
 }
 
 export async function releaseWorktreeRuntimeLease(lease: WorktreeRuntimeLease): Promise<void> {
-  const files: WorktreeRuntimeLease[] = [{ file: lease.file, physicalPath: lease.physicalPath }];
-  if (lease.sharedFile) files.push({ file: lease.sharedFile, physicalPath: lease.physicalPath, keepSentinel: lease.keepSentinel });
-  const results = await Promise.allSettled(files.map(releaseRuntimeLeaseFile));
-  const failure = results.find((result) => result.status === 'rejected');
-  if (failure?.status === 'rejected') throw failure.reason;
+  await releaseRuntimeLeaseFile(lease);
 }
 
 async function removeRuntimeLeaseFile(lease: WorktreeRuntimeLease): Promise<void> {

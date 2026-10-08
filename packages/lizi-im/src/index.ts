@@ -66,6 +66,30 @@ export { TELEGRAM_DEFAULT_BEHAVIOR } from './telegram/index.js';
 export type { TelegramBehaviorConfig } from './telegram/index.js';
 export { TELEGRAM_PERSONAL_CAPABILITIES } from './telegram/presentationCapabilities.js';
 export type { TelegramDriverCapabilities } from './telegram/presentationCapabilities.js';
+// 运行中过程消息: 生命周期、单帧上限、渲染与失败判据 —— 官方 bot 的 msg.op 进度
+// 消息与个人 driver 同源(官方只实现 TelegramProgressDeps 的 msg.op 版)。
+export { TELEGRAM_PROGRESS_FRAME_MAX_CHARS } from './telegram/progressFrame.js';
+export {
+  startTelegramProgressCarrier,
+  startTelegramTurnCarrier,
+} from './telegram/streamingText.js';
+export type {
+  TelegramProgressCarrier,
+  TelegramProgressDeps,
+  TelegramStreamingDeps,
+  TelegramTurnCarrier,
+} from './telegram/streamingText.js';
+export { markdownToTelegramHtml, stripTelegramHtmlTags } from './telegram/markdown.js';
+export { chunkTelegramSource } from './telegram/chunk.js';
+export { layoutTelegramCard } from './telegram/components.js';
+export type { TelegramCardLayoutInput } from './telegram/components.js';
+export {
+  callWithTelegramRateLimitRetry,
+  isTelegramBadRequest,
+  editTelegramHtmlWithFallback,
+  sendTelegramHtmlWithFallback,
+} from './telegram/outboundPolicy.js';
+export type { TelegramErrorShape } from './telegram/outboundPolicy.js';
 export { createTelegramMessageLifecycle } from './telegram/messageLifecycle.js';
 export { TelegramFinalUnconfirmedError } from './telegram/streamingText.js';
 export type {

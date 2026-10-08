@@ -3,9 +3,9 @@
   "dataLicense": "CC0-1.0",
   "SPDXID": "SPDXRef-DOCUMENT",
   "name": "cindy-desktop-macos",
-  "documentNamespace": "https://cindy.app/spdx/desktop-macos/7067d9251098807b40652f7a53024262a1af8638a76dd2f10f4df388cd105500",
+  "documentNamespace": "https://cindy.app/spdx/desktop-macos/acda3a49c9907075859872bce4297dd4fe5f737e8ffa940a088b21574e4ac10a",
   "creationInfo": {
-    "created": "2026-09-18T02:10:31Z",
+    "created": "2026-10-06T01:25:03Z",
     "creators": [
       "Tool: scripts/generate-third-party-notices.mjs"
     ]
@@ -103,8 +103,8 @@
     },
     {
       "name": "OpenAI Codex CLI (runtime-downloaded binary)",
-      "SPDXID": "SPDXRef-Package-4f22132a77577bcb",
-      "versionInfo": "0.145.0",
+      "SPDXID": "SPDXRef-Package-618e13d446a4c6e4",
+      "versionInfo": "0.159.2",
       "downloadLocation": "https://github.com/openai/codex",
       "filesAnalyzed": false,
       "licenseConcluded": "Apache-2.0",
@@ -143,8 +143,8 @@
     },
     {
       "name": "pi coding agent (runtime-downloaded binary)",
-      "SPDXID": "SPDXRef-Package-e7ecfd34000fcb76",
-      "versionInfo": "0.85.1",
+      "SPDXID": "SPDXRef-Package-9a414e8a6f3ff55d",
+      "versionInfo": "1.0.2",
       "downloadLocation": "https://github.com/earendil-works/pi",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
@@ -230,8 +230,8 @@
     },
     {
       "name": "@anthropic-ai/sdk",
-      "SPDXID": "SPDXRef-Package-6dd15d27ddf97540",
-      "versionInfo": "0.91.1",
+      "SPDXID": "SPDXRef-Package-28dc3e2c8c9ba29e",
+      "versionInfo": "0.93.0",
       "downloadLocation": "https://github.com/anthropics/anthropic-sdk-typescript",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
@@ -241,7 +241,7 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/%40anthropic-ai/sdk@0.91.1"
+          "referenceLocator": "pkg:npm/%40anthropic-ai/sdk@0.93.0"
         }
       ]
     },
@@ -1641,23 +1641,6 @@
     },
     {
       "name": "@img/sharp-darwin-arm64",
-      "SPDXID": "SPDXRef-Package-2a66da62f577c26b",
-      "versionInfo": "0.34.5",
-      "downloadLocation": "https://github.com/lovell/sharp",
-      "filesAnalyzed": false,
-      "licenseConcluded": "Apache-2.0",
-      "licenseDeclared": "Apache-2.0",
-      "copyrightText": "NOASSERTION",
-      "externalRefs": [
-        {
-          "referenceCategory": "PACKAGE-MANAGER",
-          "referenceType": "purl",
-          "referenceLocator": "pkg:npm/%40img/sharp-darwin-arm64@0.34.5"
-        }
-      ]
-    },
-    {
-      "name": "@img/sharp-darwin-arm64",
       "SPDXID": "SPDXRef-Package-9763f084a676210f",
       "versionInfo": "0.35.3",
       "downloadLocation": "https://github.com/lovell/sharp",
@@ -1670,23 +1653,6 @@
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
           "referenceLocator": "pkg:npm/%40img/sharp-darwin-arm64@0.35.3"
-        }
-      ]
-    },
-    {
-      "name": "@img/sharp-darwin-x64",
-      "SPDXID": "SPDXRef-Package-66cc2721b030fbf0",
-      "versionInfo": "0.34.5",
-      "downloadLocation": "https://github.com/lovell/sharp",
-      "filesAnalyzed": false,
-      "licenseConcluded": "Apache-2.0",
-      "licenseDeclared": "Apache-2.0",
-      "copyrightText": "NOASSERTION",
-      "externalRefs": [
-        {
-          "referenceCategory": "PACKAGE-MANAGER",
-          "referenceType": "purl",
-          "referenceLocator": "pkg:npm/%40img/sharp-darwin-x64@0.34.5"
         }
       ]
     },
@@ -1709,23 +1675,6 @@
     },
     {
       "name": "@img/sharp-libvips-darwin-arm64",
-      "SPDXID": "SPDXRef-Package-a49de551d26c27c6",
-      "versionInfo": "1.2.4",
-      "downloadLocation": "https://github.com/lovell/sharp-libvips",
-      "filesAnalyzed": false,
-      "licenseConcluded": "LGPL-3.0-or-later",
-      "licenseDeclared": "LGPL-3.0-or-later",
-      "copyrightText": "NOASSERTION",
-      "externalRefs": [
-        {
-          "referenceCategory": "PACKAGE-MANAGER",
-          "referenceType": "purl",
-          "referenceLocator": "pkg:npm/%40img/sharp-libvips-darwin-arm64@1.2.4"
-        }
-      ]
-    },
-    {
-      "name": "@img/sharp-libvips-darwin-arm64",
       "SPDXID": "SPDXRef-Package-966f59cb0db4939e",
       "versionInfo": "1.3.2",
       "downloadLocation": "https://github.com/lovell/sharp-libvips",
@@ -1738,23 +1687,6 @@
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
           "referenceLocator": "pkg:npm/%40img/sharp-libvips-darwin-arm64@1.3.2"
-        }
-      ]
-    },
-    {
-      "name": "@img/sharp-libvips-darwin-x64",
-      "SPDXID": "SPDXRef-Package-aa749fa20bac88b6",
-      "versionInfo": "1.2.4",
-      "downloadLocation": "https://github.com/lovell/sharp-libvips",
-      "filesAnalyzed": false,
-      "licenseConcluded": "LGPL-3.0-or-later",
-      "licenseDeclared": "LGPL-3.0-or-later",
-      "copyrightText": "NOASSERTION",
-      "externalRefs": [
-        {
-          "referenceCategory": "PACKAGE-MANAGER",
-          "referenceType": "purl",
-          "referenceLocator": "pkg:npm/%40img/sharp-libvips-darwin-x64@1.2.4"
         }
       ]
     },
@@ -7131,6 +7063,23 @@
       ]
     },
     {
+      "name": "dotenv",
+      "SPDXID": "SPDXRef-Package-55a09c11de197ec1",
+      "versionInfo": "16.6.1",
+      "downloadLocation": "https://github.com/motdotla/dotenv",
+      "filesAnalyzed": false,
+      "licenseConcluded": "BSD-2-Clause",
+      "licenseDeclared": "BSD-2-Clause",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/dotenv@16.6.1"
+        }
+      ]
+    },
+    {
       "name": "drizzle-orm",
       "SPDXID": "SPDXRef-Package-bc6d5248a7fbabed",
       "versionInfo": "0.45.2",
@@ -9745,6 +9694,23 @@
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
           "referenceLocator": "pkg:npm/json-schema-typed@8.0.2"
+        }
+      ]
+    },
+    {
+      "name": "json5",
+      "SPDXID": "SPDXRef-Package-77423d29c03ab400",
+      "versionInfo": "2.2.3",
+      "downloadLocation": "https://github.com/json5/json5",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/json5@2.2.3"
         }
       ]
     },
@@ -15748,7 +15714,7 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-4f22132a77577bcb"
+      "relatedSpdxElement": "SPDXRef-Package-618e13d446a4c6e4"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -15768,7 +15734,7 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-e7ecfd34000fcb76"
+      "relatedSpdxElement": "SPDXRef-Package-9a414e8a6f3ff55d"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -15808,7 +15774,7 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-6dd15d27ddf97540"
+      "relatedSpdxElement": "SPDXRef-Package-28dc3e2c8c9ba29e"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -16223,17 +16189,7 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-2a66da62f577c26b"
-    },
-    {
-      "spdxElementId": "SPDXRef-DOCUMENT",
-      "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-9763f084a676210f"
-    },
-    {
-      "spdxElementId": "SPDXRef-DOCUMENT",
-      "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-66cc2721b030fbf0"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -16243,17 +16199,7 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-a49de551d26c27c6"
-    },
-    {
-      "spdxElementId": "SPDXRef-DOCUMENT",
-      "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-966f59cb0db4939e"
-    },
-    {
-      "spdxElementId": "SPDXRef-DOCUMENT",
-      "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-aa749fa20bac88b6"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -17838,6 +17784,11 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-55a09c11de197ec1"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-bc6d5248a7fbabed"
     },
     {
@@ -18604,6 +18555,11 @@
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-60b0d7ba48b8100a"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-77423d29c03ab400"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",

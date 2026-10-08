@@ -22,7 +22,7 @@ import { createOrcaTeamService, type OrcaTeamServiceDeps, type OrcaWorkerRecordS
 import type { MakerSessionCreateOpts } from '../sessionRequest';
 import { CredentialModeSwitchBusyError } from '../../maker-host/codex-credential-switch';
 import { isActiveWorkerStatus } from '../../../shared/orca-worker-status';
-import { sshCodexWorkerRoutingContext } from '../orcaProviderRoutingContext';
+import { deviceAvailableModels, deviceWorkerRoutingContext, sshCodexWorkerRoutingContext } from '../orcaProviderRoutingContext';
 import type { ProviderView } from '@cindy/model-providers';
 import { createOrcaLifecycleService, type OrcaLifecycleDeps } from '../orcaLifecycleService';
 
@@ -237,6 +237,68 @@ describe('SSH Codex Worker catalog', () => {
         model: model ?? 'remote-lead', providerId: 'openai', remoteHostId: 'remote-builder', effort: 'low', fastMode: false,
       }));
     }
+  });
+});
+
+describe('Worker of a lead whose agent runs on another computer', () => {
+  const sparkModels = ['spark/qwen', 'spark/deepseek'].map((id) => ({
+    id, name: id, efforts: ['low', 'high'], defaultEffort: 'high', supportsFastMode: false,
+  }));
+  const views = [
+    { id: 'spark', name: 'Spark', source: 'user', agents: ['claude-code', 'pi'], connected: true,
+      models: { 'claude-code': sparkModels, pi: sparkModels }, routing: { 'claude-code': {}, pi: {} } },
+    { id: 'offline', name: 'Offline', source: 'user', agents: ['pi'], connected: false,
+      models: { pi: [{ id: 'offline/model', name: 'Offline', efforts: [], defaultEffort: null }] }, routing: { pi: {} } },
+  ] as unknown as ProviderView[];
+  const deviceLead = (overrides: Record<string, unknown> = {}) => ({
+    id: 'lead-1', agentKind: 'pi' as const, workspaceKind: 'project' as const, workingDir: '/Users/me/repo',
+    model: 'spark/qwen', effort: 'high', permissionMode: 'default', fastMode: false, providerId: 'spark',
+    remoteHostId: null, agentDeviceId: 'device-b', ...overrides,
+  });
+
+  it.each([undefined, 'spark/deepseek', 'local-only'])('uses that computer for membership and defaults (%s)', async (model) => {
+    const routing = deviceWorkerRoutingContext(views, 'pi');
+    const { deps, service } = createDeps({
+      getLeadSessionRow: vi.fn(async () => deviceLead()),
+      getProviderRoutingContext: vi.fn(async () => routing),
+      getWorkerDefaults: vi.fn(() => ({ model: 'local-only', providerId: 'xd', effort: 'high' })),
+    });
+    const result = await service.createWorker({ leadSessionId: 'lead-1', role: 'reviewer', label: 'reviewer', agent: 'pi', model });
+    expect(deps.getProviderRoutingContext).toHaveBeenCalledWith('pi', null, 'device-b');
+    expect(deps.getAvailableModels).not.toHaveBeenCalled();
+    expect(deps.getWorkerDefaults).not.toHaveBeenCalled();
+    if (model === 'local-only') {
+      expect(result.ok).toBe(false);
+      expect(deps.bootstrapSession).not.toHaveBeenCalled();
+      return;
+    }
+    expect(result.ok).toBe(true);
+    // Worker 跟 lead 在同一台电脑运行，模型与来源按那台的目录。
+    expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({
+      model: model ?? 'spark/qwen', providerId: 'spark', agentDeviceId: 'device-b',
+    }));
+    expect(deps.buildCreateOptsWithStderr).toHaveBeenCalledWith(expect.objectContaining({ agentDeviceId: 'device-b' }));
+  });
+
+  it("starts from that computer's first model when the lead uses another agent", async () => {
+    const routing = deviceWorkerRoutingContext(views, 'claude-code');
+    const { deps, service } = createDeps({
+      getLeadSessionRow: vi.fn(async () => deviceLead({ agentKind: 'codex', model: 'gpt-5.5', providerId: 'openai' })),
+      getProviderRoutingContext: vi.fn(async () => routing),
+    });
+    const result = await service.createWorker({ leadSessionId: 'lead-1', role: 'reviewer', label: 'reviewer', agent: 'claude-code' });
+    expect(result.ok).toBe(true);
+    expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({
+      agentKind: 'claude-code', model: 'spark/qwen', providerId: 'spark', agentDeviceId: 'device-b',
+    }));
+  });
+
+  it('lists only connected sources of that computer', () => {
+    expect(deviceAvailableModels(views, 'pi')).toEqual([
+      { id: 'spark/qwen', label: 'spark/qwen', providers: [{ id: 'spark', name: 'Spark' }], defaultProviderId: 'spark' },
+      { id: 'spark/deepseek', label: 'spark/deepseek', providers: [{ id: 'spark', name: 'Spark' }], defaultProviderId: 'spark' },
+    ]);
+    expect(deviceAvailableModels(views, 'codex')).toEqual([]);
   });
 });
 
@@ -1474,6 +1536,43 @@ describe('OrcaWorkerCreationService', () => {
 
     expect(deps.bootstrapSession).not.toHaveBeenCalled();
     expect(deps.addOrUpdateWorker).not.toHaveBeenCalled();
+  });
+
+  it('keeps an explicit effort for a custom model whose capabilities were never declared (#5535)', async () => {
+    // 自定义来源只填了 id/name:目录与路由快照都没有档位声明,[] 只是占位而不是 valid: none。
+    const model = 'custom/step-5-preview';
+    const { deps, service } = createDeps({
+      getAvailableModels: vi.fn((agent: AgentKind) => (
+        agent === 'claude-code'
+          ? [{ id: model, efforts: [], defaultEffort: null, effortsUnknown: true }]
+          : [{ id: 'gpt-5.5', efforts: ['low', 'medium', 'high', 'xhigh'], defaultEffort: 'high', supportsFastMode: true }]
+      )),
+      getProviderRoutingContext: vi.fn(async () => providerRoutingContext({
+        'claude-code': [{
+          id: 'custom-anthropic',
+          name: 'Custom Anthropic Messages',
+          models: [model],
+          effortMetaByModel: { [model]: { efforts: [], defaultEffort: null, effortsUnknown: true } },
+          requiresExplicitRoute: true,
+        }],
+        codex: [{ id: 'xd', name: 'XD Gateway', models: ['gpt-5.5'] }],
+      })),
+    });
+
+    await expect(
+      service.createWorker({
+        leadSessionId: 'lead-1',
+        role: 'reviewer',
+        agent: 'claude-code',
+        label: 'reviewer',
+        model,
+        effort: 'medium',
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      resolved: { model, effort: 'medium' },
+    });
+    expect(deps.buildCreateOptsWithStderr).toHaveBeenCalledWith(expect.objectContaining({ model, effort: 'medium' }));
   });
 
   it('rejects explicit minimal effort for a Claude Code worker at the creation boundary', async () => {

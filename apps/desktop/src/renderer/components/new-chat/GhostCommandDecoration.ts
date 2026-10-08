@@ -17,7 +17,7 @@
  *   hardBreak / 段落边界(序列化为 `\n`),紧贴 chip 视为 run 未断,不亮。
  *
  * 意识清单不在 plugin 里查(listSync 是同步 IPC,不进 keystroke 热路径):
- * ChatInput 经 useInstalledGhosts 订阅,变更时用 setGhostCommandRoster 推进来。
+ * ChatInput 读取当前设备的插件清单,变更时用 setGhostCommandRoster 推进来。
  */
 import { Extension, type Editor } from '@tiptap/core';
 import { Plugin, PluginKey, type EditorState, type Transaction } from '@tiptap/pm/state';
@@ -28,13 +28,13 @@ import {
   findGhostByCommand,
   findGhostByCommandIncludingDisabled,
 } from '@/cindy-brain/ghostCommand';
-import type { InstalledGhost } from '../../../shared/ghost';
+import type { GhostCommandSource } from '../../../shared/ghostComposer';
 
 const PLUGIN_KEY = new PluginKey<GhostCommandPluginState>('ghostCommandDecoration');
 const META_KEY = 'ghostCommandDecoration';
 
 interface GhostCommandPluginState {
-  ghosts: InstalledGhost[];
+  ghosts: GhostCommandSource[];
   decorations: DecorationSet;
 }
 
@@ -56,7 +56,7 @@ export interface GhostCommandMatch {
   from: number;
   /** 指令词结束后的 doc 位置(decoration 区间 [from, to))。 */
   to: number;
-  ghost: InstalledGhost;
+  ghost: GhostCommandSource;
 }
 
 /**
@@ -66,7 +66,7 @@ export interface GhostCommandMatch {
  */
 export function findGhostCommandMatch(
   doc: PMNode,
-  ghosts: InstalledGhost[],
+  ghosts: GhostCommandSource[],
   options: { includeDisabled?: boolean } = {},
 ): GhostCommandMatch | null {
   if (ghosts.length === 0) return null;
@@ -125,7 +125,7 @@ export function findGhostCommandMatch(
  * 胶囊 span 的渲染属性(导出供测试锁契约):头像 data URL 过白名单才注入
  * `--ghost-cmd-icon`(globals.css 据此换掉默认幽灵图标),异形值静默回退。
  */
-export function ghostPillAttrs(ghost: InstalledGhost): Record<string, string> {
+export function ghostPillAttrs(ghost: GhostCommandSource): Record<string, string> {
   const attrs: Record<string, string> = {
     class: 'ghost-cmd-pill',
     'data-ghost-cmd': ghost.manifest.id,
@@ -141,7 +141,7 @@ export function ghostPillAttrs(ghost: InstalledGhost): Record<string, string> {
 }
 
 /** 由匹配结果构建胶囊 decoration(未命中 → 空集)。 */
-function buildDecorations(doc: PMNode, ghosts: InstalledGhost[]): DecorationSet {
+function buildDecorations(doc: PMNode, ghosts: GhostCommandSource[]): DecorationSet {
   const match = findGhostCommandMatch(doc, ghosts);
   if (!match) return DecorationSet.empty;
   return DecorationSet.create(doc, [
@@ -192,9 +192,9 @@ export function applyGhostCommandBackspace(view: EditorView): boolean {
 
 /**
  * 推送最新意识清单(装/卸/唤醒/沉睡即时反映)。同引用去重——
- * useInstalledGhosts 的 state 引用只在真变更时更新。
+ * 清单的 state 引用只在数据更新时变化。
  */
-export function setGhostCommandRoster(editor: Editor | null, ghosts: InstalledGhost[]): void {
+export function setGhostCommandRoster(editor: Editor | null, ghosts: GhostCommandSource[]): void {
   if (!editor || editor.isDestroyed) return;
   const current = PLUGIN_KEY.getState(editor.state);
   if (current && current.ghosts === ghosts) return;
@@ -211,7 +211,7 @@ export function createGhostCommandPlugin(): Plugin<GhostCommandPluginState> {
         return { ghosts: [], decorations: buildDecorations(state.doc, []) };
       },
       apply(tr: Transaction, old: GhostCommandPluginState): GhostCommandPluginState {
-        const roster = tr.getMeta(META_KEY) as InstalledGhost[] | undefined;
+        const roster = tr.getMeta(META_KEY) as GhostCommandSource[] | undefined;
         if (roster) return { ghosts: roster, decorations: buildDecorations(tr.doc, roster) };
         if (!tr.docChanged) return old;
         // 只扫消息头部的指令 run,输入量级下全量重算成本可忽略(同 CjkPunct)。

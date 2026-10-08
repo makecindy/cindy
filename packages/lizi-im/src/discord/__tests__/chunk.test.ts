@@ -40,4 +40,18 @@ describe('chunkDiscordText', () => {
     expect(chunks).toEqual(['x'.repeat(10), 'x'.repeat(10), 'x'.repeat(5)]);
     expect(chunks.every((chunk) => chunk.length <= 10)).toBe(true);
   });
+
+  it('keeps words and emoji intact when a long line must be split', () => {
+    const words = 'bottomPadding value '.repeat(20);
+    const chunks = chunkDiscordText(words, 30);
+    expect(chunks.join('')).toBe(words);
+    expect(chunks.slice(0, -1).every((chunk) => /\s$/.test(chunk))).toBe(true);
+    const emoji = chunkDiscordText('🙂'.repeat(30), 11);
+    expect(emoji.join('')).toBe('🙂'.repeat(30));
+    expect(
+      emoji.every(
+        (chunk) => chunk.length <= 11 && !/^[\uDC00-\uDFFF]|[\uD800-\uDBFF]$/.test(chunk),
+      ),
+    ).toBe(true);
+  });
 });

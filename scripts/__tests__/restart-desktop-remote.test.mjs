@@ -1056,19 +1056,6 @@ test("devEnvPrefix passes explicit model catalog test controls to Desktop", () =
 	);
 });
 
-test("devEnvPrefix passes native iOS dev switches to Electron", () => {
-	assert.equal(
-		devEnvPrefix(
-			{
-				CINDY_IOS_SIMULATOR_NATIVE_H264: "1",
-				CINDY_IOS_SIMULATOR_NATIVE_HID: "1",
-			},
-			"darwin",
-		),
-		"CINDY_CUA_SMOKE='0' CINDY_IOS_SIMULATOR_NATIVE_H264='1' CINDY_IOS_SIMULATOR_NATIVE_HID='1' ",
-	);
-});
-
 test("formatDesktopDevVerdict prints a grepable ready block", () => {
 	const text = formatDesktopDevVerdict({
 		state: "ready",

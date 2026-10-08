@@ -132,6 +132,17 @@ describe('Bot read positions', () => {
     expect(listener).toHaveBeenCalledTimes(1);
   });
 
+  it('does not count a system admission as an incoming reply or hide a pending reply', () => {
+    setBotReadStateOwner('owner-1');
+    markBotRead(botGroupReadKey('g'), 100);
+    const lastMessage = { authorKind: 'system' as const, isSelf: false, authorName: 'Taylor',
+      noticeCode: 'member-joined' as const, preview: 'Taylor joined the group', createdAt: 300 };
+    expect(isBotGroupUnread({ id: 'g', lastMessage })).toBe(false);
+    expect(isBotGroupUnread({ id: 'g', lastReplyAt: 100, lastMessage })).toBe(false);
+    expect(isBotGroupUnread({ id: 'g', lastReplyAt: 200, lastMessage })).toBe(true);
+    expect(getBotLastReadAt(botGroupReadKey('g'))).toBe(100);
+  });
+
   it('degrades to an empty map when the stored value is corrupt', () => {
     setBotReadStateOwner('owner-1');
     window.localStorage.setItem('cindy.bots.readState.v1.owner-1', 'not json');

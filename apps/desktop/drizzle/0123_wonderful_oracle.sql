@@ -1,0 +1,1 @@
+ALTER TABLE `sessions` ADD `agent_device_id` text;

@@ -524,6 +524,12 @@ describe('Agent Island expanded content height', () => {
 });
 
 describe('AgentIslandService native publishing', () => {
+  beforeEach(async () => {
+    // Load after the outer mock setup, outside the first behavior test's budget.
+    // Cold Vite transforms can otherwise consume its entire 5-second timeout.
+    await import('../service.js');
+  });
+
   it('keeps compact activity broadcasting alive in headless mode', async () => {
     const { AgentIslandService } = await import('../service.js');
     const service = new AgentIslandService({
@@ -560,7 +566,9 @@ describe('AgentIslandService native publishing', () => {
         compactDetail: 'check logs',
       }),
     );
-  });
+    // 首个动态 import('../service.js') 在高并行 worker 下可能超过 vitest 默认 5s，
+    // 显式放宽本用例的超时(用例本身是纯同步断言，不是真长跑)。
+  }, 20_000);
 
   it('exposes the canonical snapshot and emits per-session transition edges', async () => {
     const { AgentIslandService } = await import('../service.js');

@@ -17,7 +17,7 @@
  *      (i18n `effortLevels.*`),绝不把翻译过的文案回灌进配置。
  */
 
-import type { UnifiedAgentCapability, UnifiedModelEntry } from '@cindy/model-providers';
+import type { ProviderView, UnifiedAgentCapability, UnifiedModelEntry } from '@cindy/model-providers';
 
 import type { AgentKind } from '@/hooks/useAgentCapabilities';
 import type { SelectableVendor } from '@/lib/agentVendors';
@@ -310,12 +310,32 @@ export type UnifiedRailItem =
   | { kind: 'favorites' }
   | { kind: 'engine'; agent: AgentKind }
   | { kind: 'all' }
-  | { kind: 'provider'; providerId: string };
+  | { kind: 'provider'; providerId: string }
+  /**
+   * 另一台电脑上的供应商(远程 Agent)。选它 = 列那台电脑这个供应商的模型；选中模型后
+   * Agent 在那台电脑运行。只在新任务草稿出现；列表数据由面板调用方切到那台电脑的目录，
+   * 所以在列表筛选上它与 `provider` 格等价。
+   */
+  | { kind: 'remote-provider'; deviceId: string; providerId: string };
 
 export type UnifiedRailFilter = UnifiedRailItem;
 
+/**
+ * 远程 Agent 只能用那台电脑开了「允许被远程调用」的供应商。没有该标记(旧数据)按未开放处理；
+ * 远程控制那台电脑时照常列全部，不经过这里。
+ */
+export function remoteAgentProviders(providers: readonly ProviderView[]): ProviderView[] {
+  return providers.filter((provider) => provider.remoteInvocationEnabled === true);
+}
+
+/** 该格按哪个供应商筛选(本机或远程供应商格);其余格不按供应商筛。 */
+export function railProviderFilterId(item: UnifiedRailItem): string | null {
+  return item.kind === 'provider' || item.kind === 'remote-provider' ? item.providerId : null;
+}
+
 export function railItemKey(item: UnifiedRailItem): string {
   if (item.kind === 'provider') return `provider:${item.providerId}`;
+  if (item.kind === 'remote-provider') return `remote:${item.deviceId}:${item.providerId}`;
   if (item.kind === 'engine') return `engine:${item.agent}`;
   return item.kind;
 }
@@ -518,7 +538,8 @@ export function buildUnifiedListSections(args: {
     // 收藏指向的模型已不可路由(来源断开 / 目录下架)→ 本轮不显示;**不删条目**:
     // 连回来就该回来,静默删掉用户存过的配置是不可逆的。
     if (!entry) continue;
-    if (rail.kind === 'provider' && entry.providerId !== rail.providerId) continue;
+    const railProviderId = railProviderFilterId(rail);
+    if (railProviderId !== null && entry.providerId !== railProviderId) continue;
     // 同引擎视图:收藏按**解析后的生效引擎**过滤。收藏是配置快照,不是模型本体 ——
     // 只列点下去仍停在当前引擎的副本。判据只有这一个,不再先按条目自存的 item.agent
     // 硬排除(2026-08-19 review P2):两者在「条目引擎掉出候选」时会分叉 ——
@@ -554,10 +575,11 @@ export function buildUnifiedListSections(args: {
   // 同引擎视图的准入只有一条:候选里有当前引擎。生效引擎是排序优先级,不是隐藏条件
   // (Chris 2026-08-23 纠正 08-19「不显示」裁决):默认 / 用户选过本引擎的在前,其余兼容
   // 行在后。不把兼容行转换成当前引擎 —— 点下去仍按其落点走,落点在别处就走跨引擎确认。
+  const groupProviderId = railProviderFilterId(rail);
   const visible = entries.filter(
     (entry) =>
       matches(entry, q) &&
-      (rail.kind !== 'provider' || entry.providerId === rail.providerId) &&
+      (groupProviderId === null || entry.providerId === groupProviderId) &&
       (rail.kind !== 'engine' || entry.candidates.includes(rail.agent)),
   );
   const promoted = new Set<UnifiedModelEntry>();

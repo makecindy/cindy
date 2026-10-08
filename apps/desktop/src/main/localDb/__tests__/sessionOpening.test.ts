@@ -62,3 +62,15 @@ it('lets a queued commit recheck the account before its actual insert', async ()
   })).rejects.toThrow('账号已变化');
   expect(h.run).not.toHaveBeenCalled();
 });
+
+it("leaves model admission to the computer running the agent when the task's agent runs elsewhere", async () => {
+  // 那台的模型(如内网 Spark)本机目录里没有：本机不校验，由那台启动时按它的目录裁决。
+  const opened = await openSession({ id: 'device-task', body: { ...body, model: 'spark/qwen', providerId: 'spark', agentDeviceId: 'device-b' } });
+  expect(opened.row).toMatchObject({ model: 'spark/qwen', providerId: 'spark', agentDeviceId: 'device-b' });
+  expect(h.run).toHaveBeenCalledOnce();
+});
+
+it('still admits the model here for a blank agent computer', async () => {
+  await expect(openSession({ body: { ...body, providerId: 'disconnected', agentDeviceId: '  ' } })).rejects.toThrow('供应商');
+  expect(h.values).not.toHaveBeenCalled();
+});

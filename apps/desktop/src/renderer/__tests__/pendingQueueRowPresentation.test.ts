@@ -106,7 +106,7 @@ describe('getPendingQueueRowPresentation', () => {
     ).toBe('{"text":"x"}');
   });
 
-  it('uses orca sender and display text while disabling edit and steer actions', () => {
+  it('uses orca sender and display text, keeping steer but disabling edit', () => {
     const presentation = getPendingQueueRowPresentation(
       queuedMessage({
         text: '[orca protocol text]',
@@ -129,13 +129,13 @@ describe('getPendingQueueRowPresentation', () => {
       isSyntheticTrigger: false,
       syntheticKind: null,
       canEdit: false,
-      canSteer: false,
+      canSteer: true,
     });
   });
 
   it('marks scheduler heartbeat rows with schedule name, hides silent-run suffix, locks edit/steer', () => {
     // 撞忙排队的心跳:text 带隐藏静默协议后缀,展示用 persistedContent(原始 prompt);
-    // 机器生成 → 保留重排/删除,禁编辑/steer(与 orca 同规)。
+    // 机器生成 → 保留重排/删除,禁编辑/steer。
     const presentation = getPendingQueueRowPresentation(
       queuedMessage({
         text: 'PR #971 heartbeat prompt\n\n---\n[Silent scheduled run]\n...',

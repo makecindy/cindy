@@ -324,31 +324,50 @@ export function assertShareImageReadableSize(root: HTMLElement): void {
   }
 }
 
+function isScrollOverflow(value: string): boolean {
+  return value === 'auto' || value === 'scroll' || value === 'overlay';
+}
+
 /**
- * 让横向/纵向可滚动的块在产物里完整展开。
+ * 去掉产物里的所有滚动容器,并让溢出的块完整展开。
  *
- * 流内的宽表格、长代码行是 `overflow-x:auto` —— 用户能滚动看全。克隆进图片后
- * 滚动条不存在,右侧内容会被**静默裁掉**:接收方既看不到也不知道被裁了。所以
- * 导出时把这些容器改成按内容宽度展开,图会变宽但信息完整
- * (html-to-image 的画布宽取 `scrollWidth`,底色铺满整张画布,溢出区不会透明)。
+ * 流内的宽表格、长代码行是 `overflow-x:auto` —— 用户能滚动看全。图片里没法滚动,
+ * 溢出内容会被**静默裁掉**,所以溢出的容器按内容宽高展开(图会变宽但信息完整;
+ * html-to-image 的画布宽取 `scrollWidth`,底色铺满整张画布,溢出区不会透明)。
  *
+ * 没溢出的滚动容器也要改成 visible:html-to-image 会把 `overflow:auto` 连同固定
+ * 像素宽高一起内联进 SVG,却带不走应用的 `::-webkit-scrollbar` 样式。光栅化时只要
+ * 差出亚像素,就会画出系统默认滚动条(Windows 上尤其明显),表格最常见。
+ *
+ * 先读后写:边改样式边读 scrollWidth 会逐个元素强制重排。
  * 必须在克隆体挂进 document **之后**调用 —— getComputedStyle 对游离节点无效。
  */
 export function expandScrollableBlocks(root: HTMLElement): void {
+  const scrollers: { el: HTMLElement; widen: boolean; lengthen: boolean }[] = [];
   for (const el of Array.from(root.querySelectorAll<HTMLElement>('*'))) {
-    const overflowsX = el.scrollWidth > el.clientWidth;
-    const overflowsY = el.scrollHeight > el.clientHeight;
-    if (!overflowsX && !overflowsY) continue;
-
     const style = window.getComputedStyle(el);
-    if (overflowsX && (style.overflowX === 'auto' || style.overflowX === 'scroll')) {
-      el.style.overflowX = 'visible';
+    const scrollsX = isScrollOverflow(style.overflowX);
+    const scrollsY = isScrollOverflow(style.overflowY);
+    if (!scrollsX && !scrollsY) continue;
+    scrollers.push({
+      el,
+      widen: scrollsX && el.scrollWidth > el.clientWidth,
+      lengthen: scrollsY && el.scrollHeight > el.clientHeight,
+    });
+  }
+
+  for (const { el, widen, lengthen } of scrollers) {
+    // 两轴必须一起改:只要另一轴仍是 auto,visible 会被重新计算成 auto。
+    el.style.overflowX = 'visible';
+    el.style.overflowY = 'visible';
+    if (widen) {
       // 只解除 overflow 不够:容器仍被父级宽度约束,内容照旧在边界处截断。
       el.style.width = 'max-content';
       el.style.maxWidth = 'none';
     }
-    if (overflowsY && (style.overflowY === 'auto' || style.overflowY === 'scroll')) {
-      el.style.overflowY = 'visible';
+    if (lengthen) {
+      // 固定高度的容器解除裁剪后,内容会压到下方兄弟节点上。
+      el.style.height = 'auto';
       el.style.maxHeight = 'none';
     }
   }

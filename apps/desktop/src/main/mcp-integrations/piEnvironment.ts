@@ -303,7 +303,7 @@ export async function getPiExtraSpawnConfig(
     vendorOptions[CODEX_ALLOWED_BUILTIN_PLUGIN_IDS_KEY] = allowedPluginIds;
   }
   const liziCtx: LiziMcpSessionContext = {
-    agentKind: 'pi',
+    agentKind: sessionCtx?.agentKind ?? 'pi',
     sessionId,
     ...(sessionCtx?.sessionInstanceId ? { sessionInstanceId: sessionCtx.sessionInstanceId } : {}),
     workingDir: sessionCtx?.workingDir ?? '',

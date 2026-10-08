@@ -69,11 +69,15 @@ vi.mock('@expo/ui/swift-ui/modifiers', () => ({...Object.fromEntries(
 ), shapes:{rectangle:()=>({})}}));
 vi.mock('@expo/ui', () => ({Host:({children}:any)=>children}));
 vi.mock('@/session/ComposerSheet', () => import('@/session/ComposerSheet.ios'));
-vi.mock('@/session/ComposerNativeSection', () => ({ ComposerNativeSection: ({ children }: any) => children }));
+vi.mock('@/session/ComposerNativeSection', () => ({ ComposerNativeSection: ({ children, title }: any) => createElement('div', null, title, children) }));
 vi.mock('@/session/ComposerNativeRow', () => ({ ComposerNativeRow: ({ leading, title }: any) => createElement('div', null, leading, title) }));
 vi.mock('@/platform/chrome', () => ({ NativePullDownMenu: ({ children }: any) => children, NativeSwitch: () => null, usesNativePullDownMenu: () => true }));
 vi.mock('@/components/MobileAgentMark', () => ({ MobileAgentMark: () => null }));
-vi.mock('@/session/MobileProviderMark', () => ({ MobileModelIconMark: () => null, MobileProviderMark: () => null }));
+// 远程标记由 mark 自己按 remote 画(字形不缩放不移位),桩里只留一个可数的记号。
+vi.mock('@/session/MobileProviderMark', () => {
+  const stub = ({ remote }: any) => (remote ? createElement('span', { 'data-remote-mark': '' }) : null);
+  return { MobileModelIconMark: stub, MobileProviderMark: stub };
+});
 vi.mock('@/session/SheetModal', () => ({ SheetModal: ({ children }: any) => children }));
 vi.mock('@/session/SheetSurface', () => ({ SheetSurface: ({ children, pinnedTop, onBack, backAccessibilityLabel, testID, renderScrollContent }: any) => createElement('section', null,
   onBack ? createElement('button', {onClick:onBack, 'aria-label':backAccessibilityLabel ?? 'shared.back'}, 'Back') : null,
@@ -208,6 +212,60 @@ it.each([
   expect(host.querySelector(`[data-testid="${listId}"]`)).toBe(list);
   expect(list.scrollTop).toBe(960);
   expect(list.closest('[aria-hidden="true"]')).toBeNull();
+});
+
+it.each([
+  ['Android', UnifiedModelPickerView],
+  ['iOS', IosModelPickerView],
+] as const)('lists each other computer as its own source block on %s', async (_platform, Component) => {
+  const remote = (deviceId: string, deviceName: string, providerLabel: string) => ({
+    id: `remote:${deviceId}:${providerLabel}`,
+    label: `${providerLabel} · ${deviceName}`,
+    providerMark: { name: providerLabel },
+    remote: { deviceId, deviceName, providerLabel },
+  });
+  const filters = [
+    { id: 'all', label: 'All' },
+    { id: 'account', label: 'Local Provider', providerMark: { name: 'Local Provider' } },
+    remote('studio', 'Studio Mac', 'Claude Sub'),
+    remote('office', 'Office PC', 'Codex Sub'),
+    remote('studio', 'Studio Mac', 'OpenRouter'),
+  ];
+  const onFilter = vi.fn();
+  await act(async () => root.render(createElement(Component, {
+    visible: true, testID: 'modelSheet', title: 'Models', query: '', filter: 'all', filters, groups: [], onFilter,
+  } as any)));
+  const sourceButton = host.querySelector('button[aria-label="models.unified.source"]') as HTMLButtonElement;
+  await act(async () => sourceButton.click());
+  const text = host.textContent ?? '';
+  // 每台电脑一块,块标题是电脑名;块里的行只写供应商名。
+  expect(text).toContain('Studio Mac');
+  expect(text).toContain('Office PC');
+  expect(text.indexOf('Local Provider')).toBeLessThan(text.indexOf('Studio Mac'));
+  expect(text.indexOf('Studio Mac')).toBeLessThan(text.indexOf('Claude Sub'));
+  expect(text.indexOf('OpenRouter')).toBeLessThan(text.indexOf('Office PC'));
+  expect(text).not.toContain('Claude Sub · Studio Mac');
+  // 其他电脑的供应商图标带远程标记,本机的不带。
+  expect(host.querySelectorAll('[data-remote-mark]')).toHaveLength(3);
+});
+
+it.each([
+  ['Android', UnifiedModelPickerView],
+  ['iOS', IosModelPickerView],
+] as const)('marks model rows from another computer on %s', async (_platform, Component) => {
+  const row = (key: string, remoteDevice?: { deviceId: string; name: string }) => ({
+    key, entry: { displayName: key, capabilities: { codex: { efforts: [] } } },
+    config: { agent: 'codex' }, subtitle: '', providerMark: {}, ...(remoteDevice ? { remoteDevice } : {}),
+  });
+  await act(async () => root.render(createElement(Component, {
+    visible: true, testID: 'modelSheet', title: 'Models', query: '', filter: 'all', filters: [],
+    groups: [
+      { key: 'account', title: 'Local Provider', rows: [row('local')] },
+      { key: 'remote', title: 'Claude Sub · Studio Mac', rows: [row('remote', { deviceId: 'studio', name: 'Studio Mac' })] },
+    ],
+  } as any)));
+  expect(host.textContent).toContain('Claude Sub · Studio Mac');
+  expect(host.querySelectorAll('[data-remote-mark]')).toHaveLength(1);
 });
 
 it('keeps selection errors visible in the retained native root list', async () => {
