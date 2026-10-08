@@ -38,6 +38,23 @@ const mocks = vi.hoisted(() => {
 // `sql` 同理拼成可读字符串: 生产代码用 `sql\`case when ...\`` 组装 workspaceKind
 // 的 SET, 这里只看判据的形状 —— 它在真 SQLite 下的语义由
 // sessionRepoWorkspaceKind.test.ts 覆盖。
+// 新任务经公共入口 openSession(模型准入)—— 准入本身由 sessionOpening 的测试覆盖, 这里
+// 只把准入前的路由原样透传给建行回调。
+vi.mock('../../../localDb/sessionOpening', () => ({
+  openSession: vi.fn(
+    async (
+      input: { body: Record<string, unknown> },
+      commit?: (row: Record<string, unknown>, assertCurrent: () => void) => Promise<unknown>,
+    ) => {
+      const row = {
+        ...input.body,
+        providerId: input.body.providerId ?? null,
+        fastMode: !!input.body.fastMode,
+      };
+      return { row, value: commit ? await commit(row, () => undefined) : undefined };
+    },
+  ),
+}));
 vi.mock('drizzle-orm', () => ({
   and: (...conditions: unknown[]) => ({ and: conditions }),
   desc: (col: unknown) => ({ desc: col }),
@@ -63,7 +80,10 @@ vi.mock('../../../logger', () => ({
   createLogger: () => mocks.logger,
   maskPath: (p: string) => p,
 }));
+const STABLE_ACCOUNT = vi.hoisted(() => ({}));
 vi.mock('../../../localDb/client/current', () => ({
+  // 账号快照: 同一引用 = 账号没变(sessionRepo 建任务前按它复核账号代次)。
+  getCurrentDbClientSnapshot: () => STABLE_ACCOUNT,
   getDbClient: () => ({
     tx: mocks.tx,
     drizzle: {

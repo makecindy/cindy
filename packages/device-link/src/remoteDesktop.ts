@@ -107,14 +107,17 @@ type LegacyVideoBitrate = 0 | 2_000_000 | 8_000_000 | 20_000_000;
 const LEGACY_BITRATES: readonly number[] = [
   0, 2_000_000, 8_000_000, 20_000_000,
 ];
-/** Older hosts only accept `bitrate` and ignore `quality`; send both. Saver
- * also caps the frame rate, which older hosts can only learn from `fps`. */
+/** Older hosts only accept `bitrate` and ignore `quality`; send both. */
 export function remoteDesktopVideoSettingsWire(
   settings: RemoteDesktopVideoSettings,
 ): RemoteDesktopVideoSettings & { bitrate: LegacyVideoBitrate } {
-  if (settings.quality === "saver")
-    return { ...settings, fps: 30, bitrate: 2_000_000 };
-  return { ...settings, bitrate: settings.quality === "hd" ? 20_000_000 : 0 };
+  const bitrate =
+    settings.quality === "saver"
+      ? 2_000_000
+      : settings.quality === "hd"
+        ? 20_000_000
+        : 0;
+  return { ...settings, bitrate };
 }
 function legacyVideoQuality(bitrate: number): RemoteDesktopVideoQuality {
   return bitrate === 0 ? "auto" : bitrate === 2_000_000 ? "saver" : "hd";
@@ -169,6 +172,12 @@ export interface RemoteDesktopCapabilities {
   channelRequests?: boolean;
   /** Display changes requested with `keepVideo` may keep the live video stream. */
   liveDisplaySwitch?: boolean;
+  /**
+   * `start` and display changes accept `control: true`: the host takes control
+   * (starts input) within the same request and replies `controlling: true`, so
+   * the viewer needs no separate `control` request.
+   */
+  autoControl?: boolean;
   backgroundViewing?: boolean;
   cursorOverlay?: boolean;
   clipboardText?: boolean;
@@ -178,6 +187,11 @@ export interface RemoteDesktopCapabilities {
   clipboardInline?: boolean;
   privacyScreen?: boolean;
   hostMute?: boolean;
+  /**
+   * Accepts `viewerHidden`: the host stops sending video while the viewer is
+   * hidden, keeping audio, input and the lease. Each new offer starts unpaused.
+   */
+  viewerHidden?: boolean;
   /** Explicit host actions, independent of user-configured keyboard bindings. */
   windowActions?: boolean;
   workspaceNavigation?: boolean;
@@ -224,13 +238,20 @@ export type RemoteDesktopRequest =
       lockOnExit?: boolean;
     }
   | { op: "hostMute"; lease: string; enabled: boolean }
+  | { op: "viewerHidden"; lease: string; hidden: boolean }
   | { op: "clipboardSync"; lease: string; enabled: boolean }
   | { op: "clipboardVersion"; lease: string }
   | RemoteDesktopIceRequest
   | ClipboardContentRequest
   | { op: "capabilities" }
   | { op: "permissions"; action: "check" | "guide" }
-  | { op: "start"; displayId: string; resume?: boolean; takeover?: boolean }
+  | {
+      op: "start";
+      displayId: string;
+      resume?: boolean;
+      takeover?: boolean;
+      control?: boolean;
+    }
   | { op: "heartbeat"; lease: string }
   | { op: "stop"; lease: string; lockScreen?: boolean }
   | { op: "frame"; lease: string; cursorOverlay?: boolean }
@@ -253,14 +274,21 @@ export type RemoteDesktopRequest =
       width: number;
       height: number;
       keepVideo?: boolean;
+      control?: boolean;
     }
-  | { op: "restoreViewerDisplay"; lease: string; keepVideo?: boolean }
+  | {
+      op: "restoreViewerDisplay";
+      lease: string;
+      keepVideo?: boolean;
+      control?: boolean;
+    }
   | {
       op: "resolution";
       lease: string;
       modeId: string;
       temporary?: boolean;
       keepVideo?: boolean;
+      control?: boolean;
     };
 
 export function parseRemoteDesktopRequest(
@@ -269,6 +297,13 @@ export function parseRemoteDesktopRequest(
   if (!value || typeof value !== "object" || Array.isArray(value))
     throw new Error("INVALID_REQUEST");
   const v = value as Record<string, unknown>;
+  // Optional on start and display changes; older hosts drop it and the viewer
+  // asks for control separately.
+  const control = () => {
+    if (v.control !== undefined && typeof v.control !== "boolean")
+      throw new Error("INVALID_REQUEST");
+    return v.control === true ? { control: true as const } : {};
+  };
   if (v.op === "capabilities") return { op: v.op };
   if (v.op === "permissions" && (v.action === "check" || v.action === "guide"))
     return { op: v.op, action: v.action };
@@ -288,6 +323,7 @@ export function parseRemoteDesktopRequest(
       displayId: v.displayId,
       ...(v.takeover === true ? { takeover: true } : {}),
       ...(typeof v.resume === "boolean" ? { resume: v.resume } : {}),
+      ...control(),
     };
   }
   if (typeof v.lease !== "string" || v.lease.length > 128 || !v.lease)
@@ -330,6 +366,8 @@ export function parseRemoteDesktopRequest(
   )
     return { op: v.op, lease, enabled: v.enabled };
   if (v.op === "clipboardVersion") return { op: v.op, lease };
+  if (v.op === "viewerHidden" && typeof v.hidden === "boolean")
+    return { op: v.op, lease, hidden: v.hidden };
   if (v.op === "ice") {
     if (!isDesktopAttemptId(v.attemptId) || !isDesktopIceCursor(v.after))
       throw new Error("INVALID_REQUEST");
@@ -385,7 +423,7 @@ export function parseRemoteDesktopRequest(
     return v.keepVideo === true ? { keepVideo: true as const } : {};
   };
   if (v.op === "restoreViewerDisplay")
-    return { op: v.op, lease, ...keepVideo() };
+    return { op: v.op, lease, ...keepVideo(), ...control() };
   if (v.op === "displayModes") return { op: v.op, lease };
   if (v.op === "viewerDisplay") {
     if (
@@ -404,6 +442,7 @@ export function parseRemoteDesktopRequest(
       width: v.width as number,
       height: v.height as number,
       ...keepVideo(),
+      ...control(),
     };
   }
   if (
@@ -417,7 +456,7 @@ export function parseRemoteDesktopRequest(
       op: v.op,
       lease,
       modeId: v.modeId,
-      ...(v.temporary === true ? { temporary: true } : {}),
+      ...(v.temporary === true ? { temporary: true, ...control() } : {}),
       ...keepVideo(),
     };
   }

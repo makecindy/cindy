@@ -345,6 +345,29 @@ describe('rewriteOutboundMedia — send/steer content-block 形态', () => {
 
 describe('rewriteOutboundMedia — enqueue files 形态', () => {
   it.each([
+    ['report.pdf', 'pdf', 'application/pdf'],
+    ['demo.mp4', 'file', 'video/mp4'],
+    ['audio.mp3', 'file', 'audio/mpeg'],
+  ] as const)('uploads new remote-draft %s attachments before removing controller paths', async (name, category, mimeType) => {
+    const localPath = path.resolve('controller-files', name);
+    const payload = buildUserMessageAttachmentPayload([{
+      id: name, name, path: localPath, size: 42, ext: path.extname(name), category, mimeType,
+    }]);
+    const item = {
+      clientId: 'new-remote-draft', files: payload.serializedFiles,
+      persistedContent: JSON.stringify({ text: 'read this', files: payload.persistFileRefs }),
+    };
+    uploadLocalFile.mockResolvedValue({ key: `cindy/device-link/u/${name}`, size: 42, contentType: mimeType, sha256: SHA256 });
+    const out = await rewriteOutboundMedia('maker:input:enqueue', ['sess', item]);
+    const rewritten = out[1] as typeof item;
+    expect(uploadLocalFile).toHaveBeenCalledExactlyOnceWith(localPath, { contentType: mimeType });
+    expect(parseAttachmentOssRef(rewritten.files![0].path)).toMatchObject({ originalName: name, mimeType });
+    expect(JSON.stringify(out)).not.toContain(JSON.stringify(localPath).slice(1, -1));
+    expect(item.files![0].path).toBe(localPath);
+    uploadLocalFile.mockRejectedValueOnce(new Error('upload failed'));
+    await expect(rewriteOutboundMedia('maker:input:enqueue', ['sess', item])).rejects.toThrow('upload failed');
+  });
+  it.each([
     ['maker:input:enqueue', undefined],
     ['maker:input:steer', { touchUserSend: true }],
     ['maker:input:steer', { removeFromQueue: false }],

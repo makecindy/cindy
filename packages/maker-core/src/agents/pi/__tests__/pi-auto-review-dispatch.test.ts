@@ -312,7 +312,6 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     /** 本会话「已注册」的桥接 MCP server 名(经 preparePiExtraSpawnConfig 下发)。 */
     serverNames?: string[];
     policy?: AgentDeps['getMcpToolApprovalPolicy'];
-    presentation?: AgentDeps['getMcpToolApprovalPresentation'];
   }
 
   function buildDeps(
@@ -322,9 +321,6 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
   ): AgentDeps {
     return {
       ...(mcp?.policy ? { getMcpToolApprovalPolicy: mcp.policy } : {}),
-      ...(mcp?.presentation
-        ? { getMcpToolApprovalPresentation: mcp.presentation }
-        : {}),
       ...(mcp?.serverNames
         ? {
           preparePiExtraSpawnConfig: async (_providers, context) => {
@@ -4368,6 +4364,21 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     await handle.close();
   });
 
+  it.each(['send', 'steer'] as const)('%s carries Host references beside the authored channel text', async (method) => {
+    const review = vi.fn(async (_request: AutoReviewRequest) => ({ verdict: 'block' as const }));
+    const handle = await start('auto', review);
+    if (method === 'steer') await handle.send({ type: 'user', content: 'Inspect only.' });
+    const references = { attachments: { images: 1, files: 0 }, quotedMessages: [{ author: '群友', text: '[图片]', attachmentCount: 1 }] };
+    await handle[method]!({ type: 'user', content: '<reply_context>[群友] [图片]</reply_context>这啥情况' }, {
+      [MAIN_OWNED_SEND_CONTEXT]: { origin: { kind: 'im', channel: 'telegram' }, rawChannelText: '这啥情况', autoReviewReferences: references },
+    });
+    firePermissionRequest('references', 'unknown_sender', { action: 'search' });
+    await waitForResponse('references');
+    expect(review.mock.calls[0]?.[0].userIntent)
+      .toMatchObject({ currentUserMessage: '这啥情况', currentUserReferences: references });
+    await handle.close();
+  });
+
   it('marks legacy channel policies as unknown rather than ordinary task authorization', async () => {
     const review = vi.fn(async (_request: AutoReviewRequest) => ({ verdict: 'block' as const }));
     const handle = await start('auto', review);
@@ -4760,38 +4771,6 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       id: 'r21',
       confirmed: true,
     });
-  });
-
-  it('uses the host security disclosure for progressive MCP approvals', async () => {
-    const disclosure = {
-      title: 'Allow Xcode to build this project?',
-      description: 'Build scripts may access files outside the project, and output is returned to the Agent.',
-    };
-    const handle = await start('auto', async () => ({ verdict: 'ask' as const }), false, {
-      serverNames: ['cindy_ios_simulator'],
-      policy: () => 'prompt-each-time',
-      presentation: () => disclosure,
-    });
-    const resolver = vi.fn(async () => ({ kind: 'permission', behavior: 'deny' }) as const);
-    handle.setInteractionResolver?.(resolver as never);
-
-    firePermissionRequest('r-build', 'mcp__cindy_ios_simulator__call_tool', {
-      name: 'build_app',
-      args: {},
-    });
-
-    expect(await waitForResponse('r-build')).toEqual({
-      type: 'extension_ui_response',
-      id: 'r-build',
-      confirmed: false,
-    });
-    expect(resolver).toHaveBeenCalledWith(
-      expect.objectContaining({
-        kind: 'permission',
-        title: disclosure.title,
-        description: disclosure.description,
-      }),
-    );
   });
 
   /**

@@ -9,10 +9,8 @@ import {
   type GhostLocale,
   type GhostManifestLocales,
 } from '@cindy/plugin-protocol';
-import type { IOSSimulatorMcpErrorCode } from '@cindy/mcps';
 import { findSplitChildByPanelKind, insertRootSplitPane, type Layout } from './layoutTree';
 import { DEFAULT_LOCALE, SUPPORTED_LOCALES, type SupportedLocale } from './locale';
-import type { IOSSimulatorPublicInstance, IOSSimulatorPublicRouteStatus } from './iosSimulatorIpc';
 
 /**
  * 意识(Ghost,.cindy 文件)的清单数据模型与校验 —— main / renderer 共用。
@@ -139,10 +137,7 @@ const GHOST_ID_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
  * 即授权(pick 模式,路径不回沙箱),或 tool-call 语境下带在途 callId + 绝对
  * 路径(目录在该会话 workdir 内自动放行,workdir 外弹确认卡)。远程工作区
  * v1 一律拒(fail closed)。
- * 'ios-simulator' = 内置 iOS 模拟器(2026-08-06):插件只能读取当前台前任务的
- * 脱敏状态摘要并请求 Host 打开既有模拟器面板。视频帧、输入、viewer lease、
- * UDID、Sidecar 路径/进程与任意 sessionId 均不跨插件边界；实际 WDA / Native
- * 路由、生命周期、恢复与 fallback 仍完全由 Host 管理。
+ * 'ios-simulator' is retired; retained only to round-trip legacy approval receipts.
  *
  * 以下名称只用于 schemaVersion 2 的兼容解析。schemaVersion 3 已移除 slots，
  * 运行时统一使用 GhostManifest 上的直接字段；未知 v2 slot 只用于兼容诊断，
@@ -1537,6 +1532,7 @@ export interface GhostManifest {
   sessionContext?: true;
   pick?: true;
   workspace?: true;
+  /** @deprecated Retirement detection only. No runtime capability is granted. */
   iosSimulator?: true;
   /** v3 未知字段为前向兼容原样保留，但 Host 不解释也不授权。 */
   [key: string]: unknown;
@@ -1603,6 +1599,8 @@ export function isGhostInstallApprovalToken(value: unknown): value is string {
 
 /** 已装入主机的插件(批准清单 + 安装位置 + 启用态)。 */
 export interface InstalledGhost {
+  /** Host retirement projection; never supplied by plugin authors. */
+  retirement?: import('./featureRetirements').InstalledFeatureRetirement;
   /** Host receipt fact, not a manifest declaration. Missing means tasks need confirmation. */
   taskCapabilityApproved?: true;
   manifest: GhostManifest;
@@ -1693,7 +1691,6 @@ export function ghostContentKeys(manifest: GhostManifest): string[] {
   // skill 是信任面最高的内容(给主 Agent 灌指令),详情页必须如实露出。
   if (manifest.skill) keys.push('slotSkill');
   if (manifest.workspace === true) keys.push('slotWorkspace');
-  if (manifest.iosSimulator === true) keys.push('slotIOSSimulator');
   return keys;
 }
 
@@ -1801,8 +1798,7 @@ export interface GhostPermissionItem {
     | 'pick'
     | 'preview'
     | 'skill'
-    | 'workspace'
-    | 'ios-simulator';
+    | 'workspace';
   /** i18n key 后缀,消费方拼 `settings.ghosts.perm.<labelKey>`。 */
   labelKey: string;
   /** i18n 插值参数(工具名、指令名、面板标题等)。 */
@@ -2146,15 +2142,6 @@ export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionIt
       kind: 'workspace',
       labelKey: 'workspace',
       detailKey: 'workspaceDetail',
-    });
-  }
-  // 内置模拟器槽只给脱敏状态与 Host 面板入口；视频、输入和进程控制都不授权。
-  if (manifest.iosSimulator === true) {
-    items.push({
-      key: 'ios-simulator',
-      kind: 'ios-simulator',
-      labelKey: 'iosSimulator',
-      detailKey: 'iosSimulatorDetail',
     });
   }
   // session-context 槽:派活时可获知当前会话的项目目录位置(路径信息,
@@ -6643,83 +6630,6 @@ export type GhostPipeWorkspaceResult =
         | 'INTERNAL';
       message: string;
     };
-
-/** 插件内置模拟器槽协议版本；能力按版本握手，不靠插件自报可用性。 */
-export const GHOST_IOS_SIMULATOR_CAPABILITY_API_VERSION = 1 as const;
-
-/**
- * 插件可见的最小模拟器状态。刻意不含 sessionId、UDID、source fingerprint、
- * lease、device grant、mutation state、路径或诊断；这些值既不是状态面板所需，
- * 也可能被滥用于跨任务控制或设备指纹识别。
- */
-export interface GhostIOSSimulatorStatusSnapshot {
-  environment: {
-    platform: string;
-    supported: boolean;
-    ready: boolean;
-    xcodeVersion: string | null;
-    availableDeviceCount: number;
-  };
-  instances: Array<{
-    instanceId: string;
-    simulatorName: string;
-    generation: number;
-    lifecycleState: IOSSimulatorPublicInstance['lifecycleState'];
-    healthState: IOSSimulatorPublicInstance['healthState'];
-  }>;
-  routeStatuses: Array<{
-    instanceId: string;
-    generation: number;
-    stream: Pick<IOSSimulatorPublicRouteStatus['stream'], 'adapter' | 'encoding' | 'state'>;
-    input: Pick<IOSSimulatorPublicRouteStatus['input'], 'adapter' | 'state'>;
-  }>;
-}
-
-/** Host 内部的只读投影结果；供 capability slot 消费，不直接跨 preload。 */
-export type GhostIOSSimulatorStatusProbeResult =
-  | { ok: true; status: GhostIOSSimulatorStatusSnapshot }
-  | { ok: false; errorCode: IOSSimulatorMcpErrorCode; message: string };
-
-/** 插件只能请求能力摘要、当前台前任务状态，或打开 Host 面板。 */
-export type GhostPipeIOSSimulatorRequest = { mobilePageId?: string } & (
-  | { type: 'ios-simulator-request'; kind: 'capabilities' }
-  | { type: 'ios-simulator-request'; kind: 'status' }
-  | { type: 'ios-simulator-request'; kind: 'open-panel'; instanceId?: string });
-
-export type GhostPipeIOSSimulatorErrorCode =
-  | IOSSimulatorMcpErrorCode
-  | 'PERMISSION_DENIED'
-  | 'INVALID_REQUEST'
-  | 'INSTANCE_NOT_OWNED'
-  | 'RATE_LIMITED'
-  | 'HOST_NOT_READY'
-  | 'IOS_SIMULATOR_HOST_ERROR';
-
-export type GhostPipeIOSSimulatorResult =
-  | {
-      ok: true;
-      apiVersion: typeof GHOST_IOS_SIMULATOR_CAPABILITY_API_VERSION;
-      kind: 'capabilities';
-      capabilities: {
-        status: true;
-        openHostPanel: true;
-        pluginVideo: false;
-        pluginInput: false;
-      };
-    }
-  | {
-      ok: true;
-      apiVersion: typeof GHOST_IOS_SIMULATOR_CAPABILITY_API_VERSION;
-      kind: 'status';
-      status: GhostIOSSimulatorStatusSnapshot;
-    }
-  | {
-      ok: true;
-      apiVersion: typeof GHOST_IOS_SIMULATOR_CAPABILITY_API_VERSION;
-      kind: 'open-panel';
-      instanceId?: string;
-    }
-  | { ok: false; errorCode: GhostPipeIOSSimulatorErrorCode; message: string };
 
 /**
  * 上行:preview 槽——请主机在右侧栏内置浏览器打开一个预览标签页。

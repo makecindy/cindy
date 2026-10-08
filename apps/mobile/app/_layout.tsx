@@ -1,3 +1,4 @@
+import { completePrecreatedWorktreeRecovery } from '@/session/completePrecreatedWorktreeRecovery';
 import { recentTaskKey } from '@/session/recentTasks';
 import { readComposerEntry } from '@/session/composerMorph';
 import { RecentMessageHistoriesProvider } from '@/session/RecentMessageHistories';
@@ -133,7 +134,8 @@ function NavigationGate() {
   useEffect(() => {
     if (!auth.initialized) return;
     const inAuthGroup = segments[0] === '(auth)';
-    if (!auth.isAuthenticated && !inAuthGroup) {
+    // 供应商分享链接的提示页只说明「请在电脑上打开」,不读账号数据,未登录也直接显示。
+    if (!auth.isAuthenticated && !inAuthGroup && segments[0] !== 'provider-share') {
       router.replace('/login');
       return;
     }
@@ -301,6 +303,8 @@ function PrecreatedWorktreeRecoveryBridge() {
         'worktree:discard-precreated',
         [input],
       ),
+      cancelPrecreated: (deviceId, input) => invoke(deviceId, 'worktree:cancel-precreated', [input]),
+      onDiscarded: completePrecreatedWorktreeRecovery,
       isSessionClaimed: (deviceId, sessionId) => isExactRemoteSessionClaimed(
         sessionId,
         (id) => invoke(deviceId, 'local-db:sessions:get', [id]),

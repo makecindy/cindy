@@ -22,6 +22,15 @@ import {
   type AgentTaskTerminalStatus,
 } from '@cindy/maker-shared/agent-task';
 import { isSyntheticTriggerText } from '@cindy/maker-shared/synthetic-trigger';
+import {
+  isHookSchedulerOrigin,
+  readMessageSourceDevice,
+  readMessageSourcePlugin,
+  sanitizeSourceName,
+  type MessageSourceDevice,
+  type MessageSourcePlugin,
+} from '@cindy/maker-shared/message-source';
+import { sharedTaskAuthorMemberId, sharedTaskAuthorName } from '@cindy/maker-shared';
 import { stripGoalVerdictBlock } from '@cindy/maker-shared/goal-verdict';
 import {
   formatToolResultCompactionBytes,
@@ -34,9 +43,10 @@ import {
 } from '@/session/messagePayload';
 import {
   buildOrcaDispatchCard,
-  parseOrcaWorkerReport,
+  parseOrcaPersistedMessage,
   type OrcaCollabCard,
 } from '@/session/orcaCollab';
+import { isMobileImPlatform, type MobileImPlatform } from '@/session/messageSourceLabels';
 import {
   parseMobilePersistedSessionReferenceMetadata,
   type MobilePersistedSessionReferenceMetadata,
@@ -119,7 +129,7 @@ export interface NormalizedRemoteMessage {
   turnTotalTokens?: number;
   /** assistant 专用:本轮模型降级标记(agentMeta.modelMismatch,桌面 main 在 turn 结束检测命中时落库)。 */
   modelMismatch?: { selected: string; actual: string };
-  /** Orca 协同卡片(Lead 派活 / worker 回报);存在时由 MessageRenderer 渲染成专属卡片而非普通气泡。 */
+  /** Orca 协同卡片(Lead 派活 / Lead↔worker 互发消息);存在时由 MessageRenderer 渲染成专属卡片而非普通气泡。 */
   orcaCard?: OrcaCollabCard;
   companion?: { kind: 'task'; meta: BotCollaborationMeta } | { kind: 'direct'; meta: BotDirectMessageMeta };
   /** tool 消息专用:tool_result 是否已到达(含被隐藏的 orca 空结果),驱动工具行 running/done 状态。 */
@@ -138,8 +148,22 @@ export interface NormalizedRemoteMessage {
    * 不进分享投影:来源任务标题属于用户本机上下文,不随分享图外发。
    */
   sessionOrigin?: NormalizedSessionOrigin;
-  /** 共享 Cindy relay 派发的来源；用于移动端还原 Slack / Telegram 任务卡。 */
+  /**
+   * IM 来源(共享 relay 的 agentMeta.hookSource,或本机 IM 渠道的 agentMeta.imSource);
+   * 渲染「Cindy · 来自 X」卡片。不进分享投影。
+   */
   hookSource?: NormalizedHookSource;
+  /**
+   * user 专用:手机或另一台电脑远程操作主机时由主机盖章的控制端设备(agentMeta.sourceDevice)。
+   * 是否显示由渲染层按查看者设备判定(shouldShowSourceDevice),不进分享投影。
+   */
+  sourceDevice?: MessageSourceDevice;
+  /** user 专用:插件任务派发的消息(agentMeta.sourcePlugin);与本轮插件调用头(pluginInvocations)无关。 */
+  sourcePlugin?: MessageSourcePlugin;
+  /** user 专用:共享任务成员发送的消息作者名(agentMeta.sharedTaskAuthor);气泡上方标签。 */
+  sharedAuthorName?: string;
+  /** 共享任务成员 id(作者标签长按显示,与模型 `[消息来源]` 的 member_id 同源)。 */
+  sharedAuthorMemberId?: string;
   /**
    * user 专用:合成 UI 指令行(桌面「失败后继续 / 中断续跑」等隐藏 prompt,
    * `[UI_ACTION_TRIGGER]` 前缀,对齐桌面 makerChatStore 同名标记)。保留在
@@ -159,16 +183,26 @@ export interface NormalizedSessionOrigin {
   senderBotName?: string;
 }
 
-/** scheduler 注入消息的来源标记(对齐桌面 MessageAutomationOrigin)。 */
+/**
+ * scheduler 注入消息的来源标记(对齐桌面 MessageAutomationOrigin)。共享任务访客收到的来源
+ * 已由主机脱敏(只有 kind:'scheduler',没有 scheduleId / scheduleName):仍标「由自动化发送」,
+ * 并沿用自动化消息的收起阈值。
+ */
 export interface NormalizedAutomationOrigin {
-  scheduleId: string;
+  scheduleId?: string;
   scheduleName?: string;
 }
 
 export interface NormalizedHookSource {
-  im: 'slack' | 'telegram' | 'x';
+  im: MobileImPlatform;
   channelName?: string;
   userText: string;
+  /**
+   * 落库正文就是用户原文(本机 IM 的 `contentFormat:'user-text'`):保留普通用户消息的复制 /
+   * 分叉 / 回退 / 删除 / 分享等操作。为 false 时落库的是拼好的 Agent prompt(旧 Hook),
+   * 渲染层降级为系统卡、不挂用户操作,也不进分享。
+   */
+  userTextContent: boolean;
   threadContext?: Array<{ author: string; text: string; isBot?: boolean }>;
 }
 
@@ -432,16 +466,22 @@ export function normalizeRemoteMessages(
       continue;
     }
 
-    // worker 回报:user 消息 content = {orcaSource:'worker',content} → report 卡片;非该格式回退普通文本。
+    // Orca 互发:user 消息 content = {orcaSource:'worker'|'lead',content} → 卡片;非该格式回退普通文本。
     if (message.role === 'user') {
-      const reportCard = parseOrcaWorkerReport(message.content);
+      const orcaOrigin = readRecord(message.agentMeta?.origin);
+      const reportCard = parseOrcaPersistedMessage(
+        message.content,
+        orcaOrigin?.kind === 'orca' ? readString(orcaOrigin.senderLabel) ?? undefined : undefined,
+      );
       if (reportCard) {
         result.push({
           key: messageNormalizeKey(message),
           source: message,
           kind: 'user',
           role: message.role,
-          label: 'orca:report',
+          // worker 回报不是 Lead 的真实用户输入(历史口径:不切 turn);Lead 发来的消息在
+          // worker 任务里就是新一轮的输入,保持 'user' 以维持 turn 边界(与改卡片前一致)。
+          label: reportCard.variant === 'report' ? 'orca:report' : 'user',
           body: reportCard.body,
           orcaCard: reportCard,
           align: 'agent',
@@ -498,8 +538,10 @@ export function normalizeRemoteMessages(
     const rawBody = userContent ? userContent.text : contentToPreview(message.content);
     const hookSource = message.role === 'user' ? readHookSource(message, rawBody) : undefined;
     // /goal 裁决块只给 Desktop 驱动续跑,与 Desktop 一致只在显示层剥掉(原文仍在 source)。
-    const body = hookSource?.userText
-      ?? (message.role === 'assistant' ? stripGoalVerdictBlock(rawBody) : rawBody);
+    // 本机 IM 落库的就是用户原文:正文保持完整落库内容,分叉 / 回退据此恢复草稿。
+    const body = hookSource && !hookSource.userTextContent
+      ? hookSource.userText
+      : message.role === 'assistant' ? stripGoalVerdictBlock(rawBody) : rawBody;
     const turnCost = readTurnCost(message);
     result.push({
       key: messageNormalizeKey(message),
@@ -530,6 +572,7 @@ export function normalizeRemoteMessages(
       ...readModelMismatch(message),
       ...(message.role === 'user' ? readAutomationOrigin(message) : {}),
       ...(message.role === 'user' ? readSessionOrigin(message) : {}),
+      ...(message.role === 'user' ? readMessageSourceFields(message) : {}),
       ...(hookSource ? { hookSource } : {}),
     });
   }
@@ -1028,12 +1071,17 @@ function readSessionOrigin(message: RemoteMessage): Pick<NormalizedRemoteMessage
 }
 
 // scheduler runner 落库时在 agentMeta.origin 写 { kind:'scheduler', scheduleId, scheduleName? }
-// (见桌面 MessageAutomationOrigin);其它 kind 或缺 scheduleId 的一律忽略。
+// (见桌面 MessageAutomationOrigin)。共享任务访客收到的是脱敏的 { kind:'scheduler' }:
+// 仍返回来源(不带 id / 名字),标签显示「由自动化发送」,收起阈值与自动化消息一致。
+// 没有 scheduleId 时一并丢弃名字,不展示未经主机脱敏规则确认的名字。
 function readAutomationOrigin(message: RemoteMessage): Pick<NormalizedRemoteMessage, 'automationOrigin'> {
   const origin = readRecord(message.agentMeta?.origin);
   if (!origin || origin.kind !== 'scheduler') return {};
   const scheduleId = readString(origin.scheduleId);
-  if (!scheduleId) return {};
+  // Hook 渠道消息复用 scheduler 形态(scheduleId 为 `hook:<连接>`),不是自动化:不出自动化标签
+  // (有 hookSource 时由渠道卡片表明来源)。
+  if (isHookSchedulerOrigin(origin)) return {};
+  if (!scheduleId) return { automationOrigin: {} };
   const scheduleName = readString(origin.scheduleName);
   return {
     automationOrigin: {
@@ -1043,10 +1091,31 @@ function readAutomationOrigin(message: RemoteMessage): Pick<NormalizedRemoteMess
   };
 }
 
-/** Fail closed on unknown providers and bound all server-controlled display fields. */
+// 主机盖章的「谁 / 在哪台设备」来源:设备、插件、共享任务作者。读取与名字净化走共享
+// message-source 助手,与发给模型的来源说明同一份事实。
+function readMessageSourceFields(
+  message: RemoteMessage,
+): Pick<NormalizedRemoteMessage, 'sourceDevice' | 'sourcePlugin' | 'sharedAuthorName' | 'sharedAuthorMemberId'> {
+  const sourceDevice = readMessageSourceDevice(message.agentMeta);
+  const sourcePlugin = readMessageSourcePlugin(message.agentMeta);
+  const sharedAuthorName = sanitizeSourceName(sharedTaskAuthorName(message.agentMeta));
+  const sharedAuthorMemberId = sharedAuthorName ? sharedTaskAuthorMemberId(message.agentMeta) : undefined;
+  return {
+    ...(sourceDevice ? { sourceDevice } : {}),
+    ...(sourcePlugin ? { sourcePlugin } : {}),
+    ...(sharedAuthorName ? { sharedAuthorName } : {}),
+    ...(sharedAuthorMemberId ? { sharedAuthorMemberId } : {}),
+  };
+}
+
+/**
+ * 本机 IM 写 agentMeta.imSource(优先),共享 relay Hook 写 agentMeta.hookSource,两者同一
+ * 展示结构(对齐桌面 makerChatStore 的 `imSource ?? hookSource`)。
+ * Fail closed on unknown providers and bound all server-controlled display fields.
+ */
 function readHookSource(message: RemoteMessage, fallbackBody: string): NormalizedHookSource | undefined {
-  const source = readRecord(message.agentMeta?.hookSource);
-  if (!source || (source.im !== 'slack' && source.im !== 'telegram' && source.im !== 'x')) {
+  const source = readRecord(message.agentMeta?.imSource) ?? readRecord(message.agentMeta?.hookSource);
+  if (!source || !isMobileImPlatform(source.im)) {
     return undefined;
   }
   const userText = (
@@ -1064,6 +1133,7 @@ function readHookSource(message: RemoteMessage, fallbackBody: string): Normalize
   return {
     im: source.im,
     userText,
+    userTextContent: source.contentFormat === 'user-text',
     ...(channelName ? { channelName } : {}),
     ...(threadContext.length > 0 ? { threadContext } : {}),
   };

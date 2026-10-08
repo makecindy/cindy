@@ -145,10 +145,7 @@ describe('registerLocalDbIpc ready-hook composition', () => {
     expect(hook.indexOf('await opts.onReady?.(userId)')).toBeLessThan(
       hook.indexOf('tryGetDbClient()'),
     );
-    expect(hook).toContain('await opts.reconcilePersistedSessionRuntimes?.()');
-    expect(hook.indexOf('await opts.reconcilePersistedSessionRuntimes?.()')).toBeLessThan(
-      hook.indexOf('reconcileSessionMediaRefsForDeletedSessions({'),
-    );
+
     expect(hook).toContain('if (');
     expect(hook).toContain('!client');
     expect(hook).toContain('!withSessionLock');

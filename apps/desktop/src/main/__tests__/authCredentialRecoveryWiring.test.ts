@@ -5,6 +5,53 @@ import { describe, expect, it, vi } from 'vitest';
 const bootstrap = readFileSync(new URL('../bootstrap-electron.ts', import.meta.url), 'utf8');
 
 describe('production credential recovery wiring', () => {
+  it.each([false, true])(
+    'checks recovery after a login action settles (rejects=%s)',
+    async (rejects) => {
+      const start = bootstrap.indexOf("ipcMain.handle('auth:dispatch-login-action',");
+      const end = bootstrap.indexOf("ipcMain.handle('auth:get-captcha-challenge-url',", start);
+      const compiled = transpileModule(bootstrap.slice(start, end), {
+        compilerOptions: { target: ScriptTarget.ES2022 },
+      }).outputText;
+      let handler!: (event: unknown, action: unknown) => Promise<unknown>;
+      let settle!: () => void;
+      const outcome = rejects
+        ? new Error('storage unavailable')
+        : { success: false, code: 'CREDENTIAL_STORE_UNAVAILABLE' };
+      const dispatch = vi.fn(
+        () =>
+          new Promise((resolve, reject) => {
+            settle = () => (rejects ? reject(outcome) : resolve(outcome));
+          }),
+      );
+      const request = vi.fn();
+      const guard = vi.fn((event) => {
+        if (event !== 'trusted') throw new Error('untrusted');
+      });
+      const deps = {
+        ipcMain: {
+          handle: (_channel: string, callback: typeof handler) => {
+            handler = callback;
+          },
+        },
+        authManager: { dispatchLoginAction: dispatch },
+        authCredentialRecovery: { request },
+        assertTrustedAppRendererEvent: guard,
+      };
+      new Function(...Object.keys(deps), compiled)(...Object.values(deps));
+      await expect(handler('untrusted', { type: 'reset' })).rejects.toThrow('untrusted');
+      expect(dispatch).not.toHaveBeenCalled();
+      const action = { type: 'reset' };
+      const pending = handler('trusted', action);
+      expect(dispatch).toHaveBeenCalledWith(action);
+      expect(request).not.toHaveBeenCalled();
+      settle();
+      if (rejects) await expect(pending).rejects.toBe(outcome);
+      else await expect(pending).resolves.toBe(outcome);
+      expect(request).toHaveBeenCalledTimes(1);
+    },
+  );
+
   it('connects observed failures to recovery without probing the credential backend', () => {
     const wiring = bootstrap.match(
       /const authCredentialRecovery = createAuthCredentialRecovery\(\{([\s\S]*?)\n\}\);/,

@@ -290,6 +290,7 @@ function createDb(filename = ':memory:'): void {
       extra_dirs TEXT NOT NULL DEFAULT '[]',
       writable_dirs TEXT NOT NULL DEFAULT '[]',
       remote_host_id TEXT,
+      agent_device_id TEXT,
       source TEXT NOT NULL DEFAULT 'desktop',
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL,
@@ -572,6 +573,33 @@ describe('Bot global model restore IPC', () => {
 });
 
 describe('Bot canonical Session lifecycle', () => {
+  it.each(['inherit', 'allowlist'])('omits retired toolsets from the %s companion settings and discovery', async (mode) => {
+    const row = h.sqlite!.prepare('SELECT capabilities_json FROM bot_profile_versions WHERE bot_id = ? AND version = 1')
+      .get('bot-1') as { capabilities_json: string };
+    const config = { ...JSON.parse(row.capabilities_json), toolCapabilityVersion: 1,
+      toolsetMode: mode, toolsets: ['ios-simulator', 'docs', 'missing-tool'], permissions: 'ask' };
+    h.sqlite!.prepare('UPDATE bot_profile_versions SET capabilities_json = ? WHERE bot_id = ? AND version = 1')
+      .run(JSON.stringify(config), 'bot-1');
+    const created = await invoke('local-db:bots:create-canonical-session', {
+      botId: 'bot-1', expectedCanonicalSessionId: null, expectedProfileVersion: 1,
+    });
+    const profile = await invoke('local-db:bots:get', 'bot-1');
+    expect(profile.capabilities).toMatchObject({ toolsetMode: mode, toolsets: ['docs', 'missing-tool'], permissions: 'ask' });
+    const remote = await (await import('../bots')).getBotRemoteSettingsSource('bot-1');
+    expect(remote).toMatchObject({ toolsets: ['docs', 'missing-tool'], permissions: 'ask' });
+    const result = await createBotCapabilityService(capabilityDeps).list({
+      callerSessionId: created.session.id, kind: 'toolset',
+    });
+    expect(result.ok).toBe(true);
+    expect(JSON.stringify(result)).not.toContain('ios-simulator');
+    expect(result).toMatchObject({ capabilities: expect.arrayContaining([
+      expect.objectContaining({ id: 'missing-tool', available: false, joined: true }),
+    ]) });
+    // Reading the upgraded projection must not rewrite historical profile versions.
+    expect(JSON.parse((h.sqlite!.prepare('SELECT capabilities_json FROM bot_profile_versions WHERE bot_id = ? AND version = 1')
+      .get('bot-1') as { capabilities_json: string }).capabilities_json)).toEqual(config);
+  });
+
 
   it.each(['../bot', 'Bot', 'a:b', 'con', 'aux', 'lpt1'])('rejects nonportable new companion ID %s before persistence', async (id) => {
     await expect(invoke('local-db:bots:create', { id, name: 'Unsafe ID' })).rejects.toMatchObject({ code: 'INVALID_PARAMS' });
@@ -4227,6 +4255,8 @@ describe('Bot Session task end-to-end runtime', () => {
       readSessionRuntimeProfiles: async () => ({ effective: { providerId: 'openai', model: 'gpt-6-astra' },
         control: { generation: 1, visitedRoutes: [], fallbackHop: 0 } }),
       canApplyAutomaticRuntimeSelection: () => true,
+      // 本机任务(Agent 不在另一台电脑运行)。
+      readSessionAgentDeviceId: async () => null,
       readBotFallbackCandidate: async () => ({ isBot: false, candidate: null }),
       readSessionRuntimeFallbackSettings: () => ({ enabled: true }),
       getDesktopProviderService: () => ({ listProviders: async () => [] }),
@@ -4551,6 +4581,12 @@ describe('Bot Session task end-to-end runtime', () => {
       expect(completionRow.role).toBe('user');
       expect(completionRow.content).toContain('结论：三个版本都兼容。');
       expect(completionRow.content.startsWith(UI_ACTION_TRIGGER_PREFIX)).toBe(true);
+      // 发给模型的回执正文不带隐藏前缀;前缀只留在落库 / 排队可见内容上。
+      const completionDispatch = runtime.dispatch.mock.calls
+        .map(([params]) => params)
+        .find((params) => params.clientId === completionClientId);
+      expect(completionDispatch?.message.startsWith('[任务回执]')).toBe(true);
+      expect(completionDispatch?.persistedContent).toBe(`${UI_ACTION_TRIGGER_PREFIX}${completionDispatch?.message}`);
       // 发起方那一侧也真的被唤醒了（否则「结果回到 A 的对话」只是写了一行数据库）。
       expect(runtime.started.some((turn) => turn.sessionId === 'session-1')).toBe(true);
       expect(runtime.changed.at(-1)).toEqual({
@@ -5991,6 +6027,8 @@ describe('Bot Session task end-to-end runtime', () => {
         queue[index] = next; return true;
       },
       removeQueuedMessage: (_id, clientId) => { queue = queue.filter(item => item.clientId !== clientId); return true; },
+      steerQueuedMessage: async () => ({ kind: 'gone' }),
+      moveQueuedMessage: () => null,
     });
     const runtime = createDelegationRuntime({ taskControl: true, taskQueue: {
       inspect: async (_id, caller) => queue.filter(item => authorizeSessionQueueItem(item, caller).ok)
@@ -6832,7 +6870,8 @@ describe('Bot Session task end-to-end runtime', () => {
       expect(runtime.dispatch).toHaveBeenCalledWith(expect.objectContaining({
         targetSessionId: started.childSessionId,
         clientId: childClientId,
-        message: `[来自 发起方伙伴 的补充]\n\n${instruction}`,
+        // 来源由 origin 统一表达(派发时主机前置 `[消息来源]`),正文不再手写前缀。
+        message: instruction,
         persistedContent: instruction,
       }));
       const readMessage = (sessionId: string, clientId: string) => h.sqlite!.prepare(

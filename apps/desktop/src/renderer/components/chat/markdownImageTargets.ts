@@ -6,6 +6,7 @@ import {
   normalizeMarkdownRendererContent,
   REMARK_PLUGINS_PRIVILEGED,
 } from './MarkdownRenderer';
+import { isManagedMarkdownVideoUrl } from './markdownMedia';
 
 const markdownImageParser = unified()
   .use(remarkParse)
@@ -33,7 +34,10 @@ export function extractRenderedMarkdownImageTargets(markdown: string): string[] 
   const urls: string[] = [];
   const seen = new Set<string>();
   visit(tree, 'image', (node: Image) => {
-    if (!node.url || seen.has(node.url)) return;
+    // Markdown image syntax can carry generated videos. Those targets are
+    // rendered by ChatVideoView and must not be counted as images for inline
+    // image fallback / delivery decisions.
+    if (!node.url || isManagedMarkdownVideoUrl(node.url) || seen.has(node.url)) return;
     seen.add(node.url);
     urls.push(node.url);
   });

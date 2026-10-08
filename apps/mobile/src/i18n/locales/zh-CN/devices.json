@@ -427,7 +427,13 @@
       "needAttention": "{{count}} 个需关注",
       "waiting": "等待处理 {{count}} 个",
       "automationRunning": "自动化运行中",
-      "totalRuns": "共 {{count}} 次运行"
+      "totalRuns": "共 {{count}} 次运行",
+      "runCount": "共 {{count}} 次",
+      "nextRunMinutes": "{{count}} 分钟后运行",
+      "nextRunHours": "{{count}} 小时后运行",
+      "nextRunDays": "{{count}} 天后运行",
+      "imminent": "即将运行",
+      "stopped": "已停止"
     }
   },
   "detail": {

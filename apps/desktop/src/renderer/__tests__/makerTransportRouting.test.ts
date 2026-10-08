@@ -30,6 +30,7 @@ function stubElectron() {
     disableOrca: vi.fn(),
     regenerateSessionTitle: vi.fn().mockResolvedValue({ title: 'local title' }),
     predictNextPrompt: vi.fn().mockResolvedValue({ prompt: 'local prompt' }),
+    getSessionTurnActive: vi.fn().mockResolvedValue({ inTurn: false }),
     plugins: { getState: vi.fn().mockResolvedValue({ effectiveEnabled: true }) },
     input: { clearSession: vi.fn(), compact: vi.fn() },
   };
@@ -447,6 +448,27 @@ describe('makerApiFor 路由(完整对等会话级操作)', () => {
     expect(invoke).not.toHaveBeenCalled();
   });
 
+  it('getSessionTurnActiveOn:远程问被控端 maker:session-in-turn,本机问本机 main', async () => {
+    const { invoke, makerSpies } = stubElectron();
+    invoke.mockResolvedValue(true);
+    const { getSessionTurnActiveOn } = await import('@/lib/makerTransport');
+
+    // 远程:控制端本机 main 没有这个 turn,必须问被控端,不能拿本机的 false 当真值。
+    await expect(getSessionTurnActiveOn('rs', 'dev-1')).resolves.toBe(true);
+    expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:session-in-turn', ['rs']);
+    expect(makerSpies.getSessionTurnActive).not.toHaveBeenCalled();
+
+    // 隧道失败原样抛出,由调用方按「未确认」处理(不显示中断横幅)。
+    invoke.mockRejectedValueOnce(new Error('[DEVICE_OFFLINE]'));
+    await expect(getSessionTurnActiveOn('rs', 'dev-1')).rejects.toThrow('DEVICE_OFFLINE');
+
+    invoke.mockClear();
+    makerSpies.getSessionTurnActive.mockResolvedValueOnce({ inTurn: true });
+    await expect(getSessionTurnActiveOn('local-sess', null)).resolves.toBe(true);
+    expect(makerSpies.getSessionTurnActive).toHaveBeenCalledWith('local-sess');
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
   it('estimatedSessionValueFor:远程经隧道查被控端汇总;本机查本地库(不经隧道)', async () => {
     const { localMessages, invoke } = stubElectron();
     invoke.mockResolvedValue({ totalValueUsd: 1.5, entries: [{ clientId: 'a', costUsd: 1.5 }] });
@@ -513,6 +535,60 @@ describe('makerApiFor 路由(完整对等会话级操作)', () => {
     expect(invoke).not.toHaveBeenCalled();
     await makerApiForSticky('local-only').compactSession('local-only');
     expect(makerSpies.compactSession).toHaveBeenCalledWith('local-only');
+  });
+
+  // greptile P1:冷启动时远程注册表尚未就绪,停止若退回本机会对不存在的会话幂等「成功」,
+  // 任务却在被控端继续跑 —— 只有本机库确有该会话才走本机。
+  it('后台任务停止:远程走隧道;本机库有该会话才走本机;归属未解析时拒绝', async () => {
+    const { makerSpies, localSessions, invoke } = stubElectron();
+    const stopAgentTask = vi.fn().mockResolvedValue({ ok: true });
+    const stopSessionBackgroundTasks = vi.fn().mockResolvedValue({ ok: true });
+    Object.assign(makerSpies, { stopAgentTask, stopSessionBackgroundTasks });
+    invoke.mockResolvedValue({ ok: true });
+    const { stopAgentTaskFor, stopSessionBackgroundTasksFor } = await import('@/lib/makerTransport');
+    const { remoteProjectsStore } = await import('@/features/device-link/remoteProjectsStore');
+    remoteProjectsStore.setDeviceSessions('dev-1', 'Mac', [sess('rs')]);
+
+    await stopAgentTaskFor('rs', 't1');
+    await stopSessionBackgroundTasksFor('rs');
+    expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:agent-task:stop', ['rs', 't1']);
+    expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:session-background-tasks:stop', ['rs']);
+    expect(localSessions.get).not.toHaveBeenCalled();
+
+    // 归属未解析:本机库查无此会话(stub 默认 NOT_FOUND)→ 拒绝,不调本机 IPC。
+    await expect(stopAgentTaskFor('unknown', 't1')).rejects.toThrow('DEVICE_LINK_NOT_CONNECTED');
+    await expect(stopSessionBackgroundTasksFor('unknown')).rejects.toThrow(
+      'DEVICE_LINK_NOT_CONNECTED',
+    );
+    expect(stopAgentTask).not.toHaveBeenCalled();
+    expect(stopSessionBackgroundTasks).not.toHaveBeenCalled();
+
+    // 本机库确有该会话 → 本机 IPC。
+    localSessions.get.mockResolvedValue({ id: 'local-sess' });
+    invoke.mockClear();
+    await stopAgentTaskFor('local-sess', 't2');
+    await stopSessionBackgroundTasksFor('local-sess');
+    expect(stopAgentTask).toHaveBeenCalledWith('local-sess', 't2');
+    expect(stopSessionBackgroundTasks).toHaveBeenCalledWith('local-sess');
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it('后台任务停止:本机查询在途期间远程注册表完成水合 → 仍走远程,不落到同 id 本机会话', async () => {
+    const { makerSpies, localSessions, invoke } = stubElectron();
+    const stopAgentTask = vi.fn().mockResolvedValue({ ok: true });
+    Object.assign(makerSpies, { stopAgentTask });
+    invoke.mockResolvedValue({ ok: true });
+    const { stopAgentTaskFor } = await import('@/lib/makerTransport');
+    const { remoteProjectsStore } = await import('@/features/device-link/remoteProjectsStore');
+    // 恢复 / 复制的本机库含同 id 会话;查询落地前远程注册表完成水合。
+    localSessions.get.mockImplementation(async () => {
+      remoteProjectsStore.setDeviceSessions('dev-1', 'Mac', [sess('dup')]);
+      return { id: 'dup' };
+    });
+
+    await stopAgentTaskFor('dup', 't1');
+    expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:agent-task:stop', ['dup', 't1']);
+    expect(stopAgentTask).not.toHaveBeenCalled();
   });
 
   // issue #1170:协同入口的项目级 collab 开关此前一律查控制端本机 —— 拿被控端的路径查

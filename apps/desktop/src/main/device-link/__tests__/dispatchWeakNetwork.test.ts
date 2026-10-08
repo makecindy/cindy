@@ -61,6 +61,10 @@ vi.mock('../sharedTaskDispatch.js', async (original) => ({
 
 import {
   __testing,
+  clearControllerDisplayNames,
+  getControllerDisplayName,
+  setControllerDisplayName,
+  setControllerFallbackDisplayName,
   deactivateAllControllers,
   deactivateController,
   flushRemoteInvokeResultOutboxOnReconnect,
@@ -865,5 +869,24 @@ describe('[6] active controller 生命周期与故障半径', () => {
       linkGeneration: 2,
     });
     expect(__testing.getActiveControllers()).toEqual([]);
+  });
+});
+
+describe('被控浮窗读取控制端展示名', () => {
+  afterEach(() => clearControllerDisplayNames());
+
+  it('旧 presence 主机名作为最后一级回退，权威展示名优先', () => {
+    setControllerFallbackDisplayName('ctrl-legacy', 'Legacy Mac');
+    expect(getControllerDisplayName('ctrl-legacy')).toBe('Legacy Mac');
+    setControllerDisplayName('ctrl-legacy', 'Dash 的 MacBook');
+    expect(getControllerDisplayName('ctrl-legacy')).toBe('Dash 的 MacBook');
+    clearControllerDisplayNames();
+    expect(getControllerDisplayName('ctrl-legacy')).toBeUndefined();
+  });
+
+  it('权威名被显式清空时同时清掉旧 presence 主机名', () => {
+    setControllerFallbackDisplayName('ctrl-legacy', 'Legacy Mac');
+    setControllerDisplayName('ctrl-legacy', '');
+    expect(getControllerDisplayName('ctrl-legacy')).toBeUndefined();
   });
 });

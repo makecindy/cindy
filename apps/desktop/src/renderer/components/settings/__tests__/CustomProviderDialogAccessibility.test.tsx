@@ -1242,11 +1242,10 @@ describe('ProviderConnectionDialog accessibility', () => {
     expect(document.querySelectorAll('#custom-provider-image-generation-help-card')).toHaveLength(
       1,
     );
-    await user.unhover(help);
     await user.hover(screen.getByRole('tooltip'));
     await act(() => new Promise((resolve) => window.setTimeout(resolve, 150)));
     expectCompleteImageGenerationHelp(screen.getByRole('tooltip'));
-    await user.unhover(screen.getByRole('tooltip'));
+    await user.hover(advanced);
     await waitFor(() => expect(screen.queryByRole('tooltip')).toBeNull());
 
     await user.hover(help);
@@ -1260,7 +1259,7 @@ describe('ProviderConnectionDialog accessibility', () => {
     expect(onClose).not.toHaveBeenCalled();
     await act(() => new Promise((resolve) => window.setTimeout(resolve, 0)));
     expect(screen.queryByRole('tooltip')).toBeNull();
-    await user.unhover(help);
+    await user.hover(advanced);
 
     await act(async () => help.focus());
     expect(screen.queryByRole('tooltip')).toBeNull();
@@ -1293,14 +1292,14 @@ describe('ProviderConnectionDialog accessibility', () => {
     expect(onClose).not.toHaveBeenCalled();
     await act(() => new Promise((resolve) => window.setTimeout(resolve, 0)));
     expect(screen.queryByRole('tooltip')).toBeNull();
-    await user.unhover(help);
+    await user.hover(advanced);
 
     await user.click(help);
     helpPopover = await screen.findByRole('dialog', {
       name: 'settings.providers.custom.fields.runtimeSupportsImageGenerationHelpLabel',
     });
     expectCompleteImageGenerationHelp(helpPopover);
-    await user.unhover(help);
+    await user.hover(advanced);
     await act(() => new Promise((resolve) => window.setTimeout(resolve, 150)));
     expect(
       screen.getByRole('dialog', {
@@ -1365,9 +1364,6 @@ describe('ProviderConnectionDialog accessibility', () => {
     expect(document.activeElement).toBe(help);
     expect(onClose).not.toHaveBeenCalled();
     await act(async () => capability.focus());
-    await user.keyboard('{Escape}');
-    expect(onClose).toHaveBeenCalledOnce();
-
     await act(async () => help.focus());
     expectCompleteImageGenerationHelp(await screen.findByRole('tooltip'));
     await user.keyboard(' ');
@@ -1382,6 +1378,11 @@ describe('ProviderConnectionDialog accessibility', () => {
         }),
       ).toBeNull(),
     );
+
+    await act(async () => capability.focus());
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
+    expect(screen.queryByRole('dialog')).toBeNull();
 
     expect(consoleError.mock.calls.flat().join('\n')).not.toMatch(
       /changing an (uncontrolled|controlled).*component/i,
@@ -1815,4 +1816,35 @@ it('saves OpenRouter OAuth connections that leave scopes empty for provider defa
   expect(customProviderMocks.updateCustomProvider.mock.calls[0][0].auth).toMatchObject({
     method: 'oauth', oauth: { scopes: '' },
   });
+});
+
+it('main provider form contains Tab and blocks dismissal only during the actual save', async () => {
+  let finish!: () => void;
+  customProviderMocks.readCustomProviderKey.mockResolvedValue(null);
+  customProviderMocks.updateCustomProvider.mockImplementation(() => new Promise<void>((resolve) => { finish = resolve; }));
+  const onSaved = vi.fn();
+  const onClose = vi.fn();
+  const user = userEvent.setup();
+  render(<ProviderConnectionDialog initial={modelRoutedCodexProvider()} onSaved={onSaved} onClose={onClose} />);
+  await waitForInitialDialogFocus();
+  const name = screen.getByPlaceholderText('settings.providers.custom.fields.namePlaceholder');
+  const save = screen.getByRole('button', { name: 'settings.providers.custom.save' });
+  const cancel = screen.getByRole('button', { name: 'settings.providers.custom.cancel' }) as HTMLButtonElement;
+  await user.tab({ shift: true });
+  expect(document.activeElement).toBe(save);
+  await user.tab();
+  expect(document.activeElement).toBe(name);
+  await user.type(name, ' renamed');
+  await user.click(save);
+  await waitFor(() => expect(customProviderMocks.updateCustomProvider).toHaveBeenCalledOnce());
+  expect(cancel.disabled).toBe(true);
+  await user.keyboard('{Escape}');
+  fireEvent.click(cancel);
+  fireEvent.pointerDown(document.querySelector('[data-custom-provider-dialog-scrim]')!);
+  expect(onClose).not.toHaveBeenCalled();
+  expect(onSaved).not.toHaveBeenCalled();
+  expect(screen.getByRole('dialog')).toBeTruthy();
+  await act(async () => finish());
+  await waitFor(() => expect(onSaved).toHaveBeenCalledOnce());
+  expect(screen.queryByRole('dialog')).toBeNull();
 });

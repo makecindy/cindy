@@ -21,6 +21,7 @@ import {
   PINNED_SKILL_INVOCATION,
   CodexResumePreparationBlockedError,
   AgentNotAuthenticatedError,
+  AgentStartupStoppedError,
   type AgentDeps,
   type AgentSessionHandle,
   type TurnPermissionPolicy,
@@ -15600,6 +15601,27 @@ describe('CodexAgent MCP thread context hooks', () => {
     await handle.close();
   });
 
+  it.each(['send', 'steer'] as const)('%s carries Host references beside the authored channel text', async (method) => {
+    const review = vi.fn<AutoReviewDelegate>(async () => ({ verdict: 'block' }));
+    const agent = new CodexAgent(createDeps({}, { reviewAutoPermissionAction: review }));
+    const host = installFakeHost(agent, (rpc) => rpc === Method.TurnStart ? { turn: { id: 'ref-turn' } }
+      : rpc === Method.TurnSteer ? { turnId: 'ref-turn' } : undefined);
+    const handle = await agent.startSession({ sessionId: 'references', model: 'gpt-5.5', providerId: 'xd', workingDir: '/repo', permissionMode: 'auto' });
+    if (method === 'steer') await handle.send({ type: 'user', content: 'Inspect only.' });
+    const references = { attachments: { images: 1, files: 0 }, quotedMessages: [{ author: '群友', text: '[图片]', attachmentCount: 1 }] };
+    await handle[method]!({ type: 'user', content: '<reply_context>[群友] [图片]</reply_context>这啥情况' }, {
+      [MAIN_OWNED_SEND_CONTEXT]: { origin: { kind: 'im', channel: 'telegram' }, rawChannelText: '这啥情况', autoReviewReferences: references },
+    });
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.mcpServerElicitation) throw new Error('missing elicitation handler');
+    await handlers.mcpServerElicitation({ threadId: 'start-thread-id', turnId: 'ref-turn', serverName: 'cindy', mode: 'form',
+      _meta: { codex_approval_kind: 'mcp_tool_call', tool_name: 'search', tool_params: { q: 'news' } }, message: 'Allow tool call', requestedSchema: {},
+    });
+    expect(review.mock.calls[0]?.[0].userIntent)
+      .toMatchObject({ currentUserMessage: '这啥情况', currentUserReferences: references });
+    await handle.close();
+  });
+
   it.each((['absent', 'ambiguous', 'missing-arguments', 'unique', 'explicit-empty'] as const)
     .flatMap((source) => (['prompt', 'prompt-each-time', 'channel'] as const).map((policy) => ({ source, policy }))))('Auto MCP requires exact argument evidence: $source / $policy', async ({ source, policy }) => {
     const review = vi.fn<AutoReviewDelegate>(async () => ({ verdict: 'allow' }));
@@ -16028,60 +16050,6 @@ describe('CodexAgent MCP thread context hooks', () => {
       expect(policy).toHaveBeenLastCalledWith({ serverName, toolName, toolParams });
     }
     expect(resolver).toHaveBeenCalledTimes(3);
-    await handle.close();
-  });
-
-  it('uses the host security disclosure for progressive MCP approvals', async () => {
-    const disclosure = {
-      title: 'Allow Xcode to build this project?',
-      description:
-        'Build scripts may access files outside the project, and output is returned to the Agent.',
-    };
-    const presentation = vi.fn(() => disclosure);
-    const agent = new CodexAgent(createDeps({}, {
-      getMcpToolApprovalPolicy: () => 'prompt-each-time',
-      getMcpToolApprovalPresentation: presentation,
-    }));
-    const host = installFakeHost(agent);
-    const handle = await agent.startSession({
-      sessionId: 'session-ios-build-disclosure',
-      model: 'gpt-5.4',
-      workingDir: '/repo',
-      permissionMode: 'ask',
-    });
-    const resolver = vi.fn(async () => ({
-      kind: 'permission' as const,
-      behavior: 'deny' as const,
-    }));
-    handle.setInteractionResolver(resolver);
-
-    const handlers = host.getThreadHandlers();
-    if (!handlers?.mcpServerElicitation) throw new Error('expected mcpServerElicitation handler');
-    const result = await handlers.mcpServerElicitation({
-      threadId: 'start-thread-id',
-      turnId: 'turn-ios-build',
-      serverName: 'cindy_ios_simulator',
-      mode: 'form',
-      _meta: {
-        codex_approval_kind: 'mcp_tool_call',
-        persist: ['session'],
-        tool_params: { name: 'build_app', args: {} },
-      },
-      message: 'Generic MCP approval',
-      requestedSchema: {},
-    });
-
-    expect(result).toEqual({ action: 'decline', content: null, _meta: null });
-    expect(resolver).toHaveBeenCalledWith(expect.objectContaining({
-      kind: 'permission',
-      title: disclosure.title,
-      description: disclosure.description,
-      suggestions: undefined,
-    }));
-    expect(presentation).toHaveBeenCalledWith({
-      serverName: 'cindy_ios_simulator',
-      toolParams: { name: 'build_app', args: {} },
-    });
     await handle.close();
   });
 
@@ -17124,7 +17092,7 @@ describe('CodexAgent MCP thread context hooks', () => {
     await fullHandle.close();
   });
 
-  describe.each(['mcp', 'dynamic'] as const)('delegated trusted MCP %s', (kind) => {
+  describe('delegated trusted MCP', () => {
     it.each((['auto', 'acceptEdits', 'ask'] as const).flatMap(permissionMode =>
       (['ordinary', 'allow', 'block', 'ask', 'revoked', 'unavailable', 'late-revoke', 'late-scope', 'confirmed'] as const)
         .map(scenario => ({ permissionMode, scenario }))))('keeps live authorization before the Host shortcut: $permissionMode/$scenario', async ({ permissionMode, scenario }) => {
@@ -17148,32 +17116,24 @@ describe('CodexAgent MCP thread context hooks', () => {
           task: 'Run the approved evaluation only', workingDir: '/repo', authorizationRevision: revision } }
           : { ...request, authorizationError: 'Plugin authorization revoked' };
       }) });
-      const callTool = vi.fn(async () => ({ contentItems: [], success: true }));
       const agent = new CodexAgent(createDeps({}, {
         reviewAutoPermissionAction: reviewer,
         getMcpToolApprovalPolicy: () => 'auto-approve',
-        codexHostDynamicToolProvider: {
-          listTools: () => [{ type: 'function' as const, name: 'cindy_scheduler__call_tool', description: 'Scheduler', inputSchema: { type: 'object' }, deferLoading: false }],
-          callTool,
-        },
       }));
       const host = installFakeHost(agent, (method) => method === Method.TurnStart ? { turn: { id: 'delegated-turn' } } : undefined);
-      const handle = await agent.startSession({ sessionId: `delegated-mcp-${kind}-${scenario}`, model: 'gpt-5.5', providerId: 'openai', workingDir: '/repo', permissionMode });
+      const handle = await agent.startSession({ sessionId: `delegated-mcp-${scenario}`, model: 'gpt-5.5', providerId: 'openai', workingDir: '/repo', permissionMode });
       try {
         const resolver = vi.fn(async (): Promise<InteractionDecision> => ({ kind: 'permission', behavior: scenario === 'confirmed' ? 'allow' : 'deny' }));
         handle.setInteractionResolver(resolver);
         await handle.send({ type: 'user', content: 'Run this evaluation; do not create schedules.' });
         const h = host.getThreadHandlers();
-        if (!h?.mcpServerElicitation || !h.dynamicToolCall) throw new Error('missing MCP handlers');
+        if (!h?.mcpServerElicitation) throw new Error('missing MCP handlers');
         h.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'delegated-turn' } });
         const input = { name: 'schedule_create', args: { prompt: 'outside task scope' } };
-        const result = kind === 'mcp'
-          ? await h.mcpServerElicitation({ threadId: 'start-thread-id', turnId: 'delegated-turn', serverName: 'cindy_scheduler', mode: 'form', message: 'Allow tool call', requestedSchema: {},
-            _meta: { codex_approval_kind: 'mcp_tool_call', tool_name: 'call_tool', tool_params: input } })
-          : await h.dynamicToolCall({ threadId: 'start-thread-id', turnId: 'delegated-turn', callId: 'delegated-call', namespace: null, tool: 'cindy_scheduler__call_tool', arguments: input }, { requestId: 'delegated-dynamic' });
+        const result = await h.mcpServerElicitation({ threadId: 'start-thread-id', turnId: 'delegated-turn', serverName: 'cindy_scheduler', mode: 'form', message: 'Allow tool call', requestedSchema: {},
+          _meta: { codex_approval_kind: 'mcp_tool_call', tool_name: 'call_tool', tool_params: input } });
         const allowed = scenario === 'ordinary' || (permissionMode === 'auto' ? scenario === 'allow' : scenario === 'confirmed');
-        expect(result).toMatchObject(kind === 'mcp' ? { action: allowed ? 'accept' : 'decline' } : { success: allowed });
-        expect(callTool).toHaveBeenCalledTimes(kind === 'dynamic' && allowed ? 1 : 0);
+        expect(result).toMatchObject({ action: allowed ? 'accept' : 'decline' });
         expect(reviewer.prepareRequest).toHaveBeenCalled();
         expect(reviewer).toHaveBeenCalledTimes(permissionMode !== 'auto' || ['ordinary', 'revoked', 'unavailable', 'confirmed'].includes(scenario) ? 0 : 1);
         expect(resolver).toHaveBeenCalledTimes((permissionMode === 'auto' ? ['ask', 'unavailable'].includes(scenario) : scenario !== 'ordinary') ? 1 : 0);
@@ -17185,18 +17145,13 @@ describe('CodexAgent MCP thread context hooks', () => {
     });
   });
 
-  it.each(['command', 'file', 'mcp', 'permissions', 'dynamic'] as const)('revalidates cancelled Auto waits across %s approval callbacks', async (kind) => {
+  it.each(['command', 'file', 'mcp', 'permissions'] as const)('revalidates cancelled Auto waits across %s approval callbacks', async (kind) => {
     for (const lifecycle of ['abort', 'graceful-stop', 'close', 'completed', 'failed', 'superseded', 'child-completed', 'child-root-stopped', 'child-root-completed', 'same-turn-started'] as const) {
       for (const verdict of ['allow', 'ask'] as const) {
         const review = deferred<{ verdict: 'allow' | 'ask' }>();
         const reviewer = vi.fn(() => review.promise);
-        const callTool = vi.fn(async () => ({ contentItems: [], success: true }));
         const agent = new CodexAgent(createDeps({}, {
           reviewAutoPermissionAction: reviewer,
-          ...(kind === 'dynamic' ? { codexHostDynamicToolProvider: {
-            listTools: () => [{ type: 'function' as const, name: 'cindy_contacts__call_tool', description: 'Contacts tool', inputSchema: { type: 'object' }, deferLoading: false }],
-            callTool,
-          } } : {}),
         }));
         const host = installFakeHost(agent, (method) => method === Method.TurnInterrupt ? {} : undefined);
         const handle = await agent.startSession({
@@ -17204,7 +17159,7 @@ describe('CodexAgent MCP thread context hooks', () => {
           providerId: 'openai', workingDir: '/repo', permissionMode: 'auto',
         });
         const h = host.getThreadHandlers();
-        if (!h?.commandExecutionApproval || !h.fileChangeApproval || !h.mcpServerElicitation || !h.permissionsApproval || !h.dynamicToolCall) throw new Error('missing approval handlers');
+        if (!h?.commandExecutionApproval || !h.fileChangeApproval || !h.mcpServerElicitation || !h.permissionsApproval) throw new Error('missing approval handlers');
         if (lifecycle !== 'same-turn-started') h.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'root-review-turn' } });
         const child = lifecycle.startsWith('child-');
         const threadId = child ? 'child-review-thread' : 'start-thread-id';
@@ -17218,9 +17173,7 @@ describe('CodexAgent MCP thread context hooks', () => {
             : kind === 'mcp'
               ? h.mcpServerElicitation({ threadId, turnId, serverName: 'cindy_contacts', mode: 'form', message: 'Allow tool call', requestedSchema: {},
                 _meta: { codex_approval_kind: 'mcp_tool_call', tool_name: 'call_tool', tool_params: { name: 'contacts_delete', args: { id: 'contact-1' } } } })
-              : kind === 'dynamic'
-                ? h.dynamicToolCall({ threadId, turnId, callId: 'review-item', namespace: null, tool: 'cindy_contacts__call_tool', arguments: { name: 'contacts_delete', args: { id: 'contact-1' } } }, { requestId: 'review-dynamic' })
-                : h.permissionsApproval({ threadId, turnId, itemId: 'review-item', permissions: { network: true } });
+              : h.permissionsApproval({ threadId, turnId, itemId: 'review-item', permissions: { network: true } });
         await waitForExpectation(() => expect(reviewer).toHaveBeenCalledOnce());
         if (lifecycle === 'abort' || lifecycle === 'child-root-stopped') await handle.abort();
         if (lifecycle === 'graceful-stop') await handle.requestGracefulStop?.();
@@ -17238,15 +17191,12 @@ describe('CodexAgent MCP thread context hooks', () => {
         if (lifecycle === 'abort' || lifecycle === 'child-root-stopped' || lifecycle === 'superseded') await handle.setPermissionMode?.('bypassPermissions');
         review.resolve({ verdict });
         const accepted = lifecycle === 'child-root-completed' || lifecycle === 'same-turn-started';
-        expect(await pending, `${kind}/${lifecycle}/${verdict}`).toEqual(kind === 'dynamic'
-          ? { success: accepted, contentItems: accepted ? [] : [{ type: 'inputText', text: expect.stringMatching(/^Cindy could not approve this tool call:/) }] }
-          : kind === 'mcp'
+        expect(await pending, `${kind}/${lifecycle}/${verdict}`).toEqual(kind === 'mcp'
           ? { action: accepted ? 'accept' : 'decline', content: null, _meta: null }
           : kind === 'permissions'
             ? { permissions: accepted ? { network: true } : {}, scope: 'turn' }
             : { decision: accepted ? 'accept' : 'decline' });
         expect(resolver).toHaveBeenCalledTimes(accepted && verdict === 'ask' ? 1 : 0);
-        expect(callTool).toHaveBeenCalledTimes(kind === 'dynamic' && accepted ? 1 : 0);
         await handle.close();
       }
     }
@@ -18146,257 +18096,6 @@ describe('CodexAgent MCP thread context hooks', () => {
     await resumeHandle.close();
   });
 
-  it('registers eager host dynamic tools and restores their handler on resume', async () => {
-    const callTool = vi.fn(async () => ({
-      contentItems: [{ type: 'inputText' as const, text: '{"ok":true}' }],
-      success: true,
-    }));
-    const provider: NonNullable<AgentDeps['codexHostDynamicToolProvider']> = {
-      listTools: vi.fn(() => [
-        {
-          type: 'function' as const,
-          name: 'cindy_ios_simulator__list_tools',
-          description: 'Discover embedded simulator tools.',
-          inputSchema: { type: 'object' },
-          deferLoading: false,
-        },
-        {
-          type: 'function' as const,
-          name: 'cindy_ios_simulator__call_tool',
-          description: 'Call an embedded simulator tool.',
-          inputSchema: { type: 'object' },
-          deferLoading: false,
-        },
-      ]),
-      callTool,
-    };
-    const approvalPolicy = vi.fn(() => 'auto-approve' as const);
-
-    const startAgent = new CodexAgent(createDeps({}, {
-      codexHostDynamicToolProvider: provider,
-      getMcpToolApprovalPolicy: approvalPolicy,
-    }));
-    const startHost = installFakeHost(startAgent);
-    const startHandle = await startAgent.startSession({
-      sessionId: 'session-ios-dynamic-start',
-      model: 'qwen/qwen3.8-max-preview',
-      providerId: 'xd',
-      workingDir: '/repo',
-    });
-    const startParams = startHost.request.mock.calls.find(
-      ([method]) => method === Method.ThreadStart,
-    )?.[1] as {
-      dynamicTools?: Array<{
-        type?: string;
-        namespace?: string;
-        name?: string;
-        deferLoading?: boolean;
-      }>;
-    };
-    expect(startParams.dynamicTools).toEqual([
-      expect.objectContaining({
-        type: 'function',
-        name: 'cindy__ask_user_question',
-      }),
-      expect.objectContaining({
-        type: 'function',
-        name: 'cindy_ios_simulator__list_tools',
-        deferLoading: false,
-      }),
-      expect.objectContaining({
-        type: 'function',
-        name: 'cindy_ios_simulator__call_tool',
-        deferLoading: false,
-      }),
-    ]);
-
-    const resumeAgent = new CodexAgent(createDeps({}, {
-      codexHostDynamicToolProvider: provider,
-      getMcpToolApprovalPolicy: approvalPolicy,
-    }));
-    const resumeHost = installFakeHost(resumeAgent);
-    const resumeHandle = await resumeAgent.startSession({
-      sessionId: 'session-ios-dynamic-resume',
-      model: 'qwen/qwen3.8-max-preview',
-      providerId: 'xd',
-      workingDir: '/repo',
-      resumeSessionId: '123e4567-e89b-12d3-a456-426614174000',
-    });
-    const resumeParams = resumeHost.request.mock.calls.find(
-      ([method]) => method === Method.ThreadResume,
-    )?.[1] as { dynamicTools?: unknown };
-    expect(resumeParams.dynamicTools).toBeUndefined();
-
-    const handlers = resumeHost.getThreadHandlers();
-    if (!handlers?.dynamicToolCall || !handlers.itemStarted) {
-      throw new Error('expected dynamicToolCall handler');
-    }
-    handlers.itemStarted({
-      threadId: 'start-thread-id',
-      turnId: 'turn-ios',
-      item: {
-        id: 'call-ios',
-        type: 'dynamicToolCall',
-        namespace: null,
-        tool: 'cindy_ios_simulator__call_tool',
-      },
-    });
-    const result = await handlers.dynamicToolCall(
-      {
-        threadId: 'resume-thread-id',
-        turnId: 'turn-ios',
-        callId: 'call-ios',
-        namespace: null,
-        tool: 'cindy_ios_simulator__list_tools',
-        arguments: {},
-      },
-      { requestId: 'request-ios' },
-    );
-    expect(result).toEqual({
-      contentItems: [{ type: 'inputText', text: '{"ok":true}' }],
-      success: true,
-    });
-    expect(callTool).toHaveBeenCalledWith(
-      expect.objectContaining({
-        namespace: null,
-        tool: 'cindy_ios_simulator__list_tools',
-      }),
-      expect.objectContaining({
-        sessionId: 'session-ios-dynamic-resume',
-        workingDir: '/repo',
-      }),
-    );
-    expect(approvalPolicy).toHaveBeenCalledWith({
-      serverName: 'cindy_ios_simulator',
-      toolName: 'list_tools',
-      toolParams: {},
-    });
-
-    await startHandle.close();
-    await resumeHandle.close();
-  });
-
-  it('does not expose or execute host dynamic tools omitted by the host policy', async () => {
-    const callTool = vi.fn();
-    const agent = new CodexAgent(createDeps({}, {
-      codexHostDynamicToolProvider: {
-        listTools: () => [],
-        callTool,
-      },
-    }));
-    const host = installFakeHost(agent);
-    const handle = await agent.startSession({
-      sessionId: 'session-ios-dynamic-disabled',
-      model: 'qwen/qwen3.8-max-preview',
-      providerId: 'xd',
-      workingDir: '/repo',
-    });
-    const startParams = host.request.mock.calls.find(
-      ([method]) => method === Method.ThreadStart,
-    )?.[1] as {
-      dynamicTools?: Array<{ type?: string; namespace?: string; name?: string }>;
-    };
-    expect(startParams.dynamicTools).toEqual([
-      expect.objectContaining({
-        type: 'function',
-        name: 'cindy__ask_user_question',
-      }),
-    ]);
-
-    const handlers = host.getThreadHandlers();
-    if (!handlers?.dynamicToolCall) throw new Error('expected dynamicToolCall handler');
-    const result = await handlers.dynamicToolCall(
-      {
-        threadId: 'start-thread-id',
-        turnId: 'turn-ios',
-        callId: 'call-ios',
-        namespace: null,
-        tool: 'cindy_ios_simulator__list_tools',
-        arguments: {},
-      },
-      { requestId: 'request-ios' },
-    );
-    expect(result.success).toBe(false);
-    expect(callTool).not.toHaveBeenCalled();
-    await handle.close();
-  });
-
-  it.each(['ask', 'bypassPermissions'] as const)('host dynamic tool approvals follow %s', async (permissionMode) => {
-    const disclosure = {
-      title: 'Allow the Agent to connect to and control this simulator?',
-      description:
-        'The Agent may control the simulator for this task without another device-control prompt.',
-    };
-    const presentation = vi.fn(() => disclosure);
-    const callTool = vi.fn(async () => ({
-      contentItems: [{ type: 'inputText' as const, text: '{"ok":true}' }],
-      success: true,
-    }));
-    const agent = new CodexAgent(createDeps({}, {
-      codexHostDynamicToolProvider: {
-        listTools: () => [{
-          type: 'function',
-          name: 'cindy_ios_simulator__call_tool',
-          description: 'Call an embedded simulator tool.',
-          inputSchema: { type: 'object' },
-          deferLoading: false,
-        }],
-        callTool,
-      },
-      getMcpToolApprovalPolicy: () => 'prompt-each-time',
-      getMcpToolApprovalPresentation: presentation,
-    }));
-    const host = installFakeHost(agent);
-    const handle = await agent.startSession({
-      sessionId: 'session-ios-dynamic-approval',
-      model: 'gpt-5.4',
-      workingDir: '/repo',
-      permissionMode,
-    });
-    const resolver = vi.fn(async (request: InteractionRequest) => {
-      expect(request).toMatchObject({
-        kind: 'permission',
-        toolName: 'dynamic:cindy_ios_simulator:call_tool',
-        input: { serverName: 'cindy_ios_simulator', toolName: 'call_tool', toolParams: { name: 'attach_device', args: { udid: 'SIM-1' } } },
-        title: disclosure.title,
-        description: disclosure.description,
-      });
-      if (request.kind !== 'permission') throw new Error('expected permission request');
-      expect(request.suggestions).toBeUndefined();
-      return { kind: 'permission' as const, behavior: 'deny' as const };
-    });
-    handle.setInteractionResolver(resolver);
-
-    const handlers = host.getThreadHandlers();
-    if (!handlers?.dynamicToolCall) throw new Error('expected dynamicToolCall handler');
-    const result = await handlers.dynamicToolCall(
-      {
-        threadId: 'start-thread-id',
-        turnId: 'turn-ios',
-        callId: 'call-ios',
-        namespace: null,
-        tool: 'cindy_ios_simulator__call_tool',
-        arguments: { name: 'attach_device', args: { udid: 'SIM-1' } },
-      },
-      { requestId: 'request-ios' },
-    );
-    expect(result.success).toBe(permissionMode === 'bypassPermissions');
-    expect(result.contentItems).toEqual([{
-      type: 'inputText',
-      text: permissionMode === 'bypassPermissions'
-        ? '{"ok":true}'
-        : 'User denied this tool call via Cindy.',
-    }]);
-    expect(resolver).toHaveBeenCalledTimes(permissionMode === 'ask' ? 1 : 0);
-    expect(presentation).toHaveBeenCalledWith({
-      serverName: 'cindy_ios_simulator',
-      toolName: 'call_tool',
-      toolParams: { name: 'attach_device', args: { udid: 'SIM-1' } },
-    });
-    expect(callTool).toHaveBeenCalledTimes(permissionMode === 'ask' ? 0 : 1);
-    await handle.close();
-  });
-
   it('does not register ask_user_question dynamic fallback for xAI Codex providers', async () => {
     const explicitAgent = new CodexAgent(createDeps());
     const explicitHost = installFakeHost(explicitAgent);
@@ -18613,1245 +18312,6 @@ describe('CodexAgent MCP thread context hooks', () => {
     });
 
     expect(result).toEqual({ decision: 'accept' });
-    await handle.close();
-  });
-
-  it('applies a host shell-command denial before Full access auto-approval', async () => {
-    const { logger, warn } = createLoggerSpy();
-    const policy = vi.fn(() => ({
-      decision: 'deny' as const,
-      reason: 'use the embedded iOS Simulator',
-    }));
-    const agent = new CodexAgent(createDeps({}, { getShellCommandPolicy: policy, logger }));
-    const host = installFakeHost(agent);
-    const handle = await agent.startSession({
-      sessionId: 'session-command-host-policy',
-      model: 'gpt-5.4',
-      workingDir: '/repo',
-      permissionMode: 'bypassPermissions',
-    });
-    const handlers = host.getThreadHandlers();
-    if (!handlers?.commandExecutionApproval) throw new Error('expected commandExecutionApproval handler');
-    const resolver = vi.fn(async (): Promise<InteractionDecision> => ({
-      kind: 'permission',
-      behavior: 'allow',
-    }));
-    handle.setInteractionResolver(resolver);
-    const events: AgentEvent[] = [];
-    const collectEvents = (async () => {
-      for await (const event of handle.events()) events.push(event);
-    })();
-
-    const command = 'API_TOKEN=super-secret open -a Simulator';
-    const result = await handlers.commandExecutionApproval({
-      threadId: 'start-thread-id',
-      turnId: 'turn-1',
-      itemId: 'cmd-1',
-      command,
-      cwd: '/repo',
-    });
-
-    expect(policy).toHaveBeenCalledWith({
-      agentKind: 'codex',
-      command,
-      cwd: '/repo',
-    });
-    expect(resolver).not.toHaveBeenCalled();
-    expect(result).toEqual({ decision: 'decline' });
-    expect(warn).toHaveBeenCalledWith('command execution denied by host policy', {
-      requestId: 'cmd-1',
-      reason: 'use the embedded iOS Simulator',
-    });
-    expect(JSON.stringify(warn.mock.calls)).not.toContain('super-secret');
-    await handle.close();
-    await collectEvents;
-    // Declining silently is indistinguishable from a user cancellation, so the
-    // product reason has to reach the user.
-    expect(events).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          type: 'error',
-          data: expect.objectContaining({
-            message: 'use the embedded iOS Simulator',
-            isTerminal: false,
-          }),
-        }),
-      ]),
-    );
-  });
-
-  it('keeps an approval-path policy denial as the terminal turn reason', async () => {
-    const policy = vi.fn(() => ({
-      decision: 'deny' as const,
-      reason: 'use the embedded iOS Simulator',
-    }));
-    const agent = new CodexAgent(createDeps({}, { getShellCommandPolicy: policy }));
-    const host = installFakeHost(agent, (method) =>
-      method === Method.TurnInterrupt ? {} : undefined,
-    );
-    const handle = await agent.startSession({
-      sessionId: 'session-command-approval-policy-terminal-reason',
-      model: 'gpt-5.4',
-      workingDir: '/repo',
-      permissionMode: 'bypassPermissions',
-    });
-    const handlers = host.getThreadHandlers();
-    if (!handlers?.commandExecutionApproval || !handlers.itemCompleted || !handlers.turnCompleted) {
-      throw new Error('expected commandExecutionApproval, itemCompleted and turnCompleted handlers');
-    }
-    const events: AgentEvent[] = [];
-    const collectEvents = (async () => {
-      for await (const event of handle.events()) events.push(event);
-    })();
-
-    await expect(
-      handlers.commandExecutionApproval({
-        threadId: 'start-thread-id',
-        turnId: 'turn-approval-policy',
-        itemId: 'cmd-approval-policy',
-        command: 'open -a Simulator',
-        cwd: '/repo',
-      }),
-    ).resolves.toEqual({ decision: 'decline' });
-    // A declined command may still emit its own completion before the
-    // abort-shaped turn completion. That is not recovery progress and must
-    // not clear the policy reason.
-    handlers.itemCompleted({
-      threadId: 'start-thread-id',
-      turnId: 'turn-approval-policy',
-      item: {
-        id: 'cmd-approval-policy',
-        type: 'commandExecution',
-        command: 'open -a Simulator',
-        cwd: '/repo',
-      },
-    });
-    handlers.turnCompleted({
-      threadId: 'start-thread-id',
-      turn: {
-        id: 'turn-approval-policy',
-        status: 'interrupted',
-        error: { message: 'aborted by user' },
-      },
-    } as never);
-
-    await handle.close();
-    await collectEvents;
-    const terminal = events.filter(
-      (event) =>
-        (event as { type?: string }).type === 'error' &&
-        (event as { data?: { isTerminal?: boolean } }).data?.isTerminal === true,
-    );
-    expect(terminal).toEqual([
-      expect.objectContaining({
-        data: expect.objectContaining({
-          message: 'use the embedded iOS Simulator',
-          isTerminal: true,
-        }),
-      }),
-    ]);
-    expect(JSON.stringify(terminal)).not.toContain('aborted by user');
-  });
-
-  it('keeps all declined approval items attached to an interrupted turn', async () => {
-    const policy = vi.fn(({ command }: { command: string }) => ({
-      decision: 'deny' as const,
-      reason: command.startsWith('open ') ? 'first policy reason' : 'latest policy reason',
-    }));
-    const agent = new CodexAgent(createDeps({}, { getShellCommandPolicy: policy }));
-    const host = installFakeHost(agent);
-    const handle = await agent.startSession({
-      sessionId: 'session-command-approval-policy-multiple-denials',
-      model: 'gpt-5.4',
-      workingDir: '/repo',
-      permissionMode: 'bypassPermissions',
-    });
-    const handlers = host.getThreadHandlers();
-    if (!handlers?.commandExecutionApproval || !handlers.itemCompleted || !handlers.turnCompleted) {
-      throw new Error('expected commandExecutionApproval, itemCompleted and turnCompleted handlers');
-    }
-    const events: AgentEvent[] = [];
-    const collectEvents = (async () => {
-      for await (const event of handle.events()) events.push(event);
-    })();
-
-    const turnId = 'turn-approval-policy-multiple-denials';
-    await expect(Promise.all([
-      handlers.commandExecutionApproval({
-        threadId: 'start-thread-id',
-        turnId,
-        itemId: 'cmd-approval-policy-first',
-        command: 'open -a Simulator',
-        cwd: '/repo',
-      }),
-      handlers.commandExecutionApproval({
-        threadId: 'start-thread-id',
-        turnId,
-        itemId: 'cmd-approval-policy-second',
-        command: 'xcrun simctl shutdown DEVICE',
-        cwd: '/repo',
-      }),
-    ])).resolves.toEqual([
-      { decision: 'decline' },
-      { decision: 'decline' },
-    ]);
-
-    // Completion of either declined item is not recovery progress. The
-    // interrupted turn must still retain the policy attribution.
-    handlers.itemCompleted({
-      threadId: 'start-thread-id',
-      turnId,
-      item: {
-        id: 'cmd-approval-policy-first',
-        type: 'commandExecution',
-        command: 'open -a Simulator',
-        cwd: '/repo',
-      },
-    });
-    handlers.turnCompleted({
-      threadId: 'start-thread-id',
-      turn: {
-        id: turnId,
-        status: 'interrupted',
-        error: { message: 'aborted by user' },
-      },
-    } as never);
-
-    await handle.close();
-    await collectEvents;
-    const terminal = events.filter(
-      (event) =>
-        (event as { type?: string }).type === 'error' &&
-        (event as { data?: { isTerminal?: boolean } }).data?.isTerminal === true,
-    );
-    expect(terminal).toEqual([
-      expect.objectContaining({
-        data: expect.objectContaining({
-          message: 'latest policy reason',
-          isTerminal: true,
-        }),
-      }),
-    ]);
-    expect(JSON.stringify(terminal)).not.toContain('aborted by user');
-  });
-
-  it('keeps an approval denial through late updates from a pre-existing parallel item', async () => {
-    const policy = vi.fn(({ command }: { command: string }) =>
-      command === 'open -a Simulator'
-        ? { decision: 'deny' as const, reason: 'use the embedded iOS Simulator' }
-        : undefined,
-    );
-    const agent = new CodexAgent(createDeps({}, { getShellCommandPolicy: policy }));
-    const host = installFakeHost(agent);
-    const handle = await agent.startSession({
-      sessionId: 'session-command-approval-policy-parallel-sibling',
-      model: 'gpt-5.4',
-      workingDir: '/repo',
-      permissionMode: 'bypassPermissions',
-    });
-    const handlers = host.getThreadHandlers();
-    if (
-      !handlers?.commandExecutionApproval
-      || !handlers.itemStarted
-      || !handlers.itemUpdated
-      || !handlers.itemCompleted
-      || !handlers.turnDiffUpdated
-      || !handlers.turnCompleted
-    ) {
-      throw new Error('expected approval, item lifecycle and turn diff handlers');
-    }
-    const events: AgentEvent[] = [];
-    const collectEvents = (async () => {
-      for await (const event of handle.events()) events.push(event);
-    })();
-
-    const turnId = 'turn-approval-policy-parallel-sibling';
-    // This item was already running when the other parallel command was
-    // declined. Its late completion must not erase the denial attribution.
-    handlers.itemStarted({
-      threadId: 'start-thread-id',
-      turnId,
-      item: {
-        id: 'cmd-parallel-sibling',
-        type: 'commandExecution',
-        command: 'printf safe',
-        cwd: '/repo',
-      },
-    });
-    await expect(
-      handlers.commandExecutionApproval({
-        threadId: 'start-thread-id',
-        turnId,
-        itemId: 'cmd-denied-parallel',
-        command: 'open -a Simulator',
-        cwd: '/repo',
-      }),
-    ).resolves.toEqual({ decision: 'decline' });
-    handlers.turnDiffUpdated({
-      threadId: 'start-thread-id',
-      turnId,
-      diff: 'diff --git a/safe.txt b/safe.txt\n--- a/safe.txt\n+++ b/safe.txt\n',
-    });
-    handlers.itemUpdated({
-      threadId: 'start-thread-id',
-      turnId,
-      item: {
-        id: 'cmd-parallel-sibling',
-        type: 'commandExecution',
-        command: 'printf safe',
-        cwd: '/repo',
-      },
-    });
-    handlers.itemCompleted({
-      threadId: 'start-thread-id',
-      turnId,
-      item: {
-        id: 'cmd-parallel-sibling',
-        type: 'commandExecution',
-        command: 'printf safe',
-        cwd: '/repo',
-      },
-    });
-    handlers.turnCompleted({
-      threadId: 'start-thread-id',
-      turn: {
-        id: turnId,
-        status: 'interrupted',
-        error: { message: 'aborted by user' },
-      },
-    } as never);
-
-    await handle.close();
-    await collectEvents;
-    const terminal = events.filter(
-      (event) =>
-        (event as { type?: string }).type === 'error' &&
-        (event as { data?: { isTerminal?: boolean } }).data?.isTerminal === true,
-    );
-    expect(terminal).toEqual([
-      expect.objectContaining({
-        data: expect.objectContaining({
-          message: 'use the embedded iOS Simulator',
-          isTerminal: true,
-        }),
-      }),
-    ]);
-    expect(JSON.stringify(terminal)).not.toContain('aborted by user');
-  });
-
-  it('keeps an approval denial through an approval item that was already pending', async () => {
-    const policy = vi.fn(({ command }: { command: string }) =>
-      command === 'open -a Simulator'
-        ? { decision: 'deny' as const, reason: 'use the embedded iOS Simulator' }
-        : undefined,
-    );
-    const decision = deferred<InteractionDecision>();
-    const agent = new CodexAgent(createDeps({}, { getShellCommandPolicy: policy }));
-    const host = installFakeHost(agent);
-    const handle = await agent.startSession({
-      sessionId: 'session-command-approval-policy-pending-sibling',
-      model: 'gpt-5.4',
-      workingDir: '/repo',
-      permissionMode: 'ask',
-    });
-    const interactionResolver = vi.fn(() => decision.promise);
-    handle.setInteractionResolver(interactionResolver);
-    const handlers = host.getThreadHandlers();
-    if (
-      !handlers?.commandExecutionApproval
-      || !handlers.itemStarted
-      || !handlers.itemCompleted
-      || !handlers.turnCompleted
-    ) {
-      throw new Error('expected approval, item lifecycle and turn completion handlers');
-    }
-    const events: AgentEvent[] = [];
-    const collectEvents = (async () => {
-      for await (const event of handle.events()) events.push(event);
-    })();
-
-    const turnId = 'turn-approval-policy-pending-sibling';
-    const pendingApproval = handlers.commandExecutionApproval({
-      threadId: 'start-thread-id',
-      turnId,
-      itemId: 'cmd-pending-sibling',
-      command: 'printf safe',
-      cwd: '/repo',
-    });
-    await waitForExpectation(() => expect(interactionResolver).toHaveBeenCalledTimes(1));
-    // The resolver promise is held, so this approval is present in the pending
-    // map before the policy denial for the parallel command arrives.
-    await expect(
-      handlers.commandExecutionApproval({
-        threadId: 'start-thread-id',
-        turnId,
-        itemId: 'cmd-denied-after-pending',
-        command: 'open -a Simulator',
-        cwd: '/repo',
-      }),
-    ).resolves.toEqual({ decision: 'decline' });
-
-    decision.resolve({ kind: 'permission', behavior: 'allow' });
-    await expect(pendingApproval).resolves.toEqual({ decision: 'accept' });
-    handlers.itemStarted({
-      threadId: 'start-thread-id',
-      turnId,
-      item: {
-        id: 'cmd-pending-sibling',
-        type: 'commandExecution',
-        command: 'printf safe',
-        cwd: '/repo',
-      },
-    });
-    handlers.itemCompleted({
-      threadId: 'start-thread-id',
-      turnId,
-      item: {
-        id: 'cmd-pending-sibling',
-        type: 'commandExecution',
-        command: 'printf safe',
-        cwd: '/repo',
-      },
-    });
-    handlers.turnCompleted({
-      threadId: 'start-thread-id',
-      turn: {
-        id: turnId,
-        status: 'interrupted',
-        error: { message: 'aborted by user' },
-      },
-    } as never);
-
-    await handle.close();
-    await collectEvents;
-    const terminal = events.filter(
-      (event) =>
-        (event as { type?: string }).type === 'error' &&
-        (event as { data?: { isTerminal?: boolean } }).data?.isTerminal === true,
-    );
-    expect(terminal).toEqual([
-      expect.objectContaining({
-        data: expect.objectContaining({
-          message: 'use the embedded iOS Simulator',
-          isTerminal: true,
-        }),
-      }),
-    ]);
-    expect(JSON.stringify(terminal)).not.toContain('aborted by user');
-  });
-
-  it('clears an approval denial when a new native plan item continues the turn', async () => {
-    const policy = vi.fn(({ command }: { command: string }) =>
-      command === 'open -a Simulator'
-        ? { decision: 'deny' as const, reason: 'use the embedded iOS Simulator' }
-        : undefined,
-    );
-    const agent = new CodexAgent(createDeps({}, { getShellCommandPolicy: policy }));
-    const host = installFakeHost(agent, (method) =>
-      method === Method.TurnStart ? { turn: { id: 'turn-plan-after-denial' } } : undefined,
-    );
-    const handle = await agent.startSession({
-      sessionId: 'session-command-approval-policy-plan-continuation',
-      model: 'gpt-5.4',
-      workingDir: '/repo',
-      permissionMode: 'bypassPermissions',
-      planMode: true,
-    });
-    const handlers = host.getThreadHandlers();
-    if (!handlers?.commandExecutionApproval || !handlers.itemStarted || !handlers.turnCompleted) {
-      throw new Error('expected approval, itemStarted and turnCompleted handlers');
-    }
-    const events: AgentEvent[] = [];
-    const collectEvents = (async () => {
-      for await (const event of handle.events()) events.push(event);
-    })();
-
-    const turnId = 'turn-plan-after-denial';
-    await handle.send({ type: 'user', content: 'make a plan' });
-    await expect(
-      handlers.commandExecutionApproval({
-        threadId: 'start-thread-id',
-        turnId,
-        itemId: 'cmd-denied-before-plan',
-        command: 'open -a Simulator',
-        cwd: '/repo',
-      }),
-    ).resolves.toEqual({ decision: 'decline' });
-    handlers.itemStarted({
-      threadId: 'start-thread-id',
-      turnId,
-      item: {
-        id: 'plan-after-denial',
-        type: 'plan',
-        text: '1. inspect\n2. edit',
-      },
-    } as never);
-    handlers.turnCompleted({
-      threadId: 'start-thread-id',
-      turn: {
-        id: turnId,
-        status: 'failed',
-        error: { message: 'plan continuation failed' },
-      },
-    } as never);
-
-    await handle.close();
-    await collectEvents;
-    const terminal = events.filter(
-      (event) =>
-        (event as { type?: string }).type === 'error'
-        && (event as { data?: { isTerminal?: boolean } }).data?.isTerminal === true,
-    );
-    expect(terminal).toEqual([
-      expect.objectContaining({
-        data: expect.objectContaining({
-          message: 'plan continuation failed',
-          isTerminal: true,
-        }),
-      }),
-    ]);
-    expect(JSON.stringify(terminal)).not.toContain('use the embedded iOS Simulator');
-  });
-
-  it('lets an approval-path denial recover to a normal completed turn', async () => {
-    const policy = vi.fn(() => ({
-      decision: 'deny' as const,
-      reason: 'use the embedded iOS Simulator',
-    }));
-    const agent = new CodexAgent(createDeps({}, { getShellCommandPolicy: policy }));
-    const host = installFakeHost(agent);
-    const handle = await agent.startSession({
-      sessionId: 'session-command-approval-policy-recovery',
-      model: 'gpt-5.4',
-      workingDir: '/repo',
-      permissionMode: 'bypassPermissions',
-    });
-    const handlers = host.getThreadHandlers();
-    if (!handlers?.commandExecutionApproval || !handlers.turnCompleted) {
-      throw new Error('expected commandExecutionApproval and turnCompleted handlers');
-    }
-    const events: AgentEvent[] = [];
-    const collectEvents = (async () => {
-      for await (const event of handle.events()) events.push(event);
-    })();
-
-    await expect(
-      handlers.commandExecutionApproval({
-        threadId: 'start-thread-id',
-        turnId: 'turn-approval-policy-recovery',
-        itemId: 'cmd-approval-policy-recovery',
-        command: 'open -a Simulator',
-        cwd: '/repo',
-      }),
-    ).resolves.toEqual({ decision: 'decline' });
-    handlers.turnCompleted({
-      threadId: 'start-thread-id',
-      turn: {
-        id: 'turn-approval-policy-recovery',
-        status: 'completed',
-      },
-    } as never);
-
-    await handle.close();
-    await collectEvents;
-    expect(events.filter((event) => (event as { type?: string }).type === 'error')).toEqual([
-      expect.objectContaining({
-        data: expect.objectContaining({
-          message: 'use the embedded iOS Simulator',
-          isTerminal: false,
-        }),
-      }),
-    ]);
-    expect(events).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ type: 'done' }),
-      ]),
-    );
-    expect(JSON.stringify(events)).not.toContain('isTerminal":true');
-  });
-
-  it('clears an approval denial once a replacement command continues the turn', async () => {
-    const policy = vi.fn(({ command }: { command: string }) =>
-      command === 'open -a Simulator'
-        ? { decision: 'deny' as const, reason: 'use the embedded iOS Simulator' }
-        : undefined,
-    );
-    const agent = new CodexAgent(createDeps({}, { getShellCommandPolicy: policy }));
-    const host = installFakeHost(agent);
-    const handle = await agent.startSession({
-      sessionId: 'session-command-approval-policy-replacement-failure',
-      model: 'gpt-5.4',
-      workingDir: '/repo',
-      permissionMode: 'bypassPermissions',
-    });
-    const handlers = host.getThreadHandlers();
-    if (!handlers?.commandExecutionApproval || !handlers.itemStarted || !handlers.turnCompleted) {
-      throw new Error('expected approval, itemStarted and turnCompleted handlers');
-    }
-    const events: AgentEvent[] = [];
-    const collectEvents = (async () => {
-      for await (const event of handle.events()) events.push(event);
-    })();
-
-    await expect(
-      handlers.commandExecutionApproval({
-        threadId: 'start-thread-id',
-        turnId: 'turn-approval-policy-replacement-failure',
-        itemId: 'cmd-approval-policy-replacement-failure',
-        command: 'open -a Simulator',
-        cwd: '/repo',
-      }),
-    ).resolves.toEqual({ decision: 'decline' });
-    handlers.itemStarted({
-      threadId: 'start-thread-id',
-      turnId: 'turn-approval-policy-replacement-failure',
-      item: {
-        id: 'cmd-safe-replacement',
-        type: 'commandExecution',
-        command: 'printf safe',
-        cwd: '/repo',
-      },
-    });
-    handlers.turnCompleted({
-      threadId: 'start-thread-id',
-      turn: {
-        id: 'turn-approval-policy-replacement-failure',
-        status: 'failed',
-        error: { message: 'replacement failed' },
-      },
-    } as never);
-
-    await handle.close();
-    await collectEvents;
-    expect(events).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          type: 'error',
-          data: expect.objectContaining({
-            message: 'replacement failed',
-            isTerminal: true,
-          }),
-        }),
-      ]),
-    );
-    const terminalErrors = events.filter(
-      (event) =>
-        (event as { type?: string }).type === 'error'
-        && (event as { data?: { isTerminal?: boolean } }).data?.isTerminal === true,
-    );
-    expect(JSON.stringify(terminalErrors)).not.toContain('use the embedded iOS Simulator');
-  });
-
-  it('interrupts an already-started shell bypass and reports the policy reason', async () => {
-    const { logger, warn } = createLoggerSpy();
-    const policy = vi.fn(() => ({
-      decision: 'deny' as const,
-      reason: 'use the embedded iOS Simulator',
-    }));
-    let acknowledgeInterrupt!: () => void;
-    const interruptAck = new Promise<unknown>((resolve) => {
-      acknowledgeInterrupt = () => resolve({});
-    });
-    const agent = new CodexAgent(createDeps({}, { getShellCommandPolicy: policy, logger }));
-    const host = installFakeHost(agent, (method) => {
-      if (method === Method.TurnStart) return { turn: { id: 'turn-1' } };
-      if (method === Method.TurnInterrupt) return interruptAck;
-      return undefined;
-    });
-    const handle = await agent.startSession({
-      sessionId: 'session-command-item-host-policy',
-      model: 'gpt-5.4',
-      workingDir: '/repo',
-      permissionMode: 'bypassPermissions',
-    });
-    const handlers = host.getThreadHandlers();
-    if (!handlers?.itemStarted || !handlers.turnCompleted) {
-      throw new Error('expected itemStarted and turnCompleted handlers');
-    }
-    const iterator = handle.events()[Symbol.asyncIterator]();
-    await handle.send({ type: 'user', content: 'test host policy' });
-    expect(await nextEvent(iterator)).toMatchObject({
-      type: 'status',
-      data: { isRunning: true },
-    });
-
-    const command = 'API_TOKEN=super-secret /usr/bin/open -a Simulator';
-    handlers.itemStarted({
-      threadId: 'start-thread-id',
-      turnId: 'turn-1',
-      item: {
-        id: 'cmd-absolute',
-        type: 'commandExecution',
-        command,
-        cwd: '/repo',
-      },
-    });
-
-    expect(policy).toHaveBeenCalledWith({
-      agentKind: 'codex',
-      command,
-      cwd: undefined,
-    });
-    expect(host.request).toHaveBeenCalledWith(Method.TurnInterrupt, {
-      threadId: 'start-thread-id',
-      turnId: 'turn-1',
-    });
-    expect(warn).toHaveBeenCalledWith('command execution interrupted by host policy', {
-      turnId: 'turn-1',
-      reason: 'use the embedded iOS Simulator',
-    });
-    expect(JSON.stringify(warn.mock.calls)).not.toContain('super-secret');
-    expect(await nextEvent(iterator)).toMatchObject({
-      type: 'error',
-      data: {
-        message: 'use the embedded iOS Simulator',
-        isTerminal: false,
-        reason: 'host-shell-command-blocked',
-      },
-    });
-    expect(handle.isTurnRunning?.()).toBe(true);
-
-    handlers.itemStarted({
-      threadId: 'start-thread-id',
-      turnId: 'turn-1',
-      item: {
-        id: 'cmd-absolute',
-        type: 'commandExecution',
-        command,
-        cwd: '/repo',
-      },
-    });
-    expect(
-      host.request.mock.calls.filter(([method]) => method === Method.TurnInterrupt),
-    ).toHaveLength(1);
-
-    acknowledgeInterrupt();
-    await Promise.resolve();
-    expect(handle.isTurnRunning?.()).toBe(true);
-
-    handlers.itemStarted({
-      threadId: 'start-thread-id',
-      turnId: 'turn-1',
-      item: {
-        id: 'cmd-absolute-after-ack',
-        type: 'commandExecution',
-        command: '/usr/bin/open -a Simulator',
-        cwd: '/repo',
-      },
-    });
-    expect(await nextEvent(iterator)).toMatchObject({
-      type: 'error',
-      data: { isTerminal: false, reason: 'host-shell-command-blocked' },
-    });
-    await vi.waitFor(() => {
-      expect(
-        host.request.mock.calls.filter(([method]) => method === Method.TurnInterrupt),
-      ).toHaveLength(2);
-    });
-
-    handlers.turnCompleted({
-      threadId: 'start-thread-id',
-      turn: { id: 'turn-1', status: 'interrupted' },
-    });
-
-    expect(await nextEvent(iterator)).toMatchObject({
-      type: 'error',
-      data: {
-        message: 'use the embedded iOS Simulator',
-        isTerminal: true,
-        reason: 'host-shell-command-blocked',
-      },
-    });
-    expect(await nextEvent(iterator)).toMatchObject({
-      type: 'status',
-      data: { status: 'Done', isRunning: false },
-    });
-    expect(handle.isTurnRunning?.()).toBe(false);
-
-    await expect(nextEvent(iterator)).rejects.toThrow('timed out waiting for event');
-    await handle.close();
-  });
-
-  it('keeps explicit user Stop attribution after a policy hit and late blocked item', async () => {
-    const policy = vi.fn(() => ({
-      decision: 'deny' as const,
-      reason: 'use the embedded iOS Simulator',
-    }));
-    let resolvePolicyInterrupt!: () => void;
-    const policyInterruptAck = new Promise<unknown>((resolve) => {
-      resolvePolicyInterrupt = () => resolve({});
-    });
-    let interruptCount = 0;
-    const agent = new CodexAgent(createDeps({}, { getShellCommandPolicy: policy }));
-    const host = installFakeHost(agent, (method) => {
-      if (method === Method.TurnStart) return { turn: { id: 'turn-1' } };
-      if (method === Method.TurnInterrupt) {
-        interruptCount += 1;
-        return interruptCount === 1 ? policyInterruptAck : {};
-      }
-      return undefined;
-    });
-    const handle = await agent.startSession({
-      sessionId: 'session-command-item-host-policy-user-stop',
-      model: 'gpt-5.4',
-      workingDir: '/repo',
-      permissionMode: 'bypassPermissions',
-    });
-    const handlers = host.getThreadHandlers();
-    if (!handlers?.itemStarted || !handlers.turnCompleted) {
-      throw new Error('expected itemStarted and turnCompleted handlers');
-    }
-    const iterator = handle.events()[Symbol.asyncIterator]();
-    await handle.send({ type: 'user', content: 'test user Stop after host policy' });
-    expect(await nextEvent(iterator)).toMatchObject({
-      type: 'status',
-      data: { isRunning: true },
-    });
-
-    handlers.itemStarted({
-      threadId: 'start-thread-id',
-      turnId: 'turn-1',
-      item: {
-        id: 'cmd-before-stop',
-        type: 'commandExecution',
-        command: '/usr/bin/open -a Simulator',
-        cwd: '/repo',
-      },
-    });
-    expect(await nextEvent(iterator)).toMatchObject({
-      type: 'error',
-      data: { isTerminal: false, reason: 'host-shell-command-blocked' },
-    });
-
-    await handle.abort();
-    handlers.itemStarted({
-      threadId: 'start-thread-id',
-      turnId: 'turn-1',
-      item: {
-        id: 'cmd-after-stop',
-        type: 'commandExecution',
-        command: '/usr/bin/open -a Simulator',
-        cwd: '/repo',
-      },
-    });
-    expect(
-      host.request.mock.calls.filter(([method]) => method === Method.TurnInterrupt),
-    ).toHaveLength(2);
-
-    handlers.turnCompleted({
-      threadId: 'start-thread-id',
-      turn: { id: 'turn-1', status: 'interrupted' },
-    });
-    expect(await nextEvent(iterator)).toMatchObject({
-      type: 'done',
-      data: { cancelled: true },
-    });
-
-    resolvePolicyInterrupt();
-    await Promise.resolve();
-    await expect(nextEvent(iterator)).rejects.toThrow('timed out waiting for event');
-    await handle.close();
-  });
-
-  it('ends an active plan cycle after a host-policy interruption', async () => {
-    const policy = vi.fn(() => ({
-      decision: 'deny' as const,
-      reason: 'use the embedded iOS Simulator',
-    }));
-    let turnSeq = 0;
-    const agent = new CodexAgent(createDeps({}, { getShellCommandPolicy: policy }));
-    const host = installFakeHost(agent, (method) => {
-      if (method === Method.TurnStart) return { turn: { id: `turn-${++turnSeq}` } };
-      if (method === Method.TurnInterrupt) return {};
-      return undefined;
-    });
-    const handle = await agent.startSession({
-      sessionId: 'session-command-item-host-policy-plan-cycle',
-      model: 'gpt-5.4',
-      workingDir: '/repo',
-      permissionMode: 'bypassPermissions',
-      planMode: true,
-    });
-    const handlers = host.getThreadHandlers();
-    if (!handlers?.itemStarted || !handlers.turnCompleted) {
-      throw new Error('expected itemStarted and turnCompleted handlers');
-    }
-
-    await handle.send({ type: 'user', content: 'make a plan' });
-    const turnStartRequests = () =>
-      host.request.mock.calls.filter(([method]) => method === Method.TurnStart);
-    const [, planParams] = turnStartRequests()[0] as [string, Record<string, unknown>];
-    expect(planParams.collaborationMode).toMatchObject({ mode: 'plan' });
-
-    handlers.itemStarted({
-      threadId: 'start-thread-id',
-      turnId: 'turn-1',
-      item: {
-        id: 'cmd-plan-bypass',
-        type: 'commandExecution',
-        command: '/usr/bin/open -a Simulator',
-        cwd: '/repo',
-      },
-    });
-    handlers.turnCompleted({
-      threadId: 'start-thread-id',
-      turn: { id: 'turn-1', status: 'interrupted' },
-    });
-
-    await handle.send({ type: 'user', content: 'continue normally' });
-    const [, normalParams] = turnStartRequests()[1] as [string, Record<string, unknown>];
-    expect(normalParams.collaborationMode).toMatchObject({ mode: 'default' });
-    await handle.close();
-  });
-
-  it.each(['interrupted', 'completed', 'failed'] as const)(
-    'preserves an early %s turn completion while interrupt ACK is pending',
-    async (turnStatus) => {
-      const policy = vi.fn(() => ({
-        decision: 'deny' as const,
-        reason: 'use the embedded iOS Simulator',
-      }));
-      let acknowledgeInterrupt!: () => void;
-      const interruptAck = new Promise<unknown>((resolve) => {
-        acknowledgeInterrupt = () => resolve({});
-      });
-      const agent = new CodexAgent(createDeps({}, { getShellCommandPolicy: policy }));
-      const host = installFakeHost(agent, (method) => {
-        if (method === Method.TurnStart) return { turn: { id: 'turn-1' } };
-        if (method === Method.TurnInterrupt) return interruptAck;
-        return undefined;
-      });
-      const handle = await agent.startSession({
-        sessionId: 'session-command-item-host-policy-completes-before-ack',
-        model: 'gpt-5.4',
-        workingDir: '/repo',
-        permissionMode: 'bypassPermissions',
-      });
-      const handlers = host.getThreadHandlers();
-      if (!handlers?.itemStarted || !handlers.turnCompleted) {
-        throw new Error('expected itemStarted and turnCompleted handlers');
-      }
-      const iterator = handle.events()[Symbol.asyncIterator]();
-      await handle.send({ type: 'user', content: 'test early completion' });
-      expect(await nextEvent(iterator)).toMatchObject({
-        type: 'status',
-        data: { isRunning: true },
-      });
-
-      handlers.itemStarted({
-        threadId: 'start-thread-id',
-        turnId: 'turn-1',
-        item: {
-          id: 'cmd-absolute',
-          type: 'commandExecution',
-          command: '/usr/bin/open -a Simulator',
-          cwd: '/repo',
-        },
-      });
-      expect(await nextEvent(iterator)).toMatchObject({
-        type: 'error',
-        data: { isTerminal: false, reason: 'host-shell-command-blocked' },
-      });
-
-      handlers.turnCompleted({
-        threadId: 'start-thread-id',
-        turn: { id: 'turn-1', status: turnStatus },
-      });
-      if (turnStatus === 'interrupted') {
-        expect(await nextEvent(iterator)).toMatchObject({
-          type: 'error',
-          data: { isTerminal: true, reason: 'host-shell-command-blocked' },
-        });
-        expect(await nextEvent(iterator)).toMatchObject({
-          type: 'status',
-          data: { status: 'Done', isRunning: false },
-        });
-      } else if (turnStatus === 'failed') {
-        expect(await nextEvent(iterator)).toMatchObject({
-          type: 'error',
-          data: { isTerminal: true, reason: 'turn-failed' },
-        });
-        expect(await nextEvent(iterator)).toMatchObject({
-          type: 'done',
-          data: { cancelled: false, raw: { status: 'failed' } },
-        });
-      } else {
-        expect(await nextEvent(iterator)).toMatchObject({
-          type: 'status',
-          data: { status: 'Done', isRunning: false },
-        });
-        expect(await nextEvent(iterator)).toMatchObject({
-          type: 'done',
-          data: { raw: { status: 'completed' } },
-        });
-      }
-      expect(handle.isTurnRunning?.()).toBe(false);
-
-      acknowledgeInterrupt();
-      await Promise.resolve();
-      await expect(nextEvent(iterator)).rejects.toThrow('timed out waiting for event');
-      await handle.close();
-    },
-  );
-
-  it('keeps the turn visible when a host-policy interrupt cannot be acknowledged', async () => {
-    const { logger, error } = createLoggerSpy();
-    const policy = vi.fn(() => ({
-      decision: 'deny' as const,
-      reason: 'use the embedded iOS Simulator',
-    }));
-    const agent = new CodexAgent(createDeps({}, { getShellCommandPolicy: policy, logger }));
-    const host = installFakeHost(agent, (method) => {
-      if (method === Method.TurnStart) return { turn: { id: 'turn-1' } };
-      if (method === Method.TurnInterrupt) throw new Error('transport closed');
-      return undefined;
-    });
-    const handle = await agent.startSession({
-      sessionId: 'session-command-item-host-policy-interrupt-failed',
-      model: 'gpt-5.4',
-      workingDir: '/repo',
-      permissionMode: 'bypassPermissions',
-    });
-    const handlers = host.getThreadHandlers();
-    if (!handlers?.itemStarted || !handlers.turnCompleted) {
-      throw new Error('expected itemStarted and turnCompleted handlers');
-    }
-    const iterator = handle.events()[Symbol.asyncIterator]();
-    await handle.send({ type: 'user', content: 'test failed host-policy interrupt' });
-    expect(await nextEvent(iterator)).toMatchObject({
-      type: 'status',
-      data: { isRunning: true },
-    });
-
-    handlers.itemStarted({
-      threadId: 'start-thread-id',
-      turnId: 'turn-1',
-      item: {
-        id: 'cmd-absolute',
-        type: 'commandExecution',
-        command: '/usr/bin/open -a Simulator',
-        cwd: '/repo',
-      },
-    });
-
-    expect(await nextEvent(iterator)).toMatchObject({
-      type: 'error',
-      data: {
-        message: 'use the embedded iOS Simulator',
-        isTerminal: false,
-        reason: 'host-shell-command-blocked',
-      },
-    });
-    expect(
-      host.request.mock.calls.filter(([method]) => method === Method.TurnInterrupt),
-    ).toHaveLength(2);
-    expect(handle.isTurnRunning?.()).toBe(true);
-    await vi.waitFor(() => {
-      expect(error).toHaveBeenCalledWith('host policy could not interrupt running command', {
-        turnId: 'turn-1',
-      });
-    });
-
-    handlers.itemStarted({
-      threadId: 'start-thread-id',
-      turnId: 'turn-1',
-      item: {
-        id: 'cmd-absolute-2',
-        type: 'commandExecution',
-        command: '/usr/bin/open -a Simulator',
-        cwd: '/repo',
-      },
-    });
-    expect(await nextEvent(iterator)).toMatchObject({
-      type: 'error',
-      data: { isTerminal: false, reason: 'host-shell-command-blocked' },
-    });
-    await vi.waitFor(() => {
-      expect(
-        host.request.mock.calls.filter(([method]) => method === Method.TurnInterrupt),
-      ).toHaveLength(4);
-    });
-    expect(handle.isTurnRunning?.()).toBe(true);
-
-    handlers.turnCompleted({
-      threadId: 'start-thread-id',
-      turn: { id: 'turn-1', status: 'completed' },
-    });
-    expect(await nextEvent(iterator)).toMatchObject({
-      type: 'status',
-      data: { status: 'Done', isRunning: false },
-    });
-    expect(await nextEvent(iterator)).toMatchObject({ type: 'done' });
-    expect(handle.isTurnRunning?.()).toBe(false);
-    await handle.close();
-  });
-
-  it('preserves policy origin when interrupt ACKs are lost before an interrupted completion', async () => {
-    const { logger, error } = createLoggerSpy();
-    const policy = vi.fn(() => ({
-      decision: 'deny' as const,
-      reason: 'use the embedded iOS Simulator',
-    }));
-    const agent = new CodexAgent(createDeps({}, { getShellCommandPolicy: policy, logger }));
-    const host = installFakeHost(agent, (method) => {
-      if (method === Method.TurnStart) return { turn: { id: 'turn-1' } };
-      if (method === Method.TurnInterrupt) throw new Error('ACK lost');
-      return undefined;
-    });
-    const handle = await agent.startSession({
-      sessionId: 'session-command-item-host-policy-interrupt-ack-lost',
-      model: 'gpt-5.4',
-      workingDir: '/repo',
-      permissionMode: 'bypassPermissions',
-    });
-    const handlers = host.getThreadHandlers();
-    if (!handlers?.itemStarted || !handlers.turnCompleted) {
-      throw new Error('expected itemStarted and turnCompleted handlers');
-    }
-    const iterator = handle.events()[Symbol.asyncIterator]();
-    await handle.send({ type: 'user', content: 'test lost interrupt ACK' });
-    expect(await nextEvent(iterator)).toMatchObject({
-      type: 'status',
-      data: { isRunning: true },
-    });
-
-    handlers.itemStarted({
-      threadId: 'start-thread-id',
-      turnId: 'turn-1',
-      item: {
-        id: 'cmd-absolute',
-        type: 'commandExecution',
-        command: '/usr/bin/open -a Simulator',
-        cwd: '/repo',
-      },
-    });
-    expect(await nextEvent(iterator)).toMatchObject({
-      type: 'error',
-      data: { isTerminal: false, reason: 'host-shell-command-blocked' },
-    });
-    await vi.waitFor(() => {
-      expect(error).toHaveBeenCalledWith('host policy could not interrupt running command', {
-        turnId: 'turn-1',
-      });
-    });
-
-    handlers.turnCompleted({
-      threadId: 'start-thread-id',
-      turn: { id: 'turn-1', status: 'interrupted' },
-    });
-    expect(await nextEvent(iterator)).toMatchObject({
-      type: 'error',
-      data: { isTerminal: true, reason: 'host-shell-command-blocked' },
-    });
-    expect(await nextEvent(iterator)).toMatchObject({
-      type: 'status',
-      data: { status: 'Done', isRunning: false },
-    });
-    expect(handle.isTurnRunning?.()).toBe(false);
-    await expect(nextEvent(iterator)).rejects.toThrow('timed out waiting for event');
-    await handle.close();
-  });
-
-  it('keeps the policy reason as the terminal outcome of the interrupted turn', async () => {
-    const policy = vi.fn(() => ({
-      decision: 'deny' as const,
-      reason: 'use the embedded iOS Simulator',
-    }));
-    const agent = new CodexAgent(createDeps({}, { getShellCommandPolicy: policy }));
-    const host = installFakeHost(agent, (method) =>
-      method === Method.TurnInterrupt ? {} : undefined,
-    );
-    const handle = await agent.startSession({
-      sessionId: 'session-policy-terminal-reason',
-      model: 'gpt-5.4',
-      workingDir: '/repo',
-      permissionMode: 'bypassPermissions',
-    });
-    const handlers = host.getThreadHandlers();
-    if (!handlers?.itemStarted || !handlers.turnCompleted) {
-      throw new Error('expected itemStarted and turnCompleted handlers');
-    }
-    const events: AgentEvent[] = [];
-    const collectEvents = (async () => {
-      for await (const event of handle.events()) events.push(event);
-    })();
-
-    handlers.itemStarted({
-      threadId: 'start-thread-id',
-      turnId: 'turn-1',
-      item: { id: 'cmd-1', type: 'commandExecution', command: 'open -a Simulator', cwd: '/repo' },
-    });
-    // Codex answers our interrupt with an abort-shaped completion. The renderer
-    // clears a non-terminal error once the turn completes, so the product reason
-    // has to win here or the denial reads as a user action.
-    handlers.turnCompleted({
-      threadId: 'start-thread-id',
-      turn: {
-        id: 'turn-1',
-        status: 'interrupted',
-        error: { message: 'aborted by user' },
-      },
-    } as never);
-
-    await handle.close();
-    await collectEvents;
-    const terminal = events.filter(
-      (event) =>
-        (event as { type?: string }).type === 'error' &&
-        (event as { data?: { isTerminal?: boolean } }).data?.isTerminal === true,
-    );
-    expect(terminal).toEqual([
-      expect.objectContaining({
-        data: expect.objectContaining({
-          message: 'use the embedded iOS Simulator',
-          isTerminal: true,
-        }),
-      }),
-    ]);
-    expect(JSON.stringify(terminal)).not.toContain('aborted by user');
-  });
-
-  it('interrupts a raw function_call exec_command shell bypass as a fail-safe', async () => {
-    const policy = vi.fn(() => ({
-      decision: 'deny' as const,
-      reason: 'use the embedded iOS Simulator',
-    }));
-    const agent = new CodexAgent(createDeps({}, { getShellCommandPolicy: policy }));
-    const host = installFakeHost(agent, (method) =>
-      method === Method.TurnInterrupt ? {} : undefined,
-    );
-    const handle = await agent.startSession({
-      sessionId: 'session-function-call-shell-policy',
-      model: 'gpt-5.4',
-      workingDir: '/repo',
-      permissionMode: 'bypassPermissions',
-    });
-    const handlers = host.getThreadHandlers();
-    if (!handlers?.itemStarted) throw new Error('expected itemStarted handler');
-
-    handlers.itemStarted({
-      threadId: 'start-thread-id',
-      turnId: 'turn-raw-function-call',
-      item: {
-        id: 'fc-raw-shell',
-        type: 'function_call',
-        name: 'exec_command',
-        arguments: JSON.stringify({
-          cmd: 'xcrun simctl boot DEVICE',
-          workdir: '/repo',
-        }),
-      },
-    });
-
-    expect(policy).toHaveBeenCalledWith({
-      agentKind: 'codex',
-      command: 'xcrun simctl boot DEVICE',
-      cwd: '/repo',
-    });
-    expect(host.request).toHaveBeenCalledWith(Method.TurnInterrupt, {
-      threadId: 'start-thread-id',
-      turnId: 'turn-raw-function-call',
-    });
     await handle.close();
   });
 
@@ -24860,20 +23320,7 @@ describe('CodexAgent resume preparation', () => {
   });
 
   it('falls back to thread/start only when resume proves the thread has no rollout', async () => {
-    const dynamicTools = [{
-      type: 'function' as const,
-      name: 'cindy_fixture__call_tool',
-      description: 'Fixture dynamic tool.',
-      inputSchema: { type: 'object' },
-      deferLoading: false,
-    }];
-    const listTools = vi.fn(() => dynamicTools);
-    const agent = new CodexAgent(createDeps({ systemPrompt: 'runtime developer instructions' }, {
-      codexHostDynamicToolProvider: {
-        listTools,
-        callTool: vi.fn(async () => undefined),
-      },
-    }));
+    const agent = new CodexAgent(createDeps({ systemPrompt: 'runtime developer instructions' }));
     const host = installFakeHost(agent, (method) => {
       if (method === Method.ThreadResume) throw exactNoRolloutError();
       return undefined;
@@ -24918,13 +23365,8 @@ describe('CodexAgent resume preparation', () => {
     expect(startParams.developerInstructions).toContain('runtime developer instructions');
     expect(startParams.developerInstructions).toContain('user developer instructions');
     expect(startParams.dynamicTools).toEqual(expect.arrayContaining([
-      expect.objectContaining({ name: 'cindy_fixture__call_tool' }),
+      expect.objectContaining({ name: 'cindy__ask_user_question' }),
     ]));
-    expect(listTools).toHaveBeenCalledWith(expect.objectContaining({
-      workingDir: '/device-link/repo',
-      providerId: 'fixture-provider',
-      vendorOptions: { orcaRole: 'lead' },
-    }));
     await handle.close();
   });
 
@@ -35143,14 +33585,16 @@ describe('CodexAgent custom provider context window override', () => {
     await agent.dispose();
   });
 
-  it('retires the isolated custom-context app-server when initialize fails', async () => {
+  it.each(['account', 'custom-context'])('reports confirmed %s host exit after initialize fails', async (kind) => {
     MockCodexTransport.onCreate = (transport) => {
       transport.setMockResponse(Method.Initialize, {
         error: { code: -32_000, message: 'initialize boom' },
       });
     };
     const agent = new CodexAgent(createDeps({}, {
-      resolveCodexThreadContextWindow: () => 700_000,
+      ...(kind === 'account'
+        ? { isCodexAccountProvider: (id?: string | null) => id === 'mygpt' }
+        : { resolveCodexThreadContextWindow: () => 700_000 }),
       prepareCodexExtraSpawnConfig: async () => ({ extraArgs: [], extraEnv: {} }),
     }));
 
@@ -35159,10 +33603,57 @@ describe('CodexAgent custom provider context window override', () => {
       model: 'gpt-5.6-sol',
       providerId: 'mygpt',
       workingDir: '/repo',
-    })).rejects.toThrow('initialize boom');
+    })).rejects.toMatchObject({
+      name: 'AgentStartupStoppedError',
+      cause: expect.objectContaining({ message: expect.stringContaining('initialize boom') }),
+    });
 
     expect(createdTransports[0]?.closed).toBe(true);
     expect((agent as unknown as { hosts: Map<string, unknown> }).hosts.size).toBe(0);
+    await agent.dispose();
+  });
+
+  it.each([
+    ['account', Method.Initialize], ['custom-context', Method.Initialize],
+    ['account', Method.ThreadStart], ['custom-context', Method.ThreadStart],
+  ])('never reports stopped when the %s startup transport fails to retire after %s fails', async (kind, method) => {
+    MockCodexTransport.onCreate = (transport) => {
+      transport.setMockResponse(method, {
+        error: { code: -32_000, message: 'startup boom' },
+      });
+    };
+    MockCodexTransport.closeError = new Error('shutdown unconfirmed');
+    const agent = new CodexAgent(createDeps({}, {
+      ...(kind === 'account'
+        ? { isCodexAccountProvider: (id?: string | null) => id === 'account-a' }
+        : { resolveCodexThreadContextWindow: () => 700_000 }),
+      prepareCodexExtraSpawnConfig: async () => ({ extraArgs: [], extraEnv: {} }),
+    }));
+    const failure = await agent.startSession({
+      sessionId: 'failed-isolated-start', providerId: 'account-a', model: 'gpt-5.4', workingDir: '/repo',
+    }).catch((error) => error);
+    expect(failure).toBeInstanceOf(Error);
+    expect(failure).toBe(MockCodexTransport.closeError);
+    expect(failure).not.toBeInstanceOf(AgentStartupStoppedError);
+    expect((agent as unknown as { retiringHosts: Map<string, unknown> }).retiringHosts.size).toBe(1);
+    MockCodexTransport.closeError = null;
+    await agent.dispose();
+    expect(createdTransports[0]?.closed).toBe(true);
+    expect((agent as unknown as { retiringHosts: Map<string, unknown> }).retiringHosts.size).toBe(0);
+  });
+
+  it('releases the failed account startup without interrupting another live host', async () => {
+    const agent = new CodexAgent(createDeps({}, { isCodexAccountProvider: () => true }));
+    const live = await agent.startSession({ sessionId: 'unrelated-live', providerId: 'account-b', model: 'gpt-5.4', workingDir: '/other' });
+    MockCodexTransport.onCreate = (transport) => {
+      transport.setMockResponse(Method.Initialize, { error: { code: -32_000, message: 'initialize boom' } });
+    };
+    await expect(agent.startSession({ sessionId: 'failed-start', providerId: 'account-a', model: 'gpt-5.4', workingDir: '/repo' }))
+      .rejects.toBeInstanceOf(AgentStartupStoppedError);
+    expect(createdTransports[0].closed).toBe(false);
+    expect(createdTransports[1].closed).toBe(true);
+    await live.send({ type: 'user', content: 'still available' });
+    await live.close();
     await agent.dispose();
   });
 

@@ -530,6 +530,29 @@ export async function readClientWallpaperFile(url: string): Promise<{ buffer: Bu
   return { buffer: await fs.readFile(absPath), mimeType };
 }
 
+/** Open a verified wallpaper video once; the response stream owns this handle. */
+export async function openClientWallpaperVideo(url: string) {
+  const parsed = parseClientWallpaperUrl(url);
+  if (parsed?.ext !== '.mp4') throw new Error('cindy-media: invalid client wallpaper video url');
+  const { absPath, mimeType } = resolveHashRef(parsed.hash, parsed.ext, 'client-wallpaper');
+  await assertBlobPathContained(absPath, 'client-wallpaper');
+  const before = await fs.lstat(absPath);
+  if (!before.isFile()) throw new Error('cindy-media: wallpaper is not a regular file');
+  const file = await fs.open(absPath, noFollowReadFlags() | (fsConstants.O_NONBLOCK ?? 0));
+  try {
+    const stat = await file.stat();
+    await assertBlobPathContained(absPath, 'client-wallpaper');
+    const after = await fs.lstat(absPath);
+    if (!stat.isFile() || !sameFileIdentity(before, stat) || !sameFileIdentity(after, stat)) {
+      throw new Error('cindy-media: wallpaper changed while opening');
+    }
+    return { file, totalSize: stat.size, mimeType };
+  } catch (error) {
+    await file.close();
+    throw error;
+  }
+}
+
 // ── 回收器 / 对账底层能力(第 5 步)──────────────────────────────────────
 // 本模块仍然只管字节:下面的枚举与删除不看账本,"该不该删"由 recycler.ts
 // 按账本判定后才调用这里。

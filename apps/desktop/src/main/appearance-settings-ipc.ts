@@ -5,6 +5,8 @@ import {
   APPEARANCE_LIMITS,
   WALLPAPER_IDS,
   clampAppearanceWallpaperOverlay,
+  clampAppearanceWallpaperVisibility,
+  clampAppearanceWallpaperBlur,
   clampAppearanceCodeSize,
   clampAppearanceUiSize,
   clampAppearanceWindowZoom,
@@ -137,9 +139,13 @@ export async function updatePersistedWindowZoom(delta: number | null): Promise<A
 }
 
 // A font/theme reader is not a grant to the client's custom media capability.
-function appearanceForWindow(settings: AppearanceSettings, win: BrowserWindow | null): AppearanceSettings {
+function appearanceForWindow(
+  settings: AppearanceSettings,
+  win: BrowserWindow | null,
+): AppearanceSettings {
   if (isAppContentWindow(win)) return settings;
   const { customWallpaperUrl: _privateUrl, ...publicSettings } = settings;
+  void _privateUrl;
   return {
     ...publicSettings,
     wallpaperId: settings.wallpaperId === 'custom' ? 'none' : settings.wallpaperId,
@@ -170,6 +176,8 @@ function parsePatch(rawPatch: unknown): AppearanceOverrides {
     'windowZoom',
     'wallpaperId',
     'wallpaperOverlay',
+    'wallpaperVisibility',
+    'wallpaperBlur',
     'wallpaperMotion',
   ]);
   for (const key of Object.keys(raw)) {
@@ -222,6 +230,28 @@ function parsePatch(rawPatch: unknown): AppearanceOverrides {
       throwIpcError('INVALID_PARAMS', 'wallpaperMotion is not supported');
     }
     patch.wallpaperMotion = raw.wallpaperMotion;
+  }
+  if ('wallpaperVisibility' in raw) {
+    patch.wallpaperVisibility =
+      raw.wallpaperVisibility === null
+        ? null
+        : parseNumber(
+            raw.wallpaperVisibility,
+            'wallpaperVisibility',
+            clampAppearanceWallpaperVisibility,
+            APPEARANCE_LIMITS.wallpaperVisibility,
+          );
+  }
+  if ('wallpaperBlur' in raw) {
+    patch.wallpaperBlur =
+      raw.wallpaperBlur === null
+        ? null
+        : parseNumber(
+            raw.wallpaperBlur,
+            'wallpaperBlur',
+            clampAppearanceWallpaperBlur,
+            APPEARANCE_LIMITS.wallpaperBlur,
+          );
   }
   return patch;
 }

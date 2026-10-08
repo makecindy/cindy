@@ -29,6 +29,7 @@ const h = vi.hoisted(() => ({
   deps: null as any,
   permissionDeps: null as any,
   lease: 'lease',
+  background: false,
   ready: false,
   source: null as null | Promise<any[]>,
   owner: null as any,
@@ -172,6 +173,9 @@ vi.mock('../controller', () => ({
     hasLease(value: string) {
       return value === h.lease;
     }
+    isBackgroundViewing(value: string) {
+      return value === h.lease && h.background;
+    }
     stop() {
       h.stop();
       h.deps.stopVideo();
@@ -255,6 +259,7 @@ beforeEach(() => {
   vi.stubGlobal('process', { ...process, platform: 'darwin', getSystemVersion: () => '26.0' });
   vi.useFakeTimers();
   h.wayland = false;
+  h.background = false;
   h.hyprland = false;
   h.linuxInput = false;
   h.linuxAudio = false;
@@ -1257,4 +1262,32 @@ it('revokes audio recovery with the lease and never grants it to an audio-off re
   grant(request, callback);
   expect(callback).toHaveBeenLastCalledWith({});
   expect(owner.dead).toBe(false);
+});
+
+it('starts and retunes video for a background viewer without a new offer', async () => {
+  h.background = true;
+  const pending = h.deps.offer(
+    { lease: h.lease, display: { id: '1' } },
+    'sdp',
+    { fps: 60, quality: 'auto', audio: false },
+    false,
+    'attempt',
+  );
+  h.handlers.get(DESKTOP_LOCAL.REGISTER)(event());
+  await flush();
+  const offer = h.owner.send.mock.calls[0][1];
+  expect(offer).toMatchObject({ op: 'offer', lease: h.lease, background: true });
+  h.handlers.get(DESKTOP_LOCAL.REPLY)(event(), offer.id, 'answer');
+  await pending;
+  const owner = h.owner;
+  const sent = owner.send.mock.calls.length;
+  h.deps.videoBackground('stale', false);
+  expect(owner.send).toHaveBeenCalledTimes(sent);
+  h.deps.videoBackground(h.lease, false);
+  expect(owner.send.mock.calls.at(-1)[1]).toMatchObject({
+    op: 'background-viewing',
+    lease: h.lease,
+    background: false,
+  });
+  expect(h.windows).toHaveLength(1);
 });

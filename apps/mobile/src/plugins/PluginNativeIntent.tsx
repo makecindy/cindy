@@ -12,7 +12,6 @@ import type {
   PluginNativeIntent as Intent,
   PluginPageFetchResult,
 } from "@cindy/device-link";
-import { useGuardedPush } from "@/utils/useGuardedPush";
 import { SheetModal } from "@/session/SheetModal";
 import { Text } from "@/components/AppText";
 import { HtmlWebsiteBrowser } from "@/session/HtmlWebsiteBrowser";
@@ -51,7 +50,6 @@ export function PluginNativeIntent({
     { colors } = useTheme(),
     styles = useThemedStyles(makeStyles),
     insets = useSafeAreaInsets();
-  const push = useGuardedPush();
   const [preview, setPreview] = useState<MobileHtmlPreview>(),
     [failed, setFailed] = useState(false);
   const closed = useRef(Promise.resolve()).current;
@@ -95,27 +93,12 @@ export function PluginNativeIntent({
     return (
       <PluginMediaViewer intent={intent} read={readMedia} onClose={onClose} />
     );
-  if (intent.kind === "simulator")
+  if (intent.kind !== "preview")
     return (
       <SheetModal visible onRequestClose={onClose} onBackdropPress={() => {}}>
         <View style={styles.fallback}>
           <Text style={styles.body}>{intent.ghostName}</Text>
-          <Text style={styles.hint}>{t("plugins.simulatorOnComputer")}</Text>
-          <Pressable
-            accessibilityRole="button"
-            style={styles.button}
-            onPress={() => {
-              onClose();
-              push({
-                pathname: "/devices/desktop/[deviceId]",
-                params: { deviceId },
-              });
-            }}
-          >
-            <Text style={styles.body}>
-              {t("interaction.pluginSetup.remoteDesktop")}
-            </Text>
-          </Pressable>
+          <Text style={styles.hint}>{t("plugins.unsupportedOperation")}</Text>
           <Pressable
             accessibilityRole="button"
             style={styles.button}
@@ -126,7 +109,6 @@ export function PluginNativeIntent({
         </View>
       </SheetModal>
     );
-  if (intent.kind !== "preview") return null;
   return (
     <Modal visible animationType="slide" onRequestClose={onClose}>
       <View
@@ -198,9 +180,9 @@ const makeStyles = (colors: ThemeColors) =>
     },
     hint: {
       fontSize: typeScale.footnote,
-      lineHeight: lineHeight.bodySmall,
+      lineHeight: lineHeight.caption,
       fontWeight: fontWeight.regular,
-      color: colors.textTertiary,
+      color: colors.textSecondary,
       padding: spacing.md,
     },
   });

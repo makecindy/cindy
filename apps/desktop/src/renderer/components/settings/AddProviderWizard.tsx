@@ -18,6 +18,9 @@ import { bindProviderPresetRuntime, providerEndpointBindings, bindProviderEndpoi
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import * as Dialog from '@radix-ui/react-dialog';
+import { useDialogExit } from '@/hooks/useDialogExit';
+import { WINDOW_DRAG_STYLE, WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 import { Check, Info, Plus, Search } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
@@ -112,6 +115,8 @@ function presetRuntimeBaseUrl(
   for (const [sourceAgent, endpoint] of Object.entries(edited)) {
     const source = preset.runtimes[sourceAgent as AgentKind];
     if (!source || !endpoint) continue;
+    // 默认地址相同的运行时指向同一服务(如本机 llama.cpp 的 Codex / Pi),未单独编辑时跟随已编辑的那个。
+    if (source.baseUrl === runtime.baseUrl) return endpoint.trim();
     const bindings = providerEndpointBindings(source.baseUrl, endpoint.trim());
     if (bindings && source.baseUrl.includes('{')) {
       return bindProviderEndpoint(runtime.baseUrl, bindings, endpoint.trim());
@@ -353,11 +358,16 @@ function hasRetainedBuiltinConnection(provider: ProviderView): boolean {
 export function AddProviderWizard({
   providers,
   entry,
-  onOpenCustomForm,
-  onClose,
-  onDone,
+  onOpenCustomForm: openCustomForm,
+  onClose: notifyClosed,
+  onDone: notifyDone,
 }: AddProviderWizardProps) {
   const { t, i18n } = useTranslation();
+  const dialog = useDialogExit();
+  const panelRef = useRef<HTMLDivElement>(null);
+  const onClose = useCallback(() => dialog.close(notifyClosed), [dialog.close, notifyClosed]);
+  const onDone = useCallback((id?: string) => dialog.close(() => notifyDone(id)), [dialog.close, notifyDone]);
+  const onOpenCustomForm = useCallback(() => dialog.close(openCustomForm), [dialog.close, openCustomForm]);
 
   // Native credentials alone do not mean this Cindy account has added the local
   // connection. Keep the slot occupied when suspended or awaiting reconnection.
@@ -563,7 +573,8 @@ export function AddProviderWizard({
   const filteredLocalAdvanced = q
     ? localAdvancedPresets.filter((p) => p.name.toLowerCase().includes(q))
     : localAdvancedPresets;
-  const filteredLocalPresets = [...filteredLocalConnect, ...filteredLocalAdvanced].filter(p => p.id !== 'llamacpp');
+  // 目录里的 llamacpp 预设是「连接已有服务」(默认 8080);Cindy 托管的 llama.cpp 走下方单独卡片,两者互不影响。
+  const filteredLocalPresets = [...filteredLocalConnect, ...filteredLocalAdvanced];
 
   const ollamaAlreadyAdded = providers.some((p) => p.id === MANAGED_OLLAMA_PROVIDER_ID);
   const oauthChoiceIds = new Set(oauthChoices.map((p) => p.id));
@@ -669,10 +680,6 @@ export function AddProviderWizard({
 
   const pickPreset = useCallback(
     (preset: ProviderPreset, useApiKey = false) => {
-      if (preset.id === 'llamacpp') {
-        void connectLlamaCpp();
-        return;
-      }
       const oauth = providerPresetOAuth(preset.id);
       if (oauth && !useApiKey) {
         pickOauth({ ...buildUserProvider({
@@ -700,7 +707,7 @@ export function AddProviderWizard({
       setPresetBaseUrls({});
       setStep(2);
     },
-    [i18n.language, onDone, providers, pickOauth, connectLlamaCpp],
+    [i18n.language, onDone, providers, pickOauth],
   );
 
   const connectOllama = useCallback(async () => {
@@ -942,18 +949,6 @@ export function AddProviderWizard({
     if (loggingIn) cancelAuthorize();
     onClose();
   }, [loggingIn, cancelAuthorize, onClose]);
-
-  // Esc 关闭(本弹窗未用 Radix,需自行监听)。
-  // CJK 输入法组合期间的 Esc 是「取消候选词」,不是关闭命令(isComposing / 遗留
-  // keyCode 229),与仓库其他 CJK 输入场景同口径(PR #1102 review 第六轮)。
-  useEffect(() => {
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && !e.isComposing && e.keyCode !== 229) handleClose();
-    };
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
-  }, [handleClose]);
-
 
   // ── 预设:进入 Step 3 时自动拉取模型 ─────────────────────────────────────
   const startFetch = useCallback(async () => {
@@ -1455,15 +1450,29 @@ export function AddProviderWizard({
     (!presetNeedsApiKey || apiKey.trim().length > 0);
 
   return (
-    <div
-      className="modal-scrim fixed inset-0 z-[10000] flex items-center justify-center"
-    >
-      <div
-        className="modal-panel flex max-h-[min(640px,85vh)] w-[min(600px,calc(100vw-32px))] flex-col overflow-hidden"
+    <Dialog.Root open={dialog.open} onOpenChange={(open) => { if (!open) handleClose(); }}>
+      <Dialog.Portal>
+        <Dialog.Overlay className="modal-scrim fixed inset-0 z-[10000]" style={WINDOW_DRAG_STYLE} />
+      <Dialog.Content
+        ref={panelRef}
+        aria-describedby={undefined}
+        onPointerDownOutside={(event) => event.preventDefault()}
+        onOpenAutoFocus={(event) => {
+          dialog.onOpenAutoFocus();
+          event.preventDefault();
+          const input = panelRef.current?.querySelector<HTMLElement>('input:not([disabled]), textarea:not([disabled])');
+          (input ?? panelRef.current?.querySelector<HTMLElement>('button:not([disabled])'))?.focus();
+        }}
+        onCloseAutoFocus={dialog.onCloseAutoFocus}
+        onEscapeKeyDown={(event) => {
+          if (savingRef.current || event.isComposing || event.keyCode === 229) event.preventDefault();
+        }}
+        style={WINDOW_NO_DRAG_STYLE}
+        className="modal-panel fixed inset-0 z-[10000] m-auto flex h-fit max-h-[min(640px,85vh)] w-[min(600px,calc(100vw-32px))] flex-col overflow-hidden outline-none"
       >
         {/* 头部:标题居左 + 步骤指示居右,同一行(2026-07 定稿原型形态)。 */}
         <div className="flex items-center justify-between gap-4 px-4 pb-3 pt-4">
-          <h3
+          <Dialog.Title asChild><h3
             className="min-w-0 truncate text-16 font-medium"
             style={{ color: 'var(--settings-section-title)' }}
           >
@@ -1477,7 +1486,7 @@ export function AddProviderWizard({
                         : sel.provider.name,
                 })
               : t('settings.providers.wizard.title')}
-          </h3>
+          </h3></Dialog.Title>
           <div className="flex shrink-0 items-center gap-4">
             {stepLabels.map((label, i) => {
               const n = i + 1;
@@ -2244,7 +2253,8 @@ export function AddProviderWizard({
             )}
           </div>
         </div>
-      </div>
-    </div>
+      </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
   );
 }

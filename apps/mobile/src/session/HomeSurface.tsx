@@ -247,6 +247,7 @@ import { mapContentEqual } from '@/utils/valueEquality';
 import { homeRowPropsEqual } from './homeRowPropsEqual';
 import { useStableValue } from '@/utils/useStableValue';
 import { useMinuteNow } from '@/utils/useMinuteNow';
+import { automationGroupPreview } from '@/session/automationGroupPreview';
 import {
   getScheduleIndexInvalidationVersion,
   invalidateOfflineScheduleIndexFailureFor,
@@ -4232,9 +4233,10 @@ function HomeSessionRowInner({
   // (收起时块底线紧贴行底,展开时组头与子行之间保持连续无线,均与项目组语义一致)。
   const blockMode = asBlock && !!group;
   // 预览走共享 buildRemoteSessionCardPreview(已并入 #368 的 liveActivity),运行中会显示实时活动;
-  // 组行的预览位改为任务态摘要(需关注数 / 执行中 / 共 N 次运行),对齐桌面版组头 meta。
+  // 组行的预览位改为任务态摘要(需关注数 / 执行中 / 已停止 / 下次运行倒计时 / 共 N 次运行),
+  // 由 AutomationGroupPreviewText 叶子组件渲染。
   const preview = group
-    ? automationGroupPreview(item, group.sessionCount, t)
+    ? null
     : buildRemoteSessionCardPreview(
         loadedMessagePreview === undefined || loadedMessagePreview === item.messagePreview
           ? item
@@ -4243,7 +4245,7 @@ function HomeSessionRowInner({
       );
   // 零消息会话没有摘要。此时不要保留双行列表的空白第二行；定时任务与置顶
   // 标记仍占用右下状态槽，因此继续使用双行布局。共享身份位于标题左侧。
-  const showPreviewLine = !!preview?.trim() || showSchedule || showPinned;
+  const showPreviewLine = !!group || !!preview?.trim() || showSchedule || showPinned;
   // 组行点击语义对齐桌面版侧边栏:收起且有需关注内容(未读运行 / 待处理)时,点行直接打开
   // 该看的那条会话(共享层 primary:运行中 > 有未读 > 最新);想展开点行首箭头(独立热区)。
   // 无需关注内容或已展开时,点行仍是展开 / 收起。
@@ -4408,14 +4410,23 @@ function HomeSessionRowInner({
           </View>
           {showPreviewLine ? (
             <View style={styles.sessionPreviewRow}>
-              <Text
-                ellipsizeMode="tail"
-                numberOfLines={1}
-                style={styles.sessionPreview}
-                testID={`home.sessionRowPreview.${item.session.id}`}
-              >
-                {preview}
-              </Text>
+              {group ? (
+                <AutomationGroupPreviewText
+                  item={item}
+                  sessionCount={group.sessionCount}
+                  style={styles.sessionPreview}
+                  testID={`home.sessionRowPreview.${item.session.id}`}
+                />
+              ) : (
+                <Text
+                  ellipsizeMode="tail"
+                  numberOfLines={1}
+                  style={styles.sessionPreview}
+                  testID={`home.sessionRowPreview.${item.session.id}`}
+                >
+                  {preview}
+                </Text>
+              )}
               {showSchedule || showPinned ? (
                 // 组行与单次自动化会话行同款标记:Timer 放右下(时间下方的尾部图标位),
                 // 行首保留正常的会话状态图标(primary 运行的 vendor / 运行态)。
@@ -4583,18 +4594,24 @@ function AutomationGroupChildren({
   );
 }
 
-/** 自动化组行的预览位文案:需关注数 > 执行中 > 共 N 次运行(对齐桌面版组头 meta 的优先级)。 */
-function automationGroupPreview(item: RemoteSessionListItem, sessionCount: number, t: TFunction): string {
-  const unread = item.scheduleInfo?.unreadCount ?? 0;
-  const waiting = item.pendingInteractionCount;
-  if (unread > 0 || waiting > 0) {
-    return [
-      unread > 0 ? t('devices.list.preview.needAttention', { count: unread }) : null,
-      waiting > 0 ? t('devices.list.preview.waiting', { count: waiting }) : null,
-    ].filter(Boolean).join(' · ');
-  }
-  if (item.scheduleInfo?.running) return t('devices.list.preview.automationRunning');
-  return t('devices.list.preview.totalRuns', { count: sessionCount });
+/**
+ * 自动化组行预览位(文案规则见 automationGroupPreview)。与 SessionRelativeTime 同理下沉为
+ * 叶子组件订阅分钟心跳:倒计时每分钟前进,行主体不跟着重渲染。now 取渲染时刻,
+ * 心跳只负责触发,避免模块级快照在无订阅期间过期。
+ */
+function AutomationGroupPreviewText({ item, sessionCount, style, testID }: {
+  item: RemoteSessionListItem;
+  sessionCount: number;
+  style: StyleProp<TextStyle>;
+  testID: string;
+}) {
+  const { t } = useTranslation();
+  useMinuteNow();
+  return (
+    <Text ellipsizeMode="tail" numberOfLines={1} style={style} testID={testID}>
+      {automationGroupPreview(item, sessionCount, t, Date.now())}
+    </Text>
+  );
 }
 
 // 状态提醒点已移到行右侧(替代时间位,与桌面一致),行首图标只保留 vendor 标识 +

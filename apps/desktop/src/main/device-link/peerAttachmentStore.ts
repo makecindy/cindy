@@ -162,11 +162,15 @@ export async function handlePeerAttachment(peer: string, r: Record<string, unkno
   });
 }
 
-async function copyPeerAttachmentBytes(ref: PeerAttachment, destination: string) {
+async function copyPeerAttachmentBytes(
+  ref: PeerAttachment,
+  destination: string,
+  peer: string | undefined,
+  consume: boolean,
+) {
   const owner = captureDataOwnerBroadcastScope();
   const root = ownerScopedUserDataPath('peer-attachment-inbox');
   const file = path.join(root, ref.ticket);
-  const peer = getDeviceLinkInvokeContext()?.controllerDeviceId;
   if (!peer || !validTicket(ref.ticket)) throw new Error('FILE_PEER_DENIED');
   const entry = JSON.parse(await fs.readFile(file + '.json', 'utf8')) as Entry;
   if (
@@ -178,18 +182,61 @@ async function copyPeerAttachmentBytes(ref: PeerAttachment, destination: string)
   )
     throw new Error('FILE_PEER_DENIED');
   if (!isDataOwnerBroadcastScopeCurrent(owner)) throw new Error('FILE_PEER_CANCELLED');
-  await fs.copyFile(file, destination);
+  if (consume) await fs.rename(file, destination).catch(() => fs.copyFile(file, destination));
+  else await fs.copyFile(file, destination);
   const valid =
     (await fs.stat(destination)).size === ref.size && (await digest(destination)) === ref.sha256;
   if (!isDataOwnerBroadcastScopeCurrent(owner) || !valid) {
     await fs.rm(destination, { force: true });
     throw new Error('FILE_PEER_INTEGRITY');
   }
+  if (consume) {
+    await fs.rm(file, { force: true });
+    await fs.rm(file + '.json', { force: true });
+  }
 }
 
 export async function copyPeerAttachment(ref: PeerAttachment, destination: string) {
+  return materializePeerAttachment(
+    ref,
+    destination,
+    getDeviceLinkInvokeContext()?.controllerDeviceId,
+    false,
+  );
+}
+
+/**
+ * Moves an attachment this device received from `peer` out of the inbox. Used when this device
+ * asked the peer to push the bytes (directory download), so the inbox copy is not kept for days.
+ */
+export async function takePeerAttachment(peer: string, ref: PeerAttachment, destination: string) {
+  const root = ownerScopedUserDataPath('peer-attachment-inbox');
+  return queue(`${root}:${ref.ticket}`, () =>
+    materializePeerAttachment(ref, destination, peer, true),
+  );
+}
+
+/** Drops an attachment `peer` pushed to this device that will never be taken (failed download). */
+export async function discardPeerAttachment(peer: string, ref: PeerAttachment) {
+  if (!validTicket(ref.ticket)) return;
+  const root = ownerScopedUserDataPath('peer-attachment-inbox');
+  const file = path.join(root, ref.ticket);
+  await queue(`${root}:${ref.ticket}`, async () => {
+    const entry = JSON.parse(await fs.readFile(file + '.json', 'utf8')) as Entry;
+    if (entry.peer !== peer || entry.sha256 !== ref.sha256) return;
+    await fs.rm(file, { force: true });
+    await fs.rm(file + '.json', { force: true });
+  }).catch(() => {});
+}
+
+async function materializePeerAttachment(
+  ref: PeerAttachment,
+  destination: string,
+  peer: string | undefined,
+  consume: boolean,
+) {
   try {
-    await copyPeerAttachmentBytes(ref, destination);
+    await copyPeerAttachmentBytes(ref, destination, peer, consume);
   } catch (error) {
     await fs.rm(destination, { force: true }).catch(() => {});
     // Filesystem errors include owner-private paths; never propagate them to remote UI.

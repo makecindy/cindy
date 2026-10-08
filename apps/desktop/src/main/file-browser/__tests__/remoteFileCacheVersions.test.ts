@@ -252,3 +252,70 @@ it('does not start work for an already cancelled caller', async () => {
   );
   expect(executor).not.toHaveBeenCalled();
 });
+
+it.each(['first', 'joined'] as const)(
+  'shares and replays progress, then removes the cancelled %s consumer',
+  async (cancelled) => {
+    const started = barrier();
+    const release = barrier();
+    const firstAbort = new AbortController();
+    const joinedAbort = new AbortController();
+    const firstProgress = vi.fn();
+    const joinedProgress = vi.fn();
+    let report!: import('../remote-file-cache').FetchProgressFn;
+    const executor = vi.fn(async (dest: string, progress: typeof report) => {
+      report = progress;
+      report(1, 3, 'upload');
+      started.resolve();
+      await release.promise;
+      await fs.writeFile(dest, 'new');
+      report(3, 3, 'download');
+    });
+    const first = fetchRemoteFileToCache(id, executor, firstProgress, firstAbort.signal);
+    await started.promise;
+    const joined = fetchRemoteFileToCache(id, executor, joinedProgress, joinedAbort.signal);
+    expect(joinedProgress).toHaveBeenCalledWith(1, 3, 'upload');
+    report(2, 3, 'download');
+    expect(firstProgress).toHaveBeenLastCalledWith(2, 3, 'download');
+    expect(joinedProgress).toHaveBeenLastCalledWith(2, 3, 'download');
+    const cancelledProgress = cancelled === 'first' ? firstProgress : joinedProgress;
+    const survivorProgress = cancelled === 'first' ? joinedProgress : firstProgress;
+    (cancelled === 'first' ? firstAbort : joinedAbort).abort();
+    await expect(cancelled === 'first' ? first : joined).rejects.toThrow('FILE_PEER_CANCELLED');
+    const callsBefore = cancelledProgress.mock.calls.length;
+    release.resolve();
+    await (cancelled === 'first' ? joined : first);
+    expect(executor).toHaveBeenCalledOnce();
+    expect(cancelledProgress).toHaveBeenCalledTimes(callsBefore);
+    expect(survivorProgress).toHaveBeenLastCalledWith(3, 3, 'download');
+    const survivorCalls = survivorProgress.mock.calls.length;
+    report(3, 3, 'download');
+    expect(survivorProgress).toHaveBeenCalledTimes(survivorCalls);
+  },
+);
+
+it('does not let a failing progress observer break another consumer or the transfer', async () => {
+  const started = barrier();
+  const release = barrier();
+  const observer = vi.fn(() => {
+    throw new Error('window closed');
+  });
+  const executor = vi.fn(
+    async (dest: string, report: import('../remote-file-cache').FetchProgressFn) => {
+      report(1, 3);
+      started.resolve();
+      await release.promise;
+      await fs.writeFile(dest, 'new');
+      report(3, 3);
+    },
+  );
+  const first = fetchRemoteFileToCache(id, executor, observer);
+  await started.promise;
+  const progress = vi.fn();
+  const joined = fetchRemoteFileToCache(id, executor, progress);
+  release.resolve();
+  const [a, b] = await Promise.all([first, joined]);
+  expect(a).toBe(b);
+  expect(executor).toHaveBeenCalledOnce();
+  expect(progress).toHaveBeenLastCalledWith(3, 3);
+});

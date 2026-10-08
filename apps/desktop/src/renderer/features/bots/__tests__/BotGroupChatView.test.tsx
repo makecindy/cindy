@@ -427,6 +427,17 @@ describe('BotGroupChatView', () => {
     expect(document.querySelector('[data-controlled-banner-chip]')).toBeNull();
   });
 
+  it('renders a joined member as a localized system line without message actions', async () => {
+    mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ messages: [msg({ id: 'join', kind: 'notice',
+      authorKind: 'system', authorName: 'Taylor', authorBotId: null, noticeCode: 'member-joined', content: 'Fallback text' })] }) });
+    renderView();
+    const notice = await screen.findByText('bots.groupChat.notice.memberJoined:Taylor');
+    expect(notice.tagName).toBe('P');
+    expect(notice.closest('article')).toBeNull();
+    expect(screen.queryByText('Fallback text')).toBeNull();
+    expect(mocks.sendBotGroupMessage).not.toHaveBeenCalled();
+  });
+
   it('renders user, teammate, notice and round-end rows with the header lockup', async () => {
     renderView();
     expect(await screen.findByText('周六 8:10 有票')).toBeTruthy();

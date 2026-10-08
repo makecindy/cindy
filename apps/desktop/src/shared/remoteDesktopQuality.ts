@@ -11,8 +11,6 @@ export interface DesktopVideoProfile {
    * collapse the estimate to ~100 kbps and pin the encoder to a low resolution. */
   minBitrateKbps: number;
   startBitrateKbps: number;
-  /** Upper bound on the viewer's requested frame rate. */
-  maxFramerate: 30 | 60;
   /** What WebRTC gives up first while the screen is changing. */
   degradation: 'maintain-framerate' | 'maintain-resolution';
   /** While the screen is (nearly) still, keep full resolution regardless of tier:
@@ -36,7 +34,6 @@ const PROFILES: Record<RemoteDesktopVideoSettings['quality'], DesktopVideoProfil
     maxBitrate: 20_000_000,
     minBitrateKbps: 1_000,
     startBitrateKbps: 4_000,
-    maxFramerate: 60,
     degradation: 'maintain-framerate',
     sharpWhenStill: true,
     contentHint: '',
@@ -50,7 +47,6 @@ const PROFILES: Record<RemoteDesktopVideoSettings['quality'], DesktopVideoProfil
     maxBitrate: 2_000_000,
     minBitrateKbps: 500,
     startBitrateKbps: 1_500,
-    maxFramerate: 30,
     degradation: 'maintain-framerate',
     sharpWhenStill: true,
     contentHint: '',
@@ -64,7 +60,6 @@ const PROFILES: Record<RemoteDesktopVideoSettings['quality'], DesktopVideoProfil
     maxBitrate: 20_000_000,
     minBitrateKbps: 1_000,
     startBitrateKbps: 4_000,
-    maxFramerate: 60,
     degradation: 'maintain-resolution',
     sharpWhenStill: false,
     contentHint: 'text',
@@ -79,9 +74,30 @@ export function desktopVideoProfile(settings?: RemoteDesktopVideoSettings): Desk
   return PROFILES[settings?.quality ?? 'auto'];
 }
 
-/** Effective capture/encode frame rate for the requested settings. */
+/** Capture/encode frame rate. Quality tiers never override the viewer's choice. */
 export function desktopVideoFramerate(settings?: RemoteDesktopVideoSettings): 30 | 60 {
-  return Math.min(settings?.fps ?? 30, desktopVideoProfile(settings).maxFramerate) as 30 | 60;
+  return settings?.fps ?? 30;
+}
+
+/** Live encoder ceilings. A background viewer (phone picture-in-picture) only
+ * shows a small window, so it gets the saver tier at 30 fps until it returns to
+ * fullscreen; the viewer's own choice is untouched and applies again once it is back. */
+export function desktopEncoderLimits(
+  settings: RemoteDesktopVideoSettings,
+  background: boolean,
+): Pick<DesktopVideoProfile, 'maxBitrate' | 'degradation' | 'sharpWhenStill'> & {
+  maxFramerate: 30 | 60;
+} {
+  const tier: RemoteDesktopVideoSettings = background
+    ? { ...settings, quality: 'saver' }
+    : settings;
+  const { maxBitrate, degradation, sharpWhenStill } = desktopVideoProfile(tier);
+  return {
+    maxBitrate,
+    degradation,
+    sharpWhenStill,
+    maxFramerate: background ? 30 : desktopVideoFramerate(settings),
+  };
 }
 
 const BITRATE_HINTS = ['x-google-start-bitrate', 'x-google-min-bitrate', 'x-google-max-bitrate'];

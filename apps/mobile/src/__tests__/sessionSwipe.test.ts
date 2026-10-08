@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { i18n } from '@/i18n';
 import {
@@ -472,5 +474,31 @@ describe('swipeActionPatch', () => {
 
   it('delete 是软删标记', () => {
     expect(swipeActionPatch('delete')).toEqual({ status: 'deleted' });
+  });
+});
+
+describe('会话元数据写的设备解析(首页与会话页同口径)', () => {
+  const read = (path: string) => readFileSync(resolve(process.cwd(), path), 'utf8').replace(/\r\n/g, '\n');
+
+  it('会话页乐观 patch / 对账 / 回滚落物理 shard,出网沿用路由设备', () => {
+    const source = read('app/sessions/[sessionId].tsx');
+    const start = source.indexOf('const patchSessionMeta = useCallback((');
+    const block = source.slice(start, source.indexOf('const previewRewindAtMessage', start));
+    expect(block).toContain('resolveSessionWriteDevices(sessionId, session, deviceId)');
+    expect(block).toContain('remoteSessionStore.applySessionPatch(shardId, sessionId, patch as Partial<RemoteSession>);');
+    expect(block).toContain('remoteSessionStore.upsertDeviceSession(shardId, shardName, session);');
+    expect(block).toContain('remoteSessionStore.requestReseed(shardId);');
+    expect(block).toMatch(/invoke<RemoteSession>\(\s*rpcDeviceId,/);
+    // 路由 id 不再直接当 shard 用。
+    expect(block).not.toMatch(/applySessionPatch\(\s*deviceId,/);
+    expect(block).not.toContain('upsertDeviceSession(deviceId,');
+    // 整行回滚前先释放本笔在途登记,否则会被 upsertDeviceSession 的在途保护挡掉。
+    expect(block.indexOf('releasePending();')).toBeLessThan(block.indexOf('upsertDeviceSession(shardId'));
+  });
+
+  it('首页 / 设备页写路径共用同一解析,回滚同样先释放在途登记', () => {
+    const source = read('src/session/useSessionListActions.ts');
+    expect(source).toContain('resolveSessionWriteDevices(session.id, session)');
+    expect(source.indexOf('releasePending();')).toBeLessThan(source.indexOf('upsertDeviceSession(shardId'));
   });
 });

@@ -94,6 +94,7 @@ export type PluginNativeIntent = {
   | { kind: "task"; taskId: string }
   | { kind: "preview"; url: string }
   | { kind: "schedule"; name: string; prompt: string; intervalMs?: number }
+  /** @deprecated Read compatibility for older hosts only; no longer produced. */
   | { kind: "simulator" }
   | { kind: "media"; path: string; mediaKind: "image" | "video" }
 );

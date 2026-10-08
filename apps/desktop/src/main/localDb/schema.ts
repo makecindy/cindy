@@ -231,6 +231,11 @@ export const sessions = sqliteTable(
      */
     remoteHostId: text('remote_host_id'),
     /**
+     * Agent 在同账号另一台电脑上运行时，那台电脑的设备 id(任务、项目文件与命令仍在本机)。
+     * NULL = Agent 在本机(或 SSH 远端，见 remote_host_id)。与 remote_host_id 互斥。
+     */
+    agentDeviceId: text('agent_device_id'),
+    /**
      * interrupted-turn-resume: 最近一次 turn 的启动时刻(unix ms)。与
      * lastTurnEndedAt 配对做「疑似中断」纯读判定(startedAt > endedAt),两个
      * 时间戳都是 append-only 覆盖写、**没有清除操作**——语义详见

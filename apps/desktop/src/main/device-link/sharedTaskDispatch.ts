@@ -14,6 +14,16 @@ let readInteractionSession: ((requestId: string) => SharedTaskInteractionCapture
 export function setSharedTaskQueueReader(value: typeof readQueueItem): void { readQueueItem = value; }
 export function setSharedTaskInteractionReader(value: typeof readInteractionSession): void { readInteractionSession = value; }
 export function setSharedTaskDispatchHost(value: SharedTaskHost | null): void { host = value; }
+/** 本机当前是否在共享这个任务(共享未关闭)。宿主不可用时访客本就无法操作,按未共享处理。 */
+export function isSessionSharedTaskActive(sessionId: string): boolean {
+  const current = host;
+  if (!current) return false;
+  try {
+    return current.activeSharedTaskIds().some((id) => current.detail(id)?.sessionId === sessionId);
+  } catch {
+    return false;
+  }
+}
 export function captureSharedTaskPeer(source: string): SharedTaskPeerCapture | null {
   return host?.capturePeer(source) ?? null;
 }

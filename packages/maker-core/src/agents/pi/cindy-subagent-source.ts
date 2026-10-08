@@ -385,6 +385,16 @@ function deriveRouteProxySessionToken(task) {
     .digest('base64url');
 }
 
+// 受邀者(另一个账号)的托管会话(CINDY_PI_HOSTED.guest)：子代理同样不读本机用户的说明文件与技能。
+function hostedGuestSession() {
+  try {
+    const raw = process.env.CINDY_PI_HOSTED;
+    return !!raw && JSON.parse(raw).guest === true;
+  } catch (err) {
+    return false;
+  }
+}
+
 function readDepth() {
   const raw = process.env[DEPTH_ENV];
   const parsed = typeof raw === 'string' ? Number.parseInt(raw, 10) : 0;
@@ -861,6 +871,7 @@ async function launchDurableRun(binary, tasks, runtime, taskId, mode, context, d
       };
     }),
   };
+  if (hostedGuestSession()) config.guestIsolation = true;
   const configPath = join(runDir, 'config.json');
   const durableRunnerFile = join(runDir, 'runner.cjs');
   try {

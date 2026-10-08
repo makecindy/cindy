@@ -100,6 +100,8 @@ export interface Manifest {
 // ── Constants ──────────────────────────────────────────────────────────────
 
 const REQUEST_TIMEOUT_MS = 30_000;
+// Metadata only: bound accumulation even when a server keeps streaming a 200.
+const MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
 
 // ── State ──────────────────────────────────────────────────────────────────
 
@@ -179,30 +181,50 @@ export async function fetchManifest(
     try {
       const request = net.request(url);
       let body = '';
+      let bodyBytes = 0;
       let settled = false;
-      let timeout: ReturnType<typeof setTimeout> | undefined;
+      let aborted = false;
 
       const finish = (value: Manifest | null, abortRequest = false): void => {
-        if (settled) return;
-        settled = true;
-        if (timeout) clearTimeout(timeout);
-        signal?.removeEventListener('abort', onAbort);
-        if (abortRequest) request.abort();
-        resolve(value);
+        if (!settled) {
+          settled = true;
+          if (timeout) clearTimeout(timeout);
+          signal?.removeEventListener('abort', onAbort);
+          resolve(value);
+        }
+        // Promise settlement must not prevent late response/error cleanup.
+        if (abortRequest && !aborted) {
+          aborted = true;
+          request.abort();
+        }
       };
       const onAbort = (): void => finish(null, true);
+      const timeout = setTimeout(() => finish(null, true), timeoutMs ?? REQUEST_TIMEOUT_MS);
       signal?.addEventListener('abort', onAbort, { once: true });
 
-      timeout = setTimeout(() => finish(null, true), timeoutMs ?? REQUEST_TIMEOUT_MS);
-
       request.on('response', (response) => {
+        // Keep an error listener even on responses discarded at the headers.
+        response.on('error', () => finish(null, true));
+        response.on('aborted', () => finish(null, true));
+        if (settled) {
+          finish(null, true);
+          return;
+        }
         if (response.statusCode !== 200) {
           log.info('HTTP %d for %s', response.statusCode, url);
-          finish(null);
+          // Unread Electron responses retain the native loader and data pipe.
+          finish(null, true);
           return;
         }
 
         response.on('data', (chunk) => {
+          if (settled) return;
+          bodyBytes += Buffer.byteLength(chunk);
+          if (bodyBytes > MAX_RESPONSE_BYTES) {
+            body = '';
+            finish(null, true);
+            return;
+          }
           body += chunk.toString();
         });
         response.on('end', () => {
@@ -226,12 +248,16 @@ export async function fetchManifest(
             finish(null);
           }
         });
-        response.on('error', () => finish(null));
       });
 
-      request.on('error', () => finish(null));
+      request.on('error', () => finish(null, true));
 
       try {
+        // A signal can be cancelled while the request is being constructed.
+        if (signal?.aborted) {
+          onAbort();
+          return;
+        }
         request.end();
       } catch {
         finish(null, true);
@@ -310,7 +336,6 @@ export function probeBetaManifest(timeoutMs = 8_000): Promise<boolean> {
       const request = net.request(url);
       let body = '';
       let settled = false;
-      let timeout: ReturnType<typeof setTimeout> | undefined;
       const finish = (value: boolean, abortRequest = false): void => {
         if (settled) return;
         settled = true;
@@ -318,7 +343,7 @@ export function probeBetaManifest(timeoutMs = 8_000): Promise<boolean> {
         if (abortRequest) request.abort();
         resolve(value);
       };
-      timeout = setTimeout(() => finish(false, true), timeoutMs);
+      const timeout = setTimeout(() => finish(false, true), timeoutMs);
       request.on('response', (response) => {
         if (response.statusCode !== 200) {
           response.on('data', () => {});

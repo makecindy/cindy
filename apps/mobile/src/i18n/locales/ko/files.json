@@ -96,6 +96,8 @@
     "downloadFailed": "다운로드에 실패했습니다",
     "fetchingVideo": "컴퓨터에서 동영상을 가져오는 중…",
     "fetchingAudio": "컴퓨터에서 오디오를 가져오는 중…",
+    "videoBuffering": "버퍼링 중…",
+    "videoBufferingPercent": "버퍼링 중 {{percent}}%",
     "fetchAvFailed": "가져오기에 실패했습니다: {{detail}}",
     "fetchPdfFailed": "PDF 가져오기에 실패했습니다: {{detail}}",
     "fetchingPdf": "컴퓨터에서 PDF를 가져오는 중…",

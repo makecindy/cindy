@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   DESKTOP_MOTION,
+  desktopEncoderLimits,
   desktopFrameChange,
   desktopVideoFramerate,
   desktopVideoProfile,
@@ -25,19 +26,38 @@ const offer = [
 ].join('\r\n');
 
 describe('remote desktop quality tiers', () => {
-  it('lets the host own each tier, including the frame-rate ceiling', () => {
+  it('lets the host own each tier while the viewer owns the frame rate', () => {
     expect(desktopVideoProfile().degradation).toBe('maintain-framerate');
     expect(desktopVideoProfile({ fps: 60, quality: 'hd', audio: false })).toMatchObject({
       degradation: 'maintain-resolution',
       sharpWhenStill: false,
     });
-    expect(desktopVideoFramerate({ fps: 60, quality: 'saver', audio: false })).toBe(30);
+    expect(desktopVideoFramerate({ fps: 60, quality: 'saver', audio: false })).toBe(60);
     expect(desktopVideoFramerate({ fps: 60, quality: 'auto', audio: false })).toBe(60);
     for (const quality of ['auto', 'saver', 'hd'] as const) {
       const p = desktopVideoProfile({ fps: 30, quality, audio: false });
       expect(p.minBitrateKbps).toBeLessThanOrEqual(p.startBitrateKbps);
       expect(p.startBitrateKbps * 1000).toBeLessThanOrEqual(p.maxBitrate);
     }
+  });
+
+  it('caps a background viewer at the saver tier without changing its own choice', () => {
+    const hd = { fps: 60, quality: 'hd', audio: true } as const;
+    expect(desktopEncoderLimits(hd, false)).toEqual({
+      maxBitrate: 20_000_000,
+      maxFramerate: 60,
+      degradation: 'maintain-resolution',
+      sharpWhenStill: false,
+    });
+    expect(desktopEncoderLimits(hd, true)).toEqual({
+      maxBitrate: 2_000_000,
+      maxFramerate: 30,
+      degradation: 'maintain-framerate',
+      sharpWhenStill: true,
+    });
+    expect(hd.quality).toBe('hd');
+    const saver = { fps: 30, quality: 'saver', audio: false } as const;
+    expect(desktopEncoderLimits(saver, true)).toEqual(desktopEncoderLimits(saver, false));
   });
 
   it('adds bandwidth hints to every video media codec only', () => {

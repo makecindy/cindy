@@ -1298,7 +1298,7 @@ apps/mobile/src/
 - media lightbox。已完成首版:HTTP/data image 可全屏预览,`xdt-*://` 打开详情后自动取件,失败显示可重试占位和原始 URL。
 - tool payload full-screen。已完成首版:tool_result、媒体 URL、文件路径/文本预览、diff 全量内容统一走 `MessagePayloadModal`。
 - diff viewer。已完成移动端结构化版:全屏分段展示完整 Edit / Write / MultiEdit payload,每段保留旧内容 / 新内容两栏横向对照;后续再补桌面同级 line-level context folding 和更细的语法增强。
-- 附件上传:已完成真实发送链路——手机端输入被控电脑上的文件路径,通过被控端 `fs:stat-path` 校验为文件后,构造桌面兼容队列项并随消息发送。手机本机文件已接 `expo-document-picker` + presign-put / OSS PUT / `cindy-oss-attach://` 链路;图片附件现在会写入 `persistedContent.images[]` / `chatMessage.images`,非图片文件写入 `persistedContent.files[]` / `chatMessage.files`,顶层 `files[]` 仍保留全部附件供被控端 `materializeQueuedOssAttachments` 一次性物化和去重。photo/library/share sheet 作为更好的原生入口仍留后续。
+- 附件上传:已完成真实发送链路——手机端输入被控电脑上的文件路径,通过被控端 `fs:stat-path` 校验为文件后,构造桌面兼容队列项并随消息发送。手机本机文件已接 `expo-document-picker` + presign-put / OSS PUT / `cindy-oss-attach://` 链路;图片附件现在会写入 `persistedContent.images[]` / `chatMessage.images`,非图片文件写入 `persistedContent.files[]` / `chatMessage.files`,顶层 `files[]` 仍保留全部附件供被控端 `materializeQueuedOssAttachmentsDeferred` 一次性物化和去重。photo/library/share sheet 作为更好的原生入口仍留后续。
 
 验收:
 
