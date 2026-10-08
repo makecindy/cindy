@@ -69,7 +69,7 @@ the whole host application: title bar, navigation, messages, tool-pane chrome,
 settings and other host pages share continuous viewport-aligned artwork. This
 opt-in setting supersedes the CINDY sidebar-only backdrop treatment while active;
 disabling it restores the original theme without modifying theme files or tokens.
-Use a theme-surface veil, never a fixed black overlay in Light mode. Image opacity
+Blend wallpaper with the theme surface, never a fixed black overlay in Light mode. Image opacity
 must not affect text or icons. Elevated controls, menus, dialogs and embedded web
 or editor content keep their readable surfaces. Composer scroll masking must
 align with the same wallpaper instead of introducing an opaque footer rectangle.
@@ -78,10 +78,11 @@ Verify actual Light/Dark screenshots across host pages and the expanded tool pan
 
 The built-in wallpaper catalog contains only Window Companion, Future Atelier and Dream
 Wander, plus None to restore the theme canvas (user decision, 2026-10-01).
-Custom wallpaper is available through Choose image, Replace image and Remove image
-in the same section (user addition, 2026-10-01). Accept local PNG/JPEG/WebP up to
+Custom wallpaper is available through Choose Wallpaper, Replace Wallpaper and Remove Wallpaper
+in the same section (user addition, 2026-10-01; video support, 2026-10-05). Accept local PNG/JPEG/WebP up to
 20 MB and 40 megapixels, store a metadata-free static image up to 3840 pixels
-in the managed media store. Wallpaper selection and the custom image reference
+in the managed media store. Also accept local MP4 videos up to 100 MB, preserving their bytes;
+H.264 is recommended for playback compatibility. Wallpaper selection and the custom media reference
 are shared within the Desktop profile, just like theme preferences (user decision,
 2026-10-02). Import, replacement, removal and recycling are client-wide as well:
 no account database, account-bound operation guard or pre-release owner migration.
@@ -90,9 +91,36 @@ switching accounts (or signing out) keeps the same wallpaper. Font-only utility 
 custom media URLs.
 Detached sidebar and plugin-panel host chrome use the same wallpaper provider;
 embedded plugin webviews retain their own surfaces and permission boundary.
-Cancellation and import failures retain the existing image. Switching to a built-in
-or None keeps the imported image available; Remove image forgets it. Custom imagery
-shares the continuous cover-fit canvas and readability veil; no dynamic toggle.
+Cancellation and import failures retain the existing media. Switching to a built-in
+or None keeps the imported media available; Remove Wallpaper forgets it. Custom imagery
+shares the continuous cover-fit canvas and readability veil. Custom MP4 exposes the existing
+Static / Dynamic choice: Static and reduced motion show a paused frame; Dynamic loops silently
+and pauses when hidden/minimized. Playback failure releases the decoder, leaves the theme surface
+visible and shows an actionable error in wallpaper settings. The custom video tile uses a film icon
+instead of opening a second decoder for a thumbnail.
+Wallpaper Visibility ranges from 0% (hidden) to 100% (fully visible), in 1% steps
+(user decision, 2026-10-05). Static images use the theme-surface veil with opacity equal to
+100% minus visibility. Video uses visibility directly as the video element's opacity over
+an opaque theme-surface backing, without a separate translucent veil; this avoids the
+observed Windows HDR brightness shift when P3 content changes the output composition.
+The video wrapper's opacity is reserved for loading/exit crossfades. Never reduce text
+or control opacity. Release video playback at 0%. Blend-mode controls remain out of scope.
+Optional Wallpaper Blur (user addition, 2026-10-06) ranges from 0 (off, default) to 20
+in whole steps, applying a CSS-pixel radius only to the wallpaper image/video. No UI,
+theme backing, or text is blurred; video opacity remains on the video itself. At zero,
+retain the existing filter-free rendering path. Overscan the artwork by three radii
+and clip the video at the viewport to avoid transparent edges; static and video crops
+must match. For blurred static scenes, reuse the moving-scene message fade instead
+of repainting a sharp wallpaper behind the composer. Persist only explicit overrides;
+Reset removes the blur override. Reuse the settings Slider with a localized accessible
+label and hint, disable it for None, and explain the additional GPU cost for video.
+Dragging previews blur locally; only a committed pointer/keyboard value is saved and
+broadcast. Cancelled gestures or leaving settings discard the preview.
+Existing preferences without an explicit visibility override keep the previous Light/Dark veil
+mapping and display its equivalent visibility. The unchanged soft default is 37% visible in
+Light and 27% in Dark. Adjusting the slider saves literal visibility, shared across themes;
+Reset removes that override and restores the theme-dependent default. Do not rewrite old
+preferences just because they were read or a theme changed.
 Remove the previous arrow, standalone portrait, gradient and paper
 options and assets. Retired saved selections normalize to None; unrelated theme
 and font preferences remain unchanged. All three scenes use the same cover fit,

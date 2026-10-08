@@ -25,6 +25,7 @@
  * Renderer 可调用。它由业务 dispatch 拦截,绝不放行通用 UI / shell IPC。
  */
 import { FILE_PEER_CHANNEL } from './filePeer.js';
+import { REMOTE_AGENT_CHANNEL } from './remoteAgent.js';
 import { TASK_MIGRATION_CHANNEL } from './taskMigration.js';
 import { SESSION_ACTIVITY_CHANNEL, SESSION_SYNC_CHANNEL } from './topics.js';
 import { REMOTE_DESKTOP_INVOKE_MS } from './remoteDesktopIce.js';
@@ -182,6 +183,7 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   'maker:input:resume',
   'maker:input:retry-last-error',
   'maker:input:clear-error',
+  'maker:input:cancel-usage-limit-wait',
   'maker:input:remove',
   'maker:input:update-text',
   // 整条内容替换(文本+附件),手机端排队消息复用 composer 编辑;老被控端无 handler →
@@ -259,6 +261,9 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   // 模型供应商目录(只读):远程会话的模型选择器据此 1:1 镜像被控端的「供应商+模型」结构。
   // 被控端 dispatch 在返回前剥离 routing 等执行字段(见 device-link/dispatch.ts),只回显示用字段。
   'maker:provider:list',
+  // 供应商分享(只读):被控电脑收到的、别人分享给它的供应商目录(经被控电脑代读，手机读不到
+  // 另一个账号的电脑)。只回显示用字段，供手机模型列表的远程供应商区域使用。
+  'maker:provider-share:received-catalogs', // PROVIDER_SHARE_RECEIVED_CATALOGS_CHANNEL
   // Git safety 设置(只读):远程 Codex Rewind 入口必须按被控端是否会创建 safety snapshot
   // 决定显隐。SET/RESET 不放行,控制端不能改被控端全局偏好。
   'maker:git-safety:get',
@@ -330,6 +335,10 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   DL_MEDIA_FETCH_CHANNEL,
   FILE_PEER_CHANNEL,
   TASK_MIGRATION_CHANNEL,
+  // 远程 Agent(被控端 dispatch 拦截执行，不落 ipcMain handler)：在被控端用它自己的登录与
+  // 供应商运行 Agent，文件、命令与 Cindy 工具回到控制端执行。准入同 fs:list-dir 的论证：
+  // 同账号 + 被控端显式打开远程控制时，控制端本就能驱动被控端的 Agent；不进共享任务白名单。
+  REMOTE_AGENT_CHANNEL,
   // 出方向语音转写(被控端 dispatch 拦截执行,不落 ipcMain handler;复用被控端 ASR 配置)。
   DL_VOICE_TRANSCRIBE_CHANNEL,
   // 临时 voice credential 同步(被控端 dispatch 拦截执行,不落 ipcMain handler;禁止泛化)。
@@ -513,6 +522,8 @@ const EXTENDED_INVOKE_CHANNELS: readonly string[] = [
   'maker:list-customizations',
   'maker:scan-at-resources',
   // —— 插件列表(只读)——
+  // Public composer metadata only; no paths, secrets, lifecycle writes or shared guests.
+  'ghosts:composer-list',
   'maker:plugins:list',
   // 单个插件的启停状态(只读)。与 maker:plugins:list 同类,差别只在它不跳过
   // HOSTED_ELSEWHERE 插件、且按 id 精确查。准入三条:handler 只读 settings + 项目
@@ -617,6 +628,7 @@ export const REMOTE_REVIEW_EXTERNAL_INPUT_CHANNELS: ReadonlySet<string> = new Se
   'maker:input:resume',
   'maker:input:retry-last-error',
   'maker:input:clear-error',
+  'maker:input:cancel-usage-limit-wait',
   'maker:input:remove',
   'maker:input:update-text',
   'maker:input:update-content',

@@ -74,6 +74,42 @@ describe('ordinary Session model selection', () => {
     const { resolve } = setup({ availableModels: () => [{ id: 'glm-5.3', efforts: [] }] });
     expect(await resolve({ agentKind: 'cc', model: 'glm-5.3', providerId: 'glm' })).toMatchObject({ effort: undefined });
   });
+  it('creates a task on an undeclared custom Anthropic Messages model when the draft carries medium (#5535)', async () => {
+    // 复现 #5535:自定义来源模型只有 id/name,草稿 effort 预填 medium,之前被当成 valid: none 拒绝。
+    const model = 'custom/step-5-preview';
+    const custom = {
+      availability: {
+        ...routing.availability,
+        'claude-code': [{
+          id: 'custom-anthropic', name: 'Custom Anthropic Messages', models: [model],
+          effortMetaByModel: { [model]: { efforts: [], defaultEffort: null, effortsUnknown: true } },
+          requiresExplicitRoute: true,
+        }],
+      },
+      resolveDefaultProviderIdForModel: (agent: string, id: string) =>
+        agent === 'claude-code' && id === model ? 'custom-anthropic' : null,
+    };
+    const { resolve } = setup({
+      availableModels: () => [{ id: model, efforts: [], defaultEffort: null, effortsUnknown: true }],
+      readProviderRouting: async () => custom,
+    });
+    await expect(resolve({ agentKind: 'cc', model, providerId: 'custom-anthropic', effort: 'medium' }))
+      .resolves.toEqual({ agentKind: 'claude-code', model, providerId: 'custom-anthropic', effort: 'medium', fastMode: false });
+    // 重启后草稿还在:同一选择重复提交仍可创建,模型与来源都不被替换。
+    await expect(resolve({ agentKind: 'cc', model, providerId: 'custom-anthropic', effort: 'medium' }))
+      .resolves.toMatchObject({ model, providerId: 'custom-anthropic', effort: 'medium' });
+    // 已声明的空档位(reasoning:false)仍拒绝显式 medium,不被「未知」放行误伤。
+    const { resolve: resolveDeclared } = setup({
+      availableModels: () => [{ id: model, efforts: [], defaultEffort: null }],
+      readProviderRouting: async () => ({
+        ...custom,
+        availability: { ...custom.availability, 'claude-code': [{ ...custom.availability['claude-code'][0]!,
+          effortMetaByModel: { [model]: { efforts: [], defaultEffort: null } } }] },
+      }),
+    });
+    await expect(resolveDeclared({ agentKind: 'cc', model, providerId: 'custom-anthropic', effort: 'medium' }))
+      .rejects.toThrow('valid: none');
+  });
   it('does not silently choose a hardcoded model when default selection is missing', async () => {
     await expect(setup({ readDefault: () => undefined }).resolve({})).rejects.toThrow('尚未选择');
   });

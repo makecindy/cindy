@@ -26,13 +26,13 @@ const offer = [
 ].join('\r\n');
 
 describe('remote desktop quality tiers', () => {
-  it('lets the host own each tier, including the frame-rate ceiling', () => {
+  it('lets the host own each tier while the viewer owns the frame rate', () => {
     expect(desktopVideoProfile().degradation).toBe('maintain-framerate');
     expect(desktopVideoProfile({ fps: 60, quality: 'hd', audio: false })).toMatchObject({
       degradation: 'maintain-resolution',
       sharpWhenStill: false,
     });
-    expect(desktopVideoFramerate({ fps: 60, quality: 'saver', audio: false })).toBe(30);
+    expect(desktopVideoFramerate({ fps: 60, quality: 'saver', audio: false })).toBe(60);
     expect(desktopVideoFramerate({ fps: 60, quality: 'auto', audio: false })).toBe(60);
     for (const quality of ['auto', 'saver', 'hd'] as const) {
       const p = desktopVideoProfile({ fps: 30, quality, audio: false });

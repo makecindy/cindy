@@ -5729,6 +5729,54 @@ describe('makerChatStore text delta batching', () => {
     },
   );
 
+  it('keeps the archived tombstone through an optimistic unarchive until the write confirms', () => {
+    remoteProjectsStore.pinSessionOrigin('device-1', SESSION_ID);
+    remoteProjectsStore.setDeviceSessions(
+      'device-1',
+      'Test Mac',
+      [{ id: SESSION_ID, status: 'archived', title: 'Archived task' } as Session],
+      'archived',
+    );
+    onRemotePush?.({
+      deviceId: 'device-1',
+      channel: 'local-db:sessions:patched',
+      payload: { sessionId: SESSION_ID, patch: { status: 'archived' } },
+    });
+    const lateMessage = (id: string) => ({
+      deviceId: 'device-1',
+      channel: 'local-db:messages:created',
+      payload: {
+        sessionId: SESSION_ID,
+        message: serverMessage({
+          id,
+          sessionId: SESSION_ID,
+          clientId: `${id}-client`,
+          role: 'user',
+          content: id,
+          createdAt: '2026-08-02T00:00:00.000Z',
+        }),
+      },
+    });
+
+    // 恢复写库仍在途:投影已是 active,但墓碑只认分片里的权威行,迟到帧照旧丢弃。
+    const token = remoteProjectsStore.beginPendingStatus('device-1', SESSION_ID, 'active');
+    expect(
+      remoteProjectsStore.getMergedRemoteSessions().find((s) => s.id === SESSION_ID)?.status,
+    ).toBe('active');
+    onRemotePush?.(lateMessage('during-write'));
+    expect(makerChatStore.__hasSessionForTest(SESSION_ID)).toBe(false);
+
+    // 写库失败回滚 —— 墓碑仍在。
+    remoteProjectsStore.rollbackPendingStatus(token);
+    onRemotePush?.(lateMessage('after-rollback'));
+    expect(makerChatStore.__hasSessionForTest(SESSION_ID)).toBe(false);
+
+    // 写库成功:显式释放墓碑,后续帧不再被丢弃,不必等 reseed。
+    makerChatStore.releaseRemoteArchivedTombstone(SESSION_ID, 'device-1');
+    onRemotePush?.(lateMessage('after-restore'));
+    expect(makerChatStore.__hasSessionForTest(SESSION_ID)).toBe(true);
+  });
+
   it('cancels a remote optimistic send that is still in preflight when the session is cleared', async () => {
     remoteProjectsStore.pinSessionOrigin('device-1', SESSION_ID);
     let resolvePreflight!: (value: boolean) => void;

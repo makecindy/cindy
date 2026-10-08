@@ -12,11 +12,17 @@
  * 任何只存在于单侧的命令必须写 `parityNote` 讲清楚为什么 —— 缺了 CI 红。
  * 差异本身不消失, 但它从此是**写下来的、拦得住的**, 而不是靠人记。
  *
- * 当前接线边界(#1855 第二刀):
+ * 当前接线边界:
  *   - 个人 bot: 本表是运行时事实来源(菜单渲染 + 命令分发都读它)。
- *   - 官方 bot: 命令仍由服务端下发, 本表对官方侧是**声明性镜像**, 不接线。
- *     镜像与服务端的一致性由 `botCommands.test.ts` 里的内联清单断言守住。
+ *   - 官方 bot: 双方协商 `telegram-commands-v1` 后, **菜单**以本表为准 —— desktop 按
+ *     en / zh / ja / ko 渲染(`buildOfficialBotCommandMenus`)经 provider.commands.set
+ *     下发, 服务端只执行 setMyCommands; 未协商时服务端照旧用自己的 TELEGRAM_COMMANDS。
+ *     **命令分发**仍在服务端(官方入站由服务端收), 命令集合与服务端分发的一致性仍由
+ *     `botCommands.test.ts` 的内联清单守住。
  */
+
+import type { TelegramCommandMenu } from '@cindy/slack-hook-protocol';
+import type { SupportedLocale } from '../../../shared/locale';
 
 import type { ImChannelName } from './types';
 
@@ -40,8 +46,8 @@ export interface BotCommandDefinition {
    *
    * 只有 Telegram 有 `setMyCommands` 这种平台级命令菜单, 别的渠道不消费它,
    * 所以字段名直接带上 telegram —— 不是命名空间没解耦, 是它本来就只服务 Telegram。
-   * `surfaces` 含 `personal` 的命令必填(菜单要渲染); 官方独有的命令留空,
-   * 因为它们的菜单文案在服务端 `TELEGRAM_COMMANDS` 里。
+   * 每条命令都必填 —— 个人菜单与官方菜单(协商 telegram-commands-v1 后)都由 desktop 按
+   * 这个 key 渲染。
    */
   telegramMenuDescriptionKey?: `settings.telegramBot.commandMenu.${string}`;
   /**
@@ -147,6 +153,7 @@ export const BOT_COMMANDS = [
   {
     command: 'workspace',
     surfaces: ['official'],
+    telegramMenuDescriptionKey: 'settings.telegramBot.commandMenu.workspace',
     parityNote:
       '/project 的同义命令(服务端两条菜单文案逐字相同)。个人 bot 用 aliases 表达同义拼写, 不重复占一个菜单位, 因此不登记为独立命令。',
     requiresRichCards: true,
@@ -154,24 +161,28 @@ export const BOT_COMMANDS = [
   {
     command: 'unbind',
     surfaces: ['official'],
+    telegramMenuDescriptionKey: 'settings.telegramBot.commandMenu.unbind',
     parityNote: '清除当前 chat 的项目映射。个人 bot 尚未实现 —— 目前只能在桌面设置页解绑。',
     requiresRichCards: false,
   },
   {
     command: 'effort',
     surfaces: ['official'],
+    telegramMenuDescriptionKey: 'settings.telegramBot.commandMenu.effort',
     parityNote: '选择思考强度。个人 bot 尚未实现 —— 只能在桌面端改。',
     requiresRichCards: true,
   },
   {
     command: 'agent',
     surfaces: ['official'],
+    telegramMenuDescriptionKey: 'settings.telegramBot.commandMenu.agent',
     parityNote: '切换 Agent(Claude Code / Codex / Pi)。个人 bot 尚未实现 —— 只能在桌面端改。',
     requiresRichCards: true,
   },
   {
     command: 'status',
     surfaces: ['official'],
+    telegramMenuDescriptionKey: 'settings.telegramBot.commandMenu.status',
     parityNote:
       '查看关联状态。官方 bot 经服务端中继, 链路可断; 个人 bot 由桌面端直连 Bot API, 没有等价的「关联状态」概念 —— 这是有意的产品差异, 不是缺口。',
     requiresRichCards: false,
@@ -179,6 +190,7 @@ export const BOT_COMMANDS = [
   {
     command: 'unlink',
     surfaces: ['official'],
+    telegramMenuDescriptionKey: 'settings.telegramBot.commandMenu.unlink',
     parityNote:
       '解除 Telegram 关联。个人 bot 的 token 由用户自填, 解绑入口在桌面设置页 —— 有意的产品差异。',
     requiresRichCards: false,
@@ -256,6 +268,40 @@ export function isBotCommandAvailableOnChannel(
 ): boolean {
   if (!definition.requiresRichCards || channelSupportsRichCards) return true;
   return (definition.textFallbackChannels ?? []).includes(channel);
+}
+
+/**
+ * 官方 bot 的命令菜单(telegram-commands-v1): 每个 Telegram 语言一份。官方菜单按用户的
+ * Telegram 语言展示(服务端 setMyCommands 带 language_code), 与个人菜单「按桌面端语言」
+ * 的策略不同 —— 沿用两侧各自既有的语言口径, 不在这里统一。
+ *
+ * 默认菜单(languageCode=null)用英文; zh 取简体(Telegram 的 language_code 只分到 zh,
+ * 分不出繁简)。顺序即注册表顺序。
+ */
+export const OFFICIAL_BOT_COMMAND_MENU_LOCALES: ReadonlyArray<{
+  languageCode: string | null;
+  locale: SupportedLocale;
+}> = [
+  { languageCode: null, locale: 'en' },
+  { languageCode: 'zh', locale: 'zh-CN' },
+  { languageCode: 'ja', locale: 'ja' },
+  { languageCode: 'ko', locale: 'ko' },
+];
+
+export function buildOfficialBotCommandMenus(
+  translate: (
+    key: NonNullable<BotCommandDefinition['telegramMenuDescriptionKey']>,
+    locale: SupportedLocale,
+  ) => string,
+): TelegramCommandMenu[] {
+  return OFFICIAL_BOT_COMMAND_MENU_LOCALES.map(({ languageCode, locale }) => ({
+    languageCode,
+    commands: OFFICIAL_BOT_COMMANDS.map(({ command, telegramMenuDescriptionKey }) => ({
+      command,
+      // 每条命令都有菜单 key(botCommands.test.ts 守门), 非空断言安全。
+      description: translate(telegramMenuDescriptionKey!, locale),
+    })),
+  }));
 }
 
 /** 按桌面端语言渲染 owner 作用域的 Telegram 命令菜单。 */

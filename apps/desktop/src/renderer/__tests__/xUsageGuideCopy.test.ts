@@ -6,12 +6,11 @@
  *
  *   1. **bot handle `@askmycindy` 硬编码在各 locale 里。** 它不来自 binding:这一节
  *      在用户还没绑定时就要显示(评估阶段最需要看到风险), 那时候拿不到 scopeName。
- *      改 handle 时四份都得改, 漏一份就会让那个语言的用户去 @ 一个不存在的账号。
+ *      改 handle 时所有语言都得改, 漏一份就会让那个语言的用户去 @ 一个不存在的账号。
  *      (硬编码是安全的: cn 与 global 两份 endpoint manifest 的 xHookWsUrl 指向同一个
  *      x-hook 服务, 也就是同一个 bot。)
- *   2. **`/删除` 只该出现在 zh-CN。** 中文命令词对非中文用户是噪音 —— 他们既不会打,
- *      也会被这串看不懂的字符干扰(Dash 2026-08-02 明确)。而服务端两个词都收, 所以
- *      少宣传一个不影响任何功能。
+ *   2. **`/删除` 只出现在中文说明, 且不翻译命令本身。** 服务端接受 `/删除`,
+ *      不接受繁体 `/刪除`。所有语言均展示正文中必须输入的 `@askmycindy /delete`。
  *
  * 三组文案本身的准确性由 XUsageGuide 的注释与 HookConnectionsSection 的用例守着;
  * 这里只钉这两条「跨语言必须一致 / 必须不一致」的契约。
@@ -68,15 +67,18 @@ describe('X 用法与风险告知的多语言文案', () => {
     }
   });
 
-  it('撤回说明都写出 /delete: 这是跨语言通用的命令词', () => {
+  it('撤回说明都写出正文中需要输入的完整 @ 和 /delete 命令', () => {
     for (const [loc, guide] of Object.entries(LOCALES)) {
-      expect(guide.withdrawBody, `${loc}.withdrawBody 必须含 /delete`).toContain('/delete');
+      expect(guide.withdrawBody, `${loc}.withdrawBody 必须含完整撤回命令`).toContain(
+        `${BOT_HANDLE} /delete`,
+      );
     }
   });
 
-  it('中文命令词按简繁中文展示, 对非中文用户不产生噪音', () => {
+  it('中文命令词保持服务端接受的原文, 不翻译命令, 对非中文用户不产生噪音', () => {
     expect(LOCALES['zh-CN'].withdrawBody).toContain('/删除');
-    expect(LOCALES['zh-TW'].withdrawBody).toContain('/刪除');
+    expect(LOCALES['zh-TW'].withdrawBody).toContain('/删除');
+    expect(LOCALES['zh-TW'].withdrawBody).not.toContain('/刪除');
     for (const loc of ['en', 'ja', 'ko']) {
       expect(LOCALES[loc].withdrawBody, `${loc} 不该提 /删除`).not.toContain('删除');
     }

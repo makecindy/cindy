@@ -354,7 +354,19 @@ function toCatalogModel(
           generationDefaults,
         )
       : pickModelMetadata(user);
-  return applyModelMetadata(model, resolved);
+  // 「未声明」与「明确无档位」要分开（#5535）：用户/运行时 reasoning、目录继承、发现或用户
+  // 元数据任一来源给过 efforts 就算已声明；都没有时 `efforts: []` 只是占位，打上
+  // effortsUnknown 让准入校验不要把显式档位判成 valid: none。
+  // Pi 例外：Pi 的 models.json 直接按本目录的 efforts 物化 reasoning（pi-host 里
+  // `reasoning: model.efforts.length > 0`），自定义 Pi 模型在显式开启前就是非推理模型，
+  // 放行未声明档位也不会生效，所以 Pi 不打「未知」标记，准入仍按明确无档位处理。
+  const effortsDeclared =
+    agent === "pi" ||
+    m.reasoning !== undefined ||
+    registryEfforts !== undefined ||
+    resolved.efforts !== undefined;
+  const projected = applyModelMetadata(model, resolved);
+  return effortsDeclared ? projected : { ...projected, effortsUnknown: true };
 }
 
 function defaultWireProtocol(agent: AgentKind): ProviderWireProtocol {

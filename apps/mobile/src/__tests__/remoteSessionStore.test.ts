@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { MAKER_EVENT_BATCH_CHANNEL, SESSION_SYNC_CHANNEL } from '@cindy/device-link';
 import { clampLiveRowCreatedAt } from '@/session/messagePaging';
 import { MOBILE_TOOL_INPUT_PROJECTION_THRESHOLD_BYTES } from '@/session/messageToolPayloadProjection';
-import { remoteSessionStore, sessionPendingWrites } from '@/session/remoteSessionStore';
+import { remoteSessionStore, resolveSessionWriteDevices, sessionPendingWrites } from '@/session/remoteSessionStore';
 import type { InputProjection, PendingInteraction, RemoteMessage, RemoteSession } from '@/session/types';
 
 function session(id: string, patch: Partial<RemoteSession> = {}): RemoteSession {
@@ -5079,6 +5079,62 @@ describe('setDeviceSessions 在途元数据写保护(sessionPendingWrites)', () 
     remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1', { title: 'A' })]);
     remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1', { title: 'B' })]);
     expect(remoteSessionStore.getSessions().find((s) => s.id === 's1')?.title).toBe('B');
+  });
+});
+
+describe('upsertDeviceSession 在途元数据写保护(sessionPendingWrites)', () => {
+  beforeEach(() => remoteSessionStore.clear());
+
+  it('归档在途、行已被乐观移出:单条读回的旧行不插回;release 后恢复正常 upsert', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1'), session('s2')]);
+    const release = sessionPendingWrites.track('s1', ['status']);
+    remoteSessionStore.applySessionPatch('dev-1', 's1', { status: 'archived' });
+    // 会话页 getSession 慢回包:被控端还没处理归档,带回旧 status
+    remoteSessionStore.upsertDeviceSession('dev-1', 'Mac', session('s1', { status: 'active' }));
+    expect(remoteSessionStore.getSessions().map((s) => s.id)).toEqual(['s2']);
+    // 失败回滚先 release 再整行插回:不被自己的在途登记挡掉
+    release();
+    remoteSessionStore.upsertDeviceSession('dev-1', 'Mac', session('s1'));
+    expect(remoteSessionStore.getSessions().map((s) => s.id).sort()).toEqual(['s1', 's2']);
+  });
+
+  it('行仍在本地:在途字段保留本地乐观值并留差异痕,其余字段照常吃读回', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1', { title: '旧名' })]);
+    const release = sessionPendingWrites.track('s1', ['title']);
+    remoteSessionStore.applySessionPatch('dev-1', 's1', { title: '新名' });
+    remoteSessionStore.upsertDeviceSession('dev-1', 'Mac', session('s1', {
+      title: '旧名',
+      updatedAt: '2026-01-02T00:00:00.000Z',
+    }));
+    const row = remoteSessionStore.getSessions().find((s) => s.id === 's1');
+    expect(row?.title).toBe('新名');
+    expect(row?.updatedAt).toBe('2026-01-02T00:00:00.000Z');
+    expect(sessionPendingWrites.consumeMaskedPush('s1', ['title'])).toBe(true);
+    release();
+  });
+
+  it('只有非 status 字段在途时,本地缺行的读回照常插入', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', []);
+    const release = sessionPendingWrites.track('s1', ['title']);
+    remoteSessionStore.upsertDeviceSession('dev-1', 'Mac', session('s1'));
+    expect(remoteSessionStore.getSessions().map((s) => s.id)).toEqual(['s1']);
+    release();
+  });
+});
+
+describe('resolveSessionWriteDevices', () => {
+  beforeEach(() => remoteSessionStore.clear());
+
+  it('乐观 patch / 回滚落行所在的物理 shard,出网走规范 id 或调用方指定的路由设备', () => {
+    remoteSessionStore.setDeviceSessions('dev-old', 'Mac', [session('s1')]);
+    const row = { ...remoteSessionStore.getSessions().find((s) => s.id === 's1')!, canonicalDeviceId: 'dev-new' };
+    expect(resolveSessionWriteDevices('s1', row)).toEqual({ rpcDeviceId: 'dev-new', shardId: 'dev-old' });
+    // 会话页:出网沿用路由设备,shard 仍是物理 shard(不是路由 id)
+    expect(resolveSessionWriteDevices('s1', row, 'dev-route')).toEqual({ rpcDeviceId: 'dev-route', shardId: 'dev-old' });
+    // 调用方没有会话对象时按 store 索引解析
+    expect(resolveSessionWriteDevices('s1', null, 'dev-route')).toEqual({ rpcDeviceId: 'dev-route', shardId: 'dev-old' });
+    expect(resolveSessionWriteDevices('missing', null)).toBeNull();
+    expect(resolveSessionWriteDevices('missing', null, 'dev-route')).toEqual({ rpcDeviceId: 'dev-route', shardId: 'dev-route' });
   });
 });
 

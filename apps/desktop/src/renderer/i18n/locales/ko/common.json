@@ -194,6 +194,201 @@
     "closeAllLabel": "모든 공유 중지",
     "closeAllDescription": "모든 게스트의 접근이 차단됩니다. 작업 기록은 유지됩니다."
   },
+  "providerShare": {
+    "entry": {
+      "manage": "공유 관리",
+      "manageWithPending_other": "공유 관리 · 대기 중인 요청 {{count}}개",
+      "disabledInvocation": "공유하려면 먼저 원격 사용 허용을 켜세요",
+      "disabledRemoteControl": "공유하려면 먼저 원격 연결에서 이 컴퓨터의 제어를 허용하세요",
+      "remoteControlOff": "이 컴퓨터는 아직 원격 제어를 허용하지 않아 제공자를 원격으로 사용하거나 공유할 수 없습니다.",
+      "openRemoteControl": "원격 연결 설정 열기",
+      "descriptionOff": "켜면 내 다른 컴퓨터와 공유받은 사람이 이 제공자의 모델을 사용할 수 있습니다. 꺼져 있는 동안 기존 공유는 일시적으로 사용할 수 없지만 삭제되지는 않습니다."
+    },
+    "manage": {
+      "title": "{{provider}} 공유",
+      "description": "공유하면 상대방은 자신의 세션에서 {{provider}} 모델을 선택할 수 있습니다. Agent는 이 컴퓨터에서 실행되고 사용량은 내 {{provider}}에 계산됩니다. 상대방의 파일과 명령은 계속 상대방 컴퓨터에서 실행됩니다.",
+      "descriptionWithDevice": "공유하면 상대방은 자신의 세션에서 {{provider}} 모델을 선택할 수 있습니다. Agent는 이 컴퓨터({{device}})에서 실행되고 사용량은 내 {{provider}}에 계산됩니다. 상대방의 파일과 명령은 계속 상대방 컴퓨터에서 실행됩니다.",
+      "createLink": "공유 링크 만들기",
+      "loading": "공유 정보를 불러오는 중…",
+      "notReady": "지금은 공유를 사용할 수 없습니다. 로그인되어 있고 네트워크에 연결되어 있는지 확인하세요. 자동으로 다시 시도합니다.",
+      "loadFailed": "공유 정보를 불러오지 못했습니다. 잠시 후 다시 시도하세요.",
+      "gateRemoteControl": "이 컴퓨터가 원격 제어를 허용하지 않아 기존 공유를 일시적으로 사용할 수 없고 새 링크도 만들 수 없습니다.",
+      "gateInvocation": "이 제공자의 원격 사용 허용이 꺼져 있어 기존 공유를 일시적으로 사용할 수 없고 새 링크도 만들 수 없습니다.",
+      "pending": {
+        "title": "대기 중",
+        "applying": "사용 요청",
+        "requestedAt": "{{time}} 요청",
+        "expiresHint": "24시간 안에 처리하지 않으면 자동으로 만료됩니다"
+      },
+      "members": {
+        "title": "공유 중인 사람",
+        "rangeAria": "사용량 기간",
+        "range": {
+          "7d": "최근 7일",
+          "month": "이번 달",
+          "all": "전체"
+        },
+        "statusActive": "정상",
+        "statusRunning_other": "정상 · 세션 {{count}}개 실행 중",
+        "statusPaused": "일시 중지됨",
+        "joined": "{{date}} 참여",
+        "lastUsed": "최근 사용: {{time}}",
+        "neverUsed": "아직 사용하지 않음",
+        "tokens": "{{tokens}} 토큰",
+        "amount": "약 {{amount}}",
+        "pause": "공유 일시 중지",
+        "resume": "공유 재개",
+        "remove": "삭제",
+        "removeAria": "{{name}}님과의 공유 삭제",
+        "expandAria": "{{name}}님의 모델별 사용량 펼치기",
+        "collapseAria": "{{name}}님의 모델별 사용량 접기",
+        "empty": "아직 아무와도 공유하지 않았습니다. 공유 링크를 만들어 보내세요. 상대방이 요청하고 내가 승인하면 여기에 표시됩니다.",
+        "table": {
+          "model": "모델",
+          "turns": "메시지",
+          "input": "입력",
+          "output": "출력",
+          "amount": "예상 금액"
+        },
+        "noUsage": "이 기간에는 사용량이 없습니다",
+        "estimateNote": "금액은 로컬 단가로 추정한 값이며 제공자의 실제 청구액이 아닙니다."
+      },
+      "removeConfirm": {
+        "title": "{{name}}님과의 공유를 삭제할까요?",
+        "description": "{{name}}님은 즉시 {{provider}}을(를) 사용할 수 없게 되고 실행 중인 세션은 중지됩니다. 다시 공유하려면 새 링크가 필요합니다. 사용량 기록은 유지됩니다.",
+        "confirm": "공유 삭제"
+      }
+    },
+    "toast": {
+      "approved": "{{name}}님에게 {{provider}}을(를) 공유했습니다",
+      "rejected": "{{name}}님의 요청을 거절했습니다. 링크는 더 이상 사용할 수 없습니다",
+      "paused": "{{name}}님과의 공유를 일시 중지했습니다. 실행 중인 세션은 중지되었습니다",
+      "resumed": "{{name}}님과의 공유를 재개했습니다",
+      "removed": "{{name}}님과의 공유를 삭제했습니다"
+    },
+    "link": {
+      "title": "{{provider}} 공유 링크를 만들었습니다",
+      "description": "공유하려는 사람에게 링크를 보내세요. 상대방은 안내를 확인한 뒤 요청을 보내고, 이 컴퓨터에서 승인하면 공유가 시작됩니다.",
+      "fieldLabel": "공유 링크",
+      "copy": "링크 복사",
+      "copied": "복사됨",
+      "oneTime": "한 번만 사용 가능",
+      "expiresIn": "{{time}} 후 만료",
+      "expired": "만료됨",
+      "regenerateHint": "만료되면 새로 만들 수 있습니다",
+      "generating": "링크를 만드는 중…",
+      "back": "관리 페이지로 돌아가기",
+      "regenerate": "링크 다시 만들기",
+      "regenerated": "새 링크를 만들었습니다",
+      "copyFailed": "링크를 복사하지 못했습니다. 직접 선택해서 복사하세요"
+    },
+    "pairing": {
+      "label": "페어링 코드",
+      "ariaLabel": "페어링 코드 {{digits}}"
+    },
+    "approve": {
+      "title": "{{name}}님이 내가 공유한 {{provider}} 사용을 요청했습니다",
+      "requestedAt": "{{time}} 공유 링크로 요청함",
+      "pairingHint": "승인하기 전에 링크를 보낸 곳에서 “보이는 페어링 코드가 뭐예요?”라고 물어볼 수 있습니다. 일치하면 승인하세요.",
+      "callout": "승인하면 {{name}}님이 자신의 세션에서 {{provider}} 모델을 사용할 수 있습니다. Agent는 이 컴퓨터에서 실행되고 사용량은 내 {{provider}}에 계산됩니다. ‘{{provider}} 공유’에서 언제든지 일시 중지하거나 삭제할 수 있습니다.",
+      "calloutUnknown": "요청한 사람을 모른다면 거절하세요. 거절하면 이 링크는 더 이상 사용할 수 없습니다.",
+      "approve": "공유 승인",
+      "reject": "요청 거절",
+      "later": "나중에 처리"
+    },
+    "apply": {
+      "loading": "공유 링크를 읽는 중…",
+      "askTitle": "{{name}}님이 {{provider}}을(를) 공유하려고 합니다",
+      "providerOnDevice": "{{provider}} · {{device}}",
+      "factRuns": "Agent는 {{name}}님의 컴퓨터에서 {{provider}}로 실행됩니다",
+      "factRunsDetail": "사용량은 {{name}}님의 {{provider}}에 계산되며 {{name}}님이 내 사용량을 볼 수 있습니다",
+      "factFiles": "프로젝트 파일과 명령은 계속 내 컴퓨터에서 실행됩니다",
+      "factFilesDetail": "내 세션 권한이 그대로 적용됩니다",
+      "factPrivacy": "채팅 내용과 Agent가 읽은 파일 내용은 {{name}}님의 컴퓨터를 거쳐 저장됩니다",
+      "factPrivacyDetail": "{{name}}님에게는 내 닉네임과 프로필 사진만 표시됩니다",
+      "factApproval": "요청을 보낸 뒤 {{name}}님이 승인해야 적용됩니다",
+      "factApprovalDetail": "{{name}}님은 언제든지 이 공유를 일시 중지하거나 삭제할 수 있습니다",
+      "send": "요청 보내기",
+      "cancel": "취소",
+      "waitTitle": "{{name}}님의 승인을 기다리는 중…",
+      "waitTitleGeneric": "승인을 기다리는 중…",
+      "waitDescription": "{{name}}님이 보이는 페어링 코드를 물어보면 이 4자리 숫자를 알려 주세요. 상대방 컴퓨터가 오프라인이면 온라인이 된 뒤 요청을 보게 됩니다. 24시간 안에 처리되지 않은 요청은 자동으로 만료됩니다.",
+      "waitDescriptionGeneric": "상대방이 보이는 페어링 코드를 물어보면 이 4자리 숫자를 알려 주세요. 상대방 컴퓨터가 오프라인이면 온라인이 된 뒤 요청을 보게 됩니다. 24시간 안에 처리되지 않은 요청은 자동으로 만료됩니다.",
+      "close": "창 닫기",
+      "withdraw": "요청 철회",
+      "withdrawn": "요청을 철회했습니다. 링크는 더 이상 사용할 수 없습니다",
+      "doneTitle": "{{name}}님이 {{provider}} 공유를 승인했습니다",
+      "doneTitleGeneric": "공유가 승인되었습니다",
+      "doneDescription": "모델 목록의 원격 제공자에서 ‘{{label}}’을(를) 찾을 수 있습니다.",
+      "doneDescriptionGeneric": "모델 목록의 원격 제공자에서 찾을 수 있습니다.",
+      "newTask": "새 세션",
+      "later": "나중에",
+      "usedTitle": "이 공유 링크는 더 이상 사용할 수 없습니다",
+      "usedDescription": "공유 링크는 한 번만 사용할 수 있고 만든 뒤 5분 동안 유효합니다. 이 링크는 이미 사용되었거나 만료되었습니다. {{name}}님에게 새 링크를 요청하세요.",
+      "usedDescriptionGeneric": "공유 링크는 한 번만 사용할 수 있고 만든 뒤 5분 동안 유효합니다. 이 링크는 이미 사용되었거나 만료되었습니다. 공유한 사람에게 새 링크를 요청하세요.",
+      "selfTitle": "내 제공자입니다",
+      "selfDescription": "내 다른 컴퓨터에서 바로 사용할 수 있으므로 요청할 필요가 없습니다.",
+      "memberTitle": "이미 이 공유를 사용하고 있습니다",
+      "memberDescription": "모델 목록의 원격 제공자에서 찾을 수 있으므로 다시 요청할 필요가 없습니다.",
+      "regionTitle": "다른 지역 간 공유는 아직 지원되지 않습니다",
+      "regionDescription": "이 링크는 다른 지역의 Cindy 서비스에서 만든 것입니다. 아직 지역 간 공유 요청은 지원되지 않습니다.",
+      "invalidTitle": "올바른 공유 링크가 아닙니다",
+      "invalidDescription": "링크가 모두 복사되었는지 확인하거나 다시 보내 달라고 요청하세요.",
+      "rejectedTitle": "{{name}}님이 요청을 거절했습니다",
+      "rejectedTitleGeneric": "요청이 거절되었습니다",
+      "rejectedDescription": "이 링크는 더 이상 사용할 수 없습니다. 사용하려면 새 링크를 요청하세요.",
+      "expiredTitle": "요청이 만료되었습니다",
+      "expiredDescription": "24시간 안에 처리되지 않아 이 링크는 더 이상 사용할 수 없습니다. 다시 사용하려면 새 링크를 요청하세요.",
+      "errorTitle": "이 공유 링크를 열 수 없습니다",
+      "retry": "다시 시도",
+      "toastApproved": "{{name}}님이 {{provider}} 공유를 승인했습니다",
+      "toastApprovedGeneric": "공유 요청이 승인되었습니다",
+      "toastRejected": "{{name}}님이 공유 요청을 거절했습니다",
+      "toastRejectedGeneric": "공유 요청이 거절되었습니다",
+      "toastExpired": "공유 요청이 만료되어 링크를 더 이상 사용할 수 없습니다"
+    },
+    "received": {
+      "title": "나에게 공유된 제공자",
+      "description": "다른 사람이 공유한 제공자는 모델 목록의 원격 제공자에 표시됩니다.",
+      "empty": "아직 공유받은 제공자가 없습니다. 공유 링크를 받으면 열거나 여기에 붙여넣으세요.",
+      "paste": "공유 링크 붙여넣기",
+      "fromOwner": "{{name}}님의 공유",
+      "providerOnDevice": "{{provider}} · {{device}}",
+      "statusActive": "정상",
+      "statusPaused": "일시 중지됨",
+      "hostOffline": "상대방 컴퓨터가 오프라인",
+      "hostUnavailable": "상대방 Cindy 업데이트 필요",
+      "leave": "나가기",
+      "leaveAria": "{{name}}님이 공유한 {{provider}}에서 나가기",
+      "leaveConfirm": {
+        "title": "{{name}}님이 공유한 {{provider}}에서 나갈까요?",
+        "description": "나간 뒤 다시 사용하려면 상대방이 새 링크를 만들어 줘야 합니다. 이 제공자를 쓰는 세션은 다른 모델로 바꿔 계속할 수 있습니다.",
+        "confirm": "공유에서 나가기"
+      },
+      "left": "{{name}}님이 공유한 {{provider}}에서 나갔습니다",
+      "pasteDialog": {
+        "title": "공유 링크 붙여넣기",
+        "description": "받은 제공자 공유 링크를 붙여넣으세요. 내용을 확인한 뒤 요청할지 결정할 수 있습니다.",
+        "label": "공유 링크",
+        "placeholder": "여기에 링크 붙여넣기",
+        "empty": "먼저 공유 링크를 붙여넣으세요",
+        "open": "링크 열기",
+        "cancel": "취소"
+      }
+    },
+    "picker": {
+      "deviceName": "{{device}} · {{owner}}님의 공유",
+      "unavailable": "사용할 수 없는 공유"
+    },
+    "notification": {
+      "requestTitle": "새 공유 요청",
+      "requestBody": "{{name}}님이 내가 공유한 {{provider}} 사용을 요청했습니다",
+      "approvedTitle": "공유 요청 승인됨",
+      "approvedBody": "{{name}}님이 {{provider}} 공유를 승인했습니다",
+      "rejectedTitle": "공유 요청 거절됨",
+      "rejectedBody": "{{name}}님이 {{provider}} 공유를 거절했습니다"
+    }
+  },
   "privacyExit": {
     "status": "Cindy를 통해 원격 제어 중입니다",
     "hint": "화면을 클릭하거나 아무 키나 누르면 연결 끊기를 확인합니다",
@@ -273,6 +468,9 @@
     "keys": "키",
     "showDesktop": "데스크톱",
     "allWindows": "모든 창",
+    "workspaceLeft": "왼쪽 데스크톱",
+    "workspaceRight": "오른쪽 데스크톱",
+    "omarchyMenu": "Omarchy",
     "reconnecting": "다시 연결 중…",
     "connectionTimeout": "연결 시간이 초과되었습니다. 네트워크와 컴퓨터의 온라인 상태를 확인한 후 다시 연결하세요.",
     "connectionBusy": "다른 기기가 이 원격 데스크톱에 연결되어 있습니다. 해당 기기에서 원격 데스크톱을 종료한 후 다시 연결하세요.",
@@ -292,6 +490,8 @@
       "controlDisabled": "원격 컴퓨터의 Cindy 설정 → 원격 제어에서 이 컴퓨터의 제어를 허용하세요.",
       "unsupported": "이 기기는 원격 데스크톱을 지원하지 않습니다.",
       "checkFailed": "컴퓨터 상태를 확인하지 못했습니다. 해당 컴퓨터의 네트워크 연결을 확인하세요.",
+      "checkInterrupted": "지금은 컴퓨터 상태를 확인하지 못했습니다. 다음에 표시할 때 자동으로 다시 확인합니다.",
+      "unresponsive": "이 컴퓨터가 현재 응답하지 않습니다. 복구되면 자동으로 다시 확인합니다.",
       "screenRecordingRequired": "원격 Mac의 시스템 설정 → 개인정보 보호 및 보안에서 Cindy의 화면 기록을 허용하세요. 요청이 표시되면 Cindy를 다시 여세요.",
       "noDisplay": "이 컴퓨터에 사용 가능한 디스플레이가 없습니다."
     },
@@ -310,20 +510,34 @@
       "automatic": "자동",
       "saver": "데이터 절약",
       "hd": "고화질",
-      "qualityHint": "자동은 부드러움을 우선하고 네트워크가 좋으면 더 선명하게 표시합니다. 데이터 절약은 사용량을 줄입니다(최대 30fps). 고화질은 글자 선명도를 우선하며 대역폭이 부족하면 프레임 속도를 낮춥니다.",
+      "qualityHint": "자동은 부드러움 우선, 데이터 절약은 사용량을 줄이고, 고화질은 글자 선명도 우선.",
       "resolution": "컴퓨터 해상도",
-      "clipboardFailed": "클립보드 내용을 전송하지 못했습니다. 제어 권한을 확인하고 다시 시도하세요.",
+      "clipboardEmpty": "클립보드가 비어 있습니다.",
+      "clipboardTooLong": "클립보드 내용이 너무 큽니다. 크기를 줄여 다시 시도하세요.",
+      "clipboardUnsupported": "아직 지원하지 않는 형식입니다. 이미지 한 장, 텍스트 또는 링크를 복사해 주세요. 파일과 앱 전용 형식은 아직 전송할 수 없습니다.",
+      "clipboardCopyFailed": "복사하지 못했습니다. 선택한 텍스트 또는 컴퓨터 클립보드를 확인하고 다시 시도하세요.",
+      "clipboardPasteFailed": "붙여넣지 못했습니다. 원격 제어가 가능한지 확인하고 다시 시도하세요.",
       "settingsFailed": "설정을 저장하지 못했습니다. 다시 시도하세요.",
+      "actionFailed": "작업을 완료하지 못했습니다. 다시 시도하세요.",
       "inputHint": "화면을 클릭하여 입력하세요. 단축키(Cmd/Ctrl+W 포함)는 원격 컴퓨터로 전송됩니다. Ctrl+Alt+Esc로 키보드 포커스를 해제한 뒤 Cmd/Ctrl+W로 이 창을 닫습니다.",
       "controlPending": "제어 권한을 가져오는 중…",
       "controlRequired": "보기 전용입니다. 원격 컴퓨터를 조작하려면 제어 권한을 가져오세요.",
       "confirmDisconnect": "이 컴퓨터와의 연결을 끊을까요?",
       "confirmDisconnectHint": "원격 데스크톱 연결이 종료됩니다. 컴퓨터의 앱은 계속 실행됩니다.",
       "disconnectFailed": "연결을 끊지 못했습니다. 다시 시도하세요.",
-      "clipboardShortcutHint": "화면 안에서 {{modifier}}+C / {{modifier}}+V로 복사하고 붙여넣으세요. 지원되는 내용은 원격 컴퓨터에 따라 다르며 파일은 전송되지 않습니다.",
-      "fitViewerDisplay": "현재 화면 비율에 맞추기",
-      "restoreViewerDisplay": "원래 화면 비율로 복원",
-      "fitViewerDisplayHint": "데스크톱 내용을 유지하면서 컴퓨터 화면 비율을 일시적으로 변경합니다. 연결을 종료하면 원래 해상도로 돌아갑니다.",
+      "clipboardShortcutHint": "화면 안의 복사·붙여넣기 단축키는 원격 컴퓨터에서만 동작합니다. 컴퓨터 간에 전송하려면 위의 버튼을 사용하거나 클립보드 동기화를 켜세요. 지원되는 내용은 원격 컴퓨터에 따라 다르며 파일은 전송되지 않습니다.",
+      "aspect": "화면 비율",
+      "aspectOriginal": "컴퓨터 원래",
+      "aspectScreen": "이 화면",
+      "aspectWindow": "이 창",
+      "aspectCurrent": "현재",
+      "recommended": "{{label}} (추천)",
+      "aspectHint": "이 화면에 맞추면 여백이 줄어듭니다. 데스크톱 내용을 유지한 채 컴퓨터 화면 비율을 일시적으로 변경하며, 연결을 종료하면 원래 해상도로 돌아갑니다.",
+      "resolutionSame": "이 화면과 같게",
+      "resolutionLarger": "글자 크게",
+      "resolutionMore": "공간 넓게",
+      "resolutionMax": "최대",
+      "resolutionTierHint": "해상도가 낮을수록 글자가 크고 데이터를 덜 쓰며, 높을수록 더 많은 창을 띄울 수 있습니다.",
       "resolutionHint": "해상도를 변경하면 원격 컴퓨터의 실제 모니터에 적용됩니다."
     },
     "settingUnsupported": "이 컴퓨터는 아직 이 설정을 지원하지 않습니다",
@@ -399,7 +613,19 @@
     "SSH_HOST_PREFS_WRITE_FAILED": "호스트는 저장되었지만 표시 이름 또는 Agent Proxy 설정을 저장하지 못했습니다. 로컬 저장소 권한을 확인한 후 다시 시도하세요.",
     "RIGHT_SIDEBAR_TOO_MANY_TABS": "이 작업의 탭 한도에 도달했습니다. 일부 탭을 닫아 주세요",
     "RIGHT_SIDEBAR_STATE_TOO_LARGE": "탭 내용이 너무 커서 추가할 수 없습니다",
-    "RIGHT_SIDEBAR_UNKNOWN_KIND": "이 탭 유형은 현재 사용할 수 없습니다"
+    "RIGHT_SIDEBAR_UNKNOWN_KIND": "이 탭 유형은 현재 사용할 수 없습니다",
+    "REMOTE_AGENT_DEVICE_UNREACHABLE": "모델이 바뀌지 않았습니다: Agent를 실행할 컴퓨터에 연결할 수 없습니다. 온라인 상태이고 원격 제어를 허용하는지 확인한 뒤 다시 시도하세요.",
+    "REMOTE_AGENT_MODEL_UNAVAILABLE": "모델이 바뀌지 않았습니다: 그 컴퓨터에 이 모델이 없거나, 이 제공자의 “원격 사용 허용”이 켜져 있지 않습니다. 다른 모델을 선택하세요.",
+    "PROVIDER_SHARE_LINK_USED": "이 공유 링크는 이미 사용되었습니다. 링크는 한 번만 사용할 수 있으니 공유한 사람에게 새 링크를 요청하세요.",
+    "PROVIDER_SHARE_LINK_EXPIRED": "이 공유 링크는 만료되었습니다. 링크는 만든 뒤 5분 동안만 유효하니 공유한 사람에게 새 링크를 요청하세요.",
+    "PROVIDER_SHARE_SELF": "내 제공자입니다. 내 다른 컴퓨터에서 바로 사용할 수 있습니다.",
+    "PROVIDER_SHARE_ALREADY_MEMBER": "이미 이 공유를 사용하고 있습니다. 다시 요청할 필요가 없습니다.",
+    "PROVIDER_SHARE_IDENTITY_INVALID": "계정을 확인할 수 없습니다. 다시 로그인한 뒤 시도하세요.",
+    "PROVIDER_SHARE_NOT_HOST_DEVICE": "이 공유는 제공자가 있는 컴퓨터에서만 관리할 수 있습니다.",
+    "PROVIDER_SHARE_CROSS_REGION_DISABLED": "다른 지역 간 공유는 아직 지원되지 않습니다. 이 링크는 다른 지역의 Cindy 서비스에서 만든 것입니다.",
+    "REMOTE_AGENT_SHARE_PAUSED": "모델이 바뀌지 않았습니다: 공유한 사람이 나에 대한 공유를 일시 중지했습니다. 다른 모델을 선택하세요.",
+    "REMOTE_AGENT_SHARE_REMOVED": "모델이 바뀌지 않았습니다: 이 공유는 더 이상 사용할 수 없습니다(공유한 사람이 삭제했거나 내가 나갔습니다). 다른 모델을 선택하세요.",
+    "REMOTE_AGENT_SHARE_UNAVAILABLE": "모델이 바뀌지 않았습니다: 공유된 제공자를 일시적으로 사용할 수 없습니다(공유한 사람의 컴퓨터가 오프라인이거나 공유가 잠시 꺼져 있습니다). 나중에 다시 시도하거나 다른 모델을 선택하세요."
   },
   "providerError": {
     "AUTH_INVALID": "API 키가 유효하지 않거나 만료되었습니다(401). 키를 확인한 후 다시 시도하세요",
@@ -904,7 +1130,7 @@
       },
       "wallpaper": {
         "title": "배경화면",
-        "description": "앱 전체에 Cindy 배경이나 내 이미지를 적용하세요. 테마는 별도로 선택할 수 있습니다.",
+        "description": "앱 전체에 Cindy 배경이나 내 이미지 또는 동영상을 적용하세요. 테마는 별도로 선택할 수 있습니다.",
         "reset": "기본값으로 복원",
         "aria": "배경화면 선택",
         "nonePreview": "없음",
@@ -915,18 +1141,21 @@
           "cindy-dream": "Cindy · 꿈속 여행",
           "custom": "사용자 지정 배경화면"
         },
-        "overlayLabel": "오버레이",
-        "overlayAria": "배경화면 오버레이 강도",
+        "visibilityLabel": "배경화면 표시 강도",
+        "visibilityHint": "0%에서는 배경화면을 숨기고, 100%에서는 원본 그대로 표시합니다.",
+        "blurLabel": "배경화면 흐림",
+        "blurHint": "배경화면만 흐리게 합니다. 0이면 꺼집니다. 움직이는 배경화면을 흐리게 하면 GPU 사용량이 늘어납니다.",
         "motionLabel": "표시 방식",
         "motionHint": "기본값은 정적입니다. 창이 숨겨지면 일시 정지하며 시스템의 동작 줄이기 설정을 따릅니다.",
         "motionStatic": "정적",
         "motionDynamic": "동적",
-        "customChoose": "이미지 선택",
-        "customReplace": "이미지 교체",
-        "customRemove": "이미지 제거",
+        "customChoose": "배경화면 선택",
+        "customReplace": "배경화면 교체",
+        "customRemove": "배경화면 제거",
         "customBusy": "처리 중…",
-        "customHint": "PNG, JPEG, WebP, 최대 20 MB. 이 기기에만 저장되며 정지 이미지로 표시됩니다.",
-        "customInvalid": "올바른 PNG, JPEG 또는 WebP 이미지를 선택하세요(최대 20 MB, 4천만 화소).",
+        "customPlaybackFailed": "이 동영상을 재생할 수 없습니다. H.264로 인코딩된 MP4 동영상을 선택하세요.",
+        "customHint": "PNG, JPEG, WebP 이미지는 최대 20 MB, MP4 동영상은 최대 100 MB. 이 기기에만 저장됩니다. 동적 모드에서는 소리 없이 반복 재생됩니다.",
+        "customInvalid": "올바른 PNG, JPEG 또는 WebP 이미지(최대 20 MB, 4천만 화소)나 최대 100 MB의 MP4 동영상을 선택하세요.",
         "customFailed": "배경화면을 저장하지 못했습니다. 다시 시도하세요."
       },
       "layout": {
@@ -2540,6 +2769,12 @@
           "empty": "이번에는 이 제공자가 사용 가능한 모델을 반환하지 않았습니다. 아래는 마지막으로 가져온 목록입니다. 계정 권한을 확인한 후 다시 시도하세요."
         },
         "suspendedBanner": "이 제공자는 비활성화되어 있습니다. 자격 증명은 유지되며, 활성화하면 모델을 다시 사용할 수 있습니다.",
+        "remoteAccess": {
+          "label": "원격 사용 허용",
+          "description": "켜면 내 다른 컴퓨터와 공유받은 사람이 이 제공자의 모델을 사용할 수 있습니다. Agent는 이 컴퓨터에서 이 컴퓨터의 로그인과 할당량으로 실행됩니다.",
+          "ariaLabel": "내 다른 컴퓨터와 공유받은 사람이 이 제공자를 사용하도록 허용",
+          "writeFailed": "원격 사용 설정을 저장하지 못했습니다. 다시 시도해 주세요."
+        },
         "moreActionsAria": "추가 작업"
       },
       "detect": {
@@ -3222,7 +3457,13 @@
         "permission": "권한 모드 보기·전환",
         "settings": "프로젝트와 Agent 설정 보기",
         "ctr": "데스크톱 세션 원격 제어",
-        "exctr": "원격 제어 종료"
+        "exctr": "원격 제어 종료",
+        "workspace": "프로젝트 워크스페이스 전환",
+        "unbind": "현재 프로젝트 매핑 해제",
+        "effort": "추론 강도 선택",
+        "agent": "Agent 선택",
+        "status": "연결 상태 보기",
+        "unlink": "Telegram 연결 해제"
       },
       "behavior": {
         "title": "리액션과 인용",
@@ -4366,7 +4607,7 @@
             "riskPublicBody": "Cindy의 답장은 공개 게시글이므로 누구나 볼 수 있습니다. 공개적으로 답을 찾거나 문제를 해결하는 데 적합하며, 사적인 일에는 적합하지 않습니다 —— 프라이버시가 노출될 위험이 있습니다.",
             "riskWorkdirBody": "모든 X 작업은 X 연결 설정에서 지정한 기본 작업 디렉터리에서 실행됩니다. Agent는 그 안의 파일을 읽고 쓸 수 있으며, 결론은 공개로 답장됩니다 —— 해당 디렉터리가 비공개 리포지터리를 가리키면 파일 내용도 함께 공개될 수 있습니다.",
             "withdrawLabel": "답장 철회하기",
-            "withdrawBody": "질문한 본인이 그 답장에 \"/delete\"라고 답장하면 삭제됩니다. 공개 답장만 삭제되며 로컬 작업 기록은 그대로 남습니다.",
+            "withdrawBody": "질문한 본인이 삭제할 답변에 \"@askmycindy /delete\"라고 답장하세요. 답장 본문에 @askmycindy를 직접 입력해야 합니다. 공개 답장만 삭제되며 로컬 작업 기록은 그대로 남습니다.",
             "ackTitle": "X가 연결되었습니다 —— 사용법과 주의사항",
             "ackConfirm": "위험을 이해했습니다"
           },
@@ -5684,8 +5925,6 @@
         "sessionContextDetail": "현재 세션을 위해 작동할 때만 위치 정보(세션 ID와 프로젝트 폴더 경로)를 전달합니다. 파일 내용은 포함되지 않으며 파일 접근 권한도 부여되지 않습니다.",
         "preview": "아래 사이트의 미리보기 페이지를 사이드바 브라우저에서 열 수 있습니다",
         "previewDetail": "아래에 나열된 사이트만 열 수 있으며, 페이지를 열 때마다 어떤 플러그인이 열었는지 표시됩니다.",
-        "iosSimulator": "현재 작업의 내장 iOS 시뮬레이터 상태를 확인하고 제어 패널을 열 수 있습니다",
-        "iosSimulatorDetail": "시뮬레이터 수명 주기, WDA, Native Sidecar, 영상과 입력은 계속 Cindy Host가 관리합니다. 플러그인은 프레임 데이터, 입력 권한, 네이티브 Helper 또는 다른 작업 ID를 받을 수 없습니다.",
         "nodeChildSpawn": "Node 프로그램이 패키지에 신고된 하위 프로세스 시작을 호스트에 요청할 수 있습니다",
         "nodeChildSpawnDetail": "자신의 패키지 안에 신고된 JS 파일만 시작할 수 있으며(메인 프로그램과 동일한 로컬 권한), 임의의 명령은 실행할 수 없습니다. 플러그인이 비활성화되거나 종료되면 하위 프로세스도 함께 종료됩니다.",
         "skill": "AI 어시스턴트에 스킬 \"{{name}}\"을(를) 추가합니다",
@@ -5793,8 +6032,6 @@
         "sidebarEntryTitle": "사이드바 항목",
         "showInSidebar": "사이드바에 표시",
         "sidebarEntryDescription": "켜면 “{{title}}” 항목이 사이드바에 표시됩니다. 맨 위에 둘지 “더 보기”에 넣을지는 “더 보기 → 사용자 지정”에서 바꿀 수 있습니다. 숨겨도 플러그인이 비활성화되지는 않습니다.",
-        "iosSimulatorAutoOpenTitle": "내장 시뮬레이터 패널 자동 열기",
-        "iosSimulatorAutoOpenDescription": "시뮬레이터를 시작하거나 App을 실행한 뒤 오른쪽에 시뮬레이터 화면을 자동으로 표시합니다. 꺼도 수동으로 열 수 있으며 다른 기능에는 영향을 주지 않습니다.",
         "openTool": "Tool {{name}} 세부 정보 보기",
         "noToolDescription": "이 Tool에는 설명이 없습니다.",
         "viewAllTools": "더 보기",
@@ -5820,8 +6057,7 @@
         "slotFs": "파일 쓰기",
         "slotLibrary": "영구 라이브러리",
         "slotSkill": "에이전트 스킬",
-        "slotWorkspace": "워크스페이스 세션",
-        "slotIOSSimulator": "내장 iOS 시뮬레이터"
+        "slotWorkspace": "워크스페이스 세션"
       },
       "commandPaletteTag": "플러그인 명령",
       "library": {
@@ -5955,6 +6191,31 @@
           "expired": "만료됨",
           "cancelled": "취소됨",
           "cancelledTracking": "추적을 멈췄습니다. 서버는 계속 처리 중입니다."
+        }
+      },
+      "retirement": {
+        "openFailed": "플러그인 상세 정보를 열지 못했습니다. 기본 창에서 플러그인을 열고 다시 시도하세요.",
+        "status": "지원 종료",
+        "view": "안내 보기",
+        "sidebarNotice": "이 기능은 지원이 종료되었습니다. 플러그인 상세에서 안내와 다음 단계를 확인하세요.",
+        "cardNotice": "이 기능은 지원이 종료되었습니다. 안내를 확인하세요.",
+        "recommendation": "추천 플러그인",
+        "install": "{{name}} 설치",
+        "open": "{{name}} 열기",
+        "enable": "{{name}} 활성화",
+        "later": "나중에",
+        "installed": "설치됨 · 사용 가능",
+        "installedDisabled": "설치됨 · 비활성화 상태",
+        "remove": "이전 플러그인 제거",
+        "saveFailed": "읽음 상태를 저장하지 못했습니다. 다시 시도하세요.",
+        "agentNotice": "선택한 내장 기능은 지원이 종료되었습니다. 플러그인 상세에서 대안을 확인하고 이전 도구를 다시 호출하지 마세요.",
+        "embeddedSimulator": {
+          "title": "기존 내장 시뮬레이터 지원이 종료되었습니다",
+          "description": "Cindy에서 기존 내장 시뮬레이터를 제거했습니다.",
+          "replacementName": "Baguette 시뮬레이터",
+          "replacementDescription": "Cindy 사이드바에서 실시간 화면을 보고 기기를 조작하며 App 실행과 스크린샷 촬영을 할 수 있습니다.",
+          "requirements": "Apple Silicon Mac, macOS 15 이상 및 전체 Xcode가 필요합니다.",
+          "dataNotice": "기존 시뮬레이터 기기와 App 데이터는 삭제되지 않습니다. Baguette를 설치해도 기기, App, 로그인 상태는 자동으로 이전되지 않습니다."
         }
       }
     },
@@ -6411,13 +6672,19 @@
       "dismiss": "닫기"
     },
     "dialog": {
-      "title": "시스템 자격 증명 저장소를 사용할 수 없음",
-      "intro": "Cindy가 시스템 자격 증명 저장소에서 로그인 자격 증명을 읽을 수 없어 로그인 상태와 관련 연동이 계속 실패합니다. 다음 단계를 시도해 보세요:",
-      "stepMacKeychain": "Cindy를 종료하고 '키체인 접근'을 열어 'Cindy Safe Storage'를 검색한 뒤 접근 제어를 확인하세요. 필요하면 해당 항목을 삭제하세요(저장된 연동 자격 증명은 무효화되어 다시 연결해야 합니다)",
-      "stepRestart": "Cindy 다시 시작",
-      "stepRelogin": "여전히 복구되지 않으면 로그아웃 후 다시 로그인하세요",
-      "confirm": "확인"
-    }
+      "title": "로그인 정보를 읽거나 저장할 수 없음",
+      "intro": "Cindy가 이 컴퓨터의 로그인 정보를 읽거나 저장할 수 없습니다. 로컬 저장소 문제이므로 인증 코드를 다시 받아도 해결되지 않습니다.",
+      "stepMacKeychain": "Mac과 로그인 키체인의 잠금을 해제하세요. macOS가 Cindy의 키체인 항목 접근 허용 여부를 물으면 ‘항상 허용’을 선택하세요.",
+      "stepLinuxKeyring": "데스크톱 키링의 잠금을 해제하고 비밀 정보 저장 서비스가 실행 중인지 확인하세요.",
+      "stepRestartMac": "Cindy 메뉴에서 종료(⌘Q)를 선택한 뒤 다시 여세요. 창만 닫으면 앱이 종료되지 않습니다.",
+      "stepRestart": "Cindy 메뉴나 시스템 트레이에서 종료를 선택한 뒤 다시 여세요. 창만 닫으면 백그라운드에서 계속 실행될 수 있습니다.",
+      "stepSupport": "완전히 종료한 뒤에도 복구되지 않으면 OS, Cindy 버전, 아래 오류 코드를 feedback@cindy.app으로 보내세요. 로그는 공개하지 말고 지원 담당자에게만 전달하세요.",
+      "preserveData": "저장된 자격 증명과 키체인 항목을 유지하세요. 삭제하면 다른 연결된 계정도 사용할 수 없게 될 수 있습니다.",
+      "openLogs": "로그 폴더 열기",
+      "logsFailed": "로그 폴더를 열 수 없습니다. 다시 시도하거나 오류 코드를 feedback@cindy.app으로 보내세요.",
+      "confirm": "도움말 닫기"
+    },
+    "recheck": "로그인 다시 시도"
   },
   "localDbGate": {
     "title": "로컬 데이터를 열 수 없습니다",
@@ -6428,7 +6695,7 @@
   "login": {
     "title": "Cindy에 오신 것을 환영합니다",
     "subtitle": "안전한 로그인 방법을 선택하세요",
-    "savedLoginPreserved": "저장된 로그인 정보는 이 기기에 남아 있습니다",
+    "savedLoginPreserved": "복구 과정에서 저장된 로그인 정보를 유지합니다",
     "phonePlaceholder": "휴대폰 번호 입력",
     "emailPlaceholder": "이메일 입력",
     "invalidEmail": "올바른 이메일 주소를 입력하세요",
@@ -6528,7 +6795,7 @@
       "fallback": "로그인에 실패했습니다. 다시 시도하세요.",
       "AUTH_SERVICE_UNAVAILABLE": "로그인 서비스를 일시적으로 사용할 수 없습니다.",
       "AUTH_REQUEST_FAILED": "로그인 요청에 실패했습니다.",
-      "CREDENTIAL_STORE_UNAVAILABLE": "Cindy를 완전히 종료한 뒤 다시 열어 로그인을 복구하세요.",
+      "CREDENTIAL_STORE_UNAVAILABLE": "로그인 저장소를 사용할 수 없습니다. 해결 방법을 확인하세요.",
       "BROWSER_OPEN_FAILED": "브라우저를 열 수 없습니다. 다시 시도하세요.",
       "BROWSER_OPEN_TIMEOUT": "브라우저 시작 시간이 초과되었습니다. 다시 시도하세요.",
       "NETWORK_ERROR": "네트워크 연결을 확인하세요.",
@@ -6554,6 +6821,13 @@
       "INVALID_LOGIN_TICKET": "로그인 세션이 만료되었습니다.",
       "INVALID_BIND_TICKET": "확인 세션이 만료되었습니다.",
       "REGION_MISMATCH": "로그인 서비스 지역이 이 앱과 일치하지 않습니다."
+    },
+    "rateLimit": {
+      "retryAt": "{{time}}(현지 시간) 이후에 다시 시도하세요.",
+      "unknownWait": "서버가 대기 시간을 제공하지 않았습니다. 인증 코드를 연속으로 요청하지 말고 잠시 기다려 주세요.",
+      "intro": "로그인 서비스가 요청을 일시적으로 제한하고 있습니다. 컴퓨터의 자격 증명 저장소 오류와는 별개의 문제입니다.",
+      "guidance": "잠시 기다린 뒤 인증 코드를 요청하세요. 재시작, 재설치 또는 네트워크 변경으로 제한이 해제된다는 보장은 없습니다.",
+      "support": "기다린 뒤에도 로그인할 수 없으면 OS, Cindy 버전, 오류 발생 시간, 아래 오류 코드와 로그를 feedback@cindy.app으로 비공개로 보내세요. 로그를 공개하지 마세요."
     }
   },
   "legacyMigration": {
@@ -6999,7 +7273,6 @@
       "kinds": {
         "fileBrowser": "파일 브라우저",
         "browser": "브라우저",
-        "iosSimulator": "iOS 시뮬레이터",
         "terminal": "터미널",
         "review": "리뷰",
         "subagents": "하위 에이전트",
@@ -7055,188 +7328,6 @@
       "loadFailed": "파일 트리를 불러오지 못했습니다",
       "unsupportedDropFile": "이 형식의 파일은 아직 미리 볼 수 없습니다",
       "multipleDropFilesUnsupported": "파일은 한 번에 하나만 드롭할 수 있습니다"
-    },
-    "iosSimulator": {
-      "title": "iOS 시뮬레이터",
-      "startPrompt": "iOS 시뮬레이터를 열어 주세요.",
-      "description": "이 로컬 세션에서 사용할 수 있는 Xcode 환경과 시뮬레이터를 확인합니다.",
-      "buildApproval": {
-        "title": "Xcode가 이 프로젝트를 빌드하도록 허용할까요?",
-        "description": "Xcode는 macOS 사용자 권한으로 이 프로젝트의 빌드 스크립트를 실행합니다. 스크립트는 프로젝트 외부의 파일을 읽거나 수정할 수 있고, 빌드 출력은 Agent에 반환됩니다. 신뢰하는 프로젝트인 경우에만 계속하세요."
-      },
-      "agentControlApproval": {
-        "attachTitle": "Agent가 이 시뮬레이터에 연결하고 제어하도록 허용할까요?",
-        "createTitle": "Agent가 시뮬레이터를 생성하고 제어하도록 허용할까요?",
-        "description": "이 작업이 성공하면 Agent는 현재 Cindy 작업에서 이 시뮬레이터를 사용할 수 있습니다. 시뮬레이터 시작 또는 중지, App 설치 또는 실행, 탭, 스와이프, 입력, 스크린샷, 시뮬레이터 설정 변경은 기기 제어에 대한 추가 확인 없이 실행됩니다. 기기 연결을 해제하거나 작업을 종료하거나 Cindy를 다시 시작하거나 시뮬레이터 패널에서 Agent 제어 권한을 취소하면 이 접근 권한이 만료됩니다. 그 밖의 민감한 작업에는 별도 승인이 필요할 수 있습니다."
-      },
-      "refresh": "새로 고침",
-      "checking": "확인 중",
-      "accessRequiredTitle": "이 세션 제어 허용",
-      "accessRequiredDescription": "상태 보기는 계속 사용할 수 있지만 탭, 입력 및 기타 제어는 이 세션의 권한이 있어야 사용할 수 있습니다. 시스템 대화상자에서 확인하세요.",
-      "allowTaskAccess": "세션 제어 허용",
-      "requestingAccess": "접근 요청 중…",
-      "accessDialogTitle": "iOS 시뮬레이터 제어를 허용할까요?",
-      "accessDialogMessage": "이 Cindy 창에서 ‘{{task}}’의 iOS 시뮬레이터를 보고 제어하도록 허용할까요?",
-      "accessDialogDetail": "이 권한은 이 세션에만 적용됩니다. 다른 세션으로 전환해도 보기 권한은 유지되지만 제어는 일시 중지됩니다. 돌아온 뒤 제어를 다시 허용하세요.",
-      "accessDialogAllow": "시뮬레이터 제어 허용",
-      "accessDialogCancel": "취소",
-      "accessDialogUntitledTask": "이름 없는 세션",
-      "readyTitle": "시뮬레이터 환경 준비 완료",
-      "unavailableTitle": "시뮬레이터를 사용할 수 없음",
-      "connectionError": "iOS 시뮬레이터 Host에 연결하지 못했습니다. 다시 시도해 주세요.",
-      "pluginNotInstalled": "현재 Cindy 인스턴스에 iOS 시뮬레이터 플러그인이 설치되어 있지 않습니다. 플러그인 마켓플레이스에서 설치하고 활성화한 후 다시 시도해 주세요.",
-      "pluginDisabled": "현재 Cindy 인스턴스에 iOS 시뮬레이터 플러그인이 설치되어 있지만 비활성화되어 있습니다. 플러그인 페이지에서 활성화한 후 다시 시도해 주세요.",
-      "pluginDisabledForProject": "이 작업 디렉터리에서는 iOS 시뮬레이터 플러그인이 비활성화되어 있습니다. 프로젝트 플러그인 설정에서 활성화한 후 다시 시도해 주세요.",
-      "pluginSessionUnavailable": "플러그인이 설치되고 활성화되어 있지만 현재 Cindy 인스턴스에서는 공유 플러그인 기능을 일시적으로 사용할 수 없습니다. 다른 Cindy 인스턴스 또는 계정 전환이 이 기능을 사용 중일 수 있습니다. 잠시 후 새로 고침해 주세요.",
-      "pluginStateChanging": "Cindy가 계정 또는 플러그인 상태를 전환하고 있습니다. 잠시 후 새로 고침해 주세요.",
-      "statusInternalError": "iOS 시뮬레이터 상태를 읽는 중 Cindy 내부 오류가 발생했습니다. 다시 시도해 주세요.",
-      "remoteUnsupported": "iOS 시뮬레이터는 로컬 macOS 세션에서만 사용할 수 있으며 SSH 또는 원격 세션에서는 지원되지 않습니다.",
-      "sessionUnavailable": "이 Cindy 세션을 더 이상 사용할 수 없습니다.",
-      "setupTitle": "설정 체크리스트",
-      "devicesTitle": "사용 가능한 기기",
-      "instancesTitle": "세션 시뮬레이터",
-      "instancesOverview": "다중 인스턴스 개요",
-      "instancesCount": "{{count}}개 준비됨",
-      "openDevice": "기기 열기",
-      "noDevices": "iPhone 또는 iPad 시뮬레이터를 찾지 못했습니다.",
-      "noAvailableDevices": "연결할 수 있는 iPhone 또는 iPad 시뮬레이터가 없습니다.",
-      "unavailableDevicesTitle": "사용할 수 없는 기기",
-      "unavailableDevicesCount": "{{count}}대",
-      "unavailableDevicesDescription": "현재 연결할 수 없는 기기입니다. 원인을 확인하고 해결한 후 상태를 새로 고치세요.",
-      "missingRuntime": "{{runtime}} Runtime이 없습니다",
-      "missingRuntimeHelp": "해당 Runtime을 Xcode에서 설치한 후 상태를 새로 고치세요.",
-      "deviceUnavailable": "Xcode에서 이 기기를 사용할 수 없는 상태로 표시했습니다",
-      "deviceUnavailableHelp": "Xcode에서 시뮬레이터를 확인하거나 다시 생성한 후 상태를 새로 고치세요.",
-      "booted": "부팅됨",
-      "shutdown": "종료됨",
-      "runtime": "런타임",
-      "udid": "UDID",
-      "attached": "연결됨",
-      "attachDevice": "기기 연결",
-      "detachDevice": "기기 연결 해제",
-      "startDevice": "기기 시작",
-      "stopDevice": "기기 중지",
-      "deleteDevice": "기기 삭제",
-      "deleteDeviceConfirmTitle": "{{device}} 기기를 삭제할까요?",
-      "deleteDeviceConfirmDescription": "이 시뮬레이터와 그 안에 저장된 모든 앱, 계정 및 데이터를 영구적으로 삭제합니다. 이 작업은 취소할 수 없습니다.",
-      "deleteRunningDeviceConfirmDescription": "이 시뮬레이터는 실행 중입니다. 확인하면 Cindy가 관련 리소스를 정리하고 기기를 중지한 다음 저장된 모든 앱, 계정 및 데이터를 영구적으로 삭제합니다. 이 작업은 취소할 수 없습니다.",
-      "attachedDescription": "이 기기는 현재 Cindy 세션에 연결되어 있습니다.",
-      "agentControlTitle": "Agent 제어",
-      "agentControlDescription": "허용한 경우에만 Agent가 이 기기를 시작, 중지 또는 조작할 수 있습니다.",
-      "allowAgentControl": "Agent 제어 허용",
-      "disableAgentControl": "Agent 제어 사용 중지",
-      "agentControlDialogTitle": "Agent 제어를 허용할까요?",
-      "agentControlDialogMessage": "Agent가 {{simulator}} 기기를 제어하도록 허용할까요?",
-      "agentControlDialogDetail": "이 요청은 ‘{{task}}’에서 시작되었습니다. Agent는 이 시뮬레이터에서 시작, 중지, 탭, 입력, 앱 설치 및 실행을 수행할 수 있습니다. 이 권한은 사용 중지할 때까지 현재 Cindy 프로필에 저장되며 재시작 후에도 유지됩니다.",
-      "agentControlDialogAllow": "허용",
-      "agentControlDialogCancel": "취소",
-      "operationError": "Cindy가 시뮬레이터 작업을 완료하지 못했습니다.",
-      "retryHint": "상태를 새로 고친 후 다시 시도하세요.",
-      "operationErrorWithRecovery": "Cindy가 시뮬레이터 작업을 완료하지 못했습니다. 상태를 새로 고친 후 다시 시도하세요.",
-      "deviceInUseByOtherTask": "다른 Cindy 작업에서 이 기기를 사용 중입니다. 다른 기기를 선택하거나 기존 작업에서 먼저 연결을 해제하세요.",
-      "taskDeviceLimitReached": "현재 작업에 {{limit}}대의 기기가 연결되어 있습니다. 한 대의 연결을 해제한 후 다른 기기를 연결하세요.",
-      "runningDeviceLimitReached": "Cindy에서 이미 {{limit}}대의 시뮬레이터를 동시에 실행 중입니다. 한 대를 중지한 후 이 부팅된 기기를 연결하세요.",
-      "resourceSoftLimitTitle": "현재 {{count}}대의 시뮬레이터가 실행 중입니다",
-      "resourceSoftLimitDescription": "기기를 더 시작하기 전에 Cindy가 시스템 메모리를 확인합니다. 새 시작이 차단되어도 기존 기기는 계속 실행됩니다.",
-      "resourceHardLimitTitle": "동시 실행 한도({{limit}}대)에 도달했습니다",
-      "resourceHardLimitDescription": "실행 중인 시뮬레이터 한 대를 중지한 후 새 기기를 시작하세요.",
-      "errors": {
-        "attachedElsewhere": "다른 Cindy 작업에서 이 기기를 사용 중입니다. 다른 기기를 선택하거나 기존 작업에서 먼저 연결을 해제하세요.",
-        "taskLimitReached": "이 작업에는 최대 {{taskLimit}}대의 기기를 연결할 수 있습니다. 한 대의 연결을 해제한 후 다시 시도하세요.",
-        "resourceLimitReached": "Cindy의 시뮬레이터 동시 실행 한도({{hardLimit}}대)에 도달했습니다. 한 대를 중지한 후 다시 시도하세요.",
-        "memoryPressure": "시스템 메모리 압력이 높아 시뮬레이터를 더 시작할 수 없습니다. 한 대를 중지하거나 나중에 다시 시도하세요.",
-        "deviceNotFound": "선택한 기기가 더 이상 존재하지 않습니다. 상태를 새로 고치고 다른 기기를 선택하세요.",
-        "deviceStateChanged": "기기 상태가 변경되었습니다. 상태를 새로 고친 후 다시 시도하세요."
-      },
-      "streamAlt": "{{device}}의 실시간 시뮬레이터 화면",
-      "waitingForFrame": "연결되면 실시간 화면이 여기에 표시됩니다.",
-      "viewerStoppedTitle": "시뮬레이터가 중지됨",
-      "viewerStoppedDescription": "이 기기를 시작하면 실시간 화면과 제어를 다시 사용할 수 있습니다.",
-      "gestureHint": "실시간 화면을 클릭하면 탭하고, 드래그하면 스와이프할 수 있습니다.",
-      "textInputLabel": "시뮬레이터에 입력할 텍스트",
-      "textInputPlaceholder": "시뮬레이터에 보낼 텍스트 입력",
-      "sendText": "텍스트 보내기",
-      "pressHome": "홈 누르기",
-      "rotateDevice": "기기 회전",
-      "lockScreen": "화면 잠금",
-      "unlockScreen": "화면 잠금 해제",
-      "copyScreenshot": "스크린샷 복사",
-      "screenshotCopied": "시뮬레이터 스크린샷을 복사했습니다",
-      "screenshotCopyFailed": "시뮬레이터 스크린샷을 복사하지 못했습니다. 다시 시도하세요.",
-      "moreControls": "추가 시뮬레이터 제어",
-      "controlsUnavailable": "시뮬레이터 제어를 일시적으로 사용할 수 없습니다",
-      "enterTextBeforeSending": "보낼 텍스트를 먼저 입력하세요",
-      "agentBusyTitle": "Agent가 이 기기를 사용 중",
-      "agentBusyDescription": "현재 Agent 작업이 끝날 때까지 수동 입력이 일시 중지됩니다.",
-      "takeControl": "기기 제어권 가져오기",
-      "takeoverPendingDescription": "현재 원자적 작업이 끝나기를 기다리는 중입니다. 대기 중인 Agent 작업은 취소되었습니다.",
-      "manualControlTitle": "수동 제어 활성화됨",
-      "manualControlDescription": "새 Agent 입력이 일시 중지되었습니다. 보기, 빌드 및 진단은 계속할 수 있습니다.",
-      "resumeAgentInput": "Agent 입력 재개",
-      "streamProfile": "스트림 품질",
-      "streamProfiles": {
-        "low": "낮음 · 5 FPS",
-        "balanced": "균형 · 10 FPS",
-        "balancedNative": "균형 · 20 FPS",
-        "high": "높음 · 20 FPS",
-        "highNative": "높음 · 30 FPS",
-        "experimental60": "60 FPS · 실험적"
-      },
-      "route": {
-        "nativeH264": "Native H.264",
-        "wdaJpeg": "WDA JPEG · 호환 모드",
-        "nativeHid": "Native HID",
-        "wdaInput": "WDA 입력 · 호환 모드",
-        "hidden": "뷰어 대기 중",
-        "multiTouchUnavailable": "멀티터치를 사용할 수 없음",
-        "state": {
-          "idle": "대기 중",
-          "detecting": "네이티브 기능 감지 중…",
-          "active": "활성",
-          "fallback": "호환 모드",
-          "reconnecting": "재연결 중…",
-          "unavailable": "사용할 수 없음"
-        }
-      },
-      "nativeRecovery": {
-        "available": "현재 Native 가속을 사용할 수 없습니다. 프레임 속도가 낮아지고 조작 반응이 느려질 수 있습니다.",
-        "action": "Native 복구 시도",
-        "recovering": "Native 가속을 복구하는 중입니다. 현재 WDA 화면과 제어는 계속 사용할 수 있습니다.",
-        "recoveringAction": "Native 복구 중…",
-        "failed": "Native 가속을 복구하지 못했습니다. WDA는 계속 사용할 수 있으니 나중에 다시 시도하세요."
-      },
-      "stream": {
-        "idle": "대기 중",
-        "connecting": "연결 중",
-        "streaming": "실시간",
-        "reconnecting": "다시 연결 중",
-        "paused": "일시 중지",
-        "disconnected": "연결 끊김"
-      },
-      "lifecycle": {
-        "stopped": "중지됨",
-        "booting": "시작 중",
-        "ready": "준비됨",
-        "stopping": "중지 중",
-        "error": "확인 필요"
-      },
-      "operations": {
-        "attach": "기기 연결 중…",
-        "start": "기기 시작 중…",
-        "stop": "기기 중지 중…",
-        "detach": "기기 연결 해제 중…",
-        "grant": "Agent 제어 권한 업데이트 중…",
-        "control": "입력 제어 업데이트 중…",
-        "screenshot": "시뮬레이터 스크린샷 복사 중…"
-      },
-      "setup": {
-        "localMac": "Mac의 로컬 Cindy 세션에서 이 프로젝트를 여세요.",
-        "installXcode": "Mac App Store 또는 Apple Developer에서 Xcode를 설치하세요.",
-        "selectXcode": "Xcode를 한 번 열고 명령줄 개발자 도구를 선택하세요.",
-        "installRuntime": "Xcode 설정에서 iOS 시뮬레이터 런타임을 설치하세요.",
-        "createDevice": "Xcode의 기기 및 시뮬레이터 창에서 iPhone 또는 iPad 시뮬레이터를 만드세요.",
-        "retryXcode": "Xcode를 열거나 재시작한 뒤 이 패널을 새로 고침하세요."
-      }
     },
     "browser": {
       "newTab": "새 탭",
@@ -8385,6 +8476,7 @@
         "planDoneGeneric": "역할 분담을 마쳤습니다"
       },
       "notice": {
+        "memberJoined": "{{name}} 님이 그룹에 참여했습니다",
         "memberFailed": "{{name}} 님이 이번에는 답하지 못했습니다",
         "memberTimeout": "{{name}} 님의 답이 너무 늦어 이번에는 건너뛰었습니다",
         "memberUnavailable": "{{name}} 님을 지금 사용할 수 없어 이번에는 발언하지 않았습니다",
@@ -9113,6 +9205,8 @@
         "ariaWithEffort": "모델 선택. 현재: {{model}}, 추론 강도: {{effort}}",
         "pendingAria": "모델 선택. 다음 메시지: {{agent}} · {{model}}",
         "pendingAriaWithEffort": "모델 선택. 다음 메시지: {{agent}} · {{model}}, 추론 강도: {{effort}}",
+        "agentDevice": "Agent가 {{device}}에서 실행",
+        "agentDeviceUnnamed": "Agent가 다른 컴퓨터에서 실행",
         "agent": {
           "claudeCode": "Claude Code",
           "codex": "Codex",
@@ -9168,6 +9262,8 @@
       "unified": {
         "railFavorites": "즐겨찾기",
         "railAll": "전체",
+        "railRemoteProvider": "{{provider}} · {{device}}",
+        "remoteLoading": "그 컴퓨터의 모델을 불러오는 중…",
         "favoritesGroup": "즐겨찾기",
         "favoritesEmpty": "즐겨찾기가 없습니다 — 모델 행에 마우스를 올리고 ☆를 눌러 저장하세요",
         "addFavorite": "즐겨찾기에 저장",
@@ -9453,6 +9549,13 @@
           "cancel": "현재 Agent 유지",
           "dontShowAgain": "다음부터 표시하지 않기"
         }
+      },
+      "agentRelocation": {
+        "titleLocal": "Agent를 다시 이 컴퓨터에서 실행할까요?",
+        "titleOther": "Agent를 “{{device}}”에서 실행할까요?",
+        "description": "원래 컴퓨터에 있는 대화 기록은 옮길 수 없어 인수인계 요약으로 이어집니다. 사고 내용 등은 완전히 이어지지 않을 수 있습니다. 다음 메시지를 보낼 때 적용됩니다.",
+        "confirm": "컴퓨터 전환",
+        "cancel": "그대로 두기"
       }
     },
     "agentSelect": {
@@ -9838,8 +9941,10 @@
       "retryTitle": "마지막 메시지 다시 보내기",
       "cancelTitle": "오류 알림 닫기",
       "retry": "다시 시도",
-      "continueAfterReset": "재설정 후 계속",
-      "continueAfterResetTitle": "사용량 제한 재설정 후 현재 작업을 계속할 일회성 자동화 만들기",
+      "usageLimitAutoContinueAt": "{{time}}에 자동으로 계속",
+      "usageLimitAutoContinueTitle": "사용량 한도가 재설정될 때까지 별도 조치가 없으면 이 작업을 자동으로 계속합니다",
+      "usageLimitAutoContinueCancel": "취소",
+      "usageLimitAutoContinueCancelTitle": "자동 계속 취소(오류와 다시 시도는 유지됩니다)",
       "codexOrganizationUsageLimitWithReset": "현재 연결된 Codex 계정은 조직에서 관리하며 사용량 한도에 도달했습니다. {{resetAt}}에 한도가 재설정될 예정입니다.",
       "codexOrganizationUsageLimit": "현재 연결된 Codex 계정은 조직에서 관리하며 사용량 한도에 도달했습니다. 한도 재설정을 기다리거나 사용 가능한 다른 계정으로 전환한 후 다시 시도하세요.",
       "codexUsageLimitWithReset": "현재 연결된 Codex 계정이 사용량 한도에 도달했습니다. {{resetAt}}에 한도가 재설정될 예정입니다.",
@@ -10061,7 +10166,16 @@
       "outsideWorkdir": "이 파일은 세션 작업 디렉터리 외부에 있어 원격 세션에서는 아직 접근할 수 없습니다",
       "staleCopy": "원격 연결을 사용할 수 없어 로컬 캐시 복사본을 표시합니다(최신이 아닐 수 있습니다)",
       "staleBadge": "캐시 복사본",
-      "revealLocalCopy": "로컬 복사본 다운로드 후 위치 표시"
+      "downloadToLocal": "이 컴퓨터로 다운로드",
+      "downloadPacking": "원격 컴퓨터에서 묶는 중…{{size}} 완료",
+      "downloadProgress": "다운로드 중…{{percent}}% · {{speed}}",
+      "downloadProgressUnknown": "다운로드 중…{{received}} · {{speed}}",
+      "uploadProgress": "원격 컴퓨터에서 업로드 중…{{percent}}% · {{speed}}",
+      "uploadProgressUnknown": "원격 컴퓨터에서 업로드 중…{{received}} · {{speed}}",
+      "downloadExtracting": "압축 푸는 중…",
+      "downloadUnsupported": "원격 컴퓨터가 아직 폴더 다운로드를 지원하지 않습니다. 해당 컴퓨터의 Cindy를 업데이트한 후 다시 시도하세요",
+      "downloadNoSpace": "디스크 공간이 부족해 다운로드를 완료할 수 없습니다",
+      "downloadSkipped": "다운로드 폴더에 저장했지만 일부 파일은 다운로드하지 못했습니다"
     },
     "mivoAction": {
       "promptPlaceholder": "프롬프트를 입력하고 Enter로 전송",
@@ -10261,6 +10375,7 @@
         "label": "다시 연결되었습니다",
         "labelFailed": "다시 연결하지 못했습니다",
         "labelNeutral": "다시 연결",
+        "labelUsageReset": "사용량이 복구되어 자동으로 계속했습니다",
         "detail": {
           "reason": "중단 원인",
           "attempt": "이번 재시도 {{attempt}}/{{total}}",
@@ -10279,7 +10394,11 @@
         "toggleHint": "인계 내용 보기",
         "handoffTitle": "인계 내용——전환 시 새 엔진에 전송된 컨텍스트 요약(대화 기록에 포함되지 않으며 여기에서만 표시)",
         "handoffTitleEnglishSource": "인계 내용——전환 시 새 엔진에 전송된 컨텍스트 요약. 원문은 영어(대화 기록에 포함되지 않으며 여기에서만 표시)",
-        "resumedBadge": "세션 재개됨"
+        "resumedBadge": "세션 재개됨",
+        "relocatedHere": "이제 Agent가 이 컴퓨터에서 실행됩니다",
+        "relocatedTo": "이제 Agent가 {{device}}에서 실행됩니다",
+        "relocatedTaskComputer": "이제 Agent가 작업이 있는 컴퓨터에서 실행됩니다",
+        "relocatedElsewhere": "이제 Agent가 다른 컴퓨터에서 실행됩니다"
       },
       "contextRebuild": {
         "labelOverflow": "컨텍스트를 정리하고 계속합니다",
@@ -10508,7 +10627,18 @@
       "REMOTE_PROVIDER_UNSUPPORTED": "원격 작업에서는 아직 이 모델 제공자를 사용할 수 없습니다. 다른 제공자로 바꾸거나 이 컴퓨터의 작업에서 사용하세요.",
       "REMOTE_PROVIDER_UPDATING": "이 모델 제공자의 자격 증명을 업데이트하는 중입니다. 잠시 후 다시 시도하세요.",
       "REMOTE_WORKDIR_UNAVAILABLE": "원격 작업 디렉터리를 지금 사용할 수 없습니다. 그 컴퓨터에 폴더가 아직 있는지 확인한 뒤 다시 시도하세요.",
-      "REMOTE_OPTIMISTIC_SESSION_STATE_UNAVAILABLE": "컴퓨터에서 이 메시지가 이미 전송됐는지 아직 확인할 수 없습니다. 잠시 후 다시 시도하고, 같은 메시지를 중복으로 보내지 마세요."
+      "REMOTE_OPTIMISTIC_SESSION_STATE_UNAVAILABLE": "컴퓨터에서 이 메시지가 이미 전송됐는지 아직 확인할 수 없습니다. 잠시 후 다시 시도하고, 같은 메시지를 중복으로 보내지 마세요.",
+      "REMOTE_AGENT_UNAVAILABLE": "Agent를 실행하는 컴퓨터에 연결할 수 없습니다. 그 컴퓨터가 온라인이고 원격 제어를 허용하는지 확인한 뒤 다시 시도하세요.",
+      "REMOTE_AGENT_PEER_TOO_OLD": "상대 컴퓨터의 Cindy가 오래되어 이 컴퓨터의 Agent를 실행할 수 없습니다. 먼저 그 컴퓨터에서 Cindy를 업데이트하세요.",
+      "REMOTE_AGENT_EXPIRED": "이 세션은 Agent를 실행하는 컴퓨터에서 이미 종료되었습니다. 다시 보내 주세요.",
+      "REMOTE_AGENT_NOT_FOUND": "이 세션은 Agent를 실행하는 컴퓨터에서 이미 종료되었습니다. 다시 보내 주세요.",
+      "REMOTE_AGENT_BUSY": "상대 컴퓨터에서 실행 중인 세션이 너무 많습니다. 일부를 종료한 뒤 다시 시도하세요.",
+      "REMOTE_AGENT_UNSUPPORTED": "상대 컴퓨터에서는 이 Agent를 사용할 수 없습니다. 그 컴퓨터에서 설치하거나 로그인한 뒤 다시 시도하거나, 다른 Agent를 선택하세요.",
+      "REMOTE_AGENT_INVALID": "Agent를 실행하는 컴퓨터와 통신하는 중 오류가 발생했습니다. 다시 시도하고, 계속되면 두 컴퓨터의 Cindy를 모두 최신 버전으로 업데이트하세요.",
+      "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "그 컴퓨터에서 이 제공자의 원격 사용을 허용하지 않았습니다. 그 컴퓨터의 설정 → 모델 제공자에서 원격 사용 허용을 켜거나 다른 모델을 선택하세요.",
+      "REMOTE_AGENT_SHARE_PAUSED": "공유한 사람이 나에 대한 공유를 일시 중지해서 재개될 때까지 이 모델을 사용할 수 없습니다. 다른 모델로 바꿔 계속할 수 있습니다.",
+      "REMOTE_AGENT_SHARE_REMOVED": "이 공유는 더 이상 사용할 수 없습니다(공유한 사람이 삭제했거나 내가 나갔습니다). 다른 모델로 바꿔 계속할 수 있습니다.",
+      "REMOTE_AGENT_SHARE_UNAVAILABLE": "공유된 제공자를 일시적으로 사용할 수 없습니다. 공유한 사람의 컴퓨터가 오프라인이거나 공유가 잠시 꺼져 있을 수 있습니다. 나중에 다시 시도하거나 다른 모델로 바꿔 계속할 수 있습니다."
     },
     "generatedFiles": {
       "title": "이 메시지에서 생성된 파일",
@@ -10802,7 +10932,8 @@
       "worktreeRepoHint": "작업 디렉터리를 다시 선택한 뒤 오른쪽 아래 폴더 표시가 갱신되면 다시 시도하세요",
       "sessionInactive": "세션이 더 이상 활성 상태가 아닙니다",
       "remoteProjectBanner": "{{device}}의 {{project}}에서 새 세션 만들기",
-      "remoteDialogueBanner": "{{device}}에서 새 대화(프로젝트 없음)"
+      "remoteDialogueBanner": "{{device}}에서 새 대화(프로젝트 없음)",
+      "agentDeviceBanner": "세션과 파일은 이 컴퓨터에 남고, Agent는 {{device}}에서 실행됩니다"
     },
     "jumpSession": {
       "emptyId": "이동할 sessionId를 입력하세요",
@@ -11198,7 +11329,9 @@
     },
     "sessionHeader": {
       "untitled": "제목 없는 세션",
-      "moreActions": "더 보기"
+      "moreActions": "더 보기",
+      "agentDevice": "Agent가 {{device}}에서 실행 중",
+      "agentDeviceOffline": "Agent가 {{device}}에서 실행 중이지만 그 컴퓨터가 오프라인입니다. 다시 연결되면 계속됩니다"
     },
     "gitContext": {
       "detached": "Detached HEAD",
@@ -11592,10 +11725,6 @@
     "empty": {
       "promptHeading": "자동화가 아직 없습니다",
       "promptDescription": "cron 자동화를 만들어 프롬프트를 일정에 따라 실행하세요."
-    },
-    "usageLimitRecovery": {
-      "name": "사용량 제한 재설정 후 작업 계속",
-      "prompt": "중단된 지점부터 현재 작업을 계속하세요."
     },
     "template": {
       "useTemplate": "초보자 도움말",
@@ -13161,7 +13290,7 @@
       "outputLimit": "모델이 출력 한도에 도달하여 이번 응답은 불완전할 수 있습니다. 다음 메시지를 보내 계속할 수 있습니다.",
       "permissionTightenInterruptFailed": "권한을 강화하는 동안 실행 중인 작업을 중지하지 못했습니다. 작업이 끝날 때까지 확인 없이 계속 실행될 수 있습니다. 필요하면 수동으로 중지하세요.",
       "codexAutoReviewUnavailable": "자동 리뷰를 일시적으로 사용할 수 없습니다. 현재 작업을 차단하고 기본 권한으로 전환했습니다. 다시 시도하세요. 필요한 경우 확인을 요청합니다.",
-      "hostShellCommandBlocked": "Cindy가 내장 iOS 시뮬레이터를 우회하는 셸 명령을 차단했습니다. 기기 제어, 앱 실행, 화면 조작, 스크린샷, 진단에는 iOS 시뮬레이터 도구를 사용하세요.",
+      "hostShellCommandBlocked": "Cindy가 이 셸 명령을 차단했습니다. 명령을 확인하고 사용 가능한 도구나 명령으로 계속하세요.",
       "upstreamResponseIdleTimeout": "모델이 오랫동안 응답하지 않아 무한 대기를 막기 위해 이번 턴을 자동으로 중단했습니다. 완료된 도구 호출은 유지되며, 다음 메시지를 보내 계속할 수 있습니다.",
       "codexHistoryOversized": "이미지 기록이 너무 커서 자동으로 이어가지 못했습니다. “계속”을 보내면 Cindy가 현재 작업을 이어갑니다.",
       "codexHistoryOversizedRemote": "기록에 과대한 이미지가 있어 원격 압축을 끝낼 수 없습니다. Codex를 실행 중인 기기에서 이 작업을 연 뒤 다시 보내세요. Cindy가 이미지를 생략하고 계속합니다.",
@@ -13309,6 +13438,7 @@
     "addUnavailable": "현재 분할 창에서 이 세션을 열 수 없습니다. 기본 영역에서 세션을 연 후 다시 시도하세요."
   },
   "extraDirs": {
+    "retryRemotePlugins": "원격 플러그인을 불러오지 못했습니다. 다시 시도",
     "menuAria": "작업 메뉴",
     "tooltipEmpty": "더 많은 작업",
     "tooltipCount": "추가 디렉터리 {{count}}개",
@@ -13405,7 +13535,8 @@
     "sessionTitle": "검토 · {{title}}",
     "toast": {
       "failed": "검토를 시작할 수 없습니다",
-      "remoteUnsupported": "이 버전에서는 로컬 작업만 검토할 수 있습니다"
+      "remoteUnsupported": "이 버전에서는 로컬 작업만 검토할 수 있습니다",
+      "agentDeviceUnsupported": "Agent를 다른 컴퓨터에서 실행하는 작업은 아직 검토할 수 없습니다"
     },
     "externalArtifactConfirm": {
       "title": "작업 공간 밖의 결과물을 검토할까요?",

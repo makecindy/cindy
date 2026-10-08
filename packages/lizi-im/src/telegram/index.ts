@@ -52,8 +52,13 @@ import {
   normalizeMessage,
   type TelegramGroupWindowEntry,
 } from './inbound.js';
-import { markdownToTelegramHtml, stripTelegramHtmlTags } from './markdown.js';
+import { markdownToTelegramHtml } from './markdown.js';
 import { TELEGRAM_PERSONAL_CAPABILITIES } from './presentationCapabilities.js';
+import {
+  callWithTelegramRateLimitRetry,
+  editTelegramHtmlWithFallback,
+  sendTelegramHtmlWithFallback,
+} from './outboundPolicy.js';
 import {
   EXPRESSIVE_DONE_POOL,
   EXPRESSIVE_ERROR_POOL,
@@ -103,21 +108,6 @@ const POLL_RETRY_BASE_MS = 1_000;
 const POLL_RETRY_MAX_MS = 30_000;
 /** 409 = 另一个进程在对同一 token 轮询 — 低频探测等它退出。 */
 const POLL_CONFLICT_RETRY_MS = 30_000;
-/**
- * 429 没给 `retry_after`(或给了非法值)时的兜底退避。**只用于兜底** —— 合法值
- * 一律按服务端给的全长等, 不设上限: 任何上限都等于在 flood 窗口结束前提前重试,
- * 那次重试必然再 429, 终稿于是又丢一次(bot-wide flood 的 retry_after 可以远超
- * 一分钟)。不设上限是安全的, 因为这个等待绑定了连接生命周期取消源(见
- * outboundAbortSignal), dispose / 下线 / 重连会立刻把它收口。
- */
-const RETRY_AFTER_FALLBACK_MS = 3_000;
-
-/** 429 退避时长: 合法 `retry_after` 原样采用, 缺失或非法(NaN / ≤0 / 非有限)走兜底。 */
-function retryAfterWaitMs(retryAfterSec: number | undefined): number {
-  if (typeof retryAfterSec !== 'number') return RETRY_AFTER_FALLBACK_MS;
-  if (!Number.isFinite(retryAfterSec) || retryAfterSec <= 0) return RETRY_AFTER_FALLBACK_MS;
-  return retryAfterSec * 1000;
-}
 const MAX_OUTBOUND_FILE_BYTES = 50 * 1024 * 1024;
 const OWNER_NOTICE_TIMEOUT_MS = 4_500;
 /**
@@ -1710,7 +1700,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
    * 2026-08-04: 一个 11 分钟群轮次的终稿撞上 `retry after 26`, 只等 10s 就重试,
    * 再次 429 后整条答案丢失)。任何固定上限都只是把同一个 bug 往后挪: bot-wide
    * flood 的 retry_after 可以是几分钟, 60s 上限照样会提前重试。只有缺失/非法值
-   * 才走 RETRY_AFTER_FALLBACK_MS。
+   * 才走 TELEGRAM_RETRY_AFTER_FALLBACK_MS(outboundPolicy.ts)。
    *
    * 退避必须绑定连接生命周期: 等待期可能长达一分钟, 期间实例完全可能被
    * dispose / 下线 / 换配置重连。等待本身用当前世代的 AbortSignal 取消(否则
@@ -1726,18 +1716,13 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     if (typeof params.chat_id === 'string' || typeof params.chat_id === 'number') {
       this.stopTypingLoopsForChat(String(params.chat_id));
     }
-    try {
-      return await api.call<T>(method, params);
-    } catch (err) {
-      if (err instanceof TelegramApiError && err.errorCode === 429) {
-        // sleep 在 abort 时提前 resolve(不 reject), 所以醒来后必须显式核验。
-        await sleep(retryAfterWaitMs(err.retryAfterSec), abortSignal);
-        // 已停止 → 放弃重试并抛回原始 429, 不再发出任何请求。
-        if (!this.isLiveConnection(api, generation, abortSignal)) throw err;
-        return api.call<T>(method, params);
-      }
-      throw err;
-    }
+    // 退避判据与官方 bot 的 msg.op 进度出站同源(outboundPolicy.ts)。sleep 在 abort
+    // 时提前 resolve(不 reject), 所以醒来后由 isLive 显式核验; 已停止就抛回原始
+    // 429, 不再发出任何请求。
+    return callWithTelegramRateLimitRetry(() => api.call<T>(method, params), {
+      sleep: (ms) => sleep(ms, abortSignal),
+      isLive: () => this.isLiveConnection(api, generation, abortSignal),
+    });
   }
 
   /**
@@ -1866,27 +1851,16 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       ? { params: replyParamsFor(reuseReplyTargetId), lease: null }
       : this.leaseReplyTarget(userId);
     const { html, imageUrls } = markdownToTelegramHtml(markdownChunk);
-    let sent: TgMessage;
-    try {
-      sent = await this.callSend<TgMessage>('sendMessage', {
+    // HTML 被拒(400)回落原 markdown 纯文本 —— 判据与官方 msg.op 出站同源。
+    const sent = await sendTelegramHtmlWithFallback(html, markdownChunk, (text, parseHtml) =>
+      this.callSend<TgMessage>('sendMessage', {
         ...target,
         ...replyParams,
-        text: html || '…',
-        parse_mode: 'HTML',
+        text,
+        ...(parseHtml ? { parse_mode: 'HTML' } : {}),
         link_preview_options: LINK_PREVIEW_OPTIONS,
-      });
-    } catch (err) {
-      if (err instanceof TelegramApiError && err.errorCode === 400) {
-        sent = await this.callSend<TgMessage>('sendMessage', {
-          ...target,
-          ...replyParams,
-          text: markdownChunk || '…',
-          link_preview_options: LINK_PREVIEW_OPTIONS,
-        });
-      } else {
-        throw err;
-      }
-    }
+      }),
+    );
     this.commitReplyTarget(lease);
     this.recordOwnEcho(userId, markdownChunk, sent);
     return {
@@ -1923,36 +1897,19 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     html: string,
     replyMarkup: unknown,
   ): Promise<void> {
-    try {
+    // not modified 视为成功; HTML parse 失败(400)剥标签退回纯文本编辑(宁可丢格式
+    // 不丢内容)。判据与官方 msg.op 出站同源(outboundPolicy.ts)。回落那次同样要带上
+    // reply_markup: 省略的话清空键盘的意图会被丢掉。
+    await editTelegramHtmlWithFallback(html, async (text, parseHtml) => {
       await this.callSend('editMessageText', {
         chat_id: chatId,
         message_id: Number(nativeMessageId),
-        text: html || '…',
-        parse_mode: 'HTML',
+        text,
+        ...(parseHtml ? { parse_mode: 'HTML' } : {}),
         link_preview_options: LINK_PREVIEW_OPTIONS,
         ...(replyMarkup !== undefined ? { reply_markup: replyMarkup } : {}),
       });
-    } catch (err) {
-      if (err instanceof TelegramApiError && /not modified/i.test(err.message)) return;
-      if (err instanceof TelegramApiError && err.errorCode === 400) {
-        // HTML parse 失败: 剥标签退回纯文本编辑(宁可丢格式不丢内容)。
-        await this.callSend('editMessageText', {
-          chat_id: chatId,
-          message_id: Number(nativeMessageId),
-          text: stripTelegramHtmlTags(html) || '…',
-          link_preview_options: LINK_PREVIEW_OPTIONS,
-          // 同样要带上 reply_markup: 走到这条 fallback 时若省略, 清空键盘的意图会被丢掉。
-          ...(replyMarkup !== undefined ? { reply_markup: replyMarkup } : {}),
-        }).catch((fallbackErr) => {
-          if (fallbackErr instanceof TelegramApiError && /not modified/i.test(fallbackErr.message)) {
-            return;
-          }
-          throw fallbackErr;
-        });
-        return;
-      }
-      throw err;
-    }
+    });
   }
 
   /**

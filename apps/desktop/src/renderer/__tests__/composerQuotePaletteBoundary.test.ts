@@ -25,7 +25,7 @@ describe('composer quote palette boundary wiring', () => {
     );
 
     expect(source).toContain("type: 'plugin-command'");
-    expect(source).toContain('placeGhostAtComposerStart(editor, ghost, installedGhostsRef.current)');
+    expect(source).toContain('placeGhostAtComposerStart(editor, ghost, composerGhostsRef.current)');
     expect(source).not.toContain('scanPluginAtResources');
   });
 

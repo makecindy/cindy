@@ -95,9 +95,30 @@ describe('remote file preview pager wiring', () => {
     expect(filePage).toMatch(/<AvPreviewPage[^>]*visible=\{visible\}[^>]*\/>/);
     const avPage = source.slice(source.indexOf('function AvPreviewPage('), source.indexOf('function PdfPreviewPage('));
     expect(avPage).toMatch(/<RemoteMediaPlayerWebView[^>]*visible=\{visible\}[^>]*\/>/);
+    expect(avPage).toMatch(/<NativeVideoPlayer[^>]*visible=\{visible\}[^>]*\/>/);
     // 判定落在纯生命周期模块(行为级用例在 mediaPlayerWebView.test.ts),载体只发 pause。
     const playerSource = readSource('src/session/mediaPlayerWebView.tsx');
     expect(playerSource).toContain('if (lifecycleRef.current.onVisibilityChange(visible)) pausePlayback();');
+    const nativeSource = readSource('src/session/NativeVideoPlayer.tsx');
+    expect(nativeSource).toContain('if (lifecycleRef.current.onVisibilityChange(visible)) player.pause();');
+  });
+
+  it('plays video with the system player and keeps it filling the page', () => {
+    // 视频走系统原生播放器(控件、全屏、旋转都由系统负责);data: 地址与原生播放器
+    // 报错的格式(iOS 上的 WebM)退回 WebView 播放器,原来能播的文件不能退化。
+    const avPage = source.slice(source.indexOf('function AvPreviewPage('), source.indexOf('function PdfPreviewPage('));
+    expect(avPage).toContain("if (kind === 'video' && !nativeFailed && !url.startsWith('data:')) {");
+    expect(avPage).toContain('onError={handleNativePlaybackError}');
+    expect(avPage).toContain('setNativeFailed(true);');
+    const nativeSource = readSource('src/session/NativeVideoPlayer.tsx');
+    expect(nativeSource).toMatch(/stage: \{[^}]*\bflex: 1\b[^}]*\}/);
+    expect(nativeSource).toContain('nativeControls');
+  });
+
+  it('shows real upload progress while the computer stages audio/video', () => {
+    const avPage = source.slice(source.indexOf('function AvPreviewPage('), source.indexOf('function PdfPreviewPage('));
+    expect(avPage).toContain('if (!cancelled) setProgress(measure(uploaded, total));');
+    expect(avPage).toContain('formatTransferProgress(progress)');
   });
 });
 

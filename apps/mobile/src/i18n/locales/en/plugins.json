@@ -78,7 +78,7 @@
   "returnToPlugin": "Return to plugin",
   "computerPreview": "Web preview from your computer",
   "previewFailed": "Could not load the preview. Check the computer connection and web service.",
-  "simulatorOnComputer": "This computer hosts the simulator. Open the computer screen to view and control it.",
+  "unsupportedOperation": "This version does not support this action. Check the plugin details on your computer for available actions.",
   "nativeStepHint": "Complete this step below",
   "shareMedia": "Share or save",
   "frequency_daily": "Daily",

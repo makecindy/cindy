@@ -63,10 +63,6 @@ import {
 } from './lib/projectAutomationConfig';
 import type { ScheduleFormState } from './lib/scheduleFormLogic';
 import {
-  buildUsageLimitScheduleFormOverrides,
-  readUsageLimitScheduleCreateIntent,
-} from './lib/usageLimitScheduleCreateIntent';
-import {
   buildPluginScheduleFormOverrides,
   readPluginScheduleCreateIntent,
 } from './lib/pluginScheduleCreateIntent';
@@ -207,29 +203,8 @@ export function SchedulerPage() {
     setFormOpen(true);
   }, [editToken, focusId, schedules]);
 
-  useEffect(() => {
-    const intent = readUsageLimitScheduleCreateIntent(location.state);
-    if (!intent || handledScheduleCreateRequestRef.current === intent.requestId) return;
-    handledScheduleCreateRequestRef.current = intent.requestId;
-    setCreatePrefillWorkingDir(null);
-    setCreateInitialTemplate(null);
-    setEditing(null);
-    setCreateInitialValues(
-      buildUsageLimitScheduleFormOverrides(intent, {
-        name: t('scheduler.usageLimitRecovery.name'),
-        prompt: t('scheduler.usageLimitRecovery.prompt'),
-      }),
-    );
-    setFormOpen(true);
-    // Consume the one-shot navigation intent so revisiting Automations does not
-    // reopen the modal. Creation still happens only after the user submits.
-    const path = `${location.pathname || '/cc-agent/scheduled'}${location.search}`;
-    navigate(path, { replace: true, state: null });
-  }, [location.pathname, location.search, location.state, navigate, t]);
-
-  // 插件请求新建自动化(agent 槽 schedule 加档):形态与上面 usage-limit 那条
-  // 完全一致 —— 一次性导航意图 → 预填打开面板 → 用完立刻清掉 state。
-  // 与它共用 handledScheduleCreateRequestRef:两种意图不该叠开两个面板。
+  // 插件请求新建自动化(agent 槽 schedule 加档):一次性导航意图 → 预填打开面板 →
+  // 用完立刻清掉 state。handledScheduleCreateRequestRef 防同一意图重复开面板。
   // ⚠️ 这里只 setCreateInitialValues + 打开面板,**不创建任务**。落库仍然只发生在
   // 用户点保存后走 handleSubmit —— 插件全程没有直接建任务的通道。
   useEffect(() => {

@@ -647,3 +647,14 @@ describe('normalizeInputProjection — credentialSwitchWait', () => {
     ).toBeNull();
   });
 });
+
+describe('normalizeInputProjection usageLimitWait', () => {
+  it('reads the wait and treats legacy or malformed values as no wait', () => {
+    expect(normalizeInputProjection({ sessionId: 's1', usageLimitWait: { resumeAt: 123 } }).usageLimitWait)
+      .toEqual({ resumeAt: 123 });
+    expect(normalizeInputProjection({ sessionId: 's1' }).usageLimitWait).toBeNull();
+    expect(normalizeInputProjection({ sessionId: 's1', usageLimitWait: { resumeAt: 'soon' } }).usageLimitWait)
+      .toBeNull();
+  });
+});
+

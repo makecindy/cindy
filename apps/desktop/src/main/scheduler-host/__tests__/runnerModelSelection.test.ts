@@ -255,6 +255,7 @@ function createRunnerHarness(
       defaultEffort?: string | null;
     }>;
     checkModelRoute?: ConstructorParameters<typeof MakerScheduleRunner>[0]['checkModelRoute'];
+    isAgentOnOtherDevice?: ConstructorParameters<typeof MakerScheduleRunner>[0]['isAgentOnOtherDevice'];
     resolveRouteCopyCapabilities?: ConstructorParameters<
       typeof MakerScheduleRunner
     >[0]['resolveRouteCopyCapabilities'];
@@ -285,6 +286,7 @@ function createRunnerHarness(
     notifier,
     logger: createLogger(),
     checkModelRoute: opts.checkModelRoute,
+    ...(opts.isAgentOnOtherDevice ? { isAgentOnOtherDevice: opts.isAgentOnOtherDevice } : {}),
     acquirePendingAgentSwitch: opts.acquirePendingAgentSwitch,
     applyPiModelSelectionUnderLock: opts.applyPiModelSelectionUnderLock ?? (async (_id, targetModel, providerId) => {
       await h.session.setModel(targetModel, { providerId });
@@ -520,6 +522,41 @@ describe('MakerScheduleRunner model selection', () => {
       expect(mocks.setSessionProvider).not.toHaveBeenCalled();
       expect(h.send).not.toHaveBeenCalled();
     });
+  });
+
+  it('leaves route decisions for a task whose agent runs on another computer to that computer', async () => {
+    const h = createSessionHarness();
+    (h.session as { agentKind: string }).agentKind = 'pi';
+    (h.session as { model: string }).model = 'spark/qwen';
+    const transaction = vi.fn(async () => ({ status: 'applied' as const }));
+    const checkModelRoute = vi.fn()
+      .mockResolvedValueOnce({ kind: 'pass' as const })
+      .mockResolvedValue({ kind: 'reject' as const, reason: 'model-unavailable' });
+    const isAgentOnOtherDevice = vi.fn(async (sessionId: string) => sessionId === 'scheduler-session');
+    const harness = createRunnerHarness(h, null, {
+      checkModelRoute, isAgentOnOtherDevice, applyPiModelSelectionUnderLock: transaction,
+    });
+    await fireToCompletion(harness, h, baseSchedule({ agentKind: 'pi', model: h.session.model }));
+    // 新建任务时的那一次照常裁决(定时任务新建的任务在本机运行)；绑定到这个任务之后不再用本机目录裁决。
+    expect(checkModelRoute).toHaveBeenCalledTimes(1);
+    expect(isAgentOnOtherDevice).toHaveBeenCalledWith('scheduler-session');
+    expect(transaction).not.toHaveBeenCalled();
+    expect(h.send).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps deciding routes here when the lookup fails', async () => {
+    const h = createSessionHarness();
+    (h.session as { agentKind: string }).agentKind = 'pi';
+    (h.session as { model: string }).model = 'chatgpt/gpt-5.6-sol';
+    const checkModelRoute = vi.fn(async () => ({ kind: 'pass' as const }));
+    const harness = createRunnerHarness(h, null, {
+      checkModelRoute,
+      isAgentOnOtherDevice: vi.fn(async () => {
+        throw new Error('db closed');
+      }),
+    });
+    await fireToCompletion(harness, h, baseSchedule({ agentKind: 'pi', model: h.session.model }));
+    expect(checkModelRoute.mock.calls.length).toBeGreaterThan(1);
   });
 
   it('prepares a late Pi reroute before binding the result listener or sending', async () => {

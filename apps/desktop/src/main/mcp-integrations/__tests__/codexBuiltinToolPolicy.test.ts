@@ -7,12 +7,12 @@ import {
 } from '../codexBuiltinToolPolicy.js';
 
 describe('frozen built-in tool policy', () => {
-  it('blocks stable collab and iOS gateways when the Bot Profile disables them', () => {
+  it('blocks stable collab and browser tools when the Bot Profile disables them', () => {
     const vendorOptions = {
-      [CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY]: ['collab', 'ios-simulator'],
+      [CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY]: ['collab', 'browser'],
     };
     expect(isFrozenBuiltinPluginAllowed(vendorOptions, 'collab')).toBe(false);
-    expect(isFrozenBuiltinPluginAllowed(vendorOptions, 'ios-simulator')).toBe(false);
+    expect(isFrozenBuiltinPluginAllowed(vendorOptions, 'browser')).toBe(false);
     expect(isFrozenBuiltinPluginAllowed(vendorOptions, 'memory')).toBe(true);
   });
 

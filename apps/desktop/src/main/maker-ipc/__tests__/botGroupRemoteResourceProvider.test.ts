@@ -169,6 +169,15 @@ describe('bot group remote resources', () => {
     expect(botGroupRemotePreview(summary())).toMatchObject({ translations: { 'zh-CN': '阿布：写好了' } });
   });
 
+  it('localizes join previews for every phone language without an author prefix', () => {
+    const preview = botGroupRemotePreview(summary({ openPlan: null, lastMessage: { authorKind: 'system',
+      authorName: 'Taylor', noticeCode: 'member-joined', preview: 'Fallback', createdAt: 50 } }));
+    expect(preview).toEqual({ fallback: 'Taylor joined the group', translations: {
+      'zh-CN': 'Taylor加入了群聊', 'zh-TW': 'Taylor加入了群聊',
+      ja: 'Taylorさんがグループに参加しました', ko: 'Taylor 님이 그룹에 참여했습니다',
+    } });
+  });
+
   it('sends the chat only to controllers that understand it, without host paths', async () => {
     const rich = await remoteResourceRegistry.get(context, { client: client([BOT_GROUP_CHAT_PRIMITIVE]), ref: ref('g1') });
     expect(rich.blocks?.[0]).toMatchObject({ primitive: BOT_GROUP_CHAT_PRIMITIVE });
@@ -182,6 +191,16 @@ describe('bot group remote resources', () => {
     expect(plain.blocks?.[0]).toMatchObject({ primitive: 'markdown' });
     expect(plain.blocks?.[0]?.data).toBeUndefined();
     expect(plain.blocks?.[0]?.fallbackMarkdown).toContain('**阿布**: 写好了');
+  });
+
+  it.each(['member-joined', null] as const)('keeps system notices (%s) visible to old phones through the plain fallback', async noticeCode => {
+    const joined = { ...detail().messages[0]!, kind: 'notice' as const, authorKind: 'system' as const,
+      noticeCode, authorName: 'Taylor', content: 'Taylor joined the group' };
+    service.getGroup.mockResolvedValue({ ok: true, group: detail({ messages: [joined] }) });
+    const plain = await remoteResourceRegistry.get(context, { client: client(), ref: ref('g1') });
+    expect(plain.blocks?.[0]?.fallbackMarkdown).toBe('Taylor joined the group');
+    const rich = botGroupRemoteChatData(detail({ messages: [joined] }));
+    expect(rich.messages[0]).toMatchObject({ authorKind: 'system', noticeCode, authorName: 'Taylor' });
   });
 
   it('forwards actions to the group service and reports its error code when refused', async () => {

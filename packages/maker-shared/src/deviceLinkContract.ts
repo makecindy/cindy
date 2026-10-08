@@ -394,6 +394,7 @@ export const MOBILE_REMOTE_INVOKE_CHANNELS = [
   'maker:input:resume',
   'maker:input:retry-last-error',
   'maker:input:clear-error',
+  'maker:input:cancel-usage-limit-wait',
   'maker:input:remove',
   'maker:input:update-text',
   'maker:input:update-content',

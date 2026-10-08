@@ -347,7 +347,7 @@ import type {
   MobileMediaPlayerKind,
   MobileMediaPlayerStatus,
 } from '@/session/mediaPlayerWebViewHtml';
-import { formatMobileSystemCard } from '@/session/systemCard';
+import { formatAgentSwitchLocationLabel, formatMobileSystemCard } from '@/session/systemCard';
 import { MobileBoundaryNotice } from '@/session/MobileBoundaryNotice';
 import {
   getMobileAutoResumePresentation,
@@ -5201,7 +5201,9 @@ function MobileAgentSwitchCard({ data }: { data?: Record<string, unknown> }) {
   const toModel = typeof data?.toModel === 'string' ? data.toModel : '';
   const handoff = typeof data?.handoff === 'string' ? data.handoff : '';
   const resumed = data?.resumed === true;
-  const label = t('message.renderer.agentSwitchLabel', { from, to });
+  // 远程 Agent 换了电脑:药丸说位置(「Agent 改到 X 运行」),否则仍是「已从 X 切换到 Y」。
+  const label = formatAgentSwitchLocationLabel(data, (key, options) => t(key, options))
+    ?? t('message.renderer.agentSwitchLabel', { from, to });
 
   return (
     <View style={styles.agentSwitchWrap} testID="message.systemCard.agent-switch">
@@ -5323,7 +5325,9 @@ function MobileAutoResumeActionRow({
     );
   }
 
-  const label = state === 'live'
+  const label = info.usageLimitReset
+    ? t('message.systemCard.autoResume.usageReset')
+    : state === 'live'
     ? hasProgress
       ? t('message.systemCard.autoResume.pendingWithProgress', {
           attempt: info.attempt,

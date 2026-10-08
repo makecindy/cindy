@@ -205,6 +205,18 @@ export interface AutoResumeInfo {
   sessionTotal: number;
 }
 
+/** 账号额度重置后自动继续时 `AutoResumeInfo.reason` 的取值（活动行据此换文案）。 */
+export const USAGE_LIMIT_RESET_AUTO_RESUME_REASON = 'usage-limit-reset';
+
+/**
+ * 普通任务撞上账号 5 小时 / 周限额后的等待计划：错误照常呈现，用户可随时自己处理；
+ * 到 `resumeAt` 仍无人处理时被控端自动继续该任务。仅在本次运行内有效（不落盘）。
+ */
+export interface AgentInputUsageLimitWait {
+  /** 预计自动继续的时刻（unix ms，已含重置后的缓冲）。 */
+  resumeAt: number;
+}
+
 /**
  * Durable recovery context for a retry/continue action.
  *
@@ -485,6 +497,11 @@ export interface AgentInputProjection {
    * 老被控端可能缺省该字段,消费方按 falsy 处理即可(退化成"没有自愈提示")。
    */
   autoResumePending?: AutoResumeInfo;
+  /**
+   * 账号限额等待中(与 `error` 同时存在:错误照常显示,横幅附「将于 X 自动继续 · 取消」)。
+   * 老被控端缺省该字段,消费方按 null 处理(退化成只有错误、没有自动继续)。
+   */
+  usageLimitWait?: AgentInputUsageLimitWait | null;
 }
 
 export type AgentInputMakerMessage =

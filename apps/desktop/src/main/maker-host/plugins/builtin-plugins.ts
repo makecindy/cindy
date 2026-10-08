@@ -6,7 +6,7 @@
  *   - 项目设置：.claude/settings.json → xdtMaker.builtinTools.{id}
  *
  * 所有 ID 都使用短且一致的名字，不带 `cindy_` 前缀：
- *   android | ios-simulator | browser | computer | feishu_bot | wechat |
+ *   android | browser | computer | feishu_bot | wechat |
  *   scheduler | ssh | memory | contacts | docs | xdt_helper | collab(→ cindy_orca) | lsp
  *
  * @cindy/mcps/providers.ts 里的现役 MCP provider `name` 使用 `cindy_` 前缀；
@@ -30,7 +30,6 @@ interface BuiltinPluginMeta {
  */
 const BUILTIN_META: BuiltinPluginMeta[] = [
   { id: 'android',     name: 'Android Automation', description: 'Android adb automation — screenshots, UI dump, taps, swipes, text input, and app launch on connected devices' },
-  { id: 'ios-simulator', name: 'iOS Simulator', description: 'Cindy embedded iOS Simulator — create or attach a session-owned device, boot it in the embedded viewer, build/install/launch apps, inspect screens, and debug interactions.' },
   { id: 'browser',     name: 'Browser',      description: 'Browser automation — isolated browsing, snapshots, screenshots, and page actions' },
   { id: 'computer',    name: 'Computer Use', description: 'Local desktop automation — apps, windows, UI inspection, clicks, and typing via an installed driver' },
   { id: 'feishu_bot',   name: 'Feishu Bot',   description: 'Send files and notifications to Feishu users via bot messages' },
@@ -71,7 +70,6 @@ const BUILTIN_META: BuiltinPluginMeta[] = [
  */
 export type KnownProviderName =
   | 'cindy_android'
-  | 'cindy_ios_simulator'
   | 'cindy_browser'
   | 'cindy_computer'
   | 'cindy_feishu_bot'
@@ -102,7 +100,6 @@ export type KnownProviderName =
  */
 export const PROVIDER_NAME_TO_PLUGIN_ID: Record<KnownProviderName, PluginId> = {
   cindy_android: 'android',
-  cindy_ios_simulator: 'ios-simulator',
   cindy_browser: 'browser',
   cindy_computer: 'computer',
   cindy_feishu_bot: 'feishu_bot',
@@ -160,7 +157,6 @@ export function createBuiltinPlugins(): Plugin[] {
  */
 const PLUGIN_ID_TO_MCP_ID: Record<PluginId, LiziMcpId | undefined> = {
   android: 'android',
-  'ios-simulator': 'ios_simulator',
   browser: 'browser',
   computer: 'computer',
   feishu_bot: 'cindy_feishu_bot',

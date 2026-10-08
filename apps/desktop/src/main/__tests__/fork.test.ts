@@ -990,6 +990,25 @@ describe('forkSessionAtMessage', () => {
     expect(txArgs.newMessageIds).toHaveLength(2);
   });
 
+  it('refuses to fork a task whose agent runs on another computer (its agent record is there)', async () => {
+    selectQueue.push([makeSourceRow({ agentDeviceId: 'device-b' })]);
+
+    await expect(forkSessionAtMessage('src-session', 'any-msg')).rejects.toMatchObject({
+      code: 'REMOTE_NOT_SUPPORTED',
+    });
+    expect(forkSdkSessionMock).not.toHaveBeenCalled();
+    expect(txCalls).toHaveLength(0);
+  });
+
+  it('refuses the encrypted-content fork for a Codex task whose agent runs on another computer', async () => {
+    selectQueue.push([makeSourceRow({ agentKind: 'codex', agentDeviceId: 'device-b' })]);
+
+    await expect(forkSessionStripEncrypted('src-session')).rejects.toMatchObject({
+      code: 'REMOTE_NOT_SUPPORTED',
+    });
+    expect(forkSdkSessionMock).not.toHaveBeenCalled();
+  });
+
   it('throws SOURCE_NEVER_RAN when source.sdkSessionId is null; maker not invoked', async () => {
     selectQueue.push([makeSourceRow({ sdkSessionId: null })]);
     selectQueue.push([makeMessageRow({ clientId: 'any-msg' })]);

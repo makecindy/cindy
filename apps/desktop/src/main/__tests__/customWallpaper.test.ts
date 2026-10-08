@@ -9,6 +9,14 @@ vi.mock('electron', () => ({
   app: { getPath: () => h.dir },
   dialog: { showOpenDialog: h.picker },
 }));
+vi.mock('../../shared/wallpaper-video-manifest.json', () => ({
+  default: {
+    official: {
+      delivery: 'cdn',
+      sha256: 'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad',
+    },
+  },
+}));
 vi.mock('../localDb/client/current.js', () => ({
   getDbClient: h.db,
   getCurrentDbClientSnapshot: h.db,
@@ -26,7 +34,11 @@ import {
   removeCustomWallpaper,
   prepareWallpaperImage,
 } from '../custom-wallpaper';
-import { customWallpaperStore, readCustomWallpaperUrl } from '../custom-wallpaper-settings';
+import {
+  customWallpaperStore,
+  readCustomWallpaperUrl,
+  readReferencedClientWallpaperUrls,
+} from '../custom-wallpaper-settings';
 import {
   writeBlob,
   readFile,
@@ -61,6 +73,156 @@ async function selectImage(color = 'blue') {
 const parent = {} as never;
 
 describe('client-owned custom wallpaper lifecycle', () => {
+  it('rejects a 20–100 MB image after only the header, even with an MP4 filename', async () => {
+    const png = await selectImage();
+    const file = path.join(h.dir, 'oversized.mp4');
+    fs.writeFileSync(file, png);
+    fs.truncateSync(file, 50 * 1024 * 1024);
+    h.picker.mockResolvedValue({ canceled: false, filePaths: [file] });
+    const realOpen = fs.promises.open;
+    const lengths: number[] = [];
+    vi.spyOn(fs.promises, 'open').mockImplementation(async (...args) => {
+      const handle = await realOpen(...args);
+      if (args[0] === file) {
+        const realRead = handle.read.bind(handle);
+        vi.spyOn(handle, 'read').mockImplementation((async (...readArgs: unknown[]) => {
+          lengths.push((readArgs[0] as Buffer).length);
+          return realRead(
+            readArgs[0] as Buffer,
+            readArgs[1] as number,
+            readArgs[2] as number,
+            readArgs[3] as number,
+          );
+        }) as typeof handle.read);
+      }
+      return handle;
+    });
+    await expect(importCustomWallpaper(parent)).rejects.toThrow('INVALID_PARAMS');
+    expect(lengths).toEqual([4096]);
+  });
+
+  it.each([false, true])(
+    'cleans failed imports from durable references (published=%s)',
+    async (published) => {
+      await selectImage();
+      await importCustomWallpaper(parent);
+      const official = await writeBlob({
+        buffer: Buffer.from('abc'),
+        mimeType: 'video/mp4',
+        scope: 'client-wallpaper',
+      });
+      const oldUrl = readCustomWallpaperUrl();
+      const video = Buffer.from('000000186674797069736f6d0000000069736f6d6d703432', 'hex');
+      const file = path.join(h.dir, 'replacement.mp4');
+      fs.writeFileSync(file, video);
+      h.picker.mockResolvedValue({ canceled: false, filePaths: [file] });
+      const write = customWallpaperStore.writePatchAtomic.bind(customWallpaperStore);
+      vi.spyOn(customWallpaperStore, 'writePatchAtomic').mockImplementationOnce(async (patch) => {
+        if (published) await write(patch);
+        throw new Error('save failed');
+      });
+      await expect(importCustomWallpaper(parent)).rejects.toThrow('save failed');
+      const current = readCustomWallpaperUrl();
+      expect((await listBlobFiles('client-wallpaper')).entries).toHaveLength(2);
+      await expect(readClientWallpaperFile(official.url)).resolves.toBeDefined();
+      if (published) {
+        expect(current).not.toBe(oldUrl);
+        expect((await readClientWallpaperFile(current)).buffer).toEqual(video);
+      } else {
+        expect(current).toBe(oldUrl);
+        await expect(readClientWallpaperFile(oldUrl)).resolves.toBeDefined();
+      }
+      expect(fs.readFileSync(file)).toEqual(video);
+    },
+  );
+
+  it('preserves the original save error if compensating cleanup also fails', async () => {
+    await selectImage();
+    await importCustomWallpaper(parent);
+    const oldUrl = readCustomWallpaperUrl();
+    await selectImage('red');
+    vi.spyOn(customWallpaperStore, 'writePatchAtomic').mockRejectedValueOnce(
+      new Error('save failed'),
+    );
+    vi.spyOn(recycler, 'recycleClientWallpapers').mockRejectedValueOnce(
+      new Error('cleanup failed'),
+    );
+    await expect(importCustomWallpaper(parent)).rejects.toThrow('save failed');
+    await expect(readClientWallpaperFile(oldUrl)).resolves.toBeDefined();
+    expect((await listBlobFiles('client-wallpaper')).entries).toHaveLength(2);
+    await removeCustomWallpaper();
+    expect((await listBlobFiles('client-wallpaper')).entries).toHaveLength(0);
+  });
+  it('retains an official CDN video when removing custom media', async () => {
+    const official = await writeBlob({
+      buffer: Buffer.from('abc'),
+      mimeType: 'video/mp4',
+      scope: 'client-wallpaper',
+    });
+    await selectImage();
+    await importCustomWallpaper(parent);
+    await removeCustomWallpaper();
+    expect((await readClientWallpaperFile(official.url)).buffer).toEqual(Buffer.from('abc'));
+    expect((await listBlobFiles('client-wallpaper')).entries).toHaveLength(1);
+  });
+
+  it('rejects oversized or fake MP4 files without replacing the current image', async () => {
+    await selectImage();
+    await importCustomWallpaper(parent);
+    const current = readCustomWallpaperUrl();
+    const file = path.join(h.dir, 'invalid.mp4');
+    fs.writeFileSync(file, 'not a video');
+    h.picker.mockResolvedValue({ canceled: false, filePaths: [file] });
+    await expect(importCustomWallpaper(parent)).rejects.toThrow('INVALID_PARAMS');
+    fs.truncateSync(file, 100 * 1024 * 1024 + 1);
+    await expect(importCustomWallpaper(parent)).rejects.toThrow('INVALID_PARAMS');
+    expect(readCustomWallpaperUrl()).toBe(current);
+    await expect(readClientWallpaperFile(current)).resolves.toBeDefined();
+  });
+  it('imports a video by its real bytes and recycles it when replaced by an image', async () => {
+    await selectImage();
+    await importCustomWallpaper(parent);
+    const previousImage = readCustomWallpaperUrl();
+    // A small ISO BMFF container fixture, independent of the selected filename.
+    const video = Buffer.from('000000186674797069736f6d0000000069736f6d6d703432', 'hex');
+    const file = path.join(h.dir, 'wallpaper.bin');
+    fs.writeFileSync(file, video);
+    h.picker.mockResolvedValue({ canceled: false, filePaths: [file] });
+    await importCustomWallpaper(parent);
+    const url = readCustomWallpaperUrl();
+    await expect(readClientWallpaperFile(previousImage)).rejects.toThrow();
+    expect(url).toMatch(/\.mp4$/);
+    expect((await readClientWallpaperFile(url)).buffer).toEqual(video);
+    expect(h.picker.mock.calls[0][1].filters[0].extensions).toContain('mp4');
+    await selectImage();
+    await importCustomWallpaper(parent);
+    await expect(readClientWallpaperFile(url)).rejects.toThrow();
+    expect((await listBlobFiles('client-wallpaper')).entries).toHaveLength(1);
+  });
+
+  it('refuses recycling when custom references are unreadable or invalid instead of dropping the video', () => {
+    const file = path.join(h.dir, 'custom-wallpaper.json');
+    for (const content of ['{broken', '[]', 'null', '{"url":"file:///private.mp4"}']) {
+      fs.writeFileSync(file, content);
+      expect(() => readReferencedClientWallpaperUrls()).toThrow();
+    }
+  });
+
+  it('keeps the old video when replacement fails, and removes it only after a successful save', async () => {
+    const file = path.join(h.dir, 'wallpaper.mp4');
+    fs.writeFileSync(file, Buffer.from('000000186674797069736f6d0000000069736f6d6d703432', 'hex'));
+    h.picker.mockResolvedValue({ canceled: false, filePaths: [file] });
+    await importCustomWallpaper(parent);
+    const url = readCustomWallpaperUrl();
+    await selectImage();
+    vi.spyOn(customWallpaperStore, 'writePatchAtomic').mockRejectedValueOnce(new Error('disk'));
+    await expect(importCustomWallpaper(parent)).rejects.toThrow('disk');
+    expect(readCustomWallpaperUrl()).toBe(url);
+    await expect(readClientWallpaperFile(url)).resolves.toBeDefined();
+    await removeCustomWallpaper();
+    expect((await listBlobFiles('client-wallpaper')).entries).toHaveLength(0);
+    expect(fs.existsSync(file)).toBe(true);
+  });
   it('imports without a database, then replaces and removes across account switches without touching identical chat bytes', async () => {
     const original = await selectImage();
     const chat = await writeBlob({
@@ -121,7 +283,7 @@ describe('client-owned custom wallpaper lifecycle', () => {
     expect((await readClientWallpaperFile(current)).buffer.length).toBeGreaterThan(0);
   });
 
-  it('keeps the published image after save failure and collects the unused bytes on the next successful operation', async () => {
+  it('keeps the published image after save failure and allows subsequent removal', async () => {
     await selectImage();
     await importCustomWallpaper(parent);
     const first = readCustomWallpaperUrl();

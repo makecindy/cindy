@@ -17,6 +17,8 @@ export interface SessionMeta {
   effort?: Effort;
   permissionMode?: PermissionMode;
   fastMode?: boolean;
+  /** Initial plan selection, persisted with the task rather than after creation. */
+  planMode?: boolean;
   /** Persist the host-owned Review purpose atomically with session creation. */
   reviewMode?: true;
   createdAt: number;
@@ -31,6 +33,11 @@ export interface SessionMeta {
    * 仅 Codex 支持; Claude 暂忽略此字段。
    */
   remoteHostId?: string;
+  /**
+   * Agent 在同账号另一台电脑上运行时，那台电脑的设备 id。任务、项目文件与命令仍在本机；
+   * 恢复会话时据此重新让那台电脑启动 Agent。与 remoteHostId 互斥。
+   */
+  agentDeviceId?: string;
 }
 // 历史: 这里曾有 status: 'active'|'closed'|'error'。
 // 这是 SDK 子进程的运行时瞬态, 不该持久化 —— 它跟 desktop DB 的产品语义 status

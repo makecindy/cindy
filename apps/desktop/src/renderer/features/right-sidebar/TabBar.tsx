@@ -19,26 +19,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import {
-  Activity,
-  Bot,
-  FolderTree,
-  Globe,
-  Smartphone,
-  Terminal,
-  GitPullRequestArrow,
-  UsersRound,
-  LayoutGrid,
-  ListTodo,
-  Plus,
-  Puzzle,
-  X,
-  Maximize2,
-  Minimize2,
-  PanelRightClose,
-  PictureInPicture2,
-  Wrench,
-} from 'lucide-react';
+import { Activity, Bot, FolderTree, Globe, Terminal, GitPullRequestArrow, UsersRound, LayoutGrid, ListTodo, Plus, Puzzle, X, Maximize2, Minimize2, PanelRightClose, PictureInPicture2, Wrench } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { TFunction } from 'i18next';
 import { useTranslation } from 'react-i18next';
@@ -97,7 +78,6 @@ interface TabBarProps {
    *  detached 子窗口等其它宿主不传,默认 true 维持经典拖窗行为。 */
   chromeWindowDrag?: boolean;
   /** Whether the installed product plugin currently exposes the Host viewer. */
-  iosSimulatorAvailable?: boolean;
   subagentsAvailable?: boolean;
 }
 
@@ -129,14 +109,13 @@ interface TabStripProps {
   addButtonWrapperClassName?: string;
   addButtonClassName?: string;
   /** Whether the installed product plugin currently exposes the Host viewer. */
-  iosSimulatorAvailable?: boolean;
   subagentsAvailable?: boolean;
 }
 
 const KIND_ICON: Record<BuiltinTabKindId, LucideIcon> = {
   'file-browser': FolderTree,
   'web-browser': Globe,
-  'ios-simulator': Smartphone,
+  'retired-feature': Puzzle,
   terminal: Terminal,
   review: GitPullRequestArrow,
   'orca-workers': UsersRound,
@@ -151,7 +130,7 @@ const KIND_ICON: Record<BuiltinTabKindId, LucideIcon> = {
 const KIND_LABEL_KEY: Record<BuiltinTabKindId, string> = {
   'file-browser': 'rightSidebar.tabs.kinds.fileBrowser',
   'web-browser': 'rightSidebar.tabs.kinds.browser',
-  'ios-simulator': 'rightSidebar.tabs.kinds.iosSimulator',
+  'retired-feature': 'settings.ghosts.retirement.status',
   terminal: 'rightSidebar.tabs.kinds.terminal',
   review: 'rightSidebar.tabs.kinds.review',
   'orca-workers': 'rightSidebar.tabs.kinds.collaboration',
@@ -223,7 +202,6 @@ export function TabBar({
   onCloseAll,
   onDetach,
   chromeWindowDrag = true,
-  iosSimulatorAvailable = false,
   subagentsAvailable = false,
 }: TabBarProps) {
   const { t } = useTranslation();
@@ -249,7 +227,6 @@ export function TabBar({
         onCloseAll={onCloseAll}
         addButtonWrapperClassName="h-[36px]"
         addButtonClassName="mt-[3px]"
-        iosSimulatorAvailable={iosSimulatorAvailable}
         subagentsAvailable={subagentsAvailable}
       />
 
@@ -317,7 +294,6 @@ export function TabStrip({
   pillVariant = 'flush',
   addButtonWrapperClassName,
   addButtonClassName,
-  iosSimulatorAvailable = false,
   subagentsAvailable = false,
 }: TabStripProps) {
   const { t } = useTranslation();
@@ -475,7 +451,6 @@ export function TabStrip({
             onClose={closeDropdown}
             onSelect={onAdd}
             existingKinds={existingKinds}
-            iosSimulatorAvailable={iosSimulatorAvailable}
             subagentsAvailable={subagentsAvailable}
           />
         </DropdownMenu>

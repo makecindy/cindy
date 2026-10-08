@@ -134,7 +134,8 @@ function NavigationGate() {
   useEffect(() => {
     if (!auth.initialized) return;
     const inAuthGroup = segments[0] === '(auth)';
-    if (!auth.isAuthenticated && !inAuthGroup) {
+    // 供应商分享链接的提示页只说明「请在电脑上打开」,不读账号数据,未登录也直接显示。
+    if (!auth.isAuthenticated && !inAuthGroup && segments[0] !== 'provider-share') {
       router.replace('/login');
       return;
     }

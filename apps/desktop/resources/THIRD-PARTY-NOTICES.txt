@@ -3642,7 +3642,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-OpenAI Codex CLI (runtime-downloaded binary) 0.145.0
+OpenAI Codex CLI (runtime-downloaded binary) 0.159.2
 License: Apache-2.0
 Source: https://github.com/openai/codex
 ------------------------------------------------------------------------------
@@ -4112,7 +4112,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-pi coding agent (runtime-downloaded binary) 0.85.1
+pi coding agent (runtime-downloaded binary) 1.0.2
 License: MIT
 Source: https://github.com/earendil-works/pi
 ------------------------------------------------------------------------------
@@ -4465,11 +4465,11 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ==============================================================================
-SECTION 2: npm packages (930 packages)
+SECTION 2: npm packages (923 packages)
 ==============================================================================
 
 - @antfu/install-pkg@1.1.0 — MIT — https://github.com/antfu/install-pkg
-- @anthropic-ai/sdk@0.91.1 — MIT — https://github.com/anthropics/anthropic-sdk-typescript
+- @anthropic-ai/sdk@0.93.0 — MIT — https://github.com/anthropics/anthropic-sdk-typescript
 - @aws-crypto/sha256-browser@5.2.0 — Apache-2.0 — https://github.com/aws/aws-sdk-js-crypto-helpers
 - @aws-crypto/sha256-js@5.2.0 — Apache-2.0 — https://github.com/aws/aws-sdk-js-crypto-helpers
 - @aws-crypto/supports-web-crypto@5.2.0 — Apache-2.0 — https://github.com/aws/aws-sdk-js-crypto-helpers
@@ -4552,23 +4552,14 @@ SECTION 2: npm packages (930 packages)
 - @iconify/types@2.0.0 — MIT — https://github.com/iconify/iconify
 - @iconify/utils@3.1.4 — MIT — https://github.com/iconify/iconify
 - @img/colour@1.1.0 — MIT — https://github.com/lovell/colour
-- @img/sharp-darwin-arm64@0.34.5 — Apache-2.0 — https://github.com/lovell/sharp
 - @img/sharp-darwin-arm64@0.35.3 — Apache-2.0 — https://github.com/lovell/sharp
-- @img/sharp-darwin-x64@0.34.5 — Apache-2.0 — https://github.com/lovell/sharp
 - @img/sharp-darwin-x64@0.35.3 — Apache-2.0 — https://github.com/lovell/sharp
-- @img/sharp-libvips-darwin-arm64@1.2.4 — LGPL-3.0-or-later — https://github.com/lovell/sharp-libvips
 - @img/sharp-libvips-darwin-arm64@1.3.2 — LGPL-3.0-or-later — https://github.com/lovell/sharp-libvips
-- @img/sharp-libvips-darwin-x64@1.2.4 — LGPL-3.0-or-later — https://github.com/lovell/sharp-libvips
 - @img/sharp-libvips-darwin-x64@1.3.2 — LGPL-3.0-or-later — https://github.com/lovell/sharp-libvips
-- @img/sharp-libvips-linux-arm64@1.2.4 — LGPL-3.0-or-later — https://github.com/lovell/sharp-libvips
 - @img/sharp-libvips-linux-arm64@1.3.2 — LGPL-3.0-or-later — https://github.com/lovell/sharp-libvips
-- @img/sharp-libvips-linux-x64@1.2.4 — LGPL-3.0-or-later — https://github.com/lovell/sharp-libvips
 - @img/sharp-libvips-linux-x64@1.3.2 — LGPL-3.0-or-later — https://github.com/lovell/sharp-libvips
-- @img/sharp-linux-arm64@0.34.5 — Apache-2.0 — https://github.com/lovell/sharp
 - @img/sharp-linux-arm64@0.35.3 — Apache-2.0 — https://github.com/lovell/sharp
-- @img/sharp-linux-x64@0.34.5 — Apache-2.0 — https://github.com/lovell/sharp
 - @img/sharp-linux-x64@0.35.3 — Apache-2.0 — https://github.com/lovell/sharp
-- @img/sharp-win32-x64@0.34.5 — Apache-2.0 AND LGPL-3.0-or-later — https://github.com/lovell/sharp
 - @img/sharp-win32-x64@0.35.3 — Apache-2.0 AND LGPL-3.0-or-later — https://github.com/lovell/sharp
 - @isaacs/cliui@8.0.2 — ISC — https://github.com/yargs/cliui
 - @isaacs/fs-minipass@4.0.1 — ISC — https://github.com/npm/fs-minipass
@@ -4894,6 +4885,7 @@ SECTION 2: npm packages (930 packages)
 - docx@9.7.1 — MIT — https://github.com/dolanmiu/docx
 - dompurify@3.4.12 — (MPL-2.0 OR Apache-2.0) — https://github.com/cure53/DOMPurify
 - dot-prop@6.0.1 — MIT — https://github.com/sindresorhus/dot-prop
+- dotenv@16.6.1 — BSD-2-Clause — https://github.com/motdotla/dotenv
 - drizzle-orm@0.45.2 — Apache-2.0 — https://github.com/drizzle-team/drizzle-orm
 - dunder-proto@1.0.1 — MIT — https://github.com/es-shims/dunder-proto
 - duplexer2@0.1.4 — BSD-3-Clause — https://github.com/deoxxa/duplexer2
@@ -5048,6 +5040,7 @@ SECTION 2: npm packages (930 packages)
 - json-schema-traverse@1.0.0 — MIT — https://github.com/epoberezkin/json-schema-traverse
 - json-schema-typed@7.0.3 — BSD-2-Clause — https://github.com/typeslick/json-schema-typed
 - json-schema-typed@8.0.2 — BSD-2-Clause — https://github.com/RemyRylan/json-schema-typed
+- json5@2.2.3 — MIT — https://github.com/json5/json5
 - jsonfile@4.0.0 — MIT — https://github.com/jprichardson/node-jsonfile
 - jsonfile@6.2.1 — MIT — https://github.com/jprichardson/node-jsonfile
 - jszip@3.10.1 — MIT — https://github.com/Stuk/jszip
@@ -26585,7 +26578,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-[124] Applies to: npm:@anthropic-ai/sdk@0.91.1
+[124] Applies to: npm:@anthropic-ai/sdk@0.93.0
 ------------------------------------------------------------------------------
 Copyright 2023 Anthropic, PBC.
 
@@ -29507,7 +29500,7 @@ The above copyright notice and this permission notice shall be included in all c
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[150] Applies to: npm:@img/sharp-darwin-arm64@0.34.5, npm:@img/sharp-darwin-arm64@0.35.3, npm:@img/sharp-darwin-x64@0.34.5, npm:@img/sharp-darwin-x64@0.35.3, npm:@img/sharp-linux-arm64@0.34.5, npm:@img/sharp-linux-arm64@0.35.3, npm:@img/sharp-linux-x64@0.34.5, npm:@img/sharp-linux-x64@0.35.3, npm:@img/sharp-win32-x64@0.34.5, npm:@img/sharp-win32-x64@0.35.3, npm:sharp@0.35.3
+[150] Applies to: npm:@img/sharp-darwin-arm64@0.35.3, npm:@img/sharp-darwin-x64@0.35.3, npm:@img/sharp-linux-arm64@0.35.3, npm:@img/sharp-linux-x64@0.35.3, npm:@img/sharp-win32-x64@0.35.3, npm:sharp@0.35.3
 ------------------------------------------------------------------------------
 Apache License
 Version 2.0, January 2004
@@ -34051,7 +34044,34 @@ Exhibit B - "Incompatible With Secondary Licenses" Notice
   defined by the Mozilla Public License, v. 2.0.
 
 ------------------------------------------------------------------------------
-[278] Applies to: npm:dunder-proto@1.0.1, npm:math-intrinsics@1.1.0
+[278] Applies to: npm:dotenv@16.6.1
+------------------------------------------------------------------------------
+Copyright (c) 2015, Scott Motte
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+* Redistributions of source code must retain the above copyright notice, this
+  list of conditions and the following disclaimer.
+
+* Redistributions in binary form must reproduce the above copyright notice,
+  this list of conditions and the following disclaimer in the documentation
+  and/or other materials provided with the distribution.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+------------------------------------------------------------------------------
+[279] Applies to: npm:dunder-proto@1.0.1, npm:math-intrinsics@1.1.0
 ------------------------------------------------------------------------------
 MIT License
 
@@ -34076,7 +34096,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-[279] Applies to: npm:duplexer2@0.1.4
+[280] Applies to: npm:duplexer2@0.1.4
 ------------------------------------------------------------------------------
 Copyright (c) 2013, Deoxxa Development
 ======================================
@@ -34106,7 +34126,7 @@ ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ------------------------------------------------------------------------------
-[280] Applies to: npm:ecdsa-sig-formatter@1.0.11
+[281] Applies to: npm:ecdsa-sig-formatter@1.0.11
 ------------------------------------------------------------------------------
 Apache License
                            Version 2.0, January 2004
@@ -34311,7 +34331,7 @@ Apache License
    limitations under the License.
 
 ------------------------------------------------------------------------------
-[281] Applies to: npm:ee-first@1.1.1
+[282] Applies to: npm:ee-first@1.1.1
 ------------------------------------------------------------------------------
 The MIT License (MIT)
 
@@ -34336,7 +34356,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[282] Applies to: npm:electron-squirrel-startup@1.0.1
+[283] Applies to: npm:electron-squirrel-startup@1.0.1
 ------------------------------------------------------------------------------
 Apache License
 Version 2.0, January 2004
@@ -34541,7 +34561,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 
 ------------------------------------------------------------------------------
-[283] Applies to: npm:electron-window-state@5.0.3
+[284] Applies to: npm:electron-window-state@5.0.3
 ------------------------------------------------------------------------------
 The MIT License (MIT)
 
@@ -34567,7 +34587,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[284] Applies to: npm:emoji-regex@8.0.0, npm:emoji-regex@9.2.2, npm:punycode@2.3.1
+[285] Applies to: npm:emoji-regex@8.0.0, npm:emoji-regex@9.2.2, npm:punycode@2.3.1
 ------------------------------------------------------------------------------
 Copyright Mathias Bynens <https://mathiasbynens.be/>
 
@@ -34591,7 +34611,7 @@ OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
 WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[285] Applies to: npm:encodeurl@2.0.0
+[286] Applies to: npm:encodeurl@2.0.0
 ------------------------------------------------------------------------------
 (The MIT License)
 
@@ -34617,7 +34637,7 @@ TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[286] Applies to: npm:end-of-stream@1.4.5, npm:pump@3.0.4, npm:tar-fs@2.1.5, npm:tar-stream@2.2.0
+[287] Applies to: npm:end-of-stream@1.4.5, npm:pump@3.0.4, npm:tar-fs@2.1.5, npm:tar-stream@2.2.0
 ------------------------------------------------------------------------------
 The MIT License (MIT)
 
@@ -34642,7 +34662,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[287] Applies to: npm:entities@6.0.1
+[288] Applies to: npm:entities@6.0.1
 ------------------------------------------------------------------------------
 Copyright (c) Felix Böhm
 All rights reserved.
@@ -34657,7 +34677,7 @@ THIS IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRE
 EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ------------------------------------------------------------------------------
-[288] Applies to: npm:es-set-tostringtag@2.1.0
+[289] Applies to: npm:es-set-tostringtag@2.1.0
 ------------------------------------------------------------------------------
 MIT License
 
@@ -34682,7 +34702,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-[289] Applies to: npm:es-toolkit@1.49.0
+[290] Applies to: npm:es-toolkit@1.49.0
 ------------------------------------------------------------------------------
 MIT License
 
@@ -34707,7 +34727,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-[290] Applies to: npm:escape-html@1.0.3
+[291] Applies to: npm:escape-html@1.0.3
 ------------------------------------------------------------------------------
 (The MIT License)
 
@@ -34735,7 +34755,7 @@ TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[291] Applies to: npm:esprima@4.0.1
+[292] Applies to: npm:esprima@4.0.1
 ------------------------------------------------------------------------------
 Copyright JS Foundation and other contributors, https://js.foundation/
 
@@ -34760,7 +34780,7 @@ ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ------------------------------------------------------------------------------
-[292] Applies to: npm:estree-util-is-identifier-name@3.0.0, npm:hast-util-heading-rank@3.0.0, npm:mdast-util-gfm-autolink-literal@2.0.1, npm:mdast-util-gfm-strikethrough@2.0.0, npm:mdast-util-gfm-table@2.0.0, npm:mdast-util-gfm-task-list-item@2.0.0, npm:mdast-util-math@3.0.0, npm:mdast-util-mdx-expression@2.0.1, npm:mdast-util-mdx-jsx@3.2.0, npm:mdast-util-mdxjs-esm@2.0.1, npm:micromark-extension-gfm@3.0.0, npm:micromark-extension-gfm-autolink-literal@2.1.0, npm:micromark-extension-gfm-strikethrough@2.1.0, npm:micromark-extension-gfm-tagfilter@2.0.0, npm:micromark-extension-gfm-task-list-item@2.1.0, npm:micromark-extension-math@3.1.0
+[293] Applies to: npm:estree-util-is-identifier-name@3.0.0, npm:hast-util-heading-rank@3.0.0, npm:mdast-util-gfm-autolink-literal@2.0.1, npm:mdast-util-gfm-strikethrough@2.0.0, npm:mdast-util-gfm-table@2.0.0, npm:mdast-util-gfm-task-list-item@2.0.0, npm:mdast-util-math@3.0.0, npm:mdast-util-mdx-expression@2.0.1, npm:mdast-util-mdx-jsx@3.2.0, npm:mdast-util-mdxjs-esm@2.0.1, npm:micromark-extension-gfm@3.0.0, npm:micromark-extension-gfm-autolink-literal@2.1.0, npm:micromark-extension-gfm-strikethrough@2.1.0, npm:micromark-extension-gfm-tagfilter@2.0.0, npm:micromark-extension-gfm-task-list-item@2.1.0, npm:micromark-extension-math@3.1.0
 ------------------------------------------------------------------------------
 (The MIT License)
 
@@ -34786,7 +34806,7 @@ TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[293] Applies to: npm:etag@1.8.1, npm:proxy-addr@2.0.7
+[294] Applies to: npm:etag@1.8.1, npm:proxy-addr@2.0.7
 ------------------------------------------------------------------------------
 (The MIT License)
 
@@ -34812,7 +34832,7 @@ TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[294] Applies to: npm:eventemitter3@5.0.4
+[295] Applies to: npm:eventemitter3@5.0.4
 ------------------------------------------------------------------------------
 The MIT License (MIT)
 
@@ -34837,7 +34857,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-[295] Applies to: npm:eventsource@3.0.7
+[296] Applies to: npm:eventsource@3.0.7
 ------------------------------------------------------------------------------
 The MIT License
 
@@ -34863,7 +34883,7 @@ OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
 WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[296] Applies to: npm:eventsource-parser@3.1.0
+[297] Applies to: npm:eventsource-parser@3.1.0
 ------------------------------------------------------------------------------
 MIT License
 
@@ -34888,7 +34908,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-[297] Applies to: npm:exceljs@4.4.0
+[298] Applies to: npm:exceljs@4.4.0
 ------------------------------------------------------------------------------
 The MIT License (MIT)
 
@@ -34913,7 +34933,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-[298] Applies to: npm:expand-template@2.0.3
+[299] Applies to: npm:expand-template@2.0.3
 ------------------------------------------------------------------------------
 The MIT License (MIT)
 
@@ -34938,7 +34958,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[299] Applies to: npm:express@5.2.1
+[300] Applies to: npm:express@5.2.1
 ------------------------------------------------------------------------------
 (The MIT License)
 
@@ -34966,7 +34986,7 @@ TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[300] Applies to: npm:express-rate-limit@8.5.2
+[301] Applies to: npm:express-rate-limit@8.5.2
 ------------------------------------------------------------------------------
 # MIT License
 
@@ -34990,7 +35010,7 @@ IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
 CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[301] Applies to: npm:extend@3.0.2
+[302] Applies to: npm:extend@3.0.2
 ------------------------------------------------------------------------------
 The MIT License (MIT)
 
@@ -35016,7 +35036,7 @@ OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
 WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[302] Applies to: npm:extend-shallow@2.0.1
+[303] Applies to: npm:extend-shallow@2.0.1
 ------------------------------------------------------------------------------
 The MIT License (MIT)
 
@@ -35041,7 +35061,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[303] Applies to: npm:fast-deep-equal@3.1.3, npm:json-schema-traverse@1.0.0
+[304] Applies to: npm:fast-deep-equal@3.1.3, npm:json-schema-traverse@1.0.0
 ------------------------------------------------------------------------------
 MIT License
 
@@ -35066,7 +35086,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-[304] Applies to: npm:fast-equals@5.4.1
+[305] Applies to: npm:fast-equals@5.4.1
 ------------------------------------------------------------------------------
 MIT License
 
@@ -35091,7 +35111,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-[305] Applies to: npm:fast-uri@3.1.4
+[306] Applies to: npm:fast-uri@3.1.4
 ------------------------------------------------------------------------------
 Copyright (c) 2011-2021, Gary Court until https://github.com/garycourt/uri-js/commit/a1acf730b4bba3f1097c9f52e7d9d3aba8cdcaae
 Copyright (c) 2021-present The Fastify team <https://github.com/fastify/fastify#team>
@@ -35125,7 +35145,7 @@ The complete list of contributors can be found at:
 - https://github.com/garycourt/uri-js/graphs/contributors
 
 ------------------------------------------------------------------------------
-[306] Applies to: npm:fetch-blob@3.2.0
+[307] Applies to: npm:fetch-blob@3.2.0
 ------------------------------------------------------------------------------
 MIT License
 
@@ -35150,7 +35170,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-[307] Applies to: npm:file-uri-to-path@1.0.0
+[308] Applies to: npm:file-uri-to-path@1.0.0
 ------------------------------------------------------------------------------
 Copyright (c) 2014 Nathan Rajlich <nathan@tootallnate.net>
 
@@ -35174,7 +35194,7 @@ TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[308] Applies to: npm:finalhandler@2.1.1
+[309] Applies to: npm:finalhandler@2.1.1
 ------------------------------------------------------------------------------
 (The MIT License)
 
@@ -35200,7 +35220,7 @@ TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[309] Applies to: npm:follow-redirects@1.16.0
+[310] Applies to: npm:follow-redirects@1.16.0
 ------------------------------------------------------------------------------
 Copyright 2014–present Olivier Lalonde <olalonde@gmail.com>, James Talmage <james@talmage.io>, Ruben Verborgh
 
@@ -35222,7 +35242,7 @@ WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
 IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[310] Applies to: npm:foreground-child@3.3.1
+[311] Applies to: npm:foreground-child@3.3.1
 ------------------------------------------------------------------------------
 The ISC License
 
@@ -35241,7 +35261,7 @@ ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR
 IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
 ------------------------------------------------------------------------------
-[311] Applies to: npm:form-data@4.0.6
+[312] Applies to: npm:form-data@4.0.6
 ------------------------------------------------------------------------------
 Copyright (c) 2012 Felix Geisendörfer (felix@debuggable.com) and contributors
 
@@ -35264,7 +35284,7 @@ Copyright (c) 2012 Felix Geisendörfer (felix@debuggable.com) and contributors
  THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[312] Applies to: npm:formdata-polyfill@4.0.10
+[313] Applies to: npm:formdata-polyfill@4.0.10
 ------------------------------------------------------------------------------
 MIT License
 
@@ -35289,7 +35309,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-[313] Applies to: npm:fresh@2.0.0
+[314] Applies to: npm:fresh@2.0.0
 ------------------------------------------------------------------------------
 (The MIT License)
 
@@ -35316,7 +35336,7 @@ TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[314] Applies to: npm:fs-constants@1.0.0
+[315] Applies to: npm:fs-constants@1.0.0
 ------------------------------------------------------------------------------
 The MIT License (MIT)
 
@@ -35341,7 +35361,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[315] Applies to: npm:fs-extra@11.3.6
+[316] Applies to: npm:fs-extra@11.3.6
 ------------------------------------------------------------------------------
 (The MIT License)
 
@@ -35360,7 +35380,7 @@ OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHE
  ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[316] Applies to: npm:fs.realpath@1.0.0
+[317] Applies to: npm:fs.realpath@1.0.0
 ------------------------------------------------------------------------------
 The ISC License
 
@@ -35407,7 +35427,7 @@ the licensed code:
   DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[317] Applies to: npm:function-bind@1.1.2
+[318] Applies to: npm:function-bind@1.1.2
 ------------------------------------------------------------------------------
 Copyright (c) 2013 Raynos.
 
@@ -35430,7 +35450,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[318] Applies to: npm:get-caller-file@2.0.5
+[319] Applies to: npm:get-caller-file@2.0.5
 ------------------------------------------------------------------------------
 ISC License (ISC)
 Copyright 2018 Stefan Penner
@@ -35440,7 +35460,7 @@ Permission to use, copy, modify, and/or distribute this software for any purpose
 THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
 ------------------------------------------------------------------------------
-[319] Applies to: npm:get-intrinsic@1.3.0
+[320] Applies to: npm:get-intrinsic@1.3.0
 ------------------------------------------------------------------------------
 MIT License
 
@@ -35465,7 +35485,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-[320] Applies to: npm:get-nonce@1.0.1
+[321] Applies to: npm:get-nonce@1.0.1
 ------------------------------------------------------------------------------
 MIT License
 
@@ -35490,7 +35510,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-[321] Applies to: npm:get-proto@1.0.1
+[322] Applies to: npm:get-proto@1.0.1
 ------------------------------------------------------------------------------
 MIT License
 
@@ -35515,7 +35535,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-[322] Applies to: npm:github-slugger@2.0.0
+[323] Applies to: npm:github-slugger@2.0.0
 ------------------------------------------------------------------------------
 Copyright (c) 2015, Dan Flettre <fletd01@yahoo.com>
 
@@ -35524,7 +35544,7 @@ Permission to use, copy, modify, and/or distribute this software for any purpose
 THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
 ------------------------------------------------------------------------------
-[323] Applies to: npm:glob@10.5.0
+[324] Applies to: npm:glob@10.5.0
 ------------------------------------------------------------------------------
 The ISC License
 
@@ -35543,7 +35563,7 @@ ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR
 IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
 ------------------------------------------------------------------------------
-[324] Applies to: npm:glob@7.2.3
+[325] Applies to: npm:glob@7.2.3
 ------------------------------------------------------------------------------
 The ISC License
 
@@ -35568,7 +35588,7 @@ under a Creative Commons Attribution-ShareAlike 4.0 International License
 https://creativecommons.org/licenses/by-sa/4.0/
 
 ------------------------------------------------------------------------------
-[325] Applies to: npm:gopd@1.2.0
+[326] Applies to: npm:gopd@1.2.0
 ------------------------------------------------------------------------------
 MIT License
 
@@ -35593,7 +35613,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-[326] Applies to: npm:graceful-fs@4.2.11
+[327] Applies to: npm:graceful-fs@4.2.11
 ------------------------------------------------------------------------------
 The ISC License
 
@@ -35612,7 +35632,7 @@ ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR
 IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
 ------------------------------------------------------------------------------
-[327] Applies to: npm:gray-matter@4.0.3, npm:normalize-path@3.0.0
+[328] Applies to: npm:gray-matter@4.0.3, npm:normalize-path@3.0.0
 ------------------------------------------------------------------------------
 The MIT License (MIT)
 
@@ -35637,7 +35657,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[328] Applies to: npm:gtoken@8.0.0
+[329] Applies to: npm:gtoken@8.0.0
 ------------------------------------------------------------------------------
 The MIT License (MIT)
 
@@ -35662,7 +35682,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[329] Applies to: npm:hachure-fill@0.5.2
+[330] Applies to: npm:hachure-fill@0.5.2
 ------------------------------------------------------------------------------
 MIT License
 
@@ -35687,7 +35707,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-[330] Applies to: npm:harmonyos-sans-sc-webfont-splitted@1.1.0
+[331] Applies to: npm:harmonyos-sans-sc-webfont-splitted@1.1.0
 ------------------------------------------------------------------------------
 This is free and unencumbered software released into the public domain.
 
@@ -35715,7 +35735,7 @@ OTHER DEALINGS IN THE SOFTWARE.
 For more information, please refer to <https://unlicense.org>
 
 ------------------------------------------------------------------------------
-[331] Applies to: npm:has-symbols@1.1.0
+[332] Applies to: npm:has-symbols@1.1.0
 ------------------------------------------------------------------------------
 MIT License
 
@@ -35740,7 +35760,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-[332] Applies to: npm:has-tostringtag@1.0.2
+[333] Applies to: npm:has-tostringtag@1.0.2
 ------------------------------------------------------------------------------
 MIT License
 
@@ -35765,7 +35785,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-[333] Applies to: npm:hasown@2.0.4
+[334] Applies to: npm:hasown@2.0.4
 ------------------------------------------------------------------------------
 MIT License
 
@@ -35790,7 +35810,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-[334] Applies to: npm:hast-util-from-dom@5.0.1
+[335] Applies to: npm:hast-util-from-dom@5.0.1
 ------------------------------------------------------------------------------
 (ISC License)
 
@@ -35809,7 +35829,7 @@ TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF
 THIS SOFTWARE.
 
 ------------------------------------------------------------------------------
-[335] Applies to: npm:hast-util-from-html@2.0.3
+[336] Applies to: npm:hast-util-from-html@2.0.3
 ------------------------------------------------------------------------------
 (The MIT License)
 
@@ -35835,7 +35855,7 @@ TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[336] Applies to: npm:hast-util-from-html-isomorphic@2.0.0
+[337] Applies to: npm:hast-util-from-html-isomorphic@2.0.0
 ------------------------------------------------------------------------------
 (The MIT License)
 
@@ -35861,7 +35881,7 @@ TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[337] Applies to: npm:hast-util-to-string@3.0.1, npm:html-url-attributes@3.0.1
+[338] Applies to: npm:hast-util-to-string@3.0.1, npm:html-url-attributes@3.0.1
 ------------------------------------------------------------------------------
 (The MIT License)
 
@@ -35886,7 +35906,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[338] Applies to: npm:hast-util-to-text@4.0.2
+[339] Applies to: npm:hast-util-to-text@4.0.2
 ------------------------------------------------------------------------------
 (The MIT License)
 
@@ -35912,7 +35932,7 @@ TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[339] Applies to: npm:highlight.js@11.11.1
+[340] Applies to: npm:highlight.js@11.11.1
 ------------------------------------------------------------------------------
 BSD 3-Clause License
 
@@ -35945,7 +35965,7 @@ OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ------------------------------------------------------------------------------
-[340] Applies to: npm:hono@4.12.30
+[341] Applies to: npm:hono@4.12.30
 ------------------------------------------------------------------------------
 MIT License
 
@@ -35970,7 +35990,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-[341] Applies to: npm:html-to-image@1.11.13
+[342] Applies to: npm:html-to-image@1.11.13
 ------------------------------------------------------------------------------
 MIT License
 
@@ -35995,7 +36015,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-[342] Applies to: npm:http-errors@2.0.1
+[343] Applies to: npm:http-errors@2.0.1
 ------------------------------------------------------------------------------
 The MIT License (MIT)
 
@@ -36021,7 +36041,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[343] Applies to: npm:human-signals@1.1.1, npm:human-signals@2.1.0
+[344] Applies to: npm:human-signals@1.1.1, npm:human-signals@2.1.0
 ------------------------------------------------------------------------------
 Apache License
                            Version 2.0, January 2004
@@ -36226,7 +36246,7 @@ Apache License
    limitations under the License.
 
 ------------------------------------------------------------------------------
-[344] Applies to: npm:i18next@26.3.6
+[345] Applies to: npm:i18next@26.3.6
 ------------------------------------------------------------------------------
 The MIT License (MIT)
 
@@ -36251,7 +36271,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-[345] Applies to: npm:iconv-lite@0.6.3, npm:iconv-lite@0.7.3
+[346] Applies to: npm:iconv-lite@0.6.3, npm:iconv-lite@0.7.3
 ------------------------------------------------------------------------------
 Copyright (c) 2011 Alexander Shtuchkin
 
@@ -36275,7 +36295,7 @@ OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
 WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[346] Applies to: npm:ieee754@1.2.1
+[347] Applies to: npm:ieee754@1.2.1
 ------------------------------------------------------------------------------
 Copyright 2008 Fair Oaks Labs, Inc.
 
@@ -36290,7 +36310,7 @@ Redistribution and use in source and binary forms, with or without modification,
 THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ------------------------------------------------------------------------------
-[347] Applies to: npm:ignore@7.0.6
+[348] Applies to: npm:ignore@7.0.6
 ------------------------------------------------------------------------------
 Copyright (c) 2013 Kael Zhang <i@kael.me>, contributors
 http://kael.me/
@@ -36315,7 +36335,7 @@ OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
 WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[348] Applies to: npm:image-size@1.2.1
+[349] Applies to: npm:image-size@1.2.1
 ------------------------------------------------------------------------------
 The MIT License (MIT)
 
@@ -36328,7 +36348,7 @@ The above copyright notice and this permission notice shall be included in all c
 THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[349] Applies to: npm:immediate@3.0.6
+[350] Applies to: npm:immediate@3.0.6
 ------------------------------------------------------------------------------
 Copyright (c) 2012 Barnesandnoble.com, llc, Donavon West, Domenic Denicola, Brian Cavalier
 
@@ -36352,7 +36372,7 @@ OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
 WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[350] Applies to: npm:import-meta-resolve@4.2.0
+[351] Applies to: npm:import-meta-resolve@4.2.0
 ------------------------------------------------------------------------------
 (The MIT License)
 
@@ -36430,7 +36450,7 @@ IN THE SOFTWARE.
 """
 
 ------------------------------------------------------------------------------
-[351] Applies to: npm:inflight@1.0.6
+[352] Applies to: npm:inflight@1.0.6
 ------------------------------------------------------------------------------
 The ISC License
 
@@ -36449,7 +36469,7 @@ ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR
 IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
 ------------------------------------------------------------------------------
-[352] Applies to: npm:inherits@2.0.4
+[353] Applies to: npm:inherits@2.0.4
 ------------------------------------------------------------------------------
 The ISC License
 
@@ -36468,7 +36488,7 @@ OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
 PERFORMANCE OF THIS SOFTWARE.
 
 ------------------------------------------------------------------------------
-[353] Applies to: npm:inline-style-parser@0.2.7
+[354] Applies to: npm:inline-style-parser@0.2.7
 ------------------------------------------------------------------------------
 (The MIT License)
 
@@ -36481,7 +36501,7 @@ The above copyright notice and this permission notice shall be included in all c
 THE SOFTWARE IS PROVIDED 'AS IS', WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[354] Applies to: npm:internmap@1.0.1, npm:internmap@2.0.3
+[355] Applies to: npm:internmap@1.0.1, npm:internmap@2.0.3
 ------------------------------------------------------------------------------
 Copyright 2021 Mike Bostock
 
@@ -36498,7 +36518,7 @@ TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF
 THIS SOFTWARE.
 
 ------------------------------------------------------------------------------
-[355] Applies to: npm:ip-address@10.2.0
+[356] Applies to: npm:ip-address@10.2.0
 ------------------------------------------------------------------------------
 Copyright (C) 2011 by Beau Gunderson
 
@@ -36521,7 +36541,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[356] Applies to: npm:ipaddr.js@1.9.1, npm:ipaddr.js@2.4.0
+[357] Applies to: npm:ipaddr.js@1.9.1, npm:ipaddr.js@2.4.0
 ------------------------------------------------------------------------------
 Copyright (C) 2011-2017 whitequark <whitequark@whitequark.org>
 
@@ -36544,7 +36564,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[357] Applies to: npm:is-buffer@1.1.6, npm:safe-buffer@5.1.2, npm:safe-buffer@5.2.1
+[358] Applies to: npm:is-buffer@1.1.6, npm:safe-buffer@5.1.2, npm:safe-buffer@5.2.1
 ------------------------------------------------------------------------------
 The MIT License (MIT)
 
@@ -36569,7 +36589,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[358] Applies to: npm:is-extendable@0.1.1
+[359] Applies to: npm:is-extendable@0.1.1
 ------------------------------------------------------------------------------
 The MIT License (MIT)
 
@@ -36594,7 +36614,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[359] Applies to: npm:is-extglob@2.1.1
+[360] Applies to: npm:is-extglob@2.1.1
 ------------------------------------------------------------------------------
 The MIT License (MIT)
 
@@ -36619,7 +36639,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[360] Applies to: npm:is-glob@4.0.3, npm:kind-of@6.0.3
+[361] Applies to: npm:is-glob@4.0.3, npm:kind-of@6.0.3
 ------------------------------------------------------------------------------
 The MIT License (MIT)
 
@@ -36644,7 +36664,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[361] Applies to: npm:is-promise@2.2.2, npm:is-promise@4.0.0
+[362] Applies to: npm:is-promise@2.2.2, npm:is-promise@4.0.0
 ------------------------------------------------------------------------------
 Copyright (c) 2014 Forbes Lindesay
 
@@ -36667,7 +36687,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[362] Applies to: npm:jackspeak@3.4.3
+[363] Applies to: npm:jackspeak@3.4.3
 ------------------------------------------------------------------------------
 # Blue Oak Model License
 
@@ -36726,7 +36746,7 @@ will be liable to anyone for any damages related to this
 software or this license, under any kind of legal claim._**
 
 ------------------------------------------------------------------------------
-[363] Applies to: npm:jose@6.2.3
+[364] Applies to: npm:jose@6.2.3
 ------------------------------------------------------------------------------
 The MIT License (MIT)
 
@@ -36751,7 +36771,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-[364] Applies to: npm:js-base64@3.9.1
+[365] Applies to: npm:js-base64@3.9.1
 ------------------------------------------------------------------------------
 Copyright (c) 2014, Dan Kogai
 All rights reserved.
@@ -36782,7 +36802,7 @@ OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ------------------------------------------------------------------------------
-[365] Applies to: npm:js-yaml@3.15.0, npm:js-yaml@4.3.0
+[366] Applies to: npm:js-yaml@3.15.0, npm:js-yaml@4.3.0
 ------------------------------------------------------------------------------
 (The MIT License)
 
@@ -36807,7 +36827,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[366] Applies to: npm:json-bigint@1.0.0
+[367] Applies to: npm:json-bigint@1.0.0
 ------------------------------------------------------------------------------
 The MIT License (MIT)
 
@@ -36831,7 +36851,7 @@ IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
 CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[367] Applies to: npm:json-schema-to-ts@3.1.1, npm:ts-algebra@2.0.0
+[368] Applies to: npm:json-schema-to-ts@3.1.1, npm:ts-algebra@2.0.0
 ------------------------------------------------------------------------------
 MIT License
 
@@ -36856,7 +36876,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-[368] Applies to: npm:json-schema-typed@7.0.3
+[369] Applies to: npm:json-schema-typed@7.0.3
 ------------------------------------------------------------------------------
 BSD-2-Clause License
 
@@ -36886,7 +36906,7 @@ ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 POSSIBILITY OF SUCH DAMAGE.
 
 ------------------------------------------------------------------------------
-[369] Applies to: npm:json-schema-typed@8.0.2
+[370] Applies to: npm:json-schema-typed@8.0.2
 ------------------------------------------------------------------------------
 BSD 2-Clause License
 
@@ -36947,7 +36967,34 @@ ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ------------------------------------------------------------------------------
-[370] Applies to: npm:jsonfile@4.0.0, npm:jsonfile@6.2.1
+[371] Applies to: npm:json5@2.2.3
+------------------------------------------------------------------------------
+MIT License
+
+Copyright (c) 2012-2018 Aseem Kishore, and [others].
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+[others]: https://github.com/json5/json5/contributors
+
+------------------------------------------------------------------------------
+[372] Applies to: npm:jsonfile@4.0.0, npm:jsonfile@6.2.1
 ------------------------------------------------------------------------------
 (The MIT License)
 
@@ -36966,7 +37013,7 @@ OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHE
  ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[371] Applies to: npm:jszip@3.10.1
+[373] Applies to: npm:jszip@3.10.1
 ------------------------------------------------------------------------------
 JSZip is dual licensed. At your choice you may use it under the MIT license *or* the GPLv3
 license.
@@ -37621,7 +37668,7 @@ copy of the Program in return for a fee.
                      END OF TERMS AND CONDITIONS
 
 ------------------------------------------------------------------------------
-[372] Applies to: npm:jwa@2.0.1, npm:jws@4.0.1
+[374] Applies to: npm:jwa@2.0.1, npm:jws@4.0.1
 ------------------------------------------------------------------------------
 Copyright (c) 2013 Brian J. Brennan
 
@@ -37642,7 +37689,7 @@ FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TOR
 ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[373] Applies to: npm:katex@0.16.47
+[375] Applies to: npm:katex@0.16.47
 ------------------------------------------------------------------------------
 The MIT License (MIT)
 
@@ -37667,7 +37714,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-[374] Applies to: npm:khroma@2.1.0
+[376] Applies to: npm:khroma@2.1.0
 ------------------------------------------------------------------------------
 The MIT License (MIT)
 
@@ -37692,7 +37739,7 @@ FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[375] Applies to: npm:layout-base@1.0.2, npm:layout-base@2.0.1
+[377] Applies to: npm:layout-base@1.0.2, npm:layout-base@2.0.1
 ------------------------------------------------------------------------------
 MIT License
 
@@ -37717,7 +37764,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-[376] Applies to: npm:lazystream@1.0.1
+[378] Applies to: npm:lazystream@1.0.1
 ------------------------------------------------------------------------------
 Copyright (c) 2013 J. Pommerening, contributors.
 
@@ -37743,7 +37790,7 @@ FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
 OTHER DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[377] Applies to: npm:lie@3.3.0
+[379] Applies to: npm:lie@3.3.0
 ------------------------------------------------------------------------------
 #Copyright (c) 2014-2018 Calvin Metcalf, Jordan Harband
 
@@ -37754,7 +37801,7 @@ The above copyright notice and this permission notice shall be included in all c
 **THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.**
 
 ------------------------------------------------------------------------------
-[378] Applies to: npm:listenercount@1.0.1
+[380] Applies to: npm:listenercount@1.0.1
 ------------------------------------------------------------------------------
 Copyright (c) MMXV jden <jason@denizac.org>
 
@@ -37763,7 +37810,7 @@ Permission to use, copy, modify, and/or distribute this software for any purpose
 THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
 ------------------------------------------------------------------------------
-[379] Applies to: npm:lodash@4.18.1, npm:lodash-es@4.18.1, npm:lodash.merge@4.6.2
+[381] Applies to: npm:lodash@4.18.1, npm:lodash-es@4.18.1, npm:lodash.merge@4.6.2
 ------------------------------------------------------------------------------
 Copyright OpenJS Foundation and other contributors <https://openjsf.org/>
 
@@ -37814,7 +37861,7 @@ licenses; we recommend you read them, as their terms may differ from the
 terms above.
 
 ------------------------------------------------------------------------------
-[380] Applies to: npm:lodash.defaults@4.2.0, npm:lodash.difference@4.5.0, npm:lodash.escaperegexp@4.1.2, npm:lodash.flatten@4.4.0, npm:lodash.groupby@4.6.0, npm:lodash.isplainobject@4.0.6, npm:lodash.pickby@4.6.0, npm:lodash.snakecase@4.1.1, npm:lodash.union@4.6.0, npm:lodash.uniq@4.5.0
+[382] Applies to: npm:lodash.defaults@4.2.0, npm:lodash.difference@4.5.0, npm:lodash.escaperegexp@4.1.2, npm:lodash.flatten@4.4.0, npm:lodash.groupby@4.6.0, npm:lodash.isplainobject@4.0.6, npm:lodash.pickby@4.6.0, npm:lodash.snakecase@4.1.1, npm:lodash.union@4.6.0, npm:lodash.uniq@4.5.0
 ------------------------------------------------------------------------------
 Copyright jQuery Foundation and other contributors <https://jquery.org/>
 
@@ -37865,7 +37912,7 @@ licenses; we recommend you read them, as their terms may differ from the
 terms above.
 
 ------------------------------------------------------------------------------
-[381] Applies to: npm:lodash.identity@3.0.0
+[383] Applies to: npm:lodash.identity@3.0.0
 ------------------------------------------------------------------------------
 Copyright 2012-2015 The Dojo Foundation <http://dojofoundation.org/>
 Based on Underscore.js 1.7.0, copyright 2009-2015 Jeremy Ashkenas,
@@ -37891,7 +37938,7 @@ OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
 WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[382] Applies to: npm:lodash.isboolean@3.0.3, npm:lodash.isnil@4.0.0
+[384] Applies to: npm:lodash.isboolean@3.0.3, npm:lodash.isnil@4.0.0
 ------------------------------------------------------------------------------
 Copyright 2012-2016 The Dojo Foundation <http://dojofoundation.org/>
 Based on Underscore.js, copyright 2009-2016 Jeremy Ashkenas,
@@ -37917,7 +37964,7 @@ OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
 WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[383] Applies to: npm:lodash.isequal@4.5.0, npm:lodash.isfunction@3.0.9
+[385] Applies to: npm:lodash.isequal@4.5.0, npm:lodash.isfunction@3.0.9
 ------------------------------------------------------------------------------
 Copyright JS Foundation and other contributors <https://js.foundation/>
 
@@ -37968,7 +38015,7 @@ licenses; we recommend you read them, as their terms may differ from the
 terms above.
 
 ------------------------------------------------------------------------------
-[384] Applies to: npm:lodash.isundefined@3.0.1
+[386] Applies to: npm:lodash.isundefined@3.0.1
 ------------------------------------------------------------------------------
 Copyright 2012-2015 The Dojo Foundation <http://dojofoundation.org/>
 Based on Underscore.js, copyright 2009-2015 Jeremy Ashkenas,
@@ -37994,7 +38041,7 @@ OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
 WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[385] Applies to: npm:longest-streak@3.1.0, npm:stringify-entities@4.0.4, npm:trim-lines@3.0.1
+[387] Applies to: npm:longest-streak@3.1.0, npm:stringify-entities@4.0.4, npm:trim-lines@3.0.1
 ------------------------------------------------------------------------------
 (The MIT License)
 
@@ -38020,7 +38067,7 @@ TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[386] Applies to: npm:loudness@0.4.2
+[388] Applies to: npm:loudness@0.4.2
 ------------------------------------------------------------------------------
 The MIT License (MIT)
 
@@ -38044,7 +38091,7 @@ IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
 CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[387] Applies to: npm:lru-cache@10.4.3
+[389] Applies to: npm:lru-cache@10.4.3
 ------------------------------------------------------------------------------
 The ISC License
 
@@ -38063,7 +38110,7 @@ ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR
 IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
 ------------------------------------------------------------------------------
-[388] Applies to: npm:lucide-react@0.468.0
+[390] Applies to: npm:lucide-react@0.468.0
 ------------------------------------------------------------------------------
 ISC License
 
@@ -38082,7 +38129,7 @@ ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
 ------------------------------------------------------------------------------
-[389] Applies to: npm:magic-bytes.js@1.13.0
+[391] Applies to: npm:magic-bytes.js@1.13.0
 ------------------------------------------------------------------------------
 MIT License
 
@@ -38107,7 +38154,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-[390] Applies to: npm:marked@16.4.2
+[392] Applies to: npm:marked@16.4.2
 ------------------------------------------------------------------------------
 # License information
 
@@ -38155,7 +38202,7 @@ Redistribution and use in source and binary forms, with or without modification,
 This software is provided by the copyright holders and contributors “as is” and any express or implied warranties, including, but not limited to, the implied warranties of merchantability and fitness for a particular purpose are disclaimed. In no event shall the copyright owner or contributors be liable for any direct, indirect, incidental, special, exemplary, or consequential damages (including, but not limited to, procurement of substitute goods or services; loss of use, data, or profits; or business interruption) however caused and on any theory of liability, whether in contract, strict liability, or tort (including negligence or otherwise) arising in any way out of the use of this software, even if advised of the possibility of such damage.
 
 ------------------------------------------------------------------------------
-[391] Applies to: npm:md5@2.3.0
+[393] Applies to: npm:md5@2.3.0
 ------------------------------------------------------------------------------
 Copyright © 2011-2012, Paul Vorbach.
 Copyright © 2009, Jeff Mott.
@@ -38186,7 +38233,7 @@ ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ------------------------------------------------------------------------------
-[392] Applies to: npm:mdast-util-phrasing@4.1.0
+[394] Applies to: npm:mdast-util-phrasing@4.1.0
 ------------------------------------------------------------------------------
 (The MIT License)
 
@@ -38213,7 +38260,7 @@ TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[393] Applies to: npm:mdast-util-to-markdown-cjk-friendly@1.0.0, npm:remark-cjk-friendly@2.3.1
+[395] Applies to: npm:mdast-util-to-markdown-cjk-friendly@1.0.0, npm:remark-cjk-friendly@2.3.1
 ------------------------------------------------------------------------------
 Copyright (c) 2025 Tatsunori Uchino <tats.u@live.jp>
 
@@ -38245,7 +38292,7 @@ TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[394] Applies to: npm:merge-descriptors@2.0.0
+[396] Applies to: npm:merge-descriptors@2.0.0
 ------------------------------------------------------------------------------
 MIT License
 
@@ -38260,7 +38307,7 @@ The above copyright notice and this permission notice shall be included in all c
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[395] Applies to: npm:merge-stream@2.0.0
+[397] Applies to: npm:merge-stream@2.0.0
 ------------------------------------------------------------------------------
 The MIT License (MIT)
 
@@ -38285,7 +38332,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[396] Applies to: npm:mermaid@11.16.0
+[398] Applies to: npm:mermaid@11.16.0
 ------------------------------------------------------------------------------
 The MIT License (MIT)
 
@@ -38310,7 +38357,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-[397] Applies to: npm:micromark-extension-cjk-friendly@2.0.1
+[399] Applies to: npm:micromark-extension-cjk-friendly@2.0.1
 ------------------------------------------------------------------------------
 Copyright (c) 2025 Tatsunori Uchino <tats.u@live.jp>
 
@@ -38342,7 +38389,7 @@ TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[398] Applies to: npm:micromark-extension-cjk-friendly-util@3.0.1
+[400] Applies to: npm:micromark-extension-cjk-friendly-util@3.0.1
 ------------------------------------------------------------------------------
 Copyright (c) 2025 Tatsunori Uchino <tats.u@live.jp>
 
@@ -38374,7 +38421,7 @@ TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[399] Applies to: npm:micromark-extension-gfm-footnote@2.1.0
+[401] Applies to: npm:micromark-extension-gfm-footnote@2.1.0
 ------------------------------------------------------------------------------
 (The MIT License)
 
@@ -38400,7 +38447,7 @@ TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[400] Applies to: npm:mime-db@1.52.0, npm:mime-db@1.54.0
+[402] Applies to: npm:mime-db@1.52.0, npm:mime-db@1.54.0
 ------------------------------------------------------------------------------
 (The MIT License)
 
@@ -38427,7 +38474,7 @@ TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[401] Applies to: npm:minimalistic-assert@1.0.1
+[403] Applies to: npm:minimalistic-assert@1.0.1
 ------------------------------------------------------------------------------
 Copyright 2015 Calvin Metcalf
 
@@ -38444,7 +38491,7 @@ OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
 PERFORMANCE OF THIS SOFTWARE.
 
 ------------------------------------------------------------------------------
-[402] Applies to: npm:minimatch@5.1.9, npm:minimatch@9.0.9, npm:rimraf@5.0.10
+[404] Applies to: npm:minimatch@5.1.9, npm:minimatch@9.0.9, npm:rimraf@5.0.10
 ------------------------------------------------------------------------------
 The ISC License
 
@@ -38463,7 +38510,7 @@ ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR
 IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
 ------------------------------------------------------------------------------
-[403] Applies to: npm:minipass@7.1.3, npm:path-scurry@1.11.1, npm:sax@1.6.0, npm:tar@7.5.22
+[405] Applies to: npm:minipass@7.1.3, npm:path-scurry@1.11.1, npm:sax@1.6.0, npm:tar@7.5.22
 ------------------------------------------------------------------------------
 # Blue Oak Model License
 
@@ -38522,7 +38569,7 @@ will be liable to anyone for any damages related to this
 software or this license, under any kind of legal claim.***
 
 ------------------------------------------------------------------------------
-[404] Applies to: npm:minizlib@3.1.0
+[406] Applies to: npm:minizlib@3.1.0
 ------------------------------------------------------------------------------
 Minizlib was created by Isaac Z. Schlueter.
 It is a derivative work of the Node.js project.
@@ -38552,7 +38599,7 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 """
 
 ------------------------------------------------------------------------------
-[405] Applies to: npm:mkdirp@0.5.6
+[407] Applies to: npm:mkdirp@0.5.6
 ------------------------------------------------------------------------------
 Copyright 2010 James Halliday (mail@substack.net)
 
@@ -38577,7 +38624,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[406] Applies to: npm:mkdirp-classic@0.5.3
+[408] Applies to: npm:mkdirp-classic@0.5.3
 ------------------------------------------------------------------------------
 The MIT License (MIT)
 
@@ -38602,7 +38649,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[407] Applies to: npm:ms@2.0.0
+[409] Applies to: npm:ms@2.0.0
 ------------------------------------------------------------------------------
 The MIT License (MIT)
 
@@ -38627,7 +38674,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-[408] Applies to: npm:ms@2.1.3
+[410] Applies to: npm:ms@2.1.3
 ------------------------------------------------------------------------------
 The MIT License (MIT)
 
@@ -38652,7 +38699,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-[409] Applies to: npm:nan@2.28.0
+[411] Applies to: npm:nan@2.28.0
 ------------------------------------------------------------------------------
 The MIT License (MIT)
 
@@ -38665,7 +38712,7 @@ The above copyright notice and this permission notice shall be included in all c
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[410] Applies to: npm:nanoid@5.1.16
+[412] Applies to: npm:nanoid@5.1.16
 ------------------------------------------------------------------------------
 The MIT License (MIT)
 
@@ -38689,7 +38736,7 @@ IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
 CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[411] Applies to: npm:napi-build-utils@2.0.0
+[413] Applies to: npm:napi-build-utils@2.0.0
 ------------------------------------------------------------------------------
 MIT License
 
@@ -38714,7 +38761,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-[412] Applies to: npm:negotiator@1.0.0
+[414] Applies to: npm:negotiator@1.0.0
 ------------------------------------------------------------------------------
 (The MIT License)
 
@@ -38742,7 +38789,7 @@ TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[413] Applies to: npm:node-abi@3.94.0
+[415] Applies to: npm:node-abi@3.94.0
 ------------------------------------------------------------------------------
 MIT License
 
@@ -38767,7 +38814,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-[414] Applies to: npm:node-addon-api@7.1.1
+[416] Applies to: npm:node-addon-api@7.1.1
 ------------------------------------------------------------------------------
 The MIT License (MIT)
 
@@ -38780,7 +38827,7 @@ The above copyright notice and this permission notice shall be included in all c
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[415] Applies to: npm:node-domexception@1.0.0
+[417] Applies to: npm:node-domexception@1.0.0
 ------------------------------------------------------------------------------
 MIT License
 
@@ -38805,7 +38852,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-[416] Applies to: npm:node-fetch@3.3.2
+[418] Applies to: npm:node-fetch@3.3.2
 ------------------------------------------------------------------------------
 The MIT License (MIT)
 
@@ -38830,7 +38877,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-[417] Applies to: npm:node-machine-id@1.1.12
+[419] Applies to: npm:node-machine-id@1.1.12
 ------------------------------------------------------------------------------
 The MIT License (MIT)
 
@@ -38855,7 +38902,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-[418] Applies to: npm:node-pty@1.1.0
+[420] Applies to: npm:node-pty@1.1.0
 ------------------------------------------------------------------------------
 Copyright (c) 2012-2015, Christopher Jeffrey (https://github.com/chjj/)
 
@@ -38928,7 +38975,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-[419] Applies to: npm:object-inspect@1.13.4
+[421] Applies to: npm:object-inspect@1.13.4
 ------------------------------------------------------------------------------
 MIT License
 
@@ -38953,7 +39000,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-[420] Applies to: npm:on-finished@2.4.1
+[422] Applies to: npm:on-finished@2.4.1
 ------------------------------------------------------------------------------
 (The MIT License)
 
@@ -38980,7 +39027,7 @@ TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[421] Applies to: npm:openai@6.40.0
+[423] Applies to: npm:openai@6.40.0
 ------------------------------------------------------------------------------
 Apache License
                            Version 2.0, January 2004
@@ -39185,7 +39232,7 @@ Apache License
    limitations under the License.
 
 ------------------------------------------------------------------------------
-[422] Applies to: npm:orderedmap@2.1.1, npm:w3c-keyname@2.2.8
+[424] Applies to: npm:orderedmap@2.1.1, npm:w3c-keyname@2.2.8
 ------------------------------------------------------------------------------
 Copyright (C) 2016 by Marijn Haverbeke <marijn@haverbeke.berlin> and others
 
@@ -39208,7 +39255,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[423] Applies to: npm:package-manager-detector@1.7.0
+[425] Applies to: npm:package-manager-detector@1.7.0
 ------------------------------------------------------------------------------
 MIT License
 
@@ -39233,7 +39280,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-[424] Applies to: npm:pako@1.0.11
+[426] Applies to: npm:pako@1.0.11
 ------------------------------------------------------------------------------
 (The MIT License)
 
@@ -39258,7 +39305,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[425] Applies to: npm:parse-entities@4.0.2, npm:property-information@7.2.0
+[427] Applies to: npm:parse-entities@4.0.2, npm:property-information@7.2.0
 ------------------------------------------------------------------------------
 (The MIT License)
 
@@ -39284,7 +39331,7 @@ TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[426] Applies to: npm:parse5@7.3.0
+[428] Applies to: npm:parse5@7.3.0
 ------------------------------------------------------------------------------
 Copyright (c) 2013-2019 Ivan Nikulin (ifaaan@gmail.com, https://github.com/inikulin)
 
@@ -39307,7 +39354,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[427] Applies to: npm:parseurl@1.3.3
+[429] Applies to: npm:parseurl@1.3.3
 ------------------------------------------------------------------------------
 (The MIT License)
 
@@ -39334,7 +39381,7 @@ TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[428] Applies to: npm:partial-json@0.1.7
+[430] Applies to: npm:partial-json@0.1.7
 ------------------------------------------------------------------------------
 MIT License
 
@@ -39359,7 +39406,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-[429] Applies to: npm:path-data-parser@0.1.0, npm:points-on-curve@0.2.0
+[431] Applies to: npm:path-data-parser@0.1.0, npm:points-on-curve@0.2.0
 ------------------------------------------------------------------------------
 MIT License
 
@@ -39384,7 +39431,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-[430] Applies to: npm:path-to-regexp@8.4.2
+[432] Applies to: npm:path-to-regexp@8.4.2
 ------------------------------------------------------------------------------
 The MIT License (MIT)
 
@@ -39409,7 +39456,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[431] Applies to: npm:pdfjs-dist@5.7.284
+[433] Applies to: npm:pdfjs-dist@5.7.284
 ------------------------------------------------------------------------------
 Apache License
                            Version 2.0, January 2004
@@ -39589,7 +39636,7 @@ Apache License
    END OF TERMS AND CONDITIONS
 
 ------------------------------------------------------------------------------
-[432] Applies to: npm:picomatch@4.0.5
+[434] Applies to: npm:picomatch@4.0.5
 ------------------------------------------------------------------------------
 The MIT License (MIT)
 
@@ -39614,7 +39661,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[433] Applies to: npm:pkce-challenge@5.0.1
+[435] Applies to: npm:pkce-challenge@5.0.1
 ------------------------------------------------------------------------------
 MIT License
 
@@ -39639,7 +39686,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-[434] Applies to: npm:playwright-core@1.60.0
+[436] Applies to: npm:playwright-core@1.60.0
 ------------------------------------------------------------------------------
 Apache License
                            Version 2.0, January 2004
@@ -39845,7 +39892,7 @@ Apache License
    limitations under the License.
 
 ------------------------------------------------------------------------------
-[435] Applies to: npm:playwright-core@1.60.0 (NOTICE)
+[437] Applies to: npm:playwright-core@1.60.0 (NOTICE)
 ------------------------------------------------------------------------------
 NOTICE for npm:playwright-core@1.60.0:
 
@@ -39856,7 +39903,7 @@ This software contains code derived from the Puppeteer project (https://github.c
 available under the Apache 2.0 license (https://github.com/puppeteer/puppeteer/blob/master/LICENSE).
 
 ------------------------------------------------------------------------------
-[436] Applies to: npm:pngjs@5.0.0
+[438] Applies to: npm:pngjs@5.0.0
 ------------------------------------------------------------------------------
 pngjs2 original work Copyright (c) 2015 Luke Page & Original Contributors
 pngjs derived work Copyright (c) 2012 Kuba Niegowski
@@ -39880,7 +39927,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[437] Applies to: npm:points-on-path@0.2.1
+[439] Applies to: npm:points-on-path@0.2.1
 ------------------------------------------------------------------------------
 MIT License
 
@@ -39905,7 +39952,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-[438] Applies to: npm:pptxgenjs@4.0.1
+[440] Applies to: npm:pptxgenjs@4.0.1
 ------------------------------------------------------------------------------
 The MIT License (MIT)
 
@@ -39930,7 +39977,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-[439] Applies to: npm:prebuild-install@7.1.3
+[441] Applies to: npm:prebuild-install@7.1.3
 ------------------------------------------------------------------------------
 The MIT License (MIT)
 
@@ -39955,7 +40002,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[440] Applies to: npm:process-nextick-args@2.0.1
+[442] Applies to: npm:process-nextick-args@2.0.1
 ------------------------------------------------------------------------------
 # Copyright (c) 2015 Calvin Metcalf
 
@@ -39978,7 +40025,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.**
 
 ------------------------------------------------------------------------------
-[441] Applies to: npm:promise-worker-transferable@1.0.4
+[443] Applies to: npm:promise-worker-transferable@1.0.4
 ------------------------------------------------------------------------------
 Apache License
                           Version 2.0, January 2004
@@ -40183,7 +40230,7 @@ Apache License
   limitations under the License.
 
 ------------------------------------------------------------------------------
-[442] Applies to: npm:prosemirror-changeset@2.4.1
+[444] Applies to: npm:prosemirror-changeset@2.4.1
 ------------------------------------------------------------------------------
 Copyright (C) 2017 by Marijn Haverbeke <marijn@haverbeke.berlin> and others
 
@@ -40206,7 +40253,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[443] Applies to: npm:prosemirror-commands@1.7.1, npm:prosemirror-dropcursor@1.8.3, npm:prosemirror-gapcursor@1.4.1, npm:prosemirror-history@1.5.0, npm:prosemirror-inputrules@1.5.1, npm:prosemirror-keymap@1.2.3, npm:prosemirror-model@1.25.11, npm:prosemirror-schema-list@1.5.1, npm:prosemirror-state@1.4.4, npm:prosemirror-transform@1.12.0, npm:prosemirror-view@1.42.1
+[445] Applies to: npm:prosemirror-commands@1.7.1, npm:prosemirror-dropcursor@1.8.3, npm:prosemirror-gapcursor@1.4.1, npm:prosemirror-history@1.5.0, npm:prosemirror-inputrules@1.5.1, npm:prosemirror-keymap@1.2.3, npm:prosemirror-model@1.25.11, npm:prosemirror-schema-list@1.5.1, npm:prosemirror-state@1.4.4, npm:prosemirror-transform@1.12.0, npm:prosemirror-view@1.42.1
 ------------------------------------------------------------------------------
 Copyright (C) 2015-2017 by Marijn Haverbeke <marijn@haverbeke.berlin> and others
 
@@ -40229,7 +40276,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[444] Applies to: npm:prosemirror-tables@1.8.5
+[446] Applies to: npm:prosemirror-tables@1.8.5
 ------------------------------------------------------------------------------
 Copyright (C) 2015-2016 by Marijn Haverbeke <marijnh@gmail.com> and others
 
@@ -40252,7 +40299,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[445] Applies to: npm:protobufjs@7.6.5
+[447] Applies to: npm:protobufjs@7.6.5
 ------------------------------------------------------------------------------
 This license applies to all parts of protobuf.js except those files
 either explicitly including or referencing a different license or
@@ -40295,7 +40342,7 @@ standalone and requires a support library to be linked with it. This
 support library is itself covered by the above license.
 
 ------------------------------------------------------------------------------
-[446] Applies to: npm:proxy-from-env@2.1.0
+[448] Applies to: npm:proxy-from-env@2.1.0
 ------------------------------------------------------------------------------
 The MIT License
 
@@ -40319,7 +40366,7 @@ IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
 CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[447] Applies to: npm:qrcode@1.5.4
+[449] Applies to: npm:qrcode@1.5.4
 ------------------------------------------------------------------------------
 The MIT License (MIT)
 
@@ -40332,7 +40379,7 @@ The above copyright notice and this permission notice shall be included in all c
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[448] Applies to: npm:qs@6.15.3
+[450] Applies to: npm:qs@6.15.3
 ------------------------------------------------------------------------------
 BSD 3-Clause License
 
@@ -40365,7 +40412,7 @@ OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ------------------------------------------------------------------------------
-[449] Applies to: npm:queue@6.0.2
+[451] Applies to: npm:queue@6.0.2
 ------------------------------------------------------------------------------
 The MIT License (MIT)
 Copyright (c) 2014 Jesse Tane <jesse.tane@gmail.com>
@@ -40377,7 +40424,7 @@ The above copyright notice and this permission notice shall be included in all c
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[450] Applies to: npm:range-parser@1.3.0
+[452] Applies to: npm:range-parser@1.3.0
 ------------------------------------------------------------------------------
 (The MIT License)
 
@@ -40404,7 +40451,7 @@ TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[451] Applies to: npm:raw-body@3.0.2
+[453] Applies to: npm:raw-body@3.0.2
 ------------------------------------------------------------------------------
 The MIT License (MIT)
 
@@ -40430,7 +40477,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[452] Applies to: npm:rc@1.2.8
+[454] Applies to: npm:rc@1.2.8
 ------------------------------------------------------------------------------
 Apache License, Version 2.0
 
@@ -40501,7 +40548,7 @@ TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[453] Applies to: npm:react@19.2.3, npm:react-dom@19.2.3, npm:scheduler@0.27.0, npm:use-sync-external-store@1.6.0
+[455] Applies to: npm:react@19.2.3, npm:react-dom@19.2.3, npm:scheduler@0.27.0, npm:use-sync-external-store@1.6.0
 ------------------------------------------------------------------------------
 MIT License
 
@@ -40526,7 +40573,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-[454] Applies to: npm:react-i18next@17.0.10
+[456] Applies to: npm:react-i18next@17.0.10
 ------------------------------------------------------------------------------
 The MIT License (MIT)
 
@@ -40551,7 +40598,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-[455] Applies to: npm:react-markdown@10.1.0
+[457] Applies to: npm:react-markdown@10.1.0
 ------------------------------------------------------------------------------
 The MIT License (MIT)
 
@@ -40576,7 +40623,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-[456] Applies to: npm:react-router@7.18.1, npm:react-router-dom@7.18.1
+[458] Applies to: npm:react-router@7.18.1, npm:react-router-dom@7.18.1
 ------------------------------------------------------------------------------
 MIT License
 
@@ -40603,7 +40650,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-[457] Applies to: npm:readable-stream@2.3.8, npm:readable-stream@3.6.2, npm:string_decoder@1.1.1, npm:string_decoder@1.3.0
+[459] Applies to: npm:readable-stream@2.3.8, npm:readable-stream@3.6.2, npm:string_decoder@1.1.1, npm:string_decoder@1.3.0
 ------------------------------------------------------------------------------
 Node.js is licensed for use as follows:
 
@@ -40654,7 +40701,7 @@ IN THE SOFTWARE.
 """
 
 ------------------------------------------------------------------------------
-[458] Applies to: npm:readdir-glob@1.1.3
+[460] Applies to: npm:readdir-glob@1.1.3
 ------------------------------------------------------------------------------
 Apache License
                            Version 2.0, January 2004
@@ -40859,7 +40906,7 @@ Apache License
    limitations under the License.
 
 ------------------------------------------------------------------------------
-[459] Applies to: npm:remark-parse@11.0.0, npm:remark-stringify@11.0.0
+[461] Applies to: npm:remark-parse@11.0.0, npm:remark-stringify@11.0.0
 ------------------------------------------------------------------------------
 (The MIT License)
 
@@ -40884,7 +40931,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[460] Applies to: npm:require-directory@2.1.1
+[462] Applies to: npm:require-directory@2.1.1
 ------------------------------------------------------------------------------
 The MIT License (MIT)
 
@@ -40910,7 +40957,7 @@ TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[461] Applies to: npm:require-from-string@2.0.2
+[463] Applies to: npm:require-from-string@2.0.2
 ------------------------------------------------------------------------------
 The MIT License (MIT)
 
@@ -40935,7 +40982,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[462] Applies to: npm:require-main-filename@2.0.0, npm:set-blocking@2.0.0, npm:yargs-parser@18.1.3
+[464] Applies to: npm:require-main-filename@2.0.0, npm:set-blocking@2.0.0, npm:yargs-parser@18.1.3
 ------------------------------------------------------------------------------
 Copyright (c) 2016, Contributors
 
@@ -40953,7 +41000,7 @@ WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION,
 ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
 ------------------------------------------------------------------------------
-[463] Applies to: npm:retry@0.13.1
+[465] Applies to: npm:retry@0.13.1
 ------------------------------------------------------------------------------
 Copyright (c) 2011:
 Tim Koschützki (tim@debuggable.com)
@@ -40978,7 +41025,7 @@ Felix Geisendörfer (felix@debuggable.com)
  THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[464] Applies to: npm:rope-sequence@1.3.4
+[466] Applies to: npm:rope-sequence@1.3.4
 ------------------------------------------------------------------------------
 Copyright (C) 2016 by Marijn Haverbeke <marijn@haverbeke.berlin>
 
@@ -41001,7 +41048,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[465] Applies to: npm:roughjs@4.6.6
+[467] Applies to: npm:roughjs@4.6.6
 ------------------------------------------------------------------------------
 MIT License
 
@@ -41026,7 +41073,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-[466] Applies to: npm:router@2.2.0
+[468] Applies to: npm:router@2.2.0
 ------------------------------------------------------------------------------
 (The MIT License)
 
@@ -41053,7 +41100,7 @@ TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[467] Applies to: npm:rw@1.3.3
+[469] Applies to: npm:rw@1.3.3
 ------------------------------------------------------------------------------
 Copyright (c) 2014-2016, Michael Bostock
 All rights reserved.
@@ -41083,7 +41130,7 @@ NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE,
 EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ------------------------------------------------------------------------------
-[468] Applies to: npm:safer-buffer@2.1.2
+[470] Applies to: npm:safer-buffer@2.1.2
 ------------------------------------------------------------------------------
 MIT License
 
@@ -41108,7 +41155,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-[469] Applies to: npm:section-matter@1.0.0
+[471] Applies to: npm:section-matter@1.0.0
 ------------------------------------------------------------------------------
 The MIT License (MIT)
 
@@ -41133,7 +41180,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-[470] Applies to: npm:send@1.2.1
+[472] Applies to: npm:send@1.2.1
 ------------------------------------------------------------------------------
 (The MIT License)
 
@@ -41160,7 +41207,7 @@ TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[471] Applies to: npm:serve-static@2.2.1
+[473] Applies to: npm:serve-static@2.2.1
 ------------------------------------------------------------------------------
 (The MIT License)
 
@@ -41189,7 +41236,7 @@ TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[472] Applies to: npm:set-cookie-parser@2.7.2
+[474] Applies to: npm:set-cookie-parser@2.7.2
 ------------------------------------------------------------------------------
 The MIT License (MIT)
 
@@ -41214,7 +41261,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[473] Applies to: npm:setimmediate@1.0.5
+[475] Applies to: npm:setimmediate@1.0.5
 ------------------------------------------------------------------------------
 Copyright (c) 2012 Barnesandnoble.com, llc, Donavon West, and Domenic Denicola
 
@@ -41238,7 +41285,7 @@ OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
 WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[474] Applies to: npm:setprototypeof@1.2.0
+[476] Applies to: npm:setprototypeof@1.2.0
 ------------------------------------------------------------------------------
 Copyright (c) 2015, Wes Todd
 
@@ -41255,7 +41302,7 @@ OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN
 CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
 ------------------------------------------------------------------------------
-[475] Applies to: npm:shebang-command@2.0.0
+[477] Applies to: npm:shebang-command@2.0.0
 ------------------------------------------------------------------------------
 MIT License
 
@@ -41268,7 +41315,7 @@ The above copyright notice and this permission notice shall be included in all c
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[476] Applies to: npm:side-channel@1.1.1, npm:side-channel-weakmap@1.0.2
+[478] Applies to: npm:side-channel@1.1.1, npm:side-channel-weakmap@1.0.2
 ------------------------------------------------------------------------------
 MIT License
 
@@ -41293,7 +41340,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-[477] Applies to: npm:signal-exit@3.0.7
+[479] Applies to: npm:signal-exit@3.0.7
 ------------------------------------------------------------------------------
 The ISC License
 
@@ -41313,7 +41360,7 @@ WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION,
 ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
 ------------------------------------------------------------------------------
-[478] Applies to: npm:signal-exit@4.1.0
+[480] Applies to: npm:signal-exit@4.1.0
 ------------------------------------------------------------------------------
 The ISC License
 
@@ -41333,7 +41380,7 @@ WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION,
 ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
 ------------------------------------------------------------------------------
-[479] Applies to: npm:silk-wasm@3.7.1
+[481] Applies to: npm:silk-wasm@3.7.1
 ------------------------------------------------------------------------------
 MIT License
 
@@ -41358,7 +41405,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-[480] Applies to: npm:simple-concat@1.0.1, npm:simple-get@4.0.1
+[482] Applies to: npm:simple-concat@1.0.1, npm:simple-get@4.0.1
 ------------------------------------------------------------------------------
 The MIT License (MIT)
 
@@ -41382,7 +41429,7 @@ IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
 CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[481] Applies to: npm:smol-toml@1.7.0
+[483] Applies to: npm:smol-toml@1.7.0
 ------------------------------------------------------------------------------
 Copyright (c) Squirrel Chat et al., All rights reserved.
 
@@ -41410,7 +41457,7 @@ OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ------------------------------------------------------------------------------
-[482] Applies to: npm:sortablejs@1.15.7
+[484] Applies to: npm:sortablejs@1.15.7
 ------------------------------------------------------------------------------
 MIT License
 
@@ -41435,7 +41482,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-[483] Applies to: npm:sprintf-js@1.0.3
+[485] Applies to: npm:sprintf-js@1.0.3
 ------------------------------------------------------------------------------
 Copyright (c) 2007-2014, Alexandru Marasteanu <hello [at) alexei (dot] ro>
 All rights reserved.
@@ -41463,7 +41510,7 @@ ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ------------------------------------------------------------------------------
-[484] Applies to: npm:ssh-config@5.2.0
+[486] Applies to: npm:ssh-config@5.2.0
 ------------------------------------------------------------------------------
 MIT License
 
@@ -41488,7 +41535,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-[485] Applies to: npm:statuses@2.0.2
+[487] Applies to: npm:statuses@2.0.2
 ------------------------------------------------------------------------------
 The MIT License (MIT)
 
@@ -41514,7 +41561,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[486] Applies to: npm:strip-bom-string@1.0.0
+[488] Applies to: npm:strip-bom-string@1.0.0
 ------------------------------------------------------------------------------
 The MIT License (MIT)
 
@@ -41539,7 +41586,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[487] Applies to: npm:style-mod@4.1.3
+[489] Applies to: npm:style-mod@4.1.3
 ------------------------------------------------------------------------------
 Copyright (C) 2018 by Marijn Haverbeke <marijn@haverbeke.berlin> and others
 
@@ -41562,7 +41609,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[488] Applies to: npm:style-to-js@1.1.21
+[490] Applies to: npm:style-to-js@1.1.21
 ------------------------------------------------------------------------------
 The MIT License (MIT)
 
@@ -41588,7 +41635,7 @@ OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
 WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[489] Applies to: npm:style-to-object@1.0.14
+[491] Applies to: npm:style-to-object@1.0.14
 ------------------------------------------------------------------------------
 The MIT License (MIT)
 
@@ -41614,7 +41661,7 @@ OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
 WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[490] Applies to: npm:stylis@4.4.0
+[492] Applies to: npm:stylis@4.4.0
 ------------------------------------------------------------------------------
 MIT License
 
@@ -41639,7 +41686,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-[491] Applies to: npm:tailwind-merge@2.6.1
+[493] Applies to: npm:tailwind-merge@2.6.1
 ------------------------------------------------------------------------------
 MIT License
 
@@ -41664,7 +41711,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-[492] Applies to: npm:tinyexec@1.2.4
+[494] Applies to: npm:tinyexec@1.2.4
 ------------------------------------------------------------------------------
 MIT License
 
@@ -41689,7 +41736,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-[493] Applies to: npm:tmp@0.2.7
+[495] Applies to: npm:tmp@0.2.7
 ------------------------------------------------------------------------------
 The MIT License (MIT)
 
@@ -41714,7 +41761,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-[494] Applies to: npm:toidentifier@1.0.1
+[496] Applies to: npm:toidentifier@1.0.1
 ------------------------------------------------------------------------------
 MIT License
 
@@ -41739,7 +41786,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-[495] Applies to: npm:traverse@0.3.9
+[497] Applies to: npm:traverse@0.3.9
 ------------------------------------------------------------------------------
 Copyright 2010 James Halliday (mail@substack.net)
 
@@ -41767,7 +41814,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[496] Applies to: npm:trough@2.2.0
+[498] Applies to: npm:trough@2.2.0
 ------------------------------------------------------------------------------
 (The MIT License)
 
@@ -41792,7 +41839,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[497] Applies to: npm:ts-dedent@2.3.0
+[499] Applies to: npm:ts-dedent@2.3.0
 ------------------------------------------------------------------------------
 MIT License
 
@@ -41817,7 +41864,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-[498] Applies to: npm:ts-mixer@6.0.4
+[500] Applies to: npm:ts-mixer@6.0.4
 ------------------------------------------------------------------------------
 MIT License
 
@@ -41842,7 +41889,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-[499] Applies to: npm:tslib@2.8.1
+[501] Applies to: npm:tslib@2.8.1
 ------------------------------------------------------------------------------
 Copyright (c) Microsoft Corporation.
 
@@ -41858,7 +41905,7 @@ OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
 PERFORMANCE OF THIS SOFTWARE.
 
 ------------------------------------------------------------------------------
-[500] Applies to: npm:tslog@4.11.0
+[502] Applies to: npm:tslog@4.11.0
 ------------------------------------------------------------------------------
 MIT License
 
@@ -41883,7 +41930,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-[501] Applies to: npm:tunnel-agent@0.6.0
+[503] Applies to: npm:tunnel-agent@0.6.0
 ------------------------------------------------------------------------------
 Apache License
 
@@ -41942,7 +41989,7 @@ If the Work includes a "NOTICE" text file as part of its distribution, then any 
 END OF TERMS AND CONDITIONS
 
 ------------------------------------------------------------------------------
-[502] Applies to: npm:type-fest@0.20.2
+[504] Applies to: npm:type-fest@0.20.2
 ------------------------------------------------------------------------------
 MIT License
 
@@ -41955,7 +42002,7 @@ The above copyright notice and this permission notice shall be included in all c
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[503] Applies to: npm:typebox@1.1.39, npm:typebox@1.3.7
+[505] Applies to: npm:typebox@1.1.39, npm:typebox@1.3.7
 ------------------------------------------------------------------------------
 TypeBox
 
@@ -41982,7 +42029,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[504] Applies to: npm:undici@6.27.0, npm:undici@8.7.0, npm:undici-types@6.21.0, npm:undici-types@7.24.6
+[506] Applies to: npm:undici@6.27.0, npm:undici@8.7.0, npm:undici-types@6.21.0, npm:undici-types@7.24.6
 ------------------------------------------------------------------------------
 MIT License
 
@@ -42007,7 +42054,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-[505] Applies to: npm:unified@11.0.5, npm:vfile@6.0.3
+[507] Applies to: npm:unified@11.0.5, npm:vfile@6.0.3
 ------------------------------------------------------------------------------
 (The MIT License)
 
@@ -42032,7 +42079,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[506] Applies to: npm:unist-util-is@6.0.1
+[508] Applies to: npm:unist-util-is@6.0.1
 ------------------------------------------------------------------------------
 (The MIT license)
 
@@ -42058,7 +42105,7 @@ TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[507] Applies to: npm:universalify@2.0.1
+[509] Applies to: npm:universalify@2.0.1
 ------------------------------------------------------------------------------
 (The MIT License)
 
@@ -42082,7 +42129,7 @@ IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
 CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[508] Applies to: npm:unpipe@1.0.0
+[510] Applies to: npm:unpipe@1.0.0
 ------------------------------------------------------------------------------
 (The MIT License)
 
@@ -42108,7 +42155,7 @@ TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[509] Applies to: npm:unzipper@0.10.14
+[511] Applies to: npm:unzipper@0.10.14
 ------------------------------------------------------------------------------
 Copyright (c) 2012 - 2013 Near Infinity Corporation
 
@@ -42137,7 +42184,7 @@ Commits in this fork are (c) Ziggy Jonsson (ziggy.jonsson.nyc@gmail.com)
 and fall under same licence structure as the original repo (MIT)
 
 ------------------------------------------------------------------------------
-[510] Applies to: npm:uri-js@4.4.1
+[512] Applies to: npm:uri-js@4.4.1
 ------------------------------------------------------------------------------
 Copyright 2011 Gary Court. All rights reserved.
 
@@ -42152,7 +42199,7 @@ THIS SOFTWARE IS PROVIDED BY GARY COURT "AS IS" AND ANY EXPRESS OR IMPLIED WARRA
 The views and conclusions contained in the software and documentation are those of the authors and should not be interpreted as representing official policies, either expressed or implied, of Gary Court.
 
 ------------------------------------------------------------------------------
-[511] Applies to: npm:url-template@2.0.8
+[513] Applies to: npm:url-template@2.0.8
 ------------------------------------------------------------------------------
 Copyright (c) 2012-2014, Bram Stein
 All rights reserved.
@@ -42181,7 +42228,7 @@ NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE,
 EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ------------------------------------------------------------------------------
-[512] Applies to: npm:util-deprecate@1.0.2
+[514] Applies to: npm:util-deprecate@1.0.2
 ------------------------------------------------------------------------------
 (The MIT License)
 
@@ -42209,7 +42256,7 @@ FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
 OTHER DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[513] Applies to: npm:uuid@14.0.1, npm:uuid@8.3.2
+[515] Applies to: npm:uuid@14.0.1, npm:uuid@8.3.2
 ------------------------------------------------------------------------------
 The MIT License (MIT)
 
@@ -42222,7 +42269,7 @@ The above copyright notice and this permission notice shall be included in all c
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[514] Applies to: npm:void-elements@3.1.0
+[516] Applies to: npm:void-elements@3.1.0
 ------------------------------------------------------------------------------
 (The MIT License)
 
@@ -42248,7 +42295,7 @@ TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[515] Applies to: npm:web-streams-polyfill@3.3.3
+[517] Applies to: npm:web-streams-polyfill@3.3.3
 ------------------------------------------------------------------------------
 The MIT License (MIT)
 
@@ -42274,7 +42321,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-[516] Applies to: npm:which-module@2.0.1
+[518] Applies to: npm:which-module@2.0.1
 ------------------------------------------------------------------------------
 Copyright (c) 2016, Contributors
 
@@ -42291,7 +42338,7 @@ TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF
 THIS SOFTWARE.
 
 ------------------------------------------------------------------------------
-[517] Applies to: npm:workerpool@9.1.1
+[519] Applies to: npm:workerpool@9.1.1
 ------------------------------------------------------------------------------
 Apache License
                            Version 2.0, January 2004
@@ -42496,7 +42543,7 @@ Apache License
    limitations under the License.
 
 ------------------------------------------------------------------------------
-[518] Applies to: npm:ws@8.21.1
+[520] Applies to: npm:ws@8.21.1
 ------------------------------------------------------------------------------
 Copyright (c) 2011 Einar Otto Stangvik <einaros@gmail.com>
 Copyright (c) 2013 Arnout Kazemier and contributors
@@ -42520,7 +42567,7 @@ IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
 CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[519] Applies to: npm:xml@1.0.1
+[521] Applies to: npm:xml@1.0.1
 ------------------------------------------------------------------------------
 (The MIT License)
 
@@ -42546,7 +42593,7 @@ TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[520] Applies to: npm:xml-js@1.6.11
+[522] Applies to: npm:xml-js@1.6.11
 ------------------------------------------------------------------------------
 The MIT License (MIT)
 
@@ -42571,7 +42618,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-[521] Applies to: npm:xmlchars@2.2.0
+[523] Applies to: npm:xmlchars@2.2.0
 ------------------------------------------------------------------------------
 Copyright Louis-Dominique Dubeau and contributors to xmlchars
 
@@ -42593,7 +42640,7 @@ IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
 CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[522] Applies to: npm:y18n@4.0.3
+[524] Applies to: npm:y18n@4.0.3
 ------------------------------------------------------------------------------
 Copyright (c) 2015, Contributors
 
@@ -42610,7 +42657,7 @@ TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF
 THIS SOFTWARE.
 
 ------------------------------------------------------------------------------
-[523] Applies to: npm:yargs@15.4.1
+[525] Applies to: npm:yargs@15.4.1
 ------------------------------------------------------------------------------
 MIT License
 
@@ -42635,7 +42682,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[524] Applies to: npm:zod@4.3.6
+[526] Applies to: npm:zod@4.3.6
 ------------------------------------------------------------------------------
 MIT License
 
@@ -42660,7 +42707,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-[525] Applies to: npm:zod-to-json-schema@3.25.2
+[527] Applies to: npm:zod-to-json-schema@3.25.2
 ------------------------------------------------------------------------------
 ISC License
 
@@ -42711,13 +42758,9 @@ Packages without a standalone license file (license per package.json):
 - npm:@googleapis/drive@20.2.0 (Apache-2.0)
 - npm:@googleapis/gmail@17.0.0 (Apache-2.0)
 - npm:@googleapis/sheets@13.0.2 (Apache-2.0)
-- npm:@img/sharp-libvips-darwin-arm64@1.2.4 (LGPL-3.0-or-later)
 - npm:@img/sharp-libvips-darwin-arm64@1.3.2 (LGPL-3.0-or-later)
-- npm:@img/sharp-libvips-darwin-x64@1.2.4 (LGPL-3.0-or-later)
 - npm:@img/sharp-libvips-darwin-x64@1.3.2 (LGPL-3.0-or-later)
-- npm:@img/sharp-libvips-linux-arm64@1.2.4 (LGPL-3.0-or-later)
 - npm:@img/sharp-libvips-linux-arm64@1.3.2 (LGPL-3.0-or-later)
-- npm:@img/sharp-libvips-linux-x64@1.2.4 (LGPL-3.0-or-later)
 - npm:@img/sharp-libvips-linux-x64@1.3.2 (LGPL-3.0-or-later)
 - npm:@lit-labs/ssr-dom-shim@1.6.0 (BSD-3-Clause)
 - npm:@napi-rs/canvas-darwin-arm64@0.1.100 (MIT)

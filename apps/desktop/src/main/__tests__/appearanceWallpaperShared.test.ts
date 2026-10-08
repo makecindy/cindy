@@ -15,8 +15,11 @@ vi.mock('../maker-host/logger-adapter.js', () => ({
   desktopMakerLogger: { child: () => ({ info: vi.fn(), warn: vi.fn() }) },
 }));
 vi.mock('../device-link/crossProcessLock.js', () => ({
-  withCrossProcessLock: async (_path: string, _options: unknown, action: Function) =>
-    action({ held: true }),
+  withCrossProcessLock: async (
+    _path: string,
+    _options: unknown,
+    action: (lease: { held: boolean }) => unknown,
+  ) => action({ held: true }),
 }));
 import { customWallpaperStore, readCustomWallpaperUrl } from '../custom-wallpaper-settings';
 import {
@@ -35,6 +38,38 @@ beforeEach(() => {
 afterEach(() => fs.rmSync(h.dir, { recursive: true, force: true }));
 
 describe('profile-wide wallpaper preference', () => {
+  it('keeps blur opt-in, preserves explicit zero and deletes only its override on reset', async () => {
+    const file = path.join(h.dir, 'appearance-settings.json');
+    const original = JSON.stringify({ uiSize: 18, wallpaperVisibility: 0.5 });
+    fs.writeFileSync(file, original);
+    expect(readAppearanceSettings()).not.toHaveProperty('wallpaperBlur');
+    expect(fs.readFileSync(file, 'utf8')).toBe(original);
+    await writeAppearanceSettingsPatch({ wallpaperBlur: 12 });
+    h.owner = 'b';
+    expect(readAppearanceSettings().wallpaperBlur).toBe(12);
+    await writeAppearanceSettingsPatch({ wallpaperBlur: 0 });
+    expect(JSON.parse(fs.readFileSync(file, 'utf8')).wallpaperBlur).toBe(0);
+    await writeAppearanceSettingsPatch({ wallpaperBlur: null });
+    expect(JSON.parse(fs.readFileSync(file, 'utf8'))).toEqual(JSON.parse(original));
+  });
+  it('keeps old preferences untouched, persists zero visibility, and removes its override on reset', async () => {
+    const file = path.join(h.dir, 'appearance-settings.json');
+    const original = JSON.stringify({ wallpaperOverlay: 0.35, uiSize: 18 });
+    fs.writeFileSync(file, original);
+    expect(readAppearanceSettings()).toMatchObject({ wallpaperOverlay: 0.35, uiSize: 18 });
+    expect(readAppearanceSettings()).not.toHaveProperty('wallpaperVisibility');
+    expect(fs.readFileSync(file, 'utf8')).toBe(original);
+    await writeAppearanceSettingsPatch({ wallpaperVisibility: 0 });
+    expect(readAppearanceSettings().wallpaperVisibility).toBe(0);
+    expect(JSON.parse(fs.readFileSync(file, 'utf8')).wallpaperVisibility).toBe(0);
+    await writeAppearanceSettingsPatch({ wallpaperVisibility: 1 });
+    expect(readAppearanceSettings().wallpaperVisibility).toBe(1);
+    await writeAppearanceSettingsPatch({ wallpaperVisibility: null, wallpaperOverlay: 0.2 });
+    const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
+    expect(saved).not.toHaveProperty('wallpaperVisibility');
+    expect(saved).not.toHaveProperty('wallpaperOverlay');
+    expect(saved.uiSize).toBe(18);
+  });
   it('shares selection, replacement and reset across accounts, including sign-out', async () => {
     await customWallpaperStore.writePatchAtomic({ url: urlA });
     await writeAppearanceSettingsPatch({ wallpaperId: 'custom' });

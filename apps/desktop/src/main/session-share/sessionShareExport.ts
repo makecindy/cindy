@@ -587,6 +587,10 @@ export async function exportSessionShare(
   if (session.remoteHostId) {
     throw codedError('PRECONDITION_FAILED', 'remote sessions cannot be exported');
   }
+  // Agent 在另一台电脑运行的任务：转录在那台，本机打包不全。
+  if (await sessionAgentRunsOnOtherDevice(opts.sessionId)) {
+    throw codedError('PRECONDITION_FAILED', 'tasks whose agent runs on another computer cannot be exported');
+  }
   if (session.orcaRole === 'worker') {
     throw codedError(
       'PRECONDITION_FAILED',
@@ -1040,6 +1044,14 @@ function resolveMediaFile(
     // resolveSafe 对未知 host / 越界路径抛错:该 URL 不可解析,当缺失处理。
     return null;
   }
+}
+
+async function sessionAgentRunsOnOtherDevice(sessionId: string): Promise<boolean> {
+  const row = await getDbClient().queryOne<{ agentDeviceId: string | null }>(
+    'SELECT agent_device_id AS agentDeviceId FROM sessions WHERE id = ? LIMIT 1',
+    [sessionId],
+  );
+  return Boolean(row?.agentDeviceId);
 }
 
 async function readSessionRow(sessionId: string): Promise<SessionRow | null> {

@@ -60,6 +60,7 @@ interface Sink {
   size: number;
   offset: number;
   busy: boolean;
+  reportProgress(): void;
 }
 interface Outgoing {
   id: string;
@@ -627,6 +628,7 @@ export function registerFilePeerIpc() {
         if (written.bytesWritten !== bytes.length || sinks.get(id) !== s)
           throw new Error('FILE_PEER_CLOSED');
         s.offset += bytes.length;
+        s.reportProgress();
         // Same as READ: transfer progress never refreshes diagnostic probe timers.
         for (const pending of replies.values())
           if (pending.connection === s.connection && !pending.probe) pending.timer.refresh();
@@ -645,7 +647,13 @@ type Invoke = (
 ) => Promise<{ ok: boolean; result?: unknown }>;
 /** A caller owns the returned temporary file and must dispose it after consuming it. */
 const queuePeerRead = createFileReadQueue();
-export function tryPeerFile(peer: string, url: string, invoke: Invoke, signal?: AbortSignal) {
+export function tryPeerFile(
+  peer: string,
+  url: string,
+  invoke: Invoke,
+  signal?: AbortSignal,
+  onProgress?: (received: number, total: number) => void,
+) {
   const owner = captureDataOwnerBroadcastScope();
   if (!cooldownOwner || !isDataOwnerBroadcastScopeCurrent(cooldownOwner)) {
     cooldown.clear();
@@ -655,7 +663,7 @@ export function tryPeerFile(peer: string, url: string, invoke: Invoke, signal?: 
     peer,
     () => {
       if (!isDataOwnerBroadcastScopeCurrent(owner)) throw new Error('FILE_PEER_CANCELLED');
-      return receivePeerFile(peer, url, invoke, signal);
+      return receivePeerFile(peer, url, invoke, signal, onProgress);
     },
     signal,
   );
@@ -665,6 +673,7 @@ async function receivePeerFile(
   url: string | null,
   invoke: Invoke,
   signal?: AbortSignal,
+  onProgress?: (received: number, total: number) => void,
 ) {
   refreshCooldownOwner();
   if (signal?.aborted) throw new Error('FILE_PEER_CANCELLED');
@@ -750,7 +759,24 @@ async function receivePeerFile(
     const destination = path.join(directory, 'file');
     const handle = await fs.open(destination, 'wx', 0o600),
       sink = randomUUID();
-    sinks.set(sink, { connection: id, file: handle, offset: 0, size: file.size, busy: false });
+    const receiving: Sink = {
+      connection: id,
+      file: handle,
+      offset: 0,
+      size: file.size,
+      busy: false,
+      reportProgress: () => {
+        if (signal?.aborted || !isDataOwnerBroadcastScopeCurrent(owner)) return;
+        // An observer must never fail a disk write or trigger a transport fallback.
+        try {
+          onProgress?.(receiving.offset, receiving.size);
+        } catch {
+          /* observer only */
+        }
+      },
+    };
+    sinks.set(sink, receiving);
+    receiving.reportProgress();
     step = 'receive';
     const transferStartedAt = Date.now();
     const stopProgress = startMonitor(`receive:${sink}`, id, async () => {

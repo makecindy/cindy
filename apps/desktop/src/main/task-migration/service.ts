@@ -236,6 +236,7 @@ interface SourceSession {
   workingDir: string;
   workspaceKind: string;
   remoteHostId: string | null;
+  agentDeviceId: string | null;
   status: string;
   source: string;
   orcaRole: string | null;
@@ -248,7 +249,7 @@ async function assertSource(
   worker = false,
 ): Promise<SourceSession> {
   const row = await scope.db.queryOne<SourceSession>(
-    'SELECT id, working_dir AS workingDir, workspace_kind AS workspaceKind, remote_host_id AS remoteHostId, status, source, orca_role AS orcaRole, agent_kind AS agentKind, updated_at AS updatedAt FROM sessions WHERE id = ?',
+    'SELECT id, working_dir AS workingDir, workspace_kind AS workspaceKind, remote_host_id AS remoteHostId, agent_device_id AS agentDeviceId, status, source, orca_role AS orcaRole, agent_kind AS agentKind, updated_at AS updatedAt FROM sessions WHERE id = ?',
     [sessionId],
   );
   scope.assertCurrent();
@@ -257,6 +258,8 @@ async function assertSource(
     !(row.status === 'active' || (worker && row.status === 'archived')) ||
     !row.workingDir ||
     row.remoteHostId ||
+    // Agent 在另一台电脑运行的任务：Agent 会话记录在那台，本机无法完整复制。
+    row.agentDeviceId ||
     (worker ? row.orcaRole !== 'worker' : row.orcaRole === 'worker') ||
     !['desktop', 'shared', 'feishu'].includes(row.source)
   )

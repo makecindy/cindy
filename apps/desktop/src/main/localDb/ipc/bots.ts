@@ -805,7 +805,7 @@ async function readProfile(
     canonicalClearedAt,
     lastReadAt,
   );
-  const config = parseJson(version?.capabilitiesJson ?? '{}');
+  const config = normalizeBotToolCapabilities(parseJson(version?.capabilitiesJson ?? '{}'));
   const modelChain = await readEffectiveBotModelChain(config);
   const primaryModelRoute = modelChain[0];
   const invitation = botInvitationProgress(config.invitation);
@@ -890,11 +890,11 @@ async function readProfile(
       skillsExcluded: Array.isArray(config.skillsExcluded)
         ? config.skillsExcluded.filter((item): item is string => typeof item === 'string')
         : [],
-      toolsetMode: normalizeBotToolCapabilities(config).toolsetMode,
+      toolsetMode: config.toolsetMode,
       toolsets: Array.isArray(config.toolsets)
         ? config.toolsets.filter((item): item is string => typeof item === 'string')
         : [],
-      mcpMode: normalizeBotToolCapabilities(config).mcpMode,
+      mcpMode: config.mcpMode,
       mcpServers: Array.isArray(config.mcpServers)
         ? config.mcpServers.filter((item): item is string => typeof item === 'string')
         : [],
@@ -1115,7 +1115,7 @@ export async function getBotRemoteSettingsSource(botId: string) {
   const [version] = await client.drizzle.select().from(botProfileVersions).where(and(
     eq(botProfileVersions.botId, botId), eq(botProfileVersions.version, source.currentVersion),
   )).limit(1);
-  const config = parseJson(version?.capabilitiesJson ?? '{}');
+  const config = normalizeBotToolCapabilities(parseJson(version?.capabilitiesJson ?? '{}'));
   const modelChain = await readEffectiveBotModelChain(config);
   owner.assertCurrent();
   const strings = (value: unknown) => Array.isArray(value)
