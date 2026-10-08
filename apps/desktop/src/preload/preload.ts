@@ -7529,6 +7529,24 @@ contextBridge.exposeInMainWorld('electronAPI', {
     // 重命名输入框 Magic 按钮:按会话最新对话内容重新生成标题(素材由 main 读 DB)
     regenerateSessionTitle: (sessionId: string): Promise<{ title: string | null }> =>
       ipcRenderer.invoke('maker:regenerate-title', { sessionId }),
+    sessionTitleSettingsGet: (): Promise<{
+      value: { style: 'concise' | 'goal-summary' | 'raw'; language: 'auto' | 'zh-CN' | 'zh-TW' | 'en' | 'ja' | 'ko' };
+      isCustomized: boolean;
+    }> => ipcRenderer.invoke('maker:session-title-settings:get'),
+    sessionTitleSettingsSet: (patch: {
+      style?: 'concise' | 'goal-summary' | 'raw';
+      language?: 'auto' | 'zh-CN' | 'zh-TW' | 'en' | 'ja' | 'ko';
+    }): Promise<{
+      style: 'concise' | 'goal-summary' | 'raw';
+      language: 'auto' | 'zh-CN' | 'zh-TW' | 'en' | 'ja' | 'ko';
+    }> => ipcRenderer.invoke('maker:session-title-settings:set', patch),
+    sessionTitleSettingsReset: (): Promise<{
+      style: 'concise' | 'goal-summary' | 'raw';
+      language: 'auto' | 'zh-CN' | 'zh-TW' | 'en' | 'ja' | 'ko';
+    }> => ipcRenderer.invoke('maker:session-title-settings:reset'),
+    retitleRecentSessions: (windowDays: 7 | 30): Promise<{
+      total: number; renamed: number; skipped: number; failed: number;
+    }> => ipcRenderer.invoke('maker:retitle-recent-sessions', windowDays),
     // 会话自动起名:renderer 只给素材,占位/条件写/归属表都在 main(单一真相源)。
     autoTitle: (request: {
       sessionId: string;

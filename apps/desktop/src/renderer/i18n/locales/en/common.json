@@ -573,7 +573,8 @@
       "windowBehavior": "App Behavior",
       "shortcuts": "Keyboard Shortcuts",
       "mcpServers": "Custom MCP",
-      "bots": "Teammates"
+      "bots": "Teammates",
+      "sessionTitle": "Task naming"
     },
     "remote": {
       "title": "Remote machines",
@@ -3465,6 +3466,50 @@
         "cindyHy3": "Hy3",
         "cindyDeepseekV4Flash": "DeepSeek v4 flash",
         "cindyQwen38Flash": "Qwen 3.8 Flash"
+      }
+    },
+    "sessionTitle": {
+      "title": "Task naming",
+      "styleLabel": "Automatic naming style",
+      "styleHint": "Choose how new task titles are created from the first message.",
+      "languageLabel": "Title language",
+      "languageHint": "Used by smart naming. Raw text keeps the original language.",
+      "retitleLabel": "Rename recent tasks",
+      "retitleHint": "Only tasks Cindy named automatically are eligible. Manual titles and older unknown titles are skipped.",
+      "retitleAction": "Rename Recent",
+      "styles": {
+        "concise": {
+          "label": "Smart · Concise",
+          "description": "A short topic title, matching the current behavior."
+        },
+        "goal-summary": {
+          "label": "Smart · Goal ｜ Summary",
+          "description": "Structured as a compact goal and summary when the message has enough signal."
+        },
+        "raw": {
+          "label": "Raw text truncation",
+          "description": "Use the first message directly without calling a naming model."
+        }
+      },
+      "languages": {
+        "auto": "Follow interface",
+        "zh-CN": "Simplified Chinese",
+        "zh-TW": "Traditional Chinese",
+        "en": "English",
+        "ja": "Japanese",
+        "ko": "Korean"
+      },
+      "dialog": {
+        "title": "Rename recent tasks?",
+        "description": "Cindy can rename recent automatically named tasks using the current style and language. Manual titles will not be changed.",
+        "sevenDays": "Last 7 days",
+        "thirtyDays": "Last 30 days",
+        "notNow": "Not now"
+      },
+      "toast": {
+        "saveFailed": "Failed to save task naming settings",
+        "renamed": "Renamed {{renamed}} of {{total}} task(s)",
+        "retitleFailed": "Failed to rename recent tasks"
       }
     },
     "compaction": {

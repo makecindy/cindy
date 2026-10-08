@@ -42,7 +42,12 @@ import { isDeviceLinkInvoke } from '../device-link/invoke-context.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { isIpcError } from '../../shared/ipc-errors.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
-import { buildAutoTitlePrompt, buildRegenerateTitlePrompt } from './title-prompt.js';
+import {
+  buildAutoTitlePrompt,
+  buildRegenerateTitlePrompt,
+  SESSION_TITLE_MAX_CHARS_BY_STYLE,
+} from './title-prompt.js';
+import { readSessionTitleSettings } from '../session-title-settings-store.js';
 
 import { MAKER_INVOKE } from './channels.js';
 import {
@@ -115,6 +120,9 @@ export async function generateMakerSessionTitle(
   // "请提供用户消息内容"式回复当标题返回。直接放弃,调用方保留默认名。
   const trimmed = message.trim();
   if (!trimmed) return null;
+  const settings = readSessionTitleSettings();
+  // 'raw' opts out of model naming entirely; callers keep the local placeholder.
+  if (settings.style === 'raw') return null;
   return generateTitleWithAuxiliaryModel(
     {
       sessionId: sessionId ?? '',
@@ -122,6 +130,7 @@ export async function generateMakerSessionTitle(
       prompt: buildAutoTitlePrompt(
         trimmed.slice(0, AUTO_TITLE_MESSAGE_SLICE),
         getResolvedMainLocale(),
+        settings,
       ),
     },
     {
@@ -220,10 +229,15 @@ export async function regenerateMakerSessionTitle(
           : `Assistant: ${m.text.slice(0, REGENERATE_ASSISTANT_SLICE)}`,
       )
       .join('\n');
+    const settings = readSessionTitleSettings();
+    const regenerateStyle = settings.style === 'raw' ? 'concise' : settings.style;
     const generated = await deps.generateTitle(
       sessionId,
       agentKind,
-      buildRegenerateTitlePrompt(openingText, transcript, getResolvedMainLocale()),
+      buildRegenerateTitlePrompt(openingText, transcript, getResolvedMainLocale(), {
+        style: regenerateStyle,
+        language: settings.language,
+      }),
     );
     if (generated.status !== 'ok') {
       const context = { sessionId, agentKind, reason: generated.status };
@@ -239,7 +253,12 @@ export async function regenerateMakerSessionTitle(
     }
     // Match the shared auto-title limit: one line, ≤40 Unicode code points,
     // and no transcript/meta wrapper. The prompt alone cannot enforce this.
-    const title = validateTitleOutput(generated.title, AUTO_TITLE_MAX_CHARS);
+    const title = validateTitleOutput(
+      generated.title,
+      regenerateStyle === 'goal-summary'
+        ? SESSION_TITLE_MAX_CHARS_BY_STYLE['goal-summary']
+        : AUTO_TITLE_MAX_CHARS,
+    );
     if (!title) {
       log.warn('regenerate session title rejected model output', {
         sessionId,

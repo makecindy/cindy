@@ -72,6 +72,7 @@ function createDb(initialTitle: string): void {
     CREATE TABLE sessions (
       id TEXT PRIMARY KEY NOT NULL,
       title TEXT NOT NULL DEFAULT 'New Maker',
+      title_source TEXT,
       working_dir TEXT,
       model TEXT NOT NULL DEFAULT 'claude-sonnet-4-6',
       effort TEXT NOT NULL DEFAULT 'high',
@@ -150,6 +151,16 @@ function currentTitle(): string {
   }).title;
 }
 
+function currentTitleSource(): string | null {
+  return (
+    h.sqlite!.prepare('SELECT title_source AS titleSource FROM sessions WHERE id = ?').get(
+      SESSION_ID,
+    ) as {
+      titleSource: string | null;
+    }
+  ).titleSource;
+}
+
 // normalizeAutoTitle 的用例随实现搬到 packages/maker-shared/src/__tests__/sessionTitle.test.ts
 // (main / renderer / mobile 共用同一份实现,单测跟着实现走)。
 
@@ -159,13 +170,17 @@ describe('persistSessionTitleIfStillDraft — 条件写', () => {
   it('标题仍是草稿占位时写入成功', async () => {
     expect(await persistSessionTitleIfStillDraft(SESSION_ID, '帮我排查登录失败')).toBe(true);
     expect(currentTitle()).toBe('帮我排查登录失败');
+    expect(currentTitleSource()).toBe('auto');
   });
 
   it('用户已手动改名 → 期望值不匹配,拒绝写入(user rename wins)', async () => {
-    h.sqlite!.prepare('UPDATE sessions SET title = ? WHERE id = ?').run('我自己起的名字', SESSION_ID);
+    h.sqlite!
+      .prepare('UPDATE sessions SET title = ?, title_source = ? WHERE id = ?')
+      .run('我自己起的名字', 'user', SESSION_ID);
 
     expect(await persistSessionTitleIfStillDraft(SESSION_ID, '帮我排查登录失败')).toBe(false);
     expect(currentTitle()).toBe('我自己起的名字');
+    expect(currentTitleSource()).toBe('user');
   });
 
   it('用显式期望值覆盖上一次写的占位', async () => {
@@ -178,7 +193,9 @@ describe('persistSessionTitleIfStillDraft — 条件写', () => {
   });
 
   it('目标值等于期望值且库里确实是它 → 无需写入,报成功', async () => {
-    h.sqlite!.prepare('UPDATE sessions SET title = ? WHERE id = ?').run('设计稿-v3.png', SESSION_ID);
+    h.sqlite!
+      .prepare('UPDATE sessions SET title = ?, title_source = ? WHERE id = ?')
+      .run('设计稿-v3.png', 'auto', SESSION_ID);
 
     expect(
       await persistSessionTitleIfStillDraft(SESSION_ID, '设计稿-v3.png', '设计稿-v3.png'),
@@ -188,7 +205,9 @@ describe('persistSessionTitleIfStillDraft — 条件写', () => {
 
   it('目标值等于期望值但期望值已过期 → 如实报失败,不谎称已写入', async () => {
     // 资格检查之后、写入之前用户手动改了名:期望值 '设计稿-v3.png' 已不是库里的值。
-    h.sqlite!.prepare('UPDATE sessions SET title = ? WHERE id = ?').run('我自己起的名字', SESSION_ID);
+    h.sqlite!
+      .prepare('UPDATE sessions SET title = ?, title_source = ? WHERE id = ?')
+      .run('我自己起的名字', 'user', SESSION_ID);
 
     expect(
       await persistSessionTitleIfStillDraft(SESSION_ID, '设计稿-v3.png', '设计稿-v3.png'),
@@ -205,6 +224,19 @@ describe('persistSessionTitleIfStillDraft — 条件写', () => {
   it('写入前归一化:折叠空白并截断 40 字', async () => {
     await persistSessionTitleIfStillDraft(SESSION_ID, `  ${'排'.repeat(60)}  `);
     expect(currentTitle()).toBe('排'.repeat(40));
+    expect(currentTitleSource()).toBe('auto');
+  });
+
+  it('title_source=user 时即使标题仍等于期望值也拒绝覆盖', async () => {
+    h.sqlite!
+      .prepare('UPDATE sessions SET title = ?, title_source = ? WHERE id = ?')
+      .run('帮我排查登录失败', 'user', SESSION_ID);
+
+    expect(
+      await persistSessionTitleIfStillDraft(SESSION_ID, '登录失败排查', '帮我排查登录失败'),
+    ).toBe(false);
+    expect(currentTitle()).toBe('帮我排查登录失败');
+    expect(currentTitleSource()).toBe('user');
   });
 });
 
@@ -231,6 +263,7 @@ describe('isUntitledSessionAwaitingAutoTitle — 资格', () => {
 
   it('用户手动改过名 → 无资格', async () => {
     createDb('我自己起的名字');
+    h.sqlite!.prepare('UPDATE sessions SET title_source = ? WHERE id = ?').run('user', SESSION_ID);
 
     expect(await isUntitledSessionAwaitingAutoTitle(SESSION_ID, '设计稿-v3.png')).toBe(false);
   });
@@ -302,7 +335,15 @@ describe('getOverwritableAutoTitle — 覆写目标', () => {
 
   it('用户改过名 → null(调用方据此停止尝试)', async () => {
     createDb('我自己起的名字');
+    h.sqlite!.prepare('UPDATE sessions SET title_source = ? WHERE id = ?').run('user', SESSION_ID);
 
     expect(await getOverwritableAutoTitle(SESSION_ID, '设计稿-v3.png')).toBeNull();
+  });
+
+  it('title_source=user 时默认草稿标题也不再有资格', async () => {
+    createDb('New Maker');
+    h.sqlite!.prepare('UPDATE sessions SET title_source = ? WHERE id = ?').run('user', SESSION_ID);
+
+    expect(await getOverwritableAutoTitle(SESSION_ID)).toBeNull();
   });
 });

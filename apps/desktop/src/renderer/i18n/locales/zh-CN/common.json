@@ -573,7 +573,8 @@
       "windowBehavior": "应用行为",
       "shortcuts": "键盘快捷键",
       "mcpServers": "自定义 MCP",
-      "bots": "伙伴"
+      "bots": "伙伴",
+      "sessionTitle": "任务命名"
     },
     "remote": {
       "title": "远端机器",
@@ -3464,6 +3465,50 @@
         "cindyHy3": "Hy3",
         "cindyDeepseekV4Flash": "DeepSeek v4 Flash",
         "cindyQwen38Flash": "Qwen 3.8 Flash"
+      }
+    },
+    "sessionTitle": {
+      "title": "任务命名",
+      "styleLabel": "自动命名风格",
+      "styleHint": "选择新任务如何根据第一条消息生成标题。",
+      "languageLabel": "标题语言",
+      "languageHint": "用于智能命名；原文截断会保留原始语言。",
+      "retitleLabel": "重命名最近任务",
+      "retitleHint": "只处理 Cindy 自动命名过的任务；手动标题和来源未知的旧标题会跳过。",
+      "retitleAction": "重命名最近任务",
+      "styles": {
+        "concise": {
+          "label": "智能·简洁",
+          "description": "生成简短主题标题，与当前行为一致。"
+        },
+        "goal-summary": {
+          "label": "智能·目标｜摘要",
+          "description": "信息足够时输出紧凑的目标与摘要结构。"
+        },
+        "raw": {
+          "label": "原文截断",
+          "description": "直接使用第一条消息，不调用命名模型。"
+        }
+      },
+      "languages": {
+        "auto": "跟随界面",
+        "zh-CN": "简体中文",
+        "zh-TW": "繁體中文",
+        "en": "English",
+        "ja": "日本語",
+        "ko": "한국어"
+      },
+      "dialog": {
+        "title": "要重命名最近任务吗？",
+        "description": "Cindy 可以用当前风格和语言重命名最近自动命名过的任务；手动标题不会被改动。",
+        "sevenDays": "最近 7 天",
+        "thirtyDays": "最近 30 天",
+        "notNow": "暂不用"
+      },
+      "toast": {
+        "saveFailed": "保存任务命名设置失败",
+        "renamed": "已重命名 {{renamed}} / {{total}} 个任务",
+        "retitleFailed": "重命名最近任务失败"
       }
     },
     "compaction": {

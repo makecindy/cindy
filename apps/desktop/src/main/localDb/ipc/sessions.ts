@@ -14,7 +14,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 
 import { ipcMain, app, BrowserWindow } from 'electron';
-import { eq, ne, and, desc, inArray, isNotNull, isNull, sql, type SQL } from 'drizzle-orm';
+import { eq, ne, and, or, desc, inArray, isNotNull, isNull, sql, type SQL } from 'drizzle-orm';
 
 import {
   clearPiSubagentDeletedTombstone,
@@ -1009,29 +1009,6 @@ export async function touchUserSendInDb(id: string, atMs?: number): Promise<void
 /** fork 出来的会话的占位标题前缀("[Fork] …" / "[Fork·已剥离] …")。 */
 const FORK_PLACEHOLDER_TITLE_PREFIX = '[Fork';
 
-let _onUserTitleWritten: ((sessionId: string) => void) | null = null;
-
-/**
- * 注入「用户手动写过标题」的通知(传 null 清除;由 maker-ipc 的自动起名模块注册)。
- *
- * 为什么条件写不够:`persistSessionTitleIfStillDraft` 靠 `WHERE title = 期望值` 实现
- * user rename wins,但用户把标题改成**与占位逐字相同**的串时这条件仍然成立,随后的
- * 智能标题会把他刚保存的名字覆盖掉(PR #510 review P1)。`sessions` 表没有「谁写的」
- * 这一列,所以由改名出口显式说一声,自动起名据此收手。
- */
-export function setOnUserSessionTitleWritten(fn: ((sessionId: string) => void) | null): void {
-  _onUserTitleWritten = fn;
-}
-
-/** 用户改名出口统一调这个(自动起名自己的写入**不**调)。 */
-function noteUserTitleWritten(sessionId: string): void {
-  try {
-    _onUserTitleWritten?.(sessionId);
-  } catch {
-    // 自动起名是附属功能,通知失败不该影响改名主流程。
-  }
-}
-
 /**
  * 自动标题的资格检查:title 仍是系统占位。系统占位有三种 ——
  *
@@ -1073,9 +1050,10 @@ export async function getOverwritableAutoTitle(
   const agentKind =
     row.agentKind === 'codex' || row.agentKind === 'pi' ? row.agentKind : 'claude-code';
   const overwritable =
-    row.title === DEFAULT_DRAFT_SESSION_TITLE ||
-    (!!row.parentSessionId && row.title.startsWith(FORK_PLACEHOLDER_TITLE_PREFIX)) ||
-    (!!synthesizedPlaceholder && row.title === synthesizedPlaceholder);
+    row.titleSource !== 'user' &&
+    (row.title === DEFAULT_DRAFT_SESSION_TITLE ||
+      (!!row.parentSessionId && row.title.startsWith(FORK_PLACEHOLDER_TITLE_PREFIX)) ||
+      (!!synthesizedPlaceholder && row.title === synthesizedPlaceholder));
   if (!overwritable) return null;
   return {
     title: row.title,
@@ -1113,19 +1091,24 @@ export async function persistSessionTitleIfStillDraft(
   if (!cleanTitle || cleanTitle === DEFAULT_DRAFT_SESSION_TITLE) return false;
 
   const db = getDbClient().drizzle;
-  // 目标值与期望值相同 → UPDATE 无事可做,但**不能凭期望值直接报成功**:期望值
-  // 可能已经过期(用户在资格检查之后手动改了名),那时库里根本不是这个标题。
-  // 读一次真实标题再回答,避免调用方把"没写成"当成"已写入"(PR #510 review)。
-  if (cleanTitle === expectedTitle) {
-    const current = await selectSessionWithCount(db, sessionId);
-    return !!current && current.title === cleanTitle;
-  }
-
   const setObj = sessionPatchToRow({ title: cleanTitle }, { bumpUpdatedAt: false });
+  setObj.titleSource = 'auto';
   await db
     .update(sessions)
     .set(setObj)
-    .where(and(eq(sessions.id, sessionId), eq(sessions.title, expectedTitle)));
+    .where(
+      and(
+        eq(sessions.id, sessionId),
+        eq(sessions.title, expectedTitle),
+        or(isNull(sessions.titleSource), ne(sessions.titleSource, 'user')),
+      ),
+    )
+    .run();
+
+  if (cleanTitle === expectedTitle) {
+    const current = await selectSessionWithCount(db, sessionId);
+    return current?.title === cleanTitle && current.titleSource === 'auto';
+  }
 
   const row = await selectSessionWithCount(db, sessionId);
   if (!row || row.title !== cleanTitle) return false;
@@ -1934,13 +1917,7 @@ export async function updateSessionInDb(
         setObj.sdkSessionId = reloc.persistedSdkSessionId;
       }
     }
-    // 用户手动改名(重命名框 / 侧边栏)走这条:告诉自动起名收手。同值改名不会让
-    // 条件写落空,不显式说一声的话智能标题会把他刚保存的名字盖掉(review P1)。
-    // **必须先于 UPDATE**:写库是一次 worker RPC 往返,改名提交与这里拿到回执之间
-    // 有真实时间差,在那期间智能标题仍能满足 `WHERE title = 期望值` 把名字盖掉。
-    // 先记号后写库,代价只是写库失败时该会话本进程内不再自动起名 —— 用户毕竟确实
-    // 按下过保存,这个方向的偏差是安全的。
-    if (typeof p.title === 'string') noteUserTitleWritten(sid);
+    if (typeof p.title === 'string') setObj.titleSource = 'user';
     await withStatusWriteLock(
       db,
       sid,
@@ -2129,8 +2106,7 @@ export async function patchSessionMetaInDb(
   const dbClient = getDbClient();
   const db = dbClient.drizzle;
   const setObj = sessionPatchToRow(patch, { bumpUpdatedAt: false });
-  // 控制端远程改名走这条,与本机改名同口径(同样先记号后写库)。
-  if (patch.title !== undefined) noteUserTitleWritten(sessionId);
+  if (patch.title !== undefined) setObj.titleSource = 'user';
   const updated = await withStatusWriteLock(db, sessionId, patch.status, async () => {
     if (patch.status !== undefined) await assertGenericSessionLifecycleAllowed(db, sessionId);
     const terminal = patch.status === 'archived' || patch.status === 'deleted';
@@ -2289,9 +2265,6 @@ export async function renameSessionTitlesInDb(
 
   if (dryRun) return preview;
 
-  // 批量改名(MCP 工具)同样是"人给的名字",自动起名不得再覆盖;与上面两条出口
-  // 一样先记号后写库,不给并发的智能标题留窗口。
-  for (const change of changes) noteUserTitleWritten(change.sessionId);
   const applied = await getDbClient()
     .tx('sessions.renameTitles', { changes })
     .catch((err) => {

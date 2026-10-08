@@ -67,6 +67,9 @@ vi.mock('../../maker-host/auxiliary-title-one-shot.js', () => ({
 vi.mock('../../messagePersistBroadcaster.js', () => ({
   drainPersistQueue: h.drainPersistQueue,
 }));
+vi.mock('../../session-title-settings-store.js', () => ({
+  readSessionTitleSettings: vi.fn(() => ({ style: 'concise', language: 'auto' })),
+}));
 vi.mock('../sessionAutoTitle.js', () => ({ runSessionAutoTitle: h.run }));
 vi.mock('../../security/trustedAppRenderer.js', () => ({
   assertTrustedAppRendererEvent: () => {

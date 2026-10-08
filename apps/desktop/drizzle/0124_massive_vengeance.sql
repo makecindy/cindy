@@ -1,0 +1,1 @@
+ALTER TABLE `sessions` ADD `title_source` text;

@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import { buildAutoTitlePrompt, buildRegenerateTitlePrompt } from '../title-prompt.js';
+import {
+  buildAutoTitlePrompt,
+  buildRegenerateTitlePrompt,
+  SESSION_TITLE_MAX_CHARS_BY_STYLE,
+} from '../title-prompt.js';
 
 describe('buildAutoTitlePrompt', () => {
   it('自动命名和 AI 重命名都要求最多 40 个字符', () => {
@@ -33,5 +37,45 @@ describe('buildAutoTitlePrompt', () => {
   it('follows the UI locale for the title language line', () => {
     expect(buildAutoTitlePrompt('hello', 'en')).toContain('Write the title in English.');
     expect(buildAutoTitlePrompt('hello', 'ja')).toContain('Write the title in Japanese.');
+  });
+
+  it.each([
+    ['auto', 'zh-CN', 'Simplified Chinese'],
+    ['auto', 'zh-TW', 'Traditional Chinese (繁體中文)'],
+    ['auto', 'en', 'English'],
+    ['auto', 'ja', 'Japanese'],
+    ['auto', 'ko', 'Korean'],
+    ['zh-CN', 'en', 'Simplified Chinese'],
+    ['zh-TW', 'en', 'Traditional Chinese (繁體中文)'],
+    ['en', 'zh-CN', 'English'],
+    ['ja', 'en', 'Japanese'],
+    ['ko', 'en', 'Korean'],
+  ] as const)('language setting %s with UI locale %s writes %s', (languageSetting, locale, language) => {
+    expect(buildAutoTitlePrompt('hello', locale, { language: languageSetting })).toContain(
+      `Write the title in ${language}.`,
+    );
+  });
+
+  it.each(['concise', 'goal-summary', 'raw'] as const)(
+    'style %s produces the expected instruction shape',
+    (style) => {
+      const prompt = buildAutoTitlePrompt('继续', 'zh-CN', { style });
+      if (style === 'goal-summary') {
+        expect(prompt).toContain('goal ｜ summary');
+        expect(prompt).toContain('too brief to infer a reliable goal and summary');
+        expect(prompt).toContain('without the separator instead of forcing the format');
+        expect(prompt).toContain('Use at most 30 characters in total.');
+      } else {
+        expect(prompt).toContain('Use at most 40 characters.');
+        expect(prompt).not.toContain('goal ｜ summary');
+      }
+    },
+  );
+
+  it('exports per-style title limits', () => {
+    expect(SESSION_TITLE_MAX_CHARS_BY_STYLE).toEqual({
+      concise: 40,
+      'goal-summary': 30,
+    });
   });
 });
