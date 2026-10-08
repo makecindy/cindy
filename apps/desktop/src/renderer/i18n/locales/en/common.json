@@ -351,9 +351,7 @@
     },
     "received": {
       "title": "Providers Shared with Me",
-      "description": "Providers others share with you appear among the remote providers in the model list.",
-      "empty": "No one has shared a provider with you yet. When you get a share link, open it or paste it here.",
-      "paste": "Paste Share Link",
+      "enterLink": "Enter Share Link…",
       "fromOwner": "Shared by {{name}}",
       "providerOnDevice": "{{provider}} · {{device}}",
       "statusActive": "Active",
@@ -369,18 +367,29 @@
       },
       "left": "Left {{provider}} shared by {{name}}",
       "pasteDialog": {
-        "title": "Paste Share Link",
+        "title": "Enter Share Link",
         "description": "Paste the provider share link you received. You’ll see the details before deciding whether to send a request.",
         "label": "Share link",
         "placeholder": "Paste the link here",
         "empty": "Paste a share link first",
         "open": "Open Link",
         "cancel": "Cancel"
-      }
+      },
+      "detailNote": "The agent runs on {{name}}'s computer, using their sign-in and quota. To use it, choose it in the model list when you start a task.",
+      "modelsTitle": "Available Models",
+      "modelsLoading": "Loading the models they shared…",
+      "modelsRefused": "The owner’s computer isn’t allowing this share right now. It may not allow remote control, “Allow remote use” may be off for this provider, or their Cindy may still be starting. Try again shortly, or ask them to check both settings.",
+      "modelsFailedWithCode": "Couldn’t read the models they made available. Try again shortly. (Error code: {{code}})",
+      "retryModels": "Reload Models",
+      "modelsEmpty": "They haven't made any models available yet.",
+      "pausedNote": "They've paused this share. You can use it again once they resume it.",
+      "offlineNote": "Their computer is offline. You can use it again once it is back online.",
+      "needsUpdateNote": "They need to update Cindy before you can use this share."
     },
     "picker": {
       "deviceName": "{{device}} · Shared by {{owner}}",
-      "unavailable": "Unavailable share"
+      "unavailable": "Unavailable share",
+      "hostOutdated": "The Cindy version on the owner’s computer is too old to list these models. Ask them to update Cindy, then try again."
     },
     "notification": {
       "requestTitle": "New Share Request",
@@ -2706,6 +2715,13 @@
           "reset": "Restore default selection",
           "connectionRequired": "Connect to use these models. Your selections are saved."
         }
+      },
+      "remote": {
+        "rowLabel": "{{provider}} · {{device}}",
+        "statusReady": "Available",
+        "detailNote": "The agent runs on {{device}}, using that computer’s sign-in and quota. To use it, choose it in the model list when you start a task. To change this provider, go to Settings → Providers on that computer.",
+        "modelsTitle": "Available Models",
+        "modelsEmpty": "This provider has no models available on that computer yet."
       },
       "genericOAuth": {
         "subtitle": "Subscription account",
@@ -8574,6 +8590,7 @@
         "copied": "Invitation link copied",
         "createLink": "Create invitation link",
         "accept": "Accept and join",
+        "openGroup": "Open group",
         "previewInvite": "Preview invitation",
         "invalidInvite": "This invitation is invalid, used or expired. Request a new link.",
         "notAllowed": "This account does not have permission. Check your account or contact the group owner.",
@@ -13936,6 +13953,7 @@
       "failedTitle": "Plan change failed",
       "failedBody": "The plan change did not complete. Your current plan is unchanged.",
       "requestFailed": "The plan change request couldn’t be completed. Refresh your subscription status and try again.",
+      "renewalPrepaid": "Your next billing period is already paid. Wait until the current period ends before upgrading.",
       "quoteRejected": "This plan isn’t available for your current subscription. Choose another plan.",
       "chooseAnotherPlan": "Choose Another Plan",
       "resyncHint": "The result could not be confirmed yet. Checking the latest status again…",
