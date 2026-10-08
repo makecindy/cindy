@@ -291,7 +291,7 @@ import { makeMirrorAccessors, replaceScope, clearScope } from '@/state/deviceLin
 import type { ModelMemoryAccessors } from '@/components/new-chat/ModelSelector';
 import { remoteAgentProviders } from '@/components/new-chat/unifiedModelSelection';
 import { resolveNewMakerDraftRightSidebar } from './newMakerDraftRightSidebar';
-import { resolveNewMakerDraftEffort } from './newMakerDraftModelPrefs';
+import { resolveNewMakerDraftEffort, resolveSubmitEffort } from './newMakerDraftModelPrefs';
 import { loadSshSessionModelSelection, SshModelSelectionError } from './sshSessionModelSelection';
 import { closeAllTabs as closeRightSidebarTabs } from '@/features/right-sidebar/store';
 import { revealOrcaWorkersTab } from '@/features/right-sidebar/plugins/orca-workers/actions';
@@ -3464,6 +3464,26 @@ export function NewMakerDraftRoute() {
       },
     ): Promise<boolean | undefined> => {
       if (sendInFlightRef.current) return false;
+      // 提交前按**最终模型**的能力收敛档位（#5535 那一族）。ChatInput 回传的 effort 是 UI 展示值：
+      // `initialEffort ?? localVendorDefaults.effort` 与 `display.effort ?? 'low'` 两层兜底后必然
+      // 有值；目录已声明无档位的型号照此提交会被 main 准入按 `valid: none` 拒绝 —— 新建任务必然
+      // 失败且界面无档可改（PR #5555 的 Greptile review 指出的正是这条入口）。
+      // 复用草稿层**同一条规则**（不在消费端另写一套）；目录里查不到该模型（远程 / device-link
+      // 目标）视为能力未知 → 原样保留，行为不变。
+      const submitEffort = resolveSubmitEffort({
+        currentEffort: effort,
+        provider:
+          (opts?.providerId
+            ? providers.find((candidate) => candidate.id === opts.providerId)
+            : undefined)
+          ?? (effectiveSourceId
+            ? providers.find((candidate) => candidate.id === effectiveSourceId)
+            : undefined),
+        model,
+        // 档位能力按**目录能力引擎**查，与 localDraftEffort 同源同查法；persistedAgentKind
+        // 是 DB 形态（'cc' | …），不是 getModel 要的 AgentKind。
+        agentKind: capabilityAgentKind,
+      });
       if (effectiveCollab.enabled && collabPolicy.loading) {
         toast.warning(t('newChat.collaboration.loadingHint'));
         return false;
@@ -4096,7 +4116,7 @@ export function NewMakerDraftRoute() {
               id: sessionId,
               agentKind: persistedAgentKind,
               model,
-              effort,
+              effort: submitEffort,
               permissionMode,
               fastMode: effectiveFastMode,
               planModeEnabled: effectivePlanMode,
@@ -4301,7 +4321,7 @@ export function NewMakerDraftRoute() {
                   newSession.id,
                   dispatchedMessage,
                   model,
-                  effort,
+                  submitEffort ?? '',
                   permissionMode,
                   newDir,
                   rehomedFiles,
@@ -4353,7 +4373,7 @@ export function NewMakerDraftRoute() {
             id: sessionId,
             agentKind: persistedAgentKind,
             model,
-            effort,
+            effort: submitEffort,
             permissionMode,
             fastMode: effectiveFastMode,
             planModeEnabled: effectivePlanMode,
@@ -4529,7 +4549,7 @@ export function NewMakerDraftRoute() {
               newSession.id,
               dispatchedMessage,
               model,
-              effort,
+              submitEffort ?? '',
               permissionMode,
               sendWorkingDir,
               rehydratedFiles,

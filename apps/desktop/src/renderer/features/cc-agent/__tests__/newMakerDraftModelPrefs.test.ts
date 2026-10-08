@@ -3,9 +3,47 @@ import { resolve } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import { resolveNewMakerDraftEffort } from '../newMakerDraftModelPrefs';
+import { sshModel, sshProvider } from '@/features/cc-agent/__tests__/sshModelFixtures';
+import { resolveNewMakerDraftEffort, resolveSubmitEffort } from '../newMakerDraftModelPrefs';
 
 describe('resolveNewMakerDraftEffort', () => {
+  /**
+   * **完整发送路径**（PR #5555 review 要求的那条：首页选「已声明无档位」型号 → 首条消息 →
+   * createSession 收到 effort: undefined）。
+   *
+   * 为什么要连 ChatInput 的两层兜底一起测：草稿层返回的 undefined 只喂 `initialEffort`，
+   * ChatInput 会把它填回具体档位再经 `effortForSend = activeEffort` 发给 handleSend ——
+   * 只测草稿层会得出「已修复」的错误结论，第一版 PR 正是这样被 Greptile / MagicLizi 打回的。
+   */
+  it('完整发送路径：ChatInput 两层兜底后提交，已声明无档位型号的 createSession 收到 undefined', () => {
+    const provider = sshProvider(
+      'opencode-go',
+      [sshModel('mimo-v2.6-flash', { efforts: [], defaultEffort: null })],
+      'pi',
+    );
+    // ① 草稿层：目录已声明无档位 → 不指定
+    const draftInitialEffort = resolveNewMakerDraftEffort({
+      currentEffort: 'high',
+      efforts: [],
+      defaultEffort: null,
+    });
+    expect(draftInitialEffort).toBeUndefined();
+    // ② ChatInput 两层兜底（真实代码路径的常量表达）
+    const currentEffort = draftInitialEffort ?? 'medium'; // initialEffort ?? localVendorDefaults.effort
+    const activeEffort = currentEffort ?? 'low'; // composerSelection.display.effort ?? 'low'
+    // 兑底确实发生 ⇒ 只改草稿层不足以修复主入口
+    expect(activeEffort).toBe('medium');
+    // ③ handleSend 提交边界（真实函数）→ createSession 收到 undefined
+    expect(
+      resolveSubmitEffort({
+        currentEffort: activeEffort,
+        provider,
+        model: 'mimo-v2.6-flash',
+        agentKind: 'pi',
+      }),
+    ).toBeUndefined();
+  });
+
   it('首页当前显示模型也采用其它对话写入的全局预设', () => {
     expect(
       resolveNewMakerDraftEffort({
