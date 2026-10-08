@@ -349,9 +349,7 @@
     },
     "received": {
       "title": "分享給我的供應商",
-      "description": "別人分享給你的供應商會出現在模型列表的遠端供應商裡。",
-      "empty": "還沒有人分享供應商給你。收到分享連結後，點開它或貼到這裡。",
-      "paste": "貼上分享連結",
+      "enterLink": "輸入分享連結…",
       "fromOwner": "來自 {{name}} 的分享",
       "providerOnDevice": "{{provider}} · {{device}}",
       "statusActive": "正常",
@@ -367,18 +365,29 @@
       },
       "left": "已退出 {{name}} 分享的 {{provider}}",
       "pasteDialog": {
-        "title": "貼上分享連結",
+        "title": "輸入分享連結",
         "description": "把對方傳給你的供應商分享連結貼到這裡，看過說明後再決定是否申請。",
         "label": "分享連結",
         "placeholder": "在這裡貼上連結",
         "empty": "請先貼上分享連結",
         "open": "開啟連結",
         "cancel": "取消"
-      }
+      },
+      "detailNote": "Agent 在 {{name}} 的電腦上執行，使用的是對方的登入和配額。新建任務時在模型列表裡選擇它就能用。",
+      "modelsTitle": "可用的模型",
+      "modelsLoading": "正在讀取對方開放的模型…",
+      "modelsRefused": "對方電腦暫時不讓讀取這個分享：可能沒有允許遠端控制、關了這個供應商的「允許遠端呼叫」，也可能對方的 Cindy 剛啟動、還沒準備好。請稍後重試，或請對方檢查這兩項設定。",
+      "modelsFailedWithCode": "暫時讀不到對方開放的模型，請稍後重試。（錯誤代碼：{{code}}）",
+      "retryModels": "重新讀取模型",
+      "modelsEmpty": "對方還沒有開放可用的模型。",
+      "pausedNote": "對方暫停了這個分享，恢復後才能使用。",
+      "offlineNote": "對方電腦不在線，上線後就能繼續使用。",
+      "needsUpdateNote": "對方的 Cindy 更新後才能使用這個分享。"
     },
     "picker": {
       "deviceName": "{{device}} · 來自 {{owner}} 的分享",
-      "unavailable": "已無法使用的分享"
+      "unavailable": "已無法使用的分享",
+      "hostOutdated": "分享者電腦上的 Cindy 版本太舊，讀不到這些模型。請讓對方更新 Cindy 後再試。"
     },
     "notification": {
       "requestTitle": "新的分享申請",
@@ -2725,6 +2734,13 @@
           "reset": "恢復預設選擇",
           "connectionRequired": "連線後可用，已選模型會保留。"
         }
+      },
+      "remote": {
+        "rowLabel": "{{provider}} · {{device}}",
+        "statusReady": "可用",
+        "detailNote": "Agent 在 {{device}} 上執行，使用的是那台電腦的登入和配額。新建任務時在模型列表裡選擇它就能用；要修改這個供應商，請到那台電腦的「設定 → 模型供應商」。",
+        "modelsTitle": "可用的模型",
+        "modelsEmpty": "這個供應商在那台電腦上還沒有開放可用的模型。"
       },
       "genericOAuth": {
         "subtitle": "訂閱帳號",
@@ -8581,6 +8597,7 @@
         "copied": "已複製邀請連結",
         "createLink": "產生邀請連結",
         "accept": "接受並加入",
+        "openGroup": "開啟群組",
         "previewInvite": "查看邀請",
         "invalidInvite": "邀請無效、已使用或已過期，請取得新的邀請連結。",
         "notAllowed": "目前帳號沒有權限，請檢查帳號或聯絡群主。",
@@ -13925,6 +13942,7 @@
       "failedTitle": "套餐變更失敗",
       "failedBody": "套餐變更未完成，當前套餐保持不變。",
       "requestFailed": "套餐變更請求未完成，請重新整理訂閱狀態後重試。",
+      "renewalPrepaid": "下一期費用已提前支付，請等待本期結束後再進行升級。",
       "quoteRejected": "當前訂閱無法切換到這個套餐，請選擇其他套餐。",
       "chooseAnotherPlan": "選擇其他套餐",
       "resyncHint": "確認結果暫時無法核實，正在重新確認最新狀態…",

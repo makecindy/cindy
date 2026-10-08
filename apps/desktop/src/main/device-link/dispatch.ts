@@ -111,7 +111,7 @@ import {
   redactMessageRowForSharedGuest,
   redactSharedGuestPush,
 } from './sharedTaskMessageOrigin';
-import { isProviderSharePeer, isSharedTaskPeer, PROVIDER_SHARE_RELAY_CAPABILITY, SHARED_TASK_CAPABILITY } from '@cindy/device-link';
+import { isProviderSharePeer, isSharedTaskPeer, parseProviderSharePeer, PROVIDER_SHARE_RELAY_CAPABILITY, SHARED_TASK_CAPABILITY } from '@cindy/device-link';
 import { captureSharedTaskPeer, captureSharedTaskPush, assertSharedTaskInvoke, sharedTaskMetadataTopic, sharedTaskAccessFailure } from './sharedTaskDispatch.js';
 import { runAsBackgroundDbRpc } from '../localDb/client/rpcAdmission.js';
 import { fetchLocalMediaToOss } from './mediaFetch';
@@ -339,6 +339,8 @@ export interface ProviderShareAccessPort {
   /** 不认识的受邀者连进来时按需刷新一次分享快照。 */
   ensureKnown(controller: string): Promise<void>;
   hasShares(): boolean;
+  /** 受邀者被拒的原因(只进本机日志)；放行时为 null。 */
+  denial?(controller: string): string | null;
 }
 let providerShareAccess: ProviderShareAccessPort | null = null;
 
@@ -348,6 +350,23 @@ export function setProviderShareAccess(port: ProviderShareAccessPort | null): vo
 
 function providerShareGuestAccess(controller: string): ReturnType<ProviderShareAccessPort['guestAccess']> {
   return providerShareAccess?.guestAccess(controller) ?? null;
+}
+
+/**
+ * 受邀者被拒时在本机日志记下原因(同一对端、同一位置、同一原因每分钟最多一条)。对方只收到
+ * 「暂时不可用」，排查「受邀者读不到模型」只能靠这里。
+ */
+const providerShareDenialLoggedAt = new Map<string, number>();
+function logProviderShareDenial(src: string, where: string, reason?: string): void {
+  const why = reason ?? (providerShareAccess ? providerShareAccess.denial?.(src) ?? 'unknown' : 'host-not-wired');
+  const key = `${src}\u0000${where}\u0000${why}`;
+  const now = Date.now();
+  if (now - (providerShareDenialLoggedAt.get(key) ?? 0) < 60_000) return;
+  if (providerShareDenialLoggedAt.size >= 256) providerShareDenialLoggedAt.clear();
+  providerShareDenialLoggedAt.set(key, now);
+  const peer = parseProviderSharePeer(src);
+  const who = peer?.role === 'guest' ? `share ${peer.shareId.slice(0, 8)} member ${peer.memberId.slice(0, 8)}` : shortId(src);
+  log.warn(`provider-share guest refused at ${where} from ${who}: ${why}`);
 }
 
 export interface RemoteAgentHandler {
@@ -2553,6 +2572,7 @@ function handleLinkOpen(
     }
     if (!providerShareGuestAccess(src)
       || !sanitizeControllerCapabilities(payload?.capabilities).includes(PROVIDER_SHARE_RELAY_CAPABILITY)) {
+      logProviderShareDenial(src, 'link-open', providerShareGuestAccess(src) ? 'missing-relay-capability' : undefined);
       client.closeLink(src, 'revoked', 'inbound');
       return;
     }
@@ -2992,7 +3012,11 @@ function settleRemoteInvokeWithOrphanDeadline(
 }
 
 function currentRemoteInvokeAdmissionFailure(src: string): InvokeResultPayload | null {
-  if (isProviderSharePeer(src)) return providerShareGuestAccess(src) ? null : PROVIDER_SHARE_ACCESS_FAILURE;
+  if (isProviderSharePeer(src)) {
+    if (providerShareGuestAccess(src)) return null;
+    logProviderShareDenial(src, 'admission');
+    return PROVIDER_SHARE_ACCESS_FAILURE;
+  }
   if (isSharedTaskPeer(src)) return captureSharedTaskPeer(src) ? null : sharedTaskAccessFailure(src);
   if (!readDeviceLinkSettings().remoteControlEnabled) {
     return { ok: false, error: { code: 'REMOTE_DISABLED', message: 'remote control disabled' } };
@@ -3930,8 +3954,85 @@ const PROVIDER_SHARE_ACCESS_FAILURE: InvokeResultPayload = {
   ok: false,
   error: { code: 'ACCESS_REVOKED', message: 'provider share is not available' },
 };
-/** The only channels a provider-share guest may invoke. */
-const PROVIDER_SHARE_CHANNELS: ReadonlySet<string> = new Set([REMOTE_AGENT_CHANNEL, 'maker:provider:list']);
+/**
+ * The only channels a provider-share guest may invoke: the remote agent, and the read-only
+ * catalog reads its model picker and send gate need (provider list, agent capabilities,
+ * available agents, agent readiness), each narrowed to the shared provider below.
+ */
+const PROVIDER_SHARE_CHANNELS: ReadonlySet<string> = new Set([
+  REMOTE_AGENT_CHANNEL,
+  'maker:provider:list',
+  'maker:get-capabilities',
+  'maker:list-available-agents',
+  'maker:agent:status',
+]);
+const PROVIDER_SHARE_AGENT_ARG_CHANNELS: ReadonlySet<string> = new Set(['maker:get-capabilities', 'maker:agent:status']);
+const PROVIDER_SHARE_AGENT_KINDS: ReadonlySet<string> = new Set(['claude-code', 'codex', 'pi']);
+
+type SharedProviderView = { agents: string[]; models: Record<string, string[]> };
+
+/**
+ * The shared provider as the guest sees it: `null` when it is no longer open for remote use,
+ * or the failed read itself (the guest then retries instead of caching an empty answer).
+ */
+async function sharedProviderView(
+  src: string, providerId: string,
+): Promise<SharedProviderView | null | Extract<InvokeResultPayload, { ok: false }>> {
+  // Own timing: the slow-invoke log must not file this read under the guest's channel.
+  const listed = await runAuthorizedInvoke(src, { channel: 'maker:provider:list', args: [] }, new RemoteInvokeTiming());
+  if (!listed.ok) return listed;
+  const projected = projectProviderListForShare(listed.result, providerId) as { providers?: Array<Record<string, unknown>> };
+  const provider = projected.providers?.[0];
+  if (!provider) return null;
+  const agents = Array.isArray(provider.agents) ? provider.agents.filter((agent): agent is string => typeof agent === 'string') : [];
+  const models: Record<string, string[]> = {};
+  if (provider.models && typeof provider.models === 'object') {
+    for (const [agent, entries] of Object.entries(provider.models as Record<string, unknown>)) {
+      // Exact ids: in the catalog `x[1m]` and `x` are separate models, possibly from other providers.
+      models[agent] = Array.isArray(entries)
+        ? entries.flatMap((entry) => (entry && typeof (entry as { id?: unknown }).id === 'string' ? [(entry as { id: string }).id] : []))
+        : [];
+    }
+  }
+  return { agents, models };
+}
+
+/**
+ * Narrow a read-only answer to what the shared provider offers: capabilities keep only its
+ * models, available agents only the agents it serves, and agent readiness only says whether
+ * an agent the share serves is installed (no local path, account identity or this computer's
+ * own sign-in state; the guest takes readiness from the shared provider list).
+ */
+async function projectProviderShareRead(
+  src: string, channel: string, args: unknown[], result: unknown, providerId: string,
+): Promise<{ ok: true; value: unknown } | Extract<InvokeResultPayload, { ok: false }>> {
+  if (channel === 'maker:provider:list') return { ok: true, value: projectProviderListForShare(result, providerId) };
+  const view = await sharedProviderView(src, providerId);
+  if (view && 'ok' in view) return view;
+  if (channel === 'maker:agent:status') {
+    const status = result && typeof result === 'object' ? result as { binaryReady?: unknown } : {};
+    return { ok: true, value: { binaryReady: view?.agents.includes(String(args[0])) === true && status.binaryReady === true } };
+  }
+  if (channel === 'maker:list-available-agents') {
+    return { ok: true, value: Array.isArray(result) && view ? result.filter((agent) => view.agents.includes(String(agent))) : [] };
+  }
+  // maker:get-capabilities
+  if (!result || typeof result !== 'object' || Array.isArray(result)) return { ok: true, value: result };
+  const offered = new Set(view?.models[String(args[0])] ?? []);
+  const capabilities = result as { availableModels?: unknown };
+  return {
+    ok: true,
+    value: {
+      ...capabilities,
+      availableModels: Array.isArray(capabilities.availableModels)
+        ? capabilities.availableModels.filter((model) => {
+          const id = model && typeof (model as { id?: unknown }).id === 'string' ? (model as { id: string }).id : '';
+          return id !== '' && offered.has(id);
+        })
+        : [],
+    },
+  };
+}
 
 /** Keep only the shared provider (and only while it stays open for remote use). */
 function projectProviderListForShare(result: unknown, providerId: string): unknown {
@@ -3962,17 +4063,25 @@ async function runProviderShareInvoke(
   src: string, payload: InvokePayload | undefined, timing: RemoteInvokeTiming,
 ): Promise<InvokeResultPayload> {
   const access = providerShareGuestAccess(src);
-  if (!access || !payload || typeof payload.channel !== 'string') return PROVIDER_SHARE_ACCESS_FAILURE;
+  if (!access) {
+    logProviderShareDenial(src, `invoke ${typeof payload?.channel === 'string' ? payload.channel : '?'}`);
+    return PROVIDER_SHARE_ACCESS_FAILURE;
+  }
+  if (!payload || typeof payload.channel !== 'string') return PROVIDER_SHARE_ACCESS_FAILURE;
   if (!PROVIDER_SHARE_CHANNELS.has(payload.channel)) {
     log.warn(`blocked provider-share channel from ${shortId(src)}: ${payload.channel}`);
     return { ok: false, error: { code: 'CHANNEL_NOT_ALLOWED', message: `channel '${payload.channel}' not allowed for shared providers` } };
   }
+  const args = Array.isArray(payload.args) ? payload.args : [];
+  if (PROVIDER_SHARE_AGENT_ARG_CHANNELS.has(payload.channel) && !PROVIDER_SHARE_AGENT_KINDS.has(String(args[0]))) {
+    return { ok: false, error: { code: 'IPC_ERROR', message: '[INVALID_PARAMS] unknown agent' } };
+  }
   const result = await runAuthorizedInvoke(src, payload, timing);
   if (!providerShareGuestAccess(src)) return PROVIDER_SHARE_ACCESS_FAILURE;
-  if (payload.channel === 'maker:provider:list' && result.ok) {
-    return { ...result, result: projectProviderListForShare(result.result, access.providerId) };
-  }
-  return result;
+  if (payload.channel === REMOTE_AGENT_CHANNEL || !result.ok) return result;
+  const projected = await projectProviderShareRead(src, payload.channel, args, result.result, access.providerId);
+  if (!providerShareGuestAccess(src)) return PROVIDER_SHARE_ACCESS_FAILURE;
+  return projected.ok ? { ...result, result: projected.value } : projected;
 }
 
 /** For diagnostics: whether any provider share is currently known on this computer. */
@@ -4411,6 +4520,7 @@ export const __testing = {
     onRemoteInvokeBusyChanged = null;
     inFlightRemoteInvokeCount = 0;
     completedRemoteInvokeResults.clear();
+    providerShareDenialLoggedAt.clear();
     completedRemoteInvokeResultBytes = 0;
     inFlightRemoteInvokeResults.clear();
     inFlightRemoteInvokeBytes = 0;

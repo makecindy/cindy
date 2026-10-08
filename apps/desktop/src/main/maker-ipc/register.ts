@@ -4121,6 +4121,7 @@ export interface SchedulerQueuedPromptRequest {
 export type SchedulerEnqueueResult = { clientId: string } | { duplicate: true } | { retry: true };
 
 interface SchedulerQueueBridge {
+  ensureQueueRestored(sessionId: string): Promise<boolean>;
   isSessionBusy(sessionId: string): boolean;
   hasQueuedPrompt(sessionId: string, scheduleId: string): boolean;
   enqueuePrompt(req: SchedulerQueuedPromptRequest): Promise<SchedulerEnqueueResult>;
@@ -4136,6 +4137,11 @@ const schedulerQueuedPromptPreparations = new Map<string, {
   onPreparing: () => Promise<void>;
   onPreparationFailed?: (error: unknown) => void;
 }>();
+
+export async function ensureSchedulerQueueRestored(sessionId: string): Promise<boolean> {
+  // 桥未就绪时不能把未知队列当成空闲；让 runner 沿用恢复待定的顺延路径。
+  return schedulerQueueBridgeHolder?.ensureQueueRestored(sessionId) ?? false;
+}
 
 export function isSchedulerTargetSessionBusy(sessionId: string): boolean {
   return schedulerQueueBridgeHolder?.isSessionBusy(sessionId) ?? false;
@@ -15161,6 +15167,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       }
       assertCurrentInputGeneration(sessionId, readExpectedInputGeneration(sendOpts));
       sess = readCurrentSteerSession();
+      // 同轮插话也属于新输入。必须在 vendor await 前通知，旧轮可能先于 steer ack 结束。
+      // 共用入口同时覆盖 INPUT_STEER、队列提升和旧 STEER IPC。
+      publishUiSessionIntervention(sessionId);
       await sess.steer(steerPayload as never, {
         logTitle: meta?.title,
         messageUuid: so.messageUuid,
@@ -16456,6 +16465,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         inputCoordinator.shouldQueueNewTurn(sessionId) ||
         isSessionTurnDispatchBoundaryBusy(sessionTurnActivityTracker, sessionId, sess)
       );
+    },
+    ensureQueueRestored: async (sessionId) => {
+      await inputCoordinator.ensureQueueRestored(sessionId).catch(() => undefined);
+      return inputCoordinator.isQueueRestored(sessionId);
     },
     hasQueuedPrompt: (sessionId, scheduleId) =>
       inputCoordinator.hasQueuedItemWhere(

@@ -221,6 +221,12 @@ function defaultPermissionModeForSchedule(): PermissionMode {
 export interface SchedulerQueueDeps {
   /** 目标会话当前是否忙(turn 运行中 / 队列有积压 / 凭证切换等待中)。 */
   isSessionBusy(sessionId: string): boolean;
+  /**
+   * 重启后内存还没有读回排队快照时，shouldQueueNewTurn 会把它当成忙。
+   * 指定模型的任务会因此直接顺延，永远走不到入队时的恢复。
+   * 返回 false 表示这次没恢复成功，调用方按 queue-restore-pending 顺延。
+   */
+  ensureQueueRestored?(sessionId: string): Promise<boolean>;
   /** 该 schedule 是否已有排队中(或正在派发)的心跳消息 —— 防重复入队。 */
   hasQueuedPrompt(sessionId: string, scheduleId: string): boolean;
   enqueuePrompt(req: {
@@ -553,6 +559,43 @@ export class MakerScheduleRunner implements ScheduleRunner {
     return routinePermissionSnapshot(live ?? this.deps.maker.getSession(sessionId), stored);
   }
 
+  /**
+   * 绑定会话在判断忙闲前先恢复排队快照。未恢复会被 shouldQueueNewTurn
+   * 当成忙；指定了模型的任务又会在入队前直接顺延，于是重启后永远空转。
+   * 恢复失败返回顺延结果；没有桥或已恢复则返回 undefined，继续原路径。
+   */
+  private async restoreBoundQueue(
+    schedule: Schedule,
+    ctx: FireContext,
+    sessionId: string,
+  ): Promise<FireResult | undefined> {
+    const restore = this.deps.schedulerQueue?.ensureQueueRestored;
+    if (!restore) return undefined;
+    throwIfFireAborted(ctx.signal, 'queue snapshot restore');
+    let restored = false;
+    try {
+      restored = await restore(sessionId);
+    } catch (err) {
+      this.deps.logger.warn?.('[runner] queue snapshot restore failed', {
+        scheduleId: schedule.id,
+        sessionId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      restored = false;
+    }
+    throwIfFireAborted(ctx.signal, 'queue snapshot restore');
+    if (restored) return undefined;
+    if (this.canDefer(schedule, ctx)) {
+      return this.deferFire(schedule, sessionId, 'queue-restore-pending');
+    }
+    const errMsg = formatSchedulerSendError(
+      buildSchedulerSendContext(schedule, ctx, sessionId),
+      'QUEUE_RESTORE_PENDING',
+    );
+    await this.notifyFailureSilent(schedule, ctx, errMsg);
+    throw new Error(errMsg);
+  }
+
   private async failOrDeferSessionRunning(
     schedule: Schedule,
     ctx: FireContext,
@@ -780,6 +823,8 @@ export class MakerScheduleRunner implements ScheduleRunner {
       // 直发路径不经过 makerSendTransaction。先落实 pending switch,再读取 meta/row,
       // 才能让本轮 createSession 与 send 都指向切换后的 live engine。
       throwIfFireAborted(ctx.signal, 'credential switch setup');
+      const restorePending = await this.restoreBoundQueue(schedule, ctx, sessionId);
+      if (restorePending) return restorePending;
       const selection: ScheduledModelSelection | undefined =
         schedule.modelAgentKind && schedule.model?.trim()
           ? {
@@ -3555,6 +3600,7 @@ function extractErr(data: unknown): string {
  */
 type FireAbortStage =
   | 'runner entry'
+  | 'queue snapshot restore'
   | 'workspace allocation'
   | 'session creation'
   | 'agent turn dispatch'
