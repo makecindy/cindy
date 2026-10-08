@@ -52,9 +52,16 @@ export interface GhostConfirmDialogBridgeDeps {
 
 /**
  * 创建确认请求的单窗口投递器。确认 Host 位于主 App renderer,因此不应使用
- * 当前焦点或窗口列表顺序选择目标;没有可信主 App 窗口时必须失败关闭。
+ * 当前焦点或窗口列表顺序选择目标;没有可信主 App 窗口时必须失败关闭。发送前
+ * 先恢复最小化状态并显示主窗口,避免确认请求落在用户看不见的窗口中。
  */
-export function createGhostConfirmDialogMainWindowSender<TWindow>(deps: {
+interface ConfirmDialogMainWindow {
+  isMinimized(): boolean;
+  restore(): void;
+  show(): void;
+}
+
+export function createGhostConfirmDialogMainWindowSender<TWindow extends ConfirmDialogMainWindow>(deps: {
   getMainWindow(): TWindow | null;
   isTrustedMainWindow(window: TWindow): boolean;
   send(window: TWindow, payload: GhostConfirmPush): void;
@@ -62,6 +69,9 @@ export function createGhostConfirmDialogMainWindowSender<TWindow>(deps: {
   return (payload) => {
     const mainWindow = deps.getMainWindow();
     if (!mainWindow || !deps.isTrustedMainWindow(mainWindow)) return false;
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    // show() also focuses an already visible window, so the confirmation is observable.
+    mainWindow.show();
     deps.send(mainWindow, payload);
     return true;
   };
