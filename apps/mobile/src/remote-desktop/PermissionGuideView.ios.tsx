@@ -103,6 +103,7 @@ export function PermissionGuideView(props: PermissionGuideViewProps) {
             >
               <Text
                 modifiers={[
+                  foregroundStyle(colors.ctaText),
                   fixedSize({ horizontal: false, vertical: true }),
                   multilineTextAlignment("center"),
                   frame({ maxWidth: Infinity, minHeight: 24 }),
@@ -120,6 +121,7 @@ export function PermissionGuideView(props: PermissionGuideViewProps) {
           >
             <Text
               modifiers={[
+                foregroundStyle(props.guideLabel ? colors.textPrimary : colors.ctaText),
                 fixedSize({ horizontal: false, vertical: true }),
                 multilineTextAlignment("center"),
                 frame({ maxWidth: Infinity, minHeight: 44 }),

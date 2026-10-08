@@ -2,7 +2,7 @@
  * Ghost 可见性分类的 main 侧唯一真源。
  *
  * ghost_info、ghost_call 及其 setup waiter 都必须调用本函数，判序固定为：
- * 不存在 → 未登录 → 当前工作目录停用 → 未启用。
+ * 不存在 → 未登录 → 已下线 → 当前工作目录停用 → 未启用。
  *
  * ghost_info 是免审批的只读查询，但会用 GHOST_ASLEEP /
  * GHOST_DISABLED_IN_WORKDIR 明确区分已安装插件的不可见原因；这项存在性
@@ -16,7 +16,7 @@ export type GhostVisibilityResult =
   | { ok: true; ghost: InstalledGhost }
   | {
       ok: false;
-      errorCode: 'GHOST_NOT_FOUND' | 'GHOST_ASLEEP' | 'GHOST_DISABLED_IN_WORKDIR';
+      errorCode: 'GHOST_NOT_FOUND' | 'GHOST_ASLEEP' | 'GHOST_DISABLED_IN_WORKDIR' | 'GHOST_RETIRED';
       message: string;
     };
 
@@ -47,6 +47,9 @@ export function classifyGhostVisibility(
       // 使用已废弃的「本地模式」；末句的「本地」只描述能力落在本机。
       message: '该插件需要 Cindy 账号，未登录状态不可用；不要重试，改用本地可用方式。',
     };
+  }
+  if (ghost.retirement) {
+    return { ok: false, errorCode: 'GHOST_RETIRED', message: t('settings.ghosts.retirement.agentNotice') };
   }
   if (deps.isDisabledForWorkdir(ghostId, workdir)) {
     return {

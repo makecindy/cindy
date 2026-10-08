@@ -10,6 +10,8 @@
  *   running:图标切 Thinking Orange + 呼吸;需关注:右上叠状态点(全端统一色表:
  *   error 红 / awaiting TapTap 蓝 / 完成未读绿,tone 按行精准订阅 attention store);
  *   有未发送内容(草稿/暂停队列)且未选中:右下叠铅笔。
+ *   Agent 在另一台电脑运行(任务在本机):VendorIcon 右上角加信号波纹,悬停说明哪台电脑;
+ *   右上角正显示状态点时由状态点占位,波纹暂不画(两者同角，叠在一起读不出)。
  * idle 时图标照常显示——让用户一眼看出"这是哪一个 agent"。
  *
  */
@@ -26,8 +28,45 @@ import { useGhostSessionBusy } from '@/cindy-brain/ghostSessionActivityStore';
 import { useSessionAttentionKind } from '@/lib/sessionAttentionStore';
 import { useSessionAttentionUrgency } from '../contexts/SessionAttentionUrgencyContext';
 import { AttentionDot } from '@/components/sidebar/AttentionDot';
-import { VendorIcon, agentKindToVendor } from '@/components/sidebar/VendorIcon';
+import {
+  VendorIcon,
+  agentKindToVendor,
+  type VendorIconKind,
+} from '@/components/sidebar/VendorIcon';
+import { useDeviceLinkDeviceList } from '@/features/device-link/useDeviceLinkDeviceList';
 import { useCindyMakeActivity } from './useCindyMakeActivity';
+
+/**
+ * Agent 在另一台电脑运行的 Agent 图标:带信号波纹，悬停说明在哪台电脑、是否离线。
+ * 单独成组件，只有这类任务的行才订阅设备列表(共享单例，push 驱动)。
+ */
+function AgentDeviceVendorIcon({
+  deviceId,
+  showSignal,
+  ...iconProps
+}: {
+  deviceId: string;
+  showSignal: boolean;
+  vendor: VendorIconKind;
+  size: number;
+  running: boolean;
+  colorClassName?: string;
+}) {
+  const { t } = useTranslation();
+  const device = useDeviceLinkDeviceList()?.find((item) => item.deviceId === deviceId);
+  const name = device?.name || deviceId;
+  const offline = device ? !device.online : false;
+  return (
+    <VendorIcon
+      {...iconProps}
+      remote={showSignal}
+      title={t(
+        offline ? 'ccAgent.sessionHeader.agentDeviceOffline' : 'ccAgent.sessionHeader.agentDevice',
+        { device: name },
+      )}
+    />
+  );
+}
 
 export interface SessionStatusIconProps {
   session: Session;
@@ -76,6 +115,11 @@ export function SessionStatusIcon({
   const cindyMakeActivity = useCindyMakeActivity(session);
   const isRunning = isAgentRunning || isGhostBusy || cindyMakeActivity != null;
   const vendor = agentKindToVendor(session.agentKind);
+  // 任务在本机、Agent 在另一台电脑。device-link / SSH 任务整件在远端，标题旁另有远程图标。
+  const agentDeviceId =
+    session.agentDeviceId && !session.deviceLinkDeviceId && !session.remoteHostId
+      ? session.agentDeviceId
+      : null;
   const isOrcaLead = isOrcaLeadSession(session);
   const isArchived = session.status === 'archived';
   // 角标 tone:error(含定时任务失败的 urgency context)红 > awaiting 蓝 > 完成未读绿。
@@ -142,6 +186,15 @@ export function SessionStatusIcon({
         >
           <RadioTower size={size ?? 12} strokeWidth={1.75} className="shrink-0" />
         </span>
+      ) : agentDeviceId ? (
+        <AgentDeviceVendorIcon
+          deviceId={agentDeviceId}
+          showSignal={!(showAttentionDot && hasAttentionNotification)}
+          vendor={vendor}
+          size={size ?? (vendor === 'cc' ? 13 : 12)}
+          running={isRunning}
+          colorClassName={isActive ? 'text-[var(--sidebar-item-active-foreground)]' : undefined}
+        />
       ) : (
         <VendorIcon
           vendor={vendor}

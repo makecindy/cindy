@@ -107,14 +107,17 @@ type LegacyVideoBitrate = 0 | 2_000_000 | 8_000_000 | 20_000_000;
 const LEGACY_BITRATES: readonly number[] = [
   0, 2_000_000, 8_000_000, 20_000_000,
 ];
-/** Older hosts only accept `bitrate` and ignore `quality`; send both. Saver
- * also caps the frame rate, which older hosts can only learn from `fps`. */
+/** Older hosts only accept `bitrate` and ignore `quality`; send both. */
 export function remoteDesktopVideoSettingsWire(
   settings: RemoteDesktopVideoSettings,
 ): RemoteDesktopVideoSettings & { bitrate: LegacyVideoBitrate } {
-  if (settings.quality === "saver")
-    return { ...settings, fps: 30, bitrate: 2_000_000 };
-  return { ...settings, bitrate: settings.quality === "hd" ? 20_000_000 : 0 };
+  const bitrate =
+    settings.quality === "saver"
+      ? 2_000_000
+      : settings.quality === "hd"
+        ? 20_000_000
+        : 0;
+  return { ...settings, bitrate };
 }
 function legacyVideoQuality(bitrate: number): RemoteDesktopVideoQuality {
   return bitrate === 0 ? "auto" : bitrate === 2_000_000 ? "saver" : "hd";

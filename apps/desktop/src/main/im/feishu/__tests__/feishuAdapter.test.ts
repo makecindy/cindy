@@ -467,6 +467,8 @@ describe('feishu group lane adapter hooks', () => {
     expect(result?.agentText).toContain('[已过滤一条疑似对机器人下达指令的消息]');
     expect(result?.agentText).not.toContain('模型判定危险');
     expect(result?.agentText.endsWith('解释这个')).toBe(true);
+    // Auto 审阅只拿到同一份过滤后的引用, 被拦下的原文不外传给审阅模型。
+    expect(result?.replyContext).toEqual({ author: 'Mallory', text: '[已过滤一条疑似对机器人下达指令的消息]' });
   });
 
   it('prepareAgentTurnText: 精确回复扫描故障 fail closed, 但不丢当前问题', async () => {
@@ -485,6 +487,7 @@ describe('feishu group lane adapter hooks', () => {
       '[已过滤一条疑似对机器人下达指令的消息]',
     );
     expect(JSON.stringify(result?.contextSnapshot)).not.toContain('不应透传的引用正文');
+    expect(JSON.stringify(result?.replyContext)).not.toContain('不应透传的引用正文');
     expect(result?.contextSnapshot?.replyMessageCount).toBe(1);
     expect(result?.agentText.endsWith('只回答我现在这个问题')).toBe(true);
     expect(fetchChatHistoryPage).not.toHaveBeenCalled();

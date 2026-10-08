@@ -126,7 +126,7 @@
   "automatic": "自動",
   "saver": "省流量",
   "hd": "高清",
-  "qualityHint": "自動優先確保流暢，網路良好時盡量清晰；省流量會限制用量（最高 30 幀）；高清優先確保文字清晰，頻寬不足時會降低幀率。",
+  "qualityHint": "自動優先流暢，省流量減少用量，高清優先文字清晰。",
   "resolution": "電腦解析度",
   "settingUnsupported": "目前電腦端尚不支援此設定",
   "loadingSettings": "讀取中…",

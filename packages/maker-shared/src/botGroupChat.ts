@@ -29,6 +29,7 @@ export type BotGroupAuthorKind = 'user' | 'bot' | 'system';
  */
 export type BotGroupMessageKind = 'message' | 'round-end' | 'notice' | 'plan' | 'plan-end';
 export type BotGroupNoticeCode =
+  | 'member-joined'
   | 'member-failed'
   | 'member-timeout'
   | 'member-unavailable'
@@ -180,6 +181,8 @@ export interface BotGroupLastMessage {
   isSelf?: boolean;
   authorKind: BotGroupAuthorKind;
   authorName: string;
+  /** Optional for older hosts; localize system notices in the reader's language. */
+  noticeCode?: BotGroupNoticeCode | null;
   preview: string;
   createdAt: number;
 }

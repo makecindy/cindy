@@ -38,15 +38,18 @@ to the current window generation and cannot close a later connection.
 
 Desktop uses the local system cursor inside the remote picture, with standard
 shape hints from the host. Pointer size is independent of remote resolution and zoom.
-With the picture focused, Cmd+C/V on macOS or Ctrl+C/V on Windows copies selected
-remote content to the local clipboard or pastes local content remotely. Transfers use
-the existing authorized Main bridge, are ordered and user-triggered, and report
-failure without reconnecting. Capable hosts support text, HTML, RTF, URLs and PNG;
-older hosts retain text-only behavior. Arbitrary files and cut are not bridged.
-Manual actions and progress are also available in the settings panel. Optional
-clipboard synchronization reuses Mobile's version, conflict and bounded-transfer
-logic, only while this viewer is focused and holds confirmed control. Contents
-stay in Main/native code and do not cross the viewer Renderer bridge.
+With the picture focused, Cmd/Ctrl+C/V are ordinary keys sent to the remote
+computer, so copy and paste act on its own clipboard exactly as they would locally;
+they never move content between computers. Cross-computer transfer is explicit: the
+settings panel's copy and paste actions copy selected remote content to the local
+clipboard or paste local content remotely. Transfers use the existing authorized
+Main bridge, are ordered and user-triggered, and report the specific failure
+(view only, empty, unsupported, too large, copy/paste failed) without reconnecting;
+Main logs only the action and error code. Capable hosts support text, HTML, RTF,
+URLs and PNG; older hosts retain text-only behavior. Arbitrary files and cut are
+not bridged. Optional clipboard synchronization reuses Mobile's version, conflict
+and bounded-transfer logic, only while this viewer is focused and holds confirmed
+control. Contents stay in Main/native code and do not cross the viewer Renderer bridge.
 
 The settings panel also supports host privacy screen, host mute, lock-on-exit and
 macOS-to-macOS automatic unlock. Non-secret preferences are scoped to the local

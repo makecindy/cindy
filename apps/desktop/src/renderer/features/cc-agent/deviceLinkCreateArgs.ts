@@ -41,6 +41,7 @@ export interface DeviceLinkCreateParams {
   effort: Effort;
   permissionMode: PermissionMode;
   fastMode: boolean;
+  planModeEnabled?: boolean;
   /**
    * 附加只读引用目录(草稿期用户选的)。控制端选的是**本机路径**(extraDirs picker 走本机
    * 原生目录对话框),随 create 透传到被控端后,被控端 create 落地在 bootstrapSession 里按
@@ -68,6 +69,7 @@ export interface DeviceLinkCreateArgs {
   effort: Effort;
   permissionMode: PermissionMode;
   fastMode: boolean;
+  planMode?: boolean;
   /** 仅当草稿有非空 extraDirs 时出现;被控端 bootstrapSession 再校验(单一真相源)。 */
   extraDirs?: string[];
   writableDirs?: string[];
@@ -90,6 +92,7 @@ export function buildDeviceLinkCreateArgs(p: DeviceLinkCreateParams): DeviceLink
     effort: p.effort,
     permissionMode: p.permissionMode,
     fastMode: p.fastMode,
+    ...(p.planModeEnabled ? { planMode: true } : {}),
     // 空 / 缺省不放进 args:payload 干净,且被控端 bootstrapSession 也只在非空时才校验。
     ...(p.extraDirs && p.extraDirs.length > 0 ? { extraDirs: p.extraDirs } : {}),
     ...(p.writableDirs && p.writableDirs.length > 0 ? { writableDirs: p.writableDirs } : {}),
@@ -109,6 +112,7 @@ export interface DeviceLinkSubmissionCandidate {
   effort: Effort;
   permissionMode: PermissionMode;
   fastMode: boolean;
+  planModeEnabled?: boolean;
   /** 用户显式选中的被控端来源;null / 省略 = 跟随被控端默认路由。 */
   providerId?: string | null;
 }
@@ -160,6 +164,7 @@ export function resolveDeviceLinkSubmission(p: DeviceLinkSubmissionParams): Devi
     effort: p.candidate.effort,
     permissionMode: p.candidate.permissionMode,
     fastMode: p.candidate.fastMode,
+    planModeEnabled: p.candidate.planModeEnabled,
     extraDirs: p.extraDirs,
     writableDirs: p.writableDirs,
     providerId,
@@ -215,6 +220,7 @@ export function buildProvisionalRemoteSession(p: ProvisionalRemoteSessionParams)
     contextTokens: 0,
     contextWindow: 0,
     fastMode: p.args.fastMode,
+    planModeEnabled: p.args.planMode ?? false,
     clearedAt: null,
     pinnedAt: null,
     // 与被控端刚建出的行一致:首条还没被收下,userSendAt 为空。「用户正在发第一条」由

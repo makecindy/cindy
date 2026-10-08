@@ -412,6 +412,13 @@ describe('redactConsumedDeepLinkInArgv', () => {
     expect(argv).toEqual(['electron.exe', '--flag', 'cindy://session/keep', 'cindy://consumed', 'cindy://consumed', 'cindy://consumed']);
     expect(parseDeepLink(url)?.type).toBe('provider-import');
   });
+  it('parses provider share links and never keeps their invitation in argv', () => {
+    const link = `cindy://provider-share/join?invitation=${'a'.repeat(43)}&server=${encodeURIComponent('https://device-link.cindy.app')}`;
+    expect(parseDeepLink(link)).toEqual({ type: 'provider-share-join', link });
+    const argv = ['electron', link];
+    redactConsumedDeepLinkInArgv(argv);
+    expect(argv).toEqual(['electron', 'cindy://consumed']);
+  });
 
   it('releases an overwritten cold-start draft before a renderer ever mounts', () => {
     setDeepLinkMainWindow(null);

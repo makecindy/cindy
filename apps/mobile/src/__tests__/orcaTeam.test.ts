@@ -1,6 +1,7 @@
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { i18n } from '@/i18n';
 import {
+  archiveOrcaWorker,
   buildOrcaEnableOptions,
   convergeOrcaWorkerModel,
   createOrcaWorker,
@@ -93,6 +94,27 @@ describe('mobile Orca collaboration entry', () => {
 });
 
 describe('mobile Orca collaboration mutations', () => {
+  it('settles a timed-out Worker archive by rechecking the team once', async () => {
+    const timeout = new Error('[INVOKE_TIMEOUT] timed out');
+    const gone = fakeMaker({ orca: { archiveWorker: vi.fn(async () => { throw timeout; }), listWorkers: vi.fn(async () => []) } });
+    await expect(archiveOrcaWorker(gone, 'lead-1', 'w-1')).resolves.toBeUndefined();
+    const stillListed = fakeMaker({ orca: {
+      archiveWorker: vi.fn(async () => { throw timeout; }),
+      listWorkers: vi.fn(async () => [{ id: 'w-1', sessionId: 's-1' }]),
+    } });
+    await expect(archiveOrcaWorker(stillListed, 'lead-1', 'w-1')).rejects.toThrow('ORCA_ACTION_UNCONFIRMED');
+    const recheckFailed = fakeMaker({ orca: {
+      archiveWorker: vi.fn(async () => { throw timeout; }),
+      listWorkers: vi.fn(async () => { throw new Error('[NOT_CONNECTED] offline'); }),
+    } });
+    await expect(archiveOrcaWorker(recheckFailed, 'lead-1', 'w-1')).rejects.toThrow('ORCA_ACTION_UNCONFIRMED');
+    // 非超时错误是权威失败:原样抛出,不回查。
+    const listWorkers = vi.fn(async () => []);
+    const rejected = fakeMaker({ orca: { archiveWorker: vi.fn(async () => { throw new Error('[WORKER_NOT_FOUND] x'); }), listWorkers } });
+    await expect(archiveOrcaWorker(rejected, 'lead-1', 'w-1')).rejects.toThrow('WORKER_NOT_FOUND');
+    expect(listWorkers).not.toHaveBeenCalled();
+  });
+
   const form = {
     ...orcaWorkerFormFromPrefs({ ...defaultOrcaWorkerCreationPrefs(), workerPermissionMode: 'auto' }, 'codex'),
     model: null,

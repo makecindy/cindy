@@ -63,12 +63,13 @@ export function normalizeWorkingDirForGrouping(raw: string | null | undefined): 
   return collapseWorktreeDirForGrouping(out);
 }
 
-function stripWindowsLongPathPrefix(p: string): string {
+export function stripWindowsLongPathPrefix(p: string): string {
   if (p.startsWith('\\\\?\\UNC\\')) return `\\\\${p.slice('\\\\?\\UNC\\'.length)}`;
   if (p.startsWith('\\\\?\\')) return p.slice('\\\\?\\'.length);
   return p;
 }
 
-function isWindowsPathLike(p: string): boolean {
+/** 盘符路径或 UNC(`\\server` / `//server`)——按 Windows 规则归一的判据。 */
+export function isWindowsPathLike(p: string): boolean {
   return /^[A-Za-z]:[\\/]/.test(p) || p.startsWith('\\\\') || p.startsWith('//');
 }

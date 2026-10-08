@@ -27,6 +27,11 @@ export interface GitSnapshotSessionContext {
   agentKind: AgentKind;
   workspaceKind?: string | null;
   remoteHostId?: string | null;
+  /**
+   * 文件回退走保存点链(与 Codex / Pi 一样，需要记录缺口标记)。Agent 在另一台电脑运行的
+   * Claude Code 任务没有原生文件检查点，也走保存点链；本机 Claude Code 任务不走。
+   */
+  savepointRewind?: boolean;
 }
 
 export interface GitSnapshotCoordinatorDeps {
@@ -66,6 +71,8 @@ export interface GitSnapshotCoordinatorDeps {
 interface ResolvedSnapshotSession {
   repoRoot: string;
   agentKind: AgentKind;
+  /** 文件回退走保存点链(Codex / Pi，以及另一台电脑上运行的 Claude Code)。 */
+  savepointRewind: boolean;
 }
 
 interface TurnStartState {
@@ -246,14 +253,18 @@ export class GitSnapshotCoordinator {
     }
     if (!repoRoot) return null;
 
-    const resolved = { repoRoot, agentKind: ctx.agentKind };
+    const resolved = {
+      repoRoot,
+      agentKind: ctx.agentKind,
+      savepointRewind: ctx.agentKind === 'codex' || ctx.agentKind === 'pi' || ctx.savepointRewind === true,
+    };
     this.sessionCache.set(sessionId, resolved);
     return resolved;
   }
 
   private async snapshotAfterEdit(
     sessionId: string,
-    { repoRoot, agentKind }: ResolvedSnapshotSession,
+    { repoRoot, agentKind, savepointRewind }: ResolvedSnapshotSession,
     turnStart: TurnStartRecord | undefined,
   ): Promise<void> {
     const baseline =
@@ -266,7 +277,7 @@ export class GitSnapshotCoordinator {
       // Without a baseline this turn's delta is unrecoverable; append a gap
       // marker so the file-rewind planner truncates ranges that cross it.
       // Only codex/pi consume the savepoint chain for file rewind.
-      if (agentKind === 'codex' || agentKind === 'pi') {
+      if (savepointRewind) {
         await this.createRewindBlockedMarker(
           sessionId,
           repoRoot,
@@ -288,7 +299,7 @@ export class GitSnapshotCoordinator {
         sessionId,
         repoRoot,
       });
-      if (agentKind === 'codex' || agentKind === 'pi') {
+      if (savepointRewind) {
         await this.createRewindBlockedMarker(
           sessionId,
           repoRoot,
@@ -328,7 +339,7 @@ export class GitSnapshotCoordinator {
       // This turn's delta is unrecorded; without a gap marker a later rewind
       // across this turn would restore to a newer baseline and silently keep
       // the failed turn's file changes while dropping its conversation.
-      if (agentKind === 'codex' || agentKind === 'pi') {
+      if (savepointRewind) {
         await this.createRewindBlockedMarker(
           sessionId,
           repoRoot,
@@ -360,7 +371,7 @@ export class GitSnapshotCoordinator {
     // - 两端都被过滤但 lstat 指纹(大小/mtime,不含内容)变化:文件本轮被
     //   改写(如超限文件被 Agent 重写后仍超限),同样没有任何快照可恢复。
     // 指纹完全一致的常驻过滤文件不打 gap,否则文件回退会被永久禁用。
-    if (agentKind === 'codex' || agentKind === 'pi') {
+    if (savepointRewind) {
       const baseline = new Map(
         (turnStart?.turnStartSkippedFingerprints ?? []).map((fp) => [fp.path, fp]),
       );

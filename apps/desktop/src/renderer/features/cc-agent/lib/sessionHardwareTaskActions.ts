@@ -29,7 +29,8 @@ export function useSessionHardwareTaskActions({
 } {
   const { t } = useTranslation();
   const { confirm: confirmDialog } = useConfirmDialog();
-  const { runSessionAction } = useSessionLifecycleActions();
+  const { runSessionAction, beginRemoteArchive, cancelRemoteArchive } =
+    useSessionLifecycleActions();
   const { runningSessionIds } = useSessionRunningStatus(session?.id);
   const sessionId = session?.id ?? null;
   const pinnedAt = session?.pinnedAt ?? null;
@@ -74,6 +75,10 @@ export function useSessionHardwareTaskActions({
       toast.warning(t('ccAgent.sidebar.archiveBlocked.attached'));
       return;
     }
+    // 远程任务先乐观隐藏行并跳离,再等隧道预检(与 sidebar handleActionClick 同口径)。
+    const remoteArchiveToken = deviceLinkDeviceId
+      ? beginRemoteArchive(sessionId, deviceLinkDeviceId, sessionId)
+      : null;
     const preflight = await resolveWorktreeRemovalPreflight(sessionId, deviceLinkDeviceId);
     if (preflight !== 'clean') {
       const ok = await confirmDialog({
@@ -86,10 +91,15 @@ export function useSessionHardwareTaskActions({
         confirmText: t('ccAgent.sidebar.confirmArchive.confirm'),
         cancelText: t('ccAgent.sidebar.confirmArchive.cancel'),
       });
-      if (!ok) return;
+      if (!ok) {
+        if (remoteArchiveToken) cancelRemoteArchive(remoteArchiveToken);
+        return;
+      }
     }
-    await runSessionAction(sessionId, 'archive', { activeSessionId: sessionId });
+    await runSessionAction(sessionId, 'archive', { activeSessionId: sessionId, remoteArchiveToken });
   }, [
+    beginRemoteArchive,
+    cancelRemoteArchive,
     confirmDialog,
     deviceLinkDeviceId,
     onRemoteWriteBlocked,

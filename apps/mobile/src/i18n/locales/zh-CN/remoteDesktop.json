@@ -126,7 +126,7 @@
   "automatic": "自动",
   "saver": "省流",
   "hd": "高清",
-  "qualityHint": "自动优先保证流畅，网络好时尽量清晰；省流会限制流量（最高 30 帧）；高清优先保证文字清晰，网络不够时会降低帧率。",
+  "qualityHint": "自动优先流畅，省流少用流量，高清优先文字清晰。",
   "resolution": "电脑分辨率",
   "settingUnsupported": "当前电脑端暂不支持此设置",
   "loadingSettings": "读取中…",

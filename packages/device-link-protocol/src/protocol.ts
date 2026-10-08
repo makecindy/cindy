@@ -20,6 +20,7 @@
 export const PROTOCOL_VERSION = 1;
 
 export * from './sharedTask.js';
+export * from './providerShare.js';
 
 /** 单帧最大字节数(超过即回 PAYLOAD_TOO_LARGE 并丢弃,不断连;发送方应先行拒绝/裁剪) */
 export const MAX_FRAME_BYTES = 2 * 1024 * 1024;
@@ -58,6 +59,8 @@ export interface Envelope {
   dst?: string;
   /** Optional cross-account task scope; absent means legacy same-account routing. */
   sharedTask?: import('./sharedTask.js').SharedTaskScope;
+  /** Optional cross-account provider-share scope; never combined with sharedTask. */
+  providerShare?: import('./providerShare.js').ProviderShareScope;
   payload?: unknown;
 }
 

@@ -58,6 +58,14 @@
     "cancel": "Cancel",
     "confirm": "Continue"
   },
+  "agentRelocation": {
+    "titleOther": "Run the Agent on “{{device}}”?",
+    "titleHost": "Run the Agent on “{{host}}” again?",
+    "titleHostUnnamed": "Run the Agent on the session’s computer again?",
+    "message": "The conversation record on the other computer can’t be moved over, so it continues from a handoff summary. Thinking and similar details may not carry over completely. Takes effect when you send the next message.",
+    "confirm": "Switch computer",
+    "cancel": "Keep as is"
+  },
   "unified": {
       "favoriteConfiguration": "Favorite This Configuration",
       "savedConfiguration": "Favorited · Tap to Remove",
@@ -83,6 +91,7 @@
     "all": "All models",
     "recommended": "Recommended",
     "source": "Source",
+    "remoteProvider": "{{provider}} · {{device}}",
     "harness": "Harness",
     "restoreRecommended": "Restore recommended",
     "saveFailed": "Could not save. Please try again.",

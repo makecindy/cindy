@@ -180,7 +180,8 @@ function nativeSound() {
 it.each([
   [undefined, 60, 'maintain-framerate', 60, 20_000_000, ''],
   ['auto', 60, 'maintain-framerate', 60, 20_000_000, ''],
-  ['saver', 60, 'maintain-framerate', 30, 2_000_000, ''],
+  ['saver', 60, 'maintain-framerate', 60, 2_000_000, ''],
+  ['saver', 30, 'maintain-framerate', 30, 2_000_000, ''],
   ['hd', 60, 'maintain-resolution', 60, 20_000_000, 'text'],
   ['hd', 30, 'maintain-resolution', 30, 20_000_000, 'text'],
 ] as const)(

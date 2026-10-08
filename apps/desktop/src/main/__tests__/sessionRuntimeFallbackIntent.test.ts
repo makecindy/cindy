@@ -27,6 +27,7 @@ function harness() {
   const clearCredential = vi.fn();
   const pendingCredential = vi.fn(() => ({ model: 'next', providerId: 'openai' }));
   const failed = vi.fn(() => true);
+  const readSessionAgentDeviceId = vi.fn<(sessionId: string) => Promise<string | null>>(async () => null);
   const query = { from: () => query, where: () => query, limit: async () => [{ status: 'active' }] };
   const deps = {
     agentSwitchPending: pending,
@@ -48,6 +49,7 @@ function harness() {
     clearPendingCredentialSwitchForSession: clearCredential,
     broadcastSessionRuntimeProjection: vi.fn(async () => {}),
     recordFailedSessionRuntimeFallbackCandidate: failed,
+    readSessionAgentDeviceId,
     getDbClient: () => ({ drizzle: { select: () => query } }),
     sessions: { status: 'status', id: 'id' }, eq: vi.fn(),
     runtimeSelectionRequiresModelWindowConfirmation: (result: { contextWindowConfirmationRequired?: number }) => result.contextWindowConfirmationRequired !== undefined,
@@ -62,10 +64,20 @@ function harness() {
     pending.set('session', { sameAgentSelection: true, targetAgentKind: 'codex', model: 'chosen', providerId: 'xd' });
     generation += 1;
   };
-  return { ...runtime, pending, pick, readCandidate, switchAgent, accept, withLock, apply, cancel, clearCredential, pendingCredential, failed, current, candidate, generation: () => generation };
+  return { ...runtime, pending, pick, readCandidate, switchAgent, accept, withLock, apply, cancel, clearCredential, pendingCredential, failed, readSessionAgentDeviceId, current, candidate, generation: () => generation };
 }
 
 describe('automatic runtime selection respects the user send boundary', () => {
+  it('never replaces the route of a task whose agent runs on another computer with a local candidate', async () => {
+    const h = harness();
+    h.readSessionAgentDeviceId.mockResolvedValue('device-b');
+    expect(await h.run('session', 1, 1, true)).toMatchObject({ session: null, outcome: 'exhausted' });
+    expect(await h.run('session', 1, 1, false)).toMatchObject({ session: null, outcome: 'unchanged' });
+    expect(h.readCandidate).not.toHaveBeenCalled();
+    expect(h.switchAgent).not.toHaveBeenCalled();
+    expect(h.apply).not.toHaveBeenCalled();
+  });
+
   it('stops after a committed harness switch whose engine failed to start', async () => {
     const h = harness();
     h.switchAgent.mockResolvedValue({ switched: true, engineReady: false });

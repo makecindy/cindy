@@ -20,8 +20,10 @@ import { app, BrowserWindow } from 'electron';
 import WebSocket from 'ws';
 import {
   DeviceLinkClient,
+  isScopedPeer,
   parseSharedTaskPeer,
   probeSharedTaskHost,
+  PROVIDER_SHARE_RELAY_CAPABILITY,
   sharedTaskTopics,
   SHARED_TASK_CAPABILITY,
   CONTROLLER_CAPABILITY_MAKER_EVENT_BATCH_V1,
@@ -138,6 +140,14 @@ import { resetAll as resetSubscriptionRefs, snapshotSubscriptions } from './subs
 import { getControllersForTopic } from './subscriptions';
 import { getKnownControllerIds } from './subscriptions';
 import { startSharedTaskRuntime, stopSharedTaskRuntime } from './sharedTaskRuntime.js';
+import { startProviderShareRuntime, stopProviderShareRuntime } from './providerShareRuntime.js';
+import {
+  isProviderShareRefusal,
+  noteProviderShareAccessFailure,
+  PROVIDER_SHARE_UNAVAILABLE_MESSAGE,
+  resolveRemoteAgentTargetWhenReady,
+} from './providerShareGuest.js';
+import { crossRegionInvoke, isCrossRegionProviderShareTarget } from './providerShareCrossRegion.js';
 import { sharedTaskApi } from './sharedTaskApi.js';
 import {
   MobileNotifyDeduper,
@@ -525,6 +535,8 @@ const CONTROLLER_CAPABILITIES = [
   // 手机(review P1)。拆包在 main 完成(见 onFrame 的批分支),renderer 的既有
   // maker:event 订阅者零改动。
   CONTROLLER_CAPABILITY_MAKER_EVENT_BATCH_V1,
+  // 供应商分享：受邀者连分享者电脑时声明，分享者只接受声明了它的控制端。
+  PROVIDER_SHARE_RELAY_CAPABILITY,
 ] as const;
 
 const presenceOnlineByDevice = new Map<string, boolean>();
@@ -673,7 +685,7 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
       return ok ? authManager.getAccessToken() : null;
     },
     getHello: (): HelloPayload => ({
-      capabilities: [SHARED_TASK_CAPABILITY],
+      capabilities: [SHARED_TASK_CAPABILITY, PROVIDER_SHARE_RELAY_CAPABILITY],
       deviceName: deviceName(),
       platform: process.platform,
       appVersion: app.getVersion(),
@@ -1132,6 +1144,7 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
         },
         changed(sharedTaskId) { broadcast('shared-task:changed', { sharedTaskId }); },
       });
+      startProviderShareRuntime(broadcast, { invoke: remoteBackgroundInvoke });
       client?.start();
       stopNetworkWatch?.();
       stopNetworkWatch = watchNetworkChanges(() => {
@@ -1308,6 +1321,7 @@ export function getMobileNotifyGeneration(): number {
 function teardownActiveLink(): void {
   invalidatePluginOauth();
   void stopSharedTaskRuntime().catch((error) => log.warn('sharedTask runtime teardown failed', error));
+  stopProviderShareRuntime();
   remoteCredentialHost.dispose();
   stopNetworkWatch?.();
   stopNetworkWatch = null;
@@ -1804,7 +1818,8 @@ export async function remoteInvoke(
     // 授权),或显式 CLOSE_LINK(复验取消代次)(review P1 ×2)。
     preSend();
     if (!client) throw new Error('[DEVICE_LINK_NOT_CONNECTED] device-link client not initialized');
-    if (!parseSharedTaskPeer(deviceId)) {
+    // 共享任务与供应商分享的对端是另一个账号：只走 relay，不尝试点对点直连。
+    if (!isScopedPeer(deviceId)) {
       const accelerated = await tryPeerInvoke(deviceId, channel, args, (peer, nextChannel, nextArgs) => {
         preSend();
         return remoteInvoke(peer, nextChannel, nextArgs, { preSend });
@@ -1840,10 +1855,33 @@ export async function remoteInvoke(
  * 链路已就绪(用户正在控制对端)时直接复用,不产生新的 link-open。
  */
 export async function remoteBackgroundInvoke(
-  deviceId: string,
+  agentDeviceId: string,
   channel: string,
   args: unknown[],
 ): Promise<InvokeResultPayload> {
+  // 分享来的供应商：任务记录里是 `share:<id>`，换成分享者那台电脑的本地 peer key。
+  const deviceId = await resolveRemoteAgentTargetWhenReady(agentDeviceId);
+  const shared = deviceId !== agentDeviceId;
+  if (!shared) return backgroundInvokeDevice(deviceId, channel, args);
+  try {
+    // 跨区域分享：分享者电脑在另一个区域的 relay 上，经那条连接发送。
+    const result = isCrossRegionProviderShareTarget(deviceId)
+      ? await crossRegionInvoke(deviceId, channel, args, resolveRemoteInvokeTimeoutMs(channel, args, 'desktop'))
+      : await backgroundInvokeDevice(deviceId, channel, args);
+    if (result.ok) return result;
+    if (!isProviderShareRefusal(result.error.code, result.error.message)) return result;
+    noteProviderShareAccessFailure();
+    return { ok: false, error: { code: 'IPC_ERROR', message: PROVIDER_SHARE_UNAVAILABLE_MESSAGE } };
+  } catch (error) {
+    noteProviderShareAccessFailure();
+    if (error instanceof DeviceLinkError && isProviderShareRefusal(error.code, error.message)) {
+      throw Object.assign(new Error(PROVIDER_SHARE_UNAVAILABLE_MESSAGE), { code: error.code });
+    }
+    throw error;
+  }
+}
+
+async function backgroundInvokeDevice(deviceId: string, channel: string, args: unknown[]): Promise<InvokeResultPayload> {
   if (!client?.isLinkReady(deviceId)) {
     assertBackgroundLinkAccepted(await openRemoteLink(deviceId), {
       hasOutboundSubscriptions: () => snapshotSubscriptions(deviceId).length > 0,

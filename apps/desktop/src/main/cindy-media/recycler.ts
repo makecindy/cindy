@@ -31,7 +31,7 @@ import type { LedgerDb } from './ledger';
 
 const log = createLogger('cindy-media-recycler');
 
-/** Called under the client wallpaper publication lock after saving its reference.
+/** Called under the client wallpaper publication lock with re-read durable references.
  * This scope cannot contain chat/attachment bytes; never delete ordinary blobs.
  * A later successful operation also retries failed cleanup or interrupted imports.
  */

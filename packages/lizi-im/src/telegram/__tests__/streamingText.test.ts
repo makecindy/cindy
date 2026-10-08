@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 
+import { TELEGRAM_PROGRESS_FRAME_MAX_CHARS } from '../progressFrame.js';
 import {
+  startTelegramProgressCarrier,
   startTelegramStreaming,
+  TELEGRAM_UPDATE_THROTTLE_MS,
   TelegramFinalUnconfirmedError,
   type TelegramStreamingDeps,
 } from '../streamingText.js';
@@ -578,5 +581,64 @@ describe('telegram streaming finalize — 新鲜终稿与 Rich 降级', () => {
     expect(h.deleted).toEqual([]);
     expect(h.calls).toEqual([]);
     expect(handle.messageId).toBe('');
+  });
+});
+
+describe('startTelegramProgressCarrier(官方 bot 只驱动过程载体)', () => {
+  it('与个人 handle 同一生命周期: 惰性首帧 send、尾沿节流后 edit, flush 跳过节流, close 后静默', async () => {
+    vi.useFakeTimers();
+    try {
+      const calls: string[] = [];
+      const carrier = startTelegramProgressCarrier({
+        send: async (markdown) => {
+          calls.push(`send:${markdown}`);
+          return 'p-1';
+        },
+        edit: async (messageId, markdown) => {
+          calls.push(`edit:${messageId}:${markdown}`);
+        },
+      });
+      carrier.replace('   ');
+      carrier.replace('NO_');
+      await vi.advanceTimersByTimeAsync(TELEGRAM_UPDATE_THROTTLE_MS);
+      expect(calls).toEqual([]);
+
+      carrier.replace('第一帧');
+      await vi.advanceTimersByTimeAsync(TELEGRAM_UPDATE_THROTTLE_MS);
+      expect(calls).toEqual(['send:第一帧']);
+      expect(carrier.messageId).toBe('p-1');
+
+      carrier.replace('第二帧');
+      await carrier.flush();
+      expect(calls).toEqual(['send:第一帧', 'edit:p-1:第二帧']);
+
+      carrier.close();
+      carrier.replace('迟到');
+      await carrier.flush();
+      await vi.advanceTimersByTimeAsync(TELEGRAM_UPDATE_THROTTLE_MS * 2);
+      expect(calls).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('超过单帧上限后停止编辑(与个人 driver 同一常量)', async () => {
+    vi.useFakeTimers();
+    try {
+      const edits: string[] = [];
+      const carrier = startTelegramProgressCarrier({
+        send: async () => 'p-1',
+        edit: async (_id, markdown) => {
+          edits.push(markdown);
+        },
+      });
+      carrier.replace('a');
+      await carrier.flush();
+      carrier.replace('x'.repeat(TELEGRAM_PROGRESS_FRAME_MAX_CHARS + 1));
+      await carrier.flush();
+      expect(edits).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

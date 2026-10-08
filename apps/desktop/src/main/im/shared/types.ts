@@ -233,6 +233,11 @@ export interface ImChannelAdapter {
   prepareAgentTurnText?(event: IMMessageEvent): Promise<{
     agentText: string;
     contextSnapshot?: ImContextSnapshot;
+    /**
+     * agentText 里实际交给模型的被回复消息投影(过滤后的占位也算)。Auto 审阅只用它,
+     * 不读 event.replyContext 原值 —— 审阅器看到的引用不得多于模型看到的。
+     */
+    replyContext?: IMMessageEvent['replyContext'];
     contextAttachments?: IMAttachment[];
     commit?: () => void | Promise<void>;
   } | null>;

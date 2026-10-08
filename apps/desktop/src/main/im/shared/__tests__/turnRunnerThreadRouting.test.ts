@@ -40,6 +40,12 @@ const mocks = vi.hoisted(() => ({
   takePendingInteractionsForSession: vi.fn(() => []),
   noteSilentStopUserSend: vi.fn(),
   noteSilentStopSessionReset: vi.fn(),
+  // 与生产同语义的最小替身: 统一停止按 id 取**当前** runtime 并中止(唯一的一次 abort)。
+  stopSessionTurnExplicitly: vi.fn(async (sessionId: string): Promise<void> => {
+    await (mocks.getMaker() as { getSession(id: string): { abort(): Promise<void> } | undefined })
+      .getSession(sessionId)
+      ?.abort();
+  }),
   onSilentStopSettled: vi.fn(() => vi.fn()),
   rejectAllPending: vi.fn<(reason: string, owner?: symbol) => Array<{ requestId: string; messageId: string }>>(() => []),
   registerPending: vi.fn(),
@@ -83,6 +89,7 @@ vi.mock('../../../maker-ipc/register', () => ({
   takePendingInteractionsForSession: mocks.takePendingInteractionsForSession,
   noteSilentStopUserSend: mocks.noteSilentStopUserSend,
   noteSilentStopSessionReset: mocks.noteSilentStopSessionReset,
+  stopSessionTurnExplicitly: mocks.stopSessionTurnExplicitly,
   onSilentStopSettled: mocks.onSilentStopSettled,
 }));
 vi.mock('../pendingInteractions', () => ({
@@ -581,6 +588,24 @@ describe('turnRunner 自动任务转播(scheduler turn → 远程控制 thread)'
   const schedulerOrigin = { kind: 'scheduler', scheduleId: 's1', scheduleName: 'PR #118 跟进' };
   const withOrigin = (e: Partial<AgentEvent>): AgentEvent =>
     ({ ...e, turnOrigin: schedulerOrigin }) as AgentEvent;
+
+  it('does not forward child output or settle on a child terminal during scheduled turns', async () => {
+    const stub = streamingHandleStub();
+    mocks.slackIm.startStreamingText.mockResolvedValue(stub);
+    const h = await attachAndIdle();
+    const child = { parentUuid: 'toolu_scheduled_child' };
+    h.emit(withOrigin({ type: 'text', data: { text: 'internal report', isFinal: true }, agentMeta: child }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(mocks.slackIm.startStreamingText).not.toHaveBeenCalled();
+    h.emit(withOrigin({ type: 'text', data: { text: 'public result', isFinal: true } }));
+    await vi.waitFor(() => expect(stub.replace).toHaveBeenCalled());
+    h.emit(withOrigin({ type: 'done', data: {}, agentMeta: child }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(stub.finalize).not.toHaveBeenCalled();
+    h.emit(withOrigin({ type: 'done', data: {} }));
+    await vi.waitFor(() => expect(stub.finalize).toHaveBeenCalledWith(expect.stringContaining('public result')));
+    expect(JSON.stringify(stub.replace.mock.calls)).not.toContain('internal report');
+  });
 
   it('scheduler stray 事件 → 在接管 thread 开转播卡,带任务名 + 步骤 + 流式结果', async () => {
     const stub = streamingHandleStub();

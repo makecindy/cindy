@@ -138,21 +138,23 @@ export function buildQueueRowPresentation(input: {
   // 照常——用户可以取消一条排队中的续跑,但不能改写或抢发它的内容。
   const syntheticEditReason = syntheticKind
     ? presentationText(localizer, 'message.queuePresentation.row.syntheticEditDisabled', '系统指令消息不支持编辑或插话发送。')
-    : orcaOrigin
-      // 协同成员发来的消息(对齐桌面 canEdit / canSteer=false):删除与排序照常。
-      ? presentationText(localizer, 'message.queuePresentation.row.orcaEditDisabled', '协同消息不支持编辑或插话发送。')
-      : isAutoSentQueueItem(input.item)
-        // 自动化 / 其他任务经工具 / 插件排进来的消息(对齐桌面 canEdit / canSteer=false):改写后
-        // 落库气泡的来源标签就不再属实;删除与排序照常。
-        ? presentationText(localizer, 'message.queuePresentation.row.autoSentEditDisabled', '自动发送的消息不支持编辑或插话发送。')
-        : null;
+    : null;
+  // 自动化 / 其他任务经工具 / 插件排进来的消息(对齐桌面 canEdit / canSteer=false):改写后
+  // 落库气泡的来源标签就不再属实;删除与排序照常。
+  const autoSentReason = !orcaOrigin && isAutoSentQueueItem(input.item)
+    ? presentationText(localizer, 'message.queuePresentation.row.autoSentEditDisabled', '自动发送的消息不支持编辑或插话发送。')
+    : null;
+  // 协同成员发来的消息不能改写(对齐桌面 canEdit=false),但可以插话:插话不改正文与来源。
+  const orcaEditReason = orcaOrigin
+    ? presentationText(localizer, 'message.queuePresentation.row.orcaEditDisabled', '协同消息不支持编辑。')
+    : null;
 
   return {
     actions: {
       moveUp: queueRowAction(baseDisabledReason, moveUpTarget, presentationText(localizer, 'message.queuePresentation.row.first', '已经是队列第一条。')),
       moveDown: queueRowAction(baseDisabledReason, moveDownTarget, presentationText(localizer, 'message.queuePresentation.row.last', '已经是队列最后一条。')),
-      steer: queueRowAction(baseDisabledReason ?? syntheticEditReason),
-      edit: queueRowAction(baseDisabledReason ?? syntheticEditReason),
+      steer: queueRowAction(baseDisabledReason ?? syntheticEditReason ?? autoSentReason),
+      edit: queueRowAction(baseDisabledReason ?? syntheticEditReason ?? autoSentReason ?? orcaEditReason),
       remove: queueRowAction(baseDisabledReason),
     },
     editLocked,

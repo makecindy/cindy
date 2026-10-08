@@ -2,6 +2,10 @@
 import { afterEach, beforeEach, it, expect, vi } from 'vitest';
 import { mountRemoteDesktopViewer } from '@cindy/maker-shared/remote-desktop-viewer';
 import { DESKTOP_KEY_CODES, REMOTE_DESKTOP_NETWORK } from '@cindy/device-link';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+
+const viewerCss = readFileSync(resolve(__dirname, '..', 'viewerWindow.css'), 'utf8');
 
 let viewer: ReturnType<typeof mountRemoteDesktopViewer>;
 let messages: Record<string, unknown>[];
@@ -78,6 +82,25 @@ function events() {
     m.type === 'input' ? (m.events as Record<string, unknown>[]) : [],
   );
 }
+
+it('keeps a frameless picture hidden by the viewer stylesheet so it never paints a broken image', () => {
+  const style = document.createElement('style');
+  style.textContent = viewerCss;
+  document.head.append(style);
+  document.body.className = 'remote-viewer-content';
+  const image = document.getElementById('image')!;
+  try {
+    expect(getComputedStyle(image).visibility).toBe('hidden');
+    viewer.receive({ type: 'stop' });
+    expect(getComputedStyle(image).visibility).toBe('hidden');
+    viewer.receive({ type: 'init', epoch: 'next', width: 1000, height: 600 });
+    viewer.receive({ type: 'frame', jpeg: 'AA==' });
+    expect(getComputedStyle(image).visibility).toBe('visible');
+  } finally {
+    style.remove();
+    document.body.className = '';
+  }
+});
 
 it('zooms locally within bounds and fit restores scale and position', () => {
   const image = document.getElementById('image')!;
@@ -218,16 +241,9 @@ it.each([
 });
 
 it.each(['control', 'meta'])(
-  'bridges %s clipboard shortcuts once without forwarding or inserting them',
+  'forwards %s clipboard shortcuts to the remote computer as ordinary keys',
   (modifier) => {
-    viewer.receive({
-      type: 'init',
-      epoch: 'lease',
-      width: 1000,
-      height: 600,
-      clipboardShortcuts: true,
-      clipboardModifier: modifier,
-    });
+    viewer.receive({ type: 'init', epoch: 'lease', width: 1000, height: 600 });
     viewer.receive({ type: 'control', enabled: true });
     pointer('pointerdown');
     pointer('pointerup');
@@ -246,106 +262,164 @@ it.each(['control', 'meta'])(
         cancelable: true,
       });
       input.dispatchEvent(event);
+      // The local textarea must not copy or paste on its own.
       expect(event.defaultPrevented).toBe(true);
-      input.dispatchEvent(
-        new KeyboardEvent('keydown', {
-          code,
-          ...modifiers,
-          repeat: true,
-          bubbles: true,
-          cancelable: true,
-        }),
-      );
       input.dispatchEvent(
         new KeyboardEvent('keyup', { code, ...modifiers, bubbles: true, cancelable: true }),
       );
       input.dispatchEvent(new KeyboardEvent('keyup', { code: modifierCode, bubbles: true }));
     }
     vi.advanceTimersByTime(34);
-    expect(messages.filter((message) => message.type === 'clipboard')).toEqual([
-      { type: 'clipboard', action: 'copy', epoch: 'lease' },
-      { type: 'clipboard', action: 'paste', epoch: 'lease' },
-    ]);
-    expect(events().filter((event) => event.kind === 'key' || event.kind === 'text')).toEqual([]);
+    expect(messages.some((message) => message.type === 'clipboard')).toBe(false);
+    expect(events().filter((event) => event.kind === 'key' || event.kind === 'text')).toEqual(
+      ['KeyC', 'KeyV'].flatMap((code) => [
+        { kind: 'key', code: modifierCode, down: true },
+        { kind: 'key', code, down: true },
+        { kind: 'key', code, down: false },
+        { kind: 'key', code: modifierCode, down: false },
+      ]),
+    );
   },
 );
-it('does not bridge clipboard in local controls, composition, view-only mode or unsupported hosts', () => {
-  const shortcut = () =>
-    document.activeElement!.dispatchEvent(
-      new KeyboardEvent('keydown', {
-        code: 'KeyV',
-        ctrlKey: true,
+// Invariant: a remote key is released only when its local keyup arrives, except
+// keys pressed while Command is held on a macOS controller (macOS swallows their
+// keyup); those alone are released together with Command.
+it.each([
+  {
+    name: 'macOS Cmd+C with swallowed C keyup releases C with Command',
+    macKeyboard: true,
+    steps: ['+MetaLeft', '+KeyC', '-MetaLeft', '-KeyC'],
+    remote: ['+MetaLeft', '+KeyC', '-KeyC', '-MetaLeft'],
+  },
+  {
+    name: 'macOS key held before Command keeps waiting for its own keyup',
+    macKeyboard: true,
+    steps: ['+ArrowUp', '+MetaLeft', '-MetaLeft', '-ArrowUp'],
+    remote: ['+ArrowUp', '+MetaLeft', '-MetaLeft', '-ArrowUp'],
+  },
+  {
+    name: 'macOS auto-repeat of a key held before Command keeps it held',
+    macKeyboard: true,
+    steps: ['+ArrowUp', '+MetaLeft', '+ArrowUp', '-MetaLeft', '-ArrowUp'],
+    remote: ['+ArrowUp', '+MetaLeft', '+ArrowUp', '-MetaLeft', '-ArrowUp'],
+  },
+  {
+    name: 'macOS auto-repeat under Command still releases the key once',
+    macKeyboard: true,
+    steps: ['+MetaLeft', '+KeyC', '+KeyC', '-MetaLeft', '-KeyC'],
+    remote: ['+MetaLeft', '+KeyC', '+KeyC', '-KeyC', '-MetaLeft'],
+  },
+  {
+    // Known boundary: at Command keyup a key pressed during Command may be released
+    // (keyup swallowed) or still held; it is released to avoid a stuck key, and the
+    // next auto-repeat presses it again so its real keyup still releases it.
+    name: 'macOS key still held after Command is re-pressed by its next auto-repeat',
+    macKeyboard: true,
+    steps: ['+MetaLeft', '+ArrowUp', '-MetaLeft', '+ArrowUp', '-ArrowUp'],
+    remote: ['+MetaLeft', '+ArrowUp', '-ArrowUp', '-MetaLeft', '+ArrowUp', '-ArrowUp'],
+  },
+  {
+    name: 'macOS delivered keyup is not released twice',
+    macKeyboard: true,
+    steps: ['+MetaLeft', '+KeyC', '-KeyC', '-MetaLeft'],
+    remote: ['+MetaLeft', '+KeyC', '-KeyC', '-MetaLeft'],
+  },
+  {
+    name: 'macOS other modifiers are never released early',
+    macKeyboard: true,
+    steps: ['+MetaLeft', '+ShiftLeft', '+KeyC', '-MetaLeft', '-ShiftLeft'],
+    remote: ['+MetaLeft', '+ShiftLeft', '+KeyC', '-KeyC', '-MetaLeft', '-ShiftLeft'],
+  },
+  {
+    name: 'Windows Win released first keeps the ordinary key down',
+    macKeyboard: false,
+    steps: ['+MetaLeft', '+KeyC', '-MetaLeft', '-KeyC'],
+    remote: ['+MetaLeft', '+KeyC', '-MetaLeft', '-KeyC'],
+  },
+])('$name', ({ macKeyboard, steps, remote }) => {
+  viewer.receive({ type: 'init', epoch: 'lease', width: 1000, height: 600, macKeyboard });
+  viewer.receive({ type: 'control', enabled: true });
+  pointer('pointerdown');
+  pointer('pointerup');
+  messages = [];
+  const input = document.getElementById('keyboard-input')!;
+  const held = new Set<string>();
+  for (const step of steps) {
+    const code = step.slice(1);
+    const repeat = step[0] === '+' && held.has(code);
+    if (step[0] === '+') held.add(code);
+    else held.delete(code);
+    input.dispatchEvent(
+      new KeyboardEvent(step[0] === '+' ? 'keydown' : 'keyup', {
+        code,
+        metaKey: held.has('MetaLeft'),
+        shiftKey: held.has('ShiftLeft'),
+        repeat,
         bubbles: true,
         cancelable: true,
       }),
     );
-  pointer('pointerdown');
-  pointer('pointerup');
-  shortcut();
-  expect(messages.some((message) => message.type === 'clipboard')).toBe(false);
-  viewer.receive({
-    type: 'init',
-    epoch: 'lease',
-    width: 1000,
-    height: 600,
-    clipboardShortcuts: true,
-  });
+  }
+  vi.advanceTimersByTime(34);
+  expect(
+    events()
+      .filter((event) => event.kind === 'key')
+      .map((event) => (event.down ? '+' : '-') + event.code),
+  ).toEqual(remote);
+});
+it('forgets Command-held keys when the picture loses keyboard focus', () => {
+  viewer.receive({ type: 'init', epoch: 'lease', width: 1000, height: 600, macKeyboard: true });
   viewer.receive({ type: 'control', enabled: true });
-  const button = document.createElement('button');
-  document.body.append(button);
-  button.focus();
-  shortcut();
   pointer('pointerdown');
   pointer('pointerup');
   const input = document.getElementById('keyboard-input')!;
-  input.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }));
-  shortcut();
-  input.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true }));
-  viewer.receive({ type: 'control', enabled: false });
-  shortcut();
-  expect(messages.some((message) => message.type === 'clipboard')).toBe(false);
+  const key = (type: 'keydown' | 'keyup', code: string, metaKey = false) =>
+    input.dispatchEvent(new KeyboardEvent(type, { code, metaKey, bubbles: true }));
+  key('keydown', 'MetaLeft', true);
+  key('keydown', 'KeyC', true);
+  input.blur();
+  pointer('pointerdown');
+  pointer('pointerup');
+  messages = [];
+  key('keydown', 'MetaLeft', true);
+  key('keyup', 'MetaLeft');
+  vi.advanceTimersByTime(34);
+  expect(
+    events()
+      .filter((event) => event.kind === 'key')
+      .map((event) => (event.down ? '+' : '-') + event.code),
+  ).toEqual(['+MetaLeft', '-MetaLeft']);
 });
-it.each(['key', 'button', 'scroll'])(
-  'preserves the deferred modifier for ordinary %s input',
-  (kind) => {
-    viewer.receive({
-      type: 'init',
-      epoch: 'lease',
-      width: 1000,
-      height: 600,
-      clipboardShortcuts: true,
-    });
-    viewer.receive({ type: 'control', enabled: true });
+it.each(['key', 'button', 'scroll'])('keeps a held modifier around ordinary %s input', (kind) => {
+  viewer.receive({ type: 'init', epoch: 'lease', width: 1000, height: 600 });
+  viewer.receive({ type: 'control', enabled: true });
+  pointer('pointerdown');
+  pointer('pointerup');
+  messages = [];
+  const input = document.getElementById('keyboard-input')!;
+  input.dispatchEvent(
+    new KeyboardEvent('keydown', { code: 'ControlLeft', ctrlKey: true, bubbles: true }),
+  );
+  if (kind === 'key') {
+    input.dispatchEvent(
+      new KeyboardEvent('keydown', { code: 'KeyA', ctrlKey: true, bubbles: true }),
+    );
+    input.dispatchEvent(new KeyboardEvent('keyup', { code: 'KeyA', ctrlKey: true, bubbles: true }));
+  } else if (kind === 'button') {
     pointer('pointerdown');
     pointer('pointerup');
-    messages = [];
-    const input = document.getElementById('keyboard-input')!;
-    input.dispatchEvent(
-      new KeyboardEvent('keydown', { code: 'ControlLeft', ctrlKey: true, bubbles: true }),
+  } else {
+    stage.dispatchEvent(
+      new WheelEvent('wheel', { deltaY: 32, ctrlKey: true, bubbles: true, cancelable: true }),
     );
-    if (kind === 'key') {
-      input.dispatchEvent(
-        new KeyboardEvent('keydown', { code: 'KeyA', ctrlKey: true, bubbles: true }),
-      );
-      input.dispatchEvent(
-        new KeyboardEvent('keyup', { code: 'KeyA', ctrlKey: true, bubbles: true }),
-      );
-    } else if (kind === 'button') {
-      pointer('pointerdown');
-      pointer('pointerup');
-    } else {
-      stage.dispatchEvent(
-        new WheelEvent('wheel', { deltaY: 32, ctrlKey: true, bubbles: true, cancelable: true }),
-      );
-    }
-    input.dispatchEvent(new KeyboardEvent('keyup', { code: 'ControlLeft', bubbles: true }));
-    vi.advanceTimersByTime(34);
-    expect(events()[0]).toEqual({ kind: 'key', code: 'ControlLeft', down: true });
-    expect(events().at(-1)).toEqual({ kind: 'key', code: 'ControlLeft', down: false });
-    expect(events().some((event) => event.kind === kind)).toBe(true);
-    expect(events().some((event) => event.kind === 'release')).toBe(false);
-  },
-);
+  }
+  input.dispatchEvent(new KeyboardEvent('keyup', { code: 'ControlLeft', bubbles: true }));
+  vi.advanceTimersByTime(34);
+  expect(events()[0]).toEqual({ kind: 'key', code: 'ControlLeft', down: true });
+  expect(events().at(-1)).toEqual({ kind: 'key', code: 'ControlLeft', down: false });
+  expect(events().some((event) => event.kind === kind)).toBe(true);
+  expect(events().some((event) => event.kind === 'release')).toBe(false);
+});
 it('forwards Cmd+W to the remote computer while the picture owns the keyboard', () => {
   pointer('pointerdown');
   pointer('pointerup');

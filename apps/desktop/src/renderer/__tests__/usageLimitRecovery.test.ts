@@ -34,6 +34,66 @@ describe('usage limit recovery detection', () => {
     ).toEqual({ resetAtMs: NOW + 75 * 60_000, isAccountUsageLimit: true });
   });
 
+  it('parses the Codex app-server "try again at" wording in local time', () => {
+    const sameDay = new Date(NOW);
+    sameDay.setHours(23, 30, 0, 0);
+    if (sameDay.getTime() <= NOW) sameDay.setDate(sameDay.getDate() + 1);
+    expect(
+      extractUsageLimitRecoveryHint(
+        {
+          codexErrorInfo: 'usageLimitExceeded',
+          message: "You've hit your usage limit. Upgrade to Pro, or try again at 11:30 PM.",
+        },
+        NOW,
+      )?.resetAtMs,
+    ).toBe(sameDay.getTime());
+
+    expect(
+      extractUsageLimitRecoveryHint(
+        {
+          codexErrorInfo: 'usageLimitExceeded',
+          message: "You've hit your usage limit. Try again at Jan 27, 2026 3:05 PM.",
+        },
+        NOW,
+      )?.resetAtMs,
+    ).toBe(new Date(2026, 0, 27, 15, 5).getTime());
+  });
+
+  it('drops zone-less clock times when the local time zone is not trusted (SSH sessions)', () => {
+    const remote = { localTimeZoneTrusted: false };
+    expect(
+      extractUsageLimitRecoveryHint(
+        { codexErrorInfo: 'usageLimitExceeded', message: 'Try again at Jan 27, 2026 3:05 PM.' },
+        NOW,
+        remote,
+      )?.resetAtMs,
+    ).toBeNull();
+    // 带时区的钟点与相对时长不受影响。
+    expect(
+      extractUsageLimitRecoveryHint(
+        { sdkError: 'rate_limit', message: "You've hit your limit · resets 11pm (UTC)" },
+        NOW,
+        remote,
+      )?.resetAtMs,
+    ).toBe(Date.parse('2026-01-24T23:00:00.000Z'));
+    expect(
+      extractUsageLimitRecoveryHint(
+        { codexErrorInfo: 'usageLimitExceeded', message: 'Try again in 1h 15m.' },
+        NOW,
+        remote,
+      )?.resetAtMs,
+    ).toBe(NOW + 75 * 60_000);
+  });
+
+  it("parses Pi's approximate ChatGPT relative reset", () => {
+    expect(
+      extractUsageLimitRecoveryHint(
+        { message: 'You have hit your ChatGPT usage limit (plus plan). Try again in ~12 min.' },
+        NOW,
+      )?.resetAtMs,
+    ).toBe(NOW + 12 * 60_000);
+  });
+
   it('extracts the organization plan and reset time from the Codex 429 payload', () => {
     expect(
       extractUsageLimitRecoveryHint(

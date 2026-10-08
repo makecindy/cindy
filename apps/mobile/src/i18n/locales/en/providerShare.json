@@ -1,0 +1,15 @@
+{
+  "picker": {
+    "deviceName": "{{device}} · Shared by {{owner}}",
+    "unavailable": "Unavailable share"
+  },
+  "link": {
+    "title": "Provider Sharing",
+    "heading": "Open This Link on a Computer",
+    "body": "Provider sharing can only be requested and used in {{appName}} on a computer. Send the link to your computer and open it there, or paste it in Settings → Providers → Providers Shared with Me.",
+    "note": "Share links expire 5 minutes after they’re created and work only once.",
+    "copy": "Copy Share Link",
+    "copied": "Share link copied",
+    "copyFailed": "Couldn’t copy the share link. Try again in a moment."
+  }
+}
