@@ -25,7 +25,7 @@ import { UI_ACTION_TRIGGER_PREFIX } from '../../shared/interruptedTurn.js';
 import { untrustedJsonBlock } from '../../shared/untrustedPrompt.js';
 import {
   BOT_GROUP_CLIENT_ID, isBotGroupNoReplyText,
-  type BotGroupDetail, type BotGroupPlanView, type BotGroupFailure, type BotGroupMessageView, type BotGroupAttachment, type ChatServerApi, type ChatInvitePreview,
+  type BotGroupDetail, type BotGroupPlanView, type BotGroupFailure, type BotGroupMessageView, type BotGroupAttachment, type ChatServerApi,
 } from '../../shared/botGroupChat.js';
 import type { BotGroupChatService, BotGroupChatServiceDeps, BotGroupLaneTerminal } from './botGroupChatService.js';
 import { readPersistedReplyText } from './botGroupChatService.js';
@@ -149,7 +149,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   };
   // TLS for production; explicit loopback is only enabled by the isolated fixture.
   // Redirects are never followed and every retry remains in the captured account.
-  function api<T>(route: string, method = 'GET', data?: unknown, actorId?: string, retried = false): Promise<T> {
+  function api<T>(route: string, method = 'GET', data?: unknown, actorId?: string, retried = false, successStatus?: number): Promise<T> {
     if (!current()) return Promise.reject(new Error('OWNER_CHANGED'));
     if (!config.baseUrl) return Promise.reject(new Error('CHAT_ENDPOINT_UNAVAILABLE'));
     const url = new URL(`${config.baseUrl}/v1${route}`);
@@ -172,12 +172,21 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
           try {
             if (!current()) throw new Error('OWNER_CHANGED');
             if (res.statusCode === 401 && !retried) {
-              if (await refresh() && current()) { resolve(api<T>(route, method, data, actorId, true)); return; }
+              if (await refresh() && current()) { resolve(api<T>(route, method, data, actorId, true, successStatus)); return; }
               throw new Error('AUTH_REQUIRED');
             }
             if ((res.statusCode ?? 500) >= 300 && (res.statusCode ?? 500) < 400) throw new Error('CHAT_REDIRECT_REFUSED');
-            const value = JSON.parse(Buffer.concat(chunks).toString('utf8'));
-            if ((res.statusCode ?? 500) >= 400) throw new ChatResponseError(value.error?.code ?? 'REQUEST_FAILED', res.statusCode ?? 500);
+            const raw = Buffer.concat(chunks).toString('utf8');
+            let value;
+            try { value = JSON.parse(raw); }
+            catch (error) {
+              // Older servers may return a non-JSON 404 for an unknown route.
+              if (successStatus && (res.statusCode ?? 500) >= 400) throw new ChatResponseError('REQUEST_FAILED', res.statusCode ?? 500);
+              if (successStatus) throw new Error('CHAT_RESPONSE_INVALID');
+              throw error;
+            }
+            if ((res.statusCode ?? 500) >= 400) throw new ChatResponseError(value?.error?.code ?? 'REQUEST_FAILED', res.statusCode ?? 500);
+            if (successStatus && res.statusCode !== successStatus) throw new Error('CHAT_RESPONSE_INVALID');
             resolve(value);
           } catch (error) { reject(error); }
         });
@@ -767,6 +776,17 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   const inviteToken = (link: string) => z.string().regex(/^[A-Za-z0-9_-]{43}$/).parse(
     z.string().max(100).parse(link).trim().replace(/^cindy:\/\/chat-invite\//, ''),
   );
+  // Null is the server's non-expiring contract; omitted/invalid dates are never
+  // treated as permanent links. Older servers keep their dated, single-use links.
+  const inviteExpiry = z.string().refine(value => Number.isFinite(Date.parse(value))).nullable();
+  const inviteFields = { expiresAt: inviteExpiry, reusable: z.boolean().optional() };
+  const validInvite = (value: { expiresAt: string | null; reusable?: boolean }) => value.expiresAt !== null || value.reusable === true;
+  const invitePreview = z.object({ groupId: id, name: z.string(), inviterName: z.string(), ...inviteFields, joined: z.boolean() }).refine(validInvite);
+  function inviteResponse<T>(schema: z.ZodType<T>, value: unknown): T {
+    const parsed = schema.safeParse(value);
+    if (!parsed.success) throw new Error('CHAT_RESPONSE_INVALID');
+    return parsed.data;
+  }
   const operationId = z.string().min(8).max(160).regex(/^[a-zA-Z0-9_.:-]+$/);
   const chatServer: ChatServerApi = {
     ownedBots: () => result(async () => { await register(); return { bots: actors.filter(a => a.kind === 'bot' && localBot(a.id)?.status === 'active').map(a => ({ actorId: a.id, name: a.name })) }; }),
@@ -820,10 +840,24 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     }),
     createInvite: input => result(async () => {
       const i = z.object({ groupId: id, clientId: operationId }).parse(input);
-      const invite = await api<{ token: string; expiresAt: string }>(`/conversations/${i.groupId}/invite-links`, 'POST', { operationId: i.clientId }, managementActor(await snapshot(i.groupId)));
-      return { link: `cindy://chat-invite/${invite.token}`, expiresAt: invite.expiresAt };
+      const invite = inviteResponse(z.object({ token: z.string().regex(/^[A-Za-z0-9_-]{43}$/), ...inviteFields }).refine(validInvite),
+        await api(`/conversations/${i.groupId}/invite-links`, 'POST', { operationId: i.clientId }, managementActor(await snapshot(i.groupId)), false, 200),
+      );
+      return { link: `cindy://chat-invite/${invite.token}`, expiresAt: invite.expiresAt, ...(invite.reusable !== undefined ? { reusable: invite.reusable } : {}) };
     }),
-    previewInvite: input => result(async () => api<ChatInvitePreview>('/invite-links/preview', 'POST', { token: inviteToken(input.link) })),
+    revokeInvite: input => result(async () => {
+      const i = z.object({ groupId: id, link: z.string(), clientId: z.string().uuid() }).strict().parse(input);
+      const token = inviteToken(i.link);
+      const actor = managementActor(await snapshot(i.groupId));
+      if (!actor) throw new Error('ROLE_REQUIRED');
+      try {
+        return inviteResponse(z.object({ revoked: z.literal(true) }), await api(`/conversations/${i.groupId}/invite-links/revoke`, 'POST', { token, operationId: i.clientId }, actor, false, 200));
+      } catch (error) {
+        if (error instanceof ChatResponseError && error.status === 404 && ['REQUEST_FAILED', 'NOT_FOUND'].includes(error.message)) throw new Error('INVITE_REVOKE_UNSUPPORTED');
+        throw error;
+      }
+    }),
+    previewInvite: input => result(async () => inviteResponse(invitePreview, await api('/invite-links/preview', 'POST', { token: inviteToken(input.link) }, undefined, false, 200))),
     acceptInvite: input => result(async () => {
       const room = await api<{ groupId: string }>('/invite-links/accept', 'POST', { token: inviteToken(input.link), operationId: operationId.parse(input.clientId) });
       rooms.delete(room.groupId); subscribe(room.groupId); changed(room.groupId); return room;

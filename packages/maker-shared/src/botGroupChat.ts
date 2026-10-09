@@ -433,7 +433,9 @@ export function parseBotGroupPlanRouteKey(routeKey: string | null | undefined): 
 /** Named, credential-free Desktop chat capabilities. Older/local-only hosts omit them. */
 export type ChatServerResult<T> = ({ ok: true } & T) | { ok: false; errorCode: string };
 export interface ChatInvitePreview {
-  groupId: string; name: string; inviterName: string; expiresAt: string; joined: boolean;
+  groupId: string; name: string; inviterName: string; expiresAt: string | null; joined: boolean;
+  /** Omitted by old servers, whose links remain dated and single-use. */
+  reusable?: boolean;
 }
 export type ChatGroupAction =
   | { type: 'update'; name: string; topic: string; description: string; expectedRevision: number; responseMode?: BotGroupReplyMode; speakingMode?: BotGroupSpeakingMode }
@@ -452,7 +454,8 @@ export interface ChatServerApi {
   }>>;
   reply(input: { groupId: string; rootId: string; text: string; clientId: string; mentions: BotGroupMention }): Promise<ChatServerResult<{ messageId: string }>>;
   react(input: { groupId: string; messageId: string; emoji: string; present: boolean }): Promise<ChatServerResult<Record<never, never>>>;
-  createInvite(input: { groupId: string; clientId: string }): Promise<ChatServerResult<{ link: string; expiresAt: string }>>;
+  createInvite(input: { groupId: string; clientId: string }): Promise<ChatServerResult<{ link: string; expiresAt: string | null; reusable?: boolean }>>;
+  revokeInvite(input: { groupId: string; link: string; clientId: string }): Promise<ChatServerResult<{ revoked: true }>>;
   previewInvite(input: { link: string }): Promise<ChatServerResult<ChatInvitePreview>>;
   acceptInvite(input: { link: string; clientId: string }): Promise<ChatServerResult<{ groupId: string }>>;
 }

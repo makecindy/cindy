@@ -788,6 +788,7 @@ export const MAKER_INVOKE = {
   CHAT_SERVER_REPLY: 'maker:chat-server:reply',
   CHAT_SERVER_REACT: 'maker:chat-server:react',
   CHAT_SERVER_CREATEINVITE: 'maker:chat-server:createInvite',
+  CHAT_SERVER_REVOKEINVITE: 'maker:chat-server:revokeInvite',
   CHAT_SERVER_PREVIEWINVITE: 'maker:chat-server:previewInvite',
   CHAT_SERVER_ACCEPTINVITE: 'maker:chat-server:acceptInvite',
   BOT_GROUP_LIST: 'maker:bot-group:list',
