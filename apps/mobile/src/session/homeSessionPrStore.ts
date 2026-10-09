@@ -59,22 +59,24 @@ export function subscribeHomeSessionPr(key: string, listener: () => void): () =>
 }
 
 /**
- * 按新鲜度决定是否发起加载;同一任务同时只有一个请求在途。
- * 返回值:任务有变化(refreshKey 不同)却因在途请求或 10 秒节流没能重查时,返回多少毫秒后
- * 再调用即可补查;其余情况返回 0。调用方据此安排一次补查,刚创建的 PR 不必等下一轮轮询。
+ * 按新鲜度决定是否发起加载;同一任务同时只有一个请求在途。所有刷新时机都走这里,分两档:
+ *   - 例行(挂载、定时轮询):结果不足 PR_STATUS_REFRESH_INTERVAL_MS 时沿用缓存;
+ *   - 事件(任务有更新即 refreshKey 变化,或 eventful:回到首页 / 回到前台):绕过上面的缓存期,
+ *     只保留 MIN_REFETCH_MS 防抖;被在途请求或防抖挡住时返回多少毫秒后再调用即可补查。
+ * 例行档被挡住返回 0(下一轮轮询自然会查)。
  */
 export function refreshHomeSessionPr(
   key: string,
   load: (previous: HomeSessionPrInfo | null) => Promise<HomeSessionPrInfo | null>,
-  options: { now: number; refreshKey?: string },
+  options: { now: number; refreshKey?: string; eventful?: boolean },
 ): number {
   const entry = entries.get(key);
   if (entry) {
     const age = options.now - entry.fetchedAt;
-    const changed = entry.refreshKey !== options.refreshKey;
-    if (entry.inflight) return changed ? Math.max(MIN_REFETCH_MS - age, IN_FLIGHT_RETRY_MS) : 0;
-    if (age < (changed ? MIN_REFETCH_MS : PR_STATUS_REFRESH_INTERVAL_MS)) {
-      return changed ? MIN_REFETCH_MS - age : 0;
+    const eventful = options.eventful === true || entry.refreshKey !== options.refreshKey;
+    if (entry.inflight) return eventful ? Math.max(MIN_REFETCH_MS - age, IN_FLIGHT_RETRY_MS) : 0;
+    if (age < (eventful ? MIN_REFETCH_MS : PR_STATUS_REFRESH_INTERVAL_MS)) {
+      return eventful ? MIN_REFETCH_MS - age : 0;
     }
   }
   const next: Entry = {

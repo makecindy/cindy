@@ -190,26 +190,27 @@ function useHomeSessionPr(
   useEffect(() => {
     if (!key || !deviceId || !online) return;
     let retry: ReturnType<typeof setTimeout> | undefined;
-    const refresh = () => {
+    // eventful = 回到首页 / 回到前台:期间的轮询被跳过,PR 可能已合并或关闭,不沿用 90 秒缓存。
+    const refresh = (eventful = false) => {
       if (AppState.currentState !== 'active' || !isActive()) return;
       const retryIn = refreshHomeSessionPr(key, (previous) => loadHomeSessionPr(link.invoke, deviceId, sessionId, previous), {
+        eventful,
         now: Date.now(),
         refreshKey,
       });
-      // 任务刚有更新(可能刚提了 PR)却撞上在途请求或 10 秒节流:到点补查一次,不等下一轮轮询。
+      // 事件触发却撞上在途请求或 10 秒防抖:到点补查一次,不等下一轮轮询。
       if (retryIn > 0 && retry === undefined) {
         retry = setTimeout(() => {
           retry = undefined;
-          refresh();
+          refresh(true);
         }, retryIn);
       }
     };
     refresh();
-    const timer = setInterval(refresh, PR_STATUS_REFRESH_INTERVAL_MS);
-    const stopResume = onResume(refresh);
-    // 应用从后台回到前台时补查:后台期间的轮询被跳过,PR 可能已合并或关闭。
+    const timer = setInterval(() => refresh(), PR_STATUS_REFRESH_INTERVAL_MS);
+    const stopResume = onResume(() => refresh(true));
     const appState = AppState.addEventListener('change', (state) => {
-      if (state === 'active') refresh();
+      if (state === 'active') refresh(true);
     });
     return () => {
       clearInterval(timer);

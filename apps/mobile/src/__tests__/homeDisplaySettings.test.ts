@@ -203,10 +203,10 @@ describe('task info usage wiring', () => {
   it('polls PR status only while the retained home list is visible', () => {
     // 首页被盖住时任务行仍挂载:轮询前检查可见性,回到首页时补查一次。
     expect(meta).toContain("if (AppState.currentState !== 'active' || !isActive()) return;");
-    expect(meta).toContain('const stopResume = onResume(refresh);');
+    expect(meta).toContain('const stopResume = onResume(() => refresh(true));');
     // 节流补查与回到前台补查。
     expect(meta).toContain('if (retryIn > 0 && retry === undefined) {');
-    expect(meta).toContain("if (state === 'active') refresh();");
+    expect(meta).toContain("if (state === 'active') refresh(true);");
     expect(store).toContain('export function useRemoteSessionStoreVisibility()');
   });
 });
@@ -276,6 +276,8 @@ describe('home PR cache', () => {
     // 未过期且任务没变化:不重查;任务有更新但距上次不足 10 秒:不重查,告知补查等待时长。
     expect(refreshHomeSessionPr('k', load, { now: 5_000, refreshKey: 'a' })).toBe(0);
     expect(refreshHomeSessionPr('k', load, { now: 5_000, refreshKey: 'b' })).toBe(5_000);
+    // 回到首页 / 前台:同样绕过 90 秒缓存期,只保留 10 秒防抖。
+    expect(refreshHomeSessionPr('k', load, { now: 5_000, refreshKey: 'a', eventful: true })).toBe(5_000);
     expect(load).toHaveBeenCalledTimes(1);
 
     const failing = vi.fn(async () => { throw new Error('offline'); });
@@ -283,6 +285,13 @@ describe('home PR cache', () => {
     await vi.waitFor(() => expect(listener).toHaveBeenCalledTimes(2));
     expect(failing).toHaveBeenCalledTimes(1);
     expect(readHomeSessionPr('k')?.ref.prNumber).toBe(7);
+
+    // 同一任务状态下,回到前台在 90 秒缓存期内(距上次 15 秒)也会重查。
+    expect(refreshHomeSessionPr('k', load, { now: 35_000, refreshKey: 'b' })).toBe(0);
+    expect(load).toHaveBeenCalledTimes(1);
+    expect(refreshHomeSessionPr('k', load, { now: 35_000, refreshKey: 'b', eventful: true })).toBe(0);
+    await vi.waitFor(() => expect(listener).toHaveBeenCalledTimes(3));
+    expect(load).toHaveBeenCalledTimes(2);
   });
 
   it('keeps the last known status of the same PR when the status lookup fails', async () => {
