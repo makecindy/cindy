@@ -408,6 +408,8 @@ export interface MessageInsertArgs {
   createdAt: number;
   guarded: boolean;
   expectedClearBoundaryMs?: number | null;
+  /** Host-only publication; stages belong to a connection-local TEMP table. */
+  publication?: 'stage' | 'publish' | 'discard' | 'rollback';
 }
 
 export interface MessageUpdateContentArgs {

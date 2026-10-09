@@ -27,6 +27,11 @@ export interface RemoteSessionListSessionLike extends SessionInterruptionState {
   tags?: import('./taskTags').TaskTag[];
   _count?: { messages?: number } | null;
   agentKind: 'cc' | 'codex' | string;
+  /**
+   * 远程 Agent:非空 = Agent 在同账号另一台电脑上运行(desktop sessions.agent_device_id),
+   * 任务仍在被控电脑;null / 缺省 = Agent 就在被控电脑(含旧被控端)。
+   */
+  agentDeviceId?: string | null;
   createdAt: string;
   effort?: string | null;
   fastMode?: boolean;

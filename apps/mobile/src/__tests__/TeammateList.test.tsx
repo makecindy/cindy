@@ -43,6 +43,11 @@ vi.mock('@/device-link/remoteResourceCache', () => ({ isRemoteResourceUnread: ()
 vi.mock('@/session/sessionList', () => ({ formatRemoteSessionSidebarTime: () => '' }));
 vi.mock('@/utils/useMinuteNow', () => ({ useMinuteNow: () => Date.now() }));
 import { TeammateList } from '../session/TeammateList';
+it('shows the localized cloud configuration error even alongside cached teammate rows', async () => {
+  await act(async () => root.render(el(TeammateList, { items: [item], error: 'CHAT_ENDPOINT_UNAVAILABLE', isOnline: () => false,
+    loading: false, refreshing: false, onRefresh: vi.fn(), onSelect: vi.fn(), embedded: true })));
+  expect(node.querySelector('[data-testid="teammates.error"]')?.textContent).toBe('groupChat.server.endpointUnavailable');
+});
 const item = { key: 'host:bot', host: { deviceId: 'host', deviceName: 'Computer identity' }, item: {
   ref: { collectionId: 'teammates', kind: 'bot', id: 'bot' }, revision: '1', links: [], display: { title: 'Mimi', preview: 'Last reply' },
 } };

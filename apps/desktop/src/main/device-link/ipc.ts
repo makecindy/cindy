@@ -45,6 +45,7 @@ import {
   openRemoteLink,
   closeRemoteLink,
   remoteInvoke,
+  providerShareHostInvoke,
   remoteSubscribe,
   remoteUnsubscribe,
   disconnectAllControllers,
@@ -132,6 +133,8 @@ export interface DeviceLinkIpcDeps {
   openLink(deviceId: string): Promise<LinkAcceptPayload>;
   closeLink(deviceId: string): void;
   invoke(deviceId: string, channel: string, args: unknown[]): Promise<InvokeResultPayload>;
+  /** 分享者电脑的只读请求：先建后台链路再发(relay 只在建链时登记受邀者的电脑)。缺省时用 invoke。 */
+  invokeProviderShareHost?(target: string, channel: string, args: unknown[]): Promise<InvokeResultPayload>;
   subscribe(deviceId: string, topics: string[]): Promise<InvokeResultPayload>;
   unsubscribe(deviceId: string, topics: string[]): Promise<InvokeResultPayload>;
   disconnectAll(): void;
@@ -195,6 +198,7 @@ export function defaultDeps(): DeviceLinkIpcDeps {
       requireDeviceLinkCapability();
       return remoteInvoke(...args);
     },
+    invokeProviderShareHost: providerShareHostInvoke,
     subscribe: remoteSubscribe,
     unsubscribe: remoteUnsubscribe,
     disconnectAll: disconnectAllControllers,
@@ -775,7 +779,7 @@ function logProviderShareReadFailure(agentDeviceId: string, channel: string, cod
 }
 
 export async function handleProviderShareInvoke(
-  deps: Pick<DeviceLinkIpcDeps, 'invoke'>,
+  deps: Pick<DeviceLinkIpcDeps, 'invoke' | 'invokeProviderShareHost'>,
   agentDeviceId: string,
   channel: unknown,
   args: unknown,
@@ -796,7 +800,7 @@ export async function handleProviderShareInvoke(
   try {
     result = isCrossRegionProviderShareTarget(target)
       ? await crossRegionInvoke(target, channel, callArgs)
-      : await deps.invoke(target, channel, callArgs);
+      : await (deps.invokeProviderShareHost ?? deps.invoke)(target, channel, callArgs);
   } catch (err) {
     logProviderShareReadFailure(
       agentDeviceId,

@@ -501,6 +501,8 @@ export interface TurnEndUsage {
  * 为 'error' 时 errorMessage 必须为非空字符串。
  */
 export interface TurnEndPayload {
+  /** session-result-v1: a new result for the bound lane, not a dispatched/reopened request. */
+  background?: true;
   requestId: string;
   externalKey: string;
   sessionId: string | null;
@@ -1330,6 +1332,8 @@ export interface LifecyclePreferencePayload {
  * 时才登记续跑记账并发帧; 缺席则维持旧行为(渠道消息停在失败上)。
  */
 export const HOOK_FEATURE_TURN_REOPEN = 'turn-reopen-v1';
+/** New messages for background execution in an existing IM-bound session. Excludes X. */
+export const HOOK_FEATURE_SESSION_RESULT = 'session-result-v1';
 
 /**
  * 双向能力标识：server 会在收到普通 turn.end 后回 turn.delivery，并以

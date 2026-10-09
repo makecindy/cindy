@@ -164,7 +164,10 @@
     "retryToolInput": "读取失败，重试",
     "toolResultCompacted": "完整工具输出已释放（原始大小 {{size}}）",
     "mermaidEmpty": "空 Mermaid 图表。",
-    "diffEditCount": "{{n}} 处编辑"
+    "diffEditCount": "{{n}} 处编辑",
+    "groupSentNamed": "从群聊「{{name}}」发送",
+    "groupSent": "从群聊发送",
+    "sourceGroupId": "群聊 ID：{{id}}"
   },
   "actions": {
     "attachmentsPrefix": "附件：{{names}}",

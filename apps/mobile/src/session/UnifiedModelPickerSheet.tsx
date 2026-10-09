@@ -376,7 +376,11 @@ export function UnifiedModelPickerSheet(
       selected: !favorite && selected,
       disabled:
         !caps[config.agent] ||
-        budgetRowDisabled(config.modelId, p.apiKeyStatus ?? "unknown"),
+        budgetRowDisabled(
+          config.modelId,
+          p.apiKeyStatus ?? "unknown",
+          p.providers.find((item) => item.id === entry.providerId),
+        ),
       subtitle: describe(entry, config),
       effortLabel: effortText(config),
       costMarks: mobileCostMarks(

@@ -864,7 +864,7 @@ describe('session runtime control wiring', () => {
   it('fails closed when non-UI runtime selection requires model-window confirmation', () => {
     const setRuntime = handlerBody(
       registerSource,
-      'setSessionRuntime: async ({ targetSessionId, expectedGeneration, patch }) => {',
+      'setSessionRuntime: async ({ targetSessionId, expectedGeneration, patch, beforeMutation }) => {',
       'assertExternalInputAllowed: assertReviewExternalInputAllowed,',
     );
     const setRuntimeGuard = setRuntime.indexOf(

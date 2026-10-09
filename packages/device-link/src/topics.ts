@@ -54,6 +54,9 @@ export function parseFsWatchTopic(topic: string): string | null {
 export type SessionActivityPhase = 'running' | 'needs-interaction' | 'completed' | 'error';
 
 export interface SessionActivityPayload {
+  /** Completion push ownership only; activity/attention remains unchanged.
+   * Absent on older hosts. Unknown values use ordinary completion semantics. */
+  completionNotification?: 'pending' | 'teammate';
   /** Optional public generation category; unknown values must use a generic caption. */
   workingPhase?: string;
   sessionId: string;

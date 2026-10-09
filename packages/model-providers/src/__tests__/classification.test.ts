@@ -287,6 +287,7 @@ describe('categorize', () => {
     // 折扣路由不能被"认尾段"的 gpt 规则抢走:codex/gpt-5.4 的尾段就是 gpt-5.4。
     expect(categorize('codex/gpt-5.4')).toBe('gpt-budget');
     expect(categorize('codex/gpt-5.6-sol')).toBe('gpt-budget');
+    expect(categorize('openai-codex/gpt-6.1-sol')).toBe('gpt-budget');
     // xd/codex-gpt-* 的尾段是 codex-gpt-*,不以 gpt- 开头,同样不落 gpt 组。
     expect(categorize('xd/codex-gpt-5.5')).not.toBe('gpt');
     expect(groupOf({ id: 'xd/codex-gpt-5.5', group: 'gpt-budget' })).toBe('gpt-budget');
@@ -525,6 +526,7 @@ describe('isBudgetModel — 目录 group 优先,codex/ 前缀兜底', () => {
   });
   it('无 group 时按前缀(网关旧数据)', () => {
     expect(isBudgetModel({ id: 'codex/gpt-5.5' })).toBe(true);
+    expect(isBudgetModel({ id: 'openai-codex/gpt-6.1-sol' })).toBe(true);
     expect(isBudgetModel({ id: 'gpt-5.5' })).toBe(false);
   });
   // 与 groupOf 同一「数据优先」契约(2026-07 Greptile review):目录显式给出合法的

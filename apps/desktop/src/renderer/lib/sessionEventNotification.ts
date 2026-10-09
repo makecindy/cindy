@@ -2,6 +2,7 @@ import { getAgentIslandEnabled, isAgentIslandSupported } from '@/hooks/useAgentI
 import { getFeishuNotificationsEnabled } from '@/hooks/useFeishuNotificationSettings';
 import { getNotificationsEnabled } from '@/hooks/useNotificationSettings';
 import { isDefaultDraftSessionTitle } from '@cindy/maker-shared/session-title';
+import { getRemoteSessionActivity, subscribeRemoteSessionActivity } from '@/features/device-link/remoteSessionActivityStore';
 
 export type SessionEventNotificationKind = 'done' | 'error' | 'needs-reply';
 
@@ -77,14 +78,59 @@ export function sendSessionEventNotification(
      * (agentIslandRemoteSessions),这里不再弹;未读归属那台设备,不记本机 Dock 角标。
      */
     remoteDevice?: boolean;
+    remoteDeviceId?: string | null;
   } = {},
 ): void {
   // The user is already looking at Cindy. In-app attention remains available,
   // but an OS/external notification would be duplicate noise.
   if (typeof document !== 'undefined' && document.hasFocus()) return;
 
+  if (kind === 'done' && options.remoteDeviceId) {
+    sendRemoteCompletionNotification(sessionId, options.remoteDeviceId, () =>
+      deliverSessionEventNotification(sessionId, title, kind, true));
+    return;
+  }
+
+  deliverSessionEventNotification(sessionId, title, kind, options.remoteDevice === true);
+}
+
+const pendingRemoteCompletions = new Map<string, () => void>();
+
+/** The execution host owns this decision; the controller has no delegation DB row. */
+function sendRemoteCompletionNotification(sessionId: string, deviceId: string, deliver: () => void): void {
+  const key = JSON.stringify([deviceId, sessionId]);
+  if (pendingRemoteCompletions.has(key)) return;
+  const activity = getRemoteSessionActivity(sessionId, deviceId);
+  if (activity?.phase === 'completed' && activity.completionNotification === 'teammate') return;
+  if (activity?.phase === 'error' || activity?.phase === 'needs-interaction') return;
+  if (!activity || (activity.phase === 'completed' && activity.completionNotification !== 'pending')) {
+    deliver(); // Older hosts retain their original notification behavior.
+    return;
+  }
+  let sawPendingCompletion = activity.phase === 'completed';
+  const cancel = subscribeRemoteSessionActivity((changedDeviceId, changedSessionId) => {
+    if (changedDeviceId && changedDeviceId !== deviceId) return;
+    if (changedSessionId && changedSessionId !== sessionId) return;
+    const latest = getRemoteSessionActivity(sessionId, deviceId);
+    if (latest?.phase === 'completed' && latest.completionNotification === 'pending') {
+      sawPendingCompletion = true;
+      return;
+    }
+    if (latest?.phase === 'running' && !sawPendingCompletion) return;
+    cancel();
+    pendingRemoteCompletions.delete(key);
+    // Read, disconnect, error, interaction or a replacement turn supersedes this
+    // completion request. Only the source's resolved ordinary completion sends.
+    if (latest?.phase === 'completed' && latest.completionNotification !== 'teammate') deliver();
+  });
+  pendingRemoteCompletions.set(key, cancel);
+}
+
+function deliverSessionEventNotification(sessionId: string, title: string, kind: SessionEventNotificationKind, remoteDevice: boolean): void {
+  // A handoff can finish after the user has opened Cindy or changed preferences.
+  if (typeof document !== 'undefined' && document.hasFocus()) return;
+
   const islandActive = isAgentIslandSupported() && getAgentIslandEnabled();
-  const remoteDevice = options.remoteDevice === true;
   if (!remoteDevice) void window.electronAPI.notificationMarkSessionAttention(sessionId);
   void window.electronAPI.notificationShowSessionEvent({
     sessionId,

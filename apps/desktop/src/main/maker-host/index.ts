@@ -1011,6 +1011,16 @@ export function getMaker(): Maker {
         return Boolean(session && session.instanceId === sessionInstanceId
           && session.getStatus() === 'active' && !isAppSessionBoundaryPending());
       },
+      askUserQuestionAsync: (
+        context: import('@cindy/mcps').LiziMcpSessionContext,
+        questions: Parameters<import('@cindy/maker-core').Session['askUserQuestionAsync']>[0],
+      ) => {
+        const session = context.sessionId ? _maker?.getSession(context.sessionId) : undefined;
+        if (!session || session.instanceId !== context.sessionInstanceId || isAppSessionBoundaryPending()) {
+          throw new Error('Question caller is no longer active');
+        }
+        return session.askUserQuestionAsync(questions);
+      },
       // 只读活跃 Session 的运行时真相。权限切换是 runtime-first、DB-second，
       // 因此插件过户自动放行不得回退 sessions.permission_mode；会话不再 active
       // 时同样 fail closed。闭包在 MCP tool-call 时执行，此时 _maker 已装配完成。

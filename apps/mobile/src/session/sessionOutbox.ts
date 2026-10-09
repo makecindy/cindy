@@ -73,7 +73,7 @@ export function shouldHoldOutboxDispatchForConnection(
 export function hasActiveOutboxHandoff(
   records: readonly Pick<
     DurableOutboxRecord,
-    'deviceId' | 'item' | 'state' | 'error' | 'cancelRequested' | 'suspended' | 'retrySafe' | 'cleanupOutcome'
+    'deviceId' | 'item' | 'state' | 'error' | 'cancelRequested' | 'suspended' | 'retrySafe' | 'historyConfirmed' | 'cleanupOutcome'
   >[],
   target: { deviceId: string; sessionId: string },
   connection: MobileOutboxConnectionState,

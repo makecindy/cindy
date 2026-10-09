@@ -307,13 +307,50 @@ sessionRunningRetry 就停。每次因 replacement 关闭而重新入队都计�
   `goal-ownership.native.test.ts` 用隔离的原生运行时验证旧目标恢复后不再自行续跑。
 - **产品 turn 未结算不得结束。** provider `turn/completed` 可以立刻给 SDK turn 落墓碑并
   结算 usage；只有原子挂在该终态边界上的显式 continuation claim 才能挡住产品结束。
-  Codex 提问／计划审阅尚待用户确认时同样保留产品边界：底层可继续独立工作并结束
+  Codex 同步提问／计划审阅尚待用户确认时同样保留产品边界：底层可继续独立工作并结束
   SDK turn，但不能触发完成通知、队列收口或协作任务完成。人工等待使用独立 claim，
   复用 `turnContinuationId`，不能塞进 yield claim 造成回答续跑等待自身。计划审阅必须
   在发布边界前登记；回答／批准后沿原意图续跑，取消／Stop 单次结束且不重复结算 usage。
   起跑回执之前到达的终态先缓冲再核对归属；失败只能走失败终态，不能先以取消回调
   触发定时任务的成功收口。回归见 `agents/codex/index.test.ts` 的 pending confirmation
   与 human continuation 用例，以及 Desktop `sessionEventPipeline.test.ts`。
+  Codex 异步提问使用 `agentMessage.delivery=async` 与结构化 `questions` 接入同一提问
+  流程，不把回退正文当成最终回答。未回答的异步问题不保留产品边界，原轮次结束时自动
+  收起卡片、不代选答案，迟到回答不得续跑。结束前已提交的回答优先通过 `turn/steer`
+  送入原轮次；发送与结束竞态导致原轮次明确拒绝接收时复用人工续跑，发送结果不确定时
+  提示错误且不自动重发。Stop、失败、关闭及被替换问题的迟到回答不得续跑。
+  协议与前缀稳定性实测见 `agents/codex/async-user-input.native.test.ts`，
+  卡片、回传、去重及取消回归见 `agents/codex/index.test.ts`。
+  Claude Code／Pi 通过 `cindy_helper.ask_user_question_async` 复用现有卡片；工具立即返回
+  pending 回执。Codex 只保留原生入口，MCP 按请求时的 harness 隐藏并拒绝这条工具；
+  `Session` 也按实际引擎拒绝 Codex 调用共享入口，防止陈旧上下文创建第二套待回答状态。
+  Claude Code／Pi 的 `Session` 共用 `agents/shared/async-user-questions.ts` 管理问题寿命，
+  不登记阻塞交互或人工续跑。回答只走原执行的 steer，结束／Stop／关闭／替换后作废，
+  发送失败不重投新 turn。Claude 会把已排队的答案合并为下一 SDK 段：仅在答案已被接收
+  时复用现有 continuation claim 保留产品边界，避免提前完成或重复完成；未回答不建 claim。
+  Pi 在原生 RPC 排队后再核对执行代次与取消信号，防止答案串到
+  下一次执行。Claude 的本机 hook 与远端 root-only guard 禁止原生子代理直接提问；工具
+  入口只接受宿主标明 `mcpCallerKind=root` 且 `mcpCallerAttested=true` 的请求，身份未知、
+  缺失或未证实均拒绝；不提供通用 call_tool 别名，避免绕过该判据。
+  SSH、手机沿用既有 MCP／交互传输通道。
+  回归见 `session.async-user-questions.test.ts`、MCP `asyncUserQuestionTool.test.ts`；
+  两种真实 harness 配本地假模型的投递与稳定前缀实测见
+  `agents/shared/async-user-questions.native.test.ts`。
+  同步与异步问题共用卡片时，同步问题优先：已有同步问题等待时不再显示异步卡片，
+  同步问题后到时收起未回答的异步卡片，避免遮住阻塞执行的问题。三个 harness 均只保留
+  最新一张待回答的异步卡片：显示新卡片前先将旧卡片标为被替换，旧答案即使在原轮次
+  结束前到达也不得投递或清除新卡片。Codex 的同步工具结果
+  仅在同步协议别名间按内容去重；异步只按 item id 去重事件，不共用 pending／submitted
+  答案缓存，同轮同文案的新 item 也必须重新询问。答案被接收后，卡片不再属于待回答
+  集合；即使投递尚未完成时遇到结束／Stop／替换，也只能取消投递，不能把已回答卡片
+  再标成过期。异步问题被跳过、取消或没有对应问题的非空答案时，只结算卡片，不更新
+  审查意图、不投递占位答案、不建立 continuation；同批问题至少一个有效答案仍可投递。
+  Codex 复用规范化答案与 `hasSubmittedUserInput` 判据，同步提问的 Skip 行为保持不变。
+  交错回归见上述 Session 与 Codex 测试。
+  原生与共享异步请求均携带 `InteractionRequest.delivery=async`；Session 不把它们计入
+  阻塞交互或生命周期等待，未回答也不能暂停工具循环检测／零事件看门狗。字段缺省仍按
+  同步等待处理；Codex 本机／SSH 共用同一 adapter，手机卡片仍走既有宿主交互通道。
+  回归见 `session.tool-loop.test.ts`、`session.turn-stall.test.ts`。
   Codex `functions.exec` yield 没有协议级 execution handle（cell / wait 活在
   `codex-rs` daemon），近期检测只能是 adapter 内、用真实 rollout fixture 锁死的启发式，
   用来铸造有界 claim，再由宿主确定性开续段让模型 wait 同一 cell。

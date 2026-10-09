@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { AgentInputQueuedMessage } from '../../shared/agentInputQueue.js';
 import {
+  HOST_ONLY_AGENT_PREFIX,
   ANNOTATED_IMAGE_NOTE,
   ANNOTATED_IMAGE_REGIONS_PREFIX,
   buildMakerUserMessage,
@@ -59,6 +60,27 @@ describe('agentInputQueue', () => {
     expect(rewritten.text).toBe(toolsDisabled ? '[UI_ACTION_TRIGGER]Updated welcome.' : 'Updated welcome.');
     expect(rewritten.persistedContent).toBe(rewritten.text);
     expect(getAgentFacingText(rewritten)).toBe('Updated welcome.');
+  });
+
+  it.each([false, true])('preserves host-owned peer hiding through rewrite and persistence (attachments=%s)', attachments => {
+    const body = '[UI_ACTION_TRIGGER]Original peer message';
+    const images = [{ url: 'cindy-media://fixture', mimeType: 'image/png' }];
+    const entry = { ...queuedMessage([]), text: body,
+      persistedContent: attachments ? JSON.stringify({ text: body, images }) : body,
+      agentOmitsTriggerPrefix: true as const,
+      [HOST_ONLY_AGENT_PREFIX]: '[Group source: fixture]\n' };
+    const rewritten = updateQueuedMessageText(entry, 'Rewritten peer message');
+    const hiddenText = '[UI_ACTION_TRIGGER]Rewritten peer message';
+    expect(rewritten.text).toBe(hiddenText);
+    expect(rewritten.chatMessage.content).toBe(hiddenText);
+    if (attachments) expect(JSON.parse(rewritten.persistedContent)).toMatchObject({ text: hiddenText, images });
+    else expect(rewritten.persistedContent).toBe(hiddenText);
+    expect(buildMakerUserMessage(rewritten)).toEqual({ type: 'user', content: '[Group source: fixture]\nRewritten peer message' });
+    const snapshot = JSON.parse(JSON.stringify(sanitizeQueuedMessageForPersistence(rewritten)));
+    expect(snapshot.text).toBe(hiddenText);
+    expect(JSON.stringify(snapshot)).not.toContain('Group source');
+    expect(updateQueuedMessageText(rewritten, hiddenText).text).toBe(hiddenText);
+    expect(buildMakerUserMessage(snapshot)).toEqual({ type: 'user', content: 'Rewritten peer message' });
   });
 
   it('keeps the hidden-row prefix on host receipts but omits it from the model input', () => {

@@ -3902,6 +3902,16 @@ function MessageBubble({
           testID="message.sharedAuthor"
         />
       ) : null}
+      {item.message.kind === 'assistant' && item.message.sourceGroup ? (
+        <SourceLabelWithId
+          align="agent"
+          label={item.message.sourceGroup.name
+            ? t('message.renderer.groupSentNamed', { name: item.message.sourceGroup.name })
+            : t('message.renderer.groupSent')}
+          idText={t('message.renderer.sourceGroupId', { id: item.message.sourceGroup.groupId })}
+          testID="message.groupSource"
+        />
+      ) : null}
       {automationOrigin ? (
         // 自动化任务注入的消息:气泡上方渲来源标签(对齐桌面;手机版暂不做
         // 点击跳转自动化页)。共享任务访客的脱敏来源没有名字与 ID,显示通用文案。

@@ -122,6 +122,7 @@ interface ApplyAgentIslandEventOptions {
 }
 
 interface AgentIslandSessionState {
+  pendingDeviceCompletionNotification?: boolean;
   sessionId: string;
   title: string | null;
   projectName: string | null;
@@ -1125,7 +1126,16 @@ export function syncAgentIslandDeviceSessions(
       result.changed = true;
     }
     if (applyDeviceSessionMeta(session, input)) result.changed = true;
+    const waitingForCompletionNotification = session.pendingDeviceCompletionNotification === true;
     const transition = applyDeviceSessionPhase(state, session, input, previous, now);
+    if (input.phase === 'completed') {
+      const observedCompletion = transition.event === 'done' || waitingForCompletionNotification;
+      session.pendingDeviceCompletionNotification = input.completionNotification === 'pending' && observedCompletion;
+      if (input.completionNotification) transition.event = null;
+      else if (waitingForCompletionNotification) transition.event = 'done';
+    } else {
+      session.pendingDeviceCompletionNotification = false;
+    }
     if (transition.changed) result.changed = true;
     if (transition.event) {
       result.events.push({

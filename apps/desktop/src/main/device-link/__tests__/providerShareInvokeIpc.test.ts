@@ -54,6 +54,15 @@ describe('provider share renderer reads', () => {
     await expect(handleProviderShareInvoke(deps, 'share:s1', 'maker:agent:status', ['codex'])).resolves.toEqual({ binaryReady: true });
   });
 
+  it('reads through the background link to the owner computer when it is wired in', async () => {
+    // relay 只在建链时登记受邀者这台电脑:直接发 invoke 会被拒成 providerShare peer unavailable。
+    const hostInvoke = vi.fn(async () => ({ ok: true as const, result: { providers: [] } }));
+    await expect(handleProviderShareInvoke({ invoke, invokeProviderShareHost: hostInvoke }, 'share:s1', 'maker:provider:list', [{ capabilities: [] }]))
+      .resolves.toEqual({ providers: [] });
+    expect(hostInvoke).toHaveBeenCalledWith('host-peer', 'maker:provider:list', [{ capabilities: [] }]);
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
   it('logs why a read failed, once a minute per error', async () => {
     warn.mockClear();
     invoke.mockResolvedValue({ ok: false, error: { code: 'DEVICE_OFFLINE', message: 'peer offline' } });

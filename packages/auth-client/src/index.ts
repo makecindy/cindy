@@ -1,4 +1,4 @@
-export { AuthApiError, CindyAuthClient } from "./client.js";
+export { AuthApiError, CindyAuthClient, retryAfterDeadline } from "./client.js";
 export {
   accountVaultKey,
   isStoredAccountMetadata,

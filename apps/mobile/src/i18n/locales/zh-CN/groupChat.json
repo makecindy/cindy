@@ -174,5 +174,13 @@
   "followUp": {
     "next": "分工 · 下一步",
     "failedStep": "第 {{step}} 步没做完"
+  },
+  "server": {
+    "offline": "暂时无法连接群聊，请重试。",
+    "loadFailed": "暂时无法读取群聊，请重试。",
+    "loadOlder": "加载更早的消息",
+    "attachmentFailed": "附件打开失败，请重试。",
+    "previewUnavailable": "暂时无法读取消息预览",
+    "endpointUnavailable": "群聊服务配置暂不可用，请重试。"
   }
 }
