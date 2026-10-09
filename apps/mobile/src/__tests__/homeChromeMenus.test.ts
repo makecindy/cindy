@@ -162,6 +162,30 @@ describe("home chrome menus", () => {
     ]);
   });
 
+  it("keeps the menu shape stable for every option that keeps the menu presented", () => {
+    // iOS 只能原地刷新结构相同的菜单;结构一变就得整份替换,打开中的菜单会退回根层。
+    // 不变量:任何 keepPresented 选项点下去后,菜单的 id 层级不变(只允许勾选 / 副标题 / 禁用变化)。
+    const shape = (actions: readonly NativePullDownAction[]): unknown =>
+      actions.map((action) => [action.id, action.subactions ? shape(action.subactions) : null]);
+    const keepPresentedIds = (actions: readonly NativePullDownAction[]): string[] =>
+      actions.flatMap((action) => [
+        ...(action.keepPresented ? [action.id] : []),
+        ...(action.subactions ? keepPresentedIds(action.subactions) : []),
+      ]);
+    for (const base of [displayState, { ...displayState, groupByProject: false }, { ...displayState, projectFilter: ["p1"] }]) {
+      const before = build(base);
+      const ids = keepPresentedIds(before);
+      expect(ids.length).toBeGreaterThan(0);
+      for (const id of ids) {
+        const patch = homeDisplayActionPatch(id, { ...displayState, ...base });
+        expect(patch, id).not.toBeNull();
+        expect(shape(build({ ...base, ...patch })), id).toEqual(shape(before));
+      }
+    }
+    // 「按项目分组」会增删「项目排序」子菜单,因此选完收起。
+    expect(find(build(), "group.project")?.keepPresented).toBeFalsy();
+  });
+
   it("hides project sorting when tasks are not grouped by project", () => {
     expect(find(build({ groupByProject: false }), "projectOrder")).toBeUndefined();
     expect(find(build({ groupByProject: false, groupDialogue: false }), "group")?.subtitle)

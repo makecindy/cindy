@@ -206,7 +206,9 @@ export function buildHomeDisplayPullDownActions(input: {
 
   const organize: NativePullDownAction[] = [
     submenu("group", t(`${MENU}.groupHeading`), groupSummary, "list.bullet.indent", [
-      checkable("group.project", t(`${MENU}.groupProject`), state.groupByProject, true),
+      // 「按项目分组」会增删下方「项目排序」整个子菜单,菜单结构变了 iOS 只能整份替换、
+      // 打开中的菜单会退回根层,所以它选完收起;只改勾选 / 副标题 / 禁用的项才保持展开。
+      checkable("group.project", t(`${MENU}.groupProject`), state.groupByProject),
       checkable("group.dialogue", t(`${MENU}.groupDialogue`), state.groupDialogue, true),
     ]),
     submenu("sort", t(`${MENU}.sortHeading`), t(sortLabelKey(state.sortBy)), "arrow.up.arrow.down",
