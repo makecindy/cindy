@@ -1210,10 +1210,11 @@ export function createMakerHookSessionRunner(deps: {
         : sendContentBase;
       // 落库形态: 有附件用 {text, images, files} 对象(createMessage safeStringify
       // 存 JSON, 读回 parseUserContent 提取 images/files); 无附件纯文本 string。
+      const userText = req.source?.userText ?? req.prompt;
       const userMessageContent =
         imageRefs.length > 0 || fileRefs.length > 0
-          ? { text: req.prompt, images: imageRefs, files: fileRefs }
-          : req.prompt;
+          ? { text: userText, images: imageRefs, files: fileRefs }
+          : userText;
 
       const turnChangeAnchorClientId = randomUUID();
       let turnChangeSetStarted = false;
@@ -1353,6 +1354,7 @@ export function createMakerHookSessionRunner(deps: {
                   ? {
                       hookSource: {
                         ...req.source,
+                        ...(req.source.userText !== undefined ? { contentFormat: 'user-text' } : {}),
                         // New messages only persist producer-supplied context.
                         // Legacy prompt projection belongs to the read path.
                         contextSnapshot: req.contextSnapshot ?? {},

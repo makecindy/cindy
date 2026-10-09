@@ -97,7 +97,7 @@ describe('messageHandler !stop routing', () => {
   let consumePendingOpenerAsCard: ReturnType<typeof vi.fn>;
   let deliver: (event: IMMessageEvent) => void;
 
-  function wire(threadScoped: boolean, notificationSessionId?: string): void {
+  function wire(threadScoped: boolean, notificationSessionId?: string, prepareAgentTurnText?: ImChannelAdapter['prepareAgentTurnText']): void {
     stopActiveTurn = vi.fn(async () => ({ stopped: true, droppedQueued: 0 }));
     runAgentTurn = vi.fn(async () => undefined);
     handleSlashCommand = vi.fn(async () => true);
@@ -128,6 +128,7 @@ describe('messageHandler !stop routing', () => {
       output: { kind: 'rich-card', im },
       ui: slackUi,
       threadScoped,
+      ...(prepareAgentTurnText ? { prepareAgentTurnText } : {}),
     } as unknown as ImChannelAdapter;
 
     const attach = createMessageHandler(
@@ -153,6 +154,52 @@ describe('messageHandler !stop routing', () => {
       botContextId: 'bot-ctx', userId: 'U123456789', scopeKey: 'om_root', notificationSessionId: 'original-session',
     }));
     expect(runAgentTurn).not.toHaveBeenCalled();
+  });
+
+  it.each(['telegram', 'feishu', 'dingtalk', 'wecom', 'discord'])('%s preserves a bare invocation without inventing user text', async (channelName) => {
+    deliver(makeEvent({ channelName, text: '', invoked: true }));
+    await vi.waitFor(() => expect(runAgentTurn).toHaveBeenCalledTimes(1));
+    const turn = runAgentTurn.mock.calls[0][0];
+    expect(turn.text).toBe('');
+    expect(turn.agentText).toContain('用户显式召唤了机器人');
+    expect(turn.agentText).not.toMatch(/检查|看看|继续|附件/);
+  });
+
+  it('keeps an empty reply and its quoted content separate from the user text', async () => {
+    deliver(makeEvent({ text: '', replyContext: { author: 'Chris', text: '能省流量吗？' } }));
+    await vi.waitFor(() => expect(runAgentTurn).toHaveBeenCalledTimes(1));
+    const turn = runAgentTurn.mock.calls[0][0];
+    expect(turn.text).toBe('');
+    expect(turn.agentText).toContain('<reply_context>');
+    expect(turn.agentText).toContain('能省流量吗？');
+    expect(turn.agentText).not.toContain('检查附件');
+  });
+
+  it('still drops an empty event without a summon, quote or attachment', async () => {
+    deliver(makeEvent({ text: '' }));
+    await flushMicrotasks();
+    expect(runAgentTurn).not.toHaveBeenCalled();
+  });
+
+  it('does not reintroduce filtered quoted media into the model-only facts', async () => {
+    wire(true, undefined, async () => ({
+      agentText: '[已过滤的引用]',
+      replyContext: { author: 'Chris', text: '[已过滤的引用]' },
+    }));
+    deliver(makeEvent({ text: '', invoked: true, replyContext: {
+      author: 'Chris', text: 'filtered content', unavailableAttachments: ['filtered-file-name'],
+    } }));
+    await vi.waitFor(() => expect(runAgentTurn).toHaveBeenCalledTimes(1));
+    expect(runAgentTurn.mock.calls[0][0].agentText).not.toContain('filtered-file-name');
+  });
+
+  it('does not bypass a channel context filter when context preparation fails', async () => {
+    wire(true, undefined, async () => { throw new Error('context unavailable'); });
+    deliver(makeEvent({ text: '', invoked: true, replyContext: {
+      author: 'Chris', text: 'unreviewed quote', unavailableAttachments: ['unreviewed-file'],
+    } }));
+    await vi.waitFor(() => expect(runAgentTurn).toHaveBeenCalledTimes(1));
+    expect(runAgentTurn.mock.calls[0][0].agentText).not.toContain('unreviewed');
   });
 
   it('keeps slash commands in linked topics from changing the main conversation', async () => {

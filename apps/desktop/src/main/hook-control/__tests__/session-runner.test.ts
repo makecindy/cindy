@@ -606,11 +606,24 @@ describe('hook session-runner 的 userSendAt 时序(未分类误判回归)', () 
     const source = { im, userText: 'question', threadContext: [{ author: 'Bob', text: 'quote' }] };
     await runner.run(baseReq({ prompt, source }));
     expect(h.createMessage).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
-      content: prompt,
+      content: 'question',
       agentMeta: expect.objectContaining({ hookSource: {
-        ...source, contextSnapshot: {},
+        ...source, contentFormat: 'user-text', contextSnapshot: {},
       } }),
     }));
+  });
+  it('空 userText 原样落库，系统事实只发给模型', async () => {
+    const runner = createMakerHookSessionRunner({ log });
+    const prompt = '[消息说明] 用户显式召唤了机器人，本条未附加文字正文。';
+    await runner.run(baseReq({ prompt, source: { im: 'telegram', userText: '' } }));
+    expect(h.createMessage).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
+      content: '',
+      agentMeta: expect.objectContaining({ hookSource: expect.objectContaining({
+        userText: '', contentFormat: 'user-text',
+      }) }),
+    }));
+    const session = await fakeMaker.createSession.mock.results[0].value;
+    expect(session.send.mock.calls[0][0].content).toContain(prompt);
   });
   it('createOnly materializes and broadcasts a task without a synthetic user turn', async () => {
     const runner = createMakerHookSessionRunner({ log });

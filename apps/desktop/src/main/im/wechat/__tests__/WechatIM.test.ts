@@ -23,6 +23,27 @@ vi.mock('../mediaStaging', async (importOriginal) => {
 });
 
 describe('WechatIM host boundary', () => {
+  it('keeps quote and unavailable-media facts out of the original user text', () => {
+    const payload = __testing.parseTaskPayload(JSON.stringify({
+      text: '', replyContext: '这张图是什么意思？', attachments: [],
+      unsupportedMedia: ['image:download-failed'],
+    }));
+    const turn = __testing.prepareWechatTaskTurn(payload);
+    expect(turn.text).toBe('');
+    expect(turn.agentText).toContain('这张图是什么意思？');
+    expect(turn.agentText).toContain('image:download-failed');
+    expect(turn.agentText).not.toMatch(/请检查|本轮仅处理文字|实际提供了/);
+    expect(turn.contextSnapshot?.replyMessageCount).toBe(1);
+  });
+
+  it('reads an old queued payload without changing its text or requiring migration', () => {
+    const payload = __testing.parseTaskPayload(JSON.stringify({
+      text: '[引用：旧消息] 原话', attachments: [], unsupportedMedia: [],
+    }));
+    expect(__testing.prepareWechatTaskTurn(payload)).toEqual({
+      text: '[引用：旧消息] 原话', agentText: '[引用：旧消息] 原话',
+    });
+  });
   beforeEach(() => {
     mediaMocks.removeReleasedWechatFiles.mockClear();
   });
