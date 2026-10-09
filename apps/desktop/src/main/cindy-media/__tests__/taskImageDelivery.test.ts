@@ -406,6 +406,44 @@ describe('task image delivery', () => {
   });
 });
 
+it.each([true, false])('removes shared private definitions in both channels (readable=%s)', async (readable) => {
+  const source = path.join(work, 'shared image.png');
+  if (readable) await fs.writeFile(source, PNG);
+  const target = pathToFileURL(source).href.replace(/^file:/, 'xdt-image:');
+  const text = `![shot][p] [**download**][p] [p][] [p] [![nested][p]][p] [alias][a] [direct](<${target}>)
+
+[p]: <${target}> "caption"
+[p]: /private/ignored-duplicate.png
+[a]: <${target}>
+
+[web][w]
+
+[w]: https://example.org/page
+[w]: <${target}>
+`;
+  const saved = await materializeTaskImageText('s', text);
+  const personal = await materializeLocalMarkdownImages({ text: saved, workingDir: work, sessionId: 's' });
+  const hook = await collectOutboundAttachments(saved, [], { resolveImageUrl: resolveSafe, log: { warn: vi.fn() } });
+  for (const body of [personal.text, hook.text]) {
+    expect(body).toContain('**download**');
+    expect(body).toContain('nested');
+    expect(body).toContain('[web][w]');
+    expect(body).toContain('[w]: https://example.org/page');
+    expect(body).not.toContain(target);
+    expect(body).not.toContain('/private/ignored-duplicate.png');
+    expect(body).not.toContain('cindy-media://');
+    expect(body).not.toContain('[p]');
+  }
+  expect(personal.absPaths).toHaveLength(readable ? 1 : 0);
+  expect(hook.attachments).toHaveLength(readable ? 1 : 0);
+  if (readable) {
+    expect(saved).not.toContain(target);
+    expect(saved).toContain('[**download**][p]');
+    await fs.rm(source);
+    expect(await fs.readFile(personal.absPaths[0])).toEqual(PNG);
+  }
+});
+
 describe('Markdown image contract', () => {
   it('preserves code and HTML, and rewrites images in lists, tables and reference syntax', async () => {
     const source = path.join(path.sep, 'work', 'shot.png');
@@ -422,12 +460,13 @@ describe('Markdown image contract', () => {
     expect(result.text).toContain('![ref](cindy-media://blobs/test.png)');
   });
 
-  it('removes unused image definitions but preserves ones shared with ordinary links', () => {
+  it('removes unused image definitions and retargets shared links to the persisted image', () => {
     const source = '![image][p]\n\n[p]: /tmp/a.png';
     const replacements = new Map([['/tmp/a.png', 'cindy-media://blobs/test.png']]);
     expect(rewriteTaskImageReferences(source, replacements)).not.toContain('/tmp/a.png');
     const shared = `[download][p]\n${source}`;
-    expect(rewriteTaskImageReferences(shared, replacements)).toContain('[p]: /tmp/a.png');
+    expect(rewriteTaskImageReferences(shared, replacements)).toContain('[p]: <cindy-media://blobs/test.png>');
+    expect(rewriteTaskImageReferences(shared, replacements)).not.toContain('/tmp/a.png');
   });
 
   it('supports spaces, parentheses and duplicate destinations without changing surrounding text', () => {

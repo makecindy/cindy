@@ -75,7 +75,7 @@ export function rewriteTaskImageReferences(
   if (!replacements.size) return text;
   let result = text;
   const edits: { start: number; end: number; text: string }[] = [];
-  const replacedDefinitions = new Set<string>();
+  const replacedDefinitions = new Map<string, string>();
   for (const image of taskImageReferences(text)) {
     const url = replacements.get(image.url);
     if (url === undefined) continue;
@@ -84,23 +84,66 @@ export function rewriteTaskImageReferences(
     const replacement =
       typeof mode === 'function' ? mode(image) : mode === 'alt' ? alt : `![${alt}](${url}${title})`;
     edits.push({ start: image.start, end: image.end, text: replacement });
-    if (image.identifier) replacedDefinitions.add(image.identifier);
+    if (image.identifier) replacedDefinitions.set(image.identifier, url);
   }
-  if (replacedDefinitions.size) {
-    const tree = parser.parse(text);
-    // Definitions shared with ordinary links remain intact. Image-only definitions
-    // are now unused; remove them so IM text cannot expose the original local path.
-    visit(tree, 'linkReference', (node) => {
-      replacedDefinitions.delete(node.identifier);
-    });
-    visit(tree, 'definition', (node) => {
-      const start = node.position?.start.offset;
-      const end = node.position?.end.offset;
-      if (replacedDefinitions.has(node.identifier) && start !== undefined && end !== undefined) {
-        edits.push({ start, end, text: '' });
+  const tree = parser.parse(text);
+  const sharedDefinitions = new Set<string>();
+  // Materialization can inline the image while leaving a shared definition.
+  // Match its managed destination as well when the channel removes the image.
+  const seenDefinitions = new Set<string>();
+  visit(tree, 'definition', (node) => {
+    if (seenDefinitions.has(node.identifier)) return;
+    seenDefinitions.add(node.identifier);
+    const url = replacements.get(node.url);
+    if (
+      url !== undefined &&
+      (localTaskImagePath(node.url) || /^(cindy-media|xdt-image):\/\//.test(node.url))
+    ) {
+      replacedDefinitions.set(node.identifier, url);
+    }
+  });
+  visit(tree, (node) => {
+    if (node.type !== 'linkReference' && node.type !== 'link') return;
+    const url =
+      node.type === 'link' ? replacements.get(node.url) : replacedDefinitions.get(node.identifier);
+    if (url === undefined) return;
+    if (mode === 'url' && node.type === 'linkReference') {
+      sharedDefinitions.add(node.identifier);
+      return;
+    }
+    // Remove only link delimiters, preserving emphasis and nested image edits.
+    const start = node.position?.start.offset;
+    const end = node.position?.end.offset;
+    const first = node.children[0]?.position?.start.offset;
+    const last = node.children.at(-1)?.position?.end.offset;
+    if (start !== undefined && end !== undefined && first !== undefined && last !== undefined) {
+      if (mode === 'url' && node.type === 'link') {
+        const title = node.title ? ` "${node.title.replace(/[\\"]/g, '\\$&')}"` : '';
+        edits.push({ start: last, end, text: `](${url}${title})` });
+      } else {
+        edits.push({ start, end: first, text: '' }, { start: last, end, text: '' });
       }
-    });
-  }
+    }
+  });
+  visit(tree, 'definition', (node) => {
+    const start = node.position?.start.offset;
+    const end = node.position?.end.offset;
+    if (
+      (replacedDefinitions.has(node.identifier) || replacements.has(node.url)) &&
+      start !== undefined &&
+      end !== undefined
+    ) {
+      const label = node.identifier.replace(/[\\\[\]]/g, '\\$&');
+      const title = node.title ? ` "${node.title.replace(/[\\"]/g, '\\$&')}"` : '';
+      edits.push({
+        start,
+        end,
+        text: sharedDefinitions.has(node.identifier)
+          ? `[${label}]: <${replacedDefinitions.get(node.identifier)}>${title}`
+          : '',
+      });
+    }
+  });
   for (const edit of edits.sort((a, b) => b.start - a.start)) {
     result = result.slice(0, edit.start) + edit.text + result.slice(edit.end);
   }
