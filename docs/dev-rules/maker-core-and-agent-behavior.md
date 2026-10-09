@@ -341,7 +341,10 @@ sessionRunningRetry 就停。每次因 replacement 关闭而重新入队都计�
   仅在同步协议别名间按内容去重；异步只按 item id 去重事件，不共用 pending／submitted
   答案缓存，同轮同文案的新 item 也必须重新询问。答案被接收后，卡片不再属于待回答
   集合；即使投递尚未完成时遇到结束／Stop／替换，也只能取消投递，不能把已回答卡片
-  再标成过期。交错回归见上述 Session 与 Codex 测试。
+  再标成过期。异步问题被跳过、取消或没有对应问题的非空答案时，只结算卡片，不更新
+  审查意图、不投递占位答案、不建立 continuation；同批问题至少一个有效答案仍可投递。
+  Codex 复用规范化答案与 `hasSubmittedUserInput` 判据，同步提问的 Skip 行为保持不变。
+  交错回归见上述 Session 与 Codex 测试。
   原生与共享异步请求均携带 `InteractionRequest.delivery=async`；Session 不把它们计入
   阻塞交互或生命周期等待，未回答也不能暂停工具循环检测／零事件看门狗。字段缺省仍按
   同步等待处理；Codex 本机／SSH 共用同一 adapter，手机卡片仍走既有宿主交互通道。

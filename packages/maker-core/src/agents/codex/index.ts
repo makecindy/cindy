@@ -9648,6 +9648,16 @@ assertRouteCurrent();
         // The host has resolved the card. A synchronous completion during steer
         // must not mark it expired while the outer promise is still unwinding.
         liveAskUserByRequestId.delete(requestId);
+        const answersByPosition = userInputAnswersByPosition(
+          questions,
+          responseFromAskUserAnswers(questions, decision.answers),
+        );
+        // Optional skips/cancellations settle the card without changing intent,
+        // claiming a continuation, or sending synthetic "no answer" input.
+        if (live.delivery === 'async'
+          && (decision.dismissed === true || !hasSubmittedUserInput(answersByPosition))) {
+          return answersByPosition;
+        }
         // 澄清必须锚在发起提问那一轮的审查意图上。卡片挂起期间后续 turn 可能改写
         // currentAutoReviewIntent；plan_review 已用 planRequestAutoReviewIntent 防漂。
         const continuationAutoReviewIntent = composeAutoReviewIntentWithClarification(
@@ -9655,10 +9665,6 @@ assertRouteCurrent();
           Object.entries(decision.answers ?? {}).map(([question, answer]) => ({ question, answer })),
         );
         setAutoReviewIntent(continuationAutoReviewIntent);
-        const answersByPosition = userInputAnswersByPosition(
-          questions,
-          responseFromAskUserAnswers(questions, decision.answers),
-        );
         if (
           live
           && (live.detached || live.delivery === 'async')

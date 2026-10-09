@@ -19901,6 +19901,56 @@ describe('CodexAgent MCP thread context hooks', () => {
     return { host, handle, handlers, params, decision, resolver, events };
   }
 
+  it.each([
+    { label: 'skip', answers: {} },
+    { label: 'empty text', answers: { 'Proceed?': '' } },
+    { label: 'whitespace', answers: { 'Proceed?': ' \n\t' } },
+    { label: 'empty selections', answers: { 'Proceed?': '[]' } },
+    { label: 'blank selections', answers: { 'Proceed?': '[" "]' } },
+    { label: 'unrelated answer', answers: { 'Another question?': 'Yes' } },
+    { label: 'dismissed answer', answers: { 'Proceed?': 'Yes' }, dismissed: true },
+    { label: 'resolver failure', answers: {}, reject: true },
+  ] as Array<{ label: string; answers: Record<string, string>; dismissed?: boolean; reject?: boolean }>)('does not deliver or retain an async continuation for $label', async ({ answers, dismissed, reject }) => {
+    const s = await runningAsyncQuestion();
+    try {
+      if (reject) s.decision.reject(new Error('resolver unavailable'));
+      else s.decision.resolve({ kind: 'ask_user_question', answers, ...(dismissed ? { dismissed } : {}) });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(s.host.request.mock.calls.filter(([method]) => method === Method.TurnSteer)).toHaveLength(0);
+      expect(s.handle.isTurnRunning?.()).toBe(true);
+      expect(s.events.filter((event) => event.type === 'done')).toHaveLength(0);
+      s.handlers.turnCompleted?.({ threadId: s.params.threadId,
+        turn: { id: s.params.turnId, status: 'completed' } });
+      await vi.waitFor(() => expect(s.handle.isTurnRunning?.()).toBe(false));
+      await vi.waitFor(() => expect(s.events.filter((event) => event.type === 'done')).toHaveLength(1));
+      expect(s.events.find((event) => event.type === 'done')?.turnContinuationId).toBeUndefined();
+      expect(s.events.filter((event) => event.type === 'interaction_dismissed')).toHaveLength(0);
+      expect(askUserTurnStartCalls(s.host)).toHaveLength(1);
+    } finally { await s.handle.close(); }
+  });
+
+  it('delivers a partially answered async batch once', async () => {
+    const s = await runningAsyncQuestion();
+    const partial = deferred<InteractionDecision>();
+    try {
+      s.resolver.mockImplementationOnce(async () => partial.promise);
+      const next = { ...s.params, item: { ...asyncQuestionItem, id: 'partial-question',
+        questions: [{ title: 'Optional detail?' }, { title: 'Next action?' }] } };
+      s.handlers.itemCompleted?.(next);
+      partial.resolve({ kind: 'ask_user_question', answers: { 'Optional detail?': '', 'Next action?': 'Run tests' } });
+      await vi.waitFor(() => expect(s.host.request.mock.calls.filter(([method]) => method === Method.TurnSteer)).toHaveLength(1));
+      expect(s.host.request.mock.calls.find(([method]) => method === Method.TurnSteer)?.[1]).toMatchObject({
+        expectedTurnId: s.params.turnId, input: [{ text: expect.stringContaining('A: Run tests') }],
+      });
+      s.handlers.itemCompleted?.(next);
+      expect(s.resolver).toHaveBeenCalledTimes(2);
+      s.handlers.turnCompleted?.({ threadId: s.params.threadId,
+        turn: { id: s.params.turnId, status: 'completed' } });
+      await vi.waitFor(() => expect(s.handle.isTurnRunning?.()).toBe(false));
+      expect(askUserTurnStartCalls(s.host)).toHaveLength(1);
+    } finally { await s.handle.close(); }
+  });
+
   it.each((['pending', 'answered', 'dismissed'] as const).flatMap((state) =>
     ['Proceed?', 'Continue testing?'].map((question) => ({ state, question })),
   ))('keeps only the latest async card for "$question" when the first is $state', async ({ state, question }) => {
