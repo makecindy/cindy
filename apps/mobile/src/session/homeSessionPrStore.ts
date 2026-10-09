@@ -31,6 +31,8 @@ interface Entry {
 }
 
 const MIN_REFETCH_MS = 10_000;
+/** 在途请求通常很快结束;任务有变化时至少隔这么久再补查一次。 */
+const IN_FLIGHT_RETRY_MS = 1_000;
 const MAX_ENTRIES = 300;
 const entries = new Map<string, Entry>();
 const listeners = new Map<string, Set<() => void>>();
@@ -56,18 +58,24 @@ export function subscribeHomeSessionPr(key: string, listener: () => void): () =>
   };
 }
 
-/** 按新鲜度决定是否发起加载;同一任务同时只有一个请求在途。 */
+/**
+ * 按新鲜度决定是否发起加载;同一任务同时只有一个请求在途。
+ * 返回值:任务有变化(refreshKey 不同)却因在途请求或 10 秒节流没能重查时,返回多少毫秒后
+ * 再调用即可补查;其余情况返回 0。调用方据此安排一次补查,刚创建的 PR 不必等下一轮轮询。
+ */
 export function refreshHomeSessionPr(
   key: string,
   load: (previous: HomeSessionPrInfo | null) => Promise<HomeSessionPrInfo | null>,
   options: { now: number; refreshKey?: string },
-): void {
+): number {
   const entry = entries.get(key);
-  if (entry?.inflight) return;
   if (entry) {
     const age = options.now - entry.fetchedAt;
     const changed = entry.refreshKey !== options.refreshKey;
-    if (age < (changed ? MIN_REFETCH_MS : PR_STATUS_REFRESH_INTERVAL_MS)) return;
+    if (entry.inflight) return changed ? Math.max(MIN_REFETCH_MS - age, IN_FLIGHT_RETRY_MS) : 0;
+    if (age < (changed ? MIN_REFETCH_MS : PR_STATUS_REFRESH_INTERVAL_MS)) {
+      return changed ? MIN_REFETCH_MS - age : 0;
+    }
   }
   const next: Entry = {
     fetchedAt: options.now,
@@ -89,6 +97,7 @@ export function refreshHomeSessionPr(
       next.inflight = false;
       listeners.get(key)?.forEach((listener) => listener());
     });
+  return 0;
 }
 
 export async function loadHomeSessionPr(

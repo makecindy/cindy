@@ -204,6 +204,9 @@ describe('task info usage wiring', () => {
     // 首页被盖住时任务行仍挂载:轮询前检查可见性,回到首页时补查一次。
     expect(meta).toContain("if (AppState.currentState !== 'active' || !isActive()) return;");
     expect(meta).toContain('const stopResume = onResume(refresh);');
+    // 节流补查与回到前台补查。
+    expect(meta).toContain('if (retryIn > 0 && retry === undefined) {');
+    expect(meta).toContain("if (state === 'active') refresh();");
     expect(store).toContain('export function useRemoteSessionStoreVisibility()');
   });
 });
@@ -262,15 +265,17 @@ describe('home PR cache', () => {
     const listener = vi.fn();
     subscribeHomeSessionPr('k', listener);
     const load = vi.fn(async () => ({ ref, status: null }));
-    refreshHomeSessionPr('k', load, { now: 0, refreshKey: 'a' });
-    refreshHomeSessionPr('k', load, { now: 0, refreshKey: 'a' });
+    expect(refreshHomeSessionPr('k', load, { now: 0, refreshKey: 'a' })).toBe(0);
+    // 在途期间同一状态不排补查;任务有变化时让调用方稍后补查。
+    expect(refreshHomeSessionPr('k', load, { now: 0, refreshKey: 'a' })).toBe(0);
+    expect(refreshHomeSessionPr('k', load, { now: 500, refreshKey: 'b' })).toBe(9_500);
     await vi.waitFor(() => expect(listener).toHaveBeenCalledTimes(1));
     expect(load).toHaveBeenCalledTimes(1);
     expect(readHomeSessionPr('k')?.ref.prNumber).toBe(7);
 
-    // 未过期且任务没变化:不重查;任务有更新但距上次不足 10 秒:也不重查。
-    refreshHomeSessionPr('k', load, { now: 5_000, refreshKey: 'a' });
-    refreshHomeSessionPr('k', load, { now: 5_000, refreshKey: 'b' });
+    // 未过期且任务没变化:不重查;任务有更新但距上次不足 10 秒:不重查,告知补查等待时长。
+    expect(refreshHomeSessionPr('k', load, { now: 5_000, refreshKey: 'a' })).toBe(0);
+    expect(refreshHomeSessionPr('k', load, { now: 5_000, refreshKey: 'b' })).toBe(5_000);
     expect(load).toHaveBeenCalledTimes(1);
 
     const failing = vi.fn(async () => { throw new Error('offline'); });
