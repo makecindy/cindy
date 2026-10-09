@@ -78,7 +78,7 @@ export function decideHostKey(stored: string | null, presented: string): HostKey
  * 0600 (best-effort; chmod is a no-op on Windows).
  */
 export class FileHostKeyStore implements HostKeyStore {
-  private readonly filePath: string;
+  readonly filePath: string;
   private cache: Record<string, string> | null = null;
   private loadPromise: Promise<Record<string, string>> | null = null;
   private loadSettled = false; // true once loadPromise has resolved or rejected
@@ -137,6 +137,24 @@ export class FileHostKeyStore implements HostKeyStore {
     });
     this.writeChain = mySlot;
     await mySlot;
+  }
+
+  /** Replace only the fingerprint the user reviewed; never reset trust to first-use. */
+  async replace(key: string, expected: string, fingerprint: string, isCurrent: () => boolean): Promise<void> {
+    const slot = this.writeChain.catch(() => {}).then(async () => {
+      this.reload();
+      const map = await this.load();
+      if (!isCurrent() || map[key] !== expected) {
+        throw new Error('Host key details changed. Reconnect and review the current fingerprints.');
+      }
+      const next = { ...map, [key]: fingerprint };
+      await this.persist(next);
+      // Publish only after persistence succeeds, leaving the old trust on failure.
+      this.cache = next;
+      this.loadPromise = null;
+    });
+    this.writeChain = slot;
+    await slot;
   }
 
   /**

@@ -633,7 +633,8 @@
     "PROVIDER_SHARE_CROSS_REGION_DISABLED": "暫不支援跨區域分享。這個連結來自另一個區域的 Cindy 服務。",
     "REMOTE_AGENT_SHARE_PAUSED": "模型未切換：對方已暫停對你的分享。請換一個模型。",
     "REMOTE_AGENT_SHARE_REMOVED": "模型未切換：這個分享已無法使用（對方刪除了分享或你已退出）。請換一個模型。",
-    "REMOTE_AGENT_SHARE_UNAVAILABLE": "模型未切換：分享的供應商暫時無法使用（對方電腦不在線，或對方暫時關閉了分享）。請稍後再試或換一個模型。"
+    "REMOTE_AGENT_SHARE_UNAVAILABLE": "模型未切換：分享的供應商暫時無法使用（對方電腦不在線，或對方暫時關閉了分享）。請稍後再試或換一個模型。",
+    "SSH_HOST_KEY_MISMATCH": "SSH 主機金鑰已變更"
   },
   "providerError": {
     "AUTH_INVALID": "API 金鑰無效或已過期（401），請檢查金鑰後重試",
@@ -1038,6 +1039,15 @@
         "preparingRuntime": "正在為遠端 {{hostId}} 準備執行時…",
         "installingAgent": "正在遠端 {{hostId}} 安裝 {{agent}}…",
         "failed": "遠端 {{hostId}} 安裝 {{agent}} 失敗：{{message}}。請到 設定 → 遠端機器 → 展開 {{hostId}} 檢視完整日誌。"
+      },
+      "hostKey": {
+        "title": "SSH 主機金鑰已變更",
+        "review": "核對主機金鑰",
+        "explanation": "{{host}} 的身分金鑰與 Cindy 儲存的記錄不一致。請先向伺服器管理員核實新指紋，再更新信任記錄。",
+        "details": "原指紋：{{trusted}}\n新指紋：{{presented}}\n\n伺服器重裝或連線遭冒充都可能導致此變更。請透過伺服器主控台等可信管道核對新指紋。\n\nCindy 信任記錄：{{file}}\nCindy 不讀取 ~/.ssh/known_hosts。更換登入金鑰或刪除後重新新增主機都無法解決此問題。\n\n更新信任後，只替換這台主機的指紋並重新連線，不影響其他主機。",
+        "cancel": "保留原金鑰",
+        "trust": "信任新金鑰並重新連線",
+        "updateFailed": "無法更新主機信任記錄。連線資訊或已存金鑰可能已變更，也可能無法寫入記錄檔。請重新連線以更新指紋，並檢查檔案權限"
       }
     },
     "appearance": {

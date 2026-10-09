@@ -198,6 +198,60 @@ describe('RemoteHost arm/disconnect race', () => {
     expect(host.getStatus()).toBe('disconnected');
   });
 
+  it('reports locally verified key changes and clears recovery on endpoint change', async () => {
+    const store: HostKeyStore = {
+      reload: vi.fn(), get: vi.fn(async () => 'SHA256:trusted'), set: vi.fn(),
+    };
+    const host = new RemoteHost(HOST_CONFIG, { logger: noopLogger, hostKeys: store });
+    const connecting = host.connect();
+    const rejection = expect(connecting).rejects.toThrow('SSH host key changed');
+    await flush();
+    const client = h.client!;
+    const accepted = await new Promise<boolean>((resolve) => {
+      client.connectConfig!.hostVerifier!(Buffer.from('replacement-key'), resolve);
+    });
+    expect(accepted).toBe(false);
+    client.emit('error', new Error('Host denied (verification failed)'));
+    await rejection;
+    expect(host.snapshot().hostKeyMismatch).toEqual({
+      host: `${HOST_CONFIG.hostname}:${HOST_CONFIG.port}`,
+      trusted: 'SHA256:trusted', presented: expect.stringMatching(/^SHA256:/),
+    });
+    expect(host.snapshot().lastError).toContain('~/.ssh/known_hosts');
+    expect(store.set).not.toHaveBeenCalled();
+    client.emit('close');
+    expect(host.getStatus()).toBe('failed');
+    host.updateConfig({ ...HOST_CONFIG, hostname: 'changed.example' });
+    expect(host.snapshot().hostKeyMismatch).toBeUndefined();
+    await host.disconnect();
+  });
+
+  it('stops a scheduled reconnect when the server key has changed', async () => {
+    const store: HostKeyStore = { reload: vi.fn(), get: vi.fn(async () => 'SHA256:old'), set: vi.fn() };
+    const host = new RemoteHost(HOST_CONFIG, { logger: noopLogger, hostKeys: store });
+    const connecting = host.connect();
+    await flush();
+    h.client!.emit('ready');
+    await connecting;
+    vi.useFakeTimers();
+    try {
+      h.client!.emit('close');
+      expect(host.getStatus()).toBe('reconnecting');
+      await vi.advanceTimersByTimeAsync(1000);
+      const client = h.client!;
+      await new Promise<boolean>((resolve) => client.connectConfig!.hostVerifier!(Buffer.from('new-key'), resolve));
+      client.emit('error', new Error('Host denied (verification failed)'));
+      client.emit('close');
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(host.getStatus()).toBe('failed');
+      expect(h.client).toBe(client);
+      expect(host.snapshot().hostKeyMismatch).toBeDefined();
+    } finally {
+      await host.disconnect();
+      vi.useRealTimers();
+    }
+  });
+
   it('a stale host verifier cannot persist trust or write errors for a replacement endpoint', async () => {
     let finishGet!: (fingerprint: string | null) => void;
     const store: HostKeyStore = {

@@ -635,7 +635,8 @@
     "PROVIDER_SHARE_CROSS_REGION_DISABLED": "Cross-region sharing isn’t available yet. This link comes from Cindy’s service in another region.",
     "REMOTE_AGENT_SHARE_PAUSED": "Model not changed: the owner has paused this share for you. Pick another model.",
     "REMOTE_AGENT_SHARE_REMOVED": "Model not changed: this share is no longer available (the owner removed it or you left). Pick another model.",
-    "REMOTE_AGENT_SHARE_UNAVAILABLE": "Model not changed: the shared provider is temporarily unavailable (the owner's computer is offline or sharing is turned off for now). Try again later or pick another model."
+    "REMOTE_AGENT_SHARE_UNAVAILABLE": "Model not changed: the shared provider is temporarily unavailable (the owner's computer is offline or sharing is turned off for now). Try again later or pick another model.",
+    "SSH_HOST_KEY_MISMATCH": "SSH Host Key Changed"
   },
   "providerError": {
     "AUTH_INVALID": "Invalid or expired API key (401). Check the key and try again",
@@ -1040,6 +1041,15 @@
         "preparingRuntime": "Preparing runtime on {{hostId}}…",
         "installingAgent": "Installing {{agent}} on remote {{hostId}}…",
         "failed": "Failed to install {{agent}} on {{hostId}}: {{message}}. Open Settings → Remote → expand {{hostId}} for the full log."
+      },
+      "hostKey": {
+        "title": "SSH Host Key Changed",
+        "review": "Review Host Key",
+        "explanation": "The identity key for {{host}} no longer matches the key Cindy saved. Verify the new fingerprint with the server administrator before updating trust.",
+        "details": "Previously trusted: {{trusted}}\nNew fingerprint: {{presented}}\n\nA server reinstall or an intercepted connection can cause this change. Compare the new fingerprint through a trusted channel, such as the server console.\n\nCindy’s trust record: {{file}}\nCindy does not read ~/.ssh/known_hosts. Changing your login key or deleting and adding the host will not fix this.\n\nUpdating trust replaces only this host’s fingerprint and reconnects. Other hosts stay unchanged.",
+        "cancel": "Keep Existing Key",
+        "trust": "Trust New Key and Reconnect",
+        "updateFailed": "Could not update host trust. The connection details or saved key may have changed, or the trust file could not be written. Reconnect to refresh the fingerprints and check the file permissions."
       }
     },
     "appearance": {

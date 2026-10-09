@@ -81,6 +81,44 @@ describe('FileHostKeyStore', () => {
     await fs.rm(scratchDir, { recursive: true, force: true });
   });
 
+  it('replaces only the reviewed fingerprint and survives reopening', async () => {
+    const store = new FileHostKeyStore(filePath);
+    await store.set('one:22', 'SHA256:old');
+    await store.set('two:22', 'SHA256:other');
+    await store.replace('one:22', 'SHA256:old', 'SHA256:new', () => true);
+    const reopened = new FileHostKeyStore(filePath);
+    expect(await reopened.get('one:22')).toBe('SHA256:new');
+    expect(await reopened.get('two:22')).toBe('SHA256:other');
+    await expect(store.set('one:22', 'SHA256:unreviewed')).rejects.toThrow();
+  });
+
+  it('rejects stale confirmations, removed entries, and concurrent replacements', async () => {
+    const store = new FileHostKeyStore(filePath);
+    await store.set('one:22', 'SHA256:old');
+    await expect(store.replace('one:22', 'SHA256:old', 'SHA256:new', () => false)).rejects.toThrow();
+    expect(await store.get('one:22')).toBe('SHA256:old');
+    await expect(store.replace('missing:22', 'SHA256:old', 'SHA256:new', () => true)).rejects.toThrow();
+    const results = await Promise.allSettled([
+      store.replace('one:22', 'SHA256:old', 'SHA256:new', () => true),
+      store.replace('one:22', 'SHA256:old', 'SHA256:other', () => true),
+    ]);
+    expect(results.map((result) => result.status)).toEqual(['fulfilled', 'rejected']);
+    expect(await store.get('one:22')).toBe('SHA256:new');
+  });
+
+  it('rereads manual repairs and retains old trust when replacement cannot be saved', async () => {
+    const store = new FileHostKeyStore(filePath);
+    await store.set('one:22', 'SHA256:old');
+    await fs.writeFile(filePath, JSON.stringify({ 'one:22': 'SHA256:manual' }));
+    await expect(store.replace('one:22', 'SHA256:old', 'SHA256:new', () => true)).rejects.toThrow();
+    expect(await store.get('one:22')).toBe('SHA256:manual');
+    const blocker = `${filePath}.${process.pid}.tmp`;
+    await fs.mkdir(blocker);
+    await expect(store.replace('one:22', 'SHA256:manual', 'SHA256:new', () => true)).rejects.toThrow();
+    expect(await store.get('one:22')).toBe('SHA256:manual');
+    expect(await new FileHostKeyStore(filePath).get('one:22')).toBe('SHA256:manual');
+  });
+
   it('returns null for an unknown host', async () => {
     const store = new FileHostKeyStore(filePath);
     expect(await store.get('example.com:22')).toBeNull();
