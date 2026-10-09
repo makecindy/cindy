@@ -16,7 +16,59 @@ import {
   computeExportScale,
   copyPngBlobToClipboard,
   parseSvgIntrinsicSize,
+  svgToPngBlob,
 } from '@/lib/rasterizeToImage';
+
+describe('svgToPngBlob XML contract', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it('serializes HTML labels into valid XML and carries the inherited font to the image', async () => {
+    let decoded: Document | undefined;
+    vi.stubGlobal(
+      'Image',
+      class {
+        src = '';
+        async decode() {
+          decoded = new DOMParser().parseFromString(
+            decodeURIComponent(this.src.slice(this.src.indexOf(',') + 1)),
+            'image/svg+xml',
+          );
+          if (decoded.querySelector('parsererror'))
+            throw new Error(decoded.querySelector('parsererror')!.textContent ?? 'Invalid SVG XML');
+        }
+      },
+    );
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({
+      fillRect: vi.fn(),
+      drawImage: vi.fn(),
+    } as unknown as CanvasRenderingContext2D);
+    const blob = new Blob(['isolated encoder'], { type: 'image/png' });
+    vi.spyOn(HTMLCanvasElement.prototype, 'toBlob').mockImplementation((callback) =>
+      callback(blob),
+    );
+    // Namespace is inferred at the foreignObject HTML integration point.
+    // Explicit xmlns from real Mermaid is covered in Chromium; JSDOM's XML
+    // serializer incorrectly duplicates that attribute.
+    await expect(
+      svgToPngBlob(
+        '<svg viewBox="0 0 100 50"><foreignObject width="100" height="50"><div>第一行<br>第二行&nbsp;&amp;</div></foreignObject></svg>',
+        { fontFamily: 'Arial, sans-serif' },
+      ),
+    ).resolves.toBe(blob);
+    expect(decoded?.querySelector('br')?.namespaceURI).toBe('http://www.w3.org/1999/xhtml');
+    expect(decoded?.querySelector('div')?.textContent).toBe('第一行第二行\u00a0&');
+    expect(decoded?.documentElement.getAttribute('width')).toBe('100');
+    expect(decoded?.documentElement.getAttribute('height')).toBe('50');
+    expect(decoded?.documentElement.getAttribute('style')).toContain(
+      'font-family: Arial, sans-serif',
+    );
+    // Actual image decoding, canvas encoding and visible label pixels are covered
+    // by scripts/check-mermaid-copy.mjs with real production components/Chromium.
+  });
+});
 
 describe('copyPngBlobToClipboard', () => {
   afterEach(() => {

@@ -3,6 +3,8 @@ import { resolve } from 'node:path';
 import ts from 'typescript';
 import { expect, it, vi } from 'vitest';
 import { appendAutoReviewUserIntent, AUTO_REVIEW_DELEGATED_CONTINUATION, AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT, MAIN_OWNED_SEND_CONTEXT, type SendOptions } from '@cindy/maker-core';
+import { HOST_ONLY_AGENT_PREFIX, buildMakerUserMessage, sanitizeQueuedMessageForPersistence } from '../../../shared/agentInputQueue.js';
+import { redactInputProjectionForSharedGuest } from '../../device-link/sharedTaskMessageOrigin.js';
 
 const source = readFileSync(resolve(__dirname, '..', 'register.ts'), 'utf8');
 const compile = (code: string) => ts.transpileModule(code, {
@@ -73,9 +75,9 @@ it('builds a durable queued plugin input without promoting plugin text to user i
   const end = source.indexOf('  const orcaInterAgentDispatcher:', start);
   expect(start).toBeGreaterThan(0);
   const createOpts = { model: 'm', effort: 'high', permissionMode: 'auto', workingDir: '/answer' };
-  const build = new Function('buildCreateOptsForQueuedSession', 'permissionModeOrAsk', 'UI_ACTION_TRIGGER_PREFIX',
+  const build = new Function('buildCreateOptsForQueuedSession', 'permissionModeOrAsk', 'UI_ACTION_TRIGGER_PREFIX', 'HOST_ONLY_AGENT_PREFIX',
     compile(source.slice(start, end) + '\nreturn buildSessionControlInputItem;'))(
-      vi.fn(async () => createOpts), (mode: string) => mode, '[UI_ACTION_TRIGGER]',
+      vi.fn(async () => createOpts), (mode: string) => mode, '[UI_ACTION_TRIGGER]', HOST_ONLY_AGENT_PREFIX,
     );
   const base = { targetSessionId: 'lead', clientId: 'plugin-input', message: 'Plugin instructions', persistedContent: 'Plugin instructions', meta: {} };
   const queued = JSON.parse(JSON.stringify(await build({ ...base, autoReviewUserText: { kind: 'delegated-continuation' } })));
@@ -92,9 +94,9 @@ it('keeps host receipts hidden in the queue while the model text omits the trigg
   const start = source.indexOf('  async function buildSessionControlInputItem(params: {');
   const end = source.indexOf('  const orcaInterAgentDispatcher:', start);
   const createOpts = { model: 'm', effort: 'high', permissionMode: 'auto', workingDir: '/answer' };
-  const build = new Function('buildCreateOptsForQueuedSession', 'permissionModeOrAsk', 'UI_ACTION_TRIGGER_PREFIX',
+  const build = new Function('buildCreateOptsForQueuedSession', 'permissionModeOrAsk', 'UI_ACTION_TRIGGER_PREFIX', 'HOST_ONLY_AGENT_PREFIX',
     compile(source.slice(start, end) + '\nreturn buildSessionControlInputItem;'))(
-      vi.fn(async () => createOpts), (mode: string) => mode, '[UI_ACTION_TRIGGER]',
+      vi.fn(async () => createOpts), (mode: string) => mode, '[UI_ACTION_TRIGGER]', HOST_ONLY_AGENT_PREFIX,
     );
   const receipt = '[任务回执] 后台任务已完成。task_id: d-1';
   const queued = await build({
@@ -103,6 +105,24 @@ it('keeps host receipts hidden in the queue while the model text omits the trigg
   });
   // Queue rows mask on `text`; the prefix stays there and is dropped at wire assembly.
   expect(queued).toMatchObject({ text: `[UI_ACTION_TRIGGER]${receipt}`, persistedContent: `[UI_ACTION_TRIGGER]${receipt}`, agentOmitsTriggerPrefix: true });
+  // A group DM has a private wire envelope and a separate safe durable body.
+  // Keep the queue row hidden without substituting the safe body into the model input.
+  const envelope = '[Group source: Private group (group-private); lane: private-lane]\n\nMessage body';
+  const groupInput = await build({
+    targetSessionId: 'lead', clientId: 'bot-dm:fixture', meta: {},
+    message: envelope, persistedContent: '[UI_ACTION_TRIGGER]Message body',
+    origin: { kind: 'session', senderSessionId: 'private-lane', displayText: envelope },
+  });
+  expect(groupInput).toMatchObject({ text: '[UI_ACTION_TRIGGER]Message body', agentOmitsTriggerPrefix: true,
+    persistedContent: '[UI_ACTION_TRIGGER]Message body', chatMessage: { content: '[UI_ACTION_TRIGGER]Message body' } });
+  expect(buildMakerUserMessage(groupInput)).toMatchObject({ content: envelope });
+  const snapshot = sanitizeQueuedMessageForPersistence(groupInput);
+  expect(snapshot[HOST_ONLY_AGENT_PREFIX]).toBeUndefined();
+  expect(snapshot.text).toBe('[UI_ACTION_TRIGGER]Message body');
+  expect(snapshot.origin).toMatchObject({ kind: 'session', displayText: '[UI_ACTION_TRIGGER]Message body' });
+  expect(JSON.stringify(snapshot)).not.toContain('Group source:');
+  const guest = redactInputProjectionForSharedGuest({ pendingQueue: [groupInput], recovery: { item: groupInput } });
+  expect(JSON.stringify(guest)).not.toMatch(/Private group|group-private|private-lane|Group source/);
   // Ordinary prefixed synthetic input (continue prompts) is untouched.
   const continueItem = await build({
     targetSessionId: 'lead', clientId: 'c', meta: {},

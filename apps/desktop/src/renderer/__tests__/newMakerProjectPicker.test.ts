@@ -1702,9 +1702,13 @@ describe('Shared create project picker', () => {
     const body = derive.slice(0, derive.indexOf('}, ['));
     // 本机分支行为不变。
     expect(body).toContain('if (!usesDeviceCatalog) return localProviderIdForDraft;');
-    // 远程分支按**被控端**目录 + 草稿当前模型复算,用与 main 同源的解析函数。
+    // 远程分支按**模型目录所在电脑**的目录 + 草稿当前模型复算,用与 main 同源的解析函数。
+    // 目录通常就是被控端的;Agent 在另一台电脑运行时只取那台开放了远程调用的供应商(2026-10-09)。
     expect(body).toContain('effectiveSourceIdForModel(');
-    expect(body).toContain('deviceProviders,');
+    expect(body).toContain('agentCatalogProviders,');
+    expect(newMakerDraftRouteSource).toContain(
+      '() => (effectiveAgentDeviceId ? remoteAgentProviders(deviceProviders) : deviceProviders),',
+    );
     expect(body).toContain('draftInitialModel,');
     expect(body).toContain('return deviceLinkInitial?.providerId || effectiveSourceIdForModel(');
   });

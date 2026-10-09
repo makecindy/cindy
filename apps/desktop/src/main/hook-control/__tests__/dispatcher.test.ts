@@ -14,6 +14,7 @@ import { setMainLocale } from '../../i18n';
 
 import {
   HOOK_FEATURE_MESSAGE_OPS,
+  HOOK_FEATURE_SESSION_RESULT,
   HOOK_FEATURE_TELEGRAM_CARD_OPS,
   HOOK_FEATURE_TELEGRAM_COMMANDS,
   HOOK_FEATURE_TELEGRAM_FINAL_OPS,
@@ -220,6 +221,7 @@ function makeDispatcher(overrides?: {
   subscribeUiSessionIntervention?: HookDispatcherDeps['subscribeUiSessionIntervention'];
   subscribeUiTurnDispatching?: HookDispatcherDeps['subscribeUiTurnDispatching'];
   subscribeUiTurnUndispatched?: HookDispatcherDeps['subscribeUiTurnUndispatched'];
+  subscribeChannelTurn?: HookDispatcherDeps['subscribeChannelTurn'];
   accountInitiallyActive?: boolean;
   log?: HookDispatcherDeps['log'];
 }) {
@@ -242,11 +244,43 @@ function makeDispatcher(overrides?: {
     subscribeUiSessionIntervention: overrides?.subscribeUiSessionIntervention,
     subscribeUiTurnDispatching: overrides?.subscribeUiTurnDispatching,
     subscribeUiTurnUndispatched: overrides?.subscribeUiTurnUndispatched,
+    subscribeChannelTurn: overrides?.subscribeChannelTurn,
     accountInitiallyActive: overrides?.accountInitiallyActive,
     log: overrides?.log ?? noopLog,
   });
   return { d, bindings, fr };
 }
+
+describe('background results during normal turn delivery', () => {
+  it.each(['telegram:dm:bot:user:g0', 'slack:T:C:1.2'])('%s observes the next turn before the previous run returns', async (externalKey) => {
+    let signal!: Parameters<NonNullable<HookDispatcherDeps['subscribeChannelTurn']>>[0];
+    const fr = fakeRunner();
+    const watches: HookContinuationWatchRequest[] = [];
+    fr.runner.watchContinuation = (req) => { watches.push(req); req.onClaim(); return vi.fn(); };
+    const bindings = memoryBindings();
+    bindings.findBySession = (sessionId) => bindings.get('conn-1', externalKey) === sessionId
+      ? [{ connectionId: 'conn-1', externalKey }] : [];
+    const { d } = makeDispatcher({ runner: fr.runner, bindings,
+      subscribeChannelTurn: (cb) => { signal = cb; return vi.fn(); },
+    });
+    const c = collector();
+    d.onConnected('conn-1', c.send, [HOOK_FEATURE_SESSION_RESULT]);
+    await d.handleDispatch('conn-1', dispatch({ externalKey }), c.send);
+    await tick();
+    const req = fr.calls[0]!;
+    signal(req.sessionId, req.workingDir, 'starting');
+    expect(watches).toHaveLength(0);
+    req.onTurnTerminal?.();
+    signal(req.sessionId, req.workingDir, 'starting');
+    expect(watches).toHaveLength(1);
+    watches[0]!.onEnd({ status: 'ok', finalText: 'next result', errorMessage: null, durationMs: 1 });
+    fr.finish({ finalText: 'original result' });
+    await tick();
+    expect(c.ofType('turn.end').map((frame) => [frame.payload.background, frame.payload.finalText]))
+      .toEqual([[true, 'next result'], [undefined, 'original result']]);
+    d.dispose();
+  });
+});
 
 describe('post-terminal runtime recovery delivery', () => {
   it.each([

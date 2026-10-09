@@ -212,3 +212,21 @@ describe('teammate result attachment history', () => {
     expect(messages.find(message => message.clientId === 'final')?.botTaskResults).toEqual([result]);
   });
 });
+
+// Both initial history and live message insertion use the same stored-row projection.
+describe('private group reply source', () => {
+  it('keeps group provenance on assistant rows without relabeling normal private replies', async () => {
+    const id = sid('group-private-source');
+    transportMocks.listMessages.mockResolvedValueOnce([
+      { id: 'group-reply', clientId: 'group-reply', sessionId: id, role: 'assistant', content: 'Reply',
+        agentMeta: { sourceGroup: { groupId: 'g-1', name: 'Design' } }, createdAt: Date.now() },
+      { id: 'private-reply', clientId: 'private-reply', sessionId: id, role: 'assistant', content: 'Private',
+        agentMeta: null, createdAt: Date.now() },
+    ] as never);
+    makerChatStore.ensureInitialMessages(id);
+    await vi.waitFor(() => expect(makerChatStore.getSnapshot(id).historyLoaded).toBe(true));
+    const messages = makerChatStore.getSnapshot(id).messages;
+    expect(messages.find(m => m.clientId === 'group-reply')).toMatchObject({ role: 'assistant', sourceGroup: { groupId: 'g-1', name: 'Design' } });
+    expect(messages.find(m => m.clientId === 'private-reply')?.sourceGroup).toBeUndefined();
+  });
+});

@@ -1,5 +1,5 @@
 import type { AgentKind } from '@cindy/maker-core';
-import type { AuthStrategy } from '@cindy/model-providers';
+import { isCodexGatewayWireModel, type AuthStrategy } from '@cindy/model-providers';
 import path from 'node:path';
 
 import { isCredentialModeSwitchBusyError } from '../maker-host/codex-credential-switch.js';
@@ -553,11 +553,11 @@ function resolveWorkerConfig(params: {
 }
 
 export function budgetModelRequiresApiKey(agent: AgentKind, model: string, hasApiKey: boolean): boolean {
-  return agent === 'codex' && model.startsWith('codex/') && !hasApiKey;
+  return agent === 'codex' && isCodexGatewayWireModel(model) && !hasApiKey;
 }
 
 export function budgetModelRequiresApiKeyMessage(model: string): string {
-  return `模型 "${model}"（codex/ 路由）需要先在设置里连接 Cindy AI 才能使用。`;
+  return `模型 "${model}"（openai-codex/ 或 codex/ 路由）需要先在设置里连接 Cindy AI 才能使用。`;
 }
 
 /** agent 的人类可读名,用于 preflight 失败信息。 */

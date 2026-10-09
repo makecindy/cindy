@@ -23,6 +23,7 @@ import {
   HOOK_FEATURE_GROUP_RELAY_RECIPIENT,
   HOOK_FEATURE_LIFECYCLE_ANNOUNCEMENT,
   HOOK_FEATURE_MULTI_TEAM,
+  HOOK_FEATURE_SESSION_RESULT,
   HOOK_FEATURE_PROVIDER_BIND,
   HOOK_FEATURE_PROVIDER_BEHAVIOR,
   HOOK_FEATURE_PROVIDER_PREFS,
@@ -108,60 +109,11 @@ import {
 import { parseTelegramConnectUrl } from './telegramDeepLink.js';
 import { parseXConnectUrl, xProfileUrlOrNull } from './xDeepLink.js';
 import type { HookTransport, HookTransportOpts, HookTransportStatus } from './transport.js';
+import { providerForExternalKey, providerForTaskDispatch } from './providerRouting.js';
+export { providerForExternalKey, providerForTaskDispatch } from './providerRouting.js';
 
 /** dispatcher / bindings 的 connectionId 基础键；运行时追加账号与 provider。 */
 export const SLACK_HOOK_CONNECTION_ID = 'slack';
-
-/** Legacy Slack channel lane used before provider-prefixed external keys. */
-function isLegacySlackExternalKey(externalKey: string): boolean {
-  return /^[A-Z][A-Z0-9]*:[A-Z][A-Z0-9]*:\d+(?:\.\d+)?$/.test(externalKey);
-}
-
-/** Pre-provider-prefix Slack DM lane accepted only for source-less/Slack traffic. */
-function isLegacySlackDmExternalKey(externalKey: string): boolean {
-  return /^dm:(?:[A-Z][A-Z0-9]*:){1,2}g\d+$/.test(externalKey);
-}
-
-/**
- * Route only the providers implemented by this client.  Missing source is
- * retained solely for legacy Slack servers; Telegram and X always have both an
- * explicit source and the provider-prefixed lane key from their wire contracts.
- * A source/key disagreement fails closed instead of letting a future or
- * compromised provider inherit Slack permissions and prompt semantics.
- */
-export function providerForTaskDispatch(
-  payload: Pick<import('@cindy/slack-hook-protocol').TaskDispatchPayload, 'externalKey' | 'source'>,
-): HookProvider | null {
-  const telegramKey = payload.externalKey.startsWith('telegram:');
-  const xKey = payload.externalKey.startsWith('x:');
-  const slackKey =
-    payload.externalKey.startsWith('slack:') ||
-    payload.externalKey.startsWith('team-slack:') ||
-    // Pre-prefix Slack channel lane: <team>:<channel>:<message timestamp>.
-    isLegacySlackExternalKey(payload.externalKey) ||
-    isLegacySlackDmExternalKey(payload.externalKey);
-  const source = payload.source?.im;
-  if (source === undefined) return slackKey ? 'slack' : null;
-  if (source === 'telegram') return telegramKey ? 'telegram' : null;
-  if (source === 'x') return xKey ? 'x' : null;
-  if (source === 'slack') return slackKey ? 'slack' : null;
-  return null;
-}
-
-/** Route archive frames only for lane-key formats owned by implemented providers. */
-export function providerForExternalKey(externalKey: string): HookProvider | null {
-  if (externalKey.startsWith('telegram:')) return 'telegram';
-  if (externalKey.startsWith('x:')) return 'x';
-  if (
-    externalKey.startsWith('slack:') ||
-    externalKey.startsWith('team-slack:') ||
-    isLegacySlackExternalKey(externalKey) ||
-    isLegacySlackDmExternalKey(externalKey)
-  ) {
-    return 'slack';
-  }
-  return null;
-}
 
 /**
  * group.message 的本地持久化 owner 只能来自 server 针对本次扇出的权威
@@ -692,6 +644,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
     requiredFeatures: telegramProviderBaseFeatures,
     helloFeatures: [
       ...telegramProviderBaseFeatures,
+      HOOK_FEATURE_SESSION_RESULT,
       HOOK_FEATURE_GROUP_RELAY,
       HOOK_FEATURE_GROUP_RELAY_RECIPIENT,
       HOOK_FEATURE_PROVIDER_BEHAVIOR,
@@ -1890,6 +1843,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
 
   /** Slack legacy 线的 hello 能力声明(provider-neutral 线各自在 config.helloFeatures)。 */
   const SLACK_HELLO_FEATURES: readonly string[] = [
+    HOOK_FEATURE_SESSION_RESULT,
     HOOK_FEATURE_MULTI_TEAM,
     HOOK_FEATURE_SESSION_PICKER,
   ];

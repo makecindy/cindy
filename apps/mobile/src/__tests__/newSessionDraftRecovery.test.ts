@@ -25,6 +25,7 @@ function fixture() {
     setAttachments: (value: unknown[]) => { state.files = value; },
     setPlanModeDraftOn: (value: boolean) => { state.plan = value; },
     setDraft: vi.fn((value: typeof state.draft) => { state.draft = value; }),
+    setRemoteAgentChoice: vi.fn(),
   };
   const compiled = ts.transpileModule(`const apply = ${expression.getText(source)};`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
   const apply = new Function(...Object.keys(bindings), `${compiled}\nreturn apply;`)(...Object.values(bindings));
@@ -49,6 +50,20 @@ it.each([true, false])('restores Plan=%s and makes recovered text immediately av
   expect(f.userTouchedWorkspaceRef.current && f.userTouchedRuntimeRef.current && f.appliedPermissionMemoryRef.current).toBe(true);
   // A previously captured runtime preference continuation is now stale.
   expect(f.runtimeActionSeqRef.current).not.toBe(10);
+});
+
+it('splits a saved remote Agent back into the remote choice and leaves the draft local', () => {
+  const f = fixture();
+  const saved = { ...DEFAULT_NEW_SESSION_DRAFT, firstMessage: 'hi', agentKind: 'codex' as const, model: 'gpt-5.5',
+    providerId: 'openai', effort: 'high', fastMode: true, agentDeviceId: 'share:s1' };
+  f.apply(saved, [], undefined, 'controlled-a');
+  expect(f.state.draft).not.toHaveProperty('agentDeviceId');
+  expect(f.setRemoteAgentChoice).toHaveBeenCalledWith({
+    controlledDeviceId: 'controlled-a',
+    pick: { deviceId: 'share:s1', agentKind: 'codex', model: 'gpt-5.5', providerId: 'openai', effort: 'high', fastMode: true },
+  });
+  f.apply({ ...DEFAULT_NEW_SESSION_DRAFT, firstMessage: 'local' }, []);
+  expect(f.setRemoteAgentChoice).toHaveBeenLastCalledWith(null);
 });
 
 it('uses the same text recovery without inventing a Plan snapshot for legacy stashes', () => {

@@ -70,7 +70,7 @@ export function companionConversationItems(items: readonly MobileMessageRenderIt
     }
     if (message.systemCardType) return true;
     if (message.kind === 'thinking' || message.kind === 'tool') return false;
-    return message.kind !== 'assistant' || message.turnCompleted || sealed.has(item.key) || isDelivery(item)
+    return message.kind !== 'assistant' || Boolean(message.sourceGroup) || message.explicitDelivery || message.turnCompleted || sealed.has(item.key) || isDelivery(item)
       || message.isTurnFinalAssistant && !deliveredAfter.has(item.key);
   });
 }

@@ -1,5 +1,6 @@
 import type { AgentKind } from '../types/common.js';
 import type { AgentCredentialMode } from '../interfaces/auth-adapter.js';
+import { isCodexGatewayWireModel } from '@cindy/model-providers/classification';
 
 export interface ResolveAgentCredentialModeOptions {
   agentKind: AgentKind;
@@ -7,17 +8,15 @@ export interface ResolveAgentCredentialModeOptions {
   model?: string | null;
 }
 
-/** Cindy Provider 中由 Codex Responses 上游实现远程压缩的模型路由。 */
+/** Cindy Provider 中由 Codex Responses 上游实现远程压缩的模型路由。`openai-codex/` 与 `codex/` 都算。 */
 export function isCindyProviderCodexRemoteCompactionRoute(input: {
   providerId: string | null | undefined;
   model: string | null | undefined;
 }): boolean {
   const providerId = input.providerId?.trim() || null;
-  const model = input.model?.trim() ?? '';
   return (
     (providerId === null || providerId === 'xd') &&
-    model.startsWith('codex/') &&
-    model.length > 'codex/'.length
+    isCodexGatewayWireModel(input.model)
   );
 }
 
@@ -41,7 +40,7 @@ export function resolveAgentCredentialMode(
   if (providerId) return 'provider-oauth';
 
   const model = options.model?.trim() ?? '';
-  if (model.startsWith('codex/')) return 'gateway-key';
+  if (isCodexGatewayWireModel(model)) return 'gateway-key';
   if (model.startsWith('chatgpt/') || model.startsWith('xai/')) return 'provider-oauth';
   return undefined;
 }

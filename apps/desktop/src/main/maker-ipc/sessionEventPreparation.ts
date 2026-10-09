@@ -116,7 +116,7 @@ export interface PrepareSessionEventDeps {
   readonly silentStopTurnLeaseGate: Pick<SilentStopTurnLeaseGate, 'turnLeaseIdForEvent'>;
   readonly agentInputCoordinatorHolder: Pick<
     AgentInputCoordinator,
-    'onTurnEvent' | 'noteSuppressedTerminalError' | 'getActiveInputClientId' | 'getActiveInputClientIds'
+    'onTurnEvent' | 'noteSuppressedTerminalError' | 'getActiveInputClientId' | 'getActiveInputClientIds' | 'isActiveTaskCoordination'
   > | null;
   readonly handleSilentStopTurnEnd: (
     session: Session,
@@ -168,7 +168,10 @@ export function prepareSessionEvent(
       },
     };
   }
+  const taskCoordination = event.turnScope !== 'background'
+    && (deps.agentInputCoordinatorHolder?.isActiveTaskCoordination?.(session.id, event.sessionTurnGeneration) ?? false);
   if (event.type === 'text' && event.standaloneText === true) {
+    if (taskCoordination && !event.runtimeRecovery) return;
     if (isQuietScheduledOutput(event) && !event.runtimeRecovery) return;
     // Deliver through the existing persisted-row channel only. Sending a text
     // event as well would let older renderers adopt the notice as their active
@@ -204,7 +207,8 @@ export function prepareSessionEvent(
         ...event,
         agentMeta: {
           ...event.agentMeta,
-          botPrivateReply: isBotPrivateInput(activeInputId),
+          botPrivateReply: isBotPrivateInput(activeInputId) || (taskCoordination && !event.runtimeRecovery),
+          botTaskCoordination: taskCoordination && !event.runtimeRecovery,
           // A group-lane turn is delivered into the group chat; its hidden Session never
           // raises completion/error attention of its own (docs/product-rules/bot-group-chat.md §3).
           ...(isBotGroupClientId(activeInputId) ? { botGroupLane: true } : {}),
@@ -568,6 +572,7 @@ export function prepareSessionEvent(
     event,
     attributedEvent,
     botTaskResultInputIds,
+    taskCoordination,
     broadcastEvent,
     eventAgentMeta,
     pendingContextSnapshot,

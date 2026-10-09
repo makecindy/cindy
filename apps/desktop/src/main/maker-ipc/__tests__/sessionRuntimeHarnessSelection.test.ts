@@ -56,7 +56,7 @@ function setup(running = false) {
     pendingRevision: (id) => pending.revision!(id),
     read: vi.fn(async () => effective),
     resolve: vi.fn(async (profile) => ({ ...profile, providerId: profile.providerId ?? 'openai' })),
-    stage: (id, profile, assertCurrent) =>
+    stage: (id, profile, assertCurrent, beforeMutation) =>
       performSessionAgentSwitch(switchDeps, {
         sessionId: id,
         targetAgentKind: profile.agentKind,
@@ -66,6 +66,7 @@ function setup(running = false) {
         fastMode: profile.fastMode,
         runtimeSource: 'agent',
         assertSelectionCurrent: assertCurrent,
+        beforeMutation,
       }),
     pending: (id) => pending.get(id),
   };

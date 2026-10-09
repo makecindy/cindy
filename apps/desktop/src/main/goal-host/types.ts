@@ -152,6 +152,7 @@ export interface SessionLike {
   ): Promise<SessionSendResult>;
   onEvent(listener: (event: AgentEvent) => void): () => void;
   getStatus?(): SessionStatus;
+  getTurnGeneration?(): number;
   isTurnRunning(): boolean;
   abort(): Promise<void>;
 }

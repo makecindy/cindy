@@ -86,7 +86,7 @@ describe('bundled model settings integrity', () => {
   });
 
   it.each(['gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'].flatMap(
-    (model) => [`openai/${model}`, `codex/${model}`, model],
+    (model) => [`openai/${model}`, `openai-codex/${model}`, `codex/${model}`, model],
   ))(
     'shows known tiers for Gateway %s without opening them', (id) => {
     setActiveCatalog(BUNDLED_CATALOG);
