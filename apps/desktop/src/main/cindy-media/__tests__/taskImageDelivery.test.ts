@@ -12,6 +12,7 @@ import {
   claudeScratchpadPath,
   claudeScratchpadTempBase,
   materializeTaskImageText,
+  materializeTaskImageTextResult,
   readTaskImage,
   restoreTaskImageRows,
   taskImageRoots,
@@ -133,6 +134,25 @@ describe('task image delivery', () => {
     expect(raw.prepare('SELECT count(*) AS n FROM media_refs').get()).toEqual({ n: 1 });
     await fs.rm(source);
     expect(await fs.readFile(resolveSafe(url).absPath)).toEqual(PNG);
+  });
+
+  it.each(['deleted', 'replaced'])('reuses an imported snapshot after the source is %s', async (change) => {
+    const source = path.join(work, 'snapshot.png');
+    await fs.writeFile(source, PNG);
+    const publicText = `![shot](${source})`;
+    state.afterIngest = async () => {
+      if (change === 'deleted') await fs.rm(source);
+      else await fs.writeFile(source, Buffer.concat([PNG, Buffer.from([2])]));
+    };
+    const result = await materializeTaskImageTextResult('s', `过程。\n\n${publicText}`);
+    const projected = rewriteTaskImageReferences(publicText, result.replacements);
+    const collected = await collectOutboundAttachments(projected, [], {
+      refScanText: result.text, resolveImageUrl: resolveSafe, allowedFileRoots: [work], log: { warn() {} },
+    });
+    expect(collected.text).toBe('🖼️ _shot_');
+    expect(collected.attachments).toHaveLength(1);
+    expect(collected.attachments[0].dataBase64).toBe(PNG.toString('base64'));
+    expect(raw.prepare('SELECT count(*) AS n FROM media_refs').get()).toEqual({ n: 1 });
   });
 
   it.each([true, false])('handles an interrupted import state (source remains=%s)', async (sourceRemains) => {

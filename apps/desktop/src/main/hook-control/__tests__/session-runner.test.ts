@@ -20,6 +20,8 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import fs from 'node:fs/promises';
+import * as taskImages from '../../cindy-media/taskImageDelivery';
+import { rewriteTaskImageReferences } from '../../cindy-media/taskImageMarkdown';
 import type { AgentEvent, Effort, PermissionMode, PermissionModeState } from '@cindy/maker-core';
 import type { CatalogModel, ProviderView } from '@cindy/model-providers';
 
@@ -3326,6 +3328,39 @@ describe('watchContinuation: 观察桌面端续跑并回流', () => {
   async function flush(times = 30): Promise<void> {
     for (let i = 0; i < times; i++) await Promise.resolve();
   }
+
+  it.each(['deleted', 'replaced'])('keeps public text and attachments coherent when the source is %s', async (change) => {
+    const source = '/private/task/shot.png';
+    const firstUrl = `cindy-media://blobs/${'a'.repeat(64)}.png`;
+    let reads = 0;
+    const materialize = vi.fn(async (_id: string, text: string) => {
+      const url = ++reads === 1 ? firstUrl
+        : change === 'replaced' ? `cindy-media://blobs/${'b'.repeat(64)}.png` : null;
+      const replacements = new Map(url ? [[source, url]] : []);
+      return { text: rewriteTaskImageReferences(text, replacements), replacements, failures: url ? [] : [source] };
+    });
+    const snapshot = vi.spyOn(taskImages, 'materializeTaskImageTextResult').mockImplementation(materialize);
+    const legacy = vi.spyOn(taskImages, 'materializeTaskImageText').mockImplementation(async (id, text) => (await materialize(id, text)).text);
+    const read = vi.spyOn(fs, 'readFile').mockImplementation(async (file) =>
+      Buffer.from(String(file).includes('b'.repeat(64)) ? 'replaced bytes' : 'first bytes'));
+    try {
+      fakeMaker.getSession.mockReturnValueOnce(makeManualSession('sess-live'));
+      const onEnd = vi.fn();
+      createMakerHookSessionRunner({ log }).watchContinuation!(watchReq({ onEnd }).req as never);
+      const emit = h.eventCbs.get('sess-live')!;
+      emit({ type: 'text', data: { text: '我先检查。', isFinal: true } });
+      emit({ type: 'tool_use', data: { toolName: 'Read', toolUseId: 'read-1', input: {} } });
+      emit({ type: 'text', data: { text: `结果：![shot](${source})`, isFinal: true } });
+      emit({ type: 'done', data: null });
+      await vi.waitFor(() => expect(onEnd).toHaveBeenCalledOnce());
+      const outcome = onEnd.mock.calls[0]![0];
+      expect(outcome.finalText).toBe('结果：🖼️ _shot_');
+      expect(outcome.attachments).toHaveLength(1);
+      expect(outcome.attachments[0].dataBase64).toBe(Buffer.from('first bytes').toString('base64'));
+      expect(materialize).toHaveBeenCalledOnce();
+      expect(materialize.mock.calls[0][1]).toContain('我先检查。');
+    } finally { snapshot.mockRestore(); legacy.mockRestore(); read.mockRestore(); }
+  });
 
   it.each(['run', 'continuation'].flatMap((entry) =>
     [false, true].flatMap((remote) => [false, true].map((outputLimit) => ({ entry, remote, outputLimit }))),

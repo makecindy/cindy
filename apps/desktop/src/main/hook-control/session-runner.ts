@@ -32,7 +32,8 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 
 import { app } from 'electron';
-import { materializeTaskImageText } from '../cindy-media/taskImageDelivery';
+import { materializeTaskImageTextResult } from '../cindy-media/taskImageDelivery';
+import { rewriteTaskImageReferences } from '../cindy-media/taskImageMarkdown';
 import { stripInternalWebCitations } from '@cindy/maker-shared/internal-citation';
 import { MAIN_OWNED_SEND_CONTEXT } from '@cindy/maker-core';
 
@@ -460,9 +461,12 @@ async function collectOutboundForFinalText(
   // Remote runtimes do not grant access to this host's files or media cache.
   // The attachment collector's managed-image path is independent of file roots.
   if (allowedFileRoots.length === 0) return { finalText: stripInternalWebCitations(texts.publicText) };
-  const publicText = await materializeTaskImageText(sessionId, stripInternalWebCitations(texts.publicText));
-  const wholeTurn = texts.wholeTurn === texts.publicText ? publicText
-    : await materializeTaskImageText(sessionId, stripInternalWebCitations(texts.wholeTurn));
+  // The public projection is drawn from this whole turn. Import its image URLs
+  // once so a temporary source changing cannot split the body from its attachment.
+  const materialized = await materializeTaskImageTextResult(sessionId, stripInternalWebCitations(texts.wholeTurn));
+  const wholeTurn = materialized.text;
+  const publicText = texts.wholeTurn === texts.publicText ? wholeTurn
+    : rewriteTaskImageReferences(stripInternalWebCitations(texts.publicText), materialized.replacements);
   if (!hasOutboundRefs(wholeTurn) && extraImageAbsPaths.length === 0) {
     return { finalText: publicText };
   }

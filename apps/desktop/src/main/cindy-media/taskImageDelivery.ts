@@ -224,24 +224,29 @@ async function captureTaskImages(sessionId: string, client?: DbClient) {
 
 /** Channel adapter: same source validation/import as durable chat. Never rewrites Agent history. */
 export async function materializeTaskImageText(sessionId: string, text: string): Promise<string> {
+  return (await materializeTaskImageTextResult(sessionId, text)).text;
+}
+
+/** Keep the existing replacement table so projections share the same imported bytes. */
+export async function materializeTaskImageTextResult(sessionId: string, text: string) {
   const client = getCurrentDbClientSnapshot()?.client;
-  if (!client || !hasLocalTaskImages(text)) return text;
+  const unchanged = { text, replacements: new Map<string, string>(), failures: [] as string[] };
+  if (!client || !hasLocalTaskImages(text)) return unchanged;
   return withSessionMediaRefLock(client.drizzle, sessionId, () =>
-    materializeTaskImageTextUnlocked(client, sessionId, text),
+    materializeTaskImageTextUnlocked(client, sessionId, unchanged),
   );
 }
 
 async function materializeTaskImageTextUnlocked(
   client: DbClient,
   sessionId: string,
-  text: string,
-): Promise<string> {
-  if (!hasLocalTaskImages(text)) return text;
+  unchanged: Awaited<ReturnType<typeof materializeTaskImageMarkdown>>,
+) {
   let scope: Awaited<ReturnType<typeof captureTaskImages>> = null;
   try {
     scope = await captureTaskImages(sessionId, client);
-    if (!scope) return text;
-    const result = await scope.materialize(text);
+    if (!scope) return unchanged;
+    const result = await scope.materialize(unchanged.text);
     scope.assertStillValid();
     const [current] = await scope.db
       .select({
@@ -264,10 +269,10 @@ async function materializeTaskImageTextUnlocked(
       current.workingDir !== scope.session.workingDir
     )
       throw new Error('task-image: task changed');
-    return result.text;
+    return result;
   } catch {
     await scope?.rollback().catch(() => {});
-    return text;
+    return unchanged;
   }
 }
 
