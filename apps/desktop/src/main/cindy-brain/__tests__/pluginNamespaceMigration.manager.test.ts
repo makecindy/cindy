@@ -282,6 +282,25 @@ describe('GhostManager namespace migration census', () => {
     });
   });
 
+  it('keeps a mismatched legacy Forge install pending and enabled', async () => {
+    await plantLegacyInstall('acme-tool', false, 'agent-forge');
+    manager = createManager({
+      classifyPendingNamespace: (ghostId, marketSyncCompleted = false) => classifyNamespaceMigration({
+        ghostId,
+        builtin: false,
+        installOrigin: readNamespaceMigrationInstallOrigin(() => manager.readApprovedInstallOriginStrict(ghostId)),
+        marketSyncCompleted,
+        marketRecord: null,
+        currentOrganization: { organizationId: 'org-other', orgSlug: 'other', pluginPrefix: 'other' },
+      }),
+    });
+    await manager.reconcilePendingRootNamespaces(true);
+    expect(manager.list()[0]).toMatchObject({ enabled: true, dir: path.join(rootDir, 'acme-tool') });
+    expect(manager.list()[0]?.namespaceState).toBe('pending');
+    expect(manager.list()[0]?.namespace).toBeUndefined();
+    expect(manager.readDeliveryNamespace('acme-tool')).toBeUndefined();
+  });
+
   it.each([false, true])('stops, stamps and restarts an offline resident with in-flight work %s', async (initiallyInFlight) => {
     await plantLegacyInstall('hello');
     vi.useFakeTimers();

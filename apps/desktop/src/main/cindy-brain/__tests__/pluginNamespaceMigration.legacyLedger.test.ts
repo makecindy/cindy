@@ -175,6 +175,31 @@ describe('classifyNamespaceMigration', () => {
   });
 });
 
+describe('legacy Forge ownership exception', () => {
+  const current = { organizationId: 'org-1', orgSlug: 'org-abcdefgh', pluginPrefix: 'acme' };
+
+  it('keeps the install pending when the signed-in organization uses another prefix', () => {
+    expect(classify({
+      ghostId: 'acme-tool', installOrigin: 'agent-forge', marketSyncCompleted: true,
+      currentOrganization: { ...current, pluginPrefix: 'other' },
+    })).toEqual({ kind: 'pending', reason: 'awaiting-market-facts' });
+  });
+
+  it('keeps the install pending when the current token has no orgSlug', () => {
+    expect(classify({
+      ghostId: 'acme-tool', installOrigin: 'agent-forge',
+      currentOrganization: { ...current, orgSlug: null },
+    })).toEqual({ kind: 'pending', reason: 'awaiting-organization-namespace' });
+  });
+
+  it('does not apply the prefix exception to a manual import', () => {
+    expect(classify({
+      ghostId: 'acme-tool', installOrigin: 'manual', marketSyncCompleted: true,
+      currentOrganization: current,
+    })).toEqual({ kind: 'commit', namespace: null, basis: 'manual-after-sync' });
+  });
+});
+
 describe('legacy ledger parsing', () => {
   it('ignores a leftover forgeNamespaces field instead of rejecting the census', () => {
     const parsed = parseNamespaceMigrationLedger({

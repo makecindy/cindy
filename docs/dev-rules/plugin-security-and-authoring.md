@@ -605,6 +605,18 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
 
 市场同步补写账本 namespace 的条件只有一条：该行已安装，pluginId、ghostId、scope、organizationId 都与服务端目录一致，而且行上没有 namespace 字段。只补缺失，不覆盖已有值。非法 slug 不写。组织行上的显式 null 也不写成 root。
 
+### 5.2 迁移中按名称判断归属的唯一例外
+
+升级普查里、来源是 Forge 自测（agent-forge）的旧安装，如果 ghostId 以当前组织登记的前缀加连字符开头，就归到当前组织的 orgSlug。这是唯一允许按名称判断归属的例外。
+
+旧 Forge 安装没有市场 pluginId 或其他归属证据。旧客户端本来就按这个前缀给 Forge 自测安装发 Connection 权限，所以按同一前缀迁到当前 orgSlug 不会扩大权限。
+
+- 只对这次升级普查时已经存在的旧安装生效。普查之后新装的 Forge 插件在安装时已经绑定 namespace，不走这条规则。
+- 前缀按当前组织 id 从组织前缀记录查出。ghostId 以前缀加连字符开头时，namespace 取当前 token 的 orgSlug，不是前缀本身。orgSlug 和前缀可以不同。
+- 当前 token 没有合法 orgSlug 时保持待迁移，不写成 root。
+- 当前组织的前缀对不上这个 ghostId 时保持待迁移，插件按旧规则继续运行，不报错。作者以后登录前缀匹配的组织，再完成迁移。
+- 归属一旦写入注册表并确认，再切换组织也不会改这条记录。
+
 ## 6. 作者契约与编写手册同步
 
 `FORGE_GUIDE` 是 agent 替用户编写插件的**唯一教材**，由 `ghost_forge_guide` 现拿现读。
