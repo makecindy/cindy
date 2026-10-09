@@ -29,11 +29,12 @@ describe('ExtraDirsButton path overlap normalization', () => {
 });
 
 describe('pickAndAddExtraDir', () => {
-  it('由调用方提供父目录确认弹窗的本地化文案', async () => {
+  it('可写目录使用任务绑定的系统选择器授权，并确认父目录扩权', async () => {
+    const showOpenDirectory = vi.fn(async () => ({ success: true, path: 'D:\\repo' }));
     vi.stubGlobal('window', {
       electronAPI: {
         dialog: {
-          showOpenDirectory: vi.fn(async () => ({ success: true, path: 'D:\\repo' })),
+          showOpenDirectory,
         },
       },
     });
@@ -43,6 +44,7 @@ describe('pickAndAddExtraDir', () => {
     await pickAndAddExtraDir({
       extraDirs: [],
       workingDir: 'D:/repo/app',
+      writableGrantScope: 'task-directory-grant',
       onChange,
       confirm,
       parentDirectoryConfirm: {
@@ -53,6 +55,7 @@ describe('pickAndAddExtraDir', () => {
       },
     });
 
+    expect(showOpenDirectory).toHaveBeenCalledWith({ writableGrantScope: 'task-directory-grant' });
     expect(confirm).toHaveBeenCalledWith({
       title: 'localized title',
       description: 'localized description: D:/repo',
