@@ -6,7 +6,8 @@ import { registerSessionTagTools, type SessionTagsCallback } from './xdt-helper/
  *
  * 设计:
  *  - server name = `cindy_helper`,essential(常开,不可被用户关闭)
- *  - 所有工具走 `list_tools` / `call_tool` 两个入口,渐进式发现:
+ *  - 通用工具走 `list_tools` / `call_tool` 两个入口,渐进式发现:
+ *    异步提问使用独立的 ask_user_question_async 入口，以便 harness 验证根代理身份。
  *    - 'cindy'   : 只读自省 (get_capabilities / get_current_session_id)
  *    - 'auth'    : 由 Host 保存凭证的供应商授权
  *    - 'history' : 只读查询本地数据库聊天历史与输入队列 (list_workdirs /
@@ -35,6 +36,7 @@ import { z } from 'zod';
 import { registerBotRoutineTools, type BotRoutineCallbacks } from './xdt-helper/botRoutineTools.js';
 import { registerGrokLoginTools, type GrokLoginCallbacks } from './xdt-helper/grok_login.js';
 import { jsonObjectArg } from './json-object-arg.js';
+import { registerAsyncQuestionTool, type AskUserQuestionAsyncCallback } from './xdt-helper/ask_user_question_async.js';
 
 import { XdtHelperToolRegistry } from './lizi_xdtHelperToolRegistry.js';
 import { registerCreateProjectTool, type CreateProjectCallback } from './xdt-helper/create_project.js';
@@ -801,6 +803,7 @@ export interface XdtHelperMcpDeps {
    * set_current_session_title 会被注册; 不注入则不出现在 list_tools 里。
    */
   setCurrentSessionTitle?: SetCurrentSessionTitleDeps['setCurrentSessionTitle'];
+  askUserQuestionAsync?: AskUserQuestionAsyncCallback;
   /**
    * 批量 session 标题更新回调。host 注入后, control 类工具 rename_sessions 会被注册。
    * 工具层负责 dry-run token 护栏; host 负责读取当前标题、校验前置条件和写库。
@@ -1025,6 +1028,24 @@ export function createXdtHelperMcpServer(
     ...(deps.authorizeCall ? { authorizeCall: deps.authorizeCall } : {}),
   }, allowedSurface);
 
+  // A dedicated tool identity lets native Claude enforce root-only provenance
+  // before MCP dispatch. Do not expose an alias through the generic call_tool.
+  const questionTools: Tool[] = [];
+  if (deps.askUserQuestionAsync) {
+    const questions = new XdtHelperToolRegistry();
+    registerAsyncQuestionTool(questions, () => resolveLiziMcpSessionContext(sessionCtx), deps.askUserQuestionAsync);
+    const definition = questions.get('ask_user_question_async')!;
+    const inputSchema = z.strictObject(definition.inputShape);
+    server.registerTool(definition.name, { description: definition.description, inputSchema }, async (args) => {
+      if (!(await allowedSurface()).categories?.has('cindy')) {
+        return errorPayload('CAPABILITY_NOT_AVAILABLE', 'Question UI is unavailable for this task.');
+      }
+      return questions.call(definition.name, args);
+    });
+    questionTools.push({ name: definition.name, description: definition.description,
+      inputSchema: z.toJSONSchema(inputSchema) as Tool['inputSchema'] });
+  }
+
   // Pi already provides direct Bot tools through its native bridge. CC and Codex
   // consume MCP tools/list instead; expose the same registered definitions there.
   // Resolve identity per request: Codex's HTTP server is shared across sessions.
@@ -1062,11 +1083,15 @@ export function createXdtHelperMcpServer(
     }));
     // Codex/remote Claude share one helper factory; rewrite ghost guidance from
     // the request-time session, not the empty factory ctx.
-    server.server.setRequestHandler(ListToolsRequestSchema, async () => ({
-      tools: (await allowedSurface()).categories?.has('bots')
-        ? [...entryTools, ...withCindyGatedBotToolDescriptions(botTools, cindyAvailableForSession(sessionCtx))]
-        : entryTools,
-    }));
+    server.server.setRequestHandler(ListToolsRequestSchema, async () => {
+      const allowed = await allowedSurface();
+      return { tools: [
+        ...entryTools,
+        ...(allowed.categories?.has('cindy') ? questionTools : []),
+        ...(allowed.categories?.has('bots')
+          ? withCindyGatedBotToolDescriptions(botTools, cindyAvailableForSession(sessionCtx)) : []),
+      ] };
+    });
   }
   return server;
 }

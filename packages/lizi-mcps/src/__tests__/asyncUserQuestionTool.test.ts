@@ -1,0 +1,47 @@
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { describe, expect, it, vi } from 'vitest';
+import { createXdtHelperMcpServer } from '../lizi_xdtHelperMcpServer.js';
+import type { LiziMcpSessionContext } from '../types.js';
+
+describe.each(['claude-code', 'pi'] as const)('%s async question MCP', (agentKind) => {
+  it('discovers and calls the same tool with request-time identity and a pending-only receipt', async () => {
+    let context: LiziMcpSessionContext | undefined = {
+      agentKind, workingDir: '/repo', sessionId: 'task-1', sessionInstanceId: 'instance-1',
+      mcpCallerKind: 'root', remoteHostId: 'ssh-host',
+    };
+    const ask = vi.fn(() => 'question-1');
+    const server = createXdtHelperMcpServer({ askUserQuestionAsync: ask }, {
+      agentKind, workingDir: '', getSessionContext: () => context,
+    });
+    const client = new Client({ name: 'question-test', version: '1' });
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    await Promise.all([server.connect(st), client.connect(ct)]);
+    const parse = (result: unknown) => JSON.parse((result as { content: Array<{ text: string }> }).content[0].text);
+    const call = (args: Record<string, unknown>) => client.callTool({ name: 'ask_user_question_async', arguments: args });
+    const questions = [{ question: 'Which scope?', options: [{ label: 'Personal' }, { label: 'Both' }] }];
+    try {
+      const prefix = await client.listTools();
+      expect(prefix.tools.some((tool) => tool.name === 'ask_user_question_async')).toBe(true);
+      const bypass = await client.callTool({ name: 'call_tool', arguments: { name: 'ask_user_question_async', args: { questions } } });
+      expect(bypass.isError).toBe(true);
+      expect(parse(await call({ questions }))).toEqual({ ok: true, request_id: 'question-1', status: 'pending' });
+      expect(ask).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'task-1', remoteHostId: 'ssh-host' }), questions);
+      context = { ...context!, sessionId: 'task-2', sessionInstanceId: 'instance-2' };
+      await call({ questions });
+      expect(ask).toHaveBeenLastCalledWith(expect.objectContaining({ sessionId: 'task-2' }), questions);
+      context = undefined;
+      expect(parse(await call({ questions })).errorCode).toBe('NO_SESSION_CONTEXT');
+      expect(ask).toHaveBeenCalledTimes(2);
+      context = { agentKind, workingDir: '/repo', sessionId: 'child', sessionInstanceId: 'instance', mcpCallerKind: 'descendant' };
+      expect(parse(await call({ questions })).errorCode).toBe('ROOT_REQUIRED');
+      context.mcpCallerKind = 'root';
+      expect((await call({ questions: [...questions, ...questions] })).isError).toBe(true);
+      expect((await call({ questions, sessionId: 'spoofed' })).isError).toBe(true);
+      expect(ask).toHaveBeenCalledTimes(2);
+      ask.mockImplementationOnce(() => { throw new Error('stale instance'); });
+      expect(parse(await call({ questions })).errorCode).toBe('QUESTION_UNAVAILABLE');
+      expect(await client.listTools()).toEqual(prefix);
+    } finally { await client.close(); await server.close(); }
+  });
+});

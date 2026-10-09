@@ -19871,6 +19871,142 @@ describe('CodexAgent MCP thread context hooks', () => {
     return events;
   }
 
+  const asyncQuestionItem = {
+    type: 'agentMessage', id: 'async-question-1', phase: 'final_answer', delivery: 'async',
+    text: 'Proceed?\n- Yes\n- No', questions: [{ title: 'Proceed?', options: ['Yes', 'No'] }],
+  };
+
+  async function runningAsyncQuestion(steer?: () => Promise<unknown>) {
+    const agent = new CodexAgent(createDeps());
+    let turnSeq = 0;
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnStart) return { turn: { id: `async-turn-${++turnSeq}` } };
+      if (method === Method.TurnSteer) return steer ? steer() : {};
+      if (method === Method.TurnInterrupt) return {};
+      return undefined;
+    });
+    const handle = await agent.startSession({ sessionId: 'async-question', model: 'gpt-5.4', workingDir: '/repo' });
+    const decision = deferred<InteractionDecision>();
+    const resolver = vi.fn(async (_request: InteractionRequest) => decision.promise);
+    handle.setInteractionResolver(resolver);
+    const events = await collectAgentEvents(handle);
+    await handle.send({ type: 'user', content: 'Make the change' });
+    const handlers = host.getThreadHandlers()!;
+    const params = { threadId: 'start-thread-id', turnId: 'async-turn-1', item: asyncQuestionItem };
+    handlers.itemStarted?.(params);
+    handlers.itemUpdated?.(params);
+    expect(resolver).not.toHaveBeenCalled();
+    handlers.itemCompleted?.(params);
+    expect(resolver).toHaveBeenCalledOnce();
+    return { host, handle, handlers, params, decision, resolver, events };
+  }
+
+  it('shows an async question once through the existing card and steers its answer without waiting for turn completion', async () => {
+    const { host, handle, handlers, params, decision, resolver, events } = await runningAsyncQuestion();
+    expect(resolver.mock.calls[0]?.[0]).toMatchObject({ kind: 'ask_user_question', questions: [{
+      question: 'Proceed?', options: [{ label: 'Yes' }, { label: 'No' }],
+    }] });
+    handlers.itemCompleted?.(params);
+    expect(resolver).toHaveBeenCalledOnce();
+    decision.resolve({ kind: 'ask_user_question', answers: { 'Proceed?': 'Yes' } });
+    await vi.waitFor(() => expect(host.request.mock.calls.filter(([method]) => method === Method.TurnSteer)).toHaveLength(1));
+    const [, input] = host.request.mock.calls.find(([method]) => method === Method.TurnSteer)!;
+    expect(input).toMatchObject({ expectedTurnId: 'async-turn-1', input: [{ text: expect.stringContaining('A: Yes') }] });
+    handlers.itemCompleted?.(params);
+    expect(resolver).toHaveBeenCalledOnce();
+    expect(events.filter((event) => event.type === 'text')).toHaveLength(0);
+    expect(askUserTurnStartCalls(host)).toHaveLength(1);
+    handlers.turnCompleted?.({ threadId: params.threadId, turn: { id: params.turnId, status: 'completed' } });
+    await waitForExpectation(() => expect(handle.isTurnRunning?.()).toBe(false));
+    await waitForExpectation(() => expect(events.filter((event) => event.type === 'done' && event.turnContinuationId === undefined)).toHaveLength(1));
+    await handle.close();
+  });
+
+  it.each(['accepted', 'rejected'] as const)('handles an async answer whose steer is %s after the original turn finishes', async (outcome) => {
+    const ack = deferred<unknown>();
+    const { host, handle, handlers, params, decision, events } = await runningAsyncQuestion(() => ack.promise);
+    decision.resolve({ kind: 'ask_user_question', answers: { 'Proceed?': 'Yes' } });
+    await vi.waitFor(() => expect(host.request.mock.calls.some(([method]) => method === Method.TurnSteer)).toBe(true));
+    handlers.turnCompleted?.({ threadId: params.threadId, turn: { id: params.turnId, status: 'completed' } });
+    expect(handle.isTurnRunning?.()).toBe(true);
+    if (outcome === 'accepted') ack.resolve({});
+    else ack.reject(Object.assign(new Error('codex app-server turn/steer error -32602: no active turn to steer'), { code: -32602 }));
+    if (outcome === 'rejected') {
+      await vi.waitFor(() => expect(askUserTurnStartCalls(host)).toHaveLength(2));
+      handlers.turnCompleted?.({ threadId: params.threadId, turn: { id: 'async-turn-2', status: 'completed' } });
+    }
+    await waitForExpectation(() => expect(handle.isTurnRunning?.()).toBe(false));
+    expect(askUserTurnStartCalls(host)).toHaveLength(outcome === 'accepted' ? 1 : 2);
+    await waitForExpectation(() => expect(events.filter((event) => event.type === 'done' && event.turnContinuationId === undefined)).toHaveLength(1));
+    await handle.close();
+  });
+
+  it('does not replay an async answer when steer delivery is uncertain', async () => {
+    const { host, handle, handlers, params, decision, events } = await runningAsyncQuestion(async () => {
+      throw new Error('connection lost after dispatch');
+    });
+    decision.resolve({ kind: 'ask_user_question', answers: { 'Proceed?': 'Yes' } });
+    await waitForExpectation(() => expect(events.some((event) => event.type === 'error' && event.data.isTerminal === false)).toBe(true));
+    expect(handle.isTurnRunning?.()).toBe(true);
+    expect(events.filter((event) => event.type === 'done')).toHaveLength(0);
+    handlers.turnCompleted?.({ threadId: params.threadId, turn: { id: params.turnId, status: 'completed' } });
+    await waitForExpectation(() => expect(handle.isTurnRunning?.()).toBe(false));
+    expect(askUserTurnStartCalls(host)).toHaveLength(1);
+    await handle.close();
+  });
+
+  it.each(['stop', 'failed', 'close'] as const)('ignores an async answer after %s', async (action) => {
+    const { host, handle, handlers, params, decision } = await runningAsyncQuestion();
+    if (action === 'stop') await handle.abort();
+    if (action === 'close') await handle.close();
+    if (action === 'failed') handlers.turnCompleted?.({ threadId: params.threadId, turn: { id: params.turnId, status: 'failed' } });
+    decision.resolve({ kind: 'ask_user_question', answers: { 'Proceed?': 'Yes' } });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(host.request.mock.calls.filter(([method]) => method === Method.TurnSteer)).toHaveLength(0);
+    expect(askUserTurnStartCalls(host)).toHaveLength(1);
+    await handle.close();
+  });
+
+  it.each([1, 2])('expires all %i unanswered async cards before completing the task and ignores late answers', async (count) => {
+    const { host, handle, handlers, params, decision, resolver, events } = await runningAsyncQuestion();
+    const lastDecision = deferred<InteractionDecision>();
+    if (count === 2) {
+      handle.setInteractionResolver(async () => lastDecision.promise);
+      handlers.itemCompleted?.({ ...params, item: { ...asyncQuestionItem, id: 'async-question-2',
+        questions: [{ title: 'Last question?', options: null }] } });
+    }
+    handlers.itemCompleted?.({ ...params, item: { type: 'agentMessage', id: 'final',
+      phase: 'final_answer', text: 'Independent work completed.' } });
+    handlers.turnCompleted?.({ threadId: params.threadId, turn: { id: params.turnId, status: 'completed' } });
+    await waitForExpectation(() => expect(events.filter((event) => event.type === 'done')).toHaveLength(1));
+    const doneIndex = events.findIndex((event) => event.type === 'done');
+    expect(events[doneIndex]?.turnContinuationId).toBeUndefined();
+    expect(handle.isTurnRunning?.()).toBe(false);
+    const dismissed = events.filter((event) => event.type === 'interaction_dismissed');
+    expect(dismissed).toHaveLength(count);
+    for (const event of dismissed) {
+      expect(event.data.reason).toBe('turn_completed');
+      expect(events.indexOf(event)).toBeLessThan(doneIndex);
+    }
+    expect(events.some((event) => event.type === 'text'
+      && JSON.stringify(event.data).includes('Independent work completed.'))).toBe(true);
+    expect(events.some((event) => event.type === 'error')).toBe(false);
+    // Neither a repeated completion nor a late item may revive an expired card.
+    handlers.turnCompleted?.({ threadId: params.threadId, turn: { id: params.turnId, status: 'completed' } });
+    handlers.itemCompleted?.(params);
+    expect(resolver).toHaveBeenCalledOnce();
+    decision.resolve({ kind: 'ask_user_question', answers: { 'Proceed?': 'stale' } });
+    lastDecision.resolve({ kind: 'ask_user_question', answers: { 'Last question?': 'free-form answer' } });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(host.request.mock.calls.filter(([method]) => method === Method.TurnSteer)).toHaveLength(0);
+    expect(askUserTurnStartCalls(host)).toHaveLength(1);
+    expect(events.filter((event) => event.type === 'done')).toHaveLength(1);
+    // The user can still start ordinary new work after the expired questions.
+    await handle.send({ type: 'user', content: 'A new task' });
+    expect(askUserTurnStartCalls(host)).toHaveLength(2);
+    await handle.close();
+  });
+
   async function pendingHumanProduct(kind: 'native' | 'dynamic' | 'plan', followupStart?: () => Promise<unknown>) {
     const agent = new CodexAgent(createDeps());
     let turnSeq = 0;
@@ -19939,7 +20075,7 @@ describe('CodexAgent MCP thread context hooks', () => {
     await handle.close();
   });
 
-  it.each(['abort', 'graceful', 'close'] as const)('supports %s while only a confirmation remains and ignores late approval', async (action) => {
+  it.each(['abort', 'graceful', 'close'] as const)('supports %s while only a plan confirmation remains and ignores late approval', async (action) => {
     const { handle, host, decision, events } = await pendingHumanProduct('plan');
     if (action === 'abort') await handle.abort();
     else if (action === 'graceful') await handle.requestGracefulStop?.();

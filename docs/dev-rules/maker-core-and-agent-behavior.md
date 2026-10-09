@@ -307,13 +307,31 @@ sessionRunningRetry 就停。每次因 replacement 关闭而重新入队都计�
   `goal-ownership.native.test.ts` 用隔离的原生运行时验证旧目标恢复后不再自行续跑。
 - **产品 turn 未结算不得结束。** provider `turn/completed` 可以立刻给 SDK turn 落墓碑并
   结算 usage；只有原子挂在该终态边界上的显式 continuation claim 才能挡住产品结束。
-  Codex 提问／计划审阅尚待用户确认时同样保留产品边界：底层可继续独立工作并结束
+  Codex 同步提问／计划审阅尚待用户确认时同样保留产品边界：底层可继续独立工作并结束
   SDK turn，但不能触发完成通知、队列收口或协作任务完成。人工等待使用独立 claim，
   复用 `turnContinuationId`，不能塞进 yield claim 造成回答续跑等待自身。计划审阅必须
   在发布边界前登记；回答／批准后沿原意图续跑，取消／Stop 单次结束且不重复结算 usage。
   起跑回执之前到达的终态先缓冲再核对归属；失败只能走失败终态，不能先以取消回调
   触发定时任务的成功收口。回归见 `agents/codex/index.test.ts` 的 pending confirmation
   与 human continuation 用例，以及 Desktop `sessionEventPipeline.test.ts`。
+  Codex 异步提问使用 `agentMessage.delivery=async` 与结构化 `questions` 接入同一提问
+  流程，不把回退正文当成最终回答。未回答的异步问题不保留产品边界，原轮次结束时自动
+  收起卡片、不代选答案，迟到回答不得续跑。结束前已提交的回答优先通过 `turn/steer`
+  送入原轮次；发送与结束竞态导致原轮次明确拒绝接收时复用人工续跑，发送结果不确定时
+  提示错误且不自动重发。Stop、失败、关闭及被替换问题的迟到回答不得续跑。
+  协议与前缀稳定性实测见 `agents/codex/async-user-input.native.test.ts`，
+  卡片、回传、去重及取消回归见 `agents/codex/index.test.ts`。
+  Claude Code／Pi 通过 `cindy_helper.ask_user_question_async` 复用现有卡片；工具立即返回
+  pending 回执，`Session` 共用 `agents/shared/async-user-questions.ts` 管理问题寿命，
+  不登记阻塞交互或人工续跑。回答只走原执行的 steer，结束／Stop／关闭／替换后作废，
+  发送失败不重投新 turn。Claude 会把已排队的答案合并为下一 SDK 段：仅在答案已被接收
+  时复用现有 continuation claim 保留产品边界，避免提前完成或重复完成；未回答不建 claim。
+  Pi 在原生 RPC 排队后再核对执行代次与取消信号，防止答案串到
+  下一次执行。Claude 的本机 hook 与远端 root-only guard 禁止原生子代理直接提问；工具
+  不提供通用 call_tool 别名，避免绕过该判据。SSH、手机沿用既有 MCP／交互传输通道。
+  回归见 `session.async-user-questions.test.ts`、MCP `asyncUserQuestionTool.test.ts`；
+  两种真实 harness 配本地假模型的投递与稳定前缀实测见
+  `agents/shared/async-user-questions.native.test.ts`。
   Codex `functions.exec` yield 没有协议级 execution handle（cell / wait 活在
   `codex-rs` daemon），近期检测只能是 adapter 内、用真实 rollout fixture 锁死的启发式，
   用来铸造有界 claim，再由宿主确定性开续段让模型 wait 同一 cell。

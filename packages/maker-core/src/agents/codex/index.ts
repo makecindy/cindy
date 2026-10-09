@@ -152,6 +152,7 @@ import {
 } from './capability-routing.js';
 import { scanCodexCustomizations } from './customization-scanner.js';
 import { commandExecutionDisplayInput } from './command-display.js';
+import { asyncUserInputQuestions } from './async-user-input.js';
 import {
   dedupeCells,
   extractAliveYieldCellsFromCodexItem,
@@ -250,6 +251,7 @@ import {
   type DynamicToolCallParams,
   type DynamicToolCallResponse,
   type DynamicToolSpec,
+  type ItemEnvelope,
   type FileChangeRequestApprovalParams,
   type FileChangeRequestApprovalResponse,
   type McpServerElicitationRequestParams,
@@ -1070,6 +1072,7 @@ interface LiveAskUserRequest {
   questions: ToolRequestUserInputQuestion[];
   detached: boolean;
   continuationStarted: boolean;
+  delivery?: 'async';
   permissionPolicy: TurnPermissionPolicy | null;
   capabilitySelectionText: string;
   autoReviewIntent: AutoReviewUserIntent;
@@ -3892,12 +3895,31 @@ assertRouteCurrent();
     async function sendInteractionContinuation(
       requestId: string, message: UserMessage, options: CodexInternalSendOptions,
       failureContext: string,
+      steerTurnId?: string | null,
     ): Promise<void> {
       const claim = interactionContinuation;
       if (!claim || !claim.requestIds.delete(requestId) || claim.settled) return;
       claim.pendingSends += 1;
       claim.sendTail = claim.sendTail.then(async () => {
-        if (claim.settled || closed || await waitForYieldContinuationIdle()) return;
+        if (claim.settled || closed) return;
+        if (steerTurnId && isTurnInFlight && currentTurnId === steerTurnId) {
+          try {
+            await handle.steer!(message, { ...options, signal: claim.abort.signal });
+            return;
+          } catch (error) {
+            if (claim.settled || closed) return;
+            // Only a definite pre-accept rejection can become a fresh turn.
+            // A timeout/transport failure may already have delivered the answer.
+            const message = error instanceof Error ? error.message : String(error);
+            if (!/\bno active (?:Codex )?turn to steer\b/i.test(message)) {
+              eventQueue.push({ type: 'error', data: {
+                message: `Async question answer delivery failed: ${message}`, isTerminal: false,
+              }, source: 'codex' });
+              return;
+            }
+          }
+        }
+        if (await waitForYieldContinuationIdle()) return;
         while (!claim.settled && (isTurnInFlight || isTurnStartPending)) {
           await new Promise<void>((resolve) => {
             const wake = () => {
@@ -7654,6 +7676,7 @@ assertRouteCurrent();
       pendingInteraction: PendingUserInputInteraction;
     }>();
     const liveAskUserByRequestId = new Map<string, LiveAskUserRequest>();
+    const asyncQuestionItemsByTurn = new Map<string, Set<string>>();
     registerRootCodexMcpContext();
     let mcpElicitationSeq = 0;
 
@@ -8156,10 +8179,11 @@ assertRouteCurrent();
         (meta) => meta.turnId === turnId,
         cancelledDynamicToolResponse('turn_completed'),
       );
-      // Desktop 只有一个 pendingAskUser。同 turn 多个提问只留最后一张，
-      // 否则被盖住的 resolver 会一直占着 hasPendingAgentInteraction。
+      // Desktop 只有一个 pendingAskUser，只保留最后一张同步提问。
+      // 异步提问不阻塞结束：未回答的卡片随原 turn 到期，不代选或续跑。
       const lives = [...liveAskUserByRequestId.values()].filter((live) => live.turnId === turnId);
-      const keep = lives.at(-1) ?? null;
+      const latest = lives.at(-1);
+      const keep = latest?.delivery === 'async' ? null : latest ?? null;
       if (keep) {
         keep.detached = true;
         retainInteractionContinuation(turnId, keep.requestId);
@@ -8179,7 +8203,7 @@ assertRouteCurrent();
       };
       for (const live of lives) {
         if (keep && live.requestId === keep.requestId) continue;
-        dismiss(live.requestId, 'superseded');
+        dismiss(live.requestId, live.delivery === 'async' ? 'turn_completed' : 'superseded');
       }
       for (const meta of [...cancelledUserInput, ...cancelledDynamicTools]) {
         dismiss(serverInteractionId(meta.requestId), 'turn_completed');
@@ -8209,7 +8233,7 @@ assertRouteCurrent();
       autoReviewIntent?: AutoReviewUserIntent,
     ): Promise<void> {
       if (closed) return;
-      if (await waitForYieldContinuationIdle()) return;
+      if (live.delivery !== 'async' && await waitForYieldContinuationIdle()) return;
       if (closed) return;
       const message = formatAskUserContinuationMessage(live.questions, answers);
       const sendOptions: CodexInternalSendOptions = {
@@ -8222,7 +8246,7 @@ assertRouteCurrent();
       };
       try {
         await sendInteractionContinuation(live.requestId, { type: 'user', content: message }, sendOptions,
-          'ask_user continuation turn failed to start');
+          'ask_user continuation turn failed to start', live.delivery === 'async' ? live.turnId : null);
       } catch (error) {
         emitAskUserContinuationStartFailure(error);
       }
@@ -9536,6 +9560,7 @@ assertRouteCurrent();
       turnId?: string | null,
       isRequestPending: () => boolean = () => true,
       toolUseId?: string,
+      delivery?: 'async',
     ): Promise<ToolRequestUserInputResponse> {
       if (questions.some((q) => q.isSecret)) {
         log.warn('requestUserInput secret question refused', {
@@ -9577,7 +9602,7 @@ assertRouteCurrent();
             turnId,
           });
           return isRequestPending()
-            ? askUserViaInteraction(requestId, questions, turnId, isRequestPending, toolUseId)
+            ? askUserViaInteraction(requestId, questions, turnId, isRequestPending, toolUseId, delivery)
             : emptyUserInputResponse(questions);
         }
         return responseFromUserInputAnswersByPosition(questions, joined.answersByPosition);
@@ -9590,6 +9615,7 @@ assertRouteCurrent();
           questions,
           detached: false,
           continuationStarted: false,
+          delivery,
           permissionPolicy: activeTurnPermissionPolicy,
           capabilitySelectionText: (
             (turnId ? capabilitySelectionTextByTurnId.get(turnId) : undefined)
@@ -9610,6 +9636,8 @@ assertRouteCurrent();
           return questions.map(() => []);
         }
         const live = liveAskUserByRequestId.get(requestId);
+        // Stop/supersession may win while the UI response is already in flight.
+        if (!live) return questions.map(() => []);
         // 澄清必须锚在发起提问那一轮的审查意图上。卡片挂起期间后续 turn 可能改写
         // currentAutoReviewIntent；plan_review 已用 planRequestAutoReviewIntent 防漂。
         const continuationAutoReviewIntent = composeAutoReviewIntentWithClarification(
@@ -9623,11 +9651,14 @@ assertRouteCurrent();
         );
         if (
           live
-          && live.detached
+          && (live.detached || live.delivery === 'async')
           && !live.continuationStarted
           && decision.dismissed !== true
         ) {
           live.continuationStarted = true;
+          if (live.delivery === 'async' && live.turnId) {
+            retainInteractionContinuation(live.turnId, requestId);
+          }
           // Pass the applied, normalized snapshot so send can reuse this transition.
           void startAskUserContinuation(live, decision.answers ?? {}, currentAutoReviewIntent);
         } else if (live?.detached && decision.dismissed === true) {
@@ -9693,6 +9724,25 @@ assertRouteCurrent();
           }
         }
       }
+    }
+
+    function interceptAsyncUserInput(
+      params: { threadId: string; turnId: string; item: ItemEnvelope },
+      phase: 'started' | 'updated' | 'completed',
+    ): boolean {
+      const rawQuestions = asyncUserInputQuestions(params.item);
+      if (!rawQuestions) return false;
+      // Do not render the fallback prose as a final answer or open child-agent cards.
+      if (phase !== 'completed' || reviewMode || params.threadId !== threadId) return true;
+      let seen = asyncQuestionItemsByTurn.get(params.turnId);
+      if (seen?.has(params.item.id)) return true;
+      if (!seen) asyncQuestionItemsByTurn.set(params.turnId, seen = new Set());
+      seen.add(params.item.id);
+      const requestId = serverInteractionId(`async:${params.turnId}:${params.item.id}`);
+      void askUserViaInteraction(requestId, normalizeRequestUserInputQuestions(rawQuestions),
+        params.turnId, () => !closed && !completedTurnIds.has(params.turnId), undefined, 'async')
+        .catch((error: unknown) => log.warn('async user input interaction failed', { requestId, error: String(error) }));
+      return true;
     }
 
     async function requestUserInputAsPermission(
@@ -10756,6 +10806,7 @@ assertRouteCurrent();
       // 同一个墓碑也负责拦截该 turn 随后迟到的 item / reasoning / started 事件。
       if (completedTurnIds.has(turn.id)) return;
       completedTurnIds.add(turn.id);
+      asyncQuestionItemsByTurn.delete(turn.id);
       compactingTurnIds.delete(turn.id);
       normalModelWorkTurnIds.delete(turn.id);
       completedSummaryRecoveryTurnIds.delete(turn.id);
@@ -12231,6 +12282,7 @@ assertRouteCurrent();
         }
         noteActiveToolContext(params.item, params.turnId);
         noteToolItemLifecycle(params.item, 'started');
+        if (interceptAsyncUserInput(params, 'started')) return;
         // 先登记再翻译:子线程通知可能紧随 spawn item 到达,映射就位才不丢首帧。
         const translatedItem = withFrozenSubagentSpawnIdentity(params.item, params.turnId);
         const translatedParams = translatedItem === params.item
@@ -12272,6 +12324,7 @@ assertRouteCurrent();
         }
         noteActiveToolContext(params.item, params.turnId);
         rememberYieldedExecCells(params.turnId, params.item, 'updated');
+        if (interceptAsyncUserInput(params, 'updated')) return;
         // updated 也要登记映射,顺序与 started / completed 一致(先登记 → 翻译 → 后发重放帧)。
         // V1 的 spawn 是长跑 item(started → updated* → completed):started 那帧若没到我们手里
         // (turn 缓冲、stale turn 丢弃、上游省略),映射就要一直等到 completed 才建立 —— 期间
@@ -12339,6 +12392,7 @@ assertRouteCurrent();
           producedOutputTurnIds.add(params.turnId);
           noteRecoveryModelWork(params.turnId, params.item);
         }
+        if (interceptAsyncUserInput(params, 'completed')) return;
         noteAssistantReplyCandidate(params.turnId, params.item);
         completeActiveToolContext(params.item, params.turnId);
         rememberYieldedExecCells(params.turnId, params.item, 'completed');

@@ -21,6 +21,8 @@ import { ORCA_NESTED_REPORT_DENIAL_REASON } from '../shared/orca-report-policy.j
 const CLAUDE_CODE_HARNESS_ID = 'claude-code';
 export const ORCA_SEND_TO_LEAD_TOOL_NAME = 'mcp__orca_worker_bridge__send_to_lead';
 export const CLAUDE_ASK_USER_QUESTION_TOOL_NAME = 'AskUserQuestion';
+export const CINDY_ASYNC_QUESTION_TOOL_NAME = 'mcp__cindy_helper__ask_user_question_async';
+const USER_QUESTION_TOOLS = [CLAUDE_ASK_USER_QUESTION_TOOL_NAME, CINDY_ASYNC_QUESTION_TOOL_NAME];
 export const CLAUDE_SUBAGENT_ASK_USER_QUESTION_DENIAL_REASON =
   'NATIVE_SUBAGENT_USER_INPUT_NOT_ALLOWED: report the question to the parent agent, which can decide whether to ask the user.';
 
@@ -48,7 +50,7 @@ export function buildClaudeAskUserQuestionCallerProvenanceHooks(): Partial<Recor
   const guardTool: HookCallback = async (input) => {
     if (input.hook_event_name !== 'PreToolUse') return { continue: true };
     const pre = input as PreToolUseHookInput;
-    if (pre.tool_name !== CLAUDE_ASK_USER_QUESTION_TOOL_NAME) return { continue: true };
+    if (!USER_QUESTION_TOOLS.includes(pre.tool_name)) return { continue: true };
     if (typeof pre.agent_id !== 'string' || pre.agent_id.length === 0) return { continue: true };
     return {
       continue: true,
@@ -59,7 +61,7 @@ export function buildClaudeAskUserQuestionCallerProvenanceHooks(): Partial<Recor
       },
     };
   };
-  return { PreToolUse: [{ matcher: CLAUDE_ASK_USER_QUESTION_TOOL_NAME, hooks: [guardTool] }] };
+  return { PreToolUse: USER_QUESTION_TOOLS.map((matcher) => ({ matcher, hooks: [guardTool] })) };
 }
 
 function isClaudeSkillDirective(directive: CapabilityRouteOverride): boolean {
@@ -120,12 +122,12 @@ export function buildClaudeRemoteOrcaCallerGuards(isOrcaWorker: boolean): Claude
 
 /** JSON-safe remote equivalent of the native subagent user-input guard. */
 export function buildClaudeRemoteRootOnlyToolGuards(): ClaudeRemoteToolGuard[] {
-  return [{
-    toolNamePrefix: CLAUDE_ASK_USER_QUESTION_TOOL_NAME,
-    sourceServerId: 'claude-code',
-    invocation: 'root-only',
+  return USER_QUESTION_TOOLS.map((toolNamePrefix) => ({
+    toolNamePrefix,
+    sourceServerId: toolNamePrefix === CLAUDE_ASK_USER_QUESTION_TOOL_NAME ? 'claude-code' : 'cindy_helper',
+    invocation: 'root-only' as const,
     denialMessage: CLAUDE_SUBAGENT_ASK_USER_QUESTION_DENIAL_REASON,
-  }];
+  }));
 }
 
 /**
