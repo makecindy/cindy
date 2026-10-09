@@ -14,6 +14,23 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+describe('Discord routing identity', () => {
+  it('keeps gateway application id separate from the display tag across bot changes', () => {
+    const gateway = makeGateway();
+    const im = new DiscordIM(makeHost(), { gatewayFactory: (handlers) => {
+      gateway.setHandlers(handlers);
+      return gateway;
+    } });
+    gateway.emitStatus({ kind: 'connected', appId: 'bot#0000' });
+    expect(im.getStatus()).toEqual({ kind: 'connected', appId: 'bot#0000' });
+    expect(im.botContextId).toBe('app-1');
+    gateway.setAppId('app-2');
+    expect(im.botContextId).toBe('app-2');
+    gateway.setAppId('');
+    expect(im.botContextId).toBe('');
+  });
+});
+
 describe('normalizeDmMessage', () => {
   it('normalizes plain DM text fields', async () => {
     const event = await normalizeDmMessage(message({ content: 'hello' }), {

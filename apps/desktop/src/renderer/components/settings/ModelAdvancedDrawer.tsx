@@ -714,7 +714,7 @@ export function ModelAdvancedDrawer({
                   {conversational && (
                     <Section
                       title={t('settings.providers.models.advanced.contextLimit')}
-                      hint={t(supportsMillionContext ? 'settings.providers.models.advanced.contextLimitLocalMillionHint' : /^(?:(?:codex|openai|chatgpt)\/)?gpt-/.test(primaryModel.id) && provider.source !== 'user' && ['openai', 'xd'].includes(provider.id)
+                      hint={t(supportsMillionContext ? 'settings.providers.models.advanced.contextLimitLocalMillionHint' : /^(?:(?:openai-codex|codex|openai|chatgpt)\/)?gpt-/.test(primaryModel.id) && provider.source !== 'user' && ['openai', 'xd'].includes(provider.id)
                         ? 'settings.providers.models.advanced.contextLimitGptHint'
                         : 'settings.providers.models.advanced.contextLimitHint')}
                     >

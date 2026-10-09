@@ -1578,6 +1578,9 @@ export async function createMessage(
      * final "is this still current?" check is actually meaningful.
      */
     shouldBroadcast?: () => boolean;
+    /** Host-only admission guard, checked before and after the publication transaction.
+     * Must be repeatable. A failed final check rolls back this exact row before delivery hooks. */
+    beforePublish?: () => Promise<void>;
     /**
      * Optional clear-boundary compare-and-set for optimistic user sends.  The
      * insert is accepted only while the session still has this exact
@@ -1618,6 +1621,7 @@ export async function createMessage(
     if (existing.length > 0) return messageToCamel(existing[0]);
   }
 
+  if (guarded && opts?.beforePublish) throw new Error('Publication guard cannot be combined with optimistic input');
   const id = createId();
   const now = Date.now();
   const visibleCreatedAt =
@@ -1625,20 +1629,48 @@ export async function createMessage(
       ? Math.max(body.createdAt ?? now, expected + 1)
       : (body.createdAt ?? now);
   const insertRow = messageCreateToRow(id, sessionId, body, visibleCreatedAt);
+  const insertArgs = {
+    id: insertRow.id,
+    clientId: insertRow.clientId,
+    sessionId,
+    role: insertRow.role,
+    content: insertRow.content,
+    toolUseId: insertRow.toolUseId ?? null,
+    agentMeta: insertRow.agentMeta ?? null,
+    agentKind: insertRow.agentKind ?? null,
+    createdAt: insertRow.createdAt,
+    guarded,
+    expectedClearBoundaryMs: guarded ? (expected ?? null) : undefined,
+  };
   try {
-    const inserted = await dbClient.tx('message.insert', {
-      id: insertRow.id,
-      clientId: insertRow.clientId,
-      sessionId,
-      role: insertRow.role,
-      content: insertRow.content,
-      toolUseId: insertRow.toolUseId ?? null,
-      agentMeta: insertRow.agentMeta ?? null,
-      agentKind: insertRow.agentKind ?? null,
-      createdAt: insertRow.createdAt,
-      guarded,
-      expectedClearBoundaryMs: guarded ? (expected ?? null) : undefined,
+    const inserted = await dbClient.tx('message.insert', { ...insertArgs,
+      ...(opts?.beforePublish ? { publication: 'stage' as const } : {}),
     });
+    if (opts?.beforePublish) {
+      await opts.beforePublish();
+      try {
+        const published = await dbClient.tx('message.insert', { ...insertArgs, publication: 'publish' });
+        if (published.changes !== 1) throw new Error('Message publication lost its pending row');
+      } catch (error) {
+        // The worker can commit before its receipt is lost. Recover only this
+        // exact publication, then run the same delivery/indexing hooks below.
+        const [committed] = await db.select().from(messages)
+          .where(and(eq(messages.id, id), eq(messages.sessionId, sessionId), eq(messages.clientId, body.clientId)))
+          .limit(1);
+        if (!committed || committed.role !== insertArgs.role || committed.content !== insertArgs.content
+          || committed.toolUseId !== insertArgs.toolUseId || committed.agentMeta !== insertArgs.agentMeta
+          || committed.agentKind !== insertArgs.agentKind || committed.createdAt !== insertArgs.createdAt
+          || committed.rewindAt !== null) throw error;
+      }
+      // Keep this outside the lost-receipt recovery: a failed authorization
+      // check must never be mistaken for a successful committed publication.
+      try {
+        await opts.beforePublish();
+      } catch (error) {
+        await dbClient.tx('message.insert', { ...insertArgs, publication: 'rollback' });
+        throw error;
+      }
+    }
     if (guarded && inserted.changes === 0) {
       const [existingAfterGuard] = await db
         .select()
@@ -1670,6 +1702,10 @@ export async function createMessage(
       throw new Error('Message insert skipped without a clear-boundary change');
     }
   } catch (err) {
+    if (opts?.beforePublish) {
+      await dbClient.tx('message.insert', { ...insertArgs, publication: 'discard' });
+      throw err;
+    }
     const after = await db
       .select()
       .from(messages)

@@ -202,7 +202,7 @@ export function observeHookTurn(
       failTurn(new Error(`hook turn session ended without a terminal event (${status})`));
     });
     const off = session.onEvent((ev: AgentEvent) => {
-      if (isImSubagentEvent(ev)) return;
+      if (isImSubagentEvent(ev) || ev.turnScope === 'background') return;
       if (ev.type === 'text') {
         // 正文累积(isFinal 逐条契约 / 定稿段按消息切开 / fallbackTail 自成段 /
         // uuid 缺失退 requestId)都在 presenter 的 finalized-segments 策略里。

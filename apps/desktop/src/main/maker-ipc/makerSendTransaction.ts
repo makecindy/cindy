@@ -215,6 +215,7 @@ export function stampTrustedDeviceLinkQueuedOrigin(
   delete stamped.sourceDevice;
   delete stamped.sourcePlugin;
   delete stamped.agentOmitsTriggerPrefix;
+  delete stamped.botTaskCoordination;
   if (deviceLinkInvoke && sourceDevice) stamped.sourceDevice = { ...sourceDevice };
   return stamped;
 }
@@ -290,6 +291,7 @@ type MakerSendOptions = {
    */
   sourceDevice?: MessageSourceDevice;
   persistUserMessage?: {
+    botTaskCoordination?: AgentInputQueuedMessage['botTaskCoordination'];
     sharedTaskAuthor?: AgentInputQueuedMessage['sharedTaskAuthor'];
     /** 插件来源(只写入 agentMeta.sourcePlugin 并生成 `[消息来源]`,不传给 maker-core)。 */
     sourcePlugin?: unknown;
@@ -558,6 +560,7 @@ type ResolveSessionResult =
   | { kind: 'failure'; result: DesktopMakerSendResult };
 
 function readPersistUserMessageOption(sendOpts: MakerSendOptions): {
+  botTaskCoordination?: AgentInputQueuedMessage['botTaskCoordination'];
   sharedTaskAuthor?: AgentInputQueuedMessage['sharedTaskAuthor'];
   sourcePlugin?: AgentInputQueuedMessage['sourcePlugin'];
   clientId: string;
@@ -580,6 +583,7 @@ function readPersistUserMessageOption(sendOpts: MakerSendOptions): {
   if (!persist || typeof persist.clientId !== 'string') return null;
   const sourcePlugin = readWireSourcePlugin(persist.sourcePlugin);
   return {
+    ...(persist.botTaskCoordination ? { botTaskCoordination: persist.botTaskCoordination } : {}),
     ...(persist.sharedTaskAuthor ? { sharedTaskAuthor: persist.sharedTaskAuthor } : {}),
     ...(sourcePlugin ? { sourcePlugin } : {}),
     clientId: persist.clientId,
@@ -1598,12 +1602,14 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
           onAccepted: persistUserMessage
             ? async () => {
                 persistUserMessage.onPersisting?.();
-                deps.previewUserPrompt?.(sess, persistUserMessage.content, {
-                  source: 'maker_send:onPersisting',
-                  clientId: persistUserMessage.clientId,
-                });
-                userPromptPreviewSessionId = sessionId;
-                userPromptPreviewClientId = persistUserMessage.clientId;
+                if (!persistUserMessage.botTaskCoordination) {
+                  deps.previewUserPrompt?.(sess, persistUserMessage.content, {
+                    source: 'maker_send:onPersisting',
+                    clientId: persistUserMessage.clientId,
+                  });
+                  userPromptPreviewSessionId = sessionId;
+                  userPromptPreviewClientId = persistUserMessage.clientId;
+                }
                 try {
                   await deps.createDbMessage(
                     sessionId,
@@ -1612,6 +1618,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
                       role: 'user',
                       content: persistUserMessage.content,
                       agentMeta: {
+                        ...(persistUserMessage.botTaskCoordination ? { botTaskCoordinationInput: persistUserMessage.botTaskCoordination } : {}),
                         ...(persistUserMessage.sharedTaskAuthor ? { sharedTaskAuthor: persistUserMessage.sharedTaskAuthor } : {}),
                         // 来源标签数据(只用于归属展示,不是权限判据)。
                         ...(sourceDevice ? { sourceDevice } : {}),

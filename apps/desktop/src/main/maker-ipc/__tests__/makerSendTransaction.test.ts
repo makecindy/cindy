@@ -2626,12 +2626,14 @@ describe('message source notes', () => {
       text: 'hello',
       sourceDevice: { deviceId: 'forged', platform: 'mobile' },
       sourcePlugin: { pluginId: 'forged' },
+      botTaskCoordination: { delegationId: 'forged', senderSessionId: 'child', runSequence: 1 },
       agentOmitsTriggerPrefix: true,
     } as unknown as AgentInputQueuedMessage;
     const local = stampTrustedDeviceLinkQueuedOrigin(forged, false, phone);
     expect(local).not.toHaveProperty('sourceDevice');
     expect(local).not.toHaveProperty('sourcePlugin');
     expect(local).not.toHaveProperty('agentOmitsTriggerPrefix');
+    expect(local).not.toHaveProperty('botTaskCoordination');
     expect(stampTrustedDeviceLinkQueuedOrigin(forged, true)).not.toHaveProperty('sourceDevice');
     expect(stampTrustedDeviceLinkQueuedOrigin(forged, true, phone).sourceDevice).toEqual(phone);
     expect(forged.sourceDevice).toEqual({ deviceId: 'forged', platform: 'mobile' });
@@ -3416,5 +3418,20 @@ describe('session-agent-switch handoff injection', () => {
     expect(fresh.send).toHaveBeenCalledTimes(1);
     const sent = vi.mocked(fresh.send).mock.calls[0]?.[0] as { content: string };
     expect(sent.content).toContain('OVERFLOW-HANDOFF');
+  });
+});
+
+it('persists coordination audit metadata and dispatches the model without a prompt notification', async () => {
+  const previewUserPrompt = vi.fn();
+  const receipt = { delegationId: 'delegation', senderSessionId: 'child', runSequence: 1 };
+  const { deps, session } = createDeps({ previewUserPrompt });
+  const transaction = createMakerSendTransaction(deps);
+  await transaction.sendToAgentAccepted('session-1', 'Internal wire input', undefined, {
+    persistUserMessage: { clientId: 'coordination', content: '[UI_ACTION_TRIGGER]Coordination', botTaskCoordination: receipt },
+  });
+  expect(session.send).toHaveBeenCalledOnce();
+  expect(previewUserPrompt).not.toHaveBeenCalled();
+  expect(vi.mocked(deps.createDbMessage).mock.calls[0]?.[1]).toMatchObject({
+    role: 'user', content: '[UI_ACTION_TRIGGER]Coordination', agentMeta: { botTaskCoordinationInput: receipt },
   });
 });

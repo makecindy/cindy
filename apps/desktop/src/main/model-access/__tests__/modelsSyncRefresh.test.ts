@@ -14,6 +14,20 @@ import {
 } from '../modelsSyncRefresh.js';
 
 describe('parseModelsSyncPayload', () => {
+  it.each(['available', 'requires_payment'] as const)(
+    'accepts standalone speech from the opted-in v5 catalog (%s)',
+    (availability) => {
+      const model = {
+        id: 'speech-from-gateway', name: 'Gateway Speech', mode: 'audio_speech',
+        currency: 'USD', agents: [], availability,
+        inputCostPerCharacter: 0.00001, outputCostPerAudioToken: 0.00002,
+        modalities: { input: ['text'], output: ['audio'] },
+      };
+      expect(parseModelsSyncPayload({ schemaVersion: 5, accountTier: 'free', models: [model] }))
+        .toEqual({ ok: true, accountTier: 'free', models: [model] });
+    },
+  );
+
   const baseModel = {
     id: 'deepseek/deepseek-v4-pro',
     name: 'DeepSeek V4 Pro',
@@ -223,6 +237,7 @@ describe('waitForModelsSyncRefresh', () => {
         baseUrl: 'https://model-access.example.com',
         timeoutMs: 20_000,
         cache: 'no-store',
+        headers: { 'X-Cindy-Model-Capabilities': 'audio_speech' },
       },
     });
     expect(Number.isFinite(XD_MODELS_SYNC_TIMEOUT_MS)).toBe(true);

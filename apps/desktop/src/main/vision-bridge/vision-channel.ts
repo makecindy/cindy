@@ -18,7 +18,7 @@
  */
 import fs from 'node:fs/promises';
 
-import { resolvePiModelWireProtocol, type AgentKind, type Provider } from '@cindy/model-providers';
+import { isCodexGatewayWireModel, resolvePiModelWireProtocol, type AgentKind, type Provider } from '@cindy/model-providers';
 
 import { withOpenCodeGoSessionHeader } from '../maker-host/opencode-go-session.js';
 import { providerRuntimeCatalogPresetId } from '../maker-host/provider-route.js';
@@ -165,13 +165,13 @@ async function toDataUrl(imagePath: string): Promise<string> {
 
 /**
  * 选该 provider 用于视觉的 agent 面。跟 agent 路由一致：先按模型 id 前缀判定面
- * （`codex/` → codex 面、`claude-`/`anthropic/` → claude-code 面），再按 provider.models
+ * （`openai-codex/`、`codex/` → codex 面、`claude-`/`anthropic/` → claude-code 面），再按 provider.models
  * 里模型归属，最后回退到第一个声明 routing 的 agent。避免「模型是 codex 面却走了
  * claude-code 的 routing」导致协议/端点不匹配。
  */
 function pickAgent(provider: Provider, modelId: string): AgentKind | null {
-  // 模型前缀显式指面（对齐 codex-proxy 的 `model.startsWith('codex/')` 判定）。
-  if (modelId.startsWith('codex/') && provider.routing.codex) return 'codex';
+  // 模型前缀显式指面（对齐 codex-proxy 的折扣 wire 前缀判定）。
+  if (isCodexGatewayWireModel(modelId) && provider.routing.codex) return 'codex';
   if (
     (modelId.startsWith('claude-') || modelId.startsWith('anthropic/')) &&
     provider.routing['claude-code']
