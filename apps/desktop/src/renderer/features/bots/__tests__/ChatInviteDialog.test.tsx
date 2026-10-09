@@ -1,16 +1,16 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { ChatInviteDialog } from '../ChatInviteDialog';
-const mocks = vi.hoisted(() => ({ createInvite: vi.fn(), previewInvite: vi.fn(), acceptInvite: vi.fn(), revokeInvite: vi.fn(), copy: vi.fn(), success: vi.fn(), current: true }));
+const mocks = vi.hoisted(() => ({ createInvite: vi.fn(), previewInvite: vi.fn(), acceptInvite: vi.fn(), revokeInvite: vi.fn(), copy: vi.fn(), success: vi.fn() }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string, values?: { date?: string }) => values?.date ? `${key}: ${values.date}` : key, i18n: { language: 'en' } }) }));
 vi.mock('../botGroupStore', () => ({ refreshBotGroups: vi.fn() }));
 vi.mock('@/lib/toast', () => ({ toast: { success: mocks.success } }));
-vi.mock('@/contexts/dataOwnerGeneration', () => ({ getDataOwnerGeneration: () => 1, isDataOwnerGenerationCurrent: () => mocks.current }));
 const k = (name: string) => `bots.groupChat.server.${name}`;
 const link = `cindy://chat-invite/${'a'.repeat(43)}`;
 beforeEach(() => {
-  vi.clearAllMocks(); mocks.current = true;
+  vi.clearAllMocks(); setDataOwnerGeneration('account', 1);
   mocks.createInvite.mockResolvedValue({ ok: true, link, expiresAt: null, reusable: true });
   mocks.previewInvite.mockResolvedValue({ ok: true, groupId: 'room', name: 'Room', inviterName: 'Host', expiresAt: null, reusable: true, joined: false });
   mocks.copy.mockResolvedValue(undefined);
@@ -129,10 +129,34 @@ describe('invitation validity', () => {
     await create();
     fireEvent.click(screen.getByRole('button', { name: k('revokeLink') }));
     fireEvent.click(screen.getByRole('button', { name: k('revokeLink') }));
-    mocks.current = false;
+    setDataOwnerGeneration('other-account', 2);
     await act(async () => finish({ ok: true, revoked: true }));
     expect(screen.queryByText(k('revokedLink'))).toBeNull();
     expect(mocks.success).not.toHaveBeenCalled();
+  });
+  it.each(['success', 'error', 'rejection'])('clears a pending revoke after a same-account generation update on %s', async outcome => {
+    let finish!: (value: unknown) => void;
+    let reject!: (reason: Error) => void;
+    mocks.revokeInvite.mockReturnValue(new Promise((resolve, fail) => { finish = resolve; reject = fail; }));
+    const onClose = vi.fn();
+    render(<ChatInviteDialog groupId="room" onClose={onClose} />);
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: k('createLink') })));
+    fireEvent.click(screen.getByRole('button', { name: k('revokeLink') }));
+    fireEvent.click(screen.getByRole('button', { name: k('revokeLink') }));
+    expect((screen.getByRole('button', { name: 'commonUi.confirmDialog.cancel' }) as HTMLButtonElement).disabled).toBe(true);
+    setDataOwnerGeneration('account', 2);
+    await act(async () => {
+      if (outcome === 'rejection') reject(new Error('unavailable'));
+      else finish(outcome === 'success' ? { ok: true, revoked: true } : { ok: false, errorCode: 'ROLE_REQUIRED' });
+    });
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.getByRole('status').textContent).toBe(k('reusableLink'));
+    expect(mocks.success).not.toHaveBeenCalled();
+    const close = screen.getByRole('button', { name: 'bots.close' }) as HTMLButtonElement;
+    expect(close.disabled).toBe(false);
+    fireEvent.click(close);
+    expect(onClose).toHaveBeenCalledOnce();
   });
   it('discards a stale reusable preview when the server reports an expired or revoked link on acceptance', async () => {
     mocks.acceptInvite.mockResolvedValue({ ok: false, errorCode: 'INVITATION_NOT_FOUND' });

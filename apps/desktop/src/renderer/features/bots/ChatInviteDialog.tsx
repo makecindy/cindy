@@ -97,7 +97,15 @@ export function ChatInviteDialog({ groupId, initialLink = '', onClose, onJoined 
     } catch {
       if (current()) { setRevokeConfirm(false); setError(t(key(action === 'copy' ? 'copyFailed' : 'requestFailed'))); }
     }
-    finally { busyRef.current = false; if (current()) setBusy(false); }
+    finally {
+      busyRef.current = false;
+      // Request results belong to their owner generation; transient UI cleanup
+      // belongs to the mounted dialog, which can survive a same-owner update.
+      if (mounted.current) {
+        setBusy(false);
+        if (action === 'revoke') setRevokeConfirm(false);
+      }
+    }
   }
   const title = t(key(groupId ? 'invite' : 'join'));
   return <Dialog.Root open onOpenChange={open => !busyRef.current && !open && onClose()}>
