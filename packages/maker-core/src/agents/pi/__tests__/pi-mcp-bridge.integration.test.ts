@@ -263,6 +263,14 @@ function scriptedAnthropicTurn(requestBody: string): string {
     }
     return anthropicTextTurn(2, 'second boot blind call executed');
   }
+  if (requestBody.includes('persisted disclosure stale catalog')) {
+    if (toolResultCount === 0) {
+      return anthropicToolTurn(1, 'cindy_mcp_call_tool', {
+        server: 'cindy_echo', tool: 'echo', args: { text: 'stale-echo' },
+      });
+    }
+    return anthropicTextTurn(2, 'stale catalog re-gated the blind call');
+  }
   if (requestBody.includes('unknown gateway tool')) {
     return toolResultCount === 0
       ? anthropicToolTurn(1, 'cindy_mcp_call_tool', {
@@ -704,7 +712,7 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
 
   function buildDeps(
     bridgeMode:
-        | 'local' | 'local-multi' | 'bot-memory' | 'remote' | 'remote-sse' | 'remote-paginated' | 'remote-failures' = 'local',
+        | 'local' | 'local-echo-plus' | 'local-multi' | 'bot-memory' | 'remote' | 'remote-sse' | 'remote-paginated' | 'remote-failures' = 'local',
     logger: Logger = noopLogger,
   ): AgentDeps {
     return {
@@ -849,6 +857,23 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
             mcpEnv: { CINDY_PI_REMOTE_MCP_SECRET_0: `Bearer ${REMOTE_BEARER}` },
           };
         }
+        if (bridgeMode === 'local-echo-plus') {
+          // Same echo server as 'local' plus one more server: the tool-catalog
+          // fingerprint differs from a pure 'local' boot while cindy_echo/echo
+          // stays resolvable — used to prove stale disclosure state is dropped.
+          const sessionQuery = ctx?.sessionId
+            ? `?session=${encodeURIComponent(ctx.sessionId)}`
+            : '';
+          return {
+            mcpBridge: {
+              token: MCP_TOKEN,
+              servers: [
+                { name: 'cindy_echo', url: `${mcpUrl}${sessionQuery}` },
+                { name: 'cindy_workspace', url: `${mcpUrl}/workspace${sessionQuery}` },
+              ],
+            },
+          };
+        }
         if (bridgeMode === 'local-multi') {
           const sessionQuery = ctx?.sessionId
             ? `?session=${encodeURIComponent(ctx.sessionId)}`
@@ -897,7 +922,7 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
     permissionMode: 'ask' | 'bypassPermissions',
     resolver: (req: InteractionRequest) => Promise<InteractionDecision>,
     bridgeMode:
-        | 'local' | 'local-multi' | 'bot-memory' | 'remote' | 'remote-sse' | 'remote-paginated' = 'local',
+        | 'local' | 'local-echo-plus' | 'local-multi' | 'bot-memory' | 'remote' | 'remote-sse' | 'remote-paginated' = 'local',
     prompt = 'call the echo tool',
     opts: { sessionId?: string; keepDisclosureState?: boolean } = {},
   ): Promise<{
@@ -1439,6 +1464,37 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
       );
       expect(echoCalls).toEqual([{ text: 'persist-echo' }]);
       expect(requestBodies.join('\n')).not.toContain('Inspect this tool before execution');
+    },
+  );
+
+  it(
+    'schema disclosure state is dropped when the tool catalog changes across restarts',
+    { timeout: 120_000 },
+    async () => {
+      echoCalls.length = 0;
+      const sid = 'mcp-itest-disclose-stale';
+      // First boot on the plain echo catalog: inspect echo, state file written.
+      await runOneTurn(
+        'ask',
+        async () => ({ kind: 'permission', behavior: 'allow' }),
+        'local',
+        'persisted disclosure first boot',
+        { sessionId: sid },
+      );
+      // Second boot on a different catalog (echo + workspace): the fingerprint
+      // mismatch must drop the persisted key, so the blind call is gated again
+      // instead of running on a schema remembered from the previous catalog.
+      const { requestBodies } = await runOneTurn(
+        'ask',
+        async () => ({ kind: 'permission', behavior: 'allow' }),
+        'local-echo-plus',
+        'persisted disclosure stale catalog',
+        { sessionId: sid, keepDisclosureState: true },
+      );
+      expect(echoCalls).toEqual([]);
+      expect(requestBodies.join('\n')).toContain('Inspect this tool before execution');
+      const state = JSON.parse(readFileSync(path.join(agentHome, 'runtime', `mcp-disclosed-${sid}.json`), 'utf8')) as { keys?: string[] };
+      expect(state.keys).toEqual([]);
     },
   );
 

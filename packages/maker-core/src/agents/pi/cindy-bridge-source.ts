@@ -2864,6 +2864,10 @@ function schemaHint(schema: Record<string, unknown>): string {
 // env — both deterministic per session, so no new spawn env key is introduced
 // (pi-harness spawn-env stability invariant). Missing env (utility one-shots,
 // review clones) leaves persistence off = in-memory only, the previous behavior.
+// Two Cindy instances hosting the same session (--passive multi-open) share the
+// file: contents converge, writes are atomic, and the state carries no authority
+// (the gate is prompt hygiene; execution still goes through host approval), so
+// last-writer-wins is harmless — unlike the nonce-named permission files.
 function resolveMcpDisclosureStatePath(): string | null {
   const permFile = process.env.CINDY_PI_PERMISSION_FILE ?? '';
   const sid = process.env.CINDY_PI_SESSION_ID ?? '';
@@ -3049,7 +3053,12 @@ class CindyMcpGateway {
   }
 
   private disclosureCatalogFingerprint(): string {
-    return Array.from(this.tools.keys()).sort().join('\u0001');
+    // Cover schema content, not just the name set: an external MCP server can
+    // redeploy the same tool name with a changed inputSchema across a restart.
+    return Array.from(this.tools.values())
+      .map((tool) => tool.serverName + '\u0000' + tool.name + '\u0000' + JSON.stringify(tool.inputSchema))
+      .sort()
+      .join('\u0001');
   }
 
   // Called once from register(), after this session's tool catalog is fully connected.

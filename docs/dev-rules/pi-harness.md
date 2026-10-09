@@ -55,7 +55,10 @@ Cindy 以 `pi --mode rpc` spawn pi 二进制(JSONL/stdio),`translator.ts` 把 pi
   调用保留 600s 长预算。SSE response 按 event 增量消费，不等待 server 关闭持续流。Pi 模型侧
   始终只注册 `cindy_mcp_list_tools` 与 `cindy_mcp_call_tool` 两个稳定网关 schema；完整工具目录与
   input schema 留在 bridge 内部。先发现名称／描述，再按具体 server + tool 取单个 schema，
-  未检查 schema 的调用在 bridge 内 fail closed，不会触达 MCP 或弹权限框。Host 审批、策略与变更捕获仍使用真实
+  未检查 schema 的调用在 bridge 内 fail closed，不会触达 MCP 或弹权限框。检查状态按会话
+  持久化于 `runtime/mcp-disclosed-<sessionId>.json`：同一会话的 pi 进程重启（Orca
+  idle-release/resume）后复用，pi 版本或工具目录（server/tool/schema 任一）变化时作废重查；
+  文件仅是提示卫生缓存，无授权语义。Host 审批、策略与变更捕获仍使用真实
   `mcp__<server>__<tool>` identity 和真实参数，不能退化成对网关包装器授权。Claude Code 与
   Codex 保持各自的直接 MCP 注册方式，不经过此 Pi 专属网关。配置新增、修改、禁用或删除对
   下一新建/重启会话生效；旧活动会话保留启动时 generation 快照至 close。
