@@ -370,6 +370,7 @@ import {
   resolveWorktreeEligibility,
   shouldAcceptWorktreeBranchListResult,
   shouldBlockNewSessionCreateForWorktree,
+  shouldAttemptWorktreeProbe,
   shouldShowWorktreeToggle,
   worktreeEligibilityForTarget,
   worktreeEligibilityCaptionKey,
@@ -2736,10 +2737,15 @@ export default function NewRemoteSessionScreen() {
     });
     worktreeEligibilityRef.current = initialEligibility;
     setWorktreeProbe({ target, eligibility: initialEligibility });
-    // Relay 离线时不把预期的 NOT_CONNECTED 固化成 detect-failed；online /
-    // connectionEpoch / presenceVersion 变化后自动重探，覆盖手机重连和工作端
-    // 重新上线两种路径。
-    if (!selectedDeviceId || !cwd || deviceLinkStatus !== 'online') return undefined;
+    // connecting 期间也发起探测(#4452)：BH-022 真机观察到 relay 回 online 后旧
+    // peer link 仍在握手恢复窗口，若只依赖 status / epoch / presence 事件翻新，
+    // 行会永久停在 recovering；探测结果本身就是恢复信号，NOT_CONNECTED 等瞬时
+    // 失败走下方 catch → recovering → 定时重探。stopped(登出/后台停链)不发请求。
+    if (!shouldAttemptWorktreeProbe({
+      hasDevice: Boolean(selectedDeviceId),
+      hasWorkingDir: cwd.length > 0,
+      linkStatus: deviceLinkStatus,
+    })) return undefined;
     void withTransientRemoteRetry(async () => {
       await openLink(selectedDeviceId);
       return maker.worktree.detectCwd(cwd);

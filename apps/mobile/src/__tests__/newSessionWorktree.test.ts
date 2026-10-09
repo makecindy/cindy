@@ -24,6 +24,7 @@ import {
   parseWorktreeCreateResult,
   resolveWorktreeEligibility,
   seedWorktreeEnabled,
+  shouldAttemptWorktreeProbe,
   shouldBlockNewSessionCreateForWorktree,
   shouldAcceptWorktreeBranchListResult,
   shouldShowWorktreeToggle,
@@ -387,6 +388,27 @@ describe('initialWorktreeProbeEligibility(#4046 完全断网时探测起始态)'
       eligibility: offline,
       preferenceSaving: false,
     })).toBe(true);
+  });
+});
+
+describe('shouldAttemptWorktreeProbe(#4452 断网恢复自愈的探测门禁)', () => {
+  it('connecting 也发起探测:恢复信号来自探测结果,不能只等 status 翻转事件', () => {
+    expect(shouldAttemptWorktreeProbe({ hasDevice: true, hasWorkingDir: true, linkStatus: 'connecting' }))
+      .toBe(true);
+  });
+
+  it('online 正常探测;stopped(登出/后台停链)不发请求', () => {
+    expect(shouldAttemptWorktreeProbe({ hasDevice: true, hasWorkingDir: true, linkStatus: 'online' }))
+      .toBe(true);
+    expect(shouldAttemptWorktreeProbe({ hasDevice: true, hasWorkingDir: true, linkStatus: 'stopped' }))
+      .toBe(false);
+  });
+
+  it('设备或目录未选全时不探测,与资格行的隐藏条件一致', () => {
+    expect(shouldAttemptWorktreeProbe({ hasDevice: false, hasWorkingDir: true, linkStatus: 'online' }))
+      .toBe(false);
+    expect(shouldAttemptWorktreeProbe({ hasDevice: true, hasWorkingDir: false, linkStatus: 'online' }))
+      .toBe(false);
   });
 });
 

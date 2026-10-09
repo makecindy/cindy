@@ -15,6 +15,7 @@ import type {
   MobileWorktreeCreateResult,
   MobileWorktreeDetectCwdResult,
 } from '@/device-link/mobileMakerTransport';
+import type { DeviceLinkStatus } from '@cindy/device-link';
 import { isTransientRemoteError } from '@/device-link/remoteRetry';
 
 /** 资格不满足的原因(语义对齐桌面 newChat.worktree.{gitMissing,notGitRepo,alreadyInWorktree})。 */
@@ -250,8 +251,9 @@ export function worktreeEligibilityFromError(error: unknown): NewSessionWorktree
  * 探测 effect 的**起始**状态(#4046):
  *  - 设备或目录还没选全 → probing(探测尚未开始,UI 不暴露该行);
  *  - 设备与目录都在、但链路不在 online → recovering(「连接恢复中,正在自动重试…」)。
- *    完全断网时 effect 会在发请求前直接返回,永远进不了 catch,若仍停在 probing 就是
- *    永久的「检测环境中…」;online / connectionEpoch / presenceVersion 变化即重探。
+ *    探测是否发起由 shouldAttemptWorktreeProbe 决定:connecting 期间也发(#4452),
+ *    恢复后首个成功探测即回到 eligible;online / connectionEpoch / presenceVersion
+ *    变化仍会重跑探测。
  *  - 三者齐备 → probing,随后由请求结果 / 抛错归并覆盖。
  * 创建门禁不变:probing / recovering 都 fail-closed(shouldBlockNewSessionCreateForWorktree)。
  */
@@ -262,6 +264,21 @@ export function initialWorktreeProbeEligibility(input: {
 }): NewSessionWorktreeEligibility {
   if (input.hasDevice && input.hasWorkingDir && !input.online) return { status: 'recovering' };
   return { status: 'probing' };
+}
+
+/**
+ * 探测发起门禁(#4452):设备与目录选全后,relay 处于 connecting 时也要发起探测 ——
+ * 断网恢复的自愈不能只依赖 status / connectionEpoch / presenceVersion 这些状态
+ * 事件被页面观察到(BH-022 真机观察到链路恢复后行一直停在 recovering);探测
+ * 结果本身就是恢复信号,NOT_CONNECTED 等瞬时失败由调用方归并为 recovering 并
+ * 定时重探。stopped(登出 / 后台停链)时不发请求。
+ */
+export function shouldAttemptWorktreeProbe(input: {
+  hasDevice: boolean;
+  hasWorkingDir: boolean;
+  linkStatus: DeviceLinkStatus;
+}): boolean {
+  return input.hasDevice && input.hasWorkingDir && input.linkStatus !== 'stopped';
 }
 
 /**
