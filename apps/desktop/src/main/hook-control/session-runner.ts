@@ -32,6 +32,8 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 
 import { app } from 'electron';
+import { materializeTaskImageTextResult } from '../cindy-media/taskImageDelivery';
+import { rewriteTaskImageReferences } from '../cindy-media/taskImageMarkdown';
 import { stripInternalWebCitations } from '@cindy/maker-shared/internal-citation';
 import { MAIN_OWNED_SEND_CONTEXT } from '@cindy/maker-core';
 
@@ -447,6 +449,7 @@ function turnTextsFor(observer: HookTurnObserver): HookTurnTexts {
  * 贴在被折叠工作过程里的图和文件会随着正文投影一起被丢掉(PR #1272 review)。
  */
 async function collectOutboundForFinalText(
+  sessionId: string,
   texts: HookTurnTexts,
   extraImageAbsPaths: string[],
   allowedFileRoots: string[],
@@ -455,17 +458,26 @@ async function collectOutboundForFinalText(
   // Defense in depth for X/Slack/Telegram: live Codex traffic is normalized in
   // maker-core, but older persisted/continuation text and future adapters must
   // never forward private Web citation delimiters to an external channel.
-  const publicText = stripInternalWebCitations(texts.publicText);
-  const wholeTurn = stripInternalWebCitations(texts.wholeTurn);
   // Remote runtimes do not grant access to this host's files or media cache.
-  // The attachment collector's managed-image path is independent of file roots.
-  if (allowedFileRoots.length === 0) return { finalText: publicText };
+  // Still run the shared caption/warning projection without granting local IO.
+  const canReadLocal = allowedFileRoots.length > 0;
+  // The public projection is drawn from this whole turn. Import its image URLs
+  // once so a temporary source changing cannot split the body from its attachment.
+  const scanText = stripInternalWebCitations(texts.wholeTurn);
+  const materialized = canReadLocal
+    ? await materializeTaskImageTextResult(sessionId, scanText)
+    : { text: scanText, replacements: new Map<string, string>() };
+  const wholeTurn = materialized.text;
+  const publicText = texts.wholeTurn === texts.publicText ? wholeTurn
+    : rewriteTaskImageReferences(stripInternalWebCitations(texts.publicText), materialized.replacements);
   if (!hasOutboundRefs(wholeTurn) && extraImageAbsPaths.length === 0) {
     return { finalText: publicText };
   }
   try {
-    const collected = await collectOutboundAttachments(publicText, extraImageAbsPaths, {
-      resolveImageUrl: resolveRenderableImageUrl,
+    const collected = await collectOutboundAttachments(publicText, canReadLocal ? extraImageAbsPaths : [], {
+      resolveImageUrl: canReadLocal ? resolveRenderableImageUrl : () => {
+        throw new Error('Remote media is not available on this host');
+      },
       allowedFileRoots,
       ...(wholeTurn !== publicText ? { refScanText: wholeTurn } : {}),
       log,
@@ -1414,12 +1426,12 @@ export function createMakerHookSessionRunner(deps: {
         await observer.finished;
       } catch (err) {
         observer.stop();
-        return fail(
-          err instanceof Error ? err.message : String(err),
-          observer.errorReason === 'output-limit'
-            ? stripInternalWebCitations(observer.finalText())
-            : '',
-        );
+        const collected = observer.errorReason === 'output-limit'
+          ? await collectOutboundForFinalText(
+            session.id, turnTextsFor(observer), extraImageAbsPaths, allowedFileRoots, log,
+          )
+          : { finalText: '' };
+        return { ...fail(err instanceof Error ? err.message : String(err)), ...collected };
       } finally {
         // 无论正常收口还是超时/错误,未决交互都按默认收口并释放中央 route
         finalizeInteractions();
@@ -1435,6 +1447,7 @@ export function createMakerHookSessionRunner(deps: {
       // 出站附件: 文本引用 / 旁路图存在时才收集(读盘 + base64 只在需要时
       // 发生); 收集失败不拖垮收口 —— 附件是回帖增强, 文本永远要发出去
       const collected = await collectOutboundForFinalText(
+        session.id,
         turnTextsFor(observer),
         extraImageAbsPaths,
         allowedFileRoots,
@@ -1538,13 +1551,11 @@ function beginContinuationWatch(
       req.onAbandon();
       return;
     }
-    if (errorMessage !== null) {
+    if (errorMessage !== null && observer.errorReason !== 'output-limit') {
       // 与 run() 一致：只有确定的输出上限失败携带已累计正文。
       req.onEnd({
         status: 'error',
-        finalText: observer.errorReason === 'output-limit'
-          ? stripInternalWebCitations(observer.finalText())
-          : '',
+        finalText: '',
         errorMessage,
         durationMs: Date.now() - startedAt,
       });
@@ -1554,15 +1565,16 @@ function beginContinuationWatch(
       // workDir 以 live session 为权威(会话可能被移动过), 与 run() 里
       // isDirAuthorized 用 session.workDir 复核同理。
       const collected = await collectOutboundForFinalText(
+        session.id,
         turnTextsFor(observer),
         extraImageAbsPaths,
         allowedFileRoots,
         log,
       );
       req.onEnd({
-        status: 'ok',
+        status: errorMessage === null ? 'ok' : 'error',
         finalText: collected.finalText,
-        errorMessage: null,
+        errorMessage,
         durationMs: Date.now() - startedAt,
         ...(collected.attachments !== undefined ? { attachments: collected.attachments } : {}),
       });

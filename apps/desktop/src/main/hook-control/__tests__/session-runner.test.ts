@@ -19,6 +19,9 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import fs from 'node:fs/promises';
+import * as taskImages from '../../cindy-media/taskImageDelivery';
+import { rewriteTaskImageReferences } from '../../cindy-media/taskImageMarkdown';
 import type { AgentEvent, Effort, PermissionMode, PermissionModeState } from '@cindy/maker-core';
 import type { CatalogModel, ProviderView } from '@cindy/model-providers';
 
@@ -2521,6 +2524,8 @@ describe('上游过载自动重试期间的渠道进度(零产出窗口)', () =>
   it.each([
     ['output-limit', 'partial answer'],
     ['output-limit', ''],
+    ['output-limit', '![shot](/private/task/shot.png)'],
+    ['output-limit', '![shot](xdt-image:///C:/Users/task/shot.png)'],
     ['turn-failed', 'partial answer'],
   ])('official Telegram failure preserves only output-limit text (%s, %s)', async (reason, text) => {
     fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
@@ -2536,7 +2541,11 @@ describe('上游过载自动重试期间的渠道进度(零产出窗口)', () =>
     // A trailing done has no subscriber: the failure must carry the observed body.
     h.eventCbs.get('sess-new')?.({ type: 'done', data: { result: 'late result' } });
     const outcome = await pending;
-    expect(outcome).toMatchObject({ status: 'error', finalText: reason === 'output-limit' ? text : '' });
+    expect(outcome.status).toBe('error');
+    if (text.startsWith('![')) {
+      expect(outcome.finalText).toContain('🖼️ _shot_');
+      expect(outcome.finalText).not.toContain('shot.png');
+    } else expect(outcome.finalText).toBe(reason === 'output-limit' ? text : '');
     expect(outcome.errorMessage).toBe(reason === 'output-limit'
       ? '模型已达到输出长度上限，本轮回复可能不完整。可以直接发送下一条消息继续。'
       : 'provider failure');
@@ -3320,36 +3329,103 @@ describe('watchContinuation: 观察桌面端续跑并回流', () => {
     for (let i = 0; i < times; i++) await Promise.resolve();
   }
 
-  it.each([false, true])('continuation attachments stay in their runtime (remote=%s)', async (remote) => {
-    const workDir = process.cwd().replaceAll('\\', '/');
-    fakeMaker.getSession.mockReturnValueOnce({
-      ...makeManualSession('sess-live'),
-      workDir,
-      ...(remote ? { remoteHostId: 'ssh-host' } : {}),
+  it.each(['deleted', 'replaced'])('keeps public text and attachments coherent when the source is %s', async (change) => {
+    const source = '/private/task/shot.png';
+    const firstUrl = `cindy-media://blobs/${'a'.repeat(64)}.png`;
+    let reads = 0;
+    const materialize = vi.fn(async (_id: string, text: string) => {
+      const url = ++reads === 1 ? firstUrl
+        : change === 'replaced' ? `cindy-media://blobs/${'b'.repeat(64)}.png` : null;
+      const replacements = new Map(url ? [[source, url]] : []);
+      return { text: rewriteTaskImageReferences(text, replacements), replacements, failures: url ? [] : [source] };
     });
+    const snapshot = vi.spyOn(taskImages, 'materializeTaskImageTextResult').mockImplementation(materialize);
+    const legacy = vi.spyOn(taskImages, 'materializeTaskImageText').mockImplementation(async (id, text) => (await materialize(id, text)).text);
+    const read = vi.spyOn(fs, 'readFile').mockImplementation(async (file) =>
+      Buffer.from(String(file).includes('b'.repeat(64)) ? 'replaced bytes' : 'first bytes'));
+    try {
+      fakeMaker.getSession.mockReturnValueOnce(makeManualSession('sess-live'));
+      const onEnd = vi.fn();
+      createMakerHookSessionRunner({ log }).watchContinuation!(watchReq({ onEnd }).req as never);
+      const emit = h.eventCbs.get('sess-live')!;
+      emit({ type: 'text', data: { text: '我先检查。', isFinal: true } });
+      emit({ type: 'tool_use', data: { toolName: 'Read', toolUseId: 'read-1', input: {} } });
+      emit({ type: 'text', data: { text: `结果：![shot](${source})`, isFinal: true } });
+      emit({ type: 'done', data: null });
+      await vi.waitFor(() => expect(onEnd).toHaveBeenCalledOnce());
+      const outcome = onEnd.mock.calls[0]![0];
+      expect(outcome.finalText).toBe('结果：🖼️ _shot_');
+      expect(outcome.attachments).toHaveLength(1);
+      expect(outcome.attachments[0].dataBase64).toBe(Buffer.from('first bytes').toString('base64'));
+      expect(materialize).toHaveBeenCalledOnce();
+      expect(materialize.mock.calls[0][1]).toContain('我先检查。');
+    } finally { snapshot.mockRestore(); legacy.mockRestore(); read.mockRestore(); }
+  });
+
+  it.each(['run', 'continuation'].flatMap((entry) =>
+    [false, true].flatMap((remote) => [false, true].map((outputLimit) => ({ entry, remote, outputLimit }))),
+  ))('attachments stay in their runtime ($entry, remote=$remote, outputLimit=$outputLimit)', async ({ entry, remote, outputLimit }) => {
+    const workDir = process.cwd().replaceAll('\\', '/');
     const onEnd = vi.fn();
     const runner = createMakerHookSessionRunner({ log });
-    const { req } = watchReq({ onEnd });
-    runner.watchContinuation!(req as never);
-    const cb = h.eventCbs.get('sess-live')!;
-    const media = `cindy-media://blobs/${'a'.repeat(64)}.png`;
-    const text = `结果 [文件](xdt-file://${workDir}/package.json) ![图](xdt-image://chart.png) ![媒体](${media})`;
-    cb({ type: 'tool_result_full', data: { fullText: `![工具图](xdt-image://tool.png) ![工具媒体](${media})` } });
-    cb({ type: 'text', data: { text, isFinal: true } });
-    cb({ type: 'done', data: null });
-    await vi.waitFor(() => expect(onEnd).toHaveBeenCalledTimes(1));
-    const outcome = onEnd.mock.calls[0]![0];
-    expect(outcome.status).toBe('ok');
-    if (remote) {
-      expect(resolveXdtImage).not.toHaveBeenCalled();
-      expect(cindyMock.resolveSafe).not.toHaveBeenCalled();
-      expect(outcome.attachments).toBeUndefined();
-      expect(outcome.finalText).toBe(text);
+    let pending: ReturnType<typeof runner.run> | undefined;
+    if (entry === 'run') {
+      fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) => {
+        const session = makeFakeSession(opts.id ?? 'sess-x');
+        session.send.mockImplementation(async (_message, options) => {
+          await options.onAccepted?.();
+          return { accepted: true };
+        });
+        return { ...session, workDir, ...(remote ? { remoteHostId: 'ssh-host' } : {}) };
+      });
+      pending = runner.run(baseReq({ workingDir: workDir }));
+      await vi.waitFor(() => expect(h.eventCbs.has('sess-new')).toBe(true));
     } else {
-      expect(resolveXdtImage).toHaveBeenCalled();
-      expect(cindyMock.resolveSafe).toHaveBeenCalled();
-      expect(outcome.attachments?.map((a: { name: string }) => a.name)).toContain('package.json');
+      fakeMaker.getSession.mockReturnValueOnce({
+        ...makeManualSession('sess-live'), workDir,
+        ...(remote ? { remoteHostId: 'ssh-host' } : {}),
+      });
+      const { req } = watchReq({ onEnd });
+      runner.watchContinuation!(req as never);
     }
+    const cb = h.eventCbs.get(entry === 'run' ? 'sess-new' : 'sess-live')!;
+    const media = `cindy-media://blobs/${'a'.repeat(64)}.png`;
+    const text = `结果 [文件](xdt-file://${workDir}/package.json) ![图](xdt-image://chart.png) ![媒体](${media})`
+      + String.raw` ![Unix](/home/task/shot.png) ![Windows](C:\task\shot.png)`
+      + '\n![引用][shot] [查看][shot]\n\n[shot]: xdt-image:///private/tmp/shot.png'
+      + '\n\n![网页](https://example.com/shot.png) `![示例](/example.png)`';
+    const read = remote ? vi.spyOn(fs, 'readFile') : undefined;
+    const realpath = remote ? vi.spyOn(fs, 'realpath') : undefined;
+    const materialize = remote ? vi.spyOn(taskImages, 'materializeTaskImageTextResult') : undefined;
+    try {
+      cb({ type: 'tool_result_full', data: { fullText: `![工具图](xdt-image://tool.png) ![工具媒体](${media})` } });
+      cb({ type: 'text', data: { text, isFinal: true } });
+      cb(outputLimit
+        ? { type: 'error', data: { reason: 'output-limit', message: 'limit', isTerminal: true } }
+        : { type: 'done', data: null });
+      if (pending) onEnd(await pending);
+      await vi.waitFor(() => expect(onEnd).toHaveBeenCalledTimes(1));
+      const outcome = onEnd.mock.calls[0]![0];
+      expect(outcome.status).toBe(outputLimit ? 'error' : 'ok');
+      if (remote) {
+        expect(resolveXdtImage).not.toHaveBeenCalled();
+        expect(cindyMock.resolveSafe).not.toHaveBeenCalled();
+        expect(outcome.attachments).toBeUndefined();
+        expect(outcome.finalText).toContain('🖼️ _Unix_');
+        expect(outcome.finalText).toContain('🖼️ _Windows_');
+        expect(outcome.finalText).toContain('🖼️ _引用_ 查看');
+        expect(outcome.finalText).toContain('Attachment delivery incomplete');
+        expect(outcome.finalText).not.toMatch(/xdt-|cindy-media|\/home\/task|C:\\task|\/private\/tmp|\[shot\]:/);
+        expect(outcome.finalText).toContain('![网页](https://example.com/shot.png) `![示例](/example.png)`');
+        expect(read).not.toHaveBeenCalled();
+        expect(realpath).not.toHaveBeenCalled();
+        expect(materialize).not.toHaveBeenCalled();
+      } else {
+        expect(resolveXdtImage).toHaveBeenCalled();
+        expect(cindyMock.resolveSafe).toHaveBeenCalled();
+        expect(outcome.attachments?.map((a: { name: string }) => a.name)).toContain('package.json');
+      }
+    } finally { read?.mockRestore(); realpath?.mockRestore(); materialize?.mockRestore(); }
   });
 
   it.each([false, true].flatMap((isFinal) => [false, true].map((background) => ({ isFinal, background }))))(
@@ -3524,19 +3600,77 @@ describe('watchContinuation: 观察桌面端续跑并回流', () => {
     expect(ends[0]?.finalText).toBe('第一段\n\n第二段');
   });
 
-  it.each(['output-limit', 'turn-failed'])('continuation failure retains output-limit body only (%s)', async (reason) => {
+  it.each(['run', 'continuation'])('output-limit %s waits for image bytes and settles once', async (entry) => {
+    let release!: (bytes: Buffer<ArrayBuffer>) => void;
+    const reading = new Promise<Buffer<ArrayBuffer>>((resolve) => { release = resolve; });
+    let restoreRead = () => {};
+    try {
+      const runner = createMakerHookSessionRunner({ log });
+      const { req, ends } = watchReq({ source: { im: 'telegram' } });
+      let cancel = () => {};
+      let pending: ReturnType<typeof runner.run> | undefined;
+      if (entry === 'run') {
+        fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) => {
+          const session = makeFakeSession(opts.id ?? 'sess-x');
+          session.send.mockImplementation(async (_message, options) => {
+            await options.onAccepted?.();
+            return { accepted: true };
+          });
+          return session;
+        });
+        pending = runner.run(baseReq({ source: { im: 'telegram', userText: 'hello' } }));
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      } else {
+        fakeMaker.getSession.mockReturnValueOnce(makeManualSession('sess-live'));
+        cancel = runner.watchContinuation!(req as never);
+      }
+      const read = vi.spyOn(fs, 'readFile').mockImplementation(() => reading);
+      restoreRead = () => read.mockRestore();
+      const emit = h.eventCbs.get(entry === 'run' ? 'sess-new' : 'sess-live')!;
+      emit({ type: 'text', source: 'pi', data: {
+        text: `![shot](cindy-media://blobs/${'a'.repeat(64)}.png)`, isFinal: true,
+      } });
+      emit({ type: 'error', source: 'pi', data: { reason: 'output-limit', message: 'limit', isTerminal: true } });
+      await flush();
+      expect(read).toHaveBeenCalledTimes(1);
+      cancel();
+      cancel();
+      expect(ends).toHaveLength(0);
+      release(Buffer.from('image bytes'));
+      if (pending) ends.push(await pending);
+      else await flush();
+      expect(ends).toHaveLength(1);
+      expect(ends[0]).toMatchObject({ status: 'error', finalText: '🖼️ _shot_', attachments: [
+        { mimeType: 'image/png', dataBase64: Buffer.from('image bytes').toString('base64') },
+      ] });
+    } finally {
+      release(Buffer.from('image bytes'));
+      restoreRead();
+    }
+  });
+
+  it.each([
+    ['output-limit', 'partial continuation'],
+    ['turn-failed', 'partial continuation'],
+    ['output-limit', '![shot](/private/task/shot.png)'],
+    ['output-limit', '![shot](xdt-image:///C:/Users/task/shot.png)'],
+  ])('continuation failure retains output-limit body only (%s, %s)', async (reason, text) => {
     fakeMaker.getSession.mockReturnValueOnce(makeManualSession('sess-live'));
     const runner = createMakerHookSessionRunner({ log });
     const { req, ends } = watchReq({ source: { im: 'telegram' } });
     const cancel = runner.watchContinuation!(req as never);
     const emit = h.eventCbs.get('sess-live')!;
-    emit({ type: 'text', source: 'pi', data: { text: 'partial continuation', isFinal: true } });
+    emit({ type: 'text', source: 'pi', data: { text, isFinal: true } });
     emit({ type: 'error', source: 'pi', data: { reason, message: 'provider failure', isTerminal: true } });
     expect(h.eventCbs.has('sess-live')).toBe(false);
     await flush();
     cancel();
     expect(ends).toHaveLength(1);
-    expect(ends[0]).toMatchObject({ status: 'error', finalText: reason === 'output-limit' ? 'partial continuation' : '' });
+    expect(ends[0]?.status).toBe('error');
+    if (text.startsWith('![')) {
+      expect(ends[0]?.finalText).toContain('🖼️ _shot_');
+      expect(ends[0]?.finalText).not.toContain('shot.png');
+    } else expect(ends[0]?.finalText).toBe(reason === 'output-limit' ? text : '');
     expect(ends[0]?.errorMessage).toBe(reason === 'output-limit'
       ? '模型已达到输出长度上限，本轮回复可能不完整。可以直接发送下一条消息继续。'
       : 'provider failure');
