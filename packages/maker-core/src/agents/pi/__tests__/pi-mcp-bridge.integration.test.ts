@@ -18,7 +18,7 @@
  */
 
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from 'node:http';
-import { mkdtempSync, existsSync, rmSync } from 'node:fs';
+import { mkdtempSync, existsSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -246,6 +246,22 @@ function scriptedAnthropicTurn(requestBody: string): string {
       });
     }
     return anthropicTextTurn(3, 'Bot Memory maintenance complete');
+  }
+  if (requestBody.includes('persisted disclosure first boot')) {
+    if (toolResultCount === 0) {
+      return anthropicToolTurn(1, 'cindy_mcp_list_tools', {
+        server: 'cindy_echo', tool: 'echo',
+      });
+    }
+    return anthropicTextTurn(2, 'first boot inspected echo');
+  }
+  if (requestBody.includes('persisted disclosure second boot')) {
+    if (toolResultCount === 0) {
+      return anthropicToolTurn(1, 'cindy_mcp_call_tool', {
+        server: 'cindy_echo', tool: 'echo', args: { text: 'persist-echo' },
+      });
+    }
+    return anthropicTextTurn(2, 'second boot blind call executed');
   }
   if (requestBody.includes('unknown gateway tool')) {
     return toolResultCount === 0
@@ -883,6 +899,7 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
     bridgeMode:
         | 'local' | 'local-multi' | 'bot-memory' | 'remote' | 'remote-sse' | 'remote-paginated' = 'local',
     prompt = 'call the echo tool',
+    opts: { sessionId?: string; keepDisclosureState?: boolean } = {},
   ): Promise<{
     events: AgentEvent[];
     permissionAsked: boolean;
@@ -891,13 +908,19 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
   }> {
     const agent = new PiAgent(buildDeps(bridgeMode));
     const cwd = mkdtempSync(path.join(tmpdir(), 'pi-mcp-cwd-'));
+    const sid = opts.sessionId ?? `mcp-itest-${permissionMode}`;
+    // Schema-disclosure state persists per sid in agentHome/runtime across pi process
+    // restarts — clear it unless a test deliberately continues the previous boot.
+    if (!opts.keepDisclosureState) {
+      rmSync(path.join(agentHome, 'runtime', `mcp-disclosed-${sid}.json`), { force: true });
+    }
     const requestStart = modelRequests.length;
     const requestBodyStart = modelRequestBodies.length;
     let handle: AgentSessionHandle | null = null;
     let permissionAsked = false;
     try {
       handle = await agent.startSession({
-        sessionId: `mcp-itest-${permissionMode}`,
+        sessionId: sid,
         workingDir: cwd,
         model: 'pi-test-model',
         permissionMode,
@@ -1380,6 +1403,42 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
       expect(requestBodies[1]).toContain('Inspect this tool before execution');
       expect(requestBodies[2]).toContain('inputSchema');
       await waitFor(() => opaqueTurnCaptures.length === 1);
+    },
+  );
+
+  it(
+    'schema disclosure persists across pi process restarts of the same session',
+    { timeout: 120_000 },
+    async () => {
+      echoCalls.length = 0;
+      const sid = 'mcp-itest-disclose-persist';
+      // First boot: inspect echo through the normal flow, then finish. This writes
+      // the per-session disclosure state file under agentHome/runtime.
+      await runOneTurn(
+        'ask',
+        async () => ({ kind: 'permission', behavior: 'allow' }),
+        'local',
+        'persisted disclosure first boot',
+        { sessionId: sid },
+      );
+      const stateFile = path.join(agentHome, 'runtime', `mcp-disclosed-${sid}.json`);
+      expect(existsSync(stateFile)).toBe(true);
+      const state = JSON.parse(readFileSync(stateFile, 'utf8')) as { keys?: string[] };
+      expect(Array.isArray(state.keys)).toBe(true);
+      expect(state.keys?.some((key) => key.includes('cindy_echo'))).toBe(true);
+
+      // Second boot (fresh pi process, same session id): the blind call must execute
+      // instead of being gated — the schema was already inspected in first boot.
+      echoCalls.length = 0;
+      const { requestBodies } = await runOneTurn(
+        'ask',
+        async () => ({ kind: 'permission', behavior: 'allow' }),
+        'local',
+        'persisted disclosure second boot',
+        { sessionId: sid, keepDisclosureState: true },
+      );
+      expect(echoCalls).toEqual([{ text: 'persist-echo' }]);
+      expect(requestBodies.join('\n')).not.toContain('Inspect this tool before execution');
     },
   );
 

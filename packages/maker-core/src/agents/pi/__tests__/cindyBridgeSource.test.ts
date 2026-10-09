@@ -1580,6 +1580,15 @@ describe('cindy-bridge extension source', () => {
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('private readonly disclosedSchemas');
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('mcpGateway.isSchemaDisclosed(resolvedGatewayCall)');
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('Inspect this tool before execution');
+    // Session-scoped disclosure persistence: Orca idle-release/resume restarts the pi
+    // process, so the inspect-first gate must rehydrate per-session state instead of
+    // re-blocking every already-inspected tool on each cold boot.
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('resolveMcpDisclosureStatePath');
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain("'mcp-disclosed-' + sid + '.json'");
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('loadDisclosedSchemas');
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('reconcileDisclosedSchemas');
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('writeDisclosedSchemas');
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('process.env.CINDY_PI_SESSION_ID');
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('permissionToolName = gatewayCall?.qualifiedName');
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('permissionInput = gatewayCall?.args');
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain(
