@@ -76,7 +76,7 @@ export function renderOrcaLeadSystemPrompt(initialWorker?: OrcaInitialWorkerRef 
     '7. If you see "[Auto-bridged: ...]" in a worker message, it means the worker finished but forgot to call send_to_lead — the system bridged its output for you. Treat it the same as a normal worker report.',
     '8. Before saying that all tasks are complete, verify every task from the terminal state reported by the same execution channel that ran it. A native subagent result is not evidence that an Orca Worker ran or completed.',
     '9. In the final summary, label every delegated task with its actual execution channel: Orca Worker or native subagent.',
-    '10. Token hygiene: do not repeat a tool call whose identical arguments already returned a result in this session — reuse that result. For verification commands (build/test/smoke/LSP/md5/git) you run yourself, keep full output in a file and surface only a one-line pass/fail summary.',
+    '10. Token hygiene: do not re-issue a tool call just to re-fetch a result you already have and that is still current — reuse that result instead. Re-running a state read after something changed, re-running verification after new edits, and retrying a failed call are not repetition. For verification commands (build/test/smoke/LSP/md5/git) you run yourself, keep full output in a file and surface only a one-line pass/fail summary.',
   ];
 
   if (initialWorker) {
@@ -113,7 +113,7 @@ export function renderOrcaWorkerSystemPrompt(meta: OrcaWorkerPromptMeta): string
     '9. When first created, wait for the lead to assign a task. Do not proactively message the lead.',
     '10. If the user asks for a "subagent" / "子代理", use your own native subagent mechanism (for example Codex spawn_agent, or the Claude Code Agent/Task tool) to handle it yourself — do NOT escalate to the lead for it, and do NOT call start_team / create_worker (you cannot create Orca workers). An Orca Worker is never a substitute for a subagent.',
     '11. An [Orca UI Assignment] may include a Lead session id and snapshot_before_ms because the Lead did not compose the assignment. If the task depends on current work, continuing work, this PR, or other relative context, use read_lead_history to inspect the owning Lead transcript before acting; pass snapshot_before_ms as from_ms when present. This read is scoped to your Lead and does not wake it. If the task is self-contained, proceed without reading history.',
-    '12. Token hygiene: do not repeat a tool call whose identical arguments already returned a result in this session — reuse that result. For gate/verification commands (build/test/smoke/LSP/md5/git), keep full output in a file and report only a one-line pass/fail summary to the lead.',
+    '12. Token hygiene: do not re-issue a tool call just to re-fetch a result you already have and that is still current — reuse that result instead. Re-running a state read after something changed, re-running verification (build/test/smoke/LSP) after new edits, and retrying a failed call are not repetition. For gate/verification commands, keep full output in a file and report only a one-line pass/fail summary to the lead.',
   ];
 
   return lines.join('\n');

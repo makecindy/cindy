@@ -3054,9 +3054,10 @@ class CindyMcpGateway {
 
   private disclosureCatalogFingerprint(): string {
     // Cover schema content, not just the name set: an external MCP server can
-    // redeploy the same tool name with a changed inputSchema across a restart.
+    // redeploy the same tool name with a changed inputSchema or description
+    // across a restart.
     return Array.from(this.tools.values())
-      .map((tool) => tool.serverName + '\u0000' + tool.name + '\u0000' + JSON.stringify(tool.inputSchema))
+      .map((tool) => tool.serverName + '\u0000' + tool.name + '\u0000' + tool.description + '\u0000' + JSON.stringify(tool.inputSchema))
       .sort()
       .join('\u0001');
   }
@@ -3083,7 +3084,11 @@ class CindyMcpGateway {
 
   private writeDisclosedSchemas(): void {
     if (!this.disclosureFile) return;
-    const tmp = this.disclosureFile + '.tmp';
+    // Per-writer tmp name: two Cindy instances can host the same session
+    // (--passive); a shared tmp path would let one instance rename the other's
+    // half-written file. Full-content last-writer-wins is fine — lost keys only
+    // cost one extra inspection, and the gate carries no authority.
+    const tmp = this.disclosureFile + '.' + process.pid + '.tmp';
     try {
       writeFileSync(tmp, JSON.stringify({
         piVersion: this.disclosureVersion,
