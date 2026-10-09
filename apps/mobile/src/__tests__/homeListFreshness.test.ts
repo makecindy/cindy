@@ -20,12 +20,16 @@ function createHarness(deviceIds: readonly string[]) {
   const unregister = deviceIds.map((deviceId) => remoteSessionStore.registerReseedHandler(deviceId, () => {
     freshness.invalidate(deviceId);
   }));
-  /** Mirrors hydrateDeviceSessionsOnce: capture → list → markFresh. */
-  const hydrate = async (deviceId: string, beforeResponse?: () => void) => {
+  /** Mirrors hydrateDeviceSessionsOnce: capture → list → markFresh (bounded when truncated). */
+  const hydrate = async (deviceId: string, beforeResponse?: () => void, truncated = false) => {
     const token = freshness.capture(deviceId);
     await invoke(deviceId, 'local-db:sessions:list');
     beforeResponse?.();
-    freshness.markFresh(deviceId, token);
+    freshness.markFresh(
+      deviceId,
+      token,
+      truncated ? remoteSessionStore.captureDeviceSessionListMutationEpoch(deviceId) : null,
+    );
   };
   const returnHome = async (options: { awayMs?: number; forceFull?: boolean } = {}) => {
     const now = 1_000_000;
@@ -36,6 +40,7 @@ function createHarness(deviceIds: readonly string[]) {
       now,
       deviceIds,
       freshness,
+      listMutationEpoch: (deviceId) => remoteSessionStore.captureDeviceSessionListMutationEpoch(deviceId),
     });
     for (const deviceId of plan.kind === 'full' ? deviceIds : plan.deviceIds) await hydrate(deviceId);
     return plan;
@@ -102,6 +107,22 @@ describe('Home list freshness on return', () => {
     expect(home.listCalls()).toEqual(['pc']);
   });
 
+  it('re-pulls a device whose list was cut at the page limit once any list push arrived', async () => {
+    // Over LIST_LIMIT tasks: an archive or an outside task's activity changes which tasks belong
+    // in the window, which local patches cannot fill in. A complete list keeps reusing patches.
+    const home = createHarness(['big', 'small']);
+    await home.hydrate('big', undefined, true);
+    await home.hydrate('small');
+    home.invoke.mockClear();
+    expect(await home.returnHome()).toEqual({ kind: 'refill', deviceIds: [] });
+
+    for (const deviceId of ['big', 'small']) {
+      remoteSessionStore.applyRemotePush(deviceId, 'local-db:sessions:patched', { sessionId: 'old', patch: { status: 'archived' } });
+    }
+    expect(await home.returnHome()).toEqual({ kind: 'refill', deviceIds: ['big'] });
+    expect(home.listCalls()).toEqual(['big']);
+  });
+
   it('keeps a device stale when a reseed lands while its list request is in flight', async () => {
     const home = createHarness(['mac']);
     await home.hydrate('mac', () => remoteSessionStore.requestReseed('mac'));
@@ -124,7 +145,7 @@ describe('Home list freshness on return', () => {
 
   it('needs a completed first sync before reusing the mirror', () => {
     const freshness = createHomeListFreshness();
-    const input = { forceFull: false, now: 10_000, deviceIds: ['mac'], freshness };
+    const input = { forceFull: false, now: 10_000, deviceIds: ['mac'], freshness, listMutationEpoch: () => 0 };
     expect(planHomeListFocusReturn({ ...input, blurredAt: 9_000, lastSyncedAt: null })).toEqual({ kind: 'full' });
     expect(planHomeListFocusReturn({ ...input, blurredAt: null, lastSyncedAt: 1 })).toEqual({ kind: 'full' });
     expect(planHomeListFocusReturn({ ...input, blurredAt: 11_000, lastSyncedAt: 1 })).toEqual({ kind: 'full' });
@@ -166,7 +187,7 @@ describe('Home list sync wiring', () => {
     const subscribe = hydrate.indexOf("await subscribe(HOME_LIST_SUBSCRIPTION_OWNER, device.deviceId, ['sessions']);");
     const list = hydrate.indexOf("'local-db:sessions:list'");
     const applied = hydrate.indexOf('remoteSessionStore.setDeviceSessions(');
-    const fresh = hydrate.indexOf('homeListFreshnessRef.current.markFresh(device.deviceId, freshnessToken);');
+    const fresh = hydrate.indexOf('homeListFreshnessRef.current.markFresh(');
     expect(capture).toBeGreaterThan(-1);
     expect(capture).toBeLessThan(subscribe);
     expect(subscribe).toBeLessThan(list);
@@ -187,13 +208,26 @@ describe('Home list sync wiring', () => {
 
   it('refreshes automation badges on return only for devices that sent schedule events while away', () => {
     const events = source.slice(source.indexOf('useEffect(() => remoteScheduleEventStore.subscribe('), source.indexOf('const refreshHomeScheduleIndexes = useCallback('));
-    expect(events).toMatch(/if \(!screenFocusedRef\.current\) \{\s*homeScheduleIndexDirtyRef\.current\.add\(deviceId\);\s*continue;\s*\}\s*refreshDeviceScheduleIndex\(deviceId, sessionIds\);/);
+    expect(events).toMatch(/if \(!screenFocusedRef\.current\) \{\s*markHomeScheduleIndexDirty\(deviceId\);\s*continue;\s*\}\s*refreshDeviceScheduleIndex\(deviceId, sessionIds\);/);
     // The old unconditional "refresh every device on focus" effect is gone.
     expect(source).not.toContain('兜底刷新一次 scheduleIndex');
     const focus = source.slice(source.indexOf('useFocusEffect(\n    useCallback(() => {\n      // The focus event'));
     expect(focus.indexOf('screenFocusedRef.current = true;')).toBeLessThan(focus.indexOf('refreshHomeScheduleIndexes('));
-    expect(focus).toContain('const scheduleDirty = new Set(homeScheduleIndexDirtyRef.current);');
-    expect(focus).toContain('homeScheduleIndexDirtyRef.current.clear();');
+    expect(focus).toContain('const scheduleDirty = new Set(homeScheduleIndexDirtyRef.current.keys());');
+  });
+
+  it('keeps automation badge refreshes pending until one is applied', () => {
+    const refresh = source.slice(source.indexOf('const refreshDeviceScheduleIndex = useCallback('), source.indexOf('const hydrateDeviceSessionsOnce = useCallback('));
+    // Recorded before the focus gate, so a skipped refresh or a dropped in-flight result is refilled on return.
+    expect(refresh.indexOf('const pendingSeq = markHomeScheduleIndexDirty(deviceId);'))
+      .toBeLessThan(refresh.indexOf("if (!screenFocusedRef.current || AppState.currentState !== 'active') return;"));
+    const apply = refresh.slice(refresh.indexOf('setScheduleIndex((current) => replaceSessionScheduleIndexEntries('));
+    expect(apply).toMatch(/if \(homeScheduleIndexDirtyRef\.current\.get\(deviceId\) === pendingSeq\) \{\s*homeScheduleIndexDirtyRef\.current\.delete\(deviceId\);/);
+    const hydrate = source.slice(source.indexOf('const hydrateDeviceSessionsOnce = useCallback('), source.indexOf('const hydrateDeviceSessions = useCallback('));
+    expect(hydrate.indexOf('markHomeScheduleIndexDirty(device.deviceId);'))
+      .toBeLessThan(hydrate.indexOf('scheduleIndexDeferRegistryRef.current.schedule(device.deviceId'));
+    expect(hydrate).toContain('nextSessions.length >= LIST_LIMIT');
+    expect(hydrate).toContain('remoteSessionStore.captureDeviceSessionListMutationEpoch(device.deviceId)');
   });
 
   it('marks a device stale whenever its list asks for a reseed, even while Home is covered', () => {

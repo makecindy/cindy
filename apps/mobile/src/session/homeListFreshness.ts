@@ -7,6 +7,8 @@
  * - a reseed request (task created elsewhere, unknown-session patch, or the device-link recovery
  *   replay that follows a peer reset / reconnect / foreground return);
  * - the device left the sync scope, failed, or went offline;
+ * - its last list was cut at the page limit and any list push arrived since: such a push may
+ *   change which tasks belong in the window, which the local mirror cannot complete;
  * - an app-wide reset such as going to the background.
  *
  * Tokens are captured when a pull starts, so a reseed that lands while the request is in flight
@@ -17,12 +19,21 @@ export interface HomeListFreshnessToken {
   readonly invalidation: number;
 }
 
+interface FreshRecord extends HomeListFreshnessToken {
+  /** List mutation epoch after applying a truncated list; null when the list was complete. */
+  readonly boundedListEpoch: number | null;
+}
+
 export interface HomeListFreshness {
   /** Capture before reading the list; pass it back to `markFresh` after applying the response. */
   capture(deviceId: string): HomeListFreshnessToken;
-  markFresh(deviceId: string, token: HomeListFreshnessToken): void;
+  /**
+   * `boundedListEpoch`: the device's list mutation epoch when the applied list was truncated at
+   * the page limit, otherwise null.
+   */
+  markFresh(deviceId: string, token: HomeListFreshnessToken, boundedListEpoch?: number | null): void;
   /** True when nothing has invalidated the device since its last successful full pull. */
-  isFresh(deviceId: string): boolean;
+  isFresh(deviceId: string, listMutationEpoch?: number): boolean;
   invalidate(deviceId: string): void;
   invalidateAll(): void;
   clear(): void;
@@ -31,7 +42,7 @@ export interface HomeListFreshness {
 export function createHomeListFreshness(): HomeListFreshness {
   let epoch = 0;
   const invalidations = new Map<string, number>();
-  const fresh = new Map<string, HomeListFreshnessToken>();
+  const fresh = new Map<string, FreshRecord>();
   const tokenFor = (deviceId: string): HomeListFreshnessToken => ({
     epoch,
     invalidation: invalidations.get(deviceId) ?? 0,
@@ -42,13 +53,14 @@ export function createHomeListFreshness(): HomeListFreshness {
   };
   return {
     capture: tokenFor,
-    markFresh(deviceId, token) {
-      if (isCurrent(deviceId, token)) fresh.set(deviceId, token);
+    markFresh(deviceId, token, boundedListEpoch = null) {
+      if (isCurrent(deviceId, token)) fresh.set(deviceId, { ...token, boundedListEpoch });
       else fresh.delete(deviceId);
     },
-    isFresh(deviceId) {
+    isFresh(deviceId, listMutationEpoch) {
       const record = fresh.get(deviceId);
-      return record !== undefined && isCurrent(deviceId, record);
+      if (record === undefined || !isCurrent(deviceId, record)) return false;
+      return record.boundedListEpoch === null || record.boundedListEpoch === listMutationEpoch;
     },
     invalidate(deviceId) {
       invalidations.set(deviceId, (invalidations.get(deviceId) ?? 0) + 1);
@@ -89,6 +101,8 @@ export function planHomeListFocusReturn(input: {
   now: number;
   deviceIds: readonly string[];
   freshness: HomeListFreshness;
+  /** Current per-device list mutation epoch (bumped by every list push). */
+  listMutationEpoch(deviceId: string): number;
 }): HomeListFocusReturnPlan {
   const awayMs = input.blurredAt === null ? null : input.now - input.blurredAt;
   if (
@@ -100,6 +114,8 @@ export function planHomeListFocusReturn(input: {
   ) return { kind: 'full' };
   return {
     kind: 'refill',
-    deviceIds: input.deviceIds.filter((deviceId) => !input.freshness.isFresh(deviceId)),
+    deviceIds: input.deviceIds.filter((deviceId) => (
+      !input.freshness.isFresh(deviceId, input.listMutationEpoch(deviceId))
+    )),
   };
 }

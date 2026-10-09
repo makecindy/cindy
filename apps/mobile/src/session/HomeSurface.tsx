@@ -508,8 +508,15 @@ function HomeScreenContent({ active = true, onModeChange, width, newSessionInSys
   const homeBlurredAtRef = useRef<number | null>(null);
   // 首页被盖住期间 App 退过后台或 relay 重连过：回首页走整轮 loadHome（含设备清单）。
   const homeFullReloadOnFocusRef = useRef(false);
-  // 首页被盖住期间收到过自动化事件的设备：回首页只刷新这些设备的自动化角标。
-  const homeScheduleIndexDirtyRef = useRef(new Set<string>());
+  // 自动化角标待补刷的设备：首页被盖住时收到事件、或刷新被失焦跳过／结果被丢弃。值是登记
+  // 序号，只有同一序号的刷新成功应用后才清除；回首页只刷新这些设备。
+  const homeScheduleIndexDirtyRef = useRef(new Map<string, number>());
+  const homeScheduleIndexDirtySeqRef = useRef(0);
+  const markHomeScheduleIndexDirty = useCallback((deviceId: string) => {
+    const seq = ++homeScheduleIndexDirtySeqRef.current;
+    homeScheduleIndexDirtyRef.current.set(deviceId, seq);
+    return seq;
+  }, []);
   const homeSyncRowsRef = useRef<ReturnType<typeof toDeviceListItems<DeviceView>>>([]);
   const hydrateDeviceSessionsRef = useRef<HydrateDeviceSessions>(async () => ({
     failure: null,
@@ -787,11 +794,14 @@ function HomeScreenContent({ active = true, onModeChange, width, newSessionInSys
     sessionIds: readonly string[],
     options?: { accountGeneration?: number; homeSyncGeneration?: number },
   ) => {
-    if (!screenFocusedRef.current || AppState.currentState !== 'active') return;
     const expectedAccountGeneration = options?.accountGeneration ?? accountGeneration;
+    if (homeAccountGenerationRef.current !== expectedAccountGeneration) return;
+    if (!homeSyncTargetDeviceIdsRef.current.has(deviceId)) return;
+    // 先登记待补刷，成功应用后才清除：失焦跳过、在途结果被丢弃都留给回首页补刷。
+    const pendingSeq = markHomeScheduleIndexDirty(deviceId);
+    if (!screenFocusedRef.current || AppState.currentState !== 'active') return;
     const expectedHomeSyncGeneration = options?.homeSyncGeneration
       ?? homeSyncGenerationByDeviceRef.current.get(deviceId);
-    if (homeAccountGenerationRef.current !== expectedAccountGeneration) return;
     if (
       expectedHomeSyncGeneration === undefined
       || !isCurrentHomeSyncTarget(deviceId, expectedHomeSyncGeneration)
@@ -821,11 +831,14 @@ function HomeScreenContent({ active = true, onModeChange, width, newSessionInSys
           sessionIds,
           nextIndex,
         ));
+        if (homeScheduleIndexDirtyRef.current.get(deviceId) === pendingSeq) {
+          homeScheduleIndexDirtyRef.current.delete(deviceId);
+        }
       })
       .catch(() => {
         // 网络失败时保留旧数据,不清零已有徽标——数据清零只应由明确的"已读"事件触发。
       });
-  }, [accountGeneration, invoke, isCurrentHomeSyncTarget]);
+  }, [accountGeneration, invoke, isCurrentHomeSyncTarget, markHomeScheduleIndexDirty]);
 
   const hydrateDeviceSessionsOnce = useCallback((
     device: DeviceView,
@@ -919,6 +932,8 @@ function HomeScreenContent({ active = true, onModeChange, width, newSessionInSys
       // 抢同一条 WS 管道(见 scheduleIndexDefer / issue #324)。home 自动化分组与名称已由 fallbackScheduleInfo
       // 兜底,徽标晚半拍出现即可。
       // 按设备 id 登记:同设备上一轮还没执行的延后任务会被先取消,避免较早回调用旧 nextSessions 覆盖新状态。
+      // 延后刷新若因首页失焦被跳过，回首页时补刷（列表已标新鲜，不会再触发 hydrate）。
+      markHomeScheduleIndexDirty(device.deviceId);
       scheduleIndexDeferRegistryRef.current.schedule(device.deviceId, () => {
         void (async () => {
           while (syncInFlightRef.current) await syncInFlightRef.current;
@@ -932,7 +947,15 @@ function HomeScreenContent({ active = true, onModeChange, width, newSessionInSys
           });
         })();
       });
-      homeListFreshnessRef.current.markFresh(device.deviceId, freshnessToken);
+      // 列表被 LIST_LIMIT 截断时，补丁可能改变前 N 条的成员（如归档后第 N+1 条该补进、
+      // 窗口外任务因活动排进来），本地无法补全：记下 mutation epoch，回首页时有变就重拉。
+      homeListFreshnessRef.current.markFresh(
+        device.deviceId,
+        freshnessToken,
+        nextSessions.length >= LIST_LIMIT
+          ? remoteSessionStore.captureDeviceSessionListMutationEpoch(device.deviceId)
+          : null,
+      );
       updateDeviceConnectionState(device.deviceId, 'idle');
       // hydrate 成功后去抖回写首页列表缓存(collect 在定时器触发时才读 store,拿届时最新快照;
       // 多设备并发 hydrate 只落盘一次)。不在 store 每次变更时写盘。缓存按账号键控。
@@ -956,7 +979,7 @@ function HomeScreenContent({ active = true, onModeChange, width, newSessionInSys
         superseded: false,
       };
     }
-  }, 'foreground'), [HOME_LIST_SUBSCRIPTION_OWNER, homeCacheUserId, invoke, isCurrentHomeSyncTarget, markDeviceOffline, refreshDeviceScheduleIndex, statusFilter, active, subscribe, updateDeviceConnectionState]);
+  }, 'foreground'), [HOME_LIST_SUBSCRIPTION_OWNER, homeCacheUserId, invoke, isCurrentHomeSyncTarget, markDeviceOffline, markHomeScheduleIndexDirty, refreshDeviceScheduleIndex, statusFilter, active, subscribe, updateDeviceConnectionState]);
 
   const hydrateDeviceSessions = useCallback((
     device: DeviceView,
@@ -1371,7 +1394,7 @@ function HomeScreenContent({ active = true, onModeChange, width, newSessionInSys
       }
       // 首页被盖住时刷新会被门禁跳过；记下这台，回首页再刷，不在返回时兜底全量刷新。
       if (!screenFocusedRef.current) {
-        homeScheduleIndexDirtyRef.current.add(deviceId);
+        markHomeScheduleIndexDirty(deviceId);
         continue;
       }
       refreshDeviceScheduleIndex(deviceId, sessionIds);
@@ -1455,9 +1478,9 @@ function HomeScreenContent({ active = true, onModeChange, width, newSessionInSys
         now: Date.now(),
         deviceIds: homeSyncRowsRef.current.map((item) => item.device.deviceId),
         freshness: homeListFreshnessRef.current,
+        listMutationEpoch: (deviceId) => remoteSessionStore.captureDeviceSessionListMutationEpoch(deviceId),
       });
-      const scheduleDirty = new Set(homeScheduleIndexDirtyRef.current);
-      homeScheduleIndexDirtyRef.current.clear();
+      const scheduleDirty = new Set(homeScheduleIndexDirtyRef.current.keys());
       if (plan.kind === 'refill') {
         refillStaleHomeDevices(plan.deviceIds);
         if (scheduleDirty.size > 0) refreshHomeScheduleIndexes(scheduleDirty);
