@@ -101,7 +101,7 @@ export function registerSendToWorkerTool(
         .array(z.string().min(1))
         .max(8)
         .optional()
-        .describe('可选, 随消息发给 worker 的图片(png/jpeg/gif/webp, 最多 8 张); 仅本机 worker 支持, SSH 远端 worker 返回 INVALID_ARGS。地址两类: (a) 用户在对话里贴的图 — 把上下文 <cindy-host-image-references> 里的 uri 原样传入; (b) Lead 自己落盘的本机绝对路径'),
+        .describe('可选, 随消息发给 worker 的图片(png/jpeg/gif/webp, 最多 8 张); 仅本机 worker 支持, SSH 远端 worker 会被拒绝。地址两类: (a) 用户在对话里贴的图 — 把上下文 <cindy-host-image-references> 里的 uri 原样传入; (b) Lead 自己落盘的本机绝对路径'),
     },
     handler: async ({ target_session_id, message, delivery, images }) => {
       const ctx = deps.getSessionContext?.();

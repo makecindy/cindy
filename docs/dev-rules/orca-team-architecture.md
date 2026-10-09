@@ -321,8 +321,9 @@ Git worktree，不改变供应商、模型与 Worker 创建权限偏好。
    不降级为纯文本（静默丢图是产品错误）。dispatcher 入口经 host 注入的
    `validateImageAttachments` 做校验；直发时 image block 跟在格式化文本后，
    排队/插话时文件挂在 entry `files`，drain 由 `buildMakerUserMessage` 还原成同样的
-   block 序列；`update_queued_message` / `merge_queued_messages` 重建只改文本字段，
-   files 随 `...entry` 保留。带图消息的 `persistedContent`（DB/展示）仍是纯文本协议，
+   block 序列；`update_queued_message` 重建只改文本字段，files 随 `...entry` 保留；
+   `merge_queued_messages` 把其余被合并条目的图片按队列顺序并入保留条目。带图消息的
+   `persistedContent`（DB/展示）仍是纯文本协议，
    队列气泡不预览图片（已知边界）。实现指针：`orcaInterAgentDispatcher.ts` 的
    `imageFiles` / `agentMessageTextWithImages`、`orcaImageAttachments.ts` 与 `register.ts` 的
    `validateImageAttachments`。

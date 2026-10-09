@@ -506,6 +506,23 @@ describe('OrcaTeamService', () => {
     expect(leadMessages).toEqual(['[Auto-bridged: worker 完成但未调 send_to_lead]\n\n完成了']);
   });
 
+  it('forwards imagePaths through dispatchWorkerTask to the shared primitive', async () => {
+    const { deps, service } = createDeps();
+
+    await expect(
+      service.dispatchWorkerTask({
+        targetSessionId: 'worker-session-1',
+        message: '看截图',
+        imagePaths: ['C:/tmp/a.png'],
+        dispatchMeta: { source: 'test-source', context: 'images' },
+      }),
+    ).resolves.toMatchObject({ dispatched: true });
+
+    expect(deps.dispatchWorkerMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ imagePaths: ['C:/tmp/a.png'] }),
+    );
+  });
+
   it('resumes a stale running worker before dispatching the next task', async () => {
     const { deps, service, setWorker } = createDeps();
     setWorker(
@@ -3187,6 +3204,52 @@ describe('OrcaTeamService worker queued message control', () => {
       senderLabel: 'Lead',
       displayText: 'merged task',
     });
+  });
+
+  it('keeps merged items images on the survivor in queue order', async () => {
+    const imageFile = (name: string) => ({
+      id: `file-${name}`,
+      name,
+      path: `/tmp/${name}`,
+      ext: '.png',
+      size: 10,
+      category: 'image' as const,
+      mimeType: 'image/png',
+    });
+    let queue = [
+      { ...queuedItem('q1', leadOrigin, 'one'), files: [imageFile('a.png')] },
+      { ...queuedItem('q2', leadOrigin, 'two'), files: [imageFile('b.png'), imageFile('c.png')] },
+      queuedItem('q3', leadOrigin, 'three'),
+    ];
+    const mergeQueuedMessages = vi.fn((_sessionId, ids, buildReplacement) => {
+      const targets = queue.slice(0, ids.length);
+      const replacement = buildReplacement(targets);
+      if (!replacement) return false;
+      queue = [replacement, ...queue.slice(ids.length)];
+      return true;
+    });
+    const { service } = createDeps({
+      getSessionQueueSnapshot: vi.fn(async () => ({
+        pendingQueue: queue,
+        steeringClientIds: [],
+        consumingClientIds: [],
+        isWorking: true,
+        willQueue: true,
+        queuePaused: false,
+      })),
+      mergeQueuedMessages,
+    });
+
+    await expect(
+      service.mergeWorkerQueuedMessages({
+        callerLeadSessionId: 'lead-1',
+        workerRef: 'worker-1',
+        queuedMessageIds: ['q1', 'q2'],
+        message: 'merged task',
+      }),
+    ).resolves.toMatchObject({ ok: true, queuedMessageId: 'q1' });
+
+    expect(queue[0]?.files?.map((file) => file.name)).toEqual(['a.png', 'b.png', 'c.png']);
   });
 
   it('returns QUEUE_CHANGED with the latest full queue and no partial mutation', async () => {
