@@ -1751,7 +1751,7 @@ function formatWechatQuote(message: WechatInboundMessage): string {
   const details = [quote.title?.trim(), quote.text?.trim()].filter((item): item is string =>
     Boolean(item),
   );
-  if (quote.media.length > 0) details.push(`原消息记录含 ${quote.media.length} 个附件，实际提供情况见本轮消息说明`);
+  if (quote.media.length > 0) details.push(`原消息记录含 ${quote.media.length} 个附件`);
   return details.length > 0 ? `[引用：${details.join('｜')}]` : '';
 }
 
@@ -2056,6 +2056,7 @@ function machineErrorCode(error: unknown): string {
 export const __testing = {
   parseTaskPayload,
   prepareWechatTaskTurn,
+  formatWechatQuote,
   activePeerIdForSession,
   acceptedPollTaskIds,
   authorizationCancelPhase,
