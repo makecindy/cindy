@@ -4,6 +4,7 @@ import {
   REMOTE_RESOURCE_LIST_CHANNEL,
   REMOTE_RESOURCE_MANIFEST_CHANNEL,
   REMOTE_RESOURCE_PROTOCOL_VERSION,
+  parseRemoteResourceRef,
   resolveRemoteText,
   type RemoteActionInvokeResponse,
   type RemoteCollectionDescriptor,
@@ -134,11 +135,7 @@ function normalizeRemoteText(value: unknown, max = MAX_REMOTE_TEXT_CHARS): Remot
 }
 
 function normalizeRemoteRef(value: unknown): RemoteResourceRef | null {
-  const record = recordOf(value);
-  const collectionId = boundedString(record?.collectionId, MAX_REMOTE_ID_CHARS);
-  const kind = boundedString(record?.kind, MAX_REMOTE_ID_CHARS);
-  const id = boundedString(record?.id, MAX_REMOTE_ID_CHARS);
-  return collectionId && kind && id ? { collectionId, kind, id } : null;
+  return parseRemoteResourceRef(value);
 }
 
 function normalizeRemoteStatus(value: unknown): RemoteResourceStatus | null {
