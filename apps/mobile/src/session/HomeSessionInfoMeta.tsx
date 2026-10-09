@@ -124,7 +124,8 @@ function InfoMetaContent({
     <View style={styles.row} testID={`home.sessionInfo.${session.id}`}>
       {pieces.map((piece, index) => (
         <Fragment key={piece.key}>
-          {index > 0 ? <Text accessible={false} style={[textStyle, styles.separator]}>·</Text> : null}
+          {/* 分隔符与行内时间同一文字角色与语义字色,不用透明度另造一档灰。 */}
+          {index > 0 ? <Text accessible={false} style={textStyle}>·</Text> : null}
           {piece.key === 'time' ? (
             <SessionRelativeTime lastActivityAt={item.lastActivityAt} style={textStyle} />
           ) : piece.key === 'pr' && pr ? (
@@ -240,9 +241,6 @@ const styles = StyleSheet.create({
     gap: spacing.xs,
     maxWidth: '62%',
     overflow: 'hidden',
-  },
-  separator: {
-    opacity: 0.5,
   },
   tabular: {
     fontVariant: ['tabular-nums'],

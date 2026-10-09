@@ -230,8 +230,10 @@ import {
 import {
   readHomeViewPreferences,
   saveHomeViewPreferences as persistHomeViewPreferences,
+  type HomeViewPreferencePatch,
   type HomeViewPreferences,
 } from '@/session/homeViewPreferenceStore';
+import { homeNavigationOwner } from '@/session/useHomeMode';
 import {
   getCachedHomeListSnapshot,
   scheduleHomeListSnapshotPersist,
@@ -429,6 +431,23 @@ export const HomeListViewportContext = createContext<{
   viewportHeight: number;
 } | null>(null);
 
+/**
+ * 「最近活跃」筛选用的粗粒度时钟:只在该筛选开启且首页可见时每 5 分钟前进一次
+ * (筛选按天截断,分钟级精度没有意义,也避免每分钟重建整张列表);开启或回到首页时立即对时。
+ * 关闭时返回 0,调用方在重新计算时取当下时间,且不会因时钟单独触发重算。
+ */
+const HOME_FILTER_CLOCK_MS = 5 * 60 * 1000;
+function useHomeFilterClock(enabled: boolean): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!enabled) return;
+    setNow(Date.now());
+    const timer = setInterval(() => setNow(Date.now()), HOME_FILTER_CLOCK_MS);
+    return () => clearInterval(timer);
+  }, [enabled]);
+  return enabled ? now : 0;
+}
+
 export function MobileHome(props: MobileHomeProps) {
   const screenFocused = useIsFocused();
   const { accountGeneration } = useAuth();
@@ -459,9 +478,20 @@ function HomeScreenContent({ active = true, onModeChange, width, newSessionInSys
   const styles = useThemedStyles(makeStyles);
   const { colors, mode } = useTheme();
   const { t, i18n: i18nInstance } = useTranslation();
-  const saveHomeViewPreferences = useCallback((patch: Parameters<typeof persistHomeViewPreferences>[0]) => {
+  // 项目筛选按账号身份存取(项目 key 跨账号无效);其余视图偏好仍按设备共用。
+  const { user: preferenceUser } = useAuth();
+  const preferenceOwner = homeNavigationOwner(preferenceUser);
+  const preferenceOwnerRef = useRef(preferenceOwner);
+  preferenceOwnerRef.current = preferenceOwner;
+  const saveHomeViewPreferences = useCallback((
+    patch: Omit<HomeViewPreferencePatch, 'projectFilter'> & { projectFilter?: HomeProjectFilter },
+  ) => {
     const owner = getMobileAuthOwner();
-    return persistHomeViewPreferences(patch).catch(() => {
+    const { projectFilter, ...rest } = patch;
+    const stored: HomeViewPreferencePatch = projectFilter === undefined
+      ? rest
+      : { ...rest, projectFilter: { owner: preferenceOwnerRef.current, value: projectFilter } };
+    return persistHomeViewPreferences(stored).catch(() => {
       if (isMobileAuthOwnerCurrent(owner)) {
         Alert.alert(t('devices.list.alert.actionFailed'), t('models.unified.saveFailed'));
       }
@@ -1280,7 +1310,7 @@ function HomeScreenContent({ active = true, onModeChange, width, newSessionInSys
     const expectedAccountGeneration = homeAccountGenerationRef.current;
     let cancelled = false;
     const read = startBoundedStartupRead<HomeViewPreferences | null>(
-      readHomeViewPreferences(),
+      readHomeViewPreferences(preferenceOwnerRef.current),
       null,
     );
     const applyPreferences = (preferences: HomeViewPreferences | null) => {
@@ -1910,15 +1940,17 @@ function HomeScreenContent({ active = true, onModeChange, width, newSessionInSys
     projects: projectFilter,
     vendor: vendorFilter,
   }), [lastActivityFilter, projectFilter, vendorFilter]);
+  // 「最近活跃」按当前时间截断:列表没有新数据时也要让越过截止线的任务按时移出。
+  const filterTick = useHomeFilterClock(lastActivityFilter !== 'all' && screenFocused);
   const filteredSharedRows = useMemo(
-    () => filterSharedHomeRows(sharedGroup.rows, contentFilters, Date.now()),
-    [contentFilters, sharedGroup.rows],
+    () => filterSharedHomeRows(sharedGroup.rows, contentFilters, filterTick || Date.now()),
+    [contentFilters, filterTick, sharedGroup.rows],
   );
   const sharedRows = shouldReplaceListWithSearchResults(searchQuery, indexedSearch.status) ? [] : filteredSharedRows;
   const contentFilterCount = activeContentFilterCount(contentFilters);
   const filteredHome = useMemo(
-    () => applyHomeContentFilters(sharedGroup.home, contentFilters, Date.now()),
-    [contentFilters, sharedGroup.home],
+    () => applyHomeContentFilters(sharedGroup.home, contentFilters, filterTick || Date.now()),
+    [contentFilters, filterTick, sharedGroup.home],
   );
   const homeSections = useMemo(
     () => buildHomeSections(filteredHome, groupByProject, pinnedCollapsed, {

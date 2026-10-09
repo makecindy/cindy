@@ -28,7 +28,10 @@ export interface HomeViewPreferences {
   /** 缺省按最近活动;手动时项目行按 manualProjectOrder,对话仍跟任务排序。 */
   projectOrder: HomeProjectOrder;
   manualProjectOrder: string[];
+  /** 项目 key 带设备与路径,只对保存它的账号身份有效(见 projectFilterOwner)。 */
   projectFilter: HomeProjectFilter;
+  /** 保存项目筛选时的账号身份(homeNavigationOwner);读取时与当前身份不符则视为不筛选。 */
+  projectFilterOwner: string;
   vendorFilter: HomeVendorFilter;
   lastActivityFilter: HomeLastActivityFilter;
   /** 缺省列表(带预览行):手机首页一直是这个样子。 */
@@ -46,7 +49,8 @@ export interface HomeViewPreferencePatch {
   statusFilter?: HomeStatusFilter;
   projectOrder?: HomeProjectOrder;
   manualProjectOrder?: string[];
-  projectFilter?: HomeProjectFilter;
+  /** 写项目筛选必须同时给 owner,否则无法判断它属于哪个账号。 */
+  projectFilter?: { owner: string; value: HomeProjectFilter };
   vendorFilter?: HomeVendorFilter;
   lastActivityFilter?: HomeLastActivityFilter;
   viewMode?: HomeListViewMode;
@@ -54,14 +58,22 @@ export interface HomeViewPreferencePatch {
   selectedDevice?: { deviceId: string; name: string } | null;
 }
 
-export async function readHomeViewPreferences(): Promise<HomeViewPreferences> {
+/**
+ * 读首页视图偏好。偏好整体按设备存一份,但项目筛选按账号隔离:切换账号后另一个账号
+ * 的项目 key 匹配不上任何项目,沿用会把新账号的首页筛空,因此身份不符时回到不筛选。
+ */
+export async function readHomeViewPreferences(owner: string): Promise<HomeViewPreferences> {
   const raw = await AsyncStorage.getItem(STORAGE_KEY);
   if (!raw) return emptyPreferences();
+  let preferences: HomeViewPreferences;
   try {
-    return normalizeStoredPreferences(JSON.parse(raw));
+    preferences = normalizeStoredPreferences(JSON.parse(raw));
   } catch {
     return emptyPreferences();
   }
+  return owner && preferences.projectFilterOwner === owner
+    ? preferences
+    : { ...preferences, projectFilter: 'all', projectFilterOwner: '' };
 }
 
 // save 是 read-modify-write:并发调用会拿到同一份旧快照互相覆盖(后落盘者丢掉先落盘的 patch),
@@ -88,7 +100,8 @@ async function writeHomeViewPreferences(patch: HomeViewPreferencePatch): Promise
     statusFilter: patch.statusFilter ?? current.statusFilter,
     projectOrder: patch.projectOrder ?? current.projectOrder,
     manualProjectOrder: patch.manualProjectOrder ?? current.manualProjectOrder,
-    projectFilter: patch.projectFilter ?? current.projectFilter,
+    projectFilter: patch.projectFilter ? patch.projectFilter.value : current.projectFilter,
+    projectFilterOwner: patch.projectFilter ? patch.projectFilter.owner : current.projectFilterOwner,
     vendorFilter: patch.vendorFilter ?? current.vendorFilter,
     lastActivityFilter: patch.lastActivityFilter ?? current.lastActivityFilter,
     viewMode: patch.viewMode ?? current.viewMode,
@@ -115,6 +128,7 @@ function emptyPreferences(): HomeViewPreferences {
     projectOrder: 'activity',
     manualProjectOrder: [],
     projectFilter: 'all',
+    projectFilterOwner: '',
     vendorFilter: 'all',
     lastActivityFilter: 'all',
     viewMode: 'list',
@@ -142,6 +156,7 @@ function normalizeStoredPreferences(value: unknown): HomeViewPreferences {
     projectOrder: record.projectOrder === 'custom' ? 'custom' : 'activity',
     manualProjectOrder: readStringList(record.manualProjectOrder),
     projectFilter: normalizeProjectFilter(record.projectFilter),
+    projectFilterOwner: readString(record.projectFilterOwner) ?? '',
     vendorFilter: normalizeVendorFilter(record.vendorFilter),
     lastActivityFilter: normalizeLastActivityFilter(record.lastActivityFilter),
     viewMode: normalizeViewMode(record.viewMode),
@@ -177,6 +192,7 @@ function serializePreferences(preferences: HomeViewPreferences): Record<string, 
     projectOrder: preferences.projectOrder,
     manualProjectOrder: preferences.manualProjectOrder,
     projectFilter: preferences.projectFilter,
+    ...(preferences.projectFilterOwner ? { projectFilterOwner: preferences.projectFilterOwner } : {}),
     vendorFilter: preferences.vendorFilter,
     lastActivityFilter: preferences.lastActivityFilter,
     viewMode: preferences.viewMode,

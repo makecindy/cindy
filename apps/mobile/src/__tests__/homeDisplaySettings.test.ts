@@ -71,16 +71,17 @@ describe('home content filters (desktop 筛选 parity)', () => {
     expect(activeContentFilterCount(NO_FILTERS)).toBe(0);
   });
 
-  it('narrows by harness everywhere, including pinned, and drops emptied projects', () => {
+  it('narrows by harness outside the pinned section and drops emptied projects', () => {
     const result = applyHomeContentFilters(fixture, { ...NO_FILTERS, vendor: 'codex' }, NOW);
     expect(result.chats.map((entry) => entry.session.id)).toEqual(['chat-codex']);
-    expect(result.pinned.map((entry) => entry.session.id)).toEqual(['pin-codex']);
+    // 与桌面一致:筛选不作用于置顶区。
+    expect(result.pinned).toBe(fixture.pinned);
     expect(result.projects).toEqual([]);
   });
 
   it('narrows by last activity and keeps project counts consistent', () => {
     const result = applyHomeContentFilters(fixture, { ...NO_FILTERS, lastActivity: '7d' }, NOW);
-    expect(result.pinned.map((entry) => entry.session.id)).toEqual(['pin-codex']);
+    expect(result.pinned.map((entry) => entry.session.id)).toEqual(['pin-old', 'pin-codex']);
     expect(result.projects.map((entry) => [entry.key, entry.sessionCount])).toEqual([['p1', 1], ['p2', 1]]);
     expect(result.projects[0].sessions.map((entry) => entry.session.id)).toEqual(['p1-new']);
   });
@@ -175,6 +176,12 @@ describe('task info usage wiring', () => {
     expect(store).toContain('delete projected.totalTokenUsage;');
     expect(meta).toContain("taskInfoFields.includes('tokens') || taskInfoFields.includes('cost')");
     expect(meta.match(/useRemoteSessionUsage\(/g)?.length).toBe(2);
+  });
+
+  it('re-evaluates the last-activity filter on a clock while the list stays open', () => {
+    const surface = readFileSync(resolve(process.cwd(), 'src/session/HomeSurface.tsx'), 'utf8');
+    expect(surface).toContain("const filterTick = useHomeFilterClock(lastActivityFilter !== 'all' && screenFocused);");
+    expect(surface).toContain('applyHomeContentFilters(sharedGroup.home, contentFilters, filterTick || Date.now())');
   });
 
   it('polls PR status only while the retained home list is visible', () => {

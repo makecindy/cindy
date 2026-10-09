@@ -637,7 +637,7 @@ describe('mobile home desktop-first surface', () => {
     expect(source).toMatch(/startBoundedStartupRead\(\s*getCachedHomeListSnapshot\(homeCacheUserId\)/);
     expect(source).toContain('await syncInFlightRef.current;');
     expect(source).toMatch(/startBoundedStartupRead\(\s*loadDeviceIdentityCache\(\)/);
-    expect(source).toMatch(/startBoundedStartupRead<HomeViewPreferences \| null>\(\s*readHomeViewPreferences\(\)/);
+    expect(source).toMatch(/startBoundedStartupRead<HomeViewPreferences \| null>\(\s*readHomeViewPreferences\(preferenceOwnerRef\.current\)/);
     const preferenceHydration = source.slice(
       source.indexOf('// 冷启动恢复上次的首页视图偏好'),
       source.indexOf('// 卸载时取消所有延后中的 schedule-index hydration'),

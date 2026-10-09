@@ -73,8 +73,9 @@ function filterItems(
 }
 
 /**
- * 按筛选收窄首页展示模型。Harness 与最近活跃作用于全部任务(含置顶,与桌面一致);
- * 项目筛选只作用于项目组与对话,置顶是用户显式钉住的,不被项目筛选藏掉。
+ * 按筛选收窄首页展示模型。与桌面侧栏一致(设计文档 §3.3,2026-08-12 用户重申):
+ * **筛选一律不作用于置顶区**——置顶是「我要一直看见它」,被筛掉会让人以为置顶丢了。
+ * 项目筛选作用于项目组与对话;Harness / 最近活跃作用于项目组与对话里的任务。
  * 筛完为空的项目组整组隐藏。共享任务分组见 filterSharedHomeRows。
  */
 export function applyHomeContentFilters(
@@ -96,7 +97,7 @@ export function applyHomeContentFilters(
   return {
     ...home,
     chats: projectFilterIncludes(filters.projects, HOME_DIALOGUE_FILTER_KEY) ? narrow(home.chats) : [],
-    pinned: narrow(home.pinned),
+    pinned: home.pinned,
     projects,
   };
 }
