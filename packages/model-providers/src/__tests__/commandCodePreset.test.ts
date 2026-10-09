@@ -14,7 +14,7 @@ const agents: readonly AgentKind[] = ['claude-code', 'codex', 'pi'];
  * `supported_endpoints` 是官方逐模型接口声明：Claude 型号只在 `/messages` 上服务，Claude 型号与
  * 其它型号互投别的路由都会被上游 400（官方 Provider 文档「Supported endpoints and formats」）。
  * 目录（`providers.json` 的 `command-code` 预设）与这份映射必须一起改：预设增减型号、或把型号写到
- * 官方没有声明的协议上，本文件就会失败。
+ * 官方没有声明的端点上，本文件就会失败。
  */
 const supportedEndpoints: Record<string, readonly string[]> = {
   'claude-sonnet-5': ['/messages'],
@@ -36,6 +36,8 @@ const supportedEndpoints: Record<string, readonly string[]> = {
 /** 官方只在 Messages 上服务的 Claude 型号；其余型号官方不提供 Messages。 */
 const claudeModels = ['claude-sonnet-5', 'claude-opus-5', 'claude-haiku-4-5-20251001'];
 const sorted = (values: readonly string[]) => [...values].sort();
+const allModels = sorted(Object.keys(supportedEndpoints));
+const chatRoute = { baseUrl: 'https://api.commandcode.ai/provider/v1', wireProtocol: 'openai-chat' };
 
 const preset = BUNDLED_CATALOG.presets?.find((candidate) => candidate.id === 'command-code');
 const options = { presets: BUNDLED_CATALOG.presets, modelRegistry: BUNDLED_CATALOG.modelRegistry };
@@ -92,56 +94,57 @@ describe('Command Code 供应商预设', () => {
     }
   });
 
-  it('目录只声明快照里的型号，快照也只覆盖目录声明的型号', () => {
+  it('快照只覆盖预设声明的型号，预设也不声明快照外的型号', () => {
     const declared = agents.flatMap((agent) => preset!.runtimes[agent]!.models.map((model) => model.id));
-    expect(sorted(declared)).toEqual(sorted(Object.keys(supportedEndpoints)));
+    expect(sorted([...new Set(declared)])).toEqual(allModels);
   });
 
-  it('Claude Code 运行时只放官方仅在 /messages 服务的 Claude 型号', () => {
-    expect(sorted(preset!.runtimes['claude-code']!.models.map((model) => model.id))).toEqual(sorted(claudeModels));
-    for (const model of preset!.runtimes['claude-code']!.models) {
-      expect(supportedEndpoints[model.id], model.id).toEqual(['/messages']);
+  // 连接后的「刷新模型」会把渠道目录里的型号追加进所选引擎。预设把每个推荐型号都声明到三个引擎，
+  // 刷新就不会造出「渠道不服务的型号 + 引擎默认协议」这种必然失败、又要用户自己排查的组合。
+  it.each(agents)('%s 运行时声明全部推荐型号，各自带该引擎的上游路由', (agent) => {
+    expect(sorted(preset!.runtimes[agent]!.models.map((model) => model.id)), agent).toEqual(allModels);
+  });
+
+  it('Claude 型号在三个引擎上都指向官方唯一的 /messages 端点', () => {
+    for (const agent of agents) {
+      for (const model of preset!.runtimes[agent]!.models) {
+        if (!claudeModels.includes(model.id)) continue;
+        expect(model.api ?? model.piApi, agent + '/' + model.id + ' 出站协议').toBe('anthropic-messages');
+        expect(model.route, agent + '/' + model.id + ' 路由').toMatchObject({
+          baseUrl: 'https://api.commandcode.ai/provider',
+          wireProtocol: 'anthropic-messages',
+        });
+      }
     }
   });
 
-  it('Codex 运行时不放 Claude 型号，并且只在官方没有 /responses 时改用逐模型 Chat 路由', () => {
+  it('Codex 只在官方没有 /responses 时改用逐模型 Chat 路由', () => {
     const runtime = preset!.runtimes.codex!;
     expect(runtime.wireProtocol).toBeUndefined();
-    const expected = sorted(Object.keys(supportedEndpoints).filter((id) => !claudeModels.includes(id)));
-    expect(sorted(runtime.models.map((model) => model.id))).toEqual(expected);
     for (const model of runtime.models) {
-      expect(supportedEndpoints[model.id], model.id).not.toContain('/messages');
+      if (claudeModels.includes(model.id)) continue;
       if (supportedEndpoints[model.id]!.includes('/responses')) {
-        // Responses 是 Codex 的原生协议，原生可用就不额外声明路由。
-        expect(model.route, model.id).toBeUndefined();
         expect(model.api, model.id).toBeUndefined();
+        expect(model.route, model.id).toBeUndefined();
       } else {
-        expect(model, model.id).toMatchObject({
-          api: 'openai-completions',
-          route: {
-            baseUrl: 'https://api.commandcode.ai/provider/v1',
-            wireProtocol: 'openai-chat',
-          },
-        });
+        expect(model, model.id).toMatchObject({ api: 'openai-completions', route: chatRoute });
       }
     }
   });
 
-  it('Pi 用 Messages 适配器跟随 Claude 型号，其余型号保持渠道默认 Chat', () => {
+  it('Claude Code 对非 Claude 型号走渠道的 Chat 端点', () => {
+    for (const model of preset!.runtimes['claude-code']!.models) {
+      if (claudeModels.includes(model.id)) continue;
+      expect(model, model.id).toMatchObject({ api: 'openai-completions', route: chatRoute });
+    }
+  });
+
+  it('Pi 对 Claude 型号用 Messages adapter，其余保持渠道默认 Chat', () => {
     const runtime = preset!.runtimes.pi!;
     for (const model of runtime.models) {
-      if (supportedEndpoints[model.id]!.includes('/messages')) {
-        expect(model, model.id).toMatchObject({
-          piApi: 'anthropic-messages',
-          route: {
-            baseUrl: 'https://api.commandcode.ai/provider',
-            wireProtocol: 'anthropic-messages',
-          },
-        });
-      } else {
-        expect(model.piApi, model.id).toBeUndefined();
-        expect(model.route, model.id).toBeUndefined();
-      }
+      if (claudeModels.includes(model.id)) continue;
+      expect(model.piApi, model.id).toBeUndefined();
+      expect(model.route, model.id).toBeUndefined();
     }
   });
 
@@ -150,7 +153,8 @@ describe('Command Code 供应商预设', () => {
     const models = provider.models[agent] ?? [];
     expect(models.length, agent).toBeGreaterThan(0);
     for (const model of models) {
-      const outbound = modelProtocolComparison(provider, { [agent]: model }).forAgent(agent)?.outbound;
+      const outbound = modelProtocolComparison(provider, Object.fromEntries([[agent, model]]))
+        .forAgent(agent)?.outbound;
       expect(outbound, agent + '/' + model.id + ' 出站协议').toBeTruthy();
       const baseUrl = model.route?.baseUrl ?? provider.routing[agent]!.upstream;
       expect(new URL(baseUrl).host, baseUrl).toBe('api.commandcode.ai');
@@ -162,20 +166,20 @@ describe('Command Code 供应商预设', () => {
     }
   });
 
-  it('原生引擎默认开启、供应方转换默认关闭、Pi 全部默认可用', () => {
+  it('原生组合默认开启、跨协议桥接默认关闭、Pi 全部默认可用', () => {
     const provider = imported();
     const enabled = (agent: AgentKind) =>
       sorted((provider.models[agent] ?? []).filter((model) => model.defaultEnabled).map((model) => model.id));
-    // Claude 型号是 Messages 原生，Claude Code 上默认开启；反向型号根本不进这个运行时。
+    // Claude 是 Messages 原生，Claude Code 上默认开启；其余型号经本地桥接、默认关闭但仍可选。
     expect(enabled('claude-code')).toEqual(sorted(claudeModels));
-    // Codex harness 只说 Responses：只有 Responses 原生型号默认开启，供应方转换来的默认关闭但依然可选。
+    // Codex harness 只说 Responses：只有 Responses 原生型号默认开启。
     for (const model of provider.models.codex ?? []) {
       expect(model.defaultEnabled, model.id).toBe(model.nativeApi === 'openai-responses');
     }
+    const codexModels = provider.models.codex ?? [];
     expect(enabled('codex').length).toBeGreaterThan(0);
-    expect(enabled('codex').length).toBeLessThan((provider.models.codex ?? []).length);
+    expect(enabled('codex').length).toBeLessThan(codexModels.length);
     // Pi 直接说上游 adapter，全部型号默认可用。
-    expect(enabled('pi')).toEqual(sorted(Object.keys(supportedEndpoints)));
+    expect(enabled('pi')).toEqual(allModels);
   });
 });
-
