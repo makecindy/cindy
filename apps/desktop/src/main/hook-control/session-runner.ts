@@ -1210,7 +1210,7 @@ export function createMakerHookSessionRunner(deps: {
         : sendContentBase;
       // 落库形态: 有附件用 {text, images, files} 对象(createMessage safeStringify
       // 存 JSON, 读回 parseUserContent 提取 images/files); 无附件纯文本 string。
-      const userText = req.source?.userText ?? req.prompt;
+      const userText = req.userText ?? req.source?.userText ?? req.prompt;
       const userMessageContent =
         imageRefs.length > 0 || fileRefs.length > 0
           ? { text: userText, images: imageRefs, files: fileRefs }
@@ -1272,7 +1272,7 @@ export function createMakerHookSessionRunner(deps: {
                   // clean channel message used for deterministic managed Pi
                   // package commands; only older servers that omit the field
                   // fall back to the decorated prompt.
-                  rawChannelText: req.source?.userText ?? req.prompt,
+                  rawChannelText: userText,
                   ...(autoReviewReferences ? { autoReviewReferences } : {}),
                 },
               }
@@ -1309,7 +1309,7 @@ export function createMakerHookSessionRunner(deps: {
                 sourceDescription: describeInteractionSource({
                   channelName: req.source?.im ?? req.origin.connectionName,
                   chatId: req.source?.channelName ?? req.title ?? req.source?.im ?? 'IM',
-                  text: req.source?.userText ?? '',
+                  text: req.userText ?? req.source?.userText ?? '',
                   interactionSource: {
                     senderName: req.source?.threadContext?.find((message) =>
                       message.messageId === req.source?.triggerMessageId && !!message.messageId)?.author,

@@ -625,6 +625,17 @@ describe('hook session-runner 的 userSendAt 时序(未分类误判回归)', () 
     const session = await fakeMaker.createSession.mock.results[0].value;
     expect(session.send.mock.calls[0][0].content).toContain(prompt);
   });
+  it('stores the full user body independently of the bounded source preview', async () => {
+    const runner = createMakerHookSessionRunner({ log });
+    const userText = '原文'.repeat(15_000) + '原文末尾';
+    await runner.run(baseReq({
+      prompt: '[消息说明]\n' + userText, userText,
+      source: { im: 'slack', userText: userText.slice(0, 20_000) },
+    }));
+    expect(h.createMessage).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
+      content: userText,
+    }));
+  });
   it('createOnly materializes and broadcasts a task without a synthetic user turn', async () => {
     const runner = createMakerHookSessionRunner({ log });
 
@@ -1049,14 +1060,19 @@ describe('hook session-runner 的 userSendAt 时序(未分类误判回归)', () 
     });
   });
 
-  it('replacement 读取旧任务历史交接给 Agent，落库仍只保存当前 Slack 原话', async () => {
+  it.each(['检查支付回调失败的问题并修复', ''])('replacement 读取旧任务原话及分离引用（%s），落库仍只保存当前 Slack 原话', async (body) => {
     h.listMessagesForAgentHandoff.mockResolvedValueOnce([
       {
         clientId: 'old-user',
         role: 'user',
-        content: '检查支付回调失败的问题并修复',
+        content: body,
         createdAt: 1,
-        agentMeta: null,
+        agentMeta: {
+          hookSource: {
+            im: 'slack', contentFormat: 'user-text',
+            threadContext: [{ author: 'Alice', text: '被引用的支付错误日志' }],
+          },
+        },
       },
       {
         clientId: 'old-error',
@@ -1079,10 +1095,11 @@ describe('hook session-runner 的 userSendAt 时序(未分类误判回归)', () 
     expect(h.listMessagesForAgentHandoff).toHaveBeenCalledWith('sess-old', 400);
     const session = await fakeMaker.createSession.mock.results[0].value;
     const sent = session.send.mock.calls[0][0].content as string;
-    expect(sent).toContain('检查支付回调失败的问题并修复');
+    if (body) expect(sent).toContain(body);
+    expect(sent).toContain('被引用的支付错误日志');
     expect(sent).toContain('Provided authentication token is expired');
     expect(sent).toContain('再试试');
-    expect(sent.indexOf('检查支付回调失败的问题并修复')).toBeLessThan(sent.indexOf('再试试'));
+    expect(sent.indexOf('被引用的支付错误日志')).toBeLessThan(sent.indexOf('再试试'));
     const createCalls = h.createMessage.mock.calls as unknown as Array<
       [string, { content: unknown }]
     >;
