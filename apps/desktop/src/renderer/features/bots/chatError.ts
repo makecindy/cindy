@@ -1,6 +1,7 @@
 const key = (name: string) => `bots.groupChat.server.${name}`;
 
 export function chatErrorKey(code: string) {
+  if (code === 'INVITE_REVOKE_UNSUPPORTED') return key('revokeUnsupported');
   if (['INVITATION_NOT_FOUND', 'INVITATION_UNAVAILABLE', 'INVALID_INPUT'].includes(code)) return key('invalidInvite');
   if (code === 'MENTION_UNAVAILABLE') return 'bots.groupChat.errors.mentionUnavailable';
   if (code === 'LAST_OWNER') return key('settings.lastOwner');

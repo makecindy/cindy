@@ -1046,6 +1046,18 @@ Mobile 据此区分已关闭与已删除的旧选择：保留任务或草稿原�
 合并相同在途请求并缓存最近成功回执，服务器 operationId 仍是最终幂等依据。
 不新增 IPC channel、数据库迁移或 Mobile 原生指纹输入。
 
+### 服务器伙伴群讨论与分工补全
+
+Chat Server `/me` 追加 `capabilities.groupDiscussionParity: 1`。Desktop 只在该能力存在时发送
+可选 `mentionsAll`、`planningMode`，辅助判断后用 `continue({automatic:true})`，停止判断用
+`messages/:id/cancel-planning`。旧服务器继续收到旧形状；能力协商并不恢复旧服务端缺失的行为。
+整个服务端集群升级后再发布客户端，不能在新旧副本混用时提前承诺该能力。
+
+领取执行追加可选 `attachment_after_seq`，按伙伴/群/授权版本/分工步骤隔离成功投递水位。
+缺字段时沿用旧读取范围；新客户端以此翻页收集未见附件，保留每轮 40 个上限及缺失名称提示。
+`cindy.group-notice` v1 的 integration 卡映射到已有 plan-failed/member-failed/member-timeout
+展示提示，仅承担文案，不授予执行权限。Mobile 继续消费主机既有群资源投影，无新增原生能力。
+
 ## 委派任务的完成通知归属
 
 既有 `SessionActivityPayload` 可选字段 `completionNotification` 影响远端桌面、手机与飞书完成通知：

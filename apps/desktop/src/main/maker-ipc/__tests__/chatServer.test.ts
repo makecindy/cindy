@@ -138,15 +138,16 @@ describe('Chat Server result delivery and refresh', () => {
       if (route.endsWith('/messages') && method === 'POST') return { body: { id: 'saved-message' } };
       return response(route);
     });
-    const input = { groupId: roomId, text: 'photo', clientId: 'phone-send-1', mentions: { all: false, botIds: [] }, attachments: [{}] };
+    const input = { groupId: roomId, text: 'photo', clientId: 'phone-send-1', mentions: { all: false, botIds: [] }, attachments: [{ id: 'annotated-photo', name: 'annotated-100.png', originalName: 'annotated-100.png' }] };
     const first = service.sendMessage(input, { controllerDeviceId: 'phone' });
     await vi.advanceTimersByTimeAsync(16_000);
     expect(release).toBeTypeOf('function');
-    const retry = service.sendMessage(input, { controllerDeviceId: 'phone' });
+    const regenerated = { ...input, attachments: [{ id: 'annotated-photo', name: 'annotated-200.png', originalName: 'annotated-200.png' }] };
+    const retry = service.sendMessage(regenerated, { controllerDeviceId: 'phone' });
     release();
     expect(await first).toEqual({ ok: true, messageId: 'saved-message' });
     expect(await retry).toEqual(await first);
-    expect(await service.sendMessage(input, { controllerDeviceId: 'phone' })).toEqual(await first);
+    expect(await service.sendMessage(regenerated, { controllerDeviceId: 'phone' })).toEqual(await first);
     expect(deps.prepareAttachments).toHaveBeenCalledTimes(1);
     expect(commit).toHaveBeenCalledTimes(1);
     expect(fixture.handle.mock.calls.filter(([route, method]) => route.endsWith('/messages') && method === 'POST')).toHaveLength(1);
@@ -866,11 +867,11 @@ describe('Chat Server directed sends', () => {
   const rootId = '50000000-0000-4000-8000-000000000001';
   let service: BotGroupChatService;
   let responseMode: 'all' | 'mentioned';
-  let sendSequence = 0;
+  let nextSendId: number;
   let members: Array<{ id: string; kind: string; state: string }>;
   beforeEach(() => {
     vi.useFakeTimers();
-    fixture.packaged = true; responseMode = 'all'; sendSequence = 0;
+    fixture.packaged = true; responseMode = 'all'; nextSendId = 0;
     fixture.profiles = [{ id: 'local-bot', displayName: 'Bot', status: 'active' }];
     members = [{ id: selfId, kind: 'human', state: 'joined' },
       { id: botId, kind: 'bot', state: 'joined' }, { id: humanId, kind: 'human', state: 'joined' }];
@@ -888,7 +889,7 @@ describe('Chat Server directed sends', () => {
   afterEach(() => { service.dispose(); vi.useRealTimers(); vi.clearAllMocks(); });
   const posts = () => fixture.handle.mock.calls.filter(([route, method]) => route.endsWith('/messages') && method === 'POST');
   const send = (entry: string, mentions = { all: false, botIds: ['local-bot'] }) => {
-    const input = { groupId: roomId, text: '@Bot hello', clientId: `directed-send-${++sendSequence}`, mentions };
+    const input = { groupId: roomId, text: '@Bot hello', clientId: `directed-send-${++nextSendId}`, mentions };
     return entry === 'thread' ? service.chatServer!.reply({ ...input, rootId }) : service.sendMessage(input);
   };
 

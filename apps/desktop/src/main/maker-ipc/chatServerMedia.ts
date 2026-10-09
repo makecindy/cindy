@@ -13,12 +13,12 @@ import type { BotGroupAttachment } from '../../shared/botGroupChat.js';
 import type { ChatApi, ChatContentBlock } from './chatServerMigration.js';
 
 const MAX_SIZE = 100 * 1024 * 1024;
-export function createChatMedia(api: ChatApi, current: () => boolean, log?: { warn(message: string, meta?: Record<string, unknown>): void }) {
+export function createChatMedia(api: ChatApi, current: () => boolean, log?: { warn(message: string, meta?: Record<string, unknown>): void }, options: { allowLoopback?: boolean } = {}) {
   const cache = new Map<string, Promise<BotGroupAttachment>>();
   const check = () => { if (!current()) throw new Error('OWNER_CHANGED'); };
   const signedUrl = (value: string) => {
     const url = new URL(value);
-    if (url.protocol !== 'https:' || url.username || url.password) throw new Error('INVALID_MEDIA_URL');
+    if ((url.protocol !== 'https:' && !(options.allowLoopback && url.origin === 'http://127.0.0.1:3018')) || url.username || url.password) throw new Error('INVALID_MEDIA_URL');
     return url.href;
   };
   return {

@@ -58,4 +58,14 @@ describe('chat private media', () => {
     await expect(media.download('room', 'media')).rejects.toThrow('CONVERSATION_NOT_FOUND');
     expect(api).toHaveBeenCalledTimes(2);
   });
+  it('permits exact loopback media only for the explicitly isolated adapter', async () => {
+    f.read.mockResolvedValue({ buffer: Buffer.from('png') });f.fetch.mockResolvedValue(new Response('', { status: 200 }));
+    let uploadUrl = 'http://127.0.0.1:3018/dev-media/fixture';
+    const api = vi.fn(async () => ({ id: 'media', uploadUrl })) as unknown as ChatApi;
+    await expect(createChatMedia(api, () => true).upload('room','op',[attachment],'actor')).rejects.toThrow('INVALID_MEDIA_URL');
+    await expect(createChatMedia(api, () => true, undefined, { allowLoopback: true }).upload('room','op',[attachment],'actor')).resolves.toHaveLength(1);
+    uploadUrl = 'http://127.0.0.1:3019/private';
+    await expect(createChatMedia(api, () => true, undefined, { allowLoopback: true }).upload('room','op',[attachment],'actor')).rejects.toThrow('INVALID_MEDIA_URL');
+  });
+
 });
