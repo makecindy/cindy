@@ -3,18 +3,20 @@ import { resolve } from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   activeContentFilterCount,
-  applyHomeContentFilters,
   buildHomeSessionInfoPieces,
   toggleProjectFilter,
   toggleTaskInfoField,
   type HomeContentFilters,
 } from '@/session/homeDisplaySettings';
+import { applyHomeContentFilters, filterSharedHomeRows } from '@/session/homeContentFilters';
 import { buildGroupedHomeRows, buildMixedHomeRows } from '@/session/homeSections';
 import type { MobileHomePresentation, MobileHomeProjectGroup } from '@/session/mobileHome';
 import type { RemoteSessionListItem } from '@/session/sessionList';
+import { groupAutomationListItems } from '@cindy/maker-shared/session-list';
 import {
   __testing as prStoreTesting,
   latestPrRef,
+  loadHomeSessionPr,
   readHomeSessionPr,
   refreshHomeSessionPr,
   subscribeHomeSessionPr,
@@ -94,6 +96,42 @@ describe('home content filters (desktop 筛选 parity)', () => {
     expect(activeContentFilterCount({ lastActivity: '1d', projects: ['p2'], vendor: 'pi' })).toBe(3);
   });
 
+  it('filters automation runs individually instead of trusting the group representative', () => {
+    const run = (id: string, agentKind: string, daysAgo: number) => ({
+      ...item(id, { agentKind, daysAgo }),
+      scheduleInfo: { scheduleId: 'nightly', scheduleName: 'Nightly', unreadRunIds: [], unreadCount: 0 },
+      session: { ...item(id, { agentKind, daysAgo }).session, source: 'scheduler', title: 'Nightly' },
+      title: 'Nightly',
+    }) as unknown as RemoteSessionListItem;
+    const [group] = groupAutomationListItems(
+      [run('old-cc', 'cc', 9), run('new-codex-1', 'codex', 0), run('new-codex-2', 'codex', 1)],
+      NOW,
+    );
+    expect(group.automationGroup?.items).toHaveLength(3);
+    const fixture = home({ chats: [group] });
+
+    const codex = applyHomeContentFilters(fixture, { ...NO_FILTERS, vendor: 'codex' }, NOW).chats;
+    expect(codex).toHaveLength(1);
+    expect(codex[0].automationGroup?.items.map((entry) => entry.session.id)).toEqual(['new-codex-1', 'new-codex-2']);
+    expect(codex[0].automationGroup?.sessionCount).toBe(2);
+    expect(codex[0].automationGroup?.key).toBe(group.automationGroup?.key);
+
+    const cc = applyHomeContentFilters(fixture, { ...NO_FILTERS, vendor: 'cc' }, NOW).chats;
+    expect(cc.map((entry) => [entry.session.id, !!entry.automationGroup])).toEqual([['old-cc', false]]);
+    expect(applyHomeContentFilters(fixture, { ...NO_FILTERS, vendor: 'pi' }, NOW).chats).toEqual([]);
+  });
+
+  it('applies harness and activity filters to shared rows but keeps discovery-only rows', () => {
+    const rows = [
+      { key: 'a', item: item('shared-codex', { agentKind: 'codex' }) },
+      { key: 'b', item: item('shared-cc') },
+      { key: 'c' },
+    ];
+    expect(filterSharedHomeRows(rows, NO_FILTERS, NOW)).toBe(rows);
+    expect(filterSharedHomeRows(rows, { ...NO_FILTERS, projects: ['p1'] }, NOW)).toBe(rows);
+    expect(filterSharedHomeRows(rows, { ...NO_FILTERS, vendor: 'codex' }, NOW).map((row) => row.key)).toEqual(['a', 'c']);
+  });
+
   it('toggles projects like the desktop: first pick narrows, last un-pick restores all', () => {
     expect(toggleProjectFilter('all', 'p1')).toEqual(['p1']);
     expect(toggleProjectFilter(['p1'], 'p2')).toEqual(['p1', 'p2']);
@@ -137,6 +175,13 @@ describe('task info usage wiring', () => {
     expect(store).toContain('delete projected.totalTokenUsage;');
     expect(meta).toContain("taskInfoFields.includes('tokens') || taskInfoFields.includes('cost')");
     expect(meta.match(/useRemoteSessionUsage\(/g)?.length).toBe(2);
+  });
+
+  it('polls PR status only while the retained home list is visible', () => {
+    // 首页被盖住时任务行仍挂载:轮询前检查可见性,回到首页时补查一次。
+    expect(meta).toContain("if (AppState.currentState !== 'active' || !isActive()) return;");
+    expect(meta).toContain('const stopResume = onResume(refresh);');
+    expect(store).toContain('export function useRemoteSessionStoreVisibility()');
   });
 });
 
@@ -196,5 +241,19 @@ describe('home PR cache', () => {
     await vi.waitFor(() => expect(listener).toHaveBeenCalledTimes(2));
     expect(failing).toHaveBeenCalledTimes(1);
     expect(readHomeSessionPr('k')?.ref.prNumber).toBe(7);
+  });
+
+  it('keeps the last known status of the same PR when the status lookup fails', async () => {
+    const ref = { id: '1', sessionId: 's', owner: 'a', repo: 'r', prNumber: 7, url: '', firstSeenAt: 1, lastSeenAt: 1 };
+    const merged = { owner: 'a', repo: 'r', prNumber: 7, ok: true, status: 'merged' };
+    const invoke = vi.fn(async (_device: string, channel: string) => {
+      if (channel === 'git-context:pr-refs:list') return [ref];
+      throw new Error('offline');
+    }) as never;
+    const previous = { ref, status: merged } as never;
+    await expect(loadHomeSessionPr(invoke, 'd', 's', previous)).resolves.toEqual({ ref, status: merged });
+    // 换成另一个 PR 时没有可沿用的状态。
+    const other = { ref: { ...ref, prNumber: 8 }, status: { ...merged, prNumber: 8 } } as never;
+    await expect(loadHomeSessionPr(invoke, 'd', 's', other)).resolves.toEqual({ ref, status: null });
   });
 });

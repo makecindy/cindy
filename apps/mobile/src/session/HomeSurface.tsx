@@ -109,7 +109,6 @@ import { AnchoredPullDownMenu } from '@/platform/chrome/AnchoredPullDownMenu';
 import type { NativePullDownAction } from '@/platform/chrome/NativePullDownMenu';
 import {
   activeContentFilterCount,
-  applyHomeContentFilters,
   DEFAULT_HOME_TASK_INFO_FIELDS,
   type HomeContentFilters,
   type HomeLastActivityFilter,
@@ -118,6 +117,7 @@ import {
   type HomeTaskInfoField,
   type HomeVendorFilter,
 } from '@/session/homeDisplaySettings';
+import { applyHomeContentFilters, filterSharedHomeRows } from '@/session/homeContentFilters';
 import {
   HomeRowDisplayContext,
   HomeSessionInfoMeta,
@@ -1905,12 +1905,16 @@ function HomeScreenContent({ active = true, onModeChange, width, newSessionInSys
   const sharedGroup = useMemo(() => splitSharedHomeGroup(home, ownedSharedTasks, {
     sessions: homeSessions, searchQuery, statusFilter,
   }), [home, ownedSharedTasks, homeSessions, searchQuery, statusFilter]);
-  const sharedRows = shouldReplaceListWithSearchResults(searchQuery, indexedSearch.status) ? [] : sharedGroup.rows;
   const contentFilters = useMemo<HomeContentFilters>(() => ({
     lastActivity: lastActivityFilter,
     projects: projectFilter,
     vendor: vendorFilter,
   }), [lastActivityFilter, projectFilter, vendorFilter]);
+  const filteredSharedRows = useMemo(
+    () => filterSharedHomeRows(sharedGroup.rows, contentFilters, Date.now()),
+    [contentFilters, sharedGroup.rows],
+  );
+  const sharedRows = shouldReplaceListWithSearchResults(searchQuery, indexedSearch.status) ? [] : filteredSharedRows;
   const contentFilterCount = activeContentFilterCount(contentFilters);
   const filteredHome = useMemo(
     () => applyHomeContentFilters(sharedGroup.home, contentFilters, Date.now()),

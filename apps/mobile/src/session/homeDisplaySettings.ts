@@ -1,7 +1,5 @@
 import { formatCompactTokens } from '@cindy/maker-shared/usage-format';
-import type { MobileHomePresentation } from './mobileHome';
 import type { RemoteSessionListItem } from './sessionList';
-import { activityMsFromIso } from './homeListPriority';
 import { formatRemoteMoney, resolveSessionTotalMoney } from './remoteMoney';
 import { sessionWorktreeInfo } from './sessionWorktree';
 
@@ -28,13 +26,13 @@ export const HOME_LAST_ACTIVITY_FILTERS: readonly HomeLastActivityFilter[] = ['1
 export const HOME_TASK_INFO_FIELDS: readonly HomeTaskInfoField[] = ['time', 'pr', 'worktree', 'tokens', 'cost'];
 export const DEFAULT_HOME_TASK_INFO_FIELDS: readonly HomeTaskInfoField[] = ['time'];
 
-const LAST_ACTIVITY_DAYS: Record<Exclude<HomeLastActivityFilter, 'all'>, number> = {
+export const LAST_ACTIVITY_DAYS: Record<Exclude<HomeLastActivityFilter, 'all'>, number> = {
   '1d': 1,
   '3d': 3,
   '7d': 7,
   '30d': 30,
 };
-const DAY_MS = 24 * 60 * 60 * 1000;
+export const DAY_MS = 24 * 60 * 60 * 1000;
 
 export interface HomeContentFilters {
   projects: HomeProjectFilter;
@@ -97,45 +95,6 @@ export function activeContentFilterCount(filters: HomeContentFilters): number {
     + (filters.lastActivity !== 'all' ? 1 : 0);
 }
 
-/**
- * 按筛选收窄首页展示模型。Harness 与最近活跃作用于全部任务(含置顶,与桌面一致);
- * 项目筛选只作用于项目组与对话,置顶是用户显式钉住的,不被项目筛选藏掉。
- * 筛完为空的项目组整组隐藏。
- */
-export function applyHomeContentFilters(
-  home: MobileHomePresentation,
-  filters: HomeContentFilters,
-  nowMs: number,
-): MobileHomePresentation {
-  if (activeContentFilterCount(filters) === 0) return home;
-  const cutoff = filters.lastActivity === 'all'
-    ? null
-    : nowMs - LAST_ACTIVITY_DAYS[filters.lastActivity] * DAY_MS;
-  const keep = (item: RemoteSessionListItem): boolean => {
-    if (filters.vendor !== 'all' && sessionVendor(item) !== filters.vendor) return false;
-    if (cutoff !== null && activityMsFromIso(item.lastActivityAt) < cutoff) return false;
-    return true;
-  };
-  const projects = home.projects.flatMap((project) => {
-    if (!projectFilterIncludes(filters.projects, project.key)) return [];
-    const sessions = project.sessions.filter(keep);
-    if (sessions.length === 0) return [];
-    return [sessions.length === project.sessions.length
-      ? project
-      : { ...project, sessionCount: sessions.length, sessions }];
-  });
-  return {
-    ...home,
-    chats: projectFilterIncludes(filters.projects, HOME_DIALOGUE_FILTER_KEY) ? home.chats.filter(keep) : [],
-    pinned: home.pinned.filter(keep),
-    projects,
-  };
-}
-
-function sessionVendor(item: RemoteSessionListItem): HomeVendorFilter {
-  const kind = (item.session as { agentKind?: unknown }).agentKind;
-  return kind === 'codex' || kind === 'pi' ? kind : 'cc';
-}
 
 function uniqueStrings(values: readonly unknown[]): string[] {
   const seen = new Set<string>();

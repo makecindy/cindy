@@ -59,7 +59,7 @@ export function subscribeHomeSessionPr(key: string, listener: () => void): () =>
 /** 按新鲜度决定是否发起加载;同一任务同时只有一个请求在途。 */
 export function refreshHomeSessionPr(
   key: string,
-  load: () => Promise<HomeSessionPrInfo | null>,
+  load: (previous: HomeSessionPrInfo | null) => Promise<HomeSessionPrInfo | null>,
   options: { now: number; refreshKey?: string },
 ): void {
   const entry = entries.get(key);
@@ -78,7 +78,7 @@ export function refreshHomeSessionPr(
   entries.delete(key);
   entries.set(key, next);
   trimEntries();
-  void load()
+  void load(next.value)
     .then((value) => {
       if (entries.get(key) !== next) return;
       next.value = value;
@@ -95,18 +95,27 @@ export async function loadHomeSessionPr(
   invoke: Invoke,
   deviceId: string,
   sessionId: string,
+  previous: HomeSessionPrInfo | null = null,
 ): Promise<HomeSessionPrInfo | null> {
   const refs = await invoke<unknown>(deviceId, 'git-context:pr-refs:list', [sessionId]);
   const ref = latestPrRef(refs);
   if (!ref) return null;
-  const statuses = await invoke<unknown>(deviceId, 'git-context:pr-status', [{
-    sessionId,
-    queries: [{ owner: ref.owner, repo: ref.repo, prNumber: ref.prNumber }],
-  }]).catch(() => null);
+  // 状态查询失败只是这一轮没拿到,不是「状态未知」:同一 PR 沿用上次已知状态
+  // (已合并 / 已关闭不该退回中性图标);换了 PR 才没有可沿用的状态。
+  const carried = previous && prStatusKey(previous.ref) === prStatusKey(ref) ? previous.status : null;
+  let statuses: unknown;
+  try {
+    statuses = await invoke<unknown>(deviceId, 'git-context:pr-status', [{
+      sessionId,
+      queries: [{ owner: ref.owner, repo: ref.repo, prNumber: ref.prNumber }],
+    }]);
+  } catch {
+    return { ref, status: carried };
+  }
   const status = Array.isArray(statuses)
     ? (statuses as PrStatusResult[]).find((item) => item && prStatusKey(item) === prStatusKey(ref)) ?? null
     : null;
-  return { ref, status };
+  return { ref, status: status ?? carried };
 }
 
 /** 与桌面信息槽一致:只显示最近一次出现的 PR(lastSeenAt 最大)。 */

@@ -18,7 +18,7 @@ index a26d1254eafd89268f65d968988cf6a3b8c1e457..ddf5b9daa192ca0f13e7cea8ecd15d26
  
  @end
 diff --git a/ios/RNSBarButtonItem.mm b/ios/RNSBarButtonItem.mm
-index 0eb1f09dee82edd99e3e614938233db5cdeaebfe..f7db31eb6e7368036fcb862ffb5ee12e985f7c9c 100644
+index 0eb1f09dee82edd99e3e614938233db5cdeaebfe..3a6adbe536795e3e5ad151e915ac9ce254e7b590 100644
 --- a/ios/RNSBarButtonItem.mm
 +++ b/ios/RNSBarButtonItem.mm
 @@ -6,9 +6,60 @@
@@ -96,7 +96,7 @@ index 0eb1f09dee82edd99e3e614938233db5cdeaebfe..f7db31eb6e7368036fcb862ffb5ee12e
    NSString *buttonId = dict[@"buttonId"];
    if (buttonId && action) {
      self.target = self;
-@@ -130,6 +184,158 @@ - (instancetype)initWithConfig:(NSDictionary<NSString *, id> *)dict
+@@ -130,6 +184,174 @@ - (instancetype)initWithConfig:(NSDictionary<NSString *, id> *)dict
    return self;
  }
  
@@ -125,13 +125,15 @@ index 0eb1f09dee82edd99e3e614938233db5cdeaebfe..f7db31eb6e7368036fcb862ffb5ee12e
 +#endif
 +}
 +
-+static void RNSCollectMenuValues(UIMenu *menu, NSMutableDictionary *states, NSMutableDictionary *subtitles)
++/// Collects the values applyValuesFromMenuConfig writes (check state, disabled flag, subtitles),
++/// keyed by action identifier (menuId) and submenu title.
++static void RNSCollectMenuValues(UIMenu *menu, NSMutableDictionary<NSString *, UIAction *> *actions, NSMutableDictionary *subtitles)
 +{
 +  for (UIMenuElement *child in menu.children) {
 +    if ([child isKindOfClass:[UIAction class]]) {
 +      NSString *identifier = ((UIAction *)child).identifier;
 +      if (identifier.length > 0) {
-+        states[identifier] = @(((UIAction *)child).state);
++        actions[identifier] = (UIAction *)child;
 +      }
 +    } else if ([child isKindOfClass:[UIMenu class]]) {
 +      UIMenu *submenu = (UIMenu *)child;
@@ -140,30 +142,44 @@ index 0eb1f09dee82edd99e3e614938233db5cdeaebfe..f7db31eb6e7368036fcb862ffb5ee12e
 +          subtitles[submenu.title] = submenu.subtitle ?: (id)[NSNull null];
 +        }
 +      }
-+      RNSCollectMenuValues(submenu, states, subtitles);
++      RNSCollectMenuValues(submenu, actions, subtitles);
 +    }
 +  }
 +}
 +
-+/// Returns a copy of `menu` carrying the given checkmarks and subtitles. updateVisibleMenu only
-+/// redraws when the block hands back new elements, so changed actions are copied rather than
-+/// mutated in place.
-+static UIMenu *RNSMenuWithValues(UIMenu *menu, NSDictionary *states, NSDictionary *subtitles)
++static BOOL RNSActionValuesEqual(UIAction *a, UIAction *b)
++{
++  if (a.state != b.state || a.attributes != b.attributes) {
++    return NO;
++  }
++  if (@available(iOS 15.0, *)) {
++    return a.subtitle == b.subtitle || [a.subtitle isEqualToString:b.subtitle];
++  }
++  return YES;
++}
++
++/// Returns a copy of `menu` carrying the source values. updateVisibleMenu only redraws when the
++/// block hands back new elements, so changed actions are copied rather than mutated in place.
++static UIMenu *RNSMenuWithValues(UIMenu *menu, NSDictionary<NSString *, UIAction *> *actions, NSDictionary *subtitles)
 +{
 +  NSMutableArray<UIMenuElement *> *children = [NSMutableArray arrayWithCapacity:menu.children.count];
 +  for (UIMenuElement *child in menu.children) {
 +    if ([child isKindOfClass:[UIAction class]]) {
 +      UIAction *action = (UIAction *)child;
-+      NSNumber *state = states[action.identifier ?: @""];
-+      if (state != nil && action.state != (UIMenuElementState)state.integerValue) {
++      UIAction *source = actions[action.identifier ?: @""];
++      if (source != nil && !RNSActionValuesEqual(action, source)) {
 +        UIAction *copy = [action copy];
-+        copy.state = (UIMenuElementState)state.integerValue;
++        copy.state = source.state;
++        copy.attributes = source.attributes;
++        if (@available(iOS 15.0, *)) {
++          copy.subtitle = source.subtitle;
++        }
 +        [children addObject:copy];
 +      } else {
 +        [children addObject:action];
 +      }
 +    } else if ([child isKindOfClass:[UIMenu class]]) {
-+      [children addObject:RNSMenuWithValues((UIMenu *)child, states, subtitles)];
++      [children addObject:RNSMenuWithValues((UIMenu *)child, actions, subtitles)];
 +    } else {
 +      [children addObject:child];
 +    }
@@ -191,16 +207,16 @@ index 0eb1f09dee82edd99e3e614938233db5cdeaebfe..f7db31eb6e7368036fcb862ffb5ee12e
 +}
 +
 +/// UIKit renders a copy of an open menu, so in-place writes to our UIMenu do not show until
-+/// it is reopened. Push the values into whichever menu is currently on screen through the
++/// it is reopened. Push the values (checkmarks, disabled flags, subtitles) into whichever menu is currently on screen through the
 +/// public updateVisibleMenu API (a no-op for interactions whose menu is not open). Actions
 +/// are matched by identifier (menuId), submenus by title.
 ++ (void)rns_refreshVisibleMenusWithSource:(UIMenu *)source
 +{
 +  if (@available(iOS 16.0, *)) {
-+    NSMutableDictionary *states = [NSMutableDictionary new];
++    NSMutableDictionary<NSString *, UIAction *> *actions = [NSMutableDictionary new];
 +    NSMutableDictionary *subtitles = [NSMutableDictionary new];
-+    RNSCollectMenuValues(source, states, subtitles);
-+    if (states.count == 0 && subtitles.count == 0) {
++    RNSCollectMenuValues(source, actions, subtitles);
++    if (actions.count == 0 && subtitles.count == 0) {
 +      return;
 +    }
 +    NSMutableArray<UIContextMenuInteraction *> *interactions = [NSMutableArray new];
@@ -214,7 +230,7 @@ index 0eb1f09dee82edd99e3e614938233db5cdeaebfe..f7db31eb6e7368036fcb862ffb5ee12e
 +    }
 +    for (UIContextMenuInteraction *interaction in interactions) {
 +      [interaction updateVisibleMenuWithBlock:^UIMenu *_Nonnull(UIMenu *_Nonnull visibleMenu) {
-+        return RNSMenuWithValues(visibleMenu, states, subtitles);
++        return RNSMenuWithValues(visibleMenu, actions, subtitles);
 +      }];
 +    }
 +  }
@@ -255,7 +271,7 @@ index 0eb1f09dee82edd99e3e614938233db5cdeaebfe..f7db31eb6e7368036fcb862ffb5ee12e
  + (void)resolveImageFromConfig:(NSDictionary *)dict
                     imageLoader:(RCTImageLoader *)imageLoader
                 completionBlock:(void (^)(UIImage *_Nullable))completionBlock
-@@ -188,11 +394,19 @@ + (UIMenu *)initUIMenuWithDict:(NSDictionary<NSString *, id> *)dict
+@@ -188,11 +410,19 @@ + (UIMenu *)initUIMenuWithDict:(NSDictionary<NSString *, id> *)dict
                   image = img;
                 }];
  
@@ -280,7 +296,7 @@ index 0eb1f09dee82edd99e3e614938233db5cdeaebfe..f7db31eb6e7368036fcb862ffb5ee12e
  }
  
  + (UIAction *)createActionItemFromConfig:(NSDictionary *)dict
-@@ -200,11 +414,21 @@ + (UIAction *)createActionItemFromConfig:(NSDictionary *)dict
+@@ -200,11 +430,21 @@ + (UIAction *)createActionItemFromConfig:(NSDictionary *)dict
                               imageLoader:(RCTImageLoader *)imageLoader
  {
    NSString *menuId = dict[@"menuId"];

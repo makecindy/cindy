@@ -24,7 +24,7 @@ import {
   type HomeSessionPrInfo,
 } from './homeSessionPrStore';
 import { prStatusVisual } from './prStatusVisual';
-import { useRemoteSessionUsage, type RemoteSessionUsage } from './remoteSessionStore';
+import { useRemoteSessionStoreVisibility, useRemoteSessionUsage, type RemoteSessionUsage } from './remoteSessionStore';
 import { formatRemoteSessionSidebarTime, type RemoteSessionListItem } from './sessionList';
 
 /**
@@ -184,19 +184,25 @@ function useHomeSessionPr(
   const online = !!deviceId
     && link.status === 'online'
     && link.getPresenceAvailability(deviceId) !== false;
+  // 首页被别的页面盖住时任务行仍挂载;只在列表可见时查询,回到首页时按新鲜度补查一次。
+  const { isActive, onResume } = useRemoteSessionStoreVisibility();
   useEffect(() => {
     if (!key || !deviceId || !online) return;
     const refresh = () => {
-      if (AppState.currentState !== 'active') return;
-      refreshHomeSessionPr(key, () => loadHomeSessionPr(link.invoke, deviceId, sessionId), {
+      if (AppState.currentState !== 'active' || !isActive()) return;
+      refreshHomeSessionPr(key, (previous) => loadHomeSessionPr(link.invoke, deviceId, sessionId, previous), {
         now: Date.now(),
         refreshKey,
       });
     };
     refresh();
     const timer = setInterval(refresh, PR_STATUS_REFRESH_INTERVAL_MS);
-    return () => clearInterval(timer);
-  }, [deviceId, key, link.connectionEpoch, link.invoke, online, refreshKey, sessionId]);
+    const stopResume = onResume(refresh);
+    return () => {
+      clearInterval(timer);
+      stopResume();
+    };
+  }, [deviceId, isActive, key, link.connectionEpoch, link.invoke, onResume, online, refreshKey, sessionId]);
   return value;
 }
 
