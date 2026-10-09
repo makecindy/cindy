@@ -1,10 +1,28 @@
+import { spawnSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { spawnPiSubagentRunner } from '../piSubagentRunnerHost.js';
+
+vi.mock('node:child_process', () => ({ spawnSync: vi.fn() }));
+
+const platformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform');
+
+beforeEach(() => {
+  // Never signal a real PID or run taskkill from this synthetic process fixture.
+  vi.spyOn(process, 'kill').mockReturnValue(true);
+  vi.mocked(spawnSync).mockReset().mockReturnValue({
+    pid: 0, output: [], stdout: '', stderr: '', status: 1, signal: null,
+  });
+});
+
+afterEach(() => {
+  if (platformDescriptor) Object.defineProperty(process, 'platform', platformDescriptor);
+  vi.restoreAllMocks();
+});
 
 class FakeUtilityProcess extends EventEmitter {
   readonly pid = 2468;
@@ -93,13 +111,9 @@ describe('piSubagentRunnerHost', () => {
     expect(fork).toHaveBeenCalledTimes(1);
   });
 
-  it('adds Windows taskkill /F only for SIGKILL so SIGTERM can publish stopped', () => {
-    const source = fs.readFileSync(new URL('../piSubagentRunnerHost.ts', import.meta.url), 'utf8');
-    expect(source).toContain("if (signal === 'SIGKILL') args.push('/F')");
-    expect(source).not.toMatch(/taskkill', \['\/PID', String\(pid\), '\/T', '\/F'\]/);
-  });
-
-  it('signals SIGTERM to the utility-process pid so the runner can reap children', () => {
+  it.each(['darwin', 'linux', 'win32'])('signals SIGTERM on %s, falling back when taskkill fails', (platform) => {
+    // Only signal routing is simulated; the synthetic launch layout uses host paths.
+    Object.defineProperty(process, 'platform', { ...platformDescriptor, value: platform });
     const child = new FakeUtilityProcess();
     const fork = vi.fn(() => child);
     const runId = '123e4567-e89b-42d3-a456-4266141740aa';
@@ -112,15 +126,39 @@ describe('piSubagentRunnerHost', () => {
       cwd: '/tmp',
       env: {},
     }, fork as never);
-    const realKill = process.kill.bind(process);
-    const killSpy = vi.spyOn(process, 'kill').mockImplementation(((pid: number, signal?: NodeJS.Signals | number) => {
-      if (pid !== child.pid) return realKill(pid, signal);
-      return true;
-    }) as typeof process.kill);
     expect(processHandle.kill('SIGTERM')).toBe(true);
-    expect(killSpy).toHaveBeenCalledWith(child.pid, 'SIGTERM');
+    expect(process.kill).toHaveBeenCalledWith(child.pid, 'SIGTERM');
+    if (platform === 'win32') {
+      expect(spawnSync).toHaveBeenCalledWith('taskkill', ['/PID', String(child.pid), '/T'], {
+        windowsHide: true, stdio: 'ignore', timeout: 5_000,
+      });
+    } else {
+      expect(spawnSync).not.toHaveBeenCalled();
+    }
     expect(child.kill).not.toHaveBeenCalled();
-    killSpy.mockRestore();
+  });
+
+  it.each(['SIGTERM', 'SIGKILL'] as const)('uses successful Windows taskkill for %s with /F only for SIGKILL', (signal) => {
+    Object.defineProperty(process, 'platform', { ...platformDescriptor, value: 'win32' });
+    vi.mocked(spawnSync).mockReturnValue({
+      pid: 0, output: [], stdout: '', stderr: '', status: 0, signal: null,
+    });
+    const child = new FakeUtilityProcess();
+    const runId = '123e4567-e89b-42d3-a456-4266141740aa';
+    const runDir = path.join(path.sep, 'tmp', runId);
+    const processHandle = spawnPiSubagentRunner({
+      runId, runDir,
+      runnerFile: path.join(runDir, 'runner.cjs'),
+      configFile: path.join(runDir, 'config.json'),
+      cwd: '/tmp', env: {},
+    }, vi.fn(() => child) as never);
+
+    expect(processHandle.kill(signal)).toBe(true);
+    expect(spawnSync).toHaveBeenCalledWith('taskkill',
+      ['/PID', String(child.pid), '/T', ...(signal === 'SIGKILL' ? ['/F'] : [])],
+      { windowsHide: true, stdio: 'ignore', timeout: 5_000 });
+    expect(process.kill).not.toHaveBeenCalled();
+    expect(child.kill).not.toHaveBeenCalled();
   });
 
   it('rejects runner or config paths outside the declared run directory', () => {
