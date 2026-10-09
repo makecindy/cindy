@@ -194,6 +194,15 @@ describe('task info usage wiring', () => {
     expect(meta.match(/useRemoteSessionUsage\(/g)?.length).toBe(2);
   });
 
+  it('lists project filter candidates regardless of search and status', () => {
+    // 已选中的项目不能因为搜索没命中或当前状态下没有任务而从菜单消失。
+    const surface = readFileSync(resolve(process.cwd(), 'src/session/HomeSurface.tsx'), 'utf8');
+    const universe = surface.slice(surface.indexOf('const projectFilterUniverse = useMemo('), surface.indexOf('const projectMachineIdentities'));
+    expect(universe).toContain("statusFilter: 'all',");
+    expect(universe).not.toContain('searchQuery');
+    expect(surface).toContain('projects: projectFilterUniverse.projects.map((project) => ({');
+  });
+
   it('re-evaluates the last-activity filter on a clock while the list stays open', () => {
     const surface = readFileSync(resolve(process.cwd(), 'src/session/HomeSurface.tsx'), 'utf8');
     expect(surface).toContain("const filterTick = useHomeFilterClock(lastActivityFilter !== 'all' && screenFocused);");

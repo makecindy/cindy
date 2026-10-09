@@ -1879,6 +1879,19 @@ function HomeScreenContent({ active = true, onModeChange, width, newSessionInSys
     }),
     [deviceModels, liveActivityIndex, messagePreviewIndex, pendingInteractionIndex, scheduleIndex, searchQuery, selectedDeviceId, homeSessions, statusFilter, t],
   );
+  // 「筛选 › 项目」的候选:设备范围内的项目全集,不受搜索与任务状态影响——否则已选中的项目
+  // 会因搜索没命中或当前状态下没有任务而从菜单里消失,用户无法单独取消它。
+  const projectFilterUniverse = useMemo(
+    () => buildMobileHomePresentation({
+      devices: deviceModels,
+      scheduleIndex,
+      selectedDeviceId,
+      sessions: homeSessions,
+      statusFilter: 'all',
+      unnamedLabel: t('session.menu.unnamedTitle'),
+    }),
+    [deviceModels, scheduleIndex, selectedDeviceId, homeSessions, t],
+  );
   const projectMachineIdentities = useMemo(
     () => buildHomeProjectMachineIdentities(home, deviceConnectionStates),
     [home, deviceConnectionStates],
@@ -2692,9 +2705,9 @@ function HomeScreenContent({ active = true, onModeChange, width, newSessionInSys
   }), [displayedProjectOrder, groupByProject, groupDialogue, lastActivityFilter, projectFilter, sortBy, statusFilter, taskInfoFields, vendorFilter, viewMode]);
   const homeDisplayPullDownActions = useMemo(
     () => buildHomeDisplayPullDownActions({
-      dialogueCount: home.chats.length,
-      // 候选用未筛选的完整项目集;看所有电脑时用设备名区分同名项目。
-      projects: home.projects.map((project) => ({
+      dialogueCount: projectFilterUniverse.chats.length,
+      // 候选用设备范围内的完整项目集(不受搜索 / 状态影响);看所有电脑时用设备名区分同名项目。
+      projects: projectFilterUniverse.projects.map((project) => ({
         count: project.sessionCount,
         key: project.key,
         subtitle: selectedDeviceId ? undefined : project.deviceName || undefined,
@@ -2703,7 +2716,7 @@ function HomeScreenContent({ active = true, onModeChange, width, newSessionInSys
       state: displayMenuState,
       t,
     }),
-    [displayMenuState, home.chats.length, home.projects, selectedDeviceId, t],
+    [displayMenuState, projectFilterUniverse.chats.length, projectFilterUniverse.projects, selectedDeviceId, t],
   );
   const handleDisplayAction = useCallback((id: string) => {
     const patch = homeDisplayActionPatch(id, displayMenuState);
