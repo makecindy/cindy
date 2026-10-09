@@ -123,7 +123,7 @@ describe('collectOutboundAttachments', () => {
     expect(r.attachments.map((a) => a.name)).toEqual(['img1.png', 'extra.png', 'report.md']);
     expect(r.attachments[0].mimeType).toBe('image/png');
     expect(r.attachments[2].mimeType).toBe('text/markdown');
-    expect(r.text).toContain('🖼️ _效果图(已作为附件发送)_');
+    expect(r.text).toContain('🖼️ _效果图_');
     expect(r.text).not.toContain('xdt-image://');
     expect(r.text).not.toContain('xdt-file://');
     expect(r.skipped).toBe(0);
@@ -139,7 +139,7 @@ describe('collectOutboundAttachments', () => {
       deps({ '/cache/good.png': Buffer.from('png-good') }),
     );
     expect(r.attachments.map((a) => a.name)).toEqual(['good.png']);
-    expect(r.text).toContain('🖼️ _good(已作为附件发送)_');
+    expect(r.text).toContain('🖼️ _good_');
     expect(r.text).toContain('[bad](xdt-file://unterminated');
     expect(r.text).not.toContain('xdt-image://');
     expect(r.skipped).toBe(0);
@@ -219,7 +219,7 @@ describe('collectOutboundAttachments', () => {
       deps({ '/cache/chart.png': Buffer.from('png') }),
     );
     expect(r.attachments.map((a) => a.name)).toEqual(['chart.png']);
-    expect(r.text).toContain('🖼️ _图(已作为附件发送)_');
+    expect(r.text).toContain('🖼️ _图_');
   });
 
   it('同一路径重复引用只收一份', async () => {

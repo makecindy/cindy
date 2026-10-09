@@ -9855,7 +9855,9 @@
       "label": "基於原任務建立"
     },
     "imageMissing": {
-      "title": "圖片已丟失"
+      "title": "圖片已丟失",
+      "unavailable": "圖片暫時無法顯示",
+      "loading": "正在載入圖片…"
     },
     "visionBridge": {
       "analyzing": "正在辨識圖片中…（{{count}} 張）",

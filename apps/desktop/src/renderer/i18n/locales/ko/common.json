@@ -9856,7 +9856,9 @@
       "label": "원래 세션에서 생성됨"
     },
     "imageMissing": {
-      "title": "이미지가 손실되었습니다"
+      "title": "이미지가 손실되었습니다",
+      "unavailable": "이미지를 표시할 수 없습니다",
+      "loading": "이미지 불러오는 중…"
     },
     "visionBridge": {
       "analyzing": "이미지 인식 중…({{count}}장)",

@@ -1,0 +1,285 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import Database from 'better-sqlite3';
+import { drizzle } from 'drizzle-orm/better-sqlite3';
+import * as schema from '../../localDb/schema';
+import type { DbClient } from '../../localDb/client/DbClient';
+import { setCurrentDbClient, clearCurrentDbClient } from '../../localDb/client/current';
+import {
+  claudeScratchpadPath,
+  materializeTaskImageText,
+  readTaskImage,
+  restoreTaskImageRows,
+  taskImageRoots,
+} from '../taskImageDelivery';
+import { resolveSafe } from '../blobStore';
+import { materializeLocalMarkdownImages } from '../../im/shared/localMarkdownImages';
+import { collectOutboundAttachments } from '../../hook-control/outbound';
+import {
+  materializeTaskImageMarkdown,
+  rewriteTaskImageReferences,
+  taskImageReferences,
+} from '../taskImageMarkdown';
+
+const state = vi.hoisted(() => ({
+  root: '',
+  valid: true,
+  afterIngest: undefined as (() => void) | undefined,
+}));
+vi.mock('electron', () => ({ app: { getPath: () => state.root } }));
+vi.mock('../refCompensationJournal', () => ({
+  captureMediaRefCompensationScope: () => ({
+    assertStillValid: () => {
+      if (!state.valid) throw new Error('owner changed');
+    },
+  }),
+  withMediaRefCompensation: async ({ perform }: { perform(): Promise<void> }) => perform(),
+}));
+vi.mock('../ingest', async (original) => {
+  const actual = await original<typeof import('../ingest')>();
+  return {
+    ...actual,
+    ingestMedia: async (...args: Parameters<typeof actual.ingestMedia>) => {
+      const result = await actual.ingestMedia(...args);
+      state.afterIngest?.();
+      return result;
+    },
+  };
+});
+
+const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 42]);
+const sdk = '11111111-1111-4111-8111-111111111111';
+let raw: Database.Database;
+let client: DbClient;
+let work: string;
+beforeEach(async () => {
+  state.root = await fs.mkdtemp(path.join(os.tmpdir(), 'task-image-'));
+  work = path.join(state.root, 'work');
+  await fs.mkdir(work);
+  vi.stubEnv('CLAUDE_CODE_TMPDIR', path.join(state.root, 'tmp'));
+  state.valid = true;
+  state.afterIngest = undefined;
+  raw = new Database(':memory:');
+  raw.exec(`CREATE TABLE sessions (id TEXT PRIMARY KEY, working_dir TEXT, sdk_session_id TEXT,
+    agent_kind TEXT, remote_host_id TEXT, status TEXT, cleared_at INTEGER);
+    CREATE TABLE messages (id TEXT PRIMARY KEY, session_id TEXT, role TEXT, content TEXT,
+    created_at INTEGER, rewind_at INTEGER);`);
+  const mediaSql = await fs.readFile(
+    path.resolve(__dirname, '../../../../drizzle/0070_woozy_harpoon.sql'),
+    'utf8',
+  );
+  raw.exec(mediaSql);
+  raw.exec('ALTER TABLE media_refs ADD COLUMN label TEXT');
+  raw
+    .prepare('INSERT INTO sessions VALUES (?, ?, ?, ?, NULL, ?, NULL)')
+    .run('s', work, sdk, 'cc', 'active');
+  client = { drizzle: drizzle(raw, { schema }) } as unknown as DbClient;
+  setCurrentDbClient(client, 'test-owner');
+});
+afterEach(async () => {
+  clearCurrentDbClient();
+  raw.close();
+  vi.unstubAllEnvs();
+  await fs.rm(state.root, { recursive: true, force: true });
+});
+
+function insert(text: string) {
+  const row = {
+    id: 'm',
+    sessionId: 's',
+    role: 'assistant' as const,
+    content: JSON.stringify(text),
+    createdAt: 10,
+    rewindAt: null,
+  };
+  raw
+    .prepare('INSERT INTO messages VALUES (?, ?, ?, ?, ?, NULL)')
+    .run(row.id, row.sessionId, row.role, row.content, row.createdAt);
+  return row;
+}
+
+describe('task image delivery', () => {
+  it('recovers the malformed scratchpad URL and preserves bytes after source removal', async () => {
+    const scratch = claudeScratchpadPath({ workingDir: work, sdkSessionId: sdk, agentKind: 'cc' })!;
+    await fs.mkdir(scratch, { recursive: true });
+    const source = path.join(scratch, 'shot.png');
+    await fs.writeFile(source, PNG);
+    const row = insert(`![before](xdt-image://${source})`);
+    const [saved] = await restoreTaskImageRows(client, [row]);
+    const url = taskImageReferences(JSON.parse(saved.content))[0].url;
+    expect(url).toMatch(/^cindy-media:\/\/blobs\/[a-f0-9]{64}\.png$/);
+    await fs.rm(source);
+    expect(await fs.readFile(resolveSafe(url).absPath)).toEqual(PNG);
+    expect(raw.prepare('SELECT content FROM messages').get()).toEqual({ content: saved.content });
+    expect((await restoreTaskImageRows(client, [saved]))[0]).toEqual(saved);
+    expect(raw.prepare('SELECT count(*) AS n FROM media_refs').get()).toEqual({ n: 1 });
+  });
+
+  it('uses the same persisted bytes for chat and both channel collectors', async () => {
+    const source = path.join(work, 'shot.png');
+    await fs.writeFile(source, PNG);
+    const text = `![shot](xdt-image://${source})`;
+    const personal = await materializeLocalMarkdownImages({
+      text,
+      workingDir: work,
+      sessionId: 's',
+    });
+    expect(personal.text).toBe('shot');
+    expect(personal.absPaths).toHaveLength(1);
+    const [saved] = await restoreTaskImageRows(client, [insert(text)]);
+    await fs.rm(source);
+    const hook = await collectOutboundAttachments(JSON.parse(saved.content), [], {
+      resolveImageUrl: resolveSafe,
+      log: { warn: vi.fn() },
+    });
+    expect(hook.skipped).toBe(0);
+    expect(hook.attachments).toHaveLength(1);
+    expect(await fs.readFile(personal.absPaths[0])).toEqual(PNG);
+    expect(raw.prepare('SELECT count(*) AS n FROM media_refs').get()).toEqual({ n: 1 });
+  });
+
+  it('serializes concurrent channel imports without duplicate task references', async () => {
+    const source = path.join(work, 'shot.png');
+    await fs.writeFile(source, PNG);
+    const text = `![shot](${source})`;
+    const results = await Promise.all([
+      materializeTaskImageText('s', text),
+      materializeTaskImageText('s', text),
+    ]);
+    expect(results[0]).toBe(results[1]);
+    expect(results[0]).toContain('cindy-media://');
+    expect(raw.prepare('SELECT count(*) AS n FROM media_refs').get()).toEqual({ n: 1 });
+  });
+
+  it.each(['clear', 'remote', 'sdk', 'owner'])(
+    'rejects a channel import after %s changes',
+    async (kind) => {
+      const source = path.join(work, 'shot.png');
+      await fs.writeFile(source, PNG);
+      const text = `![shot](${source})`;
+      state.afterIngest = () => {
+        if (kind === 'clear') raw.exec('UPDATE sessions SET cleared_at = 20');
+        if (kind === 'remote') raw.exec("UPDATE sessions SET remote_host_id = 'other-host'");
+        if (kind === 'sdk') raw.exec("UPDATE sessions SET sdk_session_id = 'new-session'");
+        if (kind === 'owner') state.valid = false;
+      };
+      expect(await materializeTaskImageText('s', text)).toBe(text);
+      expect(raw.prepare('SELECT count(*) AS n FROM media_refs').get()).toEqual({ n: 0 });
+    },
+  );
+
+  it('imports one readable image and retains unrelated failed references and code examples', async () => {
+    const source = path.join(work, 'shot.png');
+    await fs.writeFile(source, PNG);
+    const image = `![image](${source})`;
+    const row = insert(`${image}\n\n\`${image}\`\n\n![missing](${work}/absent.png)`);
+    const [saved] = await restoreTaskImageRows(client, [row]);
+    expect(JSON.parse(saved.content)).toContain(`\`${image}\``);
+    expect(JSON.parse(saved.content)).toContain(`![missing](${work}/absent.png)`);
+    expect(taskImageReferences(JSON.parse(saved.content))[0].url).toMatch(/^cindy-media:/);
+  });
+
+  it.each(['remote', 'outside', 'other-scratch', 'symlink', 'not-image'])(
+    'rejects %s sources',
+    async (kind) => {
+      let source = path.join(work, 'shot.png');
+      if (kind === 'remote') raw.exec("UPDATE sessions SET remote_host_id = 'other-host'");
+      if (kind === 'outside') source = path.join(state.root, 'private.png');
+      if (kind === 'other-scratch') {
+        source = path.join(
+          claudeScratchpadPath({
+            workingDir: work,
+            sdkSessionId: sdk.replace(/^1/, '2'),
+            agentKind: 'cc',
+          })!,
+          'shot.png',
+        );
+        await fs.mkdir(path.dirname(source), { recursive: true });
+      }
+      if (kind === 'symlink') {
+        const outside = path.join(state.root, 'private.png');
+        await fs.writeFile(outside, PNG);
+        await fs.symlink(outside, source);
+      } else await fs.writeFile(source, kind === 'not-image' ? Buffer.from('not png') : PNG);
+      const row = insert(`![image](${source})`);
+      expect(await restoreTaskImageRows(client, [row])).toEqual([row]);
+      expect(raw.prepare('SELECT count(*) AS n FROM media_refs').get()).toEqual({ n: 0 });
+    },
+  );
+
+  it.each(['clear', 'edit', 'rewind', 'owner'])(
+    'does not publish after %s during import',
+    async (kind) => {
+      const source = path.join(work, 'shot.png');
+      await fs.writeFile(source, PNG);
+      const row = insert(`![image](${source})`);
+      state.afterIngest = () => {
+        if (kind === 'clear') raw.exec('UPDATE sessions SET cleared_at = 20');
+        if (kind === 'edit') raw.exec("UPDATE messages SET content = 'new text'");
+        if (kind === 'rewind') raw.exec('UPDATE messages SET rewind_at = 20');
+        if (kind === 'owner') state.valid = false;
+      };
+      expect(await restoreTaskImageRows(client, [row])).toEqual([row]);
+      expect(raw.prepare('SELECT count(*) AS n FROM media_refs').get()).toEqual({ n: 0 });
+      expect(raw.prepare('SELECT content FROM messages').get()).toEqual({
+        content: kind === 'edit' ? 'new text' : row.content,
+      });
+    },
+  );
+
+  it('refuses a scratchpad redirected through a symlink', async () => {
+    const scope = {
+      id: 's',
+      workingDir: work,
+      sdkSessionId: sdk,
+      agentKind: 'cc',
+      remoteHostId: null,
+      status: 'active' as const,
+      clearedAt: null,
+    };
+    const scratch = claudeScratchpadPath(scope)!;
+    await fs.mkdir(path.dirname(scratch), { recursive: true });
+    await fs.symlink(work, scratch, process.platform === 'win32' ? 'junction' : 'dir');
+    expect(await taskImageRoots(scope)).toEqual([await fs.realpath(work)]);
+  });
+
+  it('reads only ordinary image files inside validated roots', async () => {
+    await expect(readTaskImage(work, [await fs.realpath(work)])).rejects.toThrow();
+  });
+});
+
+describe('Markdown image contract', () => {
+  it('preserves code and HTML, and rewrites images in lists, tables and reference syntax', async () => {
+    const source = path.join(path.sep, 'work', 'shot.png');
+    const image = `![pic](${source})`;
+    const text = `\`${image}\`\n\n\`\`\`md\n${image}\n\`\`\`\n\n<img src="${source}">\n\n- ${image}\n\n|pic|\n|---|\n|${image}|\n\n![ref][p]\n\n[p]: ${source}\n`;
+    const importImage = vi.fn(async () => 'cindy-media://blobs/test.png');
+    const result = await materializeTaskImageMarkdown(text, { importImage });
+    expect(importImage).toHaveBeenCalledTimes(1);
+    expect(result.text).toContain(`\`${image}\``);
+    expect(result.text).toContain(`\`\`\`md\n${image}\n\`\`\``);
+    expect(result.text).toContain('<img src=');
+    expect(result.text).toContain('- ![pic](cindy-media://blobs/test.png)');
+    expect(result.text).toContain('|![pic](cindy-media://blobs/test.png)|');
+    expect(result.text).toContain('![ref](cindy-media://blobs/test.png)');
+  });
+
+  it('removes unused image definitions but preserves ones shared with ordinary links', () => {
+    const source = '![image][p]\n\n[p]: /tmp/a.png';
+    const replacements = new Map([['/tmp/a.png', 'cindy-media://blobs/test.png']]);
+    expect(rewriteTaskImageReferences(source, replacements)).not.toContain('/tmp/a.png');
+    const shared = `[download][p]\n${source}`;
+    expect(rewriteTaskImageReferences(shared, replacements)).toContain('[p]: /tmp/a.png');
+  });
+
+  it('supports spaces, parentheses and duplicate destinations without changing surrounding text', () => {
+    const text = 'before ![a](</tmp/a (1).png> "caption") after';
+    const ref = taskImageReferences(text)[0];
+    expect(ref.url).toBe('/tmp/a (1).png');
+    expect(
+      rewriteTaskImageReferences(text, new Map([[ref.url, 'cindy-media://blobs/test.png']])),
+    ).toBe('before ![a](cindy-media://blobs/test.png "caption") after');
+  });
+});

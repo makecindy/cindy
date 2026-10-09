@@ -32,6 +32,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 
 import { app } from 'electron';
+import { materializeTaskImageText } from '../cindy-media/taskImageDelivery';
 import { stripInternalWebCitations } from '@cindy/maker-shared/internal-citation';
 import { MAIN_OWNED_SEND_CONTEXT } from '@cindy/maker-core';
 
@@ -447,6 +448,7 @@ function turnTextsFor(observer: HookTurnObserver): HookTurnTexts {
  * 贴在被折叠工作过程里的图和文件会随着正文投影一起被丢掉(PR #1272 review)。
  */
 async function collectOutboundForFinalText(
+  sessionId: string,
   texts: HookTurnTexts,
   extraImageAbsPaths: string[],
   allowedFileRoots: string[],
@@ -455,11 +457,12 @@ async function collectOutboundForFinalText(
   // Defense in depth for X/Slack/Telegram: live Codex traffic is normalized in
   // maker-core, but older persisted/continuation text and future adapters must
   // never forward private Web citation delimiters to an external channel.
-  const publicText = stripInternalWebCitations(texts.publicText);
-  const wholeTurn = stripInternalWebCitations(texts.wholeTurn);
   // Remote runtimes do not grant access to this host's files or media cache.
   // The attachment collector's managed-image path is independent of file roots.
-  if (allowedFileRoots.length === 0) return { finalText: publicText };
+  if (allowedFileRoots.length === 0) return { finalText: stripInternalWebCitations(texts.publicText) };
+  const publicText = await materializeTaskImageText(sessionId, stripInternalWebCitations(texts.publicText));
+  const wholeTurn = texts.wholeTurn === texts.publicText ? publicText
+    : await materializeTaskImageText(sessionId, stripInternalWebCitations(texts.wholeTurn));
   if (!hasOutboundRefs(wholeTurn) && extraImageAbsPaths.length === 0) {
     return { finalText: publicText };
   }
@@ -1435,6 +1438,7 @@ export function createMakerHookSessionRunner(deps: {
       // 出站附件: 文本引用 / 旁路图存在时才收集(读盘 + base64 只在需要时
       // 发生); 收集失败不拖垮收口 —— 附件是回帖增强, 文本永远要发出去
       const collected = await collectOutboundForFinalText(
+        session.id,
         turnTextsFor(observer),
         extraImageAbsPaths,
         allowedFileRoots,
@@ -1554,6 +1558,7 @@ function beginContinuationWatch(
       // workDir 以 live session 为权威(会话可能被移动过), 与 run() 里
       // isDirAuthorized 用 session.workDir 复核同理。
       const collected = await collectOutboundForFinalText(
+        session.id,
         turnTextsFor(observer),
         extraImageAbsPaths,
         allowedFileRoots,

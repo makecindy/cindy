@@ -9856,7 +9856,9 @@
       "label": "基于原任务创建"
     },
     "imageMissing": {
-      "title": "图片已丢失"
+      "title": "图片已丢失",
+      "unavailable": "图片暂时无法显示",
+      "loading": "正在加载图片…"
     },
     "visionBridge": {
       "analyzing": "正在识别图片中…（{{count}} 张）",

@@ -9856,7 +9856,9 @@
       "label": "元のセッションから作成"
     },
     "imageMissing": {
-      "title": "画像が失われました"
+      "title": "画像が失われました",
+      "unavailable": "画像を表示できません",
+      "loading": "画像を読み込み中…"
     },
     "visionBridge": {
       "analyzing": "画像を認識中…（{{count}}枚）",
