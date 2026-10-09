@@ -13,6 +13,7 @@ import { buildGroupedHomeRows, buildMixedHomeRows } from '@/session/homeSections
 import type { MobileHomePresentation, MobileHomeProjectGroup } from '@/session/mobileHome';
 import type { RemoteSessionListItem } from '@/session/sessionList';
 import { groupAutomationListItems } from '@cindy/maker-shared/session-list';
+import { reorderVisibleProjectByDropIndex } from '@/session/homeProjectOrder';
 import {
   __testing as prStoreTesting,
   latestPrRef,
@@ -202,6 +203,14 @@ describe('task info usage wiring', () => {
   it('counts dialogue automation runs like project candidates', () => {
     const surface = readFileSync(resolve(process.cwd(), 'src/session/HomeSurface.tsx'), 'utf8');
     expect(surface).toContain('dialogueCount: projectFilterUniverse.chats.reduce((sum, item) => sum + (item.automationGroup?.sessionCount ?? 1), 0),');
+  });
+
+  it('reorders only the filtered visible projects and keeps hidden project slots', () => {
+    // 完整顺序 A、B、C,筛选后只显示 A / C,把 C 拖到 A 前:B 保持原槽位。
+    expect(reorderVisibleProjectByDropIndex(['A', 'B', 'C'], ['A', 'C'], 'C', 0)).toEqual(['C', 'B', 'A']);
+    const surface = readFileSync(resolve(process.cwd(), 'src/session/HomeSurface.tsx'), 'utf8');
+    // 主机账本分支的可见集同样取实际渲染(已筛选)的项目。
+    expect(surface).toContain('const visibleKeys = visibleProjectKeys.filter((key) => hostWritable.has(key));');
   });
 
   it('lists project filter candidates regardless of search and status', () => {

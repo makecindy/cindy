@@ -2438,9 +2438,12 @@ function HomeScreenContent({ active = true, onModeChange, width, newSessionInSys
     };
     const mountedKeysByY = session.layouts.map((item) => item.key);
     if (ledger === 'host' && selectedDeviceId) {
-      const visibleKeys = home.projects
+      // 可见集取当前实际渲染的项目(已应用筛选),只保留该电脑可写主机账本的项目;
+      // 主机完整账本只作为 currentFullOrder,被筛掉的项目保持原槽位。
+      const hostWritable = new Set(home.projects
         .filter((item) => item.kind !== 'cindy-make' && item.deviceId === selectedDeviceId)
-        .map((item) => item.key);
+        .map((item) => item.key));
+      const visibleKeys = visibleProjectKeys.filter((key) => hostWritable.has(key));
       // 虚拟化下 session.hoverIndex 只在已挂载子集从 0 计,先翻译成完整可见列表的插入位;
       // 翻译不出(源行未测到 / 已挂载子集为空)则中止,不写主机账本。
       const dropIndex = resolveVirtualizedDropIndex(
