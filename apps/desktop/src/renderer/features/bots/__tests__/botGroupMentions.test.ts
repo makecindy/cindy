@@ -5,6 +5,7 @@ import {
   findBotGroupMentionQuery,
   insertBotGroupMention,
   resolveBotGroupMentions,
+  retainBotGroupTrackedMentions,
   splitBotGroupMentionSegments,
 } from '../botGroupMentions';
 import {
@@ -77,6 +78,14 @@ describe('resolveBotGroupMentions', () => {
 });
 
 describe('stale explicit picks', () => {
+  it('retains only picked labels that still form mention tokens after a text edit', () => {
+    const tracked = [{ botId: 'departed', label: 'Ann' }, { botId: 'picked', label: '小满' }];
+    const input = { members: [{ botId: 'longer', name: '小满满' }], allLabels: ['所有人'], tracked };
+    expect(retainBotGroupTrackedMentions('@Ann hello @小满', input)).toEqual(tracked);
+    expect(retainBotGroupTrackedMentions('@所有人 @Anna ann@Ann.com @小满满', input)).toEqual([]);
+    expect(retainBotGroupTrackedMentions('@Ann hello', input)).toEqual([tracked[0]]);
+  });
+
   it('retains a selected target after roster removal rather than making it unaddressed or retargeting a namesake', () => {
     const tracked = [{ botId: 'departed', label: 'Ann' }];
     for (const current of [[], [{ botId: 'namesake', name: 'Ann' }]]) {

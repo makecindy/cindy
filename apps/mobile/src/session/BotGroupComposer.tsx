@@ -26,6 +26,7 @@ import {
   findBotGroupMentionQuery,
   insertBotGroupMention,
   resolveBotGroupMentions,
+  retainBotGroupTrackedMentions,
   type BotGroupTrackedMention,
 } from '@cindy/maker-shared/botGroupMentions';
 import {
@@ -315,7 +316,14 @@ export function BotGroupComposer({
       cursorColor={colors.inputCaret}
       selectionColor={colors.inputCaret}
       selection={forcedSelection}
-      onChangeText={setText}
+      onChangeText={(value) => {
+        setText(value);
+        setTracked(current => retainBotGroupTrackedMentions(value, {
+          members: members.map(member => ({ botId: member.botId, name: member.name })),
+          allLabels: [allLabel],
+          tracked: current,
+        }));
+      }}
       onSelectionChange={(event) => {
         setForcedSelection(undefined);
         setCaret(event.nativeEvent.selection.end);

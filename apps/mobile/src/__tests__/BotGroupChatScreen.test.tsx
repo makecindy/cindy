@@ -492,6 +492,19 @@ describe('group composer', () => {
     expect(h.row.value).toBe('');
   });
 
+  it('drops a deleted selected mention before a namesake is manually mentioned again', async () => {
+    const data = group({ openPlan: null });
+    const namesakes = [{ ...data.members[0]!, name: 'Ann' }, { ...data.members[1]!, name: 'Ann' }];
+    await render(group({ openPlan: null, members: namesakes }));
+    await type('@');
+    await click('botGroup.mention.mimi');
+    await render(group({ openPlan: null, members: namesakes.slice(1) }));
+    await type('hello');
+    await type('@Ann hello');
+    await click('botGroup.composer.send');
+    expect(h.chat.act).toHaveBeenLastCalledWith('send', expect.objectContaining({ mentions: { all: false, botIds: ['abu'] } }));
+  });
+
   it('sends a 分工 message and keeps the clientId and tag for a retry', async () => {
     await render(group({ openPlan: null }));
     expect(byId('botGroup.divisionTag')).toBeNull();

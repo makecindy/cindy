@@ -147,6 +147,20 @@ export function resolveBotGroupMentions(
   return { all, botIds };
 }
 
+/** Forget a picked identity once the user removes its mention from the draft. */
+export function retainBotGroupTrackedMentions(
+  text: string,
+  input: {
+    members: readonly BotGroupMentionMember[];
+    allLabels: readonly string[];
+    tracked: readonly BotGroupTrackedMention[];
+  },
+): BotGroupTrackedMention[] {
+  const entries = buildLabelEntries(input.members, input.allLabels, input.tracked);
+  const labels = new Set(scanMentionTokens(text, entries).filter(token => !token.entry.all).map(token => token.entry.label));
+  return input.tracked.filter(mention => labels.has(mention.label.trim()));
+}
+
 /** The `@query` being typed right before the caret, if any. */
 export function findBotGroupMentionQuery(text: string, caret: number): BotGroupMentionQuery | null {
   const before = text.slice(0, Math.max(0, Math.min(caret, text.length)));

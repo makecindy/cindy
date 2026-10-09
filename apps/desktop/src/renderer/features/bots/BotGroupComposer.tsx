@@ -66,6 +66,7 @@ import {
   findBotGroupMentionQuery,
   insertBotGroupMention,
   resolveBotGroupMentions,
+  retainBotGroupTrackedMentions,
   type BotGroupTrackedMention,
 } from './botGroupMentions';
 import {
@@ -502,6 +503,7 @@ export function BotGroupComposer({
               const value = event.target.value;
               const nextCaret = event.target.selectionStart ?? value.length;
               setText(value);
+              setTracked(current => retainBotGroupTrackedMentions(value, { members, allLabels: [allLabel], tracked: current }));
               setCaret(nextCaret);
               setHighlight(0);
               // A dismissed picker stays closed only for the `@` it was closed on.
