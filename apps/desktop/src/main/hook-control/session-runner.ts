@@ -1419,7 +1419,7 @@ export function createMakerHookSessionRunner(deps: {
         observer.stop();
         const collected = observer.errorReason === 'output-limit'
           ? await collectOutboundForFinalText(
-            session.id, turnTextsFor(observer), extraImageAbsPaths, [workingDir], log,
+            session.id, turnTextsFor(observer), extraImageAbsPaths, allowedFileRoots, log,
           )
           : { finalText: '' };
         return { ...fail(err instanceof Error ? err.message : String(err)), ...collected };

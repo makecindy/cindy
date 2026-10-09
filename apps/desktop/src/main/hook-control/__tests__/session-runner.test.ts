@@ -3327,26 +3327,44 @@ describe('watchContinuation: 观察桌面端续跑并回流', () => {
     for (let i = 0; i < times; i++) await Promise.resolve();
   }
 
-  it.each([false, true])('continuation attachments stay in their runtime (remote=%s)', async (remote) => {
+  it.each(['run', 'continuation'].flatMap((entry) =>
+    [false, true].flatMap((remote) => [false, true].map((outputLimit) => ({ entry, remote, outputLimit }))),
+  ))('attachments stay in their runtime ($entry, remote=$remote, outputLimit=$outputLimit)', async ({ entry, remote, outputLimit }) => {
     const workDir = process.cwd().replaceAll('\\', '/');
-    fakeMaker.getSession.mockReturnValueOnce({
-      ...makeManualSession('sess-live'),
-      workDir,
-      ...(remote ? { remoteHostId: 'ssh-host' } : {}),
-    });
     const onEnd = vi.fn();
     const runner = createMakerHookSessionRunner({ log });
-    const { req } = watchReq({ onEnd });
-    runner.watchContinuation!(req as never);
-    const cb = h.eventCbs.get('sess-live')!;
+    let pending: ReturnType<typeof runner.run> | undefined;
+    if (entry === 'run') {
+      fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) => {
+        const session = makeFakeSession(opts.id ?? 'sess-x');
+        session.send.mockImplementation(async (_message, options) => {
+          await options.onAccepted?.();
+          return { accepted: true };
+        });
+        return { ...session, workDir, ...(remote ? { remoteHostId: 'ssh-host' } : {}) };
+      });
+      pending = runner.run(baseReq({ workingDir: workDir }));
+      await vi.waitFor(() => expect(h.eventCbs.has('sess-new')).toBe(true));
+    } else {
+      fakeMaker.getSession.mockReturnValueOnce({
+        ...makeManualSession('sess-live'), workDir,
+        ...(remote ? { remoteHostId: 'ssh-host' } : {}),
+      });
+      const { req } = watchReq({ onEnd });
+      runner.watchContinuation!(req as never);
+    }
+    const cb = h.eventCbs.get(entry === 'run' ? 'sess-new' : 'sess-live')!;
     const media = `cindy-media://blobs/${'a'.repeat(64)}.png`;
     const text = `结果 [文件](xdt-file://${workDir}/package.json) ![图](xdt-image://chart.png) ![媒体](${media})`;
     cb({ type: 'tool_result_full', data: { fullText: `![工具图](xdt-image://tool.png) ![工具媒体](${media})` } });
     cb({ type: 'text', data: { text, isFinal: true } });
-    cb({ type: 'done', data: null });
+    cb(outputLimit
+      ? { type: 'error', data: { reason: 'output-limit', message: 'limit', isTerminal: true } }
+      : { type: 'done', data: null });
+    if (pending) onEnd(await pending);
     await vi.waitFor(() => expect(onEnd).toHaveBeenCalledTimes(1));
     const outcome = onEnd.mock.calls[0]![0];
-    expect(outcome.status).toBe('ok');
+    expect(outcome.status).toBe(outputLimit ? 'error' : 'ok');
     if (remote) {
       expect(resolveXdtImage).not.toHaveBeenCalled();
       expect(cindyMock.resolveSafe).not.toHaveBeenCalled();
