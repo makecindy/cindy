@@ -220,15 +220,22 @@ export function useChatServerGroup(groupId: string, enabled: boolean) {
     if (!latest || latest.identity !== identity) throw new Error('CHAT_READ_FAILED');
     try {
       const mentions = input.mentions as { all: boolean; botIds: string[] };
-      const recipients = mentions.all
-        ? (await api.client.members(groupId)).filter(member => member.state === 'joined').map(member => member.id)
-        : mentions.botIds;
+      const joined = mentions.all || mentions.botIds.length
+        ? (await api.client.members(groupId)).filter(member => member.state === 'joined') : [];
       if (!valid() || page.current?.identity !== identity) throw new Error('OWNER_CHANGED');
+      // Validate every explicit pick before Everyone expansion; never discard a
+      // departed target or submit only the remaining part of the intended list.
+      if (mentions.botIds.some(id => !joined.some(member => member.id === id))) throw new Error('MENTION_UNAVAILABLE');
+      const recipients = mentions.all
+        ? joined.map(member => member.id)
+        : mentions.botIds;
       await api.client.send(groupId, { clientId: String(input.clientId), text: String(input.text),
         mentions: { all: false, botIds: recipients.filter(id => id !== latest.self) } });
       if (valid()) reload();
       return { effects: [] };
     } catch (error) {
+      // An unavailable mention is a draft correction, not a connectivity failure.
+      if (error instanceof Error && error.message === 'MENTION_UNAVAILABLE') throw error;
       if (valid()) {
         freshRead.current = false;
         if (chatAccessLost(error)) loseAccess();

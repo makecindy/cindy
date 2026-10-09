@@ -471,14 +471,14 @@ describe('group composer', () => {
     expect(h.row.value).toBe('');
   });
 
-  it('keeps a stale selected target through a refused send and lets a new pick replace it', async () => {
+  it.each(['[INVALID_PARAMS] MENTION_UNAVAILABLE', 'MENTION_UNAVAILABLE'])('keeps a stale selected target through a refused send (%s) and lets a new pick replace it', async message => {
     const data = group({ openPlan: null });
     const namesakes = [{ ...data.members[0]!, name: 'Ann' }, { ...data.members[1]!, name: 'Ann' }];
     await render(group({ openPlan: null, members: namesakes }));
     await type('@');
     await click('botGroup.mention.mimi');
     await render(group({ openPlan: null, members: namesakes.slice(1) }));
-    h.chat.act.mockRejectedValue(new Error('[INVALID_PARAMS] MENTION_UNAVAILABLE'));
+    h.chat.act.mockRejectedValue(new Error(message));
     for (let retry = 0; retry < 2; retry++) {
       await click('botGroup.composer.send');
       expect(h.chat.act).toHaveBeenLastCalledWith('send', expect.objectContaining({ mentions: { all: false, botIds: ['mimi'] } }));
