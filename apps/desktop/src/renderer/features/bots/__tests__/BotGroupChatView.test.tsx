@@ -612,6 +612,31 @@ describe('BotGroupChatView', () => {
     expect(mocks.sendBotGroupMessage.mock.calls[0]![0].mentions).toEqual({ all: false, botIds: ['other'] });
   });
 
+  it.each(['picked', 'manual'])('removes only the %s token identity when same-name mentions coexist', async removed => {
+    const namesakes = [
+      { ...detail().members[0]!, botId: 'picked', name: 'Ann' },
+      { ...detail().members[1]!, botId: 'other', name: 'Ann' },
+    ];
+    mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ members: namesakes }) });
+    mocks.sendBotGroupMessage.mockResolvedValue({ ok: false, errorCode: 'MENTION_UNAVAILABLE' });
+    renderView();
+    const input = (await screen.findByRole('textbox')) as HTMLTextAreaElement;
+    act(() => input.focus());
+    fireEvent.change(input, { target: { value: '  @', selectionStart: 3 } });
+    fireEvent.click((await screen.findAllByRole('option'))[1]!);
+    fireEvent.change(input, { target: { value: '  @Ann @Ann', selectionStart: 11 } });
+    mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ members: namesakes.slice(1) }) });
+    act(() => mocks.pushes.forEach(push => push({ groupId: 'g1', change: 'messages' })));
+    await waitFor(() => expect(mocks.getBotGroup).toHaveBeenCalledTimes(2));
+    input.setSelectionRange(removed === 'picked' ? 2 : 6, removed === 'picked' ? 7 : 11);
+    fireEvent.select(input);
+    fireEvent.change(input, { target: { value: '  @Ann', selectionStart: removed === 'picked' ? 2 : 6 } });
+    fireEvent.keyDown(input, { key: 'Escape' });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await waitFor(() => expect(mocks.sendBotGroupMessage).toHaveBeenCalledTimes(1));
+    expect(mocks.sendBotGroupMessage.mock.calls[0]![0].mentions).toEqual({ all: false, botIds: [removed === 'picked' ? 'other' : 'picked'] });
+  });
+
   it('refreshes on a push for this group and shows the unavailable state after delete', async () => {
     renderView();
     await screen.findByText('周六 8:10 有票');

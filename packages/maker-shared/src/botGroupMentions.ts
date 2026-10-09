@@ -20,6 +20,8 @@ export interface BotGroupMentionMember {
 export interface BotGroupTrackedMention {
   botId: string;
   label: string;
+  /** UTF-16 index of this picked token's `@` in the untrimmed draft. */
+  start: number;
 }
 
 export interface BotGroupMentionQuery {
@@ -66,14 +68,6 @@ function buildLabelEntries(
     const label = raw.trim();
     if (label) byLabel.set(label, { label, all: true, botIds: [] });
   }
-  const trackedByLabel = new Map<string, string[]>();
-  for (const mention of tracked) {
-    const label = mention.label.trim();
-    if (!label) continue;
-    const ids = trackedByLabel.get(label) ?? [];
-    if (!ids.includes(mention.botId)) ids.push(mention.botId);
-    trackedByLabel.set(label, ids);
-  }
   for (const member of members) {
     for (const raw of [member.name, member.nickname || member.displayName || '']) {
       const label = raw.trim();
@@ -85,10 +79,9 @@ function buildLabelEntries(
   }
   // Keep an explicit pick even after it disappears from the live roster. This
   // records intent, not membership: the host must reject unavailable targets.
-  for (const [label, ids] of trackedByLabel) {
-    const entry = byLabel.get(label);
-    if (entry?.all) continue;
-    byLabel.set(label, { label, all: false, botIds: ids });
+  for (const mention of tracked) {
+    const label = mention.label.trim();
+    if (label && !byLabel.has(label)) byLabel.set(label, { label, all: false, botIds: [] });
   }
   // 最长优先：`@小满满` 不能先被 `@小满` 截走。
   return [...byLabel.values()].sort((a, b) => b.label.length - a.label.length);
@@ -139,7 +132,9 @@ export function resolveBotGroupMentions(
   let all = false;
   for (const token of scanMentionTokens(text, entries)) {
     if (token.entry.all) all = true;
-    for (const botId of token.entry.botIds) {
+    const picked = (input.tracked ?? []).filter(mention => !token.entry.all &&
+      mention.start === token.start && mention.label.trim() === token.entry.label);
+    for (const botId of picked.length ? picked.map(mention => mention.botId) : token.entry.botIds) {
       if (!botIds.includes(botId)) botIds.push(botId);
     }
   }
@@ -147,18 +142,38 @@ export function resolveBotGroupMentions(
   return { all, botIds };
 }
 
-/** Forget a picked identity once the user removes its mention from the draft. */
+/** Move intact picked tokens with a text edit; forget tokens the edit replaces. */
 export function retainBotGroupTrackedMentions(
+  previousText: string,
   text: string,
   input: {
     members: readonly BotGroupMentionMember[];
     allLabels: readonly string[];
     tracked: readonly BotGroupTrackedMention[];
+    /** Previous selection start (or new caret after deletion) disambiguates identical tokens. */
+    editStart?: number;
+    /** Selected text is replaced even when its characters also match the new suffix. */
+    editEnd?: number;
   },
 ): BotGroupTrackedMention[] {
-  const entries = buildLabelEntries(input.members, input.allLabels, input.tracked);
-  const labels = new Set(scanMentionTokens(text, entries).filter(token => !token.entry.all).map(token => token.entry.label));
-  return input.tracked.filter(mention => labels.has(mention.label.trim()));
+  const prefixLimit = Math.min(previousText.length, text.length, Math.max(0, input.editStart ?? previousText.length));
+  let prefix = 0;
+  while (prefix < prefixLimit && previousText[prefix] === text[prefix]) prefix++;
+  let previousEnd = previousText.length, nextEnd = text.length;
+  const suffixLimit = Math.max(prefix, input.editEnd ?? prefix);
+  while (previousEnd > suffixLimit && nextEnd > prefix && previousText[previousEnd - 1] === text[nextEnd - 1]) {
+    previousEnd--; nextEnd--;
+  }
+  const delta = text.length - previousText.length;
+  const tracked = input.tracked.flatMap(mention => {
+    if (mention.start + 1 + mention.label.trim().length <= prefix) return [mention];
+    if (mention.start >= previousEnd) return [{ ...mention, start: mention.start + delta }];
+    return []; // This particular token was edited or deleted, even if a namesake remains.
+  });
+  const entries = buildLabelEntries(input.members, input.allLabels, tracked);
+  const tokens = scanMentionTokens(text, entries);
+  return tracked.filter(mention => tokens.some(token => !token.entry.all &&
+    token.start === mention.start && token.entry.label === mention.label.trim()));
 }
 
 /** The `@query` being typed right before the caret, if any. */

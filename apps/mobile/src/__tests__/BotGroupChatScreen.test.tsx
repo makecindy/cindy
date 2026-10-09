@@ -505,6 +505,22 @@ describe('group composer', () => {
     expect(h.chat.act).toHaveBeenLastCalledWith('send', expect.objectContaining({ mentions: { all: false, botIds: ['abu'] } }));
   });
 
+  it.each(['picked', 'manual'])('removes only the %s token identity when same-name mentions coexist', async removed => {
+    const data = group({ openPlan: null });
+    const namesakes = [{ ...data.members[0]!, name: 'Ann' }, { ...data.members[1]!, name: 'Ann' }];
+    await render(group({ openPlan: null, members: namesakes }));
+    await type('  @');
+    await click('botGroup.mention.mimi');
+    await type('  @Ann @Ann');
+    await render(group({ openPlan: null, members: namesakes.slice(1) }));
+    await act(async () => h.row.onSelectionChange({ nativeEvent: { selection: {
+      start: removed === 'picked' ? 2 : 6, end: removed === 'picked' ? 7 : 11,
+    } } }));
+    await type('  @Ann');
+    await click('botGroup.composer.send');
+    expect(h.chat.act).toHaveBeenLastCalledWith('send', expect.objectContaining({ mentions: { all: false, botIds: [removed === 'picked' ? 'abu' : 'mimi'] } }));
+  });
+
   it('sends a 分工 message and keeps the clientId and tag for a retry', async () => {
     await render(group({ openPlan: null }));
     expect(byId('botGroup.divisionTag')).toBeNull();

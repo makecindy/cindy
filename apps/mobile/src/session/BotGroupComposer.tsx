@@ -100,6 +100,7 @@ export function BotGroupComposer({
   const [stopping, setStopping] = useState(false);
   const inputRef = useRef<NativeTextInput>(null);
   const textRef = useRef(text); textRef.current = text;
+  const selectionRef = useRef({ start: 0, end: 0 });
   const sendingRef = useRef(false);
   const stoppingRef = useRef(false);
   const attemptRef = useRef<BotGroupSendAttempt | null>(null);
@@ -147,15 +148,16 @@ export function BotGroupComposer({
     if (!query) return;
     const next = insertBotGroupMention(text, { start: query.start, end: caret }, option.label);
     setText(next.text);
+    selectionRef.current = { start: next.caret, end: next.caret };
     setCaret(next.caret);
     setForcedSelection({ start: next.caret, end: next.caret });
-    if (option.kind === 'member') {
-      setTracked((current) => [
-        ...current.filter((mention) => mention.botId !== option.member.botId &&
-          (mention.label !== option.label || activeMembers.some(member => member.botId === mention.botId))),
-        { botId: option.member.botId, label: option.label },
-      ]);
-    }
+    setTracked(current => {
+      const remaining = retainBotGroupTrackedMentions(text, next.text, {
+        members: members.map(member => ({ botId: member.botId, name: member.name })),
+        allLabels: [allLabel], tracked: current, editStart: query.start, editEnd: caret,
+      });
+      return option.kind === 'member' ? [...remaining, { botId: option.member.botId, label: option.label, start: query.start }] : remaining;
+    });
     inputRef.current?.focus();
   };
 
@@ -193,7 +195,7 @@ export function BotGroupComposer({
       // The tag and the attachments change what the host does, so they are part of the idempotency key.
       const attempt = nextBotGroupSendAttempt(attemptRef.current, draftText, draftDivision, randomUUID, attachmentIds);
       attemptRef.current = attempt;
-      const mentions = resolveBotGroupMentions(draftText, {
+      const mentions = resolveBotGroupMentions(draft, {
         members: members.map((member) => ({ botId: member.botId, name: member.name })),
         allLabels: [allLabel],
         tracked: draftTracked,
@@ -317,14 +319,18 @@ export function BotGroupComposer({
       selectionColor={colors.inputCaret}
       selection={forcedSelection}
       onChangeText={(value) => {
+        const { start: editStart, end: editEnd } = selectionRef.current;
         setText(value);
-        setTracked(current => retainBotGroupTrackedMentions(value, {
+        setTracked(current => retainBotGroupTrackedMentions(text, value, {
           members: members.map(member => ({ botId: member.botId, name: member.name })),
           allLabels: [allLabel],
           tracked: current,
+          editStart,
+          editEnd,
         }));
       }}
       onSelectionChange={(event) => {
+        selectionRef.current = event.nativeEvent.selection;
         setForcedSelection(undefined);
         setCaret(event.nativeEvent.selection.end);
       }}

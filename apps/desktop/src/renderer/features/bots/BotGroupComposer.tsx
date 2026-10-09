@@ -158,6 +158,7 @@ export function BotGroupComposer({
   });
   const textRef = useRef(text);
   textRef.current = text;
+  const selectionRef = useRef({ start: 0, end: 0 });
   const attachmentsRef = useRef(attachmentState.attachments);
   attachmentsRef.current = attachmentState.attachments;
   const focusInputOnMenuCloseRef = useRef(false);
@@ -214,7 +215,10 @@ export function BotGroupComposer({
 
   const syncCaret = () => {
     const element = textareaRef.current;
-    if (element) setCaret(element.selectionStart ?? element.value.length);
+    if (element) {
+      selectionRef.current = { start: element.selectionStart ?? element.value.length, end: element.selectionEnd ?? element.value.length };
+      setCaret(selectionRef.current.start);
+    }
   };
 
   const choose = (option: MentionOption | undefined) => {
@@ -222,15 +226,13 @@ export function BotGroupComposer({
     const next = insertBotGroupMention(text, { start: query.start, end: caret }, option.label);
     pendingCaretRef.current = next.caret;
     setText(next.text);
+    selectionRef.current = { start: next.caret, end: next.caret };
     setCaret(next.caret);
     setHighlight(0);
-    if (option.kind === 'member') {
-      setTracked((current) => [
-        ...current.filter((mention) => mention.botId !== option.member.botId &&
-          (mention.label !== option.label || activeMembers.some(member => member.botId === mention.botId))),
-        { botId: option.member.botId, label: option.label },
-      ]);
-    }
+    setTracked(current => {
+      const remaining = retainBotGroupTrackedMentions(text, next.text, { members, allLabels: [allLabel], tracked: current, editStart: query.start, editEnd: caret });
+      return option.kind === 'member' ? [...remaining, { botId: option.member.botId, label: option.label, start: query.start }] : remaining;
+    });
     textareaRef.current?.focus();
   };
 
@@ -252,7 +254,7 @@ export function BotGroupComposer({
         ? attemptRef.current
         : { text: trimmed, clientId: crypto.randomUUID(), division, attachments: signature };
     attemptRef.current = attempt;
-    const mentions = resolveBotGroupMentions(trimmed, {
+    const mentions = resolveBotGroupMentions(text, {
       members,
       allLabels: [allLabel],
       tracked,
@@ -502,8 +504,11 @@ export function BotGroupComposer({
             onChange={(event) => {
               const value = event.target.value;
               const nextCaret = event.target.selectionStart ?? value.length;
+              const editStart = Math.min(selectionRef.current.start, nextCaret);
+              const editEnd = selectionRef.current.end;
               setText(value);
-              setTracked(current => retainBotGroupTrackedMentions(value, { members, allLabels: [allLabel], tracked: current }));
+              setTracked(current => retainBotGroupTrackedMentions(text, value, { members, allLabels: [allLabel], tracked: current, editStart, editEnd }));
+              selectionRef.current = { start: nextCaret, end: nextCaret };
               setCaret(nextCaret);
               setHighlight(0);
               // A dismissed picker stays closed only for the `@` it was closed on.
