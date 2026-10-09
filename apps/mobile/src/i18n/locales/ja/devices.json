@@ -349,10 +349,10 @@
       "remoteSettings": "リモート接続設定",
       "displaySettings": "表示設定",
       "groupHeading": "グループ",
-      "sortHeading": "セッション順",
+      "sortHeading": "タスク順",
       "projectOrderHeading": "プロジェクトの並び順",
       "projectOrderManualTip": "プロジェクト行を長押ししてドラッグすると順番を変えられます。グループ内のタスクは上の並び替えに従います。",
-      "statusHeading": "セッションの状態",
+      "statusHeading": "タスクの状態",
       "showDeviceTasks": "タスクを表示",
       "openDevice": "開く",
       "renameDevice": "名前を変更",
@@ -364,7 +364,7 @@
       },
       "sortByPriorityTip": "要対応を最上位に、次に未読、実行中、残りは時間順",
       "projectOrder": {
-        "activity": "セッションに従う",
+        "activity": "タスクに従う",
         "custom": "手動"
       },
       "status": {
@@ -399,7 +399,7 @@
         "text": "テキスト",
         "list": "リスト"
       },
-      "taskInfoHeading": "セッション情報",
+      "taskInfoHeading": "タスク情報",
       "taskInfo": {
         "time": "時間",
         "pr": "PR ステータス",

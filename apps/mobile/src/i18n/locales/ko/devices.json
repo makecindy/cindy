@@ -349,10 +349,10 @@
       "remoteSettings": "원격 연결 설정",
       "displaySettings": "표시 설정",
       "groupHeading": "그룹",
-      "sortHeading": "세션 정렬",
+      "sortHeading": "작업 정렬",
       "projectOrderHeading": "프로젝트 정렬",
       "projectOrderManualTip": "프로젝트 행을 길게 누른 뒤 드래그하면 순서를 바꿀 수 있습니다. 그룹 안 작업은 위 정렬을 따릅니다.",
-      "statusHeading": "세션 상태",
+      "statusHeading": "작업 상태",
       "showDeviceTasks": "작업 보기",
       "openDevice": "열기",
       "renameDevice": "이름 변경",
@@ -364,7 +364,7 @@
       },
       "sortByPriorityTip": "확인이 필요한 항목 먼저, 다음 읽지 않음, 실행 중, 나머지는 시간순",
       "projectOrder": {
-        "activity": "세션 따르기",
+        "activity": "작업 따르기",
         "custom": "수동"
       },
       "status": {
@@ -399,7 +399,7 @@
         "text": "텍스트",
         "list": "리스트"
       },
-      "taskInfoHeading": "세션 정보",
+      "taskInfoHeading": "작업 정보",
       "taskInfo": {
         "time": "시간",
         "pr": "PR 상태",
