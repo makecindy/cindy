@@ -83,7 +83,7 @@ describe('SchedulerScriptCapabilityBroker', () => {
     registerCallMock.mockReset();
     finalizeCallMock.mockReset();
     mockAvailableGhosts(['xd-atlassian', 'xd-feishu'].map((id) => ({
-      ...makeInstalledGhost(id), namespaceMigration: 'pending',
+      ...makeInstalledGhost(id), namespaceState: 'pending',
     })), ['xd-atlassian', 'xd-feishu']);
   });
 
@@ -117,7 +117,7 @@ describe('SchedulerScriptCapabilityBroker', () => {
   it.each([
     { namespace: 'other-org' },
     {},
-    { namespace: null, namespaceMigration: 'pending' as const },
+    { namespace: null, namespaceState: 'pending' as const },
   ])('rejects an unverified or foreign install: %j', async (identity) => {
     mockAvailableGhosts([{ ...makeInstalledGhost('xd-atlassian'), ...identity }]);
     await expect(new SchedulerScriptCapabilityBroker().call(
@@ -129,7 +129,7 @@ describe('SchedulerScriptCapabilityBroker', () => {
   });
 
   it('preserves an approved pre-namespace XD install captured as pending', async () => {
-    mockAvailableGhosts([{ ...makeInstalledGhost('xd-atlassian'), namespaceMigration: 'pending' }], ['xd-atlassian']);
+    mockAvailableGhosts([{ ...makeInstalledGhost('xd-atlassian'), namespaceState: 'pending' }], ['xd-atlassian']);
     await new SchedulerScriptCapabilityBroker().call(
       { method: 'jira.get', params: { issue_key: 'DING-1' } },
       new Set(['jira.read']), { schedule: schedule() },
@@ -138,7 +138,7 @@ describe('SchedulerScriptCapabilityBroker', () => {
   });
 
   it.each(['xd-atlassian', 'xd-feishu'])('does not authorize an approved pending ordinary root %s', async (id) => {
-    mockAvailableGhosts([{ ...makeInstalledGhost(id), namespaceMigration: 'pending' }]);
+    mockAvailableGhosts([{ ...makeInstalledGhost(id), namespaceState: 'pending' }]);
     await expect(new SchedulerScriptCapabilityBroker().call(
       id === 'xd-atlassian'
         ? { method: 'jira.get', params: { issue_key: 'DING-1' } }
@@ -151,7 +151,7 @@ describe('SchedulerScriptCapabilityBroker', () => {
 
   it.each(['legacy-unapproved', 'invalid'] as const)('rejects a pending install with %s approval', async (state) => {
     mockAvailableGhosts([{
-      ...makeInstalledGhost('xd-atlassian'), namespaceMigration: 'pending', approval: { state },
+      ...makeInstalledGhost('xd-atlassian'), namespaceState: 'pending', approval: { state },
     }]);
     await expect(new SchedulerScriptCapabilityBroker().call(
       { method: 'jira.get', params: { issue_key: 'DING-1' } },

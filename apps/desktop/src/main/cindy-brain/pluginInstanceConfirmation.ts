@@ -18,7 +18,7 @@ import {
   type PluginInstanceRegistry,
 } from './pluginInstanceRegistry.js';
 
-export interface ConfirmationMarketRow {
+interface ConfirmationMarketRow {
   installed?: boolean;
   namespace?: string | null;
   scope?: 'public' | 'personal' | 'organization';
@@ -26,7 +26,7 @@ export interface ConfirmationMarketRow {
   sha256?: string | null;
 }
 
-export function confirmationMarketRecords(input: {
+function confirmationMarketRecords(input: {
   rows: readonly ConfirmationMarketRow[];
   record: PluginInstanceRecord;
   currentOrganization: { organizationId: string; orgSlug: string | null } | null;
@@ -64,7 +64,7 @@ export function buildUnconfirmedConfirmationEvidence(input: {
   };
 }
 
-export interface UnconfirmedConfirmationHost {
+interface UnconfirmedConfirmationHost {
   readEvidence?(record: PluginInstanceRecord): InstanceConfirmationEvidence | null | undefined;
   isBlocked(): boolean;
   sync(): PluginInstanceRegistry;

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import type { NamespaceMigrationLedgerRead } from '../ghostNamespaceMigration.js';
+import type { NamespaceMigrationLedgerRead } from '../pluginNamespaceMigration.js';
 import {
   emptyPluginInstanceRegistry,
   type PluginInstanceRegistry,

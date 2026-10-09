@@ -32,7 +32,7 @@ function installed(namespace?: string | null, inPlace = false): InstalledGhost {
     dir: namespace && !inPlace ? '/plugins/_ns/' + namespace + '/helper' : '/plugins/helper',
     enabled: true,
     approval: { state: 'approved', revision: '00000000-0000-4000-8000-000000000001' },
-    ...(namespace === undefined ? { namespaceMigration: 'pending' } : { namespace }),
+    ...(namespace === undefined ? { namespaceState: 'pending' } : { namespace }),
   } as InstalledGhost;
 }
 

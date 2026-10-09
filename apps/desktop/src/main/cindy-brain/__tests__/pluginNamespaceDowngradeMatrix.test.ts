@@ -178,7 +178,7 @@ describe('namespace downgrade matrix', () => {
       expect(ghost.enabled).toBe(true);
       expect(ghost.dir).toBe(path.join(rootDir, id));
       expect(installedGhostStoragePart(ghost)).toBe(keys[id]);
-      expect(ghost.namespaceMigration).toBe('pending');
+      expect(ghost.namespaceState).toBe('pending');
       expect(manager.readDeliveryNamespace(keys[id])).toBeUndefined();
       expectOwnedData(keys[id], 'data:' + id);
     }
@@ -287,7 +287,7 @@ describe('namespace downgrade matrix', () => {
       expect(installedGhostStoragePart(byId(id))).toBe(keys[id]);
       expectOwnedData(keys[id], 'owner-a:' + id);
     }
-    expect(byId('public-tool').namespaceMigration).toBe('pending');
+    expect(byId('public-tool').namespaceState).toBe('pending');
   });
 
   it('reconnects an enterprise plugin after an old client changes its package and rewrites the market row', async () => {

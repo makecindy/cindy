@@ -2854,7 +2854,7 @@ export class PluginMarketService {
     const installed = getGhostManager()
       .list()
       .find((ghost) => ghost.manifest.id === 'cindy-github' && ghost.namespace == null &&
-        ghost.namespaceMigration !== 'pending');
+        ghost.namespaceState !== 'pending');
     if (!record || !installed || !canBackfillOfficialCindyGithubTrust(record, installed)) return;
     const tempPath = path.join(
       app.getPath('temp'),
@@ -2880,7 +2880,7 @@ export class PluginMarketService {
         const currentInstalled = getGhostManager()
           .list()
           .find((ghost) => ghost.manifest.id === 'cindy-github' && ghost.namespace == null &&
-            ghost.namespaceMigration !== 'pending');
+            ghost.namespaceState !== 'pending');
         if (
           !currentRecord?.installed ||
           currentRecord.source !== 'market' ||

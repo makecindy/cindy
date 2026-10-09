@@ -79,7 +79,7 @@ async function callGhostForScript(
   writePath: string | null,
 ): Promise<GhostToolCallResult> {
   const ghost = findTrustedXdGhostForScript(request.ghostId);
-  const pendingLegacy = ghost?.namespaceMigration === 'pending'
+  const pendingLegacy = ghost?.namespaceState === 'pending'
     && !hasDeliveryNamespace(ghost) && ghost.approval.state === 'approved';
   if (!ghost || ghost.manifest.id !== request.ghostId ||
       (ghost.namespace !== 'xd' && !pendingLegacy)) {

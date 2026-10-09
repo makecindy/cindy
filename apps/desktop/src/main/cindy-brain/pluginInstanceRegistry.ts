@@ -19,13 +19,13 @@ import {
 } from '../../shared/pluginIdentity.js';
 import { isValidGhostId } from '../../shared/ghost.js';
 
-export const PLUGIN_INSTANCE_REGISTRY_V1_VERSION = 1 as const;
-export const PLUGIN_INSTANCE_REGISTRY_VERSION = 2 as const;
+const PLUGIN_INSTANCE_REGISTRY_V1_VERSION = 1 as const;
+const PLUGIN_INSTANCE_REGISTRY_VERSION = 2 as const;
 /** Live registry. v1 is read once and left on disk. */
-export const PLUGIN_INSTANCE_REGISTRY_FILE = 'plugin-instances.v2.json';
-export const PLUGIN_INSTANCE_REGISTRY_V1_FILE = 'plugin-instances.v1.json';
+const PLUGIN_INSTANCE_REGISTRY_FILE = 'plugin-instances.v2.json';
+const PLUGIN_INSTANCE_REGISTRY_V1_FILE = 'plugin-instances.v1.json';
 
-export type PluginInstanceNamespaceState = 'confirmed' | 'unconfirmed' | 'pending';
+type PluginInstanceNamespaceState = 'confirmed' | 'unconfirmed' | 'pending';
 export type PluginInstanceSource = 'legacy' | 'market' | 'manual' | 'agent-forge' | 'builtin';
 
 export interface PluginInstanceRecord {
@@ -43,7 +43,7 @@ export interface PluginInstanceRecord {
   active: boolean;
 }
 
-export interface PluginInstanceCensus {
+interface PluginInstanceCensus {
   completedAt: string;
   /** Bare directories captured once. Commit and uninstall remove ids. */
   pendingRelIds: string[];
@@ -56,7 +56,7 @@ export interface PluginInstanceRegistry {
   instances: Record<string, PluginInstanceRecord>;
 }
 
-export type PluginInstanceRegistryRead =
+type PluginInstanceRegistryRead =
   | { kind: 'missing' }
   | { kind: 'ok'; registry: PluginInstanceRegistry }
   | { kind: 'corrupt' }
@@ -109,7 +109,7 @@ export function allocateArchiveInstanceKey(): string {
 }
 
 /** Storage key already used by an on-disk install that has no registry row yet. */
-export function instanceKeyForExistingContent(relId: string): string | null {
+function instanceKeyForExistingContent(relId: string): string | null {
   if (!parsePluginInstallRelId(relId)) return null;
   return pluginInstallStoragePart(relId);
 }
@@ -314,13 +314,6 @@ export function findInstanceByContentRelId(
   return Object.values(registry.instances).find((record) => record.contentRelId === relId);
 }
 
-export function findInstanceByKey(
-  registry: PluginInstanceRegistry,
-  instanceKey: string,
-): PluginInstanceRecord | undefined {
-  return registry.instances[instanceKey];
-}
-
 /** Active install that must not be replaced by another copy of the same identity. */
 export function findBlockingInstance(
   registry: PluginInstanceRegistry,
@@ -368,15 +361,6 @@ export function findReusableInstance(
   return matches.length === 1 ? matches[0]! : null;
 }
 
-export function deactivateInstance(
-  registry: PluginInstanceRegistry,
-  relOrKey: string,
-): PluginInstanceRegistry {
-  const record = registry.instances[relOrKey] ?? findInstanceByContentRelId(registry, relOrKey);
-  if (!record || !record.active) return registry;
-  return upsertInstance(registry, { ...record, active: false });
-}
-
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
@@ -409,7 +393,7 @@ function parseRecord(value: unknown, instanceKey: string): PluginInstanceRecord 
 }
 
 
-export interface PendingCensusProjectionEntry {
+interface PendingCensusProjectionEntry {
   ghostId: string;
   relId: string;
   capturedAt: string;
@@ -510,7 +494,7 @@ function parseInstances(
   };
 }
 
-export type PluginInstanceRegistryParse =
+type PluginInstanceRegistryParse =
   | { kind: 'ok'; registry: PluginInstanceRegistry }
   | { kind: 'corrupt' }
   | { kind: 'unknown-schema' };
@@ -526,7 +510,7 @@ export function parsePluginInstanceRegistryDocument(raw: unknown): PluginInstanc
   return parseInstances(raw, census);
 }
 
-export function parsePluginInstanceRegistry(raw: unknown): PluginInstanceRegistry | null {
+function parsePluginInstanceRegistry(raw: unknown): PluginInstanceRegistry | null {
   const parsed = parsePluginInstanceRegistryDocument(raw);
   return parsed.kind === 'ok' ? parsed.registry : null;
 }

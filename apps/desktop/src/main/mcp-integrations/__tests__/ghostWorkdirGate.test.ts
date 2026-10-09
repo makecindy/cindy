@@ -1214,7 +1214,7 @@ describe('connect_account shares Host live plugin policy', () => {
     expect(authorizationRequestMock).toHaveBeenCalledWith('bot-session', {
       kind: 'plugin', id: 'art', namespace: 'acme',
     });
-    listMock.mockReturnValue([{ ...(chipGhost('art') as object), namespaceMigration: 'pending' as const }]);
+    listMock.mockReturnValue([{ ...(chipGhost('art') as object), namespaceState: 'pending' as const }]);
     await makeDeps('claude-code', 'bot-session', 'bot-instance').connectAccount!({ kind: 'plugin', id: 'art' });
     expect(authorizationRequestMock).toHaveBeenLastCalledWith('bot-session', { kind: 'plugin', id: 'art' });
   });
@@ -1335,7 +1335,7 @@ describe('花名册 / ghost_list 过滤', () => {
           manual: { items: [{ dir: 'docs', name: 'guide', description: 'Usage guide' }] },
         }) as object),
         dir: path.join(tmpUserData, 'art'),
-        ...(isPending ? { namespaceMigration: 'pending' as const } : {}),
+        ...(isPending ? { namespaceState: 'pending' as const } : {}),
       };
       listMock.mockReturnValue([pending]);
       const deps = makeDeps(agentKind);

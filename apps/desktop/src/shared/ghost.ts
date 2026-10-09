@@ -1615,11 +1615,6 @@ export interface InstalledGhost {
   namespace?: string | null;
   /** Registry confirmation. Pending and unconfirmed must not receive new privileges. */
   namespaceState?: 'confirmed' | 'unconfirmed' | 'pending';
-  /**
-   * Registry says this pre-namespace install is still pending.
-   * It keeps running; elevated privileges stay on the old rules.
-   */
-  namespaceMigration?: 'pending';
   /** Stable storage key. Absent only on projections built before the registry loads. */
   instanceKey?: string;
   /**

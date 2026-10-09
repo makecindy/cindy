@@ -1,26 +1,20 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 
 import {
-  censusNamespaceMigration,
-  completeNamespaceMigration,
-  dropNamespaceMigrationEntry,
   classifyNamespaceMigration,
   createNamespaceMigrationStore,
   isCensusCandidate,
-  isPendingNamespaceGhost,
   parseNamespaceMigrationDocument,
   parseNamespaceMigrationLedger,
-  pendingNamespaceGhostIds,
   planNamespaceCommit,
   readNamespaceMigrationInstallOrigin,
   readNamespaceMigrationMarketRecord,
-  resolveInstallAgainstPending,
   type ClassifyNamespaceMigrationInput,
   type NamespaceCensusCandidate,
-} from '../ghostNamespaceMigration.js';
+} from '../pluginNamespaceMigration.js';
 
 const NOW = '2026-09-22T12:00:00.000Z';
 
@@ -49,54 +43,6 @@ describe('isCensusCandidate', () => {
     expect(isCensusCandidate(candidate('hello', { namespace: 'acme' }))).toBe(false);
     expect(isCensusCandidate({ ghostId: 'hello', relId: '_ns/acme/hello' })).toBe(false);
     expect(isCensusCandidate({ ghostId: 'BAD', relId: 'BAD' })).toBe(false);
-  });
-});
-
-describe('censusNamespaceMigration', () => {
-  it('captures only legacy root installs the first time, then closes the door', () => {
-    const created = censusNamespaceMigration(
-      { kind: 'missing' },
-      [
-        candidate('xd-feishu'),
-        candidate('hello', { namespace: null }),
-        { ghostId: 'helper', relId: '_ns/acme/helper' },
-      ],
-      NOW,
-    );
-    expect(created.kind).toBe('created');
-    if (created.kind !== 'created') return;
-    expect(Object.keys(created.ledger.entries)).toEqual(['xd-feishu']);
-    expect(created.ledger.entries['xd-feishu']?.status).toBe('pending');
-
-    const again = censusNamespaceMigration(
-      { kind: 'ok', ledger: created.ledger },
-      [candidate('xd-feishu'), candidate('new-plugin')],
-      '2026-09-23T00:00:00.000Z',
-    );
-    expect(again).toEqual({ kind: 'unchanged', ledger: created.ledger });
-
-    const duringUpdateBackup = censusNamespaceMigration(
-      { kind: 'ok', ledger: created.ledger },
-      [],
-      '2026-09-23T00:00:00.000Z',
-    );
-    expect(duringUpdateBackup).toEqual({ kind: 'unchanged', ledger: created.ledger });
-    expect(dropNamespaceMigrationEntry(created.ledger, 'xd-feishu').entries).toEqual({});
-  });
-
-  it('does not mistake inherited object keys for pending plugin ids', () => {
-    const created = censusNamespaceMigration({ kind: 'missing' }, [], NOW);
-    if (created.kind !== 'created') throw new Error('expected census');
-    expect(isPendingNamespaceGhost(created.ledger, 'constructor')).toBe(false);
-    expect(dropNamespaceMigrationEntry(created.ledger, 'constructor')).toBe(created.ledger);
-    expect(Object.hasOwn(created.ledger.entries, 'constructor')).toBe(false);
-  });
-
-  it('rebuilds a corrupt ledger from legacy candidates but blocks unreadable state', () => {
-    expect(censusNamespaceMigration({ kind: 'corrupt' }, [candidate('hello')], NOW))
-      .toMatchObject({ kind: 'created', ledger: { entries: { hello: { status: 'pending' } } } });
-    expect(censusNamespaceMigration({ kind: 'unreadable' }, [candidate('hello')], NOW))
-      .toEqual({ kind: 'blocked', reason: 'unreadable' });
   });
 });
 
@@ -229,18 +175,7 @@ describe('classifyNamespaceMigration', () => {
   });
 });
 
-describe('commit and install conflict', () => {
-  it('drops a pending entry without keeping a forge revision chain', () => {
-    const captured = censusNamespaceMigration({ kind: 'missing' }, [candidate('acme-tool')], NOW);
-    if (captured.kind !== 'created') throw new Error('expected census');
-    const completed = completeNamespaceMigration(captured.ledger, 'acme-tool');
-    expect(completed.entries).toEqual({});
-    expect(parseNamespaceMigrationLedger(completed)).toEqual(completed);
-    expect(isPendingNamespaceGhost(completed, 'acme-tool')).toBe(false);
-    expect(completeNamespaceMigration(completed, 'later-forge')).toBe(completed);
-    expect(dropNamespaceMigrationEntry(completed, 'acme-tool')).toBe(completed);
-  });
-
+describe('legacy ledger parsing', () => {
   it('ignores a leftover forgeNamespaces field instead of rejecting the census', () => {
     const parsed = parseNamespaceMigrationLedger({
       schemaVersion: 1, censusedAt: NOW, entries: {},
@@ -258,26 +193,6 @@ describe('commit and install conflict', () => {
     expect(parseNamespaceMigrationDocument('nope').kind).toBe('corrupt');
     expect(parseNamespaceMigrationLedger({ schemaVersion: 2, censusedAt: NOW, entries: {} })).toBeNull();
   });
-
-  it('blocks a same-name org install until the pending identity is committed', () => {
-    type Input = Parameters<typeof resolveInstallAgainstPending>[0];
-    const waiting: Input['classification'][] = [
-      { kind: 'pending', reason: 'awaiting-market-facts' },
-      { kind: 'commit', namespace: null, basis: 'market-public' },
-    ];
-    for (const classification of waiting) {
-      expect(resolveInstallAgainstPending({ ghostId: 'hello', requestedNamespace: 'acme', pending: true, classification }))
-        .toMatchObject({ kind: 'wait' });
-    }
-    const cases: [Omit<Input, 'ghostId'>, ReturnType<typeof resolveInstallAgainstPending>][] = [
-      [{ requestedNamespace: 'acme', pending: true, classification: { kind: 'commit', namespace: 'acme', basis: 'market-organization' } }, { kind: 'already-installed' }],
-      [{ requestedNamespace: null, pending: true, classification: null }, { kind: 'already-installed' }],
-      [{ requestedNamespace: 'acme', pending: false, classification: null }, { kind: 'proceed' }],
-    ];
-    for (const [input, expected] of cases) {
-      expect(resolveInstallAgainstPending({ ghostId: 'hello', ...input })).toEqual(expected);
-    }
-  });
 });
 
 describe('namespace migration store', () => {
@@ -287,77 +202,33 @@ describe('namespace migration store', () => {
     dir = null;
   });
 
-  it('does not overwrite an unknown schema version', () => {
+  it('reads an unknown schema without rewriting the file', () => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ns-mig-future-'));
     const filePath = path.join(dir, 'namespace-migration.v1.json');
     const original = '{"schemaVersion":2,"entries":{"future":true}}\n';
     fs.writeFileSync(filePath, original);
     const store = createNamespaceMigrationStore(filePath);
     expect(store.read()).toEqual({ kind: 'unknown-schema' });
-    const ledger = { schemaVersion: 1 as const, censusedAt: NOW, entries: {} };
-    expect(() => store.write(ledger)).toThrow(/unknown-schema/);
-    expect(fs.readFileSync(filePath, 'utf8')).toBe(original);
-    expect(censusNamespaceMigration(store.read(), [candidate('hello')], NOW))
-      .toEqual({ kind: 'blocked', reason: 'unknown-schema' });
     expect(fs.readFileSync(filePath, 'utf8')).toBe(original);
   });
 
-  it('round-trips a census and refuses to write over an unreadable path', () => {
+  it('reads a legacy census without writing the ledger', () => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ns-mig-'));
     const filePath = path.join(dir, 'namespace-migration.v1.json');
     const store = createNamespaceMigrationStore(filePath);
     expect(store.read()).toEqual({ kind: 'missing' });
-    const created = censusNamespaceMigration({ kind: 'missing' }, [candidate('hello')], NOW);
-    if (created.kind !== 'created') throw new Error('expected census');
-    store.write(created.ledger);
+    const ledger = {
+      schemaVersion: 1 as const,
+      censusedAt: NOW,
+      entries: {
+        hello: { ghostId: 'hello', relId: 'hello', capturedAt: NOW, status: 'pending' as const },
+      },
+    };
+    fs.writeFileSync(filePath, JSON.stringify(ledger) + '\n');
     const read = store.read();
-    expect(read.kind).toBe('ok');
+    expect(read).toEqual({ kind: 'ok', ledger });
     if (read.kind !== 'ok') return;
     expect(parseNamespaceMigrationLedger(read.ledger)).toEqual(read.ledger);
-    expect(pendingNamespaceGhostIds(read.ledger)).toEqual(['hello']);
-  });
-
-  it('uses durable writes by default for the migration boundary', () => {
-    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ns-mig-default-durable-'));
-    const filePath = path.join(dir, 'namespace-migration.v1.json');
-    const store = createNamespaceMigrationStore(filePath);
-    const ledger = { schemaVersion: 1 as const, censusedAt: NOW, entries: {} };
-    const actualFlush = fs.fsyncSync;
-    const flush = vi.spyOn(fs, 'fsyncSync').mockImplementation((descriptor) => actualFlush(descriptor));
-    try {
-      store.write(ledger);
-      expect(flush).toHaveBeenCalledTimes(2);
-    } finally {
-      flush.mockRestore();
-    }
-  });
-
-  it.each([false, true])('flushes a durable=%s proof before publishing it and before returning', (durable) => {
-    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ns-mig-durable-'));
-    const filePath = path.join(dir, 'namespace-migration.v1.json');
-    const store = createNamespaceMigrationStore(filePath);
-    const ledger = { schemaVersion: 1 as const, censusedAt: NOW, entries: {} };
-    const events: string[] = [];
-    const actualFlush = fs.fsyncSync;
-    const actualRename = fs.renameSync;
-    const flush = vi.spyOn(fs, 'fsyncSync').mockImplementation((descriptor) => {
-      events.push(fs.fstatSync(descriptor).isDirectory() ? 'directory-flush' : 'file-flush');
-      return actualFlush(descriptor);
-    });
-    const rename = vi.spyOn(fs, 'renameSync').mockImplementation((from, to) => {
-      events.push('published');
-      return actualRename(from, to);
-    });
-    try {
-      store.write(ledger, { durable });
-      expect(events).toEqual(durable
-        ? ['file-flush', 'published', process.platform === 'win32' ? 'file-flush' : 'directory-flush']
-        : ['published']);
-      expect(store.read()).toEqual({ kind: 'ok', ledger });
-    } finally {
-      flush.mockRestore();
-      rename.mockRestore();
-    }
   });
 });
 
@@ -365,13 +236,13 @@ describe('planNamespaceCommit', () => {
   const cases: [string, Parameters<typeof planNamespaceCommit>[0], ReturnType<typeof planNamespaceCommit>][] = [
     ['recovers a receipt that already has namespace even when the plugin is busy',
       { pending: true, busy: true, receiptNamespace: 'xd', requested: { namespace: null, basis: 'builtin' } },
-      { kind: 'write-ledger-only', namespace: 'xd', basis: 'receipt-recovered' }],
+      { kind: 'write-registry-only', namespace: 'xd', basis: 'receipt-recovered' }],
     ['blocks the first receipt write while the plugin is busy',
       { pending: true, busy: true, requested: { namespace: 'acme', basis: 'market-organization' } },
       { kind: 'skip', reason: 'busy' }],
     ['applies the requested namespace when the receipt is still legacy',
       { pending: true, busy: false, requested: { namespace: 'acme', basis: 'market-organization' } },
-      { kind: 'write-receipt-and-ledger', namespace: 'acme', basis: 'market-organization' }],
+      { kind: 'write-receipt-and-registry', namespace: 'acme', basis: 'market-organization' }],
   ];
   it.each(cases)('%s', (_name, input, expected) => {
     expect(planNamespaceCommit(input)).toEqual(expected);

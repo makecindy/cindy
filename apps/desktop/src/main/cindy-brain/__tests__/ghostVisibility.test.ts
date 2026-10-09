@@ -64,7 +64,7 @@ describe('classifyGhostVisibility namespace', () => {
   });
 
   it('addresses a pending legacy candidate when namespace null is retried', () => {
-    const pending = { ...ghost('helper'), namespaceMigration: 'pending' as const };
+    const pending = { ...ghost('helper'), namespaceState: 'pending' as const };
     const stageDeps = { ...deps, listGhosts: () => [pending, enterprise] };
     expect(classifyGhostVisibility('helper', null, stageDeps)).toMatchObject({
       ok: false,
@@ -81,7 +81,7 @@ describe('classifyGhostVisibility namespace', () => {
   });
 
   it('resolves a unique pending install only when namespace is omitted', () => {
-    const pending = { ...ghost('xd-feishu'), namespaceMigration: 'pending' as const };
+    const pending = { ...ghost('xd-feishu'), namespaceState: 'pending' as const };
     const stageDeps = { ...deps, listGhosts: () => [pending] };
     expect(classifyGhostVisibility('xd-feishu', null, stageDeps)).toMatchObject({ ok: true, ghost: pending });
     expect(classifyGhostVisibility('xd-feishu', null, stageDeps, null)).toMatchObject({
@@ -114,7 +114,7 @@ describe('classifyGhostVisibility namespace', () => {
   it.each(['pending', 'root', 'in-place', 'canonical', 'coexist'] as const)(
     'revalidates the selected physical instance in %s without erasing delivery state', (stage) => {
       const selected = stage === 'pending'
-        ? { ...ghost('helper'), namespaceMigration: 'pending' as const }
+        ? { ...ghost('helper'), namespaceState: 'pending' as const }
         : stage === 'root' ? root
         : stage === 'in-place' ? { ...enterprise, dir: root.dir } : enterprise;
       const others = stage === 'coexist' ? [root] : [];

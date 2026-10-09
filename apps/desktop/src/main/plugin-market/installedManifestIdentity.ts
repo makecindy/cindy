@@ -109,16 +109,3 @@ export function hasVerifiedDisconnectedOrganizationInstallation(
     /^[a-f0-9]{64}$/.test(record.sha256) &&
     matchesApprovedOrganizationInstallation(record, input, true));
 }
-
-export function verifiedUnstampedOrganizationNamespace(input: OrganizationInstallationEvidenceInput & {
-  organizationId: string | null;
-  orgSlug: string | null;
-}): string | null {
-  const installedRecords = input.records.filter((record) => record.installed);
-  if (installedRecords.length !== 1 || !input.orgSlug || !isValidPluginNamespace(input.orgSlug)) return null;
-  const record = installedRecords[0];
-  if (record.organizationId !== input.organizationId ||
-      (record.namespace !== undefined && record.namespace !== input.orgSlug) ||
-      !matchesApprovedOrganizationInstallation(record, input)) return null;
-  return input.orgSlug;
-}

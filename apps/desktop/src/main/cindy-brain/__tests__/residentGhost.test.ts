@@ -55,7 +55,7 @@ it('preserves disabled/unavailable gates and ordinary on-demand startup behavior
 it('starts a pending install without waiting for namespace confirmation', () => {
   const checked = validateGhostManifest(manifest);
   if (!checked.ok) throw new Error(checked.reason);
-  const ghost = { enabled: true, manifest: checked.manifest, namespaceMigration: 'pending' } as InstalledGhost;
+  const ghost = { enabled: true, manifest: checked.manifest, namespaceState: 'pending' } as InstalledGhost;
   const deps = { isAvailable: () => true, startNode: vi.fn(), spawnBrowser: vi.fn(async () => ({ ok: true })), warn: vi.fn() };
   spawnResidentGhost(ghost, deps);
   expect(deps.spawnBrowser).toHaveBeenCalledOnce();

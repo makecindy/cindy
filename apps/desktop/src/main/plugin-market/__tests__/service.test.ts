@@ -20,7 +20,7 @@ const runtime = vi.hoisted(() => ({
     dir: string;
     enabled: boolean;
     namespace?: string | null;
-    namespaceMigration?: 'pending';
+    namespaceState?: 'pending';
     approval?: GhostInstallApproval;
     trust?: GhostTrustInfo;
   }>,
@@ -555,7 +555,7 @@ describe('PluginMarketService migration and defaultInstall', () => {
     const dir = installOrganizationHelper(manifest('helper'), 'legacy');
     const h = harness([item]);
     delete runtime.ghosts[0]!.namespace;
-    runtime.ghosts[0]!.namespaceMigration = 'pending';
+    runtime.ghosts[0]!.namespaceState = 'pending';
     const identitySha = crypto.createHash('sha256').update(fs.readFileSync(path.join(dir, 'ghost.json'))).digest('hex');
     const record = recordForTest(item, {
       installed: false, rawManifestSha256: evidence === 'raw-mismatch' ? 'b'.repeat(64) : identitySha,

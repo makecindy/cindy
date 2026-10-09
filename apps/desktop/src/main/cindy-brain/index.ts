@@ -1854,7 +1854,7 @@ export function getGhostManager(): GhostManager {
           if (activeOwnerScopeKey() !== ownerKey) return;
           const ghost = managerSingleton?.list().find((candidate) =>
             candidate.manifest.id === ghostId && candidate.namespace === namespace &&
-            candidate.namespaceMigration !== 'pending');
+            candidate.namespaceState !== 'pending');
           if (ghost) spawnIfResident(ghost);
         });
       },

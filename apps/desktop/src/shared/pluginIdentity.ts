@@ -8,7 +8,6 @@ interface InstalledGhostIdentitySource {
   /** Registry instance key. Storage uses this and never a path-derived alias. */
   instanceKey?: string;
   namespaceState?: 'confirmed' | 'unconfirmed' | 'pending';
-  namespaceMigration?: 'pending';
 }
 
 function isGhostIdValue(value: string): boolean {
@@ -20,7 +19,7 @@ function isGhostIdValue(value: string): boolean {
  * Once an installation is committed, callers must use a known identity with
  * namespace === null for root or a non-empty namespace for an organization.
  */
-export type PluginNamespaceState =
+type PluginNamespaceState =
   | { kind: 'legacy' }
   | { kind: 'known'; namespace: string | null };
 
@@ -125,7 +124,7 @@ export const PLUGIN_ROOT_INSTALL_DIR = '_root';
 export const PLUGIN_ROOT_INSTALL_ROOT = `${PLUGIN_NS_INSTALL_ROOT}/${PLUGIN_ROOT_INSTALL_DIR}`;
 
 /** Archive ids are not namespaces and are not directory keys. */
-export const ARCHIVE_INSTANCE_KEY_RE = /^arch_[a-f0-9]{32}$/;
+const ARCHIVE_INSTANCE_KEY_RE = /^arch_[a-f0-9]{32}$/;
 
 export function isArchiveInstanceKey(value: unknown): value is string {
   return typeof value === 'string' && ARCHIVE_INSTANCE_KEY_RE.test(value);
@@ -316,13 +315,11 @@ export function installedGhostLogicalIdentity(
 export function findInstalledGhostByIdentity<T extends {
   manifest: { id: string };
   namespace?: string | null;
-  namespaceMigration?: 'pending';
   namespaceState?: 'confirmed' | 'unconfirmed' | 'pending';
 }>(ghosts: readonly T[], identity: PluginLogicalIdentity): T | undefined {
   const rel = pluginInstallRelId(identity);
   return ghosts.find(
-    (ghost) => ghost.namespaceMigration !== 'pending' &&
-      ghost.namespaceState !== 'pending' &&
+    (ghost) => ghost.namespaceState !== 'pending' &&
       pluginInstallRelId(installedGhostLogicalIdentity(ghost)) === rel,
   );
 }
@@ -355,7 +352,6 @@ export function resolvePluginInstanceQuery<T extends {
   manifest: { id: string };
   dir?: string;
   namespace?: string | null;
-  namespaceMigration?: 'pending';
   namespaceState?: 'confirmed' | 'unconfirmed' | 'pending';
   instanceKey?: string;
 }>(
@@ -382,12 +378,12 @@ export function findInstalledGhostForLocalUpdate<T extends {
     ghostInstallApprovalToken(ghost.approval) === approvalToken ? ghost : undefined;
 }
 
-export type InstalledGhostIdentityResolve<T> =
+type InstalledGhostIdentityResolve<T> =
   | { status: 'missing' }
   | { status: 'unique'; ghost: T }
   | { status: 'ambiguous'; candidates: T[] };
 
-export function listInstalledGhostsByGhostId<T extends { manifest: { id: string } }>(
+function listInstalledGhostsByGhostId<T extends { manifest: { id: string } }>(
   ghosts: readonly T[],
   ghostId: string,
 ): T[] {
@@ -400,18 +396,16 @@ export function listInstalledGhostsByGhostId<T extends { manifest: { id: string 
  * `null` means root; a string means that organization.
  */
 function isPendingLegacyGhost(ghost: {
-  namespaceMigration?: 'pending';
   namespaceState?: 'confirmed' | 'unconfirmed' | 'pending';
 }): boolean {
-  return ghost.namespaceMigration === 'pending' || ghost.namespaceState === 'pending';
+  return ghost.namespaceState === 'pending';
 }
 
 export function resolveInstalledGhost<
   T extends {
     manifest: { id: string };
     namespace?: string | null;
-    namespaceMigration?: 'pending';
-    namespaceState?: 'confirmed' | 'unconfirmed' | 'pending';
+  namespaceState?: 'confirmed' | 'unconfirmed' | 'pending';
   },
 >(
   ghosts: readonly T[],
@@ -466,7 +460,7 @@ export function findInstalledGhostForDeliveryTarget<
   return resolved.status === 'unique' ? resolved.ghost : undefined;
 }
 
-export function installedGhostNamespaceLabel(ghost: { namespace?: string | null }): string | null {
+function installedGhostNamespaceLabel(ghost: { namespace?: string | null }): string | null {
   return hasDeliveryNamespace(ghost) ? ghost.namespace : null;
 }
 

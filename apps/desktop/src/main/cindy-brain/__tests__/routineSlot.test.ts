@@ -213,7 +213,7 @@ const rootMail = { ...ghost, namespace: null, dir: path.join('ghosts', '_ns', '_
 const orgMail = { ...ghost, namespace: 'acme', dir: path.join('ghosts', '_ns', 'acme', 'mail') };
 
 it.each([
-  ['mail', { ...ghost, dir: path.join('ghosts', 'mail'), namespaceMigration: 'pending' as const }],
+  ['mail', { ...ghost, dir: path.join('ghosts', 'mail'), namespaceState: 'pending' as const }],
   ['mail', { ...ghost, dir: path.join('ghosts', 'mail'), namespace: 'acme' }],
   ['_root__mail', rootMail],
   ['_ns__acme__mail', orgMail],

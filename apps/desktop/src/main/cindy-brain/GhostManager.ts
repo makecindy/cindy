@@ -89,7 +89,7 @@ import {
   type NamespaceMigrationBasis,
   type NamespaceMigrationLedger,
   type NamespaceMigrationStore,
-} from './ghostNamespaceMigration.js';
+} from './pluginNamespaceMigration.js';
 import { confirmUnconfirmedInstances } from './pluginInstanceConfirmation.js';
 import {
   commitPendingNamespaceMigration,
@@ -286,7 +286,7 @@ export interface GhostManagerOptions {
   onResumePendingResidentOffline?: (ghost: InstalledGhost) => void;
   preparePendingResidentForMigration?: (ghostId: string) => Promise<boolean>;
   onPendingResidentMigrationDeferred?: (ghostId: string) => void;
-  /** Best-effort side effect after receipt + census ledger commit. */
+  /** Best-effort side effect after the receipt and registry census commit. */
   onNamespaceCommitted?: (ghostId: string, namespace: string | null) => void;
   beforeNamespaceCommit?: (ghostId: string, namespace: string | null) => void;
   onArchiveSourceState?: (fromPart: string, archivePart: string) => Promise<void>;
@@ -770,7 +770,6 @@ export class GhostManager {
     instanceKey?: string;
     namespace?: string | null;
     namespaceState?: PluginInstanceRecord['namespaceState'];
-    namespaceMigration?: 'pending';
   } {
     const registry = this.instanceRegistryService.current();
     if (this.instanceRegistryService.isBlocked() || !registry) return {};
@@ -781,7 +780,6 @@ export class GhostManager {
       namespaceState: record.namespaceState,
       ...(record.namespaceState === 'confirmed' || record.namespaceState === 'unconfirmed'
         ? { namespace: record.namespace } : {}),
-      ...(record.namespaceState === 'pending' ? { namespaceMigration: 'pending' as const } : {}),
     };
   }
 
@@ -911,7 +909,7 @@ export class GhostManager {
     for (const ghost of ghosts) {
       const ghostId = ghost.manifest.id;
       if (ghost.dir !== this.contentPath(ghostId) ||
-          ghost.namespaceMigration !== 'pending' || !ghost.enabled ||
+          ghost.namespaceState !== 'pending' || !ghost.enabled ||
           ghost.approval.state !== 'approved' || this.hasPendingMutationJournal(ghostId)) continue;
       const approval = this.readApproval(ghostId);
       if (approval.state !== 'approved' || hasDeliveryNamespace(approval.receipt)) continue;

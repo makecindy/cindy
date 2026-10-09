@@ -1653,7 +1653,7 @@ describe('networkSlot · GitHub CLI 优先凭证(source:gh-cli)', () => {
   });
 
   it('组织同名或尚未确认 root 的 cindy-github 不能借用 gh-cli token', async () => {
-    for (const identity of [{ namespace: 'acme' }, { namespaceMigration: 'pending' }] as const) {
+    for (const identity of [{ namespace: 'acme' }, { namespaceState: 'pending' }] as const) {
       const readGhCliToken = vi.fn(async () => 'gho_should_not_be_read');
       const { slot, fetchImpl } = makeGithubSlot({
         getGhost: () => ({ ...fakeGhost({ id: 'cindy-github', network: githubNetwork,

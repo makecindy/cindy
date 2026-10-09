@@ -3,22 +3,14 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { GhostManifest } from '../../../shared/ghost.js';
 import { createNamespaceMigrationHost } from '../../cindy-brain/pluginNamespaceMigrationHost.js';
-import { type NamespaceClassification } from '../../cindy-brain/ghostNamespaceMigration.js';
+import { type NamespaceClassification } from '../../cindy-brain/pluginNamespaceMigration.js';
 import { ghostManifestDigest, type PluginMarketInstallationRecord } from '../ledger.js';
-import {
-  verifiedUnstampedOrganizationNamespace,
-  type InstalledMarketManifestIdentity,
-} from '../installedManifestIdentity.js';
 
 const manifest = {
   schemaVersion: 2, id: 'hello', name: 'Hello', version: '1.0.0', kind: 'chip', entry: 'main.js',
 } as GhostManifest;
 const digest = ghostManifestDigest(manifest);
 const packageSha256 = 'b'.repeat(64);
-const identity: InstalledMarketManifestIdentity = {
-  manifest, rawManifestSha256: digest, legacyManifestDigest: digest,
-  legacyManifestDigests: [digest],
-};
 const record: PluginMarketInstallationRecord = {
   pluginId: 'plugin', ghostId: 'hello', releaseId: 'release', version: '1.0.0',
   sha256: packageSha256, scope: 'organization', organizationId: 'org-acme',
@@ -26,58 +18,6 @@ const record: PluginMarketInstallationRecord = {
   rawManifestSha256: digest,
 };
 const evidence = { packageSha256, approvedManifest: manifest, legacyMigrated: false };
-const input = { records: [record], organizationId: 'org-acme', orgSlug: 'acme', evidence, identity };
-
-describe('unstamped organization namespace recovery', () => {
-  it('restores only the approved package for the current organization', () => {
-    expect(verifiedUnstampedOrganizationNamespace(input)).toBe('acme');
-    expect(verifiedUnstampedOrganizationNamespace({ ...input, organizationId: 'other' })).toBeNull();
-    expect(verifiedUnstampedOrganizationNamespace({ ...input, orgSlug: null })).toBeNull();
-    expect(verifiedUnstampedOrganizationNamespace({ ...input, records: [record, record] })).toBeNull();
-    expect(verifiedUnstampedOrganizationNamespace({ ...input, records: [{ ...record, namespace: null }] })).toBeNull();
-  });
-
-  it('rejects changed package, installed manifest, or approval', () => {
-    expect(verifiedUnstampedOrganizationNamespace({
-      ...input, evidence: { ...evidence, packageSha256: 'c'.repeat(64) },
-    })).toBeNull();
-    expect(verifiedUnstampedOrganizationNamespace({
-      ...input, identity: { ...identity, rawManifestSha256: 'c'.repeat(64) },
-    })).toBeNull();
-    expect(verifiedUnstampedOrganizationNamespace({
-      ...input, evidence: { ...evidence, approvedManifest: { ...manifest, name: 'Other' } },
-    })).toBeNull();
-    expect(verifiedUnstampedOrganizationNamespace({
-      ...input, records: [{ ...record, rawManifestSha256: undefined }],
-      evidence: { ...evidence, packageSha256: null },
-    })).toBeNull();
-  });
-
-  it.each([
-    { ghostId: 'other' },
-    { version: '0.9.0' },
-  ])('rejects a record naming another installed identity ($ghostId, $version)', (changes) => {
-    expect(verifiedUnstampedOrganizationNamespace({
-      ...input, records: [{ ...record, ...changes }],
-    })).toBeNull();
-  });
-
-  it('recovers a legacy-approved package only with completed migration and matched digest', () => {
-    const legacyInput = {
-      ...input,
-      records: [{ ...record, rawManifestSha256: undefined, manifestDigest: digest }],
-      evidence: { ...evidence, packageSha256: null, legacyMigrated: true },
-    };
-    expect(verifiedUnstampedOrganizationNamespace(legacyInput)).toBe('acme');
-    expect(verifiedUnstampedOrganizationNamespace({
-      ...legacyInput, evidence: { ...legacyInput.evidence, legacyMigrated: false },
-    })).toBeNull();
-    expect(verifiedUnstampedOrganizationNamespace({
-      ...legacyInput, records: [{ ...legacyInput.records[0], manifestDigest: 'c'.repeat(64) }],
-    })).toBeNull();
-  });
-});
-
 afterEach(() => vi.useRealTimers());
 
 const pending = { kind: 'pending', reason: 'awaiting-market-facts' } as const;
@@ -89,7 +29,7 @@ const migrationCases: Array<{
   name: string;
   record: PluginMarketInstallationRecord;
   additionalRecords?: PluginMarketInstallationRecord[];
-  evidence: Parameters<typeof verifiedUnstampedOrganizationNamespace>[0]['evidence'];
+  evidence: { packageSha256: string | null; approvedManifest: GhostManifest; legacyMigrated: boolean } | null;
   expected: NamespaceClassification;
   unreadable?: boolean;
   user?: { membershipKind: string; orgId?: string; orgSlug?: string | null };
@@ -125,7 +65,7 @@ describe.each([
     const originalRecords = structuredClone(records);
     const observed: NamespaceClassification[] = [];
     const manager = {
-      list: () => [{ manifest, namespaceMigration: 'pending' }],
+      list: () => [{ manifest, namespaceState: 'pending' }],
       approvedInstallEvidence: vi.fn(() => fixture.evidence),
       readApprovedInstallOriginStrict: (): 'manual' => 'manual',
       reconcilePendingRootNamespaces: vi.fn(async (syncCompleted: boolean) => {

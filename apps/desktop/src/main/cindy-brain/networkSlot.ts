@@ -1068,7 +1068,7 @@ export class GhostNetworkSlot {
     if (
       ghCliSecrets.length > 0 &&
       (ghost.manifest.id !== 'cindy-github' || ghost.namespace != null ||
-        ghost.namespaceMigration === 'pending' ||
+        ghost.namespaceState === 'pending' ||
         !isCindyOfficialTrustInfo(ghost.trust))
     ) {
       return { ok: false, message: '本意识未通过官方 GitHub 宿主凭证信任校验，已阻断 gh-cli 凭证请求' };

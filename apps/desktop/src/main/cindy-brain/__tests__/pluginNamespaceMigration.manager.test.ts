@@ -11,7 +11,7 @@ import {
   classifyNamespaceMigration,
   readNamespaceMigrationInstallOrigin,
   readNamespaceMigrationMarketRecord,
-} from '../ghostNamespaceMigration.js';
+} from '../pluginNamespaceMigration.js';
 import {
   assertManagedPluginParentSync,
   GhostInstallReceiptStore,
@@ -193,7 +193,7 @@ describe('GhostManager namespace migration census', () => {
     await plantLegacyInstall('hello');
     fs.writeFileSync(path.join(workDir, 'ghosts-install-state', 'namespace-migration.v1.json'), '{');
     expect(manager.list()[0]).toMatchObject({ namespaceState: 'unconfirmed', namespace: null });
-    expect(manager.list()[0]?.namespaceMigration).toBeUndefined();
+    expect(manager.list()[0]?.namespaceState).not.toBe('pending');
     expect(manager.ensureNamespaceMigrationCensus()?.entries.hello?.status).toBe('pending');
   });
 
@@ -213,7 +213,7 @@ describe('GhostManager namespace migration census', () => {
     manager = createManager({ classifyPendingNamespace: classify, beforeNamespaceCommit: beforeCommit });
     await manager.reconcilePendingRootNamespaces(true);
     expect(beforeCommit).not.toHaveBeenCalled();
-    expect(manager.list()[0]?.namespaceMigration).toBe('pending');
+    expect(manager.list()[0]?.namespaceState).toBe('pending');
     expect(manager.list()[0]?.namespace).toBeUndefined();
   });
   it('passes sync state to classification and commits only after facts become available', async () => {
@@ -236,10 +236,10 @@ describe('GhostManager namespace migration census', () => {
     factsAvailable = true;
     await manager.reconcilePendingRootNamespaces(false);
     expect(classify).toHaveBeenLastCalledWith('hello', false);
-    expect(manager.list()[0]?.namespaceMigration).toBe('pending');
+    expect(manager.list()[0]?.namespaceState).toBe('pending');
     await manager.reconcilePendingRootNamespaces(true);
     expect(manager.list()[0]).toMatchObject({ namespace: 'acme' });
-    expect(manager.list()[0]?.namespaceMigration).toBeUndefined();
+    expect(manager.list()[0]?.namespaceState).not.toBe('pending');
     expect(committed).toHaveBeenCalledOnce();
   });
 
@@ -264,19 +264,19 @@ describe('GhostManager namespace migration census', () => {
     expect(() => manager.readApprovedInstallOriginStrict('acme-tool')).toThrow();
     await manager.reconcilePendingRootNamespaces(true);
     // An invalid receipt is not adopted, so the registry does not project pending.
-    expect(manager.list()[0]?.namespaceMigration).toBeUndefined();
+    expect(manager.list()[0]?.namespaceState).not.toBe('pending');
     expect(manager.list()[0]?.namespace).toBeUndefined();
 
     fs.writeFileSync(receiptFile, receiptBytes);
     expect(manager.readApprovedInstallOriginStrict('acme-tool')).toBe('agent-forge');
     await manager.reconcilePendingRootNamespaces(true);
-    expect(manager.list()[0]?.namespaceMigration).toBe('pending');
+    expect(manager.list()[0]?.namespaceState).toBe('pending');
     expect(manager.list()[0]?.namespace).toBeUndefined();
 
     pluginPrefix = 'acme';
     await manager.reconcilePendingRootNamespaces(true);
     expect(manager.list()[0]?.namespace).toBe('acme');
-    expect(manager.list()[0]?.namespaceMigration).toBeUndefined();
+    expect(manager.list()[0]?.namespaceState).not.toBe('pending');
     expect(receiptStore().read('acme-tool')).toMatchObject({
       state: 'approved', receipt: { installOrigin: 'agent-forge', namespace: 'acme' },
     });
@@ -318,13 +318,13 @@ describe('GhostManager namespace migration census', () => {
       manager.resumePendingResidentsOffline();
       await manager.reconcilePendingRootNamespaces(false);
       expect(events).toEqual(['started']);
-      expect(manager.list()[0]?.namespaceMigration).toBe('pending');
+      expect(manager.list()[0]?.namespaceState).toBe('pending');
       await manager.reconcilePendingRootNamespaces(true);
       if (initiallyInFlight) {
         expect(stop).toHaveBeenCalledOnce();
         expect(deferred).toHaveBeenCalledWith('hello');
         expect(events).toEqual(['started']);
-        expect(manager.list()[0]?.namespaceMigration).toBe('pending');
+        expect(manager.list()[0]?.namespaceState).toBe('pending');
         expect(manager.list()[0]?.namespace).toBeUndefined();
         inFlight = false;
         await vi.advanceTimersByTimeAsync(1000);
@@ -355,7 +355,7 @@ describe('GhostManager namespace migration census', () => {
     });
     await expect(manager.reconcilePendingRootNamespaces(true)).resolves.toBeUndefined();
     expect(deferred).toHaveBeenCalledWith('hello');
-    expect(manager.list()[0]?.namespaceMigration).toBe('pending');
+    expect(manager.list()[0]?.namespaceState).toBe('pending');
     expect(receiptStore().read('hello')).toMatchObject({ state: 'approved' });
     const approval = receiptStore().read('hello');
     if (approval.state !== 'approved') throw new Error('expected approved receipt');
@@ -377,7 +377,7 @@ describe('GhostManager namespace migration census', () => {
     });
     await expect(manager.reconcilePendingRootNamespaces(true)).resolves.toBeUndefined();
     expect(manager.list().find((ghost) => ghost.manifest.id === 'first')).toMatchObject({
-      namespaceMigration: 'pending',
+      namespaceState: 'pending',
     });
     expect(manager.list().find((ghost) => ghost.manifest.id === 'second')).toMatchObject({
       namespace: 'acme',
@@ -404,7 +404,7 @@ describe('GhostManager namespace migration census', () => {
     releaseStop?.();
     await migration;
     expect(committed).not.toHaveBeenCalled();
-    expect(manager.list()[0]?.namespaceMigration).toBe('pending');
+    expect(manager.list()[0]?.namespaceState).toBe('pending');
   });
 
   it('does not publish a namespace commit when its owner changes while writing the receipt', async () => {
@@ -431,7 +431,7 @@ describe('GhostManager namespace migration census', () => {
       releaseWrite?.();
       await expect(migration).rejects.toThrow('owner changed');
       expect(committed).not.toHaveBeenCalled();
-      expect(manager.list()[0]?.namespaceMigration).toBe('pending');
+      expect(manager.list()[0]?.namespaceState).toBe('pending');
     } finally {
       write.mockRestore();
     }
@@ -454,7 +454,7 @@ describe('GhostManager namespace migration census', () => {
     manager.resumePendingResidentsOffline();
     await manager.reconcilePendingRootNamespaces(true);
     expect(stopped).toHaveBeenCalledOnce();
-    expect(manager.list()[0]?.namespaceMigration).toBe('pending');
+    expect(manager.list()[0]?.namespaceState).toBe('pending');
     slugKnown = true;
     await manager.reconcilePendingRootNamespaces(true);
     expect(manager.list()[0]?.namespace).toBe('acme');
@@ -465,9 +465,9 @@ describe('GhostManager namespace migration census', () => {
     expect(manager.list()).toEqual([]);
     await plantLegacyInstall('recovered');
     await plantLegacyInstall('unverified');
-    expect(manager.list().find((ghost) => ghost.manifest.id === 'recovered')?.namespaceMigration).toBe('pending');
-    expect(manager.list().find((ghost) => ghost.manifest.id === 'recovered')?.namespaceMigration).toBe('pending');
-    expect(manager.list().find((ghost) => ghost.manifest.id === 'unverified')?.namespaceMigration).toBe('pending');
+    expect(manager.list().find((ghost) => ghost.manifest.id === 'recovered')?.namespaceState).toBe('pending');
+    expect(manager.list().find((ghost) => ghost.manifest.id === 'recovered')?.namespaceState).toBe('pending');
+    expect(manager.list().find((ghost) => ghost.manifest.id === 'unverified')?.namespaceState).toBe('pending');
     const orgCindy = await makeCindy('recovered');
     await expect(manager.install(orgCindy, { namespace: 'acme' })).resolves.toMatchObject({
       rejection: { code: 'namespace-migration-pending' },
@@ -475,7 +475,7 @@ describe('GhostManager namespace migration census', () => {
     expect(fs.existsSync(path.join(rootDir, 'recovered'))).toBe(true);
     expect(fs.existsSync(path.join(rootDir, 'unverified'))).toBe(true);
     expect(fs.existsSync(path.join(rootDir, '_ns', 'acme', 'recovered'))).toBe(false);
-    expect(manager.list().find((ghost) => ghost.dir === path.join(rootDir, 'recovered'))?.namespaceMigration).toBe('pending');
+    expect(manager.list().find((ghost) => ghost.dir === path.join(rootDir, 'recovered'))?.namespaceState).toBe('pending');
   });
 
   it('recovers an organization install whose approved namespace was erased by a downgraded client', async () => {
@@ -571,7 +571,7 @@ describe('GhostManager namespace migration census', () => {
     expect(manager.readDeliveryNamespace('acme-tool')).toBeUndefined();
     await manager.reconcilePendingRootNamespaces(true);
     expect(manager.list()[0]).toMatchObject({ namespace: 'acme', enabled, dir: path.join(rootDir, 'acme-tool') });
-    expect(manager.list()[0]?.namespaceMigration).toBeUndefined();
+    expect(manager.list()[0]?.namespaceState).not.toBe('pending');
     expect(manager.readDeliveryNamespace('acme-tool')).toBe('acme');
     expect(manager.ensureNamespaceMigrationCensus()?.entries).toEqual({});
     expect(fs.existsSync(path.join(rootDir, '_ns'))).toBe(false);
@@ -636,7 +636,7 @@ describe('GhostManager namespace migration census', () => {
       await manager.reconcilePendingRootNamespaces(true);
       if (scenario.startsWith('post-census')) {
         expect(manager.list()[0]).toMatchObject({ namespace: null, namespaceState: 'unconfirmed' });
-        expect(manager.list()[0]?.namespaceMigration).toBeUndefined();
+        expect(manager.list()[0]?.namespaceState).not.toBe('pending');
       } else {
         expect(manager.list()[0]).toMatchObject({ namespace: 'acme', namespaceState: 'unconfirmed' });
         expect(manager.readDeliveryNamespace('acme-tool')).toBeUndefined();
@@ -666,7 +666,7 @@ describe('GhostManager namespace migration census', () => {
     await fs.promises.mkdir(rootDir, { recursive: true });
     manager.list();
     await plantLegacyInstall('hello');
-    const resumed = vi.fn((ghost: InstalledGhost) => ghost.namespaceMigration);
+    const resumed = vi.fn((ghost: InstalledGhost) => ghost.namespaceState);
     manager = createManager({
       canResumePendingResidentOffline: () => true,
       onResumePendingResidentOffline: resumed,
@@ -694,7 +694,7 @@ describe('GhostManager namespace migration census', () => {
     await manager.reconcilePendingRootNamespaces(true);
     // Planted after the empty census. Evidence for a different namespace must not adopt it.
     expect(manager.list()[0]).toMatchObject({ namespace: null, namespaceState: 'unconfirmed' });
-    expect(manager.list()[0]?.namespaceMigration).toBeUndefined();
+    expect(manager.list()[0]?.namespaceState).not.toBe('pending');
     expect(manager.readDeliveryNamespace('hello')).toBeUndefined();
     expect(manager.list()[0]?.enabled).toBe(true);
   });
@@ -711,12 +711,12 @@ describe('GhostManager namespace migration census', () => {
     });
     await expect(manager.commitPendingNamespace('hello', 'acme', 'market-organization'))
       .rejects.toThrow('market ledger unavailable');
-    expect(manager.list()[0]?.namespaceMigration).toBe('pending');
+    expect(manager.list()[0]?.namespaceState).toBe('pending');
     shouldFail = false;
     await expect(manager.commitPendingNamespace('hello', 'acme', 'market-organization'))
       .resolves.toEqual({ ok: true });
     expect(manager.list()[0]?.namespace).toBe('acme');
-    expect(manager.list()[0]?.namespaceMigration).toBeUndefined();
+    expect(manager.list()[0]?.namespaceState).not.toBe('pending');
   });
 
   it('captures a pre-namespace root install as pending and does not treat a later install as pending', async () => {
@@ -725,7 +725,7 @@ describe('GhostManager namespace migration census', () => {
     expect(listed).toEqual([
       expect.objectContaining({
         manifest: expect.objectContaining({ id: 'xd-feishu' }),
-        namespaceMigration: 'pending',
+        namespaceState: 'pending',
       }),
     ]);
     expect(listed[0]?.namespace).toBeUndefined();
@@ -739,7 +739,7 @@ describe('GhostManager namespace migration census', () => {
     const helper = manager.list().find((ghost) => ghost.manifest.id === 'helper');
     expect(helper).toBeDefined();
     expect(helper).toHaveProperty('namespace', null);
-    expect(helper?.namespaceMigration).toBeUndefined();
+    expect(helper?.namespaceState).not.toBe('pending');
   });
 
   it('lets a root reinstall proceed after uninstalling a pending legacy install', async () => {
@@ -814,7 +814,7 @@ describe('GhostManager namespace migration census', () => {
     expect(manager.ensureNamespaceMigrationCensus()?.entries.hello?.status).toBe('pending');
     await fs.promises.rename(path.join(rootDir, backupName), path.join(rootDir, 'hello'));
     await receipts.clearPendingMutation('hello');
-    expect(manager.list()[0]?.namespaceMigration).toBe('pending');
+    expect(manager.list()[0]?.namespaceState).toBe('pending');
   });
 
   it('blocks a same-name organization install while the root instance is still pending', async () => {
@@ -857,7 +857,7 @@ describe('GhostManager namespace migration census', () => {
     });
     expect(fs.existsSync(path.join(rootDir, '_ns', 'acme', 'hello'))).toBe(false);
     expect(marketLedger.installationsForGhost('hello')).toHaveLength(1);
-    expect(manager.list().find((ghost) => ghost.dir === path.join(rootDir, 'hello'))?.namespaceMigration).toBe('pending');
+    expect(manager.list().find((ghost) => ghost.dir === path.join(rootDir, 'hello'))?.namespaceState).toBe('pending');
     busy = false;
     await manager.reconcilePendingRootNamespaces(true);
     await expect(manager.install(orgCindy, { namespace: 'acme' })).resolves.toMatchObject({
@@ -891,7 +891,7 @@ describe('GhostManager namespace migration census', () => {
       rejection: { code: 'namespace-migration-pending' },
     });
     expect(beforeCommit).not.toHaveBeenCalled();
-    expect(manager.list().find((ghost) => ghost.dir === path.join(rootDir, 'hello'))?.namespaceMigration).toBe('pending');
+    expect(manager.list().find((ghost) => ghost.dir === path.join(rootDir, 'hello'))?.namespaceState).toBe('pending');
     expect(fs.existsSync(path.join(rootDir, '_ns', 'other', 'hello'))).toBe(false);
   });
 
@@ -925,7 +925,7 @@ describe('GhostManager namespace migration census', () => {
       namespace,
       dir: path.join(rootDir, 'xd-feishu'),
     });
-    expect(ghost?.namespaceMigration).toBeUndefined();
+    expect(ghost?.namespaceState).not.toBe('pending');
     expect(fs.existsSync(path.join(rootDir, '_ns', 'xd', 'xd-feishu'))).toBe(false);
     expect(fs.existsSync(path.join(rootDir, '_ns', '_root', 'xd-feishu'))).toBe(false);
     expect(installedGhostStoragePart(ghost!)).toBe('xd-feishu');
@@ -946,7 +946,7 @@ describe('GhostManager namespace migration census', () => {
     expect(manager.ensureNamespaceMigrationCensus()?.entries).toEqual({});
     manager = createManager({ getStateDir: () => stateRoot });
     expect(manager.list()[0]).toMatchObject({ namespace: 'xd', dir: path.join(rootDir, 'hello') });
-    expect(manager.list()[0]?.namespaceMigration).toBeUndefined();
+    expect(manager.list()[0]?.namespaceState).not.toBe('pending');
   });
 
   it('disables and uninstalls an in-place namespaced plugin without inventing _ns paths', async () => {
@@ -1077,7 +1077,7 @@ describe('GhostManager namespace migration census', () => {
       ok: false,
       reason: 'busy',
     });
-    expect(busyManager.list()[0]?.namespaceMigration).toBe('pending');
+    expect(busyManager.list()[0]?.namespaceState).toBe('pending');
   });
 
 
@@ -1132,7 +1132,7 @@ describe('plugin instance registry boundaries', () => {
     await plantLegacyInstall('later');
     manager = createManager({ mutateSnapshot });
     expect(manager.list()[0]).toMatchObject({ namespaceState: 'unconfirmed', namespace: null });
-    expect(manager.list()[0]?.namespaceMigration).toBeUndefined();
+    expect(manager.list()[0]?.namespaceState).not.toBe('pending');
     expect(manager.isPendingLegacyNamespace('later')).toBe(false);
     expect(manager.readDeliveryNamespace('later')).toBeUndefined();
   });
@@ -1257,7 +1257,7 @@ describe('downgrade then upgrade', () => {
     });
     for (const id of ['public-tool', 'manual-tool', 'org-tool', 'cindy-helper']) {
       expect(manager.readDeliveryNamespace(id)).toBeUndefined();
-      expect(byId(id)?.namespaceMigration).toBeUndefined();
+      expect(byId(id)?.namespaceState).not.toBe('pending');
     }
 
     manager = createManager({
@@ -1502,8 +1502,8 @@ describe('unconfirmed organization recovery', () => {
     });
     await plantLegacyInstall('later');
     manager = createManager({ mutateSnapshot });
-    expect(manager.list().find((ghost) => ghost.manifest.id === 'later')?.namespaceMigration).toBeUndefined();
-    expect(manager.list().find((ghost) => ghost.manifest.id === 'hello')?.namespaceMigration).toBe('pending');
+    expect(manager.list().find((ghost) => ghost.manifest.id === 'later')?.namespaceState).not.toBe('pending');
+    expect(manager.list().find((ghost) => ghost.manifest.id === 'hello')?.namespaceState).toBe('pending');
     expect(fs.readFileSync(legacyPath, 'utf8')).toBe(legacyText);
   });
 
@@ -1513,13 +1513,13 @@ describe('unconfirmed organization recovery', () => {
     const future = '{"schemaVersion":2,"entries":{"keep":true}}' + String.fromCharCode(10);
     fs.writeFileSync(legacyPath, future);
     expect(manager.list()[0]).toMatchObject({ namespaceState: 'unconfirmed', namespace: null });
-    expect(manager.list()[0]?.namespaceMigration).toBeUndefined();
+    expect(manager.list()[0]?.namespaceState).not.toBe('pending');
     expect(manager.ensureNamespaceMigrationCensus()).toBeNull();
     expect(fs.readFileSync(legacyPath, 'utf8')).toBe(future);
     await plantLegacyInstall('later');
     manager = createManager({ mutateSnapshot });
     expect(manager.ensureNamespaceMigrationCensus()).toBeNull();
-    expect(manager.list().find((ghost) => ghost.manifest.id === 'later')?.namespaceMigration).toBeUndefined();
+    expect(manager.list().find((ghost) => ghost.manifest.id === 'later')?.namespaceState).not.toBe('pending');
     expect(fs.readFileSync(legacyPath, 'utf8')).toBe(future);
   });
 

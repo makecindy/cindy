@@ -13,7 +13,7 @@ import {
   readNamespaceMigrationInstallOrigin,
   readNamespaceMigrationMarketRecord,
   type NamespaceClassification,
-} from './ghostNamespaceMigration.js';
+} from './pluginNamespaceMigration.js';
 import { buildUnconfirmedConfirmationEvidence } from './pluginInstanceConfirmation.js';
 import type { InstanceConfirmationEvidence, PluginInstanceRecord } from './pluginInstanceRegistry.js';
 import {
@@ -25,7 +25,7 @@ import type { PluginMarketInstallationRecord } from '../plugin-market/ledger.js'
 export interface NamespaceMigrationGhostView {
   manifest: { id: string };
   builtin?: boolean;
-  namespaceMigration?: string;
+  namespaceState?: string;
 }
 
 export interface NamespaceMigrationManager {
@@ -212,7 +212,7 @@ export function createNamespaceMigrationHost(deps: NamespaceMigrationHostDeps): 
         return false;
       }
       const ghost = deps.getGhostManager().list().find((candidate) =>
-        candidate.namespaceMigration === 'pending' &&
+        candidate.namespaceState === 'pending' &&
         installedGhostPhysicalRelId(candidate as InstalledGhost) === ghostId);
       if (!ghost) return false;
       const runtimeId = installedGhostStoragePart(ghost as InstalledGhost);

@@ -13,7 +13,7 @@ import {
   type NamespaceCensusCandidate,
   type NamespaceMigrationLedger,
   type NamespaceMigrationLedgerRead,
-} from './ghostNamespaceMigration.js';
+} from './pluginNamespaceMigration.js';
 import {
   projectNamespaceMigrationLedger,
   stampInstanceCensus,
@@ -34,11 +34,11 @@ import {
   type PluginInstanceRegistryStore,
 } from './pluginInstanceRegistry.js';
 
-export interface PluginInstanceRegistryLogger {
+interface PluginInstanceRegistryLogger {
   warn(message: string, meta?: Record<string, unknown>): void;
 }
 
-export interface PluginInstanceRegistryServiceDeps {
+interface PluginInstanceRegistryServiceDeps {
   ensureOwner(): void;
   registryStore(): PluginInstanceRegistryStore;
   readLegacyLedger(): NamespaceMigrationLedgerRead;

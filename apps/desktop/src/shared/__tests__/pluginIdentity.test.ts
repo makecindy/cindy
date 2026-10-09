@@ -143,7 +143,7 @@ describe('plugin logical identity', () => {
   });
 
   it('addresses a pending legacy install with namespace null without treating it as a delivery root', () => {
-    const pending = { manifest: { id: 'helper' }, namespaceMigration: 'pending' as const };
+    const pending = { manifest: { id: 'helper' }, namespaceState: 'pending' as const };
     const enterprise = { manifest: { id: 'helper' }, namespace: 'acme' };
     const root = { manifest: { id: 'helper' }, namespace: null };
     expect(resolveInstalledGhost([pending], 'helper')).toEqual({ status: 'unique', ghost: pending });

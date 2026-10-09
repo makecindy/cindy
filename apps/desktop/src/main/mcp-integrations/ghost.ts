@@ -1641,7 +1641,7 @@ export function getGhostRosterPrompt({ workingDir }: { workingDir?: string }): s
     const recall = ghostRecall(ghost);
     return {
       id: ghost.manifest.id,
-      ...(ghost.namespaceMigration === 'pending' ? {} : deliveryNamespaceFields(ghost)),
+      ...(ghost.namespaceState === 'pending' ? {} : deliveryNamespaceFields(ghost)),
       name: ghost.manifest.name,
       ...(ghost.manifest.command ? { command: ghost.manifest.command } : {}),
       ...(recall ? { recall } : {}),
@@ -1665,7 +1665,7 @@ function toCindyGhostInfo(ghost: InstalledGhost): CindyGhostInfo {
   }
   return {
     id: ghost.manifest.id,
-    ...(ghost.namespaceMigration === 'pending' ? {} : deliveryNamespaceFields(ghost)),
+    ...(ghost.namespaceState === 'pending' ? {} : deliveryNamespaceFields(ghost)),
     name: ghost.manifest.name,
     ...(ghost.manifest.command ? { command: ghost.manifest.command } : {}),
     ...(recall ? { recall } : {}),
@@ -1775,7 +1775,7 @@ export function getCindyGhostsMcpDeps(
         return service.request(sessionId, {
           kind: 'plugin',
           id: visible.ghost.manifest.id,
-          ...(visible.ghost.namespaceMigration === 'pending' ? {} : deliveryNamespaceFields(visible.ghost)),
+          ...(visible.ghost.namespaceState === 'pending' ? {} : deliveryNamespaceFields(visible.ghost)),
           ...(target.reauthorize ? { reauthorize: true } : {}),
         });
       }
@@ -1905,7 +1905,7 @@ export function getCindyGhostsMcpDeps(
           const recall = ghostRecall(g);
           return {
             id: g.manifest.id,
-            ...(g.namespaceMigration === 'pending' ? {} : deliveryNamespaceFields(g)),
+            ...(g.namespaceState === 'pending' ? {} : deliveryNamespaceFields(g)),
             name: g.manifest.name,
             ...(g.manifest.command ? { command: g.manifest.command } : {}),
             ...(recall ? { recall } : {}),

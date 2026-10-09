@@ -456,7 +456,7 @@ describe('硬指令内嵌工具清单(显式点名免 ghost_list,2026-07-16)', (
 
 describe('pending upgrade commands', () => {
   it('omits namespace for a unique pending install', () => {
-    const pending = { ...ghost('feishu', true, { id: 'xd-feishu' }), namespaceMigration: 'pending' as const };
+    const pending = { ...ghost('feishu', true, { id: 'xd-feishu' }), namespaceState: 'pending' as const };
     const out = expandGhostCommand('$feishu check', [pending]);
     expect(out).toContain('(id: xd-feishu)');
     expect(out).not.toContain('ghost_id:');
@@ -474,7 +474,7 @@ describe('pending upgrade commands', () => {
   });
 
   it('stays ambiguous when a pending install shares a command with an organization install', () => {
-    const pending = { ...ghost('run', true, { id: 'helper' }), namespaceMigration: 'pending' as const };
+    const pending = { ...ghost('run', true, { id: 'helper' }), namespaceState: 'pending' as const };
     const org = ghost('run', true, { id: 'helper', namespace: 'acme' });
     const out = expandGhostCommand('$run x', [pending, org]);
     expect(out).toContain('存在多个实例');
