@@ -3044,7 +3044,12 @@ class CindyMcpGateway {
   private loadDisclosedSchemas(): void {
     try {
       const parsed = JSON.parse(readFileSync(this.disclosureFile as string, 'utf8'));
+      // One valid snapshot or nothing: version, catalog fingerprint, and keys are
+      // validated as a unit. A file missing the catalog (hand-edited, partially
+      // written, or from a different format) must not leak keys past the gate —
+      // fall back to "never inspected".
       if (!parsed || typeof parsed !== 'object' || parsed.piVersion !== this.disclosureVersion) return;
+      if (typeof parsed.catalog !== 'string' || parsed.catalog.length === 0) return;
       if (!Array.isArray(parsed.keys)) return;
       for (const key of parsed.keys) {
         if (typeof key === 'string' && key.length > 0 && key.length <= 512) this.disclosedSchemas.add(key);

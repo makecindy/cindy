@@ -18,7 +18,7 @@
  */
 
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from 'node:http';
-import { mkdtempSync, existsSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -1495,6 +1495,47 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
       expect(requestBodies.join('\n')).toContain('Inspect this tool before execution');
       const state = JSON.parse(readFileSync(path.join(agentHome, 'runtime', `mcp-disclosed-${sid}.json`), 'utf8')) as { keys?: string[] };
       expect(state.keys).toEqual([]);
+    },
+  );
+
+  it(
+    'invalid disclosure snapshots (missing catalog or wrong pi version) fall back to the gate',
+    { timeout: 180_000 },
+    async () => {
+      const sid = 'mcp-itest-disclose-invalid';
+      const stateFile = path.join(agentHome, 'runtime', `mcp-disclosed-${sid}.json`);
+      const blindCallPrompt = 'persisted disclosure stale catalog';
+
+      const bootAndMutate = async (mutate: (snapshot: Record<string, unknown>) => void): Promise<void> => {
+        echoCalls.length = 0;
+        // Normal first boot: inspect echo, producing a fully valid state file.
+        await runOneTurn(
+          'ask',
+          async () => ({ kind: 'permission', behavior: 'allow' }),
+          'local',
+          'persisted disclosure first boot',
+          { sessionId: sid },
+        );
+        const snapshot = JSON.parse(readFileSync(stateFile, 'utf8')) as Record<string, unknown>;
+        mutate(snapshot);
+        writeFileSync(stateFile, JSON.stringify(snapshot));
+        // Second boot with the mutated snapshot: the blind call must NOT run on it.
+        const { requestBodies } = await runOneTurn(
+          'ask',
+          async () => ({ kind: 'permission', behavior: 'allow' }),
+          'local',
+          blindCallPrompt,
+          { sessionId: sid, keepDisclosureState: true },
+        );
+        expect(echoCalls).toEqual([]);
+        expect(requestBodies.join('\n')).toContain('Inspect this tool before execution');
+      };
+
+      // Snapshot with keys but no catalog field: must be treated as invalid, not
+      // honored on faith.
+      await bootAndMutate((snapshot) => { delete snapshot.catalog; });
+      // Snapshot with matching catalog but tampered pi version: same fallback.
+      await bootAndMutate((snapshot) => { snapshot.piVersion = '0.0.0-wrong'; });
     },
   );
 
