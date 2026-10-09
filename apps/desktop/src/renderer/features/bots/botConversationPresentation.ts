@@ -123,7 +123,7 @@ function projectWindow(
       if (item.type === 'message' && item.message.isSyntheticTrigger) return;
       if (isProse(item)) {
         if (!item.message.content.trim() && !hasAttachments(item.message)) return;
-        if (!isCompletedAssistantMessage(item.message) && !sealedAnswers.has(item.message)
+        if (!item.message.sourceGroup && !item.message.explicitDelivery && !isCompletedAssistantMessage(item.message) && !sealedAnswers.has(item.message)
           && !hasAttachments(item.message) && index !== fallbackProse
           && extractRenderedMarkdownImageTargets(item.message.content).length === 0) {
           return;

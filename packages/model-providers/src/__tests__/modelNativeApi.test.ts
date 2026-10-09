@@ -119,6 +119,8 @@ describe("canonical model APIs in registry v3", () => {
     ["meta/muse-spark-99", "openai-responses"],
     ["x-ai/grok-99", "openai-responses"],
     ["minimax/MiniMax-M99", "anthropic-messages"],
+    ["openai-codex/gpt-99", "openai-responses"],
+    ["codex/gpt-99", "openai-responses"],
   ])(
     "declares the native API of future family member %s locally",
     (id, api) => {

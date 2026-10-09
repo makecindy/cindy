@@ -1,6 +1,6 @@
 {
   "schemaVersion": 5,
-  "updatedAt": "2026-10-03T12:00:00.000Z",
+  "updatedAt": "2026-10-09T06:00:00.000Z",
   "models": [
     {
       "id": "openai/gpt-6.1-sol",
@@ -2482,6 +2482,11 @@
     {
       "providerId": "xd",
       "modelIdPrefix": "codex/gpt-",
+      "nativeApi": "openai-responses"
+    },
+    {
+      "providerId": "xd",
+      "modelIdPrefix": "openai-codex/gpt-",
       "nativeApi": "openai-responses"
     },
     {

@@ -198,6 +198,91 @@ describe('notificationService — channels 分发', () => {
     vi.useRealTimers();
   });
 
+  it('hands off delegated completion on every external channel while preserving task attention and consuming retries', async () => {
+    const { initNotificationService } = await freshService();
+    const feishuIm = makeFeishuIm('owner');
+    const check = vi.fn().mockResolvedValue(true);
+    initNotificationService({ ...baseDeps(feishuIm), isCompletionHandledByTeammate: check });
+    getSessionNotificationTurnSignal.mockReturnValue({ id: 'turn:100:200', fallbackEventId: 'turn:100:200', ended: true });
+    const payload = { sessionId: 's1', title: 'Delegated', kind: 'done', channels: { desktop: true, feishu: true, mobile: true } };
+    await invokeHandler(payload);
+    expect(markSessionNeedsAttention).toHaveBeenCalledWith('s1');
+    expect(notificationCtor).not.toHaveBeenCalled();
+    expect(sendMobileSessionNotify).not.toHaveBeenCalled();
+    expect(feishuIm.sendMarkdownText).not.toHaveBeenCalled();
+    // Removing the relation cannot resurrect a previously consumed event.
+    check.mockResolvedValue(false);
+    getMobileNotifyGeneration.mockReturnValueOnce(8);
+    await invokeHandler(payload);
+    expect(notificationCtor).not.toHaveBeenCalled();
+    expect(sendMobileSessionNotify).not.toHaveBeenCalled();
+    getSessionNotificationTurnSignal.mockReturnValue({ id: 'turn:300:400', fallbackEventId: 'turn:300:400', ended: true });
+    await invokeHandler(payload);
+    expect(notificationCtor).toHaveBeenCalledOnce();
+    expect(sendMobileSessionNotify).toHaveBeenCalledOnce();
+    expect(feishuIm.sendMarkdownText).toHaveBeenCalledOnce();
+  });
+
+  it('does not send an old completion when handoff resolution crosses a newer turn', async () => {
+    const { initNotificationService } = await freshService();
+    const feishuIm = makeFeishuIm('owner');
+    let resolve!: (handled: boolean) => void;
+    const check = vi.fn(() => new Promise<boolean>(r => { resolve = r; }));
+    initNotificationService({ ...baseDeps(feishuIm), isCompletionHandledByTeammate: check });
+    getSessionNotificationTurnSignal.mockReturnValue({ id: 'turn:100:200', fallbackEventId: 'turn:100:200', ended: true });
+    await invokeHandler({ sessionId: 's1', title: 'Delegated', kind: 'done', channels: { desktop: true, feishu: true, mobile: true } });
+    expect(check).toHaveBeenCalledOnce();
+    getSessionNotificationTurnSignal.mockReturnValue({ id: 'turn:300:400', fallbackEventId: 'turn:300:400', ended: true });
+    resolve(false); await flushAsync();
+    expect(notificationCtor).not.toHaveBeenCalled();
+    expect(sendMobileSessionNotify).not.toHaveBeenCalled();
+    expect(feishuIm.sendMarkdownText).not.toHaveBeenCalled();
+    expect(markSessionNeedsAttention).toHaveBeenCalledWith('s1');
+  });
+
+  it('notifies only the teammate final reply after handing off its child completion', async () => {
+    const { initNotificationService } = await freshService();
+    const feishuIm = makeFeishuIm('owner');
+    initNotificationService({ ...baseDeps(feishuIm), isCompletionHandledByTeammate: async id => id === 'child' });
+    readSessionNotificationPreview.mockImplementation(async id => id === 'teammate'
+      ? { teammateName: 'Teammate', teammateBotId: 'bot-a', reply: { clientId: 'final', text: '**Final** result' }, eventId: 'final' }
+      : { eventId: 'child-result' });
+    const channels = { desktop: true, feishu: true, mobile: true };
+    await invokeHandler({ sessionId: 'child', title: 'Background task', kind: 'done', channels });
+    await invokeHandler({ sessionId: 'child', title: 'Background task', kind: 'done', channels });
+    await invokeHandler({ sessionId: 'teammate', title: 'Teammate', kind: 'done', channels });
+    await invokeHandler({ sessionId: 'teammate', title: 'Teammate', kind: 'done', channels });
+    expect(notificationCtor).toHaveBeenCalledOnce();
+    expect(notificationCtor).toHaveBeenCalledWith(expect.objectContaining({ body: 'Final result' }));
+    expect(sendMobileSessionNotify).toHaveBeenCalledOnce();
+    expect(sendMobileSessionNotify).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'teammate', teammateBotId: 'bot-a' }));
+    expect(feishuIm.sendText).toHaveBeenCalledOnce();
+    expect(feishuIm.sendMarkdownText).not.toHaveBeenCalled();
+  });
+
+  it.each(['error', 'needs-reply'])('keeps %s immediate even while a teammate completion check is blocked', async kind => {
+    const { initNotificationService } = await freshService();
+    const feishuIm = makeFeishuIm('owner');
+    const check = vi.fn(() => new Promise<boolean>(() => {}));
+    initNotificationService({ ...baseDeps(feishuIm), isCompletionHandledByTeammate: check });
+    await invokeHandler({ sessionId: 's1', title: 'Delegated', kind, channels: { desktop: true, feishu: true, mobile: true } });
+    expect(check).not.toHaveBeenCalled();
+    expect(notificationCtor).toHaveBeenCalledOnce();
+    expect(sendMobileSessionNotify).toHaveBeenCalledOnce();
+    expect(feishuIm.sendMarkdownText).toHaveBeenCalledOnce();
+  });
+
+  it.each([false, 'reject'])('retains completion fallback when internal handoff is unavailable (%s)', async outcome => {
+    const { initNotificationService } = await freshService();
+    const feishuIm = makeFeishuIm('owner');
+    const check = outcome === false ? vi.fn().mockResolvedValue(false) : vi.fn().mockRejectedValue(new Error('fixture failure'));
+    initNotificationService({ ...baseDeps(feishuIm), isCompletionHandledByTeammate: check });
+    await invokeHandler({ sessionId: 's1', title: 'Delegated', kind: 'done', channels: { desktop: true, feishu: true, mobile: true } });
+    expect(notificationCtor).toHaveBeenCalledOnce();
+    expect(sendMobileSessionNotify).toHaveBeenCalledOnce();
+    expect(feishuIm.sendMarkdownText).toHaveBeenCalledOnce();
+  });
+
   it('同步并校验 renderer 持久化的桌面通知总开关', async () => {
     const { getDesktopNotificationsEnabled, initNotificationService } = await freshService();
     initNotificationService(baseDeps(makeFeishuIm('ou_owner')));

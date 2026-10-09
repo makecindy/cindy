@@ -12,7 +12,7 @@ const h = vi.hoisted(() => ({
     saveFailed: false, openTeammate: vi.fn(), setMode: vi.fn() },
   roster: { createTargets: [], authoritative: true, items: [] as HostedRemoteCollectionItem[], loading: false, refreshing: false, error: null as string | null,
     isOnline: vi.fn(() => true), refresh: vi.fn(), groupTargets: [] as { deviceId: string; deviceName: string }[] },
-  groups: { items: [] as HostedRemoteCollectionItem[], supported: false, isOnline: () => true, refresh: vi.fn() },
+  groups: { loading: false, refreshing: false, error: null as string | null, items: [] as HostedRemoteCollectionItem[], supported: false, isOnline: () => true, refresh: vi.fn() },
   groupTargetsSeen: [] as unknown[],
   create: {} as any,
 }));
@@ -64,6 +64,7 @@ beforeEach(() => {
   h.auth.user = { id: `owner-${++serial}` }; h.auth.accountGeneration = serial;
   vi.clearAllMocks(); h.focused = true; h.nav.lastTeammate = teammateIdentity(teammate); h.roster.items = [teammate];
   h.nav.mode = 'teammates'; h.roster.authoritative = true;
+  h.groups.loading = false; h.groups.refreshing = false; h.groups.error = null;
   h.roster.loading = false; h.roster.error = null; h.roster.isOnline.mockReturnValue(true);
 });
 afterEach(() => { act(() => root?.unmount()); root = undefined; });
@@ -133,7 +134,7 @@ describe('explicit sidebar entry through the home page', () => {
 describe('group chats in the teammate list', () => {
   const group: HostedRemoteCollectionItem = { key: 'mac:g1', host: { deviceId: 'mac', deviceName: 'Mac' },
     item: { ref: { collectionId: 'bot-groups', kind: 'bot-group', id: 'g1' }, revision: '1', display: { title: '官网' }, links: [] } };
-  afterEach(() => { h.roster.groupTargets = []; h.groups = { items: [], supported: false, isOnline: () => true, refresh: vi.fn() }; h.create = {}; });
+  afterEach(() => { h.roster.groupTargets = []; h.groups = { loading: false, refreshing: false, error: null, items: [], supported: false, isOnline: () => true, refresh: vi.fn() }; h.create = {}; });
 
   it('leaves group chats out when no computer supports them (older desktops)', async () => {
     h.nav.lastTeammate = null; await render();
@@ -154,5 +155,16 @@ describe('group chats in the teammate list', () => {
     await act(async () => h.create.onGroupCreated({ deviceId: 'pc', deviceName: 'PC' }, 'g2'));
     expect(h.push).toHaveBeenLastCalledWith({ pathname: '/companions/groups/[groupId]', params: { groupId: 'g2', deviceId: 'pc', deviceName: 'PC' } });
     expect(h.nav.openTeammate).not.toHaveBeenCalled();
+  });
+});
+
+
+describe('server groups in the actual teammate home', () => {
+  it('shows group loading/failure and refreshes it even without any computer target', async () => {
+    h.roster.items = []; h.groups.items = []; h.groups.supported = true; h.groups.loading = true;
+    await render(); expect(h.list.loading).toBe(true);
+    h.groups.loading = false; h.groups.error = 'CHAT_LIST_FAILED';
+    await render(); expect(h.list.error).toBe('CHAT_LIST_FAILED');
+    await act(async () => h.list.onRefresh()); expect(h.groups.refresh).toHaveBeenCalledOnce();
   });
 });

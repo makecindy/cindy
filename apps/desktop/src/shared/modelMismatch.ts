@@ -17,6 +17,8 @@
  *     去 vendor 路由前缀、点横等价、去 claude- 前缀,大小写不敏感。
  */
 
+import { stripCodexGatewayWirePrefix } from '@cindy/model-providers';
+
 /** 判定结果:selected / actual 均为原始 raw id(展示层再折算短标签)。 */
 export interface ModelMismatchInfo {
   /** 用户为该会话所选的模型 raw id(turn start 时快照)。 */
@@ -45,7 +47,9 @@ export function canonicalModelFamilyKey(modelId: string | null | undefined): str
   if (!id) return '';
   id = id.replace(/\[[^\]]*\]\s*$/, '').trim();
   id = id.replace(/-\d{8}$/, '').replace(/-latest$/, '');
-  id = id.replace(/^us\.anthropic\./, '').replace(/^eu\.anthropic\./, '').replace(/^anthropic\./, '').replace(/^codex\//, '');
+  id = stripCodexGatewayWirePrefix(
+    id.replace(/^us\.anthropic\./, '').replace(/^eu\.anthropic\./, '').replace(/^anthropic\./, ''),
+  );
   id = id.replace(/\./g, '-');
   id = id.replace(/^claude-/, '');
   return id;

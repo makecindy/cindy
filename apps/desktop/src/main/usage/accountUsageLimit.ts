@@ -156,6 +156,17 @@ export function subscriptionFamilyOf(
 }
 
 /**
+ * 会话的模型请求是否用另一台机器的登录发出：SSH 远程工作区用远端主机的登录，远程 Agent 用
+ * Agent 所在电脑的登录。此时本机订阅快照属于另一个账号，不能拿来推算重置时刻；报错原文里不带
+ * 时区的钟点也是那台的本地时间，不按本机时区理解。
+ */
+export function sessionUsesOtherMachineAccount(
+  row: { remoteHostId?: string | null; agentDeviceId?: string | null } | null | undefined,
+): boolean {
+  return Boolean(row?.remoteHostId || row?.agentDeviceId);
+}
+
+/**
  * @returns `undefined` = 不是订阅家族（调用方另找来源）；`null` = 是订阅家族但暂无可用快照。
  */
 export async function readAccountUsageLimit(

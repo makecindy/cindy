@@ -3,8 +3,9 @@
  * Agent 在另一台电脑运行(任务在本机)的标识:Agent 图标右上角加模型选择器同款的单波纹 + 点,
  * 替代标题后的芯片图标(2026-10-07 用户裁决)。
  *
- * 锁四件事:波纹不改 Agent 图标本身的大小;只有本机任务 + agentDeviceId 才画;右上角正显示
- * 状态点时由状态点占位;悬停说明在哪台电脑、是否离线。
+ * 锁四件事:波纹不改 Agent 图标本身的大小;有 agentDeviceId 才画(本机任务,以及 2026-10-09 起
+ * 远程控制的被控电脑上的任务;SSH 任务不画);右上角正显示状态点时由状态点占位;悬停说明在哪台
+ * 电脑、是否离线。
  */
 import React from 'react';
 import { cleanup, render } from '@testing-library/react';
@@ -30,6 +31,13 @@ vi.mock('@/hooks/useComposerDraftPresence', () => ({ useComposerDraftPresence: (
 vi.mock('@/hooks/useSessionPausedQueue', () => ({ useSessionPausedQueue: () => false }));
 vi.mock('@/features/device-link/useDeviceLinkDeviceList', () => ({
   useDeviceLinkDeviceList: () => devices.list,
+}));
+// 本机已收到的分享:`share:mine` 是别人分享给本机的供应商。
+vi.mock('@/features/provider-share/useProviderShareAgentDevices', () => ({
+  useProviderShareAgentDevices: () => ({
+    nameFor: (deviceId: string | null | undefined) =>
+      deviceId === 'share:mine' ? 'Magi Mini · shared by Magi' : null,
+  }),
 }));
 
 import { RemoteSourceMark } from '@/components/icons/RemoteSourceMark';
@@ -132,16 +140,28 @@ describe('SessionStatusIcon for an Agent on another computer', () => {
     expect(getByTitle('ccAgent.sessionHeader.agentDeviceOffline:Studio Mac')).toBeTruthy();
   });
 
-  it('leaves local, device-link and SSH tasks unmarked', () => {
+  it('leaves tasks whose Agent runs where the task is, and SSH tasks, unmarked', () => {
     expect(signal(renderStatus({}).container)).toBeNull();
     cleanup();
+    // 被控电脑上的任务,Agent 就在被控电脑上(被控电脑投影 null)。
     expect(
-      signal(renderStatus({ agentDeviceId: 'device-b', deviceLinkDeviceId: 'device-c' }).container),
+      signal(renderStatus({ agentDeviceId: null, deviceLinkDeviceId: 'device-c' }).container),
     ).toBeNull();
     cleanup();
     expect(
       signal(renderStatus({ agentDeviceId: 'device-b', remoteHostId: 'host-1' }).container),
     ).toBeNull();
+  });
+
+  it('names a provider shared with this computer for a local task', () => {
+    const { container, getByTitle } = renderStatus({ agentDeviceId: 'share:mine' });
+    expect(signal(container)).not.toBeNull();
+    expect(getByTitle('ccAgent.sessionHeader.agentDevice:Magi Mini · shared by Magi')).toBeTruthy();
+  });
+
+  it('falls back to "another computer" instead of showing a raw id', () => {
+    const { getByTitle } = renderStatus({ agentDeviceId: 'device-unknown' });
+    expect(getByTitle('newChat.modelSelector.trigger.agentDeviceUnnamed')).toBeTruthy();
   });
 
   it('gives the top-right corner to the attention dot while one is shown', () => {
@@ -157,5 +177,35 @@ describe('SessionStatusIcon for an Agent on another computer', () => {
     );
     expect(attentionDot(row.container)).toBeUndefined();
     expect(signal(row.container)).not.toBeNull();
+  });
+});
+
+describe('SessionStatusIcon for a task on a remotely controlled computer', () => {
+  // A 远控 B 的任务,Agent 在 C 上运行(B 投影 agentDeviceId = C)。
+  it('marks the Agent icon the same way and names the computer it runs on', () => {
+    const { container, getByTitle } = renderStatus({
+      agentDeviceId: 'device-b',
+      deviceLinkDeviceId: 'device-c',
+    });
+    expect(signal(container)).not.toBeNull();
+    expect(getByTitle('ccAgent.sessionHeader.agentDevice:Studio Mac')).toBeTruthy();
+  });
+
+  it('says when that computer is offline', () => {
+    devices.list = [{ deviceId: 'device-b', name: 'Studio Mac', online: false }];
+    const { getByTitle } = renderStatus({
+      agentDeviceId: 'device-b',
+      deviceLinkDeviceId: 'device-c',
+    });
+    expect(getByTitle('ccAgent.sessionHeader.agentDeviceOffline:Studio Mac')).toBeTruthy();
+  });
+
+  it("does not borrow this computer's shares to name a share the controlled computer received", () => {
+    const { container, getByTitle } = renderStatus({
+      agentDeviceId: 'share:mine',
+      deviceLinkDeviceId: 'device-c',
+    });
+    expect(signal(container)).not.toBeNull();
+    expect(getByTitle('newChat.modelSelector.trigger.agentDeviceUnnamed')).toBeTruthy();
   });
 });

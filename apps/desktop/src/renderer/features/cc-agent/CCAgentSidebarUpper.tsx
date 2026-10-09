@@ -1148,6 +1148,7 @@ function ExpandedView({
         const title = projectDraftSessionTitle(session.title, unnamedLabelRef.current);
         sendSessionEventNotification(sessionId, title, kind, {
           remoteDevice: !!session.deviceLinkDeviceId,
+          remoteDeviceId: session.deviceLinkDeviceId,
         });
         return;
       }

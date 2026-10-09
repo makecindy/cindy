@@ -2322,6 +2322,11 @@ it('routes Bot shortcuts through the scoped helper entry without exposing them t
         properties: { at: { type: 'integer', minimum: 0, maximum: Number.MAX_SAFE_INTEGER } },
       });
     }
+    if (name === 'start_session_task') {
+      expect(tool.description).toContain('A repository, multiple files, tools, or a deliverable alone is not a reason to delegate');
+      expect(tool.description).toContain('the user explicitly requests an independent task');
+      expect(tool.description).toContain('Follow up with message_session_task on the same task');
+    }
     if (name === 'send_to_agent') expect(tool.parameters.properties.target_id.maxLength).toBe(210);
     const resolved = gateway.resolveDirectHelperTool(name, args);
     expect(resolved.qualifiedName).toBe('mcp__cindy_helper__' + name);

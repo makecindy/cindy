@@ -383,10 +383,15 @@ describe('rowFastEditable / rowFastOn(严格 per-(供应商, 模型))', () => {
 });
 
 describe('budgetRowDisabled(折扣版置灰三态)', () => {
-  it("只有 codex/ 前缀且被控端明确 absent 才置灰;unknown 不误伤", () => {
+  it("只有折扣前缀且被控端明确 absent 才置灰;unknown 不误伤", () => {
     expect(budgetRowDisabled('codex/gpt-5.5', 'absent')).toBe(true);
+    expect(budgetRowDisabled('openai-codex/gpt-6.1-sol', 'absent')).toBe(true);
+    expect(budgetRowDisabled('openai-codex/gpt-6.1-sol', 'present')).toBe(false);
     expect(budgetRowDisabled('codex/gpt-5.5', 'present')).toBe(false);
     expect(budgetRowDisabled('codex/gpt-5.5', 'unknown')).toBe(false);
     expect(budgetRowDisabled('gpt-5.5', 'absent')).toBe(false);
+    expect(budgetRowDisabled('openai-codex/gpt-6.1-sol', 'absent', { source: 'builtin' })).toBe(true);
+    expect(budgetRowDisabled('openai-codex/gpt-6.1-sol', 'absent', { source: 'user' })).toBe(false);
+    expect(budgetRowDisabled('codex/gpt-5.5', 'absent', { source: 'organization' })).toBe(false);
   });
 });
