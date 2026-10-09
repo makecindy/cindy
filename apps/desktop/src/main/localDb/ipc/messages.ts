@@ -545,7 +545,8 @@ export function registerMessageIpc(
       const aroundOpts = opts as { radius?: unknown; contentCharLimit?: unknown } | undefined;
       const radius = clampAroundRadius(aroundOpts?.radius);
       const contentCharLimit = requireReferenceContentCharLimit(aroundOpts?.contentCharLimit);
-      const db = getDbClient().drizzle;
+      const imageDbClient = getDbClient();
+      const db = imageDbClient.drizzle;
 
       const [sessionRow] = await db
         .select({ clearedAt: sessions.clearedAt })
@@ -616,7 +617,7 @@ export function registerMessageIpc(
         .limit(radius);
 
       const rows = await hydrateLegacyUserTurnCosts(
-        [...before.reverse(), anchor, ...after].map(messageToCamelWithRowid),
+        (await restoreTaskImageRows(imageDbClient, [...before.reverse(), anchor, ...after])).map(messageToCamelWithRowid),
       );
       return capReferenceMessageRows(rows, contentCharLimit);
     },
