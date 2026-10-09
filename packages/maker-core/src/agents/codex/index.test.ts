@@ -19901,6 +19901,51 @@ describe('CodexAgent MCP thread context hooks', () => {
     return { host, handle, handlers, params, decision, resolver, events };
   }
 
+  it.each(['completed', 'failed', 'stop'] as const)('does not expire an answered async card when %s occurs inside steer dispatch', async (outcome) => {
+    let terminate!: () => void;
+    const s = await runningAsyncQuestion(async () => { terminate(); return {}; });
+    try {
+      terminate = () => {
+        if (outcome === 'stop') void s.handle.abort();
+        else s.handlers.turnCompleted?.({ threadId: s.params.threadId,
+          turn: { id: s.params.turnId, status: outcome } });
+      };
+      s.decision.resolve({ kind: 'ask_user_question', answers: { 'Proceed?': 'Yes' } });
+      await vi.waitFor(() => expect(s.host.request.mock.calls.some(([method]) => method === Method.TurnSteer)).toBe(true));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(s.events.filter((event) => event.type === 'interaction_dismissed')).toEqual([]);
+    } finally { await s.handle.close(); }
+  });
+
+  it.each(['pending', 'answered'] as const)('does not join a synchronous tool to a %s async answer', async (state) => {
+    const s = await runningAsyncQuestion();
+    const syncDecision = deferred<InteractionDecision>();
+    const syncResolver = vi.fn(async () => syncDecision.promise);
+    try {
+      if (state === 'answered') {
+        s.decision.resolve({ kind: 'ask_user_question', answers: { 'Proceed?': 'Yes' } });
+        await vi.waitFor(() => expect(s.host.request.mock.calls.filter(([method]) => method === Method.TurnSteer)).toHaveLength(1));
+      }
+      s.handle.setInteractionResolver(syncResolver);
+      const sync = s.handlers.requestUserInput!({
+        threadId: s.params.threadId, turnId: s.params.turnId, itemId: 'sync-item',
+        questions: [{ id: 'sync-choice', header: '', question: 'Proceed?', isOther: true,
+          options: [{ label: 'Yes', description: null }, { label: 'No', description: null }] }],
+      }, { requestId: 561 });
+      await vi.waitFor(() => expect(syncResolver).toHaveBeenCalledOnce());
+      // Another optional question cannot cover the blocking card.
+      s.handlers.itemCompleted?.({ ...s.params, item: { ...asyncQuestionItem, id: 'async-later' } });
+      expect(syncResolver).toHaveBeenCalledOnce();
+      s.decision.resolve({ kind: 'ask_user_question', answers: { 'Proceed?': 'Yes' } });
+      syncDecision.resolve({ kind: 'ask_user_question', answers: { 'Proceed?': 'No' } });
+      await expect(sync).resolves.toEqual({ answers: { 'sync-choice': { answers: ['No'] } } });
+      expect(s.host.request.mock.calls.filter(([method]) => method === Method.TurnSteer)).toHaveLength(state === 'answered' ? 1 : 0);
+      s.handlers.turnCompleted?.({ threadId: s.params.threadId,
+        turn: { id: s.params.turnId, status: 'completed' } });
+      await vi.waitFor(() => expect(s.handle.isTurnRunning?.()).toBe(false));
+    } finally { await s.handle.close(); }
+  });
+
   it('shows an async question once through the existing card and steers its answer without waiting for turn completion', async () => {
     const { host, handle, handlers, params, decision, resolver, events } = await runningAsyncQuestion();
     expect(resolver.mock.calls[0]?.[0]).toMatchObject({ kind: 'ask_user_question', questions: [{

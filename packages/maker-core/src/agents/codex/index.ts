@@ -8127,6 +8127,16 @@ assertRouteCurrent();
       success: false,
     });
 
+    function dismissLiveAskUser(requestId: string, reason: string): void {
+      liveAskUserByRequestId.delete(requestId);
+      forgetPendingUserInputRequest(requestId);
+      eventQueue.push({
+        type: 'interaction_dismissed',
+        data: { requestId, reason, resolvedAs: 'deny' },
+        source: 'codex',
+      });
+    }
+
     function dismissPendingUserInput(
       reason: string,
       predicate: (meta: { threadId?: string; turnId?: string | null }) => boolean,
@@ -8144,25 +8154,13 @@ assertRouteCurrent();
         const requestId = serverInteractionId(meta.requestId);
         if (dismissed.has(requestId)) continue;
         dismissed.add(requestId);
-        liveAskUserByRequestId.delete(requestId);
-        forgetPendingUserInputRequest(requestId);
-        eventQueue.push({
-          type: 'interaction_dismissed',
-          data: { requestId, reason, resolvedAs: 'deny' },
-          source: 'codex',
-        });
+        dismissLiveAskUser(requestId, reason);
       }
       for (const [requestId, live] of liveAskUserByRequestId) {
         if (!predicate({ threadId, turnId: live.turnId })) continue;
-        liveAskUserByRequestId.delete(requestId);
         if (dismissed.has(requestId)) continue;
         dismissed.add(requestId);
-        forgetPendingUserInputRequest(requestId);
-        eventQueue.push({
-          type: 'interaction_dismissed',
-          data: { requestId, reason, resolvedAs: 'deny' },
-          source: 'codex',
-        });
+        dismissLiveAskUser(requestId, reason);
       }
     }
 
@@ -8193,13 +8191,7 @@ assertRouteCurrent();
       const dismiss = (requestId: string, reason: string): void => {
         if (keepUiRequestIds.has(requestId) || dismissed.has(requestId)) return;
         dismissed.add(requestId);
-        liveAskUserByRequestId.delete(requestId);
-        forgetPendingUserInputRequest(requestId);
-        eventQueue.push({
-          type: 'interaction_dismissed',
-          data: { requestId, reason, resolvedAs: 'deny' },
-          source: 'codex',
-        });
+        dismissLiveAskUser(requestId, reason);
       };
       for (const live of lives) {
         if (keep && live.requestId === keep.requestId) continue;
@@ -9569,7 +9561,18 @@ assertRouteCurrent();
         });
         return emptyUserInputResponse(questions);
       }
-      const fingerprint = turnId ? userInputQuestionsFingerprint(questions) : null;
+      // A blocking tool must remain answerable; optional cards may not cover it.
+      if (delivery === 'async') {
+        if ([...liveAskUserByRequestId.values()].some((live) => live.delivery !== 'async')) {
+          return emptyUserInputResponse(questions);
+        }
+      } else {
+        for (const live of liveAskUserByRequestId.values()) {
+          if (live.delivery === 'async') dismissLiveAskUser(live.requestId, 'superseded');
+        }
+      }
+      // A native tool result and an async steer are different delivery owners.
+      const fingerprint = turnId ? JSON.stringify([delivery ?? 'sync', userInputQuestionsFingerprint(questions)]) : null;
       const submittedForTurn = turnId ? submittedUserInputByTurn.get(turnId) : undefined;
       const replay = fingerprint ? submittedForTurn?.get(fingerprint) : undefined;
       if (replay) {
@@ -9638,6 +9641,9 @@ assertRouteCurrent();
         const live = liveAskUserByRequestId.get(requestId);
         // Stop/supersession may win while the UI response is already in flight.
         if (!live) return questions.map(() => []);
+        // The host has resolved the card. A synchronous completion during steer
+        // must not mark it expired while the outer promise is still unwinding.
+        liveAskUserByRequestId.delete(requestId);
         // 澄清必须锚在发起提问那一轮的审查意图上。卡片挂起期间后续 turn 可能改写
         // currentAutoReviewIntent；plan_review 已用 planRequestAutoReviewIntent 防漂。
         const continuationAutoReviewIntent = composeAutoReviewIntentWithClarification(

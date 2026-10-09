@@ -4,6 +4,7 @@ import type { AskUserQuestionItem, InteractionDecision, InteractionRequest } fro
 interface PendingQuestion {
   generation: number;
   abort: AbortController;
+  answered: boolean;
 }
 
 /** Optional questions never own a continuation or a blocking interaction. */
@@ -23,7 +24,7 @@ export class AsyncUserQuestions {
     // The existing question UI has one active card per task.
     this.expire('superseded');
     const requestId = `async-question:${randomUUID()}`;
-    const entry = { generation, abort: new AbortController() };
+    const entry = { generation, abort: new AbortController(), answered: false };
     this.pending.set(requestId, entry);
     void this.waitForAnswer(requestId, entry, questions);
     return requestId;
@@ -34,7 +35,7 @@ export class AsyncUserQuestions {
       if (generation !== undefined && entry.generation !== generation) continue;
       this.pending.delete(requestId);
       entry.abort.abort();
-      this.deps.dismiss(requestId, reason);
+      if (!entry.answered) this.deps.dismiss(requestId, reason);
     }
   }
 
@@ -50,6 +51,8 @@ export class AsyncUserQuestions {
       ]);
       if (!answer || answer.kind !== 'ask_user_question' || answer.dismissed
         || entry.abort.signal.aborted || !this.deps.isActive(entry.generation)) return;
+      // Keep delivery cancellable without expiring the card already resolved by the host.
+      entry.answered = true;
       const answered = questions.flatMap(({ question, header }) => {
         const value = answer.answers[question] ?? (header ? answer.answers[header] : undefined);
         return typeof value === 'string' && value.trim() ? [{ question, answer: value }] : [];

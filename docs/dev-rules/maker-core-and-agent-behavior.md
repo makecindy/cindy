@@ -332,6 +332,11 @@ sessionRunningRetry 就停。每次因 replacement 关闭而重新入队都计�
   回归见 `session.async-user-questions.test.ts`、MCP `asyncUserQuestionTool.test.ts`；
   两种真实 harness 配本地假模型的投递与稳定前缀实测见
   `agents/shared/async-user-questions.native.test.ts`。
+  同步与异步问题共用卡片时，同步问题优先：已有同步问题等待时不再显示异步卡片，
+  同步问题后到时收起未回答的异步卡片，避免遮住阻塞执行的问题。Codex 的同步工具结果
+  与异步 steer 分开去重，不能共用一次答案的投递。答案被接收后，卡片不再属于待回答
+  集合；即使投递尚未完成时遇到结束／Stop／替换，也只能取消投递，不能把已回答卡片
+  再标成过期。交错回归见上述 Session 与 Codex 测试。
   Codex `functions.exec` yield 没有协议级 execution handle（cell / wait 活在
   `codex-rs` daemon），近期检测只能是 adapter 内、用真实 rollout fixture 锁死的启发式，
   用来铸造有界 claim，再由宿主确定性开续段让模型 wait 同一 cell。

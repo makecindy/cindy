@@ -535,6 +535,8 @@ export class Session {
   private turnStallSliceStartedAt = 0;
   /** 正在等用户回应的交互数；>0 期间不计 stall 额度（没事件是正常的）。 */
   private pendingInteractions = 0;
+  /** Blocking question cards take precedence over optional async cards. */
+  private pendingUserQuestions = 0;
   /** 最近一次 fan-out 事件的时刻，仅用于日志诊断。 */
   private lastEventAt = 0;
   /**
@@ -2158,12 +2160,18 @@ export class Session {
     request: InteractionRequest,
     resolve: () => Promise<InteractionDecision>,
   ): Promise<InteractionDecision> {
+    const isQuestion = request.kind === 'ask_user_question';
+    if (isQuestion) {
+      this.pendingUserQuestions += 1;
+      this.asyncUserQuestions.expire('superseded');
+    }
     this.pendingInteractions += 1;
     const runtime = this.observeInteractionStarted(request);
     this.armTurnStallWatchdog();
     try {
       return await resolve();
     } finally {
+      if (isQuestion) this.pendingUserQuestions -= 1;
       this.pendingInteractions = Math.max(0, this.pendingInteractions - 1);
       this.observeInteractionSettled(runtime);
       this.armTurnStallWatchdog();
@@ -2178,6 +2186,7 @@ export class Session {
   askUserQuestionAsync(questions: AskUserQuestionItem[]): string {
     this.ensureActive();
     if (!this.interactionListener) throw new Error('Question UI is unavailable');
+    if (this.pendingUserQuestions > 0) throw new Error('A blocking user question is already pending');
     if (!this.capabilities.sameTurnSteer.supported) {
       throw new NotSupportedError('sameTurnSteer', this.capabilities.sameTurnSteer);
     }

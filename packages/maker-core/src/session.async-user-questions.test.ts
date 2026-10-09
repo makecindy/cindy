@@ -15,12 +15,13 @@ async function setup(agentKind: 'claude-code' | 'pi') {
   let running = false;
   const requests: InteractionRequest[] = [];
   const resolvers: Array<(decision: InteractionDecision) => void> = [];
+  let resolveNative!: (request: InteractionRequest) => Promise<InteractionDecision>;
   const handle = {
     id: 'thread', agentKind, model: 'test-model', events: () => queue,
     send: vi.fn(async () => { running = true; }), steer: vi.fn(async () => {}),
     abort: vi.fn(async () => { running = false; }),
     close: vi.fn(async () => { running = false; queue.end(); }),
-    isTurnRunning: () => running, setInteractionResolver() {},
+    isTurnRunning: () => running, setInteractionResolver(resolve: typeof resolveNative) { resolveNative = resolve; },
     getUsageSnapshot: () => ({ tokenUsage: 0, contextTokens: 0, contextWindow: 0, costUsd: 0 }),
   } as unknown as AgentSessionHandle;
   const session = new Session({ id: 'task', agentKind, workDir: '/repo', handle, logger,
@@ -33,6 +34,7 @@ async function setup(agentKind: 'claude-code' | 'pi') {
   session.onEvent((event) => events.push(event));
   await session.send('Start independent work');
   return { session, handle, requests, resolvers, events,
+    askSync() { return resolveNative({ kind: 'ask_user_question', requestId: 'sync', questions }); },
     end(type: 'done' | 'error' = 'done') {
       running = false;
       queue.push({ type, source: agentKind, data: type === 'error' ? { isTerminal: true, message: 'failed' } : {} });
@@ -42,6 +44,47 @@ async function setup(agentKind: 'claude-code' | 'pi') {
 }
 
 describe.each(['claude-code', 'pi'] as const)('%s async questions', (agentKind) => {
+  it.each(['sync-first', 'async-first'] as const)('keeps the blocking question answerable with %s arrival', async (order) => {
+    const s = await setup(agentKind);
+    try {
+      const oldId = order === 'async-first' ? s.session.askUserQuestionAsync(questions) : null;
+      const sync = s.askSync();
+      expect(() => s.session.askUserQuestionAsync(questions)).toThrow('blocking user question');
+      expect(s.requests.at(-1)?.requestId).toBe('sync');
+      if (oldId) {
+        expect(s.events.some((e) => e.type === 'interaction_dismissed'
+          && (e.data as { requestId?: string }).requestId === oldId)).toBe(true);
+        s.resolvers[0](answer);
+      }
+      s.resolvers.at(-1)!(answer);
+      await expect(sync).resolves.toEqual(answer);
+      await flush();
+      expect(s.handle.steer).not.toHaveBeenCalled();
+      // Settling the blocking request releases the card slot.
+      expect(s.session.askUserQuestionAsync(questions)).toBeTypeOf('string');
+    } finally { await s.session.close(); }
+  });
+
+  it.each(['done', 'error', 'abort', 'close', 'replace'] as const)('cancels in-flight answer delivery on %s without expiring the answered card', async (action) => {
+    const s = await setup(agentKind);
+    let settle!: () => void;
+    vi.mocked(s.handle.steer).mockImplementationOnce(async () => new Promise<void>((resolve) => { settle = resolve; }));
+    try {
+      const id = s.session.askUserQuestionAsync(questions);
+      s.resolvers[0](answer);
+      await vi.waitFor(() => expect(s.handle.steer).toHaveBeenCalledOnce());
+      const signal = vi.mocked(s.handle.steer).mock.calls[0][1]?.signal;
+      if (action === 'done' || action === 'error') s.end(action);
+      else if (action === 'replace') s.session.askUserQuestionAsync([{ question: 'Another question?' }]);
+      else await s.session[action]();
+      await vi.waitFor(() => expect(signal?.aborted).toBe(true));
+      expect(s.events.filter((e) => e.type === 'interaction_dismissed'
+        && (e.data as { requestId?: string }).requestId === id)).toEqual([]);
+      settle();
+      await flush();
+    } finally { settle?.(); await s.session.close(); }
+  });
+
   it('returns immediately, uses the existing card and sends a same-turn answer only once', async () => {
     const s = await setup(agentKind);
     try {
