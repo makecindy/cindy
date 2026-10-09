@@ -347,3 +347,82 @@ describe('Chat Server result delivery and refresh', () => {
     expect(fixture.handle.mock.calls.some(([route]) => route.includes('/messages?'))).toBe(false);
   });
 });
+
+
+describe('Chat Server directed sends', () => {
+  const roomId = '10000000-0000-4000-8000-000000000001';
+  const botId = '20000000-0000-4000-8000-000000000001';
+  const selfId = '30000000-0000-4000-8000-000000000001';
+  const humanId = '40000000-0000-4000-8000-000000000001';
+  const rootId = '50000000-0000-4000-8000-000000000001';
+  let service: BotGroupChatService;
+  let responseMode: 'all' | 'mentioned';
+  let members: Array<{ id: string; kind: string; state: string }>;
+  beforeEach(() => {
+    vi.useFakeTimers();
+    fixture.packaged = true; responseMode = 'all';
+    fixture.profiles = [{ id: 'local-bot', displayName: 'Bot', status: 'active' }];
+    members = [{ id: selfId, kind: 'human', state: 'joined' },
+      { id: botId, kind: 'bot', state: 'joined' }, { id: humanId, kind: 'human', state: 'joined' }];
+    fixture.handle.mockImplementation((route, method) => {
+      if (route === '/me') return { body: { actor: { id: selfId } } };
+      if (route === '/actors') return { body: [{ id: botId, kind: 'bot', externalId: 'local-bot', name: 'Bot' }] };
+      if (route.endsWith('/members')) return { body: members };
+      if (route.endsWith('/snapshot')) return { body: { room: { id: roomId, response_mode: responseMode }, members, messages: [], cursor: '0' } };
+      if (route.endsWith('/messages') && method === 'POST') return { body: { id: 'posted-message' } };
+      return { body: [] };
+    });
+    service = withChatServer({ listGroups: async () => ({ ok: true, groups: [] }), dispose: vi.fn() } as unknown as BotGroupChatService,
+      { dispatch: vi.fn(), onChanged: vi.fn() } as unknown as BotGroupChatServiceDeps);
+  });
+  afterEach(() => { service.dispose(); vi.useRealTimers(); vi.clearAllMocks(); });
+  const posts = () => fixture.handle.mock.calls.filter(([route, method]) => route.endsWith('/messages') && method === 'POST');
+  const send = (entry: string, mentions = { all: false, botIds: ['local-bot'] }) => {
+    const input = { groupId: roomId, text: '@Bot hello', clientId: 'directed-send-1', mentions };
+    return entry === 'thread' ? service.chatServer!.reply({ ...input, rootId }) : service.sendMessage(input);
+  };
+
+  it.each(['main', 'thread'])('rejects a selected bot that left before the %s send instead of posting empty mentions', async entry => {
+    await service.chatServer!.ownedBots();
+    members[1]!.state = 'left';
+    expect(await send(entry)).toMatchObject({ ok: false, errorCode: 'MENTION_UNAVAILABLE' });
+    expect(posts()).toEqual([]);
+  });
+
+  it.each(['main', 'thread'])('preserves explicit actor/local-bot/human/self targets in %s wire payloads', async entry => {
+    for (const targets of [[botId], ['local-bot'], [humanId], [selfId], [humanId, 'local-bot', botId]]) {
+      expect(await send(entry, { all: false, botIds: targets })).toMatchObject({ ok: true });
+      const ids = [...new Set(targets.map(target => target === 'local-bot' ? botId : target))];
+      expect(posts().at(-1)![2]).toMatchObject({ mentions: ids,
+        ...(entry === 'thread' ? { threadRootId: rootId } : {}) });
+    }
+  });
+
+  it.each(['main', 'thread'])('keeps Everyone and ordinary unaddressed %s messages working', async entry => {
+    for (const mode of ['all', 'mentioned'] as const) {
+      responseMode = mode;
+      for (const mentions of [{ all: true, botIds: [] }, { all: false, botIds: [] }]) {
+        expect(await send(entry, mentions)).toMatchObject({ ok: true });
+        expect(posts().at(-1)![2].mentions).toEqual(mentions.all ? [botId, humanId] : []);
+      }
+    }
+  });
+
+  it.each(['main', 'thread'])('refuses unknown, removed, and mixed stale targets in %s without posting', async entry => {
+    for (const state of ['left', 'removed', 'banned', 'invited', 'missing']) {
+      members = state === 'missing' ? members.filter(m => m.id !== botId) : members.map(m => m.id === botId ? { ...m, state } : m);
+      for (const mentions of [{ all: false, botIds: [botId] }, { all: false, botIds: [humanId, 'local-bot'] },
+        { all: true, botIds: [botId] }, { all: false, botIds: ['unknown-target'] }]) {
+        expect(await send(entry, mentions)).toMatchObject({ ok: false, errorCode: 'MENTION_UNAVAILABLE' });
+      }
+    }
+    expect(posts()).toEqual([]);
+  });
+
+  it.each(['main', 'thread'])('refuses a departed human target in %s', async entry => {
+    members[2]!.state = 'left';
+    expect(await send(entry, { all: false, botIds: [humanId] })).toMatchObject({ ok: false, errorCode: 'MENTION_UNAVAILABLE' });
+    expect(posts()).toEqual([]);
+  });
+
+});

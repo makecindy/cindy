@@ -75,6 +75,7 @@ export function mergeBotGroupMessages(
 export type BotGroupErrorVariant =
   | 'memberLimit'
   | 'memberUnavailable'
+  | 'mentionUnavailable'
   | 'notFound'
   | 'hostNotReady'
   | 'planOpen'
@@ -83,6 +84,7 @@ export type BotGroupErrorVariant =
 const ERROR_VARIANTS: ReadonlyMap<string, BotGroupErrorVariant> = new Map<BotGroupErrorCode, BotGroupErrorVariant>([
   ['MEMBER_LIMIT', 'memberLimit'],
   ['MEMBER_UNAVAILABLE', 'memberUnavailable'],
+  ['MENTION_UNAVAILABLE', 'mentionUnavailable'],
   ['NOT_FOUND', 'notFound'],
   ['HOST_NOT_READY', 'hostNotReady'],
   ['PLAN_OPEN', 'planOpen'],

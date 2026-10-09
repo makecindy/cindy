@@ -2,8 +2,8 @@
  * 群聊输入框里的 @ 点名：纯文本解析，不依赖 React 与 IPC。
  *
  * 输入框是普通 textarea，点名以 `@名字 ` 的形式留在正文里。发送时以正文为准重新解析
- * （手打的 `@小满` 与从候选里选的效果一致），只有「重名」这种正文分辨不了的情况，才用
- * 选择候选时记下的 botId 消歧。宿主按解析结果决定谁回答
+ * （手打的 `@小满` 与从候选里选的效果一致）。选择候选时记下的 botId 用于消歧，
+ * 成员离群后仍保留显式目标，由宿主拒绝失效目标。宿主按解析结果决定谁回答
  * （docs/product-rules/bot-group-chat.md §4.1）。
  */
 import type { BotGroupMention } from './botGroupChat.js';
@@ -66,11 +66,10 @@ function buildLabelEntries(
     const label = raw.trim();
     if (label) byLabel.set(label, { label, all: true, botIds: [] });
   }
-  const memberIds = new Set(members.map((member) => member.botId));
   const trackedByLabel = new Map<string, string[]>();
   for (const mention of tracked) {
     const label = mention.label.trim();
-    if (!label || !memberIds.has(mention.botId)) continue;
+    if (!label) continue;
     const ids = trackedByLabel.get(label) ?? [];
     if (!ids.includes(mention.botId)) ids.push(mention.botId);
     trackedByLabel.set(label, ids);
@@ -84,10 +83,12 @@ function buildLabelEntries(
       byLabel.set(label, entry);
     }
   }
-  // 重名时正文分辨不出是哪一位，才用选择候选时记下的 botId 收窄。
+  // Keep an explicit pick even after it disappears from the live roster. This
+  // records intent, not membership: the host must reject unavailable targets.
   for (const [label, ids] of trackedByLabel) {
     const entry = byLabel.get(label);
-    if (entry && !entry.all) entry.botIds = ids;
+    if (entry?.all) continue;
+    byLabel.set(label, { label, all: false, botIds: ids });
   }
   // 最长优先：`@小满满` 不能先被 `@小满` 截走。
   return [...byLabel.values()].sort((a, b) => b.label.length - a.label.length);
@@ -123,7 +124,7 @@ function scanMentionTokens(text: string, entries: readonly LabelEntry[]): Mentio
 
 /**
  * Resolve who a group message addresses. Mentions are re-derived from the text
- * at send time; a tracked pick only disambiguates members that share a name.
+ * at send time; a tracked pick also preserves a stale target for host validation.
  */
 export function resolveBotGroupMentions(
   text: string,
@@ -134,13 +135,12 @@ export function resolveBotGroupMentions(
   },
 ): BotGroupMention {
   const entries = buildLabelEntries(input.members, input.allLabels, input.tracked ?? []);
-  const memberIds = new Set(input.members.map((member) => member.botId));
   const botIds: string[] = [];
   let all = false;
   for (const token of scanMentionTokens(text, entries)) {
     if (token.entry.all) all = true;
     for (const botId of token.entry.botIds) {
-      if (memberIds.has(botId) && !botIds.includes(botId)) botIds.push(botId);
+      if (!botIds.includes(botId)) botIds.push(botId);
     }
   }
   // 按正文里点名的先后输出：宿主直接按这个顺序轮流发言（bot-group-chat.md §4.1）。

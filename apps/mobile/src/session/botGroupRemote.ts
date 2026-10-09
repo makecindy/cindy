@@ -360,6 +360,7 @@ export function botGroupChatDataFromResource(resource: Pick<RemoteResource, 'blo
 const ERROR_CODES: readonly BotGroupErrorCode[] = [
   'MEMBER_LIMIT',
   'MEMBER_UNAVAILABLE',
+  'MENTION_UNAVAILABLE',
   'PLAN_OPEN',
   'PLAN_CLOSED',
   'HOST_NOT_READY',

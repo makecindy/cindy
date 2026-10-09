@@ -118,6 +118,17 @@ describe('chat interaction controls', () => {
     expect((await screen.findByRole('textbox', { name: k('inviteLink') }) as HTMLInputElement).value).toBe('cindy://chat-invite/test');
   });
 
+  it('keeps a refused directed thread reply and displays the actionable mention error', async () => {
+    mocks.reply.mockResolvedValue({ ok: false, errorCode: 'MENTION_UNAVAILABLE' });
+    render(<ChatThreadPanel group={{ ...group, members: [{ botId: 'bot', name: 'Ann', status: 'active' }] } as BotGroupDetail} rootId="root" onClose={vi.fn()} />);
+    const input = screen.getByRole('textbox', { name: k('replyPlaceholder') }) as HTMLTextAreaElement;
+    fireEvent.change(input, { target: { value: '@Ann hello' } });
+    fireEvent.click(screen.getByRole('button', { name: k('sendReply') }));
+    expect((await screen.findByRole('alert')).textContent).toBe('bots.groupChat.errors.mentionUnavailable');
+    expect(input.value).toBe('@Ann hello');
+    expect(mocks.reply).toHaveBeenCalledWith(expect.objectContaining({ mentions: { all: false, botIds: ['bot'] } }));
+  });
+
   it('keeps a failed reply draft and reuses its operation id; IME confirmation does not send', async () => {
     mocks.reply.mockResolvedValueOnce({ ok: false, errorCode: 'REQUEST_TIMEOUT' }).mockResolvedValueOnce({ ok: true, messageId: 'reply' });
     render(<ChatThreadPanel group={group} rootId="root" onClose={vi.fn()} />);

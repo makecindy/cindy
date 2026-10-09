@@ -249,6 +249,7 @@ export type BotGroupErrorCode =
   | 'NOT_FOUND'
   | 'MEMBER_LIMIT'
   | 'MEMBER_UNAVAILABLE'
+  | 'MENTION_UNAVAILABLE'
   | 'HOST_NOT_READY'
   /** An explicit 安排分工 while a plan is running or waiting. */
   | 'PLAN_OPEN'

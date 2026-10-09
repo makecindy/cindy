@@ -150,7 +150,8 @@ export function BotGroupComposer({
     setForcedSelection({ start: next.caret, end: next.caret });
     if (option.kind === 'member') {
       setTracked((current) => [
-        ...current.filter((mention) => mention.botId !== option.member.botId),
+        ...current.filter((mention) => mention.botId !== option.member.botId &&
+          (mention.label !== option.label || activeMembers.some(member => member.botId === mention.botId))),
         { botId: option.member.botId, label: option.label },
       ]);
     }

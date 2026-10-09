@@ -149,6 +149,7 @@ describe('actions', () => {
     ['[INVALID_PARAMS] MEMBER_LIMIT', 'MEMBER_LIMIT'],
     [new Error('[NOT_FOUND] NOT_FOUND'), 'NOT_FOUND'],
     [new Error('[INVALID_PARAMS] MEMBER_UNAVAILABLE'), 'MEMBER_UNAVAILABLE'],
+    [new Error('[INVALID_PARAMS] MENTION_UNAVAILABLE'), 'MENTION_UNAVAILABLE'],
     [new Error('[NOT_CONNECTED] not online within 1500ms'), null],
     [new Error('XPLAN_OPEN'), null],
   ])('reads the group error code of %s', (error, code) => {

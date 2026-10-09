@@ -76,6 +76,17 @@ describe('resolveBotGroupMentions', () => {
   });
 });
 
+describe('stale explicit picks', () => {
+  it('retains a selected target after roster removal rather than making it unaddressed or retargeting a namesake', () => {
+    const tracked = [{ botId: 'departed', label: 'Ann' }];
+    for (const current of [[], [{ botId: 'namesake', name: 'Ann' }]]) {
+      expect(resolveBotGroupMentions('@Ann hello', { members: current, allLabels: [], tracked })).toEqual({ all: false, botIds: ['departed'] });
+    }
+    expect(resolveBotGroupMentions('hello', { members: [], allLabels: [], tracked })).toEqual({ all: false, botIds: [] });
+    expect(resolveBotGroupMentions('@Anna hello', { members: [], allLabels: [], tracked })).toEqual({ all: false, botIds: [] });
+  });
+});
+
 describe('mention picker helpers', () => {
   it('finds the query typed right before the caret', () => {
     expect(findBotGroupMentionQuery('帮我查一下 @小', 8)).toEqual({ start: 6, query: '小' });

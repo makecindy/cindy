@@ -470,6 +470,28 @@ describe('group composer', () => {
     expect(h.row.value).toBe('');
   });
 
+  it('keeps a stale selected target through a refused send and lets a new pick replace it', async () => {
+    const data = group({ openPlan: null });
+    const namesakes = [{ ...data.members[0]!, name: 'Ann' }, { ...data.members[1]!, name: 'Ann' }];
+    await render(group({ openPlan: null, members: namesakes }));
+    await type('@');
+    await click('botGroup.mention.mimi');
+    await render(group({ openPlan: null, members: namesakes.slice(1) }));
+    h.chat.act.mockRejectedValue(new Error('[INVALID_PARAMS] MENTION_UNAVAILABLE'));
+    for (let retry = 0; retry < 2; retry++) {
+      await click('botGroup.composer.send');
+      expect(h.chat.act).toHaveBeenLastCalledWith('send', expect.objectContaining({ mentions: { all: false, botIds: ['mimi'] } }));
+      expect(h.row.value).toBe('@Ann ');
+    }
+    expect(h.alert).toHaveBeenCalledWith('groupChat.errors.mentionUnavailable');
+    await type('@');
+    await click('botGroup.mention.abu');
+    h.chat.act.mockResolvedValue({ effects: [] });
+    await click('botGroup.composer.send');
+    expect(h.chat.act).toHaveBeenLastCalledWith('send', expect.objectContaining({ mentions: { all: false, botIds: ['abu'] } }));
+    expect(h.row.value).toBe('');
+  });
+
   it('sends a 分工 message and keeps the clientId and tag for a retry', async () => {
     await render(group({ openPlan: null }));
     expect(byId('botGroup.divisionTag')).toBeNull();

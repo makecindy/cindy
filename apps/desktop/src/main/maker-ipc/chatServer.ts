@@ -751,14 +751,22 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     if (['PLAN_OPEN','PLAN_CLOSED'].includes(code)) return { ok: false, errorCode: code as 'PLAN_OPEN' | 'PLAN_CLOSED', message: '分工状态已变化，请刷新后重试。' };
     if (code === 'IMPORT_PENDING') return failure('这个群的历史记录尚未上传完成，稍后会自动重试，其他群可正常使用。');
     if (code === 'CONVERSATION_NOT_FOUND') return { ok: false, errorCode: 'NOT_FOUND', message: '你已退出此群，或没有访问权限。' };
+    if (code === 'MENTION_UNAVAILABLE') return { ok: false, errorCode: 'MENTION_UNAVAILABLE', message: '点名的成员已不可用，请重新选择后发送' };
     if (code === 'CONVERSATION_ARCHIVED') return { ok: false, errorCode: 'INVALID_PARAMS', message: '本群已归档，不能发送新消息。' };
     if (['ROLE_REQUIRED', 'ACTOR_NOT_OWNED', 'OWNER_REQUIRED'].includes(code)) return { ok: false, errorCode: 'INVALID_PARAMS', message: '你没有执行此操作的权限。' };
     return failure('聊天服务暂时无法连接，请稍后重试。');
   });
   async function mentionIds(roomId: string, mentions: { all: boolean; botIds: string[] }) {
     const members = await api<Member[]>(`/conversations/${roomId}/members`);
-    return members.filter(m => m.state === 'joined' && m.id !== selfId && (mentions.all ||
-      mentions.botIds.includes(m.id) || mentions.botIds.includes(localBot(m.id)?.id ?? ''))).map(m => m.id);
+    const joined = members.filter(m => m.state === 'joined');
+    // A stale explicit target must never become an unaddressed message. Check
+    // every pick, including mixed valid/stale picks, before expanding Everyone.
+    const named = mentions.botIds.map(target => {
+      const member = joined.find(m => m.id === target || localBot(m.id)?.id === target);
+      if (!member) throw new Error('MENTION_UNAVAILABLE');
+      return member.id;
+    });
+    return [...new Set(mentions.all ? [...joined.filter(m => m.id !== selfId).map(m => m.id), ...named] : named)];
   }
   const result = async <T>(fn: () => Promise<T>) => {
     try { return { ok: true as const, ...await fn() }; }

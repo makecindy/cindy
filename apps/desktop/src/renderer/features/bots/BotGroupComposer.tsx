@@ -225,7 +225,8 @@ export function BotGroupComposer({
     setHighlight(0);
     if (option.kind === 'member') {
       setTracked((current) => [
-        ...current.filter((mention) => mention.botId !== option.member.botId),
+        ...current.filter((mention) => mention.botId !== option.member.botId &&
+          (mention.label !== option.label || activeMembers.some(member => member.botId === mention.botId))),
         { botId: option.member.botId, label: option.label },
       ]);
     }
@@ -269,7 +270,10 @@ export function BotGroupComposer({
     const owner = getDataOwnerGeneration();
     const restore = () => {
       // The tag comes back only with its own draft, never onto newly typed text.
-      if (attempt.division && !textRef.current) setDivision(true);
+      if (!textRef.current) {
+        if (attempt.division) setDivision(true);
+        setTracked(tracked);
+      }
       setText((current) => (current ? current : draft));
     };
     try {

@@ -558,6 +558,39 @@ describe('BotGroupChatView', () => {
     expect(mocks.sendBotGroupMessage).not.toHaveBeenCalled();
   });
 
+  it('keeps a selected target and its draft across roster removal and a rejected retry', async () => {
+    const namesakes = [
+      { ...detail().members[0]!, botId: 'picked', name: 'Ann' },
+      { ...detail().members[1]!, botId: 'other', name: 'Ann' },
+    ];
+    mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ members: namesakes }) });
+    mocks.sendBotGroupMessage.mockResolvedValue({ ok: false, errorCode: 'MENTION_UNAVAILABLE', message: '' });
+    renderView();
+    const input = (await screen.findByRole('textbox')) as HTMLTextAreaElement;
+    act(() => input.focus());
+    fireEvent.change(input, { target: { value: '@', selectionStart: 1 } });
+    const options = await screen.findAllByRole('option');
+    fireEvent.click(options[1]!);
+    expect(input.value).toBe('@Ann ');
+    mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ members: namesakes.slice(1) }) });
+    act(() => mocks.pushes.forEach(push => push({ groupId: 'g1', change: 'messages' })));
+    await waitFor(() => expect(mocks.getBotGroup).toHaveBeenCalledTimes(2));
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      fireEvent.keyDown(input, { key: 'Enter' });
+      await waitFor(() => expect(mocks.sendBotGroupMessage).toHaveBeenCalledTimes(attempt));
+      await waitFor(() => expect(input.value).toBe('@Ann '));
+      expect(mocks.sendBotGroupMessage.mock.calls.at(-1)![0].mentions).toEqual({ all: false, botIds: ['picked'] });
+    }
+    expect(mocks.toastError).toHaveBeenCalledWith('bots.groupChat.errors.mentionUnavailable');
+    fireEvent.change(input, { target: { value: '@', selectionStart: 1 } });
+    const remaining = await screen.findAllByRole('option');
+    fireEvent.click(remaining[1]!);
+    mocks.sendBotGroupMessage.mockResolvedValue({ ok: true, messageId: 'accepted' });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await waitFor(() => expect(mocks.sendBotGroupMessage).toHaveBeenCalledTimes(3));
+    expect(mocks.sendBotGroupMessage.mock.calls.at(-1)![0].mentions).toEqual({ all: false, botIds: ['other'] });
+  });
+
   it('refreshes on a push for this group and shows the unavailable state after delete', async () => {
     renderView();
     await screen.findByText('周六 8:10 有票');

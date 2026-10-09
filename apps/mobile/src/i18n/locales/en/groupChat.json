@@ -166,6 +166,7 @@
   "errors": {
     "memberLimit": "A group chat needs 2–6 teammates",
     "memberUnavailable": "One of these teammates is unavailable. Choose another and try again.",
+    "mentionUnavailable": "A mentioned member is no longer available. Choose who to mention before sending again.",
     "notFound": "This group chat no longer exists",
     "hostNotReady": "Cindy is still getting ready. Try again in a moment.",
     "planOpen": "A work split is underway. Finish or stop it before starting another.",
