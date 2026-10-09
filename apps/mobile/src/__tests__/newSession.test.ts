@@ -453,6 +453,30 @@ describe('stored agent restore gating', () => {
   });
 });
 
+describe('pickAgentDefaultRuntime on hosts without provider:list', () => {
+  const flat = (id: string, marked: boolean): MobileModelOption => ({
+    id, label: id, efforts: ['low', 'high'], effortDisplayNames: {}, defaultEffort: 'high', supportsFastMode: false,
+    ...(marked ? { newSessionDefault: ['claude-code'] } : {}),
+  } as MobileModelOption);
+
+  it('uses the advertised capabilities model instead of settling an empty one', () => {
+    const base = { agentKind: 'claude-code' as const, sessions: [], modelRows: [], currentEffort: 'medium', catalogReady: false };
+    expect(pickAgentDefaultRuntime({ ...base, flatModels: [flat('a', false), flat('b', true)] }))
+      .toMatchObject({ model: 'b', providerId: null, effort: 'high' });
+    expect(pickAgentDefaultRuntime({ ...base, flatModels: [flat('a', false)] })).toMatchObject({ model: 'a', providerId: null });
+    // 能力表也没有时才留空。
+    expect(pickAgentDefaultRuntime({ ...base, flatModels: [] })).toMatchObject({ model: '' });
+    expect(pickAgentDefaultRuntime(base)).toMatchObject({ model: '' });
+  });
+
+  it('passes capabilities models only for unsupported hosts, on both stored-agent restore and agent switch', () => {
+    const source = readTextLf(resolve(process.cwd(), 'app/sessions/new.tsx'), 'utf8');
+    expect(source).toContain('flatModels: flatModelsForUnsupportedHost(selectedDeviceId, storedAgentKind, deviceProvidersRef.current.unsupported),');
+    expect(source).toContain('flatModels: flatModelsForUnsupportedHost(selectedDeviceId, nextKind, deviceProvidersRef.current.unsupported),');
+    expect(source).toContain('if (!providersUnsupported || !deviceId) return undefined;');
+  });
+});
+
 describe('isNewSessionRuntimePending', () => {
   const base = {
     settled: false,

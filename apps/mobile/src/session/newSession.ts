@@ -752,12 +752,13 @@ export function pickMostRecentSessionRuntime(
  *   1) 该 agent 的最近一次会话模型(pickMostRecentSessionRuntime,按 deviceId scope);
  *   2) 否则取区域门控后的新任务默认；无标记再取该 agent 的模型列表最上面那个
  *      (modelRows[0] —— providers 已加载时同步可得,与下拉渲染的第一项一致);
- *   3) 否则留空(不写死模型),由用户自己选。
+ *   3) 被控端明确不支持目录(旧电脑)时取它能力表里的模型:区域默认标记优先,否则首个;
+ *   4) 否则留空(不写死模型),由用户自己选。
  * providerId 跟随 model 同源:
  *   1) 跟随最近会话 → 继承该会话的来源(validateModelProviderId 校验:目录已就绪且来源
  *      已删/不再提供该模型时清空回默认路由;同设备+同 agent 范围,供应商集天然兼容);
  *   2) 取列表首项 → 该行的 provider(modelRows[0].provider.id);
- *   3) 都没有 → 模型留空、null(默认路由)。
+ *   3) 能力表模型 / 都没有 → null(默认路由)。
  * effort:reconcile 到目标 model 的合法档(reconcileEffortForModel,base = 最近会话 effort ?? 当前 effort,
  *   SectionModel 按 (providerId, modelId) 精确匹配行——同模型多来源时不串档);
  *   拿不到目标 model 对应的 SectionModel(model 不在 modelRows 里,如模型留空或历史模型已下架)
@@ -772,8 +773,11 @@ export function pickAgentDefaultRuntime(args: {
   /** 供应商目录是否已就绪(加载完成);未就绪时来源校验信任最近会话(见 validateModelProviderId)。 */
   catalogReady: boolean;
   visibilityOverrides?: Record<string, boolean> | null;
+  /** 仅当被控端明确不支持 provider:list 时传入该 agent 的能力表模型(与 resolveNewSessionAutoDefault 同口径)。 */
+  flatModels?: readonly MobileModelOption[];
 }): NewSessionRuntime {
   const { agentKind, sessions, modelRows, currentEffort, deviceId, catalogReady } = args;
+  let flatModel: MobileModelOption | undefined;
   const recent = pickMostRecentSessionRuntime(sessions, { deviceId, agentKind });
   const baseEffort = recent?.effort ?? currentEffort;
   let model: string;
@@ -799,6 +803,10 @@ export function pickAgentDefaultRuntime(args: {
       ?? modelRows[0];
     model = chosenRow.model.id;
     providerId = chosenRow.provider.id;
+  } else if (args.flatModels?.length) {
+    flatModel = pickRegionalNewSessionDefault(args.flatModels, agentKind) ?? args.flatModels[0];
+    model = flatModel.id;
+    providerId = null;
   } else {
     model = '';
     providerId = null;
@@ -813,7 +821,9 @@ export function pickAgentDefaultRuntime(args: {
   const sectionModel = catalogReady ? findSectionModelRow(modelRows, model, providerId)?.model : undefined;
   const effort = sectionModel
     ? reconcileEffortForModel(sectionModel, baseEffort)
-    : catalogReady && !modelNeedsReselection(args.visibilityOverrides, agentKind, model, providerId) ? '' : baseEffort;
+    : flatModel
+      ? reconcileEffortForModel(flatModel, baseEffort)
+      : catalogReady && !modelNeedsReselection(args.visibilityOverrides, agentKind, model, providerId) ? '' : baseEffort;
   return { agentKind, model, effort, providerId };
 }
 

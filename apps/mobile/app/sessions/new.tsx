@@ -409,6 +409,16 @@ function targetAgentHasFast(deviceId: string, agentKind: NewSessionAgentKind): b
   return getCachedAgentCapabilities(buildAgentCapabilitiesCacheKey(deviceId, agentKind))?.hasFastMode === true;
 }
 
+/** 旧被控端(明确不支持 provider:list)才用能力表模型兜底选默认;支持目录的电脑一律走目录。 */
+function flatModelsForUnsupportedHost(
+  deviceId: string,
+  agentKind: NewSessionAgentKind,
+  providersUnsupported: boolean,
+): readonly MobileModelOption[] | undefined {
+  if (!providersUnsupported || !deviceId) return undefined;
+  return getCachedAgentCapabilities(buildAgentCapabilitiesCacheKey(deviceId, agentKind))?.availableModels;
+}
+
 interface WorktreeBranchListSnapshot {
   target: { deviceId: string; workingDir: string };
   branches: string[];
@@ -1280,6 +1290,7 @@ export default function NewRemoteSessionScreen() {
         currentEffort,
         catalogReady: catalogReadyRef.current,
         visibilityOverrides: deviceProvidersRef.current.modelVisibilityOverrides,
+        flatModels: flatModelsForUnsupportedHost(selectedDeviceId, storedAgentKind, deviceProvidersRef.current.unsupported),
       });
       return {
         model: next.model,
@@ -4179,6 +4190,7 @@ export default function NewRemoteSessionScreen() {
           currentEffort: current.effort,
           catalogReady: catalogReadyRef.current,
           visibilityOverrides: deviceProvidersRef.current.modelVisibilityOverrides,
+          flatModels: flatModelsForUnsupportedHost(selectedDeviceId, nextKind, deviceProvidersRef.current.unsupported),
         });
         return {
           ...current,
