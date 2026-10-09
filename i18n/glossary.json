@@ -2371,6 +2371,8 @@
         "ko": "작업대"
       },
       "note": "伙伴主任务右侧栏里的标签：主人交给伙伴的项目，以及项目里的任务、自动化与产出（docs/product-rules/cindy-bots-runtime.md「工作台」一节）。只指这个伙伴视图，不泛指任务列表或其它面板。先登记为 proposed，待 Chris 实机试用后再定。"
-    }
+    },
+    {"id": "desktop-presence", "status": "proposed", "en": "Desktop presence", "translations": {"zh-CN": "桌面互动", "zh-TW": "桌面互動", "ja": "デスクトップ連動", "ko": "데스크톱 연동"}, "note": "旧版桌面互动名称；当前统一入口为外观设置中的记忆壁纸，保留旧术语供历史记录使用。"},
+    {"id": "memory-wallpaper", "status": "proposed", "en": "Memory wallpaper", "translations": {"zh-CN": "记忆壁纸", "zh-TW": "記憶桌布", "ja": "記憶の壁紙", "ko": "기억 배경화면"}, "checkCase": false, "note": "外观壁纸里的记忆生成模式，同一画面可用于 Cindy 应用和 macOS 系统桌面。只使用当前账号记忆标题，图片不进入跨账号共享壁纸。"}
   ]
 }

@@ -123,6 +123,7 @@ describe('AppearanceSection accessibility', () => {
       'settings.appearance.wallpaper.options.cindy-window',
       'settings.appearance.wallpaper.options.cindy-studio',
       'settings.appearance.wallpaper.options.cindy-dream',
+      'settings.appearance.wallpaper.options.memory',
       'settings.appearance.wallpaper.options.custom',
     ]);
     expect(

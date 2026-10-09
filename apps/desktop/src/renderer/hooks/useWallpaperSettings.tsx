@@ -24,6 +24,7 @@ import {
 } from '@/../shared/appearanceSettings';
 
 import { getBuiltinWallpaperBackground } from '@/lib/wallpaper';
+import { useDesktopCompanionSettings } from './useDesktopCompanionSettings';
 import { useIsDarkMode } from '@/components/markdown/useIsDarkMode';
 import { WallpaperVideo } from '@/components/layout/WallpaperVideo';
 
@@ -83,6 +84,7 @@ export function WallpaperSettingsProvider({ children }: { children: ReactNode })
   );
   const onPlaybackReady = useCallback(() => setFailedUrl(''), []);
   const isDark = useIsDarkMode();
+  const { previewDataUrl } = useDesktopCompanionSettings();
   const visibility = getWallpaperVisibility(settings, isDark);
   // Document-level surface also covers settings, split panes, portals and detached
   // app windows, without changing the layout tree or stacking order of its panes.
@@ -90,7 +92,9 @@ export function WallpaperSettingsProvider({ children }: { children: ReactNode })
     const root = document.documentElement;
     const customUrl = normalizeCustomWallpaperUrl(settings.customWallpaperUrl);
     const background =
-      settings.wallpaperId === 'custom'
+      settings.wallpaperId === 'memory'
+        ? previewDataUrl ? `url("${previewDataUrl}")` : undefined
+        : settings.wallpaperId === 'custom'
         ? customUrl
           ? isCustomWallpaperVideo(customUrl)
             ? 'none'
@@ -116,7 +120,7 @@ export function WallpaperSettingsProvider({ children }: { children: ReactNode })
       for (const name of ['--app-wallpaper-image', '--app-wallpaper-veil', '--app-wallpaper-blur'])
         root.style.removeProperty(name);
     };
-  }, [settings, visibility, blurPreview]);
+  }, [settings, visibility, blurPreview, previewDataUrl]);
   const settingsRef = useRef(settings);
   const confirmedRef = useRef(settings);
   const pendingRef = useRef<Array<{ id: number; patch: Partial<WallpaperSettings> }>>([]);
@@ -280,3 +284,4 @@ export function useWallpaperSettings(): WallpaperSettingsContextValue {
     throw new Error('useWallpaperSettings must be used within WallpaperSettingsProvider');
   return context;
 }
+

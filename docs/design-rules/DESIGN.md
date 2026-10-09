@@ -78,6 +78,15 @@ Verify actual Light/Dark screenshots across host pages and the expanded tool pan
 
 The built-in wallpaper catalog contains only Window Companion, Future Atelier and Dream
 Wander, plus None to restore the theme canvas (user decision, 2026-10-01).
+Memory wallpaper (user decision, 2026-10-05) joins the existing wallpaper section.
+It generates an account-private still from recent task and memory titles and the
+time of day. Selecting it uses the same continuous application canvas and
+Light/Dark readability veil. Only the current account's managed media URL is
+exposed; signing out or changing accounts clears the previous image immediately.
+Generation and optional location are explicit opt-ins. An independent macOS
+desktop switch can apply the same generated image outside the app; it is off
+for new users and preserves the system-desktop behavior of existing enabled users.
+Generation failures are reported and do not invoke a different image operation.
 Custom wallpaper is available through Choose Wallpaper, Replace Wallpaper and Remove Wallpaper
 in the same section (user addition, 2026-10-01; video support, 2026-10-05). Accept local PNG/JPEG/WebP up to
 20 MB and 40 megapixels, store a metadata-free static image up to 3840 pixels
@@ -1552,6 +1561,12 @@ The splash wordmark is a separate asset pair (`assets/splash/wordmark.png`, whit
 - **Constraints**: no animation, shadow, decorative background, additional brand color, enlarged hero treatment, or alternate character composition. This approval identifies the source of an exported Cindy conversation; it is not precedent for adding mascots to cards, dialogs, tool output, or other share-adjacent UI.
 - **Theme boundary**: Light and Dark use their matching wordmark assets. The same static character crop may be used in both modes because it is an exported brand asset, not a UI color surface.
 
+**Sanctioned brand surface — macOS desktop presence (Desktop approved 2026-09-18).**
+
+- **Where**: Settings → Appearance → Wallpaper groups memory generation and the optional macOS system-desktop destination (user decision, 2026-10-05). The same generated still can be explicitly selected as the application wallpaper under the canvas rule in §2. Generated stills and looping videos use the product-approved Cindy portrait as identity. She occupies about 15% of the frame in a corner; the rest stays empty for Finder icons.
+- **Constraints**: no desktop pet overlay, no click-to-talk character, no mascot in the Cindy app chrome. Reduced Motion keeps the still wallpaper and does not play video.
+- **Scope boundary**: the explicitly selected application canvas and macOS system desktop only. It is not precedent for artwork inside message content, settings cards, or other product surfaces.
+
 **Sanctioned brand surface — mobile download dialog (approved 2026-07-25).**
 
 - **Where**: `components/sidebar/MobileDownloadDialog.tsx` only, and only the dialog header icon (64px `resources/icon.png`). This is a promotion surface for the mobile app, so showing the app's own icon is identification, not decoration.
@@ -2018,3 +2033,4 @@ and media position (`ui/media-scrubber`, seconds in/out). Native media controls 
 > **(6) 需拆开读**〔2026-07-29 二次修正〕：手机短屏 / 长屏的**品牌簇**（立绘 / SLOGAN / 字标）新稿基准与避脸落值**保留生效**；同条的**功能区落位**（`loginY` **622 / 827**）在 2026-07-28 曾随跳过登录剥离一并退回 main 原值（694 / 933），但那会与已换新稿的品牌簇拼出稿内不存在的 92 / 131.65 间距（实机可见空白），**2026-07-29 审图后恢复为新稿标注值**（方案 B，60 落到底部留白；详见上方 §16.2「面板 500→440 少掉的 60 去向」）。dh<1334 段**不采用**该条曾写过的 `dh-712`，而是「紧凑底距 18 + 钳到 622」（`dh-712` 会压盖窄屏字标，见 §16.2 对应条目）。**pad 竖屏推导值**（`loginY` 573.353 / `splashOffset` 206）仍然**作废**、保持 main 原值 621 / 158——pad 无 figma 新稿帧，其品牌簇也未换新稿基准，内部自洽，不受本次修正影响。
 > 手机端保持无游客 / 无账号行为不变。详见
 > [`design-decision-log.md`](./design-decision-log.md)「2026-07-28」条。
+

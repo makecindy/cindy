@@ -6,8 +6,10 @@ import { extractIpcError } from '@/utils/ipcError';
 import { Button } from '@/components/ui/button';
 import { SegmentedControl } from '@/components/ui/segmented-control';
 import { Slider } from '@/components/ui/slider';
+import { DesktopCompanionSection } from './DesktopCompanionSection';
 import { cn } from '@/lib/utils';
 import { useWallpaperSettings } from '@/hooks/useWallpaperSettings';
+import { useDesktopCompanionSettings } from '@/hooks/useDesktopCompanionSettings';
 import { getBuiltinWallpaperBackground, isSceneWallpaper } from '@/lib/wallpaper';
 import {
   APPEARANCE_LIMITS,
@@ -21,12 +23,14 @@ const WALLPAPER_OPTIONS: Array<{ id: WallpaperId }> = [
   { id: 'cindy-window' },
   { id: 'cindy-studio' },
   { id: 'cindy-dream' },
+  { id: 'memory' },
 ];
 
 export function WallpaperSection() {
   const { t } = useTranslation();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const { previewDataUrl, setEnabled } = useDesktopCompanionSettings();
   const {
     wallpaperId,
     wallpaperOverlay,
@@ -132,7 +136,9 @@ export function WallpaperSection() {
         {[...WALLPAPER_OPTIONS, { id: 'custom' as const }].map((option) => {
           const selected = wallpaperId === option.id;
           const background =
-            option.id === 'custom' && customWallpaperUrl && !customVideo
+            option.id === 'memory' && previewDataUrl
+              ? `url("${previewDataUrl}")`
+              : option.id === 'custom' && customWallpaperUrl && !customVideo
               ? `url("${customWallpaperUrl}")`
               : getBuiltinWallpaperBackground(option.id);
           return (
@@ -144,7 +150,9 @@ export function WallpaperSection() {
               aria-label={t('settings.appearance.wallpaper.options.' + option.id)}
               disabled={busy}
               onClick={() =>
-                option.id === 'custom' && !customWallpaperUrl
+                option.id === 'memory'
+                  ? (void setEnabled(true), setWallpaper('memory'))
+                  : option.id === 'custom' && !customWallpaperUrl
                   ? void chooseWallpaper()
                   : setWallpaper(option.id)
               }
@@ -308,6 +316,7 @@ export function WallpaperSection() {
           {t('settings.appearance.wallpaper.blurHint')}
         </p>
       </div>
+      <DesktopCompanionSection />
     </div>
   );
 }

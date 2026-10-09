@@ -4,6 +4,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { WallpaperSettingsProvider, useWallpaperSettings } from '../useWallpaperSettings';
 import { DEFAULT_APPEARANCE_SETTINGS } from '@/../shared/appearanceSettings';
+import type { DesktopCompanionSnapshot } from '@/../shared/desktopCompanion';
 
 function Controls() {
   const settings = useWallpaperSettings();
@@ -36,6 +37,34 @@ afterEach(() => {
 });
 
 describe('application wallpaper lifecycle', () => {
+  it.each([false, true])('clears memory artwork across account generations with dark=%s', async (dark) => {
+    if (dark) document.documentElement.classList.add('dark');
+    const url = 'cindy-media://blobs/' + 'c'.repeat(64) + '.webp';
+    const snapshot: DesktopCompanionSnapshot = {
+      supported: true, systemSupported: true, generation: 1,
+      enabled: true, locationEnabled: false, systemEnabled: false,
+      status: 'ready', lastTopic: null, lastUpdatedAt: 1, lastError: null,
+      previewSrc: url, imageReady: true, videoReady: false,
+    };
+    let publish = (_value: DesktopCompanionSnapshot) => {};
+    vi.stubGlobal('electronAPI', {
+      appearanceSettings: {
+        getSync: () => ({ ...DEFAULT_APPEARANCE_SETTINGS, wallpaperId: 'memory' }),
+        onChanged: () => () => {},
+      },
+      desktopCompanion: {
+        getState: async () => snapshot,
+        onState: (listener: typeof publish) => { publish = listener; return () => {}; },
+      },
+    });
+    render(<WallpaperSettingsProvider><Controls /></WallpaperSettingsProvider>);
+    await waitFor(() => expect(document.documentElement.style.getPropertyValue('--app-wallpaper-image')).toContain(url));
+    act(() => publish({ ...snapshot, generation: 2, enabled: false, previewSrc: null }));
+    expect(document.documentElement.dataset.wallpaperActive).toBeUndefined();
+    act(() => publish(snapshot));
+    expect(document.documentElement.dataset.wallpaperActive).toBeUndefined();
+  });
+
   it.each(['webp', 'mp4'])(
     'applies blur to %s, follows window updates and clears on hide/reset',
     async (ext) => {
@@ -359,3 +388,4 @@ describe('application wallpaper lifecycle', () => {
     );
   });
 });
+

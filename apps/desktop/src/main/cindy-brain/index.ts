@@ -123,6 +123,8 @@ import {
   isValidGhostId,
   layoutWithGhostPanel,
   type GhostHostNoticeKey,
+  type GhostImageAspectRatio,
+  type GhostVideoRatio,
   type GhostManifest,
   type GhostCindyPreferenceResult,
   type GhostMediaCapability,
@@ -4153,6 +4155,62 @@ function getGhostImageCapabilities(
   } catch {
     return null;
   }
+}
+
+export type HostMediaCapability = 'image.edit' | 'video.edit';
+
+export function peekHostMediaModel(
+  capability: HostMediaCapability,
+): { providerId: string; modelId: string; label: string } | null {
+  const config = getMediaPreferenceConfig(capability);
+  const selected = resolveMediaPreferenceOrDefault(config, config.defaults?.standard);
+  if (!selected) return null;
+  return { providerId: selected.providerId, modelId: selected.modelId, label: selected.label };
+}
+
+export async function runHostImageEdit(params: {
+  prompt: string;
+  imagePaths: string[];
+  aspectRatio?: GhostImageAspectRatio;
+}): Promise<{ buffer: Buffer; mimeType: string }> {
+  const selected = peekHostMediaModel('image.edit');
+  if (!selected) throw new Error('NO_IMAGE_MODEL');
+  assertMediaModelStillEnabled('image', selected.modelId, selected.providerId, 'edit');
+  const channel = resolveImageChannelForModel(selected.modelId, 'edit', selected.providerId);
+  return decodeImageResponse(
+    await channel.editImage({
+      model: selected.modelId,
+      prompt: params.prompt,
+      imagePaths: params.imagePaths,
+      ...(params.aspectRatio ? { aspectRatio: params.aspectRatio } : {}),
+    }),
+  );
+}
+
+export async function runHostImageToVideo(params: {
+  prompt: string;
+  imagePaths: string[];
+  assertStillValid: () => void;
+  ratio?: GhostVideoRatio;
+  duration?: number;
+  audio?: boolean;
+}): Promise<{ buffer: Buffer; mimeType: string }> {
+  params.assertStillValid();
+  const selected = peekHostMediaModel('video.edit');
+  if (!selected) throw new Error('NO_VIDEO_MODEL');
+  const imageDataUris = await Promise.all(params.imagePaths.map((imagePath) => readImageFileAsDataUri(imagePath)));
+  params.assertStillValid();
+  const generated = await runGhostVideo({
+    alias: selected.modelId,
+    providerId: selected.providerId,
+    prompt: params.prompt,
+    imageDataUris,
+    refMode: 'first_and_last_frame',
+    ...(params.ratio ? { ratio: params.ratio } : {}),
+    ...(params.duration ? { duration: params.duration } : {}),
+    ...(params.audio === undefined ? {} : { audio: params.audio }),
+  });
+  return { buffer: generated.buffer, mimeType: generated.mimeType };
 }
 
 /**

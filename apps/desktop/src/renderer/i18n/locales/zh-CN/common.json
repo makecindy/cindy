@@ -1147,7 +1147,8 @@
           "cindy-window": "Cindy · 窗边陪伴",
           "cindy-studio": "Cindy · 未来工作室",
           "cindy-dream": "Cindy · 梦境漫游",
-          "custom": "自定义壁纸"
+          "custom": "自定义壁纸",
+          "memory": "记忆壁纸"
         },
         "visibilityLabel": "壁纸可见度",
         "visibilityHint": "0% 隐藏壁纸，100% 完全显示壁纸。",
@@ -1174,6 +1175,25 @@
         "resetFailed": "无法恢复默认面板布局",
         "saved": "面板位置已保存；可在“设置 → 通用”的“外观”区域恢复默认布局",
         "saveFailed": "无法保存面板位置"
+      },
+      "desktopCompanion": {
+        "title": "记忆壁纸",
+        "enableLabel": "根据记忆生成",
+        "enableHint": "把最近任务、记忆标题和时段变成画面里的小彩蛋，每小时检查更新。生成会使用你配置的图片模型。",
+        "enableAria": "开启记忆壁纸生成",
+        "locationLabel": "使用当前位置",
+        "locationHint": "向系统申请定位，用大致城市画窗外景。关闭或拒绝后只表现时段。",
+        "locationAria": "打开或关闭桌面位置",
+        "previewAlt": "当前桌面",
+        "lastTopic": "当前：{{topic}}",
+        "empty": "打开后会生成第一张桌面",
+        "updateNow": "立即更新",
+        "updating": "正在生成…",
+        "needImageModel": "先在设置里配置支持参考图的图片模型",
+        "needVideoModel": "先在设置里配置视频模型",
+        "failed": "这次更新未完成，请检查模型配置或系统权限后重试。",
+        "systemLabel": "同时设为 macOS 系统桌面",
+        "useInApp": "用作 Cindy 壁纸"
       }
     },
     "notifications": {
@@ -1339,6 +1359,25 @@
         "secret-chime": "秘密音",
         "custom": "本地文件…",
         "customSelected": "本地文件：{{name}}"
+      },
+      "desktopCompanion": {
+        "title": "记忆壁纸",
+        "enableLabel": "根据记忆生成",
+        "enableHint": "把最近任务、记忆标题和时段变成画面里的小彩蛋，每小时检查更新。生成会使用你配置的图片模型。",
+        "enableAria": "开启记忆壁纸生成",
+        "locationLabel": "使用当前位置",
+        "locationHint": "向系统申请定位，用大致城市画窗外景。关闭或拒绝后只表现时段。",
+        "locationAria": "打开或关闭桌面位置",
+        "previewAlt": "当前桌面",
+        "lastTopic": "当前：{{topic}}",
+        "empty": "打开后会生成第一张桌面",
+        "updateNow": "立即更新",
+        "updating": "正在生成…",
+        "needImageModel": "先在设置里配置支持参考图的图片模型",
+        "needVideoModel": "先在设置里配置视频模型",
+        "failed": "这次更新未完成，请检查模型配置或系统权限后重试。",
+        "systemLabel": "同时设为 macOS 系统桌面",
+        "useInApp": "用作 Cindy 壁纸"
       }
     },
     "language": {

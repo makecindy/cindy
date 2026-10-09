@@ -1147,7 +1147,8 @@
           "cindy-window": "Cindy · 창가의 휴식",
           "cindy-studio": "Cindy · 미래의 아틀리에",
           "cindy-dream": "Cindy · 꿈속 여행",
-          "custom": "사용자 지정 배경화면"
+          "custom": "사용자 지정 배경화면",
+          "memory": "메모리 배경화면"
         },
         "visibilityLabel": "배경화면 표시 강도",
         "visibilityHint": "0%에서는 배경화면을 숨기고, 100%에서는 원본 그대로 표시합니다.",
@@ -1174,6 +1175,25 @@
         "resetFailed": "기본 패널 레이아웃을 복원하지 못했습니다",
         "saved": "패널 위치를 저장했습니다. 설정 → 일반의 모양 섹션에서 기본 레이아웃으로 복원할 수 있습니다.",
         "saveFailed": "패널 위치를 저장하지 못했습니다"
+      },
+      "desktopCompanion": {
+        "title": "메모리 배경화면",
+        "enableLabel": "메모리에서 생성",
+        "enableHint": "최근 작업, 메모리 제목, 시간대를 화면 속 작은 디테일로 담아 매시간 변경을 확인합니다. 생성에는 구성된 이미지 모델을 사용합니다.",
+        "enableAria": "메모리 배경화면 생성 사용",
+        "locationLabel": "현재 위치 사용",
+        "locationHint": "시스템에 위치를 요청해 대략적인 도시의 창문 풍경을 그립니다. 끄면 시간대만 표현합니다.",
+        "locationAria": "데스크톱 위치 전환",
+        "previewAlt": "현재 데스크톱",
+        "lastTopic": "현재: {{topic}}",
+        "empty": "켜면 첫 배경화면을 생성합니다",
+        "updateNow": "지금 업데이트",
+        "updating": "생성 중…",
+        "needImageModel": "먼저 설정에서 참조 이미지를 지원하는 이미지 모델을 구성하세요",
+        "needVideoModel": "먼저 설정에서 동영상 모델을 구성하세요",
+        "failed": "이번 업데이트를 완료하지 못했습니다. 모델 구성 또는 시스템 권한을 확인한 뒤 다시 시도하세요.",
+        "systemLabel": "macOS 시스템 배경화면으로도 설정",
+        "useInApp": "Cindy 배경화면으로 사용"
       }
     },
     "notifications": {
@@ -1339,6 +1359,25 @@
         "secret-chime": "시크릿 차임",
         "custom": "로컬 파일…",
         "customSelected": "로컬 파일: {{name}}"
+      },
+      "desktopCompanion": {
+        "title": "메모리 배경화면",
+        "enableLabel": "메모리에서 생성",
+        "enableHint": "최근 작업, 메모리 제목, 시간대를 화면 속 작은 디테일로 담아 매시간 변경을 확인합니다. 생성에는 구성된 이미지 모델을 사용합니다.",
+        "enableAria": "메모리 배경화면 생성 사용",
+        "locationLabel": "현재 위치 사용",
+        "locationHint": "시스템에 위치를 요청해 대략적인 도시의 창문 풍경을 그립니다. 끄면 시간대만 표현합니다.",
+        "locationAria": "데스크톱 위치 전환",
+        "previewAlt": "현재 데스크톱",
+        "lastTopic": "현재: {{topic}}",
+        "empty": "켜면 첫 배경화면을 생성합니다",
+        "updateNow": "지금 업데이트",
+        "updating": "생성 중…",
+        "needImageModel": "먼저 설정에서 참조 이미지를 지원하는 이미지 모델을 구성하세요",
+        "needVideoModel": "먼저 설정에서 동영상 모델을 구성하세요",
+        "failed": "이번 업데이트를 완료하지 못했습니다. 모델 구성 또는 시스템 권한을 확인한 뒤 다시 시도하세요.",
+        "systemLabel": "macOS 시스템 배경화면으로도 설정",
+        "useInApp": "Cindy 배경화면으로 사용"
       }
     },
     "language": {

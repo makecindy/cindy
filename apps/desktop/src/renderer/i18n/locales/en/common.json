@@ -1149,7 +1149,8 @@
           "cindy-window": "Cindy · Window Companion",
           "cindy-studio": "Cindy · Future Atelier",
           "cindy-dream": "Cindy · Dream Voyage",
-          "custom": "Custom wallpaper"
+          "custom": "Custom wallpaper",
+          "memory": "Memory wallpaper"
         },
         "visibilityLabel": "Wallpaper Visibility",
         "visibilityHint": "0% hides the wallpaper; 100% shows it without an overlay.",
@@ -1176,6 +1177,25 @@
         "resetFailed": "Could not restore the default panel layout",
         "saved": "Panel position saved. Restore the default layout in the Appearance section under Settings → General.",
         "saveFailed": "Could not save the panel position"
+      },
+      "desktopCompanion": {
+        "title": "Memory wallpaper",
+        "enableLabel": "Generate from memory",
+        "enableHint": "Weave recent tasks, memory titles and time of day into small visual details, checking hourly for changes. Generation uses your configured image model.",
+        "enableAria": "Enable memory wallpaper generation",
+        "locationLabel": "Use current location",
+        "locationHint": "Ask the system for location to sketch a rough-city window view. Disable or deny to express time of day only.",
+        "locationAria": "Toggle desktop location",
+        "previewAlt": "Current desktop",
+        "lastTopic": "Current: {{topic}}",
+        "empty": "Enable to generate the first desktop",
+        "updateNow": "Update now",
+        "updating": "Generating…",
+        "needImageModel": "Configure an image model that supports references in Settings first",
+        "needVideoModel": "Configure a video model in Settings first",
+        "failed": "This update did not finish. Check model configuration or system permissions and retry.",
+        "systemLabel": "Also set as macOS system desktop",
+        "useInApp": "Use as Cindy wallpaper"
       }
     },
     "notifications": {
@@ -1341,6 +1361,25 @@
         "secret-chime": "Secret chime",
         "custom": "Local file…",
         "customSelected": "Local file: {{name}}"
+      },
+      "desktopCompanion": {
+        "title": "Memory wallpaper",
+        "enableLabel": "Generate from memory",
+        "enableHint": "Weave recent tasks, memory titles and time of day into small visual details, checking hourly for changes. Generation uses your configured image model.",
+        "enableAria": "Enable memory wallpaper generation",
+        "locationLabel": "Use current location",
+        "locationHint": "Ask the system for location to sketch a rough-city window view. Disable or deny to express time of day only.",
+        "locationAria": "Toggle desktop location",
+        "previewAlt": "Current desktop",
+        "lastTopic": "Current: {{topic}}",
+        "empty": "Enable to generate the first desktop",
+        "updateNow": "Update now",
+        "updating": "Generating…",
+        "needImageModel": "Configure an image model that supports references in Settings first",
+        "needVideoModel": "Configure a video model in Settings first",
+        "failed": "This update did not finish. Check model configuration or system permissions and retry.",
+        "systemLabel": "Also set as macOS system desktop",
+        "useInApp": "Use as Cindy wallpaper"
       }
     },
     "language": {

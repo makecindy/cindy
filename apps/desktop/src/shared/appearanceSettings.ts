@@ -67,6 +67,7 @@ export const WALLPAPER_IDS = [
   'cindy-studio',
   'cindy-dream',
   'custom',
+  'memory',
 ] as const;
 export type WallpaperId = (typeof WALLPAPER_IDS)[number];
 
