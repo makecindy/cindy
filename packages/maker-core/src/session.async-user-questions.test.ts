@@ -89,7 +89,7 @@ describe.each(['claude-code', 'pi'] as const)('%s async questions', (agentKind) 
     const s = await setup(agentKind);
     try {
       const id = s.session.askUserQuestionAsync(questions);
-      expect(s.requests).toEqual([{ kind: 'ask_user_question', requestId: id, questions }]);
+      expect(s.requests).toEqual([{ kind: 'ask_user_question', requestId: id, questions, delivery: 'async' }]);
       expect(s.session.getTurnControlSnapshot().pendingInteractionCount).toBe(0);
       expect(s.handle.steer).not.toHaveBeenCalled();
       s.resolvers[0](answer);

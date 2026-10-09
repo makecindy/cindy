@@ -2160,6 +2160,9 @@ export class Session {
     request: InteractionRequest,
     resolve: () => Promise<InteractionDecision>,
   ): Promise<InteractionDecision> {
+    // Native async questions use the same card resolver, but never suspend turn
+    // protection or register a waiting interaction with the lifecycle observer.
+    if (request.kind === 'ask_user_question' && request.delivery === 'async') return resolve();
     const isQuestion = request.kind === 'ask_user_question';
     if (isQuestion) {
       this.pendingUserQuestions += 1;

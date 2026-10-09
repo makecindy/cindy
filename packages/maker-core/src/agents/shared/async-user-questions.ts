@@ -47,7 +47,7 @@ export class AsyncUserQuestions {
     });
     try {
       const answer = await Promise.race([
-        this.deps.resolve({ kind: 'ask_user_question', requestId, questions }), cancelled,
+        this.deps.resolve({ kind: 'ask_user_question', requestId, questions, delivery: 'async' }), cancelled,
       ]);
       if (!answer || answer.kind !== 'ask_user_question' || answer.dismissed
         || entry.abort.signal.aborted || !this.deps.isActive(entry.generation)) return;

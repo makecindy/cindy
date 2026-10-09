@@ -9631,6 +9631,7 @@ assertRouteCurrent();
           kind: 'ask_user_question',
           requestId,
           ...(toolUseId ? { toolUseId } : {}),
+          ...(delivery ? { delivery } : {}),
           questions: questionsToAskUserItems(questions),
         });
         if (decision.kind !== 'ask_user_question') {

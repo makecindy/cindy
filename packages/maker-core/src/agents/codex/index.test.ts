@@ -19948,7 +19948,7 @@ describe('CodexAgent MCP thread context hooks', () => {
 
   it('shows an async question once through the existing card and steers its answer without waiting for turn completion', async () => {
     const { host, handle, handlers, params, decision, resolver, events } = await runningAsyncQuestion();
-    expect(resolver.mock.calls[0]?.[0]).toMatchObject({ kind: 'ask_user_question', questions: [{
+    expect(resolver.mock.calls[0]?.[0]).toMatchObject({ kind: 'ask_user_question', delivery: 'async', questions: [{
       question: 'Proceed?', options: [{ label: 'Yes' }, { label: 'No' }],
     }] });
     handlers.itemCompleted?.(params);
