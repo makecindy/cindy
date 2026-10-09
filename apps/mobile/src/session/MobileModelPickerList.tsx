@@ -232,7 +232,7 @@ export function MobileModelPickerList({
           const selected = row.model.id === activeModelId && row.provider.id === activeSourceId;
           // 对齐桌面 ModelSelector:订阅制来源(Claude.ai / ChatGPT 等)的模型带「订阅」。
           const isSubscription = row.provider.access?.kind === 'subscription';
-          const rowDisabled = budgetRowDisabled(row.model.id, apiKeyStatus);
+          const rowDisabled = budgetRowDisabled(row.model.id, apiKeyStatus, row.provider);
           const fastEditable =
             configEnabled &&
             rowFastEditable({

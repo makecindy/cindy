@@ -66,6 +66,7 @@ import {
   AgentStartupStoppedError,
   BaseAgent,
   MAIN_OWNED_SEND_CONTEXT,
+  ASYNC_QUESTION_ANSWER,
   PINNED_SKILL_INVOCATION,
   PI_REQUEST_BODY_RECOVERY_EXHAUSTED,
   PiManagedPackageMutationCancelledError,
@@ -7303,6 +7304,7 @@ export class PiAgent extends BaseAgent {
       },
 
       async steer(message: UserMessage, sendOpts?: SendOptions): Promise<void> {
+        const answerLifecycle = piAgentLifecycleSequence;
         rejectIfCancelled(sendOpts, 'steer');
         if (sendOpts) handle.validateSendOptions?.(sendOpts);
         if (reviewMode) {
@@ -7355,7 +7357,15 @@ export class PiAgent extends BaseAgent {
         doctorCommandActivity.enter(isDoctorCommand);
         let resp: Awaited<ReturnType<typeof proc.request>>;
         try {
-          resp = await runExclusivePiRpc(() => proc.request(command));
+          resp = await runExclusivePiRpc(() => {
+            if (sendOpts?.[ASYNC_QUESTION_ANSWER]) {
+              rejectIfCancelled(sendOpts, 'steer');
+              if (!ctx.isStreaming || piAgentLifecycleSequence !== answerLifecycle) {
+                throw new Error('No active Pi turn for the async question answer');
+              }
+            }
+            return proc.request(command);
+          });
         } finally {
           doctorCommandActivity.leave(isDoctorCommand);
         }

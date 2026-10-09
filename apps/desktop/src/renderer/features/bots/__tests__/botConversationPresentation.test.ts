@@ -19,6 +19,13 @@ const project = (items: RenderItem[], streaming: boolean) =>
   simplifyBotRenderItems(groupWorkRuns(items, streaming), streaming);
 
 describe('teammate final-result presentation', () => {
+  it('keeps coordination input hidden while explicit inputs, results and errors remain visible', () => {
+    const rows = [message('coordination', 'user', '[UI_ACTION_TRIGGER]File agreement', { isSyntheticTrigger: true }),
+      tool('audit'), message('visible-input', 'user', 'Requested status'),
+      message('result', 'assistant', 'Final result', { turnCompleted: true }), message('error', 'error', 'Action required')];
+    expect(allKeys(project(rows, false))).toEqual(['msg-visible-input', 'msg-result', 'msg-error']);
+  });
+
   it('omits all process rows and keeps final answers without mutating history', () => {
     const input = [message('u', 'user'), message('a', 'assistant'), tool('t1'),
       message('b', 'assistant'), tool('t2'), message('final', 'assistant', 'Result', { turnCompleted: true })];

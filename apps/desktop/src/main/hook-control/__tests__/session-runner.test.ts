@@ -729,6 +729,21 @@ describe('hook session-runner 的 userSendAt 时序(未分类误判回归)', () 
     );
   });
 
+  it('provider 终态立即释放观察归属，不等待受理回调或结果收集', async () => {
+    let release!: () => void;
+    const waiting = new Promise<void>((resolve) => { release = resolve; });
+    const onTurnTerminal = vi.fn();
+    const runner = createMakerHookSessionRunner({ log });
+    let returned = false;
+    const result = runner.run(baseReq({ onTurnTerminal, onProviderAccepted: () => waiting }))
+      .then((outcome) => { returned = true; return outcome; });
+    await vi.waitFor(() => expect(onTurnTerminal).toHaveBeenCalledTimes(1));
+    expect(returned).toBe(false);
+    release();
+    expect((await result).status).toBe('ok');
+    expect(onTurnTerminal).toHaveBeenCalledTimes(1);
+  });
+
   it('入站图片附件:ingest 进媒体总仓挂 session-attachment 引用,喂 agent 用 blob 绝对路径,落库用 cindy-media url', async () => {
     const runner = createMakerHookSessionRunner({ log });
     const outcome = await runner.run(
@@ -3275,7 +3290,40 @@ describe('watchContinuation: 观察桌面端续跑并回流', () => {
     for (let i = 0; i < times; i++) await Promise.resolve();
   }
 
-  it.each([false, true])('isolates child events before root completion (isFinal=%s)', async (isFinal) => {
+  it.each([false, true])('continuation attachments stay in their runtime (remote=%s)', async (remote) => {
+    const workDir = process.cwd().replaceAll('\\', '/');
+    fakeMaker.getSession.mockReturnValueOnce({
+      ...makeManualSession('sess-live'),
+      workDir,
+      ...(remote ? { remoteHostId: 'ssh-host' } : {}),
+    });
+    const onEnd = vi.fn();
+    const runner = createMakerHookSessionRunner({ log });
+    const { req } = watchReq({ onEnd });
+    runner.watchContinuation!(req as never);
+    const cb = h.eventCbs.get('sess-live')!;
+    const media = `cindy-media://blobs/${'a'.repeat(64)}.png`;
+    const text = `结果 [文件](xdt-file://${workDir}/package.json) ![图](xdt-image://chart.png) ![媒体](${media})`;
+    cb({ type: 'tool_result_full', data: { fullText: `![工具图](xdt-image://tool.png) ![工具媒体](${media})` } });
+    cb({ type: 'text', data: { text, isFinal: true } });
+    cb({ type: 'done', data: null });
+    await vi.waitFor(() => expect(onEnd).toHaveBeenCalledTimes(1));
+    const outcome = onEnd.mock.calls[0]![0];
+    expect(outcome.status).toBe('ok');
+    if (remote) {
+      expect(resolveXdtImage).not.toHaveBeenCalled();
+      expect(cindyMock.resolveSafe).not.toHaveBeenCalled();
+      expect(outcome.attachments).toBeUndefined();
+      expect(outcome.finalText).toBe(text);
+    } else {
+      expect(resolveXdtImage).toHaveBeenCalled();
+      expect(cindyMock.resolveSafe).toHaveBeenCalled();
+      expect(outcome.attachments?.map((a: { name: string }) => a.name)).toContain('package.json');
+    }
+  });
+
+  it.each([false, true].flatMap((isFinal) => [false, true].map((background) => ({ isFinal, background }))))(
+    'isolates out-of-turn events (isFinal=$isFinal, background=$background)', async ({ isFinal, background }) => {
     const session = makeManualSession('sess-subagent-output');
     const onProgress = vi.fn();
     const onToolResult = vi.fn();
@@ -3298,7 +3346,8 @@ describe('watchContinuation: 观察桌面端续跑并回流', () => {
       { type: 'error', data: { message: 'child failed', isTerminal: true } },
       { type: 'done', data: {} },
     ];
-    for (const event of events) emit({ ...event, source: 'claude-code', agentMeta: child });
+    for (const event of events) emit({ ...event, source: background ? 'pi' : 'claude-code',
+      ...(background ? { turnScope: 'background' } : { agentMeta: child }) });
     expect(onProgress).not.toHaveBeenCalled();
     expect(onToolResult).not.toHaveBeenCalled();
     expect(onTurnTerminal).not.toHaveBeenCalled();

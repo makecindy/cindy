@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-const fixture = vi.hoisted(() => ({ download: vi.fn(), packaged: true, urls: [] as string[], wsUrls: [] as string[], exists: vi.fn(), config: '', handle: vi.fn(), profiles: [] as unknown[], sockets: [] as import('ws').WebSocket[] }));
-vi.mock('../../authManager.js', () => ({ getAccessToken: () => 'isolated-test-token', refresh: vi.fn(async () => true) }));
+const fixture = vi.hoisted(() => ({ download: vi.fn(), packaged: true, urls: [] as string[], wsUrls: [] as string[], exists: vi.fn(), config: '', handle: vi.fn(), refresh: vi.fn(async () => true), profiles: [] as unknown[], sockets: [] as import('ws').WebSocket[] }));
+vi.mock('../../authManager.js', () => ({ getAccessToken: () => 'isolated-test-token', refresh: fixture.refresh }));
 vi.mock('../../clientEndpointsService.js', () => ({ getClientEndpoint: () => 'https://chat.cindy.app' }));
 vi.mock('../chatServerMedia.js', () => ({ createChatMedia: () => ({ upload: vi.fn(async () => []), download: fixture.download }) }));
 vi.mock('../chatServerWorkspaces.js', () => ({ chatServerWorkspaces: () => ({ read: () => null, save: vi.fn() }) }));
@@ -20,7 +20,7 @@ vi.mock('node:http', async () => {
       end: (data?: string) => {
         void Promise.resolve().then(() => fixture.handle(new URL(url).pathname.slice(3) + new URL(url).search, options.method, data ? JSON.parse(data) : undefined, options.headers))
           .then(result => {
-            const response = Object.assign(new EventEmitter(), { statusCode: result?.status ?? 200 });
+            const response = Object.assign(new EventEmitter(), { statusCode: result?.status ?? 200, headers: result?.headers ?? {} });
             callback(response);
             response.emit('data', Buffer.from(result?.raw ?? JSON.stringify(result?.body ?? {})));
             response.emit('end');
@@ -124,6 +124,39 @@ describe('Chat Server invitation contract', () => {
     const original = fixture.handle.getMockImplementation()!;
     fixture.handle.mockImplementation((route, ...args) => route.endsWith('/revoke') ? { status: 404, raw: '<html>Not found</html>' } : original(route, ...args));
     expect(await service.chatServer!.revokeInvite({ groupId, link, clientId })).toEqual({ ok: false, errorCode: 'INVITE_REVOKE_UNSUPPORTED' });
+  });
+  it.each([200, 201])('keeps the exact revocation success status after refreshing an expired token (status %s)', async status => {
+    const original = fixture.handle.getMockImplementation()!;
+    let attempts = 0;
+    fixture.handle.mockImplementation((route, ...args) => {
+      if (!route.endsWith('/revoke')) return original(route, ...args);
+      return ++attempts === 1 ? { status: 401, body: { error: { code: 'TOKEN_EXPIRED' } } } : { status, body: { revoked: true } };
+    });
+    expect(await service.chatServer!.revokeInvite({ groupId, link, clientId })).toEqual(status === 200
+      ? { ok: true, revoked: true } : { ok: false, errorCode: 'CHAT_RESPONSE_INVALID' });
+    expect(fixture.refresh).toHaveBeenCalledOnce();
+    const calls = fixture.handle.mock.calls.filter(([route]) => route.endsWith('/revoke'));
+    expect(calls).toHaveLength(2);
+    expect(calls[1]).toEqual(calls[0]);
+  });
+  it('shares the authentication refresh cooldown across repeated invitation failures', async () => {
+    const original = fixture.handle.getMockImplementation()!;
+    fixture.handle.mockImplementation((route, ...args) => route === '/invite-links/preview'
+      ? { status: 401, body: { error: { code: 'TOKEN_EXPIRED' } } } : original(route, ...args));
+    for (let i = 0; i < 2; i++) {
+      expect(await service.chatServer!.previewInvite({ link })).toEqual({ ok: false, errorCode: 'TOKEN_EXPIRED' });
+    }
+    expect(fixture.refresh).toHaveBeenCalledOnce();
+  });
+  it.each(['ACCOUNT_INACTIVE', 'ROLE_REQUIRED'])('does not refresh a non-refreshable invitation rejection (%s)', async errorCode => {
+    fixture.handle.mockResolvedValue({ status: 401, body: { error: { code: errorCode } } });
+    expect(await service.chatServer!.previewInvite({ link })).toEqual({ ok: false, errorCode });
+    expect(fixture.refresh).not.toHaveBeenCalled();
+  });
+  it('does not refresh a malformed 401 invitation response', async () => {
+    fixture.handle.mockResolvedValue({ status: 401, raw: '<html>auth challenge fixture</html>' });
+    expect(await service.chatServer!.previewInvite({ link })).toEqual({ ok: false, errorCode: 'REQUEST_FAILED' });
+    expect(fixture.refresh).not.toHaveBeenCalled();
   });
   it('returns a sanitized failure for malformed invite responses', async () => {
     fixture.handle.mockResolvedValue({ raw: 'not-json-containing-an-invitation-token' });

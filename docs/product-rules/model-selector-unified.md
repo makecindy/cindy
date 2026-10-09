@@ -207,11 +207,11 @@
 
 ## 4. 特殊情况检查表(实现与 review 逐条过)
 
-**目录/来源**
+- **目录/来源**
 - 同名模型多来源:一切能力(Fast/ctx/efforts/推荐)先解析生效来源再查,禁止读拍平列表;`actualSourceIdForModel`(会话内,含停用) vs `effectiveSourceIdForModel`(草稿)双口径保留。
 - XD 网关独占存在性:不从 Registry 给 XD 补条目;`/models` 空则空。
 - bridge 条目 id 带前缀(`chatgpt/`,anthropic→codex 强制 `supportsFastMode:false`):按 id 查推荐/能力时先归一。
-- `[1m]` 后缀 / `codex/` 前缀归一;`status:'retired'` 的 keepSelected 豁免(运行中会话仍显示)。
+- `[1m]` 后缀 / `openai-codex/` 与 `codex/` 前缀归一;`status:'retired'` 的 keepSelected 豁免(运行中会话仍显示)。
 - user provider:默认 ctx 200K 不带 verified 标;Pi effort 交集塌陷;`custom:<id>` 分组;`'cindy'` 复合路由排除 user provider。
 - 立省/订阅徽标:`group==='gpt-budget'`+前缀兜底;订阅走 provider.access(flat 模式 sourceAccess);`visibleModelUnion` 返回值含 3 个隐藏字段,禁止整对象过 wire/持久化。
 

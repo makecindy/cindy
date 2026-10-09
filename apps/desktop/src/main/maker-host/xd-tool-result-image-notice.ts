@@ -2,8 +2,9 @@ import {
   replaceToolResultImagesWithNotice,
   type RequestTransform,
 } from '@cindy/anthropic-compat-proxy';
+import { stripCodexGatewayWirePrefix } from '@cindy/model-providers';
 
-const XD_TOOL_RESULT_IMAGE_MODELS = new Set(['codex/gpt-5.6-sol', 'gpt-5.6-sol']);
+const XD_TOOL_RESULT_IMAGE_MODEL = 'gpt-5.6-sol';
 const XD_TOOL_RESULT_IMAGE_NOTICE =
   '[image omitted: this tool returned an image, but the current route cannot deliver ' +
   'images inside tool results. Do NOT guess or fabricate what the image contains. ' +
@@ -35,7 +36,7 @@ export function createXdToolResultImageNoticeTransform(
   return (body, ctx) => {
     if (!isPlainObject(body) || typeof body.model !== 'string') return null;
     const model = body.model.endsWith('[1m]') ? body.model.slice(0, -4) : body.model;
-    if (!XD_TOOL_RESULT_IMAGE_MODELS.has(model)) return null;
+    if (stripCodexGatewayWirePrefix(model) !== XD_TOOL_RESULT_IMAGE_MODEL) return null;
     const actualUpstream = ctx.upstreamBase ? normalizeUpstreamBase(ctx.upstreamBase) : null;
     const xdUpstream = normalizeUpstreamBase(readXdUpstream());
     if (!actualUpstream || actualUpstream !== xdUpstream) return null;

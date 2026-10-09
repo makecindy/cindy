@@ -35,7 +35,7 @@
   },
   "language": {
     "title": "언어",
-    "hint": "앱 UI에만 영향을 줍니다. Agent 응답 언어는 Agent 자체 설정에 따릅니다.",
+    "hint": "화면과 AI 오류 안내에 사용하는 언어입니다. 일반 답변은 메시지나 요청한 언어를 따릅니다.",
     "options": {
       "system": "자동 (시스템 따르기)",
       "zh-CN": "简体中文",
@@ -91,7 +91,7 @@
   "about": {
     "sectionTitle": "이 휴대폰 정보",
     "deviceName": "기기 이름",
-    "deviceNameDetail": "컴퓨터의 승인 목록에 이 이름이 표시됩니다.",
+    "deviceNameDetail": "컴퓨터의 승인 목록에 표시되는 이름입니다.",
     "platform": "플랫폼",
     "editAccessibility": "{{label}} 수정"
   },
@@ -188,9 +188,9 @@
     "refresh": "새로고침",
     "refreshing": "새로고치는 중…",
     "refreshAccessibility": "사전 새로고침",
-    "readOnlyHint": "휴대폰에서는 보기만 가능합니다. 추가와 삭제는 컴퓨터에서 해주세요.",
-    "offlineHint": "온라인 상태인 컴퓨터가 없습니다. 마지막으로 휴대폰에 동기화된 내용을 표시합니다.",
-    "noDesktops": "아직 동기화할 컴퓨터가 없습니다. 같은 계정으로 컴퓨터에 로그인하면 사전이 여기에 표시됩니다."
+    "readOnlyHint": "휴대폰에서는 보기만 가능합니다. 단어 추가와 삭제는 컴퓨터에서 하세요.",
+    "offlineHint": "컴퓨터가 오프라인입니다. 마지막으로 동기화한 사전을 표시합니다.",
+    "noDesktops": "컴퓨터에서 같은 계정으로 로그인하면 사전이 동기화됩니다."
   },
   "deviceNameEditor": {
     "screenTitle": "기기 이름",

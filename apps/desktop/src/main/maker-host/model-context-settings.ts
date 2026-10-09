@@ -1,4 +1,4 @@
-import type { AgentKind, Catalog, Effort } from '@cindy/model-providers';
+import { isCodexGatewayWireModel, type AgentKind, type Catalog, type Effort } from '@cindy/model-providers';
 
 import { desktopCodexAuthAdapter, readClaudeApiKey } from './auth-adapters.js';
 import { hasClaudeNativeLogin } from './claude-native-auth.js';
@@ -22,7 +22,7 @@ export function resolveDesktopModelContextProviderId(
     ? gatewayDefaultRouteDecision(agent, readClaudeApiKey()) ? 'xd'
       : hasClaudeNativeLogin() ? 'anthropic' : null
     : agent === 'codex'
-      ? modelId.startsWith('codex/') ? 'xd'
+      ? isCodexGatewayWireModel(modelId) ? 'xd'
         : desktopCodexAuthAdapter.hasCodexOAuthLoginReadOnly() ? 'openai' : 'xd'
       : null;
   return resolveModelContextProviderId(catalog, agent, providerId, modelId, defaultSource);

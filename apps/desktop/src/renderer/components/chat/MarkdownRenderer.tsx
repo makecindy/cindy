@@ -111,6 +111,7 @@ import { SessionHandoffCard } from './SessionHandoffCard';
 import { SessionLinkChip } from './SessionLinkChip';
 import { ProjectLinkChip } from './ProjectLinkChip';
 import { ImageLightbox } from './ImageLightbox';
+import { useImageClipboard } from './useImageClipboard';
 import { ImageHoverPreview } from './ImageHoverPreview';
 import { ImageMissingPlaceholder } from './ImageMissingPlaceholder';
 import { ChatVideoView } from './ChatVideoView';
@@ -854,6 +855,9 @@ function LightboxImage({
   // trigger can anchor the Radix DropdownMenu wherever the user clicked.
   const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null);
 
+  const { canCopy, canReveal: canRevealInFolder, copyImage, revealImage } = useImageClipboard(src ?? '');
+  const showMenu = canCopy || canRevealInFolder;
+
   // image-local-cache F4: when the underlying file is missing (cache cleared,
   // xdt-image:// 404, etc.), swap to the friendly placeholder card. The
   // filename is best-effort: derive it from the URL's last segment.
@@ -864,30 +868,16 @@ function LightboxImage({
     return <ImageMissingPlaceholder filename={alt || fallbackName} />;
   }
 
-  // Only locally-managed images (xdt-image:// / cindy-media://) have a
-  // meaningful "open folder" target. Remote https:// images skip the menu.
-  const canRevealInFolder =
-    !!src && (src.startsWith('xdt-image://') || src.startsWith('cindy-media://'));
   const zoomLabel = alt || t('chat.media.clickToZoom');
 
   async function handleRevealInFolder(): Promise<void> {
-    if (!src) return;
-    const res = await window.electronAPI.showItemInFolder({ url: src });
-    if (!res.success) {
-      toast.error(res.error ?? t('chat.media.openFolderFailed'));
-    }
     setMenuPos(null);
+    await revealImage();
   }
 
   async function handleCopyImage(): Promise<void> {
-    if (!src) return;
-    const res = await window.electronAPI.copyMediaToClipboard({ url: src });
-    if (res.success) {
-      toast.success(t('chat.media.imageCopied'));
-    } else {
-      toast.error(res.error ?? t('chat.media.copyFailed'));
-    }
     setMenuPos(null);
+    await copyImage();
   }
 
   return (
@@ -902,7 +892,7 @@ function LightboxImage({
           if (src) onZoom(src);
         }}
         onContextMenu={(e) => {
-          if (!canRevealInFolder) return;
+          if (!showMenu) return;
           e.preventDefault();
           e.stopPropagation();
           setMenuPos({ x: e.clientX, y: e.clientY });
@@ -916,7 +906,7 @@ function LightboxImage({
           {...props}
         />
       </button>
-      {canRevealInFolder ? (
+      {showMenu ? (
         <DropdownMenu
           open={menuPos !== null}
           onOpenChange={(open) => {
@@ -938,14 +928,18 @@ function LightboxImage({
             />
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start" sideOffset={2}>
-            <DropdownMenuItem onClick={handleCopyImage}>
-              <Copy className="mr-2 h-4 w-4" />
-              {t('chat.media.copyImage')}
-            </DropdownMenuItem>
-            <DropdownMenuItem onClick={handleRevealInFolder}>
-              <FolderOpen className="mr-2 h-4 w-4" />
-              {t('chat.media.revealImage')}
-            </DropdownMenuItem>
+            {canCopy && (
+              <DropdownMenuItem onClick={handleCopyImage}>
+                <Copy className="mr-2 h-4 w-4" />
+                {t('chat.media.copyImage')}
+              </DropdownMenuItem>
+            )}
+            {canRevealInFolder && (
+              <DropdownMenuItem onClick={handleRevealInFolder}>
+                <FolderOpen className="mr-2 h-4 w-4" />
+                {t('chat.media.revealImage')}
+              </DropdownMenuItem>
+            )}
           </DropdownMenuContent>
         </DropdownMenu>
       ) : null}

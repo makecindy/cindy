@@ -2,6 +2,7 @@ import type { NormalizedRemoteMessage } from '@/session/messageNormalize';
 import { stripChatQuoteMarkerLines } from '@cindy/maker-shared/chat-quotes';
 import { projectSlashCommandsInText } from '@cindy/maker-shared/composer-palette';
 import { formatCompactTokens } from '@cindy/maker-shared/usage-format';
+import { stripCodexGatewayWirePrefix } from '@cindy/model-providers';
 import { i18n } from '@/i18n';
 import {
   remoteMoneySymbol,
@@ -173,7 +174,7 @@ export function formatModelShortLabel(modelId: string | undefined | null): strin
   if (!id) return '';
   id = id.replace(/\[1m\]$/i, '');
   id = id.replace(/-\d{8}$/, '');
-  id = id.replace(/^us\.anthropic\./i, '').replace(/^anthropic\./i, '').replace(/^codex\//i, '');
+  id = stripCodexGatewayWirePrefix(id.replace(/^us\.anthropic\./i, '').replace(/^anthropic\./i, ''));
   const claude = /^claude-([a-z]+)-(\d+)(?:-(\d+))?$/i.exec(id);
   if (claude) {
     const family = claude[1][0].toUpperCase() + claude[1].slice(1).toLowerCase();

@@ -61,6 +61,13 @@ describe('send_to_session tool', () => {
     expect(control).not.toContain('send_to_session');
   });
 
+  it.each(['coordination', 'user-visible'])('passes message purpose with the bound caller identity: %s', async purpose => {
+    const { registry, sendToSession } = setup();
+    const result = await registry.call('send_to_session', { target_session_id: 'parent', message: 'Update', message_purpose: purpose });
+    expect(result.isError).toBeUndefined();
+    expect(sendToSession).toHaveBeenCalledWith(expect.objectContaining({ targetSessionId: 'parent', messagePurpose: purpose, dispatcherSessionId: expect.any(String) }));
+  });
+
   it('缺 message → INVALID_ARGS, host 不被调', async () => {
     const { registry, sendToSession } = setup();
     const res = await registry.call('send_to_session', { title: 'x' });

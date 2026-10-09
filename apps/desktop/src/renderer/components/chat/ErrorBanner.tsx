@@ -1,4 +1,4 @@
-import { isOpenAiSubscriptionProvider } from '@cindy/model-providers';
+import { isCodexGatewayWireModel, isOpenAiSubscriptionProvider } from '@cindy/model-providers';
 import { useProviders } from '@/hooks/useProviders';
 /**
  * ErrorBanner — 错误横幅 + Retry / Cancel
@@ -236,7 +236,7 @@ export function ErrorBanner({
   const hasImplicitOpenAiProvider =
     normalizedProviderId === null &&
     codexAuthInjection !== 'provider-oauth' &&
-    !modelId?.startsWith('codex/') &&
+    !isCodexGatewayWireModel(modelId) &&
     !modelId?.startsWith('xai/');
   const isCodexOpenAiSource =
     agentKind === 'codex' && (hasExplicitOpenAiProvider || hasImplicitOpenAiProvider);
