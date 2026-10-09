@@ -2439,8 +2439,15 @@ export class PiAgent extends BaseAgent {
         // value across the required local process rebuild; never synthesize a
         // 128K override for a model whose bundled window is still unknown.
         if (inheritsNativeWindow && !(workingWindow && workingWindow > 0) && !learnedWindow) continue;
+        // Preview treats a Cindy working-window override as the effective
+        // inherited window. Keep startup on the same precedence: a previously
+        // learned larger native capacity must not inflate reserveTokens and
+        // cause every subsequent preview to request another rebuild.
+        const budgetWindow = inheritsNativeWindow && workingWindow && workingWindow > 0
+          ? workingWindow
+          : Math.max(model.contextWindow ?? learnedWindow ?? 128_000, workingWindow ?? 0);
         addBudget(provider.id, model.wireId ?? model.id,
-          Math.max(model.contextWindow ?? learnedWindow ?? 128_000, workingWindow ?? 0), workingWindow);
+          budgetWindow, workingWindow);
       }
     }
     const settingsJsonContent = await this.buildSettingsJsonPreservingUserKeys(

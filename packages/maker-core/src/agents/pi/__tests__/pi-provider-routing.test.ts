@@ -3876,6 +3876,57 @@ describe("Pi provider-aware model routing", () => {
     }
   });
 
+  it('keeps a learned inherited window below a later Cindy working-window override', async () => {
+    let workingWindow: number | undefined;
+    const deps = byomDeps(async () => ({ providers: [
+      { id: 'native-a', name: 'Current', baseUrl: 'http://a.test', api: 'openai-completions',
+        models: [{ id: 'local-model', contextWindow: 200_000 }] },
+      { id: 'pi-native', sourceProviderId: 'native-account', name: 'Inherited', baseUrl: 'http://b.test',
+        inheritModels: true, modelIdAliases: { 'catalog-alias': 'catalog-model' },
+        models: [{ id: 'catalog-model', wireId: 'wire-model' }] },
+    ], env: {} }));
+    deps.runtimeConfig = { ...deps.runtimeConfig, piAutoCompactThresholdPct: 75 };
+    deps.resolveModelContextLimit = (provider, model) =>
+      provider === 'native-account' && (model === 'catalog-model' || model === 'catalog-alias')
+        ? workingWindow
+        : undefined;
+    captured.requestHandler = async (command) => {
+      if (command.type === 'get_available_models') return { success: true, data: { models: [
+        { provider: 'pi-native', id: 'wire-model', contextWindow: 400_000 },
+      ] } };
+      return { success: true, data: command.type === 'get_state'
+        ? { sessionFile: '/mock/s.jsonl', model: { contextWindow: captured.runtimeProvider === 'pi-native' ? 400_000 : 200_000 } }
+        : {} };
+    };
+
+    const agent = new PiAgent(deps);
+    const initial = await agent.startSession({
+      sessionId: 'learned-working-window', workingDir: cwd,
+      model: 'local-model', providerId: 'native-a',
+    });
+    expect(await initial.previewModelSwitch?.('catalog-alias', { providerId: 'native-account' }))
+      .toMatchObject({ action: 'rebuild', targetContextWindow: 400_000 });
+    await initial.close();
+
+    workingWindow = 150_000;
+    captured.initialProvider = undefined;
+    captured.initialModel = undefined;
+    captured.runtimeProvider = undefined;
+    captured.runtimeModel = undefined;
+    const rebuilt = await agent.startSession({
+      sessionId: 'learned-working-window', workingDir: cwd,
+      model: 'catalog-alias', providerId: 'native-account',
+    });
+    const rebuiltSettings = JSON.parse(readFileSync(
+      path.join(captured.env.PI_CODING_AGENT_DIR!, 'settings.json'), 'utf8',
+    )) as { compaction?: { modelOverrides?: Record<string, { reserveTokens?: number }> } };
+    expect(rebuiltSettings.compaction?.modelOverrides?.['pi-native/wire-model']?.reserveTokens)
+      .toBe(37_500);
+    expect(await rebuilt.previewModelSwitch?.('catalog-alias', { providerId: 'native-account' }))
+      .toMatchObject({ action: 'hot', targetContextWindow: 150_000 });
+    await rebuilt.close();
+  });
+
   it('refreshes a managed adapter when the same model ID gets a new descriptor', async () => {
     let window = 100_000;
     const deps = byomDeps(async () => ({ providers: [{
