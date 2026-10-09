@@ -20,6 +20,7 @@ import { resolveSafe } from '../blobStore';
 import * as ledger from '../ledger';
 import { commitMessageMediaRefs } from '../chatAttachments';
 import { createHash } from 'node:crypto';
+import { ingestMedia } from '../ingest';
 import { reconcileMediaRefCompensationsForOwner } from '../refCompensationJournal';
 import { materializeLocalMarkdownImages } from '../../im/shared/localMarkdownImages';
 import { collectOutboundAttachments } from '../../hook-control/outbound';
@@ -132,6 +133,26 @@ describe('task image delivery', () => {
     expect(raw.prepare('SELECT count(*) AS n FROM media_refs').get()).toEqual({ n: 1 });
     await fs.rm(source);
     expect(await fs.readFile(resolveSafe(url).absPath)).toEqual(PNG);
+  });
+
+  it.each([true, false])('handles an interrupted import state (source remains=%s)', async (sourceRemains) => {
+    const source = path.join(work, 'interrupted.png');
+    await fs.writeFile(source, PNG);
+    const row = insert(`![interrupted](${source})`);
+    // Seed the durable state after ingest succeeds but before message publication.
+    const saved = await ingestMedia({ buffer: PNG, mimeType: 'image/png', refs: [
+      { refKind: 'session-attachment', refId: 's', originSessionId: 's', originKind: 'tool' },
+    ] }, client.drizzle);
+    if (!sourceRemains) await fs.rm(source);
+    await reconcileMediaRefCompensationsForOwner({
+      ownerId: 'test-owner', db: client.drizzle, isOwnerCurrent: () => true,
+    });
+    const [restored] = await restoreTaskImageRows(client, [row]);
+    expect(restored.content).toBe(sourceRemains ? JSON.stringify(`![interrupted](${saved.url})`) : row.content);
+    expect(raw.prepare('SELECT count(*) AS n FROM media_refs').get()).toEqual({ n: 1 });
+    expect(await fs.readFile(resolveSafe(saved.url).absPath)).toEqual(PNG);
+    raw.exec("UPDATE sessions SET status = 'deleted'");
+    expect(await ledger.removeSessionRefsIfDeleted('s', client.drizzle)).toBe(1);
   });
 
   it('preserves the image when the message commit succeeds but its worker ACK is lost', async () => {
@@ -403,6 +424,41 @@ describe('task image delivery', () => {
 
   it('reads only ordinary image files inside validated roots', async () => {
     await expect(readTaskImage(work, [await fs.realpath(work)])).rejects.toThrow();
+  });
+
+  it.each([
+    '//attacker/share/a.png',
+    '\\\\attacker\\share\\a.png',
+    '/\\attacker/share/a.png',
+    '\\/attacker/share/a.png',
+    '//attacker@SSL/DavWWWRoot/a.png',
+    '\\\\?\\UNC\\attacker\\share\\a.png',
+    '\\\\.\\UNC\\attacker\\share\\a.png',
+    '\\\\?\\C:\\task\\a.png',
+    '\\\\.\\C:\\task\\a.png',
+    '\\??\\UNC\\attacker\\share\\a.png',
+  ])('rejects Windows network/device syntax before filesystem access: %s', async (source) => {
+    const realpath = vi.spyOn(fs, 'realpath').mockRejectedValue(new Error('unexpected filesystem access'));
+    const open = vi.spyOn(fs, 'open');
+    await expect(readTaskImage(source, [source])).rejects.toThrow('task-image: network or device path');
+    expect(realpath).not.toHaveBeenCalled();
+    expect(open).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    '//attacker/share/a.png',
+    'xdt-image:////attacker/share/a.png',
+    'xdt-file:///%2Fattacker/share/a.png',
+    'xdt-image:///%5C%5Cattacker%5Cshare%5Ca.png',
+  ])('does not resolve network targets after Markdown URL decoding: %s', async (url) => {
+    const realpath = vi.spyOn(fs, 'realpath').mockRejectedValue(new Error('unexpected filesystem access'));
+    const text = `![network](<${url}>)`;
+    const result = await materializeTaskImageMarkdown(text, {
+      importImage: async (source) => { await readTaskImage(source, [work]); return 'unreachable'; },
+    });
+    expect(result.text).toBe(text);
+    expect(result.failures).toEqual([url]);
+    expect(realpath).not.toHaveBeenCalled();
   });
 });
 

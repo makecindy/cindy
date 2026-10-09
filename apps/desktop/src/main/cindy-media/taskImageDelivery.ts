@@ -90,6 +90,10 @@ export async function readTaskImage(
   source: string,
   roots: readonly string[],
 ): Promise<{ buffer: Buffer; mimeType: string }> {
+  // Reject Windows UNC / WebDAV / device namespaces before realpath can contact
+  // a remote server. Apply to decoded paths too, independent of the host OS.
+  if (/^[\\/]{2}|^[\\/]\?\?[\\/]/.test(source))
+    throw new Error('task-image: network or device path');
   const real = await fs.realpath(source);
   if (!roots.some((root) => isPathWithin(root, real))) throw new Error('task-image: outside task');
   const handle = await fs.open(
