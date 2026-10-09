@@ -37,6 +37,9 @@ vi.mock('@/lib/composerDraftStore', () => ({
   }),
 }));
 
+import { redactMessageRowForSharedGuest } from '../../main/device-link/sharedTaskMessageOrigin';
+import { groupWorkRuns } from '@/components/chat/messageWorkGroups';
+import { simplifyBotRenderItems } from '@/features/bots/botConversationPresentation';
 import { makerChatStore } from '@/lib/makerChatStore';
 import { aroundMessagesByClientIdFor } from '@/lib/makerTransport';
 import type { Message } from '@/lib/ccAgent.types';
@@ -102,6 +105,29 @@ describe('makerChatStore loadAroundMessageClientId', () => {
       'before',
       'target',
     ]);
+  });
+
+  it.each([true, false])('keeps a redacted group delivery visible without sealing private progress (running=%s)', async (running) => {
+    const rows = [
+      serverMessage({ clientId: 'progress-before', role: 'assistant', content: 'Working before' }),
+      serverMessage({ clientId: 'group-delivery', role: 'assistant', content: 'Explicit reply',
+        agentMeta: { sourceGroup: { groupId: 'private-group', name: 'Secret group' } } }),
+      serverMessage({ clientId: 'progress-after', role: 'assistant', content: 'Working after' }),
+      serverMessage({ clientId: 'tool', role: 'tool_use', content: { toolName: 'Read', toolUseId: 't', input: {} } }),
+      ...(!running ? [serverMessage({ clientId: 'final', role: 'assistant', content: 'Final reply', agentMeta: { turnCompleted: true } })] : []),
+    ].map(redactMessageRowForSharedGuest);
+    expect(rows[1].agentMeta).toEqual({ explicitDelivery: true });
+    expect(JSON.stringify(rows)).not.toMatch(/private-group|Secret group/);
+    vi.mocked(aroundMessagesByClientIdFor).mockResolvedValueOnce(rows);
+    await makerChatStore.loadAroundMessageClientId(SID, 'group-delivery', { radius: 10 });
+    const messages = makerChatStore.getSnapshot(SID).messages;
+    expect(messages.find(m => m.clientId === 'group-delivery')).toMatchObject({ explicitDelivery: true });
+    const items = messages.map(message => ({ type: 'message' as const, key: message.clientId, message }));
+    const visible = simplifyBotRenderItems(groupWorkRuns(items, running), running)
+      .flatMap(item => item.type === 'message' && item.message.role === 'assistant' ? [item.message.content] : []);
+    expect(visible).toContain('Explicit reply');
+    expect(visible).not.toContain('Working before');
+    expect(visible).not.toContain('Working after');
   });
 
   it('hydrates shorter authoritative tool_result content during around-message hydration', async () => {

@@ -22,6 +22,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { AgentDeps, AgentSessionHandle } from '../../base-agent.js';
+import { ASYNC_QUESTION_ANSWER } from '../../base-agent.js';
 import type { AuthAdapter } from '../../../interfaces/auth-adapter.js';
 import type { AgentEvent } from '../../../types/events.js';
 import type { Logger } from '../../../interfaces/logger.js';
@@ -523,6 +524,44 @@ describe('ClaudeCodeAgent abort stops background wake tasks', () => {
       'graceful stop terminal',
     );
     await handle.close();
+  });
+
+  it.each([1, 2])('retains the product for a batch of %i submitted async answers without adding a wake task', async (count) => {
+    const { handle, stream, events } = await startSessionWithStream();
+    try {
+      await handle.send({ type: 'user', content: 'independent work' });
+      for (let i = 0; i < count; i++) {
+        await handle.steer({ type: 'user', content: `answer ${i}` }, { [ASYNC_QUESTION_ANSWER]: true });
+      }
+      stream.emit(turnResult('original work complete'));
+      await waitFor(() => events.some((e) => e.type === 'done'), 'original SDK boundary');
+      const boundary = events.find((e) => e.type === 'done')!;
+      expect(boundary.turnContinuationId).toBeTypeOf('number');
+      expect(handle.isTurnRunning?.()).toBe(true);
+      expect(handle.listBackgroundTasks?.()).toEqual([]);
+      expect(events.filter(isProductTerminal)).toHaveLength(0);
+      stream.emit(assistantText('using the answers'));
+      stream.emit(turnResult('answer work complete'));
+      await waitFor(() => events.filter(isProductTerminal).length === 1, 'one product terminal');
+      expect(handle.isTurnRunning?.()).toBe(false);
+    } finally { await handle.close(); }
+  });
+
+  it.each(['abort', 'requestGracefulStop'] as const)('cancels accepted-answer continuation on %s without reviving it', async (action) => {
+    const { handle, stream, streams, events } = await startSessionWithStream();
+    try {
+      await handle.send({ type: 'user', content: 'work' });
+      await handle.steer({ type: 'user', content: 'answer' }, { [ASYNC_QUESTION_ANSWER]: true });
+      stream.emit(turnResult());
+      await waitFor(() => events.some((e) => e.type === 'done'), 'claimed SDK boundary');
+      await handle[action]?.();
+      await waitFor(() => events.filter(isProductTerminal).length === 1, 'cancelled product');
+      streams[0].emit(assistantText('late answer processing'));
+      streams[0].emit(turnResult());
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(events.filter(isProductTerminal)).toHaveLength(1);
+      expect(handle.isTurnRunning?.()).toBe(false);
+    } finally { await handle.close(); }
   });
 
   it('graceful stop cancels an awaiting wake continuation and rebuilds before the next send', async () => {

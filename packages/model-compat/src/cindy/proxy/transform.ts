@@ -1498,8 +1498,10 @@ const STRIP_HANDLERS: Readonly<Record<string, ModelStripHandler>> = {
   'gpt-5.4': stripGpt54,
   'gpt-5.4-mini': stripGpt54Mini,
   // 「折扣GPT」低价路由 —— 与 gpt-5.4 打同一个 Azure 后端, 同样会因 output_config 报 400,
-  // 镜像 gpt-5.4 的 strip 行为 (复用同一 handler)。codex/gpt-5.5 暂不加, 与 gpt-5.5 一致。
+  // 镜像 gpt-5.4 的 strip 行为 (复用同一 handler)。openai-codex/ 与 codex/ 是同一条
+  // wire，查表是精确 id，所以两条都要登记。codex/gpt-5.5 暂不加, 与 gpt-5.5 一致。
   'codex/gpt-5.4': stripGpt54,
+  'openai-codex/gpt-5.4': stripGpt54,
   // 纯文本模型 tool_result 图像会被上游静默吞掉 (#794) —— 带/不带命名空间前缀,
   // 以及 claude-code SDK 按目录 1M 窗口追加 [1m] 后缀 (toSdkModelString) 的形态
   // 都登记 (直通路由 body.model 可能保留 z-ai/ 前缀与 [1m] 后缀)。

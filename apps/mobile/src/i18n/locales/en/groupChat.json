@@ -174,5 +174,13 @@
   "followUp": {
     "next": "Plan · Next step",
     "failedStep": "Step {{step}} didn't finish"
+  },
+  "server": {
+    "offline": "Can’t connect to group chat. Try again.",
+    "loadFailed": "Can’t load this group chat right now. Try again.",
+    "loadOlder": "Load Earlier Messages",
+    "attachmentFailed": "Couldn’t open the attachment. Try again.",
+    "previewUnavailable": "Preview unavailable",
+    "endpointUnavailable": "Group chat service configuration is unavailable. Please retry."
   }
 }

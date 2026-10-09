@@ -65,9 +65,9 @@ export async function readHistoryDisk(authority: Authority): Promise<HistoryView
       ready: true, loading: false, error: null };
   } catch { return null; }
 }
-export async function writeHistoryDisk(authority: Authority, snapshot: HistoryViewSnapshot<RemoteMessage>): Promise<void> {
-  if (!authority.current() || !snapshot.ready || snapshot.loading || snapshot.error) return;
-  if (historyValueBytes([snapshot.items, snapshot.details, snapshot.expanded, snapshot.nextCursor], HISTORY_DISK_ITEM_BYTES - 1024) > HISTORY_DISK_ITEM_BYTES - 1024) return;
+export async function writeHistoryDisk(authority: Authority, snapshot: HistoryViewSnapshot<RemoteMessage>): Promise<boolean> {
+  if (!authority.current() || !snapshot.ready || snapshot.loading || snapshot.error) return false;
+  if (historyValueBytes([snapshot.items, snapshot.details, snapshot.expanded, snapshot.nextCursor], HISTORY_DISK_ITEM_BYTES - 1024) > HISTORY_DISK_ITEM_BYTES - 1024) return false;
   try {
     const messages = (rows: readonly RemoteMessage[]) => rows.map(row =>
       row.agentMeta?.isStreaming === true || row.agentMeta?.streaming === true
@@ -86,8 +86,8 @@ export async function writeHistoryDisk(authority: Authority, snapshot: HistoryVi
         .map(([key, detail]) => [key, { ...detail, messages: messages(detail.messages) }]),
       expanded: [...snapshot.expanded], nextCursor: snapshot.nextCursor, hasMore: snapshot.hasMore,
     });
-    await (await disk()).write(authority.key, text, authority.current);
-  } catch { /* Cache failure must not affect reading or synchronizing. */ }
+    return await (await disk()).write(authority.key, text, authority.current);
+  } catch { return false; /* Retain outbox ownership when caching fails. */ }
 }
 
 export function clearHistoryDisk(deviceId?: string, sessionId?: string): Promise<void> {

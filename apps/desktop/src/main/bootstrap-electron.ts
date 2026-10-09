@@ -745,6 +745,7 @@ import {
   createAutomationUserTurnGitBaselineHooks,
   registerModelVisibilitySyncIpc,
   registerMakerIpc as registerMakerCoreIpc,
+  tryGetBotDelegationService,
   restoreBotRuntimeForCurrentOwner,
   isSessionTurnPendingCompletion,
   isSessionInTurn,
@@ -968,7 +969,7 @@ import {
   findOpenShareFileInArgv,
   setDeepLinkMainWindow,
   focusMainWindow as activateMainWindow,
-  takePendingDeepLink,
+  takePendingDeepLinkFromRenderer,
 } from './deepLink.js';
 import { createMakeTestWindowBehavior } from './cindy-make/testWindowBehavior.js';
 import { registerFolderContextMenu } from './folderContextMenu.js';
@@ -2948,9 +2949,7 @@ ipcMain.on('app-locale:get-preferred-system-locale-sync', (event) => {
 // renderer 侧 MainLayout mount 后主动拉一次冷启动期间缓存的 deep link /
 // --open-folder payload。pull-on-mount 路径专用,take 一次清空,重复调安全。
 // 详见 deepLink.ts 的 pending buffer 段。
-ipcMain.handle('deep-link:take-pending', () => {
-  return takePendingDeepLink();
-});
+ipcMain.handle('deep-link:take-pending', takePendingDeepLinkFromRenderer);
 
 ipcMain.handle('app-menu:set-locale', (_event, locale: unknown): { ok: true } => {
   currentApplicationMenuLocale = resolveApplicationMenuLocale(
@@ -4313,12 +4312,18 @@ const registerIpcHandlers = () => {
   });
 
   // 系统级通知（CC Agent session 完成时弹出 / 可选飞书私聊）
+  const isCompletionHandledByTeammate = (sessionId: string): Promise<boolean> =>
+    tryGetBotDelegationService()?.isCompletionHandledByTeammate(sessionId) ?? Promise.resolve(false);
   initNotificationService({
+    isCompletionHandledByTeammate: (sessionId) => getAgentIslandService()?.waitForCompletionNotification(sessionId)
+      ?? isCompletionHandledByTeammate(sessionId),
     getWindow: () => getWindow() ?? null,
     feishuIm,
   });
   initWecomGroupNotificationIpc();
   initAgentIslandService({
+    // The relay waits for native done before checking the durable result handoff.
+    isCompletionHandledByTeammate,
     getMainWindow: () => getWindow() ?? null,
     isPlannedRemoteDaemonClose: isCcMgrUpgradeInFlight,
     onSessionActivityChange: (activity) => {

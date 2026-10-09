@@ -73,7 +73,7 @@ describe('remote Orca Worker creation context', () => {
     expect(selector).toContain('if (!deviceId) {');
     expect(selector).toContain('if (subscriptionDirectDisabledReason(id)) return true;');
     expect(selector).toContain("if (isCustomRoutedProvider(provider)) return false;");
-    expect(selector).toContain("return id.startsWith('codex/') && !hasSavedKey;");
+    expect(selector).toContain('return isCodexGatewayWireModel(id) && !hasSavedKey;');
     expect(selector).toContain("if (remoteModelListStatus !== 'ready') return true;");
     expect(selector).toContain(
       'if (remoteProviders.error) return remoteProviders.unsupported ? false : true;',

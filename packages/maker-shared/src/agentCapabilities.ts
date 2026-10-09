@@ -285,9 +285,12 @@ export function categorizeMobileModel(id: string): MobileModelCategory {
   // 本来就带命名空间,只认裸 id 会让整批模型掉进兜底分类。
   const tail = lower.slice(lower.lastIndexOf('/') + 1);
   if (lower.startsWith('claude-') || tail.startsWith('claude-')) return 'anthropic';
-  // 折扣路由必须判在 gpt 之前:`codex/gpt-5.5` 的尾段就是 `gpt-5.5`,顺序反了会被认成
-  // 'gpt',于是切换确认框把「GPT 折扣」模型读成「GPT」。桌面 categorize 同一处理。
-  if (lower.startsWith('codex/')) return 'gpt-budget';
+  // 折扣路由必须判在 gpt 之前:`openai-codex/gpt-*` 与 `codex/gpt-5.5` 的尾段都是 gpt-*,
+  // 顺序反了会被认成 'gpt'。与桌面 `CODEX_GATEWAY_WIRE_PREFIXES` 保持同一组前缀。
+  if (
+    (lower.startsWith('openai-codex/') && lower.length > 'openai-codex/'.length) ||
+    (lower.startsWith('codex/') && lower.length > 'codex/'.length)
+  ) return 'gpt-budget';
   if (lower.startsWith('gpt-') || tail.startsWith('gpt-')) return 'gpt';
   if (lower.startsWith('gemini-') || tail.startsWith('gemini-')) return 'google';
   return 'ungrouped';

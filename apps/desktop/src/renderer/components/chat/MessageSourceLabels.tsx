@@ -1,5 +1,5 @@
 /**
- * 用户消息气泡上方的来源标签行。
+ * 消息气泡上方的来源标签行；群内显式私聊的 assistant 消息复用同一行。
  *
  * 两个独立维度（与 @cindy/maker-shared/message-source 同口径）：
  *  - 谁发的（至多一个）：自动化 / 其他任务 / 伙伴 / Orca 发送方 / Hook 渠道 / 插件；
@@ -9,7 +9,7 @@
  * 整行属于来源标注，分享图不带（SHARE_SOURCE_ATTR）。
  */
 
-import { Monitor, Puzzle, Smartphone } from 'lucide-react';
+import { Monitor, Puzzle, Smartphone, Users } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
@@ -27,7 +27,7 @@ import {
 import { SHARE_SOURCE_ATTR } from '@/lib/shareConversationImage';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
-import type { MessageSourceDevice, MessageSourcePlugin } from '@cindy/maker-shared/message-source';
+import type { MessageSourceDevice, MessageSourcePlugin, MessageSourceGroup } from '@cindy/maker-shared/message-source';
 
 import { AutomationOriginBadge, MessageSourceLabelShell } from './AutomationOriginBadge';
 
@@ -152,6 +152,7 @@ export function MessageSourceLabels({
   hookIm,
   sourceDevice,
   sourcePlugin,
+  sourceGroup,
   hostSessionId,
   align = 'end',
 }: {
@@ -159,10 +160,11 @@ export function MessageSourceLabels({
   hookIm?: string;
   sourceDevice?: MessageSourceDevice;
   sourcePlugin?: MessageSourcePlugin;
+  sourceGroup?: MessageSourceGroup;
   hostSessionId?: string;
   align?: 'start' | 'end';
 }) {
-  if (!automationOrigin && !sourceDevice && !sourcePlugin) return null;
+  if (!automationOrigin && !sourceDevice && !sourcePlugin && !sourceGroup) return null;
   return (
     <div
       {...{ [SHARE_SOURCE_ATTR]: '' }}
@@ -172,8 +174,10 @@ export function MessageSourceLabels({
         align === 'start' ? 'justify-start' : 'justify-end',
       )}
     >
-      {/* 插件优先(与 messageSourceSenderFromMeta 同序):插件在某任务里派发时同时带来源任务 origin。 */}
-      {sourcePlugin ? (
+      {/* 群来源仅用于显式私聊；普通发送方仍以插件优先于其运行任务。 */}
+      {sourceGroup ? (
+        <MessageSourceGroupBadge group={sourceGroup} />
+      ) : sourcePlugin ? (
         <MessageSourcePluginBadge plugin={sourcePlugin} hostSessionId={hostSessionId} />
       ) : automationOrigin ? (
         <AutomationOriginBadge
@@ -185,4 +189,14 @@ export function MessageSourceLabels({
       {sourceDevice ? <MessageSourceDeviceBadge device={sourceDevice} /> : null}
     </div>
   );
+}
+
+function MessageSourceGroupBadge({ group }: { group: MessageSourceGroup }) {
+  const { t } = useTranslation();
+  return <MessageSourceLabelShell
+    kind="group"
+    icon={<Users size={11} strokeWidth={1.75} aria-hidden className="shrink-0" />}
+    label={group.name ? t('chat.userMessage.groupSentNamed', { name: group.name }) : t('chat.userMessage.groupSent')}
+    tooltip={t('chat.userMessage.sourceIds.group', { id: group.groupId })}
+  />;
 }

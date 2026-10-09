@@ -141,7 +141,7 @@ describe('mobile settings overview', () => {
     expect(overview.sections.find((section) => section.id === 'about')?.collapsible).toBeUndefined();
 
     expect(overview.sections.find((section) => section.id === 'about')?.rows).toContainEqual({
-      detail: '电脑端授权列表会显示这个名称。',
+      detail: '显示在电脑的授权列表中',
       id: 'about.deviceName',
       label: '设备名称',
       value: 'Carol iPhone',

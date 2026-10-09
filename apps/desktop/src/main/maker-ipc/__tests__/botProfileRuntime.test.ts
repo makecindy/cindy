@@ -70,7 +70,9 @@ describe('Bot Profile runtime prompt', () => {
     expect(prompt).toContain('installed-plugin gateway (`ghost_list`, `ghost_info`, `ghost_call`)');
     expect(prompt).toContain('New mounts take effect next turn in this same task');
     expect(prompt).toContain('`start_session_task`');
-    expect(prompt).toContain('proactively start independent tasks for coding and medium or large work');
+    expect(prompt).toContain('Prefer completing work in the current chat');
+    expect(prompt).toContain('the user explicitly requests an independent task');
+    expect(prompt).not.toContain('proactively start independent tasks');
     expect(prompt).toContain('`check_session_task`');
     expect(prompt).toContain('`message_session_task`');
     expect(prompt).toContain('`stop_session_task`');

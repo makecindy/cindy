@@ -28,6 +28,9 @@ const CONTROLLED_SOURCE_FILES = Object.freeze([
   'apps/desktop/src/main/clientEndpointsService.ts',
   'apps/mobile/src/config/env.ts',
   'apps/mobile/src/config/clientEndpointStartup.ts',
+  'apps/mobile/src/chat/useChatServer.ts',
+  'apps/mobile/src/chat/chatServerClient.ts',
+  'apps/mobile/src/chat/chatServerSubscription.ts',
   'apps/mobile/eas.json',
   'packages/embedding-client/src/client.ts',
   'packages/embedding-client/src/types.ts',
@@ -76,8 +79,22 @@ function findAbsoluteOrigins(content) {
   ].map((match) => match[0].toLowerCase());
 }
 
+/** Production manifests must publish the endpoint required by the mobile direct client. */
+export function validatePublishedChatEndpoint(manifest) {
+  let url;
+  try { url = new URL(manifest?.chatApiBaseUrl); } catch { throw new Error('chatApiBaseUrl must be a nonempty HTTPS URL'); }
+  if (url.protocol !== 'https:' || !url.hostname || url.username || url.password || url.search || url.hash) {
+    throw new Error('chatApiBaseUrl must be an HTTPS base URL without credentials, query or fragment');
+  }
+}
+
 function main() {
   const errors = [];
+
+  for (const file of ['config/endpoint.json', 'config/endpoint.global.json']) {
+    try { validatePublishedChatEndpoint(JSON.parse(fs.readFileSync(path.join(REPO_ROOT, file), 'utf8'))); }
+    catch (error) { errors.push(`${file}: ${error.message}`); }
+  }
 
   for (const file of CONTROLLED_SOURCE_FILES) {
     const content = fs.readFileSync(path.join(REPO_ROOT, file), 'utf8');

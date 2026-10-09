@@ -164,7 +164,10 @@
     "retryToolInput": "입력을 불러오지 못했습니다. 다시 시도",
     "toolResultCompacted": "전체 도구 출력이 해제되었습니다(원래 크기 {{size}})",
     "mermaidEmpty": "빈 Mermaid 다이어그램.",
-    "diffEditCount": "{{n}}개 편집"
+    "diffEditCount": "{{n}}개 편집",
+    "groupSentNamed": "그룹 「{{name}}」에서 보냄",
+    "groupSent": "그룹에서 보냄",
+    "sourceGroupId": "그룹 ID: {{id}}"
   },
   "actions": {
     "attachmentsPrefix": "첨부파일: {{names}}",
