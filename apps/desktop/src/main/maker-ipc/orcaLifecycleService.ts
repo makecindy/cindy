@@ -98,6 +98,7 @@ export interface OrcaLifecycleDeps {
   dispatchWorkerTask(params: {
     targetSessionId: string;
     message: string;
+    imagePaths?: string[];
     dispatchMeta: {
       source: string;
       context: string;
@@ -204,6 +205,7 @@ export function createOrcaLifecycleService(deps: OrcaLifecycleDeps): OrcaLifecyc
   async function dispatchInitialTask(params: {
     workerSessionId: string;
     message: string | undefined;
+    imagePaths?: string[];
     context: string;
   }, assertCurrent?: () => Promise<void>): Promise<DispatchWorkerTaskResult | undefined> {
     if (!params.message) return undefined;
@@ -223,6 +225,7 @@ export function createOrcaLifecycleService(deps: OrcaLifecycleDeps): OrcaLifecyc
       const result = await deps.dispatchWorkerTask({
         targetSessionId: params.workerSessionId,
         message: params.message,
+        ...(params.imagePaths ? { imagePaths: params.imagePaths } : {}),
         dispatchMeta: {
           source: dispatchSource,
           context: params.context,
@@ -275,6 +278,7 @@ export function createOrcaLifecycleService(deps: OrcaLifecycleDeps): OrcaLifecyc
         dispatchResult = await dispatchInitialTask({
           workerSessionId: created.workerSessionId,
           message: initialTask,
+          ...(params.initialTaskImages ? { imagePaths: params.initialTaskImages } : {}),
           context: `create_worker/${created.workerSessionId}/initial_task`,
         }, assertCreatedCurrent);
       } else {

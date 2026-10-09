@@ -153,6 +153,7 @@ export function registerCreateWorkersTool(
           fast: worker.fast,
           label: worker.label,
           ...(worker.working_dir !== undefined ? { workingDir: worker.working_dir } : {}),
+          ...(worker.images ? { initialTaskImages: worker.images } : {}),
           initialTask: worker.initial_task,
         });
         limit = result.limit ?? limit;

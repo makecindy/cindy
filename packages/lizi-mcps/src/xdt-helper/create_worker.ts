@@ -59,6 +59,7 @@ export interface CreateWorkerDeps {
     label: string;
     workingDir?: string;
     initialTask?: string;
+    initialTaskImages?: string[];
   }) => Promise<CreateWorkerControlResult>;
 }
 
@@ -103,6 +104,11 @@ export const createWorkerSpecSchema = z.object({
     .min(1)
     .optional()
     .describe('可选, 创建后立即派给 worker 的第一条消息'),
+  images: z
+    .array(z.string().min(1))
+    .max(8)
+    .optional()
+    .describe('可选, 随 initial_task 发给 worker 的本机图片绝对路径(png/jpeg/gif/webp, 最多 8 张); 仅本机 worker 支持, SSH 远端 worker 会拒绝; 不传 initial_task 时忽略'),
   working_dir: z.string().min(1).max(4096).refine((value) => value.trim().length > 0).optional()
     .describe('可选，Worker 所在主机上已存在的绝对工作目录；省略则继承 Lead。创建前校验并绑定，失败不回退；不创建目录或 Git worktree。'),
 }).strict();
@@ -157,7 +163,7 @@ export function registerCreateWorkerTool(
     category: 'control',
     description: DESCRIPTION,
     inputShape: createWorkerSpecSchema.shape,
-    handler: async ({ role, agent, model, provider_id, effort, fast, label, initial_task, working_dir }) => {
+    handler: async ({ role, agent, model, provider_id, effort, fast, label, initial_task, images, working_dir }) => {
       const ctx = deps.getSessionContext?.() ?? deps;
       if (!ctx.sessionId) {
         return errorPayload('LEAD_NOT_SUPPORTED', '当前 session 类型不支持作为 Lead。');
@@ -178,6 +184,7 @@ export function registerCreateWorkerTool(
         fast,
         label,
         ...(working_dir !== undefined ? { workingDir: working_dir } : {}),
+        ...(images ? { initialTaskImages: images } : {}),
         initialTask: initial_task,
       });
       if (!result.ok) {

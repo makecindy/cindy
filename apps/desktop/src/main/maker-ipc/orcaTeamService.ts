@@ -110,6 +110,8 @@ export type DispatchWorkerMessageResult =
 export interface DispatchWorkerTaskParams {
   targetSessionId: string;
   message: string;
+  /** 可选, 随首条任务发给 worker 的本机图片绝对路径; 仅本机 worker。 */
+  imagePaths?: string[];
   dispatchMeta: {
     source: string;
     context: string;
@@ -286,6 +288,7 @@ export interface OrcaTeamServiceDeps {
     message: string;
     workerId: string;
     delivery?: 'queue' | 'steer';
+    imagePaths?: string[];
     dispatchMeta: {
       source: string;
       context: string;
@@ -908,6 +911,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     message: string;
     mode: 'normal' | 'interrupt';
     delivery?: 'queue' | 'steer';
+    imagePaths?: string[];
     dispatchMeta: DispatchWorkerTaskParams['dispatchMeta'];
     assertCurrent?: () => Promise<void>;
   }): Promise<ResolvedWorkerDispatchExecution> {
@@ -1041,6 +1045,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
             message: params.message,
             workerId: link.workerId,
             ...(params.delivery ? { delivery: params.delivery } : {}),
+            ...(params.imagePaths ? { imagePaths: params.imagePaths } : {}),
             dispatchMeta: params.dispatchMeta,
             onAccepted,
             onAcceptedRollback: rollbackAccepted,
@@ -1123,6 +1128,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     targetSessionId: string;
     message: string;
     delivery?: 'queue' | 'steer';
+    imagePaths?: string[];
   }, assertCurrent?: () => Promise<void>): Promise<SendToWorkerResult> {
     return dispatchToWorker({ ...params, mode: 'normal' }, assertCurrent) as Promise<SendToWorkerResult>;
   }
@@ -1142,6 +1148,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     message: string;
     mode: 'normal' | 'interrupt';
     delivery?: 'queue' | 'steer';
+    imagePaths?: string[];
   }, captured?: () => Promise<void>): Promise<SendToWorkerResult | InterruptWorkerResult> {
     const assertCurrent = captured ?? await deps.captureControlAuthority?.(params.callerLeadSessionId);
     const resolved = await resolveWorkerRef(params.callerLeadSessionId, params.targetSessionId);
@@ -1160,6 +1167,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
       message: params.message,
       mode: params.mode,
       ...(params.delivery ? { delivery: params.delivery } : {}),
+      ...(params.imagePaths ? { imagePaths: params.imagePaths } : {}),
       assertCurrent,
       dispatchMeta: {
         source: 'maker-ipc/collab',

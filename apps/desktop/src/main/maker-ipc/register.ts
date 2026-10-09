@@ -2199,6 +2199,7 @@ interface OrcaCollabService {
     label: string;
     workingDir?: string;
     initialTask?: string;
+    initialTaskImages?: string[];
   }) => Promise<
     | {
         ok: true;
@@ -2307,6 +2308,7 @@ interface OrcaCollabService {
     targetSessionId: string;
     message: string;
     delivery?: 'queue' | 'steer';
+    imagePaths?: string[];
   }) => Promise<SendToWorkerResult>;
   interruptWorker: (params: {
     callerLeadSessionId: string;
@@ -11979,6 +11981,38 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     getSessionMeta: (sessionId) => maker.getSessionMeta(sessionId).catch(() => null),
     getSessionRowSnapshot,
     getLiveSession: (sessionId) => maker.getSession(sessionId),
+    validateImageAttachments: async (paths) => {
+      // 图片附件仅支持本机;扩展名白名单 + 存在性检查,失败给 Lead 可读的错误。
+      const mimeByExt: Record<string, string> = {
+        '.png': 'image/png',
+        '.jpg': 'image/jpeg',
+        '.jpeg': 'image/jpeg',
+        '.gif': 'image/gif',
+        '.webp': 'image/webp',
+      };
+      const images: Array<{ path: string; name: string; ext: string; size: number; mimeType: string }> = [];
+      for (const rawPath of paths) {
+        const ext = path.extname(rawPath).toLowerCase();
+        const mimeType = mimeByExt[ext];
+        if (!mimeType) {
+          return { ok: false, message: `unsupported image type (png/jpeg/gif/webp only): ${rawPath}` };
+        }
+        try {
+          const stat = await fsp.stat(rawPath);
+          if (!stat.isFile()) throw new Error('not a file');
+          images.push({
+            path: rawPath,
+            name: path.basename(rawPath),
+            ext,
+            size: stat.size,
+            mimeType,
+          });
+        } catch {
+          return { ok: false, message: `image not found or unreadable: ${rawPath}` };
+        }
+      }
+      return { ok: true, images };
+    },
     shouldQueueNewTurn: (sessionId): boolean => inputCoordinator.shouldQueueNewTurn(sessionId),
     steerControlInput: (sessionId, item, expectedTurn) =>
       inputCoordinator.steerControlInput(sessionId, { item }, expectedTurn),
@@ -12521,6 +12555,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       message,
       workerId,
       delivery,
+      imagePaths,
       dispatchMeta,
       onAccepted,
       onAcceptedRollback,
@@ -12533,6 +12568,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         senderLabel: 'Lead',
         workerId,
         ...(delivery ? { delivery } : {}),
+        ...(imagePaths ? { imagePaths } : {}),
         meta: dispatchMeta,
         onAccepted,
         onAcceptedRollback,

@@ -206,6 +206,8 @@ export interface OrcaWorkerCreateParams {
    */
   providerId?: string | null;
   initialTask?: string;
+  /** 可选, 随 initial_task 发给 worker 的本机图片绝对路径; 仅本机 worker。 */
+  initialTaskImages?: string[];
   /** Existing absolute directory on the Worker's host; omission inherits Lead. */
   workingDir?: string;
   /** 显式值用于本次创建；缺省读取全局 Worker 创建偏好。 */
@@ -289,6 +291,7 @@ export interface OrcaWorkerCreationDeps {
   dispatchWorkerTask(params: {
     targetSessionId: string;
     message: string;
+    imagePaths?: string[];
     dispatchMeta: {
       source: string;
       context: string;

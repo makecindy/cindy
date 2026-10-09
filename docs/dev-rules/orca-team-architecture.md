@@ -109,11 +109,11 @@ PR #101 之后，Orca 的 main 侧业务由独立 service 承接，`register.ts`
 1. `start_team`
 2. `end_team`
 3. `create_worker`
-4. `create_workers`（批量创建；顺序执行、hard limit 后停止并返回逐项汇总）
+4. `create_workers`（批量创建；顺序执行、hard limit 后停止并返回逐项汇总；每项支持可选 `images` 随 `initial_task` 发本机图片）
 5. `list_workers`
 6. `switch_focus`
-7. `send_to_worker`
-8. `interrupt_worker`（原子预留下一条输入并优雅停止当前 turn）
+7. `send_to_worker`（支持可选 `images`：本机图片绝对路径，随消息发给本机 worker；SSH 远端 worker 拒绝）
+8. `interrupt_worker`（原子预留下一条输入并优雅停止当前 turn；不支持图片）
 9. `get_worker_queue_status`（工作态与完整队列）
 10. `update_queued_message`（排队消息控制）
 11. `cancel_queued_message`（排队消息控制）
@@ -311,6 +311,17 @@ Git worktree，不改变供应商、模型与 Worker 创建权限偏好。
 
 1a. **空闲 live 直发前必须先做换窗预检（状态：不变量）**<br>
 目标空闲且已有 live session 时，dispatcher 仍走 `session.send()`，不经过 `sendToSessionInternal()`。这条直发必须先调用与用户发送相同的 `prepareUnhealthySession`：满窗或当前进程内 `needsRollover` 锁存时关闭旧原生窗口，再 `getLiveSession`。不能把 inter-agent 消息打进应被丢弃的旧窗口。prepare → 重新取 live → send 整段必须复用 `sendToSessionInternal` 的 per-session 锁；锁已被占用时先排队，不要把 in-flight prepare 当成健康状态继续直发。没有 live 后释放锁再走 `sendToSessionInternal`，避免自己把自己排队。实现指针：`orcaInterAgentDispatcher.ts` 的 live 分支，以及 `register.ts` 注入的 `prepareUnhealthySession` / `withSendToSessionLock`。
+
+1c. **图片附件仅限本机目标，走既有附件通道（状态：不变量）**<br>
+   `send_to_worker` 与 `create_worker` / `create_workers` 的 `images` 参数只接受本机图片绝对路径
+   （png/jpeg/gif/webp，最多 8 张）；目标 session 的 DB 快照带 `remoteHostId` 时必须拒绝，
+   不降级为纯文本（静默丢图是产品错误）。dispatcher 入口经 host 注入的
+   `validateImageAttachments` 做存在性与扩展名校验；直发时 image block 跟在格式化文本后，
+   排队/插话时文件挂在 entry `files`，drain 由 `buildMakerUserMessage` 还原成同样的
+   block 序列；`update_queued_message` / `merge_queued_messages` 重建只改文本字段，
+   files 随 `...entry` 保留。带图消息的 `persistedContent`（DB/展示）仍是纯文本协议，
+   队列气泡不预览图片（已知边界）。实现指针：`orcaInterAgentDispatcher.ts` 的
+   `imageFiles` / `agentMessageTextWithImages` 与 `register.ts` 的 `validateImageAttachments`。
 
 2. **accepted 才能产生运行副作用（状态：不变量）**<br>
    只有底层 send accepted 后，才能把 worker 标成 `running`、建立 auto-bridge pending 并广播 UI；dispatch 失败必须 rollback 到 accepted 前状态，且 rollback 不得覆盖已有终态。实现指针：`orcaTeamService.ts` 的 `dispatchResolvedWorker` 与 `rollbackAcceptedDispatchState`。
