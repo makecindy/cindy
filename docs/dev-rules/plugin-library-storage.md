@@ -55,6 +55,8 @@ backups）对插件不可达——路径语法段首不许点，协议层天然�
    实际撤 grant。自动 open 失败要把 drift 记进 session，同盘归位后仅 `status` 也须恢复。合法 default
    首次创建仍可 mkdir。被 rename 走的原件仍在旧目录，不称已删除。同一磁盘对象归位后既有 `open`/`status`
    恢复，删后重建的同路径是 `binding-moved` 不是原盘回归。Windows st_ino=0 检不出同路径重建，已知限制。
+   既有 Library meta 的插件身份与当前物理实例不一致时不得打开；namespace 物理搬迁
+   必须随数据同步更新 meta 身份，恢复重试可重复执行但不得认领其它插件的库。
    插件侧同样语义写进了 FORGE_GUIDE。
 2. **卸载不删**：uninstall 只标 orphaned + 作废会话；binding 保留（用户亲选
    事实不因重装消失）。删除 = 设置页独立破坏性确认 + `trashGhostLibrary`
@@ -63,6 +65,9 @@ backups）对插件不可达——路径语法段首不许点，协议层天然�
 3. **owner 隔离**：会话绑定 `activeOwnerScopeKey` 每请求比对；切换在途由
    `interruptGhostCallsForAccountBoundary` 的 `disposeAll` 收口（在途写入随串行
    链归属原 owner）。根解析每次经 binding store 现解。
+   Host 的 bind/unbind/relocate/revert-default 与换源归档共用安装变更队列，复制及 binding
+   提交必须在同一队列操作内完成；排队前捕获安装目标，出队后复核，目标变化时拒绝旧操作。
+   owner mutation 租约只稳定账号归属，不能替代此互斥队列。
 4. **路径纪律**：相对路径四层校验（`isSafeGhostRelativePath` →
    `validateLibraryRelPath` → `isInsideDir` → realpath 祖先收敛），目标 lstat
    不穿透 symlink。写入 = staging + fsync + rename + dev/ino identity 复验

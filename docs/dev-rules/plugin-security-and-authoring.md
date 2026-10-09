@@ -45,10 +45,81 @@
 - `.cindy` 是以 `ghost.json` 为身份卡的插件包，现行唯一形态为 `kind: 'chip'`。
 - 代码目录与运行时使用 `cindy-brain` / `Ghost` 命名，**不得重新引入已退役的 cartridge
   声明型兼容层**。
-- `cindy-` / `filo-` / `xd-` 是官方保留 id 前缀，第三方插件不得占用；前缀正本见
-  `apps/desktop/src/shared/ghost.ts` 的 `GHOST_OFFICIAL_ID_PREFIXES`。
+- `cindy-` 保留为平台官方命名；`filo-` / `xd-` 可作为普通插件名称，名称本身不授予特权。
+  旧官方资格只从升级时真实旧安装的可信批准与来源事实保留，换源后清除。企业 XD 宿主
+  能力核对 namespace、当前组织与已批准包来源，不要求名称带 `xd-`。保留命名判据见
+  `apps/desktop/src/shared/ghost.ts` 的 `isUserInstallReservedGhostId`。
 
-### 1.1 Manifest v3 直接能力声明
+### 1.1 服务端阶段与安装身份
+
+客户端同时承接 S1、S2 关闭和 S2 开启，不根据是否收到 namespace 判断阶段，也不自造阶段开关。
+S1 和 S2 关闭时保留旧认领与发布入口，由服务端执行命名准入；S2 开启后同一客户端可以
+安装和运行自然命名的企业实例。namespace 缺失是旧协议待确认状态，只有显式 null 才是 root。
+通过安装入口新装的 root 插件使用 `_ns/_root/<id>` 和 `_root__<id>` 数据键，企业新实例使用
+`_ns/<namespace>/<id>`；`_root` 仅是目录保留名，root 的 namespace 仍为 null。
+旧安装只原位确认 namespace，保留原目录与数据键；更新时也不搬迁。安装同名 root 不停旧企业插件，
+不搬旧数据、凭证或界面引用。内置种子沿用既有布局。
+namespace 迁移读取市场账本时区分缺失与损坏，损坏证据不能作为 root 或手动来源的依据。
+普通账本写回也不得过滤并删除坏行，避免后续迁移把损坏事实误判为无记录。
+断连的企业市场记录仍匹配原批准内容时保持 pending；恢复失败或常驻重试不能把它认作手动 root。
+已完成迁移的旧 Forge 安装保留 namespace 与批准修订号；降级丢失 namespace 后，只在原批准、
+Forge 来源及当前组织分类都吻合时恢复，不能据此认领普查后新装的实例。
+同来源 Forge 更新先持久化原／新批准修订的桥接证据，提交和回滚都保留该旧实例的恢复资格。
+旧组织身份缺少 orgSlug 时，发布先刷新已验签身份；仍缺失则从当前服务端市场的
+currentOrganization 核对同组织、同 membership 与 owner 后补齐，不能把前缀当成 namespace。
+
+安装、调用、项目启停、OAuth、媒体归属和卸载必须使用 Main 核准的实例键，不能用 URL host
+或裸插件名选取同名实例。调度器只绑定可信 XD 企业实例；旧调用没有明确实例且同名候选
+不唯一时，不默认选择 root。OAuth 连接在开始时绑定批准版本、owner 和实例，最终写入
+仍在凭证锁内复核，身份变更后旧流程不得把账号写给替代实例。
+面板和逻辑页的内存 session 绑定 owner 代次、批准版本及目录，协议注册事实不可原位复用。
+旧页即使尚未被 Renderer 销毁，也不能在替换后发起新请求；异步响应返回前再次核对绑定。
+外部请求保留 namespace 缺失／null／组织三态；选定实例后的内部复核、订阅队列、下载和
+外链导航按物理实例定位，不再用裸名字重新选择。文件确认记忆及授权卡 adapter 绑定安装
+身份，不能跨实例复用授权；身份或批准变化使旧卡失效，恢复卡先更新实例与交互版本。
+普通 Setup 的 Connection 和 Secret 表单在创建时绑定安装批准版本，最终写入再次核对；
+相同物理键和 manifest 不代表相同安装。持久 Bot 授权卡保存批准绑定，恢复时批准变化则
+终结旧卡；缺少绑定的旧卡先绑定当前安装并提高交互版本，旧提交不能直接执行。
+同批准版本的合法物理位置变化仍刷新卡片身份后恢复，不按换源处理。
+新 root 技能快照的断链回收识别 `_ns/_root/<id>`，仍须核对受管根、root 身份和插件 ID，
+不得覆盖真实目录或删除外来链接。
+历史交互卡及手机插件资源只按持久化的物理实例键定位，实例消失后不得回退到同名逻辑身份。
+手机 relay 和资源 fetch 复用该实例实际运行的批准版本分区，不能仅按 manifest id 构造分区。
+手机资源 ref 使用物理实例键；PluginPageDocument.pluginId 仍是协议 host（manifest id），
+不能拿资源 ref 拼协议 URL。资源 id 独立允许至 256 字符，覆盖最长 namespace 实例键，
+手机列表与 Host 请求复用同一 ref parser；collection、kind 等其它标识仍保持原上限。
+
+旧集成账号导入只允许仍有历史来源资格或可信内置资格的已批准原物理实例；
+换源清除资格后，保留的旧凭证文件不得再次导入。OAuth 导入还须核对原提供方路径：
+Google 直连仅使用确切的 Google token endpoint，Atlassian 仅使用原 jira broker。
+面板关闭请求携带用户确认时的批准版本，Main 在停止运行时前及安装变更队列内复核；
+迟到的确认不得停用替代安装。
+
+同来源更新延续原实例与数据。真正换源时，安装事务把旧密钥、OAuth、连接、KV、私有文件、
+Library、媒体、卡片归属、偏好、亲选目录、errand 会话映射及普通任务回执隔离归档；新来源不能自动继承。
+任务回执的实例键在既有任务写入队列中归档，保留原任务、消息、成果和请求身份，并增加修订号使旧写入失效。
+换源不继承旧任务能力批准；新来源即使重新获批也不能读取归档任务。同来源更新和原位 namespace 确认保留原归属。
+旧包回滚时恢复旧数据和任务归属；中断恢复依据
+receipt 的提交版本选择归档或还原，恢复未完成前保持隔离。普通升级迁移不属于换源，
+不要求旧插件重新授权。归档不会把历史任务和面板改指向一个可运行的归档插件。
+归档恢复与安装、卸载共用变更队列，并在回调前后核对 owner、journal 和 receipt；
+归档与卸载统一先取得安装变更队列，再取得任务写入队列；任务存储就绪后重试未完成恢复。
+换源归档的暂存上传除搬目录，还迁移库 meta、任务 manifest 和
+未完成 intent 的实例归属，保留原任务、owner、校验和与文件字节；失败可按日志重放。
+旧恢复任务不能覆盖后续重装。损坏批准的本地包仍可明确重装恢复，但不继承旧来源资格。
+有在途工具、文件请求、网络请求或 AI 工作时先等待，网络请求从异步凭证准备起计入在途；
+网络响应及媒体落仓全程复核入口绑定的安装批准与 owner。异步用户确认绑定原安装目标，不让晚到的结果
+重建原键或授权给替代实例。资源迁移幂等重放现有安装日志，
+中途失败保留日志与隔离，不能靠只存于内存的回滚闭包认定恢复完成。
+已有安装／更新恢复日志时，后续更新或卸载不得覆盖该日志或解除隔离；已有卸载日志按原意图续跑。
+
+Library 目录重命名必须有持久、owner 绑定的事务证据，重放校验原目录与授权根的文件身份
+及绑定代次。目标目录已存在但没有本事务证据时仍拒绝，不得把它当作自己的已完成重命名。
+换源归档及其预检严格读取 Library binding；读取失败、损坏配置或无效记录必须拒绝，不能按默认位置继续。
+Library 请求同时绑定迁移代次和安装批准，根解析、排队及开库之后都复核；迁移结束清旗标
+不恢复旧请求的资格，避免延迟请求在归档后重建原目录或阻断回滚。
+
+### 1.2 Manifest v3 直接能力声明
 
 - 新插件统一使用 `schemaVersion: 3`，并填写插件实际依赖的首个 Cindy 正式版本作为
   `minCindyVersion`。Manifest schema 不设置统一的 Cindy 版本下限；具体版本只属于插件包元数据。
@@ -159,10 +230,13 @@
     策略为 `exempt`，不向用户确认。豁免只绑当前用户对该条目的默认下发资格：目录仍标
     `defaultInstall`、但用户已退订后再自行从市场安装的，扩权更新必须确认。
 - 市场安装账本是后续更新来源的唯一事实：服务端市场按 `pluginId + releaseId` 路由，
+  任一来源账本文件存在却损坏时，读写都必须拒绝，不得把其它来源的记录当成完整视图重写并覆盖损坏文件。
   自定义市场还必须匹配 `sourceKey`；已装目录的原始 `ghost.json` 字节 SHA-256 必须与账本
   一致。旧记录缺少 raw 字段时，Host 只能按已发布的 legacy digest 编码核对同一份受限读取
   的字节，命中后原地补字段且不改 `updatedAt`；raw 字段已经存在但不匹配时必须 fail closed，
   不得用当前目录覆盖基线。`manifestDigest` 保留旧语义供降级客户端读取，不能改写成 raw SHA。
+  无账本的旧前缀认领还须具备已完成历史迁移、无包哈希的批准回执及匹配的已批准 manifest；
+  Forge、现代重装回执和已知 namespace 不匹配的安装不能仅凭前缀自动认领。
   同 id 来源冲突或目录漂移通常不得被自动覆盖，只能由用户显式选择替换来源。唯一受控例外是：
   当前组织下发 `defaultInstall`、组织与合法非空前缀都精确匹配、同 ghost id 在目录中唯一时，
   可以接管无有效市场来源的普通本地安装，或修复同一目标 `pluginId` 的坏 market / legacy-adopted
@@ -310,10 +384,7 @@
   且安装目录 `ghost.json` 的 raw SHA（旧记录迁移前为集中 legacy digest）与记录一致；
   Manifest 与身份必须来自同一次受限读取，禁止分两次读取后分别校验与消费；或企业作者显式使用 `ghost_forge_install`
   安装、在提交前核对插件 id 与精确注入域名，且插件 id 命中当前组织前缀。手动导入不取得
-  Forge 作者资格。另有一条点名例外：`ghostId` 精确等于 `mivo-canvas` 的组织成员本地安装，
-  在已装 manifest 声明的精确 `oidc-token` host 仅为 `mivo-canvas.dsworks.cn` 时可解析 audience；其它本地插件、个人账号、
-  通配 host、其它精确 host 仍不签发。若该插件已有市场 organization 记录（含 `installed:false` 的卸载残留），不得走白名单捷径，必须仍走
-  digest 校验。市场账本损坏、schema 不认或该 ghostId 记录校验失败时 fail-closed，不得当成「无记录」走例外。Host 根据当前组织和插件 id 推导 audience。
+  Forge 作者资格。另有一条临时例外，计划在 XD 企业市场版 `mivo-canvas` 上线并发布一次性数据迁移后删除，只对 root 实例生效：`ghostId` 精确等于 `mivo-canvas`；已装 manifest 声明的精确 `oidc-token` host 只有 `mivo-canvas.dsworks.cn`；只在组织身份校验之后且没有市场记录时生效，已有 organization 记录（含 `installed:false`）仍走 digest，市场账本损坏、schema 不认或记录校验失败时 fail-closed，不得当成「无记录」；实例 namespace 必须为 null，或是尚未写入 namespace 的旧 root 安装。`_ns/xd/mivo-canvas` 这类企业实例、其它本地插件、个人账号、通配 host 和其它精确 host 仍不签发。Host 根据当前组织和插件 id 推导 audience。
   插件和 Node Worker 都不能读取或保存令牌。声明必须固定使用
   `Authorization: Bearer {value}` 并显式列出非空 `inject.hosts`；其中只允许精确域名，
   不允许通配。实际目标必须精确命中这份可信 manifest 声明的服务域名才会签发和注入。它没有用户输入、`url`、`exchange` 或
@@ -518,6 +589,21 @@
   **所有非随包插件**同时变成停用、必须逐个重新确认，本地包还要求重新提供原始 `.cindy`
   文件（包已丢失就无从恢复）。安全方向是对的，落地方式把一次内部机制升级变成了全量
   用户故障。
+
+
+### 5.1 实例注册表
+
+每个数据所有者一份 `plugin-instances.v1.json`。记录包含 `instanceKey`、目录 `contentRelId`、`ghostId`、`namespace`、`namespaceState`、`pluginId`、`source`、receipt 修订和包 sha。
+
+`instanceKey` 由安装目录推出，不另分配：旧 root 是 `helper`，新 root 是 `_root__helper`，企业是 `_ns__<namespace>__<ghostId>`。注册表丢失或损坏时按目录重建，KV、密钥和 OAuth 仍挂在这个键上。
+
+`namespaceState`：
+
+- `confirmed`：身份已确认，可以按该 namespace 使用 Broker、OIDC 等新权限。
+- `pending`：这次升级普查时已经存在、receipt 还没有 namespace 的旧安装。按升级前的规则继续运行，不停用。
+- `unconfirmed`：曾经确认过的 namespace 被旧客户端抹掉，或证据不够。不给新权限，等市场同步或 Forge 自测的正面证据再确认。
+
+市场同步补写账本 namespace 的条件只有一条：该行已安装，pluginId、ghostId、scope、organizationId 都与服务端目录一致，而且行上没有 namespace 字段。只补缺失，不覆盖已有值。非法 slug 不写。组织行上的显式 null 也不写成 root。
 
 ## 6. 作者契约与编写手册同步
 
