@@ -87,31 +87,66 @@ export function saveHomeViewPreferences(patch: HomeViewPreferencePatch): Promise
   return next;
 }
 
+/**
+ * 只持久化用户 override(docs/dev-rules/configuration-and-overrides.md §2):把 patch 合并进已存的
+ * 稀疏记录,未写过的字段不落盘,读取时按当下默认值补齐,默认值演进时未自定义的用户自动跟随。
+ * 三个筛选的 'all' 即「不筛选」= 默认,写入时删除字段(「重置筛选」由此恢复跟随默认);
+ * 其余字段一经用户显式选择就保留为 override,即使恰好等于当前默认值。
+ * 旧版本写下的完整记录无法区分是否自定义,按规则不猜测,原样当作 override。
+ */
 async function writeHomeViewPreferences(patch: HomeViewPreferencePatch): Promise<void> {
   // A failed read (disk/lock) must reject so we do not replace a still-valid
   // blob with defaults. Corrupt JSON is different: keeping it makes every
   // computer switch alert "couldn't save" forever.
   const raw = await AsyncStorage.getItem(STORAGE_KEY);
-  const current = raw === null ? emptyPreferences() : parseStoredPreferences(raw);
-  const next: HomeViewPreferences = {
-    groupByProject: patch.groupByProject ?? current.groupByProject,
-    groupDialogue: patch.groupDialogue ?? current.groupDialogue,
-    sortBy: patch.sortBy ?? current.sortBy,
-    statusFilter: patch.statusFilter ?? current.statusFilter,
-    projectOrder: patch.projectOrder ?? current.projectOrder,
-    manualProjectOrder: patch.manualProjectOrder ?? current.manualProjectOrder,
-    projectFilter: patch.projectFilter ? patch.projectFilter.value : current.projectFilter,
-    projectFilterOwner: patch.projectFilter ? patch.projectFilter.owner : current.projectFilterOwner,
-    vendorFilter: patch.vendorFilter ?? current.vendorFilter,
-    lastActivityFilter: patch.lastActivityFilter ?? current.lastActivityFilter,
-    viewMode: patch.viewMode ?? current.viewMode,
-    taskInfoFields: patch.taskInfoFields ?? current.taskInfoFields,
-    // null 是有效值(切回「所有对话」),用 undefined 判断字段是否出现在 patch 里。
-    selectedDevice: patch.selectedDevice !== undefined
-      ? normalizeDevice(patch.selectedDevice)
-      : current.selectedDevice,
+  const record: Record<string, unknown> = { ...(raw === null ? {} : parseStoredRecord(raw)) };
+  const assign = (field: string, value: unknown) => {
+    if (value !== undefined) record[field] = value;
   };
-  await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(serializePreferences(next)));
+  assign('groupByProject', patch.groupByProject);
+  assign('groupDialogue', patch.groupDialogue);
+  assign('sortBy', patch.sortBy);
+  assign('statusFilter', patch.statusFilter);
+  assign('projectOrder', patch.projectOrder);
+  assign('manualProjectOrder', patch.manualProjectOrder ? [...patch.manualProjectOrder] : undefined);
+  assign('viewMode', patch.viewMode);
+  assign('taskInfoFields', patch.taskInfoFields ? [...patch.taskInfoFields] : undefined);
+  if (patch.projectFilter) {
+    if (patch.projectFilter.value === 'all') {
+      delete record.projectFilter;
+      delete record.projectFilterOwner;
+    } else {
+      record.projectFilter = [...patch.projectFilter.value];
+      record.projectFilterOwner = patch.projectFilter.owner;
+    }
+  }
+  for (const field of ['vendorFilter', 'lastActivityFilter'] as const) {
+    const value = patch[field];
+    if (value === undefined) continue;
+    if (value === 'all') delete record[field];
+    else record[field] = value;
+  }
+  // null 是有效值(切回「所有对话」),用 undefined 判断字段是否出现在 patch 里。
+  if (patch.selectedDevice !== undefined) {
+    const device = normalizeDevice(patch.selectedDevice);
+    if (device) {
+      record.deviceId = device.deviceId;
+      record.deviceName = device.name;
+    } else {
+      delete record.deviceId;
+      delete record.deviceName;
+    }
+  }
+  await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(record));
+}
+
+/** 已存的稀疏记录;损坏或不是对象时从空记录重来(见上方关于损坏 JSON 的说明)。 */
+function parseStoredRecord(raw: string): Record<string, unknown> {
+  try {
+    return readRecord(JSON.parse(raw)) ?? {};
+  } catch {
+    return {};
+  }
 }
 
 export async function clearHomeViewPreferences(): Promise<void> {
@@ -164,14 +199,6 @@ function normalizeStoredPreferences(value: unknown): HomeViewPreferences {
   };
 }
 
-function parseStoredPreferences(raw: string): HomeViewPreferences {
-  try {
-    return normalizeStoredPreferences(JSON.parse(raw));
-  } catch {
-    return emptyPreferences();
-  }
-}
-
 function normalizeDevice(device: { deviceId: string; name: string } | null): HomeViewPreferences['selectedDevice'] {
   if (!device) return null;
   const deviceId = typeof device.deviceId === 'string' ? device.deviceId.trim() : '';
@@ -180,29 +207,6 @@ function normalizeDevice(device: { deviceId: string; name: string } | null): Hom
   return {
     deviceId,
     name: name || deviceId,
-  };
-}
-
-function serializePreferences(preferences: HomeViewPreferences): Record<string, unknown> {
-  return {
-    groupByProject: preferences.groupByProject,
-    groupDialogue: preferences.groupDialogue,
-    sortBy: preferences.sortBy,
-    statusFilter: preferences.statusFilter,
-    projectOrder: preferences.projectOrder,
-    manualProjectOrder: preferences.manualProjectOrder,
-    projectFilter: preferences.projectFilter,
-    ...(preferences.projectFilterOwner ? { projectFilterOwner: preferences.projectFilterOwner } : {}),
-    vendorFilter: preferences.vendorFilter,
-    lastActivityFilter: preferences.lastActivityFilter,
-    viewMode: preferences.viewMode,
-    taskInfoFields: preferences.taskInfoFields,
-    ...(preferences.selectedDevice
-      ? {
-          deviceId: preferences.selectedDevice.deviceId,
-          deviceName: preferences.selectedDevice.name,
-        }
-      : {}),
   };
 }
 

@@ -126,6 +126,27 @@ describe('homeViewPreferenceStore', () => {
     });
   });
 
+  it('persists only user overrides and drops a filter when it is reset to all', async () => {
+    const { __testing, readHomeViewPreferences, saveHomeViewPreferences } = await import('@/session/homeViewPreferenceStore');
+    await saveHomeViewPreferences({ groupDialogue: true });
+    // 没碰过的设置不落盘,读取时按当下默认值补齐。
+    expect(JSON.parse(store.get(__testing.storageKey) ?? '{}')).toEqual({ groupDialogue: true });
+    await expect(readHomeViewPreferences(OWNER)).resolves.toEqual({ ...defaultPrefs, groupDialogue: true });
+
+    await saveHomeViewPreferences({
+      lastActivityFilter: '7d',
+      projectFilter: { owner: OWNER, value: ['proj-a'] },
+      vendorFilter: 'codex',
+    });
+    // 「重置筛选」写回 all = 删除 override,恢复跟随默认。
+    await saveHomeViewPreferences({
+      lastActivityFilter: 'all',
+      projectFilter: { owner: OWNER, value: 'all' },
+      vendorFilter: 'all',
+    });
+    expect(JSON.parse(store.get(__testing.storageKey) ?? '{}')).toEqual({ groupDialogue: true });
+  });
+
   it('only restores a project filter for the account identity that saved it', async () => {
     const { readHomeViewPreferences, saveHomeViewPreferences } = await import('@/session/homeViewPreferenceStore');
     await saveHomeViewPreferences({ projectFilter: { owner: OWNER, value: ['proj-a'] }, vendorFilter: 'pi' });
