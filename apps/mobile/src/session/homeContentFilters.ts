@@ -92,7 +92,9 @@ export function applyHomeContentFilters(
     if (sessions.length === 0) return [];
     const unchanged = sessions.length === project.sessions.length
       && sessions.every((item, index) => item === project.sessions[index]);
-    return [unchanged ? project : { ...project, sessionCount: sessions.length, sessions }];
+    // 与初始项目分组同口径:自动化组行按组内运行数计入。
+    const sessionCount = sessions.reduce((sum, item) => sum + (item.automationGroup?.sessionCount ?? 1), 0);
+    return [unchanged ? project : { ...project, sessionCount, sessions }];
   });
   return {
     ...home,

@@ -54,6 +54,16 @@ function home(over: Partial<MobileHomePresentation>): MobileHomePresentation {
   return { chats: [], pinned: [], projects: [], ...over } as unknown as MobileHomePresentation;
 }
 
+function run(id: string, agentKind: string, daysAgo: number): RemoteSessionListItem {
+  const base = item(id, { agentKind, daysAgo });
+  return {
+    ...base,
+    scheduleInfo: { scheduleId: 'nightly', scheduleName: 'Nightly', unreadRunIds: [], unreadCount: 0 },
+    session: { ...base.session, source: 'scheduler', title: 'Nightly' },
+    title: 'Nightly',
+  } as unknown as RemoteSessionListItem;
+}
+
 const NO_FILTERS: HomeContentFilters = { lastActivity: 'all', projects: 'all', vendor: 'all' };
 
 describe('home content filters (desktop 筛选 parity)', () => {
@@ -98,12 +108,6 @@ describe('home content filters (desktop 筛选 parity)', () => {
   });
 
   it('filters automation runs individually instead of trusting the group representative', () => {
-    const run = (id: string, agentKind: string, daysAgo: number) => ({
-      ...item(id, { agentKind, daysAgo }),
-      scheduleInfo: { scheduleId: 'nightly', scheduleName: 'Nightly', unreadRunIds: [], unreadCount: 0 },
-      session: { ...item(id, { agentKind, daysAgo }).session, source: 'scheduler', title: 'Nightly' },
-      title: 'Nightly',
-    }) as unknown as RemoteSessionListItem;
     const [group] = groupAutomationListItems(
       [run('old-cc', 'cc', 9), run('new-codex-1', 'codex', 0), run('new-codex-2', 'codex', 1)],
       NOW,
@@ -120,6 +124,18 @@ describe('home content filters (desktop 筛选 parity)', () => {
     const cc = applyHomeContentFilters(fixture, { ...NO_FILTERS, vendor: 'cc' }, NOW).chats;
     expect(cc.map((entry) => [entry.session.id, !!entry.automationGroup])).toEqual([['old-cc', false]]);
     expect(applyHomeContentFilters(fixture, { ...NO_FILTERS, vendor: 'pi' }, NOW).chats).toEqual([]);
+  });
+
+  it('counts the runs of a filtered automation group in the project total', () => {
+    const [group] = groupAutomationListItems(
+      [run('old-cc', 'cc', 9), run('new-codex-1', 'codex', 0), run('new-codex-2', 'codex', 1)],
+      NOW,
+    );
+    const fixture = home({ projects: [project('p', [group, item('plain-cc'), item('plain-codex', { agentKind: 'codex' })])] });
+    const [filtered] = applyHomeContentFilters(fixture, { ...NO_FILTERS, vendor: 'codex' }, NOW).projects;
+    expect(filtered.sessions).toHaveLength(2);
+    // 自动化组行剩 2 次运行 + 1 条普通任务。
+    expect(filtered.sessionCount).toBe(3);
   });
 
   it('applies harness and activity filters to shared rows but keeps discovery-only rows', () => {
@@ -210,6 +226,20 @@ describe('creation-time task sort', () => {
       'chat:new-but-idle',
       'p',
       'chat:old-but-active',
+    ]);
+  });
+
+  it('sorts an automation group by its newest run, not by an older representative', () => {
+    const [group] = groupAutomationListItems([run('run-old', 'cc', 9), run('run-new', 'cc', 0)], NOW);
+    // 组代表可能是较旧的未读 / 待处理运行。
+    const olderPrimary = {
+      ...group,
+      session: { ...group.session, createdAt: new Date(NOW - 9 * DAY).toISOString() },
+    } as RemoteSessionListItem;
+    const presentation = home({ chats: [item('mid', { createdDaysAgo: 3, daysAgo: 3 }), olderPrimary] });
+    expect(buildMixedHomeRows(presentation, { sortBy: 'created' }).map((row) => row.key)).toEqual([
+      `chat:${olderPrimary.automationGroup?.key}`,
+      'chat:mid',
     ]);
   });
 });

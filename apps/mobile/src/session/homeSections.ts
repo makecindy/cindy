@@ -314,8 +314,14 @@ function homeRowCreatedMs(row: HomeRow): number {
   return max;
 }
 
+/** 自动化组行代表多次运行,取组内最新创建的一次(组代表可能是较旧的未读 / 待处理运行)。 */
 function sessionCreatedMs(item: RemoteSessionListItem): number {
-  return activityMsFromIso(item.session.createdAt);
+  let max = activityMsFromIso(item.session.createdAt);
+  for (const run of item.automationGroup?.items ?? []) {
+    const ms = activityMsFromIso(run.session.createdAt);
+    if (ms > max) max = ms;
+  }
+  return max;
 }
 
 function compareSessionItemsByPriority(
