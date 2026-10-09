@@ -33,10 +33,12 @@ function harness(rows: RemoteMessage[], streaming = false, lazyDetails = false) 
 }
 
 describe('remote history preserves original folding', () => {
-  it('keeps recovered work folded after reopening and restores details on expansion', async () => {
+  it.each([CONTINUE_AFTER_ERROR_PROMPT, { text: CONTINUE_AFTER_ERROR_PROMPT },
+    JSON.stringify({ text: CONTINUE_AFTER_ERROR_PROMPT, images: [], files: [] }),
+  ])('keeps recovered work folded after reopening and restores details on expansion: %j', async (content) => {
     const rows = [row(0, 'user', 'Work'), row(1, 'assistant', 'Checking'), thought(2),
       row(3, 'error', { message: 'Usage limit reached' }),
-      row(4, 'user', { text: CONTINUE_AFTER_ERROR_PROMPT }),
+      row(4, 'user', content),
       row(5, 'assistant', 'Resuming'), thought(6),
       { ...row(7, 'assistant', 'Done'), agentMeta: { turnCompleted: true } }];
     const { view, render } = harness(rows);
