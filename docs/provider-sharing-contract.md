@@ -123,7 +123,7 @@ interface ReceivedShare {
 
 仿 `/shared-task/join`：口令在 `#` 之后（`#<token>[?app=cindy|cindycn|cindydev]`），页面不访问数据库。
 桌面浏览器一律唤起 `cindy://provider-share/join?invitation=<token>&server=<origin+prefix>`（与共享任务一致：各区域与 dev 的桌面版
-都注册 `cindy://`；`app` 提示只给手机网页用）。唤起失败时提示把链接粘贴到 Cindy（设置 → 模型供应商 →「分享给我的供应商」）。
+都注册 `cindy://`；`app` 提示只给手机网页用）。唤起失败时提示把链接粘贴到 Cindy（设置 → 模型供应商 → 右上角「输入分享链接…」；2026-10-08 起入口从左栏组末移到这里，加入页文案需同步）。
 手机浏览器不唤起 App，显示「请在电脑上打开这个链接」并提供复制链接。五种语言、深浅色、严格 CSP。
 
 ## 4. 身份名片（auth-server）
@@ -140,7 +140,9 @@ interface ReceivedShare {
 ## 5. 分享者电脑本地（客户端）
 
 - 受邀者对端由 peer key 判定（`controllerTrust` 返回 guest）；准入要求：允许远程控制、该分享供应商的「允许被远程调用」、本机缓存里分享与成员 active。
-- 只放行 invoke channel：`maker:remote-agent:v1`、`maker:provider:list`（只返回该分享的供应商）；订阅与其他 channel 全拒，迟到的结果在撤权后改写为拒绝。
+- 只放行 invoke channel：`maker:remote-agent:v1`、`maker:provider:list`（只返回该分享的供应商），以及模型列表与发送前检查要读的
+  `maker:get-capabilities`（只留该供应商的模型）、`maker:list-available-agents`（只留它支持的 Agent）、`maker:agent:status`
+  （只回该供应商支持的 Agent 是否装好 `binaryReady`，不带本机路径、登录身份与分享者自己的登录状态）；订阅与其他 channel 全拒，迟到的结果在撤权后改写为拒绝。
 - 远程 Agent 运行按受邀者设备隔离（peer key 含分享、成员与设备）：运行数上限沿用每个控制端的上限；暂停或删除时立即结束任务，删除时清理本机会话数据（影子工作区、附件、会话记录）；用量记录保留。
 
 ## 6. P3 跨区域（服务端开关 `PROVIDER_SHARE_CROSS_REGION_ENABLED`，默认关）

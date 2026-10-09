@@ -65,6 +65,7 @@ import {
   AgentStartupCleanupPendingError,
   TurnPermissionPolicyUnsupportedError,
   PINNED_SKILL_INVOCATION,
+  ASYNC_QUESTION_ANSWER,
   DEVICE_HOSTED_GUEST_ROUTE_HEADER,
   type AgentSessionHandle,
   type AgentDeps,
@@ -4638,11 +4639,15 @@ export class ClaudeCodeAgent extends BaseAgent {
       pendingBoundaryEvents: number;
       /** A later natural/synthetic done has closed the product turn. */
       settled: boolean;
+      /** A submitted async answer already accepted by the SDK input queue. */
+      asyncAnswer?: boolean;
     };
     // Claims are created synchronously when the provider enqueues a `done`.
     // The id is attached to that exact event, so a fast task_notification or
     // result-only continuation cannot change what the host later observes.
     let nextContinuationId = 1;
+    // Claude coalesces input queued before the next SDK segment into one turn.
+    let queuedAsyncAnswer = false;
     let activeContinuationId: number | null = null;
     // User Stop can close an awaiting product continuation while the provider
     // still has buffered activity. Suppress that cancelled tail until its
@@ -4702,6 +4707,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       }
     };
     const cancelActiveContinuation = (reason: string): ContinuationClaim | null => {
+      queuedAsyncAnswer = false;
       const claim = activeContinuationClaim();
       if (!claim || claim.state !== 'awaiting') return null;
       claim.state = 'cancelled';
@@ -4726,6 +4732,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       releaseSettledContinuationClaim(claim);
     };
     const discardActiveContinuation = (reason: string, forceRelease = false): void => {
+      queuedAsyncAnswer = false;
       clearWakeContractReconciliation();
       if (continuationClaims.size > 0) {
         log.debug('discarding turn continuation claims', {
@@ -4797,6 +4804,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         interruptedGeneration ||
         continuationCancellationGeneration === turnState.generation
       ) {
+        queuedAsyncAnswer = false;
         if (interruptedGeneration && existing) retireContinuationTasks(existing);
         return wasActiveContinuation;
       }
@@ -4804,13 +4812,16 @@ export class ClaudeCodeAgent extends BaseAgent {
       for (const [taskId] of wakeTasks) {
         if (!carriedTasks.has(taskId)) carriedTasks.set(taskId, 'running');
       }
-      if (carriedTasks.size === 0) return wasActiveContinuation;
+      const asyncAnswer = queuedAsyncAnswer;
+      queuedAsyncAnswer = false;
+      if (carriedTasks.size === 0 && !asyncAnswer) return wasActiveContinuation;
       const claim: ContinuationClaim = {
         id: nextContinuationId++,
         state: 'awaiting',
         tasks: carriedTasks,
         pendingBoundaryEvents: 1,
         settled: false,
+        ...(asyncAnswer ? { asyncAnswer: true } : {}),
       };
       continuationClaims.set(claim.id, claim);
       activeContinuationId = claim.id;
@@ -4847,6 +4858,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       // concurrent interrupt resolving or rejecting; waiting for that control
       // result would leak the claim when no further provider event can exist.
       if (
+        !claim.asyncAnswer &&
         states.length > 0 &&
         states.every((state) => state === 'stopped')
       ) {
@@ -4968,7 +4980,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       }
     };
     const claimTasksAllTerminal = (claim: ContinuationClaim): boolean => {
-      if (claim.tasks.size === 0) return false;
+      if (claim.tasks.size === 0) return claim.asyncAnswer === true;
       for (const state of claim.tasks.values()) {
         if (state === 'running') return false;
       }
@@ -5211,6 +5223,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         // 后台任务表旁路观察(O(1) type check,task 事件低频,不碰热路径逻辑)。
         const cancelledContinuation = noteBackgroundTaskEvent(e);
         if (ignoredLateTerminalTaskEvents.delete(e)) return true;
+        if (e.type === 'error' && isTerminalAgentErrorEvent(e)) queuedAsyncAnswer = false;
         if (queuedBridgeTurns > 0) {
           if (e.type === 'done') {
             rememberBridgeSuppressedDoneData(e.data);
@@ -6789,6 +6802,7 @@ export class ClaudeCodeAgent extends BaseAgent {
           // received it.
           throw new Error('No active Claude turn to steer: input queue is closed');
         }
+        if (sendOpts?.[ASYNC_QUESTION_ANSWER]) queuedAsyncAnswer = true;
         appendActiveCapabilitySelectionText(
           userMessageTextForCapabilityRouting(message.content),
         );

@@ -56,6 +56,42 @@ export interface NewSessionDraft {
   fastMode: boolean;
   firstMessage: string;
   extraDirs?: string[];
+  /**
+   * 远程 Agent:Agent 在哪台电脑运行——同账号另一台电脑的 deviceId,或别人分享给被控电脑的
+   * 供应商(`share:<shareId>`)。缺省 / null = 被控电脑自己。只在创建时由选中的远程模型写入
+   * (见 applyRemoteAgentPick),模型与来源随之属于那台电脑的目录。
+   */
+  agentDeviceId?: string | null;
+}
+
+/**
+ * 新建任务里选中的另一台电脑上的模型(同账号远程供应商或分享来的供应商)。与草稿分开存:
+ * 草稿的模型 / 来源一直按被控电脑的目录校准,这份不受那些校准影响,创建时整体覆盖进草稿。
+ */
+export interface NewSessionRemoteAgentPick {
+  deviceId: string;
+  agentKind: NewSessionAgentKind;
+  model: string;
+  providerId: string | null;
+  effort: string;
+  fastMode: boolean;
+}
+
+/** 把选中的远程模型落进要创建的草稿;没选时原样返回。 */
+export function applyRemoteAgentPick(
+  draft: NewSessionDraft,
+  pick: NewSessionRemoteAgentPick | null,
+): NewSessionDraft {
+  if (!pick) return draft;
+  return {
+    ...draft,
+    agentKind: pick.agentKind,
+    model: pick.model,
+    providerId: pick.providerId,
+    effort: pick.effort,
+    fastMode: pick.fastMode,
+    agentDeviceId: pick.deviceId,
+  };
 }
 
 export interface CreateSessionResult {
@@ -975,6 +1011,8 @@ export function buildRemoteCreateSessionOptions(draft: NewSessionDraft): CreateS
     ...(effort ? { effort } : {}),
     // 仅显式选了非空来源才带 providerId(空 = NULL = 被控端默认路由,对齐桌面 deviceLinkCreateArgs)。
     ...(providerId ? { providerId } : {}),
+    // Agent 在另一台电脑运行:与桌面新建任务同一个参数,被控电脑记进任务并经那台运行 Agent。
+    ...(draft.agentDeviceId ? { agentDeviceId: draft.agentDeviceId } : {}),
   };
   if (draft.workspaceKind === 'dialogue') return base;
   return {
@@ -1000,7 +1038,7 @@ export function normalizeCreateSessionResult(value: unknown): CreateSessionResul
 
 export function sessionFromCreateResult(
   result: CreateSessionResult,
-  fallback: Pick<NewSessionDraft, 'agentKind' | 'workspaceKind' | 'model' | 'effort' | 'permissionMode' | 'fastMode' | 'workingDir' | 'providerId'> & {
+  fallback: Pick<NewSessionDraft, 'agentKind' | 'workspaceKind' | 'model' | 'effort' | 'permissionMode' | 'fastMode' | 'workingDir' | 'providerId' | 'agentDeviceId'> & {
     firstMessage?: string;
     attachments?: readonly { name?: string; originalName?: string; path?: string; category?: string }[];
   },
@@ -1036,6 +1074,8 @@ export function sessionFromCreateResult(
     // 兜底/乐观会话必须带出来源:buildQueuedTextMessage 从这里复制 providerId 进
     // createOpts,缺了它,创建确认前排队的首条消息会丢来源路由(codex review P1)。
     providerId: fallback.providerId ?? null,
+    // 乐观行就带上 Agent 所在电脑:会话页的模型药丸与目录从一开始就按那台显示。
+    ...(fallback.agentDeviceId ? { agentDeviceId: fallback.agentDeviceId } : {}),
     _count: { messages: 0 },
   };
 }

@@ -183,24 +183,52 @@ export function getProviderShareHostSnapshot(): readonly ProviderShareOwned[] {
   return runtime?.shares ?? [];
 }
 
+/** 受邀者对端被拒的原因(只进日志，不发给对方)。 */
+export type ProviderShareGuestDenial =
+  | 'host-not-running'
+  | 'host-scope-stale'
+  | 'not-guest-peer'
+  | 'self-device'
+  | 'snapshot-not-loaded'
+  | 'share-unknown'
+  | 'share-on-other-device'
+  | 'member-not-active'
+  | 'remote-control-off'
+  | 'provider-not-remote';
+
+type GuestAccessCheck = { access: ProviderShareGuestAccess } | { denied: ProviderShareGuestDenial };
+
+function checkGuestAccess(controller: string): GuestAccessCheck {
+  const rt = runtime;
+  if (!rt || rt.stopped || runtime !== rt) return { denied: 'host-not-running' };
+  if (!current(rt)) return { denied: 'host-scope-stale' };
+  const peer = parseProviderSharePeer(controller);
+  if (!peer || peer.role !== 'guest') return { denied: 'not-guest-peer' };
+  const self = getDeviceId();
+  if (self && peer.deviceId === self) return { denied: 'self-device' };
+  const share = rt.shares.find((item) => item.shareId === peer.shareId);
+  if (!share) return { denied: rt.fetchedAt === 0 ? 'snapshot-not-loaded' : 'share-unknown' };
+  if (self && share.hostDeviceId !== self) return { denied: 'share-on-other-device' };
+  const member = share.members.find((item) => item.memberId === peer.memberId);
+  if (!member || member.status !== 'active') return { denied: 'member-not-active' };
+  if (!readDeviceLinkSettings().remoteControlEnabled) return { denied: 'remote-control-off' };
+  if (!isRemoteProviderInvocationAllowed(share.providerId)) return { denied: 'provider-not-remote' };
+  return { access: { shareId: share.shareId, memberId: member.memberId, providerId: share.providerId } };
+}
+
 /**
  * 受邀者对端的准入：分享与成员在本机快照里 active、这台电脑允许远程控制、分享的供应商仍开放
  * 「允许被远程调用」。任一不满足返回 null。
  */
 export function providerShareGuestAccess(controller: string): ProviderShareGuestAccess | null {
-  const rt = runtime;
-  if (!rt || !current(rt)) return null;
-  const peer = parseProviderSharePeer(controller);
-  if (!peer || peer.role !== 'guest') return null;
-  const self = getDeviceId();
-  if (self && peer.deviceId === self) return null;
-  const share = rt.shares.find((item) => item.shareId === peer.shareId);
-  if (!share || (self && share.hostDeviceId !== self)) return null;
-  const member = share.members.find((item) => item.memberId === peer.memberId);
-  if (!member || member.status !== 'active') return null;
-  if (!readDeviceLinkSettings().remoteControlEnabled) return null;
-  if (!isRemoteProviderInvocationAllowed(share.providerId)) return null;
-  return { shareId: share.shareId, memberId: member.memberId, providerId: share.providerId };
+  const result = checkGuestAccess(controller);
+  return 'access' in result ? result.access : null;
+}
+
+/** 受邀者对端为什么被拒；放行时为 null。只用于诊断日志。 */
+export function providerShareGuestDenial(controller: string): ProviderShareGuestDenial | null {
+  const result = checkGuestAccess(controller);
+  return 'denied' in result ? result.denied : null;
 }
 
 /** 不认识的受邀者连进来：可能是刚同意的成员，按需立即拉一次(限频)。 */

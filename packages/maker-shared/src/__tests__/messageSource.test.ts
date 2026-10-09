@@ -8,6 +8,7 @@ import {
   promptSafeSourceName,
   messageSourceSenderFromMeta,
   readMessageSourceDevice,
+  readMessageSourceGroup,
   readMessageSourcePlugin,
   sanitizeSourceName,
   shouldShowSourceDevice,
@@ -231,5 +232,15 @@ describe('buildClientDeviceNote', () => {
   it('is byte-stable for the same devices', () => {
     const device = { deviceId: 'phone-1', name: 'iPhone', platform: 'mobile' as const };
     expect(buildClientDeviceNote(device)).toBe(buildClientDeviceNote(device));
+  });
+});
+
+describe('private group reply provenance', () => {
+  it('shares sanitized group facts between UI and model handoff attribution', () => {
+    const meta = { sourceGroup: { groupId: 'group-1', name: 'Design\nRoom' },
+      origin: { kind: 'session', senderSessionId: 'lane-1', senderBotId: 'bot-1', senderBotName: 'Helper' } };
+    expect(readMessageSourceGroup(meta)).toEqual({ groupId: 'group-1', name: 'Design Room' });
+    expect(describeMessageSourceSender(messageSourceSenderFromMeta(meta)!)).toContain('从群聊「Design Room」(group_id: group-1)');
+    expect(readMessageSourceGroup({ sourceGroup: { name: 'No identity' } })).toBeUndefined();
   });
 });

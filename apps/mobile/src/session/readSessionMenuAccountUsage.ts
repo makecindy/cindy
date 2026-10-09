@@ -1,4 +1,5 @@
 import { selectCodexUsageForModel } from "@cindy/maker-shared/codex-usage-buckets";
+import { isCodexGatewayWireModel } from "@cindy/model-providers/classification";
 import { formatRemoteError } from "@cindy/maker-shared/device-link-contract";
 import {
   isXaiWeeklyUsageCurrent,
@@ -74,6 +75,10 @@ const empty = (
   windows: [],
   amounts: [],
 });
+/** An account this device cannot read (e.g. a provider shared by another account). */
+export function unavailableSessionMenuAccountUsage(): SessionMenuAccountUsage {
+  return empty("unavailable");
+}
 const finite = (value: unknown): value is number =>
   typeof value === "number" && Number.isFinite(value);
 const record = (value: unknown): Record<string, unknown> =>
@@ -191,7 +196,7 @@ export async function readSessionMenuAccountUsage(
   const gateway =
     provider === "xd" ||
     (provider === null &&
-      ((session.agentKind === "codex" && model.startsWith("codex/")) ||
+      ((session.agentKind === "codex" && isCodexGatewayWireModel(model)) ||
         claudeRoute === "gateway"));
   if (gateway) {
     const payload = record(await reader.getAccountUsage("claude-code"));

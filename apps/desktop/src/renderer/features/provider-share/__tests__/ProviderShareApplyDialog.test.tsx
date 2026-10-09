@@ -81,7 +81,11 @@ describe('ProviderShareApplyDialog', () => {
     await waitFor(() => expect(dialogState()).toBe('wait'));
     expect(state.command).toHaveBeenLastCalledWith({ action: 'send-request', link: 'https://x.test/provider-share/join#abc' });
     expect(screen.getByTestId('provider-share-pairing-code').textContent).toBe('4827');
-    expect(isProviderShareRequestTrackedByDialog('req-1')).toBe(true);
+    // The waiting UI can commit before its passive effects register the request and listener.
+    await waitFor(() => {
+      expect(isProviderShareRequestTrackedByDialog('req-1')).toBe(true);
+      expect(state.settledListeners.size).toBe(1);
+    });
 
     act(() => {
       for (const listener of state.settledListeners) {
@@ -90,7 +94,7 @@ describe('ProviderShareApplyDialog', () => {
     });
     await waitFor(() => expect(dialogState()).toBe('done'));
     expect(screen.getByText(/providerShare\.apply\.doneDescription/)).toBeTruthy();
-    expect(isProviderShareRequestTrackedByDialog('req-1')).toBe(false);
+    await waitFor(() => expect(isProviderShareRequestTrackedByDialog('req-1')).toBe(false));
 
     fireEvent.click(screen.getByRole('button', { name: 'providerShare.apply.newTask' }));
     expect(onNewTask).toHaveBeenCalledTimes(1);

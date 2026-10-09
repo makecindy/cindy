@@ -42,6 +42,7 @@ import {
   broadcastSessionCreated,
   cancelSchedulerAutoResume,
   enqueueSchedulerPrompt,
+  ensureSchedulerQueueRestored,
   hasQueuedSchedulerPrompt,
   isSchedulerAutoResumePending,
   isSchedulerPromptTracked,
@@ -143,8 +144,9 @@ async function startSchedulerInternal(deps: StartSchedulerDeps): Promise<Schedul
     resolveRouteCopyCapabilities,
     resolveDefaultModelRoute: resolveDefaultScheduleRoute,
     // 心跳撞忙排队桥:实现挂在 maker-ipc/register.ts 的 coordinator 装配处
-    // (holder 未就绪时 isSessionBusy 返回 false → runner 走原直发路径)。
+    // 先恢复快照再判忙闲；holder 未就绪时恢复返回 false，由 runner 顺延。
     schedulerQueue: {
+      ensureQueueRestored: ensureSchedulerQueueRestored,
       isSessionBusy: isSchedulerTargetSessionBusy,
       hasQueuedPrompt: hasQueuedSchedulerPrompt,
       enqueuePrompt: enqueueSchedulerPrompt,

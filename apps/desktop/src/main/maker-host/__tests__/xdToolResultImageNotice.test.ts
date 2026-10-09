@@ -42,7 +42,13 @@ describe('XD tool-result image notice', () => {
     () => 'https://gateway.example.com/anthropic/',
   );
 
-  it.each(['codex/gpt-5.6-sol', 'gpt-5.6-sol', 'gpt-5.6-sol[1m]'])(
+  it.each([
+    'codex/gpt-5.6-sol',
+    'openai-codex/gpt-5.6-sol',
+    'openai-codex/gpt-5.6-sol[1m]',
+    'gpt-5.6-sol',
+    'gpt-5.6-sol[1m]',
+  ])(
     'replaces XD-routed %s tool-result images without exposing image bytes',
     (model) => {
       const output = transform(
