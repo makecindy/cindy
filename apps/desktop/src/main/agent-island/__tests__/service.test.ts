@@ -6256,3 +6256,21 @@ describe('Agent Island device sessions', () => {
     });
   });
 });
+
+it('does not sound or mark attention for internal coordination completion, but surfaces a failure', async () => {
+  const { AgentIslandService } = await import('../service.js');
+  const publish = vi.fn(() => true);
+  const playSound = vi.fn(() => true);
+  const service = new AgentIslandService({ getMainWindow: () => null, nativeHost: { failed: false, publish, playSound } });
+  syncEnabledForTest(service, publish);
+  service.setSoundSettings({ enabled: true, sounds: { ...DEFAULT_AGENT_ISLAND_SOUND_SETTINGS.sounds,
+    complete: customSound('complete.wav'), error: customSound('error.wav') } });
+  const meta = { sessionId: 'coordination', agentKind: 'codex' as const };
+  service.handleAgentEvent(meta, { type: 'status', source: 'codex', data: { isRunning: true } });
+  playSound.mockClear();
+  service.handleAgentEvent(meta, { ...doneEvent(), agentMeta: { botTaskCoordination: true, botPrivateReply: true } });
+  expect(playSound).not.toHaveBeenCalled();
+  expect(service.getSessionActivitySnapshot(meta.sessionId)?.attention).not.toBe(true);
+  service.handleAgentEvent(meta, terminalErrorEvent('User action required'));
+  expect(playSound).toHaveBeenCalledWith(customSound('error.wav'));
+});

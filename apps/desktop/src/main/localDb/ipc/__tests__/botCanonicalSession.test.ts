@@ -3401,6 +3401,20 @@ describe('Bots list unread projection', () => {
     expect((await getBotRemoteResourceSource('bot-1')).lastReplyAt).toBe(0);
   });
 
+  it('keeps hidden coordination inputs and actions out of unread and preview after history reload', async () => {
+    const sessionId = await canonicalFor('bot-1');
+    insertMessage(sessionId, { id: 'result', role: 'assistant', content: 'Visible final result', createdAt: 1000 });
+    insertMessage(sessionId, { id: 'coordination', role: 'user', content: '[UI_ACTION_TRIGGER]File ownership agreement', createdAt: 2000,
+      agentMeta: { origin: { kind: 'session', senderSessionId: 'child' }, botTaskCoordinationInput: { delegationId: 'task', senderSessionId: 'child', runSequence: 1 } } });
+    insertMessage(sessionId, { id: 'audit-tool', role: 'tool_use', content: { toolName: 'read', input: {} }, createdAt: 3000 });
+    expect(await unreadFor('bot-1', { 'bot-1': 1500 })).toBe(0);
+    const resource = await getBotRemoteResourceSource('bot-1');
+    expect(resource.lastReplyAt).toBe(1000);
+    expect(resource.lastMessagePreview).toBe('Visible final result');
+    insertMessage(sessionId, { id: 'next-result', role: 'assistant', content: 'Requested update', createdAt: 4000 });
+    expect(await unreadFor('bot-1', { 'bot-1': 1500 })).toBe(1);
+  });
+
   it('counts only replies that landed after the read position', async () => {
     const sessionId = await canonicalFor('bot-1');
     insertMessage(sessionId, {

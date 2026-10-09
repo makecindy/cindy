@@ -257,6 +257,7 @@ export interface AgentInputSendOpts {
   /** Session reservation 时回调本轮 vendor generation；必须在 send 返回前绑定 leftover。 */
   onVendorTurnReserved?: (generation: number) => void;
   persistUserMessage?: {
+    botTaskCoordination?: AgentInputQueuedMessage['botTaskCoordination'];
     sharedTaskAuthor?: AgentInputQueuedMessage['sharedTaskAuthor'];
     /** 插件来源:写入 agentMeta.sourcePlugin 并生成 `[消息来源]`(不传给 maker-core)。 */
     sourcePlugin?: AgentInputQueuedMessage['sourcePlugin'];
@@ -1210,6 +1211,16 @@ export class AgentInputCoordinator {
       && vendorGeneration !== active.vendorTurnGeneration) return null;
     // A human steering a private reply takes ownership of the resulting output.
     return active.latestSteeringClientId ?? active.item?.clientId ?? null;
+  }
+
+  /** Only a main-owned accepted receipt can silence this turn. Human steering restores visibility. */
+  isActiveTaskCoordination(sessionId: string, vendorGeneration?: number): boolean {
+    const active = this.states.get(sessionId)?.activeTurn;
+    // Pending steering attribution precedes policy/attachment/provider acceptance.
+    // Only replacement of active.item after acceptance may release this silence.
+    return !!active?.item?.botTaskCoordination
+      && (vendorGeneration === undefined || active.vendorTurnGeneration === null
+        || vendorGeneration === active.vendorTurnGeneration);
   }
 
   /** Authority follows the active input, never pending steering or cumulative reply attribution. */
@@ -2251,6 +2262,10 @@ export class AgentInputCoordinator {
           typeof item.hostAcceptedAtMs === 'number' && Number.isFinite(item.hostAcceptedAtMs);
       }
     }
+    // Coordination must wait for its own turn and the normal dispatch-time
+    // relationship check. Read the host-owned row first: UI projections omit
+    // the receipt, and queue-to-steer must not silence an existing user turn.
+    if (item.botTaskCoordination) return false;
     if (state.steeringQueueClientIds.includes(item.clientId)) {
       log.info('steer ignored: duplicate in-flight clientId (control-side resend)', {
         sessionId,
@@ -4298,6 +4313,7 @@ export class AgentInputCoordinator {
     delete projected[HOST_ONLY_AGENT_PREFIX];
     delete projected.hostAcceptedAtMs;
     delete projected.autoReviewUserText;
+    delete projected.botTaskCoordination;
     delete projected.fromDeviceLinkClient;
     // Main-only wire-assembly hint; renderers mask rows from `text` alone.
     delete projected.agentOmitsTriggerPrefix;
@@ -4881,6 +4897,7 @@ export class AgentInputCoordinator {
         ...(head.fromDeviceLinkClient ? { fromDeviceLinkClient: true } : {}),
         ...(head.sourceDevice ? { sourceDevice: head.sourceDevice } : {}),
         persistUserMessage: {
+          ...(head.botTaskCoordination ? { botTaskCoordination: head.botTaskCoordination } : {}),
           ...(head.sharedTaskAuthor ? { sharedTaskAuthor: head.sharedTaskAuthor } : {}),
           ...(head.sourcePlugin ? { sourcePlugin: head.sourcePlugin } : {}),
           clientId: head.clientId,

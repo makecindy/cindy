@@ -5969,10 +5969,14 @@ function useSessionMessageCacheSync(
     clearTimeout(persistTimerRef.current);
     persistTimerRef.current = null;
     const ctx = ctxRef.current;
-    if (!ctx.deviceId || !ctx.sessionId || ctx.messages.length === 0) return;
+    if (!ctx.deviceId || !ctx.sessionId) return;
     if (remoteSessionStore.getSessionRetention(ctx.sessionId) !== 'regular') return;
+    // Store ingress can precede the last React render. A fresh write authority
+    // must use fresh rows, never the render snapshot from before an outbox handoff.
+    const latestMessages = remoteSessionStore.getMessages(ctx.sessionId);
+    if (latestMessages.length === 0) return;
     const cacheAuthority = captureSessionMessageCacheWriteAuthority(ctx.deviceId, ctx.sessionId);
-    void cacheSessionMessagesIfCurrent(cacheAuthority, ctx.messages).catch(() => undefined);
+    void cacheSessionMessagesIfCurrent(cacheAuthority, latestMessages).catch(() => undefined);
   }, []);
 }
 

@@ -1455,7 +1455,8 @@ export class AgentIslandService {
 
   private isCompletionEventSilenced(sessionId: string, event: AgentEvent): boolean {
     if (!isCompletionDoneEvent(event)) return false;
-    return event.turnOrigin?.surface === 'im' || this.silencedSessionRunIds.has(sessionId);
+    return event.agentMeta?.botTaskCoordination === true
+      || event.turnOrigin?.surface === 'im' || this.silencedSessionRunIds.has(sessionId);
   }
 
   private hadAttentionBeforeSilencedRun(sessionId: string): boolean {

@@ -713,7 +713,7 @@
       "ariaLabel": "搜索设置",
       "placeholder": "搜索设置",
       "resultsLabel": "设置搜索结果",
-      "noResults": "没有匹配的设置",
+      "noResults": "没有找到设置，试试其他关键词",
       "clear": "清除搜索"
     },
     "back": "返回",
@@ -721,7 +721,7 @@
       "customizedBadge": "已自定义",
       "restore": "恢复默认",
       "restored": "已恢复默认设置",
-      "restoreFailed": "恢复默认设置失败"
+      "restoreFailed": "未能恢复默认设置"
     },
     "tabs": {
       "storage": "存储空间",
@@ -770,8 +770,8 @@
       "compaction": "上下文压缩",
       "terminalShell": "默认终端 shell",
       "composer": "消息输入",
-      "linkOpen": "链接打开方式",
-      "streamFade": "流式动效",
+      "linkOpen": "打开链接",
+      "streamFade": "回复动效",
       "compatMode": "小技巧",
       "voiceInput": "语音输入",
       "import": "任务导入",
@@ -1072,26 +1072,26 @@
         "defaultPreset": "默认",
         "presets": "预设",
         "custom": "自定义",
-        "customPlaceholder": "输入 font-family",
-        "applyCustom": "应用",
+        "customPlaceholder": "输入字体名称，如 Arial",
+        "applyCustom": "应用字体",
         "uiFamily": {
           "label": "界面字体",
-          "description": "用于菜单、设置、对话正文等界面文字。",
+          "description": "用于菜单、设置和对话正文",
           "aria": "选择界面字体"
         },
         "uiSize": {
           "label": "界面字号",
-          "description": "影响对话正文、设置、菜单和弹窗等界面文字。",
+          "description": "调整菜单、设置和对话文字大小",
           "aria": "调整界面字号"
         },
         "codeFamily": {
           "label": "代码字体",
-          "description": "用于代码块、diff、编辑器和路径类等宽文本。",
+          "description": "用于代码、编辑器、修改对比和文件路径",
           "aria": "选择代码字体"
         },
         "codeSize": {
           "label": "代码字号",
-          "description": "只影响代码块、diff 和编辑器，不影响内联代码、状态数字、徽标和路径标签。",
+          "description": "仅调整代码块、修改对比和编辑器字号；不影响行内代码、状态数字、徽标和路径标签",
           "aria": "调整代码字号"
         },
         "presetsUi": {
@@ -1120,13 +1120,13 @@
         "system": "跟随系统"
       },
       "sidebarCardMode": {
-        "label": "侧边栏卡片模式",
-        "hint": "置顶任务以卡片形式展示，含执行状态摘要，卡片高度随摘要长短错落；侧栏拉宽时自动分 2~3 列。",
-        "aria": "切换侧边栏卡片模式"
+        "label": "置顶样式",
+        "hint": "选择置顶任务的文字、卡片或列表样式",
+        "aria": "选择置顶任务的显示样式"
       },
       "sidebarMainListMode": {
-        "label": "任务列表显示方式",
-        "hint": "侧边栏主列表（置顶以外）的显示形态：文字为紧凑单行，列表为带预览的两行。",
+        "label": "列表样式",
+        "hint": "未置顶任务：文字单行，列表带预览",
         "aria": "切换任务列表显示方式"
       },
       "ghostPanelRestore": {
@@ -1168,19 +1168,19 @@
       },
       "layout": {
         "label": "面板布局",
-        "hint": "面板位置和宽度会保留到下次启动。如果布局变得难以使用，可以恢复默认排列。",
+        "hint": "自动记住面板位置和宽度，可恢复默认",
         "reset": "恢复默认布局",
         "resetSuccess": "已恢复默认面板布局",
-        "resetFailed": "无法恢复默认面板布局",
+        "resetFailed": "未能恢复面板布局",
         "saved": "面板位置已保存；可在“设置 → 通用”的“外观”区域恢复默认布局",
-        "saveFailed": "无法保存面板位置"
+        "saveFailed": "未能保存面板位置"
       }
     },
     "notifications": {
       "title": "通知",
-      "sessionDoneLabel": "任务完成时弹出系统通知",
-      "sessionDoneHint": "仅在窗口失焦时弹出，避免前台打扰。",
-      "sessionDoneAria": "切换任务完成的系统通知",
+      "sessionDoneLabel": "系统通知",
+      "sessionDoneHint": "任务完成、出错或需要回复时提醒。普通任务仅在窗口处于后台时通知；开启灵动岛时改由灵动岛提醒。",
+      "sessionDoneAria": "切换任务系统通知",
       "feishuLabel": "任务完成或需要回复时发送飞书 / Lark 消息",
       "feishuHint": "通过已绑定的飞书或 Lark 机器人，向你私聊发送一条消息；仅在窗口失焦时发送。",
       "feishuDisabledHint": "需要先在「飞书 / Lark 机器人」中配置 bot 并向它发送一条消息以完成绑定。",
@@ -1219,8 +1219,8 @@
     },
     "windowBehavior": {
       "loginItem": {
-        "label": "登录电脑后自动启动 Cindy",
-        "hint": "登录系统后自动打开 Cindy，默认关闭",
+        "label": "自动启动",
+        "hint": "登录电脑后打开 Cindy，默认关闭",
         "requiresApproval": "请在 macOS 系统设置的登录项中允许 Cindy，完成后此设置才会生效",
         "loading": "正在读取系统设置…",
         "loadFailed": "无法读取启动设置，请重新打开此设置页重试",
@@ -1230,7 +1230,7 @@
       "title": "应用行为",
       "closeBehavior": {
         "label": "关闭主窗口时",
-        "hint": "首次关闭时会询问，选择后可随时在这里修改。",
+        "hint": "每次关闭都按此设置执行。未设置时，首次关闭会询问；可随时在这里修改",
         "aria": "选择关闭主窗口时的行为",
         "tray": "收起到托盘",
         "minimize": "最小化窗口",
@@ -1250,9 +1250,9 @@
         "title": "无法收起到托盘",
         "message": "系统托盘图标创建失败，窗口将保持打开。"
       },
-      "swallowActivationClickLabel": "后台窗口首次左键点击仅激活不透传",
-      "swallowActivationClickHint": "开启后，从后台切回窗口时的第一下左键点击只把窗口带到前台，不触发页面按钮或选中文本(避免误触)。\n关闭后即可一次点击继续操作，双屏使用时更顺手，但可能误触按钮。",
-      "swallowActivationClickAria": "切换后台窗口首次左键点击是否吞掉",
+      "swallowActivationClickLabel": "切回时防误触",
+      "swallowActivationClickHint": "左键点回后台窗口时，只唤起窗口。关闭后会同时操作点击位置，可能误触。",
+      "swallowActivationClickAria": "切换返回窗口时的误点保护",
       "macRestartNote": "macOS 上需要重启应用才能生效。"
     },
     "agentIsland": {
@@ -1344,7 +1344,7 @@
     "language": {
       "title": "语言",
       "label": "显示语言",
-      "hint": "仅影响应用界面。Agent 回复语言由 Agent 自身决定。",
+      "hint": "界面和 AI 错误说明使用此语言；普通回复按你的消息或语言要求",
       "ariaLabel": "显示语言选择",
       "options": {
         "system": "跟随系统",
@@ -1387,35 +1387,35 @@
         "nameHint": "留空则保持当前名字",
         "changeAvatar": "更换头像",
         "resetAvatar": "恢复默认头像",
-        "save": "保存",
+        "save": "保存资料",
         "cancel": "取消",
-        "syncHint": "名字和头像保存在你的账号中，所有设备同步生效。",
+        "syncHint": "名字和头像会保存到账号，并同步到你的所有设备",
         "avatarInvalid": "请选择 5MB 以内的 PNG / JPG / WebP 图片",
         "saveFailed": "保存失败，请重试"
       }
     },
     "help": {
       "title": "帮助",
-      "description": "这里是 {{appName}} 的 overview，用来说明进入应用后如何开始，以及更推荐的工作方式。",
+      "description": "了解如何用 {{appName}} 完成工作",
       "gettingStarted": {
         "title": "快速开始",
-        "step1": "先新建一个任务，告诉 Claude Code 或 Codex 你要完成的目标。",
-        "step2": "如果你的工作和项目代码有关，先选择工作目录，再让它读文件、解释代码或修改实现。",
-        "step3": "把对话区当作持续推进工作的地方：提出任务、查看结果、根据结果继续推进。"
+        "step1": "新建任务，告诉 AI 你想完成什么",
+        "step2": "处理项目文件前，先选择工作目录",
+        "step3": "查看结果，有需要就继续补充要求"
       },
       "workflows": {
-        "title": "推荐工作流",
-        "description": "{{appName}} 适合把不同目标拆成不同任务，并在侧边栏之间快速切换。",
-        "item1": "探索代码：先让 Agent 解释项目结构、关键文件和约束，再开始修改。",
-        "item2": "处理改动：让 Agent 先给出小步修改，再逐轮验证、修正并收敛。",
-        "item3": "并行处理：需要隔离上下文时，创建新任务分别处理不同目标。"
+        "title": "工作方法",
+        "description": "在 {{appName}} 中按目标分开任务",
+        "item1": "读代码：先了解项目结构，再开始修改",
+        "item2": "改代码：每次改一小步，检查后再继续",
+        "item3": "同时处理多件事：为每件事新建任务"
       },
       "recommendedWays": {
-        "title": "推荐的使用方式",
-        "description": "先描述目标和上下文，再给出你希望的结果形式，通常比只发一句短命令更高效。",
-        "item1": "先说清楚你要完成什么，再补充相关目录、文件或限制条件。",
-        "item2": "把大任务拆成多轮：先理解，再修改，再验证。",
-        "item3": "当你要处理独立问题时，创建新任务而不是把所有事情混在一个任务里。"
+        "title": "提问技巧",
+        "description": "说清目标、背景和想要的结果",
+        "item1": "附上相关文件，并说明要求和限制",
+        "item2": "复杂的事分步做：先理解，再修改、验证",
+        "item3": "无关的事另建任务，避免混在一起"
       },
       "linuxUpdates": {
         "title": "Linux 安装与更新",
@@ -1425,9 +1425,9 @@
         "item3": "Linux x64 支持 Beta 渠道，arm64 暂不支持。Linux 仅在你选择重启时应用更新，不会在空闲时自动安装。"
       },
       "qnaTitle": "直接提问",
-      "qnaDescription": "如果 overview 里没有覆盖到你的问题，可以直接问我该怎么做。",
+      "qnaDescription": "没找到答案？直接问你想做什么",
       "qnaPlaceholder": "例如：如何导入 codex 任务",
-      "qnaSend": "发送",
+      "qnaSend": "发送问题",
       "qnaPending": "正在整理答案…",
       "qnaNoAnswer": "暂时还没有可靠答案，你可以换个说法再问一次。",
       "qnaAiDisclaimer": "AI 生成，可能不准确",
@@ -1447,7 +1447,7 @@
       "panelAriaLabel": "帮助问答面板",
       "newSession": "新任务",
       "threadEmptyTitle": "有问题尽管问",
-      "threadEmptyHint": "覆盖常见问题的快速答案，可以追问纠正"
+      "threadEmptyHint": "告诉我你想做什么，也可以继续追问"
     },
     "about": {
       "title": "关于",
@@ -3726,28 +3726,28 @@
       }
     },
     "linkOpen": {
-      "title": "链接打开方式",
-      "description": "消息里左键点击网页或本机链接时的默认打开位置。右键仍可临时选择另一种方式。",
+      "title": "打开链接",
+      "description": "选择消息链接的打开位置，右键可临时更换",
       "web": {
         "label": "外部网页",
         "description": "互联网上的网页链接。",
         "ariaLabel": "选择外部网页的默认打开位置"
       },
       "local": {
-        "label": "内部网页",
-        "description": "本地硬盘上的 HTML 文件，以及本机地址（localhost）。",
-        "ariaLabel": "选择内部网页的默认打开位置"
+        "label": "本机网页",
+        "description": "此电脑的网页文件或本机地址",
+        "ariaLabel": "选择本机网页的打开位置"
       },
       "options": {
-        "sidebar": "内置侧边栏浏览器",
+        "sidebar": "内置浏览器",
         "external": "系统默认浏览器"
       }
     },
     "streamFade": {
-      "title": "流式动效",
-      "label": "输出文字淡入浮现",
-      "hint": "回复流式输出时，新文字逐词淡入浮现；开启后生效，关闭时内容直接显示。系统开启「减弱动态效果」时此动效始终关闭。",
-      "toggleAria": "开启或关闭流式输出淡入动效"
+      "title": "回复动效",
+      "label": "文字渐显",
+      "hint": "回复中的新文字逐渐显示。关闭后直接显示；系统开启减少动效时不启用。",
+      "toggleAria": "切换回复文字渐显效果"
     },
     "personalization": {
       "title": "个性化",
@@ -3836,9 +3836,9 @@
       "toggleAria": "切换提问导航条"
     },
     "promptRecommendation": {
-      "label": "输入框推荐提示词",
-      "description": "AI 回复结束后，输入框会显示预测的后续提示词，按 Tab 键可快速填入。",
-      "toggleAria": "切换输入框推荐提示词"
+      "label": "输入建议",
+      "description": "回复后建议下一句，按 Tab 填入",
+      "toggleAria": "切换下一条消息的输入建议"
     },
     "collaboration": {
       "loading": "正在加载协同设置…",

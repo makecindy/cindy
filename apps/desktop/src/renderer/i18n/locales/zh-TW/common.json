@@ -713,7 +713,7 @@
       "ariaLabel": "搜尋設定",
       "placeholder": "搜尋設定",
       "resultsLabel": "設定搜尋結果",
-      "noResults": "沒有符合的設定",
+      "noResults": "找不到設定，試試其他關鍵字",
       "clear": "清除搜尋"
     },
     "back": "返回",
@@ -721,7 +721,7 @@
       "customizedBadge": "已自定義",
       "restore": "恢復預設",
       "restored": "已恢復預設設定",
-      "restoreFailed": "恢復預設設定失敗"
+      "restoreFailed": "無法恢復預設設定"
     },
     "tabs": {
       "storage": "儲存空間",
@@ -770,8 +770,8 @@
       "compaction": "上下文壓縮",
       "terminalShell": "預設終端 shell",
       "composer": "訊息輸入",
-      "linkOpen": "連結開啟方式",
-      "streamFade": "串流動態效果",
+      "linkOpen": "開啟連結",
+      "streamFade": "回覆動效",
       "compatMode": "小技巧",
       "voiceInput": "語音輸入",
       "import": "任務匯入",
@@ -1072,26 +1072,26 @@
         "defaultPreset": "預設",
         "presets": "預設",
         "custom": "自定義",
-        "customPlaceholder": "輸入 font-family",
-        "applyCustom": "應用",
+        "customPlaceholder": "輸入字型名稱，例如 Arial",
+        "applyCustom": "套用字型",
         "uiFamily": {
           "label": "介面字型",
-          "description": "用於選單、設定、對話正文等介面文字。",
+          "description": "用於選單、設定和對話正文",
           "aria": "選擇介面字型"
         },
         "uiSize": {
           "label": "介面字號",
-          "description": "影響對話正文、設定、選單和彈窗等介面文字。",
+          "description": "調整選單、設定和對話文字大小",
           "aria": "調整介面字號"
         },
         "codeFamily": {
           "label": "程式碼字型",
-          "description": "用於程式碼塊、diff、編輯器和路徑類等寬文字。",
+          "description": "用於程式碼、編輯器、修改比較和檔案路徑",
           "aria": "選擇程式碼字型"
         },
         "codeSize": {
           "label": "程式碼字號",
-          "description": "只影響程式碼塊、diff 和編輯器，不影響內聯程式碼、狀態數字、徽標和路徑標籤。",
+          "description": "僅調整程式碼區塊、修改比較和編輯器字級；不影響行內程式碼、狀態數字、徽章和路徑標籤",
           "aria": "調整程式碼字號"
         },
         "presetsUi": {
@@ -1120,13 +1120,13 @@
         "system": "跟隨系統"
       },
       "sidebarCardMode": {
-        "label": "側邊欄卡片模式",
-        "hint": "置頂任務以卡片形式展示，含執行狀態摘要，卡片高度隨摘要長短錯落；側欄拉寬時自動分 2~3 列。",
-        "aria": "切換側邊欄卡片模式"
+        "label": "置頂樣式",
+        "hint": "選擇置頂任務的文字、卡片或列表樣式",
+        "aria": "選擇置頂任務的顯示樣式"
       },
       "sidebarMainListMode": {
-        "label": "任務列表顯示方式",
-        "hint": "側邊欄主列表（置頂以外）的顯示形態：文字為緊湊單行，列表為帶預覽的兩行。",
+        "label": "列表樣式",
+        "hint": "未置頂任務：文字單行，列表附預覽",
         "aria": "切換任務列表顯示方式"
       },
       "ghostPanelRestore": {
@@ -1168,19 +1168,19 @@
       },
       "layout": {
         "label": "面板佈局",
-        "hint": "面板位置和寬度會保留到下次啟動。如果佈局變得難以使用，可以恢復預設排列。",
+        "hint": "自動記住面板位置和寬度，可恢復預設",
         "reset": "恢復預設佈局",
         "resetSuccess": "已恢復預設面板佈局",
-        "resetFailed": "無法恢復預設面板佈局",
+        "resetFailed": "無法恢復面板配置",
         "saved": "面板位置已儲存；可在「設定 → 一般」的「外觀」區段恢復預設配置",
         "saveFailed": "無法儲存面板位置"
       }
     },
     "notifications": {
       "title": "通知",
-      "sessionDoneLabel": "任務完成時彈出系統通知",
-      "sessionDoneHint": "僅在視窗失焦時彈出，避免前臺打擾。",
-      "sessionDoneAria": "切換任務完成的系統通知",
+      "sessionDoneLabel": "系統通知",
+      "sessionDoneHint": "任務完成、出錯或需要回覆時提醒。一般任務僅在視窗處於背景時通知；開啟靈動島時改由靈動島提醒。",
+      "sessionDoneAria": "切換任務系統通知",
       "feishuLabel": "任務完成或需要回復時傳送飛書 / Lark 訊息",
       "feishuHint": "透過已繫結的飛書或 Lark 機器人，向你私聊傳送一條訊息；僅在視窗失焦時傳送。",
       "feishuDisabledHint": "需要先在「飛書 / Lark 機器人」中配置 bot 並向它傳送一條訊息以完成繫結。",
@@ -1219,8 +1219,8 @@
     },
     "windowBehavior": {
       "loginItem": {
-        "label": "登入電腦後自動啟動 Cindy",
-        "hint": "登入系統後自動開啟 Cindy，預設關閉",
+        "label": "自動啟動",
+        "hint": "登入電腦後開啟 Cindy，預設關閉",
         "requiresApproval": "請在 macOS 系統設定的登入項目中允許 Cindy，完成後此設定才會生效",
         "loading": "正在讀取系統設定…",
         "loadFailed": "無法讀取啟動設定，請重新開啟此設定頁重試",
@@ -1230,7 +1230,7 @@
       "title": "應用行為",
       "closeBehavior": {
         "label": "關閉主視窗時",
-        "hint": "首次關閉時會詢問，選擇後可隨時在這裡修改。",
+        "hint": "每次關閉都依此設定執行。尚未設定時，首次關閉會詢問；可隨時在這裡修改",
         "aria": "選擇關閉主視窗時的行為",
         "tray": "收起到系統匣",
         "minimize": "最小化視窗",
@@ -1250,9 +1250,9 @@
         "title": "無法收起到系統匣",
         "message": "系統匣圖示建立失敗，視窗將保持開啟。"
       },
-      "swallowActivationClickLabel": "後臺視窗首次左鍵點選僅啟用不透傳",
-      "swallowActivationClickHint": "開啟後，從後臺切回視窗時的第一下左鍵點選只把視窗帶到前臺，不觸發頁面按鈕或選中文字(避免誤觸)。\n關閉後即可一次點選繼續操作，雙屏使用時更順手，但可能誤觸按鈕。",
-      "swallowActivationClickAria": "切換後臺視窗首次左鍵點選是否吞掉",
+      "swallowActivationClickLabel": "切回時防誤觸",
+      "swallowActivationClickHint": "左鍵點回背景視窗時，只喚起視窗。關閉後會同時操作點擊位置，可能誤觸。",
+      "swallowActivationClickAria": "切換返回視窗時的誤點保護",
       "macRestartNote": "macOS 上需要重啟應用才能生效。"
     },
     "agentIsland": {
@@ -1344,7 +1344,7 @@
     "language": {
       "title": "語言",
       "label": "顯示語言",
-      "hint": "僅影響應用介面。Agent 回覆語言由 Agent 自身決定。",
+      "hint": "介面和 AI 錯誤說明使用此語言；一般回覆依你的訊息或語言要求",
       "ariaLabel": "顯示語言選擇",
       "options": {
         "system": "跟隨系統",
@@ -1387,35 +1387,35 @@
         "nameHint": "留空則保持當前名字",
         "changeAvatar": "更換頭像",
         "resetAvatar": "恢復預設頭像",
-        "save": "儲存",
+        "save": "儲存資料",
         "cancel": "取消",
-        "syncHint": "名字和頭像儲存在你的帳號中，所有裝置同步生效。",
+        "syncHint": "名字和頭像會儲存到帳號，並同步到你的所有裝置",
         "avatarInvalid": "請選擇 5MB 以內的 PNG / JPG / WebP 圖片",
         "saveFailed": "儲存失敗，請重試"
       }
     },
     "help": {
       "title": "幫助",
-      "description": "這裡是 {{appName}} 的 overview，用來說明進入應用後如何開始，以及更推薦的工作方式。",
+      "description": "瞭解如何用 {{appName}} 完成工作",
       "gettingStarted": {
         "title": "快速開始",
-        "step1": "先新建一個任務，告訴 Claude Code 或 Codex 你要完成的目標。",
-        "step2": "如果你的工作和專案程式碼有關，先選擇工作目錄，再讓它讀檔案、解釋程式碼或修改實現。",
-        "step3": "把對話區當作持續推進工作的地方：提出任務、檢視結果、根據結果繼續推進。"
+        "step1": "新增任務，告訴 AI 你想完成什麼",
+        "step2": "處理專案檔案前，先選擇工作目錄",
+        "step3": "查看結果，有需要就繼續補充要求"
       },
       "workflows": {
-        "title": "推薦工作流",
-        "description": "{{appName}} 適合把不同目標拆成不同任務，並在側邊欄之間快速切換。",
-        "item1": "探索程式碼：先讓 Agent 解釋專案結構、關鍵檔案和約束，再開始修改。",
-        "item2": "處理改動：讓 Agent 先給出小步修改，再逐輪驗證、修正並收斂。",
-        "item3": "並行處理：需要隔離上下文時，建立新任務分別處理不同目標。"
+        "title": "工作方法",
+        "description": "在 {{appName}} 中按目標分開任務",
+        "item1": "讀程式碼：先瞭解專案結構，再開始修改",
+        "item2": "改程式碼：每次改一小步，檢查後再繼續",
+        "item3": "同時處理多件事：為每件事新增任務"
       },
       "recommendedWays": {
-        "title": "推薦的使用方式",
-        "description": "先描述目標和上下文，再給出你希望的結果形式，通常比只發一句短命令更高效。",
-        "item1": "先說清楚你要完成什麼，再補充相關目錄、檔案或限制條件。",
-        "item2": "把大任務拆成多輪：先理解，再修改，再驗證。",
-        "item3": "當你要處理獨立問題時，建立新任務而不是把所有事情混在一個任務裡。"
+        "title": "提問技巧",
+        "description": "說清目標、背景和想要的結果",
+        "item1": "附上相關檔案，並說明要求和限制",
+        "item2": "複雜的事分步做：先理解，再修改、驗證",
+        "item3": "無關的事另建任務，避免混在一起"
       },
       "linuxUpdates": {
         "title": "Linux 安裝與更新",
@@ -1425,9 +1425,9 @@
         "item3": "Linux x64 支援 Beta 渠道，arm64 暫不支援。Linux 僅在你選擇重新啟動時套用更新，不會在閒置時自動安裝。"
       },
       "qnaTitle": "直接提問",
-      "qnaDescription": "如果 overview 裡沒有覆蓋到你的問題，可以直接問我該怎麼做。",
+      "qnaDescription": "沒找到答案？直接問你想做什麼",
       "qnaPlaceholder": "例如：如何匯入 codex 任務",
-      "qnaSend": "傳送",
+      "qnaSend": "傳送問題",
       "qnaPending": "正在整理答案…",
       "qnaNoAnswer": "暫時還沒有可靠答案，你可以換個說法再問一次。",
       "qnaAiDisclaimer": "AI 生成，可能不準確",
@@ -1447,7 +1447,7 @@
       "panelAriaLabel": "幫助問答面板",
       "newSession": "新任務",
       "threadEmptyTitle": "有問題儘管問",
-      "threadEmptyHint": "覆蓋常見問題的快速答案，可以追問糾正"
+      "threadEmptyHint": "告訴我你想做什麼，也可以繼續追問"
     },
     "about": {
       "title": "關於",
@@ -3726,28 +3726,28 @@
       }
     },
     "linkOpen": {
-      "title": "連結開啟方式",
-      "description": "訊息裡左鍵點選網頁或本機連結時的預設開啟位置。右鍵仍可臨時選擇另一種方式。",
+      "title": "開啟連結",
+      "description": "選擇訊息連結的開啟位置，右鍵可臨時更換",
       "web": {
         "label": "外部網頁",
         "description": "網際網路上的網頁連結。",
         "ariaLabel": "選擇外部網頁的預設開啟位置"
       },
       "local": {
-        "label": "內部網頁",
-        "description": "本機硬碟上的 HTML 檔案，以及本機位址（localhost）。",
-        "ariaLabel": "選擇內部網頁的預設開啟位置"
+        "label": "本機網頁",
+        "description": "此電腦的網頁檔案或本機位址",
+        "ariaLabel": "選擇本機網頁的開啟位置"
       },
       "options": {
-        "sidebar": "內建側邊欄瀏覽器",
+        "sidebar": "內建瀏覽器",
         "external": "系統預設瀏覽器"
       }
     },
     "streamFade": {
-      "title": "串流動態效果",
-      "label": "輸出文字淡入顯示",
-      "hint": "回覆串流輸出時，新文字會逐詞淡入顯示；開啟後套用效果，關閉時內容會立即顯示。系統開啟「減少動態效果」時，此效果一律關閉。",
-      "toggleAria": "開啟或關閉串流輸出淡入效果"
+      "title": "回覆動效",
+      "label": "文字漸顯",
+      "hint": "回覆中的新文字逐漸顯示。關閉後直接顯示；系統開啟減少動態效果時不啟用。",
+      "toggleAria": "切換回覆文字漸顯效果"
     },
     "personalization": {
       "title": "個性化",
@@ -3836,9 +3836,9 @@
       "toggleAria": "切換提問導航條"
     },
     "promptRecommendation": {
-      "label": "輸入框推薦提示詞",
-      "description": "AI 回覆結束後，輸入框會顯示預測的後續提示詞，按 Tab 鍵可快速填入。",
-      "toggleAria": "切換輸入框推薦提示詞"
+      "label": "輸入建議",
+      "description": "回覆後建議下一句，按 Tab 填入",
+      "toggleAria": "切換下一則訊息的輸入建議"
     },
     "collaboration": {
       "loading": "正在載入協同設定…",

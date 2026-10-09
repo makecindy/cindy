@@ -303,6 +303,7 @@ function harness() {
     agentInputCoordinatorHolder: {
       getActiveInputClientId: vi.fn((): string | null => null),
       getActiveInputClientIds: vi.fn((): string[] => []),
+      isActiveTaskCoordination: vi.fn(() => false),
       getQueueControlSnapshot: vi.fn(() => ({ pendingQueue: [] as unknown[] })),
       onTurnEvent: vi.fn(),
       noteSuppressedTerminalError: vi.fn(),
@@ -399,6 +400,49 @@ function ordered(...names: string[]) {
 }
 
 describe('production Session event pipeline', () => {
+  it('delivers coordination actions without public prose, then preserves ordinary and completion replies', async () => {
+    const h = harness();
+    h.deps.agentInputCoordinatorHolder.isActiveTaskCoordination.mockReturnValue(true);
+    h.deps.agentInputCoordinatorHolder.getActiveInputClientId.mockReturnValue('coordination');
+    try {
+      h.emit(event('text', { text: 'Internal file ownership agreement', isFinal: true }));
+      h.emit(event('text', { text: 'Internal standalone' }, { standaloneText: true }));
+      h.emit(event('thinking', { text: 'Internal reasoning' }));
+      expect(effects.fn('onAssistantTextEvent')).not.toHaveBeenCalled();
+      expect(effects.fn('onStandaloneTextEvent')).not.toHaveBeenCalled();
+      expect(h.deps.broadcastToAllWindows).not.toHaveBeenCalled();
+      h.emit(event('tool_use', { id: 'tool', name: 'read', input: {} }));
+      expect(effects.fn('onToolUseEvent')).toHaveBeenCalledOnce();
+      h.deps.agentInputCoordinatorHolder.onTurnEvent.mockImplementation(() => {
+        h.deps.agentInputCoordinatorHolder.isActiveTaskCoordination.mockReturnValue(false);
+      });
+      h.emit(event('done', { result: 'Internal acknowledgement', finalText: 'Internal acknowledgement' }));
+      expect(h.deps.broadcastToAllWindows).toHaveBeenCalledWith('maker:event', expect.objectContaining({
+        event: expect.objectContaining({ type: 'done', data: expect.objectContaining({ result: '', finalText: '' }),
+          agentMeta: expect.objectContaining({ botPrivateReply: true, botTaskCoordination: true }) }),
+      }));
+      expect(JSON.stringify(h.deps.broadcastToAllWindows.mock.calls)).not.toContain('Internal acknowledgement');
+      h.deps.agentInputCoordinatorHolder.getActiveInputClientId.mockReturnValue('bot-delegation-completion:result');
+      h.emit(event('text', { text: 'User requested final result', isFinal: true }));
+      expect(effects.fn('onAssistantTextEvent')).toHaveBeenCalledOnce();
+    } finally { await h.dispose(); }
+  });
+
+  it('keeps terminal failures and runtime recovery notices visible during coordination', async () => {
+    const h = harness();
+    h.deps.redactEventForRenderer.mockImplementation(value => value);
+    h.deps.agentInputCoordinatorHolder.isActiveTaskCoordination.mockReturnValue(true);
+    h.deps.agentInputCoordinatorHolder.getActiveInputClientId.mockReturnValue('coordination');
+    try {
+      h.emit(event('error', { message: 'User action required' }));
+      expect(h.deps.broadcastToAllWindows).toHaveBeenCalledWith('maker:event', expect.objectContaining({
+        event: expect.objectContaining({ type: 'error', data: expect.objectContaining({ message: 'User action required' }) }),
+      }));
+      h.emit(event('text', { text: 'Recovery requires attention' }, { runtimeRecovery: true }));
+      expect(effects.fn('onAssistantTextEvent')).toHaveBeenCalledOnce();
+    } finally { await h.dispose(); }
+  });
+
   it('suppresses scheduled content before persistence and delivery while preserving unrelated replies', async () => {
     const h = harness();
     const close = beginQuietScheduledOutput('check', 'check-run');

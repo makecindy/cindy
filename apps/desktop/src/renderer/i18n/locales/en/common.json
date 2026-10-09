@@ -715,7 +715,7 @@
       "ariaLabel": "Search settings",
       "placeholder": "Search settings",
       "resultsLabel": "Settings search results",
-      "noResults": "No matching settings",
+      "noResults": "No settings found. Try another keyword.",
       "clear": "Clear search"
     },
     "back": "Back",
@@ -723,7 +723,7 @@
       "customizedBadge": "Custom",
       "restore": "Restore default",
       "restored": "Restored default settings",
-      "restoreFailed": "Failed to restore default settings"
+      "restoreFailed": "Could not restore defaults."
     },
     "tabs": {
       "storage": "Storage",
@@ -772,8 +772,8 @@
       "compaction": "Context compaction",
       "terminalShell": "Default terminal shell",
       "composer": "Message input",
-      "linkOpen": "Link open behavior",
-      "streamFade": "Streaming motion",
+      "linkOpen": "Open Links",
+      "streamFade": "Reply Animation",
       "compatMode": "Tips",
       "voiceInput": "Voice input",
       "import": "Session Import",
@@ -1074,26 +1074,26 @@
         "defaultPreset": "Default",
         "presets": "Presets",
         "custom": "Custom",
-        "customPlaceholder": "Enter font-family",
-        "applyCustom": "Apply",
+        "customPlaceholder": "Enter a font name, such as Arial",
+        "applyCustom": "Apply Font",
         "uiFamily": {
           "label": "UI font",
-          "description": "Used by menus, settings, chat text, and other interface text.",
+          "description": "Used for menus, settings, and chat text.",
           "aria": "Select UI font"
         },
         "uiSize": {
           "label": "UI font size",
-          "description": "Affects chat text, settings, menus, dialogs, and other interface text.",
+          "description": "Adjust text size in menus, settings, and chats.",
           "aria": "Adjust UI font size"
         },
         "codeFamily": {
           "label": "Code font",
-          "description": "Used by code blocks, diffs, editors, and path-like monospace text.",
+          "description": "Used for code, editors, change comparisons, and file paths.",
           "aria": "Select code font"
         },
         "codeSize": {
           "label": "Code font size",
-          "description": "Only affects code blocks, diffs, and editors, not inline code, status numbers, badges, or path labels.",
+          "description": "Resize text only in code blocks, change comparisons, and editors. Inline code, status numbers, badges, and path labels keep their size.",
           "aria": "Adjust code font size"
         },
         "presetsUi": {
@@ -1122,13 +1122,13 @@
         "system": "Follow system"
       },
       "sidebarCardMode": {
-        "label": "Sidebar card mode",
-        "hint": "Pinned sessions are shown as cards with task-status summaries; card heights vary with summary length, and the cards flow into 2–3 columns when the sidebar is widened.",
-        "aria": "Toggle sidebar card mode"
+        "label": "Pinned Style",
+        "hint": "Show pinned sessions as text, cards, or a list.",
+        "aria": "Choose how pinned sessions appear"
       },
       "sidebarMainListMode": {
-        "label": "Session list style",
-        "hint": "Display style for the main sidebar list (below Pinned): Text is a compact single row; List is a two-line row with a preview.",
+        "label": "List Style",
+        "hint": "For unpinned sessions: Text uses one line; List adds a preview.",
         "aria": "Switch session list style"
       },
       "ghostPanelRestore": {
@@ -1170,19 +1170,19 @@
       },
       "layout": {
         "label": "Panel layout",
-        "hint": "Panel positions and widths persist across restarts. Restore the default arrangement if the layout becomes difficult to use.",
+        "hint": "Panel positions and widths are saved automatically. Restore defaults anytime.",
         "reset": "Restore default layout",
         "resetSuccess": "Default panel layout restored",
-        "resetFailed": "Could not restore the default panel layout",
+        "resetFailed": "Could not restore the panel layout.",
         "saved": "Panel position saved. Restore the default layout in the Appearance section under Settings → General.",
-        "saveFailed": "Could not save the panel position"
+        "saveFailed": "Could not save panel positions."
       }
     },
     "notifications": {
       "title": "Notifications",
-      "sessionDoneLabel": "Show desktop notification when a session finishes",
-      "sessionDoneHint": "Only shown while the window is unfocused, to avoid foreground interruption.",
-      "sessionDoneAria": "Toggle session-done desktop notifications",
+      "sessionDoneLabel": "System Notifications",
+      "sessionDoneHint": "Notify when a session finishes, encounters an error, or needs a reply. Regular sessions notify only while the window is in the background. When Agent Island is enabled, it handles these alerts instead.",
+      "sessionDoneAria": "Toggle system notifications for sessions",
       "feishuLabel": "Send a Feishu / Lark DM when a session finishes or needs a reply",
       "feishuHint": "Sends a private message via the linked Feishu or Lark bot; only when the window is unfocused.",
       "feishuDisabledHint": "First set up the bot in \"Feishu / Lark Bot\" and DM it once to complete binding.",
@@ -1221,8 +1221,8 @@
     },
     "windowBehavior": {
       "loginItem": {
-        "label": "Start Cindy at Login",
-        "hint": "Open Cindy automatically when you sign in to your computer. Off by default.",
+        "label": "Start at Login",
+        "hint": "Open Cindy when you sign in to your computer. Off by default.",
         "requiresApproval": "Allow Cindy in Login Items in macOS System Settings to finish enabling startup.",
         "loading": "Reading system settings…",
         "loadFailed": "Could not read startup settings. Reopen this settings page to retry.",
@@ -1232,7 +1232,7 @@
       "title": "App Behavior",
       "closeBehavior": {
         "label": "When closing the main window",
-        "hint": "You will be asked the first time. You can change the choice here later.",
+        "hint": "Applies every time you close the main window. If no choice is saved, you’ll be asked the first time. Change it here anytime.",
         "aria": "Choose what happens when the main window closes",
         "tray": "Minimize to tray",
         "minimize": "Minimize window",
@@ -1252,9 +1252,9 @@
         "title": "Could not minimize to tray",
         "message": "The system tray icon could not be created, so the window will stay open."
       },
-      "swallowActivationClickLabel": "First left-click on a background window only activates, doesn't fall through",
-      "swallowActivationClickHint": "When on, the first left-click that brings the window back from background only raises it — page buttons don't fire and no text is selected.\nTurn off to continue working with a single click (better for dual-monitor setups), at the cost of possibly triggering buttons unintentionally.",
-      "swallowActivationClickAria": "Toggle whether the first left-click on a background window is swallowed",
+      "swallowActivationClickLabel": "Prevent Accidental Clicks When Returning",
+      "swallowActivationClickHint": "When enabled, a left-click on a background window only brings it forward. When disabled, it also acts on the clicked item, which may cause accidental clicks.",
+      "swallowActivationClickAria": "Toggle protection from accidental clicks when returning to the window",
       "macRestartNote": "On macOS, restart the app for changes to take effect."
     },
     "agentIsland": {
@@ -1346,7 +1346,7 @@
     "language": {
       "title": "Language",
       "label": "Display language",
-      "hint": "Affects the app UI only. Agent replies follow the agent's own language settings.",
+      "hint": "Used for the interface and AI error reports. Other replies follow your message or language request.",
       "ariaLabel": "Display language selection",
       "options": {
         "system": "Auto (follow system)",
@@ -1389,35 +1389,35 @@
         "nameHint": "Leave empty to keep the current name",
         "changeAvatar": "Change avatar",
         "resetAvatar": "Restore default avatar",
-        "save": "Save",
+        "save": "Save Profile",
         "cancel": "Cancel",
-        "syncHint": "Your name and avatar are saved to your account and sync across all devices.",
+        "syncHint": "Your name and avatar are saved to your account and synced across your devices.",
         "avatarInvalid": "Please choose a PNG / JPG / WebP image under 5MB",
         "saveFailed": "Failed to save, please try again"
       }
     },
     "help": {
       "title": "Help",
-      "description": "This overview explains how to get started in {{appName}} after you are already inside the app, plus the working styles that tend to work best.",
+      "description": "Learn how to get work done with {{appName}}.",
       "gettingStarted": {
         "title": "Getting started",
-        "step1": "Start by creating a session and telling Claude Code or Codex what you want to accomplish.",
-        "step2": "If your work is tied to a codebase, select a working directory before asking it to read files, explain code, or make changes.",
-        "step3": "Treat the chat area as a persistent work thread: ask for work, inspect results, and keep iterating from there."
+        "step1": "Create a session and tell the AI what you want done.",
+        "step2": "Choose a working directory before working on project files.",
+        "step3": "Review the result and ask for changes as needed."
       },
       "workflows": {
-        "title": "Recommended workflows",
-        "description": "{{appName}} works best when you split different goals into separate threads and switch between them from the sidebar.",
-        "item1": "Explore first: ask the agent to explain the project structure, key files, and constraints before changing code.",
-        "item2": "Ship in small steps: ask for narrow edits, review the results, then keep iterating until the task is complete.",
-        "item3": "Parallelize when needed: create separate sessions when you want to isolate context for different goals."
+        "title": "Ways to Work",
+        "description": "Use a separate {{appName}} session for each goal.",
+        "item1": "Read code: understand the project before making changes.",
+        "item2": "Edit code: make small changes and check each one.",
+        "item3": "Work in parallel: create a session for each separate job."
       },
       "recommendedWays": {
-        "title": "Recommended ways to work",
-        "description": "Describe the goal and the surrounding context first, then state the form of result you want. This usually works better than sending one short command alone.",
-        "item1": "Be explicit about what you want done, then add the relevant directory, files, or constraints.",
-        "item2": "Break large tasks into multiple turns: understand first, edit second, verify third.",
-        "item3": "Create a new session for independent problems instead of mixing everything into one thread."
+        "title": "How to Ask",
+        "description": "Describe your goal, the background, and the result you want.",
+        "item1": "Include relevant files, requirements, and limits.",
+        "item2": "For complex work, understand first, then edit and check.",
+        "item3": "Start a new session for unrelated work."
       },
       "linuxUpdates": {
         "title": "Linux install and updates",
@@ -1427,9 +1427,9 @@
         "item3": "Linux x64 supports the Beta channel; arm64 does not yet. Linux updates are applied only when you choose to restart, never automatically while idle."
       },
       "qnaTitle": "Ask directly",
-      "qnaDescription": "If the overview does not cover your question, ask what you want to do and I will point you to the right path.",
+      "qnaDescription": "Still need help? Ask how to do what you have in mind.",
       "qnaPlaceholder": "For example: how do I import a Codex session?",
-      "qnaSend": "Send",
+      "qnaSend": "Send Question",
       "qnaPending": "Preparing an answer…",
       "qnaNoAnswer": "I do not have a reliable answer yet. Try asking again with a different wording.",
       "qnaAiDisclaimer": "AI-generated, may be inaccurate",
@@ -1449,7 +1449,7 @@
       "panelAriaLabel": "Help Assistant panel",
       "newSession": "New session",
       "threadEmptyTitle": "Ask me anything",
-      "threadEmptyHint": "Quick answers to common questions — you can follow up to correct me"
+      "threadEmptyHint": "Tell me what you want to do. You can ask follow-up questions."
     },
     "about": {
       "title": "About",
@@ -3795,28 +3795,28 @@
       }
     },
     "linkOpen": {
-      "title": "Link open behavior",
-      "description": "Where message links open on left click. Right-click still lets you pick the other option once.",
+      "title": "Open Links",
+      "description": "Choose where links in messages open. Right-click a link to use another option just for that link.",
       "web": {
         "label": "Web pages",
         "description": "Links on the public internet.",
         "ariaLabel": "Choose where web pages open"
       },
       "local": {
-        "label": "Local pages",
-        "description": "HTML files on this computer, and localhost addresses.",
-        "ariaLabel": "Choose where local pages open"
+        "label": "Local Pages",
+        "description": "Web page files or local web addresses on this computer.",
+        "ariaLabel": "Choose where pages on this computer open"
       },
       "options": {
-        "sidebar": "Sidebar browser",
-        "external": "System browser"
+        "sidebar": "Built-In Browser",
+        "external": "System Default Browser"
       }
     },
     "streamFade": {
-      "title": "Streaming motion",
-      "label": "Fade in streamed text",
-      "hint": "While a reply streams, new words fade in one after another. Turn on to enable the effect; content shows instantly when off. Always off when the system reduce-motion setting is on.",
-      "toggleAria": "Toggle streaming fade-in motion"
+      "title": "Reply Animation",
+      "label": "Fade In Text",
+      "hint": "New reply text fades in when enabled and appears immediately when disabled. This effect stays off when your system reduces motion.",
+      "toggleAria": "Toggle fading in reply text"
     },
     "chatEmbedding": {
       "cell": {
@@ -3839,9 +3839,9 @@
       "toggleAria": "Toggle question navigation rail"
     },
     "promptRecommendation": {
-      "label": "Prompt recommendations in input",
-      "description": "After a reply finishes, the input shows a predicted follow-up prompt. Press Tab to fill it in.",
-      "toggleAria": "Toggle prompt recommendations"
+      "label": "Input Suggestions",
+      "description": "After a reply, the input shows a suggestion for your next message. Press Tab to insert it.",
+      "toggleAria": "Toggle suggestions for the next message"
     },
     "collaboration": {
       "loading": "Loading collaboration settings…",
