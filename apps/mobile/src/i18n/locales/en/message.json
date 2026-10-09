@@ -164,7 +164,10 @@
     "retryToolInput": "Couldn't load input. Retry",
     "toolResultCompacted": "Full tool output was trimmed (original size {{size}})",
     "mermaidEmpty": "Empty Mermaid diagram.",
-    "diffEditCount": "{{n}} edits"
+    "diffEditCount": "{{n}} edits",
+    "groupSentNamed": "Sent from group “{{name}}”",
+    "groupSent": "Sent from a group",
+    "sourceGroupId": "Group ID: {{id}}"
   },
   "actions": {
     "attachmentsPrefix": "Attachments: {{names}}",

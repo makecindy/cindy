@@ -57,6 +57,7 @@ import {
   getProviderShareHostSnapshot,
   markProviderShareHostActive,
   providerShareGuestAccess,
+  providerShareGuestDenial,
   providerShareMemberMatcher,
   refreshProviderShareHost,
   startProviderShareHost,
@@ -406,6 +407,7 @@ export function registerProviderShareIpc(): void {
     guestAccess: providerShareGuestAccess,
     ensureKnown: ensureProviderSharePeerKnown,
     hasShares: () => getProviderShareHostSnapshot().length > 0,
+    denial: providerShareGuestDenial,
   });
   // 同账号的手机经设备互联调用(已在同账号 allowlist)；本机窗口也可调用。
   ipcMain.handle(PROVIDER_SHARE_RECEIVED_CATALOGS_CHANNEL, async (event, ...args: unknown[]) => {

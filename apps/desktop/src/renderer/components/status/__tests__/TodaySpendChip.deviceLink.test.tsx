@@ -427,6 +427,129 @@ describe('TodaySpendChip device-link remote sessions', () => {
 });
 
 
+// 远程 Agent:Agent 在另一台电脑上用那台的登录运行,余量读那台(2026-10-09 用户反馈:远程供应商
+// 的任务一直「等待配额数据更新」—— chip 拿任务所在电脑的同名账号去读)。
+describe('TodaySpendChip remote Agent account', () => {
+  const agentSnapshot: ClaudeSubscriptionUsageSnapshot = {
+    source: 'oauth-endpoint',
+    fiveHour: { utilization: 12 },
+    sevenDay: { utilization: 25 },
+  };
+
+  it('本机任务的 Agent 在另一台电脑:读那台的镜像,不读本机同名账号', () => {
+    mocks.localClaudeSnapshot = { source: 'oauth-endpoint', fiveHour: { utilization: 90 } };
+    mocks.remoteClaudeSnapshot = agentSnapshot;
+
+    const { container } = render(
+      <TodaySpendChip
+        vendorKey="cc"
+        providerId="anthropic"
+        modelId="claude-fable-5[1m]"
+        sessionId="session-local-remote-agent"
+        usageAccount={{ kind: 'device', deviceId: 'device-agent' }}
+      />,
+    );
+
+    expect(container.textContent).toContain('5h 剩余 88%');
+    expect(container.textContent).not.toContain('剩余 10%');
+    expect(mocks.remoteHookDeviceIds).toContain('device-agent');
+  });
+
+  it('远程控制的任务把 Agent 放在第三台电脑:读第三台,不读被控电脑', () => {
+    mocks.remoteClaudeSnapshot = agentSnapshot;
+
+    const { container } = render(
+      <TodaySpendChip
+        vendorKey="cc"
+        providerId="anthropic"
+        modelId="claude-fable-5[1m]"
+        sessionId="session-controlled-remote-agent"
+        deviceLinkDeviceId="device-abc"
+        usageAccount={{ kind: 'device', deviceId: 'device-agent' }}
+      />,
+    );
+
+    expect(container.textContent).toContain('5h 剩余 88%');
+    expect(mocks.remoteHookDeviceIds.filter(Boolean)).toEqual(
+      expect.arrayContaining(['device-agent']),
+    );
+    expect(mocks.remoteHookDeviceIds).not.toContain('device-abc');
+  });
+
+  it('远程 Agent 的 codex 账号同样读那台', () => {
+    mocks.remoteCodexPayload = {
+      source: 'codex-app-server',
+      limitId: 'codex',
+      primary: { usedPercent: 12, windowMinutes: 300 },
+      appServerBuckets: {
+        codex: {
+          source: 'codex-app-server',
+          limitId: 'codex',
+          primary: { usedPercent: 12, windowMinutes: 300 },
+        },
+      },
+      webSnapshot: null,
+    };
+
+    const { container } = render(
+      <TodaySpendChip
+        vendorKey="codex"
+        providerId="openai"
+        modelId="gpt-5.6-sol"
+        sessionId="session-remote-agent-codex"
+        usageAccount={{ kind: 'device', deviceId: 'device-agent' }}
+      />,
+    );
+
+    expect(container.textContent).toContain('剩余 88%');
+    expect(mocks.remoteCodexDeviceIds).toContain('device-agent');
+  });
+
+  it('远程控制的任务把 Agent 放在本机:读本机账号', () => {
+    mocks.localProviders = [{ id: 'anthropic', auth: { native: 'claude' } }];
+    mocks.localClaudeSnapshot = agentSnapshot;
+    mocks.remoteClaudeSnapshot = { source: 'oauth-endpoint', fiveHour: { utilization: 90 } };
+
+    const { container } = render(
+      <TodaySpendChip
+        vendorKey="cc"
+        providerId="anthropic"
+        modelId="claude-fable-5[1m]"
+        sessionId="session-controlled-agent-here"
+        deviceLinkDeviceId="device-abc"
+        usageAccount={{ kind: 'local' }}
+      />,
+    );
+
+    expect(container.textContent).toContain('5h 剩余 88%');
+    expect(mocks.remoteHookDeviceIds.filter(Boolean)).toHaveLength(0);
+  });
+
+  it('读不到那份账号(分享来的供应商等):只显示任务价值,不等数据、不拿别的账号凑数', () => {
+    mocks.localClaudeSnapshot = agentSnapshot;
+    mocks.remoteClaudeSnapshot = agentSnapshot;
+
+    const { container } = render(
+      <TodaySpendChip
+        vendorKey="cc"
+        providerId="anthropic"
+        modelId="claude-fable-5[1m]"
+        sessionId="session-shared-provider"
+        usageAccount={{ kind: 'unreadable' }}
+      />,
+    );
+
+    expect(container.textContent).not.toContain('剩余');
+    expect(mocks.remoteHookDeviceIds.filter(Boolean)).toHaveLength(0);
+    const trigger = screen.getByRole('button', { name: 'quotaCard.usageTitle' });
+    fireEvent.mouseEnter(trigger);
+    act(() => vi.advanceTimersByTime(300));
+    const card = screen.getByTestId('quota-hover-card');
+    expect(card.textContent).not.toContain('等待额度数据');
+    expect(within(card).queryAllByRole('progressbar')).toHaveLength(0);
+  });
+});
+
 describe('existing UI with remote account data', () => {
   it('renders the same subscription label and classes for identical local and remote data', () => {
     const snapshot: ClaudeSubscriptionUsageSnapshot = {

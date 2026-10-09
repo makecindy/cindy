@@ -2,6 +2,7 @@ import {
   chatEligibleSourcesForModel,
   getModel,
   isAgentSelectableModel,
+  isCodexGatewayWireModel,
   nativeDefaultSourceId,
   type ProviderView,
 } from '@cindy/model-providers';
@@ -205,7 +206,7 @@ async function fallbackAuthCheckForImRoute(
     }
     if (hasGatewayKey) return { ok: true, missing: null };
   }
-  if (row.agentKind === 'codex' && row.model.startsWith('codex/')) {
+  if (row.agentKind === 'codex' && isCodexGatewayWireModel(row.model)) {
     return hasGatewayKey ? { ok: true, missing: null } : { ok: false, missing: 'gateway-key' };
   }
   try {

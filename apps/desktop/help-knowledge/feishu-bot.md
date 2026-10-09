@@ -19,7 +19,7 @@ Cindy can send DMs and take commands through a FeiShu (Lark) bot. (This is unrel
 **Notifications:**
 
 - Toggle **message notifications** on the same page to get bot DMs when sessions finish, or when the bot has updates for you.
-- The desktop-OS-level "session finished" notification is a separate toggle in **Settings > General > Notifications**.
+- **System Notifications** is a separate toggle in **Settings > General > Notifications**. It covers sessions finishing, encountering an error, or needing a reply. See the appearance topic for background-window and Agent Island behavior.
 
 **Group chats:**
 

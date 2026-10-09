@@ -122,7 +122,13 @@ export function ContextSheetRow(props: ContextSheetRowProps) {
         <ProgressView />
       ) : props.trailing && props.trailing !== "chevron" ? (
         <RNHostView matchContents>
-          <View>{props.trailing}</View>
+          {/* matchContents reads this RN View's bounds, not the nested icon's size. */}
+          <View style={props.trailingSize != null ? {
+            width: props.trailingSize,
+            height: props.trailingSize,
+            alignItems: 'center',
+            justifyContent: 'center',
+          } : undefined}>{props.trailing}</View>
         </RNHostView>
       ) : props.trailing === "chevron" ? (
         <Image size={iconSize.lg} systemName="chevron.right" />

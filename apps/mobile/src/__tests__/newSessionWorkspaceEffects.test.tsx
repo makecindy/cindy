@@ -34,7 +34,7 @@ const declarations = new Set([
   'selectRecentProject', 'openProjectBrowse',
   'firstMessageRef', 'firstMessageSelectionRef', 'firstMessageSelection',
   'restoreCreationDraft', 'userTouchedRuntimeRef', 'appliedPermissionMemoryRef',
-  'runtimeActionSeqRef', 'attachments', 'attachmentsRef', 'planModeDraftOn', 'prePlanPermissionModeRef',
+  'runtimeActionSeqRef', 'attachments', 'attachmentsRef', 'planModeDraftOn', 'prePlanPermissionModeRef', 'remoteAgentChoice',
 ]);
 const effectMarkers = new Set([
   'drainStashedNewSessionDraft', 'readNewSessionPreferences',

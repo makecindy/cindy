@@ -890,7 +890,7 @@ describe('maker:event hot path ordering', () => {
     );
     expect(codexDoneSource).toContain('const isCustomProviderRoute =');
     expect(codexDoneSource).toContain('turnContext.isUserProviderRoute');
-    expect(codexDoneSource).toMatch(/&&\s*pricingModel\.startsWith\('codex\/'\);/);
+    expect(codexDoneSource).toMatch(/&&\s*isCodexGatewayWireModel\(pricingModel\);/);
     expect(codexDoneSource).toMatch(/&&\s*isExclusiveXaiModelId\(pricingModel\);/);
     expect(codexDoneSource).toContain('const hasGatewayKey = Boolean(readClaudeApiKey());');
     expect(codexDoneSource).toContain('const hasEffectiveGatewayRoute =');

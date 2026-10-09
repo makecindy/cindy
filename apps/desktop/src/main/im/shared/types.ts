@@ -147,6 +147,8 @@ export interface ImChannelAdapter {
   messageSourceIm?(): string;
   /** 所有渠道共有的文本收发能力；富卡片能力由 output.kind 显式收窄。 */
   im: TextChannelIM;
+  /** Stable inbound contextId when connected status.appId is only a display label. */
+  getBotContextId?(): string;
   /** Terminal output strategy; existing channels use rich-card. */
   output: ImOutputDriver;
   config: ImOrchestratorConfig;
