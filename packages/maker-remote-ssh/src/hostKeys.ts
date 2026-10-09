@@ -148,7 +148,7 @@ export class FileHostKeyStore implements HostKeyStore {
         throw new Error('Host key details changed. Reconnect and review the current fingerprints.');
       }
       const next = { ...map, [key]: fingerprint };
-      await this.persist(next);
+      await this.persist(next, isCurrent);
       // Publish only after persistence succeeds, leaving the old trust on failure.
       this.cache = next;
       this.loadPromise = null;
@@ -206,11 +206,19 @@ export class FileHostKeyStore implements HostKeyStore {
     return this.loadPromise;
   }
 
-  private async persist(map: Record<string, string>): Promise<void> {
+  private async persist(map: Record<string, string>, isCurrent?: () => boolean): Promise<void> {
     await fs.mkdir(path.dirname(this.filePath), { recursive: true });
     const tmp = `${this.filePath}.${process.pid}.tmp`;
-    await fs.writeFile(tmp, JSON.stringify(map, null, 2), { mode: 0o600 });
-    await fs.rename(tmp, this.filePath);
+    try {
+      await fs.writeFile(tmp, JSON.stringify(map, null, 2), { mode: 0o600 });
+      // Writing the temporary file yields; the reviewed host may have changed meanwhile.
+      if (isCurrent && !isCurrent()) {
+        throw new Error('Host key details changed. Reconnect and review the current fingerprints.');
+      }
+      await fs.rename(tmp, this.filePath);
+    } finally {
+      await fs.rm(tmp, { force: true }).catch(() => undefined);
+    }
     // Enforce mode even if the file pre-existed with looser perms.
     await fs.chmod(this.filePath, 0o600).catch(() => undefined);
   }

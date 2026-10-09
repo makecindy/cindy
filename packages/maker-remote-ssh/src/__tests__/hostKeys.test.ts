@@ -16,7 +16,7 @@
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   FileHostKeyStore,
@@ -78,6 +78,7 @@ describe('FileHostKeyStore', () => {
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     await fs.rm(scratchDir, { recursive: true, force: true });
   });
 
@@ -90,6 +91,28 @@ describe('FileHostKeyStore', () => {
     expect(await reopened.get('one:22')).toBe('SHA256:new');
     expect(await reopened.get('two:22')).toBe('SHA256:other');
     await expect(store.set('one:22', 'SHA256:unreviewed')).rejects.toThrow();
+  });
+
+  it('preserves trust when confirmation expires while the temporary file is written', async () => {
+    const store = new FileHostKeyStore(filePath);
+    await store.set('one:22', 'SHA256:old');
+    await store.set('two:22', 'SHA256:other');
+    let current = true;
+    const writeFile = fs.writeFile.bind(fs);
+    vi.spyOn(fs, 'writeFile').mockImplementationOnce(async (...args) => {
+      await writeFile(...args);
+      current = false;
+    });
+
+    await expect(store.replace('one:22', 'SHA256:old', 'SHA256:new', () => current))
+      .rejects.toThrow('Host key details changed');
+    expect(await store.get('one:22')).toBe('SHA256:old');
+    expect(JSON.parse(await fs.readFile(filePath, 'utf8'))).toEqual({
+      'one:22': 'SHA256:old', 'two:22': 'SHA256:other',
+    });
+    expect(await fs.readdir(path.dirname(filePath))).toEqual(['known-hosts.json']);
+    await store.replace('one:22', 'SHA256:old', 'SHA256:reviewed-again', () => true);
+    expect(await new FileHostKeyStore(filePath).get('one:22')).toBe('SHA256:reviewed-again');
   });
 
   it('rejects stale confirmations, removed entries, and concurrent replacements', async () => {
