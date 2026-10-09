@@ -18,17 +18,20 @@ index a26d1254eafd89268f65d968988cf6a3b8c1e457..ddf5b9daa192ca0f13e7cea8ecd15d26
  
  @end
 diff --git a/ios/RNSBarButtonItem.mm b/ios/RNSBarButtonItem.mm
-index 0eb1f09dee82edd99e3e614938233db5cdeaebfe..3a6adbe536795e3e5ad151e915ac9ce254e7b590 100644
+index 0eb1f09dee82edd99e3e614938233db5cdeaebfe..2d015f69554ef6088945893837a54f2b2708d737 100644
 --- a/ios/RNSBarButtonItem.mm
 +++ b/ios/RNSBarButtonItem.mm
-@@ -6,9 +6,60 @@
+@@ -6,9 +6,63 @@
  
  static UIMenuOptions RNSMakeUIMenuOptionsFromConfig(NSDictionary *config);
  
-+// Cindy patch: identity of a menu-only bar button is its whole config except the menu.
++// Cindy patch: identity of a bar button (plain button or menu) is its whole config except the
++// menu. Every item of the toolbar must be reusable: one freshly allocated sibling makes the
++// header reassign the whole item array, which dismisses an open menu. Press handlers route
++// through the owning header config, so a reused button keeps working.
 +static NSDictionary *RNSBarButtonReuseKey(NSDictionary *dict)
 +{
-+  if (dict[@"menu"] == nil || dict[@"buttonId"] != nil) {
++  if (dict[@"menu"] == nil && dict[@"buttonId"] == nil) {
 +    return nil;
 +  }
 +  NSMutableDictionary *key = [dict mutableCopy];
@@ -82,7 +85,7 @@ index 0eb1f09dee82edd99e3e614938233db5cdeaebfe..3a6adbe536795e3e5ad151e915ac9ce2
  }
  
  - (instancetype)initWithConfig:(NSDictionary<NSString *, id> *)dict
-@@ -116,10 +167,13 @@ - (instancetype)initWithConfig:(NSDictionary<NSString *, id> *)dict
+@@ -116,10 +170,13 @@ - (instancetype)initWithConfig:(NSDictionary<NSString *, id> *)dict
      NSDictionary *menu = dict[@"menu"];
      if (menu) {
        self.menu = [[self class] initUIMenuWithDict:menu menuAction:menuAction imageLoader:imageLoader];
@@ -96,7 +99,7 @@ index 0eb1f09dee82edd99e3e614938233db5cdeaebfe..3a6adbe536795e3e5ad151e915ac9ce2
    NSString *buttonId = dict[@"buttonId"];
    if (buttonId && action) {
      self.target = self;
-@@ -130,6 +184,174 @@ - (instancetype)initWithConfig:(NSDictionary<NSString *, id> *)dict
+@@ -130,6 +187,180 @@ - (instancetype)initWithConfig:(NSDictionary<NSString *, id> *)dict
    return self;
  }
  
@@ -113,6 +116,12 @@ index 0eb1f09dee82edd99e3e614938233db5cdeaebfe..3a6adbe536795e3e5ad151e915ac9ce2
 +#if !TARGET_OS_TV || __TV_OS_VERSION_MAX_ALLOWED >= 170000
 +  if (@available(tvOS 17.0, *)) {
 +    NSDictionary *menu = dict[@"menu"];
++    if (menu == nil) {
++      // Plain button reused as-is (its config equals the previous one apart from the menu).
++      self.menu = nil;
++      _menuShapeKey = nil;
++      return;
++    }
 +    id shapeKey = RNSMenuShapeKey(menu);
 +    if (self.menu != nil && [_menuShapeKey isEqual:shapeKey]) {
 +      [[self class] applyValuesFromMenuConfig:menu toMenu:self.menu];
@@ -271,7 +280,7 @@ index 0eb1f09dee82edd99e3e614938233db5cdeaebfe..3a6adbe536795e3e5ad151e915ac9ce2
  + (void)resolveImageFromConfig:(NSDictionary *)dict
                     imageLoader:(RCTImageLoader *)imageLoader
                 completionBlock:(void (^)(UIImage *_Nullable))completionBlock
-@@ -188,11 +410,19 @@ + (UIMenu *)initUIMenuWithDict:(NSDictionary<NSString *, id> *)dict
+@@ -188,11 +419,19 @@ + (UIMenu *)initUIMenuWithDict:(NSDictionary<NSString *, id> *)dict
                   image = img;
                 }];
  
@@ -296,7 +305,7 @@ index 0eb1f09dee82edd99e3e614938233db5cdeaebfe..3a6adbe536795e3e5ad151e915ac9ce2
  }
  
  + (UIAction *)createActionItemFromConfig:(NSDictionary *)dict
-@@ -200,11 +430,21 @@ + (UIAction *)createActionItemFromConfig:(NSDictionary *)dict
+@@ -200,11 +439,21 @@ + (UIAction *)createActionItemFromConfig:(NSDictionary *)dict
                               imageLoader:(RCTImageLoader *)imageLoader
  {
    NSString *menuId = dict[@"menuId"];
