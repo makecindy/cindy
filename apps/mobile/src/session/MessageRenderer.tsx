@@ -100,7 +100,6 @@ import {
 } from '@cindy/maker-shared/chat-quotes';
 import { formatCompactTokens } from '@cindy/maker-shared/usage-format';
 import { QuoteCapsule } from '@/session/QuoteCapsule';
-import { StreamingStatusText } from '@/session/StreamingStatusText';
 import { useReduceMotionEnabled } from '@/hooks/useReduceMotion';
 import { motionDuration, motionEasing } from '@/theme/tokens';
 import { mobileAgentLabelFromUnknown } from '@/session/sessionAgentSwitch';
@@ -3447,8 +3446,7 @@ function MessageBubble({
   // 操作行只挂在每轮收尾正文、且该行确实是一条发言(判据见
   // mobileMessageShowsActionBar):中间句不再逐条带复制/分叉/时间,系统边界卡整行
   // 不挂。分享态只保留与导出图片一致的消息内容,不显示操作图标、时间或费用。
-  // user 消息、流式「生成中」状态与正文的文本选择(canSelectVisibleText)
-  // 不受影响。
+  // 流式回复不挂操作行或状态占位；任务运行状态由底部状态栏展示。
   const showCompletedActionBar = !shareSelectionActive && mobileMessageShowsActionBar({
     hasSystemCard: !!item.message.systemCardType,
     isStreamingAssistant,
@@ -3689,15 +3687,6 @@ function MessageBubble({
     >
       {turnTokens}
     </Text>
-  ) : null;
-  const streamingStatus = isStreamingAssistant ? (
-    <StreamingStatusText
-      accessibilityLabel={t('message.renderer.messageGenerating')}
-      style={styles.streamingStatus}
-      testID="message.streamingStatus"
-    >
-      {t('message.renderer.generating')}
-    </StreamingStatusText>
   ) : null;
   // 附件条对齐桌面版:渲染在气泡外、文字气泡上方(用户消息右对齐);
   // 纯图片消息(无正文)不再渲染空气泡背景。
@@ -3985,7 +3974,6 @@ function MessageBubble({
           testID="message.actionBar"
         >
           {actionBar.items.map((id) => {
-            if (id === 'streaming') return <View key="streaming">{streamingStatus}</View>;
             if (id === 'time') return timeText;
             if (id === 'cost') return costText;
             if (id === 'more') {
@@ -9214,13 +9202,6 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     color: colors.textTertiary,
     fontSize: typeScale.caption,
     lineHeight: lineHeight.bodyRelaxed,
-  },
-  streamingStatus: {
-    alignSelf: 'center',
-    color: colors.textSecondary,
-    fontSize: typeScale.caption,
-    fontWeight: fontWeight.regular,
-    lineHeight: lineHeight.listTitle,
   },
   foldPlain: { alignSelf: 'stretch' },
   foldCard: {
