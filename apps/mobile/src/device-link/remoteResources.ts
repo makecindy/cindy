@@ -21,7 +21,7 @@ import {
   type RemoteActionDescriptor,
   type RemoteResourceBlock,
 } from '@cindy/device-link';
-import { BOT_GROUP_CHAT_PRIMITIVE } from '@cindy/maker-shared/botGroupChat';
+import { BOT_GROUP_CHAT_PRIMITIVE, type BotGroupMemberView } from '@cindy/maker-shared/botGroupChat';
 
 import { normalizeRemoteActions, normalizeRemoteBlocks } from './remoteResourceContent';
 import type { RemoteInvoke } from './mobileMakerTransport';
@@ -462,6 +462,10 @@ export interface HostedRemoteCollectionItem {
   key: string;
   host: RemoteResourceHostTarget;
   item: RemoteCollectionItem;
+  /** Local direct Chat Server projection; never changes the device-link wire display. */
+  lastReplySequence?: string;
+  /** Authorized server identities for direct group rows; display only, never cached as permissions. */
+  groupMembers?: readonly Pick<BotGroupMemberView, 'botId' | 'name' | 'avatar' | 'avatarUrl' | 'avatarColor'>[];
 }
 
 /** Replace successful host shards while retaining stale rows for transiently failed hosts. */

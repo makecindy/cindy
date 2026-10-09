@@ -3401,6 +3401,20 @@ describe('Bots list unread projection', () => {
     expect((await getBotRemoteResourceSource('bot-1')).lastReplyAt).toBe(0);
   });
 
+  it('keeps hidden coordination inputs and actions out of unread and preview after history reload', async () => {
+    const sessionId = await canonicalFor('bot-1');
+    insertMessage(sessionId, { id: 'result', role: 'assistant', content: 'Visible final result', createdAt: 1000 });
+    insertMessage(sessionId, { id: 'coordination', role: 'user', content: '[UI_ACTION_TRIGGER]File ownership agreement', createdAt: 2000,
+      agentMeta: { origin: { kind: 'session', senderSessionId: 'child' }, botTaskCoordinationInput: { delegationId: 'task', senderSessionId: 'child', runSequence: 1 } } });
+    insertMessage(sessionId, { id: 'audit-tool', role: 'tool_use', content: { toolName: 'read', input: {} }, createdAt: 3000 });
+    expect(await unreadFor('bot-1', { 'bot-1': 1500 })).toBe(0);
+    const resource = await getBotRemoteResourceSource('bot-1');
+    expect(resource.lastReplyAt).toBe(1000);
+    expect(resource.lastMessagePreview).toBe('Visible final result');
+    insertMessage(sessionId, { id: 'next-result', role: 'assistant', content: 'Requested update', createdAt: 4000 });
+    expect(await unreadFor('bot-1', { 'bot-1': 1500 })).toBe(1);
+  });
+
   it('counts only replies that landed after the read position', async () => {
     const sessionId = await canonicalFor('bot-1');
     insertMessage(sessionId, {
@@ -7968,6 +7982,49 @@ describe('Bot Session task end-to-end runtime', () => {
     } finally {
       runtime.dispose();
     }
+  });
+
+  it.each(['accepted', 'rejected', 'paused', 'archived'] as const)('delegated completion notification ownership follows the durable handoff (%s)', async boundary => {
+    await seedPair();
+    let execution = { instanceId: 'notification-child', generation: 1 };
+    let release!: () => void;
+    let entered!: () => void;
+    const waiting = new Promise<void>(resolve => { entered = resolve; });
+    const blocked = new Promise<void>(resolve => { release = resolve; });
+    const runtime = createDelegationRuntime({ readSessionExecution: () => execution,
+      decorateDispatch: dispatch => async params => {
+        if (params.clientId?.startsWith('bot-delegation-completion:')) {
+          entered(); await blocked;
+          if (boundary === 'rejected') return { ok: false, errorCode: 'NOT_FOUND', message: 'fixture requester unavailable' };
+        }
+        return dispatch(params);
+      },
+    });
+    try {
+      expect(await runtime.delegation.isCompletionHandledByTeammate('session-1')).toBe(false);
+      const task = await runtime.delegation.startSessionTask({ callerSessionId: 'session-1', objective: 'Notification ownership fixture.' });
+      if (!task.ok) throw new Error(task.message);
+      // Ordinary Session delegated by a teammate: ownership comes from this
+      // receipt, not source=bot, an avatar, title, or a Bot Session link.
+      expect(h.sqlite!.prepare('SELECT source FROM sessions WHERE id=?').pluck().get(task.childSessionId)).toBe('desktop');
+      expect(h.sqlite!.prepare('SELECT count(*) FROM bot_session_links WHERE session_id=?').pluck().get(task.childSessionId)).toBe(0);
+      const settlement = runtime.delegation.settleSession({ childSessionId: task.childSessionId, execution, outcome: 'done', resultText: 'Final fixture result' });
+      const ownership = runtime.delegation.isCompletionHandledByTeammate(task.childSessionId);
+      await waiting;
+      let resolved = false;
+      void ownership.then(() => { resolved = true; });
+      await Promise.resolve();
+      expect(resolved).toBe(false);
+      release();
+      await settlement;
+      if (boundary === 'paused' || boundary === 'archived') h.sqlite!.prepare('UPDATE bot_profiles SET status=? WHERE id=?').run(boundary, 'bot-a');
+      expect(await ownership).toBe(boundary === 'accepted');
+      expect(h.sqlite!.prepare("SELECT content FROM messages WHERE session_id='session-1' AND client_id LIKE 'bot-delegation-result:%'").pluck().get()).toBe('Final fixture result');
+      expect(h.sqlite!.prepare('SELECT status FROM sessions WHERE id=?').pluck().get(task.childSessionId)).toBe('active');
+      expect(await runtime.delegation.isCompletionHandledByTeammate(task.childSessionId)).toBe(boundary === 'accepted');
+      execution = { ...execution, generation: 2 };
+      expect(await runtime.delegation.isCompletionHandledByTeammate(task.childSessionId)).toBe(false);
+    } finally { release(); runtime.dispose(); }
   });
 
   it.each(['delegation-request', 'interjection', 'delegation-result'])('recovers the child answer without promoting a nested %s receipt', async (nestedRole) => {

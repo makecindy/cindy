@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
@@ -53,19 +54,48 @@ describe('shared Skill mutation lease', () => {
     } finally { await successor(); }
   });
 
-  it('honors a bounded wait while another profile releases the same Skill', async () => {
+  it.each([
+    { outcome: 'acquires after the owner releases within the wait budget', elapsedMs: 50, releaseOwner: true },
+    { outcome: 'times out without disturbing an owner that still holds the lease', elapsedMs: 500, releaseOwner: false },
+  ])('$outcome', async ({ elapsedMs, releaseOwner }) => {
     const first = (await acquireSharedSkillMutationLease(['startup-projection']))!;
-    const released = new Promise<void>((resolve) => {
-      setTimeout(() => { void first().then(resolve); }, 50);
+    const key = createHash('sha256').update('startup-projection').digest('hex');
+    const lockPath = path.join(root, 'Cindy', 'shared-skill-mutation-locks', `${key}.lock`);
+    const ownerRecord = fs.readFileSync(lockPath, 'utf8');
+    // Real filesystem exclusion, controlled deadline: Windows CI I/O can exceed
+    // 500 ms even when the owner's release is scheduled after only 50 ms.
+    let now = Date.now();
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    const originalOpen = fsp.open;
+    let contended = false;
+    const open = vi.spyOn(fsp, 'open').mockImplementation(async (...args) => {
+      try {
+        return await originalOpen(...args);
+      } catch (error) {
+        if (args[0] === lockPath && (error as NodeJS.ErrnoException).code === 'EEXIST' && !contended) {
+          contended = true;
+          now += elapsedMs;
+          if (releaseOwner) await first();
+        }
+        throw error;
+      }
     });
-    const next = await acquireSharedSkillMutationLease(
-      ['startup-projection'],
-      undefined,
-      { waitMs: 500 },
-    );
-    await released;
-    expect(next).not.toBeNull();
-    await next!();
+    let next: Awaited<ReturnType<typeof acquireSharedSkillMutationLease>> = null;
+    try {
+      next = await acquireSharedSkillMutationLease(['startup-projection'], undefined, { waitMs: 500 });
+      expect(contended).toBe(true);
+      if (releaseOwner) {
+        expect(next).not.toBeNull();
+      } else {
+        expect(next).toBeNull();
+        expect(fs.readFileSync(lockPath, 'utf8')).toBe(ownerRecord);
+      }
+    } finally {
+      open.mockRestore();
+      clock.mockRestore();
+      await next?.();
+      await first();
+    }
   });
 
   it('contains a damaged durable barrier to its own resource name', async () => {

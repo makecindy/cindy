@@ -1,3 +1,4 @@
+import { coordinationModelPrefix, type BotTaskCoordination } from './botTaskCoordination.js';
 /**
  * Agent input queue wire contract.
  *
@@ -248,6 +249,8 @@ export interface RecoveryCheckpoint {
 export const HOST_ONLY_AGENT_PREFIX = Symbol('host-only-agent-prefix');
 
 export interface AgentInputQueuedMessage {
+  /** Main-owned delegation receipt; stripped from renderer/device-link input. */
+  botTaskCoordination?: BotTaskCoordination;
   [HOST_ONLY_AGENT_PREFIX]?: string;
   /** Host-stamped attribution, retained in durable queue snapshots and messages. */
   sharedTaskAuthor?: SharedTaskAuthor;
@@ -1110,7 +1113,8 @@ export function buildMakerUserMessage(
     ? facingText.slice(UI_ACTION_TRIGGER_PREFIX.length)
     : facingText;
   // Combine the host source with the latest body, including any Ghost rewrite.
-  const agentFacingText = (queued[HOST_ONLY_AGENT_PREFIX] ?? '') + authoredText;
+  const agentFacingText = (queued.botTaskCoordination ? coordinationModelPrefix(queued.botTaskCoordination) : '')
+    + (queued[HOST_ONLY_AGENT_PREFIX] ?? '') + authoredText;
   if (agentFacingText.length > 0) {
     blocks.push({ type: 'text', text: agentFacingText });
   }

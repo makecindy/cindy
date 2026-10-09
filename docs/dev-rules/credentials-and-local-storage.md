@@ -170,6 +170,15 @@ Claude.ai 登录，也不得收集、存储或中转订阅凭证。Cindy 因此�
   提供给支持人员。复用本机日志目录入口，不自动上传。旧响应适配器可省略 headers，
   旧 IPC 消费者可忽略 retryAt；Mobile 暂不增加等待时间界面。
 
+### 运行时会话续期退避
+
+Desktop 的运行时 refresh 遇到瞬时失败后，主动调用与定时重试共用至少 60 秒的等待；
+429 的有效 `Retry-After` 更长时按服务器等待时间执行。等待期间的调用不发请求、不延长
+原期限，也不清除凭证。成功续期/登录清除等待，登录代次改变后旧等待不约束新账号。
+冷启动、确定性失效和同机 token 替换恢复继续沿用原有判定。状态只留在进程内存中。
+实现见 `main/authRefreshBackoff.ts`、`main/authManager.ts`；回归见
+`main/__tests__/authRefreshBackoff.test.ts`。
+
 ## 路径与生命周期
 
 | 数据性质                            | 正确位置                                                                                                                                                                                                                                                                                                                                                                                                        |

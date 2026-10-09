@@ -1234,6 +1234,30 @@ describe('recovery rule factories', () => {
   });
 });
 
+describe('stripNonAnthropicFields · gpt-5.4 output_config', () => {
+  it.each(['gpt-5.4', 'codex/gpt-5.4', 'openai-codex/gpt-5.4'])(
+    '%s 去掉 Azure 不接受的 output_config',
+    (model) => {
+      const out = stripNonAnthropicFields(
+        { model, output_config: { effort: 'high' }, messages: [] },
+        ctx,
+      ) as Record<string, unknown> | null;
+      expect(out).not.toBeNull();
+      expect(out).not.toHaveProperty('output_config');
+      expect(out?.model).toBe(model);
+    },
+  );
+
+  it('openai-codex/gpt-5.5 不剥 output_config，与 gpt-5.5 一致', () => {
+    expect(
+      stripNonAnthropicFields(
+        { model: 'openai-codex/gpt-5.5', output_config: { effort: 'high' } },
+        ctx,
+      ),
+    ).toBeNull();
+  });
+});
+
 describe('stripNonAnthropicFields · glm-5.2 tool_result 图像降级 (#794)', () => {
   const imageBlock = {
     type: 'image',

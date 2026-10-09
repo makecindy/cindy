@@ -97,6 +97,24 @@ V1–V3 解析保持原有契约；新媒体字段、媒体原生协议和空 Ag
 
 ### 发布前置条件
 
+账号模型目录 `/api/model-access/models?schemaVersion=5` 的语音合成扩展使用请求头
+`X-Cindy-Model-Capabilities: audio_speech` 显式声明客户端能解析独立音频条目。
+服务端仅向声明该能力的 V5 请求下发 Gateway 中的 `audio_speech`，旧客户端维持原列表；
+旧服务端忽略该请求头，当前客户端继续接受原有 V5 响应。该能力声明不改变 Gateway 授权、
+付费解锁或组织权限，也不声明客户端已有 TTS 执行器。
+
+兼容边界来自客户端代码演进（以下为提交日期，时区 UTC+08:00，不代表部署或用户升级日期）：
+
+- **2026-08-27**：[cbb830cb6](https://github.com/makecindy/cindy/commit/cbb830cb6aad5f2ad0a8450540a943dd6c4f4a2a)
+  已将账号模型目录请求切换到 V5。
+- **2026-09-10**：[5c47051ac](https://github.com/makecindy/cindy/commit/5c47051ac0fe9554c085632ab6f9eb8f69191d63)
+  才允许独立音频模型使用 `agents: []`。
+
+历史解析器复现：`5c47051ac^` 可以接受原有 V5 列表，但加入 `audio_speech` 后拒绝整份响应；
+`5c47051ac` 及当前解析器接受同一响应。因此不能向所有 V5 请求无条件下发音频。
+本次用能力声明区分解析能力；已支持音频但未携带声明的客户端也继续收到原目录。
+两端可独立合并和发布，没有顺序要求；完整音频目录仍须两端支持且通过既有上游可见性规则。
+
 相同 `registrySchemaVersion=4` 或 `schemaVersion=5` 请求不能证明
 客户端认识本次扩展。公共目录请求必须同时声明 `registryMedia=1`，服务端只向明确声明
 该能力的 V4/V5 请求返回完整目录（V4 仍展开 V5 官方价格）。无标识、未知标识、重复参数

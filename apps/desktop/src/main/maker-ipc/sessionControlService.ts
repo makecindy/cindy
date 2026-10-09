@@ -398,7 +398,7 @@ export function rebuildSessionQueueItem(
     // synthetic `text` property into the old JSON value. Attachment items are
     // the exception: their persisted row is the host-built `{text, images, files}`
     // envelope, which updateQueuedMessageText already rewrote in place.
-    if (!item.files?.length) updated.persistedContent = message;
+    if (!item.files?.length) updated.persistedContent = item.botTaskCoordination ? updated.text : message;
     updated.origin = { ...updated.origin, displayText: message };
   }
   return updated;

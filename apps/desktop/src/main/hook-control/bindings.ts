@@ -23,6 +23,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 export interface HookBindingStore {
+  findBySession?(sessionId: string): Array<{ connectionId: string; externalKey: string }>;
   get(connectionId: string, externalKey: string): string | null;
   /**
    * 整行覆盖写。只在绑定真正变化时调用(新建会话、legacy 命名空间迁移、接管)——
@@ -89,6 +90,16 @@ export function createHookBindingStore(deps: {
   }
 
   return {
+    findBySession(sessionId) {
+      const found: Array<{ connectionId: string; externalKey: string }> = [];
+      for (const [connectionId, rows] of Object.entries(readAll())) {
+        if (!rows || typeof rows !== 'object' || Array.isArray(rows)) continue;
+        for (const [externalKey, row] of Object.entries(rows)) {
+          if (row?.sessionId === sessionId) found.push({ connectionId, externalKey });
+        }
+      }
+      return found;
+    },
     get(connectionId, externalKey) {
       const ns: unknown = readAll()[connectionId];
       if (!ns || typeof ns !== 'object' || Array.isArray(ns)) return null;
