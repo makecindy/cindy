@@ -127,6 +127,7 @@ import {
   nativeDefaultSourceId,
   getModel,
   isCustomRoutedProvider,
+  isCodexGatewayWireModel,
   modelSupportsFastMode,
   providerOffersModel,
   resolveModelIconKind,
@@ -1835,12 +1836,12 @@ function ModelSelectorContentView({
   const modelDisabledOf = (provider: ProviderView | null, id: string, rowAgent?: AgentKind): boolean => {
     if (!deviceId) {
       if (subscriptionDirectDisabledReason(id)) return true;
-      // codex/ 的本机 key gate 只属于 XD 网关折扣路由。自定义(user)供应商目录里的
+      // openai-codex/ 与 codex/ 的本机 key gate 只属于 XD 网关折扣路由。自定义(user)供应商目录里的
       // 同前缀模型由该供应商自身配置路由(codex-proxy-host 按会话显式供应商解析,
       // 不按前缀落网关),不依赖 Cindy 登录/网关 key(#1568)。flat 列表(provider
       // 为 null,无供应商概念)与内置来源保持原前缀判定。
       if (isCustomRoutedProvider(provider)) return false;
-      return id.startsWith('codex/') && !hasSavedKey;
+      return isCodexGatewayWireModel(id) && !hasSavedKey;
     }
     if (remoteModelListStatus !== 'ready') return true;
     if (remoteProviders.error) return remoteProviders.unsupported ? false : true;
@@ -4104,7 +4105,7 @@ export function ModelSelector({
   // 多实例同屏(IM 目录偏好)时前置「字段名 · 行别名」,读屏才能区分行与行。
   const accessibleLabel = pendingSelectionTitle ? triggerTitle : withAgentDeviceLabel(baseAriaLabel);
   const ariaLabel = ariaContext ? `${ariaContext}:${accessibleLabel}` : accessibleLabel;
-  const isBudget = modelId.startsWith('codex/');
+  const isBudget = isCodexGatewayWireModel(modelId);
   const isFieldTrigger = triggerVariant === 'field';
   const isCreateAgentVariant = visualVariant === 'create-agent';
   // compact 是 composer 容器宽度状态，不是 create-agent 的视觉私有状态。

@@ -44,6 +44,7 @@ export function MobileModelPickerList(p: MobileModelPickerListProps) {
                 const blocked = budgetRowDisabled(
                   row.model.id,
                   p.apiKeyStatus ?? "unknown",
+                  row.provider,
                 );
                 const fastEditable =
                   !!p.agentKind &&

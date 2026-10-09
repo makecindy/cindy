@@ -44,7 +44,7 @@ describe('TodaySpendChip dashboard routing', () => {
   });
 
   it('treats codex/ budget models + explicit XD selection as API usage on an oauth-bearer spawn', () => {
-    expect(compact(source)).toContain(compact("modelId.startsWith('codex/')"));
+    expect(compact(source)).toContain(compact('isCodexGatewayWireModel(modelId)'));
     expect(compact(source)).toContain(compact("codexAuthInjection === 'oauth-bearer'"));
     expect(compact(source)).toContain(compact("vendorKey === 'codex' && !isCodexXaiProvider"));
     expect(compact(source)).toContain(compact('isRemoteCodexSession ||'));

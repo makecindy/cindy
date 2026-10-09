@@ -5,6 +5,7 @@ import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import { handleSessionEvent, type SessionEventDependencies } from '../sessionEventPipeline.js';
 import { setMainLocale } from '../../i18n.js';
 import { installSessionTurnObserver } from '../sessionTurnObserver.js';
+import { onChannelTurn } from '../channelTurnSignal.js';
 import { createSessionBindingLifecycle } from '../sessionBindingLifecycle.js';
 import { SessionTurnActivityTracker } from '../sessionTurnActivityTracker.js';
 import { ProductTurnWallClockTracker, ProductTurnUsageTargetTracker } from '../turnWallClock.js';
@@ -1004,6 +1005,38 @@ describe('provider turn observer on real Session.send', () => {
       },
     };
   }
+  it('awaits channel output attachment for direct sends and releases an undispatched turn', async () => {
+    const h = harness();
+    const phases: string[] = [];
+    const dispose = installSessionTurnObserver(observerDeps(), h.session);
+    const unsubscribe = onChannelTurn(async (session, phase) => {
+      expect(session).toBe(h.session);
+      await Promise.resolve();
+      phases.push(phase);
+    });
+    try {
+      await expect(h.session.send('peer message', { beforeProviderStart: async () => {
+        expect(phases).toEqual(['starting']);
+        throw new Error('cancel before dispatch');
+      } })).rejects.toThrow('cancel before dispatch');
+      expect(phases).toEqual(['starting', 'undispatched']);
+      expect(h.handle.send).not.toHaveBeenCalled();
+      await h.session.send('automatic task');
+      expect(phases).toEqual(['starting', 'undispatched', 'starting']);
+      expect(h.handle.send).toHaveBeenCalledOnce();
+    } finally { unsubscribe(); dispose(); await h.dispose(); }
+  });
+
+  it('channel attachment failure does not block task execution', async () => {
+    const h = harness();
+    const dispose = installSessionTurnObserver(observerDeps(), h.session);
+    const unsubscribe = onChannelTurn(() => { throw new Error('channel unavailable'); });
+    try {
+      await h.session.send('automatic task');
+      expect(h.handle.send).toHaveBeenCalledOnce();
+    } finally { unsubscribe(); dispose(); await h.dispose(); }
+  });
+
   it('awaits llama.cpp readiness on an existing task before dispatch and propagates startup failure', async () => {
     const h = harness();
     const gate = deferred();
