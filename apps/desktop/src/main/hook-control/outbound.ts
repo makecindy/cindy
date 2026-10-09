@@ -23,7 +23,7 @@
 
 import path from 'node:path';
 import { promises as fsp } from 'node:fs';
-import { hasLocalTaskImages, localTaskImagePath, taskImageReferences, rewriteTaskImageReferences } from '../cindy-media/taskImageMarkdown';
+import { localTaskImagePath, taskImageReferences, rewriteTaskImageReferences } from '../cindy-media/taskImageMarkdown';
 
 import type { TaskAttachment } from '@cindy/slack-hook-protocol';
 import {
@@ -177,12 +177,19 @@ export interface OutboundResult {
   skipped: number;
 }
 
+// Remote output may use another OS's path syntax. Recognize it for redaction
+// only; this does not grant the local importer access to that path.
+function isLocalImage(url: string): boolean {
+  return Boolean(localTaskImagePath(url)) || path.win32.isAbsolute(url);
+}
+
 /** 文本里是否存在任何托管媒体出站引用(快速前置判断, 避免无谓的收集开销)。 */
 export function hasOutboundRefs(text: string): boolean {
   // 双协议:老 xdt-image + 媒体总仓 cindy-media(与 @cindy/im 解析器同口径)——
   // 漏了 cindy-media 会让只含总仓图的回帖跳过附件收集,图静默丢失。
   return (
-    text.includes('xdt-image://') || text.includes('cindy-media://') || text.includes('xdt-file://') || hasLocalTaskImages(text)
+    text.includes('xdt-image://') || text.includes('cindy-media://') || text.includes('xdt-file://')
+    || taskImageReferences(text).some((ref) => isLocalImage(ref.url))
   );
 }
 
@@ -274,14 +281,14 @@ export async function collectOutboundAttachments(
   // 1. 图片: 文本引用 + tool_result 旁路, 按 absPath 去重(模型常重复引用)
   const imageAbsPaths: string[] = [];
   const seenImage = new Set<string>();
-  const imageRefs = taskImageReferences(refScanText).filter((ref) => localTaskImagePath(ref.url)
+  const imageRefs = taskImageReferences(refScanText).filter((ref) => isLocalImage(ref.url)
     || ref.url.startsWith('xdt-image://') || ref.url.startsWith('cindy-media://'));
   const visitedImageUrls = new Set<string>();
   for (const ref of imageRefs) {
     if (visitedImageUrls.has(ref.url)) continue;
     visitedImageUrls.add(ref.url);
     // Local images must already have been imported by the task-scoped adapter.
-    if (localTaskImagePath(ref.url)) { skipped += 1; continue; }
+    if (isLocalImage(ref.url)) { skipped += 1; continue; }
     try {
       const { absPath } = deps.resolveImageUrl(ref.url);
       if (!seenImage.has(absPath)) {

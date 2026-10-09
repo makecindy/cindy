@@ -105,6 +105,21 @@ function deps(
 }
 
 describe('collectOutboundAttachments', () => {
+  it.each([String.raw`C:\task\shot.png`, 'C:/task/shot.png', '/home/task/shot.png'])(
+    'recognizes standalone foreign paths without reading them: %s', async (source) => {
+      const text = `![shot](${source})`;
+      const io = deps({});
+      expect(hasOutboundRefs(text)).toBe(true);
+      const result = await collectOutboundAttachments(text, [], io);
+      expect(result.text).toContain('🖼️ _shot_');
+      expect(result.text).not.toContain(source);
+      expect(result.skipped).toBe(1);
+      expect(result.attachments).toEqual([]);
+      expect(io.realpath).not.toHaveBeenCalled();
+      expect(io.readFile).not.toHaveBeenCalled();
+    },
+  );
+
   it('deduplicates bytes while preserving each caption for repeated image URLs', async () => {
     const url = 'xdt-image://img1.png';
     const text = `![overview](${url})\n![detail][same]\n![](${url})\n\n[same]: ${url}\n\n\`![example](${url})\``;

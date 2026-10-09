@@ -459,11 +459,14 @@ async function collectOutboundForFinalText(
   // maker-core, but older persisted/continuation text and future adapters must
   // never forward private Web citation delimiters to an external channel.
   // Remote runtimes do not grant access to this host's files or media cache.
-  // The attachment collector's managed-image path is independent of file roots.
-  if (allowedFileRoots.length === 0) return { finalText: stripInternalWebCitations(texts.publicText) };
+  // Still run the shared caption/warning projection without granting local IO.
+  const canReadLocal = allowedFileRoots.length > 0;
   // The public projection is drawn from this whole turn. Import its image URLs
   // once so a temporary source changing cannot split the body from its attachment.
-  const materialized = await materializeTaskImageTextResult(sessionId, stripInternalWebCitations(texts.wholeTurn));
+  const scanText = stripInternalWebCitations(texts.wholeTurn);
+  const materialized = canReadLocal
+    ? await materializeTaskImageTextResult(sessionId, scanText)
+    : { text: scanText, replacements: new Map<string, string>() };
   const wholeTurn = materialized.text;
   const publicText = texts.wholeTurn === texts.publicText ? wholeTurn
     : rewriteTaskImageReferences(stripInternalWebCitations(texts.publicText), materialized.replacements);
@@ -471,8 +474,10 @@ async function collectOutboundForFinalText(
     return { finalText: publicText };
   }
   try {
-    const collected = await collectOutboundAttachments(publicText, extraImageAbsPaths, {
-      resolveImageUrl: resolveRenderableImageUrl,
+    const collected = await collectOutboundAttachments(publicText, canReadLocal ? extraImageAbsPaths : [], {
+      resolveImageUrl: canReadLocal ? resolveRenderableImageUrl : () => {
+        throw new Error('Remote media is not available on this host');
+      },
       allowedFileRoots,
       ...(wholeTurn !== publicText ? { refScanText: wholeTurn } : {}),
       log,

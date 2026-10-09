@@ -3390,26 +3390,42 @@ describe('watchContinuation: 观察桌面端续跑并回流', () => {
     }
     const cb = h.eventCbs.get(entry === 'run' ? 'sess-new' : 'sess-live')!;
     const media = `cindy-media://blobs/${'a'.repeat(64)}.png`;
-    const text = `结果 [文件](xdt-file://${workDir}/package.json) ![图](xdt-image://chart.png) ![媒体](${media})`;
-    cb({ type: 'tool_result_full', data: { fullText: `![工具图](xdt-image://tool.png) ![工具媒体](${media})` } });
-    cb({ type: 'text', data: { text, isFinal: true } });
-    cb(outputLimit
-      ? { type: 'error', data: { reason: 'output-limit', message: 'limit', isTerminal: true } }
-      : { type: 'done', data: null });
-    if (pending) onEnd(await pending);
-    await vi.waitFor(() => expect(onEnd).toHaveBeenCalledTimes(1));
-    const outcome = onEnd.mock.calls[0]![0];
-    expect(outcome.status).toBe(outputLimit ? 'error' : 'ok');
-    if (remote) {
-      expect(resolveXdtImage).not.toHaveBeenCalled();
-      expect(cindyMock.resolveSafe).not.toHaveBeenCalled();
-      expect(outcome.attachments).toBeUndefined();
-      expect(outcome.finalText).toBe(text);
-    } else {
-      expect(resolveXdtImage).toHaveBeenCalled();
-      expect(cindyMock.resolveSafe).toHaveBeenCalled();
-      expect(outcome.attachments?.map((a: { name: string }) => a.name)).toContain('package.json');
-    }
+    const text = `结果 [文件](xdt-file://${workDir}/package.json) ![图](xdt-image://chart.png) ![媒体](${media})`
+      + String.raw` ![Unix](/home/task/shot.png) ![Windows](C:\task\shot.png)`
+      + '\n![引用][shot] [查看][shot]\n\n[shot]: xdt-image:///private/tmp/shot.png'
+      + '\n\n![网页](https://example.com/shot.png) `![示例](/example.png)`';
+    const read = remote ? vi.spyOn(fs, 'readFile') : undefined;
+    const realpath = remote ? vi.spyOn(fs, 'realpath') : undefined;
+    const materialize = remote ? vi.spyOn(taskImages, 'materializeTaskImageTextResult') : undefined;
+    try {
+      cb({ type: 'tool_result_full', data: { fullText: `![工具图](xdt-image://tool.png) ![工具媒体](${media})` } });
+      cb({ type: 'text', data: { text, isFinal: true } });
+      cb(outputLimit
+        ? { type: 'error', data: { reason: 'output-limit', message: 'limit', isTerminal: true } }
+        : { type: 'done', data: null });
+      if (pending) onEnd(await pending);
+      await vi.waitFor(() => expect(onEnd).toHaveBeenCalledTimes(1));
+      const outcome = onEnd.mock.calls[0]![0];
+      expect(outcome.status).toBe(outputLimit ? 'error' : 'ok');
+      if (remote) {
+        expect(resolveXdtImage).not.toHaveBeenCalled();
+        expect(cindyMock.resolveSafe).not.toHaveBeenCalled();
+        expect(outcome.attachments).toBeUndefined();
+        expect(outcome.finalText).toContain('🖼️ _Unix_');
+        expect(outcome.finalText).toContain('🖼️ _Windows_');
+        expect(outcome.finalText).toContain('🖼️ _引用_ 查看');
+        expect(outcome.finalText).toContain('Attachment delivery incomplete');
+        expect(outcome.finalText).not.toMatch(/xdt-|cindy-media|\/home\/task|C:\\task|\/private\/tmp|\[shot\]:/);
+        expect(outcome.finalText).toContain('![网页](https://example.com/shot.png) `![示例](/example.png)`');
+        expect(read).not.toHaveBeenCalled();
+        expect(realpath).not.toHaveBeenCalled();
+        expect(materialize).not.toHaveBeenCalled();
+      } else {
+        expect(resolveXdtImage).toHaveBeenCalled();
+        expect(cindyMock.resolveSafe).toHaveBeenCalled();
+        expect(outcome.attachments?.map((a: { name: string }) => a.name)).toContain('package.json');
+      }
+    } finally { read?.mockRestore(); realpath?.mockRestore(); materialize?.mockRestore(); }
   });
 
   it.each([false, true].flatMap((isFinal) => [false, true].map((background) => ({ isFinal, background }))))(
