@@ -3,7 +3,6 @@ import { AppState, StyleSheet, View, type StyleProp, type TextStyle } from 'reac
 import { PR_STATUS_REFRESH_INTERVAL_MS } from '@cindy/maker-shared';
 import { useAuth } from '@/auth/AuthContext';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
-import { Folders } from 'lucide-react-native';
 import { useTranslation } from 'react-i18next';
 import { Text } from '@/components/AppText';
 import { useTheme } from '@/theme';
@@ -61,8 +60,8 @@ export function SessionRelativeTime({ lastActivityAt, style }: { lastActivityAt:
 }
 
 /**
- * 任务信息槽(对齐桌面 SessionInfoMeta):按勾选顺序显示 时间 / PR / worktree / Token /
- * 费用,以「·」分隔;无数据的项不占位,全不选时不渲染。文字统一沿用行内时间的样式。
+ * 任务信息槽(对齐桌面 SessionInfoMeta):按勾选顺序显示 时间 / PR / Token / 费用
+ *(worktree 仅本机 Desktop,见 homeDisplaySettings),以「·」分隔;无数据的项不占位,全不选时不渲染。文字统一沿用行内时间的样式。
  */
 type InfoSession = RemoteSessionListItem['session'] & {
   deviceLinkDeviceId?: string;
@@ -135,15 +134,6 @@ function InfoMetaContent({
               testID={`home.sessionInfo.pr.${session.id}`}
               textStyle={textStyle}
             />
-          ) : piece.key === 'worktree' ? (
-            <View
-              accessibilityLabel={`${t('devices.list.menu.taskInfo.worktree')} ${piece.name}`}
-              accessible
-              style={styles.iconPiece}
-              testID={`home.sessionInfo.worktree.${session.id}`}
-            >
-              <Folders color={colors.textTertiary} size={iconSize.xs} strokeWidth={iconStroke.thin} />
-            </View>
           ) : 'text' in piece ? (
             <Text numberOfLines={1} style={textStyle}>{piece.text}</Text>
           ) : null}

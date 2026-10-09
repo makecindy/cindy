@@ -157,7 +157,6 @@ describe("home chrome menus", () => {
     expect(find(actions, "taskInfo")?.subactions?.map((item) => [item.id, item.state, item.keepPresented])).toEqual([
       ["taskInfo.time", "on", true],
       ["taskInfo.pr", "off", true],
-      ["taskInfo.worktree", "off", true],
       ["taskInfo.tokens", "off", true],
       ["taskInfo.cost", "off", true],
     ]);

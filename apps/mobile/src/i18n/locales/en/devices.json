@@ -403,7 +403,6 @@
       "taskInfo": {
         "time": "Time",
         "pr": "PR status",
-        "worktree": "worktree",
         "tokens": "Tokens",
         "cost": "Cost"
       },

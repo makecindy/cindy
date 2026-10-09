@@ -1,7 +1,6 @@
 import { formatCompactTokens } from '@cindy/maker-shared/usage-format';
 import type { RemoteSessionListItem } from './sessionList';
 import { formatRemoteMoney, resolveSessionTotalMoney } from './remoteMoney';
-import { sessionWorktreeInfo } from './sessionWorktree';
 
 /**
  * 首页「显示」菜单里与桌面侧栏对齐的设置(筛选 / 显示 / 任务信息)。
@@ -15,7 +14,12 @@ export type HomeLastActivityFilter = '1d' | '3d' | '7d' | '30d' | 'all';
 /** 'all' = 不筛选;数组 = 只看这些项目(含对话占位键)。 */
 export type HomeProjectFilter = 'all' | readonly string[];
 export type HomeListViewMode = 'text' | 'list';
-export type HomeTaskInfoField = 'time' | 'pr' | 'worktree' | 'tokens' | 'cost';
+/**
+ * 与桌面任务信息同序,但不含 worktree:产品规则(sidebar-redesign-plan §3.4)限定 worktree
+ * 标识仅本机 Desktop 显示——它依赖本地登记与存活探测,SSH / device-link / Mobile 不显示。
+ * 旧版本存下的 'worktree' 由 normalizeTaskInfoFields 丢弃。
+ */
+export type HomeTaskInfoField = 'time' | 'pr' | 'tokens' | 'cost';
 
 /** 项目筛选里「对话」的占位键;与真实项目 key 不会撞(项目 key 带设备 / 路径前缀)。 */
 export const HOME_DIALOGUE_FILTER_KEY = 'dialogue';
@@ -23,7 +27,7 @@ export const HOME_DIALOGUE_FILTER_KEY = 'dialogue';
 export const HOME_VENDOR_FILTERS: readonly HomeVendorFilter[] = ['all', 'cc', 'codex', 'pi'];
 export const HOME_LAST_ACTIVITY_FILTERS: readonly HomeLastActivityFilter[] = ['1d', '3d', '7d', '30d', 'all'];
 /** 本表顺序 = 菜单里复选项的排列顺序(固定),与桌面一致。 */
-export const HOME_TASK_INFO_FIELDS: readonly HomeTaskInfoField[] = ['time', 'pr', 'worktree', 'tokens', 'cost'];
+export const HOME_TASK_INFO_FIELDS: readonly HomeTaskInfoField[] = ['time', 'pr', 'tokens', 'cost'];
 export const DEFAULT_HOME_TASK_INFO_FIELDS: readonly HomeTaskInfoField[] = ['time'];
 
 export const LAST_ACTIVITY_DAYS: Record<Exclude<HomeLastActivityFilter, 'all'>, number> = {
@@ -112,11 +116,10 @@ function uniqueStrings(values: readonly unknown[]): string[] {
 export type HomeSessionInfoPiece =
   | { key: 'time' }
   | { key: 'pr' }
-  | { key: 'worktree'; name: string; path: string }
   | { key: 'tokens' | 'cost'; text: string };
 
 /**
- * 按勾选顺序拼出任务行右侧的信息片段;无数据的项(Token 为 0、无费用、无 worktree)
+ * 按勾选顺序拼出任务行右侧的信息片段;无数据的项(Token 为 0、无费用)
  * 不占位。'pr' 只是占位,PR 号与状态由行内单独查询后替换,查不到时调用方跳过。
  */
 export function buildHomeSessionInfoPieces(
@@ -124,7 +127,6 @@ export function buildHomeSessionInfoPieces(
     totalTokenUsage?: unknown;
     totalMoney?: unknown;
     totalCostUsd?: unknown;
-    worktreePath?: string | null;
   },
   fields: readonly HomeTaskInfoField[],
 ): HomeSessionInfoPiece[] {
@@ -137,12 +139,9 @@ export function buildHomeSessionInfoPieces(
       if (typeof tokens === 'number' && Number.isFinite(tokens) && tokens > 0) {
         pieces.push({ key: 'tokens', text: formatCompactTokens(tokens) });
       }
-    } else if (field === 'cost') {
+    } else {
       const money = resolveSessionTotalMoney(session);
       if (money) pieces.push({ key: 'cost', text: formatRemoteMoney(money) });
-    } else {
-      const worktree = sessionWorktreeInfo(session);
-      if (worktree) pieces.push({ key: 'worktree', name: worktree.name, path: worktree.path });
     }
   }
   return pieces;

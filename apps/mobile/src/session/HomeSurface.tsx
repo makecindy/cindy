@@ -2705,7 +2705,8 @@ function HomeScreenContent({ active = true, onModeChange, width, newSessionInSys
   }), [displayedProjectOrder, groupByProject, groupDialogue, lastActivityFilter, projectFilter, sortBy, statusFilter, taskInfoFields, vendorFilter, viewMode]);
   const homeDisplayPullDownActions = useMemo(
     () => buildHomeDisplayPullDownActions({
-      dialogueCount: projectFilterUniverse.chats.length,
+      // 与项目候选的 sessionCount 同口径:自动化组行按组内运行数计。
+      dialogueCount: projectFilterUniverse.chats.reduce((sum, item) => sum + (item.automationGroup?.sessionCount ?? 1), 0),
       // 候选用设备范围内的完整项目集(不受搜索 / 状态影响);看所有电脑时用设备名区分同名项目。
       projects: projectFilterUniverse.projects.map((project) => ({
         count: project.sessionCount,
@@ -2716,7 +2717,7 @@ function HomeScreenContent({ active = true, onModeChange, width, newSessionInSys
       state: displayMenuState,
       t,
     }),
-    [displayMenuState, projectFilterUniverse.chats.length, projectFilterUniverse.projects, selectedDeviceId, t],
+    [displayMenuState, projectFilterUniverse.chats, projectFilterUniverse.projects, selectedDeviceId, t],
   );
   const handleDisplayAction = useCallback((id: string) => {
     const patch = homeDisplayActionPatch(id, displayMenuState);

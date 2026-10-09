@@ -163,16 +163,14 @@ describe('task info pieces (desktop 任务信息 parity)', () => {
       totalCostUsd: 0,
       totalMoney: { amount: 3.2, approximate: false, currency: 'USD', kind: 'actual-cost' },
       totalTokenUsage: 1_400_000,
-      worktreePath: '/repo/.claude/worktrees/feature-x',
     };
-    expect(buildHomeSessionInfoPieces(session, ['cost', 'pr', 'time', 'tokens', 'worktree'])).toEqual([
+    expect(buildHomeSessionInfoPieces(session, ['cost', 'pr', 'time', 'tokens'])).toEqual([
       { key: 'cost', text: '$3.20' },
       { key: 'pr' },
       { key: 'time' },
       { key: 'tokens', text: '1.4M' },
-      { key: 'worktree', name: 'feature-x', path: '/repo/.claude/worktrees/feature-x' },
     ]);
-    expect(buildHomeSessionInfoPieces({}, ['tokens', 'cost', 'worktree'])).toEqual([]);
+    expect(buildHomeSessionInfoPieces({}, ['tokens', 'cost'])).toEqual([]);
     expect(buildHomeSessionInfoPieces({ totalCostUsd: 12.4 }, ['cost'])).toEqual([{ key: 'cost', text: '$12' }]);
     expect(buildHomeSessionInfoPieces(session, [])).toEqual([]);
   });
@@ -192,6 +190,18 @@ describe('task info usage wiring', () => {
     expect(store).toContain('delete projected.totalTokenUsage;');
     expect(meta).toContain("taskInfoFields.includes('tokens') || taskInfoFields.includes('cost')");
     expect(meta.match(/useRemoteSessionUsage\(/g)?.length).toBe(2);
+  });
+
+  it('keeps worktree off the mobile task info (desktop-only per sidebar plan §3.4)', async () => {
+    const { HOME_TASK_INFO_FIELDS, normalizeTaskInfoFields } = await import('@/session/homeDisplaySettings');
+    expect(HOME_TASK_INFO_FIELDS).toEqual(['time', 'pr', 'tokens', 'cost']);
+    // 旧版本存下的 worktree 勾选被丢弃。
+    expect(normalizeTaskInfoFields(['worktree', 'pr'])).toEqual(['pr']);
+  });
+
+  it('counts dialogue automation runs like project candidates', () => {
+    const surface = readFileSync(resolve(process.cwd(), 'src/session/HomeSurface.tsx'), 'utf8');
+    expect(surface).toContain('dialogueCount: projectFilterUniverse.chats.reduce((sum, item) => sum + (item.automationGroup?.sessionCount ?? 1), 0),');
   });
 
   it('lists project filter candidates regardless of search and status', () => {
