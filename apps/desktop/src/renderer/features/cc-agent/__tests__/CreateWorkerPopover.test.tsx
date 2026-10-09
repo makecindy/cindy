@@ -1546,6 +1546,20 @@ describe('CreateWorkerPopover', () => {
     );
   });
 
+  it('keeps the modal scrim out of the Electron window drag region', () => {
+    // 遮罩标 drag = 整块视口都是拖拽命中区,只给 500px 的 Content 挖洞:模型选择器面板
+    // 按 align=end 贴 trigger、向左探出弹窗边框,探出部分被拖拽区吞掉(2026-10 实测:
+    // 左半点不动、左侧来源 rail 选不了)。同口径见 windowDrag.tsx。
+    render(<CreateWorkerPopover open onClose={vi.fn()} onCreate={vi.fn()} />);
+    const overlay = document.querySelector('.modal-scrim') as HTMLElement | null;
+    const panel = document.querySelector('.modal-panel') as HTMLElement | null;
+    const appRegion = (element: HTMLElement) =>
+      (element.style as CSSStyleDeclaration & { WebkitAppRegion: string }).WebkitAppRegion;
+    expect(overlay).not.toBeNull();
+    expect(appRegion(overlay!)).toBe('no-drag');
+    expect(appRegion(panel!)).toBe('no-drag');
+  });
+
   it('does not wire provider navigation inside the detached sidebar window', async () => {
     // 分离侧栏窗口固定 /sidebar-window 壳路由:本地 navigate 会把辅助窗口整壳替换
     // 成主设置路由,与 OrcaWorkerPanel 的 settingsEnabled={!isSidebarWindow()} 同
