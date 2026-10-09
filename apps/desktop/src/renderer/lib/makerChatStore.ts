@@ -425,6 +425,8 @@ export interface ChatMessage {
   rowid?: number;
   role: MessageRole;
   content: string;
+  /** Renderer-only provider item identity used to reconcile an in-flight Codex text item. */
+  agentMessageId?: string;
   /** Display-safe summaries for resolved session links in this user message. */
   sessionReferences?: PersistedSessionReferenceMetadata[];
   /**
@@ -5598,10 +5600,12 @@ export function handleStreamEvent(
   switch (event.type) {
     case 'text': {
       dismissVisionBridgeToast(event.sessionId);
-      const { text, isFinal, isFullText } = event.data as {
+      const { text, isFinal, isFullText, phase, agentMessageId } = event.data as {
         text: string;
         isFinal: boolean;
         isFullText?: boolean;
+        phase?: string;
+        agentMessageId?: string;
       };
       const snapshot = readRemoteTextSnapshot(event);
       if (snapshot?.truncated) return state;
@@ -5642,6 +5646,42 @@ export function handleStreamEvent(
           (message) => message.clientId === event.persistId && message.role === 'assistant',
         );
         if (existing) {
+          const streamingMessage = state.messages.find(
+            (message) =>
+              message.clientId === state.streamingClientId && message.role === 'assistant',
+          );
+          const existingIndex = state.messages.indexOf(existing);
+          const streamingIndex = streamingMessage
+            ? state.messages.indexOf(streamingMessage)
+            : -1;
+          const sameUserTurn =
+            streamingIndex > existingIndex &&
+            !state.messages
+              .slice(existingIndex + 1, streamingIndex)
+              .some((message) => message.role === 'user');
+          const streamingDuplicate =
+            isFinal &&
+            phase === 'commentary' &&
+            existing.content === text &&
+            streamingMessage !== undefined &&
+            sameUserTurn &&
+            state.streamingClientId !== event.persistId &&
+            (
+              (agentMessageId !== undefined &&
+                streamingMessage.agentMessageId === agentMessageId) ||
+              streamingMessage.content === text
+            );
+          if (streamingDuplicate) {
+            return {
+              ...state,
+              messages: state.messages.filter(
+                (message) => message.clientId !== state.streamingClientId,
+              ),
+              streamingClientId: null,
+              streamingText: '',
+              lastAgentMeta: incomingMeta ?? state.lastAgentMeta,
+            };
+          }
           // Persisted/finalized text already includes these late deltas. Only an
           // explicitly authoritative full-text event may calibrate it again.
           if (!isFinal) {
@@ -5786,6 +5826,7 @@ export function handleStreamEvent(
               clientId,
               role: 'assistant',
               content: text,
+              ...(agentMessageId ? { agentMessageId } : {}),
               isStreaming: true,
               createdAt: snapshot?.createdAt ?? new Date().toISOString(),
               ...assistantMetaFields,
@@ -5806,7 +5847,12 @@ export function handleStreamEvent(
         messages: replaceMessage(
           textState.messages,
           (m) => m.clientId === id,
-          (m) => ({ ...m, content: nextText, ...(snapshot?.createdAt ? { createdAt: snapshot.createdAt } : {}) }),
+          (m) => ({
+            ...m,
+            content: nextText,
+            ...(agentMessageId ? { agentMessageId } : {}),
+            ...(snapshot?.createdAt ? { createdAt: snapshot.createdAt } : {}),
+          }),
         ),
       };
     }
@@ -7328,6 +7374,7 @@ type PendingTextDeltaBatch = {
   ingress: LiveIngressContext;
   source?: 'claude-code' | 'codex' | 'pi' | 'vision-bridge';
   persistId?: string;
+  agentMessageId?: string;
   agentMeta?: Record<string, unknown>;
 };
 
@@ -7558,7 +7605,11 @@ function flushPendingTextDelta(sessionId: string, deferNotification = false): vo
     {
       type: 'text',
       source: pending.source,
-      data: { text: pending.text, isFinal: false },
+      data: {
+        text: pending.text,
+        isFinal: false,
+        ...(pending.agentMessageId ? { agentMessageId: pending.agentMessageId } : {}),
+      },
       ...(pending.agentMeta ? { agentMeta: pending.agentMeta } : {}),
     },
     pending.persistId,
@@ -7590,8 +7641,12 @@ function enqueueTextDeltaPayload(
   ingress: LiveIngressContext = {},
 ): void {
   if (!event) return;
-  const data = event.data as { text?: unknown };
+  const data = event.data as { text?: unknown; agentMessageId?: unknown };
   const text = typeof data.text === 'string' ? data.text : '';
+  const agentMessageId =
+    typeof data.agentMessageId === 'string' && data.agentMessageId
+      ? data.agentMessageId
+      : undefined;
   const dataOwner = getDataOwnerGeneration();
   let existing = pendingTextDeltaBatches.get(sessionId);
   if (
@@ -7606,9 +7661,18 @@ function enqueueTextDeltaPayload(
     flushPendingTextDelta(sessionId);
     existing = undefined;
   }
+  if (
+    existing?.agentMessageId &&
+    agentMessageId &&
+    existing.agentMessageId !== agentMessageId
+  ) {
+    flushPendingTextDelta(sessionId);
+    existing = undefined;
+  }
   if (existing) {
     existing.text += text;
     if (!existing.persistId && persistId) existing.persistId = persistId;
+    if (!existing.agentMessageId && agentMessageId) existing.agentMessageId = agentMessageId;
     if (event.source) existing.source = event.source;
     if (event.agentMeta) existing.agentMeta = event.agentMeta;
   } else {
@@ -7618,6 +7682,7 @@ function enqueueTextDeltaPayload(
       ingress,
       source: event.source,
       persistId,
+      ...(agentMessageId ? { agentMessageId } : {}),
       ...(event.agentMeta ? { agentMeta: event.agentMeta } : {}),
     });
   }

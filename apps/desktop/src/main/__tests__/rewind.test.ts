@@ -21,7 +21,7 @@ import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest';
 
 import { enqueueGitRepoWrite } from '../git-snapshot/gitRepoWriteQueue';
 
@@ -172,7 +172,13 @@ let previewRewindAtMessage: typeof import('../maker-orchestration/rewind').previ
 const originalClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
 const tempDirs: string[] = [];
 
-beforeEach(async () => {
+beforeAll(async () => {
+  const mod = await import('../maker-orchestration/rewind');
+  commitRewindAtMessage = mod.commitRewindAtMessage;
+  previewRewindAtMessage = mod.previewRewindAtMessage;
+}, 30_000);
+
+beforeEach(() => {
   if (originalClaudeConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
   else process.env.CLAUDE_CONFIG_DIR = originalClaudeConfigDir;
   selectQueue.length = 0;
@@ -231,11 +237,6 @@ beforeEach(async () => {
   getSessionMetaMock.mockImplementation(async () =>
     fakeSession ? { sdkSessionId: fakeSession.sdkSessionId } : null,
   );
-  if (!commitRewindAtMessage) {
-    const mod = await import('../maker-orchestration/rewind');
-    commitRewindAtMessage = mod.commitRewindAtMessage;
-    previewRewindAtMessage = mod.previewRewindAtMessage;
-  }
 });
 
 afterEach(async () => {

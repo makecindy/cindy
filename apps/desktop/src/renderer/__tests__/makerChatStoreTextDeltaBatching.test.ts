@@ -2110,6 +2110,179 @@ describe('makerChatStore text delta batching', () => {
     ]);
   });
 
+  it('removes a streamed commentary replay when main reuses the previous persist id', () => {
+    emitTextDelta('Same progress update', SESSION_ID, 'assistant-1');
+    onEvent?.({
+      sessionId: SESSION_ID,
+      event: {
+        type: 'text',
+        source: 'codex',
+        data: {
+          text: 'Same progress update',
+          isFinal: true,
+          isFullText: true,
+          agentMessageId: 'msg-commentary-1',
+          phase: 'commentary',
+        },
+      },
+      persistId: 'assistant-1',
+    });
+    onEvent?.({
+      sessionId: SESSION_ID,
+      event: {
+        type: 'tool_use',
+        source: 'codex',
+        data: { toolUseId: 'tool-between', toolName: 'read', input: {} },
+      },
+      persistId: 'tool-between',
+    });
+    emitTextDelta('Same progress update', SESSION_ID, 'assistant-2');
+    vi.advanceTimersByTime(32);
+
+    onEvent?.({
+      sessionId: SESSION_ID,
+      event: {
+        type: 'text',
+        source: 'codex',
+        data: {
+          text: 'Same progress update',
+          isFinal: true,
+          isFullText: true,
+          agentMessageId: 'msg-commentary-2',
+          phase: 'commentary',
+        },
+      },
+      // Main recognized the repeated commentary and points back to its durable row.
+      persistId: 'assistant-1',
+    });
+
+    const assistantMessages = makerChatStore.getSnapshot(SESSION_ID).messages
+      .filter((message) => message.role === 'assistant');
+    expect(assistantMessages).toEqual([
+      expect.objectContaining({
+        clientId: 'assistant-1',
+        content: 'Same progress update',
+        isStreaming: false,
+      }),
+    ]);
+    expect(makerChatStore.getSnapshot(SESSION_ID).streamingClientId).toBeNull();
+  });
+
+  it('removes a partial streamed commentary replay by provider item identity', () => {
+    onEvent?.({
+      sessionId: SESSION_ID,
+      event: { type: 'text', source: 'codex', data: {
+        text: 'Same progress update', isFinal: true, isFullText: true,
+        agentMessageId: 'msg-commentary-1', phase: 'commentary',
+      } },
+      persistId: 'assistant-1',
+    });
+    onEvent?.({
+      sessionId: SESSION_ID,
+      event: {
+        type: 'tool_use', source: 'codex',
+        data: { toolUseId: 'tool-between', toolName: 'read', input: {} },
+      },
+      persistId: 'tool-between',
+    });
+    onEvent?.({
+      sessionId: SESSION_ID,
+      event: { type: 'text', source: 'codex', data: {
+        text: 'Same progress', isFinal: false, agentMessageId: 'msg-commentary-2',
+      } },
+      persistId: 'assistant-2',
+    });
+
+    onEvent?.({
+      sessionId: SESSION_ID,
+      event: { type: 'text', source: 'codex', data: {
+        text: 'Same progress update', isFinal: true, isFullText: true,
+        agentMessageId: 'msg-commentary-2', phase: 'commentary',
+      } },
+      persistId: 'assistant-1',
+    });
+
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages
+      .filter((message) => message.role === 'assistant')).toEqual([
+      expect.objectContaining({
+        clientId: 'assistant-1', content: 'Same progress update', isStreaming: false,
+      }),
+    ]);
+    expect(makerChatStore.getSnapshot(SESSION_ID).streamingClientId).toBeNull();
+  });
+
+  it('keeps a different in-flight commentary item when a prior final event arrives late', () => {
+    onEvent?.({
+      sessionId: SESSION_ID,
+      event: { type: 'text', source: 'codex', data: {
+        text: 'First progress update', isFinal: true, isFullText: true,
+        agentMessageId: 'msg-commentary-1', phase: 'commentary',
+      } },
+      persistId: 'assistant-1',
+    });
+    onEvent?.({
+      sessionId: SESSION_ID,
+      event: { type: 'text', source: 'codex', data: {
+        text: 'Different progress', isFinal: false, agentMessageId: 'msg-commentary-2',
+      } },
+      persistId: 'assistant-2',
+    });
+
+    onEvent?.({
+      sessionId: SESSION_ID,
+      event: { type: 'text', source: 'codex', data: {
+        text: 'First progress update', isFinal: true, isFullText: true,
+        agentMessageId: 'msg-commentary-1', phase: 'commentary',
+      } },
+      persistId: 'assistant-1',
+    });
+
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages
+      .filter((message) => message.role === 'assistant')).toEqual([
+      expect.objectContaining({ clientId: 'assistant-1', content: 'First progress update' }),
+      expect.objectContaining({ clientId: 'assistant-2', content: 'Different progress' }),
+    ]);
+    expect(makerChatStore.getSnapshot(SESSION_ID).streamingClientId).toBe('assistant-2');
+  });
+
+  it('does not deduplicate identical commentary across user turns', () => {
+    onEvent?.({
+      sessionId: SESSION_ID,
+      event: { type: 'text', source: 'codex', data: {
+        text: 'Same progress update', isFinal: true, isFullText: true,
+        agentMessageId: 'msg-commentary-1', phase: 'commentary',
+      } },
+      persistId: 'assistant-1',
+    });
+    emitDbMessageCreated({
+      clientId: 'user-2', role: 'user', content: 'Run it again',
+      createdAt: '2027-06-15T00:00:03.000Z',
+    });
+    onEvent?.({
+      sessionId: SESSION_ID,
+      event: { type: 'text', source: 'codex', data: {
+        text: 'Same progress', isFinal: false, agentMessageId: 'msg-commentary-2',
+      } },
+      persistId: 'assistant-2',
+    });
+
+    onEvent?.({
+      sessionId: SESSION_ID,
+      event: { type: 'text', source: 'codex', data: {
+        text: 'Same progress update', isFinal: true, isFullText: true,
+        agentMessageId: 'msg-commentary-2', phase: 'commentary',
+      } },
+      persistId: 'assistant-1',
+    });
+
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages
+      .filter((message) => message.role === 'assistant')).toEqual([
+      expect.objectContaining({ clientId: 'assistant-1', content: 'Same progress update' }),
+      expect.objectContaining({ clientId: 'assistant-2', content: 'Same progress' }),
+    ]);
+    expect(makerChatStore.getSnapshot(SESSION_ID).streamingClientId).toBe('assistant-2');
+  });
+
   it('flushes batched deltas when the assistant persist id changes', () => {
     emitTextDelta('Execution preview', SESSION_ID, 'assistant-1');
     emitTextDelta('Please confirm.', SESSION_ID, 'assistant-2');
