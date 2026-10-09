@@ -1880,6 +1880,31 @@ describe('newMakerDraft agent computer', () => {
     expect(getDraft()).toMatchObject({ agentDeviceId: null, remoteHostId: 'ssh-1' });
   });
 
+  // 远程控制下新建任务:任务建到被控电脑 dev-a,Agent 在第三台电脑 dev-c。
+  it('keeps the agent computer for a task on a controlled computer until that computer changes', async () => {
+    const { getDraft, patchDraft } = await loadModule();
+    patchDraft({ deviceLinkDeviceId: 'dev-a', deviceLinkDeviceName: 'Studio', workingDir: null });
+    patchDraft({ agentDeviceId: 'dev-c', agentDeviceName: 'Office Mac' });
+    expect(getDraft()).toMatchObject({ deviceLinkDeviceId: 'dev-a', agentDeviceId: 'dev-c' });
+    // 同一台被控电脑上换项目(设备字段照样显式带上):Agent 仍在那台。
+    patchDraft({ deviceLinkDeviceId: 'dev-a', deviceLinkDeviceName: 'Studio', workingDir: '/a/proj' });
+    expect(getDraft()).toMatchObject({ agentDeviceId: 'dev-c', agentDeviceName: 'Office Mac' });
+    // 换到另一台被控电脑 / 回到本机:上一台的选择不再适用。
+    patchDraft({ deviceLinkDeviceId: 'dev-d', deviceLinkDeviceName: 'Lab', workingDir: null });
+    expect(getDraft()).toMatchObject({ agentDeviceId: null, agentDeviceName: null });
+    patchDraft({ deviceLinkDeviceId: 'dev-a', deviceLinkDeviceName: 'Studio', workingDir: null });
+    patchDraft({ agentDeviceId: 'dev-c', agentDeviceName: 'Office Mac' });
+    patchDraft({ deviceLinkDeviceId: null, deviceLinkDeviceName: null, workingDir: null });
+    expect(getDraft()).toMatchObject({ agentDeviceId: null, agentDeviceName: null });
+  });
+
+  it('never lets the agent computer be the computer the task is on', async () => {
+    const { getDraft, patchDraft } = await loadModule();
+    patchDraft({ deviceLinkDeviceId: 'dev-a', deviceLinkDeviceName: 'Studio', workingDir: null });
+    patchDraft({ agentDeviceId: 'dev-a', agentDeviceName: 'Studio' });
+    expect(getDraft()).toMatchObject({ deviceLinkDeviceId: 'dev-a', agentDeviceId: null, agentDeviceName: null });
+  });
+
   it('does not restore the agent computer after a restart', async () => {
     let mod = await loadModule();
     mod.patchDraft({ workingDir: '/local/proj', agentDeviceId: 'dev-b', agentDeviceName: 'Office Mac' });

@@ -534,9 +534,10 @@ export function getActiveMobileSessionRealm(): ClientEndpointRegion {
 
 export async function loadMobileEndpointsForRealm(
   region: ClientEndpointRegion,
+  options: { refresh?: boolean } = {},
 ): Promise<ClientEndpointMap> {
   const cached = realmEndpointCache.get(region);
-  if (cached) return cached;
+  if (cached && !options.refresh) return cached;
   const baseUrl = trustedMobileRealmManifestBaseUrls()[region];
   if (!baseUrl) {
     throw new Error('realm-manifest-url-unavailable');

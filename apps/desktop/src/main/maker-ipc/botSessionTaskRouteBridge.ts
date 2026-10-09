@@ -7,6 +7,7 @@ interface TaskRouteBridgeDeps {
   setSessionRuntime(params: {
     targetSessionId: string;
     expectedGeneration: number;
+    beforeMutation?: () => Promise<void>;
     patch: {
       harness?: SessionRuntimeProfile['agentKind'];
       model: string;
@@ -40,8 +41,9 @@ export function createBotSessionTaskRouteBridge(
         next: next.candidate,
       };
     },
-    advance: async (childSessionId, expectedGeneration, route) => {
+    advance: async (childSessionId, expectedGeneration, route, beforeApply) => {
       const current = await deps.getSessionRuntime({ targetSessionId: childSessionId });
+      await beforeApply?.();
       if (!current.ok) return current;
       if (current.runtime.runtimeGeneration !== expectedGeneration) {
         return { ok: false, errorCode: 'CONFLICT', message: 'Task runtime changed before model selection' };
@@ -49,6 +51,7 @@ export function createBotSessionTaskRouteBridge(
       const result = await deps.setSessionRuntime({
         targetSessionId: childSessionId,
         expectedGeneration,
+        beforeMutation: beforeApply,
         patch: {
           ...(current.runtime.effectiveProfile.agentKind === route.agentKind ? {} : { harness: route.agentKind }),
           model: route.model,

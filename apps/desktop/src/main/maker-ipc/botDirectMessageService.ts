@@ -1,8 +1,11 @@
 import { parseBotPeerAddress, botPeerAddress, MAX_BOT_PEER_ADDRESS_CHARS } from '../../shared/botPeerAddress.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { withBotProfileLocks } from './botProfileLock.js';
+import { authorizeGroupTool, GroupToolAuthorizationError } from './botGroupToolAuthorization.js';
+import { t } from '../i18n.js';
+import { AcceptedCallbackDispatchCancelled } from './acceptedCallbackRunner.js';
 
-import { and, asc, desc, eq, inArray, isNull, ne } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNull, ne, sql } from 'drizzle-orm';
 
 import { getDbClient } from '../localDb/client/current.js';
 import { createMessage } from '../localDb/ipc/messages.js';
@@ -101,6 +104,7 @@ export interface BotDirectMessageServiceDeps {
   transport?: BotMessageTransport;
   dispatch: (params: {
     targetSessionId: string;
+    dispatcherSessionId?: string;
     message: string;
     persistedContent?: string;
     clientId?: string;
@@ -110,9 +114,11 @@ export interface BotDirectMessageServiceDeps {
   /** Reuses the canonical-session ensure path for newly-created/recovering Bots. */
   ensureCanonicalSession?: (
     botId: string,
+    beforeRecovery?: () => Promise<void>,
   ) => Promise<{ ok: true; sessionId: string } | { ok: false; errorCode: string; message: string }>;
   /** True only when the durable input queue already owns this delivery. */
   hasQueuedDelivery?: (sessionId: string, clientId: string) => Promise<boolean>;
+  discardQueuedDelivery?: (sessionId: string, clientId: string, assertOwner: () => void) => Promise<void>;
   captureOwnerScope?: () => DataOwnerBroadcastScope;
   isOwnerScopeCurrent?: (scope: DataOwnerBroadcastScope) => boolean;
   onChanged?: (payload: BotDirectMessageChangedPayload, ownerScope?: DataOwnerBroadcastScope) => void;
@@ -120,25 +126,28 @@ export interface BotDirectMessageServiceDeps {
   createId?: () => string;
 }
 
-async function activeRoster(): Promise<BotRosterEntry[]> {
+async function activeRoster(beforeReturn?: () => Promise<void>): Promise<BotRosterEntry[]> {
   const db = getDbClient().drizzle;
-  return db
+  const roster = await db
     .select({ id: botProfiles.id, name: botProfiles.displayName })
     .from(botProfiles)
     .where(eq(botProfiles.status, 'active'))
     .orderBy(desc(botProfiles.updatedAt));
+  await beforeReturn?.();
+  return roster;
 }
 
 async function failed(
   errorCode: string,
   message: string,
   includeRoster = false,
+  beforeRosterReturn?: () => Promise<void>,
 ): Promise<BotDirectMessageResult> {
   return {
     ok: false,
     errorCode,
     message,
-    ...(includeRoster ? { availableBots: await activeRoster() } : {}),
+    ...(includeRoster ? { availableBots: await activeRoster(beforeRosterReturn) } : {}),
   };
 }
 
@@ -295,6 +304,29 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
     if (rejected?.status === 'rejected') throw rejected.reason;
   };
 
+  // senderSessionId and the durable Bot link retain the source identity across
+  // restarts. A missing local link cannot prove canonical authority either.
+  const canRestoreDelivery = async (db: ReturnType<typeof getDbClient>['drizzle'], row: typeof botDirectMessages.$inferSelect): Promise<boolean> => {
+    if (row.deliveryStatus === 'failed') return false;
+    if (!row.senderSessionId) return !!parseBotPeerAddress(row.senderBotId); // Remote peer, not a deleted local source.
+    const [link] = await db.select({ role: botSessionLinks.role }).from(botSessionLinks)
+      .where(and(eq(botSessionLinks.sessionId, row.senderSessionId), eq(botSessionLinks.botId, row.senderBotId))).limit(1);
+    return link?.role === 'canonical';
+  };
+
+  const assertRestoredQueuedDelivery = async (sessionId: string, clientId: string): Promise<void> => {
+    if (!clientId.startsWith('bot-dm:')) return;
+    const owner = deps.captureOwnerScope?.();
+    const db = getDbClient().drizzle;
+    const [row] = await db.select().from(botDirectMessages)
+      .where(and(eq(botDirectMessages.recipientSessionId, sessionId),
+        eq(sql`'bot-dm:' || ${botDirectMessages.threadId} || ':' || ${botDirectMessages.id}`, clientId))).limit(1);
+    const restorable = row && await canRestoreDelivery(db, row);
+    if (!restorable || (owner !== undefined && deps.isOwnerScopeCurrent && !deps.isOwnerScopeCurrent(owner))) {
+      throw new AcceptedCallbackDispatchCancelled(new GroupToolAuthorizationError().message);
+    }
+  };
+
   /** Reconcile receipts after restart without replaying uncertain model/tool work. */
   const restore = async (): Promise<void> => {
     const owner = deps.captureOwnerScope?.();
@@ -319,10 +351,15 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
         // it based on the absence of a receipt in this device's local database.
         if (parseBotPeerAddress(row.recipientBotId)) return;
         const clientId = `bot-dm:${row.threadId}:${row.id}`;
-        const [receipt] = row.recipientSessionId ? await db.select({ id: messages.id }).from(messages)
+        const restorable = await canRestoreDelivery(db, row);
+        if (!restorable && row.recipientSessionId) {
+          assertOwner();
+          await deps.discardQueuedDelivery?.(row.recipientSessionId, clientId, assertOwner);
+        }
+        const [receipt] = restorable && row.recipientSessionId ? await db.select({ id: messages.id }).from(messages)
           .where(and(eq(messages.sessionId, row.recipientSessionId), eq(messages.clientId, clientId), isNull(messages.rewindAt)))
           .limit(1) : [];
-        const queued = !receipt && row.recipientSessionId && deps.hasQueuedDelivery
+        const queued = restorable && !receipt && row.recipientSessionId && deps.hasQueuedDelivery
           ? await deps.hasQueuedDelivery(row.recipientSessionId, clientId) : false;
         assertOwner();
         if (receipt || queued) {
@@ -337,7 +374,8 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
           // row, remove partial projections, and return its budget to the pair.
           await db.delete(messages).where(inArray(messages.clientId,
             [row.senderSessionId, row.recipientSessionId].filter((id): id is string => !!id)
-              .map((id) => BOT_DIRECT_MESSAGE_CLIENT_ID.timelineAnchor(row.threadId, row.id, id))));
+              .map((id) => BOT_DIRECT_MESSAGE_CLIENT_ID.timelineAnchor(row.threadId, row.id, id))
+              .concat(restorable ? [] : [clientId])));
         }
         const [thread] = await db.select().from(botDirectMessageThreads)
           .where(eq(botDirectMessageThreads.id, row.threadId)).limit(1);
@@ -441,7 +479,9 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
     if (caller.sessionStatus !== 'active' || caller.botStatus !== 'active') {
       return failed('BOT_SESSION_INACTIVE', '当前 Bot 主任务已暂停、归档或删除');
     }
-    if (caller.role !== 'canonical' || caller.linkArchivedAt !== null) {
+    const groupAuthority = caller.role === 'group'
+      ? await authorizeGroupTool(input.callerSessionId, caller.botId, 'owner-action') : null;
+    if ((!groupAuthority && caller.role !== 'canonical') || caller.linkArchivedAt !== null) {
       return failed('NOT_CANONICAL_BOT_SESSION', 'send_to_agent 只能从伙伴主任务发送');
     }
     if (caller.botId === input.targetBotId) {
@@ -449,6 +489,7 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
     }
 
     const remoteTarget = parseBotPeerAddress(input.targetBotId);
+    if (groupAuthority && remoteTarget) return failed('PERMISSION_DENIED', t('groupTools.localPeersOnly'));
     if (remoteTarget && remoteSender) return failed('INVALID_ARGS', 'Remote forwarding is not supported');
     let targetProfile: { name: string; status: string; hiddenAt?: number | null } | undefined;
     let bridgeSessionId: string | undefined;
@@ -464,28 +505,30 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
     } else targetProfile = await loadTargetProfile(input.targetBotId);
     if (!ownerIsCurrent()) return failed('OWNER_CHANGED', '账号已经切换，本次伙伴消息未发送');
     if (!targetProfile) {
-      return failed('TARGET_BOT_NOT_FOUND', '找不到目标 Bot', true);
+      return failed('TARGET_BOT_NOT_FOUND', '找不到目标 Bot', true, groupAuthority?.refresh);
     }
     if (remoteSender && targetProfile.hiddenAt) return failed('NOT_FOUND', 'Remote teammate is unavailable');
     if (targetProfile.status !== 'active') {
-      return failed('TARGET_BOT_INACTIVE', '目标 Bot 已暂停或归档', true);
+      return failed('TARGET_BOT_INACTIVE', '目标 Bot 已暂停或归档', true, groupAuthority?.refresh);
     }
 
     // Resolve on every use so a missing/deleted canonical task can be repaired
     // before the message is persisted or queued against a Session id.
     let targetSessionId: string | null = null;
     if (!remoteTarget && deps.ensureCanonicalSession) {
-      const ensured = await deps.ensureCanonicalSession(input.targetBotId);
+      const ensured = groupAuthority
+        ? await deps.ensureCanonicalSession(input.targetBotId, groupAuthority.refresh).finally(groupAuthority.refresh)
+        : await deps.ensureCanonicalSession(input.targetBotId);
       if (!ownerIsCurrent()) return failed('OWNER_CHANGED', '账号已经切换，本次伙伴消息未发送');
       if (ensured.ok) targetSessionId = ensured.sessionId;
-      else return failed(ensured.errorCode, ensured.message, true);
+      else return failed(ensured.errorCode, ensured.message, true, groupAuthority?.refresh);
     }
     if (!remoteTarget && !targetSessionId) {
       const target = await loadTargetCanonicalSession(input.targetBotId);
       targetSessionId = target?.sessionId ?? null;
     }
     if (!remoteTarget && !targetSessionId) {
-      return failed('TARGET_CANONICAL_UNAVAILABLE', '目标 Bot 没有可用的主任务', true);
+      return failed('TARGET_CANONICAL_UNAVAILABLE', '目标 Bot 没有可用的主任务', true, groupAuthority?.refresh);
     }
 
     const [botAId, botBId] = pairOf(caller.botId, input.targetBotId);
@@ -495,14 +538,16 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
       // Admission above may precede a queued delete/pause. Re-read after obtaining
       // both lifecycle locks, before creating any shared thread or message row.
       const currentCaller = remoteSender ? caller : await loadCaller(input.callerSessionId);
+      await groupAuthority?.refresh();
       if (!currentCaller || currentCaller.botId !== caller.botId || currentCaller.sessionSource !== 'bot'
         || currentCaller.sessionStatus !== 'active' || currentCaller.botStatus !== 'active'
-        || currentCaller.role !== 'canonical' || currentCaller.linkArchivedAt !== null) {
+        || currentCaller.role !== caller.role || currentCaller.linkArchivedAt !== null) {
         return failed('BOT_SESSION_INACTIVE', '当前 Bot 主任务已暂停、归档或删除');
       }
       const currentTarget = remoteTarget ? targetProfile : await loadTargetProfile(input.targetBotId);
+      await groupAuthority?.refresh();
       if (!currentTarget || currentTarget.status !== 'active' || (remoteSender && currentTarget.hiddenAt)) {
-        return failed('TARGET_BOT_INACTIVE', '目标 Bot 已暂停或归档', true);
+        return failed('TARGET_BOT_INACTIVE', '目标 Bot 已暂停或归档', true, groupAuthority?.refresh);
       }
       if (!ownerIsCurrent()) return failed('OWNER_CHANGED', '账号已经切换，本次伙伴消息未发送');
       const db = getDbClient().drizzle;
@@ -536,6 +581,7 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
           ),
         )
         .limit(1);
+      await groupAuthority?.refresh();
       let thread: typeof botDirectMessageThreads.$inferSelect | undefined = activeThreads[0];
 
       if (thread && thread.expiresAt <= sentAt) {
@@ -563,6 +609,7 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
           )
           .orderBy(desc(botDirectMessageThreads.updatedAt))
           .limit(1);
+        await groupAuthority?.refresh();
         if (
           latest?.closeReason === 'message-limit' &&
           latest.blockedUntil !== null &&
@@ -594,6 +641,7 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
           .where(eq(botDirectMessageThreads.id, threadId))
           .limit(1);
       }
+      await groupAuthority?.refresh();
       if (!thread) return failed('INTERNAL', '伙伴对话未能建立');
 
       // A previous process may have stopped between reserving a delivery and
@@ -606,6 +654,7 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
         })
         .from(botDirectMessages)
         .where(eq(botDirectMessages.threadId, thread.id));
+      await groupAuthority?.refresh();
       const reservedCount = reservations.filter((row) => row.deliveryStatus !== 'failed').length;
       if (reservedCount !== thread.messageCount) {
         await db
@@ -614,6 +663,7 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
           .where(eq(botDirectMessageThreads.id, thread.id));
         thread = { ...thread, messageCount: reservedCount };
       }
+      await groupAuthority?.refresh();
       if (thread.messageCount >= thread.maxMessages - (bridgeSessionId ? 1 : 0)) {
         return failed('CONVERSATION_LIMIT_REACHED', '这轮伙伴对话已达到往来上限，请先回到各自主任务整理结果。');
       }
@@ -629,6 +679,7 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
         )
         .orderBy(desc(botDirectMessages.sequence))
         .limit(2);
+      await groupAuthority?.refresh();
       if (recent.length === 2 && recent.every((row) => row.senderBotId === caller.botId)) {
         return failed('WAIT_FOR_PEER', '已连续发出 2 条消息，请等待对方回应后再继续。');
       }
@@ -637,6 +688,10 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
       const senderId = trustedHeaderLabel(caller.botId, MAX_SENDER_ID_CHARS);
       const envelope = [
         `[Direct message from Cindy Bot "${senderName}" (${senderId})]`,
+        ...(groupAuthority ? [
+          `[Group source: ${trustedHeaderLabel(groupAuthority.sourceGroup?.name ?? '', MAX_SENDER_NAME_CHARS)} (${trustedHeaderLabel(groupAuthority.sourceGroup?.groupId ?? '', MAX_SENDER_ID_CHARS)}); lane: ${trustedHeaderLabel(input.callerSessionId, MAX_SENDER_ID_CHARS)}]`,
+          'Replies go to the sender teammate\'s private chat with its owner. They are not delivered to the group lane. Retain this group source when replying.',
+        ] : []),
         `Handle this in your current canonical task. If a useful answer, result, or clarification should go back, call send_to_agent with target_id="${senderId}". Do not send acknowledgement-only replies.`,
         message,
       ].join('\n\n');
@@ -663,6 +718,7 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
         createdAt: sentAt,
       });
       try {
+        await groupAuthority?.refresh();
         await db
           .update(botDirectMessageThreads)
           .set({
@@ -753,6 +809,7 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
       };
 
       const onAccepted = async () => {
+        await groupAuthority?.refresh();
         if (!ownerIsCurrent()) throw new Error('owner changed before Bot message acceptance');
         await persistDeliveryAnchors({
           id: deliveryId, threadId: thread.id, sequence: nextSequence,
@@ -796,17 +853,20 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
         try {
           dispatched = await deps.dispatch({
             targetSessionId: targetSessionId!, message: envelope,
-            persistedContent: `${UI_ACTION_TRIGGER_PREFIX}${envelope}`,
+            ...(groupAuthority ? { dispatcherSessionId: input.callerSessionId } : {}),
+            // Group routing details belong only to the agent wire. Shared
+            // history and queue projections can expose the persisted body.
+            persistedContent: `${UI_ACTION_TRIGGER_PREFIX}${groupAuthority ? message : envelope}`,
             clientId: `bot-dm:${thread.id}:${deliveryId}`,
             onAccepted, onAcceptedRollback: rollbackReservation,
           });
         } catch (error) {
           await rollbackReservation().catch(() => undefined);
-          return failed('DELIVERY_NOT_ACCEPTED', error instanceof Error ? error.message : String(error), true);
+          return failed('DELIVERY_NOT_ACCEPTED', error instanceof Error ? error.message : String(error), true, groupAuthority?.refresh);
         }
         if (!dispatched.ok) {
           await rollbackReservation().catch(() => undefined);
-          return failed(dispatched.errorCode, dispatched.message, true);
+          return failed(dispatched.errorCode, dispatched.message, true, groupAuthority?.refresh);
         }
       }
 
@@ -827,11 +887,16 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
     return typeof outcome === 'function' ? outcome() : outcome;
   };
 
-  const messageAgent = (input: { callerSessionId: string; targetBotId: string; message: string }) => {
+  const messageAgent = async (input: { callerSessionId: string; targetBotId: string; message: string }) => {
     const peer = parseBotPeerAddress(input.targetBotId);
     // Addresses copied back onto their own device still resolve to the local profile.
-    return sendMessage(peer && peer.deviceId === deps.transport?.selfDeviceId()
-      ? { ...input, targetBotId: peer.botId } : input);
+    try {
+      return await sendMessage(peer && peer.deviceId === deps.transport?.selfDeviceId()
+        ? { ...input, targetBotId: peer.botId } : input);
+    } catch (error) {
+      if (error instanceof GroupToolAuthorizationError) return failed(error.code, error.message);
+      throw error;
+    }
   };
   const receiveRemote = async (input: { controllerDeviceId: string; senderBotId: string; targetBotId: string; messageId: string; message: string }) => {
     if (!deps.transport) return failed('HOST_NOT_READY', 'Device messaging is not ready');
@@ -857,11 +922,18 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
   const listAgents = async (callerSessionId: string) => {
     const scope = deps.captureOwnerScope?.();
     const caller = await loadCaller(callerSessionId);
-    if (!caller || caller.role !== 'canonical' || caller.linkArchivedAt !== null
+    const groupAuthority = caller?.role === 'group'
+      ? await authorizeGroupTool(callerSessionId, caller.botId, 'owner-action') : null;
+    if (!caller || (!groupAuthority && caller.role !== 'canonical') || caller.linkArchivedAt !== null
       || caller.sessionSource !== 'bot' || caller.sessionStatus !== 'active' || caller.botStatus !== 'active') {
       return { ok: false as const, errorCode: 'NOT_A_BOT_SESSION', message: 'An active canonical teammate is required' };
     }
-    const local = (await activeRoster()).filter(row => row.id !== caller.botId);
+    const local = (await activeRoster(groupAuthority?.refresh)).filter(row => row.id !== caller.botId);
+    if (groupAuthority) {
+      if (scope !== undefined && deps.isOwnerScopeCurrent && !deps.isOwnerScopeCurrent(scope))
+        return { ok: false as const, errorCode: 'OWNER_CHANGED', message: t('groupTools.ownerChanged') };
+      return { ok: true as const, agents: local.map(row => ({ ...row, local: true })), unavailableDevices: [] };
+    }
     let remote: Awaited<ReturnType<BotMessageTransport['list']>> = { agents: [], unavailableDevices: [] };
     let discoveryError: string | undefined;
     try {
@@ -1050,7 +1122,75 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
       return transportFailure(error);
     }
   };
-  return { messageAgent, receiveRemote, verifyRemoteMessage, readRemoteReceipt, listAgents, checkMessage, getThread, restore };
+  const sendToUser = async (input: { callerSessionId: string; message: string; idempotencyKey: string }) => {
+    try {
+      const scope = deps.captureOwnerScope?.();
+      const caller = await loadCaller(input.callerSessionId);
+      if (!caller || caller.role !== 'group' || caller.linkArchivedAt !== null
+        || caller.sessionSource !== 'bot' || caller.sessionStatus !== 'active' || caller.botStatus !== 'active')
+        return { ok: false as const, errorCode: 'GROUP_AUTHORIZATION_REQUIRED', message: t('groupTools.authorizationRequired') };
+      const authority = await authorizeGroupTool(input.callerSessionId, caller.botId, 'owner-action');
+      if (!authority.sourceGroup) throw new GroupToolAuthorizationError();
+      const message = input.message.trim();
+      if (!message || message.length > MAX_MESSAGE_CHARS || !/^[\w-]{8,100}$/.test(input.idempotencyKey))
+        return { ok: false as const, errorCode: 'INVALID_ARGS', message: t('groupTools.invalidMessage') };
+      if (scope !== undefined && deps.isOwnerScopeCurrent && !deps.isOwnerScopeCurrent(scope))
+        return { ok: false as const, errorCode: 'OWNER_CHANGED', message: t('groupTools.ownerChanged') };
+      // Use the same recovery as peer messages before taking the delivery lock.
+      // Recovery may await profile/Session preparation, so it cannot authorize delivery.
+      if (deps.ensureCanonicalSession) {
+        await authority.refresh();
+        const ensured = await deps.ensureCanonicalSession(caller.botId, authority.refresh).finally(() => authority.refresh());
+        if (scope !== undefined && deps.isOwnerScopeCurrent && !deps.isOwnerScopeCurrent(scope))
+          return { ok: false as const, errorCode: 'OWNER_CHANGED', message: t('groupTools.ownerChanged') };
+        if (!ensured.ok) return { ...ensured, message: t('groupTools.privateUnavailable') };
+      }
+      return await withBotProfileLocks([caller.botId], async () => {
+        const current = await loadCaller(input.callerSessionId);
+        const target = await loadTargetCanonicalSession(caller.botId);
+        const clientId = `bot-group-private:${input.callerSessionId}:${input.idempotencyKey}`;
+        // Recovery replaces the canonical Session but preserves its historical
+        // link. A lane's retry key still identifies the original delivery.
+        const [existing] = target ? await getDbClient().drizzle.select({ id: messages.id, content: messages.content, sessionId: messages.sessionId })
+          .from(messages)
+          .innerJoin(botSessionLinks, eq(botSessionLinks.sessionId, messages.sessionId))
+          .innerJoin(sessions, eq(sessions.id, messages.sessionId))
+          .where(and(eq(botSessionLinks.botId, caller.botId), inArray(botSessionLinks.role, ['canonical', 'history']),
+            eq(sessions.source, 'bot'), eq(messages.clientId, clientId))).limit(1) : [];
+        await authority.refresh();
+        if (scope !== undefined && deps.isOwnerScopeCurrent && !deps.isOwnerScopeCurrent(scope))
+          return { ok: false as const, errorCode: 'OWNER_CHANGED', message: t('groupTools.ownerChanged') };
+        if (!target || !current || current.botId !== caller.botId || current.role !== 'group'
+          || current.linkArchivedAt !== null || current.botStatus !== 'active' || current.sessionStatus !== 'active')
+          return { ok: false as const, errorCode: 'TARGET_CANONICAL_UNAVAILABLE', message: t('groupTools.privateUnavailable') };
+        if (existing) return existing.content === message
+          ? { ok: true as const, messageId: existing.id, targetSessionId: existing.sessionId, delivered: true }
+          : { ok: false as const, errorCode: 'IDEMPOTENCY_CONFLICT', message: t('groupTools.idempotencyConflict') };
+        // An assistant message for the owner, never synthetic user input to the Bot.
+        // Host-derived target prevents another account or a namesake from receiving it.
+        const saved = await createMessage(target.sessionId, {
+          clientId, role: 'assistant', content: message, agentKind: null,
+          agentMeta: { sourceGroup: authority.sourceGroup, origin: { kind: 'session', senderSessionId: input.callerSessionId,
+            senderBotId: caller.botId, senderBotName: caller.botName } },
+        }, { broadcastOwnerScope: scope, beforePublish: async () => {
+          await authority.refresh();
+          if (scope !== undefined && deps.isOwnerScopeCurrent && !deps.isOwnerScopeCurrent(scope))
+            throw new GroupToolAuthorizationError();
+        } });
+        return { ok: true as const, messageId: saved.id, targetSessionId: target.sessionId, delivered: true };
+      });
+    } catch (error) {
+      return { ok: false as const, errorCode: error instanceof GroupToolAuthorizationError ? error.code : 'PRIVATE_MESSAGE_UNAVAILABLE',
+        message: error instanceof GroupToolAuthorizationError ? error.message : t('groupTools.privateUnconfirmed') };
+    }
+  };
+  return { messageAgent, sendToUser, receiveRemote, verifyRemoteMessage, readRemoteReceipt,
+    listAgents: async (sessionId: string) => {
+      try { return await listAgents(sessionId); } catch (error) {
+        if (error instanceof GroupToolAuthorizationError) return { ok: false as const, errorCode: error.code, message: error.message };
+        throw error;
+      }
+    }, checkMessage, getThread, restore, assertRestoredQueuedDelivery };
 }
 
 export type BotDirectMessageService = ReturnType<typeof createBotDirectMessageService>;

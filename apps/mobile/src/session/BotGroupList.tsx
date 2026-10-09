@@ -30,13 +30,14 @@ export function BotGroupListRow({ row, online, last = false, onPress }: {
   const { user } = useAuth();
   useSyncExternalStore(subscribeRemoteResourceCache, remoteResourceCacheRevision);
   const display = row.item.display;
-  const unread = isRemoteResourceUnread(user?.id ?? '', row.host.deviceId, row.item.ref.id, display.lastReplyAt);
+  const unread = isRemoteResourceUnread(user?.id ?? '', row.host.deviceId, row.item.ref.id, display.lastReplyAt, row.lastReplySequence);
   const title = resolveRemoteText(display.title, i18n.language);
   const preview = display.preview ? parseMobileMarkdownInlines(resolveRemoteText(display.preview, i18n.language))
     .map((inline) => inline.type === 'image' ? inline.alt : inline.text).join('').replace(/\s+/g, ' ').trim() : '';
-  const summary = preview || t('groupChat.list.noMessages');
+  const summary = preview || t(!row.host.deviceId && display.preview === undefined ? 'groupChat.server.previewUnavailable' : 'groupChat.list.noMessages');
   const running = online && !!display.generation;
-  const members = botGroupMemberLinks(row.item, i18n.language).map((member) => identityFor(member.botId, member.label));
+  const members = botGroupMemberLinks(row.item, i18n.language).map((member) =>
+    identityFor(member.botId, member.label, row.groupMembers?.find(identity => identity.botId === member.botId)));
   const time = display.timestamp !== undefined && Number.isFinite(new Date(display.timestamp).getTime())
     ? formatRemoteSessionSidebarTime(new Date(display.timestamp).toISOString(), now) : '';
   const offline = online ? '' : t('devices.resources.hostOffline');

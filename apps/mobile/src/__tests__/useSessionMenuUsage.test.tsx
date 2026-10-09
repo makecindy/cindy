@@ -246,3 +246,62 @@ describe("menu usage refresh lifecycle", () => {
     expect(h.value.loading).toBe(false);
   });
 });
+
+// 远程 Agent:Agent 在另一台电脑上用那台的登录运行,账号余量读那台;任务价值仍读被控电脑。
+describe("menu usage with a remote Agent account", () => {
+  async function renderWith(
+    host: SessionMenuUsageReader,
+    accountReader: SessionMenuUsageReader | null,
+    task: RemoteSession,
+  ) {
+    let value!: ReturnType<typeof useSessionMenuUsage>;
+    function Probe() {
+      value = useSessionMenuUsage(task, host, true, null, undefined, accountReader);
+      return null;
+    }
+    root = createRoot(document.createElement("div"));
+    await act(async () => root!.render(createElement(Probe)));
+    return () => value;
+  }
+
+  it("reads the account from the Agent's computer and the task value from the host", async () => {
+    const host = reader();
+    const agent = reader();
+    vi.mocked(agent.getSubscriptionUsage).mockResolvedValue({
+      subscriptionType: "max",
+      fiveHour: { utilization: 12 },
+    });
+    const task = {
+      ...session("a"),
+      agentKind: "cc",
+      model: "claude-fable-5",
+      providerId: "anthropic",
+      agentDeviceId: "device-agent",
+    } as RemoteSession;
+    const value = await renderWith(host, agent, task);
+    expect(value().account?.source).toBe("claude");
+    expect(value().account?.windows[0]?.remainingPercent).toBe(88);
+    expect(value().estimate?.amount).toBe(12);
+    expect(agent.getSubscriptionUsage).toHaveBeenCalledWith("claude", "anthropic");
+    expect(host.getSubscriptionUsage).not.toHaveBeenCalled();
+    expect(host.getSessionEstimatedValue).toHaveBeenCalledWith("a");
+    expect(agent.getSessionEstimatedValue).not.toHaveBeenCalled();
+  });
+
+  it("shows an unreadable account as unavailable without borrowing the host's account", async () => {
+    const host = reader();
+    const task = {
+      ...session("a"),
+      agentKind: "cc",
+      model: "claude-fable-5",
+      providerId: "anthropic",
+      agentDeviceId: "share:share-1",
+    } as RemoteSession;
+    const value = await renderWith(host, null, task);
+    expect(value().account?.source).toBe("unavailable");
+    expect(value().account?.windows).toEqual([]);
+    expect(value().estimate?.amount).toBe(12);
+    expect(host.getSubscriptionUsage).not.toHaveBeenCalled();
+    expect(host.getCodexRateLimits).not.toHaveBeenCalled();
+  });
+});

@@ -446,6 +446,12 @@ export class GhostPanelWindowsController {
     slot.openTimeout = setTimeout(() => {
       slot.openTimeout = null;
       if (slot.win.isDestroyed() || !slot.pendingOpen) return;
+      // 窗口规则 §3.1:shell(rendererReady)未就绪时展示可能是空白窗口;按资源用量
+      // 窗口基线作废缓存并走有界恢复(重建重开),恢复额度耗尽才放弃。
+      if (!slot.rendererReady) {
+        this.invalidateSlot(ghostId, slot, 'renderer readiness timed out');
+        return;
+      }
       if (!slot.visible) this.showAndFocus(ghostId, slot);
     }, DEFAULT_OPEN_TIMEOUT_MS);
     slot.openTimeout.unref?.();

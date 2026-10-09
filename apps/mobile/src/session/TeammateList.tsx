@@ -106,6 +106,9 @@ export function TeammateList({ items, loading, refreshing, error, isOnline, conn
     return names;
   }, [items, i18n.language]);
   const searchLabel = t(groups ? 'devices.companions.searchWithGroups' : 'devices.companions.search');
+  const errorKey = error === 'CHAT_ENDPOINT_UNAVAILABLE' ? 'groupChat.server.endpointUnavailable'
+    : error === 'CHAT_LIST_FAILED' ? 'groupChat.server.loadFailed'
+    : items.length + (groups?.items.length ?? 0) ? 'devices.companions.stale' : 'devices.resources.loadFailed';
   const header = <View style={styles.controls}>
     <View style={styles.search}>
       <Search size={iconSize.md} color={colors.textPlaceholder} strokeWidth={iconStroke.regular} />
@@ -122,7 +125,7 @@ export function TeammateList({ items, loading, refreshing, error, isOnline, conn
       </Pressable> : null}
     </View>
     {error ? <View style={styles.noticeRow}>
-      <Text accessibilityRole="alert" style={[styles.notice, styles.noticeText]} testID="teammates.error">{t(items.length ? 'devices.companions.stale' : 'devices.resources.loadFailed')}</Text>
+      <Text accessibilityRole="alert" style={[styles.notice, styles.noticeText]} testID="teammates.error">{t(errorKey)}</Text>
       <Pressable accessibilityRole="button" accessibilityLabel={t('devices.resources.retry')} disabled={refreshing}
         onPress={onRefresh} style={styles.retry} testID="teammates.refresh">
         {refreshing ? <ActivityIndicator color={colors.textSecondary} /> : <RefreshCw size={iconSize.sm} color={colors.textSecondary} />}

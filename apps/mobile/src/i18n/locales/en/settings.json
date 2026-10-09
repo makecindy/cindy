@@ -35,7 +35,7 @@
   },
   "language": {
     "title": "Language",
-    "hint": "Affects the app UI only. Agent replies follow the agent's own language settings.",
+    "hint": "Used for the interface and AI error reports. Other replies follow your message or language request.",
     "options": {
       "system": "Auto (follow system)",
       "zh-CN": "简体中文",
@@ -91,7 +91,7 @@
   "about": {
     "sectionTitle": "About This Phone",
     "deviceName": "Device Name",
-    "deviceNameDetail": "This name appears in the authorization list on your computer.",
+    "deviceNameDetail": "Shown in the computer’s authorization list.",
     "platform": "Platform",
     "editAccessibility": "Edit {{label}}"
   },
@@ -188,9 +188,9 @@
     "refresh": "Refresh",
     "refreshing": "Refreshing…",
     "refreshAccessibility": "Refresh dictionary",
-    "readOnlyHint": "Read-only here — add or remove terms on a computer.",
-    "offlineHint": "None of your computers are online. Showing what was last synced to your phone.",
-    "noDesktops": "No computers yet. Sign in on a computer with the same account and your dictionary will show up here."
+    "readOnlyHint": "View on your phone; add or remove entries on a computer.",
+    "offlineHint": "Your computers are offline. Showing the last synced dictionary.",
+    "noDesktops": "Sign in to the same account on a computer to sync your dictionary."
   },
   "deviceNameEditor": {
     "screenTitle": "Device Name",

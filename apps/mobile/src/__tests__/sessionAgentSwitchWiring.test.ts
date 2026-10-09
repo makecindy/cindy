@@ -6,6 +6,29 @@ function readSource(relativePath: string): string {
   return readFileSync(resolve(process.cwd(), relativePath), 'utf8').replace(/\r\n/g, '\n');
 }
 
+describe('new task remote Agent wiring', () => {
+  it('lists remote and shared providers and creates the task with the Agent there', () => {
+    const source = readSource('app/sessions/new.tsx');
+    // 被控电脑支持远程 Agent 时,模型列表接上其他电脑与分享的供应商;协同草稿与之互斥。
+    expect(source).toContain('const remoteAgentCatalogs = useRemoteAgentCatalogs({');
+    expect(source).toContain('...(remoteAgentSupported && !collabDraft');
+    expect(source).toContain('remote: { catalogs: remoteAgentCatalogs, selectedDeviceId: remoteAgentPick?.deviceId ?? null }');
+    expect(source).toContain('const collabEligible = isOrcaCollabEligible(collabTarget) && remoteAgentPick === null;');
+    // 选中远程行单独记;选本机行清掉。
+    const select = source.slice(source.indexOf('const selectUnifiedModel = useCallback'), source.indexOf('const selectFlatModel'));
+    expect(select).toContain('const remoteDeviceId = source?.deviceId ?? null;');
+    expect(select).toContain('setRemoteAgentChoice({');
+    expect(select).toContain('setRemoteAgentChoice(null);');
+    // 普通创建与目标模式都把远程选择落进草稿,且不按被控电脑的目录 / 登录拦。
+    expect(source.split('applyRemoteAgentPick(draft, remoteAgentPick)')).toHaveLength(3);
+    expect(source.split('const runGuard = () => effectiveDraft.agentDeviceId ? Promise.resolve({')).toHaveLength(3);
+    expect(source).toContain('confirmUnauthenticated: effectiveDraft.agentDeviceId');
+    expect(source).toContain("agentAuthVerdict === 'unauthenticated' || remoteAgentPick");
+    // 恢复草稿时把 Agent 所在电脑拆回远程选择。
+    expect(source).toContain('const { agentDeviceId, ...recovered } = saved;');
+  });
+});
+
 describe('session Agent switch UI wiring', () => {
   it('keeps pending intent separate from the persisted session fields and rehydrates it', () => {
     const source = readSource('app/sessions/[sessionId].tsx');

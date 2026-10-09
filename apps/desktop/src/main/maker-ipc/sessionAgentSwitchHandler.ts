@@ -133,6 +133,7 @@ export interface MakerSessionAgentSwitchHandlerDeps {
     intent: PendingAgentSwitchIntent,
     applyNow: boolean,
     assertSelectionCurrent?: () => void,
+    beforeMutation?: () => Promise<void>,
   ): Promise<{ deferred: boolean; superseded?: boolean }>;
   /** 与 send / SET_MODEL 共用的 session 锁；生产注入，最小测试 harness 可省略。 */
   withSessionLock?<T>(sessionId: string, task: () => Promise<T>): Promise<T>;
@@ -437,6 +438,7 @@ export async function performSessionAgentSwitch(
     configStaged?: boolean;
     /** Recheck caller CAS after asynchronous validation, before staging any intent. */
     assertSelectionCurrent?: () => void;
+    beforeMutation?: () => Promise<void>;
   },
 ): Promise<SessionAgentSwitchResult> {
   const { sessionId, targetAgentKind, model, providerId, signal } = params;
@@ -503,6 +505,7 @@ export async function performSessionAgentSwitch(
     throwIpcError('UNSUPPORTED_CAPABILITY', 'agent switch is not supported for Orca sessions');
   }
 
+  if (params.beforeMutation) await params.beforeMutation();
   params.assertSelectionCurrent?.();
 
   const fromDbKind: DbAgentKind = normalizeDbAgentKind(row.agentKind);
@@ -520,6 +523,7 @@ export async function performSessionAgentSwitch(
       model,
       typeof normalizedProviderId === 'string' ? normalizedProviderId : null,
     );
+    if (params.beforeMutation) await params.beforeMutation();
     throwIfAgentSwitchAborted(signal);
     params.assertSelectionCurrent?.();
   }
@@ -536,7 +540,7 @@ export async function performSessionAgentSwitch(
         sameAgentSelection: true,
         ...(params.runtimeSource ? { runtimeSource: params.runtimeSource } : {}),
         ...(params.configStaged === true ? { configStaged: true } : {}),
-      }, false, params.assertSelectionCurrent);
+      }, false, params.assertSelectionCurrent, params.beforeMutation);
       return {
         switched: false,
         agentKind: targetAgentKind,
