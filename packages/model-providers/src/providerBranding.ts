@@ -62,6 +62,8 @@ export const PROVIDER_LOGO_PATHS = {
     'M14.025 0c3.492 0 5.237 0 6.571.68a6.24 6.24 0 0 1 2.725 2.724C24 4.738 24 6.484 24 9.975v4.05c0 3.492 0 5.237-.68 6.571a6.24 6.24 0 0 1-2.724 2.725c-1.334.679-3.08.679-6.571.679h-4.05c-3.492 0-5.237 0-6.571-.68A6.24 6.24 0 0 1 .68 20.597C0 19.262 0 17.516 0 14.025v-4.05c0-3.492 0-5.237.68-6.571A6.23 6.23 0 0 1 3.404.68C4.738 0 6.484 0 9.975 0zM7.688 16.313a1.313 1.313 0 0 0 0 2.625h11.625a1.313 1.313 0 0 0 0-2.625zm-3-3.75a1.313 1.313 0 0 0 0 2.624h11.625a1.313 1.313 0 0 0 0-2.624zm3-3.75a1.313 1.313 0 0 0 0 2.624h11.625a1.313 1.313 0 0 0 0-2.624zm-3-3.75a1.313 1.313 0 0 0 0 2.625h11.625a1.313 1.313 0 0 0 0-2.625z',
   llamacpp: 'M9.2 5.2 12 2.6l2.8 2.6H9.2zM6 18.5h12v2H6zm1.8-4.2h8.4v2.1H7.8zm1.8-4.2h4.8v2.1H9.6z',
   vllm: 'm23.6 0-8.721 4.59L9.829 24h7.41zM9.83 24V5.142H.4Z',
+  // Original terminal-prompt monogram for the Command Code connection (no upstream artwork supplied).
+  commandcode: 'M7.2 6.6 12.9 11.1 7.2 15.6 5.75 13.85 9.6 11.1 5.75 8.35Z M12.3 13.4h6.2v2.2h-6.2z',
 } as const;
 
 export type ProviderLogoKind = keyof typeof PROVIDER_LOGO_PATHS | 'anthropic' | 'openai' | 'xd';
@@ -149,6 +151,7 @@ const PROVIDER_LOGO_KIND_BY_ID: Readonly<Record<string, ProviderLogoKind>> = {
   'volcengine-agent-plan': 'volcengine',
   'tencentcloud-coding-plan': 'tencentcloud',
   'opencode-go': 'opencode',
+  'command-code': 'commandcode',
   'vercel-ai-gateway': 'vercel',
   ollama: 'ollama',
   'cindy-local-ollama': 'ollama',
@@ -166,6 +169,7 @@ const PROVIDER_LOGO_KIND_BY_HOST: readonly (readonly [string, ProviderLogoKind])
   ["api.cerebras.ai", "cerebras"],
   ["api.fireworks.ai", "fireworks"],
   ["api.groq.com", "groq"],
+  ["api.commandcode.ai", "commandcode"],
   ["router.huggingface.co", "huggingface"],
   ["integrate.api.nvidia.com", "nvidia"],
   ["api.together.ai", "together"],
