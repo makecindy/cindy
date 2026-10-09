@@ -187,14 +187,24 @@ describe('GhostManager namespace migration census', () => {
     } finally {
       read.mockRestore();
     }
-    expect(manager.ensureNamespaceMigrationCensus()?.entries.hello?.status).toBe('pending');
+    expect(manager.ensureNamespaceMigrationCensus()?.pendingRelIds).toContain('hello');
   });
-  it('keeps an old unstamped install unresolved when its census is unavailable', async () => {
+  it('ignores a corrupt leftover migration file and still censuses the directory', async () => {
     await plantLegacyInstall('hello');
-    fs.writeFileSync(path.join(workDir, 'ghosts-install-state', 'namespace-migration.v1.json'), '{');
-    expect(manager.list()[0]).toMatchObject({ namespaceState: 'unconfirmed', namespace: null });
-    expect(manager.list()[0]?.namespaceState).not.toBe('pending');
-    expect(manager.ensureNamespaceMigrationCensus()?.entries.hello?.status).toBe('pending');
+    const legacyPath = path.join(workDir, 'ghosts-install-state', 'namespace-migration.v1.json');
+    fs.writeFileSync(legacyPath, '{');
+    expect(manager.list()[0]?.namespaceState).toBe('pending');
+    expect(manager.ensureNamespaceMigrationCensus()?.pendingRelIds).toContain('hello');
+    expect(fs.readFileSync(legacyPath, 'utf8')).toBe('{');
+  });
+
+
+  it('keeps a pending legacy xd-mivo-canvas addressable without a committed namespace', async () => {
+    await plantLegacyInstall('xd-mivo-canvas');
+    expect(manager.ensureNamespaceMigrationCensus()?.pendingRelIds).toContain('xd-mivo-canvas');
+    expect(manager.list().find((ghost) => ghost.manifest.id === 'xd-mivo-canvas')?.namespaceState).toBe('pending');
+    expect(manager.isPendingLegacyNamespace('xd-mivo-canvas')).toBe(true);
+    expect(manager.readDeliveryNamespace('xd-mivo-canvas')).toBeUndefined();
   });
 
   it('rejects a namespace commit when the receipt changes after classification', async () => {
@@ -258,7 +268,7 @@ describe('GhostManager namespace migration census', () => {
         currentOrganization: { organizationId: 'org-acme', orgSlug: 'acme', pluginPrefix },
       }),
     });
-    expect(manager.ensureNamespaceMigrationCensus()?.entries['acme-tool']?.status).toBe('pending');
+    expect(manager.ensureNamespaceMigrationCensus()?.pendingRelIds).toContain('acme-tool');
 
     fs.writeFileSync(receiptFile, '{');
     expect(() => manager.readApprovedInstallOriginStrict('acme-tool')).toThrow();
@@ -561,7 +571,7 @@ describe('GhostManager namespace migration census', () => {
     manager = createManager(options);
     await manager.reconcilePendingRootNamespaces(true);
     expect(manager.list()[0]).toMatchObject({ namespace: 'acme', enabled: true });
-    expect(manager.ensureNamespaceMigrationCensus()?.entries).toEqual({});
+    expect(manager.ensureNamespaceMigrationCensus()?.pendingRelIds).toEqual([]);
     for (let updateIndex = 0; updateIndex < updates; updateIndex += 1) {
       const previousRevision = manager.list()[0].approval;
       const updated = await manager.update(await makeCindy('acme-tool', true), {
@@ -572,7 +582,7 @@ describe('GhostManager namespace migration census', () => {
       if (!('ghost' in updated) || previousRevision.state !== 'approved' || updated.ghost.approval.state !== 'approved') {
         throw new Error('expected approved Forge update');
       }
-      expect(manager.ensureNamespaceMigrationCensus()?.entries).toEqual({});
+      expect(manager.ensureNamespaceMigrationCensus()?.pendingRelIds).toEqual([]);
       expect(JSON.stringify(manager.ensureNamespaceMigrationCensus())).not.toContain('forgeNamespaces');
     }
     const store = receiptStore(mutateSnapshot);
@@ -592,7 +602,7 @@ describe('GhostManager namespace migration census', () => {
     expect(manager.list()[0]).toMatchObject({ namespace: 'acme', enabled, dir: path.join(rootDir, 'acme-tool') });
     expect(manager.list()[0]?.namespaceState).not.toBe('pending');
     expect(manager.readDeliveryNamespace('acme-tool')).toBe('acme');
-    expect(manager.ensureNamespaceMigrationCensus()?.entries).toEqual({});
+    expect(manager.ensureNamespaceMigrationCensus()?.pendingRelIds).toEqual([]);
     expect(fs.existsSync(path.join(rootDir, '_ns'))).toBe(false);
     expect(await manager.verifyApprovedSkillSnapshot(manager.list()[0])).toBe(true);
     },
@@ -613,7 +623,7 @@ describe('GhostManager namespace migration census', () => {
     })).toHaveProperty('ghost');
     expect(fs.readFileSync(ledgerPath, 'utf8')).toBe(future);
     manager = createManager({});
-    expect(manager.ensureNamespaceMigrationCensus()?.entries).toEqual({});
+    expect(manager.ensureNamespaceMigrationCensus()?.pendingRelIds).toEqual([]);
     expect(fs.readFileSync(ledgerPath, 'utf8')).toBe(future);
     expect(manager.list()[0]).toMatchObject({ namespace: 'acme', enabled: true });
   });
@@ -660,7 +670,7 @@ describe('GhostManager namespace migration census', () => {
         expect(manager.list()[0]).toMatchObject({ namespace: 'acme', namespaceState: 'unconfirmed' });
         expect(manager.readDeliveryNamespace('acme-tool')).toBeUndefined();
       }
-      expect(manager.ensureNamespaceMigrationCensus()?.entries).toEqual({});
+      expect(manager.ensureNamespaceMigrationCensus()?.pendingRelIds).toEqual([]);
     },
   );
 
@@ -697,7 +707,7 @@ describe('GhostManager namespace migration census', () => {
 
   it('does not assign an organization namespace to a plugin planted after the census', async () => {
     await fs.promises.mkdir(rootDir, { recursive: true });
-    expect(manager.ensureNamespaceMigrationCensus()?.entries).toEqual({});
+    expect(manager.ensureNamespaceMigrationCensus()?.pendingRelIds).toEqual([]);
     await plantLegacyInstall('hello');
     manager = createManager({
       mutateSnapshot,
@@ -774,7 +784,7 @@ describe('GhostManager namespace migration census', () => {
   it.each(['interrupted', 'ledger-write-failed'] as const)(
     'finishes pending legacy uninstall after %s before allowing a root reinstall', async (boundary) => {
       await plantLegacyInstall('hello');
-      expect(manager.ensureNamespaceMigrationCensus()?.entries.hello).toBeDefined();
+      expect(manager.ensureNamespaceMigrationCensus()?.pendingRelIds).toContain('hello');
       const store = receiptStore(mutateSnapshot);
       if (boundary === 'interrupted') {
         await store.writePendingMutation('hello', { kind: 'uninstall' });
@@ -788,14 +798,14 @@ describe('GhostManager namespace migration census', () => {
         try {
           await expect(manager.uninstall('hello')).resolves.toEqual({ ok: true });
           expect(store.readPendingMutationSync('hello').state).toBe('valid');
-          expect(manager.ensureNamespaceMigrationCensus()?.entries.hello).toBeDefined();
+          expect(manager.ensureNamespaceMigrationCensus()?.pendingRelIds).toContain('hello');
         } finally { blocked.mockRestore(); }
       }
       manager = createManager({ mutateSnapshot });
       expect(manager.list()).toEqual([]);
       expect(store.readPendingMutationSync('hello').state).toBe('missing');
       expect(store.readForRecovery('hello').state).toBe('missing');
-      expect(manager.ensureNamespaceMigrationCensus()?.entries.hello).toBeUndefined();
+      expect(manager.ensureNamespaceMigrationCensus()?.pendingRelIds ?? []).not.toContain('hello');
       manager = createManager({ mutateSnapshot });
       await expect(manager.install(await makeCindy('hello'))).resolves.toMatchObject({
         ghost: { manifest: { id: 'hello' }, namespace: null },
@@ -830,7 +840,7 @@ describe('GhostManager namespace migration census', () => {
       phase: 'backed-up',
     });
     await fs.promises.rename(path.join(rootDir, 'hello'), path.join(rootDir, backupName));
-    expect(manager.ensureNamespaceMigrationCensus()?.entries.hello?.status).toBe('pending');
+    expect(manager.ensureNamespaceMigrationCensus()?.pendingRelIds).toContain('hello');
     await fs.promises.rename(path.join(rootDir, backupName), path.join(rootDir, 'hello'));
     await receipts.clearPendingMutation('hello');
     expect(manager.list()[0]?.namespaceState).toBe('pending');
@@ -883,7 +893,7 @@ describe('GhostManager namespace migration census', () => {
       ghost: { manifest: { id: 'hello' }, namespace: 'acme' },
     });
     expect(marketLedger.installationForPlugin({ ghostId: 'hello', namespace: null })).toMatchObject({ namespace: null });
-    expect(manager.ensureNamespaceMigrationCensus()?.entries).toEqual({});
+    expect(manager.ensureNamespaceMigrationCensus()?.pendingRelIds).toEqual([]);
     expect(manager.list().find((ghost) => ghost.dir === path.join(rootDir, 'hello'))).toMatchObject({
       namespace: null,
       namespaceState: 'confirmed',
@@ -937,7 +947,7 @@ describe('GhostManager namespace migration census', () => {
       ? manager.commitPendingRootNamespace('xd-feishu', 'builtin')
       : manager.commitPendingNamespace('xd-feishu', namespace, 'market-organization');
     await expect(committed).resolves.toEqual({ ok: true });
-    expect(manager.ensureNamespaceMigrationCensus()?.entries).toEqual({});
+    expect(manager.ensureNamespaceMigrationCensus()?.pendingRelIds).toEqual([]);
     const ghost = manager.list()[0];
     expect(ghost).toMatchObject({
       manifest: { id: 'xd-feishu' },
@@ -952,7 +962,7 @@ describe('GhostManager namespace migration census', () => {
 
   it('finishes a receipt-first commit by removing the pending entry after a restart', async () => {
     await plantLegacyInstall('hello');
-    expect(manager.ensureNamespaceMigrationCensus()?.entries.hello?.status).toBe('pending');
+    expect(manager.ensureNamespaceMigrationCensus()?.pendingRelIds).toContain('hello');
     const stateRoot = path.join(workDir, 'ghosts-install-state');
     const receipts = receiptStore(mutateSnapshot);
     const approval = receipts.read('hello');
@@ -962,7 +972,7 @@ describe('GhostManager namespace migration census', () => {
     });
     manager = createManager({ getStateDir: () => stateRoot });
     await expect(manager.commitPendingNamespace('hello', null, 'market-public')).resolves.toEqual({ ok: true });
-    expect(manager.ensureNamespaceMigrationCensus()?.entries).toEqual({});
+    expect(manager.ensureNamespaceMigrationCensus()?.pendingRelIds).toEqual([]);
     manager = createManager({ getStateDir: () => stateRoot });
     expect(manager.list()[0]).toMatchObject({ namespace: 'xd', dir: path.join(rootDir, 'hello') });
     expect(manager.list()[0]?.namespaceState).not.toBe('pending');
@@ -1147,7 +1157,7 @@ describe('plugin instance registry boundaries', () => {
 
   it('does not grant legacy pending to a plugin planted after the census', async () => {
     expect(manager.list()).toEqual([]);
-    expect(manager.ensureNamespaceMigrationCensus()?.entries).toEqual({});
+    expect(manager.ensureNamespaceMigrationCensus()?.pendingRelIds).toEqual([]);
     await plantLegacyInstall('later');
     manager = createManager({ mutateSnapshot });
     expect(manager.list()[0]).toMatchObject({ namespaceState: 'unconfirmed', namespace: null });
@@ -1459,92 +1469,43 @@ describe('unconfirmed organization recovery', () => {
     expect(manager.readDeliveryNamespace('_root__helper')).toBeNull();
   });
 
-  it('upgrades a v1 registry by importing the legacy ledger once', async () => {
+  it('censuses only the legacy root directories present at the first scan', async () => {
     await plantLegacyInstall('hello');
     await plantLegacyInstall('kept');
     const receipts = receiptStore(mutateSnapshot);
-    const helloReceipt = receipts.read('hello');
     const keptReceipt = receipts.read('kept');
-    if (helloReceipt.state !== 'approved' || keptReceipt.state !== 'approved') {
-      throw new Error('expected approved receipts');
-    }
+    if (keptReceipt.state !== 'approved') throw new Error('expected approved receipt');
     await receipts.write({ ...keptReceipt.receipt, namespace: 'acme' }, {
       relId: 'kept', skillSourceDir: path.join(rootDir, 'kept'), requireSkillSnapshot: false,
     });
-    const stamped = receipts.read('kept');
-    if (stamped.state !== 'approved') throw new Error('expected stamped receipt');
-    const state = path.join(workDir, 'ghosts-install-state');
-    const v1Path = path.join(state, 'plugin-instances.v1.json');
-    const legacyPath = path.join(state, 'namespace-migration.v1.json');
-    const v1 = {
-      schemaVersion: 1,
-      instances: {
-        hello: {
-          instanceKey: 'hello', contentRelId: 'hello', ghostId: 'hello', namespace: null,
-          namespaceState: 'unconfirmed', pluginId: null, source: 'legacy',
-          receiptRevision: helloReceipt.receipt.revision,
-          packageSha256: helloReceipt.receipt.packageSha256 ?? null, active: true,
-        },
-        kept: {
-          instanceKey: 'kept', contentRelId: 'kept', ghostId: 'kept', namespace: 'acme',
-          namespaceState: 'confirmed', pluginId: 'plugin-kept', source: 'market',
-          receiptRevision: stamped.receipt.revision,
-          packageSha256: stamped.receipt.packageSha256 ?? null, active: true,
-        },
-      },
-    };
-    const legacy = {
-      schemaVersion: 1,
-      censusedAt: '2026-01-01T00:00:00.000Z',
-      entries: {
-        hello: {
-          ghostId: 'hello', relId: 'hello', capturedAt: '2026-01-01T00:00:00.000Z', status: 'pending',
-        },
-      },
-    };
-    const v1Text = JSON.stringify(v1, null, 2) + String.fromCharCode(10);
-    const legacyText = JSON.stringify(legacy, null, 2) + String.fromCharCode(10);
-    fs.writeFileSync(v1Path, v1Text);
-    fs.writeFileSync(legacyPath, legacyText);
     const census = manager.ensureNamespaceMigrationCensus();
-    expect(census?.entries.hello?.status).toBe('pending');
-    expect(census?.entries.kept).toBeUndefined();
-    expect(census?.censusedAt).toBe('2026-01-01T00:00:00.000Z');
-    expect(fs.readFileSync(v1Path, 'utf8')).toBe(v1Text);
-    expect(fs.readFileSync(legacyPath, 'utf8')).toBe(legacyText);
-    const v2 = JSON.parse(fs.readFileSync(pluginInstanceRegistryPath(state), 'utf8'));
-    expect(v2.schemaVersion).toBe(2);
-    expect(v2.census.completedAt).toBe('2026-01-01T00:00:00.000Z');
-    expect(v2.instances.hello.namespaceState).toBe('pending');
-    expect(v2.instances.kept).toMatchObject({
-      namespaceState: 'confirmed', namespace: 'acme', pluginId: 'plugin-kept',
-    });
+    expect(census?.pendingRelIds).toEqual(['hello']);
+    expect(manager.list().find((ghost) => ghost.manifest.id === 'hello')?.namespaceState).toBe('pending');
+    expect(manager.list().find((ghost) => ghost.manifest.id === 'kept')?.namespaceState).not.toBe('pending');
     await plantLegacyInstall('later');
     manager = createManager({ mutateSnapshot });
     expect(manager.list().find((ghost) => ghost.manifest.id === 'later')?.namespaceState).not.toBe('pending');
     expect(manager.list().find((ghost) => ghost.manifest.id === 'hello')?.namespaceState).toBe('pending');
-    expect(fs.readFileSync(legacyPath, 'utf8')).toBe(legacyText);
+    expect(fs.existsSync(path.join(workDir, 'ghosts-install-state', 'namespace-migration.v1.json'))).toBe(false);
   });
 
-  it('does not rebuild or overwrite a legacy ledger with an unknown schema', async () => {
+  it('ignores a future migration file instead of blocking the census', async () => {
     await plantLegacyInstall('hello');
     const legacyPath = path.join(workDir, 'ghosts-install-state', 'namespace-migration.v1.json');
     const future = '{"schemaVersion":2,"entries":{"keep":true}}' + String.fromCharCode(10);
     fs.writeFileSync(legacyPath, future);
-    expect(manager.list()[0]).toMatchObject({ namespaceState: 'unconfirmed', namespace: null });
-    expect(manager.list()[0]?.namespaceState).not.toBe('pending');
-    expect(manager.ensureNamespaceMigrationCensus()).toBeNull();
+    expect(manager.ensureNamespaceMigrationCensus()?.pendingRelIds).toContain('hello');
     expect(fs.readFileSync(legacyPath, 'utf8')).toBe(future);
     await plantLegacyInstall('later');
     manager = createManager({ mutateSnapshot });
-    expect(manager.ensureNamespaceMigrationCensus()).toBeNull();
     expect(manager.list().find((ghost) => ghost.manifest.id === 'later')?.namespaceState).not.toBe('pending');
+    expect(manager.list().find((ghost) => ghost.manifest.id === 'hello')?.namespaceState).toBe('pending');
     expect(fs.readFileSync(legacyPath, 'utf8')).toBe(future);
   });
 
   it('finishes a receipt-first namespace commit as one registry write and one active instance', async () => {
     await plantLegacyInstall('hello');
-    expect(manager.ensureNamespaceMigrationCensus()?.entries.hello?.status).toBe('pending');
+    expect(manager.ensureNamespaceMigrationCensus()?.pendingRelIds).toContain('hello');
     const state = path.join(workDir, 'ghosts-install-state');
     const receipts = receiptStore(mutateSnapshot);
     const approval = receipts.read('hello');

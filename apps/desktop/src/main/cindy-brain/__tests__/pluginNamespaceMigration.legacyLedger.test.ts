@@ -1,14 +1,8 @@
-import fs from 'node:fs';
-import os from 'node:os';
-import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 import {
   classifyNamespaceMigration,
-  createNamespaceMigrationStore,
   isCensusCandidate,
-  parseNamespaceMigrationDocument,
-  parseNamespaceMigrationLedger,
   planNamespaceCommit,
   readNamespaceMigrationInstallOrigin,
   readNamespaceMigrationMarketRecord,
@@ -197,63 +191,6 @@ describe('legacy Forge ownership exception', () => {
       ghostId: 'acme-tool', installOrigin: 'manual', marketSyncCompleted: true,
       currentOrganization: current,
     })).toEqual({ kind: 'commit', namespace: null, basis: 'manual-after-sync' });
-  });
-});
-
-describe('legacy ledger parsing', () => {
-  it('ignores a leftover forgeNamespaces field instead of rejecting the census', () => {
-    const parsed = parseNamespaceMigrationLedger({
-      schemaVersion: 1, censusedAt: NOW, entries: {},
-      forgeNamespaces: { 'acme-tool': { namespace: 'acme', revision: 'rev' } },
-    });
-    expect(parsed).toEqual({ schemaVersion: 1, censusedAt: NOW, entries: {} });
-  });
-
-  it('treats an unknown integer schema as unreadable and a bad document as corrupt', () => {
-    expect(parseNamespaceMigrationDocument({ schemaVersion: 2, censusedAt: NOW, entries: {} }).kind)
-      .toBe('unknown-schema');
-    expect(parseNamespaceMigrationDocument({ schemaVersion: 0, entries: {} }).kind).toBe('unknown-schema');
-    expect(parseNamespaceMigrationDocument({ schemaVersion: 1.2, censusedAt: NOW, entries: {} }).kind).toBe('corrupt');
-    expect(parseNamespaceMigrationDocument({ censusedAt: NOW, entries: {} }).kind).toBe('corrupt');
-    expect(parseNamespaceMigrationDocument('nope').kind).toBe('corrupt');
-    expect(parseNamespaceMigrationLedger({ schemaVersion: 2, censusedAt: NOW, entries: {} })).toBeNull();
-  });
-});
-
-describe('namespace migration store', () => {
-  let dir: string | null = null;
-  afterEach(() => {
-    if (dir) fs.rmSync(dir, { recursive: true, force: true });
-    dir = null;
-  });
-
-  it('reads an unknown schema without rewriting the file', () => {
-    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ns-mig-future-'));
-    const filePath = path.join(dir, 'namespace-migration.v1.json');
-    const original = '{"schemaVersion":2,"entries":{"future":true}}\n';
-    fs.writeFileSync(filePath, original);
-    const store = createNamespaceMigrationStore(filePath);
-    expect(store.read()).toEqual({ kind: 'unknown-schema' });
-    expect(fs.readFileSync(filePath, 'utf8')).toBe(original);
-  });
-
-  it('reads a legacy census without writing the ledger', () => {
-    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ns-mig-'));
-    const filePath = path.join(dir, 'namespace-migration.v1.json');
-    const store = createNamespaceMigrationStore(filePath);
-    expect(store.read()).toEqual({ kind: 'missing' });
-    const ledger = {
-      schemaVersion: 1 as const,
-      censusedAt: NOW,
-      entries: {
-        hello: { ghostId: 'hello', relId: 'hello', capturedAt: NOW, status: 'pending' as const },
-      },
-    };
-    fs.writeFileSync(filePath, JSON.stringify(ledger) + '\n');
-    const read = store.read();
-    expect(read).toEqual({ kind: 'ok', ledger });
-    if (read.kind !== 'ok') return;
-    expect(parseNamespaceMigrationLedger(read.ledger)).toEqual(read.ledger);
   });
 });
 

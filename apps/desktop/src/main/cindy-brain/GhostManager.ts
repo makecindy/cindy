@@ -77,18 +77,15 @@ import {
   findReusableInstance,
   pluginInstanceRegistryPath,
   type InstanceConfirmationEvidence,
+  type PluginInstanceCensus,
   type PluginInstanceReceiptFact,
   type PluginInstanceRecord,
   type PluginInstanceRegistry,
   type PluginInstanceSource,
 } from './pluginInstanceRegistry.js';
 import {
-  createNamespaceMigrationStore,
-  namespaceMigrationFilePath,
   type NamespaceClassification,
   type NamespaceMigrationBasis,
-  type NamespaceMigrationLedger,
-  type NamespaceMigrationStore,
 } from './pluginNamespaceMigration.js';
 import { confirmUnconfirmedInstances } from './pluginInstanceConfirmation.js';
 import {
@@ -615,7 +612,6 @@ export class GhostManager {
   private readonly instanceRegistryService = new PluginInstanceRegistryService({
     ensureOwner: () => this.ensureCurrentOwnerContextSync(),
     registryStore: () => this.instanceRegistryStore(),
-    readLegacyLedger: () => this.namespaceMigrationStore().read(),
     listContentEntries: () => this.listContentEntries(),
     receiptFact: (relId) => this.receiptFact(relId),
     censusCandidates: () => collectRootInstallCensusCandidates({
@@ -705,10 +701,6 @@ export class GhostManager {
       }
     }
     return path.join(root, ...parts);
-  }
-
-  private namespaceMigrationStore(): NamespaceMigrationStore {
-    return createNamespaceMigrationStore(namespaceMigrationFilePath(this.stateRootDir()));
   }
 
   private instanceRegistryStore() {
@@ -844,7 +836,7 @@ export class GhostManager {
   }
 
 
-  ensureNamespaceMigrationCensus(): NamespaceMigrationLedger | null {
+  ensureNamespaceMigrationCensus(): PluginInstanceCensus | null {
     return this.instanceRegistryService.ensureCensus();
   }
 

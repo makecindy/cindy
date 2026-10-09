@@ -1,11 +1,8 @@
 /**
  * Upgrade census stored on the instance registry.
- * The legacy namespace-migration.v1.json ledger is read-only and imported once.
- * After that import, the census on the registry is the only pending record.
+ * The first census records the legacy root directories present at that moment.
+ * Later installs are not added to pendingRelIds.
  */
-import fs from 'node:fs';
-import path from 'node:path';
-
 import { isValidPluginNamespace, PLUGIN_PREFIX_PATTERN } from '@cindy/plugin-protocol';
 import { isValidGhostId } from '../../shared/ghost.js';
 import { hasDeliveryNamespace, resolvePluginNamespaceState } from '../../shared/pluginIdentity.js';
@@ -15,15 +12,10 @@ import {
   type GhostInstallReceiptReadResult,
 } from './ghostInstallReceipt.js';
 import {
-  emptyPluginInstanceRegistry,
   finishInstanceCensus,
-  noteImportedPending,
-  projectPendingCensus,
+  type PluginInstanceCensus,
   type PluginInstanceRegistry,
 } from './pluginInstanceRegistry.js';
-
-const NAMESPACE_MIGRATION_SCHEMA_VERSION = 1 as const;
-const NAMESPACE_MIGRATION_FILE = 'namespace-migration.v1.json';
 
 export type NamespaceMigrationBasis =
   | 'builtin'
@@ -35,27 +27,6 @@ export type NamespaceMigrationBasis =
   | 'market-organization'
   | 'forge-current-org'
   | 'receipt-recovered';
-
-export interface NamespaceMigrationEntry {
-  ghostId: string;
-  relId: string;
-  capturedAt: string;
-  status: 'pending';
-  basis?: NamespaceMigrationBasis | 'awaiting-facts';
-}
-
-export interface NamespaceMigrationLedger {
-  schemaVersion: typeof NAMESPACE_MIGRATION_SCHEMA_VERSION;
-  censusedAt: string;
-  entries: Record<string, NamespaceMigrationEntry>;
-}
-
-export type NamespaceMigrationLedgerRead =
-  | { kind: 'missing' }
-  | { kind: 'ok'; ledger: NamespaceMigrationLedger }
-  | { kind: 'corrupt' }
-  | { kind: 'unreadable' }
-  | { kind: 'unknown-schema' };
 
 export type NamespaceClassification =
   | { kind: 'commit'; namespace: string | null; basis: NamespaceMigrationBasis }
@@ -107,14 +78,6 @@ export function readNamespaceMigrationInstallOrigin(
   } catch {
     return undefined;
   }
-}
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value);
-}
-
-function isIsoTimestamp(value: unknown): value is string {
-  return typeof value === 'string' && Number.isFinite(Date.parse(value));
 }
 
 function matchesOrgPrefix(ghostId: string, prefix: string | null): boolean {
@@ -239,98 +202,6 @@ export function planNamespaceCommit(input: {
   };
 }
 
-export type NamespaceMigrationLedgerParse =
-  | { kind: 'ok'; ledger: NamespaceMigrationLedger }
-  | { kind: 'corrupt' }
-  | { kind: 'unknown-schema' };
-
-export function parseNamespaceMigrationDocument(raw: unknown): NamespaceMigrationLedgerParse {
-  if (!isPlainObject(raw)) return { kind: 'corrupt' };
-  // An integer from another version is unreadable, not damage to rebuild over.
-  if (!Number.isInteger(raw.schemaVersion)) return { kind: 'corrupt' };
-  if (raw.schemaVersion !== NAMESPACE_MIGRATION_SCHEMA_VERSION) return { kind: 'unknown-schema' };
-  if (!isIsoTimestamp(raw.censusedAt)) return { kind: 'corrupt' };
-  if (!isPlainObject(raw.entries)) return { kind: 'corrupt' };
-  const entries: Record<string, NamespaceMigrationEntry> = {};
-  for (const [key, value] of Object.entries(raw.entries)) {
-    const entry = parseEntry(value);
-    if (!entry || entry.ghostId !== key) return { kind: 'corrupt' };
-    entries[key] = entry;
-  }
-  return {
-    kind: 'ok',
-    ledger: {
-      schemaVersion: NAMESPACE_MIGRATION_SCHEMA_VERSION,
-      censusedAt: raw.censusedAt,
-      entries,
-    },
-  };
-}
-
-export function parseNamespaceMigrationLedger(raw: unknown): NamespaceMigrationLedger | null {
-  const parsed = parseNamespaceMigrationDocument(raw);
-  return parsed.kind === 'ok' ? parsed.ledger : null;
-}
-
-function parseEntry(value: unknown): NamespaceMigrationEntry | null {
-  if (!isPlainObject(value)) return null;
-  if (!isValidGhostId(value.ghostId) || typeof value.relId !== 'string') return null;
-  if (value.relId !== value.ghostId) return null;
-  if (!isIsoTimestamp(value.capturedAt)) return null;
-  if (value.status === 'pending') {
-    return {
-      ghostId: value.ghostId,
-      relId: value.relId,
-      capturedAt: value.capturedAt,
-      status: 'pending',
-      ...(typeof value.basis === 'string' ? { basis: value.basis as NamespaceMigrationEntry['basis'] } : {}),
-    };
-  }
-  return null;
-}
-
-export interface NamespaceMigrationStore {
-  read(): NamespaceMigrationLedgerRead;
-}
-
-export function createNamespaceMigrationStore(filePath: string): NamespaceMigrationStore {
-  return {
-    read(): NamespaceMigrationLedgerRead {
-      let text: string;
-      try {
-        text = fs.readFileSync(filePath, 'utf8');
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { kind: 'missing' };
-        return { kind: 'unreadable' };
-      }
-      try {
-        const parsed = parseNamespaceMigrationDocument(JSON.parse(text));
-        if (parsed.kind === 'unknown-schema') return { kind: 'unknown-schema' };
-        if (parsed.kind !== 'ok') return { kind: 'corrupt' };
-        return { kind: 'ok', ledger: parsed.ledger };
-      } catch {
-        return { kind: 'corrupt' };
-      }
-    },
-  };
-}
-
-export function namespaceMigrationFilePath(stateRoot: string): string {
-  return path.join(stateRoot, NAMESPACE_MIGRATION_FILE);
-}
-
-export function projectNamespaceMigrationLedger(
-  registry: PluginInstanceRegistry,
-): NamespaceMigrationLedger | null {
-  const projected = projectPendingCensus(registry);
-  if (!projected) return null;
-  return {
-    schemaVersion: NAMESPACE_MIGRATION_SCHEMA_VERSION,
-    censusedAt: projected.censusedAt,
-    entries: projected.entries,
-  };
-}
-
 export interface CensusApproval {
   state: string;
   receipt?: {
@@ -341,13 +212,11 @@ export interface CensusApproval {
 }
 
 /**
- * One-shot census. An ok legacy ledger contributes only its still-present
- * pending rows. Any other readable ledger takes the directories that are
- * still legacy. Callers refuse unreadable and unknown schemas before this.
+ * One-shot census of the legacy root directories present now.
+ * Existing instance rows are not rewritten.
  */
 export function stampInstanceCensus(input: {
   registry: PluginInstanceRegistry;
-  legacy: NamespaceMigrationLedgerRead;
   candidates: readonly NamespaceCensusCandidate[];
   now: string;
   readApproval: (relId: string) => CensusApproval;
@@ -355,17 +224,6 @@ export function stampInstanceCensus(input: {
   recordLegacyEligibility: (relId: string, revision: string) => void;
 }): PluginInstanceRegistry | null {
   if (input.registry.census) return input.registry;
-  const present = new Set(input.candidates.map((candidate) => candidate.relId));
-  if (input.legacy.kind === 'ok') {
-    let next = input.registry;
-    const pendingRelIds: string[] = [];
-    for (const entry of Object.values(input.legacy.ledger.entries)) {
-      if (entry.status !== 'pending' || !present.has(entry.relId)) continue;
-      pendingRelIds.push(entry.relId);
-      next = noteImportedPending(next, entry.relId);
-    }
-    return finishInstanceCensus(next, input.legacy.ledger.censusedAt, pendingRelIds);
-  }
   const pendingEntries = input.candidates.filter((candidate) => isCensusCandidate(candidate));
   try {
     for (const entry of pendingEntries) {
@@ -434,7 +292,7 @@ export function sameNamespaceCommitReceiptSnapshot(
 
 export interface PendingNamespaceCommitHost {
   ownerContextKey(): string;
-  ensureCensus(): NamespaceMigrationLedger | null;
+  ensureCensus(): PluginInstanceCensus | null;
   readApproval(ghostId: string): GhostInstallReceiptReadResult;
   hasPendingMutationJournal(ghostId: string): boolean;
   isNamespaceMigrationBusy(ghostId: string): boolean;
@@ -464,7 +322,7 @@ export async function commitPendingNamespaceMigration(
     return { ok: false, reason: 'invalid namespace' };
   }
   const census = host.ensureCensus();
-  if (!census?.entries[ghostId]) return { ok: false, reason: 'not pending' };
+  if (!census?.pendingRelIds.includes(ghostId)) return { ok: false, reason: 'not pending' };
   const approval = host.readApproval(ghostId);
   if (expectedReceipt && !sameNamespaceCommitReceiptSnapshot(
     expectedReceipt, namespaceCommitReceiptSnapshot(approval),
@@ -515,7 +373,7 @@ export async function commitPendingNamespaceMigration(
 }
 
 export interface PendingNamespaceReconcileHost {
-  ensureCensus(): NamespaceMigrationLedger | null;
+  ensureCensus(): PluginInstanceCensus | null;
   ownerContextKey(): string;
   preparePendingResident?(ghostId: string): Promise<boolean>;
   onPendingResidentDeferred?(ghostId: string): void;
@@ -536,10 +394,10 @@ export async function reconcilePendingNamespaceMigrations(
   host: PendingNamespaceReconcileHost,
   marketSyncCompleted: boolean,
 ): Promise<void> {
-  const ledger = host.ensureCensus();
-  if (!ledger) return;
+  const census = host.ensureCensus();
+  if (!census) return;
   const ownerContextKey = host.ownerContextKey();
-  for (const ghostId of Object.keys(ledger.entries)) {
+  for (const ghostId of census.pendingRelIds) {
     if (host.ownerContextKey() !== ownerContextKey) return;
     try {
       if (marketSyncCompleted) {

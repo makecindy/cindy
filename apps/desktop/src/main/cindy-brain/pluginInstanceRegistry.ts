@@ -43,7 +43,7 @@ export interface PluginInstanceRecord {
   active: boolean;
 }
 
-interface PluginInstanceCensus {
+export interface PluginInstanceCensus {
   completedAt: string;
   /** Bare directories captured once. Commit and uninstall remove ids. */
   pendingRelIds: string[];
@@ -392,37 +392,6 @@ function parseRecord(value: unknown, instanceKey: string): PluginInstanceRecord 
   };
 }
 
-
-interface PendingCensusProjectionEntry {
-  ghostId: string;
-  relId: string;
-  capturedAt: string;
-  status: 'pending';
-}
-
-/** Pending namespaceState is the migration entry. Inactive rows stay until release. */
-export function projectPendingCensus(
-  registry: PluginInstanceRegistry,
-): { censusedAt: string; entries: Record<string, PendingCensusProjectionEntry> } | null {
-  if (!registry.census) return null;
-  const capturedAt = registry.census.completedAt;
-  const entries: Record<string, PendingCensusProjectionEntry> = {};
-  for (const relId of registry.census.pendingRelIds) {
-    if (!isValidGhostId(relId)) continue;
-    entries[relId] = { ghostId: relId, relId, capturedAt, status: 'pending' };
-  }
-  return { censusedAt: capturedAt, entries };
-}
-
-/** A v1 row already on disk takes the imported pending state. Do not allocate a new row. */
-export function noteImportedPending(
-  registry: PluginInstanceRegistry,
-  relId: string,
-): PluginInstanceRegistry {
-  const existing = findInstanceByContentRelId(registry, relId) ?? registry.instances[relId];
-  if (!existing || existing.namespaceState !== 'unconfirmed') return registry;
-  return upsertInstance(registry, { ...existing, namespaceState: 'pending' });
-}
 
 export function finishInstanceCensus(
   registry: PluginInstanceRegistry,

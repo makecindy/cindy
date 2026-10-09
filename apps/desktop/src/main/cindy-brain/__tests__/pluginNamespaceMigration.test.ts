@@ -23,7 +23,7 @@ function row(overrides: Partial<PluginInstanceRecord> = {}): PluginInstanceRecor
 }
 
 describe('stampInstanceCensus', () => {
-  it('imports pending legacy rows and leaves a confirmed row alone', () => {
+  it('records legacy root directories without rewriting existing rows', () => {
     const registry = {
       ...emptyPluginInstanceRegistry(),
       instances: {
@@ -36,32 +36,23 @@ describe('stampInstanceCensus', () => {
     };
     const stamped = stampInstanceCensus({
       registry,
-      legacy: {
-        kind: 'ok',
-        ledger: {
-          schemaVersion: 1,
-          censusedAt: NOW,
-          entries: {
-            hello: { ghostId: 'hello', relId: 'hello', capturedAt: NOW, status: 'pending' },
-            gone: { ghostId: 'gone', relId: 'gone', capturedAt: NOW, status: 'pending' },
-          },
-        },
-      },
-      candidates: [{ ghostId: 'hello', relId: 'hello' }, { ghostId: 'kept', relId: 'kept' }],
-      now: '2026-10-09T00:00:00.000Z',
+      candidates: [
+        { ghostId: 'hello', relId: 'hello' },
+        { ghostId: 'kept', relId: 'kept', identitySource: { namespace: 'acme' } },
+        { ghostId: 'later', relId: '_ns/_root/later' },
+      ],
+      now: NOW,
       readApproval: () => ({ state: 'missing' }),
-      recordLegacyEligibility: () => { throw new Error('import does not recapture'); },
+      recordLegacyEligibility: () => { throw new Error('missing approval is not recaptured'); },
     });
     expect(stamped?.census).toEqual({ completedAt: NOW, pendingRelIds: ['hello'] });
-    expect(stamped?.instances.hello?.namespaceState).toBe('pending');
+    expect(stamped?.instances.hello?.namespaceState).toBe('unconfirmed');
     expect(stamped?.instances.kept?.namespaceState).toBe('confirmed');
-    expect(stamped?.instances.gone).toBeUndefined();
   });
 
   it('does not allocate rows for a fresh census', () => {
     const stamped = stampInstanceCensus({
       registry: emptyPluginInstanceRegistry(),
-      legacy: { kind: 'missing' },
       candidates: [
         { ghostId: 'hello', relId: 'hello' },
         { ghostId: 'later', relId: '_ns/_root/later' },

@@ -1,6 +1,5 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
-import type { NamespaceMigrationLedgerRead } from '../pluginNamespaceMigration.js';
 import {
   emptyPluginInstanceRegistry,
   type PluginInstanceRegistry,
@@ -25,17 +24,12 @@ function memoryStore(initial: PluginInstanceRegistry): PluginInstanceRegistrySto
 
 function service(options: {
   registry: PluginInstanceRegistry;
-  legacy?: () => NamespaceMigrationLedgerRead;
   relIds?: string[];
 }) {
-  const legacy = options.legacy ?? vi.fn(() => {
-    throw new Error('legacy ledger should not be read');
-  });
   const store = memoryStore(options.registry);
   const created = new PluginInstanceRegistryService({
     ensureOwner: () => {},
     registryStore: () => store,
-    readLegacyLedger: legacy,
     listContentEntries: () => (options.relIds ?? []).map((relId) => ({ relId, dir: relId })),
     receiptFact: (relId) => ({
       ghostId: relId,
@@ -48,30 +42,20 @@ function service(options: {
     readApproval: () => ({ state: 'missing' }),
     recordLegacyEligibility: () => {},
   });
-  return { created, store, legacy };
+  return { created, store };
 }
 
 describe('plugin instance registry service', () => {
-  it('does not read the legacy ledger once the registry has a census', () => {
+  it('returns the stored census allowlist', () => {
     const registry: PluginInstanceRegistry = {
       ...emptyPluginInstanceRegistry(),
       census: { completedAt: NOW, pendingRelIds: ['hello'] },
     };
-    const { created, legacy } = service({ registry, relIds: ['hello'] });
-    expect(created.ensureCensus()?.entries.hello?.status).toBe('pending');
+    const { created } = service({ registry, relIds: ['hello'] });
+    expect(created.ensureCensus()?.pendingRelIds).toEqual(['hello']);
     const synced = created.sync();
     expect(synced.instances.hello?.namespaceState).toBe('pending');
-    expect(legacy).not.toHaveBeenCalled();
     expect(pendingCensusMismatches(synced, 'strict')).toEqual([]);
-  });
-
-  it('still refuses an unknown legacy schema when no census has been stored', () => {
-    const { created, store } = service({
-      registry: emptyPluginInstanceRegistry(),
-      legacy: () => ({ kind: 'unknown-schema' }),
-    });
-    expect(created.ensureCensus()).toBeNull();
-    expect(store.snapshot().census).toBeNull();
   });
 
   it('reports a pending row that is missing from the census allowlist', () => {

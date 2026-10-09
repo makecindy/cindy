@@ -11,11 +11,6 @@ import { parsePluginInstallRelId, PLUGIN_NS_INSTALL_ROOT } from '../../shared/pl
 import { classifyGhostDirEntrySync } from './ghostContentTree.js';
 import {
   type NamespaceCensusCandidate,
-  type NamespaceMigrationLedger,
-  type NamespaceMigrationLedgerRead,
-} from './pluginNamespaceMigration.js';
-import {
-  projectNamespaceMigrationLedger,
   stampInstanceCensus,
   type CensusApproval,
 } from './pluginNamespaceMigration.js';
@@ -28,6 +23,7 @@ import {
   reconcileInstanceReceipt,
   releaseInstalledInstance,
   upsertInstance,
+  type PluginInstanceCensus,
   type PluginInstanceReceiptFact,
   type PluginInstanceRecord,
   type PluginInstanceRegistry,
@@ -41,7 +37,6 @@ interface PluginInstanceRegistryLogger {
 interface PluginInstanceRegistryServiceDeps {
   ensureOwner(): void;
   registryStore(): PluginInstanceRegistryStore;
-  readLegacyLedger(): NamespaceMigrationLedgerRead;
   listContentEntries(): Array<{ relId: string; dir: string }>;
   receiptFact(relId: string): PluginInstanceReceiptFact | null | undefined;
   censusCandidates(): NamespaceCensusCandidate[];
@@ -185,18 +180,11 @@ export class PluginInstanceRegistryService {
   }
 
   /**
-   * Adoption allowlist. A stored census wins; the legacy ledger is read only
-   * while this owner has never recorded a census.
+   * Adoption allowlist. Before the census is stored, a bare root directory is
+   * pending. Afterwards only the frozen pendingRelIds list is.
    */
   isPendingMigrationRel(relId: string, registry: PluginInstanceRegistry): boolean {
     if (registry.census) return registry.census.pendingRelIds.includes(relId);
-    const read = this.deps.readLegacyLedger();
-    if (read.kind === 'unreadable' || read.kind === 'unknown-schema') return false;
-    if (read.kind === 'ok') {
-      return Object.values(read.ledger.entries).some((entry) =>
-        entry.relId === relId && entry.status === 'pending');
-    }
-    if (read.kind !== 'missing') return false;
     return parsePluginInstallRelId(relId)?.ghostId === relId;
   }
 
@@ -311,7 +299,7 @@ export class PluginInstanceRegistryService {
     this.registry = next;
   }
 
-  ensureCensus(): NamespaceMigrationLedger | null {
+  ensureCensus(): PluginInstanceCensus | null {
     this.deps.ensureOwner();
     const store = this.deps.registryStore();
     const opened = this.open(store);
@@ -322,12 +310,7 @@ export class PluginInstanceRegistryService {
     if (opened.registry.census) {
       this.blocked = false;
       this.registry = opened.registry;
-      return projectNamespaceMigrationLedger(opened.registry);
-    }
-    const legacy = this.deps.readLegacyLedger();
-    if (legacy.kind === 'unreadable' || legacy.kind === 'unknown-schema') {
-      this.deps.log?.warn('namespace migration census blocked', { reason: legacy.kind });
-      return null;
+      return opened.registry.census;
     }
     let candidates: NamespaceCensusCandidate[];
     try {
@@ -340,7 +323,6 @@ export class PluginInstanceRegistryService {
     }
     const stamped = stampInstanceCensus({
       registry: opened.registry,
-      legacy,
       candidates,
       now: new Date().toISOString(),
       readApproval: (relId) => this.deps.readApproval(relId),
@@ -361,6 +343,6 @@ export class PluginInstanceRegistryService {
     }
     this.blocked = false;
     this.registry = stamped;
-    return projectNamespaceMigrationLedger(stamped);
+    return stamped.census;
   }
 }

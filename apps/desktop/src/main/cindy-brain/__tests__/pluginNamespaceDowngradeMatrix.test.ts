@@ -378,7 +378,7 @@ describe('namespace downgrade matrix', () => {
       captureLegacyFirstPartyEligibility: (ghostId) => ghostId === 'cindy-helper',
     });
     await plant('cindy-helper');
-    expect(manager.ensureNamespaceMigrationCensus()?.entries['cindy-helper']?.status).toBe('pending');
+    expect(manager.ensureNamespaceMigrationCensus()?.pendingRelIds).toContain('cindy-helper');
     expect(manager.readLegacyFirstPartyEligible('cindy-helper')).toBe(true);
     await manager.commitPendingNamespace('cindy-helper', null, 'builtin');
     const key = installedGhostStoragePart(byId('cindy-helper'));
