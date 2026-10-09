@@ -570,12 +570,15 @@ describe('Chat Server directed sends', () => {
     expect(posts()).toEqual([]);
   });
 
-  it.each(['main', 'thread'])('preserves explicit actor/local-bot/human/self targets in %s wire payloads', async entry => {
-    for (const targets of [[botId], ['local-bot'], [humanId], [selfId], [humanId, 'local-bot', botId]]) {
-      expect(await send(entry, { all: false, botIds: targets })).toMatchObject({ ok: true });
-      const ids = [...new Set(targets.map(target => target === 'local-bot' ? botId : target))];
-      expect(posts().at(-1)![2]).toMatchObject({ mentions: ids,
-        ...(entry === 'thread' ? { threadRootId: rootId } : {}) });
+  it.each(['main', 'thread'])('preserves actor/local-bot/human targets and excludes self in %s wire payloads', async entry => {
+    for (const all of [false, true]) {
+      for (const targets of [[botId], ['local-bot'], [humanId], [selfId], [selfId, humanId, 'local-bot', botId]]) {
+        expect(await send(entry, { all, botIds: targets })).toMatchObject({ ok: true });
+        const ids = all ? [botId, humanId]
+          : [...new Set(targets.map(target => target === 'local-bot' ? botId : target))].filter(target => target !== selfId);
+        expect(posts().at(-1)![2]).toMatchObject({ mentions: ids,
+          ...(entry === 'thread' ? { threadRootId: rootId } : {}) });
+      }
     }
   });
 
@@ -593,7 +596,8 @@ describe('Chat Server directed sends', () => {
     for (const state of ['left', 'removed', 'banned', 'invited', 'missing']) {
       members = state === 'missing' ? members.filter(m => m.id !== botId) : members.map(m => m.id === botId ? { ...m, state } : m);
       for (const mentions of [{ all: false, botIds: [botId] }, { all: false, botIds: [humanId, 'local-bot'] },
-        { all: true, botIds: [botId] }, { all: false, botIds: ['unknown-target'] }]) {
+        { all: true, botIds: [botId] }, { all: false, botIds: [selfId, 'local-bot'] },
+        { all: true, botIds: [selfId, 'local-bot'] }, { all: false, botIds: ['unknown-target'] }]) {
         expect(await send(entry, mentions)).toMatchObject({ ok: false, errorCode: 'MENTION_UNAVAILABLE' });
       }
     }

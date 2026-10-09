@@ -818,7 +818,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       if (!member) throw new Error('MENTION_UNAVAILABLE');
       return member.id;
     });
-    return [...new Set(mentions.all ? [...joined.filter(m => m.id !== selfId).map(m => m.id), ...named] : named)];
+    const recipients = mentions.all ? [...joined.map(m => m.id), ...named] : named;
+    return [...new Set(recipients.filter(target => target !== selfId))];
   }
   const result = async <T>(fn: () => Promise<T>) => {
     try { return { ok: true as const, ...await fn() }; }
