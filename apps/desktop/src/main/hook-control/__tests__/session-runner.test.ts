@@ -19,6 +19,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import fs from 'node:fs/promises';
 import type { AgentEvent, Effort, PermissionMode, PermissionModeState } from '@cindy/maker-core';
 import type { CatalogModel, ProviderView } from '@cindy/model-providers';
 
@@ -2521,6 +2522,8 @@ describe('上游过载自动重试期间的渠道进度(零产出窗口)', () =>
   it.each([
     ['output-limit', 'partial answer'],
     ['output-limit', ''],
+    ['output-limit', '![shot](/private/task/shot.png)'],
+    ['output-limit', '![shot](xdt-image:///C:/Users/task/shot.png)'],
     ['turn-failed', 'partial answer'],
   ])('official Telegram failure preserves only output-limit text (%s, %s)', async (reason, text) => {
     fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
@@ -2536,7 +2539,11 @@ describe('上游过载自动重试期间的渠道进度(零产出窗口)', () =>
     // A trailing done has no subscriber: the failure must carry the observed body.
     h.eventCbs.get('sess-new')?.({ type: 'done', data: { result: 'late result' } });
     const outcome = await pending;
-    expect(outcome).toMatchObject({ status: 'error', finalText: reason === 'output-limit' ? text : '' });
+    expect(outcome.status).toBe('error');
+    if (text.startsWith('![')) {
+      expect(outcome.finalText).toContain('🖼️ _shot_');
+      expect(outcome.finalText).not.toContain('shot.png');
+    } else expect(outcome.finalText).toBe(reason === 'output-limit' ? text : '');
     expect(outcome.errorMessage).toBe(reason === 'output-limit'
       ? '模型已达到输出长度上限，本轮回复可能不完整。可以直接发送下一条消息继续。'
       : 'provider failure');
@@ -3524,19 +3531,77 @@ describe('watchContinuation: 观察桌面端续跑并回流', () => {
     expect(ends[0]?.finalText).toBe('第一段\n\n第二段');
   });
 
-  it.each(['output-limit', 'turn-failed'])('continuation failure retains output-limit body only (%s)', async (reason) => {
+  it.each(['run', 'continuation'])('output-limit %s waits for image bytes and settles once', async (entry) => {
+    let release!: (bytes: Buffer<ArrayBuffer>) => void;
+    const reading = new Promise<Buffer<ArrayBuffer>>((resolve) => { release = resolve; });
+    let restoreRead = () => {};
+    try {
+      const runner = createMakerHookSessionRunner({ log });
+      const { req, ends } = watchReq({ source: { im: 'telegram' } });
+      let cancel = () => {};
+      let pending: ReturnType<typeof runner.run> | undefined;
+      if (entry === 'run') {
+        fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) => {
+          const session = makeFakeSession(opts.id ?? 'sess-x');
+          session.send.mockImplementation(async (_message, options) => {
+            await options.onAccepted?.();
+            return { accepted: true };
+          });
+          return session;
+        });
+        pending = runner.run(baseReq({ source: { im: 'telegram', userText: 'hello' } }));
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      } else {
+        fakeMaker.getSession.mockReturnValueOnce(makeManualSession('sess-live'));
+        cancel = runner.watchContinuation!(req as never);
+      }
+      const read = vi.spyOn(fs, 'readFile').mockImplementation(() => reading);
+      restoreRead = () => read.mockRestore();
+      const emit = h.eventCbs.get(entry === 'run' ? 'sess-new' : 'sess-live')!;
+      emit({ type: 'text', source: 'pi', data: {
+        text: `![shot](cindy-media://blobs/${'a'.repeat(64)}.png)`, isFinal: true,
+      } });
+      emit({ type: 'error', source: 'pi', data: { reason: 'output-limit', message: 'limit', isTerminal: true } });
+      await flush();
+      expect(read).toHaveBeenCalledTimes(1);
+      cancel();
+      cancel();
+      expect(ends).toHaveLength(0);
+      release(Buffer.from('image bytes'));
+      if (pending) ends.push(await pending);
+      else await flush();
+      expect(ends).toHaveLength(1);
+      expect(ends[0]).toMatchObject({ status: 'error', finalText: '🖼️ _shot_', attachments: [
+        { mimeType: 'image/png', dataBase64: Buffer.from('image bytes').toString('base64') },
+      ] });
+    } finally {
+      release(Buffer.from('image bytes'));
+      restoreRead();
+    }
+  });
+
+  it.each([
+    ['output-limit', 'partial continuation'],
+    ['turn-failed', 'partial continuation'],
+    ['output-limit', '![shot](/private/task/shot.png)'],
+    ['output-limit', '![shot](xdt-image:///C:/Users/task/shot.png)'],
+  ])('continuation failure retains output-limit body only (%s, %s)', async (reason, text) => {
     fakeMaker.getSession.mockReturnValueOnce(makeManualSession('sess-live'));
     const runner = createMakerHookSessionRunner({ log });
     const { req, ends } = watchReq({ source: { im: 'telegram' } });
     const cancel = runner.watchContinuation!(req as never);
     const emit = h.eventCbs.get('sess-live')!;
-    emit({ type: 'text', source: 'pi', data: { text: 'partial continuation', isFinal: true } });
+    emit({ type: 'text', source: 'pi', data: { text, isFinal: true } });
     emit({ type: 'error', source: 'pi', data: { reason, message: 'provider failure', isTerminal: true } });
     expect(h.eventCbs.has('sess-live')).toBe(false);
     await flush();
     cancel();
     expect(ends).toHaveLength(1);
-    expect(ends[0]).toMatchObject({ status: 'error', finalText: reason === 'output-limit' ? 'partial continuation' : '' });
+    expect(ends[0]?.status).toBe('error');
+    if (text.startsWith('![')) {
+      expect(ends[0]?.finalText).toContain('🖼️ _shot_');
+      expect(ends[0]?.finalText).not.toContain('shot.png');
+    } else expect(ends[0]?.finalText).toBe(reason === 'output-limit' ? text : '');
     expect(ends[0]?.errorMessage).toBe(reason === 'output-limit'
       ? '模型已达到输出长度上限，本轮回复可能不完整。可以直接发送下一条消息继续。'
       : 'provider failure');

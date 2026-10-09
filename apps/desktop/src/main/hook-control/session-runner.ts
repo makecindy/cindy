@@ -1417,12 +1417,12 @@ export function createMakerHookSessionRunner(deps: {
         await observer.finished;
       } catch (err) {
         observer.stop();
-        return fail(
-          err instanceof Error ? err.message : String(err),
-          observer.errorReason === 'output-limit'
-            ? stripInternalWebCitations(observer.finalText())
-            : '',
-        );
+        const collected = observer.errorReason === 'output-limit'
+          ? await collectOutboundForFinalText(
+            session.id, turnTextsFor(observer), extraImageAbsPaths, [workingDir], log,
+          )
+          : { finalText: '' };
+        return { ...fail(err instanceof Error ? err.message : String(err)), ...collected };
       } finally {
         // 无论正常收口还是超时/错误,未决交互都按默认收口并释放中央 route
         finalizeInteractions();
@@ -1542,13 +1542,11 @@ function beginContinuationWatch(
       req.onAbandon();
       return;
     }
-    if (errorMessage !== null) {
+    if (errorMessage !== null && observer.errorReason !== 'output-limit') {
       // 与 run() 一致：只有确定的输出上限失败携带已累计正文。
       req.onEnd({
         status: 'error',
-        finalText: observer.errorReason === 'output-limit'
-          ? stripInternalWebCitations(observer.finalText())
-          : '',
+        finalText: '',
         errorMessage,
         durationMs: Date.now() - startedAt,
       });
@@ -1565,9 +1563,9 @@ function beginContinuationWatch(
         log,
       );
       req.onEnd({
-        status: 'ok',
+        status: errorMessage === null ? 'ok' : 'error',
         finalText: collected.finalText,
-        errorMessage: null,
+        errorMessage,
         durationMs: Date.now() - startedAt,
         ...(collected.attachments !== undefined ? { attachments: collected.attachments } : {}),
       });

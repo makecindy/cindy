@@ -18,6 +18,8 @@ import {
 } from '../taskImageDelivery';
 import { resolveSafe } from '../blobStore';
 import * as ledger from '../ledger';
+import { commitMessageMediaRefs } from '../chatAttachments';
+import { createHash } from 'node:crypto';
 import { reconcileMediaRefCompensationsForOwner } from '../refCompensationJournal';
 import { materializeLocalMarkdownImages } from '../../im/shared/localMarkdownImages';
 import { collectOutboundAttachments } from '../../hook-control/outbound';
@@ -30,7 +32,7 @@ import {
 const state = vi.hoisted(() => ({
   root: '',
   valid: true,
-  afterIngest: undefined as (() => void) | undefined,
+  afterIngest: undefined as (() => void | Promise<void>) | undefined,
 }));
 vi.mock('electron', () => ({ app: { getPath: () => state.root } }));
 vi.mock('../../appSessionState', () => ({
@@ -45,7 +47,7 @@ vi.mock('../ingest', async (original) => {
     ...actual,
     ingestMedia: async (...args: Parameters<typeof actual.ingestMedia>) => {
       const result = await actual.ingestMedia(...args);
-      state.afterIngest?.();
+      await state.afterIngest?.();
       return result;
     },
   };
@@ -104,6 +106,34 @@ function insert(text: string) {
 }
 
 describe('task image delivery', () => {
+  it.each(['chat', 'channel'].flatMap((target) =>
+    ['publish', 'rollback'].map((result) => [target, result]),
+  ))('preserves a concurrent message reference after %s %s', async (target, result) => {
+    const source = path.join(work, 'shared.png');
+    await fs.writeFile(source, PNG);
+    const text = `![shared](${source})`;
+    const row = insert(text);
+    const url = `cindy-media://blobs/${createHash('sha256').update(PNG).digest('hex')}.png`;
+    let otherCommit: ReturnType<typeof commitMessageMediaRefs> | undefined;
+    state.afterIngest = async () => {
+      raw.prepare('INSERT INTO messages VALUES (?, ?, ?, ?, ?, NULL)')
+        .run('other', 's', 'user', JSON.stringify(url), 11);
+      // The ordinary message publishes while the task import still owns a provisional pin.
+      otherCommit = commitMessageMediaRefs({ sessionId: 's', role: 'user', content: url }, client.drizzle);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      if (result === 'rollback') {
+        if (target === 'chat') raw.exec("UPDATE messages SET content = 'edited' WHERE id = 'm'");
+        else raw.exec("UPDATE sessions SET sdk_session_id = 'changed'");
+      }
+    };
+    if (target === 'chat') await restoreTaskImageRows(client, [row]);
+    else await materializeTaskImageText('s', text);
+    await otherCommit;
+    expect(raw.prepare('SELECT count(*) AS n FROM media_refs').get()).toEqual({ n: 1 });
+    await fs.rm(source);
+    expect(await fs.readFile(resolveSafe(url).absPath)).toEqual(PNG);
+  });
+
   it('preserves the image when the message commit succeeds but its worker ACK is lost', async () => {
     const source = path.join(work, 'committed.png');
     await fs.writeFile(source, PNG);

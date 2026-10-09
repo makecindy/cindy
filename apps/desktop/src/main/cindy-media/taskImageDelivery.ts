@@ -8,6 +8,7 @@ import { getCurrentDbClientSnapshot } from '../localDb/client/current';
 import type { DbClient } from '../localDb/client/DbClient';
 import { messages, sessions } from '../localDb/schema';
 import { ingestMedia } from './ingest';
+import { withSessionMediaRefLock } from './chatAttachments';
 import { hasRef, removeRefById } from './ledger';
 import {
   captureMediaRefCompensationScope,
@@ -135,34 +136,6 @@ function markdownContent(value: string): { text: string; serialize(text: string)
   }
 }
 
-// Serialize publication and rollback for a task, so a history read cannot borrow
-// an uncommitted pin from a simultaneous message/channel import.
-const taskLocks = new WeakMap<DbClient, Map<string, Promise<void>>>();
-async function withTaskImageLock<T>(
-  client: DbClient,
-  sessionId: string,
-  perform: () => Promise<T>,
-): Promise<T> {
-  let locks = taskLocks.get(client);
-  if (!locks) {
-    locks = new Map();
-    taskLocks.set(client, locks);
-  }
-  const previous = locks.get(sessionId) ?? Promise.resolve();
-  let release!: () => void;
-  const next = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  locks.set(sessionId, next);
-  try {
-    await previous;
-    return await perform();
-  } finally {
-    release();
-    if (locks.get(sessionId) === next) locks.delete(sessionId);
-  }
-}
-
 async function captureTaskImages(sessionId: string, client?: DbClient) {
   const snapshot = getCurrentDbClientSnapshot();
   if (!snapshot || (client && client !== snapshot.client)) return null;
@@ -249,7 +222,7 @@ async function captureTaskImages(sessionId: string, client?: DbClient) {
 export async function materializeTaskImageText(sessionId: string, text: string): Promise<string> {
   const client = getCurrentDbClientSnapshot()?.client;
   if (!client || !hasLocalTaskImages(text)) return text;
-  return withTaskImageLock(client, sessionId, () =>
+  return withSessionMediaRefLock(client.drizzle, sessionId, () =>
     materializeTaskImageTextUnlocked(client, sessionId, text),
   );
 }
@@ -308,7 +281,7 @@ export async function restoreTaskImageRows<T extends ImageMessage>(
       continue;
     }
     output.push(
-      ...(await withTaskImageLock(client, row.sessionId, () =>
+      ...(await withSessionMediaRefLock(client.drizzle, row.sessionId, () =>
         restoreTaskImageRowsUnlocked(client, [row]),
       )),
     );
