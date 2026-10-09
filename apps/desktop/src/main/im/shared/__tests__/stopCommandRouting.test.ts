@@ -175,6 +175,25 @@ describe('messageHandler !stop routing', () => {
     expect(turn.agentText).not.toContain('检查附件');
   });
 
+  it.each(['audio', 'oversize', 'download_failed'])('keeps summons and quotes with unavailable media (%s)', async (type) => {
+    for (const invoked of [true, false]) {
+      runAgentTurn.mockClear();
+      deliver(makeEvent({
+        text: '', invoked,
+        ...(invoked ? {} : { replyContext: { author: 'Chris', text: '引用正文' } }),
+        unsupported: [{ type, label: '文件未提供' }],
+      }));
+      await vi.waitFor(() => expect(runAgentTurn).toHaveBeenCalledTimes(1));
+      const turn = runAgentTurn.mock.calls[0][0];
+      expect(turn.text).toBe('');
+      expect(turn.agentText).toContain('未附加文字正文');
+      expect(turn.agentText).toContain('文件未提供');
+      expect(turn.agentText).not.toContain('实际提供了');
+      if (invoked) expect(turn.agentText).toContain('用户显式召唤了机器人');
+      else expect(turn.agentText).toContain('引用正文');
+    }
+  });
+
   it('still drops an empty event without a summon, quote or attachment', async () => {
     deliver(makeEvent({ text: '' }));
     await flushMicrotasks();

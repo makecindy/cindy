@@ -295,7 +295,7 @@ export function createMessageHandler(
     const hasContent = event.text.length > 0 || event.attachments.length > 0;
 
     // ── pure-unsupported: reply directly, do NOT invoke agent ───────────────
-    if (!hasContent && !event.replyContext && event.unsupported.length > 0) {
+    if (!hasContent && !event.invoked && !event.replyContext && event.unsupported.length > 0) {
       const notice = ui.agent.unsupportedOnly(event.unsupported);
       // 同 !stop: 开场白卡就地 patch 成 unsupported 提示, 消费不了再另发;
       // 仅本条消息自己开了话题(groupContextLane)才消费。
