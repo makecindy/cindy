@@ -119,9 +119,28 @@ describe('Telegram group history access scope', () => {
     });
   });
 
-  it('names the group in the channel note but leaves the speaker to the existing [发言人] line', async () => {
+  it('keeps guest DMs from crossing Telegram lanes', () => {
     expect(
-      await adapter.channelNoteSourceFor?.({
+      adapter.groupHistoryAccessFor?.({
+        contextId: 'bot-1',
+        senderId: '22222',
+        messageId: 'm-3',
+        chatId: '22222',
+        text: '查历史',
+        attachments: [],
+        unsupported: [],
+        speaker: { id: '22222', name: 'Guest', isOwner: false },
+      } as never),
+    ).toEqual({
+      access: 'lane',
+      provider: 'telegram-personal:bot-1',
+      lane: null,
+    });
+  });
+
+  it('names the group in the channel note but leaves the speaker to the existing [发言人] line', () => {
+    expect(
+      adapter.channelNoteSourceFor?.({
         contextId: 'bot-1',
         senderId: 'g/-1001',
         messageId: 'm-3',

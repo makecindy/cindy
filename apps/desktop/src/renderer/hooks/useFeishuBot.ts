@@ -61,6 +61,10 @@ export interface UseFeishuBotReturn {
   lifecycleAnnouncement: boolean;
   setLifecycleAnnouncement: (enabled: boolean) => void;
 
+  /** 是否允许其他飞书用户私聊 / @ Bot 发起普通对话。 */
+  allowStrangerChats: boolean;
+  setAllowStrangerChats: (enabled: boolean) => void;
+
   save: () => Promise<boolean>;
   reconnect: () => Promise<boolean>;
   clear: () => Promise<void>;
@@ -79,6 +83,7 @@ interface FeishuBotCache {
   hasSavedCreds: boolean;
   ownerOpenId: string | null;
   lifecycleAnnouncement: boolean;
+  allowStrangerChats: boolean;
 }
 let cachedState: FeishuBotCache | null = null;
 
@@ -100,6 +105,9 @@ export function useFeishuBot(): UseFeishuBotReturn {
   );
   const [lifecycleAnnouncement, setLifecycleAnnouncementState] = useState(
     () => cachedState?.lifecycleAnnouncement ?? true,
+  );
+  const [allowStrangerChats, setAllowStrangerChatsState] = useState(
+    () => cachedState?.allowStrangerChats ?? false,
   );
 
   const [validationError, setValidationError] = useState<string | null>(null);
@@ -142,6 +150,7 @@ export function useFeishuBot(): UseFeishuBotReturn {
       setOwnerOpenId(nextOwnerOpenId);
       setErrorMessage(nextErrorMessage);
       setLifecycleAnnouncementState(state.lifecycleAnnouncement);
+      setAllowStrangerChatsState(state.allowStrangerChats);
       if (state.appId) {
         setAppIdState(state.appId);
       }
@@ -157,6 +166,7 @@ export function useFeishuBot(): UseFeishuBotReturn {
         hasSavedCreds: state.hasSecret,
         ownerOpenId: nextOwnerOpenId,
         lifecycleAnnouncement: state.lifecycleAnnouncement,
+        allowStrangerChats: state.allowStrangerChats,
       };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -279,6 +289,7 @@ export function useFeishuBot(): UseFeishuBotReturn {
           hasSavedCreds: true,
           ownerOpenId: cachedState?.ownerOpenId ?? null,
           lifecycleAnnouncement: cachedState?.lifecycleAnnouncement ?? true,
+          allowStrangerChats: cachedState?.allowStrangerChats ?? false,
         };
         toast.success(t('logic.toasts.feishuBotConnected'));
         if (saveSuccessTimerRef.current) clearTimeout(saveSuccessTimerRef.current);
@@ -327,6 +338,7 @@ export function useFeishuBot(): UseFeishuBotReturn {
         hasSavedCreds: false,
         ownerOpenId: null,
         lifecycleAnnouncement: cachedState?.lifecycleAnnouncement ?? true,
+        allowStrangerChats: cachedState?.allowStrangerChats ?? false,
       };
       // 解绑 bot 后顺手把"飞书通知"开关落 false,避免:
       //   - main 侧每次任务事件 warn 一行 ownerOpenId 缺失
@@ -385,6 +397,30 @@ export function useFeishuBot(): UseFeishuBotReturn {
     });
   }, []);
 
+  const setAllowStrangerChats = useCallback(
+    (enabled: boolean) => {
+      // 先乐观切换, main 侧没能落盘再拨回来(见 ipc.ts): 这是安全开关, 界面
+      // 不能停在策略其实没生效的档位上。
+      const revert = (message: string) => {
+        log.error('setAllowStrangerChats failed:', message);
+        setAllowStrangerChatsState(!enabled);
+        if (cachedState) cachedState = { ...cachedState, allowStrangerChats: !enabled };
+        toast.error(t('logic.toasts.feishuBotSaveFailed', { message }));
+      };
+      setAllowStrangerChatsState(enabled);
+      if (cachedState) cachedState = { ...cachedState, allowStrangerChats: enabled };
+      window.electronAPI.feishuBot
+        .setAllowStrangerChats(enabled)
+        .then((res) => {
+          if (!res.ok) revert(res.error ?? '');
+        })
+        .catch((err) => {
+          revert(err instanceof Error ? err.message : String(err));
+        });
+    },
+    [t],
+  );
+
   const setService = useCallback(
     (nextService: FeishuBotService) => {
       setServiceState(nextService);
@@ -408,6 +444,8 @@ export function useFeishuBot(): UseFeishuBotReturn {
     ownerOpenId,
     lifecycleAnnouncement,
     setLifecycleAnnouncement,
+    allowStrangerChats,
+    setAllowStrangerChats,
     validationError,
     isSaving,
     isClearing,

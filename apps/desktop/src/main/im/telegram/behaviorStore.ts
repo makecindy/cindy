@@ -34,6 +34,10 @@ function normalize(raw: unknown): TelegramBehaviorConfig {
     replyQuoteDm: DM_QUOTE_MODES.has(String(r.replyQuoteDm))
       ? (r.replyQuoteDm as TelegramBehaviorConfig['replyQuoteDm'])
       : TELEGRAM_DEFAULT_BEHAVIOR.replyQuoteDm,
+    allowNonOwnerMessages:
+      typeof r.allowNonOwnerMessages === 'boolean'
+        ? r.allowNonOwnerMessages
+        : TELEGRAM_DEFAULT_BEHAVIOR.allowNonOwnerMessages,
     ...(isRecordOfActivation(r.groupActivation)
       ? { groupActivation: r.groupActivation }
       : {}),
@@ -133,6 +137,9 @@ function normalizePatch(
   }
   if (patch.replyQuoteDm && DM_QUOTE_MODES.has(patch.replyQuoteDm)) {
     next.replyQuoteDm = patch.replyQuoteDm;
+  }
+  if (typeof patch.allowNonOwnerMessages === 'boolean') {
+    next.allowNonOwnerMessages = patch.allowNonOwnerMessages;
   }
   if (isRecordOfActivation(patch.groupActivation)) {
     next.groupActivation = patch.groupActivation;

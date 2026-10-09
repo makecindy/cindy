@@ -10,12 +10,9 @@
 
 import { useCallback, useEffect, useState } from 'react';
 
-import { FeishuConflictDialog } from './FeishuConflictDialog';
+import { FEISHU_OPEN_PLATFORM_URLS } from '@/components/settings/feishuBotPresentation';
 
-const OPEN_PLATFORM_URLS = {
-  feishu: 'https://open.feishu.cn/app?lang=zh-CN',
-  lark: 'https://open.larksuite.com/app',
-} as const;
+import { FeishuConflictDialog } from './FeishuConflictDialog';
 
 export function FeishuConflictDialogHost() {
   const [open, setOpen] = useState(false);
@@ -41,7 +38,7 @@ export function FeishuConflictDialogHost() {
 
   const handleCreateOwnApp = useCallback(() => {
     setOpen(false);
-    window.electronAPI.openExternal?.(OPEN_PLATFORM_URLS[service]);
+    window.electronAPI.openExternal?.(FEISHU_OPEN_PLATFORM_URLS[service]);
   }, [service]);
 
   return (

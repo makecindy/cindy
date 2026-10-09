@@ -19,6 +19,14 @@ describe('Feishu bot saved-credential presentation', () => {
     ['conflict', 'settings.feishuBot.saved.conflictNote'],
     ['error', 'settings.feishuBot.saved.errorNote'],
   ] as const)('maps %s to an explicit saved-credential explanation', (status, key) => {
-    expect(savedCredentialsNoteKey(status)).toBe(key);
+    expect(savedCredentialsNoteKey(status, false)).toBe(key);
+  });
+
+  it('swaps the connected note once strangers are allowed', () => {
+    expect(savedCredentialsNoteKey('connected', true)).toBe(
+      'settings.feishuBot.connected.noteStrangersAllowed',
+    );
+    // 只有已连接那句会被开关改写, 其它档位与访客开关无关。
+    expect(savedCredentialsNoteKey('error', true)).toBe('settings.feishuBot.saved.errorNote');
   });
 });

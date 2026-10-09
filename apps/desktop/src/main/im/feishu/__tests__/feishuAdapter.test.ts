@@ -341,6 +341,15 @@ describe('feishu group lane adapter hooks', () => {
     expect(adapter.turnPolicyOptionalForMode?.('acceptEdits', policy!)).toBe(false);
   });
 
+  it('turnPolicyOptionalForMode: 访客轮次任何权限档都挂策略, 不吃 Full access 豁免', () => {
+    const guestPolicy = adapter.turnPermissionPolicyFor?.(
+      groupEvent({ speaker: { id: 'ou_guest', name: '', isOwner: false } }),
+    );
+    expect(guestPolicy).toBeDefined();
+    expect(adapter.turnPolicyOptionalForMode?.('bypassPermissions', guestPolicy!)).toBe(false);
+    expect(adapter.turnPolicyOptionalForMode?.('auto', guestPolicy!)).toBe(false);
+  });
+
   it('prepareAgentTurnText: 群 lane 拉历史拼上下文前缀(带时间标注), 剔除触发消息', async () => {
     fetchChatHistoryPage.mockResolvedValueOnce(
       historyPage([

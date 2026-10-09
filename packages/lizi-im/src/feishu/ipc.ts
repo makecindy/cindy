@@ -107,6 +107,19 @@ export function registerFeishuIpc(): void {
     return { ok: true };
   });
 
+  host.ipc.handle('feishuBot:set-allow-stranger-chats', async (payload) => {
+    const p = payload as { enabled?: unknown } | undefined;
+    const enabled = typeof p?.enabled === 'boolean' ? p.enabled : false;
+    // 先落盘再改运行时: 写不进去就什么都不改 —— 只在内存里生效的「关闭」会在
+    // 重启后被 init() 读回旧的 true, 安全开关静默回到打开。
+    if (!storage.writeAllowStrangerChats(enabled)) {
+      log.warn(`[feishu/ipc] allowStrangerChats=${enabled} not persisted; runtime unchanged`);
+      return { ok: false, error: '[PERSIST_FAILED] secure storage unavailable' };
+    }
+    wsClient.setAllowStrangerChats(enabled);
+    return { ok: true };
+  });
+
   host.ipc.handle('feishuBot:registration-begin', async (payload) => {
     const p = payload as { service?: unknown } | undefined;
     if (p?.service !== 'feishu' && p?.service !== 'lark') {
@@ -175,6 +188,7 @@ export function getPublicState(): FeishuPublicState {
     hasSecret: creds != null,
     ownerOpenId: storage.readOwnerOpenId(),
     lifecycleAnnouncement: storage.readLifecycleAnnouncement(),
+    allowStrangerChats: storage.readAllowStrangerChats(),
     service: creds?.service ?? 'feishu',
   };
 }
