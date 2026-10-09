@@ -23,6 +23,11 @@ const defaultPrefs = {
   statusFilter: 'active',
   projectOrder: 'activity',
   manualProjectOrder: [],
+  projectFilter: 'all',
+  vendorFilter: 'all',
+  lastActivityFilter: 'all',
+  viewMode: 'list',
+  taskInfoFields: ['time'],
 } as const;
 
 describe('homeViewPreferenceStore', () => {
@@ -85,26 +90,53 @@ describe('homeViewPreferenceStore', () => {
       projectOrder: 'custom',
       manualProjectOrder: ['proj-b', 'proj-a'],
     });
+    await saveHomeViewPreferences({
+      sortBy: 'created',
+      projectFilter: ['proj-a', 'dialogue'],
+      vendorFilter: 'codex',
+      lastActivityFilter: '7d',
+      viewMode: 'text',
+      taskInfoFields: ['cost', 'pr'],
+    });
 
-    await expect(readHomeViewPreferences()).resolves.toEqual({
+    const expected = {
       groupByProject: true,
       groupDialogue: true,
-      selectedDevice: { deviceId: 'devA', name: 'Mac A' },
-      sortBy: 'priority',
+      sortBy: 'created',
       statusFilter: 'archived',
       projectOrder: 'custom',
       manualProjectOrder: ['proj-b', 'proj-a'],
+      projectFilter: ['proj-a', 'dialogue'],
+      vendorFilter: 'codex',
+      lastActivityFilter: '7d',
+      viewMode: 'text',
+      taskInfoFields: ['cost', 'pr'],
+    };
+    await expect(readHomeViewPreferences()).resolves.toEqual({
+      ...expected,
+      selectedDevice: { deviceId: 'devA', name: 'Mac A' },
     });
     expect(JSON.parse(store.get(__testing.storageKey) ?? '{}')).toEqual({
-      groupByProject: true,
-      groupDialogue: true,
-      sortBy: 'priority',
-      statusFilter: 'archived',
-      projectOrder: 'custom',
-      manualProjectOrder: ['proj-b', 'proj-a'],
+      ...expected,
       deviceId: 'devA',
       deviceName: 'Mac A',
     });
+  });
+
+  it('keeps an explicit empty task-info selection and drops unknown values', async () => {
+    const { __testing, readHomeViewPreferences } = await import('@/session/homeViewPreferenceStore');
+    store.set(__testing.storageKey, JSON.stringify({
+      taskInfoFields: [],
+      projectFilter: [],
+      vendorFilter: 'gemini',
+      lastActivityFilter: '2d',
+      viewMode: 'cards',
+      sortBy: 'manual',
+    }));
+    await expect(readHomeViewPreferences()).resolves.toEqual({ ...defaultPrefs, taskInfoFields: [] });
+
+    store.set(__testing.storageKey, JSON.stringify({ taskInfoFields: ['tokens', 'bogus', 'tokens', 'time'] }));
+    await expect(readHomeViewPreferences()).resolves.toEqual({ ...defaultPrefs, taskInfoFields: ['tokens', 'time'] });
   });
 
   it('treats explicit null selectedDevice as switching back to all sessions', async () => {

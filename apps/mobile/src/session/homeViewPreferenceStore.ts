@@ -2,10 +2,23 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import type { HomeListSortBy, HomeStatusFilter } from './homeListPriority';
 import type { HomeProjectOrder } from './homeProjectOrder';
+import {
+  DEFAULT_HOME_TASK_INFO_FIELDS,
+  normalizeLastActivityFilter,
+  normalizeProjectFilter,
+  normalizeTaskInfoFields,
+  normalizeVendorFilter,
+  normalizeViewMode,
+  type HomeLastActivityFilter,
+  type HomeListViewMode,
+  type HomeProjectFilter,
+  type HomeTaskInfoField,
+  type HomeVendorFilter,
+} from './homeDisplaySettings';
 
 const STORAGE_KEY = 'xdt-maker.mobile.home.view-preferences.v1';
 
-/** 首页视图偏好:设备范围 + 显示菜单(分组 / 排序 / 状态)。缺省值保持老用户现在的样子。 */
+/** 首页视图偏好:设备范围 + 显示菜单(与桌面侧栏同结构)。缺省值保持老用户现在的样子。 */
 export interface HomeViewPreferences {
   groupByProject: boolean;
   /** 缺省关:老首页是项目 folder + 对话按时间混排,不是桌面现在的「对话归组」。 */
@@ -15,6 +28,13 @@ export interface HomeViewPreferences {
   /** 缺省按最近活动;手动时项目行按 manualProjectOrder,对话仍跟任务排序。 */
   projectOrder: HomeProjectOrder;
   manualProjectOrder: string[];
+  projectFilter: HomeProjectFilter;
+  vendorFilter: HomeVendorFilter;
+  lastActivityFilter: HomeLastActivityFilter;
+  /** 缺省列表(带预览行):手机首页一直是这个样子。 */
+  viewMode: HomeListViewMode;
+  /** 任务行右侧信息;顺序 = 勾选先后。 */
+  taskInfoFields: HomeTaskInfoField[];
   /** 上次选中的电脑;name 用于设备列表尚未同步回来时的表头兜底显示。 */
   selectedDevice: { deviceId: string; name: string } | null;
 }
@@ -26,6 +46,11 @@ export interface HomeViewPreferencePatch {
   statusFilter?: HomeStatusFilter;
   projectOrder?: HomeProjectOrder;
   manualProjectOrder?: string[];
+  projectFilter?: HomeProjectFilter;
+  vendorFilter?: HomeVendorFilter;
+  lastActivityFilter?: HomeLastActivityFilter;
+  viewMode?: HomeListViewMode;
+  taskInfoFields?: HomeTaskInfoField[];
   selectedDevice?: { deviceId: string; name: string } | null;
 }
 
@@ -63,6 +88,11 @@ async function writeHomeViewPreferences(patch: HomeViewPreferencePatch): Promise
     statusFilter: patch.statusFilter ?? current.statusFilter,
     projectOrder: patch.projectOrder ?? current.projectOrder,
     manualProjectOrder: patch.manualProjectOrder ?? current.manualProjectOrder,
+    projectFilter: patch.projectFilter ?? current.projectFilter,
+    vendorFilter: patch.vendorFilter ?? current.vendorFilter,
+    lastActivityFilter: patch.lastActivityFilter ?? current.lastActivityFilter,
+    viewMode: patch.viewMode ?? current.viewMode,
+    taskInfoFields: patch.taskInfoFields ?? current.taskInfoFields,
     // null 是有效值(切回「所有对话」),用 undefined 判断字段是否出现在 patch 里。
     selectedDevice: patch.selectedDevice !== undefined
       ? normalizeDevice(patch.selectedDevice)
@@ -84,6 +114,11 @@ function emptyPreferences(): HomeViewPreferences {
     statusFilter: 'active',
     projectOrder: 'activity',
     manualProjectOrder: [],
+    projectFilter: 'all',
+    vendorFilter: 'all',
+    lastActivityFilter: 'all',
+    viewMode: 'list',
+    taskInfoFields: [...DEFAULT_HOME_TASK_INFO_FIELDS],
   };
 }
 
@@ -100,12 +135,17 @@ function normalizeStoredPreferences(value: unknown): HomeViewPreferences {
     selectedDevice: deviceId
       ? { deviceId, name: deviceName || deviceId }
       : null,
-    sortBy: record.sortBy === 'priority' ? 'priority' : 'recency',
+    sortBy: record.sortBy === 'priority' || record.sortBy === 'created' ? record.sortBy : 'recency',
     statusFilter: record.statusFilter === 'archived' || record.statusFilter === 'all'
       ? record.statusFilter
       : 'active',
     projectOrder: record.projectOrder === 'custom' ? 'custom' : 'activity',
     manualProjectOrder: readStringList(record.manualProjectOrder),
+    projectFilter: normalizeProjectFilter(record.projectFilter),
+    vendorFilter: normalizeVendorFilter(record.vendorFilter),
+    lastActivityFilter: normalizeLastActivityFilter(record.lastActivityFilter),
+    viewMode: normalizeViewMode(record.viewMode),
+    taskInfoFields: normalizeTaskInfoFields(record.taskInfoFields),
   };
 }
 
@@ -136,6 +176,11 @@ function serializePreferences(preferences: HomeViewPreferences): Record<string, 
     statusFilter: preferences.statusFilter,
     projectOrder: preferences.projectOrder,
     manualProjectOrder: preferences.manualProjectOrder,
+    projectFilter: preferences.projectFilter,
+    vendorFilter: preferences.vendorFilter,
+    lastActivityFilter: preferences.lastActivityFilter,
+    viewMode: preferences.viewMode,
+    taskInfoFields: preferences.taskInfoFields,
     ...(preferences.selectedDevice
       ? {
           deviceId: preferences.selectedDevice.deviceId,

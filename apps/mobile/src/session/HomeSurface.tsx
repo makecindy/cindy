@@ -98,12 +98,32 @@ import {
 } from '@/platform/chrome';
 import {
   buildHomeDisplayPullDownActions,
+  homeDisplayActionPatch,
+  type HomeDisplayMenuState,
+  type HomeDisplayPatch,
   buildHomeScopePullDownActions,
   parseHomeScopePullDownAction,
-  homeDisplayMenuPatch,
-  type HomeDisplayMenuKey,
 } from '@/session/homeChromeMenus';
 import { useConversationSearchFilterMenu } from '@/session/useConversationSearchFilterMenu';
+import { AnchoredPullDownMenu } from '@/platform/chrome/AnchoredPullDownMenu';
+import type { NativePullDownAction } from '@/platform/chrome/NativePullDownMenu';
+import {
+  activeContentFilterCount,
+  applyHomeContentFilters,
+  DEFAULT_HOME_TASK_INFO_FIELDS,
+  type HomeContentFilters,
+  type HomeLastActivityFilter,
+  type HomeListViewMode,
+  type HomeProjectFilter,
+  type HomeTaskInfoField,
+  type HomeVendorFilter,
+} from '@/session/homeDisplaySettings';
+import {
+  HomeRowDisplayContext,
+  HomeSessionInfoMeta,
+  useHomeRowDisplay,
+  type HomeRowDisplay,
+} from '@/session/HomeSessionInfoMeta';
 import { buildMainWindowLayout } from '@/components/mainWindowLayout';
 import { useScreenEdgePadding } from '@/components/screenEdgeInsets';
 import { isAccessRevokedError } from '@/device-link/accessRevoked';
@@ -226,7 +246,6 @@ import {
 import { serializeNewSessionDeviceOptions } from '@/session/newSession';
 import {
   buildRemoteSessionCardPreview,
-  formatRemoteSessionSidebarTime,
   getRemoteSessionPreviewCollapse,
   type RemoteAutomationSessionGroup,
   type RemoteSessionListItem,
@@ -311,7 +330,9 @@ const HOME_PROJECT_VIEW_ALL_INSET = 48;
 const CONNECTION_ICON_BUTTON_SIZE = 28;
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
-function estimateHomeSessionRowHeight(item: RemoteSessionListItem): number {
+function estimateHomeSessionRowHeight(item: RemoteSessionListItem, textMode = false): number {
+  // 文字形态整行单行(预览、定时 / 置顶标记都并到标题行),与 HomeSessionRow 同口径。
+  if (textMode) return HOME_SESSION_SINGLE_LINE_ROW_HEIGHT;
   const running = remoteSessionStore.isSessionRunning(item.session.id)
     || item.scheduleInfo?.running === true
     || item.liveActivity?.phase === 'running';
@@ -325,8 +346,9 @@ function estimateHomeSessionRowHeight(item: RemoteSessionListItem): number {
 function estimateHomeProjectChildHeight(
   item: RemoteSessionListItem,
   expandedAutomationGroups: ReadonlySet<string>,
+  textMode: boolean,
 ): number {
-  const rowHeight = estimateHomeSessionRowHeight(item);
+  const rowHeight = estimateHomeSessionRowHeight(item, textMode);
   const group = item.automationGroup;
   if (!group || !expandedAutomationGroups.has(group.key)) return rowHeight;
   const { visibleItems, hiddenCount } = getRemoteSessionPreviewCollapse(group.items, {
@@ -334,7 +356,7 @@ function estimateHomeProjectChildHeight(
     isSessionRunning: (sessionId) => remoteSessionStore.isSessionRunning(sessionId),
   });
   const childrenHeight = visibleItems.reduce(
-    (height, child) => height + estimateHomeSessionRowHeight(child),
+    (height, child) => height + estimateHomeSessionRowHeight(child, textMode),
     0,
   );
   return rowHeight
@@ -547,7 +569,6 @@ function HomeScreenContent({ active = true, onModeChange, width, newSessionInSys
   // 恢复自偏好的设备选择还没做过首次同步后的可用性校验(一次性,校验后或用户手动选择后清掉)。
   const restoredSelectionUnvalidatedRef = useRef(false);
   const [deviceMenuOpen, setDeviceMenuOpen] = useState(false);
-  const [displaySettingsOpen, setDisplaySettingsOpen] = useState(false);
   const [chromeMenuOpen, setChromeMenuOpen] = useState(false);
   const [accountSwitcherOpen, setAccountSwitcherOpen] = useState(false);
   const [chromeMenuCloseInstant, setChromeMenuCloseInstant] = useState(false);
@@ -586,6 +607,11 @@ function HomeScreenContent({ active = true, onModeChange, width, newSessionInSys
   const [sortBy, setSortBy] = useRetainedHomeState<HomeListSortBy>(viewSession, 'sortBy', 'recency');
   const [projectOrder, setProjectOrder] = useRetainedHomeState<HomeProjectOrder>(viewSession, 'projectOrder', 'activity');
   const [manualProjectOrder, setManualProjectOrder] = useRetainedHomeState<string[]>(viewSession, 'manualProjectOrder', []);
+  const [projectFilter, setProjectFilter] = useRetainedHomeState<HomeProjectFilter>(viewSession, 'projectFilter', 'all');
+  const [vendorFilter, setVendorFilter] = useRetainedHomeState<HomeVendorFilter>(viewSession, 'vendorFilter', 'all');
+  const [lastActivityFilter, setLastActivityFilter] = useRetainedHomeState<HomeLastActivityFilter>(viewSession, 'lastActivityFilter', 'all');
+  const [viewMode, setViewMode] = useRetainedHomeState<HomeListViewMode>(viewSession, 'viewMode', 'list');
+  const [taskInfoFields, setTaskInfoFields] = useRetainedHomeState<readonly HomeTaskInfoField[]>(viewSession, 'taskInfoFields', DEFAULT_HOME_TASK_INFO_FIELDS);
   const [hostProjectOrders, setHostProjectOrders] = useState<ReadonlyMap<string, SyncedProjectOrderSnapshot>>(() => new Map());
   const projectOrderFetchFenceRef = useRef(createProjectOrderFetchFence());
   const visualProjectKeysRef = useRef<string[]>([]);
@@ -1270,6 +1296,11 @@ function HomeScreenContent({ active = true, onModeChange, width, newSessionInSys
       setStatusFilter(preferences.statusFilter);
       setProjectOrder(preferences.projectOrder);
       setManualProjectOrder(preferences.manualProjectOrder);
+      setProjectFilter(preferences.projectFilter);
+      setVendorFilter(preferences.vendorFilter);
+      setLastActivityFilter(preferences.lastActivityFilter);
+      setViewMode(preferences.viewMode);
+      setTaskInfoFields(preferences.taskInfoFields);
       if (preferences.selectedDevice) {
         setSelectedDeviceId(preferences.selectedDevice.deviceId);
         setRestoredDeviceName(preferences.selectedDevice.name);
@@ -1490,7 +1521,6 @@ function HomeScreenContent({ active = true, onModeChange, width, newSessionInSys
   // 菜单展开时清掉上一轮残留的延后动作(例如淡出中途被重新展开,onClosed 未触发的情况)。
   const openDeviceMenu = useCallback(() => {
     pendingMenuActionRef.current = null;
-    setDisplaySettingsOpen(false);
     setChromeMenuOpen(false);
     setDeviceMenuOpen(true);
   }, []);
@@ -1498,16 +1528,8 @@ function HomeScreenContent({ active = true, onModeChange, width, newSessionInSys
   const openChromeMenu = useCallback(() => {
     pendingMenuActionRef.current = null;
     setDeviceMenuOpen(false);
-    setDisplaySettingsOpen(false);
     setChromeMenuCloseInstant(false);
     setChromeMenuOpen(true);
-  }, []);
-
-  const openDisplaySettings = useCallback(() => {
-    pendingMenuActionRef.current = null;
-    setDeviceMenuOpen(false);
-    setChromeMenuOpen(false);
-    setDisplaySettingsOpen(true);
   }, []);
 
   const onListScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
@@ -1884,8 +1906,18 @@ function HomeScreenContent({ active = true, onModeChange, width, newSessionInSys
     sessions: homeSessions, searchQuery, statusFilter,
   }), [home, ownedSharedTasks, homeSessions, searchQuery, statusFilter]);
   const sharedRows = shouldReplaceListWithSearchResults(searchQuery, indexedSearch.status) ? [] : sharedGroup.rows;
+  const contentFilters = useMemo<HomeContentFilters>(() => ({
+    lastActivity: lastActivityFilter,
+    projects: projectFilter,
+    vendor: vendorFilter,
+  }), [lastActivityFilter, projectFilter, vendorFilter]);
+  const contentFilterCount = activeContentFilterCount(contentFilters);
+  const filteredHome = useMemo(
+    () => applyHomeContentFilters(sharedGroup.home, contentFilters, Date.now()),
+    [contentFilters, sharedGroup.home],
+  );
   const homeSections = useMemo(
-    () => buildHomeSections(sharedGroup.home, groupByProject, pinnedCollapsed, {
+    () => buildHomeSections(filteredHome, groupByProject, pinnedCollapsed, {
       dialogueTitle: t('devices.list.menu.dialogueFolder'),
       groupDialogue,
       manualProjectOrder: displayedManualProjectOrder,
@@ -1893,7 +1925,7 @@ function HomeScreenContent({ active = true, onModeChange, width, newSessionInSys
       projectOrder: displayedProjectOrder,
       sortBy,
     }),
-    [displayedManualProjectOrder, displayedProjectOrder, groupByProject, groupDialogue, sharedGroup.home, pinnedCollapsed, sortPriorityContext, sortBy, t],
+    [displayedManualProjectOrder, displayedProjectOrder, filteredHome, groupByProject, groupDialogue, pinnedCollapsed, sortPriorityContext, sortBy, t],
   );
   const sections = useMemo(() => {
     if (!shouldReplaceListWithSearchResults(searchQuery, indexedSearch.status)) return homeSections;
@@ -2038,7 +2070,8 @@ function HomeScreenContent({ active = true, onModeChange, width, newSessionInSys
     sessionCount: countHomeSuggestionSessions(home,
       shouldReplaceListWithSearchResults(searchQuery, indexedSearch.status) ? indexedSearch.results : undefined),
     totalSessionCount: home.overview.all,
-    hasSearchOrFilter: !!searchQuery.trim() || indexedSearch.activeFilterCount > 0 || statusFilter !== 'active',
+    hasSearchOrFilter: !!searchQuery.trim() || indexedSearch.activeFilterCount > 0 || statusFilter !== 'active'
+      || contentFilterCount > 0,
     // Cached/offline lists and in-flight searches must not look ready to start work.
     ready: status === 'online' && !activeConnectionIssue && !initialHomeLoading && !initialHomeError && !connectionError
       && indexedSearch.status !== 'searching' && !newSessionDisabled
@@ -2178,14 +2211,7 @@ function HomeScreenContent({ active = true, onModeChange, width, newSessionInSys
     runDisclosure(() => setDialogueShowAll(true));
   }, [runDisclosure]);
 
-  const applyDisplayView = useCallback((patch: {
-    groupByProject?: boolean;
-    groupDialogue?: boolean;
-    sortBy?: HomeListSortBy;
-    statusFilter?: HomeStatusFilter;
-    projectOrder?: HomeProjectOrder;
-    manualProjectOrder?: string[];
-  }) => {
+  const applyDisplayView = useCallback((patch: HomeDisplayPatch & { manualProjectOrder?: string[] }) => {
     const expectedAccountGeneration = accountGeneration;
     viewPrefsTouchedRef.current = true;
     let nextPatch = patch;
@@ -2207,6 +2233,11 @@ function HomeScreenContent({ active = true, onModeChange, width, newSessionInSys
     if (nextPatch.groupDialogue !== undefined) setGroupDialogue(nextPatch.groupDialogue);
     if (nextPatch.sortBy !== undefined) setSortBy(nextPatch.sortBy);
     if (nextPatch.statusFilter !== undefined) setStatusFilter(nextPatch.statusFilter);
+    if (nextPatch.projectFilter !== undefined) setProjectFilter(nextPatch.projectFilter);
+    if (nextPatch.vendorFilter !== undefined) setVendorFilter(nextPatch.vendorFilter);
+    if (nextPatch.lastActivityFilter !== undefined) setLastActivityFilter(nextPatch.lastActivityFilter);
+    if (nextPatch.viewMode !== undefined) setViewMode(nextPatch.viewMode);
+    if (nextPatch.taskInfoFields !== undefined) setTaskInfoFields(nextPatch.taskInfoFields);
     if (selectedDeviceId && nextPatch.projectOrder) {
       if (!isHostProjectOrderReachable(hostProjectOrders.get(selectedDeviceId))) {
         if (nextPatch.projectOrder !== undefined) setProjectOrder(nextPatch.projectOrder);
@@ -2611,29 +2642,47 @@ function HomeScreenContent({ active = true, onModeChange, width, newSessionInSys
     const item = home.deviceFilters.find((filter) => filter.id === parsed.filterId);
     if (item) selectHomeScope(item);
   }, [guardedPush, home.deviceFilters, remoteHomeCollections, selectHomeScope]);
+  const displayMenuState = useMemo<HomeDisplayMenuState>(() => ({
+    groupByProject,
+    groupDialogue,
+    lastActivityFilter,
+    projectFilter,
+    projectOrder: displayedProjectOrder,
+    sortBy,
+    statusFilter,
+    taskInfoFields,
+    vendorFilter,
+    viewMode,
+  }), [displayedProjectOrder, groupByProject, groupDialogue, lastActivityFilter, projectFilter, sortBy, statusFilter, taskInfoFields, vendorFilter, viewMode]);
   const homeDisplayPullDownActions = useMemo(
     () => buildHomeDisplayPullDownActions({
-      groupByProject,
-      groupByProjectLabel: t('devices.list.menu.groupByProject'),
-      groupDialogue,
-      groupDialogueLabel: t('devices.list.menu.groupDialogue'),
-      groupHeading: t('devices.list.menu.groupHeading'),
-      projectOrder: displayedProjectOrder,
-      projectOrderActivityLabel: t('devices.list.menu.projectOrderActivity'),
-      projectOrderCustomLabel: t('devices.list.menu.projectOrderManual'),
-      projectOrderHeading: t('devices.list.menu.projectOrderHeading'),
-      showProjectOrder: true,
-      sortBy,
-      sortByPriorityLabel: t('devices.list.menu.sortByPriority'),
-      sortByTimeLabel: t('devices.list.menu.sortByTime'),
-      sortHeading: t('devices.list.menu.sortHeading'),
-      statusActiveLabel: t('devices.list.menu.statusActive'),
-      statusAllLabel: t('devices.list.menu.statusAll'),
-      statusArchivedLabel: t('devices.list.menu.statusArchived'),
-      statusFilter,
-      statusHeading: t('devices.list.menu.statusHeading'),
+      dialogueCount: home.chats.length,
+      // 候选用未筛选的完整项目集;看所有电脑时用设备名区分同名项目。
+      projects: home.projects.map((project) => ({
+        count: project.sessionCount,
+        key: project.key,
+        subtitle: selectedDeviceId ? undefined : project.deviceName || undefined,
+        title: project.title,
+      })),
+      state: displayMenuState,
+      t,
     }),
-    [displayedProjectOrder, groupByProject, groupDialogue, sortBy, statusFilter, t],
+    [displayMenuState, home.chats.length, home.projects, selectedDeviceId, t],
+  );
+  const handleDisplayAction = useCallback((id: string) => {
+    const patch = homeDisplayActionPatch(id, displayMenuState);
+    if (patch) applyDisplayView(patch);
+  }, [applyDisplayView, displayMenuState]);
+  // iOS 系统顶栏的菜单项是顶栏选项的一部分,任何变化都会重建顶栏并关掉展开中的菜单。
+  // 菜单内容按结构比较、回调走 ref 保持同一引用:后台同步刷新任务列表时,菜单没实质变化
+  // 就不重建顶栏;只有用户自己的勾选会更新它。
+  const stableDisplayActions = useStableValue(homeDisplayPullDownActions, pullDownActionsEqual);
+  const handleDisplayActionRef = useRef(handleDisplayAction);
+  handleDisplayActionRef.current = handleDisplayAction;
+  const stableDisplayAction = useCallback((id: string) => handleDisplayActionRef.current(id), []);
+  const rowDisplay = useMemo<HomeRowDisplay>(
+    () => ({ taskInfoFields, viewMode }),
+    [taskInfoFields, viewMode],
   );
   const openSelectedRemoteDesktop = useCallback(() => {
     if (!selectedDeviceId) return;
@@ -2652,6 +2701,7 @@ function HomeScreenContent({ active = true, onModeChange, width, newSessionInSys
     ? nativeHeaderHeight + (headerHeight ?? 0)
     : (headerHeight ?? edgePadding.paddingTop + HOME_HEADER_MIN_HEIGHT);
   const homeListNode = (
+    <HomeRowDisplayContext.Provider value={rowDisplay}>
     <HomeListViewportContext.Provider value={childViewport}>
     <ListDisclosureScope controller={disclosure.controller}>
       <SectionList
@@ -2768,7 +2818,7 @@ function HomeScreenContent({ active = true, onModeChange, width, newSessionInSys
           if (section.key !== 'pinned' || !section.title) return null;
           return (
             <Pressable
-              accessibilityLabel={t('devices.list.a11y.pinnedConversations', { count: sharedGroup.home.pinned.length })}
+              accessibilityLabel={t('devices.list.a11y.pinnedConversations', { count: filteredHome.pinned.length })}
               accessibilityRole="button"
               accessibilityState={{ expanded: !pinnedCollapsed }}
               onPress={togglePinned}
@@ -2783,7 +2833,7 @@ function HomeScreenContent({ active = true, onModeChange, width, newSessionInSys
               )}
               <Pin color={colors.textSecondary} size={iconSize.action} strokeWidth={iconStroke.thin} />
               <Text style={styles.projectTitle} numberOfLines={1}>{section.title}</Text>
-              <Text style={styles.projectCount} numberOfLines={1}>{sharedGroup.home.pinned.length}</Text>
+              <Text style={styles.projectCount} numberOfLines={1}>{filteredHome.pinned.length}</Text>
             </Pressable>
           );
         }}
@@ -2802,7 +2852,7 @@ function HomeScreenContent({ active = true, onModeChange, width, newSessionInSys
                 padding: windowLayout.emptyPadding,
               }}
             />
-          ) : home.pinned.length > 0 ? (
+          ) : filteredHome.pinned.length > 0 ? (
             // 仅剩置顶且被收起时 item 数为 0,但用户并非"无对话",不显示空状态插画。
             null
           ) : showRemoteGuide && home.emptyNoDevice ? (
@@ -2822,6 +2872,19 @@ function HomeScreenContent({ active = true, onModeChange, width, newSessionInSys
               }}
               testID="home.remoteAccessGuide"
               title={emptyStateTitle}
+            />
+          ) : contentFilterCount > 0 && !initialHomeError ? (
+            // 显示菜单里的筛选把任务全部筛掉了:说清是筛选导致,而不是「还没有任务」。
+            <MainWindowEmptyState
+              centered
+              copy={t('devices.list.menu.filterEmptyCopy')}
+              style={{
+                marginTop: spacing.xxl,
+                minHeight: windowLayout.emptyMinHeight,
+                padding: windowLayout.emptyPadding,
+              }}
+              testID="home.filterEmpty"
+              title={t('devices.presentation.sessionList.context.noResults')}
             />
           ) : taskSuggestionsMode === 'empty' ? (
             <RemoteTaskSuggestions mode="empty" onNewSession={() => openSuggestedSession()}
@@ -2848,6 +2911,7 @@ function HomeScreenContent({ active = true, onModeChange, width, newSessionInSys
       />
     </ListDisclosureScope>
     </HomeListViewportContext.Provider>
+    </HomeRowDisplayContext.Provider>
   );
   const homeListOverlays = (<>
 
@@ -2886,16 +2950,10 @@ function HomeScreenContent({ active = true, onModeChange, width, newSessionInSys
           keepMenuTopLeft={keepMenuTopLeft}
           syncing={quietSyncing}
           displayA11y={t('devices.list.a11y.openDisplaySettings')}
-          displayActions={homeDisplayPullDownActions}
+          displayActions={stableDisplayActions}
           menuA11y={t('devices.list.a11y.openMenu')}
-          onDisplayAction={(id) => {
-            applyDisplayView(homeDisplayMenuPatch(id as HomeDisplayMenuKey, {
-              groupByProject,
-              groupDialogue,
-            }));
-          }}
+          onDisplayAction={stableDisplayAction}
           onOpenDeviceMenu={openDeviceMenu}
-          onOpenDisplaySettings={openDisplaySettings}
           onOpenMenu={openChromeMenu}
           onOpenRemoteDesktop={selectedDeviceId ? openSelectedRemoteDesktop : undefined}
           remoteDesktopA11y={t('remoteDesktop.title')}
@@ -2976,14 +3034,12 @@ function HomeScreenContent({ active = true, onModeChange, width, newSessionInSys
                 <Monitor color={colors.textPrimary} size={iconSize.action} strokeWidth={iconStroke.regular} />
               </HomeHeaderGlassButton>
             ) : null}
-            <NativePullDownMenu
-              actions={homeDisplayPullDownActions}
-              onAction={(id) => applyDisplayView(homeDisplayMenuPatch(id as HomeDisplayMenuKey, { groupByProject, groupDialogue }))}
-            >
-              <HomeHeaderGlassButton accessibilityLabel={t('devices.list.a11y.openDisplaySettings')} onPress={nativeHomeMenus ? () => undefined : openDisplaySettings} testID="home.displaySettingsButton">
+            {/* 系统菜单不可用(未编进 MenuView 的旧 iOS 包)时退回同一份菜单模型的 Cindy 自绘菜单。 */}
+            <HomeDisplayMenu actions={homeDisplayPullDownActions} onAction={handleDisplayAction}>
+              <HomeHeaderGlassButton accessibilityLabel={t('devices.list.a11y.openDisplaySettings')} onPress={() => undefined} testID="home.displaySettingsButton">
                 <Ellipsis color={colors.textPrimary} size={iconSize.action} strokeWidth={iconStroke.regular} />
               </HomeHeaderGlassButton>
-            </NativePullDownMenu>
+            </HomeDisplayMenu>
           </View>
         )}
         </View>
@@ -3185,17 +3241,6 @@ function HomeScreenContent({ active = true, onModeChange, width, newSessionInSys
         topOffset={chromeHeight}
         visible={searchFilterOpen}
       />}</MountOnFirstOpen>
-      <MountOnFirstOpen open={displaySettingsOpen}>{() => <HomeDisplaySettingsModal
-        groupByProject={groupByProject}
-        groupDialogue={groupDialogue}
-        onChangeView={applyDisplayView}
-        onClose={() => setDisplaySettingsOpen(false)}
-        projectOrder={displayedProjectOrder}
-        sortBy={sortBy}
-        statusFilter={statusFilter}
-        topOffset={chromeHeight}
-        visible={displaySettingsOpen}
-      />}</MountOnFirstOpen>
       <MountOnFirstOpen open={actionSheetSession !== null}>{() => <SessionOptionsPresenter
         session={actionSheetSession}
         onAction={handleSessionSheetAction}
@@ -3314,132 +3359,6 @@ function DeviceMenuModal({
                 testID={item.deviceId ? `home.deviceChip.${sanitizeDeviceChipTestId(item.deviceId)}` : undefined}
               />
             ))}
-          </ScrollView>
-        </HomeGlassMenuPanel>
-    </HomeMenuScrim>
-  );
-}
-
-function HomeDisplaySettingsModal({
-  groupByProject,
-  groupDialogue,
-  onChangeView,
-  onClose,
-  projectOrder,
-  showProjectOrder = true,
-  sortBy,
-  statusFilter,
-  topOffset,
-  visible,
-}: {
-  groupByProject: boolean;
-  groupDialogue: boolean;
-  onChangeView(patch: {
-    groupByProject?: boolean;
-    groupDialogue?: boolean;
-    sortBy?: HomeListSortBy;
-    statusFilter?: HomeStatusFilter;
-    projectOrder?: HomeProjectOrder;
-    manualProjectOrder?: string[];
-  }): void;
-  onClose(): void;
-  projectOrder: HomeProjectOrder;
-  showProjectOrder?: boolean;
-  sortBy: HomeListSortBy;
-  statusFilter: HomeStatusFilter;
-  topOffset: number;
-  visible: boolean;
-}) {
-  const styles = useThemedStyles(makeStyles);
-  const { t } = useTranslation();
-  const { height: screenHeight } = useWindowDimensions();
-  const insets = useSafeAreaInsets();
-  const scrollMaxHeight = Math.max(200, screenHeight - topOffset - insets.bottom - 24);
-  const menuFadeTiming = useHomeMenuFadeTiming();
-  const { mounted, progress, onShowStartIn } = useModalFadeLifecycle(visible, {
-    ...menuFadeTiming,
-  });
-  return (
-    <HomeMenuScrim
-      backdropTestID="home.displaySettings.backdrop"
-      onClose={onClose}
-      onShow={onShowStartIn}
-      progress={progress}
-      topOffset={topOffset}
-      visible={mounted}
-    >
-        <HomeGlassMenuPanel style={styles.deviceMenuPanelEnd} testID="home.displaySettings">
-          <ScrollView style={[styles.deviceMenuScroll, { maxHeight: scrollMaxHeight }]} showsVerticalScrollIndicator>
-            <Text style={styles.deviceMenuSectionLabel}>{t('devices.list.menu.groupHeading')}</Text>
-            <DeviceMenuItem
-              checked={groupByProject}
-              label={t('devices.list.menu.groupByProject')}
-              onPress={() => onChangeView({ groupByProject: !groupByProject })}
-              selected={false}
-              testID="home.deviceMenu.groupByProject"
-            />
-            <DeviceMenuItem
-              checked={groupDialogue}
-              label={t('devices.list.menu.groupDialogue')}
-              onPress={() => onChangeView({ groupDialogue: !groupDialogue })}
-              selected={false}
-              testID="home.deviceMenu.groupDialogue"
-            />
-            <View style={styles.deviceMenuDivider} />
-            <Text style={styles.deviceMenuSectionLabel}>{t('devices.list.menu.sortHeading')}</Text>
-            <DeviceMenuItem
-              label={t('devices.list.menu.sortByTime')}
-              onPress={() => onChangeView({ sortBy: 'recency' })}
-              selected={sortBy === 'recency'}
-              testID="home.deviceMenu.sort.recency"
-            />
-            <DeviceMenuItem
-              label={t('devices.list.menu.sortByPriority')}
-              onPress={() => onChangeView({ sortBy: 'priority' })}
-              selected={sortBy === 'priority'}
-              testID="home.deviceMenu.sort.priority"
-            />
-            {groupByProject && showProjectOrder ? (
-              <>
-                <View style={styles.deviceMenuDivider} />
-                <Text style={styles.deviceMenuSectionLabel}>{t('devices.list.menu.projectOrderHeading')}</Text>
-                <DeviceMenuItem
-                  label={t('devices.list.menu.projectOrderActivity')}
-                  onPress={() => onChangeView({ projectOrder: 'activity' })}
-                  selected={projectOrder === 'activity'}
-                  testID="home.deviceMenu.projectOrder.activity"
-                />
-                <DeviceMenuItem
-                  label={t('devices.list.menu.projectOrderManual')}
-                  onPress={() => onChangeView({ projectOrder: 'custom' })}
-                  selected={projectOrder === 'custom'}
-                  testID="home.deviceMenu.projectOrder.custom"
-                />
-                {projectOrder === 'custom' ? (
-                  <Text style={styles.deviceMenuHint}>{t('devices.list.menu.projectOrderManualTip')}</Text>
-                ) : null}
-              </>
-            ) : null}
-            <View style={styles.deviceMenuDivider} />
-            <Text style={styles.deviceMenuSectionLabel}>{t('devices.list.menu.statusHeading')}</Text>
-            <DeviceMenuItem
-              label={t('devices.list.menu.statusActive')}
-              onPress={() => onChangeView({ statusFilter: 'active' })}
-              selected={statusFilter === 'active'}
-              testID="home.deviceMenu.status.active"
-            />
-            <DeviceMenuItem
-              label={t('devices.list.menu.statusArchived')}
-              onPress={() => onChangeView({ statusFilter: 'archived' })}
-              selected={statusFilter === 'archived'}
-              testID="home.deviceMenu.status.archived"
-            />
-            <DeviceMenuItem
-              label={t('devices.list.menu.statusAll')}
-              onPress={() => onChangeView({ statusFilter: 'all' })}
-              selected={statusFilter === 'all'}
-              testID="home.deviceMenu.status.all"
-            />
           </ScrollView>
         </HomeGlassMenuPanel>
     </HomeMenuScrim>
@@ -3730,14 +3649,15 @@ function ProjectRow({
           : null,
   ].filter(Boolean).join(', ');
   const projectHeaderHeight = useSharedValue(HOME_PROJECT_HEADER_HEIGHT);
+  const textMode = useHomeRowDisplay().viewMode === 'text';
   const projectRef = useAnimatedRef<View>();
   const prepareDisclosure = useDisclosurePrepare();
   const [windowAnchor, setWindowAnchor] = useState(-1);
   const projectLayoutRevision = useSharedValue(0);
   const estimatedChildHeights = useMemo(() => {
     const expandedKeys = new Set(expandedAutomationGroups);
-    return visibleSessions.map((item) => estimateHomeProjectChildHeight(item, expandedKeys));
-  }, [expandedAutomationGroups, homeStatusVersion, visibleSessions]);
+    return visibleSessions.map((item) => estimateHomeProjectChildHeight(item, expandedKeys, textMode));
+  }, [expandedAutomationGroups, homeStatusVersion, textMode, visibleSessions]);
   const estimatedChildOffsets = useMemo(
     () => buildHomeProjectChildOffsets(estimatedChildHeights),
     [estimatedChildHeights],
@@ -4227,6 +4147,8 @@ function HomeSessionRowInner({
   // 才在 Timer 固定槽位叠 Pause 角标；任一 active 绑定仍保留普通 Timer。
   const scheduleStopped = item.scheduleInfo?.allSchedulesStopped === true;
   const showPinned = !!item.session.pinnedAt;
+  // 显示形态(显示菜单「文字 / 列表」):文字形态不画预览行,定时 / 置顶标记并到标题行尾。
+  const textMode = useHomeRowDisplay().viewMode === 'text';
   // 自动化组行:同一任务的多次运行折叠而成(共享层 groupAutomationListItems 产出)。
   // 没接展开回调的调用点退化为普通行为(点击打开 primary 会话)。
   // 块模式:组行 + 展开的子行整体包在一个上下全宽线的块里;组行自身不再画缩进分割线
@@ -4245,7 +4167,7 @@ function HomeSessionRowInner({
       );
   // 零消息会话没有摘要。此时不要保留双行列表的空白第二行；定时任务与置顶
   // 标记仍占用右下状态槽，因此继续使用双行布局。共享身份位于标题左侧。
-  const showPreviewLine = !!group || !!preview?.trim() || showSchedule || showPinned;
+  const showPreviewLine = !textMode && (!!group || !!preview?.trim() || showSchedule || showPinned);
   // 组行点击语义对齐桌面版侧边栏:收起且有需关注内容(未读运行 / 待处理)时,点行直接打开
   // 该看的那条会话(共享层 primary:运行中 > 有未读 > 最新);想展开点行首箭头(独立热区)。
   // 无需关注内容或已展开时,点行仍是展开 / 收起。
@@ -4380,8 +4302,22 @@ function HomeSessionRowInner({
                 {sourceLabel}
               </Text>
             ) : null}
+            {textMode && (showSchedule || showPinned) ? (
+              <View style={styles.sessionInlineIcons}>
+                {showSchedule ? (
+                  <AutomationTimerIcon
+                    paused={scheduleStopped}
+                    size={iconSize.md}
+                    testID={`home.sessionAutomationTimer.${item.session.id}`}
+                  />
+                ) : null}
+                {showPinned ? <Pin color={colors.textTertiary} size={iconSize.md} strokeWidth={iconStroke.thin} /> : null}
+              </View>
+            ) : null}
             {rightStatus === 'time' ? (
-              <SessionRelativeTime lastActivityAt={item.lastActivityAt} style={styles.sessionTime} />
+              // 任务信息(显示菜单勾选):时间 / PR / worktree / Token / 费用,按勾选顺序。
+              // 状态点 / spinner 优先占这一格,与桌面信息槽让位规则一致。
+              <HomeSessionInfoMeta item={item} textStyle={styles.sessionTime} />
             ) : (
               // 统一 18×18 定位槽(对齐桌面 size-4 槽的做法):点(10)与 spinner(15)
               // 尺寸不同,裸放会导致两者横/纵中心不一致,先居中到同一槽再谈对齐。
@@ -4522,7 +4458,8 @@ function AutomationGroupChildren({
   const layoutRevision = useSharedValue(0);
   const headerHeight = useSharedValue(0);
   const [windowAnchor, setWindowAnchor] = useState(-1);
-  const childOffsets = buildHomeProjectChildOffsets(visibleItems.map(estimateHomeSessionRowHeight));
+  const textMode = useHomeRowDisplay().viewMode === 'text';
+  const childOffsets = buildHomeProjectChildOffsets(visibleItems.map((child) => estimateHomeSessionRowHeight(child, textMode)));
   const windowingEnabled = shouldWindowHomeProjectChildren({
     collapsed: false, itemCount: visibleItems.length,
     scrollTrackingAvailable: viewport !== null, threshold: PROJECT_CHILD_WINDOW_THRESHOLD,
@@ -4616,18 +4553,28 @@ function AutomationGroupPreviewText({ item, sessionCount, style, testID }: {
 
 // 状态提醒点已移到行右侧(替代时间位,与桌面一致),行首图标只保留 vendor 标识 +
 // running 呼吸 + 草稿铅笔,不再叠角标点。
+
+function pullDownActionsEqual(a: readonly NativePullDownAction[], b: readonly NativePullDownAction[]): boolean {
+  return a === b || JSON.stringify(a) === JSON.stringify(b);
+}
+
 /**
- * 行右侧相对时间标签(「刚刚 / N 分钟前」)的独家保鲜叶子:行主体 memo 化后不再逐
- * emit 重渲染,时间标签失去偶然保鲜会无限期冻结(review P1);而把分钟订阅挂在行
- * 本体又等于每分钟重画全列表重型子树(review 复核 P1)。下沉到只渲染一个 Text 的
- * 叶子组件独家订阅 useMinuteNow:每分钟只重渲染 ~百个纯 Text,行主体纹丝不动。
+ * 显示菜单触发器:系统菜单可用时走 UIMenu / 安卓下拉;未编进 MenuView 的旧 iOS 包退回
+ * 同一份菜单模型的 Cindy 自绘菜单,两条路径的选项与层级完全一致。
  */
-function SessionRelativeTime({ lastActivityAt, style }: { lastActivityAt: string; style: StyleProp<TextStyle> }) {
-  useMinuteNow();
-  return (
-    <Text style={style} numberOfLines={1}>
-      {formatRemoteSessionSidebarTime(lastActivityAt)}
-    </Text>
+function HomeDisplayMenu({
+  actions,
+  children,
+  onAction,
+}: {
+  actions: readonly NativePullDownAction[];
+  children: ReactNode;
+  onAction(id: string): void;
+}) {
+  return usesNativePullDownMenu() ? (
+    <NativePullDownMenu actions={actions} onAction={onAction}>{children}</NativePullDownMenu>
+  ) : (
+    <AnchoredPullDownMenu actions={actions} onAction={onAction}>{children}</AnchoredPullDownMenu>
   );
 }
 
@@ -4801,9 +4748,6 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   deviceMenuPanelCenter: {
     alignSelf: 'center',
   },
-  deviceMenuPanelEnd: {
-    alignSelf: 'flex-end',
-  },
   connectionRow: {
     alignSelf: 'flex-start',
     maxWidth: '100%',
@@ -4877,28 +4821,6 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     fontWeight: fontWeight.medium,
     lineHeight: lineHeight.body,
     minWidth: 0,
-  },
-  deviceMenuSectionLabel: {
-    color: colors.textTertiary,
-    fontSize: typeScale.footnote,
-    fontWeight: fontWeight.semibold,
-    lineHeight: lineHeight.caption,
-    paddingHorizontal: spacing.md,
-    paddingTop: spacing.sm,
-  },
-  deviceMenuHint: {
-    color: colors.textTertiary,
-    fontSize: typeScale.footnote,
-    fontWeight: fontWeight.regular,
-    lineHeight: lineHeight.caption,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-  },
-  deviceMenuDivider: {
-    backgroundColor: colors.border,
-    height: StyleSheet.hairlineWidth,
-    marginHorizontal: spacing.sm,
-    marginVertical: spacing.sm,
   },
   revokedTipBackdrop: {
     alignItems: 'center',

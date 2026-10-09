@@ -342,13 +342,7 @@
       "switchConfirm": "继续切换"
     },
     "menu": {
-      "groupByProject": "按项目分组",
-      "groupDialogue": "对话归为一组",
-      "sortByTime": "按时间排序",
-      "sortByPriority": "优先级",
-      "statusActive": "活跃",
-      "statusArchived": "已归档",
-      "statusAll": "全部",
+      "groupDialogue": "对话",
       "dialogueFolder": "对话",
       "search": "搜索",
       "settings": "设置",
@@ -356,14 +350,66 @@
       "displaySettings": "显示设置",
       "groupHeading": "分组",
       "sortHeading": "任务排序",
-      "projectOrderHeading": "项目顺序",
-      "projectOrderActivity": "按最近活动",
-      "projectOrderManual": "手动",
+      "projectOrderHeading": "项目排序",
       "projectOrderManualTip": "长按项目行拖动调整顺序，组内任务仍按上面的排序",
-      "statusHeading": "状态",
+      "statusHeading": "任务状态",
       "showDeviceTasks": "查看任务",
       "openDevice": "打开",
-      "renameDevice": "重命名"
+      "renameDevice": "重命名",
+      "groupProject": "项目",
+      "sortBy": {
+        "priority": "优先级",
+        "recency": "最近活动",
+        "created": "创建时间"
+      },
+      "sortByPriorityTip": "等你处理的排在最前，然后是未读、运行中，其余按时间",
+      "projectOrder": {
+        "activity": "跟随任务",
+        "custom": "手动"
+      },
+      "status": {
+        "active": "活跃",
+        "archived": "已归档",
+        "all": "全部"
+      },
+      "filterHeading": "筛选",
+      "filterSummaryActive": "{{count}} 项生效",
+      "filterReset": "重置筛选",
+      "filterAll": "全部",
+      "filterProjectsHeading": "项目",
+      "filterAllProjects": "所有项目",
+      "filterSelectedProjects": "已选 {{count}} 个",
+      "filterVendorHeading": "Harness",
+      "filterVendor": {
+        "all": "全部",
+        "cc": "Claude Code",
+        "codex": "Codex",
+        "pi": "Pi"
+      },
+      "filterLastActivityHeading": "最近活跃",
+      "filterLastActivity": {
+        "1d": "1 天",
+        "3d": "3 天",
+        "7d": "7 天",
+        "30d": "30 天",
+        "all": "全部"
+      },
+      "displayHeading": "显示",
+      "view": {
+        "text": "文字",
+        "list": "列表"
+      },
+      "taskInfoHeading": "任务信息",
+      "taskInfo": {
+        "time": "时间",
+        "pr": "PR 状态",
+        "worktree": "worktree",
+        "tokens": "Token",
+        "cost": "费用"
+      },
+      "summaryNone": "无",
+      "summarySeparator": "、",
+      "filterEmptyCopy": "可在显示设置的「筛选」中调整或重置。"
     },
     "search": {
       "placeholder": "搜索标题或内容…",

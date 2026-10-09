@@ -263,6 +263,10 @@ function sortSessionItems(
   if (options.sortBy === 'priority') {
     return items.slice().sort((a, b) => compareSessionItemsByPriority(a, b, ctx));
   }
+  if (options.sortBy === 'created') {
+    return items.slice().sort((a, b) =>
+      sessionCreatedMs(b) - sessionCreatedMs(a) || compareSessionListStrings(a.session.id, b.session.id));
+  }
   return items.slice().sort((a, b) =>
     compareSessionListStrings(b.lastActivityAt, a.lastActivityAt) || compareSessionListStrings(a.session.id, b.session.id));
 }
@@ -293,7 +297,25 @@ function sortHomeRowsByTaskSort(rows: HomeRow[], options: HomeSectionOptions): H
       || homeRowPriorityRecencyMs(b, ctx) - homeRowPriorityRecencyMs(a, ctx)
       || compareSessionListStrings(a.key, b.key));
   }
+  if (options.sortBy === 'created') {
+    return rows.slice().sort((a, b) =>
+      homeRowCreatedMs(b) - homeRowCreatedMs(a) || compareSessionListStrings(a.key, b.key));
+  }
   return rows.slice().sort(compareHomeRowsByActivityDesc);
+}
+
+/** 创建时间排序:目录行取组内最新创建的任务,与桌面 sortProjectsForSidebar 同口径。 */
+function homeRowCreatedMs(row: HomeRow): number {
+  let max = 0;
+  for (const item of homeRowSessionItems(row)) {
+    const ms = sessionCreatedMs(item);
+    if (ms > max) max = ms;
+  }
+  return max;
+}
+
+function sessionCreatedMs(item: RemoteSessionListItem): number {
+  return activityMsFromIso(item.session.createdAt);
 }
 
 function compareSessionItemsByPriority(

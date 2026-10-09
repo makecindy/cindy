@@ -230,7 +230,7 @@ describe('mobile home desktop-first surface', () => {
     expect(source).toContain('</HomeChromeFrost>');
     expect(source).toContain('<HomeNativeStackHeader');
     expect(source).toContain('onProjectDragStart={displayedProjectOrder === \'custom\'');
-    expect(source).toContain('projectOrder={displayedProjectOrder}');
+    expect(source).toContain('projectOrder: displayedProjectOrder,');
     expect(source).toContain('resolveDisplayedProjectOrder(');
     expect(source).not.toContain('projectOrder={selectedDeviceId ? hostProjectOrder : projectOrder}');
     expect(source).toContain('<HomeGlassMenuPanel');
@@ -276,13 +276,11 @@ describe('mobile home desktop-first surface', () => {
     expect(rootLayout).toContain('name="settings"');
     expect(rootLayout).toContain("animation: 'slide_from_left'");
     expect(source).toContain("label={t('devices.list.allConversations')}");
-    expect(source).toContain("label={t('devices.list.menu.groupByProject')}");
-    expect(source).toContain("label={t('devices.list.menu.groupDialogue')}");
+    // 显示菜单只有一份菜单模型(homeChromeMenus),原生下拉 / 自绘兜底都消费它,不再有平行的自绘面板。
+    expect(source).toContain('homeDisplayActionPatch(id, displayMenuState)');
+    expect(source).not.toContain('HomeDisplaySettingsModal');
     expect(source).not.toContain('testID="home.deviceMenu.remoteSettings"');
     expect(source).not.toContain('onOpenRemoteSettings');
-    expect(source).toContain('testID="home.deviceMenu.sort.priority"');
-    expect(source).toContain('testID="home.deviceMenu.projectOrder.custom"');
-    expect(source).toContain('testID="home.deviceMenu.status.archived"');
     // 注:首页分区构造逻辑(buildMixedHomeRows / buildGroupedHomeRows / buildHomeSections)
     // 已抽到 @/session/homeSections,并由 homeSections.test.ts 做行为测试,这里不再做源码字符串断言。
     expect(source).toContain('styles.sessionListRow');
@@ -415,7 +413,7 @@ describe('mobile home desktop-first surface', () => {
     expect((homeSource.match(/useRemoteHomeStatusVersion\(\)/g) ?? []).length).toBeGreaterThanOrEqual(3);
     expect(homeSource).toContain('useRemoteSessionMessagePreview(item.session.id)');
     expect(homeSource).toContain('useRemoteMessageVersion(normalizedSearchQuery.length > 0)');
-    expect(homeSource).toContain('useMinuteNow();');
+    expect(readSource('src/session/HomeSessionInfoMeta.tsx')).toContain('useMinuteNow();');
     expect(homeSource).toContain('<RadioTower');
     expect(homeSource).toContain('<UsersRound');
     expect(homeSource).not.toContain('<Puzzle');
@@ -588,14 +586,17 @@ describe('mobile home desktop-first surface', () => {
     expect(sessionRowSource).toContain('buildRemoteSessionCardPreview(');
     expect(sessionRowSource).toContain('useRemoteSessionMessagePreview(item.session.id)');
     expect(sessionRowSource).toContain('testID={`home.sessionRowPreview.${item.session.id}`}');
-    expect(sessionRowSource).toContain('const showPreviewLine = !!group || !!preview?.trim() || showSchedule || showPinned;');
+    expect(sessionRowSource).toContain('const showPreviewLine = !textMode && (!!group || !!preview?.trim() || showSchedule || showPinned);');
     expect(sessionRowSource).toContain('!showPreviewLine && styles.sessionListRowSingleLine');
     expect(sessionRowSource).toContain('!showPreviewLine && styles.sessionIconCellSingleLine');
     expect(sessionRowSource).toContain('{showPreviewLine ? (');
     expect(sessionRowSource).not.toContain('numberOfLines={2}');
     // 相对时间下沉到独家订阅分钟心跳的叶子组件(行主体 memo 化后由它单独保鲜,风暴修复)
-    expect(sessionRowSource).toContain('<SessionRelativeTime lastActivityAt={item.lastActivityAt}');
-    expect(source).toContain('formatRemoteSessionSidebarTime(lastActivityAt)');
+    // 时间槽改由「任务信息」渲染,时间仍是其中独家订阅分钟心跳的叶子组件。
+    expect(sessionRowSource).toContain('<HomeSessionInfoMeta item={item} textStyle={styles.sessionTime} />');
+    const infoMeta = readSource('src/session/HomeSessionInfoMeta.tsx');
+    expect(infoMeta).toContain('<SessionRelativeTime lastActivityAt={item.lastActivityAt}');
+    expect(infoMeta).toContain('formatRemoteSessionSidebarTime(lastActivityAt)');
     expect(sessionRowSource).toContain('item.pendingInteractionCount');
     expect(sessionRowSource).toContain('item.scheduleInfo?.unreadCount');
     expect(sessionRowSource).toContain('item.session.pinnedAt');
