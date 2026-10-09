@@ -328,13 +328,16 @@ sessionRunningRetry 就停。每次因 replacement 关闭而重新入队都计�
   时复用现有 continuation claim 保留产品边界，避免提前完成或重复完成；未回答不建 claim。
   Pi 在原生 RPC 排队后再核对执行代次与取消信号，防止答案串到
   下一次执行。Claude 的本机 hook 与远端 root-only guard 禁止原生子代理直接提问；工具
-  不提供通用 call_tool 别名，避免绕过该判据。SSH、手机沿用既有 MCP／交互传输通道。
+  入口只接受宿主标明 `mcpCallerKind=root` 且 `mcpCallerAttested=true` 的请求，身份未知、
+  缺失或未证实均拒绝；不提供通用 call_tool 别名，避免绕过该判据。
+  SSH、手机沿用既有 MCP／交互传输通道。
   回归见 `session.async-user-questions.test.ts`、MCP `asyncUserQuestionTool.test.ts`；
   两种真实 harness 配本地假模型的投递与稳定前缀实测见
   `agents/shared/async-user-questions.native.test.ts`。
   同步与异步问题共用卡片时，同步问题优先：已有同步问题等待时不再显示异步卡片，
   同步问题后到时收起未回答的异步卡片，避免遮住阻塞执行的问题。Codex 的同步工具结果
-  与异步 steer 分开去重，不能共用一次答案的投递。答案被接收后，卡片不再属于待回答
+  仅在同步协议别名间按内容去重；异步只按 item id 去重事件，不共用 pending／submitted
+  答案缓存，同轮同文案的新 item 也必须重新询问。答案被接收后，卡片不再属于待回答
   集合；即使投递尚未完成时遇到结束／Stop／替换，也只能取消投递，不能把已回答卡片
   再标成过期。交错回归见上述 Session 与 Codex 测试。
   原生与共享异步请求均携带 `InteractionRequest.delivery=async`；Session 不把它们计入

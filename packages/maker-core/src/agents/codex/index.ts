@@ -9571,8 +9571,10 @@ assertRouteCurrent();
           if (live.delivery === 'async') dismissLiveAskUser(live.requestId, 'superseded');
         }
       }
-      // A native tool result and an async steer are different delivery owners.
-      const fingerprint = turnId ? JSON.stringify([delivery ?? 'sync', userInputQuestionsFingerprint(questions)]) : null;
+      // Async items already deduplicate lifecycle notifications by item id.
+      // Only synchronous protocol aliases may share pending/submitted answers
+      // by content: distinct async items must always own their own decisions.
+      const fingerprint = turnId && delivery !== 'async' ? userInputQuestionsFingerprint(questions) : null;
       const submittedForTurn = turnId ? submittedUserInputByTurn.get(turnId) : undefined;
       const replay = fingerprint ? submittedForTurn?.get(fingerprint) : undefined;
       if (replay) {

@@ -19901,6 +19901,40 @@ describe('CodexAgent MCP thread context hooks', () => {
     return { host, handle, handlers, params, decision, resolver, events };
   }
 
+  it.each(['pending', 'answered', 'dismissed'] as const)('keeps distinct identical async questions independent when the first is %s', async (state) => {
+    const s = await runningAsyncQuestion();
+    const second = deferred<InteractionDecision>();
+    const steerCalls = () => s.host.request.mock.calls.filter(([method]) => method === Method.TurnSteer);
+    try {
+      if (state !== 'pending') {
+        s.decision.resolve({ kind: 'ask_user_question', answers: state === 'answered' ? { 'Proceed?': 'Yes' } : {},
+          ...(state === 'dismissed' ? { dismissed: true } : {}) });
+        if (state === 'answered') await vi.waitFor(() => expect(steerCalls()).toHaveLength(1));
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+      s.resolver.mockImplementationOnce(async () => second.promise);
+      const next = { ...s.params, item: { ...asyncQuestionItem, id: 'async-question-2' } };
+      s.handlers.itemCompleted?.(next);
+      s.handlers.itemCompleted?.(next);
+      s.handlers.itemCompleted?.(s.params);
+      expect(s.resolver).toHaveBeenCalledTimes(2);
+      expect(s.resolver.mock.calls[1][0].requestId).not.toBe(s.resolver.mock.calls[0][0].requestId);
+      expect(steerCalls()).toHaveLength(state === 'answered' ? 1 : 0);
+      second.resolve({ kind: 'ask_user_question', answers: { 'Proceed?': 'No' } });
+      await vi.waitFor(() => expect(steerCalls()).toHaveLength(state === 'answered' ? 2 : 1));
+      expect(steerCalls().at(-1)?.[1]).toMatchObject({ input: [{ text: expect.stringContaining('A: No') }] });
+      s.handlers.turnCompleted?.({ threadId: s.params.threadId,
+        turn: { id: s.params.turnId, status: 'completed' } });
+      await vi.waitFor(() => expect(s.handle.isTurnRunning?.()).toBe(false));
+      // A still-pending first item expires independently; its late answer cannot
+      // reuse the second item's delivery or restart the finished execution.
+      s.decision.resolve({ kind: 'ask_user_question', answers: { 'Proceed?': 'Yes' } });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(steerCalls()).toHaveLength(state === 'answered' ? 2 : 1);
+      expect(askUserTurnStartCalls(s.host)).toHaveLength(1);
+    } finally { await s.handle.close(); }
+  });
+
   it.each(['completed', 'failed', 'stop'] as const)('does not expire an answered async card when %s occurs inside steer dispatch', async (outcome) => {
     let terminate!: () => void;
     const s = await runningAsyncQuestion(async () => { terminate(); return {}; });

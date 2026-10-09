@@ -38,7 +38,7 @@ export function registerAsyncQuestionTool(
       if (!context.sessionId || !context.sessionInstanceId) {
         return errorPayload('NO_SESSION_CONTEXT', 'No current task instance for this question.');
       }
-      if (context.mcpCallerKind === 'descendant') {
+      if (context.mcpCallerKind !== 'root' || context.mcpCallerAttested !== true) {
         return errorPayload('ROOT_REQUIRED', 'Ask the parent agent to relay the question.');
       }
       try {

@@ -8,7 +8,7 @@ describe.each(['claude-code', 'pi'] as const)('%s async question MCP', (agentKin
   it('discovers and calls the same tool with request-time identity and a pending-only receipt', async () => {
     let context: LiziMcpSessionContext | undefined = {
       agentKind, workingDir: '/repo', sessionId: 'task-1', sessionInstanceId: 'instance-1',
-      mcpCallerKind: 'root', remoteHostId: 'ssh-host',
+      mcpCallerKind: 'root', mcpCallerAttested: true, remoteHostId: 'ssh-host',
     };
     const ask = vi.fn(() => 'question-1');
     const server = createXdtHelperMcpServer({ askUserQuestionAsync: ask }, {
@@ -33,9 +33,18 @@ describe.each(['claude-code', 'pi'] as const)('%s async question MCP', (agentKin
       context = undefined;
       expect(parse(await call({ questions })).errorCode).toBe('NO_SESSION_CONTEXT');
       expect(ask).toHaveBeenCalledTimes(2);
-      context = { agentKind, workingDir: '/repo', sessionId: 'child', sessionInstanceId: 'instance', mcpCallerKind: 'descendant' };
-      expect(parse(await call({ questions })).errorCode).toBe('ROOT_REQUIRED');
-      context.mcpCallerKind = 'root';
+      for (const [mcpCallerKind, mcpCallerAttested] of [
+        ['descendant', true], ['unknown', true], [undefined, true],
+        ['root', false], ['root', undefined], [undefined, undefined],
+      ] as const) {
+        context = { agentKind, workingDir: '/repo', sessionId: 'task-2', sessionInstanceId: 'instance-2',
+          mcpCallerKind, mcpCallerAttested };
+        expect(parse(await call({ questions })).errorCode).toBe('ROOT_REQUIRED');
+        expect(ask).toHaveBeenCalledTimes(2);
+      }
+      // Tool arguments cannot supply the missing host provenance.
+      expect((await call({ questions, mcpCallerKind: 'root', mcpCallerAttested: true })).isError).toBe(true);
+      context = { ...context!, mcpCallerKind: 'root', mcpCallerAttested: true };
       expect((await call({ questions: [...questions, ...questions] })).isError).toBe(true);
       expect((await call({ questions, sessionId: 'spoofed' })).isError).toBe(true);
       expect(ask).toHaveBeenCalledTimes(2);
