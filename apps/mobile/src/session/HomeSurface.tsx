@@ -506,9 +506,8 @@ function HomeScreenContent({ active = true, onModeChange, width, newSessionInSys
   const homeListFreshnessRef = useRef(createHomeListFreshness());
   // 最近一次离开首页的时刻；null = 当前在首页（或尚未离开过）。
   const homeBlurredAtRef = useRef<number | null>(null);
-  // 待完成的整轮重拉（含设备清单）：首页被盖住期间 App 退过后台／relay 重连过，或回首页
-  // 已决定整轮重拉。值是请求序号，只有在它之后开始的 loadHome 整轮成功提交才清除；失败或
-  // 被跳过时保留，下次回首页仍整轮重拉。
+  // 待完成的整轮重拉（含设备清单），由 startSilentHomeSync 统一登记。值是请求序号，只有在它
+  // 之后开始的 loadHome 整轮成功提交才清除；失败、失焦退出或被跳过时保留，下次回首页仍整轮重拉。
   const homeFullReloadOnFocusRef = useRef<number | null>(null);
   const homeFullReloadSeqRef = useRef(0);
   const requestHomeFullReload = useCallback(() => {
@@ -1430,19 +1429,19 @@ function HomeScreenContent({ active = true, onModeChange, width, newSessionInSys
   // syncInFlight 去重,冷启动时与上线瞬间的两次触发只会实际执行一次。
   // 首次触发同时等首页列表缓存种入完成(homeListCacheHydrated,AsyncStorage 读一个小 key,毫秒级):
   // 保证缓存先画、fresh 后覆盖的顺序确定,避免 loadHome 清理下线设备后缓存又把 stale shard 种回去。
+  // 所有整轮同步触发（首次、回前台、重连、需整轮的回首页、依赖变化）都经过这里：先登记整轮
+  // 重拉请求，再尝试执行。请求只由在它之后开始的 loadHome 整轮成功提交清除；失焦、缓存未就绪、
+  // 设备清单失败或中途失焦退出都会保留它，下次回首页仍整轮重拉。
   const startSilentHomeSync = useCallback(() => {
+    requestHomeFullReload();
     if (!screenFocusedRef.current) return;
     if (!deviceIdentityCacheReady || !homeListCacheHydrated || !homeViewPreferencesHydrated) return;
     void loadHome({ visible: false });
-  }, [deviceIdentityCacheReady, homeListCacheHydrated, homeViewPreferencesHydrated, loadHome]);
+  }, [deviceIdentityCacheReady, homeListCacheHydrated, homeViewPreferencesHydrated, loadHome, requestHomeFullReload]);
 
   useEffect(() => {
     if (!screenFocused) homeBlurredAtRef.current = Date.now();
   }, [screenFocused]);
-
-  useEffect(() => {
-    if (!screenFocusedRef.current) requestHomeFullReload();
-  }, [connectionEpoch, requestHomeFullReload]);
 
   // 从任务 / 设置等页面返回首页：离开期间订阅一直在、补丁一直在收，只补拉判定为可能漏了
   // 推送的设备。离开太久或尚未完成首轮同步时退回整轮 loadHome。
@@ -1493,25 +1492,20 @@ function HomeScreenContent({ active = true, onModeChange, width, newSessionInSys
         if (scheduleDirty.size > 0) refreshHomeScheduleIndexes(scheduleDirty);
         return;
       }
-      // Keep the full-reload request until a loadHome that started after it commits.
-      if (homeFullReloadOnFocusRef.current === null) requestHomeFullReload();
       refreshHomeScheduleIndexes();
       startSilentHomeSync();
-    }, [refillStaleHomeDevices, refreshHomeScheduleIndexes, requestHomeFullReload, startSilentHomeSync]),
+    }, [refillStaleHomeDevices, refreshHomeScheduleIndexes, startSilentHomeSync]),
   );
 
   useEffect(() => {
     startSilentHomeSync();
     const subscription = AppState.addEventListener('change', (nextState) => {
       // 退后台后连接会在宽限期后停掉，期间的推送无从补齐：回前台一律按需重拉。
-      if (nextState === 'background') {
-        homeListFreshnessRef.current.invalidateAll();
-        if (!screenFocusedRef.current) requestHomeFullReload();
-      }
+      if (nextState === 'background') homeListFreshnessRef.current.invalidateAll();
       if (nextState === 'active') startSilentHomeSync();
     });
     return () => subscription.remove();
-  }, [connectionEpoch, requestHomeFullReload, startSilentHomeSync]);
+  }, [connectionEpoch, startSilentHomeSync]);
 
   // 把当前权威设备列表注入 remoteSessionStore,让 store 给所有 useRemoteSessions 消费者(首页项目卡、
   // 设备详情页)统一算展示用 canonicalDeviceId:re-link 后残留的 stale shard 会话按设备名唯一匹配认领回

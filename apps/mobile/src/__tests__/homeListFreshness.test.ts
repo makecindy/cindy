@@ -199,29 +199,32 @@ describe('Home list sync wiring', () => {
     const focus = source.slice(source.indexOf('const refillStaleHomeDevices = useCallback('), source.indexOf('// 把当前权威设备列表注入 remoteSessionStore'));
     expect(focus).toContain('screenFocusedRef.current = true;');
     expect(focus).toContain('const plan = planHomeListFocusReturn({');
-    expect(focus).toMatch(/if \(plan\.kind === 'refill'\) \{\s*refillStaleHomeDevices\(plan\.deviceIds\);\s*if \(scheduleDirty\.size > 0\) refreshHomeScheduleIndexes\(scheduleDirty\);\s*return;\s*\}[\s\S]*?if \(homeFullReloadOnFocusRef\.current === null\) requestHomeFullReload\(\);\s*refreshHomeScheduleIndexes\(\);\s*startSilentHomeSync\(\);/);
-    expect(focus).toContain("if (nextState === 'background') {");
-    expect(focus).toContain('homeListFreshnessRef.current.invalidateAll();');
+    expect(focus).toMatch(/if \(plan\.kind === 'refill'\) \{\s*refillStaleHomeDevices\(plan\.deviceIds\);\s*if \(scheduleDirty\.size > 0\) refreshHomeScheduleIndexes\(scheduleDirty\);\s*return;\s*\}\s*refreshHomeScheduleIndexes\(\);\s*startSilentHomeSync\(\);/);
+    expect(focus).toContain("if (nextState === 'background') homeListFreshnessRef.current.invalidateAll();");
     expect(focus).toContain("if (nextState === 'active') startSilentHomeSync();");
-    expect(source).toMatch(/useEffect\(\(\) => \{\s*if \(!screenFocusedRef\.current\) requestHomeFullReload\(\);\s*\}, \[connectionEpoch, requestHomeFullReload\]\);/);
   });
 
-  it('keeps a full-reload request until a loadHome started after it commits', () => {
-    // A failed or skipped full sync (e.g. device list request fails) must not downgrade the next
-    // quick return to a device-row refill: newly bound / removed computers would stay wrong.
+  it('keeps a full-reload request from every full-sync trigger until a loadHome started after it commits', () => {
+    // Invariant: any trigger needing a full sync (mount, foreground, reconnect, a full focus return,
+    // dependency changes) leaves a request that only a later-started, committed loadHome clears.
+    // A sync that fails, is skipped while covered or exits because Home blurred mid-flight keeps it,
+    // so a quick return cannot downgrade to a device-row refill and miss bound/unbound computers.
+    const silent = source.slice(source.indexOf('const startSilentHomeSync = useCallback(() => {'), source.indexOf('}, [deviceIdentityCacheReady, homeListCacheHydrated'));
+    expect(silent.indexOf('requestHomeFullReload();')).toBeGreaterThan(-1);
+    expect(silent.indexOf('requestHomeFullReload();')).toBeLessThan(silent.indexOf('if (!screenFocusedRef.current) return;'));
+    // Single funnel: no other call site sets the request, nothing but a commit or account reset clears it.
+    expect(source.match(/requestHomeFullReload\(\);/g)).toHaveLength(1);
+    expect(source.match(/homeFullReloadOnFocusRef\.current = null/g)).toHaveLength(2);
     const focus = source.slice(source.indexOf('useFocusEffect(\n    useCallback(() => {\n      // The focus event'));
     const focusBody = focus.slice(0, focus.indexOf('}, [refillStaleHomeDevices'));
     expect(focusBody).toContain('const forceFull = homeFullReloadOnFocusRef.current !== null;');
-    expect(focusBody).not.toContain('homeFullReloadOnFocusRef.current = null');
-    expect(focusBody.indexOf('if (homeFullReloadOnFocusRef.current === null) requestHomeFullReload();'))
-      .toBeLessThan(focusBody.indexOf('startSilentHomeSync();'));
     const load = source.slice(source.indexOf('const loadHome = useCallback('), source.indexOf('loadHomeRef.current = loadHome;'));
     expect(load.indexOf('const fullReloadRequestAtStart = homeFullReloadOnFocusRef.current;'))
       .toBeLessThan(load.indexOf('const rawTask = (async () => {'));
+    // Blurring after the device-list read exits before the commit, leaving the request in place.
+    expect(load.indexOf('if (!screenFocusedRef.current) return;')).toBeLessThan(load.indexOf('lastSyncedAtRef.current = now;'));
     const commit = load.slice(load.indexOf('lastSyncedAtRef.current = now;'));
     expect(commit).toContain('if (homeFullReloadOnFocusRef.current === fullReloadRequestAtStart) homeFullReloadOnFocusRef.current = null;');
-    // The only other place that clears it is the account reset.
-    expect(source.match(/homeFullReloadOnFocusRef\.current = null/g)).toHaveLength(2);
   });
 
   it('refreshes automation badges on return only for devices that sent schedule events while away', () => {
