@@ -3,7 +3,7 @@
  *
  * 输入 `@` 在输入框上方弹出点名候选，第一项固定是「所有人」。发送时以正文重新解析点名
  * （与桌面同一套规则，见 @cindy/maker-shared/botGroupMentions），clientId 作为幂等键：同一段
- * 文字、同一个「分工」标签、同一批附件重发沿用同一个 clientId。一轮进行中输入框为空且没有
+ * 文字、同一批点名目标、同一个「分工」标签、同一批附件重发沿用同一个 clientId。一轮进行中输入框为空且没有
  * 附件时，发送按钮变成停止；否则照常发送（插话本身就会作废当前一轮）。
  *
  * 附件与一对一聊天同一套（照片、拍照、文件、iOS 最近照片、粘贴图片，见
@@ -192,14 +192,14 @@ export function BotGroupComposer({
         return;
       }
       const attachmentIds = attachments.map((attachment) => attachment.id);
-      // The tag and the attachments change what the host does, so they are part of the idempotency key.
-      const attempt = nextBotGroupSendAttempt(attemptRef.current, draftText, draftDivision, randomUUID, attachmentIds);
-      attemptRef.current = attempt;
       const mentions = resolveBotGroupMentions(draft, {
         members: members.map((member) => ({ botId: member.botId, name: member.name })),
         allLabels: [allLabel],
         tracked: draftTracked,
       });
+      // Targets, tag and attachments are part of the same send intent.
+      const attempt = nextBotGroupSendAttempt(attemptRef.current, draftText, draftDivision, randomUUID, attachmentIds, mentions);
+      attemptRef.current = attempt;
       release = tray.holdForSend(attachmentIds);
       await onSend({ text: attempt.text, mentions, clientId: attempt.clientId, division: attempt.division, attachments });
       attemptRef.current = null;

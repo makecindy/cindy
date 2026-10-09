@@ -165,12 +165,13 @@ export function BotGroupComposer({
   const pendingCaretRef = useRef<number | null>(null);
   const sendingRef = useRef(false);
   const stoppingRef = useRef(false);
-  /** Idempotency key for the text and attachments currently being (re)sent. */
+  /** Idempotency key for the text, targets and attachments currently being (re)sent. */
   const attemptRef = useRef<{
     text: string;
     clientId: string;
     division: boolean;
     attachments: string;
+    mentionSignature: string;
   } | null>(null);
 
   const activeMembers = useMemo(() => members.filter(isActiveBotGroupMember), [members]);
@@ -247,18 +248,20 @@ export function BotGroupComposer({
     const signature = botGroupAttachmentSignature(files);
     // The tag changes what main does with the text, so it is part of the idempotency key;
     // so are the attachments that go with it.
-    const attempt =
-      attemptRef.current?.text === trimmed &&
-      attemptRef.current.division === division &&
-      attemptRef.current.attachments === signature
-        ? attemptRef.current
-        : { text: trimmed, clientId: crypto.randomUUID(), division, attachments: signature };
-    attemptRef.current = attempt;
     const mentions = resolveBotGroupMentions(text, {
       members,
       allLabels: [allLabel],
       tracked,
     });
+    const mentionSignature = JSON.stringify([mentions.all, mentions.botIds]);
+    const attempt =
+      attemptRef.current?.text === trimmed &&
+      attemptRef.current.division === division &&
+      attemptRef.current.attachments === signature &&
+      attemptRef.current.mentionSignature === mentionSignature
+        ? attemptRef.current
+        : { text: trimmed, clientId: crypto.randomUUID(), division, attachments: signature, mentionSignature };
+    attemptRef.current = attempt;
     const draft = text;
     sendingRef.current = true;
     setSending(true);

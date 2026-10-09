@@ -484,11 +484,14 @@ describe('group composer', () => {
       expect(h.row.value).toBe('@Ann ');
     }
     expect(h.alert).toHaveBeenCalledWith('groupChat.errors.mentionUnavailable');
+    const originalClientId = h.chat.act.mock.calls[0][1].clientId;
+    expect(h.chat.act.mock.calls[1][1].clientId).toBe(originalClientId);
     await type('@');
     await click('botGroup.mention.abu');
     h.chat.act.mockResolvedValue({ effects: [] });
     await click('botGroup.composer.send');
     expect(h.chat.act).toHaveBeenLastCalledWith('send', expect.objectContaining({ mentions: { all: false, botIds: ['abu'] } }));
+    expect(h.chat.act.mock.calls.at(-1)[1].clientId).not.toBe(originalClientId);
     expect(h.row.value).toBe('');
   });
 

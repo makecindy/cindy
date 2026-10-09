@@ -582,6 +582,8 @@ describe('BotGroupChatView', () => {
       expect(mocks.sendBotGroupMessage.mock.calls.at(-1)![0].mentions).toEqual({ all: false, botIds: ['picked'] });
     }
     expect(mocks.toastError).toHaveBeenCalledWith('bots.groupChat.errors.mentionUnavailable');
+    const originalClientId = mocks.sendBotGroupMessage.mock.calls[0]![0].clientId;
+    expect(mocks.sendBotGroupMessage.mock.calls[1]![0].clientId).toBe(originalClientId);
     fireEvent.change(input, { target: { value: '@', selectionStart: 1 } });
     const remaining = await screen.findAllByRole('option');
     fireEvent.click(remaining[1]!);
@@ -589,6 +591,7 @@ describe('BotGroupChatView', () => {
     fireEvent.keyDown(input, { key: 'Enter' });
     await waitFor(() => expect(mocks.sendBotGroupMessage).toHaveBeenCalledTimes(3));
     expect(mocks.sendBotGroupMessage.mock.calls.at(-1)![0].mentions).toEqual({ all: false, botIds: ['other'] });
+    expect(mocks.sendBotGroupMessage.mock.calls.at(-1)![0].clientId).not.toBe(originalClientId);
   });
 
   it('drops a deleted selected mention before a namesake is manually mentioned again', async () => {
