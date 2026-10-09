@@ -18,10 +18,17 @@
  */
 import type { PluginMarketInstallationRecord } from '../plugin-market/ledger.js';
 import type { OrganizationPrefixLookup } from '../plugin-market/organizationPrefixStore.js';
+import { isTrustedPublicCindyResource } from './ghostFirstPartyPrivilege.js';
 import type {
   GhostFirstPartyFacts,
   GhostFirstPartyMarketRecord,
+  GhostFirstPartyTrustedSource,
 } from './ghostFirstPartyPrivilege.js';
+import {
+  parsePluginInstallRelId,
+  parsePluginStoragePart,
+  pluginInstanceInstallRelId,
+} from '../../shared/pluginIdentity.js';
 
 export type GhostFirstPartyFactsPurpose = 'install' | 'runtime';
 
@@ -38,6 +45,7 @@ export type GhostFirstPartyFactsUnavailableReason =
 export interface GhostFirstPartyFactsIdentity {
   membershipKind: 'personal' | 'org';
   orgId: string | null;
+  orgSlug?: string | null;
 }
 
 export type GhostFirstPartyFactsLoad =
@@ -66,6 +74,15 @@ export interface LoadGhostFirstPartyFactsLoaderOptions {
   lookupOrganizationPrefix(orgId: string): OrganizationPrefixLookup;
   /** 显式 ghost_forge_install 返回 agent-forge；其它入口返回 manual。 */
   readInstallOrigin(ghostId: string): 'manual' | 'agent-forge';
+  /**
+   * Trusted receipt namespace. `undefined` means no delivery field; explicit
+   * `null` is root. Do not invent the current org slug here.
+   */
+  readInstallNamespace?(ghostId: string): string | null | undefined;
+  isPendingLegacyForge?(ghostId: string): boolean;
+  isPendingLegacyNamespace?(installRelId: string): boolean;
+  readTrustedSource?(installRelId: string): GhostFirstPartyTrustedSource | null;
+  readLegacyFirstPartyEligible?(installRelId: string): boolean;
 }
 
 function actionFor(purpose: GhostFirstPartyFactsPurpose): GhostFirstPartyFactsUnavailableAction {
@@ -106,6 +123,14 @@ export function bindPendingMarketRecordToInspectedPackage(
 export type GhostFirstPartyFactsOverrides = {
   installOrigin?: 'manual' | 'agent-forge';
   marketRecord?: GhostFirstPartyMarketRecord | null;
+  /**
+   * Install-time delivery namespace. Runtime keeps parsing the storage part /
+   * install rel id; callers must not invent the current org slug at runtime.
+   * `undefined` means "parse from ghostId"; explicit `null` is root.
+   */
+  namespace?: string | null;
+  trustedSource?: GhostFirstPartyTrustedSource | null;
+  legacyFirstPartyEligible?: boolean;
 };
 
 export function loadGhostFirstPartyFactsLoader(
@@ -113,6 +138,22 @@ export function loadGhostFirstPartyFactsLoader(
 ): GhostFirstPartyFactsLoader {
   return {
     load(ghostId, purpose, identity, overrides) {
+      const parsed =
+        parsePluginStoragePart(ghostId) ?? parsePluginInstallRelId(ghostId);
+      const logicalGhostId = parsed?.ghostId ?? ghostId;
+      // Receipts / origin live under install rel id (`helper` or `_ns/acme/helper`).
+      // Runtime oauth may pass a storage part (`_ns__acme__helper`).
+      const installRelId = pluginInstanceInstallRelId(ghostId) ?? ghostId;
+      const recordedNamespace =
+        overrides?.namespace !== undefined
+          ? overrides.namespace
+          : options.readInstallNamespace?.(installRelId);
+      const namespace =
+        recordedNamespace !== undefined ? recordedNamespace : (parsed?.namespace ?? null);
+      const legacyPendingForge = purpose === 'runtime' && recordedNamespace === undefined &&
+        namespace === null && options.isPendingLegacyForge?.(installRelId) === true;
+      const legacyPendingNamespace = purpose === 'runtime' && recordedNamespace === undefined &&
+        namespace === null && options.isPendingLegacyNamespace?.(installRelId) === true;
       const unavailable = (
         reason: GhostFirstPartyFactsUnavailableReason,
       ): GhostFirstPartyFactsLoad => ({
@@ -121,6 +162,30 @@ export function loadGhostFirstPartyFactsLoader(
         purpose,
         action: actionFor(purpose),
       });
+
+      let trustedSource: GhostFirstPartyTrustedSource | null = null;
+      let legacyFirstPartyEligible = false;
+      let approvedPackageSha256: string | null = null;
+      try {
+        trustedSource = overrides?.trustedSource !== undefined
+          ? overrides.trustedSource
+          : purpose === 'runtime' ? options.readTrustedSource?.(installRelId) ?? null : null;
+        legacyFirstPartyEligible = overrides?.legacyFirstPartyEligible !== undefined
+          ? overrides.legacyFirstPartyEligible === true
+          : purpose === 'runtime' && options.readLegacyFirstPartyEligible?.(installRelId) === true;
+        approvedPackageSha256 = overrides?.marketRecord !== undefined
+          ? overrides.marketRecord?.approvedPackageSha256 ?? null
+          : options.readApprovedPackageSha256(installRelId);
+      } catch {
+        trustedSource = null;
+        legacyFirstPartyEligible = false;
+        approvedPackageSha256 = null;
+      }
+      const privilegeEvidence = {
+        ...(legacyPendingNamespace ? { legacyPendingNamespace: true } : {}),
+        ...(trustedSource ? { trustedSource, approvedPackageSha256 } : {}),
+        ...(legacyFirstPartyEligible ? { legacyFirstPartyEligible: true } : {}),
+      };
 
       let builtin: boolean;
       try {
@@ -134,7 +199,7 @@ export function loadGhostFirstPartyFactsLoader(
         installOrigin = overrides.installOrigin;
       } else {
         try {
-          installOrigin = options.readInstallOrigin(ghostId);
+          installOrigin = options.readInstallOrigin(installRelId);
         } catch {
           installOrigin = 'manual';
         }
@@ -147,12 +212,12 @@ export function loadGhostFirstPartyFactsLoader(
         try {
           const installation = options.readMarketInstallation(ghostId);
           marketRecord = installation
-            ? toMarketRecord(installation, options.readApprovedPackageSha256(ghostId))
+            ? toMarketRecord(installation, approvedPackageSha256)
             : null;
         } catch {
           // Builtin official plugins and explicit Forge self-tests do not depend
           // on the ledger. A corrupt cache must not take either qualification away.
-          if (!builtin && installOrigin !== 'agent-forge') {
+          if (!builtin && !trustedSource && !legacyFirstPartyEligible && installOrigin !== 'agent-forge') {
             return unavailable('market-installation-read-failed');
           }
           marketRecord = null;
@@ -163,11 +228,14 @@ export function loadGhostFirstPartyFactsLoader(
         return {
           kind: 'ready',
           facts: {
-            ghostId,
+            ghostId: logicalGhostId,
+            namespace,
             builtin,
             marketRecord,
             currentOrganization: null,
             installOrigin,
+            ...(legacyPendingForge ? { legacyPendingForge: true } : {}),
+            ...privilegeEvidence,
           },
         };
       }
@@ -187,16 +255,35 @@ export function loadGhostFirstPartyFactsLoader(
        * 哪天有人让优先级 1 开始读这两个字段，那条测试会红，
        * 提醒他这里的填充值会变成静默误报。
        */
-      const builtinOnlyFacts = (): GhostFirstPartyFactsLoad => ({
+      const builtinOnlyFacts = (): Extract<GhostFirstPartyFactsLoad, { kind: 'ready' }> => ({
         kind: 'ready',
-        facts: { ghostId, builtin, marketRecord, currentOrganization: null, installOrigin },
+        facts: { ghostId: logicalGhostId, namespace, builtin, marketRecord, currentOrganization: null, installOrigin, ...(legacyPendingForge ? { legacyPendingForge: true } : {}), ...privilegeEvidence },
       });
+
+      if (installOrigin === 'manual' && isTrustedPublicCindyResource(builtinOnlyFacts().facts)) {
+        return builtinOnlyFacts();
+      }
+
+      if (identity.orgSlug && (namespace === identity.orgSlug ||
+          (legacyPendingNamespace && installOrigin !== 'agent-forge')) ||
+          (namespace !== null && identity.orgSlug == null && installOrigin !== 'agent-forge' &&
+            marketRecord?.source === 'market' && marketRecord.scope === 'organization' &&
+            marketRecord.organizationId === identity.orgId)) {
+        return {
+          kind: 'ready',
+          facts: {
+            ghostId: logicalGhostId, namespace, builtin, marketRecord, installOrigin,
+            currentOrganization: { organizationId: identity.orgId, orgSlug: identity.orgSlug },
+            ...privilegeEvidence,
+          },
+        };
+      }
 
       let lookup: OrganizationPrefixLookup;
       try {
         lookup = options.lookupOrganizationPrefix(identity.orgId);
       } catch {
-        if (builtin) return builtinOnlyFacts();
+        if (builtin || trustedSource || legacyFirstPartyEligible) return builtinOnlyFacts();
         return unavailable('organization-prefix-unavailable');
       }
 
@@ -204,21 +291,25 @@ export function loadGhostFirstPartyFactsLoader(
         return {
           kind: 'ready',
           facts: {
-            ghostId,
+            ghostId: logicalGhostId,
+            namespace,
             builtin,
             marketRecord,
             currentOrganization: {
               organizationId: identity.orgId,
               pluginPrefix: lookup.pluginPrefix,
+              orgSlug: identity.orgSlug ?? null,
             },
             installOrigin,
+            ...(legacyPendingForge ? { legacyPendingForge: true } : {}),
+            ...privilegeEvidence,
           },
         };
       }
 
       // Prefix is required for non-builtin evaluation. Builtin still concludes
       // from `facts.builtin` and must not wait on a market-list cache fill.
-      if (builtin) return builtinOnlyFacts();
+      if (builtin || trustedSource || legacyFirstPartyEligible) return builtinOnlyFacts();
 
       return unavailable(
         lookup.kind === 'absent'

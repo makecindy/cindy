@@ -1,23 +1,27 @@
 /**
  * Host-owned Connection audience resolution. Explicit Forge installs for the
  * current organization and intact organization-market installs are the two
- * dynamic bases. A named local-install exception exists only for ghostId
- * `mivo-canvas`: organization members may resolve after the org gate when the
- * installed manifest's exact oidc-token host is only `mivo-canvas.dsworks.cn`.
- * An intact organization market record, including installed:false, still takes
- * the digest path and must not skip via this exception. A present but invalid
- * market ledger is a hard failure, not an absent record. The Host derives the
- * audience from current identity + plugin id.
+ * dynamic bases. A temporary local-install exception exists only for root
+ * ghostId `mivo-canvas`: organization members may resolve after the org gate
+ * when the installed manifest's exact oidc-token host is only
+ * `mivo-canvas.dsworks.cn` and the instance namespace is null or not yet
+ * recorded. Organization installs such as `_ns/xd/mivo-canvas` are excluded.
+ * Delete it after the XD enterprise-market build and the one-time data
+ * migration ship. An intact organization market record, including
+ * installed:false, still takes the digest path and must not skip via this
+ * exception. A present but invalid market ledger is a hard failure, not an
+ * absent record. The Host derives the audience from current identity + plugin id.
  */
 import { isValidGhostId, isValidGhostNetworkHostPattern } from '../../shared/ghost.js';
 import type { GhostManifest } from '../../shared/ghost.js';
+import { hasDeliveryNamespace, parsePluginInstanceId } from '../../shared/pluginIdentity.js';
 import type { PluginMarketInstallationRecord } from '../plugin-market/ledger.js';
+import { matchesPendingLegacyForge } from './ghostFirstPartyPrivilege.js';
 import {
   verifyInstalledMarketManifest,
   type InstalledMarketManifestIdentity,
 } from '../plugin-market/installedManifestIdentity.js';
 import { PLUGIN_MEMBER_PUBLISHER_GHOST_ID } from '../plugin-publisher/types.js';
-import { PLUGIN_PREFIX_PATTERN } from '@cindy/plugin-protocol';
 
 export interface ConnectionAudienceIdentity {
   membershipId: string;
@@ -42,9 +46,13 @@ export interface ConnectionAudienceResolver {
 
 const ORG_SLUG_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
 const PLUGIN_SLUG_RE = /^[a-z][a-z0-9-]{0,31}$/;
-/** Named local-install Connection exception. Must stay an exact id, not a prefix. */
+/**
+ * Temporary root-only exception for the locally imported mivo-canvas.
+ * Delete it after the XD enterprise-market build ships and the follow-up
+ * one-time Library/KV migration is released.
+ */
 const LOCAL_OIDC_ALLOWLIST_GHOST_ID = 'mivo-canvas';
-/** Local exception may inject the org JWT only to this exact BFF host. */
+/** Local exception may inject the org JWT only to this exact host. */
 const LOCAL_OIDC_ALLOWLIST_HOST = 'mivo-canvas.dsworks.cn';
 
 /**
@@ -94,6 +102,11 @@ export interface LoadConnectionAudienceResolverOptions {
   ): PluginMarketInstallationRecord | MarketInstallationLookup | null;
   readApprovedPackageSha256?(ghostId: string): string | null;
   readInstallOrigin?(ghostId: string): 'manual' | 'agent-forge';
+  /** Trusted receipt namespace. undefined means no delivery field. */
+  readInstallNamespace?(ghostId: string): string | null | undefined;
+  /** Upgrade-census root install still running under the pre-namespace rules. */
+  isPendingLegacyNamespace?(ghostId: string): boolean;
+  isPendingLegacyForge?(ghostId: string): boolean;
   lookupOrganizationPrefix?(
     orgId: string,
   ): { kind: 'known'; pluginPrefix: string | null } | { kind: 'absent' } | { kind: 'unavailable' };
@@ -108,17 +121,19 @@ export function loadConnectionAudienceResolver(
 ): ConnectionAudienceResolver {
   return {
     resolve(ghostId, identity) {
+      const pluginSlug = parsePluginInstanceId(ghostId)?.ghostId ?? ghostId;
       const reject = (reason: string): null => {
         options.log?.warn('ghost Connection audience resolution rejected', {
           ghostId,
+          pluginSlug,
           reason,
         });
         return null;
       };
-      if (!isValidGhostId(ghostId) || !PLUGIN_SLUG_RE.test(ghostId)) {
+      if (!isValidGhostId(pluginSlug) || !PLUGIN_SLUG_RE.test(pluginSlug)) {
         return reject('plugin-id-invalid');
       }
-      if (isReservedConnectionPluginSlug(ghostId)) {
+      if (isReservedConnectionPluginSlug(pluginSlug)) {
         return reject('plugin-id-reserved');
       }
       if (identity.membershipKind !== 'org') return reject('membership-not-org');
@@ -131,16 +146,17 @@ export function loadConnectionAudienceResolver(
       const finish = (manifest: GhostManifest): ConnectionAudienceResolution | null => {
         const allowedHosts = declaredOidcTokenHosts(manifest);
         if (allowedHosts.length === 0) return reject('oidc-host-declaration-missing');
-        const audience = `${identity.orgSlug}:${ghostId}`;
+        const audience = `${identity.orgSlug}:${pluginSlug}`;
         if (audience.length > 64) return reject('audience-too-long');
         options.log?.info('ghost Connection audience resolved', {
           ghostId,
+          pluginSlug,
           allowedHostCount: allowedHosts.length,
         });
         return {
           membershipId: identity.membershipId,
           audience,
-          pluginSlug: ghostId,
+          pluginSlug,
           allowedHosts,
         };
       };
@@ -154,23 +170,50 @@ export function loadConnectionAudienceResolver(
       };
 
       // 显式 ghost_forge_install 的企业作者自测分支，同时兼容升级前已有的
-      // agent-forge receipt。个人身份、未知前缀与缺失批准包哈希均 fail closed。
+      // agent-forge receipt。资格绑定当前组织身份，不再要求旧认领前缀。
       const forgeOrigin = options.readInstallOrigin?.(ghostId);
       if (forgeOrigin === 'agent-forge') {
-        const prefixLookup = options.lookupOrganizationPrefix?.(identity.orgId);
-        const prefix =
-          prefixLookup && prefixLookup.kind === 'known' ? prefixLookup.pluginPrefix : null;
-        if (prefix && PLUGIN_PREFIX_PATTERN.test(prefix) && ghostId.startsWith(`${prefix}-`)) {
+        const parsedNamespace = parsePluginInstanceId(ghostId)?.namespace ?? null;
+        const recordedNamespace = options.readInstallNamespace?.(ghostId);
+        const namespace = recordedNamespace !== undefined ? recordedNamespace : parsedNamespace;
+        let pendingLegacyForCurrentOrg = false;
+        if (recordedNamespace === undefined && parsedNamespace === null) {
+          try {
+            const prefix = options.lookupOrganizationPrefix?.(identity.orgId);
+            pendingLegacyForCurrentOrg = prefix?.kind === 'known' && matchesPendingLegacyForge(
+              pluginSlug,
+              namespace,
+              options.isPendingLegacyForge?.(ghostId) === true,
+              prefix.pluginPrefix,
+            );
+          } catch {
+            pendingLegacyForCurrentOrg = false;
+          }
+        }
+        if (identity.orgSlug && (namespace === identity.orgSlug || pendingLegacyForCurrentOrg)) {
           const approvedSha = options.readApprovedPackageSha256?.(ghostId) ?? null;
           if (!approvedSha || !/^[a-f0-9]{64}$/.test(approvedSha)) {
             return reject('forge-package-sha-missing');
           }
           const identitySnapshot = readManifestIdentity();
           if (!identitySnapshot) return reject('plugin-not-installed');
-          if (identitySnapshot.manifest.id !== ghostId) return reject('plugin-id-mismatch');
+          if (identitySnapshot.manifest.id !== pluginSlug) return reject('plugin-id-mismatch');
           return finish(identitySnapshot.manifest);
         }
       }
+
+      const temporaryRootMivoCanvas = (): boolean => {
+        if (pluginSlug !== LOCAL_OIDC_ALLOWLIST_GHOST_ID) return false;
+        const parsed = parsePluginInstanceId(ghostId);
+        if (!parsed || parsed.namespace !== null) return false;
+        let recordedNamespace: string | null | undefined;
+        try {
+          recordedNamespace = options.readInstallNamespace?.(ghostId);
+        } catch {
+          return false;
+        }
+        return recordedNamespace === undefined || recordedNamespace === null;
+      };
 
       let installation: PluginMarketInstallationRecord | null = null;
       try {
@@ -190,12 +233,11 @@ export function loadConnectionAudienceResolver(
         return reject('market-installation-read-failed');
       }
       if (!installation) {
-        // Named exception after the org gate and before market-missing reject.
-        // Any persisted market row, including installed:false, still takes digest.
-        if (ghostId === LOCAL_OIDC_ALLOWLIST_GHOST_ID) {
+        // Temporary root-only exception. Any persisted market row still takes digest.
+        if (temporaryRootMivoCanvas()) {
           const allowlisted = readManifestIdentity();
           if (!allowlisted) return reject('plugin-not-installed');
-          if (allowlisted.manifest.id !== ghostId) return reject('plugin-id-mismatch');
+          if (allowlisted.manifest.id !== pluginSlug) return reject('plugin-id-mismatch');
           const allowlistedHosts = declaredOidcTokenHosts(allowlisted.manifest);
           if (
             allowlistedHosts.length !== 1 ||
@@ -215,6 +257,27 @@ export function loadConnectionAudienceResolver(
       if (installation.organizationId !== identity.orgId) {
         return reject('market-installation-org-mismatch');
       }
+      if (hasDeliveryNamespace(installation)) {
+        let installedNamespace: string | null | undefined;
+        try {
+          installedNamespace = options.readInstallNamespace?.(ghostId);
+        } catch {
+          return reject('installed-namespace-unavailable');
+        }
+        // A running pre-namespace install stays pending until it can stop.
+        // Do not require a receipt namespace that has not been committed yet.
+        // The catalog namespace must still be the current org.
+        const pendingLegacyRoot =
+          installedNamespace === undefined &&
+          options.isPendingLegacyNamespace?.(ghostId) === true;
+        if (
+          (!pendingLegacyRoot && installedNamespace !== installation.namespace) ||
+          (installation.namespace !== null && identity.orgSlug != null &&
+            installation.namespace !== identity.orgSlug)
+        ) {
+          return reject('market-installation-namespace-mismatch');
+        }
+      }
       if (!installation.rawManifestSha256 && !installation.manifestDigest) {
         return reject('market-manifest-identity-missing');
       }
@@ -226,7 +289,7 @@ export function loadConnectionAudienceResolver(
         return reject('installed-manifest-read-failed');
       }
       if (!identitySnapshot) return reject('plugin-not-installed');
-      if (identitySnapshot.manifest.id !== ghostId) return reject('plugin-id-mismatch');
+      if (identitySnapshot.manifest.id !== pluginSlug) return reject('plugin-id-mismatch');
       if (!verifyInstalledMarketManifest(installation, identitySnapshot)) {
         return reject('installed-manifest-identity-mismatch');
       }

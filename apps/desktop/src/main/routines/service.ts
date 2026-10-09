@@ -5,6 +5,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { app, BrowserWindow, ipcMain } from 'electron';
 import {
   RoutineEngine,
+  rewriteRoutinePluginSource,
   type Routine,
   type RoutineRun,
   type RoutineInput,
@@ -453,4 +454,19 @@ export function disconnectRoutineSource(pluginId: string): void {
   if (current?.scope === activeOwnerScopeKey() && !isAppSessionBoundaryPending()) {
     current.engine.removeSource(`plugin:${pluginId}`);
   }
+}
+
+/** Follow an archived plugin so the replacement does not inherit its event routines. */
+export async function relocateRoutinePluginSource(fromPart: string, toPart: string): Promise<void> {
+  if (fromPart === toPart) return;
+  const scope = activeOwnerScopeKey();
+  if (current?.scope === scope && !isAppSessionBoundaryPending()) {
+    await current.engine.relocatePluginSource(fromPart, toPart);
+    return;
+  }
+  const store = new RoutineFileStore(ownerScopedUserDataPath());
+  const state = await store.load();
+  if (!state) return;
+  const next = rewriteRoutinePluginSource(state, fromPart, toPart);
+  if (next !== state) await store.save(next);
 }

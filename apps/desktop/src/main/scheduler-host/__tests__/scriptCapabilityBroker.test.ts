@@ -9,6 +9,7 @@ import { GhostCardService } from '../../cindy-brain/cardService.js';
 import { GhostFsSlot } from '../../cindy-brain/fsSlot.js';
 import { GhostPipeDispatcher } from '../../cindy-brain/pipeDispatcher.js';
 import type { GhostPipeToolCall, InstalledGhost } from '../../../shared/ghost.js';
+import { installedGhostStoragePart, resolveInstalledGhost } from '../../../shared/pluginIdentity.js';
 import { SchedulerScriptCapabilityBroker } from '../script-capability-broker';
 
 const sendToSessionMock = vi.hoisted(() => vi.fn());
@@ -27,8 +28,12 @@ const callGhostToolMock = vi.hoisted(() =>
 // cardService 账本:缺省 void spy(生命周期断言用);端到端用例转发到真实实例。
 const registerCallMock = vi.hoisted(() => vi.fn());
 const finalizeCallMock = vi.hoisted(() => vi.fn());
+const findAvailableGhostMock = vi.hoisted(() => vi.fn());
+const findTrustedXdGhostMock = vi.hoisted(() => vi.fn());
 
 vi.mock('../../cindy-brain/index.js', () => ({
+  findAvailableGhostForAuthorization: findAvailableGhostMock,
+  findTrustedXdGhostForScript: findTrustedXdGhostMock,
   getGhostPipeDispatcher: () => ({ callGhostTool: callGhostToolMock }),
   getGhostCardService: () => ({ registerCall: registerCallMock, finalizeCall: finalizeCallMock }),
 }));
@@ -77,6 +82,93 @@ describe('SchedulerScriptCapabilityBroker', () => {
     callGhostToolMock.mockImplementation(async (request: unknown) => ({ ok: true, result: request }));
     registerCallMock.mockReset();
     finalizeCallMock.mockReset();
+    mockAvailableGhosts(['xd-atlassian', 'xd-feishu'].map((id) => ({
+      ...makeInstalledGhost(id), namespaceMigration: 'pending',
+    })), ['xd-atlassian', 'xd-feishu']);
+  });
+
+  it.each([
+    ['xd-atlassian', 'jira.get', { issue_key: 'DING-1' }, 'jira.read'],
+    ['xd-feishu', 'feishu.recent_chats', {}, 'feishu.read'],
+  ] as const)('binds %s to XD instead of a same-name root', async (id, method, params, capability) => {
+    const enterprise = { ...makeInstalledGhost(id), namespace: 'xd', dir: '/fake/ghosts/_ns/xd/' + id };
+    mockAvailableGhosts([{ ...makeInstalledGhost(id), namespace: null }, enterprise]);
+    await new SchedulerScriptCapabilityBroker().call(
+      { method, params }, new Set([capability]), { schedule: schedule() },
+    );
+    expect(callGhostToolMock).toHaveBeenCalledWith(expect.objectContaining({ ghostId: installedGhostStoragePart(enterprise) }));
+    expect(registerCallMock).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ ghostId: installedGhostStoragePart(enterprise) }));
+    expect(findTrustedXdGhostMock).toHaveBeenCalledWith(id);
+    expect(findAvailableGhostMock).not.toHaveBeenCalled();
+  });
+
+  it.each(['xd-atlassian', 'xd-feishu'])('rejects a confirmed root impersonating %s before registration', async (id) => {
+    mockAvailableGhosts([{ ...makeInstalledGhost(id), namespace: null }]);
+    await expect(new SchedulerScriptCapabilityBroker().call(
+      id === 'xd-atlassian'
+        ? { method: 'jira.get', params: { issue_key: 'DING-1' } }
+        : { method: 'feishu.recent_chats', params: {} },
+      new Set(['jira.read', 'feishu.read']), { schedule: schedule() },
+    )).rejects.toMatchObject({ code: 'GHOST_NOT_FOUND' });
+    expect(registerCallMock).not.toHaveBeenCalled();
+    expect(callGhostToolMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { namespace: 'other-org' },
+    {},
+    { namespace: null, namespaceMigration: 'pending' as const },
+  ])('rejects an unverified or foreign install: %j', async (identity) => {
+    mockAvailableGhosts([{ ...makeInstalledGhost('xd-atlassian'), ...identity }]);
+    await expect(new SchedulerScriptCapabilityBroker().call(
+      { method: 'jira.get', params: { issue_key: 'DING-1' } },
+      new Set(['jira.read']), { schedule: schedule() },
+    )).rejects.toMatchObject({ code: 'GHOST_NOT_FOUND' });
+    expect(registerCallMock).not.toHaveBeenCalled();
+    expect(callGhostToolMock).not.toHaveBeenCalled();
+  });
+
+  it('preserves an approved pre-namespace XD install captured as pending', async () => {
+    mockAvailableGhosts([{ ...makeInstalledGhost('xd-atlassian'), namespaceMigration: 'pending' }], ['xd-atlassian']);
+    await new SchedulerScriptCapabilityBroker().call(
+      { method: 'jira.get', params: { issue_key: 'DING-1' } },
+      new Set(['jira.read']), { schedule: schedule() },
+    );
+    expect(callGhostToolMock).toHaveBeenCalledWith(expect.objectContaining({ ghostId: 'xd-atlassian' }));
+  });
+
+  it.each(['xd-atlassian', 'xd-feishu'])('does not authorize an approved pending ordinary root %s', async (id) => {
+    mockAvailableGhosts([{ ...makeInstalledGhost(id), namespaceMigration: 'pending' }]);
+    await expect(new SchedulerScriptCapabilityBroker().call(
+      id === 'xd-atlassian'
+        ? { method: 'jira.get', params: { issue_key: 'DING-1' } }
+        : { method: 'feishu.recent_chats', params: {} },
+      new Set(['jira.read', 'feishu.read']), { schedule: schedule() },
+    )).rejects.toMatchObject({ code: 'GHOST_NOT_FOUND' });
+    expect(registerCallMock).not.toHaveBeenCalled();
+    expect(callGhostToolMock).not.toHaveBeenCalled();
+  });
+
+  it.each(['legacy-unapproved', 'invalid'] as const)('rejects a pending install with %s approval', async (state) => {
+    mockAvailableGhosts([{
+      ...makeInstalledGhost('xd-atlassian'), namespaceMigration: 'pending', approval: { state },
+    }]);
+    await expect(new SchedulerScriptCapabilityBroker().call(
+      { method: 'jira.get', params: { issue_key: 'DING-1' } },
+      new Set(['jira.read']), { schedule: schedule() },
+    )).rejects.toMatchObject({ code: 'GHOST_NOT_FOUND' });
+    expect(registerCallMock).not.toHaveBeenCalled();
+    expect(callGhostToolMock).not.toHaveBeenCalled();
+  });
+
+  it('checks the resolved manifest rather than trusting a mismatched lookup result', async () => {
+    findTrustedXdGhostMock.mockReturnValue({ ...makeInstalledGhost('other-plugin'), namespace: 'xd' });
+    await expect(new SchedulerScriptCapabilityBroker().call(
+      { method: 'jira.get', params: { issue_key: 'DING-1' } },
+      new Set(['jira.read']), { schedule: schedule() },
+    )).rejects.toMatchObject({ code: 'GHOST_NOT_FOUND' });
+    expect(registerCallMock).not.toHaveBeenCalled();
+    expect(callGhostToolMock).not.toHaveBeenCalled();
   });
 
   it('maps Jira reads to the current xd-atlassian argument contract', async () => {
@@ -652,8 +744,7 @@ describe('SchedulerScriptCapabilityBroker', () => {
       const { fsSlot } = wireRealChannel(tmp);
       // 真实 dispatcher:资格审 + callId 配对 + 错误折叠全真,只有「意识进程」
       // 本身由 sendToGhost 内联模拟(先经 fs 槽写盘,再 handleToolResult 交卷)。
-      let dispatcher!: GhostPipeDispatcher;
-      dispatcher = new GhostPipeDispatcher({
+      const dispatcher = new GhostPipeDispatcher({
         getGhost: (id) => (id === 'xd-atlassian' ? makeInstalledGhost(id) : null),
         runtimeStateOf: () => 'running',
         spawn: async () => ({ ok: true }),
@@ -688,6 +779,57 @@ describe('SchedulerScriptCapabilityBroker', () => {
       expect(await fsSlot.handleFsRequest('xd-atlassian', {
         op: 'write', root: 'workdir', callId: usedCallId, path: 'r/late.json', content: 'x',
       })).toMatchObject({ ok: false });
+    } finally {
+      await fs.promises.rm(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('writes namespaced out_file through the real dispatcher, card service and fs slot', async () => {
+    const tmp = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'broker-ns-pipe-'));
+    try {
+      const installed = { ...makeInstalledGhost('xd-atlassian'), namespace: 'xd', dir: path.join(tmp, '_ns', 'xd', 'xd-atlassian') };
+      mockAvailableGhosts([installed]);
+      const instanceId = installedGhostStoragePart(installed);
+      const { fsSlot } = wireRealChannel(tmp, installed);
+      let offPathResult: { ok: boolean } | undefined;
+      const dispatcher: GhostPipeDispatcher = new GhostPipeDispatcher({
+        getGhost: (id) => id === instanceId || id === installed.manifest.id ? installed : null,
+        runtimeStateOf: () => 'running',
+        spawn: async () => ({ ok: true }),
+        sendToGhost: (ghostId, payload) => {
+          void (async () => {
+            const outFile = (payload.args as Record<string, unknown>).out_file as string;
+            const result = await fsSlot.handleFsRequest(ghostId, {
+              op: 'write', root: 'workdir', callId: payload.callId, path: outFile, content: 'namespaced result',
+            });
+            offPathResult = await fsSlot.handleFsRequest(ghostId, {
+              op: 'write', root: 'workdir', callId: payload.callId, path: 'other.json', content: 'forbidden',
+            });
+            dispatcher.handleToolResult(ghostId, result.ok
+              ? { callId: payload.callId, ok: true, result: { saved_to: outFile } }
+              : { callId: payload.callId, ok: false, errorCode: 'INTERNAL', message: result.message });
+          })();
+          return true;
+        },
+        timeoutMs: 1_000,
+      });
+      callGhostToolMock.mockImplementation((request: unknown) => dispatcher.callGhostTool(
+        request as { ghostId: string; tool: string; args: Record<string, unknown> },
+      ));
+
+      await expect(new SchedulerScriptCapabilityBroker().call(
+        { method: 'jira.get', params: { issue_key: 'DING-1', out_file: 'reports/result.json' } },
+        new Set(['jira.read']), { schedule: schedule({ workingDir: tmp }) },
+      )).resolves.toEqual({ saved_to: 'reports/result.json' });
+      expect(await fs.promises.readFile(path.join(tmp, 'reports/result.json'), 'utf8')).toBe('namespaced result');
+      expect(offPathResult).toMatchObject({ ok: false });
+      expect(fs.existsSync(path.join(tmp, 'other.json'))).toBe(false);
+      const callId = registerCallMock.mock.calls[0][0] as string;
+      expect(registerCallMock.mock.calls[0][1]).toMatchObject({ ghostId: instanceId });
+      expect(await fsSlot.handleFsRequest(instanceId, {
+        op: 'write', root: 'workdir', callId, path: 'reports/result.json', content: 'late result',
+      })).toMatchObject({ ok: false });
+      expect(await fs.promises.readFile(path.join(tmp, 'reports/result.json'), 'utf8')).toBe('namespaced result');
     } finally {
       await fs.promises.rm(tmp, { recursive: true, force: true });
     }
@@ -828,12 +970,29 @@ function makeInstalledGhost(id: string): InstalledGhost {
   };
 }
 
+function mockAvailableGhosts(ghosts: InstalledGhost[], trustedLegacyIds: string[] = []): void {
+  findAvailableGhostMock.mockReset();
+  findAvailableGhostMock.mockImplementation((id: string, namespace?: string | null) => {
+    const resolved = resolveInstalledGhost(ghosts, id, namespace);
+    return resolved.status === 'unique' ? resolved.ghost : null;
+  });
+  findTrustedXdGhostMock.mockReset();
+  findTrustedXdGhostMock.mockImplementation((id: string) => {
+    const explicit = resolveInstalledGhost(ghosts, id, 'xd');
+    if (explicit.status === 'unique') return explicit.ghost;
+    const legacy = resolveInstalledGhost(ghosts, id);
+    return legacy.status === 'unique' && trustedLegacyIds.includes(installedGhostStoragePart(legacy.ghost))
+      ? legacy.ghost
+      : null;
+  });
+}
+
 /**
  * 端到端 harness:真实 GhostCardService + 真实 GhostFsSlot,把 broker 的
  * mock 边界(register/finalize)接到真实账本——用例只需替换意识行为
  * (callGhostToolMock 的实现),其余链路全真。
  */
-function wireRealChannel(tmp: string): { cardService: GhostCardService; fsSlot: GhostFsSlot } {
+function wireRealChannel(tmp: string, installed = makeInstalledGhost('xd-atlassian')): { cardService: GhostCardService; fsSlot: GhostFsSlot } {
   const cardService = new GhostCardService({
     hasCardSlot: () => false,
     sanitize: (html: string) => ({ ok: true, html }),
@@ -841,7 +1000,7 @@ function wireRealChannel(tmp: string): { cardService: GhostCardService; fsSlot: 
     broadcast: () => {},
   });
   const fsSlot = new GhostFsSlot({
-    getGhost: (id) => (id === 'xd-atlassian' ? makeInstalledGhost(id) : null),
+    getGhost: (id) => id === installedGhostStoragePart(installed) ? installed : null,
     dataRootDir: () => path.join(tmp, 'ghost-fs'),
     callInfo: (callId) => cardService.callInfoOf(callId),
     inFlightCallInfo: (callId) => cardService.inFlightCallInfoOf(callId),

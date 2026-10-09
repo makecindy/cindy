@@ -85,7 +85,13 @@ function makeHarness(dataRoot: string, overrides: HarnessOverrides = {}) {
     writeSaveDeposit:
       overrides.saveWrite ?? (async (_ghostId, _token, fileName) => ({ fileName })),
   };
-  return { slot: new GhostFsSlot(deps), confirmCalls };
+  return { slot: new GhostFsSlot(deps), confirmCalls, deps };
+}
+
+function deferredSignal() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((accept) => { resolve = accept; });
+  return { promise, resolve };
 }
 
 /** Real Session authority with an in-memory provider, so the production resolver is exercised. */
@@ -159,7 +165,132 @@ describe('GhostFsSlot', () => {
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     await fs.promises.rm(tmpRoot, { recursive: true, force: true });
+  });
+
+  describe('in-flight requests', () => {
+    it.each(['data', 'session-workdir', 'script-workdir'] as const)(
+      '%s blocks relocation through the final native write and cleans up on success or failure',
+      async (channel) => {
+        const base = path.join(dataRoot, GHOST_ID);
+        const relocated = path.join(dataRoot, '_ns__acme__' + GHOST_ID);
+        await fs.promises.mkdir(base, { recursive: true });
+        const target = path.join(channel === 'data' ? base : await fs.promises.realpath(workdir), 'pending.txt');
+        const { slot } = makeHarness(dataRoot, channel === 'script-workdir' ? {
+          callSessionId: null, callScriptWorkdir: workdir,
+        } : { session: {
+          workingDir: workdir, permissionMode: 'acceptEdits', planModeEnabled: false, remoteHostId: null,
+        } });
+        const migrate = () => {
+          if (slot.hasInFlightRequests(GHOST_ID)) throw new Error('FS busy');
+          fs.renameSync(base, relocated);
+        };
+        const nativeWrite = fs.promises.writeFile;
+        for (const failWrite of [false, true]) {
+          const started = deferredSignal();
+          const resume = deferredSignal();
+          const write = vi.spyOn(fs.promises, 'writeFile').mockImplementation(async (...args) => {
+            if (args[0] === target) {
+              started.resolve();
+              await resume.promise;
+              if (failWrite) throw new Error('write failed');
+            }
+            return nativeWrite(...args);
+          });
+          const pending = slot.handleFsRequest(GHOST_ID, {
+            op: 'write', root: channel === 'data' ? 'data' : 'workdir',
+            path: 'pending.txt', content: 'org-data', callId: 'call-1',
+          });
+          try {
+            await started.promise;
+            expect(slot.hasInFlightRequests(GHOST_ID)).toBe(true);
+            expect(slot.hasInFlightRequests('_ns__acme__' + GHOST_ID)).toBe(false);
+            expect(migrate).toThrow('FS busy');
+            expect(fs.existsSync(base)).toBe(true);
+            expect(fs.existsSync(relocated)).toBe(false);
+          } finally {
+            resume.resolve();
+            await pending;
+            write.mockRestore();
+          }
+          expect(await pending).toMatchObject({ ok: !failWrite });
+          expect(slot.hasInFlightRequests(GHOST_ID)).toBe(false);
+        }
+        expect(migrate).not.toThrow();
+        expect(fs.existsSync(relocated)).toBe(true);
+      },
+    );
+
+    it.each(['unlink', 'rmdir'] as const)('tracks data deletion through %s and cleanup on native failure', async (operation) => {
+      const { slot } = makeHarness(dataRoot);
+      const directory = path.join(dataRoot, GHOST_ID, 'nested');
+      const target = path.join(directory, 'delete.txt');
+      const nativeRemove = fs.promises[operation];
+      for (const failRemove of [false, true]) {
+        await fs.promises.mkdir(directory, { recursive: true });
+        await fs.promises.writeFile(target, 'org-data');
+        const started = deferredSignal();
+        const resume = deferredSignal();
+        const remove = vi.spyOn(fs.promises, operation).mockImplementation(async (entry) => {
+          if (entry === (operation === 'unlink' ? target : directory)) {
+            started.resolve();
+            await resume.promise;
+            if (failRemove) throw new Error('remove failed');
+          }
+          return nativeRemove(entry);
+        });
+        const pending = slot.handleFsRequest(GHOST_ID, { op: 'delete', root: 'data', path: 'nested/delete.txt' });
+        try {
+          await started.promise;
+          expect(slot.hasInFlightRequests(GHOST_ID)).toBe(true);
+        } finally {
+          resume.resolve();
+          await pending;
+          remove.mockRestore();
+        }
+        expect(await pending).toMatchObject({ ok: true, existed: !(operation === 'unlink' && failRemove) });
+        expect(slot.hasInFlightRequests(GHOST_ID)).toBe(false);
+      }
+    });
+
+    it('counts concurrent save writes per physical instance until every request settles', async () => {
+      const first = deferredSignal();
+      const second = deferredSignal();
+      const namespaced = deferredSignal();
+      const gates = [first, second, namespaced];
+      const { deps } = makeHarness(dataRoot, { saveWrite: async (_ghostId, token, fileName) => {
+        await gates[Number(token)]!.promise;
+        if (token === '1') throw new Error('save failed');
+        return { fileName };
+      } });
+      const slot = new GhostFsSlot({ ...deps, getGhost: () => makeGhost(true) });
+      const namespacedId = '_ns__acme__' + GHOST_ID;
+      const requests = [GHOST_ID, GHOST_ID, namespacedId].map((id, index) => slot.handleFsRequest(id, {
+        op: 'write', root: 'save', path: 'save.txt', content: 'org-data', token: String(index),
+      }));
+      try {
+        expect(slot.hasInFlightRequests(GHOST_ID)).toBe(true);
+        expect(slot.hasInFlightRequests(namespacedId)).toBe(true);
+        slot.setSessionSnapshotResolver(async () => null);
+        expect(slot.hasInFlightRequests(GHOST_ID)).toBe(true);
+        expect(slot.hasInFlightRequests(namespacedId)).toBe(true);
+        first.resolve();
+        expect(await requests[0]).toMatchObject({ ok: true });
+        expect(slot.hasInFlightRequests(GHOST_ID)).toBe(true);
+        second.resolve();
+        expect(await requests[1]).toMatchObject({ ok: false });
+        expect(slot.hasInFlightRequests(GHOST_ID)).toBe(false);
+        expect(slot.hasInFlightRequests(namespacedId)).toBe(true);
+      } finally {
+        gates.forEach((gate) => gate.resolve());
+        await Promise.all(requests);
+      }
+      expect(await requests[2]).toMatchObject({ ok: true });
+      expect(slot.hasInFlightRequests(namespacedId)).toBe(false);
+      expect(await slot.handleFsRequest(GHOST_ID, { op: 'invalid', root: 'data' })).toMatchObject({ ok: false });
+      expect(slot.hasInFlightRequests(GHOST_ID)).toBe(false);
+    });
   });
 
   it('未声明 fs 能力一律拒', async () => {
@@ -376,6 +507,20 @@ describe('GhostFsSlot', () => {
     });
     expect(w4).toMatchObject({ ok: true });
     expect(confirmCalls).toHaveLength(3);
+  });
+
+  it('a root occupying the old organization key cannot inherit its workdir confirmation', async () => {
+    const { slot, deps, confirmCalls } = makeHarness(dataRoot, {
+      session: { workingDir: workdir, permissionMode: 'default', planModeEnabled: false, remoteHostId: null },
+    });
+    let current = { ...makeGhost(true), namespace: 'acme' as string | null };
+    deps.getGhost = () => current;
+    const request = { type: 'fs-request', op: 'write', root: 'workdir', path: 'a.txt', content: 'org', callId: 'call-1' };
+    expect(await slot.handleFsRequest(GHOST_ID, request)).toMatchObject({ ok: true });
+    expect(slot.hasInFlightRequests(GHOST_ID)).toBe(false);
+    current = { ...current, namespace: null };
+    expect(await slot.handleFsRequest(GHOST_ID, { ...request, content: 'root' })).toMatchObject({ ok: true });
+    expect(confirmCalls).toHaveLength(2);
   });
 
   it('workdir:plan / planModeEnabled 拒', async () => {

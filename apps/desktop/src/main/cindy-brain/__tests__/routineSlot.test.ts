@@ -1,4 +1,5 @@
 import { afterEach, describe, it, expect, vi } from 'vitest';
+import path from 'node:path';
 import { RoutineEngine } from '@cindy/maker-scheduler';
 import type { InstalledGhost } from '../../../shared/ghost.js';
 import { handleRoutineRequest } from '../routineSlot.js';
@@ -80,10 +81,11 @@ describe('Plugin routine publisher', () => {
 
 async function statusFixture() {
   let now = 1000;
+  let sequence = 0;
   const changed = vi.fn();
   const engine = new RoutineEngine({
     load: async () => null, save: vi.fn(async () => {}), execute: vi.fn(async () => ({})),
-    id: () => 'id', now: () => now, changed, onError: vi.fn(),
+    id: () => 'id-' + ++sequence, now: () => now, changed, onError: vi.fn(),
   });
   await engine.start();
   return {
@@ -206,6 +208,102 @@ function deferred<T>() {
 const listening = { action: 'status', status: 'listening' };
 const publish = { action: 'publish', event: { id: 'startup-event', type: 'new', occurredAt: 1, data: {} } };
 const busy = { ok: false, message: 'Routine request intake is busy; retry later' };
+
+const rootMail = { ...ghost, namespace: null, dir: path.join('ghosts', '_ns', '_root', 'mail') };
+const orgMail = { ...ghost, namespace: 'acme', dir: path.join('ghosts', '_ns', 'acme', 'mail') };
+
+it.each([
+  ['mail', { ...ghost, dir: path.join('ghosts', 'mail'), namespaceMigration: 'pending' as const }],
+  ['mail', { ...ghost, dir: path.join('ghosts', 'mail'), namespace: 'acme' }],
+  ['_root__mail', rootMail],
+  ['_ns__acme__mail', orgMail],
+] as const)('uses the physical source key %s for status and publication', async (instanceId, plugin) => {
+  const fixture = await statusFixture();
+  try {
+    expect(await fixture.request(listening, plugin)).toEqual({ ok: true });
+    expect(fixture.engine.listSources().map(({ id }) => id)).toEqual(['plugin:' + instanceId]);
+    expect(await fixture.request(publish, plugin)).toEqual({ ok: true, accepted: 0, duplicate: false });
+    expect(await fixture.request(publish, plugin)).toEqual({ ok: true, accepted: 0, duplicate: true });
+  } finally {
+    await fixture.engine.stop();
+  }
+});
+
+it('isolates same-name routine triggers, receipts and Host disconnects by physical instance', async () => {
+  const fixture = await statusFixture();
+  const sources = ['plugin:_root__mail', 'plugin:_ns__acme__mail'];
+  try {
+    const routines = [];
+    for (const sourceId of sources) {
+      routines.push(await fixture.engine.createOnce('bot', {
+        name: sourceId, prompt: 'Read new mail', enabled: true,
+        triggers: [{ id: 'new-mail', kind: 'event', sourceId, eventType: 'new', filters: [] }],
+      }, 'routine-' + sourceId.replace(/:/g, '-')));
+    }
+    await fixture.request(listening, rootMail);
+    await fixture.request(listening, orgMail);
+    expect(await fixture.request({ ...publish, sourceId: sources[1] }, rootMail))
+      .toEqual({ ok: true, accepted: 1, duplicate: false });
+    expect(fixture.engine.history(routines[0].id)[0].events).toEqual([{ sourceId: sources[0], event: publish.event }]);
+    expect(fixture.engine.history(routines[1].id)).toEqual([]);
+    expect(await fixture.request(publish, orgMail)).toEqual({ ok: true, accepted: 1, duplicate: false });
+    expect(fixture.engine.history(routines[1].id)[0].events).toEqual([{ sourceId: sources[1], event: publish.event }]);
+    expect(await fixture.request(publish, rootMail)).toEqual({ ok: true, accepted: 0, duplicate: true });
+    expect(await fixture.request(publish, orgMail)).toEqual({ ok: true, accepted: 0, duplicate: true });
+    fixture.engine.removeSource(sources[1]);
+    expect(fixture.engine.listSources().map(({ id, status }) => ({ id, status }))).toEqual([
+      { id: sources[0], status: 'listening' },
+      { id: sources[1], status: 'disconnected' },
+    ]);
+    const next = { ...publish, event: { ...publish.event, id: 'next-event' } };
+    expect(await fixture.request(next, orgMail)).toEqual({ ok: false, message: 'Event source is not listening' });
+    expect(await fixture.request(next, rootMail)).toEqual({ ok: true, accepted: 1, duplicate: false });
+  } finally {
+    await fixture.engine.stop();
+  }
+});
+
+it('keeps same-name source rate limits independent', async () => {
+  const fixture = await statusFixture();
+  try {
+    for (let index = 0; index < 60; index += 1) {
+      expect(await fixture.request(listening, rootMail)).toEqual({ ok: true });
+    }
+    expect(await fixture.request(listening, rootMail)).toMatchObject({ ok: false, message: expect.stringContaining('rate limit') });
+    expect(await fixture.request(listening, orgMail)).toEqual({ ok: true });
+    for (let index = 0; index < 60; index += 1) {
+      const event = { ...publish, event: { ...publish.event, id: 'event-' + index } };
+      expect(await fixture.request(event, rootMail)).toMatchObject({ ok: true, duplicate: false });
+    }
+    expect(await fixture.request(publish, rootMail)).toMatchObject({ ok: false, message: expect.stringContaining('rate limit') });
+    expect(await fixture.request(publish, orgMail)).toMatchObject({ ok: true, duplicate: false });
+  } finally {
+    await fixture.engine.stop();
+  }
+});
+
+it('reserves intake slots per physical instance and shares them across an in-place namespace confirmation', async () => {
+  const fixture = await statusFixture();
+  const ready = deferred<RoutineEngine>();
+  const getEngine = vi.fn(() => ready.promise);
+  const legacy = { ...ghost, dir: path.join('ghosts', 'mail') };
+  const stamped = { ...legacy, namespace: 'acme' };
+  const request = (plugin: InstalledGhost) => handleRoutineRequest(plugin, listening, getEngine, () => true);
+  const pending = Array.from({ length: 8 }, () => request(legacy));
+  try {
+    expect(await request(stamped)).toEqual(busy);
+    pending.push(...Array.from({ length: 8 }, () => request(rootMail)));
+    pending.push(...Array.from({ length: 8 }, () => request(orgMail)));
+    expect(getEngine).toHaveBeenCalledTimes(24);
+    expect(await request(rootMail)).toEqual(busy);
+    expect(await request(orgMail)).toEqual(busy);
+  } finally {
+    ready.resolve(fixture.engine);
+    const results = await Promise.all(pending);
+    await fixture.engine.stop();
+    expect(results.every(({ ok }) => ok)).toBe(true);
+  }
+});
 
 it('bounds the entire request including ignored fields before waiting, with UTF-8 accounting', async () => {
   const getEngine = vi.fn();

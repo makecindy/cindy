@@ -36,6 +36,7 @@
 
 import { GHOST_SECRET_VALUE_MAX_CHARS } from '../../../shared/ghost.js';
 import { GhostKvError } from '../ghostKvStore.js';
+import { assertGhostProtocolTargetCurrent, GhostProtocolTargetChangedError } from './ghostProtocolTargetGuard.js';
 
 /** 单条凭证值的字符上限(粘贴的 key/token 量级;超限 413)。 */
 export { GHOST_SECRET_VALUE_MAX_CHARS };
@@ -48,12 +49,12 @@ export interface GhostSecretsRequestOutcome {
 
 /** 保险库最小面(main 侧 providerSecretStore 注入;测试喂内存假体)。 */
 export interface GhostSecretsVault {
-  saved(ghostId: string, secretKey: string): boolean;
+  saved(instanceKey: string, secretKey: string): boolean;
   /** 尾 4 位指纹(预截值;老键由真身懒回填);值太短不产时返回 null。 */
-  tail(ghostId: string, secretKey: string): string | null;
+  tail(instanceKey: string, secretKey: string): string | null;
   /** 返回 false = safeStorage 写失败(端点折叠 500)。store 内部连带截存指纹。 */
-  store(ghostId: string, secretKey: string, value: string): boolean;
-  remove(ghostId: string, secretKey: string): void;
+  store(instanceKey: string, secretKey: string, value: string): boolean;
+  remove(instanceKey: string, secretKey: string): void;
 }
 
 export async function handleGhostSecretsRequest(args: {
@@ -82,6 +83,7 @@ export async function handleGhostSecretsRequest(args: {
   }>;
   vault: GhostSecretsVault;
   ghostId: string;
+  isCurrent?: () => boolean;
   /**
    * 入库成功(PUT/POST → 204)后的通知钩子(2026-07-14):调用方拿它广播
    * "凭证已保存"的主机代言 tips。只报成功——失败面(400/413/500)设置页
@@ -90,7 +92,8 @@ export async function handleGhostSecretsRequest(args: {
   onStored?: (secretKey: string) => void;
   log?: { warn(message: string, meta?: Record<string, unknown>): void };
 }): Promise<GhostSecretsRequestOutcome> {
-  const { method, pathname, readBodyText, userSecretKeys, vault, ghostId, log } = args;
+  const { method, pathname, readBodyText, userSecretKeys, vault, ghostId: instanceKey, log } = args;
+  if (args.isCurrent?.() === false) return { status: 403 };
   const identityKeys = args.identitySecretKeys ?? [];
   const managedStates = args.managedSecretStates ?? [];
   const managedKeys = managedStates.map(({ key }) => key);
@@ -102,9 +105,9 @@ export async function handleGhostSecretsRequest(args: {
     if (method !== 'GET') return { status: 405 };
     try {
       const userList = userSecretKeys.map((key) => {
-        const saved = vault.saved(ghostId, key);
+        const saved = vault.saved(instanceKey, key);
         // 指纹只在"确实存了"时给(没存过的键即便留有孤儿指纹也不回)。
-        const tail = saved ? vault.tail(ghostId, key) : null;
+        const tail = saved ? vault.tail(instanceKey, key) : null;
         const hostState = hostCredentialStates.get(key);
         const hostFields = hostState
           ? {
@@ -127,7 +130,7 @@ export async function handleGhostSecretsRequest(args: {
       }));
       return { status: 200, body: JSON.stringify([...userList, ...identityList, ...managedList]) };
     } catch (err) {
-      log?.warn('ghost secrets 状态回查失败', { ghostId, err: String(err) });
+      log?.warn('ghost secrets 状态回查失败', { instanceKey, err: String(err) });
       return { status: 500 };
     }
   }
@@ -145,9 +148,11 @@ export async function handleGhostSecretsRequest(args: {
     try {
       text = await readBodyText();
     } catch (err) {
+      if (args.isCurrent?.() === false || err instanceof GhostProtocolTargetChangedError) return { status: 403 };
       if (err instanceof GhostKvError && err.code === 'TOO_LARGE') return { status: 413 };
       return { status: 400 };
     }
+    if (args.isCurrent?.() === false) return { status: 403 };
     let parsed: unknown;
     try {
       parsed = JSON.parse(text);
@@ -161,17 +166,18 @@ export async function handleGhostSecretsRequest(args: {
     if (typeof value !== 'string' || value.trim().length === 0) return { status: 400 };
     if (value.length > GHOST_SECRET_VALUE_MAX_CHARS) return { status: 413 };
     try {
-      if (!vault.store(ghostId, secretKey, value.trim())) return { status: 500 };
+      assertGhostProtocolTargetCurrent(args.isCurrent);
+      if (!vault.store(instanceKey, secretKey, value.trim())) return { status: 500 };
     } catch (err) {
-      log?.warn('ghost secret 入库意外失败', { ghostId, secretKey, err: String(err) });
+      if (err instanceof GhostProtocolTargetChangedError) return { status: 403 };
+      log?.warn('ghost secret 入库意外失败', { instanceKey, secretKey, err: String(err) });
       return { status: 500 };
     }
     // 通知钩子在入库成功之外单独兜:提示挂了不能把真成功折叠成 500。
     try {
       args.onStored?.(secretKey);
     } catch (err) {
-      log?.warn('ghost secret onStored 通知失败(不影响入库结果)', {
-        ghostId,
+      log?.warn('ghost secret onStored 通知失败(不影响入库结果)', { instanceKey,
         secretKey,
         err: String(err),
       });
@@ -181,10 +187,12 @@ export async function handleGhostSecretsRequest(args: {
 
   if (method === 'DELETE') {
     try {
-      vault.remove(ghostId, secretKey);
+      assertGhostProtocolTargetCurrent(args.isCurrent);
+      vault.remove(instanceKey, secretKey);
       return { status: 204 };
     } catch (err) {
-      log?.warn('ghost secret 清除意外失败', { ghostId, secretKey, err: String(err) });
+      if (err instanceof GhostProtocolTargetChangedError) return { status: 403 };
+      log?.warn('ghost secret 清除意外失败', { instanceKey, secretKey, err: String(err) });
       return { status: 500 };
     }
   }

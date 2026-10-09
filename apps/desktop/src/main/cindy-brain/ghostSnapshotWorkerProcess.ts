@@ -105,7 +105,10 @@ async function removeVerifiedDirectory(
     || movedStat.isSymbolicLink()
     || movedStat.dev !== targetStat.dev
     || movedStat.ino !== targetStat.ino
-    || !samePath(await fs.promises.realpath(quarantinePath), targetRealPath)
+    || !samePath(
+      await fs.promises.realpath(quarantinePath),
+      path.join(await fs.promises.realpath(path.dirname(quarantinePath)), path.basename(quarantinePath)),
+    )
   ) {
     // Never recursively delete an unverified path. Leave the quarantined
     // directory for a later owner-checked cleanup pass.
@@ -115,7 +118,9 @@ async function removeVerifiedDirectory(
   // owner-bound parent before recursive deletion; on failure the isolated
   // directory is intentionally left for a later guarded cleanup pass.
   await verifyParent(expectedParent, workingDir);
-  await verifyDirectory(workingDir, parentName);
+  if (!samePath(targetPath, path.join(workingDir, parentName))) {
+    await verifyDirectory(workingDir, parentName);
+  }
   await fs.promises.rm(quarantinePath, { recursive: true, force: true });
 }
 async function copyDirectory(source: string, target: string): Promise<void> {

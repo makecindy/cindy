@@ -8,6 +8,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import Database from 'better-sqlite3';
+import JSZip from 'jszip';
 
 import {
   GhostLibrarySlot,
@@ -20,14 +21,19 @@ import {
 } from '../librarySlot.js';
 import { createHash } from 'node:crypto';
 import { crc32 } from 'node:zlib';
-import { LibraryBindingStore } from '../libraryBinding.js';
+import { LibraryBindingStore, relocateLibraryMetaOwner } from '../libraryBinding.js';
 import { LibraryVault } from '../libraryVault.js';
 import { initCustomLibraryTree, openExistingCustomLibrary } from '../libraryDirFd.js';
 import { createLibraryDbCore, type SqliteDatabaseConstructor } from '../libraryDbCore.js';
 import { LibrarySqlService } from '../librarySqlService.js';
+import { GhostManager } from '../GhostManager.js';
+import { findInstalledGhostByInstanceId, installedGhostStoragePart } from '../../../shared/pluginIdentity.js';
+import { GhostInstallReceiptStore } from '../ghostInstallReceipt.js';
+import { runGhostSnapshotWorkerRequest } from '../ghostSnapshotWorkerProcess.js';
 import {
   classifyGhostLibraryOperationSupport,
   GHOST_LIBRARY_CAPABILITIES_V1,
+  ghostInstallApprovalToken,
   type InstalledGhost,
 } from '../../../shared/ghost.js';
 
@@ -70,6 +76,7 @@ describe('GhostLibrarySlot', () => {
   let resolveLibraryRoot: ReturnType<typeof vi.fn>;
   let createVault: ReturnType<typeof vi.fn>;
   let createSqlService: ReturnType<typeof vi.fn>;
+  let getGhost: GhostLibrarySlotDeps['getGhost'];
   let clock: number;
 
   beforeEach(async () => {
@@ -82,6 +89,7 @@ describe('GhostLibrarySlot', () => {
     await fs.promises.mkdir(candidate, { recursive: true });
     ghost = makeGhost(true);
     ghosts = new Map([[GHOST_ID, ghost]]);
+    getGhost = (id) => ghosts.get(id) ?? null;
     bindingStore = new LibraryBindingStore({
       getFile: () => bindingFile,
       getManagedRoots: () => [path.join(tmp, 'managed')],
@@ -100,7 +108,7 @@ describe('GhostLibrarySlot', () => {
       }),
     );
     const deps: GhostLibrarySlotDeps = {
-      getGhost: (id) => ghosts.get(id) ?? null,
+      getGhost: (id) => getGhost(id),
       bindingStore,
       getDefaultRoot: (id) => path.join(defaultRootBase, id),
       captureOwnerScope: () => captureOwnerScope(),
@@ -127,6 +135,21 @@ describe('GhostLibrarySlot', () => {
     await slot.disposeAll();
     await fs.promises.rm(tmp, { recursive: true, force: true });
   });
+
+  function pauseNextLibraryRootResolution() {
+    let resume!: () => void;
+    let entered!: () => void;
+    const gate = new Promise<void>((resolve) => { resume = resolve; });
+    const started = new Promise<void>((resolve) => { entered = resolve; });
+    const original = LibraryBindingStore.prototype.resolveLibraryRoot.bind(bindingStore);
+    resolveLibraryRoot.mockImplementationOnce(async (id: string) => {
+      const resolution = await original(id);
+      entered();
+      await gate;
+      return resolution;
+    });
+    return { resume, started };
+  }
 
   it('资格审:未声明 library 能力/停用 → NOT_DECLARED', async () => {
     ghosts.set(GHOST_ID, makeGhost(false));
@@ -302,6 +325,306 @@ describe('GhostLibrarySlot', () => {
     const backupsDir = path.join(defaultRootBase, GHOST_ID, '.cindy-library', 'backups');
     const backups = await fs.promises.readdir(backupsDir);
     expect(backups.some((f) => f.startsWith('pre-migrate-'))).toBe(true);
+  });
+
+  async function relocateLibraryState(
+    fromPart: string,
+    toPart: string,
+    afterRelocate?: () => Promise<void>,
+  ): Promise<void> {
+    slot.setRelocating(fromPart, true);
+    slot.setRelocating(toPart, true);
+    try {
+      await slot.disposeGhost(fromPart);
+      await slot.disposeGhost(toPart);
+      const binding = await bindingStore.getBinding(fromPart);
+      let destination: string;
+      if (binding) {
+        await bindingStore.relocateBinding(fromPart, toPart);
+        destination = path.join(binding.realPathAtGrant, toPart);
+      } else {
+        destination = path.join(defaultRootBase, toPart);
+        if (fs.existsSync(destination)) throw new Error('Library relocation destination already exists');
+        await fs.promises.rename(path.join(defaultRootBase, fromPart), destination);
+      }
+      await relocateLibraryMetaOwner(destination, fromPart, toPart);
+      await afterRelocate?.();
+    } finally {
+      try {
+        await slot.disposeGhost(fromPart);
+        await slot.disposeGhost(toPart);
+      } finally {
+        slot.setRelocating(fromPart, false);
+        slot.setRelocating(toPart, false);
+      }
+    }
+  }
+
+  async function seedSourceDatabase(value: string, instanceId = GHOST_ID): Promise<void> {
+    expect(await slot.handleLibraryRequest(instanceId, { op: 'db.open', dbPath: 'library.sqlite' }))
+      .toMatchObject({ ok: true, op: 'db.open' });
+    expect(await slot.handleLibraryRequest(instanceId, {
+      op: 'db.exec', dbPath: 'library.sqlite', sql: 'CREATE TABLE source_state (value TEXT)',
+    })).toMatchObject({ ok: true, op: 'db.exec' });
+    expect(await slot.handleLibraryRequest(instanceId, {
+      op: 'db.exec', dbPath: 'library.sqlite', sql: 'INSERT INTO source_state VALUES (?)', params: [value],
+    })).toMatchObject({ ok: true, op: 'db.exec' });
+    expect(await slot.handleLibraryRequest(instanceId, {
+      op: 'db.exec', dbPath: 'library.sqlite', sql: 'SELECT value FROM source_state',
+    })).toMatchObject({ ok: true, op: 'db.exec', rows: [{ value }] });
+  }
+
+  it.each(['default', 'custom'] as const)('source archive wrapper isolates the real SQLite %s Library from a replacement source', async (location) => {
+    if (location === 'custom') {
+      expect((await bindingStore.setBinding(GHOST_ID, candidate)).ok).toBe(true);
+    }
+    await seedSourceDatabase('old-source');
+    const archivePart = '_ns__cindy-archive-00000000-0000-4000-8000-000000000002__mivo-canvas';
+    await relocateLibraryState(GHOST_ID, archivePart);
+    ghosts.set(GHOST_ID, {
+      ...makeGhost(true),
+      approval: { state: 'approved', revision: '00000000-0000-4000-8000-000000000003' },
+    });
+    expect(await slot.handleLibraryRequest(GHOST_ID, { op: 'open' })).toMatchObject({ ok: true, state: 'ready' });
+    expect(await slot.handleLibraryRequest(GHOST_ID, { op: 'db.open', dbPath: 'library.sqlite' }))
+      .toMatchObject({ ok: true, op: 'db.open' });
+    expect(await slot.handleLibraryRequest(GHOST_ID, {
+      op: 'db.exec', dbPath: 'library.sqlite',
+      sql: "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'source_state'",
+    })).toMatchObject({ ok: true, op: 'db.exec', rows: [] });
+    await seedSourceDatabase('new-source');
+    const archivedRoot = location === 'custom' ? candidate : defaultRootBase;
+    const archived = new Database(path.join(archivedRoot, archivePart, 'library.sqlite'), { readonly: true });
+    try {
+      expect(archived.prepare('SELECT value FROM source_state').all()).toEqual([{ value: 'old-source' }]);
+    } finally {
+      archived.close();
+    }
+    expect(await slot.handleLibraryRequest(GHOST_ID, {
+      op: 'db.exec', dbPath: 'library.sqlite', sql: 'SELECT value FROM source_state',
+    })).toMatchObject({ ok: true, op: 'db.exec', rows: [{ value: 'new-source' }] });
+  });
+
+  it.each(['default', 'custom'] as const)('source archive wrapper restores the real SQLite %s Library on inverse after failure', async (location) => {
+    if (location === 'custom') {
+      expect((await bindingStore.setBinding(GHOST_ID, candidate)).ok).toBe(true);
+    }
+    await seedSourceDatabase('original-source');
+    const initialService = createSqlService.mock.results[0].value as LibrarySqlService;
+    const archivePart = '_ns__cindy-archive-00000000-0000-4000-8000-000000000002__mivo-canvas';
+    await expect(relocateLibraryState(GHOST_ID, archivePart, async () => {
+      expect(await slot.handleLibraryRequest(GHOST_ID, { op: 'db.open', dbPath: 'library.sqlite' }))
+        .toMatchObject({ ok: false, errorCode: 'LIBRARY_READONLY' });
+      throw new Error('failure before source receipt commit');
+    })).rejects.toThrow('failure before source receipt commit');
+    expect(await initialService.exec(path.join(defaultRootBase, GHOST_ID, 'library.sqlite'), 'SELECT 1'))
+      .toMatchObject({ ok: false, code: 'DB_ERROR' });
+    const originalRoot = location === 'custom' ? candidate : defaultRootBase;
+    expect(fs.existsSync(path.join(originalRoot, GHOST_ID))).toBe(false);
+    await relocateLibraryState(archivePart, GHOST_ID);
+    expect(await slot.handleLibraryRequest(GHOST_ID, { op: 'db.open', dbPath: 'library.sqlite' }))
+      .toMatchObject({ ok: true, op: 'db.open' });
+    expect(await slot.handleLibraryRequest(GHOST_ID, {
+      op: 'db.exec', dbPath: 'library.sqlite', sql: 'SELECT value FROM source_state',
+    })).toMatchObject({ ok: true, op: 'db.exec', rows: [{ value: 'original-source' }] });
+    expect(await slot.handleLibraryRequest(GHOST_ID, {
+      op: 'db.exec', dbPath: 'library.sqlite', sql: 'INSERT INTO source_state VALUES (?)', params: ['after-rollback'],
+    })).toMatchObject({ ok: true, op: 'db.exec', changes: 1 });
+    expect(fs.existsSync(path.join(originalRoot, archivePart))).toBe(false);
+    const restored = new Database(path.join(originalRoot, GHOST_ID, 'library.sqlite'), { readonly: true });
+    try {
+      expect(restored.prepare('SELECT value FROM source_state ORDER BY rowid').all())
+        .toEqual([{ value: 'original-source' }, { value: 'after-rollback' }]);
+    } finally {
+      restored.close();
+    }
+  });
+
+  it.each(['default', 'custom'] as const)('delayed session creation does not block real Manager %s source archive rollback', async (location) => {
+    const manager = new GhostManager({
+      getRootDir: () => path.join(tmp, 'ghosts'),
+      onArchiveSourceState: relocateLibraryState,
+      mutateSnapshot: async ({ parentDir, ...request }) => runGhostSnapshotWorkerRequest(request, parentDir),
+    });
+    getGhost = (id) => findInstalledGhostByInstanceId(manager.list(), id) ?? null;
+    const pack = async (version: string): Promise<string> => {
+      const zip = new JSZip();
+      zip.file('ghost.json', JSON.stringify({
+        schemaVersion: 2, id: GHOST_ID, name: 'Library regression', version,
+        kind: 'chip', entry: 'main.js', slots: ['library'],
+      }));
+      const file = path.join(tmp, version + '.cindy');
+      await fs.promises.writeFile(file, await zip.generateAsync({ type: 'nodebuffer' }));
+      return file;
+    };
+    expect(await manager.install(await pack('1.0.0'))).toHaveProperty('ghost');
+    const instanceId = installedGhostStoragePart(manager.list()[0]);
+    if (location === 'custom') expect((await bindingStore.setBinding(instanceId, candidate)).ok).toBe(true);
+    await seedSourceDatabase('original-source', instanceId);
+    await slot.disposeGhost(instanceId);
+    const { resume, started } = pauseNextLibraryRootResolution();
+    const pending = slot.handleLibraryRequest(instanceId, { op: 'db.open', dbPath: 'late.sqlite' });
+    await started;
+    const store = (manager as unknown as { receiptStore: GhostInstallReceiptStore }).receiptStore;
+    const write = vi.spyOn(store, 'write').mockImplementationOnce(async () => {
+      expect(manager.list()[0]?.approval.state).toBe('invalid');
+      resume();
+      await pending;
+      throw new Error('simulated receipt write failure');
+    });
+    const archivePart = '_ns__cindy-archive-00000000-0000-4000-8000-000000000002__mivo-canvas';
+    let result;
+    try {
+      result = await manager.update(await pack('2.0.0'), {
+        expectedInstalledApproval: ghostInstallApprovalToken(manager.list()[0]?.approval),
+        sourceStateArchiveId: archivePart,
+      });
+    } finally {
+      resume();
+      write.mockRestore();
+    }
+    expect(await pending).toMatchObject({ ok: false, errorCode: 'LIBRARY_UNAVAILABLE', reason: 'CANCELLED' });
+    expect(result).toMatchObject({ rejection: { code: 'io', reason: 'simulated receipt write failure' } });
+    expect(result).not.toHaveProperty('rejection.rollbackFailed');
+    await manager.retryInterruptedMutationsAfterDbReady();
+    expect(manager.list()[0]).toMatchObject({ manifest: { version: '1.0.0' }, approval: { state: 'approved' } });
+    expect(store.readPendingMutationSync('_ns/_root/' + GHOST_ID).state).toBe('missing');
+    const restoredRoot = path.join(location === 'custom' ? candidate : defaultRootBase, instanceId);
+    expect(fs.existsSync(path.join(restoredRoot, 'late.sqlite'))).toBe(false);
+    expect(fs.existsSync(path.join(location === 'custom' ? candidate : defaultRootBase, archivePart))).toBe(false);
+    const restored = new Database(path.join(restoredRoot, 'library.sqlite'), { readonly: true });
+    try {
+      expect(restored.prepare('SELECT value FROM source_state').all()).toEqual([{ value: 'original-source' }]);
+    } finally {
+      restored.close();
+    }
+    expect(await slot.handleLibraryRequest(instanceId, { op: 'db.open', dbPath: 'library.sqlite' })).toMatchObject({ ok: true });
+  });
+
+  it.each(['open', 'db.open'] as const)('delayed %s and queued writes stay cancelled after relocation flags clear', async (op) => {
+    await seedSourceDatabase('original-source');
+    await slot.disposeGhost(GHOST_ID);
+    const { resume, started } = pauseNextLibraryRootResolution();
+    const pending = slot.handleLibraryRequest(GHOST_ID, { op, dbPath: 'late.sqlite' });
+    await started;
+    const queued = op === 'db.open'
+      ? slot.handleLibraryRequest(GHOST_ID, { op: 'db.open', dbPath: 'queued.sqlite' })
+      : undefined;
+    const archivePart = '_ns__cindy-archive-00000000-0000-4000-8000-000000000002__mivo-canvas';
+    try {
+      await relocateLibraryState(GHOST_ID, archivePart);
+    } finally {
+      resume();
+    }
+    expect(await pending).toMatchObject({ ok: false, reason: 'CANCELLED' });
+    if (queued) expect(await queued).toMatchObject({ ok: false, reason: 'CANCELLED' });
+    expect(fs.existsSync(path.join(defaultRootBase, GHOST_ID))).toBe(false);
+    await relocateLibraryState(archivePart, GHOST_ID);
+    expect(await slot.handleLibraryRequest(GHOST_ID, { op: 'db.open', dbPath: 'library.sqlite' })).toMatchObject({ ok: true });
+  });
+
+  it.each(['receipt', 'unapproved', 'directory'] as const)('delayed session creation rejects a changed %s target without relocation', async (change) => {
+    const { resume, started } = pauseNextLibraryRootResolution();
+    const pending = slot.handleLibraryRequest(GHOST_ID, { op: 'open' });
+    await started;
+    ghosts.set(GHOST_ID, {
+      ...ghost,
+      ...(change === 'directory' ? { dir: '/tmp/replaced-install' } : {
+        approval: change === 'unapproved'
+          ? { state: 'invalid' }
+          : { state: 'approved', revision: '00000000-0000-4000-8000-000000000003' },
+      }),
+    });
+    resume();
+    expect(await pending).toMatchObject({ ok: false, reason: 'CANCELLED' });
+    expect(createVault).not.toHaveBeenCalled();
+    expect(fs.existsSync(path.join(defaultRootBase, GHOST_ID))).toBe(false);
+  });
+
+  it('locale projection changes keep the same approved Library request and session current', async () => {
+    const original = LibraryBindingStore.prototype.resolveLibraryRoot.bind(bindingStore);
+    resolveLibraryRoot.mockImplementationOnce(async (id: string) => {
+      const resolution = await original(id);
+      ghosts.set(GHOST_ID, {
+        ...ghost, manifest: { ...ghost.manifest, name: 'Localized Library', resolvedLocale: 'en' },
+      });
+      return resolution;
+    });
+    expect(await slot.handleLibraryRequest(GHOST_ID, { op: 'open' })).toMatchObject({ ok: true, state: 'ready' });
+    ghosts.set(GHOST_ID, { ...ghost, manifest: { ...ghost.manifest, resolvedLocale: 'zh-CN' } });
+    expect(await slot.handleLibraryRequest(GHOST_ID, { op: 'db.open', dbPath: 'library.sqlite' })).toMatchObject({ ok: true });
+    expect(createVault).toHaveBeenCalledTimes(1);
+    expect(createSqlService).toHaveBeenCalledTimes(1);
+  });
+
+  it('queued vault open cannot publish a disposed session after archive', async () => {
+    await seedSourceDatabase('original-source');
+    await slot.disposeGhost(GHOST_ID);
+    let resume!: () => void;
+    let entered!: () => void;
+    const gate = new Promise<void>((resolve) => { resume = resolve; });
+    const started = new Promise<void>((resolve) => { entered = resolve; });
+    const original = LibraryVault.prototype.open;
+    const open = vi.spyOn(LibraryVault.prototype, 'open').mockImplementationOnce(async function (this: LibraryVault) {
+      entered();
+      await gate;
+      return original.call(this);
+    });
+    const pending = slot.handleLibraryRequest(GHOST_ID, { op: 'open' });
+    await started;
+    const archivePart = '_ns__cindy-archive-00000000-0000-4000-8000-000000000002__mivo-canvas';
+    try {
+      await relocateLibraryState(GHOST_ID, archivePart);
+    } finally {
+      resume();
+      open.mockRestore();
+    }
+    expect(await pending).toMatchObject({ ok: false, reason: 'CANCELLED' });
+    expect(fs.existsSync(path.join(defaultRootBase, GHOST_ID))).toBe(false);
+    expect(syncAgentReadonlyExtraDir).not.toHaveBeenCalledWith(GHOST_ID, path.join(defaultRootBase, GHOST_ID));
+    await relocateLibraryState(archivePart, GHOST_ID);
+    expect(await slot.handleLibraryRequest(GHOST_ID, { op: 'open' })).toMatchObject({ ok: true, state: 'ready' });
+  });
+
+  it('delayed db path resolution cannot recreate the original root after relocation', async () => {
+    await seedSourceDatabase('original-source');
+    syncAgentReadonlyExtraDir.mockClear();
+    let resume!: () => void;
+    let entered!: () => void;
+    const gate = new Promise<void>((resolve) => { resume = resolve; });
+    const started = new Promise<void>((resolve) => { entered = resolve; });
+    const original = LibraryVault.prototype.resolveDbTarget;
+    const resolve = vi.spyOn(LibraryVault.prototype, 'resolveDbTarget').mockImplementationOnce(async function (this: LibraryVault, relativePath: string) {
+      const target = await original.call(this, relativePath);
+      entered();
+      await gate;
+      return target;
+    });
+    const pending = slot.handleLibraryRequest(GHOST_ID, { op: 'db.open', dbPath: 'late.sqlite' });
+    await started;
+    const archivePart = '_ns__cindy-archive-00000000-0000-4000-8000-000000000002__mivo-canvas';
+    try {
+      await relocateLibraryState(GHOST_ID, archivePart);
+    } finally {
+      resume();
+      resolve.mockRestore();
+    }
+    expect(await pending).toMatchObject({ ok: false, reason: 'CANCELLED' });
+    expect(fs.existsSync(path.join(defaultRootBase, GHOST_ID))).toBe(false);
+    await relocateLibraryState(archivePart, GHOST_ID);
+    expect(await slot.handleLibraryRequest(GHOST_ID, { op: 'db.open', dbPath: 'library.sqlite' })).toMatchObject({ ok: true });
+  });
+
+  it('open during relocation cannot create an empty default root', async () => {
+    slot.setRelocating(GHOST_ID, true);
+    try {
+      expect(await slot.handleLibraryRequest(GHOST_ID, { op: 'open' })).toMatchObject({ ok: false });
+      expect(createVault).not.toHaveBeenCalled();
+      expect(fs.existsSync(path.join(defaultRootBase, GHOST_ID))).toBe(false);
+    } finally {
+      slot.setRelocating(GHOST_ID, false);
+    }
+    expect(await slot.handleLibraryRequest(GHOST_ID, { op: 'open' })).toMatchObject({ ok: true, state: 'ready' });
   });
 
   it('dbPath 非法/越界 → PATH_INVALID + INVALID_REQUEST', async () => {

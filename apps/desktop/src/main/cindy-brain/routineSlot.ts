@@ -1,4 +1,5 @@
 import type { InstalledGhost } from '../../shared/ghost.js';
+import { installedGhostStoragePart } from '../../shared/pluginIdentity.js';
 import { parseRoutineEvent, type RoutineEngine } from '@cindy/maker-scheduler';
 import { createLogger } from '../logger.js';
 import { Buffer } from 'node:buffer';
@@ -100,7 +101,8 @@ export async function handleRoutineRequest(
   const request = payload as Record<string, unknown>;
   let release: (() => void) | undefined;
   try {
-    release = reserveRequest(ghost.manifest.id);
+    const instanceId = installedGhostStoragePart(ghost);
+    release = reserveRequest(instanceId);
     validateRequestSize(request);
     if (request.action !== 'status' && request.action !== 'publish')
       return { ok: false, message: 'Unknown routine operation' };
@@ -110,7 +112,7 @@ export async function handleRoutineRequest(
     const event = request.action === 'publish' ? parseRoutineEvent(request.event) : undefined;
     const engine = await getEngine();
     if (!isCurrent()) return { ok: false, message: 'Plugin owner or installation changed' };
-    const sourceId = `plugin:${ghost.manifest.id}`;
+    const sourceId = `plugin:${instanceId}`;
     if (request.action === 'status') {
       engine.registerSource({
         id: sourceId,

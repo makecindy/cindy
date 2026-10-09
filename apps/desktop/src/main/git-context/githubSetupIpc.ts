@@ -7,6 +7,11 @@ import { createGithubSetup } from './githubSetup.js';
 import { getSharedGhCliTokenSource } from './ghCliTokenSource.js';
 import { githubConnection } from './githubConnection.js';
 import { readGhostSecret } from '../secrets/providerSecretStore.js';
+import {
+  createPluginLogicalIdentity,
+  pluginInstallStoragePart,
+  pluginNewInstallRelId,
+} from '../../shared/pluginIdentity.js';
 import { outboundFetch } from '../maker-host/outbound-fetch.js';
 import { activeOwnerScopeKey } from '../appSessionState.js';
 import { getGhostSetupChangeBus } from '../cindy-brain/ghostSetupChangeBus.js';
@@ -24,9 +29,12 @@ export function registerGithubSetupIpc(invalidateStatuses: () => void): void {
     }
   };
   const setup = createGithubSetup(root, changed);
-  const unsubscribe = getGhostSetupChangeBus().subscribe('cindy-github', (event) => {
+  const cindyGithubRootInstance = pluginInstallStoragePart(
+    pluginNewInstallRelId(createPluginLogicalIdentity(null, 'cindy-github')),
+  );
+  const unsubscribes = ['cindy-github', cindyGithubRootInstance].map(id => getGhostSetupChangeBus().subscribe(id, (event) => {
     if (event.source === 'secret') changed();
-  });
+  }));
   for (const [channel, handle] of [
     [
       'git-context:github-setup:connection',
@@ -37,7 +45,9 @@ export function registerGithubSetupIpc(invalidateStatuses: () => void): void {
         const result = await githubConnection({
           readGh: () => source.readToken(),
           readFallback: () =>
-            owner === activeOwnerScopeKey() ? readGhostSecret('cindy-github', 'github_pat') : null,
+            owner === activeOwnerScopeKey()
+              ? readGhostSecret(cindyGithubRootInstance, 'github_pat') ?? readGhostSecret('cindy-github', 'github_pat')
+              : null,
           fetch: outboundFetch,
         });
         return owner === activeOwnerScopeKey() ? result : { status: 'missing' as const };
@@ -54,7 +64,7 @@ export function registerGithubSetupIpc(invalidateStatuses: () => void): void {
     });
   }
   app.once('before-quit', () => {
-    unsubscribe();
+    unsubscribes.forEach(unsubscribe => unsubscribe());
     setup.cancel();
   });
 }

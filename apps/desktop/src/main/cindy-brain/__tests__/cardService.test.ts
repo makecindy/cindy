@@ -50,7 +50,97 @@ const update = (callId: string, html = '<p>x</p>', extra: Record<string, unknown
   ...extra,
 });
 
+function deferredWrite() {
+  let resolve!: () => void;
+  let reject!: (error: Error) => void;
+  const promise = new Promise<void>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+describe('GhostCardService relocation', () => {
+  it('drains every accepted source write even after its call was swept, without waiting for other plugins', async () => {
+    const pending = [deferredWrite(), deferredWrite(), deferredWrite()];
+    const persist = vi.fn()
+      .mockReturnValueOnce(pending[0].promise)
+      .mockReturnValueOnce(pending[1].promise)
+      .mockReturnValueOnce(pending[2].promise);
+    const { svc, advance } = makeService({ persist });
+    svc.registerCall('old', { ghostId: 'helper', toolUseId: null, sessionId: 's1' });
+    svc.handleCardUpdate('helper', update('old'));
+    advance(1000);
+    svc.handleCardUpdate('helper', update('old'));
+    svc.finalizeCall('old');
+    advance(31_000);
+    svc.registerCall('other', { ghostId: 'other', toolUseId: null, sessionId: 's2' });
+    svc.handleCardUpdate('other', update('other'));
+    expect(svc.ownerOf('old')).toBeNull();
+
+    const moved = vi.fn();
+    const relocation = svc.relocateGhost('helper', '_ns__acme__helper').then(moved);
+    pending[0].resolve();
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(moved).not.toHaveBeenCalled();
+    pending[1].resolve();
+    await relocation;
+    expect(moved).toHaveBeenCalledOnce();
+    pending[2].resolve();
+  });
+
+  it('awaits a failing outstanding write while preserving best-effort persistence', async () => {
+    const pending = deferredWrite();
+    const log = { debug: vi.fn(), warn: vi.fn() };
+    const { svc } = makeService({ persist: () => pending.promise, log });
+    svc.registerCall('old', { ghostId: 'helper', toolUseId: null, sessionId: 's1' });
+    svc.handleCardUpdate('helper', update('old'));
+    const moved = vi.fn();
+    const relocation = svc.relocateGhost('helper', '_ns__acme__helper').then(moved);
+    expect(svc.handleCardUpdate('helper', update('old')).reason).toBe('not-owner');
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(moved).not.toHaveBeenCalled();
+    pending.reject(new Error('db down'));
+    await relocation;
+    expect(log.warn).toHaveBeenCalledWith('ghost card persist failed', { callId: 'old', error: 'db down' });
+    expect(svc.ownerOf('old')).toBe('_ns__acme__helper');
+  });
+
+  it.each(['_ns__acme__helper', '_archive_helper'])('is idempotent and reversible without changing call scopes: %s', async (target) => {
+    const { svc } = makeService();
+    svc.registerCall('script', {
+      ghostId: 'helper', toolUseId: null, sessionId: null, channel: 'script',
+      scriptWorkdir: '/project', scriptWritePath: 'result.txt', remoteHostId: null,
+    });
+    svc.registerCall('session', {
+      ghostId: 'helper', toolUseId: 'tool-1', sessionId: 's1',
+      sessionInstanceId: 'instance-1', remoteHostId: 'ssh-1',
+    });
+    for (const [source, destination] of [['helper', target], ['helper', target], [target, 'helper']]) {
+      await svc.relocateGhost(source, destination);
+      expect(svc.inFlightCallInfoOf('script')).toEqual({
+        ghostId: destination, sessionId: null, remoteHostId: null, channel: 'script',
+        scriptWorkdir: '/project', scriptWritePath: 'result.txt',
+      });
+      expect(svc.inFlightCallInfoOf('session')).toEqual({
+        ghostId: destination, sessionId: 's1', sessionInstanceId: 'instance-1',
+        remoteHostId: 'ssh-1', channel: 'session', scriptWorkdir: null, scriptWritePath: null,
+      });
+    }
+  });
+});
+
 describe('GhostCardService', () => {
+  it('broadcasts the trusted logical identity only for an in-place namespace install', () => {
+    const { svc, broadcast } = makeService();
+    svc.registerCall('org', { ghostId: 'helper', logicalGhostId: '_ns__acme__helper', toolUseId: null, sessionId: 's1' });
+    expect(svc.handleCardUpdate('helper', update('org')).accepted).toBe(true);
+    expect(broadcast).toHaveBeenCalledWith(expect.objectContaining({
+      ghostId: 'helper', logicalGhostId: '_ns__acme__helper',
+    }));
+    expect(svc.handleCardUpdate('_ns__acme__helper', update('org')).accepted).toBe(false);
+  });
+
   it('接受链路:sanitize 产物落库并推送,hasCard/finalize 语义正确', async () => {
     const { svc, persist, broadcast } = makeService();
     svc.registerCall('c1', { ghostId: 'g1', toolUseId: 'tu1', sessionId: 's1' });

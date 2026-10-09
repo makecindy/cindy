@@ -12,6 +12,7 @@ import { GhostMutationCoordinator } from '../ghostMutationCoordinator';
 import {
   GhostSetupCoordinator,
   type GhostSetupActionResult,
+  type GhostSetupInlineActionInput,
   type GhostSetupTargetValidation,
 } from '../ghostSetupCoordinator';
 import {
@@ -194,7 +195,10 @@ function requiredNavigation(revision = 0): GhostSetupAssessment {
   };
 }
 
-function harness(initial: GhostSetupAssessment) {
+function harness(
+  initial: GhostSetupAssessment,
+  extras?: { resolveStoreId?: (ghostId: string) => string; getTargetToken?: (ghostId: string) => string | null },
+) {
   const changeBus = new GhostSetupChangeBus();
   const broadcast = vi.fn();
   const bridge = new GhostSetupInteractionBridge({ broadcast });
@@ -208,7 +212,7 @@ function harness(initial: GhostSetupAssessment) {
       responseTarget?: GhostSetupInteractionResponseTarget;
     }): Promise<GhostSetupActionResult> => ({ ok: true }),
   );
-  const executeInlineAction = vi.fn(async (): Promise<GhostSetupActionResult> => ({ ok: true }));
+  const executeInlineAction = vi.fn(async (_args: GhostSetupInlineActionInput): Promise<GhostSetupActionResult> => ({ ok: true }));
   let requestNumber = 0;
   const coordinator = new GhostSetupCoordinator({
     changeBus,
@@ -225,6 +229,8 @@ function harness(initial: GhostSetupAssessment) {
     createRequestId: () => `request-${++requestNumber}`,
     timeoutMs: 5_000,
     terminalGraceMs: 0,
+    ...(extras?.resolveStoreId ? { resolveStoreId: extras.resolveStoreId } : {}),
+    ...(extras?.getTargetToken ? { getTargetToken: extras.getTargetToken } : {}),
   });
   return {
     bridge,
@@ -243,6 +249,45 @@ function harness(initial: GhostSetupAssessment) {
 }
 
 describe('GhostSetupCoordinator', () => {
+  it('refuses the old inline card after a same-key installation replacement without a lifecycle event', async () => {
+    let token = 'original';
+    const h = harness(requiredInline(), { getTargetToken: () => token });
+    const abort = new AbortController();
+    const waiting = h.coordinator.ensureReady({ sessionId: 'task', ghostId: 'api', signal: abort.signal });
+    try {
+      await vi.waitFor(() => expect(h.bridge.pendingSnapshots()).toHaveLength(1));
+      const card = h.bridge.pendingSnapshots()[0].request;
+      token = 'replacement';
+      expect(h.bridge.submitInline(card.requestId, {
+        actionId: 'inline_form:opaque', expectedRevision: card.revision, value: 'synthetic-secret',
+      })).toBe(false);
+      expect(h.executeInlineAction).not.toHaveBeenCalled();
+      expect(h.bridge.pendingSnapshots()).toHaveLength(0);
+    } finally { abort.abort(); await waiting; }
+  });
+
+  it('rechecks the original install binding at the final inline commit', async () => {
+    let token = 'original';
+    const h = harness(requiredInline(), { getTargetToken: () => token });
+    const abort = new AbortController();
+    const waiting = h.coordinator.ensureReady({ sessionId: 'task', ghostId: 'api', signal: abort.signal });
+    let rejected = false;
+    h.executeInlineAction.mockImplementationOnce(async ({ commit }) => {
+      token = 'replacement';
+      try { commit!.assertCurrent('api', 'inline_form:opaque', 'secret:api_key'); }
+      catch { rejected = true; }
+      return { ok: false, errorCode: 'ACTION_STALE' };
+    });
+    try {
+      await vi.waitFor(() => expect(h.bridge.pendingSnapshots()).toHaveLength(1));
+      const card = h.bridge.pendingSnapshots()[0].request;
+      expect(h.bridge.submitInline(card.requestId, {
+        actionId: 'inline_form:opaque', expectedRevision: card.revision, value: 'synthetic-secret',
+      })).toBe(true);
+      await vi.waitFor(() => expect(h.executeInlineAction).toHaveBeenCalledOnce());
+      expect(rejected).toBe(true);
+    } finally { abort.abort(); await waiting; }
+  });
   it('completes local reconfiguration only after opening settings and a committed write to that connection', async () => {
     const action = { id: 'manage_connection:connection:service', kind: 'manage_connection' as const };
     const assessment: GhostSetupAssessment = { state: 'ready', revision: 1, groups: [{ id: 'connection', mode: 'any_of',
@@ -449,6 +494,24 @@ describe('GhostSetupCoordinator', () => {
       expectedRevision: snapshot.revision,
     });
     await waiting;
+  });
+
+  it('wakes setup waiters from namespaced store ids emitted by plugin settings', async () => {
+    const h = harness(required(), {
+      resolveStoreId: (ghostId) => (ghostId === 'gmail' ? '_ns__xd__gmail' : ghostId),
+    });
+    const waiting = h.coordinator.ensureReady({
+      sessionId: 'session-1',
+      ghostId: 'gmail',
+      tool: 'search',
+    });
+    await vi.waitFor(() => expect(h.bridge.pendingSnapshots()).toHaveLength(1));
+    h.setAssessment(ready(4));
+    h.changeBus.emit('_ns__xd__gmail', { source: 'oauth', ref: 'google' });
+    await expect(waiting).resolves.toMatchObject({
+      ok: true,
+      assessment: { state: 'ready', revision: 4 },
+    });
   });
 
   it('submits inline Secret per request, re-assesses on change, and never snapshots the value', async () => {

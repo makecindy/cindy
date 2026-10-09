@@ -80,6 +80,44 @@ const prepared = {
 };
 
 describe('PluginPublisherOrchestrator', () => {
+  it('waits for trusted identity refresh before inspecting and confirming an old legal prefix package', async () => {
+    const filePath = await packagePath();
+    let resolveIdentity!: (value: { membershipId: string; orgSlug: string; orgName: string }) => void;
+    const identity = new Promise<{ membershipId: string; orgSlug: string; orgName: string }>((resolve) => {
+      resolveIdentity = resolve;
+    });
+    const inspectPackage = vi.fn(async () => ({ ghostId: 'legacy-helper', name: 'Helper', version: '1.0.0' }));
+    const confirm = vi.fn(async () => false);
+    const orch = createPluginPublisherOrchestrator({
+      api: { prepare: vi.fn(), commit: vi.fn(), status: vi.fn() } as unknown as PluginPublisherApi,
+      identity: () => identity, inspectPackage, confirm,
+    });
+    const started = orch.start(filePath);
+    await Promise.resolve();
+    expect(inspectPackage).not.toHaveBeenCalled();
+    resolveIdentity({ membershipId: 'm1', orgSlug: 'actual-org', orgName: 'Acme' });
+    await vi.waitFor(() => expect(orch.snapshot(started.transferId)?.errorCode).toBe('CONFIRM_UNAVAILABLE'));
+    expect(inspectPackage).toHaveBeenCalledWith(filePath);
+    expect(confirm).toHaveBeenCalledWith(expect.objectContaining({
+      orgSlug: 'actual-org', ghostId: 'legacy-helper',
+    }), expect.any(AbortSignal));
+  });
+
+  it('reports missing namespace separately from non-organization membership and does not inspect or upload', async () => {
+    const filePath = await packagePath();
+    const inspectPackage = vi.fn(async () => ({ ghostId: 'legacy-helper', name: 'Helper', version: '1.0.0' }));
+    const prepare = vi.fn();
+    const orch = createPluginPublisherOrchestrator({
+      api: { prepare, commit: vi.fn(), status: vi.fn() } as unknown as PluginPublisherApi,
+      identity: async () => ({ membershipId: 'm1', orgSlug: null, orgName: 'Acme' }),
+      inspectPackage, confirm: vi.fn(async () => true),
+    });
+    const started = orch.start(filePath);
+    await vi.waitFor(() => expect(orch.snapshot(started.transferId)?.errorCode).toBe('PUBLISHER_IDENTITY_UNAVAILABLE'));
+    expect(inspectPackage).not.toHaveBeenCalled();
+    expect(prepare).not.toHaveBeenCalled();
+  });
+
   it('caps pending confirmations per owner before opening another package', async () => {
     const filePath = await packagePath();
     const snapshots: PluginPublisherProgress[] = [];
@@ -690,6 +728,7 @@ describe('PluginPublisherOrchestrator', () => {
     { status: 503, code: 'INTERNAL_ERROR', expected: 'PUBLISH_UNSUPPORTED' },
     { status: 503, code: 'RATE_LIMIT_UNAVAILABLE', expected: 'RATE_LIMIT_UNAVAILABLE' },
     { status: 503, code: 'STORAGE_UNAVAILABLE', expected: 'STORAGE_UNAVAILABLE' },
+    { status: 409, code: 'PLUGIN_NAMESPACE_CLIENT_REQUIRED', expected: 'PLUGIN_NAMESPACE_CLIENT_REQUIRED' },
   ])('maps prepare $status/$code to $expected', async ({ status, code, expected }) => {
     const filePath = await packagePath();
     const snapshots: PluginPublisherProgress[] = [];
@@ -709,5 +748,8 @@ describe('PluginPublisherOrchestrator', () => {
     orch.start(filePath);
     const failed = await waitFor(snapshots, (progress) => progress.stage === 'failed');
     expect(failed.errorCode).toBe(expected);
+    if (code === 'PLUGIN_NAMESPACE_CLIENT_REQUIRED') {
+      expect(failed.message).toBe('请更新 Cindy 后再发布此组织的插件');
+    }
   });
 });

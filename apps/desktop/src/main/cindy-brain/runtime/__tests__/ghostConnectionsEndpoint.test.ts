@@ -34,6 +34,75 @@ function makeVault(): GhostConnectionsVault {
 const G = 'cindy-gitlab';
 const DECLS = new Map([['gitlab', { label: 'GitLab 实例', maxConnections: 2 }]]);
 
+describe('connection install target guard', () => {
+  it.each(['body', 'confirmation'] as const)('rejects a source replacement during %s without writing or notifying', async (transition) => {
+    const manager = new GhostConnectionManager({ vault: makeVault() });
+    const upsert = vi.spyOn(manager, 'upsert');
+    const onChanged = vi.fn();
+    const onAdded = vi.fn();
+    let current = true;
+    const confirmAddHost = vi.fn(async () => { current = false; return true; });
+    const result = await handleGhostConnectionsRequest({
+      method: 'POST', pathname: '/connections/gitlab', ghostId: G, decls: DECLS,
+      manager, onChanged, onAdded, isCurrent: () => current,
+      readBodyText: async () => {
+        if (transition === 'body') current = false;
+        return '{"host":"gitlab.example.com","token":"fake-old-token"}';
+      },
+      confirmAddHost,
+    });
+    expect(result).toEqual({ status: 403 });
+    expect(upsert).not.toHaveBeenCalled();
+    expect(manager.list(G, 'gitlab')).toEqual([]);
+    expect(onChanged).not.toHaveBeenCalled();
+    expect(onAdded).not.toHaveBeenCalled();
+    if (transition === 'body') expect(confirmAddHost).not.toHaveBeenCalled();
+  });
+
+  it('rejects a late default selection without changing the replacement connection', async () => {
+    const manager = new GhostConnectionManager({ vault: makeVault() });
+    const setDefault = vi.spyOn(manager, 'setDefault');
+    const onChanged = vi.fn();
+    let current = true;
+    expect(await handleGhostConnectionsRequest({
+      method: 'POST', pathname: '/connections/gitlab/default', ghostId: G, decls: DECLS,
+      manager, onChanged, isCurrent: () => current, confirmAddHost: async () => true,
+      readBodyText: async () => { current = false; return '{"connectionId":"old-id"}'; },
+    })).toEqual({ status: 403 });
+    expect(setDefault).not.toHaveBeenCalled();
+    expect(onChanged).not.toHaveBeenCalled();
+  });
+
+  it('rejects connection deletion from an invalid install', async () => {
+    const manager = new GhostConnectionManager({ vault: makeVault() });
+    const remove = vi.spyOn(manager, 'remove');
+    const onChanged = vi.fn();
+    expect(await handleGhostConnectionsRequest({
+      method: 'DELETE', pathname: '/connections/gitlab/old-id', ghostId: G, decls: DECLS,
+      manager, onChanged, isCurrent: () => false, confirmAddHost: async () => true,
+      readBodyText: vi.fn(),
+    })).toEqual({ status: 403 });
+    expect(remove).not.toHaveBeenCalled();
+    expect(onChanged).not.toHaveBeenCalled();
+  });
+
+  it('still confirms and writes for the unchanged current install', async () => {
+    const manager = new GhostConnectionManager({ vault: makeVault() });
+    const confirmAddHost = vi.fn(async () => true);
+    const onChanged = vi.fn();
+    const result = await handleGhostConnectionsRequest({
+      method: 'POST', pathname: '/connections/gitlab', ghostId: G, decls: DECLS,
+      manager, onChanged, isCurrent: () => true, confirmAddHost,
+      readBodyText: async () => '{"host":"gitlab.example.com","token":"fake-current-token"}',
+    });
+    expect(result.status).toBe(200);
+    expect(JSON.parse(result.body!)).toMatchObject({ ok: true });
+    expect(confirmAddHost).toHaveBeenCalledExactlyOnceWith('GitLab 实例', 'gitlab.example.com');
+    expect(manager.list(G, 'gitlab')).toHaveLength(1);
+    expect(onChanged).toHaveBeenCalledExactlyOnceWith('gitlab');
+  });
+});
+
 function call(args: {
   method: string;
   pathname: string;

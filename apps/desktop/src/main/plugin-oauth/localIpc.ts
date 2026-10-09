@@ -1,6 +1,7 @@
 import {
   PLUGIN_OAUTH_CHANNEL,
   oauthId,
+  oauthGhostId,
   parsePluginOauthAction,
   parsePluginSecretInput,
   parsePluginSecretPresentation,
@@ -64,7 +65,7 @@ async function handleAuthorization(
   const { deviceId, ghostId, ...rest } = raw as Record<string, unknown>;
   const action = parsePluginOauthAction(rest);
   const owner = deps.owner();
-  if (!oauthId(deviceId) || !oauthId(ghostId) || !action || !owner) throw fail();
+  if (!oauthId(deviceId) || !oauthGhostId(ghostId) || !action || !owner) throw fail();
   const slot = `${deviceId}:${action.requestId}`;
   if (active.has(slot) || active.size >= 8) throw fail();
   const peerCurrent = capturePluginOauthPeer(deviceId);

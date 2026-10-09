@@ -1,4 +1,5 @@
 import type { GhostManifest } from '../../shared/ghost.js';
+import { isValidPluginNamespace } from '@cindy/plugin-protocol';
 import type { InstalledGhostManifestSnapshot } from '../installedGhostManifest.js';
 import {
   ghostManifestDigest,
@@ -72,4 +73,52 @@ export function installedIdentityMatchesManifest(
   manifest: GhostManifest,
 ): boolean {
   return identity.legacyManifestDigests.includes(ghostManifestDigest(manifest));
+}
+
+interface OrganizationInstallationEvidenceInput {
+  records: readonly PluginMarketInstallationRecord[];
+  evidence: { packageSha256: string | null; approvedManifest: GhostManifest; legacyMigrated: boolean } | null;
+  identity: InstalledMarketManifestIdentity | null;
+}
+
+function matchesApprovedOrganizationInstallation(
+  record: PluginMarketInstallationRecord,
+  input: OrganizationInstallationEvidenceInput,
+  allowLegacyReceiptWithoutStoredIdentity = false,
+): boolean {
+  const { evidence, identity } = input;
+  if (!evidence || !identity) return false;
+  if (record.scope !== 'organization' ||
+      (record.source !== 'market' && record.source !== 'legacy-adopted') ||
+      !record.organizationId ||
+      record.ghostId !== identity.manifest.id || record.version !== identity.manifest.version ||
+      (record.namespace !== undefined && !isValidPluginNamespace(record.namespace)) ||
+      (evidence.packageSha256 !== null && evidence.packageSha256 !== record.sha256) ||
+      (evidence.packageSha256 === null && !evidence.legacyMigrated) ||
+      !installedIdentityMatchesManifest(identity, evidence.approvedManifest)) return false;
+  return verifyInstalledMarketManifest(record, identity) ||
+    (record.rawManifestSha256 === undefined && record.manifestDigest === undefined &&
+      (evidence.packageSha256 === record.sha256 ||
+        (allowLegacyReceiptWithoutStoredIdentity && evidence.packageSha256 === null)));
+}
+
+export function hasVerifiedDisconnectedOrganizationInstallation(
+  input: OrganizationInstallationEvidenceInput,
+): boolean {
+  return input.records.some((record) => !record.installed &&
+    /^[a-f0-9]{64}$/.test(record.sha256) &&
+    matchesApprovedOrganizationInstallation(record, input, true));
+}
+
+export function verifiedUnstampedOrganizationNamespace(input: OrganizationInstallationEvidenceInput & {
+  organizationId: string | null;
+  orgSlug: string | null;
+}): string | null {
+  const installedRecords = input.records.filter((record) => record.installed);
+  if (installedRecords.length !== 1 || !input.orgSlug || !isValidPluginNamespace(input.orgSlug)) return null;
+  const record = installedRecords[0];
+  if (record.organizationId !== input.organizationId ||
+      (record.namespace !== undefined && record.namespace !== input.orgSlug) ||
+      !matchesApprovedOrganizationInstallation(record, input)) return null;
+  return input.orgSlug;
 }

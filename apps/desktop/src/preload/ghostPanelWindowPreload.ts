@@ -20,7 +20,7 @@ import { contextBridge, ipcRenderer } from 'electron';
 import { createAppearanceSnapshotBridge } from './appearanceSnapshot';
 import type { LocalThemesResult } from '../shared/local-themes';
 import type { GhostPanelWindowsState } from '../shared/ghostPanelWindow';
-import { isValidGhostId } from '../shared/ghost';
+import { isValidPluginStoragePart } from '../shared/pluginIdentity';
 import { DEFAULT_LOCALE, SUPPORTED_LOCALES, type SupportedLocale } from '../shared/locale';
 import {
   GHOST_PANEL_WINDOW_CLOSE_REQUESTED_CHANNEL,
@@ -54,7 +54,7 @@ function onPayload<T>(channel: string, cb: (payload: T) => void): Unsub {
 
 const currentGhostPanelId = (() => {
   const raw = new URLSearchParams(window.location.search).get('ghostPanelWindow');
-  return isValidGhostId(raw) ? raw : null;
+  return isValidPluginStoragePart(raw) ? raw : null;
 })();
 
 function mutationErrorForGhostPanel(id: string): Error | null {
@@ -240,19 +240,25 @@ contextBridge.exposeInMainWorld('electronAPI', {
       return ipcRenderer.invoke('ghosts:reload', id);
     },
     /** 启用/停用（面板错误态「关闭」按钮）。 */
-    setEnabled: (id: string, enabled: boolean): Promise<{ ok: true }> => {
+    setEnabled: (id: string, enabled: boolean, expectedInstalledApproval?: string): Promise<{ ok: true }> => {
       const error = mutationErrorForGhostPanel(id);
       if (error) return Promise.reject(error);
-      return ipcRenderer.invoke('ghosts:set-enabled', id, enabled);
+      return ipcRenderer.invoke('ghosts:set-enabled', id, enabled, expectedInstalledApproval);
     },
     /** 解析面板媒体 URI → cindy-media:// 地址（右键菜单 / 拖拽引渡）。 */
     resolvePanelMedia: (
       uri: string,
       purpose?: 'attach' | 'menu',
+      instanceId?: string,
+      sourceToken?: string,
     ): Promise<
       | { url: string; kind?: 'image' }
       | { url: string; kind: 'video'; absPath: string; size: number; name: string; ext: string; mimeType: string }
-    > => ipcRenderer.invoke('ghosts:resolve-panel-media', uri, purpose),
+    > => sourceToken !== undefined
+      ? ipcRenderer.invoke('ghosts:resolve-panel-media', uri, purpose, instanceId, sourceToken)
+      : instanceId === undefined
+        ? ipcRenderer.invoke('ghosts:resolve-panel-media', uri, purpose)
+        : ipcRenderer.invoke('ghosts:resolve-panel-media', uri, purpose, instanceId),
     /** 运行时状态快照（面板崩溃/熔断错误态接管）。 */
     runtimeStates: (): Promise<{ states: Record<string, string> }> =>
       ipcRenderer.invoke('ghosts:runtime-states'),

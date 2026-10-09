@@ -7,6 +7,7 @@ import {
   isGhostInstallApprovalToken,
   type GhostManifest,
 } from '../../shared/ghost.js';
+import { installedGhostStoragePart } from '../../shared/pluginIdentity.js';
 import {
   isPluginMarketCustomIconKey,
   type PluginMarketSnapshot,
@@ -207,7 +208,7 @@ export function registerPluginMarketIpc(): void {
       const previouslyInstalled = new Set(
         getGhostManager()
           .list()
-          .map((g) => g.manifest.id),
+          .map((g) => installedGhostStoragePart(g)),
       );
       return invokePluginMarket(async () => {
         const result = await service().install(
@@ -228,10 +229,10 @@ export function registerPluginMarketIpc(): void {
         );
         if (
           getActiveAppSession().generation === owner.generation &&
-          !previouslyInstalled.has(result.ghost.manifest.id)
+          !previouslyInstalled.has(installedGhostStoragePart(result.ghost))
         ) {
           try {
-            markGhostRecommendationInstalled(result.ghost.manifest.id);
+            markGhostRecommendationInstalled(installedGhostStoragePart(result.ghost));
           } catch {
             log.warn('ghost recommendation install history unavailable');
           }

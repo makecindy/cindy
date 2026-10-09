@@ -39,6 +39,49 @@ export interface RoutineState {
   pausedBotIds?: string[];
 }
 
+
+/** Move event subscriptions off a plugin instance onto its archive key. */
+export function rewriteRoutinePluginSource(
+  state: RoutineState,
+  fromPart: string,
+  toPart: string,
+): RoutineState {
+  const fromId = `plugin:${fromPart}`;
+  const toId = `plugin:${toPart}`;
+  if (fromId === toId) return state;
+  let changed = false;
+  const routines = state.routines.map((routine) => {
+    let routineChanged = false;
+    const triggers = routine.triggers.map((trigger) => {
+      if (trigger.kind !== "event" || trigger.sourceId !== fromId) return trigger;
+      routineChanged = true;
+      changed = true;
+      return { ...trigger, sourceId: toId };
+    });
+    return routineChanged ? { ...routine, triggers } : routine;
+  });
+  const receipts: Record<string, number> = {};
+  for (const [key, timestamp] of Object.entries(state.receipts)) {
+    let nextKey = key;
+    try {
+      const parts: unknown = JSON.parse(key);
+      if (
+        Array.isArray(parts) && parts.length === 2 &&
+        parts[0] === fromId && typeof parts[1] === "string"
+      ) {
+        nextKey = JSON.stringify([toId, parts[1]]);
+        changed = true;
+      }
+    } catch {
+      // Malformed receipt keys stay untouched.
+    }
+    const previous = receipts[nextKey];
+    receipts[nextKey] = previous === undefined ? timestamp : Math.max(previous, timestamp);
+  }
+  if (!changed) return state;
+  return { ...state, routines, receipts };
+}
+
 export interface RoutineEngineDeps {
   load(): Promise<RoutineState | null>;
   save(state: RoutineState): Promise<void>;
@@ -194,6 +237,19 @@ export class RoutineEngine {
     // Host-observed disconnects must still take effect when a plugin has exhausted its quota.
     source.status = "disconnected";
     this.notifyChanged();
+  }
+
+  /** Archived plugins must not keep receiving events published for the replacement. */
+  async relocatePluginSource(fromPart: string, toPart: string): Promise<void> {
+    if (fromPart === toPart) return;
+    const fromId = `plugin:${fromPart}`;
+    await this.change((state) => {
+      const next = rewriteRoutinePluginSource(state, fromPart, toPart);
+      if (next === state) return;
+      state.routines = next.routines;
+      state.receipts = next.receipts;
+    });
+    if (this.sources.delete(fromId)) this.notifyChanged();
   }
 
   async put(botId: string, raw: RoutineInput, id?: string, expectedRevision?: number): Promise<Routine> {

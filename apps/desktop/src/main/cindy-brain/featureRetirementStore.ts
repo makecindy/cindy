@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { isValidGhostId } from '../../shared/ghost.js';
+import { isPluginInstanceKey } from '../../shared/pluginIdentity.js';
 import type { InstalledFeatureRetirement } from '../../shared/featureRetirements.js';
 
 interface RetirementRecord {
@@ -18,7 +19,7 @@ export class FeatureRetirementStore {
   constructor(private readonly getStateRoot: () => string) {}
 
   private file(retirementId: string, pluginId: string): string {
-    if (!isValidGhostId(retirementId) || !isValidGhostId(pluginId))
+    if (!isValidGhostId(retirementId) || !isPluginInstanceKey(pluginId))
       throw new Error('Invalid retirement identity');
     return path.join(this.getStateRoot(), 'feature-retirements', retirementId, `${pluginId}.json`);
   }

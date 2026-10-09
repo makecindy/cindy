@@ -1,3 +1,4 @@
+import { installedGhostStoragePart } from '../../../shared/pluginIdentity.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -112,6 +113,25 @@ function sameRealPath(a: string, b: string): boolean {
 }
 
 describe('skillSlot · checkSkillMdConsistency', () => {
+  it('reclaims a new root snapshot link before reinstalling the same skill', async () => {
+    const installed = { ...ghost('helper', [{ dir: 'skills/guide', name: 'guide' }]), namespace: null };
+    const snapshotRoot = path.join(approvalStateRoot, 'skill-snapshots', '_ns', '_root', 'helper');
+    const skillRoot = (revision: string) => path.join(snapshotRoot, revision);
+    const write = async (revision: string) => {
+      installed.approvedSkillRoot = skillRoot(revision);
+      const directory = path.join(installed.approvedSkillRoot, 'skills', 'guide');
+      await fs.promises.mkdir(directory, { recursive: true });
+      await fs.promises.writeFile(path.join(directory, 'SKILL.md'), '---\nname: guide\ndescription: 说明\n---\n正文\n');
+    };
+    const reconcile = (ghosts: InstalledGhost[]) => reconcileGhostSkillLinks({ ghosts, brainRoot, approvalStateRoot, homeDir });
+    await write('original');
+    expect((await reconcile([installed])).actions).toContainEqual({ linkName: 'helper--guide', op: 'linked' });
+    await fs.promises.rm(snapshotRoot, { recursive: true });
+    expect((await reconcile([])).actions).toContainEqual({ linkName: 'helper--guide', op: 'removed' });
+    await write('replacement');
+    expect((await reconcile([installed])).actions).toContainEqual({ linkName: 'helper--guide', op: 'linked' });
+    expect(sameRealPath(path.join(sharedDir(), 'helper--guide'), path.join(skillRoot('replacement'), 'skills', 'guide'))).toBe(true);
+  });
   const item = { dir: 'skills/foo', name: 'foo', description: '教 Agent 用 foo' };
   const md = (name: string, description: string) =>
     `---\nname: ${name}\ndescription: ${description}\n---\n\n正文\n`;
@@ -136,6 +156,46 @@ describe('skillSlot · checkSkillMdConsistency', () => {
 });
 
 describe('skillSlot · reconcileGhostSkillLinks', () => {
+  it('projects root and organization skills separately and reclaims a namespaced dangling link', async () => {
+    const root = ghost('my-ghost', [{ dir: 'skills/foo', name: 'foo' }]);
+    const organization = {
+      ...ghost('my-ghost', [{ dir: 'skills/foo', name: 'foo' }]),
+      namespace: 'acme',
+      dir: path.join(brainRoot, '_ns', 'acme', 'my-ghost'),
+      approvedSkillRoot: path.join(approvalStateRoot, 'skill-snapshots', '_ns', 'acme', 'my-ghost', 'revision'),
+    };
+    await writeSkillDir('my-ghost', 'skills/foo', 'foo');
+    await fs.promises.mkdir(path.join(organization.approvedSkillRoot, 'skills', 'foo'), { recursive: true });
+    await fs.promises.writeFile(path.join(organization.approvedSkillRoot, 'skills', 'foo', 'SKILL.md'),
+      '---\nname: foo\ndescription: 说明\n---\n正文\n');
+    await reconcileGhostSkillLinks({ ghosts: [root, organization], brainRoot, approvalStateRoot, homeDir });
+    const rootLink = path.join(sharedDir(), ghostSkillLinkName('my-ghost', 'foo'));
+    const orgLink = path.join(sharedDir(), ghostSkillLinkName('_ns__acme__my-ghost', 'foo'));
+    expect(sameRealPath(rootLink, path.join(brainRoot, 'my-ghost', 'skills', 'foo'))).toBe(true);
+    expect(sameRealPath(orgLink, path.join(organization.approvedSkillRoot, 'skills', 'foo'))).toBe(true);
+    await fs.promises.rm(organization.approvedSkillRoot, { recursive: true });
+    await reconcileGhostSkillLinks({ ghosts: [root], brainRoot, approvalStateRoot, homeDir });
+    await expect(fs.promises.lstat(orgLink)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('reclaims a pre-namespace-link-named orphan under a namespaced snapshot path', async () => {
+    const snapshot = path.join(approvalStateRoot, 'skill-snapshots', '_ns', 'acme', 'my-ghost', 'revision', 'skills', 'foo');
+    const legacyLink = path.join(sharedDir(), ghostSkillLinkName('my-ghost', 'foo'));
+    await fs.promises.mkdir(sharedDir(), { recursive: true });
+    await fs.promises.symlink(snapshot, legacyLink, process.platform === 'win32' ? 'junction' : 'dir');
+    await reconcileGhostSkillLinks({ ghosts: [], brainRoot, approvalStateRoot, homeDir });
+    await expect(fs.promises.lstat(legacyLink)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it.each(['other', '_root'])('does not reclaim a namespaced dangling link to a %s snapshot', async (namespace) => {
+    const snapshot = path.join(approvalStateRoot, 'skill-snapshots', '_ns', namespace, 'my-ghost', 'revision', 'skills', 'foo');
+    const externalLink = path.join(sharedDir(), ghostSkillLinkName('_ns__acme__my-ghost', 'foo'));
+    await fs.promises.mkdir(sharedDir(), { recursive: true });
+    await fs.promises.symlink(snapshot, externalLink, process.platform === 'win32' ? 'junction' : 'dir');
+    await reconcileGhostSkillLinks({ ghosts: [], brainRoot, approvalStateRoot, homeDir });
+    expect(await fs.promises.readlink(externalLink)).toBe(snapshot);
+  });
+
   it('启用插件 → 私有目录可见;二次对账幂等', async () => {
     await writeSkillDir('my-ghost', 'skills/foo', 'foo');
     const ghosts = [ghost('my-ghost', [{ dir: 'skills/foo', name: 'foo' }])];
@@ -731,7 +791,7 @@ describe('skillSlot · 全链路(打包 → 装入 → 对账 → 双端可见)'
       validateApprovedSkillSnapshot: (candidate) =>
         manager.verifyApprovedSkillSnapshot(candidate),
     });
-    const linkName = ghostSkillLinkName('e2e-ghost', 'demo');
+    const linkName = ghostSkillLinkName(installedGhostStoragePart(manager.list()[0]!), 'demo');
     const approvedSkillRoot = manager.list()[0].approvedSkillRoot;
     expect(approvedSkillRoot).toBeTruthy();
     const target = path.join(approvedSkillRoot!, 'skills', 'demo');
@@ -741,7 +801,7 @@ describe('skillSlot · 全链路(打包 → 装入 → 对账 → 双端可见)'
       await fs.promises.readFile(path.join(sharedDir(), linkName, 'SKILL.md'), 'utf8'),
     ).toContain('演示技能');
     await fs.promises.writeFile(
-      path.join(brainRoot, 'e2e-ghost', 'skills', 'demo', 'SKILL.md'),
+      path.join(manager.list()[0].dir, 'skills', 'demo', 'SKILL.md'),
       '---\nname: demo\ndescription: 演示技能\n---\n\n篡改后的指令\n',
     );
     expect(
