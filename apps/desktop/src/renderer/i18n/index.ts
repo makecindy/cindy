@@ -23,7 +23,7 @@ import jaCommon from './locales/ja/common.json';
 import jaAiRename from './locales/ja/aiRename.json';
 import koCommon from './locales/ko/common.json';
 import koAiRename from './locales/ko/aiRename.json';
-import { GHOST_OFFICIAL_ID_PREFIXES } from '../../shared/ghost';
+import { GHOST_OFFICIAL_ID_PREFIX } from '../../shared/ghost';
 import { DEFAULT_LOCALE } from '../../shared/locale';
 
 export {
@@ -105,12 +105,11 @@ void i18n.use(initReactI18next).init({
     //
     // pronoun:伙伴文案里指代该伙伴的第三人称。具体视图可按当前伙伴传入；这里给
     // 一个通用兜底，避免漏传时把 `{{pronoun}}` 原样显示给用户。
-    // 保留前缀同样只读 shared/ghost.ts 的正本。错误文案不各自枚举,
-    // 新增前缀后所有装入入口会自动展示完整列表。
+    // 用户装入通道只保留 cindy-。官方运行时前缀仍在 GHOST_OFFICIAL_ID_PREFIXES。
     defaultVariables: {
       appName: BRAND_NAME,
       pronoun: '这位伙伴',
-      reservedGhostIdPrefixes: GHOST_OFFICIAL_ID_PREFIXES.join(' / '),
+      reservedGhostIdPrefixes: GHOST_OFFICIAL_ID_PREFIX,
     },
   },
   parseMissingKeyHandler(key: string, defaultValue?: string) {

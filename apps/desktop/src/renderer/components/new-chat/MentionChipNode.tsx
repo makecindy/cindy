@@ -22,6 +22,7 @@ import {
 
 import { InlineReferenceChip } from '@/components/chat/InlineReferenceChip';
 import { useInstalledGhosts } from '@/cindy-brain/useInstalledGhosts';
+import { findInstalledGhostByInstanceId } from '../../../shared/pluginIdentity';
 import { GhostPluginIcon } from '@/features/plugin/GhostPluginIcon';
 import { parseSessionDeepLinkHref } from '@/lib/deepLink';
 
@@ -85,7 +86,7 @@ function MentionIcon({ attrs }: { attrs: MentionChipAttrs }) {
 function PluginCapabilityIcon({ attrs }: { attrs: MentionChipAttrs }) {
   const installedGhosts = useInstalledGhosts();
   const pluginId = attrs.pluginId?.trim() || attrs.label;
-  const ghost = installedGhosts.find((candidate) => candidate.manifest.id === pluginId);
+  const ghost = findInstalledGhostByInstanceId(installedGhosts, pluginId);
 
   return (
     <GhostPluginIcon

@@ -13,7 +13,7 @@ import {
   setSidebarNavigationPrefs,
 } from '../sidebarNavigationPrefs';
 
-type MainViewMock = { ghostId: string; title: string; icon: 'globe' };
+type MainViewMock = { ghostId: string; instanceId: string; title: string; icon: 'globe' };
 const OWNER = 'owner-1';
 const PREFS_KEY = `sidebar-navigation:v2.owner.${OWNER}`;
 const mainViewsMock = vi.hoisted(() => ({
@@ -25,7 +25,7 @@ const visibilityMock = vi.hoisted(() => ({
     async () => true,
   ),
 }));
-const SITES: MainViewMock = { ghostId: 'xd-sites', title: '站点', icon: 'globe' };
+const SITES: MainViewMock = { ghostId: 'xd-sites', instanceId: 'xd-sites', title: '站点', icon: 'globe' };
 
 vi.mock('@/cindy-brain/ghostMainViews', () => ({
   useGhostMainViews: () => ({
@@ -246,6 +246,28 @@ describe('sidebar navigation customization', () => {
       'false',
     );
   });
+  it.each([
+    { label: 'short', namespace: 'acme' },
+    { label: 'maximum-length', namespace: 'a'.repeat(128) },
+  ])('saves independent placement and order for same-name root and enterprise instances with $label namespace', ({ namespace }) => {
+    const root = { ...SITES, instanceId: '_root__xd-sites', title: 'Root sites' };
+    const organization = { ...SITES, instanceId: '_ns__' + namespace + '__xd-sites', title: 'Enterprise sites' };
+    const organizationEntryId = `app:${organization.instanceId}` as const;
+    mainViewsMock.routeCapable = [root, organization];
+    mainViewsMock.sidebarVisible = [root, organization];
+    const savedOrder = ['app:_root__xd-sites', organizationEntryId, ...defaults().order] as const;
+    setSidebarNavigationPrefs(OWNER, { order: [...savedOrder], visible: [...defaults().visible],
+      appsAtTop: ['app:_root__xd-sites'] });
+    render(<SidebarNavigationCustomize onDone={() => {}} />);
+    expect(screen.getByRole('checkbox', { name: 'Root sites' }).getAttribute('aria-checked')).toBe('true');
+    expect(screen.getByRole('checkbox', { name: 'Enterprise sites' }).getAttribute('aria-checked')).toBe('false');
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Root sites' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Enterprise sites' }));
+    fireEvent.click(screen.getByRole('button', { name: 'sidebar.navigation.customize.done' }));
+    navigationTesting.resetPrefsCache();
+    expect(getSidebarNavigationPrefs(OWNER)).toEqual({ order: [...savedOrder],
+      visible: [...defaults().visible], appsAtTop: [organizationEntryId] });
+  });
 
   it('leaves out plugins switched off in their own settings and keeps their saved place', () => {
     mainViewsMock.routeCapable = [SITES];
@@ -262,7 +284,7 @@ describe('sidebar navigation customization', () => {
   });
 
   it('drops every plugin placement on reset, including ones switched off for now', () => {
-    const off = { ghostId: 'off', title: 'Off', icon: 'globe' as const };
+    const off = { ghostId: 'off', instanceId: 'off', title: 'Off', icon: 'globe' as const };
     mainViewsMock.routeCapable = [SITES, off];
     mainViewsMock.sidebarVisible = [SITES];
     setSidebarNavigationPrefs(OWNER, {

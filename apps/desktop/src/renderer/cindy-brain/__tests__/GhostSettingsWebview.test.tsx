@@ -96,6 +96,26 @@ function renderSettings(settingsHeight?: number, measuredHeight?: number) {
 }
 
 describe('GhostSettingsWebview layout ownership', () => {
+  it('recreates the settings guest when a same-version source gets a new receipt', () => {
+    const { ghost, view } = renderSettings();
+    const approved = { ...ghost, approval: { state: 'approved' as const, revision: 'receipt-a' } };
+    view.rerender(<GhostSettingsWebview ghost={approved} />);
+    const original = view.container.querySelector('webview');
+    view.rerender(<GhostSettingsWebview ghost={{ ...approved, approval: { state: 'approved', revision: 'receipt-b' } }} />);
+    const replacement = view.container.querySelector('webview');
+    expect(replacement).not.toBe(original);
+    expect(original?.isConnected).toBe(false);
+    expect(replacement?.getAttribute('src')).toBe(original?.getAttribute('src'));
+    view.rerender(<GhostSettingsWebview ghost={{ ...approved, approval: { state: 'approved', revision: 'receipt-b' } }} />);
+    expect(view.container.querySelector('webview')).toBe(replacement);
+  });
+  it('moves an in-place namespaced settings page off the root WebView partition', () => {
+    const { ghost, view, webview } = renderSettings();
+    expect(webview.getAttribute('partition')).toBe('cindy-ghost-example-settings-layout');
+    view.rerender(<GhostSettingsWebview ghost={{ ...ghost, namespace: 'acme' }} />);
+    expect(view.container.querySelector('webview')?.getAttribute('partition'))
+      .toBe('cindy-ghost-_ns__acme__example-settings-layout');
+  });
   it('keeps account status visible and the plugin form collapsed without a duplicate title', () => {
     const { ghost, view } = renderSettings();
     view.rerender(

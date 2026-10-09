@@ -35,6 +35,14 @@ describe('settings height cache', () => {
     expect(loadGhostSettingsHeight('owner-a', 'g1', '2.0.0')).toBeNull();
   });
 
+  it('keeps same-name root and organization heights separate', () => {
+    saveGhostSettingsHeight('owner-a', 'helper', '1.0.0', 240);
+    saveGhostSettingsHeight('owner-a', '_ns__acme__helper', '1.0.0', 320);
+    pruneGhostSettingsHeights('owner-a', ['helper', '_ns__acme__helper']);
+    expect(loadGhostSettingsHeight('owner-a', 'helper', '1.0.0')).toBe(240);
+    expect(loadGhostSettingsHeight('owner-a', '_ns__acme__helper', '1.0.0')).toBe(320);
+  });
+
   it('isolates owners and plugins without claiming unowned legacy data', () => {
     localStorage.setItem('ghostSettings.snapshot.g1', JSON.stringify(legacySnapshot));
     saveGhostSettingsHeight('owner-a', 'g1', '1.0.0', 240);

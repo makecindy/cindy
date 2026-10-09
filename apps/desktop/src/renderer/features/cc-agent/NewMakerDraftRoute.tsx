@@ -192,6 +192,7 @@ import {
   type HomeTaskSuggestion,
 } from './pluginHomeSuggestions';
 import { useInstalledGhosts } from '@/cindy-brain/useInstalledGhosts';
+import { installedGhostStoragePart } from '../../../shared/pluginIdentity.js';
 import {
   startPendingPluginSuggestion,
   takePendingPluginSuggestion,
@@ -215,7 +216,7 @@ import { cn } from '@/lib/utils';
 import { InvisibleWindowDragStrip } from '@/components/layout/windowDrag';
 import {
   attachGhostMediaToSession,
-  getGhostMediaUriFromDataTransfer,
+  getGhostMediaHandoverFromDataTransfer,
 } from '@/cindy-brain/ghostMediaHandover';
 import { isGlobalDropIntercepted } from '@/lib/globalDropIntercept';
 import { classifyUnclassifiedDroppedItems, getDroppedFileItems } from '@/lib/fileDrop';
@@ -5315,7 +5316,7 @@ export function NewMakerDraftRoute() {
       new Map(
         (isDeviceLinkDraft ? [] : filterGhostsForWorkdir(installedGhosts, effectiveWorkingDir))
           .filter((g) => g.enabled)
-          .map((g) => [g.manifest.id, g]),
+          .map((g) => [installedGhostStoragePart(g), g]),
       ),
     [isDeviceLinkDraft, effectiveWorkingDir, installedGhosts],
   );
@@ -5324,7 +5325,7 @@ export function NewMakerDraftRoute() {
       const ghost = suggestion.pluginId
         ? usableSuggestionGhosts.get(suggestion.pluginId)
         : undefined;
-      return ghost ? pluginSuggestionComposerText(suggestion.prompt, ghost, t) : suggestion.prompt;
+      return ghost ? pluginSuggestionComposerText(suggestion.prompt, ghost, t, [...usableSuggestionGhosts.values()]) : suggestion.prompt;
     },
     [t, usableSuggestionGhosts],
   );
@@ -5397,15 +5398,16 @@ export function NewMakerDraftRoute() {
           toast.info(t('newChat.pluginSuggestions.changed'));
           return;
         }
-        const ghost = window.electronAPI.ghosts
-          .listSync()
-          .ghosts.find((g) => g.manifest.id === suggestion.pluginId);
+        const installedGhosts = window.electronAPI.ghosts.listSync().ghosts;
+        const ghost = installedGhosts.find((g) => installedGhostStoragePart(g) === suggestion.pluginId);
+        const usableGhosts = filterGhostsForWorkdir(installedGhosts, request.workingDir)
+          .filter((g) => g.enabled);
         const usable =
-          ghost && ghost.enabled && filterGhostsForWorkdir([ghost], request.workingDir).length > 0;
+          ghost && usableGhosts.includes(ghost);
         if (!usable) {
           let route: string;
           if (ghost) {
-            route = `/plugins?ghost=${encodeURIComponent(ghost.manifest.id)}`;
+            route = `/plugins?ghost=${encodeURIComponent(installedGhostStoragePart(ghost))}`;
           } else {
             const market = await window.electronAPI.pluginMarket.snapshot();
             if (!stillCurrent() || readPluginRecommendationSnapshot().ownerId !== request.ownerId)
@@ -5428,8 +5430,8 @@ export function NewMakerDraftRoute() {
         // 填进输入框而不是直接发送;ChatInput 发送时会自己展开 $command。无指令插件发送时
         // 识别不出所用插件,所以选中插件建议并成功填入即记一次最近使用(有指令的插件发送时
         // 还会再记一次,只刷新时间,不影响排序语义)。
-        if (fillComposerWithSuggestion(pluginSuggestionComposerText(suggestion.prompt, ghost, t))) {
-          void window.electronAPI.ghosts.markUsed(ghost.manifest.id).catch(() => undefined);
+        if (fillComposerWithSuggestion(pluginSuggestionComposerText(suggestion.prompt, ghost, t, usableGhosts))) {
+          void window.electronAPI.ghosts.markUsed(installedGhostStoragePart(ghost)).catch(() => undefined);
         }
       } catch {
         if (pluginSuggestionMounted.current)
@@ -5514,7 +5516,7 @@ export function NewMakerDraftRoute() {
           setPageDragOver(false);
           // .cindy / .cshare 已被窗口级 capture 接管(装入 / 导入链路),不当附件消费。
           if (isGlobalDropIntercepted(e.nativeEvent)) return;
-          const ghostMediaUri = getGhostMediaUriFromDataTransfer(e.dataTransfer);
+          const ghostMediaUri = getGhostMediaHandoverFromDataTransfer(e.dataTransfer);
           if (ghostMediaUri) {
             e.preventDefault();
             e.stopPropagation();

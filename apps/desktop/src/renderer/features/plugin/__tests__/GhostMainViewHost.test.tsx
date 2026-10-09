@@ -2,6 +2,7 @@
 
 import { render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { InstalledGhost } from '../../../../shared/ghost';
 
 const mocks = vi.hoisted(() => ({
   navigate: vi.fn(),
@@ -25,7 +26,9 @@ vi.mock('@/cindy-brain/runtimeStates', () => ({
   useGhostRuntimeState: () => mocks.runtimeState,
 }));
 vi.mock('@/cindy-brain/ghostPanelBody', () => ({
-  GhostWebviewBody: ({ html }: { html?: string }) => <div data-testid="webview">{html}</div>,
+  GhostWebviewBody: ({ html, ghost }: { html?: string; ghost: InstalledGhost }) => (
+    <div data-testid="webview" data-dir={ghost.dir}>{html}</div>
+  ),
   GhostPanelError: ({ state }: { state: string }) => <div data-testid="error">{state}</div>,
 }));
 vi.mock('@/features/cc-agent/useRegisterCCAgentSidebar', () => ({
@@ -60,6 +63,7 @@ beforeEach(() => {
   mocks.routeCapable = [
     {
       ghostId: 'workspace',
+      instanceId: 'workspace',
       title: 'Workspace',
       manifest,
       installedGhost: {
@@ -84,6 +88,71 @@ describe('GhostMainViewHost', () => {
     render(<GhostMainViewHost />);
     expect(screen.queryByTestId('webview')).toBeNull();
     expect(mocks.navigate).toHaveBeenCalledWith('/plugins', { replace: true });
+  });
+
+  it('does not resolve an absent physical route to a same-name organization instance', () => {
+    mocks.routeCapable = [{
+      ghostId: 'workspace',
+      instanceId: '_ns__acme__workspace',
+      title: 'Organization Workspace',
+      manifest,
+      installedGhost: {
+        manifest,
+        namespace: 'acme',
+        dir: '/plugins/_ns/acme/workspace',
+        enabled: true,
+        approval: { state: 'approved', revision: 'organization-revision' },
+      },
+    }];
+    render(<GhostMainViewHost />);
+
+    expect(screen.queryByTestId('webview')).toBeNull();
+    expect(mocks.navigate).toHaveBeenCalledWith('/plugins', { replace: true });
+  });
+
+  it('leaves the route when its original instance is disabled instead of switching to its twin', () => {
+    const organization = {
+      ghostId: 'workspace',
+      instanceId: '_ns__acme__workspace',
+      title: 'Organization Workspace',
+      manifest,
+      installedGhost: {
+        manifest,
+        namespace: 'acme',
+        dir: '/plugins/_ns/acme/workspace',
+        enabled: true,
+        approval: { state: 'approved', revision: 'organization-revision' },
+      },
+    };
+    mocks.routeCapable.push(organization);
+    const { rerender } = render(<GhostMainViewHost />);
+    expect(screen.getByTestId('webview').getAttribute('data-dir')).toBe('/plugins/workspace');
+
+    mocks.routeCapable = [organization];
+    rerender(<GhostMainViewHost />);
+
+    expect(screen.queryByTestId('webview')).toBeNull();
+    expect(mocks.navigate).toHaveBeenCalledWith('/plugins', { replace: true });
+  });
+
+  it.each([
+    ['workspace', 'acme', '/plugins/workspace'],
+    ['_ns__acme__workspace', 'acme', '/plugins/_ns/acme/workspace'],
+    ['_root__workspace', null, '/plugins/_ns/_root/workspace'],
+  ] as const)('opens the physical route %s without changing its namespace', (instanceId, namespace, dir) => {
+    mocks.ghostId = instanceId;
+    mocks.routeCapable = [{
+      ghostId: 'workspace',
+      instanceId,
+      title: 'Workspace',
+      manifest,
+      installedGhost: { manifest, namespace, dir, enabled: true,
+        approval: { state: 'approved', revision: 'revision' } },
+    }];
+    render(<GhostMainViewHost />);
+
+    expect(screen.getByTestId('webview').getAttribute('data-dir')).toBe(dir);
+    expect(mocks.navigate).not.toHaveBeenCalled();
   });
 
   it('unmounts the webview and replaces the route when capability is revoked in place', () => {

@@ -20,9 +20,16 @@ import i18n from '@/i18n';
 import { GhostFulfillmentContext, GhostSummonCard } from '@/components/chat/GhostSummonCard';
 import type { GhostDirectiveDisplay } from '@/cindy-brain/ghostCommand';
 import type { HostCapabilityDirectiveDisplay } from '@/cindy-brain/hostCapabilityInvocation';
+import type { InstalledGhost } from '../../shared/ghost';
+import { collectGhostCallsByUserTurn } from '@/components/chat/MessageStream';
+import type { ChatMessage } from '@/lib/makerChatStore';
+
+const { installedGhostsMock } = vi.hoisted(() => ({
+  installedGhostsMock: vi.fn(() => [] as InstalledGhost[]),
+}));
 
 vi.mock('@/cindy-brain/useInstalledGhosts', () => ({
-  useInstalledGhosts: () => [],
+  useInstalledGhosts: () => installedGhostsMock(),
 }));
 
 const commandDirective: GhostDirectiveDisplay = {
@@ -72,12 +79,167 @@ beforeEach(async () => {
 
 afterEach(() => {
   cleanup();
+  installedGhostsMock.mockReturnValue([]);
   vi.useRealTimers();
   // biome-ignore lint/performance/noDelete: 还原 jsdom 默认(无 matchMedia)。
   delete (window as { matchMedia?: unknown }).matchMedia;
 });
 
 describe('GhostSummonCard(chip 形态)', () => {
+  it('does not attach a newly installed root version to an ambiguous historical bare id', () => {
+    installedGhostsMock.mockReturnValue([
+      { manifest: { id: 'helper', name: 'New Root', version: '99' },
+        dir: '/tmp/helper', namespace: null, iconDataUrl: 'data:image/png;base64,AAAA' },
+    ] as InstalledGhost[]);
+    const { container } = render(
+      <GhostSummonCard directive={{ kind: 'semantic', ghostIds: ['helper'] }} />,
+    );
+    expect(screen.queryByText('v99')).toBeNull();
+    expect(container.querySelector('img[src="data:image/png;base64,AAAA"]')).toBeNull();
+  });
+
+  it('renders an organization semantic call instead of its same-id root neighbor', () => {
+    installedGhostsMock.mockReturnValue([
+      { manifest: { id: 'helper', name: 'Root', version: '1' }, dir: '/tmp/helper', namespace: null },
+      { manifest: { id: 'helper', name: 'Organization', version: '2' }, dir: '/tmp/_ns/acme/helper', namespace: 'acme' },
+    ] as InstalledGhost[]);
+    const messages = [
+      { clientId: 'm1', role: 'user', content: 'help' },
+      { clientId: 'call', role: 'tool_use', toolName: 'mcp__cindy__ghost_call', toolInput: { ghost_id: 'helper', namespace: 'acme', tool: 'run' } },
+    ] as ChatMessage[];
+    const fulfilled = collectGhostCallsByUserTurn(messages);
+    render(
+      <GhostFulfillmentContext.Provider value={fulfilled}>
+        <GhostSummonCard directive={{ kind: 'semantic', ghostIds: [...(fulfilled.get('m1') ?? [])] }} messageClientId='m1' />
+      </GhostFulfillmentContext.Provider>,
+    );
+    expect(screen.getByText('Organization')).toBeTruthy();
+    expect(screen.queryByText('Root')).toBeNull();
+  });
+
+  it('resolves the logical organization after an in-place namespace stamp', () => {
+    installedGhostsMock.mockReturnValue([
+      { manifest: { id: 'helper', name: 'Organization', version: '2' }, dir: '/tmp/helper', namespace: 'acme' },
+    ] as InstalledGhost[]);
+    render(
+      <GhostFulfillmentContext.Provider value={fulfillmentOf('m1', ['_ns__acme__helper'])}>
+        <GhostSummonCard directive={{ kind: 'semantic', ghostIds: ['_ns__acme__helper'] }} messageClientId='m1' />
+      </GhostFulfillmentContext.Provider>,
+    );
+    expect(screen.getByText('Organization')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { expanded: false }));
+    expect(screen.getByText('v2')).toBeTruthy();
+  });
+
+  it('counts an explicit organization command after its in-place install relocates', () => {
+    installedGhostsMock.mockReturnValue([
+      { manifest: { id: 'helper', name: 'Root', version: '1' }, dir: '/tmp/helper', namespace: null },
+      { manifest: { id: 'helper', name: 'Organization', version: '2' }, dir: '/tmp/_ns/acme/helper', namespace: 'acme' },
+    ] as InstalledGhost[]);
+    render(
+      <GhostFulfillmentContext.Provider value={fulfillmentOf('m1', ['_ns__acme__helper'])}>
+        <GhostSummonCard directive={{ kind: 'command', command: 'draw', name: 'Organization', ghostId: 'helper', raw: '' }} commandNamespace='acme' messageClientId='m1' />
+      </GhostFulfillmentContext.Provider>,
+    );
+    expect(screen.getByText('已调用')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { expanded: false }));
+    expect(screen.getByText('v2')).toBeTruthy();
+  });
+
+  it('counts a legacy bare call when an in-place organization is the only matching install', () => {
+    installedGhostsMock.mockReturnValue([
+      { manifest: { id: 'helper', name: 'Organization', version: '2' }, dir: '/tmp/helper', namespace: 'acme' },
+    ] as InstalledGhost[]);
+    render(
+      <GhostFulfillmentContext.Provider value={fulfillmentOf('m1', ['helper'])}>
+        <GhostSummonCard directive={{ kind: 'command', command: 'draw', name: 'Organization', ghostId: 'helper', raw: '' }} commandNamespace='acme' messageClientId='m1' />
+      </GhostFulfillmentContext.Provider>,
+    );
+    expect(screen.getByText('已调用')).toBeTruthy();
+  });
+
+  it('does not claim a bare call for an organization when root also exists', () => {
+    installedGhostsMock.mockReturnValue([
+      { manifest: { id: 'helper', name: 'Root', version: '1' }, dir: '/tmp/helper', namespace: null },
+      { manifest: { id: 'helper', name: 'Organization', version: '2' }, dir: '/tmp/_ns/acme/helper', namespace: 'acme' },
+    ] as InstalledGhost[]);
+    render(
+      <GhostFulfillmentContext.Provider value={fulfillmentOf('m1', ['helper'])}>
+        <GhostSummonCard directive={{ kind: 'command', command: 'draw', name: 'Organization', ghostId: 'helper', raw: '' }} commandNamespace='acme' messageClientId='m1' />
+      </GhostFulfillmentContext.Provider>,
+    );
+    expect(screen.getByText('已完成')).toBeTruthy();
+    expect(screen.queryByText('已调用')).toBeNull();
+  });
+
+  it('does not mark a root command as called by an organization of the same id', () => {
+    installedGhostsMock.mockReturnValue([
+      { manifest: { id: 'helper', name: 'Root', version: '1' }, dir: '/tmp/helper', namespace: null },
+      { manifest: { id: 'helper', name: 'Organization', version: '2' }, dir: '/tmp/_ns/acme/helper', namespace: 'acme' },
+    ] as InstalledGhost[]);
+    render(
+      <GhostFulfillmentContext.Provider value={fulfillmentOf('m1', ['_ns__acme__helper'])}>
+        <GhostSummonCard directive={{ kind: 'command', command: 'draw', name: 'Root', ghostId: 'helper', raw: '' }} messageClientId='m1' />
+      </GhostFulfillmentContext.Provider>,
+    );
+    expect(screen.getByText('已完成')).toBeTruthy();
+    expect(screen.queryByText('已调用')).toBeNull();
+  });
+  it('resolves an explicit root command without attributing an organization call to it', () => {
+    installedGhostsMock.mockReturnValue([
+      { manifest: { id: 'helper', name: 'Root', version: '1' }, dir: '/tmp/helper', namespace: null },
+      { manifest: { id: 'helper', name: 'Organization', version: '2' }, dir: '/tmp/_ns/acme/helper', namespace: 'acme' },
+    ] as InstalledGhost[]);
+    const directive = { kind: 'command', command: 'draw/@root', name: 'Root', ghostId: 'helper', raw: '' } as const;
+    const { rerender } = render(
+      <GhostFulfillmentContext.Provider value={fulfillmentOf('m1', ['_ns__acme__helper'])}>
+        <GhostSummonCard directive={directive} commandNamespace='@root' messageClientId='m1' />
+      </GhostFulfillmentContext.Provider>,
+    );
+    expect(screen.getByText('已完成')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { expanded: false }));
+    expect(screen.getByText('v1')).toBeTruthy();
+    rerender(
+      <GhostFulfillmentContext.Provider value={fulfillmentOf('m1', ['helper'])}>
+        <GhostSummonCard directive={directive} commandNamespace='@root' messageClientId='m1' />
+      </GhostFulfillmentContext.Provider>,
+    );
+    expect(screen.getByText('已调用')).toBeTruthy();
+  });
+  it('resolves a namespaced $command instance id to the live install version', () => {
+    installedGhostsMock.mockReturnValue([
+      {
+        manifest: {
+          schemaVersion: 2,
+          id: 'art',
+          name: 'Art',
+          version: '2.0.0',
+          kind: 'chip',
+          entry: 'main.js',
+          command: 'draw',
+          tools: [{ name: 'run', description: 'Run.' }],
+        },
+        dir: '/tmp/_ns/acme/art',
+        namespace: 'acme',
+        enabled: true,
+        approval: { state: 'approved', revision: '00000000-0000-4000-8000-000000000001' },
+      } as InstalledGhost,
+    ]);
+    render(
+      <GhostSummonCard
+        directive={{
+          kind: 'command',
+          command: 'draw',
+          name: 'Art',
+          ghostId: '_ns__acme__art',
+          raw: '[插件指令] 用户显式点名插件 Art(id: _ns__acme__art)',
+        }}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { expanded: false }));
+    expect(screen.getByText('v2.0.0')).toBeTruthy();
+  });
+
   it('renders the seal chip with plugin name and no overline/prompt slot', () => {
     render(<GhostSummonCard directive={commandDirective} running />);
     expect(screen.getByText('XD Feishu')).toBeTruthy();

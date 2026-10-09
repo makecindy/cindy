@@ -194,7 +194,7 @@ function useSidebarNavigationEntries(): {
   const prefs = useSidebarNavigationPrefs(dataOwnerId);
   const { sidebarVisible } = useGhostMainViews();
   const rosterReady = useInstalledGhosts().length > 0;
-  const sidebarGhostIds = sidebarVisible.map((item) => item.ghostId).join('\n');
+  const sidebarGhostIds = sidebarVisible.map((item) => item.instanceId).join('\n');
   // Plugins entering the sidebar for the first time start in More, flagged as new.
   // Wait for the account and its installed roster: both are per data owner.
   useEffect(() => {
@@ -207,8 +207,8 @@ function useSidebarNavigationEntries(): {
     }
   }, [dataOwnerId, sidebarGhostIds, rosterReady]);
   const unseenGhostIds = useSidebarUnseenApps(dataOwnerId);
-  const apps = new Map(sidebarVisible.map((item) => [item.ghostId, item]));
-  const order = resolveSidebarNavigationOrder(prefs.order, sidebarVisible.map((item) => item.ghostId));
+  const apps = new Map(sidebarVisible.map((item) => [item.instanceId, item]));
+  const order = resolveSidebarNavigationOrder(prefs.order, sidebarVisible.map((item) => item.instanceId));
   const isVisible = (id: SidebarNavigationEntryId) => ghostIdOfEntry(id) === null
     ? prefs.visible.includes(id as SidebarNavigationItemId)
     : prefs.appsAtTop.includes(id as SidebarNavigationAppEntryId);
@@ -286,7 +286,7 @@ function SidebarNavigationMoreMenu({
           if (app) {
             const AppIcon = MAIN_VIEW_ICONS[app.icon];
             const manageLabel = t('settings.ghosts.page.manageAria', { name: app.manifest.name });
-            const ghostId = encodeURIComponent(app.ghostId);
+            const ghostId = encodeURIComponent(app.instanceId);
             return (
               <DropdownMenuItem
                 key={id}

@@ -3,7 +3,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { toast } from '@/lib/toast';
-import { installGhostFromFile } from '../installFlow';
+import { installGhostFromFile, pickAndUpdateGhost } from '../installFlow';
 
 vi.mock('@/lib/toast', () => ({
   toast: { success: vi.fn(), error: vi.fn() },
@@ -27,22 +27,24 @@ function setupWindow(manifest: object, installed: object[] = []) {
   const update = vi.fn(async () => ({
     ghost: { manifest, dir: '/tmp/installed', enabled: true },
   }));
+  const inspect = vi.fn(async () => ({
+    manifest,
+    packageSha256: 'a'.repeat(64),
+    unsupportedSlots: [],
+    trust: {
+      level: 'unverified',
+      publisherSigned: false,
+      publisherVerified: false,
+      reviewed: false,
+    },
+  }));
   Object.defineProperty(globalThis, 'window', {
     value: {
       electronAPI: {
         appVersion: '1.0.0',
         ghosts: {
-          inspect: vi.fn(async () => ({
-            manifest,
-            packageSha256: 'a'.repeat(64),
-            unsupportedSlots: [],
-            trust: {
-              level: 'unverified',
-              publisherSigned: false,
-              publisherVerified: false,
-              reviewed: false,
-            },
-          })),
+          inspect,
+          pickFile: vi.fn(async () => ({ filePath: '/tmp/node.cindy' })),
           listSync: vi.fn(() => ({ ghosts: installed })),
           install,
           update,
@@ -51,7 +53,7 @@ function setupWindow(manifest: object, installed: object[] = []) {
     },
     configurable: true,
   });
-  return { install, update };
+  return { install, update, inspect };
 }
 
 afterEach(() => {
@@ -60,6 +62,55 @@ afterEach(() => {
 });
 
 describe('installFlow · 本地包安装', () => {
+  it.each(['node-ghost', '_ns__xd__node-ghost'])(
+    'binds local update inspect and commit to %s',
+    async (instanceId) => {
+      const namespace = instanceId === 'node-ghost' ? null : 'xd';
+      const installed = {
+        manifest: baseManifest,
+        namespace,
+        dir: namespace ? '/tmp/brain/_ns/xd/node-ghost' : '/tmp/brain/node-ghost',
+        approval: { state: 'approved', revision: 'selected-receipt' },
+      };
+      const { inspect, update } = setupWindow(baseManifest, [installed]);
+      await pickAndUpdateGhost(instanceId, { t: ((key: string) => key) as never });
+      const target = {
+        expectedInstalledInstanceId: instanceId,
+        expectedInstalledApproval: 'approved:selected-receipt',
+      };
+      expect(inspect).toHaveBeenCalledWith('/tmp/node.cindy', target);
+      expect(update).toHaveBeenCalledWith('/tmp/node.cindy', {
+        ...target,
+        expectedPackageSha256: 'a'.repeat(64),
+      });
+    },
+  );
+
+  it('does not silently rebind an update after inspect to a replaced receipt', async () => {
+    const installed = [
+      {
+        manifest: baseManifest,
+        dir: '/tmp/brain/node-ghost',
+        namespace: null,
+        approval: { state: 'approved', revision: 'original-receipt' },
+      },
+    ];
+    const { inspect, update } = setupWindow(baseManifest, installed);
+    const original = inspect.getMockImplementation()!;
+    inspect.mockImplementation(async () => {
+      installed[0] = {
+        ...installed[0],
+        approval: { state: 'approved', revision: 'replacement-receipt' },
+      };
+      return original();
+    });
+    await pickAndUpdateGhost('node-ghost', { t: ((key: string) => key) as never });
+    expect(update).toHaveBeenCalledWith(
+      '/tmp/node.cindy',
+      expect.objectContaining({ expectedInstalledApproval: 'approved:original-receipt' }),
+    );
+  });
+
   it('直接启用安装，并把真实包摘要交给 Main', async () => {
     const { install } = setupWindow(baseManifest);
 
@@ -115,6 +166,7 @@ describe('installFlow · 本地包安装', () => {
     expect(update).toHaveBeenCalledWith('/tmp/node.cindy', {
       expectedPackageSha256: 'a'.repeat(64),
       expectedInstalledApproval: 'approved:00000000-0000-4000-8000-000000000001',
+      expectedInstalledInstanceId: 'node-ghost',
     });
   });
 
