@@ -320,6 +320,23 @@ const cases: Array<{ name: string; events: Event[]; streaming?: boolean; expecte
 ];
 
 describe('desktop and shared/mobile work grouping projection', () => {
+  it.each([false, true])('folds short seals before recovery but preserves delivery runs (streaming=%s)', (streaming) => {
+    const events = [user(), tool('read', 1), answer('intro', 2),
+      answer('report', 3, true, '# Report\nThe result'), thinking('next', 4),
+      answer('waiting', 5, true), tool('retry', 6),
+      { ...user('resume', 7), body: CONTINUE_AFTER_ERROR_PROMPT }];
+    const desktop = desktopProjection(groupWorkRuns(desktopItems(events), streaming));
+    expect(sharedProjection(buildMessageRenderItems(normalized(events), { isSessionStreaming: streaming }))).toEqual(desktop);
+    expect(tree(desktop)).toEqual([
+      ['u'], ['work-read', [['read']]], ['intro'], ['report'],
+      ['work-summary-next', [['work-next', [['next']]], ['waiting'], ['work-retry', [['retry']]]]], ['resume'],
+    ]);
+    const lastSealIsDelivery = [...events.slice(0, 4), events.at(-1)!];
+    const delivery = desktopProjection(groupWorkRuns(desktopItems(lastSealIsDelivery), streaming));
+    expect(sharedProjection(buildMessageRenderItems(normalized(lastSealIsDelivery), { isSessionStreaming: streaming }))).toEqual(delivery);
+    expect(tree(delivery)).toEqual([['u'], ['work-read', [['read']]], ['intro'], ['report'], ['resume']]);
+  });
+
   it.each([
     { body: CONTINUE_AFTER_ERROR_PROMPT },
     { body: CONTINUE_AFTER_APP_EXIT_PROMPT },

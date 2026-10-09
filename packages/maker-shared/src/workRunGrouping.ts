@@ -184,8 +184,8 @@ function groupAnsweredTurn<TItem, TChild extends TItem>(
 
   if (sealed.length > 0) {
     // Background wake-ups (async agents, background shells) seal several SDK turns under
-    // one user row. The last seal is the turn's answer; an earlier seal stays visible only
-    // when its contiguous answer run carries a delivery (a non-archivable answer), and then
+    // one user row. Unless recovery supersedes this attempt, the last seal is its answer.
+    // Other seals stay visible only when their answer run carries a delivery, and then
     // the whole run stays together so an intro is never split from its report.
     let segmentStart = 0;
     for (const sealedIndex of sealed) {
@@ -204,7 +204,7 @@ function groupAnsweredTurn<TItem, TChild extends TItem>(
       ) {
         answerStart--;
       }
-      let keep = sealedIndex === sealed[sealed.length - 1];
+      let keep = !resumed && sealedIndex === sealed[sealed.length - 1];
       for (let index = answerStart; index <= sealedIndex && !keep; index++) {
         keep =
           adapter.isAnswer(items[index]) && !adapter.isArchivable(items[index]);
@@ -243,7 +243,7 @@ function groupAnsweredTurn<TItem, TChild extends TItem>(
     }
   }
 
-  // Recovery has superseded an unsealed attempt. Its short progress prose belongs
+  // Recovery has superseded the interrupted attempt. Its short progress prose belongs
   // in the work fold even when the last activity never produced a final answer.
   // Error/interaction cards and delivery prose still follow isArchivable.
   const out: TItem[] = [];
