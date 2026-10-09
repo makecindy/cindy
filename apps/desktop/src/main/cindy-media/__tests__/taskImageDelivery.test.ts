@@ -108,6 +108,41 @@ function insert(text: string) {
 }
 
 describe('task image delivery', () => {
+  it.each(['before', 'during'].flatMap((order) =>
+    ['publish', 'rollback'].map((result) => [order, result]),
+  ))('reconciles a reused reference when cleanup runs %s %s', async (order, result) => {
+    const source = path.join(work, 'reused.png');
+    await fs.writeFile(source, PNG);
+    const saved = await ingestMedia({ buffer: PNG, mimeType: 'image/png', refs: [
+      { refKind: 'session-attachment', refId: 's', originSessionId: 's', originKind: 'user' },
+    ] }, client.drizzle);
+    const hash = createHash('sha256').update(PNG).digest('hex');
+    raw.prepare('INSERT INTO messages VALUES (?, ?, ?, ?, ?, NULL)')
+      .run('old', 's', 'user', JSON.stringify(saved.url), 1);
+    const row = insert(`![shared](${source})`);
+    const cleanup = () => {
+      raw.exec("UPDATE messages SET rewind_at = 20 WHERE id = 'old'");
+      return ledger.removeSessionAttachmentRefIfUnreferencedByLiveMessage({ sessionId: 's', hash }, client.drizzle);
+    };
+    let pendingCleanup: Promise<number> | undefined;
+    if (order === 'before') await cleanup();
+    state.afterIngest = async () => {
+      if (order === 'during') pendingCleanup = cleanup();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      if (result === 'rollback') raw.exec("UPDATE messages SET content = 'edited' WHERE id = 'm'");
+    };
+    await restoreTaskImageRows(client, [row]);
+    await pendingCleanup;
+    expect(raw.prepare('SELECT count(*) AS n FROM media_refs').get())
+      .toEqual({ n: result === 'publish' ? 1 : 0 });
+    if (result === 'publish') {
+      expect(raw.prepare("SELECT content FROM messages WHERE id = 'm'").get())
+        .toEqual({ content: JSON.stringify(`![shared](${saved.url})`) });
+      await fs.rm(source);
+      expect(await fs.readFile(resolveSafe(saved.url).absPath)).toEqual(PNG);
+    }
+  });
+
   it.each(['chat', 'channel'].flatMap((target) =>
     ['publish', 'rollback'].map((result) => [target, result]),
   ))('preserves a concurrent message reference after %s %s', async (target, result) => {

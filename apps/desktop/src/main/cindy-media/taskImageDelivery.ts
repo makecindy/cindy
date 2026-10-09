@@ -8,8 +8,7 @@ import { getCurrentDbClientSnapshot } from '../localDb/client/current';
 import type { DbClient } from '../localDb/client/DbClient';
 import { messages, sessions } from '../localDb/schema';
 import { ingestMedia } from './ingest';
-import { withSessionMediaRefLock } from './chatAttachments';
-import { hasRef, removeRefById } from './ledger';
+import { hasRef, removeRefById, withSessionMediaRefLock } from './ledger';
 import {
   captureMediaRefCompensationScope,
   withMediaRefCompensation,

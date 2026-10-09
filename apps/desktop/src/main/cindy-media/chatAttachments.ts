@@ -147,34 +147,6 @@ export async function commitMessageMediaRefs(
   );
 }
 
-// All session-reference borrowers share publication/rollback serialization.
-// A normal message must not deduplicate against a task import that can still roll back.
-const sessionMediaRefLocks = new WeakMap<LedgerDb, Map<string, Promise<void>>>();
-export async function withSessionMediaRefLock<T>(
-  db: LedgerDb,
-  sessionId: string,
-  perform: () => Promise<T>,
-): Promise<T> {
-  let locks = sessionMediaRefLocks.get(db);
-  if (!locks) {
-    locks = new Map();
-    sessionMediaRefLocks.set(db, locks);
-  }
-  const previous = locks.get(sessionId) ?? Promise.resolve();
-  let release!: () => void;
-  const next = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  locks.set(sessionId, next);
-  try {
-    await previous;
-    return await perform();
-  } finally {
-    release();
-    if (locks.get(sessionId) === next) locks.delete(sessionId);
-  }
-}
-
 export async function commitChatImageUrls(
   params: {
     sessionId: string;
@@ -188,7 +160,7 @@ export async function commitChatImageUrls(
     return { committed: 0, skipped: params.urls.length, failed: 0 };
   }
   const database = db ?? getDbClient().drizzle;
-  return withSessionMediaRefLock(database, params.sessionId, () =>
+  return ledger.withSessionMediaRefLock(database, params.sessionId, () =>
     commitChatImageUrlsUnlocked(params, database),
   );
 }
