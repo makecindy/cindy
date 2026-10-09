@@ -10,6 +10,7 @@ import {
 import {
   groupWorkRuns as groupSharedWorkRuns,
   isDeliveryProseText,
+  isSteerUserRow,
 } from '@cindy/maker-shared/message-render';
 import type { AgentTaskUpdate, ChatMessage } from '@/hooks/useCCAgentChat';
 import type { GeneratedFileRef } from '@/lib/generatedFiles';
@@ -523,7 +524,7 @@ function createCompletedWorkGroup(
 /** Keep desktop card shapes and stable keys while sharing turn, gap and answer boundaries. */
 export function groupWorkRuns(items: RenderItem[], isSessionStreaming: boolean): RenderItem[] {
   return groupSharedWorkRuns<RenderItem, WorkChildItem>(items, isSessionStreaming, {
-    isUserBoundary: (item) => item.type === 'message' && item.message.role === 'user',
+    isUserBoundary: (item) => item.type === 'message' && item.message.role === 'user' && !isSteerUserRow(item.message),
     isContinuationBoundary: (item) => item.type === 'message' && isContinuationMessage(item.message),
     isAnswer: isAssistantAnswerCandidate,
     isSealedAnswer: (item) => item.type === 'message' && isCompletedAssistantMessage(item.message),

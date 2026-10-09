@@ -33,6 +33,22 @@ function harness(rows: RemoteMessage[], streaming = false, lazyDetails = false) 
 }
 
 describe('remote history preserves original folding', () => {
+  it.each([false, true])('keeps steering visible while recovering work on both sides (streaming=%s)', async (streaming) => {
+    const rows = [row(0, 'user', 'Work'), row(1, 'assistant', 'Before steer'), thought(2),
+      { ...row(3, 'user', 'Check this too'), agentMeta: { delivery: 'steer' } },
+      row(4, 'assistant', 'After steer'), thought(5),
+      row(6, 'user', JSON.stringify({ text: CONTINUE_AFTER_ERROR_PROMPT })),
+      row(7, 'assistant', 'Continuing')];
+    const { view, render } = harness(rows, streaming);
+    await view.refresh();
+    expect(render().map(item => item.key)).toEqual([
+      'message-client-0', 'work-summary-client-2', 'message-client-3',
+      'work-summary-client-5', 'message-client-7',
+    ]);
+    expect(outline(render())).toEqual(outline(buildMobileMessageRenderItems(rows, { isSessionStreaming: streaming })));
+    view.setActive(false);
+  });
+
   it.each([CONTINUE_AFTER_ERROR_PROMPT, { text: CONTINUE_AFTER_ERROR_PROMPT },
     JSON.stringify({ text: CONTINUE_AFTER_ERROR_PROMPT, images: [], files: [] }),
   ])('keeps recovered work folded after reopening and restores details on expansion: %j', async (content) => {

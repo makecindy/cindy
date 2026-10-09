@@ -107,6 +107,15 @@ describe('subagent grouping (buildMobileMessageRenderItems)', () => {
     }
     expect(collectSourceIds(items)).toEqual(['u', 'progress', 'between', 'error', ...(autoResume ? ['resume'] : []), 'active']);
 
+    const steer = msg({ id: 'steer', role: 'user', content: 'Check this too', agentMeta: { delivery: 'steer' }, createdAt: '2026-01-01T00:00:02.500Z' });
+    const withSteer = [...messages.slice(0, 3), steer, ...messages.slice(3)];
+    const steered = buildMobileMessageRenderItems(withSteer, { isSessionStreaming: streaming });
+    expect(steered.map(item => item.type)).toEqual([
+      'message', 'work_group', 'subagent_group', 'message', 'work_group', 'subagent_group', 'message',
+      ...(autoResume ? ['message'] : []), 'message',
+    ]);
+    expect(collectSourceIds(steered)).toEqual(['u', 'progress', 'steer', 'between', 'error', ...(autoResume ? ['resume'] : []), 'active']);
+
     // A real user turn blocks recovery from affecting earlier Agent segments.
     const ordinaryBoundary = msg({ id: 'other', role: 'user', content: 'Another request', createdAt: '2026-01-01T00:00:02.500Z' });
     messages.splice(3, 0, ordinaryBoundary);

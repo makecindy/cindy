@@ -16,6 +16,7 @@ interface Event {
   end?: number;
   sealed?: boolean;
   autoResume?: boolean;
+  delivery?: 'steer' | 'turn';
 }
 
 const iso = (seconds: number) => new Date(Date.UTC(2026, 0, 1) + seconds * 1000).toISOString();
@@ -74,6 +75,7 @@ function desktopItems(events: readonly Event[]): RenderItem[] {
           : {}),
         createdAt: iso(event.at),
         turnCompleted: event.sealed,
+        delivery: event.delivery,
         ...(event.autoResume ? { systemCardType: 'auto-resume' as const } : {}),
         ...(event.kind === 'compact' ? { systemCardType: 'compact' as const } : {}),
         ...(event.kind === 'thinking'
@@ -96,7 +98,7 @@ function normalized(events: readonly Event[]): MessageRenderNormalizedMessage[] 
     source: {
       clientId: event.id,
       role: event.kind,
-      ...(event.autoResume ? { agentMeta: { autoResume: true } } : {}),
+      agentMeta: { autoResume: event.autoResume, delivery: event.delivery },
       createdAt: iso(event.at),
       content:
         event.kind === 'thinking'
@@ -320,6 +322,24 @@ const cases: Array<{ name: string; events: Event[]; streaming?: boolean; expecte
 ];
 
 describe('desktop and shared/mobile work grouping projection', () => {
+  it.each([false, true])('folds the whole recovered turn across visible steer rows (streaming=%s)', (streaming) => {
+    const events: Event[] = [user(), answer('before', 1), tool('first', 2),
+      { ...user('steer1', 3), delivery: 'steer' }, answer('middle', 4),
+      { ...user('steer2', 5), delivery: 'steer' }, tool('last', 6),
+      { ...user('resume', 7), body: CONTINUE_AFTER_ERROR_PROMPT }, answer('active', 8)];
+    const desktop = desktopProjection(groupWorkRuns(desktopItems(events), streaming));
+    expect(sharedProjection(buildMessageRenderItems(normalized(events), { isSessionStreaming: streaming }))).toEqual(desktop);
+    expect(tree(desktop)).toEqual([
+      ['u'], ['work-summary-first', [['before'], ['work-first', [['first']]]]],
+      ['steer1'], ['work-summary-middle', [['middle']]], ['steer2'], ['work-last', [['last']]],
+      ['resume'], ['active'],
+    ]);
+    const ordinary = events.map(event => event.id === 'steer1' ? { ...event, delivery: 'turn' as const } : event);
+    const split = desktopProjection(groupWorkRuns(desktopItems(ordinary), streaming));
+    expect(sharedProjection(buildMessageRenderItems(normalized(ordinary), { isSessionStreaming: streaming }))).toEqual(split);
+    expect(tree(split).slice(0, 4)).toEqual([['u'], ['before'], ['work-first', [['first']]], ['steer1']]);
+  });
+
   it.each([false, true])('folds short seals before recovery but preserves delivery runs (streaming=%s)', (streaming) => {
     const events = [user(), tool('read', 1), answer('intro', 2),
       answer('report', 3, true, '# Report\nThe result'), thinking('next', 4),

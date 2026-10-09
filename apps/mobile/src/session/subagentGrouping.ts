@@ -10,6 +10,7 @@
  */
 import {
   buildMessageRenderItems,
+  isSteerUserRow,
   type MessageRenderOptions,
 } from '@cindy/maker-shared/message-render';
 import { isSubagentResultError } from '@cindy/maker-shared/agent-task';
@@ -144,7 +145,8 @@ function buildLevel(
     // the next real recovery boundary even when it lies beyond one or more cards.
     // The monotonic cursor stops at an ordinary user row and scans each row once.
     nextUserIndex = Math.max(nextUserIndex, endIndex);
-    while (nextUserIndex < level.length && level[nextUserIndex].kind !== 'user') nextUserIndex++;
+    while (nextUserIndex < level.length
+      && (level[nextUserIndex].kind !== 'user' || isSteerUserRow(level[nextUserIndex].source))) nextUserIndex++;
     const boundary = level[nextUserIndex];
     if (boundary && isContinuationMessage(boundary.source)) {
       out.push(...buildMessageRenderItems([...run, boundary], options).filter(
