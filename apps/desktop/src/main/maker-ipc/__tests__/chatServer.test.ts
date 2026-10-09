@@ -109,6 +109,8 @@ describe('Chat Server result delivery and refresh', () => {
     fixture.config = '{"baseUrl":"http://127.0.0.1:3018","auth":"cindy"}';
     vi.stubEnv('XDT_ISOLATED', '1');
     fixture.handle.mockImplementation(response);
+    fixture.token = 'isolated-test-token';
+    fixture.refresh.mockReset().mockResolvedValue(true);
     deps = { ensureLane: vi.fn(async () => ({ ok: true, sessionId: 'lane' })), abortLane: vi.fn(async () => {}),
       dispatch: vi.fn(async (input: Parameters<BotGroupChatServiceDeps['dispatch']>[0]) => { await input.onAccepted?.(); return { ok: true }; }),
       onChanged: vi.fn(),
@@ -287,6 +289,114 @@ describe('Chat Server result delivery and refresh', () => {
     await vi.advanceTimersByTimeAsync(16000);
     expect(deliveries()).toHaveLength(2);
     expect(deps.abortLane).not.toHaveBeenCalled();
+  });
+
+  it.each(['TOKEN_EXPIRED', 'INVALID_TOKEN', 'AUTH_REQUIRED'])('preserves an immutable completion during %s while Auth refresh fails or waits', async code => {
+    let recovering = false;
+    fixture.refresh.mockResolvedValue(false);
+    fixture.handle.mockImplementation((route, _method, body) => body?.action === 'complete' && !recovering
+      ? { status: 401, body: { error: { code } } } : response(route));
+    await start();
+    expect(await service.settleLaneTurn(terminal)).toBe(true);
+    const payload = deliveries()[0][2];
+    await vi.advanceTimersByTimeAsync(58_000);
+    expect(deliveries()).toHaveLength(1);
+    expect(fixture.refresh).toHaveBeenCalledOnce();
+    recovering = true;
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(deliveries()).toHaveLength(2);
+    expect(deliveries()[1][2]).toEqual(payload);
+    expect(deps.dispatch).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(deliveries()).toHaveLength(2);
+  });
+
+  it('retains a completion when Auth rotates successfully but Chat still rejects the new token', async () => {
+    let recovering = false;
+    fixture.refresh.mockImplementation(async () => { fixture.token = 'renewed-test-token'; return true; });
+    fixture.handle.mockImplementation((route, _method, body) => body?.action === 'complete' && !recovering
+      ? { status: 401, body: { error: { code: 'INVALID_TOKEN' } } } : response(route));
+    await start();
+    await service.settleLaneTurn(terminal);
+    expect(deliveries()).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(58_000);
+    expect(deliveries()).toHaveLength(2);
+    recovering = true;
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(deliveries()).toHaveLength(3);
+    expect(deliveries().every(([, , body]) => JSON.stringify(body) === JSON.stringify(deliveries()[0][2]))).toBe(true);
+    expect(fixture.refresh).toHaveBeenCalledOnce();
+    expect(deps.dispatch).toHaveBeenCalledOnce();
+  });
+
+  it('keeps the lease alive while a prepared completion waits for authentication recovery', async () => {
+    let recovering = false;
+    let leaseUntil = Date.now() + 60_000;
+    let committed = 0;
+    fixture.refresh.mockResolvedValue(false);
+    fixture.handle.mockImplementation((route, _method, body) => {
+      if (body?.action === 'complete' && !recovering) return { status: 401, body: { error: { code: 'INVALID_TOKEN' } } };
+      if (body?.action === 'heartbeat' || body?.action === 'complete') {
+        if (Date.now() >= leaseUntil) return { status: 409, body: { error: { code: 'STALE_EXECUTOR' } } };
+        leaseUntil = Date.now() + 60_000;
+        if (body.action === 'complete') committed += 1;
+      }
+      return response(route);
+    });
+    await start();
+    await service.settleLaneTurn(terminal);
+    await vi.advanceTimersByTimeAsync(58_000);
+    expect(deliveries()).toHaveLength(1);
+    recovering = true;
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(committed).toBe(1);
+    expect(deliveries()[1][2]).toEqual(deliveries()[0][2]);
+    expect(deps.dispatch).toHaveBeenCalledOnce();
+  });
+
+  it.each([401, 429])('preserves a pending completion after an HTML %s and observes the delivery wait', async status => {
+    let recovering = false;
+    fixture.handle.mockImplementation((route, _method, body) => body?.action === 'complete' && !recovering
+      ? { status, headers: { 'retry-after': '120' }, rawBody: '<html>temporary upstream fixture</html>' } : response(route));
+    await start();
+    await service.settleLaneTurn(terminal);
+    const wait = status === 429 ? 120_000 : 60_000;
+    await vi.advanceTimersByTimeAsync(wait - 2_000);
+    expect(deliveries()).toHaveLength(1);
+    recovering = true;
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(deliveries()).toHaveLength(2);
+    expect(deliveries()[1][2]).toEqual(deliveries()[0][2]);
+    expect(fixture.refresh).not.toHaveBeenCalled();
+    expect(deps.dispatch).toHaveBeenCalledOnce();
+  });
+
+  it.each([{ status: 401, code: 'ACCOUNT_UNAVAILABLE' }, { status: 403, code: 'ROLE_REQUIRED' }, { status: 409, code: 'STALE_EXECUTOR' }])('stops a completion after a definitive rejection $code', async ({ status, code }) => {
+    fixture.handle.mockImplementation((route, _method, body) => body?.action === 'complete'
+      ? { status, body: { error: { code } } } : response(route));
+    await start();
+    await service.settleLaneTurn(terminal);
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(deliveries()).toHaveLength(1);
+    expect(fixture.refresh).not.toHaveBeenCalled();
+    expect(deps.dispatch).toHaveBeenCalledOnce();
+  });
+
+  it('does not retry a previous owner’s auth-delayed completion', async () => {
+    service.dispose();
+    let epoch = 0;
+    deps.captureOwnerScope = () => ({ epoch }) as ReturnType<NonNullable<BotGroupChatServiceDeps['captureOwnerScope']>>;
+    deps.isOwnerScopeCurrent = captured => (captured as unknown as { epoch: number }).epoch === epoch;
+    service = withChatServer({ dispose: vi.fn() } as unknown as BotGroupChatService, deps);
+    fixture.refresh.mockResolvedValue(false);
+    fixture.handle.mockImplementation((route, _method, body) => body?.action === 'complete'
+      ? { status: 401, body: { error: { code: 'INVALID_TOKEN' } } } : response(route));
+    await start();
+    await service.settleLaneTurn(terminal);
+    epoch += 1;
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(deliveries()).toHaveLength(1);
+    expect(deps.dispatch).toHaveBeenCalledOnce();
   });
 
   it('uses a fresh operation id for each lease renewal', async () => {

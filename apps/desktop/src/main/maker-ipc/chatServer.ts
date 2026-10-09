@@ -71,6 +71,7 @@ class ChatResponseError extends Error {
   constructor(code: string, readonly status: number, readonly retryAt?: number) { super(code); }
 }
 const CHAT_AUTH_RETRY_MS = 60_000;
+const CHAT_REFRESHABLE_ERROR_CODES = new Set(['TOKEN_EXPIRED', 'INVALID_TOKEN', 'AUTH_REQUIRED']);
 const id = z.string().uuid();
 const groupInput = z.object({ name: z.string().trim().min(1).max(40), botIds: z.array(z.string().min(1)).max(6) });
 const failure = (message: string): BotGroupFailure => ({ ok: false, errorCode: 'HOST_NOT_READY', message });
@@ -195,7 +196,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
             try { value = JSON.parse(Buffer.concat(chunks).toString('utf8')); }
             catch { throw new ChatResponseError('INVALID_CHAT_RESPONSE', status >= 400 ? status : 502, retryAt); }
             const code = typeof value?.error?.code === 'string' ? value.error.code : 'REQUEST_FAILED';
-            if (res.statusCode === 401 && !retried && ['TOKEN_EXPIRED', 'INVALID_TOKEN', 'AUTH_REQUIRED'].includes(code)) {
+            if (res.statusCode === 401 && !retried && CHAT_REFRESHABLE_ERROR_CODES.has(code)) {
               if (await refreshRejectedToken(token) && current()) { resolve(api<T>(route, method, data, actorId, true)); return; }
             }
             if (status >= 400) throw new ChatResponseError(code, status, retryAt);
@@ -585,8 +586,13 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         // Keep the result during transport/temporary service failures. A definitive
         // rejection (including revoked/expired leases) must never rerun the Agent
         // or post the private result under a new execution identity.
-        if (!(error instanceof ChatResponseError) || error.status >= 500 || [408, 429].includes(error.status)) {
-          pending.retryAt = Date.now() + 15000;
+        const recoveringAuth = error instanceof ChatResponseError && error.status === 401
+          && (CHAT_REFRESHABLE_ERROR_CODES.has(error.message) || error.message === 'INVALID_CHAT_RESPONSE');
+        if (recoveringAuth || !(error instanceof ChatResponseError) || error.status >= 500 || [408, 429].includes(error.status)) {
+          const delayed = recoveringAuth || (error instanceof ChatResponseError && error.status === 429);
+          pending.retryAt = delayed
+            ? Math.max(Date.now() + CHAT_AUTH_RETRY_MS, error instanceof ChatResponseError ? error.retryAt ?? 0 : 0)
+            : Date.now() + 15000;
           return;
         }
       } finally { run.delivery = undefined; }
@@ -749,9 +755,9 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   const checking = new Set<Running>();
   async function checkLease(run: Running) {
     if (run.settlement) {
-      // Large step artifacts may take longer than one lease to upload. Keep the
-      // lease alive while preparing the immutable completion, never rerun the Agent.
-      if (!run.settlement.payload) await updateExecution(run, 'heartbeat').catch(() => undefined);
+      // Keep the lease alive while preparing or waiting to deliver the immutable
+      // completion. The server still fences revoked/expired executions; never rerun the Agent.
+      await updateExecution(run, 'heartbeat').catch(() => undefined);
       await deliverSettlement(run); return;
     }
     if (checking.has(run) || running.get(run.execution.bot_id) !== run) return;
