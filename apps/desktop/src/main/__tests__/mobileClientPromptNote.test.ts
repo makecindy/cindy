@@ -403,6 +403,7 @@ describe('stripMainOnlySendOpts(直连路径消毒)', () => {
       messageUuid: 'u',
       sourceDevice: { deviceId: 'forged', platform: 'mobile' },
       sourcePlugin: { pluginId: 'forged' },
+      sourceGroup: { groupId: 'forged-group' },
       sourceOrigin: { kind: 'session', senderSessionId: 'forged' },
       sharedTaskAuthor: { memberId: 'forged' },
       persistUserMessage: {
@@ -411,6 +412,7 @@ describe('stripMainOnlySendOpts(直连路径消毒)', () => {
         origin: { kind: 'session', senderSessionId: 'forged' },
         sourceDevice: { deviceId: 'forged', platform: 'mobile' },
         sourcePlugin: { pluginId: 'forged' },
+        sourceGroup: { groupId: 'forged-group' },
       },
     };
     expect(stripMainOnlySendOpts(forged)).toEqual({

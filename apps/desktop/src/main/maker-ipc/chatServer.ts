@@ -13,6 +13,7 @@ import { createChatMedia } from './chatServerMedia.js';
 import { chatServerWorkspaces } from './chatServerWorkspaces.js';
 import { buildPlanStepBrief } from './botGroupDivision.js';
 import { chatMigrationReceipts } from './chatMigrationReceipts.js';
+import { registerGroupToolAuthority, GroupToolAuthorizationError } from './botGroupToolAuthorization.js';
 import path from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
 import WebSocket from 'ws';
@@ -45,6 +46,7 @@ interface Room {
 interface Snapshot { room: Room; members: Member[]; messages: Message[]; cursor: string }
 interface Execution {
   id: string; conversation_id: string; source_message_id: string; bot_id: string;
+  requester_id?: string;
   plan_id?: string | null; plan_step?: number | null;
   context_seq: string; epoch: number; status: string; access_mode: 'owner' | 'chat' | 'tools'; access_revision: number;
 }
@@ -62,6 +64,7 @@ interface Running {
   workspace?: { workDir: string; branch: string | null; ownerSessionId: string | null };
   beforeFiles?: Map<string, string>;
   pauseStarted?: number;
+  releaseToolAuthority?: () => void;
 }
 class ChatResponseError extends Error {
   constructor(code: string, readonly status: number) { super(code); }
@@ -567,6 +570,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         }
       } finally { run.delivery = undefined; }
       if (running.get(run.execution.bot_id) === run) {
+        run.releaseToolAuthority?.();
         running.delete(run.execution.bot_id);
         changed(run.execution.conversation_id);
       }
@@ -616,6 +620,29 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         ...(run.plan ? { plan: { planId: run.plan.id, workDir: run.workspace?.workDir ?? '', sessionId: run.workspace?.ownerSessionId ?? undefined } } : {}) });
       if (!lane.ok) throw new Error(lane.errorCode);
       run.sessionId = lane.sessionId;
+      run.releaseToolAuthority = registerGroupToolAuthority(lane.sessionId, {
+        botId: bot.id, mode: execution.access_mode,
+        sourceGroup: { groupId: s.room.id, name: s.room.name },
+        isCurrent: () => current() && running.get(execution.bot_id) === run && !run.settlement,
+        validate: async () => {
+          // Recheck metadata and the execution lease at the actual tool boundary.
+          // Group administrators cannot grant access to someone else's companion.
+          try {
+            const members = await api<Member[]>(`/conversations/${s.room.id}/members`);
+            const companion = members.find(m => m.id === execution.bot_id && m.kind === 'bot' && m.state === 'joined');
+            const requester = members.find(m => m.id === execution.requester_id && m.state === 'joined');
+            if (!companion || companion.ownerActorId !== selfId || !requester
+              || companion.accessRevision !== execution.access_revision
+              || (execution.access_mode === 'owner' ? requester.ownerActorId !== selfId : companion.guestAccess !== 'tools'))
+              throw new GroupToolAuthorizationError();
+            await updateExecution(run, 'heartbeat');
+          } catch (error) {
+            if (error instanceof ChatResponseError && [401, 403, 404, 409, 410].includes(error.status))
+              throw new GroupToolAuthorizationError();
+            throw error;
+          }
+        },
+      });
       if (run.plan && run.workspace?.ownerSessionId) {
         const settings = workspaces().read(s.room.id)!;
         const key = `${run.plan.id}:${execution.access_mode}:${execution.access_revision}`;
@@ -666,6 +693,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       if (!dispatched.ok) throw new Error(dispatched.errorCode);
       changed(s.room.id);
     } catch {
+      run.releaseToolAuthority?.();
       if (run.sessionId) await deps.abortLane(run.sessionId).catch(() => undefined);
       running.delete(execution.bot_id);
       await updateExecution(run, 'fail', { detail: 'Local runtime could not start' }).catch(() => undefined);
@@ -709,6 +737,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       // An in-flight heartbeat must not discard a result that became ready while
       // it was awaiting its response; retry the terminal operation for its receipt.
       if (!run.settlement && running.get(run.execution.bot_id) === run) {
+        run.releaseToolAuthority?.();
         running.delete(run.execution.bot_id);
         if (run.sessionId) await deps.abortLane(run.sessionId).catch(() => undefined);
         changed(run.execution.conversation_id);
@@ -916,7 +945,10 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     editPlanStep: input => safe(() => actPlan(input, 'reassign')),
     dispose: () => {
       disposed = true; clearInterval(timer); clearInterval(heartbeat); clearTimeout(reconnect); socket?.close();
-      for (const run of running.values()) if (run.sessionId) void deps.abortLane(run.sessionId).catch(() => undefined);
+      for (const run of running.values()) {
+        run.releaseToolAuthority?.();
+        if (run.sessionId) void deps.abortLane(run.sessionId).catch(() => undefined);
+      }
       for (const pending of planning.values()) pending.controller.abort();
       running.clear();
     },

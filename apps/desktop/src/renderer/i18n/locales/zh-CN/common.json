@@ -10515,7 +10515,8 @@
         "automation": "自动化 ID：{{id}}",
         "plugin": "插件 ID：{{id}}",
         "device": "设备 ID：{{id}}",
-        "member": "成员 ID：{{id}}"
+        "member": "成员 ID：{{id}}",
+        "group": "群聊 ID：{{id}}"
       },
       "expandLongMessage": "展开全文",
       "collapseLongMessage": "收起",
@@ -10541,7 +10542,9 @@
         "sourceNeverRan": "原任务尚未运行，无法开启新任务",
         "codexStateUnavailable": "Codex Agent 会话状态不可用，无法开启新任务。{{detail}}",
         "generic": "无法开启新任务，请重试"
-      }
+      },
+      "groupSentNamed": "从群聊「{{name}}」发送",
+      "groupSent": "从群聊发送"
     },
     "threadContext": {
       "cindyFrom": "Cindy · 来自 {{platform}}",
@@ -10928,7 +10931,8 @@
       "sessionInactive": "任务已不再处于活跃状态",
       "remoteProjectBanner": "在 {{device}} 的 {{project}} 中新建任务",
       "remoteDialogueBanner": "在 {{device}} 上新建对话（不绑定项目）",
-      "agentDeviceBanner": "任务和文件留在本机，Agent 在 {{device}} 上运行"
+      "agentDeviceBanner": "任务和文件留在本机，Agent 在 {{device}} 上运行",
+      "agentDeviceElsewhereBanner": "Agent 在 {{device}} 上运行"
     },
     "jumpSession": {
       "emptyId": "请输入要跳转的任务 ID",
@@ -14781,5 +14785,15 @@
     "detail": "将此插件的 AI 权限设为“允许修改”，后续任务沿用此选择。独立作答目录不是系统沙箱；命令仍遵循 Cindy 的权限检查。你可以随时在插件 AI 设置中改回只读。",
     "allow": "允许并继续",
     "cancel": "暂不允许"
+  },
+  "groupTools": {
+    "authorizationRequired": "群内授权已失效或不允许此操作，请由伙伴主人在当前群重新发起。",
+    "localPeersOnly": "群内私聊只能发送给本机同账号伙伴。",
+    "ownerChanged": "账号已经切换，请重试。",
+    "invalidMessage": "消息或重试标识无效。",
+    "privateUnavailable": "当前伙伴私聊不可用，请稍后重试。",
+    "idempotencyConflict": "此重试标识已用于另一条消息。",
+    "privateUnconfirmed": "私聊未确认送达，请使用同一重试标识重试。",
+    "verificationUnavailable": "暂时无法核验群聊授权，请在连接恢复后重试。"
   }
 }

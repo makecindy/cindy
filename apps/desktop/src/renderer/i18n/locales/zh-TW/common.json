@@ -10514,7 +10514,8 @@
         "automation": "自動化 ID：{{id}}",
         "plugin": "插件 ID：{{id}}",
         "device": "裝置 ID：{{id}}",
-        "member": "成員 ID：{{id}}"
+        "member": "成員 ID：{{id}}",
+        "group": "群聊 ID：{{id}}"
       },
       "expandLongMessage": "展開全文",
       "collapseLongMessage": "收起",
@@ -10540,7 +10541,9 @@
         "sourceNeverRan": "原任務尚未執行，無法開啟新任務",
         "codexStateUnavailable": "Codex Agent 會話狀態不可用，無法開啟新任務。{{detail}}",
         "generic": "無法開啟新任務，請重試"
-      }
+      },
+      "groupSentNamed": "從群聊「{{name}}」傳送",
+      "groupSent": "從群聊傳送"
     },
     "threadContext": {
       "cindyFrom": "Cindy · 來自 {{platform}}",
@@ -10928,7 +10931,8 @@
       "sessionInactive": "任務已不再處於活躍狀態",
       "remoteProjectBanner": "在 {{device}} 的 {{project}} 中新建任務",
       "remoteDialogueBanner": "在 {{device}} 上新建對話（不繫結專案）",
-      "agentDeviceBanner": "任務和檔案留在本機，Agent 在 {{device}} 上執行"
+      "agentDeviceBanner": "任務和檔案留在本機，Agent 在 {{device}} 上執行",
+      "agentDeviceElsewhereBanner": "Agent 在 {{device}} 上執行"
     },
     "jumpSession": {
       "emptyId": "請輸入要跳轉的任務 ID",
@@ -14781,5 +14785,15 @@
     "autoTitle": "啟用 Auto 自動審批",
     "autoMessage": "允許「{{name}}」使用 Auto 自動審批？",
     "autoDetail": "主任務與 Worker 的操作將交由 Cindy 自動審批。需要人工確認或遭拒時仍會暫停；這不是完全存取。此選擇儲存到插件 AI 設定，不變更其他任務的全域權限。"
+  },
+  "groupTools": {
+    "authorizationRequired": "群組授權已失效或不允許此操作，請由夥伴主人在目前群組重新發起。",
+    "localPeersOnly": "群組內的私訊只能傳送給本機同帳號夥伴。",
+    "ownerChanged": "帳號已切換，請重試。",
+    "invalidMessage": "訊息或重試識別碼無效。",
+    "privateUnavailable": "目前夥伴的私聊無法使用，請稍後重試。",
+    "idempotencyConflict": "此重試識別碼已用於另一則訊息。",
+    "privateUnconfirmed": "尚未確認私訊送達，請使用相同的重試識別碼重試。",
+    "verificationUnavailable": "暫時無法核驗群聊授權，請在連線恢復後重試。"
   }
 }

@@ -282,6 +282,7 @@ describe("cindy_helper MCP server", () => {
       delegationId: "session-task-1",
       childSessionId: "desktop-child-session",
       status: "running",
+      completionDestination: 'teammate-private-chat',
       deadlineAt: 1_788_000_000_000,
     }));
     const messageSessionTask = vi.fn(async () => ({
@@ -365,6 +366,7 @@ describe("cindy_helper MCP server", () => {
       expect(sessionTask).toMatchObject({
         ok: true,
         action: "start_session_task",
+        completion_destination: 'teammate-private-chat',
         task_id: "session-task-1",
         session_id: "desktop-child-session",
         deadline_at: 1_788_000_000_000,
@@ -698,6 +700,28 @@ describe("cindy_helper MCP server", () => {
     }
   });
 
+  it('binds send_to_user to the current lane without accepting an arbitrary recipient', async () => {
+    const sendToUser = vi.fn(async () => ({ ok: true as const, messageId: 'saved', targetSessionId: 'owner-private', delivered: true }));
+    const messageAgent = vi.fn(async () => ({ ok: false as const, errorCode: 'UNEXPECTED', message: 'must not run' }));
+    const server = createXdtHelperMcpServer({ resolveSurface: async () => 'bot', botMessaging: { sendToUser, messageAgent } },
+      { agentKind: 'codex', workingDir: '/fixture', sessionId: 'group-lane' });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: 'group-private-message', version: '0.0.0' });
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+    try {
+      const catalog = parsePayload(await client.callTool({ name: 'list_tools', arguments: { category: 'bots' } }));
+      expect(JSON.stringify(catalog)).toContain('send_to_user');
+      const result = parsePayload(await client.callTool({ name: 'call_tool', arguments: { name: 'send_to_user',
+        args: { message: 'Owner reply', idempotency_key: 'request-123', target_id: 'another-account' } } }));
+      expect(result).toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+      expect(sendToUser).not.toHaveBeenCalled();
+      const valid = parsePayload(await client.callTool({ name: 'call_tool', arguments: { name: 'send_to_user', args: { message: 'Owner reply', idempotency_key: 'request-123' } } }));
+      expect(valid).toMatchObject({ ok: true, delivered: true, read: null, session_id: 'owner-private' });
+      expect(sendToUser).toHaveBeenCalledWith({ callerSessionId: 'group-lane', message: 'Owner reply', idempotencyKey: 'request-123' });
+      expect(messageAgent).not.toHaveBeenCalled();
+    } finally { await client.close(); await server.close(); }
+  });
+
   it.each(["default", "restricted", "error", "unbound"] as const)("hides and blocks all companion commands on %s surface", async (surface) => {
     const callback = vi.fn(async () => ({ ok: false as const, errorCode: "UNEXPECTED", message: "must not run" }));
     const server = createXdtHelperMcpServer({
@@ -706,7 +730,7 @@ describe("cindy_helper MCP server", () => {
         return surface === "unbound" ? "bot" : surface;
       },
       sessionTasks: { startSessionTask: callback, getSessionTask: callback, messageSessionTask: callback, stopSessionTask: callback },
-      botMessaging: { messageAgent: callback, checkMessage: callback },
+      botMessaging: { messageAgent: callback, checkMessage: callback, sendToUser: callback },
       botProfiles: { create: callback },
     }, { agentKind: "codex", workingDir: "/repo", sessionId: surface === "unbound" ? undefined : "normal-session" });
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
@@ -716,7 +740,7 @@ describe("cindy_helper MCP server", () => {
       expect((await client.listTools()).tools.map((tool) => tool.name).sort()).toEqual(["call_tool", "list_tools"]);
       const discovery = parsePayload(await client.callTool({ name: "list_tools", arguments: { category: "bots" } }));
       expect(discovery).toMatchObject({ ok: false, errorCode: "CAPABILITY_NOT_AVAILABLE" });
-      for (const name of ["start_session_task", "check_session_task", "message_session_task", "stop_session_task", "send_to_agent", "check_agent_message", "create_teammate"]) {
+      for (const name of ["start_session_task", "check_session_task", "message_session_task", "stop_session_task", "send_to_agent", "send_to_user", "check_agent_message", "create_teammate"]) {
         const result = parsePayload(await client.callTool({ name: "call_tool", arguments: { name, args: {} } }));
         expect(result).toMatchObject({ ok: false, errorCode: "CAPABILITY_NOT_AVAILABLE" });
       }

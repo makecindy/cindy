@@ -10515,7 +10515,8 @@
         "automation": "자동화 ID: {{id}}",
         "plugin": "플러그인 ID: {{id}}",
         "device": "기기 ID: {{id}}",
-        "member": "멤버 ID: {{id}}"
+        "member": "멤버 ID: {{id}}",
+        "group": "그룹 ID: {{id}}"
       },
       "expandLongMessage": "전체 메시지 보기",
       "collapseLongMessage": "접기",
@@ -10541,7 +10542,9 @@
         "sourceNeverRan": "원래 세션이 아직 실행되지 않아 새 세션을 시작할 수 없습니다",
         "codexStateUnavailable": "Codex 세션 상태를 사용할 수 없어 새 세션을 시작할 수 없습니다. {{detail}}",
         "generic": "새 세션을 시작하지 못했습니다. 다시 시도해 주세요"
-      }
+      },
+      "groupSentNamed": "그룹 「{{name}}」에서 보냄",
+      "groupSent": "그룹에서 보냄"
     },
     "threadContext": {
       "cindyFrom": "Cindy · {{platform}}에서",
@@ -10928,7 +10931,8 @@
       "sessionInactive": "세션이 더 이상 활성 상태가 아닙니다",
       "remoteProjectBanner": "{{device}}의 {{project}}에서 새 세션 만들기",
       "remoteDialogueBanner": "{{device}}에서 새 대화(프로젝트 없음)",
-      "agentDeviceBanner": "세션과 파일은 이 컴퓨터에 남고, Agent는 {{device}}에서 실행됩니다"
+      "agentDeviceBanner": "세션과 파일은 이 컴퓨터에 남고, Agent는 {{device}}에서 실행됩니다",
+      "agentDeviceElsewhereBanner": "Agent는 {{device}}에서 실행됩니다"
     },
     "jumpSession": {
       "emptyId": "이동할 sessionId를 입력하세요",
@@ -14781,5 +14785,15 @@
     "autoTitle": "Auto 자동 승인 사용",
     "autoMessage": "“{{name}}”에 Auto 자동 승인을 허용할까요?",
     "autoDetail": "Cindy가 주 작업과 Worker 동작을 자동 심사합니다. 확인이 필요하거나 거부된 동작은 일시 중지됩니다. 전체 접근 권한이 아니며 다른 작업의 전역 권한은 변경하지 않습니다."
+  },
+  "groupTools": {
+    "authorizationRequired": "그룹 권한이 만료되었거나 이 작업이 허용되지 않습니다. 파트너 소유자가 이 그룹에서 다시 요청해 주세요.",
+    "localPeersOnly": "그룹에서는 이 기기의 같은 계정에 있는 파트너에게만 메시지를 보낼 수 있습니다.",
+    "ownerChanged": "계정이 변경되었습니다. 다시 시도해 주세요.",
+    "invalidMessage": "메시지 또는 재시도 식별자가 유효하지 않습니다.",
+    "privateUnavailable": "이 파트너의 개인 채팅을 사용할 수 없습니다. 나중에 다시 시도해 주세요.",
+    "idempotencyConflict": "이 재시도 식별자는 다른 메시지에 이미 사용되었습니다.",
+    "privateUnconfirmed": "개인 메시지 전달이 확인되지 않았습니다. 같은 식별자로 다시 시도해 주세요.",
+    "verificationUnavailable": "그룹 권한을 확인할 수 없습니다. 연결이 복구되면 다시 시도하세요."
   }
 }

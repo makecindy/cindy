@@ -4,7 +4,10 @@
  */
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
+import { HOST_ONLY_AGENT_PREFIX, buildMakerUserMessage, sanitizeQueuedMessageForPersistence } from '../../../shared/agentInputQueue';
+import { UI_ACTION_TRIGGER_PREFIX } from '../../../shared/interruptedTurn';
 
 import {
   buildWireMessageSourceNote,
@@ -164,15 +167,32 @@ describe('delivery-path wiring (source contract)', () => {
     expect(pluginDispatch).not.toContain('origin:');
   });
 
-  it('host receipts keep queue rows hidden: prefix stays on text, wire assembly drops it', () => {
+  it.each(['receipt', 'group-peer', 'user'])('preserves %s queue visibility and final model content', async kind => {
     const builder = between(
       register,
       'async function buildSessionControlInputItem',
       'const orcaInterAgentDispatcher',
     );
-    expect(builder).toContain(
-      'text: hiddenTriggerForAgent ? params.persistedContent : params.message',
-    );
-    expect(builder).toContain('agentOmitsTriggerPrefix: true as const');
+    // Execute the actual host builder with only its runtime dependencies stubbed.
+    // This protects the behavior without fixing its conditional expression shape.
+    const js = ts.transpileModule(`${builder}\nreturn buildSessionControlInputItem;`, {
+      compilerOptions: { target: ts.ScriptTarget.ES2022 },
+    }).outputText;
+    const build = new Function('buildCreateOptsForQueuedSession', 'permissionModeOrAsk', 'UI_ACTION_TRIGGER_PREFIX', 'HOST_ONLY_AGENT_PREFIX', js)(
+      async () => ({ model: 'fixture', workingDir: '/fixture', permissionMode: 'ask' }),
+      (mode: string) => mode, UI_ACTION_TRIGGER_PREFIX, HOST_ONLY_AGENT_PREFIX);
+    const body = 'Delivery body';
+    const message = kind === 'group-peer' ? '[Group source: Design (group-1); lane: lane-1]\n\n' + body : body;
+    const persistedContent = kind === 'user' ? body : UI_ACTION_TRIGGER_PREFIX + body;
+    const queued = await build({ targetSessionId: 'target', meta: {}, message, persistedContent,
+      clientId: kind === 'group-peer' ? 'bot-dm:fixture' : 'fixture' });
+    expect(queued.text).toBe(persistedContent);
+    expect(queued.agentOmitsTriggerPrefix).toBe(kind === 'user' ? undefined : true);
+    expect(buildMakerUserMessage(queued)).toEqual({ type: 'user', content: message });
+    const snapshot = sanitizeQueuedMessageForPersistence(queued);
+    expect(snapshot.text).toBe(persistedContent);
+    expect(snapshot.persistedContent).toBe(persistedContent);
+    expect(snapshot[HOST_ONLY_AGENT_PREFIX]).toBeUndefined();
+    expect(JSON.stringify(snapshot)).not.toMatch(/Group source|group-1|lane-1/);
   });
 });

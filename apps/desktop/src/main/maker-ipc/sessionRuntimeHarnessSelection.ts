@@ -38,6 +38,7 @@ export interface HarnessRuntimeSelectionDeps {
     sessionId: string,
     profile: SessionRuntimeProfile,
     assertCurrent: () => void,
+    beforeMutation?: () => Promise<void>,
   ): Promise<{ deferred?: boolean; sameEngineSuperseded?: boolean }>;
   pending(sessionId: string): PendingAgentSwitchIntent | undefined;
 }
@@ -48,6 +49,7 @@ export async function setSessionRuntimeHarness(
   params: {
     targetSessionId: string;
     expectedGeneration?: number;
+    beforeMutation?: () => Promise<void>;
     patch: {
       harness: AgentKind;
       model?: string;
@@ -84,6 +86,7 @@ export async function setSessionRuntimeHarness(
       };
       assertCurrent();
       const effective = await deps.read(id);
+      if (params.beforeMutation) await params.beforeMutation();
       if (!effective)
         return { ok: false, errorCode: 'NOT_FOUND', message: `session ${id} not found` };
       const profile = await deps.resolve(
@@ -98,7 +101,7 @@ export async function setSessionRuntimeHarness(
         { effort: patch.effort !== undefined, fast: patch.fastMode !== undefined },
       );
       assertCurrent();
-      const result = await deps.stage(id, profile, assertCurrent);
+      const result = await deps.stage(id, profile, assertCurrent, params.beforeMutation);
       if (result.sameEngineSuperseded) {
         return {
           ok: false,

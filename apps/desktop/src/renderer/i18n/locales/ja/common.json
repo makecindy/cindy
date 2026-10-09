@@ -10515,7 +10515,8 @@
         "automation": "自動化 ID：{{id}}",
         "plugin": "プラグイン ID：{{id}}",
         "device": "デバイス ID：{{id}}",
-        "member": "メンバー ID：{{id}}"
+        "member": "メンバー ID：{{id}}",
+        "group": "グループ ID: {{id}}"
       },
       "expandLongMessage": "全文を表示",
       "collapseLongMessage": "折りたたむ",
@@ -10541,7 +10542,9 @@
         "sourceNeverRan": "元のセッションがまだ実行されていないため、新しいセッションを始められません",
         "codexStateUnavailable": "Codex セッションの状態を利用できないため、新しいセッションを始められません。{{detail}}",
         "generic": "新しいセッションを始められませんでした。再試行してください"
-      }
+      },
+      "groupSentNamed": "グループ「{{name}}」から送信",
+      "groupSent": "グループから送信"
     },
     "threadContext": {
       "cindyFrom": "Cindy · {{platform}} から",
@@ -10928,7 +10931,8 @@
       "sessionInactive": "セッションはすでにアクティブではありません",
       "remoteProjectBanner": "{{device}} の {{project}} で新しいセッションを作成",
       "remoteDialogueBanner": "{{device}} で新しい対話（プロジェクトなし）",
-      "agentDeviceBanner": "セッションとファイルはこのパソコンに残り、Agent は {{device}} で実行されます"
+      "agentDeviceBanner": "セッションとファイルはこのパソコンに残り、Agent は {{device}} で実行されます",
+      "agentDeviceElsewhereBanner": "Agent は {{device}} で実行されます"
     },
     "jumpSession": {
       "emptyId": "移動先の sessionId を入力してください",
@@ -14781,5 +14785,15 @@
     "autoTitle": "Auto 自動承認を有効化",
     "autoMessage": "「{{name}}」で Auto 自動承認を使用しますか？",
     "autoDetail": "主タスクと Worker の操作を Cindy が自動審査します。確認が必要な操作や拒否された操作は停止します。完全アクセスではありません。他のタスクの全体設定は変更しません。"
+  },
+  "groupTools": {
+    "authorizationRequired": "グループの許可が失効したか、この操作は許可されていません。パートナーの所有者からこのグループで再度依頼してください。",
+    "localPeersOnly": "グループからのメッセージは、この端末の同じアカウントのパートナーにのみ送信できます。",
+    "ownerChanged": "アカウントが切り替わりました。もう一度お試しください。",
+    "invalidMessage": "メッセージまたは再試行識別子が無効です。",
+    "privateUnavailable": "このパートナーの個別チャットを利用できません。後でもう一度お試しください。",
+    "idempotencyConflict": "この再試行識別子は別のメッセージに使用されています。",
+    "privateUnconfirmed": "個別メッセージの配信は未確認です。同じ識別子で再試行してください。",
+    "verificationUnavailable": "グループの権限を確認できませんでした。接続が回復してから再試行してください。"
   }
 }

@@ -216,3 +216,10 @@ it('nests only explicitly bound results, preserving original anchor and human me
   expect(allKeys(project([receipt, message('unrelated', 'assistant', 'Other', { turnCompleted: true })], false))).toContain('msg-receipt');
   expect(input[1]).toBe(receipt);
 });
+
+it('keeps explicitly delivered group private messages while the private model is working and after another reply', () => {
+  const input = [message('u', 'user'), message('group', 'assistant', 'Group reply', { sourceGroup: { groupId: 'g-1' } }),
+    message('progress', 'assistant', 'Working'), tool('running')];
+  expect(proseIds(project(input, true))).toEqual(['group']);
+  expect(proseIds(project([...input, message('final', 'assistant', 'Result', { turnCompleted: true })], false))).toEqual(['group', 'final']);
+});

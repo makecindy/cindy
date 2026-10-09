@@ -829,6 +829,8 @@ export interface SessionRowSnapshot {
   providerId: string | null;
   /** Hook exact-takeover must reject SSH-owned sessions. */
   remoteHostId?: string | null;
+  /** 远程 Agent 所在电脑(null = 本机);限额自动继续据此不拿本机账号快照推算。 */
+  agentDeviceId?: string | null;
   /** Hook exact-takeover must reject internal Orca worker sessions. */
   orcaRole?: 'lead' | 'worker' | null;
   /** Collab policy gate: remote session 的 codex / claude-code 均放行。 */
@@ -857,6 +859,7 @@ async function selectSessionRowSnapshot(id: string): Promise<SessionRowSnapshot 
       providerId: sessions.providerId,
       clearedAt: sessions.clearedAt,
       remoteHostId: sessions.remoteHostId,
+      agentDeviceId: sessions.agentDeviceId,
       orcaRole: sessions.orcaRole,
       agentKind: sessions.agentKind,
       source: sessions.source,

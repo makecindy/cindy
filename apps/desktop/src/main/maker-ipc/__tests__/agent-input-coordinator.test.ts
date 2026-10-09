@@ -1,3 +1,8 @@
+import { BOT_GROUP_CLIENT_ID } from '../../../shared/botGroupChat.js';
+import { authorizeGroupTool, registerGroupToolAuthority } from '../botGroupToolAuthorization.js';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { ScriptTarget, transpileModule } from 'typescript';
 import { AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT, appendAutoReviewUserIntent } from '@cindy/maker-core';
 import { AUTO_REVIEW_DELEGATED_CONTINUATION, restoreAutoReviewUserIntent, type AutoReviewHistoryMessage } from '../autoReviewUserIntent.js';
 import { createPluginTaskReviewResolver, type PluginReviewSnapshot } from '../pluginTaskReviewContext.js';
@@ -32,7 +37,7 @@ import type {
   AgentInputProjection,
   AgentInputQueuedMessage,
 } from '../../../shared/agentInputQueue.js';
-import { USAGE_LIMIT_RESET_AUTO_RESUME_REASON } from '../../../shared/agentInputQueue.js';
+import { HOST_ONLY_AGENT_PREFIX, USAGE_LIMIT_RESET_AUTO_RESUME_REASON } from '../../../shared/agentInputQueue.js';
 import {
   CONTINUE_AFTER_APP_EXIT_PROMPT,
   CONTINUE_AFTER_ERROR_PROMPT,
@@ -6176,6 +6181,37 @@ describe('AgentInputCoordinator stop and drain boundaries', () => {
 });
 
 describe('AgentInputCoordinator steer transaction', () => {
+  it.each(['restore', 'screening', 'references', 'valid'] as const)('runs the host steer authority guard after %s', async boundary => {
+    const h = createHarness();
+    const sid = 'group-steer-guard';
+    h.setRunning(true);
+    let revoked = false;
+    const failure = new Error('Fixture authority revoked');
+    const beforeMutation = vi.fn(async () => { if (revoked) throw failure; });
+    h.setScreenUserMessage(async () => { if (boundary === 'screening') revoked = true; return { action: 'allow' }; });
+    h.resolveSessionReferences.mockImplementationOnce(async () => { if (boundary === 'references') revoked = true; return []; });
+    const source = readFileSync(resolve(__dirname, '../register.ts'), 'utf8');
+    const start = source.indexOf('    steerQueuedMessage: async (sessionId, item, expectedTurn) =>');
+    const end = source.indexOf('    getQueueSnapshot:', start);
+    expect(start).toBeGreaterThan(0); expect(end).toBeGreaterThan(start);
+    const adapter = transpileModule(`return ({${source.slice(start, end)}}).steerQueuedMessage;`, { compilerOptions: { target: ScriptTarget.ES2022 } }).outputText;
+    const host = new Function('inputCoordinator', adapter)({
+      ensureQueueRestored: async () => { if (boundary === 'restore') revoked = true; },
+      steer: h.coordinator.steer.bind(h.coordinator),
+    });
+    const result = host(sid, makeItem('guarded-input', 'Private task input', { sessionRefs: [{ sessionId: 'reference' }] }),
+      { session: h.getTurnSessionIdentity(), turnGeneration: 0, beforeMutation });
+    if (boundary === 'valid') { await expect(result).resolves.toBe(true); expect(h.steerToAgent).toHaveBeenCalledOnce(); }
+    else {
+      await expect(result).rejects.toBe(failure);
+      expect(h.steerToAgent).not.toHaveBeenCalled();
+      expect(h.onSteerAccepted).not.toHaveBeenCalled();
+      expect(h.coordinator.getQueueControlSnapshot(sid).pendingQueue).toEqual([]);
+      expect(h.coordinator.getQueueControlSnapshot(sid).steeringQueueClientIds).toEqual([]);
+    }
+    expect(beforeMutation).toHaveBeenCalledTimes(boundary === 'restore' ? 1 : 2);
+  });
+
   it('rejects a control steer when screening crosses into a new turn generation', async () => {
     const h = createHarness();
     const sid = 'control-steer-screening-turn-race';
@@ -9976,6 +10012,40 @@ describe('AgentInputCoordinator queue mutations', () => {
 });
 
 describe('AgentInputCoordinator crash-recovery queue snapshots (issue #761)', () => {
+  it.each(['member', 'plan'] as const)('drops restored %s group inputs before a new execution can use their lane', async kind => {
+    const sid = 'reused-group-lane';
+    const oldId = kind === 'member' ? BOT_GROUP_CLIENT_ID.memberTurn('room', 'old-execution', 'bot')
+      : BOT_GROUP_CLIENT_ID.planStep('room', 'plan', 0, 'old-execution');
+    const writer = createHarness();
+    await writer.coordinator.ensureQueueRestored(sid);
+    writer.setRunning(true);
+    writer.coordinator.enqueue(sid, makeItem(oldId, 'Expired group request'));
+    await flush();
+    const snapshot = JSON.parse(JSON.stringify(writer.persistQueueSnapshot.mock.calls.at(-1)![1]));
+    const reader = createHarness();
+    reader.setLoadQueueSnapshot(async () => snapshot);
+    const validate = vi.fn(async () => {});
+    // Same lane, same group grant, but a different execution owns tool authority.
+    const release = registerGroupToolAuthority(sid, { botId: 'bot', mode: 'owner', isCurrent: () => true, validate });
+    try {
+      await expect(authorizeGroupTool(sid, 'bot', 'owner-action')).resolves.toBeTruthy();
+      await reader.coordinator.ensureQueueRestored(sid);
+      await flush();
+      expect(reader.coordinator.getQueueControlSnapshot(sid).pendingQueue).toEqual([]);
+      expect(reader.onDiscardedQueuedMessage).toHaveBeenCalledWith(sid, expect.objectContaining({ clientId: oldId }));
+      expect(latestSnapshotClientIds(reader.persistQueueSnapshot)).toEqual([]);
+      reader.coordinator.resume(sid);
+      await flush();
+      expect(reader.sendToAgent).not.toHaveBeenCalled();
+      const freshId = BOT_GROUP_CLIENT_ID.memberTurn('room', 'new-execution', 'bot');
+      reader.coordinator.enqueue(sid, makeItem(freshId, 'Fresh group request'));
+      await flush();
+      expect(reader.sendToAgent).toHaveBeenCalledOnce();
+      expect(reader.sendToAgent.mock.calls[0][3].persistUserMessage?.clientId).toBe(freshId);
+      expect(reader.onAcceptedQueuedMessage).toHaveBeenCalledWith(sid, expect.objectContaining({ clientId: freshId }));
+    } finally { release(); }
+  });
+
   it('restores the Main-owned authorization for an exact queued Desktop Pi command', async () => {
     const writer = createHarness();
     const sid = 'snapshot-desktop-pi-command';
@@ -11575,6 +11645,40 @@ describe('AgentInputCoordinator replaceQueuedMessage(Orca lead 排队消息修�
       });
     },
   );
+
+  it.each([false, true])('keeps a peer source in memory and uses the current body at dispatch (rewrite=%s)', async (rewrite) => {
+    const h = createHarness();
+    const sid = 'group-envelope-fixture';
+    await h.coordinator.ensureQueueRestored(sid);
+    h.setRunning(true);
+    const body = '[UI_ACTION_TRIGGER]Bounded peer question';
+    const prefix = '[Group source: Fixture Design (fixture-group); lane: fixture-lane]\n';
+    const screen = vi.fn<NonNullable<AgentInputCoordinatorDeps['screenUserMessage']>>(async () => rewrite
+      ? { action: 'rewrite' as const, ghostId: 'fixture-hook', ghostName: 'Fixture hook', text: 'Rewritten question' }
+      : { action: 'allow' as const });
+    h.setScreenUserMessage(screen);
+    h.coordinator.enqueue(sid, { ...makeItem('bot-dm:fixture:message', body),
+      [HOST_ONLY_AGENT_PREFIX]: prefix, agentOmitsTriggerPrefix: true,
+      origin: { kind: 'session', senderSessionId: 'fixture-lane', displayText: body } });
+    await flush();
+    const snapshot = h.persistQueueSnapshot.mock.calls.at(-1)?.[1] ?? [];
+    expect(snapshot).toHaveLength(1);
+    expect(snapshot[0][HOST_ONLY_AGENT_PREFIX]).toBeUndefined();
+    expect(snapshot[0].text).toBe(body);
+    expect(JSON.stringify(snapshot)).not.toMatch(/Group source|Fixture Design|fixture-group/);
+    const projection = h.coordinator.getProjection(sid).pendingQueue[0];
+    expect(projection[HOST_ONLY_AGENT_PREFIX]).toBeUndefined();
+    expect(projection.text).toBe(body);
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(sid, 'done');
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledOnce();
+    expect(screen).toHaveBeenCalledOnce();
+    expect(screen.mock.calls[0]?.[1]).not.toContain('Group source');
+    expect(h.sendToAgent.mock.calls[0]?.[1]).toEqual({ type: 'user', content: prefix + (rewrite ? 'Rewritten question' : 'Bounded peer question') });
+    const message = mocks.createMessage.mock.calls.find(call => (call[1] as { clientId?: string }).clientId === 'bot-dm:fixture:message')?.[1];
+    expect(message).toMatchObject({ content: rewrite ? '[UI_ACTION_TRIGGER]Rewritten question' : body });
+  });
 
   it('preserves typed plugin receipts from queue snapshot through durable persistence and review', async () => {
     const h = createHarness();

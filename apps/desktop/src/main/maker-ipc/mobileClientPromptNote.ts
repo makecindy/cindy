@@ -178,7 +178,7 @@ export function attachMainOwnedInputBoundary(
   };
 }
 
-const MAIN_ONLY_PERSIST_FIELDS = ['sharedTaskAuthor', 'origin', 'sourceDevice', 'sourcePlugin'] as const;
+const MAIN_ONLY_PERSIST_FIELDS = ['sharedTaskAuthor', 'origin', 'sourceDevice', 'sourcePlugin', 'sourceGroup'] as const;
 const MAIN_ONLY_SEND_FIELDS = [
   'fromMobileClient',
   'fromDeviceLinkClient',
@@ -193,6 +193,7 @@ const MAIN_ONLY_SEND_FIELDS = [
   'origin',
   'sourceDevice',
   'sourcePlugin',
+  'sourceGroup',
   'sourceOrigin',
   'sharedTaskAuthor',
 ] as const;

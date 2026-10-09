@@ -172,6 +172,9 @@ interface SessionTaskCallbacks {
 }
 
 interface BotMessagingCallbacks {
+  sendToUser?(params: { callerSessionId: string; message: string; idempotencyKey: string }): Promise<
+    { ok: true; messageId: string; targetSessionId: string; delivered: boolean }
+    | { ok: false; errorCode: string; message: string }>;
   checkMessage?(params: { callerSessionId: string; messageId: string }): Promise<
     { ok: true } | { ok: false; errorCode: string; message: string }>;
   listAgents?(params: { callerSessionId: string;
@@ -402,8 +405,11 @@ function registerStartSessionTaskEntry(
             status: result.status,
             deadline_at: result.deadlineAt,
             expects_result: true,
+            ...(result.completionDestination ? { completion_destination: result.completionDestination } : {}),
             guidance:
-              "The task card tracks progress and the result will return automatically. Do not start it again. Treat model_route and task/session ids as internal bookkeeping; do not echo them or the delegated instruction in ordinary replies unless the user asks for these details.",
+              (result.completionDestination === 'teammate-private-chat'
+                ? 'Tell the owner that the task card, permission/questions, and final result will appear in their private chat with this teammate. '
+                : '') + "The task card tracks progress and the result will return automatically. Do not start it again. Treat model_route and task/session ids as internal bookkeeping; do not echo them or the delegated instruction in ordinary replies unless the user asks for these details.",
           })
         : errorPayload(result.errorCode, result.message);
     },
@@ -417,6 +423,18 @@ function registerSendToAgentEntry(
   sessionCtx: XdtHelperMcpSessionCtx,
 ): void {
   if (!deps.botMessaging) return;
+  if (deps.botMessaging.sendToUser) registry.register({
+    name: 'send_to_user', category: 'bots',
+    description: 'From a group, send a private message to your owner in this same teammate’s main chat. Use when your owner explicitly asks for a private reply. The host resolves the recipient; this does not call yourself, wake another model, or message an arbitrary group member. Other members’ group tool grants do not authorize this action. In the main private chat, reply normally. Reuse idempotency_key when retrying the same message. A saved receipt does not mean the user has read it.',
+    inputShape: { message: z.string().trim().min(1).max(16000), idempotency_key: z.string().regex(/^[\w-]{8,100}$/) },
+    handler: async ({ message, idempotency_key }) => {
+      const callerSessionId = resolveLiziMcpSessionContext(sessionCtx).sessionId;
+      if (!callerSessionId) return errorPayload('NOT_A_BOT_SESSION', '当前调用未绑定伙伴任务。');
+      const result = await deps.botMessaging!.sendToUser!({ callerSessionId, message, idempotencyKey: idempotency_key });
+      return result.ok ? okPayload({ action: 'send_to_user', message_id: result.messageId, session_id: result.targetSessionId,
+        delivered: result.delivered, read: null }) : errorPayload(result.errorCode, result.message);
+    },
+  });
   if (deps.botMessaging.checkMessage) registry.register({
     name: 'check_agent_message', category: 'bots',
     description: 'Check your own remote message: read native acceptance receipts or ordinary replies from an older teammate conversation. Use the message_id returned by send_to_agent when its transport is remote-conversation, or after uncertain delivery. This does not send or retry. It returns native acceptance or persisted ordinary reply text, not proof of engine delivery, a remote tool call, or a completed turn. Check when following up; do not poll.',

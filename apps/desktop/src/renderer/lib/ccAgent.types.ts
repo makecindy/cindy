@@ -8,6 +8,7 @@ import type { ReviewRunMeta } from '../../shared/reviewRun';
 import type { AgentTaskTerminalStatus } from '@cindy/maker-shared/agent-task';
 import type {
   MessageSourceDevice,
+  MessageSourceGroup,
   MessageSourcePlugin,
 } from '@cindy/maker-shared/message-source';
 import type { ToolLoopErrorDetails } from '@cindy/maker-core';
@@ -192,6 +193,10 @@ export interface CcMeta {
   sourceDevice?: MessageSourceDevice;
   /** 插件任务派发的消息（readMessageSourcePlugin 读取）。 */
   sourcePlugin?: MessageSourcePlugin;
+  /** Group source of an explicitly sent private assistant message. */
+  sourceGroup?: MessageSourceGroup;
+  /** Guest-safe independent assistant delivery; does not seal a model turn. */
+  explicitDelivery?: boolean;
 
   /** 历史 per-turn USD；新数据以 turnCost 为区域金额事实。 */
   turnCostUsd?: number;

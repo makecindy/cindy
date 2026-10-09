@@ -14,11 +14,11 @@
 ## 数据
 
 - 沿用既有字段：`origin`（scheduler / session / orca）、`imSource`、`hookSource`、
-  `sharedTaskAuthor`；新增 `sourceDevice`、`sourcePlugin`。
+  `sharedTaskAuthor`；新增 `sourceDevice`、`sourcePlugin`；群内显式发给主人的私聊消息使用 `sourceGroup` 保存群名与 ID，桌面和手机的 assistant 消息均显示此来源。
 - 新数据**不进** `origin`：多处 host 逻辑把任何 `origin.kind` 当作非人工派发。
 - 全部只用于归属展示，**不是**权限或信任判据；wire 传入的同名字段一律丢弃，由 host 重写。
 - 共享任务访客收到脱敏后的数据：任务来源去掉 id 与标题，自动化只保留「由自动化发送」，
-  不下发设备与插件来源。
+  不下发设备、插件与群聊来源。群来源私聊脱敏后只保留不含身份的 `explicitDelivery` 可见性标记；它不代表主任务模型轮次结束，不封存相邻过程正文。
 - 共享读写与说明构造在 `packages/maker-shared/src/messageSource.ts`。
 
 ## 发给模型的说明

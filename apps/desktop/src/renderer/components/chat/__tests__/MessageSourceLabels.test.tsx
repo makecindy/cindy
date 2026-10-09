@@ -178,3 +178,13 @@ describe('QueueSourceDeviceTag (pending queue rows)', () => {
   });
 });
 
+
+describe('private group reply source', () => {
+  it('shows the group name and id in the existing source row, excluded from share images', () => {
+    const { container } = render(<MessageSourceLabels sourceGroup={{ groupId: 'g-1', name: 'Design' }} align="start" />);
+    const label = screen.getByText('chat.userMessage.groupSentNamed:Design');
+    expect(label.closest('[data-message-origin]')?.getAttribute('title')).toBe('chat.userMessage.sourceIds.group:g-1');
+    expect(container.querySelector(`[${SHARE_SOURCE_ATTR}]`)).not.toBeNull();
+    expect(container.querySelector('button')).toBeNull();
+  });
+});

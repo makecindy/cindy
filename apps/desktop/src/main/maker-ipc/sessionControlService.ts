@@ -81,6 +81,7 @@ export interface SessionControlLiveSession {
 export interface SessionSteerTurnIdentity {
   session: SessionControlLiveSession;
   turnGeneration: number;
+  beforeMutation?: () => Promise<void>;
 }
 
 export interface SessionControlServiceDeps {
@@ -91,6 +92,7 @@ export interface SessionControlServiceDeps {
   setSessionRuntime(params: {
     targetSessionId: string;
     expectedGeneration?: number;
+    beforeMutation?: () => Promise<void>;
     patch: {
       harness?: AgentKind;
       model?: string;
@@ -145,6 +147,8 @@ export function createSessionControlService(deps: SessionControlServiceDeps) {
       callerSessionId: string;
       targetSessionId: string;
       queuedMessageId: string;
+      /** Host-only authorization check after async reads, immediately before mutation. */
+      beforeMutation?: () => Promise<void>;
       message: string;
     }): Promise<SessionQueuedMessageControlResult> {
       const missing = await ensureTarget(params.targetSessionId);
@@ -154,6 +158,7 @@ export function createSessionControlService(deps: SessionControlServiceDeps) {
         queuedMessageId: params.queuedMessageId,
         message: params.message,
         authorize: (item) => authorizeSessionQueueItem(item, params.callerSessionId),
+        beforeMutation: params.beforeMutation,
         rebuild: rebuildSessionQueueItem,
       });
     },
@@ -162,6 +167,8 @@ export function createSessionControlService(deps: SessionControlServiceDeps) {
       callerSessionId: string;
       targetSessionId: string;
       queuedMessageId: string;
+      /** Host-only authorization check after async reads, immediately before mutation. */
+      beforeMutation?: () => Promise<void>;
     }): Promise<SessionQueuedMessageControlResult> {
       const missing = await ensureTarget(params.targetSessionId);
       if (missing) return missing;
@@ -169,6 +176,7 @@ export function createSessionControlService(deps: SessionControlServiceDeps) {
         sessionId: params.targetSessionId,
         queuedMessageId: params.queuedMessageId,
         authorize: (item) => authorizeSessionQueueItem(item, params.callerSessionId),
+        beforeMutation: params.beforeMutation,
       });
     },
 
@@ -210,12 +218,15 @@ export function createSessionControlService(deps: SessionControlServiceDeps) {
       message: string;
       /** Host-owned stable ID; the input coordinator owns acceptance deduplication. */
       queuedMessageId?: string;
+      beforeMutation?: () => Promise<void>;
     }): Promise<SessionSteerResult> {
       const missing = await ensureTarget(params.targetSessionId);
+      await params.beforeMutation?.();
       if (missing) return missing;
       try {
         await deps.assertExternalInputAllowed(params.targetSessionId);
       } catch (error) {
+        await params.beforeMutation?.();
         if ((error as { code?: unknown }).code === 'UNSUPPORTED_CAPABILITY') {
           return {
             ok: false,
@@ -225,6 +236,7 @@ export function createSessionControlService(deps: SessionControlServiceDeps) {
         }
         throw error;
       }
+      await params.beforeMutation?.();
       const live = deps.getLiveSession(params.targetSessionId);
       if (!live?.isTurnRunning()) {
         return {
@@ -246,6 +258,7 @@ export function createSessionControlService(deps: SessionControlServiceDeps) {
         ...params,
         queuedMessageId,
       });
+      await params.beforeMutation?.();
       const current = deps.getLiveSession(params.targetSessionId);
       if (
         current !== live ||
@@ -258,7 +271,7 @@ export function createSessionControlService(deps: SessionControlServiceDeps) {
           message: `session ${params.targetSessionId} changed turns before steer was accepted`,
         };
       }
-      const expectedTurn = { session: live, turnGeneration };
+      const expectedTurn = { session: live, turnGeneration, ...(params.beforeMutation ? { beforeMutation: params.beforeMutation } : {}) };
       const accepted = await deps.steerQueuedMessage(params.targetSessionId, item, expectedTurn);
       if (!accepted) {
         const latest = deps.getLiveSession(params.targetSessionId);
@@ -279,8 +292,9 @@ export function createSessionControlService(deps: SessionControlServiceDeps) {
       return { ok: true, queuedMessageId };
     },
 
-    async stopSessionTurn(params: { targetSessionId: string }): Promise<SessionStopResult> {
+    async stopSessionTurn(params: { targetSessionId: string; beforeMutation?: () => Promise<void> }): Promise<SessionStopResult> {
       const missing = await ensureTarget(params.targetSessionId);
+      if (params.beforeMutation) await params.beforeMutation();
       if (missing) return missing;
       const live = deps.getLiveSession(params.targetSessionId);
       if (!live) return { ok: true, status: 'no-active-turn' };
@@ -322,6 +336,7 @@ export function createSessionControlService(deps: SessionControlServiceDeps) {
     async setSessionRuntime(params: {
       targetSessionId: string;
       expectedGeneration?: number;
+      beforeMutation?: () => Promise<void>;
       patch: {
         harness?: AgentKind;
         model?: string;
@@ -331,6 +346,7 @@ export function createSessionControlService(deps: SessionControlServiceDeps) {
       };
     }): Promise<SessionRuntimeSetResult> {
       const missing = await ensureTarget(params.targetSessionId);
+      if (params.beforeMutation) await params.beforeMutation();
       if (missing) return missing;
       return deps.setSessionRuntime(params);
     },

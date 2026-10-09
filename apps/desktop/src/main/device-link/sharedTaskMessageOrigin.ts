@@ -1,8 +1,9 @@
+import { readMessageSourceGroup } from '@cindy/maker-shared/message-source';
 import { queueItemVisibleText } from '@cindy/maker-shared/queue';
 
 const HOOK_SCHEDULE_ID_PREFIX = 'hook:';
 
-const GUEST_HIDDEN_META_KEYS = ['agentFacingWireContent', 'sourceDevice', 'sourcePlugin'] as const;
+const GUEST_HIDDEN_META_KEYS = ['agentFacingWireContent', 'sourceDevice', 'sourcePlugin', 'sourceGroup'] as const;
 
 function redactOriginForSharedGuest(origin: Record<string, unknown>): Record<string, unknown> | null {
   if (origin.kind === 'session') return { kind: 'session' };
@@ -55,7 +56,12 @@ export function redactMessageOriginForSharedGuest(agentMeta: unknown): unknown {
 export function redactMessageRowForSharedGuest<T>(message: T): T {
   if (!message || typeof message !== 'object' || Array.isArray(message)) return message;
   const record = message as Record<string, unknown>;
-  const agentMeta = redactMessageOriginForSharedGuest(record.agentMeta);
+  let agentMeta = redactMessageOriginForSharedGuest(record.agentMeta);
+  // Preserve independent reply visibility without disclosing source identity
+  // or sealing unrelated prose in the canonical model turn.
+  if (record.role === 'assistant' && readMessageSourceGroup(record.agentMeta)) {
+    agentMeta = { ...(agentMeta as Record<string, unknown>), explicitDelivery: true };
+  }
   return agentMeta === record.agentMeta ? message : ({ ...record, agentMeta } as T);
 }
 

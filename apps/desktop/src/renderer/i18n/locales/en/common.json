@@ -10534,7 +10534,8 @@
         "automation": "Automation ID: {{id}}",
         "plugin": "Plugin ID: {{id}}",
         "device": "Device ID: {{id}}",
-        "member": "Member ID: {{id}}"
+        "member": "Member ID: {{id}}",
+        "group": "Group ID: {{id}}"
       },
       "expandLongMessage": "Show full message",
       "collapseLongMessage": "Collapse",
@@ -10560,7 +10561,9 @@
         "sourceNeverRan": "The original session hasn't run yet, so a new session can't be started",
         "codexStateUnavailable": "The Codex session state is unavailable, so a new session can't be started. {{detail}}",
         "generic": "Couldn't start a new session. Try again."
-      }
+      },
+      "groupSentNamed": "Sent from group “{{name}}”",
+      "groupSent": "Sent from a group"
     },
     "threadContext": {
       "cindyFrom": "Cindy · from {{platform}}",
@@ -10956,7 +10959,8 @@
       "sessionInactive": "Session is no longer active",
       "remoteProjectBanner": "New session in {{project}} on {{device}}",
       "remoteDialogueBanner": "New chat on {{device}} (no project)",
-      "agentDeviceBanner": "Session and files stay on this computer — the Agent runs on {{device}}"
+      "agentDeviceBanner": "Session and files stay on this computer — the Agent runs on {{device}}",
+      "agentDeviceElsewhereBanner": "The Agent runs on {{device}}"
     },
     "jumpSession": {
       "emptyId": "Enter a sessionId to jump to",
@@ -14813,5 +14817,15 @@
     "detail": "This sets the plugin’s AI permission to Allow edits for future tasks too. A separate working directory is not a system sandbox; commands still follow Cindy permission checks. You can switch back to read-only in the plugin’s AI settings.",
     "allow": "Allow and continue",
     "cancel": "Not now"
+  },
+  "groupTools": {
+    "authorizationRequired": "Group authorization has expired or does not allow this action. Ask the teammate owner to make a new request in this group.",
+    "localPeersOnly": "Group messages can only target teammates on this device and account.",
+    "ownerChanged": "The account changed. Please try again.",
+    "invalidMessage": "The message or retry identifier is invalid.",
+    "privateUnavailable": "This teammate’s private chat is unavailable. Please try again later.",
+    "idempotencyConflict": "This retry identifier was already used for a different message.",
+    "privateUnconfirmed": "Private message delivery is unconfirmed. Retry with the same identifier.",
+    "verificationUnavailable": "Group authorization could not be verified. Try again when the connection recovers."
   }
 }
