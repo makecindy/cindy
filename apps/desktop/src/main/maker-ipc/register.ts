@@ -782,6 +782,7 @@ import {
   type OrcaInterAgentDispatcher,
   type OrcaInterAgentMessageSource,
 } from './orcaInterAgentDispatcher.js';
+import { resolveOrcaImageAttachmentInput } from './orcaImageAttachments.js';
 import { OrcaWorkerPermissionConfirmBridge } from './orcaWorkerPermissionConfirmBridge.js';
 import {
   getOrcaWorkspaceInfoReadOnly,
@@ -11982,34 +11983,31 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     getSessionRowSnapshot,
     getLiveSession: (sessionId) => maker.getSession(sessionId),
     validateImageAttachments: async (paths) => {
-      // 图片附件仅支持本机;扩展名白名单 + 存在性检查,失败给 Lead 可读的错误。
-      const mimeByExt: Record<string, string> = {
-        '.png': 'image/png',
-        '.jpg': 'image/jpeg',
-        '.jpeg': 'image/jpeg',
-        '.gif': 'image/gif',
-        '.webp': 'image/webp',
-      };
+      // 图片来源两类: 会话受管地址(cindy-media:// / xdt-image://)与任意本机绝对路径。
       const images: Array<{ path: string; name: string; ext: string; size: number; mimeType: string }> = [];
-      for (const rawPath of paths) {
-        const ext = path.extname(rawPath).toLowerCase();
-        const mimeType = mimeByExt[ext];
-        if (!mimeType) {
-          return { ok: false, message: `unsupported image type (png/jpeg/gif/webp only): ${rawPath}` };
+      for (const input of paths) {
+        const resolved = resolveOrcaImageAttachmentInput(input);
+        if (!resolved) {
+          return {
+            ok: false,
+            message: `image not resolvable (accepts cindy-media:// / xdt-image:// URIs or local image files: png/jpeg/gif/webp): ${input}`,
+          };
         }
+        let size: number;
         try {
-          const stat = await fsp.stat(rawPath);
+          const stat = await fsp.stat(resolved.absPath);
           if (!stat.isFile()) throw new Error('not a file');
-          images.push({
-            path: rawPath,
-            name: path.basename(rawPath),
-            ext,
-            size: stat.size,
-            mimeType,
-          });
+          size = stat.size;
         } catch {
-          return { ok: false, message: `image not found or unreadable: ${rawPath}` };
+          return { ok: false, message: `image not found or unreadable: ${input}` };
         }
+        images.push({
+          path: resolved.absPath,
+          name: path.basename(resolved.absPath),
+          ext: path.extname(resolved.absPath).toLowerCase(),
+          size,
+          mimeType: resolved.mimeType,
+        });
       }
       return { ok: true, images };
     },

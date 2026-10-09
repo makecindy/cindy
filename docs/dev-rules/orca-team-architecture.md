@@ -313,15 +313,19 @@ Git worktree，不改变供应商、模型与 Worker 创建权限偏好。
 目标空闲且已有 live session 时，dispatcher 仍走 `session.send()`，不经过 `sendToSessionInternal()`。这条直发必须先调用与用户发送相同的 `prepareUnhealthySession`：满窗或当前进程内 `needsRollover` 锁存时关闭旧原生窗口，再 `getLiveSession`。不能把 inter-agent 消息打进应被丢弃的旧窗口。prepare → 重新取 live → send 整段必须复用 `sendToSessionInternal` 的 per-session 锁；锁已被占用时先排队，不要把 in-flight prepare 当成健康状态继续直发。没有 live 后释放锁再走 `sendToSessionInternal`，避免自己把自己排队。实现指针：`orcaInterAgentDispatcher.ts` 的 live 分支，以及 `register.ts` 注入的 `prepareUnhealthySession` / `withSendToSessionLock`。
 
 1c. **图片附件仅限本机目标，走既有附件通道（状态：不变量）**<br>
-   `send_to_worker` 与 `create_worker` / `create_workers` 的 `images` 参数只接受本机图片绝对路径
-   （png/jpeg/gif/webp，最多 8 张）；目标 session 的 DB 快照带 `remoteHostId` 时必须拒绝，
+   `send_to_worker` 与 `create_worker` / `create_workers` 的 `images` 参数接受两类地址：
+   用户在会话里贴的图用受管地址（`cindy-media://blobs/` / `xdt-image://`，即上下文
+   `<cindy-host-image-references>` 的 uri），Lead 自己落盘的文件用本机绝对路径；
+   经 `resolveOrcaImageAttachmentInput` 归一为可读图片文件（非图片一律拒）。张数上限 8，
+   目标 session 的 DB 快照带 `remoteHostId` 时必须拒绝，
    不降级为纯文本（静默丢图是产品错误）。dispatcher 入口经 host 注入的
-   `validateImageAttachments` 做存在性与扩展名校验；直发时 image block 跟在格式化文本后，
+   `validateImageAttachments` 做校验；直发时 image block 跟在格式化文本后，
    排队/插话时文件挂在 entry `files`，drain 由 `buildMakerUserMessage` 还原成同样的
    block 序列；`update_queued_message` / `merge_queued_messages` 重建只改文本字段，
    files 随 `...entry` 保留。带图消息的 `persistedContent`（DB/展示）仍是纯文本协议，
    队列气泡不预览图片（已知边界）。实现指针：`orcaInterAgentDispatcher.ts` 的
-   `imageFiles` / `agentMessageTextWithImages` 与 `register.ts` 的 `validateImageAttachments`。
+   `imageFiles` / `agentMessageTextWithImages`、`orcaImageAttachments.ts` 与 `register.ts` 的
+   `validateImageAttachments`。
 
 2. **accepted 才能产生运行副作用（状态：不变量）**<br>
    只有底层 send accepted 后，才能把 worker 标成 `running`、建立 auto-bridge pending 并广播 UI；dispatch 失败必须 rollback 到 accepted 前状态，且 rollback 不得覆盖已有终态。实现指针：`orcaTeamService.ts` 的 `dispatchResolvedWorker` 与 `rollbackAcceptedDispatchState`。

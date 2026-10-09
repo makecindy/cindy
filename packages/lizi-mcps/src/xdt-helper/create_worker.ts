@@ -108,7 +108,7 @@ export const createWorkerSpecSchema = z.object({
     .array(z.string().min(1))
     .max(8)
     .optional()
-    .describe('可选, 随 initial_task 发给 worker 的本机图片绝对路径(png/jpeg/gif/webp, 最多 8 张); 仅本机 worker 支持, SSH 远端 worker 会拒绝; 不传 initial_task 时忽略'),
+    .describe('可选, 随 initial_task 发给 worker 的图片(png/jpeg/gif/webp, 最多 8 张); 仅本机 worker 支持, SSH 远端 worker 会拒绝; 不传 initial_task 时忽略。地址两类: (a) 用户在对话里贴的图 — 把上下文 <cindy-host-image-references> 里的 uri 原样传入; (b) Lead 自己落盘的本机绝对路径'),
   working_dir: z.string().min(1).max(4096).refine((value) => value.trim().length > 0).optional()
     .describe('可选，Worker 所在主机上已存在的绝对工作目录；省略则继承 Lead。创建前校验并绑定，失败不回退；不创建目录或 Git worktree。'),
 }).strict();
@@ -141,6 +141,7 @@ const DESCRIPTION = [
   '- label: worker 短标识, 1-32 chars, 只能含字母、数字、-、_, 同 workflow 内唯一, 用于 switch_focus 定位',
   '- working_dir: 可选，Worker 所在主机上已存在的绝对目录；创建前校验并绑定，省略继承 Lead，失败不回退。不创建目录或 Git worktree。',
   "- initial_task: 可选, 创建后立即派给 worker 的第一条消息；dispatch_outcome.wakeKind=queued 表示首条任务已成功入队(此时回传 queued_message_id, 被消费前可用 get_worker_queue_status / update_queued_message / cancel_queued_message / merge_queued_messages 管理)；dispatch_outcome.kind='session-dispatch' 且 dispatched=false，或 kind='host-send' 且 accepted=false，表示 worker 已创建但首条任务未送达 / 派发失败",
+  "- images: 可选, 随 initial_task 发的图片(最多 8 张, 仅本机 worker)。用户在对话里贴的图, 把上下文 <cindy-host-image-references> 里的 uri 原样传入; Lead 自己落盘的文件传本机绝对路径。",
   '',
   '【硬边界】',
   '- worker 数量达软上限 → 创建仍成功, payload.warning = WORKER_LIMIT_SOFT_EXCEEDED',
