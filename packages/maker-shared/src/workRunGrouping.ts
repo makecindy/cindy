@@ -85,13 +85,6 @@ export function groupWorkRuns<TItem, TChild extends TItem>(
     turn = [];
   };
   for (const item of items) {
-    if (adapter.isUserBoundary(item)) {
-      flushTurn(false, adapter.isContinuationBoundary?.(item) === true);
-      out.push(item);
-      previousEnd = adapter.userBoundaryEnd(item, previousEnd);
-      turnStart = adapter.startTimestamp(item);
-      continue;
-    }
     const start = adapter.startTimestamp(item);
     if (
       previousEnd !== null &&
@@ -101,6 +94,14 @@ export function groupWorkRuns<TItem, TChild extends TItem>(
       flushTurn(false);
       // The user boundary on the far side of a gap cannot contribute to this duration.
       turnStart = null;
+    }
+    // A recovery closes only the contiguous loaded turn, never work across a gap.
+    if (adapter.isUserBoundary(item)) {
+      flushTurn(false, adapter.isContinuationBoundary?.(item) === true);
+      out.push(item);
+      previousEnd = adapter.userBoundaryEnd(item, previousEnd);
+      turnStart = start;
+      continue;
     }
     turn.push(item);
     const end = adapter.endTimestamp(item);

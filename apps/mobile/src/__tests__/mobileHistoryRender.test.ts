@@ -33,6 +33,19 @@ function harness(rows: RemoteMessage[], streaming = false, lazyDetails = false) 
 }
 
 describe('remote history preserves original folding', () => {
+  it.each([false, true])('keeps the earlier answer when recovery follows an unloaded gap (streaming=%s)', async (streaming) => {
+    const rows = [row(0, 'user', 'Work'), thought(1), row(2, 'assistant', 'Earlier answer'),
+      row(4000, 'user', JSON.stringify({ text: CONTINUE_AFTER_ERROR_PROMPT })),
+      row(4001, 'assistant', 'Continuing')];
+    const { view, render } = harness(rows, streaming);
+    await view.refresh();
+    expect(render().map(item => item.key)).toEqual([
+      'message-client-0', 'work-client-1', 'message-client-2', 'message-client-4001',
+    ]);
+    expect(outline(render())).toEqual(outline(buildMobileMessageRenderItems(rows, { isSessionStreaming: streaming })));
+    view.setActive(false);
+  });
+
   it.each([false, true])('keeps steering visible while recovering work on both sides (streaming=%s)', async (streaming) => {
     const rows = [row(0, 'user', 'Work'), row(1, 'assistant', 'Before steer'), thought(2),
       { ...row(3, 'user', 'Check this too'), agentMeta: { delivery: 'steer' } },

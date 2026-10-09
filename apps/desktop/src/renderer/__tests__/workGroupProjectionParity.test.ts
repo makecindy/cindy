@@ -5,6 +5,7 @@ import {
   type MessageRenderNormalizedMessage,
 } from '@cindy/maker-shared/message-render';
 import { groupWorkRuns, type RenderItem } from '../components/chat/messageWorkGroups';
+import { HISTORY_GAP_SPLIT_MS } from '@cindy/maker-shared/history-gap';
 import { CONTINUE_AFTER_APP_EXIT_PROMPT, CONTINUE_AFTER_ERROR_PROMPT, syntheticTriggerKind } from '@cindy/maker-shared/synthetic-trigger';
 
 /** One event fixture feeds both projections; only platform item representations differ. */
@@ -322,6 +323,29 @@ const cases: Array<{ name: string; events: Event[]; streaming?: boolean; expecte
 ];
 
 describe('desktop and shared/mobile work grouping projection', () => {
+  it.each([false, true])('applies the history gap before recovery boundaries (streaming=%s)', (streaming) => {
+    const threshold = HISTORY_GAP_SPLIT_MS / 1000;
+    for (const autoResume of [false, true]) {
+      for (const gap of [threshold - 1, threshold, threshold + 1]) {
+        const events = [user(), tool('read', 1), answer('reply', 2, true),
+          { ...user('resume', 2 + gap), body: CONTINUE_AFTER_ERROR_PROMPT, autoResume }, answer('active', 3 + gap)];
+        const desktop = desktopProjection(groupWorkRuns(desktopItems(events), streaming));
+        expect(sharedProjection(buildMessageRenderItems(normalized(events), { isSessionStreaming: streaming }))).toEqual(desktop);
+        expect(tree(desktop)).toEqual(gap > threshold
+          ? [['u'], ['work-read', [['read']]], ['reply'], ['resume'], ['active']]
+          : [['u'], ['work-summary-read', [['work-read', [['read']]], ['reply']]], ['resume'], ['active']]);
+      }
+    }
+    // A long-running tool's result is the anchor, not its start time.
+    const events = [user(), answer('progress', 1), tool('long', 2, threshold * 2),
+      { ...user('resume', threshold * 2 + 1), body: CONTINUE_AFTER_ERROR_PROMPT }];
+    const desktop = desktopProjection(groupWorkRuns(desktopItems(events), streaming));
+    expect(sharedProjection(buildMessageRenderItems(normalized(events), { isSessionStreaming: streaming }))).toEqual(desktop);
+    expect(tree(desktop)).toEqual([
+      ['u'], ['work-summary-long', [['progress'], ['work-long', [['long']]]]], ['resume'],
+    ]);
+  });
+
   it.each([false, true])('folds the whole recovered turn across visible steer rows (streaming=%s)', (streaming) => {
     const events: Event[] = [user(), answer('before', 1), tool('first', 2),
       { ...user('steer1', 3), delivery: 'steer' }, answer('middle', 4),

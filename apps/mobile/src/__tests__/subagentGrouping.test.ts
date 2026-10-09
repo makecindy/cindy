@@ -116,6 +116,15 @@ describe('subagent grouping (buildMobileMessageRenderItems)', () => {
     ]);
     expect(collectSourceIds(steered)).toEqual(['u', 'progress', 'steer', 'between', 'error', ...(autoResume ? ['resume'] : []), 'active']);
 
+    // A borrowed recovery must not reach an earlier disconnected history window.
+    const gapped = messages.map((message, index) => index < 2 ? message : {
+      ...message, createdAt: new Date(Date.parse(message.createdAt!) + 48 * 60 * 60_000).toISOString(),
+    });
+    const afterGap = buildMobileMessageRenderItems(gapped, { isSessionStreaming: streaming });
+    expect(afterGap[1].type).toBe('message');
+    expect(afterGap[3].type).toBe('work_group');
+    expect(collectSourceIds(afterGap)).toEqual(collectSourceIds(items));
+
     // A real user turn blocks recovery from affecting earlier Agent segments.
     const ordinaryBoundary = msg({ id: 'other', role: 'user', content: 'Another request', createdAt: '2026-01-01T00:00:02.500Z' });
     messages.splice(3, 0, ordinaryBoundary);
