@@ -506,8 +506,14 @@ function HomeScreenContent({ active = true, onModeChange, width, newSessionInSys
   const homeListFreshnessRef = useRef(createHomeListFreshness());
   // 最近一次离开首页的时刻；null = 当前在首页（或尚未离开过）。
   const homeBlurredAtRef = useRef<number | null>(null);
-  // 首页被盖住期间 App 退过后台或 relay 重连过：回首页走整轮 loadHome（含设备清单）。
-  const homeFullReloadOnFocusRef = useRef(false);
+  // 待完成的整轮重拉（含设备清单）：首页被盖住期间 App 退过后台／relay 重连过，或回首页
+  // 已决定整轮重拉。值是请求序号，只有在它之后开始的 loadHome 整轮成功提交才清除；失败或
+  // 被跳过时保留，下次回首页仍整轮重拉。
+  const homeFullReloadOnFocusRef = useRef<number | null>(null);
+  const homeFullReloadSeqRef = useRef(0);
+  const requestHomeFullReload = useCallback(() => {
+    homeFullReloadOnFocusRef.current = ++homeFullReloadSeqRef.current;
+  }, []);
   // 自动化角标待补刷的设备：首页被盖住时收到事件、或刷新被失焦跳过／结果被丢弃。值是登记
   // 序号，只有同一序号的刷新成功应用后才清除；回首页只刷新这些设备。
   const homeScheduleIndexDirtyRef = useRef(new Map<string, number>());
@@ -668,7 +674,7 @@ function HomeScreenContent({ active = true, onModeChange, width, newSessionInSys
     homeHydrateInFlightByDeviceRef.current.clear();
     homeListFreshnessRef.current.clear();
     homeBlurredAtRef.current = null;
-    homeFullReloadOnFocusRef.current = false;
+    homeFullReloadOnFocusRef.current = null;
     homeScheduleIndexDirtyRef.current.clear();
     scheduleIndexDeferRegistryRef.current.cancelAll();
     scheduleEventVersionsRef.current.clear();
@@ -1076,6 +1082,7 @@ function HomeScreenContent({ active = true, onModeChange, width, newSessionInSys
       });
     }
 
+    const fullReloadRequestAtStart = homeFullReloadOnFocusRef.current;
     const rawTask = (async () => {
       setError(null);
       // 记录 REST 请求发起时的 presence 纪元:在请求飞行期间收到过 presence 补丁的设备,
@@ -1184,6 +1191,7 @@ function HomeScreenContent({ active = true, onModeChange, width, newSessionInSys
       setDevices(nextDevices);
       lastSyncedAtRef.current = now;
       setLastSyncedAt(now);
+      if (homeFullReloadOnFocusRef.current === fullReloadRequestAtStart) homeFullReloadOnFocusRef.current = null;
       if (selectedDeviceIdRef.current === selectedDeviceIdAtSyncStart) {
         setError(failures.length > 0 ? failures : null);
       }
@@ -1433,8 +1441,8 @@ function HomeScreenContent({ active = true, onModeChange, width, newSessionInSys
   }, [screenFocused]);
 
   useEffect(() => {
-    if (!screenFocusedRef.current) homeFullReloadOnFocusRef.current = true;
-  }, [connectionEpoch]);
+    if (!screenFocusedRef.current) requestHomeFullReload();
+  }, [connectionEpoch, requestHomeFullReload]);
 
   // 从任务 / 设置等页面返回首页：离开期间订阅一直在、补丁一直在收，只补拉判定为可能漏了
   // 推送的设备。离开太久或尚未完成首轮同步时退回整轮 loadHome。
@@ -1468,9 +1476,8 @@ function HomeScreenContent({ active = true, onModeChange, width, newSessionInSys
       // already confirmed focus, so open the scope gate now instead of skipping this return.
       screenFocusedRef.current = true;
       const blurredAt = homeBlurredAtRef.current;
-      const forceFull = homeFullReloadOnFocusRef.current;
+      const forceFull = homeFullReloadOnFocusRef.current !== null;
       homeBlurredAtRef.current = null;
-      homeFullReloadOnFocusRef.current = false;
       const plan = planHomeListFocusReturn({
         forceFull,
         blurredAt,
@@ -1486,9 +1493,11 @@ function HomeScreenContent({ active = true, onModeChange, width, newSessionInSys
         if (scheduleDirty.size > 0) refreshHomeScheduleIndexes(scheduleDirty);
         return;
       }
+      // Keep the full-reload request until a loadHome that started after it commits.
+      if (homeFullReloadOnFocusRef.current === null) requestHomeFullReload();
       refreshHomeScheduleIndexes();
       startSilentHomeSync();
-    }, [refillStaleHomeDevices, refreshHomeScheduleIndexes, startSilentHomeSync]),
+    }, [refillStaleHomeDevices, refreshHomeScheduleIndexes, requestHomeFullReload, startSilentHomeSync]),
   );
 
   useEffect(() => {
@@ -1497,12 +1506,12 @@ function HomeScreenContent({ active = true, onModeChange, width, newSessionInSys
       // 退后台后连接会在宽限期后停掉，期间的推送无从补齐：回前台一律按需重拉。
       if (nextState === 'background') {
         homeListFreshnessRef.current.invalidateAll();
-        if (!screenFocusedRef.current) homeFullReloadOnFocusRef.current = true;
+        if (!screenFocusedRef.current) requestHomeFullReload();
       }
       if (nextState === 'active') startSilentHomeSync();
     });
     return () => subscription.remove();
-  }, [connectionEpoch, startSilentHomeSync]);
+  }, [connectionEpoch, requestHomeFullReload, startSilentHomeSync]);
 
   // 把当前权威设备列表注入 remoteSessionStore,让 store 给所有 useRemoteSessions 消费者(首页项目卡、
   // 设备详情页)统一算展示用 canonicalDeviceId:re-link 后残留的 stale shard 会话按设备名唯一匹配认领回
