@@ -11,7 +11,7 @@
  *   (1280, 800) → ≈0.3813;(800, 600) → ≈0.2860;宽度拉伸不改 scale。
  */
 
-import { HERO, LOGIN_GROUP, WORDMARK } from './loginDesignTokens';
+import { HERO, LOGIN_GROUP, WORDMARK, WORDMARK_PANEL_GAP } from './loginDesignTokens';
 
 /** 设计画布尺寸(figma §5.1 桌面通用画板 1819×2098)。 */
 export const LOGIN_STAGE_WIDTH = 1819;
@@ -126,8 +126,9 @@ function brandPlacementForPanelTop(
  * 品牌块(立绘 275..1209,字标底 1191 / Slogan 底 995 均在其内)只作为整体
  * 移动/缩放,字标与立绘的设计相对位(压胸口渐隐区)永不改变。三级规则:
  *   ① 常态:v3.1 desktopScale + 画布居中(translateY=0),大窗零变化;
- *   ② 面板上侵:有登录底部预留时以字标底部为碰撞边界,允许立绘尾部
- *      (立绘底部比字标底部低 18 个设计单位)自然落入面板下方;不再按窗口高度硬切档;
+ *   ② 面板上侵:有登录底部预留时以字标底部为碰撞边界(与面板顶至少留
+ *      WORDMARK_PANEL_GAP),允许立绘尾部(立绘底部比字标底部低 18 个设计单位)
+ *      自然落入面板下方;不再按窗口高度硬切档;
  *   ③ 极矮窗:上移仍不够 → 受保护的品牌范围等比压缩至恰好塞进
  *      [12, 面板顶-当前安全间距]。
  * 面板锚点取 yDefault(sso 态差 2 设计px,由 12px gap 吸收)。
@@ -141,7 +142,7 @@ export function brandPlacement(w: number, h: number, bottomReserve = 0): BrandPl
     base,
     panelTop,
     protectsWordmark ? WORDMARK.inner.y + WORDMARK.inner.height : HERO.y + HERO.size,
-    protectsWordmark ? 0 : 12,
+    protectsWordmark ? WORDMARK_PANEL_GAP : 12,
   );
 }
 

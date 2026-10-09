@@ -69,17 +69,28 @@ export const LOGIN_DELETION_BUBBLE = {
 } as const;
 
 /**
- * 登录面板下方的本地模式操作区。
+ * 登录组下方的屏幕预留(CSS px)。
  *
- * 这块区域不再脱离登录 stage 固定在窗口底部：stage 会为它预留空间，避免小窗口
- * 中与第三方登录圆钮重叠。reservedHeight 包含 stage 与操作区间距、两行文案的
- * 最大高度，以及窗口底部安全边距。
+ * 组外只剩协议同意行会溢出组底:(CONSENT_ROW 底 682 − 组高 620) × 0.5 = 31。
+ * error 步的「跳过登录」已收进面板(SKIP_ENTRY 槽),组外不再有 footer;原先为
+ * footer 预留的 124 会在小窗里给协议行下方留出近 100px 空白,并把面板顶到字标上。
+ * 除 completed 外全步骤共用同一预留,step 切换时面板/品牌层零跳位(规则 7)。
  */
-export const LOGIN_LOCAL_MODE = {
-  gap: 16,
-  reservedHeight: 124,
-  descriptionLineHeight: 18,
-} as const;
+export const LOGIN_BOTTOM_RESERVE = 31;
+
+/**
+ * 字标底 ↔ 面板顶的最小屏幕间距(CSS px)。品牌块上移/压缩让位时以它为碰撞边界,
+ * 与立绘保护档的 12px 安全间距同值;大窗下设计稿自带的间距(38 设计单位 ×
+ * desktopScale)更大时不受影响。
+ */
+export const WORDMARK_PANEL_GAP = 12;
+
+/**
+ * error 步「跳过登录」的说明文字:落在面板下方圆钮行的槽位(y=540 = 面板底 + 40,
+ * 与 identifier 步圆钮行同位),680 宽 20/23 顶对齐 ≤3 行(槽底 609 < 组底 620),
+ * 色与副标题同档。
+ */
+export const LOCAL_MODE_NOTE = { y: 540, width: 680, fontSize: 20, lineHeight: 23, maxLines: 3 } as const;
 
 /**
  * 面板与面板内组件几何(figma §5.1/§4;wave4 面板描边 1px inside 368:1383)。
@@ -104,7 +115,11 @@ export const ACCOUNT_LIST = {
   rowStep: 120,
   bottomPadding: 12,
 } as const;
-export const TITLE = { y: 31, height: 38, fontSize: 32 } as const;
+/**
+ * 标题槽。backInsetX:有返回钮(BACK 20..80)时标题槽左右各让 90(= 返回钮右缘 80 +
+ * 间距 10,右侧镜像以保持水平居中),可用宽 680 − 180 = 500。
+ */
+export const TITLE = { y: 31, height: 38, fontSize: 32, backInsetX: 90 } as const;
 /** 副标题:540@70 ≤2 行顶对齐,槽高 = 行高 × 最大行数(DESIGN.md §16.2,2026-07-24 拍板)。 */
 export const SUBTITLE = { x: 70, y: 75, width: 540, fontSize: 20, lineHeight: 23, maxLines: 2 } as const;
 /**

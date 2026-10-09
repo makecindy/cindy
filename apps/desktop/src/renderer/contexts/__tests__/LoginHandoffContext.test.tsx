@@ -82,6 +82,7 @@ import {
   panelPlacement,
   splashBrandPlacement,
 } from '@/components/login/loginScale';
+import { LOGIN_BOTTOM_RESERVE } from '@/components/login/loginDesignTokens';
 import '@/themes/colors';
 import { colorRegistry } from '@/themes/color-registry';
 
@@ -446,7 +447,7 @@ function loadBrandAssets() {
 }
 
 describe('冷启动集成(resolved snapshot,禁 mock-reject)', () => {
-  it('browser-redirect 无 footer 时，面板与品牌层统一使用 0 bottom reserve', async () => {
+  it('browser-redirect 与其余登录步共用同一 bottom reserve(面板不随 step 跳位)', async () => {
     svc.loginHook.loginState = { step: 'browser-redirect', label: 'Google' };
     svc.service.initialize.mockResolvedValue({
       isAuthenticated: false,
@@ -457,10 +458,10 @@ describe('冷启动集成(resolved snapshot,禁 mock-reject)', () => {
     renderColdStart();
     await flush();
 
-    expect(probe.current!.panelBottomReserve).toBe(0);
+    expect(probe.current!.panelBottomReserve).toBe(LOGIN_BOTTOM_RESERVE);
     expect(screen.queryByTestId('login-stage-footer')).toBeNull();
 
-    const panel = panelPlacement(window.innerWidth, window.innerHeight, 1229, 0);
+    const panel = panelPlacement(window.innerWidth, window.innerHeight, 1229, LOGIN_BOTTOM_RESERVE);
     expect(screen.getByTestId('login-stage').style.top).toBe(`${panel.topY}px`);
 
     const brand = splashBrandPlacement(window.innerWidth, window.innerHeight);

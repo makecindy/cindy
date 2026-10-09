@@ -17,7 +17,7 @@ import sloganDarkPng from '@/assets/login/slogan-dark.png';
 import sloganDarkPng2x from '@/assets/login/slogan-dark@2x.png';
 
 import { brandPlacement, sloganShiftX, splashBrandPlacement } from './loginScale';
-import { HERO, LOGIN_COLORS, LOGIN_LOCAL_MODE, SLOGAN, STAGE, WORDMARK } from './loginDesignTokens';
+import { HERO, LOGIN_BOTTOM_RESERVE, LOGIN_COLORS, SLOGAN, STAGE, WORDMARK } from './loginDesignTokens';
 import { useViewportSize } from './LoginStage';
 
 /**
@@ -48,7 +48,7 @@ export function LoginBrandStage() {
   const { width, height } = useViewportSize();
   const panelBottomReserve =
     handoff.panelBottomReserve ??
-    (handoff.brandLayout === 'login' ? LOGIN_LOCAL_MODE.reservedHeight : 0);
+    (handoff.brandLayout === 'login' ? LOGIN_BOTTOM_RESERVE : 0);
   // 品牌块整体让位(scale+translateY,构图冻结;用户拍板 2026-07-23,design.md §11)
   const { scale, translateY } =
     handoff.brandLayout === 'splash'

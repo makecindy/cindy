@@ -46,6 +46,7 @@ import {
   LoginErrorText,
   LoginInput,
   LoginLoadingRing,
+  LoginLocalModeNote,
   LoginMethodRow,
   LoginPanel,
   LoginPrimaryButton,
@@ -68,7 +69,7 @@ import {
   LOADING_RING,
   LOGIN_COLORS,
   LOGIN_DELETION_BUBBLE,
-  LOGIN_LOCAL_MODE,
+  LOGIN_BOTTOM_RESERVE,
   METHOD_ROW,
   PANEL,
   SSO_ORG_HINT,
@@ -333,17 +334,13 @@ export function LoginPage({
     reportLoginPanelMounted();
     return () => reportLoginPanelUnmounted();
   }, [reportLoginPanelMounted, reportLoginPanelUnmounted]);
-  // 「跳过登录」常驻入口在面板内(identifier 视图 SKIP_ENTRY 文字链);footer 仅保留
-  // error 步的逃生入口——登录服务不可用时用户仍能进入本地模式(既有产品保证)。
-  const showLocalModeFooter =
+  // 「跳过登录」常驻入口在面板内(identifier 视图 SKIP_ENTRY 文字按钮);error 步同槽
+  // 保留逃生入口——登录服务不可用时用户仍能进入本地模式(既有产品保证)。
+  const showErrorLocalModeEntry =
     !isAddAccount && loginState?.step === 'error' && !credentialStoreFailed;
-  // 面板底部预留恒取全流程最大值(footer 124;协议行 48 被其覆盖):step 切换时
-  // 面板/品牌层零跳位(规则 7,codex 审查 P1)。browser-redirect/completed 维持 0,
-  // 与迁移前 main 口径一致(该两步由品牌 overlay/跳转态接管)。
-  const panelBottomReserve =
-    loginState?.step === 'browser-redirect' || loginState?.step === 'completed'
-      ? 0
-      : LOGIN_LOCAL_MODE.reservedHeight;
+  // 面板底部预留除 completed 外全步骤恒定(含 browser-redirect):identifier → 浏览器
+  // 等待 → error 往返时面板/品牌层零跳位,字标↔面板间距处处一致(规则 7)。
+  const panelBottomReserve = loginState?.step === 'completed' ? 0 : LOGIN_BOTTOM_RESERVE;
   const { reportPanelBottomReserve } = handoff;
   useLayoutEffect(() => {
     reportPanelBottomReserve(panelBottomReserve);
@@ -714,6 +711,7 @@ export function LoginPage({
               title={t('login.title')}
               subtitle={t('login.subtitle')}
               regionPill={regionPillKey ? t(regionPillKey) : undefined}
+              withBackButton={isAddAccount && !!onClose}
             />
             <LoginInput
               autoFocus
@@ -848,7 +846,11 @@ export function LoginPage({
               setSsoOrgMode(false);
             }}
           />
-          <LoginTitleBlock title={t('login.ssoOrgTitle')} subtitle={t('login.ssoOrgSubtitle')} />
+          <LoginTitleBlock
+            title={t('login.ssoOrgTitle')}
+            subtitle={t('login.ssoOrgSubtitle')}
+            withBackButton
+          />
           <LoginInput
             autoFocus={ssoOrgHistory.length <= 1}
             disabled={isLoading}
@@ -941,7 +943,7 @@ export function LoginPage({
     return (
       <LoginPanel testId="login-panel-method-choice">
         <LoginBackButton disabled={isLoading} label={t('login.back')} onClick={reset} />
-        <LoginTitleBlock title={t('login.chooseMethod')} subtitle={subtitle} />
+        <LoginTitleBlock title={t('login.chooseMethod')} subtitle={subtitle} withBackButton />
         {ssoMethods.map((method, index) => (
           <LoginMethodRow
             key={method.connectionId}
@@ -1004,6 +1006,7 @@ export function LoginPage({
           <LoginTitleBlock
             title={t('login.enterCode')}
             subtitle={t('login.codeSentTo', { identifier: loginState.identifier })}
+            withBackButton
           />
           <LoginInput
             autoFocus
@@ -1063,6 +1066,7 @@ export function LoginPage({
         <LoginTitleBlock
           title={t('login.chooseAccount')}
           subtitle={t('login.chooseAccountSubtitle')}
+          withBackButton
         />
         {/* 标题区固定；身份卡片独立滚动。1–3 个身份保持原构图，更多身份不再
             被面板的 overflow-hidden 裁掉。 */}
@@ -1118,6 +1122,7 @@ export function LoginPage({
           <LoginTitleBlock
             title={t('login.ssoVerificationTitle')}
             subtitle={t('login.ssoVerificationSubtitle', { target: loginState.targetMasked })}
+            withBackButton
           />
           {!loginState.codeRequested ? (
             <LoginPrimaryButton
@@ -1189,6 +1194,7 @@ export function LoginPage({
           <LoginTitleBlock
             title={t(`login.binding.${loginState.bindType}Title`)}
             subtitle={t(`login.binding.${loginState.bindType}Subtitle`)}
+            withBackButton
           />
           {!loginState.codeRequested ? (
             <>
@@ -1259,7 +1265,11 @@ export function LoginPage({
             {isAddAccount && onClose ? (
               <LoginBackButton label={t('login.back')} onClick={onClose} />
             ) : null}
-            <LoginTitleBlock title={t('login.preparing')} subtitle={t('login.preparingSubtitle')} />
+            <LoginTitleBlock
+              title={t('login.preparing')}
+              subtitle={t('login.preparingSubtitle')}
+              withBackButton={isAddAccount && !!onClose}
+            />
             <LoginLoadingRing y={LOADING_RING.yPreparing} label={t('login.working')} />
           </LoginPanel>
         ),
@@ -1279,6 +1289,7 @@ export function LoginPage({
       return {
         ssoOrgGroupY: false,
         node: (
+          <>
           <LoginPanel testId="login-panel-error">
             <LoginBackButton
               disabled={isLoading || localModePending}
@@ -1286,6 +1297,7 @@ export function LoginPage({
               onClick={returnFromError}
             />
             <LoginTitleBlock
+              withBackButton
               title={t(
                 credentialStoreFailed ? 'credentialStore.dialog.title' : 'login.unavailable',
               )}
@@ -1340,7 +1352,27 @@ export function LoginPage({
                 },
               )}
             </LoginErrorText>
+            {/* 逃生入口与 identifier 视图同组件同槽(SKIP_ENTRY @y430,紧接 error 槽之下),
+                同口径过协议门(2026-07-29 拍板)。 */}
+            {showErrorLocalModeEntry && (
+              <LoginSkipEntry
+                testId="login-local-mode"
+                disabled={localModePending || isLoading}
+                onClick={() =>
+                  requireConsent(() => void openLocalMode(), { deferConsentPersist: true })
+                }
+                ariaDescribedBy="login-local-mode-description"
+              >
+                {localModePending ? t('login.localModeOpening') : t('login.localModeEntry')}
+              </LoginSkipEntry>
+            )}
           </LoginPanel>
+          {showErrorLocalModeEntry && (
+            <LoginLocalModeNote id="login-local-mode-description">
+              {t('login.localModeDescription')}
+            </LoginLocalModeNote>
+          )}
+        </>
         ),
       };
     }
@@ -1353,7 +1385,11 @@ export function LoginPage({
               label={t('login.cancel')}
               onClick={() => void dispatch({ type: 'cancel-browser' })}
             />
-            <LoginTitleBlock title={t('login.browserWaiting')} subtitle={loginState.label} />
+            <LoginTitleBlock
+              title={t('login.browserWaiting')}
+              subtitle={loginState.label}
+              withBackButton
+            />
             <LoginLoadingRing y={LOADING_RING.yBrowser} label={t('login.working')} />
           </LoginPanel>
         ),
@@ -1389,31 +1425,6 @@ export function LoginPage({
       ? `opacity ${LOGIN_HANDOFF_TIMINGS.panelMs}ms ${LOGIN_HANDOFF_TIMINGS.panelEasing}, transform ${LOGIN_HANDOFF_TIMINGS.panelMs}ms ${LOGIN_HANDOFF_TIMINGS.panelEasing}`
       : undefined,
   };
-  const loginFooter = showLocalModeFooter ? (
-    <>
-      <div className="flex items-center justify-center gap-3">
-        <button
-          data-testid="login-local-mode"
-          type="button"
-          disabled={localModePending || isLoading}
-          // error 步逃生入口与面板内文字按钮同口径:过协议门(2026-07-29 拍板)
-          onClick={() => requireConsent(() => void openLocalMode(), { deferConsentPersist: true })}
-          aria-describedby="login-local-mode-description"
-          className="select-none rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] px-6 py-2.5 text-13 font-medium text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)] disabled:cursor-not-allowed disabled:opacity-60"
-          style={{ minHeight: 40 }}
-        >
-          {localModePending ? t('login.localModeOpening') : t('login.localModeEntry')}
-        </button>
-      </div>
-      <span
-        id="login-local-mode-description"
-        className="mt-2 line-clamp-2 max-w-full text-12 text-[var(--text-secondary)]"
-        style={{ lineHeight: `${LOGIN_LOCAL_MODE.descriptionLineHeight}px` }}
-      >
-        {t('login.localModeDescription')}
-      </span>
-    </>
-  ) : null;
 
   return (
     // 根级 z-[9990] 建立 LoginPage 自己的 stacking context:整体压过品牌 overlay
@@ -1423,7 +1434,6 @@ export function LoginPage({
       <LoginStage
         ssoOrgGroupY={ssoOrgGroupY}
         groupStyle={groupStyle}
-        footer={loginFooter}
         bottomReserve={panelBottomReserve}
       >
         {node}

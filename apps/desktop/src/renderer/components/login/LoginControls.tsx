@@ -17,6 +17,7 @@ import {
   CONTROL,
   ERROR_TEXT,
   LOADING_RING,
+  LOCAL_MODE_NOTE,
   LOGIN_COLORS,
   METHOD_ROW,
   PANEL,
@@ -94,6 +95,7 @@ export function LoginTitleBlock({
   subtitle,
   regionPill,
   subtitleMaxLines = SUBTITLE.maxLines,
+  withBackButton = false,
 }: {
   title: string;
   subtitle?: ReactNode;
@@ -101,14 +103,19 @@ export function LoginTitleBlock({
   regionPill?: string;
   /** 副标题行数上限(登录屏默认 2;Splash 故障指引等长文案宿主可放宽)。 */
   subtitleMaxLines?: number;
+  /** 同面板有 LoginBackButton:标题槽左右各让 TITLE.backInsetX,不与返回钮相交。 */
+  withBackButton?: boolean;
 }) {
+  const titleInsetX = withBackButton ? TITLE.backInsetX : 0;
   return (
     <>
       <div
-        className="absolute left-0 whitespace-nowrap text-center font-bold"
+        data-testid="login-title"
+        className="absolute whitespace-nowrap text-center font-bold"
         style={{
+          left: titleInsetX,
           top: TITLE.y,
-          width: PANEL.width,
+          width: PANEL.width - titleInsetX * 2,
           height: TITLE.height,
           // 行框 = 设计 h(38 @32):缺省行高继承 body 1.5(≈48px)>容器 38,显式
           // lineHeight=行框高保几何忠实、拉丁 descender 完整(MT-7;与回调页 h1
@@ -749,11 +756,13 @@ export function LoginSkipEntry({
   onClick,
   disabled,
   testId,
+  ariaDescribedBy,
 }: {
   children: ReactNode;
   onClick: () => void;
   disabled?: boolean;
   testId?: string;
+  ariaDescribedBy?: string;
 }) {
   return (
     <div
@@ -773,6 +782,7 @@ export function LoginSkipEntry({
         type="button"
         disabled={disabled}
         onClick={onClick}
+        aria-describedby={ariaDescribedBy}
         className={cn(
           'flex items-center justify-center overflow-hidden whitespace-nowrap',
           'border-0 bg-transparent underline',
@@ -795,6 +805,33 @@ export function LoginSkipEntry({
       >
         {children}
       </button>
+    </div>
+  );
+}
+
+/**
+ * error 步「跳过登录」说明(LOCAL_MODE_NOTE):面板外、圆钮行槽位(组坐标 y=540),
+ * 680 宽居中 ≤3 行顶对齐,色同副标题。随登录组一起缩放,不再是脱离组的 footer。
+ */
+export function LoginLocalModeNote({ id, children }: { id?: string; children: ReactNode }) {
+  return (
+    <div
+      id={id}
+      data-testid="login-local-mode-note"
+      className="absolute left-0 overflow-hidden break-words text-center [display:-webkit-box] [-webkit-box-orient:vertical]"
+      style={{
+        top: LOCAL_MODE_NOTE.y,
+        width: LOCAL_MODE_NOTE.width,
+        maxHeight: LOCAL_MODE_NOTE.lineHeight * LOCAL_MODE_NOTE.maxLines,
+        lineHeight: `${LOCAL_MODE_NOTE.lineHeight}px`,
+        fontSize: LOCAL_MODE_NOTE.fontSize,
+        color: LOGIN_COLORS.secondaryText,
+        // ja 按词组断行(不把 クラウドモデル 等拆开;依赖 useLocale 同步的 <html lang>);其余语言行为不变
+        wordBreak: 'auto-phrase' as CSSProperties['wordBreak'],
+        WebkitLineClamp: LOCAL_MODE_NOTE.maxLines,
+      }}
+    >
+      {children}
     </div>
   );
 }

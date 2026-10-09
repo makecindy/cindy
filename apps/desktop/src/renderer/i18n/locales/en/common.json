@@ -6767,9 +6767,9 @@
     "completeSignIn": "Complete sign-in",
     "preparing": "Connecting to sign-in",
     "preparingSubtitle": "Loading the methods available for this region",
-    "unavailable": "Sign-in is temporarily unavailable",
+    "unavailable": "Can't sign in right now",
     "retry": "Retry",
-    "browserWaiting": "Complete verification in your browser",
+    "browserWaiting": "Continue in your browser",
     "browserCallback": {
       "successTitle": "Signed in",
       "successBody": "You’re signed in. You can close this page now.",

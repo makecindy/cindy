@@ -111,8 +111,25 @@ describe('LoginPage browser redirect waiting state', () => {
 
     render(<LoginPage />);
 
-    expect(screen.getByRole('button', { name: 'login.localModeEntry' })).toBeTruthy();
-    expect(screen.getByText('login.localModeDescription')).toBeTruthy();
+    const entry = screen.getByRole('button', { name: 'login.localModeEntry' });
+    const note = screen.getByText('login.localModeDescription');
+    // 逃生入口与 identifier 同组件同槽:在错误面板内、紧接 error 槽;说明在面板下方
+    // 圆钮行槽位,随登录组一起缩放,不再是脱离组的 footer。
+    expect(screen.getByTestId('login-panel-error').contains(entry)).toBe(true);
+    expect(entry.closest('[data-testid="login-skip-entry-slot"]')).not.toBeNull();
+    expect(screen.getByTestId('login-group').contains(note)).toBe(true);
+    expect(screen.getByTestId('login-panel-error').contains(note)).toBe(false);
+    expect(entry.getAttribute('aria-describedby')).toBe(note.id);
+    expect(screen.queryByTestId('login-stage-footer')).toBeNull();
+  });
+
+  it('keeps the panel title clear of the back button', () => {
+    render(<LoginPage />);
+
+    // 返回钮占 20..80 设计px:标题槽左右各让 90,可用宽 500,中心仍是面板中线 340。
+    const title = screen.getByTestId('login-title');
+    expect(title.style.left).toBe('90px');
+    expect(title.style.width).toBe('500px');
   });
 
   it('keeps saved-account switching out of the signed-out error screen', () => {

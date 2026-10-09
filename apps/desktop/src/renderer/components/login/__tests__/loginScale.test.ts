@@ -8,7 +8,16 @@ import {
   sloganShiftX,
   splashBrandPlacement,
 } from '../loginScale';
-import { CONTROL, HERO, LOGIN_GROUP, PANEL, SSO_ORG_HISTORY, WORDMARK } from '../loginDesignTokens';
+import {
+  CONTROL,
+  HERO,
+  LOGIN_BOTTOM_RESERVE,
+  LOGIN_GROUP,
+  PANEL,
+  SSO_ORG_HISTORY,
+  WORDMARK,
+  WORDMARK_PANEL_GAP,
+} from '../loginDesignTokens';
 
 /**
  * 缩放公式行为单测(implementation-plan Step 2 WHAT1 锚点数值,demo v3.1 拍板)。
@@ -137,43 +146,46 @@ describe('brandPlacement(品牌块整体让位,用户拍板 2026-07-23 第二轮
   it('短窗口以字标底部为碰撞边界,立绘尾部可自然落入面板下方', () => {
     const width = 1280;
     const height = 600;
-    const panelTop = panelPlacement(width, height, 1229, 124).topY;
-    const r = brandPlacement(width, height, 124);
+    const panelTop = panelPlacement(width, height, 1229, LOGIN_BOTTOM_RESERVE).topY;
+    const r = brandPlacement(width, height, LOGIN_BOTTOM_RESERVE);
     const blockTopAfter = height / 2 + (275 - 2098 / 2) * r.scale + r.translateY;
     const wordmarkBottomAfter = height / 2 + (1191 - 2098 / 2) * r.scale + r.translateY;
     const heroBottomAfter = height / 2 + (1209 - 2098 / 2) * r.scale + r.translateY;
 
     expect(blockTopAfter).toBeCloseTo(12, 6);
-    expect(wordmarkBottomAfter).toBeLessThanOrEqual(panelTop + 1e-9);
-    expect(heroBottomAfter).toBeGreaterThan(panelTop);
+    // 字标底与面板顶恰好留 WORDMARK_PANEL_GAP(原先为 0,字标贴着面板顶边)
+    expect(panelTop - wordmarkBottomAfter).toBeCloseTo(WORDMARK_PANEL_GAP, 6);
+    expect(heroBottomAfter).toBeGreaterThan(panelTop - WORDMARK_PANEL_GAP);
   });
 
-  it('768px 与 769px 之间按可用空间连续变化,没有高度阈值 scale cliff', () => {
+  it('压缩档相邻高度(600/601px)按可用空间连续变化,没有高度阈值 scale cliff', () => {
     const width = 1280;
-    const reserve = 124;
-    const at768 = brandPlacement(width, 768, reserve);
-    const at769 = brandPlacement(width, 769, reserve);
-    const panelTop768 = panelPlacement(width, 768, 1229, reserve).topY;
-    const panelTop769 = panelPlacement(width, 769, 1229, reserve).topY;
-    const expected768 = (panelTop768 - 12) / (WORDMARK.inner.y + WORDMARK.inner.height - HERO.y);
-    const expected769 = (panelTop769 - 12) / (WORDMARK.inner.y + WORDMARK.inner.height - HERO.y);
+    const reserve = LOGIN_BOTTOM_RESERVE;
+    const at600 = brandPlacement(width, 600, reserve);
+    const at601 = brandPlacement(width, 601, reserve);
+    const panelTop600 = panelPlacement(width, 600, 1229, reserve).topY;
+    const panelTop601 = panelPlacement(width, 601, 1229, reserve).topY;
+    const limit600 = panelTop600 - WORDMARK_PANEL_GAP;
+    const limit601 = panelTop601 - WORDMARK_PANEL_GAP;
+    const expected600 = (limit600 - 12) / (WORDMARK.inner.y + WORDMARK.inner.height - HERO.y);
+    const expected601 = (limit601 - 12) / (WORDMARK.inner.y + WORDMARK.inner.height - HERO.y);
 
-    expect(at768.scale).toBeCloseTo(expected768, 6);
-    expect(at769.scale).toBeCloseTo(expected769, 6);
-    expect(at769.scale - at768.scale).toBeCloseTo(
+    expect(at600.scale).toBeCloseTo(expected600, 6);
+    expect(at601.scale).toBeCloseTo(expected601, 6);
+    expect(at601.scale - at600.scale).toBeCloseTo(
       1 / (WORDMARK.inner.y + WORDMARK.inner.height - HERO.y),
       6,
     );
 
     for (const [height, placement, panelTop] of [
-      [768, at768, panelTop768],
-      [769, at769, panelTop769],
+      [600, at600, panelTop600],
+      [601, at601, panelTop601],
     ] as const) {
       const wordmarkBottom =
         height / 2 +
         (WORDMARK.inner.y + WORDMARK.inner.height - 2098 / 2) * placement.scale +
         placement.translateY;
-      expect(wordmarkBottom).toBeLessThanOrEqual(panelTop + 1e-9);
+      expect(wordmarkBottom).toBeLessThanOrEqual(panelTop - WORDMARK_PANEL_GAP + 1e-9);
     }
   });
 });
