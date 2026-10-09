@@ -182,6 +182,7 @@ import {
   insertSlashCommand,
   mergeSlashCommands,
 } from '@/session/composerPalette';
+import { mobileDebugLog } from '@/debug/mobileDebugLog';
 import {
   type StoredAgentRestoreState,
   applyRemoteAgentPick,
@@ -194,6 +195,7 @@ import {
   buildRecentWorkspaceOptions,
   filterRemoteDirectoryEntries,
   isCurrentRemoteBrowseRequest,
+  isNewSessionRuntimePending,
   isStoredAgentRestorePending,
   nextStoredAgentRestoreStep,
   normalizeRemoteDirectoryDrives,
@@ -1017,6 +1019,17 @@ export default function NewRemoteSessionScreen() {
   // 自动默认运行配置(跟随最近会话 / 区域默认 / 列表最上面)的守卫:用户一旦手动选过模型,就不再自动覆盖;
   // 记录已自动应用过的设备,切设备时(未手动选过)按新设备重算。
   const userTouchedRuntimeRef = useRef(false);
+  // 模型是否已按真实数据落定(见 isNewSessionRuntimePending);未落定时药丸显示读取中、不能创建。
+  const [runtimeSettled, setRuntimeSettled] = useState(false);
+  const runtimeSettledRef = useRef(false);
+  const mountedAtRef = useRef(Date.now());
+  const runtimeSettledSourceRef = useRef('');
+  const settleRuntime = useCallback((source: string) => {
+    if (runtimeSettledRef.current) return;
+    runtimeSettledRef.current = true;
+    runtimeSettledSourceRef.current = source;
+    setRuntimeSettled(true);
+  }, []);
   // 只保护当前页面刚从 provider 目录显式选中的模型，避免旧 capabilities 在途结果误回退；
   // 持久草稿不会写入该 ref，因此已下架模型仍走 mobile 的首项降级。
   const explicitProviderModelSelectionRef = useRef<string | null>(null);
@@ -1234,7 +1247,7 @@ export default function NewRemoteSessionScreen() {
       expectedDeviceId: preferredDefaultDevice?.deviceId ?? '',
       selectedDeviceId,
     })) return;
-    // agent 偏好一到就恢复;模型要等目录或该 agent 的最近任务,否则只能落到内置兜底模型。
+    // agent 偏好一到就恢复;模型要等目录或该 agent 的最近任务,否则选不出模型。
     const step = nextStoredAgentRestoreStep({
       storedAgentKind,
       restored,
@@ -1247,7 +1260,10 @@ export default function NewRemoteSessionScreen() {
       }),
     });
     if (!step) return;
-    storedAgentRestoreRef.current = { agentKind: storedAgentKind, phase: step === 'agent' ? 'agent' : 'done' };
+    mobileDebugLog('debug', 'new-session', 'stored agent restore', { step, agentKind: storedAgentKind });
+    const previousRestore = restored;
+    const restoreState: StoredAgentRestoreState = { agentKind: storedAgentKind, phase: step === 'agent' ? 'agent' : 'done' };
+    storedAgentRestoreRef.current = restoreState;
     // 现场按最新目录算该 agent 的默认运行配置(rows 与 ready 必须同一代,codex review P2)。
     const resolveStoredRuntime = (currentEffort: string) => {
       const rowsNow = flattenProviderSections(
@@ -1286,11 +1302,14 @@ export default function NewRemoteSessionScreen() {
       setDraft((current) => (current.agentKind === storedAgentKind
         ? { ...current, ...resolveStoredRuntime(current.effort) }
         : current));
+      settleRuntime('stored-agent-model');
       return;
     }
     // 该路径同时负责恢复 agent 权限，下面的通用权限记忆 effect 不再重复弹框。
     appliedPermissionMemoryRef.current = true;
+    const previousAutoDefaultDevice = autoDefaultDeviceRef.current;
     if (selectedDeviceId) autoDefaultDeviceRef.current = selectedDeviceId;
+    let applied = false;
     const storedPermissionMode = newSessionPreferences?.permissionModeByAgent[storedAgentKind];
     const nextPermissionMode =
       storedPermissionMode ??
@@ -1307,6 +1326,7 @@ export default function NewRemoteSessionScreen() {
       if (deviceAtTrigger !== selectedDeviceRef.current) return;
       // 确认期间用户又切了 agent / 手动选了模型 → 旧回调不得覆盖新选择。
       if (seqAtTrigger !== runtimeActionSeqRef.current) return;
+      applied = true;
       setDraft((current) => ({
         ...current,
         ...resolveStoredRuntime(current.effort),
@@ -1314,9 +1334,16 @@ export default function NewRemoteSessionScreen() {
         // 上次明确选择过的权限直接沿用；内置默认若升级到 Full access 仍需确认。
         permissionMode: confirmed ? nextPermissionMode : current.permissionMode,
       }));
+      // 'agent' 只恢复了 agent,模型仍是占位,等数据到了由 'model' 落定。
+      if (step === 'full') settleRuntime('stored-agent');
     })();
     return () => {
       cancelled = true;
+      // 写入前依赖已变(effect 重跑):撤回「已恢复」与设备锁,让重跑的 effect 重新恢复。
+      // 否则标记已落、草稿却没写,两条默认路径都不再处理,页面停在占位模型。
+      if (applied) return;
+      if (storedAgentRestoreRef.current === restoreState) storedAgentRestoreRef.current = previousRestore;
+      if (autoDefaultDeviceRef.current === selectedDeviceId) autoDefaultDeviceRef.current = previousAutoDefaultDevice;
     };
   }, [
     draft.permissionMode,
@@ -1379,7 +1406,9 @@ export default function NewRemoteSessionScreen() {
       currentEffort: draft.effort,
     });
     if (!result) return;
+    const previousAutoDefaultDevice = autoDefaultDeviceRef.current;
     autoDefaultDeviceRef.current = result.appliedDeviceId;
+    let applied = false;
     const nextAgentKind = result.patch.agentKind ?? draft.agentKind;
     const storedPermissionMode = appliedPermissionMemoryRef.current
       ? undefined
@@ -1392,6 +1421,8 @@ export default function NewRemoteSessionScreen() {
       restoringRememberedChoice: storedPermissionMode !== undefined,
     }).then((confirmed) => {
       if (cancelled || userTouchedRuntimeRef.current) return;
+      applied = true;
+      settleRuntime(result.patch.agentKind ? 'recent-task' : 'catalog-default');
       setDraft((current) => {
         // 自动默认重算(设备切换/最近会话变化)改了 (agent, model, providerId) 组合 →
         // fastMode 按新组合重验(Codex review P2):A 设备记忆恢复的 fastMode:true 不得
@@ -1419,12 +1450,16 @@ export default function NewRemoteSessionScreen() {
     });
     return () => {
       cancelled = true;
+      // 写入前 effect 重跑:撤回设备锁,重跑时按最新数据重新应用,不把这台设备误记为已应用。
+      if (!applied && autoDefaultDeviceRef.current === result.appliedDeviceId) {
+        autoDefaultDeviceRef.current = previousAutoDefaultDevice;
+      }
     };
   }, [capabilities?.availableModels, deviceProviders.loading, draft.effort, draft.permissionMode, draft.agentKind, modelRows, deviceProviders.ready, deviceProviders.modelVisibilityOverrides, deviceProviders.unsupported, modelSections.connected.length, newSessionPreferences, newSessionPreferencesLoaded, selectedDeviceId, sessions]);
 
   // 目录就绪后的来源终检(codex review P1):自动默认/恢复在目录加载期信任的来源可能已失效
   // (provider 被删/断开/模型下架),就绪后必须复核——联合回退整对 (model, providerId)
-  // (其他来源顶替 / 首项 / 内置默认),不留裸模型回落默认网关(codex review P2)。
+  // (其他来源顶替 / 首项 / 留空),不留裸模型回落默认网关(codex review P2)。
   // 无变化时返回原引用,不触发额外渲染。
   useEffect(() => {
     if (!deviceProviders.ready) return;
@@ -1454,6 +1489,29 @@ export default function NewRemoteSessionScreen() {
     () => ({ attachmentCount: attachments.length + pendingUploads.length }),
     [attachments.length, pendingUploads.length],
   );
+  const runtimePending = isNewSessionRuntimePending({
+    settled: runtimeSettled,
+    userTouched: userTouchedRuntimeRef.current,
+    remoteAgentPicked: !!remoteAgentPick,
+    selectedDeviceId: selectedDeviceId ?? '',
+    catalogReady: deviceProviders.ready,
+    catalogFailed: deviceProviders.error !== null,
+    modelRowCount: modelRows.length,
+  });
+  const runtimePendingRef = useRef(runtimePending);
+  runtimePendingRef.current = runtimePending;
+  useEffect(() => {
+    if (!runtimeSettled) return;
+    // 诊断用:新建页的模型经哪条路径、多久后落定(只记 agent 与模型 id,不含正文)。
+    mobileDebugLog('info', 'new-session', 'runtime settled', {
+      source: runtimeSettledSourceRef.current,
+      agentKind: draft.agentKind,
+      model: draft.model,
+      elapsedMs: Date.now() - mountedAtRef.current,
+    });
+    // 只在落定那一刻记一次。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [runtimeSettled]);
   const runtimeSummary = useMemo(
     () => buildDraftRuntimeSummary(draft, runtimeOptions),
     // effort / 权限标签按 app 语言解析,切换语言时必须重算,否则停留在上一语言。
@@ -1468,7 +1526,11 @@ export default function NewRemoteSessionScreen() {
         remoteAgentModelName || remoteAgentPick.model,
         effortLabelFromRuntime({ currentModel: null, effortOptions: runtimeOptions.effortOptions }, remoteAgentPick.effort),
       ].filter(Boolean).join(' · ')
-    : runtimeSummary.modelSummary;
+    : runtimePending
+      ? t('session.new.modelLoading')
+      : draft.model.trim()
+        ? runtimeSummary.modelSummary
+        : t('session.new.noModelSelected');
   const pillAccessibilityModel = remoteAgentCatalog?.name
     ? [pillModelSummary, remoteAgentCatalog.name].join(', ')
     : pillModelSummary;
@@ -1769,8 +1831,8 @@ export default function NewRemoteSessionScreen() {
       );
   }, []);
   const createValidation = useMemo(
-    () => validateNewSessionDraft(draft, draftContent),
-    [draft, draftContent],
+    () => runtimePending ? t('session.new.modelLoading') : validateNewSessionDraft(draft, draftContent),
+    [draft, draftContent, runtimePending, t],
   );
   const composerHasMessage = draft.firstMessage.trim().length > 0;
   // 「按下即录」的乐观反馈(与会话页/桌面同款,详见 [sessionId].tsx 同名状态注释)。
@@ -1810,6 +1872,7 @@ export default function NewRemoteSessionScreen() {
     [draft, draftContent],
   );
   const canCreate = (!createValidation || (voiceIsListening && createValidationIsMissingPayload))
+    && !runtimePending
     && !creating
     && !voiceIsProcessing
     && !worktreeCreateBlocked;
@@ -4078,7 +4141,7 @@ export default function NewRemoteSessionScreen() {
     </VoicePillWidthFrame>
   );
 
-  // 切 agent:跟随该 agent 的最近会话 → 否则该 agent 列表最上面 → 否则内置默认(见 pickAgentDefaultRuntime),
+  // 切 agent:跟随该 agent 的最近会话 → 否则该 agent 列表最上面 → 否则留空由用户选(见 pickAgentDefaultRuntime),
   // 同时 reconcile effort、来源跟随 model 同源(最近会话来源校验后继承 / 首项行 provider / 兜底 null)。
   // 手动切 agent = 手动选运行配置 → 之后自动默认不再覆盖。
   const switchAgent = useCallback((nextKind: NewSessionAgentKind) => {
@@ -4435,6 +4498,8 @@ export default function NewRemoteSessionScreen() {
       setError(t('session.new.selectDeviceError'));
       return;
     }
+    // 模型仍是占位(最近任务 / 目录未到):不创建,按钮此时本就不可点,这里兜住其它提交入口。
+    if (runtimePendingRef.current) return;
     // 旧协议 Plan 依赖会话级 permissionMode，不能安全进入断线创建 / 离线 FIFO。
     // 保留草稿与 Plan 选择，等 relay 和目标电脑恢复后再走原有在线兼容路径。
     if (
@@ -4849,7 +4914,7 @@ export default function NewRemoteSessionScreen() {
       }
       // 提交点联合终检(Greptile/Codex review P1):目录就绪后的清理 effect 跑在渲染后,
       // 用户可能在清理生效前点创建——创建路径自身必须守卫;来源失效时 model 随之一并
-      // 回退(其他来源顶替 / 首项 / 内置默认),并同步校准 effort、组合变化时 fastMode
+      // 回退(其他来源顶替 / 首项 / 留空),并同步校准 effort、组合变化时 fastMode
       // 保守置 false(codex review P2)。代际安全版(独立 review P1-1):唯一数据源 =
       // 设备缓存 + 代际,不再读渲染期 rows(catalogReadyRef 是渲染镜像,驱逐窗口内
       // 不可信);缓存命中即当前代已确认目录;未命中且曾驱逐 → join 在途重拉,await

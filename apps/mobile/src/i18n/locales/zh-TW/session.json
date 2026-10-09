@@ -301,6 +301,7 @@
     "selectDeviceError": "請選擇裝置。",
     "enterProjectPath": "請輸入電腦端專案路徑。",
     "enterModel": "請輸入模型。",
+    "modelLoading": "正在讀取模型…",
     "enterFirstMessageOrAttachment": "請輸入首條訊息或新增附件。",
     "noSessionIdReturned": "無法確認遠端電腦上的新任務已建立，請重新同步後查看。",
     "sessionIdNotAdopted": "遠端電腦上的 Cindy 版本不相容，請更新後重試。",

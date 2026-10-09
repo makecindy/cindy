@@ -9,6 +9,7 @@ import {
   NEW_SESSION_AGENT_OPTIONS,
   availableNewSessionAgentOptions,
   canResolveStoredAgentRuntime,
+  isNewSessionRuntimePending,
   isStoredAgentRestorePending,
   nextStoredAgentRestoreStep,
   type StoredAgentRestoreState,
@@ -352,7 +353,7 @@ describe('stored agent restore gating', () => {
       currentEffort: 'medium',
       deviceId: 'mac',
       catalogReady: false,
-    })).toMatchObject({ model: 'claude-sonnet-4-6', effort: 'medium' });
+    })).toMatchObject({ model: '', effort: 'medium' });
   });
 
   it('proceeds once a recent task of the stored agent exists on the device', () => {
@@ -436,7 +437,7 @@ describe('stored agent restore gating', () => {
     const source = readTextLf(resolve(process.cwd(), 'app/sessions/new.tsx'), 'utf8');
     const storedStart = source.indexOf('const storedAgentKind = newSessionPreferences?.agentKind;');
     const autoStart = source.indexOf('const result = resolveNewSessionAutoDefault({');
-    const storedSource = source.slice(storedStart, source.indexOf('storedAgentRestoreRef.current = {', storedStart));
+    const storedSource = source.slice(storedStart, source.indexOf('storedAgentRestoreRef.current = restoreState', storedStart));
     const autoGuardSource = source.slice(source.lastIndexOf('useEffect(() => {', autoStart), autoStart);
     expect(storedSource).toContain('isStoredAgentRestorePending({');
     expect(storedSource).toContain('canResolveStoredAgentRuntime({');
@@ -448,6 +449,47 @@ describe('stored agent restore gating', () => {
     expect(storedSource).not.toContain('deviceProviders.loading');
     // 恢复待落定时不阻断「跟随最近任务」(Greptile P1)。
     expect(autoGuardSource).not.toContain('isStoredAgentRestorePending(');
+  });
+});
+
+describe('isNewSessionRuntimePending', () => {
+  const base = {
+    settled: false,
+    userTouched: false,
+    remoteAgentPicked: false,
+    selectedDeviceId: 'mac-studio',
+    catalogReady: false,
+    catalogFailed: false,
+    modelRowCount: 0,
+  };
+
+  it('keeps the placeholder model pending until real data settles it', () => {
+    expect(isNewSessionRuntimePending(base)).toBe(true);
+    // 目录就绪但自动默认 / 恢复还没写入:仍是占位。
+    expect(isNewSessionRuntimePending({ ...base, catalogReady: true, modelRowCount: 3 })).toBe(true);
+    expect(isNewSessionRuntimePending({ ...base, settled: true })).toBe(false);
+  });
+
+  it('never blocks a choice the user made', () => {
+    expect(isNewSessionRuntimePending({ ...base, userTouched: true })).toBe(false);
+    expect(isNewSessionRuntimePending({ ...base, remoteAgentPicked: true })).toBe(false);
+  });
+
+  it('falls back to the built-in model when no more data will arrive', () => {
+    expect(isNewSessionRuntimePending({ ...base, selectedDeviceId: '' })).toBe(false);
+    expect(isNewSessionRuntimePending({ ...base, catalogFailed: true })).toBe(false);
+    expect(isNewSessionRuntimePending({ ...base, catalogReady: true, modelRowCount: 0 })).toBe(false);
+  });
+
+  it('rolls back the restore marker and device lock when an automatic write is dropped', () => {
+    const source = readTextLf(resolve(process.cwd(), 'app/sessions/new.tsx'), 'utf8');
+    const storedStart = source.indexOf('const storedAgentKind = newSessionPreferences?.agentKind;');
+    const storedEffect = source.slice(storedStart, source.indexOf('}, [', storedStart));
+    expect(storedEffect).toContain('if (storedAgentRestoreRef.current === restoreState) storedAgentRestoreRef.current = previousRestore;');
+    expect(storedEffect).toContain('autoDefaultDeviceRef.current = previousAutoDefaultDevice;');
+    const autoStart = source.indexOf('const result = resolveNewSessionAutoDefault({');
+    const autoEffect = source.slice(autoStart, source.indexOf('}, [', autoStart));
+    expect(autoEffect).toContain('autoDefaultDeviceRef.current = previousAutoDefaultDevice;');
   });
 });
 
@@ -577,7 +619,7 @@ describe('pickAgentDefaultRuntime', () => {
     expect(runtime).toEqual({ agentKind: 'claude-code', model: 'claude-sonnet-4-6', effort: 'medium', providerId: 'prov-claude-sonnet-4-6' });
   });
 
-  it('falls back to DEFAULT_MODELS + default route when the catalog is ready but empty and the provider is gone', () => {
+  it('leaves the model empty with the default route when the catalog is ready but empty and the provider is gone', () => {
     const runtime = pickAgentDefaultRuntime({
       agentKind: 'codex',
       sessions: [remoteSession('ds', { agentKind: 'codex', model: 'delisted-model', providerId: 'prov-deleted', userSendAt: '2026-01-01T00:00:00.000Z' })],
@@ -586,7 +628,7 @@ describe('pickAgentDefaultRuntime', () => {
       catalogReady: true,
     });
     // 回退内置默认且目录为空 → 省略 effort(codex P2:旧自定义档位对内置模型无效)
-    expect(runtime).toEqual({ agentKind: 'codex', model: 'gpt-5.4', effort: '', providerId: null });
+    expect(runtime).toEqual({ agentKind: 'codex', model: '', effort: '', providerId: null });
   });
 
   it('trusts the recent providerId while modelRows are still loading (empty)', () => {
@@ -610,7 +652,7 @@ describe('pickAgentDefaultRuntime', () => {
     });
     // 目录就绪但为空:来源失效且无人能提供该模型 → model 一并回退内置默认(不留裸模型)
     // + 省略 effort(codex P2:旧自定义档位对内置模型无效)
-    expect(runtime).toEqual({ agentKind: 'claude-code', model: 'claude-sonnet-4-6', effort: '', providerId: null });
+    expect(runtime).toEqual({ agentKind: 'claude-code', model: '', effort: '', providerId: null });
   });
 
   it('reconciles effort with the exact (providerId, modelId) row when multiple providers offer the same model (Copilot)', () => {
@@ -733,21 +775,21 @@ describe('pickAgentDefaultRuntime', () => {
     expect(runtime).toEqual({ agentKind: 'claude-code', model: 'shared-model', effort: 'high', providerId: 'provB' });
   });
 
-  it('falls back to DEFAULT_MODELS and omits effort when the catalog is ready but empty (codex P2)', () => {
+  it('leaves the model empty and omits effort when the catalog is ready but empty (codex P2)', () => {
     expect(pickAgentDefaultRuntime({
       agentKind: 'codex',
       sessions: [],
       modelRows: [],
       currentEffort: 'medium',
       catalogReady: true,
-    })).toEqual({ agentKind: 'codex', model: 'gpt-5.4', effort: '', providerId: null });
+    })).toEqual({ agentKind: 'codex', model: '', effort: '', providerId: null });
     expect(pickAgentDefaultRuntime({
       agentKind: 'claude-code',
       sessions: [],
       modelRows: [],
       currentEffort: 'high',
       catalogReady: true,
-    })).toEqual({ agentKind: 'claude-code', model: 'claude-sonnet-4-6', effort: '', providerId: null });
+    })).toEqual({ agentKind: 'claude-code', model: '', effort: '', providerId: null });
   });
 
   it('skips the top-row branch while the catalog is not ready (stale rows from the previous device, codex P1)', () => {
@@ -759,7 +801,7 @@ describe('pickAgentDefaultRuntime', () => {
       catalogReady: false,
     });
     // 目录未就绪 → 不抄残留目录的首项,落内置默认 + 默认路由
-    expect(runtime).toEqual({ agentKind: 'codex', model: 'gpt-5.4', effort: 'medium', providerId: null });
+    expect(runtime).toEqual({ agentKind: 'codex', model: '', effort: 'medium', providerId: null });
     expect(runtime.providerId).toBeNull();
   });
 
@@ -1177,6 +1219,8 @@ describe('new session default device follows the home device filter', () => {
 });
 
 describe('new session model', () => {
+  const DRAFT_WITH_MODEL = { ...DEFAULT_NEW_SESSION_DRAFT, model: 'claude-sonnet-4-6' };
+
   it('hides dot directories by default and restores them when enabled', () => {
     const entries = [
       { name: '.config', kind: 'dir' as const, path: '/Users/cindy/.config' },
@@ -1252,7 +1296,7 @@ describe('new session model', () => {
 
   it('builds device-link create-session args with desktop remote-project semantics', () => {
     expect(buildRemoteCreateSessionOptions({
-      ...DEFAULT_NEW_SESSION_DRAFT,
+      ...DRAFT_WITH_MODEL,
       workingDir: ' /repo/xdt-maker ',
       firstMessage: 'hello',
       extraDirs: [' /repo/docs ', '/repo/docs', ''],
@@ -1269,7 +1313,7 @@ describe('new session model', () => {
   });
 
   it('runs the Agent on the picked remote computer or share', () => {
-    const draft = { ...DEFAULT_NEW_SESSION_DRAFT, workingDir: '/repo/app', firstMessage: 'hi' };
+    const draft = { ...DRAFT_WITH_MODEL, workingDir: '/repo/app', firstMessage: 'hi' };
     expect(applyRemoteAgentPick(draft, null)).toBe(draft);
     const remote = applyRemoteAgentPick(draft, {
       deviceId: 'share:s1', agentKind: 'codex', model: 'gpt-5.5', providerId: 'openai', effort: 'high', fastMode: true,
@@ -1289,7 +1333,7 @@ describe('new session model', () => {
 
   it('builds folderless dialogue create-session args for controlled-side cwd allocation', () => {
     expect(buildRemoteCreateSessionOptions({
-      ...DEFAULT_NEW_SESSION_DRAFT,
+      ...DRAFT_WITH_MODEL,
       workspaceKind: 'dialogue',
       workingDir: ' /repo/should-not-leak ',
       firstMessage: 'hello',
@@ -1306,7 +1350,7 @@ describe('new session model', () => {
 
   it('omits effort from create-session args when the selected model has no effort control', () => {
     expect(buildRemoteCreateSessionOptions({
-      ...DEFAULT_NEW_SESSION_DRAFT,
+      ...DRAFT_WITH_MODEL,
       workingDir: '/repo/xdt-maker',
       firstMessage: 'hello',
       model: 'claude-haiku-4-6',
@@ -1323,7 +1367,7 @@ describe('new session model', () => {
 
   it('preserves a Codex Auto-review draft when creating the session', () => {
     expect(buildRemoteCreateSessionOptions({
-      ...DEFAULT_NEW_SESSION_DRAFT,
+      ...DRAFT_WITH_MODEL,
       agentKind: 'codex',
       model: 'gpt-5.4',
       permissionMode: 'auto',
@@ -1335,17 +1379,17 @@ describe('new session model', () => {
   });
 
   it('switches agent defaults without carrying a Claude model into Codex', () => {
-    const codex = withAgentDefaults(DEFAULT_NEW_SESSION_DRAFT, 'codex');
+    const codex = withAgentDefaults(DRAFT_WITH_MODEL, 'codex');
     expect(codex).toMatchObject({
       agentKind: 'codex',
-      model: 'gpt-5.4',
+      model: '',
       permissionMode: 'auto',
     });
 
     const claude = withAgentDefaults({ ...codex, fastMode: true }, 'claude-code');
     expect(claude).toMatchObject({
       agentKind: 'claude-code',
-      model: 'claude-sonnet-4-6',
+      model: '',
       permissionMode: 'auto',
       fastMode: false,
     });
@@ -1355,8 +1399,8 @@ describe('new session model', () => {
     expect(NEW_SESSION_AGENT_OPTIONS.map((option) => option.kind)).toEqual([
       'claude-code', 'codex', 'pi',
     ]);
-    const pi = withAgentDefaults({ ...DEFAULT_NEW_SESSION_DRAFT, fastMode: true }, 'pi');
-    expect(pi).toMatchObject({ agentKind: 'pi', model: 'gpt-5.4', fastMode: true });
+    const pi = withAgentDefaults({ ...DRAFT_WITH_MODEL, fastMode: true }, 'pi');
+    expect(pi).toMatchObject({ agentKind: 'pi', model: '', fastMode: true });
     expect(buildRemoteCreateSessionOptions({
       ...pi,
       workingDir: '/repo/xdt-maker',
@@ -1404,27 +1448,29 @@ describe('new session model', () => {
 
   it('validates required path, model and first-message payload', () => {
     expect(validateNewSessionDraft(DEFAULT_NEW_SESSION_DRAFT)).toBe('请输入电脑端项目路径。');
+    // 草稿初值不写死模型:由最近任务 / 目录落定,拿不到时留空让用户选。
+    expect(DEFAULT_NEW_SESSION_DRAFT.model).toBe('');
     expect(validateNewSessionDraft({
-      ...DEFAULT_NEW_SESSION_DRAFT,
+      ...DRAFT_WITH_MODEL,
       workspaceKind: 'dialogue',
     })).toBe('请输入首条消息或添加附件。');
     expect(validateNewSessionDraft({
-      ...DEFAULT_NEW_SESSION_DRAFT,
+      ...DRAFT_WITH_MODEL,
       workingDir: '/repo',
       model: '',
     })).toBe('请输入模型。');
     expect(validateNewSessionDraft({
-      ...DEFAULT_NEW_SESSION_DRAFT,
+      ...DRAFT_WITH_MODEL,
       workingDir: '/repo',
       firstMessage: '',
     })).toBe('请输入首条消息或添加附件。');
     expect(validateNewSessionDraft({
-      ...DEFAULT_NEW_SESSION_DRAFT,
+      ...DRAFT_WITH_MODEL,
       workingDir: '/repo',
       firstMessage: 'run tests',
     })).toBeNull();
     expect(validateNewSessionDraft({
-      ...DEFAULT_NEW_SESSION_DRAFT,
+      ...DRAFT_WITH_MODEL,
       workingDir: '/repo',
       firstMessage: '',
     }, { attachmentCount: 1 })).toBeNull();
@@ -1432,7 +1478,7 @@ describe('new session model', () => {
 
   it('summarizes the mobile create-session draft for the top overview strip', () => {
     expect(summarizeNewSessionDraft({
-      ...DEFAULT_NEW_SESSION_DRAFT,
+      ...DRAFT_WITH_MODEL,
       workingDir: '',
       firstMessage: '',
     })).toMatchObject({
@@ -1445,7 +1491,7 @@ describe('new session model', () => {
     });
 
     expect(summarizeNewSessionDraft({
-      ...DEFAULT_NEW_SESSION_DRAFT,
+      ...DRAFT_WITH_MODEL,
       workingDir: '/repo/xdt-maker',
       firstMessage: 'run tests',
       extraDirs: ['/repo/docs', '/repo/docs', ''],
@@ -1456,7 +1502,7 @@ describe('new session model', () => {
     });
 
     expect(summarizeNewSessionDraft({
-      ...DEFAULT_NEW_SESSION_DRAFT,
+      ...DRAFT_WITH_MODEL,
       workingDir: '/repo/xdt-maker',
       firstMessage: '',
     }, { attachmentCount: 2 })).toMatchObject({
@@ -1465,7 +1511,7 @@ describe('new session model', () => {
     });
 
     expect(summarizeNewSessionDraft({
-      ...DEFAULT_NEW_SESSION_DRAFT,
+      ...DRAFT_WITH_MODEL,
       agentKind: 'codex',
       workspaceKind: 'dialogue',
       workingDir: '',
@@ -1483,7 +1529,7 @@ describe('new session model', () => {
 
   it('builds a final mobile create preview before sending to the controlled computer', () => {
     expect(buildNewSessionCreatePreview({
-      ...DEFAULT_NEW_SESSION_DRAFT,
+      ...DRAFT_WITH_MODEL,
       workingDir: '',
       firstMessage: '',
     }, 'Carol Mac')).toMatchObject({
@@ -1498,7 +1544,7 @@ describe('new session model', () => {
     });
 
     expect(buildNewSessionCreatePreview({
-      ...DEFAULT_NEW_SESSION_DRAFT,
+      ...DRAFT_WITH_MODEL,
       workspaceKind: 'dialogue',
       workingDir: '',
       firstMessage: '请帮我总结这个项目，并给出下一步建议。',
@@ -1515,7 +1561,7 @@ describe('new session model', () => {
     });
 
     expect(buildNewSessionCreatePreview({
-      ...DEFAULT_NEW_SESSION_DRAFT,
+      ...DRAFT_WITH_MODEL,
       workingDir: '/repo/xdt-maker',
       firstMessage: '',
     }, 'Carol Mac', { attachmentCount: 2 })).toMatchObject({

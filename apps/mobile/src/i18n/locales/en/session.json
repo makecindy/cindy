@@ -301,6 +301,7 @@
     "selectDeviceError": "Select a device.",
     "enterProjectPath": "Enter the project path on the computer.",
     "enterModel": "Enter a model.",
+    "modelLoading": "Loading model…",
     "enterFirstMessageOrAttachment": "Enter a first message or add an attachment.",
     "noSessionIdReturned": "Could not confirm that the new session was created on the remote computer. Sync again to check.",
     "sessionIdNotAdopted": "The Cindy version on the remote computer is incompatible. Update it and try again.",
