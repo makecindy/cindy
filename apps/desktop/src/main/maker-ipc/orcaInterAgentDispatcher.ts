@@ -685,16 +685,10 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
         ? await deps.withSendToSessionLock(params.targetSessionId, dispatchLive)
         : await dispatchLive();
       if (liveResult) return liveResult;
-      // 带图时 no-live 回退路径(sendToSessionInternal 重建)只支持纯文本,宁拒勿静默丢图。
+      // 带图 no-live(换窗/重建中)与纯文本排队语义对齐:携 files 入队,
+      // drain 经 sendToAgent 用 createOpts 重建 session 后送达,不静默丢图。
       if (imageFiles.length > 0) {
-        return failureResult({
-          ...createHostSendFailure(
-            'SEND_FAILED',
-            'image attachments require a live local session; retry after the target session is available',
-          ),
-          source: params.meta.source,
-          context: params.meta.context,
-        });
+        return enqueueQueuedMessage('orca inter-agent message queued for no-live target with images');
       }
       return await sendToInternal();
     } catch (err) {

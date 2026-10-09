@@ -396,6 +396,34 @@ describe('Orca lead/worker dispatcher', () => {
     expect(invalid.liveSession.send).not.toHaveBeenCalled();
   });
 
+  it('queues image attachments for a no-live target instead of failing after rollover', async () => {
+    const validateImageAttachments = vi.fn(async (paths: string[]) => ({
+      ok: true as const,
+      images: paths.map((p) => ({
+        path: p, name: p.split(/[\\/]/).pop() ?? p, ext: '.png', size: 10, mimeType: 'image/png',
+      })),
+    }));
+    const h = createHarness({
+      validateImageAttachments,
+      prepareUnhealthySession: vi.fn(async () => true),
+      getLiveSession: vi.fn(() => null),
+    });
+
+    const result = await h.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage({
+      targetSessionId: 'target-session',
+      rawContent: 'Check after rollover',
+      source: 'lead',
+      senderLabel: 'Lead',
+      imagePaths: ['C:/tmp/a.png'],
+      meta: { source: 'orca', context: 'images-no-live-test' },
+    });
+
+    expect(result).toMatchObject({ ok: true, mode: 'queued', clientId: 'client-1' });
+    const item = firstQueuedItem(h.queuedItems);
+    expect(item.files?.map((file) => file.path)).toEqual(['C:/tmp/a.png']);
+    expect(h.deps.sendToSessionInternal).not.toHaveBeenCalled();
+  });
+
   it('prepares an unhealthy live session before direct send and does not reuse the closed handle', async () => {
     const closed = { current: false };
     const liveSession = createLiveSession(async (_message, opts) => {
