@@ -330,9 +330,11 @@ export async function collectOutboundAttachments(
   }
 
   // Collection is not a delivery receipt. Keep captions without claiming the channel sent them.
-  const captions = new Map(taskImageReferences(finalText).filter((ref) => visitedImageUrls.has(ref.url))
-    .map((ref) => [ref.url, ref.alt ? `🖼️ _${ref.alt.replace(/[*_\[\]\\]/g, '\\$&')}_` : '']));
-  const transformed = transformXdtRefs(rewriteTaskImageReferences(finalText, captions, 'literal'), {
+  const imageUrls = new Map([...visitedImageUrls].map((url) => [url, url]));
+  const captionText = rewriteTaskImageReferences(finalText, imageUrls, (ref) =>
+    ref.alt ? `🖼️ _${ref.alt.replace(/[*_\[\]\\]/g, '\\$&')}_` : '',
+  );
+  const transformed = transformXdtRefs(captionText, {
     file: ({ alt, url }) => {
       const absPath = fileAbsPathByUrl.get(url);
       return absPath !== null && absPath !== undefined && sentFileAbsPaths.has(absPath) ? '' : alt;

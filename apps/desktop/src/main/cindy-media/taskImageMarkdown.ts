@@ -70,7 +70,7 @@ export function hasLocalTaskImages(text: unknown): text is string {
 export function rewriteTaskImageReferences(
   text: string,
   replacements: ReadonlyMap<string, string>,
-  mode: 'url' | 'alt' | 'literal' = 'url',
+  mode: 'url' | 'alt' | ((image: TaskImageReference) => string) = 'url',
 ): string {
   if (!replacements.size) return text;
   let result = text;
@@ -82,7 +82,7 @@ export function rewriteTaskImageReferences(
     const alt = image.alt.replace(/[\\\[\]]/g, '\\$&');
     const title = image.title ? ` "${image.title.replace(/[\\"]/g, '\\$&')}"` : '';
     const replacement =
-      mode === 'alt' ? alt : mode === 'literal' ? url : `![${alt}](${url}${title})`;
+      typeof mode === 'function' ? mode(image) : mode === 'alt' ? alt : `![${alt}](${url}${title})`;
     edits.push({ start: image.start, end: image.end, text: replacement });
     if (image.identifier) replacedDefinitions.add(image.identifier);
   }

@@ -8,61 +8,89 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-it.each([403, 500, 200])('does not label HTTP %s as a deleted image', async (status) => {
-  const fetch = vi.fn(async () => ({ status, body: null }));
-  vi.stubGlobal('fetch', fetch);
-  const { result } = renderHook(() => useImageLoadFailure('xdt-image:///tmp/bad.png'));
+it.each(['INTERNAL', 'PERMISSION_DENIED', 'INVALID_PARAMS'])(
+  'does not label %s as a deleted image',
+  async (code) => {
+    const read = vi.fn().mockRejectedValue(new Error(`[${code}] Cannot read image`));
+    vi.stubGlobal('electronAPI', { readCachedImageAsBase64: read });
+    const { result } = renderHook(() => useImageLoadFailure('xdt-image:///tmp/bad.png'));
+    act(() => result.current.onError());
+    await act(async () => {});
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(result.current.status).toBe('unavailable');
+  },
+);
+
+it.each(['cindy-media://blobs/a.png', 'xdt-image://images/a.png'])(
+  'uses the preload reader to confirm missing bytes for %s without CORS fetch',
+  async (src) => {
+    const read = vi
+      .fn()
+      .mockRejectedValue(
+        new Error(
+          "Error invoking remote method 'image-cache:read-base64': Error: [NOT_FOUND] Image file not found",
+        ),
+      );
+    vi.stubGlobal('electronAPI', { readCachedImageAsBase64: read });
+    const fetch = vi.fn().mockRejectedValue(new TypeError('Failed to fetch'));
+    vi.stubGlobal('fetch', fetch);
+    const { result } = renderHook(() => useImageLoadFailure(src));
+    act(() => result.current.onError());
+    await waitFor(() => expect(result.current.status).toBe('missing'));
+    expect(read).toHaveBeenCalledWith({ url: src });
+    expect(fetch).not.toHaveBeenCalled();
+  },
+);
+
+it('keeps existing bytes with decode errors unavailable', async () => {
+  vi.stubGlobal('electronAPI', {
+    readCachedImageAsBase64: vi.fn().mockResolvedValue({ base64: 'bad', mimeType: 'image/png' }),
+  });
+  const { result } = renderHook(() => useImageLoadFailure('cindy-media://blobs/a.png'));
   act(() => result.current.onError());
-  await waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
+  await act(async () => {});
   expect(result.current.status).toBe('unavailable');
 });
 
-it('labels only a confirmed local 404 as missing', async () => {
-  vi.stubGlobal(
-    'fetch',
-    vi.fn(async () => ({ status: 404, body: null })),
-  );
-  const { result } = renderHook(() => useImageLoadFailure('cindy-media://blobs/a.png'));
-  act(() => result.current.onError());
-  await waitFor(() => expect(result.current.status).toBe('missing'));
-});
-
 it('discards late diagnostics after a repaired source replaces the bad link', async () => {
-  let resolve!: (value: unknown) => void;
-  vi.stubGlobal(
-    'fetch',
-    vi.fn(
+  let reject!: (value: unknown) => void;
+  vi.stubGlobal('electronAPI', {
+    readCachedImageAsBase64: vi.fn(
       () =>
-        new Promise((r) => {
-          resolve = r;
+        new Promise((_, r) => {
+          reject = r;
         }),
     ),
-  );
+  });
   const { result, rerender } = renderHook(({ src }) => useImageLoadFailure(src), {
     initialProps: { src: 'xdt-image:///tmp/a.png' },
   });
   act(() => result.current.onError());
   rerender({ src: 'cindy-media://blobs/saved.png' });
   await act(async () => {
-    resolve({ status: 404, body: null });
+    reject(new Error('[NOT_FOUND] Image file not found'));
   });
   expect(result.current.status).toBeNull();
 });
 
-it('keeps incomplete streaming images loading and retries on focus without polling', () => {
-  const fetch = vi.fn();
-  vi.stubGlobal('fetch', fetch);
-  const { result, rerender } = renderHook(
-    ({ streaming }) => useImageLoadFailure('cindy-remote-media://transfer', streaming),
-    {
-      initialProps: { streaming: true },
-    },
-  );
-  act(() => result.current.onError());
-  expect(result.current.status).toBe('loading');
-  expect(fetch).not.toHaveBeenCalled();
-  rerender({ streaming: false });
-  expect(result.current.status).toBe('unavailable');
-  act(() => window.dispatchEvent(new Event('focus')));
-  expect(result.current.status).toBeNull();
-});
+it.each(['focus', 'online'])(
+  'keeps remote images unavailable and retries on %s without polling',
+  (event) => {
+    const read = vi.fn();
+    vi.stubGlobal('electronAPI', { readCachedImageAsBase64: read });
+    const { result, rerender } = renderHook(
+      ({ streaming }) => useImageLoadFailure('cindy-remote-media://transfer', streaming),
+      {
+        initialProps: { streaming: true },
+      },
+    );
+    act(() => result.current.onError());
+    expect(result.current.status).toBe('loading');
+    expect(read).not.toHaveBeenCalled();
+    rerender({ streaming: false });
+    expect(result.current.status).toBe('unavailable');
+    expect(read).not.toHaveBeenCalled();
+    act(() => window.dispatchEvent(new Event(event)));
+    expect(result.current.status).toBeNull();
+  },
+);

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { extractIpcError } from '../../utils/ipcError';
 
 /** An img error alone cannot distinguish a missing file from a transport/decode failure. */
 export function useImageLoadFailure(src: string | undefined, streaming = false) {
@@ -12,21 +13,18 @@ export function useImageLoadFailure(src: string | undefined, streaming = false) 
     const retry = () => setFailure(null);
     window.addEventListener('focus', retry);
     window.addEventListener('online', retry);
-    const controller = new AbortController();
-    // Only the local managed protocol has a known 404 = file missing contract.
-    // Remote URLs can return 404 for expired transfers, so remain "unavailable".
+    let cancelled = false;
+    // These protocols intentionally disallow renderer fetch (CORS). Reuse the
+    // existing preload reader; only Main's confirmed ENOENT means "missing".
     if (src?.startsWith('cindy-media://') || src?.startsWith('xdt-image://')) {
-      void fetch(src, { signal: controller.signal })
-        .then(async (response) => {
-          await response.body?.cancel();
-          if (!controller.signal.aborted && response.status === 404) {
-            setFailure({ src, missing: true });
-          }
-        })
-        .catch(() => {});
+      void window.electronAPI?.readCachedImageAsBase64({ url: src }).catch((error: unknown) => {
+        if (!cancelled && extractIpcError(error)?.code === 'NOT_FOUND') {
+          setFailure({ src, missing: true });
+        }
+      });
     }
     return () => {
-      controller.abort();
+      cancelled = true;
       window.removeEventListener('focus', retry);
       window.removeEventListener('online', retry);
     };

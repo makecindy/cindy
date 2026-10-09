@@ -105,6 +105,19 @@ function deps(
 }
 
 describe('collectOutboundAttachments', () => {
+  it('deduplicates bytes while preserving each caption for repeated image URLs', async () => {
+    const url = 'xdt-image://img1.png';
+    const text = `![overview](${url})\n![detail][same]\n![](${url})\n\n[same]: ${url}\n\n\`![example](${url})\``;
+    const r = await collectOutboundAttachments(
+      text,
+      [],
+      deps({ '/cache/img1.png': Buffer.from('png') }),
+    );
+    expect(r.attachments).toHaveLength(1);
+    expect(r.text).toBe(`🖼️ _overview_\n🖼️ _detail_\n\n\n\n\n\`![example](${url})\``);
+    expect(r.skipped).toBe(0);
+  });
+
   it('图片引用 + 旁路图去重收集, 正文替换成提示; 文件链接剥离', async () => {
     const text =
       '成果:\n![效果图](xdt-image://img1.png)\n详见 [报告](xdt-file:///out/report.md) 收工';
