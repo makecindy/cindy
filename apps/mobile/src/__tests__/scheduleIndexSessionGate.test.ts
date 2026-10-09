@@ -84,6 +84,22 @@ describe('task page schedule index gate', () => {
     expect(sessionMayHaveScheduleRuns('mac', 'ordinary', 'desktop')).toBe(true);
   });
 
+  it('does not let a scan from before an account switch record bindings afterwards', async () => {
+    const remote = maker();
+    let release!: () => void;
+    remote.listSidebarIndexRuns.mockImplementationOnce(async () => {
+      await new Promise<void>((resolveRelease) => { release = resolveRelease; });
+      return { runs: [] };
+    });
+    const oldAccountScan = loadSharedSessionScheduleIndex('mac', remote.maker);
+    await vi.waitFor(() => expect(remote.listSidebarIndexRuns).toHaveBeenCalled());
+    clearSessionScheduleIndexCache(); // account switch: versions restart at 0
+    release();
+    await oldAccountScan;
+    expect(sessionMayHaveScheduleRuns('mac', 'pr-task', 'desktop')).toBe(true);
+    expect(sessionMayHaveScheduleRuns('mac', 'ordinary', 'desktop')).toBe(true);
+  });
+
   it('gates the task page read-marking scan before it starts', () => {
     const page = readFileSync(resolve(process.cwd(), 'app/sessions/[sessionId].tsx'), 'utf8').replace(/\r\n/g, '\n');
     const effect = page.slice(page.indexOf('const cancel = deferScheduleIndexHydration(() => {'));

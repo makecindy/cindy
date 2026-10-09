@@ -101,6 +101,9 @@ const scheduleIndexInvalidationVersions = new Map<string, number>();
  * noteScheduleEventInIndexCache); any other invalidation (link recovery, offline) makes it unknown.
  */
 const scheduleBoundSessionsByDevice = new Map<string, { sessionIds: ReadonlySet<string>; invalidationVersion: number }>();
+// Bumped on every clear (account switch). Invalidation versions restart at 0 after a clear and
+// device ids are machine-level, so a scan started before the clear must not record bindings.
+let scheduleIndexCacheGeneration = 0;
 
 /**
  * 错误标记匹配:优先结构化 code,兜底 message 文本(review:mobile 各处的
@@ -298,6 +301,7 @@ export function getScheduleIndexInvalidationVersion(deviceId: string): number {
 
 /** Clear cache, invalidation generations and binding knowledge (account switch, tests). */
 export function clearSessionScheduleIndexCache(): void {
+  scheduleIndexCacheGeneration += 1;
   scheduleIndexThrottleEntries.clear();
   scheduleIndexInvalidationVersions.clear();
   scheduleBoundSessionsByDevice.clear();
@@ -339,6 +343,7 @@ export async function loadSharedSessionScheduleIndex(
     // creating an entry so an abandoned waiter cannot poison active consumers.
     if (!canStart()) throw new Error('Schedule index consumer inactive');
     const invalidationVersion = getScheduleIndexInvalidationVersion(deviceId);
+    const cacheGeneration = scheduleIndexCacheGeneration;
     return withTransientRemoteRetry(() => {
       if (!canStart()) {
         // Cancellation is not a device failure: discard this pending entry on
@@ -351,7 +356,9 @@ export async function loadSharedSessionScheduleIndex(
         isDeviceUnresponsive: () => unresponsiveDevicesStore.has(deviceId),
       });
     }).then((index) => {
-      scheduleBoundSessionsByDevice.set(deviceId, { sessionIds: new Set(index.keys()), invalidationVersion });
+      if (cacheGeneration === scheduleIndexCacheGeneration) {
+        scheduleBoundSessionsByDevice.set(deviceId, { sessionIds: new Set(index.keys()), invalidationVersion });
+      }
       return index;
     });
   });
