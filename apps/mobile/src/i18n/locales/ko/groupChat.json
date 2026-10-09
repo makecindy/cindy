@@ -166,6 +166,7 @@
   "errors": {
     "memberLimit": "그룹 채팅에는 동료가 2~6명 필요합니다",
     "memberUnavailable": "사용할 수 없는 동료가 있습니다. 다른 동료를 골라 다시 시도하세요",
+    "mentionUnavailable": "멘션한 멤버를 더 이상 사용할 수 없습니다. 다시 선택한 후 보내세요.",
     "notFound": "이 그룹 채팅은 더 이상 존재하지 않습니다",
     "hostNotReady": "Cindy가 아직 준비 중입니다. 잠시 후 다시 시도하세요",
     "planOpen": "역할 분담이 진행 중입니다. 끝내거나 중지한 뒤 새로 시작하세요",

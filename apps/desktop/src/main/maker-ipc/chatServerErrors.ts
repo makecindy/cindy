@@ -13,7 +13,7 @@ export function chatErrorDiagnostic(error: unknown): { code: string; status?: nu
 export function chatGroupFailure(error: unknown): BotGroupFailure {
   const { code, status } = chatErrorDiagnostic(error);
   let errorCode: BotGroupErrorCode;
-  if (['PLAN_OPEN', 'PLAN_CLOSED', 'MEMBER_LIMIT', 'MEMBER_UNAVAILABLE', 'HOST_NOT_READY',
+  if (['PLAN_OPEN', 'PLAN_CLOSED', 'MEMBER_LIMIT', 'MEMBER_UNAVAILABLE', 'MENTION_UNAVAILABLE', 'HOST_NOT_READY',
     'INVALID_ATTACHMENT', 'ATTACHMENT_UNAVAILABLE', 'ATTACHMENT_TOO_LARGE', 'MEDIA_UPLOAD_FAILED',
     'AUTH_REQUIRED', 'IMPORT_PENDING', 'REQUEST_TIMEOUT'].includes(code)) errorCode = code as BotGroupErrorCode;
   else if (code === 'CONVERSATION_NOT_FOUND' || code === 'OWNER_CHANGED') errorCode = 'NOT_FOUND';

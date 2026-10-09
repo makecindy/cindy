@@ -369,6 +369,9 @@ it.each([true, false])(
     await connection.request(generation, { op: 'capabilities' });
     await connection.request(generation, { op: 'start', displayId: 'screen' });
     const closed = connection.close(generation);
+    expect(closed).toBeUndefined();
+    expect(connection.active).toBe(false);
+    expect(() => connection.check(generation)).toThrow('DESKTOP_STOPPED');
     expect(dispose).toHaveBeenCalledOnce();
     expect(request.mock.calls.at(-1)?.[1]).toEqual({
       op: 'stop',
@@ -379,6 +382,106 @@ it.each([true, false])(
     await closed;
   },
 );
+
+it('keeps explicit exit locking on a start reply that arrives after close and rebind', async () => {
+  let finish!: (value: unknown) => void;
+  const request = vi.fn(async (_device, message, check) => {
+    check();
+    if (message.op === 'capabilities') return { lockOnExit: true };
+    if (message.op === 'start')
+      return new Promise((resolve) => {
+        finish = resolve;
+      });
+    return {};
+  });
+  const connection = new RemoteViewerConnection({
+    owner: () => 'owner',
+    request,
+    readClipboard: () => '',
+    writeClipboard: () => {},
+    preferences: () => ({ ...DEFAULT_VIEWER_PREFERENCES, lockOnExit: true }),
+  });
+  connection.bind({ deviceId: 'old', name: 'Old' });
+  connection.setActive(true);
+  const generation = connection.generation;
+  await connection.request(generation, { op: 'capabilities' });
+  const pending = connection.request(generation, { op: 'start', displayId: 'screen' });
+  connection.close(generation);
+  connection.bind({ deviceId: 'new', name: 'New' });
+  connection.setActive(true);
+  finish({ lease: 'late-lease' });
+  expect(await pending).toEqual({ ok: false, code: 'DESKTOP_STOPPED' });
+  expect(request.mock.calls.at(-1)?.slice(0, 2)).toEqual([
+    'old',
+    { op: 'stop', lease: 'late-lease', lockScreen: true },
+  ]);
+  expect(connection.active).toBe(true);
+});
+
+it.each([false, true])(
+  'returns the saved preference before a failed remote sync, enabled=%s',
+  async (enabled) => {
+    let fail!: (error: Error) => void;
+    const sync = new Promise<never>((_resolve, reject) => {
+      fail = reject;
+    });
+    const request = vi.fn(async (_target, message, check) => {
+      check();
+      if (message.op === 'heartbeat') return sync;
+      return message.op === 'start' ? { lease: 'lease' } : {};
+    });
+    const connection = new RemoteViewerConnection({
+      owner: () => 'owner',
+      request,
+      readClipboard: () => '',
+      writeClipboard: () => {},
+      preferences: () => ({ ...DEFAULT_VIEWER_PREFERENCES, lockOnExit: !enabled }),
+      savePreferences: async (_device, patch) => ({ ...DEFAULT_VIEWER_PREFERENCES, ...patch }),
+    });
+    connection.bind({ deviceId: 'target', name: 'Target' });
+    connection.setActive(true);
+    const generation = connection.generation;
+    await connection.request(generation, { op: 'start', displayId: 'screen' });
+    await expect(
+      connection.preferences(generation, { lockOnExit: enabled }),
+    ).resolves.toMatchObject({ lockOnExit: enabled });
+    expect(request.mock.calls.at(-1)?.[1]).toMatchObject({ op: 'heartbeat', lockOnExit: enabled });
+    fail(new Error('INVOKE_TIMEOUT'));
+    await connection.request(generation, { op: 'heartbeat', lease: 'lease' });
+    await expect(connection.preferences(generation)).resolves.toMatchObject({
+      lockOnExit: enabled,
+    });
+    expect(request.mock.calls.at(-1)?.[1]).toMatchObject({ lockOnExit: enabled });
+  },
+);
+
+it('sends the lock policy before a lease starts and immediately after changing the preference', async () => {
+  const request = vi.fn(async (_target, message, check) => {
+    check();
+    return message.op === 'start' ? { lease: 'lease', controlling: false } : {};
+  });
+  const connection = new RemoteViewerConnection({
+    owner: () => 'owner',
+    request,
+    readClipboard: () => '',
+    writeClipboard: () => {},
+    preferences: () => ({ ...DEFAULT_VIEWER_PREFERENCES, lockOnExit: true }),
+    savePreferences: async (_device, patch) => ({ ...DEFAULT_VIEWER_PREFERENCES, ...patch }),
+  });
+  connection.bind({ deviceId: 'target', name: 'Target' });
+  connection.setActive(true);
+  const generation = connection.generation;
+  await connection.request(generation, { op: 'start', displayId: 'screen' });
+  expect(request.mock.calls.at(-1)?.[1]).toMatchObject({ op: 'start', lockOnExit: true });
+  await connection.preferences(generation, { lockOnExit: false });
+  expect(request.mock.calls.at(-1)?.[1]).toEqual({
+    op: 'heartbeat',
+    lease: 'lease',
+    lockOnExit: false,
+  });
+  await connection.request(generation, { op: 'heartbeat', lease: 'lease' });
+  expect(request.mock.calls.at(-1)?.[1]).toMatchObject({ lockOnExit: false });
+});
 
 it.each([false, true])(
   'keeps rich clipboard payloads in Main and cancels writes after control release %s',
@@ -473,7 +576,9 @@ describe('remembered viewer resolution', () => {
     await expect(connection.resolution(generation, 'screen', fit)).resolves.toEqual(fit);
     expect(saveResolution).toHaveBeenCalledWith('computer-a', 'screen', fit);
     await expect(connection.resolution(generation, 'screen')).resolves.toEqual(fit);
-    await expect(connection.resolution(generation, 'other', fit)).rejects.toThrow('INVALID_REQUEST');
+    await expect(connection.resolution(generation, 'other', fit)).rejects.toThrow(
+      'INVALID_REQUEST',
+    );
     await connection.resolution(generation, 'screen', null);
     await expect(connection.resolution(generation, 'screen')).resolves.toBeNull();
   });
@@ -504,13 +609,15 @@ describe('remembered viewer resolution', () => {
 
 describe('requests carried by the viewer window’s media data channel', () => {
   function channelFixture(channelRequests = true) {
-    const relay = vi.fn(async (_target: string, message: RemoteDesktopRequest, check: () => void) => {
-      check();
-      if (message.op === 'capabilities') return { channelRequests, clipboardText: true };
-      if (message.op === 'start') return { lease: 'lease', controlling: false };
-      if (message.op === 'control') return { controlling: message.enabled };
-      return { ok: true };
-    });
+    const relay = vi.fn(
+      async (_target: string, message: RemoteDesktopRequest, check: () => void) => {
+        check();
+        if (message.op === 'capabilities') return { channelRequests, clipboardText: true };
+        if (message.op === 'start') return { lease: 'lease', controlling: false };
+        if (message.op === 'control') return { controlling: message.enabled };
+        return { ok: true };
+      },
+    );
     const carried: { generation: number; id: string; request: RemoteDesktopRequest }[] = [];
     let accept = true;
     const connection = new RemoteViewerConnection({
@@ -633,15 +740,17 @@ describe('requests carried by the viewer window’s media data channel', () => {
 
 describe('control granted with the lease (autoControl)', () => {
   it('records a grant from start or a display change like a control reply', async () => {
-    const relay = vi.fn(async (_target: string, message: RemoteDesktopRequest, check: () => void) => {
-      check();
-      if (message.op === 'capabilities') return { autoControl: true, clipboardText: true };
-      if (message.op === 'start')
-        return { lease: 'lease', controlling: message.control === true, display: { id: 's' } };
-      if (message.op === 'viewerDisplay')
-        return { lease: 'lease', controlling: message.control === true, display: { id: 'v' } };
-      return { ok: true };
-    });
+    const relay = vi.fn(
+      async (_target: string, message: RemoteDesktopRequest, check: () => void) => {
+        check();
+        if (message.op === 'capabilities') return { autoControl: true, clipboardText: true };
+        if (message.op === 'start')
+          return { lease: 'lease', controlling: message.control === true, display: { id: 's' } };
+        if (message.op === 'viewerDisplay')
+          return { lease: 'lease', controlling: message.control === true, display: { id: 'v' } };
+        return { ok: true };
+      },
+    );
     const connection = new RemoteViewerConnection({
       owner: () => 'owner',
       request: relay,

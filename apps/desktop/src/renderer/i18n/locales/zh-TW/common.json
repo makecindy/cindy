@@ -8522,6 +8522,7 @@
       "errors": {
         "memberLimit": "一個群聊需要 2–6 位夥伴",
         "memberUnavailable": "有夥伴現在無法使用，換一位再試",
+        "mentionUnavailable": "點名的成員已無法使用，請重新選擇後傳送",
         "notFound": "這個群聊已不存在",
         "hostNotReady": "Cindy 還在準備中，請稍後重試",
         "planOpen": "正在分工，做完或停止後才能安排新的",

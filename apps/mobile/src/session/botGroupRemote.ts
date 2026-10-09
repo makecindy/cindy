@@ -377,6 +377,7 @@ const ERROR_CODES: readonly BotGroupErrorCode[] = [
   'GROUP_ARCHIVED',
   'MEMBER_LIMIT',
   'MEMBER_UNAVAILABLE',
+  'MENTION_UNAVAILABLE',
   'PLAN_OPEN',
   'PLAN_CLOSED',
   'HOST_NOT_READY',
@@ -424,11 +425,13 @@ export interface BotGroupSendAttempt {
   division: boolean;
   /** Ids of the attached uploads, in order. */
   attachmentIds: readonly string[];
+  /** Explicit target identity, independent of the displayed names. */
+  mentionSignature?: string;
   clientId: string;
 }
 
 /**
- * A retry of the same text with the same 「分工」 tag and the same attachments reuses its
+ * A retry of the same text, targets, 「分工」 tag and attachments reuses its
  * clientId, so the host returns the message it already stored instead of writing it twice.
  */
 export function nextBotGroupSendAttempt(
@@ -437,10 +440,14 @@ export function nextBotGroupSendAttempt(
   division: boolean,
   newClientId: () => string,
   attachmentIds: readonly string[] = [],
+  mentions?: BotGroupMention,
 ): BotGroupSendAttempt {
+  const mentionSignature = mentions === undefined ? undefined : JSON.stringify([mentions.all, mentions.botIds]);
   return previous && previous.text === text && previous.division === division
+    && previous.mentionSignature === mentionSignature
     && previous.attachmentIds.length === attachmentIds.length
     && previous.attachmentIds.every((attachmentId, index) => attachmentId === attachmentIds[index])
     ? previous
-    : { text, division, attachmentIds: [...attachmentIds], clientId: newClientId() };
+    : { text, division, attachmentIds: [...attachmentIds], clientId: newClientId(),
+      ...(mentionSignature === undefined ? {} : { mentionSignature }) };
 }

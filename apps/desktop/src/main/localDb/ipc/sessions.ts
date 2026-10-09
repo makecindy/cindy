@@ -1256,6 +1256,19 @@ export function registerSessionIpc(
       const cap = clampLimit(limit, 20);
       const includePinned = shouldIncludePinnedSessions(options);
       const fresh = shouldBypassSessionListSingleFlight(options);
+      const rawBefore = options && typeof options === 'object' ? (options as { before?: unknown }).before : undefined;
+      let before: { updatedAt: number; id: string } | undefined;
+      if (rawBefore !== undefined) {
+        // Pagination is local renderer-only until remote capability negotiation exists.
+        assertTrustedAppRendererEvent(event);
+        const value = requireObject(rawBefore, 'before');
+        if (typeof value.updatedAt !== 'number' || !Number.isSafeInteger(value.updatedAt) || value.updatedAt < 0
+          || typeof value.id !== 'string' || !value.id || value.id.length > 200 || usageHistory || includePinned) {
+          throwIpcError('INVALID_PARAMS', 'Invalid session list cursor');
+        }
+        before = { updatedAt: value.updatedAt, id: value.id };
+      }
+
       // 支持 Sidebar Filter 的 Active/Archived/All status 过滤。
       //   - 'active' / 'archived' → WHERE status = ?
       //   - 'all' / undefined / 其它非法值 → WHERE status != 'deleted'
@@ -1270,7 +1283,7 @@ export function registerSessionIpc(
         const sourceFilter = inArray(sessions.source, DESKTOP_VISIBLE_SESSION_SOURCES);
         const statusWhere = () =>
           statusFilter ? eq(sessions.status, statusFilter) : ne(sessions.status, 'deleted');
-        const rows = await selectSessionListRows(db, and(sourceFilter, statusWhere()), cap);
+        const rows = await selectSessionListRows(db, and(sourceFilter, statusWhere()), cap, before);
 
         let mergedRows = rows;
         if (includePinned) {
@@ -1303,7 +1316,7 @@ export function registerSessionIpc(
       // forceRefresh / status 重拉带 fresh，不并入写前那次查询。
       const result = usageHistory
         ? await loadUsageHistoryRows()
-        : userId && !fresh
+        : userId && !fresh && !before
           ? await runSessionListSingleFlight(
               buildSessionListFlightKey({
                 userId,

@@ -35,6 +35,9 @@ keyboard focus; without it, Cmd/Ctrl+W requests closing this viewer.
 Native window close and the close shortcut share a confirmation
 dialog only after a connection is established; cancelling keeps the connection and control lease. Confirmation belongs
 to the current window generation and cannot close a later connection.
+After confirmation, the local window closes immediately, retires its input and
+heartbeat authority, and sends lease cleanup in the background. A missing or
+failed remote reply cannot keep the window open or close a replacement window.
 
 Desktop uses the local system cursor inside the remote picture, with standard
 shape hints from the host. Pointer size is independent of remote resolution and zoom.
@@ -56,7 +59,10 @@ macOS-to-macOS automatic unlock. Non-secret preferences are scoped to the local
 account and target computer; only explicit overrides are stored. Host effects
 are capability-gated and applied after control is confirmed. Privacy failures
 remain visible ahead of mute or clipboard notices, with explicit retry. Explicit
-exit waits for the requested lock; reconnect and display changes do not lock.
+exit does not wait for the requested lock. The host receives the lock-on-exit
+policy at start and on heartbeats, then locks locally on stop, signaling loss or
+lease expiry. Live-lease resume/takeover and display changes do not lock; recovery
+after expiry waits for the already-triggered lock to finish.
 See [native credential behavior](remote-desktop-credentials.md) for password storage.
 Video quality changes are coalesced while negotiation is pending. The toolbar
 shows receive rate and clears stale network samples, while resolution discovery

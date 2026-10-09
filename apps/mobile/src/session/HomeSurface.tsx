@@ -223,6 +223,7 @@ import {
   resolveHomeDeviceSyncIds,
   runHomeDeviceSyncBatch,
 } from '@/session/homeDeviceSync';
+import { createHomeListFreshness, planHomeListFocusReturn } from '@/session/homeListFreshness';
 import { serializeNewSessionDeviceOptions } from '@/session/newSession';
 import {
   buildRemoteSessionCardPreview,
@@ -500,6 +501,28 @@ function HomeScreenContent({ active = true, onModeChange, width, newSessionInSys
   // Reconnect rehydrate, presence recovery and Home refresh can all request the same device
   // at once. Share one authoritative list pull per device + scope generation.
   const homeHydrateInFlightByDeviceRef = useRef(new Map<string, HomeHydrateInFlightEntry>());
+  // Home 被其它页面盖住时继续持有 `sessions` 订阅、接收增量补丁；回到首页只重拉
+  // 「可能漏了推送」的设备（判据见 homeListFreshness），不再每次整份重拉所有电脑。
+  const homeListFreshnessRef = useRef(createHomeListFreshness());
+  // 最近一次离开首页的时刻；null = 当前在首页（或尚未离开过）。
+  const homeBlurredAtRef = useRef<number | null>(null);
+  // 待完成的整轮重拉（含设备清单），由 startSilentHomeSync 统一登记。值是请求序号，只有在它
+  // 之后开始的 loadHome 整轮成功提交才清除；失败、失焦退出或被跳过时保留，下次回首页仍整轮重拉。
+  const homeFullReloadOnFocusRef = useRef<number | null>(null);
+  const homeFullReloadSeqRef = useRef(0);
+  const requestHomeFullReload = useCallback(() => {
+    homeFullReloadOnFocusRef.current = ++homeFullReloadSeqRef.current;
+  }, []);
+  // 自动化角标待补刷的设备：首页被盖住时收到事件、或刷新被失焦跳过／结果被丢弃。值是登记
+  // 序号，只有同一序号的刷新成功应用后才清除；回首页只刷新这些设备。
+  const homeScheduleIndexDirtyRef = useRef(new Map<string, number>());
+  const homeScheduleIndexDirtySeqRef = useRef(0);
+  const markHomeScheduleIndexDirty = useCallback((deviceId: string) => {
+    const seq = ++homeScheduleIndexDirtySeqRef.current;
+    homeScheduleIndexDirtyRef.current.set(deviceId, seq);
+    return seq;
+  }, []);
+  const homeSyncRowsRef = useRef<ReturnType<typeof toDeviceListItems<DeviceView>>>([]);
   const hydrateDeviceSessionsRef = useRef<HydrateDeviceSessions>(async () => ({
     failure: null,
     offline: false,
@@ -648,6 +671,10 @@ function HomeScreenContent({ active = true, onModeChange, width, newSessionInSys
     homeListOwnedDeviceIdsRef.current.clear();
     homeSyncGenerationByDeviceRef.current.clear();
     homeHydrateInFlightByDeviceRef.current.clear();
+    homeListFreshnessRef.current.clear();
+    homeBlurredAtRef.current = null;
+    homeFullReloadOnFocusRef.current = null;
+    homeScheduleIndexDirtyRef.current.clear();
     scheduleIndexDeferRegistryRef.current.cancelAll();
     scheduleEventVersionsRef.current.clear();
     presenceFreshnessRef.current = createPresenceFreshnessTracker();
@@ -708,6 +735,7 @@ function HomeScreenContent({ active = true, onModeChange, width, newSessionInSys
 
     for (const deviceId of diff.release) {
       advanceHomeSyncGeneration(deviceId);
+      homeListFreshnessRef.current.invalidate(deviceId);
       releaseHomeListOwner(deviceId);
     }
     for (const deviceId of diff.acquire) {
@@ -757,6 +785,7 @@ function HomeScreenContent({ active = true, onModeChange, width, newSessionInSys
   const markDeviceOffline = useCallback((deviceId: string) => {
     // 普通离线是可恢复的传输状态:保留 session/messages,只清 live 投影并失效
     // message marker。恢复后会话立即显示 last-known 内容,后台 reopen 再补最新窗口。
+    homeListFreshnessRef.current.invalidate(deviceId);
     softInvalidateDeviceMirror(deviceId);
     setDevices((current) => {
       const next = reconcileDeviceViews(markDeviceViewsOffline(current, new Set([deviceId]))).devices;
@@ -770,11 +799,14 @@ function HomeScreenContent({ active = true, onModeChange, width, newSessionInSys
     sessionIds: readonly string[],
     options?: { accountGeneration?: number; homeSyncGeneration?: number },
   ) => {
-    if (!screenFocusedRef.current || AppState.currentState !== 'active') return;
     const expectedAccountGeneration = options?.accountGeneration ?? accountGeneration;
+    if (homeAccountGenerationRef.current !== expectedAccountGeneration) return;
+    if (!homeSyncTargetDeviceIdsRef.current.has(deviceId)) return;
+    // 先登记待补刷，成功应用后才清除：失焦跳过、在途结果被丢弃都留给回首页补刷。
+    const pendingSeq = markHomeScheduleIndexDirty(deviceId);
+    if (!screenFocusedRef.current || AppState.currentState !== 'active') return;
     const expectedHomeSyncGeneration = options?.homeSyncGeneration
       ?? homeSyncGenerationByDeviceRef.current.get(deviceId);
-    if (homeAccountGenerationRef.current !== expectedAccountGeneration) return;
     if (
       expectedHomeSyncGeneration === undefined
       || !isCurrentHomeSyncTarget(deviceId, expectedHomeSyncGeneration)
@@ -804,11 +836,14 @@ function HomeScreenContent({ active = true, onModeChange, width, newSessionInSys
           sessionIds,
           nextIndex,
         ));
+        if (homeScheduleIndexDirtyRef.current.get(deviceId) === pendingSeq) {
+          homeScheduleIndexDirtyRef.current.delete(deviceId);
+        }
       })
       .catch(() => {
         // 网络失败时保留旧数据,不清零已有徽标——数据清零只应由明确的"已读"事件触发。
       });
-  }, [accountGeneration, invoke, isCurrentHomeSyncTarget]);
+  }, [accountGeneration, invoke, isCurrentHomeSyncTarget, markHomeScheduleIndexDirty]);
 
   const hydrateDeviceSessionsOnce = useCallback((
     device: DeviceView,
@@ -822,6 +857,7 @@ function HomeScreenContent({ active = true, onModeChange, width, newSessionInSys
       return { failure: null, offline: false, superseded: true };
     }
     updateDeviceConnectionState(device.deviceId, 'syncing');
+    const freshnessToken = homeListFreshnessRef.current.capture(device.deviceId);
     try {
       const assertCurrentScope = () => {
         if (
@@ -901,6 +937,8 @@ function HomeScreenContent({ active = true, onModeChange, width, newSessionInSys
       // 抢同一条 WS 管道(见 scheduleIndexDefer / issue #324)。home 自动化分组与名称已由 fallbackScheduleInfo
       // 兜底,徽标晚半拍出现即可。
       // 按设备 id 登记:同设备上一轮还没执行的延后任务会被先取消,避免较早回调用旧 nextSessions 覆盖新状态。
+      // 延后刷新若因首页失焦被跳过，回首页时补刷（列表已标新鲜，不会再触发 hydrate）。
+      markHomeScheduleIndexDirty(device.deviceId);
       scheduleIndexDeferRegistryRef.current.schedule(device.deviceId, () => {
         void (async () => {
           while (syncInFlightRef.current) await syncInFlightRef.current;
@@ -914,6 +952,15 @@ function HomeScreenContent({ active = true, onModeChange, width, newSessionInSys
           });
         })();
       });
+      // 列表被 LIST_LIMIT 截断时，补丁可能改变前 N 条的成员（如归档后第 N+1 条该补进、
+      // 窗口外任务因活动排进来），本地无法补全：记下 mutation epoch，回首页时有变就重拉。
+      homeListFreshnessRef.current.markFresh(
+        device.deviceId,
+        freshnessToken,
+        nextSessions.length >= LIST_LIMIT
+          ? remoteSessionStore.captureDeviceSessionListMutationEpoch(device.deviceId)
+          : null,
+      );
       updateDeviceConnectionState(device.deviceId, 'idle');
       // hydrate 成功后去抖回写首页列表缓存(collect 在定时器触发时才读 store,拿届时最新快照;
       // 多设备并发 hydrate 只落盘一次)。不在 store 每次变更时写盘。缓存按账号键控。
@@ -928,6 +975,7 @@ function HomeScreenContent({ active = true, onModeChange, width, newSessionInSys
         return { failure: null, offline: false, superseded: true };
       }
       const offline = isDeviceOfflineError(err);
+      homeListFreshnessRef.current.invalidate(device.deviceId);
       if (offline) markDeviceOffline(device.deviceId);
       updateDeviceConnectionState(device.deviceId, 'failed');
       return {
@@ -936,7 +984,7 @@ function HomeScreenContent({ active = true, onModeChange, width, newSessionInSys
         superseded: false,
       };
     }
-  }, 'foreground'), [HOME_LIST_SUBSCRIPTION_OWNER, homeCacheUserId, invoke, isCurrentHomeSyncTarget, markDeviceOffline, refreshDeviceScheduleIndex, statusFilter, active, subscribe, updateDeviceConnectionState]);
+  }, 'foreground'), [HOME_LIST_SUBSCRIPTION_OWNER, homeCacheUserId, invoke, isCurrentHomeSyncTarget, markDeviceOffline, markHomeScheduleIndexDirty, refreshDeviceScheduleIndex, statusFilter, active, subscribe, updateDeviceConnectionState]);
 
   const hydrateDeviceSessions = useCallback((
     device: DeviceView,
@@ -1033,6 +1081,7 @@ function HomeScreenContent({ active = true, onModeChange, width, newSessionInSys
       });
     }
 
+    const fullReloadRequestAtStart = homeFullReloadOnFocusRef.current;
     const rawTask = (async () => {
       setError(null);
       // 记录 REST 请求发起时的 presence 纪元:在请求飞行期间收到过 presence 补丁的设备,
@@ -1141,6 +1190,7 @@ function HomeScreenContent({ active = true, onModeChange, width, newSessionInSys
       setDevices(nextDevices);
       lastSyncedAtRef.current = now;
       setLastSyncedAt(now);
+      if (homeFullReloadOnFocusRef.current === fullReloadRequestAtStart) homeFullReloadOnFocusRef.current = null;
       if (selectedDeviceIdRef.current === selectedDeviceIdAtSyncStart) {
         setError(failures.length > 0 ? failures : null);
       }
@@ -1349,27 +1399,29 @@ function HomeScreenContent({ active = true, onModeChange, width, newSessionInSys
         remoteSessionStore.requestReseed(deviceId);
         continue;
       }
+      // 首页被盖住时刷新会被门禁跳过；记下这台，回首页再刷，不在返回时兜底全量刷新。
+      if (!screenFocusedRef.current) {
+        markHomeScheduleIndexDirty(deviceId);
+        continue;
+      }
       refreshDeviceScheduleIndex(deviceId, sessionIds);
     }
   }), [refreshDeviceScheduleIndex]);
 
-  // 从自动化 / 会话页返回首页时,兜底刷新一次 scheduleIndex:
-  // markScheduleRunsRead 的桌面广播若在导航切换途中丢失(silent swallow / 弱网 / tap listener
-  // 未挂),之前依赖 remoteScheduleEventStore.subscribe 的路径就永远不会补跑,首页那颗
-  // "已完成未读"绿点会一直挂着。useFocusEffect 每次 focus 都按当前设备清一遍未读徽标,
-  // 命中真实变化才会 setScheduleIndex(entries 等值比较),不触发无谓 re-render。
-  useFocusEffect(
-    useCallback(() => {
-      for (const device of devicesRef.current) {
-        if (!homeSyncTargetDeviceIdsRef.current.has(device.deviceId)) continue;
-        const sessionIds = remoteSessionStore.getSessions()
-          .filter((session) => session.deviceLinkDeviceId === device.deviceId)
-          .map((session) => session.id);
-        if (sessionIds.length === 0) continue;
-        refreshDeviceScheduleIndex(device.deviceId, sessionIds);
-      }
-    }, [refreshDeviceScheduleIndex]),
-  );
+  // 刷新首页的自动化角标(scheduleIndex)。整轮返回(首次、后台、重连、离开太久)兜底刷新
+  // 所有设备:那些情况下自动化事件可能漏收。普通返回只刷新离开期间收到过事件的设备——
+  // 事件走首页常驻的 `sessions` 订阅,离开期间照常到达(见 homeScheduleIndexDirtyRef)。
+  const refreshHomeScheduleIndexes = useCallback((onlyDeviceIds?: ReadonlySet<string>) => {
+    for (const device of devicesRef.current) {
+      if (!homeSyncTargetDeviceIdsRef.current.has(device.deviceId)) continue;
+      if (onlyDeviceIds && !onlyDeviceIds.has(device.deviceId)) continue;
+      const sessionIds = remoteSessionStore.getSessions()
+        .filter((session) => session.deviceLinkDeviceId === device.deviceId)
+        .map((session) => session.id);
+      if (sessionIds.length === 0) continue;
+      refreshDeviceScheduleIndex(device.deviceId, sessionIds);
+    }
+  }, [refreshDeviceScheduleIndex]);
 
   // 初次加载 + 每次重连(connectionEpoch 变化)都全量刷新。presence 只在状态"变化"时广播、
   // 服务端没有面向新连接的全量重放,后台期间(client.stop)漏掉的上/下线事件只能靠重连时
@@ -1377,24 +1429,79 @@ function HomeScreenContent({ active = true, onModeChange, width, newSessionInSys
   // syncInFlight 去重,冷启动时与上线瞬间的两次触发只会实际执行一次。
   // 首次触发同时等首页列表缓存种入完成(homeListCacheHydrated,AsyncStorage 读一个小 key,毫秒级):
   // 保证缓存先画、fresh 后覆盖的顺序确定,避免 loadHome 清理下线设备后缓存又把 stale shard 种回去。
+  // 所有整轮同步触发（首次、回前台、重连、需整轮的回首页、依赖变化）都经过这里：先登记整轮
+  // 重拉请求，再尝试执行。请求只由在它之后开始的 loadHome 整轮成功提交清除；失焦、缓存未就绪、
+  // 设备清单失败或中途失焦退出都会保留它，下次回首页仍整轮重拉。
   const startSilentHomeSync = useCallback(() => {
+    requestHomeFullReload();
     if (!screenFocusedRef.current) return;
     if (!deviceIdentityCacheReady || !homeListCacheHydrated || !homeViewPreferencesHydrated) return;
     void loadHome({ visible: false });
-  }, [deviceIdentityCacheReady, homeListCacheHydrated, homeViewPreferencesHydrated, loadHome]);
+  }, [deviceIdentityCacheReady, homeListCacheHydrated, homeViewPreferencesHydrated, loadHome, requestHomeFullReload]);
+
+  useEffect(() => {
+    if (!screenFocused) homeBlurredAtRef.current = Date.now();
+  }, [screenFocused]);
+
+  // 从任务 / 设置等页面返回首页：离开期间订阅一直在、补丁一直在收，只补拉判定为可能漏了
+  // 推送的设备。离开太久或尚未完成首轮同步时退回整轮 loadHome。
+  const refillStaleHomeDevices = useCallback((deviceIds: readonly string[]) => {
+    if (deviceIds.length === 0) return;
+    const expectedAccountGeneration = accountGeneration;
+    const selectedDeviceIdAtStart = selectedDeviceIdRef.current;
+    const stale = new Set(deviceIds);
+    const rows = homeSyncRowsRef.current.filter((item) => stale.has(item.device.deviceId));
+    void runHomeDeviceSyncBatch(rows, async (item) => (
+      hydrateDeviceSessions(item.device, expectedAccountGeneration)
+    )).then((results) => {
+      if (
+        homeAccountGenerationRef.current !== expectedAccountGeneration
+        || selectedDeviceIdRef.current !== selectedDeviceIdAtStart
+      ) return;
+      const failures = results
+        .filter((result) => !result.superseded && result.failure)
+        .map((result) => result.failure as HomeDeviceFailure);
+      if (failures.length > 0) setError(failures);
+      else if (results.some((result) => !result.superseded)) setError(null);
+    });
+  }, [accountGeneration, hydrateDeviceSessions]);
 
   // Android can recreate the activity or resume the JS runtime without a fresh React
   // mount. Foreground is therefore an authoritative trigger alongside the initial mount
   // and reconnect; loadHome single-flights these overlapping cold-start calls.
   useFocusEffect(
     useCallback(() => {
+      // The focus event can fire before useIsFocused re-renders this screen. Navigation has
+      // already confirmed focus, so open the scope gate now instead of skipping this return.
+      screenFocusedRef.current = true;
+      const blurredAt = homeBlurredAtRef.current;
+      const forceFull = homeFullReloadOnFocusRef.current !== null;
+      homeBlurredAtRef.current = null;
+      const plan = planHomeListFocusReturn({
+        forceFull,
+        blurredAt,
+        lastSyncedAt: lastSyncedAtRef.current,
+        now: Date.now(),
+        deviceIds: homeSyncRowsRef.current.map((item) => item.device.deviceId),
+        freshness: homeListFreshnessRef.current,
+        listMutationEpoch: (deviceId) => remoteSessionStore.captureDeviceSessionListMutationEpoch(deviceId),
+      });
+      const scheduleDirty = new Set(homeScheduleIndexDirtyRef.current.keys());
+      if (plan.kind === 'refill') {
+        refillStaleHomeDevices(plan.deviceIds);
+        if (scheduleDirty.size > 0) refreshHomeScheduleIndexes(scheduleDirty);
+        return;
+      }
+      refreshHomeScheduleIndexes();
       startSilentHomeSync();
-    }, [startSilentHomeSync]),
+    }, [refillStaleHomeDevices, refreshHomeScheduleIndexes, startSilentHomeSync]),
   );
 
   useEffect(() => {
     startSilentHomeSync();
     const subscription = AppState.addEventListener('change', (nextState) => {
+      // 退后台后连接会在宽限期后停掉，期间的推送无从补齐：回前台一律按需重拉。
+      if (nextState === 'background') homeListFreshnessRef.current.invalidateAll();
       if (nextState === 'active') startSilentHomeSync();
     });
     return () => subscription.remove();
@@ -1521,18 +1628,21 @@ function HomeScreenContent({ active = true, onModeChange, width, newSessionInSys
     () => toDeviceListItems(devices, Date.now(), revokedDevices),
     [devices, i18nInstance.resolvedLanguage, revokedDevices],
   );
-  const homeSyncDeviceIds = useMemo(() => screenFocused ? resolveHomeDeviceSyncIds(
+  // 不随首页失焦清空：被任务页等盖住时保留订阅与镜像，增量补丁照常到达；
+  // 不可见 / 不可用的设备仍由 resolveHomeDeviceSyncIds 排除并 release。
+  const homeSyncDeviceIds = useMemo(() => resolveHomeDeviceSyncIds(
     deviceRows.map((item) => ({
       canOpen: item.canOpen,
       deviceId: item.device.deviceId,
     })),
     active ? selectedDeviceId : null,
-  ) : [], [deviceRows, screenFocused, selectedDeviceId, active]);
+  ), [deviceRows, selectedDeviceId, active]);
   const homeSyncDeviceIdSet = useMemo(() => new Set(homeSyncDeviceIds), [homeSyncDeviceIds]);
   const homeSyncRows = useMemo(
     () => deviceRows.filter((item) => homeSyncDeviceIdSet.has(item.device.deviceId)),
     [deviceRows, homeSyncDeviceIdSet],
   );
+  homeSyncRowsRef.current = homeSyncRows;
 
   useEffect(() => {
     const expectedAccountGeneration = accountGeneration;
@@ -1559,6 +1669,8 @@ function HomeScreenContent({ active = true, onModeChange, width, newSessionInSys
   useEffect(() => {
     const unregisters = homeSyncRows.map((item) =>
       remoteSessionStore.registerReseedHandler(item.device.deviceId, () => {
+        // 首页被盖住时 hydrate 会被 scope 门禁跳过；先记下失效，回到首页再补拉这台。
+        homeListFreshnessRef.current.invalidate(item.device.deviceId);
         void hydrateDeviceSessions(item.device, accountGeneration, {
           trailingIfInFlight: true,
         }).then((hydrateResult) => {

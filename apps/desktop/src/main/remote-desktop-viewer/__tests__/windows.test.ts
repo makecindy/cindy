@@ -108,6 +108,7 @@ vi.mock('../../resource-usage-window/window', () => ({
 }));
 import { RemoteDesktopViewerWindows } from '../windows';
 import { REMOTE_VIEWER } from '../../../shared/remoteDesktopViewer';
+import { remoteInvoke } from '../../device-link/index';
 let manager: RemoteDesktopViewerWindows;
 afterEach(() => {
   manager?.reset();
@@ -119,6 +120,40 @@ afterEach(() => {
 const event = (win: any) => ({ sender: win.webContents, senderFrame: win.webContents.mainFrame });
 const call = (channel: string, win: any, ...args: unknown[]) =>
   fixture.handlers.get(channel)!(event(win), ...args);
+it.each(['resolve', 'reject'])(
+  'closes immediately while stop is pending and ignores its late %s',
+  async (outcome) => {
+    const sender: any = { id: 100 };
+    manager = new RemoteDesktopViewerWindows((value) => value === sender);
+    manager.register();
+    manager.open(sender, { deviceId: 'a', name: 'A' });
+    const win = fixture.windows[0];
+    call(REMOTE_VIEWER.READY, win);
+    call(REMOTE_VIEWER.PRESENTED, win);
+    const { generation } = call(REMOTE_VIEWER.STATE, win);
+    await call(REMOTE_VIEWER.REQUEST, win, generation, { op: 'start', displayId: 'screen' });
+    let settle!: () => void;
+    vi.mocked(remoteInvoke).mockImplementationOnce(
+      () =>
+        new Promise((resolve, reject) => {
+          settle = () =>
+            outcome === 'resolve'
+              ? resolve({ ok: true, result: {} })
+              : reject(new Error('INVOKE_TIMEOUT'));
+        }),
+    );
+    call(REMOTE_VIEWER.CLOSE, win, generation);
+    expect(win.isVisible()).toBe(false);
+    expect(call(REMOTE_VIEWER.STATE, win).active).toBe(false);
+    manager.open(sender, { deviceId: 'a', name: 'A' });
+    expect(win.isVisible()).toBe(true);
+    settle();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(win.isVisible()).toBe(true);
+    expect(call(REMOTE_VIEWER.STATE, win).active).toBe(true);
+  },
+);
 it('routes native close and the close shortcut to confirmation without ending the lease', async () => {
   const sender: any = { id: 100 };
   manager = new RemoteDesktopViewerWindows((value) => value === sender);

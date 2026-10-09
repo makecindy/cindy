@@ -130,6 +130,7 @@ export class RemoteDesktopController {
         backgroundViewing?: boolean;
         clipboardSync?: boolean;
         hostMute?: boolean;
+        lockOnExit?: boolean;
         privacyLockOnExit?: boolean;
       })
     | null = null;
@@ -147,6 +148,7 @@ export class RemoteDesktopController {
   private viewerGeometryManaged = false;
   private locking = false;
   private lockAbort: AbortController | null = null;
+  private stopping: Promise<void> | null = null;
   private startingPeer: string | null = null;
   private framePending = false;
   private clipboardPending = false;
@@ -242,13 +244,17 @@ export class RemoteDesktopController {
     }
   }
   tick(): void {
+    const active = this.active;
+    if (!active) return;
     if (
-      this.active &&
-      (this.active.expires <= this.now() ||
-        !this.deps.authorized(this.active.peer) ||
-        !this.authenticationCurrent(this.active.peer, this.active.authenticationSession))
-    )
-      this.stop();
+      !this.deps.authorized(active.peer) ||
+      !this.authenticationCurrent(active.peer, active.authenticationSession)
+    ) {
+      this.lockAbort?.abort();
+      void this.stop(undefined, false);
+    } else if (!this.locking && active.expires <= this.now()) {
+      void this.stop();
+    }
   }
   /** Losing the signaling socket is expected while the phone shows PiP.
    * Only an authorized, view-only presentation may outlive it, and only while
@@ -265,13 +271,46 @@ export class RemoteDesktopController {
       return;
     this.stop(peer);
   }
-  stop(peer?: string): Promise<void> {
+  stop(peer?: string, lockScreen = this.exitLockEnabled()): Promise<void> {
     if (peer && this.active?.peer !== peer) {
       // Cancelling a takeover candidate must not revoke the current owner's work.
       if (this.startingPeer === peer) this.startingPeer = null;
       return Promise.resolve();
     }
-    this.lockAbort?.abort();
+    if (this.stopping) return this.stopping;
+    const active = this.active;
+    if (active && lockScreen && this.deps.lockScreen) {
+      this.locking = true;
+      const cancellation = new AbortController();
+      this.lockAbort = cancellation;
+      active.controlling = false;
+      this.controlGeneration++;
+      this.deps.stopInput();
+      // The policy belongs to the host lease. Losing its heartbeat or receiving
+      // another stop must not cancel an accepted lock; revocation still can.
+      const pending = Promise.resolve()
+        .then(() =>
+          this.deps.lockScreen!(
+            () =>
+              this.active === active &&
+              !cancellation.signal.aborted &&
+              this.deps.authorized(active.peer) &&
+              this.authenticationCurrent(active.peer, active.authenticationSession),
+            cancellation.signal,
+          ),
+        )
+        .finally(async () => {
+          this.stopping = null;
+          this.lockAbort = null;
+          this.locking = false;
+          if (this.active === active) await this.stop(active.peer, false);
+        });
+      this.stopping = pending;
+      // Timer/disconnect callers have no reply channel; explicit callers still
+      // receive the rejection. Privacy masks stay up until locking settles.
+      void pending.catch(() => log.warn('Screen lock failed while ending remote desktop'));
+      return pending;
+    }
     if (this.active) this.lastEnded = { peer: this.active.peer, lease: this.active.lease };
     this.clipboardTransfer.reset();
     this.controlGeneration++;
@@ -290,6 +329,9 @@ export class RemoteDesktopController {
     this.viewerGeometryManaged = false;
     this.deps.changed();
     return restoring;
+  }
+  private exitLockEnabled(): boolean {
+    return (this.active?.lockOnExit ?? this.active?.privacyLockOnExit) === true;
   }
   /** A display change keeps the viewer's video only when it asked and capture can follow. */
   private holdVideo(keepVideo: boolean | undefined): boolean {
@@ -378,7 +420,7 @@ export class RemoteDesktopController {
       };
       return control ? await this.withControl(peer, active, reply) : reply;
     } catch (error) {
-      if (this.active === active) this.stop(peer);
+      if (this.active === active) this.stop(peer, false);
       throw error;
     } finally {
       this.resolutionWrite = null;
@@ -419,8 +461,13 @@ export class RemoteDesktopController {
   }
   /** Join the same restoration used by disconnects before the process exits. */
   async stopAndRestore(): Promise<void> {
-    const safety = this.stop();
-    await Promise.all([safety, this.restoreStoppedDisplay()]);
+    try {
+      await this.stop();
+    } finally {
+      // Locking retains the lease until it settles, even on failure. Only then
+      // can restoration start; process shutdown must also await that work.
+      await this.restoreStoppedDisplay();
+    }
   }
   /**
    * Input injection failed while the lease is still valid. Input belongs to the
@@ -495,7 +542,7 @@ export class RemoteDesktopController {
   }
   async stopPrivacyByUser(): Promise<void> {
     const active = this.active;
-    if (!active?.privacyLockOnExit) {
+    if (!active || !this.exitLockEnabled()) {
       this.stopByUser();
       return;
     }
@@ -635,10 +682,13 @@ export class RemoteDesktopController {
       if (caps.permissions && !desktopPermissionReady(caps.permissions.screenRecording))
         throw new Error('DESKTOP_SCREEN_PERMISSION_REQUIRED');
       if (request.resume && this.userStopped.has(peer)) throw new Error('DESKTOP_STOPPED');
-      if (request.takeover && this.active) this.stopByUser();
+      if (request.takeover && this.active) {
+        this.userStopped.set(this.active.peer, this.active.lease);
+        void this.stop(this.active.peer, false);
+      }
       // A lost start reply can leave our own lease alive. Rotate it using the
       // existing cleanup so the new viewer can restart its input sequence at 0.
-      else if (resumesActive) this.stop(peer);
+      else if (resumesActive) this.stop(peer, false);
       if (this.viewerDisplay || this.originalResolution) {
         const restorationGeneration = this.controlGeneration;
         await this.restoreStoppedDisplay();
@@ -662,6 +712,7 @@ export class RemoteDesktopController {
         expires: this.now() + REMOTE_DESKTOP_LEASE_MS,
         sequence: -1,
         authenticationSession,
+        lockOnExit: request.lockOnExit,
       };
       this.deps.changed();
       return lease;
@@ -850,7 +901,7 @@ export class RemoteDesktopController {
           // Input restarts on the new geometry within the same request.
           return request.control ? await this.withControl(peer, active, reply) : reply;
         } catch (error) {
-          if (this.active === active) this.stop(peer);
+          if (this.active === active) this.stop(peer, false);
           throw error;
         } finally {
           this.resolutionWrite = null;
@@ -858,30 +909,15 @@ export class RemoteDesktopController {
         }
       }
       case 'stop': {
-        if (request.lockScreen) {
-          if (!this.deps.lockScreen) throw new Error('DESKTOP_LOCK_UNAVAILABLE');
-          if (this.locking || this.starting) throw new Error('DESKTOP_BUSY');
-          this.locking = true;
-          const cancellation = new AbortController();
-          this.lockAbort = cancellation;
-          active.controlling = false;
-          this.controlGeneration++;
-          try {
-            await this.deps.lockScreen(() => {
-              this.tick();
-              return this.active === active && this.deps.authorized(peer);
-            }, cancellation.signal);
-          } finally {
-            this.lockAbort = null;
-            this.locking = false;
-            if (this.active === active) this.stop(peer);
-          }
-          return { ok: true };
-        }
-        this.stop(peer);
+        if (request.lockScreen && !this.deps.lockScreen)
+          throw new Error('DESKTOP_LOCK_UNAVAILABLE');
+        // Plain stop is also used for viewer recovery and display handoff.
+        // Explicit exit sends lockScreen; involuntary host stops use the policy.
+        await this.stop(peer, request.lockScreen === true);
         return { ok: true };
       }
       case 'heartbeat':
+        if (request.lockOnExit !== undefined) active.lockOnExit = request.lockOnExit;
         active.expires = this.now() + REMOTE_DESKTOP_LEASE_MS;
         return { controlling: active.controlling };
       case 'presentation': {
@@ -1011,7 +1047,7 @@ export class RemoteDesktopController {
           if (!current()) throw new Error('DESKTOP_LEASE_EXPIRED');
           // Release old geometry before the native write can emit display events.
           // Completion must not inspect or stop a replacement lease.
-          this.stop(peer);
+          this.stop(peer, false);
         };
         try {
           if (this.viewerDisplay) {
@@ -1041,7 +1077,7 @@ export class RemoteDesktopController {
           await this.deps.resolution(active.sourceDisplayId, request.modeId, beforeChange);
           return { ok: true };
         } catch (error) {
-          if (restoringViewer && current()) this.stop(peer);
+          if (restoringViewer && current()) this.stop(peer, false);
           throw error;
         }
       }

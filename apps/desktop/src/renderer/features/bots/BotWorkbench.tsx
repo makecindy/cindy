@@ -1,8 +1,11 @@
+import { WorkbenchSessionList } from './WorkbenchSessionList';
+import { useWorkbenchSessionPages } from './useWorkbenchSessionPages';
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import {
   ArrowLeft,
   ArrowUp,
   ChevronRight,
+  ChevronDown,
   CircleCheck,
   CircleDot,
   CirclePause,
@@ -51,6 +54,7 @@ import { useAgentIslandActivityMap } from '@/state/agentIslandActivity';
 import {
   BOT_WORKBENCH_MAX_DIRECTORIES,
   isCaseInsensitivePlatform,
+  findWorkbenchProject,
   parseWorkbenchTaskId,
   validateWorkbenchRef,
   type BotWorkbench as BotWorkbenchData,
@@ -62,6 +66,7 @@ import { isBotPrimaryGeneratedFile } from './botGeneratedArtifacts';
 import { useBotProfiles } from './botStore';
 import {
   buildWorkbenchProjectOptions,
+  isWorkbenchCandidateSession,
   buildWorkbenchTiles,
   collectBotHiddenSessionIds,
   countUnjudgedCandidates,
@@ -314,6 +319,14 @@ export function BotWorkbench({ botId, sessionId }: { botId: string; sessionId: s
   const judgments = useMemo(() => workbench?.tasks ?? {}, [workbench]);
   const projectDirs = useMemo(() => directories.map((dir) => dir.path), [directories]);
   const candidates = useExternalCandidates(botId, projectDirs.join('\n'));
+  const [archivedOpen, setArchivedOpen] = useState(false);
+  const [listRevision, setListRevision] = useState(0);
+  const listScope = `${botId}:${projectDirs.join('\n')}:${listRevision}`;
+  const activePages = useWorkbenchSessionPages(listScope, 'active', Boolean(workbench));
+  const archivedPages = useWorkbenchSessionPages(listScope, 'archived', archivedOpen);
+  const sessionRows = activePages.rows;
+  const refreshList = useCallback(() => { setListRevision(value => value + 1); emitRefresh(); }, []);
+
   const hiddenIds = useMemo(() => collectBotHiddenSessionIds(profiles), [profiles]);
   const erroredIds = useMemo(
     () => new Set([...attentionKinds].filter(([, kind]) => kind === 'error').map(([id]) => id)),
@@ -323,7 +336,7 @@ export function BotWorkbench({ botId, sessionId }: { botId: string; sessionId: s
   const tiles = useMemo(
     () =>
       buildWorkbenchTiles({
-        sessions,
+        sessions: sessionRows,
         hiddenIds,
         projectDirs,
         caseInsensitive,
@@ -336,7 +349,7 @@ export function BotWorkbench({ botId, sessionId }: { botId: string; sessionId: s
         candidates,
       }),
     [
-      sessions,
+      sessionRows,
       hiddenIds,
       projectDirs,
       caseInsensitive,
@@ -349,6 +362,16 @@ export function BotWorkbench({ botId, sessionId }: { botId: string; sessionId: s
       candidates,
     ],
   );
+
+  const listedIds = useMemo(() => new Set(tiles.filter(tile => tile.type === 'session').map(tile => tile.id)), [tiles]);
+  const activeSessionRows = useMemo(() => sessionRows.filter(row => listedIds.has(row.id)), [sessionRows, listedIds]);
+  const delegationChildIds = useMemo(() => new Set(delegations.flatMap(row => row.childSessionId ? [row.childSessionId] : [])), [delegations]);
+  const archivedSessionRows = useMemo(() => archivedPages.rows.filter(row =>
+    row.status === 'archived' && isWorkbenchCandidateSession({ ...row, status: 'active' }, hiddenIds, delegationChildIds)
+      && findWorkbenchProject(row.workingDir, projectDirs, caseInsensitive)), [archivedPages.rows, hiddenIds, projectDirs, caseInsensitive, delegationChildIds]);
+  const pageAction = (page: typeof activePages) => page.loading
+    ? <Spinner size={14} className="mx-5 my-3" role="status" aria-label={t('ccAgent.common.loading')} />
+    : page.error || page.hasMore ? <Button size="sm" variant="secondary" className="mx-4 my-2" onClick={() => void page.load()}>{t(page.error ? 'commonUi.retry' : 'settings.contacts.list.loadMore')}</Button> : null;
 
   // 伙伴正在读这些项目:还有本机外部会话没写判断,且伙伴主任务正在跑。
   const unjudged = useMemo(
@@ -366,7 +389,9 @@ export function BotWorkbench({ botId, sessionId }: { botId: string; sessionId: s
 
   const openTile = useCallback(
     (tile: WorkbenchTile) => {
-      if (tile.type === 'session' || tile.type === 'external' || tile.type === 'item') {
+      if (tile.type === 'session') {
+        void resolveSessionRoute(tile.id).then(route => navigate(route));
+      } else if (tile.type === 'external' || tile.type === 'item') {
         // 任务在本标签内打开详情,不换路由、不跳任务页。
         setDetailOpened(tile);
       } else if (tile.type === 'schedule') {
@@ -517,13 +542,24 @@ export function BotWorkbench({ botId, sessionId }: { botId: string; sessionId: s
         </>
       )}
 
+      {!picking && <>
+        <WorkbenchSessionList sessions={activeSessionRows} onChanged={refreshList} />
+        {pageAction(activePages)}
+        <section className="pb-3 pt-2">
+          <button type="button" className="mx-3 flex min-h-9 items-center gap-1.5 rounded-lg px-2 text-12 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]" aria-expanded={archivedOpen} onClick={() => setArchivedOpen(value => !value)}>
+            {archivedOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}{t('ccAgent.sidebar.filterStatus.archived')}
+          </button>
+          {archivedOpen && <><WorkbenchSessionList sessions={archivedSessionRows} onChanged={refreshList} />{pageAction(archivedPages)}</>}
+        </section>
+      </>}
+
       {/* 还没接手项目时,伙伴已有的自动化(例行任务、导入来的自动化)照常列在下面。 */}
       {!picking || routineTiles.length > 0 ? (
         <TaskGroups
-          tiles={picking ? routineTiles : tiles}
+          tiles={picking ? routineTiles : tiles.filter(tile => tile.type !== 'session')}
           now={now}
           language={i18n.language}
-          showEmpty={!picking && !understanding}
+          showEmpty={false}
           followingKey={followingKey}
           onOpen={openTile}
           onFollowUp={followUp}
