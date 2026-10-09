@@ -88,9 +88,59 @@ it.each(['focus', 'online'])(
     expect(result.current.status).toBe('loading');
     expect(read).not.toHaveBeenCalled();
     rerender({ streaming: false });
+    expect(result.current.status).toBeNull();
+    // A repeated error after the stream's one retry still waits for a natural event.
+    act(() => result.current.onError());
     expect(result.current.status).toBe('unavailable');
     expect(read).not.toHaveBeenCalled();
     act(() => window.dispatchEvent(new Event(event)));
     expect(result.current.status).toBeNull();
   },
 );
+
+it.each(['cindy-media://blobs/a.png', 'xdt-image://images/a.png'])(
+  'retries %s once when streaming finishes without looping on readable invalid bytes',
+  async (src) => {
+    const read = vi.fn().mockResolvedValue({ base64: 'bad', mimeType: 'image/png' });
+    vi.stubGlobal('electronAPI', { readCachedImageAsBase64: read });
+    const { result, rerender } = renderHook(
+      ({ streaming }) => useImageLoadFailure(src, streaming),
+      { initialProps: { streaming: true } },
+    );
+    act(() => result.current.onError());
+    expect(result.current.status).toBe('loading');
+    expect(read).not.toHaveBeenCalled();
+    rerender({ streaming: false });
+    await act(async () => {});
+    expect(result.current.status).toBeNull();
+
+    // The remounted img can still fail decoding despite a successful byte read.
+    act(() => result.current.onError());
+    await act(async () => {});
+    expect(result.current.status).toBe('unavailable');
+    const calls = read.mock.calls.length;
+    rerender({ streaming: false });
+    await act(async () => {});
+    expect(result.current.status).toBe('unavailable');
+    expect(read).toHaveBeenCalledTimes(calls);
+  },
+);
+
+it('ignores the pre-retry missing result but diagnoses the retried image', async () => {
+  let reject!: (error: Error) => void;
+  const read = vi.fn()
+    .mockImplementationOnce(() => new Promise((_, r) => { reject = r; }))
+    .mockRejectedValue(new Error('[NOT_FOUND] Missing after retry'));
+  vi.stubGlobal('electronAPI', { readCachedImageAsBase64: read });
+  const { result, rerender } = renderHook(
+    ({ streaming }) => useImageLoadFailure('cindy-media://blobs/a.png', streaming),
+    { initialProps: { streaming: true } },
+  );
+  act(() => result.current.onError());
+  rerender({ streaming: false });
+  await act(async () => { reject(new Error('[NOT_FOUND] Stale result')); });
+  expect(result.current.status).toBeNull();
+  act(() => result.current.onError());
+  await waitFor(() => expect(result.current.status).toBe('missing'));
+  expect(read).toHaveBeenCalledTimes(2);
+});

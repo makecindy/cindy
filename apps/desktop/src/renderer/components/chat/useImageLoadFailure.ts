@@ -8,6 +8,12 @@ export function useImageLoadFailure(src: string | undefined, streaming = false) 
   );
   const current = failure?.src === src ? failure : null;
   const onError = useCallback(() => setFailure({ src, missing: false }), [src]);
+  // Stream completion is a natural retry boundary: the producer may just have
+  // finished writing the image. Successful byte probes alone must not retry,
+  // since readable but undecodable bytes would otherwise cause an error loop.
+  useEffect(() => {
+    if (!streaming) setFailure(null);
+  }, [src, streaming]);
   useEffect(() => {
     if (!current || streaming) return;
     const retry = () => setFailure(null);
