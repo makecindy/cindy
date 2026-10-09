@@ -426,6 +426,10 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
         size: image.size,
         category: 'image',
         mimeType: image.mimeType,
+        // 图片只可能来自本机(SSH 远端在入口已拒):标记 desktop-host,
+        // 视觉桥才会桥接无视觉模型的 worker,否则原始 block 进 Pi 会抛
+        // PiImageInputUnsupportedError 整条任务失败。
+        pathOrigin: 'desktop-host',
       }));
     }
     // 直发时 image block 跟在格式化文本后;排队/插话时文件挂在 entry.files,
@@ -437,7 +441,12 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
         type: 'user',
         content: [
           { type: 'text', text },
-          ...imageFiles.map((file) => ({ type: 'image' as const, path: file.path, mimeType: file.mimeType })),
+          ...imageFiles.map((file) => ({
+            type: 'image' as const,
+            path: file.path,
+            mimeType: file.mimeType,
+            pathOrigin: 'desktop-host' as const,
+          })),
         ],
       };
     };

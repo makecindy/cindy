@@ -337,8 +337,8 @@ describe('Orca lead/worker dispatcher', () => {
       type: 'user',
       content: [
         { type: 'text', text: expect.stringContaining('Check this screenshot') },
-        { type: 'image', path: 'C:/tmp/a.png', mimeType: 'image/png' },
-        { type: 'image', path: 'C:/tmp/b.png', mimeType: 'image/png' },
+        { type: 'image', path: 'C:/tmp/a.png', mimeType: 'image/png', pathOrigin: 'desktop-host' },
+        { type: 'image', path: 'C:/tmp/b.png', mimeType: 'image/png', pathOrigin: 'desktop-host' },
       ],
     });
 
@@ -356,7 +356,7 @@ describe('Orca lead/worker dispatcher', () => {
     });
     const item = firstQueuedItem(queued.queuedItems);
     expect(item.files).toEqual([expect.objectContaining({
-      path: 'C:/tmp/a.png', category: 'image', mimeType: 'image/png',
+      path: 'C:/tmp/a.png', category: 'image', mimeType: 'image/png', pathOrigin: 'desktop-host',
     })]);
   });
 
