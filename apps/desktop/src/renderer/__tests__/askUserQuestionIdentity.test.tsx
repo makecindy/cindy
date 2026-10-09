@@ -53,6 +53,25 @@ async function fillBothQuestions(view: ReturnType<typeof render>) {
 }
 
 describe('AskUserQuestionPrompt identity', () => {
+  it('walks a five-item questionnaire without submitting after the third answer', async () => {
+    const props = makeProps();
+    props.pending.questions = Array.from({ length: 5 }, (_, i) => ({
+      question: `Contract field ${i + 1}?`, options: [{ label: `Value ${i + 1}` }],
+    }));
+    const view = render(createElement(AskUserQuestionPrompt, props));
+    for (let i = 0; i < 5; i += 1) {
+      await waitFor(() => expect(view.queryByText(`Contract field ${i + 1}?`)).not.toBeNull());
+      const option = await waitFor(() => view.getByRole('button', { name: new RegExp(`Value ${i + 1}`) }));
+      expect(props.onAnswer).not.toHaveBeenCalled();
+      fireEvent.click(option);
+    }
+    expect(props.onAnswer).toHaveBeenCalledExactlyOnceWith('request-1', {
+      'Contract field 1?': 'Value 1', 'Contract field 2?': 'Value 2',
+      'Contract field 3?': 'Value 3', 'Contract field 4?': 'Value 4',
+      'Contract field 5?': 'Value 5',
+    });
+  });
+
   it('keeps text, selections and question progress when the same card is synchronized', async () => {
     const props = makeProps();
     const view = render(createElement(AskUserQuestionPrompt, props));

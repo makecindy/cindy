@@ -772,6 +772,10 @@ const ASK_USER_DYNAMIC_TOOL_CANONICAL_NAME =
 const CODEX_SUBAGENT_ASK_USER_QUESTION_DENIAL_MESSAGE =
   'User questions are only available to the root agent. Report the question to the parent agent, which can decide whether to ask the user.';
 const MAX_REQUEST_USER_INPUT_QUESTIONS = 3;
+// The Cindy card already walks a list one question at a time. Keep a requested
+// questionnaire together instead of relying on the model to issue each batch.
+// Native request_user_input keeps its own three-question contract.
+const MAX_DYNAMIC_ASK_USER_QUESTIONS = 50;
 const MAX_REQUEST_USER_INPUT_OPTIONS = 10;
 const MAX_REQUEST_USER_INPUT_TEXT_CHARS = 1_000;
 const MAX_REQUEST_USER_INPUT_ANSWER_CHARS = 2_000;
@@ -786,8 +790,9 @@ const ASK_USER_DYNAMIC_TOOL: DynamicToolSpec = {
     'Use this tool instead of listing choices or asking in prose when the user asks to choose, pick a direction, select an approach, or narrow options before you continue.',
     'Use it for product preferences, game/design/business directions, business judgments, and choices between materially different approaches.',
     'Use it when the next useful step depends on the user selecting among options, even if you could provide a generic list yourself.',
-    'Ask 1 to 3 short questions in a single call when those questions are independent; do not make several back-to-back calls for independent clarification questions.',
-    'Use a later follow-up call only when the next question depends on the user answer to an earlier question.',
+    'For ordinary clarification, ask 1 to 3 short questions in a single call; bundle independent choices instead of making unnecessary back-to-back calls.',
+    'When the user explicitly asks to be interviewed or to confirm every item one by one, include the complete known checklist in one call (up to 50 questions). Cindy presents one question at a time and waits for the whole list before returning answers.',
+    'Use follow-up calls for questions that depend on earlier answers or for remaining items beyond the per-call limit. Keep track of remaining items and continue until every requested item is answered or explicitly skipped, unless the user pauses, cancels, or changes the request. Do not replace the remaining questions with a prose summary or an offer to continue.',
     'Do not use it for routine implementation details; choose a reasonable default.',
     'This tool does not replace authorization for destructive or external actions.',
     'Codex code-mode returns the awaited result as a JSON string shaped like {"question-id":{"answers":["Choice"]}}; it is not an MCP CallToolResult object.',
@@ -801,9 +806,9 @@ const ASK_USER_DYNAMIC_TOOL: DynamicToolSpec = {
     properties: {
       questions: {
         type: 'array',
-        description: 'One to three short user-facing questions to ask together. Bundle independent choices into this array instead of calling the tool repeatedly.',
+        description: 'Ordered questions with distinct ids and question text. Normally ask 1 to 3; for a user-requested item-by-item interview, include the complete known checklist (up to 50). The card presents them one at a time. Bundle independent choices here; ask dependent follow-ups after receiving answers.',
         minItems: 1,
-        maxItems: MAX_REQUEST_USER_INPUT_QUESTIONS,
+        maxItems: MAX_DYNAMIC_ASK_USER_QUESTIONS,
         items: {
           type: 'object',
           additionalProperties: false,
@@ -898,8 +903,9 @@ function emptyUserInputResponse(questions: readonly Pick<ToolRequestUserInputQue
 
 function normalizeRequestUserInputQuestions(
   questions: readonly ToolRequestUserInputQuestion[],
+  maxQuestions = MAX_REQUEST_USER_INPUT_QUESTIONS,
 ): ToolRequestUserInputQuestion[] {
-  return questions.slice(0, MAX_REQUEST_USER_INPUT_QUESTIONS).map((q, index) => ({
+  return questions.slice(0, maxQuestions).map((q, index) => ({
     id: q.id || `question-${index + 1}`,
     header: truncateUserInputText(q.header || ''),
     question: truncateUserInputText(q.question || q.header || `Question ${index + 1}`),
@@ -914,9 +920,12 @@ function normalizeRequestUserInputQuestions(
   }));
 }
 
-function normalizeDynamicAskUserQuestions(args: unknown): ToolRequestUserInputQuestion[] {
+function normalizeDynamicAskUserQuestions(args: unknown): { questions: ToolRequestUserInputQuestion[]; error?: string } {
   const input = args && typeof args === 'object' ? args as { questions?: unknown } : {};
   const rawQuestions = Array.isArray(input.questions) ? input.questions : [];
+  if (rawQuestions.length > MAX_DYNAMIC_ASK_USER_QUESTIONS) {
+    return { questions: [], error: `At most ${MAX_DYNAMIC_ASK_USER_QUESTIONS} questions can be asked per call. Split the checklist into ordered batches and continue with the remaining items after receiving answers.` };
+  }
   const questions: ToolRequestUserInputQuestion[] = rawQuestions.map((raw, index) => {
     const q = raw && typeof raw === 'object' ? raw as Record<string, unknown> : {};
     const rawOptions = Array.isArray(q.options) ? q.options : null;
@@ -940,7 +949,15 @@ function normalizeDynamicAskUserQuestions(args: unknown): ToolRequestUserInputQu
         : null,
     };
   });
-  return normalizeRequestUserInputQuestions(questions);
+  const normalized = normalizeRequestUserInputQuestions(questions, MAX_DYNAMIC_ASK_USER_QUESTIONS);
+  // The UI keys drafts by question text and the protocol keys results by id.
+  // Check after normalization, including generated ids and truncated text, so
+  // one checklist item cannot silently overwrite another item's answer.
+  if (new Set(normalized.map((q) => q.id)).size !== normalized.length
+    || new Set(normalized.map((q) => q.question)).size !== normalized.length) {
+    return { questions: [], error: 'Each question must have a distinct id and distinct question text so every answer can be returned.' };
+  }
+  return { questions: normalized };
 }
 
 function questionsToAskUserItems(questions: readonly ToolRequestUserInputQuestion[]) {
@@ -9941,10 +9958,10 @@ assertRouteCurrent();
             success: false,
           };
         }
-        const questions = normalizeDynamicAskUserQuestions(params.arguments);
-        if (questions.length === 0) {
+        const { questions, error } = normalizeDynamicAskUserQuestions(params.arguments);
+        if (error || questions.length === 0) {
           return {
-            contentItems: [{ type: 'inputText', text: 'No valid questions were provided.' }],
+            contentItems: [{ type: 'inputText', text: error ?? 'No valid questions were provided.' }],
             success: false,
           };
         }

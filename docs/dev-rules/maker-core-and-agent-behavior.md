@@ -314,6 +314,12 @@ sessionRunningRetry 就停。每次因 replacement 关闭而重新入队都计�
   起跑回执之前到达的终态先缓冲再核对归属；失败只能走失败终态，不能先以取消回调
   触发定时任务的成功收口。回归见 `agents/codex/index.test.ts` 的 pending confirmation
   与 human continuation 用例，以及 Desktop `sessionEventPipeline.test.ts`。
+  用户明确要求逐项访谈／确认清单时，Codex 的 `cindy__ask_user_question` 将已知问题一次
+  交给现有逐题卡片（最多 50 项），等整份回答后返回；普通澄清仍建议 1–3 项，原生
+  `request_user_input` 的三题上限不变。超出动态工具上限或规范化后问题 id／正文重复时
+  明确报错，不静默丢项或覆盖答案。依赖前一答案才能确定的问题仍在答案返回后追问；
+  不由宿主推断合同字段或在普通完成后强行续跑。回归见 `agents/codex/index.test.ts`、
+  `agents/codex/questionnaire.native.test.ts` 和 Desktop `askUserQuestionIdentity.test.tsx`。
   Codex 异步提问使用 `agentMessage.delivery=async` 与结构化 `questions` 接入同一提问
   流程，不把回退正文当成最终回答。未回答的异步问题不保留产品边界，原轮次结束时自动
   收起卡片、不代选答案，迟到回答不得续跑。结束前已提交的回答优先通过 `turn/steer`
