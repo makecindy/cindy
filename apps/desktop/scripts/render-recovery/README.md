@@ -35,6 +35,8 @@ Electron 渲染实验。生产 Electron pin 暂时保持 41.10.3；候选版本�
 
 每组上传合成页面的 `baseline.png`、`after-idle.png`、`events.jsonl` 和 `report.json`。
 报告包含原生显隐、节流值、renderer 身份、页面可见性、timer、rAF、截图色块及输入结果。
+输入前后检查承载窗口焦点；失焦时 `inputResponded=null`，不把无效输入探针判为失败，
+也不主动聚焦来唤醒画面。像素正常但输入无法判断时为 `inconclusive`；真实像素不匹配仍为 `failed`。
 截图来自 `capturePage()`，**不是物理显示器或 UU 远控画面的采样**；采集/输入本身也可能唤醒
 停滞的 surface，因此保留采集前后的分项观察，不能用最后一张截图证明此前从未黑屏。
 

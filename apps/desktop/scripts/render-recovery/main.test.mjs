@@ -13,6 +13,8 @@ const source = readFileSync(new URL('./main.cjs', import.meta.url), 'utf8');
 async function probe(fault) {
   let captures = 0;
   let clicks = 0;
+  let inputEvents = 0;
+  let lostFocus = false;
   let wokenByFrame = false;
   let report;
   let complete;
@@ -48,7 +50,9 @@ async function probe(fault) {
       };
     },
     sendInputEvent(event) {
-      if (event.type === 'mouseUp') clicks++;
+      inputEvents++;
+      if (captures === 2 && fault === 'focus-during-input') lostFocus = true;
+      if (event.type === 'mouseUp' && !(captures === 2 && fault === 'input')) clicks++;
     },
   };
   class Window {
@@ -67,7 +71,7 @@ async function probe(fault) {
       return false;
     }
     isFocused() {
-      return true;
+      return !lostFocus && !(captures === 2 && ['focus', 'pixels-unfocused'].includes(fault));
     }
     isDestroyed() {
       return false;
@@ -83,7 +87,7 @@ async function probe(fault) {
         on() {},
         whenReady: () => Promise.resolve(),
         getGPUFeatureStatus: () => ({}),
-        exit: (code) => complete({ code, report }),
+        exit: (code) => complete({ code, report, inputEvents }),
       },
       BrowserWindow: Window,
     },
@@ -105,7 +109,8 @@ async function probe(fault) {
       inspectPixels: () => ({
         pixelsMatch: !(
           captures === 2 &&
-          (fault === 'pixels' || (fault === 'woken-by-frame' && !wokenByFrame))
+          (['pixels', 'pixels-unfocused'].includes(fault) ||
+            (fault === 'woken-by-frame' && !wokenByFrame))
         ),
       }),
     },
@@ -149,6 +154,31 @@ describe('render probe evidence classification', () => {
   });
   it('passes healthy evidence', async () => {
     expect((await probe()).report.status).toBe('passed');
+  });
+  it.each(['focus', 'focus-during-input'])(
+    'treats %s as inconclusive instead of failed input',
+    async (fault) => {
+      const { code, report, inputEvents } = await probe(fault);
+      expect(code).toBe(2);
+      expect(report.status).toBe('inconclusive');
+      expect(report.samples.at(-1)).toMatchObject({
+        pixelsMatch: true,
+        frame: { arrived: true },
+        inputFocused: false,
+        inputResponded: null,
+      });
+      expect(inputEvents).toBe(fault === 'focus' ? 2 : 4);
+    },
+  );
+  it('preserves pixel failure even when input cannot be assessed without focus', async () => {
+    const { code, report } = await probe('pixels-unfocused');
+    expect(code).toBe(1);
+    expect(report.samples.at(-1)).toMatchObject({ pixelsMatch: false, inputResponded: null });
+  });
+  it('still fails unresponsive input in a focused window', async () => {
+    const { code, report } = await probe('input');
+    expect(code).toBe(1);
+    expect(report.samples.at(-1)).toMatchObject({ inputFocused: true, inputResponded: false });
   });
   it('preserves a bad restored frame even when the rAF probe wakes the compositor', async () => {
     const { code, report } = await probe('woken-by-frame');

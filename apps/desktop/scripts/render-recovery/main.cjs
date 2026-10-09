@@ -93,11 +93,19 @@ async function sample(label) {
   Object.assign(result, inspectPixels(bitmap));
   // Preserve pixels before requesting a new frame, which may wake the compositor.
   result.frame = await bounded(contents.executeJavaScript('window.probeFrame()'), 'frame probe');
-  contents.sendInputEvent({ type: 'mouseDown', x: 140, y: 140, button: 'left', clickCount: 1 });
-  contents.sendInputEvent({ type: 'mouseUp', x: 140, y: 140, button: 'left', clickCount: 1 });
-  await delay(150);
+  // sendInputEvent requires a focused host window. Do not focus it here: that
+  // could wake the surface being observed. Missing focus is not failed input.
+  result.inputFocused = win.isFocused();
+  if (result.inputFocused) {
+    contents.sendInputEvent({ type: 'mouseDown', x: 140, y: 140, button: 'left', clickCount: 1 });
+    contents.sendInputEvent({ type: 'mouseUp', x: 140, y: 140, button: 'left', clickCount: 1 });
+    await delay(150);
+  }
   result.after = await bounded(contents.executeJavaScript('window.readProbe()'), 'input snapshot');
-  result.inputResponded = result.after.clicks === result.before.clicks + 1;
+  result.inputFocused = result.inputFocused && win.isFocused();
+  result.inputResponded = result.inputFocused
+    ? result.after.clicks === result.before.clicks + 1
+    : null;
   record('sample', result);
   return result;
 }
@@ -183,9 +191,9 @@ app
     }
     // An rAF timeout alone does not mean black pixels or unresponsive input.
     finish(
-      !recovered.pixelsMatch || !recovered.inputResponded
+      !recovered.pixelsMatch || recovered.inputResponded === false
         ? 'failed'
-        : recovered.frame.arrived
+        : recovered.frame.arrived && recovered.inputResponded === true
           ? 'passed'
           : 'inconclusive',
     );
