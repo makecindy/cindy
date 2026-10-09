@@ -115,6 +115,51 @@ describe('FileHostKeyStore', () => {
     expect(await new FileHostKeyStore(filePath).get('one:22')).toBe('SHA256:reviewed-again');
   });
 
+  it('keeps concurrent reads and first-use writes behind a pending trust replacement', async () => {
+    const store = new FileHostKeyStore(filePath);
+    await store.set('one:22', 'SHA256:old');
+    let releaseWrite!: () => void;
+    let writing!: () => void;
+    const blocked = new Promise<void>(resolve => { releaseWrite = resolve; });
+    const entered = new Promise<void>(resolve => { writing = resolve; });
+    const writeFile = fs.writeFile.bind(fs);
+    vi.spyOn(fs, 'writeFile').mockImplementationOnce(async (...args) => {
+      await writeFile(...args);
+      writing();
+      await blocked;
+    });
+    const replacing = store.replace('one:22', 'SHA256:old', 'SHA256:new', () => true);
+    await entered;
+    const readFile = fs.readFile.bind(fs);
+    let releaseRead!: () => void;
+    const readBlocked = new Promise<void>(resolve => { releaseRead = resolve; });
+    const read = vi.spyOn(fs, 'readFile').mockImplementation(async (...args) => {
+      const value = await readFile(...args);
+      await readBlocked;
+      return value;
+    });
+    store.reload();
+    const concurrentRead = store.get('one:22');
+    const firstUse = store.get('two:22').then(value => {
+      expect(value).toBeNull();
+      return store.set('two:22', 'SHA256:other');
+    });
+    // Let pending microtasks run while persistence is deliberately suspended.
+    await new Promise<void>(resolve => setImmediate(resolve));
+    const readsDuringWrite = read.mock.calls.length;
+    releaseWrite();
+    await replacing;
+    releaseRead();
+    const observed = await concurrentRead;
+    await firstUse;
+    expect(await store.get('one:22')).toBe('SHA256:new');
+    const reopened = new FileHostKeyStore(filePath);
+    expect(await reopened.get('one:22')).toBe('SHA256:new');
+    expect(await reopened.get('two:22')).toBe('SHA256:other');
+    expect(readsDuringWrite).toBe(0);
+    expect(observed).toBe('SHA256:new');
+  });
+
   it('rejects stale confirmations, removed entries, and concurrent replacements', async () => {
     const store = new FileHostKeyStore(filePath);
     await store.set('one:22', 'SHA256:old');

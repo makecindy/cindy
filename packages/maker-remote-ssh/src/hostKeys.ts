@@ -82,6 +82,7 @@ export class FileHostKeyStore implements HostKeyStore {
   private cache: Record<string, string> | null = null;
   private loadPromise: Promise<Record<string, string>> | null = null;
   private loadSettled = false; // true once loadPromise has resolved or rejected
+  // Reads share the write queue so an older disk load cannot overwrite a committed cache.
   private writeChain: Promise<void> = Promise.resolve();
 
   constructor(filePath: string) {
@@ -89,8 +90,13 @@ export class FileHostKeyStore implements HostKeyStore {
   }
 
   async get(key: string): Promise<string | null> {
-    const map = await this.load();
-    return map[key] ?? null;
+    const slot = this.writeChain.catch(() => {}).then(async () => {
+      const map = await this.load();
+      return map[key] ?? null;
+    });
+    // Keep failures observable to this caller without poisoning subsequent operations.
+    this.writeChain = slot.then(() => undefined, () => undefined);
+    return slot;
   }
 
   reload(): void {
