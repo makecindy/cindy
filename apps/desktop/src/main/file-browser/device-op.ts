@@ -78,6 +78,8 @@ import * as subscriptions from '../device-link/subscriptions.js';
 import { getRipgrepBinaryPath } from '../maker-host/runtime-configs.js';
 import { getRemoteFileBrowser } from './remote-deps.js';
 import { generateFileThumbnail } from './thumbnail.js';
+import { assertSharedTaskInvoke } from '../device-link/sharedTaskDispatch.js';
+import { assertSharedTaskMedia, sharedTaskFileSnapshot, sharedTaskFileUrl } from '../device-link/sharedTaskMediaAccess.js';
 import {
   createDirExportDeps,
   getDirExportStatus,
@@ -402,6 +404,12 @@ async function handleRemoteOp(args: RemoteOpArgs): Promise<unknown> {
   if (!args || typeof args.op !== 'string' || typeof args.workdir !== 'string' || !args.workdir) {
     return bad('invalid remote-op args');
   }
+  const shared = getDeviceLinkInvokeContext()?.sharedTask;
+  if (shared) assertSharedTaskInvoke(shared, { channel: FILE_BROWSER_REMOTE_OP_CHANNEL, args: [args] });
+  const snapshot = shared ? await sharedTaskFileSnapshot(shared) : undefined;
+  if (snapshot && args.workdir !== snapshot.workingDir) {
+    throwIpcError('PERMISSION_DENIED', 'Working directory does not belong to this shared task');
+  }
   // 能力探测:与 workdir 无关、零 fs 访问,放在 guard 之前。老被控端没有
   // 这个分支,会走到 default 返回 `unknown op: caps`——控制端把它当确定性
   // 的"不支持压缩"信号(见 fileBrowserTransport 的 caps 缓存)。
@@ -420,12 +428,26 @@ async function handleRemoteOp(args: RemoteOpArgs): Promise<unknown> {
     throwIpcError(rejection.code, rejection.message);
   }
 
-  const exec = await resolveWorkdirExecution(args.workdir, guardResult);
-  const workdir = args.workdir;
+  // Shared tasks already identify the owning endpoint. Never discover another
+  // task's SSH host (or choose a local directory with the same spelling).
+  const exec: WorkdirExecution = snapshot
+    ? snapshot.remoteHostId ? { kind: 'ssh', hostId: snapshot.remoteHostId } : { kind: 'local' }
+    : await resolveWorkdirExecution(args.workdir, guardResult);
+  let workdir = args.workdir;
 
   if (exec.kind === 'unavailable') {
     const rejection = remoteWorkingDirRejectionToIpcError(exec.reason);
     throwIpcError(rejection.code, rejection.message);
+  }
+
+  if (shared && snapshot) {
+    const file = (snapshot.remoteHostId ? path.posix : path).resolve(workdir, args.relPath ?? '');
+    const scope = await assertSharedTaskMedia(sharedTaskFileUrl(file, snapshot, shared.author.sessionId), shared);
+    if (scope?.root) {
+      workdir = scope.root;
+      args = { ...args, relPath: path.relative(workdir, scope.file) };
+    }
+    if (!shared.isCurrent()) throwIpcError('PERMISSION_DENIED', 'Shared task access revoked');
   }
   if (exec.kind === 'ambiguous') {
     // 端点不确定时执行任何读写都可能落在错误机器上,显式失败最安全。
@@ -528,10 +550,18 @@ async function handleRemoteOp(args: RemoteOpArgs): Promise<unknown> {
         return mgr.request(hostId, 'listAllFiles', { workdir, cap: args.cap });
       case 'exportFileStart':
       case 'exportFileStatus':
-      case 'fileUrl':
         // 嵌套(device-link 套 SSH)的大文件导出要先经 daemon 分片拉回被控端再
         // 上传 OSS,本期不做——控制端对嵌套会话维持 OVERSIZE 占位。
         return bad('exportFile is not supported for nested SSH workdirs yet');
+      case 'fileUrl': {
+        if (!shared || !snapshot) return bad('exportFile is not supported for nested SSH workdirs yet');
+        const st = await mgr.request(hostId, 'stat', { workdir, relPath: args.relPath ?? '' });
+        if (st.type !== 'file') return bad('not a file');
+        if (!shared.isCurrent()) throwIpcError('PERMISSION_DENIED', 'Shared task access revoked');
+        const url = new URL(sharedTaskFileUrl(path.posix.resolve(workdir, args.relPath ?? ''), snapshot, shared.author.sessionId));
+        url.searchParams.set('maxBytes', String(Math.max(1, st.size)));
+        return { ok: true, url: url.toString(), size: st.size, mtimeMs: st.mtimeMs };
+      }
       case 'exportDirStart':
       case 'exportDirStatus':
         return bad('REMOTE_UNSUPPORTED: nested SSH workdir');

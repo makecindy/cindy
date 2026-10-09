@@ -11,6 +11,30 @@ function capture(): SharedTaskPeerCapture {
 }
 afterEach(() => { setSharedTaskQueueReader(null); setSharedTaskInteractionReader(null); });
 describe('sharedTask dispatch scope', () => {
+  it('admits file preview reads without granting file mutation or export-job access', () => {
+    for (const op of ['caps', 'stat', 'fileUrl', 'readFile', 'thumbnail', 'listDir']) {
+      expect(() => assertSharedTaskInvoke(capture(), {
+        channel: 'file-browser:remote-op', args: [{ op, workdir: '/work', ...(op === 'caps' ? {} : { relPath: 'report.md' }) }],
+      })).not.toThrow();
+    }
+    expect(() => assertSharedTaskInvoke(capture(), {
+      channel: 'text-file:read-preview', args: [{ filePath: '/work/report.md' }],
+    })).not.toThrow();
+    for (const op of ['writeFile', 'deleteEntry', 'createFile', 'createFolder', 'renameEntry', 'exportFileStart', 'exportFileStatus', 'searchCollect', 'listAllFiles']) {
+      expect(() => assertSharedTaskInvoke(capture(), {
+        channel: 'file-browser:remote-op', args: [{ op, workdir: '/work', relPath: 'report.md' }],
+      })).toThrow('PERMISSION_DENIED');
+    }
+    for (const request of [
+      { op: 'stat', workdir: '/work', relPath: '../secret' },
+      { op: 'stat', workdir: '/work', relPath: '/secret' },
+      { op: 'stat', workdir: '/work', relPath: 'C:\\secret' },
+      { op: 'readFile', workdir: '/work', relPath: 'a', contentGz: 'forged' },
+      { op: 'fileUrl', workdir: '/work', relPath: 'a', remoteHostId: 'other' },
+    ]) {
+      expect(() => assertSharedTaskInvoke(capture(), { channel: 'file-browser:remote-op', args: [request] })).toThrow('PERMISSION_DENIED');
+    }
+  });
   it('reads subagent context only through the shared parent task', () => {
     for (const channel of ['local-db:subagent-runs:list', 'local-db:subagent-runs:detail', 'local-db:subagent-runs:transcript']) {
       const request = { sessionId: 'task', provider: 'pi', runIdOrAlias: 'child' };

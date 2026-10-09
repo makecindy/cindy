@@ -58,6 +58,8 @@ export type MaterializedSshRemoteMedia =
       ok: false;
       status: 400 | 403 | 404 | 415 | 502;
       message: string;
+      code?: 'OVERSIZE';
+      size?: number;
     };
 
 function defaultDeps(): SshMediaDeps {
@@ -217,7 +219,7 @@ export async function materializeSshRemoteMedia(
   origUrl: string,
   deps: SshMediaDeps = defaultDeps(),
   /**
-   * 取件方带来的额外约束(HTML 资源透传专用;省略 = 只受既有 workdir 限界约束)。
+   * Host 提供的取件约束；fileDownload 仅用于已授权文件下载，不由媒体 URL 决定。
    *
    * 两项都必须在**拉取之前**判:本函数 stat 完就会把整份文件分片拉进 Desktop 磁盘缓存,
    * 拉完再判等于 SSH 流量与磁盘已经花掉(review P2)。
@@ -226,7 +228,7 @@ export async function materializeSshRemoteMedia(
    * file-service 现在没有暴露 realpath;这条限制与既有 SSH 媒体边界(toWorkdirRelPosix
    * 也是词法的、侧边栏文件浏览器共用)同级,不是本次新引入的缺口。
    */
-  limits?: { baseDir?: string; maxBytes?: number },
+  limits?: { baseDir?: string; maxBytes?: number; fileDownload?: boolean },
 ): Promise<MaterializedSshRemoteMedia> {
   const abs = extractMediaPathQuery(origUrl);
   if (!abs) return { ok: false, status: 400, message: '媒体 URL 缺少路径语义' };
@@ -254,7 +256,9 @@ export async function materializeSshRemoteMedia(
   }
 
   const ext = path.posix.extname(relPath).toLowerCase();
-  const mime = MIME_BY_EXT[ext];
+  // Explicit file downloads can carry non-media attachments. The renderer
+  // media protocol never sets this option and retains its extension allowlist.
+  const mime = MIME_BY_EXT[ext] ?? (limits?.fileDownload ? 'application/octet-stream' : undefined);
   if (!mime) return { ok: false, status: 415, message: '该扩展名不是允许的媒体类型' };
 
   try {
@@ -269,6 +273,8 @@ export async function materializeSshRemoteMedia(
       return {
         ok: false,
         status: 403,
+        code: 'OVERSIZE',
+        size: stat.size,
         message: `资源超出取件大小上限(${stat.size} > ${maxBytes} 字节)`,
       };
     }

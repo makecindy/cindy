@@ -236,6 +236,26 @@ describe('materializeSshRemoteMedia — baseDir / maxBytes 约束', () => {
     expect(r.ok).toBe(true);
   });
 
+  it.each(['notes.md', 'notes.txt', 'sheet.xlsx', 'LICENSE'])('materializes explicit file downloads: %s', async (name) => {
+    const { deps, fetchToCache } = makeDeps();
+    const url = urlFor('/home/u/proj/' + name);
+    await expect(materializeSshRemoteMedia(origin, url, deps)).resolves.toMatchObject({ ok: false, status: 415 });
+    expect(fetchToCache).not.toHaveBeenCalled();
+    await expect(materializeSshRemoteMedia(origin, url, deps, { fileDownload: true })).resolves.toMatchObject({ ok: true, relPath: name });
+    fetchToCache.mockClear();
+    await expect(materializeSshRemoteMedia(origin, urlFor('/home/u/private/' + name), deps, { fileDownload: true })).resolves.toMatchObject({ ok: false, status: 403 });
+    expect(fetchToCache).not.toHaveBeenCalled();
+  });
+
+  it('reports an oversized text attachment before fetching any SSH bytes', async () => {
+    const size = 11 * 1024 * 1024;
+    const { deps, fetchToCache } = makeDeps(size);
+    await expect(materializeSshRemoteMedia(origin, urlFor('/home/u/proj/notes.md'), deps, {
+      fileDownload: true, maxBytes: 10 * 1024 * 1024,
+    })).resolves.toMatchObject({ ok: false, code: 'OVERSIZE', size });
+    expect(fetchToCache).not.toHaveBeenCalled();
+  });
+
   it('baseDir 外 → 403,且不拉字节', async () => {
     const { deps, fetchToCache } = makeDeps();
     const r = await materializeSshRemoteMedia(origin, urlFor('/home/u/proj/other/a.png'), deps, {

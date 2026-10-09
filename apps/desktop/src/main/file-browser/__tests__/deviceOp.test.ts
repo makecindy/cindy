@@ -18,6 +18,38 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { WorkdirWatchManager, type RemoteFileTreeEvent } from '@cindy/remote-file-service';
 import { FILE_BROWSER_EVENT_CHANNEL } from '@cindy/device-link';
 import type { RemoteWorkingDirCheckResult } from '../../device-link/remote-workdir-guard.js';
+import type { SharedTaskPeerCapture } from '../../device-link/sharedTaskDispatch.js';
+import { assertSharedTaskInvoke } from '../../device-link/sharedTaskDispatch.js';
+import { fetchChatFile } from '../chat-file.js';
+
+const shared = vi.hoisted(() => ({
+  capture: undefined as SharedTaskPeerCapture | undefined,
+  controllerDeviceId: undefined as string | null | undefined,
+  snapshot: vi.fn(),
+}));
+vi.mock('../../device-link/invoke-context.js', () => ({
+  getDeviceLinkInvokeContext: () =>
+    shared.controllerDeviceId === null ? null : { controllerDeviceId: shared.controllerDeviceId, sharedTask: shared.capture },
+  runDeviceLinkInvokeContext: async (context: { controllerDeviceId?: string; sharedTask?: SharedTaskPeerCapture }, fn: () => unknown) => {
+    const prev = shared.controllerDeviceId;
+    const prevCapture = shared.capture;
+    shared.controllerDeviceId = context.controllerDeviceId;
+    shared.capture = context.sharedTask
+      ? {
+          ...(shared.capture ?? {
+            author: { sharedTaskId: 'share', sessionId: 'task', memberId: 'member', accountId: 'guest', displayName: 'Guest' },
+          }),
+          ...context.sharedTask,
+          isCurrent: () => true,
+          authorize: () => true,
+        }
+      : undefined;
+    try { return await fn(); } finally { shared.controllerDeviceId = prev; shared.capture = prevCapture; }
+  },
+}));
+vi.mock('../../localDb/ipc/sessions.js', () => ({ getSessionFsSnapshot: shared.snapshot }));
+vi.mock('../../cindy-media/blobStore.js', () => ({ parseBlobUrl: () => null }));
+vi.mock('../../cindy-media/ledger.js', () => ({ sessionCanRead: vi.fn() }));
 
 const pushSpy = vi.fn();
 const ownerStampState = vi.hoisted(() => ({
@@ -134,6 +166,7 @@ describe('file-browser device-op', () => {
 
   beforeEach(async () => {
     vi.clearAllMocks();
+    shared.capture = undefined;
     ownerStampState.current = { dataOwnerId: 'owner-a', ownerGeneration: 7 };
     sshListenerState.hostEventHandlers.length = 0;
     sshListenerState.hostConnectedHandlers.length = 0;
@@ -148,6 +181,55 @@ describe('file-browser device-op', () => {
   afterEach(async () => {
     onFsWatchReleased(workdir);
     await rm(workdir, { recursive: true, force: true });
+  });
+
+  it('opens a shared history file through the real stat gate and authorized file URL', async () => {
+    let current = true;
+    shared.capture = {
+      author: { sharedTaskId: 'share', sessionId: 'task', memberId: 'member', accountId: 'guest', displayName: 'Guest' },
+      isCurrent: () => current, authorize: () => current,
+    };
+    shared.snapshot.mockResolvedValue({ workingDir: workdir, remoteHostId: null });
+    const invoke = async (args: { op: string; workdir: string; relPath?: string }) => {
+      assertSharedTaskInvoke(shared.capture!, { channel: 'file-browser:remote-op', args: [args] });
+      return handleRemoteOp(args);
+    };
+    const result = await fetchChatFile({ origin: { kind: 'device', deviceId: 'host' }, workdir, absPath: path.join(workdir, 'src/a.ts') }, () => {}, {
+      sshStat: vi.fn(),
+      deviceStat: async (_device, root, relPath) => await invoke({ op: 'stat', workdir: root, relPath }) as { type: 'file'; size: number; mtimeMs: number },
+      fetchBigFile: async ({ relPath }) => {
+        expect(await invoke({ op: 'caps', workdir })).toMatchObject({ fileRead: true });
+        const reference = await invoke({ op: 'fileUrl', workdir, relPath }) as { ok: boolean; url: string };
+        expect(reference.ok).toBe(true);
+        return new URL(reference.url).searchParams.get('path')!;
+      },
+      deviceMediaFetch: vi.fn(), downloadToFile: vi.fn(), removeRemote: vi.fn(), fetchToCache: vi.fn(), findStale: vi.fn(),
+    });
+    expect(result).toMatchObject({ ok: true, stale: false });
+    await expect(invoke({ op: 'readFile', workdir, relPath: 'src/a.ts' })).resolves.toMatchObject({ ok: true, data: { content: 'export const a = 1;\n' } });
+    await expect(invoke({ op: 'stat', workdir: path.dirname(workdir), relPath: 'private' })).rejects.toThrow('PERMISSION_DENIED');
+    await expect(invoke({ op: 'stat', workdir, relPath: '../private' })).rejects.toThrow('PERMISSION_DENIED');
+    await expect(invoke({ op: 'writeFile', workdir, relPath: 'src/a.ts' })).rejects.toThrow('PERMISSION_DENIED');
+    shared.snapshot.mockImplementation(async () => { current = false; return { workingDir: workdir, remoteHostId: null }; });
+    await expect(invoke({ op: 'caps', workdir })).rejects.toThrow('PERMISSION_DENIED');
+  });
+
+  it('uses the shared task SSH host even when another endpoint has the same workdir', async () => {
+    shared.capture = {
+      author: { sharedTaskId: 'share', sessionId: 'task', memberId: 'member', accountId: 'guest', displayName: 'Guest' },
+      isCurrent: () => true, authorize: () => true,
+    };
+    // SSH paths are wire POSIX paths, independent of the test runner platform.
+    shared.snapshot.mockResolvedValue({ workingDir: '/work', remoteHostId: 'task-ssh' });
+    dbRowsMock.mockReturnValue([{ remoteHostId: 'other-ssh' }]);
+    sshRequestMock.mockResolvedValue({ type: 'file', size: 12, mtimeMs: 1 });
+    const result = await handleRemoteOp({ op: 'fileUrl', workdir: '/work', relPath: 'report.pdf' }) as { ok: boolean; url: string };
+    expect(result.ok).toBe(true);
+    expect(sshRequestMock).toHaveBeenCalledWith('task-ssh', 'stat', { workdir: '/work', relPath: 'report.pdf' });
+    const url = new URL(result.url);
+    expect(url.searchParams.get('sessionId')).toBe('task');
+    expect(url.searchParams.get('remoteHostId')).toBe('task-ssh');
+    expect(url.searchParams.get('workdir')).toBe('/work');
   });
 
   it('rejects invalid args and guard-denied workdir', async () => {
@@ -927,16 +1009,16 @@ describe('file-browser device-op', () => {
         handleRemoteOp({ op: 'exportDirStart', workdir, relPath: 'src/a.ts' }),
       ),
     ).toEqual({ ok: false, message: 'not a directory' });
-    expect(
-      await runDeviceLinkInvokeContext(
+    await expect(
+      runDeviceLinkInvokeContext(
         {
           controllerDeviceId: 'guest',
           channel: 'file-browser:remote-op',
-          sharedTask: {} as never,
+          sharedTask: { author: { sharedTaskId: 'share', sessionId: 'task', memberId: 'member', accountId: 'guest', displayName: 'Guest' }, isCurrent: () => true, authorize: () => true } as never,
         },
         () => handleRemoteOp({ op: 'exportDirStart', workdir, relPath: 'src' }),
       ),
-    ).toEqual({ ok: false, message: 'REMOTE_UNSUPPORTED' });
+    ).rejects.toThrow('PERMISSION_DENIED');
     // 工作目录本身(relPath 为空)也可导出。
     expect(
       await asController(() => handleRemoteOp({ op: 'exportDirStart', workdir, relPath: '' })),

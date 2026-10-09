@@ -20,6 +20,28 @@ beforeEach(() => {
   deps.query.mockResolvedValue([]);
 });
 describe('shared task media access', () => {
+  it('allows an exact historical file attachment outside the workdir, never prose or another file', async () => {
+    const file = path.resolve('downloads', 'report.pdf');
+    const url = 'xdt-file://open?path=' + encodeURIComponent(file);
+    deps.query.mockResolvedValue([{ content: JSON.stringify({ text: 'report', files: [{ name: 'report.pdf', path: file }] }) }]);
+    await expect(assertSharedTaskMedia(url, capture)).resolves.toEqual({ file });
+    expect(deps.query.mock.calls[0][0]).toContain("role = 'user' AND rewind_at IS NULL");
+    expect(deps.query.mock.calls[0][1]).toEqual(['task']);
+    await expect(assertSharedTaskMedia(url + '.other', capture)).rejects.toThrow('PERMISSION_DENIED');
+    deps.query.mockResolvedValue([{ content: JSON.stringify({ text: url }) }]);
+    await expect(assertSharedTaskMedia(url, capture)).rejects.toThrow('PERMISSION_DENIED');
+  });
+  it('rejects a historical attachment replaced by a symlink and revocation during history lookup', async () => {
+    const file = path.resolve('downloads', 'report.pdf');
+    const url = 'xdt-file://open?path=' + encodeURIComponent(file);
+    const rows = [{ content: JSON.stringify({ files: [{ path: file }] }) }];
+    deps.query.mockResolvedValue(rows);
+    deps.realpath.mockImplementation(async (value: string) => value === file ? path.resolve('other', 'private.pdf') : path.resolve(value));
+    await expect(assertSharedTaskMedia(url, capture)).rejects.toThrow('PERMISSION_DENIED');
+    deps.realpath.mockImplementation(async (value: string) => path.resolve(value));
+    deps.query.mockImplementation(async () => { current = false; return rows; });
+    await expect(assertSharedTaskMedia(url, capture)).rejects.toThrow('PERMISSION_DENIED');
+  });
   it('allows legacy generated media only when its complete URL occurs in host-authored task history', async () => {
     const url = 'xdt-video://art/clip.mp4';
     deps.query.mockResolvedValue([{ content: JSON.stringify({ text: '[video](' + url + ')' }) }]);

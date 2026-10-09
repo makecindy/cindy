@@ -116,6 +116,7 @@ import { captureSharedTaskPeer, captureSharedTaskPush, assertSharedTaskInvoke, s
 import { runAsBackgroundDbRpc } from '../localDb/client/rpcAdmission.js';
 import { fetchLocalMediaToOss } from './mediaFetch';
 import { refreshSharedTaskPeer } from './sharedTaskDispatch.js';
+import { readSharedTaskTextPreview } from './sharedTaskTextPreview.js';
 import { transcribeRemoteVoiceInput } from './voiceTranscribe';
 import { readTelegramRemoteStatus, setTelegramRemoteOnline } from './telegramRemoteControl';
 import { adviseAndRecordVoiceInputDictionaryLearning } from '../voice-input/index.js';
@@ -4241,6 +4242,12 @@ async function executeRemoteInvoke(src: string, payload: InvokePayload | undefin
       log.warn(`media:fetch failed from ${shortId(src)}: ${message}`);
       return { ok: false, error: { code: 'MEDIA_FETCH_FAILED', message } };
     }
+  }
+
+  const sharedFileReader = getDeviceLinkInvokeContext()?.sharedTask;
+  if (sharedFileReader && payload.channel === 'text-file:read-preview') {
+    const request = payload.args?.[0] as { filePath: string };
+    return { ok: true, result: await readSharedTaskTextPreview(request.filePath, sharedFileReader) };
   }
 
   // device-link:telegram:* 不是 ipcMain handler(IM 的 ipcMain 面统一挂了

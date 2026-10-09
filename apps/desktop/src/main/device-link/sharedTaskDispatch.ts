@@ -208,6 +208,30 @@ export function assertSharedTaskInvoke(
     // The media handler validates ledger/workdir ownership before reading bytes.
     return;
   }
+  if (channel === 'file-browser:remote-op') {
+    const request = record(args[0]);
+    const fields: Record<string, readonly string[]> = {
+      caps: [], stat: ['relPath'], fileUrl: ['relPath'], thumbnail: ['relPath'],
+      readFile: ['relPath', 'acceptGzip'],
+      listDir: ['relPath', 'hideMetaFiles', 'includeIgnored', 'maxEntries', 'docMode'],
+    };
+    const allowed = request && typeof request.op === 'string' && Object.hasOwn(fields, request.op)
+      ? fields[request.op] : undefined;
+    if (args.length !== 1 || !request || !allowed || typeof request.workdir !== 'string' || !request.workdir ||
+        Object.keys(request).some((key) => !['op', 'workdir', ...allowed].includes(key)) ||
+        !capture.authorize('attachment.read')) deny();
+    if (request.op !== 'caps' && (typeof request.relPath !== 'string' ||
+        /^[\\/]|^[A-Za-z]:/.test(request.relPath) || request.relPath.split(/[\\/]/).includes('..'))) deny();
+    // The handler checks this workdir against the Host-owned task snapshot,
+    // resolves the exact SSH host and validates the physical path before reads.
+    return;
+  }
+  if (channel === 'text-file:read-preview') {
+    const request = record(args[0]);
+    if (args.length !== 1 || !request || typeof request.filePath !== 'string' || !request.filePath ||
+        Object.keys(request).some((key) => key !== 'filePath') || !capture.authorize('attachment.read')) deny();
+    return;
+  }
   // Display-only catalogs used by the existing remote composer. The provider
   // response goes through dispatch's normal credential-free projection.
   if (channel === 'maker:get-capabilities' || channel === 'maker:provider:list') {

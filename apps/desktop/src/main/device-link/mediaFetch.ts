@@ -318,10 +318,7 @@ export async function resolveAuthorizedMedia(arg: unknown, maximumBytes?: number
   const url = record.url;
   if (typeof url !== 'string' || !url) throw new Error('media:fetch 缺少 url');
   const sharedTask = getDeviceLinkInvokeContext()?.sharedTask;
-  let sharedRoot: string | undefined;
-  if (sharedTask) {
-    sharedRoot = await assertSharedTaskMedia(url, sharedTask);
-  }
+  const sharedScope = sharedTask ? await assertSharedTaskMedia(url, sharedTask) : undefined;
   const isPathMedia = url.startsWith('xdt-file://') || url.startsWith('xdt-audio://');
   const sshOrigin = isPathMedia ? await parseSshMediaOrigin(url) : null;
   const constraints: PathMediaConstraints = isPathMedia
@@ -335,15 +332,18 @@ export async function resolveAuthorizedMedia(arg: unknown, maximumBytes?: number
     // SSH 分支的两道约束必须在 materialize **内部**生效:它 stat 完就会把整份文件分片拉进
     // Desktop 磁盘缓存,拉完再判等于流量已经花掉。
     const sshLimits =
-      constraints.baseDir !== null || constraints.maxBytes !== null
+      sharedTask || constraints.baseDir !== null || constraints.maxBytes !== null
         ? {
+            ...(sharedTask && url.startsWith('xdt-file://') ? { fileDownload: true } : {}),
             ...(constraints.baseDir ? { baseDir: constraints.baseDir } : {}),
             ...(constraints.maxBytes !== null ? { maxBytes: constraints.maxBytes } : {}),
           }
         : undefined;
     const materialized = await materializeSshRemoteMedia(sshOrigin, url, undefined, sshLimits);
     if (!materialized.ok) {
-      throw new Error(`SSH 媒体取回失败（${materialized.status}）：${materialized.message}`);
+      throw Object.assign(new Error(`SSH 媒体取回失败（${materialized.status}）：${materialized.message}`), {
+        code: materialized.code, size: materialized.size,
+      });
     }
     absPath = materialized.cachePath;
     mimeType = materialized.mime;
@@ -387,8 +387,8 @@ export async function resolveAuthorizedMedia(arg: unknown, maximumBytes?: number
       throw new Error('媒体文件不存在或不可读');
     }
     // realpath 再查:挡字面形式看似无害的 symlink 逃逸。
-    if (sharedRoot && !isInsideRealDir(real, sharedRoot)) {
-      throw new Error('[PERMISSION_DENIED] Media left the shared task workdir');
+    if (sharedScope && (real !== sharedScope.file || sharedScope.root && !isInsideRealDir(real, sharedScope.root))) {
+      throw new Error('[PERMISSION_DENIED] Shared task file changed during read');
     }
     if (!isPathAllowedAgainst(real, getSensitiveMediaBlocklist())) {
       log.warn(`media:fetch blocked sensitive realpath ${url.slice(0, 60)}`);
@@ -422,7 +422,9 @@ export async function resolveAuthorizedMedia(arg: unknown, maximumBytes?: number
       log.warn(
         `media:fetch rejected oversize ${sizeStat.size}B > ${constraints.maxBytes}B ${url.slice(0, 60)}`,
       );
-      throw new Error(`资源超出取件大小上限(${sizeStat.size} > ${constraints.maxBytes} 字节)`);
+      throw Object.assign(new Error(`资源超出取件大小上限(${sizeStat.size} > ${constraints.maxBytes} 字节)`), {
+        code: 'OVERSIZE', size: sizeStat.size,
+      });
     }
   }
 
