@@ -8168,7 +8168,7 @@ export function registerGhostIpc(): void {
 
   ipcMain.handle('ghosts:acknowledge-retirement', (event, id: unknown) => {
     assertTrustedAppRendererEvent(event);
-    if (typeof id !== 'string' || !isValidGhostId(id))
+    if (typeof id !== 'string' || !isPluginInstanceKey(id))
       throwIpcError('INVALID_PARAMS', 'Invalid plugin id');
     requireGhostAvailableForActiveSession(id);
     try {

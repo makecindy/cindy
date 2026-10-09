@@ -163,4 +163,5 @@ describe('feature retirement upgrade', () => {
     expect(store.observe('ios-simulator', '_root__helper', true).unread).toBe(false);
     expect(store.observe('ios-simulator', '_ns__acme__helper', true).unread).toBe(true);
   });
+
 });
