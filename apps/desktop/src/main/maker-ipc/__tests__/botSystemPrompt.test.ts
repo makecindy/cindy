@@ -129,7 +129,10 @@ describe('稳定层:能力必须写进提示词', () => {
     expect(all).toContain('stop_session_task');
     expect(all).toContain('send_to_agent');
     expect(all).toContain('不启动任务');
-    expect(all).toContain('编码实施和中大型工作必须用 `start_session_task`');
+    expect(all).toContain('优先在当前对话完成能清楚收口的工作');
+    expect(all).toContain('用户明确要求独立任务');
+    expect(all).toContain('隔离工作区、并行交付或独立跟踪');
+    expect(all).not.toContain('编码实施和中大型工作');
     expect(all).toContain('不要只为“收到”“好的”互相确认');
     expect(all).not.toContain('collaborate_with_bot');
     expect(all).not.toContain('action=notify');
@@ -141,6 +144,7 @@ describe('稳定层:能力必须写进提示词', () => {
     expect(none).not.toContain('save_teammate_skill');
     expect(none).not.toContain('create_teammate');
     expect(none).not.toContain('make_pptx');
+    expect(none).not.toContain('start_session_task');
   });
 
   it('交付纪律恒在:要真做出来,被挡住说实话,不许编', () => {

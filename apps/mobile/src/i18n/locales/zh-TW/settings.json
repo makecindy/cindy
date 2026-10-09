@@ -35,7 +35,7 @@
   },
   "language": {
     "title": "語言",
-    "hint": "僅影響應用介面。Agent 回覆語言由 Agent 自身決定。",
+    "hint": "介面和 AI 錯誤說明使用此語言；一般回覆依你的訊息或語言要求",
     "options": {
       "system": "跟隨系統",
       "zh-CN": "簡體中文",
@@ -91,7 +91,7 @@
   "about": {
     "sectionTitle": "關於這臺手機",
     "deviceName": "裝置名稱",
-    "deviceNameDetail": "電腦端授權列表會顯示這個名稱。",
+    "deviceNameDetail": "顯示在電腦的授權列表中",
     "platform": "平臺",
     "editAccessibility": "修改{{label}}"
   },
@@ -188,9 +188,9 @@
     "refresh": "重新整理",
     "refreshing": "重新整理中…",
     "refreshAccessibility": "重新整理詞典",
-    "readOnlyHint": "手機只能檢視，新增和刪除請回電腦操作。",
-    "offlineHint": "電腦當前都不線上，顯示的是上次同步到手機的內容。",
-    "noDesktops": "還沒有可同步的電腦。在電腦上登入同一帳號後，詞典會自動出現在這裡。"
+    "readOnlyHint": "手機僅供檢視，新增或刪除詞條請到電腦操作",
+    "offlineHint": "電腦不在線上，正在顯示上次同步的詞典",
+    "noDesktops": "在電腦上登入同一帳號，即可同步詞典"
   },
   "deviceNameEditor": {
     "screenTitle": "裝置名稱",

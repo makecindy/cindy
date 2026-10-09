@@ -19,7 +19,7 @@ export interface ModelDescriptor {
   defaultProviderId?: string | null;
 }
 
-/** tier: 'budget' = codex/ 前缀的 gateway 折扣路由, 'standard' = 官方原版。仅出现在返回值, 供 agent 精准选型。 */
+/** tier: 'budget' = openai-codex/ 或 codex/ 前缀的 gateway 折扣路由, 'standard' = 官方原版。仅出现在返回值, 供 agent 精准选型。 */
 type ModelTier = 'budget' | 'standard';
 
 interface TaggedModel {
@@ -33,18 +33,26 @@ interface TaggedModel {
 /**
  * 给每个 model 打 tier 标记。
  *
- * tier='budget'(gateway 折扣 codex 路由) 的唯一判定依据是 model id 的 `codex/` 前缀 ——
- * 与 renderer ModelSelector.categorize() 的归类规则保持一致 (codex/* → 折扣分组),
+ * tier='budget'(gateway 折扣路由) 的判定依据是 model id 的 `openai-codex/` 或 `codex/` 前缀 ——
+ * 与 `@cindy/model-providers` 的 `CODEX_GATEWAY_WIRE_PREFIXES` 保持一致,
  * 也与 host CODEX_BUDGET_MODELS 的 id 命名约定一致。据此打 tier 后, agent 不必再从
  * label / description 里语义推断, 直接按 tier 精准匹配用户指定的档位。
  * label (= host displayName, 同时是 UI 下拉展示名) 不受影响, 保持干净。
  */
+function isBudgetWireModel(modelId: string): boolean {
+  const id = modelId.trim().toLowerCase();
+  return (
+    (id.startsWith('openai-codex/') && id.length > 'openai-codex/'.length) ||
+    (id.startsWith('codex/') && id.length > 'codex/'.length)
+  );
+}
+
 function tagTier(models: ModelDescriptor[] | undefined): TaggedModel[] | undefined {
   if (!models) return undefined;
   return models.map((m) => ({
     id: m.id,
     label: m.label,
-    tier: m.id.startsWith('codex/') ? 'budget' : 'standard',
+    tier: isBudgetWireModel(m.id) ? 'budget' : 'standard',
     ...(m.providers
       ? {
           providers: m.providers.map((provider) => ({
@@ -87,7 +95,7 @@ const DESCRIPTION = [
   '- default_provider_id: 未显式选择来源时 host 当前解析出的默认来源；providers 只有一项时直接使用该项。',
   '',
   'tier 字段 (用于精准选型, 不要靠 label 推断):',
-  "- tier='budget': codex/ 前缀的 gateway 折扣路由 (如 codex/gpt-5.5)",
+  "- tier='budget': openai-codex/ 或 codex/ 前缀的 gateway 折扣路由 (如 openai-codex/gpt-5.5、codex/gpt-5.5)",
   "- tier='standard': 官方原版 (如 gpt-5.5)",
   '选型规则: 用户明确要求折扣路由 → 选 tier=budget 的模型; 说「官方 / 原版 / 普通版」→ 选 tier=standard。',
   '默认规则: 用户只报模型名 (如 "gpt-5.5") 时, 一律默认 tier=standard (官方原版); 只有用户明确要求折扣路由才允许选 tier=budget。',

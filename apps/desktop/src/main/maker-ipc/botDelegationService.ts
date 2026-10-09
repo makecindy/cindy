@@ -427,6 +427,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
   const completionRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
   /** Serializes a terminal receipt with a user continuing the same task card. */
   const completionInFlight = new Map<string, Promise<void>>();
+  const terminalSettlements = new Map<string, Promise<void>>();
   const interactionRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const cleanupRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const resumeRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -3958,7 +3959,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
     return [];
   };
 
-  const settleSession = async (params: Parameters<typeof settleSessionUnserialized>[0]) => {
+  const settleSessionSerialized = async (params: Parameters<typeof settleSessionUnserialized>[0]) => {
     // Publish an awaitable validation before the first database await. Queue drain
     // is already scheduled by the synchronous event adapter at this point.
     if (params.execution && params.pendingInputClientIds?.length) {
@@ -3988,6 +3989,38 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
     const [row] = await getDbClient().drizzle.select({ id: botDelegations.id, runSequence: botDelegations.runSequence }).from(botDelegations)
       .where(eq(botDelegations.childSessionId, params.childSessionId)).limit(1);
     if (row) await withTaskOperation(row.id, () => settleSessionUnserialized({ ...params, expectedRunSequence: row.runSequence }));
+  };
+
+  // Register synchronously: completion notices can arrive while settlement is
+  // still reading the DB. Await only this terminal attempt, never retry timers.
+  const settleSession = (params: Parameters<typeof settleSessionUnserialized>[0]): Promise<void> => {
+    const settlement = settleSessionSerialized(params);
+    terminalSettlements.set(params.childSessionId, settlement);
+    void settlement.finally(() => {
+      if (terminalSettlements.get(params.childSessionId) === settlement) terminalSettlements.delete(params.childSessionId);
+    }).catch(() => undefined);
+    return settlement;
+  };
+
+  const isCompletionHandledByTeammate = async (childSessionId: string): Promise<boolean> => {
+    const execution = deps.readSessionExecution?.(childSessionId);
+    if (!execution) return false;
+    await terminalSettlements.get(childSessionId);
+    const [row] = await getDbClient().drizzle.select().from(botDelegations)
+      .where(eq(botDelegations.childSessionId, childSessionId)).limit(1);
+    if (!row || row.status !== 'completed' || row.completionDeliveredAt == null || row.acceptedAt == null) return false;
+    const snapshot = parseRecord(row.permissionSnapshotJson);
+    const accepted = snapshot.taskExecution as (DelegationExecutionReceipt & { runSequence: number }) | undefined;
+    const terminal = snapshot.taskTerminal as {
+      runSequence: number; execution: DelegationExecutionReceipt; outcome: string;
+    } | undefined;
+    if (accepted?.runSequence !== row.runSequence || terminal?.runSequence !== row.runSequence
+      || terminal.outcome !== 'done' || !isSameSessionExecution(accepted, execution)
+      || !isSameSessionExecution(terminal.execution, execution) || !sameExecution(childSessionId, execution)) return false;
+    // An archived/paused requester cannot produce a new public reply. Preserve
+    // the task notice in that case, including delivery failures held for resume.
+    const requester = await requesterLiveSessionId(row.requestingBotId, row.parentSessionId);
+    return requester !== null && sameExecution(childSessionId, execution);
   };
 
   // Only delegation-owned entries from a validated terminal/resume boundary
@@ -4223,6 +4256,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
     cancelDelegationsForParentSession,
     cancelDelegationsForBot,
     settleSession,
+    isCompletionHandledByTeammate,
     acceptQueuedSessionInput,
     confirmQueuedSessionInputDispatched,
     handleInteractionStart,

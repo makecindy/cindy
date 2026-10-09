@@ -35,7 +35,7 @@
   },
   "language": {
     "title": "语言",
-    "hint": "仅影响应用界面。Agent 回复语言由 Agent 自身决定。",
+    "hint": "界面和 AI 错误说明使用此语言；普通回复按你的消息或语言要求",
     "options": {
       "system": "跟随系统",
       "zh-CN": "简体中文",
@@ -91,7 +91,7 @@
   "about": {
     "sectionTitle": "关于这台手机",
     "deviceName": "设备名称",
-    "deviceNameDetail": "电脑端授权列表会显示这个名称。",
+    "deviceNameDetail": "显示在电脑的授权列表中",
     "platform": "平台",
     "editAccessibility": "修改{{label}}"
   },
@@ -188,9 +188,9 @@
     "refresh": "刷新",
     "refreshing": "刷新中…",
     "refreshAccessibility": "刷新词典",
-    "readOnlyHint": "手机只能查看，添加和删除请回电脑操作。",
-    "offlineHint": "电脑当前都不在线，显示的是上次同步到手机的内容。",
-    "noDesktops": "还没有可同步的电脑。在电脑上登录同一账号后，词典会自动出现在这里。"
+    "readOnlyHint": "手机仅供查看，增删词条请到电脑操作",
+    "offlineHint": "电脑不在线，正在显示上次同步的词典",
+    "noDesktops": "在电脑上登录同一账号，即可同步词典"
   },
   "deviceNameEditor": {
     "screenTitle": "设备名称",

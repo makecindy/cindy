@@ -82,6 +82,9 @@ export function TeammateHomeScreen({ active = true }: { active?: boolean }) {
     </View>
     {navigation.saveFailed ? <Text accessibilityRole="alert" style={styles.notice}>{t('devices.companions.preferenceSaveFailed')}</Text> : null}
     <TeammateList key={searchEpoch} {...roster} autoFocusSearch={searchEpoch > 0}
+      loading={roster.items.length + groups.items.length === 0 && (roster.loading || groups.loading)}
+      refreshing={roster.refreshing || groups.refreshing}
+      error={groups.error ?? roster.error}
       onRefresh={() => { void roster.refresh(); if (groups.supported) void groups.refresh(); }}
       onSelect={(item) => { void navigation.openTeammate(item); }}
       groups={groups.supported || groups.items.length > 0 ? {

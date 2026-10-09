@@ -30,6 +30,8 @@ export interface DurableOutboxDeliveryDeps {
   enqueue(record: DurableOutboxRecord): Promise<InputProjection>;
   cancel(record: DurableOutboxRecord): Promise<boolean>;
   history(record: DurableOutboxRecord): Promise<boolean>;
+  /** A remote row alone cannot release the local bubble before offline history owns it. */
+  cacheHistory?(record: DurableOutboxRecord): Promise<boolean>;
   applyProjection(
     record: DurableOutboxRecord,
     projection: InputProjection,
@@ -56,7 +58,7 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
   const current = (r: DurableOutboxRecord) =>
     !stopped && deps.isCurrent() && deps.store.getSnapshot().includes(r);
   const hasDurableOwnership = (r: DurableOutboxRecord) =>
-    r.state === "host-owned" && r.retrySafe === true;
+    r.state === "host-owned" && isDurableOutboxHandedOff(r);
   async function deliver(initial: DurableOutboxRecord) {
     let record = initial;
     due.set(id(record), Date.now() + 5_000);
@@ -75,6 +77,17 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
       await deps.store.remove(record);
       due.delete(id(record));
       attempts.delete(id(record));
+    };
+    const finishHistory = async () => {
+      if (!current(record)) return;
+      if (deps.cacheHistory && !await deps.cacheHistory(record)) {
+        // Even a legacy host has durably accepted this row. Retaining its local
+        // bubble must not block later sends or make the old message retryable.
+        if (current(record) && !record.historyConfirmed)
+          await update({ state: 'host-owned', historyConfirmed: true, error: undefined });
+        return;
+      }
+      if (current(record)) await finish();
     };
     try {
       if (record.draftHandoff) {
@@ -142,7 +155,7 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
           // Legacy hosts cannot seal a not-yet-arrived enqueue. Keep uncertain cancellation visible.
           await update({ state: "failed", error: deps.confirmationMessage });
         } else if (await deps.history(record)) {
-          if (current(record)) await finish();
+          await finishHistory();
         } else if (current(record)) {
           await update({ state: "failed", error: deps.confirmationMessage });
         }
@@ -163,7 +176,7 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
         if (record.state !== "host-owned") await deps.accepted?.(record);
         if (!current(record)) return;
         if (await deps.history(record)) {
-          if (current(record)) await finish();
+          await finishHistory();
           return;
         }
         if (!current(record)) return;
@@ -174,7 +187,7 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
       }
       // Even old hosts may already have persisted a user row after the enqueue receipt was lost.
       if ((record.prepared || state === "pending" || state === "accepted") && (await deps.history(record))) {
-        if (current(record)) await finish();
+        await finishHistory();
         return;
       }
       if (!current(record) || record.state === "failed") return;

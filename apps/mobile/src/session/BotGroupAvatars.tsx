@@ -27,6 +27,7 @@ export interface BotGroupIdentity {
   botId: string;
   name: string;
   avatar?: RemoteResourceAvatar;
+  avatarUrl?: string | null;
 }
 
 /** Timeline and plan rows: Desktop BotAvatar `sm` / `xs` on a phone. */
@@ -56,20 +57,20 @@ export function useBotGroupIdentities(deviceId: string) {
     void readRemoteResourceSnapshot(userId).then(() => { if (current) setLoaded((value) => value + 1); });
     return () => { current = false; };
   }, [userId]);
-  return useCallback((botId: string, fallbackName = '', member?: Pick<BotGroupMemberView, 'name' | 'avatar' | 'avatarColor'>): BotGroupIdentity => {
+  return useCallback((botId: string, fallbackName = '', member?: Pick<BotGroupMemberView, 'name' | 'avatar' | 'avatarColor' | 'avatarUrl'>): BotGroupIdentity => {
     void revision; void loaded;
     const cached = botId ? cachedBotItem(userId, BOT_GROUP_TEAMMATES_COLLECTION_ID, deviceId, botId) : null;
     const cachedName = cached ? resolveRemoteText(cached.display.title, i18n.language) : '';
     const name = fallbackName.trim() || member?.name.trim() || cachedName || '';
     const avatar = cached?.display.avatar ?? (member ? botGroupMemberAvatar({ ...member, name: member.name || name }) : undefined);
-    return { botId, name, ...(avatar ? { avatar } : {}) };
+    return { botId, name, ...(avatar ? { avatar } : {}), ...(member?.avatarUrl ? { avatarUrl: member.avatarUrl } : {}) };
   }, [deviceId, i18n.language, loaded, revision, userId]);
 }
 
 export function BotGroupAvatar({ deviceId, identity, size, online }: {
   deviceId: string; identity: BotGroupIdentity; size: number; online: boolean;
 }) {
-  return <RemoteCompanionAvatar avatar={identity.avatar} deviceId={deviceId} name={identity.name} online={online} size={size} framed />;
+  return <RemoteCompanionAvatar avatar={identity.avatar} imageUrl={identity.avatarUrl} deviceId={deviceId} name={identity.name} online={online} size={size} framed />;
 }
 
 /**

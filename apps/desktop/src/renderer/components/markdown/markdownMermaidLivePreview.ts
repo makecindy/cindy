@@ -570,7 +570,10 @@ class MermaidWidget extends WidgetType {
         ev.stopPropagation();
         if (copyImgPending) return;
         copyImgPending = true;
-        svgToPngBlob(svg, { background: resolveExportBackground(root) })
+        svgToPngBlob(svg, {
+          background: resolveExportBackground(root),
+          fontFamily: window.getComputedStyle(root).fontFamily,
+        })
           .then((blob) => copyPngBlobToClipboard(blob, this.source))
           .then(() => {
             copyImgBtn.innerHTML = SVG_CHECK;

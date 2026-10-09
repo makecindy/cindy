@@ -712,6 +712,52 @@ describe("app-owned delivery and reconciliation", () => {
     expect(store.getSnapshot()).toEqual([]);
     expect(deps.cleanup).toHaveBeenCalledOnce();
   });
+  it.each([true, false])('retains a confirmed send across restart until history is cached (durable host=%s)', async (durable) => {
+    const first = await setup();
+    await first.store.add({ ...message(), state: durable ? 'host-owned' : 'confirming',
+      retrySafe: durable, prepared: { clientId: 'id-1' } as QueuedRemoteMessage });
+    first.deps.history.mockResolvedValue(true);
+    first.deps.projection.mockResolvedValue(durable ? projection('id-1', 'accepted')
+      : { pendingQueue: [] } as unknown as DeliveryProjection);
+    const cacheHistory = vi.fn(async () => false);
+    await createDurableOutboxDelivery({ ...first.deps, cacheHistory }).run();
+    expect(first.deps.cleanup).not.toHaveBeenCalled();
+    expect(first.store.getSnapshot()[0]?.cleanupOutcome).toBeUndefined();
+    expect(first.store.getSnapshot()[0]?.historyConfirmed).toBe(true);
+    const restarted = await setup(first.storage);
+    expect(restarted.store.getSnapshot()[0]?.item.text).toBe('keep this message');
+    restarted.deps.history.mockResolvedValue(true);
+    restarted.deps.projection.mockResolvedValue(durable ? projection('id-1', 'accepted')
+      : { pendingQueue: [] } as unknown as DeliveryProjection);
+    const saved = deferred<boolean>();
+    const run = createDurableOutboxDelivery({ ...restarted.deps, cacheHistory: () => saved.promise }).run();
+    await vi.waitFor(() => expect(restarted.deps.history).toHaveBeenCalled());
+    expect(restarted.store.getSnapshot()[0]?.cleanupOutcome).toBeUndefined();
+    saved.resolve(true);
+    await run;
+    expect(restarted.store.getSnapshot()).toEqual([]);
+    expect(restarted.deps.enqueue).not.toHaveBeenCalled();
+    expect(restarted.deps.cleanup).toHaveBeenCalledOnce();
+  });
+  it('does not block later legacy sends while the first confirmed row awaits caching', async () => {
+    const { store, deps } = await setup();
+    await store.add({ ...message(), state: 'host-owned', historyConfirmed: true, retrySafe: false,
+      prepared: { clientId: 'id-1' } as QueuedRemoteMessage });
+    await store.add(message('id-2'));
+    deps.projection.mockResolvedValue({ pendingQueue: [] } as unknown as DeliveryProjection);
+    deps.history.mockResolvedValue(true);
+    await createDurableOutboxDelivery({ ...deps, cacheHistory: async () => false }).run();
+    expect(deps.enqueue.mock.calls.map(([record]) => record.item.clientId)).toEqual(['id-2']);
+    expect(store.getSnapshot().find(record => record.item.clientId === 'id-1')?.historyConfirmed).toBe(true);
+  });
+  it('does not release a send if its owner changes while history is being cached', async () => {
+    const { store, deps, deactivate } = await setup();
+    await store.add({ ...message(), state: 'host-owned', retrySafe: true });
+    deps.history.mockResolvedValue(true);
+    await createDurableOutboxDelivery({ ...deps, cacheHistory: async () => { deactivate(); return true; } }).run();
+    expect(store.getSnapshot()[0]?.cleanupOutcome).toBeUndefined();
+    expect(deps.cleanup).not.toHaveBeenCalled();
+  });
   it("restarts after a lost receipt, finds durable host ownership, and never enqueues twice", async () => {
     const first = await setup();
     await first.store.add(message());

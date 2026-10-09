@@ -5,6 +5,7 @@ import { uploadPublicAsset } from '../ossPublicUpload.js';
 import { getClientEndpoint } from '../clientEndpointsService.js';
 import { readFile as readMedia } from '../cindy-media/blobStore.js';
 import { getAccessToken, refresh } from '../authManager.js';
+import { retryAfterDeadline } from '@cindy/auth-client';
 import { existsSync, readFileSync } from 'node:fs';
 import { request as httpRequest } from 'node:http';
 import { request as httpsRequest } from 'node:https';
@@ -58,7 +59,7 @@ interface ServerPlan {
 }
 interface Running {
   execution: Execution; sessionId: string; clientId: string; accepted: boolean; started: number;
-  settlement?: { terminal: BotGroupLaneTerminal; payload?: Record<string, unknown>; retryAt: number };
+  settlement?: { terminal: BotGroupLaneTerminal; payload?: Record<string, unknown>; retryAt: number; keepLease?: boolean };
   delivery?: Promise<void>;
   plan?: ServerPlan;
   workspace?: { workDir: string; branch: string | null; ownerSessionId: string | null };
@@ -67,8 +68,14 @@ interface Running {
   releaseToolAuthority?: () => void;
 }
 class ChatResponseError extends Error {
-  constructor(code: string, readonly status: number) { super(code); }
+  constructor(code: string, readonly status: number, readonly retryAt?: number) { super(code); }
 }
+const CHAT_AUTH_RETRY_MS = 60_000;
+const CHAT_REFRESHABLE_ERROR_CODES = new Set(['TOKEN_EXPIRED', 'INVALID_TOKEN', 'AUTH_REQUIRED']);
+const recoverableAuth = (error: ChatResponseError) => error.status === 401
+  && (CHAT_REFRESHABLE_ERROR_CODES.has(error.message) || error.message === 'INVALID_CHAT_RESPONSE');
+const retryableResponse = (error: ChatResponseError) => recoverableAuth(error)
+  || error.status >= 500 || [408, 429].includes(error.status);
 const id = z.string().uuid();
 const groupInput = z.object({ name: z.string().trim().min(1).max(40), botIds: z.array(z.string().min(1)).max(6) });
 const failure = (message: string): BotGroupFailure => ({ ok: false, errorCode: 'HOST_NOT_READY', message });
@@ -139,6 +146,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   let reconnect: ReturnType<typeof setTimeout> | undefined;
   let reconnectDelay = 500;
   let refreshActors: Promise<void> | undefined;
+  let authRefreshPromise: Promise<boolean> | undefined;
+  let authRefreshRetryAt = 0;
   let upgradedGroups = new Map<string, string>();
   const changed = (roomId: string) => {
     if (!current()) return;
@@ -149,6 +158,17 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   };
   // TLS for production; explicit loopback is only enabled by the isolated fixture.
   // Redirects are never followed and every retry remains in the captured account.
+  function refreshRejectedToken(token: string): Promise<boolean> {
+    if (!current()) return Promise.resolve(false);
+    // A concurrent request may already have replaced this request's token.
+    if (getAccessToken() !== token) return Promise.resolve(Boolean(getAccessToken()));
+    if (authRefreshPromise) return authRefreshPromise;
+    if (Date.now() < authRefreshRetryAt) return Promise.resolve(false);
+    // Even a successful refresh cannot repair a persistent upstream 401.
+    authRefreshRetryAt = Date.now() + CHAT_AUTH_RETRY_MS;
+    authRefreshPromise = refresh().finally(() => { authRefreshPromise = undefined; });
+    return authRefreshPromise;
+  }
   function api<T>(route: string, method = 'GET', data?: unknown, actorId?: string, retried = false): Promise<T> {
     if (!current()) return Promise.reject(new Error('OWNER_CHANGED'));
     if (!config.baseUrl) return Promise.reject(new Error('CHAT_ENDPOINT_UNAVAILABLE'));
@@ -171,13 +191,19 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         res.on('end', async () => {
           try {
             if (!current()) throw new Error('OWNER_CHANGED');
-            if (res.statusCode === 401 && !retried) {
-              if (await refresh() && current()) { resolve(api<T>(route, method, data, actorId, true)); return; }
-              throw new Error('AUTH_REQUIRED');
-            }
             if ((res.statusCode ?? 500) >= 300 && (res.statusCode ?? 500) < 400) throw new Error('CHAT_REDIRECT_REFUSED');
-            const value = JSON.parse(Buffer.concat(chunks).toString('utf8'));
-            if ((res.statusCode ?? 500) >= 400) throw new ChatResponseError(value.error?.code ?? 'REQUEST_FAILED', res.statusCode ?? 500);
+            const status = res.statusCode ?? 500;
+            const retryAt = status === 429 ? retryAfterDeadline({ headers: {
+              get: name => { const header = res.headers[name.toLowerCase()]; return typeof header === 'string' ? header : null; },
+            } }) : undefined;
+            let value;
+            try { value = JSON.parse(Buffer.concat(chunks).toString('utf8')); }
+            catch { throw new ChatResponseError('INVALID_CHAT_RESPONSE', status >= 400 ? status : 502, retryAt); }
+            const code = typeof value?.error?.code === 'string' ? value.error.code : 'REQUEST_FAILED';
+            if (res.statusCode === 401 && !retried && CHAT_REFRESHABLE_ERROR_CODES.has(code)) {
+              if (await refreshRejectedToken(token) && current()) { resolve(api<T>(route, method, data, actorId, true)); return; }
+            }
+            if (status >= 400) throw new ChatResponseError(code, status, retryAt);
             resolve(value);
           } catch (error) { reject(error); }
         });
@@ -564,8 +590,13 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         // Keep the result during transport/temporary service failures. A definitive
         // rejection (including revoked/expired leases) must never rerun the Agent
         // or post the private result under a new execution identity.
-        if (!(error instanceof ChatResponseError) || error.status >= 500 || [408, 429].includes(error.status)) {
-          pending.retryAt = Date.now() + 15000;
+        const recoveringAuth = error instanceof ChatResponseError && recoverableAuth(error);
+        if (!(error instanceof ChatResponseError) || retryableResponse(error)) {
+          const delayed = recoveringAuth || (error instanceof ChatResponseError && error.status === 429);
+          pending.keepLease = delayed;
+          pending.retryAt = delayed
+            ? Math.max(Date.now() + CHAT_AUTH_RETRY_MS, error instanceof ChatResponseError ? error.retryAt ?? 0 : 0)
+            : Date.now() + 15000;
           return;
         }
       } finally { run.delivery = undefined; }
@@ -701,8 +732,10 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     }
   }
   let polling = false;
+  let pollRetryAt = 0;
+  let pollFailures = 0;
   const timer = setInterval(() => {
-    if (!current() || polling) return;
+    if (!current() || polling || Date.now() < pollRetryAt) return;
     polling = true;
     void (async () => {
       for (const run of running.values()) if (run.settlement) void deliverSettlement(run);
@@ -714,14 +747,33 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         const { execution } = await api<{ execution: Execution | null }>('/executions/claim', 'POST', { operationId: randomUUID(), executorId, accessPolicyVersion: 1, planVersion: 1 }, actor.id);
         if (execution) void runExecution(execution);
       }
-    })().catch(() => undefined).finally(() => { polling = false; });
+    })().then(() => { pollFailures = 0; pollRetryAt = 0; }).catch(error => {
+      if (error instanceof ChatResponseError && (error.status === 401 || error.status === 429)) {
+        pollRetryAt = Math.max(Date.now() + CHAT_AUTH_RETRY_MS, error.retryAt ?? 0);
+      } else if (!(error instanceof ChatResponseError) || error.status >= 500) {
+        pollFailures += 1;
+        pollRetryAt = Date.now() + Math.min(60_000, 2_000 * 2 ** Math.min(pollFailures - 1, 5));
+      }
+    }).finally(() => { polling = false; });
   }, 2000);
   const checking = new Set<Running>();
   async function checkLease(run: Running) {
     if (run.settlement) {
-      // Large step artifacts may take longer than one lease to upload. Keep the
-      // lease alive while preparing the immutable completion, never rerun the Agent.
-      if (!run.settlement.payload) await updateExecution(run, 'heartbeat').catch(() => undefined);
+      // Auth/rate-limit waits need lease renewal; ordinary lost-response retries
+      // preserve the existing receipt lookup without an intervening heartbeat.
+      if (!run.settlement.payload || run.settlement.keepLease) {
+        try { await updateExecution(run, 'heartbeat'); }
+        catch (error) {
+          if (error instanceof ChatResponseError && !retryableResponse(error)) {
+            if (running.get(run.execution.bot_id) === run) {
+              run.releaseToolAuthority?.();
+              running.delete(run.execution.bot_id);
+              changed(run.execution.conversation_id);
+            }
+            return;
+          }
+        }
+      }
       await deliverSettlement(run); return;
     }
     if (checking.has(run) || running.get(run.execution.bot_id) !== run) return;

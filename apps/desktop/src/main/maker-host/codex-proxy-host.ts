@@ -9,8 +9,10 @@ import {
 } from '@cindy/responses-chat-bridge';
 import {
   isCustomRoutedProvider,
+  isCodexGatewayWireModel,
   providerCatalogId,
   providerModelRecord,
+  stripCodexGatewayWirePrefix,
   type CatalogModel,
   type Effort,
   type Provider,
@@ -529,11 +531,11 @@ function providerContextForRequest(
 }
 
 /**
- * 网关折扣命名空间判定：`codex/` 是 Gateway wire model 的档位标识，请求必须送往
- * 网关换 key，且转发时原样保留。它不是 Codex 运行时 slug，也不参与 spawn_agent。
+ * 网关折扣命名空间判定：`openai-codex/` 与 `codex/` 都是 Gateway wire model 的档位标识，
+ * 请求必须送往网关换 key，且转发时原样保留。它不是 Codex 运行时 slug，也不参与 spawn_agent。
  */
 function gatewayProviderIdForRewrittenModel(model: string): string | null {
-  return model.startsWith('codex/') && model.length > 'codex/'.length ? 'xd' : null;
+  return isCodexGatewayWireModel(model) ? 'xd' : null;
 }
 
 /** Applies the locked Subagent effort while preserving unrelated reasoning fields. */
@@ -882,7 +884,7 @@ function createGatewayNativeWebSearchTransform(frozenAuthInjection?: CodexProxyA
     const routeProviderId = providerContext.providerId
       ?? inferProviderIdForModel(model, 'codex')
       ?? rewrittenGatewayProviderId;
-    const gatewayModel = model.startsWith('codex/') ? model.slice('codex/'.length) : model;
+    const gatewayModel = stripCodexGatewayWirePrefix(model);
     if (!/^gpt-5\.6(?:$|[-.])/.test(gatewayModel)) return null;
 
     // Match the effective auth context used by this proxy's routing transform. Another
