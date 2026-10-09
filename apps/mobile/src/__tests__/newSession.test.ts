@@ -9,6 +9,7 @@ import {
   NEW_SESSION_AGENT_OPTIONS,
   availableNewSessionAgentOptions,
   canResolveStoredAgentRuntime,
+  assertSubmitModelResolved,
   isNewSessionRuntimePending,
   isStoredAgentRestorePending,
   nextStoredAgentRestoreStep,
@@ -490,6 +491,24 @@ describe('isNewSessionRuntimePending', () => {
     const autoStart = source.indexOf('const result = resolveNewSessionAutoDefault({');
     const autoEffect = source.slice(autoStart, source.indexOf('}, [', autoStart));
     expect(autoEffect).toContain('autoDefaultDeviceRef.current = previousAutoDefaultDevice;');
+  });
+
+  it('binds the settled model to the computer it was settled for', () => {
+    const source = readTextLf(resolve(process.cwd(), 'app/sessions/new.tsx'), 'utf8');
+    // 切到另一台电脑后重新等待,不能沿用上一台电脑落定的模型直接创建。
+    expect(source).toContain('settled: !!selectedDeviceId && runtimeSettledDeviceId === selectedDeviceId,');
+    expect(source).toContain("settleRuntime('stored-agent', deviceAtTrigger);");
+    expect(source).toContain("settleRuntime('stored-agent-model', selectedDeviceId);");
+    expect(source).toContain('result.appliedDeviceId);');
+  });
+
+  it('aborts creation instead of sending an empty model after the submit-time catalog check', () => {
+    expect(() => assertSubmitModelResolved({ model: 'claude-opus-5-5' }, 'claude-opus-5-5')).not.toThrow();
+    expect(() => assertSubmitModelResolved({ model: '' }, 'delisted-model'))
+      .toThrow('delisted-model 在这台电脑上已不可用，请重新选择模型后再发送。');
+    // 三处提交终检(创建前两处 + 鉴权后重验)都要经过这道拦截。
+    const source = readTextLf(resolve(process.cwd(), 'app/sessions/new.tsx'), 'utf8');
+    expect(source.split('assertSubmitModelResolved(resolved, effectiveDraft.model);').length - 1).toBe(3);
   });
 });
 

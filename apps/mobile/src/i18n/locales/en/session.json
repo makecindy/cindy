@@ -7,6 +7,7 @@
   },
   "common": {
     "modelHiddenReselect": "{{model}} is turned off. Choose an enabled model before sending.",
+    "modelUnavailableReselect": "{{model}} is no longer available on this computer. Choose another model before sending.",
     "cancel": "Cancel",
     "dismissRecommendation": "Dismiss recommendation",
     "delete": "Delete",

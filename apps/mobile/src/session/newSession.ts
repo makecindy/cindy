@@ -521,6 +521,16 @@ export function resolveRecentModelAndProvider(
 }
 
 /**
+ * 提交终检不得产出空模型:目录里已没有所选模型、也没有可顶替的行时,
+ * resolveRecentModelAndProvider 会回退为空;电脑端拒收空模型,此时中止创建让用户重选。
+ * 提交路径(创建前终检 / 鉴权后重验)统一经此判断。
+ */
+export function assertSubmitModelResolved(resolved: { model: string }, selectedModel: string): void {
+  if (resolved.model.trim()) return;
+  throw new Error(i18n.t('session.common.modelUnavailableReselect', { model: selectedModel }));
+}
+
+/**
  * 提交终检的目录取信(代际安全版,独立 review P1-1):**唯一数据源 = 设备缓存 + 代际**,
  * 不再读渲染期 rows——catalogReadyRef 是渲染期镜像,外部驱逐后要等下一渲染才失效,
  * 渲染 rows 在该窗口内不可信(㉛ 分支此前因此被绕过)。缓存写入受代际门控

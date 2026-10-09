@@ -7,6 +7,7 @@
   },
   "common": {
     "modelHiddenReselect": "{{model}} 已关闭，请选择已开启的模型后再发送。",
+    "modelUnavailableReselect": "{{model}} 在这台电脑上已不可用，请重新选择模型后再发送。",
     "cancel": "取消",
     "dismissRecommendation": "关闭推荐",
     "delete": "删除",

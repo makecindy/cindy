@@ -7,6 +7,7 @@
   },
   "common": {
     "modelHiddenReselect": "{{model}} はオフになっています。送信する前に、有効なモデルを選んでください。",
+    "modelUnavailableReselect": "{{model}} はこのコンピューターでは利用できなくなりました。送信する前に、別のモデルを選んでください。",
     "cancel": "キャンセル",
     "dismissRecommendation": "おすすめを閉じる",
     "delete": "削除",

@@ -186,6 +186,7 @@ import { mobileDebugLog } from '@/debug/mobileDebugLog';
 import {
   type StoredAgentRestoreState,
   applyRemoteAgentPick,
+  assertSubmitModelResolved,
   DEFAULT_NEW_SESSION_DRAFT,
   NEW_SESSION_AGENT_OPTIONS,
   availableNewSessionAgentOptions,
@@ -1019,16 +1020,14 @@ export default function NewRemoteSessionScreen() {
   // 自动默认运行配置(跟随最近会话 / 区域默认 / 列表最上面)的守卫:用户一旦手动选过模型,就不再自动覆盖;
   // 记录已自动应用过的设备,切设备时(未手动选过)按新设备重算。
   const userTouchedRuntimeRef = useRef(false);
-  // 模型是否已按真实数据落定(见 isNewSessionRuntimePending);未落定时药丸显示读取中、不能创建。
-  const [runtimeSettled, setRuntimeSettled] = useState(false);
-  const runtimeSettledRef = useRef(false);
+  // 模型已按哪台电脑的真实数据落定(见 isNewSessionRuntimePending);切到别的电脑即重新等待,
+  // 未落定时药丸显示读取中、不能创建。
+  const [runtimeSettledDeviceId, setRuntimeSettledDeviceId] = useState<string | null>(null);
   const mountedAtRef = useRef(Date.now());
   const runtimeSettledSourceRef = useRef('');
-  const settleRuntime = useCallback((source: string) => {
-    if (runtimeSettledRef.current) return;
-    runtimeSettledRef.current = true;
+  const settleRuntime = useCallback((source: string, deviceId: string) => {
     runtimeSettledSourceRef.current = source;
-    setRuntimeSettled(true);
+    setRuntimeSettledDeviceId(deviceId);
   }, []);
   // 只保护当前页面刚从 provider 目录显式选中的模型，避免旧 capabilities 在途结果误回退；
   // 持久草稿不会写入该 ref，因此已下架模型仍走 mobile 的首项降级。
@@ -1302,7 +1301,7 @@ export default function NewRemoteSessionScreen() {
       setDraft((current) => (current.agentKind === storedAgentKind
         ? { ...current, ...resolveStoredRuntime(current.effort) }
         : current));
-      settleRuntime('stored-agent-model');
+      settleRuntime('stored-agent-model', selectedDeviceId);
       return;
     }
     // 该路径同时负责恢复 agent 权限，下面的通用权限记忆 effect 不再重复弹框。
@@ -1335,7 +1334,7 @@ export default function NewRemoteSessionScreen() {
         permissionMode: confirmed ? nextPermissionMode : current.permissionMode,
       }));
       // 'agent' 只恢复了 agent,模型仍是占位,等数据到了由 'model' 落定。
-      if (step === 'full') settleRuntime('stored-agent');
+      if (step === 'full') settleRuntime('stored-agent', deviceAtTrigger);
     })();
     return () => {
       cancelled = true;
@@ -1422,7 +1421,7 @@ export default function NewRemoteSessionScreen() {
     }).then((confirmed) => {
       if (cancelled || userTouchedRuntimeRef.current) return;
       applied = true;
-      settleRuntime(result.patch.agentKind ? 'recent-task' : 'catalog-default');
+      settleRuntime(result.patch.agentKind ? 'recent-task' : 'catalog-default', result.appliedDeviceId);
       setDraft((current) => {
         // 自动默认重算(设备切换/最近会话变化)改了 (agent, model, providerId) 组合 →
         // fastMode 按新组合重验(Codex review P2):A 设备记忆恢复的 fastMode:true 不得
@@ -1490,7 +1489,7 @@ export default function NewRemoteSessionScreen() {
     [attachments.length, pendingUploads.length],
   );
   const runtimePending = isNewSessionRuntimePending({
-    settled: runtimeSettled,
+    settled: !!selectedDeviceId && runtimeSettledDeviceId === selectedDeviceId,
     userTouched: userTouchedRuntimeRef.current,
     remoteAgentPicked: !!remoteAgentPick,
     selectedDeviceId: selectedDeviceId ?? '',
@@ -1501,7 +1500,7 @@ export default function NewRemoteSessionScreen() {
   const runtimePendingRef = useRef(runtimePending);
   runtimePendingRef.current = runtimePending;
   useEffect(() => {
-    if (!runtimeSettled) return;
+    if (!runtimeSettledDeviceId) return;
     // 诊断用:新建页的模型经哪条路径、多久后落定(只记 agent 与模型 id,不含正文)。
     mobileDebugLog('info', 'new-session', 'runtime settled', {
       source: runtimeSettledSourceRef.current,
@@ -1509,9 +1508,9 @@ export default function NewRemoteSessionScreen() {
       model: draft.model,
       elapsedMs: Date.now() - mountedAtRef.current,
     });
-    // 只在落定那一刻记一次。
+    // 每台电脑落定那一刻记一次。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [runtimeSettled]);
+  }, [runtimeSettledDeviceId]);
   const runtimeSummary = useMemo(
     () => buildDraftRuntimeSummary(draft, runtimeOptions),
     // effort / 权限标签按 app 语言解析,切换语言时必须重算,否则停留在上一语言。
@@ -4960,6 +4959,7 @@ export default function NewRemoteSessionScreen() {
             effectiveDraft.agentKind,
             g.catalogKnown,
           );
+          assertSubmitModelResolved(resolved, effectiveDraft.model);
           const pairChanged = resolved.model !== effectiveDraft.model || resolved.providerId !== effectiveDraft.providerId;
           // 目录就绪时**始终**按 fresh 精确行校准(codex review P2:来源未变时也按
           // 新目录校准运行选项)——provider revision 可能只改能力不删行(撤销 effort
@@ -5057,6 +5057,7 @@ export default function NewRemoteSessionScreen() {
             effectiveDraft.agentKind,
             true,
           );
+          assertSubmitModelResolved(resolved, effectiveDraft.model);
           const pairChanged = resolved.model !== effectiveDraft.model
             || resolved.providerId !== effectiveDraft.providerId;
           // codex review P2:来源未变也按 fresh 精确行校准——fresh 目录就绪时始终
@@ -5498,6 +5499,7 @@ export default function NewRemoteSessionScreen() {
           effectiveDraft.agentKind,
           g.catalogKnown,
         );
+        assertSubmitModelResolved(resolved, effectiveDraft.model);
         const pairChanged = resolved.model !== effectiveDraft.model || resolved.providerId !== effectiveDraft.providerId;
         // codex review P2:目录就绪时**始终**按 fresh 精确行校准(来源未变也按新
         // 目录校准运行选项)——provider revision 只改能力不删行(撤销 effort 档位
