@@ -4037,6 +4037,89 @@ describe("Pi provider-aware model routing", () => {
     await handle.close();
   });
 
+  it("re-declares the session effort when the switch target only exists after session start", async () => {
+    // 2026-10-09 实测：用户在会话中途新建 provider/模型后直接热切。该路由不在
+    // 启动快照里——preview 必须走 live-refresh 重建能力表，收敛块随后按会话档位
+    // 显式下发 set_thinking_level。这条链一旦断裂（快照外就沉默、或误判目标不
+    // 支持思考而发 off），切模后的首轮就没有思考声明，模型会把推理写进正文。
+    let includeLate = false;
+    const lateProvider = {
+      id: "late-prov",
+      sourceProviderId: "late-prov",
+      name: "Late Provider",
+      baseUrl: "http://late.test",
+      api: "openai-completions" as const,
+      models: [
+        {
+          id: "late-model",
+          wireId: "late-model",
+          reasoning: true,
+          contextWindow: 200_000,
+          thinkingLevelMap: {
+            minimal: null,
+            low: "low",
+            medium: null,
+            high: "high",
+            xhigh: null,
+            max: "max",
+          },
+        },
+      ],
+    };
+    const startupProviders = {
+      providers: [
+        {
+          id: "native-a",
+          sourceProviderId: "native-a",
+          name: "Native A",
+          baseUrl: "http://a.test",
+          api: "openai-completions" as const,
+          models: [{ id: "local-model", contextWindow: 200_000 }],
+        },
+      ],
+      env: {},
+    };
+    const agent = new PiAgent(
+      byomDeps(
+        async () => (includeLate ? { providers: [lateProvider], env: {} } : startupProviders),
+        [
+          { id: "local-model", displayName: "Local", contextWindow: 200_000, efforts: [], defaultEffort: null },
+          {
+            id: "late-model",
+            displayName: "Late",
+            contextWindow: 200_000,
+            efforts: ["low", "high", "max"],
+            defaultEffort: null,
+          },
+        ],
+      ),
+    );
+    const handle = await agent.startSession({
+      sessionId: "late-provider-thinking",
+      workingDir: cwd,
+      model: "local-model",
+      providerId: "native-a",
+      effort: "max",
+    });
+    includeLate = true;
+    const beforeSwitch = captured.requests.length;
+
+    // 无 intent 载体（旁路入口 / UI 只选模型的形状）：档位仍必须按会话档位显式
+    // 重发。2026-10-06 lead 案例就是切换没带载体 → 上游 off 原样继承 →
+    // usage.reasoning 归零、推理整段写进正文。
+    await handle.setModel!("late-model", { providerId: "late-prov" });
+
+    const switched = captured.requests.slice(beforeSwitch);
+    // 目标不在启动快照 → 必须发生一次 native catalog 重建（get_available_models
+    // 或 models.json 重写），否则后面的档位收敛无从谈起。
+    expect(switched.some((request) => request.type === "set_model")).toBe(true);
+    // 档位必须显式下发为会话档位：既不能沉默（一条都没有），更不能误判成
+    // 「不支持思考」而主动发 off。
+    expect(switched).toContainEqual({ type: "set_thinking_level", level: "max" });
+    expect(switched).not.toContainEqual({ type: "set_thinking_level", level: "off" });
+    await handle.close();
+  });
+
   it("reopens thinking at the session effort instead of a hardcoded xhigh", async () => {
     const denseMap = {
       minimal: "minimal",
