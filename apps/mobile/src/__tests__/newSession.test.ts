@@ -526,6 +526,21 @@ describe('isNewSessionRuntimePending', () => {
     expect(source).toContain('result.appliedDeviceId);');
   });
 
+  it('drops the previous computer\'s auto-picked model on device switch and gates goal creation too', () => {
+    const source = readTextLf(resolve(process.cwd(), 'app/sessions/new.tsx'), 'utf8');
+    const selectStart = source.indexOf('const selectDevice = useCallback(');
+    const selectDevice = source.slice(selectStart, source.indexOf('const handleBack = useCallback(', selectStart));
+    // 用户没手动选过模型时清掉旧电脑的自动选择并重新等待;手动选过的保留。
+    expect(selectDevice).toContain('option.deviceId !== selectedDeviceIdRef.current && !userTouchedRuntimeRef.current');
+    expect(selectDevice).toContain('autoDefaultDeviceRef.current = null;');
+    expect(selectDevice).toContain('setRuntimeSettledDeviceId(null);');
+    expect(selectDevice).toContain("...(clearAutoRuntime ? { model: '', providerId: null, fastMode: false } : {}),");
+    // 目标模式是独立创建入口:表单禁用 + 函数内兜底。
+    const goalStart = source.indexOf('const createGoalSession = useCallback(');
+    expect(source.slice(goalStart, goalStart + 400)).toContain('if (runtimePendingRef.current) return;');
+    expect(source).toContain('disabled={worktreeCreateBlocked || runtimePending}');
+  });
+
   it('aborts creation instead of sending an empty model after the submit-time catalog check', () => {
     expect(() => assertSubmitModelResolved({ model: 'claude-opus-5-5' }, 'claude-opus-5-5')).not.toThrow();
     expect(() => assertSubmitModelResolved({ model: '' }, 'delisted-model'))
