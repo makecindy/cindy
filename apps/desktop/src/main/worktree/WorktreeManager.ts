@@ -619,7 +619,7 @@ export function getForSession(sessionId: string): WorktreeMeta | null {
 }
 
 /** Caller holds the session/resource locks. Unknown DB outcomes retain the intent. */
-async function reconcileSessionTransferLocked(meta: WorktreeMeta): Promise<void> {
+async function reconcileSessionTransferLocked(meta: WorktreeMeta, beforeMutation?: () => Promise<void>): Promise<void> {
   const transfer = meta.pendingSessionTransfer;
   if (!transfer) return;
   if (!transfer.sessionId || transfer.sessionId === meta.sessionId
@@ -651,11 +651,11 @@ async function reconcileSessionTransferLocked(meta: WorktreeMeta): Promise<void>
   }
   const next = { ...meta, sessionId: row.childSessionId };
   delete next.pendingSessionTransfer;
-  await store.replace(meta.sessionId, next.sessionId, next, meta);
+  await store.replace(meta.sessionId, next.sessionId, next, meta, beforeMutation);
 }
 
 /** Startup/dispatch/retry reconciliation, scoped to the affected execution only. */
-export async function reconcileSessionTransfer(sessionId: string): Promise<void> {
+export async function reconcileSessionTransfer(sessionId: string, beforeMutation?: () => Promise<void>): Promise<void> {
   const pending = store.getAll().find(meta => meta.pendingSessionTransfer
     && (meta.sessionId === sessionId || meta.pendingSessionTransfer.sessionId === sessionId));
   if (!pending?.pendingSessionTransfer) return;
@@ -664,7 +664,7 @@ export async function reconcileSessionTransfer(sessionId: string): Promise<void>
     withWorktreeRestoreMutation(pending.pendingSessionTransfer!.sessionId, () =>
       withWorktreeResourceLock(pending.path, async () => {
         const current = store.get(pending.sessionId);
-        if (current?.pendingSessionTransfer) await reconcileSessionTransferLocked(current);
+        if (current?.pendingSessionTransfer) await reconcileSessionTransferLocked(current, beforeMutation);
       })));
 }
 

@@ -655,6 +655,8 @@ describe('decideCodexRoute', () => {
     const { decideCodexRoute } = await import('../codex-proxy-host.js');
     expect(decideCodexRoute({ model: 'codex/gpt-5.5', authInjection: 'oauth-bearer', gatewayKey: 'gw' }))
       .toEqual({ headerOverride: { authorization: 'Bearer gw' } });
+    expect(decideCodexRoute({ model: 'openai-codex/gpt-6.1-sol', authInjection: 'oauth-bearer', gatewayKey: 'gw' }))
+      .toEqual({ headerOverride: { authorization: 'Bearer gw' } });
   });
 
   it('oauth-bearer + 普通模型 → override 到 ChatGPT, 不换 header(订阅默认)', async () => {

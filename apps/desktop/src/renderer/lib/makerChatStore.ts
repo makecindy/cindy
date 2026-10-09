@@ -83,8 +83,10 @@ import type { AgentMeta, MessageRole, Message, MessageAutomationOrigin } from '@
 import { toMessageAutomationOrigin } from '@/lib/messageAutomationOrigin';
 import {
   readMessageSourceDevice,
+  readMessageSourceGroup,
   readMessageSourcePlugin,
   type MessageSourceDevice,
+  type MessageSourceGroup,
   type MessageSourcePlugin,
 } from '@cindy/maker-shared/message-source';
 import {
@@ -502,6 +504,10 @@ export interface ChatMessage {
   sourceDevice?: MessageSourceDevice;
   /** 插件任务派发的消息来源(读自 agentMeta.sourcePlugin)。 */
   sourcePlugin?: MessageSourcePlugin;
+  /** Group source of an explicitly sent private assistant message. */
+  sourceGroup?: MessageSourceGroup;
+  /** Host-stamped delivery remains visible after source identity is redacted. */
+  explicitDelivery?: boolean;
   /** user 消息投递方式:普通新 turn 或运行中 steer。 */
   delivery?: 'turn' | 'steer';
   /** Hook 来源元数据(IM 平台 + 用户干净原文 + thread 上下文),UserMessage 据此渲染 Cindy 任务卡片。 */
@@ -18833,6 +18839,8 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
       clientId: m.clientId,
       role: m.role,
       content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
+      ...(m.role === 'assistant' ? { sourceGroup: readMessageSourceGroup(m.agentMeta) } : {}),
+      ...(m.role === 'assistant' && m.agentMeta?.explicitDelivery === true ? { explicitDelivery: true } : {}),
       ...(m.role === 'assistant' ? { botLearning: m.agentMeta?.botLearning } : {}),
       ...(m.agentMeta?.botPrivateReply === true ? { botPrivateReply: true } : {}),
       ...(m.role === 'assistant' && m.agentMeta?.turnCompleted === true

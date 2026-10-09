@@ -16,6 +16,7 @@ import {
   describeMessageSourceSender,
   formatSourceRef,
   messageSourceSenderFromMeta,
+  readMessageSourceGroup,
   readMessageSourceDevice,
   promptSafeSourceName,
 } from '@cindy/maker-shared/message-source';
@@ -455,8 +456,11 @@ function splitTurns(messages: HandoffSourceMessage[], includeToolResults = false
       case 'assistant': {
         const text = extractPlainText(msg.content);
         if (text) {
-          current.detailLines.push(`[Assistant]\n${truncate(text, RECENT_TEXT_CAP)}`);
-          current.lastAssistantText = text;
+          const groupSource = readMessageSourceGroup(parseJsonObjectString(msg.agentMeta))
+            ? describeHandoffUserSource(msg) : null;
+          const label = groupSource ? `[Assistant · ${groupSource}]` : '[Assistant]';
+          current.detailLines.push(`${label}\n${truncate(text, RECENT_TEXT_CAP)}`);
+          current.lastAssistantText = groupSource ? `${label} ${text}` : text;
         }
         break;
       }

@@ -20,6 +20,7 @@ import { useModelDiscoveryPending } from '@/components/new-chat/useModelDiscover
 import {
   effectiveSourceIdForModel,
   getModel,
+  isCodexGatewayWireModel,
 } from '@cindy/model-providers';
 import * as sessionService from '@/lib/sessionService';
 import type { Session } from '@/lib/ccAgent.types';
@@ -1110,7 +1111,7 @@ export function ModelEffortChip({
   );
   const pickerAgents = useModelPickerAgents(agentKind);
   const caps = useAgentCapabilities(agentKind);
-  // 触发器(trigger)展示用:仍按 codex/ 折扣模型的 XD 网关来源可见性过滤,算出当前
+  // 触发器(trigger)展示用:仍按 openai-codex/ 与 codex/ 折扣模型的 XD 网关来源可见性过滤,算出当前
   // 选中模型名。下拉内容本体改用聊天的 ModelSelectorContent(它内部按来源/api-key 自行
   // 过滤 + 分组),这里只为 trigger 文案保留最小化 model 解析。
   const { providers } = useProviders();
@@ -1119,7 +1120,7 @@ export function ModelEffortChip({
   const models = useMemo(
     () =>
       (availableModels ?? []).filter(
-        (m) => agentKind !== 'codex' || xdConnected || !m.id.startsWith('codex/'),
+        (m) => agentKind !== 'codex' || xdConnected || !isCodexGatewayWireModel(m.id),
       ),
     [availableModels, agentKind, xdConnected],
   );

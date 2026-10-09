@@ -333,6 +333,8 @@ function validateAck(p: Record<string, unknown>): string | null {
 }
 
 function validateTurnEnd(p: Record<string, unknown>): string | null {
+  if (p.background !== undefined && p.background !== true) return 'turn.end.background must be true or absent';
+  if (p.background === true && p.clientFinal !== undefined) return 'background results cannot carry clientFinal';
   if (!isNonEmptyString(p.requestId)) return 'turn.end.requestId must be a non-empty string';
   if (!isNonEmptyString(p.externalKey)) return 'turn.end.externalKey must be a non-empty string';
   if (!isNullableString(p.sessionId)) return 'turn.end.sessionId must be a string or null';

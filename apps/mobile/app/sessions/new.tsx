@@ -7,6 +7,7 @@ import { retainOutboxFile, durableOutboxUploadUri, removeRetainedOutboxFiles, ou
 import { buildOutboxItem, createOutboxClientId } from '@/session/sessionOutbox';
 import type { DurableOutboxRecord } from '@/session/durableOutbox';
 import { stripTrailingPathSeparators } from '@cindy/maker-shared/path-text';
+import { isSharedTaskPeer } from '@cindy/device-link';
 import { takeRefinementContextTail } from '@cindy/voice-input-core';
 import { Stack, useIsFocused, useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
 import { NewTaskSelectionSheet } from '@/session/NewTaskSelectionSheet';
@@ -183,6 +184,7 @@ import {
 } from '@/session/composerPalette';
 import {
   type StoredAgentRestoreState,
+  applyRemoteAgentPick,
   DEFAULT_NEW_SESSION_DRAFT,
   NEW_SESSION_AGENT_OPTIONS,
   availableNewSessionAgentOptions,
@@ -213,6 +215,7 @@ import {
   type NewSessionAgentKind,
   type NewSessionDraft,
   type NewSessionDeviceOption,
+  type NewSessionRemoteAgentPick,
   type NewSessionStoredPreferences,
 } from '@/session/newSession';
 import { isDefaultDraftSessionTitle } from '@cindy/maker-shared/session-title';
@@ -379,6 +382,7 @@ import { mobileAgentLabel, mobileAgentVendor } from '@/session/sessionAgentSwitc
 import { MobileModelIconMark } from '@/session/MobileProviderMark';
 import { draftModelMemoryFor, hydrateDraftModelMemory } from '@/session/draftModelMemory';
 import { effortLabelFromRuntime, rowFastEditable } from '@/session/modelPickerRows';
+import { useRemoteAgentCatalogs } from '@/session/useRemoteAgentCatalogs';
 import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { fontWeight, iconSize, iconStroke, lineHeight, navigationChrome, radius, spacing, typeScale } from '@/theme/tokens';
 
@@ -611,7 +615,21 @@ export default function NewRemoteSessionScreen() {
     workingDir: draft.workingDir || null,
     remoteHostId: null,
   }), [draft.workingDir, draft.workspaceKind]);
-  const collabEligible = isOrcaCollabEligible(collabTarget);
+  // 远程 Agent / 供应商分享(与已建任务、桌面新建同一套):选中另一台电脑或分享来的模型 = Agent
+  // 在那里运行。单独存,不进草稿:草稿的模型 / 来源一直按被控电脑的目录校准,创建时再整体覆盖。
+  const [remoteAgentChoice, setRemoteAgentChoice] = useState<{
+    controlledDeviceId: string;
+    pick: NewSessionRemoteAgentPick;
+  } | null>(null);
+  // 只对选它时的那台被控电脑与那个 Agent 成立:换了电脑、在别处换了 Agent 就不再生效(按条件
+  // 判,不靠 effect 清——恢复草稿时电脑与草稿同一轮写入,effect 会把刚恢复的选择误清)。
+  const remoteAgentPick = remoteAgentChoice
+    && remoteAgentChoice.controlledDeviceId === selectedDeviceId
+    && remoteAgentChoice.pick.agentKind === draft.agentKind
+    ? remoteAgentChoice.pick
+    : null;
+  // 协同首个 Worker 的模型从被控电脑的目录里选,与 Agent 在另一台电脑运行还对不上:两者先互斥。
+  const collabEligible = isOrcaCollabEligible(collabTarget) && remoteAgentPick === null;
   // 换设备 / 换工作区后,草稿里的协同设置属于旧目标:丢弃,避免在新目标上静默开启。
   // 按草稿武装时的目标比对(而不是「目标一变就清」):返回编辑恢复草稿时目标与草稿一起回填,
   // 不会被这里误清。
@@ -750,7 +768,19 @@ export default function NewRemoteSessionScreen() {
   // (创建期间发出的消息可能超出单条上限,装不下的只能丢,但不能静默丢,review P1)。
   // 声明在 attachmentError 之后:notice 就落在附件错误行上。
   const outboxRecoveryRef = useRef<DurableOutboxRecord | null>(null);
-  const restoreCreationDraft = useCallback((recovered: NewSessionDraft, files: RemoteSerializedAttachment[], plan?: { enabled: boolean; restorePermissionMode: string | null }) => {
+  const restoreCreationDraft = useCallback((
+    saved: NewSessionDraft,
+    files: RemoteSerializedAttachment[],
+    plan?: { enabled: boolean; restorePermissionMode: string | null },
+    controlledDeviceId?: string,
+  ) => {
+    // 存下来的草稿里 Agent 在另一台电脑时,模型属于那台:拆回远程选择,草稿本身回到被控电脑。
+    const { agentDeviceId, ...recovered } = saved;
+    setRemoteAgentChoice(agentDeviceId && controlledDeviceId ? {
+      controlledDeviceId,
+      pick: { deviceId: agentDeviceId, agentKind: saved.agentKind, model: saved.model,
+        providerId: saved.providerId, effort: saved.effort, fastMode: saved.fastMode },
+    } : null);
     userTouchedWorkspaceRef.current = true;
     userTouchedRuntimeRef.current = true;
     appliedPermissionMemoryRef.current = true;
@@ -789,7 +819,8 @@ export default function NewRemoteSessionScreen() {
       userTouchedDeviceRef.current = true;
       restoreCreationDraft(record.creation.draft,
         record.item.attachmentSlots.filter((a): a is RemoteSerializedAttachment => a !== null),
-        { enabled: record.creation.planModeArm, restorePermissionMode: record.creation.restorePermissionMode });
+        { enabled: record.creation.planModeArm, restorePermissionMode: record.creation.restorePermissionMode },
+        record.deviceId);
       setSelectedDeviceId(record.deviceId);
       setSelectedDeviceName(record.creation.deviceName);
     };
@@ -800,7 +831,7 @@ export default function NewRemoteSessionScreen() {
   useEffect(() => {
     const stashed = drainStashedNewSessionDraft();
     if (!stashed) return;
-    restoreCreationDraft(stashed.draft, [...stashed.attachments]);
+    restoreCreationDraft(stashed.draft, [...stashed.attachments], undefined, stashed.deviceId || undefined);
     if (stashed.notice) setAttachmentError(stashed.notice);
     if (stashed.collabDraft && stashed.deviceId) {
       collabDraftTargetRef.current = orcaCollabDraftTargetKey(
@@ -1035,6 +1066,39 @@ export default function NewRemoteSessionScreen() {
   // 旧目录快照绕过终检)。
   const modelRowsRef = useRef(modelRows);
   modelRowsRef.current = modelRows;
+  // 被控电脑认得新建时的 agentDeviceId 才提供远程模型:它的目录带「允许被远程调用」标记
+  // (与远程 Agent 同一版加入)。共享任务访客读到的是自己账号的设备,与这台电脑无关。
+  const remoteAgentSupported = !!selectedDeviceId
+    && !isSharedTaskPeer(selectedDeviceId)
+    && deviceProviders.providers.some(
+      (provider) => typeof (provider as { remoteInvocationEnabled?: unknown }).remoteInvocationEnabled === 'boolean',
+    );
+  const remoteAgentKeepDeviceIds = useMemo(
+    () => (remoteAgentPick ? [remoteAgentPick.deviceId] : []),
+    [remoteAgentPick],
+  );
+  const remoteAgentCatalogs = useRemoteAgentCatalogs({
+    // 选择器打开时读其他电脑与分享;已选远程模型时还要按那份目录显示模型药丸。
+    enabled: remoteAgentSupported && (modelSheetOpen || remoteAgentPick !== null),
+    controlledDeviceId: selectedDeviceId,
+    keepDeviceIds: remoteAgentKeepDeviceIds,
+    keepOnly: !modelSheetOpen,
+  });
+  const remoteAgentCatalog = remoteAgentPick
+    ? remoteAgentCatalogs.find((catalog) => catalog.deviceId === remoteAgentPick.deviceId) ?? null
+    : null;
+  // 药丸用那台电脑目录里的来源与模型名;目录还没读到时退回模型 id、不画来源标。
+  const remoteAgentPillProvider = useMemo(() => {
+    if (!remoteAgentPick || !remoteAgentCatalog) return null;
+    const sourceId = remoteAgentPick.providerId ?? buildMobileModelSections({
+      providers: remoteAgentCatalog.providers,
+      agentKind: remoteAgentPick.agentKind,
+      selectedModelId: remoteAgentPick.model,
+      selectedProviderId: null,
+      visibilityOverrides: remoteAgentCatalog.modelVisibilityOverrides,
+    }).activeSourceId;
+    return remoteAgentCatalog.providers.find((provider) => provider.id === sourceId) ?? null;
+  }, [remoteAgentCatalog, remoteAgentPick]);
   const catalogReadyRef = useRef(deviceProviders.ready);
   catalogReadyRef.current = deviceProviders.ready;
   // 供应商目录本身的渲染期镜像:异步回调(权限确认 .then)提交时用它现场重建目标
@@ -1044,14 +1108,15 @@ export default function NewRemoteSessionScreen() {
   deviceProvidersRef.current = deviceProviders;
   // 发送前鉴权门禁(对齐桌面 useVendorAuthGate):选中 agent 在被控端没有已连接
   // 供应商时提前提示 + 拦截创建,不让用户发出注定失败的首条消息。unknown 不拦截。
+  // 选了另一台电脑的模型时不按被控电脑判:那一行来自那台已连接的供应商,登录由那台核对。
   const agentAuthVerdict = useMemo(
-    () => agentAuthGateVerdict({
+    () => remoteAgentPick ? 'ready' as const : agentAuthGateVerdict({
       providers: deviceProviders.providers,
       loading: deviceProviders.loading,
       error: deviceProviders.error,
       agentKind: draft.agentKind,
     }),
-    [deviceProviders.providers, deviceProviders.loading, deviceProviders.error, draft.agentKind],
+    [deviceProviders.providers, deviceProviders.loading, deviceProviders.error, draft.agentKind, remoteAgentPick],
   );
   // 创建前的 fresh 鉴权确认(绕过缓存现拉):true = 确认无已连接供应商,应拦截。
   // 空目录 / 拉取失败(旧被控端 / 瞬断)与 agentAuthGateVerdict 的 unknown 同语义,
@@ -1394,6 +1459,19 @@ export default function NewRemoteSessionScreen() {
     // effort / 权限标签按 app 语言解析,切换语言时必须重算,否则停留在上一语言。
     [draft, runtimeOptions, i18nInstance.language],
   );
+  // 选了另一台电脑的模型:药丸写那台目录里的模型名与档位,读屏一并读出电脑名(与已建任务同口径)。
+  const remoteAgentModelName = remoteAgentPick && remoteAgentPillProvider
+    ? getModel(remoteAgentPillProvider, remoteAgentPick.model, remoteAgentPick.agentKind)?.name ?? null
+    : null;
+  const pillModelSummary = remoteAgentPick
+    ? [
+        remoteAgentModelName || remoteAgentPick.model,
+        effortLabelFromRuntime({ currentModel: null, effortOptions: runtimeOptions.effortOptions }, remoteAgentPick.effort),
+      ].filter(Boolean).join(' · ')
+    : runtimeSummary.modelSummary;
+  const pillAccessibilityModel = remoteAgentCatalog?.name
+    ? [pillModelSummary, remoteAgentCatalog.name].join(', ')
+    : pillModelSummary;
   // 权限按钮 / 权限下拉不体现 plan(对齐桌面 PR#494 / Cursor):计划模式激活时展示
   // 进入前的底层权限档(无记录时回退首个非 plan 档),激活态由 composer 的 PlanModeChip 表达。
   const displayPermissionMode = draft.permissionMode === 'plan'
@@ -2505,6 +2583,7 @@ export default function NewRemoteSessionScreen() {
   const selectProviderModelRow = useCallback((row: ProviderModelRow) => {
     userTouchedRuntimeRef.current = true; // 用户手动选了模型 → 不再自动覆盖运行配置
     runtimeActionSeqRef.current += 1; // 使在途的切 agent/恢复回调失效(最新者胜)
+    setRemoteAgentChoice(null);
     setDraft((current) => {
       const next = resolveRowSelection({
         row,
@@ -2529,8 +2608,13 @@ export default function NewRemoteSessionScreen() {
     setModelSheetOpen(false);
   }, [capabilities, draftMemory]);
 
-  const selectUnifiedModel = useCallback(async (config: MobileModelConfiguration): Promise<boolean> => {
+  // source.deviceId 非空 = 选的是另一台电脑(或分享来的)目录里的行:Agent 在那里运行。
+  const selectUnifiedModel = useCallback(async (
+    config: MobileModelConfiguration,
+    source?: { deviceId: string | null },
+  ): Promise<boolean> => {
     if (creating || !selectedDeviceId) return false;
+    const remoteDeviceId = source?.deviceId ?? null;
     const deviceAtStart = selectedDeviceId;
     const sequence = ++runtimeActionSeqRef.current;
     const targetCapabilities = normalizeMobileAgentCapabilities(await maker.getCapabilities(config.agent));
@@ -2543,10 +2627,21 @@ export default function NewRemoteSessionScreen() {
     })) return false;
     if (deviceAtStart !== selectedDeviceRef.current || sequence !== runtimeActionSeqRef.current) return false;
     userTouchedRuntimeRef.current = true;
-    explicitProviderModelSelectionRef.current = config.modelId;
     const fastMode = targetCapabilities.hasFastMode === true && config.fast;
-    setDraft(current => ({ ...current, agentKind: config.agent, model: config.modelId,
-      providerId: config.providerId, effort: config.effort, fastMode, permissionMode: permission }));
+    if (remoteDeviceId) {
+      // 模型与来源属于那台电脑:单独记,草稿只跟着换 Agent 与权限(权限仍在被控电脑上生效)。
+      setRemoteAgentChoice({
+        controlledDeviceId: deviceAtStart,
+        pick: { deviceId: remoteDeviceId, agentKind: config.agent, model: config.modelId,
+          providerId: config.providerId, effort: config.effort, fastMode },
+      });
+      setDraft(current => ({ ...current, agentKind: config.agent, permissionMode: permission }));
+    } else {
+      explicitProviderModelSelectionRef.current = config.modelId;
+      setRemoteAgentChoice(null);
+      setDraft(current => ({ ...current, agentKind: config.agent, model: config.modelId,
+        providerId: config.providerId, effort: config.effort, fastMode, permissionMode: permission }));
+    }
     void saveNewSessionPreferences({ agentKind: config.agent });
     return true;
   }, [creating, selectedDeviceId, maker, newSessionPreferences, draft.agentKind, draft.permissionMode]);
@@ -2555,6 +2650,7 @@ export default function NewRemoteSessionScreen() {
   const selectFlatModel = useCallback((option: MobileModelOption) => {
     userTouchedRuntimeRef.current = true; // 用户手动选了模型 → 不再自动覆盖运行配置
     runtimeActionSeqRef.current += 1; // 使在途的切 agent/恢复回调失效(最新者胜)
+    setRemoteAgentChoice(null);
     explicitProviderModelSelectionRef.current = null;
     setDraft((current) =>
       reconcileRuntimeDraftWithCapabilities({ ...current, model: option.id, providerId: null }, capabilities));
@@ -3849,7 +3945,7 @@ export default function NewRemoteSessionScreen() {
           />
         ) : null}
         <Pressable
-          accessibilityLabel={t('session.new.modelAccessibility', { model: runtimeSummary.modelSummary })}
+          accessibilityLabel={t('session.new.modelAccessibility', { model: pillAccessibilityModel })}
           accessibilityRole="button"
           accessibilityState={{ expanded: modelSheetOpen || undefined }}
           hitSlop={10}
@@ -3857,7 +3953,20 @@ export default function NewRemoteSessionScreen() {
           style={({ pressed }) => [styles.modelPill, pressed && styles.pressed]}
           testID="newSession.modelIndicator"
         >
-          {activeSourceProvider ? (
+          {remoteAgentPick ? (
+            // 另一台电脑上的模型:那台目录里的来源标,带远程标记。
+            remoteAgentPillProvider ? (
+              <MobileModelIconMark
+                color={colors.textSecondary}
+                icon={getModel(remoteAgentPillProvider, remoteAgentPick.model, remoteAgentPick.agentKind)?.icon}
+                name={remoteAgentPillProvider.name}
+                providerId={remoteAgentPillProvider.id}
+                routing={remoteAgentPillProvider.routing}
+                logoKind={remoteAgentPillProvider.logoKind}
+                remote
+              />
+            ) : null
+          ) : activeSourceProvider ? (
             // 图标统一规则(桌面同源):模型条目 icon(AI Gateway 设定)优先,缺省回落来源标。
             <MobileModelIconMark
               color={colors.textSecondary}
@@ -3868,8 +3977,10 @@ export default function NewRemoteSessionScreen() {
               logoKind={activeSourceProvider.logoKind}
             />
           ) : null}
-          <Text style={styles.modelPillText} numberOfLines={1}>{runtimeSummary.modelSummary}</Text>
-          {triggerFastOn ? <Zap color={colors.textTertiary} size={iconSize.sm} strokeWidth={iconStroke.regular} /> : null}
+          <Text style={styles.modelPillText} numberOfLines={1}>{pillModelSummary}</Text>
+          {(remoteAgentPick ? remoteAgentPick.fastMode : triggerFastOn)
+            ? <Zap color={colors.textTertiary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
+            : null}
           <ChevronDown color={colors.textTertiary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
         </Pressable>
       </ComposerToolbarLeftGroup>
@@ -4337,7 +4448,7 @@ export default function NewRemoteSessionScreen() {
       setError(t('session.menu.aiRenameOffline'));
       return;
     }
-    if (deviceProvidersRef.current.ready && modelNeedsReselection(
+    if (!remoteAgentPick && deviceProvidersRef.current.ready && modelNeedsReselection(
       deviceProvidersRef.current.modelVisibilityOverrides, draft.agentKind, draft.model, draft.providerId,
     )) {
       setError(t('session.common.modelHiddenReselect', { model: draft.model }));
@@ -4371,7 +4482,8 @@ export default function NewRemoteSessionScreen() {
     );
     try {
       if (!isCurrentOwner()) return;
-      let effectiveDraft = draft;
+      // 选了另一台电脑的模型:模型 / 来源 / 档位与 Agent 所在电脑一起落进要创建的草稿。
+      let effectiveDraft = applyRemoteAgentPick(draft, remoteAgentPick);
       // ㉙ 设备守卫全程化(独立 review P1-1/P1-2):设备快照必须取自**闭包**
       // selectedDeviceId(真正会创建会话的目标设备)——selectedDeviceRef 是渲染后
       // 的最新值,若用户在渲染与点击之间切了设备,ref 已属新设备而闭包 maker/目录
@@ -4384,7 +4496,7 @@ export default function NewRemoteSessionScreen() {
         if (!isCurrentOwner()) return;
         if (!ensureDeviceAlive()) return;
         if (latestDraftText === null) return;
-        effectiveDraft = { ...draft, firstMessage: latestDraftText };
+        effectiveDraft = { ...effectiveDraft, firstMessage: latestDraftText };
       }
       // 拍照 / 选图后立刻点创建是常见路径:等在途图片上传落定(乐观托盘)。
       // 有失败就中止创建——错误文案已由上传回调写入 attachmentError,让用户处理;
@@ -4754,7 +4866,10 @@ export default function NewRemoteSessionScreen() {
           model: effectiveDraft.model,
           providerId: effectiveDraft.providerId,
         });
-        const runGuard = () => resolveSubmitGuardCatalog({
+        // Agent 在另一台电脑运行:模型属于那台的目录,不按被控电脑的目录校准(由那台在运行时核对)。
+        const runGuard = () => effectiveDraft.agentDeviceId ? Promise.resolve({
+          rows: [] as readonly ProviderModelRow[], catalogKnown: false, genAt: getDeviceProvidersGen(guardDeviceId),
+        }) : resolveSubmitGuardCatalog({
           deferRefreshToCreation: true,
           cached: () => getCachedDeviceProviders(guardDeviceId),
           gen: () => getDeviceProvidersGen(guardDeviceId),
@@ -4854,7 +4969,10 @@ export default function NewRemoteSessionScreen() {
         // 表单内预检放行(新来源已连接/空响应/瞬断)后还要经历 worktree、目录
         // guard、建链、订阅多个 await,期间来源可能再变——verdict 分支若把管线
         // fresh 替换成 null 会绕过最后的联合终检。
-        confirmUnauthenticated: () => confirmAgentUnauthenticated(agentKindSnapshot, deviceIdSnapshot),
+        // Agent 在另一台电脑运行时,被控电脑上没有这个 Agent 的登录也照样能建:登录在那台。
+        confirmUnauthenticated: effectiveDraft.agentDeviceId
+          ? async () => ({ unauthenticated: false, fresh: null })
+          : () => confirmAgentUnauthenticated(agentKindSnapshot, deviceIdSnapshot),
         // 鉴权 fresh 之后联合校验 (model, providerId)(codex review P2):建链/鉴权
         // 期间工作站可能已替换 provider——patch 覆盖本次创建,不再向已删除来源发。
         revalidateDraftAfterAuth: async (fresh) => {
@@ -4958,6 +5076,7 @@ export default function NewRemoteSessionScreen() {
     selectedDeviceId,
     selectedDeviceName,
     draft,
+    remoteAgentPick,
     finishVoiceRecording,
     leaveForeignOutboxRecovery,
     getPresenceAvailability,
@@ -5003,7 +5122,7 @@ export default function NewRemoteSessionScreen() {
       setGoalError(t('session.new.enterModel'));
       return;
     }
-    if (deviceProvidersRef.current.ready && modelNeedsReselection(
+    if (!remoteAgentPick && deviceProvidersRef.current.ready && modelNeedsReselection(
       deviceProvidersRef.current.modelVisibilityOverrides, draft.agentKind, draft.model, draft.providerId,
     )) {
       setGoalError(t('session.common.modelHiddenReselect', { model: draft.model }));
@@ -5088,8 +5207,9 @@ export default function NewRemoteSessionScreen() {
         if (!ensureDeviceAlive()) return;
         evictDeviceProviders(selectedDeviceId);
       }
+      // Agent 在另一台电脑运行时登录在那台:不按被控电脑的登录拦(agentAuthVerdict 此时恒为 ready)。
       const freshAuth: Promise<{ unauthenticated: boolean; fresh: DeviceProvidersPayload | null }> =
-        agentAuthVerdict === 'unauthenticated'
+        agentAuthVerdict === 'unauthenticated' || remoteAgentPick
           ? Promise.resolve({ unauthenticated: false, fresh: null })
           : confirmAgentUnauthenticated(draft.agentKind, selectedDeviceId);
       if (!isCurrentOwner()) return;
@@ -5156,7 +5276,8 @@ export default function NewRemoteSessionScreen() {
       }
 
       sessionId = createNewSessionId();
-      let effectiveDraft = draft;
+      // 选了另一台电脑的模型:与普通创建同一份覆盖(模型、来源、档位与 Agent 所在电脑)。
+      let effectiveDraft = applyRemoteAgentPick(draft, remoteAgentPick);
       if (
         worktreeIntent.applicable
         && worktreeIntent.enabled
@@ -5257,7 +5378,7 @@ export default function NewRemoteSessionScreen() {
           if (!isCurrentOwner()) return;
           // ㉙ 远端目录已产生 → 切设备走 ledger 补偿。
           if (await abortIfDeviceSwitched()) return;
-          effectiveDraft = { ...draft, workingDir: response.meta.path };
+          effectiveDraft = { ...effectiveDraft, workingDir: response.meta.path };
         } catch {
           if (!isCurrentOwner()) return;
           // create 回包前工作端可能已经完成副作用；reservation 保留给下一次
@@ -5285,7 +5406,10 @@ export default function NewRemoteSessionScreen() {
         model: effectiveDraft.model,
         providerId: effectiveDraft.providerId,
       });
-      const runGuard = () => resolveSubmitGuardCatalog({
+      // Agent 在另一台电脑运行:不按被控电脑的目录校准,也不按它的来源判登录(同 create())。
+      const runGuard = () => effectiveDraft.agentDeviceId ? Promise.resolve({
+        rows: [] as readonly ProviderModelRow[], catalogKnown: false, genAt: getDeviceProvidersGen(guardDeviceId),
+      }) : resolveSubmitGuardCatalog({
         cached: () => getCachedDeviceProviders(guardDeviceId),
         gen: () => getDeviceProvidersGen(guardDeviceId),
         // 强制刷新(同 create() 口径,codex review P2):revalidate 必须访问工作站。
@@ -5738,6 +5862,7 @@ export default function NewRemoteSessionScreen() {
     deviceProviders.providers,
     confirmAgentUnauthenticated,
     draft,
+    remoteAgentPick,
     goalBusy,
     leaveForeignOutboxRecovery,
     maker,
@@ -6497,6 +6622,7 @@ export default function NewRemoteSessionScreen() {
                   }}
                   testID="newSession.contextSheetPlanRow"
                   trailing={planModeOn ? <Check color={colors.textPrimary} size={iconSize.md} strokeWidth={iconStroke.bold} /> : null}
+                  trailingSize={iconSize.md}
                 />
               ) : null}
               <ContextSheetRow
@@ -6654,8 +6780,13 @@ export default function NewRemoteSessionScreen() {
             return result;
           },
           onSelect: selectUnifiedModel,
+          // 远程 Agent / 供应商分享:其他电脑开放了远程调用的供应商与别人分享给这台电脑的供应商接在
+          // 后面,每个供应商一段、标题带电脑名。协同草稿与它们互斥(见 collabEligible)。
+          ...(remoteAgentSupported && !collabDraft
+            ? { remote: { catalogs: remoteAgentCatalogs, selectedDeviceId: remoteAgentPick?.deviceId ?? null } }
+            : {}),
         }}
-        activeModelId={draft.model}
+        activeModelId={remoteAgentPick?.model ?? draft.model}
         activePermissionMode={displayPermissionMode}
         agentKind={draft.agentKind}
         apiKeyStatus={deviceApiKeyStatus}
@@ -6682,9 +6813,9 @@ export default function NewRemoteSessionScreen() {
         permissionOptions={runtimeOptions.permissionOptions}
         pricing={deviceModelPricing}
         providers={deviceProviders.providers}
-        selectedEffort={draft.effort}
-        selectedFastMode={draft.fastMode}
-        selectedProviderId={draft.providerId}
+        selectedEffort={remoteAgentPick?.effort ?? draft.effort}
+        selectedFastMode={remoteAgentPick?.fastMode ?? draft.fastMode}
+        selectedProviderId={remoteAgentPick ? remoteAgentPick.providerId : draft.providerId}
         testID="newSession.modelSheet"
         visible={modelSheetOpen}
       />

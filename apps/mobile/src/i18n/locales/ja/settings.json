@@ -35,7 +35,7 @@
   },
   "language": {
     "title": "言語",
-    "hint": "アプリの UI のみに影響します。Agent の応答言語は Agent 側の設定に従います。",
+    "hint": "画面と AI のエラー説明に使う言語です。通常の返信はメッセージや指定した言語に従います。",
     "options": {
       "system": "自動 (システムに従う)",
       "zh-CN": "简体中文",
@@ -91,7 +91,7 @@
   "about": {
     "sectionTitle": "このスマートフォンについて",
     "deviceName": "デバイス名",
-    "deviceNameDetail": "パソコン側の承認リストにこの名前が表示されます。",
+    "deviceNameDetail": "パソコンの承認一覧に表示する名前です。",
     "platform": "プラットフォーム",
     "editAccessibility": "{{label}}を変更"
   },
@@ -188,9 +188,9 @@
     "refresh": "更新",
     "refreshing": "更新中…",
     "refreshAccessibility": "辞書を更新",
-    "readOnlyHint": "スマホでは閲覧のみです。追加や削除はパソコンで行ってください。",
-    "offlineHint": "現在オンラインのパソコンがありません。前回スマホに同期された内容を表示しています。",
-    "noDesktops": "同期できるパソコンがまだありません。同じアカウントでパソコンにログインすると、辞書がここに表示されます。"
+    "readOnlyHint": "スマートフォンでは閲覧のみです。追加や削除はパソコンで行ってください。",
+    "offlineHint": "パソコンがオフラインのため、最後に同期した辞書を表示しています。",
+    "noDesktops": "パソコンで同じアカウントにログインすると辞書を同期できます。"
   },
   "deviceNameEditor": {
     "screenTitle": "デバイス名",

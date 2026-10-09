@@ -136,8 +136,10 @@ const gatewayCatalogIdentityOverrides = new Map<string, { provider: string; mode
     'gpt-6-astra',
   ].flatMap((id) => [
     [id, { provider: 'openai', modelId: id }] as const,
+    [`openai-codex/${id}`, { provider: 'openai', modelId: id }] as const,
     [`codex/${id}`, { provider: 'openai', modelId: id }] as const,
   ]),
+  ['openai-codex/gpt-5.5:auto', { provider: 'openai', modelId: 'gpt-5.5' }],
   ['codex/gpt-5.5:auto', { provider: 'openai', modelId: 'gpt-5.5' }],
   ...['deepseek-v4-flash', 'deepseek-v4-flash-vision-exp', 'deepseek-v4-pro'].map(
     (id) => [`deepseek/${id}`, { provider: 'deepseek', modelId: id }] as const,

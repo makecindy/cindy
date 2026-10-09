@@ -319,6 +319,72 @@ describe('buildProvisionalRemoteSession', () => {
   });
 });
 
+// 远程控制下新建任务,Agent 在同账号第三台电脑运行(与手机新建任务同一个 create-session 参数)。
+describe('Agent 在另一台电脑运行', () => {
+  const NOW = '2026-10-09T03:00:00.000Z';
+  const candidate = {
+    model: 'c-model',
+    effort: 'high' as const,
+    permissionMode: 'default' as const,
+    fastMode: false,
+  };
+  // 模型目录是运行 Agent 的那台电脑的:来源在那份目录里解析。
+  const agentComputerCatalog = [deviceProvider('c-open', true, ['c-model'])];
+
+  it('agentDeviceId 交给被控电脑,来源按那台电脑的目录解析', () => {
+    const args = resolveDeviceLinkSubmission({
+      agentKind: 'cc',
+      workingDir: '/peer/proj',
+      candidate,
+      deviceProviders: agentComputerCatalog,
+      capabilityAgentKind: 'claude-code',
+      agentDeviceId: 'device-c',
+    });
+    expect(args.agentDeviceId).toBe('device-c');
+    expect(args.providerId).toBe('c-open');
+    expect(args.model).toBe('c-model');
+  });
+
+  it('Agent 在被控电脑本身时不带这个字段(旧被控电脑与原有调用不变)', () => {
+    for (const agentDeviceId of [undefined, null, '']) {
+      const args = resolveDeviceLinkSubmission({
+        agentKind: 'cc',
+        candidate,
+        deviceProviders: agentComputerCatalog,
+        capabilityAgentKind: 'claude-code',
+        agentDeviceId,
+      });
+      expect('agentDeviceId' in args).toBe(false);
+    }
+  });
+
+  it('临时行就带上 Agent 所在电脑;不带时不出现这个字段', () => {
+    const remote = buildDeviceLinkCreateArgs({
+      agentKind: 'cc',
+      model: 'c-model',
+      effort: 'high',
+      permissionMode: 'default',
+      fastMode: false,
+      agentDeviceId: 'device-c',
+    });
+    expect(
+      buildProvisionalRemoteSession({ sessionId: 's-6', workDir: '/w', args: remote, nowIso: NOW })
+        .agentDeviceId,
+    ).toBe('device-c');
+    const plain = buildDeviceLinkCreateArgs({
+      agentKind: 'cc',
+      model: 'b-model',
+      effort: 'high',
+      permissionMode: 'default',
+      fastMode: false,
+    });
+    expect(
+      'agentDeviceId' in
+        buildProvisionalRemoteSession({ sessionId: 's-7', workDir: '/w', args: plain, nowIso: NOW }),
+    ).toBe(false);
+  });
+});
+
 /**
  * resolveDeviceLinkSubmission —— 远程建会话参数的**唯一入口**。
  *

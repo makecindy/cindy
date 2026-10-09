@@ -111,7 +111,7 @@ export function resolveExportBackground(from?: Element | null): string {
  */
 export async function svgToPngBlob(
   svgText: string,
-  opts?: { scale?: number; background?: string },
+  opts?: { scale?: number; background?: string; fontFamily?: string },
 ): Promise<Blob> {
   const size = parseSvgIntrinsicSize(svgText);
   if (!size) throw new Error('svg has no usable size');
@@ -119,8 +119,22 @@ export async function svgToPngBlob(
   const outW = Math.max(1, Math.round(size.width * scale));
   const outH = Math.max(1, Math.round(size.height * scale));
 
+  // Mermaid returns HTML-serialized SVG: foreignObject labels can contain
+  // HTML void tags (<br>) that render inline but are invalid SVG/XML images.
+  // Parse in an inert template, then serialize namespaces and void elements
+  // as XML. Keep the rendered labels/styles; do not re-render with htmlLabels
+  // disabled or weaken Mermaid's securityLevel / the image CSP.
+  const template = document.createElement('template');
+  template.innerHTML = svgText;
+  const svg = template.content.querySelector('svg');
+  if (!svg) throw new Error('svg missing');
+  svg.setAttribute('width', String(size.width));
+  svg.setAttribute('height', String(size.height));
+  // SVG-as-image has no surrounding document to inherit its label font from.
+  svg.style.fontFamily = opts?.fontFamily ?? window.getComputedStyle(document.body).fontFamily;
+  const imageSvg = new XMLSerializer().serializeToString(svg);
   const image = new Image();
-  image.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svgText)}`;
+  image.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(imageSvg)}`;
   await image.decode();
 
   const canvas = document.createElement('canvas');

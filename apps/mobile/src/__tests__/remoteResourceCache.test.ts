@@ -8,6 +8,7 @@ vi.mock('@react-native-async-storage/async-storage', () => ({ default: {
   multiRemove: vi.fn(async (keys: string[]) => { keys.forEach((key) => disk.delete(key)); }),
 } }));
 import { cacheRemoteResourceHome, cacheRemoteResourceItems, clearRemoteResourceCache, isRemoteResourceUnread, markRemoteResourceRead, readRemoteResourceSnapshot, remoteResourceCacheRevision, subscribeRemoteResourceCache } from '@/device-link/remoteResourceCache';
+import { chatReadAt, chatRoomRow, type ChatSnapshot } from '@/chat/chatServerClient';
 const rows = (deviceId: string, lastReplyAt: number) => [{
   key: `${deviceId}:bot:writer`, host: { deviceId, deviceName: deviceId },
   item: { ref: { collectionId: 'teammates', kind: 'bot', id: 'writer' }, display: { title: 'Writer', lastReplyAt }, revision: '1', links: [] },
@@ -43,6 +44,26 @@ it('keeps device-qualified read positions and treats only later host replies as 
   await markRemoteResourceRead('alice', 'home', 'writer', 100);
   expect(isRemoteResourceUnread('alice', 'home', 'writer', 200)).toBe(false);
   expect((await readRemoteResourceSnapshot('bob')).items).toEqual({});
+});
+it('preserves unread replies in the same millisecond using exact server sequences', async () => {
+  const first = '9007199254740992', second = '9007199254740993';
+  const data: ChatSnapshot = { room: { id: 'group', name: 'Discussion', kind: 'group', archived: false, revision: 1,
+    created_at: '2026-10-09', updated_at: '2026-10-09', response_mode: 'all', speaking_mode: 'auto' }, cursor: second,
+    reads: [{ thread_key: 'main', read_seq: first }], members: [], messages: [first, second].map((seq, index) => ({
+      id: `incoming-${index}`, seq, authorId: 'other', author: { kind: 'human', name: 'Other' },
+      createdAt: '2026-10-09T10:00:00.123Z', deleted: false, threadRootId: null, content: [{ type: 'text', text: 'hello' }],
+    })) };
+  const row = chatRoomRow(data.room, data, 'self');
+  await markRemoteResourceRead('alice', '', 'group', chatReadAt(data, 'self'), first);
+  expect(isRemoteResourceUnread('alice', '', 'group', row.item.display.lastReplyAt, second)).toBe(true);
+  await markRemoteResourceRead('alice', '', 'group', row.item.display.lastReplyAt!, second);
+  await markRemoteResourceRead('alice', '', 'group', chatReadAt(data, 'self'), first);
+  expect(isRemoteResourceUnread('alice', '', 'group', row.item.display.lastReplyAt, second)).toBe(false);
+  expect(isRemoteResourceUnread('bob', '', 'group', row.item.display.lastReplyAt, second)).toBe(true);
+  vi.resetModules();
+  const restored = await import('@/device-link/remoteResourceCache');
+  await restored.readRemoteResourceSnapshot('alice');
+  expect(restored.isRemoteResourceUnread('alice', '', 'group', row.item.display.lastReplyAt, second)).toBe(false);
 });
 it('stays silent when a read mark or roster refresh leaves the cache unchanged', async () => {
   const { default: storage } = await import('@react-native-async-storage/async-storage');

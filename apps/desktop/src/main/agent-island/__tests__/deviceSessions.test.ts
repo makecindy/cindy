@@ -37,6 +37,28 @@ function remote(
 }
 
 describe('Agent Island device sessions', () => {
+  it.each(['teammate', undefined] as const)('resolves pending remote completion once without changing task state (%s)', completionNotification => {
+    const state = createAgentIslandState();
+    syncAgentIslandDeviceSessions(state, [remote('running')], 1_000);
+    const pending = syncAgentIslandDeviceSessions(state, [remote('completed', { completionNotification: 'pending', detail: 'Result' })], 2_000);
+    expect(pending.events).toEqual([]);
+    expect(state.sessions.get('remote-1')).toMatchObject({ phase: 'completed', unread: true });
+    const result = syncAgentIslandDeviceSessions(state, [remote('completed', { completionNotification, detail: 'Result' })], 3_000);
+    expect(result.events.map(event => event.kind)).toEqual(completionNotification ? [] : ['done']);
+    expect(syncAgentIslandDeviceSessions(state, [remote('completed', { completionNotification })], 4_000).events).toEqual([]);
+    syncAgentIslandDeviceSessions(state, [remote('running')], 5_000);
+    expect(syncAgentIslandDeviceSessions(state, [remote('completed')], 6_000).events.map(event => event.kind)).toEqual(['done']);
+  });
+
+  it('does not notify a first-seen pending completion and preserves action/error events', () => {
+    const state = createAgentIslandState();
+    syncAgentIslandDeviceSessions(state, [remote('completed', { completionNotification: 'pending' })], 1_000);
+    expect(syncAgentIslandDeviceSessions(state, [remote('completed')], 2_000).events).toEqual([]);
+    syncAgentIslandDeviceSessions(state, [remote('running')], 3_000);
+    expect(syncAgentIslandDeviceSessions(state, [remote('needs-interaction', { completionNotification: 'teammate', interactionKind: 'permission' })], 4_000).events.map(event => event.kind)).toEqual(['needs-reply']);
+    expect(syncAgentIslandDeviceSessions(state, [remote('error', { completionNotification: 'teammate' })], 5_000).events.map(event => event.kind)).toEqual(['error']);
+  });
+
   it('shows a first-seen remote task without revealing it or emitting an event', () => {
     const state = createAgentIslandState();
     const result = syncAgentIslandDeviceSessions(state, [remote('completed')], 1_000);

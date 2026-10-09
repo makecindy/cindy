@@ -34,6 +34,48 @@ describe('SessionActivityRelay', () => {
     vi.useRealTimers();
   });
 
+  it.each([true, false])('publishes completion and unread immediately, then only resolves notification ownership (%s)', async handled => {
+    let resolve!: (handled: boolean) => void;
+    const check = vi.fn(() => new Promise<boolean>(r => { resolve = r; }));
+    const emit = vi.fn();
+    const relay = new SessionActivityRelay(emit, { isCompletionHandledByTeammate: check });
+    const done = activity('s1', 'Final result', { phase: 'completed', attention: true });
+    relay.publish([done]);
+    expect(emit).toHaveBeenLastCalledWith(expect.objectContaining({ phase: 'completed', attention: true, compactDetail: 'Final result', completionNotification: 'pending' }));
+    relay.publish([done]);
+    await Promise.resolve();
+    expect(check).toHaveBeenCalledOnce();
+    const replay = vi.fn();
+    relay.replay([done], replay);
+    expect(replay).toHaveBeenLastCalledWith(emit.mock.calls[0][0]);
+    resolve(handled);
+    await check.mock.results[0].value;
+    await vi.advanceTimersByTimeAsync(0);
+    expect(emit).toHaveBeenLastCalledWith(expect.objectContaining({ phase: 'completed', attention: true, completionNotification: handled ? 'teammate' : undefined }));
+    relay.publish([done]);
+    expect(emit).toHaveBeenCalledTimes(2);
+    relay.replay([done], replay);
+    expect(replay).toHaveBeenLastCalledWith(emit.mock.calls[1][0]);
+  });
+
+  it.each(['running', 'read', 'reset', 'dispose'])('discards an old completion decision after %s', async boundary => {
+    let resolve!: (handled: boolean) => void;
+    const emit = vi.fn();
+    const relay = new SessionActivityRelay(emit, { isCompletionHandledByTeammate: () => new Promise<boolean>(r => { resolve = r; }) });
+    relay.publish([activity('s1', 'Done', { phase: 'completed', attention: true })]);
+    await Promise.resolve();
+    const decision = relay.waitForCompletionNotification('s1');
+    if (boundary === 'running') relay.publish([activity('s1', 'New turn', { startedAtMs: 2 })]);
+    if (boundary === 'read') relay.publish([]);
+    if (boundary === 'reset') relay.reset();
+    if (boundary === 'dispose') relay.dispose();
+    await expect(decision).resolves.toBe(true);
+    const count = emit.mock.calls.length;
+    resolve(true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(emit).toHaveBeenCalledTimes(count);
+  });
+
   it('bypasses throttling for unread terminal states arriving inside the window', () => {
     const emit = vi.fn();
     const relay = new SessionActivityRelay(emit, { minIntervalMs: 1_500 });

@@ -117,7 +117,7 @@ describe('passive shared-userData instance auth isolation', () => {
     expect(scheduleBody).toContain('refreshTimer = setTimeout(');
 
     const retryBody = sliceBody(
-      'function scheduleRefreshRetryAfterTransientFailure(): void {',
+      'function scheduleRefreshRetryAfterTransientFailure(epoch: number, retryAt?: number): void {',
       '\n}\n',
     );
     expect(retryBody).not.toContain('isPassiveSharedUserDataInstance');
