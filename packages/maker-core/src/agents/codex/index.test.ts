@@ -19901,7 +19901,9 @@ describe('CodexAgent MCP thread context hooks', () => {
     return { host, handle, handlers, params, decision, resolver, events };
   }
 
-  it.each(['pending', 'answered', 'dismissed'] as const)('keeps distinct identical async questions independent when the first is %s', async (state) => {
+  it.each((['pending', 'answered', 'dismissed'] as const).flatMap((state) =>
+    ['Proceed?', 'Continue testing?'].map((question) => ({ state, question })),
+  ))('keeps only the latest async card for "$question" when the first is $state', async ({ state, question }) => {
     const s = await runningAsyncQuestion();
     const second = deferred<InteractionDecision>();
     const steerCalls = () => s.host.request.mock.calls.filter(([method]) => method === Method.TurnSteer);
@@ -19913,24 +19915,59 @@ describe('CodexAgent MCP thread context hooks', () => {
         await new Promise((resolve) => setTimeout(resolve, 0));
       }
       s.resolver.mockImplementationOnce(async () => second.promise);
-      const next = { ...s.params, item: { ...asyncQuestionItem, id: 'async-question-2' } };
+      const next = { ...s.params, item: { ...asyncQuestionItem, id: 'async-question-2',
+        questions: [{ title: question, options: ['Yes', 'No'] }] } };
       s.handlers.itemCompleted?.(next);
       s.handlers.itemCompleted?.(next);
       s.handlers.itemCompleted?.(s.params);
       expect(s.resolver).toHaveBeenCalledTimes(2);
       expect(s.resolver.mock.calls[1][0].requestId).not.toBe(s.resolver.mock.calls[0][0].requestId);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(s.events.filter((event) => event.type === 'interaction_dismissed')).toEqual(state === 'pending' ? [{
+        type: 'interaction_dismissed', source: 'codex',
+        data: { requestId: s.resolver.mock.calls[0][0].requestId, reason: 'superseded', resolvedAs: 'deny' },
+      }] : []);
+      // Even before the turn ends, a late response to the replaced card cannot
+      // steer the model or remove the current card.
+      s.decision.resolve({ kind: 'ask_user_question', answers: { 'Proceed?': 'Yes' } });
+      await new Promise((resolve) => setTimeout(resolve, 0));
       expect(steerCalls()).toHaveLength(state === 'answered' ? 1 : 0);
-      second.resolve({ kind: 'ask_user_question', answers: { 'Proceed?': 'No' } });
+      second.resolve({ kind: 'ask_user_question', answers: { [question]: 'No' } });
       await vi.waitFor(() => expect(steerCalls()).toHaveLength(state === 'answered' ? 2 : 1));
       expect(steerCalls().at(-1)?.[1]).toMatchObject({ input: [{ text: expect.stringContaining('A: No') }] });
       s.handlers.turnCompleted?.({ threadId: s.params.threadId,
         turn: { id: s.params.turnId, status: 'completed' } });
       await vi.waitFor(() => expect(s.handle.isTurnRunning?.()).toBe(false));
-      // A still-pending first item expires independently; its late answer cannot
-      // reuse the second item's delivery or restart the finished execution.
-      s.decision.resolve({ kind: 'ask_user_question', answers: { 'Proceed?': 'Yes' } });
       await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(s.events.filter((event) => event.type === 'interaction_dismissed')).toHaveLength(state === 'pending' ? 1 : 0);
       expect(steerCalls()).toHaveLength(state === 'answered' ? 2 : 1);
+      expect(askUserTurnStartCalls(s.host)).toHaveLength(1);
+    } finally { await s.handle.close(); }
+  });
+
+  it.each(['completed', 'failed', 'stop', 'close'] as const)('expires only the latest unanswered async card on %s after replacement', async (outcome) => {
+    const s = await runningAsyncQuestion();
+    const second = deferred<InteractionDecision>();
+    try {
+      s.resolver.mockImplementationOnce(async () => second.promise);
+      const next = { ...s.params, item: { ...asyncQuestionItem, id: 'async-question-2' } };
+      s.handlers.itemCompleted?.(next);
+      // Replayed lifecycle events cannot bring the replaced card back.
+      s.handlers.itemCompleted?.(s.params);
+      expect(s.resolver).toHaveBeenCalledTimes(2);
+      if (outcome === 'stop') await s.handle.abort();
+      else if (outcome === 'close') await s.handle.close();
+      else s.handlers.turnCompleted?.({ threadId: s.params.threadId,
+        turn: { id: s.params.turnId, status: outcome } });
+      await vi.waitFor(() => expect(s.events.filter((event) => event.type === 'interaction_dismissed')).toHaveLength(2));
+      expect(s.events.filter((event) => event.type === 'interaction_dismissed').map((event) => event.data)).toEqual([
+        { requestId: s.resolver.mock.calls[0][0].requestId, reason: 'superseded', resolvedAs: 'deny' },
+        { requestId: s.resolver.mock.calls[1][0].requestId, reason: expect.any(String), resolvedAs: 'deny' },
+      ]);
+      s.decision.resolve({ kind: 'ask_user_question', answers: { 'Proceed?': 'Yes' } });
+      second.resolve({ kind: 'ask_user_question', answers: { 'Proceed?': 'No' } });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(s.host.request.mock.calls.filter(([method]) => method === Method.TurnSteer)).toHaveLength(0);
       expect(askUserTurnStartCalls(s.host)).toHaveLength(1);
     } finally { await s.handle.close(); }
   });
@@ -20063,8 +20100,10 @@ describe('CodexAgent MCP thread context hooks', () => {
     expect(handle.isTurnRunning?.()).toBe(false);
     const dismissed = events.filter((event) => event.type === 'interaction_dismissed');
     expect(dismissed).toHaveLength(count);
+    expect(dismissed.map((event) => event.data.reason)).toEqual(
+      count === 2 ? ['superseded', 'turn_completed'] : ['turn_completed'],
+    );
     for (const event of dismissed) {
-      expect(event.data.reason).toBe('turn_completed');
       expect(events.indexOf(event)).toBeLessThan(doneIndex);
     }
     expect(events.some((event) => event.type === 'text'

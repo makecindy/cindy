@@ -9566,10 +9566,11 @@ assertRouteCurrent();
         if ([...liveAskUserByRequestId.values()].some((live) => live.delivery !== 'async')) {
           return emptyUserInputResponse(questions);
         }
-      } else {
-        for (const live of liveAskUserByRequestId.values()) {
-          if (live.delivery === 'async') dismissLiveAskUser(live.requestId, 'superseded');
-        }
+      }
+      // The shared card has one slot: either kind of new question replaces an
+      // unanswered async card. Answered cards have already left this map.
+      for (const live of liveAskUserByRequestId.values()) {
+        if (live.delivery === 'async') dismissLiveAskUser(live.requestId, 'superseded');
       }
       // Async items already deduplicate lifecycle notifications by item id.
       // Only synchronous protocol aliases may share pending/submitted answers
