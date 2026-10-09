@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises';
 import { constants } from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import { createHash } from 'node:crypto';
 import { and, eq, isNull, sql } from 'drizzle-orm';
 import { getCurrentDbClientSnapshot } from '../localDb/client/current';
@@ -8,7 +9,10 @@ import type { DbClient } from '../localDb/client/DbClient';
 import { messages, sessions } from '../localDb/schema';
 import { ingestMedia } from './ingest';
 import { hasRef, removeRefById } from './ledger';
-import { captureMediaRefCompensationScope } from './refCompensationJournal';
+import {
+  captureMediaRefCompensationScope,
+  withMediaRefCompensation,
+} from './refCompensationJournal';
 import { sniffMediaMime } from './sniffMediaMime';
 import {
   hasLocalTaskImages,
@@ -17,6 +21,11 @@ import {
 } from './taskImageMarkdown';
 
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
+
+export function claudeScratchpadTempBase(platform: NodeJS.Platform = process.platform): string {
+  // Claude uses /tmp on Unix, including macOS where os.tmpdir() differs.
+  return process.env.CLAUDE_CODE_TMPDIR || (platform === 'win32' ? os.tmpdir() : '/tmp');
+}
 type SessionImageScope = Pick<
   typeof sessions.$inferSelect,
   'id' | 'workingDir' | 'sdkSessionId' | 'agentKind' | 'remoteHostId' | 'status' | 'clearedAt'
@@ -31,7 +40,7 @@ type ImageMessage = Pick<
  */
 export function claudeScratchpadPath(
   session: Pick<SessionImageScope, 'workingDir' | 'sdkSessionId' | 'agentKind'>,
-  tempBase = process.env.CLAUDE_CODE_TMPDIR || '/tmp',
+  tempBase = claudeScratchpadTempBase(),
   uid = process.getuid?.() ?? 0,
 ): string | null {
   if (
@@ -59,15 +68,13 @@ export async function taskImageRoots(session: SessionImageScope): Promise<string
   } catch {
     /* missing workdir */
   }
-  const scratchpad = claudeScratchpadPath(session);
+  const configuredTempBase = claudeScratchpadTempBase();
+  const scratchpad = claudeScratchpadPath(session, configuredTempBase);
   if (scratchpad) {
     try {
       // /tmp may itself alias /private/tmp. No task-owned path component may redirect elsewhere.
-      const tempBase = await fs.realpath(process.env.CLAUDE_CODE_TMPDIR || '/tmp');
-      const expected = path.join(
-        tempBase,
-        path.relative(process.env.CLAUDE_CODE_TMPDIR || '/tmp', scratchpad),
-      );
+      const tempBase = await fs.realpath(configuredTempBase);
+      const expected = path.join(tempBase, path.relative(configuredTempBase, scratchpad));
       const actual = await fs.realpath(scratchpad);
       if (actual === expected) roots.push(actual);
     } catch {
@@ -188,7 +195,19 @@ async function captureTaskImages(sessionId: string, client?: DbClient) {
     db,
     assertStillValid,
     rollback: async () => {
-      for (const id of newRefs) await removeRefById(id, db);
+      if (!newRefs.length) return;
+      const remove = (id: string) => removeRefById(id, db);
+      await withMediaRefCompensation({
+        // Rollback must remain possible AFTER an owner switch. Only these exact
+        // newly created ids are removed, using the captured owner's directory
+        // and DB; never resolve either against the now-active account.
+        scope: { ...journal, assertStillValid: () => {} },
+        refIds: newRefs,
+        perform: async () => {
+          for (const id of newRefs) await remove(id);
+        },
+        compensate: remove,
+      });
     },
     materialize: (text: string) =>
       materializeTaskImageMarkdown(text, {
@@ -310,7 +329,7 @@ async function restoreTaskImageRowsUnlocked<T extends ImageMessage>(
       continue;
     }
     let scope: Awaited<ReturnType<typeof captureTaskImages>> = null;
-    let published = false;
+    let publicationMayHaveCommitted = false;
     try {
       scope = await captureTaskImages(row.sessionId, client);
       if (
@@ -327,6 +346,9 @@ async function restoreTaskImageRowsUnlocked<T extends ImageMessage>(
         continue;
       }
       const content = parsed.serialize(result.text);
+      // A disposed worker can lose the ACK after committing. Until a definite
+      // CAS miss is returned, preserve pins rather than risk breaking history.
+      publicationMayHaveCommitted = true;
       const updated = await scope.db
         .update(messages)
         .set({ content })
@@ -346,16 +368,14 @@ async function restoreTaskImageRowsUnlocked<T extends ImageMessage>(
         )
         .returning({ id: messages.id });
       if (!updated.length) {
-        await scope.rollback();
-        output.push(row);
-        continue;
+        publicationMayHaveCommitted = false;
+        throw new Error('task-image: message changed');
       }
-      published = true;
       scope.assertStillValid();
       output.push({ ...row, content });
     } catch {
       // Preserve the readable original on failure. Never claim the bytes were deleted.
-      if (!published) await scope?.rollback().catch(() => {});
+      if (!publicationMayHaveCommitted) await scope?.rollback().catch(() => {});
       output.push(row);
     }
   }

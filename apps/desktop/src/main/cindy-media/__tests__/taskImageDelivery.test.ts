@@ -9,12 +9,15 @@ import type { DbClient } from '../../localDb/client/DbClient';
 import { setCurrentDbClient, clearCurrentDbClient } from '../../localDb/client/current';
 import {
   claudeScratchpadPath,
+  claudeScratchpadTempBase,
   materializeTaskImageText,
   readTaskImage,
   restoreTaskImageRows,
   taskImageRoots,
 } from '../taskImageDelivery';
 import { resolveSafe } from '../blobStore';
+import * as ledger from '../ledger';
+import { reconcileMediaRefCompensationsForOwner } from '../refCompensationJournal';
 import { materializeLocalMarkdownImages } from '../../im/shared/localMarkdownImages';
 import { collectOutboundAttachments } from '../../hook-control/outbound';
 import {
@@ -29,13 +32,11 @@ const state = vi.hoisted(() => ({
   afterIngest: undefined as (() => void) | undefined,
 }));
 vi.mock('electron', () => ({ app: { getPath: () => state.root } }));
-vi.mock('../refCompensationJournal', () => ({
-  captureMediaRefCompensationScope: () => ({
-    assertStillValid: () => {
-      if (!state.valid) throw new Error('owner changed');
-    },
-  }),
-  withMediaRefCompensation: async ({ perform }: { perform(): Promise<void> }) => perform(),
+vi.mock('../../appSessionState', () => ({
+  activeOwnerScopeKey: () => (state.valid ? 'cloud:test-owner:1' : 'cloud:other-owner:2'),
+  dataOwnerStorageKey: (id: string) => (id === 'test-owner' ? 'a' : 'b').repeat(20),
+  getActiveAppSession: () => ({ dataOwnerId: state.valid ? 'test-owner' : 'other-owner' }),
+  isAppSessionBoundaryPending: () => false,
 }));
 vi.mock('../ingest', async (original) => {
   const actual = await original<typeof import('../ingest')>();
@@ -79,6 +80,7 @@ beforeEach(async () => {
   setCurrentDbClient(client, 'test-owner');
 });
 afterEach(async () => {
+  vi.restoreAllMocks();
   clearCurrentDbClient();
   raw.close();
   vi.unstubAllEnvs();
@@ -101,6 +103,129 @@ function insert(text: string) {
 }
 
 describe('task image delivery', () => {
+  it('preserves the image when the message commit succeeds but its worker ACK is lost', async () => {
+    const source = path.join(work, 'committed.png');
+    await fs.writeFile(source, PNG);
+    const row = insert(`![committed](${source})`);
+    vi.spyOn(client.drizzle, 'update').mockImplementation(
+      () =>
+        ({
+          set: ({ content }: { content: string }) => ({
+            where: () => ({
+              returning: async () => {
+                raw.prepare('UPDATE messages SET content = ? WHERE id = ?').run(content, row.id);
+                throw new Error('worker acknowledgement lost');
+              },
+            }),
+          }),
+        }) as unknown as ReturnType<typeof client.drizzle.update>,
+    );
+    expect(await restoreTaskImageRows(client, [row])).toEqual([row]);
+    const persisted = raw.prepare('SELECT content FROM messages').get() as { content: string };
+    const url = taskImageReferences(JSON.parse(persisted.content))[0].url;
+    expect(url).toMatch(/^cindy-media:/);
+    await fs.rm(source);
+    await reconcileMediaRefCompensationsForOwner({
+      ownerId: 'test-owner',
+      db: client.drizzle,
+      isOwnerCurrent: () => true,
+    });
+    expect(raw.prepare('SELECT count(*) AS n FROM media_refs').get()).toEqual({ n: 1 });
+    expect(await fs.readFile(resolveSafe(url).absPath)).toEqual(PNG);
+  });
+
+  it('keeps published references when the owner changes after the message update', async () => {
+    const source = path.join(work, 'published.png');
+    await fs.writeFile(source, PNG);
+    const row = insert(`![published](${source})`);
+    raw.function('switch_owner', () => {
+      state.valid = false;
+      return 0;
+    });
+    raw.exec(
+      'CREATE TRIGGER switch_owner_after_publish AFTER UPDATE OF content ON messages BEGIN SELECT switch_owner(); END',
+    );
+    // The old caller gets its original row, but the committed message and pin survive.
+    expect(await restoreTaskImageRows(client, [row])).toEqual([row]);
+    expect(raw.prepare('SELECT content FROM messages').get()).toEqual({
+      content: expect.stringContaining('cindy-media://'),
+    });
+    expect(raw.prepare('SELECT count(*) AS n FROM media_refs').get()).toEqual({ n: 1 });
+    state.valid = true;
+    const result = await reconcileMediaRefCompensationsForOwner({
+      ownerId: 'test-owner',
+      db: client.drizzle,
+      isOwnerCurrent: () => true,
+    });
+    expect(result.recoveredPending).toBe(0);
+    expect(raw.prepare('SELECT count(*) AS n FROM media_refs').get()).toEqual({ n: 1 });
+  });
+
+  it('uses the platform temp directory on Windows and the CLI /tmp convention on Unix', () => {
+    vi.stubEnv('CLAUDE_CODE_TMPDIR', '');
+    const temp = path.join(state.root, 'system-temp');
+    vi.spyOn(os, 'tmpdir').mockReturnValue(temp);
+    expect(claudeScratchpadTempBase('win32')).toBe(temp);
+    expect(claudeScratchpadTempBase('darwin')).toBe('/tmp');
+    expect(claudeScratchpadTempBase('linux')).toBe('/tmp');
+    const override = path.join(state.root, 'cli-temp');
+    vi.stubEnv('CLAUDE_CODE_TMPDIR', override);
+    expect(claudeScratchpadTempBase('win32')).toBe(override);
+    expect(claudeScratchpadTempBase('darwin')).toBe(override);
+  });
+
+  it.each(['chat', 'channel'])(
+    'journals %s rollback when the old owner DB is unavailable',
+    async (target) => {
+      const prior = path.join(work, 'prior.png');
+      await fs.writeFile(prior, PNG);
+      await materializeTaskImageText('s', `![prior](${prior})`);
+      const priorRefs = raw.prepare('SELECT id FROM media_refs').all();
+      const source = path.join(work, 'new.png');
+      await fs.writeFile(source, Buffer.concat([PNG, Buffer.from([1])]));
+      const text = `![new](${source})`;
+      const row = insert(text);
+      const remove = vi
+        .spyOn(ledger, 'removeRefById')
+        .mockRejectedValue(new Error('old worker disposed'));
+      state.afterIngest = () => {
+        state.valid = false;
+      };
+      if (target === 'chat') expect(await restoreTaskImageRows(client, [row])).toEqual([row]);
+      else expect(await materializeTaskImageText('s', text)).toBe(text);
+      expect(raw.prepare('SELECT content FROM messages').get()).toEqual({ content: row.content });
+      const journalDir = path.join(
+        state.root,
+        'owners',
+        'a'.repeat(20),
+        'cindy-media',
+        'ref-compensation-v1',
+      );
+      const pending = (await fs.readdir(journalDir)).filter((name) =>
+        name.endsWith('.pending.json'),
+      );
+      expect(pending).toHaveLength(1);
+      const record = JSON.parse(await fs.readFile(path.join(journalDir, pending[0]), 'utf8'));
+      expect(record.refIds).toHaveLength(1);
+      expect(record.refIds).not.toContain((priorRefs[0] as { id: string }).id);
+      expect(raw.prepare('SELECT count(*) AS n FROM media_refs').get()).toEqual({ n: 2 });
+      for (const call of remove.mock.calls) expect(call[1]).toBe(client.drizzle);
+      await expect(fs.stat(path.join(state.root, 'owners', 'b'.repeat(20)))).rejects.toMatchObject({
+        code: 'ENOENT',
+      });
+      remove.mockRestore();
+      state.valid = true;
+      const result = await reconcileMediaRefCompensationsForOwner({
+        ownerId: 'test-owner',
+        db: client.drizzle,
+        isOwnerCurrent: () => true,
+      });
+      expect(result.recoveredPending).toBe(1);
+      expect(raw.prepare('SELECT id FROM media_refs').all()).toEqual(priorRefs);
+      expect((await fs.readdir(journalDir)).filter((name) => name.endsWith('.json'))).toEqual([]);
+    },
+  );
+
   it('recovers the malformed scratchpad URL and preserves bytes after source removal', async () => {
     const scratch = claudeScratchpadPath({ workingDir: work, sdkSessionId: sdk, agentKind: 'cc' })!;
     await fs.mkdir(scratch, { recursive: true });

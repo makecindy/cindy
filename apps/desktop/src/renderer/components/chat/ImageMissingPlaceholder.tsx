@@ -43,7 +43,12 @@ export function ImageMissingPlaceholder({
       style={{ maxWidth, minHeight: 140 }}
     >
       {status === 'loading' ? (
-        <LoaderCircle className="h-8 w-8 animate-spin opacity-60" aria-hidden="true" />
+        <span
+          className="inline-flex animate-spin motion-reduce:animate-none opacity-60"
+          aria-hidden="true"
+        >
+          <LoaderCircle className="h-8 w-8" />
+        </span>
       ) : (
         <ImageOff className="h-8 w-8 opacity-60" aria-hidden="true" />
       )}
