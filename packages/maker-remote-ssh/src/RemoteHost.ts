@@ -37,6 +37,16 @@ export interface RemoteHostDeps {
    * ConnectionPool injects one built from its `knownHostsPath`.
    */
   hostKeys?: HostKeyStore;
+  /** Localized host-key diagnostics; the standalone package defaults to English. */
+  formatHostKeyError?: (details: HostKeyErrorDetails) => string;
+}
+
+export interface HostKeyErrorDetails {
+  kind: 'missing' | 'read' | 'write' | 'mismatch';
+  host: string;
+  filePath?: string;
+  fingerprint?: string;
+  reason?: string;
 }
 
 const READY_TIMEOUT_MS = 20_000;
@@ -363,6 +373,7 @@ export class RemoteHost {
   private events = new EventEmitter();
   private readonly log: RemoteHostDeps['logger'];
   private readonly hostKeys?: HostKeyStore;
+  private readonly formatHostKeyError?: RemoteHostDeps['formatHostKeyError'];
   /**
    * Set by the host-key verifier when it rejects a connect, so onError can
    * surface an actionable message instead of ssh2's opaque handshake error.
@@ -382,6 +393,7 @@ export class RemoteHost {
     this.cfg = config;
     this.log = deps.logger;
     this.hostKeys = deps.hostKeys;
+    this.formatHostKeyError = deps.formatHostKeyError;
   }
 
   get config(): HostConfig {
@@ -1103,8 +1115,7 @@ export class RemoteHost {
     const store = this.hostKeys;
     if (!store) {
       if (isCurrentAttempt()) {
-        this.hostKeyError =
-          'SSH host key verification is not configured; refusing to connect without it.';
+        this.hostKeyError = this.hostKeyFailure({ kind: 'missing', host: storeKey });
       }
       this.log.error('ssh host key store missing — refusing connect', { id: this.id });
       return false;
@@ -1120,7 +1131,10 @@ export class RemoteHost {
       stored = await store.get(storeKey);
     } catch (err) {
       if (isCurrentAttempt()) {
-        this.hostKeyError = `failed to read trusted host keys: ${(err as Error).message}`;
+        this.hostKeyError = this.hostKeyFailure({
+          kind: 'read', host: storeKey, filePath: store.filePath,
+          reason: err instanceof Error ? err.message : String(err),
+        });
       }
       this.log.error('ssh known-hosts read failed — refusing connect', {
         id: this.id,
@@ -1141,7 +1155,10 @@ export class RemoteHost {
         // Proceeding without persistence means the next reconnect would
         // re-enter trust-new and silently accept any key, defeating TOFU.
         if (isCurrentAttempt()) {
-          this.hostKeyError = `failed to persist trusted host key: ${(err as Error).message}`;
+          this.hostKeyError = this.hostKeyFailure({
+            kind: 'write', host: storeKey, filePath: store.filePath,
+            reason: err instanceof Error ? err.message : String(err),
+          });
         }
         this.log.error('ssh known-hosts write failed — refusing connect', {
           id: this.id,
@@ -1159,11 +1176,9 @@ export class RemoteHost {
     }
     // mismatch
     if (isCurrentAttempt()) {
-      this.hostKeyError =
-        `Remote host key for ${storeKey} changed (${presented}) and no longer matches the ` +
-        `previously trusted key. This can mean the server was reinstalled — or a ` +
-        `man-in-the-middle. Connection refused. If you trust the change, remove the stale ` +
-        `entry from maker's known hosts and reconnect.`;
+      this.hostKeyError = this.hostKeyFailure({
+        kind: 'mismatch', host: storeKey, filePath: store.filePath, fingerprint: presented,
+      });
     }
     this.log.error('ssh host key mismatch — refusing connect', {
       id: this.id,
@@ -1172,6 +1187,27 @@ export class RemoteHost {
       trusted: stored,
     });
     return false;
+  }
+
+  private hostKeyFailure(details: HostKeyErrorDetails): string {
+    if (this.formatHostKeyError) return this.formatHostKeyError(details);
+    if (details.kind === 'missing') {
+      return 'SSH host key verification is not configured; refusing to connect without it.';
+    }
+    const location = details.filePath ? `\nTrusted host keys file:\n${details.filePath}` : '';
+    if (details.kind === 'read' || details.kind === 'write') {
+      const action = details.kind === 'read' ? 'read trusted host keys' : 'persist trusted host key';
+      return `Failed to ${action}: ${details.reason}. Connection refused.${location}`;
+    }
+    const recovery = details.filePath
+      ? `\nCindy does not read ~/.ssh/known_hosts. The old fingerprint is stored in:\n${details.filePath}` +
+        `\nThe entry key is "${details.host}".\nIf you have verified that this change is trustworthy, quit Cindy, ` +
+        `remove only this entry, keep the file and all other hosts, then reconnect. ` +
+        `The new fingerprint will be saved on first connection. Do not delete the entire file.`
+      : '\nVerify the change with the server administrator before updating the trusted host key store.';
+    return `Remote host key for ${details.host} changed (${details.fingerprint}) and no longer matches the ` +
+      `key previously trusted by Cindy. This may mean the server was reinstalled or a man-in-the-middle attack. ` +
+      `Connection refused.${recovery}`;
   }
 
   private async doConnect(): Promise<void> {

@@ -1077,7 +1077,9 @@ export function RemoteSection({ showTitle = true }: { showTitle?: boolean } = {}
       // instead of the generic i18n key, so the user sees the exact
       // command they need to run.
       const ipc = extractIpcError(err);
-      if (ipc?.code === 'SSH_AUTH_FAILED') {
+      if (ipc?.code === 'SSH_AUTH_FAILED' || ipc?.code === 'SSH_CONNECT_FAILED') {
+        // Preserve the actual connection failure, including localized host-key
+        // diagnostics and the backing store path, rather than a generic toast.
         toast.error(ipc.message);
       } else if (ipc?.code === 'SSH_KEY_FILE_NOT_FOUND') {
         // Local key-path problem (fs ENOENT on the configured identityFile),

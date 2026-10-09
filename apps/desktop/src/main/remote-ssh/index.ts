@@ -76,6 +76,7 @@ import { PROTOCOL_VERSION as PI_MANAGER_PROTOCOL_VERSION } from '@cindy/maker-pi
 import { invalidateRemotePiPathCaches, redactCredentialText } from '../maker-host/pi-remote-transport.js';
 import { serializeEnvBlock } from './env-block.js';
 import { classifyConnectFailure } from './connect-failure.js';
+import { formatHostKeyError } from './host-key-error.js';
 import {
   addKeyToAgent,
   buildInstallCommand,
@@ -306,6 +307,7 @@ function getPool(): ConnectionPool {
     pool = new ConnectionPool({
       logger: poolLogger,
       hostKeys: getSharedHostKeyStore(),
+      formatHostKeyError,
     });
   }
   return pool;
@@ -1148,7 +1150,7 @@ export function registerRemoteSshIpc(): void {
       if (host) broadcastStatus(host.snapshot());
     },
     createTunnelHost: (cfg) =>
-      new RemoteHost(cfg, { logger: poolLogger, hostKeys: getSharedHostKeyStore() }),
+      new RemoteHost(cfg, { logger: poolLogger, hostKeys: getSharedHostKeyStore(), formatHostKeyError }),
     getMainHost: (hostId) => getPool().get(hostId) ?? null,
   });
 

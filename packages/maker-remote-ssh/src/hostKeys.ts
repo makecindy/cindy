@@ -24,6 +24,8 @@ import path from 'node:path';
  * stays decoupled from Electron / userData paths (design rule 2).
  */
 export interface HostKeyStore {
+  /** Actual backing file, when file-based; used in connection repair guidance. */
+  readonly filePath?: string;
   /** Trusted fingerprint for `key`, or null when the host is unknown. */
   get(key: string): Promise<string | null>;
   /**
@@ -78,7 +80,7 @@ export function decideHostKey(stored: string | null, presented: string): HostKey
  * 0600 (best-effort; chmod is a no-op on Windows).
  */
 export class FileHostKeyStore implements HostKeyStore {
-  private readonly filePath: string;
+  readonly filePath: string;
   private cache: Record<string, string> | null = null;
   private loadPromise: Promise<Record<string, string>> | null = null;
   private loadSettled = false; // true once loadPromise has resolved or rejected

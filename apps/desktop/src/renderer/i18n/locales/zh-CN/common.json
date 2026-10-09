@@ -791,6 +791,15 @@
     },
     "remote": {
       "title": "远端机器",
+      "hostKeyError": {
+        "missing": "SSH 主机密钥校验尚未配置。连接已拒绝。",
+        "read": "Cindy 无法读取已信任的主机密钥：{{reason}}。连接已拒绝。",
+        "write": "Cindy 无法保存已信任的主机密钥：{{reason}}。连接已拒绝。",
+        "mismatch": "主机 {{host}} 的密钥已变化（{{fingerprint}}），和 Cindy 之前信任的指纹不一致。这可能是服务器重装，也可能是中间人攻击。连接已拒绝。",
+        "file": "主机密钥信任文件：\n{{filePath}}",
+        "repair": "Cindy 不读取 ~/.ssh/known_hosts。旧指纹在：\n{{filePath}}\n键名是 \"{{host}}\"。\n如果确认这次变化可信：先退出 Cindy，只删除这个键，保留文件和其他主机，再重新连接。新指纹会在首次连接时写入。不要删除整个文件。",
+        "verifyChange": "请先向服务器管理员核实密钥变化，再更新主机密钥信任记录。"
+      },
       "footnote": "第一版仅支持 SSH 连接管理。在远端运行 Agent 的能力将在后续版本中加入。",
       "viaAuth": "通过 {{label}} 认证",
       "readOnlyFromSshConfig": "连接信息来自 SSH 配置",
