@@ -10931,7 +10931,8 @@
       "sessionInactive": "セッションはすでにアクティブではありません",
       "remoteProjectBanner": "{{device}} の {{project}} で新しいセッションを作成",
       "remoteDialogueBanner": "{{device}} で新しい対話（プロジェクトなし）",
-      "agentDeviceBanner": "セッションとファイルはこのパソコンに残り、Agent は {{device}} で実行されます"
+      "agentDeviceBanner": "セッションとファイルはこのパソコンに残り、Agent は {{device}} で実行されます",
+      "agentDeviceElsewhereBanner": "Agent は {{device}} で実行されます"
     },
     "jumpSession": {
       "emptyId": "移動先の sessionId を入力してください",

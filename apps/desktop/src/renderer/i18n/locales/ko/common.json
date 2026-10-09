@@ -10931,7 +10931,8 @@
       "sessionInactive": "세션이 더 이상 활성 상태가 아닙니다",
       "remoteProjectBanner": "{{device}}의 {{project}}에서 새 세션 만들기",
       "remoteDialogueBanner": "{{device}}에서 새 대화(프로젝트 없음)",
-      "agentDeviceBanner": "세션과 파일은 이 컴퓨터에 남고, Agent는 {{device}}에서 실행됩니다"
+      "agentDeviceBanner": "세션과 파일은 이 컴퓨터에 남고, Agent는 {{device}}에서 실행됩니다",
+      "agentDeviceElsewhereBanner": "Agent는 {{device}}에서 실행됩니다"
     },
     "jumpSession": {
       "emptyId": "이동할 sessionId를 입력하세요",

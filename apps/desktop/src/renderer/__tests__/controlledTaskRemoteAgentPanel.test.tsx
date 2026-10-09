@@ -273,6 +273,86 @@ describe('被控电脑上的任务:模型面板列出第三台电脑的远程供
   });
 });
 
+// 2026-10-09 用户反馈:远程控制下新建任务(选了另一台电脑当任务电脑)时模型列表里选不到远程供应商,
+// 只有选本机才选得到。草稿走 onUnifiedSelect 直通,不经 onRelocate。
+describe('远程控制下新建任务:草稿的模型面板同样列出第三台电脑的远程供应商', () => {
+  function renderControlledDraftPanel(
+    remoteAgent: Partial<React.ComponentProps<typeof ModelSelectorContent>['remoteAgent']> = {},
+    props: Partial<React.ComponentProps<typeof ModelSelectorContent>> = {},
+  ) {
+    const onUnifiedSelect = vi.fn(async () => true);
+    const onProviderChange = vi.fn();
+    render(
+      React.createElement(ModelSelectorContent, {
+        modelId: 'b-model',
+        effort: 'high',
+        onModelChange: vi.fn(),
+        onEffortChange: vi.fn(),
+        currentProviderId: 'b-main',
+        onProviderChange,
+        actualRoute: false,
+        vendorKey: 'cc',
+        deviceId: 'device-b',
+        onUnifiedSelect,
+        remoteAgent: {
+          devices,
+          selectedDeviceId: null,
+          homeDeviceId: 'device-b',
+          ...remoteAgent,
+        },
+        ...props,
+      }),
+    );
+    return { onUnifiedSelect, onProviderChange };
+  }
+
+  it('先列被控电脑的全部供应商,再列第三台电脑开放了远程调用的供应商', () => {
+    renderControlledDraftPanel();
+    expect(screen.getByRole('button', { name: 'B Main' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'B Closed' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'A Local' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'C Open · Studio' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'C Closed · Studio' })).toBeNull();
+  });
+
+  it('选中第三台电脑的模型:把那台电脑交给草稿层,不走换位置', async () => {
+    const { onUnifiedSelect, onProviderChange } = renderControlledDraftPanel();
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'C Open · Studio' }));
+    });
+    const row = within(list()).getByText('C Model').closest('[data-unified-anchor]') as HTMLElement;
+    await act(async () => {
+      fireEvent.click(row);
+    });
+    expect(onUnifiedSelect).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerId: 'c-open',
+        modelId: 'c-model',
+        engine: 'cc',
+        agentDevice: { deviceId: 'device-c', name: 'Studio' },
+      }),
+    );
+    expect(onProviderChange).not.toHaveBeenCalled();
+  });
+
+  it('Agent 已选在第三台电脑:选回被控电脑的模型带 agentDevice: null', async () => {
+    const { onUnifiedSelect } = renderControlledDraftPanel(
+      { selectedDeviceId: 'device-c' },
+      { deviceId: 'device-c', modelId: 'c-model', currentProviderId: 'c-open' },
+    );
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'B Main' }));
+    });
+    const row = within(list()).getByText('B Model').closest('[data-unified-anchor]') as HTMLElement;
+    await act(async () => {
+      fireEvent.click(row);
+    });
+    expect(onUnifiedSelect).toHaveBeenCalledWith(
+      expect.objectContaining({ providerId: 'b-main', modelId: 'b-model', agentDevice: null }),
+    );
+  });
+});
+
 describe('本机任务不受影响', () => {
   it('不传 homeDeviceId 时任务所在电脑一格仍是本机目录', () => {
     renderControlledTaskPanel(

@@ -85,16 +85,17 @@ describe('ChatInput:换位置进切换事务', () => {
 });
 
 describe('被控电脑上的任务:换 Agent 所在电脑', () => {
-  it('只在调用方传了候选电脑(被控端支持)、不是草稿 / SSH / 共享任务访客、位置本机读得到时开放', () => {
+  it('只在调用方传了候选电脑(被控端支持)、不是 SSH / 共享任务访客时开放;已建任务还要位置本机读得到', () => {
     const start = chatInputSource.indexOf('const deviceLinkAgentLocation =');
     expect(start).toBeGreaterThan(0);
-    const block = chatInputSource.slice(start, chatInputSource.indexOf('});\n', start));
+    const block = chatInputSource.slice(start, chatInputSource.indexOf('}));\n', start));
     for (const guard of [
-      '!!sessionId',
       '!!deviceLinkDeviceId',
       '!remoteHostId',
       '!sharedGuest',
       'remoteAgentDevices !== undefined',
+      // 草稿(还没有 sessionId)的落点只来自候选电脑;已建任务另看当前与挂着的位置。
+      '(!sessionId ||',
       'controlledTaskAgentLocationReadable({',
     ]) {
       expect(block).toContain(guard);

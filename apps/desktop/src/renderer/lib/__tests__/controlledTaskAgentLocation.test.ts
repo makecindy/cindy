@@ -5,11 +5,25 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  controlledComputerSupportsRemoteAgent,
   controlledTaskAgentLocationReadable,
   controlledTaskSupportsAgentLocation,
   isControllerReadableAgentDevice,
   selectControlledTaskAgentDevices,
 } from '../controlledTaskAgentLocation';
+
+describe('controlledComputerSupportsRemoteAgent', () => {
+  it('被控电脑的供应商目录带「允许被远程调用」布尔标记(开或关都算)就支持远程控制下新建任务', () => {
+    expect(controlledComputerSupportsRemoteAgent([{ remoteInvocationEnabled: false }])).toBe(true);
+    expect(controlledComputerSupportsRemoteAgent([{}, { remoteInvocationEnabled: true }])).toBe(true);
+  });
+
+  it('旧版被控电脑不带这个标记、或目录还没读到:不支持', () => {
+    expect(controlledComputerSupportsRemoteAgent([{}, {}])).toBe(false);
+    expect(controlledComputerSupportsRemoteAgent([])).toBe(false);
+    expect(controlledComputerSupportsRemoteAgent([{ remoteInvocationEnabled: 'yes' }])).toBe(false);
+  });
+});
 
 describe('controlledTaskSupportsAgentLocation', () => {
   it('被控电脑投影了 agentDeviceId 字段(含 null)才算支持', () => {

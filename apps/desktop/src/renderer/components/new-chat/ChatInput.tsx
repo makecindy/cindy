@@ -541,8 +541,8 @@ interface ChatInputProps {
   /**
    * Agent 在同账号另一台电脑上运行:那台电脑的 deviceId(null = 任务所在电脑)。只决定**模型目录**
    * (能力、供应商、可用引擎)从哪台读 —— 任务、文件、命令、斜杠命令、附件仍按任务所在电脑处理,
-   * 切换模型也走任务所在电脑(由它转给那台的 Agent)。被控电脑上的任务传被控电脑投影的值,只在
-   * 传了 remoteAgentDevices 时生效。
+   * 切换模型也走任务所在电脑(由它转给那台的 Agent)。被控电脑上的任务(已建任务传被控电脑投影的值,
+   * 草稿传草稿里的选择)只在传了 remoteAgentDevices 时生效。
    */
   agentDeviceId?: string | null;
   /** agentDeviceId 那台电脑的名字(模型选择器悬停 / 读屏用);未知时显示「另一台电脑」。 */
@@ -550,8 +550,8 @@ interface ChatInputProps {
   /**
    * 「Agent 在其他电脑运行」的可选目标(同账号电脑,不含任务所在电脑)。传了且非空时,模型面板
    * 左侧栏在任务所在电脑的供应商之后列出这些电脑上的供应商:草稿里选中会经 onUnifiedDraftSelect
-   * 的 agentDevice 交给草稿层;已建任务里选中 = 把 Agent 挪过去。被控电脑上的已建任务只在那台
-   * 支持远程 Agent 时传;SSH 任务不传。
+   * 的 agentDevice 交给草稿层;已建任务里选中 = 把 Agent 挪过去。被控电脑上的任务(已建任务与建到
+   * 被控电脑的草稿)只在那台支持远程 Agent 时传;SSH 任务不传。
    */
   remoteAgentDevices?: readonly { deviceId: string; name: string }[];
   /**
@@ -1263,21 +1263,22 @@ export function ChatInput({
   const sharedGuest = isSharedTaskPeer(deviceLinkDeviceId ?? '');
   const selfDeviceId = useOptionalAuthDeviceId();
   /**
-   * 远程控制的被控电脑上的已建任务,Agent 同样可以在第三台电脑运行(与手机同一套)。调用方只在
-   * 被控电脑支持时才传 remoteAgentDevices;草稿、SSH 任务与共享任务访客不走这条。Agent 现在或
-   * 挂着的位置是本机读不到目录的地方(被控电脑收到的分享 / 本机自己)时,维持原有的被控电脑列表。
+   * 远程控制的被控电脑上的任务(已建任务,或建到被控电脑的新任务草稿),Agent 同样可以在第三台电脑
+   * 运行(与手机同一套)。调用方只在被控电脑支持时才传 remoteAgentDevices;SSH 任务与共享任务访客
+   * 不走这条。已建任务里 Agent 现在或挂着的位置是本机读不到目录的地方(被控电脑收到的分享 / 本机
+   * 自己)时,维持原有的被控电脑列表;草稿的落点只会是 remoteAgentDevices 里的电脑。
    */
   const deviceLinkAgentLocation =
-    !!sessionId &&
     !!deviceLinkDeviceId &&
     !remoteHostId &&
     !sharedGuest &&
     remoteAgentDevices !== undefined &&
-    controlledTaskAgentLocationReadable({
-      agentDeviceId: _agentDeviceId,
-      pendingAgentDeviceId: makerChatStore.getAgentSwitchIntent(sessionId)?.agentDeviceId,
-      selfDeviceId,
-    });
+    (!sessionId ||
+      controlledTaskAgentLocationReadable({
+        agentDeviceId: _agentDeviceId,
+        pendingAgentDeviceId: makerChatStore.getAgentSwitchIntent(sessionId)?.agentDeviceId,
+        selfDeviceId,
+      }));
   /** 这个任务的 Agent 位置由本机呈现与切换:本机任务,或上面那种被控电脑上的任务。 */
   const agentLocationAware = !deviceLinkDeviceId || deviceLinkAgentLocation;
   /** Agent 在另一台电脑运行(null = 任务所在电脑);只影响模型目录来源。 */
@@ -2118,18 +2119,32 @@ export function ChatInput({
    */
   const taskComputerModelMemory = deviceLinkDeviceId ? modelMemoryOverride : LOCAL_MODEL_MEMORY;
 
-  // 远程 Agent(仅本机新任务草稿):模型面板左侧栏同时列出其他电脑上的供应商。
+  // 远程 Agent · 新任务草稿:模型面板左侧栏同时列出其他电脑上的供应商。本机草稿先列本机目录;
+  // 建到被控电脑的草稿(被控电脑支持时调用方才传候选电脑)先列被控电脑的目录与它的镜像记忆。
   const remoteAgentOptions = useMemo<RemoteAgentSelectorOptions | undefined>(
     () =>
-      !sessionId && !deviceLinkDeviceId && !remoteHostId && remoteAgentDevices && remoteAgentDevices.length > 0
+      !sessionId &&
+      agentLocationAware &&
+      !remoteHostId &&
+      remoteAgentDevices &&
+      remoteAgentDevices.length > 0
         ? {
             devices: remoteAgentDevices,
             selectedDeviceId: agentDeviceId,
-            localModelMemory: LOCAL_MODEL_MEMORY,
+            ...(deviceLinkDeviceId ? { homeDeviceId: deviceLinkDeviceId } : {}),
+            ...(taskComputerModelMemory ? { localModelMemory: taskComputerModelMemory } : {}),
             deviceModelMemory: agentDeviceModelMemoryAccessors,
           }
         : undefined,
-    [sessionId, deviceLinkDeviceId, remoteHostId, remoteAgentDevices, agentDeviceId],
+    [
+      sessionId,
+      agentLocationAware,
+      deviceLinkDeviceId,
+      taskComputerModelMemory,
+      remoteHostId,
+      remoteAgentDevices,
+      agentDeviceId,
+    ],
   );
 
   // 把「用户在当前来源下选定的 (model, effort)」记进模型全局预设,供其它非活跃行和之后的
@@ -7311,8 +7326,8 @@ export function ChatInput({
     }) => {
       if (sessionId || settingsLocked) return;
       const targetKind = vendorKeyToAgentKind(selection.engine);
-      // 这一行与当前目录不在同一台电脑(远程 Agent 换落点):记忆按目标目录写 —— 落到本机就写
-      // 本机预设;落到另一台电脑就写本机为那台记的那一份。
+      // 这一行与当前目录不在同一台电脑(远程 Agent 换落点):记忆按目标目录写 —— 落回任务所在
+      // 电脑就写那份(本机预设 / 被控电脑的镜像);落到另一台电脑就写本机为那台记的那一份。
       const crossDevice =
         selection.agentDevice !== undefined &&
         (selection.agentDevice?.deviceId ?? null) !== agentDeviceId;
@@ -7320,7 +7335,7 @@ export function ChatInput({
         ? modelMemory
         : selection.agentDevice
           ? agentDeviceModelMemoryAccessors(selection.agentDevice.deviceId)
-          : LOCAL_MODEL_MEMORY;
+          : taskComputerModelMemory;
       if (targetKind && selection.providerId && !selection.resetToRecommended) {
         if (selection.effort) {
           targetMemory?.setEffort(
@@ -7345,7 +7360,7 @@ export function ChatInput({
         ...(selection.agentDevice !== undefined ? { agentDevice: selection.agentDevice } : {}),
       });
     },
-    [sessionId, settingsLocked, modelMemory, onUnifiedDraftSelect, agentDeviceId],
+    [sessionId, settingsLocked, modelMemory, taskComputerModelMemory, onUnifiedDraftSelect, agentDeviceId],
   );
 
   const showModelSwitchFailure = useCallback(

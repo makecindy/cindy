@@ -4,7 +4,9 @@
  * (apps/mobile/src/session/remoteAgentCatalogs.ts):模型列表在被控电脑自己的供应商之后,另列同账号
  * 其他电脑开放了远程调用的供应商;选另一台电脑的模型 = 把 Agent 挪过去,下一条消息生效。
  *
- * 这里只放纯判定,接线在 CCAgentSessionView / ChatInput。
+ * 远程控制下新建任务(建到被控电脑上)同样可以选第三台电脑的模型:任务建出来就带 agentDeviceId。
+ *
+ * 这里只放纯判定,接线在 CCAgentSessionView / NewMakerDraftRoute / ChatInput。
  */
 import { isProviderShareAgentDeviceId } from '../../shared/providerShare';
 
@@ -14,6 +16,17 @@ import { isProviderShareAgentDeviceId } from '../../shared/providerShare';
  */
 export function controlledTaskSupportsAgentLocation(session: object | null | undefined): boolean {
   return !!session && Object.prototype.hasOwnProperty.call(session, 'agentDeviceId');
+}
+
+/**
+ * 远程控制下新建任务时,被控电脑认不认 `maker:create-session` 的 agentDeviceId(与手机新建任务同一
+ * 判据):它的供应商目录带「允许被远程调用」布尔标记(与远程 Agent 同一版加入)。旧版被控电脑不带,
+ * 不提供其他电脑的模型。目录还没读到时同样按不支持处理。
+ */
+export function controlledComputerSupportsRemoteAgent(
+  providers: readonly { remoteInvocationEnabled?: unknown }[],
+): boolean {
+  return providers.some((provider) => typeof provider.remoteInvocationEnabled === 'boolean');
 }
 
 /**
@@ -43,8 +56,9 @@ export function controlledTaskAgentLocationReadable(input: {
 }
 
 /**
- * 被控电脑上的任务可以让 Agent 去哪些电脑:本机的可选设备(已排除本机与手机)里去掉被控电脑本身,
- * 留下在线的,以及任务当前 / 挂着的 Agent 所在电脑(离线也保留,让用户看得到、换得回来)。
+ * 被控电脑上的任务(已建任务或新建任务草稿)可以让 Agent 去哪些电脑:本机的可选设备(已排除本机与
+ * 手机)里去掉被控电脑本身,留下在线的,以及任务当前 / 挂着的 Agent 所在电脑(离线也保留,让用户
+ * 看得到、换得回来)。
  * 本机自己收到的分享不列:被控电脑用不了。被控电脑收到的分享本机读不到目录,同样不列。
  */
 export function selectControlledTaskAgentDevices(input: {

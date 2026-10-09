@@ -660,7 +660,8 @@ export interface RemoteAgentRelocation {
 }
 
 /**
- * 远程 Agent 的选择入口(本机新任务草稿、本机已建任务,以及远程控制的被控电脑上的已建任务传)。
+ * 远程 Agent 的选择入口(本机新任务草稿、本机已建任务,以及远程控制的被控电脑上的已建任务与
+ * 建到被控电脑的新任务草稿传)。
  * 模型面板的左侧栏在任务所在电脑的供应商之后列出这些电脑上的供应商;选中那台电脑上的模型 =
  * Agent 在那台电脑运行,任务和文件仍在任务所在电脑。
  */
@@ -670,7 +671,7 @@ export interface RemoteAgentSelectorOptions {
   /** 当前的 Agent 所在电脑(已建任务按下一条消息时的位置);null = 任务所在电脑。 */
   selectedDeviceId: string | null;
   /**
-   * 任务所在电脑:远程控制的被控电脑上的任务传那台的 deviceId,它的目录照远程控制列出全部供应商;
+   * 任务所在电脑:远程控制的被控电脑上的任务(含草稿)传那台的 deviceId,它的目录照远程控制列出全部供应商;
    * 不传 = 本机任务,用本机目录。
    */
   homeDeviceId?: string;

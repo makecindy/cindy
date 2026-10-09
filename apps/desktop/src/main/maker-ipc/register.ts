@@ -916,7 +916,11 @@ import { clearSealedCodexPlanState, readCodexPlanState } from '../localDb/codexP
 import { buildCompletedPlanGuardNote, buildPlanReconcileNote } from './planReconcile.js';
 import { peekGoalInactiveNote } from '../goal-host/inactiveNote.js';
 import { readTurnUsageResetAt } from '../goal-host/usageLimit.js';
-import { readAccountUsageLimit, subscriptionFamilyOf } from '../usage/accountUsageLimit.js';
+import {
+  readAccountUsageLimit,
+  sessionUsesOtherMachineAccount,
+  subscriptionFamilyOf,
+} from '../usage/accountUsageLimit.js';
 import { UsageLimitAutoResume } from './usageLimitAutoResume.js';
 import { type MakerSessionCreateOpts, withCreateSessionStderr } from './sessionRequest.js';
 import { persistAndHydrateSessionProvider } from './sessionProviderBootstrap.js';
@@ -1374,13 +1378,14 @@ async function resolveSessionUsageResetAt(
   if (!row || !agentKind) return null;
   const { providerId, modelId } = resolveSessionRuntimeRoute(sessionId, agentKind, row);
   if (!subscriptionFamilyOf(agentKind, providerId)) return null;
-  // SSH 远程会话的报错用远端主机的本地时间:不带时区的钟点不按本机时区理解。
+  // SSH 远程会话 / 远程 Agent 的报错用那台机器的本地时间:不带时区的钟点不按本机时区理解。
+  const otherMachineAccount = sessionUsesOtherMachineAccount(row);
   const fromError = readTurnUsageResetAt(signals, Date.now(), {
-    localTimeZoneTrusted: !row.remoteHostId,
+    localTimeZoneTrusted: !otherMachineAccount,
   });
   if (fromError !== null) return fromError;
-  // SSH 远程会话用远端主机自己的登录,本机快照属于另一个账号,不能拿来推算。
-  if (row.remoteHostId) return null;
+  // SSH 远端主机 / 远程 Agent 所在电脑用自己的登录,本机快照属于另一个账号,不能拿来推算。
+  if (otherMachineAccount) return null;
   const limit = await readAccountUsageLimit(agentKind, providerId, modelId);
   return limit?.limited ? limit.resetAtMs : null;
 }

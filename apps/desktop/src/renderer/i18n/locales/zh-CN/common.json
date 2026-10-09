@@ -10931,7 +10931,8 @@
       "sessionInactive": "任务已不再处于活跃状态",
       "remoteProjectBanner": "在 {{device}} 的 {{project}} 中新建任务",
       "remoteDialogueBanner": "在 {{device}} 上新建对话（不绑定项目）",
-      "agentDeviceBanner": "任务和文件留在本机，Agent 在 {{device}} 上运行"
+      "agentDeviceBanner": "任务和文件留在本机，Agent 在 {{device}} 上运行",
+      "agentDeviceElsewhereBanner": "Agent 在 {{device}} 上运行"
     },
     "jumpSession": {
       "emptyId": "请输入要跳转的任务 ID",
