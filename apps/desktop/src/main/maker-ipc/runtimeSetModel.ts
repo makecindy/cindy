@@ -84,6 +84,8 @@ export interface ApplyRuntimeSetModelChangeInput {
   assertSessionCloseSupported?: () => void;
   /** Called after async preflight, immediately before the first setting side effect. */
   admit?: () => void;
+  /** Host authorization refreshed after async route preparation, before admission. */
+  beforeMutation?: () => Promise<void>;
   isSessionInTurn?: (sessionId: string) => boolean;
   /**
    * 会话自己正在跑 turn 时的延迟生效登记(PendingCredentialSwitchService.register)。
@@ -264,6 +266,7 @@ export async function applyRuntimeSetModelChange(
   }
 
   if (!sess && requiresCodexThreadRelink) {
+    if (input.beforeMutation) await input.beforeMutation();
     input.admit?.();
     await input.relinkCodexThread?.();
     if (providerId !== undefined) setSessionProvider(sessionId, nextProviderId);
@@ -284,6 +287,7 @@ export async function applyRuntimeSetModelChange(
     // 把 route/model 的生效边界固定在 turn 结束；pending 收口只关闭本 Session，
     // 当前账号保持到回合边界，不能让工具续轮命中新账号。
     if (input.registerPendingCredentialSwitch) {
+      if (input.beforeMutation) await input.beforeMutation();
       input.admit?.();
       await input.registerPendingCredentialSwitch(sessionId, {
         model,
@@ -306,6 +310,7 @@ export async function applyRuntimeSetModelChange(
 
   if (sess && (shouldCloseSession || requiresCodexThreadRelink)) {
     input.assertSessionCloseSupported?.();
+    if (input.beforeMutation) await input.beforeMutation();
     input.admit?.();
     if (isSelfBusy() && input.registerPendingCredentialSwitch) {
       // A required credential rebuild must also survive close failure: keeping
@@ -415,6 +420,7 @@ export async function applyRuntimeSetModelChange(
       : { status: 'applied', retiredRuntime: true };
   }
 
+  if (input.beforeMutation) await input.beforeMutation();
   input.admit?.();
   if (providerId !== undefined) {
     setSessionProvider(sessionId, nextProviderId);

@@ -107,5 +107,5 @@ export function useTeammateRoster(enabled = true) {
     authoritative: ready && !discovery.loading && !list.loading && !list.syncing && status === 'online' && !discovery.error && (!discovery.targets.length || !list.error),
     loading: items.length === 0 && (!ready || list.loading),
     refreshing: list.refreshing,
-    error: ready ? discovery.error ?? list.error : null, refresh };
+    error: ready ? discovery.error ?? (discovery.targets.length ? list.error : null) : null, refresh };
 }

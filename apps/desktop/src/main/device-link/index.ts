@@ -1881,6 +1881,15 @@ export async function remoteBackgroundInvoke(
   }
 }
 
+/**
+ * 分享者那台电脑(已解析成本地 peer key)的只读请求：relay 只在建链时登记受邀者这台电脑，没建过链的
+ * 电脑直接发 invoke 会被当成不在分享名单里(`providerShare peer unavailable`)。与远程 Agent、手机代读
+ * 分享同一条路：先建后台链路，再请求。
+ */
+export function providerShareHostInvoke(target: string, channel: string, args: unknown[]): Promise<InvokeResultPayload> {
+  return backgroundInvokeDevice(target, channel, args);
+}
+
 async function backgroundInvokeDevice(deviceId: string, channel: string, args: unknown[]): Promise<InvokeResultPayload> {
   if (!client?.isLinkReady(deviceId)) {
     assertBackgroundLinkAccepted(await openRemoteLink(deviceId), {

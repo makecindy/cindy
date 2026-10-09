@@ -8,6 +8,7 @@
  */
 
 import { app } from 'electron';
+import { authorizeGroupTool, GroupToolAuthorizationError } from './botGroupToolAuthorization.js';
 import { collectTeammateGuideMount } from './teammateGuideStore.js';
 import { botSkillRuntimeSummary, projectBotSkillMounts } from './botSkillRuntimeProjection.js';
 import { queryBotSkillIndex } from './botSkillQueryIndex.js';
@@ -65,7 +66,7 @@ export interface BotSkillServiceDeps {
   ownerBoundaryPending?: () => boolean;
   requestRefresh?: typeof requestBotRuntimeEpochRefresh;
   resolveBotId?: (callerSessionId: string) => Promise<
-    | { ok: true; botId: string; canonicalSessionId?: string | null }
+    | { ok: true; botId: string; canonicalSessionId?: string | null; refresh?: () => Promise<void> }
     | { ok: false; errorCode: string; message: string }
   >;
 }
@@ -123,8 +124,8 @@ async function skillHomeOf(
   return dir;
 }
 
-async function defaultResolveBotId(callerSessionId: string): Promise<
-  { ok: true; botId: string; canonicalSessionId: string | null } | { ok: false; errorCode: string; message: string }
+async function defaultResolveBotId(callerSessionId: string, readOnly = false): Promise<
+  { ok: true; botId: string; canonicalSessionId: string | null; refresh?: () => Promise<void> } | { ok: false; errorCode: string; message: string }
 > {
   const db = getDbClient().drizzle;
   const [row] = await db
@@ -148,7 +149,9 @@ async function defaultResolveBotId(callerSessionId: string): Promise<
   if (row.sessionStatus !== 'active' || row.profileStatus !== 'active' || row.linkArchivedAt !== null) {
     return { ok: false, errorCode: 'BOT_SESSION_INACTIVE', message: '已归档的 Bot 任务不能沉淀技能' };
   }
-  if (row.role !== 'canonical' && row.role !== 'delegation') {
+  const authority = row.role === 'group' && readOnly
+    ? await authorizeGroupTool(callerSessionId, row.botId, 'read-self') : null;
+  if (row.role !== 'canonical' && row.role !== 'delegation' && !authority) {
     return { ok: false, errorCode: 'BOT_SESSION_READ_ONLY', message: '当前 Bot 历史任务为只读状态' };
   }
   // Runtime hydration cannot mount the local personal shelf on an SSH host.
@@ -157,10 +160,11 @@ async function defaultResolveBotId(callerSessionId: string): Promise<
   if (row.remoteHostId) {
     return { ok: false, errorCode: 'REMOTE_SKILLS_UNAVAILABLE', message: '当前远端任务尚未挂载伙伴自有 Skill 存储，不能读取或保存本机 Skill，也不能承诺远端生效' };
   }
-  return { ok: true, botId: row.botId, canonicalSessionId: row.canonicalSessionId };
+  return { ok: true, botId: row.botId, canonicalSessionId: row.canonicalSessionId, ...authority };
 }
 
 function storeError(cause: unknown): { ok: false; errorCode: string; message: string } {
+  if (cause instanceof GroupToolAuthorizationError) return { ok: false, errorCode: cause.code, message: cause.message };
   if (cause instanceof BotSkillStoreError) {
     return { ok: false, errorCode: cause.errorCode, message: cause.message };
   }
@@ -227,12 +231,14 @@ export async function listBotSkillsForSession(
 ): Promise<BotSkillResult<{ skills: ReturnType<typeof botSkillRuntimeSummary>[]; total: number; nextOffset?: number }>> {
   try {
     const boundary = captureOwnerBoundary(deps);
-    const owner = await (deps.resolveBotId ?? defaultResolveBotId)(params.callerSessionId);
+    const owner = await (deps.resolveBotId ?? (id => defaultResolveBotId(id, true)))(params.callerSessionId);
     if (!owner.ok) return owner;
     assertOwnerBoundary(deps, boundary);
     const home = await skillHomeOf(deps, owner.botId, boundary);
     assertOwnerBoundary(deps, boundary);
     const result = await queryBotSkillIndex(botSkillRootDir(home, owner.botId), home, owner.botId, params);
+    assertOwnerBoundary(deps, boundary);
+    await owner.refresh?.();
     assertOwnerBoundary(deps, boundary);
     return { ok: true, ...result };
   } catch (cause) {

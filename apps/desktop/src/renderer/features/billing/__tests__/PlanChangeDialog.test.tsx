@@ -146,6 +146,27 @@ describe('PlanChangeStatusDialog stale snapshot handling', () => {
     expect(onRefresh).toHaveBeenCalledTimes(1);
   });
 
+  it('explains a prepaid renewal without offering another upgrade or confirmation', () => {
+    render(
+      <PlanChangeStatusDialog
+        state={quoteReadyState({
+          phase: 'FAILED',
+          error: true,
+          quoteFailureReason: 'RENEWAL_PREPAID',
+        })}
+        targetName="Max"
+        onClose={vi.fn()}
+        onConfirm={vi.fn()}
+        onRefresh={vi.fn()}
+        onReselect={vi.fn()}
+        onAbandon={vi.fn()}
+      />,
+    );
+    expect(screen.getByText('billing.planChange.renewalPrepaid')).toBeTruthy();
+    expect(screen.queryByText('billing.planChange.confirm')).toBeNull();
+    expect(screen.queryByText('billing.planChange.chooseAnotherPlan')).toBeNull();
+  });
+
   it('explains a rejected target and returns to plan selection', () => {
     const onReselect = vi.fn();
     render(

@@ -24,6 +24,7 @@ import { createLogger } from '../logger.js';
 import { t } from '../i18n.js';
 import { buildOfficialBotCommandMenus } from '../im/shared/botCommands.js';
 import { stopSessionTurnExplicitly } from '../maker-ipc/register.js';
+import { onChannelTurn } from '../maker-ipc/channelTurnSignal.js';
 import { getMaker, restartCodexAfterAuthModeChange } from '../maker-host/index.js';
 import { shutdownCodexEnvironment } from '../mcp-integrations/codexEnvironment.js';
 import { getDesktopProviderService } from '../maker-host/createDesktopProviderService.js';
@@ -552,6 +553,7 @@ function ensureInstances(): { store: SlackHookStore; manager: HookControlManager
       // 「用户在桌面端点了重试 / 继续任务」信号 -> 把那一轮接回渠道原消息
       // (turn.reopen, 协议阶段 18)。信号由 maker 的发送事务发布。
       subscribeUiContinuation: onUiContinuation,
+      subscribeChannelTurn: (listener) => onChannelTurn((session, phase) => listener(session.id, session.workDir, phase)),
       subscribeUiSessionIntervention: onUiSessionIntervention,
       subscribeUiTurnDispatching: onUiTurnDispatching,
       subscribeUiTurnUndispatched: onUiTurnUndispatched,

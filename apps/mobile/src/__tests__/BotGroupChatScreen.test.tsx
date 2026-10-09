@@ -24,6 +24,7 @@ const h = vi.hoisted(() => ({
   platform: { OS: 'ios' },
 }));
 
+vi.mock('expo-web-browser', () => ({ openBrowserAsync: vi.fn(async () => ({})) }));
 vi.mock('react-native', () => {
   const box = (tag: string) => ({ children, testID, accessibilityLabel }: any) =>
     el(tag, { 'data-testid': testID, 'aria-label': accessibilityLabel }, children);
@@ -470,6 +471,19 @@ describe('group composer', () => {
     expect(h.row.value).toBe('');
   });
 
+  it('keeps the current human in the group but excludes it from mention choices and typed mentions', async () => {
+    h.chat.server = true;
+    const data = group({ openPlan: null });
+    data.members.unshift({ ...data.members[0]!, botId: 'self', name: 'Me', actorKind: 'human', isSelf: true });
+    await render(data);
+    await type('@');
+    expect(byId('botGroup.mention.self')).toBeNull();
+    expect(byId('botGroup.mention.mimi')).not.toBeNull();
+    await type('@Me @阿布 hello');
+    await click('botGroup.composer.send');
+    expect(h.chat.act).toHaveBeenLastCalledWith('send', expect.objectContaining({ mentions: { all: false, botIds: ['abu'] } }));
+  });
+
   it('sends a 分工 message and keeps the clientId and tag for a retry', async () => {
     await render(group({ openPlan: null }));
     expect(byId('botGroup.divisionTag')).toBeNull();
@@ -768,4 +782,59 @@ describe('offline computer', () => {
     expect(byId('botGroup.continue')?.disabled).toBe(true);
     expect(h.row.editable).toBe(false);
   });
+});
+
+
+describe('direct server group presentation', () => {
+  it.each([true, false])('aligns attachments with their message author (server=%s)', async (server) => {
+    h.chat = { ...h.chat, server, ...(server ? { media: vi.fn() } : {}) };
+    const attachment = { id: 'media', name: 'brief.pdf', mimeType: 'application/pdf', size: 10, category: 'pdf' as const, url: null, path: null };
+    await render(group({ messages: [
+      message('mine', 1, { authorKind: 'user', isSelf: true, attachments: [attachment] }),
+      message('other', 2, { authorKind: 'user', isSelf: false, authorName: 'Other member', attachments: [attachment] }),
+      message('bot', 3, { authorBotId: 'mimi', authorName: '咪咪', attachments: [attachment] }),
+    ], plans: [], openPlan: null }));
+    expect(all('botGroup.message.user')).toHaveLength(1);
+    expect(all('botGroup.message.bot')).toHaveLength(2);
+    expect(all('attachmentStrip').map(strip => strip.getAttribute('data-align'))).toEqual(['right', 'left', 'left']);
+  });
+  it('uses server failure copy, keeps other humans incoming and loads older history', async () => {
+    h.chat = { ...h.chat, server: true, online: false, loadOlder: vi.fn(async () => {}) };
+    await render(null, 'error');
+    expect(byId('botGroup.loadFailed')?.textContent).toContain('groupChat.server.loadFailed');
+    expect(node.textContent).not.toContain('devices.resources.hostOffline');
+    h.chat.online = true;
+    await render(group({ messages: [message('other', 1, { authorKind: 'user', authorName: 'Other member', isSelf: false, content: 'hello' })], plans: [], openPlan: null, hasMoreBefore: true }));
+    expect(all('botGroup.message.user')).toHaveLength(0);
+    expect(node.textContent).toContain('Other member');
+    expect(h.scroll.maintainVisibleContentPosition).toEqual({ minIndexForVisible: 1 });
+    await click('botGroup.loadOlder'); expect(h.chat.loadOlder).toHaveBeenCalledOnce();
+    await click('botGroup.settingsButton');
+    expect(byId('botGroup.settings.delete')?.disabled).toBe(true);
+    expect(byId('botGroup.settings.replyMode.mentioned')?.disabled).toBe(true);
+  });
+  it('reauthorizes a server attachment on tap and opens the existing image viewer', async () => {
+    const attachment = { id: 'media', name: 'picture.png', mimeType: 'image/png', size: 10, category: 'image' as const, url: 'https://media.example.invalid/one-use', path: null };
+    h.chat = { ...h.chat, server: true, media: vi.fn(async () => attachment) };
+    await render(group({ messages: [message('picture', 1, { authorKind: 'user', isSelf: false, attachments: [{ ...attachment, url: null, category: 'file' }] })], plans: [], openPlan: null }));
+    expect(h.chat.media).not.toHaveBeenCalled();
+    await click('attachment.file'); expect(h.chat.media).toHaveBeenCalledExactlyOnceWith('media');
+    expect(byId('lightbox')?.getAttribute('data-url')).toBe(attachment.url);
+  });
+});
+
+
+it('acknowledges other humans only once their messages reach the measured visible tail', async () => {
+  h.chat.server = true;
+  h.chat.markRead = vi.fn(async () => {});
+  await render(group({ messages: [message('incoming-human', 12, { authorKind: 'user', isSelf: false, content: 'hello' }),
+    message('mine', 13, { authorKind: 'user', isSelf: true, content: 'reply' })], plans: [], openPlan: null }));
+  expect(h.markRead).not.toHaveBeenCalled();
+  expect(h.chat.markRead).not.toHaveBeenCalled();
+  await act(async () => {
+    h.scroll.onLayout({ nativeEvent: { layout: { height: 500 } } });
+    h.scroll.onContentSizeChange(400, 400);
+  });
+  expect(h.chat.markRead).toHaveBeenLastCalledWith(['incoming-human']);
+  expect(h.markRead).not.toHaveBeenCalled();
 });

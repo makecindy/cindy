@@ -1,4 +1,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import ts from 'typescript';
 import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -18,7 +21,14 @@ vi.mock('../../localDb/ipc/messages.js', () => ({
 }));
 
 import { createBotDirectMessageService } from '../botDirectMessageService.js';
+import { botDirectMessages, botDirectMessageThreads } from '../../localDb/schema.js';
 import { createBotMessageTransport } from '../botMessageTransport.js';
+import { GroupToolAuthorizationError, registerGroupToolAuthority } from '../botGroupToolAuthorization.js';
+import { sessionQueueOriginForDispatcher } from '../sessionControlService.js';
+import { redactMessageRowForSharedGuest, redactInputProjectionForSharedGuest } from '../../device-link/sharedTaskMessageOrigin.js';
+import { HOST_ONLY_AGENT_PREFIX, buildMakerUserMessage, getAgentFacingText, sanitizeQueuedMessageForPersistence } from '../../../shared/agentInputQueue.js';
+import { UI_ACTION_TRIGGER_PREFIX } from '../../../shared/interruptedTurn.js';
+import { AcceptedCallbackDispatchCancelled, runAcceptedCallback, runAcceptedRollback } from '../acceptedCallbackRunner.js';
 
 function createDatabase(): Database.Database {
   const sqlite = new Database(':memory:');
@@ -76,6 +86,7 @@ function createDatabase(): Database.Database {
       id TEXT PRIMARY KEY,
       session_id TEXT NOT NULL,
       client_id TEXT,
+      content TEXT,
       rewind_at INTEGER
     );
     INSERT INTO bot_profiles (id, display_name, status, updated_at) VALUES
@@ -105,6 +116,320 @@ function createDatabase(): Database.Database {
 describe('botDirectMessageService', () => {
   let sqlite: Database.Database;
   let dispatch: ReturnType<typeof vi.fn>;
+
+  it('sends a group owner a real assistant message in their private chat, with stable retry receipts', async () => {
+    sqlite.exec("INSERT INTO sessions VALUES ('a-group','bot','active'); INSERT INTO bot_session_links VALUES ('a-group-link','bot-a','a-group','group',NULL)");
+    const release = registerGroupToolAuthority('a-group', { botId: 'bot-a', sourceGroup: { groupId: 'group-1', name: 'Design' }, mode: 'owner', isCurrent: () => true, validate: async () => {} });
+    h.createMessage.mockImplementationOnce(async (sessionId, body) => {
+      sqlite.prepare('INSERT INTO messages (id,session_id,client_id,content) VALUES (?,?,?,?)').run('private-message', sessionId, body.clientId, body.content);
+      return { id: 'private-message' };
+    });
+    const service = createBotDirectMessageService({ dispatch });
+    try {
+      const input = { callerSessionId: 'a-group', message: 'Private reply for the owner', idempotencyKey: 'reply-request-1' };
+      expect(await service.sendToUser(input)).toMatchObject({ ok: true, targetSessionId: 'a-main', messageId: 'private-message', delivered: true });
+      expect(h.createMessage).toHaveBeenCalledWith('a-main', expect.objectContaining({ role: 'assistant', content: input.message,
+        agentMeta: { sourceGroup: { groupId: 'group-1', name: 'Design' }, origin: { kind: 'session', senderSessionId: 'a-group', senderBotId: 'bot-a', senderBotName: '总控' } } }), expect.anything());
+      expect(await service.sendToUser(input)).toMatchObject({ ok: true, messageId: 'private-message' });
+      expect(await service.sendToUser({ ...input, message: 'Different message' })).toMatchObject({ ok: false, errorCode: 'IDEMPOTENCY_CONFLICT' });
+      expect(h.createMessage).toHaveBeenCalledOnce();
+      expect(dispatch).not.toHaveBeenCalled();
+      expect(await service.messageAgent({ callerSessionId: 'a-group', targetBotId: 'bot-a', message: 'Never wake myself' })).toMatchObject({ ok: false, errorCode: 'SELF_MESSAGE' });
+    } finally { release(); }
+  });
+
+  it.each(['deleted', 'archived'])('keeps the original private receipt after canonical recovery from %s', async status => {
+    sqlite.exec("INSERT INTO sessions VALUES ('a-group','bot','active'); INSERT INTO bot_session_links VALUES ('a-group-link','bot-a','a-group','group',NULL)");
+    const release = registerGroupToolAuthority('a-group', { botId: 'bot-a', sourceGroup: { groupId: 'group-1' },
+      mode: 'owner', isCurrent: () => true, validate: async () => {} });
+    const input = { callerSessionId: 'a-group', message: 'Private reply', idempotencyKey: 'stable-recovery-key' };
+    const clientId = `bot-group-private:a-group:${input.idempotencyKey}`;
+    // A matching key in another teammate's private history cannot claim this receipt.
+    sqlite.prepare('INSERT INTO messages(id,session_id,client_id,content) VALUES(?,?,?,?)')
+      .run('other-receipt', 'b-main', clientId, 'Different private content');
+    h.createMessage.mockImplementationOnce(async (sessionId, body) => {
+      sqlite.prepare('INSERT INTO messages(id,session_id,client_id,content) VALUES(?,?,?,?)')
+        .run('original-receipt', sessionId, body.clientId, body.content);
+      return { id: 'original-receipt' };
+    });
+    let recover = false;
+    const ensureCanonicalSession = vi.fn(async (_botId: string, beforeRecovery?: () => Promise<void>) => {
+      if (recover) {
+        await beforeRecovery?.();
+        sqlite.exec("UPDATE bot_session_links SET role='history', archived_at=1 WHERE session_id='a-main'; INSERT INTO sessions VALUES('a-restored','bot','active'); INSERT INTO bot_session_links VALUES('a-restored-link','bot-a','a-restored','canonical',NULL)");
+        recover = false;
+      }
+      const target = sqlite.prepare("SELECT session_id AS sessionId FROM bot_session_links WHERE bot_id='bot-a' AND role='canonical'").get() as { sessionId: string };
+      return { ok: true as const, sessionId: target.sessionId };
+    });
+    const service = createBotDirectMessageService({ dispatch, ensureCanonicalSession });
+    try {
+      const receipt = { ok: true, messageId: 'original-receipt', targetSessionId: 'a-main', delivered: true };
+      expect(await service.sendToUser(input)).toEqual(receipt);
+      sqlite.prepare('UPDATE sessions SET status=? WHERE id=?').run(status, 'a-main');
+      recover = true;
+      expect(await service.sendToUser(input)).toEqual(receipt);
+      expect(await service.sendToUser({ ...input, message: 'Changed body' }))
+        .toMatchObject({ ok: false, errorCode: 'IDEMPOTENCY_CONFLICT' });
+      expect(h.createMessage).toHaveBeenCalledOnce();
+      expect(sqlite.prepare("SELECT count(*) AS n FROM messages WHERE session_id='a-restored'").get()).toEqual({ n: 0 });
+      expect(dispatch).not.toHaveBeenCalled();
+    } finally { release(); }
+  });
+
+  it.each(['unregistered', 'tools', 'chat', 'revoked', 'other-bot', 'account'])(
+    'refuses a group private send with %s authority without changing messages', async condition => {
+      sqlite.exec("INSERT INTO sessions VALUES ('a-group','bot','active'); INSERT INTO bot_session_links VALUES ('a-group-link','bot-a','a-group','group',NULL)");
+      const release = condition === 'unregistered' ? () => {} : registerGroupToolAuthority('a-group', {
+        botId: condition === 'other-bot' ? 'bot-b' : 'bot-a', mode: condition === 'tools' || condition === 'chat' ? condition : 'owner',
+        isCurrent: () => condition !== 'revoked', validate: async () => {},
+      });
+      const service = createBotDirectMessageService({ dispatch,
+        captureOwnerScope: () => ({ ownerScopeKey: 'owner-a' }), isOwnerScopeCurrent: () => condition !== 'account' });
+      try {
+        expect(await service.sendToUser({ callerSessionId: 'a-group', message: 'Do not send', idempotencyKey: 'request-123' })).toMatchObject({ ok: false });
+        expect(h.createMessage).not.toHaveBeenCalled(); expect(dispatch).not.toHaveBeenCalled();
+      } finally { release(); }
+    });
+
+  it('allows owner-authorized local peer messaging while retaining its group source', async () => {
+    sqlite.exec("INSERT INTO sessions VALUES ('a-group','bot','active'); INSERT INTO bot_session_links VALUES ('a-group-link','bot-a','a-group','group',NULL)");
+    const release = registerGroupToolAuthority('a-group', { botId: 'bot-a', sourceGroup: { groupId: 'group-1', name: 'Design' }, mode: 'owner', isCurrent: () => true, validate: async () => {} });
+    const service = createBotDirectMessageService({ dispatch });
+    try {
+      expect(await service.listAgents('a-group')).toMatchObject({ ok: true, agents: expect.arrayContaining([{ id: 'bot-b', name: 'Dash Bot', local: true }]) });
+      expect(await service.messageAgent({ callerSessionId: 'a-group', targetBotId: 'bot-b', message: 'Bounded peer question' })).toMatchObject({ ok: true, targetSessionId: 'b-main' });
+      expect(sqlite.prepare('SELECT sender_session_id FROM bot_direct_messages').get()).toEqual({ sender_session_id: 'a-group' });
+      expect(dispatch).toHaveBeenLastCalledWith(expect.objectContaining({
+        dispatcherSessionId: 'a-group',
+        message: expect.stringContaining('[Group source: Design (group-1); lane: a-group]'),
+        persistedContent: `${UI_ACTION_TRIGGER_PREFIX}Bounded peer question`,
+      }));
+      const sent = dispatch.mock.calls.at(-1)![0];
+      expect(sent.message).toContain('Replies go to the sender teammate');
+      const origin = sessionQueueOriginForDispatcher(sent);
+      const row = { sessionId: sent.targetSessionId, content: sent.persistedContent,
+        agentMeta: { origin, agentFacingWireContent: { type: 'user', content: sent.message } } };
+      const source = readFileSync(resolve(__dirname, '..', 'register.ts'), 'utf8');
+      const begin = source.indexOf('  async function buildSessionControlInputItem(');
+      const end = source.indexOf('  const orcaInterAgentDispatcher:', begin);
+      const js = ts.transpileModule(`${source.slice(begin, end)}\nreturn buildSessionControlInputItem;`, {
+        compilerOptions: { target: ts.ScriptTarget.ES2022 },
+      }).outputText;
+      const build = new Function('buildCreateOptsForQueuedSession', 'permissionModeOrAsk', 'UI_ACTION_TRIGGER_PREFIX', 'HOST_ONLY_AGENT_PREFIX', js)(
+        async () => ({ model: 'fixture', workingDir: '/fixture', permissionMode: 'ask' }), (mode: string) => mode,
+        UI_ACTION_TRIGGER_PREFIX, HOST_ONLY_AGENT_PREFIX);
+      const queued = await build({ ...sent, meta: {}, origin });
+      expect(queued.text).toBe(sent.persistedContent);
+      expect(getAgentFacingText(queued)).not.toContain('Group source');
+      expect(buildMakerUserMessage(queued)).toEqual({ type: 'user', content: sent.message });
+      const snapshot = sanitizeQueuedMessageForPersistence(queued);
+      expect(snapshot[HOST_ONLY_AGENT_PREFIX]).toBeUndefined();
+      expect(snapshot.text).toBe(sent.persistedContent);
+      expect(JSON.stringify(snapshot)).not.toMatch(/Design|group-1|Group source/);
+      expect(JSON.stringify(buildMakerUserMessage(JSON.parse(JSON.stringify(snapshot))))).not.toContain('Group source');
+      const projection = { pendingQueue: [queued], recovery: { kind: 'active-turn', item: queued } };
+      // These are the actual history/message-push and queue/read-recovery
+      // redactors. The host's model input retains the full group source.
+      const guestRow = redactMessageRowForSharedGuest(row);
+      const guestProjection = redactInputProjectionForSharedGuest(projection);
+      expect(guestRow.content).toBe(`${UI_ACTION_TRIGGER_PREFIX}Bounded peer question`);
+      expect(JSON.stringify([guestRow, guestProjection])).not.toMatch(/Design|group-1|a-group|Group source/);
+      expect(JSON.stringify(guestProjection)).toContain('Bounded peer question');
+      expect(row.agentMeta.agentFacingWireContent.content).toContain('[Group source: Design (group-1); lane: a-group]');
+      expect(queued[HOST_ONLY_AGENT_PREFIX]).toBe(sent.message.slice(0, -'Bounded peer question'.length));
+      release();
+      dispatch.mockImplementationOnce(async params => {
+        await params.onAccepted?.();
+        return { ok: true, targetSessionId: params.targetSessionId, wakeKind: 'resumed' };
+      });
+      expect(await service.messageAgent({ callerSessionId: 'b-main', targetBotId: 'bot-a', message: 'Reply about Design (group-1)' }))
+        .toMatchObject({ ok: true, targetSessionId: 'a-main' });
+      expect(dispatch).toHaveBeenLastCalledWith(expect.objectContaining({ targetSessionId: 'a-main' }));
+      expect(dispatch.mock.calls.at(-1)?.[0]).not.toHaveProperty('dispatcherSessionId');
+    } finally { release(); }
+  });
+
+  it.each(['valid', 'server-revoked', 'execution-ended'] as const)('uses the host cancellation adapter when a queued group DM drains: %s', async condition => {
+    sqlite.exec("INSERT INTO sessions VALUES ('a-group','bot','active'); INSERT INTO bot_session_links VALUES ('a-group-link','bot-a','a-group','group',NULL)");
+    let draining = false;
+    const release = registerGroupToolAuthority('a-group', { botId: 'bot-a', mode: 'owner',
+      isCurrent: () => !draining || condition !== 'execution-ended',
+      validate: async () => { if (draining && condition === 'server-revoked') throw new GroupToolAuthorizationError(); } });
+    // Compile the actual production adapter, including its error conversion;
+    // invoking the service callback directly would bypass the boundary under review.
+    const source = readFileSync(resolve(__dirname, '..', 'register.ts'), 'utf8');
+    const holder = source.indexOf('botDirectMessageServiceHolder = createBotDirectMessageService({');
+    const start = source.indexOf('    dispatch: ({', holder);
+    const end = source.indexOf('    ensureCanonicalSession:', start);
+    expect(holder).toBeGreaterThan(0); expect(start).toBeGreaterThan(holder); expect(end).toBeGreaterThan(start);
+    const adapter = ts.transpileModule(`return ({${source.slice(start, end)}}).dispatch;`, {
+      compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None },
+    }).outputText;
+    const enqueue = vi.fn(async (params: {
+      targetSessionId: string; clientId: string; onAccepted: () => Promise<void>; onAcceptedRollback: () => Promise<void>;
+    }) => ({ ok: true as const, targetSessionId: params.targetSessionId, wakeKind: 'queued' as const }));
+    const hostDispatch = new Function('dispatchBotSessionMessage', 'AcceptedCallbackDispatchCancelled', adapter)(enqueue, AcceptedCallbackDispatchCancelled);
+    const service = createBotDirectMessageService({ dispatch: hostDispatch });
+    const vendorDispatch = vi.fn(async () => {});
+    const log = { warn: vi.fn() };
+    try {
+      expect(await service.messageAgent({ callerSessionId: 'a-group', targetBotId: 'bot-b', message: 'Queued fixture' }))
+        .toMatchObject({ ok: true, delivered: false });
+      expect(sqlite.prepare('SELECT delivery_status FROM bot_direct_messages').pluck().get()).toBe('pending');
+      expect(h.createMessage).not.toHaveBeenCalled();
+      draining = true;
+      const queued = enqueue.mock.calls[0][0];
+      const drain = async () => {
+        try {
+          await runAcceptedCallback(queued.onAccepted, queued.targetSessionId, queued.clientId, log);
+          await vendorDispatch();
+        } catch (error) {
+          await runAcceptedRollback(queued.onAcceptedRollback, queued.targetSessionId, queued.clientId, log);
+          throw error;
+        }
+      };
+      if (condition === 'valid') {
+        await drain();
+        expect(vendorDispatch).toHaveBeenCalledOnce();
+        expect(sqlite.prepare('SELECT delivery_status FROM bot_direct_messages').pluck().get()).toBe('delivered');
+      } else {
+        await expect(drain()).rejects.toBeInstanceOf(AcceptedCallbackDispatchCancelled);
+        expect(vendorDispatch).not.toHaveBeenCalled();
+        expect(h.createMessage).not.toHaveBeenCalled();
+        expect(sqlite.prepare('SELECT delivery_status FROM bot_direct_messages').pluck().get()).toBe('failed');
+        expect(sqlite.prepare('SELECT message_count FROM bot_direct_message_threads').pluck().get()).toBe(0);
+      }
+    } finally { release(); }
+  });
+
+  it.each(['group', 'group-receipt', 'missing-link', 'deleted-source', 'canonical'] as const)('checks durable sender provenance before restored DM dispatch: %s', async identity => {
+    sqlite.exec("INSERT INTO sessions VALUES ('a-group','bot','active'); INSERT INTO bot_session_links VALUES ('a-group-link','bot-a','a-group','group',NULL)");
+    const release = registerGroupToolAuthority('a-group', { botId: 'bot-a', mode: 'owner', isCurrent: () => true, validate: async () => {} });
+    const enqueue = vi.fn(async (_params: Parameters<Parameters<typeof createBotDirectMessageService>[0]['dispatch']>[0]) =>
+      ({ ok: true as const, targetSessionId: 'b-main', wakeKind: 'queued' as const }));
+    const before = createBotDirectMessageService({ dispatch: enqueue });
+    try {
+      await before.messageAgent({ callerSessionId: identity === 'canonical' ? 'a-main' : 'a-group', targetBotId: 'bot-b', message: 'Persisted queue fixture' });
+      release();
+      if (identity === 'missing-link') sqlite.exec("DELETE FROM bot_session_links WHERE session_id='a-group'");
+      if (identity === 'deleted-source') sqlite.exec("UPDATE bot_direct_messages SET sender_session_id=NULL; DELETE FROM bot_session_links WHERE session_id='a-group'");
+      // Only the durable queue item survives, not its accepted/rollback closures.
+      const item = JSON.parse(JSON.stringify({ clientId: enqueue.mock.calls[0][0].clientId }));
+      if (identity === 'group-receipt') sqlite.prepare('INSERT INTO messages (id, session_id, client_id) VALUES (?, ?, ?)')
+        .run('unaccepted-group-receipt', 'b-main', item.clientId);
+      const discard = vi.fn(async () => {});
+      const after = createBotDirectMessageService({ dispatch, hasQueuedDelivery: async () => true, discardQueuedDelivery: discard });
+      const source = readFileSync(resolve(__dirname, '..', 'register.ts'), 'utf8');
+      const start = source.indexOf('    onAcceptedQueuedMessage: async (');
+      const end = source.indexOf('    onUserMessagePersisting:', start);
+      const hookSource = ts.transpileModule(`return ({${source.slice(start, end)}}).onAcceptedQueuedMessage;`, {
+        compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None },
+      }).outputText;
+      const acceptedHook = new Function('botDirectMessageServiceHolder', 'AcceptedCallbackDispatchCancelled',
+        'schedulerQueuedPromptDiscardWatchers', 'schedulerQueuedPromptPreparations', 'orcaInterAgentDispatcher',
+        'botDelegationServiceHolder', 'maker', 'pluginTaskServiceForCurrentOwner', hookSource)(after,
+        AcceptedCallbackDispatchCancelled, new Map(), new Map(), { runQueuedOrcaInterAgentAcceptedCallback: async () => {} },
+        null, { getSession: () => null }, null);
+      const vendor = vi.fn(async () => {});
+      const drain = async () => { await acceptedHook('b-main', item, true); await vendor(); };
+      if (identity === 'canonical') {
+        await after.restore(); await drain();
+        expect(vendor).toHaveBeenCalledOnce(); expect(discard).not.toHaveBeenCalled();
+        expect(sqlite.prepare('SELECT delivery_status FROM bot_direct_messages').pluck().get()).toBe('delivered');
+      } else {
+        // Fence works even if queue drain wins the startup race with DM restore.
+        await expect(drain()).rejects.toBeInstanceOf(AcceptedCallbackDispatchCancelled);
+        await after.restore(); await after.restore();
+        await expect(drain()).rejects.toBeInstanceOf(AcceptedCallbackDispatchCancelled);
+        expect(vendor).not.toHaveBeenCalled(); expect(h.createMessage).not.toHaveBeenCalled();
+        expect(discard).toHaveBeenCalledWith('b-main', item.clientId, expect.any(Function));
+        expect(sqlite.prepare('SELECT id FROM messages WHERE client_id=?').get(item.clientId)).toBeUndefined();
+        expect(sqlite.prepare('SELECT delivery_status FROM bot_direct_messages').pluck().get()).toBe('failed');
+        expect(sqlite.prepare('SELECT message_count FROM bot_direct_message_threads').pluck().get()).toBe(0);
+      }
+    } finally { release(); }
+  });
+
+  it.each(['expiry', 'new-thread', 'cooldown', 'reservations', 'recent'] as const)('rejects group peer thread changes/state after revocation during %s read', async boundary => {
+    sqlite.exec("INSERT INTO sessions VALUES ('a-group','bot','active'); INSERT INTO bot_session_links VALUES ('a-group-link','bot-a','a-group','group',NULL)");
+    let revoked = false;
+    const release = registerGroupToolAuthority('a-group', { botId: 'bot-a', mode: 'owner', isCurrent: () => true,
+      validate: async () => { if (revoked) throw new GroupToolAuthorizationError(); } });
+    let id = 0;
+    const service = createBotDirectMessageService({ dispatch, now: () => 1000, createId: () => `read-${++id}` });
+    if (boundary !== 'new-thread') {
+      await service.messageAgent({ callerSessionId: 'a-main', targetBotId: 'bot-b', message: 'Earlier message' });
+      if (boundary === 'recent') await service.messageAgent({ callerSessionId: 'a-main', targetBotId: 'bot-b', message: 'Second message' });
+      if (boundary === 'expiry') sqlite.exec('UPDATE bot_direct_message_threads SET expires_at=1');
+      if (boundary === 'cooldown') sqlite.exec("UPDATE bot_direct_message_threads SET status='closed', close_reason='message-limit', blocked_until=99999");
+      if (boundary === 'reservations') sqlite.exec('UPDATE bot_direct_message_threads SET message_count=9');
+    }
+    const threads = sqlite.prepare('SELECT * FROM bot_direct_message_threads').all();
+    const deliveries = sqlite.prepare('SELECT * FROM bot_direct_messages').all();
+    dispatch.mockClear();
+    let threadReads = 0;
+    const select = h.db!.select.bind(h.db!);
+    const spy = vi.spyOn(h.db!, 'select').mockImplementation(fields => {
+      const query = select(fields); const from = query.from.bind(query);
+      vi.spyOn(query, 'from').mockImplementation(table => {
+        const result = from(table);
+        if (table === botDirectMessageThreads) threadReads++;
+        const hit = table === botDirectMessageThreads && threadReads === (boundary === 'expiry' ? 1 : 2)
+          && ['expiry', 'new-thread', 'cooldown'].includes(boundary)
+          || table === botDirectMessages && (boundary === 'reservations' ? !!fields?.deliveryStatus : boundary === 'recent' && !!fields?.senderBotId);
+        if (hit) queueMicrotask(() => { revoked = true; });
+        return result;
+      }); return query;
+    });
+    try {
+      expect(await service.messageAgent({ callerSessionId: 'a-group', targetBotId: 'bot-b', message: 'Must not reserve' }))
+        .toMatchObject({ ok: false, errorCode: 'GROUP_AUTHORIZATION_REQUIRED' });
+      expect(revoked).toBe(true); expect(dispatch).not.toHaveBeenCalled();
+      expect(sqlite.prepare('SELECT * FROM bot_direct_message_threads').all()).toEqual(threads);
+      expect(sqlite.prepare('SELECT * FROM bot_direct_messages').all()).toEqual(deliveries);
+    } finally { spy.mockRestore(); release(); }
+  });
+
+  it.each(['list', 'failed-send'] as const)('revalidates group authority after the private roster read for %s', async operation => {
+    sqlite.exec("INSERT INTO sessions VALUES ('a-group','bot','active'); INSERT INTO bot_session_links VALUES ('a-group-link','bot-a','a-group','group',NULL)");
+    let serverAuthorized = true;
+    let revokeDuringRead = false;
+    const validate = vi.fn(async () => { if (!serverAuthorized) throw new GroupToolAuthorizationError(); });
+    const release = registerGroupToolAuthority('a-group', {
+      botId: 'bot-a', mode: 'owner', isCurrent: () => true, validate,
+    });
+    const rosterRead = vi.fn(() => { if (revokeDuringRead) serverAuthorized = false; });
+    const prepare = sqlite.prepare.bind(sqlite);
+    const spy = vi.spyOn(sqlite, 'prepare').mockImplementation(sql => {
+      const statement = prepare(sql);
+      if (sql.includes('from "bot_profiles"') && sql.includes('order by')) {
+        const all = statement.all.bind(statement);
+        vi.spyOn(statement, 'all').mockImplementation((...args: unknown[]) => {
+          const result = all(...args);
+          rosterRead();
+          return result;
+        });
+      }
+      return statement;
+    });
+    const service = createBotDirectMessageService({ dispatch });
+    const read = () => operation === 'list' ? service.listAgents('a-group')
+      : service.messageAgent({ callerSessionId: 'a-group', targetBotId: 'missing-bot', message: 'Fixture only' });
+    try {
+      expect(await read()).toMatchObject(operation === 'list'
+        ? { ok: true, agents: expect.arrayContaining([{ id: 'bot-b', name: 'Dash Bot', local: true }]) }
+        : { ok: false, errorCode: 'TARGET_BOT_NOT_FOUND', availableBots: expect.arrayContaining([{ id: 'bot-b', name: 'Dash Bot' }]) });
+      expect(rosterRead).toHaveBeenCalledOnce();
+      expect(validate).toHaveBeenCalledTimes(2);
+      revokeDuringRead = true;
+      rosterRead.mockClear(); validate.mockClear();
+      expect(await read()).toEqual({ ok: false, errorCode: 'GROUP_AUTHORIZATION_REQUIRED', message: expect.any(String) });
+      expect(rosterRead).toHaveBeenCalledOnce();
+      expect(validate).toHaveBeenCalledTimes(2);
+      expect(dispatch).not.toHaveBeenCalled();
+    } finally { release(); spy.mockRestore(); }
+  });
 
   beforeEach(() => {
     sqlite = createDatabase();

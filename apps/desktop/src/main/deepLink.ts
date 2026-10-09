@@ -3,6 +3,7 @@
  * ---------------------------------------------------------------------------
  * URL 形态(scheme 单点在 shared/deepLinkSchemes.ts:生成一律主 scheme cindy://,
  * 解析主 + 历史 scheme 都认——存量消息里的 xdt-maker:// 老链接不能死):
+ *   cindy://chat-invite/<token>            —— 预填群邀请，预览后由用户确认加入
  *   cindy://session/<sessionId>             —— sessionId 直接是 string id
  *   cindy://project/<urlencoded-workingDir> —— workingDir 全路径 URL-encoded
  *   cindy://settings/providers[?connect=<providerId>] —— 打开设置「模型供应商」页,
@@ -39,7 +40,7 @@
  *   发布前仍需用 packaged build 做最终跨平台验证。
  */
 
-import { app, BrowserWindow } from 'electron';
+import { app, BrowserWindow, type IpcMainInvokeEvent } from 'electron';
 import path from 'node:path';
 import { parseProviderShareInvitationIntent, parseSharedTaskInvitationIntent } from '@cindy/device-link';
 import { createLogger } from './logger';
@@ -65,6 +66,7 @@ export const OPEN_FOLDER_FLAG = '--open-folder';
 export const OPEN_SHARE_FILE_FLAG = '--open-share-file';
 
 export type DeepLinkPayload =
+  | { type: 'chat-invite'; token: string }
   | { type: 'shared-task-join'; invitation: string; server: string }
   /** 供应商分享链接：原样交给 Renderer 的申请弹窗，由主进程命令再解析与核对区域。 */
   | { type: 'provider-share-join'; link: string }
@@ -111,6 +113,10 @@ export function parseDeepLink(url: string): DeepLinkPayload | null {
   const prefix = matchDeepLinkPrefix(url);
   if (prefix === null) return null;
   const rest = url.slice(prefix.length);
+  if (rest.startsWith('chat-invite/')) {
+    const token = rest.slice('chat-invite/'.length);
+    return /^[A-Za-z0-9_-]{43}$/.test(token) ? { type: 'chat-invite', token } : null;
+  }
   // provider/import 是双段精确路径，必须在通用 type/value 解析前消费。
   if (rest.startsWith('provider/')) {
     const importId = createProviderImportDraftFromRest(rest);
@@ -275,6 +281,8 @@ export function buildFocusDeepLink(source: string): string {
 //   - mainWindow 已存在 + MainLayout 必然已 mount (用户已登录),dispatchDeepLink
 //     直接 webContents.send,不进 pending
 let pendingDeepLink: DeepLinkPayload | null = null;
+// Invitation targets must survive unrelated navigation and login focus callbacks.
+const pendingChatInvitations: Array<Extract<DeepLinkPayload, { type: 'chat-invite' }>> = [];
 let mainWindowRef: BrowserWindow | null = null;
 
 export function setDeepLinkMainWindow(win: BrowserWindow | null): void {
@@ -416,7 +424,7 @@ export function sendMainWindowMessage(channel: string, payload: unknown): boolea
 
 function safeDeepLinkLog(payload: DeepLinkPayload) {
   // 口令不进日志。
-  return payload.type === 'shared-task-join' || payload.type === 'provider-share-join' ? { type: payload.type } : payload;
+  return payload.type === 'chat-invite' || payload.type === 'shared-task-join' || payload.type === 'provider-share-join' ? { type: payload.type } : payload;
 }
 
 function dispatchDeepLink(payload: DeepLinkPayload, shouldFocus = true): void {
@@ -427,6 +435,14 @@ function dispatchDeepLink(payload: DeepLinkPayload, shouldFocus = true): void {
   }
   const win = mainWindowRef;
   const windowReady = win && !win.isDestroyed() && win.webContents && !win.webContents.isLoading();
+  if (payload.type === 'chat-invite') {
+    if (!pendingChatInvitations.some(invitation => invitation.token === payload.token)) {
+      pendingChatInvitations.push(payload);
+    }
+    if (shouldFocus) focusMainWindow();
+    if (windowReady) win!.webContents.send('deep-link:navigate', payload);
+    return;
+  }
   // A loaded login/LocalDbGate page has no MainLayout listener yet. Imports stay
   // in the existing pending slot until the authenticated consumer takes them.
   if (!windowReady || payload.type === 'provider-import' || payload.type === 'shared-task-join' || payload.type === 'provider-share-join') {
@@ -460,14 +476,27 @@ function dispatchDeepLink(payload: DeepLinkPayload, shouldFocus = true): void {
   win!.webContents.send('deep-link:navigate', payload);
 }
 
+/** Only the main window can own and display retained invitation intents. */
+export function takePendingDeepLinkFromRenderer(
+  event: Pick<IpcMainInvokeEvent, 'sender' | 'senderFrame'>,
+): DeepLinkPayload | null {
+  if (!mainWindowRef || mainWindowRef.isDestroyed()
+    || event.sender !== mainWindowRef.webContents
+    || !event.senderFrame || event.senderFrame !== event.sender.mainFrame) return null;
+  return takePendingDeepLink();
+}
+
 /**
- * 给 IPC handler 用:取走 pendingDeepLink 并清空。供 mount 和导入唤醒事件调用,
+ * 给 IPC handler 用:先取排队的群邀请，再取 pendingDeepLink 并清空。
+ * Renderer 在取到群邀请后继续拉取，直至普通导航或空值。供 mount 和导入唤醒事件调用,
  * 重复调用是安全的——第一次拿到 payload,后续调用返回 null,不会双发。
  *
  * 命名上故意用 "take" 而非 "consume" / "get" 表达 pop 语义,避免和老的
  * (已删除) consumePendingDeepLink push 路径搞混。
  */
 export function takePendingDeepLink(): DeepLinkPayload | null {
+  const invitation = pendingChatInvitations.shift();
+  if (invitation) return invitation;
   if (!pendingDeepLink) return null;
   const payload = pendingDeepLink;
   pendingDeepLink = null;
@@ -499,7 +528,7 @@ export function redactConsumedDeepLinkInArgv(argv: string[], deepLink?: string):
   for (let i = argv.length - 1; i >= 0; i -= 1) {
     const arg = argv[i];
     const prefix = typeof arg === 'string' ? matchDeepLinkPrefix(arg) : null;
-    if (arg !== deepLink && !(prefix && /^(provider\/|provider-share\/|shared-task\/|shared-session\?)/.test(arg.slice(prefix.length)))) continue;
+    if (arg !== deepLink && !(prefix && /^(chat-invite\/|provider\/|provider-share\/|shared-task\/|shared-session\?)/.test(arg.slice(prefix.length)))) continue;
     argv[i] = `${DEEP_LINK_PRIMARY_SCHEME}://consumed`;
   }
 }

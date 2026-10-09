@@ -40,7 +40,7 @@ describe('desktop auth session-expiry detection', () => {
     expect(body).toContain('treating as transient');
     // 瞬时分支必须重排 refresh 重试:正常 timer 已触发过,不重排则密钥链/IO 抖动
     // 后有效会话在 access token 到期前没有任何后续 refresh(半死)。
-    expect(body).toContain('scheduleRefreshRetryAfterTransientFailure();');
+    expect(body).toContain('scheduleRefreshRetryAfterTransientFailure(refreshEpoch);');
     expect(body.indexOf('isPersistedSecretAbsent(AUTH_SESSION_KEY)')).toBeLessThan(
       body.indexOf("await expireRuntimeAuth(previousUserId, 'credential-lost', {"),
     );

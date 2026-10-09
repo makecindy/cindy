@@ -530,6 +530,64 @@ describe('AgentIslandService native publishing', () => {
     await import('../service.js');
   });
 
+  it.each([true, false])('waits across status Done → native done for the shared local/remote completion decision (%s)', async handled => {
+    const { AgentIslandService } = await import('../service.js');
+    const remoteEvents: string[] = [];
+    const controller = new AgentIslandService({
+      getMainWindow: () => null,
+      nativeHost: { failed: false, headless: true, publish: () => true, suspend: () => undefined },
+      onDeviceSessionEvent: event => remoteEvents.push(event.kind),
+    });
+    controller.setEnabled(false);
+    mocks.tapWindowBroadcast.mockImplementation((channel, payload) => {
+      if (channel !== SESSION_ACTIVITY_CHANNEL) return;
+      controller.setDeviceSessions([{
+        ...payload,
+        deviceId: 'execution-host',
+        deviceName: 'Host',
+        title: 'Delegated task',
+        detail: payload.compactDetail,
+      }]);
+    });
+    let settlement: Promise<boolean> | undefined;
+    let resolve!: (handled: boolean) => void;
+    const check = vi.fn(async () => await settlement ?? false);
+    const source = new AgentIslandService({
+      getMainWindow: () => null,
+      nativeHost: { failed: false, headless: true, publish: () => true, suspend: () => undefined },
+      isCompletionHandledByTeammate: check,
+    });
+    source.setEnabled(false);
+    const meta = { sessionId: 'delegated-status-done', agentKind: 'codex' as const };
+    source.handleUserPrompt(meta, 'run task');
+    source.handleAgentEvent(meta, textEvent('Final result', true));
+    source.handleAgentEvent(meta, { type: 'status', source: 'codex', data: { status: 'Done', isRunning: false } });
+    // Native events cross separate iterator awaits. A microtask delay at status
+    // Done alone must never decide ownership before the later done boundary.
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    expect(check).not.toHaveBeenCalled();
+    expect(remoteEvents).toEqual([]);
+    const localDecision = source.waitForCompletionNotification(meta.sessionId);
+    expect(localDecision).toBeDefined();
+    expect(source.getSessionActivitySnapshot(meta.sessionId)).toMatchObject({ phase: 'completed', attention: true });
+    source.handleAgentEvent(meta, doneEvent());
+    // The synchronous terminal adapter registers settlement after island delivery.
+    settlement = new Promise<boolean>(r => { resolve = r; });
+    await Promise.resolve();
+    expect(check).toHaveBeenCalledOnce();
+    expect(remoteEvents).toEqual([]);
+    resolve(handled);
+    await expect(localDecision).resolves.toBe(handled);
+    expect(remoteEvents).toEqual(handled ? [] : ['done']);
+    source.handleAgentEvent(meta, doneEvent());
+    source.replaySessionActivity();
+    expect(check).toHaveBeenCalledOnce();
+    expect(remoteEvents).toEqual(handled ? [] : ['done']);
+    expect(source.getSessionActivitySnapshot(meta.sessionId)).toMatchObject({ phase: 'completed', attention: true });
+    source.resetRuntimeState(); controller.resetRuntimeState();
+    mocks.tapWindowBroadcast.mockReset();
+  });
+
   it('keeps compact activity broadcasting alive in headless mode', async () => {
     const { AgentIslandService } = await import('../service.js');
     const service = new AgentIslandService({
@@ -6255,4 +6313,22 @@ describe('Agent Island device sessions', () => {
       kind: 'done',
     });
   });
+});
+
+it('does not sound or mark attention for internal coordination completion, but surfaces a failure', async () => {
+  const { AgentIslandService } = await import('../service.js');
+  const publish = vi.fn(() => true);
+  const playSound = vi.fn(() => true);
+  const service = new AgentIslandService({ getMainWindow: () => null, nativeHost: { failed: false, publish, playSound } });
+  syncEnabledForTest(service, publish);
+  service.setSoundSettings({ enabled: true, sounds: { ...DEFAULT_AGENT_ISLAND_SOUND_SETTINGS.sounds,
+    complete: customSound('complete.wav'), error: customSound('error.wav') } });
+  const meta = { sessionId: 'coordination', agentKind: 'codex' as const };
+  service.handleAgentEvent(meta, { type: 'status', source: 'codex', data: { isRunning: true } });
+  playSound.mockClear();
+  service.handleAgentEvent(meta, { ...doneEvent(), agentMeta: { botTaskCoordination: true, botPrivateReply: true } });
+  expect(playSound).not.toHaveBeenCalled();
+  expect(service.getSessionActivitySnapshot(meta.sessionId)?.attention).not.toBe(true);
+  service.handleAgentEvent(meta, terminalErrorEvent('User action required'));
+  expect(playSound).toHaveBeenCalledWith(customSound('error.wav'));
 });

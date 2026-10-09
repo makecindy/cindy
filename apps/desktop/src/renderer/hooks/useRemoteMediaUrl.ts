@@ -14,7 +14,7 @@
  *
  * 本地会话 / 未传 sessionId / 非媒体 URL → 原样返回,零行为变化。
  * 改写后的 URL 不再以 `xdt-image://` 等开头 —— 调用方据此判定的本机专属操作
- * (reveal-in-folder / 复制原图)会自然失效,这正是远程媒体期望的行为。
+ * (reveal-in-folder)不再适用;图片复制经共享字节层保留远端来源后写本机剪贴板。
  */
 import { useMemo } from 'react';
 

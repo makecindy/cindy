@@ -73,7 +73,7 @@ export class AuthApiError extends Error {
 }
 
 /** Accept Retry-After seconds or HTTP-date; never invent a cooldown. */
-function retryAfterDeadline(response: AuthFetchResponse): number | undefined {
+export function retryAfterDeadline(response: Pick<AuthFetchResponse, "headers">): number | undefined {
   const value = response.headers?.get("retry-after")?.trim();
   if (!value) return undefined;
   const now = Date.now();

@@ -53,6 +53,7 @@ import {
   HOOK_FEATURE_TELEGRAM_PROGRESS_OPS,
   HOOK_FEATURE_TURN_DELIVERY,
   HOOK_FEATURE_TURN_REOPEN,
+  HOOK_FEATURE_SESSION_RESULT,
   type HookMessage,
   type HookTurnEndMessage,
   type InteractionButton,
@@ -96,6 +97,7 @@ import type { HookBindingStore } from './bindings.js';
 import { terminalDeliveryExpired } from './requestLedger.js';
 import { composeXPrompt } from './xPrompt.js';
 import type { HookRequestLedger, HookTerminalRecord } from './requestLedger.js';
+import { createBackgroundResults } from './backgroundResults.js';
 
 /** 会话执行器抽象 —— 生产实现 session-runner.ts(包 maker), 测试注入假的。 */
 export interface HookSessionRunner {
@@ -235,6 +237,8 @@ export interface HookRunRequest {
    * 确认为 dispatched 后 await；失败必须由调用方自行降级，不能反转已受理 turn。
    */
   onProviderAccepted?: () => void | Promise<void>;
+  /** Provider observation ended; attachment collection and channel delivery may still be pending. */
+  onTurnTerminal?: () => void;
   /**
    * 执行中渲染快照回调(turn.progress 链路)。runner 合成「过程区时间线 +
    * 部分正文」的完整 markdown 快照并节流回调; dispatcher 注入的实现把它
@@ -347,6 +351,7 @@ export interface HookDispatcherDeps {
    * 返回退订函数, dispose 时调用。
    */
   subscribeUiContinuation?: (listener: (sessionId: string, clientId: string) => void) => () => void;
+  subscribeChannelTurn?: (listener: (sessionId: string, workingDir: string, phase: 'starting' | 'undispatched') => void) => () => void;
   /**
    * 可选: 订阅「桌面端在某会话里做了与续跑无关的事」(生产为 maker-ipc 的
    * onUiSessionIntervention)。命中即作废该会话的待续跑记账 —— 记账只按 sessionId
@@ -844,7 +849,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
   /** 每 session 的 FIFO 等待队列。 */
   const queues = new Map<string, PendingTask[]>();
   /** connectionId + requestId -> 正在执行它的 session(cancel 定位与归属校验用, 收口即清)。 */
-  const runningByRequest = new Map<string, { sessionId: string; connectionId: string }>();
+  const runningByRequest = new Map<string, { sessionId: string; connectionId: string; observing?: boolean }>();
   /**
    * 已开始执行但 provider 尚未受理的 Telegram 群任务。账号边界必须把其
    * accepted / queued ACK 收成 cancelled；accepted=true 后消息已交给 agent，
@@ -1419,6 +1424,21 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     return serverFeatures.get(connectionId)?.includes(HOOK_FEATURE_TURN_REOPEN) === true;
   }
 
+  const backgroundResults = createBackgroundResults({
+    bindings, runner,
+    generation: () => accountGeneration,
+    log,
+    owned: (sessionId) => [...runningByRequest.values()].some((entry) => entry.sessionId === sessionId && entry.observing)
+      || activeContinuations.has(sessionId) || pendingClaims.has(sessionId),
+    allowed: (connectionId, dir) => accountActive && dirStillAllowed(connectionId, dir),
+    sender: (connectionId) => accountActive && serverFeatures.get(connectionId)?.includes(HOOK_FEATURE_SESSION_RESULT)
+      ? sendFns.get(connectionId) : undefined,
+  });
+  const unsubscribeBackgroundResults = deps.subscribeChannelTurn?.((sessionId, dir, phase) => {
+    if (phase === 'starting') backgroundResults.start(sessionId, dir);
+    else backgroundResults.cancel(sessionId);
+  });
+
   /**
    * 放弃这个 session 的续跑回流: 撤销在观察的那一轮 + 清掉记账。
    *
@@ -1751,7 +1771,8 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     // 这条消息线交给新任务了: 撤掉上一轮失败留下的续跑观察与记账。连接还在, 所以要
     // 发收口帧把那条旧消息定稿; 但不再记待续跑(它已经不是"最新一轮"了)。
     dropContinuation(sessionId, { silent: false, remember: false });
-    runningByRequest.set(requestKey, { sessionId, connectionId: task.connectionId });
+    const runningEntry = { sessionId, connectionId: task.connectionId, observing: true };
+    runningByRequest.set(requestKey, runningEntry);
     const messageLifecycle = telegramLegacyLifecycle(
       task.connectionId,
       task.requestId,
@@ -1846,6 +1867,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       try {
         outcome = await runner.run({
           ...task.run,
+          onTurnTerminal: () => { runningEntry.observing = false; },
           onProgress,
           ...(task.run.source?.im === 'telegram' ? {
             onRuntimeRecovery: (text: string): Promise<boolean> => {
@@ -2789,6 +2811,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       accountActive = true;
     },
     async deactivateAccount() {
+      backgroundResults.clear();
       // Invalidate a deferred activation on every close request, including a
       // duplicate request that arrives while the physical drain is running.
       const wasActive = accountActive;
@@ -3133,6 +3156,8 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       serverFeatures.delete(connectionId);
     },
     dispose() {
+      backgroundResults.clear();
+      unsubscribeBackgroundResults?.();
       clearRecoveryDeliveries();
       closeTelegramTurnOps();
       unsubscribeUiContinuation?.();

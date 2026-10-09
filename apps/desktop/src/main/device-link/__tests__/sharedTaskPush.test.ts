@@ -220,6 +220,20 @@ describe('shared task guests never see the owner private message sources', () =>
     expect(sent.get('own-task')).toEqual(projection);
   });
 
+  it('keeps group private delivery visible in guest pushes without its source identity', () => {
+    const transport = client();
+    __testing.setActiveClient(transport as never);
+    subscriptions.subscribe(guestA, ['session:task-a']);
+    subscriptions.subscribe('own-task', ['session:task-a']);
+    const message = { clientId: 'private-delivery', sessionId: 'task-a', role: 'assistant', content: 'Private reply',
+      agentMeta: { sourceGroup: { groupId: 'secret-group', name: 'Secret group' } } };
+    __testing.forwardPush('local-db:messages:created', { sessionId: 'task-a', message });
+    const sent = new Map(transport.sendPush.mock.calls.map(call => [call[0], call[2]]));
+    expect(sent.get(guestA).message.agentMeta).toEqual({ explicitDelivery: true });
+    expect(JSON.stringify(sent.get(guestA))).not.toMatch(/secret-group|Secret group|sourceGroup/);
+    expect(sent.get('own-task').message).toEqual(message);
+  });
+
   it('hides owner devices, plugins and automation identities from the guest only', async () => {
     const transport = client();
     __testing.setActiveClient(transport as never);
@@ -228,7 +242,7 @@ describe('shared task guests never see the owner private message sources', () =>
     const sourceDevice = { deviceId: 'owner-phone', name: 'Owner iPhone', platform: 'mobile' };
     const sourcePlugin = { pluginId: 'owner-plugin', name: 'Owner Plugin' };
     const schedulerOrigin = { kind: 'scheduler', scheduleId: 'owner-schedule', scheduleName: 'Owner nightly', runId: 'run-1' };
-    const deviceRow = { clientId: 'm2', sessionId: 'task-a', role: 'user', content: 'hi', agentMeta: { sourceDevice, uuid: 'u2' } };
+    const deviceRow = { clientId: 'm2', sessionId: 'task-a', role: 'user', content: 'hi', agentMeta: { sourceDevice, sourceGroup: { groupId: 'owner-group', name: 'Private group' }, uuid: 'u2' } };
     const scheduledRow = {
       clientId: 'm3', sessionId: 'task-a', role: 'user', content: 'nightly',
       agentMeta: { origin: schedulerOrigin, sourcePlugin },
@@ -268,7 +282,7 @@ describe('shared task guests never see the owner private message sources', () =>
     expect(guestQueue[1].origin).toEqual({ kind: 'scheduler' });
     expect(guestQueue[1].text).toBe('nightly');
     expect(JSON.stringify(guestPushes)).not.toMatch(
-      /owner-phone|Owner iPhone|owner-plugin|Owner Plugin|owner-schedule|Owner nightly|run-1|owner-conn|Owner Slack/,
+      /owner-phone|Owner iPhone|owner-plugin|Owner Plugin|owner-group|Private group|owner-schedule|Owner nightly|run-1|owner-conn|Owner Slack/,
     );
     // Same-account controllers keep the full attribution.
     expect(ownPushes.filter((payload) => payload.message).map((payload) => payload.message.agentMeta))
