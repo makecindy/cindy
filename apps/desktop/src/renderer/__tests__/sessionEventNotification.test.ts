@@ -6,6 +6,8 @@ import {
   findSessionNotificationSession,
   sendSessionEventNotification,
 } from '@/lib/sessionEventNotification';
+import { applyRemoteSessionActivity, clearRemoteSessionActivity, getRemoteSessionActivity } from '@/features/device-link/remoteSessionActivityStore';
+import { SessionActivityRelay } from '../../main/agent-island/sessionActivityRelay';
 
 const gates = vi.hoisted(() => ({
   desktop: true,
@@ -30,6 +32,7 @@ const showSessionEvent = vi.fn(() => Promise.resolve());
 
 describe('shared session event notifications', () => {
   beforeEach(() => {
+    clearRemoteSessionActivity();
     gates.desktop = true;
     gates.feishu = false;
     gates.islandEnabled = false;
@@ -44,6 +47,7 @@ describe('shared session event notifications', () => {
   });
 
   afterEach(() => {
+    clearRemoteSessionActivity();
     vi.restoreAllMocks();
   });
 
@@ -88,6 +92,64 @@ describe('shared session event notifications', () => {
         channels: { desktop: false, feishu: true, mobile: true },
       }),
     );
+  });
+
+  it.each([true, false])('uses the execution host decision for remote mobile/Feishu completion calls (%s)', async handled => {
+    gates.feishu = true;
+    let resolve!: (handled: boolean) => void;
+    const relay = new SessionActivityRelay(payload => applyRemoteSessionActivity('host', payload), {
+      isCompletionHandledByTeammate: () => new Promise<boolean>(r => { resolve = r; }),
+    });
+    const running = { sessionId: 'remote-task', phase: 'running', recordStatus: 'active', compactDetail: 'Working', startedAtMs: 1, lastActivityAtMs: 1, currentActionSummary: 'Working', attention: false, workflow: null, turnGeneration: null, gracefulStopState: 'none', source: 'live' } as const;
+    relay.publish([running]);
+    // The native renderer transition can precede the activity relay frame.
+    sendSessionEventNotification('remote-task', 'Task', 'done', { remoteDevice: true, remoteDeviceId: 'host' });
+    expect(showSessionEvent).not.toHaveBeenCalled();
+    relay.awaitCompletionTerminal('remote-task');
+    const completed = { ...running, phase: 'completed' as const, attention: true, compactDetail: 'Final result' };
+    relay.publish([completed]);
+    sendSessionEventNotification('remote-task', 'Task', 'done', { remoteDevice: true, remoteDeviceId: 'host' });
+    expect(showSessionEvent).not.toHaveBeenCalled();
+    relay.completeTerminal('remote-task');
+    await Promise.resolve();
+    resolve(handled);
+    await relay.waitForCompletionNotification('remote-task');
+    expect(showSessionEvent).toHaveBeenCalledTimes(handled ? 0 : 1);
+    if (!handled) expect(showSessionEvent).toHaveBeenCalledWith({ sessionId: 'remote-task', title: 'Task', kind: 'done', markAttention: false, channels: { desktop: false, feishu: true, mobile: true } });
+    expect(markAttention).not.toHaveBeenCalled();
+    expect(getRemoteSessionActivity('remote-task', 'host')).toMatchObject({ phase: 'completed', attention: true, compactDetail: 'Final result' });
+    relay.replay([completed]);
+    expect(showSessionEvent).toHaveBeenCalledTimes(handled ? 0 : 1);
+    relay.dispose();
+  });
+
+  it.each(['running', 'read', 'error', 'needs-interaction'])('discards a pending remote completion on %s without losing action/error reminders', boundary => {
+    gates.feishu = true;
+    applyRemoteSessionActivity('host', { sessionId: 'remote-task', phase: 'completed', attention: true, completionNotification: 'pending' });
+    sendSessionEventNotification('remote-task', 'Task', 'done', { remoteDevice: true, remoteDeviceId: 'host' });
+    applyRemoteSessionActivity('host', { sessionId: 'remote-task', phase: boundary === 'read' ? 'completed' : boundary, attention: boundary !== 'read' });
+    expect(showSessionEvent).not.toHaveBeenCalled();
+    if (boundary === 'error' || boundary === 'needs-interaction') {
+      sendSessionEventNotification('remote-task', 'Task', boundary === 'error' ? 'error' : 'needs-reply', { remoteDevice: true, remoteDeviceId: 'host' });
+      expect(showSessionEvent).toHaveBeenCalledWith(expect.objectContaining({ kind: boundary === 'error' ? 'error' : 'needs-reply', channels: { desktop: false, feishu: true, mobile: true } }));
+    }
+  });
+
+  it.each(['focus', 'preferences'])('rechecks %s when remote handoff releases an ordinary completion', boundary => {
+    gates.feishu = true;
+    applyRemoteSessionActivity('host', { sessionId: 'remote-task', phase: 'completed', attention: true, completionNotification: 'pending' });
+    sendSessionEventNotification('remote-task', 'Task', 'done', { remoteDevice: true, remoteDeviceId: 'host' });
+    if (boundary === 'focus') vi.mocked(document.hasFocus).mockReturnValue(true);
+    else gates.feishu = false;
+    applyRemoteSessionActivity('host', { sessionId: 'remote-task', phase: 'completed', attention: true });
+    if (boundary === 'focus') expect(showSessionEvent).not.toHaveBeenCalled();
+    else expect(showSessionEvent).toHaveBeenCalledWith(expect.objectContaining({ channels: { desktop: false, feishu: false, mobile: true } }));
+  });
+
+  it('keeps old-host remote completion calls unchanged', () => {
+    applyRemoteSessionActivity('old-host', { sessionId: 'legacy', phase: 'completed', attention: true });
+    sendSessionEventNotification('legacy', 'Task', 'done', { remoteDevice: true, remoteDeviceId: 'old-host' });
+    expect(showSessionEvent).toHaveBeenCalledWith(expect.objectContaining({ kind: 'done', channels: { desktop: false, feishu: false, mobile: true } }));
   });
 
   it('does not send external notifications while the user is already looking at Cindy', () => {

@@ -4,7 +4,7 @@ import { createAsyncQueue } from './agents/shared/async-queue.js';
 import { createPiTranslateContext, translatePiEvent } from './agents/pi/translator.js';
 import { newCodexRuntimeState, translateItemNotification } from './agents/codex/translator.js';
 import type { AgentSessionHandle } from './agents/base-agent.js';
-import type { AgentEvent, InteractionDecision } from './types/events.js';
+import type { AgentEvent, InteractionDecision, InteractionResolver } from './types/events.js';
 import type { Logger } from './interfaces/logger.js';
 import type { ToolLoopReviewer } from './agents/shared/tool-loop-review.js';
 
@@ -18,6 +18,7 @@ function setup(agentKind: 'pi' | 'codex', hangAbort = false, toolLoopReviewer?: 
   vi.useFakeTimers();
   const queue = createAsyncQueue<AgentEvent>();
   let running = false;
+  let resolveInteraction!: InteractionResolver;
   const handle = {
     id: 'native-session', agentKind, model: 'test-model',
     events: () => queue,
@@ -29,7 +30,7 @@ function setup(agentKind: 'pi' | 'codex', hangAbort = false, toolLoopReviewer?: 
     }),
     close: vi.fn(async () => { running = false; queue.end(); }),
     isTurnRunning: () => running,
-    setInteractionResolver() {},
+    setInteractionResolver(resolve: InteractionResolver) { resolveInteraction = resolve; },
   } as unknown as AgentSessionHandle;
   const logger: Logger = { trace() {}, debug() {}, info() {}, warn() {}, error() {}, fatal() {}, child() { return logger; } };
   const session = new Session({
@@ -45,14 +46,35 @@ function setup(agentKind: 'pi' | 'codex', hangAbort = false, toolLoopReviewer?: 
     await vi.advanceTimersByTimeAsync(0);
   };
   const errors = () => seen.filter((event) => event.type === 'error');
-  return { queue, session, seen, handle, tool, errors, end: async () => {
-    running = false;
-    queue.push({ type: 'done', data: {}, source: agentKind });
-    await vi.advanceTimersByTimeAsync(0);
-  } };
+  return { queue, session, seen, handle, tool, errors,
+    ask: (delivery?: 'async') => resolveInteraction({ kind: 'ask_user_question', requestId: 'question',
+      questions: [{ question: 'Scope?' }], ...(delivery ? { delivery } : {}) }),
+    end: async () => {
+      running = false;
+      queue.push({ type: 'done', data: {}, source: agentKind });
+      await vi.advanceTimersByTimeAsync(0);
+    } };
 }
 
 describe.each(['pi', 'codex'] as const)('%s Session tool loop coverage', (agentKind) => {
+  it.each(['sync', 'async'] as const)('only suspends loop detection for a blocking question: %s', async (delivery) => {
+    const t = setup(agentKind);
+    let answer!: (decision: InteractionDecision) => void;
+    t.session.setInteractionListener(() => new Promise((resolve) => { answer = resolve; }));
+    await t.session.send('investigate');
+    const pending = t.ask(delivery === 'async' ? delivery : undefined);
+    for (let i = 0; i < 4; i++) await t.tool(`pending-${i}`);
+    expect(t.handle.abort).toHaveBeenCalledTimes(delivery === 'async' ? 1 : 0);
+    answer({ kind: 'ask_user_question', answers: {} });
+    await pending;
+    if (delivery === 'sync') {
+      for (let i = 0; i < 4; i++) await t.tool(`resumed-${i}`);
+      expect(t.handle.abort).toHaveBeenCalledOnce();
+    }
+    expect(t.errors()).toHaveLength(1);
+    expect(t.errors()[0]).toMatchObject({ data: { reason: 'tool_use_loop_detected' } });
+  });
+
   it('does not interpret one parallel batch of distinct contract failures as retries', async () => {
     const t = setup(agentKind);
     await t.session.send('investigate');

@@ -39,6 +39,7 @@ export function buildAgentIslandRemoteSessionInputs(
       agentKind: session.agentKind,
       phase: activity.phase,
       detail: activity.compactDetail,
+      ...(activity.completionNotification ? { completionNotification: activity.completionNotification } : {}),
       ...(activity.workingPhase ? { workingPhase: activity.workingPhase } : {}),
       ...(activity.interactionKind
         ? {

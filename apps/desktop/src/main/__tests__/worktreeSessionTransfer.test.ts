@@ -76,6 +76,30 @@ afterEach(() => {
 });
 
 describe('durable task worktree transfer', () => {
+  it('rechecks caller authority after recovery reads and before the registry write', async () => {
+    await store.replace('previous', 'previous', intent(), meta);
+    commitChild();
+    const registryBefore = readFileSync(path.join(root, 'worktrees.json'), 'utf8');
+    const originalReplace = store.replace;
+    const replacement = vi.spyOn(store, 'replace');
+    let revoked = false;
+    replacement.mockImplementationOnce(async (...args) => {
+      revoked = true;
+      return originalReplace(...args);
+    });
+    const check = vi.fn(async () => { if (revoked) throw new Error('GROUP_AUTHORIZATION_REQUIRED'); });
+    try {
+      await expect(manager.reconcileSessionTransfer('next', check)).rejects.toThrow('GROUP_AUTHORIZATION_REQUIRED');
+      expect(check).toHaveBeenCalledOnce();
+      expect(readFileSync(path.join(root, 'worktrees.json'), 'utf8')).toBe(registryBefore);
+      expect(store.get('previous')).toEqual(intent());
+      expect(store.get('next')).toBeNull();
+      revoked = false;
+      await manager.reconcileSessionTransfer('next', check);
+      expect(store.get('next')?.sessionId).toBe('next');
+    } finally { replacement.mockRestore(); }
+  });
+
   it('journals before commit and preserves the branch and files through repeated continuations', async () => {
     await manager.withTransferredSession('previous', 'next', meta.path, async () => {
       expect(store.get('previous')).toEqual(intent());

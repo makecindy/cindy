@@ -366,6 +366,7 @@ import {
   supportsMobileSessionAgentSwitch,
   type MobileSessionAgentKind,
 } from '@/session/sessionAgentSwitch';
+import { formatProviderAccountLabel, resolveSessionUsageAccount } from '@/session/sessionUsageAccount';
 import { useRemoteAgentCatalogs } from '@/session/useRemoteAgentCatalogs';
 import {
   drainComposerAnnotationSubmissions,
@@ -2155,14 +2156,10 @@ export default function SessionScreen() {
   const accountProvider = composerDeviceProviders.ready
     ? composerDeviceProviders.providers.find((provider) => provider.id === currentSession?.providerId)
     : undefined;
-  const providerAccountIdentity = accountProvider?.openAiAccount?.identity?.trim()
-    || accountProvider?.subscriptionAccount?.identity?.trim();
-  const providerDisplayName = accountProvider?.name?.trim();
-  const providerAccountLabel = providerDisplayName && providerAccountIdentity
-    && !providerDisplayName.includes(providerAccountIdentity)
-    ? `${providerDisplayName} · ${providerAccountIdentity}`
-    : providerDisplayName;
-  const localCodexRateLimitControl = canUseLocalCodexRateLimitControl(currentSession, accountProvider);
+  // Codex 限额读取 / 重置作用于被控电脑的账号:Agent 在另一台电脑运行时(远程 Agent)这一轮消耗的
+  // 是那台的账号,被控电脑的控件与之无关(余量改由任务菜单读那台,见 sessionUsageAccount)。
+  const localCodexRateLimitControl = !sessionAgentRunsOnOtherComputer(currentSession)
+    && canUseLocalCodexRateLimitControl(currentSession, accountProvider);
   const accountProviderId = currentSession?.providerId ?? 'openai';
   const accountControlScope = `${deviceId}\0${sessionId}\0${accountProviderId}`;
   const accountControlScopeRef = useRef(accountControlScope);
@@ -2626,6 +2623,26 @@ export default function SessionScreen() {
     () => agentCatalogFor(nextAgentDeviceId),
     [agentCatalogFor, nextAgentDeviceId],
   );
+  // 任务菜单的账号余量读 Agent 现在所在那台(远程 Agent):手机直接经 device-link 读它,与读它的
+  // 模型目录同一条路;分享来的供应商等读不到,只显示任务价值。任务价值与上下文仍读被控电脑。
+  const usageAccount = resolveSessionUsageAccount({
+    agentDeviceId: currentAgentDeviceId,
+    providerId: currentSession?.providerId,
+    sharedTaskGuest: isSharedTaskPeer(deviceId),
+    remoteHostId: currentSession?.remoteHostId,
+  });
+  const agentAccountMaker = useMobileMakerTransport(
+    usageAccount.kind === 'device' ? usageAccount.deviceId : deviceId,
+  );
+  const menuAccountReader = usageAccount.kind === 'host'
+    ? maker
+    : usageAccount.kind === 'device' ? agentAccountMaker : null;
+  /** 菜单上的来源与登录身份:Agent 在另一台电脑时按那台的目录,不借被控电脑的同名来源。 */
+  const menuAccountProvider = usageAccount.kind !== 'host'
+    ? (currentAgentCatalog.loading
+        ? undefined
+        : currentAgentCatalog.providers.find((provider) => provider.id === currentSession?.providerId))
+    : accountProvider;
   const runtimeOptions = useMemo(
     () => currentSession ? buildSessionRuntimeOptions(currentSession, capabilities) : null,
     [capabilities, currentSession],
@@ -9325,7 +9342,7 @@ export default function SessionScreen() {
               setSettingsOpen(false);
               guardedPush({ pathname: '/shared-session', params: { sessionId, deviceId } });
             }}
-            providerName={providerAccountLabel}
+            providerName={formatProviderAccountLabel(menuAccountProvider)}
             modelLabel={sessionModelDisplayName}
             messageOnly={sessionManagedByHost}
             onOpenSearch={() => {
@@ -9333,7 +9350,8 @@ export default function SessionScreen() {
               setSettingsOpen(false);
             }}
             usageReader={maker}
-            accountProvider={accountProvider}
+            accountUsageReader={menuAccountReader}
+            accountProvider={menuAccountProvider}
             accountUsage={localCodexRateLimitControl ? accountUsage : null}
             busy={controlBusy}
             codexRateLimits={localCodexRateLimitControl ? codexRateLimits : null}
@@ -9491,6 +9509,7 @@ export default function SessionScreen() {
                     }}
                     testID="session.contextSheetPlanRow"
                     trailing={planModeOn ? <Check color={colors.textPrimary} size={iconSize.md} strokeWidth={iconStroke.bold} /> : null}
+                    trailingSize={iconSize.md}
                   />
                 ) : null}
                 <ContextSheetRow

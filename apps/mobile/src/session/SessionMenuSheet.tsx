@@ -66,7 +66,11 @@ import {
   summarizeCodexRateLimitReset,
   summarizeContextUsage,
 } from '@/session/sessionControls';
-import { useSessionMenuUsage, type SessionMenuUsageReader } from '@/session/useSessionMenuUsage';
+import {
+  useSessionMenuUsage,
+  type SessionMenuAccountReader,
+  type SessionMenuUsageReader,
+} from '@/session/useSessionMenuUsage';
 import { useSessionMenuContextUsage } from '@/session/useSessionMenuContextUsage';
 import { SessionUsageSummary } from '@/session/SessionUsageSummary';
 import {
@@ -119,6 +123,11 @@ export interface SessionMenuSheetProps {
   onOpenSearch?: () => void;
   accountProvider?: OpenAiAccountProvider;
   usageReader: SessionMenuUsageReader & Pick<MobileMakerTransport, 'getContextUsage'>;
+  /**
+   * 账号余量从哪台电脑读(远程 Agent 时是 Agent 所在那台,见 sessionUsageAccount)。缺省 = usageReader
+   * (被控电脑);null = 读不到那份账号,只显示任务价值。
+   */
+  accountUsageReader?: SessionMenuAccountReader | null;
   visible: boolean;
   /** 打开时落在哪个视图(header 用量入口可直达 info)。 */
   initialView: SessionMenuView;
@@ -169,6 +178,7 @@ export function SessionMenuSheet({
   messageOnly = false,
   onOpenSearch,
   usageReader,
+  accountUsageReader = usageReader,
   accountProvider,
   visible,
   initialView,
@@ -202,7 +212,14 @@ export function SessionMenuSheet({
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
   const { t, i18n: i18nInstance } = useTranslation();
-  const menuUsage = useSessionMenuUsage(session, usageReader, visible && !messageOnly, codexRateLimits, accountProvider);
+  const menuUsage = useSessionMenuUsage(
+    session,
+    usageReader,
+    visible && !messageOnly,
+    codexRateLimits,
+    accountProvider,
+    accountUsageReader,
+  );
   const { height: windowHeight } = useWindowDimensions();
   const insets = useSafeAreaInsets();
 

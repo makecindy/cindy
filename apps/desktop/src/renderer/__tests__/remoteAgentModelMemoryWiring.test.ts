@@ -23,16 +23,27 @@ const draftRouteSource = read('../features/cc-agent/NewMakerDraftRoute.tsx');
 const authSource = read('../contexts/AuthContext.tsx');
 
 describe('ChatInput:远程 Agent 的模型记忆', () => {
-  it('远程控制不掺本机记忆;Agent 在另一台电脑时用那台电脑的记忆', () => {
+  it('Agent 在另一台电脑时用那台电脑的记忆(被控电脑上的任务也是);远程控制不掺本机记忆', () => {
     const memo = chatInputSource.indexOf('const modelMemory = useMemo<ModelMemoryAccessors | undefined>');
     expect(memo).toBeGreaterThan(0);
-    const deviceLink = chatInputSource.indexOf('if (deviceLinkDeviceId) return undefined;', memo);
     const agentDevice = chatInputSource.indexOf(
-      'if (catalogDeviceId) return agentDeviceModelMemoryAccessors(catalogDeviceId);',
+      'if (effectiveAgentDeviceId) return agentDeviceModelMemoryAccessors(effectiveAgentDeviceId);',
       memo,
     );
-    expect(deviceLink).toBeGreaterThan(memo);
-    expect(agentDevice).toBeGreaterThan(deviceLink);
+    const mirror = chatInputSource.indexOf('if (modelMemoryOverride) return modelMemoryOverride;', memo);
+    const deviceLink = chatInputSource.indexOf('if (deviceLinkDeviceId) return undefined;', memo);
+    const local = chatInputSource.indexOf('return LOCAL_MODEL_MEMORY;', memo);
+    expect(agentDevice).toBeGreaterThan(memo);
+    // 那台电脑的来源 id 与被控电脑的不是一回事:先于被控电脑镜像判定。
+    expect(mirror).toBeGreaterThan(agentDevice);
+    expect(deviceLink).toBeGreaterThan(mirror);
+    expect(local).toBeGreaterThan(deviceLink);
+  });
+
+  it('任务所在电脑那份记忆:被控电脑上的任务用它的镜像,本机任务用本机预设', () => {
+    expect(chatInputSource).toContain(
+      'const taskComputerModelMemory = deviceLinkDeviceId ? modelMemoryOverride : LOCAL_MODEL_MEMORY;',
+    );
   });
 
   it('草稿与已建任务的面板都拿到按电脑取记忆的入口', () => {
@@ -49,40 +60,43 @@ describe('ChatInput:远程 Agent 的模型记忆', () => {
     expect(chatInputSource).toContain('useAgentDeviceModelMemoryVersion();');
   });
 
-  it('按模型所在目录写档位:另一台电脑写那台的一份,本机写本机预设', () => {
+  it('按模型所在目录写档位:另一台电脑写那台的一份,任务所在电脑写那份(没有就不写)', () => {
     const helper = chatInputSource.indexOf('function rememberCatalogModelPrefs(');
     expect(helper).toBeGreaterThan(0);
     const body = chatInputSource.slice(helper, chatInputSource.indexOf('\n}\n', helper));
     expect(body).toContain(
-      'const memory = deviceId ? agentDeviceModelMemoryAccessors(deviceId) : LOCAL_MODEL_MEMORY;',
+      'const memory = deviceId ? agentDeviceModelMemoryAccessors(deviceId) : taskComputerMemory;',
     );
+    expect(body).toContain('if (!memory) return;');
     expect(body).toContain('memory.setEffort(agent, providerId, modelId, patch.effort)');
     expect(body).toContain('memory.setFast(agent, providerId, modelId, patch.fast)');
   });
 
-  it('Agent 在另一台电脑的任务:换模后意图期调档记进那台的记忆,不写本机新建任务记忆', () => {
+  it('Agent 在另一台电脑的任务:换模后意图期调档记进那台的记忆,不写新建任务记忆', () => {
     const start = chatInputSource.indexOf('const syncSessionDraftModelPrefs = useCallback(');
     expect(start).toBeGreaterThan(0);
     const agentDeviceBranch = chatInputSource.indexOf('if (agentDeviceId) {', start);
-    const remember = chatInputSource.indexOf(
-      'rememberCatalogModelPrefs(agentDeviceId, agentKind, memoryProviderId, modelId, patch);',
-      agentDeviceBranch,
+    const remember = chatInputSource.slice(agentDeviceBranch).search(
+      /rememberCatalogModelPrefs\(\s*agentDeviceId,\s*agentKind,\s*memoryProviderId,\s*modelId,\s*patch,\s*taskComputerModelMemory,\s*\);/,
     );
     const localWrites = chatInputSource.indexOf('setProviderModelChoice(agentKind,', start);
+    const remoteWrites = chatInputSource.indexOf("'maker:apply-new-maker-draft-pref'", start);
     expect(agentDeviceBranch).toBeGreaterThan(start);
-    expect(remember).toBeGreaterThan(agentDeviceBranch);
-    // 分支在本机写入之前 return,不掺本机预设与新建任务记忆。
-    const earlyReturn = chatInputSource.indexOf('return;', remember);
-    expect(earlyReturn).toBeGreaterThan(remember);
+    expect(remember).toBeGreaterThan(0);
+    // 分支在本机写入、写穿被控电脑之前 return,不掺本机预设与两边的新建任务记忆。
+    const earlyReturn = chatInputSource.indexOf('return;', agentDeviceBranch + remember);
+    expect(earlyReturn).toBeGreaterThan(agentDeviceBranch + remember);
     expect(localWrites).toBeGreaterThan(earlyReturn);
+    expect(remoteWrites).toBeGreaterThan(earlyReturn);
   });
 
-  it('已有任务换电脑:档位记进目标电脑那份目录的记忆', () => {
+  it('已有任务换电脑:档位记进目标电脑那份目录的记忆(改回任务所在电脑写那份)', () => {
     expect(chatInputSource).toContain(
       'rememberCatalogModelPrefs(relocateTo, targetAgentKind, providerId, newModelId, {',
     );
+    expect(chatInputSource).toContain('}, taskComputerModelMemory);');
     expect(chatInputSource).toMatch(
-      /rememberCatalogModelPrefs\(\s*relocateTo,\s*targetAgentKind,\s*syncedProviderId,\s*newModelId,\s*syncedPatch,\s*\)/,
+      /rememberCatalogModelPrefs\(\s*relocateTo,\s*targetAgentKind,\s*syncedProviderId,\s*newModelId,\s*syncedPatch,\s*taskComputerModelMemory,\s*\)/,
     );
   });
 });

@@ -14,6 +14,7 @@ import {
   type StoredAgentRestoreState,
   buildNewSessionCreatePreview,
   buildRecentWorkspaceOptions,
+  applyRemoteAgentPick,
   buildRemoteCreateSessionOptions,
   filterRemoteDirectoryEntries,
   isCurrentRemoteBrowseRequest,
@@ -1267,6 +1268,25 @@ describe('new session model', () => {
     });
   });
 
+  it('runs the Agent on the picked remote computer or share', () => {
+    const draft = { ...DEFAULT_NEW_SESSION_DRAFT, workingDir: '/repo/app', firstMessage: 'hi' };
+    expect(applyRemoteAgentPick(draft, null)).toBe(draft);
+    const remote = applyRemoteAgentPick(draft, {
+      deviceId: 'share:s1', agentKind: 'codex', model: 'gpt-5.5', providerId: 'openai', effort: 'high', fastMode: true,
+    });
+    expect(remote).toMatchObject({
+      agentKind: 'codex', model: 'gpt-5.5', providerId: 'openai', effort: 'high', fastMode: true,
+      agentDeviceId: 'share:s1', workingDir: '/repo/app', firstMessage: 'hi',
+    });
+    expect(buildRemoteCreateSessionOptions(remote)).toMatchObject({
+      agentKind: 'codex', model: 'gpt-5.5', providerId: 'openai', agentDeviceId: 'share:s1',
+    });
+    expect(buildRemoteCreateSessionOptions(draft)).not.toHaveProperty('agentDeviceId');
+    // 乐观会话行一开始就带上 Agent 所在电脑,会话页按那台的目录显示模型。
+    expect(sessionFromCreateResult({ sessionId: 's' }, remote).agentDeviceId).toBe('share:s1');
+    expect(sessionFromCreateResult({ sessionId: 's' }, draft)).not.toHaveProperty('agentDeviceId');
+  });
+
   it('builds folderless dialogue create-session args for controlled-side cwd allocation', () => {
     expect(buildRemoteCreateSessionOptions({
       ...DEFAULT_NEW_SESSION_DRAFT,
@@ -1865,7 +1885,7 @@ describe('new session composer surface', () => {
     expect(restoreSource).toContain('firstMessageRef.current = recovered.firstMessage;');
     expect(restoreSource).toContain('firstMessageSelectionRef.current = selection;');
     expect(restoreSource).toContain('setFirstMessageSelection(selection);');
-    expect(newSource).toContain('restoreCreationDraft(stashed.draft, [...stashed.attachments]);');
+    expect(newSource).toContain('restoreCreationDraft(stashed.draft, [...stashed.attachments], undefined, stashed.deviceId || undefined);');
     expect(newSource).toContain('restoreCreationDraft(record.creation.draft,');
   });
 
@@ -2145,7 +2165,7 @@ describe('new session composer surface', () => {
     expect(createSource).toContain('creatingRef.current = true;');
     expect(createSource.indexOf('creatingRef.current = true;')).toBeLessThan(createSource.indexOf('const latestDraftText = await finishVoiceRecording();'));
     expect(createSource).toContain('const latestDraftText = await finishVoiceRecording();');
-    expect(createSource).toContain('effectiveDraft = { ...draft, firstMessage: latestDraftText };');
+    expect(createSource).toContain('effectiveDraft = { ...effectiveDraft, firstMessage: latestDraftText };');
     expect(createSource).toContain('creatingRef.current = false;');
     expect(createButtonSource).toContain('busy: creating');
     expect(createButtonSource).toContain('|| worktreeBranchPreferenceSaving');
@@ -2378,7 +2398,7 @@ describe('new session worktree wiring (source locks)', () => {
     expect(worktreeCreate).toBeGreaterThan(gate);
     expect(sessionCreate).toBeGreaterThan(worktreeCreate);
     expect(goalBody).toContain('id: sessionId,');
-    expect(goalBody).toContain('effectiveDraft = { ...draft, workingDir: response.meta.path };');
+    expect(goalBody).toContain('effectiveDraft = { ...effectiveDraft, workingDir: response.meta.path };');
     expect(goalBody).toContain('sessionId: precreatedWorktree!.sessionId');
     expect(goalBody).toContain('sessionId: precreatedWorktree.sessionId');
   });

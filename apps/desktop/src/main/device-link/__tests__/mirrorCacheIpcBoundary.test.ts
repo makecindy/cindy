@@ -103,6 +103,7 @@ vi.mock('../index', () => ({
   openRemoteLink: vi.fn(),
   closeRemoteLink: vi.fn(),
   remoteInvoke: vi.fn(),
+  providerShareHostInvoke: vi.fn(),
   remoteSubscribe: vi.fn(),
   remoteUnsubscribe: vi.fn(),
   disconnectAllControllers: vi.fn(),

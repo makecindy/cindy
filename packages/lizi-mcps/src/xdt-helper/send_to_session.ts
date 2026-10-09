@@ -22,6 +22,7 @@ export type SendToSessionCallback = (params: {
   targetSessionId?: string;
   message: string;
   dispatcherSessionId?: string;
+  messagePurpose?: "coordination" | "user-visible";
   title?: string;
   /** create 模式可选:true = 为新 session 预建独立 git worktree 并以其为 workingDir(jump 忽略)。 */
   useWorktree?: boolean;
@@ -150,6 +151,9 @@ export function registerSendToSessionTool(
         .describe(
           "要 handoff 给目标 session 的消息正文(create 模式下作为新 session 的首条消息)。",
         ),
+      message_purpose: z.enum(["coordination", "user-visible"]).optional().describe(
+        "委派子任务发给发起伙伴默认 coordination：送达模型但内部文字不进正文或通知。user-visible 用于用户要求的结果、需要用户介入的消息。其他普通任务默认保持可见；coordination 仅限宿主核实的委派关系。正常完成自动回传，无需重发。",
+      ),
       title: z
         .string()
         .optional()
@@ -197,6 +201,7 @@ export function registerSendToSessionTool(
     handler: async ({
       target_session_id,
       message,
+      message_purpose,
       title,
       use_worktree,
       working_dir,
@@ -210,6 +215,7 @@ export function registerSendToSessionTool(
         targetSessionId: target_session_id,
         message,
         dispatcherSessionId: ctx.sessionId,
+        ...(message_purpose !== undefined ? { messagePurpose: message_purpose } : {}),
         title,
         useWorktree: use_worktree,
         workingDir: working_dir,

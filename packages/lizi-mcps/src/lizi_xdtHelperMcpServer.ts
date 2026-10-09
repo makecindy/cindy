@@ -6,7 +6,8 @@ import { registerSessionTagTools, type SessionTagsCallback } from './xdt-helper/
  *
  * 设计:
  *  - server name = `cindy_helper`,essential(常开,不可被用户关闭)
- *  - 所有工具走 `list_tools` / `call_tool` 两个入口,渐进式发现:
+ *  - 通用工具走 `list_tools` / `call_tool` 两个入口,渐进式发现:
+ *    异步提问使用独立的 ask_user_question_async 入口，以便 harness 验证根代理身份。
  *    - 'cindy'   : 只读自省 (get_capabilities / get_current_session_id)
  *    - 'auth'    : 由 Host 保存凭证的供应商授权
  *    - 'history' : 只读查询本地数据库聊天历史与输入队列 (list_workdirs /
@@ -35,6 +36,7 @@ import { z } from 'zod';
 import { registerBotRoutineTools, type BotRoutineCallbacks } from './xdt-helper/botRoutineTools.js';
 import { registerGrokLoginTools, type GrokLoginCallbacks } from './xdt-helper/grok_login.js';
 import { jsonObjectArg } from './json-object-arg.js';
+import { registerAsyncQuestionTool, supportsAsyncQuestionTool, type AskUserQuestionAsyncCallback } from './xdt-helper/ask_user_question_async.js';
 
 import { XdtHelperToolRegistry } from './lizi_xdtHelperToolRegistry.js';
 import { registerCreateProjectTool, type CreateProjectCallback } from './xdt-helper/create_project.js';
@@ -172,6 +174,9 @@ interface SessionTaskCallbacks {
 }
 
 interface BotMessagingCallbacks {
+  sendToUser?(params: { callerSessionId: string; message: string; idempotencyKey: string }): Promise<
+    { ok: true; messageId: string; targetSessionId: string; delivered: boolean }
+    | { ok: false; errorCode: string; message: string }>;
   checkMessage?(params: { callerSessionId: string; messageId: string }): Promise<
     { ok: true } | { ok: false; errorCode: string; message: string }>;
   listAgents?(params: { callerSessionId: string;
@@ -354,7 +359,7 @@ function registerStartSessionTaskEntry(
     category: 'bots',
     description: [
       'Start one real independent Cindy Session task in the background. For project work, pass the actual project/worktree path in working_dir before starting. Set use_worktree=true to create and register an isolated worktree before runtime starts; failure never falls back to the shared directory; creating a worktree later in a shell does not relocate the registered Session. timeout_ms defaults to 1800000 (30 minutes), maximum 86400000 (24 hours); specify the needed budget at creation. Follow-up after timeout inherits the original budget, it does not extend it.',
-      'Proactively use this for coding implementation and medium or large work: reading/modifying a project and running checks, multi-source research, multi-file processing, or complex analysis and deliverables. Do not wait for the user to request delegation or ask permission merely to start a task. Handle short simple questions, code explanations, small snippets, and single-step work yourself unless the user explicitly requests a separate task. Respect an explicit request to work inline.',
+      'Prefer completing work in the current chat, including status checks, bounded code or document reading, explaining existing results, and simple file work. A repository, multiple files, tools, or a deliverable alone is not a reason to delegate. Use this when the user explicitly requests an independent task or the work needs separate ongoing execution, an isolated workspace, parallel delivery, or independent tracking. Decide by execution needs, not time or file-count thresholds. When warranted, act without asking again merely to start a task; respect an explicit request to work inline.',
       'Normally omit model_selection: the host uses the teammate task model, or inherits its current model when no task model is configured. When the user requests another model or this task needs a different available capability, read get_app_default_model and pass an available route id in model_selection, with supported effort or fast_mode if needed. The id binds model, provider account and Harness together. This changes only this task, never application or teammate defaults. An unavailable explicit choice fails instead of silently using another model.',
       'Choose the route internally when starting the task. In ordinary replies, briefly describe the work or result; do not repeat the delegated instruction, tool names, argument names, route JSON, or task/session ids. The task card already tracks progress. Explain model or routing details when the user asks, and explain failures in plain language with the action needed.',
       'Pass the objective, constraints, known facts, relevant files, completed actions, and acceptance criteria in instruction; the task does not automatically inherit this chat. Do not duplicate its work. Review the returned result and follow up on the same task if needed.',
@@ -402,8 +407,11 @@ function registerStartSessionTaskEntry(
             status: result.status,
             deadline_at: result.deadlineAt,
             expects_result: true,
+            ...(result.completionDestination ? { completion_destination: result.completionDestination } : {}),
             guidance:
-              "The task card tracks progress and the result will return automatically. Do not start it again. Treat model_route and task/session ids as internal bookkeeping; do not echo them or the delegated instruction in ordinary replies unless the user asks for these details.",
+              (result.completionDestination === 'teammate-private-chat'
+                ? 'Tell the owner that the task card, permission/questions, and final result will appear in their private chat with this teammate. '
+                : '') + "The task card tracks progress and the result will return automatically. Do not start it again. Treat model_route and task/session ids as internal bookkeeping; do not echo them or the delegated instruction in ordinary replies unless the user asks for these details.",
           })
         : errorPayload(result.errorCode, result.message);
     },
@@ -417,6 +425,18 @@ function registerSendToAgentEntry(
   sessionCtx: XdtHelperMcpSessionCtx,
 ): void {
   if (!deps.botMessaging) return;
+  if (deps.botMessaging.sendToUser) registry.register({
+    name: 'send_to_user', category: 'bots',
+    description: 'From a group, send a private message to your owner in this same teammate’s main chat. Use when your owner explicitly asks for a private reply. The host resolves the recipient; this does not call yourself, wake another model, or message an arbitrary group member. Other members’ group tool grants do not authorize this action. In the main private chat, reply normally. Reuse idempotency_key when retrying the same message. A saved receipt does not mean the user has read it.',
+    inputShape: { message: z.string().trim().min(1).max(16000), idempotency_key: z.string().regex(/^[\w-]{8,100}$/) },
+    handler: async ({ message, idempotency_key }) => {
+      const callerSessionId = resolveLiziMcpSessionContext(sessionCtx).sessionId;
+      if (!callerSessionId) return errorPayload('NOT_A_BOT_SESSION', '当前调用未绑定伙伴任务。');
+      const result = await deps.botMessaging!.sendToUser!({ callerSessionId, message, idempotencyKey: idempotency_key });
+      return result.ok ? okPayload({ action: 'send_to_user', message_id: result.messageId, session_id: result.targetSessionId,
+        delivered: result.delivered, read: null }) : errorPayload(result.errorCode, result.message);
+    },
+  });
   if (deps.botMessaging.checkMessage) registry.register({
     name: 'check_agent_message', category: 'bots',
     description: 'Check your own remote message: read native acceptance receipts or ordinary replies from an older teammate conversation. Use the message_id returned by send_to_agent when its transport is remote-conversation, or after uncertain delivery. This does not send or retry. It returns native acceptance or persisted ordinary reply text, not proof of engine delivery, a remote tool call, or a completed turn. Check when following up; do not poll.',
@@ -783,6 +803,7 @@ export interface XdtHelperMcpDeps {
    * set_current_session_title 会被注册; 不注入则不出现在 list_tools 里。
    */
   setCurrentSessionTitle?: SetCurrentSessionTitleDeps['setCurrentSessionTitle'];
+  askUserQuestionAsync?: AskUserQuestionAsyncCallback;
   /**
    * 批量 session 标题更新回调。host 注入后, control 类工具 rename_sessions 会被注册。
    * 工具层负责 dry-run token 护栏; host 负责读取当前标题、校验前置条件和写库。
@@ -1007,6 +1028,24 @@ export function createXdtHelperMcpServer(
     ...(deps.authorizeCall ? { authorizeCall: deps.authorizeCall } : {}),
   }, allowedSurface);
 
+  // A dedicated tool identity lets native Claude enforce root-only provenance
+  // before MCP dispatch. Do not expose an alias through the generic call_tool.
+  const questionTools: Tool[] = [];
+  if (deps.askUserQuestionAsync) {
+    const questions = new XdtHelperToolRegistry();
+    registerAsyncQuestionTool(questions, () => resolveLiziMcpSessionContext(sessionCtx), deps.askUserQuestionAsync);
+    const definition = questions.get('ask_user_question_async')!;
+    const inputSchema = z.strictObject(definition.inputShape);
+    server.registerTool(definition.name, { description: definition.description, inputSchema }, async (args) => {
+      if (!(await allowedSurface()).categories?.has('cindy')) {
+        return errorPayload('CAPABILITY_NOT_AVAILABLE', 'Question UI is unavailable for this task.');
+      }
+      return questions.call(definition.name, args);
+    });
+    questionTools.push({ name: definition.name, description: definition.description,
+      inputSchema: z.toJSONSchema(inputSchema) as Tool['inputSchema'] });
+  }
+
   // Pi already provides direct Bot tools through its native bridge. CC and Codex
   // consume MCP tools/list instead; expose the same registered definitions there.
   // Resolve identity per request: Codex's HTTP server is shared across sessions.
@@ -1044,11 +1083,16 @@ export function createXdtHelperMcpServer(
     }));
     // Codex/remote Claude share one helper factory; rewrite ghost guidance from
     // the request-time session, not the empty factory ctx.
-    server.server.setRequestHandler(ListToolsRequestSchema, async () => ({
-      tools: (await allowedSurface()).categories?.has('bots')
-        ? [...entryTools, ...withCindyGatedBotToolDescriptions(botTools, cindyAvailableForSession(sessionCtx))]
-        : entryTools,
-    }));
+    server.server.setRequestHandler(ListToolsRequestSchema, async () => {
+      const allowed = await allowedSurface();
+      return { tools: [
+        ...entryTools,
+        ...(allowed.categories?.has('cindy') && supportsAsyncQuestionTool(resolveLiziMcpSessionContext(sessionCtx))
+          ? questionTools : []),
+        ...(allowed.categories?.has('bots')
+          ? withCindyGatedBotToolDescriptions(botTools, cindyAvailableForSession(sessionCtx)) : []),
+      ] };
+    });
   }
   return server;
 }

@@ -486,3 +486,16 @@ describe("source labels reveal their ids on long press", () => {
     expect(html).not.toMatch(/data-testid="message.automationOrigin"[^>]*data-hint/);
   });
 });
+
+describe('private group reply source', () => {
+  it('renders the host group name and id on assistant replies after remote normalization', () => {
+    const html = render([{ ...msg('group-private', 'Private reply', {
+      sourceGroup: { groupId: 'g-1', name: 'Design' },
+      origin: { kind: 'session', senderSessionId: 'lane', senderBotId: 'bot-1' },
+    }), role: 'assistant' }]);
+    expect(html).toContain('从群聊「Design」发送');
+    expect(html).toContain('群聊 ID：g-1');
+    expect(html).toContain('message.groupSource');
+    expect(render([{ ...msg('ordinary', 'Private', null), role: 'assistant' }])).not.toContain('message.groupSource');
+  });
+});

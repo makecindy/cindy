@@ -42,6 +42,7 @@ vi.mock('../providerShareApi.js', () => ({
 import {
   applyLocalMemberChange,
   providerShareGuestAccess,
+  providerShareGuestDenial,
   providerShareMemberMatcher,
   refreshProviderShareHost,
   startProviderShareHost,
@@ -102,6 +103,26 @@ describe('provider share host snapshot', () => {
     state.remoteControl = true;
     state.scope = 'cloud:other:2';
     expect(providerShareGuestAccess(guest('m1'))).toBeNull();
+  });
+
+  it('names the reason a guest is refused, for the diagnostic log', async () => {
+    expect(providerShareGuestDenial(guest('m1'))).toBe('host-not-running');
+    state.owned = [share([member('m1'), member('m2', 'paused')])];
+    startProviderShareHost(events());
+    expect(providerShareGuestDenial(guest('m1'))).toBe('snapshot-not-loaded');
+    await refreshProviderShareHost('test');
+    expect(providerShareGuestDenial(guest('m1'))).toBeNull();
+    expect(providerShareGuestDenial(guest('m2'))).toBe('member-not-active');
+    expect(providerShareGuestDenial(providerShareGuestPeer('share-9', 'm1', 'laptop'))).toBe('share-unknown');
+    expect(providerShareGuestDenial(guest('m1', 'host-device'))).toBe('self-device');
+    state.allowed.clear();
+    expect(providerShareGuestDenial(guest('m1'))).toBe('provider-not-remote');
+    state.allowed.add('anthropic');
+    state.remoteControl = false;
+    expect(providerShareGuestDenial(guest('m1'))).toBe('remote-control-off');
+    state.remoteControl = true;
+    state.scope = 'cloud:other:2';
+    expect(providerShareGuestDenial(guest('m1'))).toBe('host-scope-stale');
   });
 
   it('announces pending requests once and reconciles stale guests on the first snapshot', async () => {

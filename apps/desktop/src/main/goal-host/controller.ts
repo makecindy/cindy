@@ -20,6 +20,7 @@ import { isTurnContinuationBoundaryEvent } from '@cindy/maker-shared/turn-contin
 
 import { buildContinuationDirective, buildFirstTurnDirective } from './directive';
 import { agentHandoffPending } from '../maker-ipc/agentHandoffPendingSingleton';
+import { onUiSessionIntervention } from '../maker-ipc/uiContinuationSignal';
 import { prependHandoffToUserMessage } from '../maker-ipc/agentHandoff';
 import {
   MAX_CONSECUTIVE_OVERLOAD_TURNS,
@@ -351,6 +352,8 @@ export function decideNextGoalState(prev: GoalCounters, outcome: TurnOutcome): G
 // ── 每轮事件累计状态 ─────────────────────────────────────────────────────────
 
 interface TurnAccumulator {
+  /** 创建目标之前已在运行的轮次；只保存在本生命周期内，不计入目标裁决。 */
+  precedingTurn: { session: SessionLike; generation: number } | null;
   text: string;
   sawToolUse: boolean;
   tokensThisTurn: number;
@@ -374,6 +377,7 @@ function freshTurn(
   pendingCompletion: Promise<void> | null = null,
 ): TurnAccumulator {
   return {
+    precedingTurn: null,
     text: '',
     sawToolUse: false,
     tokensThisTurn: 0,
@@ -466,6 +470,7 @@ export class GoalController {
   /** Disposal is two-phase: detach synchronously, then drain old-owner writes. */
   private disposing = false;
   private disposePromise: Promise<void> | null = null;
+  private readonly unsubscribeIntervention: () => void;
 
   /** Throw if the controller has been disposed. */
   private assertActive(): void {
@@ -475,6 +480,11 @@ export class GoalController {
   constructor(private readonly deps: GoalControllerDeps) {
     this.now = deps.now ?? (() => Date.now());
     this.debounceMs = deps.continuationDebounceMs ?? DEFAULT_DEBOUNCE_MS;
+    this.unsubscribeIntervention = onUiSessionIntervention((sessionId) => {
+      // 新消息（包括同一轮内的插话）撤销旧轮豁免，保留原有用户打断语义。
+      const turn = this.turns.get(sessionId);
+      if (turn) turn.precedingTurn = null;
+    });
   }
 
   // ── 公开 API ───────────────────────────────────────────────────────────────
@@ -487,6 +497,19 @@ export class GoalController {
     if (!objective) throw new GoalControllerInputError('objective must not be empty');
     this.cancelDeferredManualResume(sessionId);
     let entryBoundary = this.turns.get(sessionId);
+    const entrySession = this.deps.getSession(sessionId);
+    const entryGeneration = entrySession?.getTurnGeneration?.();
+    if (
+      (!entryBoundary || entryBoundary.cancelled || entryBoundary.pendingCompletion)
+      && entrySession && entryGeneration != null && entryGeneration > 0
+      && this.isBusy(sessionId)
+    ) {
+      // 必须在首次 await 前记住身份，不能把落库期间新开始的一轮也当作旧轮。
+      // Stop 或目标完成清理都可能留下 owner，而普通轮次已启动；保留原取消状态和写入屏障。
+      entryBoundary ??= freshTurn();
+      entryBoundary.precedingTurn = { session: entrySession, generation: entryGeneration };
+      this.turns.set(sessionId, entryBoundary);
+    }
     let rejectionTakeover:
       | {
           retry: { attempts: number; firstRejectedAt: number; retryNotBefore: number };
@@ -527,6 +550,7 @@ export class GoalController {
         entryBoundary.pendingPersistence,
         entryBoundary.pendingCompletion,
       );
+      takeoverBoundary.precedingTurn = entryBoundary.precedingTurn;
       this.stopSession(sessionId);
       this.turns.set(sessionId, takeoverBoundary);
       await this.awaitPendingLifecycle(takeoverBoundary);
@@ -684,6 +708,7 @@ export class GoalController {
       previousBoundary?.pendingPersistence ?? null,
       previousBoundary?.pendingCompletion ?? null,
     );
+    createBoundary.precedingTurn = previousBoundary?.precedingTurn ?? null;
     this.turns.set(sessionId, createBoundary);
     let createdState: GoalState | null = null;
     try {
@@ -1571,6 +1596,7 @@ export class GoalController {
   async dispose(): Promise<void> {
     if (this.disposePromise) return this.disposePromise;
     this.disposing = true;
+    this.unsubscribeIntervention();
     // Snapshot all old-owner persistence barriers before stopSession removes
     // their owners.  The DB may be closed as soon as account teardown returns;
     // dropping either a completion clear or a goal-state write leaves stale
@@ -1772,6 +1798,19 @@ export class GoalController {
       this.turns.set(sessionId, turn);
     }
     if (turn.cancelled) return;
+    const preceding = turn.precedingTurn;
+    if (
+      preceding && this.listenerSessions.get(sessionId) === preceding.session
+      && event.sessionTurnGeneration === preceding.generation
+      && !isTerminalAgentErrorEvent(event)
+    ) {
+      // 旧轮的正文、用量和正常结束都不属于目标首轮。真正错误仍走原有停止路径。
+      // 保留身份以忽略重复/迟到的旧事件；Stop/Clear 换掉生命周期即撤销等待。
+      if (event.type === 'done' && !isTurnContinuationBoundaryEvent(event)) {
+        this.scheduleContinuation(sessionId);
+      }
+      return;
+    }
     switch (event.type) {
       case 'text': {
         const d = event.data as { text?: string; isFinal?: boolean } | null;

@@ -26,7 +26,7 @@
 | 任务详情面板 | 系统 BottomSheet、展开档位和拖拽关闭 | RN 内容、间距和业务信息布局；不能称整页系统 Form。[实现](../src/session/SessionDetailsNative.ios.tsx) |
 | 附件、伙伴等面板 | 原生 sheet；部分页面用 Form / Section / 原生按钮 | 某些资源块通过 RNHostView 嵌入 RN 内容。[公共外壳](../src/session/ComposerSheet.ios.tsx)、[伙伴内容桥](../src/session/CompanionNativeContent.ios.tsx) |
 | 消息输入器 | UITextView 编辑核心与选择/撤销，原生展开控制器 | Cindy 编写的原生引用/文档逻辑、业务工具栏；外框在可用系统上用原生 GlassView。[编辑器](../src/session/ComposerNativeInput.ios.tsx)、[外框](../src/session/ComposerFrame.ios.tsx) |
-| 底部动作菜单 | 自定义原生 UIViewController / UITableView + 系统 UISheetPresentationController；旧包回退系统 ActionSheetIOS | 不是每一种动作菜单都直接使用系统 UIAlertController。[模块](../modules/xdt-ios-action-sheet/ios/XdtIosActionSheetModule.swift) |
+| 底部动作菜单 | 自定义原生 UIViewController / UITableView + 系统 UISheetPresentationController；旧包回退系统 ActionSheetIOS | 不是每一种动作菜单都直接使用系统 UIAlertController；背景仅在 Liquid Glass 可用时透明，否则用系统分组底色。[模块](../modules/xdt-ios-action-sheet/ios/XdtIosActionSheetModule.swift) |
 
 ## 仍主要由 React Native 定制的部分
 

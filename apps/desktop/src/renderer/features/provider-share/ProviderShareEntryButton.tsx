@@ -2,7 +2,7 @@
  * 「允许被远程调用」一行开关左侧的「管理分享」图标按钮(产品规则 §7.1；设计稿场景 1)。
  * 能力未开启时不可点击，Tip 与无障碍名称说明需先开启哪一级；有待审批申请时带提示点。
  */
-import { Users } from 'lucide-react';
+import { Share2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { Tip } from '@/components/ui/tooltip';
@@ -44,7 +44,7 @@ export function ProviderShareEntryButton({
             : 'cursor-default opacity-50',
         )}
       >
-        <Users size={16} aria-hidden />
+        <Share2 size={16} aria-hidden />
         {enabled && pendingCount > 0 && (
           <span
             aria-hidden="true"

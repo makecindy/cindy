@@ -75,17 +75,17 @@ export class HistoryDiskStore {
       return text;
     }).catch(() => null);
   }
-  write(key: string, text: string, current: () => boolean): Promise<void> {
-    if (text.length > HISTORY_DISK_ITEM_BYTES) return Promise.resolve();
+  write(key: string, text: string, current: () => boolean): Promise<boolean> {
+    if (text.length > HISTORY_DISK_ITEM_BYTES) return Promise.resolve(false);
     const epoch = this.epoch;
     // UTF-8 bytes, rather than JS UTF-16 code units, own the disk budget.
     const bytes = new TextEncoder().encode(text).byteLength;
     return this.run(async () => {
       await this.init();
-      if (epoch !== this.epoch || !current() || bytes > Math.min(this.budget, HISTORY_DISK_ITEM_BYTES)) return;
+      if (epoch !== this.epoch || !current() || bytes > Math.min(this.budget, HISTORY_DISK_ITEM_BYTES)) return false;
       const file = `view-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}.json`;
       await this.io.write(file, text);
-      if (epoch !== this.epoch || !current()) { await this.io.remove(file); return; }
+      if (epoch !== this.epoch || !current()) { await this.io.remove(file); return false; }
       const previous = { ...this.entries! };
       const old = this.entries![key];
       this.entries![key] = { file, bytes, accessed: Date.now() };
@@ -101,7 +101,8 @@ export class HistoryDiskStore {
       try { await this.persist(); }
       catch (error) { this.entries = previous; await this.io.remove(file); throw error; }
       for (const name of discarded) await this.io.remove(name);
-    }).catch(() => undefined);
+      return epoch === this.epoch && current();
+    }).catch(() => false);
   }
   clear(matches: (key: string) => boolean = () => true): Promise<void> {
     // Revoke queued work immediately, including reads already waiting on native IO.
