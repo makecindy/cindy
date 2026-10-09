@@ -5,15 +5,17 @@ import {
   type MessageRenderNormalizedMessage,
 } from '@cindy/maker-shared/message-render';
 import { groupWorkRuns, type RenderItem } from '../components/chat/messageWorkGroups';
+import { CONTINUE_AFTER_APP_EXIT_PROMPT, CONTINUE_AFTER_ERROR_PROMPT, syntheticTriggerKind } from '@cindy/maker-shared/synthetic-trigger';
 
 /** One event fixture feeds both projections; only platform item representations differ. */
 interface Event {
   id: string;
-  kind: 'user' | 'assistant' | 'thinking' | 'tool' | 'compact' | 'agent';
+  kind: 'user' | 'assistant' | 'thinking' | 'tool' | 'compact' | 'agent' | 'error';
   at: number;
   body?: string;
   end?: number;
   sealed?: boolean;
+  autoResume?: boolean;
 }
 
 const iso = (seconds: number) => new Date(Date.UTC(2026, 0, 1) + seconds * 1000).toISOString();
@@ -67,8 +69,12 @@ function desktopItems(events: readonly Event[]): RenderItem[] {
         clientId: event.id,
         role: event.kind === 'compact' ? 'assistant' : event.kind,
         content: event.body ?? (event.kind === 'thinking' ? 'Thinking' : ''),
+        ...(event.kind === 'user' && syntheticTriggerKind(event.body ?? '') !== null
+          ? { content: '', isSyntheticTrigger: true, isContinuationTrigger: syntheticTriggerKind(event.body ?? '') === 'continue' }
+          : {}),
         createdAt: iso(event.at),
         turnCompleted: event.sealed,
+        ...(event.autoResume ? { systemCardType: 'auto-resume' as const } : {}),
         ...(event.kind === 'compact' ? { systemCardType: 'compact' as const } : {}),
         ...(event.kind === 'thinking'
           ? { thinkingDurationMs: ((event.end ?? event.at) - event.at) * 1000 }
@@ -81,7 +87,7 @@ function desktopItems(events: readonly Event[]): RenderItem[] {
 function normalized(events: readonly Event[]): MessageRenderNormalizedMessage[] {
   return events.map((event) => ({
     key: event.id,
-    kind: event.kind === 'compact' ? 'system' : event.kind === 'agent' ? 'tool' : event.kind,
+    kind: event.kind === 'compact' || event.kind === 'error' ? 'system' : event.kind === 'agent' ? 'tool' : event.kind,
     label: event.kind === 'compact' ? 'system:compact' : event.kind,
     body: event.body ?? (event.kind === 'thinking' ? 'Thinking' : ''),
     createdAt: iso(event.at),
@@ -90,6 +96,7 @@ function normalized(events: readonly Event[]): MessageRenderNormalizedMessage[] 
     source: {
       clientId: event.id,
       role: event.kind,
+      ...(event.autoResume ? { agentMeta: { autoResume: true } } : {}),
       createdAt: iso(event.at),
       content:
         event.kind === 'thinking'
@@ -313,6 +320,54 @@ const cases: Array<{ name: string; events: Event[]; streaming?: boolean; expecte
 ];
 
 describe('desktop and shared/mobile work grouping projection', () => {
+  it.each([
+    { body: CONTINUE_AFTER_ERROR_PROMPT },
+    { body: CONTINUE_AFTER_APP_EXIT_PROMPT },
+    { body: `${CONTINUE_AFTER_ERROR_PROMPT}\n\n[CINDY_RECOVERY_CHECKPOINT v1]\nattempt 2` },
+    { body: 'Continue', autoResume: true },
+  ])('folds interrupted progress across recovery: %j', (continuation) => {
+    const events: Event[] = [
+      user(), answer('progress', 1), tool('read', 2, 3),
+      { id: 'error', kind: 'error', at: 4, body: 'Usage limit reached' },
+      { ...user('resume', 5), ...continuation },
+      answer('resuming', 6), thinking('next', 7), answer('final', 8, true),
+    ];
+    for (const streaming of [true, false]) {
+      const input = streaming ? events.slice(0, -1) : events;
+      const desktop = desktopProjection(groupWorkRuns(desktopItems(input), streaming));
+      const shared = sharedProjection(buildMessageRenderItems(normalized(input), { isSessionStreaming: streaming }));
+      expect(shared).toEqual(desktop);
+      expect(tree(desktop).slice(0, 4)).toEqual([
+        ['u'], ['work-summary-read', [['progress'], ['work-read', [['read']]]]],
+        ['error'], ['resume'],
+      ]);
+      expect(desktop[1].streaming).toBe(false);
+      expect(tree(desktop).slice(4)).toEqual(streaming
+        ? [['resuming'], ['work-next', [['next']]]]
+        : [['work-summary-next', [['resuming'], ['work-next', [['next']]]]], ['final']]);
+    }
+  });
+
+  it('folds a prose-only interrupted attempt without mistaking it for a final answer', () => {
+    const events: Event[] = [user(), answer('progress', 1),
+      { ...user('resume', 2), body: CONTINUE_AFTER_ERROR_PROMPT }, answer('final', 3, true)];
+    const desktop = desktopProjection(groupWorkRuns(desktopItems(events), false));
+    expect(sharedProjection(buildMessageRenderItems(normalized(events)))).toEqual(desktop);
+    expect(tree(desktop)).toEqual([
+      ['u'], ['work-summary-progress', [['progress']]], ['resume'], ['final'],
+    ]);
+  });
+
+  it.each(['Another task', '[UI_ACTION_TRIGGER] regenerate the image'])('keeps ordinary boundaries unchanged: %s', (body) => {
+    const events: Event[] = [user(), answer('progress', 1), tool('read', 2),
+      { ...user('other', 3), body }, answer('final', 4, true)];
+    const desktop = desktopProjection(groupWorkRuns(desktopItems(events), false));
+    expect(sharedProjection(buildMessageRenderItems(normalized(events)))).toEqual(desktop);
+    expect(tree(desktop)).toEqual([
+      ['u'], ['progress'], ['work-read', [['read']]], ['other'], ['final'],
+    ]);
+  });
+
   it.each(cases)('$name', ({ events, streaming = false, expected }) => {
     const desktop = desktopProjection(groupWorkRuns(desktopItems(events), streaming));
     const shared = sharedProjection(

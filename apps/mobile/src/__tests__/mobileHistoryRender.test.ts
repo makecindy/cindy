@@ -4,6 +4,7 @@ import { buildMobileHistoryRenderItems } from '../session/mobileHistoryRender';
 import { buildMobileMessageRenderItems, type MobileMessageRenderItem } from '../session/messageRenderModel';
 import type { RemoteMessage } from '../session/types';
 import { reconcileMobileMessageRenderItems } from '../session/messageRenderReconcile';
+import { CONTINUE_AFTER_ERROR_PROMPT } from '@cindy/maker-shared/synthetic-trigger';
 
 function row(index: number, role: RemoteMessage['role'], content: unknown, toolUseId: string | null = null): RemoteMessage {
   return { id: `id-${index}`, clientId: `client-${index}`, sessionId: 'session', role, content, toolUseId,
@@ -32,6 +33,30 @@ function harness(rows: RemoteMessage[], streaming = false, lazyDetails = false) 
 }
 
 describe('remote history preserves original folding', () => {
+  it('keeps recovered work folded after reopening and restores details on expansion', async () => {
+    const rows = [row(0, 'user', 'Work'), row(1, 'assistant', 'Checking'), thought(2),
+      row(3, 'error', { message: 'Usage limit reached' }),
+      row(4, 'user', { text: CONTINUE_AFTER_ERROR_PROMPT }),
+      row(5, 'assistant', 'Resuming'), thought(6),
+      { ...row(7, 'assistant', 'Done'), agentMeta: { turnCompleted: true } }];
+    const { view, render } = harness(rows);
+    await view.refresh();
+    const output = render();
+    expect(output.map((item) => item.key)).toEqual([
+      'message-client-0', 'work-summary-client-2', 'message-client-3',
+      'work-summary-client-6', 'message-client-7',
+    ]);
+    const work = output[1];
+    if (work.type !== 'work_group') throw new Error('Missing recovered work');
+    expect(work.children[0]).toMatchObject({ type: 'message', message: { body: 'Checking' } });
+    const actions = work.children.find((item) => item.type === 'work_group');
+    if (actions?.type !== 'work_group') throw new Error('Missing action details');
+    actions.deferred!.setVisible!(true, false);
+    await vi.waitFor(() => expect([...view.getSnapshot().details.values()].some((state) => state.complete)).toBe(true));
+    expect(outline(render())).toEqual(outline(buildMobileMessageRenderItems(rows)));
+    view.setActive(false);
+  });
+
   it.each([0, 2_000_000_000_000])('keeps a local send before an early reply with phone time %s', async (phoneTime) => {
     const rows = [row(0, 'user', 'Earlier'), row(1, 'assistant', 'Done')];
     const { view } = harness(rows);

@@ -63,3 +63,20 @@ export function syntheticTriggerKind(text: string): 'continue' | 'generic' | nul
     ? 'continue'
     : 'generic';
 }
+
+/** Raw history and desktop projections identify the same recovery boundary. */
+export function isContinuationMessage(message: {
+  role?: string | null;
+  content?: unknown;
+  agentMeta?: object | null;
+  systemCardType?: string;
+  isContinuationTrigger?: boolean;
+}): boolean {
+  if (message.role !== 'user') return false;
+  if (message.isContinuationTrigger === true
+    || (message.agentMeta as { autoResume?: unknown } | null)?.autoResume === true
+    || message.systemCardType === 'auto-resume') return true;
+  const text = typeof message.content === 'string' ? message.content
+    : (message.content as { text?: unknown } | null)?.text;
+  return typeof text === 'string' && syntheticTriggerKind(text) === 'continue';
+}

@@ -1,4 +1,5 @@
 import { groupWorkRuns } from './workRunGrouping.js';
+import { isContinuationMessage } from './syntheticTrigger.js';
 export { groupWorkRuns, type WorkRunGroupingAdapter } from './workRunGrouping.js';
 import {
   type AgentTaskTerminalStatus,
@@ -1524,6 +1525,7 @@ function groupMessageWorkRuns<TMessage extends MessageRenderNormalizedMessage>(
   return groupWorkRuns<MessageRenderItem<TMessage>, MessageRenderWorkChildItem<TMessage>>(
     items, isSessionStreaming, {
       isUserBoundary: (item) => item.type === 'message' && item.message.kind === 'user',
+      isContinuationBoundary: (item) => item.type === 'message' && isContinuationMessage(item.message.source),
       isAnswer: isAssistantAnswerCandidate,
       isSealedAnswer: (item) => item.type === 'message' && isCompletedAssistantMessage(item.message),
       isCompactBoundary: isCompactBoundaryItem,

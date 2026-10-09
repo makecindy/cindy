@@ -4,10 +4,23 @@ import {
   CONTINUE_AFTER_ERROR_PROMPT,
   UI_ACTION_TRIGGER_PREFIX,
   isSyntheticTriggerText,
+  isContinuationMessage,
   syntheticTriggerKind,
 } from '../syntheticTrigger.js';
 
 describe('synthetic trigger detection', () => {
+  it('recognizes recovery in raw and hidden projections without treating every trigger as recovery', () => {
+    for (const content of [CONTINUE_AFTER_ERROR_PROMPT, { text: CONTINUE_AFTER_ERROR_PROMPT }]) {
+      expect(isContinuationMessage({ role: 'user', content })).toBe(true);
+      expect(isContinuationMessage({ role: 'assistant', content })).toBe(false);
+    }
+    expect(isContinuationMessage({ role: 'user', content: '', isContinuationTrigger: true })).toBe(true);
+    expect(isContinuationMessage({ role: 'user', agentMeta: { autoResume: true } })).toBe(true);
+    expect(isContinuationMessage({ role: 'user', systemCardType: 'auto-resume' })).toBe(true);
+    expect(isContinuationMessage({ role: 'user', content: `${UI_ACTION_TRIGGER_PREFIX} regenerate` })).toBe(false);
+    expect(isContinuationMessage({ role: 'user', content: null })).toBe(false);
+  });
+
   it('detects the magic prefix on raw text', () => {
     expect(isSyntheticTriggerText(`${UI_ACTION_TRIGGER_PREFIX} do something`)).toBe(true);
     expect(isSyntheticTriggerText('normal user message')).toBe(false);

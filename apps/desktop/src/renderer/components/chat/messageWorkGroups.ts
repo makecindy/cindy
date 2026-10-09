@@ -1,4 +1,5 @@
 /** Desktop item projection for the shared work-run grouping algorithm. No UI side effects. */
+import { isContinuationMessage } from '@cindy/maker-shared/synthetic-trigger';
 import {
   deriveAgentTaskStatus,
   subagentSpawnReceiptName,
@@ -523,6 +524,7 @@ function createCompletedWorkGroup(
 export function groupWorkRuns(items: RenderItem[], isSessionStreaming: boolean): RenderItem[] {
   return groupSharedWorkRuns<RenderItem, WorkChildItem>(items, isSessionStreaming, {
     isUserBoundary: (item) => item.type === 'message' && item.message.role === 'user',
+    isContinuationBoundary: (item) => item.type === 'message' && isContinuationMessage(item.message),
     isAnswer: isAssistantAnswerCandidate,
     isSealedAnswer: (item) => item.type === 'message' && isCompletedAssistantMessage(item.message),
     isCompactBoundary: isCompactBoundaryItem,
