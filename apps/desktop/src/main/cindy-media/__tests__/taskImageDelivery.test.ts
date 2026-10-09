@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import * as schema from '../../localDb/schema';
@@ -231,7 +232,7 @@ describe('task image delivery', () => {
     await fs.mkdir(scratch, { recursive: true });
     const source = path.join(scratch, 'shot.png');
     await fs.writeFile(source, PNG);
-    const row = insert(`![before](xdt-image://${source})`);
+    const row = insert(`![before](${pathToFileURL(source).href.replace(/^file:/, 'xdt-image:')})`);
     const [saved] = await restoreTaskImageRows(client, [row]);
     const url = taskImageReferences(JSON.parse(saved.content))[0].url;
     expect(url).toMatch(/^cindy-media:\/\/blobs\/[a-f0-9]{64}\.png$/);
@@ -245,7 +246,7 @@ describe('task image delivery', () => {
   it('uses the same persisted bytes for chat and both channel collectors', async () => {
     const source = path.join(work, 'shot.png');
     await fs.writeFile(source, PNG);
-    const text = `![shot](xdt-image://${source})`;
+    const text = `![shot](${pathToFileURL(source).href.replace(/^file:/, 'xdt-image:')})`;
     const personal = await materializeLocalMarkdownImages({
       text,
       workingDir: work,
