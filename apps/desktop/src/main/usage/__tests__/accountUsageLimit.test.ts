@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
@@ -24,9 +26,38 @@ import {
   claudeAccountUsageLimit,
   codexAccountUsageLimit,
   readAccountUsageLimit,
+  sessionUsesOtherMachineAccount,
   subscriptionFamilyOf,
   xaiAccountUsageLimit,
 } from '../accountUsageLimit';
+
+// 远程 Agent 的任务撞上限额时,本机订阅快照属于另一个账号(2026-10-09:与 SSH 同一边界)。
+describe('sessionUsesOtherMachineAccount', () => {
+  it('SSH 远程工作区与远程 Agent(含分享来的供应商)都用另一台机器的账号', () => {
+    expect(sessionUsesOtherMachineAccount({ remoteHostId: 'host-1' })).toBe(true);
+    expect(sessionUsesOtherMachineAccount({ agentDeviceId: 'device-agent' })).toBe(true);
+    expect(sessionUsesOtherMachineAccount({ agentDeviceId: 'share:share-1' })).toBe(true);
+  });
+
+  it('Agent 在本机运行的任务读本机账号', () => {
+    expect(sessionUsesOtherMachineAccount({ remoteHostId: null, agentDeviceId: null })).toBe(false);
+    expect(sessionUsesOtherMachineAccount({})).toBe(false);
+    expect(sessionUsesOtherMachineAccount(null)).toBe(false);
+  });
+
+  it('普通任务与目标模式都按它判定,且任务行快照带上 agentDeviceId', () => {
+    const read = (relative: string) => readFileSync(resolve(__dirname, relative), 'utf8');
+    expect(read('../../maker-ipc/register.ts')).toContain('sessionUsesOtherMachineAccount(row)');
+    expect(read('../../goal-host/index.ts')).toContain('sessionUsesOtherMachineAccount(row)');
+    // 目标模式对远程 Agent 也不回落本机网关预算(那台的独立账号本机目录认不出时同样如此)。
+    expect(read('../../goal-host/index.ts')).toContain(
+      'if (row?.agentDeviceId && !row.remoteHostId) return null;',
+    );
+    expect(read('../../localDb/ipc/sessions.ts')).toContain(
+      'agentDeviceId: sessions.agentDeviceId,',
+    );
+  });
+});
 
 // 必须在未来:过期窗口的 app-server 桶会被选桶逻辑当作陈旧桶跳过。
 const NOW_SEC = Math.floor(Date.now() / 1000);

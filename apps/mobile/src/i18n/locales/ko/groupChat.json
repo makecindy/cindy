@@ -174,5 +174,13 @@
   "followUp": {
     "next": "분담 · 다음 단계",
     "failedStep": "{{step}}단계를 끝내지 못했어요"
+  },
+  "server": {
+    "offline": "그룹 채팅에 연결할 수 없습니다. 다시 시도해 주세요.",
+    "loadFailed": "그룹 채팅을 불러올 수 없습니다. 다시 시도해 주세요.",
+    "loadOlder": "이전 메시지 불러오기",
+    "attachmentFailed": "첨부 파일을 열지 못했습니다. 다시 시도해 주세요.",
+    "previewUnavailable": "미리보기를 불러올 수 없습니다",
+    "endpointUnavailable": "그룹 채팅 서비스 설정을 사용할 수 없습니다. 다시 시도해 주세요."
   }
 }

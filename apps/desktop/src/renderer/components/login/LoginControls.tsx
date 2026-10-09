@@ -305,7 +305,9 @@ export function LoginInput({
             width: CONTROL.width,
             height: CONTROL.height,
             borderRadius: CONTROL.radius,
-            background: LOGIN_COLORS.controlBg,
+            // backgroundColor 而非 background 简写:简写会把 background-image 重置为 none,
+            // 上面 hover:enabled 的 5% 叠层(background-image)因此从未生效。
+            backgroundColor: LOGIN_COLORS.controlBg,
             border: `1px solid ${
               error
                 ? LOGIN_COLORS.errorFg
@@ -649,8 +651,9 @@ export function LoginBackButton({
         border: `1px solid ${LOGIN_COLORS.backBorder}`,
       }}
     >
-      {/* 24 box 内左向 chevron(247:1635 icon 语义;矢量重绘,静态) */}
-      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden>
+      {/* 24 box 内左向 chevron(247:1635 icon 语义;矢量重绘,静态)。z-[1]:hover/pressed
+          叠层(::after,亮色白 70%)只染底色,不盖住箭头——否则悬停时箭头仅 1.76:1。 */}
+      <svg className="relative z-[1]" width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden>
         <path
           d="M14.5 5.5 8 12l6.5 6.5"
           stroke={LOGIN_COLORS.controlText}
@@ -1251,7 +1254,7 @@ export function LoginMethodRow({
     >
       <span
         aria-hidden
-        className="absolute inline-flex"
+        className="absolute z-[1] inline-flex"
         style={
           !showLogo && icon === 'person'
             ? {
@@ -1283,7 +1286,7 @@ export function LoginMethodRow({
         )}
       </span>
       <span
-        className="absolute flex flex-col justify-center text-left"
+        className="absolute z-[1] flex flex-col justify-center text-left"
         style={{
           left: METHOD_ROW.textX,
           top: 0,
@@ -1306,7 +1309,7 @@ export function LoginMethodRow({
       </span>
       <span
         aria-hidden
-        className="absolute inline-flex"
+        className="absolute z-[1] inline-flex"
         style={{
           left: METHOD_ROW.rightIcon.x,
           top: METHOD_ROW.rightIcon.y,

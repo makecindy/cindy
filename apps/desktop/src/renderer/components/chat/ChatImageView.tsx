@@ -38,6 +38,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { extractIpcError } from '@/utils/ipcError';
 import { ImageLightbox } from './ImageLightbox';
+import { useImageClipboard } from './useImageClipboard';
 import { ModelLightbox } from './ModelLightbox';
 import { ImageMissingPlaceholder } from './ImageMissingPlaceholder';
 import { useRemoteMediaUrl } from '@/hooks/useRemoteMediaUrl';
@@ -112,7 +113,7 @@ export function ChatImageView({
 }: ChatImageViewProps) {
   const { t } = useTranslation();
   // 远程会话改写到 cindy-remote-media://;本地会话原样。下游一律用 displaySrc(渲染 +
-  // gallery + lightbox + 本机操作判定),远程媒体的 reveal/copy 自然失效。
+  // gallery + lightbox + 动作判定),保留远端归属。
   const displaySrc = useRemoteMediaUrl(src, sessionId);
   // 'image' = 2D 预览图 lightbox; 'model' = `<model-viewer>` 3D lightbox。
   // 同一个 state 槽位避免两种 lightbox 同时出现 (且统一受 scroll-lock 影响)。
@@ -133,36 +134,24 @@ export function ChatImageView({
   // 没响应。pending 状态显示 spinner + 抑制重复点击。
   const [modelPending, setModelPending] = useState<'open' | 'reveal' | null>(null);
 
+  const { canCopy, canReveal: canRevealInFolder, copyImage, revealImage } = useImageClipboard(displaySrc);
+
   if (errored) {
     return <ImageMissingPlaceholder filename={filename} />;
   }
 
   const { style, className } = VARIANT_STYLES[variant];
 
-  // 只有缓存到本地 (xdt-image://) 的图才能 reveal/copy 原图。
-  // base64 fallback (data:) 没有对应文件,菜单整段不渲染。
-  // 但 modelFile 路径不依赖本地缓存的预览图 — fileId 直接打到 mivo 后端拉
-  // 模型,所以只要有 modelFile 菜单就可用。
-  const canRevealInFolder =
-    displaySrc.startsWith('xdt-image://') || displaySrc.startsWith('cindy-media://');
-  const showMenu = modelFile !== undefined || canRevealInFolder;
+  const showMenu = modelFile !== undefined || canCopy || canRevealInFolder;
 
   async function handleCopyImage(): Promise<void> {
-    const res = await window.electronAPI.copyMediaToClipboard({ url: displaySrc });
-    if (res.success) {
-      toast.success(t('chat.media.imageCopied'));
-    } else {
-      toast.error(res.error ?? t('chat.media.copyFailed'));
-    }
     setMenuPos(null);
+    await copyImage();
   }
 
   async function handleRevealInFolder(): Promise<void> {
-    const res = await window.electronAPI.showItemInFolder({ url: displaySrc });
-    if (!res.success) {
-      toast.error(res.error ?? t('chat.media.openFolderFailed'));
-    }
     setMenuPos(null);
+    await revealImage();
   }
 
   async function handleModelAction(action: 'open' | 'reveal'): Promise<void> {
@@ -294,14 +283,18 @@ export function ChatImageView({
               </>
             ) : (
               <>
-                <DropdownMenuItem onClick={handleCopyImage}>
-                  <Copy className="mr-2 h-4 w-4" />
-                  {t('chat.media.copyImage')}
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={handleRevealInFolder}>
-                  <FolderOpen className="mr-2 h-4 w-4" />
-                  {t('chat.media.revealImage')}
-                </DropdownMenuItem>
+                {canCopy && (
+                  <DropdownMenuItem onClick={handleCopyImage}>
+                    <Copy className="mr-2 h-4 w-4" />
+                    {t('chat.media.copyImage')}
+                  </DropdownMenuItem>
+                )}
+                {canRevealInFolder && (
+                  <DropdownMenuItem onClick={handleRevealInFolder}>
+                    <FolderOpen className="mr-2 h-4 w-4" />
+                    {t('chat.media.revealImage')}
+                  </DropdownMenuItem>
+                )}
               </>
             )}
           </DropdownMenuContent>

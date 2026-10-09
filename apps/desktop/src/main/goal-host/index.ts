@@ -21,7 +21,11 @@ import { isSessionSharedTaskActive } from '../device-link/sharedTaskDispatch.js'
 import { createMessage } from '../localDb/ipc/messages.js';
 import { readGoalSettings, writeGoalSettings } from '../maker-host/goal-settings-store.js';
 import { getSessionRowSnapshot } from '../localDb/ipc/sessions.js';
-import { readAccountUsageLimit, subscriptionFamilyOf } from '../usage/accountUsageLimit.js';
+import {
+  readAccountUsageLimit,
+  sessionUsesOtherMachineAccount,
+  subscriptionFamilyOf,
+} from '../usage/accountUsageLimit.js';
 import { readClaudeAccountUsageSnapshot } from '../usage/claudeAccountUsage.js';
 import { GoalController } from './controller';
 import { readTurnUsageResetAt } from './usageLimit.js';
@@ -99,17 +103,23 @@ export function startGoalController(deps: StartGoalControllerDeps): GoalControll
       const row = await getSessionRowSnapshot(sessionId);
       const { providerId, modelId } = resolveSessionRuntimeRoute(sessionId, agentKind, row);
       if (subscriptionFamilyOf(agentKind, providerId)) {
+        const otherMachineAccount = sessionUsesOtherMachineAccount(row);
         // 报错原文写明的重置时刻只对订阅账号可信(非订阅来源的是分钟级请求限流)。
         if (turnError !== undefined) {
-          // SSH 远程会话的报错用远端主机的本地时间:不带时区的钟点不按本机时区理解。
+          // SSH 远程会话 / 远程 Agent 的报错用那台机器的本地时间:不带时区的钟点不按本机时区理解。
           const fromError = readTurnUsageResetAt(turnError, Date.now(), {
-            localTimeZoneTrusted: !row?.remoteHostId,
+            localTimeZoneTrusted: !otherMachineAccount,
           });
           if (fromError !== null) return { limited: true, resetAtMs: fromError };
         }
-        // SSH 远程会话用远端主机自己的登录,本机订阅快照属于另一个账号(与普通任务同一边界)。
-        if (row?.remoteHostId) return null;
+        // SSH 远端主机 / 远程 Agent 所在电脑用自己的登录,本机订阅快照属于另一个账号
+        // (与普通任务同一边界)。
+        if (otherMachineAccount) return null;
       }
+      // 远程 Agent 用 Agent 所在电脑自己的登录与来源:本机的订阅 / 网关快照都不是它的账号。
+      // 那台的独立账号本机目录认不出(上面判不出订阅家族)时也到这里,同样不读。
+      // SSH 沿用原有的网关预算回落。
+      if (row?.agentDeviceId && !row.remoteHostId) return null;
       const subscription = await readAccountUsageLimit(agentKind, providerId, modelId).catch(
         () => null,
       );

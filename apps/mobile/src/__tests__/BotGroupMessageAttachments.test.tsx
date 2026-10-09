@@ -7,6 +7,7 @@ import type { ResolveRemoteMediaFn } from '@/session/remoteMedia';
 // Keep the real group attachment, AttachmentStrip, MediaPreview and LegendList hooks.
 // Only native surfaces and unrelated viewers are replaced for Node rendering.
 const imageEvents = vi.hoisted(() => new Map<string, { onLoad: (event: unknown) => void; onError: () => void }>());
+vi.mock('expo-web-browser', () => ({ openBrowserAsync: vi.fn(async () => ({})) }));
 vi.mock('react-native', async () => {
   const React = await import('react');
   const view = ({ children, testID, accessibilityLabel, onPress }: any) => React.createElement('div', { 'data-testid': testID, 'aria-label': accessibilityLabel, onClick: onPress }, children);
@@ -97,6 +98,7 @@ async function renderAttachment(messageId: string) {
   root = createRoot(host);
   await act(async () => root!.render(createElement(BotGroupMessageAttachments, {
     messageId,
+    align: 'right',
     attachments: [{ id: 'attachment', size: 10, path: null, category: 'image', name: 'group-picture.png', url: imageUrl, mimeType: 'image/png' }],
     onResolveRemoteMedia: resolveMedia,
   })));

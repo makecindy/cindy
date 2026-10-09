@@ -928,3 +928,11 @@ describe('buildHandoffText 超限收缩保住首尾', () => {
     expect(text.trimEnd().endsWith("== End of handoff note; the user's new message follows ==")).toBe(true);
   });
 });
+
+it('keeps the group source of a private assistant reply when rebuilding model context', () => {
+  const handoff = buildHandoffText([{ role: 'assistant', content: 'Private delivery', createdAt: 1,
+    agentMeta: { sourceGroup: { groupId: 'group-1', name: 'Design' }, origin: {
+      kind: 'session', senderSessionId: 'lane-1', senderBotId: 'bot-1', senderBotName: 'Helper',
+    } } }], { fromLabel: 'Claude Code', toLabel: 'Codex' });
+  expect(handoff).toContain('[Assistant · 由伙伴「Helper」(bot_id: bot-1) 从群聊「Design」(group_id: group-1)');
+});

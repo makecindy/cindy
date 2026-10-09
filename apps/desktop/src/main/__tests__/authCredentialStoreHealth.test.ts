@@ -206,7 +206,7 @@ describe('authManager credential-store escalation wiring', () => {
     expect(noteIdx).toBeGreaterThan(body.indexOf('treating as transient'));
     // 注意 refresh body 更早处(realm manifest 分支)也调用了同名重排函数,
     // 必须取 noteReadFailure 之后的那一次。
-    const retryAfterNote = body.indexOf('scheduleRefreshRetryAfterTransientFailure();', noteIdx);
+    const retryAfterNote = body.indexOf('scheduleRefreshRetryAfterTransientFailure(refreshEpoch);', noteIdx);
     expect(retryAfterNote).toBeGreaterThan(noteIdx);
     // 升级不改变瞬时语义:transient 分支内不得出现实际的过期 / 清态调用
     // (匹配调用形态,避免误中提及函数名的注释)。

@@ -444,6 +444,11 @@ export class DiscordIM extends BaseIM implements ChannelIM {
     return this.status;
   }
 
+  /** Routing identity used by inbound contextId; status.appId is a display tag. */
+  get botContextId(): string {
+    return this.gateway.appId;
+  }
+
   private restoreSecret(key: string, previousValue: string | null): void {
     if (previousValue === null) {
       this.host.secrets.remove(key);

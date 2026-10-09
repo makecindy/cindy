@@ -949,7 +949,7 @@ Cindy's product voice matches its visuals: **restrained, direct, never self-cong
 ### 11.1 Language-Independent Principles (zh-CN / zh-TW / en / ja / ko alike)
 
 - **Actions = verb + object, never a bare verb.** Buttons and menu items say what is done to what: `Deploy Project` / `删除会话` / `セッションを削除`. **Forbidden**: objectless verbs like `Confirm` / `OK` / `确定` / `提交` (confirm-dialog primary buttons especially must carry the object so they read correctly out of context).
-- **Errors = what happened + what to do.** A bare "Failed / 出错了" is not acceptable — give the next step ("Connection timed out — check your network and retry"). Pairs with `docs/dev-rules/engineering-conventions.md` §2 (IPC error protocol): error codes are for code; the user-facing sentence must be human and actionable.
+- **Errors name what failed; advice must be supported by the cause.** When the cause is known, give the corresponding remedy. Suggest retrying only when there is evidence it may help; never append "Try again / 请重试" by default. When the cause or recovery path is unknown, state the failed operation honestly (for example, `Could not save panel positions` / `未能保存面板位置`), without inventing a cause, promising recovery, or prescribing an arbitrary action. Before suggesting a repeated write, import, or payment, account for possible partial completion. Pairs with `docs/dev-rules/engineering-conventions.md` §2 (IPC error protocol).
 - **In-progress = present continuous + ellipsis.** `Deploying…` / `正在部署…` / `デプロイ中…`. The ChatView Thinking status bar (`Spelunking…`, Thinking Orange) already is this pattern; new loading/processing states follow it.
 - **Results name the object — never say "success".** Toasts say what changed, not that an operation succeeded: `会话已删除` not `删除成功`; `Project deleted` not `Deleted successfully`. **Forbidden**: filler like "successfully / 成功了". (Toast visuals are §2; this rule is copy only.)
 - **Empty states point at the first action** — never just "No data"; tell the user what they can do now ("No sessions yet — hit + to create one").
@@ -967,10 +967,20 @@ Cindy's product voice matches its visuals: **restrained, direct, never self-cong
 ### 11.3 Self-Check (when touching copy)
 
 - [ ] Action buttons carry an object — not a bare `确定` / `OK`
-- [ ] Error copy says what to do next, not just that it failed
+- [ ] Error copy names the failed operation; any cause, remedy, or retry advice is supported by the actual failure
 - [ ] No "successfully / 成功" filler
 - [ ] In-progress states read "present continuous + …"
-- [ ] All 5 `common.json` files updated, each matching its language's casing/punctuation (see `docs/dev-rules/engineering-conventions.md` §5)
+- [ ] Affected copy reviewed in all 5 languages on each affected client, including descriptions, navigation names, and accessible labels (see `docs/dev-rules/engineering-conventions.md` §5)
+- [ ] Names and descriptions match the actual controls, scope, conditions, and consequences; shorter copy has not changed the promise
+- [ ] Relevant structural, placeholder, terminology, and copy tests run; language review and any unverified runtime presentation are reported separately
+
+### 11.4 Plain-language copy and multilingual review (owner decision, 2026-10-09)
+
+- **Make the next action understandable at a glance.** Menus and settings use everyday language describing what users can do or what changes. Do not expose implementation vocabulary such as `chip`, `hover tooltip`, or `max_budget` as instructions. Keep established product terms, brand names, and technical identifiers when users need them to identify a real option; consult `i18n/GLOSSARY.md` rather than inventing synonyms.
+- **Brevity is a target, not a truncation rule.** In Simplified and Traditional Chinese, aim for 2–4 characters for names and no more than 20 characters for short descriptions. Preserve the action's object, device/account scope, effective time, exceptions, and irreversible consequences even when they require more text. Detailed help and accessible labels may be longer. Other languages use natural concise phrasing, not the Chinese character limit or word-for-word translations.
+- **Explain the actual behavior.** Read the consuming UI and relevant behavior before rewriting. A three-way display selector must not be described as a card-mode switch; a notification setting covering errors and requests for a reply must not be named only for completion. Distinguish mode labels from action buttons and keep page headings, navigation/search labels, descriptions, and accessible names consistent.
+- **Review every affected language.** Compare zh-CN, zh-TW, en, ja, and ko for meaning, conditions, terminology, natural phrasing, and local punctuation. For shared concepts, check Desktop and Mobile together. Preserve placeholders and plural forms. A translation that is already correct need not be changed merely to produce a matching diff.
+- **Use checks and language review together.** Run the existing i18n structure and glossary gates plus relevant Desktop/Mobile catalog, placeholder, and copy tests. These do not prove semantic accuracy or naturalness, and static references do not cover every dynamically constructed key. State the review scope and distinguish automated checks, language review, native-speaker review, and runtime layout/readability checks; do not claim a full-product audit or verified Light/Dark presentation from a passing catalog check.
 
 ## 12. Component Spec (merged into §4)
 

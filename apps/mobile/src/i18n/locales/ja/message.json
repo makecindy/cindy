@@ -164,7 +164,10 @@
     "retryToolInput": "入力を読み込めませんでした。再試行",
     "toolResultCompacted": "ツールの完全な出力は解放されました（元のサイズ：{{size}}）",
     "mermaidEmpty": "空の Mermaid 図。",
-    "diffEditCount": "{{n}} 件の編集"
+    "diffEditCount": "{{n}} 件の編集",
+    "groupSentNamed": "グループ「{{name}}」から送信",
+    "groupSent": "グループから送信",
+    "sourceGroupId": "グループ ID: {{id}}"
   },
   "actions": {
     "attachmentsPrefix": "添付ファイル：{{names}}",
