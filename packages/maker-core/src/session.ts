@@ -2187,6 +2187,9 @@ export class Session {
 
   /** Display an optional question and return immediately; answers steer only this execution. */
   askUserQuestionAsync(questions: AskUserQuestionItem[]): string {
+    // Use the live Session identity, even if a stale MCP context claims another
+    // harness. Codex's native adapter is its sole async question owner.
+    if (this.agentKind === 'codex') throw new Error('Codex uses native async questions');
     this.ensureActive();
     if (!this.interactionListener) throw new Error('Question UI is unavailable');
     if (this.pendingUserQuestions > 0) throw new Error('A blocking user question is already pending');

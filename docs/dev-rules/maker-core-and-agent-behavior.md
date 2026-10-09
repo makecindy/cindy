@@ -322,7 +322,9 @@ sessionRunningRetry 就停。每次因 replacement 关闭而重新入队都计�
   协议与前缀稳定性实测见 `agents/codex/async-user-input.native.test.ts`，
   卡片、回传、去重及取消回归见 `agents/codex/index.test.ts`。
   Claude Code／Pi 通过 `cindy_helper.ask_user_question_async` 复用现有卡片；工具立即返回
-  pending 回执，`Session` 共用 `agents/shared/async-user-questions.ts` 管理问题寿命，
+  pending 回执。Codex 只保留原生入口，MCP 按请求时的 harness 隐藏并拒绝这条工具；
+  `Session` 也按实际引擎拒绝 Codex 调用共享入口，防止陈旧上下文创建第二套待回答状态。
+  Claude Code／Pi 的 `Session` 共用 `agents/shared/async-user-questions.ts` 管理问题寿命，
   不登记阻塞交互或人工续跑。回答只走原执行的 steer，结束／Stop／关闭／替换后作废，
   发送失败不重投新 turn。Claude 会把已排队的答案合并为下一 SDK 段：仅在答案已被接收
   时复用现有 continuation claim 保留产品边界，避免提前完成或重复完成；未回答不建 claim。

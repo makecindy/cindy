@@ -9,6 +9,12 @@ export type AskUserQuestionAsyncCallback = (
   questions: Parameters<Session['askUserQuestionAsync']>[0],
 ) => string;
 
+// Codex owns async questions through its native protocol. Exposing this second
+// path there would give the same card two independent lifecycle owners.
+export function supportsAsyncQuestionTool(context: LiziMcpSessionContext): boolean {
+  return context.agentKind === 'claude-code' || context.agentKind === 'pi';
+}
+
 export function registerAsyncQuestionTool(
   registry: XdtHelperToolRegistry,
   getContext: () => LiziMcpSessionContext,
@@ -37,6 +43,9 @@ export function registerAsyncQuestionTool(
       const context = getContext();
       if (!context.sessionId || !context.sessionInstanceId) {
         return errorPayload('NO_SESSION_CONTEXT', 'No current task instance for this question.');
+      }
+      if (!supportsAsyncQuestionTool(context)) {
+        return errorPayload('CAPABILITY_NOT_AVAILABLE', 'Use your native question tool.');
       }
       if (context.mcpCallerKind !== 'root' || context.mcpCallerAttested !== true) {
         return errorPayload('ROOT_REQUIRED', 'Ask the parent agent to relay the question.');

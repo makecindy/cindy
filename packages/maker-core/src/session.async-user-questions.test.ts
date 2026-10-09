@@ -10,7 +10,7 @@ const questions = [{ question: 'Which scope?', options: [{ label: 'Personal' }, 
 const answer: InteractionDecision = { kind: 'ask_user_question', answers: { 'Which scope?': 'Both' } };
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
-async function setup(agentKind: 'claude-code' | 'pi') {
+async function setup(agentKind: 'claude-code' | 'pi' | 'codex') {
   const queue = createAsyncQueue<AgentEvent>();
   let running = false;
   const requests: InteractionRequest[] = [];
@@ -161,4 +161,29 @@ describe.each(['claude-code', 'pi'] as const)('%s async questions', (agentKind) 
       expect(s.handle.steer).toHaveBeenCalledOnce();
     } finally { await s.session.close(); }
   });
+});
+
+// Even a stale/misattributed MCP context cannot create a shared question in a
+// Codex Session: the live Session owns the harness identity.
+it('rejects shared questions around a native Codex card without disturbing it', async () => {
+  const s = await setup('codex');
+  try {
+    expect(() => s.session.askUserQuestionAsync(questions)).toThrow('native');
+    const nativeRequest: InteractionRequest = {
+      kind: 'ask_user_question', requestId: 'native', questions, delivery: 'async',
+    };
+    const native = s.session.runHostInteraction(nativeRequest, () => new Promise((resolve) => {
+      s.requests.push(nativeRequest);
+      s.resolvers.push(resolve);
+    }));
+    expect(() => s.session.askUserQuestionAsync(questions)).toThrow('native');
+    expect(s.requests).toEqual([nativeRequest]);
+    expect(s.session.getTurnControlSnapshot().pendingInteractionCount).toBe(0);
+    expect(s.events.filter((e) => e.type === 'interaction_dismissed')).toEqual([]);
+    s.resolvers[0](answer);
+    await expect(native).resolves.toEqual(answer);
+    expect(() => s.session.askUserQuestionAsync(questions)).toThrow('native');
+    await flush();
+    expect(s.handle.steer).not.toHaveBeenCalled();
+  } finally { await s.session.close(); }
 });

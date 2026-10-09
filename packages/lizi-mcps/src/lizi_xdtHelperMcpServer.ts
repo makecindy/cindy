@@ -36,7 +36,7 @@ import { z } from 'zod';
 import { registerBotRoutineTools, type BotRoutineCallbacks } from './xdt-helper/botRoutineTools.js';
 import { registerGrokLoginTools, type GrokLoginCallbacks } from './xdt-helper/grok_login.js';
 import { jsonObjectArg } from './json-object-arg.js';
-import { registerAsyncQuestionTool, type AskUserQuestionAsyncCallback } from './xdt-helper/ask_user_question_async.js';
+import { registerAsyncQuestionTool, supportsAsyncQuestionTool, type AskUserQuestionAsyncCallback } from './xdt-helper/ask_user_question_async.js';
 
 import { XdtHelperToolRegistry } from './lizi_xdtHelperToolRegistry.js';
 import { registerCreateProjectTool, type CreateProjectCallback } from './xdt-helper/create_project.js';
@@ -1087,7 +1087,8 @@ export function createXdtHelperMcpServer(
       const allowed = await allowedSurface();
       return { tools: [
         ...entryTools,
-        ...(allowed.categories?.has('cindy') ? questionTools : []),
+        ...(allowed.categories?.has('cindy') && supportsAsyncQuestionTool(resolveLiziMcpSessionContext(sessionCtx))
+          ? questionTools : []),
         ...(allowed.categories?.has('bots')
           ? withCindyGatedBotToolDescriptions(botTools, cindyAvailableForSession(sessionCtx)) : []),
       ] };

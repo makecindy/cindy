@@ -54,3 +54,37 @@ describe.each(['claude-code', 'pi'] as const)('%s async question MCP', (agentKin
     } finally { await client.close(); await server.close(); }
   });
 });
+
+// The HTTP helper factory can serve different harnesses; its captured kind is
+// not the authority for a tools/list or tools/call request.
+it.each(['codex', 'claude-code'] as const)('keeps one async entry per harness with a %s factory', async (factoryKind) => {
+  let context: LiziMcpSessionContext = {
+    agentKind: 'claude-code', workingDir: '/repo', sessionId: 'task', sessionInstanceId: 'instance',
+    mcpCallerKind: 'root', mcpCallerAttested: true,
+  };
+  const ask = vi.fn(() => 'question');
+  const server = createXdtHelperMcpServer({ askUserQuestionAsync: ask }, {
+    agentKind: factoryKind, workingDir: '', getSessionContext: () => context,
+  });
+  const client = new Client({ name: 'shared-question-test', version: '1' });
+  const [ct, st] = InMemoryTransport.createLinkedPair();
+  await Promise.all([server.connect(st), client.connect(ct)]);
+  const questions = [{ question: 'Which scope?' }];
+  try {
+    const claudePrefix = await client.listTools();
+    for (const agentKind of ['codex', 'pi', 'unknown', 'claude-code', 'codex']) {
+      context = { ...context, agentKind };
+      const supported = agentKind === 'claude-code' || agentKind === 'pi';
+      expect((await client.listTools()).tools.some((t) => t.name === 'ask_user_question_async')).toBe(supported);
+      ask.mockClear();
+      // A cached tool name must not open a second card through direct invocation.
+      const result = await client.callTool({ name: 'ask_user_question_async', arguments: { questions } });
+      expect(result.isError === true).toBe(!supported);
+      expect(ask).toHaveBeenCalledTimes(supported ? 1 : 0);
+      const alias = await client.callTool({ name: 'call_tool', arguments: { name: 'ask_user_question_async', args: { questions } } });
+      expect(alias.isError).toBe(true);
+    }
+    context = { ...context, agentKind: 'claude-code' };
+    expect(await client.listTools()).toEqual(claudePrefix);
+  } finally { await client.close(); await server.close(); }
+});
