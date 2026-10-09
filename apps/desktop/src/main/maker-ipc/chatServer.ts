@@ -59,7 +59,7 @@ interface ServerPlan {
 }
 interface Running {
   execution: Execution; sessionId: string; clientId: string; accepted: boolean; started: number;
-  settlement?: { terminal: BotGroupLaneTerminal; payload?: Record<string, unknown>; retryAt: number };
+  settlement?: { terminal: BotGroupLaneTerminal; payload?: Record<string, unknown>; retryAt: number; keepLease?: boolean };
   delivery?: Promise<void>;
   plan?: ServerPlan;
   workspace?: { workDir: string; branch: string | null; ownerSessionId: string | null };
@@ -72,6 +72,10 @@ class ChatResponseError extends Error {
 }
 const CHAT_AUTH_RETRY_MS = 60_000;
 const CHAT_REFRESHABLE_ERROR_CODES = new Set(['TOKEN_EXPIRED', 'INVALID_TOKEN', 'AUTH_REQUIRED']);
+const recoverableAuth = (error: ChatResponseError) => error.status === 401
+  && (CHAT_REFRESHABLE_ERROR_CODES.has(error.message) || error.message === 'INVALID_CHAT_RESPONSE');
+const retryableResponse = (error: ChatResponseError) => recoverableAuth(error)
+  || error.status >= 500 || [408, 429].includes(error.status);
 const id = z.string().uuid();
 const groupInput = z.object({ name: z.string().trim().min(1).max(40), botIds: z.array(z.string().min(1)).max(6) });
 const failure = (message: string): BotGroupFailure => ({ ok: false, errorCode: 'HOST_NOT_READY', message });
@@ -586,10 +590,10 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         // Keep the result during transport/temporary service failures. A definitive
         // rejection (including revoked/expired leases) must never rerun the Agent
         // or post the private result under a new execution identity.
-        const recoveringAuth = error instanceof ChatResponseError && error.status === 401
-          && (CHAT_REFRESHABLE_ERROR_CODES.has(error.message) || error.message === 'INVALID_CHAT_RESPONSE');
-        if (recoveringAuth || !(error instanceof ChatResponseError) || error.status >= 500 || [408, 429].includes(error.status)) {
+        const recoveringAuth = error instanceof ChatResponseError && recoverableAuth(error);
+        if (!(error instanceof ChatResponseError) || retryableResponse(error)) {
           const delayed = recoveringAuth || (error instanceof ChatResponseError && error.status === 429);
+          pending.keepLease = delayed;
           pending.retryAt = delayed
             ? Math.max(Date.now() + CHAT_AUTH_RETRY_MS, error instanceof ChatResponseError ? error.retryAt ?? 0 : 0)
             : Date.now() + 15000;
@@ -755,9 +759,21 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   const checking = new Set<Running>();
   async function checkLease(run: Running) {
     if (run.settlement) {
-      // Keep the lease alive while preparing or waiting to deliver the immutable
-      // completion. The server still fences revoked/expired executions; never rerun the Agent.
-      await updateExecution(run, 'heartbeat').catch(() => undefined);
+      // Auth/rate-limit waits need lease renewal; ordinary lost-response retries
+      // preserve the existing receipt lookup without an intervening heartbeat.
+      if (!run.settlement.payload || run.settlement.keepLease) {
+        try { await updateExecution(run, 'heartbeat'); }
+        catch (error) {
+          if (error instanceof ChatResponseError && !retryableResponse(error)) {
+            if (running.get(run.execution.bot_id) === run) {
+              run.releaseToolAuthority?.();
+              running.delete(run.execution.bot_id);
+              changed(run.execution.conversation_id);
+            }
+            return;
+          }
+        }
+      }
       await deliverSettlement(run); return;
     }
     if (checking.has(run) || running.get(run.execution.bot_id) !== run) return;

@@ -354,6 +354,76 @@ describe('Chat Server result delivery and refresh', () => {
     expect(deps.dispatch).toHaveBeenCalledOnce();
   });
 
+  it.each([
+    { status: 401, code: 'ACCOUNT_UNAVAILABLE' },
+    { status: 403, code: 'ROLE_REQUIRED' },
+    { status: 404, code: 'EXECUTION_NOT_FOUND' },
+    { status: 409, code: 'STALE_EXECUTOR' },
+    { status: 410, code: 'EXECUTION_EXPIRED' },
+  ])('releases an auth-delayed completion immediately after a definitive heartbeat $code', async ({ status, code }) => {
+    let rejectHeartbeat = false;
+    let replacementQueued = false;
+    const nextExecution = { ...execution, id: '40000000-0000-4000-8000-000000000002', epoch: 2 };
+    fixture.handle.mockImplementation((route, _method, body) => {
+      if (body?.action === 'complete') return { status: 429, headers: { 'retry-after': '3600' }, body: { error: { code: 'RATE_LIMITED' } } };
+      if (body?.action === 'heartbeat' && rejectHeartbeat) {
+        rejectHeartbeat = false;
+        return { status, body: { error: { code } } };
+      }
+      if (route === '/executions/claim' && replacementQueued) {
+        replacementQueued = false;
+        return { body: { execution: nextExecution } };
+      }
+      return response(route);
+    });
+    await start();
+    await service.settleLaneTurn(terminal);
+    rejectHeartbeat = true;
+    replacementQueued = true;
+    await vi.advanceTimersByTimeAsync(18_000);
+    expect(deps.dispatch).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(deps.dispatch).mock.calls[1][0].clientId).toContain(nextExecution.id);
+    expect(deliveries()).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(3_600_000);
+    expect(deliveries()).toHaveLength(1);
+  });
+
+  it.each([401, 503])('retains the completed reply when the waiting heartbeat has a temporary %s response', async status => {
+    let recovering = false;
+    fixture.refresh.mockResolvedValue(false);
+    fixture.handle.mockImplementation((route, _method, body) => {
+      if (body?.action === 'complete' && !recovering) return { status: 401, body: { error: { code: 'INVALID_TOKEN' } } };
+      if (body?.action === 'heartbeat' && !recovering && Date.now() > new Date('2026-10-03T00:00:02Z').getTime())
+        return { status, body: { error: { code: status === 401 ? 'INVALID_TOKEN' : 'SERVICE_UNAVAILABLE' } } };
+      return response(route);
+    });
+    await start();
+    await service.settleLaneTurn(terminal);
+    await vi.advanceTimersByTimeAsync(58_000);
+    recovering = true;
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(deliveries()).toHaveLength(2);
+    expect(deliveries()[1][2]).toEqual(deliveries()[0][2]);
+    expect(deps.dispatch).toHaveBeenCalledOnce();
+  });
+
+  it('keeps the original completion receipt lookup after a lost committed response', async () => {
+    let committed: unknown;
+    fixture.handle.mockImplementation((route, _method, body) => {
+      if (body?.action === 'heartbeat' && committed) return { status: 409, body: { error: { code: 'STALE_EXECUTOR' } } };
+      if (body?.action === 'complete') {
+        if (!committed) { committed = body; throw new Error('ECONNRESET'); }
+        expect(body).toEqual(committed);
+      }
+      return response(route);
+    });
+    await start();
+    await service.settleLaneTurn(terminal);
+    await vi.advanceTimersByTimeAsync(16_000);
+    expect(deliveries()).toHaveLength(2);
+    expect(deps.dispatch).toHaveBeenCalledOnce();
+  });
+
   it.each([401, 429])('preserves a pending completion after an HTML %s and observes the delivery wait', async status => {
     let recovering = false;
     fixture.handle.mockImplementation((route, _method, body) => body?.action === 'complete' && !recovering
