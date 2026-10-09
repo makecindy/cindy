@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-const fixture = vi.hoisted(() => ({ download: vi.fn(), packaged: true, urls: [] as string[], wsUrls: [] as string[], exists: vi.fn(), config: '', handle: vi.fn(), profiles: [] as unknown[], sockets: [] as import('ws').WebSocket[] }));
-vi.mock('../../authManager.js', () => ({ getAccessToken: () => 'isolated-test-token', refresh: vi.fn(async () => true) }));
+const fixture = vi.hoisted(() => ({ download: vi.fn(), packaged: true, urls: [] as string[], wsUrls: [] as string[], exists: vi.fn(), config: '', handle: vi.fn(), profiles: [] as unknown[], sockets: [] as import('ws').WebSocket[], token: 'isolated-test-token', refresh: vi.fn(async () => true), requests: [] as Array<{ url: string; token: string }> }));
+vi.mock('../../authManager.js', () => ({ getAccessToken: () => fixture.token, refresh: fixture.refresh }));
 vi.mock('../../clientEndpointsService.js', () => ({ getClientEndpoint: () => 'https://chat.cindy.app' }));
 vi.mock('../chatServerMedia.js', () => ({ createChatMedia: () => ({ upload: vi.fn(async () => []), download: fixture.download }) }));
 vi.mock('../chatServerWorkspaces.js', () => ({ chatServerWorkspaces: () => ({ read: () => null, save: vi.fn() }) }));
@@ -14,15 +14,16 @@ vi.mock('../../localDb/client/current.js', () => ({ getDbClient: () => ({ drizzl
 } }) }));
 vi.mock('node:http', async () => {
   const { EventEmitter } = await import('node:events');
-  return { request: (url: string, options: { method: string }, callback: (response: unknown) => void) => {
+  return { request: (url: string, options: { method: string; headers: { Authorization: string } }, callback: (response: unknown) => void) => {
     fixture.urls.push(String(url));
+    fixture.requests.push({ url: String(url), token: options.headers.Authorization });
     const req = Object.assign(new EventEmitter(), {
       end: (data?: string) => {
         void Promise.resolve().then(() => fixture.handle(new URL(url).pathname.slice(3) + new URL(url).search, options.method, data ? JSON.parse(data) : undefined))
           .then(result => {
-            const response = Object.assign(new EventEmitter(), { statusCode: result?.status ?? 200 });
+            const response = Object.assign(new EventEmitter(), { statusCode: result?.status ?? 200, headers: result?.headers ?? {} });
             callback(response);
-            response.emit('data', Buffer.from(JSON.stringify(result?.body ?? {})));
+            response.emit('data', Buffer.from(result?.rawBody ?? JSON.stringify(result?.body ?? {})));
             response.emit('end');
           }, error => req.emit('error', error));
       },
@@ -345,5 +346,159 @@ describe('Chat Server result delivery and refresh', () => {
     if (result.ok) expect(result.groups.map(g => g.id)).toEqual([roomId]);
     expect(fixture.handle).toHaveBeenCalledWith(`/conversations?limit=100&after=${firstPage[99].id}`, 'GET', undefined);
     expect(fixture.handle.mock.calls.some(([route]) => route.includes('/messages?'))).toBe(false);
+  });
+});
+
+describe('Chat authentication recovery and polling backoff', () => {
+  let service: BotGroupChatService;
+  const denied = (code = 'INVALID_TOKEN') => ({ status: 401, body: { error: { code } } });
+  const healthy = (route: string) => ({ body: route === '/me' ? { actor: { id: 'self' } } : [] });
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-10-09T00:00:00Z'));
+    fixture.packaged = true;
+    fixture.profiles = [];
+    fixture.requests = [];
+    fixture.token = 'isolated-test-token';
+    fixture.refresh.mockReset().mockResolvedValue(true);
+    fixture.handle.mockReset().mockImplementation(healthy);
+    service = withChatServer({ dispose: vi.fn(), listGroups: async () => ({ ok: true, groups: [] }) } as unknown as BotGroupChatService, {} as BotGroupChatServiceDeps);
+  });
+
+  afterEach(() => {
+    service.dispose();
+    fixture.token = 'isolated-test-token';
+    fixture.refresh.mockReset().mockResolvedValue(true);
+    vi.useRealTimers();
+  });
+
+  it.each(['TOKEN_EXPIRED', 'INVALID_TOKEN', 'AUTH_REQUIRED'])('refreshes %s once and replays with the current token', async code => {
+    fixture.handle.mockImplementation(route => fixture.token === 'isolated-test-token' ? denied(code) : healthy(route));
+    fixture.refresh.mockImplementation(async () => { fixture.token = 'renewed-test-token'; return true; });
+    expect(await service.chatServer!.refreshProfile()).toMatchObject({ ok: true });
+    expect(fixture.refresh).toHaveBeenCalledOnce();
+    expect(fixture.requests.map(r => r.token)).toEqual(['Bearer isolated-test-token', 'Bearer renewed-test-token']);
+  });
+
+  it.each([true, false])('bounds repeated foreground 401s when Auth refresh returns %s', async refreshed => {
+    fixture.handle.mockImplementation(() => denied());
+    let rotation = 0;
+    fixture.refresh.mockImplementation(async () => {
+      if (refreshed) fixture.token = `renewed-test-token-${++rotation}`;
+      return refreshed;
+    });
+    for (let i = 0; i < 10; i += 1) {
+      expect(await service.chatServer!.refreshProfile()).toMatchObject({ ok: false });
+    }
+    expect(fixture.refresh).toHaveBeenCalledOnce();
+    expect(fixture.requests).toHaveLength(refreshed ? 11 : 10);
+    await vi.advanceTimersByTimeAsync(58_000);
+    expect(fixture.refresh).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(2_000);
+    await service.chatServer!.refreshProfile();
+    expect(fixture.refresh).toHaveBeenCalledTimes(2);
+  });
+
+  it('shares one refresh across concurrent 401 responses', async () => {
+    let finish!: (value: boolean) => void;
+    fixture.refresh.mockImplementation(() => new Promise<boolean>(resolve => { finish = resolve; }));
+    fixture.handle.mockImplementation(route => fixture.token === 'isolated-test-token' ? denied('TOKEN_EXPIRED') : healthy(route));
+    const first = service.chatServer!.refreshProfile();
+    const second = service.chatServer!.refreshProfile();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fixture.refresh).toHaveBeenCalledOnce();
+    fixture.token = 'renewed-test-token';
+    finish(true);
+    expect(await Promise.all([first, second])).toEqual([{ ok: true }, { ok: true }]);
+    expect(fixture.refresh).toHaveBeenCalledOnce();
+  });
+
+  it('reuses a newer token for a late 401 without rotating again', async () => {
+    let finish!: (value: ReturnType<typeof denied>) => void;
+    fixture.handle.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    fixture.handle.mockImplementation(route => fixture.token === 'isolated-test-token' ? denied() : healthy(route));
+    fixture.refresh.mockImplementation(async () => { fixture.token = 'renewed-test-token'; return true; });
+    const first = service.chatServer!.refreshProfile();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(await service.chatServer!.refreshProfile()).toMatchObject({ ok: true });
+    finish(denied());
+    expect(await first).toMatchObject({ ok: true });
+    expect(fixture.refresh).toHaveBeenCalledOnce();
+  });
+
+  it.each(['ACCOUNT_UNAVAILABLE', 'SOME_OTHER_CODE', undefined])('does not refresh on a non-recoverable 401 code %s', async code => {
+    fixture.handle.mockImplementation(() => ({ status: 401, body: { error: { code } } }));
+    expect(await service.chatServer!.refreshProfile()).toMatchObject({ ok: false });
+    expect(fixture.refresh).not.toHaveBeenCalled();
+  });
+
+  it('pauses the two-second poll after persistent 401 and resumes after the wait', async () => {
+    fixture.handle.mockImplementation(() => denied());
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(fixture.requests).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(58_000);
+    expect(fixture.requests).toHaveLength(2);
+    fixture.handle.mockImplementation(healthy);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(fixture.requests.some(r => new URL(r.url).pathname === '/v1/actors')).toBe(true);
+    expect(fixture.refresh).toHaveBeenCalledOnce();
+  });
+
+  it.each([false, true])('honors a longer Retry-After on 429 (HTML=%s) without calling Auth refresh', async html => {
+    fixture.handle.mockImplementation(() => ({ status: 429, headers: { 'retry-after': '120' }, body: { error: { code: 'RATE_LIMITED' } }, ...(html ? { rawBody: '<html>rate limit fixture</html>' } : {}) }));
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(fixture.requests).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(118_000);
+    expect(fixture.requests).toHaveLength(1);
+    fixture.handle.mockImplementation(healthy);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(fixture.requests.some(r => new URL(r.url).pathname === '/v1/actors')).toBe(true);
+    expect(fixture.refresh).not.toHaveBeenCalled();
+  });
+
+  it('backs off temporary server errors and returns to normal polling on recovery', async () => {
+    fixture.handle.mockImplementation(() => ({ status: 503, body: { error: { code: 'JWKS_UNAVAILABLE' } } }));
+    await vi.advanceTimersByTimeAsync(18_000);
+    expect(fixture.requests).toHaveLength(4); // Requests at 2s, 4s, 8s and 16s.
+    fixture.handle.mockImplementation(healthy);
+    await vi.advanceTimersByTimeAsync(14_000);
+    const meCalls = () => fixture.requests.filter(r => new URL(r.url).pathname === '/v1/me').length;
+    expect(meCalls()).toBe(5);
+    await vi.advanceTimersByTimeAsync(6_000);
+    expect(meCalls()).toBe(6);
+    expect(fixture.refresh).not.toHaveBeenCalled();
+  });
+
+  it('does not refresh on an HTML challenge or leak its body through the error result', async () => {
+    fixture.handle.mockImplementation(() => ({ status: 401, rawBody: '<script>private-challenge-fixture</script>' }));
+    const result = await service.chatServer!.refreshProfile();
+    expect(result).toEqual({ ok: false, errorCode: 'INVALID_CHAT_RESPONSE' });
+    expect(fixture.refresh).not.toHaveBeenCalled();
+    expect(JSON.stringify(result)).not.toContain('private-challenge-fixture');
+  });
+
+  it('discards a late refresh after owner change and gives the new owner an independent recovery window', async () => {
+    service.dispose();
+    let epoch = 0;
+    const deps = {
+      captureOwnerScope: () => ({ epoch }),
+      isOwnerScopeCurrent: (scope: { epoch: number }) => scope.epoch === epoch,
+    } as unknown as BotGroupChatServiceDeps;
+    service = withChatServer({ dispose: vi.fn() } as unknown as BotGroupChatService, deps);
+    fixture.handle.mockImplementation(() => denied());
+    let finish!: (value: boolean) => void;
+    fixture.refresh.mockImplementation(() => new Promise<boolean>(resolve => { finish = resolve; }));
+    const oldRequest = service.chatServer!.refreshProfile();
+    await vi.advanceTimersByTimeAsync(0);
+    epoch += 1;
+    fixture.token = 'new-owner-test-token';
+    finish(true);
+    expect(await oldRequest).toMatchObject({ ok: false });
+    expect(fixture.requests).toHaveLength(1);
+    fixture.refresh.mockResolvedValue(true);
+    await service.chatServer!.refreshProfile();
+    expect(fixture.refresh).toHaveBeenCalledTimes(2);
+    expect(fixture.requests.slice(1).every(r => r.token === 'Bearer new-owner-test-token')).toBe(true);
   });
 });

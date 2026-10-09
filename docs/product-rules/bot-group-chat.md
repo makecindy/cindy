@@ -276,6 +276,13 @@ Chris 已明确扩展到多人各带伙伴，并选择「主人按群预先授�
 
 当前本地验收与正式切源边界见 [Chat Server 本地联调](../dev-rules/chat-server-local-test.md)。
 
+Desktop 群聊只对 `TOKEN_EXPIRED`、`INVALID_TOKEN`、`AUTH_REQUIRED` 的 401 尝试一次
+续期后重发，并发失败共用同一次续期；已有更新 token 时直接重发。持续 401 即使续期
+成功也至少等待 60 秒再尝试刷新，不能让两秒任务轮询反复轮换 Auth token。后台轮询
+在 401/429 后等待至少 60 秒，429 遵守更长的 `Retry-After`；服务暂时不可用时逐步
+退避到最多 60 秒，成功后恢复正常轮询。换账号后使用独立的恢复状态，旧请求不重发。
+回归见 `main/maker-ipc/__tests__/chatServer.test.ts`。
+
 ### Desktop 群邀请深链续接
 
 群邀请沿用创建接口生成的 `cindy://chat-invite/<token>`，由主进程校验并暂存目标。
