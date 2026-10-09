@@ -1,3 +1,4 @@
+import { isLiquidGlassAvailable } from "expo-glass-effect";
 import { ActionSheetIOS, Alert, Platform } from "react-native";
 import {
   iosBottomActionSheetAvailable,
@@ -20,13 +21,27 @@ export function usesSystemActionMenu(): boolean {
   return Platform.OS === "ios";
 }
 
+/**
+ * 原生底部 Sheet 的内容透明,靠系统 Liquid Glass 材质托底。旧设计(iOS 26 以前、旧 SDK
+ * 构建或兼容模式)下 Sheet 不画底色,菜单会和正文叠字,只能走 ActionSheetIOS。
+ */
+function nativeBottomSheetUsable(): boolean {
+  if (!iosBottomActionSheetAvailable) return false;
+  try {
+    return isLiquidGlassAvailable();
+  } catch {
+    return false;
+  }
+}
+
 function presentIosActionSheet(spec: IosActionSheetSpec): Promise<number> {
+  const useNativeSheet = nativeBottomSheetUsable();
   if (__DEV__) {
     console.log(
-      `[cindy-action-sheet] presenter=${iosBottomActionSheetAvailable ? "native-sheet" : "fallback-ActionSheetIOS"}`,
+      `[cindy-action-sheet] presenter=${useNativeSheet ? "native-sheet" : "fallback-ActionSheetIOS"}`,
     );
   }
-  const native = showIosBottomActionSheet({
+  const native = useNativeSheet && showIosBottomActionSheet({
     cancelButtonIndex: spec.cancelButtonIndex,
     options: spec.options,
     ...(spec.destructiveButtonIndex !== undefined
@@ -60,7 +75,7 @@ function presentIosActionSheet(spec: IosActionSheetSpec): Promise<number> {
 /**
  * 弹出系统动作菜单。只在 iOS 调用;Android 应渲染现有自绘 sheet。
  * 优先走系统底部 Sheet(UISheetPresentationController,抓手 + medium/large,可拖高度);
- * 当前包尚未编进原生模块时回退 ActionSheetIOS。
+ * 当前包尚未编进原生模块、或系统没有 Liquid Glass 材质时回退 ActionSheetIOS。
  * 从用户手势回调里调用,不要从 useEffect 里调,避免 Strict Mode 弹两次。
  */
 export async function showActionMenu<K extends string>(

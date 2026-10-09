@@ -3,6 +3,7 @@ import { showActionMenu } from "@/platform/chrome/showActionMenu";
 
 const native = vi.hoisted(() => ({
   os: "ios",
+  liquidGlass: true,
   show: vi.fn(),
   fallback: vi.fn(),
 }));
@@ -11,6 +12,9 @@ vi.mock("react-native", () => ({
   Platform: { get OS() { return native.os; } },
   ActionSheetIOS: { showActionSheetWithOptions: native.fallback },
   Alert: { alert: vi.fn() },
+}));
+vi.mock("expo-glass-effect", () => ({
+  isLiquidGlassAvailable: () => native.liquidGlass,
 }));
 vi.mock("xdt-ios-action-sheet", () => ({
   iosBottomActionSheetAvailable: true,
@@ -32,6 +36,7 @@ function deferred<T>() {
 
 beforeEach(() => {
   native.os = "ios";
+  native.liquidGlass = true;
   native.show.mockReset();
   native.fallback.mockReset();
 });
@@ -115,6 +120,20 @@ describe("iOS action menu presentation", () => {
     callbacks.at(-1)!(1);
     expect(await next).toEqual({ kind: "cancel" });
     expect(native.fallback).toHaveBeenCalledTimes(2);
+  });
+
+  it("uses ActionSheetIOS without Liquid Glass so the transparent native sheet never overlaps the message", async () => {
+    // #5645: the native sheet relies on the system glass material for its background.
+    native.liquidGlass = false;
+    native.fallback.mockImplementation((_options, callback) => { callback(0); });
+    expect(await showActionMenu(request)).toEqual({ kind: "action", key: "open" });
+    expect(native.show).not.toHaveBeenCalled();
+    expect(native.fallback).toHaveBeenCalledTimes(1);
+    expect(native.fallback.mock.calls[0][0]).toMatchObject({
+      options: ["快速预览", "取消"],
+      cancelButtonIndex: 1,
+      title: "preview.png",
+    });
   });
 
   it("leaves Android on its existing in-page menu path", async () => {
