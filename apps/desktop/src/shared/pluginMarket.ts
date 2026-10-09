@@ -15,6 +15,8 @@ export type PluginMarketItemSource = 'server' | 'git-market' | 'local-market';
 export interface PluginMarketItem {
   pluginId: string;
   ghostId: string;
+  /** Host-verified namespace. Missing is legacy wire; null is root. */
+  namespace?: string | null;
   name: string;
   description: string | null;
   author: string | null;

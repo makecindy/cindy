@@ -92,6 +92,35 @@ describe('PluginMarketApi', () => {
     });
   });
 
+  it('sends the client version on detail and download unchanged', async () => {
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce({
+        schemaVersion: 2,
+        plugin: {
+          ...summary(PLUGIN_A, 'alpha'),
+          currentRelease: {
+            ...summary(PLUGIN_A, 'alpha').currentRelease,
+            manifest: {
+              schemaVersion: 2, id: 'alpha', name: 'alpha', version: '1.0.0', kind: 'chip',
+              entry: 'index.js', slots: ['tool'], tools: [{ name: 'help', description: 'Help' }],
+            },
+          },
+        },
+      })
+      .mockResolvedValueOnce({
+        url: 'https://downloads.example.test/plugin.cindy',
+        expiresAt: '2099-01-01T00:00:00.000Z',
+        sha256: 'a'.repeat(64),
+        sizeBytes: 42,
+      });
+    const api = new PluginMarketApi(fetcher, () => '0.0.0-dev');
+    await api.detail(PLUGIN_A);
+    await api.download(PLUGIN_A, 'release-alpha');
+    expect(fetcher.mock.calls[0]?.[1]).toMatchObject({ headers: { 'x-cindy-version': '0.0.0-dev' } });
+    expect(fetcher.mock.calls[1]?.[1]).toMatchObject({ headers: { 'x-cindy-version': '0.0.0-dev' } });
+    expect(fetcher.mock.calls.map((call) => call[1]?.headers?.['x-cindy-version'])).toEqual(['0.0.0-dev', '0.0.0-dev']);
+  });
+
   it('deduplicates removals by pluginId across pages keeping the first-seen notice', async () => {
     const fetcher = pagedFetcher(
       {
@@ -203,6 +232,31 @@ describe('PluginMarketApi', () => {
       plugins: [{ id: PLUGIN_A }, { id: PLUGIN_B }],
       currentOrganization: { organizationId: 'org-acme', pluginPrefix: 'acme' },
     });
+  });
+
+  it('rejects a later page whose organization namespace conflicts with the first-page identity', async () => {
+    const fetcher = pagedFetcher(
+      {
+        plugins: [], nextCursor: PLUGIN_A,
+        currentOrganization: { organizationId: 'org-acme', orgSlug: 'acme', pluginPrefix: 'acme' },
+      },
+      {
+        plugins: [{ ...summary(PLUGIN_B, 'beta'), scope: 'organization',
+          organizationId: 'org-other', namespace: 'other' }],
+        nextCursor: null,
+      },
+    );
+    await expect(new PluginMarketApi(fetcher).listAll()).rejects.toThrow('namespace');
+  });
+
+  it('rejects conflicting organization facts across pages even with empty listings', async () => {
+    const fetcher = pagedFetcher(
+      { plugins: [], nextCursor: PLUGIN_A,
+        currentOrganization: { organizationId: 'org-acme', orgSlug: 'acme', pluginPrefix: 'acme' } },
+      { plugins: [], nextCursor: null,
+        currentOrganization: { organizationId: 'org-other', orgSlug: 'other', pluginPrefix: 'other' } },
+    );
+    await expect(new PluginMarketApi(fetcher).listAll()).rejects.toThrow('currentOrganization');
   });
 
   it('keeps a null currentOrganization as a personal-identity fact', async () => {
