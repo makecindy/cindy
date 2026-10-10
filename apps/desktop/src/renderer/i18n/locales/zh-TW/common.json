@@ -8257,6 +8257,12 @@
       "discardDescription": "重新讀取將放棄尚未儲存的設定。",
       "leaveDescription": "離開後會放棄尚未儲存的設定。"
     },
+    "unsavedChanges": {
+      "title": "尚有未儲存的修改",
+      "description": "有改動沒能儲存成功。離開後會捨棄這次對夥伴設定的修改。",
+      "discard": "放棄修改",
+      "continueEditing": "繼續編輯"
+    },
     "devicePicker": {
       "local": "本機",
       "title": "切換裝置",

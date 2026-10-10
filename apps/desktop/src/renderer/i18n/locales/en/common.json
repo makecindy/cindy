@@ -8277,6 +8277,12 @@
       "discardDescription": "Reloading will discard these unsaved settings.",
       "leaveDescription": "Leaving will discard these unsaved settings."
     },
+    "unsavedChanges": {
+      "title": "Unsaved Changes",
+      "description": "These changes could not be saved. Leaving will discard them.",
+      "discard": "Discard Changes",
+      "continueEditing": "Keep Editing"
+    },
     "devicePicker": {
       "local": "This Device",
       "title": "Switch Device",

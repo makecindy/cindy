@@ -49,6 +49,11 @@ export interface BotSettingsAutosaveController {
   flush: () => Promise<void>;
   /** 失败后重发。 */
   retry: () => Promise<void>;
+  /**
+   * 用户确认放弃这次草稿:取消待发计时,并把当前快照同步收回基线 ——
+   * 之后的 flush、卸载补写都不得再提交它。
+   */
+  discard: () => void;
   /** 是否有已改但未落库的内容。 */
   isDirty: () => boolean;
   /** 挂到文本框上:输入法组合中的拼音不是已完成的编辑,上屏后再进入防抖。 */
@@ -161,7 +166,14 @@ export function useBotSettingsAutosave(
     return autosave.retry();
   }, [autosave]);
 
+  const discard = useCallback(() => {
+    autosave.cancel();
+    const saved = baselineRef.current;
+    payloadRef.current = saved;
+    committablePayloadRef.current = saved;
+  }, [autosave]);
+
   const isDirty = useCallback(() => enabledRef.current && autosave.isDirty(), [autosave]);
 
-  return { status, onEdit, flush, retry, isDirty, composition };
+  return { status, onEdit, flush, retry, discard, isDirty, composition };
 }

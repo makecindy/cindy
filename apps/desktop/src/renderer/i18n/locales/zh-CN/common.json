@@ -8257,6 +8257,12 @@
       "discardDescription": "重新读取将放弃尚未保存的设置。",
       "leaveDescription": "离开后会放弃尚未保存的设置。"
     },
+    "unsavedChanges": {
+      "title": "尚有未保存的修改",
+      "description": "有改动没能保存成功。离开后会丢弃这次对伙伴设置的修改。",
+      "discard": "放弃修改",
+      "continueEditing": "继续编辑"
+    },
     "devicePicker": {
       "local": "本机",
       "title": "切换设备",

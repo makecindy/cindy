@@ -2,6 +2,7 @@ import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/input';
 import { shouldShowOpenPathError } from '../../../shared/openPathResult';
 import { ConnectProviderCard } from '@/components/onboarding/ConnectProviderCard';
+import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { useProviderOnboarding } from '@/hooks/useProviderOnboarding';
 import { useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { MainViewHistoryContext } from '@/contexts/MainViewHistoryContext';
@@ -108,6 +109,7 @@ export function BotSettings({
 }) {
   const { t } = useBotTranslation();
   const navigate = useNavigate();
+  const { confirm } = useConfirmDialog();
   const [name, setName] = useState(bot.name);
   const [description, setDescription] = useState(bot.description);
   const profiles = useBotProfiles();
@@ -231,13 +233,53 @@ export function BotSettings({
     if (!((await memoryLeaveRef.current?.()) ?? true)) return false;
     return (await routineLeaveRef.current?.()) ?? true;
   }, [autosave.flush, autosave.isDirty]);
+
+  /** 用户确认放弃这次草稿:界面收回已保存值,卸载补写不再提交它。 */
+  const discardDraft = useCallback(() => {
+    const saved = savedSettingsRef.current;
+    setName(saved.name);
+    setDescription(saved.description);
+    setIdentitySource(saved.identitySource);
+    setUserContextSource(saved.userContextSource);
+    setAvatar(saved.avatar);
+    setAvatarColor(saved.avatarColor);
+    setSelectedSkills(saved.skills);
+    setCapabilities(saved.capabilities);
+    autosave.discard();
+  }, [autosave.discard]);
+
+  /**
+   * 关闭 / 返回这类真正离开抽屉的路径:保存没能落库时不再静默拒绝,
+   * 给用户一个明确的「放弃修改」出口 —— 宿主拒绝这次写入时草稿会一直判脏,
+   * 只靠重试的话抽屉就成了关不掉的全屏壳。
+   */
+  const leaveForClose = useCallback(async () => {
+    if (avatarInFlight.current) return false;
+    // 冲刷本身失败也按「没保存成功」处理:这条路径不允许把用户关在抽屉里。
+    await autosave.flush().catch(() => undefined);
+    if (autosave.isDirty()) {
+      const discard = await confirm({
+        presentation: 'standard',
+        title: t('bots.unsavedChanges.title'),
+        description: t('bots.unsavedChanges.description'),
+        confirmText: t('bots.unsavedChanges.discard'),
+        cancelText: t('bots.unsavedChanges.continueEditing'),
+        confirmVariant: 'destructive',
+      });
+      if (!discard) return false;
+      discardDraft();
+    }
+    if (!((await memoryLeaveRef.current?.()) ?? true)) return false;
+    return (await routineLeaveRef.current?.()) ?? true;
+  }, [autosave.flush, autosave.isDirty, confirm, discardDraft, t]);
+
   useEffect(() => {
     if (!beforeCloseRef) return;
-    beforeCloseRef.current = canLeave;
+    beforeCloseRef.current = leaveForClose;
     return () => {
       beforeCloseRef.current = null;
     };
-  }, [beforeCloseRef, canLeave]);
+  }, [beforeCloseRef, leaveForClose]);
   // Opening a page unmounts the row that had focus; move it to the page's back
   // button, and back to the originating row on return.
   const pageBackButtonRef = useRef<HTMLButtonElement>(null);
@@ -318,7 +360,7 @@ export function BotSettings({
     autosave.onEdit('instant');
   };
   const handleBack = () => {
-    void canLeave().then((allowed) => {
+    void leaveForClose().then((allowed) => {
       if (allowed) onBack();
     });
   };
@@ -626,7 +668,7 @@ export function BotSettings({
           <div>
             <BotCapabilitySettings
               onConfigure={(kind, id) => {
-                void canLeave().then(ok => {
+                void leaveForClose().then(ok => {
                   if (!ok) return;
                   const toolSettings: Record<string, string> = {
                     browser: 'computer-use', computer: 'computer-use', android: 'computer-use',
@@ -662,7 +704,7 @@ export function BotSettings({
             bot={bot}
             mode="history"
             onOpenSession={(...args) => {
-              void canLeave().then((ok) => {
+              void leaveForClose().then((ok) => {
                 if (ok) onOpenSession(...args);
               });
             }}

@@ -8257,6 +8257,12 @@
       "discardDescription": "다시 불러오면 저장하지 않은 설정이 삭제됩니다.",
       "leaveDescription": "나가면 저장하지 않은 설정이 삭제됩니다."
     },
+    "unsavedChanges": {
+      "title": "저장하지 않은 변경 사항",
+      "description": "변경 사항을 저장하지 못했습니다. 나가면 이번 변경 사항이 삭제됩니다.",
+      "discard": "변경 사항 버리기",
+      "continueEditing": "계속 편집"
+    },
     "devicePicker": {
       "local": "이 기기",
       "title": "기기 전환",

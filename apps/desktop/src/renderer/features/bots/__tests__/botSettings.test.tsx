@@ -24,6 +24,7 @@ vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: translate }) }));
 const mocks = vi.hoisted(() => {
   const sessionGet = vi.fn();
   return {
+  confirm: vi.fn(),
   navigate: vi.fn(),
   onboarding: false,
   readSession: sessionGet,
@@ -55,6 +56,10 @@ const mocks = vi.hoisted(() => {
 });
 
 vi.mock('@/lib/sessionService', () => ({ get: mocks.readSession }));
+
+vi.mock('@/components/ui/confirm-dialog-provider', () => ({
+  useConfirmDialog: () => ({ confirm: mocks.confirm }),
+}));
 
 vi.mock('react-router-dom', async (importOriginal) => {
   const actual = await importOriginal<typeof import('react-router-dom')>();
@@ -199,6 +204,7 @@ function renderSettings(overrides: Partial<BotProfile> = {}, initialSearch = 'se
 }
 
 beforeEach(() => {
+  mocks.confirm.mockReset().mockResolvedValue(true);
   mocks.navigate.mockReset();
   mocks.onboarding = false;
   mocks.readSession.mockReset();
@@ -508,9 +514,48 @@ describe('Bot settings profile consolidation', () => {
     fireEvent.click(screen.getByRole('button', { name: 'bots.settingsBack' }));
     await screen.findByRole('button', { name: 'bots.autosave.retry' });
     expect((screen.getByRole('textbox', { name: 'bots.nameLabel' }) as HTMLInputElement).value).toBe('Keep this draft');
+    // 关闭前先征求一句：保存没成功，是放弃还是继续编辑。
+    mocks.confirm.mockResolvedValueOnce(false);
     let allowed = true;
     await act(async () => { allowed = await beforeCloseRef.current!(); });
     expect(allowed).toBe(false);
+    expect(mocks.confirm).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        title: 'bots.unsavedChanges.title',
+        confirmText: 'bots.unsavedChanges.discard',
+        cancelText: 'bots.unsavedChanges.continueEditing',
+      }),
+    );
+  });
+
+  it('leaves the drawer after the user confirms discarding a draft that could not be saved', async () => {
+    mocks.updateBotProfile.mockRejectedValue(new Error('offline'));
+    const beforeCloseRef = { current: null as (() => Promise<boolean>) | null };
+    const view = render(
+      <BotSettings bot={bot()} onBack={vi.fn()} onOpenSession={vi.fn()} beforeCloseRef={beforeCloseRef} />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'bots.profile.title' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'bots.nameLabel' }), { target: { value: 'Discard me' } });
+    fireEvent.blur(screen.getByRole('textbox', { name: 'bots.nameLabel' }));
+    await screen.findByRole('button', { name: 'bots.autosave.retry' });
+    let allowed = false;
+    await act(async () => { allowed = await beforeCloseRef.current!(); });
+    expect(allowed).toBe(true);
+    // 放弃后界面回到已保存值，卸载补写不得再把这份草稿发出去。
+    expect((screen.getByRole('textbox', { name: 'bots.nameLabel' }) as HTMLInputElement).value).toBe('PR steward');
+    const writes = mocks.updateBotProfile.mock.calls.length;
+    view.unmount();
+    await act(async () => {});
+    expect(mocks.updateBotProfile).toHaveBeenCalledTimes(writes);
+  });
+
+  it('leaves without asking when the draft is saved', async () => {
+    const beforeCloseRef = { current: null as (() => Promise<boolean>) | null };
+    render(<BotSettings bot={bot()} onBack={vi.fn()} onOpenSession={vi.fn()} beforeCloseRef={beforeCloseRef} />);
+    let allowed = false;
+    await act(async () => { allowed = await beforeCloseRef.current!(); });
+    expect(allowed).toBe(true);
+    expect(mocks.confirm).not.toHaveBeenCalled();
   });
 
   it('does not duplicate the chat action inside the settings panel', () => {

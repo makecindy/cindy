@@ -8257,6 +8257,12 @@
       "discardDescription": "再読み込みすると、未保存の設定が破棄されます。",
       "leaveDescription": "移動すると、未保存の設定が破棄されます。"
     },
+    "unsavedChanges": {
+      "title": "未保存の変更があります",
+      "description": "変更を保存できませんでした。移動すると、今回の変更は破棄されます。",
+      "discard": "変更を破棄",
+      "continueEditing": "編集を続ける"
+    },
     "devicePicker": {
       "local": "この端末",
       "title": "端末を切り替え",
