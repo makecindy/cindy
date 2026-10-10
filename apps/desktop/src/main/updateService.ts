@@ -174,6 +174,8 @@ const STARTUP_MANIFEST_TIMEOUT_MS = 8_000;
 
 let currentStatus: UpdateStatus = 'idle';
 let readyVersion: string | undefined;
+/** Version of the patch currently being downloaded (downloading / superseding only). */
+let downloadingVersion: string | undefined;
 let readyFilePath: string | undefined;
 /** 当前 staged 补丁对应的渠道代际。延迟清理用它区分「同路径上的新旧包」。 */
 let readyChannelEpoch: number | undefined;
@@ -244,6 +246,7 @@ function broadcastChannelSettings(): void {
 
 function setStatus(status: UpdateStatus, extra?: Partial<UpdateStatusPayload>): void {
   currentStatus = status;
+  if (status !== 'downloading' && status !== 'superseding') downloadingVersion = undefined;
   lastErrorCode = extra?.errorCode;
   broadcastStatus({ status, ...extra });
   if (status === 'ready' && !startupUpdateCheckInProgress && !extra?.errorCode) {
@@ -1221,6 +1224,7 @@ async function doCheckForUpdate(manifestOverride?: Manifest | null): Promise<Che
 
   // wasReady 路径下,旧的 a.zip 必须保留到 b 通过 SHA 校验之后才能删,否则 b 下载失败
   // 时用户连旧的 a 都装不上了。非 wasReady 路径保持原行为(下载前清理腾空间)。
+  downloadingVersion = latestVersion;
   if (!wasReady) {
     cleanOldFiles(fileName);
     setStatus('downloading', { version: latestVersion, progress: 0 });
@@ -2135,14 +2139,8 @@ export async function checkAppUpdateForAgent(): Promise<{
   if (unsupported) return { status: 'unsupported', currentVersion, reason: unsupported };
   if (currentStatus === 'downloading' || currentStatus === 'superseding') {
     // `readyVersion` is unset during a first download and still names the old
-    // patch while superseding; read the version being downloaded from the
-    // manifest (read-only) so a confirmation is always bound to a concrete version.
-    const manifest = await fetchManifest();
-    const downloading = manifest
-      && compareAppUpdateVersions(manifest.app?.version, currentVersion) === 'newer'
-      && resolveUpdateAsset(manifest)
-      ? manifest.app.version : undefined;
-    return { status: 'downloading', currentVersion, targetVersion: downloading };
+    // patch while superseding; report the version actually being downloaded.
+    return { status: 'downloading', currentVersion, targetVersion: downloadingVersion };
   }
   if (currentStatus === 'ready' && readyVersion) {
     return { status: 'ready', currentVersion, targetVersion: readyVersion };

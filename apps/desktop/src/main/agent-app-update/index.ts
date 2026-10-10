@@ -160,8 +160,16 @@ function getService(): AgentAppUpdateService {
           return null;
         }
       },
-      clear: (owner) => {
+      clear: (owner, requestId) => {
         const file = markerPathOf(owner);
+        let current: AgentAppUpdateMarker | null = null;
+        try {
+          current = parseMarker(readAtomicFileSync(file));
+        } catch {
+          current = null;
+        }
+        // A newer install's marker is not ours to remove.
+        if (current && current.requestId !== requestId) return;
         for (const target of [file, `${file}.bak`]) {
           try {
             fs.rmSync(target, { force: true });

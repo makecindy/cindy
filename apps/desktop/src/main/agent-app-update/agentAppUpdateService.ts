@@ -116,7 +116,8 @@ export interface AgentAppUpdateDeps {
   marker: {
     write(owner: AgentAppUpdateOwner, marker: AgentAppUpdateMarker): void;
     read(owner: AgentAppUpdateOwner): AgentAppUpdateMarker | null;
-    clear(owner: AgentAppUpdateOwner): void;
+    /** Removes the marker only if it still belongs to `requestId` (a newer install keeps its own). */
+    clear(owner: AgentAppUpdateOwner, requestId: string): void;
   };
   /**
    * Persist a visible host notice in the owner's task (idempotent per clientId).
@@ -275,7 +276,7 @@ export function createAgentAppUpdateService(deps: AgentAppUpdateDeps) {
       });
       return;
     }
-    deps.marker.clear(owner);
+    deps.marker.clear(owner, marker.requestId);
     deps.logger?.info?.('agent app update result delivered', {
       failed: Boolean(marker.failure),
       outcome,
@@ -301,6 +302,18 @@ export function createAgentAppUpdateService(deps: AgentAppUpdateDeps) {
       deps.logger?.warn?.('agent app update failure marker write failed', { error: String(error) });
     }
     await deliver(owner, failed);
+  };
+
+  /** Deliver the owner's recorded result if it is reportable now. */
+  const deliverPending = async (owner: AgentAppUpdateOwner) => {
+    const marker = deps.marker.read(owner);
+    // Without a recorded failure, a same-process marker means no restart yet.
+    if (!marker || (!marker.failure && marker.pid === deps.pid)) return;
+    if (deps.now() - marker.requestedAt > MARKER_MAX_AGE_MS) {
+      deps.marker.clear(owner, marker.requestId);
+      return;
+    }
+    await deliver(owner, marker);
   };
 
   const runInstall = async (
@@ -371,6 +384,18 @@ export function createAgentAppUpdateService(deps: AgentAppUpdateDeps) {
       flow = { kind: 'confirming' };
       let started = false;
       try {
+        // A previous result not yet written back must not be overwritten by this install.
+        const currentOwner = deps.captureOwner();
+        if (currentOwner) {
+          await deliverPending(currentOwner);
+          if (deps.marker.read(currentOwner)) {
+            return {
+              ok: false,
+              errorCode: 'PREVIOUS_RESULT_PENDING',
+              message: '上一次更新的结果还没写回任务，暂不发起新的更新；请稍后再试。',
+            };
+          }
+        }
         const check = await deps.check();
         if (!UPDATABLE_STATUSES.has(check.status)) return { ...check };
         // Every confirmation names a concrete version; the updater installs only that one.
@@ -465,15 +490,7 @@ export function createAgentAppUpdateService(deps: AgentAppUpdateDeps) {
      */
     async deliverPendingResult(): Promise<void> {
       const owner = deps.captureOwner();
-      if (!owner) return;
-      const marker = deps.marker.read(owner);
-      // Without a recorded failure, a same-process marker means no restart yet.
-      if (!marker || (!marker.failure && marker.pid === deps.pid)) return;
-      if (deps.now() - marker.requestedAt > MARKER_MAX_AGE_MS) {
-        deps.marker.clear(owner);
-        return;
-      }
-      await deliver(owner, marker);
+      if (owner) await deliverPending(owner);
     },
   };
 }

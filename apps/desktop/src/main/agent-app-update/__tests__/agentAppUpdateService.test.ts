@@ -53,8 +53,8 @@ function setup(overrides: Partial<AgentAppUpdateDeps> = {}) {
         marker = value;
       }),
       read: () => marker,
-      clear: vi.fn(() => {
-        marker = null;
+      clear: vi.fn((_owner, requestId: string) => {
+        if (marker?.requestId === requestId) marker = null;
       }),
     },
     notify: vi.fn(async () => 'written' as const),
@@ -351,6 +351,51 @@ describe('Agent app update install', () => {
     await expect(service.install(caller)).resolves.toMatchObject({ status: 'target_unknown' });
     expect(deps.requestHostPermission).not.toHaveBeenCalled();
     expect(deps.apply).not.toHaveBeenCalled();
+  });
+
+  it('delivers a pending earlier result before starting, and never overwrites one it cannot deliver', async () => {
+    const earlier = {
+      requestId: 'earlier',
+      sessionId: 'task-0',
+      fromVersion: '0.1.80',
+      targetVersion: '0.1.85',
+      requestedAt: 900,
+      pid: 100,
+      failure: { errorCode: 'download_failed' },
+    };
+    const notify = vi
+      .fn<AgentAppUpdateDeps['notify']>()
+      .mockRejectedValueOnce(new Error('database busy'))
+      .mockResolvedValue('written');
+    const harness = setup({ notify });
+    harness.setMarker(earlier);
+    await expect(harness.service.install(caller)).resolves.toMatchObject({
+      ok: false,
+      errorCode: 'PREVIOUS_RESULT_PENDING',
+    });
+    expect(harness.deps.requestHostPermission).not.toHaveBeenCalled();
+    expect(harness.getMarker()).toMatchObject({ requestId: 'earlier' });
+    // Next attempt: the earlier result is written first, then the new install proceeds.
+    await expect(harness.service.install(caller)).resolves.toMatchObject({ status: 'started' });
+    expect(notify.mock.calls[1]![1]).toBe('task-0');
+    expect(harness.deps.marker.write).toHaveBeenLastCalledWith(
+      ownerA,
+      expect.objectContaining({ sessionId: 'task-1' }),
+    );
+  });
+
+  it('clears only the marker of the request it delivered', async () => {
+    const harness = setup({
+      apply: vi.fn(async () => ({
+        status: 'failed' as const,
+        reason: 'x',
+        errorCode: 'not_ready',
+      })),
+    });
+    await harness.service.install(caller);
+    await flush();
+    const written = vi.mocked(harness.deps.marker.write).mock.calls.at(-1)![1];
+    expect(harness.deps.marker.clear).toHaveBeenCalledWith(ownerA, written.requestId);
   });
 
   it('mentions the Linux password prompt only on Linux', async () => {

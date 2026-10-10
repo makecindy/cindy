@@ -495,7 +495,7 @@ describe('agent-facing managed app update check', () => {
       }
     });
 
-    it('reports the version being downloaded instead of an unknown target', async () => {
+    it('reports the version actually being downloaded, not the latest manifest', async () => {
       let finishDownload!: () => void;
       download.mockImplementation(({ targetPath }: { targetPath: string }) => new Promise((resolve) => {
         finishDownload = () => {
@@ -508,6 +508,8 @@ describe('agent-facing managed app update check', () => {
       try {
         const staging = service.checkForUpdate();
         await vi.waitFor(() => { expect(download).toHaveBeenCalledOnce(); });
+        // The channel moves on mid-download; the in-flight download is still 0.0.65.
+        fetchManifest.mockResolvedValue(updateManifest('0.0.66'));
         await expect(service.checkAppUpdateForAgent()).resolves.toMatchObject({
           status: 'downloading', targetVersion: '0.0.65',
         });
