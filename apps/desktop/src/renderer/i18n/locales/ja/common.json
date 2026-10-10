@@ -11465,7 +11465,11 @@
       "untitled": "無題のセッション",
       "moreActions": "その他の操作",
       "agentDevice": "Agent は {{device}} で実行中",
-      "agentDeviceOffline": "Agent は {{device}} で実行中ですが、そのパソコンはオフラインです。接続されると続行します"
+      "agentDeviceOffline": "Agent は {{device}} で実行中ですが、そのパソコンはオフラインです。接続されると続行します",
+      "orcaRemoteLead": "{{device}} からの協同",
+      "orcaRemoteLeadReleased": "協同は終了しました · {{device}} から",
+      "orcaRemoteLeadUnknownDevice": "別のパソコン",
+      "orcaRemoteLeadTip": "{{device}} の「{{lead}}」の Worker です。タスク、フォルダー、コマンドはこのパソコンで実行されます。ここで送ったメッセージは Lead に報告されません。"
     },
     "gitContext": {
       "detached": "Detached HEAD",
@@ -13528,7 +13532,25 @@
       "optional": "（任意）",
       "initialTaskPlaceholder": "この Worker に渡す任意の最初のタスク",
       "enableCollabTitle": "コラボレーションを開始",
-      "enableCollabSubmit": "コラボレーションを開始"
+      "enableCollabSubmit": "コラボレーションを開始",
+      "executionDeviceLabel": "実行デバイス",
+      "thisComputer": "このデバイス",
+      "deviceOnline": "オンライン",
+      "deviceNeedsUpdate": "要アップデート",
+      "executionDeviceHint": "同じアカウントで、オンラインかつリモート操作が有効なコンピューターのみ表示します。",
+      "executionDeviceRemoteHint": "Worker のタスク、フォルダー、コマンドはすべて {{device}} 上にあります。",
+      "remoteDirLabel": "{{device}} 上の作業フォルダー",
+      "remoteDirChat": "チャット",
+      "remoteDirPath": "フォルダーを指定",
+      "remoteDirChatHint": "{{device}} 上でプロジェクトに紐づけないチャットのセッションを作成します。",
+      "remoteDirPathHint": "{{device}} 上で確認します。存在しない場合はエラーになり、このコンピューターのフォルダーに置き換えることはありません。",
+      "remoteDirInvalid": "{{device}} 上の絶対パスを入力してください。",
+      "errors": {
+        "deviceUnreachable": "{{device}} は現在使用できません。オンラインでリモート操作が有効になっている必要があります。Worker は作成されていません。",
+        "deviceOutdated": "{{device}} の Cindy が古いため、アップデートすると Worker を実行できます。",
+        "dirRejected": "{{device}} 上にこのフォルダーが見つからないか、使用できません。Worker は作成されていません。",
+        "dirUnavailable": "{{device}} のフォルダーは一時的に使用できません。接続やネットワークドライブを確認して再試行してください。Worker は作成されていません。"
+      }
     },
     "rolePill": {
       "unread": "未読の更新",
@@ -13550,13 +13572,19 @@
       "scrollWorkersLeftEdge": "すでに先頭の Worker を表示しています",
       "scrollWorkersRightEdge": "すでに末尾の Worker を表示しています",
       "errorBadge": "エラー",
-      "errorBadgeAria": "エラーが発生した Worker があります"
+      "errorBadgeAria": "エラーが発生した Worker があります",
+      "executionDevice": "{{device}} で実行",
+      "deviceUnreachable": "状態を取得できません",
+      "unknownDevice": "別のコンピューター",
+      "archiveRemoteWorkerConfirmDesc": "この協同から外し、{{device}} で進行中のラウンドを停止します。{{device}} 上のタスク、履歴、ファイルは保持され「協同は終了しました」と表示されるので、そちらで引き続き確認できます。"
     },
     "split": {
       "leadLabel": "Lead ({{agent}})",
       "workerLabel": "Worker ({{agent}})",
       "leadNotFound": "Orca lead session が見つかりません",
       "waitingForWorker": "Worker を待機中",
+      "remoteWorkerLoading": "{{device}} 上のタスクを読み込み中…",
+      "remoteWorkerUnreachable": "{{device}} に現在接続できません。再接続すると、この Worker のタスクが再び表示されます。",
       "closeAria": "閉じる"
     }
   },

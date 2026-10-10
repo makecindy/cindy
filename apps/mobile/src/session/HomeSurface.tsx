@@ -24,6 +24,7 @@ import {
   Alert,
   Animated,
   AppState,
+  Keyboard,
   Platform,
   Modal,
   type NativeScrollEvent,
@@ -81,6 +82,8 @@ import {
 } from '@/components/MobilePrimitives';
 import { RemoteAccessGuide } from '@/components/RemoteAccessGuide';
 import { HomeChromeDrawer } from '@/session/HomeChromeDrawer';
+import { useHomeMode } from '@/session/useHomeMode';
+import { TEAMMATE_COLLECTION_ID } from '@/session/useTeammateRoster';
 import { AccountSwitcherSheet } from '@/session/AccountSwitcherSheet';
 import { HomeChromeFrost } from '@/session/HomeChromeFrost';
 import { HomeGlassMenuPanel, HomeMenuScrim } from '@/session/HomeGlassMenuPanel';
@@ -103,6 +106,7 @@ import {
   type HomeDisplayPatch,
   buildHomeScopePullDownActions,
   parseHomeScopePullDownAction,
+  openHomeRemoteCollection,
 } from '@/session/homeChromeMenus';
 import { useConversationSearchFilterMenu } from '@/session/useConversationSearchFilterMenu';
 import { AnchoredPullDownMenu } from '@/platform/chrome/AnchoredPullDownMenu';
@@ -131,7 +135,6 @@ import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import {
   discoverRemoteHomeCollections,
   remoteResourceDiscoveryTargets,
-  serializeRemoteResourceTargets,
   type RemoteHomeCollection,
 } from '@/device-link/remoteResources';
 import {
@@ -469,6 +472,7 @@ function HomeScreenContent({ active = true, onModeChange, width, newSessionInSys
   const activeHomeSession = useContext(ActiveHomeSession);
   const rememberTask = rememberRecentTask;
   const viewSession = getHomeViewSession();
+  const homeNavigation = useHomeMode();
   const [restoredView] = useState(() => viewSession.has('preferencesHydrated'));
   const routeFocused = useIsFocused();
   // The task mirror also feeds navigation while the teammate pane is visible.
@@ -2777,6 +2781,12 @@ function HomeScreenContent({ active = true, onModeChange, width, newSessionInSys
   }, []);
 
   const nativeHomeMenus = usesNativePullDownMenu();
+  const openRemoteCollection = useCallback((collection: RemoteHomeCollection) => {
+    openHomeRemoteCollection({
+      collection, teammateCollectionId: TEAMMATE_COLLECTION_ID, embedded,
+      setMode: homeNavigation.setMode, push: guardedPush, onModeChange, dismissKeyboard: Keyboard.dismiss,
+    });
+  }, [embedded, guardedPush, homeNavigation.setMode, onModeChange]);
   const homeScopePullDownActions = useMemo(
     () => buildHomeScopePullDownActions(
       home.deviceFilters,
@@ -2793,19 +2803,12 @@ function HomeScreenContent({ active = true, onModeChange, width, newSessionInSys
     if (parsed.kind === 'collection') {
       const collection = remoteHomeCollections.find((item) => item.id === parsed.collectionId);
       if (!collection) return;
-      guardedPush({
-        pathname: '/resources/[collectionId]',
-        params: {
-          collectionId: collection.id,
-          title: collection.title,
-          targets: serializeRemoteResourceTargets(collection.targets),
-        },
-      });
+      openRemoteCollection(collection);
       return;
     }
     const item = home.deviceFilters.find((filter) => filter.id === parsed.filterId);
     if (item) selectHomeScope(item);
-  }, [guardedPush, home.deviceFilters, remoteHomeCollections, selectHomeScope]);
+  }, [home.deviceFilters, openRemoteCollection, remoteHomeCollections, selectHomeScope]);
   const displayMenuState = useMemo<HomeDisplayMenuState>(() => ({
     groupByProject,
     groupDialogue,
@@ -3288,14 +3291,7 @@ function HomeScreenContent({ active = true, onModeChange, width, newSessionInSys
         onClosed={handleDeviceMenuClosed}
         onSelectCollection={(collection) => {
           setDeviceMenuOpen(false);
-          guardedPush({
-            pathname: '/resources/[collectionId]',
-            params: {
-              collectionId: collection.id,
-              title: collection.title,
-              targets: serializeRemoteResourceTargets(collection.targets),
-            },
-          });
+          openRemoteCollection(collection);
         }}
         onSelect={(item) => {
           if (item.deviceId && item.state === 'access_revoked') {

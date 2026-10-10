@@ -60,6 +60,7 @@ export function NewTaskSelectionSheet(p: NewTaskSelectionSheetProps) {
       visible={p.page !== null}
       nativePresentation={nativePresentation.current}
       onBackdropPress={p.onClose}
+      onClosed={p.onClosed}
       onRequestClose={browsing ? p.onBack : p.onClose}
     >
       <SheetSurface

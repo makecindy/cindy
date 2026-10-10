@@ -11465,7 +11465,11 @@
       "untitled": "未命名任務",
       "moreActions": "更多操作",
       "agentDevice": "Agent 在 {{device}} 上執行",
-      "agentDeviceOffline": "Agent 在 {{device}} 上執行，那臺電腦目前離線，連上後才能繼續"
+      "agentDeviceOffline": "Agent 在 {{device}} 上執行，那臺電腦目前離線，連上後才能繼續",
+      "orcaRemoteLead": "來自 {{device}} 的協同",
+      "orcaRemoteLeadReleased": "協同已結束 · 來自 {{device}}",
+      "orcaRemoteLeadUnknownDevice": "另一臺電腦",
+      "orcaRemoteLeadTip": "{{device}} 上「{{lead}}」的 Worker。任務、目錄和命令都在這臺電腦執行；你在這裡傳送的訊息不會回報給 Lead。"
     },
     "gitContext": {
       "detached": "分離 HEAD",
@@ -13528,7 +13532,25 @@
       "optional": "（可選）",
       "initialTaskPlaceholder": "給這個 Worker 的可選第一條任務",
       "enableCollabTitle": "開啟協同",
-      "enableCollabSubmit": "開啟協同"
+      "enableCollabSubmit": "開啟協同",
+      "executionDeviceLabel": "執行裝置",
+      "thisComputer": "本機",
+      "deviceOnline": "線上",
+      "deviceNeedsUpdate": "版本過舊，需更新",
+      "executionDeviceHint": "只列出同帳號、線上並開啟遠端控制的電腦。",
+      "executionDeviceRemoteHint": "Worker 的任務、目錄和指令都在 {{device}}。",
+      "remoteDirLabel": "{{device}} 上的工作目錄",
+      "remoteDirChat": "對話",
+      "remoteDirPath": "指定目錄",
+      "remoteDirChatHint": "在 {{device}} 上建立對話任務，不連結專案。",
+      "remoteDirPathHint": "在 {{device}} 上檢查；不存在時報錯，不會換成這台電腦的目錄。",
+      "remoteDirInvalid": "請輸入 {{device}} 上的絕對路徑。",
+      "errors": {
+        "deviceUnreachable": "{{device}} 目前無法使用：需要在線並開啟遠端控制。Worker 沒有建立。",
+        "deviceOutdated": "{{device}} 的 Cindy 版本過舊，更新後才能執行 Worker。",
+        "dirRejected": "{{device}} 上找不到這個目錄或不允許使用。Worker 沒有建立。",
+        "dirUnavailable": "{{device}} 上的目錄暫時無法存取。請檢查連線或網路磁碟後重試。Worker 沒有建立。"
+      }
     },
     "rolePill": {
       "unread": "未讀更新",
@@ -13550,13 +13572,19 @@
       "scrollWorkersLeftEdge": "已是最左側的 Worker",
       "scrollWorkersRightEdge": "已是最右側的 Worker",
       "errorBadge": "錯誤",
-      "errorBadgeAria": "有 Worker 出錯"
+      "errorBadgeAria": "有 Worker 出錯",
+      "executionDevice": "在 {{device}} 執行",
+      "deviceUnreachable": "暫時無法取得狀態",
+      "unknownDevice": "另一台電腦",
+      "archiveRemoteWorkerConfirmDesc": "它會從這個協同裡移除，並停止 {{device}} 上正在進行的這一輪。{{device}} 上的任務、記錄和檔案都會保留，標註「協同已結束」，可以在那台繼續查看。"
     },
     "split": {
       "leadLabel": "Lead ({{agent}})",
       "workerLabel": "Worker ({{agent}})",
       "leadNotFound": "找不到 Orca lead 任務",
       "waitingForWorker": "等待 Worker",
+      "remoteWorkerLoading": "正在讀取 {{device}} 上的任務…",
+      "remoteWorkerUnreachable": "{{device}} 目前無法連線，恢復後會自動顯示這個 Worker 的任務。",
       "closeAria": "關閉"
     }
   },

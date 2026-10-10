@@ -95,7 +95,7 @@ import { isModelVisible } from '@cindy/model-providers/sections';
 import { app } from 'electron';
 import { remoteDesktop, requestRemoteDesktop } from '../remote-desktop';
 import { remoteCredentialHost } from '../remote-desktop/credentialHost';
-import { REMOTE_DESKTOP_CHANNEL } from '@cindy/device-link';
+import { ORCA_REMOTE_WORKER_OPEN_CHANNEL, REMOTE_DESKTOP_CHANNEL } from '@cindy/device-link';
 import type { DeviceLinkClient } from '@cindy/device-link';
 import { isDeferredHistoryPush, deferredToolBoundary } from './historyViewPush';
 import { mapHistoryViewMessages, type HistoryMessageSource, type HistoryViewItem } from '@cindy/maker-shared/message-window';
@@ -310,6 +310,8 @@ export type { ActiveController } from './subscriptions';
  */
 const PATH_GUARDED_CHANNELS: ReadonlyMap<string, 'workingDir' | 'baseRepo'> = new Map([
   ['maker:create-session', 'workingDir'],
+  // 协同远端 Worker 指定本机目录时同口径收敛；不指定则由本机分配任务目录。
+  [ORCA_REMOTE_WORKER_OPEN_CHANNEL, 'workingDir'],
   ['worktree:create', 'baseRepo'],
 ]);
 

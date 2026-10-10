@@ -650,6 +650,53 @@ handler 无 sender 依赖；不加入共享任务访客白名单，不进入自�
 - **暂不支持**：分叉、审查、移动项目、复制到其他电脑、导出 `.cshare`(Agent 会话记录在 B)，入口隐藏、
   主进程拒绝。
 
+## 协同远端 Worker：Worker 在另一台电脑运行
+
+与上一节方向相反：协同的 Lead 与团队留在 A，单个 Worker 的任务、目录、命令与文件都在 B(运行设备)。
+B 上的 Worker 是一条普通任务，`sessions.orca_remote_lead`(migration 0124，JSON 见
+`apps/desktop/src/shared/orcaRemoteWorker.ts`)记录派活电脑与 Lead；派活、停止与回报复用现有会话通道。
+方案与产品决策见 [`../orca-cross-device-worker-plan.md`](../orca-cross-device-worker-plan.md)。
+
+- **新增 channel**(`packages/device-link/src/orcaRemoteWorker.ts`，只进同账号 allowlist，不进共享任务清单)：
+  `maker:orca:remote-worker:caps`(能力探测，回 `{ version }`)、`…:open`(按 A 给定的任务 id 新建 Worker 任务，
+  幂等；超时 60s)、`…:release`(结束协同，任务与文件保留，幂等)。B 侧实现见
+  `apps/desktop/src/main/maker-ipc/orcaRemoteWorkerHost.ts`。
+- **幂等 open 的终态检查**：同来源、同 Lead 且未 release 的已有任务也必须仍为 `active`；
+  已归档／软删除时拒绝并返回既有 `PRECONDITION_FAILED`，不新建、不复活。A 保留未确认创建
+  收据，恢复仅解除未关联标记。该检查使用 B 的现有 status 列，不新增 wire 字段或改变版本；
+  旧 B 仍保留原行为，B 更新后生效。
+- **实际档位**：`open` 回包可选 `effort` 是 B 已保存的解析结果，同 ID 重试也从已有任务读取。
+  空字符串保留无档位状态；旧 B 不返回该字段时，A 保留原来的请求值降级规则。字段增量不改协议版本，
+  旧 A 忽略它，新 A 不向旧 B 要求新增请求字段。
+- **实际 Fast 状态**：`open` 回包可选 `fastMode` 是 B 已保存的布尔值，新建和同 ID 重试均取真实任务，
+  A 的代理任务和创建结果沿用它，显式 `false` 不被请求中的 `true` 覆盖。旧 B 缺省时，A 保留请求值的
+  降级规则；旧 A 忽略新增字段，版本与请求不变。完整状态一致性需要 A/B 均更新，服务端无需改动。
+  此字段不改变 B 的模型准入：当前显式开启不支持的 Fast 仍在创建前拒绝，不新增静默降级。
+- **来源身份**：派活电脑取 server 盖章的 `src`(`DeviceLinkInvokeContext.controllerDeviceId`)，不采信载荷自报；
+  非 device-link 调用与共享任务访客一律拒绝。`open` 指定的 `workingDir` 与 `maker:create-session` 同口径经
+  B 的目录守卫(`device-link/dispatch.ts` 的 `PATH_GUARDED_CHANNELS`)；不指定则由 B 分配任务目录。
+- **旧端降级**：旧版 B 没有这三个 channel，回 `CHANNEL_NOT_ALLOWED`；A 据此把该电脑显示为「需要更新」，
+  **不回退**到普通 `maker:create-session`(普通任务没有防嵌套与来源标记)。B 新、A 旧时 B 不受影响。
+- **可选运行设备**：`maker:orca:execution-devices`(只读)由 A 本机界面与控制端共用，返回
+  `{ devices: [{ deviceId, name, platform, supported }] }`；逐台探测 caps，旧版标 `supported:false`，
+  探测失败的不列出。共享任务访客拒绝。
+  Mobile 使用同一只读通道获取 A 视角的设备，模型与 Agent 从所选运行设备读取。
+  新手机连接旧 A 收到 `CHANNEL_NOT_ALLOWED` 时隐藏设备选择，原来的 A 本机 Worker 创建不变。
+  首个与追加 Worker 都沿用既有可选 `executionDeviceId` / `workingDir` 字段；「对话」不传目录，
+  「指定目录」传 B 上的绝对路径，由 B 校验；失败不回退 A。
+- **A 驱动 B 的其余通道**全部是已有同账号 channel：`maker:input:enqueue`(按 `clientId` 幂等，
+  `durableDelivery`)、`maker:input:get-projection`(投递回执)、`maker:list-active`、`local-db:sessions:get`、
+  `local-db:history:messages`、`maker:abort-session`；B 不需要知道「这是协同派活」，只认来源标签。
+- **恢复暂停**：B 的 `INPUT_ENQUEUE` 按已有自动消息来源判据处理 `origin.kind`，Orca 派活不解除
+  崩溃恢复后的队列暂停；普通手机／桌面用户输入仍可解除恢复暂停，用户 Stop 暂停不受影响。
+  不新增 wire 字段或改变版本，A 的既有派活载荷不变；旧 B 保持其原有行为，需更新 B 才有此修复。
+- **收尾限制**：当前 abort/release 不取消未消费的远端派活，结束协同后队列仍可能继续执行。
+  远控入队后的来源不足以可靠区分 Lead 派活与用户输入，本轮不通过清空队列规避；待专门设计
+  持久投递归属、取消回执与释放边界后修复，详见 `orca-team-architecture.md` 的已知限制。
+- **B 侧约束**：带标记的任务不能再开启协同(`assertLeadCollabProjectEnabled` 统一拒绝 Worker 与远端 Worker，
+  覆盖 IPC、远程与 Agent 工具入口)，不能复制到其他电脑(`task-migration/service.ts`)；侧栏照常显示，
+  任务头标注「来自 X 的协同」，结束后显示「协同已结束」。
+
 ## 事实来源
 
 | 内容                     | 权威来源                                                                                                                                                                                   |
