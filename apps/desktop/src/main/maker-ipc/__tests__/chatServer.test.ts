@@ -270,6 +270,24 @@ describe('Chat Server result delivery and refresh', () => {
     expect(JSON.stringify(notice)).not.toContain('private token and path');
   });
 
+  it.each(['failed', 'queued', 'running', 'completed', 'cancelled'])('returns all active failure IDs beyond the requested page (status: %s)', async status => {
+    fixture.handle.mockImplementation(route => {
+      if (route.endsWith('/members')) return { body: [] };
+      if (route.endsWith(`/messages/${execution.source_message_id}`)) return { body: { id: execution.source_message_id, seq: '7',
+        authorId: selfId, author: { kind: 'human', name: 'Owner' }, content: [], origin: 'user', deleted: false,
+        threadRootId: null, createdAt: '2026-10-03T00:00:00Z' } };
+      if (route.includes('/messages?')) return { body: [] };
+      if (route.endsWith('/executions')) return { body: [{ ...execution, status, epoch: 2, failure_code: 'AUTH_REQUIRED' }] };
+      return response(route);
+    });
+    const result = await service.getGroup(roomId);
+    if (!result.ok) throw new Error('group missing');
+    expect(result.group.messages).toEqual([]);
+    expect(result.group.activeExecutionFailureIds).toEqual(status === 'failed' ? [`execution-failure:${execution.id}:2`] : []);
+    const thread = await service.chatServer!.thread({ groupId: roomId, rootId: execution.source_message_id });
+    expect(thread).toMatchObject({ ok: true, activeExecutionFailureIds: result.group.activeExecutionFailureIds });
+  });
+
   it.each([false, true])('does not project failures for paged-out or deleted sources (deleted: %s)', async deleted => {
     const source = { id: execution.source_message_id, seq: '7', authorId: selfId, author: { kind: 'human', name: 'Owner' },
       content: [], origin: 'user', deleted, threadRootId: null, createdAt: '2026-10-03T00:00:00Z' };

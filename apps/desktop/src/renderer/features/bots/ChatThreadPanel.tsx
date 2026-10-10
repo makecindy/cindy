@@ -68,7 +68,7 @@ export function ChatThreadPanel({ group, rootId, onClose }: { group: BotGroupDet
       setRoot(result.root); setError('');
       setRootFailureNotices(result.rootFailureNotices ?? []);
       setReplies(previous => {
-        return mergeBotGroupMessages(previous, result.replies);
+        return mergeBotGroupMessages(previous, result.replies, result.activeExecutionFailureIds);
       });
       if (before || replies.length === 0) setHasMore(result.hasMore);
     } catch { if (current()) setError(t(key('requestFailed'))); }

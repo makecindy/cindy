@@ -63,6 +63,23 @@ describe('chat interaction controls', () => {
     expect(screen.getByText('Root message')).toBeTruthy();
   });
 
+  it('clears a retried failure on an older loaded Thread page without dropping its reply', async () => {
+    const latest = { ...message, id: 'latest', sequence: 100, content: 'Latest reply' };
+    const older = { ...message, id: 'older', sequence: 4, content: 'Earlier reply' };
+    const failure = { ...older, id: 'execution-failure:older:1', kind: 'notice', content: '', runtimeFailureCode: 'AUTH_REQUIRED' };
+    mocks.thread.mockResolvedValueOnce({ ok: true, root: message, replies: [latest], hasMore: true, activeExecutionFailureIds: [failure.id] })
+      .mockResolvedValueOnce({ ok: true, root: message, replies: [older, failure], hasMore: false, activeExecutionFailureIds: [failure.id] })
+      .mockResolvedValue({ ok: true, root: message, replies: [latest], hasMore: true, activeExecutionFailureIds: [] });
+    render(<ChatThreadPanel group={group} rootId="root" onClose={vi.fn()} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'bots.groupChat.timeline.loadEarlier' }));
+    await screen.findByText('bots.groupChat.notice.runtimeFailure.AUTH_REQUIRED');
+    const root = screen.getByText('Root message').closest('article')!;
+    fireEvent.click(within(root).getByRole('button', { name: k('reactionCount') }));
+    await waitFor(() => expect(screen.queryByText('bots.groupChat.notice.runtimeFailure.AUTH_REQUIRED')).toBeNull());
+    expect(screen.getByText('Earlier reply')).toBeTruthy();
+    expect(screen.getByText('Latest reply')).toBeTruthy();
+  });
+
   it('preserves copy and image sharing beside thread replies and reactions in one toolbar', async () => {
     const writeText = vi.fn().mockResolvedValue(undefined), reply = vi.fn();
     Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });

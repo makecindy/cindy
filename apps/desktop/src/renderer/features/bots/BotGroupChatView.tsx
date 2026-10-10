@@ -233,7 +233,7 @@ function BotGroupChatContent({ groupId }: { groupId: string }) {
 
   const group = state.kind === 'ready' ? state.group : null;
   const messages = useMemo(
-    () => (state.kind === 'ready' ? mergeBotGroupMessages(state.older, state.group.messages) : []),
+    () => (state.kind === 'ready' ? mergeBotGroupMessages(state.older, state.group.messages, state.group.activeExecutionFailureIds) : []),
     [state],
   );
   const acknowledge = useCallback(() => {
@@ -349,16 +349,20 @@ function BotGroupChatContent({ groupId }: { groupId: string }) {
       }
       const element = scrollRef.current;
       if (element) prependAnchorRef.current = { height: element.scrollHeight, top: element.scrollTop };
-      setState((previous) =>
-        previous.kind === 'ready'
-          ? {
-              ...previous,
-              older: mergeBotGroupMessages(result.group.messages, previous.older),
-              olderPlans: mergeBotGroupPlans(result.group.plans, previous.olderPlans),
-              olderHasMore: result.group.hasMoreBefore,
-            }
-          : previous,
-      );
+      setState((previous) => {
+        if (previous.kind !== 'ready') return previous;
+        // A newer push refresh wins over an older in-flight pagination request.
+        const activeIds = previous.group === state.group
+          ? result.group.activeExecutionFailureIds ?? previous.group.activeExecutionFailureIds
+          : previous.group.activeExecutionFailureIds;
+        return {
+          ...previous,
+          group: { ...previous.group, activeExecutionFailureIds: activeIds },
+          older: mergeBotGroupMessages(previous.older, result.group.messages, activeIds),
+          olderPlans: mergeBotGroupPlans(result.group.plans, previous.olderPlans),
+          olderHasMore: result.group.hasMoreBefore,
+        };
+      });
     } catch {
       toast.error(t('bots.groupChat.timeline.loadEarlierFailed'));
     } finally {

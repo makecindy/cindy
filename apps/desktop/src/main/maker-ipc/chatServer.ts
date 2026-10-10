@@ -570,7 +570,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       lastReplyAt: s.messages.reduce((latest, m) => !m.deleted && m.origin !== 'system' && m.authorId !== selfId
         ? Math.max(latest, Date.parse(m.createdAt)) : latest, 0),
       createdAt: Date.parse(s.room.created_at), updatedAt: Date.parse(s.room.updated_at ?? s.room.created_at),
-      messages, hasMoreBefore: page.length === (o.limit ?? 100), plans,
+      messages, activeExecutionFailureIds: activeExecutionFailureIds(executions), hasMoreBefore: page.length === (o.limit ?? 100), plans,
       round: { status: executions.some(e => ['queued', 'running'].includes(e.status)) ? 'running' : 'idle', speakers, canContinue: !open && !planning.has(roomId) && (executions.some(e => !e.plan_id && ordinaryExecution(e)) || s.messages.some(m => !m.deleted && m.origin !== 'system' && m.author.kind === 'human' && !m.content.some(b => b.namespace === 'cindy.plan'))) && !executions.some(e => ['queued','running','stopping'].includes(e.status)) } };
   }
   function planView(plan: ServerPlan, members: Member[], workspace: ReturnType<ReturnType<typeof chatServerWorkspaces>['read']>): BotGroupPlanView {
@@ -639,6 +639,10 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   // Compatibility cache for servers which do not yet return failure_code.
   // The server execution status still owns whether a notice is displayed.
   const failureCodes = new Map<string, BotGroupRuntimeFailureCode>();
+  const executionFailureId = (execution: Execution) => `execution-failure:${execution.id}:${execution.epoch}`;
+  function activeExecutionFailureIds(executions: Execution[]): string[] {
+    return executions.filter(execution => execution.status === 'failed').map(executionFailureId);
+  }
   function executionFailureViews(executions: Execution[], page: Message[], members: Member[]): BotGroupMessageView[] {
     return executions.flatMap(execution => {
       if (execution.status !== 'failed') return [];
@@ -647,7 +651,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       const member = members.find(value => value.id === execution.bot_id);
       const code = isBotGroupRuntimeFailureCode(execution.failure_code) ? execution.failure_code
         : failureCodes.get(`${execution.id}:${execution.epoch}`) ?? 'RUNTIME_ERROR';
-      return [{ id: `execution-failure:${execution.id}:${execution.epoch}`, sequence: Number(source.seq),
+      return [{ id: executionFailureId(execution), sequence: Number(source.seq),
         kind: 'notice', authorKind: 'system', authorBotId: localBot(execution.bot_id)?.id ?? execution.bot_id,
         authorName: member ? memberName(member) : actors.find(actor => actor.id === execution.bot_id)?.name ?? '',
         content: '', noticeCode: code === 'RUNTIME_TIMEOUT' ? 'member-timeout' : 'member-failed', runtimeFailureCode: code,
@@ -1039,6 +1043,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       const page = await api<Message[]>(`/conversations/${i.groupId}/messages?threadRootId=${i.rootId}&limit=50${i.before ? `&before=${i.before}` : ''}`);
       const executions = await api<Execution[]>(`/conversations/${i.groupId}/executions`);
       return { root: (await messageViews(i.groupId, [root], members))[0], rootFailureNotices: executionFailureViews(executions, [root], members),
+        activeExecutionFailureIds: activeExecutionFailureIds(executions),
         replies: [...await messageViews(i.groupId, page.reverse(), members),
         ...executionFailureViews(executions, page, members)].sort((a, b) => a.sequence - b.sequence), hasMore: page.length === 50 };
     }),

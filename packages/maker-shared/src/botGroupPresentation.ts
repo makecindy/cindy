@@ -69,14 +69,17 @@ function isExecutionFailure(message: BotGroupMessageView): boolean {
 export function mergeBotGroupMessages(
   older: readonly BotGroupMessageView[],
   latest: readonly BotGroupMessageView[],
+  activeExecutionFailureIds?: readonly string[],
 ): BotGroupMessageView[] {
   const refreshedSources = new Set(latest.filter(message => !isExecutionFailure(message)).map(message => message.sequence));
+  const activeFailures = activeExecutionFailureIds === undefined ? null : new Set(activeExecutionFailureIds);
+  const isCurrent = (message: BotGroupMessageView) => !isExecutionFailure(message) || activeFailures === null || activeFailures.has(message.id);
   const byKey = new Map<string, BotGroupMessageView>();
   const key = (message: BotGroupMessageView) => isExecutionFailure(message) ? message.id : `sequence:${message.sequence}`;
   for (const message of older) {
-    if (!isExecutionFailure(message) || !refreshedSources.has(message.sequence)) byKey.set(key(message), message);
+    if (isCurrent(message) && (!isExecutionFailure(message) || !refreshedSources.has(message.sequence))) byKey.set(key(message), message);
   }
-  for (const message of latest) byKey.set(key(message), message);
+  for (const message of latest) if (isCurrent(message)) byKey.set(key(message), message);
   return [...byKey.values()].sort((a, b) => a.sequence - b.sequence || Number(isExecutionFailure(a)) - Number(isExecutionFailure(b)));
 }
 

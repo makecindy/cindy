@@ -309,6 +309,42 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe('BotGroupChatView', () => {
+  it('keeps a newer push failure snapshot when a stale older-page request finishes later', async () => {
+    const latest = msg({ id: 'latest', sequence: 100, content: 'Latest question' });
+    const source = msg({ id: 'older', sequence: 4, content: 'Earlier question' });
+    const failure = msg({ id: 'execution-failure:older:1', sequence: 4, kind: 'notice', authorKind: 'system',
+      authorName: 'Bot', runtimeFailureCode: 'AUTH_REQUIRED', noticeCode: 'member-failed' });
+    let finish: ((result: { ok: true; group: BotGroupDetail }) => void) | undefined;
+    const pending = new Promise<{ ok: true; group: BotGroupDetail }>(resolve => { finish = resolve; });
+    mocks.getBotGroup.mockResolvedValueOnce({ ok: true, group: detail({ messages: [latest], hasMoreBefore: true, activeExecutionFailureIds: [failure.id] }) })
+      .mockReturnValueOnce(pending)
+      .mockResolvedValue({ ok: true, group: detail({ name: 'Fresh group', messages: [latest], activeExecutionFailureIds: [] }) });
+    renderView();
+    fireEvent.click(await screen.findByRole('button', { name: 'bots.groupChat.timeline.loadEarlier' }));
+    await act(async () => mocks.pushes.forEach(push => push({ groupId: 'g1', change: 'round' })));
+    await screen.findByText('Fresh group');
+    await act(async () => finish?.({ ok: true, group: detail({ messages: [source, failure], activeExecutionFailureIds: [failure.id] }) }));
+    expect(screen.getByText('Earlier question')).toBeTruthy();
+    expect(screen.queryByText('bots.groupChat.notice.runtimeFailure.AUTH_REQUIRED:Bot')).toBeNull();
+  });
+
+  it.each([false, true])('clears retried failures on an older timeline page when the newest page is refreshed (initial failure: %s)', async initialFailure => {
+    const source = msg({ id: 'older-source', sequence: 4, content: 'Earlier question' });
+    const failure = msg({ id: 'execution-failure:older:1', sequence: 4, kind: 'notice', authorKind: 'system',
+      authorName: 'Bot', runtimeFailureCode: 'AUTH_REQUIRED', noticeCode: 'member-failed' });
+    const latest = msg({ id: 'latest-source', sequence: 100, content: 'Latest question' });
+    mocks.getBotGroup.mockResolvedValueOnce({ ok: true, group: detail({ messages: [latest], hasMoreBefore: true, activeExecutionFailureIds: initialFailure ? [failure.id] : [] }) })
+      .mockResolvedValueOnce({ ok: true, group: detail({ messages: [source, failure], hasMoreBefore: false, activeExecutionFailureIds: [failure.id] }) })
+      .mockResolvedValue({ ok: true, group: detail({ messages: [latest], activeExecutionFailureIds: [] }) });
+    renderView();
+    fireEvent.click(await screen.findByRole('button', { name: 'bots.groupChat.timeline.loadEarlier' }));
+    await screen.findByText('bots.groupChat.notice.runtimeFailure.AUTH_REQUIRED:Bot');
+    act(() => mocks.pushes.forEach(push => push({ groupId: 'g1', change: 'round' })));
+    await waitFor(() => expect(screen.queryByText('bots.groupChat.notice.runtimeFailure.AUTH_REQUIRED:Bot')).toBeNull());
+    expect(screen.getByText('Earlier question')).toBeTruthy();
+    expect(screen.getByText('Latest question')).toBeTruthy();
+  });
+
   it('shows another human as a named participant instead of the current user bubble', async () => {
     mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ messages: [
       msg({ id: 'guest', authorKind: 'user', isSelf: false, authorName: 'Invited human', content: 'Hello from another account' }),

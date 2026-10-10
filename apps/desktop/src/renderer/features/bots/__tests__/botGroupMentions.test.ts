@@ -197,6 +197,19 @@ describe('group presentation', () => {
     expect(mergeBotGroupMessages(merged, [message({ id: 'newer', sequence: 5 })])).toHaveLength(4);
   });
 
+  it('reconciles failures outside the refreshed page against the full execution snapshot', () => {
+    const source = message({ id: 'source', sequence: 4 });
+    const failed = (id: string) => message({ id, sequence: 4, kind: 'notice', runtimeFailureCode: 'AUTH_REQUIRED' });
+    const first = failed('execution-failure:first:1'), second = failed('execution-failure:second:1');
+    const latest = [message({ id: 'newer', sequence: 100 })];
+    expect(mergeBotGroupMessages([source, first, second], latest, [second.id]).map(item => item.id))
+      .toEqual(['source', second.id, 'newer']);
+    expect(mergeBotGroupMessages([source, first, second], latest, []).map(item => item.id)).toEqual(['source', 'newer']);
+    expect(mergeBotGroupMessages([source, first], latest, ['execution-failure:first:2']).map(item => item.id))
+      .toEqual(['source', 'newer']);
+    expect(mergeBotGroupMessages([], [source, first], []).map(item => item.id)).toEqual(['source']);
+  });
+
   it('merges pages by sequence and sorts groups by latest activity', () => {
     const merged = mergeBotGroupMessages(
       [message({ id: 'a', sequence: 1 }), message({ id: 'b', sequence: 2 })],

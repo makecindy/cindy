@@ -280,6 +280,8 @@ export interface BotGroupSummary {
 export interface BotGroupDetail extends BotGroupSummary {
   /** Oldest first. */
   messages: BotGroupMessageView[];
+  /** All currently failed execution/epoch IDs, including sources outside this page. Older/local hosts omit this. */
+  activeExecutionFailureIds?: string[];
   hasMoreBefore: boolean;
   round: BotGroupRoundView;
   /** Plans referenced by the loaded messages, plus the open plan. */
@@ -510,6 +512,8 @@ export interface ChatServerApi {
     root: BotGroupMessageView; replies: BotGroupMessageView[]; hasMore: boolean;
     /** Derived root failures stay beside the root and never count toward reply pagination. */
     rootFailureNotices?: BotGroupMessageView[];
+    /** Conversation-wide failure snapshot, independent of reply pagination. */
+    activeExecutionFailureIds?: string[];
   }>>;
   reply(input: { groupId: string; rootId: string; text: string; clientId: string; mentions: BotGroupMention }): Promise<ChatServerResult<{ messageId: string }>>;
   react(input: { groupId: string; messageId: string; emoji: string; present: boolean }): Promise<ChatServerResult<Record<never, never>>>;
