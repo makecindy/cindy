@@ -41,6 +41,7 @@ const links: Record<string, ProviderSetupLink> = {
   'tencentcloud-coding-plan': account('https://console.cloud.tencent.com/'),
   opencode: account('https://opencode.ai/auth'),
   'opencode-go': account('https://opencode.ai/auth'),
+  'command-code': key('https://commandcode.ai/settings/keys'),
   'vercel-ai-gateway': key('https://vercel.com/d?to=%2F%5Bteam%5D%2F%7E%2Fai-gateway%2Fapi-keys&title=AI+Gateway+API+Keys'),
   'amazon-bedrock': account('https://console.aws.amazon.com/bedrock/'),
   'azure-openai-responses': account('https://ai.azure.com/'),
