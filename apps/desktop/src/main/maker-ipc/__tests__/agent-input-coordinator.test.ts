@@ -13978,7 +13978,7 @@ describe('provider group computer switch hold', () => {
     sessionTotal: 0,
   };
 
-  async function failWhileSwitching(sid: string, cause: 'usage-limit' | null = 'usage-limit') {
+  async function failWhileSwitching(sid: string, cause: 'usage-limit' | 'unavailable' | null = 'usage-limit') {
     const candidate = vi.fn<NonNullable<AgentInputCoordinatorDeps['providerGroupSwitchCandidate']>>(
       () => cause,
     );
@@ -14069,5 +14069,53 @@ describe('provider group computer switch hold', () => {
     expect(latestProjection(h.projections).autoResumePending?.groupSwitchPending).toBeUndefined();
     // 错误已不是当前状态：结算只清登记，不再弹横幅。
     expect(h.coordinator.releaseProviderGroupSwitchHold(sid, holdId)).toBe(false);
+  });
+
+  it('shows "reconnecting n/5" while waiting for the original computer, and "switching" once it gives up', async () => {
+    const sid = 'group-hold-reconnect';
+    const { h } = await failWhileSwitching(sid, 'unavailable');
+    const holdId = h.coordinator.getProviderGroupSwitchHoldId(sid)!;
+    expect(h.coordinator.setProviderGroupSwitchHoldProgress(sid, holdId + 1, { attempt: 1, maxAttempts: 5 })).toBe(false);
+    expect(h.coordinator.setProviderGroupSwitchHoldProgress(sid, holdId, { attempt: 2, maxAttempts: 5 })).toBe(true);
+    // 一次普通的重连：新旧端都显示「重新连接中 2/5」，不带 groupSwitchPending；错误仍不呈现。
+    expect(latestProjection(h.projections).error).toBeNull();
+    expect(latestProjection(h.projections).autoResumePending).toEqual({
+      error: MESSAGE,
+      attempt: 2,
+      maxAttempts: 5,
+      sessionTotal: 0,
+    });
+    expect(h.coordinator.setProviderGroupSwitchHoldProgress(sid, holdId, null)).toBe(true);
+    expect(latestProjection(h.projections).autoResumePending).toMatchObject({
+      attempt: 0,
+      groupSwitchPending: { cause: 'unavailable' },
+    });
+    // 放出来之后不再改。
+    expect(h.coordinator.releaseProviderGroupSwitchHold(sid, holdId)).toBe(true);
+    expect(h.coordinator.setProviderGroupSwitchHoldProgress(sid, holdId, { attempt: 3, maxAttempts: 5 })).toBe(false);
+    expect(latestProjection(h.projections).error).toBe(MESSAGE);
+    expect(latestProjection(h.projections).autoResumePending).toBeUndefined();
+  });
+
+  it('shows progress on a message that has not gone out while the group waits before sending', async () => {
+    const h = createHarness();
+    const sid = 'group-send-reconnect';
+    const send = deferred<AgentInputSendResult>();
+    h.sendToAgent.mockImplementationOnce(async () => send.promise);
+    h.coordinator.enqueue(sid, makeItem('q-1', 'hello'));
+    await flush();
+    h.coordinator.setProviderGroupSendReconnect(sid, { attempt: 1, maxAttempts: 5 });
+    expect(latestProjection(h.projections).autoResumePending).toEqual({ attempt: 1, maxAttempts: 5, sessionTotal: 0 });
+    h.coordinator.setProviderGroupSendReconnect(sid, 'switching');
+    expect(latestProjection(h.projections).autoResumePending).toMatchObject({
+      groupSwitchPending: { cause: 'unavailable' },
+    });
+    h.coordinator.setProviderGroupSendReconnect(sid, null);
+    expect(latestProjection(h.projections).autoResumePending).toBeUndefined();
+    // 派出去之后不再挂到这一轮上。
+    send.resolve(sendSuccess());
+    await flush();
+    h.coordinator.setProviderGroupSendReconnect(sid, { attempt: 2, maxAttempts: 5 });
+    expect(latestProjection(h.projections).autoResumePending).toBeUndefined();
   });
 });

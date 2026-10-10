@@ -3308,6 +3308,31 @@ describe('session-agent-switch handoff injection', () => {
     expect(bootstrapOpts.resumeSessionId).toBeUndefined();
   });
 
+  it('发送前的准备期间被停止(如供应商组在等原电脑恢复)→ 不再打开会话,按「派发前取消」返回', async () => {
+    const controller = new AbortController();
+    const getSession = vi.fn((): MakerSendTransactionSession | null => null);
+    const bootstrapSession = vi.fn(async (): Promise<never> => {
+      throw new Error('must not open a session after the send was stopped');
+    });
+    const { deps } = createDeps({
+      getSession,
+      bootstrapSession,
+      applyPendingAgentSwitch: vi.fn(async () => {
+        controller.abort();
+      }),
+    });
+    const transaction = createMakerSendTransaction(deps);
+    const result = await transaction.sendToAgentAccepted(
+      'session-1',
+      { type: 'user', content: 'hi' },
+      { agentKind: 'claude-code', workingDir: 'C:\Users\admin\AppData\Local\Temp\w' },
+      { signal: controller.signal },
+    );
+    expect(result).toMatchObject({ accepted: false, reason: 'cancelled-before-dispatch' });
+    expect(getSession).not.toHaveBeenCalled();
+    expect(bootstrapSession).not.toHaveBeenCalled();
+  });
+
   it('排队 drain 端到端:切换在派发时刻落实(关旧引擎)→ createOpts 按 DB 对齐新引擎 → 交接注入新引擎首条 + scheduler origin 透传', async () => {
     // 复刻 coordinator drain 一条排队 scheduler 心跳时对 sendToAgentAccepted 的调用:
     // 入队的是裸 prompt(不含交接)+ 旧引擎(claude-code)createOpts。drain 时会话已

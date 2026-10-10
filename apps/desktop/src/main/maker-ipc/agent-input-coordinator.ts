@@ -667,6 +667,11 @@ interface ActiveTurn {
    * `undefined` 表示当前没有待回滚的采纳。
    */
   preContinuationVendorTurnGeneration?: number | null;
+  /**
+   * 供应商组在发送前等原电脑恢复(这条还没派出去，provider-groups.md §6.1)：投影的进行中行显示
+   * 「重新连接中 n/5」。挂在这一轮上，轮次结束或换掉即一起消失。
+   */
+  providerGroupReconnect?: AutoResumeInfo;
 }
 
 interface PendingCompactRequest {
@@ -766,6 +771,8 @@ interface SessionInputState {
     /** 每次登记唯一：host 暂存的 error 行与结算都按它对号，迟到的旧结算不会碰到下一次失败。 */
     id: number;
     recovery: NonNullable<AgentInputRecovery>;
+    cause: AutoResumeAgentSwitchCause;
+    /** 投影里的进行中行：换电脑时「正在换一台电脑继续」，先等原电脑恢复时「重新连接中 n/5」。 */
     info: AutoResumeInfo;
   } | null;
   recovery: AgentInputRecovery;
@@ -911,6 +918,22 @@ function isUsageLimitCandidateCurrent(state: SessionInputState, token?: number):
 /** 已排期（有自动继续时刻）且仍有效的等待。 */
 function isUsageLimitWaitLive(state: SessionInputState, token?: number): boolean {
   return state.usageLimitWait?.resumeAt != null && isUsageLimitCandidateCurrent(state, token);
+}
+
+/**
+ * 换电脑期间进行中行的内容。`error` 只用来让 renderer 认出随后到达的终态 event 是同一次失败的回声(不再点亮
+ * 横幅)。换电脑时次数都给 0(不是重连)，旧端按普通的「重新连接中」显示、不带次数；先等原电脑恢复时就是一次
+ * 普通的重连：不带 groupSwitchPending，新旧端都显示「重新连接中 n/5」，展开看原因。
+ */
+function providerGroupSwitchHoldInfo(
+  cause: AutoResumeAgentSwitchCause,
+  error: string | undefined,
+  progress: { attempt: number; maxAttempts: number } | null,
+): AutoResumeInfo {
+  const base = error ? { error } : {};
+  return progress
+    ? { ...base, attempt: progress.attempt, maxAttempts: progress.maxAttempts, sessionTotal: 0 }
+    : { ...base, attempt: 0, maxAttempts: 0, sessionTotal: 0, groupSwitchPending: { cause } };
 }
 
 /** 换电脑期间先不呈现的那次错误仍是当前状态：登记时的 recovery 没被换掉、错误仍在、没有别的自愈接管。 */
@@ -4306,9 +4329,9 @@ export class AgentInputCoordinator {
     const autoResumePending = state.autoResumePending ?? (
       groupSwitchHeld
         ? state.providerGroupSwitchHold!.info
-        : state.activeTurn?.item?.autoResume &&
-            state.activeTurn.dispatchLifecycle !== 'dispatched'
-          ? state.activeTurn.item.autoResumeInfo
+        : state.activeTurn && state.activeTurn.dispatchLifecycle !== 'dispatched'
+          ? state.activeTurn.providerGroupReconnect ??
+            (state.activeTurn.item?.autoResume ? state.activeTurn.item.autoResumeInfo : undefined)
           : undefined
     );
     const recovery: AgentInputRecovery =
@@ -6571,16 +6594,49 @@ export class AgentInputCoordinator {
     state.providerGroupSwitchHold = {
       id: ++this.providerGroupSwitchHoldSeq,
       recovery: state.recovery!,
-      info: {
-        // 只用来让 renderer 认出随后到达的终态 event 是同一次失败的回声(不再点亮横幅)，行内不显示它。
-        ...(message ? { error: message } : {}),
-        // 不是重连：次数都给 0，旧端按普通的「重新连接中」显示、不带次数。
-        attempt: 0,
-        maxAttempts: 0,
-        sessionTotal: 0,
-        groupSwitchPending: { cause },
-      },
+      cause,
+      info: providerGroupSwitchHoldInfo(cause, message, null),
     };
+  }
+
+  /**
+   * 换电脑这一趟先等原电脑恢复(那台连不上)：进行中行改为「重新连接中 attempt/maxAttempts」；传 null 回到
+   * 「正在换一台电脑继续」。只认仍有效的那次登记；返回是否更新了。
+   */
+  setProviderGroupSwitchHoldProgress(
+    sessionId: string,
+    id: number,
+    progress: { attempt: number; maxAttempts: number } | null,
+  ): boolean {
+    const state = this.states.get(sessionId);
+    const hold = state?.providerGroupSwitchHold;
+    if (!state || !hold || hold.id !== id || !isProviderGroupSwitchHoldLive(state)) return false;
+    hold.info = providerGroupSwitchHoldInfo(hold.cause, hold.info.error, progress);
+    this.emit(sessionId);
+    return true;
+  }
+
+  /**
+   * 供应商组在发送前等原电脑恢复(这条还没派出去)：进行中行显示「重新连接中 attempt/maxAttempts」，没等到、开始换电脑
+   * 时(`switching`)显示「正在换一台电脑继续」，传 null 撤掉。只挂在还没派发的这一轮上；没有这样的一轮时不做什么。
+   */
+  setProviderGroupSendReconnect(
+    sessionId: string,
+    progress: { attempt: number; maxAttempts: number } | 'switching' | null,
+  ): void {
+    const active = this.states.get(sessionId)?.activeTurn;
+    if (!active || active.dispatchLifecycle === 'dispatched') return;
+    if (!progress && !active.providerGroupReconnect) return;
+    if (progress) {
+      active.providerGroupReconnect = providerGroupSwitchHoldInfo(
+        'unavailable',
+        undefined,
+        progress === 'switching' ? null : progress,
+      );
+    } else {
+      delete active.providerGroupReconnect;
+    }
+    this.emit(sessionId);
   }
 
   /**

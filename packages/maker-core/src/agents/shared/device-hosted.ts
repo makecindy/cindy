@@ -5,10 +5,31 @@
 import { realpathSync } from 'node:fs';
 import path from 'node:path';
 
-import type { DeviceHostedSession, PiExtraSpawnConfig } from '../base-agent.js';
+import type { DeviceHostedLinkActivity, DeviceHostedSession, PiExtraSpawnConfig } from '../base-agent.js';
 
 /** 交给 Pi 内 cindy-bridge 的托管配置(隧道地址、令牌、Agent 主机上的工作目录)。 */
 export const DEVICE_HOSTED_PI_ENV = 'CINDY_PI_HOSTED';
+
+/**
+ * 链路往来写成一句诊断，附在托管会话关键 RPC 的超时错误里：分得清「请求一直在走、只是链路慢」
+ * (回复数在涨、往返耗时长)、「某个请求卡住」(最早未回复的请求等了很久)与「链路上根本没有往来」。
+ */
+export function describeDeviceHostedLinkActivity(activity: DeviceHostedLinkActivity, now = Date.now()): string {
+  const seconds = (ms: number) => `${(ms / 1000).toFixed(1)}s`;
+  const parts = [`execution environment answered ${activity.execResponses}/${activity.execRequests} requests`];
+  if (activity.execOldestPending) {
+    parts.push(`oldest unanswered ${activity.execOldestPending.method} waiting ${seconds(activity.execOldestPending.waitedMs)}`);
+  }
+  if (activity.execRoundTripAvgMs !== undefined && activity.execRoundTripMaxMs !== undefined) {
+    parts.push(`round trip avg ${seconds(activity.execRoundTripAvgMs)} max ${seconds(activity.execRoundTripMaxMs)}`);
+  }
+  parts.push(`peak in flight ${activity.execMaxInFlight}`);
+  if (activity.httpInFlight > 0) parts.push(`${activity.httpInFlight} tool requests in flight`);
+  parts.push(activity.lastActivityAt === null
+    ? 'no link activity yet'
+    : `last link activity ${seconds(Math.max(0, now - activity.lastActivityAt))} ago`);
+  return parts.join(', ');
+}
 
 /**
  * 去掉结尾的斜杠。不用正则：`x+$` 这类模式在不可控输入上是多项式回溯(CodeQL

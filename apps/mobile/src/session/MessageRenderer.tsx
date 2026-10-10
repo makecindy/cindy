@@ -5330,6 +5330,10 @@ function MobileAutoResumeActionRow({
         from: info.agentSwitch.from,
         to: info.agentSwitch.to,
       })
+    : info.agentReconnect
+    ? info.agentReconnect.computer
+      ? t('message.systemCard.autoResume.agentReconnect.named', { computer: info.agentReconnect.computer })
+      : t('message.systemCard.autoResume.agentReconnect.unnamed')
     : info.groupSwitch
     ? t('message.systemCard.autoResume.groupSwitch')
     : info.usageLimitReset

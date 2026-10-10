@@ -384,7 +384,9 @@ describe('interrupted continuation enqueue contract', () => {
       /if \(typeof event\.turnAttemptToken === 'number'\) \{\s*autoResumeBookkeeping\.clearFailedTurnCompletionTail\(session\.id\);/,
     );
 
-    expect(registerSource).toMatch(/finalizeOrcaSuppressedTerminal:\s*\(sessionId, payload\)\s*=>/);
+    expect(registerSource).toMatch(
+      /finalizeOrcaSuppressedTerminal:\s*settleDeferredOrcaWorkerTerminal,/,
+    );
     expect(registerSource).toMatch(/status: payload\.status,\s*finalText: payload\.finalText/);
   });
 });

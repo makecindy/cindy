@@ -1,3 +1,5 @@
+import { todoForCaller } from '../maker-ipc/botTodoAccess.js';
+import { TodoError, queryTodoItems, type TodoListQuery, type TodoPatch, type preflightTodoEvents } from '@cindy/maker-shared/teammate-todo';
 import { t } from '../i18n.js';
 import { executeTaskTags } from '../localDb/ipc/taskTags.js';
 import { getPluginMarketService } from '../plugin-market/service.js';
@@ -904,6 +906,23 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       // botWorkbenchAccess 里逐次确定性校验;投递复用 send_to_session 的同一条宿主路径。
       // 停止走通用的 stop_session_turn。
       botWorkbench: {
+        todos: async (caller, operation, input) => {
+          try {
+            const access = await todoForCaller(caller);
+            if (operation === 'list') {
+              const all = await access.list();
+              const q = (input ?? {}) as TodoListQuery & {id?:string;key?:string};
+              if (q.id || q.key) {
+                const items = all.items.filter(t => q.id ? t.id === q.id : t.key === q.key);
+                return {ok:true,items,total:items.length};
+              }
+              return {ok:true,...queryTodoItems(all.items,q)};
+            }
+            if (operation === 'update') return {ok:true,todo:await access.patch(input as TodoPatch)};
+            if (operation === 'preflight') return {ok:true,events:await access.preflight(input as Parameters<typeof preflightTodoEvents>[1])};
+            return {ok:true,...await access.ingest(input as Parameters<typeof access.ingest>[0])};
+          } catch(error) { return {ok:false,errorCode:error instanceof TodoError ? error.code : 'INTERNAL',message:error instanceof Error?error.message:'INTERNAL'}; }
+        },
         get: (params) => runBotWorkbenchTool(workbenchSend, (access) => access.get(params)),
         read: (params) => runBotWorkbenchTool(workbenchSend, (access) => access.read(params)),
         set: (params) => runBotWorkbenchTool(workbenchSend, (access) => access.set(params)),

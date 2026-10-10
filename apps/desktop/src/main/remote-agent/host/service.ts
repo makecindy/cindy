@@ -71,6 +71,7 @@ export function hostedStartOptions(input: HostedStartInput): StartSessionOptions
       homeDir: undefined,
       tunnelUrl: input.tunnel.url,
       tunnelToken: input.tunnel.token,
+      ...(input.tunnel.linkActivity ? { linkActivity: input.tunnel.linkActivity } : {}),
       mcpServers: [...input.mcpServers],
       mirrorRoot: input.mirrorRoot,
       ...(input.personalInstructions ? { personalInstructions: input.personalInstructions } : {}),

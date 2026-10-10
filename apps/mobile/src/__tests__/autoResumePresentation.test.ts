@@ -111,4 +111,13 @@ describe('provider group computer switch', () => {
     expect(readMobileAutoResumeInfo({ reason: 'usage-limit-reset', groupSwitch: {} }))
       .toEqual({ usageLimitReset: true });
   });
+
+  it('reads a reconnect to the original computer, with or without its name', () => {
+    expect(readMobileAutoResumeInfo({ reason: 'usage-limit-reset', agentReconnect: { computer: 'Mac mini' } }))
+      .toEqual({ usageLimitReset: true, agentReconnect: { computer: 'Mac mini' } });
+    expect(readMobileAutoResumeInfo({ reason: 'usage-limit-reset', agentReconnect: {} }))
+      .toEqual({ usageLimitReset: true, agentReconnect: { computer: '' } });
+    expect(readMobileAutoResumeInfo({ reason: 'usage-limit-reset', agentReconnect: 'Mac mini' }))
+      .toEqual({ usageLimitReset: true });
+  });
 });

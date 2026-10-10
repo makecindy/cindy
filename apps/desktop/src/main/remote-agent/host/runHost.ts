@@ -42,7 +42,7 @@ import {
   type RemoteAgentReverseRequest,
   type RemoteAgentTeardownReason,
 } from '@cindy/device-link';
-import type { AgentEvent, AgentSessionHandle, InteractionRequest } from '@cindy/maker-core';
+import type { AgentEvent, AgentSessionHandle, DeviceHostedLinkActivity, InteractionRequest } from '@cindy/maker-core';
 
 import { RemoteAgentRunClient, type RemoteAgentInvoke, type RemoteAgentPoller } from '../controller/runClient';
 import { EventLog, waitForAny } from '../eventLog';
@@ -129,7 +129,8 @@ export interface HostedStartInput {
   personalInstructions?: string;
   options: RemoteAgentWireStartOptions;
   workspace: RemoteAgentWireWorkspace;
-  tunnel: { url: string; token: string };
+  /** linkActivity：隧道上的往来记录，Codex 据此判断慢启动是否仍在推进。 */
+  tunnel: { url: string; token: string; linkActivity?: () => DeviceHostedLinkActivity };
   mcpServers: string[];
   onInvalidResumeSession?: (expectedSdkSessionId: string) => Promise<boolean>;
   /** 控制端是其他账号(供应商分享的受邀者)：Agent 不加载本机的个人化配置与可执行配置。 */
@@ -990,7 +991,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
         ...(payload.personal.instructions ? { personalInstructions: projectText(payload.personal.instructions) } : {}),
         options: Object.fromEntries(Object.entries(payload.options).map(([key, value]) => [key, typeof value === 'string' ? projectText(value) : value])) as unknown as RemoteAgentWireStartOptions,
         workspace: payload.workspace,
-        tunnel: { url: tunnel.url, token: tunnel.token },
+        tunnel: { url: tunnel.url, token: tunnel.token, linkActivity: () => tunnel.linkActivity() },
         mcpServers: payload.mcpServers,
         ...(run.trust === 'guest' ? { guest: true, ...(guestHome ? { guestHome } : {}), ...(guestProvider ? { guestProvider } : {}) } : {}),
         ...(payload.options.invalidResumeCallback

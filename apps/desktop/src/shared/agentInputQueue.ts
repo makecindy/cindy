@@ -210,6 +210,12 @@ export interface AutoResumeInfo {
    */
   agentSwitch?: AutoResumeAgentSwitch;
   /**
+   * 供应商组里任务所在的那台连不上，等它恢复后留在原电脑继续(reason 同样为 USAGE_LIMIT_RESET_AUTO_RESUME_REASON)：
+   * 活动行显示「{computer} 已重新连上，继续运行」，读不到名称时不写电脑名。旧端忽略该字段，显示成「用量已恢复，
+   * 已自动继续」(与 agentSwitch 相同)。
+   */
+  agentReconnect?: AutoResumeAgentReconnect;
+  /**
    * 分享的人这边的自动换电脑(分享者的供应商组替它换了一台，本机不知道是哪台)：活动行显示「已自动换一台
    * 电脑继续」，不出现电脑名称(docs/product-rules/provider-groups.md §8)。旧端忽略该字段。
    */
@@ -234,6 +240,11 @@ export interface AutoResumeAgentSwitch {
   /** 换到的电脑的显示名。 */
   to: string;
   cause: AutoResumeAgentSwitchCause;
+}
+
+export interface AutoResumeAgentReconnect {
+  /** 重新连上的那台电脑的显示名；读不到时为空。 */
+  computer: string;
 }
 
 /** 账号额度重置后自动继续时 `AutoResumeInfo.reason` 的取值（活动行据此换文案）。 */

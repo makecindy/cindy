@@ -175,6 +175,7 @@ describe('provider-group:remote', () => {
       },
       listCandidates: async () => [],
       readDeviceCatalog: async () => [],
+      probe: async () => 'ok' as const,
       memberLabel: (m) => m.label ?? m.key,
       invalidate: vi.fn(),
     };

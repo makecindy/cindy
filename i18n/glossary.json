@@ -2397,6 +2397,19 @@
         "ko": "작업대"
       },
       "note": "伙伴主任务右侧栏里的标签：主人交给伙伴的项目，以及项目里的任务、自动化与产出（docs/product-rules/cindy-bots-runtime.md「工作台」一节）。只指这个伙伴视图，不泛指任务列表或其它面板。先登记为 proposed，待 Chris 实机试用后再定。"
+    },
+    {
+      "id": "teammate-todo",
+      "status": "proposed",
+      "en": "Todo",
+      "translations": {
+        "zh-CN": "待办",
+        "zh-TW": "待辦",
+        "ja": "Todo",
+        "ko": "할 일"
+      },
+      "checkCase": false,
+      "note": "伙伴独立事务清单，含交办与获准信息中的主动发现；项目、执行任务与PR仅可选关联。不替代Session任务生命周期。"
     }
   ]
 }

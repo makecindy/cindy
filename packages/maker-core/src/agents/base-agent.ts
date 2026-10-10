@@ -1783,6 +1783,36 @@ export interface DeviceHostedSession {
    * Pi / Codex 子代理与按模型分流的路由也只保留这个供应商。
    */
   guestProvider?: DeviceHostedGuestProvider;
+  /**
+   * 任务隧道的往来记录。托管会话里 Codex 每读一个项目文件都要过一次设备互联，慢链路下线程启动会
+   * 合法地超过关键 RPC 的固定上限(#5764)：链路上还有往来就顺延等待，超时时把这里的计数写进错误说明。
+   * 不提供时按固定上限。
+   */
+  linkActivity?: () => DeviceHostedLinkActivity;
+}
+
+/**
+ * 设备托管会话的链路往来快照(运行 Agent 的电脑上、任务隧道记下的)。只含方法名、计数与耗时，
+ * 可以写进日志与错误说明。
+ */
+export interface DeviceHostedLinkActivity {
+  /**
+   * 最近一次往来的时间(Date.now 毫秒)：Agent 发给执行环境的消息、执行环境的回复或 Cindy 工具请求；
+   * 执行环境主动推的通知(后台命令输出等)不算。还没有往来时为 null。
+   */
+  lastActivityAt: number | null;
+  /** Agent 发给执行环境(Codex exec-server)的请求数，与其中已收到回复的数量。 */
+  execRequests: number;
+  execResponses: number;
+  /** 同时在等回复的执行环境请求数的峰值。 */
+  execMaxInFlight: number;
+  /** 还在等回复的执行环境请求里最早的一个：方法名与已等时长(毫秒)。 */
+  execOldestPending?: { method: string; waitedMs: number };
+  /** 最近若干次执行环境往返的平均与最大耗时(毫秒)；还没有完成的往返时缺省。 */
+  execRoundTripAvgMs?: number;
+  execRoundTripMaxMs?: number;
+  /** 正在经隧道处理的 Cindy 工具(HTTP)请求数。 */
+  httpInFlight: number;
 }
 
 /** 受邀者会话的供应商边界，见 DeviceHostedSession.guestProvider。 */

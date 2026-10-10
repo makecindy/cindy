@@ -22,6 +22,17 @@ function readAgentSwitch(value: unknown): MobileAutoResumeAgentSwitch | undefine
   return { from: from.slice(0, 128), to: to.slice(0, 128), cause: cause as MobileAutoResumeAgentSwitchCause };
 }
 
+/** 对齐桌面 AutoResumeAgentReconnect:供应商组等原电脑恢复后在原电脑继续(读不到名称时为空)。 */
+export interface MobileAutoResumeAgentReconnect {
+  computer: string;
+}
+
+function readAgentReconnect(value: unknown): MobileAutoResumeAgentReconnect | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const { computer } = value as Record<string, unknown>;
+  return { computer: typeof computer === 'string' ? computer.slice(0, 128) : '' };
+}
+
 /** 对齐桌面 AutoResumeGroupSwitch:分享者的供应商组替分享的人换了一台电脑(不显示电脑名称)。 */
 export interface MobileAutoResumeGroupSwitch {
   cause: MobileAutoResumeAgentSwitchCause;
@@ -39,6 +50,8 @@ export interface MobileAutoResumeInfo {
   usageLimitReset?: boolean;
   /** 供应商组自动换电脑后继续(与 usageLimitReset 同时出现)。 */
   agentSwitch?: MobileAutoResumeAgentSwitch;
+  /** 供应商组等原电脑恢复后在原电脑继续(与 usageLimitReset 同时出现)。 */
+  agentReconnect?: MobileAutoResumeAgentReconnect;
   /** 分享的人这边的自动换电脑:活动行写「已自动换一台电脑继续」。 */
   groupSwitch?: MobileAutoResumeGroupSwitch;
   /** 进行中:供应商组正在为这次失败换电脑,错误先不呈现,写「正在换一台电脑继续」。 */
@@ -68,11 +81,13 @@ export function readMobileAutoResumeInfo(data?: Record<string, unknown>): Mobile
   const maxAttempts = usageLimitReset ? undefined : number(data?.maxAttempts);
   const sessionTotal = usageLimitReset ? undefined : number(data?.sessionTotal);
   const agentSwitch = readAgentSwitch(data?.agentSwitch);
+  const agentReconnect = readAgentReconnect(data?.agentReconnect);
   const groupSwitch = readGroupSwitch(data?.groupSwitch);
   const groupSwitchPending = readGroupSwitch(data?.groupSwitchPending);
   return {
     ...(usageLimitReset ? { usageLimitReset: true } : {}),
     ...(agentSwitch ? { agentSwitch } : {}),
+    ...(agentReconnect ? { agentReconnect } : {}),
     ...(groupSwitch ? { groupSwitch } : {}),
     ...(groupSwitchPending ? { groupSwitchPending } : {}),
     // 正在换电脑时错误先不呈现:行内不带原始错误。

@@ -66,6 +66,7 @@ const directoryFacade: ProviderGroupDirectory = {
   resolveMembers: (providerId, config) => runtimeForActiveOwner().directory.resolveMembers(providerId, config),
   listCandidates: (providerId, config) => runtimeForActiveOwner().directory.listCandidates(providerId, config),
   readDeviceCatalog: (agentDeviceId) => runtimeForActiveOwner().directory.readDeviceCatalog(agentDeviceId),
+  probe: (agentDeviceId, providerId) => runtimeForActiveOwner().directory.probe(agentDeviceId, providerId),
   memberLabel: (member) => runtimeForActiveOwner().directory.memberLabel(member),
   invalidate: (agentDeviceId) => runtimeForActiveOwner().directory.invalidate(agentDeviceId),
 };

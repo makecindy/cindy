@@ -25112,7 +25112,11 @@ describe('CodexAgent rewind', () => {
     expect(methods).not.toContain(Method.ThreadFork);
     expect(methods).not.toContain(Method.ThreadTurnsList);
     expect(methods.filter((method) => method === Method.ThreadStart)).toHaveLength(2);
-    expect(host.request).toHaveBeenLastCalledWith(Method.ThreadStart, expect.objectContaining({ cwd: '/repo' }));
+    expect(host.request).toHaveBeenLastCalledWith(
+      Method.ThreadStart,
+      expect.objectContaining({ cwd: '/repo' }),
+      expect.objectContaining({ timeoutMs: 10_000 }),
+    );
     expect(host.subscribeThread).toHaveBeenLastCalledWith('fresh-thread-id', expect.any(Object));
     expect(await nextEvent(iterator)).toMatchObject({
       type: 'session_id',

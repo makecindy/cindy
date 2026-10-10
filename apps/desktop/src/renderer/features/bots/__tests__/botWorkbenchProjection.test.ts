@@ -12,6 +12,7 @@ import {
   tierWorkbenchProjectOptions,
   workbenchGroupHasFollowUp,
   workbenchTileGroup,
+  workbenchItemNeedsLocalReference,
   type WorkbenchProjectOption,
   type WorkbenchDelegationInput,
 } from '../botWorkbenchProjection';
@@ -569,4 +570,41 @@ describe('project picker filtering and tiers', () => {
     });
     expect(cindy).toMatchObject({ name: 'cindy', isGitRepo: true });
   });
+});
+
+it('retains an entrusted legacy local reference entrance until equivalent migration', () => {
+  const tiles = buildWorkbenchTiles({
+    ...base,
+    projectDirs: [CINDY],
+    sessions: [],
+    judgments: {
+      'idea:local': {
+        project: CINDY,
+        title: '本地方案',
+        next: '查看文件',
+        verdict: 'idea',
+        ref: CINDY + '/notes.md',
+        updatedAt: new Date(base.now).toISOString(),
+      },
+      'idea:web': {
+        project: CINDY,
+        title: '网上方案',
+        next: '查看',
+        verdict: 'idea',
+        ref: 'https://example.test/notes',
+        updatedAt: new Date(base.now).toISOString(),
+      },
+      'idea:outside': {
+        project: CINDY,
+        title: '外部路径',
+        next: '查看',
+        verdict: 'idea',
+        ref: '/private/notes.md',
+        updatedAt: new Date(base.now).toISOString(),
+      },
+    },
+  });
+  const kept = tiles.filter((tile) => workbenchItemNeedsLocalReference(tile, [CINDY], false));
+  expect(kept.map((tile) => tile.id)).toEqual(['idea:local']);
+  expect(workbenchItemNeedsLocalReference(kept[0], [], false)).toBe(false);
 });

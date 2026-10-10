@@ -52,11 +52,6 @@ const ALLOWLIST: Array<{ file: string; snippet: string; reason: string }> = [
     reason: 'Claude logo 视觉重量偏小的 +1px 光学补偿',
   },
   {
-    file: 'src/session/ContextSheetCollabView.tsx',
-    snippet: '? 19 : iconSize.lg',
-    reason: '协同 Worker 行与首页任务行同一个 Agent 标，Claude logo +1px 光学补偿同值',
-  },
-  {
     file: 'app/sessions/[sessionId].tsx',
     snippet: 'size={10}',
     reason: '停止按钮实心 Square(填充块语义,非阶梯图标)',

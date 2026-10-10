@@ -14,8 +14,9 @@ export const CHAT_HEADER_MARK_SIZE = 32;
  * 设置。点身份区和设置按钮打开同一份资料 / 设置。
  */
 export function ChatIdentityHeader({
-  mark, title, subtitle, identityLabel, identityHint, controlsReady = true, onBack, onOpenSettings, settingsLabel, testIDPrefix, settingsTestID,
+  accessory, mark, title, subtitle, identityLabel, identityHint, controlsReady = true, onBack, onOpenSettings, settingsLabel, testIDPrefix, settingsTestID,
 }: {
+  accessory?: ReactNode;
   mark: ReactNode;
   title: string;
   /** A short line under the title: presence + computer name, or member names. */
@@ -47,6 +48,7 @@ export function ChatIdentityHeader({
         {typeof subtitle === 'string' ? <Text numberOfLines={1} style={styles.subtitle}>{subtitle}</Text> : subtitle}
       </View>
     </Pressable>
+    {accessory}
     <HomeHeaderGlassButton testID={settingsTestID ?? `${testIDPrefix}.settings`} disabled={!controlsReady} accessibilityLabel={settingsLabel} onPress={open}>
       <Settings2 size={iconSize.lg} strokeWidth={iconStroke.regular} color={colors.textPrimary} />
     </HomeHeaderGlassButton>

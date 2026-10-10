@@ -227,3 +227,55 @@ describe('resolveMembers', () => {
     expect(d.readDeviceProviders).toHaveBeenCalledTimes(2);
   });
 });
+
+describe('probe (waiting for a computer to come back, §6.1)', () => {
+  it('tells apart a computer that cannot be reached from one whose provider cannot be used', async () => {
+    const directory = createProviderGroupDirectory(deps());
+    expect(await directory.probe('mini', 'anthropic-1a2b3c4d')).toBe('ok');
+    expect(await directory.probe('off', 'anthropic')).toBe('offline');
+    expect(await directory.probe('mini', 'gone')).toBe('unavailable');
+    expect(await directory.probe('share:s1', 'anthropic')).toBe('ok');
+    expect(await directory.probe('share:s2', 'anthropic')).toBe('unavailable');
+  });
+
+  it('does not wait for a computer that is online but turned off remote control', async () => {
+    const directory = createProviderGroupDirectory(deps({
+      listDevices: async () => [device('mini', { remoteControlEnabled: false })],
+    }));
+    expect(await directory.probe('mini', 'anthropic-1a2b3c4d')).toBe('unavailable');
+  });
+
+  it('reads a shared computer directly instead of trusting the periodically refreshed online flag', async () => {
+    const directory = createProviderGroupDirectory(deps({
+      listReceivedShares: () => [share('s1', { hostOnline: false })],
+    }));
+    // 快照还说离线，其实已经能读到那台的目录：按恢复算。
+    expect(await directory.probe('share:s1', 'anthropic')).toBe('ok');
+    // 真读不到时仍是离线。
+    const unreachable = createProviderGroupDirectory(deps({
+      listReceivedShares: () => [share('s1', { hostOnline: false })],
+      readDeviceProviders: async () => {
+        throw new Error('unreachable');
+      },
+    }));
+    expect(await unreachable.probe('share:s1', 'anthropic')).toBe('offline');
+  });
+
+  it('reads the current state instead of the cached one', async () => {
+    let miniOnline = true;
+    const d = deps({ listDevices: async () => [device('self', { isSelf: true }), device('mini', { online: miniOnline })] });
+    const directory = createProviderGroupDirectory(d);
+    const config: ProviderGroupConfig = {
+      strategy: 'least',
+      autoSwitch: true,
+      members: [{ key: 'device:mini:anthropic-1a2b3c4d', kind: 'device', agentDeviceId: 'mini', providerId: 'anthropic-1a2b3c4d', limit: 4, weight: 1, paused: false }],
+    };
+    await directory.resolveMembers('anthropic', config);
+    miniOnline = false;
+    expect(await directory.probe('mini', 'anthropic-1a2b3c4d')).toBe('offline');
+    miniOnline = true;
+    expect(await directory.probe('mini', 'anthropic-1a2b3c4d')).toBe('ok');
+    // 那台的目录也现读，不用短时缓存。
+    expect(d.readDeviceProviders).toHaveBeenCalledTimes(2);
+  });
+});

@@ -53,6 +53,8 @@ interface Fixture {
   providerId?: string;
   /** app-server 不给功能清单(旧版本或出错)。 */
   noFeatureList?: boolean;
+  /** 宿主提供的任务隧道往来记录。 */
+  linkActivity?: DeviceHostedSession['linkActivity'];
 }
 
 /** app-server 的功能清单，分两页返回。 */
@@ -237,6 +239,7 @@ async function startHosted(fixture: Fixture) {
     mirrorRoot,
     ...(fixture.guest ? { guest: true, guestProvider: SHARED_PROVIDER } : {}),
     ...(guestHome ? { guestHome } : {}),
+    ...(fixture.linkActivity ? { linkActivity: fixture.linkActivity } : {}),
   };
   const started = agent.startSession({
     sessionId: 'hosted-session',
@@ -258,6 +261,11 @@ function threadParams(request: ReturnType<typeof vi.fn>, method: string): Record
   const params = request.mock.calls.find(([called]) => called === method)?.[1] as Record<string, unknown> | undefined;
   if (!params) throw new Error(`expected ${method}`);
   return params;
+}
+
+/** host.request 的第三个参数(超时与顺延设置)。 */
+function requestOptions(request: ReturnType<typeof vi.fn>, method: string): Record<string, unknown> | undefined {
+  return request.mock.calls.find(([called]) => called === method)?.[2] as Record<string, unknown> | undefined;
 }
 
 afterEach(async () => {
@@ -411,6 +419,61 @@ describe('Codex device-hosted guest sessions', () => {
     expect(fixture.prepareCodexResumeSession).toHaveBeenCalled();
     expect(fixture.resolveCodexThreadStorage).toHaveBeenCalled();
     expect(fixture.prepareCodexSkills).toHaveBeenCalled();
+    await handle.close();
+  });
+
+  it.each([false, true])('lets thread requests keep waiting while the tunnel still has traffic (#5764, resume: %s)', async (resume) => {
+    const linkActivity = vi.fn(() => ({
+      lastActivityAt: 1_234,
+      execRequests: 4,
+      execResponses: 3,
+      execMaxInFlight: 2,
+      httpInFlight: 0,
+    }));
+    const fixture = await startHosted({ guest: true, resume, linkActivity });
+    const handle = await fixture.started;
+    const optionsOf = (method: string) => requestOptions(fixture.request, method) as {
+      timeoutMs?: number;
+      extendWhileProgress?: { lastProgressAt(): number | null; idleMs: number; maxMs: number; describe?(): string };
+    } | undefined;
+    const thread = optionsOf(resume ? Method.ThreadResume : Method.ThreadStart);
+    expect(thread).toMatchObject({ timeoutMs: 60_000, extendWhileProgress: { idleMs: 30_000, maxMs: 300_000 } });
+    expect(thread?.extendWhileProgress?.lastProgressAt()).toBe(1_234);
+    expect(thread?.extendWhileProgress?.describe?.()).toContain('execution environment answered 3/4 requests');
+    await handle.send({ type: 'user', content: 'hi' });
+    expect(optionsOf(Method.TurnStart)).toMatchObject({ timeoutMs: 60_000, extendWhileProgress: { idleMs: 30_000 } });
+    await handle.close();
+  });
+
+  it('extends hosted workspace profile lifecycle requests with tunnel progress', async () => {
+    const linkActivity = vi.fn(() => ({
+      lastActivityAt: 1_234,
+      execRequests: 4,
+      execResponses: 3,
+      execMaxInFlight: 2,
+      httpInFlight: 0,
+    }));
+    const fixture = await startHosted({ guest: true, linkActivity });
+    const handle = await fixture.started;
+    await handle.setExtraDirs?.(['/shared-profile']);
+    await handle.send({ type: 'user', content: 'use the hosted profile' });
+
+    const replacementCall = fixture.request.mock.calls
+      .filter(([method]) => method === Method.ThreadStart)[1] as unknown as [string, unknown, unknown] | undefined;
+    const replacement = replacementCall?.[2] as Record<string, unknown> | undefined;
+    expect(replacement).toMatchObject({
+      timeoutMs: 60_000,
+      extendWhileProgress: { idleMs: 30_000, maxMs: 300_000 },
+    });
+    await handle.close();
+  });
+
+  it('keeps the fixed limit when the host provides no tunnel activity', async () => {
+    const fixture = await startHosted({ guest: false });
+    const handle = await fixture.started;
+    const options = requestOptions(fixture.request, Method.ThreadStart);
+    expect(options).toMatchObject({ timeoutMs: 60_000 });
+    expect(options).not.toHaveProperty('extendWhileProgress');
     await handle.close();
   });
 

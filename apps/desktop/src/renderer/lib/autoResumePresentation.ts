@@ -1,5 +1,6 @@
 import {
   USAGE_LIMIT_RESET_AUTO_RESUME_REASON,
+  type AutoResumeAgentReconnect,
   type AutoResumeAgentSwitch,
   type AutoResumeAgentSwitchCause,
   type AutoResumeGroupSwitch,
@@ -11,6 +12,8 @@ export interface AutoResumeCardInfo {
   usageLimitReset?: boolean;
   /** 供应商组自动换电脑后继续(与 usageLimitReset 同时出现)。 */
   agentSwitch?: AutoResumeAgentSwitch;
+  /** 供应商组等原电脑恢复后在原电脑继续(与 usageLimitReset 同时出现)。 */
+  agentReconnect?: AutoResumeAgentReconnect;
   /** 分享者的供应商组替分享的人换了一台电脑后继续(不知道是哪台，不显示电脑名称)。 */
   groupSwitch?: AutoResumeGroupSwitch;
   /** 进行中：供应商组正在为这次失败换电脑(错误先不呈现)。 */
@@ -40,6 +43,9 @@ export function readAutoResumeInfo(data?: Record<string, unknown>): AutoResumeCa
   return {
     ...(data?.reason === USAGE_LIMIT_RESET_AUTO_RESUME_REASON ? { usageLimitReset: true } : {}),
     ...(readAgentSwitch(data?.agentSwitch) ? { agentSwitch: readAgentSwitch(data?.agentSwitch)! } : {}),
+    ...(readAgentReconnect(data?.agentReconnect)
+      ? { agentReconnect: readAgentReconnect(data?.agentReconnect)! }
+      : {}),
     ...(readGroupSwitch(data?.groupSwitch) ? { groupSwitch: readGroupSwitch(data?.groupSwitch)! } : {}),
     ...(readGroupSwitch(data?.groupSwitchPending)
       ? { groupSwitchPending: readGroupSwitch(data?.groupSwitchPending)! }
@@ -62,6 +68,12 @@ function readAgentSwitch(value: unknown): AutoResumeAgentSwitch | null {
   if (typeof from !== 'string' || !from || typeof to !== 'string' || !to) return null;
   if (!AGENT_SWITCH_CAUSES.includes(cause as AutoResumeAgentSwitchCause)) return null;
   return { from: from.slice(0, 128), to: to.slice(0, 128), cause: cause as AutoResumeAgentSwitchCause };
+}
+
+function readAgentReconnect(value: unknown): AutoResumeAgentReconnect | null {
+  if (!value || typeof value !== 'object') return null;
+  const { computer } = value as Record<string, unknown>;
+  return { computer: typeof computer === 'string' ? computer.slice(0, 128) : '' };
 }
 
 function readGroupSwitch(value: unknown): AutoResumeGroupSwitch | null {

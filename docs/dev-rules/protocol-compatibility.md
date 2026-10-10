@@ -113,6 +113,12 @@ Claude Code 终态 error 事件可带 `usageResetAt`（unix ms）。服务端无
 并且不论哪种 Agent 都不再用这次终态 event 点亮横幅。换成了投影直接进入续跑；没换成投影恢复带 `error`。旧客户端忽略该
 字段，按普通「重新连接中」显示(不带次数)；旧 Desktop 控制端对 Claude Code / Pi 仍会被终态 event 短暂点亮横幅，
 下一份投影即收回。只改投影内容，不新增 invoke 或推送通道，服务端无需改动。
+连不上先等它恢复(2026-10-11)：等原电脑恢复期间，`autoResumePending` 是一次普通的重连进度(`attempt` 1–5、
+`maxAttempts` 5、`sessionTotal` 0，不带 `groupSwitchPending`)，新旧端都显示「重新连接中 n/5」；发送前等的时候同样挂在
+还没派出的这一轮上(不带 `error`)。开始换电脑时回到上面的 `groupSwitchPending`。恢复后在原电脑续跑，续跑记录的
+`autoResumeInfo` 新增可选字段 `agentReconnect: { computer }`(读不到名称时为空串)，新 Desktop 与 Mobile 显示
+「已重新连上 {电脑}，继续运行」；旧客户端忽略该字段，显示「用量已恢复，已自动继续」(与 `agentSwitch` 相同)。
+同样只改投影与记录内容，服务端无需改动。
 
 ## Agent 跨设备历史发现与搜索
 
@@ -589,7 +595,11 @@ handler 无 sender 依赖；不加入共享任务访客白名单，不进入自�
   隧道每个任务一个随机令牌，只监听 127.0.0.1。
 - **Codex 依赖**：B 的 Codex 通过 app-server 的实验接口 `environment/add` + `environments` 把 A 注册为
   exec-server 执行环境，A 为每条连接起本机 `codex exec-server --listen stdio://`。该接口随 Codex 版本
-  可能变化，升级 Codex 时需回归 `remote-agent/__tests__/codexHosted.e2e.test.ts`。
+  可能变化，升级 Codex 时需回归 `remote-agent/__tests__/codexHosted.e2e.test.ts`。A 的中继按方法语义
+  过本机闸门(`controller/execServerRelay.ts`)：`fs/readFile`、`fs/open` 的 read 模式与目录读取按读取，
+  `fs/open` 的 replace/write 模式按写入(后续 `fs/writeBlock` 只有句柄，权限必须在 open 时检查)，`fs/walk` 按
+  目录级读取，`fs/getMetadata`、`fs/canonicalize` 等只看元数据的不过闸门，其余 `fs/` 方法按写入；
+  升级 Codex 后核对 exec-server 新增的方法，只读的要显式归类，否则会被当成写入拒掉(#5764)。
 - **影子目录与配置同步**：`open` 载荷除项目说明文件(含 `.claude/CLAUDE.md`、`.claude/rules`、
   `.codex/skills`)外还带 `ancestorFiles`(项目上级目录里的
   `CLAUDE.md` / `CLAUDE.local.md` / `AGENTS.md` / `AGENTS.override.md`，按层级 `up`，最多 24 级)与

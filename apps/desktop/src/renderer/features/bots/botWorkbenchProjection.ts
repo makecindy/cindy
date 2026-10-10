@@ -27,6 +27,7 @@ import {
   isWorkbenchTaskSource,
   parseWorkbenchTaskId,
   workbenchProjectKey,
+  validateWorkbenchRef,
   type WorkbenchDelegationStatus,
   type WorkbenchTaskJudgment,
   type WorkbenchTaskOrigin,
@@ -727,4 +728,16 @@ export function tierWorkbenchProjectOptions(
   primary.sort(byRecency);
   const max = input.maxPrimary ?? WORKBENCH_PRIMARY_PROJECTS;
   return { primary: primary.slice(0, max), folded: [...primary.slice(max), ...folded].sort(byRecency) };
+}
+
+/** Retain the existing safe local-file entrance until its Todo source has an equivalent opener. */
+export function workbenchItemNeedsLocalReference(
+  tile: WorkbenchTile,
+  projectDirs: readonly string[],
+  caseInsensitive: boolean,
+): boolean {
+  return (
+    tile.type === 'item' && !!tile.ref && !/^https:\/\//i.test(tile.ref) &&
+    validateWorkbenchRef(tile.ref, projectDirs, caseInsensitive).ok
+  );
 }

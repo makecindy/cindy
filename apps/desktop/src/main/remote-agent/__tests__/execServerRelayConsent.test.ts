@@ -91,6 +91,15 @@ describe('exec-server relay with confirmation on this computer', () => {
     expect(pending).toEqual([]);
   });
 
+  it('checks fs/open replace as a write before allowing the handle stream', async () => {
+    const { send, pending, replies } = setup();
+    send({ id: 1, method: 'fs/open', params: { handleId: 'h1', mode: 'replace', path: path.join(root, '.env') } });
+    await vi.waitFor(() => expect(pending).toHaveLength(1));
+    expect(pending[0].action).toEqual({ kind: 'write', path: path.join(root, '.env') });
+    pending[0].answer(false);
+    await vi.waitFor(() => expect(replies).toEqual([{ id: 1, error: { code: -32001, message: 'needs confirmation' } }]));
+  });
+
   it('keeps later messages behind one that waits for the user, then forwards them in order', async () => {
     const { send, sentIds, pending } = setup();
     send({ id: 1, method: 'fs/readFile', params: { path: path.join(root, '.env') } });
@@ -119,5 +128,45 @@ describe('exec-server relay with confirmation on this computer', () => {
     pending[0].answer(true);
     await new Promise((resolve) => setTimeout(resolve, 10));
     expect(sentIds()).toEqual([]);
+  });
+});
+
+describe('exec-server relay summary (#5764)', () => {
+  function relayWith(opts: { allow: boolean; pushMs: number }) {
+    let clock = 0;
+    const warn = vi.fn();
+    const relay = new ExecServerRelay({
+      codexPath: 'codex',
+      cwd: root,
+      workspace: new ExecutorWorkspace({ workingDir: root }),
+      authorize: (): ExecutorGateDecision => (opts.allow ? { ok: true } : { ok: false, reason: 'outside the workspace' }),
+      push: async () => {
+        clock += opts.pushMs;
+      },
+      now: () => clock,
+      log: { warn },
+    });
+    relay.handle({ t: 'ws', connId: 'c1', kind: 'open', path: '/ws/exec-server' });
+    const send = (message: Record<string, unknown>) =>
+      relay.handle({ t: 'ws', connId: 'c1', kind: 'message', data: JSON.stringify(message) });
+    return { relay, warn, send };
+  }
+
+  it('logs the first slow push right away and a summary with refusals when the task ends', async () => {
+    const { relay, warn, send } = relayWith({ allow: false, pushMs: 2_500 });
+    send({ id: 1, method: 'fs/walk', params: { path: path.join(root, '..', 'skills') } });
+    await vi.waitFor(() => expect(relay.stats().pushes).toBe(1));
+    expect(warn).toHaveBeenCalledWith('remote agent: exec-server push slow', { pushMs: 2_500, frames: 1 });
+    relay.close();
+    expect(relay.stats()).toEqual({ requests: 1, rejected: 1, pushes: 1, pushMaxMs: 2_500, pushAvgMs: 2_500, slowPushes: 1 });
+    expect(warn).toHaveBeenLastCalledWith('remote agent: exec-server relay summary', relay.stats());
+  });
+
+  it('stays quiet when the link was fast and nothing was refused', () => {
+    const { relay, warn, send } = relayWith({ allow: true, pushMs: 10 });
+    send({ id: 1, method: 'fs/readFile', params: { path: path.join(root, 'a.txt') } });
+    relay.close();
+    expect(relay.stats()).toMatchObject({ requests: 1, rejected: 0, slowPushes: 0 });
+    expect(warn).not.toHaveBeenCalled();
   });
 });

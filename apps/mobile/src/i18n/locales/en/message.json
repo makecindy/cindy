@@ -273,6 +273,10 @@
         "unavailable": "Couldn’t reach {{from}}; continued on {{to}}",
         "overload": "{{from}} was overloaded; continued on {{to}}"
       },
+      "agentReconnect": {
+        "named": "Reconnected to {{computer}}; continued there",
+        "unnamed": "Reconnected to the original computer; continued there"
+      },
       "groupSwitch": "Continued on another computer automatically"
     },
     "modelLabel": "Model",

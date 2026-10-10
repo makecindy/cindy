@@ -465,7 +465,11 @@ describe('guest provider access and usage', () => {
     const host = makeHost(started, { bindGuestProviderRoute: bind });
     await host.handle(GUEST, { op: 'open', runId: RUN_1, agentKind: kind, payload: { json: openPayload('task-1') } });
     await host.handle(OWNER, { op: 'open', runId: RUN_2, agentKind: kind, payload: { json: openPayload('task-2') } });
-    await vi.waitFor(() => expect(started).toHaveLength(2));
+    // Open acknowledges before filesystem preparation/startHosted finishes.
+    // Keep Linux's default; Windows already allows this suite 60s for async disk I/O.
+    await vi.waitFor(() => expect(started).toHaveLength(2), {
+      timeout: process.platform === 'win32' ? 10_000 : 1_000,
+    });
     const guestRun = started.find((entry) => entry.input.guest)!;
     const ownerRun = started.find((entry) => !entry.input.guest)!;
     expect(bind).toHaveBeenCalledTimes(1);

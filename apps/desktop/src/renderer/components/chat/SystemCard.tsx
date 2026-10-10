@@ -970,6 +970,10 @@ function AutoResumeActionRow({
         from: info.agentSwitch.from,
         to: info.agentSwitch.to,
       })
+    : info.agentReconnect
+    ? info.agentReconnect.computer
+      ? t('chat.systemCard.autoResume.agentReconnect.named', { computer: info.agentReconnect.computer })
+      : t('chat.systemCard.autoResume.agentReconnect.unnamed')
     : info.groupSwitch
     ? t('chat.systemCard.autoResume.groupSwitch')
     : usageLimitReset

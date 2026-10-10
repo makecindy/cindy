@@ -273,6 +273,10 @@
         "unavailable": "{{from}} に接続できないため、{{to}} で続行しました",
         "overload": "{{from}} のサービスが混雑しているため、{{to}} で続行しました"
       },
+      "agentReconnect": {
+        "named": "{{computer}} に再接続し、続行しました",
+        "unnamed": "元のパソコンに再接続し、続行しました"
+      },
       "groupSwitch": "別のパソコンに自動で切り替えて続行しました"
     },
     "modelLabel": "モデル",

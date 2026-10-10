@@ -8,6 +8,7 @@ import type { DeviceHostedSession } from '../base-agent.js';
 import {
   DEVICE_HOSTED_DISALLOWED_CLAUDE_TOOLS,
   DEVICE_HOSTED_GUEST_CLAUDE_TOOLS,
+  describeDeviceHostedLinkActivity,
   deviceHostedBuiltinToolName,
   deviceHostedClaudeNote,
   deviceHostedEnvironmentNote,
@@ -266,5 +267,30 @@ describe('device-hosted guest Claude tools', () => {
     expect(deviceHostedBuiltinToolName('mcp__other__WebFetch')).toBeNull();
     // 受邀者电脑上的 Cindy 较旧时没有这个工具，说明里不提。
     expect(deviceHostedClaudeNote(hosted({ guest: true }), '/local')).not.toContain('WebFetch');
+  });
+});
+
+describe('describeDeviceHostedLinkActivity (#5764)', () => {
+  it('tells a slow but moving link from a stuck request and from no traffic at all', () => {
+    expect(describeDeviceHostedLinkActivity({
+      lastActivityAt: 9_700,
+      execRequests: 169,
+      execResponses: 165,
+      execMaxInFlight: 81,
+      execOldestPending: { method: 'fs/readFile', waitedMs: 1_250 },
+      execRoundTripAvgMs: 1_600,
+      execRoundTripMaxMs: 4_210,
+      httpInFlight: 2,
+    }, 10_000)).toBe(
+      'execution environment answered 165/169 requests, oldest unanswered fs/readFile waiting 1.3s, '
+      + 'round trip avg 1.6s max 4.2s, peak in flight 81, 2 tool requests in flight, last link activity 0.3s ago',
+    );
+    expect(describeDeviceHostedLinkActivity({
+      lastActivityAt: null,
+      execRequests: 0,
+      execResponses: 0,
+      execMaxInFlight: 0,
+      httpInFlight: 0,
+    }, 10_000)).toBe('execution environment answered 0/0 requests, peak in flight 0, no link activity yet');
   });
 });

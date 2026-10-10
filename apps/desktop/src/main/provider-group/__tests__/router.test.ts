@@ -49,6 +49,9 @@ function harness(reported: Record<string, number>, bindings: Record<string, Prov
     async readDeviceCatalog() {
       return [];
     },
+    async probe() {
+      return 'ok' as const;
+    },
     memberLabel: (m) => m.key,
     invalidate: () => undefined,
   };
