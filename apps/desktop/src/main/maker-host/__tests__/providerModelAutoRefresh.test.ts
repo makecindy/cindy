@@ -19,6 +19,14 @@ function view(
   return { id, connected, source } as unknown as ProviderView;
 }
 
+function account(
+  id: string,
+  native: 'codex' | 'xai' | 'claude',
+  connected = true,
+): ProviderView {
+  return { id, connected, source: 'user', auth: { method: 'oauth', native } } as unknown as ProviderView;
+}
+
 function deferred(): {
   promise: Promise<void>;
   resolve(): void;
@@ -34,6 +42,165 @@ function deferred(): {
 }
 
 describe('provider model auto-refresh coordinator', () => {
+  it('refreshes connected added accounts together with their built-in family', async () => {
+    const refreshProvider =
+      vi.fn<(providerId: BuiltinRefreshableProviderId) => Promise<void>>();
+    refreshProvider.mockResolvedValue(undefined);
+    const refreshAccount = vi.fn(async (_id: string, _family: 'openai' | 'xai') => undefined);
+    const coordinator = createProviderModelRefreshCoordinator({
+      listProviders: async () => [
+        view('openai', true),
+        view('xai', false),
+        view('anthropic', true),
+        account('openai-plus', 'codex'),
+        account('openai-pro', 'codex'),
+        account('openai-signed-out', 'codex', false),
+        account('xai-second', 'xai'),
+        account('claude-retired', 'claude'),
+        view('custom-endpoint', true, 'user'),
+      ],
+      refreshProvider,
+      refreshAccount,
+      now: () => 1_000,
+      log: { debug: vi.fn(), warn: vi.fn() },
+    });
+
+    // Startup names families explicitly; accounts must not be dropped by that filter.
+    await coordinator.requestAutoRefresh('startup', ['xd', 'openai', 'xai']);
+    expect(refreshProvider.mock.calls.map(([id]) => id)).toEqual(['openai']);
+    expect(refreshAccount.mock.calls).toEqual([
+      ['openai-plus', 'openai'],
+      ['openai-pro', 'openai'],
+      ['xai-second', 'xai'],
+    ]);
+
+    refreshAccount.mockClear();
+    await coordinator.requestAutoRefresh('startup', ['anthropic']);
+    expect(refreshAccount).not.toHaveBeenCalled();
+  });
+
+  it('applies an independent cooldown to each added account', async () => {
+    let now = 1_000;
+    const refreshAccount = vi.fn(async (_id: string, _family: 'openai' | 'xai') => undefined);
+    const coordinator = createProviderModelRefreshCoordinator({
+      listProviders: async () => [view('openai', true), account('openai-plus', 'codex')],
+      refreshProvider: vi.fn(async () => undefined),
+      refreshAccount,
+      now: () => now,
+      log: { debug: vi.fn(), warn: vi.fn() },
+    });
+
+    await coordinator.requestAutoRefresh('model-selector-open');
+    await coordinator.requestAutoRefresh('providers-open');
+    expect(refreshAccount).toHaveBeenCalledTimes(1);
+
+    coordinator.resetCooldowns('openai-plus');
+    await coordinator.requestAutoRefresh('providers-open');
+    expect(refreshAccount).toHaveBeenCalledTimes(2);
+
+    now += PROVIDER_MODEL_AUTO_REFRESH_COOLDOWN_MS;
+    await coordinator.requestAutoRefresh('foreground');
+    expect(refreshAccount).toHaveBeenCalledTimes(3);
+  });
+
+  it('retries a failed account after the failure cooldown and logs the failure', async () => {
+    let now = 1_000;
+    const warn = vi.fn();
+    const refreshAccount = vi
+      .fn<(id: string, family: 'openai' | 'xai') => Promise<void>>()
+      .mockRejectedValueOnce(new Error('model/list unavailable'))
+      .mockResolvedValue(undefined);
+    const coordinator = createProviderModelRefreshCoordinator({
+      listProviders: async () => [account('openai-plus', 'codex')],
+      refreshProvider: vi.fn(async () => undefined),
+      refreshAccount,
+      now: () => now,
+      log: { debug: vi.fn(), warn },
+    });
+
+    await coordinator.requestAutoRefresh('foreground');
+    await vi.waitFor(() =>
+      expect(warn).toHaveBeenCalledWith(
+        'provider model auto-refresh failed',
+        expect.objectContaining({ providerId: 'openai-plus' }),
+      ),
+    );
+    await coordinator.requestAutoRefresh('foreground');
+    expect(refreshAccount).toHaveBeenCalledTimes(1);
+
+    now += PROVIDER_MODEL_AUTO_REFRESH_FAILURE_COOLDOWN_MS;
+    await coordinator.requestAutoRefresh('foreground');
+    expect(refreshAccount).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not hold startup readiness on a stuck added account', async () => {
+    const stuck = deferred();
+    const refreshProvider = vi.fn(async (_id: BuiltinRefreshableProviderId) => undefined);
+    const refreshAccount = vi.fn((_id: string, _family: 'openai' | 'xai') => stuck.promise);
+    const coordinator = createProviderModelRefreshCoordinator({
+      listProviders: async () => [view('openai', true), account('openai-plus', 'codex')],
+      refreshProvider,
+      refreshAccount,
+      now: () => 1_000,
+      log: { debug: vi.fn(), warn: vi.fn() },
+    });
+
+    // Resolves although the account refresh never settles.
+    await coordinator.requestAutoRefresh('startup', ['xd', 'openai', 'xai']);
+    expect(refreshProvider).toHaveBeenCalledExactlyOnceWith('openai');
+    expect(refreshAccount).toHaveBeenCalledExactlyOnceWith('openai-plus', 'openai');
+    stuck.resolve();
+  });
+
+  it('joins concurrent refreshes of the same added account', async () => {
+    const pending = deferred();
+    const refreshAccount = vi.fn((_id: string, _family: 'openai' | 'xai') => pending.promise);
+    const coordinator = createProviderModelRefreshCoordinator({
+      listProviders: async () => [account('openai-plus', 'codex')],
+      refreshProvider: vi.fn(async () => undefined),
+      refreshAccount,
+      now: () => 1_000,
+      log: { debug: vi.fn(), warn: vi.fn() },
+    });
+
+    await Promise.all([
+      coordinator.requestAutoRefresh('model-selector-open'),
+      coordinator.requestAutoRefresh('providers-open'),
+    ]);
+    pending.resolve();
+    await vi.waitFor(() => expect(refreshAccount).toHaveBeenCalledTimes(1));
+  });
+
+  it('stops refreshing an account once it is signed out', async () => {
+    let now = 1_000;
+    let signedIn = true;
+    const refreshAccount = vi.fn(async (_id: string, _family: 'openai' | 'xai') => undefined);
+    const coordinator = createProviderModelRefreshCoordinator({
+      listProviders: async () => [account('openai-plus', 'codex', signedIn)],
+      refreshProvider: vi.fn(async () => undefined),
+      refreshAccount,
+      now: () => now,
+      log: { debug: vi.fn(), warn: vi.fn() },
+    });
+    await coordinator.requestAutoRefresh('foreground');
+    signedIn = false;
+    now += PROVIDER_MODEL_AUTO_REFRESH_COOLDOWN_MS;
+    await coordinator.requestAutoRefresh('foreground');
+    expect(refreshAccount).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps built-in-only behavior when no account refresh is configured', async () => {
+    const refreshProvider = vi.fn(async (_id: BuiltinRefreshableProviderId) => undefined);
+    const coordinator = createProviderModelRefreshCoordinator({
+      listProviders: async () => [view('openai', true), account('openai-plus', 'codex')],
+      refreshProvider,
+      now: () => 1_000,
+      log: { debug: vi.fn(), warn: vi.fn() },
+    });
+    await coordinator.requestAutoRefresh('foreground');
+    expect(refreshProvider.mock.calls.map(([id]) => id)).toEqual(['openai']);
+  });
+
   it('refreshes the public image catalog before manual OpenAI discovery', async () => {
     const catalog = deferred();
     const refreshProvider = vi.fn(async () => undefined);
