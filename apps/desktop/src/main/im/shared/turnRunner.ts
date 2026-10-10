@@ -1414,6 +1414,7 @@ export function createTurnRunner(
                     turnId: item.turn.turnId,
                     origin: effectiveTurnPolicy?.origin ?? { kind: 'im', channel },
                     interactionSurface: 'channel-card',
+                    supportsMultiQuestionInput: !richIm && !!adapter.handleTextInteraction,
                     sourceDescription: item.turn.sourceDescription,
                     ...(effectiveTurnPolicy?.confirmationTimeoutMs
                       ? { timeoutMs: effectiveTurnPolicy.confirmationTimeoutMs }
@@ -2939,7 +2940,7 @@ export function createTurnRunner(
 
   function expireInteractionCard(requestId: string, messageId: string): void {
     if (!richIm) return;
-    const notice = adapter.interactionExpiredNotice ?? t('imBot.interactionExpired');
+    const notice = adapter.interactionExpiredNotice ?? t('settings.imBot.interactionExpired');
     const im = richIm;
     let cancelled = false;
     const done = enqueueAskCardPatch(requestId, async () => {

@@ -982,6 +982,26 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     expect(isHeadlessGhostSetupTurn('feishu-session')).toBe(false);
   });
 
+  it('preserves complete free-text questionnaires on chunked-text adapters', async () => {
+    const h = setupSession(async () => ({ accepted: true }));
+    const answer: InteractionDecision = { kind: 'ask_user_question', answers: { 'Name?': 'Alice', 'City?': 'Paris' } };
+    const handleTextInteraction = vi.fn(async () => answer);
+    const localRunner = createTurnRunner({
+      ...fakeAdapter,
+      channel: 'dingtalk',
+      output: { kind: 'chunked-text', im: mocks.feishuIm as unknown as ChannelIM, commitFinal: vi.fn(async () => undefined) },
+      handleTextInteraction,
+    }, fakeRepo, fakeCards);
+    try {
+      await localRunner.runAgentTurn({ botContextId: 'cli_test_bot', userId: 'ou_user', userMessageId: 'msg-text-questionnaire', text: 'ask', attachments: [] });
+      const request: InteractionRequest = { kind: 'ask_user_question', requestId: 'text-questionnaire', questions: [{ question: 'Name?' }, { question: 'City?' }] };
+      await expect(h.dispatchInteraction(request)).resolves.toEqual(answer);
+      expect(handleTextInteraction).toHaveBeenCalledOnce();
+      expect(handleTextInteraction.mock.calls[0]).toEqual(expect.arrayContaining(['ou_user', request]));
+      h.emit({ type: 'done', data: {} });
+    } finally { await localRunner.disposeAllSessions(); }
+  });
+
   it('holds a host turn lease and applies channel policy timeout/state metadata', async () => {
     const h = setupSession(async () => ({ accepted: true }));
     const handleTextInteraction = vi.fn(
@@ -4020,7 +4040,7 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     await flushMicrotasks();
     const calls = mocks.rejectAllPending.mock.calls;
     expect(calls.at(-2)?.[1]).not.toBe(calls.at(-1)?.[1]);
-    expect(fakeCards.buildResolvedCard).toHaveBeenCalledWith(t('imBot.interactionExpired'));
+    expect(fakeCards.buildResolvedCard).toHaveBeenCalledWith(t('settings.imBot.interactionExpired'));
     expect(mocks.feishuIm.updateInteractiveCard).toHaveBeenCalledWith('legacy', expect.anything());
   });
 

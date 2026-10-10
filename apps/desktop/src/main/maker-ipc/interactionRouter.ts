@@ -26,6 +26,8 @@ export interface InteractionRoute {
   origin: TurnOrigin;
   interactionSurface: InteractionSurface;
   timeoutMs?: number;
+  /** Text-input adapters can collect the complete questionnaire themselves. */
+  supportsMultiQuestionInput?: boolean;
   /** Main-owned source text, shared by Desktop and channel presentations. */
   sourceDescription?: string;
   onStateChange?(state: InteractionRouteState): void;
@@ -214,7 +216,8 @@ class SessionInteractionRouter {
     const paginated = request.kind === 'ask_user_question'
       && request.delivery !== 'async'
       && request.questions.length > 1
-      && active?.route.interactionSurface === 'channel-card';
+      && active?.route.interactionSurface === 'channel-card'
+      && !active.route.supportsMultiQuestionInput;
     let surfaceRequestId = request.requestId;
     const surfaceController = paginated ? new AbortController() : undefined;
 
@@ -225,7 +228,8 @@ class SessionInteractionRouter {
         cancelledByRouter = true;
         surfaceController?.abort();
         shared?.settle(decision);
-        resolve(decision);
+        // The paginator owns accumulated answers; its abort result must win.
+        if (!paginated) resolve(decision);
       };
     });
     this.pending.set(request.requestId, {

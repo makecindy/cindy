@@ -83,6 +83,42 @@ describe('session interaction router', () => {
     } finally { lease.release(); }
   });
 
+  it('keeps free-text questionnaires together for text input surfaces', async () => {
+    const host = makeSession();
+    const request: InteractionRequest = { kind: 'ask_user_question', requestId: 'text-input', questions: [{ question: 'Name?' }, { question: 'City?' }] };
+    const channel = vi.fn<InteractionHandler>(async () => ({ kind: 'ask_user_question', answers: { 'Name?': 'Alice', 'City?': 'Paris' } }));
+    const lease = beginInteractionRoute(host.session, {
+      route: { sessionId: host.session.id, turnId: 'text-turn', origin: { kind: 'im', channel: 'dingtalk' }, interactionSurface: 'channel-card', supportsMultiQuestionInput: true },
+      handle: channel,
+    });
+    try {
+      await expect(host.dispatch(request)).resolves.toEqual({ kind: 'ask_user_question', answers: { 'Name?': 'Alice', 'City?': 'Paris' } });
+      expect(channel).toHaveBeenCalledExactlyOnceWith(request);
+    } finally { lease.release(); }
+  });
+
+  it.each(['timeout', 'release', 'abort'] as const)('retains completed pages on router %s', async stop => {
+    vi.useFakeTimers();
+    const host = makeSession();
+    const controller = new AbortController();
+    const channel = vi.fn<InteractionHandler>()
+      .mockResolvedValueOnce({ kind: 'ask_user_question', answers: { 'First?': 'yes' } })
+      .mockImplementation(() => new Promise(() => {}));
+    const lease = beginInteractionRoute(host.session, {
+      route: { sessionId: host.session.id, turnId: 'partial-turn', origin: { kind: 'im', channel: 'feishu' }, interactionSurface: 'channel-card', timeoutMs: 100 },
+      handle: channel,
+    });
+    try {
+      const pending = requestHostInteraction(host.session, { kind: 'ask_user_question', requestId: 'partial', questions: ['First?', 'Second?'].map(question => ({ question, options: [{ label: 'yes', description: '' }] })) }, controller.signal);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(channel).toHaveBeenCalledTimes(2);
+      if (stop === 'timeout') await vi.advanceTimersByTimeAsync(100);
+      else if (stop === 'release') lease.release();
+      else controller.abort();
+      await expect(pending).resolves.toEqual({ kind: 'ask_user_question', answers: { 'First?': 'yes' }, dismissed: true });
+    } finally { lease.release(); vi.useRealTimers(); }
+  });
+
   it('routes Host download permissions through the active channel without replacing the listener', async () => {
     const host = makeSession();
     const desktop = vi.fn<InteractionHandler>((_request, shared) => shared!.result);
