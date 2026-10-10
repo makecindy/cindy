@@ -351,7 +351,8 @@ describe("DingTalkIM", () => {
     await vi.waitFor(() => expect(received).toHaveLength(2));
     expect(received[1]).toMatchObject({
       senderId: "g/group%2Fa",
-      text: "@",
+      text: "",
+      invoked: true,
       speaker: { id: "guest-1", isOwner: false },
     });
 

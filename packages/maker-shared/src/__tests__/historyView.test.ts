@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { projectHistoryView } from '../historyViewProjection.js';
+import { CONTINUE_AFTER_ERROR_PROMPT } from '../syntheticTrigger.js';
 import { historyWorkSummaries, isHistoryViewUnavailable, readHistoryWorkDetails, type HistoryMessageSource } from '../historyView.js';
 
 function row(id: number, role: string, content: unknown): HistoryMessageSource {
@@ -8,6 +9,28 @@ function row(id: number, role: string, content: unknown): HistoryMessageSource {
 }
 
 describe('history reading projection', () => {
+  it.each([false, true])('archives interrupted progress in recoverable history ranges (streaming=%s)', (streaming) => {
+    const rows = [row(0, 'user', 'Work'), row(1, 'assistant', 'Checking the build'),
+      row(2, 'thinking', 'detail'), row(3, 'error', { message: 'Usage limit reached' }),
+      row(4, 'user', { text: CONTINUE_AFTER_ERROR_PROMPT }),
+      row(5, 'assistant', 'Resuming'), row(6, 'thinking', 'more detail')];
+    if (!streaming) rows.push({ ...row(7, 'assistant', 'Done'), agentMeta: { turnCompleted: true } });
+    const projected = projectHistoryView(rows, streaming);
+    expect(projected.slice(0, 4)).toMatchObject([
+      { type: 'messages', messages: [{ id: '0' }] },
+      { type: 'work', summary: { firstMessageId: '1', lastMessageId: '2', messageCount: 2, isStreaming: false },
+        children: [{ type: 'messages', messages: [{ id: '1' }] },
+          { type: 'work', summary: { firstMessageId: '2', lastMessageId: '2' } }] },
+      { type: 'messages', messages: [{ id: '3' }] },
+      { type: 'messages', messages: [{ id: '4' }] },
+    ]);
+    expect(historyWorkSummaries(projected).map((summary) => summary.firstMessageId))
+      .toEqual(streaming ? ['2', '6', '6'] : ['2', '6']);
+    expect(projected.at(-1)).toMatchObject(streaming
+      ? { type: 'work', summary: { isStreaming: true } }
+      : { type: 'messages', messages: [{ id: '7' }] });
+  });
+
   it.each(['<tool_use_error>Permission denied</tool_use_error>', { isError: true, text: 'Failed' }])('keeps ordinary tool failures in the same recoverable activity range', (content) => {
     const rows = [row(0, 'user', 'Work'), row(1, 'thinking', 'reasoning'),
       { ...row(2, 'tool_use', { toolName: 'Read', input: {} }), toolUseId: 't' },
@@ -621,6 +644,73 @@ describe('locating folded history preserves display expansion', () => {
       build: messages => messages.map(message => message.clientId), structure: ungroupedStructure });
     expect(rendered).toContain(rows[0].clientId);
     expect([...view.getSnapshot().expanded]).toEqual(['preview']);
+    view.setActive(false);
+  });
+
+  it('keeps the previous running preview window while its advanced tail is still loading', async () => {
+    const rows = Array.from({ length: 8 }, (_, i) => row(i + 1, 'thinking', `detail-${i}`));
+    const items = projectHistoryView(rows, true);
+    if (items[0].type !== 'work') throw new Error('missing work');
+    const summary = items[0].summary;
+    // Three new activities moved the latest-five preview from rows[0..4] to rows[3..7].
+    summary.preview = { ...summary, key: 'preview', firstMessageId: rows[3].id, lastMessageId: rows[7].id };
+    const view = new HistoryViewController<HistoryMessageSource>({
+      page: async () => ({ version: 1, items, hasMore: false, nextCursor: null }),
+      details: () => new Promise(() => {}),
+      expanded: async () => undefined,
+    });
+    await view.refresh();
+    view.setExpanded('preview', true);
+    const snapshot = view.getSnapshot();
+    const details = new Map(snapshot.details);
+    details.set('preview', { messages: rows.slice(0, 5), revision: 'previous', lastMessageId: rows[4].id,
+      loading: true, complete: false, error: null });
+    const rendered = renderHistoryView({ view, snapshot: { ...snapshot, details }, liveMessages: [], streaming: true,
+      build: messages => messages.map(message => message.clientId), structure: ungroupedStructure });
+    // Not the two-row overlap [rows[3], rows[4]]: the live list keeps its height until the read lands.
+    expect(rendered).toEqual(rows.slice(0, 5).map(message => message.clientId));
+    view.setActive(false);
+  });
+
+  it('keeps the previous window until a paginated reread lands the slid tail', async () => {
+    const rows = Array.from({ length: 8 }, (_, i) => row(i + 1, 'thinking', `detail-${i}`));
+    const items = projectHistoryView(rows, true);
+    if (items[0].type !== 'work') throw new Error('missing work');
+    const summary = items[0].summary;
+    summary.preview = { ...summary, key: 'preview', revision: 'r1', firstMessageId: rows[0].id, lastMessageId: rows[4].id };
+    const reads: Array<(page: import('../historyView.js').HistoryDetailPage<HistoryMessageSource>) => void> = [];
+    const view = new HistoryViewController<HistoryMessageSource>({
+      page: async () => ({ version: 1, items, hasMore: false, nextCursor: null }),
+      details: () => new Promise(resolve => { reads.push(resolve); }),
+      expanded: async () => undefined,
+    });
+    await view.refresh();
+    view.setExpanded('preview', true);
+    reads[0]({ version: 1, messages: rows.slice(0, 5), hasMore: false, nextCursor: null });
+    await new Promise(done => setTimeout(done, 0));
+    const structure = { ...ungroupedStructure,
+      placeholder: (ref: import('../historyView.js').HistoryWorkSummary) => ({ ...row(0, 'thinking', ''), clientId: `placeholder:${ref.key}` }) };
+    const render = () => renderHistoryView({ view, snapshot: view.getSnapshot(), liveMessages: [], streaming: true,
+      build: messages => messages.map(message => message.clientId), structure });
+    const placeholderId = `placeholder:${summary.key}`;
+    const previousWindow = rows.slice(0, 5).map(message => message.clientId);
+    expect(render()).toEqual([placeholderId, ...previousWindow]);
+
+    // Three new activities slide the latest-five preview from rows[0..4] to rows[3..7].
+    summary.preview = { ...summary, key: 'preview', revision: 'r2', firstMessageId: rows[3].id, lastMessageId: rows[7].id };
+    void view.refresh();
+    await new Promise(done => setTimeout(done, 0));
+    expect(reads).toHaveLength(2);
+    reads[1]({ version: 1, messages: [rows[3]], hasMore: true, nextCursor: rows[3].id });
+    await new Promise(done => setTimeout(done, 0));
+    // The first page of the new range must not replace the previous window with a partial slice.
+    expect(view.getSnapshot().details.get('preview')?.messages.map(message => message.clientId)).toEqual(previousWindow);
+    expect(render()).toEqual([placeholderId, ...previousWindow]);
+    reads[2]({ version: 1, messages: rows.slice(4), hasMore: false, nextCursor: null });
+    await new Promise(done => setTimeout(done, 0));
+    const slidWindow = rows.slice(3, 8).map(message => message.clientId);
+    expect(view.getSnapshot().details.get('preview')?.messages.map(message => message.clientId)).toEqual(slidWindow);
+    expect(render()).toEqual([placeholderId, ...slidWindow]);
     view.setActive(false);
   });
 

@@ -2472,3 +2472,11 @@ describe('codex internal citation 归一化 (#785)', () => {
     ]);
   });
 });
+
+
+it('carries the provider final phase from item start onto the first delta', async () => {
+  const rt = newCodexRuntimeState(), q = createAsyncQueue<AgentEvent>(), ctx = makeCtx(rt);
+  translateItemNotification('started', { threadId: 'thread', turnId: 'turn', item: { type: 'agentMessage', id: 'final', text: '', phase: 'final_answer' } }, q, ctx);
+  translateAgentMessageDelta({ threadId: 'thread', turnId: 'turn', itemId: 'final', delta: 'Visible now' }, q, ctx);
+  expect(await collect(q)).toContainEqual({ type: 'text', source: 'codex', data: { text: 'Visible now', isFinal: false, agentMessageId: 'final', phase: 'final_answer' } });
+});

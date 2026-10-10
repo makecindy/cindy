@@ -15,7 +15,7 @@ import {
   type WheelEvent,
 } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Check, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Plus, X, EllipsisVertical } from 'lucide-react';
+import { Check, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Plus, X, EllipsisVertical, Monitor, WifiOff } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAppShortcutDisplay } from '@/hooks/useAppShortcut';
 import { useReducedMotion } from '@/hooks/useReducedMotion';
@@ -23,6 +23,7 @@ import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { Tip } from '@/components/ui/tooltip';
 import { VendorIcon, agentKindToVendor } from '@/components/sidebar/VendorIcon';
 import type { WorkerInfo } from './hooks/useWorkers';
+import type { WorkerExecutionDevice } from './hooks/workerProjectionStore';
 import { shouldShowWorkerLabel } from './workerLabel';
 import { clearWorkerAttention, useWorkerAttentionSnapshot } from './lib/workerAttentionStore';
 
@@ -42,15 +43,50 @@ function workerEffortLabel(t: (key: string) => string, effort: string | null): s
   return t(`effortLevels.${effort}`);
 }
 
+/** 在另一台电脑运行的 Worker：副行先标运行设备，连不上时追加状态，模型名照常可截断。 */
+export function workerDeviceName(
+  t: (key: string) => string,
+  device: WorkerExecutionDevice,
+): string {
+  return device.deviceName ?? t('orca.rolePill.unknownDevice');
+}
+
 function WorkerModelLine({
   model,
   effort,
+  device,
 }: {
   model: string;
   effort: string | null;
+  device?: WorkerExecutionDevice;
 }) {
   const { t } = useTranslation();
   const effortLabel = workerEffortLabel(t, effort);
+  if (device) {
+    const name = workerDeviceName(t, device);
+    return (
+      <div className="mt-0.5 mr-7 ml-[26px] flex min-w-0 items-center gap-1.5 text-12 leading-snug text-[var(--text-secondary)]">
+        <Tip text={t('orca.rolePill.executionDevice', { device: name })} side="top">
+          <span className="inline-flex min-w-0 shrink items-center gap-1">
+            <Monitor size={11} aria-hidden className="shrink-0" />
+            <span className="truncate">{name}</span>
+          </span>
+        </Tip>
+        {device.reachable === false ? (
+          <span className="inline-flex shrink-0 items-center gap-1 text-[var(--warning-fg)]">
+            <WifiOff size={11} aria-hidden />
+            {t('orca.rolePill.deviceUnreachable')}
+          </span>
+        ) : (
+          <>
+            <span className="shrink-0">·</span>
+            <span className="min-w-0 truncate">{simplifyModelName(model)}</span>
+            {effortLabel ? <span className="shrink-0">· {effortLabel}</span> : null}
+          </>
+        )}
+      </div>
+    );
+  }
   // 列表选中行是浅色 chip 底,不能套深色药丸上的 --surface-on-card,
   // 日间会糊成看不清。副行一律走次级字色。
   // 菜单有 overflow-x-hidden,整行 nowrap 会把后加的档位裁掉;
@@ -208,10 +244,15 @@ function useRequestArchiveWorker(onArchiveWorker: (workerId: string) => void) {
           name: displayName,
           defaultValue: 'Archive worker {{name}}?',
         }),
-        description: t('newChat.collaboration.archiveWorkerConfirmDesc', {
-          defaultValue:
-            'This stops the worker SDK session and hides it from the sidebar. History is kept as archived. There is no restore action in the current UI; create a new worker if you archived it by mistake.',
-        }),
+        // 在另一台电脑运行的 Worker：任务和文件留在那台，说清楚不会被删。
+        description: target.executionDevice
+          ? t('orca.rolePill.archiveRemoteWorkerConfirmDesc', {
+              device: workerDeviceName(t, target.executionDevice),
+            })
+          : t('newChat.collaboration.archiveWorkerConfirmDesc', {
+              defaultValue:
+                'This stops the worker SDK session and hides it from the sidebar. History is kept as archived. There is no restore action in the current UI; create a new worker if you archived it by mistake.',
+            }),
         confirmText: t('newChat.collaboration.archiveWorkerConfirmConfirm', {
           defaultValue: 'Archive worker',
         }),
@@ -284,7 +325,7 @@ function WorkerSummary({
         )}
       </div>
       {!compact && (
-        <WorkerModelLine model={worker.model} effort={worker.effort} />
+        <WorkerModelLine model={worker.model} effort={worker.effort} device={worker.executionDevice} />
       )}
     </>
   );
@@ -610,7 +651,7 @@ function WorkerLayoutMenu({
                             </>
                           )}
                         </div>
-                        <WorkerModelLine model={w.model} effort={w.effort} />
+                        <WorkerModelLine model={w.model} effort={w.effort} device={w.executionDevice} />
                       </button>
                       {/* hover archive ✕ */}
                       <button
@@ -1306,7 +1347,7 @@ export function RolePillDropdown({
                     </div>
                     {/* 副行: 简化 model 名 (去 provider 前缀) + 档位文字.
                         各模型档位集合不同,不用信号条假装同一把尺子. */}
-                    <WorkerModelLine model={w.model} effort={w.effort} />
+                    <WorkerModelLine model={w.model} effort={w.effort} device={w.executionDevice} />
                   </button>
                   {/* hover archive ✕ */}
                   <button

@@ -10,9 +10,11 @@
  */
 import {
   buildMessageRenderItems,
+  isSteerUserRow,
   type MessageRenderOptions,
 } from '@cindy/maker-shared/message-render';
 import { isSubagentResultError } from '@cindy/maker-shared/agent-task';
+import { isContinuationMessage } from '@cindy/maker-shared/synthetic-trigger';
 import type { NormalizedRemoteMessage } from '@/session/messageNormalize';
 import type { RemoteMessage } from '@/session/types';
 import type { MobileMessageRenderItem, MobileSubagentGroupItem } from '@/session/messageRenderModel';
@@ -136,21 +138,36 @@ function buildLevel(
 ): MobileMessageRenderItem[] {
   const out: MobileMessageRenderItem[] = [];
   let run: NormalizedRemoteMessage[] = [];
-  const flushRun = () => {
+  let nextUserIndex = 0;
+  const flushRun = (endIndex: number) => {
     if (run.length === 0) return;
-    out.push(...buildMessageRenderItems(run, options));
+    // Agent cards split presentation, not user turns. Let the shared grouper see
+    // the next real recovery boundary even when it lies beyond one or more cards.
+    // The monotonic cursor stops at an ordinary user row and scans each row once.
+    nextUserIndex = Math.max(nextUserIndex, endIndex);
+    while (nextUserIndex < level.length
+      && (level[nextUserIndex].kind !== 'user' || isSteerUserRow(level[nextUserIndex].source))) nextUserIndex++;
+    const boundary = level[nextUserIndex];
+    if (boundary && isContinuationMessage(boundary.source)) {
+      out.push(...buildMessageRenderItems([...run, boundary], options).filter(
+        item => !(item.type === 'message' && item.message === boundary),
+      ));
+    } else {
+      out.push(...buildMessageRenderItems(run, options));
+    }
     run = [];
   };
-  for (const message of level) {
+  for (let index = 0; index < level.length; index++) {
+    const message = level[index];
     if (isAgentToolUse(message) && depth < MAX_SUBAGENT_NEST_DEPTH) {
-      flushRun();
+      flushRun(index);
       out.push(buildSubagentGroup(message, byParent, resultMeta, options, depth, consumed));
     } else {
       // 深度上限处的 Agent 走 flat(其 children 桶由上层 leftover 兜底 flush,不丢)。
       run.push(message);
     }
   }
-  flushRun();
+  flushRun(level.length);
   return out;
 }
 

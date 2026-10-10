@@ -90,7 +90,7 @@ export function CindyDeviceRow({
           current={current}
           onSelect={onSelect}
           className={cn(
-            'pointer-events-auto col-span-2 -mx-2 text-12 text-inherit focus-visible:ring-inset',
+            'pointer-events-auto col-span-2 -ml-2 justify-self-start text-12 text-inherit focus-visible:ring-inset',
             '[--button-face-bg:transparent] [--button-face-border:transparent] [--button-face-outset:0px]',
             'enabled:[&:not([aria-disabled=true])]:hover:[--button-face-bg:var(--sidebar-item-hover)] enabled:[&:not([aria-disabled=true])]:active:[--button-face-bg:var(--sidebar-item-hover)]',
             selected &&

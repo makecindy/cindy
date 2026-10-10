@@ -525,6 +525,12 @@ describe('Claude Code translator is_error result guard', () => {
       ctx,
     );
 
+    const progressIterator = queue[Symbol.asyncIterator]();
+    const progress = await progressIterator.next();
+    expect(progress.value).toMatchObject({ type: 'status', data: {
+      isRunning: true, responseSpeed: { retrying: true, recentRate: null },
+    } });
+    await progressIterator.return?.();
     expect(queue.pending, 'retryable envelope must not close the turn').toBe(0);
 
     translateSdkMessage(

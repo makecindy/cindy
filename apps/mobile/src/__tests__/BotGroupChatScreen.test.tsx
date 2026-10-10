@@ -376,6 +376,39 @@ describe('group timeline', () => {
     expect(h.chat.act).toHaveBeenLastCalledWith('plan-edit', { planId: 'p1', position: 0, action: 'remove' });
   });
 
+  it('renders human-signed plans as organizer cards with working actions and read-only old plans', async () => {
+    const data = group();
+    data.messages = data.messages.map(message => message.kind === 'plan'
+      ? { ...message, authorKind: 'user', authorBotId: null, authorName: 'Human creator' } : message);
+    await render(data);
+    expect(byId('botGroup.message.plan')?.textContent).toContain('咪咪');
+    expect(byId('botGroup.message.plan')?.textContent).not.toContain('Human creator');
+    await click('botGroup.plan.start');
+    expect(h.chat.act).toHaveBeenLastCalledWith('plan-start', { planId: 'p1' });
+    await click('botGroup.plan.dismiss');
+    expect(h.chat.act).toHaveBeenLastCalledWith('plan-dismiss', { planId: 'p1' });
+    data.plans[0]!.status = 'superseded';
+    data.openPlan = null;
+    await render(data);
+    expect(byId('botGroup.plan.finalNote')?.textContent).toBe('groupChat.plan.superseded');
+    expect(byId('botGroup.plan.start')).toBeNull();
+  });
+
+  it('removes a server human by actor identity without offering them as organizer', async () => {
+    const data = group({ serverBacked: true, supportsMemberRemoval: true });
+    data.members.push({ botId: 'person', actorId: 'actor-person', actorKind: 'human', name: 'Person', avatar: '', avatarColor: '', status: 'active' });
+    await render(data);
+    expect(byId('botGroup.plan.stepMenu.0.action.member:person')).toBeNull();
+    await click('botGroup.settingsButton');
+    expect(byId('botGroup.settings.memberMenu.person.action.organizer:person')).toBeNull();
+    await click('botGroup.settings.memberMenu.person.action.remove:person');
+    expect(h.chat.act).toHaveBeenLastCalledWith('remove-member', { actorId: 'actor-person' });
+    h.chat.act.mockRejectedValueOnce(new Error('PERMISSION_DENIED'));
+    await click('botGroup.settings.memberMenu.person.action.remove:person');
+    expect(node.textContent).toContain('groupChat.errors.permissionDenied');
+    expect(byId('botGroup.settings.member.person')).not.toBeNull();
+  });
+
   it('keeps at least one step and names the host’s reason when an action is refused', async () => {
     const data = group();
     data.plans[0]!.steps = [data.plans[0]!.steps[0]!];
@@ -471,6 +504,44 @@ describe('group composer', () => {
     expect(h.row.value).toBe('');
   });
 
+  it.each(['[INVALID_PARAMS] MENTION_UNAVAILABLE', 'MENTION_UNAVAILABLE'])('keeps a stale selected target through a refused send (%s) and lets a new pick replace it', async message => {
+    const data = group({ openPlan: null });
+    const namesakes = [{ ...data.members[0]!, name: 'Ann' }, { ...data.members[1]!, name: 'Ann' }];
+    await render(group({ openPlan: null, members: namesakes }));
+    await type('@');
+    await click('botGroup.mention.mimi');
+    await render(group({ openPlan: null, members: namesakes.slice(1) }));
+    h.chat.act.mockRejectedValue(new Error(message));
+    for (let retry = 0; retry < 2; retry++) {
+      await click('botGroup.composer.send');
+      expect(h.chat.act).toHaveBeenLastCalledWith('send', expect.objectContaining({ mentions: { all: false, botIds: ['mimi'] } }));
+      expect(h.row.value).toBe('@Ann ');
+    }
+    expect(h.alert).toHaveBeenCalledWith('groupChat.errors.mentionUnavailable');
+    const originalClientId = h.chat.act.mock.calls[0][1].clientId;
+    expect(h.chat.act.mock.calls[1][1].clientId).toBe(originalClientId);
+    await type('@');
+    await click('botGroup.mention.abu');
+    h.chat.act.mockResolvedValue({ effects: [] });
+    await click('botGroup.composer.send');
+    expect(h.chat.act).toHaveBeenLastCalledWith('send', expect.objectContaining({ mentions: { all: false, botIds: ['abu'] } }));
+    expect(h.chat.act.mock.calls.at(-1)[1].clientId).not.toBe(originalClientId);
+    expect(h.row.value).toBe('');
+  });
+
+  it('drops a deleted selected mention before a namesake is manually mentioned again', async () => {
+    const data = group({ openPlan: null });
+    const namesakes = [{ ...data.members[0]!, name: 'Ann' }, { ...data.members[1]!, name: 'Ann' }];
+    await render(group({ openPlan: null, members: namesakes }));
+    await type('@');
+    await click('botGroup.mention.mimi');
+    await render(group({ openPlan: null, members: namesakes.slice(1) }));
+    await type('hello');
+    await type('@Ann hello');
+    await click('botGroup.composer.send');
+    expect(h.chat.act).toHaveBeenLastCalledWith('send', expect.objectContaining({ mentions: { all: false, botIds: ['abu'] } }));
+  });
+
   it('keeps the current human in the group but excludes it from mention choices and typed mentions', async () => {
     h.chat.server = true;
     const data = group({ openPlan: null });
@@ -482,6 +553,22 @@ describe('group composer', () => {
     await type('@Me @阿布 hello');
     await click('botGroup.composer.send');
     expect(h.chat.act).toHaveBeenLastCalledWith('send', expect.objectContaining({ mentions: { all: false, botIds: ['abu'] } }));
+  });
+
+  it.each(['picked', 'manual'])('removes only the %s token identity when same-name mentions coexist', async removed => {
+    const data = group({ openPlan: null });
+    const namesakes = [{ ...data.members[0]!, name: 'Ann' }, { ...data.members[1]!, name: 'Ann' }];
+    await render(group({ openPlan: null, members: namesakes }));
+    await type('  @');
+    await click('botGroup.mention.mimi');
+    await type('  @Ann @Ann');
+    await render(group({ openPlan: null, members: namesakes.slice(1) }));
+    await act(async () => h.row.onSelectionChange({ nativeEvent: { selection: {
+      start: removed === 'picked' ? 2 : 6, end: removed === 'picked' ? 7 : 11,
+    } } }));
+    await type('  @Ann');
+    await click('botGroup.composer.send');
+    expect(h.chat.act).toHaveBeenLastCalledWith('send', expect.objectContaining({ mentions: { all: false, botIds: [removed === 'picked' ? 'abu' : 'mimi'] } }));
   });
 
   it('sends a 分工 message and keeps the clientId and tag for a retry', async () => {

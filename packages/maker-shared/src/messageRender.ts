@@ -1,4 +1,5 @@
 import { groupWorkRuns } from './workRunGrouping.js';
+import { isContinuationMessage } from './syntheticTrigger.js';
 export { groupWorkRuns, type WorkRunGroupingAdapter } from './workRunGrouping.js';
 import {
   type AgentTaskTerminalStatus,
@@ -897,11 +898,12 @@ export function applyCodexPlanSnapshotOnDone<
  * (mobile 与 main 侧的原始行保持这个形状),desktop 渲染层把它投影成顶层
  * `delivery` 后丢弃原 meta。只看顶层会让 mobile / main 的所有权回扫在插话行上
  * 提前收手,全勾完的失败计划先按旧数据退场、等 main 的异步印记广播才复活
- * (断连时要等到重新加载,review P2)。计划分组边界与失败回扫共用这一个谓词,
- * 两处不再各自推导"什么算插话"。
+ * (断连时要等到重新加载,review P2)。计划分组、失败回扫与工作过程分组共用
+ * 这一个谓词,不再各自推导"什么算插话"。
  */
-function isSteerUserRow(message: MessageRenderSourceMessageLike): boolean {
-  return message.delivery === 'steer' || message.agentMeta?.delivery === 'steer';
+export function isSteerUserRow(message: { delivery?: string | null; agentMeta?: object | null }): boolean {
+  return message.delivery === 'steer'
+    || (message.agentMeta as { delivery?: unknown } | null)?.delivery === 'steer';
 }
 
 /**
@@ -1523,7 +1525,8 @@ function groupMessageWorkRuns<TMessage extends MessageRenderNormalizedMessage>(
 ): MessageRenderItem<TMessage>[] {
   return groupWorkRuns<MessageRenderItem<TMessage>, MessageRenderWorkChildItem<TMessage>>(
     items, isSessionStreaming, {
-      isUserBoundary: (item) => item.type === 'message' && item.message.kind === 'user',
+      isUserBoundary: (item) => item.type === 'message' && item.message.kind === 'user' && !isSteerUserRow(item.message.source),
+      isContinuationBoundary: (item) => item.type === 'message' && isContinuationMessage(item.message.source),
       isAnswer: isAssistantAnswerCandidate,
       isSealedAnswer: (item) => item.type === 'message' && isCompletedAssistantMessage(item.message),
       isCompactBoundary: isCompactBoundaryItem,

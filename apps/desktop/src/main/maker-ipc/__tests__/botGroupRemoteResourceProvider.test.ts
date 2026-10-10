@@ -94,6 +94,7 @@ const service = {
   continuePlan: vi.fn(),
   retryPlan: vi.fn(),
   editPlanStep: vi.fn(),
+  chatServer: { manage: vi.fn() },
 };
 
 describe('bot group remote resources', () => {
@@ -108,7 +109,8 @@ describe('bot group remote resources', () => {
       INSERT INTO bot_profiles VALUES ('mimi', NULL, 'active'), ('abu', NULL, 'active'), ('ghost', 5, 'active');
     `);
     h.ownerCurrent = () => true;
-    for (const fn of Object.values(service)) fn.mockReset();
+    for (const fn of Object.values(service)) if (typeof fn === 'function') fn.mockReset();
+    service.chatServer.manage.mockReset().mockResolvedValue({ ok: true });
     service.getGroup.mockResolvedValue({ ok: true, group: detail() });
     for (const name of ['updateGroup', 'setMembers', 'deleteGroup', 'continueRound', 'stopRound', 'startPlan', 'dismissPlan', 'continuePlan', 'retryPlan', 'editPlanStep'] as const) {
       service[name].mockResolvedValue({ ok: true });
@@ -249,6 +251,38 @@ describe('bot group remote resources', () => {
       client: client(), collectionId: BOT_GROUP_REMOTE_COLLECTION_ID, actionId: 'stop', resourceRef: ref('g1'),
     })).rejects.toMatchObject({ code: 'NOT_FOUND' });
     expect(service.stopRound).not.toHaveBeenCalled();
+  });
+
+  it('preserves mixed membership, validates additions and removes a human by actor id', async () => {
+    const members: BotGroupSummary['members'] = [
+      { botId: 'mimi', actorId: 'cloud-mimi', actorKind: 'bot', isOwned: true, name: 'Mimi', avatar: '', avatarColor: '', status: 'active' },
+      { botId: 'person', actorId: 'actor-person', actorKind: 'human', isOwned: false, name: 'Guest', avatar: '', avatarColor: '', status: 'active' },
+      { botId: 'foreign', actorId: 'actor-foreign', actorKind: 'bot', isOwned: false, name: 'Foreign', avatar: '', avatarColor: '', status: 'active' },
+    ];
+    service.getGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: true, members }) });
+    const invoke = (actionId: string, input: Record<string, unknown>) => remoteResourceRegistry.invoke(context, {
+      client: client(), collectionId: BOT_GROUP_REMOTE_COLLECTION_ID, actionId, resourceRef: ref('g1'), input,
+    });
+    await invoke('set-members', { botIds: ['mimi', 'person', 'foreign', 'abu'] });
+    expect(service.setMembers).toHaveBeenLastCalledWith({ groupId: 'g1', botIds: ['mimi', 'person', 'foreign', 'abu'] });
+    for (const added of ['ghost', 'missing'])
+      await expect(invoke('set-members', { botIds: ['mimi', 'person', added] })).rejects.toMatchObject({ message: 'MEMBER_UNAVAILABLE' });
+    await expect(invoke('update', { organizerBotId: 'person' })).rejects.toMatchObject({ message: 'MEMBER_UNAVAILABLE' });
+    await invoke('update', { organizerBotId: 'foreign' });
+    expect(service.updateGroup).toHaveBeenLastCalledWith({ groupId: 'g1', organizerBotId: 'foreign' });
+    await invoke('plan-edit', { planId: 'p1', position: 0, action: 'reassign', botId: 'foreign' });
+    expect(service.editPlanStep).toHaveBeenLastCalledWith({ groupId: 'g1', planId: 'p1', position: 0, action: 'reassign', botId: 'foreign' });
+    await expect(invoke('plan-edit', { planId: 'p1', position: 0, action: 'reassign', botId: 'person' })).rejects.toThrow('MEMBER_UNAVAILABLE');
+    await invoke('remove-member', { actorId: 'actor-person' });
+    expect(service.chatServer.manage).toHaveBeenLastCalledWith({ groupId: 'g1', action: { type: 'member', action: 'remove', actorId: 'actor-person' } });
+    service.chatServer.manage.mockResolvedValueOnce({ ok: false, errorCode: 'ROLE_REQUIRED' });
+    await expect(invoke('remove-member', { actorId: 'actor-person' })).rejects.toThrow('PERMISSION_DENIED');
+    service.chatServer.manage.mockClear();
+    await expect(invoke('remove-member', { actorId: 'not-a-member' })).rejects.toThrow('NOT_FOUND');
+    expect(service.chatServer.manage).not.toHaveBeenCalled();
+    h.ownerCurrent = () => false;
+    await expect(invoke('remove-member', { actorId: 'actor-person' })).rejects.toThrow('Account changed');
+    expect(service.chatServer.manage).not.toHaveBeenCalled();
   });
 
   it('passes a phone’s attachments on with the phone that sent them', async () => {

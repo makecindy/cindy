@@ -3,7 +3,7 @@ import {
   projectScheduleEvent,
   type ScheduleEventProjection,
 } from '@cindy/maker-shared/schedule-events';
-import { invalidateScheduleIndexForDevice } from '@/session/scheduleIndex';
+import { noteScheduleEventInIndexCache } from '@/session/scheduleIndex';
 
 export interface RemoteScheduleEventSnapshot {
   lastProjection: ScheduleEventProjection | null;
@@ -64,9 +64,11 @@ export const remoteScheduleEventStore = {
     const prev = snapshots.get(deviceId) ?? emptySnapshot;
     // Invalidate once before notifying all screens. Consumer-local force loads
     // otherwise launch competing scans for the same authoritative event.
-    if (projection.refresh.sessionIndex || projection.refresh.scheduleList || clearsUnread) {
-      invalidateScheduleIndexForDevice(deviceId);
-    }
+    noteScheduleEventInIndexCache(deviceId, {
+      invalidate: projection.refresh.sessionIndex || projection.refresh.scheduleList || clearsUnread,
+      sessionId: projection.runPatch.sessionId,
+      scheduleListChanged: projection.refresh.scheduleList,
+    });
     snapshots.set(deviceId, {
       lastProjection: projection,
       runsVersion: prev.runsVersion + (projection.refresh.runRefresh.mode === 'none' ? 0 : 1),

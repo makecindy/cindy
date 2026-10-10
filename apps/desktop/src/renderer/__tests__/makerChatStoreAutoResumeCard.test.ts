@@ -245,6 +245,8 @@ describe('mapServerMessages auto-resume 分隔线', () => {
       .messages.find((m) => m.clientId === 'manual-continue');
     expect(row?.isSyntheticTrigger).toBe(true);
     expect(row?.systemCardType).toBeUndefined();
+    expect(row?.content).toBe('');
+    expect(row?.isContinuationTrigger).toBe(true);
   });
 });
 

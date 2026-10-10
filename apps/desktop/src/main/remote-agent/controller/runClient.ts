@@ -110,9 +110,14 @@ export class RemoteAgentRunClient implements PolledRun {
     return { uploadId, chunks, bytes: gz.length };
   }
 
-  /** 打开任务：等对方启动 Agent 成功(返回会话描述)或失败(抛出对方的错误)。 */
+  /**
+   * 打开任务：等对方启动 Agent 成功(返回会话描述)或失败(抛出对方的错误)。已关闭的连接不能再打开：本机这边的
+   * 任务已经结束(撤权、用户关闭)，再打开会在对方留下一个没人拉取、没人关闭的任务。
+   */
   async open(agentKind: RemoteAgentKind, openPayload: unknown): Promise<Record<string, unknown>> {
+    if (this.closed) throw new Error('[REMOTE_AGENT_EXPIRED] The task has ended on this computer.');
     const payload = await this.payload(openPayload);
+    if (this.closed) throw new Error('[REMOTE_AGENT_EXPIRED] The task has ended on this computer.');
     const started = new Promise<Record<string, unknown>>((resolve, reject) => {
       this.started = { resolve, reject };
     });
@@ -121,6 +126,12 @@ export class RemoteAgentRunClient implements PolledRun {
     } catch (error) {
       this.started = null;
       throw error;
+    }
+    if (this.closed) {
+      // 打开途中本机关掉了这个任务：对方可能先收到关闭(那时还没有这个任务)再收到打开，补发一次关闭。
+      void started.catch(() => undefined);
+      void this.invoke([{ op: 'close', runId: this.runId, mode: 'close', reason: 'navigation' }]).catch(() => undefined);
+      throw new Error('[REMOTE_AGENT_EXPIRED] The task has ended on this computer.');
     }
     this.registered = true;
     this.poller.register(this);

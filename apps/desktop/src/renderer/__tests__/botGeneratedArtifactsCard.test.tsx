@@ -4,7 +4,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ChatSessionFileProvider } from '../components/chat/ChatSessionFileContext';
-import { GeneratedFilesCard } from '../components/chat/GeneratedFilesCard';
+import { _clearLocalGeneratedFileStatCache, GeneratedFilesCard } from '../components/chat/GeneratedFilesCard';
 import { groupWorkRuns, type RenderItem } from '../components/chat/messageWorkGroups';
 import { simplifyBotRenderItems } from '../features/bots/botConversationPresentation';
 import { useBotGeneratedFileDeliveries } from '../features/bots/useBotGeneratedFileDeliveries';
@@ -136,7 +136,15 @@ describe('伙伴成果卡', () => {
     });
   });
 
-  afterEach(cleanup);
+  // The module-level local-stat cache is shared process-wide. Several tests
+  // below reuse the same '/bot/workspace/result.pdf' path across different
+  // turn windows; without clearing it, a later test's fresh mount can get
+  // seeded from an earlier test's confirmed stat instead of starting from
+  // unknown visibility, making assertions timing-dependent on the real check.
+  afterEach(() => {
+    cleanup();
+    _clearLocalGeneratedFileStatCache();
+  });
 
   it('展示 SVG 缩略图与网页成品，默认收起 index 预览页和辅助文件', async () => {
     renderCard([

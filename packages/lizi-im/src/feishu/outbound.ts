@@ -1835,6 +1835,10 @@ export async function resolveReplyMessage(
       replyContext: {
         author,
         text,
+        ...(parsed.attachments.length ? {
+          unavailableAttachments: parsed.attachments.map((attachment) =>
+            `引用${attachment.kind === 'image' ? '图片' : attachment.fileName}：仅提供原消息记录，未下载文件内容`),
+        } : {}),
         ...(isBot ? { isBot: true } : {}),
       },
     };

@@ -6,6 +6,7 @@ import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { Button } from '@/components/ui/button';
+import { useProviders } from '@/hooks/useProviders';
 import { toast } from '@/lib/toast';
 import { extractIpcError, mapIpcErrorToI18nKey } from '@/utils/ipcError';
 
@@ -15,7 +16,7 @@ import {
   ProviderShareDialogTitle,
   ProviderSharePairingCode,
 } from './ProviderShareDialog';
-import type { ProviderSharePendingRequest } from './providerShareFormat';
+import { sharesClaudeLoginEmail, type ProviderSharePendingRequest } from './providerShareFormat';
 import { removeProviderSharePendingRequest } from './providerShareStore';
 import { ShareAvatar } from './ShareAvatar';
 import { useShareTimeFormat } from './useShareTimeFormat';
@@ -34,6 +35,8 @@ export function ProviderShareApproveDialog({
   const { request, share } = item;
   const name = request.displayName;
   const provider = share.providerLabel;
+  const { providers } = useProviders();
+  const claudeEmail = sharesClaudeLoginEmail(providers.find((view) => view.id === share.providerId));
 
   const decide = async (action: 'approve' | 'reject') => {
     if (busy) return;
@@ -91,6 +94,7 @@ export function ProviderShareApproveDialog({
       </div>
       <div className="mt-3.5 flex flex-col gap-1 rounded-lg bg-[var(--surface)] px-3 py-2.5 text-12 leading-[1.5] text-[var(--text-secondary)]">
         <p>{t('providerShare.approve.callout', { name, provider })}</p>
+        {claudeEmail ? <p>{t('providerShare.approve.calloutClaudeEmail', { name })}</p> : null}
         <p>{t('providerShare.approve.calloutUnknown')}</p>
       </div>
       <ProviderShareDialogFooter>

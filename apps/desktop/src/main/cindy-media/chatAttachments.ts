@@ -22,6 +22,7 @@ import path from 'node:path';
 import * as blobStore from './blobStore';
 import * as ledger from './ledger';
 import type { LedgerDb } from './ledger';
+import { getDbClient } from '../localDb/client/current';
 import { createLogger } from '../logger';
 
 const log = createLogger('cindy-media/chat');
@@ -154,6 +155,19 @@ export async function commitChatImageUrls(
     originKind?: 'user' | 'tool';
   },
   db?: LedgerDb,
+): Promise<{ committed: number; skipped: number; failed: number }> {
+  if (!params.urls.some((url) => blobStore.parseBlobUrl(url))) {
+    return { committed: 0, skipped: params.urls.length, failed: 0 };
+  }
+  const database = db ?? getDbClient().drizzle;
+  return ledger.withSessionMediaRefLock(database, params.sessionId, () =>
+    commitChatImageUrlsUnlocked(params, database),
+  );
+}
+
+async function commitChatImageUrlsUnlocked(
+  params: Parameters<typeof commitChatImageUrls>[0],
+  db: LedgerDb,
 ): Promise<{ committed: number; skipped: number; failed: number }> {
   let committed = 0;
   let skipped = 0;

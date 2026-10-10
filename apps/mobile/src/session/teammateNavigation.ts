@@ -32,13 +32,11 @@ export function teammateResourceRoute(hosted: HostedRemoteCollectionItem, locale
   };
 }
 
-/** Reuse the actual home route, including legacy collection entry points. */
-export function homeDismissCount(routes: readonly { name: string; params?: unknown }[], mode: string): number | null {
+/** Reuse the actual home route; retired collection routes are replaced. */
+export function homeDismissCount(routes: readonly { name: string; params?: unknown }[]): number | null {
   for (let index = routes.length - 1; index >= 0; index--) {
     const route = routes[index];
-    if (route.name === 'devices/index' || route.name === 'index'
-      || (mode === 'teammates' && route.name === 'resources/[collectionId]'
-        && (route.params as { collectionId?: string } | undefined)?.collectionId === 'teammates')) return routes.length - 1 - index;
+    if (route.name === 'devices/index' || route.name === 'index') return routes.length - 1 - index;
   }
   return null;
 }

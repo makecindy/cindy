@@ -6,7 +6,7 @@
 
 - 内置 MCP：在现有 `createLiziMcpProviders` / Desktop provider 注册处声明。`capability` 元数据可提供名称、说明、来源和渐进发现入口；实际工具名称、参数、说明仍从 MCP 注册读取。
 - 插件：沿插件自己的 manifest 和 `ghost_list → ghost_info → ghost_call` 发现，不复制为另一套工具。
-- 自定义 MCP：沿现有连接配置及引擎 MCP 发现。目录查询不会另起进程或读出 URL、headers、token。
+- 自定义 MCP：连接由引擎持有。目录查询不会另起进程、调用其工具或读出 URL、headers、token，而是向发起查询的任务所在引擎读取该服务在本任务中实际持有的工具（见下节）。
 - 命令行、文件、原生子 Agent：由当前引擎提供。伙伴不再额外禁用；运行时能力摘要和引擎实际提供的工具共同表达可用范围。
 - Skill：仍使用既有安装、发现和伙伴自有 Skill 学习体系。工具全部继承不意味着覆盖伙伴人格、共享个人记忆或将全部 Skill 正文塞入上下文。
 
@@ -24,7 +24,9 @@
 { "scope": "runtime", "server": "cindy_helper", "category": "control" }
 ```
 
-读取内置 server 的真实 schema 与渐进目录。没有 `scope` 时保留原产品说明查询行为。宿主交互能力不等于 Agent 已有可调用接口；例如应用安装更新、重启没有正式 Agent 接口，`check_app_update` 只查询当前更新渠道。
+读取内置 server 的真实 schema 与渐进目录。没有 `scope` 时保留原产品说明查询行为。
+
+指定由引擎自己连接的 server（自定义 MCP 等）时，宿主经发起查询的 Session 读取引擎在本任务中的状态：Codex 用带本任务 `threadId` 的 `mcpServerStatus/list`（不拿共享 app-server 的进程级清单代替），Claude Code 用 `mcpServerStatus()`。有工具时返回服务端原始工具名与截短说明；否则返回 `ok: false` 和明确的 `engineState`——`not-mounted`（本任务引擎未挂载，常见于任务开始后才增改）、`no-tools`（已配置但未报告工具，Codex 无法区分启动失败与本无工具）、`failed`、`needs-auth`、`pending`、`disabled`；引擎没有该入口（Pi、SSH 远端 Claude、远程 Agent）报 `HARNESS_DISCOVERY_UNAVAILABLE`，读取失败或超时报 `HARNESS_DISCOVERY_FAILED`。不转发引擎的失败原文，避免带出连接地址。实现见 `apps/desktop/src/main/maker-host/agentCapabilityCatalog.ts` 与 `packages/maker-core/src/agents/{codex,claude-code}/mcp-server-tools.ts`。宿主交互能力不等于 Agent 已有可调用接口；例如应用安装更新、重启没有正式 Agent 接口，`check_app_update` 只查询当前更新渠道。
 
 ## 伙伴默认配置
 
@@ -57,6 +59,7 @@
 - `botCanonicalSession.test.ts`：创建、存量配置、同任务刷新、跨引擎/远端可用性和能力修改。
 - `botProfileVersioning.test.ts`：旧名单升级、保留权限档、显式选择的幂等保存。
 - `botCapabilitySettings.test.tsx`：默认全选及主动取消后的其他能力保留。
-- `agentCapabilityCatalog.test.ts`：真实 SDK schema、渐进目录、未挂载原因和外部连接不被重复启动。
+- `agentCapabilityCatalog.test.ts`：真实 SDK schema、渐进目录、未挂载原因、外部连接不被重复启动，以及引擎实际工具与各类未就绪状态。
+- maker-core `agents/codex/mcp-server-tools.test.ts`、`agents/claude-code/mcp-server-tools.test.ts`：按本任务线程读取、未挂载与无工具的区分。
 - `lizi_xdtHelperMcpServer.test.ts`：普通任务/伙伴使用同一个能力查询和通用任务工具。
 - 三个引擎各自的伙伴启动回归：没有伙伴专属的原生子 Agent 禁用参数。

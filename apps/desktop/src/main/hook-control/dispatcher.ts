@@ -172,6 +172,8 @@ export interface HookContinuationWatchRequest {
 }
 
 export interface HookRunRequest {
+  /** Untruncated user body for persistence; source.userText is only a bounded display preview. */
+  userText?: string;
   /** Local display snapshot; not part of the server wire protocol. */
   contextSnapshot?: ImContextSnapshot;
   sessionId: string;
@@ -2699,6 +2701,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
               groupMessageCount,
             }),
             ...(source ? { source } : {}),
+            ...(payload.source?.userText !== undefined ? { userText: payload.source.userText } : {}),
             ...(autoReviewReplyTarget ? { autoReviewReplyTarget } : {}),
             ...(groupHistoryAccess ? { groupHistoryAccess } : {}),
           },

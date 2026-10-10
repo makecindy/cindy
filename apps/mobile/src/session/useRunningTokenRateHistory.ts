@@ -15,6 +15,7 @@ export function useRunningTokenRateHistory(input: {
   outputTokens: number;
   generationDurationMs: number;
   generationReliable: boolean;
+  generationActive?: boolean;
   /** 本地发送或队列已让活动条出现，但远端本轮 startedAt 可能仍是 null。 */
   streaming?: boolean;
 }) {
@@ -24,6 +25,7 @@ export function useRunningTokenRateHistory(input: {
     outputTokens,
     generationDurationMs,
     generationReliable,
+    generationActive,
     streaming = false,
   } = input;
   // 挂载时从按会话的进程内缓存播种：ComposerActivityStatus 以账号、设备和任务身份为 key，
@@ -66,9 +68,9 @@ export function useRunningTokenRateHistory(input: {
       ) {
         return { ...recorded, baseline: null, lastReport: null, latestRate: null };
       }
-      return recorded;
+      return generationActive === false ? { ...recorded, latestRate: null, latestSampleAt: undefined } : recorded;
     });
-  }, [sessionKey, startedAt, outputTokens, generationDurationMs, generationReliable, streaming]);
+  }, [sessionKey, startedAt, outputTokens, generationDurationMs, generationReliable, generationActive, streaming]);
   useEffect(() => {
     if (sessionKey) saveCachedRateHistory(sessionKey, history);
   }, [sessionKey, history]);

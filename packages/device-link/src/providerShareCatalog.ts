@@ -103,11 +103,13 @@ function accountIdentity(value: unknown): string | undefined {
 /**
  * 分享出去的一条供应商：去掉分享者的账号身份字段(`subscriptionAccount` / `openAiAccount`，
  * 含登录邮箱)并清理名称，地址里的用户名密码与查询参数也去掉；其余展示字段沿用同账号投影。
+ * 供应商组摘要(`group`，列着组内电脑)只给同账号电脑，这里也去掉。
  * 分享者电脑、受邀者电脑与手机都各过一遍。
  */
 export function scrubSharedProvider<T>(provider: T): T {
   if (!provider || typeof provider !== 'object' || Array.isArray(provider)) return provider;
   const { subscriptionAccount, openAiAccount, ...fields } = provider as Record<string, unknown>;
+  delete fields.group;
   const rest = stripNestedUrlSecrets(fields, 0) as Record<string, unknown>;
   if (typeof rest.name === 'string') {
     rest.name = scrubProviderShareLabel(rest.name, [accountIdentity(subscriptionAccount), accountIdentity(openAiAccount)],

@@ -4,7 +4,8 @@
  * Agent 所在电脑发来的每个文件 / 命令请求都在这里先过权限上限，再在本机执行：
  *  - `handle(op, body)`：原始操作(Pi 的工具后端)；
  *  - `callTool(name, args)`：Claude Code 风格的 Bash / BashOutput / KillShell / Read / Write / Edit /
- *    NotebookEdit(Claude Code 的自带文件与命令工具关掉后由它顶替)。
+ *    NotebookEdit(Claude Code 的自带文件与命令工具关掉后由它顶替)；供应商分享的受邀者任务另有
+ *    WebFetch(自带的 WebFetch 对受邀者关闭，改在本机抓取)。
  * 写文件前通知「每轮改动对比」抓取改前内容；命令执行后登记一次无法预知范围的改动。
  */
 import path from 'node:path';
@@ -33,6 +34,7 @@ import {
 import type { ExecutorAction, ExecutorGate, ExecutorGateDecision, ExecutorGateMode } from './gate';
 import { piGrep, type PiGrepInput } from './search';
 import { resolveExecutorShell, runOnce, ShellSession } from './shell';
+import { fetchWebPage, WEB_FETCH_PAGE_CHARS, type GuardedFetch } from './webFetch';
 import { ExecutorPathError, type ExecutorWorkspace } from './workspace';
 
 /** Pi bash 的超时(秒)上限，与 Pi 侧 Cindy 桥的上限一致。 */
@@ -52,6 +54,8 @@ export interface RemoteExecutorOptions {
   tempDir?: string;
   /** Read 读 PDF 时取文字；缺省时 PDF 不能用 Read 读取。 */
   extractPdfText?: PdfTextExtractor;
+  /** 提供 WebFetch(在本机抓取网页)所用的出站通道；缺省时不提供这个工具。 */
+  webFetch?: GuardedFetch;
 }
 
 export class ExecutorRequestError extends Error {
@@ -91,8 +95,8 @@ function optionalString(body: Record<string, unknown>, key: string): string | un
   return value;
 }
 
-/** Claude Code 风格工具名(与自带工具同名，模型和界面看到的都是这些名字)。 */
-export const EXECUTOR_CC_TOOL_NAMES = ['Bash', 'BashOutput', 'KillShell', 'Read', 'Write', 'Edit', 'NotebookEdit'] as const;
+/** Claude Code 风格工具名(与自带工具同名，模型和界面看到的都是这些名字)。WebFetch 只在启用时提供。 */
+export const EXECUTOR_CC_TOOL_NAMES = ['Bash', 'BashOutput', 'KillShell', 'Read', 'Write', 'Edit', 'NotebookEdit', 'WebFetch'] as const;
 export type ExecutorCcToolName = (typeof EXECUTOR_CC_TOOL_NAMES)[number];
 
 export class RemoteExecutor {
@@ -140,6 +144,11 @@ export class RemoteExecutor {
     if (this.closed) return;
     this.closed = true;
     await this.shell.close();
+  }
+
+  /** 给 Claude Code 的工具定义(cindy_exec 的 tools/list)。 */
+  toolDefinitions(): ReturnType<typeof executorCcToolDefinitions> {
+    return executorCcToolDefinitions(process.platform, { webFetch: this.opts.webFetch !== undefined });
   }
 
   private ensureOpen(): void {
@@ -323,6 +332,9 @@ export class RemoteExecutor {
             edit_mode: editMode,
           }, this.readState, this.writeHooks));
         }
+        case 'WebFetch':
+          if (!this.opts.webFetch) return textResult(`Unknown tool: ${name}`, true);
+          return this.mapToolResult(await this.webFetch(this.opts.webFetch, args, signal));
         default:
           return textResult(`Unknown tool: ${name}`, true);
       }
@@ -347,6 +359,23 @@ export class RemoteExecutor {
         ? { ...item, text: this.workspace.mapTextForAgent(item.text) }
         : item),
     };
+  }
+
+  private async webFetch(fetchImpl: GuardedFetch, args: Record<string, unknown>, signal?: AbortSignal): Promise<ToolResult> {
+    const raw = str(args, 'url').trim();
+    let url: URL;
+    try {
+      url = new URL(raw);
+    } catch {
+      return textResult(`Not a valid URL: ${raw}`, true);
+    }
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return textResult('Only http and https URLs can be fetched.', true);
+    if (url.username || url.password) return textResult('URLs with a user name or password cannot be fetched.', true);
+    const startIndex = Math.max(0, Math.floor(optionalNumber(args, 'start_index') ?? 0));
+    // 按 Agent 给的原样地址核对：本机用户在确认卡上批准的就是这个地址。
+    const decision = this.gate.authorize({ kind: 'fetch', url: raw });
+    if (!decision.ok) throw new ExecutorDenied(decision.reason ?? 'Not allowed.');
+    return fetchWebPage(fetchImpl, { url, startIndex, allowPrivateNetwork: decision.elevated === true, signal });
   }
 
   private async bash(args: Record<string, unknown>, signal?: AbortSignal): Promise<ToolResult> {
@@ -374,7 +403,10 @@ class ExecutorDenied extends Error {
 }
 
 /** 给 Claude Code 的工具定义(参数名与自带工具一致；说明是 Cindy 自己写的)。 */
-export function executorCcToolDefinitions(platform: NodeJS.Platform = process.platform): Array<{
+export function executorCcToolDefinitions(
+  platform: NodeJS.Platform = process.platform,
+  options: { webFetch?: boolean } = {},
+): Array<{
   name: ExecutorCcToolName;
   description: string;
   inputSchema: Record<string, unknown>;
@@ -383,6 +415,26 @@ export function executorCcToolDefinitions(platform: NodeJS.Platform = process.pl
   const shellNote = platform === 'win32'
     ? 'Commands run in Git Bash when available, otherwise cmd.exe.'
     : `Commands run with ${path.basename(process.env.SHELL || 'bash')}.`;
+  const webFetch = options.webFetch ? [{
+    name: 'WebFetch' as const,
+    description: [
+      "Fetch a web page using the network of the user's computer and return its text.",
+      'HTML is converted to plain text with headings, links, lists and code blocks kept; other text types are returned as they are. Images, PDFs and other files are not returned.',
+      'HTTP URLs are upgraded to HTTPS. A redirect to another host is not followed: the result gives the new URL, so call WebFetch again with it.',
+      `Long pages come in parts of ${WEB_FETCH_PAGE_CHARS} characters; pass start_index to read further.`,
+      "Addresses on the user's computer or a private network need the user's confirmation.",
+    ].join(' '),
+    inputSchema: {
+      type: 'object',
+      properties: {
+        url: { type: 'string', description: 'The URL to fetch' },
+        prompt: { type: 'string', description: 'What you are looking for on the page, shown to the user. The page text is returned for you to read.' },
+        start_index: { type: 'integer', minimum: 0, description: 'Character position to start from when reading a long page (default 0)' },
+      },
+      required: ['url'],
+      additionalProperties: false,
+    },
+  }] : [];
   return [
     {
       name: 'Bash',
@@ -498,5 +550,6 @@ export function executorCcToolDefinitions(platform: NodeJS.Platform = process.pl
         additionalProperties: false,
       },
     },
+    ...webFetch,
   ];
 }

@@ -150,12 +150,14 @@ export function BotGroupSettingsSheet({ visible, group, host, identityFor, onlin
           {group.members.map((member) => {
             const identity = identityFor(member.botId, member.name);
             const active = isActiveBotGroupMember(member);
+            const canOrganize = active && (!member.actorKind || member.actorKind === 'bot');
+            const removable = canRemove && (!member.actorKind || member.actorKind === 'bot' || group.supportsMemberRemoval === true);
             const organizer = member.botId === group.organizerBotId;
             // G12: one row per member; a tap opens its menu (设为负责人 / 移出群聊) instead of two inline buttons.
             const options = [
-              ...(!organizer && active ? [{ id: `organizer:${member.botId}`, title: t('groupChat.settings.setOrganizer') }] : []),
+              ...(!organizer && canOrganize ? [{ id: `organizer:${member.botId}`, title: t('groupChat.settings.setOrganizer') }] : []),
               {
-                id: `remove:${member.botId}`, title: t('groupChat.settings.remove'), destructive: true, disabled: !canRemove,
+                id: `remove:${member.botId}`, title: t('groupChat.settings.remove'), destructive: true, disabled: !removable,
                 ...(canRemove ? {} : { subtitle: t('groupChat.settings.minMembers', { min: BOT_GROUP_MIN_MEMBERS }) }),
               },
             ];
@@ -166,7 +168,11 @@ export function BotGroupSettingsSheet({ visible, group, host, identityFor, onlin
               sections={[{ id: 'member', options }]}
               onSelect={(id) => {
                 if (id.startsWith('organizer:')) void run('organizer', 'update', { organizerBotId: member.botId }, 'groupChat.settings.organizerSaveFailed');
-                else if (id.startsWith('remove:')) void setMembers(memberIds.filter((botId) => botId !== member.botId));
+                else if (id.startsWith('remove:')) {
+                  if (group.supportsMemberRemoval && member.actorId)
+                    void run('members', 'remove-member', { actorId: member.actorId }, 'groupChat.settings.membersSaveFailed');
+                  else void setMembers(memberIds.filter((botId) => botId !== member.botId));
+                }
               }}>
               {(open) => <Pressable accessibilityRole="button" accessibilityLabel={t('groupChat.settings.memberActions', { name: identity.name })}
                 disabled={locked} onPress={open}

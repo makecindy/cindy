@@ -963,7 +963,14 @@ function AutoResumeActionRow({
   //   - 已回填          → ✓ / ✗ 定格,`inFlight` 不参与(终态优先)
   const live = state === 'live' || (inFlight === true && info.outcome === undefined);
   const outcome = live ? undefined : info.outcome;
-  const label = usageLimitReset
+  const label = info.agentSwitch
+    ? t(`chat.systemCard.autoResume.agentSwitch.${info.agentSwitch.cause}`, {
+        from: info.agentSwitch.from,
+        to: info.agentSwitch.to,
+      })
+    : info.groupSwitch
+    ? t('chat.systemCard.autoResume.groupSwitch')
+    : usageLimitReset
     ? t('chat.systemCard.autoResume.labelUsageReset')
     : live
     ? hasProgress

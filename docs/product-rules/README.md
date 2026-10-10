@@ -17,6 +17,7 @@
 - [本地模型筛选](local-model-selection.md)：候选、推荐、量化包装和硬件证据。
 - [供应商设置](provider-settings.md)：连接身份、状态、操作与用量展示。
 - [供应商分享](provider-sharing.md)：把远程供应商分享给其他账号的一次性链接、双方确认、管理页与跨区域规则（跨区域默认关闭）。
+- [供应商组](provider-groups.md)：一台电脑把多台电脑上的同一个供应商合成一组，本机、同账号其他电脑与分享的人都按组策略分配运行电脑（方案，未实现）。
 - [V4 全类型规范](../model-registry-v4-media.md)：媒体字段、成员投影及额外发布条件。
 
 - [`core-product-principles.md`](core-product-principles.md)：Cindy 的目的、连接本质、

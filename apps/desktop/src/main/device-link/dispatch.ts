@@ -1,4 +1,5 @@
 import { executeTaskTags, TASK_TAG_CHANNEL } from '../localDb/ipc/taskTags.js';
+import { encodeMessageBodies, versionMessageBody } from './sessionMessageReuse.js';
 import type { TaskTagRequest } from '@cindy/maker-shared';
 import {
   FILE_PEER_CHANNEL,
@@ -7,6 +8,11 @@ import {
   encodeSessionTagCatalog,
   decodeSessionTagCatalog,
   scrubSharedProvider,
+  CONTROLLER_CAPABILITY_SESSION_LIST_MESSAGES_V1,
+  isListMessagePush,
+  mapMessageBodies,
+  messageRecord,
+  MESSAGE_BODY_FORMAT,
 } from '@cindy/device-link';
 import { requestFilePeer, stopFilePeers } from './filePeer';
 import { requestTaskMigration } from '../task-migration/service';
@@ -89,7 +95,7 @@ import { isModelVisible } from '@cindy/model-providers/sections';
 import { app } from 'electron';
 import { remoteDesktop, requestRemoteDesktop } from '../remote-desktop';
 import { remoteCredentialHost } from '../remote-desktop/credentialHost';
-import { REMOTE_DESKTOP_CHANNEL } from '@cindy/device-link';
+import { ORCA_REMOTE_WORKER_OPEN_CHANNEL, REMOTE_DESKTOP_CHANNEL } from '@cindy/device-link';
 import type { DeviceLinkClient } from '@cindy/device-link';
 import { isDeferredHistoryPush, deferredToolBoundary } from './historyViewPush';
 import { mapHistoryViewMessages, type HistoryMessageSource, type HistoryViewItem } from '@cindy/maker-shared/message-window';
@@ -97,7 +103,7 @@ import { createLogger } from '../logger';
 import { projectMobileMessagePage, projectMobileToolPush } from './mobileToolProjection';
 import { normalizeSessionProviderId } from '../maker-host/session-provider-store.js';
 import { readDeviceLinkSettings } from './settings-store';
-import { PLUGIN_OAUTH_CHANNEL } from '@cindy/device-link';
+import { PLUGIN_OAUTH_CHANNEL, PROVIDER_GROUP_REMOTE_CHANNEL } from '@cindy/device-link';
 import { requestPluginOauth, invalidatePluginOauth } from '../plugin-oauth/runtime.js';
 import { dispatchLocalInvoke } from './invoke-registry';
 import {
@@ -115,7 +121,8 @@ import { isProviderSharePeer, isSharedTaskPeer, parseProviderSharePeer, PROVIDER
 import { captureSharedTaskPeer, captureSharedTaskPush, assertSharedTaskInvoke, sharedTaskMetadataTopic, sharedTaskAccessFailure } from './sharedTaskDispatch.js';
 import { runAsBackgroundDbRpc } from '../localDb/client/rpcAdmission.js';
 import { fetchLocalMediaToOss } from './mediaFetch';
-import { refreshSharedTaskPeer } from './sharedTaskDispatch.js';
+import { MAX_SHARED_TASK_TOPICS, refreshSharedTaskPeer, releaseSharedTaskWatchesOnWorkdirChange } from './sharedTaskDispatch.js';
+import { admitSharedTaskFsWatchTopics } from './sharedTaskFileAccess.js';
 import { transcribeRemoteVoiceInput } from './voiceTranscribe';
 import { readTelegramRemoteStatus, setTelegramRemoteOnline } from './telegramRemoteControl';
 import { adviseAndRecordVoiceInputDictionaryLearning } from '../voice-input/index.js';
@@ -192,7 +199,9 @@ const UPDATE_RELAUNCH_NON_BLOCKING_INVOKE_CHANNELS: ReadonlySet<string> = new Se
   'local-db:sessions:get-many',
 ]);
 const textEncoder = new TextEncoder();
-const offlinePushQueue = createOfflinePushQueue();
+// A 200,000-code-unit body can take 1.2 MB after JSON escaping. Keep the existing
+// per-peer queue bounded, with room for that body plus its message envelope.
+const offlinePushQueue = createOfflinePushQueue({ maxBytes: 2 * 1024 * 1024 });
 
 // Serialize the async DB check at the final wire boundary, retaining per-peer
 // order even when replies arrive out of order. Bounds match best-effort push:
@@ -302,6 +311,8 @@ export type { ActiveController } from './subscriptions';
  */
 const PATH_GUARDED_CHANNELS: ReadonlyMap<string, 'workingDir' | 'baseRepo'> = new Map([
   ['maker:create-session', 'workingDir'],
+  // 协同远端 Worker 指定本机目录时同口径收敛；不指定则由本机分配任务目录。
+  [ORCA_REMOTE_WORKER_OPEN_CHANNEL, 'workingDir'],
   ['worktree:create', 'baseRepo'],
 ]);
 
@@ -383,6 +394,24 @@ let remoteAgentHandler: RemoteAgentHandler | null = null;
 
 export function setRemoteAgentHandler(handler: RemoteAgentHandler | null): void {
   remoteAgentHandler = handler;
+}
+
+/** 供应商组(docs/product-rules/provider-groups.md)：只服务同账号电脑。 */
+export interface ProviderGroupRemoteHandler {
+  /** `provider-group:remote` 请求。 */
+  handle(controller: string, raw: unknown): Promise<unknown>;
+  /** 给同账号电脑的 `maker:provider:list` 补上组摘要(组所属供应商的 `group` 字段)。 */
+  decorateProviderList(result: unknown): unknown;
+}
+let providerGroupRemoteHandler: ProviderGroupRemoteHandler | null = null;
+
+export function setProviderGroupRemoteHandler(handler: ProviderGroupRemoteHandler | null): void {
+  providerGroupRemoteHandler = handler;
+}
+
+/** 组摘要只给同账号电脑：分享受邀者与共享任务访客是其他账号，看不到组内电脑。 */
+function isSameAccountController(src: string): boolean {
+  return !isProviderSharePeer(src) && !isSharedTaskPeer(src);
 }
 
 // Local renderer IPC keeps its sender guard; remote mutations enter the shared action here.
@@ -1601,6 +1630,7 @@ function flushMakerEventBatchSession(
     while (segment.events.length > 0) {
       const slice = takeMakerEventBatchSlice(segment);
       if (slice.length === 0) break;
+      if (!subscriptions.controllerHasTopic(dst, `session:${sessionId}`)) continue;
       // relay 已确认离线:只把缓冲取空(维持强不变量),不再制造成功率恒为 0 的帧。
       if (outcome.offline) {
         outcome.droppedEvents += slice.length;
@@ -1913,7 +1943,19 @@ function clearHistoryNotices(dst: string): void {
   historyNoticeStages.delete(dst);
 }
 
+function receivesListMessages(dst: string): boolean {
+  return !isSharedTaskPeer(dst) && !isProviderSharePeer(dst)
+    && subscriptions.controllerSupports(dst, CONTROLLER_CAPABILITY_SESSION_LIST_MESSAGES_V1)
+    && subscriptions.controllerHasTopic(dst, 'sessions');
+}
+
+function listMessagePayload(dst: string, sessionId: string, payload: unknown): unknown {
+  return receivesListMessages(dst) && !subscriptions.controllerHasTopic(dst, `session:${sessionId}`)
+    ? { ...(payload as object), listMessage: true } : payload;
+}
+
 function forwardPush(channel: string, payload: unknown, ownerStamp?: PushOwnerStamp): void {
+  releaseSharedTaskWatchesOnWorkdirChange(channel, payload);
   if (!activeClient) return;
   const topic = topicForPush(channel, payload);
   if (!topic) return;
@@ -1948,9 +1990,11 @@ function forwardPush(channel: string, payload: unknown, ownerStamp?: PushOwnerSt
     remotePayload = projectInteractionDismissedForRemote(remotePayload);
   }
   const sharedTaskTopic = sharedTaskMetadataTopic(channel, remotePayload);
+  const listMessage = isListMessagePush(channel, remotePayload);
   const targetsFor = (known: boolean): string[] => {
     const lookup = known ? subscriptions.getKnownControllersForTopic : subscriptions.getControllersForTopic;
-    const ordinary = lookup(topic);
+    const ordinary = [...new Set([...lookup(topic), ...(listMessage
+      ? lookup('sessions').filter(receivesListMessages) : [])])];
     if (!sharedTaskTopic) return ordinary;
     const shared = lookup(sharedTaskTopic).filter((dst) => isSharedTaskPeer(dst)
       && captureSharedTaskPush(dst, channel, remotePayload)?.() === true);
@@ -1994,7 +2038,14 @@ function forwardPush(channel: string, payload: unknown, ownerStamp?: PushOwnerSt
   };
   // 共享任务访客只能看见本任务：新消息推送里的来源身份与 invoke 读取同口径脱敏。
   const payloadFor = (dst: string): unknown => {
-    const projected = projectedPayloadFor(dst);
+    let projected = projectedPayloadFor(dst);
+    if (listMessage && receivesListMessages(dst)) {
+      if (channel === 'local-db:messages:created') {
+        const push = projected as { message: Record<string, unknown> };
+        projected = { ...push, message: versionMessageBody(push.message) };
+      }
+      projected = listMessagePayload(dst, readPushSessionId(remotePayload)!, projected);
+    }
     return isSharedTaskPeer(dst) ? redactSharedGuestPush(channel, projected) : projected;
   };
   const historySessionId = readPushSessionId(remotePayload);
@@ -2009,7 +2060,8 @@ function forwardPush(channel: string, payload: unknown, ownerStamp?: PushOwnerSt
       offlinePushQueue.enqueue(dst, {
         channel,
         payload: payloadFor(dst),
-        topic: sharedMetadata ? sharedTaskTopic : topic,
+        topic: sharedMetadata ? sharedTaskTopic : listMessage && receivesListMessages(dst)
+          && !subscriptions.controllerHasTopic(dst, `session:${historySessionId}`) ? 'sessions' : topic,
         ...(ownerStamp ? { ownerStamp } : {}),
       });
     }
@@ -2788,7 +2840,14 @@ async function handleInvoke(
     return;
   }
   if (payload && (payload.channel === DL_SUBSCRIBE_CHANNEL || payload.channel === DL_UNSUBSCRIBE_CHANNEL)) {
-    const result = handleSubscriptionFrame(src, payload);
+    // Only a shared-task workdir watch awaits; every other frame stays synchronous.
+    const admitting = admitSharedTaskSubscription(src, payload);
+    const settle = admitting ? await admitting : null;
+    // The workdir lookup is an await boundary; a frame from a replaced link must not subscribe.
+    if (settle && (remoteInvokeLinkEpoch.get(src) ?? 0) !== invokeLinkEpoch) return;
+    // Settled synchronously with the install below: no workdir move can slip between them.
+    const admission = settle?.();
+    const result = handleSubscriptionFrame(src, admission?.payload ?? payload, admission?.verifiedFsWatchTopics);
     if (!await sendAuthorizedInvokeResultSafe(
       client,
       src,
@@ -3270,7 +3329,11 @@ function sendInvokeResultSafe(
     channel === 'local-db:messages:list' && normalized.ok && Array.isArray(normalized.result)
       ? { ...normalized, result: projectMobileMessagePage(normalized.result, args?.[1]) }
       : normalized;
-  const attempt = trySendInvokeResult(client, src, requestId, proactive, channel, args);
+  const encoded = proactive.ok && !isSharedTaskPeer(src)
+    ? encodeMessageBodies(channel, args, proactive.result) : undefined;
+  const reused = proactive.ok && encoded !== undefined && encoded !== proactive.result
+    ? { ...proactive, result: encoded } : proactive;
+  const attempt = trySendInvokeResult(client, src, requestId, reused, channel, args);
   // 以真正能上 wire 的结果作为去重真相：超限原结果若被 compact/改成结构化错误，
   // 不能把缓存留在原始大对象上，否则缓存可能自淘汰且重复 requestId 会再次执行。
   // 远程 Agent 的每个 op 自带幂等(poll 按游标、其余按各自 id 去重)，高频的事件流结果不进
@@ -3547,6 +3610,14 @@ function compactInvokeResultForDeviceLink(
   frame: { dst: string; requestId: string },
   args?: unknown[],
 ): InvokeResultPayload | null {
+  if (result.ok && messageRecord(result.result) && result.result.format === MESSAGE_BODY_FORMAT) {
+    const compact = compactInvokeResultForDeviceLink(channel, { ok: true, result: result.result.value }, frame, args);
+    if (!compact?.ok) return null;
+    // Compaction may change a body; never advertise its pre-compaction digest.
+    const wrapped: InvokeResultPayload = { ok: true, result: { format: MESSAGE_BODY_FORMAT,
+      value: mapMessageBodies(compact.result, versionMessageBody) } };
+    return fitsInvokeResultFrame(frame, wrapped) ? wrapped : null;
+  }
   if (result.ok && (channel === 'local-db:messages:view' || channel === 'local-db:messages:work-details')
     && result.result && typeof result.result === 'object') {
     const page = result.result as Record<string, unknown>;
@@ -3640,6 +3711,7 @@ function fitsInvokeResultFrame(frame: { dst: string; requestId: string }, payloa
 function forceCompactRemoteMessageContent(message: unknown): unknown {
   if (!message || typeof message !== 'object' || Array.isArray(message)) return message;
   const record = message as Record<string, unknown>;
+  if (typeof record.remoteBodyVersion === 'string' && !Object.prototype.hasOwnProperty.call(record, 'content')) return record;
   return {
     ...record,
     agentMeta: markRemoteContentTruncated(record.agentMeta),
@@ -3829,14 +3901,59 @@ function isRemoteSubscriptionTopic(value: unknown): value is Topic {
   return parseFsWatchTopic(value) !== null;
 }
 
-function handleSubscriptionFrame(src: string, payload: InvokePayload): InvokeResultPayload {
+/**
+ * Shared-task guests may watch only their task workdir. That binding needs the
+ * host DB, so it runs before the synchronous frame handler. Returns null when
+ * no admission is needed, so ordinary frames never cross an await. The result
+ * is settled synchronously at install time: if the task workdir moved during
+ * the lookup, the watch topics are dropped and the rest of the frame proceeds.
+ */
+function admitSharedTaskSubscription(
+  src: string,
+  payload: InvokePayload,
+): Promise<() => { payload: InvokePayload; verifiedFsWatchTopics: ReadonlySet<string> }> | null {
+  const rawArg = (payload.args ?? [])[0];
+  const arg = rawArg && typeof rawArg === 'object' && !Array.isArray(rawArg)
+    ? rawArg as Record<string, unknown> : null;
+  const topics = arg?.topics;
+  // Oversized frames skip the DB lookup; the synchronous gate rejects them.
+  if (!isSharedTaskPeer(src) || payload.channel !== DL_SUBSCRIBE_CHANNEL || !Array.isArray(topics)
+    || topics.length > MAX_SHARED_TASK_TOPICS
+    || !topics.some((topic) => typeof topic === 'string' && parseFsWatchTopic(topic) !== null)) {
+    return null;
+  }
+  const sharedTask = captureSharedTaskPeer(src);
+  // The synchronous gate reports the access failure.
+  if (!sharedTask) return null;
+  const withTopics = (next: unknown[]): InvokePayload =>
+    ({ ...payload, args: [{ ...arg, topics: next }, ...(payload.args ?? []).slice(1)] });
+  return admitSharedTaskFsWatchTopics(sharedTask, topics).then(
+    (admitted) => () => admitted.isFresh()
+      ? { payload: withTopics(admitted.topics), verifiedFsWatchTopics: admitted.verified }
+      : {
+        payload: withTopics(admitted.topics.filter((topic) =>
+          typeof topic !== 'string' || parseFsWatchTopic(topic) === null)),
+        verifiedFsWatchTopics: new Set<string>(),
+      },
+    (error: unknown) => {
+      log.warn(`shared task fs-watch admission failed for ${shortId(src)}: ${String(error)}`);
+      return () => ({ payload, verifiedFsWatchTopics: new Set<string>() });
+    },
+  );
+}
+
+function handleSubscriptionFrame(
+  src: string,
+  payload: InvokePayload,
+  verifiedFsWatchTopics: ReadonlySet<string> = new Set(),
+): InvokeResultPayload {
   // Provider-share guests never subscribe: the remote agent is poll-only.
   if (isProviderSharePeer(src)) return PROVIDER_SHARE_ACCESS_FAILURE;
   if (isSharedTaskPeer(src)) {
     const sharedTask = captureSharedTaskPeer(src);
     try {
       if (!sharedTask) throw new Error('SharedTask unavailable');
-      assertSharedTaskInvoke(sharedTask, payload);
+      assertSharedTaskInvoke(sharedTask, payload, undefined, 'invoke', verifiedFsWatchTopics);
     } catch {
       return sharedTaskAccessFailure(src, sharedTask);
     }
@@ -4204,6 +4321,26 @@ async function executeRemoteInvoke(src: string, payload: InvokePayload | undefin
       };
     }
   }
+  if (payload.channel === PROVIDER_GROUP_REMOTE_CHANNEL) {
+    // 供应商组只给同账号电脑：受邀者的通道清单与共享任务的清单里都没有它，这里再兜一层。
+    if (!isSameAccountController(src)) {
+      return { ok: false, error: { code: 'CHANNEL_NOT_ALLOWED', message: `channel '${payload.channel}' not allowed` } };
+    }
+    const handler = providerGroupRemoteHandler;
+    if (!handler) return { ok: false, error: { code: 'IPC_ERROR', message: '[UNAVAILABLE] provider groups are not ready yet' } };
+    try {
+      return {
+        ok: true,
+        result: await timing.measure('handler', () => runDeviceLinkInvokeContext(
+          { controllerDeviceId: src, channel: payload.channel },
+          () => handler.handle(src, payload.args?.[0]),
+        )),
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return { ok: false, error: { code: 'IPC_ERROR', message: /^\[[A-Z_]+\]/.test(message) ? message : '[INTERNAL] provider group request failed' } };
+    }
+  }
   if (payload.channel === REMOTE_DESKTOP_CHANNEL) {
     try { return { ok: true, result: await timing.measure('handler', () => requestRemoteDesktop(src, payload.args?.[0])) }; }
     catch (error) { return { ok: false, error: { code: 'IPC_ERROR', message: error instanceof Error ? error.message : 'DESKTOP_UNAVAILABLE' } }; }
@@ -4435,8 +4572,12 @@ async function executeRemoteInvoke(src: string, payload: InvokePayload | undefin
         || listingCapabilities.includes(CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2),
         args,
       ));
+    // 供应商组摘要只给同账号电脑(受邀者与共享任务访客另有投影，这里不加，scrubSharedProvider 再兜一层)。
+    const decorated = payload.channel === 'maker:provider:list' && isSameAccountController(src) && providerGroupRemoteHandler
+      ? providerGroupRemoteHandler.decorateProviderList(projected)
+      : projected;
     if (!broadcastTap.isDataOwnerBroadcastScopeCurrent(invocationOwner)) throw new Error('[NOT_FOUND] Session does not exist');
-    return { ok: true, result: projected };
+    return { ok: true, result: decorated };
   } catch (err) {
     // 被控端 handler 的 throwIpcError `[CODE] message` 原样透传,
     // 控制端 renderer 继续用 extractIpcError 解码
@@ -4521,6 +4662,7 @@ export const __testing = {
     inFlightRemoteInvokeCount = 0;
     completedRemoteInvokeResults.clear();
     providerShareDenialLoggedAt.clear();
+    providerGroupRemoteHandler = null;
     completedRemoteInvokeResultBytes = 0;
     inFlightRemoteInvokeResults.clear();
     inFlightRemoteInvokeBytes = 0;

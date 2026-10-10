@@ -92,7 +92,7 @@ export interface TodoCardPresentation {
 
 export type MessageActionBarAlignment = 'left' | 'right';
 
-export type MessageActionBarItemId = 'copy' | 'cost' | 'fork' | 'more' | 'streaming' | 'time';
+export type MessageActionBarItemId = 'copy' | 'cost' | 'fork' | 'more' | 'time';
 
 export interface MessageActionBarPresentationInput {
   align: 'agent' | 'user';
@@ -359,11 +359,12 @@ export function buildMessageActionBarPresentation(
   input: MessageActionBarPresentationInput,
 ): MessageActionBarPresentation {
   if (input.isStreaming) {
+    // Match desktop: streaming replies have no action row or status placeholder.
     return {
       align: 'left',
       buttonSize: 24,
       iconSize: 14,
-      items: ['streaming'],
+      items: [],
     };
   }
 

@@ -13,6 +13,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert } from 'react-native';
 import type { ProviderView } from '@cindy/model-providers/registry';
 import type { AgentKind } from '@cindy/model-providers/types';
+import type { OrcaExecutionDeviceView } from '@cindy/device-link';
 import type { MobileModelOption } from '@/session/agentCapabilities';
 import { confirmFullAccessChange } from '@/session/fullAccessConfirmation';
 import {
@@ -22,6 +23,8 @@ import {
   createOrcaWorker,
   describeOrcaError,
   isOrcaAmbiguousTimeout,
+  isOrcaUnsupportedError,
+  parseOrcaExecutionDevices,
   narrowOrcaWorkerProvider,
   enableOrcaTeam,
   isOrcaCollabEligible,
@@ -65,6 +68,7 @@ import { i18n } from '@/i18n';
 import type { MobileMakerTransport } from '@/device-link/mobileMakerTransport';
 import type { MobileModelConfiguration } from '@/session/unifiedMobileModels';
 import type { RemoteSession } from '@/session/types';
+import { useOrcaWorkerDirectoryPicker } from './useOrcaWorkerDirectoryPicker';
 
 export type CollabSheetView = 'collab' | 'collab-create';
 
@@ -272,6 +276,8 @@ export function useOrcaWorkerLeadSessionId(params: {
  */
 export function useOrcaWorkerForm(params: {
   maker: MobileMakerTransport;
+  executionDevicesEnabled?: boolean;
+  executionMakerForDevice?: (deviceId: string) => MobileMakerTransport;
   /** 记忆按登录账号隔离;null = 未登录,不读写记忆(用首次默认值)。 */
   prefsScope: string | null;
   active: boolean;
@@ -284,12 +290,18 @@ export function useOrcaWorkerForm(params: {
     const defaults = defaultOrcaWorkerCreationPrefs();
     return orcaWorkerFormFromPrefs(defaults, defaults.lastAgent);
   });
+  const executionMaker = useMemo(() => form.executionDeviceId && params.executionMakerForDevice
+    ? params.executionMakerForDevice(form.executionDeviceId)
+    : maker, [form.executionDeviceId, maker, params.executionMakerForDevice]);
+  const [executionDevices, setExecutionDevices] = useState<OrcaExecutionDeviceView[]>([]);
+  const [executionDevicesLoading, setExecutionDevicesLoading] = useState(false);
+  const [executionDevicesError, setExecutionDevicesError] = useState<string | null>(null);
   const [customRoleMode, setCustomRoleMode] = useState(false);
   const [agents, setAgents] = useState<readonly OrcaWorkerAgentKind[]>(ALL_AGENTS);
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
   const [modelsByAgent, setModelsByAgent] = useState<Partial<Record<OrcaWorkerAgentKind, readonly MobileModelOption[]>>>({});
-  const makerRef = useRef(maker);
-  makerRef.current = maker;
+  const makerRef = useRef(executionMaker);
+  makerRef.current = executionMaker;
   const formRef = useRef(form);
   formRef.current = form;
   const prefsRef = useRef<OrcaWorkerCreationPrefs>(defaultOrcaWorkerCreationPrefs());
@@ -309,6 +321,40 @@ export function useOrcaWorkerForm(params: {
 
   const prefsScopeRef = useRef(prefsScope);
   prefsScopeRef.current = prefsScope;
+
+  // 设备列表必须从 Lead 所在电脑读；模型与 Agent 则从选中的运行设备读。
+  // 老电脑不支持这个只读通道时隐藏选择入口，仍可创建 Lead 本机 Worker。
+  const leadMakerRef = useRef(maker);
+  useEffect(() => {
+    if (leadMakerRef.current !== maker || !params.executionDevicesEnabled) {
+      leadMakerRef.current = maker;
+      setExecutionDevices([]);
+      setExecutionDevicesError(null);
+      setForm((current) => current.executionDeviceId
+        ? { ...current, executionDeviceId: undefined, remoteDirMode: undefined, remoteDir: undefined, model: null }
+        : current);
+    }
+  }, [maker, params.executionDevicesEnabled]);
+  useEffect(() => {
+    if (!active || !params.executionDevicesEnabled) {
+      setExecutionDevicesLoading(false);
+      return undefined;
+    }
+    let cancelled = false;
+    setExecutionDevicesLoading(true);
+    setExecutionDevicesError(null);
+    void maker.orca.listExecutionDevices()
+      .then((value) => { if (!cancelled) setExecutionDevices(parseOrcaExecutionDevices(value)); })
+      .catch((error) => {
+        if (cancelled) return;
+        setExecutionDevices([]);
+        if (!isOrcaUnsupportedError(error)) {
+          setExecutionDevicesError(describeOrcaError(error, 'session.collab.errors.loadExecutionDevices'));
+        }
+      })
+      .finally(() => { if (!cancelled) setExecutionDevicesLoading(false); });
+    return () => { cancelled = true; };
+  }, [active, connectionEpoch, maker, params.executionDevicesEnabled]);
 
   // 挂载 / 换账号时预读记忆,复位时即可同步恢复,不在用户操作期间异步覆盖表单。
   // 换账号时推进代次:上一个账号还在路上的读取 / 能力收敛一律作废,不写进新账号的表单。
@@ -348,7 +394,7 @@ export function useOrcaWorkerForm(params: {
         if (capabilities && makerRef.current === source) {
           setModelsByAgent((current) => ({ ...current, [agent]: capabilities.availableModels }));
         }
-        if (generation !== convergeGenRef.current) return;
+        if (generation !== convergeGenRef.current || makerRef.current !== source) return;
         setForm((current) => (current.agent === agent
           ? { ...current, model: convergeOrcaWorkerModel(current.model, capabilities) }
           : current));
@@ -358,14 +404,15 @@ export function useOrcaWorkerForm(params: {
 
   // 换了被控电脑(新建任务页切设备):上一台的 Agent 列表作废,回到乐观全集等这台的结果,
   // 不让复位按上一台的列表挑 Agent。
-  const rosterMakerRef = useRef(maker);
+  const rosterMakerRef = useRef(executionMaker);
   useEffect(() => {
-    if (rosterMakerRef.current === maker) return;
-    rosterMakerRef.current = maker;
+    if (rosterMakerRef.current === executionMaker) return;
+    rosterMakerRef.current = executionMaker;
+    convergeGenRef.current += 1;
     agentsRef.current = ALL_AGENTS;
     setAgents(ALL_AGENTS);
     setModelsByAgent({});
-  }, [maker]);
+  }, [executionMaker]);
 
   // 读被控端实际注册的 Agent。复位时列表可能还是乐观的三个:结果回来后,当前 Agent 不在这台
   // 电脑上就切到第一个可用 Agent 并带出它的模型记忆(不论用户是否改过其它字段——角色、任务、
@@ -401,7 +448,7 @@ export function useOrcaWorkerForm(params: {
       })
       .catch(() => undefined);
     return () => { cancelled = true; };
-  }, [active, connectionEpoch, converge, maker]);
+  }, [active, connectionEpoch, converge, executionMaker]);
 
   /** 重新打开已确认的表单(新建任务的协同草稿):角色模式跟随保存的角色,不沿用上次未提交的编辑。 */
   const restore = useCallback((value: OrcaWorkerFormValue) => {
@@ -466,7 +513,12 @@ export function useOrcaWorkerForm(params: {
 
   const patch = useCallback((next: Partial<OrcaWorkerFormValue>) => {
     touchedRef.current = true;
-    setForm((current) => ({ ...current, ...next }));
+    if ('executionDeviceId' in next && next.executionDeviceId !== formRef.current.executionDeviceId) {
+      convergeGenRef.current += 1;
+      setForm((current) => ({ ...current, ...next, model: null, remoteDirMode: 'dialogue', remoteDir: '' }));
+    } else {
+      setForm((current) => ({ ...current, ...next }));
+    }
   }, []);
 
   const changePermission = useCallback(async (mode: OrcaWorkerPermissionMode) => {
@@ -501,6 +553,12 @@ export function useOrcaWorkerForm(params: {
 
   const pickerAgents = useMemo<AgentKind[]>(() => [...agents], [agents]);
 
+  const directoryPicker = useOrcaWorkerDirectoryPicker({
+    deviceId: form.executionDeviceId, maker: executionMaker, scope: prefsScope,
+    formEpoch: formEpochRef.current, workingDir: form.remoteDir ?? '', setSheetOpen,
+    onChoose: (path) => patch({ remoteDirMode: path === null ? 'dialogue' : 'path', remoteDir: path ?? '' }),
+  });
+
   /**
    * 老被控端没有 `maker:provider:list` 时,模型选择器走扁平列表:用当前 Agent 的能力模型,
    * 选中后按「不指定来源」写回表单(提交前再按实际来源对账 effort / Fast)。
@@ -518,6 +576,10 @@ export function useOrcaWorkerForm(params: {
   }, [select]);
 
   return {
+    maker: executionMaker,
+    executionDevices,
+    executionDevicesLoading,
+    executionDevicesError,
     form,
     restore,
     customRoleMode,
@@ -527,15 +589,18 @@ export function useOrcaWorkerForm(params: {
     changePermission,
     agents,
     pickerAgents,
-    valid: canSubmitOrcaWorkerForm(form, customRoleMode),
+    valid: canSubmitOrcaWorkerForm(form, customRoleMode)
+      && (!form.executionDeviceId || executionDevices.some((device) => device.deviceId === form.executionDeviceId && device.supported)),
     reset,
     remember,
+    directoryPicker,
     modelPicker: { open: modelPickerOpen, openPicker, close, closed, select, flatModelOptions, selectFlatModel },
   };
 }
 
 export function useSessionOrcaCollab(params: {
   maker: MobileMakerTransport;
+  executionMakerForDevice?: (deviceId: string) => MobileMakerTransport;
   deviceId: string | null;
   sessionId: string;
   session: RemoteSession | null;
@@ -552,10 +617,12 @@ export function useSessionOrcaCollab(params: {
   sheetOpen: boolean;
   setSheetView(view: 'main' | CollabSheetView): void;
   setSheetOpen(open: boolean): void;
-  openSession(sessionId: string): void;
+  /** target 缺省 = 当前任务所在电脑；在另一台电脑运行的 Worker 传那台。 */
+  openSession(sessionId: string, target?: { deviceId: string; deviceName?: string | null }): void;
 }) {
   const { maker, deviceId, sessionId, session, prefsScope, connectionEpoch, getProviders, enabled, sheetView, sheetOpen, setSheetView, setSheetOpen, openSession } = params;
-  const role = enabled ? session?.orcaRole ?? null : null;
+  // 远端真实任务的团队在另一台电脑，不能走本机团队查询或嵌套开启协同。
+  const role = enabled && !session?.orcaRemoteLead ? session?.orcaRole ?? null : null;
   const isLead = role === 'lead';
   const isWorker = role === 'worker';
   const eligible = enabled && (isLead || isOrcaCollabEligible(session));
@@ -577,8 +644,10 @@ export function useSessionOrcaCollab(params: {
     : null;
   const workerForm = useOrcaWorkerForm({
     maker,
+    executionMakerForDevice: params.executionMakerForDevice,
+    executionDevicesEnabled: eligible && !session?.remoteHostId && !session?.agentDeviceId,
     prefsScope,
-    active: sheetOpen && sheetView !== null,
+    active: eligible && sheetOpen && sheetView !== null,
     setSheetOpen,
     connectionEpoch,
   });
@@ -590,6 +659,11 @@ export function useSessionOrcaCollab(params: {
   makerRef.current = maker;
   const sessionRef = useRef(session);
   sessionRef.current = session;
+
+  // 权威元数据补齐 Worker 身份时收起之前的协同表单。
+  useEffect(() => {
+    if (!eligible && (sheetView === 'collab' || sheetView === 'collab-create')) setSheetView('main');
+  }, [eligible, sheetView, setSheetView]);
 
   // 换任务:错误与入口状态都属于上一个任务,整体复位。
   useEffect(() => {
@@ -621,16 +695,18 @@ export function useSessionOrcaCollab(params: {
   const rememberWorkerForm = workerForm.remember;
   /** + 面板主视图的「协同模式」行:Lead 进团队面板,其它进开启表单。 */
   const openFromMain = useCallback(() => {
+    if (!eligible || !isOrcaCollabEligible(sessionRef.current)) return;
     setError(null);
     if (!isLead) resetWorkerForm();
     setSheetView('collab');
-  }, [isLead, resetWorkerForm, setSheetView]);
+  }, [eligible, isLead, resetWorkerForm, setSheetView]);
 
   const openCreateWorker = useCallback(() => {
+    if (!eligible || !isOrcaCollabEligible(sessionRef.current)) return;
     setError(null);
     resetWorkerForm();
     setSheetView('collab-create');
-  }, [resetWorkerForm, setSheetView]);
+  }, [eligible, resetWorkerForm, setSheetView]);
 
   const form = workerForm.form;
   const formValid = workerForm.valid;
@@ -638,7 +714,7 @@ export function useSessionOrcaCollab(params: {
   getProvidersRef.current = getProviders;
 
   const submitEnable = useCallback(async () => {
-    if (!deviceId || !formValid || busy) return;
+    if (!eligible || !isOrcaCollabEligible(sessionRef.current) || !deviceId || !formValid || busy) return;
     setBusy(true);
     setError(null);
     try {
@@ -653,10 +729,10 @@ export function useSessionOrcaCollab(params: {
     } finally {
       setBusy(false);
     }
-  }, [busy, deviceId, form, formValid, refreshTeam, rememberWorkerForm, sessionId, setSheetView]);
+  }, [busy, deviceId, eligible, form, formValid, refreshTeam, rememberWorkerForm, sessionId, setSheetView]);
 
   const submitCreate = useCallback(async () => {
-    if (!formValid || busy) return;
+    if (!eligible || !isOrcaCollabEligible(sessionRef.current) || !formValid || busy) return;
     setBusy(true);
     setError(null);
     try {
@@ -670,7 +746,7 @@ export function useSessionOrcaCollab(params: {
     } finally {
       setBusy(false);
     }
-  }, [busy, form, formValid, refreshTeam, rememberWorkerForm, sessionId, setSheetView, team.workers]);
+  }, [busy, eligible, form, formValid, refreshTeam, rememberWorkerForm, sessionId, setSheetView, team.workers]);
 
   const runTeamAction = useCallback(async (action: () => Promise<unknown>, fallbackKey: string) => {
     setBusy(true);
@@ -724,13 +800,26 @@ export function useSessionOrcaCollab(params: {
     if (worker.status === 'done') {
       void makerRef.current.orca.acknowledgeDone(sessionId, worker.workerId).catch(() => undefined);
     }
+    // 在另一台电脑运行的 Worker：本机这条只是代理任务，打开那台上的真实任务。
+    const remote = worker.executionDevice;
+    if (remote) {
+      openSession(remote.remoteSessionId, {
+        deviceId: remote.deviceId,
+        deviceName: remote.deviceName,
+      });
+      return;
+    }
     openSession(worker.sessionId);
   }, [openSession, sessionId, setSheetOpen]);
 
   const confirmArchive = useCallback((worker: OrcaTeamWorker) => {
     Alert.alert(
       i18n.t('session.collab.archiveConfirmTitle', { name: orcaWorkerDisplayName(worker) }),
-      i18n.t('session.collab.archiveConfirmDesc'),
+      worker.executionDevice
+        ? i18n.t('session.collab.archiveRemoteConfirmDesc', {
+            device: worker.executionDevice.deviceName ?? i18n.t('session.collab.otherComputer'),
+          })
+        : i18n.t('session.collab.archiveConfirmDesc'),
       [
         { text: i18n.t('session.collab.cancel'), style: 'cancel' },
         {
@@ -830,8 +919,8 @@ export function useSessionOrcaCollab(params: {
     eligible,
     isLead,
     isWorker,
-    entryHint: isLead ? null : orcaCollabEntryHint(entryStatus),
-    entryBlocked: !isLead && entryStatus !== 'ready',
+    entryHint: !eligible || isLead ? null : orcaCollabEntryHint(entryStatus),
+    entryBlocked: !eligible || (!isLead && entryStatus !== 'ready'),
     team,
     workerLeadSessionId,
     openLead,
@@ -842,7 +931,7 @@ export function useSessionOrcaCollab(params: {
     workerForm,
     busy,
     error,
-    canSubmit: workerForm.valid && !busy,
+    canSubmit: eligible && workerForm.valid && !busy,
     openFromMain,
     openCreateWorker,
     submitEnable,

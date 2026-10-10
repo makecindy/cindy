@@ -13,11 +13,7 @@ import { normalizeExtraDirs } from '@/session/newSession';
 import { buildMobileSessionDeepLink } from '@/session/sessionLinks';
 import { sessionWorktreeInfo } from '@/session/sessionWorktree';
 import type { RemoteSession } from '@/session/types';
-import {
-  normalizeRemoteMoney,
-  remoteMoneySymbol,
-  type RemoteMoney,
-} from '@/session/remoteMoney';
+import { formatRemoteMoney, resolveSessionTotalMoney } from '@/session/remoteMoney';
 
 /** 菜单 sheet 的两级视图:一级操作菜单 / 二级会话信息。 */
 export type SessionMenuView = 'menu' | 'info';
@@ -225,20 +221,8 @@ function buildSessionMenuMetaLine(session: RemoteSession): string {
 
 function buildSessionMenuUsageSummary(session: RemoteSession): string | null {
   const parts: string[] = [];
-  const totalMoney = normalizeRemoteMoney(session.totalMoney);
-  const legacyCostUsd = readPositiveNumber(session.totalCostUsd);
-  const displayMoney =
-    totalMoney && totalMoney.amount > 0
-      ? totalMoney
-      : legacyCostUsd === null
-        ? null
-        : {
-            amount: legacyCostUsd,
-            currency: 'USD' as const,
-            approximate: false,
-            kind: 'actual-cost' as const,
-          };
-  if (displayMoney) parts.push(formatMoney(displayMoney));
+  const displayMoney = resolveSessionTotalMoney(session);
+  if (displayMoney) parts.push(formatRemoteMoney(displayMoney));
   const contextTokens = readPositiveNumber(session.contextTokens);
   const contextWindow = readPositiveNumber(session.contextWindow);
   if (contextTokens !== null && contextWindow !== null) {
@@ -262,9 +246,3 @@ function readPositiveNumber(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null;
 }
 
-function formatMoney(money: RemoteMoney): string {
-  const symbol = remoteMoneySymbol(money.currency);
-  if (money.amount >= 10) return `${symbol}${Math.round(money.amount)}`;
-  if (money.amount >= 0.01) return `${symbol}${money.amount.toFixed(2)}`;
-  return `<${symbol}0.01`;
-}

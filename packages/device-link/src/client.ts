@@ -1,5 +1,6 @@
 import { isPeerResetRetryableInvoke, isBackgroundInvoke, bypassInvokeScheduling } from './invokePolicy.js';
 import { InvokeScheduler } from './invokeScheduler.js';
+import { SessionMessageReuse } from './sessionMessageReuse.js';
 import { decodeScopedEnvelope, encodeScopedEnvelope, type ScopeSupport } from './providerShareEnvelope.js';
 import { isProviderSharePeer } from './providerSharePeer.js';
 import { isSharedTaskPeer } from './sharedTaskPeer.js';
@@ -987,6 +988,7 @@ export class DeviceLinkClient {
   }
 
   stop(): void {
+    this.messageReuse.clear();
     if (this.stopped) return;
     this.stopped = true;
     this.clearTimers();
@@ -1377,12 +1379,13 @@ export class DeviceLinkClient {
     options?: { preSend?: () => void },
   ): Promise<InvokeResultPayload> {
     if (this.status !== 'online') throw new DeviceLinkError('NOT_CONNECTED', 'not connected to relay');
+    const reuse = this.messageReuse.prepare(dst, payload);
     const send = () => {
       // Admission may wait: validate caller ownership/cancellation after dequeue,
       // synchronously before creating the request or retaining a transport frame.
       options?.preSend?.();
       return this.request(
-        { v: PROTOCOL_VERSION, kind: 'invoke', dst, payload: requestSessionTagCatalog(payload) },
+        { v: PROTOCOL_VERSION, kind: 'invoke', dst, payload: requestSessionTagCatalog(reuse.payload) },
         'invoke-result',
         timeoutMs,
       );
@@ -1394,7 +1397,7 @@ export class DeviceLinkClient {
     return result.ok
       ? {
           ...result,
-          result: decodeSessionTagCatalog(payload.channel, result.result),
+          result: reuse.decode(decodeSessionTagCatalog(payload.channel, result.result)),
         }
       : result;
   }
@@ -2856,7 +2859,13 @@ export class DeviceLinkClient {
     return task;
   }
 
+  private readonly messageReuse = new SessionMessageReuse();
+
   private emitFrame(env: Envelope): boolean | Promise<boolean> {
+    if (env.kind === 'push' && env.src) {
+      const push = env.payload as { channel: string; payload: unknown };
+      this.messageReuse.receive(env.src, push.channel, push.payload);
+    }
     let ok = true;
     let chain: Promise<void> | null = null;
     for (const cb of this.frameHandlers) {

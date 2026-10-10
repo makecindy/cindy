@@ -12,6 +12,7 @@
  */
 
 import { Tip } from '@/components/ui/tooltip';
+import { useImageLoadFailure } from './useImageLoadFailure';
 import { FileTypeIcon } from '@/components/ui/file-type-icon';
 import { CHAT_CODE_CLASS, CHAT_CODE_SURFACE_CLASS, CHAT_ICON_BUTTON_CLASS } from './chatChrome';
 import { createElement, memo, useCallback, useEffect, useRef, useState, useMemo, isValidElement, type HTMLAttributes, type ReactNode } from 'react';
@@ -842,15 +843,17 @@ function LightboxImage({
   src,
   alt,
   onZoom,
+  streaming = false,
   ...props
 }: {
   src?: string;
   alt?: string;
   onZoom: (src: string) => void;
+  streaming?: boolean;
   [key: string]: unknown;
 }) {
   const { t } = useTranslation();
-  const [hasError, setHasError] = useState(false);
+  const { status: imageStatus, onError } = useImageLoadFailure(src, streaming);
   // Right-click → custom popover menu. We track cursor pos so a 0×0 virtual
   // trigger can anchor the Radix DropdownMenu wherever the user clicked.
   const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null);
@@ -861,11 +864,10 @@ function LightboxImage({
   // image-local-cache F4: when the underlying file is missing (cache cleared,
   // xdt-image:// 404, etc.), swap to the friendly placeholder card. The
   // filename is best-effort: derive it from the URL's last segment.
-  if (hasError) {
-    const fallbackName = src
-      ? decodeURIComponent(src.split(/[\\/]/).pop() ?? 'image')
-      : 'image';
-    return <ImageMissingPlaceholder filename={alt || fallbackName} />;
+  if (imageStatus) {
+    let fallbackName = src?.split(/[\\/]/).pop() ?? 'image';
+    try { fallbackName = decodeURIComponent(fallbackName); } catch { /* malformed link */ }
+    return <ImageMissingPlaceholder filename={alt || fallbackName} status={imageStatus} />;
   }
 
   const zoomLabel = alt || t('chat.media.clickToZoom');
@@ -902,7 +904,7 @@ function LightboxImage({
           src={src}
           alt={alt ?? ''}
           style={{ maxWidth: 'min(100%, 50vw, 480px)', maxHeight: 'min(40vh, 420px)', height: 'auto' }}
-          onError={() => setHasError(true)}
+          onError={onError}
           {...props}
         />
       </button>
@@ -1777,6 +1779,7 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
         delete (imageProps as Record<string, unknown>)[RAW_LOCAL_IMAGE_SRC_PROP];
         return (
           <LightboxImage
+            streaming={isStreaming}
             src={normalized ? rewriteToRemoteMediaOrigin(normalized, remoteMediaOrigin) : normalized}
             alt={alt}
             onZoom={setLightboxSrc}

@@ -10,13 +10,15 @@
  *  - 可写根外的写与工作区外的递归读：本机任务同样必问(auto-review 对区外写返回 prompt)，
  *    执行器只认本机用户批准过的同一操作 —— 反向请求按本机策略与规范批准重建，发起方那台
  *    电脑不可信时也不能绕过本机用户的目录授权；
- *  - 计划模式：只允许读取和静态可证只读的命令，其余同样要本机用户批准过。
- * 批准记录只在短时间内有效；命令批准用一次即失效，路径批准在有效期内覆盖同一路径的读写
+ *  - 抓取网页：本机地址、内网与云 metadata 这类地址(与本机任务里 WebFetch / curl 同一判定)
+ *    只认本机用户刚批准过的同一地址；批准过的地址抓取时放开内网(域名也可能解析到内网)；
+ *  - 计划模式：只允许读取、抓取网页和静态可证只读的命令，其余同样要本机用户批准过。
+ * 批准记录只在短时间内有效；命令与抓取的批准用一次即失效，路径批准在有效期内覆盖同一路径的读写
  * (编辑会先读后写)。
  */
 import path from 'node:path';
 
-import { classifyShellCommand } from '@cindy/maker-core';
+import { classifyShellCommand, reviewAction } from '@cindy/maker-core';
 
 import type { ExecutorWorkspace } from './workspace';
 
@@ -29,12 +31,15 @@ export type ExecutorGateMode = 'full' | 'plan' | 'normal';
 export type ExecutorAction =
   | { kind: 'read'; path: string; scope?: 'tree' }
   | { kind: 'write'; path: string }
-  | { kind: 'exec'; command: string; cwd: string };
+  | { kind: 'exec'; command: string; cwd: string }
+  | { kind: 'fetch'; url: string };
 
 export interface ExecutorGateDecision {
   ok: boolean;
   /** 拒绝时给 Agent 看的原因。 */
   reason?: string;
+  /** 放行来自全权或本机用户的批准，而不只是普通上限之内(抓取网页据此决定能否访问内网)。 */
+  elevated?: boolean;
 }
 
 /** 批准记录的有效期：覆盖「确认后到真正执行」之间的间隔，过期须重新确认。 */
@@ -42,7 +47,7 @@ export const EXECUTOR_APPROVAL_TTL_MS = 2 * 60_000;
 const MAX_APPROVALS = 256;
 
 interface Approval {
-  kind: 'path' | 'exec';
+  kind: 'path' | 'exec' | 'fetch';
   key: string;
   expiresAt: number;
 }
@@ -61,6 +66,25 @@ function pathKey(target: string): string {
 
 function execKey(command: string, cwd: string): string {
   return `${path.resolve(cwd)}\\0${command}`;
+}
+
+function fetchKey(url: string): string {
+  try {
+    return new URL(url).href;
+  } catch {
+    return url;
+  }
+}
+
+function approvalOf(action: ExecutorAction): { kind: Approval['kind']; key: string } {
+  switch (action.kind) {
+    case 'exec':
+      return { kind: 'exec', key: execKey(action.command, action.cwd) };
+    case 'fetch':
+      return { kind: 'fetch', key: fetchKey(action.url) };
+    default:
+      return { kind: 'path', key: pathKey(action.path) };
+  }
 }
 
 export class ExecutorGate {
@@ -86,25 +110,32 @@ export class ExecutorGate {
   /** 本机用户在确认卡上允许了一个操作后调用。 */
   recordApproval(action: ExecutorAction): void {
     this.prune();
-    this.approvals.push(action.kind === 'exec'
-      ? { kind: 'exec', key: execKey(action.command, action.cwd), expiresAt: this.now() + EXECUTOR_APPROVAL_TTL_MS }
-      : { kind: 'path', key: pathKey(action.path), expiresAt: this.now() + EXECUTOR_APPROVAL_TTL_MS });
+    this.approvals.push({ ...approvalOf(action), expiresAt: this.now() + EXECUTOR_APPROVAL_TTL_MS });
     if (this.approvals.length > MAX_APPROVALS) this.approvals.splice(0, this.approvals.length - MAX_APPROVALS);
   }
 
   authorize(action: ExecutorAction): ExecutorGateDecision {
-    if (this.mode === 'full') return { ok: true };
+    if (this.mode === 'full') return { ok: true, elevated: true };
+    // 抓取网页：本机用户批准过这个地址就放开内网。公网样式的域名也可能解析到内网(公司内网域名)，
+    // 只看地址文本判定为不必问，但抓取时会按 DNS 结果被拦下。
+    if (action.kind === 'fetch' && this.consume(action)) return { ok: true, elevated: true };
     if (!this.requiresApproval(action)) return { ok: true };
-    if (this.consume(action)) return { ok: true };
+    if (this.consume(action)) return { ok: true, elevated: true };
     return {
       ok: false,
       reason: action.kind === 'exec'
         ? 'This command needs the user\'s confirmation on the computer where the task runs, and it was not confirmed.'
-        : `Access to ${action.path} needs the user's confirmation on the computer where the task runs, and it was not confirmed.`,
+        : action.kind === 'fetch'
+          ? `Fetching ${action.url} needs the user's confirmation on the computer where the task runs, and it was not confirmed.`
+          : `Access to ${action.path} needs the user's confirmation on the computer where the task runs, and it was not confirmed.`,
     };
   }
 
   private requiresApproval(action: ExecutorAction): boolean {
+    if (action.kind === 'fetch') {
+      // 只读的网络请求，计划模式也可以；本机、内网与 metadata 地址按本机任务的同一判定必问。
+      return reviewAction({ kind: 'network', target: action.url }, this.workspace.allRoots()) === 'prompt-each-time';
+    }
     if (action.kind === 'exec') {
       const verdict = classifyShellCommand(action.command, this.workspace.allRoots(), {
         cwd: action.cwd,
@@ -127,11 +158,10 @@ export class ExecutorGate {
 
   private consume(action: ExecutorAction): boolean {
     this.prune();
-    const kind = action.kind === 'exec' ? 'exec' : 'path';
-    const key = action.kind === 'exec' ? execKey(action.command, action.cwd) : pathKey(action.path);
+    const { kind, key } = approvalOf(action);
     const index = this.approvals.findIndex((approval) => approval.kind === kind && approval.key === key);
     if (index < 0) return false;
-    if (kind === 'exec') this.approvals.splice(index, 1);
+    if (kind !== 'path') this.approvals.splice(index, 1);
     return true;
   }
 

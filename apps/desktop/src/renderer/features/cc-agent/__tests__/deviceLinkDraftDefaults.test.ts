@@ -253,7 +253,7 @@ describe('resolveDeviceLinkDraftDefaults', () => {
     expect(sel.fastMode).toBe(true);
   });
 
-  it('provider 槽优先于 * 槽', () => {
+  it('* 权威槽优先于 provider 兼容副本', () => {
     const sel = resolveDeviceLinkDraftDefaults(
       caps(),
       {
@@ -263,11 +263,11 @@ describe('resolveDeviceLinkDraftDefaults', () => {
         fastMode: false,
         providerModelMemory: {
           'claude-code:*': {
-            effortByModel: { 'claude-opus-4-8': 'low' },
+            effortByModel: { 'claude-opus-4-8': 'xhigh' },
             fastByModel: {},
           },
           'claude-code:anthropic': {
-            effortByModel: { 'claude-opus-4-8': 'xhigh' },
+            effortByModel: { 'claude-opus-4-8': 'high' },
             fastByModel: { 'claude-opus-4-8': true },
           },
         },
@@ -275,6 +275,7 @@ describe('resolveDeviceLinkDraftDefaults', () => {
       undefined,
       'claude-code',
     );
+    // effort 取权威槽;fast 权威槽没记 → 回落来源副本。
     expect(sel.effort).toBe('xhigh');
     expect(sel.fastMode).toBe(true);
   });

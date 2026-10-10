@@ -7,6 +7,7 @@ const R = resolve(__dirname, '..');
 const read = (rel: string) => readFileSync(resolve(R, rel), 'utf8').replace(/\r\n?/g, '\n');
 
 const sessionViewSource = read('features/cc-agent/CCAgentSessionView.tsx');
+const overlayMetricsSource = read('features/cc-agent/useComposerOverlayMetrics.ts');
 const splitViewSource = read('features/cc-agent/OrcaSplitView.tsx');
 const routeSource = read('features/cc-agent/OrcaWorkflowRoute.tsx');
 const workerPanelSource = read('features/cc-agent/OrcaWorkerPanel.tsx');
@@ -55,7 +56,7 @@ describe('controlled banner placement', () => {
       'const controlledBannerMaxWidth = `min(${inputHalfWidth}, ${CONTROLLED_BANNER_MAX_WIDTH}px)`;',
     );
     expect(sessionViewSource).toContain(
-      'if (!rightLeadingSlot && (suppressContent || (isHidden && !ratePanelPinned))) return null;',
+      'if (!rightLeadingSlot && (suppressContent || (isHidden && !ratePanelPinned && !completedSpeed))) return null;',
     );
     expect(controlledBannerSource).toContain("placement?: 'floating' | 'inline' | 'composer';");
     expect(controlledBannerSource).toContain(
@@ -111,10 +112,10 @@ describe('controlled banner placement', () => {
     );
     expect(todoListSource).toContain('data-plan-pill-anchor="true"');
     expect(todoListSource).toContain('data-plan-flyout-positioner="composer"');
-    expect(sessionViewSource).toContain(
-      'const mutationObserver = new MutationObserver(syncResizeTargetsAndMeasure);',
+    expect(overlayMetricsSource).toContain(
+      'const mutationObserver = new MutationObserver(() => syncResizeTargetsAndMeasure(true));',
     );
-    expect(sessionViewSource).toContain(
+    expect(overlayMetricsSource).toContain(
       'mutationObserver.observe(overlayEl, { childList: true, subtree: true });',
     );
     expect(sessionViewSource).not.toContain('fitContent=');

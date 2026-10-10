@@ -74,3 +74,24 @@ describe('usage-limit reset continuation', () => {
   });
 });
 
+
+describe('provider group computer switch', () => {
+  it('reads the switch carried by a desktop auto-continue record', () => {
+    expect(readMobileAutoResumeInfo({
+      reason: 'usage-limit-reset',
+      agentSwitch: { from: 'Mac mini', to: 'Studio-PC', cause: 'auth' },
+    })).toEqual({ usageLimitReset: true, agentSwitch: { from: 'Mac mini', to: 'Studio-PC', cause: 'auth' } });
+  });
+
+  it('ignores malformed switch data', () => {
+    expect(readMobileAutoResumeInfo({ reason: 'usage-limit-reset', agentSwitch: { from: 'A', cause: 'auth' } }))
+      .toEqual({ usageLimitReset: true });
+  });
+
+  it('reads a shared user’s switch without any computer names', () => {
+    expect(readMobileAutoResumeInfo({ reason: 'usage-limit-reset', groupSwitch: { cause: 'usage-limit' } }))
+      .toEqual({ usageLimitReset: true, groupSwitch: { cause: 'usage-limit' } });
+    expect(readMobileAutoResumeInfo({ reason: 'usage-limit-reset', groupSwitch: {} }))
+      .toEqual({ usageLimitReset: true });
+  });
+});

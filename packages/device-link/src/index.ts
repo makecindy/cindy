@@ -43,8 +43,10 @@ export * from "./providerShareApi.js";
 export * from "./providerShareInvitation.js";
 export * from "./providerShareCatalog.js";
 export * from "./providerShareEnvelope.js";
+export * from "./providerGroup.js";
 export * from "./modelFavorites.js";
 export * from "./sessionListTransport.js";
+export * from './sessionMessageReuse.js';
 
 export * from "./clipboardSync.js";
 export * from "./clipboardSyncFailure.js";
@@ -59,4 +61,5 @@ export * from "./pluginOauthAuthentication.js";
 export * from "./inputDelivery.js";
 export * from "./taskMigration.js";
 export * from "./remoteAgent.js";
+export * from "./orcaRemoteWorker.js";
 export * from './pluginPages.js';

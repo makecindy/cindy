@@ -4,6 +4,9 @@
  *
  * 与本机供应商同在左栏，图标右上角带远程角标(与模型列表同一个 RemoteSourceMark)；点开在
  * 右栏只读地看它在哪台电脑、开放了哪些模型。修改要到那台电脑上去，这里不提供开关。
+ *
+ * 供应商组(provider-groups.md §10)：另一台电脑把某个供应商建成了组时，组里的电脑与分享不再单独
+ * 列出，组所在电脑那一项标成供应商组，详情里只读列出组内电脑与状态。规则与模型列表同一份。
  */
 import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -14,11 +17,16 @@ import { hasProviderLogo, ProviderLogoMark } from '@/components/icons/ProviderLo
 import { RemoteSourceMark } from '@/components/icons/RemoteSourceMark';
 import { remoteAgentProviders } from '@/components/new-chat/unifiedModelSelection';
 import { Tip } from '@/components/ui/tooltip';
+import { RemoteProviderGroupMembers } from '@/features/provider-group/RemoteProviderGroupMembers';
+import { useLocalProviderGroups } from '@/features/provider-group/useLocalProviderGroups';
 import { useControllableDevices } from '@/hooks/useControllableDevices';
 import { useDevicesProviders } from '@/hooks/useDevicesProviders';
 import { providerDisplayName } from '@/lib/providerDisplayName';
 import { providerMonogram } from '@/lib/providerModels';
+import { collectRemoteProviderGroups, remoteProviderEntryKey } from '@/lib/remoteProviderGroups';
 import { cn } from '@/lib/utils';
+import { PROVIDER_SHARE_AGENT_DEVICE_PREFIX } from '../../../shared/providerShare';
+import type { ProviderGroupConfig } from '../../../shared/providerGroup';
 
 import { ReadOnlyProviderModelSection, readOnlyProviderModels } from './ReadOnlyProviderModels';
 
@@ -29,36 +37,76 @@ export interface OwnRemoteProvider {
   deviceName: string;
   provider: ProviderView;
   modelVisibilityOverrides?: Record<string, boolean>;
+  /** 那台电脑把这个供应商建成了供应商组。 */
+  group?: ProviderGroupConfig;
 }
 
 export function ownRemoteProviderKey(deviceId: string, providerId: string): string {
-  return `${deviceId}\n${providerId}`;
+  return remoteProviderEntryKey(deviceId, providerId);
 }
 
-/** 在线的同账号电脑上可以远程使用的供应商，按电脑、再按那台电脑的供应商顺序排列。 */
-export function useOwnRemoteProviders(): readonly OwnRemoteProvider[] {
+export interface OwnRemoteProviderList {
+  entries: readonly OwnRemoteProvider[];
+  /** 被其他电脑的供应商组收进去的分享(「分享给我的供应商」里不再单独列出)。 */
+  hiddenShareIds: ReadonlySet<string>;
+}
+
+/**
+ * 在线的同账号电脑上可以远程使用的供应商，按电脑、再按那台电脑的供应商顺序排列；被其他电脑的组
+ * 收进去的不再单独列出。
+ */
+export function useOwnRemoteProviderList(): OwnRemoteProviderList {
   const devices = useControllableDevices();
   const deviceIds = useMemo(() => devices.map((device) => device.deviceId), [devices]);
   const catalogs = useDevicesProviders(deviceIds);
-  return useMemo(
-    () =>
+  // 本机自己建的组：组那一项就是本机的供应商(在上面本机那一段)，组里的远程供应商与分享同样收起。
+  const localGroups = useLocalProviderGroups();
+  return useMemo(() => {
+    const groups = collectRemoteProviderGroups(
       devices.flatMap((device) => {
         const catalog = catalogs.get(device.deviceId);
-        if (!catalog) return [];
-        return remoteAgentProviders(catalog.providers)
-          .filter((provider) => provider.connected && !provider.suspended)
-          .map((provider) => ({
-            key: ownRemoteProviderKey(device.deviceId, provider.id),
+        return catalog ? [{ deviceId: device.deviceId, providers: catalog.providers }] : [];
+      }),
+      [],
+      Object.values(localGroups),
+    );
+    const entries = devices.flatMap((device) => {
+      const catalog = catalogs.get(device.deviceId);
+      if (!catalog) return [];
+      return remoteAgentProviders(catalog.providers)
+        // 带组的项照常列出：组所在电脑自己的这个供应商掉登录或被停用时，组仍按组员分配，组员也仍收在组里，
+        // 不能让组和组员一起从设置里消失。
+        .filter((provider) => (provider.connected && !provider.suspended)
+          || groups.groups.has(remoteProviderEntryKey(device.deviceId, provider.id)))
+        .filter((provider) => !groups.hidden.has(remoteProviderEntryKey(device.deviceId, provider.id)))
+        .map((provider): OwnRemoteProvider => {
+          const key = ownRemoteProviderKey(device.deviceId, provider.id);
+          const group = groups.groups.get(key);
+          return {
+            key,
             deviceId: device.deviceId,
             deviceName: device.name,
             provider,
             ...(catalog.modelVisibilityOverrides !== undefined
               ? { modelVisibilityOverrides: catalog.modelVisibilityOverrides }
               : {}),
-          }));
-      }),
-    [catalogs, devices],
-  );
+            ...(group ? { group } : {}),
+          };
+        });
+    });
+    const hiddenShareIds = new Set<string>();
+    for (const key of groups.hidden) {
+      const agentDeviceId = key.slice(0, key.indexOf('\n'));
+      if (agentDeviceId.startsWith(PROVIDER_SHARE_AGENT_DEVICE_PREFIX)) {
+        hiddenShareIds.add(agentDeviceId.slice(PROVIDER_SHARE_AGENT_DEVICE_PREFIX.length));
+      }
+    }
+    return { entries, hiddenShareIds };
+  }, [catalogs, devices, localGroups]);
+}
+
+export function useOwnRemoteProviders(): readonly OwnRemoteProvider[] {
+  return useOwnRemoteProviderList().entries;
 }
 
 function RemoteProviderIcon({ provider, size }: { provider: ProviderView; size: number }) {
@@ -89,7 +137,10 @@ export function OwnRemoteProviderRows({
     <div data-testid="own-remote-providers" className="flex flex-col gap-0.5">
       {entries.map((entry) => {
         const name = providerDisplayName(entry.provider, t);
-        const label = t('settings.providers.remote.rowLabel', { provider: name, device: entry.deviceName });
+        const label = t(
+          entry.group ? 'settings.providers.remote.rowLabelGroup' : 'settings.providers.remote.rowLabel',
+          { provider: name, device: entry.deviceName },
+        );
         const selected = selectedKey === entry.key;
         return (
           <Tip key={entry.key} text={label} side="right" contentClassName="max-w-[360px] break-words">
@@ -123,9 +174,11 @@ export function OwnRemoteProviderRows({
                 {name}
               </span>
               <span className="shrink-0 select-none text-11 tabular-nums" style={{ color: 'var(--text-tertiary)' }}>
-                {t('settings.providers.models.modelCount', {
-                  count: readOnlyProviderModels(entry.provider, entry.modelVisibilityOverrides).length,
-                })}
+                {entry.group
+                  ? t('settings.providers.remote.groupBadge', { count: entry.group.members.length })
+                  : t('settings.providers.models.modelCount', {
+                      count: readOnlyProviderModels(entry.provider, entry.modelVisibilityOverrides).length,
+                    })}
               </span>
               <span
                 aria-hidden="true"
@@ -194,9 +247,15 @@ export function OwnRemoteProviderDetail({ entry }: { entry: OwnRemoteProvider })
         style={{ borderColor: 'var(--settings-theme-card-border)' }}
       >
         <p className="text-13 leading-[1.5]" style={{ color: 'var(--settings-section-desc)' }}>
-          {t('settings.providers.remote.detailNote', { device: entry.deviceName })}
+          {t(entry.group ? 'settings.providers.remote.groupNote' : 'settings.providers.remote.detailNote', {
+            device: entry.deviceName,
+          })}
         </p>
       </div>
+
+      {entry.group && (
+        <RemoteProviderGroupMembers deviceId={entry.deviceId} providerId={entry.provider.id} config={entry.group} />
+      )}
 
       <ReadOnlyProviderModelSection
         title={t('settings.providers.remote.modelsTitle')}

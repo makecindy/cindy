@@ -45,6 +45,7 @@ import type {
 } from '@anthropic-ai/claude-agent-sdk';
 import { discoverSubagentDefinitions } from './subagent-definitions.js';
 import { spawnObservedClaudeProcess } from './local-process-spawn.js';
+import { claudeMcpServerToolsReport, type ClaudeMcpServerStatusEntry } from './mcp-server-tools.js';
 import {
   reportSubagentModelDiagnostics,
   resolveSubagentModelDefault,
@@ -220,8 +221,10 @@ import {
 import {
   DEVICE_HOSTED_DISALLOWED_CLAUDE_TOOLS,
   DEVICE_HOSTED_EXEC_MCP_SERVER,
+  DEVICE_HOSTED_GUEST_CLAUDE_TOOLS,
   deviceHostedBuiltinToolName,
   deviceHostedClaudeNote,
+  deviceHostedGuestAgentDenial,
   deviceHostedGuestClaudeMdExcludes,
   deviceHostedMcpUrl,
   deviceHostedSubagentAllows,
@@ -2011,6 +2014,18 @@ export class ClaudeCodeAgent extends BaseAgent {
       if (hosted) {
         if (input.hook_event_name === 'PreToolUse') {
           const pre = input as PreToolUseHookInput & { agent_id?: string; agent_type?: string };
+          // 受邀者：子代理不能用隔离选项(在本机建 worktree，或用本机用户的 claude.ai 账号开云端任务)。
+          const guestDenial = hosted.guest ? deviceHostedGuestAgentDenial(pre.tool_name, pre.tool_input) : null;
+          if (guestDenial) {
+            return {
+              continue: true,
+              hookSpecificOutput: {
+                hookEventName: 'PreToolUse' as const,
+                permissionDecision: 'deny' as const,
+                permissionDecisionReason: guestDenial,
+              },
+            };
+          }
           const builtin = deviceHostedBuiltinToolName(pre.tool_name);
           // 参数化规则(Bash(git diff:*) 之类)要按本次命令判范围，不能当成整个工具放行。
           const toolInput = pre.tool_input as Record<string, unknown> | undefined;
@@ -2855,6 +2870,11 @@ export class ClaudeCodeAgent extends BaseAgent {
         // 受邀者(另一个账号)的托管会话：不执行任何设置与插件里的 hooks / 状态栏命令，
         // 不加载会话目录之外(属于本机用户)的 CLAUDE.md 与规则。
         settings.disableAllHooks = true;
+        // 本机用户 claude.ai 账号里的连接器、Remote Control，以及技能与命令里的内联 shell
+        // (会在本机执行)一律关闭。
+        settings.disableClaudeAiConnectors = true;
+        settings.disableRemoteControl = true;
+        settings.disableSkillShellExecution = true;
         const excludes = deviceHostedGuestClaudeMdExcludes(hosted);
         if (excludes.length > 0) settings.claudeMdExcludes = [...(settings.claudeMdExcludes ?? []), ...excludes];
         // 路由令牌请求头在最高优先级的设置层再写一次：会话中途出现的项目设置不能把它改掉。
@@ -4381,6 +4401,8 @@ export class ClaudeCodeAgent extends BaseAgent {
           ...(opts.botRuntimeProfile || hosted ? { strictMcpConfig: true } : {}),
           // 设备托管：自带文件与命令工具只能操作本机，关掉，由 cindy_exec 顶替。
           ...(hosted ? { disallowedTools: [...DEVICE_HOSTED_DISALLOWED_CLAUDE_TOOLS] } : {}),
+          // 受邀者(另一个账号)：自带工具只开白名单里的，其余都作用于本机或本机用户的账号。
+          ...(hosted?.guest ? { tools: [...DEVICE_HOSTED_GUEST_CLAUDE_TOOLS] } : {}),
           // 设备托管：个人配置(用户级设置、hooks)属于任务所在电脑，不加载本机用户级设置；
           // 项目级设置来自同步过来的影子目录(只保留权限规则)。
           settingSources: reviewMode || !!opts.botRuntimeProfile
@@ -7233,6 +7255,15 @@ export class ClaudeCodeAgent extends BaseAgent {
           throw new Error('Claude Code SDK does not support getContextUsage');
         }
         return await getContextUsage.call(q) as import('../../types/context-usage.js').ContextUsageData;
+      },
+
+      async readMcpServerTools(serverName: string) {
+        // SSH remote queries do not expose MCP status; report no engine entry.
+        const readStatus = (q as {
+          mcpServerStatus?: () => Promise<ClaudeMcpServerStatusEntry[]>;
+        }).mcpServerStatus;
+        if (typeof readStatus !== 'function') return null;
+        return claudeMcpServerToolsReport(await readStatus.call(q), serverName);
       },
 
       setInteractionResolver(resolver: InteractionResolver) {

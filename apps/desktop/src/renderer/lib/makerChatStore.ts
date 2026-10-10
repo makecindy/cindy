@@ -1,3 +1,4 @@
+import { readResponseSpeedSnapshot, stopResponseSpeed, retryResponseSpeed, resumeResponseSpeed, mergeResponseSpeedStatus, type ResponseSpeedSnapshot } from '@cindy/maker-shared/usage-format';
 import { readBotTaskResults } from '@cindy/maker-shared/botCollaboration';
 import { remotePluginSetupErrorCode, type PluginSetupCommandError } from './pluginSetupCommandError';
 export type { PluginSetupCommandError } from './pluginSetupCommandError';
@@ -151,7 +152,7 @@ import {
   requestRemoteReseed,
 } from '@/features/device-link/remoteProjectsStore';
 import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOrigin';
-import { clearCachedMessages, readCachedMessages } from '@/features/device-link/mirrorCacheClient';
+import { clearCachedMessages, readCachedMessages, persistListMessage } from '@/features/device-link/mirrorCacheClient';
 import {
   noteRemoteSessionSyncCompleted,
   noteRemoteSessionSyncStarted,
@@ -508,6 +509,8 @@ export interface ChatMessage {
   sourceGroup?: MessageSourceGroup;
   /** Host-stamped delivery remains visible after source identity is redacted. */
   explicitDelivery?: boolean;
+  /** Provider phase survives live deltas and durable history projection. */
+  assistantPhase?: string;
   /** user 消息投递方式:普通新 turn 或运行中 steer。 */
   delivery?: 'turn' | 'steer';
   /** Hook 来源元数据(IM 平台 + 用户干净原文 + thread 上下文),UserMessage 据此渲染 Cindy 任务卡片。 */
@@ -604,6 +607,8 @@ export interface ChatMessage {
    * 但 MessageStream 渲染 null、content 置空不外泄原文。
    */
   isSyntheticTrigger?: boolean;
+  /** Recovery identity retained after the synthetic prompt body is hidden. */
+  isContinuationTrigger?: boolean;
   /**
    * image-local-cache: image attachments for rendering in the message stream.
    * Two shapes coexist:
@@ -726,6 +731,7 @@ export interface AgentStatus {
   /** Turn-cumulative output tokens for live TPS. */
   outputTokens?: number;
   /** Generation-only milliseconds including any open interval at emit time. */
+  responseSpeed?: ResponseSpeedSnapshot;
   generationDurationMs?: number;
   /** True while the model currently owns the turn. */
   generationActive?: boolean;
@@ -5561,10 +5567,18 @@ export function handleStreamEvent(
   const hasCodexReconnectRecoveryOutput = isCodexReconnectRecoveryOutput(event);
   const shouldClearCodexReconnectPendingCard =
     event.type === 'error' ? !isCodexReconnectProgress : hasCodexReconnectRecoveryOutput;
-  const stateBeforeReconnectCleanup =
-    !hasCodexReconnectRecoveryOutput || inputState.recoverableError == null
-      ? inputState
-      : { ...inputState, recoverableError: null };
+  const resumedSpeed = ((event.type === 'text' || event.type === 'thinking') &&
+    typeof (event.data as { text?: unknown })?.text === 'string' &&
+    Boolean((event.data as { text: string }).text)) ||
+    (event.type === 'tool_use' && hasCodexReconnectRecoveryOutput)
+    ? resumeResponseSpeed(inputState.agentStatus.responseSpeed) : inputState.agentStatus.responseSpeed;
+  const stateBeforeReconnectCleanup = resumedSpeed === inputState.agentStatus.responseSpeed &&
+    (!hasCodexReconnectRecoveryOutput || inputState.recoverableError == null) ? inputState : {
+    ...inputState,
+    recoverableError: hasCodexReconnectRecoveryOutput ? null : inputState.recoverableError,
+    agentStatus: resumedSpeed === inputState.agentStatus.responseSpeed ? inputState.agentStatus
+      : { ...inputState.agentStatus, responseSpeed: resumedSpeed },
+  };
   const messagesAfterReconnectCleanup = shouldClearCodexReconnectPendingCard
     ? removeCodexReconnectPendingCard(stateBeforeReconnectCleanup.messages)
     : stateBeforeReconnectCleanup.messages;
@@ -5580,12 +5594,18 @@ export function handleStreamEvent(
   // - model / parentUuid 让纯文本子代理在 streaming 阶段也能反查模型 chip;
   // - turnCompleted 由 main 在 done 边界盖到该 SDK turn 的最后一条 assistant 上,
   //   让后台任务自动续跑时前一轮正式总结不会被后续补充回复顶掉。
+  const phaseData = event.data as { phase?: unknown; runtimeRecovery?: boolean } | undefined;
+  const assistantPhase = phaseData?.runtimeRecovery === true
+    ? 'commentary'
+    : typeof phaseData?.phase === 'string' ? phaseData.phase : incomingMeta?.assistantPhase;
   const assistantMetaFields: {
     botPrivateReply?: boolean;
+    assistantPhase?: string;
     model?: string;
     parentToolUseId?: string;
     turnCompleted?: boolean;
   } = {
+    ...(typeof assistantPhase === 'string' ? { assistantPhase } : {}),
     ...(typeof incomingMeta?.model === 'string' && incomingMeta.model
       ? { model: incomingMeta.model }
       : {}),
@@ -5740,6 +5760,7 @@ export function handleStreamEvent(
         // 把 model/parentToolUseId 补写到在途流式 assistant 消息上,否则纯文本(零工具)
         // 子代理在流式渲染期间 buildSubagentModelMap 始终为空、chip 缺失(仅重载后才补上)。
         const hasAssistantFields =
+          assistantMetaFields.assistantPhase !== undefined ||
           assistantMetaFields.model !== undefined ||
           assistantMetaFields.parentToolUseId !== undefined ||
           assistantMetaFields.turnCompleted === true ||
@@ -6210,14 +6231,15 @@ export function handleStreamEvent(
       });
 
       const terminalData = event.data as
-        | { cancelled?: unknown; reason?: unknown; plan?: unknown; raw?: { id?: unknown; status?: unknown } }
+        | { cancelled?: unknown; status?: unknown; reason?: unknown; plan?: unknown; raw?: { id?: unknown; status?: unknown } }
         | null
         | undefined;
       const terminalTurnId = typeof terminalData?.raw?.id === 'string' ? terminalData.raw.id : null;
       const terminalTurnStatus =
         typeof terminalData?.raw?.status === 'string' ? terminalData.raw.status : null;
       const terminalCancelled =
-        terminalData?.cancelled === true ||
+        terminalData?.cancelled === true || terminalData?.status === 'cancelled' ||
+        terminalData?.reason === 'send_cancelled_before_acceptance' ||
         terminalData?.reason === 'turn_continuation_cancelled' ||
         terminalData?.reason === 'user_stop_unconfirmed_wake_tasks';
       const doneMessages =
@@ -6274,6 +6296,10 @@ export function handleStreamEvent(
         turnStoppedByUser: state.turnStoppedByUser || terminalCancelled,
         agentStatus: {
           ...state.agentStatus,
+          responseSpeed: stopResponseSpeed(state.agentStatus.responseSpeed,
+            state.turnStoppedByUser || terminalCancelled ? 'cancelled'
+              : terminalTurnStatus === 'failed' || terminalData?.status === 'failed' || finalized.error ? 'failed' : undefined),
+          generationActive: false,
           isRunning: false,
           startedAt: null,
         },
@@ -6390,6 +6416,8 @@ export function handleStreamEvent(
                     isRunning: true,
                     startedAt: state.agentStatus.startedAt ?? Date.now(),
                   }),
+              responseSpeed: (event.data as { willRetry?: boolean })?.willRetry === true
+                ? retryResponseSpeed(state.agentStatus.responseSpeed) : state.agentStatus.responseSpeed,
             },
           };
         }
@@ -6409,6 +6437,8 @@ export function handleStreamEvent(
           isStreaming: true,
           agentStatus: {
             ...state.agentStatus,
+            responseSpeed: (event.data as { willRetry?: boolean })?.willRetry === true
+              ? retryResponseSpeed(state.agentStatus.responseSpeed) : state.agentStatus.responseSpeed,
             isRunning: true,
             startedAt: state.agentStatus.startedAt ?? Date.now(),
           },
@@ -6501,6 +6531,10 @@ export function handleStreamEvent(
         // 初始 "Let's go" 文案上 shimmer 闪个不停（done 路径有同样的复位）。
         agentStatus: {
           ...state.agentStatus,
+          responseSpeed: suppressAutoResumeBroadcastError || isPlannedUpgradeClose
+            ? stopResponseSpeed(state.agentStatus.responseSpeed)
+            : stopResponseSpeed(state.agentStatus.responseSpeed, state.turnStoppedByUser ? 'cancelled' : 'failed'),
+          generationActive: false,
           isRunning: false,
           startedAt: null,
         },
@@ -7013,6 +7047,8 @@ function forceFinalizeOnSessionClosed(state: SessionChatState): SessionChatState
     turnStoppedByUser: false,
     agentStatus: {
       ...finalized.agentStatus,
+      responseSpeed: stopResponseSpeed(finalized.agentStatus.responseSpeed),
+      generationActive: false,
       isRunning: false,
       startedAt: null,
     },
@@ -7025,7 +7061,7 @@ function mergeLiveGenerationStatus(
   previous: AgentStatus,
 ): Pick<
   AgentStatus,
-  'outputTokens' | 'generationDurationMs' | 'generationActive' | 'generationReliable'
+  'outputTokens' | 'generationDurationMs' | 'generationActive' | 'generationReliable' | 'responseSpeed'
 > {
   // Turn start drops leftover metrics from the previous turn, then keeps any
   // live fields carried by this same status. A reconnect-shaped first event
@@ -7033,6 +7069,7 @@ function mergeLiveGenerationStatus(
   // zero the values that just arrived.
   const baseline = isTurnStart
     ? {
+        responseSpeed: undefined,
         outputTokens: 0,
         generationDurationMs: 0,
         generationActive: false,
@@ -7046,6 +7083,8 @@ function mergeLiveGenerationStatus(
     typeof update.generationReliable === 'boolean';
   if (!hasLiveFields) {
     return {
+      responseSpeed: mergeResponseSpeedStatus(previous.responseSpeed,
+        readResponseSpeedSnapshot(update.responseSpeed, Date.now()), update.isRunning, isTurnStart),
       outputTokens: baseline.outputTokens,
       generationDurationMs: baseline.generationDurationMs,
       generationActive: update.isRunning ? baseline.generationActive : false,
@@ -7053,6 +7092,8 @@ function mergeLiveGenerationStatus(
     };
   }
   const merged = {
+    responseSpeed: mergeResponseSpeedStatus(previous.responseSpeed,
+        readResponseSpeedSnapshot(update.responseSpeed, Date.now()), update.isRunning, isTurnStart),
     outputTokens:
       typeof update.outputTokens === 'number' ? update.outputTokens : baseline.outputTokens,
     generationDurationMs:
@@ -7590,7 +7631,8 @@ function enqueueTextDeltaPayload(
   ingress: LiveIngressContext = {},
 ): void {
   if (!event) return;
-  const data = event.data as { text?: unknown };
+  const data = event.data as { text?: unknown; phase?: unknown; runtimeRecovery?: boolean };
+  const phase = data.runtimeRecovery === true ? 'commentary' : typeof data.phase === 'string' ? data.phase : undefined;
   const text = typeof data.text === 'string' ? data.text : '';
   const dataOwner = getDataOwnerGeneration();
   let existing = pendingTextDeltaBatches.get(sessionId);
@@ -7610,7 +7652,8 @@ function enqueueTextDeltaPayload(
     existing.text += text;
     if (!existing.persistId && persistId) existing.persistId = persistId;
     if (event.source) existing.source = event.source;
-    if (event.agentMeta) existing.agentMeta = event.agentMeta;
+    if (event.agentMeta) existing.agentMeta = { ...existing.agentMeta, ...event.agentMeta };
+    if (phase) existing.agentMeta = { ...existing.agentMeta, assistantPhase: phase };
   } else {
     pendingTextDeltaBatches.set(sessionId, {
       text,
@@ -7618,7 +7661,7 @@ function enqueueTextDeltaPayload(
       ingress,
       source: event.source,
       persistId,
-      ...(event.agentMeta ? { agentMeta: event.agentMeta } : {}),
+      agentMeta: { ...event.agentMeta, ...(phase ? { assistantPhase: phase } : {}) },
     });
   }
   scheduleTextDeltaFlush();
@@ -8929,7 +8972,12 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
         inboundEvent?.type === 'text' &&
         inboundEvent.data?.isFinal === false &&
         inboundEvent.data?.isFullText !== true;
-      if (push.deviceId && inboundSid && isDurableMessagePush && !isOrdinaryStreamingTextDelta) {
+      const listMessage = (push.payload as { listMessage?: unknown } | null)?.listMessage === true;
+      if (listMessage && inboundSid && !_activeViewSessions.has(inboundSid)) {
+        if (!_lastViewedAt.has(inboundSid)) _lastViewedAt.set(inboundSid, Date.now());
+        _ensureSoftEvictionTimer();
+      }
+      if (push.deviceId && inboundSid && isDurableMessagePush && !isOrdinaryStreamingTextDelta && !listMessage) {
         scheduleRemoteMessageRepair(inboundSid);
       }
       if (inboundSid && isRemoteHeavyInboundChannel(push.channel)) _markInboundEvent(inboundSid);
@@ -8951,6 +8999,11 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
             invalidateHistory: (sessionId) => {
               const state = sessions.get(sessionId);
               if (!state) return;
+              if (listMessage) {
+                bumpMessagesEpoch(sessionId);
+                setState(sessionId, current => ({ ...current, historyLoaded: false }));
+                return;
+              }
               if (getRemoteHistoryView(sessionId)) {
                 // resyncRequired also repairs unrelated durable rows; a full
                 // text snapshot only protects its own live block.
@@ -8992,6 +9045,10 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
         case 'local-db:messages:created':
           // 远程会话的持久化消息(接管路径)→ 注入 in-memory state(同本机)。
           handleMessageCreatedRaw(push.payload, remoteIngress);
+          if (listMessage && push.deviceId && inboundSid) {
+            const row = (push.payload as { message?: Message }).message;
+            if (row && !isBeforeOrAtRendererClearBoundary(inboundSid, row.createdAt)) persistListMessage(push.deviceId, inboundSid, row);
+          }
           break;
         case 'local-db:messages:deleted':
           handleMessageDeletedRaw(push.payload, remoteIngress);
@@ -15571,6 +15628,8 @@ function stopSession(
         costUsd: s.agentStatus.costUsd,
         contextTokens: s.agentStatus.contextTokens,
         contextWindow: s.agentStatus.contextWindow,
+        responseSpeed: stopResponseSpeed(s.agentStatus.responseSpeed, 'cancelled'),
+        generationActive: false,
         isRunning: false,
         startedAt: null,
       },
@@ -17056,6 +17115,7 @@ import {
   syntheticTriggerKind,
   UI_ACTION_TRIGGER_PREFIX,
 } from '../../shared/interruptedTurn.js';
+import { isContinuationMessage } from '@cindy/maker-shared/synthetic-trigger';
 export { UI_ACTION_TRIGGER_PREFIX };
 
 /**
@@ -18645,6 +18705,7 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
           content: '',
           isStreaming: false,
           isSyntheticTrigger: true,
+          isContinuationTrigger: isContinuationMessage(m),
           // 中断自动续跑补发的续跑指令带 [UI_ACTION_TRIGGER] 前缀(复用人工「继续」
           // 那条常量),会先命中本分支 —— 但它同样是**自动**动作,必须渲染「已自动
           // 继续」分隔线(MessageStream 对 systemCardType 的处理刻意优先于 synthetic
@@ -18673,6 +18734,7 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
           isStreaming: false,
           isSyntheticTrigger: true,
           systemCardType: 'auto-resume' as const,
+          isContinuationTrigger: true,
           // 展示信息只有「中断自愈」那条路径带(silent-stop 本身没有 error / 次数)。
           // SystemCard 据此二选一:带信息 → 三态重连行;不带 → silent-stop 原来的
           // 「已自动继续」分隔条(见 hasInterruptionContext)。
@@ -18840,6 +18902,7 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
       role: m.role,
       content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
       ...(m.role === 'assistant' ? { sourceGroup: readMessageSourceGroup(m.agentMeta) } : {}),
+      ...(m.role === 'assistant' && typeof m.agentMeta?.assistantPhase === 'string' ? { assistantPhase: m.agentMeta.assistantPhase } : {}),
       ...(m.role === 'assistant' && m.agentMeta?.explicitDelivery === true ? { explicitDelivery: true } : {}),
       ...(m.role === 'assistant' ? { botLearning: m.agentMeta?.botLearning } : {}),
       ...(m.agentMeta?.botPrivateReply === true ? { botPrivateReply: true } : {}),

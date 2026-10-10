@@ -153,4 +153,30 @@ describe('被控电脑上的任务:换 Agent 所在电脑', () => {
     );
     expect(sessionViewSource).toContain('deviceLinkDeviceName={controlledDeviceName}');
   });
+
+  it('Agent 在本机也收到了的分享上:按分享目录显示,只把那一条分享并进候选', () => {
+    // 2026-10-10 用户反馈:A 远控 B 上用分享供应商的任务,模型按钮显示「模型信息暂不可用」。
+    const start = sessionViewSource.indexOf('const controlledShareIds = useMemo(');
+    expect(start).toBeGreaterThan(0);
+    const block = sessionViewSource.slice(start, sessionViewSource.indexOf('[remoteDeviceId,', start));
+    expect(block).toContain('controlledTaskReadableShareIds({');
+    expect(block).toContain('agentDeviceId: session?.agentDeviceId,');
+    expect(block).toContain('isReceived: isReceivedProviderShare,');
+    expect(sessionViewSource).toContain(
+      '...(controlledShareIds ? { readableShareIds: controlledShareIds } : {}),',
+    );
+    const branch = sessionViewSource.indexOf(
+      'if (remoteDeviceId) {\n      return controlledAgentLocation',
+    );
+    const remoteBranch = sessionViewSource.slice(
+      branch,
+      sessionViewSource.indexOf(': undefined;', branch),
+    );
+    expect(remoteBranch).toContain('shareDevices: [...(controlledShareIds ?? [])]');
+    // ChatInput 只认调用方放进候选的分享。
+    const inputStart = chatInputSource.indexOf('const deviceLinkAgentLocation =');
+    expect(chatInputSource.slice(inputStart, inputStart + 800)).toContain(
+      'readableShareIds: new Set(remoteAgentDevices.map((device) => device.deviceId)),',
+    );
+  });
 });

@@ -204,6 +204,30 @@ export interface AutoResumeInfo {
   maxAttempts: number;
   /** 本会话累计自动重连次数（不设上限，纯展示）。 */
   sessionTotal: number;
+  /**
+   * 供应商组自动换电脑后的续跑(reason 仍为 USAGE_LIMIT_RESET_AUTO_RESUME_REASON，记账与额度重置
+   * 后的续跑同一条路径)：活动行据此显示「{from} {原因}，已换到 {to} 继续」。旧端忽略该字段。
+   */
+  agentSwitch?: AutoResumeAgentSwitch;
+  /**
+   * 分享的人这边的自动换电脑(分享者的供应商组替它换了一台，本机不知道是哪台)：活动行显示「已自动换一台
+   * 电脑继续」，不出现电脑名称(docs/product-rules/provider-groups.md §8)。旧端忽略该字段。
+   */
+  groupSwitch?: AutoResumeGroupSwitch;
+}
+
+export interface AutoResumeGroupSwitch {
+  cause: AutoResumeAgentSwitchCause;
+}
+
+export type AutoResumeAgentSwitchCause = 'usage-limit' | 'auth' | 'unavailable' | 'overload';
+
+export interface AutoResumeAgentSwitch {
+  /** 原电脑的显示名。 */
+  from: string;
+  /** 换到的电脑的显示名。 */
+  to: string;
+  cause: AutoResumeAgentSwitchCause;
 }
 
 /** 账号额度重置后自动继续时 `AutoResumeInfo.reason` 的取值（活动行据此换文案）。 */

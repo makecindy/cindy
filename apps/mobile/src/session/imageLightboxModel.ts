@@ -2,7 +2,8 @@
  * imageLightboxModel.ts — 全屏图片查看器的手势/布局决策纯函数。
  * ---------------------------------------------------------------------------
  * ImageLightbox 组件里的 worklet 只做数值搬运,所有"判定"(缩放边界、平移钳制、
- * 下滑释放是否关闭、背景透明度、页索引)集中在这里,node 环境可单测。
+ * 越界橡皮筋与松手回弹、下滑释放是否关闭、背景透明度、页索引)集中在这里,
+ * node 环境可单测。
  */
 
 export const LIGHTBOX_MIN_SCALE = 1;
@@ -19,11 +20,52 @@ export const LIGHTBOX_DISMISS_VELOCITY = 800;
  * 与平移 Simultaneous 时,500ms 内的短拖松手会被当成单击,lightbox 直接关掉。
  */
 export const LIGHTBOX_TAP_MAX_DISTANCE = 12;
+/** 橡皮筋系数(对齐 UIScrollView 的 0.55):越界量 x 显示为 (1 - 1/(x·c/d + 1))·d。 */
+export const LIGHTBOX_RUBBER_BAND_COEFFICIENT = 0.55;
+/** 捏合越过 1x / 最大倍率时橡皮筋的渐近幅度(倍率),手越用力越难再缩放。 */
+const LIGHTBOX_UNDER_ZOOM_RANGE = LIGHTBOX_MIN_SCALE * 0.5;
+const LIGHTBOX_OVER_ZOOM_RANGE = LIGHTBOX_MAX_SCALE * 0.5;
 
-export function clampLightboxScale(scale: number): number {
+/**
+ * 越界量 → 实际显示的越界距离:越拉阻力越大,渐近 dimension 永远拉不满。
+ * dimension 取容器边长时,手感与系统滚动视图的边缘回弹一致。
+ */
+export function lightboxRubberBand(overshoot: number, dimension: number): number {
   'worklet';
-  if (scale < LIGHTBOX_MIN_SCALE) return LIGHTBOX_MIN_SCALE;
-  if (scale > LIGHTBOX_MAX_SCALE) return LIGHTBOX_MAX_SCALE;
+  if (overshoot <= 0 || dimension <= 0) return 0;
+  return (1 - 1 / ((overshoot * LIGHTBOX_RUBBER_BAND_COEFFICIENT) / dimension + 1)) * dimension;
+}
+
+/** {@link lightboxRubberBand} 的逆运算:已显示的越界距离还原成手指实际越界量。 */
+export function lightboxRubberBandInverse(distance: number, dimension: number): number {
+  'worklet';
+  if (distance <= 0 || dimension <= 0) return 0;
+  // 显示距离理论上 < dimension;浮点 / 外部写入越过时取极大有限值,避免除零。
+  const ratio = Math.min(distance / dimension, 0.999);
+  return (dimension / LIGHTBOX_RUBBER_BAND_COEFFICIENT) * (1 / (1 - ratio) - 1);
+}
+
+/** 捏合倍率的橡皮筋:范围内原样,捏过 1x / 最大倍率按阻尼继续缩放。 */
+export function rubberBandLightboxScale(rawScale: number): number {
+  'worklet';
+  if (rawScale < LIGHTBOX_MIN_SCALE) {
+    return LIGHTBOX_MIN_SCALE - lightboxRubberBand(LIGHTBOX_MIN_SCALE - rawScale, LIGHTBOX_UNDER_ZOOM_RANGE);
+  }
+  if (rawScale > LIGHTBOX_MAX_SCALE) {
+    return LIGHTBOX_MAX_SCALE + lightboxRubberBand(rawScale - LIGHTBOX_MAX_SCALE, LIGHTBOX_OVER_ZOOM_RANGE);
+  }
+  return rawScale;
+}
+
+/** {@link rubberBandLightboxScale} 的逆运算:回弹途中再次捏合时从当前画面接续,不跳。 */
+export function unrubberLightboxScale(scale: number): number {
+  'worklet';
+  if (scale < LIGHTBOX_MIN_SCALE) {
+    return LIGHTBOX_MIN_SCALE - lightboxRubberBandInverse(LIGHTBOX_MIN_SCALE - scale, LIGHTBOX_UNDER_ZOOM_RANGE);
+  }
+  if (scale > LIGHTBOX_MAX_SCALE) {
+    return LIGHTBOX_MAX_SCALE + lightboxRubberBandInverse(scale - LIGHTBOX_MAX_SCALE, LIGHTBOX_OVER_ZOOM_RANGE);
+  }
   return scale;
 }
 
@@ -111,6 +153,23 @@ export function lightboxPinchOrigin(focal: number, containerSize: number): numbe
 }
 
 /**
+ * 捏合的缩放锚点:手指焦点下那一点在图片自身坐标里的位置(相对图片中心、未缩放)。
+ * transform 为 T + origin + s·(p - origin),只有 p = origin 的点在缩放中不动;
+ * 已放大 / 已平移时这一点不是焦点的屏幕坐标,直接用焦点会让二次捏合绕错的中心
+ * 缩放、图往外漂。translate 为 bake 后(origin=0)的位移。
+ */
+export function lightboxPinchAnchor(
+  focal: number,
+  containerSize: number,
+  translate: number,
+  scale: number,
+): number {
+  'worklet';
+  if (scale <= 0) return lightboxPinchOrigin(focal, containerSize);
+  return (lightboxPinchOrigin(focal, containerSize) - translate) / scale;
+}
+
+/**
  * 把 origin 缩放折进 translation,之后 origin 可归零而不跳变。
  * p' = (p - origin) * scale + origin + translate
  *    = p * scale + origin * (1 - scale) + translate
@@ -131,11 +190,66 @@ export function compensateLightboxOrigin(translate: number, origin: number, scal
 }
 
 /**
- * 画面中心(bake 后)钳进 contain 边界,再补偿回带 origin 的 raw translate。
- * origin≠0 时钳 raw 会让画面越出边界,松手 bake 再弹回。origin=0 时 bake/补偿
- * 是恒等,与直接钳 translate 相同——浏览捏合与标注双指平移共用这一条。
+ * 平移的橡皮筋:边界内原样;越过图片边缘(含未溢出、钳在 0 的轴)仍可继续拖,
+ * 越界部分按容器边长阻尼。value 是 bake 后的画面中心位移。
  */
-export function clampLightboxVisualPan(
+export function rubberBandLightboxTranslation(
+  value: number,
+  containerSize: number,
+  scale: number,
+  displayedSize: number,
+): number {
+  'worklet';
+  const overflow = lightboxPanOverflow(containerSize, displayedSize, scale);
+  if (value > overflow) return overflow + lightboxRubberBand(value - overflow, containerSize);
+  if (value < -overflow) return -overflow - lightboxRubberBand(-overflow - value, containerSize);
+  return value;
+}
+
+/** {@link rubberBandLightboxTranslation} 的逆运算:画面位移还原为手指的实际位移。 */
+export function unrubberLightboxTranslation(
+  value: number,
+  containerSize: number,
+  scale: number,
+  displayedSize: number,
+): number {
+  'worklet';
+  const overflow = lightboxPanOverflow(containerSize, displayedSize, scale);
+  if (value > overflow) return overflow + lightboxRubberBandInverse(value - overflow, containerSize);
+  if (value < -overflow) return -overflow - lightboxRubberBandInverse(-overflow - value, containerSize);
+  return value;
+}
+
+/**
+ * 捏合中某一轴的 raw translate:手指下的锚点跟手,越界部分按**当前倍率**的边界阻尼。
+ * 先算「锚点不动」时的画面位移 anchored = start + anchor·(startScale - scale),
+ * 在当前倍率下还原成手指量、加上焦点位移,再按当前倍率套橡皮筋,最后补偿回带
+ * origin 的 raw。不能把起始倍率下还原的手指量跨倍率复用:起点处在越界回弹区时,
+ * 两套边界的差会被 origin 缩放项放大,锚点从手指下滑开。
+ * startTranslate 为捏合开始时 bake 后的画面位移;起点越界且倍率未变时第一帧连续。
+ */
+export function lightboxPinchTranslation(
+  startTranslate: number,
+  anchor: number,
+  startScale: number,
+  scale: number,
+  focalDelta: number,
+  containerSize: number,
+  displayedSize: number,
+): number {
+  'worklet';
+  const anchored = startTranslate + anchor * (startScale - scale);
+  const finger = unrubberLightboxTranslation(anchored, containerSize, scale, displayedSize) + focalDelta;
+  const visual = rubberBandLightboxTranslation(finger, containerSize, scale, displayedSize);
+  return compensateLightboxOrigin(visual, anchor, scale);
+}
+
+/**
+ * 跟手位移的橡皮筋:raw translate(可带 origin)先 bake 成画面中心,越界部分阻尼,
+ * 再补偿回 raw。origin≠0 时直接处理 raw 会按错误的边界阻尼(画面实际越界量不同),
+ * 松手 bake 再跳;origin=0 时 bake/补偿是恒等。标注双指平移与捏合同时进行时用它。
+ */
+export function rubberBandLightboxVisualPan(
   translateX: number,
   translateY: number,
   originX: number,
@@ -149,7 +263,7 @@ export function clampLightboxVisualPan(
   'worklet';
   return {
     x: compensateLightboxOrigin(
-      clampLightboxTranslation(
+      rubberBandLightboxTranslation(
         bakeLightboxOrigin(translateX, originX, scale),
         containerWidth,
         scale,
@@ -159,7 +273,7 @@ export function clampLightboxVisualPan(
       scale,
     ),
     y: compensateLightboxOrigin(
-      clampLightboxTranslation(
+      rubberBandLightboxTranslation(
         bakeLightboxOrigin(translateY, originY, scale),
         containerHeight,
         scale,
@@ -168,6 +282,152 @@ export function clampLightboxVisualPan(
       originY,
       scale,
     ),
+  };
+}
+
+/**
+ * {@link rubberBandLightboxVisualPan} 的逆运算:捏合开始时若画面已处在越界回弹中,
+ * 先还原成手指位移再作为起点,第一帧不跳。
+ */
+export function unrubberLightboxVisualPan(
+  translateX: number,
+  translateY: number,
+  originX: number,
+  originY: number,
+  containerWidth: number,
+  containerHeight: number,
+  scale: number,
+  displayedWidth: number,
+  displayedHeight: number,
+): { x: number; y: number } {
+  'worklet';
+  return {
+    x: compensateLightboxOrigin(
+      unrubberLightboxTranslation(
+        bakeLightboxOrigin(translateX, originX, scale),
+        containerWidth,
+        scale,
+        displayedWidth,
+      ),
+      originX,
+      scale,
+    ),
+    y: compensateLightboxOrigin(
+      unrubberLightboxTranslation(
+        bakeLightboxOrigin(translateY, originY, scale),
+        containerHeight,
+        scale,
+        displayedHeight,
+      ),
+      originY,
+      scale,
+    ),
+  };
+}
+
+/**
+ * 增量拖动(单指平移 / 标注双指平移):当前画面先还原成手指位移,加上本帧增量,
+ * 再套橡皮筋。无状态,缩放同时变化(边界随之变化)时也连续。
+ */
+export function dragLightboxVisualPan(
+  translateX: number,
+  translateY: number,
+  deltaX: number,
+  deltaY: number,
+  originX: number,
+  originY: number,
+  containerWidth: number,
+  containerHeight: number,
+  scale: number,
+  displayedWidth: number,
+  displayedHeight: number,
+): { x: number; y: number } {
+  'worklet';
+  const raw = unrubberLightboxVisualPan(
+    translateX,
+    translateY,
+    originX,
+    originY,
+    containerWidth,
+    containerHeight,
+    scale,
+    displayedWidth,
+    displayedHeight,
+  );
+  return rubberBandLightboxVisualPan(
+    raw.x + deltaX,
+    raw.y + deltaY,
+    originX,
+    originY,
+    containerWidth,
+    containerHeight,
+    scale,
+    displayedWidth,
+    displayedHeight,
+  );
+}
+
+/** 松手甩动低于此速度(px/s)不做惯性滑行,避免慢放手时图片还微微漂一下。 */
+export const LIGHTBOX_FLING_MIN_VELOCITY = 50;
+
+/**
+ * 平移松手后单轴的收尾方式:
+ *   - settle:已越界,弹簧回到最近的边界(带松手速度,继续往外甩会先多冲一点再回)。
+ *   - fling:边界内且有甩动速度,惯性滑行;滑到边界时由橡皮筋衰减冲过一点再弹回。
+ *   - none:边界内慢慢放手,原地停住。
+ */
+export type LightboxPanRelease =
+  | { kind: 'settle'; to: number }
+  | { kind: 'fling'; min: number; max: number }
+  | { kind: 'none' };
+
+export function lightboxPanRelease(
+  value: number,
+  velocity: number,
+  containerSize: number,
+  scale: number,
+  displayedSize: number,
+): LightboxPanRelease {
+  'worklet';
+  const overflow = lightboxPanOverflow(containerSize, displayedSize, scale);
+  if (value > overflow) return { kind: 'settle', to: overflow };
+  if (value < -overflow) return { kind: 'settle', to: -overflow };
+  if (Math.abs(velocity) < LIGHTBOX_FLING_MIN_VELOCITY) return { kind: 'none' };
+  return { kind: 'fling', min: -overflow, max: overflow };
+}
+
+/**
+ * 捏合松手后的落点:倍率回到 [1, 最大倍率],位移回到该倍率的边界内。
+ * 捏过最大倍率时绕最后的焦点缩回,手指下那一点保持不动;缩到 1x 及以下一律回正。
+ * translate 为 bake 后(origin=0)的位移,focal 为焦点相对容器中心的坐标。
+ */
+export function lightboxPinchSettle(input: {
+  scale: number;
+  translateX: number;
+  translateY: number;
+  focalX: number;
+  focalY: number;
+  containerWidth: number;
+  containerHeight: number;
+  displayedWidth: number;
+  displayedHeight: number;
+}): { scale: number; x: number; y: number } {
+  'worklet';
+  if (!isLightboxZoomed(input.scale)) return { scale: LIGHTBOX_MIN_SCALE, x: 0, y: 0 };
+  const scale = Math.min(input.scale, LIGHTBOX_MAX_SCALE);
+  let x = input.translateX;
+  let y = input.translateY;
+  if (scale !== input.scale) {
+    // 焦点 F 下的图片点 p 满足 F = p·s + T;缩到 s' 后保持 F 不动:T' = F - (F - T)·s'/s。
+    // 倍率不变时跳过,免得浮点误差让本已合法的落点也起一段动画。
+    const ratio = scale / input.scale;
+    x = input.focalX - (input.focalX - input.translateX) * ratio;
+    y = input.focalY - (input.focalY - input.translateY) * ratio;
+  }
+  return {
+    scale,
+    x: clampLightboxTranslation(x, input.containerWidth, scale, input.displayedWidth),
+    y: clampLightboxTranslation(y, input.containerHeight, scale, input.displayedHeight),
   };
 }
 

@@ -456,7 +456,19 @@ describe('guest provider access and usage', () => {
     const host = makeHost(started, { events: [done], recordGuestUsage });
     await host.handle(GUEST, { op: 'open', runId: RUN_1, agentKind: 'claude-code', payload: { json: openPayload('task-1') } });
     await host.handle(OWNER, { op: 'open', runId: RUN_2, agentKind: 'claude-code', payload: { json: openPayload('task-2') } });
-    await vi.waitFor(() => expect(recordGuestUsage).toHaveBeenCalledTimes(1));
+    // open 只登记任务，启动与事件泵在后台继续；Windows 全量分片繁忙时不能用 waitFor 的
+    // 1 秒默认值猜测它们已处理完。等两条任务的 done 都进入可观察事件日志后再断言计量。
+    await vi.waitFor(async () => {
+      const polls = await Promise.all([
+        host.handle(GUEST, { op: 'poll', runs: [{ runId: RUN_1, cursor: 0 }], waitMs: 0 }),
+        host.handle(OWNER, { op: 'poll', runs: [{ runId: RUN_2, cursor: 0 }], waitMs: 0 }),
+      ]) as Array<{ runs: Array<{ data?: string }> }>;
+      for (const poll of polls) {
+        const events = Buffer.from(poll.runs[0]?.data ?? '', 'base64').toString('utf8');
+        expect(events).toContain('"t":"event","event":{"type":"done"');
+      }
+    }, { timeout: 10_000 });
+    expect(recordGuestUsage).toHaveBeenCalledTimes(1);
     expect(recordGuestUsage).toHaveBeenCalledWith(GUEST, {
       kind: 'claude-code',
       providerId: 'shared-provider',

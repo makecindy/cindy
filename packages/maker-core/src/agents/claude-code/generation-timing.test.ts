@@ -2011,3 +2011,42 @@ describe('claude generation pause boundaries', () => {
     vi.useRealTimers();
   });
 });
+
+describe('Claude normalized completed-turn output', () => {
+  afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
+
+  it('preserves raw SDK aggregates while exposing real turn output across success, zero and reset', () => {
+    vi.useFakeTimers();
+    const ctx = createTranslatorCtx();
+    const events: AgentEvent[] = [];
+    const queue = { push: (event: AgentEvent) => events.push(event) } as unknown as Parameters<typeof translateSdkMessage>[1];
+    const counts = [100, 60, 0, 30];
+    const aggregates = [100, 160, 160, 30];
+    for (const [index, output] of counts.entries()) {
+      const start = 1_000 + index * 10_000;
+      vi.setSystemTime(start);
+      resetClaudeGenerationTiming(ctx.rt.generation);
+      ctx.tracker.beginTurn();
+      ctx.turn = createTurnState();
+      translateSdkMessage({ type: 'stream_event', event: { type: 'message_start',
+        message: { id: `m-${index}`, model: 'claude-sonnet-4.5', usage: { input_tokens: 0 } } } }, queue, ctx);
+      vi.setSystemTime(start + 1_000);
+      translateSdkMessage({ type: 'stream_event', event: { type: 'content_block_start',
+        content_block: { type: 'text', text: '' } } }, queue, ctx);
+      translateSdkMessage({ type: 'stream_event', event: { type: 'content_block_delta',
+        delta: { type: 'text_delta', text: 'answer' } } }, queue, ctx);
+      vi.setSystemTime(start + 3_000);
+      translateSdkMessage({ type: 'stream_event', event: { type: 'message_delta',
+        usage: { output_tokens: output } } }, queue, ctx);
+      vi.setSystemTime(start + 5_000);
+      translateSdkMessage({ type: 'result', subtype: 'success', result: 'answer', total_cost_usd: 0,
+        usage: { input_tokens: 0, output_tokens: aggregates[index] } }, queue, ctx);
+      const done = events.filter(event => event.type === 'done').at(-1);
+      expect(done?.data).toMatchObject({ usage: { output_tokens: aggregates[index] }, turnUsage: { output_tokens: output },
+        responseSpeed: { phase: 'complete', outputTokens: output, durationMs: 2_000,
+          averageRate: output / 2, estimated: false } });
+      expect(done?.data).not.toHaveProperty('modelUsage');
+      expect(ctx.rt.lastResultUsageAggregate?.outputTokens).toBe(aggregates[index]);
+    }
+  });
+});
