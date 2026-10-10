@@ -292,3 +292,45 @@ jobs:
 
       - name: Run Desktop Git integration tests
         run: pnpm test:git-integration
+
+  # apply_patch 的 Windows `.bat` shim 缺陷（cindy#4990 / openai/codex#13840）只能
+  # 在 Windows 上经真实 codex 会话暴露：Linux/macOS 的 shim 不是 .bat。本 job 装
+  # pinned codex-package 后跑真实会话矩阵（换行/空格/双引号/非 ASCII + 非法补丁），
+  # 守住后续 codex-package 升级不重新引入同类回归；在上游修复进入 pin 之前，命中
+  # 已知失败签名的用例按已知缺陷跳过，直连通道控制用例全平台常驻。
+  codex-apply-patch-e2e:
+    name: Codex apply_patch payload matrix (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout client
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          lfs: true
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
+        with:
+          run_install: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # 全局 XDT_SKIP_AGENT_BIN_INSTALL=1 只跳过 install 钩子；本 job 显式装
+      # tools/codex-package/latest.json 固定的版本，矩阵因此守住 pin 本身。
+      - name: Install pinned codex package
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: pnpm install:codex
+
+      - name: Run Codex apply_patch payload matrix E2E
+        run: pnpm --filter desktop exec vitest run src/main/maker-host/__tests__/codexApplyPatchMatrix.e2e.test.ts
