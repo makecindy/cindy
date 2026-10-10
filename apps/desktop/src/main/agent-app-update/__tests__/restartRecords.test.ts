@@ -58,3 +58,11 @@ describe('restart records file', () => {
     expect(fs.readFileSync(file, 'utf8')).toBe('not json');
   });
 });
+
+describe('restart records capacity', () => {
+  it('never drops an undelivered record to make room for a new one', () => {
+    for (let i = 0; i < 25; i += 1) addRestartRecord(file, record(`r${i}`));
+    expect(listRestartRecords(file)).toHaveLength(25);
+    expect(listRestartRecords(file)[0]!.requestId).toBe('r0');
+  });
+});

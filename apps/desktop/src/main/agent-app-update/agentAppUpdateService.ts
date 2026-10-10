@@ -143,7 +143,6 @@ const UNDELIVERED_REASONS = new Set([
 ]);
 const MARKER_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const MAX_PENDING_NOTICES = 20;
-export const MAX_RESTART_RECORDS = 20;
 
 interface PendingNotice {
   /** Account id, not a captured scope: a later sign-in of the same account still matches. */

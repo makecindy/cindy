@@ -8,7 +8,7 @@ import path from 'node:path';
 
 import { createLogger, maskPath } from '../logger.js';
 import { atomicWriteFileSync, readAtomicFileSync } from '../utils/atomicWriteFile.js';
-import { MAX_RESTART_RECORDS, type AgentAppUpdateMarker } from './agentAppUpdateService.js';
+import type { AgentAppUpdateMarker } from './agentAppUpdateService.js';
 
 const log = createLogger('agent-app-update');
 
@@ -81,7 +81,8 @@ export function listRestartRecords(file: string): AgentAppUpdateMarker[] {
 /** Throws when existing records cannot be preserved; the caller then does not restart. */
 export function addRestartRecord(file: string, record: AgentAppUpdateMarker): void {
   const records = readRecords(file, 'before-write');
-  writeRecords(file, [...records, record].slice(-MAX_RESTART_RECORDS));
+  // No cap: records leave only when delivered, their task is gone, or after 7 days.
+  writeRecords(file, [...records, record]);
 }
 
 export function removeRestartRecord(file: string, requestId: string): void {
