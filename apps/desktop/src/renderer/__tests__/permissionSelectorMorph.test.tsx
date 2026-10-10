@@ -29,7 +29,14 @@ const PERMISSION_MODES = [
 let mockPermissionModes = PERMISSION_MODES;
 
 vi.mock('@/hooks/useAgentCapabilities', () => ({
-  useAgentCapabilities: () => ({ capabilities: { permissionModes: mockPermissionModes } }),
+  useAgentCapabilities: (agent: string) => ({ capabilities: { permissionModes: agent === 'cursor'
+    ? [
+      { id: 'ask', displayName: '默认权限', description: 'Cursor native policy' },
+      { id: 'default', displayName: '默认权限', description: 'Cursor native policy' },
+      { id: 'auto', displayName: '自动审批', description: 'Cursor auto-review' },
+      { id: 'bypassPermissions', displayName: '完全访问', description: 'Cursor full access' },
+    ]
+    : mockPermissionModes } }),
 }));
 
 import { PermissionSelector } from '../components/new-chat/PermissionSelector';
@@ -53,6 +60,29 @@ function getTrigger(): HTMLElement {
 }
 
 describe('PermissionSelector (MorphPopover pilot)', () => {
+  it.each(['ask', 'default'] as const)('merges Cursor permission aliases while retaining the active %s id', async permissionMode => {
+    const { onChange } = renderSelector({ vendorKey: 'cursor', permissionMode });
+    fireEvent.click(getTrigger());
+    await screen.findByRole('listbox');
+    const options = screen.getAllByRole('option');
+    expect(options).toHaveLength(3);
+    expect(options[0].getAttribute('aria-selected')).toBe('true');
+    expect(options[0].getAttribute('data-permission-mode')).toBe(permissionMode);
+    fireEvent.click(options[0]);
+    expect(onChange).toHaveBeenCalledWith(permissionMode);
+  });
+
+  it('offers and selects Cursor auto-review and full access from its capabilities', async () => {
+    const { onChange } = renderSelector({ vendorKey: 'cursor' });
+    fireEvent.click(getTrigger());
+    await screen.findByRole('listbox');
+    expect(screen.getAllByRole('option')).toHaveLength(3);
+    expect(screen.getByRole('option', { name: '完全访问' })).toBeTruthy();
+    expect(screen.getByRole('option', { name: '默认权限' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('option', { name: '自动审批' }));
+    expect(onChange).toHaveBeenCalledWith('auto');
+  });
+
   // 2026-07-22:PermissionSelector 只在 composer 使用,已统一为「恒走脱身上浮 morph」——
   // 移除 origin/main 的 useMorphPopover opt-in/Radix 回退开关,故删去原「默认用 Radix」用例。
   it('点击 trigger 打开 listbox,四档选项齐全,aria-expanded 同步', async () => {

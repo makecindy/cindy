@@ -2,8 +2,8 @@
  * localCliDetect(main)—— 本机 agent CLI 安装 / 登录态扫描的实现。
  *
  * 纯函数 + 注入 fs 依赖(规则 14:handler body 可脱 Electron 单测)。
- * 只做存在性 stat(目录用 isDirectory、文件用 isFile,防同名文件顶替误报——
- * 见 memory: 存在性探测用 stat 而非 access),**绝不读取凭证内容**(规则 23)。
+ * Claude/Codex 使用存在性 stat 与既有登录探测；Cursor 使用其原生 CLI status。
+ * stat 区分目录和文件，避免同名文件顶替误报；绝不读取或返回凭证内容。
  * 任一条目探测失败按「未安装」处理(fail-quiet:检测建议是增强,不是功能依赖)。
  */
 
@@ -14,6 +14,8 @@ import { stat } from 'node:fs/promises';
 import { hasClaudeNativeLogin } from '../maker-host/claude-native-auth.js';
 import { isCodexAuthInheritedFromSystemCli } from '../maker-host/auth-adapters.js';
 import { isNativeProviderAuthSelfAuthorized } from '../maker-host/nativeProviderAuthBinding.js';
+import { discoverCursorAgentBinarySync } from '../maker-host/cursor-binary-discovery.js';
+import { createDesktopCursorAuthAdapter } from '../maker-host/cursor-auth-adapter.js';
 import {
   LOCAL_CLI_DETECT_MAP,
   type LocalCliDetection,
@@ -31,6 +33,8 @@ export interface LocalCliScanDeps {
    * 生产 = hasClaudeNativeLogin();只返 boolean,不暴露凭证内容(规则 23)。
    */
   hasClaudeLogin(): boolean;
+  /** Cursor reports installation and login through its own CLI; no credential files are read. */
+  probeCursorCli(): Promise<{ installed: boolean; loggedIn: boolean }>;
   /**
    * Cindy 用的凭证是否确实就是这份本机凭证(填 `LocalCliDetection.sharedWithCindy`)。
    * 只在该 CLI 已登录时被调用;判据按 CLI 分派,见 createLocalCliScanDeps。
@@ -63,8 +67,15 @@ export function createLocalCliScanDeps(): LocalCliScanDeps {
         return false;
       }
     },
+    probeCursorCli: async () => {
+      const binary = discoverCursorAgentBinarySync();
+      if (!binary.installed) return { installed: false, loggedIn: false };
+      const state = await createDesktopCursorAuthAdapter(binary.binaryPath).getState();
+      return { installed: true, loggedIn: state.authenticated };
+    },
     isCredentialSharedWithCindy: (cli) => {
       try {
+        if (cli === 'cursor-cli') return true;
         const providerId = cli === 'claude-cli' ? 'anthropic' : 'openai';
         // 用户在 Cindy 里**亲自授权过**这家 → 不是继承,无论凭证此刻是否与本机共用。
         // 少了这道判据，「在 Cindy 里点过 Claude 授权」的用户下次进新建页会被告知
@@ -115,5 +126,11 @@ export async function scanLocalCliAuth(deps: LocalCliScanDeps): Promise<LocalCli
       sharedWithCindy,
     });
   }
+  const cursor = await deps.probeCursorCli().catch(() => ({ installed: false, loggedIn: false }));
+  results.push({
+    cli: 'cursor-cli', providerId: 'cursor', installed: cursor.installed,
+    loggedIn: cursor.installed && cursor.loggedIn,
+    sharedWithCindy: cursor.installed && cursor.loggedIn,
+  });
   return results;
 }

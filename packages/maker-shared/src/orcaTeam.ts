@@ -11,8 +11,8 @@ export const ORCA_PREDEFINED_WORKER_ROLES = ['developer', 'designer', 'reviewer'
 /** 自定义角色名的长度上限(被控端 `maker:worker:create` 同口径校验)。 */
 export const ORCA_WORKER_ROLE_MAX_LENGTH = 32;
 
-export type OrcaWorkerAgentKind = 'claude-code' | 'codex' | 'pi';
-export type OrcaWorkerPermissionMode = 'auto' | 'bypassPermissions';
+export type OrcaWorkerAgentKind = 'claude-code' | 'codex' | 'pi' | 'cursor';
+export type OrcaWorkerPermissionMode = 'ask' | 'auto' | 'bypassPermissions';
 export type OrcaWorkerStatus = 'idle' | 'running' | 'done' | 'error';
 
 /**
@@ -26,6 +26,7 @@ export const DEFAULT_ORCA_WORKER_MODELS: Readonly<Record<OrcaWorkerAgentKind, st
   'claude-code': 'claude-opus-4-7',
   // 与被控端 orcaWorkerCreationService 的 pi 默认一致。
   pi: 'claude-sonnet-4-6',
+  cursor: 'cursor-default',
 };
 
 /**
@@ -162,7 +163,7 @@ function text(value: unknown): string | null {
 }
 
 function agentKind(value: unknown): OrcaWorkerAgentKind {
-  return value === 'codex' || value === 'pi' ? value : 'claude-code';
+  return value === 'codex' || value === 'pi' || value === 'cursor' ? value : 'claude-code';
 }
 
 function workerStatus(value: unknown): OrcaWorkerStatus {
@@ -170,7 +171,7 @@ function workerStatus(value: unknown): OrcaWorkerStatus {
 }
 
 export function parseOrcaPermissionMode(value: unknown): OrcaWorkerPermissionMode | null {
-  return value === 'auto' || value === 'bypassPermissions' ? value : null;
+  return value === 'ask' || value === 'auto' || value === 'bypassPermissions' ? value : null;
 }
 
 /** 解析 worker 列表;缺 id / sessionId 的条目直接丢弃(不猜)。保持被控端顺序(新→旧)。 */

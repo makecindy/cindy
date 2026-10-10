@@ -2248,6 +2248,13 @@
       }
     },
     "providers": {
+      "cursor": {
+        "localAccount": "Local Cursor CLI account",
+        "setup": "Install Cursor CLI using the official instructions, then restart Cindy. Sign in to Cursor in your terminal, then refresh the model list.",
+        "installGuide": "View installation instructions",
+        "modelsUnavailable": "Models not ready",
+        "refreshFailed": "Could not read Cursor models. Check that the CLI is installed and signed in, then retry. Restart Cindy if you just installed the CLI."
+      },
       "llamacpp": {
         "ownedElsewhere": "The model service is running in another Cindy instance. Download models or change context there, or stop its service first.",
         "primaryPick": "Primary pick · try this first",
@@ -9440,6 +9447,10 @@
         "favoritesSyncFailed": "Favorites could not sync. Reopen the picker to retry; the remote computer may need an update.",
         "railRemoteProviderGroup": "{{provider}} · {{device}} · {{group}}",
         "providerGroupLabel": "{{provider}} · {{group}}"
+      },
+      "cursorGroups": {
+        "models": "Cursor Models",
+        "other": "Other Models"
       }
     },
     "permissionSelector": {
@@ -9447,6 +9458,24 @@
       "listAria": "Permission modes",
       "autoFallback": "Auto-review is temporarily unavailable. Switched to Default permissions and will ask when needed.",
       "modes": {
+        "cursor": {
+          "ask": {
+            "label": "Default permissions",
+            "description": "Cursor follows its native configured permission policy. Cindy shows only the approval requests Cursor sends; workspace edits may run without a prompt."
+          },
+          "default": {
+            "label": "Default permissions",
+            "description": "Cursor follows its native configured permission policy. Cindy shows only the approval requests Cursor sends; workspace edits may run without a prompt."
+          },
+          "auto": {
+            "label": "Auto-review",
+            "description": "Cindy automatically reviews approval requests from Cursor and asks you when needed. Cursor’s native permission policy still applies."
+          },
+          "bypassPermissions": {
+            "label": "Full access",
+            "description": "Cindy allows approval requests from Cursor without another confirmation. Highest risk; Cursor’s native permission policy still applies."
+          }
+        },
         "claude-code": {
           "ask": {
             "label": "Default permissions",
@@ -9663,6 +9692,21 @@
       "permissionSwitchFailed": "Permission mode change failed; the previous setting was kept",
       "retryPluginWriteAccess": "Confirm plugin write permission again",
       "fullAccessConfirmation": {
+        "cursor": {
+          "description": "Cindy will directly allow approval requests from Cursor without asking for each one:",
+          "items": {
+            "files": {
+              "description": "Directly allow file read and modification requests from Cursor"
+            },
+            "commands": {
+              "description": "Directly allow terminal command requests from Cursor"
+            },
+            "network": {
+              "description": "Directly allow network operation requests from Cursor"
+            }
+          },
+          "note": "Cursor’s native permission policy still applies. This choice does not change its native sandbox or persistent grants. Built-in high-risk operations still require confirmation."
+        },
         "title": "Enable Full access?",
         "description": "Full access disables the workspace sandbox and skips routine approvals. Cindy can then do the following without asking:",
         "items": {
@@ -13552,6 +13596,7 @@
       "codexVoiceAuthDescription": "Voice input uses a connected ChatGPT account for GPT realtime speech recognition. The account is not connected or needs an update. Open Model Providers to connect ChatGPT?",
       "codexBinaryMissingTitle": "Codex component not ready",
       "codexBinaryMissingDescription": "The Codex component is not ready yet, so this feature cannot be used. Try again later or check the Codex connection in Settings → Providers.",
+      "cursorSetupDescription": "Install Cursor CLI on the computer running this task and restart Cindy. Then run cursor-agent login in its terminal and refresh the model list.",
       "piBinaryMissingTitle": "Pi component not ready",
       "piBinaryMissingDescription": "The Pi component is not ready yet, so this feature cannot be used. Try again later or check the Pi connection in Settings → Providers.",
       "goToSettings": "Open Settings",

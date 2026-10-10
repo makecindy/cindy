@@ -1,4 +1,5 @@
 import { isModelVisible } from '@cindy/model-providers';
+import type { AgentKind } from '@cindy/maker-core';
 import { getModelVisibilityOverride, waitForModelVisibilityMirror } from '../maker-host/model-visibility-mirror.js';
 import { getDesktopProviderService } from '../maker-host/createDesktopProviderService.js';
 import fs from 'node:fs/promises';
@@ -89,7 +90,7 @@ export async function generateBotCreationDraft(
     await waitForModelVisibilityMirror();
     const providers = await getDesktopProviderService().listProviders({ allowSideEffects: false });
     assertOwner();
-    const assertEnabled = (selection: { agentKind: 'claude-code' | 'codex' | 'pi'; providerId: string; model: string }) => {
+    const assertEnabled = (selection: { agentKind: AgentKind; providerId: string; model: string }) => {
       const provider = providers.find(p => p.id === selection.providerId);
       const model = provider?.models[selection.agentKind]?.find(m => m.id === selection.model);
       if (!model || !isModelVisible(getModelVisibilityOverride(selection.agentKind, selection.providerId, selection.model), model.defaultEnabled))

@@ -42,12 +42,14 @@ const KIND_ICON: Record<ProcessUsageEntry['kind'], LucideIcon> = {
   'agent-claude': Bot,
   'agent-codex': Bot,
   'agent-pi': Bot,
+  'agent-cursor': Bot,
 };
 
 const AGENT_NAME: Record<string, string> = {
   'agent-claude': 'Claude Code',
   'agent-codex': 'Codex',
   'agent-pi': 'Pi',
+  'agent-cursor': 'Cursor',
 };
 
 const UTILITY_LABEL_KEY: Record<string, string> = {

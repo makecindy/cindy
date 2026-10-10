@@ -261,7 +261,7 @@ export function refreshCatalogDerivedModels(
   target: ModelCapabilitiesTarget,
   catalog: Catalog,
 ): void {
-  for (const agent of ['claude-code', 'codex', 'pi'] as const) {
+  for (const agent of ['claude-code', 'codex', 'pi', 'cursor'] as const) {
     let availableModels: ModelDescriptor[];
     try {
       availableModels = target.getCapabilities(agent).availableModels;

@@ -50,7 +50,7 @@ export interface BotCapabilityCallbacks {
 }
 
 export interface AppDefaultModelRoute {
-  harness: 'claude' | 'codex' | 'pi'; providerId: string | null;
+  harness: 'claude' | 'codex' | 'pi' | 'cursor'; providerId: string | null;
   model: string; effort: string; fastMode: boolean;
 }
 

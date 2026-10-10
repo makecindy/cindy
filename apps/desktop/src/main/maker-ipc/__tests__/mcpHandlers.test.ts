@@ -86,7 +86,7 @@ afterEach(() => {
 });
 
 describe('mcp:custom:* CRUD handlers', () => {
-  it.each(['claude-code', 'codex', 'pi'] as const)(
+  it.each(['claude-code', 'codex', 'pi', 'cursor'] as const)(
     'projects registered MCP availability for %s while preserving the configuration list',
     async (agentKind) => {
       mountDb();
@@ -125,7 +125,7 @@ describe('mcp:custom:* CRUD handlers', () => {
       expect(result).toEqual({ agentKind, servers: rawList.map((server) => ({
         ...server, available: ['mytools', 'local-http'].includes(server.id)
           || (server.id === 'events' && agentKind === 'claude-code')
-          || (server.id === 'public-http' && agentKind !== 'pi'),
+          || (server.id === 'public-http' && agentKind !== 'pi' && agentKind !== 'cursor'),
       })) });
     },
   );

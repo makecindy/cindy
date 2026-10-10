@@ -55,13 +55,13 @@ export type SubmitGithubIssueHostResult =
 export interface SubmitGithubIssueDeps {
   getSessionContext: () => {
     sessionId?: string;
-    agentKind: 'claude-code' | 'codex' | 'pi';
+    agentKind: 'claude-code' | 'codex' | 'pi' | 'cursor';
     workingDir: string;
   };
   /** host 回调:弹确认卡片 → 用户确认后提交到 server。 */
   submit: (req: {
     sessionId: string;
-    agentKind: 'claude-code' | 'codex' | 'pi';
+    agentKind: 'claude-code' | 'codex' | 'pi' | 'cursor';
     workingDir: string;
     title: string;
     body: string;

@@ -147,7 +147,7 @@ export interface BotSessionProjection {
   profileVersion?: number;
   runtimeSnapshot?: {
     profileVersion: number;
-    agentKind: 'claude-code' | 'codex' | 'pi';
+    agentKind: 'claude-code' | 'codex' | 'pi' | 'cursor';
     status: 'prepared' | 'applied' | 'degraded' | 'failed';
     preparedAt: number;
     appliedAt?: number;
@@ -352,9 +352,7 @@ function readLegacyBotGlobalModelChain(): BotModelRoute[] | null {
   }
 }
 
-export function getEffectiveBotModelChain(
-  _fallbackHarness: BotHarness = NEW_BOT_DEFAULT_HARNESS,
-): BotModelRoute[] {
+export function getEffectiveBotModelChain(): BotModelRoute[] {
   const stored = getBotGlobalModelChain();
   if (stored) return stored;
   const providers = getCachedProvidersSnapshot();
@@ -445,7 +443,7 @@ function defaultCapabilities(
 ): BotCapabilities {
   const vendor = vendorForHarness(harness);
   const prefs = getDraft().lastByVendor[vendor];
-  const globalChain = getEffectiveBotModelChain(harness);
+  const globalChain = getEffectiveBotModelChain();
   const primary = globalChain[0] ?? { harness, model: '', providerId: null, effort: '', fastMode: false };
   const model = primary.model;
   return {

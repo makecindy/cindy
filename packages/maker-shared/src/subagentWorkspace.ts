@@ -8,7 +8,7 @@
  * may add opaque `providerRunIds` without changing the product model.
  */
 
-export type SubagentProvider = 'claude-code' | 'codex' | 'pi';
+export type SubagentProvider = 'claude-code' | 'codex' | 'pi' | 'cursor';
 
 export type SubagentRunStatus = 'running' | 'completed' | 'failed' | 'stopped';
 

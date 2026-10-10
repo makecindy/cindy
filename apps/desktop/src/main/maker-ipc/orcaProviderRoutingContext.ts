@@ -22,7 +22,7 @@ export function sshCodexWorkerRoutingContext(views: ProviderView[]): OrcaWorkerP
   return {
     remoteCodexModels: models,
     availability: {
-      'claude-code': [], pi: [],
+      'claude-code': [], pi: [], cursor: [],
       codex: models.length ? [{
         id: 'openai', name: views[0]!.name, models: models.map((model) => model.id),
         fastModels: models.filter((model) => model.supportsFastMode).map((model) => model.id),
@@ -62,6 +62,7 @@ export function deviceWorkerRoutingContext(views: ProviderView[], agent: AgentKi
     'claude-code': availabilityFor('claude-code'),
     codex: availabilityFor('codex'),
     pi: availabilityFor('pi'),
+      cursor: availabilityFor('cursor'),
   };
   const models = deviceRoutableModels(views, agent);
   return {
@@ -149,7 +150,7 @@ export async function readOrcaWorkerProviderRoutingContext(deps: {
             modelRegistry,
             provider.id,
             model.id,
-            agent === 'pi' ? undefined : agent,
+            agent === 'pi' || agent === 'cursor' ? undefined : agent,
           );
           return matched ? [[model.id, matched.entry.id]] : [];
         }),
@@ -184,6 +185,7 @@ export async function readOrcaWorkerProviderRoutingContext(deps: {
       'claude-code': availabilityFor('claude-code'),
       codex: availabilityFor('codex'),
       pi: availabilityFor('pi'),
+      cursor: availabilityFor('cursor'),
     },
     resolveDefaultProviderIdForModel: (agent, model) =>
       effectiveSourceIdForModel(views, null, model, agent),

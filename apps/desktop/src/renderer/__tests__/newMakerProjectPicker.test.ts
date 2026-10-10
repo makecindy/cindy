@@ -1482,7 +1482,7 @@ describe('Shared create project picker', () => {
   // 会被静默丢掉、或撞上对端同名的无关目录 —— chip 显示的并不是真实授予的上下文。
   it('hides the reference-directory picker on remote drafts', () => {
     expect(newMakerDraftRouteSource).toContain(
-      'onExtraDirsChange={isDeviceLinkDraft ? undefined : handleExtraDirsChange}',
+      'isDeviceLinkDraft ||\n                      (capabilityAgentKind === \'cursor\' && capabilities?.extraDirs?.supported !== true)',
     );
     // The single add entry grants write access only through the local Main picker;
     // legacy read-only directories retain their independent removal callback.
@@ -1509,7 +1509,7 @@ describe('Shared create project picker', () => {
   // the executing side explicitly supports the setter.
   it('hides remote add while preserving capability-gated writable grant revocation', () => {
     expect(newMakerDraftRouteSource).toContain(
-      'isDeviceLinkDraft || isRemoteProjectDraft\n                        ? undefined\n                        : handleWritableDirsChange',
+      'isDeviceLinkDraft || isRemoteProjectDraft ||\n                      (capabilityAgentKind === \'cursor\' && capabilities?.writableDirs?.supported !== true)\n                        ? undefined\n                        : handleWritableDirsChange',
     );
     expect(agentCapabilitiesHookSource).toContain('writableDirs?: CapabilityStatus;');
     expect(ccAgentSessionViewSource).toContain(

@@ -289,7 +289,7 @@ function referencePriceQuoteForVariant(
   // 路由)在此按 agent 无关的参考价解析 —— pi 一律降级为 undefined 传给协议函数。
   const resolved = resolveModelReferencePrice(registry, providerId, modelId, {
     ...options,
-    agent: options.agent === 'pi' ? undefined : options.agent,
+    agent: options.agent === 'claude-code' || options.agent === 'codex' ? options.agent : undefined,
   });
   if (!resolved) return undefined;
   const day = referencePriceCalendarDate(options.at);

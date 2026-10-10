@@ -216,13 +216,13 @@ describe('Scheduler', () => {
   });
 
 
-  it('persists an explicit Harness with its model and clears it when following the target', async () => {
-    const saved = await h.scheduler.create({ ...baseInput, modelAgentKind: 'pi', model: 'grok-4.6' });
-    expect(saved.modelAgentKind).toBe('pi');
+  it.each(['pi', 'cursor'] as const)('persists an explicit %s Harness and clears it when following the target', async (modelAgentKind) => {
+    const saved = await h.scheduler.create({ ...baseInput, modelAgentKind, model: 'grok-4.6' });
+    expect(saved.modelAgentKind).toBe(modelAgentKind);
     await expect(h.scheduler.update(saved.id, { model: undefined })).rejects.toThrow(/Harness/);
     const followed = await h.scheduler.update(saved.id, { modelAgentKind: undefined, model: undefined });
     expect(followed?.modelAgentKind).toBeUndefined();
-    await expect(h.scheduler.create({ ...baseInput, modelAgentKind: 'pi', model: '' })).rejects.toThrow(/Harness/);
+    await expect(h.scheduler.create({ ...baseInput, modelAgentKind, model: '' })).rejects.toThrow(/Harness/);
   });
 
   it('create() computes nextFireAt and adds to active map', async () => {

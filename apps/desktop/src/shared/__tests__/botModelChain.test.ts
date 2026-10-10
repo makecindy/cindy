@@ -8,6 +8,13 @@ import {
 } from '../botModelChain';
 
 describe('Bot model chain', () => {
+  it('drops unsupported Cursor Bot routes instead of reinterpreting them as Claude', () => {
+    expect(normalizeBotModelChain([{ harness: 'cursor', model: 'native' }])).toEqual([]);
+    expect(normalizeBotModelChain(undefined, { harness: 'cursor', model: 'native' })).toEqual([]);
+    expect(nextBotModelRoute([{ harness: 'pi', model: 'fallback' }],
+      { harness: 'cursor', model: 'native', providerId: 'cursor' })).toBeNull();
+  });
+
   it('keeps a legacy single-model Bot as a one-route chain', () => {
     expect(
       normalizeBotModelChain(undefined, {

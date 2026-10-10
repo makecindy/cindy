@@ -46,7 +46,7 @@ export function createWorkingDirectoryPreflight(deps: WorkingDirectoryPreflightD
     const cindyMakeWorkspace = isCindyMakeWorktreePath(getUserDataPath(), requestedWorkingDir);
     if (cindyMakeWorkspace) workingDirectoryRecovery.discard(sessionId);
     let workingDir = workingDirectoryRecovery.resolve(sessionId, requestedWorkingDir);
-    const source: AgentKind = agentKind === 'codex' || agentKind === 'pi' ? agentKind : 'claude-code';
+    const source: AgentKind = agentKind === 'codex' || agentKind === 'pi' || agentKind === 'cursor' ? agentKind : 'claude-code';
     // suppressMissingBroadcast: 调用方(SEND 事务)手里还有 DB 权威值可兜底时,
     // 首检失败只记日志不广播错误横幅——兜底成功的话用户不该看到假错误。
     const suppress = opts?.suppressMissingBroadcast === true;

@@ -33,6 +33,7 @@ import {
   isXdGatewayPaymentRequiredRoute,
 } from './active-catalog.js';
 import { readModelDisableOverrides } from './model-disable-store.js';
+import { withCursorDiscoveredModels } from './cursor-model-catalog.js';
 import {
   isRegistryTombstoneForConsumer,
   MODEL_PLANE_POLICIES,
@@ -52,9 +53,14 @@ import {
  * hidden media model and make checkModelRoute treat it as catalog-unknown.
  */
 async function listRouteGuardProviders(
-  catalog = getActiveCatalog(),
+  catalog = routeGuardCatalog(),
 ): Promise<ProviderView[]> {
   return getDesktopProviderService().listProviders({ catalog });
+}
+
+/** Native membership plus the admission-only alias required by older saved routes. */
+function routeGuardCatalog() {
+  return withCursorDiscoveredModels(getActiveCatalog(), { includeLegacyDefault: true });
 }
 
 function tombstoneGuardOptions(
@@ -90,7 +96,7 @@ export async function resolveDefaultScheduleRoute(
   const views = await getDesktopProviderService().listProviders({
     allowSideEffects: true,
     waitForDiscovery: true,
-    getCatalog: getActiveCatalog,
+    getCatalog: routeGuardCatalog,
   });
   const preferredModelId = modelId?.trim();
   if (preferredModelId) {
@@ -128,7 +134,7 @@ export async function resolveDefaultScheduleRoute(
 
 /** 该 agent 的静态原生默认来源偏好(nativeDefaultSourceId 的无 rail 近似)。 */
 function staticNativeDefaults(agent: AgentKind): readonly string[] {
-  return agent === 'codex' ? ['openai', 'xd'] : ['xd'];
+  return agent === 'cursor' ? ['cursor'] : agent === 'codex' ? ['openai', 'xd'] : ['xd'];
 }
 
 /**
@@ -176,7 +182,7 @@ export async function verdictForModelRoute(
   model: string,
   providerId: string | null,
 ): Promise<ModelRouteVerdict> {
-  const catalog = getActiveCatalog();
+  const catalog = routeGuardCatalog();
   const guardOptions = tombstoneGuardOptions(catalog);
   let views: ProviderView[];
   try {
@@ -228,7 +234,7 @@ export async function resolveLenientSessionRoute(
   /** 仅 desiredFastMode=true 且路由被本解析改动时给出:落地拷贝不支持 Fast ⇒ false。 */
   fastMode?: boolean;
 }> {
-  const catalog = getActiveCatalog();
+  const catalog = routeGuardCatalog();
   const guardOptions = tombstoneGuardOptions(catalog);
   let views: ProviderView[];
   try {
@@ -283,7 +289,7 @@ export async function resolveScheduledModelSelectionLive(
   selection: ScheduledModelSelection,
 ): Promise<ScheduledModelSelection> {
   const providers = await getDesktopProviderService().listProviders({
-    allowSideEffects: false, catalog: getActiveCatalog(),
+    allowSideEffects: false, catalog: routeGuardCatalog(),
   });
   return resolveScheduledModelSelection(selection, providers);
 }
@@ -330,6 +336,7 @@ const DEFAULT_ONESHOT_MODEL: Record<AgentKind, string> = {
   codex: 'gpt-5.4-mini',
   // pi oneShot 未实现(BaseAgent 默认抛 NotSupported);占位与 claude 同款网关小模型。
   pi: 'claude-haiku-4-5',
+  cursor: 'cursor-default',
 };
 
 /**

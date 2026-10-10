@@ -3,6 +3,13 @@ import { describe, expect, it, vi } from 'vitest';
 import { readCreateSessionOpts, withCreateSessionStderr } from '../sessionRequest';
 
 describe('session IPC request parsing', () => {
+  it('preserves Cursor locally and rejects unsupported remote execution before allocation', () => {
+    const input = { agentKind: 'cursor', model: 'native-model', workingDir: 'workspace' };
+    expect(readCreateSessionOpts(input).agentKind).toBe('cursor');
+    expect(readCreateSessionOpts({ ...input, effort: 'high', fastMode: true })).toMatchObject({ effort: 'high', fastMode: true });
+    expect(() => readCreateSessionOpts({ ...input, remoteHostId: 'ssh-host' })).toThrow('[UNSUPPORTED_CAPABILITY]');
+    expect(() => readCreateSessionOpts({ ...input, agentDeviceId: 'other-device' })).toThrow('[UNSUPPORTED_CAPABILITY]');
+  });
   it.each(['cindy-library:/outside', '  cindy-library:/outside  '])(
     'rejects external Host-owned slots: %s', (dir) => {
       expect(() => readCreateSessionOpts({

@@ -9,6 +9,7 @@ import { useTranslation } from "react-i18next";
 import type { MobileProviderMarkProps } from "./MobileProviderMark";
 import type { AgentKind } from "@cindy/model-providers/types";
 import type { UnifiedModelEntry } from "@cindy/model-providers";
+import { providerModelDisplayGroups, providerModelDisplayGroupTitle } from "@cindy/model-providers";
 import type { MobileAgentCapabilities } from "./agentCapabilities";
 import type { ModelPickerSheetProps } from "./ModelPickerSheet";
 import { buildMobileModelSections } from "./providerModelSections";
@@ -148,7 +149,7 @@ export interface UnifiedMobilePickerViewProps {
     price: string | null;
   };
 }
-const ALL_AGENTS: readonly AgentKind[] = ["claude-code", "codex", "pi"];
+const ALL_AGENTS: readonly AgentKind[] = ["claude-code", "codex", "pi", "cursor"];
 export function UnifiedModelPickerSheet(
   p: ModelPickerSheetProps & { unified: UnifiedMobilePickerOptions },
 ) {
@@ -517,7 +518,7 @@ export function UnifiedModelPickerSheet(
   const recommended =
     all && p.existingSessionRoute
       ? filtered
-          .filter((row) => row.selected || row.config.agent === p.agentKind)
+          .filter((row) => row.entry.providerId !== 'cursor' && (row.selected || row.config.agent === p.agentKind))
           .sort((a, b) => Number(b.selected) - Number(a.selected))
       : [];
   if (recommended.length)
@@ -532,11 +533,13 @@ export function UnifiedModelPickerSheet(
         (row) =>
           row.entry.providerId === provider.id && !recommended.includes(row),
       );
-      if (group.length)
+      for (const subgroup of providerModelDisplayGroups(provider.id, group, row => row.entry.group))
         groups.push({
-          key: provider.id,
-          title: providerName(provider.id),
-          rows: group,
+          key: `${provider.id}${subgroup.group ? `:${subgroup.group}` : ''}`,
+          title: providerModelDisplayGroupTitle(providerName(provider.id), subgroup.group, {
+            models: t("models.cursorGroups.models"), other: t("models.cursorGroups.other"),
+          }),
+          rows: subgroup.items,
         });
     }
   // 其他电脑的供应商接在后面:每个供应商一段,标题带电脑名;「收藏」与本机供应商视图里不出现。
@@ -547,11 +550,13 @@ export function UnifiedModelPickerSheet(
       const group = deviceRows.filter(
         (row) => row.entry.providerId === provider.id && matches(row),
       );
-      if (group.length)
+      for (const subgroup of providerModelDisplayGroups(provider.id, group, row => row.entry.group))
         groups.push({
-          key: id,
-          title: remoteProviderLabel(catalog, provider.id),
-          rows: group,
+          key: `${id}${subgroup.group ? `:${subgroup.group}` : ''}`,
+          title: providerModelDisplayGroupTitle(remoteProviderLabel(catalog, provider.id), subgroup.group, {
+            models: t("models.cursorGroups.models"), other: t("models.cursorGroups.other"),
+          }),
+          rows: subgroup.items,
         });
     }
   const sourceRow = target

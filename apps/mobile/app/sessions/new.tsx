@@ -1362,6 +1362,7 @@ export default function NewRemoteSessionScreen() {
     const seqAtTrigger = ++runtimeActionSeqRef.current;
     void (async () => {
       const confirmed = await confirmFullAccessChange(draft.permissionMode, nextPermissionMode, {
+        agentKind: storedAgentKind,
         restoringRememberedChoice: storedPermissionMode !== undefined,
       });
       if (cancelled) return;
@@ -1414,6 +1415,7 @@ export default function NewRemoteSessionScreen() {
     let cancelled = false;
     const seqAtTrigger = runtimeActionSeqRef.current;
     void confirmFullAccessChange(draft.permissionMode, remembered, {
+      agentKind: draft.agentKind,
       restoringRememberedChoice: true,
     }).then((confirmed) => {
       if (cancelled || !confirmed || seqAtTrigger !== runtimeActionSeqRef.current) return;
@@ -1461,6 +1463,7 @@ export default function NewRemoteSessionScreen() {
       : storedPermissionMode ?? defaultPermissionModeForNewSessionAgent(nextAgentKind);
     let cancelled = false;
     void confirmFullAccessChange(draft.permissionMode, nextPermissionMode, {
+      agentKind: nextAgentKind,
       restoringRememberedChoice: storedPermissionMode !== undefined,
     }).then((confirmed) => {
       if (cancelled || userTouchedRuntimeRef.current) return;
@@ -2338,7 +2341,7 @@ export default function NewRemoteSessionScreen() {
         setAvailableAgentKinds(
           new Set(
             (Array.isArray(agents) ? agents : []).filter(
-              (a): a is NewSessionAgentKind => a === 'claude-code' || a === 'codex' || a === 'pi',
+              (a): a is NewSessionAgentKind => a === 'claude-code' || a === 'codex' || a === 'pi' || a === 'cursor',
             ),
           ),
         );
@@ -2737,6 +2740,7 @@ export default function NewRemoteSessionScreen() {
     const permission = config.agent === draft.agentKind ? draft.permissionMode
       : storedPermission ?? defaultPermissionModeForNewSessionAgent(config.agent);
     if (config.agent !== draft.agentKind && !await confirmFullAccessChange(draft.permissionMode, permission, {
+      agentKind: config.agent,
       restoringRememberedChoice: storedPermission !== undefined,
     })) return false;
     if (deviceAtStart !== selectedDeviceRef.current || sequence !== runtimeActionSeqRef.current) return false;
@@ -2811,7 +2815,7 @@ export default function NewRemoteSessionScreen() {
   // 非 plan 档写 per-agent 记忆(内存 + 落盘;对齐桌面 lastByVendor)。
   const selectPermissionMode = useCallback((mode: string) => {
     void (async () => {
-      if (!await confirmFullAccessChange(draft.permissionMode, mode)) return;
+      if (!await confirmFullAccessChange(draft.permissionMode, mode, { agentKind: draft.agentKind })) return;
       patchDraft({ permissionMode: mode });
       if (mode === 'plan') return; // 老被控端兼容档,不入记忆
       // 同步进本地 state:本次会话内切走再切回也能拿到最新记忆(落盘不回写 state)。
@@ -4207,6 +4211,7 @@ export default function NewRemoteSessionScreen() {
       storedPermissionMode ??
       defaultPermissionModeForNewSessionAgent(nextKind);
     void confirmFullAccessChange(draft.permissionMode, nextPermissionMode, {
+      agentKind: nextKind,
       restoringRememberedChoice: storedPermissionMode !== undefined,
     }).then((confirmed) => {
       // 确认期间设备已切换 → 放弃本次写入,新设备自己的 effect 会接管(Greptile P1)。
@@ -6789,6 +6794,7 @@ export default function NewRemoteSessionScreen() {
           <>
             <OrcaWorkerFormView
               agents={collabForm.agents}
+              permissionModes={collabForm.permissionModes}
               executionDevices={collabForm.executionDevices}
               executionDevicesLoading={collabForm.executionDevicesLoading}
               executionDevicesError={collabForm.executionDevicesError}

@@ -132,7 +132,7 @@ export type WorkbenchTile =
       id: string;
       title: string;
       state: WorkbenchTaskState;
-      origin: 'claude-code' | 'codex' | 'pi';
+      origin: 'claude-code' | 'codex' | 'pi' | 'cursor';
       verdict: WorkbenchShownVerdict;
       next: string | null;
       startedAtMs: null;

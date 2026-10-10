@@ -6,6 +6,7 @@ const panel = { agentKind: 'pi' as const, model: 'z-ai/glm-5.3-flash', providerI
 const metadata = (id: string) => ({ id, efforts: ['medium', 'high'], defaultEffort: 'medium', supportsFastMode: false });
 const routing = {
   availability: {
+    cursor: [],
     codex: [{ id: 'openai', name: 'OpenAI', models: [caller.model] }],
     pi: [{ id: 'xd', name: 'Cindy AI', models: [panel.model] }],
     'claude-code': [{ id: 'xd', name: 'Cindy AI', models: [panel.model] }, { id: 'glm', name: 'GLM', models: ['glm-5.3'] }],

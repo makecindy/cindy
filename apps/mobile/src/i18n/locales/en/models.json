@@ -103,5 +103,9 @@
       "minute": "m",
       "second": "s"
     }
+  },
+  "cursorGroups": {
+    "models": "Cursor Models",
+    "other": "Other Models"
   }
 }

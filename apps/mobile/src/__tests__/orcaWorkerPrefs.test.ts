@@ -30,6 +30,7 @@ describe('Worker creation preferences', () => {
       agents: {
         codex: { model: 'codex/gpt-5.5', effort: 'high', fast: false },
         'claude-code': { model: 'claude-opus-4-7', effort: 'high', fast: false },
+        cursor: { model: 'cursor-default', effort: 'medium', fast: false },
         pi: { model: 'claude-sonnet-4-6', effort: 'high', fast: false },
       },
       workerPermissionMode: 'bypassPermissions',

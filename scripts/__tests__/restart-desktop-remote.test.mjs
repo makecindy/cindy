@@ -1025,6 +1025,15 @@ test("devEnvPrefix omits harness envs when unset (whitelist stays opt-in)", () =
 	assert.equal(devEnvPrefix({}, "darwin"), "CINDY_CUA_SMOKE='0' ");
 });
 
+test("dev watcher polling is opt-in and reaches the Terminal child", () => {
+	const env = { XDT_DESKTOP_DEV_WATCH_POLLING: "1" };
+	assert.match(devEnvPrefix(env, "darwin"), /XDT_DESKTOP_DEV_WATCH_POLLING='1'/);
+	assert.match(devEnvPrefix(env, "win32"), /XDT_DESKTOP_DEV_WATCH_POLLING=1/);
+	assert.ok(!unsetKeys(darwinStaleDevEnvUnset(env)).includes("XDT_DESKTOP_DEV_WATCH_POLLING"));
+	assert.ok(unsetKeys(darwinStaleDevEnvUnset({})).includes("XDT_DESKTOP_DEV_WATCH_POLLING"));
+	assert.equal(devEnvPrefix({ XDT_DESKTOP_DEV_WATCH_POLLING: "true" }, "darwin"), "CINDY_CUA_SMOKE='0' ");
+});
+
 test("devEnvPrefix passes the explicit isolated OAuth write escape hatch", () => {
 	assert.equal(
 		devEnvPrefix(

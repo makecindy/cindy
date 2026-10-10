@@ -13,6 +13,13 @@ beforeEach(() => {
 });
 
 describe('codex process registry', () => {
+  it('preserves Cursor process identity without classifying it as Codex', () => {
+    const dispose = registerAgentProcess(303, 'cursor', 'task-host');
+    expect(resolveAgentProcessRegistration(303)).toMatchObject({ kind: 'cursor', role: 'task-host' });
+    expect(resolveCodexProcessRole(303)).toBeNull();
+    dispose();
+    expect(resolveAgentProcessRegistration(303)).toBeNull();
+  });
   it('登记角色并在 disposer 时清理', () => {
     const dispose = registerCodexProcessRole(101, 'task-host');
     expect(resolveCodexProcessRole(101)).toBe('task-host');

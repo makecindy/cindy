@@ -103,7 +103,7 @@ describe('getRemoteNewMakerDefaults (device-link 远程草稿镜像)', () => {
     });
   });
 
-  it('草稿变更广播快照始终包含 claude-code、codex、pi 三个槽', () => {
+  it('草稿变更广播快照始终包含全部四个引擎槽', () => {
     seed({
       lastByVendor: { pi: { model: 'claude-sonnet-4-6' } },
       modelChosenByVendor: { pi: false },
@@ -112,7 +112,7 @@ describe('getRemoteNewMakerDefaults (device-link 远程草稿镜像)', () => {
     });
 
     const snapshot = getRemoteNewMakerDefaultsByVendor();
-    expect(Object.keys(snapshot)).toEqual(['claudeCode', 'codex', 'pi']);
+    expect(Object.keys(snapshot)).toEqual(['claudeCode', 'codex', 'pi', 'cursor']);
     expect(snapshot.pi).toMatchObject({
       model: 'claude-sonnet-4-6',
       modelChosenByUser: false,
@@ -214,4 +214,28 @@ it('reads remembered tuning only from the matching owner snapshot, with preset-f
   expect(getNewMakerModelTuning('B:4', 'codex', 'provider', 'target')).toEqual({});
   expect(syncNewMakerDraftCache(payload, { dataOwnerId: 'B', ownerGeneration: 4 }, 'B:4', false)).toBe(false);
   expect(getNewMakerModelTuning('B:4', 'codex', 'provider', 'target')).toEqual({});
+});
+
+
+describe('Cursor draft identity', () => {
+  it('retains a Cursor application default in the owner-fenced mirror', () => {
+    const owner = { dataOwnerId: 'cursor-owner', ownerGeneration: 1 };
+    const selectedRoute = { harness: 'cursor', model: 'native', providerId: 'cursor', effort: '', fastMode: false };
+    expect(syncNewMakerDraftCache({ ownerStamp: owner, selectedRoute, lastByVendor: {},
+      fastModeByModel: {}, effortByModel: {} }, owner, 'cursor-owner:1', false)).toBe(true);
+    expect(getSelectedNewMakerRoute('cursor-owner:1')).toEqual(selectedRoute);
+    expect(getSelectedNewMakerRoute('other-owner:1')).toBeUndefined();
+  });
+
+  it('keeps Cursor selection separate from Codex and Pi', () => {
+    seed({ lastByVendor: {
+      cursor: { model: 'cursor-native', providerId: 'cursor' },
+      codex: { model: 'codex-native', providerId: 'openai' },
+      pi: { model: 'pi-native', providerId: 'local' },
+    }, fastModeByModel: {}, effortByModel: {} });
+    expect(getRemoteNewMakerDefaults('cursor')).toMatchObject({ model: 'cursor-native', providerId: 'cursor' });
+    expect(getWorkerDefaultsFromNewMaker('cursor')).toMatchObject({ model: 'cursor-native', providerId: 'cursor' });
+    expect(getRemoteNewMakerDefaults('codex').model).toBe('codex-native');
+    expect(getRemoteNewMakerDefaults('pi').model).toBe('pi-native');
+  });
 });

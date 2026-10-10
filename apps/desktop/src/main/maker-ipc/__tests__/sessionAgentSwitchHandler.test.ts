@@ -557,7 +557,7 @@ describe('deferred switch (turn running)', () => {
     const store = new Map<
       string,
       {
-        targetAgentKind: 'claude-code' | 'codex' | 'pi';
+        targetAgentKind: 'claude-code' | 'codex' | 'pi' | 'cursor';
         model: string;
         providerId: string | null | undefined;
         effort?: string;
@@ -1304,7 +1304,10 @@ describe('远程 Agent:选模型时换 Agent 所在电脑', () => {
 
   it('不带位置(旧控制端 / 内部调用)保持原位置,同引擎仍走换模型', async () => {
     const h = relocationHarness();
-    const { agentDeviceId: _omit, ...withoutLocation } = backToTaskComputer;
+    const withoutLocation: Omit<typeof backToTaskComputer, 'agentDeviceId'> & {
+      agentDeviceId?: typeof backToTaskComputer.agentDeviceId;
+    } = { ...backToTaskComputer };
+    delete withoutLocation.agentDeviceId;
     await performSessionAgentSwitch(h.deps, withoutLocation);
     expect(h.selectSameAgentModel).toHaveBeenCalledTimes(1);
     expect(h.pending.get('s1')?.targetAgentDeviceId).toBeUndefined();
@@ -1442,5 +1445,31 @@ describe('远程 Agent:选模型时换 Agent 所在电脑', () => {
       model: 'anthropic/claude-opus-5-5[1m]',
       agentDeviceId: null,
     });
+  });
+});
+
+
+describe('Cursor switch capability normalization', () => {
+  it.each(['ask', 'default', 'auto', 'bypassPermissions'] as const)('preserves supported permission %s when switching to Cursor', async permissionMode => {
+    const { deps } = makeDeps({ getSessionRow: async () => makeRow({ permissionMode }) });
+    await performSessionAgentSwitch(deps, { sessionId: 's1', targetAgentKind: 'cursor', model: 'native', providerId: 'cursor', applyNow: true });
+    expect(deps.applyAgentSwitchToDb).toHaveBeenCalledWith('s1', expect.objectContaining({ agentKind: 'cursor', permissionMode }));
+  });
+  it.each(['acceptEdits', 'plan'] as const)('tightens unsupported %s permission to Ask when switching to Cursor', async permissionMode => {
+    const { deps } = makeDeps({ getSessionRow: async () => makeRow({ permissionMode }) });
+    await performSessionAgentSwitch(deps, { sessionId: 's1', targetAgentKind: 'cursor', model: 'native', applyNow: true });
+    expect(deps.applyAgentSwitchToDb).toHaveBeenCalledWith('s1', expect.objectContaining({ permissionMode: 'ask' }));
+  });
+  it('defaults missing permission to Ask and disables unspecified Fast', async () => {
+    const { deps } = makeDeps();
+    await performSessionAgentSwitch(deps, { sessionId: 's1', targetAgentKind: 'cursor', model: 'native', providerId: 'cursor', applyNow: true });
+    expect(deps.applyAgentSwitchToDb).toHaveBeenCalledWith('s1', expect.objectContaining({
+      agentKind: 'cursor', model: 'native', permissionMode: 'ask', fastMode: false,
+    }));
+  });
+  it('retains explicit native tuning when switching to Cursor', async () => {
+    const { deps } = makeDeps();
+    await performSessionAgentSwitch(deps, { sessionId: 's1', targetAgentKind: 'cursor', model: 'native', effort: 'high', fastMode: true, applyNow: true });
+    expect(deps.applyAgentSwitchToDb).toHaveBeenCalledWith('s1', expect.objectContaining({ agentKind: 'cursor', effort: 'high', fastMode: true, permissionMode: 'ask' }));
   });
 });

@@ -84,6 +84,37 @@ it('search spans all sources and clearing preserves the selected filter',async()
   await act(async()=>test.view.onQuery(''));expect(test.view.groups).toHaveLength(0);expect(test.view.filter).toBe('favorites');
 });
 
+it.each([null, 'other-mac'])('keeps Cursor pools and native configuration on computer %s', async deviceId => {
+  test.entries = [
+    { modelId: 'default', displayName: 'Auto', group: 'cursor:auto', efforts: [], defaultEffort: null, fast: false },
+    { modelId: 'grok-4.7', displayName: 'Grok 4.7', group: 'cursor:models', efforts: ['low', 'high'], defaultEffort: 'high', fast: true },
+    { modelId: 'gpt-5.6-sol', displayName: 'GPT-5.6 Sol', group: 'cursor:other', efforts: ['low', 'medium'], defaultEffort: 'medium', fast: false },
+  ].map(({ efforts, defaultEffort, fast, ...entry }) => ({
+    ...entry, providerId: 'cursor', candidates: ['cursor'], recommended: 'cursor', nativeAgent: 'cursor',
+    capabilities: { cursor: { wireModelId: entry.modelId, efforts, defaultEffort, supportsFastMode: fast } },
+  }));
+  const provider = { id: 'cursor', name: 'Cursor', models: {}, connected: true };
+  const onSelect = vi.fn(async () => true);
+  await mount(onSelect, {
+    providers: deviceId ? [] : [provider], agentKind: 'cursor', activeModelId: 'grok-4.7', selectedProviderId: 'cursor',
+    unified: { scope: 'user-device', agents: ['cursor'], loadCapabilities: async () => ({}),
+      onSelect,
+      ...(deviceId ? { remote: { catalogs: [{ deviceId, name: 'Other Mac', status: 'ready', providers: [provider] }], selectedDeviceId: null } } : {}),
+    },
+  });
+  expect(test.view.groups.map((g: any) => g.title)).toEqual([
+    deviceId ? 'models.unified.remoteProvider' : 'Cursor',
+    `${deviceId ? 'models.unified.remoteProvider · ' : ''}models.cursorGroups.models`,
+    `${deviceId ? 'models.unified.remoteProvider · ' : ''}models.cursorGroups.other`,
+  ]);
+  const row = test.view.groups[2].rows[0];
+  expect(row.entry.modelId).toBe('gpt-5.6-sol');
+  expect(row.config).toMatchObject({ providerId: 'cursor', modelId: 'gpt-5.6-sol', agent: 'cursor', effort: 'medium', fast: false });
+  await act(async () => test.view.onSelect(row));
+  // The same native model is routed to the chosen execution computer, never to a GPT provider.
+  expect(onSelect).toHaveBeenCalledWith(row.config, { deviceId });
+});
+
 it('preserves remote provider branding in model rows and source choices',async()=>{
   await mount(undefined,{providers:[{id:'account',name:'OpenAI · account',models:{},connected:true,logoKind:'openai'}]});
   expect(test.view.groups[0].rows[0].providerMark).toMatchObject({providerId:'account',name:'OpenAI · account',logoKind:'openai'});

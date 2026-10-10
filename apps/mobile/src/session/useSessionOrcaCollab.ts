@@ -73,8 +73,19 @@ import { useOrcaWorkerDirectoryPicker } from './useOrcaWorkerDirectoryPicker';
 
 export type CollabSheetView = 'collab' | 'collab-create';
 
-const ALL_AGENTS: readonly OrcaWorkerAgentKind[] = ['claude-code', 'codex', 'pi'];
+const ALL_AGENTS: readonly OrcaWorkerAgentKind[] = ['claude-code', 'codex', 'pi', 'cursor'];
+// Cursor is optional and must be confirmed by the execution host before display.
+const LEGACY_AGENT_FALLBACK: readonly OrcaWorkerAgentKind[] = ['claude-code', 'codex', 'pi'];
+
+/** Cursor Worker 只在本机工作区。运行设备、远程供应商，或 Lead 的 Agent 在别的电脑时都不提供。 */
+function isCursorWorkerLocal(
+  form: Pick<OrcaWorkerFormValue, 'executionDeviceId' | 'agentDeviceId'>,
+  leadAgentDeviceId: string | null,
+): boolean {
+  return !form.executionDeviceId && !orcaWorkerAgentElsewhere(form) && !leadAgentDeviceId;
+}
 const EMPTY_MODEL_OPTIONS: readonly MobileModelOption[] = [];
+const CURSOR_WORKER_PERMISSION_MODES: readonly OrcaWorkerPermissionMode[] = ['ask', 'auto', 'bypassPermissions'];
 
 // ─── 团队状态 ────────────────────────────────────────────────────────────────
 
@@ -322,9 +333,10 @@ export function useOrcaWorkerForm(params: {
   const [executionDevicesLoading, setExecutionDevicesLoading] = useState(false);
   const [executionDevicesError, setExecutionDevicesError] = useState<string | null>(null);
   const [customRoleMode, setCustomRoleMode] = useState(false);
-  const [agents, setAgents] = useState<readonly OrcaWorkerAgentKind[]>(ALL_AGENTS);
+  const [agents, setAgents] = useState<readonly OrcaWorkerAgentKind[]>(LEGACY_AGENT_FALLBACK);
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
   const [modelsByAgent, setModelsByAgent] = useState<Partial<Record<OrcaWorkerAgentKind, readonly MobileModelOption[]>>>({});
+  const [cursorPermissionModes, setCursorPermissionModes] = useState(CURSOR_WORKER_PERMISSION_MODES);
   const makerRef = useRef(executionMaker);
   makerRef.current = executionMaker;
   const formRef = useRef(form);
@@ -406,13 +418,14 @@ export function useOrcaWorkerForm(params: {
 
   /**
    * 按被控端能力收敛模型选择;能力读不到时保留原选择(提交时由被控端裁决)。
-   * 只改模型字段,且只有最近一次请求的结果生效(期间又收敛 / 用户又改了模型则丢弃)。
+   * Cursor 权限同样按这台电脑实际支持的档位收敛；只有最近一次请求的结果生效。
    */
   const converge = useCallback((agent: OrcaWorkerAgentKind) => {
     const generation = ++convergeGenRef.current;
     const source = makerRef.current;
     source.getCapabilities(agent)
       .then((raw) => {
+        if (makerRef.current !== source) return;
         const capabilities = normalizeMobileAgentCapabilities(raw);
         // 能力按 Agent 缓存,供老被控端(没有来源目录)时模型选择器的扁平回退列表使用。
         // 只缓存当前这台电脑的结果:换电脑后迟到的上一台响应不写入。
@@ -420,9 +433,15 @@ export function useOrcaWorkerForm(params: {
           setModelsByAgent((current) => ({ ...current, [agent]: capabilities.availableModels }));
         }
         if (generation !== convergeGenRef.current || makerRef.current !== source) return;
+        const modes = agent === 'cursor' && capabilities?.permissionModes.length
+          ? CURSOR_WORKER_PERMISSION_MODES.filter(mode => capabilities.permissionModes.some(option =>
+            option.id === mode || (mode === 'ask' && option.id === 'default')))
+          : undefined;
+        if (modes) setCursorPermissionModes(modes.length ? modes : ['ask']);
         // Agent 在另一台电脑(远程供应商)时模型属于那台的目录，不按被控电脑的能力收敛。
         setForm((current) => (current.agent === agent && !orcaWorkerAgentElsewhere(current)
-          ? { ...current, model: convergeOrcaWorkerModel(current.model, capabilities) }
+          ? { ...current, model: convergeOrcaWorkerModel(current.model, capabilities),
+            ...(modes && !modes.includes(current.permissionMode) ? { permissionMode: 'ask' as const } : {}) }
           : current));
       })
       .catch(() => undefined);
@@ -435,9 +454,10 @@ export function useOrcaWorkerForm(params: {
     if (rosterMakerRef.current === executionMaker) return;
     rosterMakerRef.current = executionMaker;
     convergeGenRef.current += 1;
-    agentsRef.current = ALL_AGENTS;
-    setAgents(ALL_AGENTS);
+    agentsRef.current = LEGACY_AGENT_FALLBACK;
+    setAgents(LEGACY_AGENT_FALLBACK);
     setModelsByAgent({});
+    setCursorPermissionModes(CURSOR_WORKER_PERMISSION_MODES);
   }, [executionMaker]);
 
   // 读被控端实际注册的 Agent。复位时列表可能还是乐观的三个:结果回来后,当前 Agent 不在这台
@@ -450,7 +470,10 @@ export function useOrcaWorkerForm(params: {
     makerRef.current.listAvailableAgents()
       .then((available) => {
         if (cancelled) return;
-        const next = ALL_AGENTS.filter((agent) => available.includes(agent));
+        // The cross-device Worker protocol currently admits only Claude Code, Codex and Pi.
+        // Cursor may be installed on the selected computer, but is not a remote Worker option.
+        const next = ALL_AGENTS.filter((agent) => available.includes(agent)
+          && (agent !== 'cursor' || isCursorWorkerLocal(formRef.current, leadAgentDeviceIdRef.current)));
         if (next.length === 0) return;
         agentsRef.current = next;
         setAgents(next);
@@ -517,6 +540,7 @@ export function useOrcaWorkerForm(params: {
 
   /** 切 Agent:带出该 Agent 上次的模型 / 推理强度 / Fast(对齐桌面)。 */
   const changeAgent = useCallback((agent: OrcaWorkerAgentKind) => {
+    if (agent === 'cursor' && !isCursorWorkerLocal(formRef.current, leadAgentDeviceIdRef.current)) return;
     touchedRef.current = true;
     agentChosenRef.current = true;
     const remembered = prefsRef.current.agents[agent];
@@ -565,9 +589,9 @@ export function useOrcaWorkerForm(params: {
 
   const changePermission = useCallback(async (mode: OrcaWorkerPermissionMode) => {
     touchedRef.current = true;
-    if (!await confirmFullAccessChange(form.permissionMode, mode)) return;
+    if (!await confirmFullAccessChange(form.permissionMode, mode, { agentKind: form.agent })) return;
     setForm((current) => ({ ...current, permissionMode: mode }));
-  }, [form.permissionMode]);
+  }, [form.agent, form.permissionMode]);
 
   const openPicker = useCallback(() => {
     setSheetOpen(false);
@@ -580,6 +604,12 @@ export function useOrcaWorkerForm(params: {
     source?: { deviceId: string | null },
   ): Promise<boolean> => {
     if (!ALL_AGENTS.includes(config.agent as OrcaWorkerAgentKind)) return false;
+    const nextDevice = source !== undefined && agentLocationSelectableRef.current
+      ? source.deviceId
+      : formRef.current.agentDeviceId;
+    if (config.agent === 'cursor' && (
+      formRef.current.executionDeviceId || typeof nextDevice === 'string' || leadAgentDeviceIdRef.current
+    )) return false;
     touchedRef.current = true;
     agentChosenRef.current = true;
     convergeGenRef.current += 1;
@@ -637,6 +667,7 @@ export function useOrcaWorkerForm(params: {
     changeAgent,
     changePermission,
     agents,
+    permissionModes: form.agent === 'cursor' ? cursorPermissionModes : ['auto', 'bypassPermissions'] as readonly OrcaWorkerPermissionMode[],
     pickerAgents,
     valid: canSubmitOrcaWorkerForm(form, customRoleMode)
       && (!form.executionDeviceId || executionDevices.some((device) => device.deviceId === form.executionDeviceId && device.supported)),

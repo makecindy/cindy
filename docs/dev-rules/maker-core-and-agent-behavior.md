@@ -13,7 +13,7 @@ Orca 多 Agent 协同另见 [`orca-team-architecture.md`](orca-team-architecture
 
 ## 启动失败与工作目录占用
 
-Claude Code、Codex、Pi 共用 Maker 的启动失败清理契约：只有明确未启动进程或已确认
+Claude Code、Codex、Pi、Cursor 共用 Maker 的启动失败清理契约：只有明确未启动进程或已确认
 进程退出时，adapter 才返回 `AgentStartupStoppedError`；Maker 释放本次启动的目录租约，
 并向调用方还原原始错误。准备环境失败也必须进入该契约，不能把尚未启动的任务永久
 记为可能仍占用目录。鉴权失败保留原 `AgentNotAuthenticatedError` 类型。
@@ -24,8 +24,12 @@ transport；关闭未确认时复用原有隔离清理记录和 `AgentStartupCle
 保留运行期文件与目录保护，重试确认退出后才释放。旧隔离进程的清理失败不能被新一轮
 “尚未启动”的状态覆盖。此恢复只影响失败任务，不重置设备连接或其他任务，不自动重放消息。
 
+Cursor 的 ACP 关闭未确认时，adapter 保留可重试清理记录，`whenStopped` 只在后续
+确认退出后完成；重试启动和 dispose 都必须继续清理旧进程。模型发现目录由 adapter
+持有，并在原生进程退出后删除，宿主不能在 finally 中提前回收仍被占用的目录。
+
 回归见 `claude-code/__tests__/startup-cleanup.test.ts`、
-`pi/__tests__/pi-startsession-cleanup.test.ts` 与 `maker.test.ts`。
+`pi/__tests__/pi-startsession-cleanup.test.ts`、`cursor/index.test.ts` 与 `maker.test.ts`。
 
 ## 工具循环与无响应的分工
 

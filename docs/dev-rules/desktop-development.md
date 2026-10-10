@@ -166,6 +166,20 @@ localStorage 按 **origin + userData 目录** 分家——dev 的 renderer 从
 - 只修改 renderer 时优先使用现有实例的热更新，不重复重启。
 - 不确定运行实例来自哪个 checkout 时，先运行 `pnpm desktop:whoami -- --all` 核对。
 
+### 文件元数据事件导致开发窗口反复白屏
+
+若 macOS 上的源码文件仅 `ctime` 变化、`mtime` 和内容未变，FSEvents 仍可能让 Vite
+连续热更新或整页重载。确认这一现象后，可对当前开发实例启用轮询监听：
+
+```bash
+XDT_DESKTOP_DEV_WATCH_POLLING=1 pnpm restart:desktop:remote --region=global
+```
+
+启动器会把开关传到 macOS Terminal 中的 Forge 进程；主进程和主窗口监听器明确关闭
+FSEvents，以 1 秒间隔轮询。此模式仅在显式传入 `1` 时启用，冷启动就绪等待延长至
+240 秒；Windows 和未设置开关的开发实例维持原配置。单独设置
+`CHOKIDAR_USEPOLLING=1` 不够：Chokidar 会先按 macOS 默认值选中 FSEvents。
+
 ## 分层验证
 
 工作目录误报缺失或切到备用目录时，参见[工作目录异常日志判读](../working-directory-diagnostics.md)，

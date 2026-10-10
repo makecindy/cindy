@@ -17,6 +17,12 @@ function confirmingAlert() {
 }
 
 describe("getFullAccessConfirmationCopy", () => {
+  it.each(['en', 'zh-CN', 'zh-TW', 'ja', 'ko'])('describes native Cursor approval boundaries in %s', locale => {
+    const copy = getFullAccessConfirmationCopy(locale, 'cursor');
+    expect(copy.description).toContain('Cursor');
+    expect(copy.description).not.toBe(getFullAccessConfirmationCopy(locale).description);
+    expect(copy.confirm).toBe(getFullAccessConfirmationCopy(locale).confirm);
+  });
   it("selects the supported system language and falls back to English", () => {
     expect(getFullAccessConfirmationCopy("ja").confirm).toBe(
       "フルアクセスを有効にする",
@@ -37,6 +43,12 @@ describe("getFullAccessConfirmationCopy", () => {
 });
 
 describe("confirmFullAccessChange", () => {
+  it('keeps explicit Full access confirmation and uses the selected Cursor scope', async () => {
+    const showAlert = confirmingAlert();
+    await expect(confirmFullAccessChange('auto', 'bypassPermissions', { agentKind: 'cursor', showAlert })).resolves.toBe(true);
+    expect(showAlert).toHaveBeenCalledOnce();
+    expect(showAlert.mock.calls[0][1]).toBe(getFullAccessConfirmationCopy(undefined, 'cursor').description);
+  });
   it("does not show an alert when the change does not enter Full access", async () => {
     const showAlert = vi.fn();
 

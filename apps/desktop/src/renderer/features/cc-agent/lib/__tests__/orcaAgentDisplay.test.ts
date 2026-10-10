@@ -14,6 +14,7 @@ describe('orcaAgentDisplay pi support', () => {
   it('normalizes pi to pi (not claude-code)', () => {
     expect(normalizeOrcaDisplayAgentKind('pi')).toBe('pi');
     expect(normalizeOrcaDisplayAgentKind('codex')).toBe('codex');
+    expect(normalizeOrcaDisplayAgentKind('cursor')).toBe('cursor');
     expect(normalizeOrcaDisplayAgentKind('cc')).toBe('claude-code');
     expect(normalizeOrcaDisplayAgentKind('claude-code')).toBe('claude-code');
     expect(normalizeOrcaDisplayAgentKind('unknown')).toBe('claude-code');
@@ -24,6 +25,8 @@ describe('orcaAgentDisplay pi support', () => {
     expect(orcaVendorForAgentKind('pi')).toBe('pi');
     expect(orcaAgentLabel('codex')).toBe('Codex');
     expect(orcaVendorForAgentKind('codex')).toBe('codex');
+    expect(orcaAgentLabel('cursor')).toBe('Cursor');
+    expect(orcaVendorForAgentKind('cursor')).toBe('cursor');
     expect(orcaAgentLabel('claude-code')).toBe('Claude');
     expect(orcaVendorForAgentKind('claude-code')).toBe('cc');
   });

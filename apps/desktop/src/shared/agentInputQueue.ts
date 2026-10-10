@@ -160,7 +160,7 @@ export interface AgentInputChatMessage {
 }
 
 export interface AgentInputCreateOpts {
-  agentKind: 'claude-code' | 'codex' | 'pi';
+  agentKind: 'claude-code' | 'codex' | 'pi' | 'cursor';
   workingDir: string;
   model: string;
   providerId?: string | null;
@@ -1036,9 +1036,8 @@ const REF_CONTINUATION_CHARS = new Set([
  * 「ASCII 路径 + 紧跟一个汉字/假名」这个形状判成边界是安全的(PR #510 review P1)。
  */
 function isScriptChangeBoundary(ref: string, next: string): boolean {
-  // eslint-disable-next-line no-control-regex
-  if (!/^[\x00-\x7F]*$/.test(ref)) return false;
-  return /[^\x00-\x7F]/.test(next) && /\p{L}/u.test(next);
+  if (!/^\p{ASCII}*$/u.test(ref)) return false;
+  return /\P{ASCII}/u.test(next) && /\p{L}/u.test(next);
 }
 
 function isRefBoundary(ch: string): boolean {

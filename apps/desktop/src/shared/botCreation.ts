@@ -5,7 +5,7 @@ export interface BotCreationRequest {
   name?: string;
   description?: string;
   modelRoute: {
-    agentKind: 'claude-code' | 'codex' | 'pi';
+    agentKind: 'claude-code' | 'codex' | 'pi' | 'cursor';
     providerId: string | null;
     model: string;
   };

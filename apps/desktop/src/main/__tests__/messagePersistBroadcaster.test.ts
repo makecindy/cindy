@@ -1408,12 +1408,12 @@ describe('agent_kind enqueue snapshot', () => {
     expect(result).toEqual({ committed: true });
   });
 
-  it('writeChain 延迟期间切换引擎,消息仍使用事件入队时的 agent_kind', async () => {
+  it.each(['cc', 'cursor'] as const)('writeChain 延迟期间切换引擎,消息仍使用事件入队时的 %s', async (agentKind) => {
     let release!: () => void;
     const gate = new Promise<void>((resolve) => { release = resolve; });
     const blocker = enqueueDurableWrite('agent-kind-test-blocker', () => gate);
 
-    noteSessionAgentKind(SESSION, 'cc');
+    noteSessionAgentKind(SESSION, agentKind);
     onToolUseEvent(
       SESSION,
       { toolUseId: 'before-switch', toolName: 'Read', input: { file_path: '/tmp/a' } },
@@ -1426,7 +1426,7 @@ describe('agent_kind enqueue snapshot', () => {
 
     expect(createMessage).toHaveBeenCalledWith(
       SESSION,
-      expect.objectContaining({ role: 'tool_use', agentKind: 'cc' }),
+      expect.objectContaining({ role: 'tool_use', agentKind }),
       broadcastGuard(),
     );
   });
@@ -4077,7 +4077,12 @@ it('retains explicit commentary/final phases in durable assistant metadata for n
 });
 
 it('persists bound results with the final seal, and a failed result lookup cannot suppress the reply', async () => {
-  const results = [{ delegationId: 'job' }] as any;
+  const results: Awaited<ReturnType<typeof readTaskResultsForReply>> = [{
+    v: 1, role: 'delegation-result', delegationId: 'job', fromBotId: 'owner-bot',
+    fromBotName: 'Owner', toBotId: null, toBotName: '', parentSessionId: SESSION,
+    childSessionId: 'child', objective: 'Test result',
+    result: { runSequence: 1, status: 'completed', text: 'done', artifacts: [] },
+  }];
   vi.mocked(readTaskResultsForReply).mockResolvedValueOnce(results);
   await markAssistantTurnCompleted(SESSION, 'summary', undefined, ['bot-delegation-completion:job']);
   expect(patchMessageAgentMetaWithResult).toHaveBeenCalledWith(SESSION, 'summary', { turnCompleted: true, botTaskResults: results });

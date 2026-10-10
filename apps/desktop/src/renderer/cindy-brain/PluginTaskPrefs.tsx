@@ -23,7 +23,7 @@ const PERMISSION_ALLOWED = new Set(['ask', 'acceptEdits', 'auto']);
 const TASK_EFFORTS = new Set(['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']);
 
 interface TaskConfig {
-  agentKind?: 'cc' | 'codex' | 'pi';
+  agentKind?: 'cc' | 'codex' | 'pi' | 'cursor';
   model?: string;
   effort?: string;
   fastMode?: boolean;
@@ -74,9 +74,9 @@ export function PluginTaskPrefs({
     [config, ghostId, t],
   );
 
-  const followVendor: 'cc' | 'codex' | 'pi' =
-    draft.vendor === 'pi' ? 'pi' : draft.vendor === 'codex' ? 'codex' : 'cc';
-  const vendor: 'cc' | 'codex' | 'pi' = config.agentKind ?? followVendor;
+  const followVendor: 'cc' | 'codex' | 'pi' | 'cursor' =
+    draft.vendor === 'cursor' ? 'cursor' : draft.vendor === 'pi' ? 'pi' : draft.vendor === 'codex' ? 'codex' : 'cc';
+  const vendor: 'cc' | 'codex' | 'pi' | 'cursor' = config.agentKind ?? followVendor;
   const pickerAgents = useModelPickerAgents(vendor === 'cc' ? 'claude-code' : vendor);
 
   const customized = [config.agentKind, config.model, config.providerId, config.effort, config.fastMode]

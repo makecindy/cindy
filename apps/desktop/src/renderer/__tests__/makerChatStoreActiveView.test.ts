@@ -265,6 +265,19 @@ describe('makerChatStore active view tracking', () => {
     disposeAgain();
   });
 
+  it('rehydrates a Cursor task with its own reducer and native session identity', async () => {
+    const sessionId = sid('cursor-history');
+    vi.mocked(sessionService.get).mockResolvedValueOnce({
+      agentKind: 'cursor', remoteHostId: null, sdkSessionId: 'cursor-native-session',
+      fastMode: false, contextTokens: 0, contextWindow: 0, totalCostUsd: 0,
+    } as Awaited<ReturnType<typeof sessionService.get>>);
+    makerChatStore.ensureInitialMessages(sessionId);
+    await flushPromises();
+    expect(makerChatStore.getSnapshot(sessionId)).toMatchObject({
+      agentKind: 'cursor', sdkSessionId: 'cursor-native-session',
+    });
+  });
+
   it('leaveView removes a session and records lastViewedAt', () => {
     const sessionId = sid('leave');
     const dispose = enter(sessionId);

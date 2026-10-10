@@ -20,6 +20,26 @@ const compiled = ts.transpileModule(`(${validator})`, {
 }).outputText;
 
 describe('queued IPC host policy boundary', () => {
+  it.each([false, true])('accepts Cursor input with device-link=%s and rejects unknown engines', (remote) => {
+    const validate = runInNewContext(compiled, {
+      isDeviceLinkInvoke: () => remote,
+      requireSessionRefs: () => undefined,
+      requireTrustedReferenceContexts: () => undefined,
+      throwIpcError: (_code: string, message: string) => { throw new Error(message); },
+    });
+    const input = {
+      clientId: 'cursor-first-turn', text: 'Hello', persistedContent: 'Hello',
+      chatMessage: { clientId: 'cursor-first-turn', role: 'user', content: 'Hello' },
+      createOpts: { agentKind: 'cursor', model: 'cursor-default' },
+      toolsDisabled: true,
+    };
+    const result = validate(input);
+    expect(result.createOpts).toEqual(input.createOpts);
+    expect(result.text).toBe(input.text);
+    expect(result).not.toHaveProperty('toolsDisabled');
+    expect(() => validate({ ...input, createOpts: { agentKind: 'unknown' } })).toThrow('agentKind invalid');
+  });
+
   it.each([false, true])('strips caller tool policy with device-link=%s', (remote) => {
     const validate = runInNewContext(compiled, {
       isDeviceLinkInvoke: () => remote,

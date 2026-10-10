@@ -137,3 +137,16 @@ it('does not move the Agent when the controller may not change its location', as
   expect(await h.render()({ ...config, agent: 'codex' })).toBe(true);
   expect(h.setComposerModel).toHaveBeenCalled();
 });
+
+it('changes the exact Cursor model even when an older controller uses the current-engine picker', async () => {
+  const h = harness(true, true, { agentKind: 'cursor', model: 'cursor-default', providerId: 'cursor', effort: '' }, {
+    sessionAgentKind: 'cursor', sessionAgentSwitchSupported: false,
+  });
+  const nativeModel = 'native[context=272k,reasoning=medium,fast=false]';
+  expect(await h.render()({ agent: 'cursor', providerId: 'cursor', modelId: nativeModel, effort: '', fast: false }))
+    .toBe(true);
+  expect(h.setComposerModel).toHaveBeenCalledWith(expect.objectContaining({ model: nativeModel, providerId: 'cursor' }));
+  expect(h.writeSessionAgentSwitchIntent).not.toHaveBeenCalled();
+  expect(h.confirmMobileSessionAgentSwitch).not.toHaveBeenCalled();
+  expect(h.state.agent).toBe('cursor');
+});

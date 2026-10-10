@@ -1955,17 +1955,20 @@ describe('OrcaTeamService', () => {
     ]);
   });
 
-  it.each(['done', 'error'] as const)(
-    'updates worker %s status, broadcasts, and auto-bridges pending output',
-    async (status) => {
+  it.each((['codex', 'pi', 'cursor'] as const).flatMap(agentKind =>
+    (['done', 'error'] as const).map(status => ({ agentKind, status }))))(
+    'preserves $agentKind worker identity and auto-bridges $status output',
+    async ({ agentKind, status }) => {
       const leadMessages: string[] = [];
-      const { calls, getWorker, service } = createDeps({
+      const { calls, getWorker, setWorker, service } = createDeps({
         sendAutoBridgeToLead: vi.fn(async (_leadSessionId, message) => {
           leadMessages.push(message);
           return { accepted: true };
         }),
       });
 
+      const worker = createWorker();
+      setWorker({ ...worker, session: { ...worker.session, agentKind } });
       await service.sendToWorker({
         callerLeadSessionId: 'lead-1',
         targetSessionId: 'worker-session-1',
@@ -1978,6 +1981,7 @@ describe('OrcaTeamService', () => {
       });
 
       expect(getWorker().status).toBe(status);
+      expect(getWorker().session.agentKind).toBe(agentKind);
       expect(calls).toEqual([
         'dispatchWorkerMessage:worker-1',
         'updateWorkerStatus:running',

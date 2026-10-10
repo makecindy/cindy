@@ -337,7 +337,7 @@ export function messageToCamel(row: MessageRow): Message {
     content,
     toolUseId: row.toolUseId,
     agentMeta,
-    agentKind: (row.agentKind as 'cc' | 'codex' | 'pi' | null) ?? null,
+    agentKind: (row.agentKind as 'cc' | 'codex' | 'pi' | 'cursor' | null) ?? null,
     createdAt: new Date(row.createdAt).toISOString(),
   };
 }
@@ -403,7 +403,7 @@ export function sessionCreateToRow(
         : DEFAULT_DRAFT_SESSION_TITLE,
     workingDir: normalizeWorkingDirForStorage(body?.workingDir),
     workspaceKind: body?.workspaceKind ?? 'project',
-    model: body?.model ?? 'claude-sonnet-4-6',
+    model: body?.model ?? (body?.agentKind === 'cursor' ? 'cursor-default' : 'claude-sonnet-4-6'),
     effort: (body?.effort as SessionInsert['effort']) ?? 'high',
     permissionMode: (body?.permissionMode as SessionInsert['permissionMode']) ?? 'ask',
     status: 'active',
@@ -511,7 +511,7 @@ export function messageCreateToRow(
     content: unknown;
     toolUseId?: string;
     agentMeta?: AgentMeta | null;
-    agentKind?: 'cc' | 'codex' | 'pi' | null;
+    agentKind?: 'cc' | 'codex' | 'pi' | 'cursor' | null;
     createdAt?: number;
   },
   now: number,

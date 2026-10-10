@@ -52,6 +52,16 @@ function over(
 }
 
 describe('resolveHookSessionConfig', () => {
+  it('uses native permission requests for Cursor when no mode was selected', () => {
+    expect(resolveHookSessionConfig(deps(), over({ agentKind: 'cursor' })).permissionMode).toBe('ask');
+  });
+  it('preserves an explicit Cursor selection and its supported permission mode', () => {
+    const config = resolveHookSessionConfig(deps({
+      getModels: () => [{ id: 'cursor-default', efforts: [], defaultEffort: null }],
+      getPermissionModes: () => ['ask', 'default'],
+    }), over({ agentKind: 'cursor', model: 'cursor-default', permissionMode: 'ask' }));
+    expect(config).toMatchObject({ agentKind: 'cursor', model: 'cursor-default', permissionMode: 'ask' });
+  });
   it('无 override: 全部落草稿默认, 权限落 bypass', () => {
     const r = resolveHookSessionConfig(deps(), over());
     expect(r).toEqual({

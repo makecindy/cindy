@@ -13,6 +13,7 @@ import {
   DeviceLinkError,
   DEVICE_LINK_CAPABILITY_COMPACT_MESSAGE_HISTORY_V1,
   CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1,
+  CONTROLLER_CAPABILITY_CURSOR_MODEL_PICKER_V1,
   DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1,
   DL_SUBSCRIBE_CHANNEL,
   MAX_FRAME_BYTES,
@@ -84,6 +85,24 @@ beforeEach(() => {
     revokedControllers: [],
   };
   __testing.reset();
+});
+
+it('projects Cursor picker capabilities independently for old and current controllers', async () => {
+  const capabilities = {
+    supportsSessionAgentSwitch: true,
+    availableModels: [{ id: 'cursor-default' }, { id: 'native[reasoning=medium,fast=false]' }],
+    permissionModes: [{ id: 'ask' }, { id: 'default' }],
+  };
+  registry.register('maker:get-capabilities', () => capabilities);
+  subscriptions.subscribe('legacy-cursor-phone', ['sessions'], 'legacy', []);
+  subscriptions.subscribe('current-cursor-phone', ['sessions'], 'current', [CONTROLLER_CAPABILITY_CURSOR_MODEL_PICKER_V1]);
+  const [legacy, current] = await Promise.all([
+    runInvoke('legacy-cursor-phone', { channel: 'maker:get-capabilities', args: ['cursor'] }),
+    runInvoke('current-cursor-phone', { channel: 'maker:get-capabilities', args: ['cursor'] }),
+  ]);
+  expect(legacy).toEqual({ ok: true, result: { ...capabilities, supportsSessionAgentSwitch: false } });
+  expect(current).toEqual({ ok: true, result: capabilities });
+  expect(capabilities.supportsSessionAgentSwitch).toBe(true);
 });
 
 it('strips Desktop credential links from authorization history and live metadata pushes', () => {

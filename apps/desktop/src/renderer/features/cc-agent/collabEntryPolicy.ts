@@ -11,7 +11,11 @@
  * renderer 这一层只是体验层,不构成权限边界。
  */
 
+import type { MakerAgentKindWire } from '../../../shared/agentKindConversion';
+
 export interface CollabEntryTarget {
+  /** Native Cursor ACP does not support Cindy orchestration. */
+  agentKind?: MakerAgentKindWire;
   /**
    * 会话/草稿的 workspace 形态。**必须由调用方显式给出,这里不从 workingDir 反推** ——
    * dialogue 会话也有 workingDir(main 按 workspaceKind='dialogue' 自动分配
@@ -72,6 +76,7 @@ function nonEmpty(value: string | null | undefined): string | null {
  * 又要在被控端跳过项目级 —— 两个字段互相独立,不是二选一。
  */
 export function resolveCollabEntryPolicy(target: CollabEntryTarget): CollabEntryPolicyScope {
+  if (target.agentKind === 'cursor') return NOT_ELIGIBLE;
   if (target.orcaRole === 'worker' || target.orcaRemoteWorker) return NOT_ELIGIBLE;
   if (target.workspaceKind !== 'project' && target.workspaceKind !== 'dialogue') {
     return NOT_ELIGIBLE;

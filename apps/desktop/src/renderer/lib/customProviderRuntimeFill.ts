@@ -82,9 +82,7 @@ function effectiveWire(agent: RuntimeFillAgent, value: ProviderWireProtocol | un
   return value ?? defaultWire(agent);
 }
 
-function protocolSupported(_agent: RuntimeFillAgent, _wire: ProviderWireProtocol) {
-  return true;
-}
+const protocolSupported: (agent: RuntimeFillAgent, wire: ProviderWireProtocol) => boolean = () => true;
 
 /** Pi's native provider config does not consume the shared route-only request path. */
 function fieldSupported(

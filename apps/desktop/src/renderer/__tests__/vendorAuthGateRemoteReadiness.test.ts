@@ -166,6 +166,7 @@ describe('pickVoiceInputDialogCopy（语音输入缺认证文案）', () => {
     'codex-voice-unauth': { title: 'codex', description: '', confirmText: '', cancelText: '', settingsTab: 'providers' },
     'codex-binary-missing': { title: 'binary', description: '', confirmText: '', cancelText: '', settingsTab: 'providers' },
     'pi-binary-missing': { title: 'pi-binary', description: '', confirmText: '', cancelText: '', settingsTab: 'providers' },
+    'cursor-unavailable': { title: 'cursor', description: '', confirmText: '', cancelText: '', settingsTab: 'providers' },
   };
 
   it('api-key + providers 使用 XD Gateway 文案', () => {

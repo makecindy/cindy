@@ -22,7 +22,7 @@ const remoteRequest = {
   lead: { leadSessionId: 'lead-1', leadTitle: 'Lead task', workerLabel: 'tester' },
 };
 function remoteOpener() {
-  const bootstrapSession = vi.fn(async (_row: OpenedSessionRow, _assertCurrent: () => void) => undefined);
+  const bootstrapSession = vi.fn(async () => undefined);
   const broadcastSessionCreated = vi.fn();
   const open = createOrcaRemoteWorkerSessionOpener({
     openSession,
@@ -40,7 +40,7 @@ beforeEach(() => {
   setSessionOpeningModelAdmission(async request => {
     const route = resolveSessionExecutionSelection({ selection: request,
       availableAgents: ['codex'], availableModels: [{ id: 'model', efforts: [] }], hasCindyAiApiKey: false,
-      providerRouting: { availability: { 'claude-code': [], pi: [], codex: [{ id: 'connected', name: 'Connected', models: ['model'] }] },
+      providerRouting: { availability: { cursor: [], 'claude-code': [], pi: [], codex: [{ id: 'connected', name: 'Connected', models: ['model'] }] },
         resolveDefaultProviderIdForModel: () => 'connected' } });
     return { ...request, model: route.model, providerId: route.providerId, effort: route.effort ?? '' };
   });
@@ -117,7 +117,7 @@ it.each(['medium', 'low', ''] as const)('returns the execution provider admitted
       availableAgents: ['codex'], availableModels: [{ id: 'model', efforts: ['high'], defaultEffort: 'high' }],
       hasCindyAiApiKey: false,
       providerRouting: {
-        availability: { 'claude-code': [], pi: [], codex: [{ id: 'connected', name: 'Connected', models: ['model'],
+        availability: { 'claude-code': [], pi: [], cursor: [], codex: [{ id: 'connected', name: 'Connected', models: ['model'],
           effortMetaByModel: { model: { efforts: effort ? [effort] : [], defaultEffort: effort || null } } }] },
         resolveDefaultProviderIdForModel: () => 'connected',
       },
@@ -140,7 +140,7 @@ it.each([
       availableAgents: ['codex'], availableModels: [{ id: 'model', efforts: [], supportsFastMode: true }],
       hasCindyAiApiKey: false,
       providerRouting: {
-        availability: { 'claude-code': [], pi: [], codex: [{ id: 'connected', name: 'Connected', models: ['model'],
+        availability: { 'claude-code': [], pi: [], cursor: [], codex: [{ id: 'connected', name: 'Connected', models: ['model'],
           fastModels: supportsFast ? ['model'] : [] }] },
         resolveDefaultProviderIdForModel: () => 'connected',
       },
@@ -160,7 +160,7 @@ it('keeps the current unsupported explicit Fast rejection before remote persiste
       availableAgents: ['codex'], availableModels: [{ id: 'model', efforts: [], supportsFastMode: true }],
       hasCindyAiApiKey: false,
       providerRouting: {
-        availability: { 'claude-code': [], pi: [], codex: [{ id: 'connected', name: 'Connected', models: ['model'], fastModels: [] }] },
+        availability: { 'claude-code': [], pi: [], cursor: [], codex: [{ id: 'connected', name: 'Connected', models: ['model'], fastModels: [] }] },
         resolveDefaultProviderIdForModel: () => 'connected',
       },
     });

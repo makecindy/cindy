@@ -64,6 +64,8 @@ export interface ProviderListOptions extends ConnectionReadOptions {
 
 /** 内置三家供应商「是否已连接」的判定器（由 host 注入，读各自凭证存储）。 */
 export interface ProviderConnectionReaders {
+  /** Native ACP discovery is the connection authority; no HTTP routing is involved. */
+  cursor?: (opts: ConnectionReadOptions) => boolean | Promise<boolean>;
   /** XD 网关：托管 api_key 是否存在。 */
   xd: (opts: ConnectionReadOptions) => boolean | Promise<boolean>;
   /** Anthropic：内置 Claude Code CLI 是否已登录且 Cindy 获准使用。 */
@@ -146,18 +148,21 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
       snapshotOnly: opts?.snapshotOnly === true,
       waitForDiscovery: opts?.waitForDiscovery === true,
     };
-    const [xd, anthropic, openai, xai] = await Promise.all([
+    const [xd, anthropic, openai, xai, cursor] = await Promise.all([
       Promise.resolve(deps.connection.xd(readOpts)),
       Promise.resolve(deps.connection.anthropic(readOpts)),
       Promise.resolve(deps.connection.openai(readOpts)),
       Promise.resolve(deps.connection.xai(readOpts)),
+      Promise.resolve(deps.connection.cursor?.(readOpts) ?? false),
     ]);
     const catalog = opts?.getCatalog?.() ?? opts?.catalog ?? deps.getCatalog();
-    const connected: ConnectionState = { xd, anthropic, openai, xai };
+    const connected: ConnectionState = { xd, anthropic, openai, xai, cursor };
     for (const p of catalog.providers) {
       // 无鉴权供应商无需任何登录或密钥：只要目录声明有效，就可立即参与模型选择。
       // 该规则与 source 无关，覆盖远端目录下发的 built-in/self-hosted 条目。
-      if (p.auth.method === 'none') {
+      if (p.id === 'cursor') {
+        connected[p.id] = cursor;
+      } else if (p.auth.method === 'none') {
         connected[p.id] = p.agents.some((agent) => {
           const routing = p.routing[agent];
           return routing !== undefined && routing.disabled !== true;

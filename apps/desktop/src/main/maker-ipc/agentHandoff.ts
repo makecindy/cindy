@@ -24,7 +24,7 @@ import {
 import { imChannelDisplayName } from '../../shared/imMessageSource.js';
 
 /** DB 层引擎标识(sessions.agent_kind / messages.agent_kind 的值域)。 */
-export type DbAgentKind = 'cc' | 'codex' | 'pi';
+export type DbAgentKind = 'cc' | 'codex' | 'pi' | 'cursor';
 
 /** 构造交接文本所需的最小消息投影(content 已 JSON.parse,即 camel Message.content)。 */
 export interface HandoffSourceMessage {

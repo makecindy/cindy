@@ -87,7 +87,7 @@ export const createWorkerSpecSchema = z.object({
     .max(32)
     .describe('worker 角色: developer / reviewer / tester / merger 或自定义 string'),
   agent: z
-    .enum(['claude-code', 'codex', 'pi'])
+    .enum(['claude-code', 'codex', 'pi', 'cursor'])
     .describe('worker agent 类型'),
   model: z
     .string()
@@ -148,7 +148,7 @@ const DESCRIPTION = [
   '',
   '参数:',
   '- role: worker 角色 (developer / reviewer / tester / merger 或自定义 string)',
-  '- agent: worker agent 类型 (codex / claude-code / pi)',
+  '- agent: worker agent 类型 (codex / claude-code / pi / cursor)',
   '- model: 可选, worker 使用的模型 id; 不传走 host 端默认 fallback',
   '- provider_id: 可选, 模型来源 provider id。优先使用 list_available_models 对应模型返回的 provider_id；显式传入后 host 会严格校验该来源已连接且提供所选模型。',
   '- effort: 可选, reasoning/thinking 强度 (low / medium / high / xhigh / max / ultra)。Codex: 映射 OpenAI reasoning effort(max/ultra 仅部分模型如 GPT-5.6 Sol 支持); Claude Code: 映射 extended thinking token 预算(无 ultra,自动降级为 max)。显式传入时必须匹配所选 model 能力；当前 worker 模型都不把 minimal 作为可选思考档。',

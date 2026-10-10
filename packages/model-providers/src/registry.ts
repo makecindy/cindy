@@ -200,6 +200,8 @@ export function buildRegistry(
 
 /** 该供应商的指定 runtime 是否可参与选择 / 路由。 */
 function hasEnabledAgentRuntime(provider: Provider, agent: AgentKind): boolean {
+  if (agent === 'cursor') return provider.id === 'cursor' && provider.source === 'builtin'
+    && provider.agents.includes('cursor');
   const routing = provider.routing?.[agent];
   return provider.agents.includes(agent) && routing !== undefined && routing.disabled !== true;
 }
@@ -241,7 +243,19 @@ export function getModel(
   modelId: string,
   agent: AgentKind,
 ): CatalogModel | undefined {
-  return (provider.models[agent] ?? []).find((m) => m.id === modelId);
+  const models = provider.models[agent] ?? [];
+  const exact = models.find((m) => m.id === modelId);
+  if (exact) return exact;
+  // Older Cursor tasks omitted an explicit model through this private alias.
+  // Resolve its label/source only from a live native default, without inserting
+  // a second picker row or guessing the saved native session's parameter state.
+  if (provider.id === 'cursor' && provider.source === 'builtin' && agent === 'cursor' && modelId === 'cursor-default') {
+    const nativeDefault = models.find(model => model.newSessionDefault?.includes('cursor'));
+    if (nativeDefault) return { ...nativeDefault, id: modelId, contextWindow: 0,
+      efforts: [], defaultEffort: null, supportsFastMode: false, defaultEnabled: false,
+      newSessionDefault: undefined };
+  }
+  return undefined;
 }
 
 /**
@@ -268,7 +282,8 @@ export function sourcesForModel(
       (includeDisabled || !p.suspended) &&
       (!onlyConnected || p.connected) &&
       hasEnabledAgentRuntime(p, agent) &&
-      providerOffersModel(p, modelId, agent) &&
+      // Metadata lookup also recognizes the private alias in saved Cursor tasks.
+      getModel(p, modelId, agent) !== undefined &&
       (includeDisabled || getModel(p, modelId, agent)?.disabled !== true),
   );
 }

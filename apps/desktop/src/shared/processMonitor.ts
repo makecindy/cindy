@@ -23,7 +23,8 @@ export type ProcessUsageKind =
   | 'utility'
   | 'agent-claude'
   | 'agent-codex'
-  | 'agent-pi';
+  | 'agent-pi'
+  | 'agent-cursor';
 
 /** Codex 本地 app-server 的产品职责；仅传枚举，不暴露 host key / 凭据 / 命令行。 */
 export type AgentProcessRole = 'task-host' | 'control-plane-service';
@@ -72,5 +73,5 @@ export interface TerminateAgentProcessRequest {
 /** terminate 成功返回(失败一律走 IPC 错误协议 throwIpcError)。 */
 export interface TerminateAgentProcessResult {
   pid: number;
-  kind: 'claude' | 'codex' | 'pi';
+  kind: 'claude' | 'codex' | 'pi' | 'cursor';
 }

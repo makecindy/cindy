@@ -73,7 +73,7 @@ export async function createPluginDraftSession(params: {
    */
   defaults?: {
     permissionMode?: 'ask' | 'plan' | 'acceptEdits' | 'auto';
-    agentKind?: 'cc' | 'codex' | 'pi';
+    agentKind?: 'cc' | 'codex' | 'pi' | 'cursor';
     model?: string;
     effort?: string;
     fastMode?: boolean;
@@ -140,7 +140,7 @@ export async function createPluginTaskSession(params: {
   onPersistenceStarted?: () => void;
   shouldContinue?: () => boolean;
   title: string | null;
-  agentKind?: 'cc' | 'codex' | 'pi';
+  agentKind?: 'cc' | 'codex' | 'pi' | 'cursor';
   model?: string;
   effort?: string;
   fastMode?: boolean;

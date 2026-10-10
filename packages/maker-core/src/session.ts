@@ -2662,7 +2662,7 @@ export class Session {
       (
         this.lastResolvedInFlightSend &&
         resolvedGeneration === this.turnGeneration &&
-        (this.agentKind === 'codex' || this.agentKind === 'pi')
+        (this.agentKind === 'codex' || this.agentKind === 'pi' || this.agentKind === 'cursor')
       );
     this.observeTurnControl(event, resolvedGeneration);
     // fan-out 前打 turn origin(所有 listener 拿到同一份);事件对象由 translator

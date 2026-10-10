@@ -17,7 +17,7 @@ export interface SubagentsState {
   selectedProvider?: SubagentProvider | null;
 }
 
-const SUBAGENT_PROVIDERS = new Set<SubagentProvider>(['claude-code', 'codex', 'pi']);
+const SUBAGENT_PROVIDERS = new Set<SubagentProvider>(['claude-code', 'codex', 'pi', 'cursor']);
 
 function SubagentsTabPillTitle({ t }: { state: SubagentsState; t: TFunction }) {
   return <>{t('rightSidebar.tabs.kinds.subagents')}</>;

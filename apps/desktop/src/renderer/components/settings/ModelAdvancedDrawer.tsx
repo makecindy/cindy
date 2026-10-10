@@ -35,6 +35,7 @@ import { Tip } from '@/components/ui/tooltip';
 import { Switch } from '@/components/ui/switch';
 import { ClaudeMark } from '@/components/icons/ClaudeMark';
 import { CodexMark } from '@/components/icons/CodexMark';
+import { CursorMark } from '@/components/icons/CursorMark';
 import { PiMark } from '@/components/icons/PiMark';
 import { useModelContextLimit } from '@/hooks/useModelContextLimit';
 import { modelPriceDetailRows, type ModelPricePresentation } from '@/lib/modelPriceFormat';
@@ -82,6 +83,7 @@ const AGENT_LABEL: Record<AgentKind, string> = {
   'claude-code': 'Claude Code',
   codex: 'Codex',
   pi: 'Pi',
+  cursor: 'Cursor',
 };
 
 // Editing uses whole decimal K, rounded down to avoid suggesting a value above the upstream
@@ -94,6 +96,7 @@ const AGENT_MARK: Record<AgentKind, (size: number) => ReactNode> = {
   'claude-code': (size) => <ClaudeMark size={size} />,
   codex: (size) => <CodexMark size={size} />,
   pi: (size) => <PiMark size={size} />,
+  cursor: (size) => <CursorMark size={size} />,
 };
 
 /** 抽屉里的档位顺序 = 目录枚举顺序（弱到强）。ultra 只在模型真的提供时出现。 */

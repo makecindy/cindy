@@ -13,7 +13,7 @@ import { normalizeMobileAgentCapabilities } from '@/session/agentCapabilities';
  * parallel RPCs. Reuse peer recovery's serialized rerun and cancellation rules. */
 export function createDeviceCatalogRefresh(options: {
   readProviders(deviceId: string): Promise<DeviceProvidersPayload>;
-  readCapabilities(deviceId: string, agent: 'claude-code' | 'codex' | 'pi'): Promise<unknown>;
+  readCapabilities(deviceId: string, agent: 'claude-code' | 'codex' | 'pi' | 'cursor'): Promise<unknown>;
   connectionEpoch(): number;
   canRead?(deviceId: string): boolean;
 }) {
@@ -40,7 +40,7 @@ export function createDeviceCatalogRefresh(options: {
       fetchDeviceProviders(id, () => read(() => options.readProviders(id))).then(() => {
         if (!disposed && getDeviceProvidersGen(id) === providerGeneration) markDeviceFetchEpoch(id, epoch);
       }),
-      ...(['claude-code', 'codex', 'pi'] as const).map(async (agent) => {
+      ...(['claude-code', 'codex', 'pi', 'cursor'] as const).map(async (agent) => {
         const raw = await fetchAgentCapabilities(id, agent, () => read(() => options.readCapabilities(id, agent)));
         const normalized = normalizeMobileAgentCapabilities(raw);
         if (!disposed && normalized) commitAgentCapabilities(id, agent, generation, normalized);

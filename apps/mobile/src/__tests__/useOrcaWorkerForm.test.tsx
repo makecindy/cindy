@@ -88,6 +88,17 @@ it('does not let a late capability response from A overwrite a model chosen on B
   expect(latest!.modelPicker.flatModelOptions.map((option) => option.id)).toEqual(['b-model']);
 });
 
+it('does not offer Cursor as a Worker on another execution device', async () => {
+  const lead = { ...fakeMaker(), orca: { listExecutionDevices: vi.fn(async () => ({ devices: [
+    { deviceId: 'b', name: 'B', supported: true },
+  ] })) } } as unknown as MobileMakerTransport;
+  const remote = { ...fakeMaker(), listAvailableAgents: vi.fn(async () => ['cursor', 'pi']) } as unknown as MobileMakerTransport;
+  await act(async () => { root.render(<ExecutionProbe maker={lead} target={() => remote} />); await flush(); });
+  await act(async () => { latest!.patch({ executionDeviceId: 'b' }); await flush(); });
+  expect(latest!.agents).toEqual(['pi']);
+  expect(latest!.form.agent).toBe('pi');
+});
+
 function LocationProbe({ maker, lead, selectable }: { maker: MobileMakerTransport; lead: string | null; selectable: boolean }) {
   latest = useOrcaWorkerForm({
     maker, prefsScope: 'user-1', active: true, setSheetOpen: () => undefined,
@@ -140,6 +151,13 @@ it('leaves the Worker location unset when the controlled computer cannot honor i
     );
   });
   expect(latest!.form.agentDeviceId).toBeUndefined();
+});
+
+it('does not offer Cursor when the Lead Agent is on another computer', async () => {
+  const maker = { ...fakeMaker(), listAvailableAgents: vi.fn(async () => ['cursor', 'codex', 'pi']) } as unknown as MobileMakerTransport;
+  await act(async () => { root.render(<LocationProbe maker={maker} lead="agent-pc" selectable />); await flush(); });
+  expect(latest!.agents).not.toContain('cursor');
+  expect(latest!.form.agent).not.toBe('cursor');
 });
 
 it('keeps local Worker creation available on older Leads without the device-list channel', async () => {
@@ -546,6 +564,40 @@ it('restores the remembered Agent after a device switch instead of the previous 
   expect(latest!.agents).toEqual(['claude-code', 'codex', 'pi']);
   await act(async () => { releaseB(); await flush(); });
   expect(latest!.form.agent).toBe('claude-code');
+});
+
+it('offers Cursor only after the host confirms it and preserves permission on roster restoration', async () => {
+  const maker = { ...fakeMaker(), listAvailableAgents: vi.fn(async () => ['cursor']) } as unknown as MobileMakerTransport;
+  function NativeProbe() {
+    latest = useOrcaWorkerForm({ maker, prefsScope: 'user-1', active: true, setSheetOpen: () => undefined });
+    return null;
+  }
+  await act(async () => { root.render(<NativeProbe />); await flush(); });
+  expect(latest!.agents).toEqual(['cursor']);
+  expect(latest!.form.agent).toBe('cursor');
+  expect(latest!.form.permissionMode).toBe('bypassPermissions');
+});
+
+it('preserves the permission mode when confirming a Cursor model choice', async () => {
+  await act(async () => root.render(<Probe maker={fakeMaker()} />));
+  await act(async () => { await latest!.modelPicker.select({ agent: 'cursor', providerId: 'cursor', modelId: 'cursor-default', effort: '', fast: false }); });
+  expect(latest!.form.agent).toBe('cursor');
+  expect(latest!.form.permissionMode).toBe('bypassPermissions');
+});
+
+it.each(['ask', 'default'])('keeps an older Cursor host with only %s approvals usable', async mode => {
+  const maker = { ...fakeMaker(),
+    listAvailableAgents: vi.fn(async () => ['cursor']),
+    getCapabilities: vi.fn(async () => ({ permissionModes: [{ id: mode, displayName: 'Default permissions' }] })),
+  } as unknown as MobileMakerTransport;
+  function NativeProbe() {
+    latest = useOrcaWorkerForm({ maker, prefsScope: 'user-1', active: true, setSheetOpen: () => undefined });
+    return null;
+  }
+  await act(async () => { root.render(<NativeProbe />); await flush(); });
+  expect(latest!.form.agent).toBe('cursor');
+  expect(latest!.form.permissionMode).toBe('ask');
+  expect(latest!.permissionModes).toEqual(['ask']);
 });
 
 it('lets a Worker task archive itself back to the Lead', async () => {

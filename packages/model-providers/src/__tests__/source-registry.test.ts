@@ -255,6 +255,7 @@ describe("mergeWithBundled", () => {
       "xai",
       "xd",
       "gemini",
+      "cursor",
     ]);
     // 远端独有的新供应商追加在 bundled 之后。
     const withExtra: Catalog = {
@@ -270,6 +271,7 @@ describe("mergeWithBundled", () => {
       "xai",
       "xd",
       "gemini",
+      "cursor",
       "newvendor",
     ]);
   });
@@ -1310,6 +1312,7 @@ describe("loadCatalog", () => {
     expect(cat.version).toBe(BUNDLED_CATALOG.version);
     expect(cat.providers.map((p) => p.id).sort()).toEqual([
       "anthropic",
+      "cursor",
       "gemini",
       "openai",
       "xai",

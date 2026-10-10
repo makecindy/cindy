@@ -60,6 +60,7 @@ import {
   DL_VOICE_CREDENTIAL_SYNC_CHANNEL,
   DL_VOICE_DICTIONARY_LEARNING_CHANNEL,
   CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2,
+  CONTROLLER_CAPABILITY_CURSOR_MODEL_PICKER_V1,
   DL_VOICE_DICTIONARY_GET_CHANNEL,
   DL_TELEGRAM_STATUS_CHANNEL,
   DL_TELEGRAM_SET_ONLINE_CHANNEL,
@@ -155,7 +156,7 @@ const pushFailures = createPushFailureLog((summary) => log.warn('push delivery f
 function reportPushFailure(dst: string, channel: string, error: unknown): void {
   pushFailures.record(shortId(dst), channel, error instanceof DeviceLinkError ? error.code : 'UNKNOWN');
 }
-let readHistoryToolName = (_sessionId: string, _toolUseId: string): string => '';
+let readHistoryToolName: (sessionId: string, toolUseId: string) => string = () => '';
 export function setHistoryToolNameReader(read: typeof readHistoryToolName): void { readHistoryToolName = read; }
 
 
@@ -691,7 +692,16 @@ function projectInvokeResultForTunnel(
   result: unknown,
   supportsFullLogoKinds = false,
   args: readonly unknown[] = [],
+  supportsCursorModelPicker = false,
 ): unknown {
+  // Older controllers omit Cursor from their cross-engine picker. Keeping a Cursor
+  // task on its current-engine picker restores its native models without changing
+  // model ids, execution permissions, or the host's actual switching capability.
+  if (channel === 'maker:get-capabilities' && args[0] === 'cursor' && !supportsCursorModelPicker
+    && result && typeof result === 'object' && !Array.isArray(result)
+    && 'supportsSessionAgentSwitch' in result && result.supportsSessionAgentSwitch === true) {
+    return { ...result, supportsSessionAgentSwitch: false };
+  }
   // Opt-in only: legacy/desktop controllers still receive complete runtime capabilities.
   // Home only needs run state; repeating the model catalog per runtime blocks slow links.
   const options = args[0];
@@ -2502,7 +2512,7 @@ async function handleFrame(client: DeviceLinkClient, env: Envelope): Promise<voi
       if (!src || !env.id) return;
       handleLinkOpen(client, src, env.id, env.payload as LinkOpenPayload | undefined);
       return;
-    case 'link-close':
+    case 'link-close': {
       if (!src) return;
       // transport-timeout 是对端对「它作为被控端服务本机控制」的那条 link 做的
       // peer 级瞬时重置,与本机作为被控端服务对端控制的**反向**状态无关。
@@ -2530,6 +2540,7 @@ async function handleFrame(client: DeviceLinkClient, env: Envelope): Promise<voi
       if (deactivated || wasKnown) syncForwarding();
       log.info(`control link closed by ${shortId(src)}`);
       return;
+    }
     case 'invoke':
       if (!src || !env.id) return;
       await handleInvoke(client, src, env.id, env.payload as InvokePayload);
@@ -3781,7 +3792,8 @@ function mergeRemoteAgentMeta(agentMeta: unknown, patch: Record<string, unknown>
   if (!agentMeta || typeof agentMeta !== 'object' || Array.isArray(agentMeta)) {
     return { ...patch };
   }
-  const { recoveryCheckpoint: _, ...safe } = agentMeta as Record<string, unknown>;
+  const safe = { ...agentMeta as Record<string, unknown> };
+  delete safe.recoveryCheckpoint;
   return { ...sanitizeBotAuthorizationMetaForRemote(safe), ...patch };
 }
 
@@ -3798,7 +3810,8 @@ function sanitizeRemoteMessage(record: Record<string, unknown>): Record<string, 
   if (!hasPrivateMetadata && !hasCheckpointInContent) return record;
   const result: Record<string, unknown> = { ...record };
   if (hasPrivateMetadata) {
-    const { recoveryCheckpoint: _, ...safeMeta } = agentMeta as Record<string, unknown>;
+    const safeMeta = { ...agentMeta as Record<string, unknown> };
+    delete safeMeta.recoveryCheckpoint;
     result.agentMeta = sanitizeBotAuthorizationMetaForRemote(safeMeta);
   }
   if (hasCheckpointInContent) {
@@ -4611,6 +4624,7 @@ async function executeRemoteInvoke(src: string, payload: InvokePayload | undefin
         )
         || listingCapabilities.includes(CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2),
         args,
+        subscriptions.controllerSupports(src, CONTROLLER_CAPABILITY_CURSOR_MODEL_PICKER_V1),
       ));
     // 供应商组摘要与运行数只给同账号电脑(受邀者与共享任务访客另有投影，这里不加，scrubSharedProvider 再兜一层)。
     const decorated = payload.channel === 'maker:provider:list' && isSameAccountController(src) && providerGroupRemoteHandler

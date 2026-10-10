@@ -30,6 +30,8 @@ vi.mock('react-i18next', async (importOriginal) => ({
         'settings.providers.openai.title': 'OpenAI',
         'settings.providers.xd.title': 'Cindy AI',
         'newChat.modelSelector.modelListAria': '模型列表',
+        'newChat.modelSelector.cursorGroups.models': 'Cursor Models',
+        'newChat.modelSelector.cursorGroups.other': 'Other Models',
         'newChat.modelSelector.search.noResults': '无匹配模型',
         'newChat.modelSelector.search.placeholderAll': '搜索模型…',
         'newChat.modelSelector.unified.favoritesGroup': '收藏',
@@ -244,6 +246,66 @@ function rowFor(name: string): HTMLElement {
   const list = screen.getByRole('listbox');
   return within(list).getByText(name).closest('[data-unified-anchor]') as HTMLElement;
 }
+
+it('renders Cursor’s native effort slider and Fast toggle and forwards live changes', async () => {
+  const onEffortChange = vi.fn();
+  const onFastModeChange = vi.fn();
+  renderPanel({ vendorKey: 'cursor', modelId: 'grok-native', currentProviderId: 'cursor', effort: 'low',
+    fastMode: false, onEffortChange, onFastModeChange, unifiedAgents: ['cursor'],
+    providersOverride: [{ id: 'cursor', name: 'Cursor', source: 'builtin', connected: true, agents: ['cursor'],
+      auth: { method: 'none' }, routing: {}, models: { cursor: [{ id: 'grok-native', name: 'Grok Native',
+        contextWindow: 0, efforts: ['low', 'medium', 'high'], defaultEffort: 'high', supportsFastMode: true }] } }],
+  });
+  const row = rowFor('Grok Native');
+  await act(async () => { fireEvent.click(within(row).getByRole('button', { name: '自定义' })); });
+  const flyout = await screen.findByTestId('unified-model-config-flyout');
+  const slider = within(flyout).getByRole('slider');
+  await act(async () => { fireEvent.keyDown(slider, { key: 'ArrowRight' }); });
+  expect(onEffortChange).toHaveBeenCalledWith('medium', FROM_PANEL);
+  await act(async () => { fireEvent.click(within(flyout).getByRole('button', { name: 'newChat.modelSelector.unified.fastTip' })); });
+  expect(onFastModeChange).toHaveBeenCalledWith(true);
+});
+
+it('keeps Cursor pools visible in an existing task and selects third-party models through Cursor', async () => {
+  const change = vi.fn();
+  const onCrossEngineSelect = vi.fn();
+  renderPanel({ vendorKey: 'cursor', modelId: 'grok-4.7', currentProviderId: 'cursor', effort: 'high',
+    actualRoute: true, unifiedAgents: ['cursor'], onProviderChange: change,
+    sessionEngineFilter: { currentAgent: 'cursor', runtimeAgent: 'cursor', onCrossEngineSelect },
+    providersOverride: [{ id: 'cursor', name: 'Cursor', source: 'builtin', connected: true, agents: ['cursor'],
+      auth: { method: 'none' }, routing: {}, models: { cursor: [
+        { id: 'default', name: 'Auto', contextWindow: 0, group: 'cursor:auto', sortOrder: 0, efforts: [], defaultEffort: null },
+        { id: 'grok-4.7', name: 'Grok 4.7', contextWindow: 0, group: 'cursor:models', sortOrder: 1, efforts: ['low', 'high'], defaultEffort: 'high', supportsFastMode: true },
+        { id: 'gpt-5.6-sol', name: 'GPT-5.6 Sol', contextWindow: 0, group: 'cursor:other', sortOrder: 2, efforts: ['low', 'medium'], defaultEffort: 'medium' },
+      ] } }],
+  });
+  const list = screen.getByRole('listbox');
+  expect(within(list).getAllByRole('group').map(group => group.getAttribute('aria-label')))
+    .toEqual(['Cursor', 'Cursor Models', 'Other Models']);
+  expect(within(list).queryByText('Cursor Default')).toBeNull();
+  expect(within(within(list).getByRole('group', { name: 'Cursor Models' })).getByText('Grok 4.7')).toBeTruthy();
+  await act(async () => fireEvent.click(rowFor('GPT-5.6 Sol')));
+  expect(change).toHaveBeenCalledWith('cursor', 'gpt-5.6-sol', 'medium', false);
+  expect(onCrossEngineSelect).not.toHaveBeenCalled();
+});
+
+it('keeps a saved Cursor default task connected while offering Auto only once', async () => {
+  render(React.createElement(ModelSelector, {
+    vendorKey: 'cursor', modelId: 'cursor-default', currentProviderId: 'cursor', actualRoute: true,
+    effort: 'medium', onModelChange: vi.fn(), onEffortChange: vi.fn(), onProviderChange: vi.fn(),
+    unifiedAgents: ['cursor'], providersOverride: [{ id: 'cursor', name: 'Cursor', source: 'builtin',
+      connected: true, agents: ['cursor'], auth: { method: 'none' }, routing: {}, models: { cursor: [
+        { id: 'default', name: 'Auto', contextWindow: 0, efforts: [], defaultEffort: null,
+          group: 'cursor:auto', newSessionDefault: ['cursor'] },
+      ] } }],
+  }));
+  const trigger = screen.getByText('Auto').closest('button')!;
+  expect(trigger.getAttribute('aria-label')).not.toContain('source.unavailable');
+  await act(async () => fireEvent.click(trigger));
+  const list = await screen.findByRole('listbox');
+  expect(within(list).getAllByText('Auto')).toHaveLength(1);
+  expect(within(list).queryByText('Cursor Default')).toBeNull();
+});
 
 async function openRowFlyout(name: string): Promise<HTMLElement> {
   await act(async () => {
@@ -3500,7 +3562,7 @@ describe('统一面板 · 行内折扣徽标', () => {
       isFavoriteRow: false,
       justFavorited: false,
       interactionDisabled: false,
-      effortLabelOf: (_agent: 'claude-code' | 'codex' | 'pi', effort: string) => effort,
+      effortLabelOf: (_agent: 'claude-code' | 'codex' | 'pi' | 'cursor', effort: string) => effort,
       providers: [],
       onReveal: vi.fn(),
       onRevealForKeyboard: vi.fn(),

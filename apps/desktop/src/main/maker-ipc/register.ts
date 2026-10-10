@@ -1,3 +1,5 @@
+import { withCursorDiscoveredModels } from '../maker-host/cursor-model-catalog.js';
+import { refreshCursorModels } from '../maker-host/index.js';
 import { configureBotTodoDispatch, settleBotTodoForSession } from './botTodoAccess.js';
 import { createBotTodoDispatch } from './botTodoDispatch.js';
 import { assertBotTaskCoordination, classifySessionMessagePurpose, coordinationInput } from './botTaskCoordination.js';
@@ -98,7 +100,6 @@ import { projectRemoteBotDelegations } from './remoteBotDelegations.js';
 import { readCodexContextWindowInfo } from '../maker-host/codex-context-window.js';
 import { readSshCodexModelList, assertSshCodexModel, isVerifiedSshCodexResume } from '../remote-ssh/codex-model-list.js';
 import { prepareCodexCustomContextCatalog } from '../maker-host/codex-custom-context-catalog.js';
-import { inferProviderIdForModel } from '../maker-host/provider-route.js';
 import { resolveConfiguredContextWindow, resolveDesktopModelContextProviderId } from '../maker-host/model-context-settings.js';
 import { getCodexHome } from '../maker-host/auth-adapters.js';
 import { getCachedBinaryStatus } from '../agent-binaries/index.js';
@@ -135,7 +136,6 @@ import type {
 } from '@cindy/maker-core';
 import {
   effectiveSourceIdForModel,
-  isModelSelectableForNewRoute,
   buildUserProvider,
   mergeDiscoveredRuntimeModels,
   findCatalogModel,
@@ -177,7 +177,7 @@ import { initializePluginOauthCards } from '../plugin-oauth/cards.js';
 import { currentOauthIdentityScope, loadOauthSigningKey } from '../plugin-oauth/desktopIdentity.js';
 import { readDeviceLinkSettings, readLastKnownDeviceNames } from '../device-link/settings-store.js';
 import { getDeviceLinkStatus, getMobileNotifyGeneration, sendMobileBotGroupNotify } from '../device-link/index.js';
-import type { AgentMeta, Session as RendererSession } from '../../renderer/lib/ccAgent.types';
+import type { AgentMeta } from '../../renderer/lib/ccAgent.types';
 import {
   deriveAutoTitleSeed,
   isAutomaticInputOriginKind,
@@ -226,9 +226,6 @@ import {
 import { initGhostSetupCoordinator } from '../cindy-brain/ghostSetupCoordinator.js';
 import { classifyGhostVisibility } from '../cindy-brain/ghostVisibility.js';
 import { resolveSafe as resolveCindyMediaUrl } from '../cindy-media/blobStore.js';
-import { ingestMedia } from '../cindy-media/ingest.js';
-import { removeRefs as removeMediaRefs } from '../cindy-media/ledger.js';
-import { sniffMediaMime } from '../cindy-media/sniffMediaMime.js';
 import { toolNotFoundMessage } from '../cindy-brain/pipeDispatcher.js';
 import { getGhostSetupChangeBus } from '../cindy-brain/ghostSetupChangeBus.js';
 import { isGhostDisabledForWorkdir } from '../cindy-brain/ghostWorkdirPrefs.js';
@@ -476,7 +473,7 @@ import {
   orcaWorkerCreationReservations,
   sessions,
 } from '../localDb/schema.js';
-import { nextBotModelRoute, normalizeBotModelChain } from '../../shared/botModelChain.js';
+import { nextBotModelRoute } from '../../shared/botModelChain.js';
 import { createBotModelRouteReconciler } from './botModelRouteReconciler.js';
 import { readEffectiveBotModelChain, readEffectiveBotModelSelection } from '../maker-host/bot-model-chain-settings-store.js';
 import {
@@ -951,17 +948,12 @@ import { UI_ACTION_TRIGGER_PREFIX } from '@cindy/maker-shared/synthetic-trigger'
 import {
   createContextOverflowRollover,
   hasModelWindowContextToProtect,
-  isContextOverflowErrorData,
-  isOversizedHistoryErrorData,
   isPiPromptRpcTimeoutError,
   lookupVerifiedContextWindow,
   persistedUserContentToWireMessage,
   type ModelWindowSwitchPreparationResult,
 } from './contextOverflowRollover.js';
-import {
-  classifyCodexHistoryOversized,
-  reserveCodexForkCleanup,
-} from '../maker-host/codex-local-sessions.js';
+import { classifyCodexHistoryOversized } from '../maker-host/codex-local-sessions.js';
 import { readCodexThreadStorageReadOnly } from '../maker-host/codex-thread-storage.js';
 import { hydrateQueuedAgentReferences } from './agentInputReferences.js';
 import { agentHandoffPending } from './agentHandoffPendingSingleton.js';
@@ -2691,7 +2683,7 @@ export function stopOrcaIdleWatcher(): void {
 }
 
 function requireAgentKind(value: unknown): AgentKind {
-  if (value === 'claude-code' || value === 'codex' || value === 'pi') return value;
+  if (value === 'claude-code' || value === 'codex' || value === 'pi' || value === 'cursor') return value;
   throwIpcError('INVALID_PARAMS', 'agentKind required');
 }
 
@@ -6108,7 +6100,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
   );
 
-  ipcMain.handle(MAKER_INVOKE.GET_CAPABILITIES, (_e, agentKind: unknown) => {
+  ipcMain.handle(MAKER_INVOKE.GET_CAPABILITIES, async (_e, agentKind: unknown) => {
+    if (agentKind === 'cursor') await refreshCursorModels();
     return {
       ...maker.getCapabilities(requireAgentKind(agentKind)),
       // host 级 optional 能力；旧 desktop 缺省为 false。两个 agent 查询都带回，
@@ -6165,8 +6158,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       active?: unknown;
       markModelChoice?: unknown;
     };
-    if (p.agent !== 'claude-code' && p.agent !== 'codex' && p.agent !== 'pi') {
-      throwIpcError('INVALID_PARAMS', 'agent must be claude-code|codex|pi');
+    if (p.agent !== 'claude-code' && p.agent !== 'codex' && p.agent !== 'pi' && p.agent !== 'cursor') {
+      throwIpcError('INVALID_PARAMS', 'agent must be claude-code|codex|pi|cursor');
     }
     if (p.providerId !== undefined && typeof p.providerId !== 'string') {
       throwIpcError('INVALID_PARAMS', 'providerId must be string');
@@ -6240,8 +6233,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     if (typeof p.sessionId !== 'string' || !p.sessionId) {
       throwIpcError('INVALID_PARAMS', 'sessionId required');
     }
-    if (p.agent !== 'claude-code' && p.agent !== 'codex' && p.agent !== 'pi') {
-      throwIpcError('INVALID_PARAMS', 'agent must be claude-code|codex|pi');
+    if (p.agent !== 'claude-code' && p.agent !== 'codex' && p.agent !== 'pi' && p.agent !== 'cursor') {
+      throwIpcError('INVALID_PARAMS', 'agent must be claude-code|codex|pi|cursor');
     }
     if (typeof p.providerId !== 'string' || !p.providerId) {
       throwIpcError('INVALID_PARAMS', 'providerId required');
@@ -6280,7 +6273,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     if (
       typeof p.sessionId !== 'string' ||
       !p.sessionId ||
-      (p.agent !== 'claude-code' && p.agent !== 'codex' && p.agent !== 'pi') ||
+      (p.agent !== 'claude-code' && p.agent !== 'codex' && p.agent !== 'pi' && p.agent !== 'cursor') ||
       typeof p.providerId !== 'string' ||
       !p.providerId ||
       typeof p.model !== 'string' ||
@@ -6311,6 +6304,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     refreshProvider: (providerId) =>
       refreshBuiltinProviderModels(providerId, {
         refreshXd: options.refreshXdGatewayModels,
+        refreshCursor: () => refreshCursorModels(true),
         // Claude 订阅清单来自 Claude Code SDK:用本机 CLI 的登录读一次 supportedModels
         // (Cindy 不带订阅凭证请求 Anthropic,也不发送消息)。
         refreshAnthropic: refreshAnthropicModelsFromProbe,
@@ -6414,7 +6408,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // 动态清单重新发现:目前没有需要主动重拉的供应商(anthropic 清单来自 Claude Code
     // 会话 init 的 SDK 捕获,没有 HTTP 发现通道,也就没有失败态)。
     rediscoverModels: async () => null,
-    refreshBuiltinModels: refreshProviderModelsManually,
+    refreshBuiltinModels: (providerId) => providerId === 'cursor'
+      ? refreshCursorModels(true) : refreshProviderModelsManually(providerId),
     requestModelsAutoRefresh: requestProviderModelAutoRefresh,
     scanLocalCli: () => scanLocalCliAuth(createLocalCliScanDeps()),
     // 「模型 / 供应商停用」override 写入(main 侧持久化,handler 写后广播 PROVIDER_CHANGED)。
@@ -7747,6 +7742,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       o.effort = runtimeOverride.effort ?? undefined;
       o.fastMode = runtimeOverride.fastMode;
     }
+    // Old generic session defaults may contain high/medium even though Cursor has no effort control.
+    // Explicit new selections are rejected at the request boundary; persisted defaults are neutral.
+    if (o.agentKind === 'cursor') {
+      o.effort = undefined;
+      o.fastMode = false;
+    }
+
     assertAccess?.();
     await applyPersistedReviewMode(o);
     await applyPersistedCindyMakeMarker(o, readSessionSource);
@@ -8374,19 +8376,23 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       }
     }
 
-    await ensureRemoteHostReady(remoteHostIdToEnsure);
-    const ensureAgentKind: 'claude-code' | 'codex' | 'pi' | null =
+    const ensureAgentKind: 'claude-code' | 'codex' | 'pi' | 'cursor' | null =
       session?.agentKind === 'codex' ||
       session?.agentKind === 'claude-code' ||
-      session?.agentKind === 'pi'
+      session?.agentKind === 'pi' ||
+      session?.agentKind === 'cursor'
         ? session.agentKind
         : createOpts && typeof createOpts === 'object'
           ? (() => {
               const ak = (createOpts as { agentKind?: unknown }).agentKind;
-              return ak === 'codex' || ak === 'claude-code' || ak === 'pi' ? ak : null;
+              return ak === 'codex' || ak === 'claude-code' || ak === 'pi' || ak === 'cursor' ? ak : null;
             })()
           : null;
     if (!ensureAgentKind) return;
+    if (ensureAgentKind === 'cursor') {
+      throwIpcError('UNSUPPORTED_CAPABILITY', 'Cursor does not support SSH execution');
+    }
+    await ensureRemoteHostReady(remoteHostIdToEnsure);
 
     // claude-code 远端走 cc-mgr.mjs daemon。首次 /context 也必须像 send 一样
     // 触发 cc-manager 安装/升级, 否则 query/getContextUsage 可能因旧 bundle 不存在而失败。
@@ -8921,6 +8927,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       }
       if (source.source === 'review') {
         throwIpcError('INVALID_PARAMS', 'A review task cannot start another review');
+      }
+      if (source.agentKind === 'cursor') {
+        throwIpcError('UNSUPPORTED_CAPABILITY', 'Cursor does not support read-only review');
       }
       if (source.remoteHostId) {
         throwIpcError('UNSUPPORTED_CAPABILITY', 'Review is local-only in this version');
@@ -9530,6 +9539,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           sdkSessionId: sessions.sdkSessionId,
           source: sessions.source,
           agentDeviceId: sessions.agentDeviceId,
+          permissionMode: sessions.permissionMode,
         })
         .from(sessions)
         .where(eq(sessions.id, sessionId))
@@ -11501,7 +11511,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   // Bot group chat is local to this Desktop in phase 1; device-link does not route these channels.
   const botGroupNotReady = { ok: false as const, errorCode: 'HOST_NOT_READY' as const, message: '伙伴群聊服务尚未就绪' };
   // Narrow chat operations; credentials and transport stay in main.
-  ipcMain.handle(MAKER_INVOKE.CHAT_SERVER_STATUS, async (event, input) => {
+  ipcMain.handle(MAKER_INVOKE.CHAT_SERVER_STATUS, async (event) => {
     assertTrustedAppRendererEvent(event);
     const chat = botGroupChatServiceHolder?.chatServer;
     return chat ? chat.status() : { enabled: false, connected: false };
@@ -11546,12 +11556,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     const chat = botGroupChatServiceHolder?.chatServer;
     return chat ? chat.manage(input) : { ok: false, errorCode: 'HOST_NOT_READY' };
   });
-  ipcMain.handle(MAKER_INVOKE.CHAT_SERVER_OWNEDBOTS, async (event, input) => {
+  ipcMain.handle(MAKER_INVOKE.CHAT_SERVER_OWNEDBOTS, async (event) => {
     assertTrustedAppRendererEvent(event);
     const chat = botGroupChatServiceHolder?.chatServer;
     return chat ? chat.ownedBots() : { ok: false, errorCode: 'HOST_NOT_READY' };
   });
-  ipcMain.handle(MAKER_INVOKE.CHAT_SERVER_REFRESHPROFILE, async (event, input) => {
+  ipcMain.handle(MAKER_INVOKE.CHAT_SERVER_REFRESHPROFILE, async (event) => {
     assertTrustedAppRendererEvent(event);
     const chat = botGroupChatServiceHolder?.chatServer;
     return chat ? chat.refreshProfile() : { ok: false, errorCode: 'HOST_NOT_READY' };
@@ -11898,7 +11908,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         assertCurrent();
         const [row] = await snapshot.client.drizzle.select().from(sessions).where(eq(sessions.id, taskId)).limit(1);
         assertCurrent();
-        if (!row || row.source !== 'plugin' || row.remoteHostId || (row.orcaRole && row.orcaRole !== 'lead') || !['cc', 'codex', 'pi'].includes(row.agentKind)) return null;
+        if (!row || row.source !== 'plugin' || row.remoteHostId || (row.orcaRole && row.orcaRole !== 'lead') || !['cc', 'codex', 'pi', 'cursor'].includes(row.agentKind)) return null;
         const runtime = await readSessionRuntimeProfiles(taskId);
         assertCurrent();
         // A queued input will execute the accepted next-send route. Keep its
@@ -12746,7 +12756,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         agentDeviceId?: unknown;
       };
       const workerAgent: AgentKind =
-        body.workerAgent === 'codex' ? 'codex' : body.workerAgent === 'pi' ? 'pi' : 'claude-code';
+        body.workerAgent === 'cursor' ? 'cursor' : body.workerAgent === 'codex' ? 'codex' : body.workerAgent === 'pi' ? 'pi' : 'claude-code';
       const delegateTask = typeof body.delegateTask === 'string' ? body.delegateTask : undefined;
       if (
         body.workerPermissionMode !== undefined &&
@@ -13438,7 +13448,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   const getProviderRoutingContext = () =>
     readOrcaWorkerProviderRoutingContext({
       providerService: getDesktopProviderService(),
-      getCatalog: getActiveCatalog,
+      getCatalog: () => withCursorDiscoveredModels(getActiveCatalog()),
     });
 
   const assertPluginWorkerAutoAuthorized = (pluginId: string, task: { status: string; permissionMode?: string; planModeEnabled?: boolean }) => {
@@ -14268,8 +14278,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     }
     const chain = await readEffectiveBotModelChain(config);
     const toAgentKind = (harness: string): AgentKind =>
-      harness === 'codex' ? 'codex' : harness === 'pi' ? 'pi' : 'claude-code';
-    const currentHarness = current.agentKind === 'codex'
+      harness === 'cursor' ? 'cursor' : harness === 'codex' ? 'codex' : harness === 'pi' ? 'pi' : 'claude-code';
+    const currentHarness = current.agentKind === 'cursor' ? 'cursor' : current.agentKind === 'codex'
       ? 'codex'
       : current.agentKind === 'pi'
         ? 'pi'
@@ -15080,7 +15090,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     listAvailableModels: async ({ agent, callerSessionId, agentDeviceId: requestedAgentDeviceId }) => {
       try {
-        const agents: AgentKind[] = agent ? [agent] : ['codex', 'claude-code', 'pi'];
+        const registeredAgents: AgentKind[] = agent ? [agent] : maker.listAvailableAgents();
         // SSH Lead 的 Worker 在 SSH 主机上运行 Agent，不能放到别的电脑：不列可选位置。
         const sshLead = callerSessionId ? Boolean(await readSessionRemoteHostIdCached(callerSessionId)) : false;
         // 不指定位置时列 Lead 所在位置(Lead 的 Agent 在另一台电脑运行就列那台；Lead 归在供应商组里就列组那一项
@@ -15097,6 +15107,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             ? requestedAgentDeviceId
             : null;
         const locations = sshLead ? undefined : await listWorkerAgentLocations();
+        // Cursor 只在本机工作区。跨设备位置和 SSH Lead 不列 Cursor，避免跨设备入口提供它。
+        const agents = agentDeviceId || sshLead
+          ? registeredAgents.filter((kind) => kind !== 'cursor')
+          : registeredAgents;
         if (agentDeviceId) {
           let views: ProviderView[];
           try {
@@ -15109,7 +15123,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             agentDeviceId,
             ...(locations ? { locations } : {}),
             ...Object.fromEntries(agents.map((a) => [
-              a === 'codex' ? 'codex' : a === 'pi' ? 'pi' : 'claude_code',
+              a === 'claude-code' ? 'claude_code' : a,
               deviceAvailableModels(views, a),
             ])),
           };
@@ -15127,7 +15141,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         for (const a of agents) {
           const caps = maker.getCapabilities(a);
           // key 必须区分 pi,否则 pi 模型会被塞进 claude_code 键与 CC 模型混淆。
-          const key = a === 'codex' ? 'codex' : a === 'pi' ? 'pi' : 'claude_code';
+          const key = a === 'claude-code' ? 'claude_code' : a;
           const providers = providerRouting.availability[a] ?? [];
           result[key] = caps.availableModels.map((m) => ({
             id: m.id,
@@ -15259,7 +15273,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       return null;
     }
     if (!session || !lead || !session.workingDir) throw new Error('Delegated task unavailable');
-    const agentKind = session.agentKind === 'cc' ? 'cc' : session.agentKind === 'pi' ? 'pi' : session.agentKind === 'codex' ? 'codex' : null;
+    const agentKind = session.agentKind === 'cursor' ? 'cursor' : session.agentKind === 'cc' ? 'cc' : session.agentKind === 'pi' ? 'pi' : session.agentKind === 'codex' ? 'codex' : null;
     if (!agentKind) throw new Error('Delegated task route unavailable');
     const data = readPluginTaskPlanReceipt(receipt.payload);
     const item = link ? data.teamPlan?.items.find(item => item.label === link.label) : undefined;
@@ -17812,7 +17826,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     if (
       msg.createOpts.agentKind !== 'claude-code' &&
       msg.createOpts.agentKind !== 'codex' &&
-      msg.createOpts.agentKind !== 'pi'
+      msg.createOpts.agentKind !== 'pi' &&
+      msg.createOpts.agentKind !== 'cursor'
     ) {
       throwIpcError('INVALID_PARAMS', 'queued.createOpts.agentKind invalid');
     }
@@ -19234,7 +19249,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       ? atomicSelection.effort
       : ((runtimeStatus.effort ?? null) as SessionRuntimeProfile['effort']);
     const targetFastMode = atomicSelection?.fastMode ?? runtimeStatus.fastMode;
-    const agentKind = dbToMakerAgentKind(runtimeStatus.agentKind as 'cc' | 'codex' | 'pi');
+    const agentKind = dbToMakerAgentKind(runtimeStatus.agentKind as 'cc' | 'codex' | 'pi' | 'cursor');
     if (internalOptions.source === 'user' && !internalOptions.applyingUserSelectionOnSend &&
         !runtimeStatus.orcaRole) {
       assertRuntimeOwnerCurrent();

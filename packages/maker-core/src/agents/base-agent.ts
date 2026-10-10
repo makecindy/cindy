@@ -436,7 +436,7 @@ export interface CodexAppServerProcessRegistration {
 
 export interface LocalAgentProcessRegistration {
   pid: number;
-  kind: 'claude' | 'pi';
+  kind: 'claude' | 'pi' | 'cursor';
   role: 'task-host' | 'control-plane-service';
 }
 

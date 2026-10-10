@@ -65,7 +65,7 @@ function normalizePositiveInt(value: unknown): number {
 
 const messageRowid = sql<number>`rowid`;
 
-type DbAgentKind = 'cc' | 'codex' | 'pi';
+type DbAgentKind = 'cc' | 'codex' | 'pi' | 'cursor';
 
 interface MessagePosition {
   createdAt: number;
@@ -242,12 +242,6 @@ function parseContextRebuildBoundary(content: string): ParsedContextRebuildBound
   } catch {
     return null;
   }
-}
-
-function parseContextRebuildReason(
-  content: string,
-): 'context-overflow' | 'model-window-switch' | 'pi-prompt-timeout' | 'native-session-recovery' | null {
-  return parseContextRebuildBoundary(content)?.reason ?? null;
 }
 
 function parseAgentSwitchBoundary(content: string): ParsedAgentSwitchBoundary | null {

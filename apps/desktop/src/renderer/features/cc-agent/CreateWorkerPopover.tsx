@@ -73,7 +73,7 @@ const LOCAL_WORKER_MODEL_MEMORY = {
 
 export interface CreateWorkerForm {
   role: string;
-  agent: 'claude-code' | 'codex' | 'pi';
+  agent: 'claude-code' | 'codex' | 'pi' | 'cursor';
   model: string;
   effort?: Effort;
   fast?: boolean;
@@ -177,7 +177,7 @@ export function CreateWorkerPopover({
   const navigate = useNavigate();
   const [role, setRole] = useState('developer');
   const [customRole, setCustomRole] = useState('');
-  const [agent, setAgent] = useState<'claude-code' | 'codex' | 'pi'>('codex');
+  const [agent, setAgent] = useState<'claude-code' | 'codex' | 'pi' | 'cursor'>('codex');
   const [model, setModel] = useState(DEFAULT_WORKER_CREATION_PREFS.codex.model);
   const [effort, setEffort] = useState<Effort>(DEFAULT_WORKER_CREATION_PREFS.codex.effort);
   const [fast, setFast] = useState(DEFAULT_WORKER_CREATION_PREFS.codex.fast);
@@ -204,6 +204,8 @@ export function CreateWorkerPopover({
   // 模型、供应商与能力按 Worker 的 Agent 实际运行的电脑读取：选了远程供应商读那台(或分享)，
   // 远程控制的 Lead 读它所在的电脑，选了运行设备则读运行设备。权限档始终跟 Lead 所在电脑走。
   const deviceId = agentDeviceId ?? leadDeviceId ?? executionDeviceId ?? undefined;
+  // Cursor 只在本机工作区。SSH、运行设备、远程供应商，或 Lead 的 Agent 在别的电脑时不提供。
+  const cursorLocalWorkspace = !sshRemote && executionDeviceId === null && agentDeviceId === null && !leadAgentDeviceId;
   const executionDevice = executionDevices.find((d) => d.deviceId === executionDeviceId) ?? null;
   const trimmedRemoteDir = remoteDir.trim();
   const remoteDirInvalid =
@@ -212,6 +214,7 @@ export function CreateWorkerPopover({
   const ccCaps = useAgentCapabilities('claude-code', deviceId);
   const codexCaps = useAgentCapabilities('codex', deviceId);
   const piCaps = useAgentCapabilities('pi', deviceId);
+  const cursorCaps = useAgentCapabilities('cursor', deviceId);
   const pickerAgents = useModelPickerAgents(agent, deviceId);
   const localProviders = useProviders();
   const remoteProviders = useDeviceProviders(deviceId);
@@ -229,7 +232,7 @@ export function CreateWorkerPopover({
   const providersError = deviceId ? remoteProviders.error : null;
   const visibilityVersion = useModelVisibilityVersion();
   useAgentDeviceModelMemoryVersion();
-  const activeCapabilitiesState = agent === 'codex' ? codexCaps : agent === 'pi' ? piCaps : ccCaps;
+  const activeCapabilitiesState = agent === 'cursor' ? cursorCaps : agent === 'codex' ? codexCaps : agent === 'pi' ? piCaps : ccCaps;
   const activeCaps = activeCapabilitiesState.capabilities;
   // 协同的执行端是任务所在电脑：Worker 权限与「能否给 Worker 选 Agent 位置」按它的能力判，
   // 不跟着模型目录换到 Agent 所在电脑。这两位是整台电脑的协议位，用那台一定注册的 Claude Code
@@ -344,7 +347,7 @@ export function CreateWorkerPopover({
   // fast=true 清掉,回退默认来源支持 Fast 也不会恢复(codex review)。收窄后按
   // 「实际会生效的来源」口径判定,不经历 false 窗口。
   const currentModelSupportsFast = Boolean(
-    (agent === 'codex' || agent === 'pi') &&
+    (agent === 'codex' || agent === 'pi' || agent === 'cursor') &&
       activeCaps?.hasFastMode &&
       providerFastSupported(narrowProviderSource(providerSource, model), model),
   );
@@ -416,6 +419,16 @@ export function CreateWorkerPopover({
   useEffect(() => {
     if (open && !agentLocationChosenRef.current) setAgentDeviceId(leadAgentDeviceId ?? null);
   }, [leadAgentDeviceId, open]);
+  // 位置落到别的电脑、SSH 或运行设备后，已记住的 Cursor 不再是可选项，回到 Codex。
+  useEffect(() => {
+    if (cursorLocalWorkspace || agent !== 'cursor') return;
+    const remembered = prefs.codex;
+    setAgent('codex');
+    setModel(remembered.model);
+    setEffort(remembered.effort);
+    setFast(remembered.fast);
+    setProviderSource(leadDeviceId || agentDeviceId ? null : remembered.providerId);
+  }, [agent, agentDeviceId, cursorLocalWorkspace, leadDeviceId, prefs]);
 
   // 可选运行设备：每次打开读一次；读不到就只有这台电脑，不提示错误。
   useEffect(() => {
@@ -449,13 +462,19 @@ export function CreateWorkerPopover({
   );
 
   useEffect(() => {
+    if (agent === 'cursor' && activeCaps?.permissionModes.length) {
+      const supported = activeCaps.permissionModes.some(({ id }) => id === selectedWorkerPermissionMode
+        || (selectedWorkerPermissionMode === 'ask' && id === 'default'));
+      if (!supported) setSelectedWorkerPermissionMode('ask');
+      return;
+    }
     if (
       !supportsWorkerPermissionModeSelection
       && selectedWorkerPermissionMode !== 'auto'
     ) {
       setSelectedWorkerPermissionMode('auto');
     }
-  }, [selectedWorkerPermissionMode, supportsWorkerPermissionModeSelection]);
+  }, [activeCaps, agent, selectedWorkerPermissionMode, supportsWorkerPermissionModeSelection]);
 
   // capabilities 可能尚未加载或模型被移除；加载后把当前选择收敛到可用模型和 effort。
   useEffect(() => {
@@ -503,7 +522,7 @@ export function CreateWorkerPopover({
 
   const vendorKey = agentKindToVendor(agent);
   const updateAgent = useCallback(
-    (nextAgent: 'claude-code' | 'codex' | 'pi') => {
+    (nextAgent: 'claude-code' | 'codex' | 'pi' | 'cursor') => {
       if (nextAgent === agent) return;
       // 切走前把当前 agent 的 live 编辑(模型/effort/Fast/来源)快照进内存 prefs:
       // 恢复读的是 prefs,不快照会把「改了还没提交就切了个 tab」的编辑静默回滚到
@@ -735,8 +754,8 @@ export function CreateWorkerPopover({
       if (requiresFullAccessConfirmation(selectedWorkerPermissionMode, nextMode)) {
         const confirmed = await confirmDialog({
           title: t('newChat.chatInput.fullAccessConfirmation.title'),
-          description: t('newChat.chatInput.fullAccessConfirmation.description'),
-          content: <FullAccessConfirmContent />,
+          description: t(agent === 'cursor' ? 'newChat.chatInput.fullAccessConfirmation.cursor.description' : 'newChat.chatInput.fullAccessConfirmation.description'),
+          content: <FullAccessConfirmContent cursor={agent === 'cursor'} />,
           describeContent: true,
           maxWidth: 440,
           confirmText: t('newChat.chatInput.fullAccessConfirmation.confirm'),
@@ -747,7 +766,7 @@ export function CreateWorkerPopover({
       }
       setSelectedWorkerPermissionMode(nextMode);
     },
-    [confirmDialog, selectedWorkerPermissionMode, t],
+    [agent, confirmDialog, selectedWorkerPermissionMode, t],
   );
 
   const handleCreate = useCallback(async () => {
@@ -967,7 +986,7 @@ export function CreateWorkerPopover({
               value={vendorKey}
               width={220}
               ariaLabel={t('orca.createWorker.agentLabel')}
-              onChange={(next) => updateAgent(next === 'codex' ? 'codex' : next === 'pi' ? 'pi' : 'claude-code')}
+              onChange={(next) => updateAgent(next === 'codex' ? 'codex' : next === 'cursor' ? 'cursor' : next === 'pi' ? 'pi' : 'claude-code')}
             />
           )}
 
@@ -986,8 +1005,10 @@ export function CreateWorkerPopover({
                 <FastModeToggle enabled={fast} onToggle={() => setFast((v) => !v)} />
               )}
               <ModelSelector
-                fastModeConfigurable={['codex', 'pi']}
-                unifiedAgents={sshRemote ? (pickerAgents ?? ['claude-code', 'codex']).filter((kind) => kind !== 'pi') : pickerAgents}
+                fastModeConfigurable={['codex', 'pi', 'cursor']}
+                unifiedAgents={(sshRemote
+                  ? (pickerAgents ?? ['claude-code', 'codex']).filter((kind) => kind !== 'pi')
+                  : pickerAgents)?.filter((kind) => cursorLocalWorkspace || kind !== 'cursor')}
                 onUnifiedSelect={deviceId && remoteProviders.unsupported ? undefined : (selection) => {
                   const nextAgent = selection.engine === 'cc' ? 'claude-code' : selection.engine;
                   updateAgent(nextAgent);
@@ -1041,16 +1062,16 @@ export function CreateWorkerPopover({
                 // worker 创建链的显式 Fast 派发支持 Codex 与 Pi(resolveWorkerConfig 对二者
                 // 消费 input.fast,并按模型 supportsFastMode 收口):cc 层面为 no-op,不接线,
                 // 面板就不显示 Fast 开关,避免「开关能开、提交被丢」的名不副实(codex review)。
-                fastMode={!(agent === 'codex' || agent === 'pi') ? undefined : fast}
+                fastMode={!(agent === 'codex' || agent === 'pi' || agent === 'cursor') ? undefined : fast}
                 onFastModeChange={
-                  !(agent === 'codex' || agent === 'pi') ? undefined : updateFast
+                  !(agent === 'codex' || agent === 'pi' || agent === 'cursor') ? undefined : updateFast
                 }
               />
             </div>
             {noAvailableLocalModels ? (
               <p className="mt-1.5 text-11 leading-snug text-[var(--error-fg)]" role="status">
                 {t('orca.createWorker.noAvailableModels', {
-                  agent: agent === 'codex' ? 'Codex' : agent === 'pi' ? 'Pi' : 'Claude Code',
+                  agent: agent === 'codex' ? 'Codex' : agent === 'cursor' ? 'Cursor' : agent === 'pi' ? 'Pi' : 'Claude Code',
                 })}
               </p>
             ) : null}
@@ -1087,8 +1108,8 @@ export function CreateWorkerPopover({
               dense
               ariaContext={t('orca.createWorker.permissionLabel')}
               allowedModes={
-                supportsWorkerPermissionModeSelection
-                  ? ORCA_WORKER_PERMISSION_MODES
+                agent === 'cursor' && !supportsWorkerPermissionModeSelection ? ['ask', 'default'] : supportsWorkerPermissionModeSelection
+                  ? ORCA_WORKER_PERMISSION_MODES.filter((mode) => agent === 'cursor' || mode !== 'ask')
                   : AUTO_ONLY_WORKER_PERMISSION_MODES
               }
             />

@@ -61,15 +61,15 @@ describe('maker auth IPC handlers', () => {
     expect(getAgentAuthState).toHaveBeenCalledWith('codex');
   });
 
-  it('accepts Pi at the auth IPC boundary exposed by preload', async () => {
+  it.each(['pi', 'cursor'])('accepts %s at the auth IPC boundary exposed by preload', async (agentKind) => {
     const harness = new IpcHarness();
     const getAgentAuthState = vi.fn().mockResolvedValue({ authenticated: true });
     registerMakerAuthHandlers(harness, createMakerStub({ getAgentAuthState }), vi.fn(), () => null);
 
-    await expect(harness.invoke(MAKER_INVOKE.AUTH_GET_STATE, 'pi')).resolves.toEqual({
+    await expect(harness.invoke(MAKER_INVOKE.AUTH_GET_STATE, agentKind)).resolves.toEqual({
       authenticated: true,
     });
-    expect(getAgentAuthState).toHaveBeenCalledWith('pi');
+    expect(getAgentAuthState).toHaveBeenCalledWith(agentKind);
   });
 
   it('normalizes login progress and broadcasts final auth state', async () => {

@@ -493,3 +493,12 @@ describe('mobile Orca collaboration mutations', () => {
   });
 });
 
+
+describe('Cursor worker native settings', () => {
+  it('preserves Cursor identity, model tuning and native approval', () => {
+    const form = orcaWorkerFormFromPrefs(defaultOrcaWorkerCreationPrefs(), 'cursor');
+    expect(form.permissionMode).toBe('bypassPermissions');
+    const options = buildOrcaEnableOptions({ ...form, permissionMode: 'auto', model: { id: 'account-model', providerId: 'cursor', effort: 'medium', fast: true } });
+    expect(options).toMatchObject({ model: 'account-model', providerId: 'cursor', workerPermissionMode: 'auto', fast: true, effort: 'medium' });
+  });
+});

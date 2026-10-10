@@ -41,13 +41,13 @@ import {
   mergeSettingsPatch,
 } from './imDefaultSettingsLogic';
 
-function vendorKeyFor(agentKind: ImDefaultAgentKind): 'cc' | 'codex' | 'pi' {
+function vendorKeyFor(agentKind: ImDefaultAgentKind): 'cc' | 'codex' | 'pi' | 'cursor' {
   return agentKind === 'claude-code' ? 'cc' : agentKind;
 }
 
 /** AgentSelect 的 vendor → IM 默认配置的 agentKind。 */
 function agentKindOfVendor(vendor: string): ImDefaultAgentKind {
-  return vendor === 'cc' ? 'claude-code' : vendor === 'pi' ? 'pi' : 'codex';
+  return vendor === 'cc' ? 'claude-code' : vendor === 'cursor' ? 'cursor' : vendor === 'pi' ? 'pi' : 'codex';
 }
 
 export interface ImDefaultSettingsSummary {
@@ -80,6 +80,7 @@ export function ImDefaultSettingsSection({
   const cc = useAgentCapabilities('claude-code');
   const codex = useAgentCapabilities('codex');
   const pi = useAgentCapabilities('pi');
+  const cursor = useAgentCapabilities('cursor');
   const [settings, setSettings] = useState<ImDefaultSettingsState | null>(null);
   const [pending, setPending] = useState(false);
 
@@ -120,6 +121,7 @@ export function ImDefaultSettingsSection({
         admissionFiltered: true,
       }),
       codex: deriveModelsFromProviders(providers, 'codex', { admissionFiltered: true }),
+      cursor: deriveModelsFromProviders(providers, 'cursor', { admissionFiltered: true }),
       pi: deriveModelsFromProviders(providers, 'pi', { admissionFiltered: true }),
     };
     return {
@@ -129,11 +131,12 @@ export function ImDefaultSettingsSection({
       codex: fromProviders.codex.length
         ? fromProviders.codex
         : (codex.capabilities?.availableModels ?? []),
+      cursor: fromProviders.cursor,
       pi: fromProviders.pi.length
         ? fromProviders.pi
         : (pi.capabilities?.availableModels ?? []),
     };
-  }, [providers, cc.capabilities, codex.capabilities, pi.capabilities]);
+  }, [providers, cc.capabilities, codex.capabilities, pi.capabilities, cursor.capabilities]);
 
   const resolveProviderId = useCallback(
     (agentKind: ImDefaultAgentKind, modelId: string, providerId: string | null): string | null => {
@@ -231,7 +234,7 @@ export function ImDefaultSettingsSection({
       ? cc
       : settings.agentKind === 'codex'
         ? codex
-        : pi;
+        : settings.agentKind === 'cursor' ? cursor : pi;
   const selectedAgentCapabilitiesReady =
     !selectedAgentCaps.loading &&
     selectedAgentCaps.error === null &&

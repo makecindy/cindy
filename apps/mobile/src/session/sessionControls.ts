@@ -35,7 +35,7 @@ export function shouldFallbackToLegacyCodexUsage(error: unknown): boolean {
 
 export function buildContextUsageCreateOpts(session: RemoteSession): Record<string, unknown> {
   return {
-    agentKind: session.agentKind === 'codex' || session.agentKind === 'pi'
+    agentKind: session.agentKind === 'codex' || session.agentKind === 'pi' || session.agentKind === 'cursor'
       ? session.agentKind
       : 'claude-code',
     workingDir: session.workingDir ?? '',

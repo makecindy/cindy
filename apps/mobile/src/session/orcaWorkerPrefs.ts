@@ -19,7 +19,7 @@ import {
 } from '@cindy/maker-shared/orca-team';
 
 const STORAGE_KEY_PREFIX = 'cindy:orcaWorkerCreationPrefs:v1';
-const AGENTS: readonly OrcaWorkerAgentKind[] = ['codex', 'claude-code', 'pi'];
+const AGENTS: readonly OrcaWorkerAgentKind[] = ['codex', 'claude-code', 'pi', 'cursor'];
 
 export interface OrcaWorkerAgentPrefs {
   model: string;
@@ -39,6 +39,7 @@ export function defaultOrcaWorkerCreationPrefs(): OrcaWorkerCreationPrefs {
     agents: {
       codex: { model: DEFAULT_ORCA_WORKER_MODELS.codex, effort: DEFAULT_ORCA_WORKER_EFFORT, fast: false },
       'claude-code': { model: DEFAULT_ORCA_WORKER_MODELS['claude-code'], effort: DEFAULT_ORCA_WORKER_EFFORT, fast: false },
+      cursor: { model: DEFAULT_ORCA_WORKER_MODELS.cursor, effort: 'medium', fast: false },
       pi: { model: DEFAULT_ORCA_WORKER_MODELS.pi, effort: DEFAULT_ORCA_WORKER_EFFORT, fast: false },
     },
     workerPermissionMode: DEFAULT_ORCA_WORKER_PERMISSION_MODE,
@@ -68,7 +69,7 @@ export function sanitizeOrcaWorkerCreationPrefs(value: unknown): OrcaWorkerCreat
     lastAgent: AGENTS.includes(raw.lastAgent as OrcaWorkerAgentKind)
       ? raw.lastAgent as OrcaWorkerAgentKind
       : defaults.lastAgent,
-    agents: { codex: agentPrefs('codex'), 'claude-code': agentPrefs('claude-code'), pi: agentPrefs('pi') },
+    agents: { codex: agentPrefs('codex'), 'claude-code': agentPrefs('claude-code'), pi: agentPrefs('pi'), cursor: agentPrefs('cursor') },
     workerPermissionMode: parseOrcaPermissionMode(raw.workerPermissionMode) ?? defaults.workerPermissionMode,
   };
 }

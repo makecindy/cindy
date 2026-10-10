@@ -49,6 +49,34 @@ const projectForCurrentController = (result: unknown) =>
     modelVisibilityOverrides?: Record<string, boolean>;
   };
 
+describe('Cursor model picker capability projection', () => {
+  const capabilities = {
+    supportsSessionAgentSwitch: true,
+    permissionModes: [{ id: 'ask' }, { id: 'default' }],
+    availableModels: [{ id: 'cursor-default' }, { id: 'native[reasoning=medium,fast=false]' }],
+  };
+
+  it('lets older controllers list Cursor models through their current-engine picker', () => {
+    const projected = __testing.projectInvokeResultForTunnel(
+      'maker:get-capabilities', capabilities, false, ['cursor'], false,
+    );
+    expect(projected).toEqual({ ...capabilities, supportsSessionAgentSwitch: false });
+    expect(capabilities.supportsSessionAgentSwitch).toBe(true);
+  });
+
+  it('keeps engine switching available to controllers with the complete Cursor picker', () => {
+    expect(__testing.projectInvokeResultForTunnel(
+      'maker:get-capabilities', capabilities, false, ['cursor'], true,
+    )).toBe(capabilities);
+  });
+
+  it.each(['claude-code', 'codex', 'pi'])('preserves the %s capability contract for older controllers', agent => {
+    expect(__testing.projectInvokeResultForTunnel(
+      'maker:get-capabilities', capabilities, false, [agent], false,
+    )).toBe(capabilities);
+  });
+});
+
 describe('schedule binding list projection', () => {
   const fields = {
     id: 'heartbeat', name: 'Heartbeat', status: 'paused', targetSessionId: 'task',

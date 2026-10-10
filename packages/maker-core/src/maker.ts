@@ -775,7 +775,7 @@ export class Maker {
             sessionId: id,
             sessionInstanceId,
             onInvalidResumeSession:
-              opts.agentKind === 'claude-code' || opts.agentKind === 'pi'
+              opts.agentKind === 'claude-code' || opts.agentKind === 'pi' || opts.agentKind === 'cursor'
                 ? (expectedSdkSessionId) =>
                     this.invalidateAndClearSdkSessionId(id, expectedSdkSessionId)
                 : undefined,
@@ -792,7 +792,7 @@ export class Maker {
         // 的 fresh-session self-reference 恢复),需要同一把 CAS 才能把它清掉,否则下一次
         // send 会 resume 同一个不存在的会话反复失败。
         onInvalidResumeSession:
-          opts.agentKind === 'claude-code' || opts.agentKind === 'pi'
+          opts.agentKind === 'claude-code' || opts.agentKind === 'pi' || opts.agentKind === 'cursor'
             ? (expectedSdkSessionId) =>
                 this.invalidateAndClearSdkSessionId(id, expectedSdkSessionId)
             : undefined,

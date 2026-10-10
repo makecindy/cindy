@@ -468,6 +468,7 @@ function formatRunDuration(ms: number, localizer?: PresentationLocalizer): strin
 function humanizeAgentKind(agentKind: RemoteSchedule['agentKind']): string {
   if (agentKind === 'codex') return 'Codex';
   if (agentKind === 'pi') return 'Pi';
+  if (agentKind === 'cursor') return 'Cursor';
   return 'Claude';
 }
 

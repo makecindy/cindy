@@ -14,6 +14,10 @@ function isCustomMcpAvailable(input: {
   if (input.agentKind === 'codex') {
     return !input.remoteHostId && input.custom?.transport !== 'sse';
   }
+  // Cursor shares Pi's HTTP bridge and URL validation; native ACP cannot mount SSE.
+  if (input.agentKind === 'cursor') {
+    return !input.remoteHostId && (!input.custom || isPiCustomMcpProviderAvailable(input.provider));
+  }
   if (input.agentKind === 'pi' && input.custom) {
     return isPiCustomMcpProviderAvailable(input.provider, { remoteHostId: input.remoteHostId });
   }

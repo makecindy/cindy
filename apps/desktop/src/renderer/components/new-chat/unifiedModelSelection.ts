@@ -18,6 +18,7 @@
  */
 
 import type { ProviderView, UnifiedAgentCapability, UnifiedModelEntry } from '@cindy/model-providers';
+import { providerModelDisplayGroups } from '@cindy/model-providers';
 
 import type { AgentKind } from '@/hooks/useAgentCapabilities';
 import type { SelectableVendor } from '@/lib/agentVendors';
@@ -30,12 +31,12 @@ export type UnifiedEngine = SelectableVendor;
 
 /** vendor → AgentKind(查目录 / 能力 / 记忆时用)。 */
 export function agentKindOfEngine(engine: UnifiedEngine): AgentKind {
-  return engine === 'cc' ? 'claude-code' : engine === 'codex' ? 'codex' : 'pi';
+  return engine === 'cc' ? 'claude-code' : engine;
 }
 
 /** AgentKind → vendor(落 store / draft 时用)。未知值回落 cc,与既有 sanitize 方向一致。 */
 export function engineOfAgentKind(agent: AgentKind): UnifiedEngine {
-  return agent === 'codex' ? 'codex' : agent === 'pi' ? 'pi' : 'cc';
+  return agent === 'claude-code' ? 'cc' : agent;
 }
 
 /**
@@ -392,7 +393,7 @@ export interface UnifiedListSection {
    * providerLabel,与模型设置页同一套名字(Chris 2026-08-16 裁决:废除「授权登录」
    * 合并组 —— 分组名必须直接回答"这是哪家的",不引入第二套口径)。
    */
-  group?: { type: 'provider'; providerId: string };
+  group?: { type: 'provider'; providerId: string; modelGroup?: string | null };
   rows: UnifiedListRow[];
 }
 
@@ -591,7 +592,8 @@ export function buildUnifiedListSections(args: {
     const sameEngine = clusterByProvider(visible, args.providerOrder).flatMap((cluster) => cluster.items)
       .filter((entry) => entry !== current && entry.availability !== 'requires_payment' &&
         (effectiveEngineOf?.(entry) ?? resolveUnifiedRowConfig({ entry }).engine) === engineOfAgentKind(recommendation.agent));
-    const recommended = [...(current ? [current] : []), ...sameEngine];
+    // Cursor's pool boundary must remain visible even in an existing task's All view.
+    const recommended = [...(current ? [current] : []), ...sameEngine].filter(entry => entry.providerId !== 'cursor');
     if (recommended.length) {
       sections.push({ key: 'recommended', kind: 'recommended', rows: recommended.map((entry) => ({
         anchor: { kind: 'model', providerId: entry.providerId, modelId: entry.modelId }, entry,
@@ -606,15 +608,19 @@ export function buildUnifiedListSections(args: {
       ? arrangeEngineRailClusters(clustered, rail.agent, effectiveEngineOf)
       : clustered;
   for (const cluster of arranged) {
-    sections.push({
-      key: `group:provider:${cluster.providerId}`,
-      kind: 'group',
-      group: { type: 'provider' as const, providerId: cluster.providerId },
-      rows: cluster.items.map((entry) => ({
-        anchor: { kind: 'model', providerId: entry.providerId, modelId: entry.modelId },
-        entry,
-      })),
-    });
+    for (const subgroup of providerModelDisplayGroups(cluster.providerId, cluster.items, entry => entry.group)) {
+      sections.push({
+        key: `group:provider:${cluster.providerId}${subgroup.group ? `:${subgroup.group}` : ''}`,
+        kind: 'group',
+        group: { type: 'provider' as const, providerId: cluster.providerId,
+          ...(subgroup.group ? { modelGroup: subgroup.group } : {}),
+        },
+        rows: subgroup.items.map((entry) => ({
+          anchor: { kind: 'model', providerId: entry.providerId, modelId: entry.modelId },
+          entry,
+        })),
+      });
+    }
   }
   return sections;
 }

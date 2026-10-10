@@ -259,12 +259,25 @@ const GEMINI_PROVIDER: Provider = {
 };
 
 /** 内置供应商(顺序契约见文件头;gemini 追加在 xd 之后,聊天分段与 first-wins 契约零影响)。 */
+/** Cursor owns authentication and execution through its native ACP CLI. Membership is discovered live. */
+const CURSOR_PROVIDER: Provider = {
+  id: 'cursor',
+  name: 'Cursor',
+  source: 'builtin',
+  agents: ['cursor'],
+  auth: { method: 'none' },
+  access: { kind: 'subscription', product: 'Cursor' },
+  routing: {},
+  models: { cursor: [] },
+};
+
 export const BUILTIN_PROVIDERS: Provider[] = [
   ANTHROPIC_PROVIDER,
   OPENAI_PROVIDER,
   XAI_PROVIDER,
   XD_PROVIDER,
   GEMINI_PROVIDER,
+  CURSOR_PROVIDER,
 ].map((provider) => projectProviderMediaModels(provider, bundledModelRegistry, { addDeclared: true }));
 
 /** 打包进 App 的内置目录(离线兜底 / 远端拉取失败时使用)。 */

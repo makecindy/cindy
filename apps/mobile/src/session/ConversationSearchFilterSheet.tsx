@@ -26,7 +26,7 @@ import type {
 
 const SORT_OPTIONS: ConversationSearchSortBy[] = ['relevance', 'activityDesc', 'activityAsc'];
 const STATUS_OPTIONS: ConversationSearchStatusFilter[] = ['active', 'archived', 'all'];
-const AGENT_OPTIONS: ConversationSearchAgentFilter[] = ['all', 'cc', 'codex', 'pi'];
+const AGENT_OPTIONS: ConversationSearchAgentFilter[] = ['all', 'cc', 'codex', 'pi', 'cursor'];
 const LAST_ACTIVITY_OPTIONS: ConversationSearchLastActivityFilter[] = ['1d', '3d', '7d', '30d', 'all'];
 
 export function ConversationSearchFilterSheet({
@@ -158,7 +158,7 @@ export function ConversationSearchFilterSheet({
           {AGENT_OPTIONS.map((value) => (
             <FilterMenuItem
               key={value}
-              label={t(`devices.list.search.filter.agent.${value}`)}
+              label={value === 'cursor' ? 'Cursor' : t(`devices.list.search.filter.agent.${value}`)}
               onPress={() => onAgentKindChange(value)}
               selected={agentKind === value}
               testID={`home.searchFilter.agent.${value}`}

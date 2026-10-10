@@ -317,6 +317,10 @@ describe('billing model keys', () => {
 });
 
 describe('getSubscriptionValuePriceFor', () => {
+  it('does not assign another harness subscription pricing to Cursor', () => {
+    expect(getSubscriptionValuePriceFor('cursor', 'claude-sonnet-5', null)).toBeUndefined();
+    expect(getSubscriptionValuePriceFor('cursor', 'gpt-5.5', null)).toBeUndefined();
+  });
   it('routes Pi exclusive Grok ids through the subscription-direct quote', () => {
     expect(getSubscriptionValuePriceFor('pi', 'grok-4.6', null)).toMatchObject({
       providerId: 'xai',

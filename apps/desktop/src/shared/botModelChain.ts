@@ -26,6 +26,8 @@ export function normalizeBotHarness(value: unknown): BotHarness {
 export function normalizeBotModelRoute(value: unknown): BotModelRoute | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const record = value as Record<string, unknown>;
+  // Cursor cannot honor a Bot's runtime profile; never reinterpret that route as Claude.
+  if (record.harness === 'cursor') return null;
   if (typeof record.model !== 'string' || !record.model.trim()) return null;
   return {
     harness: normalizeBotHarness(record.harness),
@@ -86,10 +88,11 @@ export function primaryBotModelRoute(
 /** Select the next explicit route; never invent one from the global catalog. */
 export function nextBotModelRoute(
   value: unknown,
-  current: Pick<BotModelRoute, 'harness' | 'model' | 'providerId'>,
+  current: Omit<Pick<BotModelRoute, 'harness' | 'model' | 'providerId'>, 'harness'> & { harness: BotHarness | 'cursor' },
   visitedRoutes: readonly string[] = [],
   isUsable: (route: BotModelRoute) => boolean = () => true,
 ): BotModelRoute | null {
+  if (current.harness === 'cursor') return null;
   const chain = normalizeBotModelChain(value);
   let currentIndex = chain.findIndex((route) =>
     route.harness === current.harness

@@ -121,3 +121,12 @@ describe('makerChatStore.mirrorSessionFields', () => {
     expect(makerChatStore.getSnapshot(s).agentSwitchIntent).toBeNull();
   });
 });
+
+describe('Cursor native send options', () => {
+  it('preserves Cursor permission, plan mode, effort and Fast on task recovery', () => {
+    const s = sid();
+    makerChatStore.setSessionRuntime(s, { agentKind: 'cursor', fastMode: true, planModeEnabled: true });
+    const options = buildCreateOptsForCurrentSession(s, 'account-model', 'medium', 'auto', '/tmp');
+    expect(options).toMatchObject({ agentKind: 'cursor', model: 'account-model', permissionMode: 'auto', effort: 'medium', fastMode: true, planMode: true });
+  });
+});

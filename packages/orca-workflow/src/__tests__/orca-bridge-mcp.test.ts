@@ -295,10 +295,12 @@ describe('orca_worker_bridge MCP helpers', () => {
   });
 
   it.each([
-    ['descendant', true, 'NESTED_AGENT_NOT_ALLOWED'],
-    ['unknown', true, 'CALLER_PROVENANCE_REQUIRED'],
-    ['root', false, 'CALLER_PROVENANCE_REQUIRED'],
-  ] as const)('rejects %s/attested=%s before every send side effect', async (
+    ['codex', 'descendant', true, 'NESTED_AGENT_NOT_ALLOWED'],
+    ['codex', 'unknown', true, 'CALLER_PROVENANCE_REQUIRED'],
+    ['codex', 'root', false, 'CALLER_PROVENANCE_REQUIRED'],
+    ['cursor', 'unknown', false, 'CALLER_PROVENANCE_REQUIRED'],
+  ] as const)('rejects %s %s/attested=%s before every send side effect', async (
+    agentKind,
     mcpCallerKind,
     mcpCallerAttested,
     expectedCode,
@@ -338,7 +340,7 @@ describe('orca_worker_bridge MCP helpers', () => {
       },
     });
     const runtimeContext: McpProviderContext = {
-      agentKind: 'codex',
+      agentKind,
       workingDir: '/repo',
       sessionId: 'worker-session-1',
       mcpCallerKind,
@@ -350,7 +352,7 @@ describe('orca_worker_bridge MCP helpers', () => {
       },
     };
     const server = getServer(provider, {
-      agentKind: 'codex',
+      agentKind,
       workingDir: '/repo',
       getSessionContext: () => runtimeContext,
     });

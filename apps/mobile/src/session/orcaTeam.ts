@@ -85,7 +85,7 @@ export function isAbsoluteOrcaWorkerDir(value: string): boolean {
 }
 
 export function orcaAgentKindForSession(session: Pick<RemoteSession, 'agentKind'>): OrcaWorkerAgentKind {
-  return session.agentKind === 'codex' || session.agentKind === 'pi' ? session.agentKind : 'claude-code';
+  return session.agentKind === 'codex' || session.agentKind === 'pi' || session.agentKind === 'cursor' ? session.agentKind : 'claude-code';
 }
 
 /** 由记忆构造表单:角色回到 developer,初始任务不记忆(与桌面一致)。 */
@@ -538,5 +538,5 @@ export function orcaWorkerDisplayName(worker: Pick<OrcaTeamWorker, 'role' | 'lab
 }
 
 export function orcaAgentLabel(agent: OrcaWorkerAgentKind): string {
-  return agent === 'codex' ? 'Codex' : agent === 'pi' ? 'Pi' : 'Claude Code';
+  return agent === 'codex' ? 'Codex' : agent === 'cursor' ? 'Cursor' : agent === 'pi' ? 'Pi' : 'Claude Code';
 }

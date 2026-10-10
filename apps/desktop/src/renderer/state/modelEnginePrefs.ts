@@ -19,7 +19,7 @@
  *   modelChosenByVendor / providerModelMemory 的 `<agent>:*` 深度+Fast 槽 /
  *   modelVisibilityPrefs)。老用户空表即「全部跟随推荐」,旧数据不搬不猜。
  *
- * 为什么 agent 用 'cc' | 'codex' | 'pi'(SelectableVendor)而不是 useAgentCapabilities
+ * 为什么 agent 用 'cc' | 'codex' | 'pi' | 'cursor'(SelectableVendor)而不是 useAgentCapabilities
  * 的 AgentKind('claude-code' | ...):
  *   本 store 的下游是**选择器 → newMakerDraft** 那条链路 —— 选中确定后要派生
  *   `(vendor, model, effort, fastMode, providerId)` 写进 newMakerDraft(规格 §2.4),而

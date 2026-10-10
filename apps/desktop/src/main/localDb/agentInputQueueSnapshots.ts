@@ -205,7 +205,8 @@ function stripInlineBase64(items: AgentInputQueuedMessage[]): AgentInputQueuedMe
     const files = item.files?.map((f) => {
       if (!f.base64) return f;
       changed = true;
-      const { base64: _dropped, ...rest } = f;
+      const rest = { ...f };
+      delete rest.base64;
       return rest;
     });
     const images = item.chatMessage.images?.filter((img) => !('base64' in img));
@@ -320,7 +321,7 @@ export async function loadAgentInputQueueSnapshotCounts(
                       AND json_type(snapshot_item.value, '$.chatMessage') = 'object'
                       AND json_type(snapshot_item.value, '$.createOpts') = 'object'
                       AND json_extract(snapshot_item.value, '$.createOpts.agentKind')
-                          IN ('claude-code', 'codex', 'pi')
+                          IN ('claude-code', 'codex', 'pi', 'cursor')
                       AND COALESCE(
                         json_extract(snapshot_item.value, '$.origin.kind'),
                         ''
@@ -378,7 +379,8 @@ export function isRestorableQueuedMessage(value: unknown): value is AgentInputQu
     !!msg.createOpts && typeof msg.createOpts === 'object' &&
     (msg.createOpts.agentKind === 'claude-code' ||
       msg.createOpts.agentKind === 'codex' ||
-      msg.createOpts.agentKind === 'pi')
+      msg.createOpts.agentKind === 'pi' ||
+      msg.createOpts.agentKind === 'cursor')
   );
 }
 

@@ -1251,7 +1251,7 @@ describe('createComputerMcpServer', () => {
     const authorizer = vi.fn(async (request: { path: string; toolName?: string }) => {
       expect(request.path).toBe(screenshot);
       expect(request.toolName).toBe('cindy-computer:get_window_state');
-      return { allowed: true, isCurrent: () => true };
+      return { allowed: true as const, isCurrent: () => true };
     });
     setSessionPathAuthorizer(authorizer);
     const h = await makeHarness(deps, {

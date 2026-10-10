@@ -1,3 +1,4 @@
+import { withCursorDiscoveredModels, hasCursorDiscoveredModels } from './cursor-model-catalog.js';
 import { readProviderPresentation } from './provider-presentation-store.js';
 import { filterLegacyGptContextProfiles } from './legacy-context-profiles.js';
 import { subscriptionAccountState, isXaiSubscriptionProviderId, resetSubscriptionAccountCaches } from './subscription-account-auth.js';
@@ -975,7 +976,7 @@ let singleton: ProviderService | null = null;
  * Cindy account session keeps the full active catalog.
  */
 export function getDesktopSelectableCatalog(): Catalog {
-  return filterProviderCatalogForAccount(filterLegacyGptContextProfiles(getActiveCatalog()), {
+  return filterProviderCatalogForAccount(filterLegacyGptContextProfiles(withCursorDiscoveredModels(getActiveCatalog())), {
     canUseCindyGateway: getAppCapabilities().canUseCindyGateway,
   });
 }
@@ -1004,6 +1005,7 @@ export function getDesktopProviderService(options: { allowSideEffects?: boolean 
     getProviderPresentation: readProviderPresentation,
     getCatalog: getDesktopSelectableCatalog,
     connection: {
+      cursor: () => hasCursorDiscoveredModels(),
       xd: () => getAppCapabilities().canUseCindyGateway && readClaudeApiKey() != null,
       // Claude/Codex 是原生 Harness，可继承本机 CLI 凭证；xAI 是下游 provider，
       // 只能读取已经由 Cindy OAuth 明确绑定的 token，禁止在连接态读取时自动认领。

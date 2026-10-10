@@ -19,6 +19,11 @@ vi.mock('@react-native-async-storage/async-storage', () => ({
 }));
 
 describe('newSessionPreferenceStore', () => {
+  it.each(['ask', 'default', 'auto', 'bypassPermissions'])('keeps the saved Cursor permission %s on reload', async mode => {
+    const { readNewSessionPreferences, saveNewSessionPreferences } = await import('@/session/newSessionPreferenceStore');
+    await saveNewSessionPreferences({ permissionModeForAgent: { agentKind: 'cursor', mode } });
+    expect((await readNewSessionPreferences()).permissionModeByAgent.cursor).toBe(mode);
+  });
   beforeEach(async () => {
     vi.clearAllMocks();
     store.clear();

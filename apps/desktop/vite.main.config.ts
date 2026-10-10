@@ -16,6 +16,8 @@ const loginFixturesStub = path.resolve(
 // development rebuild lets Rollup invalidate that burst as one graph update,
 // keeping the watcher peak bounded without changing packaged builds.
 const DEV_WATCH_BUILD_DELAY_MS = 250;
+const pollDevWatcher = process.platform === 'darwin'
+  && process.env.XDT_DESKTOP_DEV_WATCH_POLLING === '1';
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), 'VITE_');
@@ -110,7 +112,14 @@ export default defineConfig(({ mode }) => {
     },
     build: {
       watch:
-        mode === 'development' ? { buildDelay: DEV_WATCH_BUILD_DELAY_MS } : undefined,
+        mode === 'development'
+          ? {
+              buildDelay: DEV_WATCH_BUILD_DELAY_MS,
+              ...(pollDevWatcher
+                ? { chokidar: { useFsEvents: false, usePolling: true, interval: 1_000 } }
+                : {}),
+            }
+          : undefined,
       rollupOptions: {
         output: {
           // Keep the vendored @cindy/browser-control-runtime (including its

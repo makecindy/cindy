@@ -21,7 +21,7 @@ export type ByokModel = Omit<ModelAccessGatewayModel, "perAgent"> & {
   nativeApi?: ByokNativeApi;
   perAgent: Partial<
     Record<
-      "claude-code" | "codex" | "pi",
+      "claude-code" | "codex" | "pi" | "cursor",
       Omit<NonNullable<ModelOverride>, "wireProtocol"> & {
         wireProtocol: ByokWireProtocol;
       }

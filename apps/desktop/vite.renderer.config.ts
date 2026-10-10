@@ -209,6 +209,9 @@ function discoverPureInternalPackages(): { specifiers: string[]; names: string[]
 const { specifiers: INTERNAL_PURE_PACKAGE_EXCLUDES, names: INTERNAL_PURE_PACKAGE_NAMES } =
   discoverPureInternalPackages();
 
+const pollDevWatcher = process.platform === 'darwin'
+  && process.env.XDT_DESKTOP_DEV_WATCH_POLLING === '1';
+
 /**
  * 「带第三方依赖」的内部 workspace 包(maker-core / maker-cc-manager 等)仍走 optimizeDeps
  * 预打包(见上方注释:排除它们会把 CJS 子依赖拖出预打包,不安全)。但 Vite 的预打包缓存失效
@@ -347,6 +350,7 @@ const rendererConfig = {
   },
   server: {
     watch: {
+      ...(pollDevWatcher ? { useFsEvents: false, usePolling: true, interval: 1_000 } : {}),
       // 被 exclude 的内部包以 node_modules 软链路径进模块图,默认 `**/node_modules/**`
       // 忽略规则会让 watcher 对它们的源码变更全盲(变更后引用新导出的组件热更、被引用包
       // 却停在旧模块 → 白屏,见 discoverPureInternalPackages 顶注)。反向 glob 豁免之。

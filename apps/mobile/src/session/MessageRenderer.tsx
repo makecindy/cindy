@@ -4562,6 +4562,7 @@ const AGENT_TASK_PROVIDER_LABEL: Record<AgentTaskCardModel['provider'], string> 
   'claude-code': 'Claude Code',
   codex: 'Codex',
   pi: 'Pi',
+  cursor: 'Cursor',
 };
 
 function AgentTaskStatusIcon({ status, size = iconSize.md }: { status: AgentTaskStatus; size?: number }) {

@@ -490,8 +490,8 @@ function PrefsField({
 }
 
 /** hook prefs 的 agentKind → 选择器的 vendor key。 */
-function toVendorKey(agentKind: string | null): 'cc' | 'codex' | 'pi' {
-  return agentKind === 'codex' || agentKind === 'pi' ? agentKind : 'cc';
+function toVendorKey(agentKind: string | null): 'cc' | 'codex' | 'pi' | 'cursor' {
+  return agentKind === 'codex' || agentKind === 'pi' || agentKind === 'cursor' ? agentKind : 'cc';
 }
 
 /** 目录卡片内的偏好编辑行(完整模型配置 / 权限)。alias 为该行当前生效别名。 */
@@ -529,7 +529,7 @@ export function WorkspacePrefsEditor({
   const disabled = !state.editable || state.pendingWs === alias;
   const vendorKey = toVendorKey(eff.agentKind.id);
 
-  const pickerAgents = useModelPickerAgents(vendorKey === 'cc' ? 'claude-code' : vendorKey === 'pi' ? 'pi' : 'codex');
+  const pickerAgents = useModelPickerAgents(vendorKey === 'cc' ? 'claude-code' : vendorKey === 'cursor' ? 'cursor' : vendorKey === 'pi' ? 'pi' : 'codex');
 
   /** 落一个模型选择(分段行与 flat 行共用): 随手写入 (agent, model) 配对并校准 effort。 */
   const applyModel = (next: string) => {

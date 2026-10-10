@@ -3,7 +3,7 @@
  * 全内存 stub 零落盘)。claude 走跨平台 hasClaudeLogin,codex 走文件 stat。
  */
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { join } from 'node:path';
 
 import { scanLocalCliAuth, type LocalCliScanDeps } from '../localCliDetect.js';
@@ -23,6 +23,7 @@ function depsWith(
     isDirectory: async (p) => dirSet.has(p),
     isFile: async (p) => fileSet.has(p),
     hasClaudeLogin: () => claudeLogin,
+    probeCursorCli: async () => ({ installed: false, loggedIn: false }),
     isCredentialSharedWithCindy: (cli) => shared(cli),
   };
 }
@@ -30,7 +31,7 @@ function depsWith(
 describe('scanLocalCliAuth', () => {
   it('都未安装未登录 → installed/loggedIn 全 false', async () => {
     const r = await scanLocalCliAuth(depsWith([], [], false));
-    expect(r).toHaveLength(2);
+    expect(r).toHaveLength(3);
     expect(r.every((d) => !d.installed && !d.loggedIn)).toBe(true);
   });
 
@@ -76,6 +77,7 @@ describe('scanLocalCliAuth', () => {
         throw new Error('EACCES');
       },
       hasClaudeLogin: () => false,
+      probeCursorCli: async () => ({ installed: false, loggedIn: false }),
       isCredentialSharedWithCindy: () => true,
     };
     await expect(scanLocalCliAuth(deps)).rejects.toThrow('EACCES');
@@ -122,5 +124,24 @@ describe('scanLocalCliAuth', () => {
     );
     expect(r.find((d) => d.cli === 'codex-cli')).toMatchObject({ sharedWithCindy: true });
     expect(r.find((d) => d.cli === 'claude-cli')).toMatchObject({ sharedWithCindy: true });
+  });
+
+  it.each([false, true])('detects the installed native Cursor CLI independently of model discovery (loggedIn=%s)', async (loggedIn) => {
+    const deps = depsWith([], []);
+    deps.probeCursorCli = vi.fn(async () => ({ installed: true, loggedIn }));
+    const results = await scanLocalCliAuth(deps);
+    expect(results.find((d) => d.cli === 'cursor-cli')).toEqual({
+      cli: 'cursor-cli', providerId: 'cursor', installed: true, loggedIn, sharedWithCindy: loggedIn,
+    });
+    expect(deps.probeCursorCli).toHaveBeenCalledOnce();
+  });
+
+  it('isolates a failed Cursor status probe from the other native CLI suggestions', async () => {
+    const deps = depsWith(['.codex'], [join('.codex', 'auth.json')], true);
+    deps.probeCursorCli = async () => { throw new Error('probe unavailable'); };
+    const results = await scanLocalCliAuth(deps);
+    expect(results.find((d) => d.cli === 'cursor-cli')).toMatchObject({ installed: false, loggedIn: false });
+    expect(results.find((d) => d.cli === 'codex-cli')).toMatchObject({ installed: true, loggedIn: true });
+    expect(results.find((d) => d.cli === 'claude-cli')).toMatchObject({ installed: true, loggedIn: true });
   });
 });

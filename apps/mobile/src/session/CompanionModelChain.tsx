@@ -17,12 +17,12 @@ import { ModelPickerSheet } from './ModelPickerSheet';
 import { normalizeMobileAgentCapabilities } from './agentCapabilities';
 import type { MobileModelConfiguration } from './unifiedMobileModels';
 import type { ProfileValues } from './companionProfileData';
-export interface CompanionModelRoute { harness: 'claude' | 'codex' | 'pi'; model: string; providerId: string | null; effort: string; fastMode: boolean }
+export interface CompanionModelRoute { harness: 'claude' | 'codex' | 'pi' | 'cursor'; model: string; providerId: string | null; effort: string; fastMode: boolean }
 export function readCompanionModelChain(value: unknown): CompanionModelRoute[] {
   if (typeof value !== 'string') return [];
   try {
     const rows: unknown = JSON.parse(value);
-    if (!Array.isArray(rows) || rows.length > 5 || rows.some(r => !r || !['claude', 'codex', 'pi'].includes(r.harness) || typeof r.model !== 'string' || !r.model || !(typeof r.providerId === 'string' || r.providerId === null) || typeof r.effort !== 'string' || typeof r.fastMode !== 'boolean')) return [];
+    if (!Array.isArray(rows) || rows.length > 5 || rows.some(r => !r || !['claude', 'codex', 'pi', 'cursor'].includes(r.harness) || typeof r.model !== 'string' || !r.model || !(typeof r.providerId === 'string' || r.providerId === null) || typeof r.effort !== 'string' || typeof r.fastMode !== 'boolean')) return [];
     return rows;
   } catch { return []; }
 }
@@ -78,7 +78,7 @@ export function CompanionModelPicker({ visible, deviceId, route, onClose, onClos
     flatOptions={[]} agentKind={agent} capabilities={null} activeModelId={route?.model ?? ''} selectedProviderId={route?.providerId ?? null}
     selectedEffort={route?.effort ?? ''} selectedFastMode={route?.fastMode ?? false} existingSessionRoute
     disabled={!catalog.ready} loading={catalog.loading} emptyHint={catalog.error ?? t('devices.companionProfile.modelsUnavailable')}
-    unified={{ scope: JSON.stringify([user?.id, deviceId]), agents: ['claude-code', 'codex', 'pi'],
+    unified={{ scope: JSON.stringify([user?.id, deviceId]), agents: ['claude-code', 'codex', 'pi', 'cursor'],
       loadCapabilities: async agent => { const value = normalizeMobileAgentCapabilities(await maker.getCapabilities(agent)); if (!value) throw new Error('Capabilities unavailable'); return value; }, onSelect: select }}
     onSelectFlatModel={() => {}} onSelectProviderRow={() => {}} permissionOptions={[]} activePermissionMode="ask" onSelectPermissionMode={() => {}} hidePermissionTrigger keyboardAvoidingBehavior="padding" />;
 }

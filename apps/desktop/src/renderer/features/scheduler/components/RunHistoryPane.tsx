@@ -89,7 +89,7 @@ export function RunHistoryPane({
   const sessionAgentMap = useMemo(() => {
     const m = new Map<string, AgentKind>();
     for (const sess of allSessions) {
-      m.set(sess.id, sess.agentKind === 'cc' ? 'claude-code' : sess.agentKind === 'pi' ? 'pi' : 'codex');
+      m.set(sess.id, sess.agentKind === 'cc' ? 'claude-code' : sess.agentKind === 'cursor' ? 'cursor' : sess.agentKind === 'pi' ? 'pi' : 'codex');
     }
     return m;
   }, [allSessions]);

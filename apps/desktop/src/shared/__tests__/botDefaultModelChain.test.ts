@@ -9,6 +9,12 @@ const providers = [{ id: 'my-connection', source: 'user', connected: true, agent
 const args = { providers, providersLoading: false, availableAgents: new Set(['codex'] as const), availableAgentsLoaded: true };
 
 describe('Bot strictly follows the available Cindy default', () => {
+  it('does not substitute a Bot engine when the application default is Cursor', () => {
+    expect(defaultBotModelChain({ ...args, preferredRoute: {
+      harness: 'cursor', providerId: 'cursor', model: 'native', effort: '', fastMode: false,
+    } })).toEqual([]);
+  });
+
   it('uses the exact selected route and tuning without adding catalog recommendations', () => {
     expect(defaultBotModelChain({ ...args, preferredRoute: selected })).toEqual([selected]);
   });

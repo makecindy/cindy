@@ -238,7 +238,7 @@ export function cleanWorkbenchTitle(raw: string | null | undefined, fallback = '
 export type WorkbenchTaskState = 'running' | 'waiting' | 'queued' | 'stopped' | 'automation' | 'done';
 
 /** 一格任务从哪里来:原有任务、伙伴替主人开的后台任务、本机其他工具 / 其它 Cindy 里的会话。 */
-export type WorkbenchTaskOrigin = 'existing' | 'delegated' | 'claude-code' | 'codex' | 'pi';
+export type WorkbenchTaskOrigin = 'existing' | 'delegated' | 'claude-code' | 'codex' | 'pi' | 'cursor';
 
 export type WorkbenchDelegationStatus =
   | 'queued'

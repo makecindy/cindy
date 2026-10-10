@@ -23,8 +23,8 @@ import type { AgentKind } from '@/hooks/useAgentCapabilities';
 import type { Effort, PermissionMode } from '@/lib/userPreferences.types';
 
 export interface DeviceLinkCreateParams {
-  /** 草稿 vendor 形态:'cc' | 'codex' | 'pi'(persistedAgentKind)。 */
-  agentKind: 'cc' | 'codex' | 'pi';
+  /** 草稿 vendor 形态:'cc' | 'codex' | 'pi' | 'cursor'(persistedAgentKind)。 */
+  agentKind: 'cc' | 'codex' | 'pi' | 'cursor';
   /**
    * 被控端上的项目目录。缺省 / 空白 = 在该设备上建**不绑项目的 standalone dialogue**,
    * workspaceKind 随之派生为 'dialogue',运行目录由被控端分配。
@@ -63,7 +63,7 @@ export interface DeviceLinkCreateParams {
 }
 
 export interface DeviceLinkCreateArgs {
-  agentKind: 'claude-code' | 'codex' | 'pi';
+  agentKind: 'claude-code' | 'codex' | 'pi' | 'cursor';
   /** 仅远程 worktree 流程出现(与 worktree:create 登记的绑定同 id)。 */
   id?: string;
   /** 仅项目会话出现;dialogue 不带此字段(被控端自行分配运行目录)。 */
@@ -71,7 +71,7 @@ export interface DeviceLinkCreateArgs {
   /** 由 workingDir 派生 —— 有目录 'project',无目录 'dialogue'。归属一致的关键。 */
   workspaceKind: WorkspaceKind;
   model: string;
-  effort: Effort;
+  effort?: Effort;
   permissionMode: PermissionMode;
   fastMode: boolean;
   planMode?: boolean;
@@ -96,7 +96,7 @@ export function buildDeviceLinkCreateArgs(p: DeviceLinkCreateParams): DeviceLink
     ...(dir ? { workingDir: dir } : {}),
     workspaceKind: dir ? 'project' : 'dialogue',
     model: p.model,
-    effort: p.effort,
+    ...(p.effort ? { effort: p.effort } : {}),
     permissionMode: p.permissionMode,
     fastMode: p.fastMode,
     ...(p.planModeEnabled ? { planMode: true } : {}),
@@ -126,7 +126,7 @@ export interface DeviceLinkSubmissionCandidate {
 }
 
 export interface DeviceLinkSubmissionParams {
-  agentKind: 'cc' | 'codex' | 'pi';
+  agentKind: 'cc' | 'codex' | 'pi' | 'cursor';
   workingDir?: string;
   id?: string;
   extraDirs?: string[];
@@ -225,7 +225,7 @@ export function buildProvisionalRemoteSession(p: ProvisionalRemoteSessionParams)
     workingDir: p.workDir,
     workspaceKind: p.args.workspaceKind,
     model: p.args.model,
-    effort: p.args.effort,
+    effort: p.args.effort ?? '',
     permissionMode: p.args.permissionMode,
     providerId: p.args.providerId ?? null,
     sdkSessionId: null,
@@ -242,7 +242,7 @@ export function buildProvisionalRemoteSession(p: ProvisionalRemoteSessionParams)
     // 回流都会把它冲回 null,会话就先掉进项目外的草稿区、首条落地后再跳回项目。
     userSendAt: null,
     status: 'active',
-    // Session.agentKind 是本机形态('cc' | 'codex' | 'pi'),args 里是 maker-core 形态,这里转回来。
+    // Session.agentKind 是本机形态('cc' | 'codex' | 'pi' | 'cursor'),args 里是 maker-core 形态,这里转回来。
     agentKind: p.args.agentKind === 'claude-code' ? 'cc' : p.args.agentKind,
     // 乐观行就带上 Agent 所在电脑:会话页的模型按钮与目录从一开始就按那台显示。
     ...(p.args.agentDeviceId ? { agentDeviceId: p.args.agentDeviceId } : {}),

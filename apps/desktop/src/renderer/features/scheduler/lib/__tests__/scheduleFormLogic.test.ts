@@ -510,6 +510,10 @@ describe('buildScheduleInput — 非 heartbeat 分支(行为锁定,不动 create
     expect(hasKey(input, 'fastMode')).toBe(true);
     expect(input.fastMode).toBe(true);
   });
+  it('preserves Cursor native effort and Fast selections', () => {
+    const input = buildScheduleInput(makeForm({ agentKind: 'cursor', model: 'grok-4.7', effort: 'xhigh', fastMode: true }));
+    expect(input).toMatchObject({ agentKind: 'cursor', model: 'grok-4.7', effort: 'xhigh', fastMode: true });
+  });
 
   it('claude-code 不序列化 fastMode(runner 忽略此字段)', () => {
     const input = buildScheduleInput(makeForm({ agentKind: 'claude-code', fastMode: true }));
@@ -646,6 +650,7 @@ describe('hasRealBinding / agentKind 映射', () => {
   it('sessionAgentKindToScheduleAgentKind 映射', () => {
     expect(sessionAgentKindToScheduleAgentKind('cc')).toBe('claude-code');
     expect(sessionAgentKindToScheduleAgentKind('codex')).toBe('codex');
+    expect(sessionAgentKindToScheduleAgentKind('cursor')).toBe('cursor');
   });
 });
 

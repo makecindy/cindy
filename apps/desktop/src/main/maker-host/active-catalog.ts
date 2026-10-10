@@ -213,7 +213,7 @@ export interface XdGatewayModelInfo {
   /**
    * 新对话默认种子的 agent 标记(服务端 /models 下发的 newSessionDefault)。
    */
-  newSessionDefault?: ('claude-code' | 'codex' | 'pi')[];
+  newSessionDefault?: AgentKind[];
   /** 展示图标 id(AI Gateway 设定;缺省 / 未知值渲染层回落来源供应商标)。 */
   icon?: string;
   modalities?: { input: string[]; output: string[] };
@@ -706,7 +706,7 @@ function modelRegistryMetaFields(
 ): RegistryMetaFields | undefined {
   // 模型 registry 的路由与 perAgent 覆盖只按 claude-code / codex 建键;Pi 是动态 BYOM,
   // 无 registry per-agent 覆盖,按 agent 无关处理(取条目基线元数据)。
-  const registryAgent = agent === 'pi' ? undefined : agent;
+  const registryAgent = agent === 'claude-code' || agent === 'codex' ? agent : undefined;
   const catalog = base ?? BUNDLED_CATALOG;
   const matched = findModelRegistryRoute(catalog.modelRegistry, providerId, modelId, registryAgent);
   if (!matched) return undefined;
@@ -973,9 +973,10 @@ function materializeXaiAccountModels(
     const registry = modelRegistryMetaFields('xai', agent, entry.id);
     // The server catalog may predate a client-known variant. Its bundled visibility
     // remains a sparse fallback; explicit server and later user choices still win.
+    const registryAgent = agent === 'claude-code' || agent === 'codex' ? agent : undefined;
     const bundledEntry = findModelRegistryRoute(BUNDLED_CATALOG.modelRegistry, 'xai', entry.id,
-      agent === 'pi' ? undefined : agent)?.entry;
-    const bundledDefaultEnabled = (agent === 'pi' ? undefined : bundledEntry?.perAgent?.[agent]?.defaultEnabled)
+      registryAgent)?.entry;
+    const bundledDefaultEnabled = (registryAgent ? bundledEntry?.perAgent?.[registryAgent]?.defaultEnabled : undefined)
       ?? bundledEntry?.defaultEnabled;
     const { efforts, defaultEffort } = resolveXaiAccountCapabilities(
       entry,
@@ -1094,8 +1095,9 @@ function declaredPiModels(providerId: string, discovered: readonly CatalogModel[
     // A sibling Harness discovers membership, not Pi-specific thinking tiers.
     // Keep portable tiers as a fallback for unknown models; known models inherit
     // the Registry, and Codex-only labels cannot become Pi capabilities.
-    const { efforts: _efforts, defaultEffort: _defaultEffort, ...metadata } =
-      model.discoveredMetadata ?? catalogModelMetadata(model);
+    const metadata = { ...(model.discoveredMetadata ?? catalogModelMetadata(model)) };
+    delete metadata.efforts;
+    delete metadata.defaultEffort;
     const efforts = model.efforts.filter(effort => PI_REASONING_EFFORTS.some(level => level === effort));
     byId.set(id, {
       ...model, id, piApi, efforts,

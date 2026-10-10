@@ -228,6 +228,7 @@ export function selectVisibleModels(params: {
   deviceCcModels: ModelDescriptor[];
   deviceCodexModels: ModelDescriptor[];
   devicePiModels?: ModelDescriptor[];
+  deviceCursorModels?: ModelDescriptor[];
   /**
    * SSH 远程会话(remoteHostId)传 true:订阅直连模型(chatgpt/ / xai/)不再被过滤,
    * 而是保留在清单中由调用方按 isSubscriptionDirectModel 标记禁用(置灰 + 原因提示)。
@@ -253,6 +254,7 @@ export function selectVisibleModels(params: {
     deviceCcModels,
     deviceCodexModels,
     devicePiModels = [],
+    deviceCursorModels = [],
     excludeSubscriptionDirect,
     excludeChatBridgedCodex,
   } = params;
@@ -271,12 +273,14 @@ export function selectVisibleModels(params: {
       model.id.startsWith('chatgpt/') &&
       model.id.endsWith('[1m]')
     ));
+  const cursor = excludeSubscriptionDirect ? [] : pass(deviceId ? deviceCursorModels : deriveModelsFromProviders(providers, 'cursor'));
+  if (agentKind === 'cursor') return cursor;
   if (agentKind === 'claude-code') return cc;
   if (agentKind === 'codex') return codex;
   if (agentKind === 'pi') return pi;
   const merged = [...cc];
   const seen = new Set(merged.map((m) => m.id));
-  for (const list of [codex, pi]) {
+  for (const list of [codex, pi, cursor]) {
     for (const m of list) {
       if (seen.has(m.id)) continue;
       seen.add(m.id);
@@ -297,12 +301,14 @@ export function resolveVisibleModelAgentKind(params: {
   ccModels: ModelDescriptor[];
   codexModels: ModelDescriptor[];
   piModels?: ModelDescriptor[];
+  cursorModels?: ModelDescriptor[];
   providers: ProviderView[];
 }): AgentKind | null {
-  const { modelId, agentKind, ccModels, codexModels, piModels = [], providers } = params;
+  const { modelId, agentKind, ccModels, codexModels, piModels = [], cursorModels = [], providers } = params;
   if (agentKind) return agentKind;
   if (ccModels.some((model) => model.id === modelId)) return 'claude-code';
   if (codexModels.some((model) => model.id === modelId)) return 'codex';
+  if (cursorModels.some((model) => model.id === modelId)) return 'cursor';
   if (piModels.some((model) => model.id === modelId)) return 'pi';
   if (providers.some((provider) => providerOffersModel(provider, modelId, 'claude-code'))) {
     return 'claude-code';

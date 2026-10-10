@@ -52,7 +52,7 @@ export const DIALOGUE_FILTER_KEY = 'dialogue';
 /** 'all' 字符串字面量 = 选中"全部"；string[] = 勾选的 projectKey 和/或 DIALOGUE_FILTER_KEY。 */
 export type FilterProjects = 'all' | string[];
 /** Harness filter；沿用 vendor 存储键，兼容已有筛选偏好。 */
-export type FilterVendor = 'all' | 'cc' | 'codex' | 'pi';
+export type FilterVendor = 'all' | 'cc' | 'codex' | 'pi' | 'cursor';
 /**
  * Sidebar 主列表分组方式(侧边栏重设计 D 期)。
  *   - project: 「按项目分组」开——有项目的任务收进项目行(默认)。

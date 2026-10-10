@@ -921,7 +921,7 @@ function toEvidenceIndex(row: Record<string, unknown>): SkillUsageEvidenceIndex 
     rawLineNo: numberValue(row.rawLineNo),
     sessionId: stringValue(row.sessionId),
     sdkSessionId: stringValue(row.sdkSessionId),
-    agentKind: stringValue(row.agentKind) === 'claude-code' ? 'claude-code' : stringValue(row.agentKind) === 'pi' ? 'pi' : 'codex',
+    agentKind: stringValue(row.agentKind) === 'claude-code' ? 'claude-code' : stringValue(row.agentKind) === 'pi' ? 'pi' : stringValue(row.agentKind) === 'cursor' ? 'cursor' : 'codex',
     skillName: stringValue(row.skillName),
     skillPath: stringValue(row.skillPath) || null,
     skillDocumentHash: stringValue(row.skillDocumentHash) || null,
@@ -1363,7 +1363,7 @@ function skillUsageEvidenceFilter(
 
 function toRecentSourceRecords(rows: Array<Record<string, unknown>>): SkillUsageRecentSourceRecord[] {
   return rows.map((row) => {
-    const agentKind: SkillUsageAgentKind = stringValue(row.agentKind) === 'claude-code' ? 'claude-code' : stringValue(row.agentKind) === 'pi' ? 'pi' : 'codex';
+    const agentKind: SkillUsageAgentKind = stringValue(row.agentKind) === 'claude-code' ? 'claude-code' : stringValue(row.agentKind) === 'pi' ? 'pi' : stringValue(row.agentKind) === 'cursor' ? 'cursor' : 'codex';
     return {
       rawFilePath: stringValue(row.rawFilePath),
       agentKind,

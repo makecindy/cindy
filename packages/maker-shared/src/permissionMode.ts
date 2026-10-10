@@ -34,3 +34,29 @@ export function requiresFullAccessConfirmation(
   return permissionModeOrAsk(nextMode) === 'bypassPermissions'
     && permissionModeOrAsk(currentMode) !== 'bypassPermissions';
 }
+
+/** Merge default/ask display aliases without changing the selected or persisted wire id. */
+export function deduplicateDefaultPermissionOptions<T extends { id: string }>(
+  options: readonly T[],
+  activeMode: string,
+): T[] {
+  const result: T[] = [];
+  let defaultPermissionsIndex: number | undefined;
+  for (const option of options) {
+    if (option.id !== 'default' && option.id !== 'ask') {
+      result.push(option);
+      continue;
+    }
+    if (defaultPermissionsIndex === undefined) {
+      defaultPermissionsIndex = result.length;
+      result.push(option);
+      continue;
+    }
+    const existing = result[defaultPermissionsIndex];
+    if (option.id === activeMode
+      || (existing.id !== activeMode && existing.id === 'default' && option.id === 'ask')) {
+      result[defaultPermissionsIndex] = option;
+    }
+  }
+  return result;
+}

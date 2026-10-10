@@ -1,3 +1,4 @@
+import { deduplicateDefaultPermissionOptions } from '@cindy/maker-shared/permission-mode';
 import type { MobileChoiceOption } from '@/session/agentCapabilities';
 
 /**
@@ -9,29 +10,5 @@ export function permissionOptionsForDisplay(
   options: readonly MobileChoiceOption[],
   activeMode: string,
 ): MobileChoiceOption[] {
-  const result: MobileChoiceOption[] = [];
-  let defaultPermissionsIndex: number | undefined;
-
-  for (const option of options) {
-    if (option.id === 'plan') continue;
-    if (option.id !== 'default' && option.id !== 'ask') {
-      result.push(option);
-      continue;
-    }
-
-    if (defaultPermissionsIndex === undefined) {
-      defaultPermissionsIndex = result.length;
-      result.push(option);
-      continue;
-    }
-
-    const existing = result[defaultPermissionsIndex];
-    const existingIsActive = existing.id === activeMode;
-    const candidateIsActive = option.id === activeMode;
-    if (candidateIsActive || (!existingIsActive && existing.id === 'default' && option.id === 'ask')) {
-      result[defaultPermissionsIndex] = option;
-    }
-  }
-
-  return result;
+  return deduplicateDefaultPermissionOptions(options.filter(option => option.id !== 'plan'), activeMode);
 }

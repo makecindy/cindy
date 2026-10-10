@@ -6,7 +6,7 @@ export interface RemoteModelFavorite {
   uid: string;
   providerId: string;
   modelId: string;
-  agent: "cc" | "codex" | "pi";
+  agent: "cc" | "codex" | "pi" | "cursor";
   effort?: string;
   fast?: true;
 }
@@ -32,7 +32,7 @@ export function parseRemoteModelFavorite(
     !text(p.providerId) ||
     p.providerId === "*" ||
     !text(p.modelId) ||
-    !["cc", "codex", "pi"].includes(p.agent) ||
+    !["cc", "codex", "pi", "cursor"].includes(p.agent) ||
     (p.effort !== undefined &&
       !["minimal", "low", "medium", "high", "xhigh", "max", "ultra"].includes(
         p.effort,

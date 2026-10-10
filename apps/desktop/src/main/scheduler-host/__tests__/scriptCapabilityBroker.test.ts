@@ -401,11 +401,14 @@ describe('SchedulerScriptCapabilityBroker', () => {
     expect(sendToSessionMock).not.toHaveBeenCalled();
   });
 
-  it('dispatches sessions with host-owned create defaults from the schedule', async () => {
+  it.each([
+    { agentKind: 'codex', model: 'gpt-5.5', providerId: 'provider-1' },
+    { agentKind: 'cursor', model: 'cursor-default', providerId: 'cursor' },
+  ] as const)('dispatches $agentKind sessions with host-owned create defaults from the schedule', async (selection) => {
     sendToSessionMock.mockResolvedValue({
       ok: true,
       targetSessionId: 'session-1',
-      agentKind: 'codex',
+      agentKind: selection.agentKind,
       wakeKind: 'created',
       targetTitle: 'Triage DING-1',
       targetLastUserSendAt: null,
@@ -420,7 +423,7 @@ describe('SchedulerScriptCapabilityBroker', () => {
         },
       },
       new Set(['sessions.dispatch']),
-      { schedule: schedule() },
+      { schedule: schedule(selection) },
     );
 
     expect(sendToSessionMock).toHaveBeenCalledWith({
@@ -429,9 +432,7 @@ describe('SchedulerScriptCapabilityBroker', () => {
       title: 'Triage DING-1',
       useWorktree: false,
       createDefaults: {
-        agentKind: 'codex',
-        model: 'gpt-5.5',
-        providerId: 'provider-1',
+        ...selection,
         effort: 'high',
         fastMode: true,
         workingDir: 'C:\\project',
@@ -652,8 +653,7 @@ describe('SchedulerScriptCapabilityBroker', () => {
       const { fsSlot } = wireRealChannel(tmp);
       // 真实 dispatcher:资格审 + callId 配对 + 错误折叠全真,只有「意识进程」
       // 本身由 sendToGhost 内联模拟(先经 fs 槽写盘,再 handleToolResult 交卷)。
-      let dispatcher!: GhostPipeDispatcher;
-      dispatcher = new GhostPipeDispatcher({
+      const dispatcher: GhostPipeDispatcher = new GhostPipeDispatcher({
         getGhost: (id) => (id === 'xd-atlassian' ? makeInstalledGhost(id) : null),
         runtimeStateOf: () => 'running',
         spawn: async () => ({ ok: true }),

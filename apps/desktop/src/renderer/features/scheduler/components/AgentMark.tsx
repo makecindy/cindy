@@ -11,6 +11,7 @@
 
 import { CodexMark } from '@/components/icons/CodexMark';
 import { ClaudeMark } from '@/components/icons/ClaudeMark';
+import { CursorMark } from '@/components/icons/CursorMark';
 import { PiMark } from '@/components/icons/PiMark';
 import type { AgentKind } from '@cindy/maker-scheduler';
 
@@ -21,6 +22,7 @@ interface Props {
 }
 
 export function AgentMark({ agentKind, size = 14, className }: Props) {
+  if (agentKind === 'cursor') return <CursorMark size={size} className={className} />;
   if (agentKind === 'codex') return <CodexMark size={size} className={className} />;
   // Pi 运行历史此前落到 ClaudeMark 兜底,显示成 Claude 身份(codex review)。
   if (agentKind === 'pi') return <PiMark size={size} className={className} />;

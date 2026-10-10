@@ -29,7 +29,7 @@ export interface OneshotPinOption {
 
 
 function knownAgent(value: string): value is AgentKind {
-  return value === 'claude-code' || value === 'codex' || value === 'pi';
+  return value === 'claude-code' || value === 'codex' || value === 'pi' || value === 'cursor';
 }
 
 /** This projection only contains host-approved pins; it never expands the allowlist. */

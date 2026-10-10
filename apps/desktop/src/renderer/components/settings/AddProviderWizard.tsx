@@ -51,6 +51,7 @@ import { LocalOllamaInstall, offersManagedOllamaInstall } from './LocalOllamaIns
 import { MANAGED_LLAMACPP_PROVIDER_ID } from '../../../shared/llamaCpp';
 import { OAuthBrowserLink, OAuthDeviceCodeCard } from './OAuthDeviceCodeCard';
 import { SettingsTextInput } from './SettingsTextInput';
+import { CursorProviderSetup } from './CursorProviderSetup';
 
 import {
   PROVIDER_MEDIA_FIELDS,
@@ -90,6 +91,7 @@ interface AddProviderWizardProps {
 
 type Selection =
   | { kind: 'oauth'; provider: ProviderView }
+  | { kind: 'cursor-cli'; provider: ProviderView }
   | { kind: 'preset'; preset: ProviderPreset }
   /** 内置 API-key 供应商(如 Gemini 图像来源,2026-07):保存 key 即连接,无自定义供应商落库。 */
   | { kind: 'builtinApiKey'; provider: ProviderView }
@@ -101,6 +103,7 @@ const AGENT_LABEL: Record<AgentKind, string> = {
   'claude-code': 'Claude Code',
   codex: 'Codex',
   pi: 'Pi',
+  cursor: 'Cursor',
 };
 
 function presetRuntimeBaseUrl(
@@ -383,6 +386,7 @@ export function AddProviderWizard({
     entry?.kind === 'builtin' ? providers.find((x) => x.id === entry.providerId) : undefined;
   const [sel, setSel] = useState<Selection | null>(() => {
     if (!entryProvider) return null;
+    if (entryProvider.id === 'cursor') return { kind: 'cursor-cli', provider: entryProvider };
     return entryProvider.auth?.method === 'apiKey'
       ? { kind: 'builtinApiKey', provider: entryProvider }
       : { kind: 'oauth', provider: entryProvider };
@@ -544,6 +548,10 @@ export function AddProviderWizard({
     [presets],
   );
   const q = query.trim().toLowerCase();
+  const cursorChoice = providers.find((p) =>
+    p.id === 'cursor' && p.source === 'builtin' && !hasRetainedBuiltinConnection(p) &&
+    (!q || p.name.toLowerCase().includes(q) || 'cursor'.includes(q)),
+  );
   const filteredOauth = q
     ? oauthChoices.filter((p) => p.name.toLowerCase().includes(q))
     : oauthChoices;
@@ -659,6 +667,20 @@ export function AddProviderWizard({
     setApiKey('');
     setStep(2);
   }, []);
+  const connectCursor = useCallback(async () => {
+    if (savingRef.current) return;
+    savingRef.current = true;
+    setSaving(true);
+    try {
+      await window.electronAPI.maker.refreshBuiltinProviderModels('cursor');
+      onDone('cursor');
+    } catch {
+      toast.error(t('settings.providers.cursor.refreshFailed'));
+    } finally {
+      savingRef.current = false;
+      setSaving(false);
+    }
+  }, [onDone, t]);
   const connectLlamaCpp = useCallback(async () => {
     if (savingRef.current) return;
     if (providers.some(p => p.id === MANAGED_LLAMACPP_PROVIDER_ID)) {
@@ -1630,9 +1652,17 @@ export function AddProviderWizard({
                     ))}
                   </>
                 )}
-                {listedOauth.length > 0 && (
+                {(listedOauth.length > 0 || cursorChoice) && (
                   <>
                     <GroupLabel>{t('settings.providers.wizard.groupSubscription')}</GroupLabel>
+                    {cursorChoice && (
+                      <ProviderRow
+                        icon={cardIcon({ providerId: 'cursor', name: cursorChoice.name })}
+                        name={cursorChoice.name}
+                        meta={t('settings.providers.cursor.localAccount')}
+                        onClick={() => { setSel({ kind: 'cursor-cli', provider: cursorChoice }); setStep(2); }}
+                      />
+                    )}
                     {listedOauth.map((p) => (
                       <ProviderRow
                         key={p.id}
@@ -1783,6 +1813,8 @@ export function AddProviderWizard({
               <LocalOllamaInstall canInstall={ollamaCanInstall} onReady={() => connectOllama()} />
             </div>
           )}
+          {step === 2 && sel?.kind === 'cursor-cli' && <CursorProviderSetup />}
+
           {step === 2 && sel?.kind === 'oauth' && (
             <div className="flex flex-col gap-4">
               <div className="flex items-center gap-3">
@@ -2216,6 +2248,12 @@ export function AddProviderWizard({
             <Button variant="secondary" size="lg" type="button" onClick={handleClose} disabled={saving}>
               {t('settings.providers.wizard.cancel')}
             </Button>
+            {sel?.kind === 'cursor-cli' && step === 2 && (
+              <Button variant="cta" size="lg" type="button" loading={saving} disabled={saving}
+                onClick={() => void connectCursor()}>
+                {t('settings.providers.models.refreshBuiltinAria')}
+              </Button>
+            )}
             {sel?.kind === 'builtinApiKey' && step === 2 && (
               <Button
                 variant="cta"

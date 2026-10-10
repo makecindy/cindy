@@ -101,7 +101,8 @@ describe('catalog invalidation under a slow device link', () => {
     for (let i = 0; i < 4; i++) { refresh.notify('a'); await vi.advanceTimersByTimeAsync(2); }
     await flush();
     expect(readProviders).toHaveBeenCalledTimes(1);
-    expect(readCapabilities).toHaveBeenCalledTimes(3);
+    expect(readCapabilities).toHaveBeenCalledTimes(4);
+    expect(readCapabilities.mock.calls.map(([, agent]) => agent)).toEqual(['claude-code', 'codex', 'pi', 'cursor']);
     // A mounted page joins the same capability read as the push refresh.
     const pageRead = vi.fn();
     const joined = caps.fetchAgentCapabilities('a', 'codex', pageRead);
@@ -118,7 +119,7 @@ describe('catalog invalidation under a slow device link', () => {
     await flush();
     expect(pageRead).not.toHaveBeenCalled();
     expect(readProviders).toHaveBeenCalledTimes(2);
-    expect(readCapabilities).toHaveBeenCalledTimes(6);
+    expect(readCapabilities).toHaveBeenCalledTimes(8);
     last.resolve(catalog('latest'));
     await flush();
     expect(published).toHaveBeenCalledExactlyOnceWith(catalog('latest'));

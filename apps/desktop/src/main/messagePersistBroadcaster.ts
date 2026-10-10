@@ -368,19 +368,19 @@ type CreateDbMessageBody = Parameters<typeof createDbMessage>[1];
 type OwnerScope = ReturnType<typeof broadcastTap.captureDataOwnerBroadcastScope> | null;
 
 /**
- * session-agent-switch:每会话当前 agent 引擎('cc'/'codex'),由 register.ts
+ * session-agent-switch:每会话当前 agent 引擎('cc'/'codex'/'pi'/'cursor'),由 register.ts
  * wireSessionToIpc 在 session 建立时登记。broadcaster 落库的 SDK 事件行
  * (assistant/tool/thinking/error)逐行 stamp 到 messages.agent_kind——切换后
  * session.agent_kind 只代表"当前引擎",历史行的 agent_meta 必须按写入时引擎解析。
  * clearSessionPersistState 时清理。
  */
-const dbAgentKindBySession = new Map<string, 'cc' | 'codex' | 'pi'>();
+const dbAgentKindBySession = new Map<string, 'cc' | 'codex' | 'pi' | 'cursor'>();
 
-export function noteSessionAgentKind(sessionId: string, dbAgentKind: 'cc' | 'codex' | 'pi'): void {
+export function noteSessionAgentKind(sessionId: string, dbAgentKind: 'cc' | 'codex' | 'pi' | 'cursor'): void {
   dbAgentKindBySession.set(sessionId, dbAgentKind);
 }
 
-export function getSessionDbAgentKind(sessionId: string): 'cc' | 'codex' | 'pi' | null {
+export function getSessionDbAgentKind(sessionId: string): 'cc' | 'codex' | 'pi' | 'cursor' | null {
   return dbAgentKindBySession.get(sessionId) ?? null;
 }
 

@@ -80,7 +80,7 @@ interface AgentTaskCardProps {
   sessionId?: string;
   /** Current owning harness. Pi's durable-detail sidebar must never surface
    * after the session has switched to Claude Code or Codex. */
-  sessionAgentKind?: 'cc' | 'codex' | 'pi';
+  sessionAgentKind?: 'cc' | 'codex' | 'pi' | 'cursor';
 }
 
 function readInputString(input: unknown, keys: string[]): string | undefined {

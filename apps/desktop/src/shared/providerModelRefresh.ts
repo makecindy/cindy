@@ -3,7 +3,7 @@
  *
  * Custom providers keep their existing endpoint-driven additions-only refresh flow.
  */
-export const BUILTIN_REFRESHABLE_PROVIDER_IDS = ['xd', 'anthropic', 'openai', 'xai'] as const;
+export const BUILTIN_REFRESHABLE_PROVIDER_IDS = ['xd', 'anthropic', 'openai', 'xai', 'cursor'] as const;
 
 export type BuiltinRefreshableProviderId = (typeof BUILTIN_REFRESHABLE_PROVIDER_IDS)[number];
 

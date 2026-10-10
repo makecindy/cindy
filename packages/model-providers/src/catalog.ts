@@ -34,7 +34,7 @@ import { isProviderRequestPath } from './provider-url.js';
 
 export { BUNDLED_CATALOG, BUILTIN_PROVIDERS, claudeSubscriptionOnlyForClaudeCode } from './builtin.js';
 
-const AGENT_KINDS: readonly AgentKind[] = ['claude-code', 'codex', 'pi'];
+const AGENT_KINDS: readonly AgentKind[] = ['claude-code', 'codex', 'pi', 'cursor'];
 const EFFORTS: readonly Effort[] = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'];
 const WIRE_PROTOCOLS = ['anthropic-messages', 'openai-responses', 'openai-chat', 'google-generative-ai'] as const;
 
@@ -317,6 +317,18 @@ function validateProvider(p: Provider, allowEmptyModalities = false): void {
   );
   // 约束：供应商声明支持的每个 agent，都必须有对应路由描述符 + per-agent 模型数组。
   for (const agent of p.agents) {
+    if (agent === 'cursor') {
+      assert(p.id === 'cursor' && p.source === 'builtin' && p.auth.method === 'none',
+        'Cursor only supports its native CLI provider');
+      assert(p.agents.length === 1 && Object.keys(p.routing).length === 0,
+        'Cursor cannot declare HTTP or compatibility routes');
+      assert(Array.isArray(p.models.cursor), 'Cursor requires a native model list');
+      for (const model of p.models.cursor) {
+        assert(model.route === undefined, 'Cursor models cannot declare HTTP routes');
+        validateModel(model, p.id, agent, undefined);
+      }
+      continue;
+    }
     const routing = p.routing[agent];
     assert(routing, `provider '${p.id}' declares agent '${agent}' but no routing[${agent}]`);
     if (routing.upstream !== undefined) {

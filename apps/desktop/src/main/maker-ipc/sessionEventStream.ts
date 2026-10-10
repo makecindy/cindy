@@ -111,7 +111,7 @@ export function persistSessionStreamEvent(
     // harness event into Cindy's durable record on the same FIFO as chat
     // messages. No launch/control path or provider payload is modified.
     const source =
-      event.source === 'claude-code' || event.source === 'codex' || event.source === 'pi'
+      event.source === 'claude-code' || event.source === 'codex' || event.source === 'pi' || event.source === 'cursor'
         ? event.source
         : undefined;
     const observedAt = Date.now();

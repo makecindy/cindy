@@ -17,8 +17,9 @@ const ITEMS: Array<{ key: 'files' | 'commands' | 'network'; icon: LucideIcon }> 
   { key: 'network', icon: Globe },
 ];
 
-export function FullAccessConfirmContent() {
+export function FullAccessConfirmContent({ cursor = false }: { cursor?: boolean }) {
   const { t } = useTranslation();
+  const copyKey = cursor ? 'newChat.chatInput.fullAccessConfirmation.cursor' : 'newChat.chatInput.fullAccessConfirmation';
   return (
     <div>
       <div className="rounded-xl border border-[var(--border-default)]">
@@ -44,7 +45,7 @@ export function FullAccessConfirmContent() {
                 {t(`newChat.chatInput.fullAccessConfirmation.items.${key}.title`)}
               </p>
               <p className="break-words text-12 leading-[1.5] text-[var(--text-secondary)]">
-                {t(`newChat.chatInput.fullAccessConfirmation.items.${key}.description`)}
+                {t(`${copyKey}.items.${key}.description`)}
               </p>
             </div>
           </div>
@@ -53,7 +54,7 @@ export function FullAccessConfirmContent() {
       {/* 兜底边界的宽心话:内置高风险操作仍会确认。作为脚注而非清单项 ——
           它不是"将被放开"的权限,混进清单会削弱上面三条的警示语义。 */}
       <p className="mt-3 text-12 leading-[1.5] text-[var(--text-tertiary)]">
-        {t('newChat.chatInput.fullAccessConfirmation.note')}
+        {t(`${copyKey}.note`)}
       </p>
     </div>
   );

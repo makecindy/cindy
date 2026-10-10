@@ -126,7 +126,7 @@ export function BotCapabilitySettings({
           agentKind:
             session.runtimePending?.profile.agentKind ??
             session.runtimeEffective?.agentKind ??
-            (session.agentKind === 'codex' || session.agentKind === 'pi'
+            (session.agentKind === 'codex' || session.agentKind === 'pi' || session.agentKind === 'cursor'
               ? session.agentKind
               : 'claude-code'),
           botSessionId: bot.canonicalSessionId,

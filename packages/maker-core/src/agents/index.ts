@@ -141,3 +141,6 @@ export {
   isClaudeProjectKeyExact,
   findClaudeSessionJsonl,
 } from './claude-code/claude-projects-fs.js';
+
+export { CursorAgent } from './cursor/index.js';
+export { CURSOR_DEFAULT_MODEL, cursorDefaultModel } from './cursor/models.js';

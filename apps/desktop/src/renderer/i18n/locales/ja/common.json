@@ -2243,6 +2243,13 @@
       }
     },
     "providers": {
+      "cursor": {
+        "localAccount": "この端末の Cursor CLI アカウント",
+        "setup": "公式の手順で Cursor CLI をインストールし、Cindy を再起動してください。その後、ターミナルで Cursor にログインし、モデル一覧を更新してください。",
+        "installGuide": "インストール手順を表示",
+        "modelsUnavailable": "モデルの準備ができていません",
+        "refreshFailed": "Cursor のモデルを取得できませんでした。CLI がインストール済みでログインしていることを確認し、再試行してください。CLI をインストールした直後は Cindy を再起動してください。"
+      },
       "llamacpp": {
         "ownedElsewhere": "モデルサービスは別の Cindy インスタンスで実行中です。モデルのダウンロードやコンテキストの変更はそちらで行うか、先にそのサービスを停止してください。",
         "primaryPick": "第一候補 · まず試す",
@@ -9421,6 +9428,10 @@
         "favoritesSyncFailed": "お気に入りを同期できません。選択画面を開き直してください。接続先の更新が必要な場合があります。",
         "railRemoteProviderGroup": "{{provider}} · {{device}} · {{group}}",
         "providerGroupLabel": "{{provider}} · {{group}}"
+      },
+      "cursorGroups": {
+        "models": "Cursor Models",
+        "other": "Other Models"
       }
     },
     "permissionSelector": {
@@ -9428,6 +9439,24 @@
       "listAria": "権限モード",
       "autoFallback": "自動レビューは一時的に利用できないため、デフォルト権限に切り替えました。必要な操作は確認します。",
       "modes": {
+        "cursor": {
+          "ask": {
+            "label": "デフォルトの権限",
+            "description": "Cursor はネイティブに設定された権限ポリシーに従います。Cindy は Cursor から送られた承認要求のみを表示し、ワークスペース内の編集は確認なしで実行される場合があります。"
+          },
+          "default": {
+            "label": "デフォルトの権限",
+            "description": "Cursor はネイティブに設定された権限ポリシーに従います。Cindy は Cursor から送られた承認要求のみを表示し、ワークスペース内の編集は確認なしで実行される場合があります。"
+          },
+          "auto": {
+            "label": "自動レビュー",
+            "description": "Cindy が Cursor からの承認要求を自動レビューし、必要な場合は確認を求めます。Cursor のネイティブ権限ポリシーは引き続き適用されます。"
+          },
+          "bypassPermissions": {
+            "label": "フルアクセス",
+            "description": "Cindy が Cursor からの承認要求を追加確認なしで許可します。最もリスクが高いモードです。Cursor のネイティブ権限ポリシーは引き続き適用されます。"
+          }
+        },
         "claude-code": {
           "ask": {
             "label": "デフォルト権限",
@@ -9644,6 +9673,21 @@
       "permissionSwitchFailed": "権限モードの変更に失敗したため、以前の設定を維持しました",
       "retryPluginWriteAccess": "プラグインの書き込み権限を再確認",
       "fullAccessConfirmation": {
+        "cursor": {
+          "description": "Cindy は Cursor からの承認リクエストを、個別に確認せず許可します：",
+          "items": {
+            "files": {
+              "description": "Cursor からのファイルの読み取り・変更リクエストを許可"
+            },
+            "commands": {
+              "description": "Cursor からのターミナルコマンドのリクエストを許可"
+            },
+            "network": {
+              "description": "Cursor からのネットワーク操作のリクエストを許可"
+            }
+          },
+          "note": "Cursor 本来の権限ポリシーは引き続き適用されます。この選択でネイティブのサンドボックスや永続的な許可は変更されません。組み込みの高リスク操作には引き続き確認が必要です。"
+        },
         "title": "Full access を有効にしますか？",
         "description": "Full access はワークスペースのサンドボックスを無効にし、通常の承認を省略します。Cindy は確認なしで次の操作ができるようになります:",
         "items": {
@@ -13519,6 +13563,7 @@
       "codexVoiceAuthDescription": "音声入力は、接続済みの ChatGPT アカウントで GPT リアルタイム音声認識を使用します。アカウントが未接続か、接続の更新が必要です。モデルプロバイダーを開いて ChatGPT に接続しますか？",
       "codexBinaryMissingTitle": "Codex コンポーネントの準備ができていません",
       "codexBinaryMissingDescription": "Codex コンポーネントの準備がまだできていないため、この機能は使用できません。しばらくしてから再試行するか、「設定 → プロバイダー」で Codex の接続状態を確認してください。",
+      "cursorSetupDescription": "このタスクを実行するコンピューターに Cursor CLI をインストールし、Cindy を再起動してください。その後、ターミナルで cursor-agent login を実行し、モデル一覧を更新してください。",
       "piBinaryMissingTitle": "Pi コンポーネントの準備ができていません",
       "piBinaryMissingDescription": "Pi コンポーネントの準備がまだできていないため、この機能は使用できません。しばらくしてから再試行するか、「設定 → プロバイダー」で Pi の接続状態を確認してください。",
       "goToSettings": "設定を開く",

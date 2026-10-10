@@ -33,7 +33,7 @@ const DESCRIPTION = [
   '【过滤参数】所有参数可任意组合, 不传 = 不过滤:',
   '  - workdir: 精确匹配 sessions.workingDir',
   '  - from / to: ISO 8601 时间窗 (from 含, to 不含), 过滤 sessions.createdAt',
-  '  - agent_kind: cc(Claude Code) | codex',
+  '  - agent_kind: cc(Claude Code) | codex | pi | cursor',
   '  - include_deleted: 默认 false (排除 status=deleted)',
   '',
   '【输出】messageCount 已过滤被 rewind 软删的消息, 是用户可见的真实条数。',
@@ -73,9 +73,9 @@ export function registerListSessionsTool(
         .optional()
         .describe('ISO 8601 时间字符串(不含), 过滤 sessions.createdAt < to。'),
       agent_kind: z
-        .enum(['cc', 'codex'])
+        .enum(['cc', 'codex', 'pi', 'cursor'])
         .optional()
-        .describe('过滤 agent 类型, 不传 = 两者都返。'),
+        .describe('过滤 agent 类型, 不传 = 所有引擎都返。'),
       include_deleted: z
         .boolean()
         .default(false)

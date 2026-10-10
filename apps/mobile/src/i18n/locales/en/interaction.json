@@ -22,6 +22,7 @@
     "highRisk": "High risk",
     "autoReviewUnavailable": "Automatic review could not finish. Confirm whether to allow this action.",
     "fullAccessConfirm": {
+      "cursorDescription": "Cindy will directly allow approval requests from Cursor without asking for each one:\n\nDirectly allow file read and modification requests from Cursor\nDirectly allow terminal command requests from Cursor\nDirectly allow network operation requests from Cursor\n\nCursor’s native permission policy still applies. This choice does not change its native sandbox or persistent grants. Built-in high-risk operations still require confirmation.",
       "title": "Enable Full access?",
       "description": "Full access disables the workspace sandbox and skips routine approvals. {{appName}} can modify files outside the workspace and run network commands without asking; built-in high-risk operations will still require confirmation.",
       "confirm": "Enable Full access",

@@ -10,7 +10,7 @@ const bundledCatalog = () => BUNDLED_CATALOG;
 
 describe('createProviderService', () => {
   it('snapshot mode suppresses side effects and skips both account presentation readers', async () => {
-    const read = vi.fn((_options: ConnectionReadOptions) => true);
+    const read = vi.fn<(options: ConnectionReadOptions) => boolean>(() => true);
     const account = vi.fn(async () => ({ source: 'unknown' as const }));
     const svc = createProviderService({
       getCatalog: bundledCatalog,
@@ -131,7 +131,7 @@ describe('createProviderService', () => {
     const providers = await svc.listProviders();
     const byId = Object.fromEntries(providers.map((p) => [p.id, p.connected]));
     // gemini(内置 API-key 供应商)未注入 builtinApiKeyConnected ⇒ 缺省未连接。
-    expect(byId).toEqual({ anthropic: false, openai: false, xai: false, xd: true, gemini: false });
+    expect(byId).toEqual({ anthropic: false, openai: false, xai: false, xd: true, gemini: false, cursor: false });
   });
 
   it('builtin API-key provider connection follows builtinApiKeyConnected (2026-07 图像多来源)', async () => {

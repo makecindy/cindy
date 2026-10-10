@@ -79,7 +79,7 @@ export interface WorkbenchDigestWire {
 export interface WorkbenchTaskWire {
   /** Cindy 任务是 session id;还没接过来的本机会话是 `claude:<id>` / `codex:<id>` / `pi:<id>`。 */
   taskId: string;
-  source: 'cindy' | 'claude-code' | 'codex' | 'pi';
+  source: 'cindy' | 'claude-code' | 'codex' | 'pi' | 'cursor';
   /** 已经是 Cindy 里的任务(本机会话被继续过之后也会变成 true)。 */
   imported: boolean;
   /** 清洗过的原始标题。 */

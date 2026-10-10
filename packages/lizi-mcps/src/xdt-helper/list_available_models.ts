@@ -48,12 +48,12 @@ function isBudgetWireModel(modelId: string): boolean {
   );
 }
 
-function tagTier(models: ModelDescriptor[] | undefined): TaggedModel[] | undefined {
+function tagTier(models: ModelDescriptor[] | undefined, nativeCatalog = false): TaggedModel[] | undefined {
   if (!models) return undefined;
   return models.map((m) => ({
     id: m.id,
     label: m.label,
-    tier: isBudgetWireModel(m.id) ? 'budget' : 'standard',
+    tier: !nativeCatalog && isBudgetWireModel(m.id) ? 'budget' : 'standard',
     ...(m.providers
       ? {
           providers: m.providers.map((provider) => ({
@@ -72,7 +72,7 @@ export interface ListAvailableModelsDeps {
   /** 调用方任务(可选)：它的 Agent 在另一台电脑运行时，按那台的模型目录列出。 */
   getSessionContext?: () => { sessionId?: string };
   listAvailableModels: (params: {
-    agent?: 'claude-code' | 'codex' | 'pi';
+    agent?: 'claude-code' | 'codex' | 'pi' | 'cursor';
     callerSessionId?: string;
     /** 列哪里的模型：省略 = Lead 所在位置；null = 任务所在电脑；string = 那台电脑或分享。 */
     agentDeviceId?: string | null;
@@ -84,6 +84,7 @@ export interface ListAvailableModelsDeps {
     codex?: ModelDescriptor[];
     claude_code?: ModelDescriptor[];
     pi?: ModelDescriptor[];
+    cursor?: ModelDescriptor[];
   }, string>>;
 }
 
@@ -94,10 +95,10 @@ function toToolAgentDeviceId(value: string | null): string {
 
 const DESCRIPTION = [
   '列出每个 agent 当前 host 支持的 model id 清单, 用于 create_worker 前确认 model 名拼写。',
-  'Codex 和 Claude Code 支持的 model 完全不同, 不可跨用。',
+  '各引擎的 model id 不可跨用；Cursor 必须原样使用其原生目录公布的 id，不根据显示名称推断。',
   '',
   '参数:',
-  '- agent: 可选, codex / claude-code / pi; 不传返三者',
+  '- agent: 可选, codex / claude-code / pi / cursor; 不传返所有引擎。Cursor 只列本机工作区，跨设备位置不提供',
   '- agent_device_id: 可选, 列哪里的模型(Worker 的 Agent 可在别的电脑或分享来的供应商上运行): 取返回的 locations[].agent_device_id, "local" 为这台电脑; 不传列 Lead 所在位置',
   '',
   '返回值:',
@@ -105,6 +106,7 @@ const DESCRIPTION = [
   '- codex: Codex agent 的可用 model 列表 [{id, label, tier, providers, default_provider_id}]',
   '- claude_code: Claude Code agent 的可用 model 列表 [{id, label, tier, providers, default_provider_id}]',
   '- pi: Pi agent 的可用 model 列表 [{id, label, tier, providers, default_provider_id}]',
+  '- cursor: Cursor agent 原生公布的 model 列表 [{id, label, tier}]',
   '- providers: 当前已连接且实际提供该模型的来源 [{provider_id, provider_name}]。创建 Worker 时把选定的 provider_id 原样传给 create_worker/create_workers。',
   '- default_provider_id: 未显式选择来源时 host 当前解析出的默认来源；providers 只有一项时直接使用该项。',
   '',
@@ -127,9 +129,9 @@ export function registerListAvailableModelsTool(
     description: DESCRIPTION,
     inputShape: {
       agent: z
-        .enum(['codex', 'claude-code', 'pi'])
+        .enum(['codex', 'claude-code', 'pi', 'cursor'])
         .optional()
-        .describe('可选, 只查某一 agent 的 model 列表; 不传返三者'),
+        .describe('可选, 只查某一 agent 的 model 列表; 不传返所有引擎。Cursor 只在本机工作区列出'),
       agent_device_id: z
         .string()
         .trim()
@@ -170,6 +172,8 @@ export function registerListAvailableModelsTool(
         codex: tagTier(result.codex),
         claude_code: tagTier(result.claude_code),
         pi: tagTier(result.pi),
+        // Cursor IDs are opaque native IDs, never Cindy gateway budget routes.
+        cursor: tagTier(result.cursor, true),
       });
     },
   });

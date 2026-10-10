@@ -37,24 +37,24 @@ import type { Effort } from '@cindy/maker-core';
 /** 依赖注入面: IM 默认值 + 各 agent 当前可用模型清单。 */
 export interface HookDefaultsDeps {
   readDefaults: () => {
-    agentKind: 'claude-code' | 'codex' | 'pi';
-    agents: Record<
-      'claude-code' | 'codex' | 'pi',
+    agentKind: 'claude-code' | 'codex' | 'pi' | 'cursor';
+    agents: Partial<Record<
+      'claude-code' | 'codex' | 'pi' | 'cursor',
       { providerId: string | null; model: string; effort: string }
-    >;
+    >>;
   };
-  getModels: (agentKind: 'claude-code' | 'codex' | 'pi') => Array<{
+  getModels: (agentKind: 'claude-code' | 'codex' | 'pi' | 'cursor') => Array<{
     id: string;
     efforts: readonly string[];
     defaultEffort: string | null;
   }>;
   /** 该 agent 支持的权限档 id 清单(capabilities.permissionModes)。 */
-  getPermissionModes: (agentKind: 'claude-code' | 'codex' | 'pi') => readonly string[];
+  getPermissionModes: (agentKind: 'claude-code' | 'codex' | 'pi' | 'cursor') => readonly string[];
   log: { warn(msg: string): void };
 }
 
 export interface ResolvedHookSessionConfig {
-  agentKind: 'claude-code' | 'codex' | 'pi';
+  agentKind: 'claude-code' | 'codex' | 'pi' | 'cursor';
   model: string;
   effort: Effort | undefined;
   permissionMode: string;
@@ -66,7 +66,7 @@ export interface ResolvedHookSessionConfig {
   providerId: string | null;
 }
 
-const AGENT_KINDS = new Set(['claude-code', 'codex', 'pi']);
+const AGENT_KINDS = new Set(['claude-code', 'codex', 'pi', 'cursor']);
 
 /**
  * 合成新 hook 会话的 agent/model/effort。
@@ -84,9 +84,9 @@ export function resolveHookSessionConfig(
   const defaults = deps.readDefaults();
 
   // 1. agent: 显式合法值 > 草稿默认
-  const agentKind: 'claude-code' | 'codex' | 'pi' =
+  const agentKind: 'claude-code' | 'codex' | 'pi' | 'cursor' =
     overrides.agentKind !== null && AGENT_KINDS.has(overrides.agentKind)
-      ? (overrides.agentKind as 'claude-code' | 'codex' | 'pi')
+      ? (overrides.agentKind as 'claude-code' | 'codex' | 'pi' | 'cursor')
       : defaults.agentKind;
 
   const models = deps.getModels(agentKind);
@@ -149,7 +149,8 @@ export function resolveHookSessionConfig(
   //    (claude-code: ask/acceptEdits/auto/bypassPermissions; codex: ask/auto/
   //    bypassPermissions), 故取 [0] 即最严档。
   //    只有「从未填过显式档」才走 bypass 历史默认, 该行为保持不变。
-  let permissionMode = 'bypassPermissions';
+  // Keep Cursor's conservative unconfigured hook default; explicit Auto/Full access is supported.
+  let permissionMode = agentKind === 'cursor' ? 'ask' : 'bypassPermissions';
   if (overrides.permissionMode !== null) {
     const supported = deps.getPermissionModes(agentKind);
     if (supported.includes(overrides.permissionMode)) {
@@ -163,7 +164,7 @@ export function resolveHookSessionConfig(
       // agent 未声明任何档位(异常/测试桩)—— 与「有档位但不含显式值」是两种情况,
       // 日志分开写,免得排障时把「无档位声明」误读成「已收紧到最严档」。
       deps.log.warn(
-        `hook override permissionMode '${overrides.permissionMode}' rejected: ${agentKind} declares no permission modes; using legacy default 'bypassPermissions'`,
+        `hook override permissionMode '${overrides.permissionMode}' rejected: ${agentKind} declares no permission modes; using default '${permissionMode}'`,
       );
     }
   }

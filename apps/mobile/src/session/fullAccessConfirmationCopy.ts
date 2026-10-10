@@ -24,15 +24,15 @@ export type FullAccessConfirmationCopy = Readonly<{
   cancel: string;
 }>;
 
-type FullAccessConfirmationSource = { permission: { fullAccessConfirm: FullAccessConfirmationCopy } };
+type FullAccessConfirmationSource = { permission: { fullAccessConfirm: FullAccessConfirmationCopy & { cursorDescription: string } } };
 
 /** locale JSON 里的 {{appName}} 由 i18next defaultVariables 注入;这里不经 i18next,手动替换。 */
-function project(source: FullAccessConfirmationSource): FullAccessConfirmationCopy {
+function project(source: FullAccessConfirmationSource, cursor = false): FullAccessConfirmationCopy {
   const copy = source.permission.fullAccessConfirm;
   const fill = (value: string) => value.replace(/\{\{appName\}\}/g, BRAND_NAME);
   return {
     title: fill(copy.title),
-    description: fill(copy.description),
+    description: fill(cursor ? copy.cursorDescription : copy.description),
     confirm: fill(copy.confirm),
     cancel: fill(copy.cancel),
   };
@@ -47,4 +47,12 @@ export const FULL_ACCESS_CONFIRMATION_COPY: Record<
   ko: project(koInteraction),
   "zh-CN": project(zhCNInteraction),
   "zh-TW": project(zhTWInteraction),
+};
+
+export const CURSOR_FULL_ACCESS_CONFIRMATION_COPY: typeof FULL_ACCESS_CONFIRMATION_COPY = {
+  en: project(enInteraction, true),
+  ja: project(jaInteraction, true),
+  ko: project(koInteraction, true),
+  "zh-CN": project(zhCNInteraction, true),
+  "zh-TW": project(zhTWInteraction, true),
 };

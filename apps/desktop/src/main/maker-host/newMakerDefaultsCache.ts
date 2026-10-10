@@ -1,4 +1,4 @@
-import { normalizeBotModelChain, type BotModelRoute } from '../../shared/botModelChain.js';
+import { normalizeAppModelRoute, type AppModelRoute } from '../../shared/appDefaultModelSelection.js';
 import { isDataOwnerPushStamp, type DataOwnerPushStamp } from '../../shared/dataOwnerPush.js';
 import {
   DEFAULT_ORCA_WORKER_PERMISSION_MODE,
@@ -19,7 +19,7 @@ import {
  * Vendor 名称差异: renderer 用 'cc' / 'codex' / 'pi'; worker spawn 路径用
  * 'claude-code' / 'codex' / 'pi'。getWorkerDefaultsFromNewMaker 内部做映射。
  */
-type VendorKey = 'cc' | 'codex' | 'pi';
+type VendorKey = 'cc' | 'codex' | 'pi' | 'cursor';
 
 interface VendorPrefsSnapshot {
   model?: string;
@@ -36,7 +36,7 @@ interface VendorPrefsSnapshot {
 export interface NewMakerDraftSnapshot {
   /** Model picker preferences captured in the same owner-fenced envelope. */
   providerModelMemory?: ProviderModelMemorySnapshot;
-  selectedRoute?: BotModelRoute;
+  selectedRoute?: AppModelRoute;
   lastByVendor: Partial<Record<VendorKey, VendorPrefsSnapshot>>;
   /** 每个 vendor 是否由用户在 New Maker picker 明确选过模型；旧 renderer 缺省不提供。 */
   modelChosenByVendor?: Partial<Record<VendorKey, boolean>>;
@@ -102,7 +102,7 @@ export function syncNewMakerDraftCache(
   const record = (value: unknown) => !!value && typeof value === 'object' && !Array.isArray(value);
   if (!record(p.lastByVendor) || !record(p.fastModeByModel) || !record(p.effortByModel)) return false;
   setNewMakerDraftCache({
-    selectedRoute: normalizeBotModelChain([p.selectedRoute])[0],
+    selectedRoute: normalizeAppModelRoute(p.selectedRoute) ?? undefined,
     ...(record(p.providerModelMemory) ? { providerModelMemory: p.providerModelMemory } : {}),
     lastByVendor: p.lastByVendor!,
     ...(record(p.modelChosenByVendor) ? { modelChosenByVendor: p.modelChosenByVendor } : {}),
@@ -144,7 +144,7 @@ export interface WorkerDefaultsFromNewMaker {
  * 权威 `${agent}:*` 全局槽优先，来源副本兜底（被控端旧快照可能只写过来源槽）。
  */
 export function getThinkingEnabledFromMemory(
-  agentKind: 'claude-code' | 'codex' | 'pi',
+  agentKind: 'claude-code' | 'codex' | 'pi' | 'cursor',
   providerId: string | null | undefined,
   model: string | undefined,
 ): boolean | undefined {
@@ -160,10 +160,10 @@ export function getThinkingEnabledFromMemory(
  * 缓存未就绪 / 该 vendor 没有偏好 → 返回空对象, 调用方按自己的兜底规则处理。
  */
 export function getWorkerDefaultsFromNewMaker(
-  workerAgent: 'claude-code' | 'codex' | 'pi',
+  workerAgent: 'claude-code' | 'codex' | 'pi' | 'cursor',
 ): WorkerDefaultsFromNewMaker {
   if (!cache) return {};
-  const vendor: VendorKey = workerAgent === 'claude-code' ? 'cc' : workerAgent === 'pi' ? 'pi' : 'codex';
+  const vendor: VendorKey = workerAgent === 'claude-code' ? 'cc' : workerAgent;
   const prefs = cache.lastByVendor[vendor];
   if (!prefs?.model) return {};
   const model = prefs.model;
@@ -212,10 +212,10 @@ export interface RemoteNewMakerDefaults {
 }
 
 export function getRemoteNewMakerDefaults(
-  agentKind: 'claude-code' | 'codex' | 'pi',
+  agentKind: 'claude-code' | 'codex' | 'pi' | 'cursor',
 ): RemoteNewMakerDefaults {
   const vendor: VendorKey =
-    agentKind === 'claude-code' ? 'cc' : agentKind === 'pi' ? 'pi' : 'codex';
+    agentKind === 'claude-code' ? 'cc' : agentKind;
   // providerModelMemory(草稿列表行真实读源)与「该 vendor 是否选过模型」无关:即便 cache 未就绪 /
   // 该 vendor 无选中模型(lastByVendor 空),只要被控端有模型级预设就要全量回给控制端,
   // 否则 req1「完整镜像被控端草稿模型列表」在这条边界上回落 capabilities 默认。故在所有早返回里都带上它。
@@ -249,21 +249,23 @@ export function getRemoteNewMakerDefaultsByVendor(): {
   claudeCode: RemoteNewMakerDefaults;
   codex: RemoteNewMakerDefaults;
   pi: RemoteNewMakerDefaults;
+  cursor: RemoteNewMakerDefaults;
 } {
   return {
     claudeCode: getRemoteNewMakerDefaults('claude-code'),
     codex: getRemoteNewMakerDefaults('codex'),
     pi: getRemoteNewMakerDefaults('pi'),
+    cursor: getRemoteNewMakerDefaults('cursor'),
   };
 }
 
 /** Read only the active owner’s current selection; never reuse another account’s mirror. */
-export function getSelectedNewMakerRoute(ownerScope: string): BotModelRoute | undefined {
+export function getSelectedNewMakerRoute(ownerScope: string): AppModelRoute | undefined {
   return selectedRouteOwner === ownerScope ? cache?.selectedRoute : undefined;
 }
 
 /** Same snapshot as the selected route; never consume the unfenced legacy preference cache. */
-export function getNewMakerModelTuning(ownerScope: string, agent: 'claude-code' | 'codex' | 'pi',
+export function getNewMakerModelTuning(ownerScope: string, agent: 'claude-code' | 'codex' | 'pi' | 'cursor',
   providerId: string, model: string): { effort?: string; fastMode?: boolean } {
   if (selectedRouteOwner !== ownerScope || !cache) return {};
   const memory = cache.providerModelMemory;

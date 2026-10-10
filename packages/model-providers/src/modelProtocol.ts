@@ -32,6 +32,10 @@ export function modelProtocolComparison(
   const forAgent = (agent: AgentKind) => {
     const model = models[agent];
     if (!model) return null;
+    // Cursor ACP owns its transport; do not infer an Anthropic HTTP bridge.
+    if (agent === 'cursor') return {
+      harness: null, outbound: null, localConversion: false, mode: 'unknown' as const,
+    };
     const routing = provider.routing?.[agent];
     const outbound = model.api ?? (
       agent === 'pi'

@@ -42,3 +42,14 @@ it("strips unknown fields and rejects invalid identities, duplicates, and effort
     }),
   ).toThrow("identity");
 });
+
+it.each(["cc", "codex", "pi", "cursor"] as const)("preserves %s favorite identity across list and mutation parsing", (agent) => {
+  const favorite = { uid: "native-fav", providerId: "native", modelId: "native/exact-id", agent };
+  expect(parseModelFavorites([favorite])).toEqual([favorite]);
+  expect(parseModelFavoriteMutation({ kind: "add", item: favorite })).toEqual({
+    kind: "add", item: { ...favorite, uid: "" },
+  });
+});
+it("continues to reject unknown harness favorites", () => {
+  expect(() => parseModelFavorites([{ ...item, agent: "unrecognized" }])).toThrow("Invalid model favorite");
+});

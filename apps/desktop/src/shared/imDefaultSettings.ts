@@ -1,4 +1,4 @@
-export type ImDefaultAgentKind = 'claude-code' | 'codex' | 'pi';
+export type ImDefaultAgentKind = 'claude-code' | 'codex' | 'pi' | 'cursor';
 export type ImDefaultPermissionMode =
   'ask' | 'default' | 'acceptEdits' | 'plan' | 'auto' | 'bypassPermissions';
 export type ImDefaultEffort = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
@@ -65,6 +65,7 @@ export const IM_DEFAULT_SETTINGS: ImDefaultSettings = {
       model: 'codex/gpt-5.5',
       effort: 'high',
     },
+    cursor: { providerId: 'cursor', model: '', effort: 'medium' },
     // Pi 走网关中档模型作为 IM 新会话默认值，可在各渠道设置中覆盖。
     pi: {
       providerId: null,
@@ -89,7 +90,7 @@ export const IM_DEFAULT_EFFORT_OVERRIDES: Readonly<Partial<Record<string, ImDefa
   'codex/gpt-5.5': 'high',
 };
 
-const AGENT_KINDS = new Set<ImDefaultAgentKind>(['claude-code', 'codex', 'pi']);
+const AGENT_KINDS = new Set<ImDefaultAgentKind>(['claude-code', 'codex', 'pi', 'cursor']);
 const EFFORTS = new Set<ImDefaultEffort>([
   'minimal',
   'low',

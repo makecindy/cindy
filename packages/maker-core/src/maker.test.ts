@@ -4241,11 +4241,11 @@ describe('Session permission mode leases', () => {
 });
 
 describe('Maker invalid-resume persistence bridge', () => {
-  it('injects a compare-and-clear callback for resumed Claude sessions', async () => {
+  it.each(['claude-code', 'pi', 'cursor'] as const)('injects a compare-and-clear callback for resumed %s sessions', async (agentKind) => {
     const storage = createStorage();
     await storage.create({
       id: 'session-1',
-      agentKind: 'claude-code',
+      agentKind,
       workDir: '/repo',
       title: 'Resume me',
       model: 'claude-opus-4-6',
@@ -4254,16 +4254,16 @@ describe('Maker invalid-resume persistence bridge', () => {
     const startSession = vi.fn(async (opts: CreateSessionOptions) => {
       expect(await opts.onInvalidResumeSession?.('sdk-old')).toBe(true);
       expect(await opts.onInvalidResumeSession?.('sdk-old')).toBe(false);
-      return createHandle({ id: '<pending>', agentKind: 'claude-code' });
+      return createHandle({ id: '<pending>', agentKind });
     });
     const maker = new Maker({
-      agents: { 'claude-code': createAgent(startSession, 'claude-code') },
+      agents: { [agentKind]: createAgent(startSession, agentKind) },
       storage,
       logger: createLogger(),
     });
     await maker.createSession({
       id: 'session-1',
-      agentKind: 'claude-code',
+      agentKind,
       workingDir: '/repo',
       model: 'claude-opus-4-6',
       resumeSessionId: 'sdk-old',

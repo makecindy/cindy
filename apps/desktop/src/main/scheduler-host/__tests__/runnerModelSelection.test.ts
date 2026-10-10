@@ -116,9 +116,7 @@ function createSessionHarness(): FakeSessionHarness {
   });
   // setModel 声明 string 入参(签名与真实 Session.setModel 一致),下面 mockImplementation 才能
   // 按 (m) 更新 session.model;测试可再用 mockRejectedValue / mockImplementation 覆盖。
-  const setModel = vi.fn(
-    async (_m: string, _opts?: { providerId?: string | null }): Promise<void> => {},
-  );
+  const setModel = vi.fn<(model: string, opts?: { providerId?: string | null }) => Promise<void>>(async () => {});
   const setEffort = vi.fn(async () => undefined);
   const session = {
     id: 'scheduler-session',
@@ -142,7 +140,7 @@ function createSessionHarness(): FakeSessionHarness {
   // session.model(而非 getSessionMeta 快照)确定复用会话实际在跑的模型,harness 必须同样更新。
   // 需要模拟"setModel 抛错"的用例用 mockRejectedValue 覆盖本实现(reject → 不更新 = Claude 语义);
   // 模拟 Codex"await 前先改 model 再抛"的用例用 mockImplementation 显式先改 model 再 throw。
-  setModel.mockImplementation(async (m: string, _opts?: { providerId?: string | null }) => {
+  setModel.mockImplementation(async (m: string) => {
     (session as { model: string }).model = m;
   });
 
@@ -274,7 +272,7 @@ function createRunnerHarness(
     listActiveSessions: vi.fn(() => opts.activeSessions ?? [h.session]),
     closeSession,
     // issue #456:runner fire 时按所选模型 efforts reconcile effort;测试经 availableModels 注入能力。
-    getCapabilities: vi.fn((_agent: string) => ({ availableModels: opts.availableModels ?? [] })),
+    getCapabilities: vi.fn(() => ({ availableModels: opts.availableModels ?? [] })),
     // 默认 false = fresh spawn（opts.model/effort 已生效）；true 模拟进程内
     // 复用 active session 的路径（createSession 忽略 opts, setModel/setEffort 是唯一通道）。
     isSessionAlive: vi.fn(() => opts.sessionAlive ?? false),
@@ -581,6 +579,14 @@ describe('MakerScheduleRunner model selection', () => {
   });
 
   describe('non-heartbeat (每次新建 session)', () => {
+    it('runs a standalone Cursor schedule with the normal unattended permission while keeping its native model', async () => {
+      const h = createSessionHarness();
+      const harness = createRunnerHarness(h);
+      await fireToCompletion(harness, h, baseSchedule({ agentKind: 'cursor', model: 'cursor-default' }));
+      expect(harness.createSession).toHaveBeenCalledWith(expect.objectContaining({
+        agentKind: 'cursor', model: 'cursor-default', permissionMode: 'bypassPermissions',
+      }));
+    });
     it('schedule.model 留空时 Claude 兜底 claude-sonnet-4-6（成本保守,与 UI 空值回退一致）', async () => {
       const h = createSessionHarness();
       const harness = createRunnerHarness(h);

@@ -730,12 +730,13 @@ const WORKER_SESSION_ID = '123e4567-e89b-42d3-a456-426614174000';
 describe('buildNoProviderMessage (pi first-class)', () => {
   const snap = (name: string): OrcaWorkerProviderSnapshot => ({ name }) as OrcaWorkerProviderSnapshot;
   it('names Pi (not Claude Code) when pi has no connected provider', () => {
-    const msg = buildNoProviderMessage('pi', { 'claude-code': [], codex: [], pi: [] });
+    const msg = buildNoProviderMessage('pi', { cursor: [], 'claude-code': [], codex: [], pi: [] });
     expect(msg).toContain('Pi 当前没有可用的模型供应商');
     expect(msg).not.toContain('Claude Code 当前没有');
   });
   it('suggests pi as a fallback agent when pi alone has a connected provider', () => {
     const msg = buildNoProviderMessage('codex', {
+      cursor: [],
       'claude-code': [],
       codex: [],
       pi: [snap('Cindy AI')],
@@ -767,6 +768,7 @@ function providerRoutingContext(
     'claude-code': partial['claude-code'] ?? [],
     codex: partial.codex ?? [],
     pi: partial.pi ?? [],
+    cursor: partial.cursor ?? [],
   };
   return {
     availability,
@@ -2252,6 +2254,7 @@ describe('OrcaWorkerCreationService', () => {
       const { deps, service } = createDeps({
         getWorkerPermissionMode: vi.fn(() => workerPermissionMode),
         getProviderRoutingContext: vi.fn(async () => providerRoutingContext({
+          cursor: [],
           'claude-code': [{ id: 'xd', name: 'XD Gateway', models: ['claude-sonnet-4-6'] }],
           codex: [{ id: 'xd', name: 'XD Gateway', models: ['gpt-5.5'] }],
           pi: [{ id: 'xd', name: 'XD Gateway', models: ['claude-sonnet-4-6'] }],
@@ -2597,6 +2600,7 @@ describe('OrcaWorkerCreationService', () => {
 
   it('pins the sole runtime provider when only the worker model is explicit', async () => {
     const availability = {
+      cursor: [],
       'claude-code': [],
       codex: [
         { id: 'custom-codex', name: 'Custom Codex', models: ['gpt-5.5'] },
@@ -2908,6 +2912,7 @@ describe('OrcaWorkerCreationService', () => {
 describe('buildNoProviderMessage', () => {
   it('suggests the other agent when it has a connected provider', () => {
     const msg = buildNoProviderMessage('codex', {
+      cursor: [],
       'claude-code': [{ id: 'xd', name: 'XD Gateway', models: ['claude-sonnet-4-6'] }],
       pi: [],
       codex: [],
@@ -2918,7 +2923,7 @@ describe('buildNoProviderMessage', () => {
   });
 
   it('omits the agent suggestion when no agent has a connected provider', () => {
-    const msg = buildNoProviderMessage('claude-code', { 'claude-code': [], codex: [], pi: [] });
+    const msg = buildNoProviderMessage('claude-code', { cursor: [], 'claude-code': [], codex: [], pi: [] });
     expect(msg).toContain('Claude Code 当前没有可用的模型供应商');
     expect(msg).toContain('设置 → 模型供应商');
     expect(msg).not.toContain('改用');
@@ -3331,6 +3336,7 @@ describe('SSH remote worker model/provider compatibility gate (R23 P2)', () => {
     const { service, deps } = createDeps({
       getLeadSessionRow: vi.fn(async () => remoteLeadRow),
       getProviderRoutingContext: vi.fn(async () => providerRoutingContext({
+        cursor: [],
         'claude-code': [],
         codex: [{ id: 'xd', name: 'XD Gateway', models: ['gpt-5.5'] }],
         pi: [{ id: 'xd', name: 'XD Gateway', models: ['claude-sonnet-4-6'] }],
@@ -3439,7 +3445,7 @@ describe('SSH remote worker model/provider compatibility gate (R23 P2)', () => {
 
 it('applies plan limit in atomic reservation',async()=>{const {deps,service}=createDeps({validateCreationPlan:vi.fn(async()=>2)});await service.createWorker({leadSessionId:'lead-1',role:'eval',agent:'codex',label:'sample'});expect(deps.reserveWorkerCreation).toHaveBeenCalledWith(expect.objectContaining({hardLimit:2}));});
 it('uses one canonical label at every plan check without mutating the caller', async () => {
-  const validateCreationPlan = vi.fn(async (_params: OrcaWorkerCreateParams) => 2);
+  const validateCreationPlan = vi.fn<(params: OrcaWorkerCreateParams) => Promise<number>>(async () => 2);
   const { service } = createDeps({ validateCreationPlan });
   const params = Object.freeze({ leadSessionId: 'lead-1', teamId: 'team-1', role: 'eval', agent: 'codex' as const, label: ' SAMPLE ', workerPermissionMode: 'auto' as const });
   await expect(service.createWorkerInTeam(params)).resolves.toMatchObject({ ok: true });
@@ -3696,4 +3702,46 @@ it('rejects a plan changed during preparation without reserving or bootstrapping
   const {deps,service}=createDeps({validateCreationPlan:validate,withLeadSendLock:async (_id, operation)=>operation()});
   const result=await service.createWorker({leadSessionId:'lead-1',role:'eval',agent:'codex',label:'sample'});
   expect(result.ok).toBe(false);expect(deps.reserveWorkerCreation).not.toHaveBeenCalled();expect(deps.bootstrapSession).not.toHaveBeenCalled();
+});
+
+
+describe('Cursor native worker admission', () => {
+  it('rejects Cursor on another execution device before reserving or opening a Worker', async () => {
+    const { deps, service } = createDeps();
+    const result = await service.createWorker({
+      leadSessionId: 'lead-1', role: 'worker', label: 'cursor', agent: 'cursor', executionDeviceId: 'device-b',
+    });
+    expect(result).toMatchObject({ ok: false, errorCode: 'INVALID_PARAMS', message: 'Cursor workers require a local workspace' });
+    expect(deps.reserveWorkerCreation).not.toHaveBeenCalled();
+    expect(deps.bootstrapSession).not.toHaveBeenCalled();
+  });
+  it('rejects Cursor when its Agent would run on another computer', async () => {
+    const { deps, service } = createDeps();
+    const result = await service.createWorker({
+      leadSessionId: 'lead-1', role: 'worker', label: 'cursor-remote', agent: 'cursor',
+      agentDeviceId: 'device-b', model: 'native', providerId: 'cursor',
+    });
+    expect(result).toMatchObject({ ok: false, errorCode: 'INVALID_PARAMS', message: 'Cursor workers require a local workspace' });
+    expect(deps.reserveWorkerCreation).not.toHaveBeenCalled();
+    expect(deps.bootstrapSession).not.toHaveBeenCalled();
+  });
+  it('preserves the selected worker permission preference for Cursor', async () => {
+    const { deps, service } = createDeps({
+      getAvailableModels: () => [{ id: 'native', efforts: [], defaultEffort: null }],
+      getProviderRoutingContext: async () => providerRoutingContext({ cursor: [{ id: 'cursor', name: 'Cursor', models: ['native'] }] }),
+    });
+    const result = await service.createWorker({ leadSessionId: 'lead-1', role: 'worker', label: 'cursor', agent: 'cursor', model: 'native', providerId: 'cursor' });
+    expect(result).toMatchObject({ ok: true });
+    expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({ agentKind: 'cursor', permissionMode: 'auto' }));
+  });
+  it.each(['ask', 'auto', 'bypassPermissions'] as const)('honors explicit Cursor worker permission %s', async workerPermissionMode => {
+    const { deps, service } = createDeps({
+      getAvailableModels: () => [{ id: 'native', efforts: [], defaultEffort: null }],
+      getProviderRoutingContext: async () => providerRoutingContext({ cursor: [{ id: 'cursor', name: 'Cursor', models: ['native'] }] }),
+    });
+    const result = await service.createWorker({ leadSessionId: 'lead-1', role: 'worker', label: 'cursor', agent: 'cursor',
+      workerPermissionMode, model: 'native', providerId: 'cursor' });
+    expect(result).toMatchObject({ ok: true });
+    expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({ agentKind: 'cursor', permissionMode: workerPermissionMode }));
+  });
 });

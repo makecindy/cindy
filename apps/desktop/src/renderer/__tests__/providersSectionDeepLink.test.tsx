@@ -43,7 +43,9 @@ const {
 }));
 
 vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (key: string) => key, i18n: { language: 'zh-CN' } }),
+  useTranslation: () => ({ t: (key: string, params?: { agent?: string }) =>
+    key === 'settings.providers.detail.singleAgentNote' ? `${key} ${params?.agent}` : key,
+    i18n: { language: 'zh-CN' } }),
 }));
 
 vi.mock('@/hooks/useProviders', () => ({
@@ -220,6 +222,33 @@ afterEach(() => {
 });
 
 describe('ProvidersSection — 深链定位', () => {
+  it('keeps an installed Cursor CLI visible and retryable without discovered models', async () => {
+    providersState.providers = [makeProvider('cursor', {
+      name: 'Cursor', agents: ['cursor'], auth: { method: 'none' },
+      models: { cursor: [] }, connected: false,
+    })];
+    vi.mocked(window.electronAPI.maker.scanLocalCli).mockResolvedValue({ detections: [{
+      cli: 'cursor-cli', providerId: 'cursor', installed: true, loggedIn: true, sharedWithCindy: true,
+    }] });
+    renderAt('?tab=providers');
+    fireEvent.click(await screen.findByRole('button', { name: /^Cursor/ }));
+    expect(await screen.findByTestId('cursor-provider-setup')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'settings.providers.models.refreshBuiltinAria' })).toBeTruthy();
+    expect(screen.queryByTestId('wizard-stub')).toBeNull();
+  });
+
+  it('labels the connected Cursor header with its actual engine and connection state', async () => {
+    providersState.providers = [makeProvider('cursor', {
+      name: 'Cursor', agents: ['cursor'], auth: { method: 'none' },
+      models: { cursor: [] }, connected: true,
+    })];
+    renderAt('?tab=providers&connect=cursor');
+    const subtitle = await screen.findByText(/^settings.providers.cursor.localAccount/);
+    expect(subtitle.textContent).toContain('singleAgentNote Cursor');
+    expect(screen.getByText('settings.providers.pill.connected')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'settings.providers.button.disconnect' })).toBeNull();
+  });
+
   it('does not rediscover a deleted local Codex provider into the settings list', async () => {
     providersState.providers.push(makeProvider('openai', {
       name: 'Deleted local account', removed: true, imageModels: [{ id: 'image', name: 'Image' }],
@@ -504,7 +533,9 @@ describe('ProvidersSection — 深链定位', () => {
 
   it('a cancelled login cannot clear a newer login on the same account', async () => {
     const completions: ((result: { ok: boolean }) => void)[] = [];
-    const login = vi.fn((_id: string, _options?: { ownerId?: string }) => new Promise<{ ok: boolean }>((resolve) => completions.push(resolve)));
+    const login = vi.fn<(id: string, options?: { ownerId?: string }) => Promise<{ ok: boolean }>>(
+      () => new Promise((resolve) => completions.push(resolve)),
+    );
     let progress!: Parameters<typeof window.electronAPI.maker.onProviderOAuthProgress>[0];
     const openExternal = vi.fn(async () => ({ success: true }));
     window.electronAPI.openExternal = openExternal;

@@ -1332,6 +1332,17 @@ Mobile 据此区分已关闭与已删除的旧选择：保留任务或草稿原�
 不增加分页、客户端重组或重试，不提高传输大小上限；本机 Desktop 设置仍读取完整目录。
 “关闭后必须重选”的提示与发送前检查随 Mobile 更新；旧版控制端仍沿用各自既有选择处理。
 
+## Cursor 既有任务的手机模型选择
+
+控制端通过既有 link-open / subscribe 的 append-only capabilities 声明
+`cursor-model-picker-v1`，表示其跨引擎模型列表包含 Cursor。声明者接收主机原有完整能力；
+未声明的旧控制端在读取 `maker:get-capabilities('cursor')` 时，仅将
+`supportsSessionAgentSwitch` 投影为 false，让既有 Cursor 任务使用当前引擎模型列表。
+原生型号 ID、模型目录、权限与主机执行能力均保留；其他引擎的响应不变。
+这使已识别 Cursor 的旧手机可以继续选 Cursor 型号，完整跨引擎选择需控制端更新。
+未知能力声明由旧主机忽略。不新增 channel、relay 类型、协议版本、数据库迁移或
+Mobile 原生 fingerprint 输入，服务端无需改动。
+
 ### 伙伴群聊成员操作与发送错误（#5604–#5606）
 
 `bot-group-chat` 数据追加可选 `supportsMemberRemoval`；仅为 true 时手机调用

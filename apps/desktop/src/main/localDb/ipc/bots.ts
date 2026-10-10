@@ -9,7 +9,6 @@ import { listBotSkillsForBot } from '../../maker-ipc/botSkillService.js';
 import { provisionDefaultBot } from '../../maker-ipc/botDefaultProvisioning.js';
 import { BOT_TEMPLATE_PRESET_AVATARS, CINDY_DEFAULT_IDENTITY } from '../../../shared/botTemplatePreset.js';
 import fs from 'node:fs/promises';
-import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 
 import { app, BrowserWindow, dialog, ipcMain } from 'electron';
@@ -499,11 +498,12 @@ export async function reconcileBotProfileFolder(
   return derived;
 }
 
-function botSessionAgentKind(config: { harness?: unknown }): 'cc' | 'codex' | 'pi' {
-  return config.harness === 'codex' ? 'codex' : config.harness === 'pi' ? 'pi' : 'cc';
+function botSessionAgentKind(config: { harness?: unknown }): 'cc' | 'codex' | 'pi' | 'cursor' {
+  return config.harness === 'codex' ? 'codex' : config.harness === 'pi' ? 'pi' : config.harness === 'cursor' ? 'cursor' : 'cc';
 }
 
 function defaultBotModelForConfig(config: Record<string, unknown>): string {
+  if (botSessionAgentKind(config) === 'cursor') return 'cursor-default';
   return botSessionAgentKind(config) === 'pi' ? NEW_BOT_DEFAULT_PI_MODEL : 'claude-sonnet-4-6';
 }
 
@@ -886,7 +886,7 @@ async function readProfile(
       fastMode: primaryModelRoute?.fastMode ?? config.fastMode === true,
       harness:
         primaryModelRoute?.harness ??
-        (config.harness === 'codex' || config.harness === 'pi' ? config.harness : 'claude'),
+        (config.harness === 'codex' || config.harness === 'pi' || config.harness === 'cursor' ? config.harness : 'claude'),
       modelChain,
       modelChainOverride: Array.isArray(config.modelChainOverride)
         ? normalizeBotModelChain(config.modelChainOverride)
@@ -980,7 +980,8 @@ async function readRemoteBotProfile(client: ReturnType<typeof getDbClient>, botI
   if (!isBotVisibleRemotely(profile)) return null;
   const canonicalResolution = await reconcileCanonicalLink(botId, client);
   owner.assertCurrent();
-  const { hiddenAt: _hiddenAt, ...visibleProfile } = profile;
+  const visibleProfile: Omit<typeof profile, 'hiddenAt'> = { ...profile };
+  Reflect.deleteProperty(visibleProfile, 'hiddenAt');
   return {
     ...visibleProfile,
     canonicalSessionId: canonicalResolution.canonicalSessionId ?? undefined,
@@ -1165,15 +1166,6 @@ function readLastReadAtMap(raw: unknown): Map<string, number> {
     out.set(botId, Math.floor(at));
   }
   return out;
-}
-
-async function fileExists(candidate: string): Promise<boolean> {
-  try {
-    await fs.access(candidate);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 async function defaultNewBotCapabilities(): Promise<Record<string, unknown>> {

@@ -64,6 +64,15 @@ function historyWithSessions(): XdtHelperHistoryDeps {
 }
 
 describe("list_sessions queuedCount", () => {
+  it.each(["cc", "codex", "pi", "cursor"] as const)("preserves %s in history filters", async (agentKind) => {
+    const history = historyWithSessions();
+    const registry = new XdtHelperToolRegistry();
+    registerListSessionsTool(registry, { history });
+    const result = await registry.call("list_sessions", { agent_kind: agentKind });
+    expect(result.isError).toBeUndefined();
+    expect(history.listSessions).toHaveBeenCalledWith(expect.objectContaining({ agentKind }));
+  });
+
   it("adds live queuedCount values for the returned page", async () => {
     const sessionQueue: SessionQueueDeps = {
       listSessionQueue: vi.fn(),

@@ -22,6 +22,7 @@
     "highRisk": "高風險",
     "autoReviewUnavailable": "自動審批沒完成，請確認要不要允許這次操作。",
     "fullAccessConfirm": {
+      "cursorDescription": "Cindy 將直接允許 Cursor 發來的授權請求，不再逐項詢問：\n\n直接允許 Cursor 發來的檔案讀取與修改請求\n直接允許 Cursor 發來的終端指令請求\n直接允許 Cursor 發來的連網操作請求\n\nCursor 原生權限策略仍然生效。此選擇不會更改原生沙箱或長期授權；內建高風險操作仍會要求確認。",
       "title": "開啟完全訪問？",
       "description": "完全訪問會關閉工作區沙箱並跳過常規審批。{{appName}} 可以修改工作區外的檔案、執行聯網命令且不再詢問；內建高風險操作仍會要求確認。",
       "confirm": "開啟完全訪問",

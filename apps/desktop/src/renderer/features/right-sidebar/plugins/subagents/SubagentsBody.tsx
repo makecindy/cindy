@@ -133,7 +133,7 @@ function ScopedSubagentsBody({
    */
   const detailReadsInFlightRef = useRef(0);
   const transcriptReadsInFlightRef = useRef(0);
-  const selectedProviderHint = state.selectedProvider === 'pi' ? 'pi' : null;
+  const selectedProviderHint = state.selectedProvider === 'cursor' ? 'cursor' : state.selectedProvider === 'pi' ? 'pi' : null;
   const selectedRunAlias = state.selectedProvider && state.selectedProvider !== 'pi'
     ? null
     : (state.selectedRunId ?? null);

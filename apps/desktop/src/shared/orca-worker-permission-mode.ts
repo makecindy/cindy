@@ -1,4 +1,4 @@
-export const ORCA_WORKER_PERMISSION_MODES = ['auto', 'bypassPermissions'] as const;
+export const ORCA_WORKER_PERMISSION_MODES = ['ask', 'auto', 'bypassPermissions'] as const;
 
 export type OrcaWorkerPermissionMode = (typeof ORCA_WORKER_PERMISSION_MODES)[number];
 

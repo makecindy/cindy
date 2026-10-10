@@ -6,6 +6,7 @@ import { getManualLocaleOverride } from "@/i18n/appLanguage";
 import { resolveSystemLocale } from "@/i18n/locale";
 import {
   FULL_ACCESS_CONFIRMATION_COPY,
+  CURSOR_FULL_ACCESS_CONFIRMATION_COPY,
   type FullAccessConfirmationCopy,
 } from "./fullAccessConfirmationCopy";
 
@@ -14,9 +15,10 @@ export function getFullAccessConfirmationCopy(
   languageTag = getManualLocaleOverride() ??
     getLocales()[0]?.languageTag ??
     getLocales()[0]?.languageCode,
+  agentKind?: string,
 ): FullAccessConfirmationCopy {
   const language = resolveSystemLocale(languageTag);
-  return FULL_ACCESS_CONFIRMATION_COPY[language];
+  return (agentKind === 'cursor' ? CURSOR_FULL_ACCESS_CONFIRMATION_COPY : FULL_ACCESS_CONFIRMATION_COPY)[language];
 }
 
 type ShowAlert = (
@@ -30,6 +32,7 @@ export interface FullAccessConfirmationOptions {
   /** 仅用于把新建任务默认权限恢复为该 agent 上一次明确选过的档位。 */
   restoringRememberedChoice?: boolean;
   showAlert?: ShowAlert;
+  agentKind?: string;
 }
 
 /**
@@ -56,7 +59,7 @@ export function confirmFullAccessChange(
       resolve(confirmed);
     };
 
-    const copy = getFullAccessConfirmationCopy();
+    const copy = getFullAccessConfirmationCopy(undefined, options.agentKind);
     (options.showAlert ?? Alert.alert)(
       copy.title,
       copy.description,

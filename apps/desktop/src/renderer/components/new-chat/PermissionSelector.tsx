@@ -9,6 +9,7 @@ import {
   Check,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { deduplicateDefaultPermissionOptions } from '@cindy/maker-shared/permission-mode';
 
 import { cn } from '@/lib/utils';
 import { currentFocusedRow } from '@/components/ui/dropdown-menu-highlight';
@@ -35,7 +36,7 @@ interface PermissionSelectorProps {
   footer?: ReactNode;
   permissionMode: PermissionMode;
   onPermissionModeChange: (mode: PermissionMode) => void;
-  vendorKey?: 'cc' | 'codex' | 'pi';
+  vendorKey?: 'cc' | 'codex' | 'pi' | 'cursor';
   /** device-link 远程会话所属被控端 id;非空 = 权限档从被控端读(本地会话 undefined,行为不变)。 */
   deviceId?: string;
   /** 禁用 trigger。用于断线远程会话等只读 composer 状态。 */
@@ -79,8 +80,9 @@ const PERMISSION_ICONS: Record<string, typeof Hand> = {
   bypassPermissions: TriangleAlert,
 };
 
-function vendorKeyToAgentKind(v: 'cc' | 'codex' | 'pi'): AgentKind {
+function vendorKeyToAgentKind(v: 'cc' | 'codex' | 'pi' | 'cursor'): AgentKind {
   if (v === 'codex') return 'codex';
+  if (v === 'cursor') return 'cursor';
   if (v === 'pi') return 'pi';
   return 'claude-code';
 }
@@ -140,8 +142,11 @@ export function PermissionSelector({
   // device-link:deviceId 非空 → 权限档从被控端读(本地会话 undefined,行为不变)。
   const { capabilities } = useAgentCapabilities(agentKind, deviceId);
 
-  const options: PermissionModeDescriptor[] = (capabilities?.permissionModes ?? []).filter(
-    (option) => allowedModes === undefined || allowedModes.includes(option.id),
+  const options: PermissionModeDescriptor[] = deduplicateDefaultPermissionOptions(
+    (capabilities?.permissionModes ?? []).filter(
+      (option) => allowedModes === undefined || allowedModes.includes(option.id),
+    ),
+    permissionMode,
   );
   const effectiveMode =
     options.length > 0 && !fallbackModeLabel ? normalizeMode(permissionMode, options) : permissionMode;

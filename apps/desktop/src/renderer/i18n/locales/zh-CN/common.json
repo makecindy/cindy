@@ -2243,6 +2243,13 @@
       }
     },
     "providers": {
+      "cursor": {
+        "localAccount": "使用本机 Cursor CLI 账号",
+        "setup": "先按官方说明安装 Cursor CLI，安装后重启 Cindy。然后在终端登录 Cursor，再刷新模型列表。",
+        "installGuide": "查看安装说明",
+        "modelsUnavailable": "模型尚未就绪",
+        "refreshFailed": "未能读取 Cursor 模型。请确认 CLI 已安装并登录，再重试；刚安装时请先重启 Cindy。"
+      },
       "llamacpp": {
         "ownedElsewhere": "模型服务正在另一个 Cindy 实例中运行。请在那里下载模型或修改上下文，或先在该实例停止服务。",
         "primaryPick": "主推 · 先试这个",
@@ -9421,6 +9428,10 @@
         "favoritesSyncFailed": "收藏未能同步。请重新打开重试；被控电脑可能需要更新。",
         "railRemoteProviderGroup": "{{provider}} · {{device}} · {{group}}",
         "providerGroupLabel": "{{provider}} · {{group}}"
+      },
+      "cursorGroups": {
+        "models": "Cursor Models",
+        "other": "Other Models"
       }
     },
     "permissionSelector": {
@@ -9428,6 +9439,24 @@
       "listAria": "权限模式",
       "autoFallback": "自动审批暂时不可用，已切换为默认权限；需要时会询问你。",
       "modes": {
+        "cursor": {
+          "ask": {
+            "label": "默认权限",
+            "description": "Cursor 遵循其原生配置的权限策略。Cindy 只展示 Cursor 发来的授权请求；工作区内的编辑可能无需确认便直接执行。"
+          },
+          "default": {
+            "label": "默认权限",
+            "description": "Cursor 遵循其原生配置的权限策略。Cindy 只展示 Cursor 发来的授权请求；工作区内的编辑可能无需确认便直接执行。"
+          },
+          "auto": {
+            "label": "自动审批",
+            "description": "Cindy 自动审核 Cursor 发来的授权请求，必要时由你确认。Cursor 原生权限策略仍生效。"
+          },
+          "bypassPermissions": {
+            "label": "完全访问",
+            "description": "Cindy 直接允许 Cursor 发来的授权请求，无需再次确认。风险最高；Cursor 原生权限策略仍生效。"
+          }
+        },
         "claude-code": {
           "ask": {
             "label": "默认权限",
@@ -9644,6 +9673,21 @@
       "permissionSwitchFailed": "权限模式切换失败，已保留原设置",
       "retryPluginWriteAccess": "重新确认插件写权限",
       "fullAccessConfirmation": {
+        "cursor": {
+          "description": "Cindy 将直接允许 Cursor 发来的授权请求，不再逐项询问：",
+          "items": {
+            "files": {
+              "description": "直接允许 Cursor 发来的文件读取和修改请求"
+            },
+            "commands": {
+              "description": "直接允许 Cursor 发来的终端命令请求"
+            },
+            "network": {
+              "description": "直接允许 Cursor 发来的联网操作请求"
+            }
+          },
+          "note": "Cursor 原生权限策略仍然生效。此选择不会更改原生沙箱或长期授权；内置高风险操作仍会要求确认。"
+        },
         "title": "开启 Full access？",
         "description": "Full access 会关闭工作区沙箱并跳过常规审批，Cindy 无需询问即可：",
         "items": {
@@ -13519,6 +13563,7 @@
       "codexVoiceAuthDescription": "语音输入需要使用已连接的 ChatGPT 账号调用 GPT 实时语音识别。当前账号尚未连接或需要更新，是否前往「模型供应商」连接 ChatGPT？",
       "codexBinaryMissingTitle": "Codex 组件未就绪",
       "codexBinaryMissingDescription": "Codex 组件尚未准备好，暂时无法使用这个功能。请稍后重试，或前往「模型供应商」检查 Codex 连接状态。",
+      "cursorSetupDescription": "请在运行任务的电脑上安装 Cursor CLI 并重启 Cindy，然后在终端运行 cursor-agent login，登录后刷新模型列表。",
       "piBinaryMissingTitle": "Pi 组件未就绪",
       "piBinaryMissingDescription": "Pi 组件尚未准备好，暂时无法使用这个功能。请稍后重试，或前往「模型供应商」检查 Pi 连接状态。",
       "goToSettings": "前往设置",

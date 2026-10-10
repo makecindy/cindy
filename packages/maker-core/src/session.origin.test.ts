@@ -567,18 +567,19 @@ describe('Session per-turn origin 打标', () => {
     await session.close();
   });
 
-  it('still stamps an in-flight start-failure after the prior turn already observed done', async () => {
+  it.each(['codex', 'pi', 'cursor'] as const)('stamps %s in-flight start-failure after the prior turn already observed done', async (agentKind) => {
     const { handle, emit, setTurnRunning, releaseDispatch } = createControllableHandle({
+      agentKind,
       dispatchEvent: {
         type: 'error',
         data: { message: 'second failed', isTerminal: true },
-        source: 'codex',
+        source: agentKind,
       },
       dispatchOnSend: 2,
       holdDispatch: true,
       holdOnSend: 2,
     });
-    const session = makeSession(handle);
+    const session = makeSession(handle, agentKind);
     const seen: AgentEvent[] = [];
     session.onEvent((event) => seen.push({ ...event }));
 

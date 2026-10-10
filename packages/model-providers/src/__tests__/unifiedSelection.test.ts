@@ -273,7 +273,7 @@ describe('candidateAgentsForModel', () => {
       'codex',
       'pi',
     ]);
-    expect(UNIFIED_AGENT_PRIORITY).toEqual(['claude-code', 'codex', 'pi']);
+    expect(UNIFIED_AGENT_PRIORITY).toEqual(['claude-code', 'codex', 'pi', 'cursor']);
   });
 
   it('bridge 壳与 root 条目寻址同一逻辑模型,候选是并集', () => {

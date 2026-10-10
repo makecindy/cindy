@@ -106,12 +106,12 @@ describe('useAgentCapabilities deviceId-aware cache', () => {
     );
   });
 
-  it('本机目录快照在可选 Pi 不可用时仍返回 Claude Code 与 Codex 能力', async () => {
+  it.each(['pi', 'cursor'] as const)('本机目录快照在可选 %s 不可用时仍返回其余能力', async (missing) => {
     const { getCapabilities } = stubElectron();
     getCapabilities.mockImplementation(async (agent: string) => {
-      if (agent === 'pi')
+      if (agent === missing)
         throw new Error(
-          "[MAKER_NOT_FOUND] Agent 'pi' is not registered (available: claude-code, codex)",
+          `[MAKER_NOT_FOUND] Agent '${missing}' is not registered`,
         );
       return caps(`local:${agent}`);
     });
@@ -120,8 +120,9 @@ describe('useAgentCapabilities deviceId-aware cache', () => {
     await expect(mod.loadLocalCapabilitiesSnapshot()).resolves.toEqual([
       ['claude-code', caps('local:claude-code')],
       ['codex', caps('local:codex')],
+      ...(['pi', 'cursor'] as const).filter(agent => agent !== missing).map(agent => [agent, caps(`local:${agent}`)]),
     ]);
-    expect(getCapabilities).toHaveBeenCalledWith('pi');
+    expect(getCapabilities).toHaveBeenCalledWith(missing);
   });
 
   it('本机目录快照在核心 agent 不可用时仍拒绝提交部分能力', async () => {
@@ -522,8 +523,8 @@ describe('useAgentCapabilities deviceId-aware cache', () => {
       mod.prefetchDeviceCapabilities('dev-1'),
       mod.prefetchDeviceCapabilities('dev-1'),
     ]);
-    // cc + codex + pi 各一次 = 3 次,而非 6 次
-    expect(invoke).toHaveBeenCalledTimes(3);
+    // Each of the four agents is fetched once, even with concurrent callers.
+    expect(invoke).toHaveBeenCalledTimes(4);
   });
 
   it('驱逐:evict 只清该设备,本地与其它设备保留', async () => {
@@ -586,8 +587,10 @@ describe('useAgentCapabilities deviceId-aware cache', () => {
     const mod = await import('@/hooks/useAgentCapabilities');
     const claudeListener = vi.fn();
     const codexListener = vi.fn();
+    const cursorListener = vi.fn();
     mod.subscribeDeviceCapabilities('dev-1', 'claude-code', claudeListener);
     mod.subscribeDeviceCapabilities('dev-1', 'codex', codexListener);
+    mod.subscribeDeviceCapabilities('dev-1', 'cursor', cursorListener);
 
     await mod.prefetchDeviceCapabilities('dev-1');
 
@@ -615,21 +618,25 @@ describe('useAgentCapabilities deviceId-aware cache', () => {
     const mod = await import('@/hooks/useAgentCapabilities');
     const claudeListener = vi.fn();
     const codexListener = vi.fn();
+    const cursorListener = vi.fn();
     mod.subscribeDeviceCapabilities('dev-1', 'claude-code', claudeListener);
     mod.subscribeDeviceCapabilities('dev-1', 'codex', codexListener);
+    mod.subscribeDeviceCapabilities('dev-1', 'cursor', cursorListener);
 
     const stale = mod.prefetchDeviceCapabilities('dev-1');
     mod.evictDeviceCapabilities('dev-1');
     const fresh = mod.prefetchDeviceCapabilities('dev-1');
-    // 每轮按 ALL_AGENT_KINDS 顺序 push 三个 resolver(cc/codex/pi):
-    // 第一轮(stale)= [0][1][2],第二轮(fresh)= [3][4][5]。
-    resolvers[3](caps('fresh:claude'));
-    resolvers[4](caps('fresh:codex'));
-    resolvers[5](caps('fresh:pi'));
+    // Each refresh starts four requests, including native Cursor.
+    expect(invoke).toHaveBeenCalledTimes(8);
+    resolvers[4](caps('fresh:claude'));
+    resolvers[5](caps('fresh:codex'));
+    resolvers[6](caps('fresh:pi'));
+    resolvers[7](caps('fresh:cursor'));
     await fresh;
     resolvers[0](caps('stale:claude'));
     resolvers[1](caps('stale:codex'));
     resolvers[2](caps('stale:pi'));
+    resolvers[3](caps('stale:cursor'));
     await stale;
 
     expect(claudeListener).toHaveBeenNthCalledWith(1, { status: 'loading' });
@@ -652,5 +659,8 @@ describe('useAgentCapabilities deviceId-aware cache', () => {
     expect(mod.getCachedCapabilities('codex', 'dev-1')?.availableModels[0].displayName).toBe(
       'fresh:codex',
     );
+    expect(cursorListener).toHaveBeenCalledTimes(2);
+    expect(cursorListener).toHaveBeenLastCalledWith(expect.objectContaining({ status: 'ready' }));
+    expect(mod.getCachedCapabilities('cursor', 'dev-1')?.availableModels[0].displayName).toBe('fresh:cursor');
   });
 });

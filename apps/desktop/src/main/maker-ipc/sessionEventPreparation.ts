@@ -342,12 +342,12 @@ export function prepareSessionEvent(
         markSessionTurnStarted(session.id);
       }
       if (
-        (event.source === 'claude-code' || event.source === 'codex' || event.source === 'pi') &&
+        (event.source === 'claude-code' || event.source === 'codex' || event.source === 'pi' || event.source === 'cursor') &&
         !deps.turnModelPromiseBySession.has(session.id)
       ) {
         deps.turnModelPromiseBySession.set(session.id, deps.readSessionModelForUsage(session.id));
       }
-      if ((event.source === 'pi' || event.source === 'codex' || event.source === 'claude-code')
+      if ((event.source === 'pi' || event.source === 'codex' || event.source === 'claude-code' || event.source === 'cursor')
         && (!wasInTurn || !deps.turnUsageContextBySession.has(session.id))) {
         deps.turnUsageContextBySession.set(session.id, captureTurnUsageContext(session.id));
       }
@@ -461,7 +461,7 @@ export function prepareSessionEvent(
     // EVENT broadcast 后结束逻辑 turn，并保留 terminal grace 给 renderer 收尾；
     // 可重试 error 保持 running。
     shouldMarkTurnTerminalIdleAfterBroadcast = true;
-    if (event.source === 'claude-code' || event.source === 'codex' || event.source === 'pi') {
+    if (event.source === 'claude-code' || event.source === 'codex' || event.source === 'pi' || event.source === 'cursor') {
       deps.turnModelPromiseBySession.delete(session.id);
       // A paired done may still carry usage after this error. Retain its billing
       // identity until done; a new product turn overwrites it using wasInTurn.

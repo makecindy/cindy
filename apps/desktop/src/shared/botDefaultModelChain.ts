@@ -1,13 +1,14 @@
 import { effectiveSourceIdForModel } from '@cindy/model-providers';
 import type { resolveNewMakerDefaultTuples } from './newMakerDefaultTuple.js';
 import type { BotModelRoute } from './botModelChain.js';
+import type { AppModelRoute } from './appDefaultModelSelection.js';
 
 /** Adapt the client's ordered defaults to Bot routes without another selection policy. */
 export function defaultBotModelChain(
-  args: Parameters<typeof resolveNewMakerDefaultTuples>[0] & { preferredRoute?: BotModelRoute | null },
+  args: Parameters<typeof resolveNewMakerDefaultTuples>[0] & { preferredRoute?: AppModelRoute | null },
 ): BotModelRoute[] {
   const preferred = args.preferredRoute;
-  if (preferred && !args.providersLoading && args.availableAgentsLoaded) {
+  if (preferred && preferred.harness !== 'cursor' && !args.providersLoading && args.availableAgentsLoaded) {
     const agent = preferred.harness === 'claude' ? 'claude-code' : preferred.harness;
     const vendor = agent === 'claude-code' ? 'cc' : agent;
     if (!args.availableAgents.has(vendor)) return [];
@@ -19,7 +20,7 @@ export function defaultBotModelChain(
     const providerId = effectiveSourceIdForModel(providers, preferred.providerId, preferred.model, agent);
     if (providerId) {
       // A selected app default is not consent to add factory fallback models.
-      return [{ ...preferred, providerId }];
+      return [{ ...preferred, harness: preferred.harness, providerId }];
     }
   }
   // Missing, stale or unavailable Cindy defaults are not permission to choose a replacement.

@@ -71,7 +71,7 @@ export interface ReadCreateSessionOptsDeps {
 }
 
 function readAgentKind(value: unknown): AgentKind {
-  if (value === 'claude-code' || value === 'codex' || value === 'pi') return value;
+  if (value === 'claude-code' || value === 'codex' || value === 'pi' || value === 'cursor') return value;
   throwIpcError('INVALID_PARAMS', 'agentKind required');
 }
 
@@ -121,6 +121,9 @@ export function readCreateSessionOpts(
     throwIpcError('INVALID_PARAMS', 'extraDirs must not contain Host-owned library slots');
   }
   const agentKind = readAgentKind(body.agentKind);
+  if (agentKind === 'cursor' && (body.remoteHostId || body.agentDeviceId)) {
+    throwIpcError('UNSUPPORTED_CAPABILITY', 'Cursor requires a workspace on the executing desktop');
+  }
   const model = requireString(body.model, 'model');
   const workspaceKind = readWorkspaceKind(body.workspaceKind);
   const explicitWorkingDir = readExplicitWorkingDir(body.workingDir);

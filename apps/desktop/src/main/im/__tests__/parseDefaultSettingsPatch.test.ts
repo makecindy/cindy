@@ -40,12 +40,13 @@ describe('parseImDefaultSettingsPatch', () => {
     );
   });
 
-  it('parses all three harnesses symmetrically', () => {
+  it('parses all four harnesses symmetrically', () => {
     const parsed = parseImDefaultSettingsPatch({
       agents: {
         'claude-code': { model: ' m-cc ', effort: 'high', providerId: ' p1 ' },
         codex: { model: 'm-codex', effort: 'low', providerId: null },
         pi: { model: 'm-pi', effort: 'medium', providerId: '  ' },
+        cursor: { model: 'm-cursor', effort: 'medium', providerId: 'cursor' },
       },
     });
     expect(parsed.agents).toEqual({
@@ -53,6 +54,7 @@ describe('parseImDefaultSettingsPatch', () => {
       'claude-code': { model: 'm-cc', effort: 'high', providerId: 'p1' },
       codex: { model: 'm-codex', effort: 'low', providerId: null },
       pi: { model: 'm-pi', effort: 'medium', providerId: null },
+      cursor: { model: 'm-cursor', effort: 'medium', providerId: 'cursor' },
     });
   });
 
@@ -75,6 +77,7 @@ describe('parseImDefaultSettingsPatch', () => {
         'claude-code': { providerId: 'p-cc', model: 'm-cc', effort: 'low' },
         codex: { providerId: 'p-codex', model: 'm-codex', effort: 'low' },
         pi: { providerId: 'p-pi', model: 'm-pi', effort: 'low' },
+        cursor: { providerId: 'cursor', model: 'm-cursor', effort: 'low' },
       },
     };
     for (const key of Object.keys(IM_DEFAULT_SETTINGS) as Array<keyof ImDefaultSettings>) {

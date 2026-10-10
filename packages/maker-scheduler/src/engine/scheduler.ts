@@ -60,7 +60,7 @@ function validateScheduleExecutionShape(
   opts: { checkAgentPrompt: boolean } = { checkAgentPrompt: true },
 ): void {
   if (schedule.modelAgentKind != null) {
-    if (!['claude-code', 'codex', 'pi'].includes(schedule.modelAgentKind) || !schedule.model?.trim()) {
+    if (!['claude-code', 'codex', 'pi', 'cursor'].includes(schedule.modelAgentKind) || !schedule.model?.trim()) {
       throw new Error('Explicit scheduled model Harness requires a supported Harness and model');
     }
   }

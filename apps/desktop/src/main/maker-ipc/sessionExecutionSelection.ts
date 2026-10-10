@@ -68,7 +68,7 @@ export function createSessionExecutionResolver(deps: SessionExecutionResolverDep
     assertOwner();
     let source: SessionExecutionSelection | undefined;
     if (existing) {
-      if (!['cc', 'claude-code', 'codex', 'pi'].includes(existing.agentKind)) throw new Error('任务 Agent 不可用，请重新选择模型');
+      if (!['cc', 'claude-code', 'codex', 'pi', 'cursor'].includes(existing.agentKind)) throw new Error('任务 Agent 不可用，请重新选择模型');
       source = { agentKind: (existing.agentKind === 'cc' ? 'claude-code' : existing.agentKind) as AgentKind,
         model: existing.model, providerId: existing.providerId,
         effort: (existing.effort || undefined) as Effort | undefined, fastMode: existing.fastMode === true };

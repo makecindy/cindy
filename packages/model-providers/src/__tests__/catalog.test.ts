@@ -171,6 +171,7 @@ describe("bundled catalog validity (dynamic-first contract)", () => {
       "xai",
       "xd",
       "gemini",
+      "cursor",
     ]);
     expect(BUNDLED_CATALOG.providers.every((p) => p.source === "builtin")).toBe(
       true,
@@ -288,7 +289,12 @@ describe("bundled catalog validity (dynamic-first contract)", () => {
   it("provides routing + a models[agent] array for every agent the provider declares", () => {
     for (const p of BUNDLED_CATALOG.providers) {
       for (const a of p.agents) {
-        expect(p.routing[a], `${p.id} routing[${a}]`).toBeTruthy();
+        if (a === 'cursor') {
+          expect(p.id).toBe('cursor');
+          expect(p.routing[a]).toBeUndefined(); // Native ACP has no HTTP route.
+        } else {
+          expect(p.routing[a], `${p.id} routing[${a}]`).toBeTruthy();
+        }
         expect(Array.isArray(p.models[a]), `${p.id} models[${a}]`).toBe(true);
       }
     }

@@ -118,6 +118,18 @@ describe('im default settings store', () => {
     expect(persisted.agents).toBeDefined();
   });
 
+  it('persists and reloads Cursor defaults for global and channel scopes', () => {
+    const cursor = { providerId: 'cursor', model: 'native-model', effort: 'low' as const };
+    writeImDefaultSettingsPatch({ agentKind: 'cursor', agents: { cursor } });
+    expect(readImDefaultSettings().agents.cursor).toEqual(cursor);
+    expect(readImDefaultSettingsState().customizedKeys).toContain('agents.cursor');
+    const persisted = JSON.parse(fs.readFileSync(settingsFile(), 'utf-8'));
+    expect(persisted.global.agents.cursor).toEqual(cursor);
+    writeImDefaultSettingsPatch({ agents: { cursor: { ...cursor, model: 'channel-model' } } }, 'feishu');
+    expect(readImDefaultSettings('feishu').agents.cursor).toEqual({ ...cursor, model: 'channel-model' });
+    expect(readImDefaultSettings().agents.cursor).toEqual(cursor);
+  });
+
   it('persists a Pi-specific default instead of dropping it from sparse overrides', () => {
     writeImDefaultSettingsPatch({
       agents: {
@@ -189,6 +201,7 @@ describe('im default settings store', () => {
         model: 'claude-sonnet-5',
         effort: 'high',
       },
+      cursor: IM_DEFAULT_SETTINGS.agents.cursor,
     });
   });
 

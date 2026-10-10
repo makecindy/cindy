@@ -245,7 +245,7 @@ describe('agent input queue snapshot durability boundary', () => {
     expect(query.mock.calls[0]?.[0]).not.toContain('SELECT payload');
   });
 
-  it('matches restore de-duplication and clear-boundary filtering for cold queued counts', async () => {
+  it.each(['pi', 'cursor'] as const)('matches %s restore de-duplication and clear-boundary filtering for cold queued counts', async (agentKind) => {
     const db = new Database(':memory:');
     db.exec(`
       CREATE TABLE sessions (
@@ -274,6 +274,7 @@ describe('agent input queue snapshot durability boundary', () => {
     const missingReceipt = queued('missing receipt', 'client-missing-receipt');
     const waiting = {
       ...queued('waiting', 'client-waiting'),
+      createOpts: { ...queued('waiting').createOpts, agentKind },
       hostAcceptedAtMs: 301,
     };
     const staleScheduler = {

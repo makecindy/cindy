@@ -6,9 +6,10 @@
  * 用户自己在目录里找渠道。
  *
  * 映射表设计为数据驱动(cliId → 建议 providerId),后续扩国产 CLI(qwen / iflow /
- * gemini / kimi 等)只需加条目;当前只做 claude / codex 两条(优先级最高、判据最稳)。
+ * gemini / kimi 等)只需加条目。Claude/Codex 使用映射表；Cursor 由 main
+ * 复用原生可执行文件发现与 CLI status 探测，不从配置目录推断安装或登录。
  *
- * 登录态判据只做**存在性判断**,绝不落盘 / 不进日志(CLAUDE.md 规则 23):
+ * 登录态只返回布尔值，绝不落盘 / 不进日志(CLAUDE.md 规则 23):
  *   - `file` 探测:stat 凭证文件是否存在(Codex 的 ~/.codex/auth.json)。
  *   - `claude-oauth` 探测:Claude Code 登录态由 CLI 自己保存(macOS 在系统钥匙串,
  *     其它平台在 ~/.claude),只 stat 文件会漏掉 Mac 上正常登录(且可能连 ~/.claude
@@ -17,12 +18,13 @@
  */
 
 /** 可检测的本机 CLI 标识。 */
-export type LocalCliId = 'claude-cli' | 'codex-cli';
+export type LocalCliId = 'claude-cli' | 'codex-cli' | 'cursor-cli';
 
 /** 插进「检测到 {{cli}}」等句子的商品名；各语言共用，不走 i18n。 */
 const LOCAL_CLI_DISPLAY_NAME: Record<LocalCliId, string> = {
   'claude-cli': 'Claude Code CLI',
   'codex-cli': 'Codex CLI',
+  'cursor-cli': 'Cursor CLI',
 };
 
 export function localCliDisplayName(cli: LocalCliId): string {
@@ -35,9 +37,9 @@ export type CredentialProbe = 'file' | 'claude-oauth';
 /** 单条检测结果:CLI 是否安装 / 是否已登录 + 建议接入的供应商 id。 */
 export interface LocalCliDetection {
   cli: LocalCliId;
-  /** 建议接入的内置供应商 id(anthropic / openai,与 active-catalog 的 provider id 对齐)。 */
+  /** 建议接入的内置供应商 id，与 active-catalog 的 provider id 对齐。 */
   providerId: string;
-  /** 配置目录存在(~/.claude / ~/.codex)。 */
+  /** Claude/Codex 配置目录存在，或已发现 Cursor 原生可执行文件。 */
   installed: boolean;
   /** 登录态凭证文件存在(只 stat 不读)。 */
   loggedIn: boolean;

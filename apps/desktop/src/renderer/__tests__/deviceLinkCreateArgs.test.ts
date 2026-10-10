@@ -499,3 +499,10 @@ describe('resolveDeviceLinkSubmission', () => {
     expect(fromSend.providerId).toBe('stale-source');
   });
 });
+
+describe('Cursor native creation', () => {
+  it('forwards native model tuning while preserving the Cursor approval policy', () => {
+    const args = buildDeviceLinkCreateArgs({ agentKind: 'cursor', model: 'account-model', effort: 'medium', permissionMode: 'auto', fastMode: true, planModeEnabled: true });
+    expect(args).toMatchObject({ agentKind: 'cursor', model: 'account-model', effort: 'medium', permissionMode: 'auto', fastMode: true, planMode: true });
+  });
+});

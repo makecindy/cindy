@@ -53,6 +53,21 @@ function parse(result: XdtHelperToolResult) {
 }
 
 describe('send_to_session tool', () => {
+  it('passes an explicit native Cursor route to the ordinary task host', async () => {
+    const { registry, sendToSession } = setup({ result: {
+      ok: true, targetSessionId: 'cursor-task', agentKind: 'cursor',
+      wakeKind: 'created', targetTitle: null, targetLastUserSendAt: null,
+    } });
+    const result = await registry.call('send_to_session', {
+      message: 'hello', agent_kind: 'cursor', model: 'cursor-default',
+    });
+    expect(result.isError).toBeUndefined();
+    expect(sendToSession).toHaveBeenCalledWith(expect.objectContaining({
+      agentKind: 'cursor', model: 'cursor-default', message: 'hello',
+    }));
+    expect(parse(result)).toMatchObject({ agent_kind: 'cursor', target_session_id: 'cursor-task' });
+  });
+
   it('注册到 handoff 类目, 不混入 control(改名场景选错隔离的核心)', () => {
     const { registry } = setup();
     const handoff = registry.list('handoff').map((t) => t.name);

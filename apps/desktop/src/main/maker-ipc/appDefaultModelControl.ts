@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { isModelVisible, type ProviderView } from '@cindy/model-providers';
 import { defaultBotModelChain } from '../../shared/botDefaultModelChain.js';
 import type { BotModelRoute } from '../../shared/botModelChain.js';
-import { sameModelRoute, type AppDefaultModelSelection } from '../../shared/appDefaultModelSelection.js';
+import { sameModelRoute, type AppDefaultModelSelection, type AppModelRoute } from '../../shared/appDefaultModelSelection.js';
 import { activeOwnerScopeKey, getActiveDataOwnerPushStamp, isAppSessionBoundaryPending } from '../appSessionState.js';
 import { getDesktopProviderService } from '../maker-host/createDesktopProviderService.js';
 import { getMakerIfReady } from '../maker-host/index.js';
@@ -17,9 +17,9 @@ export function configureAppDefaultModelSelection(dispatch: typeof dispatchSelec
 
 export function availableAppDefaultModels(input: {
   providers: readonly ProviderView[];
-  currentRoute?: BotModelRoute | null;
-  tuning?: (agent: 'claude-code' | 'codex' | 'pi', providerId: string, model: string) => { effort?: string; fastMode?: boolean };
-  availableAgents: ReadonlySet<'cc' | 'codex' | 'pi'>;
+  currentRoute?: AppModelRoute | null;
+  tuning?: (agent: 'claude-code' | 'codex' | 'pi' | 'cursor', providerId: string, model: string) => { effort?: string; fastMode?: boolean };
+  availableAgents: ReadonlySet<'cc' | 'codex' | 'pi' | 'cursor'>;
   enabled: NonNullable<Parameters<typeof defaultBotModelChain>[0]['isModelEnabled']>;
 }) {
   const current = defaultBotModelChain({ providers: input.providers, providersLoading: false,

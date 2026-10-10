@@ -22,7 +22,7 @@ import type {
   PiExtraSpawnConfigContext,
   StartSessionOptions,
 } from '@cindy/maker-core';
-import { resolveMemoryScopeKey } from '@cindy/maker-core';
+import { NotSupportedError, resolveMemoryScopeKey } from '@cindy/maker-core';
 
 import type { ExecutorCaptureHooks } from '../executor/executor';
 import type { PdfTextExtractor } from '../executor/files';
@@ -148,6 +148,9 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
   const log = deps.logger.child('remote-agent');
   const pollerFor = (deviceId: string): RemoteAgentPoller => remoteAgentPollerFor(deviceId, deps.remoteInvoke, log);
   return async (input: { agentKind: AgentKind; deviceId: string; options: StartSessionOptions }): Promise<AgentSessionHandle> => {
+    if (input.agentKind === 'cursor') {
+      throw new NotSupportedError('deviceHosted', { supported: false, reason: 'not-implemented' });
+    }
     const opts: StartSessionOptions = { ...input.options };
     const poller = pollerFor(input.deviceId);
     // 记忆在本机：对方只用这里给的索引快照，工具读写也回到本机记忆库。

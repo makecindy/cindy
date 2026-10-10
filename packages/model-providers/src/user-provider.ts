@@ -214,7 +214,7 @@ function registryEffortMetadata(
   modelId: string,
   agent: AgentKind,
 ): RegistryEffortMetadata | undefined {
-  if (agent === "pi" || !registry) return undefined;
+  if (agent === "pi" || agent === "cursor" || !registry) return undefined;
 
   // Stage 1 — exact lookup: only the original modelId.
   const exactMatches = expandedRegistryEntries(registry).filter((entry) =>

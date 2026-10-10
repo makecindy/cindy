@@ -122,7 +122,7 @@ function syncNewMakerPrefs(appDefaultModelRequestId?: string) {
   });
   // main 缓存两用途:① collab worker spawn 读 model/effort/fastMode;② device-link 远程
   // 草稿镜像读全量(model/effort/fast/permission/source)+「是否显式选过模型」。故
-  // lastByVendor 覆盖 cc/codex/pi，并带上 permissionMode + providerId(worker spawn
+  // lastByVendor 覆盖 cc/codex/pi/cursor，并带上 permissionMode + providerId(worker spawn
   // 不消费这两项,远程草稿镜像才用)。fire-and-forget。
   const selected = draft.lastByVendor[draft.vendor];
   window.electronAPI.syncNewMakerDraft({
@@ -154,11 +154,18 @@ function syncNewMakerPrefs(appDefaultModelRequestId?: string) {
         permissionMode: draft.lastByVendor.pi.permissionMode,
         providerId: draft.lastByVendor.pi.providerId ?? null,
       },
+      cursor: {
+        model: draft.lastByVendor.cursor.model,
+        effort: draft.lastByVendor.cursor.effort,
+        permissionMode: draft.lastByVendor.cursor.permissionMode,
+        providerId: draft.lastByVendor.cursor.providerId ?? null,
+      },
     },
     modelChosenByVendor: {
       cc: draft.modelChosenByVendor.cc === true,
       codex: draft.modelChosenByVendor.codex === true,
       pi: draft.modelChosenByVendor.pi === true,
+      cursor: draft.modelChosenByVendor.cursor === true,
     },
     fastModeByModel: draft.fastModeByModel,
     effortByModel: draft.effortByModel,

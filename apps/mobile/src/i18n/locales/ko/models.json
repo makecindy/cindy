@@ -103,5 +103,9 @@
       "minute": "분",
       "second": "초"
     }
+  },
+  "cursorGroups": {
+    "models": "Cursor Models",
+    "other": "Other Models"
   }
 }

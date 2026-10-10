@@ -30,6 +30,10 @@ vi.mock('../active-catalog.js', () => ({
   getActiveCatalog: () => h.catalog,
 }));
 
+vi.mock('../cursor-model-catalog.js', () => ({
+  withCursorDiscoveredModels: (catalog: unknown) => catalog,
+}));
+
 vi.mock('../model-disable-store.js', () => ({
   readModelDisableOverrides: vi.fn(() => ({})),
 }));

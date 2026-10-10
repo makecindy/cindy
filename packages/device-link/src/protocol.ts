@@ -139,6 +139,9 @@ export interface LinkOpenPayload {
 /** 控制端能安全消费完整 ProviderLogoKind（含 #527 新增品牌）的 maker:provider:list 投影。 */
 export const CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2 = 'provider-logo-kinds-v2';
 
+/** Includes Cursor when browsing models across engines in an existing task. */
+export const CONTROLLER_CAPABILITY_CURSOR_MODEL_PICKER_V1 = 'cursor-model-picker-v1';
+
 /** 控制端能区分 set-model 中显式 providerId:null 与 JSON optional 占位。 */
 export const CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1 =
   'set-model-explicit-provider-null-v1';

@@ -43,7 +43,7 @@ export interface BotDelegationArtifact {
 
 export interface BotDelegationCapabilitySnapshot {
   profileVersion: number;
-  agentKind: 'cc' | 'codex' | 'pi';
+  agentKind: 'cc' | 'codex' | 'pi' | 'cursor';
   model: string;
   capabilitiesSha256: string;
   identitySha256: string;
@@ -114,7 +114,7 @@ function isCapabilitySnapshot(target: unknown): target is BotDelegationCapabilit
   if (!isRecord(target)) return false;
   return (
     typeof target.profileVersion === 'number'
-    && (target.agentKind === 'cc' || target.agentKind === 'codex' || target.agentKind === 'pi')
+    && (target.agentKind === 'cc' || target.agentKind === 'codex' || target.agentKind === 'pi' || target.agentKind === 'cursor')
     && typeof target.model === 'string'
     && typeof target.capabilitiesSha256 === 'string'
     && typeof target.identitySha256 === 'string'

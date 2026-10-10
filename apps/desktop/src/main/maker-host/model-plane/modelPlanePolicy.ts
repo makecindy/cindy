@@ -85,7 +85,7 @@ export function isRegistryTombstoneForConsumer(
   const policy = MODEL_PLANE_POLICIES.get(providerId);
   if (!registry || !policy) return false;
 
-  if (agent === 'pi') return false;
+  if (agent !== 'claude-code' && agent !== 'codex') return false;
   const registryAgent =
     policy.roots.includes(agent) || policy.membershipGatedBridges.includes(agent) ? agent : null;
   if (!registryAgent) return false;

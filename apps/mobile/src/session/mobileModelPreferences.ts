@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react';
 import { useRemoteMobileFavorites } from './useRemoteMobileFavorites';
 import type { MobileModelPreferences, MobileModelFavorite } from './unifiedMobileModels';
 import type { AgentKind } from '@cindy/model-providers/types';
-const agents = new Set(['claude-code', 'codex', 'pi']);
+const agents = new Set(['claude-code', 'codex', 'pi', 'cursor']);
 export function sanitizeModelPreferences(value: unknown): MobileModelPreferences {
   const result: MobileModelPreferences = { favorites: [], engines: {} };
   if (!value || typeof value !== 'object') return result;

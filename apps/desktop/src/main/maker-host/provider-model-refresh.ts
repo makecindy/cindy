@@ -26,6 +26,7 @@ export async function refreshModelsWithCatalog<T>(deps: {
 
 export interface BuiltinProviderModelRefreshDeps {
   refreshXd(): Promise<void>;
+  refreshCursor?(): Promise<void>;
   refreshAnthropic(): Promise<boolean>;
   refreshOpenAi(): Promise<boolean>;
   refreshOpenAiMedia(): Promise<boolean>;
@@ -38,6 +39,10 @@ export async function refreshBuiltinProviderModels(
   deps: BuiltinProviderModelRefreshDeps,
 ): Promise<void> {
   switch (providerId) {
+    case 'cursor':
+      if (!deps.refreshCursor) throw new Error('Cursor model discovery is unavailable');
+      await deps.refreshCursor();
+      return;
     case 'xd':
       await deps.refreshXd();
       return;

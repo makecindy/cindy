@@ -20,8 +20,7 @@
 
 import { useSyncExternalStore } from 'react';
 import { isDataOwnerPushStampCurrent } from '@/contexts/dataOwnerGeneration';
-import { sameModelRoute, type AppDefaultModelSelection } from '../../shared/appDefaultModelSelection';
-import type { BotModelRoute } from '../../shared/botModelChain';
+import { sameModelRoute, type AppDefaultModelSelection, type AppModelRoute } from '../../shared/appDefaultModelSelection';
 
 import type { MakerVendor } from '@/lib/ccAgent.types';
 import { isSelectableVendor } from '@/lib/agentVendors';
@@ -99,7 +98,7 @@ export interface CollabWorkerConfig {
 
 export interface CollabDraft {
   enabled: boolean;
-  worker: 'cc' | 'codex' | 'pi';
+  worker: 'cc' | 'codex' | 'pi' | 'cursor';
   workerConfig?: CollabWorkerConfig;
 }
 
@@ -199,6 +198,7 @@ export interface NewMakerDraft {
  * 在目录里都是默认隐藏的模型 —— 种子默认模型压根不在用户看到的清单里。
  */
 function defaultVendorPrefs(vendor: MakerVendor): VendorPrefs {
+  if (vendor === 'cursor') return { model: getDefaultModelForVendor('cursor').id, effort: 'medium', permissionMode: 'ask', planMode: false, providerId: 'cursor' };
   if (vendor === 'pi') {
     return {
       // pi 走 XD 网关(anthropic-messages 可达面),默认给网关中档模型;
@@ -256,6 +256,7 @@ function makeDefault(): NewMakerDraft {
     lastByVendor: {
       cc: defaultVendorPrefs('cc'),
       pi: defaultVendorPrefs('pi'),
+      cursor: defaultVendorPrefs('cursor'),
       orca: defaultVendorPrefs('orca'),
       codex: defaultVendorPrefs('codex'),
     },
@@ -289,7 +290,7 @@ function sanitize(raw: unknown): NewMakerDraft {
   if (!raw || typeof raw !== 'object') return def;
   const r = raw as Partial<NewMakerDraft>;
   // 引擎白名单按 SELECTABLE_VENDORS(选择器同一张表的来源)校验 —— 新增引擎时这里零改动。
-  // 曾经是逐个写死的三元(`r.vendor === 'codex' || r.vendor === 'pi' ? … : 'cc'`),
+  // 曾经是逐个写死的三元(`r.vendor === 'codex' || r.vendor === 'pi' || r.vendor === 'cursor' ? … : 'cc'`),
   // 每上线一个引擎都得手工补一次;漏补则用户选中新引擎、重启后被静默重置回 Claude。
   // F-COLLAB (2026-05): 'orca' 不在表内,历史 localStorage 残留会走同一条回退路径
   // 迁到 'cc'(它已被 ChatInput 底部的协同 toggle 取代),避免空白入口。
@@ -331,7 +332,7 @@ function sanitize(raw: unknown): NewMakerDraft {
   // collab 校验: 老版本无此字段 → 默认 OFF + codex worker。
   const collabRaw = (r as { collab?: Partial<CollabDraft> }).collab;
   const collabWorker: CollabDraft['worker'] =
-    collabRaw?.worker === 'cc' ? 'cc' : collabRaw?.worker === 'pi' ? 'pi' : 'codex';
+    collabRaw?.worker === 'cc' ? 'cc' : collabRaw?.worker === 'cursor' ? 'cursor' : collabRaw?.worker === 'pi' ? 'pi' : 'codex';
   // remote 项目的协同 codex / cc draft 均放行:worker 创建已继承 remoteHostId
   // (在同一台远端主机 spawn,见 OrcaLeadSessionSnapshot.remoteHostId),两端
   // 远端 MCP 注入均已落地 (codex daemon config + cc per-query http 注入)。
@@ -392,7 +393,7 @@ function sanitize(raw: unknown): NewMakerDraft {
       ? (r.modelChosenByVendor as Record<string, unknown>)
       : {};
   const modelChosenByVendor: Partial<Record<MakerVendor, boolean>> = {};
-  for (const v of ['cc', 'orca', 'codex', 'pi'] as const) {
+  for (const v of ['cc', 'orca', 'codex', 'pi', 'cursor'] as const) {
     if (modelChosenRaw[v] === true) modelChosenByVendor[v] = true;
   }
   // 老版本没有独立的组合标记：显式选过模型/来源/思考深度/Fast 都是足够强的
@@ -423,7 +424,7 @@ function sanitize(raw: unknown): NewMakerDraft {
   const legacyCcModel =
     legacyCcModelCandidate &&
     (r.defaultTupleCustomized === undefined || !isKnownProductTuple('cc', legacyCcPrefs));
-  const legacySourceSelection = (['cc', 'orca', 'codex', 'pi'] as const).some((slotVendor) => {
+  const legacySourceSelection = (['cc', 'orca', 'codex', 'pi', 'cursor'] as const).some((slotVendor) => {
     const prefs = lastByVendorRaw[slotVendor];
     if (
       !prefs ||
@@ -486,6 +487,7 @@ function sanitize(raw: unknown): NewMakerDraft {
     lastByVendor: {
       cc: sanitizeVendorPrefs(lastByVendorRaw.cc, 'cc'),
       pi: sanitizeVendorPrefs(lastByVendorRaw.pi, 'pi'),
+      cursor: sanitizeVendorPrefs(lastByVendorRaw.cursor, 'cursor'),
       orca: sanitizeVendorPrefs(lastByVendorRaw.orca, 'orca'),
       codex: sanitizeVendorPrefs(lastByVendorRaw.codex, 'codex'),
     },
@@ -961,7 +963,7 @@ export function applyAppDefaultModelSelection(selection: AppDefaultModelSelectio
   const stored = readStoredDraftRecord();
   const base = stored ? sanitize(stored) : currentDraft;
   const prefs = base.lastByVendor[base.vendor];
-  const current: BotModelRoute | null = prefs.model ? {
+  const current: AppModelRoute | null = prefs.model ? {
     harness: base.vendor === 'cc' || base.vendor === 'orca' ? 'claude' : base.vendor,
     model: prefs.model, providerId: prefs.providerId ?? null, effort: prefs.effort ?? '',
     fastMode: base.fastModeByModel[prefs.model] === true,
@@ -1007,7 +1009,7 @@ export function fallbackUnavailableVendor(availableVendors: ReadonlySet<MakerVen
 }
 
 export interface SuggestedDefaultTuple {
-  vendor: Extract<MakerVendor, 'cc' | 'codex' | 'pi'>;
+  vendor: Extract<MakerVendor, 'cc' | 'codex' | 'pi' | 'cursor'>;
   providerId: string;
   model: string;
   effort?: Effort | null;

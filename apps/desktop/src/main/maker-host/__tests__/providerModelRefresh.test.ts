@@ -11,6 +11,7 @@ function deps(
 ): BuiltinProviderModelRefreshDeps {
   return {
     refreshXd: vi.fn(async () => {}),
+    refreshCursor: vi.fn(async () => {}),
     refreshAnthropic: vi.fn(async () => true),
     refreshOpenAi: vi.fn(async () => true),
     refreshOpenAiMedia: vi.fn(async () => true),
@@ -23,6 +24,7 @@ function deps(
 describe('refreshBuiltinProviderModels', () => {
   it.each([
     ['xd', 'refreshXd'],
+    ['cursor', 'refreshCursor'],
     ['anthropic', 'refreshAnthropic'],
     ['openai', 'refreshOpenAi'],
     ['xai', 'refreshXai'],

@@ -79,6 +79,20 @@ function favoriteOf(over: Partial<ModelFavoriteItem> = {}): ModelFavoriteItem {
   };
 }
 
+it.each(['all', 'provider', 'engine'] as const)('retains Cursor pools, source identity and native order in the %s view', (kind) => {
+  const entries = [
+    entryOf({ providerId: 'cursor', modelId: 'default', group: 'cursor:auto', sortOrder: 0, candidates: ['cursor'], recommended: 'cursor', nativeAgent: 'cursor', capabilities: { cursor: capability('cursor') } }),
+    entryOf({ providerId: 'cursor', modelId: 'grok-4.7', group: 'cursor:models', sortOrder: 1, candidates: ['cursor'], recommended: 'cursor', nativeAgent: 'cursor', capabilities: { cursor: capability('cursor') } }),
+    entryOf({ providerId: 'cursor', modelId: 'gpt-5.6-sol', group: 'cursor:other', sortOrder: 2, candidates: ['cursor'], recommended: 'cursor', nativeAgent: 'cursor', capabilities: { cursor: capability('cursor') } }),
+  ];
+  const sections = buildUnifiedListSections({ entries, favorites: [], query: '',
+    rail: kind === 'all' ? { kind } : kind === 'provider' ? { kind, providerId: 'cursor' } : { kind, agent: 'cursor' },
+    recommendation: { agent: 'cursor', providerId: 'cursor', modelId: 'grok-4.7' },
+  });
+  expect(sections.map(section => section.group?.modelGroup)).toEqual(['cursor:auto', 'cursor:models', 'cursor:other']);
+  expect(sections.flatMap(section => section.rows).map(row => row.anchor)).toEqual(entries.map(entry => ({ kind: 'model', providerId: 'cursor', modelId: entry.modelId })));
+});
+
 describe('resolveUnifiedRowConfig', () => {
   it('无 override 时落推荐引擎与目录默认档', () => {
     const config = resolveUnifiedRowConfig({ entry: entryOf() });

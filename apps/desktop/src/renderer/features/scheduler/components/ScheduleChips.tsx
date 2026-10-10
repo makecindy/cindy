@@ -54,7 +54,7 @@ import type { SessionReference } from '../../../../shared/sessionReference';
 import { isReviewSessionSource } from '../../../../shared/sessionSource';
 
 export type Destination = 'local' | 'worktree' | 'thread';
-export type AgentKind = 'claude-code' | 'codex' | 'pi';
+export type AgentKind = 'claude-code' | 'codex' | 'pi' | 'cursor';
 
 interface ChipButtonProps {
   icon?: React.ReactNode;
@@ -1331,7 +1331,7 @@ export function ThreadPickerInline({ value, onSelect, onOpen, reference }: {
             )}
             {sessions.map((s) => (
               <option key={s.id} value={s.id}>
-                {s.title} · {s.agentKind === 'cc' ? 'Claude Code' : s.agentKind === 'pi' ? 'Pi' : 'Codex'}
+                {s.title} · {s.agentKind === 'cc' ? 'Claude Code' : s.agentKind === 'cursor' ? 'Cursor' : s.agentKind === 'pi' ? 'Pi' : 'Codex'}
               </option>
             ))}
           </select>

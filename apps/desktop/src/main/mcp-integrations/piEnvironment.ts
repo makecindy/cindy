@@ -512,7 +512,8 @@ async function doStart(
       if (
         active?.agentKind !== 'pi' &&
         active?.agentKind !== 'codex' &&
-        active?.agentKind !== 'claude-code'
+        active?.agentKind !== 'claude-code' &&
+        active?.agentKind !== 'cursor'
       ) {
         return undefined;
       }

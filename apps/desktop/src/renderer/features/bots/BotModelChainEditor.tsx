@@ -24,7 +24,7 @@ function harnessFor(vendor: 'cc' | 'codex' | 'pi'): BotHarness {
   return vendor === 'cc' ? 'claude' : vendor;
 }
 
-function agentKindFor(vendor: 'cc' | 'codex' | 'pi'): AgentKind {
+function agentKindFor(vendor: 'cc' | 'codex' | 'pi' | 'cursor'): AgentKind {
   return vendor === 'cc' ? 'claude-code' : vendor;
 }
 
@@ -140,7 +140,7 @@ export function BotModelChainEditor({
         unifiedPanel
         unifiedAgents={unifiedAgents}
         onUnifiedSelect={(selection) => {
-          if (!visibleVendors.includes(selection.engine)) return;
+          if (selection.engine === 'cursor' || !visibleVendors.includes(selection.engine)) return;
           replace(index, {
             harness: harnessFor(selection.engine),
             providerId: selection.providerId,

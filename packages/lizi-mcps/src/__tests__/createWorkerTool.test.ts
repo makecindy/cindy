@@ -50,6 +50,13 @@ function setupWorkerSession() {
 }
 
 describe('create_worker tool', () => {
+  it.each(['claude-code', 'codex', 'pi', 'cursor'] as const)('preserves %s worker harness identity', async (agent) => {
+    const { registry, createWorker } = setup();
+    const result = await registry.call('create_worker', { role: 'developer', agent, label: 'worker' });
+    expect(result.isError).toBeUndefined();
+    expect(createWorker).toHaveBeenCalledWith(expect.objectContaining({ agent }));
+  });
+
   it('forwards the explicit working_dir to the host', async () => {
     const { registry, createWorker } = setup();
     const result = await registry.call('create_worker', {

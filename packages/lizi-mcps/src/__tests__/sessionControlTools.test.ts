@@ -94,6 +94,17 @@ function setup(opts?: { sessionId?: string | undefined }) {
 }
 
 describe('cindy_helper session control tools', () => {
+  it('forwards a Cursor switch without rewriting its native model or adding a provider', async () => {
+    const { deps, registry } = setup();
+    await registry.call('set_session_runtime', {
+      session_id: 'existing-task', harness: 'cursor', model: 'native/exact-model', expected_generation: 1,
+    });
+    expect(deps.setSessionRuntime).toHaveBeenCalledWith({
+      targetSessionId: 'existing-task', expectedGeneration: 1,
+      patch: { harness: 'cursor', model: 'native/exact-model' },
+    });
+  });
+
   it('forwards a complete harness selection and reports the next-send boundary', async () => {
     const { deps, registry } = setup();
     const old = { agentKind: 'claude-code' as const, model: 'claude-fable-5', providerId: null, effort: 'high' as const, fastMode: false };
@@ -165,9 +176,10 @@ describe('cindy_helper session control tools', () => {
     // 校验明细,调用方一轮自纠。
     const { registry } = setup();
     const result = parse(await registry.call('set_session_runtime', { effort: 'high' }));
+    const data = result.data as Record<string, unknown> | undefined;
     expect(result).toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
-    expect(JSON.stringify(result.data?.validation_errors ?? result)).toContain('expected_generation');
-    expect(result.data?.schema).toBeTruthy();
+    expect(JSON.stringify(data?.validation_errors ?? result)).toContain('expected_generation');
+    expect(data?.schema).toBeTruthy();
   });
 
   it('updates and cancels only through the caller-bound ownership context', async () => {
