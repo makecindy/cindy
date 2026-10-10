@@ -34,8 +34,8 @@ import { pickModelMetadata } from '@cindy/model-providers';
  *
  * contextWindow 规则:
  *   旧缓存恢复的精确窗口用之;否则读取当前 modelRegistry 的已知窗口；
- *   目录未知时默认 1M,仅 id 含 "haiku" 例外 200k。这样已知旧模型不会被错误提升到
- *   1M,未来新模型仍可在目录更新前按当代默认工作。
+ *   目录未知时默认 1M,仅 Haiku 4 及更早型号例外 200k。这样已知旧模型不会被错误提升到
+ *   1M,未来新模型(含 Haiku 5 起)仍可在目录更新前按当代默认工作。
  *
  * 磁盘缓存:`<userData>/model-discovery/anthropic-models.json`
  * ({ fetchedAt, models, explicitEffortModelIds, explicitFastModeModelIds });只缓存动态获取的
@@ -184,6 +184,15 @@ function labelFromClaudeModelId(id: string): string | null {
 }
 
 /**
+ * Haiku 4 及更早:200K 窗口、不收 effort。Haiku 5 起(如 Haiku 5.5)与当代模型一致:1M、五档 effort,
+ * 不能再按名称里的 haiku 一律判成不可调。
+ */
+function isLegacyHaiku(id: string): boolean {
+  const match = /haiku-(\d+)/.exec(id);
+  return /haiku/.test(id) && !(match && Number(match[1]) >= 5);
+}
+
+/**
  * contextWindow 规则:缓存恢复的精确值 > 目录已知值 > 未知模型启发式(默认 1M,Haiku 200k)。
  *
  * 前两档是**显式声明**的真实上限,一并标记 contextWindowVerified 让下游可以拿它收敛
@@ -201,7 +210,7 @@ function contextWindowFor(
   if (catalogWindow !== null) {
     return { contextWindow: catalogWindow, contextWindowVerified: true };
   }
-  return { contextWindow: /haiku/.test(id) ? 200_000 : 1_000_000 };
+  return { contextWindow: isLegacyHaiku(id) ? 200_000 : 1_000_000 };
 }
 
 function pickDefaultEffort(efforts: Effort[]): Effort | null {
@@ -237,14 +246,14 @@ export interface SdkMappedModel {
 }
 
 /**
- * 动态通道无能力信息时:产品目录基线优先；未知非 Haiku 模型按当代旗舰能力合成
- * 5 档，让新 Opus / Sonnet 上线后无需等客户端目录更新即可使用 xhigh / max。
- * Haiku 保持 0 档；上游后续明确返回能力时仍会逐字段覆盖此临时基线。
+ * 动态通道无能力信息时:产品目录基线优先；未知模型按当代旗舰能力合成 5 档，让新 Opus /
+ * Sonnet / Haiku 上线后无需等客户端目录更新即可使用 xhigh / max。
+ * Haiku 4 及更早保持 0 档；上游后续明确返回能力时仍会逐字段覆盖此临时基线。
  */
 function fallbackEffortBaseline(id: string): { efforts: Effort[]; defaultEffort: Effort | null } {
   const catalogBaseline = getCindyModelEffortBaseline(id);
   if (catalogBaseline) return catalogBaseline;
-  const efforts: Effort[] = /haiku/.test(id) ? [] : ['low', 'medium', 'high', 'xhigh', 'max'];
+  const efforts: Effort[] = isLegacyHaiku(id) ? [] : ['low', 'medium', 'high', 'xhigh', 'max'];
   return { efforts, defaultEffort: pickDefaultEffort(efforts) };
 }
 
