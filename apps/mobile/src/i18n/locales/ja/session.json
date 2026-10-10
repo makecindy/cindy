@@ -31,7 +31,12 @@
     "openMicPermission": "マイクの権限設定を開く",
     "maxAttachments": "添付は最大 {{max}} 件までです。",
     "voiceStopRecording": "録音を停止",
-    "capabilitiesUnsupported": "パソコンからコマンドとリソースの一覧を読み込めませんでした。パソコンの Cindy を更新してから再試行してください"
+    "capabilitiesUnsupported": "パソコンからコマンドとリソースの一覧を読み込めませんでした。パソコンの Cindy を更新してから再試行してください",
+    "plugins": "プラグイン",
+    "pluginsChooseDevice": "デバイスを選択",
+    "pluginsLoading": "プラグインを読み込み中…",
+    "pluginsEmpty": "インストール済みプラグインなし",
+    "pluginsReload": "プラグインを再読み込み"
   },
   "presentation": {
     "collaboration": {

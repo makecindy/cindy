@@ -31,7 +31,12 @@
     "openMicPermission": "Open microphone settings",
     "maxAttachments": "You can add up to {{max}} attachments.",
     "voiceStopRecording": "Stop Recording",
-    "capabilitiesUnsupported": "Couldn't load commands and resources from your computer. Update Cindy on your computer and try again."
+    "capabilitiesUnsupported": "Couldn't load commands and resources from your computer. Update Cindy on your computer and try again.",
+    "plugins": "Plugins",
+    "pluginsChooseDevice": "Choose a Device",
+    "pluginsLoading": "Loading plugins…",
+    "pluginsEmpty": "No Installed Plugins",
+    "pluginsReload": "Reload Plugins"
   },
   "presentation": {
     "collaboration": {
