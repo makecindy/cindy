@@ -72,6 +72,7 @@ const externalLoadFacade: ProviderGroupExternalLoad = {
   recordPick: (controller, sessionId, providerId, memberKey) =>
     runtimeForActiveOwner().externalLoad.recordPick(controller, sessionId, providerId, memberKey),
   replaceLeases: (controller, seq, entries) => runtimeForActiveOwner().externalLoad.replaceLeases(controller, seq, entries),
+  trackRelay: (providerId, memberKey) => runtimeForActiveOwner().externalLoad.trackRelay(providerId, memberKey),
 };
 
 const routerFacade: ProviderGroupRouter = {

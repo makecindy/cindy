@@ -95,20 +95,35 @@ async function isGitRepo(workingDir: string): Promise<boolean> {
   return false;
 }
 
+/**
+ * 每台电脑一个拉取器：那台上的全部任务共用一个 poll，不挤占设备互联的其它请求。本机作为控制端的任务
+ * 与供应商组替受邀者中转的任务(remote-agent/host 的 groupRelay)共用同一份，同一台电脑只占一个长等待。
+ * 空闲的拉取器不发任何请求，同账号电脑数量有限，留着复用。
+ */
+const sharedPollers = new WeakMap<DeviceAgentServiceDeps['remoteInvoke'], Map<string, RemoteAgentPoller>>();
+
+export function remoteAgentPollerFor(
+  deviceId: string,
+  remoteInvoke: DeviceAgentServiceDeps['remoteInvoke'],
+  log?: { warn(message: string, meta?: Record<string, unknown>): void },
+): RemoteAgentPoller {
+  let byDevice = sharedPollers.get(remoteInvoke);
+  if (!byDevice) {
+    byDevice = new Map();
+    sharedPollers.set(remoteInvoke, byDevice);
+  }
+  let poller = byDevice.get(deviceId);
+  if (!poller) {
+    poller = new RemoteAgentPoller(remoteAgentInvoker(deviceId, remoteInvoke), log);
+    byDevice.set(deviceId, poller);
+  }
+  return poller;
+}
+
 /** Maker 的 startDeviceAgentSession 实现。 */
 export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
   const log = deps.logger.child('remote-agent');
-  // 每台电脑一个拉取器：那台上的全部任务共用一个 poll，不挤占设备互联的其它请求。
-  const pollers = new Map<string, RemoteAgentPoller>();
-  // 空闲的拉取器不发任何请求，同账号电脑数量有限，留着复用。
-  const pollerFor = (deviceId: string): RemoteAgentPoller => {
-    let poller = pollers.get(deviceId);
-    if (!poller) {
-      poller = new RemoteAgentPoller(remoteAgentInvoker(deviceId, deps.remoteInvoke), log);
-      pollers.set(deviceId, poller);
-    }
-    return poller;
-  };
+  const pollerFor = (deviceId: string): RemoteAgentPoller => remoteAgentPollerFor(deviceId, deps.remoteInvoke, log);
   return async (input: { agentKind: AgentKind; deviceId: string; options: StartSessionOptions }): Promise<AgentSessionHandle> => {
     const opts: StartSessionOptions = { ...input.options };
     const poller = pollerFor(input.deviceId);

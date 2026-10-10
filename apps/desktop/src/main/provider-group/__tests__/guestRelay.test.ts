@@ -1,0 +1,97 @@
+/**
+ * 组所在电脑替受邀者选组内电脑(provider-groups.md §4、§9)：只选能按受邀者隔离的电脑；不支持的
+ * 同账号电脑一阵子不再给它受邀者的任务，但不冷却它(本机自己的任务照常分过去)。
+ */
+import { describe, expect, it, vi } from 'vitest';
+
+import type { ProviderGroupConfig, ProviderGroupMember } from '../../../shared/providerGroup';
+import { createProviderGroupExternalLoad } from '../externalLoad';
+import { createProviderGroupGuestRelay, PROVIDER_GROUP_GUEST_INCAPABLE_MS } from '../guestRelay';
+import { PROVIDER_GROUP_DEFAULT_COOLDOWN_MS, type ProviderGroupRouter } from '../router';
+
+function member(key: string, kind: ProviderGroupMember['kind'], agentDeviceId: string | null, providerId: string): ProviderGroupMember {
+  return { key, kind, agentDeviceId, providerId, limit: 4, weight: 1, paused: false };
+}
+
+const LOCAL = member('local', 'local', null, 'anthropic');
+const MINI = member('device:mini:anthropic-2', 'device', 'mini', 'anthropic-2');
+const FRIEND = member('share:s1:anthropic', 'share', 'share:s1', 'anthropic');
+const CONFIG: ProviderGroupConfig = { strategy: 'order', autoSwitch: true, members: [LOCAL, MINI, FRIEND] };
+
+function setup(picks: ProviderGroupMember[]) {
+  let now = 1_000;
+  const router = {
+    pick: vi.fn(async ({ exclude }: { exclude?: ReadonlySet<string> }) => {
+      const next = picks.find((m) => !exclude?.has(m.key));
+      return next ? { kind: 'member' as const, member: next, label: next.key, resolved: [] } : { kind: 'unavailable' as const, resolved: [] };
+    }),
+    view: vi.fn(),
+    running: vi.fn(() => 0),
+    markCooling: vi.fn(),
+    coolingUntil: vi.fn(() => null),
+    markTried: vi.fn(() => new Set<string>()),
+    triedThisTurn: vi.fn(() => new Set<string>()),
+    resetTurn: vi.fn(),
+  } as unknown as ProviderGroupRouter & { pick: ReturnType<typeof vi.fn>; markCooling: ReturnType<typeof vi.fn> };
+  const externalLoad = createProviderGroupExternalLoad({ now: () => now });
+  const invoke = vi.fn(async () => ({}));
+  const relay = createProviderGroupGuestRelay({
+    router,
+    readGroup: (id) => (id === 'anthropic' ? CONFIG : null),
+    externalLoad,
+    connect: () => ({ invoke, poller: {} as never }),
+    now: () => now,
+    log: { warn: vi.fn() },
+  });
+  return { relay, router, externalLoad, invoke, advance: (ms: number) => { now += ms; } };
+}
+
+const PLAN = { kind: 'claude-code' as const, model: 'opus', providerId: 'anthropic', exclude: new Set<string>() };
+
+describe('provider group guest relay planner', () => {
+  it('maps the picked computer: this computer runs locally, others are relayed', async () => {
+    expect(await setup([LOCAL]).relay.plan(PLAN)).toEqual({ kind: 'local' });
+    expect(await setup([MINI]).relay.plan(PLAN)).toEqual({
+      kind: 'member', memberKey: MINI.key, agentDeviceId: 'mini', providerId: 'anthropic-2', sameAccount: true,
+    });
+    expect(await setup([FRIEND]).relay.plan(PLAN)).toEqual({
+      kind: 'member', memberKey: FRIEND.key, agentDeviceId: 'share:s1', providerId: 'anthropic', sameAccount: false,
+    });
+    expect(await setup([]).relay.plan(PLAN)).toEqual({ kind: 'unavailable' });
+    expect(await setup([MINI]).relay.plan({ ...PLAN, providerId: 'openai' })).toBeNull();
+  });
+
+  it('skips a same-account computer that cannot isolate shared users for a while, without cooling it', async () => {
+    const env = setup([MINI, FRIEND]);
+    env.relay.noteStartFailure('anthropic', { memberKey: MINI.key, agentDeviceId: 'mini', providerId: MINI.providerId, sameAccount: true },
+      new Error('[REMOTE_AGENT_PEER_TOO_OLD] old'));
+    expect(env.router.markCooling).not.toHaveBeenCalled();
+    expect((await env.relay.plan(PLAN))).toMatchObject({ memberKey: FRIEND.key });
+    env.advance(PROVIDER_GROUP_GUEST_INCAPABLE_MS + 1);
+    expect((await env.relay.plan(PLAN))).toMatchObject({ memberKey: MINI.key });
+  });
+
+  it('cools a computer that failed to start for a reason of its own', async () => {
+    const env = setup([MINI]);
+    env.relay.noteStartFailure('anthropic', { memberKey: MINI.key, agentDeviceId: 'mini', providerId: MINI.providerId, sameAccount: true },
+      new Error('prompt is too long'));
+    expect(env.router.markCooling).not.toHaveBeenCalled();
+    env.relay.noteStartFailure('anthropic', { memberKey: MINI.key, agentDeviceId: 'mini', providerId: MINI.providerId, sameAccount: true },
+      new Error('[REMOTE_AGENT_DEVICE_UNREACHABLE] gone'));
+    expect(env.router.markCooling).toHaveBeenCalledWith('anthropic', MINI.key, expect.any(Number));
+    expect(env.router.markCooling.mock.calls[0][2]).toBeLessThan(1_000 + PROVIDER_GROUP_DEFAULT_COOLDOWN_MS);
+  });
+
+  it('counts relayed tasks while they run and asks computers to forget a shared user', async () => {
+    const env = setup([MINI]);
+    const load = env.relay.trackRun('anthropic', MINI.key);
+    expect(env.externalLoad.running('anthropic', MINI.key)).toBe(1);
+    load.setRunning(false);
+    expect(env.externalLoad.running('anthropic', MINI.key)).toBe(0);
+    load.setRunning(true);
+    load.release();
+    expect(env.externalLoad.running('anthropic', MINI.key)).toBe(0);
+    await env.relay.forget('mini', 'a'.repeat(32));
+    expect(env.invoke).toHaveBeenCalledWith([{ op: 'forget', relay: 'a'.repeat(32) }]);
+  });
+});

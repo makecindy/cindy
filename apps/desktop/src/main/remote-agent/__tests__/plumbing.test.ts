@@ -163,6 +163,9 @@ describe('wire payloads', () => {
     const base = { sessionId: 's1', options: { model: 'm' }, workspace: { workingDir: '/p', platform: 'darwin' } };
     expect(decodeOpenPayload({ ...base, groupAssigned: true }).groupAssigned).toBe(true);
     expect(decodeOpenPayload({ ...base, groupAssigned: 'yes' })).not.toHaveProperty('groupAssigned');
+    // 组所在电脑替受邀者中转的任务带不透明的 relay 键；格式不对丢弃。
+    expect(decodeOpenPayload({ ...base, relay: 'a1b2c3d4e5f60718293a4b5c6d7e8f90' }).relay).toBe('a1b2c3d4e5f60718293a4b5c6d7e8f90');
+    expect(decodeOpenPayload({ ...base, relay: '../x' })).not.toHaveProperty('relay');
     expect(() => decodeOpenPayload({ sessionId: 's', options: { model: 'm' }, workspace: { workingDir: '/p', platform: 'beos' } })).toThrow();
   });
 

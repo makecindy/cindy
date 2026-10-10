@@ -25,6 +25,7 @@ import {
   type UserMessage,
 } from '@cindy/maker-core';
 import { projectAutoReviewUserReferences } from '@cindy/maker-shared/auto-review-intent';
+import { REMOTE_AGENT_RELAY_KEY_PATTERN } from '@cindy/device-link';
 
 import {
   channelForceConfirmMutatingToolCall,
@@ -148,6 +149,11 @@ export interface RemoteAgentOpenPayload {
    * 不再进入这台自己的供应商组。可选字段，旧版本解码时丢弃(它本来没有组)。
    */
   groupAssigned?: boolean;
+  /**
+   * 供应商组的组所在电脑替受邀者中转过来的任务：组所在电脑为这个受邀者取的不透明键。被控端按受邀者
+   * 隔离运行，会话记录与目录按(控制端, relay)分开。只发给 caps 声明了 guestRelay 的电脑。
+   */
+  relay?: string;
   options: RemoteAgentWireStartOptions;
   workspace: RemoteAgentWireWorkspace;
   projectFiles: RemoteAgentWireFile[];
@@ -289,6 +295,7 @@ export function decodeOpenPayload(value: unknown): RemoteAgentOpenPayload {
     sessionId,
     ...(value.virtualWorkspace === true ? { virtualWorkspace: true } : {}),
     ...(value.groupAssigned === true ? { groupAssigned: true } : {}),
+    ...(typeof value.relay === 'string' && REMOTE_AGENT_RELAY_KEY_PATTERN.test(value.relay) ? { relay: value.relay } : {}),
     options: decodeStartOptions(value.options),
     workspace: decodeWorkspace(value.workspace),
     projectFiles,

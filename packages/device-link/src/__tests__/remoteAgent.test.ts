@@ -27,6 +27,16 @@ describe('remote agent channel', () => {
     expect(REMOTE_INVOKE_ALLOWLIST.has(PROVIDER_GROUP_REMOTE_CHANNEL)).toBe(true);
   });
 
+  it('parses the provider group forget op and the guest relay capability', () => {
+    const relay = 'a1b2c3d4e5f60718293a4b5c6d7e8f90';
+    expect(parseRemoteAgentRequest({ op: 'forget', relay, extra: 1 })).toEqual({ op: 'forget', relay });
+    expect(() => parseRemoteAgentRequest({ op: 'forget', relay: 'short' })).toThrow('REMOTE_AGENT_INVALID');
+    expect(() => parseRemoteAgentRequest({ op: 'forget' })).toThrow('REMOTE_AGENT_INVALID');
+    const caps = { version: 1, agents: [], maxRuns: 16, uploadChunkBytes: 1024, maxPayloadBytes: 2048 };
+    expect(parseRemoteAgentCaps({ ...caps, guestRelay: true }).guestRelay).toBe(true);
+    expect(parseRemoteAgentCaps({ ...caps, guestRelay: 'yes' })).not.toHaveProperty('guestRelay');
+  });
+
   it('parses every op and drops unknown fields', () => {
     expect(parseRemoteAgentRequest({ op: 'caps', x: 1 })).toEqual({ op: 'caps' });
     expect(parseRemoteAgentRequest({ op: 'open', runId, agentKind: 'pi', payload: { json: { a: 1 } }, extra: 1 }))

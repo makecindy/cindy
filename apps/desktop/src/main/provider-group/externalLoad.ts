@@ -25,6 +25,10 @@ export interface ProviderGroupExternalLoad {
   recordPick(controller: string, sessionId: string, providerId: string, memberKey: string): void;
   /** 某台电脑的整份报告；返回 false = 比已有的旧，被丢弃。 */
   replaceLeases(controller: string, seq: number, entries: readonly ProviderGroupRemoteLease[]): boolean;
+  /**
+   * 本机替受邀者中转到这台组内电脑的任务(本机能看到它是否在运行一轮)：任务结束时 release。
+   */
+  trackRelay(providerId: string, memberKey: string): { setRunning(running: boolean): void; release(): void };
 }
 
 interface LeaseSet {
@@ -44,6 +48,7 @@ interface Provisional {
 export function createProviderGroupExternalLoad(deps: { now(): number }): ProviderGroupExternalLoad {
   const leases = new Map<string, LeaseSet>();
   const provisional = new Map<string, Provisional>();
+  const relays = new Set<{ providerId: string; memberKey: string; running: boolean }>();
   const provisionalKey = (controller: string, sessionId: string) => `${controller}\u0000${sessionId}`;
 
   function liveLeases(controller: string): LeaseSet | null {
@@ -82,7 +87,24 @@ export function createProviderGroupExternalLoad(deps: { now(): number }): Provid
         if (reported.has(key)) continue;
         if (entry.providerId === providerId && entry.memberKey === memberKey) count++;
       }
+      for (const relay of relays) {
+        if (relay.running && relay.providerId === providerId && relay.memberKey === memberKey) count++;
+      }
       return count;
+    },
+
+    trackRelay(providerId, memberKey) {
+      // 刚交过去、还没报运行状态的先按在运行算(同时来的几个受邀者任务不会全落到同一台)。
+      const entry = { providerId, memberKey, running: true };
+      relays.add(entry);
+      return {
+        setRunning(running) {
+          entry.running = running;
+        },
+        release() {
+          relays.delete(entry);
+        },
+      };
     },
 
     recordPick(controller, sessionId, providerId, memberKey) {
