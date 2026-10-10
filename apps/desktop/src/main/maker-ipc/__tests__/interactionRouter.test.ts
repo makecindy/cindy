@@ -27,7 +27,7 @@ function ask(requestId: string): InteractionRequest {
   return {
     kind: 'ask_user_question',
     requestId,
-    questions: [{ question: 'Which?', options: [] }],
+    questions: [{ question: 'Which?', options: [{ label: 'yes', description: '' }] }],
   } as InteractionRequest;
 }
 
@@ -49,7 +49,7 @@ function makeSession() {
 describe('session interaction router', () => {
   it('collects every questionnaire answer from a first-question-only channel', async () => {
     const host = makeSession();
-    const questions = Array.from({ length: 50 }, (_, index) => ({ question: `Question ${index}`, options: [] }));
+    const questions = Array.from({ length: 50 }, (_, index) => ({ question: `Question ${index}`, options: [{ label: 'yes', description: '' }] }));
     const channel = vi.fn<InteractionHandler>(async (request) => {
       if (request.kind !== 'ask_user_question') throw new Error('unexpected request');
       return { kind: 'ask_user_question', answers: { [request.questions[0].question]: 'yes' } };
@@ -65,6 +65,21 @@ describe('session interaction router', () => {
       const requests = channel.mock.calls.map(([request]) => request);
       expect(new Set(requests.map(request => request.requestId)).size).toBe(50);
       expect(requests.every(request => request.kind === 'ask_user_question' && request.questions.length === 1)).toBe(true);
+    } finally { lease.release(); }
+  });
+
+  it.each([0, 1])('dismisses a questionnaire with free-text item %i before sending cards', async index => {
+    const host = makeSession();
+    const channel = vi.fn<InteractionHandler>();
+    const questions = [0, 1].map(i => ({ question: `Question ${i}`, options: i === index ? [] : [{ label: 'yes', description: '' }] }));
+    const lease = beginInteractionRoute(host.session, {
+      route: { sessionId: host.session.id, turnId: 'turn-1', origin: { kind: 'im', channel: 'feishu' }, interactionSurface: 'channel-card' },
+      handle: channel,
+    });
+    try {
+      await expect(host.dispatch({ kind: 'ask_user_question', requestId: 'free-text', questions }))
+        .resolves.toEqual({ kind: 'ask_user_question', answers: {}, dismissed: true });
+      expect(channel).not.toHaveBeenCalled();
     } finally { lease.release(); }
   });
 
@@ -101,7 +116,7 @@ describe('session interaction router', () => {
     try {
       const pending = requestHostInteraction(host.session, {
         kind: 'ask_user_question', requestId: 'cancel-checklist',
-        questions: [{ question: 'First?', options: [] }, { question: 'Second?', options: [] }],
+        questions: [{ question: 'First?', options: [{ label: 'yes', description: '' }] }, { question: 'Second?', options: [{ label: 'yes', description: '' }] }],
       }, controller.signal);
       expect(channel).toHaveBeenCalledOnce();
       const surfaceSignal = channel.mock.calls[0][2];
@@ -128,7 +143,7 @@ describe('session interaction router', () => {
     installDesktopInteractionHandler(host.session, desktop);
     const request: InteractionRequest = {
       kind: 'ask_user_question', requestId: 'desktop-checklist',
-      questions: [{ question: 'First?', options: [] }, { question: 'Second?', options: [] }],
+      questions: [{ question: 'First?', options: [{ label: 'yes', description: '' }] }, { question: 'Second?', options: [{ label: 'yes', description: '' }] }],
     };
     await host.dispatch(request);
     expect(desktop).toHaveBeenCalledExactlyOnceWith(request);
@@ -178,7 +193,7 @@ describe('session interaction router', () => {
     try {
       await expect(host.dispatch({
         kind: 'ask_user_question', requestId: 'skip-checklist',
-        questions: ['First?', 'Second?', 'Third?', 'Fourth?'].map(question => ({ question, options: [] })),
+        questions: ['First?', 'Second?', 'Third?', 'Fourth?'].map(question => ({ question, options: [{ label: 'yes', description: '' }] })),
       })).resolves.toEqual({ kind: 'ask_user_question', answers: { 'Second?': 'yes' }, dismissed: true });
       expect(channel).toHaveBeenCalledTimes(3);
     } finally { lease.release(); }

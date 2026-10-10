@@ -37,11 +37,15 @@ Cindy 有两个 Telegram bot，用户看到的是同一个产品：
 
 ## 一、已同源
 
-同步多题问卷通过 `maker-ipc/interactionRouter.ts` 逐题发渠道卡片，收齐后一次返回答案；
+同步多题问卷通过 `maker-ipc/channelQuestionnaire.ts` 逐题发渠道卡片，收齐后一次返回答案；
+直接路由和 Desktop 接管共用此序列，接管后的取消信号仍由原 Desktop pending 持有。
 官方 Hook 与个人富卡渠道共用此分页，渲染器仍只需处理当前题。每页独立 id 防止旧按钮
 回答下一题；取消／超时／路由释放结束整份问卷。Desktop 仍一次接收完整清单，异步提问
 沿用原生命周期。官方单页超时以 dismissed 收口，不能作为跳过继续下一页；个人富卡发送
-尚未完成时取消，迟到卡片直接标记过期，不登记新的 pending。回归见 `maker-ipc/__tests__/interactionRouter.test.ts`。
+尚未完成时取消，迟到卡片直接标记过期，不登记新的 pending；无渠道覆盖文案时使用共享
+本地化失效提示，飞书／Discord 同样撤去按钮。卡片渠道目前不能采集自由文本，多题清单
+含无选项题时，在发第一张卡前以 dismissed 返回，不用空答案假装已完成；Desktop 仍支持
+此类问题。回归见 `maker-ipc/__tests__/interactionRouter.test.ts`。
 
 官方与个人 bot 的 IM 轮次都通过 `SendOrigin.surface = 'im'` 标记成功回复的查看入口；
 App 完成未读与提醒统一由 `renderer/hooks/useSessionRunningStatus.ts` 和

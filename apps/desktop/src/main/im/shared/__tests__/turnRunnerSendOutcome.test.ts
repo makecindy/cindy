@@ -24,7 +24,7 @@ import type {
   TurnPermissionPolicy,
 } from '@cindy/maker-core';
 import type { ChannelIM } from '@cindy/im';
-import { setMainLocale } from '../../../i18n';
+import { setMainLocale, t } from '../../../i18n';
 import { enqueueAskCardPatch } from '../askCardPatchQueue';
 import { createSerializedConnectionLifecycle } from '../../connectionLifecycle';
 
@@ -3847,6 +3847,53 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     expect(mocks.persistUserMessage).toHaveBeenCalledTimes(1);
   });
 
+  it('paginates every question when taking over a Desktop questionnaire', async () => {
+    setupAttachedSession(async () => ({ accepted: true }));
+    const questions = Array.from({ length: 50 }, (_, i) => ({ question: `Question ${i}`, options: [{ label: 'yes', description: '' }] }));
+    const resolve = vi.fn();
+    mocks.takePendingInteractionsForSession.mockReturnValueOnce([{
+      requestId: 'migrated-checklist', request: { kind: 'ask_user_question', requestId: 'migrated-checklist', questions },
+      resolve, signal: new AbortController().signal,
+    }]);
+    mocks.buildAskUserCard.mockReturnValue({ body: 'question', buttons: [] });
+    mocks.feishuIm.sendInteractiveCard.mockResolvedValue({ messageId: 'page' });
+    mocks.registerPending.mockImplementation(async (id: string) => ({
+      kind: 'ask_user_question', answers: { [`Question ${id.split(':').at(-1)}`]: 'yes' },
+    }));
+    await runDefaultTurn();
+    await waitForAssertion(() => expect(resolve).toHaveBeenCalledOnce());
+    expect(resolve).toHaveBeenCalledWith({ kind: 'ask_user_question', answers: Object.fromEntries(questions.map(q => [q.question, 'yes'])) });
+    expect(mocks.buildAskUserCard).toHaveBeenCalledTimes(50);
+    expect(mocks.buildAskUserCard.mock.calls.every(([req]) => req.questions.length === 1)).toBe(true);
+    expect(mocks.registerPendingExternal).not.toHaveBeenCalled();
+    mocks.feishuIm.sendInteractiveCard.mockReset();
+    mocks.registerPending.mockReset();
+  });
+
+  it('expires a late migrated page after its Desktop owner cancels', async () => {
+    setupAttachedSession(async () => ({ accepted: true }));
+    const controller = new AbortController();
+    const delivery = deferred<{ messageId: string }>();
+    vi.mocked(fakeCards.buildResolvedCard).mockReturnValue({ body: 'expired', buttons: [] });
+    const resolve = vi.fn();
+    mocks.takePendingInteractionsForSession.mockReturnValueOnce([{
+      requestId: 'migrated-late', request: { kind: 'ask_user_question', requestId: 'migrated-late',
+        questions: ['First?', 'Second?'].map(question => ({ question, options: [{ label: 'yes', description: '' }] })) },
+      resolve, signal: controller.signal,
+    }]);
+    mocks.buildAskUserCard.mockReturnValue({ body: 'question', buttons: [] });
+    mocks.feishuIm.sendInteractiveCard.mockImplementationOnce(() => delivery.promise);
+    await runDefaultTurn();
+    await waitForAssertion(() => expect(mocks.feishuIm.sendInteractiveCard).toHaveBeenCalledOnce());
+    controller.abort();
+    await waitForAssertion(() => expect(resolve).toHaveBeenCalledWith({ kind: 'ask_user_question', answers: {}, dismissed: true }));
+    delivery.resolve({ messageId: 'late-migrated' });
+    await waitForAssertion(() => expect(mocks.feishuIm.updateInteractiveCard).toHaveBeenCalledWith('late-migrated', expect.anything()));
+    expect(mocks.registerPending).not.toHaveBeenCalled();
+    expect(mocks.feishuIm.sendInteractiveCard).toHaveBeenCalledOnce();
+    mocks.feishuIm.sendInteractiveCard.mockReset();
+  });
+
   it.each([1, 2])('expires a questionnaire card delivered after Stop on page %i', async (page) => {
     const delivery = deferred<{ messageId: string }>();
     const expired = { body: 'expired', buttons: [] };
@@ -3855,13 +3902,13 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     if (page === 2) mocks.feishuIm.sendInteractiveCard.mockResolvedValueOnce({ messageId: 'first-page' });
     mocks.feishuIm.sendInteractiveCard.mockImplementationOnce(() => delivery.promise);
     mocks.registerPending.mockResolvedValue({ kind: 'ask_user_question', answers: { 'First?': 'yes' } });
-    runner = createTurnRunner({ ...fakeAdapter, interactionExpiredNotice: 'expired' }, fakeRepo,
+    runner = createTurnRunner(fakeAdapter, fakeRepo,
       { ...fakeCards, buildResolvedCard: vi.fn(() => expired) } as unknown as ImCardBuilders);
     const h = setupSession(async () => ({ accepted: true }));
     await runDefaultTurn();
     const answer = h.dispatchInteraction({
       kind: 'ask_user_question', requestId: 'late-checklist',
-      questions: [{ question: 'First?', options: [] }, { question: 'Second?', options: [] }],
+      questions: [{ question: 'First?', options: [{ label: 'yes', description: '' }] }, { question: 'Second?', options: [{ label: 'yes', description: '' }] }],
     });
     await waitForAssertion(() => expect(mocks.feishuIm.sendInteractiveCard).toHaveBeenCalledTimes(page));
     await getRunner().stopActiveTurn({ botContextId: 'cli_test_bot', userId: 'ou_user' });
@@ -3963,7 +4010,8 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     }
   });
 
-  it('retains optional expiry capability and distinct runner identities', async () => {
+  it('expires cards without an adapter override and retains distinct runner identities', async () => {
+    vi.mocked(fakeCards.buildResolvedCard).mockReturnValueOnce({ body: 'expired', buttons: [] });
     const first = createTurnRunner(fakeAdapter, fakeRepo, fakeCards);
     const second = createTurnRunner(fakeAdapter, fakeRepo, fakeCards);
     mocks.rejectAllPending.mockReturnValueOnce([{ requestId: 'no-expiry', messageId: 'legacy' }]);
@@ -3972,7 +4020,8 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     await flushMicrotasks();
     const calls = mocks.rejectAllPending.mock.calls;
     expect(calls.at(-2)?.[1]).not.toBe(calls.at(-1)?.[1]);
-    expect(mocks.feishuIm.updateInteractiveCard).not.toHaveBeenCalled();
+    expect(fakeCards.buildResolvedCard).toHaveBeenCalledWith(t('imBot.interactionExpired'));
+    expect(mocks.feishuIm.updateInteractiveCard).toHaveBeenCalledWith('legacy', expect.anything());
   });
 
   it('disposeAllSessions aborts and awaits an IM-owned in-flight turn', async () => {

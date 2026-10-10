@@ -4731,6 +4731,7 @@
       "standbyHint": "Another Cindy instance on this computer is using the remote connection. Close it and this instance takes over automatically."
     },
     "imBot": {
+    "interactionExpired": "This interaction has expired.",
       "beta": "Beta",
       "groups": {
         "cindy": "Official",

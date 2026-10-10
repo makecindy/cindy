@@ -32,6 +32,8 @@ import { createLocalImSource, type ImContextSnapshot } from '../../../shared/imM
  */
 
 import { createHash, randomUUID } from 'node:crypto';
+import { t } from '../../i18n';
+import { presentChannelQuestionnaire } from '../../maker-ipc/channelQuestionnaire';
 import path from 'node:path';
 import { isImAccountScopeClosedError } from '../accountBoundary';
 import { bindRuntimeRecoveryNotice } from './runtimeRecoveryNotice';
@@ -1996,6 +1998,7 @@ export function createTurnRunner(
   async function publishMigratedInteraction(
     entry: {
       sharedPermission?: SharedPermission;
+      signal?: AbortSignal;
       requestId: string;
       request: InteractionRequest;
       resolve: (decision: InteractionDecision) => void;
@@ -2034,6 +2037,25 @@ export function createTurnRunner(
             ? { kind, answers: {} }
             : { kind, behavior: 'deny', reason: `text interaction failed: ${msg}` },
         );
+      }
+      return;
+    }
+
+    if (req.kind === 'ask_user_question' && req.delivery !== 'async' && req.questions.length > 1) {
+      let pageId = req.requestId;
+      const cancelPage = () => { dropInteractionCard(pageId, 'session_aborted'); };
+      entry.signal?.addEventListener('abort', cancelPage, { once: true });
+      try {
+        const handle = handleInteractionFor(localSessionId, userId, scopeKey);
+        const decision = await presentChannelQuestionnaire(
+          req, (page, signal) => handle(page, undefined, signal), entry.signal,
+          requestId => { pageId = requestId; },
+        );
+        resolve(decision);
+      } catch {
+        resolve({ kind: 'ask_user_question', answers: {}, dismissed: true });
+      } finally {
+        entry.signal?.removeEventListener('abort', cancelPage);
       }
       return;
     }
@@ -2916,8 +2938,8 @@ export function createTurnRunner(
   }
 
   function expireInteractionCard(requestId: string, messageId: string): void {
-    const notice = adapter.interactionExpiredNotice;
-    if (!notice || !richIm) return;
+    if (!richIm) return;
+    const notice = adapter.interactionExpiredNotice ?? t('imBot.interactionExpired');
     const im = richIm;
     let cancelled = false;
     const done = enqueueAskCardPatch(requestId, async () => {

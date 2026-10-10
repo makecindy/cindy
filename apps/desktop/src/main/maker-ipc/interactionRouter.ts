@@ -13,6 +13,7 @@ import type {
   TurnPermissionOrigin,
 } from '@cindy/maker-core';
 import { createSharedPermission, type SharedPermission } from './sharedPermission';
+import { presentChannelQuestionnaire } from './channelQuestionnaire';
 
 export type TurnOrigin = TurnPermissionOrigin;
 
@@ -279,26 +280,12 @@ class SessionInteractionRouter {
         }
         handled = shared.result;
       } else if (paginated && request.kind === 'ask_user_question') {
-        const questionnaire = request;
-        handled = (async (): Promise<InteractionDecision> => {
-          let answers: Record<string, string> = {};
-          for (const [index, question] of questionnaire.questions.entries()) {
-            if (cancelledByRouter || this.activeRoute?.token !== active?.token) {
-              return safeDecision(questionnaire, 'interaction_route_released');
-            }
-            // A late click on a previous card must not answer the next one.
-            surfaceRequestId = `${questionnaire.requestId}:question:${index}`;
-            const decision = await handler(
-              { ...questionnaire, requestId: surfaceRequestId, questions: [question] },
-              undefined,
-              surfaceController?.signal,
-            );
-            if (decision.kind !== 'ask_user_question') return safeDecision(questionnaire, 'interaction_handler_failed');
-            answers = { ...answers, ...decision.answers };
-            if (decision.dismissed) return { ...decision, answers };
-          }
-          return { kind: 'ask_user_question', answers };
-        })();
+        handled = presentChannelQuestionnaire(
+          request,
+          (page, pageSignal) => handler(page, undefined, pageSignal),
+          surfaceController?.signal,
+          requestId => { surfaceRequestId = requestId; },
+        );
       } else {
         handled = handler(request);
       }

@@ -167,7 +167,7 @@ export interface ImChannelAdapter {
   terminalReactionEmoji?(kind: 'done' | 'aborted' | 'error'): string | null;
   /**
    * 交互被作废(turn 收口 / session 清理 / 抢跑)时, 把它那张卡片正文改写成的失效
-   * 提示。缺省 = 不改写(该渠道保持原行为)。
+   * 提示。缺省使用共享的本地化失效提示, 所有富卡片渠道均撤去按钮。
    */
   interactionExpiredNotice?: string;
   /**
