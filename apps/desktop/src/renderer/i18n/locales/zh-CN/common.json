@@ -849,6 +849,7 @@
       "cindyMake": "Cindy Make"
     },
     "sections": {
+      "sessionTitle": "任务标题",
       "user": "用户",
       "billing": "用量和计费",
       "appearance": "外观",
@@ -1556,6 +1557,13 @@
       "newSession": "新任务",
       "threadEmptyTitle": "有问题尽管问",
       "threadEmptyHint": "告诉我你想做什么，也可以继续追问"
+    },
+    "sessionTitle": {
+      "label": "自动更新任务标题",
+      "description": "任务每轮收尾后自动按「日期｜类型｜主题」更新标题，让任务列表一眼可读。手动改过的名字不会被覆盖。",
+      "enabledToast": "已开启任务标题自动更新",
+      "disabledToast": "已关闭任务标题自动更新",
+      "saveFailed": "保存失败，请重试"
     },
     "about": {
       "title": "关于",
