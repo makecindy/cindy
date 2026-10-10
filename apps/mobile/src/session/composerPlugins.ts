@@ -45,10 +45,18 @@ export function placeComposerPlugin(
   let normalized = normalizeComposerDocument(document);
   const text = composerDocumentProjectedText(normalized);
   const trigger = detectComposerPluginTrigger(text);
-  const tail = normalized.nodes.findLast((node) => node.type !== 'quote');
-  // Queries inside rich atoms are content, not editable command tokens.
-  if (trigger && tail?.type === 'text' && trigger.from >= text.length - tail.text.length) {
-    normalized = replaceComposerTextRange(normalized, trigger.from, text.length, []);
+  if (trigger) {
+    const nodes = normalized.nodes.slice();
+    let remaining = text.length - trigger.from;
+    for (let index = nodes.length - 1; index >= 0 && remaining > 0; index -= 1) {
+      const node = nodes[index];
+      if (node.type === 'quote') continue;
+      if (node.type !== 'text') break;
+      const consumed = Math.min(remaining, node.text.length);
+      nodes[index] = { ...node, text: node.text.slice(0, node.text.length - consumed) };
+      remaining -= consumed;
+    }
+    if (remaining === 0) normalized = normalizeComposerDocument({ version: 1, nodes });
   }
   let leadingText = '';
   for (const node of normalized.nodes) {

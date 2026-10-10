@@ -124,4 +124,41 @@ describe('mobile composer plugin selection', () => {
     const selected = placeComposerPlugin({ version: 1, nodes: [atom] }, art, roster);
     expect(selected.nodes).toContainEqual(atom);
   });
+  it.each(['', 'draw a cat '])('removes a query split across quotes after draft %j', (body) => {
+    const quotes: ComposerDocument['nodes'] = [
+      { type: 'quote', quote: { text: 'first quote' } },
+      { type: 'quote', quote: { text: 'second quote' } },
+    ];
+    const selected = placeComposerPlugin({ version: 1, nodes: [
+      { type: 'text', text: body + '$' }, quotes[0],
+      { type: 'text', text: 'a' }, quotes[1], { type: 'text', text: 'r' },
+    ] }, art, roster);
+    expect(selected.nodes).toEqual([
+      { type: 'text', text: '$art ' + body }, ...quotes,
+    ]);
+    expect(detectComposerPluginTrigger(composerDocumentProjectedText(selected))).toBeNull();
+    const wire = serializeComposerDocument(selected).text;
+    expect(parseGhostCommandWord(wire)).toBe('art');
+    expect(wire).not.toMatch(/\$ar(?=\s|$)/u);
+    expect(wire).toContain('first quote');
+    expect(wire).toContain('second quote');
+  });
+  it('preserves a quote at the end of a split query', () => {
+    const quote = { type: 'quote' as const, quote: { text: 'quoted body' } };
+    const selected = placeComposerPlugin({ version: 1, nodes: [
+      { type: 'text', text: '$' }, quote, { type: 'text', text: 'ar' }, quote,
+    ] }, art, roster);
+    expect(selected.nodes).toEqual([{ type: 'text', text: '$art ' }, quote, quote]);
+    expect(detectComposerPluginTrigger(composerDocumentProjectedText(selected))).toBeNull();
+  });
+  it('keeps a query that starts in a rich atom and ends in editable text', () => {
+    const atom = { type: 'pasted-text' as const, text: 'example $', display: 'Pasted Text' };
+    const quote = { type: 'quote' as const, quote: { text: 'quoted body' } };
+    const selected = placeComposerPlugin({ version: 1, nodes: [
+      atom, quote, { type: 'text', text: 'ar' },
+    ] }, art, roster);
+    expect(selected.nodes).toEqual([
+      { type: 'text', text: '$art ' }, atom, quote, { type: 'text', text: 'ar' },
+    ]);
+  });
 });
