@@ -39,6 +39,16 @@ export type BotGroupNoticeCode =
   | 'workdir-unavailable';
 export type BotGroupMemberStatus = 'active' | 'paused' | 'error' | 'archived' | 'deleting' | 'missing';
 
+/** Public failure categories only; never transport raw Agent errors into a group. */
+export const BOT_GROUP_RUNTIME_FAILURE_CODES = [
+  'IMAGE_INPUT_UNSUPPORTED', 'MODEL_UNAVAILABLE', 'AUTH_REQUIRED', 'RATE_LIMITED',
+  'QUOTA_EXCEEDED', 'NETWORK_ERROR', 'RUNTIME_TIMEOUT', 'RUNTIME_ERROR',
+] as const;
+export type BotGroupRuntimeFailureCode = typeof BOT_GROUP_RUNTIME_FAILURE_CODES[number];
+export function isBotGroupRuntimeFailureCode(value: unknown): value is BotGroupRuntimeFailureCode {
+  return typeof value === 'string' && BOT_GROUP_RUNTIME_FAILURE_CODES.some(code => code === value);
+}
+
 export interface BotGroupMention {
   all: boolean;
   botIds: string[];
@@ -80,6 +90,8 @@ export interface BotGroupMessageView {
   content: string;
   mentions: BotGroupMention;
   noticeCode: BotGroupNoticeCode | null;
+  /** Localized cause and remedy for a failed execution; raw diagnostics stay on the executor. */
+  runtimeFailureCode?: BotGroupRuntimeFailureCode;
   /** The plan this message belongs to: the 安排卡, a step hand-off or the plan's end. */
   planId: string | null;
   /** Step hand-off files, relative to the plan's work directory (POSIX separators). */

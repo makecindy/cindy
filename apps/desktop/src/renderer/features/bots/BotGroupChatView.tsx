@@ -67,6 +67,8 @@ import { BotGroupComposer } from './BotGroupComposer';
 import { ChatInviteButton, ChatMessageActions } from './ChatServerControls';
 import { ChatThreadPanel } from './ChatThreadPanel';
 import { BotGroupPendingInteraction } from './BotGroupPendingInteraction';
+import { BotGroupRuntimeFailureNotice } from './BotGroupRuntimeFailureNotice';
+import { isBotGroupRuntimeFailureCode } from '../../../shared/botGroupChat';
 import {
   BotGroupHandoffFiles,
   BotGroupOrganizerTag,
@@ -749,6 +751,9 @@ function BotGroupTimelineItem({
   }
   if (message.kind === 'notice' || message.authorKind === 'system') {
     const name = message.authorName.trim() || member?.name || '';
+    if (isBotGroupRuntimeFailureCode(message.runtimeFailureCode)) {
+      return <BotGroupRuntimeFailureNotice name={name} code={message.runtimeFailureCode} />;
+    }
     const key = botGroupNoticeKey(message.noticeCode, message.planId !== null);
     const text = key ? t(key, { name }) : message.content;
     return <p className="text-center text-12 text-[var(--text-tertiary)]">{text}</p>;

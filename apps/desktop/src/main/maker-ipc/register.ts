@@ -510,6 +510,7 @@ import {
   type BotDirectMessageService,
 } from './botDirectMessageService.js';
 import { createBotGroupChatService, type BotGroupChatService, type BotGroupChatServiceDeps } from './botGroupChatService.js';
+import { settleUndispatchedBotGroupTurn } from './botGroupRuntimeFailure.js';
 import { withChatServer } from './chatServer.js';
 import { createBotGroupPlanDecider } from './botGroupPlanDecider.js';
 import { botGroupMembersVisibleRemotely, registerBotGroupRemoteResourceProvider } from './botGroupRemoteResourceProvider.js';
@@ -16501,6 +16502,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       publishUiSessionIntervention(sessionId);
     },
     onRejectedUserTurn: (sessionId, item) => {
+      void settleUndispatchedBotGroupTurn(botGroupChatServiceHolder, sessionId, item.clientId,
+        'failed', inputCoordinator.getProjection(sessionId).error).catch(() => {
+        log.warn('Bot group undispatched input settlement failed', { sessionId });
+      });
       notePluginTaskLifecycle(service => service.discard(sessionId, item, 'failed'));
       welcomeDispatchReceipts.settle(sessionId, item.clientId, false);
       rollbackAgentIslandUserPrompt(sessionId, item.clientId, 'rejected');

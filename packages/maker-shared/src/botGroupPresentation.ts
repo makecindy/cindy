@@ -60,15 +60,24 @@ export function continuableRoundEndId(
   return null;
 }
 
-/** Merge an older page under the latest page, keyed by sequence. */
+/** Execution notices share their source's sequence, but must not replace the source message. */
+function isExecutionFailure(message: BotGroupMessageView): boolean {
+  return message.kind === 'notice' && message.id.startsWith('execution-failure:');
+}
+
+/** Merge pages by message sequence, reconciling derived execution notices separately. */
 export function mergeBotGroupMessages(
   older: readonly BotGroupMessageView[],
   latest: readonly BotGroupMessageView[],
 ): BotGroupMessageView[] {
-  const bySequence = new Map<number, BotGroupMessageView>();
-  for (const message of older) bySequence.set(message.sequence, message);
-  for (const message of latest) bySequence.set(message.sequence, message);
-  return [...bySequence.values()].sort((a, b) => a.sequence - b.sequence);
+  const refreshedSources = new Set(latest.filter(message => !isExecutionFailure(message)).map(message => message.sequence));
+  const byKey = new Map<string, BotGroupMessageView>();
+  const key = (message: BotGroupMessageView) => isExecutionFailure(message) ? message.id : `sequence:${message.sequence}`;
+  for (const message of older) {
+    if (!isExecutionFailure(message) || !refreshedSources.has(message.sequence)) byKey.set(key(message), message);
+  }
+  for (const message of latest) byKey.set(key(message), message);
+  return [...byKey.values()].sort((a, b) => a.sequence - b.sequence || Number(isExecutionFailure(a)) - Number(isExecutionFailure(b)));
 }
 
 /** Copy variant for a refused group action; null keeps the caller's own fallback. */

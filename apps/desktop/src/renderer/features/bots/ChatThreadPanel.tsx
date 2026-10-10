@@ -13,7 +13,9 @@ import { getDataOwnerGeneration, isDataOwnerGenerationCurrent, isDataOwnerPushCu
 import type { BotGroupDetail, BotGroupMention, BotGroupMessageView } from '../../../shared/botGroupChat';
 import { resolveBotGroupMentions } from './botGroupMentions';
 import { refreshBotGroups } from './botGroupStore';
+import { mergeBotGroupMessages } from './botGroupPresentation';
 import { BotAvatar } from './BotAvatar';
+import { BotGroupRuntimeFailureNotice } from './BotGroupRuntimeFailureNotice';
 import { ChatMessageActions, chatErrorKey } from './ChatServerControls';
 const key = (name: string) => `bots.groupChat.server.${name}`;
 const api = () => window.electronAPI.maker.chatServer;
@@ -21,6 +23,7 @@ const iconClass = 'flex h-8 w-8 items-center justify-center rounded-full text-[v
 
 function ThreadMessage({ group, message, shareScope, sharing, onChanged }: { group: BotGroupDetail; message: BotGroupMessageView; shareScope: string; sharing: boolean; onChanged: () => void }) {
   const member = group.members.find(m => m.botId === message.authorBotId);
+  if (message.kind === 'notice') return <BotGroupRuntimeFailureNotice name={message.authorName || member?.name || ''} code={message.runtimeFailureCode} />;
   return <article {...{ [SHARE_SESSION_ATTR]: shareScope, [SHARE_MESSAGE_ATTR]: message.id }}
     className={`relative flex min-w-0 gap-2.5 ${sharing ? 'ml-10' : ''}`}>
     {sharing && <ShareMessageCheckbox clientId={message.id} />}
@@ -62,9 +65,7 @@ export function ChatThreadPanel({ group, rootId, onClose }: { group: BotGroupDet
       if (!result.ok) { setError(t(chatErrorKey(result.errorCode))); return; }
       setRoot(result.root); setError('');
       setReplies(previous => {
-        const merged = new Map(previous.map(m => [m.id, m]));
-        for (const message of result.replies) merged.set(message.id, message);
-        return [...merged.values()].sort((a, b) => a.sequence - b.sequence);
+        return mergeBotGroupMessages(previous, result.replies);
       });
       if (before || replies.length === 0) setHasMore(result.hasMore);
     } catch { if (current()) setError(t(key('requestFailed'))); }

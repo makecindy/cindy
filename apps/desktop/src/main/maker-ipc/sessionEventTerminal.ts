@@ -40,6 +40,7 @@ import {
   isOversizedHistoryErrorData,
 } from './contextOverflowRollover.js';
 import { isTerminalTurnErrorEvent } from './sessionTurnActivityTracker.js';
+import { botGroupRuntimeFailureCode } from './botGroupRuntimeFailure.js';
 import { ProductTurnUsageTargetTracker } from './turnWallClock.js';
 import { createWorkerTurnStartSequencer } from './workerTurnStartSequencer.js';
 import { AutoResumeBookkeeping, shouldSkipOrcaWorkerTerminal } from './autoResumeBookkeeping.js';
@@ -608,6 +609,7 @@ export function finishSessionTerminalEvent(
             outcome: isTerminalTurnErrorEvent(event) ? 'error' : 'done',
             resultText: typeof groupDoneData?.result === 'string' ? groupDoneData.result : '',
             resultMessageClientId: turnAssistantPersistId,
+            ...(isTerminalTurnErrorEvent(event) ? { failureCode: botGroupRuntimeFailureCode(event.data) } : {}),
           })
           .catch((error) => {
             deps.log.warn('Bot group lane terminal settlement failed', {

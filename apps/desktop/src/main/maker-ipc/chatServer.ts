@@ -27,10 +27,12 @@ import { UI_ACTION_TRIGGER_PREFIX } from '../../shared/interruptedTurn.js';
 import { untrustedJsonBlock } from '../../shared/untrustedPrompt.js';
 import {
   BOT_GROUP_CLIENT_ID, isBotGroupNoReplyText,
+  isBotGroupRuntimeFailureCode, type BotGroupRuntimeFailureCode,
   type BotGroupDetail, type BotGroupPlanView, type BotGroupFailure, type BotGroupMessageView, type BotGroupAttachment, type ChatServerApi,
 } from '../../shared/botGroupChat.js';
 import type { BotGroupChatService, BotGroupChatServiceDeps, BotGroupLaneTerminal } from './botGroupChatService.js';
 import { readPersistedReplyText } from './botGroupChatService.js';
+import { botGroupRuntimeFailureCode, botGroupRuntimeFailureDetail } from './botGroupRuntimeFailure.js';
 
 interface Actor { id: string; kind: string; externalId: string; name: string; avatar?: string | null; avatarSource?: string | null }
 interface Member { id: string; kind: 'human' | 'bot' | 'integration'; name: string; state: string; role: 'owner' | 'admin' | 'member' | 'guest';
@@ -49,6 +51,7 @@ interface Snapshot { room: Room; members: Member[]; messages: Message[]; cursor:
 interface Execution {
   id: string; conversation_id: string; source_message_id: string; bot_id: string;
   requester_id?: string;
+  failure_code?: unknown; updated_at?: string;
   plan_id?: string | null; plan_step?: number | null;
   trigger?: unknown; trigger_type?: string | null;
   context_seq: string; attachment_after_seq?: string; epoch: number; status: string; access_mode: 'owner' | 'chat' | 'tools'; access_revision: number;
@@ -541,7 +544,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       botId: localBot(e.bot_id)?.id ?? e.bot_id, sessionId: running.get(e.bot_id)?.sessionId ?? null, activity: e.plan_id ? 'step' as const : 'reply' as const,
     }));
     // Sidebar refresh must not download every attachment in every group's history.
-    const messages = summaryOnly ? [] : (await messageViews(roomId, page, s.members)).sort((a, b) => a.sequence - b.sequence);
+    const messages = summaryOnly ? [] : [...await messageViews(roomId, page, s.members),
+      ...executionFailureViews(executions, page, s.members)].sort((a, b) => a.sequence - b.sequence);
     const last = s.messages[0];
     const lastView = last ? messageView(last, s.members) : null;
     return { serverBacked: true, migrationPending: [...upgradeErrors.keys()].some(source => upgradedGroups.get(source) === roomId), archived: s.room.archived, selfActorId: selfId, topic: s.room.topic, description: s.room.description, revision: s.room.revision, canInvite: s.members.some(m => m.ownerActorId === selfId && m.state === 'joined' && ['owner', 'admin'].includes(m.role)), id: s.room.id, name: s.room.name, replyMode: s.room.response_mode, speakingMode: s.room.speaking_mode,
@@ -625,6 +629,25 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       executorId, epoch: run.execution.epoch, action, ...extra,
     }, run.execution.bot_id);
   }
+  // Compatibility cache for servers which do not yet return failure_code.
+  // The server execution status still owns whether a notice is displayed.
+  const failureCodes = new Map<string, BotGroupRuntimeFailureCode>();
+  function executionFailureViews(executions: Execution[], page: Message[], members: Member[]): BotGroupMessageView[] {
+    return executions.flatMap(execution => {
+      if (execution.status !== 'failed') return [];
+      const source = page.find(message => message.id === execution.source_message_id && !message.deleted);
+      if (!source) return [];
+      const member = members.find(value => value.id === execution.bot_id);
+      const code = isBotGroupRuntimeFailureCode(execution.failure_code) ? execution.failure_code
+        : failureCodes.get(`${execution.id}:${execution.epoch}`) ?? 'RUNTIME_ERROR';
+      return [{ id: `execution-failure:${execution.id}:${execution.epoch}`, sequence: Number(source.seq),
+        kind: 'notice', authorKind: 'system', authorBotId: localBot(execution.bot_id)?.id ?? execution.bot_id,
+        authorName: member ? memberName(member) : actors.find(actor => actor.id === execution.bot_id)?.name ?? '',
+        content: '', noticeCode: code === 'RUNTIME_TIMEOUT' ? 'member-timeout' : 'member-failed', runtimeFailureCode: code,
+        mentions: { all: false, botIds: [] }, planId: execution.plan_id ?? null, threadRootId: source.threadRootId,
+        files: [], attachments: [], createdAt: Date.parse(execution.updated_at ?? source.createdAt) }];
+    });
+  }
   function deliverSettlement(run: Running): Promise<void> {
     if (run.delivery) return run.delivery;
     const pending = run.settlement;
@@ -646,7 +669,11 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
             }
           }
           const files = await media.upload(run.execution.conversation_id, `step:${run.execution.id}:${run.execution.epoch}`, produced, run.execution.bot_id);
-          pending.payload = terminal.outcome === 'error' ? { detail: 'Local Agent failed' }
+          if (terminal.outcome === 'error') {
+            failureCodes.set(`${run.execution.id}:${run.execution.epoch}`, terminal.failureCode ?? 'RUNTIME_ERROR');
+            if (failureCodes.size > 1000) failureCodes.delete(failureCodes.keys().next().value!);
+          }
+          pending.payload = terminal.outcome === 'error' ? { detail: botGroupRuntimeFailureDetail(terminal.failureCode ?? 'RUNTIME_ERROR') }
             : { ...(isBotGroupNoReplyText(text) && !files.length ? {} : { content: [{ type: 'text', text: text.slice(0, 16000) || '已完成' }, ...files] }), continueDiscussion: run.context?.kind !== 'member.joined' && !run.plan && !isBotGroupNoReplyText(text) };
         }
         if (!current() || running.get(run.execution.bot_id) !== run) return;
@@ -843,12 +870,13 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         } });
       if (!dispatched.ok) throw new Error(dispatched.errorCode);
       changed(s.room.id);
-    } catch {
+    } catch (error) {
+      if (!current() || running.get(execution.bot_id) !== run) return;
+      run.settlement ??= { terminal: { sessionId: run.sessionId, activeInputClientId: run.clientId,
+        outcome: 'error', resultText: '', failureCode: botGroupRuntimeFailureCode(error) }, retryAt: 0 };
       run.releaseToolAuthority?.();
       if (run.sessionId) await deps.abortLane(run.sessionId).catch(() => undefined);
-      if (running.get(execution.bot_id) === run) running.delete(execution.bot_id);
-      await updateExecution(run, 'fail', { detail: 'Local runtime could not start' }).catch(() => undefined);
-      changed(execution.conversation_id);
+      await deliverSettlement(run);
     }
   }
   let polling = false;
@@ -912,8 +940,13 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       if (paused) run.pauseStarted ??= Date.now();
       else if (run.pauseStarted !== undefined) { run.started += Date.now() - run.pauseStarted; run.pauseStarted = undefined; }
       const timedOut = !paused && Date.now() - run.started > (run.plan ? 2 * 60 * 60 * 1000 : 300000);
-      await updateExecution(run, timedOut ? 'fail' : 'heartbeat', timedOut ? { detail: 'Runtime timeout' } : {});
-      if (timedOut) throw new Error('TIMEOUT');
+      if (timedOut) {
+        run.settlement ??= { terminal: { sessionId: run.sessionId, activeInputClientId: run.clientId,
+          outcome: 'error', resultText: '', failureCode: 'RUNTIME_TIMEOUT' }, retryAt: 0 };
+        run.releaseToolAuthority?.();
+        if (run.sessionId) await deps.abortLane(run.sessionId).catch(() => undefined);
+        await deliverSettlement(run);
+      } else await updateExecution(run, 'heartbeat');
     } catch {
       // An in-flight heartbeat must not discard a result that became ready while
       // it was awaiting its response; retry the terminal operation for its receipt.
@@ -997,7 +1030,9 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       const members = await api<Member[]>(`/conversations/${i.groupId}/members`);
       const root = await api<Message>(`/conversations/${i.groupId}/messages/${i.rootId}`);
       const page = await api<Message[]>(`/conversations/${i.groupId}/messages?threadRootId=${i.rootId}&limit=50${i.before ? `&before=${i.before}` : ''}`);
-      return { root: (await messageViews(i.groupId, [root], members))[0], replies: await messageViews(i.groupId, page.reverse(), members), hasMore: page.length === 50 };
+      const executions = await api<Execution[]>(`/conversations/${i.groupId}/executions`);
+      return { root: (await messageViews(i.groupId, [root], members))[0], replies: [...await messageViews(i.groupId, page.reverse(), members),
+        ...executionFailureViews(executions, page, members)].sort((a, b) => a.sequence - b.sequence), hasMore: page.length === 50 };
     }),
     reply: input => result(async () => {
       const i = z.object({ groupId: id, rootId: id, text: z.string().trim().min(1).max(8000), clientId: operationId,
@@ -1166,6 +1201,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       if (!run) return local.settleLaneTurn(terminal);
       if (terminal.activeInputClientId ? terminal.activeInputClientId !== run.clientId : !run.accepted) return false;
       run.settlement ??= { terminal: { ...terminal }, retryAt: 0 };
+      if (terminal.undispatched) await deps.abortLane(terminal.sessionId).catch(() => undefined);
       await deliverSettlement(run);
       return true;
     },
