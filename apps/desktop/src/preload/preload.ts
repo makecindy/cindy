@@ -201,6 +201,13 @@ import {
   type SidebarSettingsSnapshot,
 } from '../shared/sidebarSettings';
 import { isDataOwnerPushStamp, type DataOwnerPushStamp } from '../shared/dataOwnerPush';
+import {
+  PROJECT_WORKSPACES_GET_CHANNEL,
+  PROJECT_WORKSPACES_MUTATE_CHANNEL,
+  PROJECT_WORKSPACES_CHANGED_CHANNEL,
+  type ProjectWorkspaceMutation,
+  type ProjectWorkspaceSnapshot,
+} from '../shared/projectWorkspaceSettings';
 import type { VoiceInputSyncErrorResult } from '../shared/voiceInputData';
 import type { UtilityTextFailure } from '../shared/utilityTextResult';
 import { DB_SLIMMING_STARTUP_PROGRESS_CHANGED_CHANNEL } from '../shared/localDbMaintenance';
@@ -5251,6 +5258,36 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // Sidebar identity state is owner-scoped in main and every mutation/push is generation-fenced.
   sidebarSettings: {
+    getProjectWorkspaces: (): Promise<ProjectWorkspaceSnapshot> =>
+      ipcRenderer.invoke(PROJECT_WORKSPACES_GET_CHANNEL),
+    mutateProjectWorkspaces: (request: {
+      ownerStamp: DataOwnerPushStamp;
+      mutation: ProjectWorkspaceMutation;
+    }): Promise<ProjectWorkspaceSnapshot> =>
+      ipcRenderer.invoke(PROJECT_WORKSPACES_MUTATE_CHANNEL, request),
+    onProjectWorkspacesChanged: (
+      callback: (snapshot: ProjectWorkspaceSnapshot, ownerStamp: DataOwnerPushStamp) => void,
+    ): (() => void) => {
+      const listener = (
+        _event: Electron.IpcRendererEvent,
+        snapshot: ProjectWorkspaceSnapshot,
+        ownerStamp: unknown,
+      ) => {
+        if (!snapshot || !Array.isArray(snapshot.workspaces) || !isDataOwnerPushStamp(ownerStamp)) {
+          return;
+        }
+        if (
+          snapshot.ownerStamp &&
+          (snapshot.ownerStamp.dataOwnerId !== ownerStamp.dataOwnerId ||
+            snapshot.ownerStamp.ownerGeneration !== ownerStamp.ownerGeneration)
+        ) {
+          return;
+        }
+        callback({ ...snapshot, ownerStamp }, ownerStamp);
+      };
+      ipcRenderer.on(PROJECT_WORKSPACES_CHANGED_CHANNEL, listener);
+      return () => ipcRenderer.removeListener(PROJECT_WORKSPACES_CHANGED_CHANNEL, listener);
+    },
     claimLegacyRendererOwner: (): SidebarLegacyRendererOwnerClaim => {
       const value: unknown = ipcRenderer.sendSync(
         'sidebar-settings:claim-renderer-legacy-owner-sync',

@@ -18,6 +18,7 @@ import { MountedMenuContent } from '../MountedMenuContent';
  */
 
 import { memo, useCallback, useEffect, useRef, useState } from 'react';
+import { ProjectWorkspaceActions } from '../WorkspaceSidebarProvider';
 import {
   ChevronDown,
   ChevronRight,
@@ -635,6 +636,7 @@ const ProjectHeader = memo(function ProjectHeader({
                   )}
                 </DropdownMenuItem>
                 <DropdownMenuSeparator className="my-1 h-px bg-[var(--cmd-palette-border)]" />
+                <ProjectWorkspaceActions projectKey={project.projectKey} />
                 {/* 菜单 items 顺序:浏览 → 工具 → 危险
               [搜索, 查看文件, 在文件管理器中打开] - [复制深度链接, 同步 Codex] - [全部归档]
               与 SessionItem 风格保持一致:纯文字、无 icon。

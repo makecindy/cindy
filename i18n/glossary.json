@@ -5,6 +5,19 @@
   "sourceLocale": "en",
   "punctuationExempt": ["desktop:settings.help.qnaFeedbackBodyTemplate"],
   "terms": [
+    {
+      "id": "workspace",
+      "status": "proposed",
+      "en": "Workspace",
+      "translations": {
+        "zh-CN": "工作区",
+        "zh-TW": "工作區",
+        "ja": "ワークスペース",
+        "ko": "작업 공간"
+      },
+      "checkCase": false,
+      "note": "侧栏中组织项目的可折叠分组层，对应 desktop:ccAgent.sidebar.workspaces.title、desktop:ccAgent.sidebar.workspaces.create 及 desktop:ccAgent.sidebar.workspaces. 下的操作文案。不是工作目录（Working directory）、Git worktree，也不是存储设置中的对话工作区（Chat workspace）。沿用既有裁决中 Workspace 对应工作区的边界，侧栏分组概念新增登记为 proposed。"
+    },
     {"id": "wallpaper-blur", "status": "proposed", "en": "Wallpaper Blur", "translations": {"zh-CN": "壁纸模糊", "zh-TW": "桌布模糊", "ja": "壁紙のぼかし", "ko": "배경화면 흐림"}, "note": "仅使应用壁纸柔化，不模糊文字或控件；0 为关闭，按用户选择应用于静态图片和视频。"},
     {"id": "group-owner", "status": "proposed", "en": "Group Owner", "translations": {"zh-CN": "群主", "zh-TW": "群主", "ja": "グループオーナー", "ko": "그룹 소유자"}, "checkCase": false, "note": "Chat Server 的群角色，可由人或伙伴担任；不要与伙伴主人或分工负责人混同。群设置成员行英文可简写 Owner。"},
     {"id": "group-admin", "status": "proposed", "en": "Group Admin", "translations": {"zh-CN": "群管理员", "zh-TW": "群管理員", "ja": "グループ管理者", "ko": "그룹 관리자"}, "checkCase": false, "note": "可管理群资料和成员，但不能替伙伴主人授权工具或私人资料。群设置内可简称管理员 / Admin。"},

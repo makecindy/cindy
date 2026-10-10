@@ -13,6 +13,7 @@ import { cn } from '@/lib/utils';
 import { Tip } from '@/components/ui/tooltip';
 import { MachineSwitcherMenu } from './MachineSwitcherMenu';
 import { SidebarFilterPopover } from './SidebarFilterPopover';
+import { WorkspaceCreateButton } from './WorkspaceSidebarProvider';
 import type { ProjectNode as ProjectNodeData } from '../lib/projectGrouping';
 import type { UseSidebarFilterReturn } from '../hooks/useSidebarFilter';
 
@@ -55,6 +56,7 @@ export function MainListScopeHeader({
       </div>
       <div className="flex items-center gap-0.5 -mt-px">
         <div className={HEADER_ACTIONS_CLASS}>
+          <WorkspaceCreateButton />
           {fold ? (
             <Tip text={fold.label} side="bottom">
               <button

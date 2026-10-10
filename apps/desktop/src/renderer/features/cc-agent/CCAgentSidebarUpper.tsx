@@ -66,6 +66,7 @@ import { useOwnTopNavScrollableRows, useSidebarCollapsedState } from '../feature
 import { SidebarRailNavigation, SidebarTopNav } from '@/components/sidebar/SidebarTopNav';
 import { SidebarFilterPopover } from './sidebar/SidebarFilterPopover';
 import { MainListScopeHeader } from './sidebar/MainListScopeHeader';
+import { ProjectWorkspaceActions, WorkspaceSidebarProvider } from './sidebar/WorkspaceSidebarProvider';
 import { SharedTasksSection } from '@/features/device-link/SharedTasksSection';
 import { sharedTaskErrorKey } from '@/features/device-link/sharedTaskCompatibility';
 import { isSharedTaskPeer } from '@cindy/device-link';
@@ -700,6 +701,7 @@ export function CCAgentSidebarUpper() {
     // 保持"热态"即时切换——PR tips 行间穿插着无 tip 的普通行,默认窗口太短,
     // 路过几行热态就丢了,体感退回"每行都要重新等 500ms"(session-git-pr-context)。
     <Tooltip.Provider skipDelayDuration={1500}>
+      <WorkspaceSidebarProvider onCreated={() => filter.setGroupBy('project')}>
       <SessionAttentionUrgencyProvider urgentSessionIds={unreadFailedScheduleSessionIds}>
         <div ref={sidebarRootRef} className="relative flex flex-1 flex-col overflow-hidden">
           {/* Expanded — fade out when collapsed.
@@ -784,6 +786,7 @@ export function CCAgentSidebarUpper() {
           </div>
         </div>
       </SessionAttentionUrgencyProvider>
+      </WorkspaceSidebarProvider>
     </Tooltip.Provider>
   );
 }
@@ -4897,6 +4900,7 @@ function RailPanels({
             const menuTargetBlocked = menuTarget != null && isDeviceLinkWriteBlocked(menuTarget);
             return (
               <>
+                {menuTarget && <ProjectWorkspaceActions projectKey={menuTarget.projectKey} />}
                 <DropdownMenuItem
                   disabled={menuTarget == null}
                   onSelect={() => {

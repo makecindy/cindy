@@ -48,6 +48,10 @@ import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
 import { Tip } from '@/components/ui/tooltip';
+import { toast } from '@/lib/toast';
+import { useWorkspaceSidebar } from '../WorkspaceSidebarProvider';
+import { useWorkspaceSessionReveal } from '../../hooks/useWorkspaceSessionReveal';
+import { WorkspaceProjectList } from '../WorkspaceProjectList';
 import { useEffectiveSelectedMachineId } from '@/features/device-link/useMachineSwitcher';
 import { useRemoteDevices } from '@/features/device-link/remoteProjectsStore';
 import {
@@ -315,6 +319,17 @@ export function ProjectsSection({
   isCreateDialogueDisabled = false,
 }: ProjectsSectionProps) {
   const { t } = useTranslation();
+  const {
+    workspaces,
+    ready: workspacesReady,
+    pending: workspacesPending,
+    error: workspacesError,
+    mutate: mutateWorkspace,
+    reload: reloadWorkspaces,
+    rename: renameWorkspace,
+    remove: deleteWorkspace,
+  } = useWorkspaceSidebar()!;
+  const workspaceGroupingActive = filter.groupBy === 'project' && workspaces.length > 0;
   const remoteDevices = useRemoteDevices();
   // 分组索引会排除断线设备；已有缓存条目的段头仍需读取设备名，并跟随改名更新。
   const cachedDeviceNames = useMemo(
@@ -326,6 +341,7 @@ export function ProjectsSection({
     (projectKey: string) => projectKeyComparisonKey(projectKey, localPlatform) ?? projectKey,
     [localPlatform],
   );
+
   const reducedMotion = useReducedMotion();
   const selectedMachineForOrder = useEffectiveSelectedMachineId();
   const localHostProjectOrder = useLocalHostProjectOrder();
@@ -368,8 +384,8 @@ export function ProjectsSection({
 
   const getProjectId = useCallback((p: ProjectNodeData) => p.projectKey, []);
 
-  const handleReorder = useCallback(
-    (visibleNewOrder: string[]) => {
+  const persistProjectReorder = useCallback(
+    async (visibleNewOrder: string[]) => {
       // SortableList 给我们的是当前 **可见** projects 的新顺序。机器 / vendor / 项目过滤态下,
       // 不可见的 project(其它机器 / 被过滤掉的)必须**保持原位** —— 与置顶拖拽同一套「原位 merge」
       // 语义(mergeVisibleReorder),而不是把它们甩到末尾(否则切回「所有」时其它机器项目的相对
@@ -403,14 +419,12 @@ export function ProjectsSection({
           localPlatform,
         );
         const next = mergeVisibleReorder(fullOrder, visibleNewOrder, projectComparisonKey);
-        void localHostProjectOrder
-          .apply({
-            manualProjectOrder: next,
-            projectOrder: 'custom',
-          })
-          .then((result) => {
-            if (result.kind === 'unavailable') persistViewer(visibleNewOrder);
-          });
+        const result = await localHostProjectOrder.apply({
+          manualProjectOrder: next,
+          projectOrder: 'custom',
+        });
+        if (result.kind === 'unavailable') persistViewer(visibleNewOrder);
+        if (result.kind === 'transient') throw new Error('PROJECT_ORDER_SAVE_FAILED');
         return;
       }
       if (
@@ -427,14 +441,12 @@ export function ProjectsSection({
           [];
         const fullOrder = normalizeManualProjectOrder(current, remoteKeys, localPlatform);
         const next = mergeVisibleReorder(fullOrder, visibleNewOrder, projectComparisonKey);
-        void remoteHostProjectOrders
-          .apply(deviceId, {
-            manualProjectOrder: next,
-            projectOrder: 'custom',
-          })
-          .then((result) => {
-            if (result.kind === 'unavailable') persistViewer(visibleNewOrder);
-          });
+        const result = await remoteHostProjectOrders.apply(deviceId, {
+          manualProjectOrder: next,
+          projectOrder: 'custom',
+        });
+        if (result.kind === 'unavailable') persistViewer(visibleNewOrder);
+        if (result.kind === 'transient') throw new Error('PROJECT_ORDER_SAVE_FAILED');
         return;
       }
       persistViewer(visibleNewOrder);
@@ -448,6 +460,15 @@ export function ProjectsSection({
       localPlatform,
       projectComparisonKey,
     ],
+  );
+
+  const handleReorder = useCallback(
+    (keys: string[]) => {
+      void persistProjectReorder(keys).catch(() =>
+        toast.error(t('ccAgent.sidebar.workspaces.saveError')),
+      );
+    },
+    [persistProjectReorder, t],
   );
 
   // toggleDisabled 用 allKnownProjects（不是过滤后的 projects），避免 filter 收窄到 0 时
@@ -489,6 +510,17 @@ export function ProjectsSection({
   );
   // 正在看的任务 id:files 路由下回落到被浏览文件所属任务。
   const viewedIdForSort = viewedSessionId ?? activeSessionId;
+  useWorkspaceSessionReveal({
+    sessionId: viewedIdForSort,
+    ready: workspacesReady,
+    enabled: workspaceGroupingActive,
+    projects,
+    workspaces,
+    collapsedProjects: collapsed,
+    comparisonKey: projectComparisonKey,
+    onToggleProject,
+    mutateWorkspace,
+  });
   const naturalPriorityContext = useMemo(() => {
     const waiting = new Set<string>(urgentSet);
     for (const [sessionId, kind] of attentionKinds) {
@@ -627,12 +659,12 @@ export function ProjectsSection({
         entries,
         minVisibleCount: getProjectCollapseLimit(),
         showAll,
-        disableCollapse: false,
+        disableCollapse: workspaceGroupingActive,
         isFiltering: false,
         isActiveEntry: (entry) => entrySessions(entry).some((s) => s.id === viewedIdForSort),
         hasAttentionEntry: (entry) => entrySessions(entry).some((s) => lampFoldExemptIds.has(s.id)),
       }),
-    [viewedIdForSort, entrySessions, lampFoldExemptIds],
+    [viewedIdForSort, entrySessions, lampFoldExemptIds, workspaceGroupingActive],
   );
   const {
     visibleEntries: visibleMixedEntries,
@@ -738,7 +770,8 @@ export function ProjectsSection({
   //   双层(设备 + 组层同时存在)→ 循环:收组层 → 收设备层 → 全部展开。
   // 组层 = 项目行 + 自动任务组 + 「对话」组行。项目侧复用 ProjectNode 折叠状态,
   // 自动任务组复用 owner-scoped 持久化状态,对话组沿用本地显示偏好。
-  const hasGroupLayer = mixedEntries.some((entry) => entry.kind !== 'session');
+  const hasGroupLayer =
+    mixedEntries.some((entry) => entry.kind !== 'session') || workspaceGroupingActive;
   // 对话与 Cindy Make 分组按各自命名空间、设备段记忆折叠。
   // 「收起/展开所有分组」只作用于这些可见 key,不动其它模式下的记忆。
   const visibleSessionGroupKeys = useMemo<string[]>(() => {
@@ -796,7 +829,10 @@ export function ProjectsSection({
     (entry) => entry.kind !== 'project' || collapsed.has(entry.project.projectKey),
   );
   const allGroupsCollapsed =
-    allVisibleProjectGroupsCollapsed && allSessionGroupsCollapsed && allAutomationGroupsCollapsed;
+    allVisibleProjectGroupsCollapsed &&
+    allSessionGroupsCollapsed &&
+    allAutomationGroupsCollapsed &&
+    (!workspaceGroupingActive || workspaces.every((workspace) => workspace.collapsed));
   const hasDeviceLayer = deviceGroupingActive && deviceSections.length > 0;
   const allDevicesCollapsed =
     hasDeviceLayer &&
@@ -808,6 +844,20 @@ export function ProjectsSection({
     return 'expand-all';
   })();
   const handleFoldAll = useCallback(() => {
+    if (workspaceGroupingActive && foldState !== 'collapse-devices') {
+      const nextCollapsed = foldState === 'collapse-groups';
+      void (async () => {
+        for (const workspace of workspaces) {
+          if (workspace.collapsed !== nextCollapsed) {
+            await mutateWorkspace({
+              type: 'set-collapsed',
+              id: workspace.id,
+              collapsed: nextCollapsed,
+            });
+          }
+        }
+      })().catch(() => toast.error(t('ccAgent.sidebar.workspaces.saveError')));
+    }
     if (foldState === 'collapse-groups') {
       onCollapseAll();
       setDialogueCollapsed(visibleSessionGroupKeys, true);
@@ -833,6 +883,10 @@ export function ProjectsSection({
     onExpandAll,
     setDialogueCollapsed,
     setAllAutomationGroupsCollapsed,
+    workspaceGroupingActive,
+    workspaces,
+    mutateWorkspace,
+    t,
   ]);
   const foldLabel =
     foldState === 'collapse-groups'
@@ -918,6 +972,29 @@ export function ProjectsSection({
       linkingCodexProject={linkingCodexProject === project.projectKey}
       onBrowseFiles={onBrowseFiles}
       onArchiveAll={onArchiveAll}
+    />
+  );
+
+  const renderWorkspaceProjects = (entries: readonly ProjectNodeData[]) => (
+    <WorkspaceProjectList
+      projects={entries}
+      workspaces={workspaces}
+      comparisonKey={projectComparisonKey}
+      disabled={!workspacesReady || workspacesPending}
+      renderProject={renderProjectNode}
+      renderStatus={(workspaceProjects) => {
+        const lamp = lampAgg(workspaceProjects.flatMap((project) => project.sessions));
+        return (
+          <>
+            {lamp.running && <SidebarRightStatusIndicator kind="running" isActive={false} />}
+            {lamp.dotTone && <AttentionDot size={6} tone={lamp.dotTone} />}
+          </>
+        );
+      }}
+      onMutation={mutateWorkspace}
+      onProjectReorder={persistProjectReorder}
+      onRename={renameWorkspace}
+      onDelete={deleteWorkspace}
     />
   );
 
@@ -1084,8 +1161,9 @@ export function ProjectsSection({
         allKnownProjects={allKnownProjects}
         dialogueCount={dialogueCount}
         hasRemoteDevices={deviceGroupingAvailable}
+
         fold={
-          hasMainListContent && foldState !== null
+          (hasMainListContent || workspaceGroupingActive) && foldState !== null
             ? {
                 label: foldLabel,
                 Icon: FoldIcon,
@@ -1095,7 +1173,18 @@ export function ProjectsSection({
             : null
         }
       />
-      {hasMainListContent ? (
+      {workspacesError && !workspacesReady && (
+        <div
+          role="alert"
+          className="flex items-center gap-2 px-6 py-1 text-xs text-[var(--sidebar-list-muted)]"
+        >
+          <span>{t('ccAgent.sidebar.workspaces.loadError')}</span>
+          <button type="button" className="underline" onClick={reloadWorkspaces}>
+            {t('ccAgent.sidebar.workspaces.retry')}
+          </button>
+        </div>
+      )}
+      {hasMainListContent || workspaceGroupingActive ? (
         <div className="relative flex flex-col gap-1 pt-1 pr-0 pl-3">
           {!deviceGroupingActive &&
             visibleMixedEntries
@@ -1127,7 +1216,14 @@ export function ProjectsSection({
                 可与设备分组叠加:每段各自拖本段项目。
               - 按最近活动:按 deviceSections 切段(设备分组开启时),段内项目行与
                 散排对话按任务排序口径交错,项目行不可拖。 */}
-          {customProjectOrder && !deviceGroupingActive ? (
+          {workspaceGroupingActive && !deviceGroupingActive ? (
+            <>
+              {renderWorkspaceProjects(visibleProjectNodes)}
+              {visibleMixedEntries
+                .filter((entry) => entry.kind !== 'project' && entry.kind !== 'cindy-make-group')
+                .map((entry) => renderNonProjectEntry(entry, DIALOGUE_GROUP_ALL_KEY))}
+            </>
+          ) : customProjectOrder && !deviceGroupingActive ? (
             <>
               <SortableList
                 items={visibleProjectNodes}
@@ -1146,6 +1242,9 @@ export function ProjectsSection({
             </>
           ) : deviceGroupingActive ? (
             <div className="flex flex-col gap-1">
+              {workspaceGroupingActive &&
+                deviceSections.length === 0 &&
+                renderWorkspaceProjects([])}
               {deviceSections.map((section) => {
                 const key = deviceSectionKey(section.deviceId);
                 const device = section.deviceId
@@ -1236,7 +1335,25 @@ export function ProjectsSection({
                             .map((entry) => entry.project);
                           return (
                             <>
-                              {customProjectOrder ? (
+                              {workspaceGroupingActive ? (
+                                <>
+                                  {sectionView.visibleEntries
+                                    .filter((entry) => entry.kind === 'cindy-make-group')
+                                    .map((entry) =>
+                                      renderNonProjectEntry(entry, key, sectionDialogueTarget),
+                                    )}
+                                  {renderWorkspaceProjects(sectionProjects)}
+                                  {sectionView.visibleEntries
+                                    .filter(
+                                      (entry) =>
+                                        entry.kind !== 'project' &&
+                                        entry.kind !== 'cindy-make-group',
+                                    )
+                                    .map((entry) =>
+                                      renderNonProjectEntry(entry, key, sectionDialogueTarget),
+                                    )}
+                                </>
+                              ) : customProjectOrder ? (
                                 <>
                                   {sectionView.visibleEntries
                                     .filter((entry) => entry.kind === 'cindy-make-group')

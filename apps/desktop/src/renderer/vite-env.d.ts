@@ -4512,6 +4512,19 @@ interface ElectronAPI {
   };
 
   sidebarSettings: {
+    getProjectWorkspaces: () => Promise<
+      import('../shared/projectWorkspaceSettings').ProjectWorkspaceSnapshot
+    >;
+    mutateProjectWorkspaces: (request: {
+      ownerStamp: import('../shared/dataOwnerPush').DataOwnerPushStamp;
+      mutation: import('../shared/projectWorkspaceSettings').ProjectWorkspaceMutation;
+    }) => Promise<import('../shared/projectWorkspaceSettings').ProjectWorkspaceSnapshot>;
+    onProjectWorkspacesChanged: (
+      callback: (
+        snapshot: import('../shared/projectWorkspaceSettings').ProjectWorkspaceSnapshot,
+        ownerStamp: import('../shared/dataOwnerPush').DataOwnerPushStamp,
+      ) => void,
+    ) => () => void;
     claimLegacyRendererOwner: () => import('../shared/sidebarSettings').SidebarLegacyRendererOwnerClaim;
     loadSnapshot: () => import('../shared/sidebarSettings').SidebarSettingsSnapshot;
     mutatePinnedOrder: (

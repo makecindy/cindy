@@ -629,6 +629,10 @@ Desktop appearance setting for an in-app visual background layer.
 
 伙伴群聊第二阶段：负责人把一件事分成几步派给群里的伙伴，用户点「开始」后伙伴一位接一位做，每做完一步停下等用户点「继续」（docs/product-rules/bot-group-chat.md §7）。英文动作说法 split the work（输入框「+」菜单「安排分工」= Split the Work），名词 work split；句中小写，故 checkCase 为 false。**不得**译作「协同 / 協同 / Collaboration」（Orca 多 Agent 协同的功能名，见 collaboration 条目）、「协作」（共享任务）或「接力」。分工里的每一步叫「一步 / step」，不叫「任务」（见 task-and-conversation-naming）；负责人出的方案叫「安排 / plan」。先登记为 proposed：第二阶段刚落地，等 UI 走查后再定。
 
+### Workspace
+
+侧栏中组织项目的可折叠分组层，对应 desktop:ccAgent.sidebar.workspaces.title、desktop:ccAgent.sidebar.workspaces.create 及 desktop:ccAgent.sidebar.workspaces. 下的操作文案。不是工作目录（Working directory）、Git worktree，也不是存储设置中的对话工作区（Chat workspace）。沿用既有裁决中 Workspace 对应工作区的边界，侧栏分组概念新增登记为 proposed。
+
 ## 怎么加一条术语
 
 1. 在 `i18n/glossary.json` 的 `terms` 里加条目，`note` 必填——写清楚**为什么**这么定，

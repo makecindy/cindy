@@ -59,10 +59,27 @@
  *      设 cursor 不生效，只有 body 级全局规则能覆盖整个拖拽过程。
  */
 
-import { useEffect, useMemo, useRef, type AriaRole, type ReactNode } from 'react';
+import {
+  Component,
+  useEffect,
+  useMemo,
+  useRef,
+  type AriaRole,
+  type ReactNode,
+  type RefObject,
+} from 'react';
 import Sortable, { type SortableEvent } from 'sortablejs';
 
 export interface SortableListProps<T> {
+  crossListGroup?: string;
+  listId?: string;
+  onTransfer?: (event: {
+    itemId: string;
+    fromListId: string;
+    toListId: string;
+    newIndex: number;
+    targetOrderIds: string[];
+  }) => void;
   /** 列表项数据（按当前希望渲染的顺序传入）。 */
   items: readonly T[];
   /** 提取稳定 id，用于 data-sortable-id + onReorder 上报。 */
@@ -104,6 +121,76 @@ const DEFAULT_FILTER = 'button, input, textarea, select, a, [data-no-drag]';
 // 光标由其下方元素决定，只有 body 级全局规则才能覆盖整个拖拽过程。
 const SORTING_BODY_CLASS = 'xdt-sorting';
 
+type TransferConfig = Pick<
+  SortableListProps<unknown>,
+  'crossListGroup' | 'listId' | 'onTransfer' | 'disabled'
+> & {
+  getIds: () => string[];
+};
+
+const transferLists = new WeakMap<HTMLElement, { current: TransferConfig }>();
+
+let activeDrag: {
+  source: HTMLElement;
+  rows: Element[];
+  cancel: () => void;
+} | null = null;
+
+function cancelDragFor(container: HTMLElement | null) {
+  if (
+    container &&
+    activeDrag &&
+    (activeDrag.source === container ||
+      activeDrag.rows.some((row) => row.parentElement === container))
+  ) {
+    activeDrag.cancel();
+  }
+}
+
+class SortableCommitGuard extends Component<{
+  itemIds: readonly string[];
+  containerRef: RefObject<HTMLDivElement | null>;
+  children: ReactNode;
+}> {
+  getSnapshotBeforeUpdate(previous: Readonly<SortableCommitGuard['props']>) {
+    if (
+      previous.itemIds.length !== this.props.itemIds.length ||
+      previous.itemIds.some((id, index) => id !== this.props.itemIds[index])
+    ) {
+      cancelDragFor(this.props.containerRef.current);
+    }
+    return null;
+  }
+
+  componentDidUpdate() {}
+
+  componentWillUnmount() {
+    cancelDragFor(this.props.containerRef.current);
+  }
+
+  render() {
+    return this.props.children;
+  }
+}
+
+function canTransfer(from: HTMLElement, to: HTMLElement): boolean {
+  const source = transferLists.get(from)?.current;
+  const target = transferLists.get(to)?.current;
+  return Boolean(
+    from !== to &&
+    from.isConnected &&
+    to.isConnected &&
+    source?.crossListGroup &&
+    source.listId &&
+    source.onTransfer &&
+    !source.disabled &&
+    target?.listId &&
+    !target.disabled &&
+    source.listId !== target.listId &&
+    source.crossListGroup === target.crossListGroup,
+  );
+}
+
 export function SortableList<T>({
   items,
   getId,
@@ -119,6 +206,9 @@ export function SortableList<T>({
   rowClassName,
   role,
   ariaLabel,
+  crossListGroup,
+  listId,
+  onTransfer,
 }: SortableListProps<T>) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const sortableRef = useRef<Sortable | null>(null);
@@ -133,10 +223,30 @@ export function SortableList<T>({
   getIdRef.current = getId;
   onReorderRef.current = onReorder;
   onDragActiveChangeRef.current = onDragActiveChange;
+  const transferConfigRef = useRef<TransferConfig>({ getIds: () => [] });
+  transferConfigRef.current = {
+    crossListGroup,
+    listId,
+    onTransfer,
+    disabled,
+    getIds: () => itemsRef.current.map(getIdRef.current),
+  };
+  const group = useMemo(
+    () =>
+      crossListGroup
+        ? {
+            name: crossListGroup,
+            pull: Boolean(listId && onTransfer),
+            put: (to: Sortable, from: Sortable) => canTransfer(from.el, to.el),
+          }
+        : undefined,
+    [crossListGroup, listId, onTransfer],
+  );
 
   // 标记下一次 onEnd 是"窗口失焦兜底"触发的——onEnd 里把 DOM 复位后直接 return,
   // 不调 onReorder, 避免用户切走窗口的瞬间被记下一次未授意的顺序变化。
   const abortNextEndRef = useRef(false);
+  const invalidatedDragRef = useRef(false);
   // Native DnD must only persist a reorder when the final drop lands in this
   // sortable container. Drops on the composer, split panes, or outside Cindy
   // can still leave Sortable's DOM temporarily moved while the gesture passes.
@@ -146,8 +256,26 @@ export function SortableList<T>({
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
+    transferLists.set(el, transferConfigRef);
+
+    const cancelActiveDrag = () => {
+      if (activeDrag?.source !== el) return;
+      const { rows } = activeDrag;
+      activeDrag = null;
+      invalidatedDragRef.current = true;
+      abortNextEndRef.current = true;
+      for (const row of rows) el.appendChild(row);
+      document.body.classList.remove(SORTING_BODY_CLASS);
+      document.dispatchEvent(new Event(forceFallback ? 'pointercancel' : 'drop'));
+      if (Sortable.active === instance && forceFallback) {
+        document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+      }
+      onDragActiveChangeRef.current?.(false);
+    };
 
     const instance = Sortable.create(el, {
+      group,
+      ...(crossListGroup ? { emptyInsertThreshold: 20 } : {}),
       animation: reducedMotion ? 0 : 150,
       disabled,
       handle,
@@ -180,15 +308,19 @@ export function SortableList<T>({
       // 真正开拖（移动超过 fallbackTolerance）才触发,不是 pointerdown 即触发——
       // 所以"按下未拖"和"普通 hover"都不会上 grabbing 光标,只有真正拖动中才会。
       onStart: () => {
+        invalidatedDragRef.current = false;
+        abortNextEndRef.current = false;
         nativeDropDispositionRef.current = null;
+        activeDrag = { source: el, rows: Array.from(el.children), cancel: cancelActiveDrag };
         document.body.classList.add(SORTING_BODY_CLASS);
         onDragActiveChangeRef.current?.(true);
       },
       onEnd: (evt: SortableEvent) => {
+        if (invalidatedDragRef.current) return;
+        if (activeDrag?.source === el) activeDrag = null;
         // 正常 drop 和失焦兜底(dispatch pointercancel → _onDrop → onEnd)都会走到
         // 这里,统一在入口摘掉全局 grabbing 标记。
         document.body.classList.remove(SORTING_BODY_CLASS);
-        onDragActiveChangeRef.current?.(false);
 
         const aborted = abortNextEndRef.current;
         abortNextEndRef.current = false;
@@ -197,6 +329,15 @@ export function SortableList<T>({
 
         const oldIndex = evt.oldIndex;
         const newIndex = evt.newIndex;
+        const target = evt.to ?? evt.from;
+        const isTransfer = target !== evt.from;
+        const itemId = evt.item.getAttribute('data-sortable-id');
+        const targetOrderIds = isTransfer
+          ? Array.from(target.children).map((row) => row.getAttribute('data-sortable-id'))
+          : [];
+        const sourceConfig = transferConfigRef.current;
+        const targetConfig = transferLists.get(target)?.current;
+        const validTransfer = isTransfer && evt.from === el && canTransfer(el, target);
 
         // 关键步骤：把 SortableJS 在 DOM 上做的"移动"撤销，恢复成 mount 时
         // React 期望的 DOM 顺序。下一次 render 由 React 按 `newOrderIds`
@@ -204,13 +345,46 @@ export function SortableList<T>({
         // 失焦兜底路径也要走这一步，否则 ghost 位置上的 item 会留在被 hover
         // 让位时的位置上。
         const parent = evt.from;
-        if (parent && evt.item && oldIndex != null) {
+        const restoreIndex =
+          oldIndex ?? (isTransfer ? sourceConfig.getIds().indexOf(itemId ?? '') : undefined);
+        if (parent && evt.item && restoreIndex != null && restoreIndex >= 0) {
           evt.item.parentNode?.removeChild(evt.item);
-          const refNode = parent.children[oldIndex] ?? null;
+          const refNode = parent.children[restoreIndex] ?? null;
           parent.insertBefore(evt.item, refNode);
         }
 
+        onDragActiveChangeRef.current?.(false);
         if (aborted || (!forceFallback && dropDisposition !== 'internal')) return;
+        if (isTransfer) {
+          if (
+            !validTransfer ||
+            !itemId ||
+            !sourceConfig.listId ||
+            !targetConfig?.listId ||
+            oldIndex == null ||
+            sourceConfig.getIds()[oldIndex] !== itemId ||
+            newIndex == null ||
+            !Number.isInteger(newIndex) ||
+            newIndex < 0
+          )
+            return;
+          const expectedIds = targetConfig.getIds();
+          if (newIndex > expectedIds.length || expectedIds.includes(itemId)) return;
+          expectedIds.splice(newIndex, 0, itemId);
+          if (
+            expectedIds.length !== targetOrderIds.length ||
+            expectedIds.some((id, index) => id !== targetOrderIds[index])
+          )
+            return;
+          sourceConfig.onTransfer?.({
+            itemId,
+            fromListId: sourceConfig.listId,
+            toListId: targetConfig.listId,
+            newIndex,
+            targetOrderIds: expectedIds,
+          });
+          return;
+        }
         if (oldIndex == null || newIndex == null || oldIndex === newIndex) return;
 
         const currentItems = itemsRef.current;
@@ -232,8 +406,15 @@ export function SortableList<T>({
     const markDropDisposition = (event: Event) => {
       if (Sortable.active !== instance) return;
       const target = event.target;
+      let targetList = target instanceof Element ? target : null;
+      while (targetList && !(targetList instanceof HTMLElement && transferLists.has(targetList))) {
+        targetList = targetList.parentElement;
+      }
       nativeDropDispositionRef.current =
-        target instanceof Node && el.contains(target) ? 'internal' : 'external';
+        target instanceof Node &&
+        (el.contains(target) || (targetList instanceof HTMLElement && canTransfer(el, targetList)))
+          ? 'internal'
+          : 'external';
     };
     document.addEventListener('drop', markDropDisposition, true);
 
@@ -244,6 +425,10 @@ export function SortableList<T>({
     // 标记 abortNextEndRef 让上面的 onEnd 跳过 reorder 提交。
     const abortIfActive = () => {
       if (Sortable.active !== instance) return;
+      if (activeDrag?.source === el) {
+        cancelActiveDrag();
+        return;
+      }
       abortNextEndRef.current = true;
       try {
         document.dispatchEvent(new Event('pointercancel'));
@@ -255,6 +440,11 @@ export function SortableList<T>({
     const onVisibilityChange = () => {
       if (document.visibilityState === 'hidden') abortIfActive();
     };
+    const markCancelled = () => {
+      if (Sortable.active === instance) abortNextEndRef.current = true;
+    };
+    document.addEventListener('pointercancel', markCancelled, true);
+    document.addEventListener('touchcancel', markCancelled, true);
     window.addEventListener('blur', abortIfActive);
     document.addEventListener('visibilitychange', onVisibilityChange);
 
@@ -262,6 +452,9 @@ export function SortableList<T>({
       window.removeEventListener('blur', abortIfActive);
       document.removeEventListener('visibilitychange', onVisibilityChange);
       document.removeEventListener('drop', markDropDisposition, true);
+      document.removeEventListener('pointercancel', markCancelled, true);
+      document.removeEventListener('touchcancel', markCancelled, true);
+      transferLists.delete(el);
       // 拖动中组件被卸载时兜底清掉标记,避免 grabbing 光标残留到全局。
       document.body.classList.remove(SORTING_BODY_CLASS);
       onDragActiveChangeRef.current?.(false);
@@ -281,7 +474,9 @@ export function SortableList<T>({
     // handle 是 selector 字符串，undefined 表示整行可拖
     sortable.option('handle', handle ?? '');
     sortable.option('filter', filter ?? DEFAULT_FILTER);
-  }, [disabled, reducedMotion, handle, filter]);
+    sortable.option('group', group ?? '');
+    sortable.option('emptyInsertThreshold', crossListGroup ? 20 : 5);
+  }, [disabled, reducedMotion, handle, filter, group, crossListGroup]);
 
   // children 由 React 控制，直接按 items 顺序渲染。
   const children = useMemo(
@@ -302,14 +497,17 @@ export function SortableList<T>({
   );
 
   return (
-    <div
-      ref={containerRef}
-      data-sortable-native-dnd={forceFallback ? undefined : 'true'}
-      role={role}
-      aria-label={ariaLabel}
-      className={className}
-    >
-      {children}
-    </div>
+    <SortableCommitGuard itemIds={items.map(getId)} containerRef={containerRef}>
+      <div
+        ref={containerRef}
+        data-sortable-list-id={listId}
+        data-sortable-native-dnd={forceFallback ? undefined : 'true'}
+        role={role}
+        aria-label={ariaLabel}
+        className={className}
+      >
+        {children}
+      </div>
+    </SortableCommitGuard>
   );
 }

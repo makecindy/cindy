@@ -41,7 +41,9 @@ describe('Projects sidebar section', () => {
     const foldIndex = projectsSectionSource.indexOf('onClick: handleFoldAll');
     expect(titleIndex).toBeGreaterThanOrEqual(0);
     expect(foldIndex).toBeGreaterThan(titleIndex);
-    expect(projectsSectionSource).toContain('hasMainListContent && foldState !== null');
+    expect(projectsSectionSource).toContain(
+      '(hasMainListContent || workspaceGroupingActive) && foldState !== null',
+    );
     // 只有对话组、没有项目时折叠按钮仍可用;零项目不能把 isAllCollapsed 当成组层已收齐。
     expect(projectsSectionSource).toContain(
       'disabled: projectNodesToggleDisabled && !hasDeviceLayer && !hasGroupLayer',
@@ -71,29 +73,18 @@ describe('Projects sidebar section', () => {
 
   it('only shows project header actions while hovering or focusing the Projects header row', () => {
     const headerSource = readFileSync(
-      resolve(
-        __dirname,
-        '..',
-        'features',
-        'cc-agent',
-        'sidebar',
-        'MainListScopeHeader.tsx',
-      ),
+      resolve(__dirname, '..', 'features', 'cc-agent', 'sidebar', 'MainListScopeHeader.tsx'),
       'utf8',
     );
     expect(headerSource).toContain('group/sidebar-header flex h-6');
-    expect(headerSource).toContain(
-      'pointer-events-none opacity-0 transition-opacity duration-150',
-    );
+    expect(headerSource).toContain('pointer-events-none opacity-0 transition-opacity duration-150');
     expect(headerSource).toContain(
       'group-hover/sidebar-header:pointer-events-auto group-hover/sidebar-header:opacity-100',
     );
     expect(headerSource).toContain(
       'has-[:focus-visible]:pointer-events-auto has-[:focus-visible]:opacity-100',
     );
-    expect(headerSource).not.toContain(
-      'group-focus-within/sidebar-header:pointer-events-auto',
-    );
+    expect(headerSource).not.toContain('group-focus-within/sidebar-header:pointer-events-auto');
     expect(headerSource).toContain('className={HEADER_ACTIONS_CLASS}');
   });
 
@@ -141,7 +132,10 @@ describe('Projects sidebar section', () => {
       'return splitEntriesByDevice(mixedEntries, [...(remoteDeviceIndex?.keys() ?? [])], {',
     );
     const start = projectsSectionSource.indexOf('const mixedUnclassified = useMemo(');
-    const input = projectsSectionSource.slice(start, projectsSectionSource.indexOf('const mixedEntries', start));
+    const input = projectsSectionSource.slice(
+      start,
+      projectsSectionSource.indexOf('const mixedEntries', start),
+    );
     expect(start).toBeGreaterThan(-1);
     expect(input).toContain('unclassifiedHidden');
     expect(input).toContain('? []');
@@ -182,7 +176,7 @@ describe('Projects sidebar section', () => {
 
   it('includes automation groups in the header batch fold state machine', () => {
     expect(projectsSectionSource).toContain(
-      "const hasGroupLayer = mixedEntries.some((entry) => entry.kind !== 'session')",
+      "mixedEntries.some((entry) => entry.kind !== 'session') || workspaceGroupingActive",
     );
     expect(projectsSectionSource).toContain('useAutomationGroupsCollapsed(');
     expect(projectsSectionSource).toContain('setAllAutomationGroupsCollapsed(true)');
