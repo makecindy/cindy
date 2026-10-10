@@ -980,6 +980,16 @@ export interface AgentDeps {
     modelId: string,
   ) => readonly Effort[] | null;
 
+  /**
+   * Thinking budget (tokens per effort) for a route whose model takes only
+   * `thinking.budget_tokens`, not an effort parameter (e.g. Claude Haiku 4.5).
+   * Comes from the model catalog; null means the route sends effort as usual.
+   */
+  resolveModelThinkingBudget?: (
+    providerId: string | null | undefined,
+    modelId: string,
+  ) => Readonly<Partial<Record<Effort, number>>> | null;
+
   /** Local disk-auth policy, independent of the actual Provider credential mode. */
   resolveCodexLocalAuthPolicy?: (
     providerId: string | null | undefined,

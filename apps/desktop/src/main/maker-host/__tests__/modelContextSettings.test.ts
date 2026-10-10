@@ -18,7 +18,12 @@ vi.mock('../model-context-limit-store.js', () => ({
     state.limits.get(`${agent}:${provider}:${model}`) ?? null,
 }));
 
-import { resolveConfiguredContextWindow, resolveDesktopModelContextProviderId, resolveDesktopModelEfforts } from '../model-context-settings.js';
+import {
+  resolveConfiguredContextWindow,
+  resolveDesktopModelContextProviderId,
+  resolveDesktopModelEfforts,
+  resolveDesktopModelThinkingBudget,
+} from '../model-context-settings.js';
 import { shouldRebuildForModelWindowSwitch } from '../../maker-ipc/contextOverflowRollover.js';
 
 function dualCatalog(agent: AgentKind): Catalog {
@@ -135,5 +140,22 @@ describe('route efforts follow the session source', () => {
     expect(resolveDesktopModelEfforts(catalog, 'claude-code', null, 'shared-model'))
       .toEqual(['low', 'medium', 'high', 'max']);
     expect(resolveDesktopModelEfforts(catalog, 'claude-code', 'missing', 'shared-model')).toBeNull();
+  });
+});
+
+describe('catalog thinking budget for the session route', () => {
+  it('reads Haiku 4.5 budgets from the bundled Registry for the route the session uses', () => {
+    const catalog = structuredClone(BUNDLED_CATALOG) as Catalog;
+    for (const provider of catalog.providers) {
+      provider.models['claude-code'] = ['xd', 'anthropic'].includes(provider.id)
+        ? [{ id: 'claude-haiku-4-5', name: 'Haiku 4.5', contextWindow: 200_000, efforts: ['low', 'medium', 'high'], defaultEffort: 'high' },
+          { id: 'claude-sonnet-5', name: 'Sonnet 5', contextWindow: 1_000_000, efforts: ['low', 'high'], defaultEffort: 'high' }]
+        : [];
+    }
+    const budgets = { low: 2048, medium: 8192, high: 16384 };
+    expect(resolveDesktopModelThinkingBudget(catalog, 'claude-code', 'anthropic', 'claude-haiku-4-5')).toEqual(budgets);
+    expect(resolveDesktopModelThinkingBudget(catalog, 'claude-code', 'xd', 'claude-haiku-4-5')).toEqual(budgets);
+    expect(resolveDesktopModelThinkingBudget(catalog, 'claude-code', 'anthropic', 'claude-sonnet-5')).toBeNull();
+    expect(resolveDesktopModelThinkingBudget(catalog, 'claude-code', 'missing', 'claude-haiku-4-5')).toBeNull();
   });
 });

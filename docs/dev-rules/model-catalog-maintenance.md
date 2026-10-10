@@ -233,6 +233,31 @@ SSH 执行路径跳过本机启动，不会把本机模型安装到远端。
 回归测试为 `llamaCppDownloads.test.ts`、`llamaCppService.test.ts`、`llamaCppIpc.test.ts`、
 `managedLlamaCppProvider.test.ts` 与 `LlamaCppProviderDetail.test.tsx`。
 
+## 思考预算档（`thinkingBudget`）
+
+有些 Claude 模型不收 `effort` 参数，只收 `thinking.budget_tokens`（目前只有 Haiku 4.5）。
+这类模型的思考强度档由 Server 目录在公共资料（或 route defaults / forceOverrides）中声明：
+
+```json
+"thinkingBudget": { "defaultEffort": "high", "budgetTokens": { "low": 2048, "medium": 8192, "high": 16384 } }
+```
+
+同层 `efforts` 保持 `[]`。旧客户端只认 `efforts`，非空就会把档位当 `effort` 发出并被上游拒绝；
+因此客户端请求带 `registryThinkingBudget=1`，Server 只向同时声明 media 与本能力的 V4/V5
+客户端下发该字段，其余剥离并重新计算 ETag。
+
+客户端处理（`packages/model-providers/src/modelMetadataLayers.ts`）：
+
+- `applyModelMetadata` 把 `thinkingBudget` 换算成模型的 `efforts` / `defaultEffort`，字段本身不进入
+  `CatalogModel`（手机等消费方看到的仍是普通档位）。档位未知（`effortsUnknown`）或已有档位的连接不改。
+- 同系列下一代不继承 `thinkingBudget`（`generationCapabilities`）：较新的 Claude 模型拒收
+  `budget_tokens`，需要预算档时由目录显式声明。
+- Claude Code 经 `resolveModelThinkingBudget` 按会话实际来源读取每档 token 数，不下发 `effort`，
+  启动传 `thinking: { type: 'enabled', budgetTokens }`，换档 / 切模型用 `setMaxThinkingTokens`。
+- Pi（pi-ai）与 Codex 桥仍用各自内置的档位 → 预算换算，不读本字段。
+
+增删这类模型或调整预算只改 Server 目录，并同步随包 `model-registry.json`（同 revision 同内容）。
+
 ## 通用供应商导入
 
 Pi 上游生成资料统一转换为客户端 `catalog/provider-models.json`，供各引擎和设置页补缺；

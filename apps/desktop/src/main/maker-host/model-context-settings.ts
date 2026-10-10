@@ -1,4 +1,11 @@
-import { isCodexGatewayWireModel, type AgentKind, type Catalog, type Effort } from '@cindy/model-providers';
+import {
+  isCodexGatewayWireModel,
+  providerCatalogId,
+  resolveModelMetadata,
+  type AgentKind,
+  type Catalog,
+  type Effort,
+} from '@cindy/model-providers';
 
 import { desktopCodexAuthAdapter, readClaudeApiKey } from './auth-adapters.js';
 import { hasClaudeNativeLogin } from './claude-native-auth.js';
@@ -42,6 +49,23 @@ export function resolveDesktopModelEfforts(
   if (!source) return null;
   return catalog.providers.find((provider) => provider.id === source)
     ?.models[agent]?.find((model) => model.id === modelId)?.efforts ?? null;
+}
+
+/**
+ * Thinking budget (tokens per effort) declared by the catalog for the route this session uses.
+ * Non-null only for models that take thinking.budget_tokens instead of an effort parameter.
+ */
+export function resolveDesktopModelThinkingBudget(
+  catalog: Pick<Catalog, 'providers' | 'modelRegistry'>,
+  agent: AgentKind,
+  providerId: string | null | undefined,
+  modelId: string,
+): Readonly<Partial<Record<Effort, number>>> | null {
+  const source = resolveDesktopModelContextProviderId(catalog, agent, providerId, modelId);
+  const provider = source ? catalog.providers.find((candidate) => candidate.id === source) : undefined;
+  if (!provider) return null;
+  return resolveModelMetadata(catalog.modelRegistry, providerCatalogId(provider), modelId, undefined, undefined, agent)
+    .thinkingBudget?.budgetTokens ?? null;
 }
 
 /** Working budgets can tighten history protection, but never raise its verified ceiling. */

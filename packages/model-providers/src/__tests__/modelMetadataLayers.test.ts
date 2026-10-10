@@ -483,3 +483,50 @@ it.each([true, false])(
     }
   },
 );
+
+describe('thinkingBudget', () => {
+  const budget = { defaultEffort: 'high', budgetTokens: { low: 2048, medium: 8192, high: 16384 } } as const;
+  const haikuRegistry: ModelRegistry = {
+    schemaVersion: 5,
+    updatedAt: '2026-10-10T12:00:00.000Z',
+    baseModels: [{
+      id: 'anthropic/claude-haiku-4-5',
+      aliases: ['claude-haiku-4-5'],
+      defaults: { name: 'Haiku 4.5', contextWindow: 200000, efforts: [], thinkingBudget: budget },
+    }],
+    models: [{
+      id: 'anthropic/claude-haiku-4-5',
+      name: 'Haiku 4.5',
+      modelRef: 'anthropic/claude-haiku-4-5',
+      routes: [{ providerId: 'anthropic', modelId: 'claude-haiku-4-5', agents: ['claude-code', 'codex'] }],
+    }],
+  };
+  const haiku: CatalogModel = { id: 'claude-haiku-4-5', name: 'Haiku 4.5', contextWindow: 200000, efforts: [], defaultEffort: null };
+
+  it('accepts the declared shape and rejects malformed budgets', () => {
+    expect(parseModelRegistry(haikuRegistry).ok).toBe(true);
+    expect(pickModelMetadata({ thinkingBudget: budget })).toEqual({ thinkingBudget: budget });
+    for (const thinkingBudget of [
+      { ...budget, defaultEffort: 'max' },
+      { ...budget, budgetTokens: {} },
+      { defaultEffort: 'low', budgetTokens: { low: 512 } },
+      { defaultEffort: 'turbo', budgetTokens: { turbo: 2048 } },
+      { ...budget, extra: true },
+    ]) {
+      expect(pickModelMetadata({ thinkingBudget })).toEqual({});
+    }
+  });
+
+  it('becomes effort levels on the catalog model without leaking the field', () => {
+    const projected = applyModelMetadata(haiku,
+      resolveModelMetadata(haikuRegistry, 'anthropic', 'claude-haiku-4-5', { efforts: [] }, undefined, 'claude-code'));
+    expect(projected).toMatchObject({ efforts: ['low', 'medium', 'high'], defaultEffort: 'high' });
+    expect(projected).not.toHaveProperty('thinkingBudget');
+  });
+
+  it('does not invent levels for connections with unknown efforts or override declared ones', () => {
+    const metadata = resolveModelMetadata(haikuRegistry, 'anthropic', 'claude-haiku-4-5', undefined, undefined, 'claude-code');
+    expect(applyModelMetadata({ ...haiku, effortsUnknown: true }, metadata)).toMatchObject({ efforts: [], defaultEffort: null });
+    expect(applyModelMetadata(haiku, { ...metadata, efforts: ['low'] })).toMatchObject({ efforts: ['low'] });
+  });
+});

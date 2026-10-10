@@ -32,6 +32,8 @@ export function previousModelGenerations<T>(id: string, candidates: readonly T[]
 }
 /** Inherit capabilities, not identity, documentation, price, routing or membership. */
 export function generationCapabilities(value: ModelMetadata | undefined): ModelMetadata {
-  const { name: _name, nativeApi: _nativeApi, description: _description, officialDocs: _docs, group: _group, mode: _mode, ...capabilities } = pickModelMetadata(value);
+  // thinkingBudget 不传给下一代:较新的 Claude 模型拒收 budget_tokens(400),继承会把可用的
+  // effort 参数换成被拒的预算。下一代需要预算档时由目录显式声明。
+  const { name: _name, nativeApi: _nativeApi, description: _description, officialDocs: _docs, group: _group, mode: _mode, thinkingBudget: _thinkingBudget, ...capabilities } = pickModelMetadata(value);
   return capabilities;
 }

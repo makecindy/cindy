@@ -182,11 +182,7 @@ import { isClaudeResumeSessionNotFound } from './invalid-resume.js';
 import { translateSdkMessage, newRuntimeState, type TurnState, type RuntimeState } from './translator.js';
 import { resetClaudeGenerationTiming } from './generation-timing.js';
 import type { Effort, PermissionMode } from '../../types/common.js';
-import {
-  clampEffortToSupported,
-  claudeThinkingBudgetTokens,
-  isClaudeBudgetThinkingModel,
-} from '@cindy/model-providers/effort-resolution';
+import { clampEffortToSupported } from '@cindy/model-providers/effort-resolution';
 import type {
   ScanAtResourcesOptions,
   ScanAtResourcesResult,
@@ -994,8 +990,8 @@ export class ClaudeCodeAgent extends BaseAgent {
     effort: Effort,
     providerId?: string | null,
   ): ClaudeSdkEffort | undefined {
-    // Haiku 4.5 不收 effort 参数,档位改由 sdkThinkingBudgetForModel 换算成思考预算。
-    if (isClaudeBudgetThinkingModel(model)) return undefined;
+    // 目录声明了思考预算的模型(如 Haiku 4.5)不收 effort 参数,档位由 sdkThinkingBudgetForModel 换算。
+    if (this.deps.resolveModelThinkingBudget?.(providerId, model)) return undefined;
     const descriptor = this.capabilities.availableModels.find((m) => m.id === model);
     // 来源不明(null)时不收窄,只保留原有的「无档位模型不下发」判断。
     const routeEfforts = this.routeEffortsForModel(model, providerId);
@@ -1006,19 +1002,22 @@ export class ClaudeCodeAgent extends BaseAgent {
   }
 
   /**
-   * 预算型思考模型(Haiku 4.5)的档位 → `--max-thinking-tokens`。null = 不干预思考预算:
-   * 非预算型模型,或该来源没声明档位(如自定义供应商,用户没有可调的档)。
+   * 档位 → `--max-thinking-tokens`(每档 token 数来自目录 thinkingBudget)。null = 不干预思考预算:
+   * 模型收 effort 参数,或该来源没有可调档位(如档位未知的自定义供应商)。
    */
   private sdkThinkingBudgetForModel(
     model: string,
     effort: Effort,
     providerId?: string | null,
   ): number | null {
-    if (!isClaudeBudgetThinkingModel(model)) return null;
+    const budgets = this.deps.resolveModelThinkingBudget?.(providerId, model);
+    if (!budgets) return null;
     const efforts = this.routeEffortsForModel(model, providerId)
       ?? this.capabilities.availableModels.find((m) => m.id === model)?.efforts;
     if (!efforts?.length) return null;
-    return claudeThinkingBudgetTokens((clampEffortToSupported(effort, efforts) as Effort | undefined) ?? effort);
+    // 会话档位可能来自上一个模型(如 max),收窄到预算声明的档位。
+    const level = (clampEffortToSupported(effort, Object.keys(budgets) as Effort[]) as Effort | undefined) ?? effort;
+    return budgets[level] ?? null;
   }
 
   private sdkMaxEffortFallbackForModel(

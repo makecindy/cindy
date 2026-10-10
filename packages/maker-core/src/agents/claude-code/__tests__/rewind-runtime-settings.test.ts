@@ -212,6 +212,7 @@ async function startRewindableSession(
     availableModels?: ModelDescriptor[];
     resolveModelContextLimit?: AgentDeps['resolveModelContextLimit'];
     resolveModelEfforts?: AgentDeps['resolveModelEfforts'];
+    resolveModelThinkingBudget?: AgentDeps['resolveModelThinkingBudget'];
     shouldHandoffAfterContextAssessment?: (tokens: number, window: number) => boolean;
   } = {},
 ) {
@@ -245,6 +246,7 @@ async function startRewindableSession(
     capabilityAdditions: { availableModels: options.availableModels ?? TEST_MODELS },
     resolveModelContextLimit: options.resolveModelContextLimit,
     ...(options.resolveModelEfforts ? { resolveModelEfforts: options.resolveModelEfforts } : {}),
+    ...(options.resolveModelThinkingBudget ? { resolveModelThinkingBudget: options.resolveModelThinkingBudget } : {}),
     ...(remoteCcQueryFactory ? { remoteCcQueryFactory } : {}),
   });
   const handle = await agent.startSession({
@@ -739,7 +741,7 @@ describe('ClaudeCodeAgent runtime settings during rewind window', () => {
     await handle.close();
   });
 
-  describe('Haiku 4.5 thinking budget', () => {
+  describe('catalog thinking budget (Haiku 4.5)', () => {
     const haiku: ModelDescriptor = {
       id: 'claude-haiku-4-5',
       displayName: 'Haiku 4.5',
@@ -747,12 +749,15 @@ describe('ClaudeCodeAgent runtime settings during rewind window', () => {
       efforts: ['low', 'medium', 'high'],
       defaultEffort: 'high',
     };
+    const resolveModelThinkingBudget: AgentDeps['resolveModelThinkingBudget'] = (_providerId, modelId) =>
+      modelId === haiku.id ? { low: 2048, medium: 8192, high: 16384 } : null;
 
     it('starts with a thinking budget instead of an effort parameter', async () => {
       const { handle } = await startRewindableSession({
         model: haiku.id,
         effort: 'medium',
         availableModels: [...TEST_MODELS, haiku],
+        resolveModelThinkingBudget,
       });
 
       const options = sdkMock.query.mock.calls[0]?.[0]?.options;
@@ -767,6 +772,7 @@ describe('ClaudeCodeAgent runtime settings during rewind window', () => {
         model: haiku.id,
         effort: 'high',
         availableModels: [...TEST_MODELS, haiku],
+        resolveModelThinkingBudget,
       });
 
       await handle.setEffort?.('low');
@@ -786,6 +792,7 @@ describe('ClaudeCodeAgent runtime settings during rewind window', () => {
         model: 'claude-sonnet-5',
         effort: 'medium',
         availableModels: [...TEST_MODELS, haiku],
+        resolveModelThinkingBudget,
       });
       expect(sdkMock.query.mock.calls[0]?.[0]?.options?.thinking).toBeUndefined();
 
@@ -808,6 +815,7 @@ describe('ClaudeCodeAgent runtime settings during rewind window', () => {
         model: haiku.id,
         effort: 'high',
         availableModels: [...TEST_MODELS, { ...haiku, efforts: [], defaultEffort: null }],
+        resolveModelThinkingBudget,
       });
 
       const options = sdkMock.query.mock.calls[0]?.[0]?.options;

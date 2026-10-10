@@ -199,10 +199,6 @@ export {
   lowestEffort,
   nearestSupportedEffort,
   reconcileInvocationEffort,
-  isClaudeBudgetThinkingModel,
-  CLAUDE_BUDGET_THINKING_EFFORTS,
-  CLAUDE_BUDGET_THINKING_DEFAULT_EFFORT,
-  claudeThinkingBudgetTokens,
 } from "./effortResolution.js";
 export { piSupportedEfforts } from "./piThinkingLevels.mjs";
 
@@ -310,8 +306,9 @@ export {
   MODEL_METADATA_FIELDS,
   validModelMetadata,
   mergeModelMetadata,
+  thinkingBudgetEfforts,
 } from "./modelMetadataLayers.js";
-export type { ModelMetadata, BaseModel } from "./modelMetadataLayers.js";
+export type { ModelMetadata, BaseModel, ModelThinkingBudget } from "./modelMetadataLayers.js";
 
 export {
   catalogModelMetadata,

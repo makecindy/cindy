@@ -23,7 +23,7 @@ import type { AgentKind, Catalog, Provider, ProviderPreset } from "./types.js";
 
 /** 公共模型目录 API 路径。发布版由 model-access-server 匿名提供完整 Catalog。 */
 export const CATALOG_API_PATH =
-  "/api/model-catalog/catalog?registrySchemaVersion=5&registryMedia=1&registryLocalRuntimes=1";
+  "/api/model-catalog/catalog?registrySchemaVersion=5&registryMedia=1&registryLocalRuntimes=1&registryThinkingBudget=1";
 /** 旧客户端目录的 OSS 相对路径。迁移期作为公共 API 失败后的兼容回退。 */
 export const CATALOG_CFG_PATH = "/cfg/providers.json";
 
@@ -128,6 +128,7 @@ export function resolveCatalogUrl(cfg: CatalogSourceConfig): string | null {
         url.searchParams.set("registrySchemaVersion", "5");
         url.searchParams.set("registryMedia", "1");
         url.searchParams.set("registryLocalRuntimes", "1");
+        url.searchParams.set("registryThinkingBudget", "1");
         return url.toString();
       }
     } catch {

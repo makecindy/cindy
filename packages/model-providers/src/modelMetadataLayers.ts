@@ -34,6 +34,16 @@ export interface ModelMetadata {
   supportsImageInput?: boolean;
   supportsToolCalls?: boolean;
   reasoningRequired?: boolean;
+  /**
+   * 不收 effort 参数、只收 thinking.budget_tokens 的模型(如 Claude Haiku 4.5)。budgetTokens 的键
+   * 即思考强度档,由运行时换算成思考预算。服务端只对声明 registryThinkingBudget=1 的目录请求
+   * 下发;写回 CatalogModel 时换算成 efforts / defaultEffort,本字段不进入模型对象。
+   */
+  thinkingBudget?: ModelThinkingBudget;
+}
+export interface ModelThinkingBudget {
+  defaultEffort: ModelEffort;
+  budgetTokens: Partial<Record<ModelEffort, number>>;
 }
 export interface BaseModel {
   id: string;
@@ -59,6 +69,7 @@ export const MODEL_METADATA_FIELDS = [
   "supportsImageInput",
   "supportsToolCalls",
   "reasoningRequired",
+  "thinkingBudget",
 ] as const;
 const efforts = new Set([
   "minimal",
@@ -119,8 +130,29 @@ export function validModelMetadata(value: unknown): value is ModelMetadata {
         new Set(v).size === v.length
       );
     if (key === "defaultEffort") return v === null || efforts.has(v as string);
+    if (key === "thinkingBudget") return validThinkingBudget(v);
     return typeof v === "boolean";
   });
+}
+/** 与 Server 同口径:Anthropic 要求 budget_tokens >= 1024,上限取 128000(当前最大输出)。 */
+function validThinkingBudget(value: unknown): value is ModelThinkingBudget {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const v = value as Record<string, unknown>;
+  if (!Object.keys(v).every((key) => key === "defaultEffort" || key === "budgetTokens")) return false;
+  const budgets = v.budgetTokens;
+  if (!budgets || typeof budgets !== "object" || Array.isArray(budgets)) return false;
+  const entries = Object.entries(budgets);
+  return (
+    entries.length > 0 &&
+    entries.every(([effort, tokens]) => efforts.has(effort) &&
+      typeof tokens === "number" && Number.isSafeInteger(tokens) && tokens >= 1024 && tokens <= 128_000) &&
+    typeof v.defaultEffort === "string" &&
+    Object.hasOwn(budgets, v.defaultEffort)
+  );
+}
+/** 思考预算档,按强弱序。 */
+export function thinkingBudgetEfforts(budget: ModelThinkingBudget): ModelEffort[] {
+  return [...efforts].filter((effort) => Object.hasOwn(budget.budgetTokens, effort)) as ModelEffort[];
 }
 export function pickModelMetadata(value: object | undefined): ModelMetadata {
   const result: Record<string, unknown> = {};
@@ -369,7 +401,8 @@ export function expandedRegistryEntries(
             }),
           )
         : undefined;
-      const { defaultEffort, supportsImageInput, ...fields } = metadata;
+      // thinkingBudget 只存在于分层资料,旧版条目 schema 不认识;运行时经 resolveModelMetadata 读取。
+      const { defaultEffort, supportsImageInput, thinkingBudget: _thinkingBudget, ...fields } = metadata;
       const expanded = {
         ...entry,
         ...fields,
@@ -446,7 +479,7 @@ export function applyModelMetadata(
   model: CatalogModel,
   metadata: ResolvedModelMetadata,
 ): CatalogModel {
-  const { maxOutputTokens, [inheritedContextWindow]: inheritedWindow, ...fields } = metadata;
+  const { maxOutputTokens, thinkingBudget, [inheritedContextWindow]: inheritedWindow, ...fields } = metadata;
   const result = {
     ...model,
     ...fields,
@@ -457,6 +490,11 @@ export function applyModelMetadata(
   };
   if (result.contextWindowMax !== undefined && result.contextWindowMax < result.contextWindow) {
     delete result.contextWindowMax;
+  }
+  // 思考预算型模型的 effort 参数为 0 档,档位来自 thinkingBudget;档位未知的自定义连接不补。
+  if (thinkingBudget && result.efforts.length === 0 && !result.effortsUnknown) {
+    result.efforts = thinkingBudgetEfforts(thinkingBudget);
+    result.defaultEffort = thinkingBudget.defaultEffort;
   }
   if (
     result.efforts.length === 0 ||

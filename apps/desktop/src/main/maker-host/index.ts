@@ -186,7 +186,11 @@ import {
   resolveModelDefaultContextWindow,
 } from './catalog-to-descriptors.js';
 import { readModelContextLimit } from './model-context-limit-store.js';
-import { resolveDesktopModelContextProviderId, resolveDesktopModelEfforts } from './model-context-settings.js';
+import {
+  resolveDesktopModelContextProviderId,
+  resolveDesktopModelEfforts,
+  resolveDesktopModelThinkingBudget,
+} from './model-context-settings.js';
 import {
   prepareCodexCustomContextCatalog,
 } from './codex-custom-context-catalog.js';
@@ -1305,6 +1309,8 @@ export function getMaker(): Maker {
           resolveDesktopModelContextProviderId(getDesktopSelectableCatalog(), 'claude-code', providerId, modelId), modelId),
       resolveModelEfforts: (providerId, modelId) =>
         resolveDesktopModelEfforts(getDesktopSelectableCatalog(), 'claude-code', providerId, modelId),
+      resolveModelThinkingBudget: (providerId, modelId) =>
+        resolveDesktopModelThinkingBudget(getDesktopSelectableCatalog(), 'claude-code', providerId, modelId),
       // SDK PreToolUse / PostToolUse 等 in-process hook 注入点。host 自己定义 hook
       // 实现 (./claude-hooks/*.ts), maker-core 不感知具体逻辑。
       //

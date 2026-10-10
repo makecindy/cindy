@@ -218,32 +218,6 @@ export function lowestEffort(efforts: readonly Effort[]): Effort | null {
 }
 
 /**
- * 不收 `output_config.effort`、只收 `thinking.budget_tokens` 的 Claude 模型(目前是 Haiku 4.5)。
- * Cindy 照样给它们一组思考强度档,由各运行时把档位换算成思考预算:Claude Code 走
- * `--max-thinking-tokens`,Pi(pi-ai)与 Codex 桥本身已按档换算预算。
- * id 兼容日期快照、`anthropic/` 前缀与 Bedrock 的 `anthropic.` 前缀。
- */
-export function isClaudeBudgetThinkingModel(modelId: string): boolean {
-  return modelId.trim().toLowerCase().replace(/[._]/g, '-').includes('claude-haiku-4-5');
-}
-
-/** 预算型思考模型的档位与默认档(上游没有这组档位,是 Cindy 的产品声明)。 */
-export const CLAUDE_BUDGET_THINKING_EFFORTS = ['low', 'medium', 'high'] as const;
-export const CLAUDE_BUDGET_THINKING_DEFAULT_EFFORT = 'high';
-
-/**
- * 档位 → 思考预算(token)。数值与 pi-ai 的默认 thinkingBudgets 一致,同一档在 Claude Code
- * 与 Pi 上思考深度相同。低于 low 的档按 low、高于 high 的档按 high(只降不升之外的
- * 兜底:正常路径上档位已按模型声明收窄)。
- */
-export function claudeThinkingBudgetTokens(effort: Effort): number {
-  const rank = effortRank(effort);
-  if (rank <= effortRank('low')) return 2048;
-  if (rank <= effortRank('medium')) return 8192;
-  return 16384;
-}
-
-/**
  * 把请求的 effort clamp 到某模型「实际声明支持」的档位 —— 供**未门控入口**(定时任务
  * fire、跨 agent worker 创建等)在发到运行时前做安全 reconcile,避免把模型不支持的档
  * (如 gpt-5.5 + max/ultra)透给上游被拒(issue #456)。
