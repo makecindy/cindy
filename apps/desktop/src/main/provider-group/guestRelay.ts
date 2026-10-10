@@ -10,9 +10,11 @@
 import type { AgentKind } from '@cindy/maker-core';
 
 import type { ProviderGroupConfig } from '../../shared/providerGroup.js';
+import type { RelayRunFailure } from '../remote-agent/host/groupRelay.js';
 import type { GroupRelayMember, RemoteAgentGroupRelayDeps } from '../remote-agent/host/runHost.js';
 import type { RemoteAgentInvoke, RemoteAgentPoller } from '../remote-agent/controller/runClient.js';
 import type { ProviderGroupExternalLoad } from './externalLoad.js';
+import { PROVIDER_GROUP_MAX_REMOTE_COOLDOWN_MS } from './remoteHandler.js';
 import {
   PROVIDER_GROUP_DEFAULT_COOLDOWN_MS,
   PROVIDER_GROUP_FAILURE_COOLDOWN_MS,
@@ -28,6 +30,8 @@ export interface ProviderGroupGuestRelayDeps {
   readGroup(providerId: string): ProviderGroupConfig | null;
   externalLoad: ProviderGroupExternalLoad;
   connect(agentDeviceId: string): { invoke: RemoteAgentInvoke; poller: RemoteAgentPoller };
+  /** 组内电脑报错里的用量重置时刻(unix ms)；不提供时用量上限一律按默认时长冷却。 */
+  readResetAt?(failure: RelayRunFailure): number | null;
   now(): number;
   log: { warn(message: string, meta?: Record<string, unknown>): void };
 }
@@ -89,6 +93,23 @@ export function createProviderGroupGuestRelay(deps: ProviderGroupGuestRelayDeps)
         member.memberKey,
         now + (cause === 'usage-limit' ? PROVIDER_GROUP_DEFAULT_COOLDOWN_MS : PROVIDER_GROUP_FAILURE_COOLDOWN_MS),
       );
+    },
+
+    noteRunFailure(providerId, member: GroupRelayMember, failure) {
+      // 没有组，或那台已被移出组：已经在它上面的任务成为普通的远程 Agent 任务，不再自动换电脑(§9 #4)。
+      if (!deps.readGroup(providerId)?.members.some((m) => m.key === member.memberKey)) return false;
+      const cause = classifyProviderGroupSwitchCause(failure);
+      if (!cause) return false;
+      const now = deps.now();
+      // 组内电脑报来的重置时刻按那台的口径取(readResetAt 不采用不带时区的钟点)，最多信 8 天。
+      const resetAt = cause === 'usage-limit' ? deps.readResetAt?.(failure) ?? null : null;
+      const until = cause === 'usage-limit'
+        ? (resetAt !== null && resetAt > now
+            ? Math.min(resetAt, now + PROVIDER_GROUP_MAX_REMOTE_COOLDOWN_MS)
+            : now + PROVIDER_GROUP_DEFAULT_COOLDOWN_MS)
+        : now + PROVIDER_GROUP_FAILURE_COOLDOWN_MS;
+      deps.router.markCooling(providerId, member.memberKey, until);
+      return true;
     },
 
     trackRun: (providerId, memberKey) => deps.externalLoad.trackRelay(providerId, memberKey),

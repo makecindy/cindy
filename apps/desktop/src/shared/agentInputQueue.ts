@@ -209,6 +209,15 @@ export interface AutoResumeInfo {
    * 后的续跑同一条路径)：活动行据此显示「{from} {原因}，已换到 {to} 继续」。旧端忽略该字段。
    */
   agentSwitch?: AutoResumeAgentSwitch;
+  /**
+   * 分享的人这边的自动换电脑(分享者的供应商组替它换了一台，本机不知道是哪台)：活动行显示「已自动换一台
+   * 电脑继续」，不出现电脑名称(docs/product-rules/provider-groups.md §8)。旧端忽略该字段。
+   */
+  groupSwitch?: AutoResumeGroupSwitch;
+}
+
+export interface AutoResumeGroupSwitch {
+  cause: AutoResumeAgentSwitchCause;
 }
 
 export type AutoResumeAgentSwitchCause = 'usage-limit' | 'auth' | 'unavailable' | 'overload';

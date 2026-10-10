@@ -10,6 +10,7 @@ import { mapClaudeHostedEvent } from '../controller/eventMap';
 import { execServerActions, execServerCommand } from '../controller/execServerRelay';
 import { collectProjectInstructionFiles } from '../controller/projectFiles';
 import { approvalActionsFor, innerShellScript } from '../controller/proxyHandle';
+import { takeGroupSwitchState } from '../controller/startRemote';
 import { EventLog, LineSplitter } from '../eventLog';
 import { ExecutorWorkspace } from '../executor/workspace';
 import { createRunTunnel } from '../host/tunnel';
@@ -166,7 +167,25 @@ describe('wire payloads', () => {
     // 组所在电脑替受邀者中转的任务带不透明的 relay 键；格式不对丢弃。
     expect(decodeOpenPayload({ ...base, relay: 'a1b2c3d4e5f60718293a4b5c6d7e8f90' }).relay).toBe('a1b2c3d4e5f60718293a4b5c6d7e8f90');
     expect(decodeOpenPayload({ ...base, relay: '../x' })).not.toHaveProperty('relay');
+    // 「需要换一台」：声明只认 true，凭证格式不对丢弃。
+    expect(decodeOpenPayload({ ...base, acceptsGroupSwitch: true }).acceptsGroupSwitch).toBe(true);
+    expect(decodeOpenPayload({ ...base, acceptsGroupSwitch: 1 })).not.toHaveProperty('acceptsGroupSwitch');
+    expect(decodeOpenPayload({ ...base, groupSwitchToken: 'Zm9vYmFyYmF6cXV4MTIzNDU2' }).groupSwitchToken).toBe('Zm9vYmFyYmF6cXV4MTIzNDU2');
+    expect(decodeOpenPayload({ ...base, groupSwitchToken: 'short' })).not.toHaveProperty('groupSwitchToken');
     expect(() => decodeOpenPayload({ sessionId: 's', options: { model: 'm' }, workspace: { workingDir: '/p', platform: 'beos' } })).toThrow();
+  });
+
+  it('takes the provider group switch token out of the state instead of merging it', () => {
+    const offered: string[] = [];
+    const offer = (token: string) => offered.push(token);
+    const state = { turnRunning: true };
+    expect(takeGroupSwitchState(state, offer)).toBe(state);
+    expect(takeGroupSwitchState({ providerGroupSwitch: 'Zm9vYmFyYmF6cXV4MTIzNDU2' }, offer)).toBeNull();
+    expect(takeGroupSwitchState({ providerGroupSwitch: 'Zm9vYmFyYmF6cXV4MTIzNDU2', model: 'm' }, offer)).toEqual({ model: 'm' });
+    // 格式不对的凭证丢弃，也不进状态。
+    expect(takeGroupSwitchState({ providerGroupSwitch: { evil: true }, model: 'm' }, offer)).toEqual({ model: 'm' });
+    expect(takeGroupSwitchState({ providerGroupSwitch: 'Zm9vYmFyYmF6cXV4MTIzNDU2' }, undefined)).toBeNull();
+    expect(offered).toEqual(['Zm9vYmFyYmF6cXV4MTIzNDU2', 'Zm9vYmFyYmF6cXV4MTIzNDU2']);
   });
 
   it('restores known per-turn policies and confirms everything for unknown ones', async () => {

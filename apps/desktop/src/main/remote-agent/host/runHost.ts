@@ -48,13 +48,18 @@ import { RemoteAgentRunClient, type RemoteAgentInvoke, type RemoteAgentPoller } 
 import { EventLog, waitForAny } from '../eventLog';
 import { createGuestUsageMeter, type GuestUsageSample } from './guestUsage';
 import {
+  GROUP_SWITCH_STATE_KEY,
+  newGroupSwitchToken,
   relayConnId,
   relayErrorForGuest,
   relayErrorInfoFrom,
   relayKeyFor,
   relayMemberConnId,
+  relayRunFailureOf,
   relaySessionIdFor,
+  type RelayRunFailure,
 } from './groupRelay';
+import { PROVIDER_GROUP_LOCAL_MEMBER_KEY } from '../../../shared/providerGroup';
 import { projectPathText } from '../executor/workspace';
 import {
   MAX_ANCESTOR_LEVELS,
@@ -91,6 +96,12 @@ export const REMOTE_AGENT_HOST_RETAIN_MS = 60_000;
 export const REMOTE_AGENT_MAX_RELAYED_RUNS_PER_CONTROLLER = REMOTE_AGENT_MAX_RUNS_PER_CONTROLLER * 4;
 /** 受邀者的任务交给组内电脑时，启动阶段最多换几台。 */
 const MAX_RELAY_START_ATTEMPTS = 8;
+/** 「需要换一台」凭证多久内有效(受邀者那边交接通常几秒内完成，重开时带回)。 */
+export const GROUP_SWITCH_TOKEN_TTL_MS = 10 * 60_000;
+/** 距上一次换电脑超过这么久算新的一轮(与供应商组本机任务的一轮同一口径)。 */
+const GROUP_SWITCH_ROUND_MS = 30 * 60_000;
+/** 那台上的任务以这些原因结束是正常收尾，不算失败。 */
+const NORMAL_RELAY_CLOSE_REASONS = new Set(['closed', 'detached', 'ended', 'superseded']);
 const UPLOAD_IDLE_MS = 2 * 60_000;
 const MAX_STAGED_BYTES_PER_CONTROLLER = REMOTE_AGENT_MAX_PAYLOAD_BYTES * 2;
 const MAX_DECOMPRESSED_BYTES = 128 * 1024 * 1024;
@@ -205,6 +216,11 @@ export interface GroupRelayMember {
   sameAccount: boolean;
 }
 
+/** 组里的本机这一台(受邀者的任务直接在本机运行时用来冷却与避开它)。 */
+function localGroupMember(providerId: string): GroupRelayMember {
+  return { memberKey: PROVIDER_GROUP_LOCAL_MEMBER_KEY, agentDeviceId: '', providerId, sameAccount: false };
+}
+
 export type GroupRelayPlan =
   /** 组里选中了本机。 */
   | { kind: 'local' }
@@ -219,6 +235,11 @@ export interface RemoteAgentGroupRelayDeps {
   connect(agentDeviceId: string): { invoke: RemoteAgentInvoke; poller: RemoteAgentPoller };
   /** 那台在启动阶段没能接下任务(连不上、登录失效等)：按组的口径冷却。 */
   noteStartFailure(providerId: string, member: GroupRelayMember, error: unknown): void;
+  /**
+   * 那台上的任务运行中失败(终态错误，或一轮进行中任务意外结束)：问题出在那台电脑本身时按组的口径冷却它并
+   * 返回 true(可以换一台)；用户停止、上下文超限等换到哪台都一样的失败返回 false。
+   */
+  noteRunFailure(providerId: string, member: GroupRelayMember, failure: RelayRunFailure): boolean;
   /** 计入那台组内电脑的负载(按它是否正在运行一轮)。 */
   trackRun(providerId: string, memberKey: string): { setRunning(running: boolean): void; release(): void };
   /** 删掉受邀者后，请接过它任务的组内电脑清掉留下的会话记录与目录。 */
@@ -233,6 +254,8 @@ interface RelayBackend {
   attempt: number;
   /** 那台已经开始运行(启动阶段失败才能换下一台)。 */
   started: boolean;
+  /** 那台上正在运行一轮(按它报来的状态)。 */
+  turnRunning: boolean;
   /** 推帧按任务串行，保证 Codex exec-server 帧的顺序。 */
   pushChain: Promise<void>;
   model?: string;
@@ -288,6 +311,11 @@ interface Run {
   relayKey?: string;
   /** 本机是组所在电脑、把这个受邀者任务转给了组内电脑。 */
   relay?: RelayBackend;
+  /**
+   * 本机是组所在电脑、这是受邀者自己的任务(不是被中转来的)，受邀者声明了支持「需要换一台」：在本机或组内电脑上
+   * 运行中失败时可以发凭证。
+   */
+  acceptsGroupSwitch?: boolean;
 }
 
 /** 控制端真实路径 → 影子目录里逐级镜像的目录名(去掉本机文件系统不允许的字符)。 */
@@ -410,6 +438,13 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
   const now = deps.now ?? Date.now;
   const runs = new Map<string, Run>();
   const uploads = new Map<string, Upload>();
+  /** 发给受邀者的「需要换一台」凭证 → 发给了谁的哪个任务、重新打开时要避开哪些台。一次性，过期作废。 */
+  const groupSwitchTokens = new Map<string, { controller: string; hostSessionId: string; exclude: string[]; expiresAt: number }>();
+  /**
+   * 受邀者任务这一轮已经因为电脑本身的原因换下来的组内电脑(控制端 + 本机侧任务 id → 那几台)：同一轮每台最多
+   * 试一次，都试过就不再发凭证，受邀者照常看到原来的错误。那台上一轮正常结束或 30 分钟没再换算新的一轮。
+   */
+  const groupSwitchRounds = new Map<string, { tried: Set<string>; at: number }>();
   /** 影子目录重建按 hostSessionId 串行：同一任务的两次打开不并发争用同一个目录。 */
   const shadowLocks = new Map<string, Promise<unknown>>();
   let sweepTimer: ReturnType<typeof setInterval> | null = null;
@@ -905,10 +940,26 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
   }
 
   async function pumpEvents(run: Run, handle: AgentSessionHandle): Promise<void> {
+    /** 供应商组：本机这一台上这一轮出过终态错误。 */
+    let groupTurnFailed = false;
     try {
       for await (const event of handle.events()) {
         if (run.closing) break;
         if (run.trust === 'guest') meterGuestUsage(run, handle.model, event);
+        if (run.acceptsGroupSwitch) {
+          // 受邀者的任务按组分到了本机这一台：本机运行中失败时同样可以换一台(凭证排在错误前面)。
+          const failure = relayRunFailureOf(event);
+          if (failure) {
+            groupTurnFailed = true;
+            const token = await groupSwitchOfferFor(run, localGroupMember(run.providerId!), failure, handle.model)
+              .catch(() => null);
+            if (run.closing) break;
+            if (token) append(run, { t: 'state', state: { [GROUP_SWITCH_STATE_KEY]: token } });
+          } else if (event.type === 'done') {
+            noteGroupSwitchTurnEnded(run, groupTurnFailed);
+            groupTurnFailed = false;
+          }
+        }
         append(run, { t: 'event', event });
         emitState(run);
       }
@@ -934,13 +985,86 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
 
   /** 转给组内电脑的打开载荷：已按受邀者复核过；来源换成那台上的供应商，带防转圈标记与受邀者的 relay 键。 */
   function relayedOpenPayload(run: Run, payload: RemoteAgentOpenPayload, member: GroupRelayMember): RemoteAgentOpenPayload {
+    // 「需要换一台」只在受邀者与本机之间：组内电脑不认识也不需要。
+    const { acceptsGroupSwitch: _accepts, groupSwitchToken: _token, ...rest } = payload;
     return {
-      ...payload,
+      ...rest,
       sessionId: relaySessionIdFor(run.controller, payload.sessionId),
       groupAssigned: true,
       relay: relayKeyFor(run.controller),
       options: { ...payload.options, providerId: member.providerId },
     };
+  }
+
+  /** 这个受邀者任务这一轮换下来的组内电脑，记上刚出问题的这台，返回要避开的全部。 */
+  function noteGroupSwitchTried(run: Run, failed: GroupRelayMember): Set<string> {
+    const at = now();
+    for (const [roundKey, round] of groupSwitchRounds) {
+      if (at - round.at > GROUP_SWITCH_ROUND_MS) groupSwitchRounds.delete(roundKey);
+    }
+    const roundKey = key(run.controller, run.hostSessionId!);
+    const round = groupSwitchRounds.get(roundKey) ?? { tried: new Set<string>(), at };
+    round.tried.add(failed.memberKey);
+    round.at = at;
+    groupSwitchRounds.set(roundKey, round);
+    return new Set(round.tried);
+  }
+
+  /**
+   * 受邀者任务在组内电脑(含本机这一台)上运行中失败：问题出在那台时按组的口径冷却它；受邀者声明了支持、组里还有
+   * 能接的电脑(这一轮换下来的不算)时返回一张「需要换一台」凭证，调用方把它排在那次错误前面送出。
+   */
+  async function groupSwitchOfferFor(
+    run: Run,
+    member: GroupRelayMember,
+    failure: RelayRunFailure,
+    model: string,
+  ): Promise<string | null> {
+    const relayDeps = deps.groupRelay;
+    if (!relayDeps || !run.providerId || !run.hostSessionId) return null;
+    if (!relayDeps.noteRunFailure(run.providerId, member, failure)) return null;
+    // 旧版受邀者不认识这个状态：照旧只转出原来的错误。
+    if (!run.acceptsGroupSwitch) return null;
+    const exclude = noteGroupSwitchTried(run, member);
+    const next = await relayDeps.plan({ kind: run.kind, model, providerId: run.providerId, exclude }).catch(() => null);
+    const canMove = next?.kind === 'member' || (next?.kind === 'local' && deps.isAgentAvailable(run.kind));
+    if (!canMove || run.closing) return null;
+    deps.log?.info('remote agent: offered the shared user another computer in the provider group', {
+      runId: run.id,
+      from: member.memberKey,
+      tried: exclude.size,
+    });
+    return issueGroupSwitchToken(run, exclude);
+  }
+
+  /** 那台上一轮的结果：正常结束则这个任务的换电脑记录重新从头算。 */
+  function noteGroupSwitchTurnEnded(run: Run, failed: boolean): void {
+    if (!failed && run.hostSessionId) groupSwitchRounds.delete(key(run.controller, run.hostSessionId));
+  }
+
+  /** 发一张「需要换一台」凭证：只认发给的这个受邀者的这个任务，过期作废。 */
+  function issueGroupSwitchToken(run: Run, exclude: ReadonlySet<string>): string {
+    const at = now();
+    for (const [token, entry] of groupSwitchTokens) {
+      if (entry.expiresAt <= at) groupSwitchTokens.delete(token);
+    }
+    const token = newGroupSwitchToken();
+    groupSwitchTokens.set(token, {
+      controller: run.controller,
+      hostSessionId: run.hostSessionId!,
+      exclude: [...exclude],
+      expiresAt: at + GROUP_SWITCH_TOKEN_TTL_MS,
+    });
+    return token;
+  }
+
+  /** 受邀者交接后重新打开时带回的凭证：有效则用掉，返回要避开的那几台；无效(别人的、过期、用过)返回空。 */
+  function takeGroupSwitchToken(controller: string, hostSessionId: string, token: string | undefined): string[] {
+    if (!token) return [];
+    const entry = groupSwitchTokens.get(token);
+    if (!entry || entry.controller !== controller || entry.hostSessionId !== hostSessionId) return [];
+    groupSwitchTokens.delete(token);
+    return entry.expiresAt > now() ? entry.exclude : [];
   }
 
   /**
@@ -951,11 +1075,12 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
     run: Run,
     payload: RemoteAgentOpenPayload,
     first: GroupRelayMember,
-    options: { fresh: boolean },
+    /** `avoid`：「需要换一台」后重新打开时，这一轮已经换下来的组内电脑，启动阶段换台也不回到它们。 */
+    options: { fresh: boolean; avoid?: readonly string[] },
   ): Promise<void> {
     const relayDeps = deps.groupRelay!;
     const groupProviderId = run.providerId!;
-    const tried = new Set<string>();
+    const tried = new Set<string>(options.avoid ?? []);
     let member: GroupRelayMember | null = first;
     let lastError: unknown = null;
     for (let attempt = 1; member && attempt <= MAX_RELAY_START_ATTEMPTS && !run.closing; attempt += 1) {
@@ -968,42 +1093,102 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
         member: current,
         attempt,
         started: false,
+        turnRunning: false,
         pushChain: Promise.resolve(),
         load,
       };
       const wsOpened = new Set<string>();
+      // 「需要换一台」(§6.1 分享的人)：那台运行中失败时先问组里还有没有能接的电脑，期间那台转来的后续内容
+      // 按原顺序暂存，凭证排在错误前面送达；受邀者那边据此自动交接后重新打开。
+      let held: Array<() => void> | null = null;
+      const emit = (deliver: () => void) => {
+        if (held) held.push(deliver);
+        else deliver();
+      };
+      /** 这一轮在那台出过终态错误(这一轮结束时不算「正常结束」)。 */
+      let turnFailed = false;
+      /** 失败时先(异步)判定要不要发凭证，期间那台转来的内容暂存，凭证排在错误前面。 */
+      const holdForGroupSwitch = (failure: RelayRunFailure, deliver: () => void): void => {
+        const queue: Array<() => void> = [deliver];
+        held = queue;
+        void groupSwitchOfferFor(run, current, failure, backend.model ?? payload.options.model)
+          .catch(() => null)
+          .then((token) => {
+            if (token && !run.closing && run.relay === backend) {
+              append(run, { t: 'state', state: { [GROUP_SWITCH_STATE_KEY]: token } });
+            }
+          })
+          .finally(() => {
+            held = null;
+            for (const fn of queue) fn();
+          });
+      };
       backend.client = new RemoteAgentRunClient(randomUUID(), connection.poller, {
         onEvent: (event) => {
           if (run.closing || run.relay !== backend) return;
           meterGuestUsage(run, backend.model, event as AgentEvent);
-          append(run, { t: 'event', event });
+          const deliver = () => {
+            if (!run.closing) append(run, { t: 'event', event });
+          };
+          const failure = relayRunFailureOf(event);
+          if (failure) {
+            turnFailed = true;
+            if (!held) {
+              holdForGroupSwitch(failure, deliver);
+              return;
+            }
+          }
+          if ((event as { type?: unknown }).type === 'done') {
+            noteGroupSwitchTurnEnded(run, turnFailed);
+            turnFailed = false;
+          }
+          emit(deliver);
         },
         onState: (state) => {
           if (run.closing || run.relay !== backend) return;
           const projection = state.workspaceProjection as { mirrorRoot?: unknown } | undefined;
           if (typeof projection?.mirrorRoot === 'string') run.virtualRoot = projection.mirrorRoot;
           if (typeof state.model === 'string') backend.model = state.model;
-          if (typeof state.turnRunning === 'boolean') backend.load.setRunning(state.turnRunning);
+          if (typeof state.turnRunning === 'boolean') {
+            backend.turnRunning = state.turnRunning;
+            backend.load.setRunning(state.turnRunning);
+          }
           if (run.hostSessionId) {
             void recordGuestSession(run.controller, undefined, run.hostSessionId, [
               typeof state.id === 'string' ? state.id : undefined,
               typeof state.requestSessionId === 'string' ? state.requestSessionId : undefined,
             ], current);
           }
-          append(run, { t: 'state', state });
+          // 组内电脑不能替本机发凭证。
+          const { [GROUP_SWITCH_STATE_KEY]: _forged, ...forwarded } = state;
+          emit(() => {
+            if (!run.closing) append(run, { t: 'state', state: forwarded });
+          });
         },
         onRequest: (request, signal) => reverse(run, request, signal),
         onWs: (item) => {
           if (run.closing || run.relay !== backend) return;
           const connId = relayConnId(attempt, item.connId);
           if (item.kind === 'open') wsOpened.add(connId);
-          append(run, { ...item, connId });
+          emit(() => {
+            if (!run.closing) append(run, { ...item, connId });
+          });
         },
         onClosed: (reason, error) => {
           // 启动阶段的收尾由下面的 catch 处理(可能换下一台)；开始运行之后那台结束了，这个任务也结束。
           if (run.relay !== backend || run.closing || !backend.started) return;
-          run.log.append({ t: 'closed', reason, ...(error ? { error: relayErrorForGuest(error) } : {}) });
-          void finishRun(run, reason, 'navigation', false, true);
+          const finish = () => {
+            if (run.closing) return;
+            run.log.append({ t: 'closed', reason, ...(error ? { error: relayErrorForGuest(error) } : {}) });
+            void finishRun(run, reason, 'navigation', false, true);
+          };
+          // 一轮进行中那台的任务意外结束(离线、崩溃等)：与终态错误一样可以换一台。
+          const unexpected = backend.turnRunning && !NORMAL_RELAY_CLOSE_REASONS.has(reason);
+          if (unexpected && !held) {
+            holdForGroupSwitch({ reason: 'remote_agent_closed', ...(error?.message ? { message: error.message } : {}) }, finish);
+            return;
+          }
+          emit(finish);
         },
       }, randomUUID, deps.log);
       run.relay = backend;
@@ -1468,16 +1653,24 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
         // 供应商组(本机是组所在电脑)：受邀者的任务按组分给组内电脑，本机中转。被中转过来的任务(带 relay)
         // 与已由供应商组分配的任务(防转圈)直接在本机运行。续接只能回到当初运行它的那台。
         let relayTo: GroupRelayMember | null = null;
-        if (controllerTrust === 'guest' && !relayKey && !payload.groupAssigned && deps.groupRelay && providerId) {
+        /** 受邀者因「需要换一台」交接后重新打开：这一轮已经换下来的组内电脑(凭证只认这个受邀者的这个任务)。 */
+        let avoid: string[] = [];
+        const groupRouted = controllerTrust === 'guest' && !relayKey && !payload.groupAssigned && !!deps.groupRelay && !!providerId;
+        if (groupRouted && deps.groupRelay && providerId) {
           const resumeId = payload.options.resumeSessionId;
           if (resumeId) {
             relayTo = await relayMemberOf(controller, resumeId);
           } else {
+            avoid = takeGroupSwitchToken(
+              controller,
+              hostSessionIdFor(controller, payload.sessionId),
+              payload.groupSwitchToken,
+            );
             const plan = await deps.groupRelay.plan({
               kind: request.agentKind,
               model: payload.options.model,
               providerId,
-              exclude: new Set(),
+              exclude: new Set(avoid),
             });
             if (plan?.kind === 'unavailable') fail('REMOTE_AGENT_UNAVAILABLE', 'no computer can run this task right now');
             if (plan?.kind === 'member') {
@@ -1508,6 +1701,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
           pushSeq: new Set(),
           pushParts: new Map(),
           ...(providerId ? { providerId } : {}),
+          ...(groupRouted && payload.acceptsGroupSwitch === true ? { acceptsGroupSwitch: true } : {}),
         };
         runs.set(key(controller, request.runId), run);
         ensureSweep();
@@ -1517,7 +1711,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
           // 先登记再中转：中转中途失败时，分享删除也能找到并清理(含通知那台组内电脑)。
           run.hostSessionId = hostSessionIdFor(controller, payload.sessionId);
           void recordGuestSession(controller, undefined, run.hostSessionId, [])
-            .then(() => startRelay(run, payload, member, { fresh: !payload.options.resumeSessionId }))
+            .then(() => startRelay(run, payload, member, { fresh: !payload.options.resumeSessionId, avoid }))
             .catch(async (error) => {
               append(run, { t: 'start-failed', error: relayErrorInfoFrom(error) });
               await finishRun(run, 'start-failed', 'navigation', false);

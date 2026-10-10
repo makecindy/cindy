@@ -299,11 +299,11 @@
       "loading": "正在讀取分享連結…",
       "askTitle": "{{name}} 想把 {{provider}} 分享給你",
       "providerOnDevice": "{{provider}} · {{device}}",
-      "factRuns": "Agent 在 {{name}} 的電腦上用 {{provider}} 執行",
+      "factRuns": "Agent 在 {{name}} 的電腦或 {{name}} 安排的其他電腦上用 {{provider}} 執行",
       "factRunsDetail": "用量計入 {{name}} 的 {{provider}}，{{name}} 能看到你的用量",
       "factFiles": "你的專案檔案和指令仍在你自己的電腦上執行",
       "factFilesDetail": "由你的任務權限把關",
-      "factPrivacy": "對話內容和 Agent 讀取的檔案內容會經過並儲存在 {{name}} 的電腦上",
+      "factPrivacy": "對話內容和 Agent 讀取的檔案內容會經過 {{name}} 的電腦，並儲存在實際執行任務的那台電腦上",
       "factPrivacyDetail": "{{name}} 只會看到你的暱稱和頭像",
       "factApproval": "傳送申請後，需要 {{name}} 同意才會生效",
       "factApprovalDetail": "{{name}} 可以隨時關閉或刪除這個分享",
@@ -372,7 +372,7 @@
         "open": "開啟連結",
         "cancel": "取消"
       },
-      "detailNote": "Agent 在 {{name}} 的電腦上執行，使用的是對方的登入和配額。新建任務時在模型列表裡選擇它就能用。",
+      "detailNote": "Agent 在 {{name}} 的電腦或 {{name}} 安排的其他電腦上執行，使用的是對方的登入和配額。對話內容和 Agent 讀取的檔案內容會經過 {{name}} 的電腦，並儲存在實際執行任務的那台電腦上。新建任務時在模型列表裡選擇它就能用。",
       "modelsTitle": "可用的模型",
       "modelsLoading": "正在讀取對方開放的模型…",
       "modelsRefused": "對方電腦暫時不讓讀取這個分享：可能沒有允許遠端控制、關了這個供應商的「允許遠端呼叫」，也可能對方的 Cindy 剛啟動、還沒準備好。請稍後重試，或請對方檢查這兩項設定。",
@@ -416,7 +416,7 @@
       "empty": "加入其他電腦上的 {{provider}}，任務會自動選一臺執行",
       "loading": "正在讀取供應商組…",
       "loadFailed": "未能讀取供應商組",
-      "note": "這臺電腦上的任務，Agent 在被選中的電腦上執行"
+      "note": "這臺電腦上的任務和你分享的人的任務，都由組選一台電腦執行 Agent"
     },
     "strategy": {
       "label": "組策略",
@@ -10515,7 +10515,8 @@
           "auth": "{{from}} 登入已失效，已換到 {{to}} 繼續",
           "unavailable": "{{from}} 連不上，已換到 {{to}} 繼續",
           "overload": "{{from}} 的服務繁忙，已換到 {{to}} 繼續"
-        }
+        },
+        "groupSwitch": "已自動換一台電腦繼續"
       },
       "autoResumeSeparator": {
         "label": "連線中斷，已自動繼續"

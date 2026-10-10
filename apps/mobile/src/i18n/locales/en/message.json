@@ -271,7 +271,8 @@
         "auth": "{{from}} is signed out; continued on {{to}}",
         "unavailable": "Couldn’t reach {{from}}; continued on {{to}}",
         "overload": "{{from}} was overloaded; continued on {{to}}"
-      }
+      },
+      "groupSwitch": "Continued on another computer automatically"
     },
     "modelLabel": "Model",
     "sessionLabel": "Session",

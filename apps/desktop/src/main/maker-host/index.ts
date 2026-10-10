@@ -117,6 +117,7 @@ import {
 } from '../maker-ipc/register.js';
 import { MAKER_PUSH } from '../maker-ipc/channels.js';
 import { readProviderGroupBinding } from '../provider-group/bindings.js';
+import { getProviderGroupGuestSwitch } from '../provider-group/guestSwitch.js';
 import { tapWindowBroadcast } from '../device-link/broadcast-tap.js';
 import { remoteBackgroundInvoke, remoteInvoke } from '../device-link/index.js';
 import { handleListDevices, defaultDeps as deviceDirectoryDeps } from '../device-link/ipc.js';
@@ -2713,6 +2714,8 @@ export function getMaker(): Maker {
         }),
         // 供应商组分配到那台的任务：告诉那台直接运行，不再进入它自己的组(provider-groups.md §4 防转圈)。
         isGroupAssigned: (sessionId) => readProviderGroupBinding(sessionId) !== null,
+        // 分享来的供应商被分享者建成了组：那台出问题时对方发来「需要换一台」，本机交接后带回凭证(§6.1)。
+        groupSwitch: getProviderGroupGuestSwitch(),
         logger: desktopMakerLogger,
       }),
       makerMemory: makerMemoryManager,

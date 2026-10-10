@@ -271,7 +271,8 @@
         "auth": "{{from}} のログインが切れたため、{{to}} で続行しました",
         "unavailable": "{{from}} に接続できないため、{{to}} で続行しました",
         "overload": "{{from}} のサービスが混雑しているため、{{to}} で続行しました"
-      }
+      },
+      "groupSwitch": "別のパソコンに自動で切り替えて続行しました"
     },
     "modelLabel": "モデル",
     "sessionLabel": "セッション",

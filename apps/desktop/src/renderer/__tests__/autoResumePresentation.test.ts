@@ -134,4 +134,11 @@ describe('provider group switch presentation', () => {
     expect(readAutoResumeInfo({ reason: 'usage-limit-reset', agentSwitch: { from: 'A', to: 'B', cause: 'other' } }))
       .toEqual({ usageLimitReset: true });
   });
+
+  it('reads a shared user’s switch without any computer names', () => {
+    expect(readAutoResumeInfo({ reason: 'usage-limit-reset', groupSwitch: { cause: 'overload' } }))
+      .toEqual({ usageLimitReset: true, groupSwitch: { cause: 'overload' } });
+    expect(readAutoResumeInfo({ reason: 'usage-limit-reset', groupSwitch: { cause: 'other' } }))
+      .toEqual({ usageLimitReset: true });
+  });
 });

@@ -162,8 +162,14 @@ export type RemoteAgentRequest =
    */
   | { op: 'forget'; relay: string };
 
-/** 供应商组为受邀者取的不透明键(组所在电脑按受邀者派生，不含身份信息)。 */
+/** 供应商组为受邀者取的不透明键(组所在电脑按受邀者派生，不含身份信息)；「需要换一台」凭证同一格式。 */
 export const REMOTE_AGENT_RELAY_KEY_PATTERN = /^[A-Za-z0-9_-]{16,64}$/;
+
+/**
+ * 供应商组「需要换一台」：组所在电脑在中转任务的事件流里发出的状态键，值是一次性凭证。只发给打开任务时
+ * 声明了 acceptsGroupSwitch 的控制端，排在那次错误前面；控制端取走凭证、不并入任务状态。
+ */
+export const REMOTE_AGENT_GROUP_SWITCH_STATE_KEY = 'providerGroupSwitch';
 
 /** 与 maker-core AgentSessionTeardownReason 同值。 */
 export const REMOTE_AGENT_TEARDOWN_REASONS = ['navigation', 'account-boundary', 'app-quit'] as const;

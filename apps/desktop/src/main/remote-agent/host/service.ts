@@ -23,6 +23,7 @@ import { readProviderGroup } from '../../provider-group/store.js';
 import { remoteAgentPollerFor } from '../controller/service';
 import { getProviderShareUsageStore, installProviderShareUsageStore } from '../../device-link/providerShareUsageStore.js';
 import { readDeviceLinkSettings } from '../../device-link/settings-store.js';
+import { readTurnUsageResetAt } from '../../goal-host/usageLimit.js';
 import { getDesktopProviderService } from '../../maker-host/createDesktopProviderService.js';
 import { registerGuestProviderRoute } from '../../maker-host/guest-provider-route-store.js';
 import { isRemoteProviderInvocationAllowed } from '../../maker-host/remote-provider-access-store.js';
@@ -159,6 +160,8 @@ export function installRemoteAgentHost(options: { getMaker: () => Maker; userDat
         const poller = remoteAgentPollerFor(agentDeviceId, remoteBackgroundInvoke, log);
         return { invoke: poller.invoke, poller };
       },
+      // 组内电脑的报错用那台机器的本地时间：不带时区的钟点不按本机时区理解。
+      readResetAt: (failure) => readTurnUsageResetAt(failure, Date.now(), { localTimeZoneTrusted: false }),
       now: () => Date.now(),
       log,
     }),

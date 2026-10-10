@@ -5328,6 +5328,8 @@ function MobileAutoResumeActionRow({
         from: info.agentSwitch.from,
         to: info.agentSwitch.to,
       })
+    : info.groupSwitch
+    ? t('message.systemCard.autoResume.groupSwitch')
     : info.usageLimitReset
     ? t('message.systemCard.autoResume.usageReset')
     : state === 'live'

@@ -5,11 +5,13 @@
  *  - 受邀者在组内电脑上的身份是本机为它取的不透明键(relay)，不带分享与成员信息；
  *  - 受邀者的任务 id 换成按(受邀者, 任务 id)派生的 id，两个受邀者用同一个 id 也不会在组内电脑上撞车；
  *  - 组内电脑报出的、会透露它是谁或它与本机关系的错误，换成中性的「暂时不可用」；
- *  - 启动阶段换电脑时，每次尝试的 WebSocket 连接编号加前缀，不同尝试的连接不会混在一起。
+ *  - 启动阶段换电脑时，每次尝试的 WebSocket 连接编号加前缀，不同尝试的连接不会混在一起；
+ *  - 运行中那台因电脑本身的原因失败时，给声明了支持的受邀者发一张「需要换一台」的一次性凭证(§6.1)。
  */
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 
-import type { RemoteAgentErrorInfo } from '@cindy/device-link';
+import { REMOTE_AGENT_GROUP_SWITCH_STATE_KEY, type RemoteAgentErrorInfo } from '@cindy/device-link';
+import { isTerminalAgentErrorEvent, type AgentEvent } from '@cindy/maker-core';
 
 /** 受邀者在组内电脑上的不透明键(32 位十六进制)。 */
 export function relayKeyFor(guestController: string): string {
@@ -51,6 +53,42 @@ export function relayErrorInfoFrom(error: unknown): RemoteAgentErrorInfo {
 /** 第 attempt 次启动尝试的 WebSocket 连接编号(受邀者看到的)。 */
 export function relayConnId(attempt: number, connId: string): string {
   return `r${attempt}-${connId}`.slice(0, 64);
+}
+
+/** 「需要换一台」凭证在受邀者事件流里的状态键。 */
+export const GROUP_SWITCH_STATE_KEY = REMOTE_AGENT_GROUP_SWITCH_STATE_KEY;
+
+/** 一张「需要换一台」凭证(一次性，32 个 base64url 字符)。 */
+export function newGroupSwitchToken(): string {
+  return randomBytes(24).toString('base64url');
+}
+
+/** 组内电脑上任务失败时用来判断换不换电脑的结构化信号(与本机任务的终态错误判定同一组字段)。 */
+export interface RelayRunFailure {
+  message?: string;
+  sdkError?: string;
+  reason?: string;
+  errorStatus?: number;
+  usageLimit?: boolean;
+  usageResetAt?: number;
+  codexErrorInfo?: string;
+}
+
+/** 组内电脑转来的事件是不是一次终态错误；是则取出判断原因用的字段。 */
+export function relayRunFailureOf(event: unknown): RelayRunFailure | null {
+  if (!event || typeof event !== 'object' || typeof (event as { type?: unknown }).type !== 'string') return null;
+  const typed = event as AgentEvent;
+  if (!isTerminalAgentErrorEvent(typed)) return null;
+  const data = typed.data && typeof typed.data === 'object' ? typed.data as Record<string, unknown> : {};
+  return {
+    ...(typeof data.message === 'string' ? { message: data.message } : {}),
+    ...(typeof data.sdkError === 'string' ? { sdkError: data.sdkError } : {}),
+    ...(typeof data.reason === 'string' ? { reason: data.reason } : {}),
+    ...(typeof data.errorStatus === 'number' ? { errorStatus: data.errorStatus } : {}),
+    ...(data.usageLimit === true ? { usageLimit: true } : {}),
+    ...(typeof data.usageResetAt === 'number' && Number.isFinite(data.usageResetAt) ? { usageResetAt: data.usageResetAt } : {}),
+    ...(typeof data.codexErrorInfo === 'string' ? { codexErrorInfo: data.codexErrorInfo } : {}),
+  };
 }
 
 /** 受邀者推来的帧属于哪次尝试的哪条连接；不是当前尝试的返回 null(丢弃)。 */

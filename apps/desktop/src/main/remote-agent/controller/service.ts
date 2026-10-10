@@ -57,6 +57,14 @@ export interface DeviceAgentServiceDeps {
   extractPdfText?: PdfTextExtractor;
   /** 这个任务由供应商组分配(本机的组或另一台电脑上的组)：打开时告诉那台不要再进入它自己的组。 */
   isGroupAssigned?(sessionId: string): boolean;
+  /**
+   * 供应商组「需要换一台」(分享的人，docs/product-rules/provider-groups.md §6.1)：打开任务时声明支持并带回交接后
+   * 要用的凭证，对方发来的新凭证交回这里。
+   */
+  groupSwitch?: {
+    takeForOpen(sessionId: string): string | undefined;
+    offer(sessionId: string, token: string): void;
+  };
   logger: Logger;
 }
 
@@ -140,12 +148,23 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
         }
       }
     }
+    const sessionId = opts.sessionId;
+    const groupSwitch = sessionId && deps.groupSwitch ? deps.groupSwitch : null;
+    const switchToken = groupSwitch && sessionId ? groupSwitch.takeForOpen(sessionId) : undefined;
     return startRemoteAgentSession(input.agentKind, opts, {
       invoke: poller.invoke,
       poller,
       rgPath: deps.rgPath(),
       codexPath: () => deps.codexPath?.(),
-      ...(opts.sessionId && deps.isGroupAssigned?.(opts.sessionId) ? { groupAssigned: true } : {}),
+      ...(sessionId && deps.isGroupAssigned?.(sessionId) ? { groupAssigned: true } : {}),
+      ...(groupSwitch && sessionId
+        ? {
+            groupSwitch: {
+              ...(switchToken ? { token: switchToken } : {}),
+              offer: (token: string) => groupSwitch.offer(sessionId, token),
+            },
+          }
+        : {}),
       prepareMcp: async ({ kind, opts: startOpts, vendorOptions }): Promise<PreparedRemoteMcp> => {
         const extra = await deps.prepareMcpBridge(deps.mcpProviders(), deps.logger, {
           agentKind: kind,

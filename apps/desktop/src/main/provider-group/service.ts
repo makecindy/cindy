@@ -32,6 +32,7 @@ import { isProviderShareAgentDeviceId } from '../../shared/providerShare.js';
 import type { InterruptedTurnErrorSignals } from '../maker-ipc/interruptedTurnAutoResume.js';
 import type { ProviderGroupBinding } from './bindings.js';
 import type { ProviderGroupDirectory } from './directory.js';
+import type { ProviderGroupGuestSwitch } from './guestSwitch.js';
 import {
   PROVIDER_GROUP_DEFAULT_COOLDOWN_MS,
   PROVIDER_GROUP_FAILURE_COOLDOWN_MS,
@@ -149,8 +150,13 @@ export interface ProviderGroupServiceDeps {
   switchAgentLocation(
     sessionId: string,
     route: { agentKind: AgentKind; model: string; providerId: string | null; agentDeviceId: string | null },
-    options?: { beforeSend?: boolean; isCurrent?: () => boolean },
+    /** `relocate`：位置不变也重新交接、新建会话(分享的人换电脑，实际运行的电脑由组所在电脑重新选)。 */
+    options?: { beforeSend?: boolean; isCurrent?: () => boolean; relocate?: boolean },
   ): Promise<void>;
+  /**
+   * 分享的人这边的「需要换一台」凭证(guestSwitch.ts)；不提供 = 分享来的供应商出错时一律交回原有处理。
+   */
+  guestSwitch?: Pick<ProviderGroupGuestSwitch, 'claim' | 'release' | 'drop'>;
   /** 这个任务现在是否正在运行一轮。 */
   isTurnRunning(sessionId: string): boolean;
   continueSession(
@@ -442,10 +448,44 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
     return { binding, source, config };
   }
 
+  /**
+   * 登记一次进行中的换电脑：用户在途中接手(重试、发消息、换模型)或那次错误已不是当前状态时，之后的每一步都停手。
+   * `handBack` 在不再换电脑时交回原有的报错与额度重置后自动继续；之前的交接若已关掉旧会话，换一个对当前状态
+   * 有效的令牌。
+   */
+  async function withSwitchRun(
+    sessionId: string,
+    signals: InterruptedTurnErrorSignals,
+    token: number,
+    lease: object,
+    body: (isCurrent: () => boolean, handBack: () => void) => Promise<void>,
+  ): Promise<void> {
+    const run = { superseded: false };
+    const runs = runningSwitches.get(sessionId) ?? new Set();
+    runs.add(run);
+    runningSwitches.set(sessionId, runs);
+    const isCurrent = () => !run.superseded && deps.isLeaseCurrent(sessionId, lease);
+    const handBack = () => {
+      if (!isCurrent()) return;
+      const fallbackToken = deps.leaseRecovery(sessionId, token) ? token : deps.rearmContinue(sessionId, lease, null);
+      if (fallbackToken !== null) deps.fallback(sessionId, signals, fallbackToken);
+    };
+    try {
+      await body(isCurrent, handBack);
+    } catch (error) {
+      deps.log.warn('provider group: automatic switch failed', { sessionId, error: errorText(error) });
+      handBack();
+    } finally {
+      runs.delete(run);
+      if (runs.size === 0 && runningSwitches.get(sessionId) === runs) runningSwitches.delete(sessionId);
+    }
+  }
+
   /** true = 已由本机制处理(含它自己交回原有处理)；false = 不归它管，调用方照常交回。 */
   async function failover(sessionId: string, signals: InterruptedTurnErrorSignals, token: number): Promise<boolean> {
     const cause = classifyProviderGroupSwitchCause(signals);
-    if (!cause || !deps.readBinding(sessionId)) return false;
+    if (!cause) return false;
+    if (!deps.readBinding(sessionId)) return guestFailover(sessionId, signals, token, cause);
     const bound = await loadBound(sessionId);
     if (!bound?.config?.autoSwitch) return false;
     const { binding, source, config } = bound;
@@ -457,29 +497,66 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
     // 交接会关闭旧会话(关闭撤销限额等待)：先取得这次错误的重试入口。用户已接手时什么都不做。
     const lease = deps.leaseRecovery(sessionId, token);
     if (!lease) return true;
-    // 用户在换电脑途中接手(重试、发消息、换模型)或那次错误已不是当前状态：之后的每一步都停手。
-    const run = { superseded: false };
-    const runs = runningSwitches.get(sessionId) ?? new Set();
-    runs.add(run);
-    runningSwitches.set(sessionId, runs);
-    const isCurrent = () => !run.superseded && deps.isLeaseCurrent(sessionId, lease);
-    // 不再换电脑时交回原有的报错与额度重置后自动继续；之前的交接若已关掉旧会话，换一个对当前状态有效的令牌。
-    const handBack = () => {
-      if (!isCurrent()) return;
-      const fallbackToken = deps.leaseRecovery(sessionId, token) ? token : deps.rearmContinue(sessionId, lease, null);
-      if (fallbackToken !== null) deps.fallback(sessionId, signals, fallbackToken);
-    };
-    try {
-      await switchUntilSettled({
-        sessionId, signals, cause, binding, source, config, row: { ...row, model: row.model }, current, lease, isCurrent, handBack,
-      });
-    } catch (error) {
-      deps.log.warn('provider group: automatic switch failed', { sessionId, error: errorText(error) });
-      handBack();
-    } finally {
-      runs.delete(run);
-      if (runs.size === 0 && runningSwitches.get(sessionId) === runs) runningSwitches.delete(sessionId);
+    const boundRow = { ...row, model: row.model };
+    await withSwitchRun(sessionId, signals, token, lease, (isCurrent, handBack) => switchUntilSettled({
+      sessionId, signals, cause, binding, source, config, row: boundRow, current, lease, isCurrent, handBack,
+    }));
+    return true;
+  }
+
+  /**
+   * 分享的人这边(§6.1)：任务用的是分享来的供应商，分享者把它建成了组，实际运行的电脑由组所在电脑选，本机不知道
+   * 是哪台。那台因电脑本身的原因失败时，组所在电脑先发来「需要换一台」凭证；本机交接(新建会话并带上交接上下文)
+   * 后带着凭证重新打开，组所在电脑据此换一台，再继续这一轮。没有凭证不换：分享被暂停、删除、撤权是分享本身的
+   * 问题，换到哪台都一样。
+   */
+  async function guestFailover(
+    sessionId: string,
+    signals: InterruptedTurnErrorSignals,
+    token: number,
+    cause: ProviderGroupSwitchCause,
+  ): Promise<boolean> {
+    const guestSwitch = deps.guestSwitch;
+    if (!guestSwitch) return false;
+    const row = await deps.readSessionRow(sessionId);
+    const shareRoute = row?.agentDeviceId;
+    if (!row?.model || row.remoteHostId || !shareRoute || !isProviderShareAgentDeviceId(shareRoute)) return false;
+    if (!(await deps.isFailoverEligible(sessionId))) return false;
+    if (!guestSwitch.claim(sessionId)) return false;
+    const lease = deps.leaseRecovery(sessionId, token);
+    if (!lease) {
+      guestSwitch.release(sessionId);
+      return true;
     }
+    const model = row.model;
+    await withSwitchRun(sessionId, signals, token, lease, async (isCurrent, handBack) => {
+      try {
+        // 位置仍是同一个分享：强制重新交接、新建会话，打开时带上凭证，由组所在电脑换一台。
+        await deps.switchAgentLocation(sessionId, {
+          agentKind: row.agentKind,
+          model,
+          providerId: row.providerId,
+          agentDeviceId: shareRoute,
+        }, { isCurrent, relocate: true });
+      } catch (error) {
+        guestSwitch.release(sessionId);
+        deps.log.info('provider group: switching computer for a shared task stopped', { sessionId, error: errorText(error) });
+        handBack();
+        return;
+      }
+      deps.log.info('provider group: switched computer for a shared task', { sessionId, cause });
+      if (!isCurrent()) return;
+      const continueToken = deps.rearmContinue(sessionId, lease, deps.now());
+      if (continueToken === null) return;
+      const outcome = await deps.continueSession(sessionId, continueToken, {
+        reason: USAGE_LIMIT_RESET_AUTO_RESUME_REASON,
+        attempt: 1,
+        maxAttempts: 1,
+        sessionTotal: 0,
+        groupSwitch: { cause },
+      });
+      if (outcome !== 'resumed') deps.cancelContinue(sessionId, continueToken);
+    });
     return true;
   }
 
@@ -774,6 +851,7 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
     noteUserAction(sessionId) {
       for (const run of runningSwitches.get(sessionId) ?? []) run.superseded = true;
       router.resetTurn(sessionId);
+      deps.guestSwitch?.drop(sessionId);
     },
   };
 }

@@ -7,6 +7,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { ProviderGroupConfig, ProviderGroupMember } from '../../../shared/providerGroup';
 import { createProviderGroupExternalLoad } from '../externalLoad';
 import { createProviderGroupGuestRelay, PROVIDER_GROUP_GUEST_INCAPABLE_MS } from '../guestRelay';
+import { PROVIDER_GROUP_MAX_REMOTE_COOLDOWN_MS } from '../remoteHandler';
 import { PROVIDER_GROUP_DEFAULT_COOLDOWN_MS, type ProviderGroupRouter } from '../router';
 
 function member(key: string, kind: ProviderGroupMember['kind'], agentDeviceId: string | null, providerId: string): ProviderGroupMember {
@@ -80,6 +81,43 @@ describe('provider group guest relay planner', () => {
       new Error('[REMOTE_AGENT_DEVICE_UNREACHABLE] gone'));
     expect(env.router.markCooling).toHaveBeenCalledWith('anthropic', MINI.key, expect.any(Number));
     expect(env.router.markCooling.mock.calls[0][2]).toBeLessThan(1_000 + PROVIDER_GROUP_DEFAULT_COOLDOWN_MS);
+  });
+
+  it('cools a computer whose relayed task failed mid-run for a reason of its own', () => {
+    const env = setup([MINI]);
+    const mini = { memberKey: MINI.key, agentDeviceId: 'mini', providerId: MINI.providerId, sameAccount: true };
+    // 换到哪台都一样的失败：不冷却，也不换。
+    expect(env.relay.noteRunFailure('anthropic', mini, { message: 'prompt is too long', sdkError: 'invalid_request' })).toBe(false);
+    expect(env.router.markCooling).not.toHaveBeenCalled();
+    expect(env.relay.noteRunFailure('anthropic', mini, { usageLimit: true, message: 'usage limit' })).toBe(true);
+    expect(env.router.markCooling).toHaveBeenLastCalledWith('anthropic', MINI.key, 1_000 + PROVIDER_GROUP_DEFAULT_COOLDOWN_MS);
+    expect(env.relay.noteRunFailure('anthropic', mini, { reason: 'remote_agent_closed' })).toBe(true);
+    expect(env.router.markCooling.mock.calls.at(-1)?.[2]).toBeLessThan(1_000 + PROVIDER_GROUP_DEFAULT_COOLDOWN_MS);
+    // 没有组的供应商，或那台已被移出组：不冷却、不换(成为普通的远程 Agent 任务)。
+    const calls = env.router.markCooling.mock.calls.length;
+    expect(env.relay.noteRunFailure('openai', mini, { usageLimit: true })).toBe(false);
+    expect(env.relay.noteRunFailure('anthropic', { ...mini, memberKey: 'device:gone:anthropic' }, { usageLimit: true })).toBe(false);
+    expect(env.router.markCooling.mock.calls.length).toBe(calls);
+  });
+
+  it('cools until the reported reset time, trusting it at most 8 days', () => {
+    const router = { markCooling: vi.fn() } as unknown as ProviderGroupRouter & { markCooling: ReturnType<typeof vi.fn> };
+    let resetAt = 1_000 + 3 * 60 * 60_000;
+    const relay = createProviderGroupGuestRelay({
+      router,
+      readGroup: () => CONFIG,
+      externalLoad: createProviderGroupExternalLoad({ now: () => 1_000 }),
+      connect: () => ({ invoke: vi.fn(), poller: {} as never }),
+      readResetAt: () => resetAt,
+      now: () => 1_000,
+      log: { warn: vi.fn() },
+    });
+    const mini = { memberKey: MINI.key, agentDeviceId: 'mini', providerId: MINI.providerId, sameAccount: true };
+    relay.noteRunFailure('anthropic', mini, { usageLimit: true });
+    expect(router.markCooling).toHaveBeenLastCalledWith('anthropic', MINI.key, resetAt);
+    resetAt = 1_000 + 30 * 24 * 60 * 60_000;
+    relay.noteRunFailure('anthropic', mini, { usageLimit: true });
+    expect(router.markCooling).toHaveBeenLastCalledWith('anthropic', MINI.key, 1_000 + PROVIDER_GROUP_MAX_REMOTE_COOLDOWN_MS);
   });
 
   it('counts relayed tasks while they run and asks computers to forget a shared user', async () => {

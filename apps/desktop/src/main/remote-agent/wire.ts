@@ -154,6 +154,14 @@ export interface RemoteAgentOpenPayload {
    * 隔离运行，会话记录与目录按(控制端, relay)分开。只发给 caps 声明了 guestRelay 的电脑。
    */
   relay?: string;
+  /**
+   * 任务所在电脑支持「需要换一台」(docs/product-rules/provider-groups.md §6.1 分享的人)：组所在电脑中转的
+   * 任务在组内电脑上因电脑本身的原因失败时，先在事件流里发一个 `providerGroupSwitch` 状态(一次性凭证)
+   * 再转出错误，任务所在电脑据此自动交接后重新打开。只有声明了的电脑才会收到这个状态。
+   */
+  acceptsGroupSwitch?: boolean;
+  /** 自动交接后重新打开时带回的那张一次性凭证：组所在电脑据此避开出问题的那台。 */
+  groupSwitchToken?: string;
   options: RemoteAgentWireStartOptions;
   workspace: RemoteAgentWireWorkspace;
   projectFiles: RemoteAgentWireFile[];
@@ -296,6 +304,10 @@ export function decodeOpenPayload(value: unknown): RemoteAgentOpenPayload {
     ...(value.virtualWorkspace === true ? { virtualWorkspace: true } : {}),
     ...(value.groupAssigned === true ? { groupAssigned: true } : {}),
     ...(typeof value.relay === 'string' && REMOTE_AGENT_RELAY_KEY_PATTERN.test(value.relay) ? { relay: value.relay } : {}),
+    ...(value.acceptsGroupSwitch === true ? { acceptsGroupSwitch: true } : {}),
+    ...(typeof value.groupSwitchToken === 'string' && REMOTE_AGENT_RELAY_KEY_PATTERN.test(value.groupSwitchToken)
+      ? { groupSwitchToken: value.groupSwitchToken }
+      : {}),
     options: decodeStartOptions(value.options),
     workspace: decodeWorkspace(value.workspace),
     projectFiles,

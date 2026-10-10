@@ -15,7 +15,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { RemoteAgentPoller } from '../controller/poller';
 import { RemoteAgentRunClient } from '../controller/runClient';
-import { relayKeyFor } from '../host/groupRelay';
+import { relayKeyFor, type RelayRunFailure } from '../host/groupRelay';
 import {
   createRemoteAgentHost,
   hostSessionIdFor,
@@ -35,6 +35,10 @@ let root: string;
 interface Started {
   input: HostedStartInput;
   sends: unknown[];
+  /** 让这台上的 Agent 发出一个事件。 */
+  emit(event: AgentEvent): void;
+  /** 这台上是否正在运行一轮(写进状态)。 */
+  running: boolean;
 }
 
 function fakeAgentHost(name: string, started: Started[], options: {
@@ -46,7 +50,18 @@ function fakeAgentHost(name: string, started: Started[], options: {
   return createRemoteAgentHost({
     isAgentAvailable: () => true,
     startHosted: async (input) => {
-      const record: Started = { input, sends: [] };
+      const queue: AgentEvent[] = [];
+      let wake: (() => void) | null = null;
+      const record: Started = {
+        input,
+        sends: [],
+        running: false,
+        emit(event) {
+          queue.push(event);
+          wake?.();
+          wake = null;
+        },
+      };
       started.push(record);
       const handle: AgentSessionHandle = {
         id: `sdk-${name}-${input.hostSessionId}`,
@@ -57,10 +72,14 @@ function fakeAgentHost(name: string, started: Started[], options: {
         },
         async steer() {},
         async abort() {},
+        isTurnRunning: () => record.running,
         async close() {},
         events: () => ({
           [Symbol.asyncIterator]: (): AsyncIterator<AgentEvent> => ({
-            next: () => new Promise<IteratorResult<AgentEvent>>(() => undefined),
+            next: async () => {
+              while (queue.length === 0) await new Promise<void>((resolve) => { wake = resolve; });
+              return { value: queue.shift()!, done: false };
+            },
           }),
         }),
         getUsageSnapshot: () => ({ tokenUsage: 0, contextTokens: 0, contextWindow: 0, costUsd: 0 }),
@@ -112,7 +131,11 @@ async function waitFor(condition: () => boolean, ms = 3_000): Promise<void> {
 const MEMBER_MINI: GroupRelayMember = { memberKey: 'device:mini:anthropic-2', agentDeviceId: 'mini', providerId: 'anthropic-2', sameAccount: true };
 const MEMBER_STUDIO: GroupRelayMember = { memberKey: 'device:studio:anthropic', agentDeviceId: 'studio', providerId: 'anthropic', sameAccount: true };
 
-function setup(options: { plans?: GroupRelayPlan[]; miniCapable?: boolean } = {}) {
+function setup(options: {
+  plans?: GroupRelayPlan[];
+  miniCapable?: boolean;
+  switchWorthy?: (failure: RelayRunFailure) => boolean;
+} = {}) {
   const memberStarted: Record<string, Started[]> = { mini: [], studio: [] };
   const members = {
     mini: fakeAgentHost('mini', memberStarted.mini, {
@@ -137,6 +160,8 @@ function setup(options: { plans?: GroupRelayPlan[]; miniCapable?: boolean } = {}
       return { invoke: poller.invoke, poller };
     }),
     noteStartFailure: vi.fn(),
+    noteRunFailure: vi.fn((_providerId: string, _member: GroupRelayMember, failure: RelayRunFailure) =>
+      options.switchWorthy?.(failure) ?? true),
     trackRun: vi.fn(() => ({ setRunning: vi.fn(), release: vi.fn() })),
     forget: vi.fn(async (agentDeviceId: string, relayKey: string) => {
       await memberInvoke(agentDeviceId)([{ op: 'forget', relay: relayKey }]);
@@ -168,15 +193,36 @@ function runId(): string {
 async function openAsGuest(env: ReturnType<typeof setup>, guest: string, payload: Record<string, unknown>) {
   const poller = new RemoteAgentPoller(async (args) => jsonRoundTrip(await env.owner.handle(guest, jsonRoundTrip(args[0]))));
   let counter = 0;
+  /** 受邀者按顺序收到的事件与状态。 */
+  const stream: Array<{ t: 'event'; event: AgentEvent } | { t: 'state'; state: Record<string, unknown> }> = [];
   const client = new RemoteAgentRunClient(runId(), poller, {
-    onEvent: () => undefined,
-    onState: () => undefined,
+    onEvent: (event) => {
+      stream.push({ t: 'event', event: event as AgentEvent });
+    },
+    onState: (state) => {
+      stream.push({ t: 'state', state });
+    },
     onRequest: async () => ({ type: 'callback', value: undefined }),
     onWs: () => undefined,
-    onClosed: () => undefined,
+    onClosed: (reason) => {
+      closedReason = reason;
+    },
   }, () => `22222222-2222-4222-8222-${String(++counter + runSeq * 100).padStart(12, '0')}`);
+  let closedReason: string | null = null;
   const started = await client.open('claude-code', payload);
-  return { client, started };
+  return { client, started, stream, isClosed: () => closedReason !== null };
+}
+
+const USAGE_LIMIT_ERROR: AgentEvent = {
+  type: 'error',
+  data: { message: 'You have hit your usage limit', isTerminal: true, usageLimit: true },
+} as AgentEvent;
+
+function switchTokenIn(stream: Awaited<ReturnType<typeof openAsGuest>>['stream']): string | undefined {
+  for (const item of stream) {
+    if (item.t === 'state' && typeof item.state.providerGroupSwitch === 'string') return item.state.providerGroupSwitch;
+  }
+  return undefined;
 }
 
 describe('provider group relay for shared users', () => {
@@ -290,5 +336,158 @@ describe('provider group relay for shared users', () => {
       .open('claude-code', openPayload('relayed-2', { relay: relayKeyFor(GUEST_A), options: { resumeSessionId: 'owner-native' } })))
       .rejects.toThrow(/cannot be resumed/);
     await client.close('close', 'navigation');
+  });
+});
+
+describe('provider group "switch to another computer" for shared users', () => {
+  it('sends the switch token before the error, and the reopened task avoids the failed computer', async () => {
+    const env = setup({
+      plans: [
+        { kind: 'member', ...MEMBER_MINI },
+        { kind: 'member', ...MEMBER_STUDIO },
+        { kind: 'member', ...MEMBER_STUDIO },
+      ],
+    });
+    const first = await openAsGuest(env, GUEST_A, openPayload(SESSION, { acceptsGroupSwitch: true }));
+    env.memberStarted.mini[0].emit(USAGE_LIMIT_ERROR);
+    await waitFor(() => first.stream.some((item) => item.t === 'event' && item.event.type === 'error'));
+    const token = switchTokenIn(first.stream);
+    expect(token).toMatch(/^[A-Za-z0-9_-]{16,64}$/);
+    const tokenAt = first.stream.findIndex((item) => item.t === 'state' && item.state.providerGroupSwitch === token);
+    const errorAt = first.stream.findIndex((item) => item.t === 'event' && item.event.type === 'error');
+    expect(tokenAt).toBeLessThan(errorAt);
+    expect(env.relay.noteRunFailure).toHaveBeenCalledWith(
+      'shared-provider',
+      MEMBER_MINI,
+      expect.objectContaining({ usageLimit: true, message: 'You have hit your usage limit' }),
+    );
+    expect(env.relay.plan).toHaveBeenLastCalledWith(expect.objectContaining({ exclude: new Set([MEMBER_MINI.memberKey]) }));
+    await first.client.close('close', 'navigation');
+
+    // 受邀者交接后带着凭证重新打开(全新会话)：组所在电脑避开出问题的那台。
+    const reopened = await openAsGuest(env, GUEST_A, openPayload(SESSION, { acceptsGroupSwitch: true, groupSwitchToken: token }));
+    expect(env.relay.plan).toHaveBeenLastCalledWith(expect.objectContaining({ exclude: new Set([MEMBER_MINI.memberKey]) }));
+    expect(env.memberStarted.studio).toHaveLength(1);
+    await reopened.client.close('close', 'navigation');
+  });
+
+  it('accepts a token only once, and only from the shared user and task it was sent to', async () => {
+    const env = setup({
+      plans: [
+        { kind: 'member', ...MEMBER_MINI },
+        { kind: 'member', ...MEMBER_STUDIO },
+        { kind: 'member', ...MEMBER_STUDIO },
+        { kind: 'member', ...MEMBER_STUDIO },
+        { kind: 'member', ...MEMBER_STUDIO },
+      ],
+    });
+    const first = await openAsGuest(env, GUEST_A, openPayload(SESSION, { acceptsGroupSwitch: true }));
+    env.memberStarted.mini[0].emit(USAGE_LIMIT_ERROR);
+    await waitFor(() => switchTokenIn(first.stream) !== undefined);
+    const token = switchTokenIn(first.stream)!;
+    await first.client.close('close', 'navigation');
+
+    const otherGuest = await openAsGuest(env, GUEST_B, openPayload(SESSION, { groupSwitchToken: token }));
+    expect(env.relay.plan).toHaveBeenLastCalledWith(expect.objectContaining({ exclude: new Set() }));
+    await otherGuest.client.close('close', 'navigation');
+    const otherTask = await openAsGuest(env, GUEST_A, openPayload('task-2', { groupSwitchToken: token }));
+    expect(env.relay.plan).toHaveBeenLastCalledWith(expect.objectContaining({ exclude: new Set() }));
+    await otherTask.client.close('close', 'navigation');
+
+    const used = await openAsGuest(env, GUEST_A, openPayload(SESSION, { groupSwitchToken: token }));
+    expect(env.relay.plan).toHaveBeenLastCalledWith(expect.objectContaining({ exclude: new Set([MEMBER_MINI.memberKey]) }));
+    await used.client.close('close', 'navigation');
+    const again = await openAsGuest(env, GUEST_A, openPayload(SESSION, { groupSwitchToken: token }));
+    expect(env.relay.plan).toHaveBeenLastCalledWith(expect.objectContaining({ exclude: new Set() }));
+    await again.client.close('close', 'navigation');
+  });
+
+  it('only forwards the original error to old shared users, or when the failure is not about the computer', async () => {
+    const env = setup({
+      plans: [{ kind: 'member', ...MEMBER_MINI }, { kind: 'member', ...MEMBER_MINI }],
+      switchWorthy: (failure) => failure.usageLimit === true,
+    });
+    const legacy = await openAsGuest(env, GUEST_A, openPayload(SESSION));
+    env.memberStarted.mini[0].emit(USAGE_LIMIT_ERROR);
+    await waitFor(() => legacy.stream.some((item) => item.t === 'event' && item.event.type === 'error'));
+    expect(switchTokenIn(legacy.stream)).toBeUndefined();
+    // 没声明的受邀者：那台照样按组的口径冷却。
+    expect(env.relay.noteRunFailure).toHaveBeenCalledTimes(1);
+    await legacy.client.close('close', 'navigation');
+
+    const declared = await openAsGuest(env, GUEST_B, openPayload(SESSION, { acceptsGroupSwitch: true }));
+    env.memberStarted.mini[1].emit({ type: 'error', data: { message: 'prompt is too long', isTerminal: true } } as AgentEvent);
+    await waitFor(() => declared.stream.some((item) => item.t === 'event' && item.event.type === 'error'));
+    expect(switchTokenIn(declared.stream)).toBeUndefined();
+    expect(env.relay.plan).toHaveBeenCalledTimes(2);
+    await declared.client.close('close', 'navigation');
+  });
+
+  it('also offers another computer when the group ran the task on the group computer itself', async () => {
+    const env = setup({ plans: [{ kind: 'local' }, { kind: 'member', ...MEMBER_MINI }, { kind: 'member', ...MEMBER_MINI }] });
+    const first = await openAsGuest(env, GUEST_A, openPayload(SESSION, { acceptsGroupSwitch: true }));
+    expect(env.ownerStarted).toHaveLength(1);
+    env.ownerStarted[0].emit(USAGE_LIMIT_ERROR);
+    await waitFor(() => first.stream.some((item) => item.t === 'event' && item.event.type === 'error'));
+    const token = switchTokenIn(first.stream);
+    expect(token).toBeDefined();
+    const tokenAt = first.stream.findIndex((item) => item.t === 'state' && item.state.providerGroupSwitch === token);
+    const errorAt = first.stream.findIndex((item) => item.t === 'event' && item.event.type === 'error');
+    expect(tokenAt).toBeLessThan(errorAt);
+    expect(env.relay.noteRunFailure).toHaveBeenCalledWith(
+      'shared-provider',
+      expect.objectContaining({ memberKey: 'local' }),
+      expect.objectContaining({ usageLimit: true }),
+    );
+    await first.client.close('close', 'navigation');
+
+    const reopened = await openAsGuest(env, GUEST_A, openPayload(SESSION, { acceptsGroupSwitch: true, groupSwitchToken: token }));
+    expect(env.relay.plan).toHaveBeenLastCalledWith(expect.objectContaining({ exclude: new Set(['local']) }));
+    expect(env.memberStarted.mini).toHaveLength(1);
+    await reopened.client.close('close', 'navigation');
+  });
+
+  it('offers another computer when the computer’s task ends unexpectedly in the middle of a turn', async () => {
+    const env = setup({ plans: [{ kind: 'member', ...MEMBER_MINI }, { kind: 'member', ...MEMBER_STUDIO }] });
+    const guest = await openAsGuest(env, GUEST_A, openPayload(SESSION, { acceptsGroupSwitch: true }));
+    const record = env.memberStarted.mini[0];
+    record.running = true;
+    record.emit({ type: 'text', data: { text: 'working' } } as AgentEvent);
+    await waitFor(() => guest.stream.some((item) => item.t === 'state' && item.state.turnRunning === true));
+    // 那台把组所在电脑的任务结束了(撤权、崩溃等)，不是正常收尾。
+    await env.members.mini.purgeControllers((controller) => controller === OWNER_DEVICE);
+    await waitFor(() => guest.isClosed());
+    expect(switchTokenIn(guest.stream)).toMatch(/^[A-Za-z0-9_-]{16,64}$/);
+    expect(env.relay.noteRunFailure).toHaveBeenCalledWith(
+      'shared-provider',
+      MEMBER_MINI,
+      expect.objectContaining({ reason: 'remote_agent_closed' }),
+    );
+  });
+
+  it('stops offering once every computer has been tried this round', async () => {
+    const env = setup({
+      plans: [
+        { kind: 'member', ...MEMBER_MINI },
+        { kind: 'member', ...MEMBER_STUDIO },
+        { kind: 'member', ...MEMBER_STUDIO },
+        { kind: 'unavailable' },
+      ],
+    });
+    const first = await openAsGuest(env, GUEST_A, openPayload(SESSION, { acceptsGroupSwitch: true }));
+    env.memberStarted.mini[0].emit(USAGE_LIMIT_ERROR);
+    await waitFor(() => switchTokenIn(first.stream) !== undefined);
+    await first.client.close('close', 'navigation');
+    const second = await openAsGuest(env, GUEST_A, openPayload(SESSION, {
+      acceptsGroupSwitch: true,
+      groupSwitchToken: switchTokenIn(first.stream),
+    }));
+    env.memberStarted.studio[0].emit(USAGE_LIMIT_ERROR);
+    await waitFor(() => second.stream.some((item) => item.t === 'event' && item.event.type === 'error'));
+    expect(env.relay.plan).toHaveBeenLastCalledWith(expect.objectContaining({
+      exclude: new Set([MEMBER_MINI.memberKey, MEMBER_STUDIO.memberKey]),
+    }));
+    expect(switchTokenIn(second.stream)).toBeUndefined();
+    await second.client.close('close', 'navigation');
   });
 });
