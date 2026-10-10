@@ -50,6 +50,7 @@ export function createBotModelRouteReconciler(deps: {
   ownerEpoch(): string;
   withSessionLock?<T>(sessionId: string, run: () => Promise<T>): Promise<T>;
   read(sessionId: string, purpose: 'apply' | 'preview'): Promise<BotRouteState | null>;
+  validate?(route: RuntimeRoute): Promise<void>;
   apply(sessionId: string, route: RuntimeRoute, current: RuntimeRoute): Promise<void>;
 }) {
   let owner: string | undefined;
@@ -91,6 +92,15 @@ export function createBotModelRouteReconciler(deps: {
           return;
         }
         const current = state.current;
+        try {
+          await deps.validate?.(route);
+        } catch (error) {
+          if (deps.ownerEpoch() !== epoch) throw new Error('Bot model route owner changed');
+          if ((revisions.get(sessionId) ?? 0) !== revision) continue;
+          throw error;
+        }
+        if (deps.ownerEpoch() !== epoch) throw new Error('Bot model route owner changed');
+        if ((revisions.get(sessionId) ?? 0) !== revision) continue;
         if (!sameRoute(route, current) || (state.next && !sameRoute(route, state.next))) {
           try {
             await deps.apply(sessionId, route, state.current);

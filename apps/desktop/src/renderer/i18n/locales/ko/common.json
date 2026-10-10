@@ -8143,6 +8143,10 @@
     }
   },
   "bots": {
+    "modelConfiguration": {
+      "effortUnavailable": "{{model}}의 추론 강도가 설정되지 않았거나 더 이상 지원되지 않습니다. 동료 설정 → 모델에서 지원되는 추론 강도를 선택하고 저장한 후 대기 중인 메시지를 다시 시도하세요.",
+      "fastUnavailable": "{{model}}에서 Fast가 더 이상 지원되지 않습니다. 동료 설정 → 모델에서 Fast를 끄고 저장한 후 대기 중인 메시지를 다시 시도하세요."
+    },
     "workbench": {
       "title": "작업대",
       "open": "워크벤치 열기",

@@ -8143,6 +8143,10 @@
     }
   },
   "bots": {
+    "modelConfiguration": {
+      "effortUnavailable": "{{model}} 的推理強度未設定或已不再支援。請開啟夥伴設定 → 模型，選擇有效檔位並儲存，再重試待傳送訊息",
+      "fastUnavailable": "{{model}} 已不支援 Fast。請開啟夥伴設定 → 模型，關閉 Fast 並儲存，再重試待傳送訊息"
+    },
     "workbench": {
       "title": "工作台",
       "open": "打開工作台",

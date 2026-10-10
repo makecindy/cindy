@@ -422,9 +422,14 @@ export function resolveSessionRuntimeAxes(params: {
   effortExplicit: boolean;
   fastExplicit: boolean;
   allowFixedEffortPlaceholder?: boolean;
+  /** Explicit selections cannot omit an effort when the target offers one. */
+  requireEffort?: boolean;
 }):
   | { ok: true; effort: Effort | null; fastMode: boolean }
   | { ok: false; reason: 'effort-unavailable' | 'fast-unavailable' } {
+  if (params.requireEffort && params.effort === null && params.model.efforts.length > 0) {
+    return { ok: false, reason: 'effort-unavailable' };
+  }
   if (
     params.effortExplicit &&
     params.effort !== null &&

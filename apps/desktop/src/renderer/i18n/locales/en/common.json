@@ -8152,6 +8152,10 @@
     }
   },
   "bots": {
+    "modelConfiguration": {
+      "effortUnavailable": "The reasoning effort for {{model}} is missing or no longer supported. Open Teammate Settings → Models, select a supported effort, save, then retry the queued message.",
+      "fastUnavailable": "Fast is no longer supported for {{model}}. Open Teammate Settings → Models, turn off Fast, save, then retry the queued message."
+    },
     "workbench": {
       "title": "Workbench",
       "open": "Open workbench",

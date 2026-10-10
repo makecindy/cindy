@@ -23,6 +23,7 @@ import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BOT_TEMPLATE_PRESET_IDENTITIES } from '../../../../shared/botTemplatePreset';
 import { normalizeWorkingDirForStorage } from '../../../../shared/workingDir';
 import { createBotModelRouteReconciler } from '../../../maker-ipc/botModelRouteReconciler';
+import { validateBotModelSelections } from '../../../maker-ipc/botModelSelectionValidation';
 import type { BotModelRoute } from '../../../../shared/botModelChain';
 import type { AgentKind } from '@cindy/maker-core';
 import { createBotCapabilityService, type BotCapabilityServiceDeps, type BotCapabilityUpdate } from '../../../maker-ipc/botCapabilityService';
@@ -1365,7 +1366,7 @@ describe('Bot canonical Session lifecycle', () => {
   ])('keeps automatic review on the %s canonical task', async (harness, model) => {
     const profile = await invoke('local-db:bots:create', {
       id: `auto-${harness}`, name: 'Auto review companion',
-      capabilities: { harness, model, permissions: 'auto' },
+      capabilities: { harness, model, effort: 'high', permissions: 'auto' },
     });
     const created = await invoke('local-db:bots:create-canonical-session', {
       botId: profile.id, expectedCanonicalSessionId: null, expectedProfileVersion: 1,
@@ -8856,6 +8857,136 @@ describe('Teammate model selection shares profile persistence and route reconcil
       service: createBotCapabilityService(capabilityDeps),
       id: JSON.stringify(['pi', 'xd', model.id]), model };
   }
+
+  it('rejects an empty explicit effort at the shared profile save boundary before changing the profile', async () => {
+    const { model } = await setupModelControl();
+    const before = await invoke('local-db:bots:get', 'bot-1');
+    await expect(invoke('local-db:bots:update', { id: 'bot-1', capabilities: {
+      modelChainOverride: [{ harness: 'pi', providerId: 'xd', model: model.id, effort: '', fastMode: false }],
+    } })).rejects.toThrow('[INVALID_PARAMS]');
+    expect(await invoke('local-db:bots:get', 'bot-1')).toEqual(before);
+  });
+
+  it('rejects an empty effort from the teammate tool before persisting its model chain', async () => {
+    const { service, sessionId, id } = await setupModelControl();
+    const before = await invoke('local-db:bots:get', 'bot-1');
+    expect(await service.updateProfile({ callerSessionId: sessionId, expectedVersion: 1,
+      modelChain: [{ id, effort: '', fastMode: false }] })).toMatchObject({ ok: false });
+    expect(await invoke('local-db:bots:get', 'bot-1')).toEqual(before);
+  });
+
+  it.each([{}, { permissions: 'ask' }, { modelChainOverride: null }, { modelOverride: null }])(
+    'creates a profile without validating an inherited obsolete global route: %j', async capabilities => {
+      const { model } = await setupModelControl();
+      const route: BotModelRoute = { harness: 'pi', providerId: 'xd', model: model.id, effort: 'high', fastMode: false };
+      await invoke('local-db:bots:model-chain-settings-set', { modelChain: [route] });
+      model.efforts = ['low'];
+      try {
+        const created = await invoke('local-db:bots:create', { id: 'inherited-route', name: 'Inherited route', capabilities });
+        expect(created.id).toBe('inherited-route');
+        expect(created.capabilities.modelChainOverride ?? null).toBeNull();
+        expect(await modelSettings.readEffectiveBotModelChain(created.capabilities)).toEqual([route]);
+        // Creation does not repair or make the obsolete inherited route valid for sending.
+        await expect(validateBotModelSelections([route])).rejects.toThrow('[INVALID_PARAMS]');
+      } finally {
+        await invoke('local-db:bots:model-chain-settings-reset', undefined);
+      }
+    },
+  );
+
+  it.each(['modelChainOverride', 'modelChain', 'legacy'] as const)(
+    'rejects an explicitly selected invalid creation route in %s', async selection => {
+      const { model } = await setupModelControl();
+      const route: BotModelRoute = { harness: 'pi', providerId: 'xd', model: model.id, effort: '', fastMode: false };
+      const capabilities = selection === 'legacy' ? route : { [selection]: [route] };
+      await expect(invoke('local-db:bots:create', { id: 'invalid-route', name: 'Invalid route', capabilities }))
+        .rejects.toThrow('[INVALID_PARAMS]');
+      expect(h.sqlite!.prepare('SELECT id FROM bot_profiles WHERE id = ?').get('invalid-route')).toBeUndefined();
+    },
+  );
+
+  it('keeps restored messages in order until the legacy profile is explicitly repaired through remote save', async () => {
+    const { sessionId, model } = await setupModelControl();
+    model.efforts = ['medium'];
+    model.defaultEffort = 'medium';
+    const route: BotModelRoute = { harness: 'pi', providerId: 'xd', model: model.id, effort: '', fastMode: false };
+    const before = await invoke('local-db:bots:get', 'bot-1');
+    const legacy = { ...before.capabilities, modelChainOverride: [route] };
+    // Historical state cannot be created by the repaired save boundary.
+    h.sqlite!.prepare('UPDATE bot_profile_versions SET capabilities_json = ? WHERE bot_id = ? AND version = 1')
+      .run(JSON.stringify(legacy), 'bot-1');
+    h.sqlite!.prepare('UPDATE sessions SET model = ?, provider_id = ?, effort = ? WHERE id = ?')
+      .run(model.id, 'xd', 'medium', sessionId);
+    const apply = vi.fn(async () => {});
+    const reconcile = createBotModelRouteReconciler({
+      ownerEpoch: () => h.ownerScopeKey,
+      read: async () => {
+        const profile = await invoke('local-db:bots:get', 'bot-1');
+        return { chain: await modelSettings.readEffectiveBotModelChain(profile.capabilities),
+          current: { agentKind: 'pi' as const, model: model.id, providerId: 'xd', effort: 'medium', fastMode: false },
+          hasRuntimeOverride: false };
+      },
+      validate: selected => validateBotModelSelections([{ ...route, effort: selected.effort ?? '' }]),
+      apply,
+    });
+    const pending = ['first', 'second'].map(clientId => ({
+      clientId, text: clientId, persistedContent: clientId, model: model.id, effort: 'medium',
+      permissionMode: 'default', workingDir: h.userDataDir,
+      chatMessage: { clientId, role: 'user', content: clientId, isStreaming: false, createdAt: new Date().toISOString() },
+      createOpts: { agentKind: 'pi', workingDir: h.userDataDir, model: model.id, effort: 'medium',
+        permissionMode: 'default', userPrompt: '', makerMemoryEnabled: true, displayReasoning: 'summarized' },
+    } as AgentInputQueuedMessage));
+    let snapshot = structuredClone(pending);
+    let running = false;
+    const sent: string[] = [];
+    const coordinator = new AgentInputCoordinator({
+      isTurnRunning: () => running, hasPendingInteraction: () => false,
+      getAgentKind: () => 'pi', getSdkSessionId: async () => undefined,
+      emitProjection: () => {}, steerToAgent: async () => {}, abortSession: async () => {},
+      loadQueueSnapshot: async () => snapshot,
+      getPersistedClientIds: async () => new Set(),
+      persistQueueSnapshot: (_id, items) => { snapshot = structuredClone(items); },
+      sendToAgent: async (id, _message, _options, sendOptions) => {
+        await reconcile(id);
+        const persisted = sendOptions.persistUserMessage!;
+        sent.push(persisted.clientId);
+        await persisted.onPersisted?.();
+        running = true;
+        return { kind: 'session-dispatch', source: 'test', dispatched: true };
+      },
+    });
+    await coordinator.ensureQueueRestored(sessionId);
+    expect(coordinator.getProjection(sessionId).queuePaused).toBe(true);
+    coordinator.resume(sessionId);
+    await vi.waitFor(() => expect(coordinator.getProjection(sessionId).error).toContain('[INVALID_PARAMS]'));
+    expect(snapshot.map(item => item.clientId)).toEqual(['first', 'second']);
+    expect(sent).toEqual([]);
+    expect(apply).not.toHaveBeenCalled();
+    // Reading settings and editing unrelated profile fields must remain possible.
+    await invoke('local-db:bots:update', { id: 'bot-1', description: 'Still editable', capabilities: legacy });
+    await runDeviceLinkInvokeContext({ controllerDeviceId: 'phone', channel: 'local-db:bots:update' }, () =>
+      invoke('local-db:bots:update', { id: 'bot-1', capabilities: { modelChainOverride: [{ ...route, effort: 'medium' }] } }));
+    await coordinator.retryLastError(sessionId);
+    await vi.waitFor(() => expect(sent).toEqual(['first']));
+    running = false;
+    coordinator.onTurnEvent(sessionId, 'done');
+    await vi.waitFor(() => expect(sent).toEqual(['first', 'second']));
+    running = false;
+    coordinator.onTurnEvent(sessionId, 'done');
+    expect((await invoke('local-db:bots:get', 'bot-1')).canonicalSessionId).toBe(sessionId);
+    expect(snapshot).toEqual([]);
+  });
+
+  it('allows a supported empty-effort model and blocks an empty adjustable global chain', async () => {
+    const { model } = await setupModelControl();
+    const route: BotModelRoute = { harness: 'pi', providerId: 'xd', model: model.id, effort: '', fastMode: false };
+    await expect(invoke('local-db:bots:model-chain-settings-set', { modelChain: [route] })).rejects.toThrow('[INVALID_PARAMS]');
+    model.efforts = [];
+    model.defaultEffort = null;
+    await expect(invoke('local-db:bots:update', { id: 'bot-1', capabilities: { modelChainOverride: [route] } })).resolves.toBeDefined();
+    await expect(invoke('local-db:bots:model-chain-settings-set', { modelChain: [route] })).resolves.toMatchObject({ modelChain: [route] });
+    await invoke('local-db:bots:model-chain-settings-reset', undefined);
+  });
 
   it('saves only its own explicit model chain, applies it through the send resolver, and resets to the live default', async () => {
     const { service, sessionId, id } = await setupModelControl();

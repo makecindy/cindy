@@ -81,6 +81,7 @@ import {
 } from '../../../shared/botDefaults.js';
 import { normalizeBotModelChain, readBotTaskModelOverride } from '../../../shared/botModelChain.js';
 import { validateTaskModel } from '../../maker-ipc/appDefaultModelControl.js';
+import { validateBotModelSelections } from '../../maker-ipc/botModelSelectionValidation.js';
 import {
   activeOwnerScopeKey,
   isAppSessionBoundaryPending,
@@ -1356,6 +1357,17 @@ export async function createBotProfile(raw: unknown) {
     userContextSource,
     ...(gender ? { gender } : {}),
   });
+  if (hasRequestedCapabilities) {
+    // Validate only a model choice submitted with this creation request. An
+    // inherited global route may be obsolete, but must not block profile creation.
+    const submittedChain = Array.isArray(persistedCapabilities.modelChainOverride)
+      ? normalizeBotModelChain(persistedCapabilities.modelChainOverride)
+      : persistedCapabilities.modelChainOverride !== null && persistedCapabilities.modelOverride !== null
+        ? normalizeBotModelChain(persistedCapabilities.modelChain, persistedCapabilities)
+        : [];
+    await validateBotModelSelections(submittedChain);
+    assertCreationOwnerStillCurrent();
+  }
   // Progress is main-owned; callers can request an invitation, never supply its result.
   delete persistedCapabilities.invitation;
   delete persistedCapabilities.templateId;
@@ -1544,6 +1556,12 @@ export async function updateBotProfile(raw: unknown, expectedVersion?: number,
     else delete nextConfig.gender;
   }
   const normalizedNextConfig = normalizeBotModelCapabilitiesOrThrow(nextConfig);
+  // Full-form autosaves may echo an old invalid route while editing identity or
+  // capabilities. Only a changed model selection admits new runtime settings.
+  if (botProfileModelSelectionChanged(normalizeBotModelCapabilitiesOrThrow(previous), normalizedNextConfig)) {
+    await validateBotModelSelections(await readEffectiveBotModelChain(normalizedNextConfig));
+    owner.assertCurrent();
+  }
   if (JSON.stringify(previous.taskModelOverride ?? null) !== JSON.stringify(normalizedNextConfig.taskModelOverride ?? null)) {
     const taskModel = readBotTaskModelOverride(normalizedNextConfig.taskModelOverride);
     if (taskModel && !await validateTaskModel(taskModel)) {
@@ -1679,6 +1697,9 @@ export function registerBotIpc(): void {
     assertTrustedAppRendererEvent(event);
     const body =
       raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
+    const owner = captureBotOperationOwner();
+    await validateBotModelSelections(normalizeBotModelChain(body.modelChain));
+    owner.assertCurrent();
     const state = await writeBotModelChainSettings(body.modelChain);
     return { modelChain: state.value.modelChain, isCustomized: state.isCustomized };
   });

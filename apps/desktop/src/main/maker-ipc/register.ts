@@ -475,6 +475,7 @@ import {
 } from '../localDb/schema.js';
 import { nextBotModelRoute, normalizeBotModelChain } from '../../shared/botModelChain.js';
 import { createBotModelRouteReconciler } from './botModelRouteReconciler.js';
+import { validateBotModelSelections } from './botModelSelectionValidation.js';
 import { readEffectiveBotModelChain, readEffectiveBotModelSelection } from '../maker-host/bot-model-chain-settings-store.js';
 import {
   isOrcaWorkerPermissionMode,
@@ -13912,6 +13913,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   const reconcileBotModelRoute = createBotModelRouteReconciler({
     ownerEpoch: captureSessionRuntimeControlOwnerEpoch,
     withSessionLock: withSendToSessionLock,
+    validate: route => validateBotModelSelections([{
+      harness: route.agentKind === 'claude-code' ? 'claude' : route.agentKind,
+      model: route.model, providerId: route.providerId, effort: route.effort ?? '', fastMode: route.fastMode,
+    }]),
     read: async (sessionId, purpose) => {
       const [row] = await getDbClient().drizzle.select({
         capabilitiesJson: botProfileVersions.capabilitiesJson,
@@ -19413,15 +19418,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             `model "${model}" is unavailable from provider "${actualProviderId ?? 'default'}"`,
           );
         }
-        if (
-          internalOptions.source === 'user' &&
-          atomicSelection.effort === null &&
-          catalogModel.efforts.length > 0
-        ) {
-          throwIpcError('INVALID_PARAMS', `effort "null" is unavailable for model "${model}"`);
-        }
         const axes = resolveSessionRuntimeAxes({
           model: catalogModel,
+          requireEffort: internalOptions.source === 'user',
           effort: atomicSelection.effort,
           fastMode: atomicSelection.fastMode,
           // 配置跟随(IM 渠道默认跟随 / 伙伴模型对齐)带的是**任务已有的**档位/Fast

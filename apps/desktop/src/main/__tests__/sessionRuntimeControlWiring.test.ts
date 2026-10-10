@@ -360,7 +360,7 @@ describe('session runtime control wiring', () => {
     );
     const confirmation = setModel.indexOf('const confirmedContextWindow =');
     const selectionValidation = setModel.indexOf('!isSupportedRuntimeEffort(selectionEffort)');
-    const fixedEffortValidation = setModel.indexOf('atomicSelection.effort === null');
+    const fixedEffortValidation = setModel.indexOf("requireEffort: internalOptions.source === 'user'");
     const prepare = setModel.indexOf('prepareModelWindowSwitch(');
     const apply = setModel.indexOf('applyRuntimeSetModelChange({');
 
@@ -372,9 +372,8 @@ describe('session runtime control wiring', () => {
     expect(setModel).not.toContain(
       "selectionEffort === null &&\n            (internalOptions.source !== 'user' ||\n              isDeviceLinkInvoke() ||\n              confirmedContextWindow !== undefined)",
     );
-    expect(setModel).toContain('catalogModel.efforts.length > 0');
     expect(setModel).toContain(
-      "internalOptions.source === 'user' &&\n          atomicSelection.effort === null &&\n          catalogModel.efforts.length > 0",
+      "requireEffort: internalOptions.source === 'user'",
     );
     expect(fixedEffortValidation).toBeGreaterThan(selectionValidation);
     expect(fixedEffortValidation).toBeLessThan(prepare);
@@ -464,7 +463,7 @@ describe('session runtime control wiring', () => {
       normalWakeGuard,
     );
 
-    expect(setModel).toContain('atomicSelection.effort === null');
+    expect(setModel).toContain("requireEffort: internalOptions.source === 'user'");
     expect(setModel).toContain('isDeviceLinkInvoke() ||');
     expect(setModel).toContain("(atomicSelection?.effort === null && runtimeAgentKind !== 'pi')");
     expect(setModel).toContain('!rebuildLiveOrcaWorker && !atomicSelection');
