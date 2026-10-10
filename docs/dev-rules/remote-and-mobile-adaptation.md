@@ -83,6 +83,18 @@ relay 以 close 1013 `inbound backpressure` 主动断连，此时任何「立即
    12 个在途配额；被控端连续立即返回空结果时控制端放慢到 1s 一次，防止空转。2 台控制端共享被控端、
    其中一台静默的回归仍需在双实例实机验证中补测。
 
+**托管 Codex 的关键线程 RPC**(#5764)：Agent 所在电脑上的 Codex 经 exec-server 逐个读任务所在电脑的
+项目说明与 Skill，`thread/start` 实测约 35 轮串行往返，耗时 ≈ 轮数 × 链路往返，慢链路下合法地超过
+`CRITICAL_THREAD_RPC_TIMEOUT_MS`(60s)。`thread/start`、`thread/resume`、`turn/start` 因此在任务隧道
+还有往来(Agent 发出的 exec-server 消息、执行环境的回复或 Cindy 工具请求；执行环境主动推的后台命令
+输出不算，Agent 卡住时它照样会来)时顺延，隧道连续 30s 没有往来或从发出起满 5 分钟仍按超时收口；
+没有往来记录的会话(非托管、旧接线)保持固定 60s。只作用于这一个任务的这一次等待，不重试、不重放、
+不动 link 与其它任务。诊断：超时错误末尾带 exec-server 请求/回复数、最早未回复请求与等待时长、
+往返均值与峰值、最近一次往来距今多久(Agent 所在电脑的隧道记录，`host/linkActivity.ts`)；任务所在
+电脑的中继在首次回推超过 2s 时记一条日志，任务结束时有慢回推或闸门拒绝再记汇总
+(`controller/execServerRelay.ts`)。回归见 `codex/app-server/client.test.ts`、
+`codex/__tests__/device-hosted-guest.test.ts` 与 `remote-agent/__tests__/linkActivity.test.ts`。
+
 ## 协同远端 Worker 的轮询与恢复
 
 协议见 [`protocol-compatibility.md`](protocol-compatibility.md)「协同远端 Worker」，实现见

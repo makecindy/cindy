@@ -22,7 +22,7 @@ interface FakeHistoryMessage {
   clientId?: string;
   role: 'user' | 'assistant';
   content: unknown;
-  agentMeta?: { parentUuid: string };
+  agentMeta?: { parentUuid?: string; autoResume?: boolean };
 }
 
 interface FakeDevice {
@@ -320,6 +320,21 @@ describe('orca remote worker runtime', () => {
     await runtime.pollNow();
     expect(deps.onTurnEnded).toHaveBeenCalledWith('proxy-1', { status: 'done', finalText: 'Second reply' });
     expect(deps.saveReport).toHaveBeenCalledWith('worker-1', null, 'reply-2');
+  });
+
+  it('reports the reply after an automatic continue (usage reset or provider group switch) as the Lead result', async () => {
+    const { runtime, deps, state } = setup({ history: [] });
+    await runtime.dispatch({ proxySessionId: 'proxy-1', rawContent: 'Lead task', clientId: 'c-1' });
+    state.receipts['c-1'] = 'accepted';
+    state.history = [
+      { id: 'lead-input', clientId: 'c-1', role: 'user', content: 'Lead task' },
+      { id: 'partial', role: 'assistant', content: 'Half done' },
+      { id: 'continue', clientId: 'auto-1', role: 'user', content: 'Continue', agentMeta: { autoResume: true } },
+      { id: 'final', role: 'assistant', content: 'Finished on another computer' },
+    ];
+    await runtime.pollNow();
+    expect(deps.onTurnEnded).toHaveBeenCalledWith('proxy-1', { status: 'done', finalText: 'Finished on another computer' });
+    expect(deps.saveReport).toHaveBeenCalledWith('worker-1', null, 'final');
   });
 
   it('retains a new dispatch accepted while reading the previous reply', async () => {

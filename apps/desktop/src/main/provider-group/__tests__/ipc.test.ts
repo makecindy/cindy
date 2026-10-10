@@ -57,6 +57,27 @@ describe('parseProviderGroupCommand', () => {
     expect(() => parseProviderGroupCommand({ action: 'save', providerId: 'anthropic' })).toThrow();
     expect(parseProviderGroupCommand({ action: 'get', providerId: 'anthropic' })).toEqual({ action: 'get', providerId: 'anthropic' });
   });
+
+  it('accepts listing this computer’s groups and reading a group on another computer', () => {
+    expect(parseProviderGroupCommand({ action: 'list' })).toEqual({ action: 'list' });
+    expect(parseProviderGroupCommand({ action: 'remote-view', providerId: 'anthropic', deviceId: 'mini' }))
+      .toEqual({ action: 'remote-view', providerId: 'anthropic', deviceId: 'mini' });
+    expect(() => parseProviderGroupCommand({ action: 'remote-view', providerId: 'anthropic' })).toThrow();
+    expect(() => parseProviderGroupCommand({ action: 'remote-view', providerId: 'anthropic', deviceId: 'bad id' })).toThrow();
+  });
+});
+
+describe('executeProviderGroupCommand reads', () => {
+  it('lists local groups without touching the network and forwards remote views', async () => {
+    const d = deps([]);
+    const listGroups = vi.fn(() => ({ anthropic: { strategy: 'least', autoSwitch: true, members: [] } }));
+    const remoteView = vi.fn(async () => ({ providerId: 'anthropic', config: null, members: [] }));
+    Object.assign(d, { listGroups, remoteView });
+    expect(await executeProviderGroupCommand(d, { action: 'list' })).toEqual({ anthropic: expect.any(Object) });
+    expect(d.router.view).not.toHaveBeenCalled();
+    await executeProviderGroupCommand(d, { action: 'remote-view', providerId: 'anthropic', deviceId: 'mini' });
+    expect(remoteView).toHaveBeenCalledWith('mini', 'anthropic');
+  });
 });
 
 describe('executeProviderGroupCommand save', () => {

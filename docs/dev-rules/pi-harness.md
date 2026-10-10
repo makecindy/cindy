@@ -331,6 +331,24 @@ Pi CLI 管理入口、内核自更新与旧工具兼容的执行边界见
 - provider idle、进程退出、事件流结束都不是成功证明。Session 用已有 turn generation／
   control 判断未结算工作，保留缺终态时的有界 watchdog；已送达的成功终态不能被后续退出
   改判成失败，provider continuation claim 也不能被当作最终结束。
+- 本机 stdio 的 stdout EOF／关闭／错误或 stdin 错误是明确 RPC 失联，不等同于
+  正常长工具静默，也不是进程退出证明。EOF 的写栅栏先于 JSONL reader 的无换行尾帧
+  flush 生效，尾帧不得再写响应或启动 Host 包 mutation。在 250ms 退出确认窗口内
+  继续读取已写出的 stdout 尾帧；未确认退出且轮次仍未结算时才报 `pi-rpc-disconnected`，
+  工具结果保持未知。待开始的新 prompt 不继承上一轮 retry 耗尽的终态判重标记；
+  窗口内 Stop 仍登记对应 generation 的取消意图，不向失联管道写 abort。
+  已收到的 settled 成功结果、最终正文与用量不改判。管道失联／关闭中的 executor
+  即使已送达成功或取消尾帧，也保持 Session 下一轮准入关闭，直到退出或显式 close
+  完成；用户跟发与 Host 续跑沿用既有排队／重建流程。此清理栅栏不是 steer 准入：
+  steer 在准备前、异步准备后和串行 RPC 边界检查可用性，Host 包 mutation 不得先行。
+  已 settled 的不可用 turn 用既有 `NO_ACTIVE_TURN` 路径回到普通排队／重建；仍未结算
+  的 turn 保留失联失败，不仅凭断管道宣称已结束。派发准备或串行 RPC 等待后
+  若已确定管道不可用且未接受任何工作，按未派发拒绝，不伪报接受结果未知；pending
+  轮次标记仅在实际 prompt RPC 边界登记。已完成的 Host 包 mutation 不退回可重放状态。
+  复用原退出确认流程退役 root Pi，不重放输入、不重跑构建、不杀后代进程树；
+  退出未确认时仍保留进程登记和 runtime 文件。SSH daemon 断链保活语义不变。
+  缺 settled 但 RPC 仍通的情况仍走已有有界 watchdog，丢失工具结果不伪造。
+  回归见 `pi-long-tool-lifecycle.test.ts`、`transport.test.ts` 与 `rpc-client.test.ts`。
 - Pi 的 `Request was aborted` 只在无当前 generation 的 Host Stop 时归入请求断流失败；
   无错误正文的 bare abort 仍保持取消。复用既有错误收口及重试预算，不重放包命令或工具。
 - Pi 未归类的缺码临时服务故障（如 `Service temporarily unavailable` 或明确的模型

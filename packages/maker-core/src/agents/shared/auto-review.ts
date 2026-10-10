@@ -1577,8 +1577,11 @@ function stripDataLiterals(command: string): string {
     );
 }
 
-const ALWAYS_ASK_PATTERNS: readonly RegExp[] = [
-  /\b(?:sudo|doas|runuser)\b/,                           // 提权(runuser 名字独特,直接词界)
+/**
+ * 读取或打出可复用凭证的确定性红线(ALWAYS_ASK_PATTERNS 的子集)。单独成表：供应商分享的受邀者
+ * 任务在完全访问下也要确认这一类(shellCommandReadsCredentials)。
+ */
+const CREDENTIAL_ALWAYS_ASK_PATTERNS: readonly RegExp[] = [
   // `--show-token` = 把**可复用的凭证**打进 stdout,从而进模型上下文与会话记录。等同于
   // 读凭证文件,按凭证同级作**确定性必问** —— 只把它挡在 gh 只读白名单外还不够:落灰区
   // 意味着可能被轻量审阅器静默放行(`gh auth status` 看起来就是一条状态查询)。
@@ -1600,11 +1603,19 @@ const ALWAYS_ASK_PATTERNS: readonly RegExp[] = [
   // 而原来的 `(?![\w=-])` 把等号形态排除在外,令牌仍会被打进模型上下文(review 报)。
   // 命令位判据用 `(?:^|[\s|&;(])` 而不是 `(?:^|\s)`:分隔符后可以不带空格
   // (`ls;gh auth token`、`ls&&gh auth token`、`(gh auth token)`),而分段之后不会再重扫
-  // 确定性红线 —— 只认空白等于给一个删空格就绕过的口子(review 报)。与本表里 `su`
+  // 确定性红线 —— 只认空白等于给一个删空格就绕过的口子(review 报)。与 ALWAYS_ASK_PATTERNS 里 `su`
   // 那条的边界写法一致。
   /(?:^|[\s|&;(])(?:\S*\/)?gh\s+auth\s+[a-z][\w-]*[^|;&\n]*?\s-[a-zA-Z]*t[a-zA-Z]*(?:=[^\s|;&]*)?(?![\w-])/,
   // `gh auth token` 直接把令牌打到 stdout,与 `--show-token` 同级(同族一次收完)。
   /(?:^|[\s|&;(])(?:\S*\/)?gh\s+auth\s+token\b/,
+  ...SENSITIVE_CREDENTIAL_PATH_PATTERNS,                  // 凭证/密钥路径(见上)
+  /\bsecurity\s+(?:find|dump|export|add)-/,               // macOS keychain
+  /\$\{?[A-Za-z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|APIKEY|_PAT)[A-Za-z0-9_]*\}?/i, // 敏感环境变量展开(echo "$API_KEY" 等)
+];
+
+const ALWAYS_ASK_PATTERNS: readonly RegExp[] = [
+  /\b(?:sudo|doas|runuser)\b/,                           // 提权(runuser 名字独特,直接词界)
+  ...CREDENTIAL_ALWAYS_ASK_PATTERNS,                     // 凭证文件、钥匙串、令牌(见上)
   // 裸 `su`(切换到其它用户/root)同属提权,但 "su" 常出现在无关文本里 → 只在命令位(段首/分隔符后,或
   // 已知启动器后)匹配,避免 `git commit -m "su"` 之类误升(自审补:sudo/doas 已红线,漏了同级的 su)。
   /(?:^|[\n|&;(]\s*|\b(?:sudo|doas|xargs|nohup|setsid|env|command|exec|time|timeout|nice|ionice|stdbuf|chrt|builtin|watch|flock)\s+(?:-\S+\s+)*)su\b(?![\w.-])/,
@@ -1626,9 +1637,6 @@ const ALWAYS_ASK_PATTERNS: readonly RegExp[] = [
   /:\s*\(\s*\)\s*\{.*\|.*&.*\}/,                          // fork bomb :(){ :|:& };:
   /\bchmod\b[^|;&]*\s(?:-R\s+)?[0-7]*7{2,3}\b/,           // chmod 777 之类数字放宽权限
   /\bchmod\b[^|;&]*\s[ugoa]*[oa][ugoa]*[-+=][^\s]*w/,     // chmod 符号型对 other/all 开放写(a+w / o+w / a+rwx)
-  ...SENSITIVE_CREDENTIAL_PATH_PATTERNS,                  // 凭证/密钥路径(见上)
-  /\bsecurity\s+(?:find|dump|export|add)-/,               // macOS keychain
-  /\$\{?[A-Za-z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|APIKEY|_PAT)[A-Za-z0-9_]*\}?/i, // 敏感环境变量展开(echo "$API_KEY" 等)
 ];
 
 /**
@@ -6019,6 +6027,69 @@ function shellCommandReadsDotenv(
   return false;
 }
 
+/**
+ * 确定性红线的扫描面：结构上确定是数据的引号字面量先换成占位符(stripDataLiterals)，再生成防拆词
+ * 绕过的各个变体(各变体的用途见 classifyShellCommand 里的说明)。
+ */
+function deterministicScanVariants(command: string): {
+  deEscaped: string;
+  quotesOnly: string;
+  deGlobbed: string;
+  deExpanded: string;
+  deExpandedGlob: string;
+  deSubstituted: string;
+} {
+  const scannable = stripDataLiterals(command);
+  const deEscaped = scannable.replace(/['"\\]/g, '');
+  const quotesOnly = scannable.replace(/['"]/g, '');
+  const deGlobbed = deEscaped.replace(/[[\]{}*?]/g, '');
+  // deExpanded:抹掉参数展开(见 stripExpansions)—— 防 `s${X}udo`/`rm -r${X}f /` 这类把关键词拆开、
+  // bash 展开成空后才成形的绕过。**必须从 deEscaped 派生**(保留 `${...}` 完整):若先去 glob 会把
+  // `${X}` 的 `{}` 抹成 `$X`,再 stripExpansions 会把 `$Xudo` 整词吞掉、反而复原不出 `sudo`。
+  // deExpandedGlob:再叠加去 glob,覆盖 `${X}` 与 `[h]` 混用的组合变形。
+  const deExpanded = stripExpansions(deEscaped);
+  const deExpandedGlob = deExpanded.replace(/[[\]{}*?]/g, '');
+  // deSubstituted:把 `${X:-sudo}` 等默认值代入,让藏在展开默认值里的危险关键词现形(codex 报)。
+  const deSubstituted = substituteDefaults(deEscaped);
+  return { deEscaped, quotesOnly, deGlobbed, deExpanded, deExpandedGlob, deSubstituted };
+}
+
+/** curl / wget 抓云 metadata(读实例临时云凭证)。 */
+function fetchesCloudMetadata(quotesOnly: string): boolean {
+  for (const { text } of splitExecutableSegments(quotesOnly)) {
+    const tokens = unwrapWrappers(tokenize(text));
+    const bin = executableName(tokens[0] ?? '');
+    if (bin !== 'curl' && bin !== 'wget') continue;
+    if (tokens.slice(1).some((t) => isFetchTargetToken(t) && isCloudMetadataFetchTarget(t))) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function matchesAnyVariant(patterns: readonly RegExp[], variants: ReturnType<typeof deterministicScanVariants>): boolean {
+  const texts = Object.values(variants);
+  return patterns.some((re) => texts.some((text) => re.test(text)));
+}
+
+/**
+ * 命令是否静态可证地读取或打出可复用凭证：读凭证 / 密钥文件(含 .env)、钥匙串、令牌类环境变量、
+ * `gh auth token`、抓云 metadata。是 classifyShellCommand「必问」判据里凭证的那一部分，供应商分享的
+ * 受邀者任务在完全访问下也要确认这一类。只看命令文本：脚本文件里读的、编码后再解开的认不出来。
+ */
+export function shellCommandReadsCredentials(
+  command: string,
+  workspaceRoots: string[],
+  opts: ShellReviewOptions = {},
+): boolean {
+  if (typeof command !== 'string' || command.trim().length === 0) return false;
+  // 超长命令解析器不展开扫描，按需要确认处理(与 classifyShellCommand 同样不放过)。
+  if (command.length > MAX_AUTO_REVIEW_ACTION_TEXT_CHARS) return true;
+  if (shellCommandReadsDotenv(command, workspaceRoots, opts)) return true;
+  const variants = deterministicScanVariants(command);
+  return matchesAnyVariant(CREDENTIAL_ALWAYS_ASK_PATTERNS, variants) || fetchesCloudMetadata(variants.quotesOnly);
+}
+
 export function classifyShellCommand(
   command: string,
   workspaceRoots: string[],
@@ -6046,18 +6117,7 @@ export function classifyShellCommand(
   // grep 搜索模式)先换成占位符,否则中文提交说明与 PR 回复正文会被当命令扫(见
   // stripDataLiterals)。执行面判定不用这份 —— highImpactExecutionNeedsConsent 已在上面
   // 按引号外的真实结构判过。
-  const scannable = stripDataLiterals(command);
-  const deEscaped = scannable.replace(/['"\\]/g, '');
-  const quotesOnly = scannable.replace(/['"]/g, '');
-  const deGlobbed = deEscaped.replace(/[[\]{}*?]/g, '');
-  // deExpanded:抹掉参数展开(见 stripExpansions)—— 防 `s${X}udo`/`rm -r${X}f /` 这类把关键词拆开、
-  // bash 展开成空后才成形的绕过。**必须从 deEscaped 派生**(保留 `${...}` 完整):若先去 glob 会把
-  // `${X}` 的 `{}` 抹成 `$X`,再 stripExpansions 会把 `$Xudo` 整词吞掉、反而复原不出 `sudo`。
-  // deExpandedGlob:再叠加去 glob,覆盖 `${X}` 与 `[h]` 混用的组合变形。
-  const deExpanded = stripExpansions(deEscaped);
-  const deExpandedGlob = deExpanded.replace(/[[\]{}*?]/g, '');
-  // deSubstituted:把 `${X:-sudo}` 等默认值代入,让藏在展开默认值里的危险关键词现形(codex 报)。
-  const deSubstituted = substituteDefaults(deEscaped);
+  const { deEscaped, quotesOnly, deGlobbed, deExpanded, deExpandedGlob, deSubstituted } = deterministicScanVariants(command);
   // 仅按引号外的真实执行结构识别 pipe→解释器 / eval / 下载即执行，避免把打印示例文本误升级。
   if ([command, stripExpansions(command), substituteDefaults(command)]
     .some((variant) => highImpactExecutionNeedsConsent(variant))) return 'prompt-each-time';
@@ -6067,14 +6127,7 @@ export function classifyShellCommand(
   // 抓云 metadata = 读实例临时云凭证,静态可证的高危 → 与内置 WebFetch(reviewAction network)一致地
   // 确定性必问,不能一边硬问一边只给 shell curl 灰区(自审发现的两通道不一致)。
   // 只认 metadata,不含 localhost/私网 —— `curl localhost:3000` 是开发日常,硬弹窗会违反"尽量不打扰"。
-  for (const { text } of splitExecutableSegments(quotesOnly)) {
-    const tokens = unwrapWrappers(tokenize(text));
-    const bin = executableName(tokens[0] ?? '');
-    if (bin !== 'curl' && bin !== 'wget') continue;
-    if (tokens.slice(1).some((t) => isFetchTargetToken(t) && isCloudMetadataFetchTarget(t))) {
-      return 'prompt-each-time';
-    }
-  }
+  if (fetchesCloudMetadata(quotesOnly)) return 'prompt-each-time';
   // 写系统/受保护目录(重定向 `cat x > /etc/hosts` 与参数写通道 `cp payload /etc/hosts`、
   // `| tee /etc/hosts`、`truncate -s 0 /etc/passwd`、`tar -C /etc` 等)= 高影响系统写,复用
   // file-write 的系统红线。**判定放在 scopedDestructionNeedsConsent 的分段循环里**,因为那里已经

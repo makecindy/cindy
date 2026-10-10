@@ -23,7 +23,10 @@ export interface DeliverSessionEventDeps {
   readonly orcaTeamServiceForEvents: Pick<OrcaTeamService, 'captureWorkerTerminalTurn'> | null;
   readonly agentInputCoordinatorHolder: Pick<
     AgentInputCoordinator,
-    'onExternalTurnSettled' | 'isAutoResumePending' | 'isAutoResumeDeferred'
+    | 'onExternalTurnSettled'
+    | 'isAutoResumePending'
+    | 'isAutoResumeDeferred'
+    | 'getProviderGroupSwitchHoldId'
   > | null;
   readonly overflowSuppressedBroadcasts: Map<
     string,
@@ -97,6 +100,12 @@ export function deliverSessionEvent(
     event.type === 'error' &&
     isTerminalTurnErrorEvent(event) &&
     (isContextOverflowErrorData(event.data) || isOversizedHistoryErrorData(event.data));
+  // 供应商组正在为这次失败换电脑：error 行先不落库(暂存，换成了就丢掉)，同样不预留 persistId。
+  // 协调器在 prepare 阶段同步登记，结算都是异步的，这里与 terminal 阶段看到的是同一次登记。
+  const providerGroupHoldId =
+    event.type === 'error' && isTerminalTurnErrorEvent(event)
+      ? (deps.agentInputCoordinatorHolder?.getProviderGroupSwitchHoldId(session.id) ?? null)
+      : null;
   if (
     event.type === 'error' &&
     isTerminalTurnErrorEvent(event) &&
@@ -104,7 +113,8 @@ export function deliverSessionEvent(
     !isRemoteAuthRetry &&
     !isGatewayProxyTokenRecovery &&
     !autoResumeWouldSuppressPersist &&
-    !suppressOverflowBroadcast
+    !suppressOverflowBroadcast &&
+    providerGroupHoldId === null
   ) {
     persistId = reserveTurnErrorPersistId(
       session.id,
@@ -172,7 +182,7 @@ export function deliverSessionEvent(
   if (isTerminalTurnErrorEvent(event)) {
     deps.gitSnapshotCoordinator?.onTurnAbort(session.id);
   }
-  return { persistId, workerTerminalCapture };
+  return { persistId, workerTerminalCapture, providerGroupHoldId };
 }
 
 export type SessionDeliveryResult = ReturnType<typeof deliverSessionEvent>;

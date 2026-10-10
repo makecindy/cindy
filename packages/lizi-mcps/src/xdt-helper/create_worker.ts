@@ -28,7 +28,19 @@ type CreateWorkerErrorCode =
   | 'NO_PROVIDER_FOR_AGENT'
   | 'PROVIDER_ROUTE_UNAVAILABLE'
   | 'REMOTE_AGENT_DEVICE_UNREACHABLE'
+  | 'REMOTE_AGENT_SHARE_PAUSED'
+  | 'REMOTE_AGENT_SHARE_REMOVED'
+  | 'REMOTE_AGENT_SHARE_UNAVAILABLE'
   | 'UNSUPPORTED_CAPABILITY';
+
+/** agent_device_id 里表示「这台电脑」(任务所在电脑)的取值。 */
+export const LOCAL_AGENT_DEVICE = 'local';
+
+/** MCP 的 agent_device_id → host 的 agentDeviceId：`local` = null(任务所在电脑)，省略 = 不带(跟 Lead)。 */
+export function toHostAgentDeviceId(value: string | undefined): { agentDeviceId?: string | null } {
+  if (value === undefined) return {};
+  return { agentDeviceId: value === LOCAL_AGENT_DEVICE ? null : value };
+}
 
 interface CreateWorkerSuccessData {
   workerId: string;
@@ -61,6 +73,8 @@ export interface CreateWorkerDeps {
     label: string;
     workingDir?: string;
     executionDeviceId?: string;
+    /** Worker 的 Agent 所在位置：null = 任务所在电脑；省略 = 跟 Lead。 */
+    agentDeviceId?: string | null;
     initialTask?: string;
   }) => Promise<CreateWorkerControlResult>;
 }
@@ -110,6 +124,8 @@ export const createWorkerSpecSchema = z.object({
     .describe('可选，Worker 所在主机上已存在的绝对工作目录；省略则继承 Lead。创建前校验并绑定，失败不回退；不创建目录或 Git worktree。指定 execution_device_id 时是那台电脑上的目录，省略则由那台分配任务目录。'),
   execution_device_id: z.string().trim().min(1).max(128).optional()
     .describe('可选，运行设备：同账号另一台电脑的设备 id，只能取 get_workspace_info 返回的 execution_devices 中 supported=true 的 device_id。指定后 Worker 的任务、目录、命令与文件都在那台电脑；省略则与 Lead 同一台。那台离线、未开启远程控制或版本过旧时创建失败，不会回退到本机。'),
+  agent_device_id: z.string().trim().min(1).max(128).optional()
+    .describe('可选，Worker 的 Agent 在哪运行(远程供应商)：取 list_available_models 的 locations[].agent_device_id，"local" 为这台电脑；省略则与 Lead 相同。任务、目录与命令仍在这台电脑。不能与 execution_device_id 同用。'),
 }).strict();
 
 export type CreateWorkerSpec = z.infer<typeof createWorkerSpecSchema>;
@@ -140,6 +156,7 @@ const DESCRIPTION = [
   '- label: worker 短标识, 1-32 chars, 只能含字母、数字、-、_, 同 workflow 内唯一, 用于 switch_focus 定位',
   '- working_dir: 可选，Worker 所在主机上已存在的绝对目录；创建前校验并绑定，省略继承 Lead，失败不回退。不创建目录或 Git worktree。指定 execution_device_id 时是那台电脑上的目录，省略由那台分配。',
   '- execution_device_id: 可选，运行设备(同账号另一台电脑)的 device_id，只能取 get_workspace_info 的 execution_devices 里 supported=true 的值；指定后 Worker 的任务、目录、命令与文件都在那台电脑，结果仍自动回报给你。用户没有要求放到别的电脑时不要传。',
+  '- agent_device_id: 可选，Worker 的 Agent 在哪运行(远程供应商，任务与文件仍在这台)：取 list_available_models 的 locations[].agent_device_id，"local" 为这台电脑；省略与 Lead 相同。model / provider_id 要取 list_available_models 按同一位置列出的值。',
   "- initial_task: 可选, 创建后立即派给 worker 的第一条消息；dispatch_outcome.wakeKind=queued 表示首条任务已成功入队(此时回传 queued_message_id, 被消费前可用 get_worker_queue_status / update_queued_message / cancel_queued_message / merge_queued_messages 管理)；dispatch_outcome.kind='session-dispatch' 且 dispatched=false，或 kind='host-send' 且 accepted=false，表示 worker 已创建但首条任务未送达 / 派发失败",
   '',
   '【硬边界】',
@@ -152,7 +169,7 @@ const DESCRIPTION = [
   '- 选了 tier=budget (openai-codex/ 或 codex/ 前缀模型) 但当前 Codex 不在 API key 模式 → 返 BUDGET_MODEL_REQUIRES_API_MODE: 应如实告知用户「该模型需切换到 API key 模式才能使用」, 不要擅自改用官方版顶替 (除非用户明确同意)。',
   '- 该 agent 没有任何已连接的模型供应商 (provider) → 返 NO_PROVIDER_FOR_AGENT: 应如实把 message 转告用户 (去「设置 → 模型供应商」连接一个支持该 agent 的供应商), 或按 message 建议改用「已连接供应商的另一个 agent」创建 worker; 不要反复重试同一 agent。',
   '- Worker 解析出的精确 provider + model 路由当前不可用 → 返 PROVIDER_ROUTE_UNAVAILABLE: 应如实把 message 转告用户并调整模型或供应商; 不要按“完全没有供应商”处理，也不要反复重试同一路由。',
-  '- 指定的运行设备离线 / 未开启远程控制 → 返 REMOTE_AGENT_DEVICE_UNREACHABLE；版本过旧 → 返 UNSUPPORTED_CAPABILITY。都不会改在本机创建：如实告知用户，由用户决定换设备或改在本机。',
+  '- 指定的运行设备或 agent_device_id 那台离线 / 未开启远程控制 → 返 REMOTE_AGENT_DEVICE_UNREACHABLE(分享来的供应商不可用 → REMOTE_AGENT_SHARE_*)；运行设备版本过旧 → 返 UNSUPPORTED_CAPABILITY。都不会改在本机创建：如实告知用户，由用户决定换设备或改在本机。',
 ].join('\n');
 
 export function registerCreateWorkerTool(
@@ -164,7 +181,7 @@ export function registerCreateWorkerTool(
     category: 'control',
     description: DESCRIPTION,
     inputShape: createWorkerSpecSchema.shape,
-    handler: async ({ role, agent, model, provider_id, effort, fast, label, initial_task, working_dir, execution_device_id }) => {
+    handler: async ({ role, agent, model, provider_id, effort, fast, label, initial_task, working_dir, execution_device_id, agent_device_id }) => {
       const ctx = deps.getSessionContext?.() ?? deps;
       if (!ctx.sessionId) {
         return errorPayload('LEAD_NOT_SUPPORTED', '当前 session 类型不支持作为 Lead。');
@@ -186,6 +203,7 @@ export function registerCreateWorkerTool(
         label,
         ...(working_dir !== undefined ? { workingDir: working_dir } : {}),
         ...(execution_device_id !== undefined ? { executionDeviceId: execution_device_id } : {}),
+        ...toHostAgentDeviceId(agent_device_id),
         initialTask: initial_task,
       });
       if (!result.ok) {

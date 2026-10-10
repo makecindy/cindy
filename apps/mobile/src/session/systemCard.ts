@@ -183,14 +183,18 @@ function formatAutoResumeCard(data: Record<string, unknown> | undefined): System
   const outcome = data?.outcome === 'succeeded' || data?.outcome === 'failed' ? data.outcome : undefined;
   const hasInterruptionContext = !!(data?.live === true || error || attempt || maxAttempts || sessionTotal || outcome);
   if (!hasInterruptionContext) return { title: i18n.t('message.systemCard.autoResume.separator'), rows: [] };
+  // 供应商组正在换电脑:错误先不呈现,只写「正在换一台电脑继续」。
+  const groupSwitchPending = data?.live === true && !!data.groupSwitchPending && typeof data.groupSwitchPending === 'object';
   const title = data?.live === true
-    ? attempt && maxAttempts
+    ? groupSwitchPending
+      ? i18n.t('message.systemCard.autoResume.groupSwitchPending')
+      : attempt && maxAttempts
       ? i18n.t('message.systemCard.autoResume.pendingWithProgress', { attempt, total: maxAttempts })
       : i18n.t('message.systemCard.autoResume.pending')
     : i18n.t(`message.systemCard.autoResume.${outcome ?? 'neutral'}`);
   const subtitle = attempt && maxAttempts && sessionTotal
     ? i18n.t('message.systemCard.autoResume.details', { attempt, total: maxAttempts, count: sessionTotal }) : undefined;
-  return { title, ...(error ? { body: error } : {}), subtitle, rows: [] };
+  return { title, ...(error && !groupSwitchPending ? { body: error } : {}), subtitle, rows: [] };
 }
 
 type AgentSwitchTranslate = (key: string, options?: Record<string, unknown>) => string;

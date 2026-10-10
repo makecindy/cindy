@@ -9,7 +9,10 @@ import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo, Socket } from 'node:net';
 
+import type { DeviceHostedLinkActivity } from '@cindy/maker-core';
 import { WebSocketServer, type WebSocket } from 'ws';
+
+import { TunnelLinkActivity } from './linkActivity';
 
 /** 单个请求体上限(与反向请求载荷上限一致)。 */
 export const TUNNEL_MAX_BODY_BYTES = 48 * 1024 * 1024;
@@ -42,6 +45,8 @@ export interface RunTunnel {
   token: string;
   sendWs(connId: string, data: string): void;
   closeWs(connId: string): void;
+  /** 这条隧道上的往来记录(见 linkActivity.ts)。 */
+  linkActivity(): DeviceHostedLinkActivity;
   close(): Promise<void>;
 }
 
@@ -108,6 +113,7 @@ export async function createRunTunnel(handlers: TunnelHandlers): Promise<RunTunn
   const connections = new Map<string, WebSocket>();
   let nextConn = 0;
   let closed = false;
+  const activity = new TunnelLinkActivity();
 
   const server: Server = createServer((req: IncomingMessage, res: ServerResponse) => {
     void (async () => {
@@ -133,6 +139,7 @@ export async function createRunTunnel(handlers: TunnelHandlers): Promise<RunTunn
         if (!FORWARDED_HEADERS.has(name) || value === undefined) continue;
         headers.push([name, Array.isArray(value) ? value.join(', ') : value]);
       }
+      activity.httpStarted();
       try {
         const response = await handlers.http({
           method: req.method ?? 'GET',
@@ -152,6 +159,8 @@ export async function createRunTunnel(handlers: TunnelHandlers): Promise<RunTunn
           : 'The task has ended on the computer where it runs.';
         res.writeHead(502, { 'content-type': 'application/json' });
         res.end(JSON.stringify({ error: { code: 'REMOTE_AGENT_TUNNEL', message } }));
+      } finally {
+        activity.httpFinished();
       }
     })();
   });
@@ -172,13 +181,18 @@ export async function createRunTunnel(handlers: TunnelHandlers): Promise<RunTunn
       nextConn += 1;
       const connId = `c${nextConn}`;
       connections.set(connId, ws);
+      activity.connection(connId, false);
       handlers.wsOpen(connId, wsPath ?? '/');
       ws.on('message', (data, isBinary) => {
         if (isBinary) return;
-        handlers.wsMessage(connId, data.toString());
+        const text = data.toString();
+        activity.agentMessage(connId, text);
+        handlers.wsMessage(connId, text);
       });
       ws.on('close', () => {
-        if (connections.delete(connId)) handlers.wsClose(connId);
+        if (!connections.delete(connId)) return;
+        activity.connection(connId, true);
+        handlers.wsClose(connId);
       });
       ws.on('error', () => ws.terminate());
     });
@@ -198,14 +212,18 @@ export async function createRunTunnel(handlers: TunnelHandlers): Promise<RunTunn
     token,
     sendWs(connId, data) {
       const ws = connections.get(connId);
-      if (ws && ws.readyState === ws.OPEN) ws.send(data);
+      if (!ws || ws.readyState !== ws.OPEN) return;
+      activity.environmentMessage(connId, data);
+      ws.send(data);
     },
     closeWs(connId) {
       const ws = connections.get(connId);
       if (!ws) return;
       connections.delete(connId);
+      activity.connection(connId, true);
       ws.close();
     },
+    linkActivity: () => activity.snapshot(),
     async close() {
       if (closed) return;
       closed = true;

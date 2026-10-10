@@ -33,6 +33,8 @@ import {
 import { readMessageSourceDevice } from '@cindy/maker-shared/message-source';
 import { buildClientEnvironmentNote } from './mobileClientPromptNote.js';
 import { buildWireMessageSourceNote } from './messageSourceNote.js';
+import { isPiPromptRpcTimeoutError } from '../../shared/inputError.js';
+export { isPiPromptRpcTimeoutError } from '../../shared/inputError.js';
 
 const SYNTHETIC_TRIGGER_PREFIX = '[UI_ACTION_TRIGGER]';
 
@@ -84,16 +86,6 @@ export interface NativeSessionRecoveryTarget {
   providerId: string | null;
   effort: string | null;
   fastMode: boolean;
-}
-
-const PI_PROMPT_RPC_TIMEOUT_RE = /pi rpc timeout after \d+ms: prompt\b/i;
-
-export function isPiPromptRpcTimeoutError(data: unknown): boolean {
-  if (!data || typeof data !== 'object') return false;
-  const rec = data as { message?: unknown; sdkError?: unknown };
-  return [rec.message, rec.sdkError].some(
-    (value) => typeof value === 'string' && PI_PROMPT_RPC_TIMEOUT_RE.test(value),
-  );
 }
 
 function isPiRequestBodyRecoveryExhausted(data: unknown): boolean {

@@ -1,6 +1,7 @@
 {
   "picker": {
-    "deviceName": "{{device}} · Shared by {{owner}}",
+    "shareName": "Shared by {{owner}}",
+    "numbered": "{{name}} ({{index}})",
     "unavailable": "Unavailable share"
   },
   "link": {

@@ -62,6 +62,8 @@ export interface OrcaWorkerRecord {
     permissionMode: string;
     fastMode: boolean;
     sdkSessionId?: string;
+    /** Worker 的 Agent 在另一台电脑或分享上运行(远程供应商)；null = 任务所在电脑。旧端缺省。 */
+    agentDeviceId?: string | null;
   };
   /**
    * Worker 在同账号另一台电脑运行时的运行设备与那台上的真实任务 id；缺省 = 本机 Worker。
@@ -709,6 +711,7 @@ function workerToRecord(
       permissionMode: session.permissionMode,
       fastMode: !!session.fastMode,
       sdkSessionId: session.sdkSessionId ?? undefined,
+      agentDeviceId: session.agentDeviceId && !session.remoteHostId ? session.agentDeviceId : null,
     },
     ...(worker.executionDeviceId && worker.remoteSessionId
       ? {

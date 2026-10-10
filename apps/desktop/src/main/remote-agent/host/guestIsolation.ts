@@ -7,7 +7,9 @@
  *  - 只接受白名单内的说明文件、Skill / 子代理 / 命令 / 提示词模板，以及 Claude Code 项目设置；
  *  - 项目设置只保留 allow / deny / ask 权限规则(hooks、env、apiKeyHelper、状态栏命令等一律丢弃)；
  *  - frontmatter 声明了 hooks 的 Markdown 整个丢弃；`!` 预执行命令的语法被断开；
- *  - 说明文件里指向会话目录之外的 `@` 引用改成代码样式，不再被当作导入；
+ *  - 说明文件里 `@` 导入的文件只接受 Markdown / 纯文本，按同样规则处理；
+ *  - 所有 Markdown(说明、规则、命令、子代理、Skill 与导入的文件)里指向会话目录之外的 `@` 引用改成
+ *    代码样式，不再被当作导入(落地时处理，见 runHost)；
  *  - 任务中途的 setVendorOptions 只留白名单内的键，附加 / 可写目录只能落在虚拟工作区内。
  * 只对受邀者生效，同账号控制端的行为不变。
  */
@@ -23,6 +25,7 @@ import {
   PROJECT_SETTINGS_FILES,
   type RemoteAgentOpenPayload,
   type RemoteAgentWireFile,
+  type RemoteAgentWireImportFile,
 } from '../wire';
 
 /** owner = 本机同账号的设备；guest = 其他账号(供应商分享的受邀者)。 */
@@ -184,11 +187,20 @@ function guestProjectFile(file: RemoteAgentWireFile): RemoteAgentWireFile[] {
   return [];
 }
 
+/** 导入的文件：只接受 Markdown 与纯文本(其它类型可能是本机 Agent 会执行或加载的配置)。 */
+function guestImportFile(file: RemoteAgentWireImportFile): RemoteAgentWireImportFile[] {
+  if (!/\.(?:md|markdown|txt)$/i.test(file.path)) return [];
+  return guestInstructionAsset(file).map((asset) => ({ ...file, data: asset.data }));
+}
+
 /** 受邀者的打开载荷：按白名单复核项目文件与个人配置。`@` 引用在落地时按实际目录处理。 */
 export function sanitizeGuestOpenPayload(payload: RemoteAgentOpenPayload): RemoteAgentOpenPayload {
+  const { importFiles: received, ...rest } = payload;
+  const importFiles = (received ?? []).flatMap(guestImportFile);
   return {
-    ...payload,
+    ...rest,
     projectFiles: payload.projectFiles.flatMap(guestProjectFile),
+    ...(importFiles.length ? { importFiles } : {}),
     personal: {
       ...payload.personal,
       files: payload.personal.files.flatMap(guestInstructionAsset),

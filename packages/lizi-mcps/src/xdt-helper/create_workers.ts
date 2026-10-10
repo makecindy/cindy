@@ -12,6 +12,7 @@ import type { XdtHelperToolRegistry } from '../lizi_xdtHelperToolRegistry.js';
 import { okPayload, errorPayload } from './_payload.js';
 import {
   createWorkerSpecSchema,
+  toHostAgentDeviceId,
   toWorkerLimitPayload,
   type CreateWorkerDeps,
   type CreateWorkerSpec,
@@ -154,6 +155,7 @@ export function registerCreateWorkersTool(
           label: worker.label,
           ...(worker.working_dir !== undefined ? { workingDir: worker.working_dir } : {}),
           ...(worker.execution_device_id !== undefined ? { executionDeviceId: worker.execution_device_id } : {}),
+          ...toHostAgentDeviceId(worker.agent_device_id),
           initialTask: worker.initial_task,
         });
         limit = result.limit ?? limit;

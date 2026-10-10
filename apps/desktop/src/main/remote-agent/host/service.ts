@@ -15,9 +15,15 @@ import {
   type DataOwnerBroadcastScope,
 } from '../../device-link/broadcast-tap.js';
 import { setRemoteAgentHandler } from '../../device-link/dispatch.js';
+import { remoteBackgroundInvoke } from '../../device-link/index.js';
 import { providerShareGuestAccess } from '../../device-link/providerShareHost.js';
+import { createProviderGroupGuestRelay } from '../../provider-group/guestRelay.js';
+import { getProviderGroupOwnerScope } from '../../provider-group/runtime.js';
+import { readProviderGroup } from '../../provider-group/store.js';
+import { remoteAgentPollerFor } from '../controller/service';
 import { getProviderShareUsageStore, installProviderShareUsageStore } from '../../device-link/providerShareUsageStore.js';
 import { readDeviceLinkSettings } from '../../device-link/settings-store.js';
+import { readTurnUsageResetAt } from '../../goal-host/usageLimit.js';
 import { getDesktopProviderService } from '../../maker-host/createDesktopProviderService.js';
 import { registerGuestProviderRoute } from '../../maker-host/guest-provider-route-store.js';
 import { isRemoteProviderInvocationAllowed } from '../../maker-host/remote-provider-access-store.js';
@@ -65,6 +71,7 @@ export function hostedStartOptions(input: HostedStartInput): StartSessionOptions
       homeDir: undefined,
       tunnelUrl: input.tunnel.url,
       tunnelToken: input.tunnel.token,
+      ...(input.tunnel.linkActivity ? { linkActivity: input.tunnel.linkActivity } : {}),
       mcpServers: [...input.mcpServers],
       mirrorRoot: input.mirrorRoot,
       ...(input.personalInstructions ? { personalInstructions: input.personalInstructions } : {}),
@@ -145,6 +152,19 @@ export function installRemoteAgentHost(options: { getMaker: () => Maker; userDat
       const peer = parseProviderSharePeer(controller);
       if (peer?.role === 'guest' && peer.memberId) usage.record(peer.shareId, peer.memberId, sample);
     },
+    // 供应商组(本机是组所在电脑)：受邀者的任务按组分给组内电脑，本机中转(provider-groups.md §4)。
+    groupRelay: createProviderGroupGuestRelay({
+      scope: getProviderGroupOwnerScope,
+      readGroup: readProviderGroup,
+      connect: (agentDeviceId) => {
+        const poller = remoteAgentPollerFor(agentDeviceId, remoteBackgroundInvoke, log);
+        return { invoke: poller.invoke, poller };
+      },
+      // 组内电脑的报错用那台机器的本地时间：不带时区的钟点不按本机时区理解。
+      readResetAt: (failure) => readTurnUsageResetAt(failure, Date.now(), { localTimeZoneTrusted: false }),
+      now: () => Date.now(),
+      log,
+    }),
     captureOwner: captureDataOwnerBroadcastScope,
     isOwnerCurrent: (owner) => isDataOwnerBroadcastScopeCurrent(owner as DataOwnerBroadcastScope),
     runsRoot: path.join(options.userDataDir, 'remote-agent'),
@@ -159,7 +179,13 @@ export function installRemoteAgentHost(options: { getMaker: () => Maker; userDat
     abortControllers: (match) => current.abortControllers(match),
     purgeControllers: (match) => current.purgeControllers(match),
     activeControllers: () => current.activeControllers(),
+    turnRunningControllers: () => current.turnRunningControllers(),
   });
+}
+
+/** 本机替其他电脑运行、正在运行一轮的远程 Agent 任务用的本机供应商(每个任务一项)；服务没起来时为空。 */
+export function remoteAgentHostRunningProviders(): string[] {
+  return host?.turnRunningProviders() ?? [];
 }
 
 /** 退出时结束全部远程 Agent 任务。 */

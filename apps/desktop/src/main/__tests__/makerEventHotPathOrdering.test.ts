@@ -357,7 +357,7 @@ describe('maker:event hot path ordering', () => {
     expect(source).toContain(
       'deferredOrcaWorkerTerminal = autoResumeBookkeeping.stashOrcaSuppressedTerminal(',
     );
-    expect(source).toContain('finalizeOrcaSuppressedTerminal: (sessionId, payload) => {');
+    expect(source).toContain('finalizeOrcaSuppressedTerminal: settleDeferredOrcaWorkerTerminal,');
     expect(source).toContain('shouldSkipOrcaWorkerTerminal({');
     expect(source).toContain('stashedThisErrorEvent: deferredOrcaWorkerTerminal');
     expect(source).toContain('isPairedFailedTurnDone,');
@@ -369,6 +369,43 @@ describe('maker:event hot path ordering', () => {
     );
   });
   // only status/done/error paths request idle restore: covered by the executable sessionEventPipeline tests.
+
+  it('keeps the bound deferred Orca terminal behind worker start and forwards its original capture', async () => {
+    const binding = source.match(/finalizeOrcaSuppressedTerminal:\s*(\w+),/);
+    expect(binding).not.toBeNull();
+    const name = binding![1];
+    const start = source.indexOf(`function ${name}(`);
+    expect(start).toBeGreaterThanOrEqual(0);
+    const end = source.indexOf('\n/**', start);
+    expect(end).toBeGreaterThan(start);
+    const js = transpileModule(source.slice(start, end), {
+      compilerOptions: { target: ScriptTarget.ES2022 },
+    }).outputText;
+    let releaseStart!: () => void;
+    const started = new Promise<void>((resolve) => { releaseStart = resolve; });
+    const waitForStart = vi.fn(() => started);
+    const handleWorkerTerminalTurn = vi.fn(async (_terminal: { capture: unknown }) => undefined);
+    const finalize = new Function(
+      'workerTurnStartSequencer',
+      'orcaTeamServiceForEvents',
+      `${js}\nreturn ${name};`,
+    )({ waitForStart }, { handleWorkerTerminalTurn }) as (
+      sessionId: string,
+      payload: unknown,
+    ) => void;
+    const capture = { turnId: 'original-turn' };
+    const payload = {
+      status: 'error', finalText: 'original result', diagnostic: 'original failure', capture,
+    };
+
+    finalize('worker-session', payload);
+    expect(waitForStart).toHaveBeenCalledWith('worker-session');
+    expect(handleWorkerTerminalTurn).not.toHaveBeenCalled();
+    releaseStart();
+    await vi.waitFor(() => expect(handleWorkerTerminalTurn).toHaveBeenCalledTimes(1));
+    expect(handleWorkerTerminalTurn).toHaveBeenCalledWith({ sessionId: 'worker-session', ...payload });
+    expect(handleWorkerTerminalTurn.mock.calls[0]?.[0].capture).toBe(capture);
+  });
 
   // does not persist remote Codex account snapshots into local account usage: covered by the executable sessionEventPipeline tests.
 
@@ -1023,8 +1060,8 @@ describe('maker:event hot path ordering', () => {
     const claudeCostFallback = claudeDoneSource.slice(
       claudeDoneSource.indexOf("} else if (typeof cumulative === 'number' && cumulative >= 0)"),
     );
-    expect(claudeCostFallback).toMatch(
-      /buildClaudeTurnUsageDetails\(\s*undefined,\s*undefined,\s*resolvedModel,/,
+    expect(claudeCostFallback).not.toMatch(
+      /buildClaudeTurnUsageDetails\(\s*doneData\??\.usage/,
     );
     expect(claudeCostFallback).toContain(
       "if (route !== 'provider-api' || turnContext.accessKind === 'managed')",

@@ -1,12 +1,13 @@
 /**
  * 组内电脑的实时情况：哪些电脑能加进组、组里每台现在能不能用。
  *
- * 数据都来自现有通道，不新增协议：同账号电脑读 device-link 设备列表 + 那台的 `maker:provider:list`
- * (只留开了「允许被远程调用」的供应商)，分享来的读收到的分享 + `share:<id>` 的目录。目录短时缓存，
- * 避免设置页刷新与连续分配时反复读远端。
+ * 数据都来自现有通道：同账号电脑读 device-link 设备列表 + 那台的 `maker:provider:list`
+ * (只留开了「允许被远程调用」的供应商；新版在目录里带上那台用这个供应商正在运行的任务数 `runningTurns`)，
+ * 分享来的读收到的分享 + `share:<id>` 的目录(新版分享者带上本账号在那台正在运行的任务数 `guestRunning`)。
+ * 目录短时缓存，避免设置页刷新与连续分配时反复读远端。
  */
 import type { ProviderView } from '@cindy/model-providers';
-import type { ProviderShareReceived } from '@cindy/device-link';
+import { readProviderRunningTurns, readProviderShareGuestRunning, type ProviderShareReceived } from '@cindy/device-link';
 
 import {
   PROVIDER_SHARE_AGENT_DEVICE_PREFIX,
@@ -32,6 +33,8 @@ export interface ProviderGroupDirectoryDeps {
   readDeviceProviders(agentDeviceId: string): Promise<ProviderView[]>;
   listReceivedShares(): readonly ProviderShareReceived[];
   isMobilePlatform(platform: string | null): boolean;
+  /** 本机这个供应商正在运行一轮的任务数(localLoad.ts)；不提供或读不到时为 null。 */
+  localRunning?(providerId: string): Promise<number | null>;
   now(): number;
 }
 
@@ -45,6 +48,11 @@ export interface ResolvedProviderGroupMember {
   reason?: ProviderGroupUnavailableReason;
   /** 那台电脑上的这个供应商(state 为 ok 时一定有)。 */
   view?: ProviderView;
+  /**
+   * 那台电脑上这个供应商实际正在运行一轮的任务数，含不经组直接用的：本机现算；同账号电脑报来那台的总数；
+   * 分享来的电脑报来本账号(每台电脑)在那里的数。那台较旧给不出时没有。
+   */
+  reportedRunning?: number;
 }
 
 const CATALOG_TTL_MS = 15_000;
@@ -56,6 +64,18 @@ const SHARE_REASON = /^\[REMOTE_AGENT_SHARE_(PAUSED|REMOVED|UNAVAILABLE)\]/;
 export interface ProviderGroupDirectory {
   resolveMembers(providerId: string, config: ProviderGroupConfig): Promise<ResolvedProviderGroupMember[]>;
   listCandidates(providerId: string, config: ProviderGroupConfig | null): Promise<ProviderGroupCandidate[]>;
+  /** 那台电脑允许被远程调用的供应商(与组内电脑状态共用同一份短时缓存)；读不到时抛错。 */
+  readDeviceCatalog(agentDeviceId: string): Promise<ProviderView[]>;
+  /**
+   * 本机现在连不连得上那台电脑上的这个供应商：不用缓存，现读设备列表与那台的目录(同账号电脑、分享来的电脑；
+   * `agentDeviceId` 用任务记录里的写法)。自动换电脑前等那台恢复时用。
+   */
+  probe(agentDeviceId: string, providerId: string): Promise<ResolvedMemberState>;
+  /**
+   * 组员给人看的名字(换电脑的活动记录用)：分享来的电脑只用分享者的昵称，不用电脑名
+   * (provider-sharing.md §6)，读不到这条分享时为空；其余沿用加入时的快照。
+   */
+  memberLabel(member: ProviderGroupMember): string;
   /** 忘掉缓存(换账号、组内电脑失败后需要现读)。 */
   invalidate(agentDeviceId?: string): void;
 }
@@ -101,7 +121,8 @@ export function createProviderGroupDirectory(deps: ProviderGroupDirectoryDeps): 
     const label = deps.localDeviceName();
     const view = await localGroupProvider(member.providerId);
     if (!view || !view.connected || view.suspended) return { member, label, state: 'unavailable', reason: 'disconnected' };
-    return { member, label, state: 'ok', view };
+    const reportedRunning = await deps.localRunning?.(member.providerId).catch(() => null);
+    return { member, label, state: 'ok', view, ...(typeof reportedRunning === 'number' ? { reportedRunning } : {}) };
   }
 
   async function resolveDevice(
@@ -118,18 +139,26 @@ export function createProviderGroupDirectory(deps: ProviderGroupDirectoryDeps): 
     } catch {
       return { member, label, state: 'offline' };
     }
-    return withView(member, label, undefined, views);
+    const resolved = withView(member, label, undefined, views);
+    const reportedRunning = resolved.view ? readProviderRunningTurns(resolved.view) : null;
+    return reportedRunning === null ? resolved : { ...resolved, reportedRunning };
   }
 
-  async function resolveShare(member: ProviderGroupMember): Promise<ResolvedProviderGroupMember> {
+  async function resolveShare(
+    member: ProviderGroupMember,
+    /** 不信分享列表里定时刷新的 hostOnline 快照，照样去读那台的目录(等它恢复时用)。 */
+    options?: { readThroughOffline?: boolean },
+  ): Promise<ResolvedProviderGroupMember> {
     const agentDeviceId = member.agentDeviceId!;
     const shareId = agentDeviceId.slice(PROVIDER_SHARE_AGENT_DEVICE_PREFIX.length);
     const share = deps.listReceivedShares().find((s) => s.shareId === shareId);
-    if (!share) return { member, label: member.label || shareId, state: 'unavailable', reason: 'share-removed' };
-    const label = share.deviceName || member.label || shareId;
+    // 分享来的电脑只用分享者的昵称称呼，不用电脑名(provider-sharing.md §6)：服务端仍存着旧链接的电脑名，
+    // 旧版本加入时的快照(member.label)也可能是电脑名，都不再用。
+    if (!share) return { member, label: '', state: 'unavailable', reason: 'share-removed' };
     const ownerName = share.owner.displayName;
+    const label = ownerName;
     if (share.status === 'paused') return { member, label, ownerName, state: 'unavailable', reason: 'share-paused' };
-    if (!share.hostOnline) return { member, label, ownerName, state: 'offline' };
+    if (!share.hostOnline && !options?.readThroughOffline) return { member, label, ownerName, state: 'offline' };
     let views: ProviderView[];
     try {
       views = await readCatalog(agentDeviceId);
@@ -139,7 +168,9 @@ export function createProviderGroupDirectory(deps: ProviderGroupDirectoryDeps): 
       if (reason === 'REMOVED') return { member, label, ownerName, state: 'unavailable', reason: 'share-removed' };
       return { member, label, ownerName, state: 'offline' };
     }
-    return withView(member, label, ownerName, views);
+    const resolved = withView(member, label, ownerName, views);
+    const reportedRunning = resolved.view ? readProviderShareGuestRunning(resolved.view) : null;
+    return reportedRunning === null ? resolved : { ...resolved, reportedRunning };
   }
 
   function withView(
@@ -196,7 +227,8 @@ export function createProviderGroupDirectory(deps: ProviderGroupDirectoryDeps): 
           kind: 'share' as const,
           agentDeviceId,
           providerId: share.providerId,
-          label: share.deviceName || share.shareId,
+          // 加入组时存下的快照也只用分享者的昵称，不用电脑名(provider-sharing.md §6)。
+          label: share.owner.displayName,
           providerName: share.providerLabel,
           ownerName: share.owner.displayName,
         };
@@ -214,6 +246,36 @@ export function createProviderGroupDirectory(deps: ProviderGroupDirectoryDeps): 
       // 同账号电脑在前，分享来的在后；各自按名称排序，结果稳定。
       return candidates.sort((a, b) =>
         a.kind === b.kind ? a.label.localeCompare(b.label) : a.kind === 'device' ? -1 : 1);
+    },
+
+    readDeviceCatalog: readCatalog,
+
+    async probe(agentDeviceId, providerId) {
+      catalogs.delete(agentDeviceId);
+      const share = isProviderShareAgentDeviceId(agentDeviceId);
+      const member: ProviderGroupMember = {
+        key: providerGroupMemberKey(agentDeviceId, providerId),
+        kind: share ? 'share' : 'device',
+        agentDeviceId,
+        providerId,
+        limit: 1,
+        weight: 1,
+        paused: false,
+      };
+      // 分享来的电脑：hostOnline 是定时刷新的快照，等它恢复时不只看它，直接读那台的目录。
+      if (share) return (await resolveShare(member, { readThroughOffline: true })).state;
+      devices = null;
+      const deviceList = await readDevices().catch(() => null);
+      const device = deviceList?.find((d) => d.deviceId === agentDeviceId);
+      // 在线却关了远程控制或远程调用：是有意的设置，不是断线，不用等它恢复。
+      if (device?.online && !isControllable(device)) return 'unavailable';
+      return (await resolveDevice(member, deviceList)).state;
+    },
+
+    memberLabel(member) {
+      if (member.kind !== 'share') return member.label ?? member.key;
+      const shareId = member.agentDeviceId?.slice(PROVIDER_SHARE_AGENT_DEVICE_PREFIX.length) ?? '';
+      return deps.listReceivedShares().find((s) => s.shareId === shareId)?.owner.displayName ?? '';
     },
 
     invalidate(agentDeviceId) {

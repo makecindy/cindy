@@ -110,11 +110,27 @@ describe('remote Agent catalogs with provider shares', () => {
     );
     expect(latest.map((catalog) => [catalog.deviceId, catalog.name, catalog.providers.map((p) => p.id)])).toEqual([
       ['studio', 'Studio Mac', ['studio-provider']],
-      ['share:share-1', "Magi's Mac Mini · 来自 Magi 的分享", ['anthropic']],
+      ['share:share-1', '来自 Magi 的分享', ['anthropic']],
     ]);
-    // 模型列表分组标题 = 「{供应商} · {电脑名}」,即产品规则 §5.1 的写法。
+    // 模型列表分组标题 = 「{供应商} · 来自 {分享者} 的分享」,不写分享者的电脑名(产品规则 §5.1、§6)。
     expect(i18n.t('models.unified.remoteProvider', { provider: 'Anthropic', device: latest[1].name }))
-      .toBe("Anthropic · Magi's Mac Mini · 来自 Magi 的分享");
+      .toBe('Anthropic · 来自 Magi 的分享');
+  });
+
+  it('numbers a second share of the same provider from the same owner instead of naming the computer', async () => {
+    link.invoke.mockImplementation(async (_deviceId: string, channel: string) => {
+      if (channel === 'maker:provider:list') return { providers: [] };
+      return {
+        shares: [
+          receivedShare,
+          { ...receivedShare, agentDeviceId: 'share:share-2', shareId: 'share-2', deviceName: "Magi's Laptop" },
+        ],
+      };
+    });
+    await render({ enabled: true, controlledDeviceId: 'controlled', keepDeviceIds: [] });
+    const shares = latest.filter((catalog) => catalog.deviceId.startsWith('share:'));
+    expect(shares.map((catalog) => catalog.name)).toEqual(['来自 Magi 的分享', '来自 Magi 的分享 (2)']);
+    expect(JSON.stringify(shares)).not.toMatch(/Mac Mini|Laptop/);
   });
 
   it('treats an older controlled Desktop as having no shares without hiding other computers', async () => {

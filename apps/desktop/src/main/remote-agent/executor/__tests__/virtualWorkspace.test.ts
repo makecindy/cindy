@@ -67,6 +67,18 @@ describe('virtual workspace', () => {
     await executor.close();
   });
 
+  it('keeps closing quotes outside mapped command paths', async () => {
+    const { workspace, project, executor } = setup('/Users/agent/workspace');
+    const real = project.replace(/\\/g, '/');
+    // 2026-10 真实事故：单引号路径被映射成 '…mjs'\''，前置检查命令引号失配。
+    expect(workspace.mapCommand("node '/Users/agent/workspace/x.mjs'")).toBe(`node '${real}/x.mjs'`);
+    expect(workspace.mapCommand("node '/Users/agent/workspace/x.mjs' --flag")).toBe(`node '${real}/x.mjs' --flag`);
+    expect(workspace.mapCommand('node "/Users/agent/workspace/x.mjs" https://x/pull/1'))
+      .toBe(`node "${real}/x.mjs" https://x/pull/1`);
+    expect(workspace.mapCommand("echo '/Users/agent/workspace'")).toBe(`echo '${real}'`);
+    await executor.close();
+  });
+
   it('maps Codex request paths and commands before permission checks and projects text file bytes', async () => {
     const { workspace, project, executor } = setup('/Users/agent/workspace');
     const params = mapExecServerParams({ path: 'file:///Users/agent/workspace/a.txt', dataBase64: Buffer.from(project).toString('base64') }, workspace);

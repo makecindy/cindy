@@ -25,6 +25,7 @@ import {
   type UserMessage,
 } from '@cindy/maker-core';
 import { projectAutoReviewUserReferences } from '@cindy/maker-shared/auto-review-intent';
+import { REMOTE_AGENT_RELAY_KEY_PATTERN } from '@cindy/device-link';
 
 import {
   channelForceConfirmMutatingToolCall,
@@ -126,11 +127,25 @@ export interface RemoteAgentWireAncestorFile {
   data: string;
 }
 
+/**
+ * Claude Code 说明文件里 `@` 导入的文件(controller/projectFiles.ts collectInstructionImports)。
+ * `workspace`：相对影子目录(可带 `..`，落在工作目录的各级上级目录镜像里，须在虚拟工作区根内)；
+ * `session`：相对会话目录(个人说明所在的那一级，只放 ~/.claude 下被个人说明导入的文件)。
+ */
+export interface RemoteAgentWireImportFile {
+  base: 'workspace' | 'session';
+  path: string;
+  data: string;
+}
+
 /** 你这台的个人配置(用户级)，在那台电脑上以项目级配置的形式提供给 Agent。 */
 export interface RemoteAgentWirePersonal {
   /** 个人说明(Claude Code 的 ~/.claude/CLAUDE.md)：放在影子目录最外层，最先加载、优先级最低。 */
   memory?: string;
-  /** 个人 Skill / 子代理 / 命令(相对影子目录的路径，如 `.claude/skills/x/SKILL.md`)；项目里有同名的以项目为准。 */
+  /**
+   * 个人 Skill / 子代理 / 命令 / 规则(相对影子目录的路径，如 `.claude/skills/x/SKILL.md`；Codex / Pi 的个人
+   * Skill 在 `.agents/skills`、`.codex/skills`)；项目里有同名的以项目为准。
+   */
   files: RemoteAgentWireFile[];
   /** 个人权限规则(并入项目 local 设置)。 */
   permissions?: { allow?: string[]; deny?: string[]; ask?: string[] };
@@ -143,11 +158,31 @@ export interface RemoteAgentOpenPayload {
   sessionId: string;
   /** 能力增量：Agent 使用本机虚拟工作区；新控制端在 open 前必须确认对端 caps 支持。 */
   virtualWorkspace?: boolean;
+  /**
+   * 这个任务已由供应商组分配到这台(docs/product-rules/provider-groups.md §4 防转圈)：直接在这台运行，
+   * 不再进入这台自己的供应商组。可选字段，旧版本解码时丢弃(它本来没有组)。
+   */
+  groupAssigned?: boolean;
+  /**
+   * 供应商组的组所在电脑替受邀者中转过来的任务：组所在电脑为这个受邀者取的不透明键。被控端按受邀者
+   * 隔离运行，会话记录与目录按(控制端, relay)分开。只发给 caps 声明了 guestRelay 的电脑。
+   */
+  relay?: string;
+  /**
+   * 任务所在电脑支持「需要换一台」(docs/product-rules/provider-groups.md §6.1 分享的人)：组所在电脑中转的
+   * 任务在组内电脑上因电脑本身的原因失败时，先在事件流里发一个 `providerGroupSwitch` 状态(一次性凭证)
+   * 再转出错误，任务所在电脑据此自动交接后重新打开。只有声明了的电脑才会收到这个状态。
+   */
+  acceptsGroupSwitch?: boolean;
+  /** 自动交接后重新打开时带回的那张一次性凭证：组所在电脑据此避开出问题的那台。 */
+  groupSwitchToken?: string;
   options: RemoteAgentWireStartOptions;
   workspace: RemoteAgentWireWorkspace;
   projectFiles: RemoteAgentWireFile[];
   /** 项目上级目录里的说明文件。 */
   ancestorFiles: RemoteAgentWireAncestorFile[];
+  /** 说明文件里 `@` 导入的文件；旧被控端不认识，按没有处理。 */
+  importFiles?: RemoteAgentWireImportFile[];
   /** 你这台的个人配置。 */
   personal: RemoteAgentWirePersonal;
   /** 控制端经隧道提供的 Cindy MCP 服务名。 */
@@ -162,18 +197,20 @@ export const MAX_ANCESTOR_LEVELS = 24;
  * 工作目录根上的说明文件、Claude Code 项目设置(只保留权限规则)，以及这些目录下的
  * Skill / 子代理 / 命令 / 提示词模板。
  */
-export const PROJECT_INSTRUCTION_FILES = ['CLAUDE.md', 'CLAUDE.local.md', 'AGENTS.md', 'AGENTS.override.md'] as const;
+export const PROJECT_INSTRUCTION_FILES = ['CLAUDE.md', 'CLAUDE.local.md', '.claude/CLAUDE.md', 'AGENTS.md', 'AGENTS.override.md'] as const;
 export const PROJECT_SETTINGS_FILES = ['.claude/settings.json', '.claude/settings.local.json'] as const;
 export const PROJECT_INSTRUCTION_DIRECTORIES = [
   '.claude/skills',
   '.claude/agents',
   '.claude/commands',
+  '.claude/rules',
   '.agents/skills',
+  '.codex/skills',
   '.pi/skills',
   '.pi/prompts',
 ] as const;
-/** 个人配置只能落在这些子目录下。 */
-const PERSONAL_PREFIXES = ['.claude/skills/', '.claude/agents/', '.claude/commands/'];
+/** 个人配置只能落在这些子目录下(Codex / Pi 的个人 Skill 放在它们找项目 Skill 的位置)。 */
+const PERSONAL_PREFIXES = ['.claude/skills/', '.claude/agents/', '.claude/commands/', '.claude/rules/', '.agents/skills/', '.codex/skills/'];
 
 const START_STRING_FIELDS = [
   'effort', 'userPrompt', 'botProfilePrompt', 'botProfileContextPrompt', 'botUserProfilePrompt',
@@ -283,13 +320,38 @@ export function decodeOpenPayload(value: unknown): RemoteAgentOpenPayload {
   return {
     sessionId,
     ...(value.virtualWorkspace === true ? { virtualWorkspace: true } : {}),
+    ...(value.groupAssigned === true ? { groupAssigned: true } : {}),
+    ...(typeof value.relay === 'string' && REMOTE_AGENT_RELAY_KEY_PATTERN.test(value.relay) ? { relay: value.relay } : {}),
+    ...(value.acceptsGroupSwitch === true ? { acceptsGroupSwitch: true } : {}),
+    ...(typeof value.groupSwitchToken === 'string' && REMOTE_AGENT_RELAY_KEY_PATTERN.test(value.groupSwitchToken)
+      ? { groupSwitchToken: value.groupSwitchToken }
+      : {}),
     options: decodeStartOptions(value.options),
     workspace: decodeWorkspace(value.workspace),
     projectFiles,
     ancestorFiles,
+    ...decodeImportFiles(value.importFiles),
     personal: decodePersonal(value.personal),
     mcpServers: (stringArray(value.mcpServers, 128) ?? []).filter((name) => /^[a-z0-9_-]{1,64}$/i.test(name)),
   };
+}
+
+/** 导入文件的相对路径：和项目文件一样，只是允许 `..`(落点由被控端按根目录再核对)。 */
+export function isSafeImportPath(relative: string): boolean {
+  if (!relative || relative.length > 1024 || relative.includes('\0') || relative.includes('\\')) return false;
+  if (relative.startsWith('/') || /^[A-Za-z]:/.test(relative)) return false;
+  return relative.split('/').every((part) => part !== '' && part !== '.');
+}
+
+function decodeImportFiles(value: unknown): { importFiles?: RemoteAgentWireImportFile[] } {
+  if (!Array.isArray(value)) return {};
+  if (value.length > MAX_PROJECT_FILES) throw new Error('REMOTE_AGENT_INVALID');
+  const importFiles = value.flatMap((item): RemoteAgentWireImportFile[] => {
+    if (!isRecord(item) || typeof item.path !== 'string' || typeof item.data !== 'string') return [];
+    if (item.base !== 'workspace' && item.base !== 'session') return [];
+    return isSafeImportPath(item.path) ? [{ base: item.base, path: item.path, data: item.data }] : [];
+  });
+  return importFiles.length ? { importFiles } : {};
 }
 
 function decodePersonal(value: unknown): RemoteAgentWirePersonal {
@@ -454,6 +516,11 @@ export interface RemoteAgentWireSendOptions {
   toolsDisabled?: boolean;
   transcriptCallback?: boolean;
   turnPolicy?: WireTurnPolicy;
+  /**
+   * 供应商组(分享的人，provider-groups.md §6.1)：用户亲自接手(发消息、重试、换模型)后的这次发送，组所在电脑据此
+   * 清掉这个任务这一轮已经换下来的电脑。只有组所在电脑读它，不转给组内电脑；旧版本不认识，忽略。
+   */
+  groupNewRound?: true;
   cindy?: {
     /** autoReviewReferences is optional and additive; older peers drop it and review without it. */
     mainOwned?: { origin: TurnPermissionOrigin; rawChannelText?: string; autoReviewReferences?: unknown };

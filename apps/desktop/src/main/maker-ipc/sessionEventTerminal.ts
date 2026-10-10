@@ -40,9 +40,14 @@ import {
   isOversizedHistoryErrorData,
 } from './contextOverflowRollover.js';
 import { isTerminalTurnErrorEvent } from './sessionTurnActivityTracker.js';
+import { botGroupRuntimeFailureCode } from './botGroupRuntimeFailure.js';
 import { ProductTurnUsageTargetTracker } from './turnWallClock.js';
 import { createWorkerTurnStartSequencer } from './workerTurnStartSequencer.js';
-import { AutoResumeBookkeeping, shouldSkipOrcaWorkerTerminal } from './autoResumeBookkeeping.js';
+import {
+  AutoResumeBookkeeping,
+  shouldSkipOrcaWorkerTerminal,
+  type OrcaSuppressedTerminal,
+} from './autoResumeBookkeeping.js';
 import { isSuccessfulAssistantReplyDoneData } from '../cindy-brain/assistantReplyHook.js';
 import { hasEnabledGhostAssistantHook, runGhostAssistantReplyHook } from '../cindy-brain/index.js';
 import { withGhostAssistantHookModel } from '../cindy-brain/subscriptionGateway.js';
@@ -78,6 +83,26 @@ export interface FinishSessionTerminalEventDeps {
     | 'consumeFailedTurnCompletionTail'
     | 'hasSuppressedError'
   >;
+  /**
+   * 供应商组正在为这次失败换电脑(协调器登记了先不呈现)：error 行改为暂存，换成了就丢掉，没换成再补落
+   * (provider-group/heldTurnErrors.ts)。返回 false = 不是被暂存的那次失败，照常落库。
+   * `agentMeta` 是失败那一轮的事件身份：补落时不再读当时正在进行的那一轮。
+   */
+  readonly stashProviderGroupHeldError?: (
+    sessionId: string,
+    holdId: number,
+    data: unknown,
+    agentMeta: unknown,
+  ) => boolean;
+  /**
+   * 同一次换电脑期间，协同 Worker 的这次终态先不回报给 Lead(provider-group/heldWorkerTerminals.ts)：换成了由续跑
+   * 那一轮回报结果，没换成才回报这次异常终止。对不是 Worker 的任务回报时本就什么都不做。
+   */
+  readonly stashProviderGroupHeldWorkerTerminal?: (
+    sessionId: string,
+    holdId: number,
+    terminal: OrcaSuppressedTerminal,
+  ) => void;
   readonly productTurnUsageTargetTracker: Pick<
     ProductTurnUsageTargetTracker,
     'remember' | 'finish'
@@ -90,6 +115,7 @@ export interface FinishSessionTerminalEventDeps {
     | 'isAutoResumePending'
     | 'isAutoResumeDeferred'
     | 'getActiveInputClientId'
+    | 'getProviderGroupSwitchHoldId'
   > | null;
   readonly contextOverflowRolloverHolder: Pick<
     ReturnType<typeof createContextOverflowRollover>,
@@ -135,7 +161,7 @@ export function finishSessionTerminalEvent(
     isRemoteAuthRetry,
     isGatewayProxyTokenRecovery,
   } = prepared;
-  const { persistId, workerTerminalCapture } = delivery;
+  const { persistId, workerTerminalCapture, providerGroupHoldId } = delivery;
   const terminalOwner =
     event.type === 'done' || isTerminalTurnErrorEvent(event)
       ? captureProductTurnFailureOwner(session, event, eventAgentMeta)
@@ -256,6 +282,13 @@ export function finishSessionTerminalEvent(
     // hanging on the suppressed-error owner. stashOrca 失败必须立刻收口，
     // 否则 worker 会永远停在 running。
     let deferredOrcaWorkerTerminal = false;
+    // 供应商组正在为这次失败换电脑：Worker 这一轮还没有结局，先不把它回报给 Lead(只压这一步，插件任务、
+    // 委派等其他收口照旧)，按那次登记暂存。error 事件随 error 行一起暂存；只以 done 收尾的失败在下面暂存。
+    let providerGroupHeldWorkerTerminal = false;
+    const providerGroupDoneHoldId =
+      event.type === 'done'
+        ? (deps.agentInputCoordinatorHolder?.getProviderGroupSwitchHoldId?.(session.id) ?? null)
+        : null;
     const overflowClaim =
       event.type === 'error' &&
       !session.remoteHostId &&
@@ -346,16 +379,35 @@ export function finishSessionTerminalEvent(
       !isGatewayProxyTokenRecovery &&
       !autoResumeSuppressesPersist
     ) {
-      onTurnErrorEvent(
-        session.id,
-        attributedEvent.data as {
-          message?: unknown;
-          reason?: unknown;
-          sdkError?: unknown;
-        } | null,
-        eventAgentMeta,
-        persistId,
-      );
+      // 供应商组正在为这次失败换电脑：先不落库，换成了就丢掉，没换成再补落。登记期间到达的另一条不同错误
+      // 不归这次暂存，照常落库。
+      if (
+        providerGroupHoldId !== null &&
+        deps.stashProviderGroupHeldError?.(session.id, providerGroupHoldId, attributedEvent.data, eventAgentMeta) === true
+      ) {
+        if (persistId) releaseReservedTurnErrorPersistId(session.id, persistId);
+        // 同一次失败：协同 Worker 的回报与 error 行按同一次登记结算。
+        if (deps.stashProviderGroupHeldWorkerTerminal && isTerminalTurnErrorEvent(event)) {
+          deps.stashProviderGroupHeldWorkerTerminal(session.id, providerGroupHoldId, {
+            status: 'error',
+            finalText: workerTerminalFinalText,
+            diagnostic: workerTerminalDiagnostic,
+            capture: workerTerminalCapture,
+          });
+          providerGroupHeldWorkerTerminal = true;
+        }
+      } else {
+        onTurnErrorEvent(
+          session.id,
+          attributedEvent.data as {
+            message?: unknown;
+            reason?: unknown;
+            sdkError?: unknown;
+          } | null,
+          eventAgentMeta,
+          persistId,
+        );
+      }
     } else if (persistId) {
       releaseReservedTurnErrorPersistId(session.id, persistId);
     }
@@ -390,10 +442,13 @@ export function finishSessionTerminalEvent(
     // renderer 会稍后调 persistTurnErrorDeferred IPC。在 resetTurnPersistState 清掉
     // _turnStartedAtBySession 之前保存一份，让 deferred 路径能正确做 /clear 竞态 cap。
     // 自愈压住 error 行时同理:补落发生在 resetTurnPersistState 之后(退避 3–20 秒,
-    // 或决策推迟的那一小段),不先存一份会让 /clear 竞态 cap 判错。
+    // 或决策推迟的那一小段),不先存一份会让 /clear 竞态 cap 判错。供应商组换电脑暂存 error 行时同理。
     if (
       event.type === 'error' &&
-      (isRemoteAuthRetry || isGatewayProxyTokenRecovery || autoResumeSuppressesPersist)
+      (isRemoteAuthRetry ||
+        isGatewayProxyTokenRecovery ||
+        autoResumeSuppressesPersist ||
+        providerGroupHoldId !== null)
     ) {
       saveTurnStartedAtForDeferred(session.id);
     }
@@ -608,6 +663,7 @@ export function finishSessionTerminalEvent(
             outcome: isTerminalTurnErrorEvent(event) ? 'error' : 'done',
             resultText: typeof groupDoneData?.result === 'string' ? groupDoneData.result : '',
             resultMessageClientId: turnAssistantPersistId,
+            ...(isTerminalTurnErrorEvent(event) ? { failureCode: botGroupRuntimeFailureCode(event.data) } : {}),
           })
           .catch((error) => {
             deps.log.warn('Bot group lane terminal settlement failed', {
@@ -616,20 +672,32 @@ export function finishSessionTerminalEvent(
             });
           });
       }
-      void (async () => {
-        try {
-          await deps.workerTurnStartSequencer.waitForStart(session.id);
-          await deps.orcaTeamServiceForEvents?.handleWorkerTerminalTurn({
-            sessionId: session.id,
-            status: isTerminalTurnErrorEvent(event) ? 'error' : 'done',
-            finalText: workerTerminalFinalText,
-            diagnostic: workerTerminalDiagnostic,
-            capture: workerTerminalCapture,
-          });
-        } catch {
-          /* non-fatal */
-        }
-      })();
+      if (providerGroupHeldWorkerTerminal) {
+        // 已与 error 行一起暂存，由那次登记结算。
+      } else if (providerGroupDoneHoldId !== null && deps.stashProviderGroupHeldWorkerTerminal) {
+        // 换电脑期间到达的 done(只以 done 收尾的失败)：同样暂存，没换成时才回报；同一次登记只回报一次。
+        deps.stashProviderGroupHeldWorkerTerminal(session.id, providerGroupDoneHoldId, {
+          status: isTerminalTurnErrorEvent(event) ? 'error' : 'done',
+          finalText: workerTerminalFinalText,
+          diagnostic: workerTerminalDiagnostic,
+          capture: workerTerminalCapture,
+        });
+      } else {
+        void (async () => {
+          try {
+            await deps.workerTurnStartSequencer.waitForStart(session.id);
+            await deps.orcaTeamServiceForEvents?.handleWorkerTerminalTurn({
+              sessionId: session.id,
+              status: isTerminalTurnErrorEvent(event) ? 'error' : 'done',
+              finalText: workerTerminalFinalText,
+              diagnostic: workerTerminalDiagnostic,
+              capture: workerTerminalCapture,
+            });
+          } catch {
+            /* non-fatal */
+          }
+        })();
+      }
     }
   }
   return { turnAssistantPersistId };

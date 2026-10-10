@@ -87,7 +87,19 @@
     "workdirUnavailable": "{{name}}找不到工作目錄",
     "stepFailed": "{{name}}這一步出錯了，沒做完",
     "stepTimeout": "{{name}}太久沒做完，這一步先停下",
-    "stepUnavailable": "{{name}}現在無法使用，這一步沒辦法做"
+    "stepUnavailable": "{{name}}現在無法使用，這一步沒辦法做",
+    "runtimeFailure": {
+      "IMAGE_INPUT_UNSUPPORTED": "{{name}}無法回覆：目前模型不支援圖片。\n請切換至支援圖片的模型，或在「設定 → 個性化 → 視覺橋」啟用並設定視覺模型後重新傳送。",
+      "MODEL_UNAVAILABLE": "{{name}}無法回覆：目前沒有可用模型。\n請在夥伴設定中選擇已連線的可用模型後重新傳送。",
+      "AUTH_REQUIRED": "{{name}}無法回覆：模型連線需要重新驗證。\n請在設定中重新連線對應的模型來源後重新傳送。",
+      "RATE_LIMITED": "{{name}}無法回覆：模型請求過於頻繁。\n請稍後重新傳送，或選擇其他可用模型。",
+      "UPSTREAM_OVERLOADED": "{{name}}無法回覆：模型服務暫時繁忙。\n請稍後重新傳送，或選擇其他可用模型。",
+      "QUOTA_EXCEEDED": "{{name}}無法回覆：模型用量已達上限。\n請檢查對應來源的配額，或選擇其他可用模型。",
+      "NETWORK_ERROR": "{{name}}無法回覆：網路連線失敗。\n請檢查網路或 Proxy 後重新傳送。",
+      "RUNTIME_TIMEOUT": "{{name}}本次回覆逾時。\n請重新傳送訊息，或選擇其他可用模型。",
+      "RUNTIME_ERROR": "{{name}}這次未能回覆。\n請重新傳送訊息；若仍失敗，請查看記錄並回報問題。"
+    },
+    "runtimeFailureSetupHint": "如需調整模型或設定，請在夥伴所屬電腦上處理。"
   },
   "plan": {
     "intro_one": "這件事分 {{count}} 步，我這樣分工：",

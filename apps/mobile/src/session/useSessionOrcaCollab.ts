@@ -30,6 +30,7 @@ import {
   isOrcaCollabEligible,
   orcaAgentKindForSession,
   orcaCollabEntryHint,
+  orcaWorkerAgentElsewhere,
   orcaWorkerFormFromPrefs,
   orcaWorkerDisplayName,
   orcaWorkerStatusLabel,
@@ -75,6 +76,14 @@ export type CollabSheetView = 'collab' | 'collab-create';
 const ALL_AGENTS: readonly OrcaWorkerAgentKind[] = ['claude-code', 'codex', 'pi', 'cursor'];
 // Cursor is optional and must be confirmed by the execution host before display.
 const LEGACY_AGENT_FALLBACK: readonly OrcaWorkerAgentKind[] = ['claude-code', 'codex', 'pi'];
+
+/** Cursor Worker 只在本机工作区。运行设备、远程供应商，或 Lead 的 Agent 在别的电脑时都不提供。 */
+function isCursorWorkerLocal(
+  form: Pick<OrcaWorkerFormValue, 'executionDeviceId' | 'agentDeviceId'>,
+  leadAgentDeviceId: string | null,
+): boolean {
+  return !form.executionDeviceId && !orcaWorkerAgentElsewhere(form) && !leadAgentDeviceId;
+}
 const EMPTY_MODEL_OPTIONS: readonly MobileModelOption[] = [];
 const CURSOR_WORKER_PERMISSION_MODES: readonly OrcaWorkerPermissionMode[] = ['ask', 'auto', 'bypassPermissions'];
 
@@ -287,8 +296,32 @@ export function useOrcaWorkerForm(params: {
   setSheetOpen(open: boolean): void;
   /** 隧道重连代次:断线时 Agent 列表 / 模型能力读失败,重连后在打开的表单上重读一次。 */
   connectionEpoch?: number;
+  /** Lead 的 Agent 所在电脑(远程供应商)；null / 缺省 = 任务所在电脑。Worker 默认跟它。 */
+  leadAgentDeviceId?: string | null;
+  /**
+   * 被控电脑支持给 Worker 单独选 Agent 所在电脑(supportsOrcaWorkerAgentDevice)：表单带上位置，
+   * 模型选择器列出其他电脑与分享的供应商。不支持时不发送，Worker 跟 Lead。
+   */
+  agentLocationSelectable?: boolean;
 }) {
   const { maker, prefsScope, active, setSheetOpen, connectionEpoch } = params;
+  const leadAgentDeviceIdRef = useRef(params.leadAgentDeviceId ?? null);
+  leadAgentDeviceIdRef.current = params.leadAgentDeviceId ?? null;
+  const agentLocationSelectableRef = useRef(params.agentLocationSelectable === true);
+  agentLocationSelectableRef.current = params.agentLocationSelectable === true;
+  /**
+   * 复位时 Worker 的 Agent 位置：跟 Lead。Lead 在另一台电脑时本机记忆的模型属于别的目录，
+   * 模型回到「默认」交给被控端按那台的目录解析(与桌面不指定模型时同口径)。
+   */
+  const withLeadLocation = useCallback((value: OrcaWorkerFormValue): OrcaWorkerFormValue => {
+    const lead = leadAgentDeviceIdRef.current;
+    const selectable = agentLocationSelectableRef.current;
+    return {
+      ...value,
+      ...(lead ? { model: null } : {}),
+      agentDeviceId: selectable ? lead : undefined,
+    };
+  }, []);
   const [form, setForm] = useState<OrcaWorkerFormValue>(() => {
     const defaults = defaultOrcaWorkerCreationPrefs();
     return orcaWorkerFormFromPrefs(defaults, defaults.lastAgent);
@@ -405,7 +438,8 @@ export function useOrcaWorkerForm(params: {
             option.id === mode || (mode === 'ask' && option.id === 'default')))
           : undefined;
         if (modes) setCursorPermissionModes(modes.length ? modes : ['ask']);
-        setForm((current) => (current.agent === agent
+        // Agent 在另一台电脑(远程供应商)时模型属于那台的目录，不按被控电脑的能力收敛。
+        setForm((current) => (current.agent === agent && !orcaWorkerAgentElsewhere(current)
           ? { ...current, model: convergeOrcaWorkerModel(current.model, capabilities),
             ...(modes && !modes.includes(current.permissionMode) ? { permissionMode: 'ask' as const } : {}) }
           : current));
@@ -439,7 +473,7 @@ export function useOrcaWorkerForm(params: {
         // The cross-device Worker protocol currently admits only Claude Code, Codex and Pi.
         // Cursor may be installed on the selected computer, but is not a remote Worker option.
         const next = ALL_AGENTS.filter((agent) => available.includes(agent)
-          && !(formRef.current.executionDeviceId && agent === 'cursor'));
+          && (agent !== 'cursor' || isCursorWorkerLocal(formRef.current, leadAgentDeviceIdRef.current)));
         if (next.length === 0) return;
         agentsRef.current = next;
         setAgents(next);
@@ -457,7 +491,10 @@ export function useOrcaWorkerForm(params: {
         setForm((value) => ({
           ...value,
           agent: switched,
-          model: { id: agentPrefs.model, providerId: null, effort: agentPrefs.effort, fast: agentPrefs.fast },
+          // 本机记忆的模型只属于被控电脑的目录；Agent 在另一台电脑时回到「默认」。
+          model: orcaWorkerAgentElsewhere(value)
+            ? null
+            : { id: agentPrefs.model, providerId: null, effort: agentPrefs.effort, fast: agentPrefs.fast },
         }));
         converge(switched);
       })
@@ -484,7 +521,7 @@ export function useOrcaWorkerForm(params: {
     const apply = (prefs: OrcaWorkerCreationPrefs) => {
       const available = agentsRef.current;
       const agent = available.includes(prefs.lastAgent) ? prefs.lastAgent : available[0] ?? prefs.lastAgent;
-      setForm(orcaWorkerFormFromPrefs(prefs, agent));
+      setForm(withLeadLocation(orcaWorkerFormFromPrefs(prefs, agent)));
       converge(agent);
     };
     apply(prefsRef.current);
@@ -499,23 +536,29 @@ export function useOrcaWorkerForm(params: {
         apply(prefs);
       });
     }
-  }, [converge, prefsScope]);
+  }, [converge, prefsScope, withLeadLocation]);
 
   /** 切 Agent:带出该 Agent 上次的模型 / 推理强度 / Fast(对齐桌面)。 */
   const changeAgent = useCallback((agent: OrcaWorkerAgentKind) => {
+    if (agent === 'cursor' && !isCursorWorkerLocal(formRef.current, leadAgentDeviceIdRef.current)) return;
     touchedRef.current = true;
     agentChosenRef.current = true;
     const remembered = prefsRef.current.agents[agent];
     setForm((current) => ({
       ...current,
       agent,
-      model: { id: remembered.model, providerId: null, effort: remembered.effort, fast: remembered.fast },
+      // 本机记忆的模型只属于被控电脑的目录；Agent 在另一台电脑时回到「默认」。
+      model: orcaWorkerAgentElsewhere(current)
+        ? null
+        : { id: remembered.model, providerId: null, effort: remembered.effort, fast: remembered.fast },
     }));
     converge(agent);
   }, [converge]);
 
   /** 提交成功后写回记忆(与桌面一样只在提交时记);读—合并—写由 rememberOrcaWorkerChoice 一处完成。 */
-  const remember = useCallback((submitted: OrcaWorkerFormValue) => {
+  const remember = useCallback((choice: OrcaWorkerFormValue) => {
+    // 另一台电脑(远程供应商)目录里的模型不进本机 Worker 记忆，只记 Agent 与权限(与桌面同规则)。
+    const submitted = orcaWorkerAgentElsewhere(choice) ? { ...choice, model: null } : choice;
     prefsRef.current = mergeOrcaWorkerChoice(prefsRef.current, submitted);
     if (!prefsScope) return;
     const scope = prefsScope;
@@ -530,7 +573,15 @@ export function useOrcaWorkerForm(params: {
     touchedRef.current = true;
     if ('executionDeviceId' in next && next.executionDeviceId !== formRef.current.executionDeviceId) {
       convergeGenRef.current += 1;
-      setForm((current) => ({ ...current, ...next, model: null, remoteDirMode: 'dialogue', remoteDir: '' }));
+      // 运行设备与远程供应商互斥：换运行设备时 Worker 的 Agent 回到任务所在的那台。
+      setForm((current) => ({
+        ...current,
+        ...next,
+        model: null,
+        remoteDirMode: 'dialogue',
+        remoteDir: '',
+        agentDeviceId: current.agentDeviceId === undefined ? undefined : null,
+      }));
     } else {
       setForm((current) => ({ ...current, ...next }));
     }
@@ -548,8 +599,17 @@ export function useOrcaWorkerForm(params: {
   }, [setSheetOpen]);
   const close = useCallback(() => setModelPickerOpen(false), []);
   const closed = useCallback(() => setSheetOpen(true), [setSheetOpen]);
-  const select = useCallback(async (config: MobileModelConfiguration): Promise<boolean> => {
+  const select = useCallback(async (
+    config: MobileModelConfiguration,
+    source?: { deviceId: string | null },
+  ): Promise<boolean> => {
     if (!ALL_AGENTS.includes(config.agent as OrcaWorkerAgentKind)) return false;
+    const nextDevice = source !== undefined && agentLocationSelectableRef.current
+      ? source.deviceId
+      : formRef.current.agentDeviceId;
+    if (config.agent === 'cursor' && (
+      formRef.current.executionDeviceId || typeof nextDevice === 'string' || leadAgentDeviceIdRef.current
+    )) return false;
     touchedRef.current = true;
     agentChosenRef.current = true;
     convergeGenRef.current += 1;
@@ -562,6 +622,10 @@ export function useOrcaWorkerForm(params: {
         effort: config.effort || null,
         fast: !!config.fast,
       },
+      // 选择器列出远程供应商时，行带着它所属的电脑(null = 任务所在电脑)：Worker 的 Agent 跟着换过去。
+      ...(source !== undefined && agentLocationSelectableRef.current
+        ? { agentDeviceId: source.deviceId }
+        : {}),
     }));
     return true;
   }, []);
@@ -607,6 +671,8 @@ export function useOrcaWorkerForm(params: {
     pickerAgents,
     valid: canSubmitOrcaWorkerForm(form, customRoleMode)
       && (!form.executionDeviceId || executionDevices.some((device) => device.deviceId === form.executionDeviceId && device.supported)),
+    /** 模型选择器是否列出远程供应商(被控电脑支持给 Worker 选 Agent 位置，且没选运行设备)。 */
+    agentLocationSelectable: params.agentLocationSelectable === true && !form.executionDeviceId,
     reset,
     remember,
     directoryPicker,
@@ -635,6 +701,8 @@ export function useSessionOrcaCollab(params: {
   setSheetOpen(open: boolean): void;
   /** target 缺省 = 当前任务所在电脑；在另一台电脑运行的 Worker 传那台。 */
   openSession(sessionId: string, target?: { deviceId: string; deviceName?: string | null }): void;
+  /** 被控电脑支持给 Worker 单独选 Agent 所在电脑(远程供应商)，见 useOrcaWorkerForm。 */
+  workerAgentLocationSelectable?: boolean;
 }) {
   const { maker, deviceId, sessionId, session, prefsScope, connectionEpoch, getProviders, enabled, sheetView, sheetOpen, setSheetView, setSheetOpen, openSession } = params;
   // 远端真实任务的团队在另一台电脑，不能走本机团队查询或嵌套开启协同。
@@ -666,6 +734,8 @@ export function useSessionOrcaCollab(params: {
     active: eligible && sheetOpen && sheetView !== null,
     setSheetOpen,
     connectionEpoch,
+    leadAgentDeviceId: session?.remoteHostId ? null : (session?.agentDeviceId ?? null),
+    agentLocationSelectable: eligible && !session?.remoteHostId && params.workerAgentLocationSelectable === true,
   });
 
   const [entryStatus, setEntryStatus] = useState<OrcaCollabEntryStatus>('loading');

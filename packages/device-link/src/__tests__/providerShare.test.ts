@@ -144,6 +144,49 @@ describe('provider share identity scrubbing', () => {
     };
     expect(scrubSharedProvider(provider)).toEqual({ id: 'openai-2', name: 'OpenAI', connected: true });
     expect(JSON.stringify(scrubSharedProviderCatalog({ providers: [provider], providerOrder: ['openai-2'] }))).not.toContain('alice');
+    // 供应商组摘要列着组内电脑，只给同账号电脑。
+    expect(scrubSharedProvider({ id: 'anthropic', name: 'Anthropic', group: { members: [{ label: 'Mini' }] } }))
+      .toEqual({ id: 'anthropic', name: 'Anthropic' });
+  });
+
+  it('keeps only a sane group size for guests', async () => {
+    const { readProviderShareGroupSize, scrubSharedProvider } = await import('../providerShareCatalog.js');
+    expect(scrubSharedProvider({ id: 'anthropic', name: 'Anthropic', groupSize: 3, group: { members: [{ label: 'Mini' }] } }))
+      .toEqual({ id: 'anthropic', name: 'Anthropic', groupSize: 3 });
+    for (const groupSize of [0, -1, 2.5, 513, '3', null]) {
+      expect(scrubSharedProvider({ id: 'anthropic', groupSize })).toEqual({ id: 'anthropic' });
+    }
+    expect(readProviderShareGroupSize({ groupSize: 4 })).toBe(4);
+    expect(readProviderShareGroupSize({ groupSize: '4' })).toBeNull();
+    expect(readProviderShareGroupSize(null)).toBeNull();
+  });
+
+  it('keeps only a sane guest running count', async () => {
+    const { readProviderShareGuestRunning, scrubSharedProvider } = await import('../providerShareCatalog.js');
+    expect(scrubSharedProvider({ id: 'anthropic', name: 'Anthropic', guestRunning: 0 }))
+      .toEqual({ id: 'anthropic', name: 'Anthropic', guestRunning: 0 });
+    expect(scrubSharedProvider({ id: 'anthropic', guestRunning: 3 })).toEqual({ id: 'anthropic', guestRunning: 3 });
+    for (const guestRunning of [-1, 2.5, 4097, '3', null]) {
+      expect(scrubSharedProvider({ id: 'anthropic', guestRunning })).toEqual({ id: 'anthropic' });
+    }
+    expect(readProviderShareGuestRunning({ guestRunning: 4 })).toBe(4);
+    expect(readProviderShareGuestRunning({ guestRunning: '4' })).toBeNull();
+    expect(readProviderShareGuestRunning(null)).toBeNull();
+  });
+
+  it('keeps the computer-wide running count out of shared catalogs', async () => {
+    const { scrubSharedProvider } = await import('../providerShareCatalog.js');
+    const { readProviderRunningTurns } = await import('../providerGroup.js');
+    // 那台的总数含分享者本人与其他受邀者的任务，只给同账号电脑。
+    expect(scrubSharedProvider({ id: 'anthropic', runningTurns: 5, guestRunning: 1 }))
+      .toEqual({ id: 'anthropic', guestRunning: 1 });
+    expect(readProviderRunningTurns({ runningTurns: 0 })).toBe(0);
+    expect(readProviderRunningTurns({ runningTurns: 12 })).toBe(12);
+    for (const runningTurns of [-1, 2.5, 4097, '3', null]) {
+      expect(readProviderRunningTurns({ runningTurns })).toBeNull();
+    }
+    expect(readProviderRunningTurns([])).toBeNull();
+    expect(readProviderRunningTurns(null)).toBeNull();
   });
 
   it('drops a login name cut short by the 50-character auto-name limit', async () => {

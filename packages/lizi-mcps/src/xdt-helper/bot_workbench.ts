@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { TodoPatch } from '@cindy/maker-shared/teammate-todo';
 
 import type { XdtHelperToolRegistry } from '../lizi_xdtHelperToolRegistry.js';
 import type { ControlResult, LiziMcpSessionContext } from '../types.js';
@@ -141,6 +142,12 @@ export interface WorkbenchTranscriptWire {
 }
 
 export interface BotWorkbenchCallbacks {
+  todos?: (
+    callerSessionId: string,
+    operation: 'list' | 'update' | 'preflight' | 'ingest',
+    input?: unknown,
+  ) => Promise<ControlResult<Record<string, unknown>, string>>;
+
   get(params: { callerSessionId: string }): Promise<ControlResult<{ workbench: BotWorkbenchSnapshotWire }, string>>;
   read(params: {
     callerSessionId: string;
@@ -210,8 +217,8 @@ const TASK_ID = z
 const JUDGMENT_FIELDS = {
   task_id: TASK_ID,
   title: z.string().min(1).max(40).describe('人话标题'),
-  verdict: z.enum(['unfinished', 'idea', 'done']).describe('你的判断'),
-  next: z.string().max(120).optional().describe('一句下一步;done 可省略'),
+  verdict: z.enum(['unfinished', 'idea', 'done']).describe('unfinished 承诺未完成;idea 尚未接下的建议;done 有依据完成(当前界面隐藏)'),
+  next: z.string().max(120).optional().describe('一句当前进展与下一步;done 时记录完成依据,无专门的完成依据字段'),
   ref: z
     .string()
     .max(2000)
@@ -243,25 +250,16 @@ export function registerBotWorkbenchTools(
   deps: BotWorkbenchToolDeps,
 ): void {
   const callerSessionId = () => deps.getSessionContext().sessionId ?? null;
+  if (deps.callbacks.todos) registerTodoTools(registry, callerSessionId, deps.callbacks.todos);
 
   registry.register({
     name: 'get_workbench',
     category: 'bots',
     description:
-      '读取你的工作台:主人交给你的项目,每个项目的素材(brief:文档路径、git 分支与最近 14 天提交、我打开的 PR 与 issue;项目很多时只有最近交代的前 8 个带 brief,其余为 null,需要时用文件工具自己看),'
-      + '项目里最近 30 天的会话(项目里的 Cindy 任务——包括主人自己开的——不管你判断过没有都在,最多 30 条;再补本机 Claude Code / Codex / Pi 会话,合计最多 40 条;更早的只给 olderCount),你写过的 PR / issue / 建议条目,你的例行任务与项目里的自动化。'
-      + '主人提到这个项目、让你跟进或问进展时,先看工作台;主人自己在项目里开的任务也在里面,它们属于你知道的项目事务,不需要主人逐个告诉你。'
-      + '每条会话带 digest:起始目的与最后几条对话,足够大多数判断,不用逐个读全文。'
-      + '接手的做法:主人把项目交给你时,先调用它;再用你自己的文件工具读 brief.docs 里最前面的一两份(README / DESIGN / AGENTS 之类),弄清项目是做什么的、在往哪走;'
-      + '然后看最近的提交(不是 git 仓库时看 brief.recent)和会话 digest,一次性用 set_workbench_tasks 批量写下判断;只有拿不准的几件才 read_workbench_task。'
-      + '判断与下一步要体现你对项目的理解(它在项目里处于什么位置、和哪份文档或哪次提交有关),不要只复述会话。'
-      + '项目文档(如 DESIGN.md)、最近的 PR 与 issue 同样是素材:值得做的写成 pr:<owner>/<repo>#<n>、issue:<owner>/<repo>#<n> 或 idea:<slug> 条目,带上 ref。'
-      + '判断标准:最后一条是没被执行的要求、报错中断、明确留下的待办 → unfinished;讨论过方案或想法但之后没人动 → idea;已交付、纯问答、与项目无关 → done。'
-      + '写完后在聊天里用几句话告诉主人:没做完的几件各一句下一步,值得做的几件各一句建议,问主人要接着做哪件。不要自作主张开始做;只有主人点头的那件才 continue_workbench_task。'
-      + '主人在工作台上点「跟进」时会发来「跟进「<标题>」」(其它语言如 Follow up on “<标题>”):先调用本工具按标题找到那一条,'
-      + '再 continue_workbench_task——会话条目发一句承接上文、收到就能接着做的指令;PR / issue / 建议条目会在项目目录开后台任务。'
-      + '找不到同名条目就问主人是哪一件,不要猜;有几条同名时列出候选让主人选。'
-      + '要在项目里开全新的任务时用 start_session_task,把 working_dir 设为该项目路径。',
+      '读取已接手项目内的普通任务、项目素材和旧工作台判断。普通任务保留自己的生命周期。' +
+      '伙伴事务清单请用 list_teammate_todos / update_teammate_todo，可没有项目；不要逐个复制任务。' +
+      '会话限近期30天/30条，连外部会话最多40条；会话判断不返回ref，不能据此覆盖未知旧引用。' +
+      '旧判断有200条上限、done优先淘汰，不是新Todo历史。项目过滤仅影响此项目视图。',
     inputShape: {},
     handler: async () => {
       const sessionId = callerSessionId();
@@ -294,10 +292,10 @@ export function registerBotWorkbenchTools(
     name: 'set_workbench_task',
     category: 'bots',
     description:
-      '写下你对一件事的理解,主人的工作台立刻显示。整条替换之前的判断。多件时用 set_workbench_tasks。'
-      + 'task_id:get_workbench 返回的会话 taskId,或你新写的 pr:<owner>/<repo>#<n>、issue:<owner>/<repo>#<n>(须是已接手项目的 GitHub 仓库)、idea:<slug>(小写字母数字与连字符,3–40 位)。'
-      + 'title:人话标题,不超过 40 字,说清这件事是什么;verdict:unfinished(没做完、可以接着做)/ idea(聊过但没下文,建议往下做)/ done(做完或与项目无关,工作台不显示);'
-      + 'next:一句下一步,不超过 120 字,unfinished / idea 必填;ref:可选参考(https 链接或项目内文件路径)。只写有依据的判断,不要编造。',
+      '维护一件已接手项目内的事务判断。按 task_id 整条替换,多件变化用 set_workbench_tasks;保留仍有效的 ref/project。get_workbench 的会话判断没有 ref,无法从 updatedAt 与当前判断一致的已确认回执找回旧 ref 时不要覆盖。写后检查结果并尝试读回;成功回执已确认保存,近期/数量过滤导致列表不可见不等于失败,不重复写。当前不支持无项目 Todo 或独立的可选任务/PR 关联。' +
+      'task_id:get_workbench 返回的会话 taskId,或你新写的 pr:<owner>/<repo>#<n>、issue:<owner>/<repo>#<n>(须是已接手项目的 GitHub 仓库)、idea:<slug>(小写字母数字与连字符,3–40 位)。' +
+      '同一承诺沿用原 id,重复执行不重复建条目。title:当前人话标题,不超过 40 字,不用状态前缀;verdict:unfinished(约定未完成)/ idea(尚未接下的建议)/ done(有依据完成,当前界面隐藏)。无关内容不新建;记录不自动开工。' +
+      'next:当前进展与下一步,不超过 120 字,unfinished / idea 必填;done 时写完成依据,ref 放支持依据的 https 链接或项目内文件路径。没有专门完成依据字段。停止或合并仍待验收则保持 unfinished;事实未知写待核实。只写有依据的判断,不要编造。',
     inputShape: JUDGMENT_FIELDS,
     handler: async (args) => {
       const sessionId = callerSessionId();
@@ -313,8 +311,8 @@ export function registerBotWorkbenchTools(
     name: 'set_workbench_tasks',
     category: 'bots',
     description:
-      `批量写下判断(1–${WORKBENCH_BATCH_MAX} 条),字段与 set_workbench_task 相同。逐条校验,一条不合格不影响其它条;返回每条的结果。`
-      + '接手项目时优先用它:看完 get_workbench 的 brief 与 digest 后一次写完。',
+      `批量写下判断(1–${WORKBENCH_BATCH_MAX} 条),字段与 set_workbench_task 相同。逐条校验,一条不合格不影响其它条;返回每条的结果。` +
+      '对话承诺、任务回传、用户纠正或已授权跟进发现相关变化后才写,同一承诺沿用 id;没有变化不造条目。与单条一样保留旧引用,会话 ref 无法确认时不覆盖。检查每条结果,部分失败不代表全部成功,再尝试 get_workbench 读回;成功项可能因会话近期/数量限制不可见,不误报失败或重复写。当前只支持项目内记录。',
     inputShape: {
       items: z.array(z.object(JUDGMENT_FIELDS)).min(1).max(WORKBENCH_BATCH_MAX).describe('判断列表'),
     },
@@ -408,5 +406,143 @@ export function registerBotWorkbenchTools(
         ? okPayload({ path: result.path, removed: result.removed })
         : errorPayload(result.errorCode, result.message);
     },
+  });
+}
+
+const deadline = z.object({
+  kind: z.enum(['date', 'instant']),
+  date: z.string().max(10),
+  timeZone: z.string().max(100),
+  at: z.string().max(80).optional(),
+  sourceId: z.string().max(512).optional(),
+  sourceVersion: z.number().int().nonnegative().optional(),
+  quote: z.string().max(2000).optional(),
+  observedAt: z.string().max(80).optional(),
+});
+const todoPatch = z.object({
+  id: z.string().max(128).optional(),
+  expectedRevision: z.number().int().nonnegative().optional(),
+  key: z.string().min(1).max(512).optional(),
+  origin: z.enum(['assigned', 'discovered']).optional(),
+  title: z.string().min(1).max(300).optional(),
+  progress: z.string().max(4000).optional(),
+  outcome: z.string().min(1).max(4000).optional(),
+  value: z.string().max(4000).optional(),
+  next: z
+    .object({
+      label: z.string().min(1).max(100),
+      instruction: z.string().min(1).max(4000),
+      kind: z.enum(['advance', 'view', 'decide']),
+    })
+    .nullable()
+    .optional(),
+  sources: z
+    .array(
+      z.object({
+        kind: z.enum(['conversation', 'mail', 'feishu', 'github', 'community', 'task']),
+        id: z.string().min(1).max(512),
+        label: z.string().min(1).max(300),
+        ref: z.string().max(2000).optional(),
+        project: z.string().max(4096).optional(),
+        version: z.number().int().nonnegative().optional(),
+        observedAt: z.string().max(80).optional(),
+      }),
+    )
+    .max(100)
+    .optional(),
+  associations: z
+    .array(
+      z.object({
+        kind: z.enum(['task', 'pr']),
+        id: z.string().max(512),
+        label: z.string().max(300),
+      }),
+    )
+    .max(100)
+    .optional(),
+  sourceDeadline: deadline.nullable().optional(),
+  deadlineOverride: z.object({ value: deadline.nullable() }).optional(),
+  deadlineCandidate: z
+    .object({ value: deadline, reason: z.string().max(2000) })
+    .nullable()
+    .optional(),
+  suggestedDate: z.string().max(10).nullable().optional(),
+  resolvedActionRequestId: z.string().min(1).max(128).optional(),
+  operation: z
+    .enum(['complete', 'reopen', 'delete', 'mute', 'later', 'restore', 'confirm-deadline'])
+    .optional(),
+  until: z.string().max(80).optional(),
+  completion: z
+    .object({
+      summary: z.string().min(1).max(4000),
+      ref: z.string().max(2000).optional(),
+    })
+    .optional(),
+});
+function registerTodoTools(
+  registry: XdtHelperToolRegistry,
+  caller: () => string | null,
+  callback: NonNullable<BotWorkbenchCallbacks['todos']>,
+) {
+  const run = async (op: 'list' | 'update' | 'preflight' | 'ingest', input?: unknown) => {
+    const id = caller();
+    if (!id) return missingSession();
+    const result = await callback(id, op, input);
+    return result.ok ? okPayload(result) : errorPayload(result.errorCode, result.message);
+  };
+  registry.register({
+    name: 'list_teammate_todos',
+    category: 'bots',
+    description:
+      '按id/key读取同一事务（含完成/忽略记录），或分页搜索自己的清单，每页25条并返回总数。独立于项目/任务。维护优先精确读；无变化不扫描信息源。',
+    inputShape: {
+      id: z.string().max(128).optional(),
+      key: z.string().max(512).optional(),
+      query: z.string().max(300).optional(),
+      view: z.enum(['open', 'done', 'hidden']).optional(),
+      origin: z.enum(['all', 'assigned', 'discovered']).optional(),
+      offset: z.number().int().nonnegative().optional(),
+    },
+    handler: (input) => run('list', input),
+  });
+  registry.register({
+    name: 'update_teammate_todo',
+    category: 'bots',
+    description:
+      '新建或部分更新同一事务。key跨来源标识同一问题；已存在时用id+expectedRevision，冲突先读再合并，省略字段保留旧值。发现可入单但不自动授权执行/发送。完成必须携带可核验summary/ref；停止/合并未必满足outcome。删除/静音保留抑制记录，只有用户恢复可解除。无项目可用；项目型伙伴只发现职责范围。到期保留来源/时区，模糊日期用candidate，用户覆盖不被新来源改掉；稍后不修改期限。',
+    inputShape: { patch: todoPatch },
+    handler: ({ patch }) => run('update', patch satisfies TodoPatch),
+  });
+  registry.register({
+    name: 'preflight_teammate_todo_events',
+    category: 'bots',
+    description:
+      '现有已授权事件流的便宜增量预检：按职责范围、来源游标、稳定问题key及忽略/完成记录过滤，只有review事件需要取相关正文/模型判断。本工具不连接、扫描或新建定时器；无新事件不调用。',
+    inputShape: {
+      events: z
+        .array(
+          z.object({
+            source: z.string().max(512),
+            sequence: z.number().int().nonnegative(),
+            key: z.string().max(512),
+            project: z.string().max(4096).optional(),
+          }),
+        )
+        .max(100),
+    },
+    handler: ({ events }) => run('preflight', events),
+  });
+  registry.register({
+    name: 'record_teammate_todo_event',
+    category: 'bots',
+    description:
+      '原子保存一条成功处理的增量事件与Todo更新或no-action结果。source+sequence幂等，按来源顺序逐条提交，不跳过失败事件；失败不会推进游标。重复、已完成、已忽略的同一key不会重建。不同来源同一反馈沿用key/id，不能擅自绕过用户拒绝。',
+    inputShape: {
+      source: z.string().max(512),
+      sequence: z.number().int().nonnegative(),
+      patch: todoPatch.optional(),
+      skip: z.enum(['duplicate', 'suppressed', 'outside-scope', 'no-action']).optional(),
+    },
+    handler: (input) => run('ingest', input),
   });
 }

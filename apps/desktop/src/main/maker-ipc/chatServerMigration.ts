@@ -1,6 +1,7 @@
 /** Restartable upgrade of account-local history into the one server timeline. */
 import { randomUUID } from 'node:crypto';
 import type { BotGroupAttachment, BotGroupMessageView, BotGroupSummary, BotGroupPlanView } from '../../shared/botGroupChat.js';
+import { isBotGroupRuntimeFailureCode, readBotGroupRuntimeFailureDetail } from '../../shared/botGroupChat.js';
 
 export type ChatApi = <T>(route: string, method?: string, data?: unknown, actorId?: string) => Promise<T>;
 export interface ChatContentBlock { type: string; text?: string; mediaId?: string; caption?: string; namespace?: string; schemaRevision?: number; fallback?: string; data?: Record<string, unknown> }
@@ -72,6 +73,10 @@ export async function migrateLocalGroups(deps: LocalChatUpgrade): Promise<Map<st
         };
         for (const message of page) {
           check();
+          const runtimeFailureCode = message.kind === 'notice' && message.authorKind === 'system'
+            ? isBotGroupRuntimeFailureCode(message.runtimeFailureCode) ? message.runtimeFailureCode : readBotGroupRuntimeFailureDetail(message.content)
+            : undefined;
+          const portableContent = runtimeFailureCode ? '' : message.content;
           const authorId = message.authorKind === 'bot' && message.authorBotId
             ? await deps.bot(message.authorBotId, message.authorName) : deps.selfId;
           if (authorId !== deps.selfId && !members.has(authorId)) {
@@ -90,9 +95,9 @@ export async function migrateLocalGroups(deps: LocalChatUpgrade): Promise<Map<st
             : '';
           const fallback = [activity, message.files.length ? message.files.join('\n') : ''].filter(Boolean).join('\n');
           const texts: string[] = [];
-          if (message.content.length <= 32000 && Buffer.byteLength(message.content) < 48000) texts.push(message.content);
+          if (portableContent.length <= 32000 && Buffer.byteLength(portableContent) < 48000) texts.push(portableContent);
           else {
-            const points = Array.from(message.content);
+            const points = Array.from(portableContent);
             for (let i = 0; i < points.length; i += 6000) texts.push(points.slice(i, i + 6000).join(''));
           }
           for (const [part, text] of texts.entries()) {
@@ -101,9 +106,10 @@ export async function migrateLocalGroups(deps: LocalChatUpgrade): Promise<Map<st
             if (last) content.push(...media);
             // Preserve notice/plan kinds and author snapshots without uploading private host paths.
             content.push({ type: 'card', namespace: 'cindy.local-history', schemaRevision: 1,
-              fallback: last && fallback ? fallback : message.kind === 'message' ? '历史消息' : message.content.slice(0, 1000) || '群活动',
+              fallback: last && fallback ? fallback : message.kind === 'message' ? '历史消息' : portableContent.slice(0, 1000) || '群活动',
               data: { kind: message.kind, authorKind: message.authorKind, authorName: message.authorName,
                 noticeCode: message.noticeCode, files: message.files, planId: message.planId,
+                ...(runtimeFailureCode ? { runtimeFailureCode } : {}),
                 ...(last && plan ? { plan } : {}), ...(last && fallback ? { activity: true } : {}) } });
             // Refuse rather than truncate a record outside the server's wire budget.
             if (content.length > 32 || Buffer.byteLength(JSON.stringify(content)) > 65536) throw new Error('IMPORT_MESSAGE_TOO_LARGE');

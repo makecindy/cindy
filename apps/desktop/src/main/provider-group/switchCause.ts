@@ -40,3 +40,16 @@ export function classifyProviderGroupSwitchCause(
   }
   return null;
 }
+
+/** 只说明连接断了的远程错误(那台本身没问题，断线、远程 Cindy 重启后会话没了)。 */
+const REMOTE_CONNECTION_LOST = /\[REMOTE_AGENT_(?:DEVICE_UNREACHABLE|EXPIRED|NOT_FOUND)\]/;
+
+/**
+ * 这次失败只是和那台的连接断了：等它恢复时，现读第一次就已连得上，也算一次重试、留在原电脑继续(断线刚好已恢复)，
+ * 不急着换电脑。其余「连不上」(远程调用被关、分享暂停、Agent 没能启动等)现读连得上说明问题不在连接，直接换。
+ */
+export function isProviderGroupConnectionLoss(signals: InterruptedTurnErrorSignals | null | undefined): boolean {
+  if (!signals) return false;
+  const message = typeof signals.message === 'string' ? signals.message : '';
+  return signals.reason === 'remote_agent_closed' || REMOTE_CONNECTION_LOST.test(message);
+}

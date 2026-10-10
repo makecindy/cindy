@@ -18,6 +18,7 @@ import {
   ProviderShareDialogTitle,
 } from '@/features/provider-share/ProviderShareDialog';
 import { ProviderSharePasteDialog } from '@/features/provider-share/ProviderSharePasteDialog';
+import { providerShareComputerName } from '@/features/provider-share/providerShareNames';
 import { cn } from '@/lib/utils';
 
 import {
@@ -183,7 +184,12 @@ export function ProviderGroupAddDialog({
                         {checked && <Check size={12} strokeWidth={2.5} />}
                       </span>
                       <span className="flex min-w-0 flex-col">
-                        <span className="truncate text-13 text-[var(--text-primary)]">{candidate.label}</span>
+                        {/* 分享来的电脑只用分享者的昵称称呼，不用电脑名(provider-sharing.md §6)。 */}
+                        <span className="truncate text-13 text-[var(--text-primary)]">
+                          {candidate.kind === 'share'
+                            ? providerShareComputerName(t, candidate.ownerName)
+                            : candidate.label}
+                        </span>
                         <span className="truncate text-12 text-[var(--text-secondary)]">
                           {[
                             candidate.kind === 'device'

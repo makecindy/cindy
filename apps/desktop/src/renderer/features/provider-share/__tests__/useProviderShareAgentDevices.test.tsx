@@ -9,8 +9,12 @@ import { useProviderShareAgentDevices } from '../useProviderShareAgentDevices';
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
-    t: (key: string, options?: { device?: string; owner?: string }) =>
-      key === 'providerShare.picker.deviceName' ? `${options?.device} · from ${options?.owner}` : key,
+    t: (key: string, options?: { name?: string; index?: number }) =>
+      key === 'providerShare.received.fromOwner'
+        ? `from ${options?.name}`
+        : key === 'providerShare.picker.numbered'
+          ? `${options?.name} (${options?.index})`
+          : key,
   }),
 }));
 
@@ -64,15 +68,26 @@ beforeEach(() => {
 afterEach(() => cleanup());
 
 describe('useProviderShareAgentDevices', () => {
-  it('lists active shares under the "device · from owner" name and resolves names', async () => {
-    initial = [share({ shareId: 'a' }), share({ shareId: 'b', status: 'paused', deviceName: 'Studio' })];
+  it('names shares by owner only (numbering repeats), never by the sharer’s computer', async () => {
+    initial = [
+      share({ shareId: 'a' }),
+      share({ shareId: 'b', status: 'paused', deviceName: 'Studio' }),
+      share({ shareId: 'c', providerLabel: 'Anthropic', deviceName: 'Laptop' }),
+    ];
     const { result } = renderHook(() => useProviderShareAgentDevices());
     await waitFor(() => expect(result.current.loaded).toBe(true));
-    expect(result.current.devices).toEqual([{ deviceId: 'share:a', name: "Magi's Mac Mini · from Magi" }]);
-    expect(result.current.nameFor('share:b')).toBe('Studio · from Magi');
+    expect(result.current.devices).toEqual([
+      { deviceId: 'share:a', name: 'from Magi' },
+      { deviceId: 'share:c', name: 'from Magi' },
+    ]);
+    // 同一位分享者的同一个供应商第二份加序号；暂停的也算在内，序号不因暂停而变。
+    expect(result.current.nameFor('share:b')).toBe('from Magi (2)');
+    expect(JSON.stringify(result.current.devices)).not.toMatch(/Mac Mini|Studio|Laptop/);
     expect(result.current.nameFor('device-123')).toBeNull();
     expect(result.current.isKnown('share:b')).toBe(true);
     expect(result.current.isKnown('share:zzz')).toBe(false);
+    expect(result.current.isReceived('share:b')).toBe(true);
+    expect(result.current.isReceived('share:zzz')).toBe(false);
   });
 
   it('keeps the current paused or removed share so the task can see and leave it', async () => {
@@ -88,6 +103,7 @@ describe('useProviderShareAgentDevices', () => {
     const { result } = renderHook(() => useProviderShareAgentDevices(['share:x']));
     expect(result.current.loaded).toBe(false);
     expect(result.current.isKnown('share:x')).toBe(true);
+    expect(result.current.isReceived('share:x')).toBe(false);
     expect(result.current.devices).toEqual([]);
   });
 

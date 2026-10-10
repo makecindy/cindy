@@ -45,12 +45,32 @@ beforeEach(() => {
     if (path === '/v1/me') return { actor: { id: self, kind: 'human' } };
     if (path.endsWith('/members')) return [{ id: self, kind: 'human', state: 'joined', name: 'Me', ownerActorId: self, ownerName: '', role: 'member', avatar: null }];
     if (path.endsWith('/snapshot')) return { room, members: [{ id: self, kind: 'human', state: 'joined', name: 'Me', ownerActorId: self, ownerName: '', role: 'member', avatar: null }], messages: [], cursor: '1' };
+    if ((path.endsWith('/executions') || path.includes('/execution-failures?'))) return [];
     if (path.includes('/messages?')) return [{ id: self, seq: '9007199254740993', authorId: self, author: { kind: 'human', name: 'Me' }, content: [{ type: 'text', text: 'Fixture message' }], createdAt: '2026-10-09', deleted: false, threadRootId: null }];
     if (path.endsWith('/messages')) return { id: self };
     throw new Error('Unexpected request');
   });
 });
 afterEach(() => { act(() => root?.unmount()); root = undefined; vi.unstubAllGlobals(); vi.useRealTimers(); });
+it('shows safe execution failures through the direct phone entry and removes them after retry', async () => {
+  const original = h.auth.apiFetch.getMockImplementation()!;
+  let status = 'failed';
+  h.auth.apiFetch.mockImplementation(async (path, options) => (path.endsWith('/executions') || path.includes('/execution-failures?'))
+    ? [{ id, source_message_id: self, bot_id: self, epoch: 1, status, failure_code: 'AUTH_REQUIRED', detail: { message: 'private diagnostic' } }]
+    : original(path, options));
+  showChat = true; await render();
+  expect(chat.state.kind).toBe('ready');
+  if (chat.state.kind !== 'ready') throw new Error('Expected ready group');
+  expect(chat.state.group.messages).toHaveLength(2);
+  expect(chat.state.group.messages[1]).toMatchObject({ id: `execution-failure:${id}:1`, runtimeFailureCode: 'AUTH_REQUIRED' });
+  expect(chat.state.group.lastMessage?.preview).toBe('Fixture message');
+  expect(JSON.stringify(chat.state.group)).not.toContain('private diagnostic');
+  expect(h.link.invoke).not.toHaveBeenCalled();
+  status = 'queued';
+  await act(async () => { chat.reload(); });
+  if (chat.state.kind !== 'ready') throw new Error('Expected ready group after retry');
+  expect(chat.state.group.messages).toHaveLength(1);
+});
 it('lists and opens an existing joined server group with all computers and the relay offline', async () => {
   await render();
   expect(roster.items).toHaveLength(1);
@@ -80,7 +100,7 @@ it('never includes the current human actor in explicit or everyone server mentio
 it('imports read_seq and acknowledges only displayed incoming messages with their exact sequences', async () => {
   await clearRemoteResourceCache();
   const first = '9007199254740992', second = '9007199254740993';
-  const messages = [first, second].map((seq, index) => ({ id: `incoming-${index}`, seq, authorId: id,
+  const messages = [first, second].map((seq, index) => ({ id: `00000000-0000-4000-8000-${String(index + 20).padStart(12, '0')}`, seq, authorId: id,
     author: { kind: 'human', name: 'Other' }, content: [{ type: 'text', text: 'hello' }],
     createdAt: '2026-10-09T10:00:00.123Z', deleted: false, threadRootId: null }));
   const original = h.auth.apiFetch.getMockImplementation()!;
@@ -94,9 +114,9 @@ it('imports read_seq and acknowledges only displayed incoming messages with thei
   const unread = () => isRemoteResourceUnread('owner', '', id, row.item.display.lastReplyAt, row.lastReplySequence);
   expect(unread()).toBe(true);
   showChat = true; await render();
-  await act(async () => { await chat.markRead!(['incoming-0', 'unseen-id']); });
+  await act(async () => { await chat.markRead!([messages[0].id, 'unseen-id']); });
   expect(unread()).toBe(true);
-  await act(async () => { await chat.markRead!(['incoming-0', 'incoming-1']); });
+  await act(async () => { await chat.markRead!([messages[0].id, messages[1].id]); });
   expect(unread()).toBe(false);
   expect(h.auth.apiFetch.mock.calls.some(([, options]) => options.method === 'POST')).toBe(false);
 });

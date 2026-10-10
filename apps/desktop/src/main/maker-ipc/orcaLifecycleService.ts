@@ -38,6 +38,8 @@ export interface OrcaEnableTeamParams {
   executionDeviceId?: string;
   /** 运行设备上的工作目录；只在指定运行设备时生效。 */
   workingDir?: string;
+  /** 首个 Worker 的 Agent 所在位置(远程供应商)；语义见 OrcaWorkerCreateParams.agentDeviceId。 */
+  agentDeviceId?: string | null;
 }
 
 /** MCP start_team 只建立 lead team，不创建 worker；worker 后续由 create_worker 添加。 */
@@ -164,6 +166,7 @@ function normalizeEnableParams(params: OrcaEnableTeamParams): OrcaWorkerCreatePa
           ...(params.workingDir ? { workingDir: params.workingDir } : {}),
         }
       : {}),
+    ...(params.agentDeviceId !== undefined ? { agentDeviceId: params.agentDeviceId } : {}),
   };
 }
 

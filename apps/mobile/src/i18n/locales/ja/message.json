@@ -260,6 +260,7 @@
       "usageReset": "使用量が回復したため自動で続行しました",
       "pending": "再接続中…",
       "pendingWithProgress": "再接続中 {{attempt}}/{{total}}…",
+      "groupSwitchPending": "別のパソコンに切り替え中…",
       "details": "今回の再試行 {{attempt}}/{{total}} · このセッションでの再接続 {{count}} 回",
       "detail": {
         "reason": "中断の理由",
@@ -271,7 +272,12 @@
         "auth": "{{from}} のログインが切れたため、{{to}} で続行しました",
         "unavailable": "{{from}} に接続できないため、{{to}} で続行しました",
         "overload": "{{from}} のサービスが混雑しているため、{{to}} で続行しました"
-      }
+      },
+      "agentReconnect": {
+        "named": "{{computer}} に再接続し、続行しました",
+        "unnamed": "元のパソコンに再接続し、続行しました"
+      },
+      "groupSwitch": "別のパソコンに自動で切り替えて続行しました"
     },
     "modelLabel": "モデル",
     "sessionLabel": "セッション",

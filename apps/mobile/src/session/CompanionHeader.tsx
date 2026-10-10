@@ -1,10 +1,13 @@
+import { ListTodo } from 'lucide-react-native';
+import { HomeHeaderGlassButton } from './HomeHeaderGlassButton';
+import { CompanionTodos } from './CompanionTodos';
 import { useEffect, useRef, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import { resolveRemoteText, type RemoteResource } from '@cindy/device-link';
 import { useAuth } from '@/auth/AuthContext';
 import { RemoteCompanionAvatar } from '@/components/RemoteCompanionAvatar';
-import { radius, spacing, useThemedStyles, type ThemeColors } from '@/theme';
+import { radius, spacing, iconSize, iconStroke, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { CHAT_HEADER_MARK_SIZE, ChatIdentityHeader, ChatIdentitySubtitle } from './ChatIdentityHeader';
 import { CompanionPresenceRing } from './CompanionPresenceRing';
 import { CompanionProfileSheet } from './CompanionProfileSheet';
@@ -15,7 +18,8 @@ const PRESENCE_DOT = 6;
 
 /**
  * 伙伴私聊顶栏（C1，与群聊顶栏同一个 ChatIdentityHeader）：返回 + 身份（32 头像、名字、在线点与
- * 电脑名）+ 伙伴设置。点身份区与设置按钮都打开伙伴资料；切换伙伴回到列表里做。
+ * 电脑名）+ 伙伴设置；宿主提供 Todo 能力时增加独立入口。点身份区与设置按钮都打开
+ * 伙伴资料；切换伙伴回到列表里做。
  */
 export function CompanionHeader(props: {
   resource: RemoteResource; deviceId: string; deviceName: string; online: boolean; controlsReady?: boolean;
@@ -31,8 +35,10 @@ export function CompanionHeader(props: {
 function CompanionHeaderContent({ resource, deviceId, deviceName, online, controlsReady = true, working = false, onSearch, onBack, settingsRequest }: Parameters<typeof CompanionHeader>[0]) {
   const { t, i18n } = useTranslation();
   const styles = useThemedStyles(makeStyles);
+  const {colors}=useTheme();
   const navigation = useTeammateNavigation();
   const [profile, setProfile] = useState(false);
+  const [todos, setTodos] = useState(false);
   const [initialPage, setInitialPage] = useState<'home' | 'memory' | 'capabilities'>('home');
   useEffect(() => { if (settingsRequest) { setInitialPage(settingsRequest.page); setProfile(true); } }, [settingsRequest]);
   const pending = useRef<(() => void) | null>(null);
@@ -55,7 +61,9 @@ function CompanionHeaderContent({ resource, deviceId, deviceName, online, contro
       controlsReady={controlsReady}
       onBack={onBack}
       onOpenSettings={() => { setInitialPage('home'); setProfile(true); }}
+      accessory={resource.links?.some(link=>link.target.kind==='resource'&&link.target.ref.id==='todos:'+resource.ref.id)?<HomeHeaderGlassButton testID="companion.todos.open" disabled={!controlsReady} accessibilityLabel={t('devices.teammateTodo.title')} onPress={()=>setTodos(true)}><ListTodo size={iconSize.lg} strokeWidth={iconStroke.regular} color={colors.textPrimary}/></HomeHeaderGlassButton>:undefined}
       settingsLabel={t('devices.companionProfile.settingsTitle')} />
+    <CompanionTodos visible={todos} onClose={()=>setTodos(false)} botId={resource.ref.id} deviceId={deviceId} deviceName={deviceName} online={online}/>
     <CompanionProfileSheet initialPage={initialPage} visible={profile} onClose={() => setProfile(false)} onClosed={() => { const action = pending.current; pending.current = null; action?.(); }}
       resource={resource} collectionId={resource.ref.collectionId} deviceId={deviceId} deviceName={deviceName} online={online}
       onDeleted={() => void navigation.chooseMode('teammates')}

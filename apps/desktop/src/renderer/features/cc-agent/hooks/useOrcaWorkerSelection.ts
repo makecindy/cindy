@@ -14,6 +14,7 @@ import type { CreateWorkerForm } from '../CreateWorkerPopover';
 import {
   executionDeviceErrorMessage,
   getCollaborationStartErrorMessage,
+  workerAgentDeviceErrorMessage,
 } from '../collaborationErrors';
 import { createWorkerLabel } from '../workerLabel';
 import { useWorkers } from './useWorkers';
@@ -321,6 +322,8 @@ export function useOrcaWorkerSelection({
                   ...(form.workingDir ? { workingDir: form.workingDir } : {}),
                 }
               : {}),
+            // Worker 的 Agent 所在电脑(远程供应商)；面板只在任务所在电脑支持时才带。
+            ...(form.agentDeviceId !== undefined ? { agentDeviceId: form.agentDeviceId } : {}),
             label,
             initialTask: form.initialTask || undefined,
           });
@@ -336,6 +339,7 @@ export function useOrcaWorkerSelection({
           toast.error(
             (form.executionDeviceId &&
               executionDeviceErrorMessage(err, t, form.executionDeviceName, Boolean(form.workingDir)))
+              || (form.agentDeviceId && workerAgentDeviceErrorMessage(err, t))
               || getCollaborationStartErrorMessage(err, t, { remoteDevice: Boolean(deviceId) }),
           );
           return;

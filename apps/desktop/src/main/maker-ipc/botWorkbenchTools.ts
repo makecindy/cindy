@@ -67,7 +67,7 @@ import {
 } from './botWorkbenchAccess.js';
 
 /** 伙伴主任务才能用工作台;远端、归档、非主任务一律拒绝。 */
-async function resolveWorkbenchCaller(callerSessionId: string): Promise<WorkbenchCallerResult> {
+export async function resolveWorkbenchCaller(callerSessionId: string): Promise<WorkbenchCallerResult> {
   const db = getDbClient().drizzle;
   const [row] = await db
     .select({
