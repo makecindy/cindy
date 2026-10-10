@@ -8,8 +8,15 @@
  *   - 默认路由(providerId=null)的远程会话:不做本机启发式猜测,维持占位显示。
  */
 
-import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render as renderUI, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import type { ReactElement } from 'react';
+import { ConfirmDialogProvider } from '@/components/ui/confirm-dialog-provider';
+
+function render(ui: ReactElement) {
+  return renderUI(ui, { wrapper: ConfirmDialogProvider });
+}
 
 import type { ClaudeSubscriptionUsageSnapshot } from '../../../../shared/claudeSubscriptionUsage';
 import type { SessionUsageMoney } from '@/hooks/useSessionUsageMoney';

@@ -205,6 +205,8 @@ export interface MobileCodexRateLimitAccount {
 
 /** Display-safe metadata for one banked reset credit; its opaque backend id stays on desktop. */
 export interface MobileCodexRateLimitResetCredit {
+  /** Optional per-credit offer; older hosts/clients keep using the account-level offer. */
+  resetOffer?: MobileCodexRateLimitResetOffer | null;
   status: 'available' | 'redeeming' | 'redeemed' | 'unknown';
   resetType: 'codexRateLimits' | 'unknown';
   grantedAt: number;

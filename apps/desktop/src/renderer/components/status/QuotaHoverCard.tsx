@@ -45,6 +45,10 @@ export interface QuotaHoverCardSessionUsage {
 }
 
 export interface QuotaHoverCardProps {
+  /** One compact provider action beside the last quota window’s reset countdown. */
+  windowAction?: React.ReactNode;
+  /** Provider-specific manual actions, inside the existing scrollable card. */
+  children?: React.ReactNode;
   /** Embedded settings surface shares content without a second card frame. */
   variant?: 'popover' | 'embedded';
   /** The settings identity row already names this subscription and plan. */
@@ -121,6 +125,7 @@ function WindowBlock({
   breakdown,
   showAbsoluteReset = false,
   compact = false,
+  action,
   nowMs,
   paceNowMs,
   locale,
@@ -134,6 +139,7 @@ function WindowBlock({
   breakdown?: UsageCardWindow['breakdown'];
   showAbsoluteReset?: boolean;
   compact?: boolean;
+  action?: React.ReactNode;
   nowMs: number;
   paceNowMs: number | null;
   locale: string | undefined;
@@ -224,14 +230,17 @@ function WindowBlock({
         {bar}
         <div className="mt-[7px] flex items-baseline justify-between gap-3 tabular-nums">
           <span className="font-medium text-[var(--text-primary)]">{percentText}</span>
-          {resetCountdown !== null ? (
-            <span className="flex min-w-0 flex-col items-end text-right text-12 text-[var(--text-secondary)]">
-              <span>{resetCountdown}</span>
-              {showAbsoluteReset && resetAt !== null && (
-                <span>{t('quotaCard.resetAt', { at: resetAt })}</span>
-              )}
-            </span>
-          ) : null}
+          <div className="flex min-w-0 items-center gap-2">
+            {resetCountdown !== null ? (
+              <span className="flex min-w-0 flex-col items-end text-right text-12 text-[var(--text-secondary)]">
+                <span>{resetCountdown}</span>
+                {showAbsoluteReset && resetAt !== null && (
+                  <span>{t('quotaCard.resetAt', { at: resetAt })}</span>
+                )}
+              </span>
+            ) : null}
+            {action}
+          </div>
         </div>
       </div>
       {detail ? <div className="mt-1 text-12 text-[var(--text-secondary)]">{detail}</div> : null}
@@ -435,6 +444,8 @@ function SessionUsageSection({
 
 /** 套餐、配额、任务合计与本轮明细按同一信息层级渲染；供应商差异只来自 account。 */
 export function QuotaHoverCard({
+  windowAction,
+  children,
   variant = 'popover',
   hideIdentity = false,
   account,
@@ -465,11 +476,12 @@ export function QuotaHoverCard({
     paceNowMs !== null && nowMs - paceNowMs > STALE_AFTER_MS
       ? Math.floor((nowMs - paceNowMs) / 60_000)
       : null;
-  const windowBlocks = windows.map(({ key, ...displayWindow }) => (
+  const windowBlocks = windows.map(({ key, ...displayWindow }, index) => (
     <WindowBlock
       key={key}
       {...displayWindow}
       compact={embedded}
+      action={!embedded && index === windows.length - 1 ? windowAction : undefined}
       nowMs={nowMs}
       paceNowMs={paceNowMs}
       locale={locale}
@@ -536,6 +548,9 @@ export function QuotaHoverCard({
         ) : (
           windowBlocks
         )}
+        {!embedded && windows.length === 0 && windowAction ? (
+          <div className="flex justify-end px-4">{windowAction}</div>
+        ) : null}
         {emptyText ? (
           <div className="px-4 py-2 text-[var(--text-secondary)]">{emptyText}</div>
         ) : null}
@@ -570,6 +585,8 @@ export function QuotaHoverCard({
             </section>
           </>
         ) : null}
+
+        {children}
 
         {sessionUsage ? (
           <>

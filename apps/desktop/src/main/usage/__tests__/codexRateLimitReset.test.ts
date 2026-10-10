@@ -94,6 +94,93 @@ describe('Codex rate-limit reset control plane', () => {
     });
   });
 
+  function detailedHarness(over: Partial<Parameters<typeof createCodexRateLimitResetService>[0]> = {}) {
+    const value = response();
+    for (const credit of value.rateLimitResetCredits!.credits!) credit.expiresAt! += NOW_MS / 1000;
+    let next = 0;
+    return harness({
+      readRateLimits: vi.fn().mockResolvedValue(value),
+      createIdempotencyKey: () => `018f4ec7-c6d8-7f10-8d43-${String(next++).padStart(12, '0')}`,
+      ...over,
+    });
+  }
+
+  it('binds each displayed row to its own credit and keeps keys stable across reads', async () => {
+    const { deps, service } = detailedHarness();
+    const first = await service.read();
+    const second = await service.read();
+    const [later, earlier] = first.rateLimitResetCredits!.credits!;
+    expect(earlier.resetOffer).toEqual(first.resetOffer);
+    expect(later.resetOffer!.idempotencyKey).not.toBe(first.resetOffer!.idempotencyKey);
+    expect(second.rateLimitResetCredits).toEqual(first.rateLimitResetCredits);
+    expect(second.resetOffer).toEqual(first.resetOffer);
+    expect(later).not.toHaveProperty('id');
+    await service.consume(later.resetOffer!.idempotencyKey);
+    expect(deps.consumeResetCredit).toHaveBeenCalledExactlyOnceWith({
+      idempotencyKey: later.resetOffer!.idempotencyKey, creditId: 'later',
+    });
+  });
+
+  it('joins retries of the selected row and blocks another row during the same attempt', async () => {
+    let finish!: (result: { outcome: 'reset' }) => void;
+    const consumeResetCredit = vi.fn(() => new Promise<{ outcome: 'reset' }>(resolve => { finish = resolve; }));
+    const { service } = detailedHarness({ consumeResetCredit });
+    const snapshot = await service.read();
+    const key = snapshot.rateLimitResetCredits!.credits![0].resetOffer!.idempotencyKey;
+    const first = service.consume(key);
+    const retry = service.consume(key);
+    await expect(service.consume(snapshot.resetOffer!.idempotencyKey)).rejects.toMatchObject({ reason: 'RESET_IN_PROGRESS' });
+    await vi.waitFor(() => expect(consumeResetCredit).toHaveBeenCalledOnce());
+    finish({ outcome: 'reset' });
+    const [result, retryResult] = await Promise.all([first, retry]);
+    expect(result).toEqual(retryResult);
+    await expect(service.consume(key)).resolves.toEqual(result);
+    expect(consumeResetCredit).toHaveBeenCalledOnce();
+  });
+
+  it('freezes an ambiguous selected-row attempt until that same key is retried', async () => {
+    const consumeResetCredit = vi.fn().mockRejectedValueOnce(new Error('offline'))
+      .mockResolvedValue({ outcome: 'alreadyRedeemed' });
+    const { service } = detailedHarness({ consumeResetCredit });
+    const snapshot = await service.read();
+    const key = snapshot.rateLimitResetCredits!.credits![0].resetOffer!.idempotencyKey;
+    await expect(service.consume(key)).rejects.toThrow('offline');
+    const refreshed = await service.read();
+    expect(refreshed.resetOffer!.idempotencyKey).toBe(key);
+    await expect(service.consume(snapshot.resetOffer!.idempotencyKey)).rejects.toMatchObject({ reason: 'RESET_IN_PROGRESS' });
+    await service.consume(key);
+    expect(consumeResetCredit.mock.calls).toEqual([
+      [{ idempotencyKey: key, creditId: 'later' }], [{ idempotencyKey: key, creditId: 'later' }],
+    ]);
+  });
+
+  it('revokes withdrawn row offers and reuses the surviving row as the new default', async () => {
+    const { deps, service } = detailedHarness();
+    const snapshot = await service.read();
+    const later = snapshot.rateLimitResetCredits!.credits![0].resetOffer!;
+    const value: AccountRateLimitsResponse = await deps.readRateLimits();
+    value.rateLimitResetCredits!.credits = value.rateLimitResetCredits!.credits!.filter(credit => credit.id === 'later');
+    value.rateLimitResetCredits!.availableCount = 1;
+    const refreshed = await service.read();
+    expect(refreshed.resetOffer).toEqual(later);
+    expect(refreshed.rateLimitResetCredits!.credits![0].resetOffer).toEqual(later);
+    await expect(service.consume(snapshot.resetOffer!.idempotencyKey)).rejects.toMatchObject({ reason: 'OFFER_EXPIRED' });
+    value.rateLimitResetCredits = { availableCount: 0, credits: [] };
+    await service.read();
+    await expect(service.consume(later.idempotencyKey)).rejects.toMatchObject({ reason: 'OFFER_EXPIRED' });
+    expect(deps.consumeResetCredit).not.toHaveBeenCalled();
+  });
+
+  it('rejects a selected row after the account changes', async () => {
+    const readAccountIdentity = vi.fn().mockResolvedValue({ email: 'person@example.com', accountId: 'workspace-123456789' });
+    const { deps, service } = detailedHarness({ readAccountIdentity });
+    const snapshot = await service.read();
+    readAccountIdentity.mockResolvedValue({ email: 'other@example.com', accountId: 'other-workspace' });
+    await expect(service.consume(snapshot.rateLimitResetCredits!.credits![0].resetOffer!.idempotencyKey))
+      .rejects.toMatchObject({ reason: 'ACCOUNT_CHANGED' });
+    expect(deps.consumeResetCredit).not.toHaveBeenCalled();
+  });
+
   it('persists normalized account credits without exposing them to mobile', async () => {
     const { deps, service } = harness({
       readRateLimits: vi.fn().mockResolvedValue(response({

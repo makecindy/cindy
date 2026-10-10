@@ -4,7 +4,6 @@ import type { TFunction } from 'i18next';
 import type { ProviderView } from '@cindy/model-providers';
 import type { MobileCodexRateLimitsResult } from '@cindy/maker-shared/device-link-contract';
 import { matchCodexBucketForModel } from '@cindy/maker-shared/codex-usage-buckets';
-import { summarizeCodexRateLimitReset } from '@cindy/maker-shared/session-controls';
 import { useAccountUsage, type RateLimitSnapshot } from '@/hooks/useAccountUsage';
 import { useCodexRateLimits } from '@/hooks/useCodexRateLimits';
 import { useClaudeSubscriptionUsage } from '@/hooks/useClaudeSubscriptionUsage';
@@ -58,7 +57,7 @@ export function buildSettingsCodexUsageCard(
   );
   return buildCodexUsageCard(
     quota || planType ? { ...quota, planType, credits: account?.credits } : null,
-    summarizeCodexRateLimitReset(snapshot, nowMs),
+    null, // Reset count and expiry belong to the collapsible reset list.
     t,
     nowMs,
     locale,

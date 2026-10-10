@@ -15002,5 +15002,26 @@
     "idempotencyConflict": "此重试标识已用于另一条消息。",
     "privateUnconfirmed": "私聊未确认送达，请使用同一重试标识重试。",
     "verificationUnavailable": "暂时无法核验群聊授权，请在连接恢复后重试。"
+  },
+  "codexResets": {
+    "title": "额度重置",
+    "available": "可用 {{count}} 次",
+    "fullReset": "完整重置",
+    "expiresAt": "到期时间： {{at}}",
+    "expiryUnknown": "未提供到期时间",
+    "useReset": "使用重置",
+    "availableAtLimit": "达到用量上限时可使用",
+    "noCredit": "暂无可用重置",
+    "detailsUnavailable": "部分重置详情暂未提供",
+    "currentAccount": "当前 ChatGPT 账号",
+    "confirmTitle": "使用一次 Codex 重置？",
+    "confirmSelectedBody": "为 {{account}} 使用所选重置：{{title}}（{{expiry}}）。将恢复符合条件的用量上限，此操作无法撤销。",
+    "confirmBody": "将为 {{account}} 消耗 1 次重置，优先使用最早到期的一次。可重置的用量额度将恢复，此操作无法撤销。",
+    "consumeOnce": "使用一次重置",
+    "resetDone": "Codex 用量额度已恢复",
+    "nothingToReset": "当前没有需要重置的用量上限",
+    "offerExpired": "账号或重置状态已变化，请刷新用量后再使用重置",
+    "resetFailed": "无法确认重置结果，请刷新用量查看额度是否已恢复",
+    "limitAction": "使用重置 · 剩余 {{count}} 次"
   }
 }
