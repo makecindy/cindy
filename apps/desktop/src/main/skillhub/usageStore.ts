@@ -1,5 +1,7 @@
 import type Database from 'better-sqlite3';
+import type { SkillUsageRefreshStatus } from '../../shared/skillUsageRefresh';
 import type { DbClient } from '../localDb/client/DbClient.js';
+import type { SupportedLocale } from '../../shared/locale';
 
 import {
   MIN_VERSION_COMPARISON_USE_COUNT,
@@ -13,6 +15,7 @@ import type {
   SkillUsageObservation,
 } from './usageAnalyzer';
 import { RECENT_USAGE_WINDOW_DAYS, recentWindowStartMs } from './usageWindow';
+import { renderSkillUsageDiagnosisPrompt } from './usageDiagnosisPrompt';
 
 export interface SkillUsageSourceRecord {
   rawFilePath: string;
@@ -42,6 +45,8 @@ export interface SkillUsageRecentSourceRecord {
   agentKind: SkillUsageAgentKind;
   sessionId: string;
   sdkSessionId: string;
+  mtimeMs: number;
+  sizeBytes: number;
 }
 
 export interface SkillUsageSourceBreakdown {
@@ -53,6 +58,7 @@ export interface SkillUsageSourceBreakdown {
 export interface SkillUsageAgentBreakdown {
   claude: number;
   codex: number;
+  pi: number;
 }
 
 export interface SkillUsageReadObservation {
@@ -185,7 +191,7 @@ export function persistSkillUsageAnalysis(
   `);
   const deleteExposure = db.prepare(`
     DELETE FROM skill_usage_exposures
-    WHERE raw_file_path = ? AND analyzer_version = ?
+    WHERE analyzer_version = ? AND (raw_file_path = ? OR (agent_kind = ? AND session_id = ?))
   `);
   const insertExposure = db.prepare(`
     INSERT INTO skill_usage_exposures (
@@ -206,7 +212,11 @@ export function persistSkillUsageAnalysis(
 
   const tx = db.transaction(() => {
     upsertSource.run(source);
-    deleteExposure.run(source.rawFilePath, source.analyzerVersion);
+    deleteExposure.run(source.analyzerVersion, source.rawFilePath, source.agentKind, source.sessionId);
+    db.prepare(`DELETE FROM skill_usage_sources WHERE agent_kind = ? AND session_id = ?
+      AND raw_file_path <> ? AND analyzer_version = ?
+      AND NOT EXISTS (SELECT 1 FROM skill_usage_exposures e WHERE e.raw_file_path = skill_usage_sources.raw_file_path)
+    `).run(source.agentKind, source.sessionId, source.rawFilePath, source.analyzerVersion);
     for (const exposure of analysis.exposures) {
       insertExposure.run({
         id: `${source.analyzerVersion}:${exposure.id}`,
@@ -335,8 +345,12 @@ export function listSkillUsageSourcesWithRecentExposures(
       e.raw_file_path AS rawFilePath,
       e.agent_kind AS agentKind,
       e.session_id AS sessionId,
-      e.sdk_session_id AS sdkSessionId
+      e.sdk_session_id AS sdkSessionId,
+      s.mtime_ms AS mtimeMs,
+      s.size_bytes AS sizeBytes
     FROM skill_usage_exposures e
+    LEFT JOIN skill_usage_sources s ON s.raw_file_path = e.raw_file_path
+      AND s.analyzer_version = e.analyzer_version
     WHERE e.analyzer_version = ?
       AND e.seen_at >= ?
     GROUP BY e.raw_file_path
@@ -356,8 +370,12 @@ export async function listSkillUsageSourcesWithRecentExposuresFromClient(
       e.raw_file_path AS rawFilePath,
       e.agent_kind AS agentKind,
       e.session_id AS sessionId,
-      e.sdk_session_id AS sdkSessionId
+      e.sdk_session_id AS sdkSessionId,
+      s.mtime_ms AS mtimeMs,
+      s.size_bytes AS sizeBytes
     FROM skill_usage_exposures e
+    LEFT JOIN skill_usage_sources s ON s.raw_file_path = e.raw_file_path
+      AND s.analyzer_version = e.analyzer_version
     WHERE e.analyzer_version = ?
       AND e.seen_at >= ?
     GROUP BY e.raw_file_path
@@ -399,11 +417,23 @@ export async function deleteSkillUsageRecordsBeforeWithClient(
   await client.tx('skillUsage.applyMutation', { kind: 'deleteBefore', analyzerVersion, recentSince });
 }
 
-export async function promoteSkillUsageAnalyzerVersionWithClient(
+export function prepareSkillUsageCache(db: Database.Database, analyzerVersion: string): void {
+  db.transaction(() => {
+    const currentVersion = db.prepare("SELECT value FROM migration_meta WHERE key = 'skill_usage_analyzer_version'").pluck().get();
+    if (currentVersion === analyzerVersion) return;
+    db.prepare('DELETE FROM skill_usage_exposures').run();
+    db.prepare('DELETE FROM skill_usage_sources').run();
+    db.prepare("DELETE FROM migration_meta WHERE key = 'skill_usage_last_success_at'").run();
+    db.prepare(`INSERT INTO migration_meta (key, value) VALUES ('skill_usage_analyzer_version', ?)
+      ON CONFLICT(key) DO UPDATE SET value = excluded.value`).run(analyzerVersion);
+  })();
+}
+
+export async function prepareSkillUsageCacheWithClient(
   client: DbClient,
   analyzerVersion: string,
 ): Promise<void> {
-  await client.tx('skillUsage.applyMutation', { kind: 'promote', analyzerVersion });
+  await client.tx('skillUsage.applyMutation', { kind: 'prepareCache', analyzerVersion });
 }
 
 export function getSkillUsageSummaryFromDb(
@@ -421,11 +451,12 @@ export function getSkillUsageSummaryFromDb(
       MAX(seen_at) AS latestSeenAt,
       SUM(CASE WHEN agent_kind = 'claude-code' THEN 1 ELSE 0 END) AS claudeUseCount,
       SUM(CASE WHEN agent_kind = 'codex' THEN 1 ELSE 0 END) AS codexUseCount,
+      SUM(CASE WHEN agent_kind = 'pi' THEN 1 ELSE 0 END) AS piUseCount,
       SUM(CASE WHEN source = 'claude_skill_tool' THEN 1 ELSE 0 END) AS strongActiveUseCount,
-      SUM(CASE WHEN source IN ('claude_skill_file_read', 'codex_skill_file_read') THEN 1 ELSE 0 END) AS semiActiveUseCount,
+      SUM(CASE WHEN source IN ('claude_skill_file_read', 'codex_skill_file_read', 'pi_skill_file_read') THEN 1 ELSE 0 END) AS semiActiveUseCount,
       SUM(CASE
         WHEN source = 'claude_skill_tool' THEN 0
-        WHEN source IN ('claude_skill_file_read', 'codex_skill_file_read') THEN 0
+        WHEN source IN ('claude_skill_file_read', 'codex_skill_file_read', 'pi_skill_file_read') THEN 0
         ELSE 1
       END) AS passiveUseCount,
       SUM(tool_call_count) AS toolCallCount,
@@ -446,11 +477,12 @@ export function getSkillUsageSummaryFromDb(
       MAX(seen_at) AS latestSeenAt,
       SUM(CASE WHEN agent_kind = 'claude-code' THEN 1 ELSE 0 END) AS claudeUseCount,
       SUM(CASE WHEN agent_kind = 'codex' THEN 1 ELSE 0 END) AS codexUseCount,
+      SUM(CASE WHEN agent_kind = 'pi' THEN 1 ELSE 0 END) AS piUseCount,
       SUM(CASE WHEN source = 'claude_skill_tool' THEN 1 ELSE 0 END) AS strongActiveUseCount,
-      SUM(CASE WHEN source IN ('claude_skill_file_read', 'codex_skill_file_read') THEN 1 ELSE 0 END) AS semiActiveUseCount,
+      SUM(CASE WHEN source IN ('claude_skill_file_read', 'codex_skill_file_read', 'pi_skill_file_read') THEN 1 ELSE 0 END) AS semiActiveUseCount,
       SUM(CASE
         WHEN source = 'claude_skill_tool' THEN 0
-        WHEN source IN ('claude_skill_file_read', 'codex_skill_file_read') THEN 0
+        WHEN source IN ('claude_skill_file_read', 'codex_skill_file_read', 'pi_skill_file_read') THEN 0
         ELSE 1
       END) AS passiveUseCount,
       SUM(CASE WHEN skill_document_hash IS NULL THEN 1 ELSE 0 END) AS unversionedUseCount
@@ -484,7 +516,8 @@ function buildSkillUsageSummary(
   readObservations: { overall: SkillUsageReadObservation; byVersion: Map<string, SkillUsageReadObservation> },
   trend: SkillUsageTrendPoint[],
 ): SkillUsageSummary {
-  const documentVersions = versionRows.map((row) => toDocumentVersionSummary(row, readObservations.byVersion));
+  const documentVersions = versionRows.map((row) => toDocumentVersionSummary(row, readObservations.byVersion))
+    .sort((a, b) => byNumberDesc(a.latestSeenAt, b.latestSeenAt) || a.skillDocumentHash.localeCompare(b.skillDocumentHash));
   const currentDocumentHash = params.currentDocumentHash ?? null;
   const totalUseCount = numberValue(totalRow?.totalUseCount);
   const unversionedUseCount = numberValue(totalRow?.unversionedUseCount);
@@ -530,11 +563,11 @@ function getReadObservationsFromDb(
   const rows = db.prepare(`
     SELECT
       skill_document_hash AS skillDocumentHash,
-      COALESCE(NULLIF(sdk_session_id, ''), session_id) AS sessionKey,
+      agent_kind || ':' || session_id AS sessionKey,
       seen_at AS seenAt
     FROM skill_usage_exposures
     WHERE ${filter.sql}
-      AND source IN ('claude_skill_file_read', 'codex_skill_file_read')
+      AND source IN ('claude_skill_file_read', 'codex_skill_file_read', 'pi_skill_file_read')
     ORDER BY sessionKey ASC, seen_at ASC
   `).all(...filter.params) as Array<Record<string, unknown>>;
   return buildReadObservations(rows);
@@ -550,6 +583,8 @@ export function getSkillUsageDiagnosisContextFromDb(
     skillPath?: string | null;
     maxEvidence?: number;
     nowMs?: number;
+    locale?: SupportedLocale;
+    refreshStatus?: SkillUsageRefreshStatus;
   },
 ): SkillUsageDiagnosisContext {
   const summary = getSkillUsageSummaryFromDb(db, {
@@ -578,6 +613,8 @@ export function getSkillUsageDiagnosisContextFromDb(
       skillPath: params.skillPath ?? null,
       summary,
       evidence,
+      locale: params.locale,
+      refreshStatus: params.refreshStatus,
     }),
   };
 }
@@ -592,6 +629,8 @@ export async function getSkillUsageDiagnosisContextFromClient(
     skillPath?: string | null;
     maxEvidence?: number;
     nowMs?: number;
+    locale?: SupportedLocale;
+    refreshStatus?: SkillUsageRefreshStatus;
   },
 ): Promise<SkillUsageDiagnosisContext> {
   const currentDocumentHash = params.currentDocumentHash ?? null;
@@ -618,6 +657,8 @@ export async function getSkillUsageDiagnosisContextFromClient(
       skillPath: params.skillPath ?? null,
       summary,
       evidence,
+      locale: params.locale,
+      refreshStatus: params.refreshStatus,
     }),
   };
 }
@@ -652,20 +693,18 @@ async function readSkillUsageSnapshotFromClient(
   const evidenceHash = currentDocumentHash || null;
   const evidenceCte = includeEvidence
     ? `,
-      evidence_rows AS (
+      evidence_filtered AS (
         SELECT *
         FROM filtered
-        WHERE ${evidenceHash === null
+        WHERE ${readableEvidenceFilter('filtered')} AND ${evidenceHash === null
           ? '1 = 1'
           : `(
             NOT EXISTS (
-              SELECT 1 FROM filtered WHERE skill_document_hash = ?
+              SELECT 1 FROM filtered WHERE skill_document_hash = ? AND ${readableEvidenceFilter('filtered')}
             )
             OR skill_document_hash = ?
           )`}
-        ORDER BY seen_at DESC
-        LIMIT 500
-      )`
+      ), ${evidenceSelectionCtes()}`
     : '';
   const evidenceSelect = includeEvidence
     ? `
@@ -710,11 +749,12 @@ async function readSkillUsageSnapshotFromClient(
         MAX(seen_at) AS latestSeenAt,
         SUM(CASE WHEN agent_kind = 'claude-code' THEN 1 ELSE 0 END) AS claudeUseCount,
         SUM(CASE WHEN agent_kind = 'codex' THEN 1 ELSE 0 END) AS codexUseCount,
+        SUM(CASE WHEN agent_kind = 'pi' THEN 1 ELSE 0 END) AS piUseCount,
         SUM(CASE WHEN source = 'claude_skill_tool' THEN 1 ELSE 0 END) AS strongActiveUseCount,
-        SUM(CASE WHEN source IN ('claude_skill_file_read', 'codex_skill_file_read') THEN 1 ELSE 0 END) AS semiActiveUseCount,
+        SUM(CASE WHEN source IN ('claude_skill_file_read', 'codex_skill_file_read', 'pi_skill_file_read') THEN 1 ELSE 0 END) AS semiActiveUseCount,
         SUM(CASE
           WHEN source = 'claude_skill_tool' THEN 0
-          WHEN source IN ('claude_skill_file_read', 'codex_skill_file_read') THEN 0
+          WHEN source IN ('claude_skill_file_read', 'codex_skill_file_read', 'pi_skill_file_read') THEN 0
           ELSE 1
         END) AS passiveUseCount,
         SUM(tool_call_count) AS toolCallCount,
@@ -732,11 +772,12 @@ async function readSkillUsageSnapshotFromClient(
         MAX(seen_at) AS latestSeenAt,
         SUM(CASE WHEN agent_kind = 'claude-code' THEN 1 ELSE 0 END) AS claudeUseCount,
         SUM(CASE WHEN agent_kind = 'codex' THEN 1 ELSE 0 END) AS codexUseCount,
+        SUM(CASE WHEN agent_kind = 'pi' THEN 1 ELSE 0 END) AS piUseCount,
         SUM(CASE WHEN source = 'claude_skill_tool' THEN 1 ELSE 0 END) AS strongActiveUseCount,
-        SUM(CASE WHEN source IN ('claude_skill_file_read', 'codex_skill_file_read') THEN 1 ELSE 0 END) AS semiActiveUseCount,
+        SUM(CASE WHEN source IN ('claude_skill_file_read', 'codex_skill_file_read', 'pi_skill_file_read') THEN 1 ELSE 0 END) AS semiActiveUseCount,
         SUM(CASE
           WHEN source = 'claude_skill_tool' THEN 0
-          WHEN source IN ('claude_skill_file_read', 'codex_skill_file_read') THEN 0
+          WHEN source IN ('claude_skill_file_read', 'codex_skill_file_read', 'pi_skill_file_read') THEN 0
           ELSE 1
         END) AS passiveUseCount,
         SUM(CASE WHEN skill_document_hash IS NULL THEN 1 ELSE 0 END) AS unversionedUseCount
@@ -745,10 +786,10 @@ async function readSkillUsageSnapshotFromClient(
     read_rows AS (
       SELECT
         skill_document_hash AS skillDocumentHash,
-        COALESCE(NULLIF(sdk_session_id, ''), session_id) AS sessionKey,
+        agent_kind || ':' || session_id AS sessionKey,
         seen_at AS seenAt
       FROM filtered
-      WHERE source IN ('claude_skill_file_read', 'codex_skill_file_read')
+      WHERE source IN ('claude_skill_file_read', 'codex_skill_file_read', 'pi_skill_file_read')
     ),
     trend_rows AS (
       SELECT
@@ -770,6 +811,7 @@ async function readSkillUsageSnapshotFromClient(
       'latestSeenAt', latestSeenAt,
       'claudeUseCount', claudeUseCount,
       'codexUseCount', codexUseCount,
+      'piUseCount', piUseCount,
       'strongActiveUseCount', strongActiveUseCount,
       'semiActiveUseCount', semiActiveUseCount,
       'passiveUseCount', passiveUseCount,
@@ -786,6 +828,7 @@ async function readSkillUsageSnapshotFromClient(
       'latestSeenAt', latestSeenAt,
       'claudeUseCount', claudeUseCount,
       'codexUseCount', codexUseCount,
+      'piUseCount', piUseCount,
       'strongActiveUseCount', strongActiveUseCount,
       'semiActiveUseCount', semiActiveUseCount,
       'passiveUseCount', passiveUseCount,
@@ -883,8 +926,18 @@ function readEvidenceCandidates(
   analyzerVersion: string | null,
   recentSince: number,
 ): SkillUsageEvidenceIndex[] {
-  const filter = skillUsageEvidenceFilter(skillName, skillDocumentHash, analyzerVersion, recentSince);
+  const filter = skillUsageFilter(skillName, analyzerVersion, recentSince);
   const rows = db.prepare(`
+    WITH evidence_readable AS (
+      SELECT * FROM skill_usage_exposures
+      WHERE ${filter.sql} AND ${readableEvidenceFilter('skill_usage_exposures')}
+    ), evidence_filtered AS (
+      SELECT * FROM evidence_readable
+      WHERE ${skillDocumentHash === null ? '1 = 1' : `(
+        NOT EXISTS (SELECT 1 FROM evidence_readable WHERE skill_document_hash = ?)
+        OR skill_document_hash = ?
+      )`}
+    ), ${evidenceSelectionCtes()}
     SELECT
       id,
       raw_file_path AS rawFilePath,
@@ -905,12 +958,35 @@ function readEvidenceCandidates(
       tool_error_count AS toolErrorCount,
       command_call_count AS commandCallCount,
       command_failure_count AS commandFailureCount
-    FROM skill_usage_exposures
-    WHERE ${filter.sql}
+    FROM evidence_rows
     ORDER BY seen_at DESC
-    LIMIT 500
-  `).all(...filter.params) as Array<Record<string, unknown>>;
+  `).all(...(skillDocumentHash === null ? filter.params : [...filter.params, skillDocumentHash, skillDocumentHash])) as Array<Record<string, unknown>>;
   return rows.map(toEvidenceIndex);
+}
+
+function readableEvidenceFilter(table: 'filtered' | 'skill_usage_exposures'): string {
+  return `NOT EXISTS (SELECT 1 FROM skill_usage_sources s WHERE s.raw_file_path = ${table}.raw_file_path AND s.status = 'missing')`;
+}
+
+// 先为每个原生任务、每类问题挑代表，再限制候选数量，避免高频任务挤掉少见失败。
+function evidenceSelectionCtes(): string {
+  return `evidence_ranked AS (
+    SELECT *,
+      ROW_NUMBER() OVER (PARTITION BY agent_kind, session_id ORDER BY
+        CASE WHEN tool_error_count > command_failure_count THEN tool_error_count ELSE -1 END DESC, seen_at DESC, id) AS tool_rank,
+      ROW_NUMBER() OVER (PARTITION BY agent_kind, session_id ORDER BY command_failure_count DESC, seen_at DESC, id) AS command_rank,
+      ROW_NUMBER() OVER (PARTITION BY agent_kind, session_id ORDER BY repeated_tool_call_count DESC, seen_at DESC, id) AS repeated_rank,
+      ROW_NUMBER() OVER (PARTITION BY agent_kind, session_id ORDER BY seen_at DESC, id) AS recent_rank
+    FROM evidence_filtered
+  ), evidence_ids AS (
+    SELECT id FROM (SELECT id FROM evidence_ranked WHERE tool_rank = 1 AND tool_error_count > command_failure_count
+      ORDER BY tool_error_count DESC, seen_at DESC, id LIMIT 20)
+    UNION SELECT id FROM (SELECT id FROM evidence_ranked WHERE command_rank = 1 AND command_failure_count > 0
+      ORDER BY command_failure_count DESC, seen_at DESC, id LIMIT 20)
+    UNION SELECT id FROM (SELECT id FROM evidence_ranked WHERE repeated_rank = 1 AND repeated_tool_call_count > 0
+      ORDER BY repeated_tool_call_count DESC, seen_at DESC, id LIMIT 20)
+    UNION SELECT id FROM (SELECT id FROM evidence_ranked WHERE recent_rank = 1 ORDER BY seen_at DESC, id LIMIT 20)
+  ), evidence_rows AS (SELECT * FROM evidence_filtered WHERE id IN (SELECT id FROM evidence_ids))`;
 }
 
 function toEvidenceIndex(row: Record<string, unknown>): SkillUsageEvidenceIndex {
@@ -949,43 +1025,25 @@ function selectDiagnosisEvidence(
   const selected: SkillUsageEvidenceIndex[] = [];
   const selectedIds = new Set<string>();
   const selectedSessionKeys = new Set<string>();
-  const selectedMetricKeys = new Set<string>();
 
   for (const bucket of EVIDENCE_BUCKETS) {
     const matches = candidates
       .filter((item) => !selectedIds.has(item.id) && bucket.match(item))
-      .sort(bucket.compare);
+      .sort((a, b) => bucket.compare(a, b) || a.id.localeCompare(b.id));
     let bucketCount = 0;
     for (const item of matches) {
       if (selected.length >= limit) return selected;
       if (bucketCount >= perBucketLimit) break;
-      const sessionKey = item.sdkSessionId || item.sessionId || item.id;
-      const metricKey = evidenceMetricSignature(item);
-      if (selectedSessionKeys.has(sessionKey) || selectedMetricKeys.has(metricKey)) continue;
+      const sessionKey = `${item.agentKind}:${item.sessionId || item.id}`;
+      if (selectedSessionKeys.has(sessionKey)) continue;
       selected.push({ ...item, bucket: bucket.id });
       selectedIds.add(item.id);
       selectedSessionKeys.add(sessionKey);
-      selectedMetricKeys.add(metricKey);
       bucketCount += 1;
     }
   }
 
   return selected;
-}
-
-function evidenceMetricSignature(item: SkillUsageEvidenceIndex): string {
-  const observation = item.observation;
-  return [
-    item.agentKind,
-    item.source,
-    item.skillDocumentHash ?? '',
-    item.documentHashSource,
-    observation.toolCallCount,
-    observation.repeatedToolCallCount,
-    observation.toolErrorCount,
-    observation.commandCallCount,
-    observation.commandFailureCount,
-  ].join(':');
 }
 
 const EVIDENCE_BUCKETS: Array<{
@@ -1024,6 +1082,8 @@ function buildSkillUsageDiagnosisPrompt(params: {
   skillPath: string | null;
   summary: SkillUsageSummary;
   evidence: SkillUsageEvidenceIndex[];
+  locale?: SupportedLocale;
+  refreshStatus?: SkillUsageRefreshStatus;
 }): string {
   const stats = buildPromptStats(params.summary);
   const evidenceIndexes = params.evidence.map((item) => ({
@@ -1041,40 +1101,14 @@ function buildSkillUsageDiagnosisPrompt(params: {
     observation: item.observation,
   }));
 
-  return [
-    `请诊断 Skill「${params.skillName}」的实际使用表现。`,
-    '',
-    '边界：',
-    '- 不要修改任何文件；先读取证据并给出诊断。',
-    '- 读取目标 skillPath 指向的 SKILL.md；如果 skillPath 为空或不可读，说明缺少文档证据。',
-    '- 不要猜测用户意图；读取每条 rawFilePath 中 rawLineNo 附近上下文。',
-    '- rawFilePath/rawLineNo 是证据入口，不是结论；读取失败时说明证据文件不可读，不要猜。',
-    '- source/file_read 只表示模型接触过文档，不证明后续行为由 skill 导致。',
-    `- 统计摘要和原始会话索引只覆盖最近 ${RECENT_USAGE_WINDOW_DAYS} 天，不代表历史全量。`,
-    '- 诊断结论需要区分：skill 内容问题、任务复杂度问题、环境/工具问题、agent 行为问题。',
-    '- 工具失败、命令失败、重复调用都是过程摩擦信号，不要直接当成最终成功率或质量分。',
-    '- 不建议改 skill 也是有效结论；但必须把排除原因告诉用户，让用户知道问题更可能在哪。',
-    '',
-    '目标 Skill：',
-    JSON.stringify({
-      name: params.skillName,
-      skillPath: params.skillPath,
-    }, null, 2),
-    '',
-    '统计摘要：',
-    JSON.stringify(stats, null, 2),
-    '',
-    '原始会话索引：',
-    JSON.stringify(evidenceIndexes, null, 2),
-    '',
-    '读取 skillPath 指向的 SKILL.md，再读取每条 rawFilePath 中 rawLineNo 附近上下文，然后输出诊断报告：',
-    '1. 结论：只允许用「建议改 skill」「暂不建议改 skill」「证据不足」之一开头。',
-    '2. 已读取证据：列出 SKILL.md 和读取过的 rawFilePath:rawLineNo；读取失败也要列出。',
-    '3. 为什么：说明证据覆盖了哪些问题模式，并判断工具失败、命令失败、重复调用是否被后续动作恢复或解释。',
-    '4. 排除原因：即使暂不建议改 skill，也要说明用户接下来该看什么；适用时覆盖环境 / 权限 / 依赖问题、任务复杂度、工具失败或命令失败、agent 自行选择、source/file_read 无因果证据、样本太少。',
-    '5. 归因：按 skill 内容问题、任务复杂度、环境/工具问题、agent 行为问题、用户偏好变化、证据不足分类，并给出对应证据。',
-    '6. 如果证据支持改 skill，给出最小改动方向和原因；如果不支持，明确说暂不建议改，并给出非 skill 的下一步排查方向。',
-  ].join('\n');
+  return renderSkillUsageDiagnosisPrompt({
+    skillName: params.skillName,
+    skillPath: params.skillPath,
+    stats,
+    evidenceIndexes,
+    locale: params.locale,
+    refreshStatus: params.refreshStatus,
+  });
 }
 
 function buildPromptStats(summary: SkillUsageSummary): Record<string, unknown> {
@@ -1256,6 +1290,7 @@ function agentBreakdownFromRow(row: Record<string, unknown> | undefined): SkillU
   return {
     claude: numberValue(row?.claudeUseCount),
     codex: numberValue(row?.codexUseCount),
+    pi: numberValue(row?.piUseCount),
   };
 }
 
@@ -1347,20 +1382,6 @@ function skillUsageFilter(
   return { sql: clauses.join('\n      AND '), params };
 }
 
-function skillUsageEvidenceFilter(
-  skillName: string,
-  skillDocumentHash: string | null,
-  analyzerVersion: string | null,
-  recentSince: number,
-): { sql: string; params: unknown[] } {
-  const filter = skillUsageFilter(skillName, analyzerVersion, recentSince);
-  if (skillDocumentHash === null) return filter;
-  return {
-    sql: `${filter.sql}\n      AND skill_document_hash = ?`,
-    params: [...filter.params, skillDocumentHash],
-  };
-}
-
 function toRecentSourceRecords(rows: Array<Record<string, unknown>>): SkillUsageRecentSourceRecord[] {
   return rows.map((row) => {
     const agentKind: SkillUsageAgentKind = stringValue(row.agentKind) === 'claude-code' ? 'claude-code' : stringValue(row.agentKind) === 'pi' ? 'pi' : 'codex';
@@ -1369,6 +1390,8 @@ function toRecentSourceRecords(rows: Array<Record<string, unknown>>): SkillUsage
       agentKind,
       sessionId: stringValue(row.sessionId),
       sdkSessionId: stringValue(row.sdkSessionId),
+      mtimeMs: numberValue(row.mtimeMs),
+      sizeBytes: numberValue(row.sizeBytes),
     };
   }).filter((row) => row.rawFilePath && row.sessionId && row.sdkSessionId);
 }

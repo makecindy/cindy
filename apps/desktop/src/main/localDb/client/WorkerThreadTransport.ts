@@ -588,14 +588,15 @@ function skillUsageApplyMutation(readyDb, args) {
       "INSERT INTO skill_usage_sources (raw_file_path, analyzer_version, agent_kind, session_id, sdk_session_id, mtime_ms, size_bytes, last_scanned_at, status, error) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ok', NULL) ON CONFLICT(raw_file_path) DO UPDATE SET analyzer_version = excluded.analyzer_version, agent_kind = excluded.agent_kind, session_id = excluded.session_id, sdk_session_id = excluded.sdk_session_id, mtime_ms = excluded.mtime_ms, size_bytes = excluded.size_bytes, last_scanned_at = excluded.last_scanned_at, status = 'ok', error = NULL",
     );
     const deleteExposure = readyDb.prepare(
-      'DELETE FROM skill_usage_exposures WHERE raw_file_path = ? AND analyzer_version = ?',
+      'DELETE FROM skill_usage_exposures WHERE analyzer_version = ? AND (raw_file_path = ? OR (agent_kind = ? AND session_id = ?))',
     );
     const insertExposure = readyDb.prepare(
       'INSERT INTO skill_usage_exposures (id, analyzer_version, raw_file_path, raw_line_no, session_id, sdk_session_id, agent_kind, skill_name, skill_path, skill_document_hash, exposure_content_hash, document_hash_source, source, tool_use_id, seen_at, tool_call_count, repeated_tool_call_count, tool_error_count, command_call_count, command_failure_count) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
     );
     return readyDb.transaction(() => {
       upsertSource.run(source.rawFilePath, source.analyzerVersion, source.agentKind, source.sessionId, source.sdkSessionId, source.mtimeMs, source.sizeBytes, source.scannedAt);
-      deleteExposure.run(source.rawFilePath, source.analyzerVersion);
+      deleteExposure.run(source.analyzerVersion, source.rawFilePath, source.agentKind, source.sessionId);
+      readyDb.prepare('DELETE FROM skill_usage_sources WHERE agent_kind = ? AND session_id = ? AND raw_file_path <> ? AND analyzer_version = ? AND NOT EXISTS (SELECT 1 FROM skill_usage_exposures e WHERE e.raw_file_path = skill_usage_sources.raw_file_path)').run(source.agentKind, source.sessionId, source.rawFilePath, source.analyzerVersion);
       for (let index = 0; index < exposures.length; index += 1) {
         const row = asRecord(exposures[index], 'exposures.' + index);
         insertExposure.run(
@@ -631,11 +632,15 @@ function skillUsageApplyMutation(readyDb, args) {
       readyDb.prepare('DELETE FROM skill_usage_sources WHERE analyzer_version = ? AND mtime_ms < ? AND raw_file_path NOT IN (SELECT raw_file_path FROM skill_usage_exposures)').run(analyzerVersion, recentSince);
     })();
   }
-  if (kind === 'promote') {
+  if (kind === 'prepareCache') {
     const analyzerVersion = expectString(payload.analyzerVersion, 'analyzerVersion');
     return readyDb.transaction(() => {
+      const currentVersion = readyDb.prepare("SELECT value FROM migration_meta WHERE key = 'skill_usage_analyzer_version'").pluck().get();
+      if (currentVersion === analyzerVersion) return;
+      readyDb.prepare('DELETE FROM skill_usage_exposures').run();
+      readyDb.prepare('DELETE FROM skill_usage_sources').run();
+      readyDb.prepare("DELETE FROM migration_meta WHERE key = 'skill_usage_last_success_at'").run();
       readyDb.prepare("INSERT INTO migration_meta (key, value) VALUES ('skill_usage_analyzer_version', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(analyzerVersion);
-      readyDb.prepare('DELETE FROM skill_usage_exposures WHERE analyzer_version <> ?').run(analyzerVersion);
     })();
   }
   throw invalidArgs('unknown skill usage mutation: ' + kind);

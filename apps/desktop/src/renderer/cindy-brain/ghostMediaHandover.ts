@@ -21,8 +21,8 @@
 
 import type { TFunction } from 'i18next';
 
-import { getMimeType, type AttachedFile } from '@/lib/fileTypes';
-import { getDraft, saveDraft } from '@/lib/composerDraftStore';
+import { getMimeType } from '@/lib/fileTypes';
+import { appendAttachmentToDraft } from '@/lib/composerDraftStore';
 import { toast } from '@/lib/toast';
 import { extractIpcError } from '@/utils/ipcError';
 
@@ -64,7 +64,7 @@ export async function attachGhostMediaToSession(
       // 视频:不复制字节,直接以指纹仓磁盘路径落 file 类别附件(与从系统
       // 拖 .mp4 进聊天完全同款——发送时路径透传给 agent)。托盘移除 file
       // 附件不清理源文件,总仓 blob 不受影响。
-      appendDraftAttachment(sessionId, {
+      appendAttachmentToDraft(sessionId, {
         id: crypto.randomUUID(),
         name: resolved.name,
         path: resolved.absPath,
@@ -79,7 +79,7 @@ export async function attachGhostMediaToSession(
     // 图片:与 ImageLightbox「发送到对话」同一条链路——复制进会话私有缓存
     // (托盘移除附件会删缓存文件,绝不直接引用总仓 blob)。
     const meta = await window.electronAPI.cacheMediaForSession({ url: resolved.url, sessionId });
-    appendDraftAttachment(sessionId, {
+    appendAttachmentToDraft(sessionId, {
       id: crypto.randomUUID(),
       name: meta.name,
       // 与 `clipboard://paste-*` 同型:图片附件以 url 为准,path 只是来源占位。
@@ -95,19 +95,4 @@ export async function attachGhostMediaToSession(
   } catch (err) {
     toast.error(extractIpcError(err)?.message ?? t('chat.media.sendToChatFailed'));
   }
-}
-
-/** 把一条附件合入会话草稿(托盘可见;其余草稿字段原样保留)。 */
-function appendDraftAttachment(sessionId: string, attached: AttachedFile): void {
-  const existing = getDraft(sessionId);
-  saveDraft(
-    sessionId,
-    {
-      text: existing?.text ?? null,
-      attachments: [...(existing?.attachments ?? []), attached],
-      quotes: existing?.quotes ?? [],
-      browserComments: existing?.browserComments ?? [],
-    },
-    { preserveRemoteOptimisticRecovery: true },
-  );
 }

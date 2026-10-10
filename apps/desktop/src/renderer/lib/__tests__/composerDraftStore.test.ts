@@ -4,6 +4,7 @@ import type { JSONContent } from '@tiptap/core';
 import type { AttachedFile } from '@/lib/fileTypes';
 import type { BrowserCommentDraftItem } from '@/lib/browserComments';
 import {
+  appendAttachmentToDraft,
   appendBrowserCommentToDraft,
   appendQuoteToDraft,
   captureDraftDiscardToken,
@@ -503,24 +504,28 @@ describe('remote optimistic draft recovery', () => {
     clearDraft(key);
   });
 
-  it('keeps FIFO recovery after incremental quote and browser comment appends', () => {
+  it('keeps FIFO recovery after incremental quote, browser comment and attachment appends', () => {
     const key = 'session-remote-recovery-incremental-appends';
     const commentA = browserComment('comment-a', 1);
     const commentB = browserComment('comment-b', 2);
     const commentC = browserComment('comment-c', 3);
+    const attachmentA = attachment('attachment-a');
+    const attachmentB = attachment('attachment-b');
+    const attachmentC = attachment('attachment-c');
     restoreRemoteOptimisticDraft(key, {
       clientId: 'client-a',
       text: textSequenceDoc('A'),
-      attachments: [],
+      attachments: [attachmentA],
       browserComments: [commentA],
     });
 
     appendQuoteToDraft(key, { text: 'C quote' });
     appendBrowserCommentToDraft(key, commentC);
+    appendAttachmentToDraft(key, attachmentC);
     restoreRemoteOptimisticDraft(key, {
       clientId: 'client-b',
       text: textSequenceDoc('B'),
-      attachments: [],
+      attachments: [attachmentB],
       browserComments: [commentB],
     });
 
@@ -548,6 +553,11 @@ describe('remote optimistic draft recovery', () => {
       'comment-a',
       'comment-b',
       'comment-c',
+    ]);
+    expect(getDraft(key)?.attachments.map((file) => file.id)).toEqual([
+      'attachment-a',
+      'attachment-b',
+      'attachment-c',
     ]);
     clearDraft(key);
   });
