@@ -1,5 +1,5 @@
 import { providerSetupLink, providerPresetOAuth, providerPresetOAuthRuntimes, buildUserProvider, isMimoTokenPlanPreset } from '@cindy/model-providers';
-import { bindProviderPresetRuntime, providerEndpointBindings } from '@cindy/model-providers';
+import { bindProviderPresetRuntime, providerEndpointBindings, bindProviderEndpoint } from '@cindy/model-providers';
 /**
  * AddProviderWizard —— 「添加供应商」三步向导(2026-07 模型供应商重构)。
  *
@@ -110,9 +110,16 @@ function presetRuntimeBaseUrl(
 ): string {
   const runtime = preset.runtimes[agent];
   if (!runtime) return '';
-  // 只有 Pi runtime 的端点对用户开放改写；Claude / Codex 保持预设里已核验的地址。
-  if (agent === 'pi' && edited.pi !== undefined) return edited.pi.trim();
-  return runtime.baseUrl;
+  // 只有 Pi runtime 的端点对用户开放改写；Claude / Codex 不给输入框。
+  if (agent === 'pi') return edited.pi !== undefined ? edited.pi.trim() : runtime.baseUrl;
+  // 但同一服务 / 同一账户模板的其它 runtime 仍由 Pi 的填写派生：否则 Azure OpenAI 的 {resource}、
+  // Vertex 的 {location} 会原样存进配置，主进程拒绝含占位符的 baseUrl，整个连接建不出来。
+  const piRuntime = preset.runtimes.pi;
+  const piEndpoint = edited.pi?.trim();
+  if (!piRuntime || !piEndpoint) return runtime.baseUrl;
+  if (piRuntime.baseUrl === runtime.baseUrl) return piEndpoint;
+  const bindings = providerEndpointBindings(piRuntime.baseUrl, piEndpoint);
+  return bindings ? bindProviderEndpoint(runtime.baseUrl, bindings, piEndpoint) : runtime.baseUrl;
 }
 
 function isValidEditablePresetBaseUrl(value: string, template?: string): boolean {
@@ -947,8 +954,8 @@ export function AddProviderWizard({
     const agents = configuredPresetAgents(preset);
     const editableBaseUrlsValid = agents.every((agent) => {
       const rt = preset.runtimes[agent];
-      // 只有 Pi 端点可被用户改写；其余 runtime 的值恒等于预设地址，无需校验。
-      if (agent !== 'pi' || !rt) return true;
+      if (!rt) return true;
+      // 含 Pi 派生出来的 Claude / Codex 地址也要校验，它们同样会进入请求与保存。
       return isValidEditablePresetBaseUrl(presetRuntimeBaseUrl(preset, agent, presetBaseUrls), rt.baseUrl);
     });
     if (!editableBaseUrlsValid) return;
@@ -1431,8 +1438,6 @@ export function AddProviderWizard({
           (!runtime.modelsUrl?.trim() || isLoopbackProviderUrl(runtime.modelsUrl.trim()))
         );
       }
-      // 只有 Pi 端点可改写；Claude / Codex 的值恒等于预设地址，无需校验。
-      if (agent !== 'pi') return true;
       return isValidEditablePresetBaseUrl(value, runtime.baseUrl);
     });
   const presetCanContinue =

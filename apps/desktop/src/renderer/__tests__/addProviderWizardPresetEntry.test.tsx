@@ -351,12 +351,12 @@ describe('AddProviderWizard — preset 直达', () => {
     expect(window.electronAPI.maker.llamaCppInstall).not.toHaveBeenCalled();
     expect(window.electronAPI.maker.llamaCppStart).not.toHaveBeenCalled();
   });
-  it('keeps the Codex address of an existing llama.cpp server read-only while Pi stays editable', async () => {
+  it('derives the Codex address of an existing llama.cpp server from the edited Pi endpoint', async () => {
     const preset = BUNDLED_CATALOG.presets!.find(p => p.id === 'llamacpp')!;
     vi.mocked(window.electronAPI.maker.listProviderPresets).mockResolvedValue({ presets: [preset] });
     vi.mocked(window.electronAPI.maker.fetchProviderModels).mockResolvedValue({ ok: true, models: [{ id: 'qwen3-8b', name: 'qwen3-8b' }] });
     renderWizard('llamacpp');
-    // 只有 Pi runtime 提供端点输入框，Codex 沿用预设里已核验的地址。
+    // 只有 Pi runtime 提供端点输入框，Codex 跟着同一服务的地址走。
     const inputs = await screen.findAllByDisplayValue('http://127.0.0.1:8080/v1');
     expect(inputs).toHaveLength(1);
     fireEvent.change(inputs[0]!, { target: { value: 'http://127.0.0.1:8081/v1' } });
@@ -366,8 +366,7 @@ describe('AddProviderWizard — preset 直达', () => {
     fireEvent.click(screen.getByText('settings.providers.wizard.finish'));
     await waitFor(() => expect(createCustomProvider).toHaveBeenCalledOnce());
     const config = vi.mocked(createCustomProvider).mock.calls[0][0];
-    expect(config.runtimes.pi?.baseUrl).toBe('http://127.0.0.1:8081/v1');
-    expect(config.runtimes.codex?.baseUrl).toBe('http://127.0.0.1:8080/v1');
+    expect(Object.values(config.runtimes).map(rt => rt?.baseUrl)).toEqual(Object.keys(config.runtimes).map(() => 'http://127.0.0.1:8081/v1'));
   });
   it('connects an existing llama.cpp server from the preset deep link without touching the managed runtime', async () => {
     const preset = BUNDLED_CATALOG.presets!.find(p => p.id === 'llamacpp')!;
@@ -684,7 +683,7 @@ describe('AddProviderWizard — preset 直达', () => {
     expect(keys.pi).toBeUndefined();
   });
 
-  it('editable Pi preset saves the edited base URL while Codex keeps the preset endpoint and path', async () => {
+  it('editable Pi preset saves the edited base URL and derives the Codex slot from the same service', async () => {
     const editablePreset = {
       id: 'local-gateway',
       name: 'Local Gateway',
@@ -717,7 +716,7 @@ describe('AddProviderWizard — preset 直达', () => {
       expect.objectContaining({ agent: 'pi', baseUrl: 'http://localhost:11434/custom' }),
     );
     expect(window.electronAPI.maker.fetchProviderModels).toHaveBeenCalledWith(
-      expect.objectContaining({ agent: 'codex', baseUrl: 'http://127.0.0.1:4000/v1' }),
+      expect.objectContaining({ agent: 'codex', baseUrl: 'http://localhost:11434/custom' }),
     );
     fireEvent.click(screen.getByText('settings.providers.wizard.finish'));
 
@@ -726,12 +725,12 @@ describe('AddProviderWizard — preset 直达', () => {
       baseUrl: 'http://localhost:11434/custom',
     });
     expect(vi.mocked(createCustomProvider).mock.calls[0][0].runtimes.codex).toMatchObject({
-      baseUrl: 'http://127.0.0.1:4000/v1',
+      baseUrl: 'http://localhost:11434/custom',
       requestPath: '/tenant/acme/infer',
     });
   });
 
-  it('offers the endpoint field for Pi only and leaves the Codex slot on the preset template', async () => {
+  it('offers the endpoint field for Pi only and binds the Codex slot template from it', async () => {
     const preset = {
       id: 'azure-slots',
       name: 'Azure Slots',
@@ -753,9 +752,18 @@ describe('AddProviderWizard — preset 直达', () => {
     renderWizard('azure-slots');
     const inputs = await screen.findAllByDisplayValue('https://{resource}.openai.azure.com/openai/v1');
     expect(inputs).toHaveLength(1);
-    const [piInput] = inputs;
-    fireEvent.change(piInput!, { target: { value: 'https://myres.openai.azure.com/openai/v1' } });
+    fireEvent.change(inputs[0]!, { target: { value: 'https://myres.openai.azure.com/openai/v1' } });
     expect(screen.getAllByDisplayValue('https://myres.openai.azure.com/openai/v1')).toHaveLength(1);
+    fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'azure-key' } });
+    fireEvent.click(screen.getByText('settings.providers.wizard.next'));
+    // 预设模型默认勾选；取消勾选会让保存按钮保持禁用。
+    expect(await screen.findByText('M')).not.toBeNull();
+    fireEvent.click(screen.getByText('settings.providers.wizard.finish'));
+    await waitFor(() => expect(createCustomProvider).toHaveBeenCalledOnce());
+    // 未绑定的 {resource} 会被主进程拒绝，两个 runtime 都必须存成具体地址。
+    const config = vi.mocked(createCustomProvider).mock.calls[0][0];
+    expect(config.runtimes.pi?.baseUrl).toBe('https://myres.openai.azure.com/openai/v1');
+    expect(config.runtimes.codex?.baseUrl).toBe('https://myres.openai.azure.com/openai/v1');
   });
 
   it('accepts the official Vertex global host and rejects an unrelated host on the Vertex template', async () => {
@@ -790,6 +798,14 @@ describe('AddProviderWizard — preset 直达', () => {
     fireEvent.change(inputs[0]!, { target: { value: 'https://aiplatform.googleapis.com' } });
     expect(screen.getAllByDisplayValue('https://aiplatform.googleapis.com')).toHaveLength(1);
     expect(next.disabled).toBe(false);
+    fireEvent.click(next);
+    expect(await screen.findByText('Gemini 3.8 Flash')).not.toBeNull();
+    fireEvent.click(screen.getByText('settings.providers.wizard.finish'));
+    await waitFor(() => expect(createCustomProvider).toHaveBeenCalledOnce());
+    // 未绑定的 {location} 会被主进程拒绝，Codex 侧也要落成具体地址。
+    const config = vi.mocked(createCustomProvider).mock.calls[0][0];
+    expect(config.runtimes.pi?.baseUrl).toBe('https://aiplatform.googleapis.com');
+    expect(config.runtimes.codex?.baseUrl).toBe('https://aiplatform.googleapis.com');
   });
 
   it('LiteLLM:模型发现失败时可手填模型 ID，并以 none 鉴权保存', async () => {
@@ -1504,6 +1520,6 @@ it('sets up Sub2API from one site address and retains discovered capabilities in
   }
   expect(config.runtimes.pi?.baseUrl).toBe('https://relay.example/team/v1');
   expect(config.runtimes.pi?.modelsUrl).toBe('https://relay.example/team/v1/models?client_version=0.147.0');
-  expect(config.runtimes['claude-code']?.baseUrl).toBe('https://{endpoint}/v1');
-  expect(config.runtimes.codex?.baseUrl).toBe('https://{endpoint}/v1');
+  expect(config.runtimes['claude-code']?.baseUrl).toBe('https://relay.example/team/v1');
+  expect(config.runtimes.codex?.baseUrl).toBe('https://relay.example/team/v1');
 });
