@@ -41,6 +41,12 @@ import { registerAsyncQuestionTool, supportsAsyncQuestionTool, type AskUserQuest
 import { XdtHelperToolRegistry } from './lizi_xdtHelperToolRegistry.js';
 import { registerCreateProjectTool, type CreateProjectCallback } from './xdt-helper/create_project.js';
 import { registerMoveSessionTool, type MoveSessionCallback } from './xdt-helper/move_session.js';
+import { registerPinSessionsTool, registerUnpinSessionsTool, type PinSessionsDeps } from './xdt-helper/pin_sessions.js';
+import { registerDeleteSessionsTool, type DeleteSessionsDeps } from './xdt-helper/delete_sessions.js';
+import { registerExportSessionTool, type ExportSessionDeps } from './xdt-helper/export_session.js';
+import { registerOpenSessionInNewWindowTool, type OpenSessionInNewWindowDeps } from './xdt-helper/open_session_in_new_window.js';
+import { registerGetSessionBranchesTool, type GetSessionBranchesDeps } from './xdt-helper/get_session_branches.js';
+import { registerForkSessionTool, type ForkSessionDeps } from './xdt-helper/fork_session.js';
 import { registerProjectManagementTools, type ProjectManagementCallbacks } from './xdt-helper/project_management.js';
 import {
   registerGetCapabilitiesTool,
@@ -814,6 +820,27 @@ export interface XdtHelperMcpDeps {
    * unarchive_sessions 会被注册。host 负责存在性校验(全有才写)、写库并广播 sessions:patched。
    */
   setSessionsStatus?: ArchiveSessionsDeps['setSessionsStatus'];
+  /**
+   * 批量置顶 / 取消置顶 session 回调。host 注入后, control 类工具 pin_sessions /
+   * unpin_sessions 会被注册。host 走 sessions:update 业务体写 pinnedAt。
+   */
+  setSessionsPinned?: PinSessionsDeps['setSessionsPinned'];
+  /**
+   * 批量软删除 session 回调(dry-run + 确认 token)。host 注入后, control 类工具
+   * delete_sessions 会被注册。host 走 sessions:update 业务体写 status=deleted。
+   */
+  deleteSessions?: DeleteSessionsDeps['deleteSessions'];
+  /**
+   * 导出 .cshare 分享包回调。host 注入后, control 类工具 export_session 会被注册。
+   * host 走 session-share 导出编排(与 GUI「导出分享包」同一条路径)。
+   */
+  exportSession?: ExportSessionDeps['exportSession'];
+  /** 在新窗口打开 session 回调。host 注入后, control 类工具 open_session_in_new_window 会被注册。 */
+  openSessionInNewWindow?: OpenSessionInNewWindowDeps['openSessionInNewWindow'];
+  /** 会话分叉家族查询回调。host 注入后, control 类工具 get_session_branches 会被注册。 */
+  getSessionBranches?: GetSessionBranchesDeps['getSessionBranches'];
+  /** 在某条消息处分叉出新会话回调。host 注入后, control 类工具 fork_session 会被注册。 */
+  forkSession?: ForkSessionDeps['forkSession'];
 }
 
 /**
@@ -921,6 +948,44 @@ export function createXdtHelperMcpServer(
     };
     registerArchiveSessionsTool(registry, archiveDeps);
     registerUnarchiveSessionsTool(registry, archiveDeps);
+  }
+  if (deps.setSessionsPinned) {
+    const pinDeps = {
+      getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
+      setSessionsPinned: deps.setSessionsPinned,
+    };
+    registerPinSessionsTool(registry, pinDeps);
+    registerUnpinSessionsTool(registry, pinDeps);
+  }
+  if (deps.deleteSessions) {
+    registerDeleteSessionsTool(registry, {
+      getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
+      deleteSessions: deps.deleteSessions,
+    });
+  }
+  if (deps.exportSession) {
+    registerExportSessionTool(registry, {
+      getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
+      exportSession: deps.exportSession,
+    });
+  }
+  if (deps.openSessionInNewWindow) {
+    registerOpenSessionInNewWindowTool(registry, {
+      getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
+      openSessionInNewWindow: deps.openSessionInNewWindow,
+    });
+  }
+  if (deps.getSessionBranches) {
+    registerGetSessionBranchesTool(registry, {
+      getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
+      getSessionBranches: deps.getSessionBranches,
+    });
+  }
+  if (deps.forkSession) {
+    registerForkSessionTool(registry, {
+      getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
+      forkSession: deps.forkSession,
+    });
   }
 
   // History 类工具: 仅 host 注入了 history 回调时注册。

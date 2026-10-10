@@ -168,6 +168,7 @@ vi.mock('../../../cindy-brain/index.js', () => ({
 }));
 
 import {
+  SESSION_PIN_UNCHANGED,
   broadcastSessionPatched,
   deleteBotProfileAndDetachSessionsInDb,
   patchSessionMetaInDb,
@@ -1056,6 +1057,39 @@ describe('local-db:sessions:update handler wiring', () => {
       patch: { pinnedAt: null, summary: null },
     });
     expect(h.summarizeSession).not.toHaveBeenCalled();
+  });
+
+  it('skips a concurrent pin in the conditional SQL write without broadcasting', async () => {
+    const pinnedAt = '2026-01-02T00:00:00.000Z';
+    await expect(updateSessionInDb('codex-local', { pinnedAt }, undefined, {
+      assertCurrent: () => undefined,
+      beforeUpdate: async () => undefined,
+      beforeWrite: () => {
+        h.sqlite!.prepare('UPDATE sessions SET pinned_at = ? WHERE id = ?').run(
+          Date.parse('2026-01-01T00:00:00.000Z'), 'codex-local',
+        );
+      },
+      skipIfPinnedUnchanged: true,
+    })).rejects.toBe(SESSION_PIN_UNCHANGED);
+    expect(h.sqlite!.prepare('SELECT pinned_at FROM sessions WHERE id = ?').get('codex-local'))
+      .toEqual({ pinned_at: Date.parse('2026-01-01T00:00:00.000Z') });
+    expect(h.tapWindowBroadcast).not.toHaveBeenCalled();
+    expect(h.summarizeSession).not.toHaveBeenCalled();
+  });
+
+  it('applies a pin after a concurrent unpin inside the write path', async () => {
+    h.sqlite!.prepare('UPDATE sessions SET pinned_at = ? WHERE id = ?').run(1, 'codex-local');
+    const pinnedAt = '2026-01-02T00:00:00.000Z';
+    await updateSessionInDb('codex-local', { pinnedAt }, undefined, {
+      assertCurrent: () => undefined,
+      beforeUpdate: async () => undefined,
+      beforeWrite: () => {
+        h.sqlite!.prepare('UPDATE sessions SET pinned_at = NULL WHERE id = ?').run('codex-local');
+      },
+      skipIfPinnedUnchanged: true,
+    });
+    expect(h.sqlite!.prepare('SELECT pinned_at FROM sessions WHERE id = ?').get('codex-local'))
+      .toEqual({ pinned_at: Date.parse(pinnedAt) });
   });
 
   it('relocates transcripts when workingDir actually changes on a local cc session', async () => {
