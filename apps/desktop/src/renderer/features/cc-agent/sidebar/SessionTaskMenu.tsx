@@ -28,6 +28,7 @@ import {
   DropdownMenuSubContent,
 } from '@/components/ui/dropdown-menu';
 import { isEmptyDraftSession } from '../lib/sessionDisplayTitle';
+import { canOfferSessionProjectMove } from './sessionProjectDrop';
 import { AddRemoteProjectDialog } from '@/components/new-chat/AddRemoteProjectDialog';
 import {
   TaskMoveSubmenu,
@@ -284,7 +285,7 @@ function ActiveSessionTaskMenu({
         {!guest && (
           <>
             {/* Agent 在另一台电脑运行的任务：Agent 会话记录在那台，移动与复制到其他电脑都会丢失它。 */}
-            {!archived && !empty && !session.remoteHostId && !session.agentDeviceId && (
+            {canOfferSessionProjectMove(session) && (
               <TaskMoveSubmenu
                 session={session}
                 disabled={ownerActionsBlocked}

@@ -172,6 +172,9 @@ import {
 } from './lib/sidebarProjectRestore';
 import { PinnedSection, type PinnedSidebarEntry } from './sidebar/sections/PinnedSection';
 import { ProjectNode as ProjectNodeView } from './sidebar/sections/ProjectNode';
+import { PROJECT_DROP_CLASS, useSessionProjectDrop } from './sidebar/useSessionProjectDrop';
+import { moveRemoteTaskProject } from './sidebar/TaskMoveSubmenu';
+import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 import { compareDialogueSessions, type DialogueSortBy } from './sidebar/sections/DialogueSection';
 import { hasSettledOnlineDeviceSection } from './lib/mainListModel';
 import { sidebarPriorityContext } from './lib/sidebarPriorityContext';
@@ -2952,6 +2955,28 @@ function ExpandedView({
     [collapse.expand, collapse.setCollapsed, effectiveRunningSessionIds, patchLocal, t],
   );
 
+  const projectDrop = useSessionProjectDrop({
+    getSession: (id) => sessionsByIdRef.current.get(id),
+    getProject: (key) => visibleProjectUniverse.find((project) => project.projectKey === key),
+    expandProject: collapse.expand,
+    onMoveSession: (id, target) => {
+      const session = sessionsByIdRef.current.get(id);
+      if (!session?.deviceLinkDeviceId) {
+        void handleMoveSession(id, target);
+        return;
+      }
+      if (target.kind === 'browseProject') return;
+      // A remote row must be moved by its owner, never by the controller's local DB.
+      const owner = getDataOwnerGeneration();
+      void moveRemoteTaskProject(session, target.kind === 'dialogue' ? null : target.workingDir)
+        .catch((error) => {
+          if (!isDataOwnerGenerationCurrent(owner)) return;
+          const code = /MIGRATION_[A-Z_]+/.exec(String(error))?.[0];
+          toast.error(t(`taskMigration.errors.${code}`, { defaultValue: t('taskMove.failed') }));
+        });
+    },
+  });
+
   /* ---- Delete / Archive / Unarchive action handlers ----
    * delete 走 ConfirmDialog —— 不可逆，必须确认；
    * archive / archive-now 都直接执行，不弹确认框：归档可逆（菜单里就有「恢复」），
@@ -3709,6 +3734,9 @@ function ExpandedView({
       <div className="relative flex min-h-0 flex-1 flex-col">
         <div
           ref={sidebarScrollRef}
+          onDragOverCapture={projectDrop.onDragOverCapture}
+          onDropCapture={projectDrop.onDropCapture}
+          onDragLeaveCapture={projectDrop.onDragLeaveCapture}
           className="flex flex-col gap-2 pt-0 pb-4 overflow-y-auto flex-1"
           // 空白处右键 = 打开整理菜单(2026-08-12 用户裁决)。命中会话行 / 项目行 /
           // 对话组头时不接管——那些行有各自的右键菜单,由它们 stopPropagation 后
@@ -3936,6 +3964,14 @@ function ExpandedView({
                   onCreateDialogue={handleCreateDialogue}
                   isCreateDialogueDisabled={dialogueCreatePending}
                 />
+                {projectDrop.showDialogueDrop && (
+                  <div
+                    data-session-dialogue-drop="source"
+                    className={cn('mx-3 flex min-h-8 items-center rounded-full border border-dashed border-[var(--border-default)] px-3 text-sm text-[var(--sidebar-list-muted)]', PROJECT_DROP_CLASS)}
+                  >
+                    {t('ccAgent.sidebar.sessionMenu.moveToDialogue')}
+                  </div>
+                )}
               </>
             )}
           </div>
