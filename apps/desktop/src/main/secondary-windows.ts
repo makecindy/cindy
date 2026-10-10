@@ -51,6 +51,9 @@ const OFFSET_PX = 30;
 // http(s) 外链一律丢给系统浏览器,与主窗 createWindow 的 will-navigate /
 // setWindowOpenHandler 守卫保持一致(dev server origin 视为内部允许导航)。
 // 导出供其它子窗口(right-sidebar-window)复用同一守卫。
+// 顶层导航 deny-by-default:非内部 URL 一律 preventDefault,只有 http(s) 额外
+// 转交系统浏览器;file:// 等其他 scheme 与解析失败的 URL 不得在窗内导航(#5450 R01
+// 纵深防御:渲染层 markdown anchor 已全部 preventDefault,此处收紧守卫本身)。
 export function installExternalLinkGuards(win: BrowserWindow): void {
   const devOrigin = MAIN_WINDOW_VITE_DEV_SERVER_URL
     ? new URL(MAIN_WINDOW_VITE_DEV_SERVER_URL).origin
@@ -65,14 +68,14 @@ export function installExternalLinkGuards(win: BrowserWindow): void {
   };
   win.webContents.on('will-navigate', (event, url) => {
     if (isInternalUrl(url)) return;
+    event.preventDefault();
     try {
       const protocol = new URL(url).protocol;
       if (protocol === 'http:' || protocol === 'https:') {
-        event.preventDefault();
         void shell.openExternal(url);
       }
     } catch {
-      // malformed URL — 不拦截
+      // malformed URL — 仅拦截,不外开
     }
   });
   win.webContents.setWindowOpenHandler(({ url }) => {
@@ -87,6 +90,26 @@ export function installExternalLinkGuards(win: BrowserWindow): void {
     }
     return { action: 'deny' };
   });
+}
+
+/**
+ * 副窗首次展示前主框加载失败时销毁窗口,避免「永不展示的僵尸窗口」(#5450 R02):
+ * 展示事件与加载失败的实际顺序由 Electron 决定;尚未展示的失败窗口进入有界终点,
+ * 不依赖后续展示事件到来。'closed' 监听负责清理副窗 set。
+ */
+export function destroySecondaryWindowOnLoadFailure(
+  win: BrowserWindow,
+  sessionId: string,
+  failure: { errorCode: number; errorDescription: string; isMainFrame: boolean; hasShown?: boolean },
+): void {
+  // -3(ABORTED)是后续加载取代前一次(或窗口关闭中断加载)的正常路径;子框失败
+  // 由页面自身处理,不升级成整窗销毁。
+  if (failure.hasShown || !failure.isMainFrame || failure.errorCode === -3 || failure.errorDescription === 'ERR_ABORTED') return;
+  log.warn('secondary window load failed; destroying', {
+    sessionId,
+    errorCode: failure.errorCode,
+  });
+  if (!win.isDestroyed()) win.destroy();
 }
 
 /**
@@ -200,6 +223,21 @@ export function openSessionInNewWindow(
       elapsedMs: Math.round(performance.now() - createdAt),
     });
   };
+  // 首次展示前的主框加载失败(网络/dev server 抖动/文件缺失)进入明确终态,
+  // 不依赖 Electron 是否继续发出展示事件。
+  // 已展示过的窗口保留给用户重试,不因 reload 失败销毁。
+  // -3(ABORTED)是后续加载取代前一次的正常路径,不算失败。
+  win.webContents.on(
+    'did-fail-load',
+    (_event, errorCode, errorDescription, _validatedUrl, isMainFrame) => {
+      destroySecondaryWindowOnLoadFailure(win, sessionId, {
+        errorCode,
+        errorDescription,
+        isMainFrame,
+        hasShown: shown,
+      });
+    },
+  );
   // The boot gate intentionally resolves the session route after the document
   // loads. Showing at did-finish-load lets the user see that the new window
   // was created while that async route/database work continues; ready-to-show
@@ -216,23 +254,32 @@ export function openSessionInNewWindow(
   // worker)再 navigate。main 端**不**写死 /cc-agent/<id> —— 否则 Orca lead/worker
   // 会退化成单栏(main 不该复刻角色查询,角色路由解析单一来源留在 renderer)。
   const hash = '/cc-agent/boot';
-  if (MAIN_WINDOW_VITE_DEV_SERVER_URL) {
-    const url = new URL(MAIN_WINDOW_VITE_DEV_SERVER_URL);
-    url.searchParams.set('secondaryWindow', '1');
-    url.searchParams.set('bootSession', sessionId);
-    if (deviceId) url.searchParams.set('bootDevice', deviceId);
-    url.hash = hash;
-    void win.loadURL(url.toString());
-  } else {
-    void win.loadFile(path.join(__dirname, `../renderer/${MAIN_WINDOW_VITE_NAME}/index.html`), {
-      query: {
-        secondaryWindow: '1',
-        bootSession: sessionId,
-        ...(deviceId ? { bootDevice: deviceId } : {}),
-      },
-      hash,
+  const load = MAIN_WINDOW_VITE_DEV_SERVER_URL
+    ? win.loadURL((() => {
+        const url = new URL(MAIN_WINDOW_VITE_DEV_SERVER_URL);
+        url.searchParams.set('secondaryWindow', '1');
+        url.searchParams.set('bootSession', sessionId);
+        if (deviceId) url.searchParams.set('bootDevice', deviceId);
+        url.hash = hash;
+        return url.toString();
+      })())
+    : win.loadFile(path.join(__dirname, `../renderer/${MAIN_WINDOW_VITE_NAME}/index.html`), {
+        query: {
+          secondaryWindow: '1',
+          bootSession: sessionId,
+          ...(deviceId ? { bootDevice: deviceId } : {}),
+        },
+        hash,
+      });
+  void load.catch((error: unknown) => {
+    const failure = error && typeof error === 'object' ? error as { errno?: unknown; code?: unknown } : null;
+    destroySecondaryWindowOnLoadFailure(win, sessionId, {
+      errorCode: typeof failure?.errno === 'number' ? failure.errno : -1,
+      errorDescription: failure?.code === 'ERR_ABORTED' ? 'ERR_ABORTED' : 'load promise rejected',
+      isMainFrame: true,
+      hasShown: shown,
     });
-  }
+  });
 
   log.info('opened session in new window', { sessionId });
 }
