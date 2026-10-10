@@ -410,6 +410,99 @@ describe('agent-facing managed app update check', () => {
     expect(spawnProcess).not.toHaveBeenCalled();
   });
 
+  describe('confirmed Agent install', () => {
+    beforeEach(() => {
+      // Keep the idle auto-relaunch out of the way; the Agent path relaunches explicitly.
+      readAutoUpdateSettings.mockReturnValue({ autoRelaunchOnIdle: false });
+      fetchManifest.mockResolvedValue(updateManifest());
+    });
+
+    it('stages through checkForUpdate and relaunches with the built-in updater', async () => {
+      download.mockImplementation(async ({ targetPath }: { targetPath: string }) => {
+        fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+        fs.writeFileSync(targetPath, 'update');
+        return { path: targetPath, size: 123 };
+      });
+      const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+      const service = await freshUpdateService('darwin');
+      const order: string[] = [];
+      const beforeRelaunch = vi.fn(async () => {
+        order.push(`before:${download.mock.calls.length}:${spawnProcess.mock.calls.length}`);
+        return true;
+      });
+      try {
+        await expect(service.applyConfirmedAppUpdateForAgent({ beforeRelaunch }))
+          .resolves.toEqual({ status: 'relaunching', targetVersion: '0.0.65' });
+        expect(download).toHaveBeenCalledOnce();
+        expect(order).toEqual(['before:1:0']);
+        expect(spawnProcess).toHaveBeenCalledOnce();
+        // A second request while relaunching neither downloads nor spawns again.
+        await expect(service.applyConfirmedAppUpdateForAgent({ beforeRelaunch }))
+          .resolves.toMatchObject({ status: 'relaunching' });
+        expect(download).toHaveBeenCalledOnce();
+        expect(spawnProcess).toHaveBeenCalledOnce();
+      } finally {
+        service.stopUpdateService();
+        exitSpy.mockRestore();
+      }
+    });
+
+    it('joins concurrent requests onto one download and keeps the patch when relaunch is skipped', async () => {
+      let finishDownload!: () => void;
+      download.mockImplementation(({ targetPath }: { targetPath: string }) => new Promise((resolve) => {
+        finishDownload = () => {
+          fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+          fs.writeFileSync(targetPath, 'update');
+          resolve({ path: targetPath, size: 123 });
+        };
+      }));
+      const service = await freshUpdateService('darwin');
+      try {
+        const beforeRelaunch = vi.fn(async () => false);
+        const first = service.applyConfirmedAppUpdateForAgent({ beforeRelaunch });
+        const second = service.applyConfirmedAppUpdateForAgent({ beforeRelaunch });
+        await vi.waitFor(() => { expect(download).toHaveBeenCalledOnce(); });
+        finishDownload();
+        await expect(first).resolves.toMatchObject({ status: 'failed', errorCode: 'relaunch_cancelled' });
+        await expect(second).resolves.toMatchObject({ status: 'failed', errorCode: 'relaunch_cancelled' });
+        expect(download).toHaveBeenCalledOnce();
+        expect(spawnProcess).not.toHaveBeenCalled();
+        expect(await service.checkAppUpdateForAgent()).toMatchObject({ status: 'ready', targetVersion: '0.0.65' });
+      } finally {
+        service.stopUpdateService();
+      }
+    });
+
+    it('does not relaunch when the download fails or the build is unsupported', async () => {
+      download.mockRejectedValue(new Error('network'));
+      const service = await freshUpdateService('darwin');
+      const beforeRelaunch = vi.fn(async () => true);
+      try {
+        await expect(service.applyConfirmedAppUpdateForAgent({ beforeRelaunch }))
+          .resolves.toMatchObject({ status: 'failed', errorCode: 'download_failed' });
+        isDev.mockReturnValue(true);
+        download.mockClear();
+        await expect(service.applyConfirmedAppUpdateForAgent({ beforeRelaunch }))
+          .resolves.toMatchObject({ status: 'failed', errorCode: 'unsupported' });
+        expect(download).not.toHaveBeenCalled();
+        expect(beforeRelaunch).not.toHaveBeenCalled();
+        expect(spawnProcess).not.toHaveBeenCalled();
+      } finally {
+        service.stopUpdateService();
+      }
+    });
+
+    it('reads and writes the existing idle auto-install switch', async () => {
+      const { writeAutoRelaunchOnIdle } = await import('../auto-update-settings-store');
+      const service = await freshUpdateService('darwin');
+      expect(service.readAutoRelaunchOnIdleForAgent()).toBe(false);
+      readAutoUpdateSettings.mockReturnValue({ autoRelaunchOnIdle: true });
+      expect(service.setAutoRelaunchOnIdleForAgent(true)).toBe(true);
+      expect(writeAutoRelaunchOnIdle).toHaveBeenCalledWith(true);
+      service.stopUpdateService();
+    });
+  });
+
   it('does not advertise an invalid or asset-free manifest as an installable update', async () => {
     const service = await freshUpdateService('darwin');
     fetchManifest.mockResolvedValueOnce(updateManifest('not-semver'));

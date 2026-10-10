@@ -2106,6 +2106,11 @@ export class Session {
     return this.handle.getCurrentTurnId?.() ?? null;
   }
 
+  /** Product origin of the dispatched turn; Host owner-only actions refuse automated turns. */
+  getCurrentTurnOrigin(): SendOrigin | null {
+    return this.currentTurnOrigin;
+  }
+
   /**
    * dryRun: 问 SDK 这次 rewind 会动哪些文件。返回 RewindFilesResult 给 UI 显示 diff。
    * SDK 软拒绝 (老 session 无 checkpointing) 包成 {canRewind:false, error}, 业务可继续。

@@ -27,6 +27,11 @@ export interface InteractionRoute {
   timeoutMs?: number;
   /** Main-owned source text, shared by Desktop and channel presentations. */
   sourceDescription?: string;
+  /**
+   * Main-verified sender of the turn's triggering message. Only 'owner' unlocks
+   * owner-only Host actions; channels that cannot prove it leave it unset.
+   */
+  requesterAuthority?: 'owner' | 'guest' | 'unknown';
   onStateChange?(state: InteractionRouteState): void;
 }
 
@@ -121,6 +126,10 @@ class SessionInteractionRouter {
 
   setLifecycleObserver(observer: InteractionLifecycleObserver | null): void {
     this.lifecycleObserver = observer;
+  }
+
+  getActiveRoute(): InteractionRoute | null {
+    return this.activeRoute?.route ?? null;
   }
 
   private notifyState(route: InteractionRoute | undefined, state: InteractionRouteState): void {
@@ -313,6 +322,11 @@ export function requestHostInteraction(
   signal: AbortSignal,
 ): Promise<InteractionDecision> {
   return routerFor(session).dispatch(request, signal);
+}
+
+/** Read-only view of the live non-Desktop route; null for ordinary Desktop turns. */
+export function getActiveInteractionRoute(session: InteractionSession): InteractionRoute | null {
+  return routers.get(session as object)?.getActiveRoute() ?? null;
 }
 
 export function installInteractionLifecycleObserver(

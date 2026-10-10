@@ -102,6 +102,14 @@ describe('sharedTask dispatch scope', () => {
       args: ['permission-1', { kind: 'permission', behavior: 'allow', permissionUpdates: [permissionSuggestion] }],
     })).not.toThrow();
   });
+  it.each(['cindy.app.update', 'cindy.app.auto_update'])('keeps the owner-only %s card away from guests', (toolName) => {
+    setSharedTaskInteractionReader(() => ({ sessionId: 'task', kind: 'permission', toolName }));
+    for (const behavior of ['allow', 'deny']) {
+      const args = ['app-update-1', { kind: 'permission', behavior }];
+      expect(() => assertSharedTaskInvoke(capture(), { channel: 'maker:resolve-interaction', args })).toThrow('PERMISSION_DENIED');
+      expect(() => assertSharedTaskInteractionResolveCurrent(capture(), args)).toThrow('PERMISSION_DENIED');
+    }
+  });
   it.each([{ command: 'different-command' }, {}, null])('rejects guest replacement input %j at admission and consumption', (updatedInput) => {
     setSharedTaskInteractionReader(() => ({ sessionId: 'task', kind: 'permission', toolName: 'Bash' }));
     const args = ['permission-1', { kind: 'permission', behavior: 'allow', updatedInput }];

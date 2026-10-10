@@ -194,6 +194,16 @@ describe('messageHandler !stop routing', () => {
     }
   });
 
+  it.each([
+    ['a private chat', {}, true],
+    ['the owner in a group', { speaker: { id: 'owner', name: 'Owner', isOwner: true } }, true],
+    ['a group member', { speaker: { id: 'guest', name: 'Guest', isOwner: false } }, false],
+  ])('marks %s turns with the control-command owner check', async (_label, patch, owner) => {
+    deliver(makeEvent({ text: '更新 Cindy', ...patch } as Partial<IMMessageEvent>));
+    await vi.waitFor(() => expect(runAgentTurn).toHaveBeenCalledTimes(1));
+    expect(runAgentTurn.mock.calls[0][0].requesterIsOwner).toBe(owner);
+  });
+
   it('still drops an empty event without a summon, quote or attachment', async () => {
     deliver(makeEvent({ text: '' }));
     await flushMicrotasks();

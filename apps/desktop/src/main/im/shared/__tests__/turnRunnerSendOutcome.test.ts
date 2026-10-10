@@ -192,6 +192,7 @@ vi.mock('../fbotTitle', () => ({
   generateAndPersistFbotTitle: mocks.generateAndPersistFbotTitle,
 }));
 
+import { getActiveInteractionRoute } from '../../../maker-ipc/interactionRouter';
 import { createTurnRunner, type ImRunAgentTurnArgs, type ImTurnRunner } from '../turnRunner';
 import {
   readGroupHistoryAccess,
@@ -1043,6 +1044,31 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
 
       h.emit({ type: 'done', data: {} });
       await waitForAssertion(() => expect(h.releaseTurnLease).toHaveBeenCalledOnce());
+    } finally {
+      await localRunner.disposeAllSessions();
+    }
+  });
+
+  it.each([
+    [true, 'owner'],
+    [undefined, 'unknown'],
+  ] as const)('stamps the channel owner check onto the interaction route (requesterIsOwner=%s)', async (requesterIsOwner, authority) => {
+    const h = setupSession(async () => ({ accepted: true }));
+    const localRunner = createTurnRunner(fakeAdapter, fakeRepo, fakeCards);
+    try {
+      await localRunner.runAgentTurn({
+        botContextId: 'cli_test_bot',
+        userId: 'ou_user',
+        userMessageId: `msg-owner-${String(requesterIsOwner)}`,
+        text: '更新 Cindy',
+        attachments: [],
+        ...(requesterIsOwner ? { requesterIsOwner } : {}),
+      });
+      expect(getActiveInteractionRoute(h.session as never)).toMatchObject({
+        origin: { kind: 'im' },
+        requesterAuthority: authority,
+      });
+      h.emit({ type: 'done', data: {} });
     } finally {
       await localRunner.disposeAllSessions();
     }

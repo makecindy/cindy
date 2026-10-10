@@ -1,0 +1,361 @@
+import { describe, expect, it, vi } from 'vitest';
+import type { InteractionDecision } from '@cindy/maker-core';
+
+import {
+  createAgentAppUpdateService,
+  type AgentAppUpdateDeps,
+  type AgentAppUpdateMarker,
+} from '../agentAppUpdateService.js';
+import { AGENT_APP_AUTO_UPDATE_TOOL_NAME, AGENT_APP_UPDATE_TOOL_NAME } from '../constants.js';
+
+const caller = { sessionId: 'task-1', sessionInstanceId: 'instance-1' };
+
+function allow(): InteractionDecision {
+  return { kind: 'permission', behavior: 'allow' };
+}
+
+function deny(reason?: string): InteractionDecision {
+  return { kind: 'permission', behavior: 'deny', ...(reason ? { reason } : {}) };
+}
+
+function setup(overrides: Partial<AgentAppUpdateDeps> = {}) {
+  let marker: AgentAppUpdateMarker | null = null;
+  let autoUpdate = false;
+  const deps: AgentAppUpdateDeps = {
+    appVersion: () => '0.1.86',
+    platform: 'darwin',
+    pid: 100,
+    now: () => 1_000,
+    check: vi.fn(async () => ({
+      status: 'available',
+      currentVersion: '0.1.86',
+      targetVersion: '0.1.90',
+    })),
+    apply: vi.fn(async ({ beforeRelaunch }) => {
+      await beforeRelaunch();
+      return { status: 'relaunching' as const, targetVersion: '0.1.90' };
+    }),
+    readAutoUpdate: () => autoUpdate,
+    writeAutoUpdate: vi.fn((enabled: boolean) => {
+      autoUpdate = enabled;
+      return autoUpdate;
+    }),
+    resolveCaller: vi.fn(() => 'owner' as const),
+    countOtherRunningTasks: vi.fn(() => 2),
+    requestHostPermission: vi.fn(async () => allow()),
+    waitForCallerTurnToEnd: vi.fn(async () => undefined),
+    marker: {
+      write: vi.fn((value: AgentAppUpdateMarker) => {
+        marker = value;
+      }),
+      read: () => marker,
+      clear: vi.fn(() => {
+        marker = null;
+      }),
+    },
+    notify: vi.fn(async () => undefined),
+    compareVersions: (candidate, current) =>
+      candidate === current ? 'same' : (candidate ?? '') > current ? 'newer' : 'older',
+    translate: (key) => key,
+    ...overrides,
+  };
+  return {
+    deps,
+    service: createAgentAppUpdateService(deps),
+    getMarker: () => marker,
+    setMarker: (value: AgentAppUpdateMarker | null) => {
+      marker = value;
+    },
+  };
+}
+
+async function flush() {
+  for (let i = 0; i < 5; i += 1) await Promise.resolve();
+}
+
+describe('Agent app update install', () => {
+  it('does not download or restart until the owner approves the Host card', async () => {
+    let resolveCard!: (decision: InteractionDecision) => void;
+    const { deps, service } = setup({
+      requestHostPermission: vi.fn(
+        () =>
+          new Promise<InteractionDecision>((resolve) => {
+            resolveCard = resolve;
+          }),
+      ),
+    });
+    const pending = service.install(caller);
+    await flush();
+    expect(deps.requestHostPermission).toHaveBeenCalledOnce();
+    expect(deps.apply).not.toHaveBeenCalled();
+    expect(deps.marker.write).not.toHaveBeenCalled();
+
+    const [sessionId, instanceId, card] = vi.mocked(deps.requestHostPermission).mock.calls[0]!;
+    expect([sessionId, instanceId]).toEqual(['task-1', 'instance-1']);
+    expect(card).toMatchObject({
+      kind: 'permission',
+      toolName: AGENT_APP_UPDATE_TOOL_NAME,
+      title: 'update.agentInstall.title',
+      input: { from: '0.1.86', to: '0.1.90' },
+      metadata: { hostOwnedConfirmation: 'app_update' },
+    });
+    expect(card.suggestions).toBeUndefined();
+    expect(card.description?.split('\n')).toEqual([
+      'update.agentInstall.versions',
+      'update.agentInstall.otherTasks',
+      'update.agentInstall.thisTask',
+      'update.agentInstall.remote',
+    ]);
+
+    resolveCard(allow());
+    await expect(pending).resolves.toMatchObject({
+      status: 'started',
+      currentVersion: '0.1.86',
+      targetVersion: '0.1.90',
+    });
+    await flush();
+    expect(deps.apply).toHaveBeenCalledOnce();
+    expect(deps.waitForCallerTurnToEnd).toHaveBeenCalledWith(caller);
+    expect(deps.marker.write).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: 'task-1',
+        fromVersion: '0.1.86',
+        targetVersion: '0.1.90',
+        pid: 100,
+      }),
+    );
+  });
+
+  it.each([
+    ['deny', deny('user_denied'), { status: 'declined' }],
+    ['timeout', deny('interaction_timeout'), { status: 'confirmation_timeout' }],
+    ['abort', deny('session_aborted'), { status: 'declined' }],
+    [
+      'undelivered',
+      deny('no_interaction_route'),
+      { ok: false, errorCode: 'CONFIRMATION_UNAVAILABLE' },
+    ],
+  ])('does nothing when the card is answered with %s', async (_label, decision, expected) => {
+    const { deps, service } = setup({ requestHostPermission: vi.fn(async () => decision) });
+    await expect(service.install(caller)).resolves.toMatchObject(expected);
+    expect(deps.apply).not.toHaveBeenCalled();
+    expect(deps.marker.write).not.toHaveBeenCalled();
+    // The flow is released: a later request raises a fresh card.
+    await service.install(caller);
+    expect(deps.requestHostPermission).toHaveBeenCalledTimes(2);
+  });
+
+  it('refuses non-owner turns before any card or download', async () => {
+    const { deps, service } = setup({ resolveCaller: vi.fn(() => 'not-owner' as const) });
+    await expect(service.install(caller)).resolves.toMatchObject({
+      ok: false,
+      errorCode: 'OWNER_TURN_REQUIRED',
+    });
+    expect(deps.check).not.toHaveBeenCalled();
+    expect(deps.requestHostPermission).not.toHaveBeenCalled();
+    expect(deps.apply).not.toHaveBeenCalled();
+  });
+
+  it('re-checks the caller after approval and stops if the task went away', async () => {
+    const resolveCaller = vi.fn().mockReturnValueOnce('owner').mockReturnValueOnce('unavailable');
+    const { deps, service } = setup({ resolveCaller });
+    await expect(service.install(caller)).resolves.toMatchObject({
+      ok: false,
+      errorCode: 'CALLER_UNAVAILABLE',
+    });
+    expect(deps.apply).not.toHaveBeenCalled();
+  });
+
+  it('returns unsupported reasons without a card', async () => {
+    const { deps, service } = setup({
+      check: vi.fn(async () => ({
+        status: 'unsupported',
+        currentVersion: '0.0.0',
+        reason: '此构建不支持应用内更新。',
+      })),
+    });
+    await expect(service.install(caller)).resolves.toMatchObject({
+      status: 'unsupported',
+      reason: '此构建不支持应用内更新。',
+    });
+    expect(deps.requestHostPermission).not.toHaveBeenCalled();
+  });
+
+  it('keeps one install request: repeats neither raise another card nor download again', async () => {
+    let resolveCard!: (decision: InteractionDecision) => void;
+    let finishApply!: () => void;
+    const { deps, service } = setup({
+      requestHostPermission: vi.fn(
+        () =>
+          new Promise<InteractionDecision>((resolve) => {
+            resolveCard = resolve;
+          }),
+      ),
+      apply: vi.fn(
+        () =>
+          new Promise<{ status: 'relaunching' }>((resolve) => {
+            finishApply = () => resolve({ status: 'relaunching' });
+          }),
+      ),
+    });
+    const first = service.install(caller);
+    await flush();
+    await expect(service.install(caller)).resolves.toMatchObject({
+      status: 'confirmation_pending',
+    });
+    resolveCard(allow());
+    await first;
+    await expect(service.install(caller)).resolves.toMatchObject({
+      status: 'in_progress',
+      targetVersion: '0.1.90',
+    });
+    expect(deps.requestHostPermission).toHaveBeenCalledOnce();
+    expect(deps.apply).toHaveBeenCalledOnce();
+    finishApply();
+  });
+
+  it('writes an immediate failure back to the task when no restart happened', async () => {
+    const { deps, service, getMarker } = setup({
+      apply: vi.fn(async () => ({
+        status: 'failed' as const,
+        reason: '下载更新失败，请稍后重试。',
+        errorCode: 'download_failed',
+      })),
+    });
+    await service.install(caller);
+    await flush();
+    expect(getMarker()).toBeNull();
+    expect(deps.notify).toHaveBeenCalledWith(
+      'task-1',
+      expect.stringMatching(/^agent-app-update:/),
+      'update.agentInstall.failed 下载更新失败，请稍后重试。 update.agentInstall.retryHint',
+    );
+    // Released after the failure.
+    await service.install(caller);
+    expect(deps.requestHostPermission).toHaveBeenCalledTimes(2);
+  });
+
+  it('mentions the Linux password prompt only on Linux', async () => {
+    const { deps, service } = setup({ platform: 'linux', countOtherRunningTasks: vi.fn(() => 0) });
+    await service.install(caller);
+    const card = vi.mocked(deps.requestHostPermission).mock.calls[0]![2];
+    expect(card.description).toContain('update.agentInstall.noOtherTasks');
+    expect(card.description).toContain('update.agentInstall.linuxAuth');
+  });
+});
+
+describe('Agent app update result after restart', () => {
+  const marker = (overrides: Partial<AgentAppUpdateMarker> = {}): AgentAppUpdateMarker => ({
+    requestId: 'req-1',
+    sessionId: 'task-1',
+    fromVersion: '0.1.86',
+    targetVersion: '0.1.90',
+    requestedAt: 900,
+    pid: 99,
+    ...overrides,
+  });
+
+  it('reports the new version once and clears the marker', async () => {
+    const { deps, service, setMarker, getMarker } = setup({
+      appVersion: () => '0.1.90',
+      translate: (key) =>
+        key === 'update.agentInstall.succeeded' ? 'updated to {{version}} from {{from}}' : key,
+    });
+    setMarker(marker());
+    await service.deliverPendingResult();
+    await service.deliverPendingResult();
+    expect(deps.notify).toHaveBeenCalledOnce();
+    expect(deps.notify).toHaveBeenCalledWith(
+      'task-1',
+      'agent-app-update:req-1',
+      'updated to 0.1.90 from 0.1.86',
+    );
+    expect(getMarker()).toBeNull();
+  });
+
+  it('reports a failed install when the version did not change', async () => {
+    const { deps, service, setMarker } = setup();
+    setMarker(marker());
+    await service.deliverPendingResult();
+    expect(deps.notify).toHaveBeenCalledWith(
+      'task-1',
+      'agent-app-update:req-1',
+      'update.agentInstall.failed update.agentInstall.retryHint',
+    );
+  });
+
+  it('ignores a marker written by this same process (no restart yet)', async () => {
+    const { deps, service, setMarker, getMarker } = setup();
+    setMarker(marker({ pid: 100 }));
+    await service.deliverPendingResult();
+    expect(deps.notify).not.toHaveBeenCalled();
+    expect(getMarker()).not.toBeNull();
+  });
+
+  it('drops stale markers silently', async () => {
+    const { deps, service, setMarker, getMarker } = setup({
+      now: () => 900 + 8 * 24 * 60 * 60 * 1000,
+    });
+    setMarker(marker());
+    await service.deliverPendingResult();
+    expect(deps.notify).not.toHaveBeenCalled();
+    expect(getMarker()).toBeNull();
+  });
+});
+
+describe('Agent auto update switch and hint', () => {
+  it('writes the existing setting only after the owner approves', async () => {
+    const { deps, service } = setup();
+    await expect(service.setAutoUpdate(caller, true)).resolves.toMatchObject({
+      status: 'updated',
+      autoUpdateEnabled: true,
+    });
+    expect(vi.mocked(deps.requestHostPermission).mock.calls[0]![2]).toMatchObject({
+      toolName: AGENT_APP_AUTO_UPDATE_TOOL_NAME,
+      input: { enabled: true },
+      title: 'update.agentAutoUpdate.enableTitle',
+    });
+    expect(deps.writeAutoUpdate).toHaveBeenCalledWith(true);
+    // Already enabled: no card, no write.
+    await expect(service.setAutoUpdate(caller, true)).resolves.toMatchObject({
+      status: 'unchanged',
+    });
+    expect(deps.requestHostPermission).toHaveBeenCalledOnce();
+  });
+
+  it('leaves the setting alone when declined or requested by a non-owner turn', async () => {
+    const declined = setup({ requestHostPermission: vi.fn(async () => deny()) });
+    await expect(declined.service.setAutoUpdate(caller, true)).resolves.toMatchObject({
+      status: 'declined',
+    });
+    expect(declined.deps.writeAutoUpdate).not.toHaveBeenCalled();
+
+    const guest = setup({ resolveCaller: vi.fn(() => 'not-owner' as const) });
+    await expect(guest.service.setAutoUpdate(caller, true)).resolves.toMatchObject({
+      errorCode: 'OWNER_TURN_REQUIRED',
+    });
+    expect(guest.deps.requestHostPermission).not.toHaveBeenCalled();
+  });
+
+  it('hints auto update once per task while it is off and an update exists', async () => {
+    const { service } = setup();
+    await expect(service.check(caller)).resolves.toMatchObject({
+      autoUpdateEnabled: false,
+      autoUpdateHint: true,
+    });
+    expect(await service.check(caller)).not.toHaveProperty('autoUpdateHint');
+    await expect(service.check({ ...caller, sessionId: 'task-2' })).resolves.toMatchObject({
+      autoUpdateHint: true,
+    });
+  });
+
+  it('does not hint without an installable update or when already enabled', async () => {
+    const noUpdate = setup({
+      check: vi.fn(async () => ({ status: 'no_installable_update', currentVersion: '0.1.90' })),
+    });
+    expect(await noUpdate.service.check(caller)).not.toHaveProperty('autoUpdateHint');
+    const enabled = setup({ readAutoUpdate: () => true });
+    await expect(enabled.service.check(caller)).resolves.toMatchObject({ autoUpdateEnabled: true });
+    expect(await enabled.service.check(caller)).not.toHaveProperty('autoUpdateHint');
+  });
+});

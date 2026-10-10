@@ -4027,6 +4027,11 @@ export function getSessionInputProvenance(sessionId: string) {
   return { input, executing: !!input || !!getMakerIfReady()?.getSession(sessionId)?.isTurnRunning() };
 }
 
+/** Owner-authored active input (see AgentInputCoordinator.isActiveInputOwnerAuthored). */
+export function isActiveInputOwnerAuthored(sessionId: string): boolean {
+  return agentInputCoordinatorHolder?.isActiveInputOwnerAuthored(sessionId) ?? false;
+}
+
 /**
  * 标题素材读取需要覆盖 `status:isRunning=false` 到 terminal event 的短窗口：
  * 逻辑 running 已结束，但最后一条 Assistant 还没有拿到 durable turn seal。

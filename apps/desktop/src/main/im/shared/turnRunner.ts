@@ -317,6 +317,8 @@ interface QueuedSend {
   /** Durable route side effects run only after provider acceptance, never on enqueue. */
   onRouteResolved?: (sessionId: string) => void | Promise<void>;
   turnPermissionPolicy?: TurnPermissionPolicy;
+  /** Main-verified owner sender (see ImRunAgentTurnArgs.requesterIsOwner). */
+  requesterIsOwner?: boolean;
   /** 触发消息来自受保护群 —— 正文与附件不进会话存档(见 ImRunAgentTurnArgs)。 */
   protectedContent?: boolean;
   groupHistoryAccess?: GroupHistoryAccessScope;
@@ -455,6 +457,11 @@ export interface ImRunAgentTurnArgs {
   trackBackgroundTask?: (operation: () => Promise<void>) => void;
   /** Optional per-turn host policy (personal WeChat routes confirmations to Desktop). */
   turnPermissionPolicy?: TurnPermissionPolicy;
+  /**
+   * The triggering message passed the channel's owner check (DM owner gate or
+   * group speaker.isOwner). Only this unlocks owner-only Host actions; omitted = not owner.
+   */
+  requesterIsOwner?: boolean;
   /**
    * 这一轮的触发消息来自「禁止保存内容」的群。
    *
@@ -1107,6 +1114,7 @@ export function createTurnRunner(
       ...(args.beforeProviderStart ? { beforeProviderStart: args.beforeProviderStart } : {}),
       ...(args.onRouteResolved ? { onRouteResolved: args.onRouteResolved } : {}),
       ...(args.turnPermissionPolicy ? { turnPermissionPolicy: args.turnPermissionPolicy } : {}),
+      ...(args.requesterIsOwner === true ? { requesterIsOwner: true } : {}),
       ...(args.onEarlyReject ? { onEarlyReject: args.onEarlyReject } : {}),
       ...(args.protectedContent === true ? { protectedContent: true } : {}),
       ...(args.groupHistoryAccess ? { groupHistoryAccess: args.groupHistoryAccess } : {}),
@@ -1394,6 +1402,7 @@ export function createTurnRunner(
                     turnId: item.turn.turnId,
                     origin: effectiveTurnPolicy.origin,
                     interactionSurface: 'desktop',
+                    requesterAuthority: item.requesterIsOwner === true ? 'owner' : 'unknown',
                     ...(effectiveTurnPolicy.confirmationTimeoutMs
                       ? {
                           timeoutMs: effectiveTurnPolicy.confirmationTimeoutMs,
@@ -1413,6 +1422,7 @@ export function createTurnRunner(
                     origin: effectiveTurnPolicy?.origin ?? { kind: 'im', channel },
                     interactionSurface: 'channel-card',
                     sourceDescription: item.turn.sourceDescription,
+                    requesterAuthority: item.requesterIsOwner === true ? 'owner' : 'unknown',
                     ...(effectiveTurnPolicy?.confirmationTimeoutMs
                       ? { timeoutMs: effectiveTurnPolicy.confirmationTimeoutMs }
                       : {}),

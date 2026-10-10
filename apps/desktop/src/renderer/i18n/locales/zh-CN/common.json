@@ -8036,6 +8036,26 @@
       "message": "将 {{appName}} 移动到「应用程序」文件夹可获得更好的体验，包括自动更新。",
       "move": "移动（推荐）",
       "later": "暂不"
+    },
+    "agentInstall": {
+      "title": "更新 {{appName}} 到 {{version}}？",
+      "versions": "从 {{from}} 更新到 {{to}}。确认后 {{appName}} 会用内置更新器下载并安装，然后自动重启。",
+      "otherTasks": "另有 {{count}} 个任务正在运行，重启会中断它们；重启后可在对应任务中点「继续」恢复。",
+      "noOtherTasks": "目前没有其他正在运行的任务。",
+      "thisTask": "本任务会在这轮回复结束后随 {{appName}} 重启。",
+      "remote": "重启期间手机等远程连接会暂时断开，重连后可在本任务中查看更新结果。",
+      "linuxAuth": "安装时需要在这台电脑上输入系统密码。",
+      "latestVersion": "新版本",
+      "succeeded": "{{appName}} 已更新到 {{version}}（原版本 {{from}}）。",
+      "failed": "{{appName}} 更新没有完成，当前仍是 {{version}}。",
+      "retryHint": "可以稍后再让我更新，或在「设置 → 关于」中检查更新。"
+    },
+    "agentAutoUpdate": {
+      "enableTitle": "开启空闲时自动安装更新？",
+      "disableTitle": "关闭空闲时自动安装更新？",
+      "enableDescription": "开启后，更新下载完成时，如果这台电脑已空闲 10 分钟且没有正在运行的任务，{{appName}} 会自动重启完成安装。",
+      "disableDescription": "关闭后，更新下载完成时需要你手动重启才会安装。",
+      "settingsHint": "也可以随时在「设置 → 关于」中修改。"
     }
   },
   "sidebar": {

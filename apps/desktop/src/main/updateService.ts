@@ -2095,6 +2095,14 @@ function agentUpdateApplyBlockReason(): string | null {
   return null;
 }
 
+/** Build and installation blockers shared by every Agent-facing update entry. */
+function agentUpdateUnsupportedReason(): string | null {
+  if (!app.isPackaged || isDev() || isCindyPersonalRuntime() || isVersionlessAppVersion(app.getVersion())) {
+    return '此构建不支持应用内更新。';
+  }
+  return agentUpdateApplyBlockReason();
+}
+
 export async function checkAppUpdateForAgent(): Promise<{
   status: string;
   currentVersion: string;
@@ -2102,11 +2110,8 @@ export async function checkAppUpdateForAgent(): Promise<{
   reason?: string;
 }> {
   const currentVersion = app.getVersion();
-  if (!app.isPackaged || isDev() || isCindyPersonalRuntime() || isVersionlessAppVersion(currentVersion)) {
-    return { status: 'unsupported', currentVersion, reason: '此构建不支持应用内更新。' };
-  }
-  const platformBlock = agentUpdateApplyBlockReason();
-  if (platformBlock) return { status: 'unsupported', currentVersion, reason: platformBlock };
+  const unsupported = agentUpdateUnsupportedReason();
+  if (unsupported) return { status: 'unsupported', currentVersion, reason: unsupported };
   if (currentStatus === 'downloading' || currentStatus === 'superseding') {
     return { status: 'downloading', currentVersion, targetVersion: readyVersion };
   }
@@ -2129,6 +2134,70 @@ export async function checkAppUpdateForAgent(): Promise<{
     status: 'no_installable_update', currentVersion,
     reason: '当前渠道没有适用于这台设备的可安装更新；也可能已是最新版本。',
   };
+}
+
+const AGENT_UPDATE_FAILURE_REASONS: Record<Exclude<CheckForUpdateResult, 'ready'>, string> = {
+  manifest_failed: '无法读取当前渠道的更新信息。',
+  download_failed: '下载更新失败，请稍后重试。',
+  manual_download: '当前安装需要手动下载新版本。',
+  idle: '当前渠道没有适用于这台设备的可安装更新。',
+};
+
+export type AgentConfirmedAppUpdateResult =
+  | { status: 'relaunching'; targetVersion?: string }
+  | { status: 'failed'; reason: string; errorCode?: string };
+
+/**
+ * Apply an update the user approved on the Host confirmation card. This is the
+ * built-in Check for Updates → Restart path, not a parallel one:
+ * `checkForUpdate()` stages the patch (its in-flight guard keeps a repeated or
+ * concurrent request on the same download) and `executeRelaunch()` applies it
+ * with every existing platform, Subagent and channel guard.
+ *
+ * `beforeRelaunch` runs after the patch is staged; returning false keeps the
+ * patch staged and skips the restart.
+ */
+export async function applyConfirmedAppUpdateForAgent(options: {
+  beforeRelaunch: () => Promise<boolean>;
+}): Promise<AgentConfirmedAppUpdateResult> {
+  const unsupported = agentUpdateUnsupportedReason();
+  if (unsupported) return { status: 'failed', reason: unsupported, errorCode: 'unsupported' };
+  if (isRelaunching || autoRelaunchInProgress) return { status: 'relaunching', targetVersion: readyVersion };
+  if (currentStatus !== 'ready') {
+    const result = await checkForUpdate();
+    if (result !== 'ready') {
+      return { status: 'failed', reason: AGENT_UPDATE_FAILURE_REASONS[result], errorCode: result };
+    }
+  }
+  if (!await options.beforeRelaunch()) {
+    return { status: 'failed', reason: '更新已下载，但本次没有重启。', errorCode: 'relaunch_cancelled' };
+  }
+  if (isRelaunching || autoRelaunchInProgress) return { status: 'relaunching', targetVersion: readyVersion };
+  if (currentStatus !== 'ready' || !readyVersion) {
+    return { status: 'failed', reason: '已下载的更新不再可用，请重新检查更新。', errorCode: 'not_ready' };
+  }
+  const targetVersion = readyVersion;
+  // macOS / Linux exit inside this call once the updater is spawned; Windows
+  // returns with `isRelaunching` still set and exits from its own callbacks.
+  await executeRelaunch(resolvedRelaunchTheme);
+  if (isRelaunching) return { status: 'relaunching', targetVersion };
+  return {
+    status: 'failed',
+    reason: '更新器没有启动，Cindy 未重启。',
+    errorCode: lastErrorCode ?? 'relaunch_not_started',
+  };
+}
+
+/** Effective idle auto-install switch (Settings → About), shared with the Agent tools. */
+export function readAutoRelaunchOnIdleForAgent(): boolean {
+  return readAutoUpdateSettings().autoRelaunchOnIdle;
+}
+
+/** Same write as the Settings toggle IPC; only called after the user confirmed the Host card. */
+export function setAutoRelaunchOnIdleForAgent(enabled: boolean): boolean {
+  writeAutoRelaunchOnIdle(enabled);
+  void evaluateAutoRelaunch('agent-settings-set');
+  return readAutoUpdateSettings().autoRelaunchOnIdle;
 }
 
 export function initUpdateService(): void {

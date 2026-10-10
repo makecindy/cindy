@@ -8044,6 +8044,26 @@
       "message": "Moving {{appName}} to the Applications folder gives you a better experience, including automatic updates.",
       "move": "Move (Recommended)",
       "later": "Not Now"
+    },
+    "agentInstall": {
+      "title": "Update {{appName}} to {{version}}?",
+      "versions": "Update from {{from}} to {{to}}. After you confirm, {{appName}} downloads and installs it with the built-in updater, then restarts.",
+      "otherTasks": "{{count}} other task(s) are running and will be interrupted by the restart. Afterwards, click Continue in each task to resume.",
+      "noOtherTasks": "No other tasks are running.",
+      "thisTask": "This task restarts with {{appName}} after the current reply finishes.",
+      "remote": "Phones and other remote connections disconnect briefly during the restart. Reconnect to see the result in this task.",
+      "linuxAuth": "Installing requires your system password on this computer.",
+      "latestVersion": "the new version",
+      "succeeded": "{{appName}} is updated to {{version}} (was {{from}}).",
+      "failed": "The {{appName}} update did not finish. This computer is still on {{version}}.",
+      "retryHint": "Ask me to try again later, or check for updates in Settings → About."
+    },
+    "agentAutoUpdate": {
+      "enableTitle": "Install updates while idle?",
+      "disableTitle": "Stop installing updates while idle?",
+      "enableDescription": "When an update finishes downloading, {{appName}} restarts to install it once this computer has been idle for 10 minutes and no tasks are running.",
+      "disableDescription": "Downloaded updates will wait until you restart manually.",
+      "settingsHint": "You can change this anytime in Settings → About."
     }
   },
   "sidebar": {
