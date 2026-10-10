@@ -341,6 +341,7 @@ import {
 import { isGhostUnreadProjectable, selectRevokedGhostUnreadIds } from './ghostUnreadProjection.js';
 import { GhostConfirmSlot } from './confirmSlot.js';
 import {
+  createGhostConfirmDialogMainWindowSender,
   getGhostConfirmDialogBridge,
   initGhostConfirmDialogBridge,
 } from './ghostConfirmDialogBridge.js';
@@ -3134,21 +3135,21 @@ function ensureForgeOidcInstallConfirmBridge() {
  * 确认弹窗槽单例(confirm):资格审/净化/限速/单飞在 GhostConfirmSlot,往返与
  * 超时兜底在 GhostConfirmDialogBridge,这里只组装"投给哪个窗口"。
  *
- * 只投**一个**窗口(focused ?? 第一个),不像 notify 那样广播:模态确认框广播
- * 出去会在每个窗口各弹一个、收回多份答案。没有可投窗口时 sendToWindow 回
- * false → 桥 reject → 槽回 UNAVAILABLE(明确区别于"用户拒绝")。
+ * 只投给经过信任校验的主 App 窗口,不像 notify 那样广播:模态确认框广播出去
+ * 会在每个窗口各弹一个、收回多份答案。焦点窗口或窗口列表首项可能是没有确认
+ * Host 的辅助窗;没有可信主 App 时 sendToWindow 回 false → 槽回 UNAVAILABLE。
  */
 export function getGhostConfirmSlot(): GhostConfirmSlot {
   if (!confirmSlotSingleton) {
     const bridge =
       getGhostConfirmDialogBridge() ??
       initGhostConfirmDialogBridge({
-        sendToWindow: (payload) => {
-          const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
-          if (!win || win.isDestroyed()) return false;
-          sendGhostWindowPush(win, GHOST_CONFIRM_CHANNEL, payload);
-          return true;
-        },
+        sendToWindow: createGhostConfirmDialogMainWindowSender<BrowserWindow>({
+          getMainWindow: getDeepLinkMainWindow,
+          isTrustedMainWindow: isTrustedAppRendererWindow,
+          send: (window, payload) =>
+            sendGhostWindowPush(window, GHOST_CONFIRM_CHANNEL, payload),
+        }),
         log,
       });
     confirmSlotSingleton = new GhostConfirmSlot({
