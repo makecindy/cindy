@@ -3,8 +3,6 @@
  * running tasks, Host cards) come from Maker Host; updater work goes through the
  * existing updateService entry points only.
  */
-import fs from 'node:fs';
-import path from 'node:path';
 import { app } from 'electron';
 
 import type { XdtHelperMcpDeps } from '@cindy/mcps';
@@ -33,15 +31,14 @@ import {
   setAutoRelaunchOnIdleForAgent,
 } from '../updateService.js';
 import { compareAppUpdateVersions } from '../updateVersionPolicy.js';
-import { atomicWriteFileSync, readAtomicFileSync } from '../utils/atomicWriteFile.js';
 import {
   createAgentAppUpdateService,
   type AgentAppUpdateDeps,
   type AgentAppUpdateMarker,
   type AgentAppUpdateOwner,
   type AgentAppUpdateService,
-  MAX_RESTART_RECORDS,
 } from './agentAppUpdateService.js';
+import { addRestartRecord, listRestartRecords, removeRestartRecord } from './restartRecords.js';
 
 /** Owner binding: broadcast scope for current-ness checks and the owner's own marker path. */
 interface DesktopAgentAppUpdateOwner extends AgentAppUpdateOwner {
@@ -89,59 +86,6 @@ function assertOwnerCurrent(owner: AgentAppUpdateOwner): void {
     throw new Error('The account that confirmed the update is no longer active');
 }
 
-function parseRecord(value: unknown): AgentAppUpdateMarker | null {
-  if (!value || typeof value !== 'object') return null;
-  const record = value as Partial<AgentAppUpdateMarker>;
-  if (
-    typeof record.requestId !== 'string' ||
-    typeof record.sessionId !== 'string' ||
-    typeof record.fromVersion !== 'string' ||
-    typeof record.requestedAt !== 'number' ||
-    typeof record.pid !== 'number'
-  )
-    return null;
-  return {
-    requestId: record.requestId,
-    sessionId: record.sessionId,
-    fromVersion: record.fromVersion,
-    ...(typeof record.targetVersion === 'string' ? { targetVersion: record.targetVersion } : {}),
-    requestedAt: record.requestedAt,
-    pid: record.pid,
-  };
-}
-
-/** Restart records file: `{ records: [...] }`, one entry per attempted restart. */
-function readRecords(file: string, options?: { throwOnError?: boolean }): AgentAppUpdateMarker[] {
-  let raw: string | null;
-  try {
-    raw = readAtomicFileSync(file);
-  } catch (error) {
-    // An unreadable (not merely missing) file may hold records; never overwrite it blindly.
-    if (options?.throwOnError) throw error;
-    log.warn('agent app update marker read failed', { error: String(error) });
-    return [];
-  }
-  if (!raw) return [];
-  try {
-    const parsed = JSON.parse(raw) as { records?: unknown };
-    return Array.isArray(parsed.records)
-      ? parsed.records.map(parseRecord).filter((record): record is AgentAppUpdateMarker => !!record)
-      : [];
-  } catch {
-    log.warn('agent app update marker is corrupt; ignoring it');
-    return [];
-  }
-}
-
-function writeRecords(file: string, records: AgentAppUpdateMarker[]): void {
-  if (records.length === 0) {
-    for (const target of [file, `${file}.bak`]) fs.rmSync(target, { force: true });
-    return;
-  }
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  atomicWriteFileSync(file, JSON.stringify({ records }));
-}
-
 function requireSessionHost(): AgentAppUpdateSessionHost {
   if (!sessionHost) throw new Error('Agent app update host is not ready');
   return sessionHost;
@@ -164,24 +108,9 @@ function getService(): AgentAppUpdateService {
     captureOwner,
     isOwnerCurrent,
     marker: {
-      list: (owner) => readRecords(markerPathOf(owner)),
-      add: (owner, record) => {
-        const file = markerPathOf(owner);
-        // A record that cannot be read back must not be silently replaced.
-        const records = readRecords(file, { throwOnError: true });
-        writeRecords(file, [...records, record].slice(-MAX_RESTART_RECORDS));
-      },
-      remove: (owner, requestId) => {
-        const file = markerPathOf(owner);
-        const records = readRecords(file);
-        const remaining = records.filter((record) => record.requestId !== requestId);
-        if (remaining.length === records.length) return;
-        try {
-          writeRecords(file, remaining);
-        } catch (error) {
-          log.warn('agent app update marker update failed', { error: String(error) });
-        }
-      },
+      list: (owner) => listRestartRecords(markerPathOf(owner)),
+      add: (owner, record) => addRestartRecord(markerPathOf(owner), record),
+      remove: (owner, requestId) => removeRestartRecord(markerPathOf(owner), requestId),
     },
     notify: async (owner, sessionId, clientId, text) => {
       assertOwnerCurrent(owner);
