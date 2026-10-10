@@ -12,6 +12,7 @@ import {
   getSessionRuntimeControlSnapshot,
   isPendingSessionRuntimeRouteExplicit,
   mergeSessionRuntimeProfilePatch,
+  normalizeRuntimeAxesForModel,
   pickSessionRuntimeFallback,
   recordFailedSessionRuntimeFallbackCandidate,
   recordRecoveredSessionRuntimeMutation,
@@ -792,5 +793,30 @@ describe('session runtime fallback selection', () => {
         maxHops: 2,
       }),
     ).toBeNull();
+  });
+});
+
+describe('normalizeRuntimeAxesForModel', () => {
+  const model = (fields: { efforts: string[]; fast: boolean; effortsUnknown?: boolean }) => ({
+    id: 'm', name: 'm', contextWindow: 100_000, efforts: fields.efforts as never,
+    defaultEffort: (fields.efforts[0] ?? null) as never, supportsFastMode: fields.fast,
+    ...(fields.effortsUnknown ? { effortsUnknown: true } : {}),
+  }) as never;
+
+  it('maps an obsolete effort and drops unsupported Fast for the route model', () => {
+    expect(normalizeRuntimeAxesForModel(model({ efforts: ['low', 'medium'], fast: false }),
+      { effort: 'high', fastMode: true })).toEqual({ effort: 'low', fastMode: false });
+  });
+
+  it('drops effort on a model that declares no effort levels', () => {
+    expect(normalizeRuntimeAxesForModel(model({ efforts: [], fast: true }),
+      { effort: 'low', fastMode: true })).toEqual({ effort: null, fastMode: true });
+  });
+
+  it('keeps an explicit effort when the effort list is only a placeholder', () => {
+    expect(normalizeRuntimeAxesForModel(model({ efforts: [], fast: false, effortsUnknown: true }),
+      { effort: 'low', fastMode: true })).toEqual({ effort: 'low', fastMode: false });
+    expect(normalizeRuntimeAxesForModel(model({ efforts: [], fast: false, effortsUnknown: true }),
+      { effort: null, fastMode: false })).toEqual({ effort: null, fastMode: false });
   });
 });

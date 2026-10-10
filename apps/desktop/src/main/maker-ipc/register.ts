@@ -1151,6 +1151,7 @@ import {
   recordRecoveredSessionRuntimeAxisMutation,
   recordUserSessionRuntimeAxisMutation,
   recordUserSessionRuntimeMutation,
+  normalizeRuntimeAxesForModel,
   resolveCompatibleSessionRuntimeEffort,
   resolveCompatibleSessionRuntimeAxisPatch,
   resolveSessionRuntimeAxes,
@@ -7820,10 +7821,36 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       }
     };
     if (!agentOnOtherDevice) await admitLocalRoute();
+    // Native adapters capture first-turn options at creation, before bridge hydration.
+    // A persisted effort may belong to an earlier model; normalize against the route
+    // each attempt actually starts on (runtime override, provider reroute, or the next
+    // provider-group computer), always from the requested values so a failed attempt
+    // cannot lower the next one. SSH hosts and agents on another computer resolve the
+    // route against their own catalog, which this controller catalog cannot validate.
+    const requestedEffort = o.effort;
+    const requestedFastMode = o.fastMode;
+    const normalizeRuntimeOptionsForRoute = () => {
+      o.effort = requestedEffort;
+      o.fastMode = requestedFastMode;
+      if (o.remoteHostId || o.agentDeviceId) return;
+      const catalog = getActiveCatalog();
+      const effortProviderId = resolveDesktopModelContextProviderId(
+        catalog, o.agentKind, o.providerId, o.model,
+      );
+      const provider = catalog.providers.find((candidate) => candidate.id === effortProviderId);
+      const model = findCatalogModel(provider, o.model, o.agentKind);
+      if (!model) return;
+      const axes = normalizeRuntimeAxesForModel(model, {
+        effort: o.effort ?? null, fastMode: o.fastMode === true,
+      });
+      if (o.effort !== undefined) o.effort = axes.effort ?? undefined;
+      o.fastMode = axes.fastMode;
+    };
     assertAccess?.();
     let session: Awaited<ReturnType<typeof maker.createSession>> | undefined;
     while (!session) {
       try {
+        normalizeRuntimeOptionsForRoute();
         session = await maker.createSession(o);
       } catch (error) {
         // 供应商组刚分配的电脑没能启动 Agent(连不上、登录失效等)：换组里下一台再试，
@@ -7885,7 +7912,27 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         .from(sessions)
         .where(eq(sessions.id, session.id))
         .limit(1);
-      if (runtimeOverride) {
+      // Local routes: the bridge store must carry the same per-route normalized axes
+      // the native adapter just captured, or the first bridge request can still send
+      // an obsolete effort / unsupported Fast. SSH and other-computer routes are
+      // validated by the remote side, so their stored values pass through as before.
+      const localRoute = !o.remoteHostId && !o.agentDeviceId;
+      const localHydrateModel = localRoute
+        ? findCatalogModel(
+          getActiveCatalog().providers.find(
+            (candidate) => candidate.id === (getSessionProvider(session.id) ?? o.providerId ?? null),
+          ),
+          session.model,
+          o.agentKind,
+        )
+        : undefined;
+      if (localHydrateModel) {
+        const axes = normalizeRuntimeAxesForModel(localHydrateModel, runtimeOverride
+          ? { effort: runtimeOverride.effort, fastMode: runtimeOverride.fastMode }
+          : { effort: efRow?.effort ?? null, fastMode: !!efRow?.fastMode });
+        setSessionEffort(session.id, axes.effort);
+        setSessionFastMode(session.id, axes.fastMode);
+      } else if (runtimeOverride) {
         setSessionEffort(session.id, runtimeOverride.effort);
         setSessionFastMode(session.id, runtimeOverride.fastMode);
       } else {
@@ -10764,6 +10811,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           // 队列里,表现就是「对方做完了,发起方没被叫醒」。
           ...(dbRow.providerId ? { providerId: dbRow.providerId } : {}),
         });
+        // Bot child rows already contain their inherited effort/Fast. Reconcile
+        // before native creation; hydrating the bridge store afterwards cannot
+        // update Codex's captured first-turn options. Bootstrap still applies
+        // any effective runtime override after this persisted baseline.
+        await reconcileCreateOptsAgainstDb(targetSessionId, createOpts);
         await synthesizeOrcaVendorOptionsFromDb(targetSessionId, createOpts);
         if (createOpts.extraDirs === undefined) {
           try {

@@ -415,6 +415,24 @@ export function resolveCompatibleSessionRuntimeEffort(
   );
 }
 
+/**
+ * Normalize an already-chosen effort / Fast pair against the model a route actually
+ * starts on, before the native adapter or the bridge store captures it. An explicit
+ * effort survives on models whose effort list is only a placeholder (`effortsUnknown`,
+ * #5535): the engine or provider decides, matching send-time admission.
+ */
+export function normalizeRuntimeAxesForModel(
+  model: CatalogModel,
+  axes: { effort: Effort | null; fastMode: boolean },
+): { effort: Effort | null; fastMode: boolean } {
+  return {
+    effort: axes.effort === null || model.effortsUnknown !== true
+      ? resolveCompatibleSessionRuntimeEffort(model, axes.effort)
+      : axes.effort,
+    fastMode: axes.fastMode && model.supportsFastMode === true,
+  };
+}
+
 export function resolveSessionRuntimeAxes(params: {
   model: CatalogModel;
   effort: Effort | null;
