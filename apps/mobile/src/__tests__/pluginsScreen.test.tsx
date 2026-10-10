@@ -288,6 +288,87 @@ it("keeps details open and reflects confirmed off/on host states", async () => {
   });
   expect(fixture.refresh).toHaveBeenCalledTimes(2);
 });
+it("refreshes existing details after its computer reconnects", async () => {
+  await openDetail();
+  fixture.online = false;
+  await act(async () => root.render(createElement(PluginsScreen)));
+  expect(fixture.props.get("detail").model.status).toBe("offline");
+  fixture.enabled = false;
+  fixture.online = true;
+  await act(async () => root.render(createElement(PluginsScreen)));
+  expect(fixture.read).toHaveBeenCalledTimes(2);
+  expect(fixture.props.get("detail")).toMatchObject({
+    enabled: false,
+    model: { status: "disabled", canUseTasks: false },
+  });
+  await act(async () => root.render(createElement(PluginsScreen)));
+  expect(fixture.read).toHaveBeenCalledTimes(2);
+  expect(fixture.invoke).not.toHaveBeenCalled();
+});
+it("retries failed details on reconnect without replaying writes", async () => {
+  fixture.read.mockRejectedValueOnce(new Error("disconnected"));
+  await openDetail();
+  expect(fixture.props.get("detail").model.status).toBe("loadFailed");
+  fixture.online = false;
+  await act(async () => root.render(createElement(PluginsScreen)));
+  fixture.online = true;
+  await act(async () => root.render(createElement(PluginsScreen)));
+  expect(fixture.read).toHaveBeenCalledTimes(2);
+  expect(fixture.props.get("detail").model.canUseTasks).toBe(true);
+  expect(fixture.invoke).not.toHaveBeenCalled();
+});
+it("ignores a pre-disconnect read that settles after the reconnect read", async () => {
+  let finishOldRead!: (resource: any) => void;
+  const stale = row().item;
+  fixture.read.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        finishOldRead = resolve;
+      }),
+  );
+  await openDetail();
+  expect(fixture.props.get("detail").busy).toBe(true);
+  fixture.online = false;
+  await act(async () => root.render(createElement(PluginsScreen)));
+  fixture.enabled = false;
+  fixture.online = true;
+  await act(async () => root.render(createElement(PluginsScreen)));
+  expect(fixture.read).toHaveBeenCalledTimes(2);
+  expect(fixture.props.get("detail").enabled).toBe(false);
+  await act(async () => finishOldRead(stale));
+  expect(fixture.props.get("detail")).toMatchObject({
+    enabled: false,
+    busy: false,
+    model: { status: "disabled" },
+  });
+});
+it("marks details unconfirmed when a successful state change cannot be read back", async () => {
+  await openDetail();
+  fixture.read.mockRejectedValueOnce(new Error("read unavailable"));
+  await act(async () => fixture.props.get("detail").onEnabledChange(false));
+  expect(fixture.enabled).toBe(false);
+  expect(fixture.props.get("detail")).toMatchObject({
+    busy: false,
+    model: {
+      status: "loadFailed",
+      statusAction: "retry",
+      canUseTasks: false,
+      canToggle: false,
+    },
+  });
+  expect(fixture.alert).not.toHaveBeenCalled();
+  await act(async () => fixture.props.get("detail").onNewTask());
+  await act(async () => fixture.props.get("detail").onChooseTask());
+  await act(async () => fixture.props.get("detail").onEnabledChange(false));
+  expect(fixture.push).not.toHaveBeenCalled();
+  expect(fixture.invoke).toHaveBeenCalledTimes(1);
+  await act(async () => fixture.props.get("detail").onResolveStatus());
+  expect(fixture.props.get("detail")).toMatchObject({
+    enabled: false,
+    model: { status: "disabled" },
+  });
+  expect(fixture.invoke).toHaveBeenCalledTimes(1);
+});
 it("locks duplicate taps, and a rejected write keeps the previous state without replay", async () => {
   await openDetail();
   let reject!: (error: Error) => void;

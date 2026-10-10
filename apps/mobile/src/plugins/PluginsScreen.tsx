@@ -294,22 +294,33 @@ function PluginDirectory() {
         setDetailLoading(false);
     }
   };
-  // Returning from a task may have completed Setup; read current Host facts again.
+  // Returning from a task or reconnecting may invalidate the previous Host facts.
   const selectedOnline = selected ? list.isOnline(selected.row.host) : false;
   const previousFocus = useRef(focused);
+  const previousConnection = useRef({
+    key: selected?.row.key,
+    online: selectedOnline,
+  });
   useEffect(() => {
     const returned = focused && !previousFocus.current;
+    const reconnected =
+      previousConnection.current.key === selected?.row.key &&
+      !previousConnection.current.online &&
+      selectedOnline;
     previousFocus.current = focused;
+    previousConnection.current = {
+      key: selected?.row.key,
+      online: selectedOnline,
+    };
     if (
       focused &&
       selected &&
       detailOpen &&
       selectedOnline &&
-      !detailLoading &&
-      (returned || (!detail && !detailFailed))
+      (returned || reconnected || (!detailLoading && !detail && !detailFailed))
     )
       void showDetail(selected.row);
-  }, [focused, selectedOnline]);
+  }, [focused, selectedOnline, selected?.row.key]);
   useEffect(() => {
     const target = pluginVisualPreview(preview);
     if (!target || previewSelection.current === preview) return;
@@ -590,26 +601,14 @@ function PluginDirectory() {
     setBusy(true);
     try {
       await invokePlugin(invoke, row.host.deviceId, row.item.ref.id, actionId);
-      // Read the confirmed host state; keep details open and never replay an unknown write.
-      const resource = await getRemoteResource(
-        invoke,
-        row.host,
-        row.item.ref,
-        i18n.language,
-        ["plugin-capabilities"],
-      );
-      if (current()) {
-        setDetail(resource);
-        setSelected({ row: { ...row, item: resource } });
-        setDetailOpen(true);
-      }
-      await list.refresh();
+      // A read failure offers a read-only retry, never a replay of the completed write.
+      if (current()) await showDetail(row);
     } catch {
       if (current()) Alert.alert(t("plugins.actionFailed"));
-      void list.refresh();
     } finally {
       enableLock.current = false;
       if (isMobileAuthOwnerCurrent(owner)) setBusy(false);
+      void list.refresh();
     }
   };
   const enabled =
