@@ -219,9 +219,26 @@ export class RoutineEngine {
           )
         : undefined;
       // Omitted optional fields from older clients preserve saved choices.
+      // Top-level optionals survive via the spread above, but trigger-level
+      // optionals do not: `{...existing, ...parsed}` replaces the whole
+      // triggers array, so a caller that rebuilds triggers without echoing
+      // `anchorMs` (older host, or an LLM editing via MCP) silently dropped
+      // the imported interval's phase anchor and re-phased it to
+      // "edit time + interval". Carry the saved anchor forward for an
+      // interval trigger whose id matches; regenerated ids cannot match and
+      // intentionally keep the new phase.
+      const triggers = parsed.triggers?.map((trigger) => {
+        if (trigger.kind !== "interval" || trigger.anchorMs !== undefined) return trigger;
+        const previous = existing?.triggers.find((row) => row.id === trigger.id);
+        const previousAnchor = previous?.kind === "interval" ? previous.anchorMs : undefined;
+        return previousAnchor === undefined
+          ? trigger
+          : { ...trigger, anchorMs: previousAnchor };
+      });
       const input = parseRoutineInput({
         ...existing,
         ...parsed,
+        ...(triggers === undefined ? {} : { triggers }),
         // Legacy saved definitions may omit this field and must stay quiet.
         // A newly created, unclassified reminder must retain delivery.
         ...(!existing && parsed.silentWhenIdle === undefined ? { silentWhenIdle: false } : {}),
