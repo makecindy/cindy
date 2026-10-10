@@ -606,6 +606,39 @@ describe('agent-facing managed app update check', () => {
       }
     });
 
+    it('never restarts into the confirmed version while a newer one is superseding it', async () => {
+      let finishSecond: (() => void) | undefined;
+      download.mockImplementation(({ targetPath }: { targetPath: string }) => {
+        const write = () => {
+          fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+          fs.writeFileSync(targetPath, 'update');
+          return { path: targetPath, size: 123 };
+        };
+        if (download.mock.calls.length === 1) return Promise.resolve(write());
+        return new Promise((resolve) => { finishSecond = () => resolve(write()); });
+      });
+      const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+      const service = await freshUpdateService('darwin');
+      try {
+        const result = await service.applyConfirmedAppUpdateForAgent({
+          expectedVersion: '0.0.65',
+          beforeRelaunch: async () => {
+            // A background poll starts downloading 0.0.66 over the staged 0.0.65.
+            void service.checkForUpdate(updateManifest('0.0.66'));
+            await vi.waitFor(() => { expect(download).toHaveBeenCalledTimes(2); });
+            return true;
+          },
+        });
+        expect(result).toMatchObject({ status: 'failed', errorCode: 'version_changed', stagedVersion: '0.0.66' });
+        expect(spawnProcess).not.toHaveBeenCalled();
+        expect(exitSpy).not.toHaveBeenCalled();
+        finishSecond?.();
+      } finally {
+        service.stopUpdateService();
+        exitSpy.mockRestore();
+      }
+    });
+
     it('does not relaunch when the download fails or the build is unsupported', async () => {
       download.mockRejectedValue(new Error('network'));
       const service = await freshUpdateService('darwin');

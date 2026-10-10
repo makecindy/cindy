@@ -2195,15 +2195,20 @@ export async function applyConfirmedAppUpdateForAgent(options: {
   /** Re-checked inside the relaunch, after Subagent reclaim and right before the updater spawns. */
   beforeSpawn?: () => boolean;
 }): Promise<AgentConfirmedAppUpdateResult> {
-  const versionChanged = (): AgentConfirmedAppUpdateResult | null =>
-    options.expectedVersion && readyVersion !== options.expectedVersion
-      ? {
-          status: 'failed',
-          reason: `当前渠道的新版本是 ${readyVersion ?? '未知版本'}，与确认的 ${options.expectedVersion} 不同，本次没有安装；请重新发起更新。`,
-          errorCode: 'version_changed',
-          ...(readyVersion ? { stagedVersion: readyVersion } : {}),
-        }
-      : null;
+  // The single version rule for every checkpoint: the staged patch is the
+  // confirmed version and no newer one is being downloaded over it. Like the
+  // built-in banner, never restart while superseding.
+  const versionChanged = (): AgentConfirmedAppUpdateResult | null => {
+    if (!options.expectedVersion) return null;
+    const current = currentStatus === 'superseding' ? downloadingVersion : readyVersion;
+    if (current === options.expectedVersion && currentStatus !== 'superseding') return null;
+    return {
+      status: 'failed',
+      reason: `当前渠道的新版本是 ${current ?? '未知版本'}，与确认的 ${options.expectedVersion} 不同，本次没有安装；请重新发起更新。`,
+      errorCode: 'version_changed',
+      ...(current ? { stagedVersion: current } : {}),
+    };
+  };
   const unsupported = agentUpdateUnsupportedReason();
   if (unsupported) return { status: 'failed', reason: unsupported, errorCode: 'unsupported' };
   // A relaunch already under way (Settings banner or idle auto-install) only
@@ -2226,12 +2231,12 @@ export async function applyConfirmedAppUpdateForAgent(options: {
   if (isRelaunching || autoRelaunchInProgress) {
     return versionChanged() ?? { status: 'relaunching', targetVersion: readyVersion };
   }
-  if (currentStatus !== 'ready' || !readyVersion) {
-    return { status: 'failed', reason: '已下载的更新不再可用，请重新检查更新。', errorCode: 'not_ready' };
-  }
   // A background check may have superseded the staged patch during the wait.
   const changedBeforeRelaunch = versionChanged();
   if (changedBeforeRelaunch) return changedBeforeRelaunch;
+  if (currentStatus !== 'ready' || !readyVersion) {
+    return { status: 'failed', reason: '已下载的更新不再可用，请重新检查更新。', errorCode: 'not_ready' };
+  }
   const targetVersion = readyVersion;
   // Both bindings are re-checked once more inside the relaunch, after its
   // Subagent reclaim wait: the confirmed version and the caller's condition.
