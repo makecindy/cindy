@@ -10602,9 +10602,12 @@
           "sourceConversationChanged": "元のタスクが変更されました。現在のタスクに対して /review をもう一度実行してください。",
           "sourceFilesChanged": "元のタスクのファイルが変更されました。現在の成果に対して /review をもう一度実行してください。",
           "artifactChanged": "レビュー対象の成果が変更されました。現在の成果に対して /review をもう一度実行してください。",
-          "artifactUnavailable": "Cindy はレビュー対象の成果を安全に読み取れませんでした。ワークスペースまたは添付ファイルを確認して、/review をもう一度実行してください。",
+          "artifactUnavailable": "レビュー用のファイルを準備できませんでした。選択したフォルダーまたは添付ファイルを確認し、/review を再実行してください。",
           "providerFailed": "レビュータスクの実行に失敗しました"
-        }
+        },
+        "directory": "フォルダー：",
+        "baseline": "基準ブランチ：",
+        "unverifiedResult": "以下の指摘は生成されましたが、現在も有効か確認できませんでした。"
       }
     },
     "markdownRenderer": {
@@ -13751,6 +13754,13 @@
       "inline": "メモリ内の添付ファイル",
       "allow": "今回のみ許可",
       "cancel": "キャンセル"
+    },
+    "workspaceSelection": {
+      "title": "レビューするコードを選択",
+      "message": "このディレクトリには利用できるコード差分がありません。現在のコードをレビューするか、実際に開発したディレクトリを選択できます。",
+      "current": "このフォルダーを確認",
+      "choose": "別のフォルダーを選択",
+      "open": "レビュー"
     }
   },
   "learn": {

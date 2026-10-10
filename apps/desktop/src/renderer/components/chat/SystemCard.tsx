@@ -1300,6 +1300,10 @@ function ReviewCard({ data, workingDir }: { data?: Record<string, unknown>; work
   const reviewerSessionId =
     typeof data?.reviewerSessionId === 'string' ? data.reviewerSessionId : '';
   const result = typeof data?.result === 'string' ? data.result : '';
+  const workspace = data?.workspace && typeof data.workspace === 'object'
+    ? data.workspace as Record<string, unknown> : null;
+  const reviewedDir = typeof workspace?.workingDir === 'string' ? workspace.workingDir : workingDir;
+  const reviewedBase = typeof workspace?.baseRef === 'string' ? workspace.baseRef : '';
   const error = typeof data?.error === 'string' ? data.error : '';
   const failureCode =
     readReviewFailureCode(data?.failureCode) ?? reviewFailureCodeFromLegacyError(error);
@@ -1340,6 +1344,12 @@ function ReviewCard({ data, workingDir }: { data?: Record<string, unknown>; work
           </Button>
         )}
       </div>
+      {workspace && reviewedDir && (
+        <p className="mt-1 break-all pl-[23px] text-xs text-muted-foreground">
+          {t('chat.systemCard.review.directory')}{reviewedDir}
+          {reviewedBase && <> · {t('chat.systemCard.review.baseline')}{reviewedBase}</>}
+        </p>
+      )}
       {status === 'running' && (
         <p className="mt-1 pl-[23px] text-xs text-muted-foreground">
           {t('chat.systemCard.review.readOnlyHint')}
@@ -1355,12 +1365,13 @@ function ReviewCard({ data, workingDir }: { data?: Record<string, unknown>; work
           {failureMessage}
         </p>
       )}
-      {(status === 'completed' || status === 'stale') && result && (
+      {result && status !== 'running' && (
         <div className="mt-3 border-t border-border pt-3">
+          {status === 'failed' && <p className="mb-2 text-xs text-muted-foreground">{t('chat.systemCard.review.unverifiedResult')}</p>}
           <MarkdownRenderer
             content={result}
-            workingDir={workingDir ?? ''}
-            allowPrivilegedLinks={status !== 'stale'}
+            workingDir={reviewedDir ?? ''}
+            allowPrivilegedLinks={status === 'completed'}
           />
         </div>
       )}

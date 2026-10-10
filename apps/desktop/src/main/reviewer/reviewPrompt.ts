@@ -61,6 +61,7 @@ export interface ReviewBranchEvidence {
 export interface BuildReviewPromptInput {
   focus?: string;
   context: ReviewContextMessage[];
+  historyCaptureIncomplete?: boolean;
   workspace: ReviewWorkspaceEvidence | null;
   branch?: ReviewBranchEvidence | null;
   /** Why no branch evidence is present, when it should have been. */
@@ -193,7 +194,7 @@ function cappedBucketSection(
   );
 }
 
-function workspaceDiffSection(workspace: ReviewWorkspaceEvidence): string {
+function workspaceDiffSection(workspace: ReviewWorkspaceEvidence, budget = MAX_DIFF_CHARS): string {
   const parts: string[] = [];
   const diffs = [...workspace.diffs.staged, ...workspace.diffs.unstaged];
   if (diffs.length > 0) parts.push(diffSection(diffs));
@@ -207,10 +208,10 @@ function workspaceDiffSection(workspace: ReviewWorkspaceEvidence): string {
     }
     return '（Git 状态显示存在未提交变更，但没有可嵌入的文本补丁；请用只读工具检查列出的工作区文件。）';
   }
-  return clip(parts.join('\n\n'), MAX_DIFF_CHARS);
+  return clip(parts.join('\n\n'), budget);
 }
 
-function branchDiffSection(branch: ReviewBranchEvidence): string {
+function branchDiffSection(branch: ReviewBranchEvidence, budget = MAX_DIFF_CHARS): string {
   const parts: string[] = [];
   if (branch.diffs.length > 0) parts.push(diffSection(branch.diffs));
   if (branch.capped) parts.push(cappedBucketSection('分支', branch.capped));
@@ -220,7 +221,7 @@ function branchDiffSection(branch: ReviewBranchEvidence): string {
     }
     return '（本分支相对基线有变更，但没有可嵌入的文本补丁；请用只读工具检查列出的文件。）';
   }
-  return clip(parts.join('\n\n'), MAX_DIFF_CHARS);
+  return clip(parts.join('\n\n'), budget);
 }
 
 function coverageSection(input: BuildReviewPromptInput): string {
@@ -229,7 +230,7 @@ function coverageSection(input: BuildReviewPromptInput): string {
       input.workspace.diffs.capped?.staged ? '已暂存' : null,
       input.workspace.diffs.capped?.unstaged ? '未暂存' : null,
     ].filter(Boolean);
-    const summary = `当前 Git 工作区有 ${input.workspace.totalFiles} 个未提交文件（已暂存 ${input.workspace.stagedFiles}、未暂存 ${input.workspace.unstagedFiles}、未跟踪 ${input.workspace.untrackedFiles}）。`;
+    const summary = `当前 Git 工作区有 ${input.workspace.totalFiles} 个未提交文件（已暂存 ${input.workspace.stagedFiles}、未暂存 ${input.workspace.unstagedFiles}、未跟踪 ${input.workspace.untrackedFiles}）。${input.branch ? `审查同时包含本分支相对基线 ${inlineLabel(input.branch.baseRef)} 的 ${input.branch.fileCount} 个文件的已提交变更；以磁盘上的当前代码为最终状态。` : ''}${input.branchUnavailableReason ? `已提交分支差异无法读取（${inlineWarning(input.branchUnavailableReason)}），不得声称已覆盖全部分支改动。` : ''}`;
     const sensitiveNote =
       (input.workspace.sensitiveFilesOmitted ?? 0) > 0
         ? `其中 ${input.workspace.sensitiveFilesOmitted} 份敏感路径变更已从证据中排除；不得读取或评价其内容。`
@@ -279,10 +280,13 @@ function coverageSection(input: BuildReviewPromptInput): string {
 }
 
 function changeEvidenceSection(input: BuildReviewPromptInput): string {
-  // Uncommitted work first: it is what the user is looking at right now.
-  // Then the branch's own commits, which are the deliverable once committed.
-  // The last turn is a fallback for tasks with no branch of their own.
-  if (input.workspace?.dirty) return workspaceDiffSection(input.workspace);
+  // Both describe the deliverable, with current edits applied over HEAD.
+  if (input.workspace?.dirty) {
+    return clip([
+      ...(input.branch ? ['## 已提交分支改动\n\n' + branchDiffSection(input.branch, Math.floor(MAX_DIFF_CHARS / 2))] : []),
+      '## 当前未提交修改\n\n' + workspaceDiffSection(input.workspace, input.branch ? Math.floor(MAX_DIFF_CHARS / 2) : MAX_DIFF_CHARS),
+    ].join('\n\n'), MAX_DIFF_CHARS);
+  }
   if (input.branch) return branchDiffSection(input.branch);
   if (input.changeSet) return diffSection(input.changeSet.diffs);
   return '（无 Git 补丁。）';
@@ -352,7 +356,9 @@ export function buildReviewPrompt(input: BuildReviewPromptInput): BuiltReviewPro
             : ''
         }\n</untrusted-artifact-list>`
       : '（没有显式附件；请根据任务上下文，用只读工具检查当前工作目录中的实际成果。）';
-  const coverage = coverageSection(input);
+  const coverage = coverageSection(input) + (input.historyCaptureIncomplete
+    ? '\n历史改动记录不完整，本次不把它当作完整补丁。审查以当前 Git 证据和显式成果为准；未提供的历史或未跟踪成果不得声称已覆盖。'
+    : '');
 
   const prompt = `你是 Cindy 的独立成果审查员。你在一个全新、无开发历史记忆的只读任务中工作。
 

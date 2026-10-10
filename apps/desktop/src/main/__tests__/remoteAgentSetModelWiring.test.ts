@@ -67,11 +67,13 @@ describe('agent-device model selection wiring', () => {
   it('refuses Review for these tasks before collecting evidence', () => {
     const select = source.indexOf('.where(eq(sessions.id, request.sourceSessionId))');
     const guard = source.indexOf('if (source.agentDeviceId) {', select);
-    const evidence = source.indexOf('const sourceWorkingDir = source.workingDir;', select);
+    const scope = source.indexOf('await resolveReviewScope(source.id)', select);
+    const evidence = source.indexOf('loadReviewEvidence({', select);
     expect(select).toBeGreaterThan(0);
     expect(guard).toBeGreaterThan(select);
+    expect(guard).toBeLessThan(scope);
     expect(guard).toBeLessThan(evidence);
-    expect(source.slice(guard, evidence)).toContain("throwIpcError('UNSUPPORTED_CAPABILITY'");
+    expect(source.slice(guard, scope)).toContain("throwIpcError('UNSUPPORTED_CAPABILITY'");
   });
 
   it('keeps tasks created from these tasks on the same computer', () => {

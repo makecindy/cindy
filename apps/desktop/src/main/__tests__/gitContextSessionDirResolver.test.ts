@@ -5,7 +5,10 @@
 
 import path from 'node:path';
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
+
+// The injected resolver never opens Electron's persistent store.
+vi.mock('electron-store', () => ({ default: class {} }));
 
 import type { GitHeadInfo } from '../git-context/headReader';
 import {
@@ -52,6 +55,37 @@ describe('extractDirCandidate', () => {
 
   it('普通 Bash(无 cwd)→ null', () => {
     expect(extractDirCandidate(toolUse('Bash', { command: 'ls' }))).toBeNull();
+  });
+
+  it.each([
+    'cd /Users/x/wt-a && git status',
+    "cd '/Users/x/wt-a' && git diff",
+    'cd -- "/Users/x/wt-a" && python edit.py',
+  ])('Claude Bash reports a literal command directory: %s', (command) => {
+    expect(extractDirCandidate(toolUse('Bash', { command }))).toBe('/Users/x/wt-a');
+  });
+
+  it('accepts quoted directory spaces without interpreting shell expressions', () => {
+    expect(extractDirCandidate(toolUse('Bash', { command: "cd '/Users/x/code tree' && git status" })))
+      .toBe('/Users/x/code tree');
+    for (const command of [
+      'cd "$HOME/wt-a" && git status',
+      'cd /Users/$(whoami)/wt-a && git status',
+      'cd ../wt-a && git status',
+      'echo ok && cd /Users/x/wt-a && git status',
+      'cd /Users/x/wt-* && git status',
+    ]) expect(extractDirCandidate(toolUse('Bash', { command }))).toBeNull();
+  });
+
+  it.each([
+    'cd /repo/main && cd ../feature && git diff',
+    'cd /repo/main && git status; cd /repo/feature && git diff',
+    'cd /repo/main &&\ncd -- /repo/feature && git diff',
+    'cd /repo/main && command cd /repo/feature && git diff',
+    'cd /repo/main && pushd /repo/feature && git diff',
+    'cd /repo/main && popd && git diff',
+  ])('does not mistake the first directory for the final one: %s', (command) => {
+    expect(extractDirCandidate(toolUse('Bash', { command }))).toBeNull();
   });
 
   it('相对路径不采纳(cwd / file_path 都要求绝对)→ null', () => {
@@ -104,6 +138,17 @@ describe('resolveSessionGitDir', () => {
         opts.gitDirs[dir] !== undefined ? branchHead(opts.gitDirs[dir]) : null,
     };
   }
+
+  it('uses a Bash-only linked checkout instead of the unchanged task directory', async () => {
+    const res = await resolveSessionGitDir(
+      { sessionId: 's', fallbackWorktreePath: null, fallbackWorkingDir: '/Users/x/main' },
+      deps({
+        contents: [toolUse('Bash', { command: 'cd /Users/x/wt-a && git status --short' })],
+        gitDirs: { '/Users/x/main': 'main', '/Users/x/wt-a': 'integration' },
+      }),
+    );
+    expect(res).toMatchObject({ workdir: path.resolve('/Users/x/wt-a'), source: 'telemetry', head: branchHead('integration') });
+  });
 
   it('遥测命中:最近一条候选目录是 git → source=telemetry', async () => {
     const res = await resolveSessionGitDir(

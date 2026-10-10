@@ -10602,8 +10602,11 @@
           "sourceFilesChanged": "來源任務的檔案已變更，請針對當前成果重新執行 /review。",
           "artifactChanged": "審查成果已變更，請針對當前成果重新執行 /review。",
           "providerFailed": "審查任務執行失敗",
-          "artifactUnavailable": "Cindy 無法安全讀取審查成品，請檢查工作區或附件後重新執行 /review"
-        }
+          "artifactUnavailable": "Cindy 無法準備審查檔案，請檢查所選目錄或附件後重新執行 /review。"
+        },
+        "directory": "目錄：",
+        "baseline": "基準分支：",
+        "unverifiedResult": "以下結論已產生，但未能驗證是否仍然有效。"
       }
     },
     "markdownRenderer": {
@@ -13751,6 +13754,13 @@
       "inline": "記憶體附件",
       "allow": "僅本次允許",
       "cancel": "取消"
+    },
+    "workspaceSelection": {
+      "title": "選擇要審查的程式碼",
+      "message": "這個目錄沒有可用的程式碼差異。可以審查目前程式碼，或選擇實際開發的目錄。",
+      "current": "審查目前目錄",
+      "choose": "選擇其他目錄",
+      "open": "審查"
     }
   },
   "learn": {

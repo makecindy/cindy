@@ -2,11 +2,14 @@ import path from 'node:path';
 
 import { describe, expect, it, vi } from 'vitest';
 
+vi.mock('electron-store', () => ({ default: class {} }));
+
 import {
   defaultScopeResolverDeps,
   resolveReviewScope,
   type ScopeResolverDeps,
   withSessionReviewRowSnapshot,
+  withSessionReviewWorkspace,
 } from '../scopeResolver';
 import { GitRunError, type GitRunResult } from '../gitRunner';
 
@@ -34,6 +37,27 @@ function deps(patch: Partial<ScopeResolverDeps> = {}): ScopeResolverDeps {
 }
 
 describe('git-review scopeResolver', () => {
+  it('pins one Review directory and rereads its current HEAD without following new telemetry', async () => {
+    let head = 'a'.repeat(40);
+    const d = deps({ git: vi.fn(async (args, options) => ({
+      stdout: args.includes('--show-toplevel') ? `${options.cwd}\n`
+        : args.includes('--verify') ? `${head}\n`
+        : args[0] === 'symbolic-ref' ? 'integration\n' : '',
+      stderr: '', exitCode: 0,
+    })) });
+    await withSessionReviewWorkspace('s1', '/repo/actual', async () => {
+      expect(await resolveReviewScope('s1', d)).toMatchObject({
+        repoRoot: path.resolve('/repo/actual'), branch: 'integration', headOid: head,
+      });
+      head = 'b'.repeat(40);
+      expect((await resolveReviewScope('s1', d)).headOid).toBe(head);
+      expect(d.resolveSessionDir).not.toHaveBeenCalled();
+      await resolveReviewScope('other-task', d);
+      expect(d.resolveSessionDir).toHaveBeenCalledTimes(1);
+    });
+    expect((await resolveReviewScope('s1', d)).repoRoot).toBe(path.resolve('/repo/wt-store'));
+  });
+
   it('prefers managed WorktreeStore path over DB snapshot fallback', async () => {
     const d = deps();
     const scope = await resolveReviewScope('s1', d);

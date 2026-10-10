@@ -3405,6 +3405,7 @@ export function CCAgentSessionView({
           return { handled: true, accepted: true, message };
         } catch (err) {
           const ipcError = extractIpcError(err);
+          if (ipcError?.code === 'MUTATION_CANCELLED') return { handled: true, accepted: false, message };
           toast.error(
             ipcError
               ? t('review.toast.failed')
