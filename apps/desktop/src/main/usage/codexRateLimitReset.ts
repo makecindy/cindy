@@ -43,7 +43,7 @@ export interface CodexRateLimitResetService {
   consume(idempotencyKey: string): Promise<MobileCodexRateLimitResetResult>;
 }
 
-export type CodexRateLimitResetRejection = 'OFFER_EXPIRED' | 'ACCOUNT_CHANGED';
+export type CodexRateLimitResetRejection = 'OFFER_EXPIRED' | 'ACCOUNT_CHANGED' | 'RESET_IN_PROGRESS';
 
 /** Expected reset rejection that the IPC boundary must expose as a stable precondition error. */
 export class CodexRateLimitResetRejectedError extends Error {
@@ -58,6 +58,8 @@ export class CodexRateLimitResetRejectedError extends Error {
 
 /** In-memory state for one retryable reset attempt. */
 interface ResetOfferEntry {
+  /** An explicit row offer must not replace the default earliest-expiry offer. */
+  forCredit?: boolean;
   account: CodexRateLimitAccountIdentity;
   creditId: string | null;
   creditExpiresAt: number | null;
@@ -190,7 +192,7 @@ function selectEarliestExpiringCredit(
 /**
  * Build the desktop-owned reset control plane.
  *
- * Mobile never chooses a credit directly. A read creates a short-lived, account-bound UUID;
+ * Backend credit ids stay on desktop. A read creates short-lived, account-bound UUIDs;
  * retries reuse that UUID, and completed outcomes stay cached until the offer expires.
  */
 export function createCodexRateLimitResetService(
@@ -251,9 +253,17 @@ export function createCodexRateLimitResetService(
     // Detailed rows must contain an eligible Codex credit. Count-only responses may still
     // mint an offer because app-server officially supports backend credit selection.
     const hasEligibleCredit = credits === null || selectedCredit !== null;
-    let existing = [...offers.entries()].find(([, offer]) => (
+    for (const [key, offer] of offers) {
+      if (offer.forCredit && !offer.pending && !offer.attempted && sameAccount(offer.account, identity)
+        && !credits?.some(credit => credit.id === offer.creditId && credit.status === 'available'
+          && credit.resetType === 'codexRateLimits' && credit.expiresAt === offer.creditExpiresAt
+          && (credit.expiresAt === null || credit.expiresAt * 1000 > now()))) offers.delete(key);
+    }
+    const accountOffers = [...offers.entries()].filter(([, offer]) => (
       !offer.settled && sameAccount(offer.account, identity)
     ));
+    let existing = accountOffers.find(([, offer]) => offer.pending || offer.attempted)
+      ?? accountOffers.find(([, offer]) => !offer.forCredit);
     if (existing && (existing[1].pending || existing[1].attempted)) {
       // A backend consume may already have happened. Return the frozen offer even when the
       // refreshed count/credit rows changed, so Mobile can safely recover an ambiguous result.
@@ -268,12 +278,16 @@ export function createCodexRateLimitResetService(
       // Before any consume starts, a fresh authoritative read may replace a stale detailed
       // credit (expired/redeemed elsewhere). Once a consume is pending or ambiguous, freeze
       // both the backend idempotency key and credit parameters until the offer TTL ends.
-      if (existing && !existing[1].pending && !existing[1].attempted
-        && (existing[1].creditId !== selectedCreditId
-          || existing[1].creditExpiresAt !== selectedCreditExpiresAt)) {
+      if (existing && (existing[1].creditId !== selectedCreditId
+        || existing[1].creditExpiresAt !== selectedCreditExpiresAt)) {
         offers.delete(existing[0]);
         existing = undefined;
       }
+      // Reuse a promoted row's key; do not give one credit two redeemable offers.
+      existing ??= [...offers.entries()].find(([, offer]) => !offer.settled
+        && sameAccount(offer.account, identity) && offer.creditId === selectedCreditId
+        && offer.creditExpiresAt === selectedCreditExpiresAt);
+      if (existing) existing[1].forCredit = false;
       const idempotencyKey = existing?.[0] ?? createIdempotencyKey();
       const entry = existing?.[1] ?? {
         account: identity,
@@ -296,12 +310,34 @@ export function createCodexRateLimitResetService(
       offers.delete(existing[0]);
     }
 
+    const displayedCredits = displayResetCredits(credits);
+    if (displayedCredits && credits && availableCount > 0 && canBindResetOffer(identity)) {
+      credits.forEach((credit, index) => {
+        if (credit.status !== 'available' || credit.resetType !== 'codexRateLimits'
+          || !credit.id?.trim() || (credit.expiresAt !== null && credit.expiresAt * 1000 <= now())) return;
+        const row = [...offers.entries()].find(([, offer]) => (
+          !offer.settled && sameAccount(offer.account, identity) && offer.creditId === credit.id
+          && (offer.pending || offer.attempted || offer.creditExpiresAt === credit.expiresAt)
+        ));
+        const key = row?.[0] ?? createIdempotencyKey();
+        const entry = row?.[1] ?? {
+          forCredit: true, account: identity, creditId: credit.id,
+          creditExpiresAt: credit.expiresAt, validUntil: now() + RESET_OFFER_TTL_MS,
+          attempted: false, settled: false, pending: null, result: null,
+        };
+        if (!row) offers.set(key, entry);
+        displayedCredits[index].resetOffer = {
+          idempotencyKey: key, expiresAt: entry.creditExpiresAt, validUntil: entry.validUntil,
+        };
+      });
+    }
+
     return {
       account: displayAccount(identity, response.rateLimits.planType ?? null),
       rateLimits: mobileRateLimits,
       rateLimitsByLimitId: displayRateLimitsById(response.rateLimitsByLimitId),
       rateLimitResetCredits: response.rateLimitResetCredits
-        ? { availableCount, credits: displayResetCredits(credits) }
+        ? { availableCount, credits: displayedCredits }
         : null,
       resetOffer,
     };
@@ -327,6 +363,12 @@ export function createCodexRateLimitResetService(
       return offer.result;
     }
     if (offer.pending) return await offer.pending;
+    if ([...offers.values()].some(other => other !== offer && !other.settled
+      && (other.pending || other.attempted) && sameAccount(other.account, offer.account))) {
+      throw new CodexRateLimitResetRejectedError(
+        'RESET_IN_PROGRESS', 'Another reset is pending; retry that same reset before choosing another',
+      );
+    }
 
     const run = (async (): Promise<MobileCodexRateLimitResetResult> => {
       // Identity verification belongs inside the shared promise. Otherwise two clicks can

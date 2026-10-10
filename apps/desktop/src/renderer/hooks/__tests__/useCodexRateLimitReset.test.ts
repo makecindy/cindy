@@ -42,6 +42,57 @@ describe('manual Codex resets', () => {
     expect(hook.result.current.busy).toBe(false);
   });
 
+  function withRows() {
+    const value = snapshot();
+    const selected = {
+      status: 'available' as const, resetType: 'codexRateLimits' as const,
+      grantedAt: 1, expiresAt: Date.now() / 1000 + 60_000, title: 'Later reset', description: null,
+      resetOffer: { idempotencyKey: '00000000-0000-4000-8000-000000000002', expiresAt: null, validUntil: Date.now() + 60_000 },
+    };
+    value.rateLimitResetCredits!.credits = [selected];
+    return { value, selected };
+  }
+
+  it('confirms and consumes the selected row rather than the default offer', async () => {
+    const { value, selected } = withRows();
+    const hook = renderHook(() => useCodexRateLimitReset(value, refresh));
+    await act(async () => hook.result.current.reset(selected));
+    expect(mocks.confirm).toHaveBeenCalledWith(expect.objectContaining({ description: 'codexResets.confirmSelectedBody' }));
+    expect(consume).toHaveBeenCalledExactlyOnceWith(selected.resetOffer.idempotencyKey, 'openai');
+  });
+
+  it('does not fall back to the default when a selected row has no offer', async () => {
+    const { value, selected } = withRows();
+    const hook = renderHook(() => useCodexRateLimitReset(value, refresh));
+    await act(async () => hook.result.current.reset({ ...selected, resetOffer: null }));
+    expect(mocks.confirm).not.toHaveBeenCalled();
+    expect(consume).not.toHaveBeenCalled();
+  });
+
+  it('does not consume a row withdrawn while its confirmation is open', async () => {
+    let accept!: (value: boolean) => void;
+    mocks.confirm.mockImplementation(() => new Promise<boolean>(resolve => { accept = resolve; }));
+    const { value, selected } = withRows();
+    const hook = renderHook(({ current }) => useCodexRateLimitReset(current, refresh), { initialProps: { current: value } });
+    let request!: Promise<void>;
+    act(() => { request = hook.result.current.reset(selected); });
+    hook.rerender({ current: { ...value, rateLimitResetCredits: { availableCount: 0, credits: [] } } });
+    await act(async () => { accept(true); await request; });
+    expect(consume).not.toHaveBeenCalled();
+  });
+
+  it('does not consume if the quota recovers while confirmation is open', async () => {
+    let accept!: (value: boolean) => void;
+    mocks.confirm.mockImplementation(() => new Promise<boolean>(resolve => { accept = resolve; }));
+    const value = snapshot();
+    const hook = renderHook(({ current }) => useCodexRateLimitReset(current, refresh), { initialProps: { current: value } });
+    let request!: Promise<void>;
+    act(() => { request = hook.result.current.reset(); });
+    hook.rerender({ current: { ...value, rateLimits: { primary: { usedPercent: 0 } } } });
+    await act(async () => { accept(true); await request; });
+    expect(consume).not.toHaveBeenCalled();
+  });
+
   it('does not consume when the confirmation is cancelled', async () => {
     mocks.confirm.mockResolvedValue(false);
     const value = snapshot();

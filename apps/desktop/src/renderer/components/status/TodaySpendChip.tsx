@@ -18,6 +18,8 @@ import { useProviders } from '@/hooks/useProviders';
 
 import React from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
+import { X } from 'lucide-react';
+import { Tip } from '@/components/ui/tooltip';
 import { Button } from '@/components/ui/button';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
@@ -1729,24 +1731,33 @@ export function TodaySpendChip({
           <Dialog.Overlay className="modal-scrim fixed inset-0 z-[10000]" />
           <Dialog.Content
             aria-describedby={undefined}
+            onPointerDownOutside={(event) => event.preventDefault()}
             className="modal-panel fixed left-1/2 top-1/2 z-[10000] w-[400px] max-w-[calc(100vw-32px)] -translate-x-1/2 -translate-y-1/2 p-4"
             onCloseAutoFocus={(event) => {
               event.preventDefault();
               // The confirmation owns focus when it opens after this dialog closes.
-              if (!manualReset.busy) quotaPopoverTriggerRef.current?.focus({ preventScroll: true });
+              if (!manualReset.busy) {
+                quotaPopoverFocusTakenRef.current = true;
+                restoreQuotaPopoverFocus();
+              }
             }}
           >
             <Dialog.Title className="sr-only">{t('codexResets.title')}</Dialog.Title>
             <div className="max-h-[60vh] overflow-y-auto">
-              <CodexResetCredits standalone snapshot={codexRateLimits} busy={manualReset.busy}
-                canReset={manualReset.canReset} onReset={() => {
+              <CodexResetCredits variant="dialog" snapshot={codexRateLimits} busy={manualReset.busy}
+                canReset={manualReset.canReset} onReset={(credit) => {
                   setResetListOpen(false);
-                  void manualReset.reset();
+                  void manualReset.reset(credit);
                 }} />
             </div>
-            <div className="mt-2 flex justify-end">
-              <Dialog.Close asChild><Button size="sm" compact>{t('common.dismiss')}</Button></Dialog.Close>
-            </div>
+            <Dialog.Close asChild>
+              <Tip text={t('common.dismiss')} contentClassName="z-[10001]">
+                <button type="button" aria-label={t('common.dismiss')}
+                  className="absolute right-3 top-3 flex h-8 w-8 items-center justify-center rounded-full text-[var(--confirm-desc)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--confirm-title)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]">
+                  <X className="h-4 w-4" aria-hidden="true" />
+                </button>
+              </Tip>
+            </Dialog.Close>
           </Dialog.Content>
         </Dialog.Portal>
       </Dialog.Root>

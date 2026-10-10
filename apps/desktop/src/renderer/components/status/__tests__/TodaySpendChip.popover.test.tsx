@@ -481,6 +481,65 @@ describe('TodaySpendChip Claude subscription popover', () => {
     expect(mocks.refreshCodexRateLimits).toHaveBeenCalled();
   });
 
+  it('closes the reset list with X and restores focus without reopening the quota card', async () => {
+    mocks.codexAuthInjection = 'oauth-bearer';
+    mocks.codexSnapshot = { primary: { usedPercent: 100, windowMinutes: 300 } };
+    mocks.resetSnapshot = {
+      account: { email: 'te***@example.test', accountId: '…123456', planType: 'plus' },
+      rateLimits: { primary: { usedPercent: 100 } }, rateLimitsByLimitId: null,
+      rateLimitResetCredits: { availableCount: 2, credits: null },
+      resetOffer: { idempotencyKey: '00000000-0000-4000-8000-000000000001', expiresAt: null, validUntil: Date.now() + 60_000 },
+    };
+    mocks.consumeReset.mockResolvedValue({ outcome: 'reset', rateLimits: null });
+    render(<TodaySpendChip vendorKey="codex" providerId="openai" sessionId="reset" />);
+    const trigger = screen.getByRole('button', { name: '打开 Codex 用量页面' });
+    act(() => trigger.focus());
+    act(() => vi.advanceTimersByTime(300));
+    expect(screen.queryByRole('button', { name: 'codexResets.useReset' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'codexResets.title' }));
+    expect(screen.queryByTestId('quota-hover-card')).toBeNull();
+    expect(screen.getByRole('dialog')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'common.dismiss' }));
+    act(() => vi.advanceTimersByTime(0));
+    expect(screen.queryByTestId('quota-hover-card')).toBeNull();
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(document.activeElement).toBe(trigger);
+    expect(mocks.consumeReset).not.toHaveBeenCalled();
+  });
+
+  it('uses the clicked reset row and closes the list before confirming', async () => {
+    mocks.codexAuthInjection = 'oauth-bearer';
+    mocks.codexSnapshot = { primary: { usedPercent: 100, windowMinutes: 300 } };
+    mocks.resetSnapshot = {
+      account: { email: 'te***@example.test', accountId: '…123456', planType: 'plus' },
+      rateLimits: { primary: { usedPercent: 100 } }, rateLimitsByLimitId: null,
+      rateLimitResetCredits: { availableCount: 2, credits: [
+        { status: 'available', resetType: 'codexRateLimits', grantedAt: 1, expiresAt: Date.now() / 1000 + 100_000,
+          title: 'Later', description: null, resetOffer: { idempotencyKey: '00000000-0000-4000-8000-000000000002', expiresAt: null, validUntil: Date.now() + 60_000 } },
+        { status: 'available', resetType: 'codexRateLimits', grantedAt: 1, expiresAt: Date.now() / 1000 + 50_000,
+          title: 'Earlier', description: null, resetOffer: { idempotencyKey: '00000000-0000-4000-8000-000000000001', expiresAt: null, validUntil: Date.now() + 60_000 } },
+      ] },
+      resetOffer: { idempotencyKey: '00000000-0000-4000-8000-000000000001', expiresAt: null, validUntil: Date.now() + 60_000 },
+    };
+    mocks.consumeReset.mockResolvedValue({ outcome: 'reset', rateLimits: null });
+    render(<TodaySpendChip vendorKey="codex" providerId="openai" sessionId="reset" />);
+    fireEvent.mouseEnter(screen.getByRole('button', { name: '打开 Codex 用量页面' }));
+    act(() => vi.advanceTimersByTime(300));
+    expect(screen.queryByRole('button', { name: 'codexResets.useReset' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'codexResets.title' }));
+    expect(screen.queryByTestId('quota-hover-card')).toBeNull();
+    expect(screen.getByRole('dialog')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'common.dismiss' })).toBeTruthy();
+    fireEvent.click(screen.getAllByRole('button', { name: 'codexResets.useReset' })[1]);
+    expect(mocks.consumeReset).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('quota-hover-card')).toBeNull();
+    const dialog = screen.getByRole('alertdialog');
+    expect(dialog.contains(document.activeElement)).toBe(true);
+    await act(async () => fireEvent.click(within(dialog).getByRole('button', { name: 'codexResets.consumeOnce' })));
+    expect(mocks.consumeReset).toHaveBeenCalledExactlyOnceWith(mocks.resetSnapshot.rateLimitResetCredits!.credits![0].resetOffer!.idempotencyKey, 'openai');
+    expect(mocks.refreshCodexRateLimits).toHaveBeenCalled();
+  });
+
   it('完整渲染 Codex app-server 的两个权威窗口', () => {
     mocks.codexAuthInjection = 'oauth-bearer';
     mocks.codexSnapshot = {
