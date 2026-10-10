@@ -154,6 +154,26 @@ function validThinkingBudget(value: unknown): value is ModelThinkingBudget {
 export function thinkingBudgetEfforts(budget: ModelThinkingBudget): ModelEffort[] {
   return [...efforts].filter((effort) => Object.hasOwn(budget.budgetTokens, effort)) as ModelEffort[];
 }
+/**
+ * 目录为该路由声明的、某一档对应的思考预算(token)。非预算型模型返回 null;请求档不在预算档内时
+ * 就近收窄(低于最低档取最低档,高于最高档取最高档)。供 Codex 等桥接运行时换算 budget_tokens。
+ */
+export function catalogThinkingBudgetTokens(
+  registry: ModelRegistry | undefined,
+  providerId: string,
+  modelId: string,
+  agent: string,
+  effort: string,
+): number | null {
+  const budget = resolveModelMetadata(registry, providerId, modelId, undefined, undefined, agent).thinkingBudget;
+  if (!budget) return null;
+  const levels = thinkingBudgetEfforts(budget);
+  const order = [...efforts];
+  const rank = order.indexOf(effort);
+  if (rank < 0) return null;
+  const level = levels.filter((candidate) => order.indexOf(candidate) <= rank).at(-1) ?? levels[0];
+  return level ? budget.budgetTokens[level] ?? null : null;
+}
 export function pickModelMetadata(value: object | undefined): ModelMetadata {
   const result: Record<string, unknown> = {};
   for (const key of MODEL_METADATA_FIELDS) {

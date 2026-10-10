@@ -810,6 +810,19 @@ describe('ClaudeCodeAgent runtime settings during rewind window', () => {
       await handle.close();
     });
 
+    it('clamps a carried-over effort to the levels the route declares, not every budget key', async () => {
+      const { handle } = await startRewindableSession({
+        model: haiku.id,
+        effort: 'high',
+        availableModels: [...TEST_MODELS, { ...haiku, efforts: ['low'], defaultEffort: 'low' }],
+        resolveModelThinkingBudget,
+      });
+
+      expect(sdkMock.query.mock.calls[0]?.[0]?.options?.thinking).toEqual({ type: 'enabled', budgetTokens: 2048 });
+
+      await handle.close();
+    });
+
     it('leaves thinking alone when the Haiku route declares no efforts', async () => {
       const { handle, firstQuery } = await startRewindableSession({
         model: haiku.id,

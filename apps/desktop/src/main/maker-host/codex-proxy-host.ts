@@ -8,6 +8,7 @@ import {
   overrideHeadersCaseInsensitive,
 } from '@cindy/responses-chat-bridge';
 import {
+  catalogThinkingBudgetTokens,
   isCustomRoutedProvider,
   isCodexGatewayWireModel,
   providerCatalogId,
@@ -1515,6 +1516,14 @@ function createAnthropicBridgeDecision(
     supportsAdaptiveThinking: isOfficialAnthropicUpstream(upstreamBase) || isXdGatewayBridge
       ? undefined
       : () => false,
+    // 目录声明思考预算的模型(如 Haiku 4.5)按目录每档预算换算,与 Claude Code 一致。
+    thinkingBudgetTokens: (model, effort) => {
+      const catalog = getActiveCatalog();
+      const provider = catalog.providers.find((candidate) => candidate.id === providerId);
+      return provider
+        ? catalogThinkingBudgetTokens(catalog.modelRegistry, providerCatalogId(provider), model, 'codex', effort)
+        : null;
+    },
     imageCodec: desktopAnthropicImageCodec,
     ...(onUpstreamError ? { onUpstreamError } : {}),
   }, {

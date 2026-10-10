@@ -307,6 +307,7 @@ export {
   validModelMetadata,
   mergeModelMetadata,
   thinkingBudgetEfforts,
+  catalogThinkingBudgetTokens,
 } from "./modelMetadataLayers.js";
 export type { ModelMetadata, BaseModel, ModelThinkingBudget } from "./modelMetadataLayers.js";
 

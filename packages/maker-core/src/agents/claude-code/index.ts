@@ -1014,9 +1014,10 @@ export class ClaudeCodeAgent extends BaseAgent {
     if (!budgets) return null;
     const efforts = this.routeEffortsForModel(model, providerId)
       ?? this.capabilities.availableModels.find((m) => m.id === model)?.efforts;
-    if (!efforts?.length) return null;
-    // 会话档位可能来自上一个模型(如 max),收窄到预算声明的档位。
-    const level = (clampEffortToSupported(effort, Object.keys(budgets) as Effort[]) as Effort | undefined) ?? effort;
+    // 会话档位可能来自上一个模型(如 max):收窄到该路由声明且目录有预算的档位,不越过路由的档位上限。
+    const levels = efforts?.filter((level) => budgets[level] !== undefined) ?? [];
+    if (levels.length === 0) return null;
+    const level = (clampEffortToSupported(effort, levels) as Effort | undefined) ?? effort;
     return budgets[level] ?? null;
   }
 

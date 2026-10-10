@@ -571,6 +571,32 @@ describe('Responses → Anthropic request translation', () => {
     expect(result.request.top_p).toBeUndefined();
   });
 
+  it('uses the catalog thinking budget for budget-only models and makes room for it', () => {
+    const budgets: Record<string, number> = { low: 2048, medium: 8192, high: 16384 };
+    const thinkingBudgetTokens = (model: string, effort: string) =>
+      model === 'claude-haiku-4-5' ? budgets[effort] ?? null : null;
+    const request = (effort: string, extra: Record<string, unknown> = {}) => translateResponsesRequest({
+      model: 'claude-haiku-4-5',
+      reasoning: { effort },
+      input: [{ role: 'user', content: 'hi' }],
+      ...extra,
+    }, { thinkingBudgetTokens }).request;
+
+    expect(request('low')).toMatchObject({ thinking: { type: 'enabled', budget_tokens: 2048 } });
+    // Without an explicit output cap, the default max_tokens must not shrink the selected budget.
+    expect(request('high')).toMatchObject({ max_tokens: 16384 + 4096, thinking: { type: 'enabled', budget_tokens: 16384 } });
+    expect(request('high')).not.toHaveProperty('output_config');
+    // An explicit output cap still wins and narrows the budget.
+    expect(request('high', { max_output_tokens: 10000 }).thinking).toEqual({ type: 'enabled', budget_tokens: 5904 });
+    // Models without a catalog budget keep the bridge's own mapping.
+    expect(translateResponsesRequest({
+      model: 'claude-sonnet-4-5',
+      max_output_tokens: 20000,
+      reasoning: { effort: 'low' },
+      input: [{ role: 'user', content: 'hi' }],
+    }, { thinkingBudgetTokens }).request.thinking).toEqual({ type: 'enabled', budget_tokens: 4096 });
+  });
+
   it('keeps sampling fields when reasoning is explicitly disabled', () => {
     const result = translateResponsesRequest({
       model: 'claude-sonnet-4-6',

@@ -1103,6 +1103,8 @@ export interface TranslateResponsesRequestOptions {
   defaultMaxTokens?: number;
   supportsAdaptiveThinking?: (model: string) => boolean;
   supportsThinking?: (model: string) => boolean;
+  /** Catalog-declared budget for budget-only thinking models; null falls back to effortBudget. */
+  thinkingBudgetTokens?: (model: string, effort: string) => number | null;
   promptCaching?: boolean;
   automaticPromptCaching?: boolean;
   strictTools?: boolean;
@@ -1287,7 +1289,10 @@ export function translateResponsesRequest(
   );
   const effort = stringValue(raw.reasoning?.effort);
   const explicitlyDisabled = ['none', 'off', 'disabled'].includes((effort ?? '').toLowerCase());
-  const budget = effortBudget(effort);
+  const catalogBudget = effort && !explicitlyDisabled
+    ? options.thinkingBudgetTokens?.(model, effort) ?? null
+    : null;
+  const budget = catalogBudget ?? effortBudget(effort);
   const thinkingSupported = options.supportsThinking?.(model) ?? true;
   const adaptiveSupported =
     options.supportsAdaptiveThinking?.(model) ?? supportsAdaptiveThinkingByModel(model);
@@ -1335,6 +1340,11 @@ export function translateResponsesRequest(
         anth.max_tokens = Math.max(anth.max_tokens, (budget ?? 8192) + OUTPUT_HEADROOM);
       }
     } else if (budget !== null) {
+      // A catalog budget is the selected level's real budget: make room for it (as the adaptive
+      // branch does) instead of letting the default max_tokens shrink medium/high to 4096.
+      if (catalogBudget !== null && numberValue(raw.max_output_tokens) === undefined) {
+        anth.max_tokens = Math.max(anth.max_tokens, catalogBudget + OUTPUT_HEADROOM);
+      }
       const thinkingBudget = Math.max(MIN_THINKING_BUDGET, Math.min(budget, Math.max(MIN_THINKING_BUDGET, anth.max_tokens - OUTPUT_HEADROOM)));
       if (thinkingBudget >= MIN_THINKING_BUDGET && anth.max_tokens > thinkingBudget) {
         anth.thinking = { type: 'enabled', budget_tokens: thinkingBudget };

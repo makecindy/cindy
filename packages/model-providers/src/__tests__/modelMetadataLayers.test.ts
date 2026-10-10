@@ -5,6 +5,7 @@ import {
   applyModelMetadata,
   catalogModelMetadata,
   pickModelMetadata,
+  catalogThinkingBudgetTokens,
 } from "../modelMetadataLayers.js";
 import type { CatalogModel } from '../types.js';
 import { parseModelRegistry } from "../modelAccessValidator.js";
@@ -522,6 +523,17 @@ describe('thinkingBudget', () => {
       resolveModelMetadata(haikuRegistry, 'anthropic', 'claude-haiku-4-5', { efforts: [] }, undefined, 'claude-code'));
     expect(projected).toMatchObject({ efforts: ['low', 'medium', 'high'], defaultEffort: 'high' });
     expect(projected).not.toHaveProperty('thinkingBudget');
+  });
+
+  it('maps an effort to the catalog budget, clamping to the nearest declared level', () => {
+    const tokens = (effort: string, modelId = 'claude-haiku-4-5') =>
+      catalogThinkingBudgetTokens(haikuRegistry, 'anthropic', modelId, 'codex', effort);
+    expect(tokens('low')).toBe(2048);
+    expect(tokens('medium')).toBe(8192);
+    expect(tokens('max')).toBe(16384);
+    expect(tokens('minimal')).toBe(2048);
+    expect(tokens('none')).toBeNull();
+    expect(catalogThinkingBudgetTokens(registry, 'supplier', 'model', 'codex', 'high')).toBeNull();
   });
 
   it('does not invent levels for connections with unknown efforts or override declared ones', () => {

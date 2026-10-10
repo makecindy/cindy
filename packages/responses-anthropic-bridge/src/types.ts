@@ -71,6 +71,11 @@ export interface ResponsesAnthropicProviderConfig {
   supportsAdaptiveThinking?: (model: string) => boolean;
   /** Whether the upstream accepts Anthropic thinking fields at all. */
   supportsThinking?: (model: string) => boolean;
+  /**
+   * Catalog-declared thinking budget for models that take only `thinking.budget_tokens`
+   * (e.g. Claude Haiku 4.5). Return null to fall back to the bridge's built-in effort map.
+   */
+  thinkingBudgetTokens?: (model: string, effort: string) => number | null;
   /** Disable prompt cache breakpoints for a provider that does not implement them. */
   promptCaching?: boolean;
   /** Native Anthropic endpoints support top-level automatic prompt caching. */

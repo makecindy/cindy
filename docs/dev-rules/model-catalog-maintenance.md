@@ -254,7 +254,10 @@ SSH 执行路径跳过本机启动，不会把本机模型安装到远端。
   `budget_tokens`，需要预算档时由目录显式声明。
 - Claude Code 经 `resolveModelThinkingBudget` 按会话实际来源读取每档 token 数，不下发 `effort`，
   启动传 `thinking: { type: 'enabled', budgetTokens }`，换档 / 切模型用 `setMaxThinkingTokens`。
-- Pi（pi-ai）与 Codex 桥仍用各自内置的档位 → 预算换算，不读本字段。
+- Codex 桥（`responses-anthropic-bridge`）经 `thinkingBudgetTokens` 回调读取同一份目录预算；未指定输出上限时
+  把 `max_tokens` 抬到预算 + 4096，避免默认上限把中 / 高档压低。目录无预算的模型仍用桥内置换算。
+- Pi 走 pi-ai 自带的档位 → 预算换算（low / medium / high 当前同为 2048 / 8192 / 16384），不读本字段；
+  调整目录预算时需同步核对 Pi。
 
 增删这类模型或调整预算只改 Server 目录，并同步随包 `model-registry.json`（同 revision 同内容）。
 
