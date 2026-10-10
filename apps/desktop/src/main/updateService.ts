@@ -2154,12 +2154,23 @@ export type AgentConfirmedAppUpdateResult =
  * concurrent request on the same download) and `executeRelaunch()` applies it
  * with every existing platform, Subagent and channel guard.
  *
- * `beforeRelaunch` runs after the patch is staged; returning false keeps the
- * patch staged and skips the restart.
+ * `expectedVersion` is the version shown on the card the owner approved; a
+ * different staged version (the channel moved on meanwhile) is not installed
+ * without a new confirmation. `beforeRelaunch` runs after the patch is staged;
+ * returning false keeps the patch staged and skips the restart.
  */
 export async function applyConfirmedAppUpdateForAgent(options: {
+  expectedVersion?: string;
   beforeRelaunch: () => Promise<boolean>;
 }): Promise<AgentConfirmedAppUpdateResult> {
+  const versionChanged = (): AgentConfirmedAppUpdateResult | null =>
+    options.expectedVersion && readyVersion !== options.expectedVersion
+      ? {
+          status: 'failed',
+          reason: `当前渠道的新版本是 ${readyVersion ?? '未知版本'}，与确认的 ${options.expectedVersion} 不同，本次没有安装；请重新发起更新。`,
+          errorCode: 'version_changed',
+        }
+      : null;
   const unsupported = agentUpdateUnsupportedReason();
   if (unsupported) return { status: 'failed', reason: unsupported, errorCode: 'unsupported' };
   if (isRelaunching || autoRelaunchInProgress) return { status: 'relaunching', targetVersion: readyVersion };
@@ -2169,6 +2180,8 @@ export async function applyConfirmedAppUpdateForAgent(options: {
       return { status: 'failed', reason: AGENT_UPDATE_FAILURE_REASONS[result], errorCode: result };
     }
   }
+  const changedAfterDownload = versionChanged();
+  if (changedAfterDownload) return changedAfterDownload;
   if (!await options.beforeRelaunch()) {
     return { status: 'failed', reason: '更新已下载，但本次没有重启。', errorCode: 'relaunch_cancelled' };
   }
@@ -2176,6 +2189,9 @@ export async function applyConfirmedAppUpdateForAgent(options: {
   if (currentStatus !== 'ready' || !readyVersion) {
     return { status: 'failed', reason: '已下载的更新不再可用，请重新检查更新。', errorCode: 'not_ready' };
   }
+  // A background check may have superseded the staged patch during the wait.
+  const changedBeforeRelaunch = versionChanged();
+  if (changedBeforeRelaunch) return changedBeforeRelaunch;
   const targetVersion = readyVersion;
   // macOS / Linux exit inside this call once the updater is spawned; Windows
   // returns with `isRelaunching` still set and exits from its own callbacks.

@@ -9,11 +9,20 @@ import { app } from 'electron';
 
 import type { XdtHelperMcpDeps } from '@cindy/mcps';
 
-import { ownerScopedUserDataPath } from '../appSessionState.js';
+import { eq } from 'drizzle-orm';
+
+import {
+  getActiveAppSession,
+  isAppSessionBoundaryPending,
+  ownerScopedUserDataPath,
+} from '../appSessionState.js';
 import {
   captureDataOwnerBroadcastScope,
   isDataOwnerBroadcastScopeCurrent,
+  type DataOwnerBroadcastScope,
 } from '../device-link/broadcast-tap.js';
+import { getDbClient } from '../localDb/client/current.js';
+import { sessions } from '../localDb/schema.js';
 import { t } from '../i18n.js';
 import { createMessage } from '../localDb/ipc/messages.js';
 import { createLogger } from '../logger.js';
@@ -29,8 +38,15 @@ import {
   createAgentAppUpdateService,
   type AgentAppUpdateDeps,
   type AgentAppUpdateMarker,
+  type AgentAppUpdateOwner,
   type AgentAppUpdateService,
 } from './agentAppUpdateService.js';
+
+/** Owner binding: broadcast scope for current-ness checks and the owner's own marker path. */
+interface DesktopAgentAppUpdateOwner extends AgentAppUpdateOwner {
+  readonly scope: DataOwnerBroadcastScope;
+  readonly markerPath: string;
+}
 
 type AppUpdateCallbacks = NonNullable<XdtHelperMcpDeps['appUpdate']>;
 
@@ -45,8 +61,31 @@ export type AgentAppUpdateSessionHost = Pick<
 let sessionHost: AgentAppUpdateSessionHost | null = null;
 let service: AgentAppUpdateService | null = null;
 
-function markerPath(): string {
-  return ownerScopedUserDataPath(MARKER_FILE);
+function captureOwner(): DesktopAgentAppUpdateOwner | null {
+  if (isAppSessionBoundaryPending()) return null;
+  const ownerId = getActiveAppSession().dataOwnerId;
+  if (!ownerId) return null;
+  return {
+    ownerId,
+    scope: captureDataOwnerBroadcastScope(),
+    markerPath: ownerScopedUserDataPath(MARKER_FILE),
+  };
+}
+
+function isOwnerCurrent(owner: AgentAppUpdateOwner): boolean {
+  return (
+    !isAppSessionBoundaryPending() &&
+    isDataOwnerBroadcastScopeCurrent((owner as DesktopAgentAppUpdateOwner).scope)
+  );
+}
+
+function markerPathOf(owner: AgentAppUpdateOwner): string {
+  return (owner as DesktopAgentAppUpdateOwner).markerPath;
+}
+
+function assertOwnerCurrent(owner: AgentAppUpdateOwner): void {
+  if (!isOwnerCurrent(owner))
+    throw new Error('The account that confirmed the update is no longer active');
 }
 
 function parseMarker(raw: string | null): AgentAppUpdateMarker | null {
@@ -93,22 +132,24 @@ function getService(): AgentAppUpdateService {
     countOtherRunningTasks: (sessionId) => requireSessionHost().countOtherRunningTasks(sessionId),
     requestHostPermission: (...args) => requireSessionHost().requestHostPermission(...args),
     waitForCallerTurnToEnd: (caller) => requireSessionHost().waitForCallerTurnToEnd(caller),
+    captureOwner,
+    isOwnerCurrent,
     marker: {
-      write: (marker) => {
-        const file = markerPath();
+      write: (owner, marker) => {
+        const file = markerPathOf(owner);
         fs.mkdirSync(path.dirname(file), { recursive: true });
         atomicWriteFileSync(file, JSON.stringify(marker));
       },
-      read: () => {
+      read: (owner) => {
         try {
-          return parseMarker(readAtomicFileSync(markerPath()));
+          return parseMarker(readAtomicFileSync(markerPathOf(owner)));
         } catch (error) {
           log.warn('agent app update marker read failed', { error: String(error) });
           return null;
         }
       },
-      clear: () => {
-        const file = markerPath();
+      clear: (owner) => {
+        const file = markerPathOf(owner);
         for (const target of [file, `${file}.bak`]) {
           try {
             fs.rmSync(target, { force: true });
@@ -118,16 +159,27 @@ function getService(): AgentAppUpdateService {
         }
       },
     },
-    notify: async (sessionId, clientId, text) => {
-      const ownerScope = captureDataOwnerBroadcastScope();
+    notify: async (owner, sessionId, clientId, text) => {
+      assertOwnerCurrent(owner);
+      const [task] = await getDbClient()
+        .drizzle.select({ id: sessions.id })
+        .from(sessions)
+        .where(eq(sessions.id, sessionId))
+        .limit(1);
+      assertOwnerCurrent(owner);
+      if (!task) return 'task-missing';
+      const scope = (owner as DesktopAgentAppUpdateOwner).scope;
       await createMessage(
         sessionId,
         { clientId, role: 'assistant', content: text },
         {
-          broadcastOwnerScope: ownerScope,
-          shouldBroadcast: () => isDataOwnerBroadcastScopeCurrent(ownerScope),
+          broadcastOwnerScope: scope,
+          shouldBroadcast: () => isOwnerCurrent(owner),
+          // Re-checked around the write; an account switch rolls the row back.
+          beforePublish: async () => assertOwnerCurrent(owner),
         },
       );
+      return 'written';
     },
     compareVersions: compareAppUpdateVersions,
     translate: (key) => t(key),

@@ -9,6 +9,7 @@ import {
 import { AGENT_APP_AUTO_UPDATE_TOOL_NAME, AGENT_APP_UPDATE_TOOL_NAME } from '../constants.js';
 
 const caller = { sessionId: 'task-1', sessionInstanceId: 'instance-1' };
+const ownerA = { ownerId: 'owner-a' };
 
 function allow(): InteractionDecision {
   return { kind: 'permission', behavior: 'allow' };
@@ -21,6 +22,7 @@ function deny(reason?: string): InteractionDecision {
 function setup(overrides: Partial<AgentAppUpdateDeps> = {}) {
   let marker: AgentAppUpdateMarker | null = null;
   let autoUpdate = false;
+  let activeOwner: { ownerId: string } | null = ownerA;
   const deps: AgentAppUpdateDeps = {
     appVersion: () => '0.1.86',
     platform: 'darwin',
@@ -44,8 +46,10 @@ function setup(overrides: Partial<AgentAppUpdateDeps> = {}) {
     countOtherRunningTasks: vi.fn(() => 2),
     requestHostPermission: vi.fn(async () => allow()),
     waitForCallerTurnToEnd: vi.fn(async () => undefined),
+    captureOwner: vi.fn(() => activeOwner),
+    isOwnerCurrent: vi.fn((owner) => activeOwner?.ownerId === owner.ownerId),
     marker: {
-      write: vi.fn((value: AgentAppUpdateMarker) => {
+      write: vi.fn((_owner, value: AgentAppUpdateMarker) => {
         marker = value;
       }),
       read: () => marker,
@@ -53,7 +57,7 @@ function setup(overrides: Partial<AgentAppUpdateDeps> = {}) {
         marker = null;
       }),
     },
-    notify: vi.fn(async () => undefined),
+    notify: vi.fn(async () => 'written' as const),
     compareVersions: (candidate, current) =>
       candidate === current ? 'same' : (candidate ?? '') > current ? 'newer' : 'older',
     translate: (key) => key,
@@ -65,6 +69,9 @@ function setup(overrides: Partial<AgentAppUpdateDeps> = {}) {
     getMarker: () => marker,
     setMarker: (value: AgentAppUpdateMarker | null) => {
       marker = value;
+    },
+    switchOwner: (owner: { ownerId: string } | null) => {
+      activeOwner = owner;
     },
   };
 }
@@ -116,7 +123,9 @@ describe('Agent app update install', () => {
     await flush();
     expect(deps.apply).toHaveBeenCalledOnce();
     expect(deps.waitForCallerTurnToEnd).toHaveBeenCalledWith(caller);
+    expect(deps.apply).toHaveBeenCalledWith(expect.objectContaining({ expectedVersion: '0.1.90' }));
     expect(deps.marker.write).toHaveBeenCalledWith(
+      ownerA,
       expect.objectContaining({
         sessionId: 'task-1',
         fromVersion: '0.1.86',
@@ -226,6 +235,7 @@ describe('Agent app update install', () => {
     await flush();
     expect(getMarker()).toBeNull();
     expect(deps.notify).toHaveBeenCalledWith(
+      ownerA,
       'task-1',
       expect.stringMatching(/^agent-app-update:/),
       'update.agentInstall.failed 下载更新失败，请稍后重试。 update.agentInstall.retryHint',
@@ -233,6 +243,35 @@ describe('Agent app update install', () => {
     // Released after the failure.
     await service.install(caller);
     expect(deps.requestHostPermission).toHaveBeenCalledTimes(2);
+  });
+
+  it('cancels the restart after an account switch and never writes into the next account', async () => {
+    let restartAllowed: boolean | undefined;
+    const harness = setup({
+      apply: vi.fn(async ({ beforeRelaunch }) => {
+        harness.switchOwner({ ownerId: 'owner-b' });
+        restartAllowed = await beforeRelaunch();
+        return restartAllowed
+          ? { status: 'relaunching' as const }
+          : { status: 'failed' as const, reason: 'cancelled', errorCode: 'relaunch_cancelled' };
+      }),
+    });
+    await harness.service.install(caller);
+    await flush();
+    expect(restartAllowed).toBe(false);
+    expect(harness.deps.marker.clear).toHaveBeenCalledWith(ownerA);
+    expect(harness.deps.notify).not.toHaveBeenCalled();
+  });
+
+  it('refuses to start when no account is active at confirmation', async () => {
+    const harness = setup();
+    harness.switchOwner(null);
+    await expect(harness.service.install(caller)).resolves.toMatchObject({
+      ok: false,
+      errorCode: 'CALLER_UNAVAILABLE',
+    });
+    expect(harness.deps.apply).not.toHaveBeenCalled();
+    expect(harness.deps.marker.write).not.toHaveBeenCalled();
   });
 
   it('mentions the Linux password prompt only on Linux', async () => {
@@ -266,6 +305,7 @@ describe('Agent app update result after restart', () => {
     await service.deliverPendingResult();
     expect(deps.notify).toHaveBeenCalledOnce();
     expect(deps.notify).toHaveBeenCalledWith(
+      ownerA,
       'task-1',
       'agent-app-update:req-1',
       'updated to 0.1.90 from 0.1.86',
@@ -278,10 +318,44 @@ describe('Agent app update result after restart', () => {
     setMarker(marker());
     await service.deliverPendingResult();
     expect(deps.notify).toHaveBeenCalledWith(
+      ownerA,
       'task-1',
       'agent-app-update:req-1',
       'update.agentInstall.failed update.agentInstall.retryHint',
     );
+  });
+
+  it('keeps the marker after a transient write failure and retries without duplicating', async () => {
+    const notify = vi
+      .fn<AgentAppUpdateDeps['notify']>()
+      .mockRejectedValueOnce(new Error('database busy'))
+      .mockResolvedValueOnce('written');
+    const { service, setMarker, getMarker } = setup({ notify });
+    setMarker(marker());
+    await service.deliverPendingResult();
+    expect(getMarker()).not.toBeNull();
+    await service.deliverPendingResult();
+    expect(getMarker()).toBeNull();
+    expect(notify).toHaveBeenCalledTimes(2);
+    expect(notify.mock.calls[0]![2]).toBe(notify.mock.calls[1]![2]);
+  });
+
+  it('clears the marker when the task no longer exists', async () => {
+    const { service, setMarker, getMarker } = setup({
+      notify: vi.fn(async () => 'task-missing' as const),
+    });
+    setMarker(marker());
+    await service.deliverPendingResult();
+    expect(getMarker()).toBeNull();
+  });
+
+  it('waits for an active account before reading the marker', async () => {
+    const harness = setup();
+    harness.setMarker(marker());
+    harness.switchOwner(null);
+    await harness.service.deliverPendingResult();
+    expect(harness.deps.notify).not.toHaveBeenCalled();
+    expect(harness.getMarker()).not.toBeNull();
   });
 
   it('ignores a marker written by this same process (no restart yet)', async () => {

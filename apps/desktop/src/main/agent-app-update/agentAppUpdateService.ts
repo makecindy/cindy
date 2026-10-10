@@ -49,13 +49,30 @@ export interface AgentAppUpdateMarker {
 
 type PermissionRequest = Extract<InteractionRequest, { kind: 'permission' }>;
 
+/**
+ * The account that confirmed an install. Captured once at confirmation; the
+ * marker, the restart gate and every result notice stay bound to it so an
+ * account switch can neither restart the next owner's app nor receive the
+ * previous owner's result. Opaque to this module.
+ */
+export interface AgentAppUpdateOwner {
+  readonly ownerId: string;
+}
+
+/** `task-missing`: the task no longer exists for that owner, so the result can never be shown. */
+export type AgentAppUpdateNotifyOutcome = 'written' | 'task-missing';
+
 export interface AgentAppUpdateDeps {
   appVersion(): string;
   platform: NodeJS.Platform;
   pid: number;
   now(): number;
   check(): Promise<AgentAppUpdateCheck>;
-  apply(options: { beforeRelaunch: () => Promise<boolean> }): Promise<AgentAppUpdateApplyResult>;
+  /** Built-in updater. `expectedVersion` is the version the owner confirmed; a different staged version is not installed. */
+  apply(options: {
+    expectedVersion?: string;
+    beforeRelaunch: () => Promise<boolean>;
+  }): Promise<AgentAppUpdateApplyResult>;
   readAutoUpdate(): boolean;
   writeAutoUpdate(enabled: boolean): boolean;
   /** 'owner' only for a live local turn the account owner started (see callerAuthority.ts). */
@@ -70,13 +87,25 @@ export interface AgentAppUpdateDeps {
   ): Promise<InteractionDecision | null>;
   /** Let the calling turn finish its reply before the restart (bounded by the host). */
   waitForCallerTurnToEnd(caller: AgentAppUpdateCaller): Promise<void>;
+  /** The current account, or null while none is active or an account boundary is pending. */
+  captureOwner(): AgentAppUpdateOwner | null;
+  /** The captured account is still active and no account boundary is pending. */
+  isOwnerCurrent(owner: AgentAppUpdateOwner): boolean;
   marker: {
-    write(marker: AgentAppUpdateMarker): void;
-    read(): AgentAppUpdateMarker | null;
-    clear(): void;
+    write(owner: AgentAppUpdateOwner, marker: AgentAppUpdateMarker): void;
+    read(owner: AgentAppUpdateOwner): AgentAppUpdateMarker | null;
+    clear(owner: AgentAppUpdateOwner): void;
   };
-  /** Persist a visible host notice in the task (idempotent per clientId). */
-  notify(sessionId: string, clientId: string, text: string): Promise<void>;
+  /**
+   * Persist a visible host notice in the owner's task (idempotent per clientId).
+   * Throws on transient failure or when the owner is no longer current.
+   */
+  notify(
+    owner: AgentAppUpdateOwner,
+    sessionId: string,
+    clientId: string,
+    text: string,
+  ): Promise<AgentAppUpdateNotifyOutcome>;
   compareVersions(candidate: string | undefined, current: string): string;
   translate(key: string): string;
   logger?: { info?(msg: string, meta?: unknown): void; warn?(msg: string, meta?: unknown): void };
@@ -179,7 +208,14 @@ export function createAgentAppUpdateService(deps: AgentAppUpdateDeps) {
     };
   };
 
-  const reportFailure = async (sessionId: string, requestId: string, reason: string) => {
+  const reportFailure = async (
+    owner: AgentAppUpdateOwner,
+    sessionId: string,
+    requestId: string,
+    reason: string,
+  ) => {
+    // Never write into whichever account replaced the one that confirmed.
+    if (!deps.isOwnerCurrent(owner)) return;
     const message = [
       text('update.agentInstall.failed', { version: deps.appVersion() }),
       reason,
@@ -188,27 +224,34 @@ export function createAgentAppUpdateService(deps: AgentAppUpdateDeps) {
       .filter(Boolean)
       .join(' ');
     try {
-      await deps.notify(sessionId, `agent-app-update:${requestId}`, message);
+      await deps.notify(owner, sessionId, `agent-app-update:${requestId}`, message);
     } catch (error) {
       deps.logger?.warn?.('agent app update failure notice failed', { error: String(error) });
     }
   };
 
-  const runInstall = async (caller: AgentAppUpdateCaller, marker: AgentAppUpdateMarker) => {
+  const runInstall = async (
+    caller: AgentAppUpdateCaller,
+    owner: AgentAppUpdateOwner,
+    marker: AgentAppUpdateMarker,
+  ) => {
     try {
       const result = await deps.apply({
+        ...(marker.targetVersion ? { expectedVersion: marker.targetVersion } : {}),
         beforeRelaunch: async () => {
           await deps.waitForCallerTurnToEnd(caller);
-          return true;
+          // Logout or an account switch cancels the restart; the patch stays staged.
+          return deps.isOwnerCurrent(owner);
         },
       });
       // A relaunch ends this process; the next start reports from the marker.
       if (result.status === 'relaunching') return;
-      deps.marker.clear();
-      await reportFailure(caller.sessionId, marker.requestId, result.reason);
+      deps.marker.clear(owner);
+      await reportFailure(owner, caller.sessionId, marker.requestId, result.reason);
     } catch (error) {
-      deps.marker.clear();
+      deps.marker.clear(owner);
       await reportFailure(
+        owner,
         caller.sessionId,
         marker.requestId,
         String(error instanceof Error ? error.message : error),
@@ -267,6 +310,8 @@ export function createAgentAppUpdateService(deps: AgentAppUpdateDeps) {
         const current = deps.resolveCaller(caller);
         if (current === 'unavailable') return callerUnavailable();
         if (current !== 'owner') return ownerTurnRequired();
+        const owner = deps.captureOwner();
+        if (!owner) return callerUnavailable();
         const marker: AgentAppUpdateMarker = {
           requestId: randomUUID(),
           sessionId: caller.sessionId,
@@ -275,10 +320,10 @@ export function createAgentAppUpdateService(deps: AgentAppUpdateDeps) {
           requestedAt: deps.now(),
           pid: deps.pid,
         };
-        deps.marker.write(marker);
+        deps.marker.write(owner, marker);
         flow = { kind: 'installing', targetVersion: check.targetVersion };
         started = true;
-        void runInstall(caller, marker);
+        void runInstall(caller, owner, marker);
         return {
           status: 'started',
           currentVersion: from,
@@ -335,10 +380,12 @@ export function createAgentAppUpdateService(deps: AgentAppUpdateDeps) {
 
     /** Write the outcome of a pre-restart install back to its task. Safe to call repeatedly. */
     async deliverPendingResult(): Promise<void> {
-      const marker = deps.marker.read();
+      const owner = deps.captureOwner();
+      if (!owner) return;
+      const marker = deps.marker.read(owner);
       if (!marker || marker.pid === deps.pid) return;
       if (deps.now() - marker.requestedAt > MARKER_MAX_AGE_MS) {
-        deps.marker.clear();
+        deps.marker.clear(owner);
         return;
       }
       const version = deps.appVersion();
@@ -349,14 +396,24 @@ export function createAgentAppUpdateService(deps: AgentAppUpdateDeps) {
             text('update.agentInstall.failed', { version }),
             text('update.agentInstall.retryHint'),
           ].join(' ');
+      let outcome: AgentAppUpdateNotifyOutcome;
       try {
-        await deps.notify(marker.sessionId, `agent-app-update:${marker.requestId}`, message);
+        outcome = await deps.notify(
+          owner,
+          marker.sessionId,
+          `agent-app-update:${marker.requestId}`,
+          message,
+        );
       } catch (error) {
-        // A deleted task or a different account cannot receive it; do not retry forever.
-        deps.logger?.warn?.('agent app update result notice failed', { error: String(error) });
+        // Transient failure: keep the marker; the next owner-ready start retries
+        // and the clientId keeps the retry from duplicating the message.
+        deps.logger?.warn?.('agent app update result notice failed; will retry', {
+          error: String(error),
+        });
+        return;
       }
-      deps.marker.clear();
-      deps.logger?.info?.('agent app update result delivered', { updated });
+      deps.marker.clear(owner);
+      deps.logger?.info?.('agent app update result delivered', { updated, outcome });
     },
   };
 }

@@ -473,6 +473,28 @@ describe('agent-facing managed app update check', () => {
       }
     });
 
+    it('does not install a different version than the one the owner confirmed', async () => {
+      download.mockImplementation(async ({ targetPath }: { targetPath: string }) => {
+        fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+        fs.writeFileSync(targetPath, 'update');
+        return { path: targetPath, size: 123 };
+      });
+      // The card showed 0.0.66, but the channel now stages 0.0.65.
+      const service = await freshUpdateService('darwin');
+      const beforeRelaunch = vi.fn(async () => true);
+      try {
+        await expect(
+          service.applyConfirmedAppUpdateForAgent({ expectedVersion: '0.0.66', beforeRelaunch }),
+        ).resolves.toMatchObject({ status: 'failed', errorCode: 'version_changed' });
+        expect(beforeRelaunch).not.toHaveBeenCalled();
+        expect(spawnProcess).not.toHaveBeenCalled();
+        // The staged patch is kept for the built-in banner.
+        expect(await service.checkAppUpdateForAgent()).toMatchObject({ status: 'ready', targetVersion: '0.0.65' });
+      } finally {
+        service.stopUpdateService();
+      }
+    });
+
     it('does not relaunch when the download fails or the build is unsupported', async () => {
       download.mockRejectedValue(new Error('network'));
       const service = await freshUpdateService('darwin');
