@@ -8047,7 +8047,19 @@
       "linuxAuth": "安装时需要在这台电脑上输入系统密码。",
       "succeeded": "{{appName}} 已更新到 {{version}}（原版本 {{from}}）。",
       "failed": "{{appName}} 更新没有完成，当前仍是 {{version}}。",
-      "retryHint": "可以稍后再让我更新，或在「设置 → 关于」中检查更新。"
+      "retryHint": "可以稍后再让我更新，或在「设置 → 关于」中检查更新。",
+      "reasons": {
+        "downloadFailed": "下载更新失败，请稍后重试。",
+        "manifestFailed": "无法读取当前渠道的更新信息。",
+        "manualDownload": "当前安装需要手动下载新版本。",
+        "noUpdate": "当前渠道没有适用于这台设备的可安装更新。",
+        "versionChanged": "当前渠道的新版本已变成 {{version}}，与确认的 {{confirmed}} 不同，本次没有安装。",
+        "notRestarted": "更新已下载，但本次没有重启（例如期间退出或切换了账号）。",
+        "notReady": "已下载的更新不再可用。",
+        "updaterNotStarted": "更新器没有启动，{{appName}} 未重启。",
+        "unsupported": "当前安装环境不支持应用内更新。",
+        "generic": "安装过程中出现错误。"
+      }
     },
     "agentAutoUpdate": {
       "enableTitle": "开启空闲时自动安装更新？",

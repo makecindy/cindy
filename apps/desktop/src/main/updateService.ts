@@ -2156,7 +2156,7 @@ const AGENT_UPDATE_FAILURE_REASONS: Record<Exclude<CheckForUpdateResult, 'ready'
 
 export type AgentConfirmedAppUpdateResult =
   | { status: 'relaunching'; targetVersion?: string }
-  | { status: 'failed'; reason: string; errorCode?: string };
+  | { status: 'failed'; reason: string; errorCode?: string; stagedVersion?: string };
 
 /**
  * Apply an update the user approved on the Host confirmation card. This is the
@@ -2180,6 +2180,7 @@ export async function applyConfirmedAppUpdateForAgent(options: {
           status: 'failed',
           reason: `当前渠道的新版本是 ${readyVersion ?? '未知版本'}，与确认的 ${options.expectedVersion} 不同，本次没有安装；请重新发起更新。`,
           errorCode: 'version_changed',
+          ...(readyVersion ? { stagedVersion: readyVersion } : {}),
         }
       : null;
   const unsupported = agentUpdateUnsupportedReason();

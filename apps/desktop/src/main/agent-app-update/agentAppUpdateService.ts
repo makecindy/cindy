@@ -35,7 +35,26 @@ export interface AgentAppUpdateCheck {
 
 export type AgentAppUpdateApplyResult =
   | { status: 'relaunching'; targetVersion?: string }
-  | { status: 'failed'; reason: string; errorCode?: string };
+  | { status: 'failed'; reason: string; errorCode?: string; stagedVersion?: string };
+
+/**
+ * User-visible failure text is localized from the stable error code; the
+ * updater's own `reason` is Chinese diagnostic text for the model only.
+ */
+const FAILURE_REASON_KEYS: Record<string, string> = {
+  download_failed: 'downloadFailed',
+  manifest_failed: 'manifestFailed',
+  manual_download: 'manualDownload',
+  idle: 'noUpdate',
+  version_changed: 'versionChanged',
+  relaunch_cancelled: 'notRestarted',
+  not_ready: 'notReady',
+  relaunch_not_started: 'updaterNotStarted',
+  updater_spawn_failed: 'updaterNotStarted',
+  unsupported: 'unsupported',
+  linux_installation_unsupported: 'unsupported',
+  windows_vc_runtime_missing: 'unsupported',
+};
 
 export interface AgentAppUpdateMarker {
   requestId: string;
@@ -211,20 +230,24 @@ export function createAgentAppUpdateService(deps: AgentAppUpdateDeps) {
   const reportFailure = async (
     owner: AgentAppUpdateOwner,
     sessionId: string,
-    requestId: string,
-    reason: string,
+    marker: AgentAppUpdateMarker,
+    failure: { errorCode?: string; stagedVersion?: string },
   ) => {
     // Never write into whichever account replaced the one that confirmed.
     if (!deps.isOwnerCurrent(owner)) return;
+    const reasonKey = FAILURE_REASON_KEYS[failure.errorCode ?? ''] ?? 'generic';
     const message = [
       text('update.agentInstall.failed', { version: deps.appVersion() }),
-      reason,
+      text(`update.agentInstall.reasons.${reasonKey}`, {
+        version: failure.stagedVersion ?? '',
+        confirmed: marker.targetVersion ?? '',
+      }),
       text('update.agentInstall.retryHint'),
     ]
       .filter(Boolean)
       .join(' ');
     try {
-      await deps.notify(owner, sessionId, `agent-app-update:${requestId}`, message);
+      await deps.notify(owner, sessionId, `agent-app-update:${marker.requestId}`, message);
     } catch (error) {
       deps.logger?.warn?.('agent app update failure notice failed', { error: String(error) });
     }
@@ -247,15 +270,15 @@ export function createAgentAppUpdateService(deps: AgentAppUpdateDeps) {
       // A relaunch ends this process; the next start reports from the marker.
       if (result.status === 'relaunching') return;
       deps.marker.clear(owner);
-      await reportFailure(owner, caller.sessionId, marker.requestId, result.reason);
+      deps.logger?.warn?.('agent app update did not restart', {
+        errorCode: result.errorCode,
+        reason: result.reason,
+      });
+      await reportFailure(owner, caller.sessionId, marker, result);
     } catch (error) {
       deps.marker.clear(owner);
-      await reportFailure(
-        owner,
-        caller.sessionId,
-        marker.requestId,
-        String(error instanceof Error ? error.message : error),
-      );
+      deps.logger?.warn?.('agent app update failed', { error: String(error) });
+      await reportFailure(owner, caller.sessionId, marker, {});
     } finally {
       flow = null;
     }

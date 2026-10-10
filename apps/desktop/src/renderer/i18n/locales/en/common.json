@@ -8055,7 +8055,19 @@
       "linuxAuth": "Installing requires your system password on this computer.",
       "succeeded": "{{appName}} is updated to {{version}} (was {{from}}).",
       "failed": "The {{appName}} update did not finish. This computer is still on {{version}}.",
-      "retryHint": "Ask me to try again later, or check for updates in Settings → About."
+      "retryHint": "Ask me to try again later, or check for updates in Settings → About.",
+      "reasons": {
+        "downloadFailed": "Downloading the update failed. Try again later.",
+        "manifestFailed": "Could not read update information for the current channel.",
+        "manualDownload": "This installation requires downloading the new version manually.",
+        "noUpdate": "The current channel has no installable update for this device.",
+        "versionChanged": "The channel now offers {{version}} instead of the confirmed {{confirmed}}, so nothing was installed.",
+        "notRestarted": "The update was downloaded but {{appName}} did not restart (for example, you signed out or switched accounts).",
+        "notReady": "The downloaded update is no longer available.",
+        "updaterNotStarted": "The updater did not start, so {{appName}} did not restart.",
+        "unsupported": "This installation does not support in-app updates.",
+        "generic": "Something went wrong during installation."
+      }
     },
     "agentAutoUpdate": {
       "enableTitle": "Install updates while idle?",

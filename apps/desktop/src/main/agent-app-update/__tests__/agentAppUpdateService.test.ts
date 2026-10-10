@@ -238,11 +238,42 @@ describe('Agent app update install', () => {
       ownerA,
       'task-1',
       expect.stringMatching(/^agent-app-update:/),
-      'update.agentInstall.failed 下载更新失败，请稍后重试。 update.agentInstall.retryHint',
+      'update.agentInstall.failed update.agentInstall.reasons.downloadFailed update.agentInstall.retryHint',
     );
     // Released after the failure.
     await service.install(caller);
     expect(deps.requestHostPermission).toHaveBeenCalledTimes(2);
+  });
+
+  it('localizes the failure reason from its error code, never the updater diagnostic text', async () => {
+    const { deps, service } = setup({
+      translate: (key) =>
+        key === 'update.agentInstall.reasons.versionChanged'
+          ? 'now {{version}}, confirmed {{confirmed}}'
+          : key,
+      apply: vi.fn(async () => ({
+        status: 'failed' as const,
+        reason: '中文诊断文本',
+        errorCode: 'version_changed',
+        stagedVersion: '0.1.91',
+      })),
+    });
+    await service.install(caller);
+    await flush();
+    const text = vi.mocked(deps.notify).mock.calls[0]![3];
+    expect(text).toContain('now 0.1.91, confirmed 0.1.90');
+    expect(text).not.toContain('中文诊断文本');
+  });
+
+  it('falls back to a generic localized reason for unknown error codes', async () => {
+    const { deps, service } = setup({
+      apply: vi.fn(async () => ({ status: 'failed' as const, reason: 'x', errorCode: 'EACCES' })),
+    });
+    await service.install(caller);
+    await flush();
+    expect(vi.mocked(deps.notify).mock.calls[0]![3]).toContain(
+      'update.agentInstall.reasons.generic',
+    );
   });
 
   it('cancels the restart after an account switch and never writes into the next account', async () => {
