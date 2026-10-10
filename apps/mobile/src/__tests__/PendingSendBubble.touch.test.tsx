@@ -72,9 +72,16 @@ function show(
     renderImage={() => null} renderFile={() => null}
     renderText={() => <MessageBodyText testID="link" onPress={openLink}>link</MessageBodyText>} />));
 }
-function touch(type: 'Start' | 'Move' | 'End' | 'Cancel', x = 0, y = 0, count = type === 'End' ? 0 : 1) {
+interface TouchPoint { identifier: number; pageX?: number; pageY?: number }
+function touch(
+  type: 'Start' | 'Move' | 'End' | 'Cancel',
+  x = 0,
+  y = 0,
+  touches: TouchPoint[] = type === 'End' ? [] : [{ identifier: 0, pageX: x, pageY: y }],
+  changedTouches: TouchPoint[] = type === 'End' || type === 'Cancel' ? [{ identifier: 0, pageX: x, pageY: y }] : touches,
+) {
   const handler = handlers.get('pendingSend.body.a')?.[`onTouch${type}`] as ((e: GestureResponderEvent) => void) | undefined;
-  act(() => handler?.({ nativeEvent: { pageX: x, pageY: y, touches: Array(count).fill({}) } } as GestureResponderEvent));
+  act(() => handler?.({ nativeEvent: { pageX: x, pageY: y, touches, changedTouches } } as unknown as GestureResponderEvent));
 }
 function flush() {
   act(() => { for (const [id, callback] of [...frames]) { frames.delete(id); callback(0); } });
@@ -90,7 +97,7 @@ it.each(['move', 'end', 'cancel', 'long', 'multi', 'disabled', 'unmount', 'recyc
     if (kind === 'move') touch('Move', 30);
     if (kind === 'cancel') touch('Cancel');
     if (kind === 'long') vi.advanceTimersByTime(500);
-    if (kind === 'multi') touch('Start', 0, 0, 2);
+    if (kind === 'multi') touch('Start', 0, 0, [{ identifier: 0 }, { identifier: 1 }]);
     if (kind === 'disabled') show({ actions: null, phase: 'sending' });
     touch('End', kind === 'end' ? 30 : 0);
     if (kind === 'unmount') act(() => root.render(null));
@@ -112,6 +119,19 @@ it('lets a real body link consume the pending tap before the frame commits', () 
   show(); touch('Start'); touch('End');
   act(() => host.querySelector<HTMLElement>('[data-testid="link"]')!.click());
   flush(); expect(openLink).toHaveBeenCalledOnce(); expect(select).not.toHaveBeenCalled();
+});
+it('commits an Android-shaped tap: ACTION_UP still lists the lifted pointer in touches (#4609)', () => {
+  show(); touch('Start');
+  touch('End', 0, 0, [{ identifier: 0, pageX: 0, pageY: 0 }]);
+  flush(); expect(select).toHaveBeenCalledWith('a');
+});
+it('does not commit an Android-shaped tap while another finger remains down', () => {
+  show(); touch('Start');
+  touch('End', 0, 0, [
+    { identifier: 0, pageX: 0, pageY: 0 },
+    { identifier: 1, pageX: 40, pageY: 60 },
+  ]);
+  flush(); expect(select).not.toHaveBeenCalled();
 });
 it('shows the source label above the bubble and announces it with the queued message', () => {
   show({ source: { kind: 'automation', label: '由自动化「巡检」发送' } });

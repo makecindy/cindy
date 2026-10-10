@@ -262,7 +262,11 @@ export function PendingSendBubble({
   const hasBody = !!displayBody;
   const hasAttachments = item.thumbs.length > 0 || !!item.fileNames?.length;
   const [badgeAnchor, setBadgeAnchor] = useState<{ clientId: string; left: number } | null>(null);
-  const bubbleTouchOriginRef = useRef<{ start: ShareSelectionTapPoint; startedAt: number } | null>(null);
+  const bubbleTouchOriginRef = useRef<{
+    start: ShareSelectionTapPoint;
+    identifier: GestureResponderEvent['nativeEvent']['touches'][number]['identifier'];
+    startedAt: number;
+  } | null>(null);
   const pendingCommitFrameRef = useRef<number | null>(null);
   const cancelBubbleTouch = useCallback(() => {
     bubbleTouchOriginRef.current = null;
@@ -273,8 +277,9 @@ export function PendingSendBubble({
   useLayoutEffect(() => cancelBubbleTouch, [cancelBubbleTouch, item.clientId, interactive, selected]);
   const handleBubbleTouchStart = (event: GestureResponderEvent) => {
     cancelBubbleTouch();
-    if (event.nativeEvent.touches.length !== 1) return;
-    bubbleTouchOriginRef.current = { start: event.nativeEvent, startedAt: Date.now() };
+    const [touch] = event.nativeEvent.touches;
+    if (!touch || event.nativeEvent.touches.length !== 1) return;
+    bubbleTouchOriginRef.current = { start: event.nativeEvent, identifier: touch.identifier, startedAt: Date.now() };
   };
   const handleBubbleTouchMove = (event: GestureResponderEvent) => {
     const origin = bubbleTouchOriginRef.current;
@@ -284,7 +289,15 @@ export function PendingSendBubble({
   const handleBubbleTouchEnd = (event: GestureResponderEvent) => {
     const origin = bubbleTouchOriginRef.current;
     bubbleTouchOriginRef.current = null;
-    if (origin && event.nativeEvent.touches.length === 0 && shouldCommitShareSelectionTap({
+    if (!origin) return;
+    // Android 的 ACTION_UP 在 onTouchEnd 里仍把已抬起的手指列在 `touches` 里,iOS
+    // 则会移除它(#4609):按 changedTouches 的 identifier 匹配判定本次抬手,并以
+    // touches 为空的 iOS 形状兜底;否则 Android 上正文轻点永远无法提交。
+    const liftedTouches = event.nativeEvent.changedTouches
+      .filter((touch) => touch.identifier === origin.identifier);
+    const remainingTouches = event.nativeEvent.touches
+      .filter((touch) => touch.identifier !== origin.identifier);
+    if ((liftedTouches.length > 0 || event.nativeEvent.touches.length === 0) && remainingTouches.length === 0 && shouldCommitShareSelectionTap({
       durationMs: Date.now() - origin.startedAt,
       moved: shareSelectionTapMoved(origin.start, event.nativeEvent),
     })) {
