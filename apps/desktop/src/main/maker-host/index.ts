@@ -965,7 +965,9 @@ export function getMaker(): Maker {
               && entry?.source === 'builtin' && !REMOTE_ALLOWED_SERVER_NAMES.has(provider.name);
             return entry?.available === false || remoteBridgeMissing
               ? 'transport-unavailable-for-current-runtime' : null;
-          });
+          },
+          // The caller's own engine is the only evidence of what this task can call.
+          (server) => session.readMcpServerTools(server));
         if (_maker?.getSession(session.id) !== session) return { ok: false, errorCode: 'CALLER_UNAVAILABLE' };
         return { ...result, permission: session.stablePermissionModeState,
           hostCapabilities: Object.fromEntries(Object.entries(session.capabilities)

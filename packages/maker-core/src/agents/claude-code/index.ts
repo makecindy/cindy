@@ -45,6 +45,7 @@ import type {
 } from '@anthropic-ai/claude-agent-sdk';
 import { discoverSubagentDefinitions } from './subagent-definitions.js';
 import { spawnObservedClaudeProcess } from './local-process-spawn.js';
+import { claudeMcpServerToolsReport, type ClaudeMcpServerStatusEntry } from './mcp-server-tools.js';
 import {
   reportSubagentModelDiagnostics,
   resolveSubagentModelDefault,
@@ -7233,6 +7234,15 @@ export class ClaudeCodeAgent extends BaseAgent {
           throw new Error('Claude Code SDK does not support getContextUsage');
         }
         return await getContextUsage.call(q) as import('../../types/context-usage.js').ContextUsageData;
+      },
+
+      async readMcpServerTools(serverName: string) {
+        // SSH remote queries do not expose MCP status; report no engine entry.
+        const readStatus = (q as {
+          mcpServerStatus?: () => Promise<ClaudeMcpServerStatusEntry[]>;
+        }).mcpServerStatus;
+        if (typeof readStatus !== 'function') return null;
+        return claudeMcpServerToolsReport(await readStatus.call(q), serverName);
       },
 
       setInteractionResolver(resolver: InteractionResolver) {
