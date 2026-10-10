@@ -905,6 +905,15 @@
     },
     "remote": {
       "title": "Remote machines",
+      "hostKeyError": {
+        "missing": "SSH host key verification is not configured. Connection refused.",
+        "read": "Cindy could not read the trusted host keys: {{reason}}. Connection refused.",
+        "write": "Cindy could not save the trusted host key: {{reason}}. Connection refused.",
+        "mismatch": "The host key for {{host}} changed ({{fingerprint}}) and no longer matches the fingerprint previously trusted by Cindy. This may mean the server was reinstalled or a man-in-the-middle attack. Connection refused.",
+        "file": "Trusted host keys file:\n{{filePath}}",
+        "repair": "Cindy does not read ~/.ssh/known_hosts. The old fingerprint is stored in:\n{{filePath}}\nThe entry key is \"{{host}}\".\nIf you have verified that this change is trustworthy, quit Cindy, remove only this entry, keep the file and all other hosts, then reconnect. The new fingerprint will be saved on first connection. Do not delete the entire file.",
+        "verifyChange": "Verify the change with the server administrator before updating the trusted host key store."
+      },
       "footnote": "Phase A: SSH connection management only. Running agents on the remote arrives in a later update.",
       "viaAuth": "via {{label}}",
       "readOnlyFromSshConfig": "Connection details come from SSH configuration",
