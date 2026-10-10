@@ -1,5 +1,5 @@
 import { isBotGroupRuntimeFailureCode, type BotGroupRuntimeFailureCode } from '../../shared/botGroupChat.js';
-import { isPiImageInputUnsupportedError } from '../../shared/inputError.js';
+import { isPiImageInputUnsupportedError, isPiPromptRpcTimeoutError } from '../../shared/inputError.js';
 import { extractNonSecretErrorSignals, matchesDeterministicUsageExhaustionText } from '@cindy/maker-shared/error-redaction';
 import type { BotGroupChatService } from './botGroupChatService.js';
 
@@ -20,7 +20,8 @@ export function botGroupRuntimeFailureCode(error: unknown): BotGroupRuntimeFailu
   // Codex translators publish the stable tag even when message text is redacted.
   if (data?.codexErrorInfo === 'usageLimitExceeded' || data?.codexErrorInfo === 'sessionBudgetExceeded') return 'QUOTA_EXCEEDED';
   if (data?.codexErrorInfo === 'unauthorized') return 'AUTH_REQUIRED';
-  if (typeof data?.reason === 'string' && /^(?:bridge_)?(?:turn_no_event_timeout|upstream_response_idle_timeout)$/.test(data.reason)) return 'RUNTIME_TIMEOUT';
+  if (data?.reason === 'pi-prompt-timeout' || isPiPromptRpcTimeoutError(data ?? { message: error })
+    || (typeof data?.reason === 'string' && /^(?:bridge_)?(?:turn_no_event_timeout|upstream_response_idle_timeout)$/.test(data.reason))) return 'RUNTIME_TIMEOUT';
   const text = values.filter((value): value is string => typeof value === 'string').join('\n');
   const status = typeof data?.errorStatus === 'number' ? data.errorStatus : extractNonSecretErrorSignals(text).errorStatus;
   if (data?.modelAccessDenied === true || /\b(?:MODEL_NOT_FOUND|MODEL_UNAVAILABLE|NO_AVAILABLE_MODEL|BOT_MODEL_REQUIRED|MODEL_REQUIRED|user_model_access_denied)\b/i.test(text)) return 'MODEL_UNAVAILABLE';

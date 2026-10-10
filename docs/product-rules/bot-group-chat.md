@@ -118,6 +118,7 @@
   运行终态以 `sdkError`、`errorStatus`、`usageLimit` 等结构化信号及既有确定性额度判定分类；
   Codex 的 `codexErrorInfo` 额度、预算与认证标签优先于消息文字，连接／流断开标签归为网络错误。
   会话无事件与上游响应空闲看门狗的标准 reason（包括 bridge 变体）归为运行超时。
+  Pi prompt RPC 超时复用原生恢复的同一信号判定，标准 `pi-prompt-timeout` reason 也归为运行超时。
   本地成员和分工步骤的计时器超时同样带上 `RUNTIME_TIMEOUT`，保留等待用户批准时暂停计时的规则。
   明确的额度耗尽优先于泛化 429，明确的暂时限流不会因 `usageLimit` 标记误报为额度耗尽。
   直接发送拒绝也在执行端分类本地 `message`，跨群仍只提交白名单错误类别。

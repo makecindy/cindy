@@ -198,6 +198,7 @@ describe('Chat Server result delivery and refresh', () => {
   it.each([
     ['authentication_failed private credential', 'AUTH_REQUIRED'],
     ['ECONNRESET private endpoint', 'NETWORK_ERROR'],
+    ['pi rpc timeout after 30000ms: prompt /private/path', 'RUNTIME_TIMEOUT'],
   ])('classifies an unqueued dispatch rejection from its local message: %s', async (message, code) => {
     deps.dispatch = vi.fn(async () => ({ ok: false as const, errorCode: 'INTERNAL', message }));
     await start();

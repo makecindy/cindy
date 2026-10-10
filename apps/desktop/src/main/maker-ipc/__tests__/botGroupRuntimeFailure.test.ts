@@ -10,6 +10,8 @@ describe('group runtime failure diagnostics', () => {
     ['[INSUFFICIENT_BALANCE] private account', 'QUOTA_EXCEEDED'],
     ['ECONNRESET private endpoint', 'NETWORK_ERROR'],
     ['RUNTIME_TIMEOUT', 'RUNTIME_TIMEOUT'],
+    ['pi rpc timeout after 30000ms: prompt', 'RUNTIME_TIMEOUT'],
+    ['pi rpc timeout after 30000ms: set_model', 'RUNTIME_ERROR'],
     ['Request rejected (429): ExceededBudget private account', 'QUOTA_EXCEEDED'],
     ['budget_exceeded private account', 'QUOTA_EXCEEDED'],
     ['quota exceeded private account', 'QUOTA_EXCEEDED'],
@@ -53,6 +55,8 @@ describe('group runtime failure diagnostics', () => {
     [{ reason: 'bridge_turn_no_event_timeout' }, 'RUNTIME_TIMEOUT'],
     [{ reason: 'upstream_response_idle_timeout', message: '[REDACTED]' }, 'RUNTIME_TIMEOUT'],
     [{ reason: 'bridge_upstream_response_idle_timeout' }, 'RUNTIME_TIMEOUT'],
+    [{ reason: 'pi-prompt-timeout', message: '[REDACTED]' }, 'RUNTIME_TIMEOUT'],
+    [{ sdkError: 'pi rpc timeout after 60000ms: prompt' }, 'RUNTIME_TIMEOUT'],
     [{ code: 'unknown', message: 'private prompt' }, 'RUNTIME_ERROR'],
   ])('classifies structured terminal diagnostics %j', (error, code) => {
     expect(botGroupRuntimeFailureCode(error)).toBe(code);
@@ -71,5 +75,12 @@ describe('group runtime failure diagnostics', () => {
     expect(service.settleLaneTurn).toHaveBeenCalledExactlyOnceWith({ sessionId: 'lane', activeInputClientId: 'failed-input', outcome: 'error', resultText: '', failureCode: 'IMAGE_INPUT_UNSUPPORTED', undispatched: true });
     expect(await settleUndispatchedBotGroupTurn(service, 'lane', 'stopped-input', 'cancelled', 'private details')).toBe(false);
     expect(service.settleLaneTurn).toHaveBeenCalledTimes(1);
+  });
+
+  it('uses the same Pi prompt timeout signal for an undispatched input without exposing diagnostics', async () => {
+    const service = { settleLaneTurn: vi.fn(async () => true) };
+    await settleUndispatchedBotGroupTurn(service, 'lane', 'input', 'failed', 'pi rpc timeout after 30000ms: prompt /private/path');
+    expect(service.settleLaneTurn).toHaveBeenCalledExactlyOnceWith({ sessionId: 'lane', activeInputClientId: 'input',
+      outcome: 'error', resultText: '', failureCode: 'RUNTIME_TIMEOUT', undispatched: true });
   });
 });
