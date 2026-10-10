@@ -866,7 +866,8 @@ bot 同一份过程载体与渲染（见 `docs/product-rules/telegram-bot-parity
 例外，仍由服务端按 `turn.progress` 出草稿）。全部为可选字段增量：
 
 - `MessageOpPayload.purpose?: 'turn-progress'`：有它时 `requestId` 必填，只用于
-  `send` / `edit`（parse 强制）。服务端据 requestId 核验设备归属，把新消息登记为该轮进度
+  `send` / `edit` / `delete`（parse 强制；`delete` 用于终稿落地后客户端尽力删掉本轮
+  进度消息）。服务端据 requestId 核验设备归属，把新消息登记为该轮进度
   消息，终稿后照旧清理；本轮不归客户端承载或已收口时回 `PROGRESS_UNAVAILABLE`。
 - `MessageOpResultPayload.errorCode?: string | null`：服务端自判拒绝码（开放集合，常量
   `MESSAGE_OP_ERROR_*`）；`channelErrorCode?: number | null`：Telegram 原生 error_code
