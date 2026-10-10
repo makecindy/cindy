@@ -42,6 +42,24 @@ beforeEach(() => {
 afterEach(() => { cleanup(); shareSelectionStore.reset(); vi.unstubAllGlobals(); });
 
 describe('chat interaction controls', () => {
+  it('focuses the close button when the archived thread reply input is disabled', () => {
+    render(<ChatThreadPanel group={{ ...group, archived: true }} rootId="root" onClose={vi.fn()} />);
+    expect((screen.getByRole('textbox') as HTMLTextAreaElement).disabled).toBe(true);
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'bots.close' }));
+  });
+
+  it('closes from the square button surface outside the icon and retains the standard focus treatment', () => {
+    const onClose = vi.fn();
+    render(<ChatThreadPanel group={group} rootId="root" onClose={onClose} />);
+    const close = screen.getByRole('button', { name: 'bots.close' });
+    expect(close.className).toContain('w-8 rounded-none px-0');
+    expect(close.className).toContain('[&::before]:rounded-full');
+    expect(close.className).toContain('focus-visible:ring-2');
+    expect(close.querySelector('svg')?.getAttribute('aria-hidden')).toBe('true');
+    fireEvent.click(close, { clientX: 1, clientY: 1 });
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
   it.each([undefined, 'private-diagnostic'])('keeps existing thread notices visible without a valid runtime code: %s', async runtimeFailureCode => {
     mocks.thread.mockResolvedValue({ ok: true, root: message, replies: [{ ...message, id: 'old-notice', kind: 'notice',
       content: 'Existing system notice', runtimeFailureCode }], hasMore: false });

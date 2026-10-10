@@ -2,7 +2,9 @@
 
 import { act, cleanup, createEvent, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { Tooltip } from '@/components/ui/tooltip';
+import userEvent from '@testing-library/user-event';
 import { shareSelectionStore } from '@/components/chat/shareSelectionStore';
+import { MarkdownMermaidBlock } from '@/components/chat/MarkdownMermaidBlock';
 import { queryShareableMessageIds } from '@/lib/shareConversationImage';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -42,6 +44,7 @@ const mocks = vi.hoisted(() => ({
   controlledPush: null as null | ((payload: { controllers: Array<{ deviceId: string; name: string }> }) => void),
   getControlledState: vi.fn(),
   revoke: vi.fn(),
+  thread: vi.fn(),
 }));
 
 // Partial: the shared attachment pieces pull in the app i18n instance, which needs initReactI18next.
@@ -66,10 +69,15 @@ vi.mock('@/contexts/dataOwnerGeneration', () => ({
 vi.mock('@/lib/toast', () => ({ toast: { error: mocks.toastError, warning: mocks.toastWarning } }));
 vi.mock('@/components/ui/confirm-dialog-provider', () => ({
   useConfirmDialog: () => ({ confirm: vi.fn(async () => false) }),
+  useOptionalConfirmDialog: () => null,
 }));
 vi.mock('@/components/chat/MarkdownRenderer', () => ({
   MarkdownRenderer: ({ content }: { content: string }) => <div data-markdown>{content}</div>,
 }));
+vi.mock('mermaid', () => ({ default: {
+  initialize: vi.fn(), parse: vi.fn().mockResolvedValue(true),
+  render: vi.fn().mockResolvedValue({ svg: '<svg viewBox="0 0 100 100"><text>Diagram</text></svg>' }),
+} }));
 vi.mock('../BotGroupPendingInteraction', () => ({
   BotGroupPendingInteraction: ({ sessionId }: { sessionId: string }) => (
     <div data-testid="pending-interaction">{sessionId}</div>
@@ -267,6 +275,12 @@ beforeEach(() => {
   mocks.retryBotGroupPlan.mockReset().mockResolvedValue({ ok: true });
   mocks.editBotGroupPlanStep.mockReset().mockResolvedValue({ ok: true });
   mocks.openPath.mockReset().mockResolvedValue({ success: true });
+  mocks.thread.mockReset().mockImplementation(async ({ rootId }: { rootId: string }) => ({
+    ok: true,
+    root: msg({ id: rootId, content: `Thread root ${rootId}` }),
+    replies: [msg({ id: `reply-${rootId}`, content: `Reply to ${rootId}` })],
+    hasMore: false,
+  }));
   Object.defineProperty(window, 'electronAPI', {
     configurable: true,
     value: {
@@ -285,6 +299,7 @@ beforeEach(() => {
       cleanupCachedImages: vi.fn(async () => undefined),
       getFileThumbnail: vi.fn(async () => null),
       maker: {
+        chatServer: { thread: mocks.thread },
         listBotGroups: vi.fn(async () => ({ ok: true, groups: [] })),
         getBotGroup: (...args: unknown[]) => mocks.getBotGroup(...args),
         sendBotGroupMessage: (...args: unknown[]) => mocks.sendBotGroupMessage(...args),
@@ -306,9 +321,287 @@ beforeEach(() => {
   });
 });
 
-afterEach(cleanup);
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 describe('BotGroupChatView', () => {
+  function mockThreadMotion(duration: string) {
+    const style = document.createElement('style');
+    style.textContent = `aside { --motion-base: ${duration}; --motion-ease-move: linear; }`;
+    document.head.append(style);
+    const original = HTMLElement.prototype.animate;
+    const animations: Array<{ finished: Promise<void>; finish: () => void; cancel: ReturnType<typeof vi.fn> }> = [];
+    const animate = vi.fn(() => {
+      let finish!: () => void;
+      const finished = new Promise<void>(resolve => { finish = resolve; });
+      const animation = { finished, finish, cancel: vi.fn() };
+      animations.push(animation);
+      return animation;
+    });
+    Object.defineProperty(HTMLElement.prototype, 'animate', { configurable: true, value: animate });
+    return { animate, animations, restore: () => {
+      style.remove();
+      if (original) Object.defineProperty(HTMLElement.prototype, 'animate', { configurable: true, value: original });
+      else Reflect.deleteProperty(HTMLElement.prototype, 'animate');
+    } };
+  }
+
+  it.each(['200ms', '0ms'])('opens and closes with motion token %s, restoring focus and ignoring duplicate close', async duration => {
+    const motion = mockThreadMotion(duration);
+    try {
+      vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+      mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: true }) });
+      const user = userEvent.setup();
+      renderView();
+      const trigger = (await screen.findAllByRole('button', { name: 'bots.groupChat.server.reply' }))[0]!;
+      await user.click(trigger);
+      const panel = screen.getByRole('complementary');
+      if (duration === '200ms') {
+        expect(motion.animate).toHaveBeenCalledWith([{ width: '0px' }, { width: '50%' }], { duration: 200, easing: 'linear', fill: 'forwards' });
+        await act(async () => motion.animations[0]!.finish());
+      }
+      await user.click(within(panel).getByRole('button', { name: 'bots.close' }));
+      expect(document.activeElement).toBe(trigger);
+      if (duration === '200ms') {
+        expect(panel.inert).toBe(true);
+        expect(screen.getByRole('complementary')).toBe(panel);
+        expect(motion.animate).toHaveBeenCalledTimes(2);
+        fireEvent.keyDown(trigger, { key: 'Escape' });
+        expect(motion.animate).toHaveBeenCalledTimes(2);
+        await act(async () => motion.animations[1]!.finish());
+      } else expect(motion.animate).not.toHaveBeenCalled();
+      expect(screen.queryByRole('complementary')).toBeNull();
+    } finally { cleanup(); motion.restore(); }
+  });
+
+  it('cancels an interrupted close and does not animate or later close the newly selected thread', async () => {
+    const motion = mockThreadMotion('200ms');
+    try {
+      vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+      mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: true }) });
+      const user = userEvent.setup();
+      renderView();
+      const triggers = await screen.findAllByRole('button', { name: 'bots.groupChat.server.reply' });
+      await user.click(triggers[0]!);
+      await act(async () => motion.animations[0]!.finish());
+      await user.click(screen.getByRole('button', { name: 'bots.close' }));
+      const closing = motion.animations[1]!;
+      await user.click(triggers[1]!);
+      await screen.findByText('Reply to b1');
+      expect(closing.cancel).toHaveBeenCalled();
+      expect(motion.animate).toHaveBeenCalledTimes(2);
+      await act(async () => closing.finish());
+      expect(screen.getByRole('complementary').textContent).toContain('Reply to b1');
+      expect(screen.getByRole('complementary').inert).not.toBe(true);
+    } finally { cleanup(); motion.restore(); }
+  });
+
+  it('expands a sibling thread panel, keeps the group usable, switches threads and restores the layout on close', async () => {
+    vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+    mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: true }) });
+    const user = userEvent.setup();
+    renderView();
+    const main = (await screen.findByText('周六 8:10 有票')).closest('main')!;
+    const composer = within(main).getByRole('textbox');
+    const triggers = within(main).getAllByRole('button', { name: 'bots.groupChat.server.reply' });
+    await user.click(triggers[0]!);
+    const panel = screen.getByRole('complementary', { name: 'bots.groupChat.server.replies' });
+    expect(panel.parentElement).toBe(main.parentElement);
+    expect(main.parentElement?.className).toContain('flex');
+    expect(main.className).toContain('flex-1');
+    expect(panel.className).not.toMatch(/fixed|absolute/);
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(main.closest('[aria-hidden="true"]')).toBeNull();
+    await screen.findByText('Reply to u1');
+    await user.click(composer);
+    await user.type(composer, 'Group remains editable');
+    expect((composer as HTMLTextAreaElement).value).toBe('Group remains editable');
+    await user.click(triggers[1]!);
+    await screen.findByText('Reply to b1');
+    expect(screen.queryByText('Reply to u1')).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'bots.close' }));
+    expect(screen.queryByRole('complementary')).toBeNull();
+    expect(document.activeElement).toBe(triggers[1]);
+    expect(within(main).getByRole('textbox')).toBe(composer);
+    await user.click(triggers[0]!);
+    expect(await screen.findByText('Reply to u1')).toBeTruthy();
+  });
+
+  it('focuses the reply input without trapping Tab; closes by keyboard and ignores IME Escape', async () => {
+    vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+    mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: true }) });
+    const user = userEvent.setup();
+    renderView();
+    const trigger = (await screen.findAllByRole('button', { name: 'bots.groupChat.server.reply' }))[0]!;
+    await user.click(trigger);
+    const panel = screen.getByRole('complementary');
+    const input = within(panel).getByRole('textbox');
+    expect(document.activeElement).toBe(input);
+    fireEvent.keyDown(input, { key: 'Escape', isComposing: true, keyCode: 229 });
+    expect(screen.getByRole('complementary')).toBe(panel);
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('complementary')).toBeNull();
+    expect(document.activeElement).toBe(trigger);
+    for (const key of ['{Enter}', ' ']) {
+      await user.click(trigger);
+      const close = screen.getByRole('button', { name: 'bots.close' });
+      close.focus();
+      await user.tab({ shift: true });
+      expect(screen.getByRole('main').contains(document.activeElement)).toBe(true);
+      close.focus();
+      await user.keyboard(key);
+      expect(screen.queryByRole('complementary')).toBeNull();
+      expect(document.activeElement).toBe(trigger);
+    }
+  });
+
+  it('closes the thread with Escape after clicking or tabbing into the main group, respecting IME and consumed events', async () => {
+    vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+    mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: true }) });
+    const user = userEvent.setup();
+    renderView();
+    const trigger = (await screen.findAllByRole('button', { name: 'bots.groupChat.server.reply' }))[0]!;
+    const main = trigger.closest('main')!;
+    const composer = within(main).getByRole('textbox');
+    for (const path of ['click', 'tab']) {
+      await user.click(trigger);
+      const panel = screen.getByRole('complementary');
+      if (path === 'click') await user.click(composer);
+      else {
+        within(panel).getByRole('button', { name: 'bots.close' }).focus();
+        await user.tab({ shift: true });
+      }
+      const focused = document.activeElement!;
+      expect(main.contains(focused)).toBe(true);
+      fireEvent.keyDown(focused, { key: 'Escape', isComposing: true, keyCode: 229 });
+      expect(screen.getByRole('complementary')).toBe(panel);
+      const consumed = createEvent.keyDown(focused, { key: 'Escape', bubbles: true, cancelable: true });
+      consumed.preventDefault();
+      fireEvent(focused, consumed);
+      expect(screen.getByRole('complementary')).toBe(panel);
+      await user.keyboard('{Escape}');
+      expect(screen.queryByRole('complementary')).toBeNull();
+      expect(document.activeElement).toBe(trigger);
+    }
+  });
+
+  it('closes with Escape after clicking message text or empty timeline space, respecting IME and consumed events', async () => {
+    vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+    mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: true }) });
+    const user = userEvent.setup();
+    renderView();
+    const message = await screen.findByText('周六 8:10 有票');
+    const main = message.closest('main')!;
+    const trigger = within(main).getAllByRole('button', { name: 'bots.groupChat.server.reply' })[0]!;
+    for (const target of [message, main]) {
+      await user.click(trigger);
+      const panel = screen.getByRole('complementary');
+      await user.click(target);
+      expect(document.activeElement).toBe(document.body);
+      fireEvent.keyDown(document.body, { key: 'Escape', isComposing: true, keyCode: 229 });
+      expect(screen.getByRole('complementary')).toBe(panel);
+      const consumed = createEvent.keyDown(document.body, { key: 'Escape', bubbles: true, cancelable: true });
+      consumed.preventDefault();
+      fireEvent(document.body, consumed);
+      expect(screen.getByRole('complementary')).toBe(panel);
+      await user.keyboard('{Escape}');
+      expect(screen.queryByRole('complementary')).toBeNull();
+      expect(document.activeElement).toBe(trigger);
+    }
+  });
+
+  it('keeps main composer focus and both drafts when leaving thread image sharing', async () => {
+    vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+    mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: true }) });
+    const user = userEvent.setup();
+    renderView();
+    const trigger = (await screen.findAllByRole('button', { name: 'bots.groupChat.server.reply' }))[0]!;
+    const main = trigger.closest('main')!;
+    await user.click(trigger);
+    const panel = screen.getByRole('complementary');
+    await user.type(within(panel).getByRole('textbox'), 'Thread draft');
+    await user.click((await within(panel).findAllByRole('button', { name: 'chat.shareImage.entry' }))[0]!);
+    expect(within(panel).queryByRole('textbox')).toBeNull();
+    const composer = within(main).getByRole('textbox');
+    await user.type(composer, 'Main draft');
+    act(() => shareSelectionStore.exit());
+    expect(document.activeElement).toBe(composer);
+    expect((within(panel).getByRole('textbox') as HTMLTextAreaElement).value).toBe('Thread draft');
+    await user.keyboard(' continues');
+    expect((composer as HTMLTextAreaElement).value).toBe('Main draft continues');
+  });
+
+  it.each(['image', 'text-trigger', 'text-control', 'text-body'])('lets %s attachment preview close first with Escape and retains the thread draft', async kind => {
+    vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+    mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: true, messages: [msg({
+      attachments: [{ id: 'attachment', name: kind === 'image' ? 'photo.png' : 'note.md', category: kind === 'image' ? 'image' : 'text',
+        mimeType: kind === 'image' ? 'image/png' : 'text/markdown', size: 10,
+        url: kind === 'image' ? 'cindy-media://blobs/photo.png' : null, path: kind === 'image' ? null : '/tmp/note.md' }],
+    })] }) });
+    Object.assign(window.electronAPI, { readTextFilePreview: vi.fn().mockResolvedValue({ success: true, data: 'Preview note content', size: 20 }) });
+    const user = userEvent.setup();
+    renderView();
+    await user.click(await screen.findByRole('button', { name: 'bots.groupChat.server.reply' }));
+    const panel = screen.getByRole('complementary');
+    await user.type(within(panel).getByRole('textbox'), 'Unsent thread reply');
+    await user.click(screen.getByRole('button', { name: kind === 'image' ? 'photo.png' : 'note.md' }));
+    const preview = kind === 'image' ? document.activeElement! : document.querySelector('[data-text-lightbox-overlay]')!;
+    if (kind !== 'image') {
+      await screen.findByText('Preview note content');
+      if (kind === 'text-control') within(preview as HTMLElement).getAllByRole('button', { name: 'chat.lightbox.close' })[0]!.focus();
+      else if (kind === 'text-body') {
+        await user.click(screen.getByText('Preview note content'));
+        expect(document.activeElement).toBe(document.body);
+      } else expect(screen.getByRole('main').contains(document.activeElement)).toBe(true);
+    }
+    await user.keyboard('{Escape}');
+    expect(screen.getByRole('complementary')).toBe(panel);
+    expect((within(panel).getByRole('textbox') as HTMLTextAreaElement).value).toBe('Unsent thread reply');
+    await waitFor(() => expect(document.contains(preview)).toBe(false));
+    within(panel).getByRole('textbox').focus();
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('complementary')).toBeNull();
+  });
+
+  it('lets the actual Mermaid preview consume Escape before the thread and preserves its draft', async () => {
+    vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+    mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: true }) });
+    const user = userEvent.setup();
+    renderView();
+    const trigger = (await screen.findAllByRole('button', { name: 'bots.groupChat.server.reply' }))[0]!;
+    const main = trigger.closest('main')!;
+    await user.click(trigger);
+    const panel = screen.getByRole('complementary');
+    await user.type(within(panel).getByRole('textbox'), 'Unsent diagram reply');
+    const container = document.createElement('div');
+    main.append(container);
+    render(<MarkdownMermaidBlock raw="graph TD; A-->B" />, { container });
+    const diagram = await within(container).findByRole('button', { name: 'chat.mermaid.clickToZoom' });
+    await user.click(diagram);
+    await screen.findByRole('button', { name: 'chat.mermaidLightbox.close' });
+    expect(document.activeElement).toBe(diagram);
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'chat.mermaidLightbox.close' })).toBeNull());
+    expect(screen.getByRole('complementary')).toBe(panel);
+    expect((within(panel).getByRole('textbox') as HTMLTextAreaElement).value).toBe('Unsent diagram reply');
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('complementary')).toBeNull();
+  });
+
+  it('lets Escape dismiss a portalled reaction picker without closing the thread', async () => {
+    vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+    mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: true }) });
+    const user = userEvent.setup();
+    renderView();
+    await user.click((await screen.findAllByRole('button', { name: 'bots.groupChat.server.reply' }))[0]!);
+    const panel = screen.getByRole('complementary');
+    await user.click((await within(panel).findAllByRole('button', { name: 'bots.groupChat.server.addReaction' }))[0]!);
+    const reaction = await screen.findByRole('button', { name: '🎉' });
+    reaction.focus();
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('button', { name: '🎉' })).toBeNull();
+    expect(screen.getByRole('complementary')).toBe(panel);
+  });
+
   it('keeps a newer push failure snapshot when a stale older-page request finishes later', async () => {
     const latest = msg({ id: 'latest', sequence: 100, content: 'Latest question' });
     const source = msg({ id: 'older', sequence: 4, content: 'Earlier question' });
