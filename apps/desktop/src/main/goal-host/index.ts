@@ -57,11 +57,11 @@ export function startGoalController(deps: StartGoalControllerDeps): GoalControll
     getSession: (id): SessionLike | undefined => deps.maker.getSession(id),
     // 确保会话活着:已活直接返回;未活按存档 SessionMeta resume(spawn agent),
     // 仿 scheduler 心跳。修"开了对话没发消息 → goal 发不出第一轮"的根因。
-    ensureSession: (id): Promise<SessionLike | undefined> =>
+    ensureSession: (id, options): Promise<SessionLike | undefined> =>
       restoreSessionForGoal(id, {
         maker: deps.maker,
         warn: (message, meta) => logger.warn(message, meta),
-      }),
+      }, options),
     acquirePendingAgentSwitch: acquirePendingAgentSwitchForDirectSend,
     isSessionInTurn,
     stopActiveGoalTurn: stopActiveGoalTurnForClear,

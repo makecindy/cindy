@@ -5,6 +5,7 @@ import {
   hasSendToSessionLock,
   trackSendToSessionLockRun,
   withSendToSessionLock,
+  tryWithSendToSessionLocks,
 } from '../sendToSessionLock';
 
 const h = vi.hoisted(() => ({
@@ -29,6 +30,31 @@ describe('sendToSessionLock', () => {
 
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it('does not wait for a busy worker while a lead owns its route lock', async () => {
+    const release = await acquireSendToSessionLock('move-worker-b');
+    const apply = vi.fn();
+    try {
+      await expect(tryWithSendToSessionLocks(['move-worker-a', 'move-worker-b'], apply))
+        .resolves.toEqual({ acquired: false });
+      expect(apply).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(hasSendToSessionLock('move-worker-a')).toBe(false);
+    } finally { release(); }
+  });
+
+  it('keeps workers locked through migration and releases them after failure', async () => {
+    const apply = vi.fn(async () => {
+      expect(hasSendToSessionLock('move-worker-c')).toBe(true);
+      expect(hasSendToSessionLock('move-worker-d')).toBe(true);
+      throw new Error('copy failed');
+    });
+    await expect(tryWithSendToSessionLocks(['move-worker-d', 'move-worker-c'], apply))
+      .rejects.toThrow('copy failed');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(hasSendToSessionLock('move-worker-c')).toBe(false);
+    expect(hasSendToSessionLock('move-worker-d')).toBe(false);
   });
 
   it('warns and bails when a chained critical section never settles', async () => {

@@ -1,9 +1,9 @@
+import { sidebarSessionProject, sidebarProjectIdentityKeyForSession } from './sidebarSessionProject';
 import { isCindyMakeFamilySource } from '../../../../shared/cindyMakeMerge';
 import type { Session } from '@/lib/ccAgent.types';
 
 import {
   normalizeWorkingDir,
-  projectIdentityKeyForSession,
   type ProjectNode,
 } from './projectGrouping';
 
@@ -32,18 +32,18 @@ export function buildSessionSourceLabelMap(
       map.set(s.id, cindyMakeLabel);
       continue;
     }
-    if (s.workspaceKind === 'dialogue' && dialogueLabel) {
+    if (sidebarSessionProject(s).workspaceKind === 'dialogue' && dialogueLabel) {
       map.set(s.id, dialogueLabel);
       continue;
     }
-    if (s.workspaceKind === 'dialogue') continue;
-    const key = projectIdentityKeyForSession(s);
+    if (sidebarSessionProject(s).workspaceKind === 'dialogue') continue;
+    const key = sidebarProjectIdentityKeyForSession(s);
     const name = key ? nameByKey.get(key) : undefined;
     if (name) {
       map.set(s.id, name);
       continue;
     }
-    const wd = normalizeWorkingDir(s.workingDir);
+    const wd = normalizeWorkingDir(sidebarSessionProject(s).workingDir);
     if (!wd) continue;
     const slash = Math.max(wd.lastIndexOf('/'), wd.lastIndexOf('\\'));
     const base = slash < 0 ? wd : wd.slice(slash + 1);

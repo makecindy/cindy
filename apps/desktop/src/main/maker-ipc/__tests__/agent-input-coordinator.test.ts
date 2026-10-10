@@ -956,6 +956,7 @@ function createHarness(opts?: {
   });
 
   let hasPendingCredentialSwitch: (() => boolean) | null = null;
+  let pendingProjectMove = false;
   let screenUserMessage: NonNullable<AgentInputCoordinatorDeps['screenUserMessage']> | null = null;
   const onUserMessageBlocked = vi.fn<
     NonNullable<AgentInputCoordinatorDeps['onUserMessageBlocked']>
@@ -1054,6 +1055,7 @@ function createHarness(opts?: {
     resolveSessionReferences,
     refreshAgentReferencesBeforeDispatch,
     hasPendingCredentialSwitch: () => hasPendingCredentialSwitch?.() === true,
+    hasPendingProjectMove: () => pendingProjectMove,
     screenUserMessage: (sessionId, agentFacingText, item) =>
       screenUserMessage
         ? screenUserMessage(sessionId, agentFacingText, item)
@@ -1149,6 +1151,7 @@ function createHarness(opts?: {
     setAgentKind(value: AgentInputCreateOpts['agentKind'] | null) {
       agentKind = value;
     },
+    setPendingProjectMove(value: boolean) { pendingProjectMove = value; },
     setHasPendingCredentialSwitch(fn: (() => boolean) | null) {
       hasPendingCredentialSwitch = fn;
     },
@@ -1882,6 +1885,26 @@ describe('AgentInputCoordinator send transaction', () => {
     h.coordinator.onTurnEvent(sid, 'done');
     await flush();
     expect(h.coordinator.getActiveInputClientId(sid)).toBeNull();
+  });
+
+  it('keeps queued input unchanged while a project move waits, then wakes without a wait/error projection', async () => {
+    const h = createHarness();
+    const sid = 'project-move-queue';
+    h.setPendingProjectMove(true);
+    h.coordinator.enqueue(sid, makeItem('move-q1', 'continue in the new project'));
+    for (let retry = 0; retry < 5; retry++) {
+      h.coordinator.wakeSession(sid, 'worker-still-busy');
+      await flush();
+    }
+    expect(h.sendToAgent).not.toHaveBeenCalled();
+    expect(mocks.createMessage).not.toHaveBeenCalled();
+    expect(latestProjection(h.projections).pendingQueue.map((item) => item.clientId)).toEqual(['move-q1']);
+    expect(latestProjection(h.projections).error).toBeNull();
+    h.setPendingProjectMove(false);
+    h.coordinator.wakeSession(sid, 'project-move-settled');
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+    expect(latestProjection(h.projections).pendingQueue).toEqual([]);
   });
 
   it('silently keeps a queue head when host dispatch returns SESSION_RUNNING', async () => {

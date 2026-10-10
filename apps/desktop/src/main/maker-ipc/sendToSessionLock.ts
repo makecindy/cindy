@@ -93,6 +93,25 @@ export function hasSendToSessionLock(sessionId: string): boolean {
   return sendToSessionLocks.has(sessionId);
 }
 
+/** A lead already owns its route lock. Never wait for a worker lock in reverse
+ * order: a concurrent batch (archive/delete) may be waiting for that lead. */
+export async function tryWithSendToSessionLocks<T>(
+  sessionIds: readonly string[],
+  task: () => Promise<T>,
+): Promise<{ acquired: false } | { acquired: true; value: T }> {
+  const releases: Array<() => void> = [];
+  try {
+    for (const id of [...new Set(sessionIds)].sort()) {
+      if (hasSendToSessionLock(id)) return { acquired: false };
+      // acquire installs its queue entry synchronously, before its first await.
+      releases.push(await acquireSendToSessionLock(id));
+    }
+    return { acquired: true, value: await task() };
+  } finally {
+    for (const release of releases.reverse()) release();
+  }
+}
+
 /**
  * Install `run` as the session's current lock entry and return a promise that
  * mirrors `run`'s real settlement for the caller. The stored map entry settles

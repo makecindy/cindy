@@ -334,6 +334,10 @@ export interface Session {
    * - dialogue: workingDir 只是对话运行/文件目录, 不参与 Projects 分组。
    */
   workspaceKind: WorkspaceKind;
+  /** Host-owned display destination while the active runtime finishes in workingDir. */
+  projectMoveTarget?: { workingDir: string | null } | null;
+  /** One failed background move; normal updates clear this marker. */
+  projectMoveFailureId?: string | null;
   model: string;
   effort: Effort;
   permissionMode: PermissionMode;

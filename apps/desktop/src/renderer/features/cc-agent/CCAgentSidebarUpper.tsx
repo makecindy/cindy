@@ -128,6 +128,7 @@ import { useSessionLifecycleActions } from './hooks/useSessionLifecycleActions';
 import { useSidebarFilter, type UseSidebarFilterReturn } from './hooks/useSidebarFilter';
 import { useHiddenProjects, type UseHiddenProjectsReturn } from './hooks/useHiddenProjects';
 import {
+  deviceLinkProjectKey,
   buildPersistentLocalProjects,
   filterPersistentLocalProjectsByLastActivity,
   normalizeProjectKey,
@@ -174,6 +175,8 @@ import { PinnedSection, type PinnedSidebarEntry } from './sidebar/sections/Pinne
 import { ProjectNode as ProjectNodeView } from './sidebar/sections/ProjectNode';
 import { PROJECT_DROP_CLASS, useSessionProjectDrop } from './sidebar/useSessionProjectDrop';
 import { moveRemoteTaskProject } from './sidebar/TaskMoveSubmenu';
+import { moveLocalTaskProject } from './sidebar/sessionProjectMove';
+import { canOfferSessionProjectMove } from './sidebar/sessionProjectDrop';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 import { compareDialogueSessions, type DialogueSortBy } from './sidebar/sections/DialogueSection';
 import { hasSettledOnlineDeviceSection } from './lib/mainListModel';
@@ -2864,117 +2867,56 @@ function ExpandedView({
     [filter, t],
   );
 
-  // Event-only state: metadata updates recreate the collapsed Set even when
-  // membership is unchanged. Do not propagate that identity to every task row.
-  const collapsedProjectsForMoveRef = useRef(collapse.collapsed);
-  useLayoutEffect(() => {
-    collapsedProjectsForMoveRef.current = collapse.collapsed;
-  }, [collapse.collapsed]);
   const handleMoveSession = useCallback(
     async (sessionId: string, target: SessionMoveTarget) => {
       const session = sessionsByIdRef.current.get(sessionId);
-      if (!session) return;
-      if (session.remoteHostId || session.deviceLinkDeviceId) {
-        toast.warning(t('ccAgent.sidebar.sessionMenu.moveToProjectRemoteUnsupported'));
-        return;
-      }
-      if (effectiveRunningSessionIds.has(sessionId)) {
-        toast.warning(t('ccAgent.sidebar.sessionMenu.moveToProjectRunningBlocked'));
-        return;
-      }
-      try {
-        const binding = await window.electronAPI.binding.resolveSession(sessionId);
-        if (binding.attached) {
-          toast.warning(t('ccAgent.sidebar.sessionMenu.moveToProjectAttachedBlocked'));
-          return;
-        }
-      } catch {
-        // resolveSession 失败时不阻断移动；它只是 IM 接管保护的额外检查。
-      }
-
-      let targetWorkingDir = target.kind === 'project' ? target.workingDir : undefined;
-      if (target.kind === 'browseProject') {
+      if (!session || !canOfferSessionProjectMove(session)) return;
+      const owner = getDataOwnerGeneration();
+      if (!session.deviceLinkDeviceId) {
         try {
-          const result = await window.electronAPI.showOpenDirectoryDialog();
-          if (result.canceled || !result.path) return;
-          targetWorkingDir = result.path;
-        } catch (err) {
-          log.warn('[session move to project] directory picker failed', err);
-          toast.error(t('ccAgent.sidebar.sessionMenu.moveToProjectFailed'));
-          return;
+          const binding = await window.electronAPI.binding.resolveSession(sessionId);
+          if (binding.attached) {
+            toast.warning(t('ccAgent.sidebar.sessionMenu.moveToProjectAttachedBlocked'));
+            return;
+          }
+        } catch {
+          // The host independently checks IM ownership before accepting the move.
         }
       }
-
-      const oldPatch = {
-        workingDir: session.workingDir,
-        workspaceKind: session.workspaceKind,
-      };
-      if (target.kind !== 'dialogue' && !targetWorkingDir) return;
-      const nextPatch =
-        target.kind === 'dialogue'
-          ? { workspaceKind: 'dialogue' as const }
-          : { workingDir: targetWorkingDir, workspaceKind: 'project' as const };
-      patchLocal(sessionId, nextPatch);
-      let expandedProjectKey: string | null = null;
-      let wasExpandedProjectCollapsed = false;
-      if (targetWorkingDir) {
-        const normalized = normalizeWorkingDir(targetWorkingDir);
-        if (normalized) {
-          expandedProjectKey = projectIdentityKey('local', normalized, null);
-          wasExpandedProjectCollapsed = collapsedProjectsForMoveRef.current.has(expandedProjectKey);
-          collapse.expand(expandedProjectKey);
-        }
-      }
+      if (!isDataOwnerGenerationCurrent(owner)) return;
+      let workingDir = target.kind === 'project' ? target.workingDir : null;
       try {
-        await sessionService.update(sessionId, nextPatch);
-        if (target.kind !== 'dialogue') {
-          void recentWorkdirsStore.forceRefresh().catch(() => undefined);
+        if (target.kind === 'browseProject') {
+          if (session.deviceLinkDeviceId) return;
+          const result = await window.electronAPI.showOpenDirectoryDialog();
+          if (result.canceled || !result.path || !isDataOwnerGenerationCurrent(owner)) return;
+          workingDir = result.path;
         }
-        toast.success(
-          t(
-            target.kind === 'dialogue'
-              ? 'ccAgent.sidebar.sessionMenu.moveToDialogueDone'
-              : 'ccAgent.sidebar.sessionMenu.moveToProjectDone',
-          ),
-        );
-      } catch (err) {
-        log.error('[session move]', err);
-        patchLocal(sessionId, oldPatch);
-        if (expandedProjectKey && wasExpandedProjectCollapsed) {
-          collapse.setCollapsed(expandedProjectKey, true);
+        if (session.deviceLinkDeviceId) await moveRemoteTaskProject(session, workingDir);
+        else await moveLocalTaskProject(sessionId, workingDir);
+        if (!isDataOwnerGenerationCurrent(owner)) return;
+        if (workingDir) {
+          const normalized = normalizeWorkingDir(workingDir);
+          if (normalized) {
+            collapse.expand(session.deviceLinkDeviceId
+              ? deviceLinkProjectKey(session.deviceLinkDeviceId, normalized)
+              : projectIdentityKey('local', normalized, null));
+          }
         }
-        toast.error(
-          t(
-            target.kind === 'dialogue'
-              ? 'ccAgent.sidebar.sessionMenu.moveToDialogueFailed'
-              : 'ccAgent.sidebar.sessionMenu.moveToProjectFailed',
-          ),
-        );
+      } catch (error) {
+        if (!isDataOwnerGenerationCurrent(owner)) return;
+        const code = /MIGRATION_[A-Z_]+/.exec(String(error))?.[0];
+        toast.error(t(`taskMigration.errors.${code}`, { defaultValue: t('taskMove.failed') }));
       }
     },
-    [collapse.expand, collapse.setCollapsed, effectiveRunningSessionIds, patchLocal, t],
+    [collapse.expand, t],
   );
 
   const projectDrop = useSessionProjectDrop({
     getSession: (id) => sessionsByIdRef.current.get(id),
     getProject: (key) => visibleProjectUniverse.find((project) => project.projectKey === key),
     expandProject: collapse.expand,
-    onMoveSession: (id, target) => {
-      const session = sessionsByIdRef.current.get(id);
-      if (!session?.deviceLinkDeviceId) {
-        void handleMoveSession(id, target);
-        return;
-      }
-      if (target.kind === 'browseProject') return;
-      // A remote row must be moved by its owner, never by the controller's local DB.
-      const owner = getDataOwnerGeneration();
-      void moveRemoteTaskProject(session, target.kind === 'dialogue' ? null : target.workingDir)
-        .catch((error) => {
-          if (!isDataOwnerGenerationCurrent(owner)) return;
-          const code = /MIGRATION_[A-Z_]+/.exec(String(error))?.[0];
-          toast.error(t(`taskMigration.errors.${code}`, { defaultValue: t('taskMove.failed') }));
-        });
-    },
+    onMoveSession: handleMoveSession,
   });
 
   /* ---- Delete / Archive / Unarchive action handlers ----

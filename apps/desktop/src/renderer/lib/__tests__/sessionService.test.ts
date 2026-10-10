@@ -71,6 +71,23 @@ describe('sessionService.get in-flight deduplication', () => {
     await expect(second).resolves.toMatchObject({ id: 'session-b' });
   });
 
+  it('starts a fresh read after a write instead of reusing the older in-flight snapshot', async () => {
+    const old = deferred<SessionLike>();
+    const latest = deferred<SessionLike>();
+    const get = vi.fn().mockReturnValueOnce(old.promise).mockReturnValueOnce(latest.promise);
+    vi.stubGlobal('window', { electronAPI: { localDb: { sessions: { get } } } });
+    const service = await loadSessionService();
+    const first = service.get('session-1');
+    const fresh = service.get('session-1', { fresh: true });
+    expect(get).toHaveBeenCalledTimes(2);
+    expect(service.get('session-1')).toBe(fresh);
+    old.resolve({ id: 'old' });
+    await first;
+    expect(service.get('session-1')).toBe(fresh);
+    latest.resolve({ id: 'latest' });
+    await expect(fresh).resolves.toEqual({ id: 'latest' });
+  });
+
   it('removes settled requests instead of retaining stale metadata', async () => {
     const get = vi.fn(async (id: string) => ({ id }));
     vi.stubGlobal('window', { electronAPI: { localDb: { sessions: { get } } } });

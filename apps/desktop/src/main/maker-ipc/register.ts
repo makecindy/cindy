@@ -1,3 +1,4 @@
+import { applyProjectMoveBeforeSend, hasPendingProjectMove, settleProjectMovesAfterIdle } from '../mcp-integrations/projectMoveBridge.js';
 import { assertBotTaskCoordination, classifySessionMessagePurpose, coordinationInput } from './botTaskCoordination.js';
 import type { BotTaskCoordination, SessionMessagePurpose } from '../../shared/botTaskCoordination.js';
 import { openSession, setSessionOpeningModelAdmission } from '../localDb/sessionOpening.js';
@@ -304,6 +305,7 @@ import {
 } from '../localDb/client/current.js';
 import { createBotRuntimeRestoreCoordinator } from './botRuntimeRestore.js';
 import { createWorkingDirectoryRecovery, isUnavailableFilesystemError } from './workingDirectoryRecovery.js';
+import { reconcileCreateOptsWorkspace } from './reconcileCreateOptsWorkspace.js';
 import { createWorkingDirectoryPreflight } from './workingDirectoryPreflight.js';
 import { allocateDialogueRecoveryWorkspace, findDialogueRecoveryWorkspace, requiredDialogueRecoveryRoot } from './dialogueRecoveryWorkspace.js';
 import { workdirDiagnosticContext, workdirDiagnosticErrorCode } from '../workdirDiagnostics.js';
@@ -3864,6 +3866,25 @@ export function getSessionInputProvenance(sessionId: string) {
   return { input, executing: !!input || !!getMakerIfReady()?.getSession(sessionId)?.isTurnRunning() };
 }
 
+/** Re-open queue admission after committing or rolling back a workspace move. */
+export function wakeSessionAfterProjectMove(sessionId: string): void {
+  agentInputCoordinatorHolder?.wakeSession(sessionId, 'project-move-settled');
+}
+
+/** Workspace changes wait for terminal persistence, interactions and background agents. */
+export function isSessionProjectMoveBusy(sessionId: string): boolean {
+  try {
+    const live = getMakerIfReady()?.getSession(sessionId);
+    return isSessionInTurn(sessionId) || isSessionTurnPendingCompletion(sessionId) ||
+      !!live?.isTurnRunning() || (live?.listBackgroundTasks().length ?? 0) > 0 ||
+      getClaudeSessionBackgroundActivity(sessionId) ||
+      hasPendingAgentInteractionForSession(sessionId);
+  } catch {
+    // An owner/runtime boundary is unavailable, never proof of an idle task.
+    return true;
+  }
+}
+
 /**
  * 标题素材读取需要覆盖 `status:isRunning=false` 到 terminal event 的短窗口：
  * 逻辑 running 已结束，但最后一条 Assistant 还没有拿到 durable turn seal。
@@ -6603,7 +6624,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       const s = maker.listActiveSessions().find((x) => x.id === sessionId);
       return s?.sdkSessionId ?? null;
     },
-    closeSession: (sessionId) => maker.closeSession(sessionId),
+    // Closing an idle runtime for a workspace move must keep queued input.
+    closeSession: (sessionId) => rehydrateCloseSuppression.withSuppressed(
+      sessionId, () => maker.closeSession(sessionId),
+    ),
   });
 
   // ── Palette `/` 命令三源 (palette refactor) ────────────────────────────
@@ -9068,11 +9092,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           fastMode: sessions.fastMode,
           agentDeviceId: sessions.agentDeviceId,
           remoteHostId: sessions.remoteHostId,
+          workingDir: sessions.workingDir,
+          workspaceKind: sessions.workspaceKind,
         })
         .from(sessions)
         .where(eq(sessions.id, sessionId))
         .limit(1);
       if (!row) return;
+      reconcileCreateOptsWorkspace(sessionId, co, row, workingDirectoryRecovery.resolve);
       // Agent 换电脑也在发送事务内落地：快照里的旧位置不能把 Agent 拉回原来那台。
       // 缺省(undefined)交给 bootstrapSession 按任务记录读取，与恢复路径同一口径。
       if (!co.remoteHostId && !row.remoteHostId) {
@@ -9420,6 +9447,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     let deferPendingApply = false;
     const release = await acquireSendToSessionLock(sessionId, undefined, () => stage);
     try {
+      stage = 'direct-send:applyProjectMove';
+      await applyProjectMoveBeforeSend(sessionId);
       stage = 'direct-send:reconcileBotModelRoute';
       await reconcileBotModelRoute(sessionId, true);
       if (beforeApply) {
@@ -13319,6 +13348,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     result.contextTokensForConfirmation !== undefined;
   const settlingSessionRuntimeControls = new Set<string>();
   const settlePendingSessionRuntimeControl = (sessionId: string, reason: string): void => {
+    settleProjectMovesAfterIdle();
     if (settlingSessionRuntimeControls.has(sessionId)) return;
     const pending = getPendingSessionRuntimeMutation(sessionId);
     if (!pending) return;
@@ -14971,6 +15001,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     const compactedRuntime = maker.getSession(sessionId);
     if (compactedRuntime) await refreshBotCapabilityEpochBeforeSend(compactedRuntime);
     return await withSendToSessionLock(sessionId, async () => {
+      await applyProjectMoveBeforeSend(sessionId);
       await reconcileBotModelRoute(sessionId, true);
       const [botInput] = await getDbClient()
         .drizzle.select({
@@ -15560,100 +15591,104 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (typeof sessionId !== 'string' || sessionId.length === 0) {
         throwIpcError('INVALID_PARAMS', 'sessionId required');
       }
-      const sharedTaskAccess = createSharedTaskContextUsageGuard(
-        getDeviceLinkInvokeContext()?.sharedTask, sessionId,
-      );
-      sharedTaskAccess.assertCurrent();
-      let sess = maker.getSession(sessionId);
-      if (!sess) {
-        const trustedCreateOpts = await sharedTaskAccess.resolveCreateOpts(
-          createOpts, async () => ({
-            ...await readSharedTaskTaskCreateOpts(sessionId),
-            extraDirs: extraDirsForRuntime(await readSessionExtraDirsFromDb(sessionId)),
-            writableDirs: await readSessionWritableDirsFromDb(sessionId),
-          }),
+      // Context probes may lazily recreate CC. Share the route lock so a
+      // project move cannot commit its new cwd around an old-cwd bootstrap.
+      return withSendToSessionLock(sessionId, async () => {
+        const sharedTaskAccess = createSharedTaskContextUsageGuard(
+          getDeviceLinkInvokeContext()?.sharedTask, sessionId,
         );
-        if (!trustedCreateOpts) {
-          throwIpcError('NOT_FOUND', `Session ${sessionId} is not running`);
-        }
-        const co = buildCreateOptsWithStderr({ ...(trustedCreateOpts as CreateOpts), id: sessionId });
-        // session-agent-switch:先按 DB 行校正再判 claude-only——否则切到 codex 后
-        // 残留的 claude createOpts 会在这里 spawn 出旧引擎的 live session 并被后续
-        // send 复用(会话被劫持回旧引擎,2026-07-20 审计实锤)。
-        await reconcileCreateOptsAgainstDb(sessionId, co);
-        if (co.agentKind !== 'claude-code') {
-          throwIpcError(
-            'UNSUPPORTED_CAPABILITY',
-            `Agent ${co.agentKind} does not support context usage`,
+        sharedTaskAccess.assertCurrent();
+        let sess = maker.getSession(sessionId);
+        if (!sess) {
+          const trustedCreateOpts = await sharedTaskAccess.resolveCreateOpts(
+            createOpts, async () => ({
+              ...await readSharedTaskTaskCreateOpts(sessionId),
+              extraDirs: extraDirsForRuntime(await readSessionExtraDirsFromDb(sessionId)),
+              writableDirs: await readSessionWritableDirsFromDb(sessionId),
+            }),
           );
-        }
-        const okLazy = await checkWorkDirExists(
-          sessionId,
-          co.workingDir,
-          co.agentKind,
-          co.remoteHostId,
-        );
-        if (!okLazy) {
-          throwIpcError('NOT_FOUND', `Working directory is missing for session ${sessionId}`);
-        }
-        await synthesizeOrcaVendorOptionsFromDb(sessionId, co);
-        if (co.extraDirs === undefined) {
+          if (!trustedCreateOpts) {
+            throwIpcError('NOT_FOUND', `Session ${sessionId} is not running`);
+          }
+          const co = buildCreateOptsWithStderr({ ...(trustedCreateOpts as CreateOpts), id: sessionId });
+          // session-agent-switch:先按 DB 行校正再判 claude-only——否则切到 codex 后
+          // 残留的 claude createOpts 会在这里 spawn 出旧引擎的 live session 并被后续
+          // send 复用(会话被劫持回旧引擎,2026-07-20 审计实锤)。
+          await reconcileCreateOptsAgainstDb(sessionId, co);
+          if (co.agentKind !== 'claude-code') {
+            throwIpcError(
+              'UNSUPPORTED_CAPABILITY',
+              `Agent ${co.agentKind} does not support context usage`,
+            );
+          }
+          const okLazy = await checkWorkDirExists(
+            sessionId,
+            co.workingDir,
+            co.agentKind,
+            co.remoteHostId,
+          );
+          if (!okLazy) {
+            throwIpcError('NOT_FOUND', `Working directory is missing for session ${sessionId}`);
+          }
+          await synthesizeOrcaVendorOptionsFromDb(sessionId, co);
+          if (co.extraDirs === undefined) {
+            try {
+              const row = await readSessionExtraDirsFromDb(sessionId);
+              if (row.length > 0) Object.assign(co, directoryGrantsForRuntime(row));
+            } catch (err) {
+              log.warn('context-usage lazy-create: read extra_dirs from DB failed (non-fatal)', {
+                sessionId,
+                err: err instanceof Error ? err.message : String(err),
+              });
+            }
+          }
+          if (co.writableDirs === undefined) {
+            const row = await readSessionWritableDirsFromDb(sessionId).catch(() => []);
+            if (row.length > 0) co.writableDirs = row;
+          }
           try {
-            const row = await readSessionExtraDirsFromDb(sessionId);
-            if (row.length > 0) Object.assign(co, directoryGrantsForRuntime(row));
-          } catch (err) {
-            log.warn('context-usage lazy-create: read extra_dirs from DB failed (non-fatal)', {
+            sharedTaskAccess.assertCurrent();
+            await ensureRemoteReadyForSessionStart({ createOpts: co });
+            const {
+              session: lazySess,
+              didInjectOrcaInstructions,
+              didInjectProjectContext,
+            } = await bootstrapSession(co, sharedTaskAccess.assertCurrent);
+            await markOrcaRoleIfNeeded(lazySess.id, co.orcaRole);
+            log.info('context-usage: lazy create-session', {
               sessionId,
-              err: err instanceof Error ? err.message : String(err),
+              agentKind: co.agentKind,
+              model: co.model,
+              usedOrcaInstructions: didInjectOrcaInstructions,
+              usedProjectContext: didInjectProjectContext,
+              extraDirsCount: co.extraDirs?.length ?? 0,
             });
+            sess = lazySess;
+          } catch (err) {
+            throwIpcError(
+              'INTERNAL',
+              err instanceof Error ? err.message : 'context usage lazy create failed',
+            );
           }
         }
-        if (co.writableDirs === undefined) {
-          const row = await readSessionWritableDirsFromDb(sessionId).catch(() => []);
-          if (row.length > 0) co.writableDirs = row;
-        }
-        try {
-          sharedTaskAccess.assertCurrent();
-          await ensureRemoteReadyForSessionStart({ createOpts: co });
-          const {
-            session: lazySess,
-            didInjectOrcaInstructions,
-            didInjectProjectContext,
-          } = await bootstrapSession(co, sharedTaskAccess.assertCurrent);
-          await markOrcaRoleIfNeeded(lazySess.id, co.orcaRole);
-          log.info('context-usage: lazy create-session', {
-            sessionId,
-            agentKind: co.agentKind,
-            model: co.model,
-            usedOrcaInstructions: didInjectOrcaInstructions,
-            usedProjectContext: didInjectProjectContext,
-            extraDirsCount: co.extraDirs?.length ?? 0,
-          });
-          sess = lazySess;
-        } catch (err) {
+        if (sess.agentKind !== 'claude-code' && sess.agentKind !== 'pi') {
           throwIpcError(
-            'INTERNAL',
-            err instanceof Error ? err.message : 'context usage lazy create failed',
+            'UNSUPPORTED_CAPABILITY',
+            `Agent ${sess.agentKind} does not support context usage`,
           );
         }
-      }
-      if (sess.agentKind !== 'claude-code' && sess.agentKind !== 'pi') {
-        throwIpcError(
-          'UNSUPPORTED_CAPABILITY',
-          `Agent ${sess.agentKind} does not support context usage`,
-        );
-      }
-      try {
-        return await sess.getContextUsage();
-      } catch (err) {
-        if (err instanceof Error && err.name === 'NotSupportedError') {
-          throwIpcError('UNSUPPORTED_CAPABILITY', err.message);
+        try {
+          return await sess.getContextUsage();
+        } catch (err) {
+          if (err instanceof Error && err.name === 'NotSupportedError') {
+            throwIpcError('UNSUPPORTED_CAPABILITY', err.message);
+          }
+          throwIpcError(
+            'INTERNAL',
+            err instanceof Error ? err.message : 'context usage query failed',
+          );
         }
-        throwIpcError(
-          'INTERNAL',
-          err instanceof Error ? err.message : 'context usage query failed',
-        );
-      }
+      });
     },
   );
 
@@ -16578,6 +16613,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // 谓词逻辑在 deferredRestartQueueWiring.ts(与 #2506 跨模块回归共用同一
     // 工厂,harness 不再照抄接线形状);holder 晚于 coordinator 构造,经闭包
     // 晚绑定。
+    hasPendingProjectMove,
     hasPendingCredentialSwitch: createDeferredRestartQueueGate({
       hasPendingCredentialSwitchEntry: (sessionId) =>
         pendingCredentialSwitchHolder?.has(sessionId) === true,

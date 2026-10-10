@@ -309,6 +309,8 @@ export type AgentInputSendResult =
     };
 
 export interface AgentInputCoordinatorDeps {
+  /** Durable workspace changes hold the queue without spending retry attempts. */
+  hasPendingProjectMove?: (sessionId: string) => boolean;
   sendToAgent: (
     sessionId: string,
     message: AgentInputMakerMessage,
@@ -1982,6 +1984,7 @@ export class AgentInputCoordinator {
       // pending 凭证切换期间不立即派发 /compact(会打到旧凭证形态的会话上);
       // 排队后由 apply 完成的 wakeSession → getDrainableCompact 门放行。
       this.deps.hasPendingCredentialSwitch?.(sessionId) === true ||
+      this.deps.hasPendingProjectMove?.(sessionId) === true ||
       state.pendingQueue.length > 0 ||
       state.pendingCompacts.length > 0 ||
       state.queuePaused ||
@@ -4666,6 +4669,7 @@ export class AgentInputCoordinator {
     if (state.steeringQueueClientIds.length > 0) return 'steering-in-flight';
     if (state.recovery) return 'recovery-pending';
     if (this.deps.hasPendingCredentialSwitch?.(sessionId)) return 'credential-switch-gate';
+    if (this.deps.hasPendingProjectMove?.(sessionId)) return 'project-move-gate';
     if (this.isDispatchBoundaryBusy(sessionId, state)) return 'dispatch-boundary-busy';
     const head = state.pendingQueue[0];
     if (!head) return 'queue-empty';
@@ -4698,6 +4702,7 @@ export class AgentInputCoordinator {
     if (state.steeringQueueClientIds.length > 0) return null;
     if (state.recovery) return null;
     if (this.deps.hasPendingCredentialSwitch?.(sessionId)) return null;
+    if (this.deps.hasPendingProjectMove?.(sessionId)) return null;
     if (this.isDispatchBoundaryBusy(sessionId, state)) return null;
     return first;
   }

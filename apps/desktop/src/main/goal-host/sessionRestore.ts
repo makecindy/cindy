@@ -1,12 +1,13 @@
 import type { Session, SessionMeta } from '@cindy/maker-core';
 
 import { getSessionRowSnapshot } from '../localDb/ipc/sessions.js';
+import { withSessionRouteLock } from '../localDb/sessionRouteLock.js';
 import { markOrcaMcpHydratedIfNeeded } from '../maker-ipc/orcaMcpHydrationCache.js';
 import { preparePersistedOrcaSessionStart } from '../maker-ipc/orcaSessionStartOptions.js';
 import type { MakerSessionCreateOpts } from '../maker-ipc/sessionRequest.js';
 import { wireSessionToIpc } from '../maker-ipc/register.js';
 import { hydrateSessionProvider } from '../maker-host/session-provider-store.js';
-import type { SessionLike } from './types.js';
+import type { GoalSessionRestoreOptions, SessionLike } from './types.js';
 
 interface GoalSessionRestoreMaker {
   getSession(sessionId: string): SessionLike | undefined;
@@ -37,7 +38,16 @@ export interface RestoreGoalSessionDeps {
 export async function restoreSessionForGoal(
   sessionId: string,
   deps: RestoreGoalSessionDeps,
+  options?: GoalSessionRestoreOptions,
 ): Promise<SessionLike | undefined> {
+  // Goal edits and automatic recovery can restore without a direct-send lease.
+  // Read metadata only after the route lock: a project move may be committing a
+  // new cwd while the old runtime is closed. Never resurrect its old workspace.
+  if (!options?.routeLockHeld) {
+    return withSessionRouteLock(sessionId, () =>
+      restoreSessionForGoal(sessionId, deps, { routeLockHeld: true }),
+    );
+  }
   const live = deps.maker.getSession(sessionId);
   // A failed close leaves the Session in Maker's live map with status=error.
   // Do not hand that poisoned object back to Goal: Maker.createSession owns the

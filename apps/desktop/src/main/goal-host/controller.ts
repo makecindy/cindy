@@ -1459,11 +1459,11 @@ export class GoalController {
     let restoreFailed = false;
     let restoreError: unknown;
     try {
-      releaseAgentSwitchLock =
-        (await this.deps.acquirePendingAgentSwitch?.(sessionId)) ?? (() => {});
+      const lease = await this.deps.acquirePendingAgentSwitch?.(sessionId);
+      releaseAgentSwitchLock = lease ?? (() => {});
       if (this.disposed) return;
       if (this.turns.get(sessionId) !== lifecycleBoundary) return;
-      session = await this.deps.ensureSession(sessionId);
+      session = await this.deps.ensureSession(sessionId, { routeLockHeld: !!lease });
       if (this.disposed) return;
       if (this.turns.get(sessionId) !== lifecycleBoundary) return;
       if (session) {
@@ -2470,10 +2470,10 @@ export class GoalController {
       // fireTurn 每次都可能是登记 deferred intent 后的第一条直发消息。锁必须覆盖
       // apply、重新读取 live session 和 Session.send；否则并发 SET_MODEL 能在 fresh
       // session 创建后、send 前再次换 route，让本轮落到 UI 未显示的来源。
-      releaseAgentSwitchLock =
-        (await this.deps.acquirePendingAgentSwitch?.(sessionId)) ?? (() => {});
+      const lease = await this.deps.acquirePendingAgentSwitch?.(sessionId);
+      releaseAgentSwitchLock = lease ?? (() => {});
       if (!isCurrentLifecycle()) return;
-      const session = await this.deps.ensureSession(sessionId);
+      const session = await this.deps.ensureSession(sessionId, { routeLockHeld: !!lease });
       if (!isCurrentLifecycle()) return;
       if (!session) throw new GoalSessionRestoreError();
       restoringSession = false;

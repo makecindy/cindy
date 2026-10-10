@@ -95,6 +95,11 @@ type ScheduleRunInsert = typeof scheduleRuns.$inferInsert;
 type SessionRuntimeFields = Pick<Session, 'id' | 'agentKind' | 'model' | 'providerId' | 'effort' | 'fastMode'>;
 type SessionRuntimeProjector = (session: SessionRuntimeFields) => Partial<Session>;
 let sessionRuntimeProjector: SessionRuntimeProjector | null = null;
+let sessionProjectMoveProjector: ((id: string) => { workingDir: string | null } | null) | null = null;
+
+export function setSessionProjectMoveProjector(projector: typeof sessionProjectMoveProjector): void {
+  sessionProjectMoveProjector = projector;
+}
 
 export function setSessionRuntimeProjector(projector: SessionRuntimeProjector | null): void {
   sessionRuntimeProjector = projector;
@@ -102,7 +107,10 @@ export function setSessionRuntimeProjector(projector: SessionRuntimeProjector | 
 
 /** Full reads and committed route patches must publish the same runtime snapshot. */
 export function projectSessionRuntimeFields(session: SessionRuntimeFields): Partial<Session> {
-  return sessionRuntimeProjector?.(session) ?? {};
+  return {
+    ...sessionRuntimeProjector?.(session),
+    ...(sessionProjectMoveProjector ? { projectMoveTarget: sessionProjectMoveProjector(session.id) } : {}),
+  };
 }
 
 /**

@@ -44,6 +44,7 @@ import { installSystemNetworkErrorToastListener } from '@/lib/systemNetworkError
 import { installSilentInstallToastListener } from '@/lib/silentInstallToast';
 import { installProviderUpstreamErrorToastListener } from '@/lib/providerUpstreamErrorToast';
 import { installAutoPermissionFallbackToastListener } from '@/lib/autoPermissionFallbackToast';
+import { installProjectMoveFailureToastListener } from '@/lib/projectMoveFailureToast';
 import { agentKindToVendor } from '@/components/sidebar/VendorIcon';
 import { installCcMgrUpgradeListener } from '@/state/ccMgrUpgradeStore';
 import {
@@ -394,6 +395,8 @@ export function App() {
   useEffect(() => {
     return installAutoPermissionFallbackToastListener();
   }, []);
+
+  useEffect(() => installProjectMoveFailureToastListener(), []);
 
   // cc-mgr 版本不匹配的 UpgradeBanner: 订阅 main 的 CC_MGR_UPGRADE_AVAILABLE push +
   // 启动时拉一次 pending snapshot, 写进 ccMgrUpgradeStore。没挂这个 listener 的话

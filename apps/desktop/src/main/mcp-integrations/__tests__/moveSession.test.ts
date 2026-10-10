@@ -12,6 +12,7 @@ const h = vi.hoisted(() => ({
   workers: [] as Array<{ sessionId: string }>,
   running: new Set<string>(),
   attached: false,
+  worktree: null as { baseRepo: string } | null,
   update: vi.fn(),
   saved: vi.fn(),
   enterLock: vi.fn(),
@@ -54,6 +55,7 @@ vi.mock('../../localDb/ipc/recentWorkdirs.js', async (importOriginal) => {
 });
 vi.mock('../../sidebarSettingsStore.js', () => ({ restoreLocalProjectVisibility: vi.fn() }));
 vi.mock('../../logger.js', () => ({ createLogger: () => ({ warn: vi.fn() }) }));
+vi.mock('../../worktree/worktreeStore.js', () => ({ get: () => h.worktree }));
 vi.mock('../../im/binding.js', () => ({
   bindingStore: { findByTarget: () => (h.attached ? 'im' : null) },
 }));
@@ -73,6 +75,7 @@ describe('moveSession host', () => {
     h.botLinks = [];
     h.botLinkSequence = null;
     h.attached = false;
+    h.worktree = null;
     h.enterLock.mockImplementation(() => undefined);
     h.beforeCommit.mockImplementation(() => undefined);
     h.query.mockResolvedValue([
@@ -90,6 +93,13 @@ describe('moveSession host', () => {
       return { id, workingDir: patch.workingDir ?? '/old', workspaceKind: patch.workspaceKind };
     });
   });
+  it.each(['project', 'dialogue'] as const)('keeps an independent worktree bound when moving to %s', async (kind) => {
+    h.worktree = { baseRepo: path.join(directory, 'original') };
+    const result = await run(kind === 'dialogue' ? null : directory);
+    expect(result).toMatchObject({ ok: false, errorCode: 'UNSUPPORTED_CAPABILITY' });
+    expect(h.saved).not.toHaveBeenCalled();
+  });
+
   afterEach(async () => {
     await rm(directory, { recursive: true, force: true });
   });
@@ -168,6 +178,7 @@ describe('moveSession host', () => {
         h.query.mockResolvedValue([{ id: 'target', status: 'active' }]);
         h.botLinks = [];
         h.attached = false;
+    h.worktree = null;
         h.beforeCommit.mockImplementationOnce(() => {
           if (change === 'archived')
             h.query.mockResolvedValue([{ id: 'target', status: 'archived' }]);
@@ -205,6 +216,7 @@ describe('moveSession host', () => {
     h.attached = true;
     expect(await run(null)).toMatchObject({ errorCode: 'PRECONDITION_FAILED' });
     h.attached = false;
+    h.worktree = null;
     h.query.mockResolvedValue([{ id: 'target', status: 'active', orcaRole: 'lead' }]);
     h.workers = [{ sessionId: 'worker' }];
     h.running.add('worker');

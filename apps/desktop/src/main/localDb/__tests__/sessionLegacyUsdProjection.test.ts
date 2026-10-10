@@ -5,14 +5,16 @@
  * 手机端等只消费 totalCostUsd 的读方在全量 reseed 后不丢新增 USD 花费。
  */
 
+import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { sessionToCamel, setSessionRuntimeProjector, type SessionRowWithCount } from '../mapper';
+import { sessionToCamel, setSessionRuntimeProjector, setSessionProjectMoveProjector, type SessionRowWithCount } from '../mapper';
 import { setSessionInterruptionBootAtForTests } from '../sessionInterruptionBoot';
 import { projectSessionActivity } from '@cindy/maker-shared/session-activity';
 
 afterEach(() => {
   setSessionRuntimeProjector(null);
+  setSessionProjectMoveProjector(null);
   setSessionInterruptionBootAtForTests(Date.now());
 });
 
@@ -134,6 +136,19 @@ describe('sessionToCamel legacy totalCostUsd projection', () => {
   it('passes the legacy value through when no structured spend exists', () => {
     const session = sessionToCamel(sessionRow({ totalCostUsd: 1.5 }));
     expect(session.totalCostUsd).toBe(1.5);
+  });
+});
+
+describe('project move display projection', () => {
+  it.each([path.resolve('new-project'), null])('keeps the execution directory while projecting group %s', (target) => {
+    const workingDir = path.resolve('current-project');
+    setSessionProjectMoveProjector(() => ({ workingDir: target }));
+    const row = sessionToCamel(sessionRow({ workingDir, workspaceKind: 'project' }));
+    expect(row.workingDir).toBe(workingDir);
+    expect(row.workspaceKind).toBe('project');
+    expect(row.projectMoveTarget).toEqual({ workingDir: target });
+    setSessionProjectMoveProjector(() => null);
+    expect(sessionToCamel(sessionRow({ workingDir })).projectMoveTarget).toBeNull();
   });
 });
 

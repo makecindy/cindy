@@ -84,8 +84,12 @@ describe('project drop destinations', () => {
 
   it.each([
     { status: 'archived' },
+    { status: 'deleted' },
     { remoteHostId: 'ssh' },
     { agentDeviceId: 'provider-device' },
+    { source: 'review' },
+    { source: 'bot' },
+    { orcaRole: 'worker' },
     { deviceLinkDeviceId: 'owner', deviceLinkConnectionStatus: 'disconnected' },
   ] as Partial<Session>[])('retains existing move restrictions: %o', (patch) => {
     expect(resolveSessionProjectDrop({ ...task, ...patch }, { kind: 'dialogue' })).toBeNull();

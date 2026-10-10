@@ -1795,6 +1795,10 @@ export async function updateSessionInDb(
     beforeUpdate: () => Promise<void>;
     /** Mutable running/IM preconditions must not reject an already committed move. */
     beforeWrite?: () => void | Promise<void>;
+    /** Host-only: the send gate already owns this task's route lock. */
+    routeLockHeld?: boolean;
+    /** Deferred moves must preserve resumable history on failure. */
+    strictTranscriptRelocation?: boolean;
   },
 ): Promise<ReturnType<typeof sessionToCamel>> {
   moveGuard?.assertCurrent();
@@ -1943,7 +1947,13 @@ export async function updateSessionInDb(
         sid,
         beforeMove.workingDir,
         p.workingDir,
-        ...(moveGuard ? [{ client: dbClient, assertCurrent: moveGuard.assertCurrent }] : []),
+        ...(moveGuard
+          ? [{
+              client: dbClient,
+              assertCurrent: moveGuard.assertCurrent,
+              strict: moveGuard.strictTranscriptRelocation,
+            }]
+          : []),
       );
       if (reloc.persistedSdkSessionId) {
         p.sdkSessionId = reloc.persistedSdkSessionId;
@@ -2100,7 +2110,7 @@ export async function updateSessionInDb(
     return updated;
   };
   if (p.workingDir === undefined && !moveGuard) return update();
-  return withSessionRouteLock(sid, async () => {
+  const updateWithWorktreeLocks = async () => {
     const [binding] = await db
       .select({ remoteHostId: sessions.remoteHostId })
       .from(sessions)
@@ -2113,7 +2123,10 @@ export async function updateSessionInDb(
     const resources = await readSessionWorktreeResources(db, sid);
     if (resource) resources.push(resource);
     return withWorktreeMutation(resources, update);
-  });
+  };
+  return moveGuard?.routeLockHeld
+    ? updateWithWorktreeLocks()
+    : withSessionRouteLock(sid, updateWithWorktreeLocks);
 }
 
 export async function patchSessionMetaInDb(

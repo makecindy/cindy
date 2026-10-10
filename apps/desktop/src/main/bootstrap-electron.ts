@@ -750,6 +750,8 @@ import {
   tryGetBotDelegationService,
   restoreBotRuntimeForCurrentOwner,
   isSessionTurnPendingCompletion,
+  isSessionProjectMoveBusy,
+  wakeSessionAfterProjectMove,
   isSessionInTurn,
   stopOrcaIdleWatcher,
   setGoalClearObserver,
@@ -761,6 +763,8 @@ import {
   withSendToSessionLock,
 } from './maker-ipc/register.js';
 import { moveSessionProjectFromHost } from './mcp-integrations/moveSession.js';
+import { initializeProjectMoves } from './mcp-integrations/projectMoveService.js';
+import { tryWithSendToSessionLocks } from './maker-ipc/sendToSessionLock.js';
 import { cleanupActiveReviewArtifactSnapshots } from './reviewer/reviewArtifactSnapshot.js';
 import { MAKER_INVOKE as MAKER_IPC_INVOKE, MAKER_PUSH, MAKER_SEND } from './maker-ipc/channels.js';
 import {
@@ -9491,6 +9495,13 @@ app.on('ready', async () => {
   // owning modules above; future collections/actions do not add tunnel channels.
   registerRemoteResourcesIpc();
   registerDeviceLinkIpc();
+  initializeProjectMoves({
+    isBusy: isSessionProjectMoveBusy,
+    canApply: () => !authManager.isPassiveSharedUserDataInstance(),
+    onSettled: wakeSessionAfterProjectMove,
+    drainPersist: drainPersistQueue,
+    withWorkerLocks: tryWithSendToSessionLocks,
+  });
   registerTaskMigrationIpc((sessionId, workingDir, assertAuthority) =>
     moveSessionProjectFromHost(isSessionInTurn, sessionId, workingDir, assertAuthority),
     {

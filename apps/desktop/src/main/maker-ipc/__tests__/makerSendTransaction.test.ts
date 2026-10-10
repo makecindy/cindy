@@ -29,7 +29,10 @@ import {
 import type { MakerSessionCreateOpts } from '../sessionRequest';
 import { CredentialModeSwitchBusyError } from '../../maker-host/codex-credential-switch';
 import path from 'node:path';
+import { mkdtemp, mkdir, rm, stat } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { createWorkingDirectoryRecovery } from '../workingDirectoryRecovery';
+import { reconcileCreateOptsWorkspace } from '../reconcileCreateOptsWorkspace';
 import { createPreflightHarness, filesystemError } from './helpers/workingDirectoryPreflightHarness';
 import { buildCindyMakeTaskNote } from '../../cindy-make/taskNote';
 import { getResolvedMainLocale } from '../../i18n';
@@ -1673,6 +1676,46 @@ describe('maker SEND transaction', () => {
     expect(failedSession.send).not.toHaveBeenCalled();
     expect(deps.bootstrapSession).toHaveBeenCalledWith(createOpts);
     expect(recoveredSession.send).toHaveBeenCalled();
+  });
+
+  it('lazy-create uses the committed project move even while the queued old directory still exists', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'cindy-project-move-send-'));
+    const oldDir = path.join(root, 'old-project');
+    const newDir = path.join(root, 'new-project');
+    try {
+      await Promise.all([mkdir(oldDir), mkdir(newDir)]);
+      // The before-send move has closed the old runtime and committed the new
+      // binding. The queued item's createOpts still contain the old directory.
+      const row = { workingDir: newDir, workspaceKind: 'project', remoteHostId: null };
+      const recovery = createWorkingDirectoryRecovery();
+      const { deps } = createDeps({
+        getSession: vi.fn(() => undefined),
+        readSessionWorkingDirFromDb: vi.fn(async () => row.workingDir),
+        reconcileCreateOptsWithDb: async (sessionId, opts) => {
+          reconcileCreateOptsWorkspace(sessionId, opts, row, recovery.resolve);
+        },
+        checkWorkDirExists: vi.fn(async (_sessionId, dir) =>
+          !!dir && (await stat(dir)).isDirectory()),
+      });
+      const queuedOpts: MakerSessionCreateOpts = {
+        agentKind: 'codex', model: 'gpt-5.5', workingDir: oldDir, workspaceKind: 'dialogue',
+      };
+
+      await expect(createMakerSendTransaction(deps).sendToAgentAccepted(
+        'session-1', 'continue', queuedOpts,
+      )).resolves.toMatchObject({ accepted: true });
+
+      expect((await stat(oldDir)).isDirectory()).toBe(true);
+      expect(deps.checkWorkDirExists).toHaveBeenCalledExactlyOnceWith(
+        'session-1', newDir, 'codex', undefined,
+      );
+      expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({
+        workingDir: newDir, workspaceKind: 'project',
+      }));
+      expect(queuedOpts.workingDir).toBe(oldDir);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it('lazy-create adopts the DB working_dir when the caller-provided one is stale', async () => {

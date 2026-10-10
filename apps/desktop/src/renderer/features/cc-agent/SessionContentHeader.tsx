@@ -49,7 +49,10 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { WINDOW_NO_DRAG_STYLE, useManualWindowDrag } from '@/components/layout/windowDrag';
-import { recentWorkdirsStore } from '@/lib/recentWorkdirsStore';
+import { moveLocalTaskProject } from './sidebar/sessionProjectMove';
+import { canOfferSessionProjectMove } from './sidebar/sessionProjectDrop';
+import { sidebarSessionProject } from './lib/sidebarSessionProject';
+import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 import { useRegisterContentHeader } from '../feature-context';
 import { useSessionLifecycleActions } from './hooks/useSessionLifecycleActions';
 import {
@@ -61,8 +64,7 @@ import {
   getVisibleSidebarSessionIds,
   pickSessionIdAfterRemoval,
 } from './lib/sessionRemovalNavigation';
-import { isOrcaLeadSession, resolveSessionRoute } from '@/lib/orcaSessionIdentity';
-import { revalidateWorkersProjection } from './hooks/workerProjectionStore';
+import { resolveSessionRoute } from '@/lib/orcaSessionIdentity';
 import { GitContextBadge } from './GitContextBadge';
 import { SessionRenameInput } from './SessionRenameInput';
 import { useSessionBoundSchedules } from '@/features/scheduler/lib/scheduleSessionBinding';
@@ -360,34 +362,11 @@ export function SessionContentHeader({
     void window.electronAPI.maker.openSessionInNewWindow(session.id, session.deviceLinkDeviceId);
   }, [remoteWritesBlocked, session.deviceLinkDeviceId, session.id, showRemoteWriteBlockedToast]);
 
-  /* ---- 移动到项目 / 对话 ----
-   * 与 CCAgentSidebarUpper.handleMoveSession 同款守卫(远程不支持 / 执行中 /
-   * 被 IM 接管中拦截)与乐观更新 + 失败回滚;不含 sidebar 的目标项目节点自动
-   * 展开(collapse 是 CCAgentSidebarUpper 实例内 state,header 拿不到)。 */
+  // The host retains the current runtime directory until it can safely apply the move.
   const handleMoveSession = useCallback(
     async (target: SessionMoveTarget) => {
-      if (session.remoteHostId || session.deviceLinkDeviceId) {
-        toast.warning(t('ccAgent.sidebar.sessionMenu.moveToProjectRemoteUnsupported'));
-        return;
-      }
-      if (runningSessionIds.has(session.id)) {
-        toast.warning(t('ccAgent.sidebar.sessionMenu.moveToProjectRunningBlocked'));
-        return;
-      }
-      // Orca lead:team 里任一 worker 在跑时同样不允许移动 workspace(与
-      // CCAgentSidebarUpper.effectiveRunningSessionIds 的聚合口径一致)。
-      // sidebar 用常驻订阅的 lead→worker map;header 在动作时同步查一次
-      // worker 列表,避免依赖挂载初期尚未加载完成的订阅态(Codex review P2)。
-      // 查询失败时不阻断,与 sidebar map 拉取失败(空集合)的行为一致。
-      if (isOrcaLeadSession(session)) {
-        const workers = await revalidateWorkersProjection(session.id)
-          .then((result) => (result.status === 'applied' ? result.workers : []))
-          .catch(() => []);
-        if (workers.some((worker) => runningSessionIds.has(worker.sessionId))) {
-          toast.warning(t('ccAgent.sidebar.sessionMenu.moveToProjectRunningBlocked'));
-          return;
-        }
-      }
+      if (!canOfferSessionProjectMove(session) || session.deviceLinkDeviceId) return;
+      const owner = getDataOwnerGeneration();
       try {
         const binding = await window.electronAPI.binding.resolveSession(session.id);
         if (binding.attached) {
@@ -395,57 +374,24 @@ export function SessionContentHeader({
           return;
         }
       } catch {
-        // resolveSession 失败时不阻断移动；它只是 IM 接管保护的额外检查。
+        // The host independently checks IM ownership before accepting the move.
       }
-
-      let targetWorkingDir = target.kind === 'project' ? target.workingDir : undefined;
-      if (target.kind === 'browseProject') {
-        try {
-          const result = await window.electronAPI.showOpenDirectoryDialog();
-          if (result.canceled || !result.path) return;
-          targetWorkingDir = result.path;
-        } catch (err) {
-          log.warn('[session move to project] directory picker failed', err);
-          toast.error(t('ccAgent.sidebar.sessionMenu.moveToProjectFailed'));
-          return;
-        }
-      }
-
-      const oldPatch = {
-        workingDir: session.workingDir,
-        workspaceKind: session.workspaceKind,
-      };
-      if (target.kind !== 'dialogue' && !targetWorkingDir) return;
-      const nextPatch =
-        target.kind === 'dialogue'
-          ? { workspaceKind: 'dialogue' as const }
-          : { workingDir: targetWorkingDir, workspaceKind: 'project' as const };
-      patchLocal(session.id, nextPatch);
+      if (!isDataOwnerGenerationCurrent(owner)) return;
+      let workingDir = target.kind === 'project' ? target.workingDir : null;
       try {
-        await sessionService.update(session.id, nextPatch);
-        if (target.kind !== 'dialogue') {
-          void recentWorkdirsStore.forceRefresh().catch(() => undefined);
+        if (target.kind === 'browseProject') {
+          const result = await window.electronAPI.showOpenDirectoryDialog();
+          if (result.canceled || !result.path || !isDataOwnerGenerationCurrent(owner)) return;
+          workingDir = result.path;
         }
-        toast.success(
-          t(
-            target.kind === 'dialogue'
-              ? 'ccAgent.sidebar.sessionMenu.moveToDialogueDone'
-              : 'ccAgent.sidebar.sessionMenu.moveToProjectDone',
-          ),
-        );
-      } catch (err) {
-        log.error('[session move]', err);
-        patchLocal(session.id, oldPatch);
-        toast.error(
-          t(
-            target.kind === 'dialogue'
-              ? 'ccAgent.sidebar.sessionMenu.moveToDialogueFailed'
-              : 'ccAgent.sidebar.sessionMenu.moveToProjectFailed',
-          ),
-        );
+        await moveLocalTaskProject(session.id, workingDir);
+      } catch (error) {
+        if (!isDataOwnerGenerationCurrent(owner)) return;
+        const code = /MIGRATION_[A-Z_]+/.exec(String(error))?.[0];
+        toast.error(t(`taskMigration.errors.${code}`, { defaultValue: t('taskMove.failed') }));
       }
     },
-    [patchLocal, runningSessionIds, session, t],
+    [session, t],
   );
 
   /* ---- 导出会话(.cshare)---- 弹窗仅打开时挂载,与 SessionItem 同款。 */
@@ -716,9 +662,9 @@ export function SessionContentHeader({
                 <SessionProjectMoveSubmenu
                   projectOptions={projectOptions}
                   currentWorkingDir={
-                    session.workspaceKind === 'project' ? session.workingDir : null
+                    sidebarSessionProject(session).workspaceKind === 'project' ? sidebarSessionProject(session).workingDir : null
                   }
-                  isDialogue={session.workspaceKind === 'dialogue'}
+                  isDialogue={sidebarSessionProject(session).workspaceKind === 'dialogue'}
                   onSelectProject={(workingDir) =>
                     void handleMoveSession({ kind: 'project', workingDir })
                   }
