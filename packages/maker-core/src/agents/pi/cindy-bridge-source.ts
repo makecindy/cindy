@@ -2879,6 +2879,7 @@ class CindyMcpGateway {
   private readonly tools = new Map<string, ConnectedMcpTool>();
   private readonly unavailableServers = new Map<string, string>();
   private readonly disclosedSchemas = new Set<string>();
+  private disclosureNotePending = false;
   private botMemoryFacadeEnabled = false;
   private botHelperFacadeEnabled = false;
   private readonly disclosureFile: string | null;
@@ -3039,6 +3040,17 @@ class CindyMcpGateway {
 
   isSchemaDisclosed(call: ResolvedMcpGatewayCall): boolean {
     return this.disclosedSchemas.has(mcpGatewayKey(call.tool.serverName, call.tool.name));
+  }
+
+  /** Sorted, prompt-ready server/tool names of the persisted disclosure set. */
+  disclosedKeysForPrompt(limit = 48): string {
+    const all = Array.from(this.disclosedSchemas).sort();
+    const shown = all.slice(0, limit).map((key) => {
+      const sep = key.indexOf('\u0000');
+      return sep === -1 ? key : key.slice(0, sep) + '/' + key.slice(sep + 1);
+    });
+    if (all.length > limit) shown.push('… +' + (all.length - limit) + ' more');
+    return shown.join(', ');
   }
 
   private loadDisclosedSchemas(): void {
@@ -3303,6 +3315,31 @@ class CindyMcpGateway {
     this.botMemoryFacadeEnabled = options.botMemoryFacade === true
       && this.tools.has(mcpGatewayKey('cindy_memory', 'call_tool'));
     this.reconcileDisclosedSchemas();
+    // Token hygiene: post-compaction the model loses the memory of which MCP tools
+    // it already inspected and re-runs cindy_mcp_list_tools "to be safe". Inject a
+    // one-shot custom message into the first run after each successful compaction
+    // instead of editing the system prompt every run; the message then lives in
+    // context like any other turn until the next compaction summarizes it away.
+    this.disclosureNotePending = false;
+    pi.on?.('session_compact', () => { this.disclosureNotePending = true; });
+    pi.on?.('before_agent_start', () => {
+      if (!this.disclosureNotePending) return undefined;
+      this.disclosureNotePending = false;
+      const keys = this.disclosedKeysForPrompt();
+      if (!keys) return undefined;
+      return {
+        message: {
+          customType: 'cindy-mcp-disclosure-state',
+          content: [{
+            type: 'text',
+            text: 'MCP tools whose schemas you already inspected for this session (persisted across restarts): '
+              + keys + '. Call them directly; do not re-run cindy_mcp_list_tools to re-inspect them '
+              + 'unless a call is rejected as uninspected. (One-shot reminder after context compaction.)',
+          }],
+          display: false,
+        },
+      };
+    });
 
     if (this.botMemoryFacadeEnabled) {
       pi.registerTool({
