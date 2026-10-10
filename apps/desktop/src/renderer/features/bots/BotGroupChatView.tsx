@@ -269,10 +269,23 @@ function BotGroupChatContent({ groupId }: { groupId: string }) {
   const separator = t('bots.groupChat.memberSeparator');
   const [threadRootId, setThreadRootId] = useState<string | null>(null);
   const threadOpenerRef = useRef<HTMLElement | null>(null);
-  const closeThread = () => {
+  const threadLayoutRef = useRef<HTMLDivElement>(null);
+  const closeThread = useCallback(() => {
     setThreadRootId(null);
     threadOpenerRef.current?.focus();
-  };
+  }, []);
+  useEffect(() => {
+    if (!group?.serverBacked || !threadRootId) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.defaultPrevented || event.isComposing || event.keyCode === 229) return;
+      if (event.target !== document.body && !threadLayoutRef.current?.contains(event.target as Node)) return;
+      if (document.querySelector('[data-text-lightbox-overlay]')) return;
+      event.stopPropagation();
+      closeThread();
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [group?.serverBacked, threadRootId, closeThread]);
   const settingsLabel = t('bots.groupChat.settings.open');
   const headerMembers = group ? memberKey(group.members) : '';
   const header = useMemo(() => {
@@ -537,12 +550,7 @@ function BotGroupChatContent({ groupId }: { groupId: string }) {
     planId && planPending?.planId === planId ? planPending.action : null;
 
   return (
-    <div className="flex h-full min-w-0 overflow-hidden" onKeyDown={event => {
-      if (group.serverBacked && threadRootId && event.key === 'Escape' && !event.defaultPrevented && !event.nativeEvent.isComposing && event.keyCode !== 229) {
-        if (!event.currentTarget.contains(event.target as Node) || document.querySelector('[data-text-lightbox-overlay]')) return;
-        event.stopPropagation(); closeThread();
-      }
-    }}>
+    <div ref={threadLayoutRef} className="flex h-full min-w-0 overflow-hidden">
     <main
       className="relative flex h-full min-w-0 flex-1 flex-col overflow-hidden bg-[var(--surface)]"
       onDragEnter={(event) => {

@@ -408,6 +408,31 @@ describe('BotGroupChatView', () => {
     }
   });
 
+  it('closes with Escape after clicking message text or empty timeline space, respecting IME and consumed events', async () => {
+    vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+    mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: true }) });
+    const user = userEvent.setup();
+    renderView();
+    const message = await screen.findByText('周六 8:10 有票');
+    const main = message.closest('main')!;
+    const trigger = within(main).getAllByRole('button', { name: 'bots.groupChat.server.reply' })[0]!;
+    for (const target of [message, main]) {
+      await user.click(trigger);
+      const panel = screen.getByRole('complementary');
+      await user.click(target);
+      expect(document.activeElement).toBe(document.body);
+      fireEvent.keyDown(document.body, { key: 'Escape', isComposing: true, keyCode: 229 });
+      expect(screen.getByRole('complementary')).toBe(panel);
+      const consumed = createEvent.keyDown(document.body, { key: 'Escape', bubbles: true, cancelable: true });
+      consumed.preventDefault();
+      fireEvent(document.body, consumed);
+      expect(screen.getByRole('complementary')).toBe(panel);
+      await user.keyboard('{Escape}');
+      expect(screen.queryByRole('complementary')).toBeNull();
+      expect(document.activeElement).toBe(trigger);
+    }
+  });
+
   it('keeps main composer focus and both drafts when leaving thread image sharing', async () => {
     vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
     mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: true }) });
@@ -429,7 +454,7 @@ describe('BotGroupChatView', () => {
     expect((composer as HTMLTextAreaElement).value).toBe('Main draft continues');
   });
 
-  it.each(['image', 'text-trigger', 'text-control'])('lets %s attachment preview close first with Escape and retains the thread draft', async kind => {
+  it.each(['image', 'text-trigger', 'text-control', 'text-body'])('lets %s attachment preview close first with Escape and retains the thread draft', async kind => {
     vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
     mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: true, messages: [msg({
       attachments: [{ id: 'attachment', name: kind === 'image' ? 'photo.png' : 'note.md', category: kind === 'image' ? 'image' : 'text',
@@ -447,7 +472,10 @@ describe('BotGroupChatView', () => {
     if (kind !== 'image') {
       await screen.findByText('Preview note content');
       if (kind === 'text-control') within(preview as HTMLElement).getAllByRole('button', { name: 'chat.lightbox.close' })[0]!.focus();
-      else expect(screen.getByRole('main').contains(document.activeElement)).toBe(true);
+      else if (kind === 'text-body') {
+        await user.click(screen.getByText('Preview note content'));
+        expect(document.activeElement).toBe(document.body);
+      } else expect(screen.getByRole('main').contains(document.activeElement)).toBe(true);
     }
     await user.keyboard('{Escape}');
     expect(screen.getByRole('complementary')).toBe(panel);
