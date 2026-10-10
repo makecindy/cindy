@@ -26,6 +26,7 @@ import {
   readGhostRecommendationEntries,
   replaceGhostRecommendations,
   markGhostRecommendationInstalled,
+  recordGhostAdded,
   consumeGhostRecommendationPriority,
   forgetGhostRecommendations,
 } from '../ghostRecommendationStore';
@@ -45,7 +46,7 @@ describe('plugin recommendation state', () => {
     const installedAt = readGhostRecommendationEntries()[0].installedAt;
     expect(replaceGhostRecommendations('example', [item])).toEqual({ ok: true });
     expect(replaceGhostRecommendations('example', [])).toEqual({ ok: true });
-    expect(readGhostRecommendationEntries()[0]).toEqual({ id: 'example', items: [], installedAt });
+    expect(readGhostRecommendationEntries()[0]).toEqual({ id: 'example', items: [], installedAt, addedAt: installedAt });
     expect(
       buildGhostRecommendationSnapshot(state.owner, [ghost], readGhostRecommendationEntries(), [])
         .sources[0].items,
@@ -117,4 +118,25 @@ describe('plugin recommendation state', () => {
       ).toEqual([]);
     },
   );
+});
+
+it('retains addition chronology when priority is consumed or an install is recorded again', () => {
+  vi.spyOn(Date, 'now').mockReturnValue(1000);
+  recordGhostAdded('example');
+  markGhostRecommendationInstalled('example');
+  consumeGhostRecommendationPriority('example');
+  expect(readGhostRecommendationEntries()[0].addedAt).toBe(1000);
+  vi.mocked(Date.now).mockReturnValue(2000);
+  recordGhostAdded('example');
+  expect(readGhostRecommendationEntries()[0].addedAt).toBe(1000);
+  forgetGhostRecommendations('example');
+  recordGhostAdded('example');
+  expect(readGhostRecommendationEntries()[0].addedAt).toBe(2000);
+  vi.restoreAllMocks();
+});
+it('preserves an existing real install timestamp without fabricating legacy chronology', () => {
+  state.buckets.set('owner-a', { entries: [{ id: 'example', installedAt: 1234 }, { id: 'older' }] });
+  consumeGhostRecommendationPriority('example');
+  expect(readGhostRecommendationEntries().find(item => item.id === 'example')?.addedAt).toBe(1234);
+  expect(readGhostRecommendationEntries().find(item => item.id === 'older')?.addedAt).toBeUndefined();
 });

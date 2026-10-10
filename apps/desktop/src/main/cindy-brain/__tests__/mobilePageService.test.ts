@@ -1,8 +1,14 @@
 import { describe, expect, it, vi } from 'vitest';
 import { MobilePluginPages } from '../mobilePageService.js';
 import type { InstalledGhost } from '../../../shared/ghost.js';
+import { toGhostPluginDetail } from '../../../renderer/features/plugin/lib/ghostPluginViewModel.js';
 
-function setup() {
+function setup(
+  projection: Pick<
+    ConstructorParameters<typeof MobilePluginPages>[0],
+    'setupAssessment' | 'runtimeState' | 'listOrder'
+  > = {},
+) {
   let owner = 'a',
     now = 1_000,
     revision = 'r1';
@@ -15,6 +21,7 @@ function setup() {
       mobile: { channels: ['practice-ui'] },
     },
     enabled: true,
+    approval: { state: 'approved', revision: 'r1' },
   } as InstalledGhost;
   const clearUnread = vi.fn(),
     post = vi.fn(),
@@ -26,6 +33,7 @@ function setup() {
   let peerGeneration = 0;
   let unreadAt = 42;
   const service = new MobilePluginPages({
+    ...projection,
     captureController: () => {
       const captured = peerGeneration;
       return () => captured === peerGeneration;
@@ -97,6 +105,36 @@ function setup() {
   };
 }
 describe('mobile plugin pages', () => {
+  it('adds usage facts to the existing capabilities block and preserves unknown setup on a failed read', async () => {
+    const h = setup({
+      setupAssessment: () => {
+        throw new Error('READ_FAILED');
+      },
+      runtimeState: () => 'crashed',
+    });
+    const detail = await h.provider.get!(
+      { controllerDeviceId: 'phone-a' },
+      {
+        ref: { collectionId: 'plugins', kind: 'plugin', id: 'practice' },
+        client: { protocolVersion: 1, primitives: ['plugin-capabilities'] },
+      },
+    );
+    expect(detail.blocks?.find((block) => block.id === 'capabilities')?.data).toMatchObject({
+      tasks: false,
+      mobile: true,
+      usage: { taskUsable: false, runtimeIssue: 'crashed', setup: { state: 'unknown' } },
+    });
+    h.ghost.enabled = false;
+    h.ghost.approval = { state: 'invalid' };
+    const list = await h.provider.list(
+      { controllerDeviceId: 'phone-a' },
+      {
+        collectionId: 'plugins',
+        client: { protocolVersion: 1, primitives: [] },
+      },
+    );
+    expect(list.items[0].actions?.find((action) => action.id === 'enable')?.disabled).toBe(true);
+  });
   it('keeps a covered native preview readable but rejects source writes, unread consumption and another controller', async () => {
     const h = setup(),
       page = await h.open();
@@ -271,15 +309,22 @@ describe('mobile plugin pages', () => {
     expect(h.service.notify(page.pageId, 'practice', 'Foreground toast')).toBe(true);
   });
   it('drops native cover when suspending and resumes business requests without a lost uncover effect', async () => {
-    const h = setup(), page = await h.open();
+    const h = setup(),
+      page = await h.open();
     h.service.present(page.pageId, 'practice', { kind: 'preview', url: 'https://example.invalid' });
     await h.invoke('cover', { pageId: page.pageId, hidden: true });
     await h.invoke('suspend', { pageId: page.pageId });
     await expect(h.invoke('cover', { pageId: page.pageId, hidden: false })).rejects.toThrow();
-    await expect(h.invoke('post', { pageId: page.pageId, channel: 'practice-ui', data: {} })).rejects.toThrow();
+    await expect(
+      h.invoke('post', { pageId: page.pageId, channel: 'practice-ui', data: {} }),
+    ).rejects.toThrow();
     const resumed = await h.invoke('poll', { pageId: page.pageId, after: 0 });
     expect(resumed.result).toMatchObject({ intents: [] });
-    await h.invoke('post', { pageId: page.pageId, channel: 'practice-ui', data: { resumed: true } });
+    await h.invoke('post', {
+      pageId: page.pageId,
+      channel: 'practice-ui',
+      data: { resumed: true },
+    });
     await h.invoke('seen', { pageId: page.pageId, seenAt: 42 });
     expect(h.post).toHaveBeenCalledOnce();
     expect(h.clearUnread).toHaveBeenCalledWith('practice', 42);
@@ -389,4 +434,68 @@ describe('native remote plugin directory consent', () => {
     h.service.invalidate();
     expect(await next).toBeNull();
   });
+});
+
+it('projects optional Host ordering facts without changing legacy lists on metadata failure', async () => {
+  const h = setup({ listOrder: () => new Map([['practice', { addedAt: 1234, recentIndex: 0 }]]) });
+  const request = { collectionId: 'plugins', client: { protocolVersion: 1, primitives: [] } };
+  const result = await h.provider.list({ controllerDeviceId: 'phone-a' }, request);
+  expect(result.items[0].pluginOrder).toEqual({ addedAt: 1234, recentIndex: 0 });
+  const broken = setup({ listOrder: () => { throw new Error('READ_FAILED'); } });
+  expect((await broken.provider.list({ controllerDeviceId: 'phone-a' }, request)).items[0].pluginOrder).toBeUndefined();
+});
+
+
+it('projects PC permission facts in the phone locale, excludes tools and keeps OAuth scopes', async () => {
+  const h = setup();
+  h.ghost.manifest.tools = [{name: 'calendar_events', description: 'Read events', parameters: {type: 'object'}}];
+  h.ghost.manifest.network = {
+    hosts: ['calendar.example'],
+    secrets: [{key: 'account', label: 'Calendar account', source: 'oauth', inject: {header: 'Authorization', format: 'Bearer {value}'}, oauth: {
+      clientId: 'public-client-id', authorizeUrl: 'https://accounts.example/authorize',
+      tokenUrl: 'https://accounts.example/token', scopes: ['calendar.read'],
+    }}],
+  };
+  const detail = await h.provider.get!({controllerDeviceId: 'phone-a'}, {
+    ref: {collectionId: 'plugins', kind: 'plugin', id: 'practice'},
+    client: {protocolVersion: 1, primitives: ['plugin-capabilities'], locale: 'zh-CN'},
+  });
+  const facts = detail.blocks?.find(block => block.id === 'capabilities')?.data as {tools: unknown[]; permissions: Array<{title: string; description: string}>};
+  expect(facts.tools).toEqual([{name: 'calendar_events', description: 'Read events'}]);
+  expect(facts.permissions.some(item => item.title.includes('calendar.example'))).toBe(true);
+  expect(facts.permissions.some(item => item.description.includes('calendar.read'))).toBe(true);
+  expect(JSON.stringify(facts.permissions)).not.toContain('calendar_events');
+  expect(JSON.stringify(facts.permissions)).not.toContain('public-client-id');
+  expect(JSON.stringify(facts.permissions)).not.toContain('settings.ghosts.perm');
+  expect(JSON.stringify(facts.permissions)).not.toContain('{{');
+  expect(facts.permissions.some(item => /[\u4e00-\u9fff]/.test(item.title))).toBe(true);
+});
+
+
+it('projects the same installed Details as PC, with factual unsigned trust and no invented panel status', async () => {
+  const h = setup();
+  h.ghost.manifest.author = 'Cindy';
+  h.ghost.manifest.version = '1.3.13';
+  h.ghost.manifest.settingsHtml = 'settings.html';
+  h.ghost.dir = '/plugin-install/practice';
+  delete h.ghost.manifest.panel;
+  const read = async () => {
+    const detail = await h.provider.get!({controllerDeviceId: 'phone-a'}, {
+      ref: {collectionId: 'plugins', kind: 'plugin', id: 'practice'},
+      client: {protocolVersion: 1, primitives: ['plugin-capabilities'], locale: 'en'},
+    });
+    return (detail.blocks?.find(block => block.id === 'capabilities')?.data as {details: Array<{key: string; title: string; value: string}>}).details;
+  };
+  const pc = toGhostPluginDetail(h.ghost);
+  const facts = await read();
+  const values = Object.fromEntries(facts.map(fact => [fact.key, fact.value]));
+  expect(values).toMatchObject({version: 'v' + pc.version, author: pc.author, identifier: pc.id, location: pc.installDir, trust: 'Unverified / unsigned', panel: 'This plugin has no panel'});
+  expect(facts.map(fact => fact.title)).toEqual(['Version', 'Author', 'Source & signature', 'Identifier', 'Contains', 'Panel', 'Install location']);
+  expect(values.contents).toBe('Custom settings UI · Executable code');
+  h.ghost.trust = {level: 'unverified', publisherSigned: true, publisherVerified: false, reviewed: false, publisherName: 'Independent publisher', publisherKeyId: 'not-a-display-field'};
+  const signed = await read();
+  expect(signed.find(fact => fact.key === 'trust')?.value).toBe('Signed, but publisher identity is unverified: Independent publisher');
+  expect(JSON.stringify(signed)).not.toContain('not-a-display-field');
+  h.ghost.manifest.panel = {html: 'panel.html', position: 'tab'};
+  expect((await read()).find(fact => fact.key === 'panel')?.value).toBe('Panel');
 });

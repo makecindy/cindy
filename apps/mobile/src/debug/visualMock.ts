@@ -19,6 +19,7 @@ import type {
   RemoteTextFilePreviewResult,
 } from '@/device-link/mobileMakerTransport';
 import { remoteSessionStore } from '@/session/remoteSessionStore';
+import { pluginVisualFixture } from '@/debug/pluginVisualFixture';
 import { markdownPreviewFixture } from '@/debug/markdownPreviewFixture';
 import type { InputProjection, PendingInteraction, RemoteMessage, RemoteSession } from '@/session/types';
 
@@ -212,6 +213,8 @@ async function visualMockInvoke<T = unknown>(
   args: unknown[] = [],
 ): Promise<T> {
   const realData = await loadVisualRealDataSnapshot();
+  const pluginResult = realData ? undefined : pluginVisualFixture(channel, args);
+  if (pluginResult !== undefined) return pluginResult as T;
   if (channel === 'local-db:task-tags:execute') {
     const request = args[0] as TaskTagRequest;
     if (request.action !== 'list' && request.action !== 'get') {

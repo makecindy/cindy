@@ -12,13 +12,27 @@ vi.mock('react-native', () => ({
 vi.mock('@expo/ui', () => ({ Host: ({ children }: any) => <div>{children}</div> }));
 vi.mock('@expo/ui/swift-ui', () => {
   const Container = ({ children }: any) => <div>{children}</div>;
-  return { Form: Container, Button: Container, Group: Container, HStack: Container, Image: Container,
+  return { Form: ({ children }: any) => <div data-native="Form">{children}</div>,
+    List: ({ children }: any) => <div data-native="List">{children}</div>, Button: Container, Group: Container, HStack: Container, Image: Container,
     RNHostView: Container, Spacer: Container, Text: Container, VStack: Container, ZStack: Container,
     BottomSheet: (props: any) => { state.sheet = props; return <div>{props.children}</div>; },
   };
 });
+
+it('uses a plain list only when requested and preserves form sheets', () => {
+  const container = document.createElement('div');
+  const root = createRoot(container);
+  try {
+    act(() => root.render(<ComposerSheet visible title="" nativeContent nativeList onClose={() => {}}><span>Tasks</span></ComposerSheet>));
+    expect(container.querySelector('[data-native="List"]')).not.toBeNull();
+    expect(container.querySelector('[data-native="Form"]')).toBeNull();
+    act(() => root.render(<ComposerSheet visible title="" nativeContent onClose={() => {}}><span>Settings</span></ComposerSheet>));
+    expect(container.querySelector('[data-native="Form"]')).not.toBeNull();
+    expect(container.querySelector('[data-native="List"]')).toBeNull();
+  } finally { act(() => root.unmount()); }
+});
 vi.mock('@expo/ui/swift-ui/modifiers', () => ({
-  ...Object.fromEntries(['accessibilityLabel', 'contentShape', 'buttonStyle', 'font', 'foregroundStyle', 'frame', 'padding', 'presentationDetents', 'presentationDragIndicator', 'interactiveDismissDisabled', 'scrollContentBackground'].map(name => [name, vi.fn(() => ({}))])),
+  ...Object.fromEntries(['accessibilityLabel', 'contentShape', 'buttonStyle', 'font', 'foregroundStyle', 'frame', 'padding', 'presentationDetents', 'presentationDragIndicator', 'interactiveDismissDisabled', 'scrollContentBackground', 'listStyle', 'scrollDismissesKeyboard'].map(name => [name, vi.fn(() => ({}))])),
   shapes: { rectangle: () => ({}) },
 }));
 vi.mock('@/theme', () => ({ iconSize: { lg: 20 }, useTheme: () => ({ mode: 'light', colors: {} }) }));

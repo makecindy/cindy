@@ -3,6 +3,7 @@ import { Host } from "@expo/ui";
 import {
   BottomSheet,
   Form,
+  List,
   Button,
   Group,
   HStack,
@@ -31,6 +32,8 @@ import {
   interactiveDismissDisabled,
   presentationDragIndicator,
   scrollContentBackground,
+  listStyle,
+  scrollDismissesKeyboard,
 } from "@expo/ui/swift-ui/modifiers";
 import { useTranslation } from "react-i18next";
 import { ScrollView, View, useWindowDimensions } from "react-native";
@@ -51,6 +54,7 @@ export function ComposerSheet({
   footer,
   testID,
   nativeContent,
+  nativeList,
   nativeHeader,
   nativeRoot,
   preventDismiss = false,
@@ -160,6 +164,14 @@ export function ComposerSheet({
                   </VStack>
                 ) : null}
               </ZStack>
+            ) : nativeContent && nativeList ? (
+              <List testID={testID} modifiers={[
+                listStyle("plain"),
+                scrollContentBackground("hidden"),
+                scrollDismissesKeyboard("interactively"),
+              ]}>
+                {children}
+              </List>
             ) : nativeContent ? (
               <Form testID={testID} modifiers={[
                 scrollContentBackground("hidden"),

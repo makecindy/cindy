@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import type { DeviceView } from '@cindy/device-link';
+import { PLUGIN_COLLECTION, type DeviceView } from '@cindy/device-link';
+import { getRemoteResource, listRemoteCollection, normalizeRemoteCollectionItems } from '@/device-link/remoteResources';
+import { invokePlugin } from '@/plugins/pluginClient';
 import { projectHistoryView } from '@cindy/maker-shared/message-window';
 import type { RemoteMessage } from '@/session/types';
 
@@ -11,6 +13,33 @@ vi.mock('@/session/remoteSessionStore', () => ({ remoteSessionStore: {
 } }));
 beforeEach(() => { vi.resetModules(); config.MOBILE_VISUAL_MOCK_REALDATA_URL = ''; });
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); vi.clearAllMocks(); });
+
+it('supplies valid demo plugin projections and confirms enable/disable through the real client', async () => {
+  const mock = await import('@/debug/visualMock');
+  const link = mock.createVisualMockDeviceLinkContext();
+  const host = { deviceId: mock.VISUAL_MOCK_DEVICE_ID, deviceName: mock.VISUAL_MOCK_DEVICE_NAME };
+  const items = normalizeRemoteCollectionItems(await listRemoteCollection(link.invoke, host, PLUGIN_COLLECTION), PLUGIN_COLLECTION);
+  expect(items).toHaveLength(28);
+  expect(items.filter(item => item.display.badges?.length)).toHaveLength(2);
+  const ref = items[0].ref;
+  await invokePlugin(link.invoke, host.deviceId, ref.id, 'disable');
+  expect((await getRemoteResource(link.invoke, host, ref)).actions).toEqual([{ id: 'enable', label: 'Enable', disabled: false }]);
+  await invokePlugin(link.invoke, host.deviceId, ref.id, 'enable');
+  expect((await getRemoteResource(link.invoke, host, ref)).actions).toEqual([{ id: 'disable', label: 'Disable', disabled: false }]);
+  await expect(invokePlugin(link.invoke, host.deviceId, ref.id, 'unexpected')).rejects.toThrow('UNSUPPORTED_DEMO_PLUGIN_ACTION');
+});
+
+it('does not add demo plugins to an imported real-data preview', async () => {
+  config.MOBILE_VISUAL_MOCK_REALDATA_URL = 'https://fixture.invalid/snapshot.json';
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => ({
+    schema: 'cindy-mobile-visual-realdata-v1', device: { deviceId: 'real-device', name: 'Snapshot' },
+    sessions: [], messagesBySession: {},
+  }) }));
+  const mock = await import('@/debug/visualMock');
+  const link = await mock.prepareVisualMockDeviceLinkContext();
+  const host = { deviceId: 'real-device', deviceName: 'Snapshot' };
+  expect(normalizeRemoteCollectionItems(await listRemoteCollection(link.invoke, host, PLUGIN_COLLECTION), PLUGIN_COLLECTION)).toEqual([]);
+});
 
 it('waits for all 1,000 imported tasks before seeding and publishing their device identity', async () => {
   vi.useFakeTimers();
@@ -191,4 +220,25 @@ it('persists a renamed fixture in later directory reads', async () => {
       (device) => device.deviceId === mock.VISUAL_MOCK_DEVICE_ID,
     )?.name,
   ).toBe('Office Mac');
+});
+it('returns task preferences through the same action result envelope as the real Host', async () => {
+  const { pluginVisualFixture } = await import('@/debug/pluginVisualFixture');
+  const { REMOTE_RESOURCE_INVOKE_CHANNEL } = await import('@cindy/device-link');
+  expect(pluginVisualFixture(REMOTE_RESOURCE_INVOKE_CHANNEL, [{
+    resourceRef: { collectionId: 'plugins', id: '8' }, actionId: 'task-settings:get',
+  }])).toMatchObject({ effects: [], result: { revision: 'demo-prefs', config: {}, permissionModes: ['ask', 'auto'] } });
+});
+it('allows preview deep links only for explicit development visual mock fixtures', async () => {
+  const { pluginVisualPreview } = await import('@/debug/pluginVisualFixture');
+  vi.stubGlobal('__DEV__', false);
+  vi.stubEnv('EXPO_PUBLIC_CINDY_MOBILE_VISUAL_MOCK', '1');
+  expect(pluginVisualPreview('1-settings')).toBeUndefined();
+  vi.stubGlobal('__DEV__', true);
+  expect(pluginVisualPreview('1-settings')).toEqual({ id: '1', settings: true });
+  expect(pluginVisualPreview('real-plugin')).toBeUndefined();
+  expect(pluginVisualPreview('99')).toBeUndefined();
+  vi.stubEnv('EXPO_PUBLIC_CINDY_MOBILE_VISUAL_MOCK', '0');
+  expect(pluginVisualPreview('1')).toBeUndefined();
+  vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
 });

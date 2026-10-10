@@ -88,6 +88,7 @@ import {
   readGhostRecommendationEntries,
   replaceGhostRecommendations,
   markGhostRecommendationInstalled,
+  recordGhostAdded,
   consumeGhostRecommendationPriority,
   forgetGhostRecommendations,
 } from './ghostRecommendationStore.js';
@@ -208,7 +209,9 @@ import {
   evaluateGhostSetupAssessment,
   handleGhostSetupStatusRequest,
   parseOauthConnectSecretKey,
+  type GhostSetupProbes,
 } from './ghostSetupStatus.js';
+import { mobilePluginConfiguration } from './mobilePluginConfiguration.js';
 import { getGhostSetupChangeBus } from './ghostSetupChangeBus.js';
 import { GhostSetupManifestTracker } from './ghostSetupManifestTracker.js';
 import {
@@ -5069,18 +5072,12 @@ function getGhostOauthReauthSuggest(
  * omit setup; ghost_call preflight is strict, so storage or manifest drift
  * errors block dispatch.
  */
-export function getGhostSetupAssessment(ghostId: string): GhostSetupAssessment {
-  const ghost = findAvailableGhost(ghostId);
-  if (!ghost || !ghostSetupKvStore) {
-    throw new Error(`ghost setup unavailable: ${ghostId}`);
-  }
-  const runtimeManifest = withRuntimeFiloGoogleClient(ghost.manifest);
+function getGhostSetupProbes(ghostId: string, runtimeManifest: GhostManifest): GhostSetupProbes {
+  if (!ghostSetupKvStore) throw new Error(`ghost setup unavailable: ${ghostId}`);
   const oauthManager = getGhostOauthAccountManager();
   const connectionManager = getGhostConnectionManager();
   let kvSnapshot: Record<string, unknown> | null = null;
-  const assessment = evaluateGhostSetupAssessment(
-    runtimeManifest,
-    {
+  return {
       secretSaved: (key) => ghostSecretSaved(ghostId, key),
       oauthStatus: (key) => {
         const decl = runtimeManifest.network?.secrets?.find((secret) => secret.key === key)?.oauth;
@@ -5096,7 +5093,18 @@ export function getGhostSetupAssessment(ghostId: string): GhostSetupAssessment {
         if (kvSnapshot === null) kvSnapshot = ghostSetupKvStore?.readStrict(ghostId) ?? {};
         return kvSnapshot[key];
       },
-    },
+  };
+}
+
+export function getGhostSetupAssessment(ghostId: string): GhostSetupAssessment {
+  const ghost = findAvailableGhost(ghostId);
+  if (!ghost || !ghostSetupKvStore) {
+    throw new Error(`ghost setup unavailable: ${ghostId}`);
+  }
+  const runtimeManifest = withRuntimeFiloGoogleClient(ghost.manifest);
+  const assessment = evaluateGhostSetupAssessment(
+    runtimeManifest,
+    getGhostSetupProbes(ghostId, runtimeManifest),
     {
       revision: getGhostSetupChangeBus().currentRevision(ghostId),
       strict: true,
@@ -5917,6 +5925,10 @@ async function installAndDockLocked(
       `装入包的 ghostId(${result.ghost.manifest.id})与加锁使用的 id(${opts.ghostId})不一致`,
     );
   }
+  if (!installedBefore) {
+    try { recordGhostAdded(result.ghost.manifest.id); }
+    catch { log.warn('ghost addition history unavailable'); }
+  }
   // 内置墓碑清除已并入 GhostManager 的 durable install journal(marker.clearBuiltinTombstone
   // + 提交时清除 + 崩溃恢复补清),此处不再直接调用:瞬时状态写失败会保留 marker 交由
   // 启动恢复,而不是把已提交的安装误报成错误。
@@ -6719,6 +6731,26 @@ export function registerGhostIpc(): void {
   const runtime = getGhostRuntime();
   mobilePluginPages = new MobilePluginPages({
     list: availableGhosts,
+    listOrder: () => {
+      const order = new Map<string, { addedAt?: number; recentIndex?: number }>();
+      try {
+        for (const entry of readGhostRecommendationEntries()) {
+          if (entry.addedAt !== undefined) order.set(entry.id, { addedAt: entry.addedAt });
+        }
+      } catch { log.warn('ghost addition history unavailable'); }
+      try {
+        loadGhostRecentIds().forEach((id, recentIndex) => order.set(id, { ...order.get(id), recentIndex }));
+      } catch { log.warn('ghost recent usage unavailable'); }
+      return order;
+    },
+    setupAssessment: getGhostSetupAssessment,
+    configuration: (id, assessment) => {
+      const ghost = findAvailableGhost(id);
+      if (!ghost) throw new Error('PLUGIN_UNAVAILABLE');
+      const manifest = withRuntimeFiloGoogleClient(ghost.manifest);
+      return mobilePluginConfiguration(manifest, getGhostSetupProbes(id, manifest), assessment);
+    },
+    runtimeState: id => runtime.stateOf(id),
     revision: ghost => JSON.stringify([ghost.manifest.version, ghostInstallApprovalToken(ghost.approval)]),
     captureOwner: () => { const scope = captureDataOwnerBroadcastScope(); return () => isDataOwnerBroadcastScopeCurrent(scope); },
     // This existing peer fence is invalidated on disconnect, revoke, owner switch and relay teardown.

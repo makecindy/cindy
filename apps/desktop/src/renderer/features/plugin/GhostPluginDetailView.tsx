@@ -46,6 +46,7 @@ import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 import {
   isOfficialGhostId,
+  ghostTrustLabelKey,
   type GhostPermissionItem,
   type GhostToolDecl,
   type InstalledGhost,
@@ -808,16 +809,7 @@ export function DetailsSection({
   panelStatus: string | null;
 }) {
   const { t } = useTranslation();
-  const trustLabelKey =
-    detail.trust.level === 'cindy-official'
-      ? 'official'
-      : detail.trust.level === 'reviewed'
-        ? 'reviewed'
-        : detail.trust.level === 'verified-publisher'
-          ? 'verifiedPublisher'
-          : detail.trust.publisherSigned
-            ? 'signedUnverified'
-            : 'unsigned';
+  const trustLabelKey = ghostTrustLabelKey(detail.trust);
   const facts: Array<{
     key: string;
     label: string;
