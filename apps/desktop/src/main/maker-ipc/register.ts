@@ -463,7 +463,7 @@ import {
 import { t } from '../i18n.js';
 import { createLogger } from '../logger.js';
 import { createColdPiRehydrationForWindowVerification } from './coldPiRehydration.js';
-import { ColdPiRehydrationError, reportColdPiRehydrationFailure } from './coldPiRehydrationFailure.js';
+import { ColdPiRehydrationError, logColdPiRehydrationFailure, reportColdPiRehydrationFailure } from './coldPiRehydrationFailure.js';
 import {
   desktopClaudeAuthAdapter,
   desktopCodexAuthAdapter,
@@ -19473,32 +19473,36 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             try {
               await rehydrateColdPiRuntimeForWindowVerification(sessionId);
             } catch (error) {
-              reportColdPiRehydrationFailure(
-                {
-                  log,
-                  throwIpcError,
-                  errorCode: localModelWindowSwitchErrorCode('MODEL_WINDOW_CURRENT_CONTEXT_UNKNOWN'),
-                },
-                coldPiFailureContext,
-                error,
-              );
+              // 恢复失败不再阻断切模（存量 BYOM 路由死锁修复，2026-10-10）：核实是护栏
+              // 不是闸门。存量路由已死（provider 被删/不再提供该模型）时 bootstrap 按
+              // fail-closed 语义必然失败；若据此拒绝切模，用户既发不出去也切不走，
+              // 会话永久卡死。这里降级为「无当前窗口读数」继续：闸门矩阵对未知窗口
+              // fail-open 放行热切，目标路由由下一次发送懒创建；届时 bootstrap 失败
+              // 会带真实原因浮现。完整原因仍进 Main 日志（#5508）。
+              logColdPiRehydrationFailure({ log }, coldPiFailureContext, error);
+              coldPiRouteWithoutLiveWindowCheck = true;
             }
             liveSessionBeforeRouteChange = maker.getSession(sessionId);
             if (!liveSessionBeforeRouteChange) {
-              reportColdPiRehydrationFailure(
-                {
-                  log,
-                  throwIpcError,
-                  errorCode: localModelWindowSwitchErrorCode('MODEL_WINDOW_CURRENT_CONTEXT_UNKNOWN'),
-                },
-                coldPiFailureContext,
-                new ColdPiRehydrationError('runtime-not-live', 'rehydrated Pi runtime is not live after bootstrap'),
-              );
+              if (!coldPiRouteWithoutLiveWindowCheck) {
+                // bootstrap 声称成功却没有活会话：这不是「存量路由死掉」的降级形状，
+                // 保留原 fail-closed（完整原因写 Main 日志，IPC 只带类别与脱敏概述）。
+                reportColdPiRehydrationFailure(
+                  {
+                    log,
+                    throwIpcError,
+                    errorCode: localModelWindowSwitchErrorCode('MODEL_WINDOW_CURRENT_CONTEXT_UNKNOWN'),
+                  },
+                  coldPiFailureContext,
+                  new ColdPiRehydrationError('runtime-not-live', 'rehydrated Pi runtime is not live after bootstrap'),
+                );
+              }
+            } else {
+              rehydratedColdPiRuntime = liveSessionBeforeRouteChange;
+              currentRuntimeModel = liveSessionBeforeRouteChange.model;
+              runtimeRouteChanged =
+                currentRuntimeModel !== model || currentProviderId !== targetRouteProviderId;
             }
-            rehydratedColdPiRuntime = liveSessionBeforeRouteChange;
-            currentRuntimeModel = liveSessionBeforeRouteChange.model;
-            runtimeRouteChanged =
-              currentRuntimeModel !== model || currentProviderId !== targetRouteProviderId;
           }
         }
       }

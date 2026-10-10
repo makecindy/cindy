@@ -7,6 +7,7 @@ import {
   describeCauseForIpc,
   describeColdPiRehydrationFailure,
   redactLocalPaths,
+  logColdPiRehydrationFailure,
   reportColdPiRehydrationFailure,
   sanitizeColdPiRehydrationReason,
 } from '../coldPiRehydrationFailure';
@@ -167,5 +168,39 @@ describe('cold Pi rehydration failure diagnostics (#5508)', () => {
     ).toThrowError(
       '[PRECONDITION_FAILED] Pi current runtime could not be verified (runtime-not-live: rehydrated Pi runtime is not live after bootstrap); runtime selection was not changed',
     );
+  });
+
+  it('logs the full reason without throwing when the switch degrades past a failed rehydration', () => {
+    const warn = vi.fn();
+    const context = {
+      sessionId: 's-3',
+      fromModel: 'glm-5.3-flash',
+      toModel: 'glm-5.3-flash',
+      currentProviderId: 'glm',
+      nextProviderId: 'glm-coding-plan',
+    };
+
+    expect(() =>
+      logColdPiRehydrationFailure(
+        { log: { warn } },
+        context,
+        new ColdPiRehydrationError(
+          'bootstrap-failed',
+          `session s-3 bootstrap failed: dead provider at ${LOCAL_PATH}`,
+          { cause: new Error('BYOM provider absent') },
+        ),
+      ),
+    ).not.toThrow();
+
+    expect(warn).toHaveBeenCalledTimes(1);
+    const [message, fields] = warn.mock.calls[0] as [string, Record<string, unknown>];
+    expect(message).toBe(COLD_PI_REHYDRATION_FAILURE_LOG_MESSAGE);
+    expect(fields).toMatchObject({
+      ...context,
+      category: 'bootstrap-failed',
+      detail: 'Error',
+    });
+    // 完整原因（含本机路径）只进 Main 日志；没有 IPC 错误出口。
+    expect(fields.reason).toContain(LOCAL_PATH);
   });
 });
