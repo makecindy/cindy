@@ -243,6 +243,8 @@ function renderView() {
 
 beforeEach(() => {
   window.localStorage.clear();
+  // 这些测试针对聊天本身:预置已确认 AI 公示,否则首次弹窗会挡住界面。
+  window.localStorage.setItem('cindy.bots.aiDisclosureAck.v1', '1');
   for (const id of ['g1', 'g2']) clearDraft(botGroupAttachmentScope(id));
   mocks.toastWarning.mockReset();
   mocks.filePaths = new Map();

@@ -1435,9 +1435,14 @@ struct AgentIslandStrings: Codable, Equatable {
   let allowOnce: String
   let alwaysAllowForSession: String
   let deny: String
+  // 持续公示的 AI 身份标识(《人工智能生成合成内容标识办法》:互动界面需
+  // 稳定可见地标出「由 AI 驱动、非真人」;旧 main 载荷可能不带此字段。
+  let aiBadge: String?
 
   // Older main-process payloads do not contain appName; keep their idle view brand-current.
   var displayAppName: String { appName ?? "Cindy" }
+
+  var displayAiBadge: String { aiBadge ?? "AI · Not human" }
 
   static let fallback = AgentIslandStrings(
     appName: "Cindy",
@@ -1460,7 +1465,8 @@ struct AgentIslandStrings: Codable, Equatable {
     permissionPromptTitle: "Confirm permission",
     allowOnce: "Allow once",
     alwaysAllowForSession: "Always allow",
-    deny: "Deny"
+    deny: "Deny",
+    aiBadge: "AI · Not human"
   )
 }
 
@@ -2384,6 +2390,34 @@ struct NotchShape: Shape {
   }
 }
 
+/// Persistent AI-identity capsule shown on every Agent Island surface.
+/// 合规要求:互动界面需持续、稳定可见地标出「由 AI 驱动、非真人」,
+/// 不随 mascot 皮肤、任务状态、展开/收起或内容滚动消失。
+struct AgentIslandAiBadge: View {
+  let text: String
+  var textOpacity: Double = 1
+  var fontSize: CGFloat = 8
+
+  var body: some View {
+    Text(text)
+      .font(.system(size: fontSize, weight: .semibold, design: .monospaced))
+      .foregroundColor(Color.white.opacity(0.60 * textOpacity))
+      .padding(.horizontal, 5)
+      .padding(.vertical, 2)
+      .background(
+        Capsule(style: .continuous)
+          .fill(Color.white.opacity(0.10))
+          .overlay(
+            Capsule(style: .continuous)
+              .strokeBorder(Color.white.opacity(0.14), lineWidth: 0.5)
+          )
+      )
+      .lineLimit(1)
+      .fixedSize(horizontal: true, vertical: false)
+      .accessibilityLabel(Text(text))
+  }
+}
+
 struct AgentIslandRootView: View {
   @ObservedObject var model: AgentIslandModel
   let eventSink: ([String: Any]) -> Void
@@ -2527,6 +2561,10 @@ struct CompactSessionView: View {
     HStack(spacing: layout.expanded ? 9 : 7) {
       compactTitleLine(showsSubtitle: showsRegularDetail)
         .layoutPriority(2)
+      // 持续 AI 身份标识:紧凑态空间极小,用通用「AI」短文案胶囊(展开态展示完整本地化文案),
+      // 始终展示,优先级低于标题、高于计数角标。
+      AgentIslandAiBadge(text: "AI")
+        .layoutPriority(1)
       if showsRegularBadge {
         Spacer(minLength: 0)
         PillBadge(pillSnapshot: pillSnapshot)
@@ -2570,6 +2608,10 @@ struct CompactSessionView: View {
     return HStack(spacing: 6) {
       StatusDot(session: session, compact: true, mascotSkin: mascotSkin, runningMascotNamespace: runningMascotNamespace)
         .frame(width: 18, height: 18)
+
+      // 刘海屏收起态同样持续公示 AI 身份:短胶囊排在标题之前,
+      // 空间不足时标题文案先被裁切,AI 标识尽量保留可见。
+      AgentIslandAiBadge(text: "AI", textOpacity: textOpacity)
 
       compactTextView(
         compactTitle,
@@ -2820,6 +2862,8 @@ struct IdleIslandView: View {
     HStack(spacing: 5) {
       AgentIslandMascotView(skin: mascotSkin, state: .idle, size: 16)
         .frame(width: 16, height: 16)
+      // 空闲态也持续公示 AI 身份;排在应用名之前,刘海窄边裁切时优先保留标识。
+      AgentIslandAiBadge(text: strings.displayAiBadge, textOpacity: textOpacity, fontSize: 9)
       Text(strings.displayAppName)
         .font(.system(size: 10, weight: .semibold, design: .monospaced))
         .foregroundColor(Color.white.opacity(0.24))
@@ -2950,20 +2994,21 @@ struct ExpandedIslandTopBar: View {
 
   @ViewBuilder
   private var leadingContent: some View {
-    if mascotState != nil || title != nil {
-      HStack(spacing: 8) {
-        if let mascotState {
-          RunningMascotIcon(skin: mascotSkin, state: mascotState, size: 18, namespace: runningMascotNamespace)
-        }
-
-        if let title {
-          Text(title)
-            .font(.system(size: 10, weight: .semibold, design: .monospaced))
-            .foregroundColor(Color.white.opacity(0.34))
-            .lineLimit(1)
-            .truncationMode(.tail)
-        }
+    HStack(spacing: 8) {
+      if let mascotState {
+        RunningMascotIcon(skin: mascotSkin, state: mascotState, size: 18, namespace: runningMascotNamespace)
       }
+
+      if let title {
+        Text(title)
+          .font(.system(size: 10, weight: .semibold, design: .monospaced))
+          .foregroundColor(Color.white.opacity(0.34))
+          .lineLimit(1)
+          .truncationMode(.tail)
+      }
+
+      // 持续 AI 身份标识:展开态展示完整本地化文案,不随皮肤/状态变化。
+      AgentIslandAiBadge(text: strings.displayAiBadge, fontSize: 9)
     }
   }
 }

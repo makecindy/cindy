@@ -13,6 +13,7 @@ import {
   isDataOwnerPushCurrent,
 } from '@/contexts/dataOwnerGeneration';
 import { useRegisterContentHeader } from '../feature-context';
+import { BotAiBadge } from './BotAiBadge';
 import type { BotDirectMessageThreadView } from '../../../shared/botDirectMessage';
 import { BotAvatar } from './BotAvatar';
 import { useBotProfiles } from './botStore';
@@ -106,6 +107,8 @@ export function BotDirectMessageView() {
           <ArrowLeftRight size={13} className="shrink-0 text-[var(--text-tertiary)]" aria-hidden />
           <BotAvatar bot={rightBot} size="xs" />
           <span className="truncate">{rightBot.name}</span>
+          {/* 两侧都是伙伴:同样是 AI 互动界面,持续公示 AI 身份。 */}
+          <BotAiBadge />
         </div>
       ) : null,
     [leftBot, rightBot],

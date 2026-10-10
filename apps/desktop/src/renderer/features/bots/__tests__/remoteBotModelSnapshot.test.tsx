@@ -58,6 +58,8 @@ beforeEach(() => {
   remoteProjectsStore.clear();
   h.invoke.mockReset();
   window.electronAPI = { deviceLink: { invoke: h.invoke } } as unknown as Window['electronAPI'];
+  // 这些测试针对远程伙伴会话本身:预置已确认 AI 公示,否则首次弹窗会挡住界面。
+  window.localStorage.setItem('cindy.bots.aiDisclosureAck.v1', '1');
 });
 afterEach(() => { cleanup(); remoteProjectsStore.clear(); });
 
