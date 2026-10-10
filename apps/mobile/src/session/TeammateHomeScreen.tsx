@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import { Alert, Keyboard, StyleSheet, View } from 'react-native';
+import { Alert, Keyboard, Pressable, StyleSheet, View } from 'react-native';
 import { Stack, useIsFocused, useRouter } from 'expo-router';
-import { Menu } from 'lucide-react-native';
+import { ChevronDown, Menu } from 'lucide-react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '@/auth/AuthContext';
@@ -10,6 +10,7 @@ import { formatRemoteError } from '@/device-link/remoteStatus';
 import { useGuardedPush } from '@/utils/useGuardedPush';
 import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { fontWeight, iconSize, iconStroke, lineHeight, navigationChrome, radius, spacing, typeScale } from '@/theme/tokens';
+import { NativePullDownMenu, usesNativePullDownMenu } from '@/platform/chrome';
 import { AccountSwitcherSheet } from './AccountSwitcherSheet';
 import { botGroupRoute } from './botGroupNavigation';
 import { HomeChromeDrawer } from './HomeChromeDrawer';
@@ -52,6 +53,14 @@ export function TeammateHomeScreen({ active = true }: { active?: boolean }) {
     useCallback(() => (accounts || drawer) && remoteSessionStore.getSessions().some((session) => remoteSessionStore.isSessionRunning(session.id)), [accounts, drawer]),
   );
   const groupCreateTargets = roster.groupTargets.filter(groups.isOnline);
+  const nativeMenus = usesNativePullDownMenu();
+  const modeActions = [
+    { id: 'tasks', title: t('devices.companions.tasks'), state: 'off' as const },
+    { id: 'teammates', title: t('devices.companions.title'), state: 'on' as const },
+  ];
+  const selectMode = (id: string) => {
+    if (id === 'tasks') void navigation.chooseMode('tasks');
+  };
   const afterDrawer = (action: () => void) => { pending.current = action; setDrawer(false); };
   const finishOverlay = () => { const action = pending.current; pending.current = null; action?.(); };
   useEffect(() => {
@@ -72,7 +81,20 @@ export function TeammateHomeScreen({ active = true }: { active?: boolean }) {
           {counts.tasks > 0 ? <View pointerEvents="none" style={styles.navDot} testID="teammates.navigation.dot" /> : null}
         </View>
       </View>
-      <Text style={styles.title}>{t('devices.companions.title')}</Text>
+      <NativePullDownMenu actions={modeActions} onAction={selectMode} style={styles.titleMenu}>
+        <Pressable
+          accessibilityLabel={t('devices.companions.title')}
+          accessibilityRole="button"
+          onPress={nativeMenus ? undefined : () => { Keyboard.dismiss(); setDrawer(true); }}
+          style={({ pressed }) => [styles.titleTrigger, pressed && styles.pressed]}
+          testID="teammates.modeMenu"
+        >
+          <View style={styles.titleCluster}>
+            <Text style={styles.title}>{t('devices.companions.title')}</Text>
+            <ChevronDown color={colors.textSecondary} size={iconSize.xs} strokeWidth={iconStroke.medium} />
+          </View>
+        </Pressable>
+      </NativePullDownMenu>
       <View style={[styles.slot, styles.slotEnd]}>
         {roster.createTargets.length > 0 || groupCreateTargets.length > 0 ? <TeammateCreateButton targets={roster.createTargets}
           groupTargets={groupCreateTargets} preferredDeviceId={navigation.lastTeammate?.deviceId}
@@ -126,6 +148,10 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   navButton: { width: navigationChrome.target, height: navigationChrome.target },
   navDot: { position: 'absolute', top: 6, right: 6, width: 8, height: 8, borderRadius: radius.pill, backgroundColor: colors.textPrimary,
     borderWidth: 2, borderColor: colors.surface },
-  title: { flex: 1, color: colors.textPrimary, fontSize: typeScale.title, lineHeight: lineHeight.title, fontWeight: fontWeight.semibold, textAlign: 'center' },
+  titleMenu: { flex: 1 },
+  titleTrigger: { alignItems: 'center', flex: 1, justifyContent: 'center', minHeight: navigationChrome.target, minWidth: navigationChrome.target },
+  titleCluster: { alignItems: 'center', flexDirection: 'row', gap: spacing.xs },
+  title: { color: colors.textPrimary, fontSize: typeScale.title, lineHeight: lineHeight.title, fontWeight: fontWeight.semibold },
+  pressed: { opacity: 0.72 },
   notice: { color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption, padding: spacing.lg },
 });

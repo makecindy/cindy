@@ -27,6 +27,7 @@ import {
   providerShareActiveControllers,
   revokeProviderShareControllers,
   runInvoke,
+  setProviderGroupRemoteHandler,
   setProviderShareAccess,
   setRemoteAgentHandler,
 } from '../dispatch';
@@ -198,6 +199,33 @@ describe('provider share invoke', () => {
     }, 'openai-2') as { providers: Array<Record<string, unknown>> };
     expect(projected.providers[0]).toEqual({ id: 'openai-2', name: 'OpenAI', remoteInvocationEnabled: true });
     expect(JSON.stringify(projected)).not.toContain('alice@corp.com');
+  });
+
+  it('never shows the guest which computers are in a provider group', () => {
+    const projected = __testing.projectProviderListForShare({
+      providers: [{
+        id: 'anthropic', name: 'Anthropic', remoteInvocationEnabled: true,
+        group: { strategy: 'least', autoSwitch: true, members: [{ key: 'device:mini:a', kind: 'device', agentDeviceId: 'mini', providerId: 'a', label: 'Mini' }] },
+      }],
+    }, 'anthropic') as { providers: Array<Record<string, unknown>> };
+    expect(projected.providers[0]).not.toHaveProperty('group');
+    expect(JSON.stringify(projected)).not.toContain('Mini');
+  });
+});
+
+describe('provider group channel', () => {
+  it('serves same-account computers only', async () => {
+    const handle = vi.fn(async () => ({ kind: 'none' }));
+    setProviderGroupRemoteHandler({ handle, decorateProviderList: (result) => result });
+    await expect(runInvoke('same-account-mac', { channel: 'provider-group:remote', args: [{ action: 'view', providerId: 'anthropic' }] }))
+      .resolves.toEqual({ ok: true, result: { kind: 'none' } });
+    expect(handle).toHaveBeenCalledWith('same-account-mac', { action: 'view', providerId: 'anthropic' });
+
+    state.access = ACCESS;
+    handle.mockClear();
+    await expect(runInvoke(GUEST, { channel: 'provider-group:remote', args: [{ action: 'view', providerId: 'anthropic' }] }))
+      .resolves.toMatchObject({ ok: false, error: { code: 'CHANNEL_NOT_ALLOWED' } });
+    expect(handle).not.toHaveBeenCalled();
   });
 });
 

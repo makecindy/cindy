@@ -74,6 +74,8 @@ export class RemoteAgentPoller {
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
   private rotation = 0;
   private emptyFastStreak = 0;
+  /** 在途的 poll 各自覆盖哪些任务(判断有没有任务没人在拉)。 */
+  private readonly inflightCoverage = new Set<ReadonlySet<string>>();
 
   constructor(
     readonly invoke: RemoteAgentInvoke,
@@ -117,7 +119,9 @@ export class RemoteAgentPoller {
   private async pollOnce(): Promise<void> {
     const wanted = this.snapshot();
     const startedAt = this.now();
+    const coverage: ReadonlySet<string> = new Set(wanted.map((item) => item.runId));
     this.inflight += 1;
+    this.inflightCoverage.add(coverage);
     let raw: unknown;
     let failure: unknown = null;
     try {
@@ -126,6 +130,7 @@ export class RemoteAgentPoller {
       failure = error;
     } finally {
       this.inflight -= 1;
+      this.inflightCoverage.delete(coverage);
     }
     let result: RemoteAgentPollResult | null = null;
     if (!failure) {
@@ -160,9 +165,24 @@ export class RemoteAgentPoller {
   }
 
   private ensureAfterReturn(): void {
-    // 这个 poll 回来了：没有其它在途的就再发一个；有任务没被覆盖时也发。
-    if (this.inflight === 0) this.needFresh = true;
+    // 这个 poll 回来了：没有其它在途的就再发一个；有任务没被仍在途的 poll 覆盖时也发——否则新登记的
+    // 任务在覆盖它的那个 poll 带回第一段数据后，要等旧的长等待超时(最长 READ_WAIT_MS)才有人再拉它。
+    if (this.inflight === 0 || this.hasUncoveredRun()) this.needFresh = true;
     this.ensure();
+  }
+
+  private hasUncoveredRun(): boolean {
+    for (const runId of this.entries.keys()) {
+      let covered = false;
+      for (const coverage of this.inflightCoverage) {
+        if (coverage.has(runId)) {
+          covered = true;
+          break;
+        }
+      }
+      if (!covered) return true;
+    }
+    return false;
   }
 
   /** 处理一次 poll 的结果；返回是否交付了任何新数据或状态变化。 */

@@ -73,6 +73,8 @@ describe('useProviderShareAgentDevices', () => {
     expect(result.current.nameFor('device-123')).toBeNull();
     expect(result.current.isKnown('share:b')).toBe(true);
     expect(result.current.isKnown('share:zzz')).toBe(false);
+    expect(result.current.isReceived('share:b')).toBe(true);
+    expect(result.current.isReceived('share:zzz')).toBe(false);
   });
 
   it('keeps the current paused or removed share so the task can see and leave it', async () => {
@@ -88,6 +90,7 @@ describe('useProviderShareAgentDevices', () => {
     const { result } = renderHook(() => useProviderShareAgentDevices(['share:x']));
     expect(result.current.loaded).toBe(false);
     expect(result.current.isKnown('share:x')).toBe(true);
+    expect(result.current.isReceived('share:x')).toBe(false);
     expect(result.current.devices).toEqual([]);
   });
 

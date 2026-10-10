@@ -31,6 +31,8 @@ export interface ProviderShareAgentDevices {
    * 时返回 true，不把「暂时读不到」当成「已删除」。
    */
   isKnown: (deviceId: string | null | undefined) => boolean;
+  /** 该分享确实在本机已收到的列表里(无论是否暂停)；列表未加载或为空时返回 false。 */
+  isReceived: (deviceId: string | null | undefined) => boolean;
 }
 
 export function useProviderShareAgentDevices(
@@ -90,5 +92,10 @@ export function useProviderShareAgentDevices(
     [loaded, names],
   );
 
-  return { devices, loaded, nameFor, isKnown };
+  const isReceived = useCallback(
+    (deviceId: string | null | undefined) => !!deviceId && names.has(deviceId),
+    [names],
+  );
+
+  return { devices, loaded, nameFor, isKnown, isReceived };
 }

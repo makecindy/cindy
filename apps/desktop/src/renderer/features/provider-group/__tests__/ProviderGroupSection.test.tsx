@@ -54,6 +54,8 @@ const MINI = {
 };
 
 let stored: ProviderGroupConfig | null = null;
+/** 按 member key 覆盖「正在运行」的台数；不设时本机 1、其余 0。 */
+let running: Record<string, number> | null = null;
 const command = vi.fn();
 
 function viewOf(config: ProviderGroupConfig | null): ProviderGroupView {
@@ -65,7 +67,7 @@ function viewOf(config: ProviderGroupConfig | null): ProviderGroupView {
       kind: m.kind,
       label: m.kind === 'local' ? 'Home Mac Studio' : m.label ?? m.key,
       state: m.paused ? 'paused' : m.kind === 'local' ? 'available' : 'cooling',
-      running: m.kind === 'local' ? 1 : 0,
+      running: running?.[m.key] ?? (m.kind === 'local' ? 1 : 0),
       limit: m.limit,
       weight: m.weight,
       paused: m.paused,
@@ -76,6 +78,7 @@ function viewOf(config: ProviderGroupConfig | null): ProviderGroupView {
 
 beforeEach(() => {
   stored = null;
+  running = null;
   confirmSpy.mockClear();
   command.mockReset();
   command.mockImplementation(async (cmd: { action: string; config?: ProviderGroupConfig }) => {
@@ -138,6 +141,16 @@ describe('ProviderGroupSection', () => {
       within(rows[1]).getByRole('switch', { name: 'providerGroup.member.assignAria:{"name":"Mac mini"}' }),
     );
     await waitFor(() => expect(stored?.members[1].paused).toBe(true));
+  });
+
+  it('says idle instead of staying silent when a computer is available with nothing running', async () => {
+    running = { local: 0 };
+    stored = { strategy: 'least', autoSwitch: true, members: [LOCAL] };
+    render(<ProviderGroupSection providerId="anthropic" providerName="Anthropic" />);
+    const rows = await screen.findAllByTestId('provider-group-member');
+    // 每行都要报负载：跑 0 个时说「空闲」，不是什么都不显示。
+    expect(within(rows[0]).getByText('providerGroup.member.status.idle')).toBeTruthy();
+    expect(within(rows[0]).queryByText(/providerGroup\.member\.runningCount/)).toBeNull();
   });
 
   it('changes the group strategy and turns automatic switching off', async () => {

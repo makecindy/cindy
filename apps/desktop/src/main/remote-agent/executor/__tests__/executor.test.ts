@@ -9,6 +9,7 @@ import { RemoteExecutor } from '../executor';
 import { EXECUTOR_APPROVAL_TTL_MS, ExecutorGate, executorGateModeFor } from '../gate';
 import type { PdfTextExtractor } from '../files';
 import { findWindowsGitBash, truncateOutput } from '../shell';
+import type { GuardedFetch } from '../webFetch';
 import { ExecutorWorkspace } from '../workspace';
 
 const RG = path.resolve(__dirname, '../../../../../../ripgrep-bin', `${process.platform}-${process.arch}`, process.platform === 'win32' ? 'rg.exe' : 'rg');
@@ -22,7 +23,7 @@ let opaque: number;
 
 function makeExecutor(
   mode: ReturnType<typeof executorGateModeFor> = 'normal',
-  extra: { aliases?: Array<{ from: string; to: string }>; now?: () => number; extractPdfText?: PdfTextExtractor } = {},
+  extra: { aliases?: Array<{ from: string; to: string }>; now?: () => number; extractPdfText?: PdfTextExtractor; webFetch?: GuardedFetch } = {},
 ) {
   const workspace = new ExecutorWorkspace({ workingDir: project, aliases: extra.aliases });
   const gate = new ExecutorGate(workspace, mode, extra.now);
@@ -32,6 +33,7 @@ function makeExecutor(
     rgPath: RG,
     tempDir: path.join(root, 'tmp'),
     ...(extra.extractPdfText ? { extractPdfText: extra.extractPdfText } : {}),
+    ...(extra.webFetch ? { webFetch: extra.webFetch } : {}),
     capture: {
       beforeWrite: async (p) => {
         captured.push(p);
@@ -188,6 +190,31 @@ describe('permission ceiling', () => {
     expect(executorGateModeFor('acceptEdits')).toBe('normal');
     expect(executorGateModeFor('auto')).toBe('normal');
     expect(executorGateModeFor('plan')).toBe('plan');
+  });
+
+  it('lets public pages through and holds local, private and metadata addresses until confirmed on this computer', () => {
+    const workspace = new ExecutorWorkspace({ workingDir: project });
+    const gate = new ExecutorGate(workspace, 'normal');
+    expect(gate.authorize({ kind: 'fetch', url: 'https://example.com/docs' })).toEqual({ ok: true });
+    for (const url of ['http://169.254.169.254/latest/meta-data/', 'http://localhost:3000/', 'http://10.0.0.5/wiki', 'http://127.1/']) {
+      expect(gate.authorize({ kind: 'fetch', url }).ok).toBe(false);
+    }
+    gate.recordApproval({ kind: 'fetch', url: 'http://10.0.0.5/wiki' });
+    // 批准只覆盖这一个地址，用一次即失效。
+    expect(gate.authorize({ kind: 'fetch', url: 'http://10.0.0.5/wiki' })).toEqual({ ok: true, elevated: true });
+    expect(gate.authorize({ kind: 'fetch', url: 'http://10.0.0.5/wiki' }).ok).toBe(false);
+    gate.recordApproval({ kind: 'fetch', url: 'http://10.0.0.5/wiki' });
+    expect(gate.authorize({ kind: 'fetch', url: 'http://10.0.0.5/other' }).ok).toBe(false);
+    // 公网样式的域名也可能解析到内网：本机用户批准过这个地址时同样放开内网，用一次即失效。
+    gate.recordApproval({ kind: 'fetch', url: 'https://wiki.corp.example/page' });
+    expect(gate.authorize({ kind: 'fetch', url: 'https://wiki.corp.example/page' })).toEqual({ ok: true, elevated: true });
+    expect(gate.authorize({ kind: 'fetch', url: 'https://wiki.corp.example/page' })).toEqual({ ok: true });
+    // 只读的网络请求：计划模式也可以抓公网页面。
+    const plan = new ExecutorGate(workspace, executorGateModeFor('default', true));
+    expect(plan.authorize({ kind: 'fetch', url: 'https://example.com' }).ok).toBe(true);
+    expect(plan.authorize({ kind: 'fetch', url: 'http://localhost/' }).ok).toBe(false);
+    const full = new ExecutorGate(workspace, executorGateModeFor('bypassPermissions'));
+    expect(full.authorize({ kind: 'fetch', url: 'http://localhost/' })).toEqual({ ok: true, elevated: true });
   });
 });
 
@@ -489,6 +516,44 @@ describe('cindy_exec MCP endpoint', () => {
     expect((await post({ jsonrpc: '2.0', id: 4, method: 'nope' })).json.error.code).toBe(-32601);
     expect((await handleExecMcpRequest(executor, 'GET', undefined)).status).toBe(405);
     expect((await handleExecMcpRequest(executor, 'POST', Buffer.from('{bad'))).status).toBe(400);
+    // 没有启用 WebFetch 时(同账号任务)既不列出也不能调用。
+    const fetchCall = await post({ jsonrpc: '2.0', id: 5, method: 'tools/call', params: { name: 'WebFetch', arguments: { url: 'https://example.com' } } });
+    expect(fetchCall.json.result).toMatchObject({ isError: true, content: [{ text: 'Unknown tool: WebFetch' }] });
+  });
+
+  it('offers WebFetch when enabled and fetches private addresses only after the user confirms', async () => {
+    const calls: Array<{ url: string; allowPrivateNetwork?: boolean; allowHttp?: boolean }> = [];
+    const webFetch: GuardedFetch = async (url, _init, _before, approval) => {
+      calls.push({ url, allowPrivateNetwork: approval?.allowPrivateNetwork, allowHttp: approval?.allowHttp });
+      return {
+        response: new Response('<html><head><title>Wiki</title></head><body><p>Hello</p></body></html>', {
+          headers: { 'content-type': 'text/html; charset=utf-8' },
+        }),
+        release: async () => {},
+      };
+    };
+    const { executor, gate } = makeExecutor('normal', { webFetch });
+    expect(executor.toolDefinitions().map((tool) => tool.name))
+      .toEqual(['Bash', 'BashOutput', 'KillShell', 'Read', 'Write', 'Edit', 'NotebookEdit', 'WebFetch']);
+
+    const page = await executor.callTool('WebFetch', { url: 'http://example.com/a', prompt: 'greeting' });
+    expect(page.isError).toBeUndefined();
+    expect(text(page)).toContain('Title: Wiki');
+    expect(text(page)).toContain('Hello');
+    expect(calls.at(-1)).toEqual({ url: 'https://example.com/a', allowPrivateNetwork: false, allowHttp: false });
+
+    const denied = await executor.callTool('WebFetch', { url: 'http://10.0.0.5/wiki' });
+    expect(denied.isError).toBe(true);
+    expect(text(denied)).toContain('needs the user\'s confirmation');
+    expect(calls).toHaveLength(1);
+    gate.recordApproval({ kind: 'fetch', url: 'http://10.0.0.5/wiki' });
+    expect((await executor.callTool('WebFetch', { url: 'http://10.0.0.5/wiki' })).isError).toBeUndefined();
+    expect(calls.at(-1)).toEqual({ url: 'http://10.0.0.5/wiki', allowPrivateNetwork: true, allowHttp: true });
+
+    for (const url of ['file:///etc/passwd', 'not a url', 'https://user:pw@example.com/']) {
+      expect((await executor.callTool('WebFetch', { url })).isError).toBe(true);
+    }
+    expect(calls).toHaveLength(2);
   });
 });
 

@@ -2237,10 +2237,38 @@ export interface PiModelSwitchPreview {
   reason?: string;
 }
 
+/**
+ * What the running engine reports for one MCP server in this session.
+ * - `connected`: the engine lists tools for it (possibly none, when it says so).
+ * - `no-tools`: the engine has the server but lists no tools and no state; it
+ *   may have failed to start, still be starting, or expose no tools.
+ * - `not-mounted`: the engine has no server by that name in this session.
+ */
+export type AgentMcpServerToolsState =
+  | 'connected'
+  | 'no-tools'
+  | 'not-mounted'
+  | 'failed'
+  | 'needs-auth'
+  | 'pending'
+  | 'disabled';
+
+export interface AgentMcpServerToolsReport {
+  state: AgentMcpServerToolsState;
+  /** Raw MCP tool names as the server declared them, not harness-qualified names. */
+  tools: Array<{ name: string; description?: string }>;
+}
+
 export interface AgentSessionHandle {
   /** Canonical physical Skill identities frozen at native runtime startup. */
   readonly disabledSkillPaths?: readonly string[];
   getCodexContextWindowInfo?(): Promise<CodexContextWindowInfo | null>;
+  /**
+   * Read-only: ask the engine which tools it holds for one MCP server in this
+   * session. Never starts a server or calls its tools. Absent, or null, when
+   * the engine has no per-session MCP status entry.
+   */
+  readMcpServerTools?(serverName: string): Promise<AgentMcpServerToolsReport | null>;
   /** Native session identity safe for resume; may retain an unaccepted fork's source. */
   readonly id: string;
   /** Transient native request identity; hosts must not persist it as a resume id. */

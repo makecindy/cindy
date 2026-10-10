@@ -10,6 +10,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { ProviderGroupConfig, ProviderGroupMember } from '../../../shared/providerGroup';
 import type { ProviderGroupBinding } from '../bindings';
 import type { ProviderGroupDirectory, ResolvedProviderGroupMember } from '../directory';
+import { createProviderGroupGuestSwitch, PROVIDER_GROUP_SWITCH_OFFER_TTL_MS } from '../guestSwitch';
 import { createProviderGroupRouter, PROVIDER_GROUP_DEFAULT_COOLDOWN_MS } from '../router';
 import {
   createProviderGroupService,
@@ -65,6 +66,9 @@ function harness(options: {
         : { member: m, label: `${m.key}-name`, state: 'ok', view: view(m.providerId, options.unusableModel?.[m.key]) });
     },
     async listCandidates() {
+      return [];
+    },
+    async readDeviceCatalog() {
       return [];
     },
     invalidate: vi.fn(),
@@ -123,7 +127,7 @@ function harness(options: {
 }
 
 async function flush() {
-  for (let i = 0; i < 20; i++) await Promise.resolve();
+  for (let i = 0; i < 60; i++) await Promise.resolve();
 }
 
 describe('assignBeforeStart', () => {
@@ -505,5 +509,84 @@ describe('beforeSend', () => {
     h.deps.switchAgentLocation.mockRejectedValueOnce(new Error('unreachable'));
     await h.service.beforeSend('s1');
     expect(h.bindings.get('s1')?.memberKey).toBe('local');
+  });
+});
+
+describe('onTurnError for a shared user (the sharer’s group picks the computer)', () => {
+  const SHARE_ROUTE = 'share:share-from-alice';
+
+  function guestHarness() {
+    let clock = 5_000;
+    const guestSwitch = createProviderGroupGuestSwitch(() => clock);
+    const h = harness({ row: { agentDeviceId: SHARE_ROUTE, providerId: 'alice-anthropic' } });
+    const service = createProviderGroupService({ ...h.deps, guestSwitch });
+    return { ...h, service, guestSwitch, tick: (ms: number) => { clock += ms; } };
+  }
+
+  it('hands off and reopens with the token when the group computer asks to switch', async () => {
+    const h = guestHarness();
+    h.guestSwitch.offer('s1', 'token-aaaaaaaaaaaaaaaa');
+    h.service.onTurnError('s1', { sdkError: 'rate_limit' }, 7);
+    await flush();
+    // 位置仍是同一个分享：强制重新交接。
+    expect(h.deps.switchAgentLocation).toHaveBeenCalledWith('s1', {
+      agentKind: 'claude-code',
+      model: MODEL,
+      providerId: 'alice-anthropic',
+      agentDeviceId: SHARE_ROUTE,
+    }, { isCurrent: expect.any(Function), relocate: true });
+    // 交接时重新打开带上凭证(这里交接是假的，凭证仍在等打开)。
+    expect(h.guestSwitch.takeForOpen('s1')).toBe('token-aaaaaaaaaaaaaaaa');
+    expect(h.deps.continueSession).toHaveBeenCalledWith('s1', 99, expect.objectContaining({
+      groupSwitch: { cause: 'usage-limit' },
+    }));
+    const info = (h.deps.continueSession.mock.calls[0] as unknown[])[2] as Record<string, unknown>;
+    expect(info).not.toHaveProperty('agentSwitch');
+    expect(h.deps.fallback).not.toHaveBeenCalled();
+    // 分享来的电脑不在本机的任何组里：不冷却、不写绑定。
+    expect(h.bindings.size).toBe(0);
+  });
+
+  it('leaves the error to the existing handling without a token from the group computer', async () => {
+    const h = guestHarness();
+    h.service.onTurnError('s1', { message: '[REMOTE_AGENT_SHARE_PAUSED] paused' }, 3);
+    await flush();
+    expect(h.deps.switchAgentLocation).not.toHaveBeenCalled();
+    expect(h.deps.fallback).toHaveBeenCalledWith('s1', { message: '[REMOTE_AGENT_SHARE_PAUSED] paused' }, 3);
+  });
+
+  it('ignores a stale token, a token the user already took over from, and failures any computer would hit', async () => {
+    const stale = guestHarness();
+    stale.guestSwitch.offer('s1', 'token-aaaaaaaaaaaaaaaa');
+    stale.tick(PROVIDER_GROUP_SWITCH_OFFER_TTL_MS + 1);
+    stale.service.onTurnError('s1', { sdkError: 'rate_limit' }, 1);
+    await flush();
+    expect(stale.deps.switchAgentLocation).not.toHaveBeenCalled();
+    expect(stale.deps.fallback).toHaveBeenCalledTimes(1);
+
+    const tookOver = guestHarness();
+    tookOver.guestSwitch.offer('s1', 'token-aaaaaaaaaaaaaaaa');
+    tookOver.service.noteUserAction('s1');
+    tookOver.service.onTurnError('s1', { sdkError: 'rate_limit' }, 1);
+    await flush();
+    expect(tookOver.deps.switchAgentLocation).not.toHaveBeenCalled();
+
+    const sameEverywhere = guestHarness();
+    sameEverywhere.guestSwitch.offer('s1', 'token-aaaaaaaaaaaaaaaa');
+    sameEverywhere.service.onTurnError('s1', { message: 'prompt is too long', sdkError: 'invalid_request' }, 1);
+    await flush();
+    expect(sameEverywhere.deps.switchAgentLocation).not.toHaveBeenCalled();
+    expect(sameEverywhere.deps.fallback).toHaveBeenCalledTimes(1);
+  });
+
+  it('drops the token and hands back when the handoff does not go through', async () => {
+    const h = guestHarness();
+    h.guestSwitch.offer('s1', 'token-aaaaaaaaaaaaaaaa');
+    h.deps.switchAgentLocation.mockRejectedValueOnce(new Error('[REMOTE_AGENT_SHARE_PAUSED] paused'));
+    h.service.onTurnError('s1', { sdkError: 'rate_limit' }, 4);
+    await flush();
+    expect(h.guestSwitch.takeForOpen('s1')).toBeUndefined();
+    expect(h.deps.continueSession).not.toHaveBeenCalled();
+    expect(h.deps.fallback).toHaveBeenCalledWith('s1', { sdkError: 'rate_limit' }, 4);
   });
 });

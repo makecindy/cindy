@@ -56,16 +56,24 @@ function StatusDot({ status }: { status: ReceivedStatus }) {
   );
 }
 
-/** 左栏的「分享给我的供应商」一组；没有分享时整组不显示。 */
+/**
+ * 左栏的「分享给我的供应商」一组；没有分享时整组不显示。被我另一台电脑的供应商组收进去的分享
+ * 不再单独列出(provider-groups.md §3、§10)，正在查看的那一项保留。
+ */
 export function ProviderShareReceivedRailGroup({
   selectedShareId,
   onSelect,
+  hiddenShareIds,
 }: {
   selectedShareId: string | null;
   onSelect: (shareId: string) => void;
+  hiddenShareIds?: ReadonlySet<string>;
 }) {
   const { t } = useTranslation();
-  const { received } = useProviderShareReceived();
+  const { received: all } = useProviderShareReceived();
+  const received = hiddenShareIds?.size
+    ? all.filter((share) => share.shareId === selectedShareId || !hiddenShareIds.has(share.shareId))
+    : all;
   if (received.length === 0) return null;
 
   return (

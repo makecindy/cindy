@@ -122,7 +122,7 @@ export {
 export { toolAutoReviewAction } from './shared/auto-review-decision.js';
 export { AUTO_REVIEW_CONTINUATION_POLICY } from './shared/continuation-policy.js';
 export type { ReviewableAction } from './shared/auto-review.js';
-export { classifyShellCommand } from './shared/auto-review.js';
+export { classifyShellCommand, reviewAction } from './shared/auto-review.js';
 export type {
   ToolLoopReviewDecision,
   ToolLoopReviewer,

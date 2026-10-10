@@ -19,6 +19,7 @@ import {
 import type { AuthAdapter } from '../../../interfaces/auth-adapter.js';
 import type { Logger } from '../../../interfaces/logger.js';
 import { CONTACTS_RULES_DISABLED } from '../../../contacts/system-prompt.js';
+import { DEVICE_HOSTED_GUEST_CLAUDE_TOOLS } from '../../shared/device-hosted.js';
 
 const sdkMock = vi.hoisted(() => ({
   forkSession: vi.fn(),
@@ -74,16 +75,47 @@ async function makeTempDir(): Promise<string> {
 
 const GHOST_ROSTER = 'HOST GHOST ROSTER';
 
+type CapturedHook = (input: Record<string, unknown>, toolUseId: string | undefined, options: { signal: AbortSignal }) => Promise<{
+  hookSpecificOutput?: { permissionDecision?: string; permissionDecisionReason?: string };
+}>;
+
 interface CapturedOptions {
   plugins?: Array<{ type: string; path: string }>;
   systemPrompt?: { append?: string };
   settings?: {
     disableAllHooks?: boolean;
+    disableClaudeAiConnectors?: boolean;
+    disableRemoteControl?: boolean;
+    disableSkillShellExecution?: boolean;
     claudeMdExcludes?: string[];
     availableModels?: string[];
     env?: Record<string, string>;
   };
   env?: Record<string, string>;
+  tools?: unknown;
+  disallowedTools?: string[];
+  hooks?: { PreToolUse?: Array<{ hooks: CapturedHook[] }> };
+}
+
+/** 依次跑 PreToolUse 回调，返回第一个拒绝原因；都放行时返回 null。 */
+async function preToolUseDenial(options: CapturedOptions, toolName: string, toolInput: unknown): Promise<string | null> {
+  const input = {
+    hook_event_name: 'PreToolUse',
+    session_id: 'sdk-session',
+    transcript_path: '',
+    cwd: '',
+    tool_name: toolName,
+    tool_input: toolInput,
+  };
+  for (const matcher of options.hooks?.PreToolUse ?? []) {
+    for (const hook of matcher.hooks) {
+      const result = await hook(input, 'tool-use-1', { signal: new AbortController().signal });
+      if (result?.hookSpecificOutput?.permissionDecision === 'deny') {
+        return result.hookSpecificOutput.permissionDecisionReason ?? '';
+      }
+    }
+  }
+  return null;
 }
 
 const GUEST_PROVIDER: DeviceHostedGuestProvider = {
@@ -213,6 +245,24 @@ describe('Claude Code device-hosted guest sessions', () => {
     expect(options.env?.ANTHROPIC_SMALL_FAST_MODEL).toBe('shared/model-a');
   });
 
+  it('exposes only the allowlisted built-in tools and turns off account and shell features', async () => {
+    const { options } = await startHostedSession(true);
+    // 白名单是显式数组：不是 preset，也不是缺省(缺省 = Claude Code 全部自带工具)。
+    expect(options.tools).toEqual([...DEVICE_HOSTED_GUEST_CLAUDE_TOOLS]);
+    expect(options.tools).not.toContain('WebFetch');
+    expect(options.disallowedTools).toContain('Bash');
+    expect(options.settings?.disableClaudeAiConnectors).toBe(true);
+    expect(options.settings?.disableRemoteControl).toBe(true);
+    expect(options.settings?.disableSkillShellExecution).toBe(true);
+  });
+
+  it('denies subagent isolation for guests but not ordinary subagents', async () => {
+    const { options } = await startHostedSession(true);
+    expect(await preToolUseDenial(options, 'Agent', { description: 'd', prompt: 'p', isolation: 'remote' }))
+      .toMatch(/isolation/);
+    expect(await preToolUseDenial(options, 'Agent', { description: 'd', prompt: 'p' })).toBeNull();
+  });
+
   it('refuses a guest session without a provider boundary or on another provider', async () => {
     await expect(startHostedSession(true, { guestProvider: null })).rejects.toThrow(/REMOTE_AGENT_UNSUPPORTED/);
     await expect(startHostedSession(true, { providerId: 'other-provider' }))
@@ -223,6 +273,11 @@ describe('Claude Code device-hosted guest sessions', () => {
     const { options } = await startHostedSession(false);
     expect(options.settings?.disableAllHooks).toBeUndefined();
     expect(options.settings?.claudeMdExcludes).toBeUndefined();
+    expect(options.tools).toBeUndefined();
+    expect(options.settings?.disableClaudeAiConnectors).toBeUndefined();
+    expect(options.settings?.disableRemoteControl).toBeUndefined();
+    expect(options.settings?.disableSkillShellExecution).toBeUndefined();
+    expect(await preToolUseDenial(options, 'Agent', { description: 'd', prompt: 'p', isolation: 'worktree' })).toBeNull();
     expect(options.plugins?.length).toBe(1);
     expect(options.systemPrompt?.append).toContain(GHOST_ROSTER);
     expect(options.systemPrompt?.append).toContain(CONTACTS_RULES_DISABLED);

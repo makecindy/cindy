@@ -284,7 +284,6 @@ function ActiveSessionTaskMenu({
           ))}
         {!guest && (
           <>
-            {/* Agent 在另一台电脑运行的任务：Agent 会话记录在那台，移动与复制到其他电脑都会丢失它。 */}
             {canOfferSessionProjectMove(session) && (
               <TaskMoveSubmenu
                 session={session}

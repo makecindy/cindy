@@ -293,6 +293,7 @@ function createDb(filename = ':memory:'): void {
       writable_dirs TEXT NOT NULL DEFAULT '[]',
       remote_host_id TEXT,
       agent_device_id TEXT,
+      orca_remote_lead TEXT,
       source TEXT NOT NULL DEFAULT 'desktop',
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL,

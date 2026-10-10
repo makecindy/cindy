@@ -2,7 +2,8 @@
  * ImageLightbox — IM 级全屏图片查看器。
  * ---------------------------------------------------------------------------
  * 点缩略图直接全屏黑底看图,交互对齐主流 IM:
- *   - 双指捏合绕焦点缩放(1x~4x);放大后单指平移(钳制在 contain 后的图片边界内)
+ *   - 双指捏合绕焦点缩放(1x~4x,可捏过两端再弹回);放大后单指平移,
+ *     越过图片边界有橡皮筋阻尼,松手带惯性滑行、越界弹回(对齐系统相册)
  *   - 双击在 1x / 2.5x 间切换并落到点击点;1x 单击关闭
  *   - 1x 下竖直下滑跟手关闭(位移 + 背景渐隐),横滑翻会话内图片集
  *   - 放大后单指只平移;单击不关(双击缩回,或先回到 1x 再单击/下滑)
@@ -39,6 +40,7 @@ import Animated, {
   runOnJS,
   useAnimatedStyle,
   useSharedValue,
+  withDecay,
   withSpring,
   withTiming,
   type SharedValue,
@@ -56,9 +58,8 @@ import {
   bakeLightboxOrigin,
   canShareLightboxImage,
   compensateLightboxOrigin,
-  clampLightboxScale,
   clampLightboxTranslation,
-  clampLightboxVisualPan,
+  dragLightboxVisualPan,
   isLightboxZoomed,
   lightboxBackgroundOpacity,
   lightboxContainedSize,
@@ -67,12 +68,20 @@ import {
   lightboxInitialIndex,
   lightboxPageIndex,
   lightboxPageLabel,
+  lightboxPanRelease,
+  lightboxPinchAnchor,
   lightboxPinchOrigin,
+  lightboxPinchSettle,
+  lightboxPinchTranslation,
+  LIGHTBOX_MAX_SCALE,
+  LIGHTBOX_MIN_SCALE,
   LIGHTBOX_TAP_MAX_DISTANCE,
   nextDoubleTapScale,
   reclampLightboxPan,
+  rubberBandLightboxScale,
   shouldCloseLightboxOnTap,
   shouldDismissLightbox,
+  unrubberLightboxScale,
 } from '@/session/imageLightboxModel';
 import {
   ANNOTATION_OUTLINE_COLOR,
@@ -94,6 +103,9 @@ import {
 // Use the existing SVG-capable decoder for both the preview and full image,
 // retaining the lightbox's native gesture transforms.
 const AnimatedImage = Animated.createAnimatedComponent(Image);
+
+/** 越界 / 捏过两端松手的回弹:接近临界阻尼,约 0.3s 落定,几乎不来回晃。 */
+const LIGHTBOX_SETTLE_SPRING = { damping: 30, stiffness: 260, mass: 1 } as const;
 
 // 缩略图垫底**不**挂在取件态里:它要跨过 loading → ready 的边界继续垫住原图
 // 下载那一段(见 lightboxImageLayers),挂进 loading 分支会在取件完成的瞬间
@@ -694,7 +706,8 @@ export const ImageLightbox = memo(function ImageLightbox({
               width={width}
             />
           )}
-          scrollEnabled={!zoomed && !isAnnotating && !annotationSubmitting && images.length > 1}
+          // 单图同样开启:iOS 横向拖到边缘有系统回弹,与多图首尾页手感一致。
+          scrollEnabled={!zoomed && !isAnnotating && !annotationSubmitting}
           showsHorizontalScrollIndicator={false}
           windowSize={3}
         />
@@ -1026,11 +1039,22 @@ const LightboxPage = memo(function LightboxPage({
   const originY = useSharedValue(0);
   const startFocalX = useSharedValue(0);
   const startFocalY = useSharedValue(0);
+  /** 捏合开始时的画面倍率:锚定位移按它与当前倍率之差推算。 */
+  const pinchStartScale = useSharedValue(1);
   const displayedW = useSharedValue(width);
   const displayedH = useSharedValue(height);
+  /** 捏合最后的焦点(容器坐标):捏过最大倍率松手时绕它缩回。 */
+  const lastFocalX = useSharedValue(0);
+  const lastFocalY = useSharedValue(0);
   const pinchBusy = useSharedValue(0);
   const panBusy = useSharedValue(0);
   const doubleTapBusy = useSharedValue(0);
+  /** 平移松手后的惯性滑行 / 越界回弹进行中:手指按下即可接住。 */
+  const panSettling = useSharedValue(0);
+  /** 本次按下接住了滑行;若没形成拖动就抬手,要补一次回弹,不能停在越界处。 */
+  const panCaught = useSharedValue(0);
+  /** 松手回弹(springToTransform)进行中:位移已有一致的目标,平移松手不另起回弹;落定前锁住翻页。 */
+  const zoomSettling = useSharedValue(0);
   const dragY = useSharedValue(0);
   /**
    * 已 onLoad 成功的原图地址。存地址而不是 boolean:换图 / 强制重取换 url 后
@@ -1065,6 +1089,51 @@ const LightboxPage = memo(function LightboxPage({
     onZoomChange(value);
   }, [onZoomChange]);
 
+  /**
+   * 倍率与位移一起弹到合法落点。三者同一弹簧、零初速:归一化进度逐帧相同,
+   * 画面上 p·s + T 线性插值,焦点下那一点全程不漂。调用前 origin 必须已归零。
+   * 手势松手与尺寸变化(回弹途中原图尺寸到达)共用,翻页锁与落定上报只在这一处。
+   */
+  const springToTransform = useCallback((target: { scale: number; x: number; y: number }) => {
+    'worklet';
+    savedScale.value = target.scale;
+    savedTranslateX.value = target.x;
+    savedTranslateY.value = target.y;
+    const scaleMoves = scale.value !== target.scale;
+    const xMoves = translateX.value !== target.x;
+    const yMoves = translateY.value !== target.y;
+    if (!scaleMoves && !xMoves && !yMoves) {
+      zoomSettling.value = 0;
+      runOnJS(reportZoomed)(isLightboxZoomed(target.scale));
+      return;
+    }
+    // 先置标记、先锁翻页,再启动动画:减少动态效果下回调会在赋值时同步执行,
+    // 落定上报必须是最后一次(与双击路径一致)。回到 1x 的回弹期间锁住翻页,
+    // 否则缩小松手后立刻横划会被翻页抢走、在回弹中途切走当前图。
+    zoomSettling.value = 1;
+    runOnJS(reportZoomed)(true);
+    // 落定回调只挂在一条动画上;被新手势打断(finished=false)时由接管方负责翻页锁。
+    const onSettled = (finished?: boolean) => {
+      'worklet';
+      if (!finished) return;
+      zoomSettling.value = 0;
+      runOnJS(reportZoomed)(isLightboxZoomed(savedScale.value));
+    };
+    if (scaleMoves) scale.value = withSpring(target.scale, LIGHTBOX_SETTLE_SPRING, onSettled);
+    if (xMoves) {
+      translateX.value = withSpring(target.x, LIGHTBOX_SETTLE_SPRING, scaleMoves ? undefined : onSettled);
+    }
+    if (yMoves) {
+      translateY.value = withSpring(
+        target.y,
+        LIGHTBOX_SETTLE_SPRING,
+        scaleMoves || xMoves ? undefined : onSettled,
+      );
+    }
+    // 共享值引用恒定,只随 reportZoomed 重建
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reportZoomed]);
+
   useEffect(() => {
     const size = lightboxContainedSize(
       width,
@@ -1091,6 +1160,21 @@ const LightboxPage = memo(function LightboxPage({
       );
       savedTranslateX.value = next.x;
       savedTranslateY.value = next.y;
+      return;
+    }
+    // 松手回弹途中:直接改 live 会打断回弹,落定回调不触发,翻页一直锁着、倍率
+    // 也可能停在范围外。把目标收进新边界,从当前帧重新发起同一次回弹。
+    if (zoomSettling.value) {
+      const next = reclampLightboxPan(
+        savedTranslateX.value,
+        savedTranslateY.value,
+        width,
+        height,
+        savedScale.value,
+        size.width,
+        size.height,
+      );
+      springToTransform({ scale: savedScale.value, x: next.x, y: next.y });
       return;
     }
     const next = reclampLightboxPan(
@@ -1123,6 +1207,9 @@ const LightboxPage = memo(function LightboxPage({
     pinchBusy.value = 0;
     panBusy.value = 0;
     doubleTapBusy.value = 0;
+    panSettling.value = 0;
+    panCaught.value = 0;
+    zoomSettling.value = 0;
     dragY.value = 0;
     chromeHidden.value = 0;
     onChromeBusy(false);
@@ -1135,6 +1222,9 @@ const LightboxPage = memo(function LightboxPage({
     const stopTransformAnimation = () => {
       'worklet';
       doubleTapBusy.value = 0;
+      panSettling.value = 0;
+      panCaught.value = 0;
+      zoomSettling.value = 0;
       cancelAnimation(scale);
       cancelAnimation(translateX);
       cancelAnimation(translateY);
@@ -1150,30 +1240,61 @@ const LightboxPage = memo(function LightboxPage({
       chromeHidden.value = withTiming(0, { duration: motionDuration.fast });
       runOnJS(onChromeBusy)(false);
     };
-    const bakePinchOrigin = () => {
+    const settlePinch = () => {
       'worklet';
       const bakedX = bakeLightboxOrigin(translateX.value, originX.value, scale.value);
       const bakedY = bakeLightboxOrigin(translateY.value, originY.value, scale.value);
       originX.value = 0;
       originY.value = 0;
-      if (!isLightboxZoomed(scale.value)) {
-        scale.value = withTiming(1);
-        savedScale.value = 1;
-        translateX.value = withTiming(0);
-        translateY.value = withTiming(0);
-        savedTranslateX.value = 0;
-        savedTranslateY.value = 0;
-        runOnJS(reportZoomed)(false);
+      translateX.value = bakedX;
+      translateY.value = bakedY;
+      springToTransform(lightboxPinchSettle({
+        scale: scale.value,
+        translateX: bakedX,
+        translateY: bakedY,
+        focalX: lightboxPinchOrigin(lastFocalX.value, width),
+        focalY: lightboxPinchOrigin(lastFocalY.value, height),
+        containerWidth: width,
+        containerHeight: height,
+        displayedWidth: displayedW.value,
+        displayedHeight: displayedH.value,
+      }));
+    };
+    /** 单轴松手:越界弹簧回边界;边界内有速度则惯性滑行,滑到边界由橡皮筋衰减冲过再回。 */
+    const releasePanAxis = (
+      value: SharedValue<number>,
+      velocity: number,
+      containerSize: number,
+      displayedSize: number,
+    ) => {
+      'worklet';
+      const release = lightboxPanRelease(value.value, velocity, containerSize, scale.value, displayedSize);
+      if (release.kind === 'settle') {
+        value.value = withSpring(release.to, { ...LIGHTBOX_SETTLE_SPRING, velocity });
+      } else if (release.kind === 'fling') {
+        value.value = withDecay({ velocity, clamp: [release.min, release.max], rubberBandEffect: true });
+      }
+    };
+    const settlePan = (velocityX: number, velocityY: number) => {
+      'worklet';
+      // 倍率回弹被拖动打断时可能停在两端之外:连同位移按画面中心收回合法落点。
+      if (scale.value > LIGHTBOX_MAX_SCALE || scale.value < LIGHTBOX_MIN_SCALE) {
+        springToTransform(lightboxPinchSettle({
+          scale: scale.value,
+          translateX: translateX.value,
+          translateY: translateY.value,
+          focalX: 0,
+          focalY: 0,
+          containerWidth: width,
+          containerHeight: height,
+          displayedWidth: displayedW.value,
+          displayedHeight: displayedH.value,
+        }));
         return;
       }
-      const cx = clampLightboxTranslation(bakedX, width, scale.value, displayedW.value);
-      const cy = clampLightboxTranslation(bakedY, height, scale.value, displayedH.value);
-      translateX.value = cx;
-      translateY.value = cy;
-      savedTranslateX.value = cx;
-      savedTranslateY.value = cy;
-      savedScale.value = scale.value;
-      runOnJS(reportZoomed)(true);
+      releasePanAxis(translateX, velocityX, width, displayedW.value);
+      releasePanAxis(translateY, velocityY, height, displayedH.value);
+      panSettling.value = 1;
     };
 
     // 焦点捏合:起点锁定 origin,缩放绕焦点;浏览态跟手质心,标注态只改 scale
@@ -1190,38 +1311,61 @@ const LightboxPage = memo(function LightboxPage({
         // 下滑半途改捏合:关掉正在进行的 dismiss 位移,不把图和背景留在半透明上。
         dragY.value = 0;
         dismissY.value = 0;
-        savedScale.value = scale.value;
-        originX.value = lightboxPinchOrigin(event.focalX, width);
-        originY.value = lightboxPinchOrigin(event.focalY, height);
+        // 倍率起点存「手指量」而非画面量:回弹途中再捏时画面可能处在橡皮筋区,
+        // 直接当起点会让第一帧按阻尼重新映射而跳一下。
+        savedScale.value = unrubberLightboxScale(scale.value);
+        // 锚点取手指下那一点的图片坐标,已放大 / 平移后二次捏合才绕手指缩放。
+        const bakedX = bakeLightboxOrigin(translateX.value, originX.value, scale.value);
+        const bakedY = bakeLightboxOrigin(translateY.value, originY.value, scale.value);
+        originX.value = lightboxPinchAnchor(event.focalX, width, bakedX, scale.value);
+        originY.value = lightboxPinchAnchor(event.focalY, height, bakedY, scale.value);
         // 已放大时 origin 会立刻贡献 origin*(1-scale);扣掉等量位移,二次捏合不跳。
-        translateX.value = compensateLightboxOrigin(translateX.value, originX.value, scale.value);
-        translateY.value = compensateLightboxOrigin(translateY.value, originY.value, scale.value);
-        savedTranslateX.value = translateX.value;
-        savedTranslateY.value = translateY.value;
+        translateX.value = compensateLightboxOrigin(bakedX, originX.value, scale.value);
+        translateY.value = compensateLightboxOrigin(bakedY, originY.value, scale.value);
+        // 起点存 bake 后的画面位移(几何量);每帧按当前倍率的边界换算手指量,
+        // 不跨倍率复用起始倍率下的换算结果(见 lightboxPinchTranslation)。
+        savedTranslateX.value = bakedX;
+        savedTranslateY.value = bakedY;
+        pinchStartScale.value = scale.value;
         startFocalX.value = event.focalX;
         startFocalY.value = event.focalY;
+        lastFocalX.value = event.focalX;
+        lastFocalY.value = event.focalY;
       })
       .onChange((event) => {
-        scale.value = clampLightboxScale(savedScale.value * event.scale);
+        // 捏过 1x / 最大倍率不再硬卡:阻尼继续缩放,松手再弹回(settlePinch)。
+        scale.value = rubberBandLightboxScale(savedScale.value * event.scale);
+        lastFocalX.value = event.focalX;
+        lastFocalY.value = event.focalY;
         if (annotating) return;
-        // 画面中心钳制,再补偿回 raw。origin≠0 时不能钳 raw。
-        const next = clampLightboxVisualPan(
-          savedTranslateX.value + (event.focalX - startFocalX.value),
-          savedTranslateY.value + (event.focalY - startFocalY.value),
-          originX.value,
-          originY.value,
-          width,
-          height,
-          scale.value,
-          displayedW.value,
-          displayedH.value,
-        );
+        // 锚点跟手;越过图片边界按当前倍率的边界阻尼而不是硬钳,焦点附近捏合时
+        // 图不再「粘」在边上,回弹途中再捏时锚点也不从手指下滑开。
+        const next = {
+          x: lightboxPinchTranslation(
+            savedTranslateX.value,
+            originX.value,
+            pinchStartScale.value,
+            scale.value,
+            event.focalX - startFocalX.value,
+            width,
+            displayedW.value,
+          ),
+          y: lightboxPinchTranslation(
+            savedTranslateY.value,
+            originY.value,
+            pinchStartScale.value,
+            scale.value,
+            event.focalY - startFocalY.value,
+            height,
+            displayedH.value,
+          ),
+        };
         translateX.value = next.x;
         translateY.value = next.y;
       })
       .onFinalize(() => {
         if (!pinchBusy.value) return;
-        bakePinchOrigin();
+        settlePinch();
         pinchBusy.value = 0;
         maybeShowChrome();
       });
@@ -1233,7 +1377,17 @@ const LightboxPage = memo(function LightboxPage({
       .minPointers(annotating ? 2 : 1)
       .maxPointers(annotating ? 2 : 1)
       .onTouchesDown((_event, state) => {
-        if (!annotating && !isLightboxZoomed(scale.value)) state.fail();
+        if (!annotating && !isLightboxZoomed(scale.value)) {
+          state.fail();
+          return;
+        }
+        // 手指按住正在滑行 / 回弹的图:就地停住,对齐系统相册的「接住」手感。
+        if (panSettling.value) {
+          cancelAnimation(translateX);
+          cancelAnimation(translateY);
+          panSettling.value = 0;
+          panCaught.value = 1;
+        }
       })
       .onStart(() => {
         panBusy.value = 1;
@@ -1244,10 +1398,13 @@ const LightboxPage = memo(function LightboxPage({
       })
       .onChange((event) => {
         // 标注双指 pan 与 off-center pinch Simultaneous,origin 常非 0;
-        // 浏览单指 pan 的 origin 已 bake 归零,helper 退化为钳 raw。
-        const next = clampLightboxVisualPan(
-          translateX.value + event.changeX,
-          translateY.value + event.changeY,
+        // 浏览单指 pan 的 origin 已 bake 归零。越界部分走橡皮筋:到了边缘仍可
+        // 继续拖(越拖越沉),松手再弹回(settlePan)。
+        const next = dragLightboxVisualPan(
+          translateX.value,
+          translateY.value,
+          event.changeX,
+          event.changeY,
           originX.value,
           originY.value,
           width,
@@ -1259,15 +1416,27 @@ const LightboxPage = memo(function LightboxPage({
         translateX.value = next.x;
         translateY.value = next.y;
       })
-      .onFinalize(() => {
+      .onFinalize((event) => {
         // Tap 也会让未激活的 Pan 走 FAILED → finalize。它不拥有位移,
         // 不能把双击缩回的 saved=0 覆盖成动画中途的旧偏移。
-        if (!panBusy.value) return;
+        if (!panBusy.value) {
+          // 接住滑行后没拖就抬手:图可能停在越界处,补一次回弹。双击 / 捏合
+          // 已接管时由它们负责落点(stopTransformAnimation 会清掉 panCaught)。
+          if (panCaught.value && !pinchBusy.value && !doubleTapBusy.value) {
+            panCaught.value = 0;
+            settlePan(0, 0);
+          }
+          return;
+        }
         savedTranslateX.value = translateX.value;
         savedTranslateY.value = translateY.value;
         panBusy.value = 0;
-        if (!pinchBusy.value)
-          runOnJS(reportZoomed)(isLightboxZoomed(scale.value));
+        if (!pinchBusy.value) {
+          // 回弹进行中时位移已随之弹向一致落点,这里不另起动画抢它。
+          if (!zoomSettling.value) settlePan(event.velocityX ?? 0, event.velocityY ?? 0);
+          // 回弹(含刚由 settlePan 发起的)由 springToTransform 管翻页锁,落定时再上报。
+          if (!zoomSettling.value) runOnJS(reportZoomed)(isLightboxZoomed(scale.value));
+        }
         maybeShowChrome();
       });
 
@@ -1409,6 +1578,7 @@ const LightboxPage = memo(function LightboxPage({
     reportZoomed,
     onDrawPoint,
     onChromeBusy,
+    springToTransform,
   ]);
 
   const imageStyle = useAnimatedStyle(() => ({

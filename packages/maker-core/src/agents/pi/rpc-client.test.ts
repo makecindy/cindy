@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({ spawn: vi.fn() }));
 
@@ -16,13 +16,13 @@ function makeChild(pid = 4321) {
     pid: number;
     stdout: EventEmitter;
     stderr: EventEmitter;
-    stdin: { write: ReturnType<typeof vi.fn> };
+    stdin: EventEmitter & { write: ReturnType<typeof vi.fn> };
     kill: ReturnType<typeof vi.fn>;
   };
   child.pid = pid;
   child.stdout = makeStream();
   child.stderr = makeStream();
-  child.stdin = { write: vi.fn() };
+  child.stdin = Object.assign(new EventEmitter(), { write: vi.fn() });
   child.kill = vi.fn();
   return child;
 }
@@ -58,6 +58,8 @@ beforeEach(() => {
   mocks.spawn.mockReset();
 });
 
+afterEach(() => { vi.useRealTimers(); });
+
 describe('PiRpcProcess frame diagnostics (#3696)', () => {
   function createProcessWithMocks() {
     const child = makeChild();
@@ -80,11 +82,13 @@ describe('PiRpcProcess frame diagnostics (#3696)', () => {
       logger,
     });
     const onEvent = vi.fn();
-    const proc = new PiRpcProcess({ transport, logger, onEvent, onExit: vi.fn() });
+    const onExit = vi.fn();
+    const onDisconnect = vi.fn();
+    const proc = new PiRpcProcess({ transport, logger, onEvent, onExit, onDisconnect });
     const feed = (frame: Record<string, unknown>): void => {
       child.stdout.emit('data', Buffer.from(`${JSON.stringify(frame)}\n`));
     };
-    return { proc, logger, onEvent, feed };
+    return { proc, logger, onEvent, feed, child, onExit, onDisconnect };
   }
 
   it('logs message_end frame metadata (block types + char counts) without message content', () => {
@@ -165,6 +169,30 @@ describe('PiRpcProcess frame diagnostics (#3696)', () => {
     expect(logger.info).toHaveBeenCalledWith('pi rpc turn frame histogram', {
       frames: { '(other)': 1, message_end: 1, agent_settled: 1 },
     });
+  });
+
+  it('rejects pending RPC and flushes metadata at EOF without claiming executor exit', async () => {
+    vi.useFakeTimers();
+    const { proc, logger, feed, child, onExit, onDisconnect } = createProcessWithMocks();
+    feed({ type: 'agent_start' });
+    feed({ type: 'tool_execution_start', args: { command: 'PRIVATE_BUILD_COMMAND' } });
+    const request = proc.request({ type: 'get_state' });
+    const rejected = expect(request).rejects.toThrow('executor exit unconfirmed');
+    child.stdout.emit('end');
+    await vi.advanceTimersByTimeAsync(250);
+    await rejected;
+    expect(proc.isClosed).toBe(true);
+    expect(onDisconnect).toHaveBeenCalledWith('stdout-ended');
+    expect(onExit).not.toHaveBeenCalled();
+    await expect(proc.request({ type: 'prompt' })).rejects.toThrow('RPC disconnected');
+    expect(logger.info).toHaveBeenCalledWith('pi rpc turn frame histogram (no agent_settled)', {
+      frames: { agent_start: 1, tool_execution_start: 1 },
+    });
+    expect(JSON.stringify(logger.info.mock.calls)).not.toContain('PRIVATE_BUILD_COMMAND');
+    logger.info.mockClear();
+    child.emit('close', 23, null);
+    expect(onExit).toHaveBeenCalledOnce();
+    expect(logger.info).not.toHaveBeenCalled();
   });
 
   it('logs a per-turn frame histogram at agent_settled and resets counts', () => {

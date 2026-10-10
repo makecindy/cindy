@@ -87,4 +87,11 @@ describe('provider group computer switch', () => {
     expect(readMobileAutoResumeInfo({ reason: 'usage-limit-reset', agentSwitch: { from: 'A', cause: 'auth' } }))
       .toEqual({ usageLimitReset: true });
   });
+
+  it('reads a shared user’s switch without any computer names', () => {
+    expect(readMobileAutoResumeInfo({ reason: 'usage-limit-reset', groupSwitch: { cause: 'usage-limit' } }))
+      .toEqual({ usageLimitReset: true, groupSwitch: { cause: 'usage-limit' } });
+    expect(readMobileAutoResumeInfo({ reason: 'usage-limit-reset', groupSwitch: {} }))
+      .toEqual({ usageLimitReset: true });
+  });
 });

@@ -1345,9 +1345,12 @@ export class RemoteHost {
 
       // ssh2 emits 'handshake' before 'ready' — repurpose to advance state
       // so renderer can show "authenticating" instead of staying on
-      // "connecting" throughout auth.
+      // "connecting" throughout auth. ssh2 also emits it after every later
+      // key exchange (server-initiated rekey, e.g. Dropbear every 8h) without
+      // a following 'ready', so only the attempt's first, unsettled handshake
+      // may move the status; a rekey must leave a ready host ready (#5715).
       client.on('handshake', () => {
-        if (isCurrentAttempt()) this.setStatus('authenticating');
+        if (!settled && isCurrentAttempt()) this.setStatus('authenticating');
       });
       client.on('ready', onReady);
       client.on('error', onError);

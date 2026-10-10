@@ -968,6 +968,8 @@ function AutoResumeActionRow({
         from: info.agentSwitch.from,
         to: info.agentSwitch.to,
       })
+    : info.groupSwitch
+    ? t('chat.systemCard.autoResume.groupSwitch')
     : usageLimitReset
     ? t('chat.systemCard.autoResume.labelUsageReset')
     : live

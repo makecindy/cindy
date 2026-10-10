@@ -290,6 +290,7 @@
       "requestedAt": "{{time}}通过你的分享链接申请",
       "pairingHint": "同意前可以通过发链接的渠道问对方一句：「你看到的配对码是多少？」一致再同意。",
       "callout": "同意后，{{name}} 可以在自己的任务里使用 {{provider}} 的模型。Agent 在这台电脑上运行，用量计入你的 {{provider}}。你可以随时在「分享 {{provider}}」里关闭或删除。",
+      "calloutClaudeEmail": "{{name}} 使用时，Agent 能看到你登录 Claude 用的邮箱。",
       "calloutUnknown": "如果你不认识申请人，请拒绝；拒绝后这条链接作废。",
       "approve": "同意分享",
       "reject": "拒绝申请",
@@ -299,11 +300,11 @@
       "loading": "正在读取分享链接…",
       "askTitle": "{{name}} 想把 {{provider}} 分享给你",
       "providerOnDevice": "{{provider}} · {{device}}",
-      "factRuns": "Agent 在 {{name}} 的电脑上用 {{provider}} 运行",
+      "factRuns": "Agent 在 {{name}} 的电脑或 {{name}} 安排的其他电脑上用 {{provider}} 运行",
       "factRunsDetail": "用量计入 {{name}} 的 {{provider}}，{{name}} 能看到你的用量",
       "factFiles": "你的项目文件和命令仍在你自己的电脑上执行",
       "factFilesDetail": "由你的任务权限把关",
-      "factPrivacy": "对话内容和 Agent 读取的文件内容会经过并保存在 {{name}} 的电脑上",
+      "factPrivacy": "对话内容和 Agent 读取的文件内容会经过 {{name}} 的电脑，并保存在实际运行任务的那台电脑上",
       "factPrivacyDetail": "{{name}} 只会看到你的昵称和头像",
       "factApproval": "发送申请后，需要 {{name}} 同意才会生效",
       "factApprovalDetail": "{{name}} 可以随时关闭或删除这个分享",
@@ -372,7 +373,7 @@
         "open": "打开链接",
         "cancel": "取消"
       },
-      "detailNote": "Agent 在 {{name}} 的电脑上运行，用的是对方的登录和配额。新建任务时在模型列表里选择它就能用。",
+      "detailNote": "Agent 在 {{name}} 的电脑或 {{name}} 安排的其他电脑上运行，用的是对方的登录和配额。对话内容和 Agent 读取的文件内容会经过 {{name}} 的电脑，并保存在实际运行任务的那台电脑上。新建任务时在模型列表里选择它就能用。",
       "modelsTitle": "可用的模型",
       "modelsLoading": "正在读取对方开放的模型…",
       "modelsRefused": "对方电脑暂时不让读取这个分享：可能没有允许远程控制、关了这个供应商的「允许被远程调用」，也可能对方的 Cindy 刚启动、还没准备好。请稍后重试，或让对方检查这两项设置。",
@@ -416,7 +417,7 @@
       "empty": "加入其他电脑上的 {{provider}}，任务会自动选一台运行",
       "loading": "正在读取供应商组…",
       "loadFailed": "未能读取供应商组",
-      "note": "这台电脑上的任务，Agent 在被选中的电脑上运行"
+      "note": "这台电脑上的任务和分享的人的任务，都由组选一台电脑运行 Agent"
     },
     "strategy": {
       "label": "组策略",
@@ -449,7 +450,7 @@
       "remove": "移出组",
       "status": {
         "checking": "正在检查…",
-        "available": "可用",
+        "idle": "空闲",
         "full": "已满",
         "paused": "已暂停分配",
         "cooling": "冷却中",
@@ -467,7 +468,8 @@
         "description": "之后不再给它分新任务；已经在它上面运行的任务留在那台电脑上。",
         "lastDescription": "它是组里最后一台电脑，移出后会删除 {{provider}} 的供应商组。",
         "confirm": "移出组"
-      }
+      },
+      "sourceGroupOwner": "组所在电脑"
     },
     "deleteConfirm": {
       "title": "删除 {{provider}} 的供应商组？",
@@ -2825,7 +2827,12 @@
         "statusReady": "可用",
         "detailNote": "Agent 在 {{device}} 上运行，用的是那台电脑的登录和配额。新建任务时在模型列表里选择它就能用；要修改这个供应商，请到那台电脑的「设置 → 模型供应商」。",
         "modelsTitle": "可用的模型",
-        "modelsEmpty": "这个供应商在那台电脑上还没有开放可用的模型。"
+        "modelsEmpty": "这个供应商在那台电脑上还没有开放可用的模型。",
+        "rowLabelGroup": "{{provider}} · {{device}} · 供应商组",
+        "groupBadge_other": "供应商组 · {{count}} 台电脑",
+        "groupNote": "{{device}} 把这个供应商建成了供应商组。在模型列表里选它新建任务时，{{device}} 会按组策略把任务分给下面的一台电脑运行，那台出问题时自动换一台继续。要修改组，请到 {{device}} 的「设置 → 模型供应商」。",
+        "groupMembersTitle": "组内电脑",
+        "groupMembersFailed": "暂时读不到组内电脑的状态。"
       },
       "genericOAuth": {
         "subtitle": "订阅账号",
@@ -9400,7 +9407,8 @@
         "effortEndSmart": "更智能",
         "railSameEngine": "仅 {{agent}}",
         "crossEngineWarning": "切换引擎会重建上下文，可能丢失内容",
-        "favoritesSyncFailed": "收藏未能同步。请重新打开重试；被控电脑可能需要更新。"
+        "favoritesSyncFailed": "收藏未能同步。请重新打开重试；被控电脑可能需要更新。",
+        "railRemoteProviderGroup": "{{provider}} · {{device}} · 供应商组"
       }
     },
     "permissionSelector": {
@@ -10038,8 +10046,25 @@
       "observedPeak": "峰值",
       "tokenRate": "{{rate}} tok/s",
       "tokenRateUnit": "tok/s",
-      "tokenRateDescription": "最近一段生成速度，不含工具执行与等待。",
-      "tokenCount": "{{tokens}} tok"
+      "tokenRateDescription": "实时速度和峰值为估算。响应结束后用真实用量校准；不计工具执行和请求等待。",
+      "tokenCount": "{{tokens}} tok",
+      "estimatedValue": "约{{value}}",
+      "estimatedTokenRate": "约{{rate}} tok/s",
+      "responseWaiting": "等待 {{seconds}}秒",
+      "waitSeconds": "{{seconds}}秒",
+      "firstResponse": "首响应",
+      "streamWait": "流内等待",
+      "turnWaitDescription": "从本地收到引擎开始到首个文字、思考或工具内容，不等同于网络延迟。",
+      "streamWaitDescription": "从 SDK 流开始到首个内容块，之前的请求等待不可测。",
+      "lastGeneration": "上次生成",
+      "finalAverage": "最终平均",
+      "generationPaused": "生成暂停",
+      "responsePending": "等待响应",
+      "responseFailed": "请求失败",
+      "responseCancelled": "已停止",
+      "responseRetrying": "正在重试",
+      "responseGenerating": "正在生成",
+      "toolRunning": "执行工具中"
     },
     "shareImage": {
       "entry": "分享为图片",
@@ -10509,7 +10534,8 @@
           "auth": "{{from}} 登录已失效，已换到 {{to}} 继续",
           "unavailable": "{{from}} 连不上，已换到 {{to}} 继续",
           "overload": "{{from}} 的服务繁忙，已换到 {{to}} 继续"
-        }
+        },
+        "groupSwitch": "已自动换一台电脑继续"
       },
       "autoResumeSeparator": {
         "label": "连接中断，已自动继续"
@@ -11465,7 +11491,11 @@
       "untitled": "未命名任务",
       "moreActions": "更多操作",
       "agentDevice": "Agent 在 {{device}} 上运行",
-      "agentDeviceOffline": "Agent 在 {{device}} 上运行，那台电脑现在离线，连上后才能继续"
+      "agentDeviceOffline": "Agent 在 {{device}} 上运行，那台电脑现在离线，连上后才能继续",
+      "orcaRemoteLead": "来自 {{device}} 的协同",
+      "orcaRemoteLeadReleased": "协同已结束 · 来自 {{device}}",
+      "orcaRemoteLeadUnknownDevice": "另一台电脑",
+      "orcaRemoteLeadTip": "{{device}} 上「{{lead}}」的 Worker。任务、目录和命令都在这台电脑运行；你在这里发的消息不会回报给 Lead。"
     },
     "gitContext": {
       "detached": "分离 HEAD",
@@ -13528,7 +13558,25 @@
       "optional": "（可选）",
       "initialTaskPlaceholder": "给这个 Worker 的可选第一条任务",
       "enableCollabTitle": "开启协同",
-      "enableCollabSubmit": "开启协同"
+      "enableCollabSubmit": "开启协同",
+      "executionDeviceLabel": "运行设备",
+      "thisComputer": "本机",
+      "deviceOnline": "在线",
+      "deviceNeedsUpdate": "版本过旧，需更新",
+      "executionDeviceHint": "只列出同账号、在线并开启远程控制的电脑。",
+      "executionDeviceRemoteHint": "Worker 的任务、目录和命令都在 {{device}}。",
+      "remoteDirLabel": "{{device}} 上的工作目录",
+      "remoteDirChat": "对话",
+      "remoteDirPath": "指定目录",
+      "remoteDirChatHint": "在 {{device}} 上创建对话任务，不绑定项目。",
+      "remoteDirPathHint": "在 {{device}} 上检查；不存在时报错，不会换成这台电脑的目录。",
+      "remoteDirInvalid": "请输入 {{device}} 上的绝对路径。",
+      "errors": {
+        "deviceUnreachable": "{{device}} 当前不可用：需要在线并开启远程控制。Worker 没有创建。",
+        "deviceOutdated": "{{device}} 的 Cindy 版本过旧，更新后才能运行 Worker。",
+        "dirRejected": "{{device}} 上找不到这个目录或不允许使用。Worker 没有创建。",
+        "dirUnavailable": "{{device}} 上的目录暂时无法访问。请检查连接或网络盘后重试。Worker 没有创建。"
+      }
     },
     "rolePill": {
       "unread": "未读更新",
@@ -13550,13 +13598,19 @@
       "scrollWorkersLeftEdge": "已是最左侧的 Worker",
       "scrollWorkersRightEdge": "已是最右侧的 Worker",
       "errorBadge": "错误",
-      "errorBadgeAria": "有 Worker 出错"
+      "errorBadgeAria": "有 Worker 出错",
+      "executionDevice": "在 {{device}} 运行",
+      "deviceUnreachable": "暂时无法获取状态",
+      "unknownDevice": "另一台电脑",
+      "archiveRemoteWorkerConfirmDesc": "它会从这个协同里移除，并停止 {{device}} 上正在进行的这一轮。{{device}} 上的任务、记录和文件都会保留，标注「协同已结束」，可以在那台继续查看。"
     },
     "split": {
       "leadLabel": "Lead ({{agent}})",
       "workerLabel": "Worker ({{agent}})",
       "leadNotFound": "找不到 Orca lead 任务",
       "waitingForWorker": "等待 Worker",
+      "remoteWorkerLoading": "正在读取 {{device}} 上的任务…",
+      "remoteWorkerUnreachable": "{{device}} 当前无法连接，恢复后会自动显示这个 Worker 的任务。",
       "closeAria": "关闭"
     }
   },

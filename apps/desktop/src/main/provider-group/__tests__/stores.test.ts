@@ -92,4 +92,33 @@ describe('provider group bindings', () => {
     expect(bindings.readProviderGroupBinding('a')).toBeNull();
     expect(bindings.readProviderGroupBinding('c')).not.toBeNull();
   });
+
+  it('keeps bindings to a group on another computer in their own file, one group per task', async () => {
+    await bindings.writeProviderGroupBinding('r1', { providerId: 'anthropic', memberKey: 'local', groupDeviceId: 'mini' }, 7);
+    expect(bindings.readProviderGroupBinding('r1')).toEqual({ providerId: 'anthropic', memberKey: 'local', groupDeviceId: 'mini', at: 7 });
+    // 本机的组只数本机那份：另一台电脑的组不进本机分配器的统计，也不被本机删组时清掉。
+    expect(bindings.listProviderGroupBindings().r1).toBeUndefined();
+    expect(bindings.listRemoteProviderGroupBindings().r1).toBeDefined();
+    await bindings.pruneProviderGroupBindings('anthropic', null);
+    expect(bindings.readProviderGroupBinding('r1')).not.toBeNull();
+    // 降级后的旧版本只读本机那份，读不到它。
+    const localFile = JSON.parse(fs.readFileSync(path.join(tmpDir, 'provider-group-bindings.json'), 'utf8'));
+    expect(localFile.sessions?.r1).toBeUndefined();
+    // 改归本机的组时另一份里的同一任务一并清掉。
+    await bindings.writeProviderGroupBinding('r1', { providerId: 'anthropic', memberKey: 'local' }, 8);
+    expect(bindings.readProviderGroupBinding('r1')).toEqual({ providerId: 'anthropic', memberKey: 'local', at: 8 });
+    expect(bindings.listRemoteProviderGroupBindings().r1).toBeUndefined();
+    await bindings.writeProviderGroupBinding('r1', null);
+    expect(bindings.readProviderGroupBinding('r1')).toBeNull();
+  });
+
+  it('drops remote bindings without a valid group computer', () => {
+    expect(bindings.__testing.normalizeRemote({
+      sessions: {
+        r1: { providerId: 'anthropic', memberKey: 'local', groupDeviceId: 'mini', at: 1 },
+        r2: { providerId: 'anthropic', memberKey: 'local' },
+        r3: { providerId: 'anthropic', memberKey: 'local', groupDeviceId: 'bad id' },
+      },
+    })).toEqual({ sessions: { r1: { providerId: 'anthropic', memberKey: 'local', groupDeviceId: 'mini', at: 1 } } });
+  });
 });

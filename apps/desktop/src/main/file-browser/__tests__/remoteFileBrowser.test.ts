@@ -9,7 +9,7 @@
  */
 
 import { PassThrough } from 'node:stream';
-import { mkdtemp, rm, writeFile as fsWriteFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile as fsWriteFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -125,6 +125,28 @@ describe('RemoteFileBrowserManager', () => {
     expect(entries.map((e) => e.name)).toContain('hello.txt');
     expect(calls.install).toBe(0);
     expect(calls.spawn).toBe(1);
+    await mgr.disposeAll();
+  });
+
+  it('beforeSend runs after the connection is built and can stop the request', async () => {
+    const { deps, calls } = makeDeps({ probeResults: [READY_PROBE] });
+    const mgr = new RemoteFileBrowserManager(deps);
+    let spawnedBeforeGate = -1;
+    await expect(
+      mgr.request(
+        'h1',
+        'writeFile',
+        { workdir, relPath: 'hello.txt', content: 'late\n' },
+        {
+          beforeSend: () => {
+            spawnedBeforeGate = calls.spawn;
+            throw new Error('[PERMISSION_DENIED] revoked');
+          },
+        },
+      ),
+    ).rejects.toThrow('PERMISSION_DENIED');
+    expect(spawnedBeforeGate).toBe(1);
+    expect(await readFile(path.join(workdir, 'hello.txt'), 'utf8')).toBe('hi\n');
     await mgr.disposeAll();
   });
 

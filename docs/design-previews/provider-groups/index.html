@@ -625,9 +625,10 @@
   /* ---------- 模拟数据 ---------- */
   let hasGroup = true;
   const members = [
-    { id: 'self', name: '本机', sub: 'Home Mac Studio', state: 'on', running: 1, limit: 4, status: '可用' },
-    { id: 'mbp', name: "Lizi's MacBook Pro", sub: '我的其他电脑', state: 'on', running: 0, limit: 4, status: '可用' },
-    { id: 'mini', name: "Magi's Mac Mini", sub: '来自 Magi 的分享', state: 'on', running: 2, limit: 4, status: '可用' },
+    /* state 为 on 时状态词由运行数决定(空闲 / N 个任务运行中)，不再单独写「可用」。 */
+    { id: 'self', name: '本机', sub: 'Home Mac Studio', state: 'on', running: 1, limit: 4 },
+    { id: 'mbp', name: "Lizi's MacBook Pro", sub: '我的其他电脑', state: 'on', running: 0, limit: 4 },
+    { id: 'mini', name: "Magi's Mac Mini", sub: '来自 Magi 的分享', state: 'on', running: 2, limit: 4 },
     { id: 'pc', name: 'Studio-PC', sub: '来自 Kai 的分享', state: 'cool', running: 0, limit: 4, status: '冷却中 · 撞到用量上限，约 15:20 恢复' },
     { id: 'imac', name: 'Office-iMac', sub: '来自 王一 的分享', state: 'off', running: 0, limit: 2, status: '不在线' },
   ];
@@ -673,7 +674,11 @@
     $('#member-count').textContent = members.length + ' 台';
     $('#members').innerHTML = members.map((m) => {
       const dot = m.state === 'on' ? '<span class="d"></span>' : '<span class="d gray"></span>';
-      const run = m.running > 0 ? ` · <span class="run">${m.running} 个任务运行中</span>` : '';
+      // 状态词本身报负载：每行永远看得出这台现在跑了几个，不靠「>0 才显示」去推断。
+      const run = `<span class="run">${m.running} 个任务运行中</span>`;
+      const load = m.state === 'on'
+        ? (m.running > 0 ? run : '空闲')
+        : `${m.status}${m.running > 0 ? ` · ${run}` : ''}`;
       // 参与分配对所有来源都是同一个开关(同一个 paused 布尔值)，不按来源分叉成「开关 / 暂停分配按钮」。
       // 「移出组」罕用且不可逆，收进行内 ··· 菜单；本机不能移出，留等宽占位。
       const more = m.id === 'self'
@@ -684,7 +689,7 @@
         <span class="avatar" aria-hidden="true">${monitor}</span>
         <div class="who">
           <div class="line1">${m.name} <span class="src">${m.sub}</span></div>
-          <div class="line2"><span class="status">${dot}${m.status}</span>${run}</div>
+          <div class="line2"><span class="status">${dot}${load}</span></div>
         </div>
         <div class="actions">
           <span class="sel">上限 ${m.limit}${chevron}</span>

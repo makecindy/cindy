@@ -240,6 +240,10 @@ function MemberRow({
       : t('providerGroup.member.sourceShare', { name: status?.ownerName ?? '' });
   const ready = status?.state === 'available' || status?.state === 'full';
   const running = status?.running ?? 0;
+  // 能用的时候状态词本身就报负载(「空闲」/「N 个任务运行中」)，所以每行永远看得出这台现在跑了几个；
+  // 「已满」等于跑满上限，上限就在旁边的下拉里，不必再报一遍数。其余状态(冷却、不在线、已暂停)
+  // 上面可能还有在跑的任务，补一段运行数。
+  const appendRunning = running > 0 && status != null && status.state !== 'available' && status.state !== 'full';
   return (
     <div
       data-testid="provider-group-member"
@@ -267,9 +271,9 @@ function MemberRow({
             className="h-1.5 w-1.5 shrink-0 rounded-full"
             style={{ background: ready ? 'var(--remote-status-ready)' : 'var(--remote-status-disconnected)' }}
           />
-          <span>{memberStatusText(t, status, i18n.language)}</span>
           {/* 运行数是状态，上限是设置：各说一次，不再出现「0 / 10」与下拉里重复同一个上限。 */}
-          {running > 0 && (
+          <span>{memberStatusText(t, status, i18n.language)}</span>
+          {appendRunning && (
             <>
               <span aria-hidden="true">·</span>
               <span className="[font-variant-numeric:tabular-nums]">
@@ -333,7 +337,8 @@ function MemberRow({
   );
 }
 
-function memberStatusText(
+/** 组内电脑的状态词(本机的组与另一台电脑上的组的只读列表共用)。 */
+export function memberStatusText(
   t: ReturnType<typeof useTranslation>['t'],
   status: ProviderGroupMemberStatus | undefined,
   locale: string,
@@ -341,7 +346,10 @@ function memberStatusText(
   if (!status) return t('providerGroup.member.status.checking');
   switch (status.state) {
     case 'available':
-      return t('providerGroup.member.status.available');
+      // 「可用」不报负载，整列空着时就看不出每台跑了几个；状态词直接承载运行数。
+      return status.running > 0
+        ? t('providerGroup.member.runningCount', { count: status.running })
+        : t('providerGroup.member.status.idle');
     case 'full':
       return t('providerGroup.member.status.full');
     case 'paused':

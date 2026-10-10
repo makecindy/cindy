@@ -236,6 +236,11 @@ export const sessions = sqliteTable(
      */
     agentDeviceId: text('agent_device_id'),
     /**
+     * 本任务是另一台电脑上协同 Lead 派来的 Worker(JSON,见 shared/orcaRemoteWorker.ts)。
+     * 任务、目录与命令都在本机；Lead 与团队在那台。NULL = 普通任务。
+     */
+    orcaRemoteLead: text('orca_remote_lead'),
+    /**
      * interrupted-turn-resume: 最近一次 turn 的启动时刻(unix ms)。与
      * lastTurnEndedAt 配对做「疑似中断」纯读判定(startedAt > endedAt),两个
      * 时间戳都是 append-only 覆盖写、**没有清除操作**——语义详见
@@ -721,6 +726,13 @@ export const orcaTeams = sqliteTable(
   }),
 );
 
+/** 远端创建回执丢失或本机崩溃后的清理身份，成功关联 Worker 后删除。 */
+export const orcaRemoteOpens = sqliteTable('orca_remote_opens', {
+  remoteSessionId: text('remote_session_id').primaryKey(),
+  deviceId: text('device_id').notNull(),
+  createdAt: integer('created_at').notNull(),
+});
+
 export const orcaWorkers = sqliteTable(
   'orca_workers',
   {
@@ -742,6 +754,20 @@ export const orcaWorkers = sqliteTable(
     focused: integer('focused', { mode: 'boolean' }).notNull().default(false),
     /** multi-worker Phase 1: idle 释放时间戳, NULL = 非 idle */
     idleSince: integer('idle_since'),
+    /**
+     * Worker 在同账号另一台电脑运行时那台的设备 id；NULL = 本机 Worker。
+     * 此时 session_id 指向本机代理任务行，remote_session_id 是那台上的真实任务。
+     */
+    executionDeviceId: text('execution_device_id'),
+    remoteSessionId: text('remote_session_id'),
+    /** 已作为回报送给 Lead 的远端最后一条 assistant 消息 id，用于重连补报去重。 */
+    lastBridgedMessageId: text('last_bridged_message_id'),
+    /** 已通知运行设备结束协同的时刻；NULL 且已归档 = 待重连后补发。 */
+    remoteReleasedAt: integer('remote_released_at'),
+    /** 派活前落盘，重启后按投递回执及历史恢复待回报。 */
+    pendingRemoteReport: text('pending_remote_report'),
+    /** 停止已确认后只补发 release，不能误停用户后续的普通任务。 */
+    remoteStopConfirmedAt: integer('remote_stop_confirmed_at'),
     createdAt: integer('created_at').notNull(),
     updatedAt: integer('updated_at').notNull(),
   },

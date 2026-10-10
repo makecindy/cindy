@@ -3,6 +3,7 @@
  * 不读 window、不碰 i18n，便于单测。
  */
 import type { ProviderShareReceived, ProviderShareRequestItem } from '@cindy/device-link';
+import type { ProviderView } from '@cindy/model-providers';
 
 import { formatCompactTokens, formatTurnCostMoney } from '@/lib/usageFormat';
 
@@ -26,6 +27,15 @@ export function providerShareGate(input: {
 }): ProviderShareGate {
   if (input.remoteControlEnabled === false) return 'remote-off';
   return input.invocationEnabled ? 'on' : 'invocation-off';
+}
+
+/**
+ * 分享的是 Claude 订阅登录：Claude Code 会把登录账号的邮箱交给模型，受邀者的 Agent 能看到。
+ * 挡不住(只有改掉整条连接方式的开关)，审批时告诉分享者(2026-10-10 用户裁决)。
+ */
+export function sharesClaudeLoginEmail(provider: Pick<ProviderView, 'id' | 'source' | 'auth'> | undefined): boolean {
+  if (!provider || provider.auth.method !== 'oauth') return false;
+  return provider.auth.native === 'claude' || (provider.source === 'builtin' && provider.id === 'anthropic');
 }
 
 /** 任务记录里「Agent 在某个分享者的电脑上」的设备 id(与 main 的 providerShareAgentDeviceId 同构)。 */

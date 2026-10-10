@@ -163,6 +163,13 @@ it.each(['bot'] as const)(
   },
 );
 
+it('keeps project moves but hides cross-computer copies when the agent runs on another computer', async () => {
+  await mount({ ...session, agentDeviceId: 'C' });
+  expect(screen.getByRole('menuitem', { name: /another/ })).toBeTruthy();
+  expect(screen.queryByText('taskMove.otherComputers')).toBeNull();
+  expect(screen.queryByRole('menuitem', { name: 'B' })).toBeNull();
+});
+
 it.each(['desktop', 'shared', 'feishu'] as const)(
   'keeps cross-computer migration for a %s task',
   async (source) => {

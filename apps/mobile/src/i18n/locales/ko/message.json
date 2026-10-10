@@ -271,7 +271,8 @@
         "auth": "{{from}}의 로그인이 만료되어 {{to}}에서 이어서 진행했습니다",
         "unavailable": "{{from}}에 연결할 수 없어 {{to}}에서 이어서 진행했습니다",
         "overload": "{{from}}의 서비스가 혼잡해 {{to}}에서 이어서 진행했습니다"
-      }
+      },
+      "groupSwitch": "다른 컴퓨터로 자동 전환해 이어서 진행했습니다"
     },
     "modelLabel": "모델",
     "sessionLabel": "세션",

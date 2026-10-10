@@ -1,11 +1,13 @@
 import * as Dialog from '@radix-ui/react-dialog';
 import { WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 import { Button } from '@/components/ui/button';
+import { Select } from '@/components/ui/select';
 import { useModelPickerAgents } from '@/hooks/useAvailableAgents';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
-import { Info, TriangleAlert, X } from 'lucide-react';
+import { Folder, Info, TriangleAlert, X } from 'lucide-react';
+import { AddRemoteProjectDialog } from '@/components/new-chat/AddRemoteProjectDialog';
 import { requiresFullAccessConfirmation } from '@cindy/maker-shared/permission-mode';
 import {
   connectedProvidersForAgent,
@@ -66,6 +68,43 @@ export interface CreateWorkerForm {
   initialTask: string;
   /** 本次 Worker 权限；提交后同时成为下一次创建 Worker 的默认值。 */
   workerPermissionMode?: OrcaWorkerPermissionMode;
+  /** 运行设备(同账号另一台电脑)；缺省 = 这台电脑。 */
+  executionDeviceId?: string;
+  /** 运行设备名，只用于失败提示。 */
+  executionDeviceName?: string;
+  /** 运行设备上的指定工作目录；缺省在那台电脑创建对话任务。只在指定运行设备时有意义。 */
+  workingDir?: string;
+}
+
+/** 可放 Worker 的同账号其他电脑(`maker:orca:execution-devices`)。 */
+export interface ExecutionDeviceOption {
+  deviceId: string;
+  name: string;
+  platform: string | null;
+  /** false = 版本过旧，不可选。 */
+  supported: boolean;
+}
+
+export function parseExecutionDevices(value: unknown): ExecutionDeviceOption[] {
+  const devices = (value as { devices?: unknown } | null)?.devices;
+  if (!Array.isArray(devices)) return [];
+  return devices.flatMap((item) => {
+    const row = item as Record<string, unknown> | null;
+    if (!row || typeof row.deviceId !== 'string' || !row.deviceId) return [];
+    return [
+      {
+        deviceId: row.deviceId,
+        name: typeof row.name === 'string' && row.name ? row.name : row.deviceId,
+        platform: typeof row.platform === 'string' ? row.platform : null,
+        supported: row.supported === true,
+      },
+    ];
+  });
+}
+
+/** 运行设备的系统未知：接受 POSIX、Windows 盘符与 UNC 绝对路径，是否存在由那台检查。 */
+export function isAbsoluteRemoteDir(value: string): boolean {
+  return /^(\/|[a-zA-Z]:[\\/]|\\\\)/.test(value);
 }
 
 export interface CreateWorkerPopoverProps {
@@ -86,6 +125,8 @@ export interface CreateWorkerPopoverProps {
   sshRemote?: boolean;
   /** 开启新协同时必须确认执行端支持权限偏好；已有旧版远程 Team 创建 Worker 仍兼容旧行为。 */
   requireWorkerPermissionModeSupport?: boolean;
+  /** 允许把 Worker 放到同账号另一台电脑运行(仅本机 Lead)。 */
+  executionDevicesEnabled?: boolean;
 }
 
 export function CreateWorkerPopover({
@@ -95,9 +136,10 @@ export function CreateWorkerPopover({
   title,
   submitLabel,
   className,
-  deviceId,
+  deviceId: leadDeviceId,
   sshRemote,
   requireWorkerPermissionModeSupport = false,
+  executionDevicesEnabled = false,
 }: CreateWorkerPopoverProps) {
   const { t } = useTranslation();
   const { confirm: confirmDialog } = useConfirmDialog();
@@ -118,6 +160,21 @@ export function CreateWorkerPopover({
   const [prefsRestored, setPrefsRestored] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const submittingRef = useRef(false);
+  const [executionDevices, setExecutionDevices] = useState<ExecutionDeviceOption[]>([]);
+  const [executionDeviceId, setExecutionDeviceId] = useState<string | null>(null);
+  const [remoteDirMode, setRemoteDirMode] = useState<'dialogue' | 'path'>('dialogue');
+  const [remoteDir, setRemoteDir] = useState('');
+  const [directoryPickerOpen, setDirectoryPickerOpen] = useState(false);
+  const directoryTargetRef = useRef<{ deviceId: string | null; open: boolean; pickerOpen: boolean }>({ deviceId: null, open, pickerOpen: false });
+  directoryTargetRef.current = { deviceId: executionDeviceId, open, pickerOpen: directoryPickerOpen };
+  useEffect(() => { setDirectoryPickerOpen(false); }, [executionDeviceId, open]);
+  // 模型、供应商与能力按 Worker 实际运行的电脑读取：远程控制的 Lead 读它所在的电脑，
+  // 选了运行设备则读运行设备。权限档始终跟 Lead 所在电脑的创建偏好走。
+  const deviceId = leadDeviceId ?? executionDeviceId ?? undefined;
+  const executionDevice = executionDevices.find((d) => d.deviceId === executionDeviceId) ?? null;
+  const trimmedRemoteDir = remoteDir.trim();
+  const remoteDirInvalid =
+    !!executionDevice && remoteDirMode === 'path' && !isAbsoluteRemoteDir(trimmedRemoteDir);
 
   const ccCaps = useAgentCapabilities('claude-code', deviceId);
   const codexCaps = useAgentCapabilities('codex', deviceId);
@@ -132,9 +189,9 @@ export function CreateWorkerPopover({
   const activeCapabilitiesState = agent === 'codex' ? codexCaps : agent === 'pi' ? piCaps : ccCaps;
   const activeCaps = activeCapabilitiesState.capabilities;
   const supportsWorkerPermissionModeSelection =
-    !deviceId || activeCaps?.supportsOrcaWorkerPermissionMode === true;
+    !leadDeviceId || activeCaps?.supportsOrcaWorkerPermissionMode === true;
   const remoteWorkerPermissionModeUnsupported =
-    !!deviceId
+    !!leadDeviceId
     && activeCaps !== null
     && activeCaps?.supportsOrcaWorkerPermissionMode !== true;
   const activeModels = useMemo(() => {
@@ -284,11 +341,45 @@ export function CreateWorkerPopover({
     setModel(agentPrefs.model);
     setEffort(agentPrefs.effort);
     setFast(agentPrefs.fast);
-    setProviderSource(deviceId ? null : agentPrefs.providerId);
+    setProviderSource(leadDeviceId ? null : agentPrefs.providerId);
     setInitialTask('');
     setSelectedWorkerPermissionMode(stored.workerPermissionMode);
+    setExecutionDeviceId(null);
+    setRemoteDirMode('dialogue');
+    setRemoteDir('');
     setPrefsRestored(true);
-  }, [deviceId, open]);
+  }, [leadDeviceId, open]);
+
+  // 可选运行设备：每次打开读一次；读不到就只有这台电脑，不提示错误。
+  useEffect(() => {
+    if (!open || !executionDevicesEnabled) {
+      setExecutionDevices([]);
+      return;
+    }
+    let disposed = false;
+    void Promise.resolve(window.electronAPI?.localDb?.orcaWorkflows?.listExecutionDevices?.())
+      .then((value) => {
+        if (!disposed) setExecutionDevices(parseExecutionDevices(value));
+      })
+      .catch(() => {
+        if (!disposed) setExecutionDevices([]);
+      });
+    return () => {
+      disposed = true;
+    };
+  }, [executionDevicesEnabled, open]);
+
+  const selectExecutionDevice = useCallback(
+    (next: string | null) => {
+      if (next === executionDeviceId) return;
+      setExecutionDeviceId(next);
+      setRemoteDirMode('dialogue');
+      setRemoteDir('');
+      // 另一台电脑的模型目录没有本机的来源维度；回到这台电脑时恢复本机记忆的来源。
+      setProviderSource(next || leadDeviceId ? null : prefs[agent].providerId);
+    },
+    [agent, executionDeviceId, leadDeviceId, prefs],
+  );
 
   useEffect(() => {
     if (
@@ -545,6 +636,7 @@ export function CreateWorkerPopover({
     activeRole.length <= 32 &&
     !customRoleError &&
     !remoteModelListBlocked &&
+    !remoteDirInvalid &&
     (!requireWorkerPermissionModeSupport || !remoteWorkerPermissionModeUnsupported) &&
     !!currentModel;
   const resolvedTitle = title ?? t('orca.createWorker.title');
@@ -617,6 +709,13 @@ export function CreateWorkerPopover({
         ...(supportsWorkerPermissionModeSelection
           ? { workerPermissionMode: selectedWorkerPermissionMode }
           : {}),
+        ...(executionDevice
+          ? {
+              executionDeviceId: executionDevice.deviceId,
+              executionDeviceName: executionDevice.name,
+              ...(remoteDirMode === 'path' ? { workingDir: trimmedRemoteDir } : {}),
+            }
+          : {}),
       });
     } finally {
       submittingRef.current = false;
@@ -640,6 +739,9 @@ export function CreateWorkerPopover({
     routeEffortMetaFor,
     selectedWorkerPermissionMode,
     supportsWorkerPermissionModeSelection,
+    executionDevice,
+    remoteDirMode,
+    trimmedRemoteDir,
   ]);
 
   const roleInputRef = useRef<HTMLInputElement>(null);
@@ -649,7 +751,7 @@ export function CreateWorkerPopover({
   }, [onClose]);
 
   return (
-    <Dialog.Root open={open} onOpenChange={(next) => { if (!next) handleClose(); }}>
+    <><Dialog.Root open={open} onOpenChange={(next) => { if (!next) handleClose(); }}>
       <Dialog.Portal>
       <Dialog.Overlay
         className={cn('modal-scrim fixed inset-0 z-50 flex items-center justify-center', className)}
@@ -658,7 +760,7 @@ export function CreateWorkerPopover({
         style={WINDOW_NO_DRAG_STYLE}
       >
       <Dialog.Content
-        className="modal-panel relative z-10 w-[500px] p-6 outline-none"
+        className="modal-panel relative z-10 max-h-[calc(100dvh-48px)] w-[500px] overflow-y-auto p-6 outline-none"
         aria-describedby={undefined}
         onPointerDownOutside={(event) => event.preventDefault()}
         onOpenAutoFocus={(event) => {
@@ -748,6 +850,19 @@ export function CreateWorkerPopover({
             <div className="mt-1 text-11 text-[var(--error-fg)]">{customRoleError}</div>
           )}
         </div>
+
+        {executionDevices.length > 0 ? (
+          <ExecutionDeviceField
+            devices={executionDevices}
+            selectedId={executionDevice?.deviceId ?? null}
+            onSelect={selectExecutionDevice}
+            dirMode={remoteDirMode}
+            onDirModeChange={setRemoteDirMode}
+            dir={remoteDir}
+            onPickDirectory={() => setDirectoryPickerOpen(true)}
+            dirInvalid={remoteDirInvalid && trimmedRemoteDir.length > 0}
+          />
+        ) : null}
 
         <div className="mb-4 grid gap-4">
           {deviceId && remoteProviders.unsupported && (
@@ -860,7 +975,7 @@ export function CreateWorkerPopover({
                 void updateWorkerPermissionMode(mode as OrcaWorkerPermissionMode)
               }
               vendorKey={vendorKey}
-              deviceId={deviceId}
+              deviceId={leadDeviceId}
               triggerVariant="field"
               dense
               ariaContext={t('orca.createWorker.permissionLabel')}
@@ -905,5 +1020,148 @@ export function CreateWorkerPopover({
       </Dialog.Overlay>
       </Dialog.Portal>
     </Dialog.Root>
+    {executionDeviceId ? <AddRemoteProjectDialog
+      open={open && directoryPickerOpen}
+      onOpenChange={setDirectoryPickerOpen}
+      initialDeviceId={executionDeviceId}
+      fixedDeviceId={executionDeviceId}
+      title={t('orca.createWorker.remoteDirLabel', { device: executionDevice?.name })}
+      confirmText={t('newChat.folderPicker.selectFolder')}
+      onProjectAdded={(target) => {
+        const current = directoryTargetRef.current;
+        if (!current.open || !current.pickerOpen || target.kind !== 'device-link' || target.deviceId !== current.deviceId) return;
+        setRemoteDir(target.path);
+        setRemoteDirMode('path');
+      }}
+    /> : null}</>
+  );
+}
+
+const FIELD_LABEL_CLASS =
+  'mb-2 text-12 font-medium uppercase tracking-[0.5px] text-[var(--text-tertiary)]';
+
+/** 运行设备下拉选择 + 选了其他电脑时的工作目录(对话 / 指定目录)。 */
+function ExecutionDeviceField({
+  devices,
+  selectedId,
+  onSelect,
+  dirMode,
+  onDirModeChange,
+  dir,
+  onPickDirectory,
+  dirInvalid,
+}: {
+  devices: ExecutionDeviceOption[];
+  selectedId: string | null;
+  onSelect: (deviceId: string | null) => void;
+  dirMode: 'dialogue' | 'path';
+  onDirModeChange: (mode: 'dialogue' | 'path') => void;
+  dir: string;
+  onPickDirectory: () => void;
+  dirInvalid: boolean;
+}) {
+  const { t } = useTranslation();
+  const selected = devices.find((d) => d.deviceId === selectedId) ?? null;
+  const segmentClass = (checked: boolean) =>
+    cn(
+      'min-h-8 rounded-full border px-3 py-1.5 text-13 leading-none transition-colors',
+      checked
+        ? 'border-[var(--text-secondary)] bg-[var(--surface-chip)] font-medium text-[var(--text-primary)]'
+        : 'border-[var(--border-default)] text-[var(--text-secondary)] hover:bg-[var(--surface-chip)]',
+    );
+  return (
+    <div className="mb-4 grid gap-3" data-testid="worker-execution-device">
+      <div>
+        <div className={FIELD_LABEL_CLASS}>{t('orca.createWorker.executionDeviceLabel')}</div>
+        <Select
+          className="w-full"
+          label={t('orca.createWorker.executionDeviceLabel')}
+          value={selected?.deviceId ?? '__this_computer__'}
+          truncateOptions
+          options={[
+            { value: '__this_computer__', label: t('orca.createWorker.thisComputer') },
+            ...devices.map((device) => ({
+              value: device.deviceId,
+              label: device.name,
+              disabled: !device.supported,
+              endAdornment: (
+                <span className="text-11 font-normal text-[var(--text-secondary)]">
+                  {device.supported
+                    ? t('orca.createWorker.deviceOnline')
+                    : t('orca.createWorker.deviceNeedsUpdate')}
+                </span>
+              ),
+            })),
+          ]}
+          onValueChange={(value) => onSelect(value === '__this_computer__' ? null : value)}
+        />
+        <p className="mt-1.5 text-11 leading-snug text-[var(--text-secondary)]">
+          {selected
+            ? t('orca.createWorker.executionDeviceRemoteHint', { device: selected.name })
+            : t('orca.createWorker.executionDeviceHint')}
+        </p>
+      </div>
+      {selected ? (
+        <div>
+          <div className={FIELD_LABEL_CLASS}>
+            {t('orca.createWorker.remoteDirLabel', { device: selected.name })}
+          </div>
+          <div
+            className="flex flex-wrap gap-2"
+            role="radiogroup"
+            aria-label={t('orca.createWorker.remoteDirLabel', { device: selected.name })}
+          >
+            <button
+              type="button"
+              role="radio"
+              aria-checked={dirMode === 'dialogue'}
+              className={segmentClass(dirMode === 'dialogue')}
+              onClick={() => onDirModeChange('dialogue')}
+            >
+              {t('orca.createWorker.remoteDirChat')}
+            </button>
+            <button
+              type="button"
+              role="radio"
+              aria-checked={dirMode === 'path'}
+              className={segmentClass(dirMode === 'path')}
+              onClick={() => onDirModeChange('path')}
+            >
+              {t('orca.createWorker.remoteDirPath')}
+            </button>
+          </div>
+          {dirMode === 'path' ? (
+            <button
+              type="button"
+              className={cn(
+                'mt-2 flex min-h-9 w-full items-center gap-2 rounded-full border bg-transparent px-3 py-2 text-left text-13 leading-snug text-[var(--text-primary)] outline-none hover:bg-[var(--surface-chip)]',
+                dirInvalid
+                  ? 'border-[var(--error-fg)]'
+                  : 'border-[var(--border-default)] focus:border-[var(--text-secondary)]',
+              )}
+              aria-label={t('orca.createWorker.remoteDirLabel', { device: selected.name })}
+              aria-invalid={dirInvalid}
+              onClick={onPickDirectory}
+            >
+              <Folder size={16} className="shrink-0 text-[var(--text-secondary)]" />
+              <span className="min-w-0 truncate">{dir || t('newChat.folderPicker.selectFolder')}</span>
+            </button>
+          ) : null}
+          <p
+            className={cn(
+              'mt-1.5 text-11 leading-snug',
+              dirInvalid ? 'text-[var(--error-fg)]' : 'text-[var(--text-secondary)]',
+            )}
+            role={dirInvalid ? 'status' : undefined}
+          >
+            {dirInvalid
+              ? t('orca.createWorker.remoteDirInvalid', { device: selected.name })
+              : dirMode === 'dialogue'
+                ? t('orca.createWorker.remoteDirChatHint', { device: selected.name })
+                : t('orca.createWorker.remoteDirPathHint', { device: selected.name })}
+          </p>
+        </div>
+      ) : null}
+    </div>
   );
 }

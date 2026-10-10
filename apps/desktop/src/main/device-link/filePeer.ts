@@ -257,6 +257,20 @@ function track(id: string, peer: string, incoming: boolean) {
   timer.unref();
   connections.set(id, { peer, incoming, owner: captureDataOwnerBroadcastScope(), timer });
 }
+/**
+ * Best-effort close notice. The stored invoke may belong to a caller that has since gone
+ * away (e.g. a stopped remote desktop) and throw synchronously; that must neither skip the
+ * local cleanup nor escape from a timer as an uncaughtException.
+ */
+function notifyPeerClose(invoke: Invoke, peer: string, remote: string): void {
+  try {
+    void invoke(peer, FILE_PEER_CHANNEL, [{ action: 'close', connection: remote }]).catch(
+      () => {},
+    );
+  } catch {
+    // The peer still drops the connection on its own idle timeout.
+  }
+}
 function stopConnection(id: string, reason: string) {
   const c = connections.get(id);
   if (!c) return;
@@ -274,9 +288,7 @@ function stopConnection(id: string, reason: string) {
   if (out?.id === id) {
     outgoing.delete(c.peer);
     if (out.remote && isDataOwnerBroadcastScopeCurrent(c.owner))
-      void out
-        .invoke(c.peer, FILE_PEER_CHANNEL, [{ action: 'close', connection: out.remote }])
-        .catch(() => {});
+      notifyPeerClose(out.invoke, c.peer, out.remote);
   }
   for (const [ticket, source] of sources)
     if (source.connection === id) {
@@ -839,10 +851,7 @@ async function receivePeerFile(
     if (!complete) {
       stopConnection(id, 'incomplete');
       if (outgoing.get(peer) === out) outgoing.delete(peer);
-      if (remote && isDataOwnerBroadcastScopeCurrent(owner))
-        void invoke(peer, FILE_PEER_CHANNEL, [{ action: 'close', connection: remote }]).catch(
-          () => {},
-        );
+      if (remote && isDataOwnerBroadcastScopeCurrent(owner)) notifyPeerClose(invoke, peer, remote);
     }
     if (directory) await fs.rm(directory, { recursive: true, force: true });
   }
