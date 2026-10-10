@@ -7,6 +7,7 @@ import {
   requestHostInteraction,
   installDesktopInteractionHandler,
   installInteractionLifecycleObserver,
+  noteInteractionRouteSteer,
   type InteractionHandler,
 } from '../interactionRouter';
 
@@ -77,6 +78,38 @@ describe('session interaction router', () => {
     });
     lease.release();
     expect(getActiveInteractionRoute(host.session)).toBeNull();
+  });
+
+  it('stops vouching for the IM sender once other input is steered into the turn', () => {
+    const host = makeSession();
+    installDesktopInteractionHandler(host.session, vi.fn<InteractionHandler>((_request, shared) => shared!.result));
+    noteInteractionRouteSteer(host.session);
+    const lease = beginInteractionRoute(host.session, {
+      route: {
+        sessionId: host.session.id, turnId: 'turn-steered', origin: { kind: 'im', channel: 'telegram' },
+        interactionSurface: 'channel-card', requesterAuthority: 'owner',
+      },
+      handle: vi.fn(async (): Promise<InteractionDecision> => ({ kind: 'permission', behavior: 'deny' })),
+    });
+    try {
+      // A steer before this route began does not touch it.
+      expect(getActiveInteractionRoute(host.session)?.requesterAuthority).toBe('owner');
+      noteInteractionRouteSteer(host.session);
+      expect(getActiveInteractionRoute(host.session)).toMatchObject({
+        origin: { kind: 'im', channel: 'telegram' }, requesterAuthority: 'unknown',
+      });
+      expect(lease.route.requesterAuthority).toBe('owner');
+    } finally { lease.release(); }
+    const next = beginInteractionRoute(host.session, {
+      route: {
+        sessionId: host.session.id, turnId: 'turn-next', origin: { kind: 'im', channel: 'telegram' },
+        interactionSurface: 'channel-card', requesterAuthority: 'owner',
+      },
+      handle: vi.fn(async (): Promise<InteractionDecision> => ({ kind: 'permission', behavior: 'deny' })),
+    });
+    try {
+      expect(getActiveInteractionRoute(host.session)?.requesterAuthority).toBe('owner');
+    } finally { next.release(); }
   });
 
   it('lets the phone/Desktop or the IM card answer an app update card; the first answer wins', async () => {
