@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   emptyPluginInstanceRegistry,
+  selectMarketPluginIdForInstance,
   type PluginInstanceRegistry,
   type PluginInstanceRegistryStore,
 } from '../pluginInstanceRegistry.js';
@@ -25,7 +26,12 @@ function memoryStore(initial: PluginInstanceRegistry): PluginInstanceRegistrySto
 function service(options: {
   registry: PluginInstanceRegistry;
   relIds?: string[];
-  marketIdentityForGhost?: (ghostId: string) => { pluginId: string } | null;
+  marketIdentityForInstance?: (instance: {
+    ghostId: string;
+    contentRelId: string;
+    namespace: string | null;
+    packageSha256: string | null;
+  }) => { pluginId: string } | null;
 }) {
   const store = memoryStore(options.registry);
   const created = new PluginInstanceRegistryService({
@@ -42,7 +48,7 @@ function service(options: {
     censusCandidates: () => [],
     readApproval: () => ({ state: 'missing' }),
     recordLegacyEligibility: () => {},
-    marketIdentityForGhost: options.marketIdentityForGhost,
+    marketIdentityForInstance: options.marketIdentityForInstance,
   });
   return { created, store };
 }
@@ -110,7 +116,7 @@ describe('market identity backfill', () => {
     const { created, store } = service({
       registry,
       relIds: ['helper'],
-      marketIdentityForGhost: () => ({ pluginId: 'plugin-a' }),
+      marketIdentityForInstance: () => ({ pluginId: 'plugin-a' }),
     });
     created.sync();
     expect(store.snapshot().instances.helper).toMatchObject({
@@ -136,11 +142,51 @@ describe('market identity backfill', () => {
     const { created, store } = service({
       registry,
       relIds: ['helper', '_ns/_root/builtin-helper'],
-      marketIdentityForGhost: (ghostId) => ({ pluginId: ghostId + '-market' }),
+      marketIdentityForInstance: (instance) => ({ pluginId: instance.ghostId + '-market' }),
     });
     created.sync();
     const next = store.snapshot();
     expect(next.instances.helper).toMatchObject({ pluginId: null, source: 'agent-forge' });
     expect(next.instances['_root__builtin-helper']).toMatchObject({ pluginId: null, source: 'builtin' });
+  });
+
+  it('does not give a manual root the enterprise plugin id of the same ghost id', () => {
+    const sha = 'ab'.repeat(32);
+    const registry: PluginInstanceRegistry = {
+      ...emptyPluginInstanceRegistry(),
+      census: { completedAt: NOW, pendingRelIds: ['helper'] },
+      instances: {
+        helper: row({ source: 'manual', packageSha256: sha }),
+        '_ns__xd__helper': row({
+          instanceKey: '_ns__xd__helper',
+          contentRelId: '_ns/xd/helper',
+          namespace: 'xd',
+          namespaceState: 'confirmed',
+          source: 'manual',
+          packageSha256: sha,
+        }),
+      },
+    };
+    const records = [{
+      pluginId: 'plugin-org',
+      ghostId: 'helper',
+      installed: true,
+      namespace: 'xd',
+      scope: 'organization',
+      organizationId: 'org-xd',
+      sha256: sha,
+    }];
+    const { created, store } = service({
+      registry,
+      relIds: ['helper', '_ns/xd/helper'],
+      marketIdentityForInstance: (instance) => {
+        const pluginId = selectMarketPluginIdForInstance(instance, records);
+        return pluginId ? { pluginId } : null;
+      },
+    });
+    created.sync();
+    const next = store.snapshot();
+    expect(next.instances.helper).toMatchObject({ pluginId: null, source: 'manual' });
+    expect(next.instances['_ns__xd__helper']).toMatchObject({ pluginId: 'plugin-org', source: 'market' });
   });
 });

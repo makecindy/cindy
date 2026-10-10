@@ -279,12 +279,21 @@ export interface GhostManagerOptions {
   captureLegacyFirstPartyEligibility?: (ghostId: string, approvedPackageSha256: string) => boolean;
   /** True when runtime/OAuth/install work should delay a first-time namespace stamp. */
   isNamespaceMigrationBusy?: (ghostId: string) => boolean;
-  /** Market ledger identity for a ghost that predates pluginId on the receipt. */
-  marketIdentityForGhost?: (ghostId: string) => { pluginId: string } | null;
+  /**
+   * Market plugin id for this exact instance. A same-name install in another
+   * namespace must not be returned.
+   */
+  marketIdentityForInstance?: (instance: {
+    ghostId: string;
+    contentRelId: string;
+    namespace: string | null;
+    packageSha256: string | null;
+  }) => { pluginId: string } | null;
   canResumePendingResidentOffline?: (ghostId: string) => boolean;
   onResumePendingResidentOffline?: (ghost: InstalledGhost) => void;
   preparePendingResidentForMigration?: (ghostId: string) => Promise<boolean>;
   onPendingResidentMigrationDeferred?: (ghostId: string) => void;
+  onPendingResidentMigrationSettled?: (ghostId: string, committed: boolean) => void;
   /** Best-effort side effect after the receipt and registry census commit. */
   onNamespaceCommitted?: (ghostId: string, namespace: string | null) => void;
   beforeNamespaceCommit?: (ghostId: string, namespace: string | null) => void;
@@ -630,7 +639,7 @@ export class GhostManager {
     recordLegacyEligibility: (relId, revision) => {
       this.receiptStore.captureLegacyFirstPartyEligibilitySync(relId, revision);
     },
-    marketIdentityForGhost: (ghostId) => this.options.marketIdentityForGhost?.(ghostId) ?? null,
+    marketIdentityForInstance: (instance) => this.options.marketIdentityForInstance?.(instance) ?? null,
     log: {
       warn: (message, meta) => { this.options.log?.warn(message, meta); },
     },
@@ -843,6 +852,11 @@ export class GhostManager {
     return this.instanceRegistryService.ensureCensus();
   }
 
+  /** True after a corrupt registry was quarantined. Market placement must wait. */
+  isInstanceRegistryBlocked(): boolean {
+    return this.instanceRegistryService.isBlocked();
+  }
+
   private async resolvePendingNamespaceInstall(
     ghostId: string,
     requestedNamespace: string | null,
@@ -864,6 +878,7 @@ export class GhostManager {
       ownerContextKey: () => this.currentOwnerContextKey(),
       preparePendingResident: this.options.preparePendingResidentForMigration,
       onPendingResidentDeferred: this.options.onPendingResidentMigrationDeferred,
+      onPendingResidentMigrationSettled: this.options.onPendingResidentMigrationSettled,
       readApproval: (ghostId) => this.readApproval(ghostId),
       classify: this.options.classifyPendingNamespace,
       commit: (ghostId, namespace, basis, expectedReceipt) =>

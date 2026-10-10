@@ -147,6 +147,40 @@ export function adoptContentInstall(input: {
   };
 }
 
+
+/**
+ * The market row that belongs to this directory, or null when zero or several do.
+ * A missing namespace is not root: it only matches the legacy bare directory.
+ * An explicit namespace must match, and scope/organization must agree with it.
+ */
+export function selectMarketPluginIdForInstance(
+  instance: {
+    ghostId: string;
+    contentRelId: string;
+    namespace: string | null;
+    packageSha256: string | null;
+  },
+  records: readonly {
+    pluginId?: string | null;
+    ghostId?: string;
+    installed?: boolean;
+    namespace?: string | null;
+    scope?: string | null;
+    organizationId?: string | null;
+    sha256?: string | null;
+  }[],
+): string | null {
+  const matches = records.filter((record) => {
+    if (record.installed !== true || !record.pluginId || record.ghostId !== instance.ghostId) return false;
+    if (record.sha256 && instance.packageSha256 && record.sha256 !== instance.packageSha256) return false;
+    if (!hasDeliveryNamespace(record)) return instance.contentRelId === instance.ghostId;
+    if (record.namespace !== instance.namespace) return false;
+    if (record.namespace === null) return record.scope !== 'organization' && !record.organizationId;
+    return record.scope === undefined || record.scope === 'organization';
+  });
+  return matches.length === 1 ? matches[0]!.pluginId! : null;
+}
+
 /**
  * Receipt rewrite never allocates a new instance.
  * Losing the namespace field, or disagreeing with the registry, only

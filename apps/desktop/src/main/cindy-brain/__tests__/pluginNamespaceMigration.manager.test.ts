@@ -466,11 +466,12 @@ describe('GhostManager namespace migration census', () => {
     }
   });
 
-  it('stops offline residency when the market responds but the organization slug is not yet known', async () => {
+  it('does not stop a resident while classification is still pending', async () => {
     await plantLegacyInstall('hello');
     let slugKnown = false;
     let busy = false;
     const stopped = vi.fn(async () => { busy = false; return true; });
+    const resumed = vi.fn();
     manager = createManager({
       classifyPendingNamespace: () => slugKnown
         ? { kind: 'commit', namespace: 'acme', basis: 'market-organization' }
@@ -479,13 +480,16 @@ describe('GhostManager namespace migration census', () => {
       canResumePendingResidentOffline: () => true,
       onResumePendingResidentOffline: () => { busy = true; },
       preparePendingResidentForMigration: stopped,
+      onPendingResidentMigrationSettled: resumed,
     });
     manager.resumePendingResidentsOffline();
     await manager.reconcilePendingRootNamespaces(true);
-    expect(stopped).toHaveBeenCalledOnce();
+    expect(stopped).not.toHaveBeenCalled();
+    expect(resumed).not.toHaveBeenCalled();
     expect(manager.list()[0]?.namespaceState).toBe('pending');
     slugKnown = true;
     await manager.reconcilePendingRootNamespaces(true);
+    expect(stopped).toHaveBeenCalledOnce();
     expect(manager.list()[0]?.namespace).toBe('acme');
   });
 

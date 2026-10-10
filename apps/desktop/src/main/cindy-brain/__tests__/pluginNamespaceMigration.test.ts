@@ -1,7 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { buildUnconfirmedConfirmationEvidence } from '../pluginInstanceConfirmation.js';
-import { stampInstanceCensus } from '../pluginNamespaceMigration.js';
+import { reconcilePendingNamespaceMigrations, stampInstanceCensus } from '../pluginNamespaceMigration.js';
 import { emptyPluginInstanceRegistry, type PluginInstanceRecord } from '../pluginInstanceRegistry.js';
 
 const NOW = '2026-10-08T00:00:00.000Z';
@@ -84,5 +84,55 @@ describe('buildUnconfirmedConfirmationEvidence', () => {
       forgeSelfTest: false,
     });
     expect(explicit.marketRecords?.[0]).toMatchObject({ namespace: null });
+  });
+});
+
+describe('reconcilePendingNamespaceMigrations', () => {
+  const census = { completedAt: NOW, pendingRelIds: ['hello'] };
+
+  it('does not stop a plugin whose classification is still pending', async () => {
+    const prepare = vi.fn(async () => true);
+    const commit = vi.fn(async () => ({ ok: true as const }));
+    await reconcilePendingNamespaceMigrations({
+      ensureCensus: () => census,
+      ownerContextKey: () => 'owner',
+      preparePendingResident: prepare,
+      readApproval: () => ({ state: 'legacy-unapproved' }),
+      classify: () => ({ kind: 'pending', reason: 'awaiting-organization-namespace' }),
+      commit,
+      confirmUnconfirmed: async () => {},
+    }, true);
+    expect(prepare).not.toHaveBeenCalled();
+    expect(commit).not.toHaveBeenCalled();
+  });
+
+  it('restores a stopped resident when the commit fails', async () => {
+    const settled = vi.fn();
+    await reconcilePendingNamespaceMigrations({
+      ensureCensus: () => census,
+      ownerContextKey: () => 'owner',
+      preparePendingResident: async () => true,
+      onPendingResidentMigrationSettled: settled,
+      readApproval: () => ({ state: 'legacy-unapproved' }),
+      classify: () => ({ kind: 'commit', namespace: 'acme', basis: 'market-organization' }),
+      commit: async () => ({ ok: false as const, reason: 'busy' }),
+      confirmUnconfirmed: async () => {},
+    }, true);
+    expect(settled).toHaveBeenCalledWith('hello', false);
+  });
+
+  it('does not restore when the commit succeeds', async () => {
+    const settled = vi.fn();
+    await reconcilePendingNamespaceMigrations({
+      ensureCensus: () => census,
+      ownerContextKey: () => 'owner',
+      preparePendingResident: async () => true,
+      onPendingResidentMigrationSettled: settled,
+      readApproval: () => ({ state: 'legacy-unapproved' }),
+      classify: () => ({ kind: 'commit', namespace: 'acme', basis: 'market-organization' }),
+      commit: async () => ({ ok: true as const }),
+      confirmUnconfirmed: async () => {},
+    }, true);
+    expect(settled).toHaveBeenCalledWith('hello', true);
   });
 });

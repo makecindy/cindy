@@ -40,7 +40,7 @@ describe('pending resident migration host', () => {
     const host = createNamespaceMigrationHost(deps({
       getGhostManager: () => ({
         list: () => [{
-          manifest: { id: 'ns-resident-probe' },
+          manifest: { id: 'ns-resident-probe', launch: 'resident' as const },
           namespaceState: 'pending',
           dir: '/ghosts/ns-resident-probe',
         }],
@@ -56,6 +56,49 @@ describe('pending resident migration host', () => {
     await expect(host.preparePendingResidentForMigration('ns-resident-probe')).resolves.toBe(true);
     expect(stopRuntime).toHaveBeenCalledWith('ns-resident-probe');
     expect(stopNodeRuntime).toHaveBeenCalledWith('ns-resident-probe');
+  });
+
+  it('does not stop a running panel plugin', async () => {
+    const stopRuntime = vi.fn();
+    const host = createNamespaceMigrationHost(deps({
+      getGhostManager: () => ({
+        list: () => [{
+          manifest: { id: 'panel-probe' },
+          namespaceState: 'pending',
+          dir: '/ghosts/panel-probe',
+        }],
+        approvedInstallEvidence: () => null,
+        readApprovedInstallOriginStrict: () => 'manual',
+        reconcilePendingRootNamespaces: async () => {},
+      }),
+      runtimeState: () => 'running',
+      stopRuntime,
+    }));
+    await expect(host.preparePendingResidentForMigration('panel-probe')).resolves.toBe(false);
+    expect(stopRuntime).not.toHaveBeenCalled();
+  });
+
+  it('restarts a resident when the commit does not land', async () => {
+    const spawn = vi.fn();
+    const host = createNamespaceMigrationHost(deps({
+      getGhostManager: () => ({
+        list: () => [{
+          manifest: { id: 'ns-resident-probe', node: { lifecycle: 'resident' } },
+          namespaceState: 'pending',
+          dir: '/ghosts/ns-resident-probe',
+        }],
+        approvedInstallEvidence: () => null,
+        readApprovedInstallOriginStrict: () => 'manual',
+        reconcilePendingRootNamespaces: async () => {},
+      }),
+      runtimeState: () => 'running',
+      spawnIfResident: spawn,
+    }));
+    await expect(host.preparePendingResidentForMigration('ns-resident-probe')).resolves.toBe(true);
+    host.onPendingResidentMigrationSettled('ns-resident-probe', false);
+    expect(spawn).toHaveBeenCalledWith('ns-resident-probe');
+    host.onPendingResidentMigrationSettled('ns-resident-probe', false);
+    expect(spawn).toHaveBeenCalledTimes(1);
   });
 
   it('leaves an idle online resident alone', async () => {

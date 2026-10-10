@@ -186,6 +186,7 @@ import {
   findInstalledGhostForDeliveryTarget,
   installedGhostLogicalIdentity,
   installedGhostPhysicalRelId,
+  blockedInstanceRegistryMarketError,
   organizationMarketPlacementError,
   installedGhostStoragePart,
   installedGhostMutationTargetToken,
@@ -202,7 +203,7 @@ import {
   hasDeliveryNamespace,
   deliveryNamespaceFields,
 } from '../../shared/pluginIdentity.js';
-import { allocateArchiveInstanceKey } from './pluginInstanceRegistry.js';
+import { allocateArchiveInstanceKey, selectMarketPluginIdForInstance } from './pluginInstanceRegistry.js';
 import {
   createNamespaceMigrationHost,
   type NamespaceMigrationHost,
@@ -1801,6 +1802,12 @@ function getNamespaceMigrationHost(): NamespaceMigrationHost {
       nodeRuntimeRunning: (instanceKey) => nodeRuntimeBrokerSingleton?.stateOf(instanceKey) === 'running',
       stopRuntime: (instanceKey) => { getGhostRuntime().stop(instanceKey); },
       stopNodeRuntime: (instanceKey) => getGhostNodeRuntimeBroker().stopAndWait(instanceKey),
+      spawnIfResident: (ghostId) => {
+        const ghost = managerSingleton?.list().find((candidate) =>
+          candidate.namespaceState === 'pending' &&
+          installedGhostPhysicalRelId(candidate) === ghostId);
+        if (ghost) spawnIfResident(ghost, true);
+      },
       captureGhostMutationOwner,
       beginGhostMutation,
       log,
@@ -1841,13 +1848,12 @@ export function getGhostManager(): GhostManager {
       readUnconfirmedConfirmationEvidence: (record) =>
         getNamespaceMigrationHost().readUnconfirmedConfirmationEvidence(record),
       isNamespaceMigrationBusy: (ghostId) => getNamespaceMigrationHost().isNamespaceMigrationBusy(ghostId),
-      marketIdentityForGhost: (ghostId) => {
+      marketIdentityForInstance: (instance) => {
         try {
-          const lookup = getPluginMarketLedger().lookupInstallationsForNamespaceMigration(ghostId);
+          const lookup = getPluginMarketLedger().lookupInstallationsForNamespaceMigration(instance.ghostId);
           if (lookup.kind !== 'found') return null;
-          const installed = (lookup.records ?? []).filter((record) => record.installed && record.pluginId);
-          if (installed.length !== 1) return null;
-          return { pluginId: installed[0]!.pluginId };
+          const pluginId = selectMarketPluginIdForInstance(instance, lookup.records ?? []);
+          return pluginId ? { pluginId } : null;
         } catch {
           return null;
         }
@@ -1862,6 +1868,8 @@ export function getGhostManager(): GhostManager {
         getNamespaceMigrationHost().preparePendingResidentForMigration(ghostId),
       onPendingResidentMigrationDeferred: (ghostId) =>
         getNamespaceMigrationHost().schedulePendingResidentMigrationRetry(ghostId),
+      onPendingResidentMigrationSettled: (ghostId, committed) =>
+        getNamespaceMigrationHost().onPendingResidentMigrationSettled(ghostId, committed),
       beforeNamespaceCommit: (ghostId, namespace) => {
         const marketLedger = getPluginMarketLedger();
         if (!marketLedger.stampNamespaceIfAbsent(ghostId, namespace) &&
@@ -6857,6 +6865,8 @@ async function installOrUpdateMarketGhostPackageLocked(
   let releaseMutation: (() => void) | null = null;
   try {
     const manager = getGhostManager();
+    const registryError = blockedInstanceRegistryMarketError(manager.isInstanceRegistryBlocked());
+    if (registryError) throwIpcError('PRECONDITION_FAILED', registryError);
     const inspected = await manager.inspect(cindyFilePath);
     if ('rejection' in inspected) throwInstallError(inspected.rejection);
     const commitEvidence: MarketGhostPackageCommitEvidence = {

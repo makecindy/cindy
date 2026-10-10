@@ -541,10 +541,15 @@ export function organizationMarketPlacementError(input: {
   if (input.requestedNamespace !== null) return null;
   const installed = input.installedRelId ? parsePluginInstallRelId(input.installedRelId) : null;
   if (installed?.namespace) {
-    return '注册表不可用时不能把企业插件更新成 root';
+    return '不能把企业插件更新成 root';
   }
   if (input.scope === 'organization') {
     return '企业插件缺少 namespace，不能按 root 安装';
   }
   return null;
+}
+
+/** Market install and update both wait until the instance registry can be read. */
+export function blockedInstanceRegistryMarketError(blocked: boolean): string | null {
+  return blocked ? '插件注册表暂不可用，市场安装和更新已暂停，请稍后重试' : null;
 }

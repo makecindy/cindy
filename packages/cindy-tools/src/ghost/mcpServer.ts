@@ -56,7 +56,7 @@ const D_GHOST_INFO = [
   "返回单条完整形态:id、namespace(null=root，字符串=企业 orgSlug)、name、command、recall、setup、tools 与可选 manual 轻量索引。示例:ghost_info({ghost_id:\"helper\", namespace:\"acme\"})；省略 namespace 仅当同名实例唯一。拿到目标工具后用 ghost_call,需要长文时用 ghost_manual。",
   "tools 可能为空:Manual-only 插件仍返回完整详情与 manual 索引,通过 ghost_manual 读取;这不授予任何 ghost_call 工具能力。",
   "查询实时反映安装、启用、账号与当前工作目录状态,不要缓存或依赖会话早前的结果。",
-  "结构化错误:GHOST_NOT_FOUND / GHOST_AMBIGUOUS(同名多实例,candidates 为 {ghostId, namespace}。已确认 root 的 namespace 是 null；没有 namespace 字段的待迁移旧安装在候选里也会标成 null。旁边还有另一个同名实例、且没有已确认 root 时，传 namespace:null 会选中那份旧安装。按候选补 namespace 后重试，不要改选公开版) / GHOST_ASLEEP / GHOST_DISABLED_IN_WORKDIR / INTERNAL。升级普查中的旧插件没有 namespace 字段，省略 namespace 且同名唯一时才能解析；不要把 namespace:null 当成这种旧插件。",
+  "结构化错误:GHOST_NOT_FOUND / GHOST_AMBIGUOUS(同名多实例,candidates 为 {ghostId, namespace}。已确认 root 的 namespace 是 null；没有 namespace 字段的待迁移旧安装在候选里也会标成 null。旁边还有另一个同名实例、且没有已确认 root 时，传 namespace:null 会选中那份旧安装。按候选补 namespace 后重试，不要改选公开版) / GHOST_ASLEEP / GHOST_DISABLED_IN_WORKDIR / INTERNAL。升级普查中的旧插件没有 namespace 字段，省略 namespace 且同名唯一时才能解析。",
 ].join("\n");
 
 const D_GHOST_MANUAL = [

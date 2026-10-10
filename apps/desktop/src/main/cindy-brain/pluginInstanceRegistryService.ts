@@ -43,8 +43,13 @@ interface PluginInstanceRegistryServiceDeps {
   readApproval(relId: string): CensusApproval;
   captureInstalledLegacy?(ghostId: string, packageSha256: string): boolean;
   recordLegacyEligibility(relId: string, revision: string): void;
-  /** Exactly one installed market record, or null when the ledger cannot say. */
-  marketIdentityForGhost?(ghostId: string): { pluginId: string } | null;
+  /** Market plugin id for this directory, or null when the ledger cannot say. */
+  marketIdentityForInstance?(instance: {
+    ghostId: string;
+    contentRelId: string;
+    namespace: string | null;
+    packageSha256: string | null;
+  }): { pluginId: string } | null;
   log?: PluginInstanceRegistryLogger;
 }
 
@@ -212,7 +217,12 @@ export class PluginInstanceRegistryService {
           ghostId,
           receipt: fact,
           pendingMigration: this.isPendingMigrationRel(listed.relId, registry),
-          marketPluginId: this.deps.marketIdentityForGhost?.(ghostId)?.pluginId ?? null,
+          marketPluginId: this.deps.marketIdentityForInstance?.({
+            ghostId,
+            contentRelId: listed.relId,
+            namespace: parsePluginInstallRelId(listed.relId)?.namespace ?? null,
+            packageSha256: fact?.packageSha256 ?? null,
+          })?.pluginId ?? null,
         });
         if (!adopted) continue;
         registry = upsertInstance(registry, adopted);
@@ -220,7 +230,12 @@ export class PluginInstanceRegistryService {
         continue;
       }
       let next = reconcileInstanceReceipt(existing, { directoryPresent: true, receipt: fact });
-      const market = this.deps.marketIdentityForGhost?.(existing.ghostId) ?? null;
+      const market = this.deps.marketIdentityForInstance?.({
+        ghostId: next.ghostId,
+        contentRelId: next.contentRelId,
+        namespace: next.namespace,
+        packageSha256: next.packageSha256,
+      }) ?? null;
       if (market && next.pluginId == null && next.source !== 'agent-forge' && next.source !== 'builtin') {
         next = { ...next, pluginId: market.pluginId, source: 'market' };
       }

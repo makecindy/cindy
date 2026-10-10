@@ -377,6 +377,8 @@ export interface PendingNamespaceReconcileHost {
   ownerContextKey(): string;
   preparePendingResident?(ghostId: string): Promise<boolean>;
   onPendingResidentDeferred?(ghostId: string): void;
+  /** committed false means a stop was not followed by a successful stamp. */
+  onPendingResidentMigrationSettled?(ghostId: string, committed: boolean): void;
   readApproval(ghostId: string): GhostInstallReceiptReadResult;
   classify?(ghostId: string, marketSyncCompleted: boolean): NamespaceClassification;
   commit(
@@ -399,24 +401,32 @@ export async function reconcilePendingNamespaceMigrations(
   const ownerContextKey = host.ownerContextKey();
   for (const ghostId of census.pendingRelIds) {
     if (host.ownerContextKey() !== ownerContextKey) return;
+    let stopAttempted = false;
     try {
-      if (marketSyncCompleted) {
+      const expectedReceipt = namespaceCommitReceiptSnapshot(host.readApproval(ghostId));
+      const classification = host.classify?.(ghostId, marketSyncCompleted) ?? {
+        kind: 'pending' as const,
+        reason: 'awaiting-market-facts',
+      };
+      // Stop only when this entry is about to be stamped. A pending result,
+      // such as a Forge install whose organization does not match, must leave
+      // the running plugin alone.
+      if (marketSyncCompleted && classification.kind === 'commit') {
         const ready = await host.preparePendingResident?.(ghostId);
         if (host.ownerContextKey() !== ownerContextKey) return;
         if (ready === false) {
           host.onPendingResidentDeferred?.(ghostId);
           continue;
         }
+        stopAttempted = true;
       }
-      const expectedReceipt = namespaceCommitReceiptSnapshot(host.readApproval(ghostId));
-      const classification = host.classify?.(ghostId, marketSyncCompleted) ?? {
-        kind: 'pending' as const,
-        reason: 'awaiting-market-facts',
-      };
       if (classification.kind === 'commit') {
         const result = await host.commit(
           ghostId, classification.namespace, classification.basis, expectedReceipt,
         );
+        if (stopAttempted && host.ownerContextKey() === ownerContextKey) {
+          host.onPendingResidentMigrationSettled?.(ghostId, result.ok);
+        }
         if (!result.ok && result.reason === 'busy' && marketSyncCompleted) {
           host.onPendingResidentDeferred?.(ghostId);
         }
@@ -425,6 +435,13 @@ export async function reconcilePendingNamespaceMigrations(
         }
       }
     } catch (error) {
+      if (stopAttempted && host.ownerContextKey() === ownerContextKey) {
+        try {
+          host.onPendingResidentMigrationSettled?.(ghostId, false);
+        } catch {
+          // Restoring the plugin is best-effort; the entry is still deferred.
+        }
+      }
       if (marketSyncCompleted && host.ownerContextKey() === ownerContextKey) {
         host.onPendingResidentDeferred?.(ghostId);
       }

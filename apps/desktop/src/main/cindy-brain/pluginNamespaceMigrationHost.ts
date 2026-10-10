@@ -8,6 +8,7 @@ import path from 'node:path';
 import { GHOST_INSTALL_MANIFEST_MAX_BYTES } from '../../shared/ghost.js';
 import { installedGhostPhysicalRelId, installedGhostStoragePart } from '../../shared/pluginIdentity.js';
 import type { GhostManifest, InstalledGhost } from '../../shared/ghost.js';
+import { isResidentBrowserGhost } from './residentGhost.js';
 import {
   classifyNamespaceMigration,
   readNamespaceMigrationInstallOrigin,
@@ -23,7 +24,12 @@ import {
 import type { PluginMarketInstallationRecord } from '../plugin-market/ledger.js';
 
 export interface NamespaceMigrationGhostView {
-  manifest: { id: string };
+  manifest: {
+    id: string;
+    launch?: GhostManifest['launch'];
+    routineEvents?: GhostManifest['routineEvents'];
+    node?: { lifecycle?: string | null };
+  };
   builtin?: boolean;
   namespaceState?: string;
 }
@@ -68,6 +74,8 @@ export interface NamespaceMigrationHostDeps {
   nodeRuntimeRunning(instanceKey: string): boolean;
   stopRuntime(instanceKey: string): void;
   stopNodeRuntime(instanceKey: string): Promise<void>;
+  /** Restart a resident that was stopped for a commit which then did not land. */
+  spawnIfResident?(ghostId: string): void;
   captureGhostMutationOwner(): unknown;
   beginGhostMutation(owner: unknown): () => void;
   log: { warn(message: string, meta?: Record<string, unknown>): void };
@@ -88,6 +96,7 @@ export interface NamespaceMigrationHost {
   rememberOfflineResident(ghostId: string): void;
   forgetOfflineResident(ghostId: string): void;
   clearPendingResidentMigrationRetry(ghostId: string): void;
+  onPendingResidentMigrationSettled(ghostId: string, committed: boolean): void;
 }
 
 export function createNamespaceMigrationHost(deps: NamespaceMigrationHostDeps): NamespaceMigrationHost {
@@ -95,6 +104,7 @@ export function createNamespaceMigrationHost(deps: NamespaceMigrationHostDeps): 
   const ownedResidentIds = new Set<string>();
   const retryTimers = deps.pendingResidentMigrationRetryTimers ?? new Map<string, { unref?: () => void }>();
   const retryAttempts = deps.pendingResidentMigrationRetryAttempts ?? new Map<string, number>();
+  const stoppedForCommit = new Set<string>();
   const scheduleTimeout = deps.setTimeout ?? ((handler, timeoutMs) => setTimeout(handler, timeoutMs));
 
   function offlineResidentIdsForActiveScope(): Set<string> {
@@ -203,6 +213,10 @@ export function createNamespaceMigrationHost(deps: NamespaceMigrationHostDeps): 
       return record === null && readNamespaceMigrationInstallOrigin(() =>
         deps.getGhostManager().readApprovedInstallOriginStrict(ghostId)) === 'manual';
     },
+    onPendingResidentMigrationSettled(ghostId: string, committed: boolean): void {
+      if (!stoppedForCommit.delete(ghostId) || committed) return;
+      deps.spawnIfResident?.(ghostId);
+    },
     async preparePendingResidentForMigration(ghostId: string): Promise<boolean> {
       if (deps.isAppSessionBoundaryPending()) return false;
       const ownerScopeKey = deps.activeOwnerScopeKey();
@@ -213,10 +227,13 @@ export function createNamespaceMigrationHost(deps: NamespaceMigrationHostDeps): 
       const state = deps.runtimeState(runtimeId);
       const running = state === 'starting' || state === 'running' || state === 'stopping' ||
         deps.nodeRuntimeRunning(runtimeId);
-      const offline = offlineResidentIdsForActiveScope().has(ghostId);
-      // A resident that started while online is not in the offline set. Leaving
-      // it running makes the commit look busy, and the retry used to no-op.
-      if (!offline && !running) return true;
+      const resident = ghost !== undefined && (
+        isResidentBrowserGhost(ghost.manifest as GhostManifest) ||
+        ghost.manifest.node?.lifecycle === 'resident'
+      );
+      // A panel the user has open is not a resident. Leave it running and retry.
+      if (running && !resident) return false;
+      if (!running) return true;
       if (deps.hasPendingWork(ghostId)) return false;
       try {
         if (deps.oauthLockExists(ghostId)) return false;
@@ -229,6 +246,7 @@ export function createNamespaceMigrationHost(deps: NamespaceMigrationHostDeps): 
       if (deps.activeOwnerScopeKey() !== ownerScopeKey || deps.isAppSessionBoundaryPending()) {
         throw new Error('ghost owner changed while stopping a pending resident');
       }
+      stoppedForCommit.add(ghostId);
       return true;
     },
     classifyPendingNamespaceForGhost(ghostId: string, marketSyncCompleted = false): NamespaceClassification {

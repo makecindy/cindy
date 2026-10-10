@@ -32,6 +32,7 @@ import {
   resolvePluginNamespaceState,
   sameDeliveryNamespaceState,
   organizationMarketPlacementError,
+  blockedInstanceRegistryMarketError,
 } from '../pluginIdentity.js';
 
 describe('plugin logical identity', () => {
@@ -394,7 +395,7 @@ describe('organization market placement', () => {
       scope: 'public',
       requestedNamespace: null,
       installedRelId: '_ns/acme/helper',
-    })).toBe('注册表不可用时不能把企业插件更新成 root');
+    })).toBe('不能把企业插件更新成 root');
   });
 
   it('refuses a new root install for an organization plugin', () => {
@@ -411,5 +412,12 @@ describe('organization market placement', () => {
       requestedNamespace: null,
       installedRelId: 'helper',
     })).toBeNull();
+  });
+});
+
+describe('blocked instance registry', () => {
+  it('refuses every market install and update while the registry is blocked', () => {
+    expect(blockedInstanceRegistryMarketError(true)).toBe('插件注册表暂不可用，市场安装和更新已暂停，请稍后重试');
+    expect(blockedInstanceRegistryMarketError(false)).toBeNull();
   });
 });

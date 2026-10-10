@@ -13,6 +13,7 @@ import {
   parsePluginInstanceRegistryDocument,
   reconcileInstanceReceipt,
   upsertInstance,
+  selectMarketPluginIdForInstance,
   type PluginInstanceRecord,
 } from '../pluginInstanceRegistry.js';
 
@@ -331,5 +332,48 @@ describe('plugin instance registry schema', () => {
     if (again.kind !== 'ok') return;
     expect(again.registry.census?.completedAt).toBe('2026-01-01T00:00:00.000Z');
     expect(again.registry.instances.helper.active).toBe(true);
+  });
+});
+
+describe('selectMarketPluginIdForInstance', () => {
+  const instance = {
+    ghostId: 'helper',
+    contentRelId: 'helper',
+    namespace: null as string | null,
+    packageSha256: 'sha-root',
+  };
+  const org = {
+    ...instance,
+    contentRelId: '_ns/xd/helper',
+    namespace: 'xd',
+    packageSha256: 'sha-org',
+  };
+
+  it('does not stamp a root install with an organization row', () => {
+    const records = [{
+      pluginId: 'plugin-org', ghostId: 'helper', installed: true,
+      namespace: 'xd', scope: 'organization', organizationId: 'org-xd', sha256: 'sha-org',
+    }];
+    expect(selectMarketPluginIdForInstance(instance, records)).toBeNull();
+    expect(selectMarketPluginIdForInstance(org, records)).toBe('plugin-org');
+  });
+
+  it('matches a row with no namespace only to the legacy bare directory', () => {
+    const records = [{
+      pluginId: 'plugin-old', ghostId: 'helper', installed: true, sha256: 'sha-root',
+    }];
+    expect(selectMarketPluginIdForInstance(instance, records)).toBe('plugin-old');
+    expect(selectMarketPluginIdForInstance({ ...instance, contentRelId: '_ns/_root/helper' }, records)).toBeNull();
+  });
+
+  it('rejects a package sha mismatch and an organization row labeled root', () => {
+    expect(selectMarketPluginIdForInstance(org, [{
+      pluginId: 'plugin-org', ghostId: 'helper', installed: true,
+      namespace: 'xd', scope: 'organization', organizationId: 'org-xd', sha256: 'other',
+    }])).toBeNull();
+    expect(selectMarketPluginIdForInstance(instance, [{
+      pluginId: 'plugin-org', ghostId: 'helper', installed: true,
+      namespace: null, scope: 'organization', organizationId: 'org-xd', sha256: 'sha-root',
+    }])).toBeNull();
   });
 });
