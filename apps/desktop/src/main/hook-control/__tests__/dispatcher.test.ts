@@ -506,6 +506,7 @@ describe('normalizeTaskSource', () => {
 
     expect(fr.calls[0]?.source?.channelName).toHaveLength(160);
     expect(fr.calls[0]?.source?.userText).toHaveLength(20_000);
+    expect(fr.calls[0]?.userText).toBe('u'.repeat(20_100));
     fr.finish();
   });
 

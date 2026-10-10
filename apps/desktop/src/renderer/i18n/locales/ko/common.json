@@ -205,7 +205,6 @@
       "descriptionOff": "켜면 내 다른 컴퓨터와 공유받은 사람이 이 제공자의 모델을 사용할 수 있습니다. 꺼져 있는 동안 기존 공유는 일시적으로 사용할 수 없지만 삭제되지는 않습니다."
     },
     "manage": {
-      "title": "{{provider}} 공유",
       "description": "공유하면 상대방은 자신의 세션에서 {{provider}} 모델을 선택할 수 있습니다. Agent는 이 컴퓨터에서 실행되고 사용량은 내 {{provider}}에 계산됩니다. 상대방의 파일과 명령은 계속 상대방 컴퓨터에서 실행됩니다.",
       "descriptionWithDevice": "공유하면 상대방은 자신의 세션에서 {{provider}} 모델을 선택할 수 있습니다. Agent는 이 컴퓨터({{device}})에서 실행되고 사용량은 내 {{provider}}에 계산됩니다. 상대방의 파일과 명령은 계속 상대방 컴퓨터에서 실행됩니다.",
       "createLink": "공유 링크 만들기",
@@ -396,6 +395,104 @@
       "approvedBody": "{{name}}님이 {{provider}} 공유를 승인했습니다",
       "rejectedTitle": "공유 요청 거절됨",
       "rejectedBody": "{{name}}님이 {{provider}} 공유를 거절했습니다"
+    }
+  },
+  "providerGroup": {
+    "row": {
+      "label": "제공자 그룹",
+      "description": "여러 컴퓨터의 이 제공자를 하나로 묶어 자동으로 배정하고, 문제가 생기면 다른 컴퓨터로 전환합니다",
+      "summary_other": "컴퓨터 {{count}}대 · {{strategy}}",
+      "setUp": "그룹 설정",
+      "manage": "그룹 관리"
+    },
+    "page": {
+      "title": "{{provider}} · 원격 및 공유",
+      "shareTitle": "공유"
+    },
+    "section": {
+      "title": "제공자 그룹",
+      "addComputer": "컴퓨터 추가",
+      "delete": "그룹 삭제",
+      "empty": "다른 컴퓨터의 {{provider}}을(를) 추가하면 세션이 자동으로 한 대를 골라 실행합니다",
+      "loading": "제공자 그룹을 불러오는 중…",
+      "loadFailed": "제공자 그룹을 불러오지 못했습니다",
+      "note": "이 컴퓨터의 세션은 Agent가 그룹이 선택한 컴퓨터에서 실행됩니다"
+    },
+    "strategy": {
+      "label": "그룹 배정 방식",
+      "least": "여유 우선",
+      "round": "순환",
+      "order": "순서대로",
+      "weight": "가중치",
+      "description": {
+        "least": "가장 여유로운 컴퓨터로",
+        "round": "차례대로 배정",
+        "order": "목록 앞쪽 우선",
+        "weight": "가중치 비율로"
+      }
+    },
+    "autoSwitch": {
+      "label": "컴퓨터 자동 전환",
+      "description": "한도 초과, 연결 불가, 로그인 만료 시 전환합니다"
+    },
+    "member": {
+      "local": "이 컴퓨터",
+      "sourceDevice": "내 다른 컴퓨터",
+      "sourceShare": "{{name}}님의 공유",
+      "runningCount_other": "{{count}}개 실행 중",
+      "limitAria": "{{name}}의 동시 실행 한도",
+      "limitOption_other": "한도 {{count}}",
+      "weightAria": "{{name}}의 가중치",
+      "weightOption": "가중치 {{weight}}",
+      "assignAria": "{{name}}에 배정",
+      "moreAria": "{{name}} 추가 작업",
+      "remove": "그룹에서 제외",
+      "status": {
+        "checking": "확인 중…",
+        "idle": "대기 중",
+        "full": "한도 도달",
+        "paused": "배정 일시 중지됨",
+        "cooling": "대기 중",
+        "coolingUntil": "대기 중 · {{time}}쯤 복구",
+        "offline": "오프라인",
+        "unavailable": {
+          "provider-off": "그 컴퓨터에서 이 제공자의 원격 사용 허용이 꺼져 있습니다",
+          "disconnected": "제공자가 연결되지 않았거나 꺼져 있습니다",
+          "share-paused": "공유가 일시 중지됨",
+          "share-removed": "공유가 삭제됨"
+        }
+      },
+      "removeConfirm": {
+        "title": "{{name}}을(를) 제공자 그룹에서 제외할까요?",
+        "description": "새 세션이 더 이상 배정되지 않습니다. 이미 그 컴퓨터에서 실행 중인 세션은 그대로 남습니다.",
+        "lastDescription": "그룹의 마지막 컴퓨터입니다. 제외하면 {{provider}} 제공자 그룹이 삭제됩니다.",
+        "confirm": "그룹에서 제외"
+      }
+    },
+    "deleteConfirm": {
+      "title": "{{provider}} 제공자 그룹을 삭제할까요?",
+      "description": "이 컴퓨터의 새 세션은 이 컴퓨터에서 실행됩니다. 다른 컴퓨터에 배정된 세션은 그대로 남습니다.",
+      "confirm": "그룹 삭제"
+    },
+    "add": {
+      "title": "{{provider}} 제공자 그룹에 컴퓨터 추가",
+      "sourceAria": "컴퓨터 출처",
+      "tabAvailable": "이미 사용 가능",
+      "tabLink": "공유 링크",
+      "availableDescription": "내 다른 컴퓨터와 나에게 공유된 것입니다. 선택만 하면 추가되고 요청은 필요 없습니다.",
+      "loading": "추가할 수 있는 컴퓨터를 찾는 중…",
+      "loadFailed": "추가할 수 있는 컴퓨터를 불러오지 못했습니다",
+      "empty": "추가할 수 있는 컴퓨터가 없습니다. 다른 컴퓨터에서 {{provider}}의 원격 사용 허용을 켜거나, 다른 사람의 공유 링크로 요청하세요.",
+      "alreadyMember": "이미 그룹에 있음",
+      "confirm": "그룹에 추가",
+      "cancel": "취소",
+      "linkDescription": "다른 사람이 공유한 {{provider}} 링크를 붙여 넣습니다. 상대방이 승인하면 이미 사용 가능 탭으로 돌아와 선택하세요.",
+      "pasteLink": "공유 링크 붙여넣기"
+    },
+    "toast": {
+      "added_other": "컴퓨터 {{count}}대를 {{provider}} 제공자 그룹에 추가했습니다",
+      "removed": "{{name}}을(를) 제공자 그룹에서 제외했습니다",
+      "deleted": "{{provider}} 제공자 그룹을 삭제했습니다"
     }
   },
   "privacyExit": {
@@ -633,7 +730,8 @@
     "PROVIDER_SHARE_CROSS_REGION_DISABLED": "다른 지역 간 공유는 아직 지원되지 않습니다. 이 링크는 다른 지역의 Cindy 서비스에서 만든 것입니다.",
     "REMOTE_AGENT_SHARE_PAUSED": "모델이 바뀌지 않았습니다: 공유한 사람이 나에 대한 공유를 일시 중지했습니다. 다른 모델을 선택하세요.",
     "REMOTE_AGENT_SHARE_REMOVED": "모델이 바뀌지 않았습니다: 이 공유는 더 이상 사용할 수 없습니다(공유한 사람이 삭제했거나 내가 나갔습니다). 다른 모델을 선택하세요.",
-    "REMOTE_AGENT_SHARE_UNAVAILABLE": "모델이 바뀌지 않았습니다: 공유된 제공자를 일시적으로 사용할 수 없습니다(공유한 사람의 컴퓨터가 오프라인이거나 공유가 잠시 꺼져 있습니다). 나중에 다시 시도하거나 다른 모델을 선택하세요."
+    "REMOTE_AGENT_SHARE_UNAVAILABLE": "모델이 바뀌지 않았습니다: 공유된 제공자를 일시적으로 사용할 수 없습니다(공유한 사람의 컴퓨터가 오프라인이거나 공유가 잠시 꺼져 있습니다). 나중에 다시 시도하거나 다른 모델을 선택하세요.",
+    "SSH_HOST_KEY_MISMATCH": "SSH 호스트 키가 변경됨"
   },
   "providerError": {
     "AUTH_INVALID": "API 키가 유효하지 않거나 만료되었습니다(401). 키를 확인한 후 다시 시도하세요",
@@ -1038,6 +1136,15 @@
         "preparingRuntime": "원격 {{hostId}} 의 런타임 준비 중…",
         "installingAgent": "원격 {{hostId}} 에 {{agent}} 설치 중…",
         "failed": "{{hostId}} 에 {{agent}} 설치 실패: {{message}}。설정 → 원격 머신 → {{hostId}} 확장하여 전체 로그를 확인하세요."
+      },
+      "hostKey": {
+        "title": "SSH 호스트 키가 변경됨",
+        "review": "호스트 키 확인",
+        "explanation": "{{host}}의 호스트 키가 Cindy에 저장된 키와 일치하지 않습니다. 신뢰할 키를 업데이트하기 전에 서버 관리자에게 새 지문을 확인하세요.",
+        "details": "기존 지문: {{trusted}}\n새 지문: {{presented}}\n\n서버 재설치 또는 연결 대상 사칭으로 인해 변경되었을 수 있습니다. 서버 콘솔 등 신뢰할 수 있는 경로로 새 지문을 확인하세요.\n\nCindy 신뢰 기록: {{file}}\nCindy는 ~/.ssh/known_hosts를 읽지 않습니다. 로그인 키를 변경하거나 호스트를 삭제한 뒤 다시 추가해도 해결되지 않습니다.\n\n업데이트하면 이 호스트의 지문만 교체하고 다시 연결합니다. 다른 호스트에는 영향을 주지 않습니다.",
+        "cancel": "기존 키 유지",
+        "trust": "새 키 신뢰 및 다시 연결",
+        "updateFailed": "호스트 신뢰 기록을 업데이트할 수 없습니다. 연결 정보나 저장된 키가 변경되었거나 기록 파일에 쓸 수 없을 수 있습니다. 다시 연결하여 지문을 새로 확인하고 파일 권한을 확인하세요."
       }
     },
     "appearance": {
@@ -8522,10 +8629,22 @@
       "errors": {
         "memberLimit": "그룹 채팅에는 동료가 2~6명 필요합니다",
         "memberUnavailable": "사용할 수 없는 동료가 있습니다. 다른 동료를 골라 다시 시도하세요",
+        "mentionUnavailable": "멘션한 멤버를 더 이상 사용할 수 없습니다. 다시 선택한 후 보내세요.",
         "notFound": "이 그룹 채팅은 더 이상 존재하지 않습니다",
         "hostNotReady": "Cindy가 아직 준비 중입니다. 잠시 후 다시 시도하세요",
         "planOpen": "역할 분담이 진행 중입니다. 끝내거나 중지한 뒤 새로 시작하세요",
-        "planClosed": "이 계획은 이미 끝났거나 업데이트되었습니다"
+        "planClosed": "이 계획은 이미 끝났거나 업데이트되었습니다",
+        "invalidAttachment": "첨부 파일을 읽을 수 없어요. 다시 선택한 후 보내 주세요.",
+        "attachmentUnavailable": "휴대폰에서 첨부 파일을 가져오지 못했어요. 기기 연결을 확인하고 다시 시도해 주세요.",
+        "attachmentTooLarge": "첨부 파일이 100 MB를 초과해요. 더 작은 파일을 선택해 주세요.",
+        "mediaUploadFailed": "채팅 서비스에 첨부 파일을 업로드하지 못했어요. 잠시 후 다시 시도해 주세요.",
+        "authRequired": "로그인이 만료되었어요. 컴퓨터에서 다시 로그인해 주세요.",
+        "chatUnavailable": "채팅 서비스에 연결할 수 없어요. 네트워크를 확인하고 다시 시도해 주세요.",
+        "importPending": "그룹 기록을 동기화하고 있어요. 잠시 후 다시 시도해 주세요.",
+        "requestTimeout": "아직 작업 결과를 확인하지 못했어요. 새로고침하여 확인한 후 다시 시도해 주세요.",
+        "permissionDenied": "이 그룹을 관리할 권한이 없어요.",
+        "serviceError": "채팅 서비스에서 요청을 처리하지 못했어요. 잠시 후 다시 시도해 주세요.",
+        "groupArchived": "보관된 그룹에서는 이 작업을 수행할 수 없어요."
       },
       "organizer": "담당자",
       "plan": {
@@ -8566,7 +8685,14 @@
         "reactionCount": "{{emoji}} · 반응 {{count}}개",
         "invite": "그룹에 초대",
         "join": "그룹 참여",
-        "inviteDescription": "이 링크는 24시간 동안 한 번만 사용할 수 있습니다. 수락하면 그룹 구성원이 되어 대화 기록을 볼 수 있습니다.",
+        "inviteDescription": "초대를 수락하면 그룹 구성원이 되어 대화 기록을 볼 수 있습니다.",
+        "revokeLink": "이 링크 취소",
+        "revokeDescription": "이 링크로는 더 이상 그룹에 참여할 수 없습니다. 다른 초대 링크와 기존 구성원은 영향을 받지 않습니다.",
+        "revokedLink": "이 초대 링크는 취소되었습니다.",
+        "revokeUnsupported": "현재 서버는 초대 링크 취소를 지원하지 않습니다.",
+        "reusableLink": "만료 없음 · 여러 사람이 반복 사용 가능",
+        "singleUseUntil": "한 번만 사용 가능 · {{date}}에 만료",
+        "expiredLink": "이 초대 링크는 만료되었습니다.",
         "joinDescription": "초대 링크를 붙여 넣고 그룹을 확인한 후 참여하세요.",
         "inviteLink": "초대 링크",
         "pasteLink": "초대 링크 붙여 넣기…",
@@ -8577,7 +8703,7 @@
         "accept": "수락하고 참여",
         "openGroup": "그룹 열기",
         "previewInvite": "초대 확인",
-        "invalidInvite": "유효하지 않거나 사용 또는 만료된 초대입니다. 새 링크를 받으세요.",
+        "invalidInvite": "유효하지 않거나 사용, 만료 또는 취소된 초대입니다. 새 링크를 받으세요.",
         "notAllowed": "현재 계정에 권한이 없습니다. 계정을 확인하거나 그룹 소유자에게 문의하세요.",
         "loginRequired": "현재 계정에 로그인한 후 다시 시도하세요.",
         "requestFailed": "채팅 서비스에 연결할 수 없습니다. 잠시 후 다시 시도하세요.",
@@ -9848,7 +9974,9 @@
       "label": "원래 세션에서 생성됨"
     },
     "imageMissing": {
-      "title": "이미지가 손실되었습니다"
+      "title": "이미지가 손실되었습니다",
+      "unavailable": "이미지를 표시할 수 없습니다",
+      "loading": "이미지 불러오는 중…"
     },
     "visionBridge": {
       "analyzing": "이미지 인식 중…({{count}}장)",
@@ -10375,6 +10503,12 @@
           "reason": "중단 원인",
           "attempt": "이번 재시도 {{attempt}}/{{total}}",
           "sessionTotal": "이 세션에서 재연결 {{count}}회"
+        },
+        "agentSwitch": {
+          "usage-limit": "{{from}}이(가) 사용량 한도에 도달해 {{to}}에서 이어서 진행했습니다",
+          "auth": "{{from}}의 로그인이 만료되어 {{to}}에서 이어서 진행했습니다",
+          "unavailable": "{{from}}에 연결할 수 없어 {{to}}에서 이어서 진행했습니다",
+          "overload": "{{from}}의 서비스가 혼잡해 {{to}}에서 이어서 진행했습니다"
         }
       },
       "autoResumeSeparator": {
@@ -10636,7 +10770,8 @@
       "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "그 컴퓨터에서 이 제공자의 원격 사용을 허용하지 않았습니다. 그 컴퓨터의 설정 → 모델 제공자에서 원격 사용 허용을 켜거나 다른 모델을 선택하세요.",
       "REMOTE_AGENT_SHARE_PAUSED": "공유한 사람이 나에 대한 공유를 일시 중지해서 재개될 때까지 이 모델을 사용할 수 없습니다. 다른 모델로 바꿔 계속할 수 있습니다.",
       "REMOTE_AGENT_SHARE_REMOVED": "이 공유는 더 이상 사용할 수 없습니다(공유한 사람이 삭제했거나 내가 나갔습니다). 다른 모델로 바꿔 계속할 수 있습니다.",
-      "REMOTE_AGENT_SHARE_UNAVAILABLE": "공유된 제공자를 일시적으로 사용할 수 없습니다. 공유한 사람의 컴퓨터가 오프라인이거나 공유가 잠시 꺼져 있을 수 있습니다. 나중에 다시 시도하거나 다른 모델로 바꿔 계속할 수 있습니다."
+      "REMOTE_AGENT_SHARE_UNAVAILABLE": "공유된 제공자를 일시적으로 사용할 수 없습니다. 공유한 사람의 컴퓨터가 오프라인이거나 공유가 잠시 꺼져 있을 수 있습니다. 나중에 다시 시도하거나 다른 모델로 바꿔 계속할 수 있습니다.",
+      "REMOTE_AGENT_GROUP_UNAVAILABLE": "제공자 그룹의 컴퓨터가 지금 이 세션을 실행할 수 없습니다. 모두 오프라인이거나, 배정이 일시 중지되었거나, 대기 중이거나, 이 모델이 없을 수 있습니다. 이 제공자의 원격 및 공유 페이지에서 그룹을 확인하세요."
     },
     "generatedFiles": {
       "title": "이 메시지에서 생성된 파일",
@@ -11330,7 +11465,11 @@
       "untitled": "제목 없는 세션",
       "moreActions": "더 보기",
       "agentDevice": "Agent가 {{device}}에서 실행 중",
-      "agentDeviceOffline": "Agent가 {{device}}에서 실행 중이지만 그 컴퓨터가 오프라인입니다. 다시 연결되면 계속됩니다"
+      "agentDeviceOffline": "Agent가 {{device}}에서 실행 중이지만 그 컴퓨터가 오프라인입니다. 다시 연결되면 계속됩니다",
+      "orcaRemoteLead": "{{device}}에서 온 협업",
+      "orcaRemoteLeadReleased": "협업 종료됨 · {{device}}에서",
+      "orcaRemoteLeadUnknownDevice": "다른 컴퓨터",
+      "orcaRemoteLeadTip": "{{device}}에 있는 “{{lead}}”의 Worker입니다. 작업, 폴더, 명령은 이 컴퓨터에서 실행됩니다. 여기서 보낸 메시지는 Lead에 보고되지 않습니다."
     },
     "gitContext": {
       "detached": "Detached HEAD",
@@ -13396,7 +13535,25 @@
       "optional": "(선택)",
       "initialTaskPlaceholder": "이 Worker 에게 보낼 선택적 첫 작업",
       "enableCollabTitle": "협업 시작",
-      "enableCollabSubmit": "협업 시작"
+      "enableCollabSubmit": "협업 시작",
+      "executionDeviceLabel": "실행 기기",
+      "thisComputer": "이 기기",
+      "deviceOnline": "온라인",
+      "deviceNeedsUpdate": "업데이트 필요",
+      "executionDeviceHint": "같은 계정에서 온라인이고 원격 제어를 켠 컴퓨터만 표시됩니다.",
+      "executionDeviceRemoteHint": "Worker의 작업, 폴더, 명령은 모두 {{device}}에 있습니다.",
+      "remoteDirLabel": "{{device}}의 작업 폴더",
+      "remoteDirChat": "채팅",
+      "remoteDirPath": "폴더 지정",
+      "remoteDirChatHint": "{{device}}에서 프로젝트에 연결하지 않은 채팅 세션을 만듭니다.",
+      "remoteDirPathHint": "{{device}}에서 확인합니다. 없으면 오류가 나며, 이 컴퓨터의 폴더로 대신하지 않습니다.",
+      "remoteDirInvalid": "{{device}}의 절대 경로를 입력하세요.",
+      "errors": {
+        "deviceUnreachable": "{{device}}을(를) 지금 사용할 수 없습니다. 온라인이고 원격 제어가 켜져 있어야 합니다. Worker가 생성되지 않았습니다.",
+        "deviceOutdated": "{{device}}의 Cindy 버전이 오래되었습니다. 업데이트해야 Worker를 실행할 수 있습니다.",
+        "dirRejected": "{{device}}에서 이 폴더를 찾을 수 없거나 사용할 수 없습니다. Worker가 생성되지 않았습니다.",
+        "dirUnavailable": "{{device}}의 폴더를 일시적으로 사용할 수 없습니다. 연결 또는 네트워크 드라이브를 확인한 후 다시 시도하세요. Worker가 생성되지 않았습니다."
+      }
     },
     "rolePill": {
       "unread": "읽지 않은 업데이트",
@@ -13418,13 +13575,19 @@
       "scrollWorkersLeftEdge": "이미 첫 Worker 를 표시하고 있습니다",
       "scrollWorkersRightEdge": "이미 마지막 Worker 를 표시하고 있습니다",
       "errorBadge": "오류",
-      "errorBadgeAria": "오류가 발생한 Worker 가 있습니다"
+      "errorBadgeAria": "오류가 발생한 Worker 가 있습니다",
+      "executionDevice": "{{device}}에서 실행",
+      "deviceUnreachable": "상태를 가져올 수 없음",
+      "unknownDevice": "다른 컴퓨터",
+      "archiveRemoteWorkerConfirmDesc": "이 협업에서 제거하고 {{device}}에서 진행 중인 라운드를 중지합니다. {{device}}의 작업, 기록, 파일은 유지되며 「협업 종료됨」으로 표시되어 그 컴퓨터에서 계속 볼 수 있습니다."
     },
     "split": {
       "leadLabel": "Lead ({{agent}})",
       "workerLabel": "Worker ({{agent}})",
       "leadNotFound": "Orca lead session 을 찾을 수 없습니다",
       "waitingForWorker": "Worker 대기 중",
+      "remoteWorkerLoading": "{{device}}의 작업을 불러오는 중…",
+      "remoteWorkerUnreachable": "{{device}}에 지금 연결할 수 없습니다. 다시 연결되면 이 Worker의 작업이 다시 표시됩니다.",
       "closeAria": "닫기"
     }
   },
@@ -13449,17 +13612,12 @@
     "pluginDisabled": "비활성화됨",
     "pluginAgentInvoked": "Agent가 자동으로 사용",
     "pluginNoCommand": "여기에서 사용할 수 없음",
-    "sectionTitle": "참조 디렉터리(읽기 전용)",
+    "sectionTitle": "디렉터리",
     "empty": "아직 참조 디렉터리가 없습니다",
     "add": "디렉터리 추가…",
     "addReadOnly": "읽기 전용 디렉터리 추가…",
-    "addWritable": "읽기·쓰기 디렉터리 추가…",
-    "writableSectionTitle": "읽기·쓰기 디렉터리",
-    "writableEmpty": "아직 읽기·쓰기 디렉터리가 없습니다",
     "atLimit": "최대 {{max}}개 도달",
     "remove": "{{name}} 제거",
-    "parentConfirmTitle": "상위 디렉터리를 추가할까요?",
-    "parentConfirmDescription": "선택한 디렉터리는 현재 작업 디렉터리의 상위 또는 조상 디렉터리입니다. Agent가 작업 디렉터리 밖의 내용까지 볼 수 있어 표시 범위가 넓어집니다.\n\n그래도 추가할까요?\n\n{{path}}",
     "writableParentConfirmTitle": "상위 디렉터리 읽기·쓰기를 허용할까요?",
     "writableParentConfirmDescription": "선택한 디렉터리는 현재 작업 디렉터리의 상위 또는 조상 디렉터리입니다. Agent가 그 안의 파일을 읽고, 만들고, 수정하고, 삭제할 수 있습니다.\n\n그래도 허용할까요?\n\n{{path}}",
     "parentConfirmAccept": "그래도 추가",

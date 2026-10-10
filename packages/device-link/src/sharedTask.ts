@@ -81,10 +81,10 @@ export type SharedTaskDecision =
 
 const sharedOperations: ReadonlySet<string> = new Set<SharedTaskOperation>([
   'history.read', 'events.subscribe', 'attachment.read', 'attachment.upload',
-  'file.read', 'input.send', 'agent.stop', 'agent.configure', 'approval.resolve',
+  'file.read', 'input.send', 'agent.stop', 'approval.resolve',
 ]);
 const ownerOperations: ReadonlySet<string> = new Set<SharedTaskOperation>([
-  'permission.configure', 'workdir.configure', 'plugins.configure',
+  'agent.configure', 'permission.configure', 'workdir.configure', 'plugins.configure',
   'history.delete', 'session.archive', 'session.export', 'session.fork',
   'background.create', 'schedule.create', 'sharedTask.manage',
 ]);

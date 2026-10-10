@@ -159,7 +159,7 @@ export interface BotGroupChatServiceDeps {
   createId?: () => string;
   memberTurnTimeoutMs?: number;
   stepTurnTimeoutMs?: number;
-  log?: { warn: (message: string, meta?: Record<string, unknown>) => void };
+  log?: { warn: (message: string, meta?: Record<string, unknown>) => void; info?: (message: string, meta?: Record<string, unknown>) => void };
 }
 
 export interface BotGroupPreparedAttachments {

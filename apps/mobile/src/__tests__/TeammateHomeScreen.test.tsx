@@ -9,7 +9,8 @@ const h = vi.hoisted(() => ({
   focused: true, drawer: {} as any, list: {} as any, accounts: {} as any, push: vi.fn(),
   auth: { user: { id: 'owner' }, accountGeneration: 1, logout: vi.fn(), beginAddAccount: vi.fn() },
   nav: { hydrated: true, lastTeammate: null as LastTeammateIdentity | null, mode: 'teammates' as HomeMode,
-    saveFailed: false, openTeammate: vi.fn(), setMode: vi.fn() },
+    saveFailed: false, openTeammate: vi.fn(), setMode: vi.fn(), chooseMode: vi.fn() },
+  modeMenu: {} as any, nativeMenus: true,
   roster: { createTargets: [], authoritative: true, items: [] as HostedRemoteCollectionItem[], loading: false, refreshing: false, error: null as string | null,
     isOnline: vi.fn(() => true), refresh: vi.fn(), groupTargets: [] as { deviceId: string; deviceName: string }[] },
   groups: { loading: false, refreshing: false, error: null as string | null, items: [] as HostedRemoteCollectionItem[], supported: false, isOnline: () => true, refresh: vi.fn() },
@@ -19,12 +20,13 @@ const h = vi.hoisted(() => ({
 vi.mock('react-native', async () => {
   const { createElement: el } = await import('react');
   return { View: ({ children }: any) => el('div', {}, children), ActivityIndicator: () => null,
-    Keyboard: { dismiss() {} }, Alert: { alert: vi.fn() }, StyleSheet: { create: (value: unknown) => value } };
+    Pressable: ({ children, onPress }: any) => el('button', { onClick: onPress }, children),
+    Keyboard: { dismiss: vi.fn() }, Alert: { alert: vi.fn() }, StyleSheet: { create: (value: unknown) => value } };
 });
 vi.mock('expo-router', () => ({ Stack: { Screen: () => null }, useIsFocused: () => h.focused, useNavigation: () => ({ getState: () => ({ routes: [] }) }), useRouter: () => ({ dismissTo: h.dismissTo, replace: h.replace }) }));
 vi.mock('react-native-safe-area-context', () => ({ SafeAreaView: 'div' }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key, i18n: { language: 'en' } }) }));
-vi.mock('lucide-react-native', () => ({ Menu: () => null }));
+vi.mock('lucide-react-native', () => ({ ChevronDown: () => null, Menu: () => null }));
 vi.mock('@/components/AppText', () => ({ Text: 'span' }));
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => h.auth }));
 vi.mock('@/theme', () => ({ useThemedStyles: () => ({}), useTheme: () => ({ colors: {} }) }));
@@ -32,6 +34,7 @@ vi.mock('@/utils/useGuardedPush', () => ({ useGuardedPush: () => h.push }));
 vi.mock('@/device-link/remoteStatus', () => ({ formatRemoteError: String }));
 vi.mock('@/session/TeammateCreateButton', () => ({ TeammateCreateButton: (props: any) => { if (props.appearance !== 'cta') h.create = props; return null; } }));
 vi.mock('@/session/HomeChromeDrawer', () => ({ HomeChromeDrawer: (props: unknown) => { h.drawer = props; return null; } }));
+vi.mock('@/platform/chrome', () => ({ NativePullDownMenu: (props: any) => { h.modeMenu = props; return props.children; }, usesNativePullDownMenu: () => h.nativeMenus }));
 vi.mock('@/session/AccountSwitcherSheet', () => ({ AccountSwitcherSheet: (props: unknown) => { h.accounts = props; return null; } }));
 vi.mock('@/session/HomeHeaderGlassButton', () => ({ HomeHeaderGlassButton: () => null }));
 vi.mock('@/session/TeammateList', () => ({ TeammateList: (props: unknown) => { h.list = props; return null; } }));
@@ -51,6 +54,7 @@ vi.mock('@/session/remoteSessionStore', () => ({
   useRemoteHomeSessions: () => [], useRemoteHomeStatusVersion: () => 0,
 }));
 import HomeScreen from '../../app/devices/index';
+import { Keyboard } from 'react-native';
 import { TeammateHomeScreen } from '@/session/TeammateHomeScreen';
 import { teammateIdentity } from '@/session/teammateNavigation';
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
@@ -63,7 +67,8 @@ beforeEach(() => {
   h.realNavigation = false; h.stored = null;
   h.auth.user = { id: `owner-${++serial}` }; h.auth.accountGeneration = serial;
   vi.clearAllMocks(); h.focused = true; h.nav.lastTeammate = teammateIdentity(teammate); h.roster.items = [teammate];
-  h.nav.mode = 'teammates'; h.roster.authoritative = true;
+  h.nav.mode = 'teammates'; h.nav.chooseMode.mockReset(); h.roster.authoritative = true;
+  h.modeMenu = {}; h.nativeMenus = true;
   h.groups.loading = false; h.groups.refreshing = false; h.groups.error = null;
   h.roster.loading = false; h.roster.error = null; h.roster.isOnline.mockReturnValue(true);
 });
@@ -93,6 +98,24 @@ describe('teammate home entry', () => {
     await act(async () => { h.drawer.onOpenSearch(); h.drawer.onClosed(); }); expect(h.list.autoFocusSearch).toBe(true);
     h.auth.logout.mockResolvedValue(undefined); await act(async () => h.drawer.onLogout()); expect(h.auth.logout).toHaveBeenCalledOnce();
     expect(h.replace).toHaveBeenCalledWith('/login');
+  });
+  it('keeps a top mode menu available for returning to tasks', async () => {
+    await render();
+    await act(async () => h.modeMenu.onAction('tasks'));
+    expect(h.nav.chooseMode).toHaveBeenCalledWith('tasks');
+  });
+  it('dismisses search before opening the title fallback drawer and switching to tasks', async () => {
+    h.nativeMenus = false;
+    await render();
+    expect(h.drawer.open).toBe(false);
+    await act(async () => h.modeMenu.children.props.onPress());
+    expect(Keyboard.dismiss).toHaveBeenCalledOnce();
+    expect(h.drawer.open).toBe(true);
+    await act(async () => h.drawer.onModeChange('tasks'));
+    expect(h.nav.setMode).not.toHaveBeenCalled();
+    await act(async () => h.drawer.onClosed());
+    expect(h.nav.setMode).toHaveBeenCalledExactlyOnceWith('tasks');
+    expect(Keyboard.dismiss).toHaveBeenCalledOnce();
   });
 });
 

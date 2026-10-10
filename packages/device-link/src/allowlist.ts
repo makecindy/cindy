@@ -26,6 +26,13 @@
  */
 import { FILE_PEER_CHANNEL } from './filePeer.js';
 import { REMOTE_AGENT_CHANNEL } from './remoteAgent.js';
+import {
+  ORCA_EXECUTION_DEVICES_CHANNEL,
+  ORCA_REMOTE_WORKER_CAPS_CHANNEL,
+  ORCA_REMOTE_WORKER_OPEN_CHANNEL,
+  ORCA_REMOTE_WORKER_OPEN_TIMEOUT_MS,
+  ORCA_REMOTE_WORKER_RELEASE_CHANNEL,
+} from './orcaRemoteWorker.js';
 import { TASK_MIGRATION_CHANNEL } from './taskMigration.js';
 import { SESSION_ACTIVITY_CHANNEL, SESSION_SYNC_CHANNEL } from './topics.js';
 import { REMOTE_DESKTOP_INVOKE_MS } from './remoteDesktopIce.js';
@@ -406,6 +413,15 @@ const EXTENDED_INVOKE_CHANNELS: readonly string[] = [
   'local-db:orca-workflows:get-by-lead',
   'local-db:orca-workflows:get-by-worker-session',
   'local-db:orca-workflows:list-workers-by-lead',
+  // 协同远端 Worker：本机作为运行设备，承接另一台电脑上 Lead 派来的 Worker 任务。
+  // 准入同 maker:create-session：同账号 + 本机开启远程控制时控制端本就能在这里建任务；
+  // 业务 handler 不依赖 sender、无本机 UI 副作用；来源电脑取 server 盖章的 src。
+  // 老版本无 handler → CHANNEL_NOT_ALLOWED，控制端提示更新而不回退普通建任务。
+  ORCA_REMOTE_WORKER_CAPS_CHANNEL,
+  ORCA_REMOTE_WORKER_OPEN_CHANNEL,
+  ORCA_REMOTE_WORKER_RELEASE_CHANNEL,
+  // 远程控制 Lead 所在电脑时，读取那台视角下可选的运行设备(只读，真相在被控端)。
+  ORCA_EXECUTION_DEVICES_CHANNEL,
   // —— Rewind / Fork / Title / Context ——
   'maker:rewind:preview',
   'maker:rewind:commit',
@@ -795,6 +811,8 @@ export const INVOKE_TIMEOUT_OVERRIDES_MS: Readonly<Record<string, number>> = {
   // 被控端先等 Lead history 最多 30s，再 resume/queue Worker；默认 30s 会与服务端
   // deadline 对撞，把边沿成功误报成 DEVICE_LINK_TIMEOUT。留出派发和回程余量。
   'maker:worker:dispatch-ui-assignment': 65_000,
+  // 运行设备准备工作目录并启动 Worker 的 Agent，可能超过默认 30s。
+  [ORCA_REMOTE_WORKER_OPEN_CHANNEL]: ORCA_REMOTE_WORKER_OPEN_TIMEOUT_MS,
   // listing tier 轻量 DB 读:毫秒级查询,12s 仍等不到只能是链路问题,快速失败喂给熔断器。
   // 12s 同时覆盖被控端冷启动 DB 迁移的常见时长(那类失败是快速返回的 DbClient not ready,
   // 不吃满超时),不会误伤首拉重试。

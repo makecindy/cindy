@@ -3,9 +3,30 @@ import type { ContinuationInFlightProjectionCapability } from '@/session/types';
 /** 对齐桌面 USAGE_LIMIT_RESET_AUTO_RESUME_REASON(apps/desktop/src/shared/agentInputQueue.ts)。 */
 const USAGE_LIMIT_RESET_REASON = 'usage-limit-reset';
 
+export type MobileAutoResumeAgentSwitchCause = 'usage-limit' | 'auth' | 'unavailable' | 'overload';
+
+/** 对齐桌面 AutoResumeAgentSwitch:供应商组自动换电脑后继续。 */
+export interface MobileAutoResumeAgentSwitch {
+  from: string;
+  to: string;
+  cause: MobileAutoResumeAgentSwitchCause;
+}
+
+const AGENT_SWITCH_CAUSES: readonly MobileAutoResumeAgentSwitchCause[] = ['usage-limit', 'auth', 'unavailable', 'overload'];
+
+function readAgentSwitch(value: unknown): MobileAutoResumeAgentSwitch | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const { from, to, cause } = value as Record<string, unknown>;
+  if (typeof from !== 'string' || !from || typeof to !== 'string' || !to) return undefined;
+  if (!AGENT_SWITCH_CAUSES.includes(cause as MobileAutoResumeAgentSwitchCause)) return undefined;
+  return { from: from.slice(0, 128), to: to.slice(0, 128), cause: cause as MobileAutoResumeAgentSwitchCause };
+}
+
 export interface MobileAutoResumeInfo {
   /** 账号用量上限重置后自动继续(不是重连:不展示重试次数)。 */
   usageLimitReset?: boolean;
+  /** 供应商组自动换电脑后继续(与 usageLimitReset 同时出现)。 */
+  agentSwitch?: MobileAutoResumeAgentSwitch;
   error?: string;
   attempt?: number;
   maxAttempts?: number;
@@ -30,8 +51,10 @@ export function readMobileAutoResumeInfo(data?: Record<string, unknown>): Mobile
   const attempt = usageLimitReset ? undefined : number(data?.attempt);
   const maxAttempts = usageLimitReset ? undefined : number(data?.maxAttempts);
   const sessionTotal = usageLimitReset ? undefined : number(data?.sessionTotal);
+  const agentSwitch = readAgentSwitch(data?.agentSwitch);
   return {
     ...(usageLimitReset ? { usageLimitReset: true } : {}),
+    ...(agentSwitch ? { agentSwitch } : {}),
     ...(typeof data?.error === 'string' && data.error.trim() ? { error: data.error } : {}),
     ...(attempt !== undefined ? { attempt } : {}),
     ...(maxAttempts !== undefined ? { maxAttempts } : {}),

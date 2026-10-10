@@ -407,6 +407,8 @@ export function RemoteDesktopSession({
   );
   exitLock.current =
     lockOnExitLoaded && lockOnExit && caps?.lockOnExit === true;
+  const exitLockPolicy = useRef(false);
+  exitLockPolicy.current = lockOnExitLoaded && lockOnExit;
   const [status, setStatus] = useState("connecting");
   const [appState, setAppState] = useState(AppState.currentState);
   const [error, setError] = useState<string | null>(null);
@@ -631,6 +633,8 @@ export function RemoteDesktopSession({
   );
   const request = useCallback(
     async <T,>(message: RemoteDesktopRequest, preSend?: () => void) => {
+      if (message.op === "start" || message.op === "heartbeat")
+        message = { ...message, lockOnExit: exitLockPolicy.current };
       const relay = () =>
         linkRef.current.invoke<T>(deviceId, REMOTE_DESKTOP_CHANNEL, [message], {
           preSend,
@@ -658,6 +662,17 @@ export function RemoteDesktopSession({
     () => ({ current: new RemoteDesktopViewerSession(request) }),
     [request],
   );
+  const updateLockOnExit = (enabled: boolean) => {
+    setLockOnExit(enabled);
+    // Requests and exit can run before React commits the preference update.
+    exitLockPolicy.current = enabled;
+    exitLock.current = enabled && caps?.lockOnExit === true;
+    const current = active.current;
+    if (current)
+      void request({ op: "heartbeat", lease: current.lease }).catch(() => {
+        // Local preference remains saved; the regular heartbeat retries sync.
+      });
+  };
   const authRef = useRef(auth);
   authRef.current = auth;
   const loadIceServers = (attemptId: string) =>
@@ -1083,6 +1098,7 @@ export function RemoteDesktopSession({
         linkRef.current.status !== "online" ||
         !ready.current ||
         !videoPreferencesLoaded ||
+        !lockOnExitLoaded ||
         !deviceId ||
         AppState.currentState !== "active"
       )
@@ -1239,6 +1255,7 @@ export function RemoteDesktopSession({
       stop,
       t,
       videoPreferencesLoaded,
+      lockOnExitLoaded,
       viewerSession,
     ],
   );
@@ -1606,7 +1623,7 @@ export function RemoteDesktopSession({
       restoreInlinePresentationRef.current();
       if (!active.current) void connectRef.current();
     }
-  }, [focused, pause, videoPreferencesLoaded]);
+  }, [focused, pause, videoPreferencesLoaded, lockOnExitLoaded]);
   useEffect(() => {
     send({
       type: "theme",
@@ -3325,7 +3342,7 @@ export function RemoteDesktopSession({
                     lockOnExit,
                     lockOnExitAvailable:
                       lockOnExitLoaded && caps?.lockOnExit === true,
-                    onLockOnExit: setLockOnExit,
+                    onLockOnExit: updateLockOnExit,
                   }}
                   connected={Boolean(lease) && !connectionPending}
                   controlling={Boolean(lease?.controlling)}

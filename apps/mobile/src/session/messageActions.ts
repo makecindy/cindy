@@ -53,7 +53,7 @@ export interface MobileMessageActionBarInput {
 
 /**
  * 消息行是否挂完成态操作条(复制 / 新任务 / 时间 / 花费 / More)。三条规则都对齐桌面:
- * - 流式 assistant 只显示「生成中」,不挂完成态操作;
+ * - 流式 assistant 不挂操作行或状态占位;
  * - assistant 只有每轮收尾正文挂(桌面 AssistantMessage 的 showActionBar,#456);
  * - 系统边界卡整行不挂:它不是任何人的发言,没有复制 / 分叉 / 消息锚点 / 发送时间
  *   语义(桌面 MessageStream 对 systemCardType 提前 return SystemCard,卡片下方

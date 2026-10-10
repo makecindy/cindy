@@ -1148,8 +1148,8 @@ describe('ChatInput 的入口门控与调用路由', () => {
     );
     // 签名显式声明 Promise<boolean> —— 返回值是契约的一部分,不靠推断。
     expect(body).toContain('): Promise<boolean> => {');
-    // 「没落地」的四个出口:无会话 / pending send 拒绝 / 会话已切走 / ack 被超车。
-    expect(body).toContain('if (!sessionId) return false;');
+    // 「没落地」的出口:无会话或设置只读 / pending send 拒绝 / 会话已切走 / ack 被超车。
+    expect(body).toContain('if (!sessionId || settingsLocked) return false;');
     expect(body).toContain('if (hasPendingAgentSendDispatch(sessionId)) return false;');
     expect(body).toContain("if (ackAction === 'discard') return false;");
     // 同引擎重选被修订号守卫拒下 = 没落地。

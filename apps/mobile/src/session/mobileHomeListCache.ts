@@ -1,6 +1,7 @@
 import { normalizeTaskTags } from '@cindy/maker-shared';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { RemoteSession } from '@/session/types';
+import { normalizeRemoteMoney } from '@/session/remoteMoney';
 
 // 「首页设备 + 会话列表」冷启动持久缓存:冷启动时先用上次 loadHome 成功后的 last-known 快照
 // 乐观画出列表(消除首屏强制 spinner),fresh loadHome 回来后由 store 正常对账覆盖并回写缓存。
@@ -186,7 +187,8 @@ function normalizeSnapshotDevices(
 //  - live-only 状态(attached / deviceLinkAttached 等):冷启动时设备尚未连上,缓存它会画出假的在线态;
 //  - orcaRole === 'worker' 的会话:mobile 全局隐藏 worker 子会话,缓存它纯占体积;
 //  - deleted / 未知 status:不该出现在列表里;
-//  - 大字段(_count / extraDirs / token 统计等):列表行不消费。
+//  - 大字段(_count / extraDirs / 上下文窗口统计等):列表行不消费。
+// 累计 Token / 费用保留:显示菜单「任务信息」会在行内展示,冷启动丢掉会让这两项等同步回来才出现。
 // 草稿类标记(hasDraft / hasPausedQueue / composerDraft)保留——它们在被控端持久化,冷启动展示不失真。
 function coerceCachedSession(item: unknown): RemoteSession | null {
   if (!isRecord(item)) return null;
@@ -216,6 +218,14 @@ function coerceCachedSession(item: unknown): RemoteSession | null {
     updatedAt: typeof item.updatedAt === 'string' ? item.updatedAt : createdAt,
   };
   if (typeof item.worktreePath === 'string') session.worktreePath = truncateText(item.worktreePath);
+  if (typeof item.totalTokenUsage === 'number' && Number.isFinite(item.totalTokenUsage)) {
+    session.totalTokenUsage = item.totalTokenUsage;
+  }
+  if (typeof item.totalCostUsd === 'number' && Number.isFinite(item.totalCostUsd)) {
+    session.totalCostUsd = item.totalCostUsd;
+  }
+  const totalMoney = normalizeRemoteMoney(item.totalMoney);
+  if (totalMoney) session.totalMoney = totalMoney;
   if (typeof item.source === 'string') session.source = item.source;
   if (orcaRole) session.orcaRole = orcaRole;
   if (typeof item.pinnedAt === 'string') session.pinnedAt = item.pinnedAt;

@@ -432,7 +432,7 @@ export async function assembleGroupWindowContext(args: {
       if (row.fileNames !== null) {
         try {
           const names = JSON.parse(row.fileNames) as string[];
-          if (names.length > 0) fileNote = ` (附件: ${names.join(', ')})`;
+          if (names.length > 0) fileNote = ` (附件: ${names.join(', ')}；仅历史记录，是否提供文件以本轮实际附件为准)`;
         } catch {
           /* 老行损坏时静默丢附件标注 */
         }

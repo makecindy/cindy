@@ -342,13 +342,7 @@
       "switchConfirm": "繼續切換"
     },
     "menu": {
-      "groupByProject": "按專案分組",
-      "groupDialogue": "對話歸為一組",
-      "sortByTime": "按時間排序",
-      "sortByPriority": "優先級",
-      "statusActive": "活躍",
-      "statusArchived": "已歸檔",
-      "statusAll": "全部",
+      "groupDialogue": "對話",
       "dialogueFolder": "對話",
       "search": "搜尋",
       "settings": "設定",
@@ -356,14 +350,65 @@
       "displaySettings": "顯示設定",
       "groupHeading": "分組",
       "sortHeading": "任務排序",
-      "projectOrderHeading": "專案順序",
-      "projectOrderActivity": "按最近活動",
-      "projectOrderManual": "手動",
+      "projectOrderHeading": "專案排序",
       "projectOrderManualTip": "長按專案行拖動調整順序，組內任務仍按上面的排序",
-      "statusHeading": "狀態",
+      "statusHeading": "任務狀態",
       "showDeviceTasks": "查看任務",
       "openDevice": "打開",
-      "renameDevice": "重新命名"
+      "renameDevice": "重新命名",
+      "groupProject": "專案",
+      "sortBy": {
+        "priority": "優先級",
+        "recency": "最近活動",
+        "created": "建立時間"
+      },
+      "sortByPriorityTip": "等你處理的排在最前，然後是未讀、執行中，其餘按時間",
+      "projectOrder": {
+        "activity": "跟隨任務",
+        "custom": "手動"
+      },
+      "status": {
+        "active": "活躍",
+        "archived": "已歸檔",
+        "all": "全部"
+      },
+      "filterHeading": "篩選",
+      "filterSummaryActive": "{{count}} 項生效",
+      "filterReset": "重設篩選",
+      "filterAll": "全部",
+      "filterProjectsHeading": "專案",
+      "filterAllProjects": "所有專案",
+      "filterSelectedProjects": "已選 {{count}} 個",
+      "filterVendorHeading": "Harness",
+      "filterVendor": {
+        "all": "全部",
+        "cc": "Claude Code",
+        "codex": "Codex",
+        "pi": "Pi"
+      },
+      "filterLastActivityHeading": "最近活躍",
+      "filterLastActivity": {
+        "1d": "1 天",
+        "3d": "3 天",
+        "7d": "7 天",
+        "30d": "30 天",
+        "all": "全部"
+      },
+      "displayHeading": "顯示",
+      "view": {
+        "text": "文字",
+        "list": "列表"
+      },
+      "taskInfoHeading": "任務資訊",
+      "taskInfo": {
+        "time": "時間",
+        "pr": "PR 狀態",
+        "tokens": "Token",
+        "cost": "費用"
+      },
+      "summaryNone": "無",
+      "summarySeparator": "、",
+      "filterEmptyCopy": "可在顯示設定的「篩選」中調整或重設。"
     },
     "search": {
       "placeholder": "搜尋標題或內容…",

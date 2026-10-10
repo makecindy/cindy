@@ -25,6 +25,16 @@ Cindy 有两个 Telegram bot，用户看到的是同一个产品：
 > （失败收口两侧确有差异——个人侧留「过程区 + 正文 + 错误」，官方侧走独立错误字段，
 > 见第二节末行。成功与失败必须分开看。）
 
+2026-10-09 任务图片持久化：官方 hook 与个人文本渠道均复用 Desktop
+`cindy-media/taskImageDelivery.ts` 的任务范围导入（工作目录及可验证的 Claude scratchpad），
+把普通 Markdown 本地图片与错误的 hostless `xdt-image:///` 引用保存为受管媒体。
+解析由 `taskImageMarkdown.ts` 同源提供，代码示例不会作为图片发送。
+导入后仍各走现有上传器和数量/大小限制；官方扫描本轮引用，个人文本渠道扫描 presenter 正文，
+收集不等于送达，失败保留说明与附件不完整提示。个人卡片渠道不经此出站附件适配，
+原有卡片媒体行为不变；所有已落库 assistant 图片仍走共享持久化入口。
+官方普通轮次与续跑轮次的输出上限错误保留部分正文时，也经过同一附件收集入口：
+可读图片随错误结果附带，失败图片去掉本地目标地址并保留说明；其它错误仍不保留正文。
+
 判定口径三档：
 
 | 档 | 含义 |
@@ -141,6 +151,18 @@ App 完成未读与提醒统一由 `renderer/hooks/useSessionRunningStatus.ts` �
 
 ### 客户端入站上下文展示（所有 IM 渠道共用规则，Desktop 首期）
 
+所有 bot 入站保留剥离召唤标记后的真实正文，允许空串；不得因空正文补写
+「请检查这些附件」「看看转发的消息」「继续」或裸 `@`。显式召唤、引用关系、
+本轮实际提供的附件以及下载失败/超限等事实单独作为 `[消息说明]` 进入模型，
+不冒充用户指示，也不进入用户正文存档。纯召唤仍处理，普通群消息沿用原触发门禁。
+引用、转发与历史文件标记属于上下文，不代表文件已提供；附件数量只按实际投递计算，
+已知未提供的原因明确说明。没有附件的消息不凭空提示附件丢失或要求用户重传。
+本地渠道复用 `@cindy/im` 的 `buildInboundMessageFacts`，微信队列保留独立原文与引用；
+官方 Telegram / Slack / X 复用服务端 `@cindy/im-inbound` 的同语义实现。
+两仓实现与用例需同步维护，无新增模型调用、设置或 wire 字段。
+Hook 落库优先取 `source.userText`（包括空串），旧服务端缺字段才回退 `prompt`；
+完整提示词仍发送给模型，上下文继续走既有来源快照。
+
 展示规则遵循 [核心产品原则 §4.1](core-product-principles.md#41-优秀的-ui-与交互设计)，
 不按平台分别实现。Desktop Hook 卡已支持统一折叠与分组；`source.im` 是开放集合，
 新渠道携带同样的来源与快照即可复用。引用组包含被回复的消息及渠道附带的话题历史。
@@ -156,7 +178,7 @@ Hook 与本地 IM 共享消息级来源及上下文快照结构。本地所有�
 受保护内容仍不落库；群历史二进制附件仍只进模型，不因快照额外保留。
 本地 IM 使用 `agentMeta.imSource`，Hook 保留原 `hookSource`，Desktop 投影到同一展示结构。
 不复用旧客户端会解释为系统卡的 Hook 标记；旧 Mobile 忽略本地新增字段，保留普通用户
-消息的完整正文、附件与操作。本期不改模型输入，不为展示新增实时群历史查询。
+消息的完整正文、附件与操作。上下文展示本身不改模型输入，不新增实时群历史查询。
 展示来源取适配器提供的实际服务名（例如 Lark），不改变内部渠道路由标识。
 快照作为可选元数据保存，旧消息沿用已有 prompt 投影，旧客户端可忽略新增字段。
 
@@ -230,7 +252,7 @@ hook 侧既有的逐轮 `[渠道说明]`，两者措辞不同但都向模型说�
 | 2f | **群里开了「全响应」后，一轮失败：个人 bot 会往群里吐错误，官方静默** | 全响应（`always`）本身两侧行为一致：未被召唤的消息也进 turn 并打 ambient 标、**不 typing、不表情**、模型可用 NO_REPLY 闭嘴、纯媒体/无正文消息不进（个人 `if (!plain) return`，官方 `plain.length > 0`）；连 ambient 提示词都逐字相同（各写一份，跨仓无校验）。**分歧只在这一轮失败的时候**：官方不发失败通知（`controller.ts` 的 `finalFailureNoticeSent !== true && !entry.ambient`），并把过程消息删掉、记一句「completed silently」；个人侧的 `im/shared/turnRunner.ts` **完全不认识 ambient**（全文没有这个词），错误一律走 `❌ 错误：…`——惰性占位这时会被真建出来，于是群里凭空多一条错误消息，而这一轮本来连话都不打算说。第二节的生命周期表已按「普通轮次 / ambient 轮次」拆成两行，别再写回一条无条件的失败收口结论 | 待判，**不在本 PR 改代码**。倾向跟官方一致做静默（与「ambient 不打扰群」的既有取舍同一个方向），但要保证错误不因此彻底消失——至少落桌面端日志与该会话，不能只是吞掉 |
 | 2g | **交互卡挂太久：官方 30 分钟自动收口，个人一直等** | 三类卡（`ask_user_question` / `plan_review` / 权限）在两侧走的是同一个注册入口，差别只在**有没有定时器**。官方：`hook-control/interactions.ts` 的 `registerHookInteraction` 给每张卡挂一个 `HOOK_INTERACTION_TIMEOUT_MS = 30min`，到点取共享模型的安全默认（ask 空答 / plan deny + dismissed / permission deny）resolve，并回调 `onFallback` → `session-runner.ts` 的 `sendCancel(requestId, reason)` 把卡片收掉。个人：`im/shared/pendingInteractions.ts` **没有任何定时器**，只能靠按钮决策（`resolvePending`），或 turn 收口 / session 清理 / 抢跑时的 `dropInteractionCard` → `cancelPending`（安全默认与官方同源，并把卡片改成「卡片已过期」）。**而这一轮正卡在 `await` 这张卡上，它不会自己结束**；maker-core 的 turn stall 看门狗又明确把「等用户回应交互」排除在静默之外，也不会来救。结果：**个人 bot 的卡片会一直挂着，第二天点还能点，agent 也还在等** | 待判，**不在本 PR 改代码**。先答一个产品问题：个人 bot 的卡片挂着不动算不算问题——它是用户自己的 bot，晚点回来再点也说得通；官方 bot 经服务端中继，挂着的交互会长期占住 lane，动机不一样。补的话要连「超时后卡片显示什么」一起定。**顺带**：官方那个 30 分钟的注释理由（「必须短于整 turn 硬超时 60min」）已过期——那条硬超时 2026-08-01 撤了，定时器本身仍在生效，注释已随本 PR 改正 |
 | 2h | **自动审批故障降级后，个人 bot 有确认入口、官方待核** | 审阅器故障（网络/服务波动，**不是**模型判定该问）时，Cindy 兜底裁决从静默 `block` 改为 `ask` 交回用户决定。个人 bot 的 Telegram / 微信 / 钉钉群轮次即使带 `turnPermissionPolicy` 也会**真正弹确认卡**（`agents/pi/index.ts` 的 Auto 审阅分支），并附一条会话级提示（`im/shared/turnRetryNotice.ts`）。桌面、手机和多数渠道建议切到「完全访问」并写明风险更高；个人微信不能使用该档。出站提示和查看微信任务时的桌面横幅、历史错误卡、手机实时/尾部/历史提示都改为直接确认，不建议切档。**Auto 三态统一**：渠道策略命中也先交 AI；allow/block 静默执行/拒绝，模型 ask 与 unavailable 都交现有渠道确认入口，不能再由静态策略把动作直接转人工或把模型 ask 改成静默拒绝。官方 bot 侧的等价路径（服务端 `session-runner` 是否把 unavailable 降级的 `ask` 送到用户面前、提示文案由谁渲染）**待核** | 待核。个人侧收口于 PR #2474；官方侧若仍静默拒绝，用户会看到「已转由你确认」却没有确认入口——与个人侧修复前是同一个矛盾 |
-| 2i | **群内回复触发与任务归属两边各写一套** | 官方 bot 的服务端正本用 `TelegramMessageRoute.botAuthored === true` 区分“消息与任务有关”和“消息由 Cindy 发出、可通过回复召唤”：回复曾触发任务的普通用户消息不会误触发，明确 `@cindyapp_bot` 仍召唤当前发言者自己的 Cindy；回复同一 principal 的 Cindy 输出可续用其历史群 lane，回复其他 principal 的 Cindy 输出只带引用上下文，任务归当前发言者，不继承原任务的 principal、设备、会话或权限。普通群与 forum topic 都适用；`/session`、interaction、取消和 reaction 继续严格校验 owner。个人 bot 则在 `packages/lizi-im/src/telegram/inbound.ts` 的 `detectGroupTrigger` 独立用 `reply_to_message.from.id === botId` 判定回复触发，且采用本地单 owner 模型；两侧没有共享代码或数据，不能因为当前触发语义相近就跳过双路核对。**纯 @（只发一句 `@bot`、没有正文）两侧同口径都算召唤**：官方服务端 `userText` 为空时 prompt 仍是原文（桌面 `hook-control/dispatcher.ts` 标题回退同理）；个人 `detectGroupTrigger` 剥掉提及后为空时保留原文交给 agent（2026-10-03 修复：此前返回空串，被 `im/shared/messageHandler.ts` 当空消息静默丢弃，群里表现为「@ 了没反应」）。个人侧提及判据只认平台实体——`mention` 按 username、`text_mention` 按 user id，@ 在句中、句尾都触发；显示名召唤是唯一的字面匹配兜底 | 服务端实现见 `xindong/cindy-server#393`。本 PR 只登记正本与漂移风险，不改任一侧代码；以后修改群回复行为必须同时核对两条路径。是否把共同判据升为跨仓协议数据待判。纯 @ 的个人侧对齐只改了客户端，未动服务端 |
+| 2i | **群内回复触发与任务归属两边各写一套** | 官方 bot 的服务端正本用 `TelegramMessageRoute.botAuthored === true` 区分“消息与任务有关”和“消息由 Cindy 发出、可通过回复召唤”：回复曾触发任务的普通用户消息不会误触发，明确 `@cindyapp_bot` 仍召唤当前发言者自己的 Cindy；回复同一 principal 的 Cindy 输出可续用其历史群 lane，回复其他 principal 的 Cindy 输出只带引用上下文，任务归当前发言者，不继承原任务的 principal、设备、会话或权限。普通群与 forum topic 都适用；`/session`、interaction、取消和 reaction 继续严格校验 owner。个人 bot 则在 `packages/lizi-im/src/telegram/inbound.ts` 的 `detectGroupTrigger` 独立用 `reply_to_message.from.id === botId` 判定回复触发，且采用本地单 owner 模型；两侧没有共享代码或数据，不能因为当前触发语义相近就跳过双路核对。**纯 @（只发一句 `@bot`、没有正文）两侧同口径都算召唤**：剥离召唤标记后 `userText`/事件正文保持空串，召唤及附件投递情况作为独立事实进入模型，不回填裸 `@` 或虚构请求。个人侧通过 `invoked` 保留纯召唤，即使随附媒体下载失败、超限或不支持也继续处理；仅有不可用媒体且没有召唤、引用或正文时仍直接提示。个人侧提及判据只认平台实体——`mention` 按 username、`text_mention` 按 user id，@ 在句中、句尾都触发；显示名召唤是唯一的字面匹配兜底 | 本客户端改动统一个人 bot 入站事实及 Hook 原文存档；官方 bot 的输入组装需配套版本更新，不能把客户端实现完成视为官方已上线。两侧保持同语义，仍各自维护触发与归属判据；以后修改群回复行为必须同时核对两条路径 |
 | 3 | **终稿必达只有官方有** | 官方侧终稿先落盘、失败重试到送达或有界放弃（`xindong/cindy-server#348`）。个人 bot 的 `streamingText.finalize` 是进程内尽力而为，桌面进程挂掉那条终稿就没了。**两侧的「有界」各有一条明确边界、且不在同一层**：官方路径经桌面账本 `hook-control/requestLedger.ts`，客户端侧的投递时效是 `HOOK_TERMINAL_DELIVERY_TTL_MS ≈ 24h`，**规则无条件**——过线的终稿一律不再发出，不论是谁在要。覆盖的出口：持久出箱 `listPending`、ACK 退避重发、离线内存缓冲、ACK 缓冲的两个消费分支（`onConnected` 入口一次性清扫，含能力降级回落），以及 **server 显式重投**——那一支只回放 `task.ack` 后返回，不发终稿、也不把记录改回 `pending`。（重投一度有过 `origin='server-request'` 豁免，后被删除：它在持久记录里没有位置，每条路径都要手工传播，连续三轮 review 各找出一条漏掉的。）server 侧只丢掉一份它自己也已放弃发布的终稿——服务端 `OUTBOX_MAX_ATTEMPTS × OUTBOX_MAX_DELAY_MS ≈ 24h` 的发布放弃线与客户端刻意取同一个数，而结果总比请求更晚，所以它索取一份过线结果时自身 outbox 早已过放弃点；X 侧入口还另有 `x-hook-server` 的 `onMention` 陈旧守卫。**个人 bot 不经过这个账本**，既没有落盘也没有这条时效，它的边界就是「进程活着就尽力，挂了就没了」。官方协商 `telegram-final-ops-v1` 由桌面端发布终稿后**仍走这本账**：发布前先把不带 `clientFinal` 的 `turn.end` 写进出箱，崩溃重放时服务端删掉已落地的客户端终稿段并自己重发，所以官方这条保障不降级 | 待判：个人侧是否需要等价保障，还是接受「桌面挂了本来就没人在跑」。**注意两侧要判的不是同一件事**：官方已定「超过 24h 的终稿不再主动补发」，个人待定的是「要不要先落盘」 |
 | 4 | 受保护群内容的隐私边界 | 个人侧已做（出站回流 fail-closed，任一分片带保护标即整条不回流）。官方侧是否等价**待核** | 待核 |
 | 5 | 相册失败逐张回落 | 两侧都有实现，判据是否等价**待核** | 待核 |
@@ -254,7 +276,8 @@ hook 侧既有的逐轮 `[渠道说明]`，两者措辞不同但都向模型说�
 覆盖流式分段、最终快照及成功/失败收口；普通 Markdown 来源链接保留。
 工具结果中的托管图片沿用正常 IM 轮次的解析与去重规则，即使最终正文没有重复引用也会回传；
 SSH 任务不把远端路径或托管媒体引用当作本地文件上传；个人渠道的正文引用仅保留标签，
-官方渠道在收集工具图片和最终附件之前排除远程执行实例。
+官方渠道在收集工具图片和最终附件之前排除远程文件读取，仍经共用收集器将正文的本地
+图片和文件引用降为说明，并提示附件发送不完整；不回退读取控制端同名文件或媒体仓。
 
 临时回复通知不建立普通任务的持续转播；`/ctr` 接管任务仍只转播 scheduler 输出。
 每轮执行前从当前账号库恢复输出监听，核对 bot 身份和任务状态，因此重启后无需先从 IM 发一条消息。

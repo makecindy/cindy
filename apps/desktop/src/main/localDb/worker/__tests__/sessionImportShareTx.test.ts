@@ -70,6 +70,12 @@ function createTables(db: Database.Database): void {
       role TEXT NOT NULL DEFAULT 'developer',
       focused INTEGER NOT NULL DEFAULT 0,
       idle_since INTEGER,
+      execution_device_id TEXT,
+      remote_session_id TEXT,
+      last_bridged_message_id TEXT,
+      remote_released_at INTEGER,
+      pending_remote_report TEXT,
+      remote_stop_confirmed_at INTEGER,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
     );

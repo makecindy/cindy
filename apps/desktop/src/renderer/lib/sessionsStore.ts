@@ -114,6 +114,8 @@ let sessionSpendRevision = 0;
 type StoreChange = 'updated' | 'reset';
 
 const subs = new Set<(change: StoreChange) => void>();
+type SessionPatchListener = (id: string, patch: Partial<Session>, row: Session | null) => void;
+const patchSubs = new Set<SessionPatchListener>();
 
 function notify(change: StoreChange = 'updated'): void {
   subs.forEach((fn) => fn(change));
@@ -636,10 +638,16 @@ function applyAuthoritativeStatusSession(
     touched = true;
   }
   if (touched) notify();
+  patchSubs.forEach((fn) => fn(session.id, session, session));
   for (const filter of toBackfill) requestFilterBackfill(filter);
 }
 
 export const sessionsStore = {
+  /** Original list mutations, including rows outside a consumer's loaded window. */
+  subscribePatches(fn: SessionPatchListener): () => void {
+    patchSubs.add(fn);
+    return () => { patchSubs.delete(fn); };
+  },
   subscribe(fn: (change: StoreChange) => void): () => void {
     subs.add(fn);
     return () => {
@@ -1059,6 +1067,8 @@ export const sessionsStore = {
       }
     }
     if (touched) notify();
+    const patchedRow = migratedSession ?? this.findById(id);
+    patchSubs.forEach((fn) => fn(id, patch, patchedRow));
     if (
       pendingBeforePatch &&
       patch.status !== undefined &&

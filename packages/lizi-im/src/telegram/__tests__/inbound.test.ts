@@ -80,14 +80,14 @@ describe('detectGroupTrigger', () => {
     });
   });
 
-  it('纯 @bot(无正文)仍触发并保留原文, 不返回空文本', () => {
+  it('纯 @bot 保留触发结果，正文保持为空', () => {
     // 2026-10-03 群内实测: 只发一句 "@bot" 让它看上文, 剥完为空后被业务层当空消息
     // 静默丢弃, 表现为「@ 了没反应」。
     const m = msg({
       text: `@${BOT_USERNAME}`,
       entities: [{ type: 'mention', offset: 0, length: BOT_USERNAME.length + 1 }],
     });
-    expect(detectGroupTrigger(m, BOT_ID, BOT_USERNAME)).toEqual({ text: `@${BOT_USERNAME}` });
+    expect(detectGroupTrigger(m, BOT_ID, BOT_USERNAME)).toEqual({ text: '' });
 
     const caption = msg({
       text: undefined,
@@ -95,7 +95,7 @@ describe('detectGroupTrigger', () => {
       caption_entities: [{ type: 'mention', offset: 1, length: BOT_USERNAME.length + 1 }],
     });
     expect(detectGroupTrigger(caption, BOT_ID, BOT_USERNAME)).toEqual({
-      text: `@${BOT_USERNAME}`,
+      text: '',
     });
   });
 
@@ -127,7 +127,7 @@ describe('detectGroupTrigger', () => {
     expect(detectGroupTrigger(other, BOT_ID, BOT_USERNAME)).toBeNull();
   });
 
-  it('纯 text_mention 召唤保留原文', () => {
+  it('纯 text_mention 保留召唤结果，正文为空', () => {
     const m = msg({
       text: 'Cindy',
       entities: [
@@ -139,7 +139,7 @@ describe('detectGroupTrigger', () => {
         },
       ],
     });
-    expect(detectGroupTrigger(m, BOT_ID, BOT_USERNAME)).toEqual({ text: 'Cindy' });
+    expect(detectGroupTrigger(m, BOT_ID, BOT_USERNAME)).toEqual({ text: '' });
   });
 });
 

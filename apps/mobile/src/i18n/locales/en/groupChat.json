@@ -166,10 +166,22 @@
   "errors": {
     "memberLimit": "A group chat needs 2–6 teammates",
     "memberUnavailable": "One of these teammates is unavailable. Choose another and try again.",
+    "mentionUnavailable": "A mentioned member is no longer available. Choose who to mention before sending again.",
     "notFound": "This group chat no longer exists",
     "hostNotReady": "Cindy is still getting ready. Try again in a moment.",
     "planOpen": "A work split is underway. Finish or stop it before starting another.",
-    "planClosed": "This plan has already ended or been updated."
+    "planClosed": "This plan has already ended or been updated.",
+    "invalidAttachment": "This attachment cannot be read. Select it again and send.",
+    "attachmentUnavailable": "Could not retrieve the attachment from your phone. Check the device connection and retry.",
+    "attachmentTooLarge": "The attachment exceeds 100 MB. Choose a smaller file.",
+    "mediaUploadFailed": "Could not upload the attachment to the chat service. Try again later.",
+    "authRequired": "Your sign-in has expired. Sign in again on your computer.",
+    "chatUnavailable": "The chat service is unavailable. Check your connection and retry.",
+    "importPending": "Group history is still syncing. Try again later.",
+    "requestTimeout": "The result is not confirmed yet. Refresh to check before retrying.",
+    "permissionDenied": "You do not have permission to manage this group.",
+    "serviceError": "The chat service could not complete the request. Try again later.",
+    "groupArchived": "This group is archived. This action is unavailable."
   },
   "followUp": {
     "next": "Plan · Next step",

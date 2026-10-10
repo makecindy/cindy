@@ -737,7 +737,8 @@ describe('mobile auth-server login', () => {
       'utf8',
     );
     expect(screenSource).toContain('() => () => {');
-    expect(screenSource).toContain('void auth.cancelAddAccount();');
+    expect(screenSource).toContain('void auth.cancelAddAccount().catch(() => undefined);');
+    expect(screenSource).not.toContain('cancelAddAccount().finally');
     expect(screenSource).toContain('flowFinishedRef.current');
 
     const beginStart = authSource.indexOf('const beginAddAccount = useCallback');

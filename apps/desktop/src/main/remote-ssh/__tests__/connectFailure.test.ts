@@ -16,6 +16,11 @@ import {
 import { classifyConnectFailure } from '../connect-failure.js';
 
 describe('classifyConnectFailure', () => {
+  it('keeps host verification separate from login and ignores forged server text', () => {
+    const error = Object.assign(new Error('SSH host key changed'), { code: 'SSH_HOST_KEY_MISMATCH' });
+    expect(classifyConnectFailure(error).code).toBe('SSH_HOST_KEY_MISMATCH');
+    expect(classifyConnectFailure(new Error('SSH_HOST_KEY_MISMATCH')).code).toBe('SSH_CONNECT_FAILED');
+  });
   it('classifies the resolveAuth ENOENT error as SSH_KEY_FILE_NOT_FOUND via its stable local code', () => {
     const err = new Error(`identity file not found: C:\\Users\\someone\\.ssh\\id_ed25519`);
     (err as { code?: string }).code = KEY_FILE_NOT_FOUND_CODE;

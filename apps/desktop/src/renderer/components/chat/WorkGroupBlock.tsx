@@ -277,7 +277,10 @@ export function WorkGroupBlock({
     : (deferred?.expanded ?? rememberedExpanded);
   const deferredRef = useRef(deferred);
   deferredRef.current = deferred;
-  useEffect(() => {
+  // Register before paint. Switching back to a running task remounts this group;
+  // a passive effect can lag 50–300ms behind the stream's mount, showing a
+  // preview-less header until the cached tail reappears and the pinned list jumps.
+  useLayoutEffect(() => {
     const current = deferredRef.current;
     current?.setVisible?.(expanded, !compact && isStreaming);
     return () => current?.setVisible?.(false, false);

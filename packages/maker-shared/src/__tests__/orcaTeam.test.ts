@@ -31,6 +31,33 @@ describe('orca team shared helpers', () => {
     expect(buildDraftWorkerInitialTask('review', 'lead text')?.endsWith('lead text')).toBe(true);
   });
 
+  it('keeps the execution device of a worker running on another computer', () => {
+    const [remote, partial] = parseOrcaTeamWorkers([
+      {
+        id: 'w-1',
+        sessionId: 'proxy-1',
+        role: 'reader',
+        status: 'idle',
+        session: { agentKind: 'codex' },
+        executionDevice: {
+          deviceId: 'mac-mini',
+          remoteSessionId: 'remote-1',
+          deviceName: 'Mac mini',
+          reachable: false,
+        },
+      },
+      { id: 'w-2', sessionId: 's-2', executionDevice: { deviceId: 'x' } },
+    ]);
+    expect(remote!.executionDevice).toEqual({
+      deviceId: 'mac-mini',
+      remoteSessionId: 'remote-1',
+      deviceName: 'Mac mini',
+      reachable: false,
+    });
+    // 缺真实任务 id 的不当成远端 Worker(旧被控端或异常数据按本机处理)。
+    expect(partial).not.toHaveProperty('executionDevice');
+  });
+
   it('parses worker records defensively and drops rows without identity', () => {
     const workers = parseOrcaTeamWorkers([
       {

@@ -452,6 +452,23 @@ function draftEnableOrcaOptions(
   })();
   const cfg = collab.workerConfig;
   if (!cfg) return { workerAgent };
+  // 放到另一台电脑的 Worker：模型与来源是按那台的目录选的，不能拿本机目录收窄或换 agent。
+  if (cfg.executionDeviceId) {
+    return {
+      workerAgent: preferredAgent,
+      role: cfg.role,
+      label: createWorkerLabel(cfg.role, []),
+      model: cfg.model,
+      effort: cfg.effort as 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | undefined,
+      fast: cfg.fast,
+      providerId: cfg.providerId ?? undefined,
+      delegateTask: cfg.initialTask,
+      ...(deferDelegateTask ? { deferDelegateTask: true } : {}),
+      workerPermissionMode: cfg.workerPermissionMode,
+      executionDeviceId: cfg.executionDeviceId,
+      ...(cfg.executionWorkingDir ? { workingDir: cfg.executionWorkingDir } : {}),
+    };
+  }
   // 首选 agent 被目标设备目录换掉时,配置里的 model / providerId 属于旧 agent,一并丢弃 ——
   // 留着只会撞 INVALID_PARAMS。让被控端按新 agent 的默认值起 Worker。
   if (workerAgent !== preferredAgent) {
@@ -5932,6 +5949,12 @@ export function NewMakerDraftRoute() {
                 providerId: form.providerId,
                 initialTask: form.initialTask || undefined,
                 workerPermissionMode: form.workerPermissionMode,
+                ...(form.executionDeviceId
+                  ? {
+                      executionDeviceId: form.executionDeviceId,
+                      ...(form.workingDir ? { executionWorkingDir: form.workingDir } : {}),
+                    }
+                  : {}),
               },
             });
             setCreateWorkerOpen(false);
@@ -5943,6 +5966,10 @@ export function NewMakerDraftRoute() {
           // SSH 远程草稿(draft.remoteHostId):worker 在远端 spawn,模型清单按 SSH
           // 口径过滤,与本路由 ChatInput 候选及 main 侧 remote-worker guard 同口径。
           sshRemote={!!effectiveRemoteHostId}
+          // 首个 Worker 也可放到另一台电脑：仅本机草稿(非 SSH、非远程 Agent)。
+          executionDevicesEnabled={
+            !effectiveDeviceLinkDeviceId && !effectiveRemoteHostId && !isAgentDeviceDraft
+          }
         />
 
         {/* 添加远程项目弹窗 (入口在 mode pill 的 FolderPickerPopover 里, gate 走 hasAnyRemoteTarget =

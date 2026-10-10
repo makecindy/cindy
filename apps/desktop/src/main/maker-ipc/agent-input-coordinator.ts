@@ -6508,6 +6508,44 @@ export class AgentInputCoordinator {
     return true;
   }
 
+  /**
+   * 供应商组自动换电脑(docs/product-rules/provider-groups.md §6.1)：交接会关闭旧会话，而关闭会
+   * 撤销限额等待。交接前用终态错误下发的候选令牌取得这次错误的重试入口(不透明句柄)，交接完成后凭它
+   * `rearmUsageLimitWait` 重新挂上等待。返回 null = 那次错误已不是当前状态(用户已接手等)。
+   */
+  leaseUsageLimitRecovery(sessionId: string, token: number): object | null {
+    const state = this.states.get(sessionId);
+    if (!state || state.activeTurn !== null || !isUsageLimitCandidateCurrent(state, token)) return null;
+    return state.recovery;
+  }
+
+  /** 句柄对应的那次错误是否仍是当前状态(没有新 turn、用户没有接手、没有被中断自愈接管)。 */
+  isUsageLimitRecoveryLeaseCurrent(sessionId: string, lease: object): boolean {
+    const state = this.states.get(sessionId);
+    return Boolean(
+      state &&
+        state.activeTurn === null &&
+        state.recovery !== null &&
+        state.recovery === lease &&
+        state.error !== null &&
+        state.autoResumePending === null,
+    );
+  }
+
+  /**
+   * 凭 `leaseUsageLimitRecovery` 的句柄重新挂上限额等待并返回新令牌(resumeAt 为 null 只登记候选，
+   * 交给额度重置后自动继续去排期)。重试入口已变(用户发消息、重试、收下错误)、已有 turn 在跑或已被
+   * 中断自愈接管时返回 null，不替用户续跑。
+   */
+  rearmUsageLimitWait(sessionId: string, lease: object, resumeAt: number | null): number | null {
+    const state = this.states.get(sessionId);
+    if (!state || !state.recovery || !this.isUsageLimitRecoveryLeaseCurrent(sessionId, lease)) return null;
+    const token = ++this.usageLimitWaitSeq;
+    state.usageLimitWait = { resumeAt, token, recovery: state.recovery };
+    this.emit(sessionId);
+    return token;
+  }
+
   /** 等待计划是否仍有效（host 到点前复核用）。 */
   isUsageLimitWaitCurrent(sessionId: string, token: number): boolean {
     const state = this.states.get(sessionId);

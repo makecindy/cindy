@@ -265,6 +265,12 @@
         "reason": "中斷原因",
         "attempt": "本次重試 {{attempt}}/{{total}}",
         "sessionTotal": "本任務累計重新連線 {{count}} 次"
+      },
+      "agentSwitch": {
+        "usage-limit": "{{from}} 達到用量上限，已換到 {{to}} 繼續",
+        "auth": "{{from}} 登入已失效，已換到 {{to}} 繼續",
+        "unavailable": "{{from}} 連不上，已換到 {{to}} 繼續",
+        "overload": "{{from}} 的服務繁忙，已換到 {{to}} 繼續"
       }
     },
     "modelLabel": "模型",
