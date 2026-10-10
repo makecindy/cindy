@@ -304,6 +304,9 @@ it('preserves creation drafts across the model picker and sends only an explicit
   await renderCreate();
   await act(async () => h.create.onChange({ ...h.create.values, name: 'Nova' }));
   const portrait = h.create.values.avatarImageBase64;
+  expect(h.create.modelMissing).toBe(true);
+  await act(async () => h.create.onSubmit());
+  expect(h.invoke).not.toHaveBeenCalled();
   await act(async () => h.model.onPick(0));
   expect(h.create.visible).toBe(false); expect(h.picker.visible).toBe(false);
   await act(async () => h.create.onClosed()); expect(h.picker.visible).toBe(true);
@@ -311,6 +314,7 @@ it('preserves creation drafts across the model picker and sends only an explicit
   await act(async () => h.picker.onSelect(route));
   await act(async () => h.picker.onClose()); await act(async () => h.picker.onClosed());
   expect(h.create.values).toMatchObject({ name: 'Nova', avatarImageBase64: portrait });
+  expect(h.create.modelMissing).toBe(false);
   h.invoke.mockRejectedValueOnce(new Error('timeout'));
   await act(async () => h.create.onSubmit());
   const sent = h.invoke.mock.calls[0][2].input;
@@ -319,3 +323,16 @@ it('preserves creation drafts across the model picker and sends only an explicit
   await act(async () => h.create.onSubmit());
   expect(h.invoke.mock.calls[1][2].input).toEqual(sent);
 });
+
+
+it.each([undefined, JSON.stringify([{ harness: 'pi', model: 'default', providerId: 'provider' }])])(
+  'preserves default creation for host model metadata %s', async creationModelChain => {
+    h.read.mockResolvedValue({ resource, panels: [{ ...panel, creationModelChain }] });
+    await renderCreate();
+    await act(async () => h.create.onChange({ ...h.create.values, name: 'Nova' }));
+    expect(h.create.modelMissing).toBe(false);
+    await act(async () => h.create.onSubmit());
+    expect(h.invoke).toHaveBeenCalledTimes(1);
+    expect(h.invoke.mock.calls[0][2].input).not.toHaveProperty('modelChain');
+  },
+);

@@ -493,7 +493,7 @@ function CompanionCreateSheetContent({ visible, onClose, onClosed, deviceId, dev
   }, [visible, online, deviceId, collectionId]);
   const supportsModel = typeof data?.panels[0]?.creationModelChain === 'string';
   const modelChain = readCompanionModelChain(modelValues.modelChain);
-  const modelMissing = supportsModel && modelValues.followsDefault !== true && !modelChain.length;
+  const modelMissing = supportsModel && !modelChain.length;
   const dirty = !!String(values.name ?? '').trim() || portraitChanged || modelValues.followsDefault !== true;
   const change = (next: ProfileValues) => { if (unconfirmed) return; if (next.avatarImageBase64 !== values.avatarImageBase64) setPortraitChanged(true); setValues(next); };
   const close = () => {
