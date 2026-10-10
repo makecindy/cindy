@@ -43,11 +43,16 @@ describe('isControllerReadableAgentDevice', () => {
     expect(isControllerReadableAgentDevice('device-c', 'device-a')).toBe(true);
   });
 
-  it('被控电脑收到的分享、本机自己、空值都读不到', () => {
+  it('本机没收到的分享、本机自己、空值都读不到', () => {
     expect(isControllerReadableAgentDevice('share:abc', 'device-a')).toBe(false);
+    expect(isControllerReadableAgentDevice('share:abc', 'device-a', new Set(['share:xyz']))).toBe(false);
     expect(isControllerReadableAgentDevice('device-a', 'device-a')).toBe(false);
     expect(isControllerReadableAgentDevice(null, 'device-a')).toBe(false);
     expect(isControllerReadableAgentDevice(undefined, 'device-a')).toBe(false);
+  });
+
+  it('本机也收到了的分享经本机的分享通道读得到', () => {
+    expect(isControllerReadableAgentDevice('share:abc', 'device-a', new Set(['share:abc']))).toBe(true);
   });
 });
 
@@ -69,7 +74,27 @@ describe('controlledTaskAgentLocationReadable', () => {
     ).toBe(true);
   });
 
-  it('现在或挂着的位置在分享 / 本机上:维持原有的被控电脑列表', () => {
+  it('Agent 在本机也收到了的分享上:按分享的目录显示,也能换走', () => {
+    const readableShareIds = new Set(['share:abc']);
+    expect(
+      controlledTaskAgentLocationReadable({
+        agentDeviceId: 'share:abc',
+        pendingAgentDeviceId: undefined,
+        selfDeviceId: 'device-a',
+        readableShareIds,
+      }),
+    ).toBe(true);
+    expect(
+      controlledTaskAgentLocationReadable({
+        agentDeviceId: 'share:abc',
+        pendingAgentDeviceId: 'device-c',
+        selfDeviceId: 'device-a',
+        readableShareIds,
+      }),
+    ).toBe(true);
+  });
+
+  it('现在或挂着的位置在本机没收到的分享 / 本机上:维持原有的被控电脑列表', () => {
     expect(
       controlledTaskAgentLocationReadable({
         agentDeviceId: 'share:abc',
@@ -115,6 +140,20 @@ describe('selectControlledTaskAgentDevices', () => {
     ).toEqual([
       { deviceId: 'device-c', name: 'Studio' },
       { deviceId: 'device-d', name: 'Laptop' },
+    ]);
+  });
+
+  it('Agent 所在的分享接在同账号电脑之后', () => {
+    expect(
+      selectControlledTaskAgentDevices({
+        devices,
+        controlledDeviceId: 'device-b',
+        keepDeviceIds: ['share:abc'],
+        shareDevices: [{ deviceId: 'share:abc', name: 'Mac Mini · 来自 Magi 的分享' }],
+      }),
+    ).toEqual([
+      { deviceId: 'device-c', name: 'Studio' },
+      { deviceId: 'share:abc', name: 'Mac Mini · 来自 Magi 的分享' },
     ]);
   });
 });

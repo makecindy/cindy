@@ -602,7 +602,10 @@ handler 无 sender 依赖；不加入共享任务访客白名单，不进入自�
   桌面远程控制 A 上的已建任务(2026-10-09)与手机同口径：A 投影的任务带 `agentDeviceId` 字段(含 null)才开放，
   控制端直接经 device-link 读第三台电脑的 `maker:provider:list`，A 自己的目录照远程控制列全部供应商，换位置同样
   带 `agentDeviceId`(null = A)，换后档位记在控制端为那台电脑单独记的一份(改回 A 时写 A 的镜像)。A 收到的分享与
-  控制端自己作为落点暂不在桌面控制端列出(控制端读不到那份目录)；Agent 正在这类位置上时维持原有的 A 目录列表。
+  控制端自己作为新的落点暂不在桌面控制端列出；Agent 正在控制端读不到目录的位置上时维持原有的 A 目录列表。
+  例外(2026-10-10)：Agent 当前 / 挂着的位置是分享(`share:<id>`)、且控制端自己的已收到列表里也有这条(分享按账号
+  授予，同账号电脑收到的是同一份)时，控制端经自己的分享通道读那份目录与 Agent 能力，模型按钮按分享显示，候选里
+  只并进这一条分享；不经 A、不新增 channel。控制端没收到时维持原样。
   实现见 `apps/desktop/src/renderer/lib/controlledTaskAgentLocation.ts`，回归见
   `controlledTaskRemoteAgentPanel.test.tsx` 与 `remoteAgentRelocationWiring.test.ts`。
   桌面远程控制下新建任务(建到 A 上，2026-10-09)同样开放：判据与手机新建相同(A 的 `maker:provider:list` 带
