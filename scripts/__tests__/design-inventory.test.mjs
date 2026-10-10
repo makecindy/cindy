@@ -1277,7 +1277,7 @@ test('Mobile actual route families and shared visible consumers are discoverable
     ['mobile.chat.session', ['MessageRenderer.tsx', 'CompanionMessageCard.tsx', 'AuthorizationMessageCard.tsx', 'FailedScheduleNotice.tsx']],
     ['mobile.remote-desktop', ['RemoteDesktopScreen.tsx', 'viewerHtml.ts']],
     ['mobile.settings', ['settings.tsx']],
-    ['mobile.plugins', ['PluginsScreen.tsx', 'PluginPage.tsx', 'PluginTaskSettings.tsx', 'PluginNativeIntent.tsx']],
+    ['mobile.plugins', ['PluginsScreen.tsx', 'PluginPage.tsx', 'PluginDetailView.ios.tsx', 'PluginToolChips.tsx', 'PluginNativeIntent.tsx']],
     ['mobile.overlay.connection-startup', ['ConnectionNoticeOverlay.tsx', 'ConnectionBanner.tsx']],
   ]) {
     const surface = surfaces.find(s=>s.id===id);

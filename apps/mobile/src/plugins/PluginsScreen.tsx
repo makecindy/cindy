@@ -5,24 +5,33 @@ import {
   BackHandler,
   Image,
   Pressable,
+  Platform,
   RefreshControl,
   ScrollView,
   StyleSheet,
   View,
   useWindowDimensions,
 } from "react-native";
-import { useIsFocused, useRouter } from "expo-router";
+import {
+  Stack,
+  useIsFocused,
+  useRouter,
+  useLocalSearchParams,
+} from "expo-router";
+import {
+  pluginVisualPreview,
+  pluginVisualScenario,
+} from "@/debug/pluginVisualFixture";
+import type { SearchBarCommands } from "react-native-screens";
 import { goBackGuarded } from "@/utils/backGuard";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useTranslation } from "react-i18next";
 import {
   ChevronDown,
-  ChevronRight,
   Info,
   Monitor,
   Puzzle,
   Search,
-  Settings,
 } from "lucide-react-native";
 import {
   resolveRemoteText,
@@ -58,10 +67,13 @@ import {
   getMobileAuthOwner,
   isMobileAuthOwnerCurrent,
 } from "@/auth/authOwnerGeneration";
+import { pluginDetailModel } from "./pluginDetailModel";
+import { PluginDirectoryView } from "./PluginDirectoryView";
+import { PluginDetailView } from "./PluginDetailView";
 import { PluginTaskPicker } from "./PluginTaskPicker";
-import { PluginTaskSettings } from "./PluginTaskSettings";
 import { PluginPage } from "./PluginPage";
 import { invokePlugin } from "./pluginClient";
+import { sortPluginItems } from "./pluginListOrder";
 
 export default function PluginsScreen() {
   const auth = useAuth();
@@ -72,6 +84,8 @@ function PluginDirectory() {
     router = useRouter(),
     focused = useIsFocused();
   const { t, i18n } = useTranslation();
+  const { preview } = useLocalSearchParams<{ preview?: string }>();
+  const previewSelection = useRef<string | undefined>(undefined);
   const { invoke } = useDeviceLink();
   const { colors } = useTheme(),
     styles = useThemedStyles(makeStyles);
@@ -91,19 +105,65 @@ function PluginDirectory() {
     [devices.devices],
   );
   const list = useRemoteResourceList("plugins", targets);
+  const listFailed = Boolean(
+    devices.error || (targets.length > 0 && list.error),
+  );
+  const directoryLoading = Boolean(devices.loading || list.loading);
   const [deviceId, setDeviceId] = useState("");
   const [query, setQuery] = useState("");
-  const [filter, setFilter] = useState<"all" | "unread">("all");
   const [selected, setSelected] = useState<{
     row: HostedRemoteCollectionItem;
     surface?: PluginPageSurface;
   }>();
   const [detailOpen, setDetailOpen] = useState(false);
   const [detail, setDetail] = useState<RemoteResource>();
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailFailed, setDetailFailed] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [recent, setRecent] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
+  const enableLock = useRef(false);
   const [taskPicker, setTaskPicker] = useState(false);
   const [pageTitle, setPageTitle] = useState("");
+  const searchVisible = Platform.OS === "ios" && (!selected || wide);
+  const latestQuery = useRef(query);
+  latestQuery.current = query;
+  const searchBar = useMemo(() => {
+    let current: SearchBarCommands | null = null;
+    return {
+      get current() {
+        return current;
+      },
+      set current(bar: SearchBarCommands | null) {
+        current = bar;
+        // Stack options attach UISearchBar after the page effect has run.
+        // Initialize on attachment, never replay JS updates over native typing.
+        bar?.setText(latestQuery.current);
+      },
+    };
+  }, []);
+  const searchOptions = useMemo(
+    () => ({
+      headerSearchBarOptions: searchVisible
+        ? {
+            ref: searchBar,
+            placeholder: t("plugins.search"),
+            placement: "stacked" as const,
+            hideWhenScrolling: false,
+            hideNavigationBar: false,
+            obscureBackground: false,
+            autoCapitalize: "none" as const,
+            tintColor: colors.inputCaret,
+            textColor: colors.textPrimary,
+            onChangeText: (event: { nativeEvent: { text: string } }) =>
+              setQuery(event.nativeEvent.text),
+            onCancelButtonPress: () => setQuery(""),
+            onSearchButtonPress: () => searchBar.current?.blur(),
+          }
+        : undefined,
+    }),
+    [searchVisible, searchBar, t, colors.inputCaret, colors.textPrimary],
+  );
   useEffect(() => {
     setPageTitle("");
   }, [selected?.row.key, selected?.surface]);
@@ -112,13 +172,14 @@ function PluginDirectory() {
     pageBack.current = handler;
   }, []);
   const goBack = useCallback(() => {
-    if (detailOpen && selected?.surface) setDetailOpen(false);
+    if (settingsOpen) setSettingsOpen(false);
+    else if (detailOpen && selected?.surface) setDetailOpen(false);
     else if (selected?.surface && pageBack.current) pageBack.current();
     else if (selected && !wide) {
       detailGeneration.current += 1;
       setSelected(undefined);
     } else goBackGuarded(router);
-  }, [detailOpen, selected, wide, router]);
+  }, [detailOpen, settingsOpen, selected, wide, router]);
   useEffect(() => {
     if (!focused || !selected || wide) return;
     const listener = BackHandler.addEventListener("hardwareBackPress", () => {
@@ -140,14 +201,14 @@ function PluginDirectory() {
           !isMobileAuthOwnerCurrent(recentOwner) ||
           recentTouched.current ||
           !raw ||
-          raw.length > 8000
+          raw.length > 64_000
         )
           return;
         try {
           const value = JSON.parse(raw);
           if (Array.isArray(value))
             setRecent(
-              value.filter((key) => typeof key === "string").slice(0, 6),
+              value.filter((key) => typeof key === "string").slice(0, 100),
             );
         } catch {
           /* optional local history */
@@ -165,15 +226,25 @@ function PluginDirectory() {
         () => {},
       );
   }, [recent, recentKey, recentOwner]);
+  const markUsed = (key: string) => {
+    if (!isMobileAuthOwnerCurrent(recentOwner)) return;
+    recentTouched.current = true;
+    setRecent((current) =>
+      [key, ...current.filter((item) => item !== key)].slice(0, 100),
+    );
+  };
   const text = (value: Parameters<typeof resolveRemoteText>[0]) =>
     resolveRemoteText(value, i18n.language);
-  const items = list.items.filter(
-    ({ host, item }) =>
-      (!deviceId || host.deviceId === deviceId) &&
-      (filter === "all" || item.display.badges?.length) &&
+  const scopedItems = list.items.filter(
+    ({ host }) => !deviceId || host.deviceId === deviceId,
+  );
+  const items = sortPluginItems(
+    scopedItems.filter(({ item }) =>
       `${text(item.display.title)} ${item.display.subtitle ? text(item.display.subtitle) : ""}`
         .toLocaleLowerCase()
         .includes(query.toLocaleLowerCase()),
+    ),
+    recent,
   );
   const showDetail = async (row: HostedRemoteCollectionItem) => {
     const generation = ++detailGeneration.current,
@@ -182,7 +253,14 @@ function PluginDirectory() {
       current?.row.key === row.key ? { ...current, row } : { row },
     );
     setDetailOpen(true);
+    setSettingsOpen(false);
     setDetail(undefined);
+    setDetailFailed(false);
+    if (!list.isOnline(row.host)) {
+      setDetailLoading(false);
+      return;
+    }
+    setDetailLoading(true);
     try {
       const resource = await getRemoteResource(
         invoke,
@@ -194,22 +272,79 @@ function PluginDirectory() {
       if (
         generation === detailGeneration.current &&
         isMobileAuthOwnerCurrent(owner)
-      )
+      ) {
         setDetail(resource);
+        setSelected((current) =>
+          current?.row.key === row.key
+            ? { ...current, row: { ...row, item: resource } }
+            : current,
+        );
+      }
     } catch {
       if (
         generation === detailGeneration.current &&
         isMobileAuthOwnerCurrent(owner)
       )
-        Alert.alert(t("plugins.loadFailed"));
+        setDetailFailed(true);
+    } finally {
+      if (
+        generation === detailGeneration.current &&
+        isMobileAuthOwnerCurrent(owner)
+      )
+        setDetailLoading(false);
     }
   };
+  // Returning from a task or reconnecting may invalidate the previous Host facts.
+  const selectedOnline = selected ? list.isOnline(selected.row.host) : false;
+  const previousFocus = useRef(focused);
+  const previousConnection = useRef({
+    key: selected?.row.key,
+    online: selectedOnline,
+  });
+  useEffect(() => {
+    const returned = focused && !previousFocus.current;
+    const reconnected =
+      previousConnection.current.key === selected?.row.key &&
+      !previousConnection.current.online &&
+      selectedOnline;
+    previousFocus.current = focused;
+    previousConnection.current = {
+      key: selected?.row.key,
+      online: selectedOnline,
+    };
+    if (
+      focused &&
+      selected &&
+      detailOpen &&
+      selectedOnline &&
+      !enableLock.current &&
+      (returned || reconnected || (!detailLoading && !detail && !detailFailed))
+    )
+      void showDetail(selected.row);
+  }, [focused, selectedOnline, selected?.row.key]);
+  useEffect(() => {
+    const target = pluginVisualPreview(preview);
+    if (!target || previewSelection.current === preview) return;
+    const row = list.items.find(
+      (row) =>
+        row.host.deviceId === "cindy-visual-mock-mac" &&
+        row.item.ref.id === target.id,
+    );
+    if (!row) return;
+    previewSelection.current = preview;
+    const pending = showDetail(row);
+    const generation = detailGeneration.current;
+    void pending.then(() => {
+      if (target.settings && generation === detailGeneration.current)
+        setSettingsOpen(true);
+    });
+  }, [preview, list.items]);
   const open = (
     row: HostedRemoteCollectionItem,
     surface?: PluginPageSurface,
   ) => {
     if (!list.isOnline(row.host)) {
-      Alert.alert(t("plugins.offline"));
+      void showDetail(row);
       return;
     }
     const action = surface
@@ -221,20 +356,19 @@ function PluginDirectory() {
       return;
     }
     detailGeneration.current += 1;
-    recentTouched.current = true;
     setDetailOpen(false);
+    setSettingsOpen(false);
     setSelected({ row, surface: action.id.slice(5) as PluginPageSurface });
-    setRecent((current) =>
-      [row.key, ...current.filter((key) => key !== row.key)].slice(0, 6),
-    );
   };
   const openTask = useCallback(
     (sessionId: string) => {
-      if (selected)
+      if (selected) {
+        markUsed(selected.row.key);
         router.push({
           pathname: "/sessions/[sessionId]",
           params: { sessionId, deviceId: selected.row.host.deviceId },
         });
+      }
     },
     [router, selected],
   );
@@ -315,250 +449,259 @@ function PluginDirectory() {
       </Pressable>
     </View>
   );
-  const directory = (
-    <View style={[styles.directory, wide && styles.sidebar]}>
-      <View style={styles.controls}>
-        <Pressable
-          accessibilityRole="button"
-          style={styles.device}
-          onPress={selectDevice}
-        >
-          <Monitor size={iconSize.sm} color={colors.textSecondary} />
-          <Text style={styles.controlText}>
-            {targets.find((h) => h.deviceId === deviceId)?.deviceName ??
-              t("plugins.allComputers")}
-          </Text>
-          <ChevronDown size={iconSize.sm} color={colors.textSecondary} />
-        </Pressable>
-        <View style={styles.search}>
-          <Search size={iconSize.md} color={colors.textTertiary} />
-          <TextInput
-            value={query}
-            onChangeText={setQuery}
-            placeholder={t("plugins.search")}
-            placeholderTextColor={colors.textPlaceholder}
-            style={styles.input}
-            accessibilityLabel={t("plugins.search")}
-            clearButtonMode="while-editing"
-          />
-        </View>
-        <View style={styles.inline}>
-          {(["all", "unread"] as const).map((value) => (
-            <Pressable
-              key={value}
-              accessibilityRole="button"
-              accessibilityState={{ selected: filter === value }}
-              onPress={() => setFilter(value)}
-              style={[styles.chip, filter === value && styles.selected]}
-            >
-              <Text style={styles.controlText}>{t(`plugins.${value}`)}</Text>
-            </Pressable>
-          ))}
-        </View>
-      </View>
-      <ScrollView
-        contentContainerStyle={styles.content}
-        refreshControl={
-          <RefreshControl
-            refreshing={list.refreshing}
-            onRefresh={() => {
-              devices.refresh();
-              void list.refresh();
-            }}
-            tintColor={colors.textSecondary}
-          />
-        }
-      >
-        {list.loading && !items.length ? (
-          <ActivityIndicator color={colors.textSecondary} />
-        ) : null}
-        {!query &&
-        filter === "all" &&
-        recent.some((key) => items.some((row) => row.key === key)) ? (
-          <>
-            <Text style={styles.groupLabel}>{t("plugins.recent")}</Text>
-            <View style={styles.groupCard}>
-              {recent.flatMap((key) => {
-                const row = items.find((r) => r.key === key);
-                return row ? [renderRow(row)] : [];
-              })}
-            </View>
-          </>
-        ) : null}
-        <Text style={styles.groupLabel}>{t("plugins.installed")}</Text>
-        <View style={styles.groupCard}>{items.map(renderRow)}</View>
-        {!list.loading && !items.length ? (
-          <View style={styles.empty}>
-            <Puzzle size={iconSize.xl} color={colors.textTertiary} />
-            <Text style={styles.preview}>
-              {t(
-                query
-                  ? "plugins.noResults"
-                  : targets.length
-                    ? "plugins.noPlugins"
-                    : "plugins.noComputer",
-              )}
-            </Text>
-            {!targets.length ? (
-              <Pressable
-                style={styles.button}
-                onPress={() => router.push("/devices/manage")}
-              >
-                <Text style={styles.controlText}>
-                  {t("plugins.connectComputer")}
-                </Text>
-              </Pressable>
-            ) : null}
-          </View>
-        ) : null}
-        {list.error ? (
-          <Text style={styles.note}>{t("plugins.listUnavailable")}</Text>
-        ) : null}
-      </ScrollView>
-    </View>
-  );
-  const enable = async () => {
-    if (!selected || busy) return;
-    setBusy(true);
-    try {
-      const action = selected.row.item.actions?.find(
-        (a) => a.id === "enable" || a.id === "disable",
-      );
-      if (action)
-        await invokePlugin(
-          invoke,
-          selected.row.host.deviceId,
-          selected.row.item.ref.id,
-          action.id,
-        );
-      await list.refresh();
-      setSelected(undefined);
-    } catch {
-      Alert.alert(t("plugins.actionFailed"));
-    } finally {
-      setBusy(false);
-    }
-  };
-  const detailView = selected ? (
-    <ScrollView contentContainerStyle={styles.detail}>
-      <View style={styles.identity}>
-        {icon(selected.row)}
-        <View style={styles.rowText}>
-          <Text style={styles.title}>
-            {text(selected.row.item.display.title)}
-          </Text>
-          <Text style={styles.meta}>{selected.row.host.deviceName}</Text>
-        </View>
-      </View>
-      <Text style={styles.preview}>
-        {selected.row.item.display.subtitle
-          ? text(selected.row.item.display.subtitle)
-          : ""}
-      </Text>
-      <View style={styles.groupCard}>
-        {selected.row.item.actions
-          ?.filter((action) => action.id.startsWith("open:"))
-          .map((action) => (
-            <Pressable
-              key={action.id}
-              disabled={action.disabled}
-              style={styles.settingRow}
-              onPress={() =>
-                open(selected.row, action.id.slice(5) as PluginPageSurface)
-              }
-            >
-              <Text style={styles.controlText}>
-                {t(`plugins.${action.id.slice(5)}`)}
-              </Text>
-              <ChevronRight size={iconSize.md} color={colors.textTertiary} />
-            </Pressable>
-          ))}
-      </View>
-      {detail?.blocks?.some(
-        (block) =>
-          block.id === "capabilities" &&
-          (block.data as { tasks?: boolean } | undefined)?.tasks,
-      ) ? (
-        <PluginTaskSettings
-          key={selected.row.key}
-          deviceId={selected.row.host.deviceId}
-          pluginId={selected.row.item.ref.id}
+  const directory =
+    Platform.OS === "ios" ? (
+      <View style={[styles.directory, wide && styles.sidebar]}>
+        <PluginDirectoryView
+          targets={targets}
+          deviceId={deviceId}
+          onDeviceChange={setDeviceId}
+          query={query}
+          items={items}
+          selectedKey={wide ? selected?.row.key : undefined}
+          loading={directoryLoading}
+          error={listFailed}
+          isOnline={(row) => list.isOnline(row.host)}
+          onRefresh={async () => {
+            devices.refresh();
+            await list.refresh();
+          }}
+          onOpen={open}
+          onDetail={(row) => {
+            void showDetail(row);
+          }}
+          onConnectComputer={() => router.push("/devices/manage")}
         />
-      ) : null}
-      <Text style={styles.groupLabel}>{t("plugins.useInTask")}</Text>
-      <View style={styles.groupCard}>
-        <Pressable
-          style={styles.settingRow}
-          onPress={() =>
-            router.push({
-              pathname: "/sessions/new",
-              params: {
-                deviceId: selected.row.host.deviceId,
-                deviceName: selected.row.host.deviceName,
-                draft: t("plugins.taskDraft", {
-                  name: text(selected.row.item.display.title),
-                }),
-              },
-            })
+      </View>
+    ) : (
+      <View style={[styles.directory, wide && styles.sidebar]}>
+        <ScrollView
+          contentContainerStyle={styles.content}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="on-drag"
+          refreshControl={
+            <RefreshControl
+              refreshing={list.refreshing}
+              onRefresh={() => {
+                devices.refresh();
+                void list.refresh();
+              }}
+              tintColor={colors.textSecondary}
+            />
           }
         >
-          <Text style={styles.controlText}>{t("plugins.newTask")}</Text>
-          <ChevronRight size={iconSize.md} color={colors.textTertiary} />
-        </Pressable>
-        <Pressable
-          style={styles.settingRow}
-          onPress={() => setTaskPicker(true)}
-        >
-          <Text style={styles.controlText}>{t("plugins.chooseTask")}</Text>
-          <ChevronRight size={iconSize.md} color={colors.textTertiary} />
-        </Pressable>
+          <View style={styles.controls}>
+            <Pressable
+              accessibilityRole="button"
+              style={styles.device}
+              onPress={selectDevice}
+            >
+              <Monitor size={iconSize.sm} color={colors.textSecondary} />
+              <Text style={styles.controlText}>
+                {targets.find((h) => h.deviceId === deviceId)?.deviceName ??
+                  t("plugins.allComputers")}
+              </Text>
+              <ChevronDown size={iconSize.sm} color={colors.textSecondary} />
+            </Pressable>
+            <View style={styles.search}>
+              <Search size={iconSize.md} color={colors.textTertiary} />
+              <TextInput
+                value={query}
+                onChangeText={setQuery}
+                placeholder={t("plugins.search")}
+                placeholderTextColor={colors.textPlaceholder}
+                style={styles.input}
+                accessibilityLabel={t("plugins.search")}
+                clearButtonMode="while-editing"
+              />
+            </View>
+          </View>
+          {directoryLoading && !items.length ? (
+            <ActivityIndicator color={colors.textSecondary} />
+          ) : null}
+          <View style={styles.inline}>
+            <Text style={[styles.groupLabel, { flex: 1 }]}>
+              {t("plugins.installed")}
+            </Text>
+          </View>
+          <View style={styles.groupCard}>{items.map(renderRow)}</View>
+          {!directoryLoading && !listFailed && !items.length ? (
+            <View style={styles.empty}>
+              <Puzzle size={iconSize.xl} color={colors.textTertiary} />
+              <Text style={styles.preview}>
+                {t(
+                  query
+                    ? "plugins.noResults"
+                    : targets.length
+                      ? "plugins.noPlugins"
+                      : "plugins.noComputer",
+                )}
+              </Text>
+              {!targets.length ? (
+                <Pressable
+                  style={styles.button}
+                  onPress={() => router.push("/devices/manage")}
+                >
+                  <Text style={styles.controlText}>
+                    {t("plugins.connectComputer")}
+                  </Text>
+                </Pressable>
+              ) : null}
+            </View>
+          ) : null}
+          {listFailed ? (
+            <View>
+              <Text style={styles.note}>
+                {t(
+                  items.length
+                    ? "plugins.listUnavailable"
+                    : "plugins.listLoadFailed",
+                )}
+              </Text>
+              {!items.length && !directoryLoading ? (
+                <Pressable
+                  accessibilityRole="button"
+                  style={styles.button}
+                  onPress={() => {
+                    devices.refresh();
+                    void list.refresh();
+                  }}
+                >
+                  <Text style={styles.controlText}>
+                    {t("plugins.detail.action.retry")}
+                  </Text>
+                </Pressable>
+              ) : null}
+            </View>
+          ) : null}
+        </ScrollView>
       </View>
-      <Text style={styles.note}>{t("plugins.taskHint")}</Text>
-      {!selected.row.item.actions?.some(
-        (a) => a.id === "open:panel" || a.id === "open:mainView",
-      ) ? (
-        <Text style={styles.note}>{t("plugins.noMobilePage")}</Text>
-      ) : null}
-      {detail?.blocks
-        ?.filter((block) => block.id === "version")
-        .map((block) => (
-          <Text key={block.id} style={styles.meta}>
-            {block.fallbackMarkdown}
-          </Text>
-        ))}
-      <Pressable
-        disabled={busy}
-        style={styles.settingRow}
-        onPress={() => {
-          void enable();
-        }}
-      >
-        <Text style={styles.controlText}>
-          {t(
-            selected.row.item.actions?.some((a) => a.id === "disable")
-              ? "plugins.disable"
-              : "plugins.enable",
-          )}
-        </Text>
-        {busy ? (
-          <ActivityIndicator />
-        ) : (
-          <Settings color={colors.textSecondary} size={iconSize.md} />
-        )}
-      </Pressable>
-    </ScrollView>
-  ) : (
-    <View style={styles.empty}>
-      <Puzzle color={colors.textTertiary} size={iconSize.xl} />
-      <Text style={styles.preview}>{t("plugins.selectPlugin")}</Text>
-    </View>
+    );
+  const enable = async (enabled: boolean) => {
+    if (
+      !selected ||
+      !detail ||
+      enableLock.current ||
+      !list.isOnline(selected.row.host)
+    )
+      return;
+    const actionId = enabled ? "enable" : "disable";
+    if (
+      !selected.row.item.actions?.some(
+        (action) => action.id === actionId && !action.disabled,
+      )
+    )
+      return;
+    const row = selected.row,
+      generation = detailGeneration.current,
+      owner = getMobileAuthOwner();
+    const current = () =>
+      generation === detailGeneration.current &&
+      isMobileAuthOwnerCurrent(owner);
+    enableLock.current = true;
+    setBusy(true);
+    try {
+      await invokePlugin(invoke, row.host.deviceId, row.item.ref.id, actionId);
+    } catch {
+      if (current()) Alert.alert(t("plugins.actionFailed"));
+    } finally {
+      // A failed reply may follow an applied write; confirm by reading, never replaying it.
+      if (current()) await showDetail(row);
+      enableLock.current = false;
+      if (isMobileAuthOwnerCurrent(owner)) setBusy(false);
+      void list.refresh();
+    }
+  };
+  const enabled =
+    selected?.row.item.actions?.some((action) => action.id === "disable") ??
+    false;
+  const demoScenario = pluginVisualScenario(
+    selected?.row.host.deviceId,
+    selected?.row.item.ref.id,
   );
+  const online = selected
+    ? list.isOnline(selected.row.host) && demoScenario?.state !== "offline"
+    : false;
+  const model = selected
+    ? pluginDetailModel(
+        selected.row,
+        demoScenario?.state ? undefined : detail,
+        online,
+        detailLoading || demoScenario?.state === "loading",
+        detailFailed || demoScenario?.state === "loadFailed",
+      )
+    : undefined;
+  const newTask = () => {
+    if (!selected || !model || busy || !online || !detail || !enabled) return;
+    if (!model.canUseTasks) return;
+    markUsed(selected.row.key);
+    router.push({
+      pathname: "/sessions/new",
+      params: {
+        deviceId: selected.row.host.deviceId,
+        deviceName: selected.row.host.deviceName,
+        draft: t("plugins.taskDraft", {
+          name: text(selected.row.item.display.title),
+        }),
+      },
+    });
+  };
+  const resolveStatus = () => {
+    if (!selected || !model || busy) return;
+    switch (model.statusAction) {
+      case "connect":
+        router.push("/devices/manage");
+        break;
+      case "retry":
+        void showDetail(selected.row);
+        break;
+      case "enable":
+        void enable(true);
+        break;
+      case "reconnect":
+      case "settings":
+        Alert.alert(t("plugins.detail.computerSettings"));
+        break;
+    }
+  };
+  const detailView =
+    selected && model ? (
+      <PluginDetailView
+        row={selected.row}
+        enabled={enabled}
+        busy={busy || detailLoading}
+        online={online}
+        model={model}
+        previewLabel={
+          demoScenario
+            ? t("plugins.demo.hint") + " · " + demoScenario.label
+            : undefined
+        }
+        settingsOpen={settingsOpen}
+        onEnabledChange={(value) => {
+          if (model.canToggle) void enable(value);
+        }}
+        onOpen={(surface) => open(selected.row, surface)}
+        onNewTask={() => newTask()}
+        onChooseTask={() => {
+          if (model.canUseTasks && !busy) setTaskPicker(true);
+        }}
+        onSettings={() => setSettingsOpen(true)}
+        onResolveStatus={resolveStatus}
+      />
+    ) : (
+      <View style={styles.empty}>
+        <Puzzle color={colors.textTertiary} size={iconSize.xl} />
+        <Text style={styles.preview}>{t("plugins.selectPlugin")}</Text>
+      </View>
+    );
   return (
     <SafeAreaView edges={simpleScreenSafeAreaEdges()} style={styles.root}>
       <SimpleStackHeader
         title={
           selected && !wide
-            ? (!detailOpen && selected.surface && pageTitle) ||
+            ? (settingsOpen && t("plugins.settings")) ||
+              (!detailOpen && selected.surface && pageTitle) ||
               text(selected.row.item.display.title)
             : t("plugins.title")
         }
@@ -577,13 +720,17 @@ function PluginDirectory() {
           ) : undefined
         }
       />
+      {Platform.OS === "ios" ? <Stack.Screen options={searchOptions} /> : null}
       {selected ? (
         <PluginTaskPicker
+          key={selected.row.key}
           deviceId={selected.row.host.deviceId}
           visible={taskPicker}
           onClose={() => setTaskPicker(false)}
           onSelect={(sessionId) => {
             setTaskPicker(false);
+            if (!model?.canUseTasks || busy || !online) return;
+            markUsed(selected.row.key);
             router.push({
               pathname: "/sessions/[sessionId]",
               params: {
@@ -613,6 +760,7 @@ function PluginDirectory() {
                   onTask={openTask}
                   registerBack={registerBack}
                   onTitle={setPageTitle}
+                  onLoaded={() => markUsed(selected.row.key)}
                 />
               </View>
             ) : null}
@@ -636,9 +784,8 @@ const makeStyles = (c: ThemeColors) =>
       borderRightWidth: StyleSheet.hairlineWidth,
       borderRightColor: c.border,
     },
-    controls: { padding: spacing.md, gap: spacing.sm },
+    controls: { gap: spacing.sm },
     content: { padding: spacing.md, gap: spacing.md },
-    detail: { padding: spacing.lg, gap: spacing.lg },
     inline: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
     device: {
       minHeight: 44,
@@ -662,12 +809,6 @@ const makeStyles = (c: ThemeColors) =>
       fontWeight: fontWeight.regular,
       paddingVertical: spacing.sm,
     },
-    chip: {
-      minHeight: 44,
-      paddingHorizontal: spacing.md,
-      justifyContent: "center",
-      borderRadius: radius.pill,
-    },
     selected: { backgroundColor: c.surfaceChip },
     groupCard: {
       borderRadius: radius.container,
@@ -679,12 +820,13 @@ const makeStyles = (c: ThemeColors) =>
       flex: 1,
       flexDirection: "row",
       alignItems: "center",
-      padding: spacing.md,
+      paddingHorizontal: spacing.md,
+      paddingVertical: spacing.lg,
       gap: spacing.md,
-      minHeight: 88,
+      minHeight: 96,
     },
     rowText: { flex: 1, gap: spacing.xs },
-    icon: { width: 44, height: 44, borderRadius: radius.control },
+    icon: { width: 54, height: 54, borderRadius: radius.container },
     fallback: {
       alignItems: "center",
       justifyContent: "center",
@@ -702,7 +844,6 @@ const makeStyles = (c: ThemeColors) =>
       borderRadius: radius.pill,
       backgroundColor: c.statusDone,
     },
-    identity: { flexDirection: "row", alignItems: "center", gap: spacing.md },
     empty: {
       flex: 1,
       padding: spacing.xl,
@@ -710,20 +851,7 @@ const makeStyles = (c: ThemeColors) =>
       justifyContent: "center",
       gap: spacing.md,
     },
-    settingRow: {
-      minHeight: 52,
-      flexDirection: "row",
-      alignItems: "center",
-      justifyContent: "space-between",
-      padding: spacing.md,
-    },
     button: { padding: spacing.md, minHeight: 44 },
-    title: {
-      fontSize: typeScale.title,
-      lineHeight: lineHeight.title,
-      fontWeight: fontWeight.semibold,
-      color: c.textPrimary,
-    },
     rowTitle: {
       flexShrink: 1,
       fontSize: typeScale.subtitle,

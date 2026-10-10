@@ -1375,3 +1375,23 @@ Chat Server `/me` 追加 `capabilities.groupDiscussionParity: 1`。Desktop 只�
 新控制端连接旧执行端沿用原通知；旧控制端忽略该字段，仍可能发独立完成外部通知，完整远端
 去重需要两端更新。手机外部推送在执行端及远控 Desktop 的通知出口完成去重，手机无需新增协议处理；
 移动列表继续原 phase/attention 语义。无需服务端、数据库 migration 或 Mobile fingerprint 改动。
+
+## 移动插件只读权限摘要
+
+plugin-capabilities.data 可选追加 permissions（title/description 字符串数组），仅由 Host 从
+PC 同源 ghostPermissionItems 声明摘要投影并排除 tool，以请求 locale 使用 PC 文案插值。
+包含作者声明的 OAuth scope，不包含凭证、已存配置值或本机路径；不表示已授予运行权限。
+旧控制端忽略该字段，新手机遇到旧 Host 缺字段或格式不完整时明确未提供，不推断无权限。
+空数组仅表示 Host 明确投影的声明为空。工具、about 和 version 使用原字段。
+不增加 channel、allowlist、relay 帧、授权或协议版本，服务端无改动，Mobile 指纹不变。
+
+
+## 移动插件 Details 事实
+
+同一 plugin-capabilities.data 可选追加 details（key/title/value 数组），由本插件 InstalledGhost
+投影 PC 同源版本、作者、签名来源、标识、包含能力与面板声明。签名标签复用 shared ghostTrustLabelKey，
+不传签名文件、批准记录或密钥标识，不用作者自报推断官方。安装目录按用户明确要求单独只读投影本插件
+的 ghost.dir，仅走原同账号、当前 owner 的资源通道；不提供路径写入或文件操作，不扩 IPC 白名单。
+当前 PC 窗口的停靠位置不在此声明投影内，有面板只报告存在，无面板沿用 PC 文案。
+旧 Host 缺字段时新手机仅显示原有 Version 与资源 Identifier，说明其余数据未提供；旧控制端忽略新增字段。
+服务端、relay、协议版本及原生 fingerprint 均不变。

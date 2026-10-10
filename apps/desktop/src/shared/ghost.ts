@@ -1658,6 +1658,15 @@ export interface GhostTrustInfo {
   unknownReviewer?: boolean;
 }
 
+/** Shared PC/mobile display label; only Host-owned trust facts affect this result. */
+export function ghostTrustLabelKey(trust: GhostTrustInfo | undefined):
+  'official' | 'reviewed' | 'verifiedPublisher' | 'signedUnverified' | 'unsigned' {
+  return trust?.level === 'cindy-official' ? 'official'
+    : trust?.level === 'reviewed' ? 'reviewed'
+    : trust?.level === 'verified-publisher' ? 'verifiedPublisher'
+    : trust?.publisherSigned ? 'signedUnverified' : 'unsigned';
+}
+
 /** 意识面板的 panelKind(布局树寻址用)。 */
 // 返回类型收窄到模板字面量:右侧栏 TabKindId 含 `ghost:${string}` 分支,
 // 调用方无需再 as 断言;对既有 string 消费方完全兼容。

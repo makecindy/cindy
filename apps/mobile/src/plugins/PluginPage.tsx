@@ -69,6 +69,7 @@ export function PluginPage({
   visible = true,
   registerBack,
   onTitle,
+  onLoaded,
 }: {
   deviceId: string;
   pluginId: string;
@@ -76,6 +77,7 @@ export function PluginPage({
   visible?: boolean;
   registerBack?(handler: (() => void) | null): void;
   onTitle?(title: string): void;
+  onLoaded?(): void;
   onTask(id: string): void;
 }) {
   const { t } = useTranslation();
@@ -85,6 +87,8 @@ export function PluginPage({
   const routeFocused = useIsFocused(),
     focused = routeFocused && visible;
   const webview = useRef<WebView>(null);
+  const loadedCallback = useRef(onLoaded);
+  loadedCallback.current = onLoaded;
   const draftOwner = useRef(getMobileAuthOwner()).current;
   const draftQueue = useRef(Promise.resolve());
   const [attempt, setAttempt] = useState(0);
@@ -209,6 +213,7 @@ export function PluginPage({
         if (!current()) return;
         documentRef.current = page;
         setContent({ document: page, assets });
+        loadedCallback.current?.();
         // Polling starts only after ready, so startup events cannot disappear before the WebView mounts.
       } catch {
         if (current()) setError(true);

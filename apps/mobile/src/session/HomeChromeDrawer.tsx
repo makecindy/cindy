@@ -10,7 +10,7 @@
  *   走透明 RN Modal(独立 Dialog 窗口),返回键由 onRequestClose 接管。
  * 新窗口里要自带 GestureHandlerRootView,左滑关闭才有效。动画遵循 reduce-motion。
  */
-import { Building2, LogOut, Monitor, Puzzle, Search, Settings, UsersRound } from 'lucide-react-native';
+import { Building2, LogOut, Monitor, Plug, Search, Settings, UsersRound } from 'lucide-react-native';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AccessibilityInfo,
@@ -352,7 +352,7 @@ export function HomeChromeDrawer({
 
             {onOpenPlugins ? <Pressable accessibilityRole="button" accessibilityLabel={t('plugins.title')}
               onPress={onOpenPlugins} style={({ pressed }) => [styles.menuRow, pressed && styles.pressed]} testID="home.chromeDrawer.plugins">
-              <Puzzle color={colors.textSecondary} size={iconSize.md} strokeWidth={iconStroke.regular} />
+              <Plug color={colors.textSecondary} size={iconSize.md} strokeWidth={iconStroke.regular} />
               <Text numberOfLines={1} style={styles.menuLabel}>{t('plugins.title')}</Text>
               <PluginMenuUnreadDot active={open} />
             </Pressable> : null}

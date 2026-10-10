@@ -11,8 +11,13 @@ import {
   type PluginPageAsset,
   type PluginPageFile,
   type RemoteCollectionItem,
+  type PluginConfigurationSummary,
 } from '@cindy/device-link';
-import type { InstalledGhost } from '../../shared/ghost.js';
+import { ghostContentKeys, ghostPermissionItems, ghostTrustLabelKey, type GhostSetupAssessment, type InstalledGhost } from '../../shared/ghost.js';
+import { resolvePreferredSystemLocale } from '../../shared/locale.js';
+import { t } from '../i18n.js';
+import { mobilePluginUsage } from './mobilePluginUsage.js';
+import { mobilePluginConfiguration } from './mobilePluginConfiguration.js';
 import type { GhostConfirmShowParams } from './confirmSlot.js';
 import {
   RemoteResourceRegistryError,
@@ -54,6 +59,10 @@ interface Page {
 }
 interface Dependencies {
   list(): InstalledGhost[];
+  listOrder?(): ReadonlyMap<string, NonNullable<RemoteCollectionItem['pluginOrder']>>;
+  setupAssessment?(id: string): GhostSetupAssessment;
+  configuration?(id: string, assessment?: GhostSetupAssessment): PluginConfigurationSummary;
+  runtimeState?(id: string): string;
   revision(ghost: InstalledGhost): string;
   captureOwner(): () => boolean;
   captureController(controllerId: string): () => boolean;
@@ -294,13 +303,14 @@ export class MobilePluginPages {
       });
     });
   }
-  private item(ghost: InstalledGhost): RemoteCollectionItem {
+  private item(ghost: InstalledGhost, order?: RemoteCollectionItem['pluginOrder']): RemoteCollectionItem {
     const m = ghost.manifest;
     const mobile = parsePluginMobileDeclaration(m.mobile);
     const unread = ghost.enabled ? this.deps.unread(m.id) : null;
     return {
       ref: { collectionId: PLUGIN_COLLECTION, kind: 'plugin', id: m.id },
       revision: this.deps.revision(ghost),
+      ...(order ? { pluginOrder: order } : {}),
       display: {
         title: m.name,
         subtitle: m.description ?? '',
@@ -329,7 +339,13 @@ export class MobilePluginPages {
             ? [{ id: `open:${surface}`, label: surface, disabled: !ghost.enabled }]
             : [];
         }),
-        { id: ghost.enabled ? 'disable' : 'enable', label: ghost.enabled ? 'Disable' : 'Enable' },
+        {
+          id: ghost.enabled ? 'disable' : 'enable',
+          label: ghost.enabled ? 'Disable' : 'Enable',
+          ...(!ghost.enabled && (ghost.approval.state !== 'approved' || ghost.retirement)
+            ? { disabled: true }
+            : {}),
+        },
       ],
     };
   }
@@ -343,6 +359,8 @@ export class MobilePluginPages {
       },
       list: async (_ctx, request) => {
         this.sweep();
+        let order: ReturnType<NonNullable<Dependencies['listOrder']>> | undefined;
+        try { order = this.deps.listOrder?.(); } catch { /* Optional ordering cannot block the list. */ }
         const q = request.query?.toLocaleLowerCase();
         const items = this.deps
           .list()
@@ -351,7 +369,7 @@ export class MobilePluginPages {
               !q ||
               `${g.manifest.name} ${g.manifest.description ?? ''}`.toLocaleLowerCase().includes(q),
           )
-          .map((g) => this.item(g));
+          .map((g) => this.item(g, order?.get(g.manifest.id)));
         return {
           collectionId: PLUGIN_COLLECTION,
           revision: createHash('sha256').update(JSON.stringify(items)).digest('hex'),
@@ -361,6 +379,40 @@ export class MobilePluginPages {
       get: async (_ctx, request) => {
         const ghost = this.ghost(request.ref.id);
         const item = this.item(ghost);
+        const locale = resolvePreferredSystemLocale([request.client.locale ?? 'en']);
+        // Read-only declaration facts and copy shared with PC; no saved values leave Host.
+        const permissionText = (key: string, args?: Record<string, string>) =>
+          t(`settings.ghosts.perm.${key}`, locale).replace(/\{\{(\w+)\}\}/g, (match, name: string) => args?.[name] ?? match);
+        const permissions = ghostPermissionItems(ghost.manifest)
+          .filter(permission => permission.kind !== 'tool')
+          .map(permission => ({
+            title: permissionText(permission.labelKey, permission.labelArgs),
+            description: [
+              permission.detailKey ? permissionText(permission.detailKey, permission.detailArgs) : '',
+              permission.detail ?? '',
+            ].filter(Boolean).join('\n\n'),
+          }));
+        const detailFacts = [
+          {key: 'version', title: t('settings.ghosts.detail.infoVersion', locale), value: 'v' + ghost.manifest.version},
+          ...(ghost.manifest.author ? [{key: 'author', title: t('settings.ghosts.detail.infoAuthor', locale), value: ghost.manifest.author}] : []),
+          {key: 'trust', title: t('settings.ghosts.detail.infoTrust', locale), value: t('settings.ghosts.trust.' + ghostTrustLabelKey(ghost.trust), locale).replaceAll('{{publisher}}', ghost.trust?.publisherName ?? t('settings.ghosts.trust.unknownPublisher', locale))},
+          {key: 'identifier', title: t('settings.ghosts.detail.infoId', locale), value: ghost.manifest.id},
+          {key: 'contents', title: t('settings.ghosts.detail.infoContents', locale), value: ghostContentKeys(ghost.manifest).map(key => t('settings.ghosts.contents.' + key, locale)).join(' · ')},
+          {key: 'panel', title: t('settings.ghosts.detail.infoPanel', locale), value: t(ghost.manifest.panel ? 'settings.ghosts.contents.panel' : 'settings.ghosts.detail.panelNone', locale)},
+          ...(ghost.dir ? [{key: 'location', title: t('settings.ghosts.detail.infoLocation', locale), value: ghost.dir}] : []),
+        ];
+        let assessment: GhostSetupAssessment | undefined;
+        try {
+          assessment = this.deps.setupAssessment?.(ghost.manifest.id);
+        } catch {
+          // A failed read is unknown, never a fabricated missing configuration.
+        }
+        let configuration = mobilePluginConfiguration(ghost.manifest, undefined, assessment);
+        try {
+          configuration = this.deps.configuration?.(ghost.manifest.id, assessment) ?? configuration;
+        } catch {
+          // A failed configuration read retains declarations with unknown status.
+        }
         return {
           ...item,
           blocks: [
@@ -378,10 +430,18 @@ export class MobilePluginPages {
                 tools:
                   ghost.manifest.tools?.map((tool) => ({
                     name: tool.name,
-                    description: tool.description,
+                    description: tool.description ?? '',
                   })) ?? [],
+                permissions,
+                details: detailFacts,
                 tasks: Boolean(ghost.manifest.agent?.tasks || ghost.manifest.agent?.errand),
                 mobile: parsePluginMobileDeclaration(ghost.manifest.mobile) !== null,
+                usage: mobilePluginUsage(
+                  ghost,
+                  assessment,
+                  this.deps.runtimeState?.(ghost.manifest.id),
+                  configuration,
+                ),
               },
             },
           ],

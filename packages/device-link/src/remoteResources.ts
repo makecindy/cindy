@@ -140,6 +140,8 @@ export interface RemoteResourceBlock {
 export interface RemoteCollectionItem {
   ref: RemoteResourceRef;
   display: RemoteResourceDisplay;
+  /** Optional Host-owned plugin chronology. Missing dates remain unknown on older Hosts. */
+  pluginOrder?: { addedAt?: number; recentIndex?: number };
   links: RemoteResourceLink[];
   actions?: RemoteActionDescriptor[];
   /** Opaque provider revision. Controllers compare it but never interpret it. */

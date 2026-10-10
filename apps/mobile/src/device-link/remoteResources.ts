@@ -443,7 +443,15 @@ function normalizeRemoteCollectionItem(
         return normalized ? [normalized] : [];
       })
     : [];
+  const rawOrder = collectionId === 'plugins' ? recordOf(item.pluginOrder) : null;
+  const addedAt = rawOrder?.addedAt;
+  const recentIndex = rawOrder?.recentIndex;
+  const pluginOrder = rawOrder ? {
+    ...(typeof addedAt === 'number' && Number.isSafeInteger(addedAt) && addedAt > 0 ? { addedAt } : {}),
+    ...(typeof recentIndex === 'number' && Number.isSafeInteger(recentIndex) && recentIndex >= 0 && recentIndex < 100 ? { recentIndex } : {}),
+  } : undefined;
   return { ref, display, links, revision,
+    ...(pluginOrder && Object.keys(pluginOrder).length ? { pluginOrder } : {}),
     ...(collectionId === 'plugins' ? { actions: normalizeRemoteActions(item.actions) } : {}),
   };
 }

@@ -7,6 +7,8 @@ interface Entry {
   id: string;
   items?: GhostRecommendation[];
   installedAt?: number;
+  /** Durable successful first-install time; independent of consumed recommendation priority. */
+  addedAt?: number;
 }
 interface Shape {
   entries: Entry[];
@@ -41,6 +43,9 @@ export function readGhostRecommendationEntries(): Entry[] {
         ...(typeof entry.installedAt === 'number' && Number.isFinite(entry.installedAt)
           ? { installedAt: entry.installedAt }
           : {}),
+        ...(typeof (entry.addedAt ?? entry.installedAt) === 'number' && Number.isFinite(entry.addedAt ?? entry.installedAt)
+          ? { addedAt: entry.addedAt ?? entry.installedAt }
+          : {}),
       },
     ];
   });
@@ -70,7 +75,15 @@ export function replaceGhostRecommendations(
 
 /** Explicit first installs only. Updates/default installs must not call this. */
 export function markGhostRecommendationInstalled(id: string): void {
-  update(id, { installedAt: Date.now() });
+  const now = Date.now();
+  const existing = readGhostRecommendationEntries().find(entry => entry.id === id);
+  update(id, { installedAt: now, addedAt: existing?.addedAt ?? now });
+}
+
+/** New installation only. Updates never overwrite chronology or grant recommendation priority. */
+export function recordGhostAdded(id: string): void {
+  const existing = readGhostRecommendationEntries().find(entry => entry.id === id);
+  if (existing?.addedAt === undefined) update(id, { addedAt: Date.now() });
 }
 
 export function consumeGhostRecommendationPriority(id: string): void {
