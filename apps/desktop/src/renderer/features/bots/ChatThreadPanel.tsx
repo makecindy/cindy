@@ -11,6 +11,7 @@ import { shareSelectionStore, useShareSelectionActive } from '@/components/chat/
 import { SHARE_SESSION_ATTR, SHARE_MESSAGE_ATTR } from '@/lib/shareConversationImage';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent, isDataOwnerPushCurrent } from '@/contexts/dataOwnerGeneration';
 import type { BotGroupDetail, BotGroupMention, BotGroupMessageView } from '../../../shared/botGroupChat';
+import { isBotGroupRuntimeFailureCode } from '../../../shared/botGroupChat';
 import { resolveBotGroupMentions } from './botGroupMentions';
 import { refreshBotGroups } from './botGroupStore';
 import { mergeBotGroupMessages } from './botGroupPresentation';
@@ -23,7 +24,7 @@ const iconClass = 'flex h-8 w-8 items-center justify-center rounded-full text-[v
 
 function ThreadMessage({ group, message, shareScope, sharing, onChanged }: { group: BotGroupDetail; message: BotGroupMessageView; shareScope: string; sharing: boolean; onChanged: () => void }) {
   const member = group.members.find(m => m.botId === message.authorBotId);
-  if (message.kind === 'notice') return <BotGroupRuntimeFailureNotice name={message.authorName || member?.name || ''} code={message.runtimeFailureCode} />;
+  if (message.kind === 'notice' && isBotGroupRuntimeFailureCode(message.runtimeFailureCode)) return <BotGroupRuntimeFailureNotice name={message.authorName || member?.name || ''} code={message.runtimeFailureCode} />;
   return <article {...{ [SHARE_SESSION_ATTR]: shareScope, [SHARE_MESSAGE_ATTR]: message.id }}
     className={`relative flex min-w-0 gap-2.5 ${sharing ? 'ml-10' : ''}`}>
     {sharing && <ShareMessageCheckbox clientId={message.id} />}
@@ -48,6 +49,7 @@ export function ChatThreadPanel({ group, rootId, onClose }: { group: BotGroupDet
     return () => { if (shareSelectionStore.isActive(shareScope)) shareSelectionStore.exit(); };
   }, [shareScope]);
   const [root, setRoot] = useState<BotGroupMessageView | null>(null);
+  const [rootFailureNotices, setRootFailureNotices] = useState<BotGroupMessageView[]>([]);
   const [replies, setReplies] = useState<BotGroupMessageView[]>([]);
   const [hasMore, setHasMore] = useState(false);
   const [text, setText] = useState('');
@@ -64,6 +66,7 @@ export function ChatThreadPanel({ group, rootId, onClose }: { group: BotGroupDet
       if (!current()) return;
       if (!result.ok) { setError(t(chatErrorKey(result.errorCode))); return; }
       setRoot(result.root); setError('');
+      setRootFailureNotices(result.rootFailureNotices ?? []);
       setReplies(previous => {
         return mergeBotGroupMessages(previous, result.replies);
       });
@@ -106,6 +109,7 @@ export function ChatThreadPanel({ group, rootId, onClose }: { group: BotGroupDet
         </header>
         <div ref={contentRef} className="min-h-0 flex-1 space-y-5 overflow-y-auto px-5 py-4">
           {root && <ThreadMessage shareScope={shareScope} sharing={sharing} group={group} message={root} onChanged={() => void loadRef.current()} />}
+          {rootFailureNotices.map(message => <ThreadMessage key={message.id} shareScope={shareScope} sharing={sharing} group={group} message={message} onChanged={() => void loadRef.current()} />)}
           <div className="border-t border-[var(--border-default)] pt-3 text-12 text-[var(--text-tertiary)]">{t(key('replies'))}</div>
           {hasMore && <Button variant="secondary" size="sm" onClick={() => void loadRef.current(replies[0]?.sequence)}>{t('bots.groupChat.timeline.loadEarlier')}</Button>}
           {replies.map(message => <ThreadMessage key={message.id} shareScope={shareScope} sharing={sharing} group={group} message={message} onChanged={() => void loadRef.current()} />)}

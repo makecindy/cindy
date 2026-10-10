@@ -42,6 +42,27 @@ beforeEach(() => {
 afterEach(() => { cleanup(); shareSelectionStore.reset(); vi.unstubAllGlobals(); });
 
 describe('chat interaction controls', () => {
+  it.each([undefined, 'private-diagnostic'])('keeps existing thread notices visible without a valid runtime code: %s', async runtimeFailureCode => {
+    mocks.thread.mockResolvedValue({ ok: true, root: message, replies: [{ ...message, id: 'old-notice', kind: 'notice',
+      content: 'Existing system notice', runtimeFailureCode }], hasMore: false });
+    render(<ChatThreadPanel group={group} rootId="root" onClose={vi.fn()} />);
+    expect(await screen.findByText('Existing system notice')).toBeTruthy();
+    expect(screen.queryByText('private-diagnostic')).toBeNull();
+  });
+
+  it('renders the current root failure beside the root and removes it when a refreshed page clears the failure', async () => {
+    const failure = { ...message, id: 'execution-failure:root:1', kind: 'notice', content: '', runtimeFailureCode: 'QUOTA_EXCEEDED' };
+    mocks.thread.mockResolvedValueOnce({ ok: true, root: message, rootFailureNotices: [failure], replies: [], hasMore: true })
+      .mockResolvedValue({ ok: true, root: message, rootFailureNotices: [], replies: [], hasMore: false });
+    render(<ChatThreadPanel group={group} rootId="root" onClose={vi.fn()} />);
+    const text = 'bots.groupChat.notice.runtimeFailure.QUOTA_EXCEEDED';
+    expect(await screen.findByText(text)).toBeTruthy();
+    expect(screen.getByText('Root message')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'bots.groupChat.timeline.loadEarlier' }));
+    await waitFor(() => expect(screen.queryByText(text)).toBeNull());
+    expect(screen.getByText('Root message')).toBeTruthy();
+  });
+
   it('preserves copy and image sharing beside thread replies and reactions in one toolbar', async () => {
     const writeText = vi.fn().mockResolvedValue(undefined), reply = vi.fn();
     Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });

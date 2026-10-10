@@ -395,6 +395,19 @@ describe('botGroupChatService', () => {
       .toEqual([['member-failed', '咪咪']]);
   });
 
+  it('preserves a safe dispatch failure category for a local-only group', async () => {
+    const harness = createHarness(() => null, {
+      dispatch: async () => ({ ok: false, errorCode: 'INTERNAL', message: 'authentication_failed private credential' }),
+    });
+    const groupId = await createGroup(harness, ['mimi', 'abu']);
+    await harness.service.sendMessage({ groupId, text: '@咪咪 hello', mentions: { all: false, botIds: ['mimi'] }, clientId: 'rejected-input' });
+    const group = await waitForIdle(harness, groupId);
+    expect(group.messages.filter(message => message.kind === 'notice')).toEqual([
+      expect.objectContaining({ noticeCode: 'member-failed', runtimeFailureCode: 'AUTH_REQUIRED' }),
+    ]);
+    expect(JSON.stringify(group.messages)).not.toContain('private credential');
+  });
+
   it('a round superseded while a member prepares never dispatches and never steals the new waiter', async () => {
     let releaseSync!: () => void;
     const syncGate = new Promise<void>((resolve) => { releaseSync = resolve; });

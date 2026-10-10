@@ -1696,6 +1696,24 @@ describe('Bot adapters in the shared event pipeline', () => {
     await h.dispose();
   });
 
+  it.each([
+    [{ message: 'Authorization: [REDACTED]', errorStatus: 429, usageLimit: true }, 'QUOTA_EXCEEDED'],
+    [{ errorStatus: 401 }, 'AUTH_REQUIRED'],
+    [{ sdkError: 'authentication_failed' }, 'AUTH_REQUIRED'],
+    [{ sdkError: 'rate_limit', errorStatus: 429, usageLimit: true }, 'RATE_LIMITED'],
+  ])('settles a group terminal error with the safe category from structured signals %j', async (data, failureCode) => {
+    const h = harness();
+    const settleLaneTurn = vi.fn(async () => true);
+    (h.deps as unknown as { botGroupChatServiceHolder: unknown }).botGroupChatServiceHolder = { settleLaneTurn };
+    h.deps.agentInputCoordinatorHolder.getActiveInputClientId.mockReturnValue('bot-group:g1:turn:bot-a');
+    h.emit(event('error', { ...data, isTerminal: true }));
+    await microtasks();
+    expect(settleLaneTurn).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: 'task', activeInputClientId: 'bot-group:g1:turn:bot-a', outcome: 'error', failureCode,
+    }));
+    await h.dispose();
+  });
+
   it('carries a pending follow-up into task settlement and remembers compact boundaries without rebuilding early', async () => {
     const h = harness();
     h.emit(event('compact_boundary'));

@@ -10,6 +10,9 @@ describe('group runtime failure diagnostics', () => {
     ['[INSUFFICIENT_BALANCE] private account', 'QUOTA_EXCEEDED'],
     ['ECONNRESET private endpoint', 'NETWORK_ERROR'],
     ['RUNTIME_TIMEOUT', 'RUNTIME_TIMEOUT'],
+    ['Request rejected (429): ExceededBudget private account', 'QUOTA_EXCEEDED'],
+    ['budget_exceeded private account', 'QUOTA_EXCEEDED'],
+    ['quota exceeded private account', 'QUOTA_EXCEEDED'],
     ['unknown private prompt, path and credentials', 'RUNTIME_ERROR'],
   ])('classifies %s without returning the diagnostic text', (error, code) => {
     expect(botGroupRuntimeFailureCode(new Error(error))).toBe(code);
@@ -20,6 +23,22 @@ describe('group runtime failure diagnostics', () => {
     [{ code: 'INVALID_TOKEN', message: 'private response' }, 'AUTH_REQUIRED'],
     [{ reason: 'rate_limit_error', message: 'private response' }, 'RATE_LIMITED'],
     [{ code: 'ECONNRESET', message: 'private endpoint' }, 'NETWORK_ERROR'],
+    [{ message: 'Authorization: [REDACTED]', errorStatus: 429, usageLimit: true }, 'QUOTA_EXCEEDED'],
+    [{ sdkError: 'billing_error' }, 'QUOTA_EXCEEDED'],
+    [{ reason: 'provider_quota_limit' }, 'QUOTA_EXCEEDED'],
+    [{ errorStatus: 402 }, 'QUOTA_EXCEEDED'],
+    [{ errorStatus: 401 }, 'AUTH_REQUIRED'],
+    [{ errorStatus: 403 }, 'AUTH_REQUIRED'],
+    [{ sdkError: 'authentication_failed' }, 'AUTH_REQUIRED'],
+    [{ reason: 'provider_auth_or_access' }, 'AUTH_REQUIRED'],
+    [{ sdkError: 'rate_limit', errorStatus: 429, usageLimit: true }, 'RATE_LIMITED'],
+    [{ reason: 'provider_rate_limit', usageLimit: true }, 'RATE_LIMITED'],
+    [{ errorStatus: 429, usageLimit: false }, 'RATE_LIMITED'],
+    [{ message: 'Too many requests', errorStatus: 429, usageLimit: true }, 'RATE_LIMITED'],
+    [{ sdkError: 'rate_limit', message: 'ExceededBudget', errorStatus: 429, usageLimit: true }, 'QUOTA_EXCEEDED'],
+    [{ sdkError: 'model_not_found' }, 'MODEL_UNAVAILABLE'],
+    [{ modelAccessDenied: true, errorStatus: 403 }, 'MODEL_UNAVAILABLE'],
+    [{ sdkError: 'user_model_access_denied' }, 'MODEL_UNAVAILABLE'],
     [{ code: 'unknown', message: 'private prompt' }, 'RUNTIME_ERROR'],
   ])('classifies structured terminal diagnostics %j', (error, code) => {
     expect(botGroupRuntimeFailureCode(error)).toBe(code);

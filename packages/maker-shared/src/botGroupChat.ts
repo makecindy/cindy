@@ -478,6 +478,8 @@ export interface ChatServerApi {
   status(): Promise<{ enabled: boolean; connected: boolean }>;
   thread(input: { groupId: string; rootId: string; before?: number }): Promise<ChatServerResult<{
     root: BotGroupMessageView; replies: BotGroupMessageView[]; hasMore: boolean;
+    /** Derived root failures stay beside the root and never count toward reply pagination. */
+    rootFailureNotices?: BotGroupMessageView[];
   }>>;
   reply(input: { groupId: string; rootId: string; text: string; clientId: string; mentions: BotGroupMention }): Promise<ChatServerResult<{ messageId: string }>>;
   react(input: { groupId: string; messageId: string; emoji: string; present: boolean }): Promise<ChatServerResult<Record<never, never>>>;

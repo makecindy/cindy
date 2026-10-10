@@ -24,7 +24,7 @@ import {
   type PlanDecisionMode,
 } from './botGroupDivision.js';
 import type { BotGroupWorkDir } from './botGroupWorkDir.js';
-import { botGroupRuntimeFailureDetail, readBotGroupRuntimeFailureDetail } from './botGroupRuntimeFailure.js';
+import { botGroupRuntimeFailureCode, botGroupRuntimeFailureDetail, readBotGroupRuntimeFailureDetail } from './botGroupRuntimeFailure.js';
 import {
   BOT_GROUP_ATTACHMENTS_MAX,
   BOT_GROUP_CLIENT_ID,
@@ -1021,7 +1021,8 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
       if (waiters.get(turn.sessionId) === waiter) waiters.delete(turn.sessionId);
       deps.log?.warn('Bot group turn was not accepted', { groupId: turn.groupId, errorCode: dispatched.errorCode });
       if (turn.isCancelled()) return { kind: 'cancelled' };
-      return { kind: 'failed', notice: dispatched.errorCode === 'BOT_GROUP_WORKDIR_UNAVAILABLE' ? 'workdir-unavailable' : 'member-failed' };
+      return { kind: 'failed', notice: dispatched.errorCode === 'BOT_GROUP_WORKDIR_UNAVAILABLE' ? 'workdir-unavailable' : 'member-failed',
+        ...(dispatched.errorCode !== 'BOT_GROUP_WORKDIR_UNAVAILABLE' ? { failureCode: botGroupRuntimeFailureCode({ code: dispatched.errorCode, message: dispatched.message }) } : {}) };
     }
     await turn.afterDispatch?.().catch(() => undefined);
     if (turn.isCancelled()) {

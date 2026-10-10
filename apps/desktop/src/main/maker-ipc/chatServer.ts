@@ -868,7 +868,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
           if (!current() || running.get(execution.bot_id) !== run) { await deps.abortLane(lane.sessionId); throw new Error('STALE_EXECUTOR'); }
           run.accepted = true;
         } });
-      if (!dispatched.ok) throw new Error(dispatched.errorCode);
+      if (!dispatched.ok) throw new Error(botGroupRuntimeFailureCode({ code: dispatched.errorCode, message: dispatched.message }));
       changed(s.room.id);
     } catch (error) {
       if (!current() || running.get(execution.bot_id) !== run) return;
@@ -1031,7 +1031,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       const root = await api<Message>(`/conversations/${i.groupId}/messages/${i.rootId}`);
       const page = await api<Message[]>(`/conversations/${i.groupId}/messages?threadRootId=${i.rootId}&limit=50${i.before ? `&before=${i.before}` : ''}`);
       const executions = await api<Execution[]>(`/conversations/${i.groupId}/executions`);
-      return { root: (await messageViews(i.groupId, [root], members))[0], replies: [...await messageViews(i.groupId, page.reverse(), members),
+      return { root: (await messageViews(i.groupId, [root], members))[0], rootFailureNotices: executionFailureViews(executions, [root], members),
+        replies: [...await messageViews(i.groupId, page.reverse(), members),
         ...executionFailureViews(executions, page, members)].sort((a, b) => a.sequence - b.sequence), hasMore: page.length === 50 };
     }),
     reply: input => result(async () => {

@@ -175,6 +175,19 @@ describe('Chat Server result delivery and refresh', () => {
   const terminal = { sessionId: 'lane', activeInputClientId: null, outcome: 'done' as const, resultText: 'Finished reply' };
   const deliveries = () => fixture.handle.mock.calls.filter(([, , body]) => body?.action === 'complete');
 
+  it.each([
+    ['authentication_failed private credential', 'AUTH_REQUIRED'],
+    ['ECONNRESET private endpoint', 'NETWORK_ERROR'],
+  ])('classifies an unqueued dispatch rejection from its local message: %s', async (message, code) => {
+    deps.dispatch = vi.fn(async () => ({ ok: false as const, errorCode: 'INTERNAL', message }));
+    await start();
+    const failures = fixture.handle.mock.calls.filter(([, , body]) => body?.action === 'fail');
+    expect(failures).toHaveLength(1);
+    expect(failures[0][2]).toMatchObject({ detail: `cindy-runtime-error:${code}` });
+    expect(JSON.stringify(failures)).not.toContain(message);
+    expect(deps.abortLane).toHaveBeenCalledExactlyOnceWith('lane');
+  });
+
   it('immediately fails an undispatched group input without waiting for an Agent event or timeout', async () => {
     deps.dispatch = vi.fn(async input => {
       await input.onAccepted();
@@ -249,6 +262,29 @@ describe('Chat Server result delivery and refresh', () => {
     const result = await service.getGroup(roomId);
     if (!result.ok) throw new Error('group missing');
     expect(result.group.messages.some(message => message.kind === 'notice')).toBe(false);
+  });
+
+  it.each([false, true])('keeps root failure notices separate from reply pagination and clears them on retry (deleted: %s)', async deleted => {
+    const root = { id: execution.source_message_id, seq: '7', authorId: selfId, author: { kind: 'human', name: 'Owner' },
+      content: [{ type: 'text', text: 'Root question' }], origin: 'user', deleted, threadRootId: null, createdAt: '2026-10-03T00:00:00Z' };
+    const replies = Array.from({ length: 50 }, (_, i) => ({ ...root, id: `reply-${i}`, seq: String(i + 8), deleted: false, threadRootId: root.id }));
+    let status = 'failed';
+    fixture.handle.mockImplementation(route => {
+      if (route.endsWith(`/messages/${root.id}`)) return { body: root };
+      if (route.includes('/messages?')) return { body: [...replies].reverse() };
+      if (route.endsWith('/members')) return { body: [] };
+      if (route.endsWith('/executions')) return { body: [{ ...execution, status, failure_code: 'IMAGE_INPUT_UNSUPPORTED' }] };
+      return response(route);
+    });
+    const result = await service.chatServer!.thread({ groupId: roomId, rootId: root.id });
+    if (!result.ok) throw new Error('thread missing');
+    expect(result.hasMore).toBe(true);
+    expect(result.replies).toHaveLength(50);
+    expect(result.replies.some(message => message.kind === 'notice')).toBe(false);
+    expect(result.rootFailureNotices).toEqual(deleted ? [] : [expect.objectContaining({ sequence: 7, runtimeFailureCode: 'IMAGE_INPUT_UNSUPPORTED' })]);
+    status = 'queued';
+    const retry = await service.chatServer!.thread({ groupId: roomId, rootId: root.id, before: 8 });
+    expect(retry).toMatchObject({ ok: true, rootFailureNotices: [], hasMore: true });
   });
 
   it('keeps the specific local failure on an older server and clears the notice after retry', async () => {
