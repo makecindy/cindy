@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { appendComposerPluginTrigger, detectComposerPluginTrigger, filterComposerPlugins, placeComposerPlugin } from '@/session/composerPlugins';
-import { textComposerDocument, composerDocumentProjectedText, type ComposerDocument } from '@/session/composerDocument';
+import { textComposerDocument, composerDocumentProjectedText, serializeComposerDocument, type ComposerDocument } from '@/session/composerDocument';
 import { expandGhostCommand, parseGhostCommandWord } from '@cindy/maker-shared/ghost-command';
 
 const art = { manifest: { id: 'art', name: 'Art', command: 'art' }, enabled: true };
@@ -17,9 +17,10 @@ describe('mobile composer plugin selection', () => {
     expect(filterComposerPlugins(plugins, '')).toEqual(plugins);
     expect(filterComposerPlugins(plugins, 'plugin13')).toEqual([plugins[13]]);
   });
-  it.each(['new', '[sessionId]'])('places plugins inside the existing %s context sheet', (page) => {
-    const source = readFileSync(new URL('../../app/sessions/' + page + '.tsx', import.meta.url), 'utf8');
-    const sheetStart = source.indexOf('<ContextSheet\n');
+  it.each([['new', '\n'], ['new', '\r\n'], ['[sessionId]', '\n'], ['[sessionId]', '\r\n']])('places plugins inside the existing %s context sheet with %j line endings', (page, newline) => {
+    const source = readFileSync(new URL('../../app/sessions/' + page + '.tsx', import.meta.url), 'utf8')
+      .replace(/\r?\n/g, newline);
+    const sheetStart = source.search(/<ContextSheet\s/);
     const sheetEnd = source.indexOf('</ContextSheet>', sheetStart);
     const plugins = source.indexOf('<ContextSheetPlugins');
     expect(sheetStart).toBeGreaterThan(0);
@@ -55,6 +56,32 @@ describe('mobile composer plugin selection', () => {
     const next = placeComposerPlugin(document, art, roster);
     expect(next.nodes.slice(1)).toEqual(document.nodes.slice(1));
     expect(next.nodes[0]).toEqual({ type: 'text', text: '$art ' });
+  });
+  it.each([
+    ['draw a cat $ar', '$art ', 'draw a cat '],
+    ['$old draw a cat $ar', '$art', ' draw a cat '],
+  ])('places the command before a leading quote in %s', (text, command, body) => {
+    const quote = { type: 'quote' as const, quote: { text: 'quoted body' } };
+    const selected = placeComposerPlugin({ version: 1, nodes: [quote, { type: 'text', text }] }, art, roster);
+    expect(selected.nodes).toEqual([
+      { type: 'text', text: command }, quote, { type: 'text', text: body },
+    ]);
+    const wire = serializeComposerDocument(selected).text;
+    expect(parseGhostCommandWord(wire)).toBe('art');
+    expect(expandGhostCommand(wire, roster)).toContain('mcp__cindy__ghost_call');
+  });
+  it('preserves quotes around the replaced command and their order relative to the body', () => {
+    const quotes: ComposerDocument['nodes'] = [
+      { type: 'quote', quote: { text: 'first quote' } },
+      { type: 'quote', quote: { text: 'second quote' } },
+    ];
+    const selected = placeComposerPlugin({ version: 1, nodes: [
+      quotes[0], { type: 'text', text: '$old' }, quotes[1], { type: 'text', text: 'draw a cat $ar' },
+    ] }, art, roster);
+    expect(selected.nodes).toEqual([
+      { type: 'text', text: '$art ' }, ...quotes, { type: 'text', text: 'draw a cat ' },
+    ]);
+    expect(parseGhostCommandWord(serializeComposerDocument(selected).text)).toBe('art');
   });
   it('does not select unavailable entries', () => {
     const document = textComposerDocument('keep this');

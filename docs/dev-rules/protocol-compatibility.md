@@ -59,6 +59,9 @@ known 是消息 ID 与主机提供的 SHA-256 正文指纹对。支持的主机�
 Mobile 的 `+` 插件入口复用同一清单与发送期指令模板。列表随草稿末尾的 `$` 查询词展开，
 选择后把插件指令放到消息开头，保留正文与富文本引用；移除 `$` 触发词或清空草稿后收起。
 旧主机拒绝清单通道时，发送链保留原文，不能阻断 `$100` 等普通文本；权限、断连或清单校验错误仍上抛。
+排队编辑通过 `maker:input:update-content` 分别传递模型文本与原稿。旧主机只支持
+`maker:input:update-text` 时，普通文本仍可保存；需要插件展开的编辑保留草稿并提示不支持，
+不把机器指令写入用户原稿或历史。
 实现与回归见 `apps/mobile/src/session/composerPlugins.ts`、`apps/mobile/src/device-link/mobileMakerTransport.ts`
 及 `apps/mobile/src/__tests__/composerPluginTransport.test.ts`。
 

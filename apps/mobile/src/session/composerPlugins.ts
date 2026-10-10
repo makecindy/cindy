@@ -52,6 +52,7 @@ export function placeComposerPlugin(
   }
   let leadingText = '';
   for (const node of normalized.nodes) {
+    if (node.type === 'quote' && !leadingText.trim()) continue;
     if (node.type !== 'text') break;
     leadingText += node.text;
   }
@@ -60,8 +61,19 @@ export function placeComposerPlugin(
     entry.manifest.command?.toLowerCase() === match[1].toLowerCase());
   const end = replace ? match[0].length : 0;
   const nextCharacter = leadingText[end];
-  return replaceComposerTextRange(normalized, 0, end, [{
+  const nodes: ComposerDocument['nodes'] = [{
     type: 'text',
     text: '$' + plugin.manifest.command + (nextCharacter && /\s/u.test(nextCharacter) ? '' : ' '),
-  }]);
+  }];
+  let remaining = end;
+  for (const node of normalized.nodes) {
+    if (node.type !== 'text' || remaining === 0) {
+      nodes.push(node);
+      continue;
+    }
+    const consumed = Math.min(remaining, node.text.length);
+    remaining -= consumed;
+    if (consumed < node.text.length) nodes.push({ ...node, text: node.text.slice(consumed) });
+  }
+  return normalizeComposerDocument({ version: 1, nodes });
 }

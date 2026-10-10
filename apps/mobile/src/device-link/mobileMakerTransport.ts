@@ -1454,6 +1454,10 @@ export function createMobileMakerTransport({
       ) => {
         const text = await expandPluginText(newText, workingDir);
         if (!isCurrent()) throw new Error('Message update superseded');
+        // Legacy text edits also replace the persisted draft and history.
+        if (text !== newText) {
+          throw Object.assign(new Error('[CHANNEL_NOT_ALLOWED] Plugin edits require update-content'), { code: 'CHANNEL_NOT_ALLOWED' });
+        }
         return call(
           "maker:input:update-text",
           sessionRefs

@@ -42,6 +42,17 @@ describe('mobile plugin catalog and send routing', () => {
     expect(original.text).toBe('$art cat');
     expect(invoke.mock.calls[0]).toEqual(['task-host', 'ghosts:composer-list', ['/project']]);
   });
+  it('rejects a plugin edit through the legacy text channel before it can overwrite the draft', async () => {
+    const { maker, invoke } = harness();
+    await expect(maker.input.updateText('session', 'client-1', '$art cat', undefined, undefined, '/project'))
+      .rejects.toMatchObject({ code: 'CHANNEL_NOT_ALLOWED' });
+    expect(invoke.mock.calls).toEqual([['task-host', 'ghosts:composer-list', ['/project']]]);
+  });
+  it.each(['ordinary text', '$unknown cat', '$art cat'])('preserves legacy text edit %s when no plugin expands', async (text) => {
+    const { maker, invoke } = harness([{ ...plugin, enabled: false }]);
+    await maker.input.updateText('session', 'client-1', text, undefined, undefined, '/project');
+    expect(invoke).toHaveBeenLastCalledWith('task-host', 'maker:input:update-text', ['session', 'client-1', text]);
+  });
   it('routes a direct multimodal send without altering its image block', async () => {
     const { maker, invoke } = harness();
     const image = { type: 'image', source: { type: 'base64', data: 'image' } };
