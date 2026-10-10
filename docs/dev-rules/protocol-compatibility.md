@@ -1055,6 +1055,9 @@ Mobile 原生 fingerprint 输入，服务端无需改动。
 任务迁移业务通道的 `move-project` action 在任务所属宿主复用项目移动校验与更新，
 仅接受任务 ID 和明确的目录（null 表示移到对话）。不开放远程 sessions 原始 patch；
 旧宿主拒绝未知 action，不回退到控制端本机执行。
+受信 Desktop IPC 的本机请求（设备参数为 null）返回独立的 `{ supported, projectMove }` 回执，
+不依赖 relay 握手或设备 ID，仍复核账号代次与 DB 实例。跨设备响应的 `deviceId` 继续必填并与目标设备
+严格匹配；宿主在移动前捕获该身份，缺少身份时在写入前拒绝。远程协议、权限及旧端行为不变。
 
 ## 伙伴学习保存回执
 
