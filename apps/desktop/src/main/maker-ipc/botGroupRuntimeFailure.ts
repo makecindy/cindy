@@ -2,6 +2,7 @@ import { isBotGroupRuntimeFailureCode, type BotGroupRuntimeFailureCode } from '.
 import { isPiImageInputUnsupportedError, isPiPromptRpcTimeoutError } from '../../shared/inputError.js';
 import { extractNonSecretErrorSignals, matchesDeterministicUsageExhaustionText } from '@cindy/maker-shared/error-redaction';
 import type { BotGroupChatService } from './botGroupChatService.js';
+import { parseOverloadError, UPSTREAM_OVERLOAD_REASON } from '@cindy/maker-core';
 
 export { BOT_GROUP_RUNTIME_FAILURE_PREFIX, botGroupRuntimeFailureDetail, readBotGroupRuntimeFailureDetail } from '../../shared/botGroupChat.js';
 
@@ -26,6 +27,8 @@ export function botGroupRuntimeFailureCode(error: unknown): BotGroupRuntimeFailu
   const status = typeof data?.errorStatus === 'number' ? data.errorStatus : extractNonSecretErrorSignals(text).errorStatus;
   if (data?.modelAccessDenied === true || /\b(?:NO_MODEL|MODEL_NOT_FOUND|MODEL_UNAVAILABLE|NO_AVAILABLE_MODEL|BOT_MODEL_REQUIRED|MODEL_REQUIRED|user_model_access_denied)\b/i.test(text)) return 'MODEL_UNAVAILABLE';
   if (status === 401 || status === 403 || /\b(?:AUTH_REQUIRED|INVALID_TOKEN|TOKEN_EXPIRED|UNAUTHORIZED|invalid_api_key|authentication_error|authentication_failed|provider_auth_or_access)\b/i.test(text)) return 'AUTH_REQUIRED';
+  if (data?.reason === UPSTREAM_OVERLOAD_REASON
+    || parseOverloadError(text, status, typeof data?.codexErrorInfo === 'string' ? data.codexErrorInfo : undefined)) return 'UPSTREAM_OVERLOADED';
   if (status === 402 || matchesDeterministicUsageExhaustionText(text) || /\b(?:QUOTA_EXCEEDED|USAGE_LIMIT_EXCEEDED|INSUFFICIENT_BALANCE|insufficient_quota|billing_error|provider_quota_limit|usageLimitExceeded|sessionBudgetExceeded)\b/i.test(text)) return 'QUOTA_EXCEEDED';
   // usageLimit also accompanies temporary rate limits; an explicit rate signal wins.
   if (/\b(?:RATE_LIMITED|RATE_LIMIT_EXCEEDED|rate_limit_error|rate_limit|provider_rate_limit)\b|rate limit(?:ed|ing)?|too many requests/i.test(text)) return 'RATE_LIMITED';

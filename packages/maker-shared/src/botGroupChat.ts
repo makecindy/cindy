@@ -41,7 +41,7 @@ export type BotGroupMemberStatus = 'active' | 'paused' | 'error' | 'archived' | 
 
 /** Public failure categories only; never transport raw Agent errors into a group. */
 export const BOT_GROUP_RUNTIME_FAILURE_CODES = [
-  'IMAGE_INPUT_UNSUPPORTED', 'MODEL_UNAVAILABLE', 'AUTH_REQUIRED', 'RATE_LIMITED',
+  'IMAGE_INPUT_UNSUPPORTED', 'MODEL_UNAVAILABLE', 'AUTH_REQUIRED', 'RATE_LIMITED', 'UPSTREAM_OVERLOADED',
   'QUOTA_EXCEEDED', 'NETWORK_ERROR', 'RUNTIME_TIMEOUT', 'RUNTIME_ERROR',
 ] as const;
 export type BotGroupRuntimeFailureCode = typeof BOT_GROUP_RUNTIME_FAILURE_CODES[number];

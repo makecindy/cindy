@@ -120,6 +120,8 @@
   会话无事件与上游响应空闲看门狗的标准 reason（包括 bridge 变体）归为运行超时。
   Pi prompt RPC 超时复用原生恢复的同一信号判定，标准 `pi-prompt-timeout` reason 也归为运行超时。
   创建专线返回 `NO_MODEL` 时归为模型不可用；本地普通群、分工与服务器执行复用同一分类，提示配置可用模型。
+  上游容量不足复用 SDK 的过载判定（包括标准 `upstream-overload` reason、Codex `serverOverloaded` 与 Anthropic 529），
+  归为独立的 `UPSTREAM_OVERLOADED`：说明模型服务暂时繁忙，建议稍后重新发送或选择其他可用模型；不增加群聊重投。
   本地成员和分工步骤的计时器超时同样带上 `RUNTIME_TIMEOUT`，保留等待用户批准时暂停计时的规则。
   明确的额度耗尽优先于泛化 429，明确的暂时限流不会因 `usageLimit` 标记误报为额度耗尽。
   直接发送拒绝也在执行端分类本地 `message`，跨群仍只提交白名单错误类别。

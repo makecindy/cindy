@@ -20,4 +20,9 @@ describe('group failure notice', () => {
     const { container } = render(<BotGroupRuntimeFailureNotice name="m" code="private-token-and-path" />);
     expect(container.textContent).toBe('');
   });
+  it('explains upstream capacity and offers a retry without attributing it to request frequency', () => {
+    render(<BotGroupRuntimeFailureNotice name="m" code="UPSTREAM_OVERLOADED" />);
+    expect(screen.getByText(/模型服务暂时繁忙/).textContent).toContain('稍后重新发送');
+    expect(screen.getByText(/模型服务暂时繁忙/).textContent).toContain('其他可用模型');
+  });
 });

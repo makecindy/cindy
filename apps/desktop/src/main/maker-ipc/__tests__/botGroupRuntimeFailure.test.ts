@@ -4,6 +4,9 @@ import { botGroupRuntimeFailureCode, readBotGroupRuntimeFailureDetail, settleUnd
 describe('group runtime failure diagnostics', () => {
   it.each([
     ['NO_MODEL', 'MODEL_UNAVAILABLE'],
+    ['Selected model is at capacity. Please try a different model.', 'UPSTREAM_OVERLOADED'],
+    ['overloaded_error', 'UPSTREAM_OVERLOADED'],
+    ['the private queue is overloaded', 'RUNTIME_ERROR'],
     ['[PI_IMAGE_INPUT_UNSUPPORTED] private model details', 'IMAGE_INPUT_UNSUPPORTED'],
     ['[MODEL_NOT_FOUND] private route', 'MODEL_UNAVAILABLE'],
     ['[INVALID_TOKEN] private token', 'AUTH_REQUIRED'],
@@ -41,6 +44,9 @@ describe('group runtime failure diagnostics', () => {
     [{ sdkError: 'rate_limit', message: 'ExceededBudget', errorStatus: 429, usageLimit: true }, 'QUOTA_EXCEEDED'],
     [{ sdkError: 'model_not_found' }, 'MODEL_UNAVAILABLE'],
     [{ code: 'NO_MODEL', message: 'private preparation details' }, 'MODEL_UNAVAILABLE'],
+    [{ codexErrorInfo: 'serverOverloaded', message: '[REDACTED]' }, 'UPSTREAM_OVERLOADED'],
+    [{ reason: 'upstream-overload', message: '[REDACTED]' }, 'UPSTREAM_OVERLOADED'],
+    [{ errorStatus: 529, message: '[REDACTED]' }, 'UPSTREAM_OVERLOADED'],
     [{ modelAccessDenied: true, errorStatus: 403 }, 'MODEL_UNAVAILABLE'],
     [{ sdkError: 'user_model_access_denied' }, 'MODEL_UNAVAILABLE'],
     [{ codexErrorInfo: 'usageLimitExceeded', message: '[REDACTED]' }, 'QUOTA_EXCEEDED'],

@@ -43,7 +43,7 @@ vi.mock('ws', async () => {
 });
 import { withChatServer } from '../chatServer.js';
 import { projectBotGroupExecutionFailures } from '@cindy/maker-shared/botGroupPresentation';
-import { settleUndispatchedBotGroupTurn } from '../botGroupRuntimeFailure.js';
+import { botGroupRuntimeFailureCode, settleUndispatchedBotGroupTurn } from '../botGroupRuntimeFailure.js';
 import { authorizeGroupTool } from '../botGroupToolAuthorization.js';
 import type { BotGroupChatService, BotGroupChatServiceDeps } from '../botGroupChatService.js';
 
@@ -194,6 +194,18 @@ describe('Chat Server result delivery and refresh', () => {
   }
   const terminal = { sessionId: 'lane', activeInputClientId: null, outcome: 'done' as const, resultText: 'Finished reply' };
   const deliveries = () => fixture.handle.mock.calls.filter(([, , body]) => body?.action === 'complete');
+
+  it.each([{ codexErrorInfo: 'serverOverloaded' }, { reason: 'upstream-overload' }, { errorStatus: 529 }])
+    ('submits only the capacity category after the SDK terminal %j', async signals => {
+      await start();
+      const failureCode = botGroupRuntimeFailureCode({ ...signals, message: 'private endpoint and credential' });
+      await service.settleLaneTurn({ ...terminal, outcome: 'error', resultText: '', failureCode });
+      const failures = fixture.handle.mock.calls.filter(([, , body]) => body?.action === 'fail');
+      expect(failures).toHaveLength(1);
+      expect(failures[0][2]).toMatchObject({ detail: 'cindy-runtime-error:UPSTREAM_OVERLOADED' });
+      expect(JSON.stringify(failures)).not.toContain('private endpoint and credential');
+      expect(deps.abortLane).not.toHaveBeenCalled();
+    });
 
   it.each([
     ['NO_MODEL', 'MODEL_UNAVAILABLE'],
