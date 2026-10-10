@@ -10,7 +10,7 @@ const h = vi.hoisted(() => ({
   get: vi.fn(),
   language: "en", focused: true,
   t: (key: string) => key, metadataVerified: true,
-  resourceId: 'bot-1', sessionId: 'task-1',
+  resourceId: 'bot-1', sessionId: 'task-1', openSearch: '',
   markRead: vi.fn(),
   store: { getSessionDeviceId: vi.fn(), upsertDeviceSession: vi.fn() },
   router: { replace: vi.fn(), setParams: vi.fn() },
@@ -24,7 +24,7 @@ vi.mock('expo-router', async () => {
   return {
     useIsFocused: () => h.focused,
     useFocusEffect: (effect: () => void | (() => void)) => useEffect(() => h.focused ? effect() : undefined, [effect, h.focused]),
-    useLocalSearchParams: () => ({ resourceCollectionId: 'teammates', resourceId: h.resourceId, resourceKind: 'bot' }),
+    useLocalSearchParams: () => ({ resourceCollectionId: 'teammates', resourceId: h.resourceId, resourceKind: 'bot', openSearch: h.openSearch }),
     useRouter: () => h.router,
   };
 });
@@ -74,7 +74,7 @@ async function render(canMarkRead = false) {
   // A viewport receipt is separate from loading/entering the chat.
   result.markReadThrough(200);
 }
-beforeEach(() => { vi.clearAllMocks(); h.auth.accountGeneration = 1; h.metadataVerified = true; h.focused = true; h.language = "en"; h.resourceId = 'bot-1'; h.sessionId = 'task-1'; h.link.status = 'online'; h.link.connectionEpoch = 1; h.store.getSessionDeviceId.mockReturnValue(undefined); });
+beforeEach(() => { vi.clearAllMocks(); h.openSearch = ''; h.auth.accountGeneration = 1; h.metadataVerified = true; h.focused = true; h.language = "en"; h.resourceId = 'bot-1'; h.sessionId = 'task-1'; h.link.status = 'online'; h.link.connectionEpoch = 1; h.store.getSessionDeviceId.mockReturnValue(undefined); });
 afterEach(() => { act(() => root?.unmount()); root = undefined; });
 
 describe('companion task visibility refresh', () => {
@@ -285,4 +285,52 @@ it('closes controls immediately on a resource push, keeps the title, and coalesc
     await act(async () => finish({ links: [{ rel: 'conversation', target: { kind: 'session', sessionId: 'task-1' } }], display: { title: 'Teammate' } }));
     expect(result.ready).toBe(true);
   } finally { vi.useRealTimers(); }
+});
+
+
+it.each(['failed', 'identity'])('keeps %s invitation history visible without enabling writes', async stage => {
+  h.openSearch = '1';
+  h.get.mockResolvedValue({
+    blocks: [{ id: 'invitation', primitive: 'status', data: { stage } }],
+    links: [{ rel: 'conversation', target: { kind: 'session', sessionId: 'task-1' } }],
+    display: { title: 'Recovering teammate', lastReplyAt: 200 },
+  });
+  await render(true);
+  expect(h.router.replace).not.toHaveBeenCalled();
+  expect(container.textContent).toBe('Recovering teammate');
+  expect(result.ready).toBe(false);
+  expect(h.markRead).not.toHaveBeenCalled();
+
+  // The same invitation still redirects on ordinary entry.
+  h.openSearch = '';
+  await render(true);
+  expect(h.router.replace).toHaveBeenCalledWith(expect.objectContaining({ pathname: '/resources/[collectionId]/[resourceId]' }));
+});
+
+it('validates the canonical task in failed invitation history and restores controls after recovery', async () => {
+  h.openSearch = '1';
+  const resource = {
+    blocks: [{ id: 'invitation', primitive: 'status', data: { stage: 'failed' } }],
+    links: [{ rel: 'conversation', target: { kind: 'session', sessionId: 'task-2' } }],
+    display: { title: 'Recovering teammate' },
+  };
+  h.get.mockResolvedValue(resource);
+  h.link.invoke.mockResolvedValue({ id: 'task-2', source: 'bot' });
+  await render();
+  expect(h.router.setParams).toHaveBeenCalledWith({ sessionId: 'task-2' });
+  expect(result.ready).toBe(false);
+  h.sessionId = 'task-2';
+  await render();
+  expect(result.ready).toBe(false);
+  h.get.mockResolvedValue({ ...resource, blocks: [{ id: 'invitation', primitive: 'status', data: { stage: 'ready' } }] });
+  await act(async () => result.retry());
+  expect(result.ready).toBe(true);
+});
+
+it('still leaves failed invitation history when the host revokes the resource', async () => {
+  h.openSearch = '1';
+  h.get.mockRejectedValue(new Error('[NOT_FOUND] resource missing'));
+  await render();
+  expect(result.ready).toBe(false);
+  expect(h.router.replace).toHaveBeenCalledWith(expect.objectContaining({ pathname: '/resources/[collectionId]/[resourceId]' }));
 });
