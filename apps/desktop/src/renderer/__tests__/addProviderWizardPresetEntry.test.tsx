@@ -766,7 +766,40 @@ describe('AddProviderWizard — preset 直达', () => {
     expect(config.runtimes.codex?.baseUrl).toBe('https://myres.openai.azure.com/openai/v1');
   });
 
-  it('accepts the official Vertex global host and rejects an unrelated host on the Vertex template', async () => {
+  it('leaves an official same-host Claude endpoint alone when only the Pi endpoint is edited', async () => {
+  const preset = {
+    id: 'same-host-official',
+    name: 'Same Host Official',
+    runtimes: {
+      'claude-code': {
+        baseUrl: 'https://api.example.test/anthropic',
+        wireProtocol: 'anthropic-messages' as const,
+        models: [{ id: 'm', name: 'M' }],
+      },
+      pi: {
+        baseUrl: 'https://api.example.test/anthropic',
+        wireProtocol: 'anthropic-messages' as const,
+        models: [{ id: 'm', name: 'M' }],
+      },
+    },
+  };
+  vi.mocked(window.electronAPI.maker.listProviderPresets).mockResolvedValueOnce({ presets: [preset] });
+  renderWizard('same-host-official');
+  const inputs = await screen.findAllByDisplayValue('https://api.example.test/anthropic');
+  expect(inputs).toHaveLength(1);
+  fireEvent.change(inputs[0]!, { target: { value: 'https://relay.example.test/anthropic' } });
+  fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'official-key' } });
+  fireEvent.click(screen.getByText('settings.providers.wizard.next'));
+  expect(await screen.findByText('M')).not.toBeNull();
+  fireEvent.click(screen.getByText('settings.providers.wizard.finish'));
+  await waitFor(() => expect(createCustomProvider).toHaveBeenCalledOnce());
+  const config = vi.mocked(createCustomProvider).mock.calls[0][0];
+  expect(config.runtimes.pi?.baseUrl).toBe('https://relay.example.test/anthropic');
+  // 官方渠道的 Claude 端点不得跟着改走。
+  expect(config.runtimes['claude-code']?.baseUrl).toBe('https://api.example.test/anthropic');
+});
+
+it('allows the official Vertex global host and rejects an unrelated host on the Vertex template', async () => {
     const preset = {
       id: 'google-vertex',
       name: 'Google Vertex AI',

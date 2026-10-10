@@ -112,14 +112,18 @@ function presetRuntimeBaseUrl(
   if (!runtime) return '';
   // 只有 Pi runtime 的端点对用户开放改写；Claude / Codex 不给输入框。
   if (agent === 'pi') return edited.pi !== undefined ? edited.pi.trim() : runtime.baseUrl;
-  // 但同一服务 / 同一账户模板的其它 runtime 仍由 Pi 的填写派生：否则 Azure OpenAI 的 {resource}、
-  // Vertex 的 {location} 会原样存进配置，主进程拒绝含占位符的 baseUrl，整个连接建不出来。
+  // 但 Claude / Codex 的地址仍有两种派生，否则用户只改 Pi 时它们会指向别的服务或建不出来：
+  // 1) 账户 / 位置模板（如 Azure OpenAI 的 {resource}、Vertex 的 {location}）必须绑定，
+  //    未绑定的占位符会被主进程拒绝，整个连接创建失败；
+  // 2) 自托管 / 网关类预设的多个 runtime 默认指向同一服务，跟随 Pi 填写的地址。
+  //    官方渠道不走这条：它们的多个 runtime 虽可能同址，用户只换 Pi 时也不该把官方端点一起改走。
   const piRuntime = preset.runtimes.pi;
   const piEndpoint = edited.pi?.trim();
   if (!piRuntime || !piEndpoint) return runtime.baseUrl;
-  if (piRuntime.baseUrl === runtime.baseUrl) return piEndpoint;
   const bindings = providerEndpointBindings(piRuntime.baseUrl, piEndpoint);
-  return bindings ? bindProviderEndpoint(runtime.baseUrl, bindings, piEndpoint) : runtime.baseUrl;
+  if (bindings && runtime.baseUrl.includes('{')) return bindProviderEndpoint(runtime.baseUrl, bindings, piEndpoint);
+  if (runtime.baseUrl === piRuntime.baseUrl && piRuntime.baseUrlEditable) return piEndpoint;
+  return runtime.baseUrl;
 }
 
 function isValidEditablePresetBaseUrl(value: string, template?: string): boolean {
