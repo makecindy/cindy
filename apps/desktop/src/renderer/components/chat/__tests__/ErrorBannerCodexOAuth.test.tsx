@@ -34,6 +34,7 @@ const mocks = vi.hoisted(() => ({
   onStateChanged: vi.fn(),
   onLoginProgress: vi.fn(),
   getCodexRateLimits: vi.fn(),
+  consumeReset: vi.fn(),
   openChatGPTApp: vi.fn(),
   toastSuccess: vi.fn(),
   toastError: vi.fn(),
@@ -95,8 +96,12 @@ describe('ErrorBanner OpenAI connection recovery', () => {
     });
     mocks.cancelLogin.mockResolvedValue(undefined);
     mocks.logout.mockResolvedValue(undefined);
-    mocks.getCodexRateLimits.mockResolvedValue({ rateLimits: null, resetOffer: null });
+    mocks.getCodexRateLimits.mockResolvedValue({
+      account: { email: null, accountId: null, planType: null },
+      rateLimits: {}, rateLimitsByLimitId: null, rateLimitResetCredits: null, resetOffer: null,
+    });
     mocks.openChatGPTApp.mockResolvedValue({ success: true });
+    mocks.consumeReset.mockResolvedValue({ outcome: 'reset', rateLimits: null });
     mocks.onStateChanged.mockImplementation(
       (listener: (payload: AuthStateChangedPayload) => void) => {
         mocks.stateChangedListeners.add(listener);
@@ -116,7 +121,7 @@ describe('ErrorBanner OpenAI connection recovery', () => {
               onStateChanged: typeof mocks.onStateChanged;
               onLoginProgress: typeof mocks.onLoginProgress;
             };
-            usage: { getCodexRateLimits: typeof mocks.getCodexRateLimits };
+            usage: { getCodexRateLimits: typeof mocks.getCodexRateLimits; consumeCodexRateLimitReset: typeof mocks.consumeReset };
           };
           openChatGPTApp: typeof mocks.openChatGPTApp;
         };
@@ -131,7 +136,7 @@ describe('ErrorBanner OpenAI connection recovery', () => {
           onStateChanged: mocks.onStateChanged,
           onLoginProgress: mocks.onLoginProgress,
         },
-        usage: { getCodexRateLimits: mocks.getCodexRateLimits },
+        usage: { getCodexRateLimits: mocks.getCodexRateLimits, consumeCodexRateLimitReset: mocks.consumeReset },
       },
       openChatGPTApp: mocks.openChatGPTApp,
     };
@@ -977,6 +982,34 @@ describe('ErrorBanner OpenAI connection recovery', () => {
       screen.queryByRole('button', { name: 'chat.errorBanner.usageLimitAutoContinueCancel' }),
     ).toBeNull();
   });
+
+  it('offers a confirmed reset at a local ChatGPT limit without retrying the turn', async () => {
+    const key = '00000000-0000-4000-8000-000000000001';
+    mocks.getCodexRateLimits.mockResolvedValue({
+      account: { email: 'te***@example.test', accountId: '…123456', planType: 'plus' },
+      rateLimits: { primary: { usedPercent: 100 } }, rateLimitsByLimitId: null,
+      rateLimitResetCredits: { availableCount: 2, credits: null },
+      resetOffer: { idempotencyKey: key, expiresAt: null, validUntil: Date.now() + 60_000 },
+    });
+    const retry = vi.fn();
+    render(<ErrorBanner error="usageLimitExceeded" retryText="retry this turn" onRetry={retry}
+      agentKind="codex" providerId="openai" usageLimitRecovery={{ resetAtMs: null, isAccountUsageLimit: true }} />);
+    const action = await screen.findByRole('button', { name: 'codexResets.limitAction' });
+    expect(mocks.consumeReset).not.toHaveBeenCalled();
+    await act(async () => fireEvent.click(action));
+    expect(mocks.consumeReset).toHaveBeenCalledExactlyOnceWith(key, 'openai');
+    expect(retry).not.toHaveBeenCalled();
+  });
+
+  it.each([{ remoteHostId: 'ssh-host' }, { deviceLinkDeviceId: 'other-device' }])(
+    'does not offer local reset credits in a remote task %j', async (remote) => {
+      render(<ErrorBanner error="usageLimitExceeded" retryText="retry this turn" onRetry={vi.fn()}
+        agentKind="codex" providerId="openai" usageLimitRecovery={{ resetAtMs: null, isAccountUsageLimit: true }} {...remote} />);
+      await act(async () => {});
+      expect(screen.queryByRole('button', { name: 'codexResets.limitAction' })).toBeNull();
+      expect(mocks.getCodexRateLimits).not.toHaveBeenCalled();
+    },
+  );
 
   it('explains an organization Codex limit and keeps the raw 429 response available', () => {
     const rawError =

@@ -15015,5 +15015,26 @@
     "idempotencyConflict": "This retry identifier was already used for a different message.",
     "privateUnconfirmed": "Private message delivery is unconfirmed. Retry with the same identifier.",
     "verificationUnavailable": "Group authorization could not be verified. Try again when the connection recovers."
+  },
+  "codexResets": {
+    "title": "Usage Limit Resets",
+    "available": "Available {{count}}",
+    "fullReset": "Full Reset",
+    "expiresAt": "Expires {{at}}",
+    "expiryUnknown": "Expiry not provided",
+    "useReset": "Use Reset",
+    "earliestFirst": "Uses the reset that expires first",
+    "availableAtLimit": "Available when you reach a usage limit",
+    "noCredit": "No resets available",
+    "detailsUnavailable": "Some reset details are not available",
+    "currentAccount": "your current ChatGPT account",
+    "confirmTitle": "Use One Codex Reset?",
+    "confirmBody": "Consume 1 reset for {{account}}, using the earliest expiry first. Eligible usage limits will be restored. This cannot be undone.",
+    "consumeOnce": "Use One Reset",
+    "resetDone": "Codex usage limits restored",
+    "nothingToReset": "No usage limit needs a reset",
+    "offerExpired": "The account or reset offer changed. Refresh usage before resetting.",
+    "resetFailed": "Could not confirm the reset result. Refresh usage to check whether limits were restored.",
+    "limitAction": "Use Reset · {{count}} Available"
   }
 }

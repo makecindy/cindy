@@ -14978,5 +14978,26 @@
     "idempotencyConflict": "この再試行識別子は別のメッセージに使用されています。",
     "privateUnconfirmed": "個別メッセージの配信は未確認です。同じ識別子で再試行してください。",
     "verificationUnavailable": "グループの権限を確認できませんでした。接続が回復してから再試行してください。"
+  },
+  "codexResets": {
+    "title": "利用上限のリセット",
+    "available": "利用可能 {{count}} 回",
+    "fullReset": "完全リセット",
+    "expiresAt": "有効期限: {{at}}",
+    "expiryUnknown": "有効期限の情報なし",
+    "useReset": "リセットを使用",
+    "earliestFirst": "有効期限が最も早いものから使用",
+    "availableAtLimit": "利用上限に達すると使用できます",
+    "noCredit": "利用可能なリセットはありません",
+    "detailsUnavailable": "一部のリセットの詳細は取得できません",
+    "currentAccount": "現在の ChatGPT アカウント",
+    "confirmTitle": "Codex のリセットを1回使用しますか？",
+    "confirmBody": "{{account}} のリセットを1回消費します。有効期限が最も早いものから使用し、対象の利用上限を回復します。この操作は取り消せません。",
+    "consumeOnce": "リセットを1回使用",
+    "resetDone": "Codex の利用枠を回復しました",
+    "nothingToReset": "リセットが必要な利用上限はありません",
+    "offerExpired": "アカウントまたはリセットの状態が変わりました。使用量を更新してからリセットを使用してください。",
+    "resetFailed": "リセットの結果を確認できませんでした。使用量を更新して、利用枠が回復したか確認してください。",
+    "limitAction": "リセットを使用 · 残り {{count}} 回"
   }
 }

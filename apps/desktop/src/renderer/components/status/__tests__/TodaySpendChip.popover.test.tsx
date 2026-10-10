@@ -1,7 +1,15 @@
 // @vitest-environment jsdom
 
-import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render as renderUI, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import type { ReactElement } from 'react';
+import type { MobileCodexRateLimitsResult } from '@cindy/maker-shared/device-link-contract';
+import { ConfirmDialogProvider } from '@/components/ui/confirm-dialog-provider';
+
+function render(ui: ReactElement) {
+  return renderUI(ui, { wrapper: ConfirmDialogProvider });
+}
 
 import type { ClaudeSubscriptionUsageSnapshot } from '../../../../shared/claudeSubscriptionUsage';
 import type { RateLimitSnapshot } from '@/hooks/useAccountUsage';
@@ -30,6 +38,8 @@ const mocks = vi.hoisted(() => ({
   } as SessionUsageMoney,
   openExternal: vi.fn(() => Promise.resolve()),
   refreshCodexRateLimits: vi.fn(),
+  resetSnapshot: null as MobileCodexRateLimitsResult | null,
+  consumeReset: vi.fn(),
 }));
 
 vi.mock('react-i18next', () => ({
@@ -134,7 +144,7 @@ vi.mock('@/hooks/useCodexRuntimeRoute', () => ({
 }));
 vi.mock('@/hooks/useCodexRateLimits', () => ({
   useCodexRateLimits: () => ({
-    snapshot: null,
+    snapshot: mocks.resetSnapshot,
     refresh: mocks.refreshCodexRateLimits,
   }),
 }));
@@ -248,6 +258,8 @@ beforeEach(() => {
     sevenDay: { utilization: 34, resetsAt: Date.now() / 1000 + 86_400 },
   };
   mocks.codexSnapshot = null;
+  mocks.resetSnapshot = null;
+  mocks.consumeReset.mockReset();
   mocks.xaiSnapshot = null;
   mocks.gatewaySnapshot = null;
   mocks.sessionTokens = null;
@@ -256,7 +268,7 @@ beforeEach(() => {
   mocks.accountSnapshots = {};
   Object.defineProperty(window, 'electronAPI', {
     configurable: true,
-    value: { openExternal: mocks.openExternal },
+    value: { openExternal: mocks.openExternal, maker: { usage: { consumeCodexRateLimitReset: mocks.consumeReset } } },
   });
 });
 
@@ -440,6 +452,33 @@ describe('TodaySpendChip Claude subscription popover', () => {
     const trigger = screen.getByRole('button', { name: '打开 Claude 用量页面' });
     expect(trigger.className).toContain('error-fg');
     expect(trigger.querySelector('[class*="error-fg"]')).toBeNull();
+  });
+
+  it('can confirm one reset after closing the usage popover', async () => {
+    mocks.codexAuthInjection = 'oauth-bearer';
+    mocks.codexSnapshot = { primary: { usedPercent: 100, windowMinutes: 300 } };
+    mocks.resetSnapshot = {
+      account: { email: 'te***@example.test', accountId: '…123456', planType: 'plus' },
+      rateLimits: { primary: { usedPercent: 100 } }, rateLimitsByLimitId: null,
+      rateLimitResetCredits: { availableCount: 2, credits: null },
+      resetOffer: { idempotencyKey: '00000000-0000-4000-8000-000000000001', expiresAt: null, validUntil: Date.now() + 60_000 },
+    };
+    mocks.consumeReset.mockResolvedValue({ outcome: 'reset', rateLimits: null });
+    render(<TodaySpendChip vendorKey="codex" providerId="openai" sessionId="reset" />);
+    fireEvent.mouseEnter(screen.getByRole('button', { name: '打开 Codex 用量页面' }));
+    act(() => vi.advanceTimersByTime(300));
+    expect(screen.queryByRole('button', { name: 'codexResets.useReset' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'codexResets.title' }));
+    expect(screen.queryByTestId('quota-hover-card')).toBeNull();
+    expect(screen.getByRole('dialog')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'codexResets.useReset' }));
+    expect(mocks.consumeReset).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('quota-hover-card')).toBeNull();
+    const dialog = screen.getByRole('alertdialog');
+    expect(dialog.contains(document.activeElement)).toBe(true);
+    await act(async () => fireEvent.click(within(dialog).getByRole('button', { name: 'codexResets.consumeOnce' })));
+    expect(mocks.consumeReset).toHaveBeenCalledExactlyOnceWith(mocks.resetSnapshot.resetOffer!.idempotencyKey, 'openai');
+    expect(mocks.refreshCodexRateLimits).toHaveBeenCalled();
   });
 
   it('完整渲染 Codex app-server 的两个权威窗口', () => {

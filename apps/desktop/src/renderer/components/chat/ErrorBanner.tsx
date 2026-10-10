@@ -1,3 +1,6 @@
+import { useCodexRateLimits } from '@/hooks/useCodexRateLimits';
+import { useCodexRateLimitReset } from '@/hooks/useCodexRateLimitReset';
+import { Button } from '@/components/ui/button';
 import { isCodexGatewayWireModel, isOpenAiSubscriptionProvider } from '@cindy/model-providers';
 import { useProviders } from '@/hooks/useProviders';
 /**
@@ -313,6 +316,11 @@ export function ErrorBanner({
   const terminalRateLimitRetryProgress = parseTerminalRateLimitRetryProgress(error, errorReason);
   const isCodexUsageLimitError =
     agentKind === 'codex' && usageLimitRecovery?.isAccountUsageLimit === true;
+  const { snapshot: resetSnapshot, refresh: refreshResets } = useCodexRateLimits(
+    isCodexUsageLimitError && isCodexOpenAiSource && !isAnyRemoteSession,
+    normalizedProviderId ?? 'openai',
+  );
+  const manualReset = useCodexRateLimitReset(resetSnapshot, refreshResets, normalizedProviderId ?? 'openai');
   const usageLimitResetDate =
     usageLimitRecovery?.resetAtMs && Number.isFinite(usageLimitRecovery.resetAtMs)
       ? new Date(usageLimitRecovery.resetAtMs)
@@ -773,6 +781,11 @@ export function ErrorBanner({
           <Timer size={12} />
           {t('chat.errorBanner.usageLimitAutoContinueAt', { time: usageLimitResumeAt })}
         </span>
+      )}
+      {manualReset.canReset && (
+        <Button size="sm" compact loading={manualReset.busy} onClick={() => void manualReset.reset()}>
+          {t('codexResets.limitAction', { count: resetSnapshot?.rateLimitResetCredits?.availableCount ?? 0 })}
+        </Button>
       )}
       {usageLimitResumeAt && onCancelUsageLimitWait && (
         <button
