@@ -10,7 +10,7 @@ import {
   handleProviderGroupRemote,
   type ProviderGroupRemoteHandlerDeps,
 } from './remoteHandler.js';
-import { getProviderGroupExternalLoad, getProviderGroupRouter } from './runtime.js';
+import { getProviderGroupExternalLoad, getProviderGroupRouter, pinProviderGroupOwnerRuntime } from './runtime.js';
 import { readProviderGroup } from './store.js';
 
 export function registerProviderGroupRemoteHandler(): void {
@@ -19,6 +19,8 @@ export function registerProviderGroupRemoteHandler(): void {
     externalLoad: getProviderGroupExternalLoad(),
     readGroup: readProviderGroup,
     isRemoteAllowed: isRemoteProviderInvocationAllowed,
+    // 换账号后旧请求不写进新账号的负载(等待期间账号可能已换)。
+    pin: pinProviderGroupOwnerRuntime,
     now: () => Date.now(),
   };
   setProviderGroupRemoteHandler({

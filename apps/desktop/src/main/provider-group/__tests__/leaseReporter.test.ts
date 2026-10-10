@@ -26,7 +26,9 @@ function setup() {
     s3: { providerId: 'openai', memberKey: 'local', groupDeviceId: 'other', at: 1 },
   };
   const running = new Set<string>();
-  const send = vi.fn(async (_owner: string, _seq: number, _entries: unknown[]) => undefined);
+  const send = vi.fn(async (...args: [string, number, unknown[]]) => {
+    void args;
+  });
   const reporter = createProviderGroupLeaseReporter({
     listRemoteBindings: () => bindings,
     isTurnRunning: (id) => running.has(id),
@@ -89,6 +91,28 @@ describe('provider group lease reporter', () => {
     await vi.advanceTimersByTimeAsync(PROVIDER_GROUP_LEASE_DEBOUNCE_MS);
     expect(restarted.send.mock.calls[0][1] as number).toBeGreaterThan(seqs[1]);
     restarted.reporter.dispose();
+  });
+
+  it('retries the empty end-of-round report when sending it fails', async () => {
+    const { reporter, running, send } = setup();
+    running.add('s1');
+    reporter.notify('s1');
+    await vi.advanceTimersByTimeAsync(PROVIDER_GROUP_LEASE_DEBOUNCE_MS);
+    expect(send).toHaveBeenCalledTimes(1);
+    // 最后一个经组任务结束，收尾的空报告发送失败。
+    running.clear();
+    send.mockRejectedValueOnce(new Error('link down'));
+    reporter.notify('s1');
+    await vi.advanceTimersByTimeAsync(PROVIDER_GROUP_LEASE_DEBOUNCE_MS);
+    expect(send).toHaveBeenCalledTimes(2);
+    // 没有任务在跑也要重试：否则组所在电脑会把已结束的任务一直计入负载(150s 才作废)。
+    await vi.advanceTimersByTimeAsync(PROVIDER_GROUP_LEASE_HEARTBEAT_MS);
+    expect(send).toHaveBeenCalledTimes(3);
+    expect(send).toHaveBeenLastCalledWith('mini', expect.any(Number), []);
+    // 报成功之后不再重复报空。
+    await vi.advanceTimersByTimeAsync(PROVIDER_GROUP_LEASE_HEARTBEAT_MS * 3);
+    expect(send).toHaveBeenCalledTimes(3);
+    reporter.dispose();
   });
 
   it('does nothing when no task runs through a group on another computer', async () => {

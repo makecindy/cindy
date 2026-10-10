@@ -12,6 +12,7 @@ import type { ProviderGroupDirectory } from '../directory';
 import { createProviderGroupRouter } from '../router';
 import {
   createProviderGroupService,
+  PROVIDER_GROUP_BEFORE_SEND_TIMEOUT_MS,
   PROVIDER_GROUP_UNAVAILABLE_ERROR,
   type ProviderGroupRemoteGroups,
   type ProviderGroupServiceDeps,
@@ -206,6 +207,15 @@ describe('assigning through a group on another computer', () => {
     expect(next?.route).toEqual({ agentDeviceId: 'share:s1', providerId: 'anthropic' });
     expect(h.bindings.get('s1')).toMatchObject({ memberKey: SHARED.key, groupDeviceId: OWNER });
   });
+
+  it('drops the binding when the group is deleted before the agent starts', async () => {
+    const h = harness({ picks: [STUDIO] });
+    const context = await h.service.assignBeforeStart(START);
+    expect(h.bindings.size).toBe(1);
+    h.remote.readGroup.mockResolvedValue(null);
+    expect(await h.service.nextAfterStartFailure(context!, new Error('[REMOTE_AGENT_DEVICE_UNREACHABLE] gone'))).toBeNull();
+    expect(h.bindings.size).toBe(0);
+  });
 });
 
 describe('switching computers within a group on another computer', () => {
@@ -244,6 +254,48 @@ describe('switching computers within a group on another computer', () => {
     expect(h.deps.fallback).toHaveBeenCalled();
     expect(h.deps.switchAgentLocation).not.toHaveBeenCalled();
     expect(h.bindings.has('s1')).toBe(true);
+  });
+
+  it('drops the binding once the group is confirmed deleted, keeping it only while unreachable', async () => {
+    // 确认组已删除：任务成为普通远程任务，重建同名组也不会恢复自动换电脑(§6.1、§9.4)。
+    const gone = bound({ config: null });
+    gone.service.onTurnError('s1', { sdkError: 'rate_limit' }, 3);
+    await flush();
+    expect(gone.bindings.has('s1')).toBe(false);
+    expect(gone.deps.switchAgentLocation).not.toHaveBeenCalled();
+    expect(gone.deps.fallback).toHaveBeenCalled();
+
+    const unreachable = bound({ config: undefined });
+    unreachable.service.onTurnError('s1', { sdkError: 'rate_limit' }, 3);
+    await flush();
+    expect(unreachable.bindings.has('s1')).toBe(true);
+  });
+
+  it('drops the binding before sending once the group is confirmed deleted', async () => {
+    const gone = bound({ config: null });
+    await gone.service.beforeSend('s1');
+    expect(gone.bindings.has('s1')).toBe(false);
+    expect(gone.deps.switchAgentLocation).not.toHaveBeenCalled();
+
+    const unreachable = bound({ config: undefined });
+    await unreachable.service.beforeSend('s1');
+    expect(unreachable.bindings.has('s1')).toBe(true);
+  });
+
+  it('does not let an unresponsive group computer hold up sending', async () => {
+    vi.useFakeTimers();
+    try {
+      const h = bound();
+      h.remote.readGroup.mockImplementation(() => new Promise(() => undefined));
+      const send = h.service.beforeSend('s1');
+      await vi.advanceTimersByTimeAsync(PROVIDER_GROUP_BEFORE_SEND_TIMEOUT_MS + 1);
+      await send;
+      // 读不到就保留绑定照常发送，不让一台卡住的组所在电脑拖慢每次发送。
+      expect(h.deps.switchAgentLocation).not.toHaveBeenCalled();
+      expect(h.bindings.has('s1')).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('stops following the group once the user moved the task elsewhere', async () => {

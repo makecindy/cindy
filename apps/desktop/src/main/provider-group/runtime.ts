@@ -20,6 +20,7 @@ import { listProviderGroupBindings } from './bindings.js';
 import { createProviderGroupDirectory, type ProviderGroupDirectory } from './directory.js';
 import { createProviderGroupExternalLoad, type ProviderGroupExternalLoad } from './externalLoad.js';
 import { createProviderGroupRemoteClient, type ProviderGroupRemoteClient } from './remoteClient.js';
+import type { ProviderGroupRemoteRuntime } from './remoteHandler.js';
 import { createProviderGroupRouter, type ProviderGroupRouter } from './router.js';
 import type { ProviderGroupRemoteGroups } from './service.js';
 import { readProviderGroup } from './store.js';
@@ -95,6 +96,19 @@ export function getProviderGroupRouter(): ProviderGroupRouter {
 
 export function getProviderGroupExternalLoad(): ProviderGroupExternalLoad {
   return externalLoadFacade;
+}
+
+/**
+ * 请求开始时固定当前账号的分配器与负载记录：`provider-group:remote` 的 pick 要等目录读取，期间换
+ * 账号后不能把旧账号选中的任务记进新账号的负载；`isCurrent` 在等待后核对，不一致就丢弃这次分配。
+ */
+export function pinProviderGroupOwnerRuntime(): ProviderGroupRemoteRuntime {
+  const runtime = runtimeForActiveOwner();
+  return {
+    router: runtime.router,
+    externalLoad: runtime.externalLoad,
+    isCurrent: () => current === runtime,
+  };
 }
 
 let remoteClient: ProviderGroupRemoteClient | null = null;

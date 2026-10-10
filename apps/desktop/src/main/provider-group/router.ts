@@ -44,6 +44,11 @@ export interface ProviderGroupPickInput {
   agentKind: AgentKind;
   model: string;
   exclude?: ReadonlySet<string>;
+  /**
+   * 选中组内电脑的**同一步**记临时占用(刚选中、还没报告的任务，§5)：与返回值分开记会在选中与
+   * 记账之间留下窗口——并发的两次分配读到同一份负载，全落到同一台。调用方传入才生效。
+   */
+  occupy?: (memberKey: string) => void;
 }
 
 export type ProviderGroupPickResult =
@@ -133,6 +138,8 @@ export function createProviderGroupRouter(deps: ProviderGroupRouterDeps): Provid
       });
       if (!key) return { kind: 'unavailable', resolved };
       lastPicked.set(input.providerId, key);
+      // 占用在选中的同一步记，不让并发分配都挑中同一台。
+      input.occupy?.(key);
       const chosen = resolved.find((r) => r.member.key === key)!;
       return { kind: 'member', member: chosen.member, label: chosen.label, resolved };
     },

@@ -107,6 +107,44 @@ describe('useOwnRemoteProviders', () => {
     ]);
     expect([...result.current.hiddenShareIds]).toEqual(['s1']);
   });
+
+  it('keeps the group entry when that computer’s own provider dropped login or is suspended', () => {
+    // 组还在(还能往组员上分)：组那一项保留入口可查看，组里的组员与分享不单独冒出(provider-groups.md §10)。
+    devices.value = [
+      { deviceId: 'mini-a', name: "Magi's Mac Mini", platform: 'darwin' },
+      { deviceId: 'mini-b', name: 'Studio', platform: 'darwin' },
+    ];
+    catalogs.value = new Map([
+      ['mini-a', {
+        providers: [
+          provider('anthropic', {
+            connected: false,
+            group: {
+              strategy: 'least',
+              members: [
+                { kind: 'local' },
+                { kind: 'device', agentDeviceId: 'mini-b', providerId: 'anthropic' },
+                { kind: 'share', agentDeviceId: 'share:s1', providerId: 'anthropic' },
+              ],
+            },
+          }),
+          provider('openai', {
+            suspended: true,
+            group: { strategy: 'least', members: [{ kind: 'local' }, { kind: 'device', agentDeviceId: 'mini-b', providerId: 'openai' }] },
+          }),
+        ],
+        loading: false,
+        error: null,
+      }],
+      ['mini-b', { providers: [provider('anthropic'), provider('openai')], loading: false, error: null }],
+    ]);
+    const { result } = renderHook(() => useOwnRemoteProviderList());
+    expect(result.current.entries.map((entry) => [entry.deviceId, entry.provider.id, entry.group?.members.length ?? 0])).toEqual([
+      ['mini-a', 'anthropic', 3],
+      ['mini-a', 'openai', 2],
+    ]);
+    expect([...result.current.hiddenShareIds]).toEqual(['s1']);
+  });
 });
 
 describe('OwnRemoteProviderRows / OwnRemoteProviderDetail', () => {

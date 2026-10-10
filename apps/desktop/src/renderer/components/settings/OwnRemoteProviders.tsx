@@ -54,6 +54,9 @@ export interface OwnRemoteProviderList {
 /**
  * 在线的同账号电脑上可以远程使用的供应商，按电脑、再按那台电脑的供应商顺序排列；被其他电脑的组
  * 收进去的不再单独列出。
+ *
+ * 组那一项保留入口：组所在电脑自己的供应商掉登录或被停用时，组还在(还能往组员上分)，照旧只列
+ * 组那一项并可进详情查看组内电脑；无组的照旧只列已连接、未停用的(provider-groups.md §10)。
  */
 export function useOwnRemoteProviderList(): OwnRemoteProviderList {
   const devices = useControllableDevices();
@@ -74,11 +77,11 @@ export function useOwnRemoteProviderList(): OwnRemoteProviderList {
       const catalog = catalogs.get(device.deviceId);
       if (!catalog) return [];
       return remoteAgentProviders(catalog.providers)
-        .filter((provider) => provider.connected && !provider.suspended)
-        .filter((provider) => !groups.hidden.has(remoteProviderEntryKey(device.deviceId, provider.id)))
-        .map((provider): OwnRemoteProvider => {
+        .map((provider) => ({ provider, group: groups.groups.get(remoteProviderEntryKey(device.deviceId, provider.id)) }))
+        .filter(({ provider, group }) => group !== undefined || (provider.connected && !provider.suspended))
+        .filter(({ provider }) => !groups.hidden.has(remoteProviderEntryKey(device.deviceId, provider.id)))
+        .map(({ provider, group }): OwnRemoteProvider => {
           const key = ownRemoteProviderKey(device.deviceId, provider.id);
-          const group = groups.groups.get(key);
           return {
             key,
             deviceId: device.deviceId,

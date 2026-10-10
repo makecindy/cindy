@@ -202,6 +202,23 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T | null> {
   ]).finally(() => clearTimeout(timer));
 }
 
+/**
+ * 限时读取组设置：超时或抛错都按「读不到」(undefined)处理——读不到时不能当作组已删除去解除绑定；
+ * 明确读到的 null(组已删除)原样保留。
+ */
+function readGroupWithin(
+  promise: Promise<ProviderGroupConfig | null | undefined>,
+  ms: number,
+): Promise<ProviderGroupConfig | null | undefined> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return Promise.race([
+    promise.catch(() => undefined),
+    new Promise<undefined>((resolve) => {
+      timer = setTimeout(() => resolve(undefined), ms);
+    }),
+  ]).finally(() => clearTimeout(timer));
+}
+
 type SourcePick =
   | { kind: 'none' }
   | { kind: 'unavailable' }
@@ -427,8 +444,11 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
     await deps.writeBinding(sessionId, key ? bindingFor(source, groupProviderId, key) : null);
   }
 
-  /** 读到的绑定与组设置(组所在电脑读不到时返回 null，什么都不动)。 */
-  async function loadBound(sessionId: string): Promise<{
+  /**
+   * 读到的绑定与组设置(组所在电脑读不到时返回 null，什么都不动)。`readTimeoutMs` 内读不到按
+   * 「读不到」处理——发送前的检查不能被一台不响应的组所在电脑拖住。
+   */
+  async function loadBound(sessionId: string, readTimeoutMs?: number): Promise<{
     binding: ProviderGroupBinding;
     source: GroupSource;
     config: ProviderGroupConfig | null;
@@ -437,7 +457,8 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
     if (!binding) return null;
     const source = sourceFor(binding.groupDeviceId);
     if (!source) return null;
-    const config = await source.readGroup(binding.providerId).catch(() => undefined);
+    const read = source.readGroup(binding.providerId).catch(() => undefined);
+    const config = readTimeoutMs === undefined ? await read : await readGroupWithin(read, readTimeoutMs);
     if (config === undefined) return null;
     return { binding, source, config };
   }
@@ -447,7 +468,15 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
     const cause = classifyProviderGroupSwitchCause(signals);
     if (!cause || !deps.readBinding(sessionId)) return false;
     const bound = await loadBound(sessionId);
-    if (!bound?.config?.autoSwitch) return false;
+    if (!bound) return false;
+    // 组所在电脑明确说组已删除(config = null)：立即解除绑定，任务成为普通任务——之后同一台电脑
+    // 重新加入、或重建同一个组也不会恢复自动换电脑(§6.1、§9.4)。读不到(undefined，loadBound
+    // 已滤掉)保留绑定，交回原有报错。
+    if (!bound.config) {
+      await deps.writeBinding(sessionId, null);
+      return false;
+    }
+    if (!bound.config.autoSwitch) return false;
     const { binding, source, config } = bound;
     if (!(await deps.isFailoverEligible(sessionId))) return false;
     const row = await deps.readSessionRow(sessionId);
@@ -685,7 +714,13 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
       const source = sourceFor(context.groupDeviceId);
       if (!cause || !source) return null;
       const config = await source.readGroup(context.groupProviderId).catch(() => undefined);
-      if (!config?.autoSwitch) return null;
+      // 读不到不动绑定；明确组已删除才解除(§6.1、§9.4)，任务成为普通任务。
+      if (config === undefined) return null;
+      if (!config) {
+        await deps.writeBinding(context.sessionId, null);
+        return null;
+      }
+      if (!config.autoSwitch) return null;
       source.cool(context.groupProviderId, context.member.key, cause, null);
       source.invalidate(context.member);
       const tried = router.markTried(context.sessionId, context.member.key);
@@ -725,8 +760,16 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
 
     async beforeSend(sessionId) {
       if (!deps.readBinding(sessionId) || deps.isTurnRunning(sessionId)) return;
-      const bound = await loadBound(sessionId);
-      if (!bound?.config?.autoSwitch) return;
+      // 读组设置也纳入发送前检查的超时(§「发送前」)：组所在电脑断线或不响应时不让发送干等默认的
+      // 30s 请求超时，超时保留绑定照常发送。
+      const bound = await loadBound(sessionId, PROVIDER_GROUP_BEFORE_SEND_TIMEOUT_MS);
+      if (!bound) return;
+      // 组所在电脑明确说组已删除：立即解除绑定(同 failover)；读不到不动。
+      if (!bound.config) {
+        await deps.writeBinding(sessionId, null);
+        return;
+      }
+      if (!bound.config.autoSwitch) return;
       const { binding, source, config } = bound;
       if (!(await deps.isFailoverEligible(sessionId))) return;
       const row = await deps.readSessionRow(sessionId);

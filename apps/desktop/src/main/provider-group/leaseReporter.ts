@@ -74,18 +74,26 @@ export function createProviderGroupLeaseReporter(deps: ProviderGroupLeaseReporte
       if (!entries.length) lastSent.delete(owner);
       else lastSent.set(owner, serialized);
       void deps.send(owner, nextSeq(), entries).catch((error) => {
-        // 下次心跳或下一次变化时重报：清掉记录，避免以为已经报过。
-        if (entries.length) lastSent.set(owner, '');
+        // 下次心跳或下一次变化时重报：清掉记录，避免以为已经报过。空报告也要能重试——最后一个
+        // 经组任务结束时发的就是空报告，失败不重试的话组所在电脑会把已结束的任务一直计入负载。
+        lastSent.set(owner, '');
         deps.log.warn('provider group: reporting running tasks failed', {
           error: error instanceof Error ? error.message : String(error),
         });
+        scheduleRetry();
       });
     }
     if (heartbeat !== null) {
       cancel(heartbeat);
       heartbeat = null;
     }
-    if (anyRunning) heartbeat = schedule(() => {
+    if (anyRunning) scheduleRetry();
+  }
+
+  /** 挂一次心跳重试：失败的报告(含空报告)没有任务在跑时也要重发。 */
+  function scheduleRetry(): void {
+    if (disposed || heartbeat !== null) return;
+    heartbeat = schedule(() => {
       heartbeat = null;
       flush(true);
     }, PROVIDER_GROUP_LEASE_HEARTBEAT_MS);
