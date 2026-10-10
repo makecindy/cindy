@@ -539,6 +539,7 @@ function BotGroupChatContent({ groupId }: { groupId: string }) {
   return (
     <div className="flex h-full min-w-0 overflow-hidden" onKeyDown={event => {
       if (group.serverBacked && threadRootId && event.key === 'Escape' && !event.defaultPrevented && !event.nativeEvent.isComposing && event.keyCode !== 229) {
+        if (!event.currentTarget.contains(event.target as Node) || document.querySelector('[data-text-lightbox-overlay]')) return;
         event.stopPropagation(); closeThread();
       }
     }}>

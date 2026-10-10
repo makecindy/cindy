@@ -68,6 +68,7 @@ vi.mock('@/contexts/dataOwnerGeneration', () => ({
 vi.mock('@/lib/toast', () => ({ toast: { error: mocks.toastError, warning: mocks.toastWarning } }));
 vi.mock('@/components/ui/confirm-dialog-provider', () => ({
   useConfirmDialog: () => ({ confirm: vi.fn(async () => false) }),
+  useOptionalConfirmDialog: () => null,
 }));
 vi.mock('@/components/chat/MarkdownRenderer', () => ({
   MarkdownRenderer: ({ content }: { content: string }) => <div data-markdown>{content}</div>,
@@ -426,6 +427,35 @@ describe('BotGroupChatView', () => {
     expect((within(panel).getByRole('textbox') as HTMLTextAreaElement).value).toBe('Thread draft');
     await user.keyboard(' continues');
     expect((composer as HTMLTextAreaElement).value).toBe('Main draft continues');
+  });
+
+  it.each(['image', 'text-trigger', 'text-control'])('lets %s attachment preview close first with Escape and retains the thread draft', async kind => {
+    vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+    mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: true, messages: [msg({
+      attachments: [{ id: 'attachment', name: kind === 'image' ? 'photo.png' : 'note.md', category: kind === 'image' ? 'image' : 'text',
+        mimeType: kind === 'image' ? 'image/png' : 'text/markdown', size: 10,
+        url: kind === 'image' ? 'cindy-media://blobs/photo.png' : null, path: kind === 'image' ? null : '/tmp/note.md' }],
+    })] }) });
+    Object.assign(window.electronAPI, { readTextFilePreview: vi.fn().mockResolvedValue({ success: true, data: 'Preview note content', size: 20 }) });
+    const user = userEvent.setup();
+    renderView();
+    await user.click(await screen.findByRole('button', { name: 'bots.groupChat.server.reply' }));
+    const panel = screen.getByRole('complementary');
+    await user.type(within(panel).getByRole('textbox'), 'Unsent thread reply');
+    await user.click(screen.getByRole('button', { name: kind === 'image' ? 'photo.png' : 'note.md' }));
+    const preview = kind === 'image' ? document.activeElement! : document.querySelector('[data-text-lightbox-overlay]')!;
+    if (kind !== 'image') {
+      await screen.findByText('Preview note content');
+      if (kind === 'text-control') within(preview as HTMLElement).getAllByRole('button', { name: 'chat.lightbox.close' })[0]!.focus();
+      else expect(screen.getByRole('main').contains(document.activeElement)).toBe(true);
+    }
+    await user.keyboard('{Escape}');
+    expect(screen.getByRole('complementary')).toBe(panel);
+    expect((within(panel).getByRole('textbox') as HTMLTextAreaElement).value).toBe('Unsent thread reply');
+    await waitFor(() => expect(document.contains(preview)).toBe(false));
+    within(panel).getByRole('textbox').focus();
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('complementary')).toBeNull();
   });
 
   it('lets Escape dismiss a portalled reaction picker without closing the thread', async () => {
