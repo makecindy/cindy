@@ -23,6 +23,10 @@ const runtimeControlSource = readFileSync(
   resolve(mainRoot, 'maker-ipc/sessionRuntimeControl.ts'),
   'utf8',
 ).replace(/\r\n?/g, '\n');
+const patchSource = readFileSync(
+  resolve(mainRoot, 'maker-ipc/pendingRoutePersistence.ts'),
+  'utf8',
+).replace(/\r\n?/g, '\n');
 const deviceLinkHostSource = readFileSync(
   resolve(mainRoot, 'device-link/index.ts'),
   'utf8',
@@ -413,10 +417,14 @@ describe('session runtime control wiring', () => {
       'persistRoute: async (sessionId, route) => {',
       'logger: log,',
     );
-    const resolveAxes = persistRoute.indexOf('const axes = resolveSessionRuntimeAxes({');
+    // 轴向取值/收敛已抽进纯函数 buildPendingRoutePatch(pendingRoutePersistence.ts,
+    // PR 修 null effort 落库),接线侧断言委托发生且保持「补丁计算 → 落库 →
+    // 内存 → 广播」的顺序;轴向行为与 null 守卫由 pendingRoutePersistence.test.ts
+    // 的行为用例锁定。
+    const buildPatch = persistRoute.indexOf('buildPendingRoutePatch({');
     const persist = persistRoute.indexOf(
       'await pendingDb.drizzle.update(sessions).set(patch)',
-      resolveAxes,
+      buildPatch,
     );
     const commitEffort = persistRoute.indexOf('setSessionEffort(sessionId, finalEffort);', persist);
     const commitFast = persistRoute.indexOf(
@@ -427,18 +435,19 @@ describe('session runtime control wiring', () => {
 
     expect(persistRoute).toContain('const [desiredRow] = await pendingDb');
     expect(persistRoute).toContain('assertPendingOwner();');
-    expect(persistRoute).toContain('const restoringPreviousRoute =');
-    expect(persistRoute).toContain('let finalEffort = restoringPreviousRoute && route.effort');
-    expect(persistRoute).toContain(
-      'let finalFastMode = restoringPreviousRoute && route.fastMode !== undefined',
-    );
-    expect(persistRoute).toContain('effortExplicit: false');
-    expect(persistRoute).toContain('fastExplicit: false');
-    expect(resolveAxes).toBeGreaterThan(-1);
-    expect(persist).toBeGreaterThan(resolveAxes);
+    expect(buildPatch).toBeGreaterThan(-1);
+    expect(buildPatch).toBeGreaterThan(persistRoute.indexOf('const [desiredRow] = await pendingDb'));
+    expect(persist).toBeGreaterThan(buildPatch);
     expect(commitEffort).toBeGreaterThan(persist);
     expect(commitFast).toBeGreaterThan(commitEffort);
     expect(broadcast).toBeGreaterThan(commitFast);
+
+    // 轴向收敛仍在补丁计算内(非显式选择),且固定档位模型收敛为 null 时省略
+    // effort 键 —— sessions.effort NOT NULL,写 null 曾冻结会话输入队列。
+    expect(patchSource).toContain('resolveSessionRuntimeAxes({');
+    expect(patchSource).toContain('effortExplicit: false');
+    expect(patchSource).toContain('fastExplicit: false');
+    expect(patchSource).toContain('...(effort ? { effort } : {})');
   });
 
   it('commits device-link atomic axes before a rebuilt queue can wake', () => {

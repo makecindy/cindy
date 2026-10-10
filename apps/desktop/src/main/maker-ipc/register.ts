@@ -120,6 +120,7 @@ import {
   storedCustomProviderId,
   isLocalOnlyProviderForAgent,
   isOrganizationManagedProvider,
+  type CatalogModel,
 } from '@cindy/model-providers';
 import { createId } from '@paralleldrive/cuid2';
 import {
@@ -1105,6 +1106,7 @@ import {
   resolveRetainedRuntimeEffort,
 } from './runtimeSelectionAxes.js';
 import { runSchedulerQueuedPreparation } from './schedulerQueuedPreparation.js';
+import { buildPendingRoutePatch } from './pendingRoutePersistence.js';
 import {
   acceptSessionRuntimeAxisMutation,
   acceptSessionRuntimeMutation,
@@ -17079,22 +17081,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       assertPendingOwner();
       const finalModel = route.model ?? desiredRow?.model ?? null;
       const previousRoute = pendingCredentialSwitchHolder?.get(sessionId)?.previousRoute;
-      const restoringPreviousRoute =
-        !!route.model &&
-        route.model === previousRoute?.model &&
-        route.providerId === previousRoute.providerId;
-      let finalEffort = restoringPreviousRoute && route.effort && isSupportedRuntimeEffort(route.effort)
-        ? route.effort
-        : isSupportedRuntimeEffort(desiredRow?.effort)
-          ? desiredRow.effort
-          : !desiredRow && route.effort && isSupportedRuntimeEffort(route.effort)
-            ? route.effort
-            : null;
-      let finalFastMode = restoringPreviousRoute && route.fastMode !== undefined
-        ? route.fastMode
-        : desiredRow
-          ? desiredRow.fastMode === true
-          : route.fastMode === true;
+      let catalogModel: CatalogModel | undefined;
       if (agentKind && finalModel) {
         const runtimeAgentKind = dbToMakerAgentKind(agentKind);
         const providers = await getDesktopProviderService().listProviders({
@@ -17108,44 +17095,34 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           runtimeAgentKind,
         );
         const finalProvider = providers.find((provider) => provider.id === finalProviderId);
-        const catalogModel = findCatalogModel(finalProvider, finalModel, runtimeAgentKind, {
+        catalogModel = findCatalogModel(finalProvider, finalModel, runtimeAgentKind, {
           exact: true,
         });
-        if (catalogModel) {
-          const axes = resolveSessionRuntimeAxes({
-            model: catalogModel,
-            effort: finalEffort,
-            fastMode: finalFastMode,
-            effortExplicit: false,
-            fastExplicit: false,
-          });
-          if (axes.ok) {
-            finalEffort = axes.effort;
-            finalFastMode = axes.fastMode;
-          }
-        }
       }
-      const patch: Record<string, unknown> = {
-        providerId: route.providerId,
-        effort: finalEffort,
-        fastMode: finalFastMode,
-      };
-      if (route.model) patch.model = route.model;
-      if (route.model && agentKind) {
-        const verifiedWindow = lookupVerifiedContextWindow(
-          (resolvedAgentKind, modelId, pid) =>
-            resolveConfiguredContextWindow(
-              getActiveCatalog(),
-              dbToMakerAgentKind(resolvedAgentKind || agentKind),
-              pid,
-              modelId,
-            ),
-          route.model,
-          route.providerId ?? null,
-          dbToMakerAgentKind(agentKind),
-        );
-        if (verifiedWindow) patch.contextWindow = verifiedWindow;
-      }
+      const verifiedWindow = route.model && agentKind
+        ? lookupVerifiedContextWindow(
+            (resolvedAgentKind, modelId, pid) =>
+              resolveConfiguredContextWindow(
+                getActiveCatalog(),
+                dbToMakerAgentKind(resolvedAgentKind || agentKind),
+                pid,
+                modelId,
+              ),
+            route.model,
+            route.providerId ?? null,
+            dbToMakerAgentKind(agentKind),
+          )
+        : undefined;
+      // patch 计算抽成纯函数(buildPendingRoutePatch):effort 收敛为 null 时省略
+      // 该键 —— sessions.effort 是 NOT NULL,固定档位模型(efforts=[])写 null
+      // 会撞约束,回滚路径上曾因此冻结会话输入队列。
+      const { patch, effort: finalEffort, fastMode: finalFastMode } = buildPendingRoutePatch({
+        route,
+        currentRow: desiredRow,
+        previousRoute,
+        catalogModel,
+        verifiedWindow,
+      });
       assertPendingOwner();
       await pendingDb.drizzle.update(sessions).set(patch).where(eq(sessions.id, sessionId));
       assertPendingOwner();
