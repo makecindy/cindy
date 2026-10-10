@@ -315,7 +315,10 @@ sessionRunningRetry 就停。每次因 replacement 关闭而重新入队都计�
   触发定时任务的成功收口。回归见 `agents/codex/index.test.ts` 的 pending confirmation
   与 human continuation 用例，以及 Desktop `sessionEventPipeline.test.ts`。
   用户明确要求逐项访谈／确认清单时，Codex 的 `cindy__ask_user_question` 将已知问题一次
-  交给现有逐题卡片（最多 50 项），等整份回答后返回；普通澄清仍建议 1–3 项，原生
+  交给现有逐题卡片（最多 50 项），等整份回答后返回。Desktop 保留整份清单；同步渠道
+  卡片由 `maker-ipc/interactionRouter.ts` 逐题发送并汇总答案，避免只展示首题或把长问卷
+  展开成超大飞书卡片。每题使用独立卡片 id；取消、超时或渠道失效后不再发后续题。
+  普通澄清仍建议 1–3 项，原生
   `request_user_input` 的三题上限不变。超出动态工具上限或规范化后问题 id／正文重复时
   明确报错，不静默丢项或覆盖答案。依赖前一答案才能确定的问题仍在答案返回后追问；
   不由宿主推断合同字段或在普通完成后强行续跑。回归见 `agents/codex/index.test.ts`、

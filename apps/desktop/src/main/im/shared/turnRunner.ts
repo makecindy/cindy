@@ -3736,7 +3736,7 @@ export function createTurnRunner(
         log.error(`sendInteractiveCard failed: ${msg}`);
         const kind = req.kind as InteractionDecision['kind'];
         if (kind === 'ask_user_question') {
-          return { kind, answers: {} };
+          return { kind, answers: {}, dismissed: true };
         }
         return { kind, behavior: 'deny', reason: `card send failed: ${msg}` };
       }
@@ -3781,7 +3781,7 @@ export function createTurnRunner(
         log.error(`pending interaction failed: ${msg}`);
         const kind = req.kind as InteractionDecision['kind'];
         if (kind === 'ask_user_question') {
-          return { kind, answers: {} };
+          return { kind, answers: {}, dismissed: true };
         }
         return { kind, behavior: 'deny', reason: `pending failed: ${msg}` };
       }

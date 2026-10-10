@@ -69,6 +69,8 @@ interface PendingRequest {
   shared?: SharedPermission;
   routeToken: symbol | null;
   request: InteractionRequest;
+  surfaceRequestId(): string;
+  paginated: boolean;
   cancel(decision: InteractionDecision): void;
 }
 
@@ -159,12 +161,12 @@ class SessionInteractionRouter {
         released = true;
         if (this.activeRoute?.token !== active.token) return;
         this.activeRoute = null;
-        for (const [requestId, pending] of this.pending) {
+        for (const pending of this.pending.values()) {
           if (pending.routeToken !== active.token) continue;
           const decision = safeDecision(pending.request, reason);
-          if (pending.shared) pending.cancel(decision);
+          if (pending.shared || pending.paginated) pending.cancel(decision);
           const handledBySurface = callSafely(
-            () => active.onCancel?.(requestId, decision) === true,
+            () => active.onCancel?.(pending.surfaceRequestId(), decision) === true,
           ) === true;
           if (!pending.shared && !handledBySurface) pending.cancel(decision);
         }
@@ -203,6 +205,14 @@ class SessionInteractionRouter {
     // channel using this router automatically shares ordinary tool permissions.
     const shared = request.kind === 'permission' && active?.route.interactionSurface === 'channel-card'
       ? createSharedPermission() : undefined;
+    // Hook and several IM renderers only present the first question. Even
+    // multi-question cards can exceed the platform payload budget for a long
+    // checklist. Keep one logical interaction, but send one question per card.
+    const paginated = request.kind === 'ask_user_question'
+      && request.delivery !== 'async'
+      && request.questions.length > 1
+      && active?.route.interactionSurface === 'channel-card';
+    let surfaceRequestId = request.requestId;
 
     let cancel!: (decision: InteractionDecision) => void;
     let cancelledByRouter = false;
@@ -217,13 +227,15 @@ class SessionInteractionRouter {
       shared,
       routeToken: active?.token ?? null,
       request,
+      surfaceRequestId: () => surfaceRequestId,
+      paginated,
       cancel,
     });
     const abort = () => {
       const decision = safeDecision(request, 'session_aborted');
       cancel(decision);
       if (active?.route.interactionSurface === 'channel-card' || active?.route.interactionSurface === 'headless') {
-        callSafely(() => active.onCancel?.(request.requestId, decision));
+        callSafely(() => active.onCancel?.(surfaceRequestId, decision));
       } else {
         callSafely(() => this.desktopCancel?.(request.requestId, decision));
       }
@@ -240,8 +252,9 @@ class SessionInteractionRouter {
               shared.decide(decision);
               return;
             }
+            if (paginated) cancel(decision);
             const handledBySurface = callSafely(
-              () => active?.onCancel?.(request.requestId, decision) === true,
+              () => active?.onCancel?.(surfaceRequestId, decision) === true,
             ) === true;
             if (!handledBySurface) cancel(decision);
           }, timeoutMs)
@@ -261,6 +274,23 @@ class SessionInteractionRouter {
           catch { fail(); }
         }
         handled = shared.result;
+      } else if (paginated && request.kind === 'ask_user_question') {
+        const questionnaire = request;
+        handled = (async (): Promise<InteractionDecision> => {
+          let answers: Record<string, string> = {};
+          for (const [index, question] of questionnaire.questions.entries()) {
+            if (cancelledByRouter || this.activeRoute?.token !== active?.token) {
+              return safeDecision(questionnaire, 'interaction_route_released');
+            }
+            // A late click on a previous card must not answer the next one.
+            surfaceRequestId = `${questionnaire.requestId}:question:${index}`;
+            const decision = await handler({ ...questionnaire, requestId: surfaceRequestId, questions: [question] });
+            if (decision.kind !== 'ask_user_question') return safeDecision(questionnaire, 'interaction_handler_failed');
+            answers = { ...answers, ...decision.answers };
+            if (decision.dismissed) return { ...decision, answers };
+          }
+          return { kind: 'ask_user_question', answers };
+        })();
       } else {
         handled = handler(request);
       }

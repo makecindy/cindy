@@ -37,6 +37,11 @@ Cindy 有两个 Telegram bot，用户看到的是同一个产品：
 
 ## 一、已同源
 
+同步多题问卷通过 `maker-ipc/interactionRouter.ts` 逐题发渠道卡片，收齐后一次返回答案；
+官方 Hook 与个人富卡渠道共用此分页，渲染器仍只需处理当前题。每页独立 id 防止旧按钮
+回答下一题；取消／超时／路由释放结束整份问卷。Desktop 仍一次接收完整清单，异步提问
+沿用原生命周期。回归见 `maker-ipc/__tests__/interactionRouter.test.ts`。
+
 官方与个人 bot 的 IM 轮次都通过 `SendOrigin.surface = 'im'` 标记成功回复的查看入口；
 App 完成未读与提醒统一由 `renderer/hooks/useSessionRunningStatus.ts` 和
 `main/agent-island/service.ts` 静默处理，后者也负责手机／远程状态。消息历史、错误、
