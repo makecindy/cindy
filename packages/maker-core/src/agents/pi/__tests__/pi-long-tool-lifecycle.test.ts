@@ -39,7 +39,15 @@ vi.mock('../transport.js', async (importOriginal) => {
       const program = `
         const { spawn } = require('node:child_process');
         const readline = require('node:readline');
-        const output = frame => process.stdout.write(JSON.stringify(frame) + '\\n');
+        const { writeSync, closeSync } = require('node:fs');
+        // Standard stdout has a non-closing destroy hook. end() can leave the
+        // Windows pipe open while this fixture is still alive. Use the actual
+        // fd without creating process.stdout, and close it only after writes.
+        const output = frame => writeSync(1, JSON.stringify(frame) + '\\n');
+        const endOutput = tail => {
+          if (tail !== undefined) writeSync(1, tail);
+          closeSync(1);
+        };
         const result = { content: [{ type: 'text', text: 'fixture build complete' }] };
         let rpcLost = false;
         let eofOnAbort = false;
@@ -55,14 +63,14 @@ vi.mock('../transport.js', async (importOriginal) => {
           if (rpcLost) return process.exit(23);
           if (cmd.type === 'fixture_finish') {
             finish(cmd.omit);
-            if (cmd.eof) process.stdout.end();
+            if (cmd.eof) endOutput();
             return;
           }
-          if (cmd.type === 'fixture_eof_tail') return process.stdout.end(JSON.stringify(cmd.frame));
+          if (cmd.type === 'fixture_eof_tail') return endOutput(JSON.stringify(cmd.frame));
           if (cmd.type === 'fixture_eof_on_abort') { eofOnAbort = true; return; }
           if (cmd.type === 'fixture_retry_exhausted_eof') {
             output({ type: 'auto_retry_end', success: false, finalError: 'The operation timed out.' });
-            return process.stdout.end();
+            return endOutput();
           }
           if (cmd.type === 'fixture_retry_exhausted_then_next_prompt_eof') {
             output({ type: 'auto_retry_end', success: false, finalError: 'The operation timed out.' });
@@ -73,7 +81,7 @@ vi.mock('../transport.js', async (importOriginal) => {
           if (cmd.type === 'fixture_lose_rpc') {
             rpcLost = true;
             output({ type: 'fixture_rpc_losing' });
-            return process.stdout.end();
+            return endOutput();
           }
           if (cmd.type === 'fixture_exit_with_descendant') {
             const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 30000)'], {
@@ -97,12 +105,12 @@ vi.mock('../transport.js', async (importOriginal) => {
               ? { sessionFile: '/fixture/session.jsonl', model: { id: 'm', provider: 'cindy', contextWindow: 200000 } }
               : { commands: [], entries: [] } });
           if (cmd.type === 'prompt') {
-            if (loseNextPrompt) return process.stdout.end();
+            if (loseNextPrompt) return endOutput();
             output({ type: 'agent_start' });
             output({ type: 'tool_execution_start', toolCallId: 'build-1', toolName: 'bash', args: { command: 'fixture-build', timeout: 1800 } });
           }
           if (cmd.type === 'abort') {
-            if (eofOnAbort) process.stdout.end();
+            if (eofOnAbort) endOutput();
             else output({ type: 'agent_settled' });
           }
         });
@@ -280,6 +288,13 @@ describe('Pi long tool lifecycle through real stdio RPC', () => {
     const write = vi.spyOn(transport, 'writeLine');
     const exit = vi.fn();
     transport.onClose(exit);
+    let executorAliveAtDisconnect = false;
+    transport.onDisconnect?.(() => {
+      try {
+        process.kill(transport.pid!, 0);
+        executorAliveAtDisconnect = true;
+      } catch { /* The assertion below must distinguish EOF from process exit. */ }
+    });
     await transport.writeLine(JSON.stringify({ type: 'fixture_lose_rpc' }));
     await vi.waitFor(() => expect(nativeFrames).toContain('fixture_rpc_losing'));
     await vi.waitFor(() => expect(events.some(event => event.type === 'error')).toBe(true), { timeout: 2000 });
@@ -289,6 +304,7 @@ describe('Pi long tool lifecycle through real stdio RPC', () => {
       message: expect.stringContaining('tool outcome is unknown'),
     });
     expect(events.some(event => event.type === 'tool_result_full')).toBe(false);
+    expect(executorAliveAtDisconnect).toBe(true);
     await vi.waitFor(() => expect(exit).toHaveBeenCalledOnce());
     await vi.waitFor(() => expect(session!.getStatus()).toBe('closed'));
     expect(events.filter(event => event.type === 'error')).toHaveLength(1);
