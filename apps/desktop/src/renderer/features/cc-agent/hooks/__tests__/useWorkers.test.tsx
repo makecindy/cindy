@@ -131,6 +131,35 @@ describe('useWorkers / worker projection store', () => {
     vi.useRealTimers();
   });
 
+  it('projects the execution device of a worker running on another computer', async () => {
+    mocks.listWorkersByLeads.mockResolvedValue({
+      'lead-1': [
+        {
+          ...workerRecord('worker-a', 'proxy-a', true, 'running'),
+          executionDevice: {
+            deviceId: 'mac-mini',
+            remoteSessionId: 'remote-a',
+            deviceName: 'Mac mini',
+            reachable: false,
+            workingDir: '/Users/demo/Interviews',
+          },
+        },
+        { ...workerRecord('worker-b', 'session-b'), executionDevice: { deviceId: 'x' } },
+      ],
+    });
+    const hook = renderHook(() => useWorkers('lead-1'));
+    await waitFor(() => expect(hook.result.current.workers).toHaveLength(2));
+    expect(hook.result.current.workers[0]!.executionDevice).toEqual({
+      deviceId: 'mac-mini',
+      remoteSessionId: 'remote-a',
+      deviceName: 'Mac mini',
+      reachable: false,
+      workingDir: '/Users/demo/Interviews',
+    });
+    // 缺远端任务 id 的记录不当成远端 Worker。
+    expect(hook.result.current.workers[1]).not.toHaveProperty('executionDevice');
+  });
+
   it('hydrates local N lead projections through one batch IPC', async () => {
     const sessions = [leadSession('lead-1'), leadSession('lead-2')];
     const hook = renderHook(() => useOrcaLeadWorkerMap(sessions));

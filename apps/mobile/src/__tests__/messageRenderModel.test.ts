@@ -91,7 +91,10 @@ describe('messageRenderModel', () => {
       isSessionStreaming: true,
       autoResumePending: { error: 'socket hang up', attempt: 2, maxAttempts: 5, sessionTotal: 3 },
     });
-    expect(expectType(items[0], 'message').message.isTurnFinalAssistant).toBe(true);
+    const interrupted = expectType(items[0], 'work_group');
+    expect(interrupted.isStreaming).toBe(false);
+    expect(interrupted.children).toHaveLength(1);
+    expect(interrupted.children[0]).toMatchObject({ type: 'message', message: { body: 'partial' } });
     expect(expectType(items[1], 'message').message).toMatchObject({
       systemCardType: 'auto-resume',
       systemCardData: { error: 'socket hang up', attempt: 2, maxAttempts: 5, sessionTotal: 3, live: true },

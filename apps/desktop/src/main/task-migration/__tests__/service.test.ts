@@ -534,6 +534,16 @@ describe('resumable cross-computer copy', () => {
     expect(state.snapshot).not.toHaveBeenCalled();
   });
 
+  it('rejects a worker task opened here by another computer’s collaboration lead', async () => {
+    state.rows.get('A')!.get('fork')!.orcaRemoteLead = JSON.stringify({
+      leadDeviceId: 'C',
+      leadSessionId: 'lead-on-c',
+      workerLabel: '转写',
+    });
+    await expect(start()).rejects.toThrow('MIGRATION_TASK_UNSUPPORTED');
+    expect(state.exported).not.toHaveBeenCalled();
+  });
+
   it('rejects an idle runtime whose terminal delivery or accepted queue is still pending', async () => {
     state.boundaryBusy = true;
     await expect(start()).rejects.toThrow('MIGRATION_TASK_RUNNING');

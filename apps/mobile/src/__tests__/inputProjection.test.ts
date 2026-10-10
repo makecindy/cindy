@@ -18,6 +18,8 @@ import { textComposerDocument } from '@/session/composerDocument';
 import { localizeAgentError } from '@/session/agentErrorI18n';
 import type { RemoteSession } from '@/session/types';
 import { buildOutboxItem } from '@/session/sessionOutbox';
+import { buildMobileMessageRenderItems } from '@/session/messageRenderModel';
+import { CONTINUE_AFTER_ERROR_PROMPT, CONTINUE_AFTER_APP_EXIT_PROMPT } from '@cindy/maker-shared/synthetic-trigger';
 
 const ATTACHMENT_SHA256 = 'a'.repeat(64);
 
@@ -42,6 +44,24 @@ function session(patch: Partial<RemoteSession> = {}): RemoteSession {
 }
 
 describe('inputProjection', () => {
+  it.each([CONTINUE_AFTER_ERROR_PROMPT, CONTINUE_AFTER_APP_EXIT_PROMPT])('folds interrupted work using the actual queued continuation envelope: %s', (prompt) => {
+    const queued = buildQueuedTextMessage(session(), prompt, new Date('2026-01-01T00:00:03Z'), 'resume');
+    for (const content of [queued.chatMessage.content, queued.persistedContent]) {
+      const rows = [
+        { id: 'user', role: 'user' as const, content: 'Work' },
+        { id: 'progress', role: 'assistant' as const, content: 'Checking' },
+        { id: 'error', role: 'error' as const, content: 'Interrupted' },
+        { id: 'resume', role: 'user' as const, content },
+      ].map((row, index) => ({ ...row, clientId: row.id, sessionId: 's1', toolUseId: null, agentMeta: null,
+        createdAt: new Date(Date.UTC(2026, 0, 1, 0, 0, index)).toISOString() }));
+      const items = buildMobileMessageRenderItems(rows, { isSessionStreaming: true });
+      expect(items.map(item => item.type)).toEqual(['message', 'work_group', 'message']);
+      expect(items[1]).toMatchObject({ isStreaming: false, children: [
+        { type: 'message', message: { body: 'Checking' } },
+      ] });
+    }
+  });
+
   it.each([true, false, undefined])('keeps the stored Plan snapshot %s across a later host toggle and serialization', (planModeAtSend) => {
     const original = buildOutboxItem({ clientId: 'plan-id', sessionId: 's1', text: 'plan snapshot',
       permissionModeAtSend: 'ask', planModeAtSend, readyAttachments: [], claimedUploads: [] });
@@ -657,4 +677,3 @@ describe('normalizeInputProjection usageLimitWait', () => {
       .toBeNull();
   });
 });
-

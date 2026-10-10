@@ -3288,13 +3288,18 @@ function orcaRemoveWorker(db: Database.Database, args: unknown): string | null {
   const payload = asRecord(args, 'orca.removeWorker args');
   const workerId = expectString(payload.workerId, 'workerId');
   const now = expectNumber(payload.now, 'now');
-  const selectWorker = db.prepare('SELECT session_id AS sessionId FROM orca_workers WHERE id = ? LIMIT 1');
+  const selectWorker = db.prepare('SELECT session_id AS sessionId, execution_device_id AS deviceId, remote_released_at AS releasedAt FROM orca_workers WHERE id = ? LIMIT 1');
   const deleteWorker = db.prepare('DELETE FROM orca_workers WHERE id = ?');
   const archiveSession = db.prepare("UPDATE sessions SET status = 'archived', orca_role = NULL, updated_at = ? WHERE id = ? AND status != 'deleted'");
   const transaction = db.transaction(() => {
-    const row = selectWorker.get(workerId) as { sessionId: string } | undefined;
+    const row = selectWorker.get(workerId) as { sessionId: string; deviceId: string | null; releasedAt: number | null } | undefined;
     if (!row) return null;
-    deleteWorker.run(workerId);
+    // 回滚先隐藏代理并释放 label；远端 stop/release 未确认前必须保留持久重试路由。
+    if (row.deviceId && row.releasedAt == null) {
+      db.prepare('UPDATE orca_workers SET label = NULL, updated_at = ? WHERE id = ?').run(now, workerId);
+    } else {
+      deleteWorker.run(workerId);
+    }
     const archived = archiveSession.run(now, row.sessionId);
     return archived.changes > 0 ? row.sessionId : null;
   });
@@ -3394,9 +3399,31 @@ function orcaUpsertWorker(db: Database.Database, args: unknown): void {
     if (!activeTeam) {
       throw new Error(`Orca team ${teamId} is no longer active`);
     }
+    if (payload.remoteExecution !== undefined) {
+      const remote = asRecord(payload.remoteExecution, 'remoteExecution');
+      if (remote.proxySession !== undefined) {
+        const proxy = asRecord(remote.proxySession, 'remoteExecution.proxySession');
+        db.prepare("INSERT INTO sessions (id, title, working_dir, workspace_kind, model, effort, permission_mode, fast_mode, status, agent_kind, orca_role, source, created_at, updated_at) VALUES (?, ?, NULL, 'project', ?, ?, ?, ?, 'active', ?, 'worker', 'desktop', ?, ?)").run(
+          sessionId, expectString(proxy.title, 'proxySession.title'),
+          expectString(proxy.model, 'proxySession.model'),
+          proxy.effort == null ? 'high' : expectString(proxy.effort, 'proxySession.effort'),
+          expectString(proxy.permissionMode, 'proxySession.permissionMode'), proxy.fastMode === true ? 1 : 0,
+          expectString(proxy.agentKind, 'proxySession.agentKind'), now, now,
+        );
+      }
+    }
     if (payload.focused === true) {
       db.prepare('UPDATE orca_workers SET focused = 0, updated_at = ? WHERE team_id = ? AND focused = 1').run(now, teamId);
     }
+    const persistRemoteExecution = () => {
+      if (payload.remoteExecution === undefined) return;
+      const remote = asRecord(payload.remoteExecution, 'remoteExecution');
+      const deviceId = expectString(remote.deviceId, 'remoteExecution.deviceId');
+      const remoteSessionId = expectString(remote.remoteSessionId, 'remoteExecution.remoteSessionId');
+      db.prepare('UPDATE orca_workers SET execution_device_id = ?, remote_session_id = ? WHERE session_id = ?').run(deviceId, remoteSessionId, sessionId);
+      db.prepare("UPDATE sessions SET orca_role = 'worker' WHERE id = ?").run(sessionId);
+      db.prepare('DELETE FROM orca_remote_opens WHERE device_id = ? AND remote_session_id = ?').run(deviceId, remoteSessionId);
+    };
     const existing = db.prepare('SELECT * FROM orca_workers WHERE id = ? LIMIT 1').get(id) as Record<string, unknown> | undefined;
     if (existing) {
       db.prepare('UPDATE orca_workers SET team_id = ?, session_id = ?, status = ?, label = ?, worktree_branch = ?, role = ?, focused = ?, idle_since = ?, updated_at = ? WHERE id = ?').run(
@@ -3411,6 +3438,7 @@ function orcaUpsertWorker(db: Database.Database, args: unknown): void {
         now,
         id,
       );
+      persistRemoteExecution();
       return;
     }
     const bySession = db.prepare('SELECT * FROM orca_workers WHERE session_id = ? LIMIT 1').get(sessionId) as Record<string, unknown> | undefined;
@@ -3426,6 +3454,7 @@ function orcaUpsertWorker(db: Database.Database, args: unknown): void {
         now,
         sessionId,
       );
+      persistRemoteExecution();
       return;
     }
     db.prepare('INSERT INTO orca_workers (id, team_id, session_id, status, label, worktree_branch, role, focused, idle_since, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)').run(
@@ -3441,6 +3470,7 @@ function orcaUpsertWorker(db: Database.Database, args: unknown): void {
       now,
       now,
     );
+    persistRemoteExecution();
   })();
 }
 

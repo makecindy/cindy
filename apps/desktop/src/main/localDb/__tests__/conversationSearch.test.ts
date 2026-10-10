@@ -121,6 +121,7 @@ function createSearchDb(): Database.Database {
       writable_dirs TEXT NOT NULL DEFAULT '[]',
       remote_host_id TEXT,
       agent_device_id TEXT,
+      orca_remote_lead TEXT,
       active_turn_started_at INTEGER,
       active_turn_pid INTEGER,
       last_turn_ended_at INTEGER,

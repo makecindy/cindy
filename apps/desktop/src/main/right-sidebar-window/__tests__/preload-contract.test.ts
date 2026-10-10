@@ -304,7 +304,7 @@ describe('sidebar nested namespace contract', () => {
     expect(orcaWorkflowKeys).toEqual(expect.arrayContaining([
       'getByLeadSession', 'getByWorkerSession', 'listWorkersByLead', 'listWorkersByLeads',
       'createWorker', 'switchFocus', 'idleWorker', 'archiveWorker', 'endTeam',
-      'getCollaborationSettings', 'onOrcaWorkerChanged',
+      'getCollaborationSettings', 'listExecutionDevices', 'onOrcaWorkerChanged',
     ]));
   });
   it('maker capability contract', () => {

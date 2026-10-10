@@ -753,7 +753,7 @@ function BotGroupTimelineItem({
     const text = key ? t(key, { name }) : message.content;
     return <p className="text-center text-12 text-[var(--text-tertiary)]">{text}</p>;
   }
-  if (message.authorKind === 'user' && message.isSelf !== false) {
+  if (message.kind === 'message' && message.authorKind === 'user' && message.isSelf !== false) {
     // An attachment-only message shows just its attachments, without an empty bubble.
     const hasText = message.content.trim().length > 0;
     return (
@@ -785,14 +785,15 @@ function BotGroupTimelineItem({
       </article>
     );
   }
-  // Name snapshot from when it was said; the avatar follows the live profile.
-  const author = {
-    name: message.authorName || member?.name || '',
-    avatar: member?.avatar ?? null,
-    avatarUrl: member?.avatarUrl,
-    avatarColor: member?.avatarColor ?? null,
-  };
+  // A server plan is signed by its human creator; present the organizer without changing authorship.
   const isPlanCard = message.kind === 'plan';
+  const identity = isPlanCard ? members.find(candidate => candidate.botId === plan?.organizerBotId) : member;
+  const author = {
+    name: isPlanCard ? identity?.name || plan?.organizerName || '' : message.authorName || identity?.name || '',
+    avatar: identity?.avatar ?? null,
+    avatarUrl: identity?.avatarUrl,
+    avatarColor: identity?.avatarColor ?? null,
+  };
   const hasText = message.content.trim().length > 0;
   return (
     <article {...(message.kind === 'message' ? { [SHARE_SESSION_ATTR]: shareScope, [SHARE_MESSAGE_ATTR]: message.id } : {})}

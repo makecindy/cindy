@@ -71,7 +71,7 @@ const sessionReads = new Set([
   'maker:get-pending-interactions', 'maker:get-session-agent-switch-intent',
 ]);
 const inputEdits = new Set(['maker:input:update-text', 'maker:input:update-content', 'maker:input:set-edit-lock']);
-const agentSettings = new Set(['maker:set-model', 'maker:set-effort', 'maker:set-fast-mode', 'maker:set-thinking-enabled', 'maker:switch-session-agent']);
+// Model, Agent and reasoning changes belong to the owner, including result replay.
 const interactionDecisionKinds = new Set(['permission', 'ask_user_question', 'plan_review']);
 
 function record(value: unknown): Record<string, unknown> | null {
@@ -235,8 +235,7 @@ export function assertSharedTaskInvoke(
     : ['maker:input:enqueue', 'maker:input:steer', 'maker:input:resume', 'maker:input:set-expanded'].includes(channel) ? 'input.send'
     : channel === 'maker:input:stop' ? 'agent.stop'
     : channel === 'maker:input:remove' ? 'input.withdraw'
-    : inputEdits.has(channel) ? 'input.edit'
-    : agentSettings.has(channel) ? 'agent.configure' : null;
+    : inputEdits.has(channel) ? 'input.edit' : null;
   if (!operation) deny();
   if (phase === 'result') {
     if (!capture.authorize('history.read')) deny();

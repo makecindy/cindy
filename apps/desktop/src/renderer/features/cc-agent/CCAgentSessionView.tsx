@@ -105,10 +105,7 @@ import {
   readSendFollowCancelGeneration,
   tryRequestFollowLatest,
 } from '@/components/chat/autoFollowIntent';
-import {
-  getMessageStreamIndicatorResizeTargets,
-  measureMessageStreamIndicatorClearanceOffset,
-} from '@/components/chat/messageStreamIndicatorPosition';
+import { useComposerOverlayMetrics } from './useComposerOverlayMetrics';
 import { ShareSelectionBar } from '@/components/chat/ShareSelectionBar';
 import {
   shareSelectionStore,
@@ -1502,10 +1499,7 @@ export function CCAgentSessionView({
   const overlayRef = useCallback((node: HTMLDivElement | null) => {
     setOverlayEl(node);
   }, []);
-  const [overlayHeight, setOverlayHeight] = useState(200);
-  const [bottomCenterClearanceOffset, setBottomCenterClearanceOffset] = useState<
-    number | undefined
-  >(undefined);
+  const { overlayHeight, bottomCenterClearanceOffset } = useComposerOverlayMetrics(overlayEl);
   const [inlinePlanVisibilityState, setInlinePlanVisibilityState] = useState<{
     sessionId: string | undefined;
     value: InlinePlanVisibility | null;
@@ -1530,42 +1524,6 @@ export function CCAgentSessionView({
     },
     [sessionId],
   );
-
-  useEffect(() => {
-    if (!overlayEl) return;
-    const measureOverlay = () => {
-      // 状态行会动态出现 / 收起，overlay 总高度不等于底部中央控件的避让边界。
-      // 空中央行仍以 composer 栈为锚；步骤 / 接管胶囊在场时改取中央组顶边，
-      // 让消息流悬浮按钮与它们纵向成栈，而不是共享同一块 32px 区域。
-      setOverlayHeight(overlayEl.offsetHeight);
-      setBottomCenterClearanceOffset(measureMessageStreamIndicatorClearanceOffset(overlayEl));
-    };
-    const ro = new ResizeObserver(measureOverlay);
-    let observedTargets = new Set<HTMLElement>();
-    const syncResizeTargetsAndMeasure = () => {
-      const nextTargets = new Set(getMessageStreamIndicatorResizeTargets(overlayEl));
-      for (const target of observedTargets) {
-        if (!nextTargets.has(target)) ro.unobserve(target);
-      }
-      for (const target of nextTargets) {
-        if (!observedTargets.has(target)) ro.observe(target);
-      }
-      observedTargets = nextTargets;
-      measureOverlay();
-    };
-
-    // Seed with the current geometry so the first paint after remount does not
-    // reuse stale state. The plan flyout is absolutely positioned and mounts
-    // only on hover/click, so its insertion does not resize the center group;
-    // resync observed targets whenever that subtree changes.
-    syncResizeTargetsAndMeasure();
-    const mutationObserver = new MutationObserver(syncResizeTargetsAndMeasure);
-    mutationObserver.observe(overlayEl, { childList: true, subtree: true });
-    return () => {
-      mutationObserver.disconnect();
-      ro.disconnect();
-    };
-  }, [overlayEl]);
 
   // F-FP-5: 点击 workingDir → 在系统文件管理器里直接打开目录(复用 shell:open-path IPC)。
   // local only:remote session 的 chip 仅作展示,不响应点击(见下方 remoteHostId 早返 +
@@ -2955,6 +2913,7 @@ export function CCAgentSessionView({
     workspaceKind: collabWorkspaceKind,
     workingDir: session?.workingDir,
     orcaRole: session?.orcaRole,
+    orcaRemoteWorker: !!session?.orcaRemoteLead,
     remoteHostId: session?.remoteHostId,
     // 粘滞归属:relay 瞬时重连清空注册表的窗口内不把远程会话误判成本机 —— 误判会让
     // 协同策略退回查控制端本机,读到的是另一台机器的开关。
@@ -3088,6 +3047,12 @@ export function CCAgentSessionView({
           providerId: form.providerId ?? undefined,
           delegateTask: form.initialTask || undefined,
           workerPermissionMode: form.workerPermissionMode,
+          ...(form.executionDeviceId
+            ? {
+                executionDeviceId: form.executionDeviceId,
+                ...(form.workingDir ? { workingDir: form.workingDir } : {}),
+              }
+            : {}),
         };
         const orcaDeviceId = getStickySessionDeviceId(collabSessionId);
         if (orcaDeviceId) {
@@ -5950,6 +5915,10 @@ export function CCAgentSessionView({
         // openai-chat 桥接 Codex 只挂在本地 proxy),与 main 侧 remote-worker
         // guard 同规则(codex review R28)。
         sshRemote={!!session?.remoteHostId}
+        // 首个 Worker 也可放到另一台电脑：仅本机 Lead(非 SSH、Agent 也在本机)。
+        executionDevicesEnabled={
+          !remoteDeviceId && !session?.remoteHostId && !session?.agentDeviceId
+        }
       />
 
       {/* 来自 Automations 的入口浮动返回按钮：固定在聊天区左上角，

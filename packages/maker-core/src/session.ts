@@ -181,6 +181,11 @@ export interface SessionOptions {
    */
   remoteHostId?: string | null;
   /**
+   * 同账号另一台电脑（或 `share:` 分享来源）上运行 Agent 时的设备 id，与 remoteHostId 互斥。
+   * 主进程的发送边界用它判断供应商目录在对端：本机目录不能裁决这类会话的显式来源。
+   */
+  agentDeviceId?: string | null;
+  /**
    * turn 零事件看门狗阈值(ms)。省略 = env / DEFAULT_TURN_STALL_MS；0 = 关闭。
    * 主要供测试注入短阈值，宿主正常不传。
    */
@@ -429,6 +434,8 @@ export class Session {
   readonly capabilities: Capabilities;
   /** 见 SessionOptions.remoteHostId。 */
   readonly remoteHostId: string | null;
+  /** 见 SessionOptions.agentDeviceId。 */
+  readonly agentDeviceId: string | null;
 
   private readonly handle: AgentSessionHandle;
   private readonly logger: Logger;
@@ -567,6 +574,7 @@ export class Session {
     this.handle = opts.handle;
     this.capabilities = opts.capabilities;
     this.remoteHostId = opts.remoteHostId ?? null;
+    this.agentDeviceId = opts.agentDeviceId ?? null;
     this.logger = opts.logger.child(`s:${this.id}`);
     this.permissionModeStateValue = {
       mode: opts.permissionMode ?? null,

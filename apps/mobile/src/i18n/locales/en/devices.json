@@ -342,13 +342,7 @@
       "switchConfirm": "Continue"
     },
     "menu": {
-      "groupByProject": "Group by Project",
-      "groupDialogue": "Group chats together",
-      "sortByTime": "By time",
-      "sortByPriority": "Priority",
-      "statusActive": "Active",
-      "statusArchived": "Archived",
-      "statusAll": "All",
+      "groupDialogue": "Chat",
       "dialogueFolder": "Chat",
       "search": "Search",
       "settings": "Settings",
@@ -356,14 +350,65 @@
       "displaySettings": "Display settings",
       "groupHeading": "Group",
       "sortHeading": "Task sort",
-      "projectOrderHeading": "Project order",
-      "projectOrderActivity": "By recent activity",
-      "projectOrderManual": "Manual",
+      "projectOrderHeading": "Project sorting",
       "projectOrderManualTip": "Touch and hold a project row, then drag to reorder. Tasks inside still follow the sort above.",
-      "statusHeading": "Status",
+      "statusHeading": "Task status",
       "showDeviceTasks": "Show tasks",
       "openDevice": "Open",
-      "renameDevice": "Rename"
+      "renameDevice": "Rename",
+      "groupProject": "Project",
+      "sortBy": {
+        "priority": "Priority",
+        "recency": "Recent Activity",
+        "created": "Creation Time"
+      },
+      "sortByPriorityTip": "Waiting on you first, then unread, then running, then by time",
+      "projectOrder": {
+        "activity": "Follow tasks",
+        "custom": "Manual"
+      },
+      "status": {
+        "active": "Active",
+        "archived": "Archived",
+        "all": "All"
+      },
+      "filterHeading": "Filters",
+      "filterSummaryActive": "{{count}} active",
+      "filterReset": "Reset filters",
+      "filterAll": "All",
+      "filterProjectsHeading": "Projects",
+      "filterAllProjects": "All projects",
+      "filterSelectedProjects": "{{count}} selected",
+      "filterVendorHeading": "Harness",
+      "filterVendor": {
+        "all": "All",
+        "cc": "Claude Code",
+        "codex": "Codex",
+        "pi": "Pi"
+      },
+      "filterLastActivityHeading": "Last activity",
+      "filterLastActivity": {
+        "1d": "1d",
+        "3d": "3d",
+        "7d": "7d",
+        "30d": "30d",
+        "all": "All"
+      },
+      "displayHeading": "Display",
+      "view": {
+        "text": "Text",
+        "list": "List"
+      },
+      "taskInfoHeading": "Task info",
+      "taskInfo": {
+        "time": "Time",
+        "pr": "PR status",
+        "tokens": "Tokens",
+        "cost": "Cost"
+      },
+      "summaryNone": "None",
+      "summarySeparator": ", ",
+      "filterEmptyCopy": "Adjust or reset Filters in Display settings."
     },
     "search": {
       "placeholder": "Search titles or content…",

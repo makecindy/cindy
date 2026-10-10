@@ -31,6 +31,7 @@ describe('bot group copy variants (shared by desktop and phone)', () => {
 
   it('names only the refusals the user can act on', () => {
     expect(botGroupErrorVariant('PLAN_OPEN')).toBe('planOpen');
+    expect(botGroupErrorVariant('MENTION_UNAVAILABLE')).toBe('mentionUnavailable');
     expect(botGroupErrorVariant('INTERNAL')).toBeNull();
     expect(botGroupErrorVariant('constructor' as BotGroupErrorCode)).toBeNull();
     expect(botGroupErrorVariant(undefined)).toBeNull();

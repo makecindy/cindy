@@ -275,15 +275,14 @@ export class RemoteDesktopViewerWindows {
     ipcMain.handle(REMOTE_VIEWER.PRESENTED, (event) => {
       this.entry(event).controller.markPresentationReady(event.sender);
     });
-    ipcMain.handle(REMOTE_VIEWER.CLOSE, async (event, generation) => {
+    ipcMain.handle(REMOTE_VIEWER.CLOSE, (event, generation) => {
       const entry = this.entry(event);
       if (generation !== entry.connection.generation) return;
       try {
-        await entry.connection.close(generation);
+        entry.connection.close(generation);
       } catch {
         throwIpcError('PRECONDITION_FAILED', 'DESKTOP_STOP_FAILED');
       }
-      if (generation !== entry.connection.generation) return;
       entry.controller.close(event.sender);
     });
     ipcMain.handle(REMOTE_VIEWER.PREFERENCES, async (event, generation, patch) => {

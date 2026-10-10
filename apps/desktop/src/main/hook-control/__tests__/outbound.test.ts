@@ -105,6 +105,34 @@ function deps(
 }
 
 describe('collectOutboundAttachments', () => {
+  it.each([String.raw`C:\task\shot.png`, 'C:/task/shot.png', '/home/task/shot.png'])(
+    'recognizes standalone foreign paths without reading them: %s', async (source) => {
+      const text = `![shot](${source})`;
+      const io = deps({});
+      expect(hasOutboundRefs(text)).toBe(true);
+      const result = await collectOutboundAttachments(text, [], io);
+      expect(result.text).toContain('🖼️ _shot_');
+      expect(result.text).not.toContain(source);
+      expect(result.skipped).toBe(1);
+      expect(result.attachments).toEqual([]);
+      expect(io.realpath).not.toHaveBeenCalled();
+      expect(io.readFile).not.toHaveBeenCalled();
+    },
+  );
+
+  it('deduplicates bytes while preserving each caption for repeated image URLs', async () => {
+    const url = 'xdt-image://img1.png';
+    const text = `![overview](${url})\n![detail][same]\n![](${url})\n\n[same]: ${url}\n\n\`![example](${url})\``;
+    const r = await collectOutboundAttachments(
+      text,
+      [],
+      deps({ '/cache/img1.png': Buffer.from('png') }),
+    );
+    expect(r.attachments).toHaveLength(1);
+    expect(r.text).toBe(`🖼️ _overview_\n🖼️ _detail_\n\n\n\n\n\`![example](${url})\``);
+    expect(r.skipped).toBe(0);
+  });
+
   it('图片引用 + 旁路图去重收集, 正文替换成提示; 文件链接剥离', async () => {
     const text =
       '成果:\n![效果图](xdt-image://img1.png)\n详见 [报告](xdt-file:///out/report.md) 收工';
@@ -123,7 +151,7 @@ describe('collectOutboundAttachments', () => {
     expect(r.attachments.map((a) => a.name)).toEqual(['img1.png', 'extra.png', 'report.md']);
     expect(r.attachments[0].mimeType).toBe('image/png');
     expect(r.attachments[2].mimeType).toBe('text/markdown');
-    expect(r.text).toContain('🖼️ _效果图(已作为附件发送)_');
+    expect(r.text).toContain('🖼️ _效果图_');
     expect(r.text).not.toContain('xdt-image://');
     expect(r.text).not.toContain('xdt-file://');
     expect(r.skipped).toBe(0);
@@ -139,7 +167,7 @@ describe('collectOutboundAttachments', () => {
       deps({ '/cache/good.png': Buffer.from('png-good') }),
     );
     expect(r.attachments.map((a) => a.name)).toEqual(['good.png']);
-    expect(r.text).toContain('🖼️ _good(已作为附件发送)_');
+    expect(r.text).toContain('🖼️ _good_');
     expect(r.text).toContain('[bad](xdt-file://unterminated');
     expect(r.text).not.toContain('xdt-image://');
     expect(r.skipped).toBe(0);
@@ -219,7 +247,7 @@ describe('collectOutboundAttachments', () => {
       deps({ '/cache/chart.png': Buffer.from('png') }),
     );
     expect(r.attachments.map((a) => a.name)).toEqual(['chart.png']);
-    expect(r.text).toContain('🖼️ _图(已作为附件发送)_');
+    expect(r.text).toContain('🖼️ _图_');
   });
 
   it('同一路径重复引用只收一份', async () => {

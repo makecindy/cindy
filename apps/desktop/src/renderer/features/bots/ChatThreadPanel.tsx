@@ -10,7 +10,7 @@ import { ShareMessageCheckbox } from '@/components/chat/ShareMessageCheckbox';
 import { shareSelectionStore, useShareSelectionActive } from '@/components/chat/shareSelectionStore';
 import { SHARE_SESSION_ATTR, SHARE_MESSAGE_ATTR } from '@/lib/shareConversationImage';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent, isDataOwnerPushCurrent } from '@/contexts/dataOwnerGeneration';
-import type { BotGroupDetail, BotGroupMessageView } from '../../../shared/botGroupChat';
+import type { BotGroupDetail, BotGroupMention, BotGroupMessageView } from '../../../shared/botGroupChat';
 import { resolveBotGroupMentions } from './botGroupMentions';
 import { refreshBotGroups } from './botGroupStore';
 import { BotAvatar } from './BotAvatar';
@@ -51,7 +51,7 @@ export function ChatThreadPanel({ group, rootId, onClose }: { group: BotGroupDet
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const request = useRef(0);
-  const attempt = useRef<{ text: string; id: string } | null>(null);
+  const attempt = useRef<{ text: string; id: string; mentions: BotGroupMention } | null>(null);
   const sending = useRef(false);
   const load = useCallback(async (before?: number) => {
     const version = ++request.current, owner = getDataOwnerGeneration();
@@ -81,10 +81,13 @@ export function ChatThreadPanel({ group, rootId, onClose }: { group: BotGroupDet
     if (group.archived || sending.current || !text.trim()) return;
     sending.current = true; setBusy(true); setError('');
     const owner = getDataOwnerGeneration();
-    if (!attempt.current || attempt.current.text !== text) attempt.current = { text, id: crypto.randomUUID() };
+    if (!attempt.current || attempt.current.text !== text) attempt.current = {
+      text, id: crypto.randomUUID(),
+      mentions: resolveBotGroupMentions(text, { members: group.members, allLabels: [t('bots.groupChat.mention.all'), '所有人', 'all', 'everyone'] }),
+    };
     try {
       const result = await api().reply({ groupId: group.id, rootId, text: attempt.current.text, clientId: attempt.current.id,
-        mentions: resolveBotGroupMentions(text, { members: group.members, allLabels: [t('bots.groupChat.mention.all'), '所有人', 'all', 'everyone'] }) });
+        mentions: attempt.current.mentions });
       if (!isDataOwnerGenerationCurrent(owner)) return;
       if (!result.ok) { setError(t(chatErrorKey(result.errorCode))); return; }
       setText(''); attempt.current = null; void loadRef.current(); refreshBotGroups();
@@ -109,7 +112,10 @@ export function ChatThreadPanel({ group, rootId, onClose }: { group: BotGroupDet
         {sharing ? <ShareSelectionBar sessionId={shareScope} barWidth="100%"
           getContentWidth={() => contentRef.current?.querySelector('article')?.getBoundingClientRect().width ?? 400} /> : <div className="space-y-3 border-t border-[var(--border-default)] p-4">
           {error && <p role="alert" className="text-13 text-[var(--error-fg)]">{error}</p>}
-          <Textarea aria-label={t(key('replyPlaceholder'))} placeholder={t(key('replyPlaceholder'))} value={text} onChange={setText}
+          <Textarea aria-label={t(key('replyPlaceholder'))} placeholder={t(key('replyPlaceholder'))} value={text} onChange={value => {
+            setText(value);
+            if (attempt.current?.text !== value) attempt.current = null;
+          }}
             rows={3} maxLength={8000} disabled={busy || group.archived} onKeyDown={e => {
               if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing && e.keyCode !== 229) { e.preventDefault(); void send(); }
             }} />

@@ -6750,7 +6750,7 @@ const MessageItem = memo(function MessageItem({
             workingDir={workingDir}
           />
         );
-        return simplifiedBotConversation && message.systemCardType === 'bot-session-task'
+        return simplifiedBotConversation && (message.systemCardType === 'bot-session-task' || message.systemCardType === 'bot-session-task-result')
           ? withAssistantAvatar(
               assistantAvatar ? (
                 <span aria-hidden="true" className="invisible">

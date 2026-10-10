@@ -342,28 +342,73 @@
       "switchConfirm": "切り替える"
     },
     "menu": {
-      "groupByProject": "プロジェクトごとにグループ化",
-      "groupDialogue": "チャットをまとめる",
-      "sortByTime": "時間順",
-      "sortByPriority": "優先度",
-      "statusActive": "アクティブ",
-      "statusArchived": "アーカイブ済み",
-      "statusAll": "すべて",
+      "groupDialogue": "チャット",
       "dialogueFolder": "チャット",
       "search": "検索",
       "settings": "設定",
       "remoteSettings": "リモート接続設定",
       "displaySettings": "表示設定",
       "groupHeading": "グループ",
-      "sortHeading": "タスクの並び替え",
-      "projectOrderHeading": "プロジェクト順",
-      "projectOrderActivity": "最近のアクティビティ順",
-      "projectOrderManual": "手動",
+      "sortHeading": "タスク順",
+      "projectOrderHeading": "プロジェクトの並び順",
       "projectOrderManualTip": "プロジェクト行を長押ししてドラッグすると順番を変えられます。グループ内のタスクは上の並び替えに従います。",
-      "statusHeading": "ステータス",
+      "statusHeading": "タスクの状態",
       "showDeviceTasks": "タスクを表示",
       "openDevice": "開く",
-      "renameDevice": "名前を変更"
+      "renameDevice": "名前を変更",
+      "groupProject": "プロジェクト",
+      "sortBy": {
+        "priority": "優先度",
+        "recency": "最近のアクティビティ",
+        "created": "作成日時"
+      },
+      "sortByPriorityTip": "要対応を最上位に、次に未読、実行中、残りは時間順",
+      "projectOrder": {
+        "activity": "タスクに従う",
+        "custom": "手動"
+      },
+      "status": {
+        "active": "アクティブ",
+        "archived": "アーカイブ済み",
+        "all": "すべて"
+      },
+      "filterHeading": "フィルター",
+      "filterSummaryActive": "{{count}} 件適用中",
+      "filterReset": "フィルターをリセット",
+      "filterAll": "すべて",
+      "filterProjectsHeading": "プロジェクト",
+      "filterAllProjects": "すべてのプロジェクト",
+      "filterSelectedProjects": "{{count}} 件選択",
+      "filterVendorHeading": "Harness",
+      "filterVendor": {
+        "all": "すべて",
+        "cc": "Claude Code",
+        "codex": "Codex",
+        "pi": "Pi"
+      },
+      "filterLastActivityHeading": "最終アクティビティ",
+      "filterLastActivity": {
+        "1d": "1日",
+        "3d": "3日",
+        "7d": "7日",
+        "30d": "30日",
+        "all": "すべて"
+      },
+      "displayHeading": "表示",
+      "view": {
+        "text": "テキスト",
+        "list": "リスト"
+      },
+      "taskInfoHeading": "タスク情報",
+      "taskInfo": {
+        "time": "時間",
+        "pr": "PR ステータス",
+        "tokens": "トークン",
+        "cost": "コスト"
+      },
+      "summaryNone": "なし",
+      "summarySeparator": "、",
+      "filterEmptyCopy": "表示設定の「フィルター」で調整またはリセットできます。"
     },
     "search": {
       "placeholder": "タイトルまたは内容を検索…",

@@ -245,10 +245,22 @@ export interface BotGroupDetail extends BotGroupSummary {
 }
 
 export type BotGroupErrorCode =
+  | 'INVALID_ATTACHMENT'
+  | 'ATTACHMENT_UNAVAILABLE'
+  | 'ATTACHMENT_TOO_LARGE'
+  | 'MEDIA_UPLOAD_FAILED'
+  | 'AUTH_REQUIRED'
+  | 'CHAT_UNAVAILABLE'
+  | 'IMPORT_PENDING'
+  | 'REQUEST_TIMEOUT'
+  | 'PERMISSION_DENIED'
+  | 'SERVICE_ERROR'
+  | 'GROUP_ARCHIVED'
   | 'INVALID_PARAMS'
   | 'NOT_FOUND'
   | 'MEMBER_LIMIT'
   | 'MEMBER_UNAVAILABLE'
+  | 'MENTION_UNAVAILABLE'
   | 'HOST_NOT_READY'
   /** An explicit 安排分工 while a plan is running or waiting. */
   | 'PLAN_OPEN'
@@ -357,7 +369,7 @@ export const BOT_GROUP_MEMBER_LINK_REL = 'member';
  * Remote actions. `create` is collection-level ({ name, botIds }); the others target a group:
  * `send` ({ text, mentions, clientId, division? }), `continue`, `stop`, `update`
  * ({ name?, replyMode?, speakingMode?, organizerBotId? } — never a host path),
- * `set-members` ({ botIds }), `delete`, `plan-start` / `plan-dismiss` / `plan-continue` /
+ * `set-members` ({ botIds }), `remove-member` ({ actorId }, capability-gated), `delete`, `plan-start` / `plan-dismiss` / `plan-continue` /
  * `plan-retry` ({ planId }) and `plan-edit` ({ planId, position, action, botId? }).
  * A refused action fails with the `BotGroupErrorCode` as its message.
  */
@@ -368,6 +380,7 @@ export type BotGroupRemoteActionId =
   | 'stop'
   | 'update'
   | 'set-members'
+  | 'remove-member'
   | 'delete'
   | 'plan-start'
   | 'plan-dismiss'
@@ -386,6 +399,8 @@ export interface BotGroupRemoteChatData extends BotGroupDetail {
    * drop them). Attachment `path`s are always null here.
    */
   supportsAttachments?: boolean;
+  /** Host supports removing one server actor, including a human. */
+  supportsMemberRemoval?: boolean;
 }
 
 export const BOT_GROUP_CLIENT_ID_PREFIX = 'bot-group:';
@@ -433,7 +448,9 @@ export function parseBotGroupPlanRouteKey(routeKey: string | null | undefined): 
 /** Named, credential-free Desktop chat capabilities. Older/local-only hosts omit them. */
 export type ChatServerResult<T> = ({ ok: true } & T) | { ok: false; errorCode: string };
 export interface ChatInvitePreview {
-  groupId: string; name: string; inviterName: string; expiresAt: string; joined: boolean;
+  groupId: string; name: string; inviterName: string; expiresAt: string | null; joined: boolean;
+  /** Omitted by old servers, whose links remain dated and single-use. */
+  reusable?: boolean;
 }
 export type ChatGroupAction =
   | { type: 'update'; name: string; topic: string; description: string; expectedRevision: number; responseMode?: BotGroupReplyMode; speakingMode?: BotGroupSpeakingMode }
@@ -452,7 +469,8 @@ export interface ChatServerApi {
   }>>;
   reply(input: { groupId: string; rootId: string; text: string; clientId: string; mentions: BotGroupMention }): Promise<ChatServerResult<{ messageId: string }>>;
   react(input: { groupId: string; messageId: string; emoji: string; present: boolean }): Promise<ChatServerResult<Record<never, never>>>;
-  createInvite(input: { groupId: string; clientId: string }): Promise<ChatServerResult<{ link: string; expiresAt: string }>>;
+  createInvite(input: { groupId: string; clientId: string }): Promise<ChatServerResult<{ link: string; expiresAt: string | null; reusable?: boolean }>>;
+  revokeInvite(input: { groupId: string; link: string; clientId: string }): Promise<ChatServerResult<{ revoked: true }>>;
   previewInvite(input: { link: string }): Promise<ChatServerResult<ChatInvitePreview>>;
   acceptInvite(input: { link: string; clientId: string }): Promise<ChatServerResult<{ groupId: string }>>;
 }

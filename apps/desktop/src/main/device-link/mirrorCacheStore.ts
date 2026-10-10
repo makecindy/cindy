@@ -430,6 +430,7 @@ export interface MirrorCache {
     expectedOwnerRoot?: string,
     expectedAccountCounter?: number,
     historyView?: string,
+    mergeListMessage?: boolean,
   ): Promise<{ invalidation: number }>;
   /**
    * 读某 (设备, 会话) 的最近一页,并带回当前作废计数与账号代际(供写入侧比对)。
@@ -1027,6 +1028,7 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
       expectedOwnerRoot,
       expectedAccountCounter,
       historyView,
+      mergeListMessage,
     ) {
       if (!deviceId.trim() || !sessionId.trim()) return { invalidation: -1 };
       // root 在**发起时**快照,不能在出错时再 resolve:owner 会在进程生命周期内变(登出 /
@@ -1051,11 +1053,15 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
         return withCacheFileLock(rootAtStart, async (held) => {
           const dir = path.join(rootAtStart, MESSAGES_DIR);
           const file = path.join(dir, messageFileName(deviceId, sessionId));
-          const normalized = normalizeMessages(messages);
+          let normalized = normalizeMessages(messages);
           const history = decodeRemoteHistory(historyView);
           // Sanitize the whole projection, including images outside message.content.
-          const sanitizedHistory = history ? JSON.stringify(stripInlineMedia(JSON.parse(encodeRemoteHistory(history)), 0)) : undefined;
+          let sanitizedHistory = history ? JSON.stringify(stripInlineMedia(JSON.parse(encodeRemoteHistory(history)), 0)) : undefined;
           if (historyView !== undefined && (!sanitizedHistory || !decodeRemoteHistory(sanitizedHistory))) {
+            return { invalidation: numericCounter(await readClearCounter(rootAtStart, sessionKey)) };
+          }
+          // An invalid list update is never an authoritative empty-page clear.
+          if (mergeListMessage && (normalized.length !== 1 || historyView !== undefined)) {
             return { invalidation: numericCounter(await readClearCounter(rootAtStart, sessionKey)) };
           }
           // 空列表 = 清掉这条缓存(被控端 /clear、rewind 或删完最后一条时,残留会在
@@ -1145,6 +1151,15 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
             }
             return true;
           };
+          if (mergeListMessage) {
+            if (!(await canCommitNonEmpty())) return { invalidation: -1 };
+            const previous = await readJson(file);
+            const message = normalized[0];
+            const rows = isRecord(previous) && Array.isArray(previous.messages) ? normalizeMessages(previous.messages) : [];
+            normalized = normalizeMessages([...rows.filter(row => row.id !== message.id
+              && (!message.clientId || row.clientId !== message.clientId)), message]);
+            if (isRecord(previous) && decodeRemoteHistory(previous.historyView)) sanitizedHistory = previous.historyView as string;
+          }
           const body = sanitizedHistory === undefined ? JSON.stringify(normalized) : JSON.stringify([normalized, sanitizedHistory]);
           const payload: StoredMessages = {
             version: 1,
@@ -1154,6 +1169,8 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
           };
           const serialized = JSON.stringify(payload);
           if (Buffer.byteLength(serialized, 'utf8') > MAX_MESSAGE_FILE_BYTES) {
+            // Prefetch is additive: if it cannot fit, retain the usable history.
+            if (mergeListMessage) return { invalidation: numericCounter(await readClearCounter(rootAtStart, sessionKey)) };
             // 单会话超限:新页写不下 —— 但旧正本此刻可能是 rewind / 删消息**之前**的窗口,
             // 而同一个超限页每次对账都会走到这里,永远不会有第二次机会更新它。所以**作废**
             // 旧缓存,而不是留一份会骗人的旧页(review: codex P1)。

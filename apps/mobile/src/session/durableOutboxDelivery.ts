@@ -59,6 +59,16 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
     !stopped && deps.isCurrent() && deps.store.getSnapshot().includes(r);
   const hasDurableOwnership = (r: DurableOutboxRecord) =>
     r.state === "host-owned" && isDurableOutboxHandedOff(r);
+  const hasHistory = async (record: DurableOutboxRecord): Promise<boolean> => {
+    try {
+      return await deps.history(record);
+    } catch (error) {
+      // Pending and withdrawn inputs need not have a history row. Absence is
+      // not a delivery failure or proof of cancellation; host receipts decide.
+      if (isExplicitRemoteNotFoundError(error)) return false;
+      throw error;
+    }
+  };
   async function deliver(initial: DurableOutboxRecord) {
     let record = initial;
     due.set(id(record), Date.now() + 5_000);
@@ -154,7 +164,7 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
         } else if (state === "pending") {
           // Legacy hosts cannot seal a not-yet-arrived enqueue. Keep uncertain cancellation visible.
           await update({ state: "failed", error: deps.confirmationMessage });
-        } else if (await deps.history(record)) {
+        } else if (await hasHistory(record)) {
           await finishHistory();
         } else if (current(record)) {
           await update({ state: "failed", error: deps.confirmationMessage });
@@ -175,18 +185,18 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
       if (durableOwnership) {
         if (record.state !== "host-owned") await deps.accepted?.(record);
         if (!current(record)) return;
-        if (await deps.history(record)) {
+        if (await hasHistory(record)) {
           await finishHistory();
           return;
         }
         if (!current(record)) return;
-        if (!hasDurableOwnership(record))
+        if (!hasDurableOwnership(record) || record.error)
           await update({ state: "host-owned", retrySafe: true, error: undefined });
         due.set(id(record), Date.now() + 5_000);
         return;
       }
       // Even old hosts may already have persisted a user row after the enqueue receipt was lost.
-      if ((record.prepared || state === "pending" || state === "accepted") && (await deps.history(record))) {
+      if ((record.prepared || state === "pending" || state === "accepted") && (await hasHistory(record))) {
         await finishHistory();
         return;
       }
@@ -264,7 +274,8 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
           },
           retrySafe: projection.inputDeliveryVersion === 1,
           enqueueStarted: record.enqueueStarted ?? (record.sendAtMs === undefined ? false : undefined),
-          clearBoundaryMs: projection.clearBoundaryMs ?? record.clearBoundaryMs,
+          clearBoundaryMs: projection.clearBoundaryMs !== undefined
+            ? projection.clearBoundaryMs : record.clearBoundaryMs,
           sendAtMs: record.sendAtMs ?? Date.now(),
         });
       }

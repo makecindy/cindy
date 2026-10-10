@@ -192,8 +192,8 @@ describe('Cindy PI Subagent foreground durable path', () => {
       );
       process.env[CINDY_SUBAGENT_ENV.binary] = wrapper;
       await chmod(wrapper, 0o700);
-      const extension = require(f.extensionFile).default as (pi: { registerTool: (tool: unknown) => void }) => Promise<void>;
-      await extension({ registerTool: (tool) => Object.assign(registered, tool) });
+      const extension = require(f.extensionFile).default as (pi: { registerTool: (tool: unknown) => void; appendEntry: () => void }) => Promise<void>;
+      await extension({ registerTool: (tool) => Object.assign(registered, tool), appendEntry: vi.fn() });
       expect(registered.execute).toBeTypeOf('function');
       const input = hostInput(f);
       const result = await registered.execute!(
@@ -248,8 +248,8 @@ describe('Cindy PI Subagent foreground durable path', () => {
       });
       const registered: { execute?: (...args: unknown[]) => Promise<unknown> } = {};
       try {
-        const extension = require(f.extensionFile).default as (pi: { registerTool: (tool: unknown) => void }) => Promise<void>;
-        await extension({ registerTool: (tool) => Object.assign(registered, tool) });
+        const extension = require(f.extensionFile).default as (pi: { registerTool: (tool: unknown) => void; appendEntry: () => void }) => Promise<void>;
+        await extension({ registerTool: (tool) => Object.assign(registered, tool), appendEntry: vi.fn() });
         const input = hostInput(f);
         const execution = registered.execute!(
           'tool-runner-exit',
@@ -315,8 +315,8 @@ setTimeout(() => process.exit(0), 20000).unref();
       const registered: { execute?: (...args: unknown[]) => Promise<unknown> } = {};
       const controller = new AbortController();
       try {
-        const extension = require(f.extensionFile).default as (pi: { registerTool: (tool: unknown) => void }) => Promise<void>;
-        await extension({ registerTool: (tool) => Object.assign(registered, tool) });
+        const extension = require(f.extensionFile).default as (pi: { registerTool: (tool: unknown) => void; appendEntry: () => void }) => Promise<void>;
+        await extension({ registerTool: (tool) => Object.assign(registered, tool), appendEntry: vi.fn() });
         const input = hostInput(f);
         const startedAt = Date.now();
         const execution = registered.execute!(
@@ -430,8 +430,8 @@ setTimeout(() => process.exit(2), 5000).unref();
       const registered: { execute?: (...args: unknown[]) => Promise<unknown> } = {};
       const controller = new AbortController();
       try {
-        const extension = require(f.extensionFile).default as (pi: { registerTool: (tool: unknown) => void }) => Promise<void>;
-        await extension({ registerTool: (tool) => Object.assign(registered, tool) });
+        const extension = require(f.extensionFile).default as (pi: { registerTool: (tool: unknown) => void; appendEntry: () => void }) => Promise<void>;
+        await extension({ registerTool: (tool) => Object.assign(registered, tool), appendEntry: vi.fn() });
         const input = hostInput(f);
         const execution = registered.execute!(
           'tool-abort-before-status',

@@ -18,6 +18,9 @@ vi.mock('@/features/bots/BotCollaborationCard', () => ({
   BotSessionTaskCard: () => null,
   BotSessionTaskMessageTrace: () => null,
 }));
+vi.mock('@/features/bots/BotSessionTaskResultCard', () => ({
+  BotSessionTaskResultCard: () => null,
+}));
 vi.mock('@/features/learn/LearnStatusCard', () => ({ LearnStatusCard: () => null }));
 vi.mock('@/components/chat/MarkdownRenderer', () => ({ MarkdownRenderer: () => null }));
 vi.mock('@/hooks/useReducedMotion', () => ({ useReducedMotion: () => true }));

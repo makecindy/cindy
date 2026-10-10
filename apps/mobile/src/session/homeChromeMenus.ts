@@ -8,19 +8,23 @@ import type {
 } from "@/session/homeListPriority";
 import type { HomeProjectOrder } from "@/session/homeProjectOrder";
 import { canBrowseMobileHomeDevice, type MobileHomeDeviceFilterItem } from "@/session/mobileHome";
+import {
+  activeContentFilterCount,
+  HOME_DIALOGUE_FILTER_KEY,
+  HOME_LAST_ACTIVITY_FILTERS,
+  HOME_TASK_INFO_FIELDS,
+  HOME_VENDOR_FILTERS,
+  toggleProjectFilter,
+  toggleTaskInfoField,
+  type HomeLastActivityFilter,
+  type HomeListViewMode,
+  type HomeProjectFilter,
+  type HomeTaskInfoField,
+  type HomeVendorFilter,
+} from "@/session/homeDisplaySettings";
+import { serializeRemoteResourceTargets, type RemoteHomeCollection } from "@/device-link/remoteResources";
 
 export type { HomeListSortBy, HomeProjectOrder, HomeStatusFilter };
-
-export type HomeDisplayMenuKey =
-  | "groupByProject"
-  | "groupDialogue"
-  | "sort.recency"
-  | "sort.priority"
-  | "projectOrder.activity"
-  | "projectOrder.custom"
-  | "status.active"
-  | "status.archived"
-  | "status.all";
 
 function markedLabel(label: string, on: boolean): string {
   return on ? `✓ ${label}` : label;
@@ -50,120 +54,6 @@ export function buildHomeScopeMenuItems(
   return items;
 }
 
-export function buildHomeDisplayMenuItems(input: {
-  groupByProject: boolean;
-  groupDialogue: boolean;
-  groupByProjectLabel: string;
-  groupDialogueLabel: string;
-  projectOrder: HomeProjectOrder;
-  projectOrderActivityLabel: string;
-  projectOrderCustomLabel: string;
-  showProjectOrder: boolean;
-  sortBy: HomeListSortBy;
-  sortByPriorityLabel: string;
-  sortByTimeLabel: string;
-  statusAllLabel: string;
-  statusArchivedLabel: string;
-  statusActiveLabel: string;
-  statusFilter: HomeStatusFilter;
-}): ChromeActionMenuItem<HomeDisplayMenuKey>[] {
-  const items: ChromeActionMenuItem<HomeDisplayMenuKey>[] = [
-    {
-      key: "groupByProject",
-      label: markedLabel(input.groupByProjectLabel, input.groupByProject),
-    },
-    {
-      key: "groupDialogue",
-      label: markedLabel(input.groupDialogueLabel, input.groupDialogue),
-    },
-    {
-      key: "sort.recency",
-      label: markedLabel(input.sortByTimeLabel, input.sortBy === "recency"),
-    },
-    {
-      key: "sort.priority",
-      label: markedLabel(
-        input.sortByPriorityLabel,
-        input.sortBy === "priority",
-      ),
-    },
-  ];
-  if (input.groupByProject && input.showProjectOrder) {
-    items.push(
-      {
-        key: "projectOrder.activity",
-        label: markedLabel(
-          input.projectOrderActivityLabel,
-          input.projectOrder === "activity",
-        ),
-      },
-      {
-        key: "projectOrder.custom",
-        label: markedLabel(
-          input.projectOrderCustomLabel,
-          input.projectOrder === "custom",
-        ),
-      },
-    );
-  }
-  items.push(
-    {
-      key: "status.active",
-      label: markedLabel(
-        input.statusActiveLabel,
-        input.statusFilter === "active",
-      ),
-    },
-    {
-      key: "status.archived",
-      label: markedLabel(
-        input.statusArchivedLabel,
-        input.statusFilter === "archived",
-      ),
-    },
-    {
-      key: "status.all",
-      label: markedLabel(input.statusAllLabel, input.statusFilter === "all"),
-    },
-  );
-  return items;
-}
-
-export function homeDisplayMenuPatch(
-  key: HomeDisplayMenuKey,
-  current: {
-    groupByProject: boolean;
-    groupDialogue: boolean;
-  },
-): {
-  groupByProject?: boolean;
-  groupDialogue?: boolean;
-  projectOrder?: HomeProjectOrder;
-  sortBy?: HomeListSortBy;
-  statusFilter?: HomeStatusFilter;
-} {
-  switch (key) {
-    case "groupByProject":
-      return { groupByProject: !current.groupByProject };
-    case "groupDialogue":
-      return { groupDialogue: !current.groupDialogue };
-    case "sort.recency":
-      return { sortBy: "recency" };
-    case "sort.priority":
-      return { sortBy: "priority" };
-    case "projectOrder.activity":
-      return { projectOrder: "activity" };
-    case "projectOrder.custom":
-      return { projectOrder: "custom" };
-    case "status.active":
-      return { statusFilter: "active" };
-    case "status.archived":
-      return { statusFilter: "archived" };
-    case "status.all":
-      return { statusFilter: "all" };
-  }
-}
-
 function checkable(
   id: string,
   title: string,
@@ -178,21 +68,44 @@ function checkable(
   };
 }
 
-function inlineGroup(
-  id: string,
-  title: string,
-  subactions: NativePullDownAction[],
-): NativePullDownAction {
-  return {
-    displayInline: true,
-    id,
-    preferredElementSize: "medium",
-    subactions,
-    title,
-  };
-}
-
 export const HOME_SCOPE_COLLECTION_PREFIX = "scope.collection:";
+
+export function openHomeRemoteCollection({
+  collection,
+  teammateCollectionId,
+  embedded,
+  dismissKeyboard,
+  setMode,
+  push,
+  onModeChange,
+}: {
+  collection: RemoteHomeCollection;
+  teammateCollectionId: string;
+  embedded: boolean;
+  dismissKeyboard(): void;
+  setMode(mode: "teammates"): void | Promise<void>;
+  push(href: string | { pathname: string; params: Record<string, string> }): void;
+  onModeChange?: (mode: "teammates") => void;
+}) {
+  if (collection.id === teammateCollectionId) {
+    dismissKeyboard();
+    if (embedded) {
+      void setMode("teammates");
+      push("/devices");
+    } else {
+      onModeChange?.("teammates");
+    }
+    return;
+  }
+  push({
+    pathname: "/resources/[collectionId]",
+    params: {
+      collectionId: collection.id,
+      title: collection.title,
+      targets: serializeRemoteResourceTargets(collection.targets),
+    },
+  });
+}
 
 export function parseHomeScopePullDownAction(
   id: string,
@@ -231,89 +144,235 @@ export function buildHomeScopePullDownActions(
   return items;
 }
 
-export function buildHomeDisplayPullDownActions(input: {
+/* ============================== 显示菜单 ============================== */
+
+/**
+ * 显示菜单与桌面侧栏 SidebarFilterPopover 同结构:一级是「设置项 + 当前值」行,具体选项
+ * 在子菜单里;三段依次是 分组 / 任务排序 / 项目排序,任务状态 / 筛选,显示 / 任务信息。
+ * 当前值放在一级行的 subtitle:Cindy 自绘菜单(安卓 / 旧 iOS 包)显示在标题下方;系统
+ * UIMenu 的子菜单不显示 subtitle,选中项在子菜单内打勾。
+ */
+export interface HomeDisplayMenuState {
   groupByProject: boolean;
-  groupByProjectLabel: string;
   groupDialogue: boolean;
-  groupDialogueLabel: string;
-  groupHeading: string;
-  projectOrder: HomeProjectOrder;
-  projectOrderActivityLabel: string;
-  projectOrderCustomLabel: string;
-  projectOrderHeading: string;
-  showProjectOrder: boolean;
   sortBy: HomeListSortBy;
-  sortByPriorityLabel: string;
-  sortByTimeLabel: string;
-  sortHeading: string;
-  statusActiveLabel: string;
-  statusAllLabel: string;
-  statusArchivedLabel: string;
+  projectOrder: HomeProjectOrder;
   statusFilter: HomeStatusFilter;
-  statusHeading: string;
+  projectFilter: HomeProjectFilter;
+  vendorFilter: HomeVendorFilter;
+  lastActivityFilter: HomeLastActivityFilter;
+  viewMode: HomeListViewMode;
+  taskInfoFields: readonly HomeTaskInfoField[];
+}
+
+export type HomeDisplayPatch = Partial<Omit<HomeDisplayMenuState, "taskInfoFields">> & {
+  taskInfoFields?: HomeTaskInfoField[];
+};
+
+export interface HomeDisplayMenuProject {
+  key: string;
+  title: string;
+  /** 多台电脑时用于区分同名项目(设备名)。 */
+  subtitle?: string;
+  count: number;
+}
+
+type Translate = (key: string, options?: Record<string, unknown>) => string;
+
+const MENU = "devices.list.menu";
+const SORT_OPTIONS: readonly HomeListSortBy[] = ["priority", "recency", "created"];
+const PROJECT_ORDER_OPTIONS: readonly HomeProjectOrder[] = ["activity", "custom"];
+const STATUS_OPTIONS: readonly HomeStatusFilter[] = ["active", "archived", "all"];
+const VIEW_OPTIONS: readonly HomeListViewMode[] = ["text", "list"];
+const PROJECT_FILTER_PREFIX = "filter.project:";
+
+function section(id: string, subactions: NativePullDownAction[]): NativePullDownAction {
+  return { displayInline: true, id, subactions, title: "" };
+}
+
+function submenu(
+  id: string,
+  title: string,
+  value: string,
+  image: string,
+  subactions: NativePullDownAction[],
+): NativePullDownAction {
+  return { id, image, subactions, subtitle: value, title };
+}
+
+/**
+ * 项目行只给明确选中的打勾,「全部」时只勾「所有项目」。系统菜单点保持展开的复选项会就地翻转
+ * 勾选;若「全部」时每行都打勾,点一项(语义是只看它)反而会显示成取消它。
+ */
+function projectExplicitlySelected(filter: HomeProjectFilter, key: string): boolean {
+  return filter !== "all" && filter.includes(key);
+}
+
+function sortLabelKey(sortBy: HomeListSortBy): string {
+  return `${MENU}.sortBy.${sortBy}`;
+}
+
+export function homeTaskInfoSummary(
+  fields: readonly HomeTaskInfoField[],
+  t: Translate,
+): string {
+  return fields.length > 0
+    ? fields.map((field) => t(`${MENU}.taskInfo.${field}`)).join(t(`${MENU}.summarySeparator`))
+    : t(`${MENU}.summaryNone`);
+}
+
+export function buildHomeDisplayPullDownActions(input: {
+  state: HomeDisplayMenuState;
+  /** 项目筛选的候选:完整项目集,不受最近活跃等筛选收窄。 */
+  projects: readonly HomeDisplayMenuProject[];
+  dialogueCount: number;
+  t: Translate;
 }): NativePullDownAction[] {
-  const groups: NativePullDownAction[] = [
-    inlineGroup("group", input.groupHeading, [
-      checkable(
-        "groupByProject",
-        input.groupByProjectLabel,
-        input.groupByProject,
-        true,
-      ),
-      checkable(
-        "groupDialogue",
-        input.groupDialogueLabel,
-        input.groupDialogue,
-        true,
-      ),
+  const { state, t } = input;
+  const groupSummary = [
+    state.groupByProject ? t(`${MENU}.groupProject`) : null,
+    state.groupDialogue ? t(`${MENU}.groupDialogue`) : null,
+  ].filter(Boolean).join(t(`${MENU}.summarySeparator`)) || t(`${MENU}.summaryNone`);
+  const filterCount = activeContentFilterCount({
+    projects: state.projectFilter,
+    vendor: state.vendorFilter,
+    lastActivity: state.lastActivityFilter,
+  });
+  const projectValue = state.projectFilter === "all"
+    ? t(`${MENU}.filterAll`)
+    : t(`${MENU}.filterSelectedProjects`, { count: state.projectFilter.length });
+
+  const organize: NativePullDownAction[] = [
+    submenu("group", t(`${MENU}.groupHeading`), groupSummary, "list.bullet.indent", [
+      // 「按项目分组」会增删下方「项目排序」整个子菜单,菜单结构变了 iOS 只能整份替换、
+      // 打开中的菜单会退回根层,所以它选完收起;只改勾选 / 副标题 / 禁用的项才保持展开。
+      checkable("group.project", t(`${MENU}.groupProject`), state.groupByProject),
+      checkable("group.dialogue", t(`${MENU}.groupDialogue`), state.groupDialogue, true),
     ]),
-    inlineGroup("sort", input.sortHeading, [
-      checkable(
-        "sort.recency",
-        input.sortByTimeLabel,
-        input.sortBy === "recency",
-      ),
-      checkable(
-        "sort.priority",
-        input.sortByPriorityLabel,
-        input.sortBy === "priority",
-      ),
+    submenu("sort", t(`${MENU}.sortHeading`), t(sortLabelKey(state.sortBy)), "arrow.up.arrow.down",
+      SORT_OPTIONS.map((sortBy) => ({
+        ...checkable(`sort.${sortBy}`, t(sortLabelKey(sortBy)), state.sortBy === sortBy),
+        ...(sortBy === "priority" ? { subtitle: t(`${MENU}.sortByPriorityTip`) } : {}),
+      }))),
+  ];
+  if (state.groupByProject) {
+    organize.push(submenu(
+      "projectOrder",
+      t(`${MENU}.projectOrderHeading`),
+      t(`${MENU}.projectOrder.${state.projectOrder}`),
+      "list.number",
+      PROJECT_ORDER_OPTIONS.map((order) => ({
+        ...checkable(`projectOrder.${order}`, t(`${MENU}.projectOrder.${order}`), state.projectOrder === order),
+        ...(order === "custom" ? { subtitle: t(`${MENU}.projectOrderManualTip`) } : {}),
+      })),
+    ));
+  }
+
+  const projectRows: NativePullDownAction[] = [
+    {
+      ...checkable(`${PROJECT_FILTER_PREFIX}${HOME_DIALOGUE_FILTER_KEY}`, t(`${MENU}.dialogueFolder`),
+        projectExplicitlySelected(state.projectFilter, HOME_DIALOGUE_FILTER_KEY), true),
+      subtitle: String(input.dialogueCount),
+    },
+    ...input.projects.map((project) => ({
+      ...checkable(`${PROJECT_FILTER_PREFIX}${project.key}`, project.title,
+        projectExplicitlySelected(state.projectFilter, project.key), true),
+      subtitle: [project.subtitle, String(project.count)].filter(Boolean).join(" · "),
+    })),
+  ];
+  const filter = submenu(
+    "filter",
+    t(`${MENU}.filterHeading`),
+    filterCount > 0 ? t(`${MENU}.filterSummaryActive`, { count: filterCount }) : t(`${MENU}.summaryNone`),
+    "line.3.horizontal.decrease.circle",
+    [
+      submenu("filter.projects", t(`${MENU}.filterProjectsHeading`), projectValue, "folder", [
+        section("filter.projects.allGroup", [
+          // 「所有项目」是重置动作:选完收起菜单。
+          checkable("filter.projects.all", t(`${MENU}.filterAllProjects`), state.projectFilter === "all"),
+        ]),
+        section("filter.projects.list", projectRows),
+      ]),
+      submenu("filter.vendor", t(`${MENU}.filterVendorHeading`), t(`${MENU}.filterVendor.${state.vendorFilter}`), "cpu",
+        HOME_VENDOR_FILTERS.map((vendor) =>
+          checkable(`filter.vendor.${vendor}`, t(`${MENU}.filterVendor.${vendor}`), state.vendorFilter === vendor))),
+      submenu("filter.lastActivity", t(`${MENU}.filterLastActivityHeading`),
+        t(`${MENU}.filterLastActivity.${state.lastActivityFilter}`), "calendar",
+        HOME_LAST_ACTIVITY_FILTERS.map((range) =>
+          checkable(`filter.lastActivity.${range}`, t(`${MENU}.filterLastActivity.${range}`),
+            state.lastActivityFilter === range))),
+      section("filter.resetGroup", [{
+        disabled: filterCount === 0,
+        id: "filter.reset",
+        image: "arrow.counterclockwise",
+        title: t(`${MENU}.filterReset`),
+      }]),
+    ],
+  );
+
+  return [
+    section("organize", organize),
+    section("narrow", [
+      submenu("status", t(`${MENU}.statusHeading`), t(`${MENU}.status.${state.statusFilter}`), "checklist",
+        STATUS_OPTIONS.map((status) =>
+          checkable(`status.${status}`, t(`${MENU}.status.${status}`), state.statusFilter === status))),
+      filter,
+    ]),
+    section("appearance", [
+      submenu("view", t(`${MENU}.displayHeading`), t(`${MENU}.view.${state.viewMode}`),
+        state.viewMode === "text" ? "text.justify.left" : "list.bullet.rectangle.portrait",
+        VIEW_OPTIONS.map((mode) =>
+          checkable(`view.${mode}`, t(`${MENU}.view.${mode}`), state.viewMode === mode))),
+      submenu("taskInfo", t(`${MENU}.taskInfoHeading`), homeTaskInfoSummary(state.taskInfoFields, t), "info.circle",
+        HOME_TASK_INFO_FIELDS.map((field) =>
+          checkable(`taskInfo.${field}`, t(`${MENU}.taskInfo.${field}`), state.taskInfoFields.includes(field), true))),
     ]),
   ];
-  if (input.groupByProject && input.showProjectOrder) {
-    groups.push(
-      inlineGroup("projectOrder", input.projectOrderHeading, [
-        checkable(
-          "projectOrder.activity",
-          input.projectOrderActivityLabel,
-          input.projectOrder === "activity",
-        ),
-        checkable(
-          "projectOrder.custom",
-          input.projectOrderCustomLabel,
-          input.projectOrder === "custom",
-        ),
-      ]),
-    );
+}
+
+/** 菜单动作 → 偏好补丁;未知 id 返回 null(调用方忽略)。 */
+export function homeDisplayActionPatch(
+  id: string,
+  state: HomeDisplayMenuState,
+): HomeDisplayPatch | null {
+  if (id === "group.project") return { groupByProject: !state.groupByProject };
+  if (id === "group.dialogue") return { groupDialogue: !state.groupDialogue };
+  if (id === "filter.reset") return { lastActivityFilter: "all", projectFilter: "all", vendorFilter: "all" };
+  if (id === "filter.projects.all") return { projectFilter: "all" };
+  if (id.startsWith(PROJECT_FILTER_PREFIX)) {
+    const key = id.slice(PROJECT_FILTER_PREFIX.length);
+    return key ? { projectFilter: toggleProjectFilter(state.projectFilter, key) } : null;
   }
-  groups.push(
-    inlineGroup("status", input.statusHeading, [
-      checkable(
-        "status.active",
-        input.statusActiveLabel,
-        input.statusFilter === "active",
-      ),
-      checkable(
-        "status.archived",
-        input.statusArchivedLabel,
-        input.statusFilter === "archived",
-      ),
-      checkable(
-        "status.all",
-        input.statusAllLabel,
-        input.statusFilter === "all",
-      ),
-    ]),
-  );
-  return groups;
+  const [head, value] = splitActionId(id);
+  switch (head) {
+    case "sort":
+      return SORT_OPTIONS.includes(value as HomeListSortBy) ? { sortBy: value as HomeListSortBy } : null;
+    case "projectOrder":
+      return PROJECT_ORDER_OPTIONS.includes(value as HomeProjectOrder)
+        ? { projectOrder: value as HomeProjectOrder }
+        : null;
+    case "status":
+      return STATUS_OPTIONS.includes(value as HomeStatusFilter) ? { statusFilter: value as HomeStatusFilter } : null;
+    case "filter.vendor":
+      return HOME_VENDOR_FILTERS.includes(value as HomeVendorFilter)
+        ? { vendorFilter: value as HomeVendorFilter }
+        : null;
+    case "filter.lastActivity":
+      return HOME_LAST_ACTIVITY_FILTERS.includes(value as HomeLastActivityFilter)
+        ? { lastActivityFilter: value as HomeLastActivityFilter }
+        : null;
+    case "view":
+      return VIEW_OPTIONS.includes(value as HomeListViewMode) ? { viewMode: value as HomeListViewMode } : null;
+    case "taskInfo":
+      return HOME_TASK_INFO_FIELDS.includes(value as HomeTaskInfoField)
+        ? { taskInfoFields: toggleTaskInfoField(state.taskInfoFields, value as HomeTaskInfoField) }
+        : null;
+    default:
+      return null;
+  }
+}
+
+function splitActionId(id: string): [string, string] {
+  const index = id.lastIndexOf(".");
+  return index < 0 ? [id, ""] : [id.slice(0, index), id.slice(index + 1)];
 }

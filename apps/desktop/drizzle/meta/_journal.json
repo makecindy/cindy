@@ -869,6 +869,20 @@
       "when": 1791260458468,
       "tag": "0123_wonderful_oracle",
       "breakpoints": true
+    },
+    {
+      "idx": 124,
+      "version": "6",
+      "when": 1791526759742,
+      "tag": "0124_funny_glorian",
+      "breakpoints": true
+    },
+    {
+      "idx": 125,
+      "version": "6",
+      "when": 1791563747047,
+      "tag": "0125_magical_night_thrasher",
+      "breakpoints": true
     }
   ]
 }
