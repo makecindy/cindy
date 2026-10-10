@@ -519,6 +519,45 @@ describe("image viewer gesture lifecycle", () => {
     expect(runtime.nodes.get("FlatList").scrollEnabled).toBe(true);
   });
 
+  it("unlocks paging after a synchronous settle under reduced motion", () => {
+    runtime.immediate = true;
+    mount();
+    fire(pinch(), "onStart", { focalX: 200, focalY: 400 });
+    fire(pinch(), "onChange", { focalX: 220, focalY: 420, scale: 0.5 });
+    fire(pinch(), "onFinalize");
+    expect(transform()).toEqual({ x: 0, y: 0, scale: 1 });
+    expect(runtime.nodes.get("FlatList").scrollEnabled).toBe(true);
+  });
+
+  it("keeps settling into the new bounds when the image size arrives mid-spring", () => {
+    mount();
+    doubleTapAtCorner();
+    finishAnimations();
+    fire(pinch(), "onStart", { focalX: 250, focalY: 300 });
+    fire(pinch(), "onChange", { focalX: 250, focalY: 300, scale: 2.4 });
+    fire(pinch(), "onFinalize");
+    // 横图 1600×900 contain 后 400×225:4x 时纵向溢出只剩 (900-800)/2 = 50
+    act(() => runtime.nodes.get("Image").onLoad({ source: { width: 1600, height: 900 } }));
+    finishAnimations();
+    const settled = transform();
+    expect(settled.scale).toBe(4);
+    expect(Math.abs(settled.y)).toBeLessThanOrEqual(50);
+    expect(runtime.nodes.get("FlatList").scrollEnabled).toBe(false);
+  });
+
+  it("unlocks paging when the image size arrives during a translation-only settle at 1x", () => {
+    mount();
+    // 倍率未变、只有焦点漂移:松手只回弹位移
+    fire(pinch(), "onStart", { focalX: 200, focalY: 400 });
+    fire(pinch(), "onChange", { focalX: 260, focalY: 400, scale: 1 });
+    fire(pinch(), "onFinalize");
+    expect(runtime.nodes.get("FlatList").scrollEnabled).toBe(false);
+    act(() => runtime.nodes.get("Image").onLoad({ source: { width: 1600, height: 900 } }));
+    finishAnimations();
+    expect(transform()).toEqual({ x: 0, y: 0, scale: 1 });
+    expect(runtime.nodes.get("FlatList").scrollEnabled).toBe(true);
+  });
+
   it("keeps the native edge bounce available for a single image at 1x", () => {
     const url = "https://example.invalid/solo.png";
     mount({

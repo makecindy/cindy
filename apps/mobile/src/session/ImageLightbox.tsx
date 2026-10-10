@@ -1088,6 +1088,51 @@ const LightboxPage = memo(function LightboxPage({
     onZoomChange(value);
   }, [onZoomChange]);
 
+  /**
+   * 倍率与位移一起弹到合法落点。三者同一弹簧、零初速:归一化进度逐帧相同,
+   * 画面上 p·s + T 线性插值,焦点下那一点全程不漂。调用前 origin 必须已归零。
+   * 手势松手与尺寸变化(回弹途中原图尺寸到达)共用,翻页锁与落定上报只在这一处。
+   */
+  const springToTransform = useCallback((target: { scale: number; x: number; y: number }) => {
+    'worklet';
+    savedScale.value = target.scale;
+    savedTranslateX.value = target.x;
+    savedTranslateY.value = target.y;
+    const scaleMoves = scale.value !== target.scale;
+    const xMoves = translateX.value !== target.x;
+    const yMoves = translateY.value !== target.y;
+    if (!scaleMoves && !xMoves && !yMoves) {
+      zoomSettling.value = 0;
+      runOnJS(reportZoomed)(isLightboxZoomed(target.scale));
+      return;
+    }
+    // 先置标记、先锁翻页,再启动动画:减少动态效果下回调会在赋值时同步执行,
+    // 落定上报必须是最后一次(与双击路径一致)。回到 1x 的回弹期间锁住翻页,
+    // 否则缩小松手后立刻横划会被翻页抢走、在回弹中途切走当前图。
+    zoomSettling.value = 1;
+    runOnJS(reportZoomed)(true);
+    // 落定回调只挂在一条动画上;被新手势打断(finished=false)时由接管方负责翻页锁。
+    const onSettled = (finished?: boolean) => {
+      'worklet';
+      if (!finished) return;
+      zoomSettling.value = 0;
+      runOnJS(reportZoomed)(isLightboxZoomed(savedScale.value));
+    };
+    if (scaleMoves) scale.value = withSpring(target.scale, LIGHTBOX_SETTLE_SPRING, onSettled);
+    if (xMoves) {
+      translateX.value = withSpring(target.x, LIGHTBOX_SETTLE_SPRING, scaleMoves ? undefined : onSettled);
+    }
+    if (yMoves) {
+      translateY.value = withSpring(
+        target.y,
+        LIGHTBOX_SETTLE_SPRING,
+        scaleMoves || xMoves ? undefined : onSettled,
+      );
+    }
+    // 共享值引用恒定,只随 reportZoomed 重建
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reportZoomed]);
+
   useEffect(() => {
     const size = lightboxContainedSize(
       width,
@@ -1114,6 +1159,21 @@ const LightboxPage = memo(function LightboxPage({
       );
       savedTranslateX.value = next.x;
       savedTranslateY.value = next.y;
+      return;
+    }
+    // 松手回弹途中:直接改 live 会打断回弹,落定回调不触发,翻页一直锁着、倍率
+    // 也可能停在范围外。把目标收进新边界,从当前帧重新发起同一次回弹。
+    if (zoomSettling.value) {
+      const next = reclampLightboxPan(
+        savedTranslateX.value,
+        savedTranslateY.value,
+        width,
+        height,
+        savedScale.value,
+        size.width,
+        size.height,
+      );
+      springToTransform({ scale: savedScale.value, x: next.x, y: next.y });
       return;
     }
     const next = reclampLightboxPan(
@@ -1178,43 +1238,6 @@ const LightboxPage = memo(function LightboxPage({
       if (pinchBusy.value || panBusy.value) return;
       chromeHidden.value = withTiming(0, { duration: motionDuration.fast });
       runOnJS(onChromeBusy)(false);
-    };
-    /**
-     * 倍率与位移一起弹到合法落点。三者同一弹簧、零初速:归一化进度逐帧相同,
-     * 画面上 p·s + T 线性插值,焦点下那一点全程不漂。调用前 origin 必须已归零。
-     */
-    const springToTransform = (target: { scale: number; x: number; y: number }) => {
-      'worklet';
-      savedScale.value = target.scale;
-      savedTranslateX.value = target.x;
-      savedTranslateY.value = target.y;
-      const scaleMoves = scale.value !== target.scale;
-      const xMoves = translateX.value !== target.x;
-      const yMoves = translateY.value !== target.y;
-      const animating = scaleMoves || xMoves || yMoves;
-      // 落定回调只挂在一条动画上;被新手势打断(finished=false)时由接管方负责翻页锁。
-      const onSettled = (finished?: boolean) => {
-        'worklet';
-        if (!finished) return;
-        zoomSettling.value = 0;
-        runOnJS(reportZoomed)(isLightboxZoomed(savedScale.value));
-      };
-      if (scaleMoves) scale.value = withSpring(target.scale, LIGHTBOX_SETTLE_SPRING, onSettled);
-      if (xMoves) {
-        translateX.value = withSpring(target.x, LIGHTBOX_SETTLE_SPRING, scaleMoves ? undefined : onSettled);
-      }
-      if (yMoves) {
-        translateY.value = withSpring(
-          target.y,
-          LIGHTBOX_SETTLE_SPRING,
-          scaleMoves || xMoves ? undefined : onSettled,
-        );
-      }
-      // 赋值新动画会以 finished=false 回调掉旧动画,标记必须在赋值之后置位。
-      if (animating) zoomSettling.value = 1;
-      // 回弹到 1x 期间继续锁住翻页,落定后才放开(与双击缩回同一约定):
-      // 否则缩小松手后立刻横划,会被翻页抢走、在回弹中途切走当前图。
-      runOnJS(reportZoomed)(animating || isLightboxZoomed(target.scale));
     };
     const settlePinch = () => {
       'worklet';
@@ -1552,6 +1575,7 @@ const LightboxPage = memo(function LightboxPage({
     reportZoomed,
     onDrawPoint,
     onChromeBusy,
+    springToTransform,
   ]);
 
   const imageStyle = useAnimatedStyle(() => ({
