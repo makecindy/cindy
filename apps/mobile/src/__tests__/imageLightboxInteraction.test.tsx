@@ -18,7 +18,11 @@ type GestureNode = {
   handlers: Record<string, Handler>;
   children?: GestureNode[];
 };
-type Animation = { target: number; done?: (finished: boolean) => void };
+type Animation = {
+  target: number;
+  done?: (finished: boolean) => void;
+  decay?: { velocity: number; clamp: [number, number]; rubberBandEffect?: boolean };
+};
 type Value = { value: number; animation?: Animation };
 const runtime = vi.hoisted(() => ({
   nodes: new Map<string, any>(),
@@ -181,6 +185,12 @@ vi.mock("react-native-reanimated", async () => {
     cancelAnimation: cancel,
     withTiming: timing,
     withSpring: timing,
+    // 惯性滑行:测试里按速度方向直接落到 clamp 端点。
+    withDecay: (decay: NonNullable<Animation["decay"]>, done?: Animation["done"]) => ({
+      target: decay.velocity > 0 ? decay.clamp[1] : decay.clamp[0],
+      done,
+      decay,
+    }),
   };
 });
 
@@ -422,6 +432,101 @@ describe("image viewer gesture lifecycle", () => {
     finishAnimations();
     expect(transform().y).toBe(0);
     expect(transform().x).toBe(-195);
+  });
+
+  // 双击右下角后:2.5x,T=(-195,-375);未知尺寸按 400×800 铺满,溢出 x=300、y=600。
+  it("keeps following a zoomed pan past the image edge and springs back on release", () => {
+    mount();
+    doubleTapAtCorner();
+    finishAnimations();
+    fire(pan(), "onStart");
+    fire(pan(), "onChange", { changeX: -200, changeY: 0 });
+    const stretched = transform().x;
+    expect(stretched).toBeLessThan(-300);
+    expect(stretched).toBeGreaterThan(-395);
+    // 往回拖同样的距离回到原处,越界段不吞位移
+    fire(pan(), "onChange", { changeX: 200, changeY: 0 });
+    expect(transform().x).toBeCloseTo(-195, 6);
+    fire(pan(), "onChange", { changeX: -200, changeY: 0 });
+    fire(pan(), "onFinalize", { velocityX: 0, velocityY: 0 });
+    finishAnimations();
+    expect(transform()).toEqual({ x: -300, y: -375, scale: 2.5 });
+  });
+
+  it("flings with inertia inside the bounds and a touch catches it in place", () => {
+    mount();
+    doubleTapAtCorner();
+    finishAnimations();
+    fire(pan(), "onStart");
+    fire(pan(), "onChange", { changeX: 10, changeY: 0 });
+    fire(pan(), "onFinalize", { velocityX: 1500, velocityY: 0 });
+    const fling = runtime.values.find((v) => v.animation?.decay)?.animation?.decay;
+    expect(fling).toEqual({ velocity: 1500, clamp: [-300, 300], rubberBandEffect: true });
+    const fail = vi.fn();
+    act(() => pan().handlers.onTouchesDown({}, { fail }));
+    expect(fail).not.toHaveBeenCalled();
+    expect(runtime.values.some((v) => v.animation?.decay)).toBe(false);
+    // 接住后没拖就抬手:在边界内原地停住,不再滑也不回弹
+    const caught = transform();
+    fire(pan(), "onFinalize", {}, false);
+    finishAnimations();
+    expect(transform()).toEqual(caught);
+  });
+
+  it("lets a pinch overshoot the max zoom and settles back around the fingers", () => {
+    mount();
+    doubleTapAtCorner();
+    finishAnimations();
+    // 焦点相对中心 (50,-100),其下图片点 p = (F - T) / 2.5 = (98, 110)
+    fire(pinch(), "onStart", { focalX: 250, focalY: 300 });
+    fire(pinch(), "onChange", { focalX: 250, focalY: 300, scale: 2.4 });
+    expect(transform().scale).toBeGreaterThan(4);
+    expect(transform().scale).toBeLessThan(6);
+    fire(pinch(), "onFinalize");
+    expect(runtime.nodes.get("FlatList").scrollEnabled).toBe(false);
+    finishAnimations();
+    const settled = transform();
+    expect(settled.scale).toBe(4);
+    expect(settled.x + 98 * settled.scale).toBeCloseTo(50, 6);
+    expect(settled.y + 110 * settled.scale).toBeCloseTo(-100, 6);
+  });
+
+  it("zooms a second pinch around the fingers, not the stale screen focal", () => {
+    mount();
+    doubleTapAtCorner();
+    finishAnimations();
+    fire(pinch(), "onStart", { focalX: 250, focalY: 300 });
+    fire(pinch(), "onChange", { focalX: 250, focalY: 300, scale: 1.2 });
+    fire(pinch(), "onFinalize");
+    finishAnimations();
+    const after = transform();
+    expect(after.scale).toBe(3);
+    expect(after.x + 98 * after.scale).toBeCloseTo(50, 6);
+    expect(after.y + 110 * after.scale).toBeCloseTo(-100, 6);
+  });
+
+  it("lets a pinch shrink below 1x and springs back to the fitted image", () => {
+    mount();
+    fire(pinch(), "onStart", { focalX: 200, focalY: 400 });
+    fire(pinch(), "onChange", { focalX: 220, focalY: 420, scale: 0.5 });
+    expect(transform().scale).toBeLessThan(1);
+    expect(transform().scale).toBeGreaterThan(0.5);
+    fire(pinch(), "onFinalize");
+    finishAnimations();
+    expect(transform()).toEqual({ x: 0, y: 0, scale: 1 });
+    expect(runtime.nodes.get("FlatList").scrollEnabled).toBe(true);
+  });
+
+  it("keeps the native edge bounce available for a single image at 1x", () => {
+    const url = "https://example.invalid/solo.png";
+    mount({
+      images: [{
+        key: "solo", url, title: "Solo", subtitle: "",
+        payload: { kind: "media", media: { kind: "image", url, previewable: true } },
+      } as ImageLightboxProps["images"][number]],
+      initialUrl: url,
+    });
+    expect(runtime.nodes.get("FlatList").scrollEnabled).toBe(true);
   });
 
   it("does not accept dragging as the second tap", () => {
