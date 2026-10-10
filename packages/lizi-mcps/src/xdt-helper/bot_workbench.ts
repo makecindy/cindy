@@ -210,8 +210,8 @@ const TASK_ID = z
 const JUDGMENT_FIELDS = {
   task_id: TASK_ID,
   title: z.string().min(1).max(40).describe('人话标题'),
-  verdict: z.enum(['unfinished', 'idea', 'done']).describe('你的判断'),
-  next: z.string().max(120).optional().describe('一句下一步;done 可省略'),
+  verdict: z.enum(['unfinished', 'idea', 'done']).describe('unfinished 承诺未完成;idea 尚未接下的建议;done 有依据完成(当前界面隐藏)'),
+  next: z.string().max(120).optional().describe('一句当前进展与下一步;done 时记录完成依据,无专门的完成依据字段'),
   ref: z
     .string()
     .max(2000)
@@ -250,14 +250,16 @@ export function registerBotWorkbenchTools(
     description:
       '读取你的工作台:主人交给你的项目,每个项目的素材(brief:文档路径、git 分支与最近 14 天提交、我打开的 PR 与 issue;项目很多时只有最近交代的前 8 个带 brief,其余为 null,需要时用文件工具自己看),'
       + '项目里最近 30 天的会话(项目里的 Cindy 任务——包括主人自己开的——不管你判断过没有都在,最多 30 条;再补本机 Claude Code / Codex / Pi 会话,合计最多 40 条;更早的只给 olderCount),你写过的 PR / issue / 建议条目,你的例行任务与项目里的自动化。'
-      + '主人提到这个项目、让你跟进或问进展时,先看工作台;主人自己在项目里开的任务也在里面,它们属于你知道的项目事务,不需要主人逐个告诉你。'
+      + 'Todo 是你在对话中答应主人的事务,可早于项目或任务;当前工具只支持已接手项目内的记录,不支持无项目 Todo,不要创建伪项目或把日常事务塞成项目 idea。'
+      + '主人提到这个项目、让你跟进或问进展,或对话/任务回传/已授权跟进中发现承诺变化时,读相关记录并沿用 id 更新;没有变化不反复读写。项目里的任务是上下文,不应逐条复制为 Todo。'
       + '每条会话带 digest:起始目的与最后几条对话,足够大多数判断,不用逐个读全文。'
       + '接手的做法:主人把项目交给你时,先调用它;再用你自己的文件工具读 brief.docs 里最前面的一两份(README / DESIGN / AGENTS 之类),弄清项目是做什么的、在往哪走;'
-      + '然后看最近的提交(不是 git 仓库时看 brief.recent)和会话 digest,一次性用 set_workbench_tasks 批量写下判断;只有拿不准的几件才 read_workbench_task。'
+      + '然后看最近的提交(不是 git 仓库时看 brief.recent)和会话 digest,只对实际变化的相关事项用 set_workbench_tasks 批量写下判断;只有拿不准的几件才 read_workbench_task。'
       + '判断与下一步要体现你对项目的理解(它在项目里处于什么位置、和哪份文档或哪次提交有关),不要只复述会话。'
       + '项目文档(如 DESIGN.md)、最近的 PR 与 issue 同样是素材:值得做的写成 pr:<owner>/<repo>#<n>、issue:<owner>/<repo>#<n> 或 idea:<slug> 条目,带上 ref。'
-      + '判断标准:最后一条是没被执行的要求、报错中断、明确留下的待办 → unfinished;讨论过方案或想法但之后没人动 → idea;已交付、纯问答、与项目无关 → done。'
-      + '写完后在聊天里用几句话告诉主人:没做完的几件各一句下一步,值得做的几件各一句建议,问主人要接着做哪件。不要自作主张开始做;只有主人点头的那件才 continue_workbench_task。'
+      + '判断标准:已接下但约定结果未达成 → unfinished;尚未接下的建议 → idea;有可核实依据达到约定结果 → done。纯问答与无关内容不新建条目;停止、空闲、PR 合并不自动等于承诺完成,仍待验收时写明下一步。'
+      + 'get_workbench 会返回尚保留且仍在项目范围内的 done 条目,当前界面隐藏,最多 200 条且旧 done 优先淘汰;继续为后台任务时也可能移除原判断,不能当完整完成历史。'
+      + '写后检查逐条结果并读回确认,聊天只简短说明结果与余项;记录建议不等于开工授权。已有同范围授权时继续跟进,不重复求许可;没有授权的建议不能自行开始。'
       + '主人在工作台上点「跟进」时会发来「跟进「<标题>」」(其它语言如 Follow up on “<标题>”):先调用本工具按标题找到那一条,'
       + '再 continue_workbench_task——会话条目发一句承接上文、收到就能接着做的指令;PR / issue / 建议条目会在项目目录开后台任务。'
       + '找不到同名条目就问主人是哪一件,不要猜;有几条同名时列出候选让主人选。'
@@ -294,10 +296,10 @@ export function registerBotWorkbenchTools(
     name: 'set_workbench_task',
     category: 'bots',
     description:
-      '写下你对一件事的理解,主人的工作台立刻显示。整条替换之前的判断。多件时用 set_workbench_tasks。'
+      '维护一件已接手项目内的事务判断。按 task_id 整条替换,多件变化用 set_workbench_tasks;保留仍有效的 ref/project,写后检查结果并用 get_workbench 读回。当前不支持无项目 Todo 或独立的可选任务/PR 关联。'
       + 'task_id:get_workbench 返回的会话 taskId,或你新写的 pr:<owner>/<repo>#<n>、issue:<owner>/<repo>#<n>(须是已接手项目的 GitHub 仓库)、idea:<slug>(小写字母数字与连字符,3–40 位)。'
-      + 'title:人话标题,不超过 40 字,说清这件事是什么;verdict:unfinished(没做完、可以接着做)/ idea(聊过但没下文,建议往下做)/ done(做完或与项目无关,工作台不显示);'
-      + 'next:一句下一步,不超过 120 字,unfinished / idea 必填;ref:可选参考(https 链接或项目内文件路径)。只写有依据的判断,不要编造。',
+      + '同一承诺沿用原 id,重复执行不重复建条目。title:当前人话标题,不超过 40 字,不用状态前缀;verdict:unfinished(约定未完成)/ idea(尚未接下的建议)/ done(有依据完成,当前界面隐藏)。无关内容不新建;记录不自动开工。'
+      + 'next:当前进展与下一步,不超过 120 字,unfinished / idea 必填;done 时写完成依据,ref 放支持依据的 https 链接或项目内文件路径。没有专门完成依据字段。停止或合并仍待验收则保持 unfinished;事实未知写待核实。只写有依据的判断,不要编造。',
     inputShape: JUDGMENT_FIELDS,
     handler: async (args) => {
       const sessionId = callerSessionId();
@@ -314,7 +316,7 @@ export function registerBotWorkbenchTools(
     category: 'bots',
     description:
       `批量写下判断(1–${WORKBENCH_BATCH_MAX} 条),字段与 set_workbench_task 相同。逐条校验,一条不合格不影响其它条;返回每条的结果。`
-      + '接手项目时优先用它:看完 get_workbench 的 brief 与 digest 后一次写完。',
+      + '对话承诺、任务回传、用户纠正或已授权跟进发现相关变化后才写,同一承诺沿用 id;没有变化不造条目。检查每条结果,部分失败不代表全部成功,再 get_workbench 读回。与单条工具一样,当前只支持项目内记录。',
     inputShape: {
       items: z.array(z.object(JUDGMENT_FIELDS)).min(1).max(WORKBENCH_BATCH_MAX).describe('判断列表'),
     },
