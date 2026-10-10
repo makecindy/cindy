@@ -704,6 +704,25 @@ describe('Bot canonical Session lifecycle', () => {
     expect(capabilities.mcpServers).toEqual([]);
   });
 
+  it.each(['available', 'disconnected', 'deleted'])('checks the Desktop invitation selection at submission: %s', async state => {
+    const control = await import('../../../maker-ipc/appDefaultModelControl.js');
+    const real = await vi.importActual<typeof control>('../../../maker-ipc/appDefaultModelControl.js');
+    vi.mocked(control.validateTaskModel).mockImplementation(real.validateTaskModel);
+    try {
+      const route: BotModelRoute = { harness: 'pi', providerId: 'xd', model: 'z-ai/glm-5.3-flash', effort: 'high', fastMode: false };
+      if (state === 'disconnected') h.providers[0]!.connected = false;
+      if (state === 'deleted') h.providers = [];
+      const before = h.sqlite!.prepare('SELECT id FROM bot_profiles').all();
+      const creating = invoke('local-db:bots:create', { id: 'desktop-selected', name: 'Selected', prepareInvitation: true,
+        capabilities: { modelChainOverride: [route] } });
+      if (state === 'available') await expect(creating).resolves.toMatchObject({ id: 'desktop-selected' });
+      else {
+        await expect(creating).rejects.toThrow('Model route unavailable');
+        expect(h.sqlite!.prepare('SELECT id FROM bot_profiles').all()).toEqual(before);
+      }
+    } finally { vi.mocked(control.validateTaskModel).mockResolvedValue(true); }
+  });
+
   it('preserves explicit creation selections under the new capability contract', async () => {
     const created = await invoke('local-db:bots:create', {
       id: 'selected-bot', name: 'Selected Bot',

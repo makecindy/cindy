@@ -1830,6 +1830,17 @@ export function registerBotIpc(): void {
 
   ipcMain.handle('local-db:bots:create', async (event, raw: unknown) => {
     assertTrustedAppRendererEvent(event);
+    const body = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw as Record<string, unknown> : {};
+    if (body.prepareInvitation === true) {
+      const owner = captureBotOperationOwner();
+      const capabilities = body.capabilities && typeof body.capabilities === 'object' && !Array.isArray(body.capabilities)
+        ? body.capabilities as Record<string, unknown> : {};
+      const [primary] = await readEffectiveBotModelChain(capabilities);
+      owner.assertCurrent();
+      const available = primary && await validateTaskModel(primary);
+      owner.assertCurrent();
+      if (!available) throwIpcError('INVALID_PARAMS', 'Model route unavailable');
+    }
     return createBotProfile(raw);
   });
 
