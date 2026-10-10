@@ -802,7 +802,8 @@
       "permissionPromptTitleWithTool": "{{toolName}} 사용을 허용할까요?",
       "allowOnce": "한 번 허용",
       "alwaysAllowForSession": "이 세션에서 항상 허용",
-      "deny": "거부"
+      "deny": "거부",
+      "aiBadge": "AI · 사람 아님"
     }
   },
   "settings": {
@@ -8128,6 +8129,16 @@
     }
   },
   "bots": {
+    "aiBadge": {
+      "label": "AI 구동 · 사람 아님",
+      "ariaLabel": "이 컴패니언은 AI가 구동하며 사람이 아닙니다"
+    },
+    "aiDisclosure": {
+      "title": "컴패니언은 AI입니다",
+      "description": "컴패니언은 AI가 구동하는 가상 어시스턴트입니다. 사람이 아니며 인간의 감정이나 자아 의식을 갖고 있지 않습니다. 의인화된 모습은 인터페이스 스킨일 뿐입니다.",
+      "detail": "내용을 읽고 이해한 후에 상호작용을 시작해 주세요.",
+      "confirm": "확인했습니다, 시작할게요"
+    },
     "workbench": {
       "title": "작업대",
       "open": "워크벤치 열기",

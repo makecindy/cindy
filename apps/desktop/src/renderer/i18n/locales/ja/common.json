@@ -802,7 +802,8 @@
       "permissionPromptTitleWithTool": "{{toolName}} を許可しますか?",
       "allowOnce": "一度だけ許可",
       "alwaysAllowForSession": "このセッションで常に許可",
-      "deny": "拒否"
+      "deny": "拒否",
+      "aiBadge": "AI・人間ではありません"
     }
   },
   "settings": {
@@ -8128,6 +8129,16 @@
     }
   },
   "bots": {
+    "aiBadge": {
+      "label": "AI 生成・人間ではありません",
+      "ariaLabel": "このコンパニオンは AI によって駆動しており、人間ではありません"
+    },
+    "aiDisclosure": {
+      "title": "コンパニオンは AI です",
+      "description": "コンパニオンは AI が駆動するバーチャルアシスタントです。人間ではなく、人間のような感情や自己意識を持ちません。擬人化された姿はインターフェースのスキンにすぎません。",
+      "detail": "内容をご確認・ご理解のうえ、ご利用を始めてください。",
+      "confirm": "理解しました。使ってみる"
+    },
     "workbench": {
       "title": "ワークベンチ",
       "open": "ワークベンチを開く",

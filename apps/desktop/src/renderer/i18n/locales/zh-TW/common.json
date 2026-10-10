@@ -802,7 +802,8 @@
       "permissionPromptTitleWithTool": "允許 {{toolName}}？",
       "allowOnce": "允許一次",
       "alwaysAllowForSession": "本任務總是允許",
-      "deny": "拒絕"
+      "deny": "拒絕",
+      "aiBadge": "AI · 非真人"
     }
   },
   "settings": {
@@ -8128,6 +8129,16 @@
     }
   },
   "bots": {
+    "aiBadge": {
+      "label": "由 AI 驅動 · 非真人",
+      "ariaLabel": "本夥伴由 AI 驅動，非真人"
+    },
+    "aiDisclosure": {
+      "title": "夥伴由 AI 驅動",
+      "description": "「夥伴」是由 AI 驅動的虛擬助手，不是真人，也不具備人類情感或自我意識；它的擬人形象只是介面皮膚。",
+      "detail": "請在閱讀並理解上述資訊後再開始互動。",
+      "confirm": "我知道了，開始使用"
+    },
     "workbench": {
       "title": "工作台",
       "open": "打開工作台",

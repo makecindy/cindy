@@ -19,6 +19,7 @@ import { WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 import { useRegisterContentHeader } from '../feature-context';
 import { openBotWorkbenchTab } from '@/features/right-sidebar/lib/openBotWorkbenchTab';
 import { BotAvatar } from './BotAvatar';
+import { BotAiBadge } from './BotAiBadge';
 import { isCindyDeviceBot } from './cindyDeviceRoster';
 import { CindyHeaderDevicePicker } from './CindyDevicePicker';
 
@@ -60,6 +61,8 @@ export function BotSessionContentHeader({ bot }: { bot: BotChatIdentity }) {
         <BotAvatar bot={bot} size="xs" />
         <span className="min-w-0 truncate">{bot.name}</span>
       </button>
+      {/* 持续的 AI 身份公示:固定在内容头,不随滚动、皮肤或任务状态消失。 */}
+      <BotAiBadge />
       {isCindy ? <CindyHeaderDevicePicker bot={bot} /> : null}
       <div className="ml-auto flex shrink-0 items-center gap-1">
         {bot.deviceId && !isCindy ? (

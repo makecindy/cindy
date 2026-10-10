@@ -6,6 +6,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
 import { Spinner } from '@/components/ui/spinner';
+import { BotAiDisclosureGate } from './BotAiDisclosureDialog';
 import { CCAgentSessionView } from '@/features/cc-agent/CCAgentSessionView';
 import type { ComposerBotMention } from '@/lib/fileTypes';
 import { getBotLastReadAt, markBotRead } from './botReadState';
@@ -257,6 +258,8 @@ function BotSessionGateView() {
   }
   return (
     <main className="relative flex h-full min-w-0 overflow-hidden bg-[var(--surface)]">
+      {/* 首次进入伙伴互动前的一次性 AI 身份确认(设备级一次,之后靠 Badge 持续公示)。 */}
+      <BotAiDisclosureGate />
       <div className="min-w-0 flex-1">
         <CCAgentSessionView
           botMentions={gate.mentions}

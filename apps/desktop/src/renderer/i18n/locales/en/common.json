@@ -808,7 +808,8 @@
       "permissionPromptTitleWithTool": "Allow {{toolName}}?",
       "allowOnce": "Allow once",
       "alwaysAllowForSession": "Always allow for this session",
-      "deny": "Deny"
+      "deny": "Deny",
+      "aiBadge": "AI · Not human"
     }
   },
   "settings": {
@@ -8136,6 +8137,16 @@
     }
   },
   "bots": {
+    "aiBadge": {
+      "label": "AI-powered · Not human",
+      "ariaLabel": "This companion is AI-powered, not a human"
+    },
+    "aiDisclosure": {
+      "title": "Companions are AI-powered",
+      "description": "Companions are virtual assistants driven by AI. They are not humans and have no human feelings or self-awareness; their personas are just interface skins.",
+      "detail": "Please continue only after you have read and understood this.",
+      "confirm": "Got it, start using"
+    },
     "workbench": {
       "title": "Workbench",
       "open": "Open workbench",

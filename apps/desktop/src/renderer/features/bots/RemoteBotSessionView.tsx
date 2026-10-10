@@ -8,6 +8,7 @@ import { CCAgentSessionView } from '@/features/cc-agent/CCAgentSessionView';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
 import type { Session } from '@/lib/ccAgent.types';
 import { Spinner } from '@/components/ui/spinner';
+import { BotAiDisclosureGate } from './BotAiDisclosureDialog';
 import { BotAvatar } from './BotAvatar';
 import { parseRemoteBots, type RemoteBot } from './remoteBotRoster';
 import { markRemoteBotRead, useRemoteBots } from './useRemoteBots';
@@ -89,14 +90,18 @@ export function RemoteBotSessionView() {
 
   if (bot && !failed && ready?.sessionId && ready.id === botId && ready.deviceId === deviceId) {
     return (
-      <CCAgentSessionView
-        key={`${deviceId}:${ready.sessionId}`}
-        sessionIdProp={ready.sessionId}
-        routeOwner
-        botIdentity={ready}
-        onBotReadThrough={acknowledge}
-        readOnly={!bot.online || validatedSessionId !== bot.sessionId || failed}
-      />
+      <>
+        {/* 首次进入伙伴互动前的一次性 AI 身份确认(设备级一次,之后靠 Badge 持续公示)。 */}
+        <BotAiDisclosureGate />
+        <CCAgentSessionView
+          key={`${deviceId}:${ready.sessionId}`}
+          sessionIdProp={ready.sessionId}
+          routeOwner
+          botIdentity={ready}
+          onBotReadThrough={acknowledge}
+          readOnly={!bot.online || validatedSessionId !== bot.sessionId || failed}
+        />
+      </>
     );
   }
   return (
