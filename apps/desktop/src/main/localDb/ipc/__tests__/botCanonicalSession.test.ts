@@ -1082,6 +1082,21 @@ describe('Bot canonical Session lifecycle', () => {
     expect((await invoke('local-db:bots:get', created.id)).avatar).toBe(created.avatar);
   });
 
+  it.each(['available', 'disconnected', 'deleted'])('advertises a live mobile creation default: %s', async state => {
+    const { botRemoteManagement } = await import('../botRemoteManagement');
+    const route: BotModelRoute = { harness: 'pi', providerId: 'xd', model: 'z-ai/glm-5.3-flash', effort: 'high', fastMode: false };
+    const readDefault = vi.spyOn(modelSettings, 'readEffectiveBotModelChain').mockResolvedValue([route]);
+    try {
+      if (state === 'disconnected') h.providers[0]!.connected = false;
+      if (state === 'deleted') h.providers = [];
+      const resource = await botRemoteManagement.getEditor({ controllerDeviceId: 'mobile-default-test' }, 'create', 'en');
+      const data = resource.blocks?.find(block => block.id === 'create')?.data as { creationModelChain: string };
+      expect(data.creationModelChain)
+        .toBe(JSON.stringify(state === 'available' ? [route] : []));
+      expect(await modelSettings.readEffectiveBotModelChain({})).toEqual([route]);
+    } finally { readDefault.mockRestore(); }
+  });
+
   it('reconciles mobile creation after a lost receipt without bypassing invitation preparation', async () => {
     const { botRemoteManagement } = await import('../botRemoteManagement');
     const sharp = (await import('sharp')).default;
