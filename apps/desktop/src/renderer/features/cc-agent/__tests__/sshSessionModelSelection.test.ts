@@ -144,9 +144,28 @@ describe('SSH creation model selection', () => {
     expect(getPresetFast).toHaveBeenCalledWith('codex', 'openai', 'available-model');
   });
 
-  it('retains the ordinary draft policy when the catalog has no effort levels', () => {
+  /**
+   * 目录**已声明**无档位（`efforts: []` + `defaultEffort: null`，且未标 `effortsUnknown`）时，
+   * 交出任何档位都会被 main 准入按「明确无档位」拒绝（`valid: none`），而远程投影同样没有
+   * 档位可让用户改 —— 新建任务必然失败。因此交出「不指定」，与本机草稿同一规则。
+   * （此用例原先断言 `effort: 'medium'`（保留草稿策略），那正是产生 `valid: none` 的行为。）
+   */
+  it('does not submit an effort level when the catalog declares the model has none', () => {
     expect(
       resolve([sshNativeCodexProvider([sshModel('plain', { efforts: [], defaultEffort: null })])]),
+    ).toMatchObject({
+      ok: true,
+      effort: undefined,
+      fastMode: false,
+    });
+  });
+
+  /** 目录尚未就绪（标了 `effortsUnknown`）时保留草稿策略 —— 「还没加载」不是「不支持」。 */
+  it('retains the ordinary draft policy while catalog effort levels are still unknown', () => {
+    expect(
+      resolve([sshNativeCodexProvider([
+        sshModel('plain', { efforts: [], defaultEffort: null, effortsUnknown: true }),
+      ])]),
     ).toMatchObject({
       ok: true,
       effort: 'medium',

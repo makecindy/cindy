@@ -291,7 +291,7 @@ import { makeMirrorAccessors, replaceScope, clearScope } from '@/state/deviceLin
 import type { ModelMemoryAccessors } from '@/components/new-chat/ModelSelector';
 import { remoteAgentProviders } from '@/components/new-chat/unifiedModelSelection';
 import { resolveNewMakerDraftRightSidebar } from './newMakerDraftRightSidebar';
-import { resolveNewMakerDraftEffort } from './newMakerDraftModelPrefs';
+import { resolveNewMakerDraftEffort, resolveSubmitEffort } from './newMakerDraftModelPrefs';
 import { loadSshSessionModelSelection, SshModelSelectionError } from './sshSessionModelSelection';
 import { closeAllTabs as closeRightSidebarTabs } from '@/features/right-sidebar/store';
 import { revealOrcaWorkersTab } from '@/features/right-sidebar/plugins/orca-workers/actions';
@@ -1436,7 +1436,7 @@ export function NewMakerDraftRoute() {
   // 首页是“下一次创建会话”的配置草稿,没有正在运行的当前模型需要保护。其它对话更新同一模型
   // 的全局预设后,即使该模型正显示在首页 trigger 上,也应立即采用新 effort / fast。真实会话仍
   // 由 CCAgentSessionView 的 live DB/runtime props 保护,不会走这里。
-  const localDraftEffort = useMemo<Effort>(() => {
+  const localDraftEffort = useMemo<Effort | undefined>(() => {
     if (usesDeviceCatalog || !effectiveSourceId) return chatPrefs.effort;
     const provider = providers.find((item) => item.id === effectiveSourceId);
     // 按**校准后**的模型推导:effort 必须和最终提交的模型属于同一个能力集合。
@@ -1452,6 +1452,11 @@ export function NewMakerDraftRoute() {
       ),
       efforts: model?.efforts ?? [],
       defaultEffort: model?.defaultEffort ?? null,
+      // 目录里找不到该型号 = 能力尚未就绪(保留草稿原值)；找得到但未标 effortsUnknown 且
+      // 档位表为空 = 目录已声明「无档位」，此时必须交出「不指定」，否则 main 准入按
+      // `valid: none` 拒绝，而 UI 没有档位可让用户改 —— 新建任务必然失败（Registry 里
+      // 明写「无 reasoning_effort 档位」的型号即此态）。
+      effortsUnknown: model === undefined || model.effortsUnknown === true,
     });
   }, [
     usesDeviceCatalog,
@@ -3485,6 +3490,26 @@ export function NewMakerDraftRoute() {
       },
     ): Promise<boolean | undefined> => {
       if (sendInFlightRef.current) return false;
+      // 提交前按**最终模型**的能力收敛档位（#5535 那一族）。ChatInput 回传的 effort 是 UI 展示值：
+      // `initialEffort ?? localVendorDefaults.effort` 与 `display.effort ?? 'low'` 两层兜底后必然
+      // 有值；目录已声明无档位的型号照此提交会被 main 准入按 `valid: none` 拒绝 —— 新建任务必然
+      // 失败且界面无档可改（PR #5555 的 Greptile review 指出的正是这条入口）。
+      // 复用草稿层**同一条规则**（不在消费端另写一套）；目录里查不到该模型（远程 / device-link
+      // 目标）视为能力未知 → 原样保留，行为不变。
+      const submitEffort = resolveSubmitEffort({
+        currentEffort: effort,
+        provider:
+          (opts?.providerId
+            ? providers.find((candidate) => candidate.id === opts.providerId)
+            : undefined)
+          ?? (effectiveSourceId
+            ? providers.find((candidate) => candidate.id === effectiveSourceId)
+            : undefined),
+        model,
+        // 档位能力按**目录能力引擎**查，与 localDraftEffort 同源同查法；persistedAgentKind
+        // 是 DB 形态（'cc' | …），不是 getModel 要的 AgentKind。
+        agentKind: capabilityAgentKind,
+      });
       if (effectiveCollab.enabled && collabPolicy.loading) {
         toast.warning(t('newChat.collaboration.loadingHint'));
         return false;
@@ -4119,7 +4144,7 @@ export function NewMakerDraftRoute() {
               id: sessionId,
               agentKind: persistedAgentKind,
               model,
-              effort,
+              effort: submitEffort,
               permissionMode,
               fastMode: effectiveFastMode,
               planModeEnabled: effectivePlanMode,
@@ -4324,7 +4349,7 @@ export function NewMakerDraftRoute() {
                   newSession.id,
                   dispatchedMessage,
                   model,
-                  effort,
+                  submitEffort ?? '',
                   permissionMode,
                   newDir,
                   rehomedFiles,
@@ -4376,7 +4401,7 @@ export function NewMakerDraftRoute() {
             id: sessionId,
             agentKind: persistedAgentKind,
             model,
-            effort,
+            effort: submitEffort,
             permissionMode,
             fastMode: effectiveFastMode,
             planModeEnabled: effectivePlanMode,
@@ -4552,7 +4577,7 @@ export function NewMakerDraftRoute() {
               newSession.id,
               dispatchedMessage,
               model,
-              effort,
+              submitEffort ?? '',
               permissionMode,
               sendWorkingDir,
               rehydratedFiles,
@@ -4909,7 +4934,10 @@ export function NewMakerDraftRoute() {
             // 校准 —— 这两条路径曾各自推导,于是「只在新建目标上复现」的缺陷出过三次。
             candidate: {
               model: draftInitialModel,
-              effort: draftInitialEffort,
+              // device-link 分支下 localDraftEffort 恒等于 chatPrefs.effort（上方 useMemo 的第一行），
+              // 被控端草稿值已按那台的目录校准；`??` 只为满足本接口的必填档位（不碰跨端协议），
+              // 不会在运行中改变远程草稿的行为。本机「不指定档位」的新路径不经过这里。
+              effort: draftInitialEffort ?? chatPrefs.effort,
               permissionMode: chatInitialPermissionMode,
               fastMode: effectiveFastMode,
               planModeEnabled: effectivePlanMode,
