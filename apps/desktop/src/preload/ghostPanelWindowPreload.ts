@@ -116,11 +116,23 @@ function onCurrentGhostUnreadSnapshot(
 
 const appearanceSnapshot = createAppearanceSnapshotBridge();
 
+// 与 sidebar preload 同款:hidden 基线为 true(预热不得启动装饰性播放),
+// 晚注册的订阅者先拿到最新原生状态。
+let windowHidden = true;
+onPayload<boolean>('window-hidden-change', (hidden) => {
+  windowHidden = hidden;
+});
+
 const fanOutFullscreenChange = (cb: (isFullscreen: boolean) => void): Unsub =>
   onPayload('fullscreen-change', cb);
 
 contextBridge.exposeInMainWorld('electronAPI', {
   platform: process.platform,
+  onWindowHiddenChange: (cb: (hidden: boolean) => void): (() => void) => {
+    const off = onPayload('window-hidden-change', cb);
+    cb(windowHidden);
+    return off;
+  },
   preferredSystemLocale: readPreferredSystemLocale(),
   windowMinimize: (): void => ipcRenderer.send('window-minimize'),
   windowMaximize: (): void => ipcRenderer.send('window-maximize'),

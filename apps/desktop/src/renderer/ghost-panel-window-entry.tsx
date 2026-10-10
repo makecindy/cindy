@@ -22,6 +22,7 @@ import './styles/globals.css';
 
 import { TopLevelErrorBoundary } from './components/error/TopLevelErrorBoundary';
 import { GhostPanelWindowLayout } from './components/layout/GhostPanelWindowLayout';
+import { installHiddenAnimationGate } from './lib/hiddenAnimationGate';
 import { ConfirmDialogProvider } from './components/ui/confirm-dialog-provider';
 import { applyFontSettings, getInitialFontSettings } from './hooks/useFontSettings';
 import { bootstrapInitialLocale, LocaleProvider } from './hooks/useLocale';
@@ -35,6 +36,9 @@ import {
 
 document.documentElement.dataset.platform = window.electronAPI.platform;
 bootstrapLocalThemesSync();
+// 壁纸视频解码器依赖 data-app-hidden 在窗口隐藏时暂停(main 关 backgroundThrottling
+// 期间 document.hidden 恒 false);与 sidebar/resource-usage 入口同款。
+installHiddenAnimationGate();
 themeService.applyTheme(getInitialThemeVariant().theme);
 applyFontSettings(getInitialFontSettings());
 bootstrapInitialLocale();

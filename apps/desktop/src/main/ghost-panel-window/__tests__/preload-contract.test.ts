@@ -55,11 +55,20 @@ describe('ghost panel preload contract', () => {
   it('exposes only the window chrome and media capabilities needed by the panel', () => {
     expect(topLevel).toEqual(expect.arrayContaining([
       'platform', 'preferredSystemLocale', 'windowMinimize', 'windowMaximize', 'windowClose',
+      'onWindowHiddenChange',
       'appearanceSettings', 'localThemes', 'appShortcuts', 'theme',
       'onFullscreenChange', 'getFullscreenState',
       'copyMediaToClipboard', 'showItemInFolder', 'cacheMediaForSession',
       'openMediaWithDefaultApp', 'saveMediaAs', 'ghostPanelWindow', 'ghosts',
     ]));
+  });
+
+  it('delivers the hidden baseline to late subscribers so prewarmed panels stay paused', () => {
+    // 壁纸视频解码器靠 onWindowHiddenChange 在窗口隐藏时暂停; 预热(隐藏)期挂载
+    // 的订阅者必须立刻拿到 true 基线, 不得等下一次广播。
+    expect(source).toContain('let windowHidden = true;');
+    expect(source).toContain("onPayload<boolean>('window-hidden-change'");
+    expect(source).toContain('cb(windowHidden);');
   });
 
   it('does not expose unrelated privileged namespaces', () => {
