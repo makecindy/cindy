@@ -72,7 +72,9 @@ function App() {
       </div>
       <output data-testid="order">{JSON.stringify(items)}</output>
       <output data-testid="clicks">{clicks}</output>
-      <div id="external">Outside the pinned list</div>
+      <div id="external" onDragOver={(event) => event.preventDefault()}>
+        Outside the pinned list
+      </div>
       <img
         id="ordinary-image"
         src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='20' height='20'/%3E"
@@ -89,7 +91,8 @@ for (const type of ['dragstart', 'dragend', 'drop']) {
         type,
         target:
           (event.target as HTMLElement)?.getAttribute('data-sortable-id') ??
-          (event.target as HTMLElement)?.getAttribute('data-card-id'),
+          (event.target as HTMLElement)?.getAttribute('data-card-id') ??
+          (event.target as HTMLElement)?.id,
       });
     },
     true,

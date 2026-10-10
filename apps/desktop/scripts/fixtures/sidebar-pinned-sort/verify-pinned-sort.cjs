@@ -24,7 +24,12 @@ body{padding:24px;background:var(--surface);color:var(--text-primary)}
 #external{position:fixed;left:650px;top:100px;width:200px;height:200px}output{display:none}
 `;
 
-async function drag(page, from, to, { bottom = false, cancel = false } = {}) {
+async function drag(
+  page,
+  from,
+  to,
+  { bottom = false, cancel = false, releaseOn, beforeRelease } = {},
+) {
   const source = await from.boundingBox();
   const target = await to.boundingBox();
   assert.ok(source && target, 'drag endpoints exist');
@@ -42,6 +47,16 @@ async function drag(page, from, to, { bottom = false, cancel = false } = {}) {
   // a 1px nudge can leave Chromium with the previous dragover target.
   await page.mouse.move(tx + 12, ty + (bottom ? -6 : 6), { steps: 5 });
   await page.waitForTimeout(120);
+  await beforeRelease?.();
+  if (releaseOn) {
+    const release = await releaseOn.boundingBox();
+    assert.ok(release, 'release target exists');
+    const rx = release.x + release.width / 2;
+    const ry = release.y + release.height / 2;
+    await page.mouse.move(rx, ry, { steps: 20 });
+    await page.mouse.move(rx + 12, ry + 6, { steps: 5 });
+    await page.waitForTimeout(120);
+  }
   if (cancel) await page.keyboard.press('Escape');
   await page.mouse.up();
   await page.waitForTimeout(100);
@@ -51,6 +66,7 @@ async function drag(page, from, to, { bottom = false, cancel = false } = {}) {
   const bundle = await esbuild.build({
     entryPoints: [path.join(__dirname, 'pinned-sort-fixture.tsx')],
     bundle: true,
+    nodePaths: process.env.NODE_PATH?.split(path.delimiter).filter(Boolean),
     write: false,
     jsx: 'automatic',
     alias: { '@': renderer },
@@ -111,6 +127,19 @@ async function drag(page, from, to, { bottom = false, cancel = false } = {}) {
             await page.getByTestId('project-a-title').waitFor();
           };
           const order = async () => JSON.parse(await page.getByTestId('order').textContent());
+          // Read real child positions, not React state or data-sidebar-row-order:
+          // Sortable mutates these nodes before React receives a reorder callback.
+          const domOrder = () =>
+            page
+              .locator('.fixture-list [data-sortable-native-dnd]')
+              .evaluateAll((lists) =>
+                lists.map((list) =>
+                  Array.from(list.children).map(
+                    (row) =>
+                      row.getAttribute('data-sortable-id') ?? row.getAttribute('data-card-id'),
+                  ),
+                ),
+              );
           const reorders = () =>
             page.evaluate(() =>
               window.pinnedSortEvents.filter((event) => event.type === 'reorder'),
@@ -173,14 +202,50 @@ async function drag(page, from, to, { bottom = false, cancel = false } = {}) {
               ['project-b', 'project-a', 'task'],
               'mixed project/task pins reorder',
             );
-            await load();
-            await drag(page, page.getByTestId('project-c-title'), page.locator('#external'));
-            assert.deepEqual(await reorders(), [], 'external drop does not persist');
-            await load();
-            await drag(page, page.getByTestId('project-c-title'), page.getByTestId('project-a'), {
-              cancel: true,
-            });
-            assert.deepEqual(await reorders(), [], 'Escape cancels without persisting');
+            for (const cancel of [false, true]) {
+              await load();
+              const label = cancel ? 'Escape' : 'external drop';
+              const originalOrder = await order();
+              const originalDom = await domOrder();
+              await drag(page, page.getByTestId('project-c-title'), page.getByTestId('project-a'), {
+                cancel,
+                releaseOn: cancel ? undefined : page.locator('#external'),
+                beforeRelease: async () => {
+                  assert.equal(
+                    await page.evaluate(() =>
+                      window.pinnedSortEvents.some(
+                        (event) => event.type === 'dragstart' && event.target === 'project-c',
+                      ),
+                    ),
+                    true,
+                    `${label}: native project drag actually started`,
+                  );
+                  assert.notDeepEqual(
+                    await domOrder(),
+                    originalDom,
+                    `${label}: gesture temporarily moved the actual DOM`,
+                  );
+                },
+              });
+              assert.deepEqual(await reorders(), [], `${label}: does not persist`);
+              if (!cancel) {
+                assert.equal(
+                  await page.evaluate(() =>
+                    window.pinnedSortEvents.some(
+                      (event) => event.type === 'drop' && event.target === 'external',
+                    ),
+                  ),
+                  true,
+                  'external target received the native drop',
+                );
+              }
+              assert.deepEqual(await order(), originalOrder, `${label}: React order unchanged`);
+              assert.deepEqual(
+                await domOrder(),
+                originalDom,
+                `${label}: DOM positions and column membership restored`,
+              );
+            }
 
             if (mode !== 'card') {
               await load('&native=false');
