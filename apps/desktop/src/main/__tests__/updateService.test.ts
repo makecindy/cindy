@@ -437,9 +437,8 @@ describe('agent-facing managed app update check', () => {
         expect(order).toEqual(['before:1:0']);
         expect(spawnProcess).toHaveBeenCalledOnce();
         // A second request while relaunching neither downloads nor spawns again.
-        const second = service.applyConfirmedAppUpdateForAgent({ beforeRelaunch });
-        await vi.advanceTimersByTimeAsync(21_000);
-        await expect(second).resolves.toMatchObject({ status: 'relaunching' });
+        await expect(service.applyConfirmedAppUpdateForAgent({ beforeRelaunch }))
+          .resolves.toMatchObject({ status: 'failed', errorCode: 'relaunch_in_progress' });
         expect(download).toHaveBeenCalledOnce();
         expect(spawnProcess).toHaveBeenCalledOnce();
       } finally {
@@ -581,7 +580,7 @@ describe('agent-facing managed app update check', () => {
       }
     });
 
-    it('treats a relaunch already under way as this install only for the confirmed version', async () => {
+    it('does not claim a relaunch that is already under way', async () => {
       // Idle auto-install is on and starts applying 0.0.65 as soon as it is staged.
       readAutoUpdateSettings.mockReturnValue({ autoRelaunchOnIdle: true });
       download.mockImplementation(async ({ targetPath }: { targetPath: string }) => {
@@ -596,63 +595,14 @@ describe('agent-facing managed app update check', () => {
         await vi.waitFor(() => { expect(spawnProcess).toHaveBeenCalledOnce(); });
         const beforeRelaunch = vi.fn(async () => true);
         const beforeSpawn = vi.fn(() => true);
-        await expect(service.applyConfirmedAppUpdateForAgent({ expectedVersion: '0.0.66', beforeRelaunch, beforeSpawn }))
-          .resolves.toMatchObject({ status: 'failed', errorCode: 'version_changed', stagedVersion: '0.0.65' });
-        expect(beforeSpawn).not.toHaveBeenCalled();
-        // Adopting it still passes the last gate, where the caller records its restart,
-        // and waits for that relaunch to settle (here it stays under way: process.exit is mocked).
-        const adopted = service.applyConfirmedAppUpdateForAgent({ expectedVersion: '0.0.65', beforeRelaunch, beforeSpawn });
-        await vi.advanceTimersByTimeAsync(21_000);
-        await expect(adopted).resolves.toEqual({ status: 'relaunching', targetVersion: '0.0.65' });
-        expect(beforeSpawn).toHaveBeenCalledOnce();
-        await expect(service.applyConfirmedAppUpdateForAgent({
-          expectedVersion: '0.0.65', beforeRelaunch, beforeSpawn: () => false,
-        })).resolves.toMatchObject({ status: 'failed', errorCode: 'relaunch_cancelled' });
+        await expect(service.applyConfirmedAppUpdateForAgent({ expectedVersion: '0.0.65', beforeRelaunch, beforeSpawn }))
+          .resolves.toMatchObject({ status: 'failed', errorCode: 'relaunch_in_progress' });
         expect(beforeRelaunch).not.toHaveBeenCalled();
+        expect(beforeSpawn).not.toHaveBeenCalled();
         expect(spawnProcess).toHaveBeenCalledOnce();
       } finally {
         service.stopUpdateService();
         exitSpy.mockRestore();
-      }
-    });
-
-    it('reports an adopted relaunch that fails afterwards instead of claiming it', async () => {
-      readAutoUpdateSettings.mockReturnValue({ autoRelaunchOnIdle: true });
-      download.mockImplementation(async ({ targetPath }: { targetPath: string }) => {
-        fs.mkdirSync(path.dirname(targetPath), { recursive: true });
-        fs.writeFileSync(targetPath, 'update');
-        return { path: targetPath, size: 123 };
-      });
-      const service = await freshUpdateService('win32');
-      const resourcesPath = path.join(TEST_ROOT, 'resources');
-      fs.mkdirSync(resourcesPath, { recursive: true });
-      fs.writeFileSync(path.join(resourcesPath, 'cindy-updater.exe'), 'updater');
-      const resourcesDescriptor = Object.getOwnPropertyDescriptor(process, 'resourcesPath');
-      Object.defineProperty(process, 'resourcesPath', { value: resourcesPath, configurable: true });
-      const tmpdirSpy = vi.spyOn(os, 'tmpdir').mockReturnValue(TEST_ROOT);
-      const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
-      const childListeners = new Map<string, (...args: unknown[]) => void>();
-      spawnProcess.mockImplementationOnce(() => ({
-        unref: vi.fn(),
-        on: vi.fn((event: string, listener: (...args: unknown[]) => void) => { childListeners.set(event, listener); }),
-      }));
-      try {
-        // Idle auto-install starts its own relaunch as soon as 0.0.65 is staged.
-        expect(await service.checkForUpdate()).toBe('ready');
-        await vi.waitFor(() => { expect(childListeners.has('error')).toBe(true); });
-        const adopted = service.applyConfirmedAppUpdateForAgent({
-          expectedVersion: '0.0.65', beforeRelaunch: async () => true, beforeSpawn: () => true,
-        });
-        childListeners.get('error')?.(Object.assign(new Error('spawn denied'), { code: 'EACCES' }));
-        await vi.advanceTimersByTimeAsync(200);
-        await expect(adopted).resolves.toMatchObject({ status: 'failed', errorCode: 'updater_spawn_failed' });
-        expect(exitSpy).not.toHaveBeenCalled();
-      } finally {
-        service.stopUpdateService();
-        tmpdirSpy.mockRestore();
-        exitSpy.mockRestore();
-        if (resourcesDescriptor) Object.defineProperty(process, 'resourcesPath', resourcesDescriptor);
-        else Reflect.deleteProperty(process, 'resourcesPath');
       }
     });
 

@@ -8066,7 +8066,8 @@
         "notReady": "The downloaded update is no longer available.",
         "updaterNotStarted": "The updater did not start, so {{appName}} did not restart.",
         "unsupported": "This installation does not support in-app updates.",
-        "generic": "Something went wrong during installation."
+        "generic": "Something went wrong during installation.",
+        "relaunchInProgress": "{{appName}} was already restarting to install an update from Settings or idle auto-install, so this request did not install separately."
       }
     },
     "agentAutoUpdate": {

@@ -297,12 +297,13 @@ describe('Agent app update install', () => {
     expect(harness.deps.notify).not.toHaveBeenCalled();
     // No restart happened, so no restart record is left on disk.
     expect(harness.deps.marker.add).not.toHaveBeenCalled();
-    // The notice waits in memory until the confirming account is active again.
-    harness.switchOwner(ownerA);
+    // The notice waits in memory until the confirming account is active again
+    // (a fresh sign-in: same account id, new scope object).
+    harness.switchOwner({ ownerId: 'owner-a' });
     await harness.service.deliverPendingResult();
     expect(harness.deps.notify).toHaveBeenCalledOnce();
     expect(harness.deps.notify).toHaveBeenCalledWith(
-      ownerA,
+      { ownerId: 'owner-a' },
       'task-1',
       expect.stringMatching(/^agent-app-update:/),
       expect.stringContaining('update.agentInstall.reasons.notRestarted'),

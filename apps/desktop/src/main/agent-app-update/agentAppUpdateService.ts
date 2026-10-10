@@ -50,6 +50,7 @@ const FAILURE_REASON_KEYS: Record<string, string> = {
   relaunch_cancelled: 'notRestarted',
   not_ready: 'notReady',
   relaunch_not_started: 'updaterNotStarted',
+  relaunch_in_progress: 'relaunchInProgress',
   updater_spawn_failed: 'updaterNotStarted',
   unsupported: 'unsupported',
   linux_installation_unsupported: 'unsupported',
@@ -145,7 +146,8 @@ const MAX_PENDING_NOTICES = 20;
 export const MAX_RESTART_RECORDS = 20;
 
 interface PendingNotice {
-  owner: AgentAppUpdateOwner;
+  /** Account id, not a captured scope: a later sign-in of the same account still matches. */
+  ownerId: string;
   sessionId: string;
   clientId: string;
   message: string;
@@ -276,13 +278,13 @@ export function createAgentAppUpdateService(deps: AgentAppUpdateDeps) {
     if (pendingNotices.length > MAX_PENDING_NOTICES) pendingNotices.shift();
   };
   const flushNotices = async () => {
+    const owner = deps.captureOwner();
+    if (!owner) return;
     for (const notice of [...pendingNotices]) {
-      // A concurrent flush may already have delivered it.
-      if (!pendingNotices.includes(notice)) continue;
-      // Never write into whichever account replaced the one that confirmed.
-      if (!deps.isOwnerCurrent(notice.owner)) continue;
+      // Never write into a different account; a concurrent flush may already have delivered it.
+      if (notice.ownerId !== owner.ownerId || !pendingNotices.includes(notice)) continue;
       try {
-        await deps.notify(notice.owner, notice.sessionId, notice.clientId, notice.message);
+        await deps.notify(owner, notice.sessionId, notice.clientId, notice.message);
       } catch (error) {
         deps.logger?.warn?.('agent app update notice failed; will retry', { error: String(error) });
         continue;
@@ -371,7 +373,7 @@ export function createAgentAppUpdateService(deps: AgentAppUpdateDeps) {
     // A spawn that failed after the record was written did not restart anything.
     deps.marker.remove(owner, request.requestId);
     queueNotice({
-      owner,
+      ownerId: owner.ownerId,
       sessionId: request.sessionId,
       clientId: `agent-app-update:${request.requestId}`,
       message: failureMessage(request, failure),

@@ -1318,9 +1318,6 @@ export function createMakerHookSessionRunner(deps: {
                 turnId: randomUUID(),
                 origin: routeOrigin,
                 interactionSurface: req.onInteraction ? 'channel-card' : 'headless',
-                // The official bot only proves the sender for Telegram private chats
-                // (server-bound to this account). Groups and other channels stay unknown.
-                requesterAuthority: req.source?.im === 'telegram' && req.laneKind === 'dm' ? 'owner' : 'unknown',
                 sourceDescription: describeInteractionSource({
                   channelName: req.source?.im ?? req.origin.connectionName,
                   chatId: req.source?.channelName ?? req.title ?? req.source?.im ?? 'IM',

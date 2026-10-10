@@ -2165,8 +2165,6 @@ export async function checkAppUpdateForAgent(): Promise<{
 
 /** Longer than the Windows / Linux updater spawn timeout (5 s). */
 const AGENT_RELAUNCH_SETTLE_MS = 10_000;
-/** An adopted relaunch may still be in its Subagent reclaim (≈6 s) before that spawn window. */
-const AGENT_ADOPTED_RELAUNCH_SETTLE_MS = 20_000;
 
 const AGENT_UPDATE_FAILURE_REASONS: Record<Exclude<CheckForUpdateResult, 'ready'>, string> = {
   manifest_failed: '无法读取当前渠道的更新信息。',
@@ -2235,19 +2233,16 @@ export async function applyConfirmedAppUpdateForAgent(options: {
       errorCode: lastErrorCode ?? 'relaunch_not_started',
     };
   };
-  // A relaunch already under way (Settings banner or idle auto-install) counts
-  // as this install only for the confirmed version, only after the same last
-  // gate a spawn of our own would pass (the caller records its restart there),
-  // and only once that relaunch has actually settled.
-  const adoptRelaunchUnderWay = async (): Promise<AgentConfirmedAppUpdateResult> => {
-    const changed = versionChanged();
-    if (changed) return changed;
-    if (options.beforeSpawn?.() === false) return relaunchCancelled;
-    return awaitRelaunchOutcome(readyVersion, AGENT_ADOPTED_RELAUNCH_SETTLE_MS);
+  // A relaunch already started elsewhere (Settings banner or idle auto-install)
+  // is not this request's: report it instead of claiming its outcome.
+  const relaunchInProgress: AgentConfirmedAppUpdateResult = {
+    status: 'failed',
+    reason: 'Cindy 已经在通过设置页或空闲自动安装重启更新，本次请求没有另外安装。',
+    errorCode: 'relaunch_in_progress',
   };
   const unsupported = agentUpdateUnsupportedReason();
   if (unsupported) return { status: 'failed', reason: unsupported, errorCode: 'unsupported' };
-  if (isRelaunching || autoRelaunchInProgress) return await adoptRelaunchUnderWay();
+  if (isRelaunching || autoRelaunchInProgress) return relaunchInProgress;
   if (currentStatus !== 'ready') {
     const result = await checkForUpdate();
     if (result !== 'ready') {
@@ -2257,7 +2252,7 @@ export async function applyConfirmedAppUpdateForAgent(options: {
   const changedAfterDownload = versionChanged();
   if (changedAfterDownload) return changedAfterDownload;
   if (!await options.beforeRelaunch()) return relaunchCancelled;
-  if (isRelaunching || autoRelaunchInProgress) return await adoptRelaunchUnderWay();
+  if (isRelaunching || autoRelaunchInProgress) return relaunchInProgress;
   // A background check may have superseded the staged patch during the wait.
   const changedBeforeRelaunch = versionChanged();
   if (changedBeforeRelaunch) return changedBeforeRelaunch;

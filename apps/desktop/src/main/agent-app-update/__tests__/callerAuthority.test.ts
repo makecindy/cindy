@@ -34,7 +34,7 @@ describe('isAppUpdateOwnerTurn', () => {
     expect(isAppUpdateOwnerTurn(facts({ ownerAuthoredInput: () => false }))).toBe(false);
   });
 
-  it('uses the channel owner check for IM and official-bot turns', () => {
+  it('uses the channel owner check for personal IM turns', () => {
     const imRoute = (requesterAuthority?: 'owner' | 'guest' | 'unknown') => ({
       origin: { kind: 'im' as const, channel: 'telegram' as const },
       requesterAuthority,
@@ -50,15 +50,26 @@ describe('isAppUpdateOwnerTurn', () => {
     expect(isAppUpdateOwnerTurn(facts({ route: imRoute(undefined), ownerAuthoredInput }))).toBe(
       false,
     );
+    // A channel route never falls back to Desktop input evidence.
+    expect(ownerAuthoredInput).not.toHaveBeenCalled();
+  });
+
+  it('refuses official-bot (hook) turns, which carry an automation origin', () => {
     expect(
       isAppUpdateOwnerTurn(
         facts({
+          turnOrigin: {
+            kind: 'scheduler',
+            scheduleId: 'hook:conn',
+            scheduleName: 'Hook · Telegram',
+          },
           route: { origin: { kind: 'hook', source: 'telegram' }, requesterAuthority: 'owner' },
         }),
       ),
-    ).toBe(true);
-    // A channel route never falls back to Desktop input evidence.
-    expect(ownerAuthoredInput).not.toHaveBeenCalled();
+    ).toBe(false);
+    expect(
+      isAppUpdateOwnerTurn(facts({ route: { origin: { kind: 'hook', source: 'telegram' } } })),
+    ).toBe(false);
   });
 
   it('refuses scheduler routes and IM turns without a route', () => {

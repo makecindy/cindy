@@ -8058,7 +8058,8 @@
         "notReady": "다운로드한 업데이트를 더 이상 사용할 수 없습니다.",
         "updaterNotStarted": "업데이터가 시작되지 않아 {{appName}}가 다시 시작되지 않았습니다.",
         "unsupported": "이 설치 환경은 앱 내 업데이트를 지원하지 않습니다.",
-        "generic": "설치 중 오류가 발생했습니다."
+        "generic": "설치 중 오류가 발생했습니다.",
+        "relaunchInProgress": "{{appName}}이(가) 이미 설정 또는 유휴 시 자동 설치로 다시 시작해 업데이트 중이어서 이 요청으로는 따로 설치하지 않았습니다."
       }
     },
     "agentAutoUpdate": {

@@ -8058,7 +8058,8 @@
         "notReady": "已下載的更新不再可用。",
         "updaterNotStarted": "更新器沒有啟動，{{appName}} 未重新啟動。",
         "unsupported": "目前的安裝環境不支援應用程式內更新。",
-        "generic": "安裝過程中發生錯誤。"
+        "generic": "安裝過程中發生錯誤。",
+        "relaunchInProgress": "{{appName}} 已經在透過設定頁或閒置自動安裝重新啟動更新，這次請求沒有另外安裝。"
       }
     },
     "agentAutoUpdate": {
