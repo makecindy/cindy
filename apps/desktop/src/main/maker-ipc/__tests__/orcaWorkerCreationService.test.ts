@@ -641,6 +641,87 @@ describe('Worker of a lead whose agent runs on another computer', () => {
       expect(deps.getProviderRoutingContext).toHaveBeenCalledWith('codex', null);
     });
   });
+
+  // 协同任务归供应商组(2026-10-10)：跟 Lead 的 Worker 跟的是 Lead 的组，不是 Lead 这次落到的那台。
+  describe('when the Lead runs through a provider group', () => {
+    const create = (service: ReturnType<typeof createDeps>['service'], patch: Partial<OrcaWorkerCreateParams> = {}) =>
+      service.createWorker({ leadSessionId: 'lead-1', role: 'reviewer', label: 'reviewer', agent: 'pi', ...patch });
+    // Lead 由本机的组(组的供应商 spark)分配到了 device-b，那台的同一个供应商 id 是 spark-b。
+    const groupedLead = (overrides: Record<string, unknown> = {}) => deviceLead({
+      providerId: 'spark-b',
+      providerGroupEntry: { agentDeviceId: null, providerId: 'spark' },
+      ...overrides,
+    });
+
+    it('follows the group entry when no location is given, so the group picks the computer', async () => {
+      const routing = deviceWorkerRoutingContext(views, 'pi');
+      const { deps, service } = createDeps({
+        getLeadSessionRow: vi.fn(async () => groupedLead()),
+        getProviderRoutingContext: vi.fn(async () => routing),
+      });
+      const result = await create(service);
+      expect(result).toMatchObject({ ok: true, resolved: { model: 'spark/qwen', providerId: 'spark', agentDeviceId: null } });
+      expect(deps.getProviderRoutingContext).toHaveBeenCalledTimes(1);
+      expect(deps.getProviderRoutingContext).toHaveBeenCalledWith('pi', null);
+      const opts = vi.mocked(deps.bootstrapSession).mock.calls[0]![0];
+      expect(opts).toMatchObject({ model: 'spark/qwen', providerId: 'spark' });
+      expect(opts).not.toHaveProperty('agentDeviceId');
+    });
+
+    it("treats the Lead's own computer and source chosen in the panel as following the Lead", async () => {
+      const routing = deviceWorkerRoutingContext(views, 'pi');
+      const { deps, service } = createDeps({
+        getLeadSessionRow: vi.fn(async () => groupedLead()),
+        getProviderRoutingContext: vi.fn(async () => routing),
+      });
+      const result = await create(service, { agentDeviceId: 'device-b', providerId: 'spark-b', model: 'spark/deepseek' });
+      expect(result).toMatchObject({ ok: true, resolved: { model: 'spark/deepseek', providerId: 'spark', agentDeviceId: null } });
+      expect(vi.mocked(deps.bootstrapSession).mock.calls[0]![0]).not.toHaveProperty('agentDeviceId');
+    });
+
+    it('follows a group that lives on another computer', async () => {
+      const routing = deviceWorkerRoutingContext(views, 'pi');
+      const { deps, service } = createDeps({
+        getLeadSessionRow: vi.fn(async () => groupedLead({ providerGroupEntry: { agentDeviceId: 'device-g', providerId: 'spark' } })),
+        getProviderRoutingContext: vi.fn(async () => routing),
+      });
+      const result = await create(service);
+      expect(result).toMatchObject({ ok: true, resolved: { providerId: 'spark', agentDeviceId: 'device-g' } });
+      expect(deps.getProviderRoutingContext).toHaveBeenCalledWith('pi', null, 'device-g');
+      expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({ agentDeviceId: 'device-g', providerId: 'spark' }));
+    });
+
+    it("stays with the Lead's computer when the group entry does not offer the model", async () => {
+      const routing = deviceWorkerRoutingContext(views, 'pi');
+      const empty = deviceWorkerRoutingContext([], 'pi');
+      const { deps, service } = createDeps({
+        getLeadSessionRow: vi.fn(async () => groupedLead({ providerId: 'spark' })),
+        getProviderRoutingContext: vi.fn(async (_agent, _host, device) => (device === 'device-b' ? routing : empty)),
+      });
+      const result = await create(service);
+      expect(result).toMatchObject({ ok: true, resolved: { providerId: 'spark', agentDeviceId: 'device-b' } });
+      expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({ agentDeviceId: 'device-b' }));
+    });
+
+    it('keeps an explicit other location, source or agent as chosen', async () => {
+      const routing = deviceWorkerRoutingContext(views, 'pi');
+      const elsewhere = createDeps({
+        getLeadSessionRow: vi.fn(async () => groupedLead()),
+        getProviderRoutingContext: vi.fn(async () => routing),
+      });
+      expect(await create(elsewhere.service, { agentDeviceId: 'device-c' }))
+        .toMatchObject({ ok: true, resolved: { agentDeviceId: 'device-c' } });
+
+      const claude = deviceWorkerRoutingContext(views, 'claude-code');
+      const otherAgent = createDeps({
+        getLeadSessionRow: vi.fn(async () => groupedLead({ providerId: 'spark' })),
+        getProviderRoutingContext: vi.fn(async () => claude),
+      });
+      expect(await create(otherAgent.service, { agent: 'claude-code' }))
+        .toMatchObject({ ok: true, resolved: { agentDeviceId: 'device-b' } });
+      expect(otherAgent.deps.getProviderRoutingContext).toHaveBeenCalledTimes(1);
+    });
+  });
 });
 
 const UUID_V4_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;

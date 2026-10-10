@@ -445,6 +445,12 @@ export async function performSessionAgentSwitch(
      * 只在 applyNow 且 Agent 在另一台电脑上时生效。
      */
     forceRelocation?: boolean;
+    /**
+     * 仅限 main 内部(不接受 IPC 传入)：供应商组为这个任务换电脑——引擎与模型不变、只换 Agent 所在位置。
+     * 协同任务(Lead / Worker)不接受用户换引擎或换位置，只接受这一种切换(docs/product-rules/provider-groups.md §6.1)。
+     * 只在 applyNow 时生效。
+     */
+    providerGroupRelocation?: boolean;
   },
 ): Promise<SessionAgentSwitchResult> {
   const { sessionId, targetAgentKind, model, providerId, signal } = params;
@@ -506,7 +512,13 @@ export async function performSessionAgentSwitch(
     // SSH 远程会话:agent 进程在远端机器,cc-manager 链路仅覆盖 Claude,v1 不支持切换。
     throwIpcError('UNSUPPORTED_CAPABILITY', 'agent switch is not supported for remote sessions');
   }
-  if (row.orcaRole) {
+  // 供应商组换电脑：同引擎同模型、只换位置。协同任务只放行这一种(内部 applyNow 调用)。
+  const providerGroupRelocationOnly =
+    params.providerGroupRelocation === true &&
+    params.applyNow === true &&
+    normalizeDbAgentKind(row.agentKind) === makerToDbAgentKind(targetAgentKind) &&
+    row.model === model;
+  if (row.orcaRole && !providerGroupRelocationOnly) {
     // Orca lead/worker:协同运行时对 agent 形态有独立契约(docs/dev-rules/orca-team-architecture.md),不掺和。
     throwIpcError('UNSUPPORTED_CAPABILITY', 'agent switch is not supported for Orca sessions');
   }

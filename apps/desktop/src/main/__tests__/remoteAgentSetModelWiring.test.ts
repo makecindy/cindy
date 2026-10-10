@@ -88,8 +88,10 @@ describe('agent-device model selection wiring', () => {
     const start = source.indexOf('listAvailableModels: async ({ agent, callerSessionId, agentDeviceId: requestedAgentDeviceId }) => {');
     expect(start).toBeGreaterThan(0);
     const body = source.slice(start, source.indexOf('const providerRouting = await getProviderRoutingContext();', start));
-    // 不指定位置时列 Lead 所在位置；Lead 也可以指定别的电脑 / 分享，或 null(任务所在电脑)。
-    expect(body).toContain('const leadAgentDeviceId = callerSessionId ? await readSessionAgentDeviceId(callerSessionId) : null;');
+    // 不指定位置时列 Lead 所在位置(Lead 归在供应商组里时列组那一项所在电脑)；Lead 也可以指定别的电脑 / 分享，
+    // 或 null(任务所在电脑)。
+    expect(body).toContain('readLeadProviderGroupEntry(callerSessionId, null).providerGroupEntry');
+    expect(body).toMatch(/const leadAgentDeviceId = leadGroupEntry\s+\? leadGroupEntry\.agentDeviceId\s+: callerSessionId \? await readSessionAgentDeviceId\(callerSessionId\) : null;/);
     expect(body).toMatch(/requestedAgentDeviceId === undefined\s+\? leadAgentDeviceId/);
     expect(body).toContain('deviceAvailableModels(views, a)');
     expect(body).toContain('return agentDeviceCatalogFailure(err);');

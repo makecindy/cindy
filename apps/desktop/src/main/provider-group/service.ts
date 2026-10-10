@@ -138,7 +138,10 @@ export interface ProviderGroupServiceDeps {
   /** 这个任务是否已经有过 Agent 的回复(用来判断它是不是从没运行过)。 */
   hasAssistantHistory(sessionId: string): Promise<boolean>;
 
-  /** 是否由本机制接管这次失败(排除目标模式、Orca worker、伙伴、共享中的任务等)。 */
+  /**
+   * 是否由本机制接管这次失败(排除目标模式、伙伴、共享中的任务等)。协同的 Lead 与 Worker 都可以换电脑：
+   * Worker 换成了照常把这一轮的结果回报给 Lead，只是不做「等额度恢复后自动继续」(那仍交给 Lead)。
+   */
   isFailoverEligible(sessionId: string): Promise<boolean>;
   /**
    * 用终态错误下发的令牌取得这次错误的重试入口；null = 用户已接手或错误已不是当前状态。
@@ -183,8 +186,15 @@ export interface ProviderGroupService {
   /**
    * 新任务启动 Agent 前调用：需要分配时返回选中的位置(调用方据此改启动参数)，不归组管返回 null。
    * 组里没有能用的电脑时抛 PROVIDER_GROUP_UNAVAILABLE_ERROR。
+   * `startRow`：任务记录还没写入时(新建的协同 Worker 由启动这一步落库)按启动参数当作从没运行过的任务分配；
+   * 记录已存在时以记录为准。
    */
-  assignBeforeStart(input: { sessionId: string; agentKind: AgentKind; model: string }): Promise<ProviderGroupStartContext | null>;
+  assignBeforeStart(input: {
+    sessionId: string;
+    agentKind: AgentKind;
+    model: string;
+    startRow?: ProviderGroupSessionRow;
+  }): Promise<ProviderGroupStartContext | null>;
   /** 分配后 Agent 没能启动：换下一台，返回新的位置；不该换或没有下一台返回 null(调用方照常报错)。 */
   nextAfterStartFailure(context: ProviderGroupStartContext, error: unknown): Promise<ProviderGroupStartContext | null>;
   /**
@@ -818,8 +828,8 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
   }
 
   return {
-    async assignBeforeStart({ sessionId, agentKind, model }) {
-      const row = await deps.readSessionRow(sessionId);
+    async assignBeforeStart({ sessionId, agentKind, model, startRow }) {
+      const row = (await deps.readSessionRow(sessionId)) ?? startRow ?? null;
       if (!row || row.remoteHostId) return null;
       if (deps.readBinding(sessionId)) {
         const bound = await loadBound(sessionId).catch(() => null);

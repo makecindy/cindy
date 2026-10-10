@@ -41,6 +41,12 @@ export interface OrcaLeadSessionSnapshot {
    * 缺省 = Agent 在本机。
    */
   agentDeviceId?: string | null;
+  /**
+   * Lead 归在供应商组里时那个组那一项：组在本机时 `agentDeviceId` 为 null，组在同账号另一台电脑上时是那台；
+   * `providerId` 是组所在电脑上的供应商 id。跟 Lead 的 Worker 跟的是这个组(由组选电脑、出问题时换电脑)，
+   * 而不是 Lead 这次落到的那台。缺省 = Lead 不归组。
+   */
+  providerGroupEntry?: { agentDeviceId: string | null; providerId: string } | null;
 }
 
 /** worker limit 与 duplicate label 校验只需要 worker 的身份、label 与占槽状态。 */
@@ -755,6 +761,28 @@ function resolveWorkerAgentDeviceId(
   return { ok: true, agentDeviceId: deviceId };
 }
 
+/**
+ * 跟 Lead 的 Worker 遇上归组的 Lead：Worker 选的位置就是 Lead 现在所在(没指定，或指定的正是那里)、来源没另选
+ * (或选的正是 Lead 现在的来源 / 组那一项)、同一种 Agent 时，改跟 Lead 的组那一项。由调用方再核对组那一项确实
+ * 提供这个模型，不提供时照旧跟 Lead 所在那台。
+ */
+function leadProviderGroupFollowCandidate(
+  params: OrcaWorkerCreateParams,
+  lead: OrcaLeadSessionSnapshot,
+  requestedAgentDeviceId: string | null,
+  explicitSourceId: string | null,
+): { agentDeviceId: string | null; providerId: string } | null {
+  const entry = lead.providerGroupEntry;
+  if (!entry || lead.remoteHostId || params.agent !== lead.agentKind) return null;
+  if (requestedAgentDeviceId !== leadAgentDeviceId(lead)) return null;
+  if (explicitSourceId !== null && explicitSourceId !== lead.providerId && explicitSourceId !== entry.providerId) {
+    return null;
+  }
+  // Lead 正落在组那一项本身(组在本机且 Lead 在本机运行)：位置与来源不变，组照常给新 Worker 选电脑。
+  if (entry.agentDeviceId === leadAgentDeviceId(lead) && entry.providerId === lead.providerId) return null;
+  return entry;
+}
+
 const SHARE_ROUTE_REJECTION = /\[(REMOTE_AGENT_SHARE_(?:PAUSED|REMOVED|UNAVAILABLE))\]/;
 
 /** 读不到 Worker 的 Agent 所在电脑的目录：分享保留具体原因，其余按那台连不上。 */
@@ -1052,19 +1080,41 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
     // 标准面板显式选定的来源(非空 string)直接生效,由下方精确 preflight 把关「已连接且
     // 提供该模型」;空串/null/undefined 一律按未显式处理(与 IPC 边界同口径,service 作为
     // 共用内核自防调用方漏归一)。
-    const explicitSourceId =
+    const requestedSourceId =
       typeof params.providerId === 'string' && params.providerId.trim().length > 0
         ? params.providerId.trim()
         : null;
-    const workerAgentDeviceId = workerLocation.agentDeviceId;
+    // Lead 归在供应商组里：跟 Lead 的 Worker 跟那个组(组按策略给它选电脑、出问题时换电脑，与普通任务选组那一项
+    // 一样)。组那一项不提供这个模型或读不到时照旧跟 Lead 所在那台。
+    let groupFollow = leadProviderGroupFollowCandidate(params, lead, workerLocation.agentDeviceId, requestedSourceId);
+    let groupFollowRouting: OrcaWorkerProviderRoutingContext | undefined;
+    if (groupFollow) {
+      try {
+        groupFollowRouting = groupFollow.agentDeviceId
+          ? await deps.getProviderRoutingContext(params.agent, lead.remoteHostId, groupFollow.agentDeviceId)
+          : await deps.getProviderRoutingContext(params.agent, lead.remoteHostId);
+        const groupProvider = groupFollowRouting.availability[params.agent]
+          ?.find((provider) => provider.id === groupFollow!.providerId);
+        if (!groupProvider?.models.includes(params.model ?? lead.model)) groupFollow = null;
+      } catch {
+        groupFollow = null;
+      }
+    }
+    const followedLead: OrcaLeadSessionSnapshot = groupFollow
+      ? { ...lead, agentDeviceId: groupFollow.agentDeviceId, providerId: groupFollow.providerId }
+      : lead;
+    const explicitSourceId = groupFollow && requestedSourceId !== null ? groupFollow.providerId : requestedSourceId;
+    const workerAgentDeviceId = groupFollow ? groupFollow.agentDeviceId : workerLocation.agentDeviceId;
     // Lead 的模型与来源属于它自己所在位置的目录：Worker 换了位置就不沿用 Lead 的来源(来源 id 在
     // 不同电脑上不是一回事)，只在同一位置时继承；模型只在那一处也有时沿用。
-    const sameLocationAsLead = workerAgentDeviceId === leadAgentDeviceId(lead);
+    const sameLocationAsLead = workerAgentDeviceId === leadAgentDeviceId(followedLead);
     const routeLead: OrcaLeadSessionSnapshot = sameLocationAsLead
-      ? lead
+      ? followedLead
       : { ...lead, providerId: null };
     let providerRouting: OrcaWorkerProviderRoutingContext;
-    if (workerAgentDeviceId) {
+    if (groupFollow && groupFollowRouting) {
+      providerRouting = groupFollowRouting;
+    } else if (workerAgentDeviceId) {
       try {
         providerRouting = await deps.getProviderRoutingContext(params.agent, lead.remoteHostId, workerAgentDeviceId);
       } catch (err) {

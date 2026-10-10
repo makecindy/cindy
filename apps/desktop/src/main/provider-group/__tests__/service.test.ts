@@ -236,6 +236,38 @@ describe('assignBeforeStart', () => {
     expect(h.bindings.has('s1')).toBe(false);
     expect(h.released.get('s1')).toEqual({ providerId: 'anthropic', groupDeviceId: null });
   });
+
+  it('assigns a brand-new collaboration Worker from its start options before its task record exists', async () => {
+    const h = harness({ offline: ['local'] });
+    h.deps.readSessionRow.mockResolvedValue(null as unknown as ProviderGroupSessionRow);
+    const context = await h.service.assignBeforeStart({
+      sessionId: 'w1',
+      agentKind: 'claude-code',
+      model: MODEL,
+      startRow: { ...h.row },
+    });
+    expect(context?.member.key).toBe(MINI.key);
+    expect(context?.route).toEqual({ agentDeviceId: 'mini', providerId: 'anthropic-1a2b3c4d' });
+    expect(h.bindings.get('w1')).toMatchObject({ providerId: 'anthropic', memberKey: MINI.key });
+  });
+
+  it('prefers the task record over start options once the record exists', async () => {
+    const h = harness({ row: { sdkSessionId: 'native-1' } });
+    expect(await h.service.assignBeforeStart({
+      sessionId: 's1',
+      agentKind: 'claude-code',
+      model: MODEL,
+      startRow: { ...h.row, sdkSessionId: null },
+    })).toBeNull();
+    expect(h.deps.persistRoute).not.toHaveBeenCalled();
+  });
+
+  it('does not assign without a record or start options', async () => {
+    const h = harness();
+    h.deps.readSessionRow.mockResolvedValue(null as unknown as ProviderGroupSessionRow);
+    expect(await h.service.assignBeforeStart({ sessionId: 's1', agentKind: 'claude-code', model: MODEL })).toBeNull();
+    expect(h.deps.writeBinding).not.toHaveBeenCalled();
+  });
 });
 
 describe('nextAfterStartFailure', () => {

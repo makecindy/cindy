@@ -6,6 +6,9 @@
 > `docs/dev-rules/orca-team-architecture.md`「远端 Worker」。界面首版只在本机 Lead 上提供「运行设备」；
 > 被远程控制的 Lead 仍可由它自己的 Agent 经 `execution_device_id` 创建；SSH 主机上的 Lead 不支持。
 > 来源讨论：issue #5620「远程控制功能疑问」→ 跨设备派活。
+> 后续（2026-10-10）：§2 里「Worker 继承 Lead 的 `agentDeviceId`、不能单独指定」已不成立——每个 Worker 可以单独选
+> Agent 所在位置（远程供应商，任务与文件仍在 Lead 所在电脑），协同任务也归供应商组分配与自动换电脑，见
+> `docs/dev-rules/orca-team-architecture.md`「Worker 运行态」第 11、12 条。
 
 ## 1. 结论
 

@@ -21,7 +21,6 @@ import {
   type OrcaWorkerPermissionMode,
 } from '@cindy/maker-shared/orca-team';
 import { Text } from '@/components/AppText';
-import { MobileVendorIcon } from '@/components/MobileVendorIcon';
 import {
   ContextSheetChoiceRow,
   ContextSheetGroup,
@@ -38,7 +37,7 @@ import {
   isAbsoluteOrcaWorkerDir,
   type OrcaWorkerFormValue,
 } from '@/session/orcaTeam';
-import { iconSize, iconStroke, lineHeight, typeScale, useTheme } from '@/theme';
+import { iconSize, iconStroke, lineHeight, radius, typeScale, useTheme } from '@/theme';
 import type { OrcaExecutionDeviceView } from '@cindy/device-link';
 
 const CUSTOM_ROLE = '__custom__';
@@ -277,13 +276,8 @@ export interface OrcaTeamPanelViewProps {
   onEndTeam(): void;
 }
 
-/**
- * Worker 行图标：与桌面 Worker 头像、首页任务行同一个 Agent 标，颜色表示状态、运行中呼吸；
- * Worker 的 Agent 在另一台电脑或分享上运行(远程供应商)时叠同款单波纹 + 点。
- */
-function WorkerAgentMark({ worker }: { worker: OrcaTeamWorker }) {
+function WorkerStatusDot({ status }: { status: OrcaTeamWorker['status'] }) {
   const { colors } = useTheme();
-  const { status } = worker;
   const color = status === 'running'
     ? colors.statusAccent
     : status === 'done'
@@ -293,14 +287,7 @@ function WorkerAgentMark({ worker }: { worker: OrcaTeamWorker }) {
         : colors.textTertiary;
   return (
     <View style={{ width: iconSize.lg, alignItems: 'center' }}>
-      <MobileVendorIcon
-        color={color}
-        running={status === 'running'}
-        // Claude 星标视觉重量偏小，+1px 光学补偿(与首页任务行同值)。
-        size={worker.agentKind === 'claude-code' ? 19 : iconSize.lg}
-        vendor={worker.agentKind}
-        remote={Boolean(worker.agentDeviceId)}
-      />
+      <View style={{ width: 8, height: 8, borderRadius: radius.pill, backgroundColor: color }} />
     </View>
   );
 }
@@ -340,7 +327,7 @@ export function OrcaTeamPanelView({
               : [orcaAgentLabel(worker.agentKind), worker.model]
             ).filter(Boolean).join(' · ')}
             disabled={busy}
-            icon={<WorkerAgentMark worker={worker} />}
+            icon={<WorkerStatusDot status={worker.status} />}
             key={worker.workerId}
             label={orcaWorkerDisplayName(worker)}
             onLongPress={() => onWorkerLongPress(worker)}
