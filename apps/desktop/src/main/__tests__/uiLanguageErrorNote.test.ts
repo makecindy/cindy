@@ -4,8 +4,10 @@ import {
   readClaimedUiLanguage,
   resolveTurnUiLanguage,
   stampTurnUiLanguage,
+  stripLeadingUiLanguageErrorNote,
   turnUiLanguageFromSendOpts,
 } from '../maker-ipc/uiLanguageErrorNote';
+import { SUPPORTED_LOCALES } from '../../shared/locale';
 
 describe('ui language error note', () => {
   it('uses a fixed note for each interface language and never treats the note as a user request', () => {
@@ -43,5 +45,27 @@ describe('ui language error note', () => {
     expect(turnUiLanguageFromSendOpts({ uiLanguage: 'ja' }, 'zh-CN')).toBe('ja');
     expect(turnUiLanguageFromSendOpts({ uiLanguage: 'not-a-locale' }, 'en')).toBe('en');
     expect(turnUiLanguageFromSendOpts(undefined, 'zh-TW')).toBe('zh-TW');
+  });
+
+  it('strips only a complete leading note generated for a supported locale', () => {
+    for (const locale of SUPPORTED_LOCALES) {
+      const note = buildUiLanguageErrorNote(locale);
+      expect(stripLeadingUiLanguageErrorNote(`${note}\n\n测试消息`)).toBe('测试消息');
+      expect(stripLeadingUiLanguageErrorNote(`${note}\n\nline one\n\nline two`)).toBe('line one\n\nline two');
+      expect(stripLeadingUiLanguageErrorNote(note)).toBe('');
+    }
+  });
+
+  it('keeps user text that only resembles the note', () => {
+    const note = buildUiLanguageErrorNote('en');
+    const typed = '[UI language] please reply in Japanese';
+    expect(stripLeadingUiLanguageErrorNote(typed)).toBe(typed);
+    // A truncated note, a note without the wire separator, or a note later in the text is user content.
+    const truncated = `${note.slice(0, -10)}\n\nhello`;
+    expect(stripLeadingUiLanguageErrorNote(truncated)).toBe(truncated);
+    expect(stripLeadingUiLanguageErrorNote(`${note}hello`)).toBe(`${note}hello`);
+    expect(stripLeadingUiLanguageErrorNote(`hello\n\n${note}`)).toBe(`hello\n\n${note}`);
+    // Only one note is removed; a second copy the user pasted stays.
+    expect(stripLeadingUiLanguageErrorNote(`${note}\n\n${note}`)).toBe(note);
   });
 });

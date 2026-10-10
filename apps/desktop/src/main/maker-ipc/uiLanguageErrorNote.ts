@@ -64,3 +64,22 @@ export function buildUiLanguageErrorNote(locale: SupportedLocale): string {
     'Only user-facing error reports must use the interface language.'
   );
 }
+
+/** Separator `prependNoteToWireUserMessage` puts between a note and the user text. */
+const NOTE_SEPARATOR = '\n\n';
+
+/**
+ * Native Codex rollouts record the model-facing user content, so the per-turn note
+ * built above comes back on history import. Remove it only when the text starts with
+ * the complete note generated for a supported locale, followed by the wire separator
+ * or the end of the text. A partial note, a bare `[UI language]` tag, or the note in
+ * any other position is user content and stays unchanged.
+ */
+export function stripLeadingUiLanguageErrorNote(text: string): string {
+  for (const locale of SUPPORTED_LOCALES) {
+    const note = buildUiLanguageErrorNote(locale);
+    if (text === note) return '';
+    if (text.startsWith(note + NOTE_SEPARATOR)) return text.slice(note.length + NOTE_SEPARATOR.length);
+  }
+  return text;
+}

@@ -45,6 +45,7 @@ import {
   stripCompleteIdeOpenedFileBlocks,
   type ImportedImageRef,
 } from './imported-user-content.js';
+import { stripLeadingUiLanguageErrorNote } from '../maker-ipc/uiLanguageErrorNote.js';
 
 const log = createLogger('codex-local-sessions');
 
@@ -5183,7 +5184,7 @@ export function parseCodexRolloutMessageLine(
   // 残尾),直接入库会把它漏给用户(#785)。
   const text = (
     role === 'user'
-      ? stripCompleteIdeOpenedFileBlocks(rawText)
+      ? cleanImportedCodexUserText(rawText)
       : finalizeCodexCitationText(rawText)
   ).trim();
   if (!text) return null;
@@ -5221,7 +5222,7 @@ async function parseCodexRolloutMessageLineForImport(
   // 残尾),直接入库会把它漏给用户(#785)。
   const text = (
     role === 'user'
-      ? stripCompleteIdeOpenedFileBlocks(rawText)
+      ? cleanImportedCodexUserText(rawText)
       : finalizeCodexCitationText(rawText)
   ).trim();
   const images = role === 'user'
@@ -5235,6 +5236,14 @@ async function parseCodexRolloutMessageLineForImport(
     content: role === 'user' ? importedUserContent(text, images) : text,
     createdAt: timestampFromIso(stringValue(obj.timestamp)) + lineNo,
   };
+}
+
+/**
+ * User text in a rollout is what the model received, including Cindy's per-turn
+ * notes. Strip the parts Cindy added before the text becomes a chat message.
+ */
+function cleanImportedCodexUserText(rawText: string): string {
+  return stripCompleteIdeOpenedFileBlocks(stripLeadingUiLanguageErrorNote(rawText));
 }
 
 function extractContentText(content: unknown): string {
