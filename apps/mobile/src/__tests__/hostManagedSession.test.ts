@@ -24,7 +24,13 @@ describe('host-managed Session presentation', () => {
     expect(source).toContain('currentSession && runtimeOptions ? (');
     expect(source).not.toContain('!sessionManagedByHost ? renderSessionPermissionButton() : null');
     expect(source).toContain('{!sessionManagedByHost && composerRuntimeSummary ? (');
-    expect(source).toContain('if (sessionManagedByHost || !canUseRemoteSessionControls)');
+    const modelAccess = source.slice(source.indexOf('const canConfigureSessionModel'), source.indexOf('// 共享模型自造'));
+    expect(modelAccess).toContain('canUseRemoteSessionControls');
+    expect(modelAccess).toContain('!sessionManagedByHost');
+    expect(modelAccess).toContain('!isSharedTaskPeer(deviceId)');
+    const modelPicker = source.slice(source.indexOf('const toggleComposerModelPicker'), source.indexOf('// 账号限额按需拉取'));
+    expect(modelPicker).toContain('if (!canConfigureSessionModel)');
+    expect(modelPicker).toContain('setModelSheetOpen(false);');
     expect(source).toContain('{renderComposerAttachmentButton()}');
     expect(source).toContain('{renderComposerInlineStop()}');
   });

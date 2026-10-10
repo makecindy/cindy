@@ -471,6 +471,7 @@ async function retryUnconfirmedOpen(
   feishuEvents.emit('message', {
     channelName: 'feishu',
     senderId: laneUserId,
+    invoked: true,
     chatId: entry.chatId,
     contextId: entry.botAppId,
     messageId: entry.messageId,
@@ -1419,9 +1420,7 @@ function sanitizeMentionName(value: string): string {
  * 其他人的占位符替换为 `@名字`(名字是平台可改字段 — 不可信输入, 控制字符
  * 剥除 + 截断后使用)。text/post 抽出的正文里的占位符同一口径处理。
  *
- * 纯 @bot(剥完为空)仍是召唤: 回退为 `@bot显示名`, 与 Telegram / 官方 bot
- * 「纯 @ 无正文保留原文」同口径 —— 返回空串会被入站当成「没有可转发的内容」
- * 整条丢弃, 用户看到的就是「@ 了没反应」。
+ * 纯 @bot 剥完保持空正文，召唤事实通过事件的 invoked 标记传递。
  */
 function resolveMentionPlaceholders(
   text: string,
@@ -1429,17 +1428,15 @@ function resolveMentionPlaceholders(
   selfOpenId: string,
 ): string {
   let out = text;
-  let selfMentionText: string | null = null;
   for (const mention of mentions) {
     if (!mention.key) continue;
     const isSelf = mention.id?.open_id === selfOpenId;
     const safeName = sanitizeMentionName(mention.name ?? "");
-    if (isSelf && out.includes(mention.key)) selfMentionText = `@${safeName || 'bot'}`;
     const replacement = isSelf ? '' : `@${safeName || 'user'}`;
     out = out.split(mention.key).join(replacement);
   }
   out = out.replace(/[ \t]{2,}/g, ' ').trim();
-  return out || selfMentionText || '';
+  return out;
 }
 
 /** 群消息是否 @ 到本 bot。botOpenId 未知恒 false(群功能惰性失效)。 */
@@ -1634,7 +1631,7 @@ async function processClaimedMessage(
       : parsed.text;
 
   // Drop entirely only when there's literally nothing to relay.
-  if (!text && attachments.length === 0 && unsupported.length === 0) {
+  if (!text && attachments.length === 0 && unsupported.length === 0 && !(isGroup && parsed.text.trim())) {
     abandonUnpairedFlat?.();
     abandonTopic?.();
     return;
@@ -1832,6 +1829,7 @@ async function processClaimedMessage(
   // the user-facing wording and the "skip agent for pure-unsupported" rule).
   feishuEvents.emit('message', {
     channelName: 'feishu',
+    invoked: isGroup,
     senderId: laneUserId ?? senderOpenId,
     ...(!isGroup && data.message?.thread_id && data.message?.root_id
       ? { replyThread: { rootMessageId: data.message.root_id, threadId: data.message.thread_id } }

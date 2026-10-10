@@ -154,6 +154,22 @@ export async function cacheSessionMessages(
   await cacheSessionMessagesIfCurrent(authority, messages);
 }
 
+/** Merge a durable list push with the existing disk window, using its write/delete queue. */
+export async function cacheSessionListMessage(deviceId: string, sessionId: string, message: RemoteMessage): Promise<void> {
+  const authority = captureSessionMessageCacheWriteAuthority(deviceId, sessionId);
+  if (!authority) return;
+  await enqueueCacheOperation(authority.key, async () => {
+    if (!isSessionMessageCacheWriteAuthorityCurrent(authority)) return;
+    const raw = await messageCacheStorage.getItem(authority.key);
+    const parsed: unknown = raw ? JSON.parse(raw) : null;
+    const previous = normalizeCachedMessages(isRecord(parsed) && Array.isArray(parsed.messages) ? parsed.messages : []);
+    const messages = normalizeCachedMessages([...previous.filter(row =>
+      row.id !== message.id && (!message.clientId || row.clientId !== message.clientId)), message]);
+    if (!isSessionMessageCacheWriteAuthorityCurrent(authority)) return;
+    await messageCacheStorage.setItem(authority.key, JSON.stringify({ version: 1, updatedAt: Date.now(), messages }));
+  });
+}
+
 // 登出清空:遍历所有本前缀的 key 一次性删除(AsyncStorage 支持枚举,无需手动维护 host 索引)。
 export function clearCachedSessionMessages(): Promise<void> {
   if (activeGlobalClear) return activeGlobalClear;

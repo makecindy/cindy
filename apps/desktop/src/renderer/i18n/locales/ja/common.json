@@ -205,7 +205,6 @@
       "descriptionOff": "オンにすると、あなたの他のパソコンと共有相手がこのプロバイダーのモデルを使えます。オフの間、既存の共有は一時的に使えなくなりますが、削除はされません。"
     },
     "manage": {
-      "title": "{{provider}} を共有",
       "description": "共有すると、相手は自分のセッションで {{provider}} のモデルを選べます。Agent はこのパソコンで実行され、使用量はあなたの {{provider}} に計上されます。相手のファイルとコマンドは引き続き相手のパソコンで実行されます。",
       "descriptionWithDevice": "共有すると、相手は自分のセッションで {{provider}} のモデルを選べます。Agent はこのパソコン（{{device}}）で実行され、使用量はあなたの {{provider}} に計上されます。相手のファイルとコマンドは引き続き相手のパソコンで実行されます。",
       "createLink": "共有リンクを作成",
@@ -396,6 +395,104 @@
       "approvedBody": "{{name}} が {{provider}} の共有を承認しました",
       "rejectedTitle": "共有の申請は承認されませんでした",
       "rejectedBody": "{{name}} は {{provider}} の共有を承認しませんでした"
+    }
+  },
+  "providerGroup": {
+    "row": {
+      "label": "プロバイダーグループ",
+      "description": "複数のパソコンのこのプロバイダーをまとめ、自動で割り当て、問題があれば別のパソコンに切り替えます",
+      "summary_other": "{{count}} 台のパソコン · {{strategy}}",
+      "setUp": "グループを設定",
+      "manage": "グループを管理"
+    },
+    "page": {
+      "title": "{{provider}} · リモートと共有",
+      "shareTitle": "共有"
+    },
+    "section": {
+      "title": "プロバイダーグループ",
+      "addComputer": "パソコンを追加",
+      "delete": "グループを削除",
+      "empty": "ほかのパソコンの {{provider}} を追加すると、セッションが自動でいずれかを選んで実行します",
+      "loading": "プロバイダーグループを読み込み中…",
+      "loadFailed": "プロバイダーグループを読み込めませんでした",
+      "note": "このパソコンのセッションは、Agent がグループに選ばれたパソコンで実行されます"
+    },
+    "strategy": {
+      "label": "グループの割り当て方式",
+      "least": "空き優先",
+      "round": "順番に",
+      "order": "並び順",
+      "weight": "重み付け",
+      "description": {
+        "least": "空いているパソコンへ",
+        "round": "順番に割り当て",
+        "order": "上のパソコンを優先",
+        "weight": "重みの比率で"
+      }
+    },
+    "autoSwitch": {
+      "label": "パソコンを自動で切り替え",
+      "description": "上限・接続不可・ログイン切れのときに切り替えます"
+    },
+    "member": {
+      "local": "このパソコン",
+      "sourceDevice": "自分のほかのパソコン",
+      "sourceShare": "{{name}} からの共有",
+      "runningCount_other": "{{count}} 件実行中",
+      "limitAria": "{{name}} の同時実行数の上限",
+      "limitOption_other": "上限 {{count}}",
+      "weightAria": "{{name}} の重み",
+      "weightOption": "重み {{weight}}",
+      "assignAria": "{{name}} に割り当てる",
+      "moreAria": "{{name}} の他の操作",
+      "remove": "グループから外す",
+      "status": {
+        "checking": "確認中…",
+        "idle": "待機中",
+        "full": "上限に到達",
+        "paused": "割り当て停止中",
+        "cooling": "クールダウン中",
+        "coolingUntil": "クールダウン中 · {{time}} ごろ回復",
+        "offline": "オフライン",
+        "unavailable": {
+          "provider-off": "そのパソコンでこのプロバイダーの「リモート利用を許可」がオフです",
+          "disconnected": "プロバイダーが未接続か無効です",
+          "share-paused": "共有が停止されています",
+          "share-removed": "共有が削除されています"
+        }
+      },
+      "removeConfirm": {
+        "title": "{{name}} をプロバイダーグループから外しますか？",
+        "description": "新しいセッションは割り当てられなくなります。すでにそこで実行中のセッションはそのパソコンに残ります。",
+        "lastDescription": "グループ内の最後のパソコンです。外すと {{provider}} のプロバイダーグループは削除されます。",
+        "confirm": "グループから外す"
+      }
+    },
+    "deleteConfirm": {
+      "title": "{{provider}} のプロバイダーグループを削除しますか？",
+      "description": "このパソコンの新しいセッションはこのパソコンで実行されます。ほかのパソコンに割り当て済みのセッションはそのまま残ります。",
+      "confirm": "グループを削除"
+    },
+    "add": {
+      "title": "{{provider}} のプロバイダーグループにパソコンを追加",
+      "sourceAria": "パソコンの追加元",
+      "tabAvailable": "すでに使えるもの",
+      "tabLink": "共有リンク",
+      "availableDescription": "自分のほかのパソコンと共有されたものです。選ぶだけで追加でき、申請は不要です。",
+      "loading": "追加できるパソコンを探しています…",
+      "loadFailed": "追加できるパソコンを読み込めませんでした",
+      "empty": "追加できるパソコンがありません。ほかのパソコンで {{provider}} の「リモート利用を許可」をオンにするか、共有リンクで申請してください。",
+      "alreadyMember": "グループに追加済み",
+      "confirm": "グループに追加",
+      "cancel": "キャンセル",
+      "linkDescription": "ほかの人から共有された {{provider}} のリンクを貼り付けます。相手が承認したら、「すでに使えるもの」に戻って選択してください。",
+      "pasteLink": "共有リンクを貼り付け"
+    },
+    "toast": {
+      "added_other": "{{count}} 台のパソコンを {{provider}} のプロバイダーグループに追加しました",
+      "removed": "{{name}} をプロバイダーグループから外しました",
+      "deleted": "{{provider}} のプロバイダーグループを削除しました"
     }
   },
   "privacyExit": {
@@ -633,7 +730,8 @@
     "PROVIDER_SHARE_CROSS_REGION_DISABLED": "リージョンをまたぐ共有にはまだ対応していません。このリンクは別のリージョンの Cindy サービスのものです。",
     "REMOTE_AGENT_SHARE_PAUSED": "モデルは切り替わっていません：共有した人があなたへの共有を一時停止しました。別のモデルを選んでください。",
     "REMOTE_AGENT_SHARE_REMOVED": "モデルは切り替わっていません：この共有は利用できなくなりました（共有した人が削除したか、あなたが退出しました）。別のモデルを選んでください。",
-    "REMOTE_AGENT_SHARE_UNAVAILABLE": "モデルは切り替わっていません：共有されたプロバイダーは一時的に利用できません（共有した人のパソコンがオフラインか、共有が一時的にオフになっています）。後でもう一度試すか、別のモデルを選んでください。"
+    "REMOTE_AGENT_SHARE_UNAVAILABLE": "モデルは切り替わっていません：共有されたプロバイダーは一時的に利用できません（共有した人のパソコンがオフラインか、共有が一時的にオフになっています）。後でもう一度試すか、別のモデルを選んでください。",
+    "SSH_HOST_KEY_MISMATCH": "SSH ホスト鍵が変更されました"
   },
   "providerError": {
     "AUTH_INVALID": "API キーが無効か期限切れです（401）。キーを確認して再試行してください",
@@ -1038,6 +1136,15 @@
         "preparingRuntime": "リモート {{hostId}} のランタイムを準備中…",
         "installingAgent": "リモート {{hostId}} に {{agent}} をインストール中…",
         "failed": "{{hostId}} への {{agent}} インストールに失敗: {{message}}。設定 → リモートマシン → {{hostId}} を展開して完全なログを確認してください。"
+      },
+      "hostKey": {
+        "title": "SSH ホスト鍵が変更されました",
+        "review": "ホスト鍵を確認",
+        "explanation": "{{host}} のホスト鍵が Cindy に保存された鍵と一致しません。信頼する鍵を更新する前に、サーバー管理者に新しいフィンガープリントを確認してください。",
+        "details": "保存済み：{{trusted}}\n新しいフィンガープリント：{{presented}}\n\nサーバーの再インストールや接続先のなりすましが原因の可能性があります。サーバーのコンソールなど、信頼できる経路で新しいフィンガープリントを確認してください。\n\nCindy の信頼記録：{{file}}\nCindy は ~/.ssh/known_hosts を読み取りません。ログイン鍵の変更やホストの削除・再追加では解決しません。\n\n更新すると、このホストのフィンガープリントだけを置き換えて再接続します。他のホストには影響しません。",
+        "cancel": "元の鍵を保持",
+        "trust": "新しい鍵を信頼して再接続",
+        "updateFailed": "ホストの信頼記録を更新できませんでした。接続情報や保存済みの鍵が変更されたか、記録ファイルに書き込めない可能性があります。再接続してフィンガープリントを再取得し、ファイルの権限を確認してください。"
       }
     },
     "appearance": {
@@ -8522,10 +8629,22 @@
       "errors": {
         "memberLimit": "グループチャットには仲間が 2〜6 人必要です",
         "memberUnavailable": "利用できない仲間がいます。別の仲間を選んで再試行してください",
+        "mentionUnavailable": "メンションしたメンバーは現在利用できません。送信する前に選び直してください。",
         "notFound": "このグループチャットはもう存在しません",
         "hostNotReady": "Cindy の準備がまだ終わっていません。しばらくしてから再試行してください",
         "planOpen": "役割分担の途中です。終わるか停止してから新しく始めてください",
-        "planClosed": "この計画はすでに終了したか、更新されています"
+        "planClosed": "この計画はすでに終了したか、更新されています",
+        "invalidAttachment": "添付ファイルを読み込めません。選び直して送信してください。",
+        "attachmentUnavailable": "スマートフォンから添付ファイルを取得できません。接続を確認して再試行してください。",
+        "attachmentTooLarge": "添付ファイルが 100 MB を超えています。小さいファイルを選んでください。",
+        "mediaUploadFailed": "チャットサービスに添付ファイルをアップロードできません。しばらくしてから再試行してください。",
+        "authRequired": "ログインの有効期限が切れました。パソコンで再度ログインしてください。",
+        "chatUnavailable": "チャットサービスに接続できません。ネットワークを確認して再試行してください。",
+        "importPending": "グループの履歴を同期中です。しばらくしてから再試行してください。",
+        "requestTimeout": "操作の結果をまだ確認できません。更新して結果を確認してから再試行してください。",
+        "permissionDenied": "このグループを管理する権限がありません。",
+        "serviceError": "チャットサービスで処理を完了できません。しばらくしてから再試行してください。",
+        "groupArchived": "このグループはアーカイブ済みのため操作できません。"
       },
       "organizer": "まとめ役",
       "plan": {
@@ -8566,7 +8685,14 @@
         "reactionCount": "{{emoji}} · {{count}} 件のリアクション",
         "invite": "グループに招待",
         "join": "グループに参加",
-        "inviteDescription": "リンクは 24 時間有効で、一度だけ使えます。承諾するとメンバーになり、チャット履歴を閲覧できます。",
+        "inviteDescription": "招待を承諾するとメンバーになり、チャット履歴を閲覧できます。",
+        "revokeLink": "このリンクを無効にする",
+        "revokeDescription": "このリンクからはグループに参加できなくなります。他の招待リンクや既存のメンバーには影響しません。",
+        "revokedLink": "この招待リンクは無効化されました。",
+        "revokeUnsupported": "このサーバーでは招待リンクの無効化に対応していません。",
+        "reusableLink": "有効期限なし · 複数の人が繰り返し利用可能",
+        "singleUseUntil": "1 回のみ利用可能 · {{date}} まで有効",
+        "expiredLink": "この招待リンクは期限切れです。",
         "joinDescription": "招待リンクを貼り付けて、グループを確認してから参加してください。",
         "inviteLink": "招待リンク",
         "pasteLink": "招待リンクを貼り付け…",
@@ -8577,7 +8703,7 @@
         "accept": "承諾して参加",
         "openGroup": "グループを開く",
         "previewInvite": "招待を確認",
-        "invalidInvite": "招待が無効、使用済み、または期限切れです。新しいリンクを取得してください。",
+        "invalidInvite": "招待が無効、使用済み、期限切れ、または無効化されています。新しいリンクを取得してください。",
         "notAllowed": "このアカウントに権限がありません。アカウントを確認するか、グループ管理者に連絡してください。",
         "loginRequired": "ログインしてから再試行してください。",
         "requestFailed": "チャットサービスに接続できません。しばらくしてから再試行してください。",
@@ -9848,7 +9974,9 @@
       "label": "元のセッションから作成"
     },
     "imageMissing": {
-      "title": "画像が失われました"
+      "title": "画像が失われました",
+      "unavailable": "画像を表示できません",
+      "loading": "画像を読み込み中…"
     },
     "visionBridge": {
       "analyzing": "画像を認識中…（{{count}}枚）",
@@ -10375,6 +10503,12 @@
           "reason": "中断の理由",
           "attempt": "今回の再試行 {{attempt}}/{{total}}",
           "sessionTotal": "このセッションでの再接続 {{count}} 回"
+        },
+        "agentSwitch": {
+          "usage-limit": "{{from}} が使用量の上限に達したため、{{to}} で続行しました",
+          "auth": "{{from}} のログインが切れたため、{{to}} で続行しました",
+          "unavailable": "{{from}} に接続できないため、{{to}} で続行しました",
+          "overload": "{{from}} のサービスが混雑しているため、{{to}} で続行しました"
         }
       },
       "autoResumeSeparator": {
@@ -10636,7 +10770,8 @@
       "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "そのパソコンでは、このプロバイダーのリモート利用が許可されていません。そのパソコンの「設定 → モデルプロバイダー」で「リモート利用を許可」をオンにするか、別のモデルを選んでください。",
       "REMOTE_AGENT_SHARE_PAUSED": "共有した人があなたへの共有を一時停止したため、再開されるまでこれらのモデルは使えません。別のモデルに切り替えて続けられます。",
       "REMOTE_AGENT_SHARE_REMOVED": "この共有は利用できなくなりました（共有した人が削除したか、あなたが退出しました）。別のモデルに切り替えて続けられます。",
-      "REMOTE_AGENT_SHARE_UNAVAILABLE": "共有されたプロバイダーは一時的に利用できません。共有した人のパソコンがオフラインか、共有が一時的にオフになっている可能性があります。後でもう一度試すか、別のモデルに切り替えて続けられます。"
+      "REMOTE_AGENT_SHARE_UNAVAILABLE": "共有されたプロバイダーは一時的に利用できません。共有した人のパソコンがオフラインか、共有が一時的にオフになっている可能性があります。後でもう一度試すか、別のモデルに切り替えて続けられます。",
+      "REMOTE_AGENT_GROUP_UNAVAILABLE": "プロバイダーグループ内のパソコンは現在このセッションを実行できません。オフライン、割り当て停止中、クールダウン中、またはこのモデルがない可能性があります。このプロバイダーの「リモートと共有」ページでグループを確認してください。"
     },
     "generatedFiles": {
       "title": "このメッセージで作成されたファイル",
@@ -11330,7 +11465,11 @@
       "untitled": "無題のセッション",
       "moreActions": "その他の操作",
       "agentDevice": "Agent は {{device}} で実行中",
-      "agentDeviceOffline": "Agent は {{device}} で実行中ですが、そのパソコンはオフラインです。接続されると続行します"
+      "agentDeviceOffline": "Agent は {{device}} で実行中ですが、そのパソコンはオフラインです。接続されると続行します",
+      "orcaRemoteLead": "{{device}} からの協同",
+      "orcaRemoteLeadReleased": "協同は終了しました · {{device}} から",
+      "orcaRemoteLeadUnknownDevice": "別のパソコン",
+      "orcaRemoteLeadTip": "{{device}} の「{{lead}}」の Worker です。タスク、フォルダー、コマンドはこのパソコンで実行されます。ここで送ったメッセージは Lead に報告されません。"
     },
     "gitContext": {
       "detached": "Detached HEAD",
@@ -13393,7 +13532,25 @@
       "optional": "（任意）",
       "initialTaskPlaceholder": "この Worker に渡す任意の最初のタスク",
       "enableCollabTitle": "コラボレーションを開始",
-      "enableCollabSubmit": "コラボレーションを開始"
+      "enableCollabSubmit": "コラボレーションを開始",
+      "executionDeviceLabel": "実行デバイス",
+      "thisComputer": "このデバイス",
+      "deviceOnline": "オンライン",
+      "deviceNeedsUpdate": "要アップデート",
+      "executionDeviceHint": "同じアカウントで、オンラインかつリモート操作が有効なコンピューターのみ表示します。",
+      "executionDeviceRemoteHint": "Worker のタスク、フォルダー、コマンドはすべて {{device}} 上にあります。",
+      "remoteDirLabel": "{{device}} 上の作業フォルダー",
+      "remoteDirChat": "チャット",
+      "remoteDirPath": "フォルダーを指定",
+      "remoteDirChatHint": "{{device}} 上でプロジェクトに紐づけないチャットのセッションを作成します。",
+      "remoteDirPathHint": "{{device}} 上で確認します。存在しない場合はエラーになり、このコンピューターのフォルダーに置き換えることはありません。",
+      "remoteDirInvalid": "{{device}} 上の絶対パスを入力してください。",
+      "errors": {
+        "deviceUnreachable": "{{device}} は現在使用できません。オンラインでリモート操作が有効になっている必要があります。Worker は作成されていません。",
+        "deviceOutdated": "{{device}} の Cindy が古いため、アップデートすると Worker を実行できます。",
+        "dirRejected": "{{device}} 上にこのフォルダーが見つからないか、使用できません。Worker は作成されていません。",
+        "dirUnavailable": "{{device}} のフォルダーは一時的に使用できません。接続やネットワークドライブを確認して再試行してください。Worker は作成されていません。"
+      }
     },
     "rolePill": {
       "unread": "未読の更新",
@@ -13415,13 +13572,19 @@
       "scrollWorkersLeftEdge": "すでに先頭の Worker を表示しています",
       "scrollWorkersRightEdge": "すでに末尾の Worker を表示しています",
       "errorBadge": "エラー",
-      "errorBadgeAria": "エラーが発生した Worker があります"
+      "errorBadgeAria": "エラーが発生した Worker があります",
+      "executionDevice": "{{device}} で実行",
+      "deviceUnreachable": "状態を取得できません",
+      "unknownDevice": "別のコンピューター",
+      "archiveRemoteWorkerConfirmDesc": "この協同から外し、{{device}} で進行中のラウンドを停止します。{{device}} 上のタスク、履歴、ファイルは保持され「協同は終了しました」と表示されるので、そちらで引き続き確認できます。"
     },
     "split": {
       "leadLabel": "Lead ({{agent}})",
       "workerLabel": "Worker ({{agent}})",
       "leadNotFound": "Orca lead session が見つかりません",
       "waitingForWorker": "Worker を待機中",
+      "remoteWorkerLoading": "{{device}} 上のタスクを読み込み中…",
+      "remoteWorkerUnreachable": "{{device}} に現在接続できません。再接続すると、この Worker のタスクが再び表示されます。",
       "closeAria": "閉じる"
     }
   },
@@ -13446,17 +13609,12 @@
     "pluginDisabled": "無効",
     "pluginAgentInvoked": "Agent が自動で使用",
     "pluginNoCommand": "ここでは使用できません",
-    "sectionTitle": "参照ディレクトリ(読み取り専用)",
+    "sectionTitle": "ディレクトリ",
     "empty": "参照ディレクトリはまだありません",
     "add": "ディレクトリを追加…",
     "addReadOnly": "読み取り専用ディレクトリを追加…",
-    "addWritable": "読み書き可能なディレクトリを追加…",
-    "writableSectionTitle": "読み書き可能なディレクトリ",
-    "writableEmpty": "読み書き可能なディレクトリはまだありません",
     "atLimit": "上限 {{max}} 件に達しました",
     "remove": "{{name}} を削除",
-    "parentConfirmTitle": "親ディレクトリを追加しますか？",
-    "parentConfirmDescription": "選択したディレクトリは、現在の作業ディレクトリの親または祖先です。Agent が作業ディレクトリ外の内容も参照できるようになり、表示範囲が広がります。\n\nそれでも追加しますか？\n\n{{path}}",
     "writableParentConfirmTitle": "親ディレクトリの読み書きを許可しますか？",
     "writableParentConfirmDescription": "選択したディレクトリは、現在の作業ディレクトリの親または祖先です。Agent はその中のファイルを読み取り、作成、変更、削除できるようになります。\n\nそれでも許可しますか？\n\n{{path}}",
     "parentConfirmAccept": "追加する",

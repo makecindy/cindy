@@ -179,10 +179,10 @@ describe('Bot 流式正文呈现', () => {
   });
 
   // Contracts: claude-code/translator assistant text blocks; pi/translator
-  // message_end authoritative full text; codex/translator agentMessage completed.
-  // All three close text messages before tools, independently of the turn seal.
+  // message_end authoritative full text; codex/translator phase-marked deltas.
+  // A closed block is not a turn seal. Only a provider-marked final can stream early.
   it.each(['claude-code', 'pi', 'codex'] as const)(
-    '%s: hides intermediate text at every frame and releases only the sealed answer', (source) => {
+    '%s: hides intermediate text and preserves provider final through the turn seal', (source) => {
       let state = { ...EMPTY_SESSION_STATE, isStreaming: true, messages: [mkUser('u1')] };
       const project = () => simplifyBotRenderItems(
         groupWorkRuns(buildRenderItems(state.messages).items, state.isStreaming), state.isStreaming,
@@ -191,11 +191,21 @@ describe('Bot 流式正文呈现', () => {
         item.type === 'message' && item.message.role === 'assistant' ? [item.message.content] : []);
       for (const [index, text] of ['我查一下：', '已找到线索，继续核实', '这是最终答复'].entries()) {
         const persistId = `answer-${index}`;
+        const providerFinal = source === 'codex' && index === 2;
         state = handleStreamEvent(state, {
           sessionId: 'bot-event-fixture', type: 'text', persistId,
-          data: { text, isFinal: false, ...(source === 'codex' ? { agentMessageId: persistId } : {}) },
+          data: { text: providerFinal ? '这是' : text, isFinal: false,
+            ...(source === 'codex' ? { agentMessageId: persistId, phase: index === 2 ? 'final_answer' : 'commentary' } : {}),
+          },
         });
-        expect(visibleProse()).toEqual([]);
+        expect(visibleProse()).toEqual(providerFinal ? ['这是'] : []);
+        if (providerFinal) {
+          state = handleStreamEvent(state, {
+            sessionId: 'bot-event-fixture', type: 'text', persistId,
+            data: { text: '最终答复', isFinal: false, agentMessageId: persistId, phase: 'final_answer' },
+          });
+          expect(visibleProse()).toEqual(['这是最终答复']);
+        }
         state = handleStreamEvent(state, {
           sessionId: 'bot-event-fixture', type: 'text', persistId,
           data: { text, isFinal: true,
@@ -203,7 +213,7 @@ describe('Bot 流式正文呈现', () => {
             ...(source === 'codex' ? { agentMessageId: persistId, phase: index === 2 ? 'final_answer' : 'commentary' } : {}),
           },
         });
-        expect(visibleProse()).toEqual([]);
+        expect(visibleProse()).toEqual(providerFinal ? ['这是最终答复'] : []);
         if (index < 2) {
           state = handleStreamEvent(state, {
             sessionId: 'bot-event-fixture', type: 'tool_use', persistId: `tool-${index}`,
@@ -216,6 +226,8 @@ describe('Bot 流式正文呈现', () => {
           expect(visibleProse()).toEqual([]);
         }
       }
+      const streamingFinalKey = project().find(item => item.type === 'message'
+        && item.message.clientId === 'answer-2')?.key;
       // Main stamps the last assistant at done; the renderer projects that meta.
       state = handleStreamEvent(state, {
         sessionId: 'bot-event-fixture', type: 'text', persistId: 'answer-2',
@@ -223,9 +235,16 @@ describe('Bot 流式正文呈现', () => {
         agentMeta: { turnCompleted: true },
       });
       expect(visibleProse()).toEqual(['这是最终答复']);
+      if (source === 'codex') {
+        expect(streamingFinalKey).toBeDefined();
+        expect(project().find(item => item.type === 'message'
+          && item.message.clientId === 'answer-2')?.key).toBe(streamingFinalKey);
+      }
       expect(project().filter((item) => item.type === 'work_group')).toHaveLength(0);
       expect(state.messages.filter((message) => message.role === 'assistant').map((message) => message.content))
         .toEqual(['我查一下：', '已找到线索，继续核实', '这是最终答复']);
+      state = { ...state, isStreaming: false };
+      expect(visibleProse()).toEqual(['这是最终答复']);
     },
   );
 

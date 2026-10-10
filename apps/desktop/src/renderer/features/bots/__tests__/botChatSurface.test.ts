@@ -49,10 +49,10 @@ describe('消息流的头像挂载', () => {
 
   it('只有 assistant 分支挂头像', () => {
     expect(messageStream).toContain('return withAssistantAvatar(\n        assistantAvatar,');
-    // Assistant text shows the avatar; the single task anchor reserves the same
+    // Assistant text shows the avatar; both task references reserve the same
     // space invisibly. User messages and internal tool/work cards still bypass it.
     expect(messageStream.match(/withAssistantAvatar\(/g)?.length).toBe(3);
-    expect(messageStream).toContain("simplifiedBotConversation && message.systemCardType === 'bot-session-task'");
+    expect(messageStream).toMatch(/simplifiedBotConversation\s*&&\s*\(message\.systemCardType === 'bot-session-task'\s*\|\|\s*message\.systemCardType === 'bot-session-task-result'\)\s*\? withAssistantAvatar\(/);
     expect(messageStream).toMatch(/<span aria-hidden="true" className="invisible">\s*\{assistantAvatar\}\s*<\/span>/);
   });
 });

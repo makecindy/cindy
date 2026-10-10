@@ -147,6 +147,11 @@ describe('mobile native deep-link redirects', () => {
     })).toBe('/sessions/new');
   });
 
+  it.each(['cindy://auth?code=fixture&state=fixture', 'cindycn://auth?error=access_denied&state=fixture', '/auth?code=fixture'])('keeps the current route for warm OAuth callbacks: %s', path => {
+    expect(redirectSystemPath({path, initial: false})).toBeNull();
+    expect(redirectSystemPath({path, initial: true})).toBe('/');
+  });
+
   it('preserves existing auth and ordinary deep-link behavior', () => {
     expect(redirectSystemPath({
       path: 'cindy://auth?code=abc',

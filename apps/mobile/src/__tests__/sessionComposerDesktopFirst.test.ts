@@ -639,7 +639,8 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).toContain('if (canUseRemoteSessionControls) return;');
     expect(source).toContain('setModelSheetOpen(false);');
     expect(source).toContain('if (!canUseRemoteSessionControls || !currentSession || !modelSheetSelection) return;');
-    expect(source).toContain('modelSheetOpen && canUseRemoteSessionControls');
+    expect(source).toContain('<MountOnFirstOpen open={modelSheetOpen && canConfigureSessionModel}>');
+    expect(source).toContain('visible={modelSheetOpen && canConfigureSessionModel}');
     expect(source).toContain('disabled={controlBusy || !canUseRemoteSessionControls}');
     expect(source).toContain('createMobileCindyVoiceCredential');
     // Voice startup claims the pressIn-prewarmed ASR connection when one is

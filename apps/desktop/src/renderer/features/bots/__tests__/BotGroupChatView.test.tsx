@@ -558,6 +558,88 @@ describe('BotGroupChatView', () => {
     expect(mocks.sendBotGroupMessage).not.toHaveBeenCalled();
   });
 
+  it('keeps a selected target and its draft across roster removal and a rejected retry', async () => {
+    const namesakes = [
+      { ...detail().members[0]!, botId: 'picked', name: 'Ann' },
+      { ...detail().members[1]!, botId: 'other', name: 'Ann' },
+    ];
+    mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ members: namesakes }) });
+    mocks.sendBotGroupMessage.mockResolvedValue({ ok: false, errorCode: 'MENTION_UNAVAILABLE', message: '' });
+    renderView();
+    const input = (await screen.findByRole('textbox')) as HTMLTextAreaElement;
+    act(() => input.focus());
+    fireEvent.change(input, { target: { value: '@', selectionStart: 1 } });
+    const options = await screen.findAllByRole('option');
+    fireEvent.click(options[1]!);
+    expect(input.value).toBe('@Ann ');
+    mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ members: namesakes.slice(1) }) });
+    act(() => mocks.pushes.forEach(push => push({ groupId: 'g1', change: 'messages' })));
+    await waitFor(() => expect(mocks.getBotGroup).toHaveBeenCalledTimes(2));
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      fireEvent.keyDown(input, { key: 'Enter' });
+      await waitFor(() => expect(mocks.sendBotGroupMessage).toHaveBeenCalledTimes(attempt));
+      await waitFor(() => expect(input.value).toBe('@Ann '));
+      expect(mocks.sendBotGroupMessage.mock.calls.at(-1)![0].mentions).toEqual({ all: false, botIds: ['picked'] });
+    }
+    expect(mocks.toastError).toHaveBeenCalledWith('bots.groupChat.errors.mentionUnavailable');
+    const originalClientId = mocks.sendBotGroupMessage.mock.calls[0]![0].clientId;
+    expect(mocks.sendBotGroupMessage.mock.calls[1]![0].clientId).toBe(originalClientId);
+    fireEvent.change(input, { target: { value: '@', selectionStart: 1 } });
+    const remaining = await screen.findAllByRole('option');
+    fireEvent.click(remaining[1]!);
+    mocks.sendBotGroupMessage.mockResolvedValue({ ok: true, messageId: 'accepted' });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await waitFor(() => expect(mocks.sendBotGroupMessage).toHaveBeenCalledTimes(3));
+    expect(mocks.sendBotGroupMessage.mock.calls.at(-1)![0].mentions).toEqual({ all: false, botIds: ['other'] });
+    expect(mocks.sendBotGroupMessage.mock.calls.at(-1)![0].clientId).not.toBe(originalClientId);
+  });
+
+  it('drops a deleted selected mention before a namesake is manually mentioned again', async () => {
+    const namesakes = [
+      { ...detail().members[0]!, botId: 'picked', name: 'Ann' },
+      { ...detail().members[1]!, botId: 'other', name: 'Ann' },
+    ];
+    mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ members: namesakes }) });
+    renderView();
+    const input = (await screen.findByRole('textbox')) as HTMLTextAreaElement;
+    act(() => input.focus());
+    fireEvent.change(input, { target: { value: '@', selectionStart: 1 } });
+    fireEvent.click((await screen.findAllByRole('option'))[1]!);
+    mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ members: namesakes.slice(1) }) });
+    act(() => mocks.pushes.forEach(push => push({ groupId: 'g1', change: 'messages' })));
+    await waitFor(() => expect(mocks.getBotGroup).toHaveBeenCalledTimes(2));
+    fireEvent.change(input, { target: { value: 'hello', selectionStart: 5 } });
+    fireEvent.change(input, { target: { value: '@Ann hello', selectionStart: 10 } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await waitFor(() => expect(mocks.sendBotGroupMessage).toHaveBeenCalledTimes(1));
+    expect(mocks.sendBotGroupMessage.mock.calls[0]![0].mentions).toEqual({ all: false, botIds: ['other'] });
+  });
+
+  it.each(['picked', 'manual'])('removes only the %s token identity when same-name mentions coexist', async removed => {
+    const namesakes = [
+      { ...detail().members[0]!, botId: 'picked', name: 'Ann' },
+      { ...detail().members[1]!, botId: 'other', name: 'Ann' },
+    ];
+    mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ members: namesakes }) });
+    mocks.sendBotGroupMessage.mockResolvedValue({ ok: false, errorCode: 'MENTION_UNAVAILABLE' });
+    renderView();
+    const input = (await screen.findByRole('textbox')) as HTMLTextAreaElement;
+    act(() => input.focus());
+    fireEvent.change(input, { target: { value: '  @', selectionStart: 3 } });
+    fireEvent.click((await screen.findAllByRole('option'))[1]!);
+    fireEvent.change(input, { target: { value: '  @Ann @Ann', selectionStart: 11 } });
+    mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ members: namesakes.slice(1) }) });
+    act(() => mocks.pushes.forEach(push => push({ groupId: 'g1', change: 'messages' })));
+    await waitFor(() => expect(mocks.getBotGroup).toHaveBeenCalledTimes(2));
+    input.setSelectionRange(removed === 'picked' ? 2 : 6, removed === 'picked' ? 7 : 11);
+    fireEvent.select(input);
+    fireEvent.change(input, { target: { value: '  @Ann', selectionStart: removed === 'picked' ? 2 : 6 } });
+    fireEvent.keyDown(input, { key: 'Escape' });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await waitFor(() => expect(mocks.sendBotGroupMessage).toHaveBeenCalledTimes(1));
+    expect(mocks.sendBotGroupMessage.mock.calls[0]![0].mentions).toEqual({ all: false, botIds: [removed === 'picked' ? 'other' : 'picked'] });
+  });
+
   it('refreshes on a push for this group and shows the unavailable state after delete', async () => {
     renderView();
     await screen.findByText('周六 8:10 有票');
@@ -595,6 +677,32 @@ describe('BotGroupChatView', () => {
       );
       fireEvent.click(screen.getByRole('button', { name: 'bots.groupChat.plan.dismiss' }));
       await waitFor(() => expect(mocks.dismissBotGroupPlan).toHaveBeenCalledWith({ groupId: 'g1', planId: 'p1' }));
+    });
+
+    it.each([true, false])('renders a human-signed plan with organizer and controls (self=%s)', async (isSelf) => {
+      const group = withPlan(plan());
+      group.messages = group.messages.map(message => message.kind === 'plan'
+        ? { ...message, authorKind: 'user', authorBotId: null, authorName: 'Human creator', isSelf } : message);
+      mocks.getBotGroup.mockResolvedValue({ ok: true, group });
+      renderView();
+      const card = await screen.findByTestId('bot-group-plan');
+      expect(card.closest('article')?.textContent).toContain('咪咪');
+      expect(card.closest('article')?.textContent).not.toContain('Human creator');
+      fireEvent.click(screen.getByRole('button', { name: 'bots.groupChat.plan.start' }));
+      await waitFor(() => expect(mocks.startBotGroupPlan).toHaveBeenCalledWith({ groupId: 'g1', planId: 'p1' }));
+      await waitFor(() => expect((screen.getByRole('button', { name: 'bots.groupChat.plan.dismiss' }) as HTMLButtonElement).disabled).toBe(false));
+      fireEvent.click(screen.getByRole('button', { name: 'bots.groupChat.plan.dismiss' }));
+      await waitFor(() => expect(mocks.dismissBotGroupPlan).toHaveBeenCalledWith({ groupId: 'g1', planId: 'p1' }));
+    });
+
+    it('keeps human-signed superseded plans visible and read-only', async () => {
+      const group = withPlan(plan({ status: 'superseded' }));
+      group.messages = group.messages.map(message => message.kind === 'plan' ? { ...message, authorKind: 'user', authorBotId: null } : message);
+      mocks.getBotGroup.mockResolvedValue({ ok: true, group });
+      renderView();
+      expect(await screen.findByText('bots.groupChat.plan.superseded')).toBeTruthy();
+      expect(screen.queryByRole('button', { name: 'bots.groupChat.plan.start' })).toBeNull();
+      expect(screen.queryByRole('button', { name: 'bots.groupChat.plan.dismiss' })).toBeNull();
     });
 
     it('explains a failed plan action and re-reads the group', async () => {

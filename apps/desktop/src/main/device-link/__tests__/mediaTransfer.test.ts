@@ -705,6 +705,13 @@ describe('uploadBuffer — 内存字节(base64 附件)', () => {
 });
 
 describe('downloadToFile — 原子完整性校验', () => {
+  it.each([403, 500])('preserves a safe code and HTTP %s without publishing a file', async (status) => {
+    netFetchMock.mockResolvedValue({ ok: false, status });
+    await expect(downloadToFile(KEY, '/tmp/final.bin')).rejects.toMatchObject({ code: 'OSS_DOWNLOAD_FAILED', status });
+    expect(createWriteStreamMock).not.toHaveBeenCalled();
+    expect(renameMock).not.toHaveBeenCalled();
+  });
+
   it('拒绝超出声明大小的流，不发布目标文件', async () => {
     netFetchMock.mockResolvedValue({ ok: true, status: 200, body: webBody(Uint8Array.from([1, 2, 3])) });
     await expect(downloadToFile(KEY, '/tmp/final.bin', { size: 1, sha256: 'a'.repeat(64) }))

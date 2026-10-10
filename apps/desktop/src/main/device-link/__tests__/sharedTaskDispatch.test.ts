@@ -1,4 +1,4 @@
-import { sharedTaskGuestPeer } from '@cindy/device-link';
+import { authorizeSharedTaskOperation, sharedTaskGuestPeer } from '@cindy/device-link';
 import { afterEach, describe, expect, it } from 'vitest';
 import { assertSharedTaskInteractionResolveCurrent, assertSharedTaskInvoke, assertSharedTaskReferences, captureSharedTaskPush, setSharedTaskInteractionReader, setSharedTaskQueueReader, type SharedTaskInteractionCapture, type SharedTaskPeerCapture } from '../sharedTaskDispatch.js';
 
@@ -6,7 +6,11 @@ function capture(): SharedTaskPeerCapture {
   return {
     author: { sharedTaskId: 'sharedTask', sessionId: 'task', memberId: 'member', accountId: 'guest', displayName: 'Guest' },
     isCurrent: () => true,
-    authorize: (operation, item) => operation !== 'input.edit' && operation !== 'input.withdraw' || item?.authorAccountId === 'guest',
+    authorize: (operation, item) => authorizeSharedTaskOperation({
+      sharedTaskId: 'sharedTask', sessionId: 'task', ownerAccountId: 'owner', hostDeviceId: 'host',
+      status: 'active', revision: 1,
+      guests: [{ memberId: 'member', accountId: 'guest', version: 1, deviceIds: ['phone'] }],
+    }, { accountId: 'guest', deviceId: 'phone' }, 'task', operation, item).allowed,
   };
 }
 afterEach(() => { setSharedTaskQueueReader(null); setSharedTaskInteractionReader(null); });
@@ -39,10 +43,21 @@ describe('sharedTask dispatch scope', () => {
     }
     expect(() => assertSharedTaskInvoke(capture(), { channel: 'device-link:subscribe', args: [{ topics: ['session:task'] }] })).not.toThrow();
   });
-  it('allows shared task history and Agent settings, rejecting another task', () => {
-    for (const channel of ['local-db:messages:list', 'maker:set-model', 'maker:set-effort', 'maker:input:stop']) {
+  it('allows shared task history and stopping the Agent, rejecting another task', () => {
+    for (const channel of ['local-db:messages:list', 'maker:input:stop']) {
       expect(() => assertSharedTaskInvoke(capture(), { channel, args: ['task'] })).not.toThrow();
       expect(() => assertSharedTaskInvoke(capture(), { channel, args: ['other'] })).toThrow();
+    }
+  });
+  it.each([
+    ['maker:set-model', ['task', 'gpt-6-sol', 'openai', undefined, { effort: 'high', fastMode: true }]],
+    ['maker:set-effort', ['task', 'high']],
+    ['maker:set-fast-mode', ['task', true]],
+    ['maker:set-thinking-enabled', ['task', true]],
+    ['maker:switch-session-agent', ['task', 'codex', 'gpt-6-sol', 'openai']],
+  ])('rejects guest model settings through %s before execution or result replay', (channel, args) => {
+    for (const phase of ['invoke', 'result'] as const) {
+      expect(() => assertSharedTaskInvoke(capture(), { channel, args }, undefined, phase)).toThrow('PERMISSION_DENIED');
     }
   });
   it('allows guests to resolve generic Agent interaction cards for the shared task', () => {

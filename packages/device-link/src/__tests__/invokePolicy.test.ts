@@ -8,6 +8,15 @@ import {
 } from '../index.js';
 
 describe('remote invoke policy boundaries', () => {
+  it.each(['desktop', 'mobile'] as const)('waits for group sends only on %s without replaying writes', (platform) => {
+    const channel = 'maker:remote-resources:invoke';
+    expect(resolveRemoteInvokeTimeoutMs(channel, [{ collectionId: 'bot-groups', actionId: 'send' }], platform)).toBe(180_000);
+    expect(resolveRemoteInvokeTimeoutMs(channel, [{ collectionId: 'bot-groups', actionId: 'update' }], platform)).not.toBe(180_000);
+    expect(resolveRemoteInvokeTimeoutMs(channel, [{ collectionId: 'teammates', actionId: 'send' }], platform)).not.toBe(180_000);
+    expect(isPeerResetRetryableReadChannel(channel)).toBe(false);
+    expect(isCompletedInvokeRetryableReadChannel(channel)).toBe(false);
+  });
+
   it('gives predictions the host budget on both controllers without automatic link retries', () => {
     expect(resolveRemoteInvokeTimeoutMs('maker:predict-prompt', [], 'mobile')).toBe(45_000);
     expect(resolveRemoteInvokeTimeoutMs('maker:predict-prompt', [], 'desktop')).toBe(45_000);

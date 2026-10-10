@@ -43,6 +43,8 @@ import { ModelLightbox } from './ModelLightbox';
 import { ImageMissingPlaceholder } from './ImageMissingPlaceholder';
 import { useRemoteMediaUrl } from '@/hooks/useRemoteMediaUrl';
 import { useRemoteMediaErrorRetry } from '@/hooks/useRemoteMediaErrorRetry';
+import { isRemoteMediaUrl } from '../../../shared/remoteMediaUrl';
+import { useImageLoadFailure } from './useImageLoadFailure';
 import type { ToolMediaModelFile } from './AgentActionRow';
 
 export type ChatImageVariant = 'user-attached' | 'tool-output';
@@ -123,9 +125,12 @@ export function ChatImageView({
     setLightboxOpen(null);
     previewTriggerRef.current?.focus({ preventScroll: true });
   };
-  // 错误态 + 远程媒体失败自愈(退避重取,覆盖被控端物化竞态窗口)收口在
-  // hook 里;本机 scheme 的失败不重试,行为与从前一致。
+  // Remote URLs retain bounded transport retries; local images share Markdown's
+  // confirmed-missing diagnosis and focus/online retry, using the displayed URL.
   const { errored, onLoadError } = useRemoteMediaErrorRetry(displaySrc);
+  const localFailure = useImageLoadFailure(displaySrc);
+  const remote = isRemoteMediaUrl(displaySrc);
+  const imageStatus = remote ? (errored ? 'unavailable' : null) : localFailure.status;
   // Right-click → 复制图片 / 打开图片所在目录. Mirrors MarkdownRenderer.LightboxImage
   // and ImageLightbox so user-attached 图和 assistant tool-output 图右键交互一致。
   const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null);
@@ -136,8 +141,8 @@ export function ChatImageView({
 
   const { canCopy, canReveal: canRevealInFolder, copyImage, revealImage } = useImageClipboard(displaySrc);
 
-  if (errored) {
-    return <ImageMissingPlaceholder filename={filename} />;
+  if (imageStatus) {
+    return <ImageMissingPlaceholder filename={filename} status={imageStatus} />;
   }
 
   const { style, className } = VARIANT_STYLES[variant];
@@ -223,7 +228,7 @@ export function ChatImageView({
           e.stopPropagation();
           setMenuPos({ x: e.clientX, y: e.clientY });
         }}
-        onError={onLoadError}
+        onError={remote ? onLoadError : localFailure.onError}
       />
       {showMenu ? (
         <DropdownMenu

@@ -358,6 +358,8 @@ export const MOBILE_REMOTE_INVOKE_CHANNELS = [
   'maker:session:enable-orca',
   'maker:session:disable-orca',
   'maker:worker:create',
+  // 只读 Lead 所在电脑视角下的运行设备；旧端拒绝时保留本机 Worker 创建。
+  'maker:orca:execution-devices',
   'maker:worker:switch-focus',
   'maker:worker:acknowledge-done',
   'maker:worker:archive',

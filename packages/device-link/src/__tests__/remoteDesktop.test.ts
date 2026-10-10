@@ -11,6 +11,24 @@ import {
 } from "../remoteDesktop";
 import { REMOTE_INVOKE_ALLOWLIST, PUSH_FORWARD_ALLOWLIST } from "../allowlist";
 describe("remote desktop wire boundary", () => {
+  it.each([
+    { op: "start", displayId: "1" },
+    { op: "heartbeat", lease: "a" },
+  ])(
+    "accepts an optional boolean lock policy on $op without changing legacy requests",
+    (request) => {
+      expect(parseRemoteDesktopRequest(request)).toEqual(request);
+      for (const lockOnExit of [true, false])
+        expect(parseRemoteDesktopRequest({ ...request, lockOnExit })).toEqual({
+          ...request,
+          lockOnExit,
+        });
+      for (const lockOnExit of ["true", 1, null, {}])
+        expect(() =>
+          parseRemoteDesktopRequest({ ...request, lockOnExit }),
+        ).toThrow("INVALID_REQUEST");
+    },
+  );
   it("preserves legacy stop and accepts only a boolean explicit lock request", () => {
     expect(parseRemoteDesktopRequest({ op: "stop", lease: "a" })).toEqual({ op: "stop", lease: "a" });
     expect(parseRemoteDesktopRequest({ op: "stop", lease: "a", lockScreen: true })).toEqual({ op: "stop", lease: "a", lockScreen: true });

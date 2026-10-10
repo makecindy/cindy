@@ -49,6 +49,15 @@ function makeClient(scenario: string, region: AuthRegion = 'cn') {
 }
 
 describe('loginSkin 全登录态(harness 真链 + 渲染层接线)', () => {
+  it('initializes on mount without using the explicit cancel action', () => {
+    const start = loginSource.indexOf('initializedLoginRef.current = true;');
+    expect(start).toBeGreaterThan(-1);
+    const effect = loginSource.slice(start, loginSource.indexOf('}, [additionalAccount, auth]);', start));
+    expect(effect).toContain("dispatchLoginAction({ type: 'initialize' })");
+    expect(effect).not.toContain("type: 'reset'");
+    expect(loginSource).toContain("dispatchLoginAction({ type: 'reset' })");
+  });
+
   it('keeps retained accounts reachable after the active session expires', () => {
     expect(loginSource).toContain(
       "import { AccountSwitcherSheet } from '@/session/AccountSwitcherSheet';",

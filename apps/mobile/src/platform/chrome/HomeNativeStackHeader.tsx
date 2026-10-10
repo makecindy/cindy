@@ -1,4 +1,4 @@
-import { useState, type ComponentProps, type ReactNode } from "react";
+import { memo, useState, type ComponentProps, type ReactNode } from "react";
 import { Stack } from "expo-router";
 import { HomeHeaderGlassButton } from "@/session/HomeHeaderGlassButton";
 import { QuietSyncIndicator } from '@/components/QuietSyncIndicator';
@@ -27,8 +27,12 @@ import { lineHeight, navigationChrome, spacing } from "@/theme/tokens";
 /**
  * 首页 iOS 顶栏走系统 UINavigationBar。
  * 透明导航栏;设备标题使用与任务标题相同的轻磨砂胶囊。Android 不渲染。
+ *
+ * memo:系统顶栏(react-native-screens)每次选项变化都会整组重建 bar button item,展开中的
+ * 菜单随之关闭。调用方须传稳定的 props(菜单内容无实质变化时保持同一引用),避免后台同步
+ * 之类的无关重渲染把用户正在看的菜单关掉。
  */
-export function HomeNativeStackHeader({
+export const HomeNativeStackHeader = memo(function HomeNativeStackHeader({
   displayA11y,
   displayActions,
   menuA11y,
@@ -50,7 +54,6 @@ export function HomeNativeStackHeader({
   menuA11y: string;
   onDisplayAction(id: string): void;
   onOpenDeviceMenu(): void;
-  onOpenDisplaySettings(): void;
   onOpenMenu(): void;
   onOpenRemoteDesktop?: () => void;
   remoteDesktopA11y: string;
@@ -201,12 +204,13 @@ export function HomeNativeStackHeader({
       )}
     </>
   );
-}
-
+});
 
 function displayMenuItems(actions: readonly NativePullDownAction[], onAction: (id: string) => void): ReactNode {
   return actions.map(action => action.subactions?.length ? (
     <Stack.Toolbar.Menu key={action.id} title={action.title} inline={action.displayInline}
+      subtitle={action.subtitle}
+      icon={action.image as ComponentProps<typeof Stack.Toolbar.Menu>['icon']}
       disabled={action.disabled} destructive={action.destructive}>
       {displayMenuItems(action.subactions, onAction)}
     </Stack.Toolbar.Menu>

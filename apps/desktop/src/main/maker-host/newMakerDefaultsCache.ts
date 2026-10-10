@@ -141,6 +141,7 @@ export interface WorkerDefaultsFromNewMaker {
 /**
  * 读某 (agent, provider, model) 在 providerModelMemory 镜像里的思考开关。
  * 未推送 / 未记录 → undefined，调用方保持模型默认（开）。
+ * 权威 `${agent}:*` 全局槽优先，来源副本兜底（被控端旧快照可能只写过来源槽）。
  */
 export function getThinkingEnabledFromMemory(
   agentKind: 'claude-code' | 'codex' | 'pi',
@@ -148,7 +149,10 @@ export function getThinkingEnabledFromMemory(
   model: string | undefined,
 ): boolean | undefined {
   if (!providerMemoryCache || !providerId || !model) return undefined;
-  return providerMemoryCache[`${agentKind}:${providerId}`]?.thinkingByModel?.[model];
+  return (
+    providerMemoryCache[`${agentKind}:*`]?.thinkingByModel?.[model] ??
+    providerMemoryCache[`${agentKind}:${providerId}`]?.thinkingByModel?.[model]
+  );
 }
 
 /**
@@ -263,10 +267,13 @@ export function getNewMakerModelTuning(ownerScope: string, agent: 'claude-code' 
   providerId: string, model: string): { effort?: string; fastMode?: boolean } {
   if (selectedRouteOwner !== ownerScope || !cache) return {};
   const memory = cache.providerModelMemory;
+  // 权威 `${agent}:*` 槽优先,来源副本只兜底旧客户端(同 getThinkingEnabledFromMemory 与
+  // renderer getProviderModel*):来源槽优先会让同模型换个来源就回到旧档位 —— 正是
+  // 「推理强度自己变低」那一类缺陷,只是发生在 main 侧的这条读路径上。
+  const preset = memory?.[`${agent}:*`];
   const provider = memory?.[`${agent}:${providerId}`];
-  const legacy = memory?.[`${agent}:*`];
-  const effort = provider?.effortByModel?.[model] ?? legacy?.effortByModel?.[model] ?? cache.effortByModel[model];
-  const fastMode = provider?.fastByModel?.[model] ?? legacy?.fastByModel?.[model] ?? cache.fastModeByModel[model];
+  const effort = preset?.effortByModel?.[model] ?? provider?.effortByModel?.[model] ?? cache.effortByModel[model];
+  const fastMode = preset?.fastByModel?.[model] ?? provider?.fastByModel?.[model] ?? cache.fastModeByModel[model];
   return { ...(typeof effort === 'string' ? { effort } : {}),
     ...(typeof fastMode === 'boolean' ? { fastMode } : {}) };
 }
