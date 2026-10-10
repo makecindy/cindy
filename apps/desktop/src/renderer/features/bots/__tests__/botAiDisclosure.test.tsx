@@ -90,4 +90,25 @@ describe('BotAiDisclosureGate', () => {
     expect(isBotAiDisclosureAcknowledged()).toBe(true);
     cleanup();
   });
+
+  it('ignores Esc and outside clicks until the user explicitly confirms', () => {
+    render(
+      <>
+        <BotAiDisclosureGate />
+        <button type="button">chat-content</button>
+      </>,
+    );
+    expect(screen.getByText('bots.aiDisclosure.title')).toBeTruthy();
+
+    // Esc 不关闭弹窗(必须显式确认)。
+    fireEvent.keyDown(document, { key: 'Escape' });
+    // 点击遮罩不关闭弹窗。
+    const overlay = document.querySelector('.modal-scrim');
+    expect(overlay).toBeTruthy();
+    overlay!.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true }));
+
+    expect(screen.getByText('bots.aiDisclosure.title')).toBeTruthy();
+    expect(isBotAiDisclosureAcknowledged()).toBe(false);
+    cleanup();
+  });
 });

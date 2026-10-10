@@ -2609,6 +2609,10 @@ struct CompactSessionView: View {
       StatusDot(session: session, compact: true, mascotSkin: mascotSkin, runningMascotNamespace: runningMascotNamespace)
         .frame(width: 18, height: 18)
 
+      // 刘海屏收起态同样持续公示 AI 身份:短胶囊排在标题之前,
+      // 空间不足时标题文案先被裁切,AI 标识尽量保留可见。
+      AgentIslandAiBadge(text: "AI", textOpacity: textOpacity)
+
       compactTextView(
         compactTitle,
         fontSize: 10,
@@ -2858,14 +2862,14 @@ struct IdleIslandView: View {
     HStack(spacing: 5) {
       AgentIslandMascotView(skin: mascotSkin, state: .idle, size: 16)
         .frame(width: 16, height: 16)
+      // 空闲态也持续公示 AI 身份;排在应用名之前,刘海窄边裁切时优先保留标识。
+      AgentIslandAiBadge(text: strings.displayAiBadge, textOpacity: textOpacity, fontSize: 9)
       Text(strings.displayAppName)
         .font(.system(size: 10, weight: .semibold, design: .monospaced))
         .foregroundColor(Color.white.opacity(0.24))
         .opacity(textOpacity)
         .lineLimit(1)
         .fixedSize(horizontal: true, vertical: false)
-      // 空闲态也持续公示 AI 身份。
-      AgentIslandAiBadge(text: strings.displayAiBadge, textOpacity: textOpacity, fontSize: 9)
     }
   }
 
