@@ -40,6 +40,7 @@ import {
   type AgentAppUpdateMarker,
   type AgentAppUpdateOwner,
   type AgentAppUpdateService,
+  MAX_RESTART_RECORDS,
 } from './agentAppUpdateService.js';
 
 /** Owner binding: broadcast scope for current-ness checks and the owner's own marker path. */
@@ -88,29 +89,57 @@ function assertOwnerCurrent(owner: AgentAppUpdateOwner): void {
     throw new Error('The account that confirmed the update is no longer active');
 }
 
-function parseMarker(raw: string | null): AgentAppUpdateMarker | null {
-  if (!raw) return null;
-  try {
-    const value = JSON.parse(raw) as Partial<AgentAppUpdateMarker>;
-    if (
-      typeof value.requestId !== 'string' ||
-      typeof value.sessionId !== 'string' ||
-      typeof value.fromVersion !== 'string' ||
-      typeof value.requestedAt !== 'number' ||
-      typeof value.pid !== 'number'
-    )
-      return null;
-    return {
-      requestId: value.requestId,
-      sessionId: value.sessionId,
-      fromVersion: value.fromVersion,
-      ...(typeof value.targetVersion === 'string' ? { targetVersion: value.targetVersion } : {}),
-      requestedAt: value.requestedAt,
-      pid: value.pid,
-    };
-  } catch {
+function parseRecord(value: unknown): AgentAppUpdateMarker | null {
+  if (!value || typeof value !== 'object') return null;
+  const record = value as Partial<AgentAppUpdateMarker>;
+  if (
+    typeof record.requestId !== 'string' ||
+    typeof record.sessionId !== 'string' ||
+    typeof record.fromVersion !== 'string' ||
+    typeof record.requestedAt !== 'number' ||
+    typeof record.pid !== 'number'
+  )
     return null;
+  return {
+    requestId: record.requestId,
+    sessionId: record.sessionId,
+    fromVersion: record.fromVersion,
+    ...(typeof record.targetVersion === 'string' ? { targetVersion: record.targetVersion } : {}),
+    requestedAt: record.requestedAt,
+    pid: record.pid,
+  };
+}
+
+/** Restart records file: `{ records: [...] }`, one entry per attempted restart. */
+function readRecords(file: string, options?: { throwOnError?: boolean }): AgentAppUpdateMarker[] {
+  let raw: string | null;
+  try {
+    raw = readAtomicFileSync(file);
+  } catch (error) {
+    // An unreadable (not merely missing) file may hold records; never overwrite it blindly.
+    if (options?.throwOnError) throw error;
+    log.warn('agent app update marker read failed', { error: String(error) });
+    return [];
   }
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw) as { records?: unknown };
+    return Array.isArray(parsed.records)
+      ? parsed.records.map(parseRecord).filter((record): record is AgentAppUpdateMarker => !!record)
+      : [];
+  } catch {
+    log.warn('agent app update marker is corrupt; ignoring it');
+    return [];
+  }
+}
+
+function writeRecords(file: string, records: AgentAppUpdateMarker[]): void {
+  if (records.length === 0) {
+    for (const target of [file, `${file}.bak`]) fs.rmSync(target, { force: true });
+    return;
+  }
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  atomicWriteFileSync(file, JSON.stringify({ records }));
 }
 
 function requireSessionHost(): AgentAppUpdateSessionHost {
@@ -135,35 +164,22 @@ function getService(): AgentAppUpdateService {
     captureOwner,
     isOwnerCurrent,
     marker: {
-      write: (owner, marker) => {
+      list: (owner) => readRecords(markerPathOf(owner)),
+      add: (owner, record) => {
         const file = markerPathOf(owner);
-        fs.mkdirSync(path.dirname(file), { recursive: true });
-        atomicWriteFileSync(file, JSON.stringify(marker));
+        // A record that cannot be read back must not be silently replaced.
+        const records = readRecords(file, { throwOnError: true });
+        writeRecords(file, [...records, record].slice(-MAX_RESTART_RECORDS));
       },
-      read: (owner) => {
+      remove: (owner, requestId) => {
+        const file = markerPathOf(owner);
+        const records = readRecords(file);
+        const remaining = records.filter((record) => record.requestId !== requestId);
+        if (remaining.length === records.length) return;
         try {
-          return parseMarker(readAtomicFileSync(markerPathOf(owner)));
+          writeRecords(file, remaining);
         } catch (error) {
-          log.warn('agent app update marker read failed', { error: String(error) });
-          return null;
-        }
-      },
-      clear: (owner, requestId) => {
-        const file = markerPathOf(owner);
-        let current: AgentAppUpdateMarker | null = null;
-        try {
-          current = parseMarker(readAtomicFileSync(file));
-        } catch {
-          current = null;
-        }
-        // A newer install's marker is not ours to remove.
-        if (current && current.requestId !== requestId) return;
-        for (const target of [file, `${file}.bak`]) {
-          try {
-            fs.rmSync(target, { force: true });
-          } catch (error) {
-            log.warn('agent app update marker cleanup failed', { error: String(error) });
-          }
+          log.warn('agent app update marker update failed', { error: String(error) });
         }
       },
     },

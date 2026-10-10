@@ -2165,6 +2165,8 @@ export async function checkAppUpdateForAgent(): Promise<{
 
 /** Longer than the Windows / Linux updater spawn timeout (5 s). */
 const AGENT_RELAUNCH_SETTLE_MS = 10_000;
+/** An adopted relaunch may still be in its Subagent reclaim (≈6 s) before that spawn window. */
+const AGENT_ADOPTED_RELAUNCH_SETTLE_MS = 20_000;
 
 const AGENT_UPDATE_FAILURE_REASONS: Record<Exclude<CheckForUpdateResult, 'ready'>, string> = {
   manifest_failed: '无法读取当前渠道的更新信息。',
@@ -2212,17 +2214,40 @@ export async function applyConfirmedAppUpdateForAgent(options: {
   const relaunchCancelled: AgentConfirmedAppUpdateResult = {
     status: 'failed', reason: '更新已下载，但本次没有重启。', errorCode: 'relaunch_cancelled',
   };
+  /**
+   * Wait until a relaunch settles: success exits the process (Windows / Linux
+   * from their spawn callbacks), failure clears the flags in
+   * handleApplyFailure() or an early refusal. Whatever is still relaunching at
+   * the deadline is reported as relaunching.
+   */
+  const awaitRelaunchOutcome = async (
+    targetVersion: string | undefined,
+    timeoutMs: number,
+  ): Promise<AgentConfirmedAppUpdateResult> => {
+    const deadline = Date.now() + timeoutMs;
+    while ((isRelaunching || autoRelaunchInProgress) && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    if (isRelaunching || autoRelaunchInProgress) return { status: 'relaunching', targetVersion };
+    return {
+      status: 'failed',
+      reason: '更新器没有启动，Cindy 未重启。',
+      errorCode: lastErrorCode ?? 'relaunch_not_started',
+    };
+  };
   // A relaunch already under way (Settings banner or idle auto-install) counts
-  // as this install only for the confirmed version, and only after the same
-  // last gate a spawn of our own would pass (the caller records its restart there).
-  const adoptRelaunchUnderWay = (): AgentConfirmedAppUpdateResult =>
-    versionChanged()
-      ?? (options.beforeSpawn?.() === false
-        ? relaunchCancelled
-        : { status: 'relaunching', targetVersion: readyVersion });
+  // as this install only for the confirmed version, only after the same last
+  // gate a spawn of our own would pass (the caller records its restart there),
+  // and only once that relaunch has actually settled.
+  const adoptRelaunchUnderWay = async (): Promise<AgentConfirmedAppUpdateResult> => {
+    const changed = versionChanged();
+    if (changed) return changed;
+    if (options.beforeSpawn?.() === false) return relaunchCancelled;
+    return awaitRelaunchOutcome(readyVersion, AGENT_ADOPTED_RELAUNCH_SETTLE_MS);
+  };
   const unsupported = agentUpdateUnsupportedReason();
   if (unsupported) return { status: 'failed', reason: unsupported, errorCode: 'unsupported' };
-  if (isRelaunching || autoRelaunchInProgress) return adoptRelaunchUnderWay();
+  if (isRelaunching || autoRelaunchInProgress) return await adoptRelaunchUnderWay();
   if (currentStatus !== 'ready') {
     const result = await checkForUpdate();
     if (result !== 'ready') {
@@ -2232,7 +2257,7 @@ export async function applyConfirmedAppUpdateForAgent(options: {
   const changedAfterDownload = versionChanged();
   if (changedAfterDownload) return changedAfterDownload;
   if (!await options.beforeRelaunch()) return relaunchCancelled;
-  if (isRelaunching || autoRelaunchInProgress) return adoptRelaunchUnderWay();
+  if (isRelaunching || autoRelaunchInProgress) return await adoptRelaunchUnderWay();
   // A background check may have superseded the staged patch during the wait.
   const changedBeforeRelaunch = versionChanged();
   if (changedBeforeRelaunch) return changedBeforeRelaunch;
@@ -2252,19 +2277,14 @@ export async function applyConfirmedAppUpdateForAgent(options: {
   });
   if (cancelledBeforeSpawn) return cancelledBeforeSpawn;
   // macOS exits inside the call. Windows and Linux return with `isRelaunching`
-  // still set and settle within their 5 s spawn timeout: success exits via
-  // forceQuit(), failure clears the flag in handleApplyFailure(). Wait for that
-  // outcome so a failed spawn is reported now rather than after a later restart.
-  const settleDeadline = Date.now() + AGENT_RELAUNCH_SETTLE_MS;
-  while (isRelaunching && process.platform !== 'darwin' && Date.now() < settleDeadline) {
-    await new Promise((resolve) => setTimeout(resolve, 100));
+  // still set and settle within their 5 s spawn timeout; wait for that outcome
+  // so a failed spawn is reported now rather than after a later restart.
+  if (process.platform === 'darwin') {
+    return isRelaunching
+      ? { status: 'relaunching', targetVersion }
+      : { status: 'failed', reason: '更新器没有启动，Cindy 未重启。', errorCode: lastErrorCode ?? 'relaunch_not_started' };
   }
-  if (isRelaunching) return { status: 'relaunching', targetVersion };
-  return {
-    status: 'failed',
-    reason: '更新器没有启动，Cindy 未重启。',
-    errorCode: lastErrorCode ?? 'relaunch_not_started',
-  };
+  return awaitRelaunchOutcome(targetVersion, AGENT_RELAUNCH_SETTLE_MS);
 }
 
 /** Effective idle auto-install switch (Settings → About), shared with the Agent tools. */

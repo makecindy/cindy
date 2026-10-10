@@ -20,7 +20,7 @@ function deny(reason?: string): InteractionDecision {
 }
 
 function setup(overrides: Partial<AgentAppUpdateDeps> = {}) {
-  let marker: AgentAppUpdateMarker | null = null;
+  let records: AgentAppUpdateMarker[] = [];
   let autoUpdate = false;
   let activeOwner: { ownerId: string } | null = ownerA;
   const deps: AgentAppUpdateDeps = {
@@ -49,12 +49,12 @@ function setup(overrides: Partial<AgentAppUpdateDeps> = {}) {
     captureOwner: vi.fn(() => activeOwner),
     isOwnerCurrent: vi.fn((owner) => activeOwner?.ownerId === owner.ownerId),
     marker: {
-      write: vi.fn((_owner, value: AgentAppUpdateMarker) => {
-        marker = value;
+      list: () => [...records],
+      add: vi.fn((_owner, record: AgentAppUpdateMarker) => {
+        records = [...records, record];
       }),
-      read: () => marker,
-      clear: vi.fn((_owner, requestId: string) => {
-        if (marker?.requestId === requestId) marker = null;
+      remove: vi.fn((_owner, requestId: string) => {
+        records = records.filter((record) => record.requestId !== requestId);
       }),
     },
     notify: vi.fn(async () => 'written' as const),
@@ -66,9 +66,11 @@ function setup(overrides: Partial<AgentAppUpdateDeps> = {}) {
   return {
     deps,
     service: createAgentAppUpdateService(deps),
-    getMarker: () => marker,
+    /** Latest restart record, or null. */
+    getMarker: () => records.at(-1) ?? null,
+    getRecords: () => [...records],
     setMarker: (value: AgentAppUpdateMarker | null) => {
-      marker = value;
+      records = value ? [value] : [];
     },
     switchOwner: (owner: { ownerId: string } | null) => {
       activeOwner = owner;
@@ -95,7 +97,7 @@ describe('Agent app update install', () => {
     await flush();
     expect(deps.requestHostPermission).toHaveBeenCalledOnce();
     expect(deps.apply).not.toHaveBeenCalled();
-    expect(deps.marker.write).not.toHaveBeenCalled();
+    expect(deps.marker.add).not.toHaveBeenCalled();
 
     const [sessionId, instanceId, card] = vi.mocked(deps.requestHostPermission).mock.calls[0]!;
     expect([sessionId, instanceId]).toEqual(['task-1', 'instance-1']);
@@ -126,7 +128,7 @@ describe('Agent app update install', () => {
     expect(deps.apply).toHaveBeenCalledWith(expect.objectContaining({ expectedVersion: '0.1.90' }));
     const { beforeSpawn } = vi.mocked(deps.apply).mock.calls[0]![0];
     expect(beforeSpawn?.()).toBe(true);
-    expect(deps.marker.write).toHaveBeenCalledWith(
+    expect(deps.marker.add).toHaveBeenCalledWith(
       ownerA,
       expect.objectContaining({
         sessionId: 'task-1',
@@ -150,7 +152,7 @@ describe('Agent app update install', () => {
     const { deps, service } = setup({ requestHostPermission: vi.fn(async () => decision) });
     await expect(service.install(caller)).resolves.toMatchObject(expected);
     expect(deps.apply).not.toHaveBeenCalled();
-    expect(deps.marker.write).not.toHaveBeenCalled();
+    expect(deps.marker.add).not.toHaveBeenCalled();
     // The flow is released: a later request raises a fresh card.
     await service.install(caller);
     expect(deps.requestHostPermission).toHaveBeenCalledTimes(2);
@@ -294,7 +296,7 @@ describe('Agent app update install', () => {
     expect(restartAllowed).toBe(false);
     expect(harness.deps.notify).not.toHaveBeenCalled();
     // No restart happened, so no restart record is left on disk.
-    expect(harness.deps.marker.write).not.toHaveBeenCalled();
+    expect(harness.deps.marker.add).not.toHaveBeenCalled();
     // The notice waits in memory until the confirming account is active again.
     harness.switchOwner(ownerA);
     await harness.service.deliverPendingResult();
@@ -385,7 +387,7 @@ describe('Agent app update install', () => {
           : { status: 'failed' as const, reason: 'x', errorCode: 'relaunch_cancelled' };
       }),
     });
-    vi.mocked(harness.deps.marker.write).mockImplementation(() => {
+    vi.mocked(harness.deps.marker.add).mockImplementation(() => {
       throw new Error('disk full');
     });
     await harness.service.install(caller);
@@ -394,7 +396,7 @@ describe('Agent app update install', () => {
     expect(harness.deps.notify).toHaveBeenCalledOnce();
   });
 
-  it('moves an undelivered earlier restart result to memory instead of overwriting it', async () => {
+  it('keeps an undelivered earlier restart record next to a new one instead of overwriting it', async () => {
     const harness = setup({
       appVersion: () => '0.1.86',
       apply: vi.fn(async ({ beforeSpawn }) => {
@@ -412,15 +414,26 @@ describe('Agent app update install', () => {
     });
     vi.mocked(harness.deps.notify).mockRejectedValueOnce(new Error('database busy'));
     await harness.service.deliverPendingResult();
-    expect(harness.getMarker()).toMatchObject({ requestId: 'earlier' });
     await harness.service.install(caller);
     await flush();
+    // Both survive on disk, so the earlier task's result outlives this restart too.
+    expect(harness.getRecords().map((record) => record.requestId)).toEqual([
+      'earlier',
+      expect.any(String),
+    ]);
     expect(harness.getMarker()).toMatchObject({ sessionId: 'task-1' });
-    // The earlier task still gets its result from memory.
+  });
+
+  it('delivers every restart record of an earlier process independently', async () => {
+    const harness = setup({ appVersion: () => '0.1.90' });
+    const base = { fromVersion: '0.1.86', targetVersion: '0.1.90', requestedAt: 900, pid: 99 };
+    harness.setMarker({ ...base, requestId: 'a', sessionId: 'task-a' });
+    await harness.deps.marker.add(ownerA, { ...base, requestId: 'b', sessionId: 'task-b' });
+    vi.mocked(harness.deps.notify).mockRejectedValueOnce(new Error('database busy'));
     await harness.service.deliverPendingResult();
-    expect(vi.mocked(harness.deps.notify).mock.calls.some((call) => call[1] === 'task-0')).toBe(
-      true,
-    );
+    expect(harness.getRecords().map((record) => record.requestId)).toEqual(['a']);
+    await harness.service.deliverPendingResult();
+    expect(harness.getRecords()).toEqual([]);
   });
 
   it('refuses to start when no account is active at confirmation', async () => {
@@ -431,7 +444,7 @@ describe('Agent app update install', () => {
       errorCode: 'CALLER_UNAVAILABLE',
     });
     expect(harness.deps.apply).not.toHaveBeenCalled();
-    expect(harness.deps.marker.write).not.toHaveBeenCalled();
+    expect(harness.deps.marker.add).not.toHaveBeenCalled();
   });
 
   it('never raises a card without a concrete target version', async () => {

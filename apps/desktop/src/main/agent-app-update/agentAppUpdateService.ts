@@ -111,11 +111,11 @@ export interface AgentAppUpdateDeps {
   captureOwner(): AgentAppUpdateOwner | null;
   /** The captured account is still active and no account boundary is pending. */
   isOwnerCurrent(owner: AgentAppUpdateOwner): boolean;
+  /** The owner's restart records: one per attempted restart whose result is not yet written back. */
   marker: {
-    write(owner: AgentAppUpdateOwner, marker: AgentAppUpdateMarker): void;
-    read(owner: AgentAppUpdateOwner): AgentAppUpdateMarker | null;
-    /** Removes the marker only if it still belongs to `requestId` (a newer install keeps its own). */
-    clear(owner: AgentAppUpdateOwner, requestId: string): void;
+    list(owner: AgentAppUpdateOwner): AgentAppUpdateMarker[];
+    add(owner: AgentAppUpdateOwner, record: AgentAppUpdateMarker): void;
+    remove(owner: AgentAppUpdateOwner, requestId: string): void;
   };
   /**
    * Persist a visible host notice in the owner's task (idempotent per clientId).
@@ -142,6 +142,7 @@ const UNDELIVERED_REASONS = new Set([
 ]);
 const MARKER_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const MAX_PENDING_NOTICES = 20;
+export const MAX_RESTART_RECORDS = 20;
 
 interface PendingNotice {
   owner: AgentAppUpdateOwner;
@@ -293,49 +294,41 @@ export function createAgentAppUpdateService(deps: AgentAppUpdateDeps) {
   };
 
   /**
-   * The disk marker exists only for a restart that was about to happen: it is
-   * written at the last gate before the updater spawns, and read back by the
-   * next process. Cleared once its result is persisted or its task is gone.
+   * Restart records exist only for restarts that were about to happen: each is
+   * added at the last gate before the updater spawns and read back by a later
+   * process. Records never replace each other; each is removed on its own once
+   * its result is persisted, its task is gone, or it is stale.
    */
-  const deliverRestartResult = async (owner: AgentAppUpdateOwner) => {
-    const marker = deps.marker.read(owner);
-    // Same process: the restart is still pending (or is being reported as failed).
-    if (!marker || marker.pid === deps.pid) return;
-    if (deps.now() - marker.requestedAt > MARKER_MAX_AGE_MS) {
-      deps.marker.clear(owner, marker.requestId);
-      return;
+  const deliverRestartResults = async (owner: AgentAppUpdateOwner) => {
+    for (const record of deps.marker.list(owner)) {
+      // Same process: that restart has not happened (yet).
+      if (record.pid === deps.pid) continue;
+      if (deps.now() - record.requestedAt > MARKER_MAX_AGE_MS) {
+        deps.marker.remove(owner, record.requestId);
+        continue;
+      }
+      try {
+        await deps.notify(
+          owner,
+          record.sessionId,
+          `agent-app-update:${record.requestId}`,
+          restartMessage(record),
+        );
+      } catch (error) {
+        deps.logger?.warn?.('agent app update result notice failed; will retry', {
+          error: String(error),
+        });
+        continue;
+      }
+      deps.marker.remove(owner, record.requestId);
     }
-    try {
-      await deps.notify(
-        owner,
-        marker.sessionId,
-        `agent-app-update:${marker.requestId}`,
-        restartMessage(marker),
-      );
-    } catch (error) {
-      deps.logger?.warn?.('agent app update result notice failed; will retry', {
-        error: String(error),
-      });
-      return;
-    }
-    deps.marker.clear(owner, marker.requestId);
   };
 
   /** Last gate before the updater spawns (synchronous): owner check, then the restart record. */
   const recordRestart = (owner: AgentAppUpdateOwner, request: AgentAppUpdateMarker): boolean => {
     if (!deps.isOwnerCurrent(owner)) return false;
-    const previous = deps.marker.read(owner);
-    if (previous && previous.requestId !== request.requestId) {
-      // An earlier restart's result not yet written back moves to memory, not overwritten silently.
-      queueNotice({
-        owner,
-        sessionId: previous.sessionId,
-        clientId: `agent-app-update:${previous.requestId}`,
-        message: restartMessage(previous),
-      });
-    }
     try {
-      deps.marker.write(owner, request);
+      deps.marker.add(owner, request);
       return true;
     } catch (error) {
       // Without the record the outcome could not be reported after the restart.
@@ -376,7 +369,7 @@ export function createAgentAppUpdateService(deps: AgentAppUpdateDeps) {
       flow = null;
     }
     // A spawn that failed after the record was written did not restart anything.
-    deps.marker.clear(owner, request.requestId);
+    deps.marker.remove(owner, request.requestId);
     queueNotice({
       owner,
       sessionId: request.sessionId,
@@ -517,7 +510,7 @@ export function createAgentAppUpdateService(deps: AgentAppUpdateDeps) {
      */
     async deliverPendingResult(): Promise<void> {
       const owner = deps.captureOwner();
-      if (owner) await deliverRestartResult(owner);
+      if (owner) await deliverRestartResults(owner);
       await flushNotices();
     },
   };
