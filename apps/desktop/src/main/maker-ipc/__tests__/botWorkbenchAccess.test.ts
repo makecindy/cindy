@@ -79,6 +79,8 @@ function setup(overrides: Partial<BotWorkbenchAccessDeps> = {}) {
   return { deps, access: createBotWorkbenchAccess(deps) };
 }
 
+const DAY = 24 * 60 * 60 * 1000;
+
 describe('authorizeWorkbenchTarget', () => {
   it('allows an ordinary local task inside a handed-over project, including its worktrees', () => {
     expect(authorizeWorkbenchTarget(target(), [PROJECT], false)).toEqual({ ok: true, projectDir: PROJECT });
@@ -544,5 +546,70 @@ describe('workbench snapshot', () => {
     expect(result).toMatchObject({ ok: true, workbench: { projects: [], tasks: [], automations: [{ id: 'r-1', state: 'running' }] } });
     expect(deps.listProjectTasks).not.toHaveBeenCalled();
     expect(deps.listExternalCandidates).not.toHaveBeenCalled();
+  });
+});
+
+describe('workbench imported-session judgment identity (review #5347)', () => {
+  it('attributes the judgment stored under the old external key to the imported session in get()', async () => {
+    // 设置页导入不 rekey:伙伴的判断仍挂在 claude:abc 下, 而 Cindy 任务 id 是
+    // claude-abc。get_workbench 必须认领旧键判断, 否则界面上有标题/结论而
+    // 伙伴读到 judgment=null、计数进 unjudged(按标题定位不到)。
+    const { access } = setup({
+      readState: vi.fn(async () => ({
+        directories: [PROJECT],
+        tasks: {
+          'claude:abc': {
+            title: '压缩原画',
+            verdict: 'unfinished' as const,
+            next: '压到 512px',
+            project: PROJECT,
+            updatedAt: '2026-10-01T00:00:00.000Z',
+          },
+        },
+      })),
+      listProjectTasks: vi.fn(async () => [
+        { id: 'claude-abc', title: '导入后的任务', workingDir: PROJECT, agentKind: 'cc', summary: null, lastActiveAt: 100 * DAY, messageCount: 3 },
+      ]),
+      now: () => 100 * DAY,
+    });
+    const result = await access.get({ callerSessionId: 'bot-main' });
+    const task = result.ok ? result.workbench.tasks.find((t) => t.taskId === 'claude-abc') : null;
+    expect(task?.judgment).toMatchObject({ title: '压缩原画', verdict: 'unfinished', next: '压到 512px' });
+    expect(result.ok ? result.workbench.counts.unjudged : 0).toBe(0);
+  });
+
+  it('clears the stale external-key judgment after saving one under the imported session id', async () => {
+    // 缺口 2:导入后 set 写新 id,旧外部键的 unfinished 若不清理,任务滑出 30 天
+    // 窗口后会作为待做复活,旧状态还可能压过新更新。写入后立即删旧键。
+    const { deps, access } = setup({
+      readState: vi.fn(async () => ({
+        directories: [PROJECT],
+        tasks: {
+          'claude:abc': {
+            title: '压缩原画',
+            verdict: 'unfinished' as const,
+            next: '压到 512px',
+            project: PROJECT,
+            updatedAt: '2026-10-01T00:00:00.000Z',
+          },
+        },
+      })),
+      readTarget: vi.fn(async (id: string) => (id === 'claude-abc' ? target({ id }) : null)),
+      listProjectTasks: vi.fn(async () => [
+        { id: 'claude-abc', title: '导入后的任务', workingDir: PROJECT, agentKind: 'cc', summary: null, lastActiveAt: 100 * DAY, messageCount: 3 },
+      ]),
+      now: () => 100 * DAY,
+    });
+    await expect(
+      access.set({
+        callerSessionId: 'bot-main',
+        taskId: 'claude-abc',
+        title: '压缩原画',
+        verdict: 'done',
+        next: null,
+      }),
+    ).resolves.toMatchObject({ ok: true, taskId: 'claude-abc' });
+    expect(deps.saveJudgment).toHaveBeenCalledWith('bot-1', 'claude-abc', expect.objectContaining({ verdict: 'done' }));
+    expect(deps.rekeyJudgment).toHaveBeenCalledWith('bot-1', 'claude:abc', 'claude-abc');
   });
 });

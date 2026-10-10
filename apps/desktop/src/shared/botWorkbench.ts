@@ -361,6 +361,28 @@ export function importedSessionOrigin(
 }
 
 /**
+ * 导入会话在伙伴判断命名空间里的旧外部键:`claude:<sdkId>` / `codex:<threadId>`
+ * (设置页导入之前,伙伴的外部判断就写在这个键下)。导入会话 id 前缀去掉即得,
+ * 供列表投影、get_workbench 读取与判断写入三处共用同一份身份对应 —— 换取
+ * "界面认领了旧判断,工具读取/更新也要认到同一份"(review: #5347)。
+ * 非导入会话返回 null。
+ */
+export function importedSessionExternalTaskId(
+  sessionId: string,
+  agentKind?: string | null | undefined,
+): string | null {
+  // 无 agentKind 时按前缀推导:前缀是导入器写入的引擎标记, 误配形态(普通任务
+  // 恰好叫 claude-xxx)不会走导入路径;调用方在读取侧应传 agentKind 交叉验证,
+  // 写入侧(删除旧键)删错也只是 no-op, 方向安全。
+  const origin = agentKind === undefined
+    ? sessionId.startsWith('claude-') ? 'claude-code' : sessionId.startsWith('codex-') ? 'codex' : null
+    : importedSessionOrigin(sessionId, agentKind);
+  if (origin === 'claude-code') return `claude:${sessionId.slice('claude-'.length)}`;
+  if (origin === 'codex') return `codex:${sessionId.slice('codex-'.length)}`;
+  return null;
+}
+
+/**
  * 能作为工作台任务的会话来源。只认主人自己在项目里开的任务(含插件为项目建的任务、
  * 从本机工具导入的任务,它们都以 desktop 落库)。自动化的每次运行由自动化那一格代表,
  * IM 渠道、学习、评审、伙伴自身等来源都不是"项目里的任务"。缺失按 desktop 兼容旧行。

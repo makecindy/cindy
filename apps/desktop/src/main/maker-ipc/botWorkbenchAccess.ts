@@ -28,6 +28,7 @@ import {
   deriveWorkbenchAutomationState,
   deriveWorkbenchSessionState,
   findWorkbenchProject,
+  importedSessionExternalTaskId,
   importedSessionOrigin,
   isWorkbenchTaskSource,
   parseWorkbenchTaskId,
@@ -411,6 +412,14 @@ export function createBotWorkbenchAccess(deps: BotWorkbenchAccessDeps) {
       project: target.projectDir,
       ref,
     });
+    // 导入会话的新判断落在 Cindy id 上;伙伴早期的判断还挂在旧外部键下 ——
+    // 立即清掉,否则 (a) 旧 unfinished 在任务滑出 30 天窗口后会作为待做复活,
+    // (b) 旧状态可能在后续读取中压过这里的新更新(review #5347 缺口 2)。
+    // 删除而非 rekey:新键刚刚写入,内容以它为准。
+    const externalKey = target.kind === 'session'
+      ? importedSessionExternalTaskId(target.taskId)
+      : null;
+    if (externalKey) await deps.rekeyJudgment(botId, externalKey, target.taskId);
     return { taskId: target.taskId, ok: true as const, judgment: saved };
   };
 
@@ -529,7 +538,14 @@ export function createBotWorkbenchAccess(deps: BotWorkbenchAccessDeps) {
           const digest = candidate.row
             ? await deps.readSessionDigest(candidate.row.id, candidate.lastActiveMs).catch(() => null)
             : candidate.digest;
-          const judgment = workbench.tasks[candidate.taskId] ?? null;
+          // 导入会话的伙伴判断可能仍写在旧外部键下(设置页导入不 rekey):
+          // 与列表投影同一规则认领, 否则 get_workbench 报 judgment=null 且把
+          // 已判断的事项计入 unjudged(伙伴按标题定位不到, review #5347)。
+          const externalKey = candidate.row
+            ? importedSessionExternalTaskId(candidate.row.id, candidate.row.agentKind)
+            : null;
+          const judgment = workbench.tasks[candidate.taskId]
+            ?? (externalKey ? workbench.tasks[externalKey] ?? null : null);
           return {
             taskId: candidate.taskId,
             source: candidate.source,
