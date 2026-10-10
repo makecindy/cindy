@@ -72,6 +72,14 @@ const getEditor = createBotRemoteEditors({ ...deps,
     deps.assertOwner(owner);
     if (!source) {
       if (input.capabilities) await validateModelChain(input.capabilities.modelChainOverride);
+      else {
+        const chain = await readEffectiveBotModelChain({});
+        deps.assertOwner(owner);
+        if (!chain.length) throwIpcError('INVALID_PARAMS', 'Model route unavailable');
+        // Match the primary advertised by the creation form, without rejecting
+        // an otherwise usable default because an optional backup is unavailable.
+        await validateModelChain(chain.slice(0, 1));
+      }
       deps.assertOwner(owner);
       await createBotProfile({ ...input, prepareInvitation: true });
       deps.assertOwner(owner);
