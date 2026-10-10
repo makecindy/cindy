@@ -1,3 +1,4 @@
+import { normalizeVoiceConversationSelection, type VoiceConversationSelection } from './voiceConversation';
 import type {
   DictationDictionaryAdviceInput,
   DictationDictionaryLearningAction,
@@ -78,6 +79,8 @@ export interface VoiceInputDictionaryCandidate {
 }
 
 export interface VoiceInputSettings {
+  /** Explicit speech selection; absent means follow the available catalog. */
+  conversationSelection?: VoiceConversationSelection | null;
   language: VoiceInputLanguage;
   microphoneDeviceId: string | null;
   muteSystemAudio: boolean;
@@ -524,6 +527,8 @@ export function normalizeVoiceInputSettings(
       ? normalizeVoiceInputShortcut(candidate.shortcut)
       : defaults.shortcut;
   return {
+    ...(normalizeVoiceConversationSelection(candidate.conversationSelection)
+      ? { conversationSelection: normalizeVoiceConversationSelection(candidate.conversationSelection) } : {}),
     language: isVoiceInputLanguage(candidate.language) ? candidate.language : defaults.language,
     microphoneDeviceId:
       typeof candidate.microphoneDeviceId === 'string' && candidate.microphoneDeviceId.trim().length > 0

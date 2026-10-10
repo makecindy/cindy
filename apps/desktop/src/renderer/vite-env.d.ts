@@ -1714,6 +1714,7 @@ interface ElectronAPI {
     onConfirm: (callback: (request: unknown) => void) => () => void;
     resolveConfirm: (requestId: string, confirmed: boolean) => Promise<{ handled: boolean }>;
   };
+  voiceConversation: import('../shared/voiceConversation').VoiceConversationApi;
   voiceInput: {
     prewarm: (payload?: {
       sourceLanguage?: string;

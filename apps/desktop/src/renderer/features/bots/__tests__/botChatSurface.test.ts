@@ -33,9 +33,8 @@ describe('Bot 对话的判定条件', () => {
   });
 
   it('伙伴对话换掉任务顶栏,而不是在它旁边再加一个', () => {
-    expect(sessionView).toContain(
-      '<BotSessionContentHeaderRegistration bot={botChatIdentity} />',
-    );
+    expect(sessionView).toMatch(/botChatIdentity\s*\?\s*\(\s*<BotSessionContentHeaderRegistration bot=\{botChatIdentity\}/);
+    expect(sessionView).toContain('onVoice={voiceModeAvailable ? toggleVoiceMode : undefined}');
     expect(sessionView).toContain('<SessionContentHeaderRegistration');
   });
 });

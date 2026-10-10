@@ -8946,6 +8946,44 @@
       "memory": "Remembered: {{title}}",
       "skillCreated": "Created skill: {{title}}",
       "skillUpdated": "Updated skill: {{title}}"
+    },
+    "voiceMode": {
+      "finishBeforeDictation": "End voice mode before starting dictation.",
+      "title": "Voice Mode",
+      "close": "Close voice mode",
+      "model": "Speech model",
+      "refresh": "Refresh models",
+      "voice": "Voice",
+      "voiceHint": "Use a voice name supported by the selected model, such as alloy.",
+      "modelUnavailable": "The saved speech model is unavailable. Choose another model.",
+      "noModels": "No speech model is available for this account yet. You can start when one becomes available.",
+      "catalogError": "Could not load or save speech settings. Please try again.",
+      "start": "Start talking",
+      "resume": "Resume",
+      "retrySend": "Reconnect and send",
+      "mute": "Mute",
+      "interrupt": "Stop reading",
+      "send": "Finish sentence",
+      "end": "End",
+      "unsent": "Not sent · select the text to copy it",
+      "hint": "Pause to send. Replies are read aloud with an AI voice. Speak at any time to interrupt.",
+      "status": {
+        "idle": "Ready when you are",
+        "connecting": "Connecting…",
+        "listening": "Listening · pause to send",
+        "thinking": "Thinking · you can keep talking",
+        "speaking": "Speaking · interrupt at any time",
+        "paused": "Paused · microphone off",
+        "error": "Paused · microphone off",
+        "confirmation": "Waiting for your confirmation · microphone off",
+        "preparing": "Preparing voice…"
+      },
+      "errors": {
+        "connection": "Voice connection interrupted. Your unsent text is kept below.",
+        "microphone": "Microphone stopped. Check its permission and connection, then resume.",
+        "send": "This message was not accepted. Your text is kept below.",
+        "speech": "Could not read the reply aloud. The text reply remains in the conversation. Check the speech model and voice."
+      }
     }
   },
   "common": {

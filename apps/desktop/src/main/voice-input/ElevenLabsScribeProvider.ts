@@ -75,6 +75,12 @@ export class ElevenLabsScribeProvider implements AsrProvider {
     this.connectTimeoutMs = options.connectTimeoutMs ?? CONNECT_TIMEOUT_MS;
   }
 
+  private segmentCallback?: (segment: import('@cindy/voice-input-core').AsrSegment) => void;
+
+  onSegment(callback: (segment: import('@cindy/voice-input-core').AsrSegment) => void): void {
+    this.segmentCallback = callback;
+  }
+
   onEvent(callback: (event: AsrEvent) => void): void {
     this.callback = callback;
   }
@@ -421,6 +427,7 @@ export class ElevenLabsScribeProvider implements AsrProvider {
       changedFromPrevious: previous !== partial,
       draftChars: draft.length,
     });
+    this.segmentCallback?.({ id: String(this.committedSegments.length), text: partial, final: false });
     this.callback({ type: 'partial', text: draft, at: Date.now() });
   }
 
@@ -428,6 +435,7 @@ export class ElevenLabsScribeProvider implements AsrProvider {
     const committed = mergeRecoveredTranscript(this.recoveryPartialPrefix, text);
     if (!hasSpeechContent(committed) || this.isDuplicateStable(committed)) return;
 
+    this.segmentCallback?.({ id: String(this.committedSegments.length), text: committed, final: true });
     this.committedSegments.push(committed);
     this.currentPartial = '';
     this.recoveryPartialPrefix = '';

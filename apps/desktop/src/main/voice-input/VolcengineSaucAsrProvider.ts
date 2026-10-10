@@ -124,6 +124,12 @@ export class VolcengineSaucAsrProvider implements AsrProvider {
     this.errorFallbackMessage = options.errorFallbackMessage ?? 'Volcengine SAUC transcription failed.';
   }
 
+  private segmentCallback?: (segment: import('@cindy/voice-input-core').AsrSegment) => void;
+
+  onSegment(callback: (segment: import('@cindy/voice-input-core').AsrSegment) => void): void {
+    this.segmentCallback = callback;
+  }
+
   onEvent(callback: (event: AsrEvent) => void): void {
     this.callback = callback;
   }
@@ -552,6 +558,7 @@ export class VolcengineSaucAsrProvider implements AsrProvider {
     }
     this.startResolve?.();
 
+    for (const segment of extractConversationSegments(message.payload)) this.segmentCallback?.(segment);
     const rawTranscript = extractTranscript(message.payload);
     const transcript = mergeRecoveredTranscript(this.sessionTranscriptPrefix, rawTranscript);
     const confirmation = getTranscriptConfirmation(message.payload, rawTranscript);
@@ -871,4 +878,18 @@ function looksLikeJson(text: string): boolean {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/** SAUC utterance timestamps are stable within one transport; text can be revised. */
+export function extractConversationSegments(payload: unknown): import('@cindy/voice-input-core').AsrSegment[] {
+  if (!isRecord(payload)) return [];
+  const results = Array.isArray(payload.result) ? payload.result : [payload.result];
+  return results.flatMap((result) => {
+    if (!isRecord(result) || !Array.isArray(result.utterances)) return [];
+    return result.utterances.flatMap((utterance) => {
+      if (!isRecord(utterance) || typeof utterance.text !== 'string'
+        || typeof utterance.start_time !== 'number' || !Number.isFinite(utterance.start_time)) return [];
+      return [{ id: String(utterance.start_time), order: utterance.start_time, text: utterance.text, final: utterance.definite === true }];
+    });
+  });
 }

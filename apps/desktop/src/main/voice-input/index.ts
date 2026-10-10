@@ -1,3 +1,6 @@
+import { registerVoiceConversationIpc } from '../voice-conversation/index.js';
+import { hasVoiceConversationLease } from '../voice-conversation/lease.js';
+import { VOICE_CONVERSATION_ACTIVE_MESSAGE } from '../../shared/voiceInputErrors.js';
 import { app, ipcMain, shell, systemPreferences, type WebContents } from 'electron';
 import fs from 'node:fs/promises';
 
@@ -1876,6 +1879,32 @@ export async function transcribeVoiceInputAudioFile(
  */
 export function registerVoiceInputIpc(): void {
   registerVoiceInputDataStoreIpc();
+  let pendingDictationStarts = 0;
+  registerVoiceConversationIpc({
+    hasDictation: () => activeByWebContentsId.size > 0 || pendingDictationStarts > 0 || systemAudioMuteGuard.hasPendingOrActiveMute,
+    createProvider: async () => {
+      const owner = activeOwnerScopeKey();
+      const snapshot = getEffectiveAuxiliaryModelChainSnapshot();
+      assertVoiceInputOwnerScopeCurrent(owner, snapshot);
+      const language = resolveAsrLanguageHint(voiceInputDataStore.getSettings().language);
+      const managed = !isVoiceInputByokMode();
+      const chain = (await resolveStartableAsrChain()).filter(
+        (kind) => getVoiceInputAsrProfile(kind).mode !== 'batch-http',
+      );
+      assertVoiceInputOwnerScopeCurrent(owner, snapshot);
+      if (!chain.length || (managed && !isCindyVoiceServiceReady())) throw new Error('ASR unavailable');
+      // A fresh managed connection for each rotation; never cross into BYOK implicitly.
+      const context = managed ? new CindyVoiceRunContext(language, undefined) : undefined;
+      return new FallbackAsrProvider(chain.map((kind) => ({
+        kind,
+        create: () => {
+          assertVoiceInputOwnerScopeCurrent(owner, snapshot);
+          if (!context && isAsrProfileRouteDisabled(getVoiceInputAsrProfile(kind))) throw new Error('ASR disabled');
+          return createVoiceInputProvider(kind, language, context);
+        },
+      })), { hedgeDelayMs: context ? null : undefined, sharedAccountRateLimit: Boolean(context) });
+    },
+  });
   if (!appRestoreRegistered) {
     appRestoreRegistered = true;
     app.once('before-quit', () => {
@@ -2066,6 +2095,7 @@ export function registerVoiceInputIpc(): void {
   );
 
   ipcMain.handle('voice-input:mute-system-audio', async (event): Promise<VoiceInputActionResult> => {
+    if (hasVoiceConversationLease()) return { ok: false, error: VOICE_CONVERSATION_ACTIVE_MESSAGE };
     try {
       await systemAudioMuteGuard.mute(event.sender.id);
       return { ok: true };
@@ -2087,7 +2117,7 @@ export function registerVoiceInputIpc(): void {
     }
   });
 
-  ipcMain.handle('voice-input:start', async (event, payload: StartPayload | undefined): Promise<StartResult> => {
+  const startVoiceInput = async (event: Electron.IpcMainInvokeEvent, payload: StartPayload | undefined): Promise<StartResult> => {
     // Bind this run to the owner that initiated it before any cancellation,
     // readiness, or credential await. A later account switch must fail closed
     // at the final refiner dispatch instead of using the new owner's route.
@@ -2447,6 +2477,13 @@ export function registerVoiceInputIpc(): void {
           : message,
       };
     }
+  };
+  ipcMain.handle('voice-input:start', async (event, payload: StartPayload | undefined): Promise<StartResult> => {
+    if (hasVoiceConversationLease()) return { ok: false, error: VOICE_CONVERSATION_ACTIVE_MESSAGE };
+    // Reserve before the first await, including readiness/auth and provider connection.
+    pendingDictationStarts++;
+    try { return await startVoiceInput(event, payload); }
+    finally { pendingDictationStarts--; }
   });
 
   ipcMain.on('voice-input:audio', (event, payload: AudioPayload | undefined) => {

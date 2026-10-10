@@ -718,6 +718,16 @@ export class RealtimeAsrWebSocketProvider implements AsrProvider {
     }
   }
 
+  private segmentCallback?: (segment: import('@cindy/voice-input-core').AsrSegment) => void;
+
+  onSegment(callback: (segment: import('@cindy/voice-input-core').AsrSegment) => void): void {
+    this.segmentCallback = callback;
+  }
+
+  commitUtterance(): void {
+    if (this.protocolProfile === 'openai-transcription-manual') this.commitBufferedAudio('utterance');
+  }
+
   onEvent(callback: (event: AsrEvent) => void): void {
     this.callback = callback;
   }
@@ -1240,6 +1250,7 @@ export class RealtimeAsrWebSocketProvider implements AsrProvider {
     this.registerItem(event.item_id);
     const next = `${this.partialsByItem.get(event.item_id) ?? ''}${event.delta}`;
     this.partialsByItem.set(event.item_id, next);
+    this.segmentCallback?.({ id: event.item_id, order: this.itemOrder.indexOf(event.item_id), text: next, final: false });
     // Trim — not clear — the replay buffer. The partial event reflects audio
     // that the server's transcription pipeline has already consumed, but we
     // don't know exactly which frames; the safe assumption is "anything older
@@ -1263,6 +1274,7 @@ export class RealtimeAsrWebSocketProvider implements AsrProvider {
     // final source of truth.
     const preview = `${event.text}${typeof event.stash === 'string' ? event.stash : ''}`;
     this.partialsByItem.set(event.item_id, preview);
+    this.segmentCallback?.({ id: event.item_id, order: this.itemOrder.indexOf(event.item_id), text: preview, final: false });
     this.trimUnconfirmedAudioOlderThan(Date.now() - PARTIAL_CONFIRMATION_LATENCY_MS);
     this.callback({ type: 'partial', text: this.aggregateTranscript(), at: Date.now() });
   }
@@ -1291,6 +1303,7 @@ export class RealtimeAsrWebSocketProvider implements AsrProvider {
     const aggregateBefore = this.aggregateTranscript();
     this.registerItem(event.item_id);
     this.finalsByItem.set(event.item_id, itemTranscript);
+    this.segmentCallback?.({ id: event.item_id, order: this.itemOrder.indexOf(event.item_id), text: itemTranscript, final: true });
     this.partialsByItem.delete(event.item_id);
     if (this.pendingCommitCount > 0) this.pendingCommitCount -= 1;
     // A completed item means the server consumed that utterance, not
@@ -1315,6 +1328,7 @@ export class RealtimeAsrWebSocketProvider implements AsrProvider {
   private registerItem(itemId: string): void {
     if (this.itemOrder.includes(itemId)) return;
     this.itemOrder.push(itemId);
+    this.segmentCallback?.({ id: itemId, order: this.itemOrder.length - 1, text: '', final: false });
   }
 
   private aggregateTranscript(): string {

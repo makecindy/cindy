@@ -10,12 +10,23 @@ import {
   encodeAudioOnlyRequest,
   encodeFullClientRequest,
   getTranscriptConfirmation,
+  extractConversationSegments,
   VolcengineSaucAsrProvider,
 } from '../VolcengineSaucAsrProvider.js';
 import { volcengineSaucLanguageCode } from '../language.js';
 import { mergeRecoveredTranscript } from '../transcriptMerge.js';
 
 describe('VolcengineSaucAsrProvider protocol helpers', () => {
+  it('keeps stable utterance identities for continuous speech, including repeated text and provisional segments', () => {
+    expect(extractConversationSegments({ result: { utterances: [
+      { start_time: 0, text: '你好', definite: true },
+      { start_time: 1500, text: '你好', definite: false },
+      { text: 'missing timestamp', definite: true },
+    ] } })).toEqual([
+      { id: '0', order: 0, text: '你好', final: true },
+      { id: '1500', order: 1500, text: '你好', final: false },
+    ]);
+  });
   it('requires all utterances to cover the aggregate transcript', () => {
     const check = (utterances: unknown[]) => getTranscriptConfirmation({ result: { text: '一句。二句。', utterances } }, '一句。二句。');
     expect(check([{ text: '一句。', definite: true }, { text: '二句。', definite: false }]).confirmed).toBe(false);

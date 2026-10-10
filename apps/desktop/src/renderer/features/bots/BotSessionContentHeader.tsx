@@ -11,7 +11,7 @@
  * nothing else reopens it.
  */
 import { useMemo } from 'react';
-import { LayoutGrid, Settings2 } from 'lucide-react';
+import { AudioLines, LayoutGrid, Settings2 } from 'lucide-react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
@@ -34,7 +34,7 @@ export interface BotChatIdentity {
   avatarColor?: string | null;
 }
 
-export function BotSessionContentHeader({ bot }: { bot: BotChatIdentity }) {
+export function BotSessionContentHeader({ bot, onVoice, voiceActive }: { bot: BotChatIdentity; onVoice?: () => void; voiceActive?: boolean }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const location = useLocation();
@@ -67,6 +67,12 @@ export function BotSessionContentHeader({ bot }: { bot: BotChatIdentity }) {
             {bot.deviceName}
           </span>
         ) : null}
+        {onVoice ? (
+          <button type="button" onClick={onVoice} aria-label={t('bots.voiceMode.title')}
+            title={t('bots.voiceMode.title')} aria-pressed={voiceActive ?? false}
+            className="flex h-8 w-8 items-center justify-center rounded-full text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] aria-pressed:bg-[var(--surface-hover)]"
+            style={WINDOW_NO_DRAG_STYLE}><AudioLines size={16} /></button>
+        ) : null}
         {!bot.deviceId && bot.sessionId ? (
           <button
             type="button"
@@ -98,7 +104,8 @@ export function BotSessionContentHeader({ bot }: { bot: BotChatIdentity }) {
  * mounting registers, unmounting clears, and only the route-owning chat instance
  * renders it.
  */
-export function BotSessionContentHeaderRegistration({ bot }: { bot: BotChatIdentity }) {
-  useRegisterContentHeader(useMemo(() => <BotSessionContentHeader bot={bot} />, [bot]));
+export function BotSessionContentHeaderRegistration(props: { bot: BotChatIdentity; onVoice?: () => void; voiceActive?: boolean }) {
+  const { bot, onVoice, voiceActive } = props;
+  useRegisterContentHeader(useMemo(() => <BotSessionContentHeader bot={bot} onVoice={onVoice} voiceActive={voiceActive} />, [bot, onVoice, voiceActive]));
   return null;
 }

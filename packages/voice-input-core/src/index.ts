@@ -10,3 +10,6 @@ export * from './dictionary-sync';
 export * from './streamingJson';
 export * from './refinementContext';
 export * from './pcmActivity';
+
+export * from './VoiceConversationInput';
+export * from './conversationActivity';

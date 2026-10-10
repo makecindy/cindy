@@ -8927,6 +8927,44 @@
       "memory": "已记住：{{title}}",
       "skillCreated": "已建立技能：{{title}}",
       "skillUpdated": "已更新技能：{{title}}"
+    },
+    "voiceMode": {
+      "finishBeforeDictation": "请先结束语音模式，再开始听写。",
+      "title": "语音模式",
+      "close": "关闭语音模式",
+      "model": "朗读模型",
+      "refresh": "刷新模型",
+      "voice": "音色",
+      "voiceHint": "填写所选模型支持的音色名称，例如 alloy。",
+      "modelUnavailable": "之前选择的朗读模型已不可用，请重新选择。",
+      "noModels": "当前账号还没有可用的朗读模型，开放后即可开始语音对话。",
+      "catalogError": "语音设置读取或保存失败，请重试。",
+      "start": "开始说话",
+      "resume": "继续",
+      "retrySend": "重新连接并发送",
+      "mute": "静音",
+      "interrupt": "停止朗读",
+      "send": "结束本句",
+      "end": "结束",
+      "unsent": "尚未发送 · 可选中文字复制",
+      "hint": "停顿后自动发送，回复由 AI 语音朗读。随时开口即可插话。",
+      "status": {
+        "idle": "准备好就开始",
+        "connecting": "正在连接…",
+        "listening": "正在听 · 停顿后发送",
+        "thinking": "正在思考 · 可以继续说",
+        "speaking": "正在朗读 · 随时开口插话",
+        "paused": "已暂停 · 麦克风已关闭",
+        "error": "已暂停 · 麦克风已关闭",
+        "confirmation": "等待你的确认 · 麦克风已关闭",
+        "preparing": "正在准备语音…"
+      },
+      "errors": {
+        "connection": "语音连接中断，未发送的文字已保留。",
+        "microphone": "麦克风已停止，请检查权限和设备连接后继续。",
+        "send": "这条消息未被接收，文字已保留。",
+        "speech": "回复朗读失败，文字回复仍保留在对话中。请检查朗读模型和音色。"
+      }
     }
   },
   "common": {

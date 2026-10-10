@@ -1,3 +1,4 @@
+import { CompanionVoicePanel } from '../bots/voice/CompanionVoicePanel';
 import { formatSessionDuration } from '@/lib/sessionDurationFormat';
 import { shouldShowOpenPathError } from '../../../shared/openPathResult';
 import { shouldShowFailedScheduleNotice } from '@cindy/maker-shared/schedule-model';
@@ -982,6 +983,9 @@ export function CCAgentSessionView({
 
   // Bot route gates have already checked durable ownership. The async runtime
   // snapshot may be absent during load/reconnect; it must never change the skin.
+  const [voiceModeOpen, setVoiceModeOpen] = useState(false);
+  const toggleVoiceMode = useCallback(() => setVoiceModeOpen((open) => !open), []);
+  const closeVoiceMode = useCallback(() => setVoiceModeOpen(false), []);
   const botChatIdentity = resolveBotChatIdentity(botIdentity, sessionId);
   // 伙伴没有 RunningStatusBar，折叠呼吸灯继续留在输入框上方，不能随状态行一起消失。
   const showCenteredControlledBanner =
@@ -3701,6 +3705,9 @@ export function CCAgentSessionView({
       mentions?: MentionedResource[],
       opts?: {
         deliveryMode?: MessageDeliveryMode;
+        literalText?: boolean;
+        beforeEnqueue?: () => Promise<boolean>;
+        onInputCreated?: (clientId: string) => void;
         quotesEncoded?: boolean;
         agentReferences?: AgentInputReference[];
         pastedTextRanges?: PastedTextRange[];
@@ -3715,11 +3722,11 @@ export function CCAgentSessionView({
       const deliveryMode = opts?.deliveryMode ?? 'queue';
       const originalMessage = message;
       const navigationRequestVersion =
-        deliveryMode !== 'steer' && matchNavigationCommandName(message)
+        !opts?.literalText && deliveryMode !== 'steer' && matchNavigationCommandName(message)
           ? ++sessionNavigationVersionRef.current
           : null;
       if (
-        deliveryMode !== 'steer' &&
+        !opts?.literalText && deliveryMode !== 'steer' &&
         (await tryHandleNavigationCommand(message, {
           navigate,
           t,
@@ -3734,7 +3741,7 @@ export function CCAgentSessionView({
         return;
       }
 
-      if (deliveryMode !== 'steer' && (await maybeShowContextUsage(message))) {
+      if (!opts?.literalText && deliveryMode !== 'steer' && (await maybeShowContextUsage(message))) {
         return;
       }
 
@@ -3745,7 +3752,7 @@ export function CCAgentSessionView({
       // Codex only supports upstream automatic compaction, so keep the task
       // intact and explain that it manages compaction automatically.
       const botNewMatch =
-        deliveryMode !== 'steer' && sessionRef.current?.source === 'bot'
+        !opts?.literalText && deliveryMode !== 'steer' && sessionRef.current?.source === 'bot'
           ? message.match(/^\/new(?:\s+(.*))?$/s)
           : null;
       if (botNewMatch) {
@@ -3785,7 +3792,7 @@ export function CCAgentSessionView({
       //   - agent-builtin / agent-skill / 没命中任何已知命令 → 走默认 send,
       //     原文(含前导 `/`)直接送 agent, 由 SDK 自己识别 (/compact 等)。
       const slashDispatch =
-        deliveryMode === 'steer'
+        opts?.literalText ? { handled: false, message, accepted: false } : deliveryMode === 'steer'
           ? await maybeDispatchDesktopSlashCommand(message, files, {
               allowDesktopDispatch: false,
               piRuntimeRetryDelaysMs: PI_RUNTIME_SKILL_RETRY_DELAYS_MS,
@@ -3859,6 +3866,7 @@ export function CCAgentSessionView({
         if (!proceed) return false;
       }
 
+      if (opts?.beforeEnqueue && !(await opts.beforeEnqueue())) return false;
       // Popover open → prevent re-entry
       if (folderPickerOpen) return false;
       // 会话交接尚未完成(建 worktree / 远程开协同)时不放行:否则新输入会插到
@@ -3921,6 +3929,8 @@ export function CCAgentSessionView({
 
       // ④ Execute send — effort + permissionMode came straight from ChatInput (fresh value)
       const sendOptions = {
+        beforeEnqueue: opts?.beforeEnqueue,
+        onInputCreated: opts?.onInputCreated,
         ...orcaLeadVendorOptions,
         ...(opts?.quotesEncoded ? { quotesEncoded: true } : {}),
         ...(opts?.agentReferences?.length ? { agentReferences: opts.agentReferences } : {}),
@@ -4001,6 +4011,25 @@ export function CCAgentSessionView({
       cindyMakeInputLocked,
     ],
   );
+
+  const voiceModeAvailable = Boolean(botChatIdentity && !botChatIdentity.deviceId && sessionId
+    && !remoteDeviceId && !session?.remoteHostId && !readOnly && ownsRoute && viewVisible);
+  useEffect(() => { if (!voiceModeAvailable) setVoiceModeOpen(false); }, [voiceModeAvailable]);
+  const voiceModeBlocked = Boolean(pendingPermission || pendingAskUser || pendingPlanReview
+    || pendingPluginSetup || pendingIssueConfirm || pendingRenameSessionsConfirm
+    || pendingGhostGrantConfirm || pendingRemoteDesktopConfirmation || sessionBinding.attached
+    || remoteHandoffPreparing || cindyMakeInputLocked || queuePaused);
+  const sendVoiceMessage = useCallback(async (text: string, onCreated: (id: string) => void, isCurrent: () => boolean) => {
+    if (!session?.workingDir || !session.model || voiceModeBlocked || !isCurrent()) return false;
+    const accepted = await handleSend(text, session.model, session.effort ?? '', session.permissionMode ?? 'default', undefined, undefined, {
+      deliveryMode: isRunningRef.current ? 'steer' : 'queue',
+      literalText: true,
+      slashCommandRanges: [],
+      beforeEnqueue: async () => isCurrent(),
+      onInputCreated: onCreated,
+    });
+    return accepted === true;
+  }, [session, voiceModeBlocked, handleSend]);
 
   const handleStopSession = useCallback(() => {
     if (remoteSessionUnavailable) {
@@ -4168,10 +4197,10 @@ export function CCAgentSessionView({
   ]);
 
   const handleBeforeVoiceInputStart = useCallback(async () => {
-    if (cindyMakeInputLocked) return false;
+    if (cindyMakeInputLocked || voiceModeOpen) return false;
     const { proceed } = await vendorAuthGate.checkAndConfirm('codex', { purpose: 'voice-input' });
     return proceed;
-  }, [vendorAuthGate, cindyMakeInputLocked]);
+  }, [vendorAuthGate, cindyMakeInputLocked, voiceModeOpen]);
 
   // M32: Retry — ErrorBanner 的 retryText 现在只是兼容展示值。真正的
   // recovery target 由 main coordinator 持有，避免把已发出的文本重新走普通
@@ -4844,7 +4873,7 @@ export function CCAgentSessionView({
         // 伙伴对话不是用户经营的任务:它拿的是「跟谁说话 + 进 TA 的设置」,
         // 不是重命名/置顶/归档/导出那一套任务菜单。
         botChatIdentity ? (
-          <BotSessionContentHeaderRegistration bot={botChatIdentity} />
+          <BotSessionContentHeaderRegistration bot={botChatIdentity} onVoice={voiceModeAvailable ? toggleVoiceMode : undefined} voiceActive={voiceModeOpen} />
         ) : (
           <SessionContentHeaderRegistration
             session={session}
@@ -5536,6 +5565,7 @@ export function CCAgentSessionView({
                   getContentWidth={getMessageWidth}
                 />
               ) : (
+                <div className={voiceModeOpen && voiceModeAvailable ? 'hidden' : 'contents'}>
                 <ChatInput
                   topSlot={cindyMakeRecoveryId && session ? (
                     <CindyMakeEditingActions
@@ -5547,7 +5577,7 @@ export function CCAgentSessionView({
                   onSend={handleSend}
                   onBeforeVoiceInputStart={handleBeforeVoiceInputStart}
                   sessionId={sessionId}
-                  ownsHardwareComposerActions={ownsHardwareTaskActions}
+                  ownsHardwareComposerActions={ownsHardwareTaskActions && !voiceModeOpen}
                   // session=null 是冷启动 / 直链 GET 尚未回流的合法首帧；显式传 null，
                   // 让 ChatInput 暂不显示 Agent 身份，不能跟随 displayAgentKind 的 cc 回退。
                   runtimeAgentKind={session ? dbToMakerAgentKind(session.agentKind) : null}
@@ -5696,7 +5726,12 @@ export function CCAgentSessionView({
                   botMentions={botMentions}
                   hideRuntimeControls={Boolean(botChatIdentity)}
                 />
+                </div>
               )}
+              {voiceModeOpen && voiceModeAvailable && botChatIdentity && sessionId ? (
+                <CompanionVoicePanel key={sessionId} bot={botChatIdentity} sessionId={sessionId} messages={messages}
+                  blocked={voiceModeBlocked} onSend={sendVoiceMessage} onClose={closeVoiceMode} />
+              ) : null}
 
               {/* F-FP-5: workingDir — always rendered to prevent layout shift
                 worktree-parallel-sessions:worktree 创建过程的反馈(creating/failed)

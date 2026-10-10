@@ -53,6 +53,17 @@ afterEach(() => {
 });
 
 describe('BotSessionContentHeader', () => {
+  it('opens voice mode only when its route supplies the local capability and reflects the active state', () => {
+    const onVoice = vi.fn();
+    const view = render(<BotSessionContentHeader bot={bot} />);
+    expect(screen.queryByRole('button', { name: 'bots.voiceMode.title' })).toBeNull();
+    view.rerender(<BotSessionContentHeader bot={bot} onVoice={onVoice} voiceActive />);
+    const button = screen.getByRole('button', { name: 'bots.voiceMode.title' });
+    expect(button.getAttribute('aria-pressed')).toBe('true');
+    expect(appRegionOf(button)).toBe('no-drag');
+    fireEvent.click(button); expect(onVoice).toHaveBeenCalledOnce();
+  });
+
   it('preserves the local header until a second Cindy is available and restores it when removed', () => {
     deviceData.local = [localCindy];
     const view = render(<BotSessionContentHeader bot={localCindy} />);

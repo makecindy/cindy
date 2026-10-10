@@ -8927,6 +8927,44 @@
       "memory": "已記住：{{title}}",
       "skillCreated": "已建立技能：{{title}}",
       "skillUpdated": "已更新技能：{{title}}"
+    },
+    "voiceMode": {
+      "finishBeforeDictation": "請先結束語音模式，再開始聽寫。",
+      "title": "語音模式",
+      "close": "關閉語音模式",
+      "model": "朗讀模型",
+      "refresh": "重新整理模型",
+      "voice": "音色",
+      "voiceHint": "填入所選模型支援的音色名稱，例如 alloy。",
+      "modelUnavailable": "先前選擇的朗讀模型已無法使用，請重新選擇。",
+      "noModels": "目前帳號還沒有可用的朗讀模型，開放後即可開始語音對話。",
+      "catalogError": "語音設定讀取或儲存失敗，請重試。",
+      "start": "開始說話",
+      "resume": "繼續",
+      "retrySend": "重新連線並傳送",
+      "mute": "靜音",
+      "interrupt": "停止朗讀",
+      "send": "結束本句",
+      "end": "結束",
+      "unsent": "尚未傳送 · 可選取文字複製",
+      "hint": "停頓後自動傳送，回覆由 AI 語音朗讀。隨時開口即可插話。",
+      "status": {
+        "idle": "準備好就開始",
+        "connecting": "正在連線…",
+        "listening": "正在聽 · 停頓後傳送",
+        "thinking": "正在思考 · 可以繼續說",
+        "speaking": "正在朗讀 · 隨時開口插話",
+        "paused": "已暫停 · 麥克風已關閉",
+        "error": "已暫停 · 麥克風已關閉",
+        "confirmation": "等待你的確認 · 麥克風已關閉",
+        "preparing": "正在準備語音…"
+      },
+      "errors": {
+        "connection": "語音連線中斷，未傳送的文字已保留。",
+        "microphone": "麥克風已停止，請檢查權限和裝置連線後繼續。",
+        "send": "這則訊息未被接收，文字已保留。",
+        "speech": "回覆朗讀失敗，文字回覆仍保留在對話中。請檢查朗讀模型和音色。"
+      }
     }
   },
   "common": {

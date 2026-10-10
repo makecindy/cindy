@@ -1,0 +1,33 @@
+.companion-voice-panel {
+  animation: companion-voice-enter var(--motion-enter) var(--motion-ease-out) both;
+}
+
+.companion-voice-meter > span {
+  transform-origin: center;
+  transition: transform var(--motion-instant) linear;
+}
+
+.companion-voice-meter[data-active='false'] {
+  opacity: 0.45;
+}
+
+@keyframes companion-voice-enter {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .companion-voice-panel {
+    animation: none;
+  }
+  .companion-voice-meter > span {
+    transition: none;
+    transform: scaleY(0.2) !important;
+  }
+}

@@ -133,6 +133,7 @@ interface UseCCAgentChatReturn {
       pastedTextRanges?: PastedTextRange[];
       slashCommandRanges?: SlashCommandRange[];
       beforeEnqueue?: () => Promise<boolean>;
+      onInputCreated?: (clientId: string) => void;
       onRemoteOptimisticFailure?: (clientId: string, error?: unknown) => void;
       annotationBurnFailure?: 'abort';
     },
@@ -159,6 +160,7 @@ interface UseCCAgentChatReturn {
       pastedTextRanges?: PastedTextRange[];
       slashCommandRanges?: SlashCommandRange[];
       beforeEnqueue?: () => Promise<boolean>;
+      onInputCreated?: (clientId: string) => void;
       onRemoteOptimisticFailure?: (clientId: string, error?: unknown) => void;
       annotationBurnFailure?: 'abort';
     },
@@ -427,6 +429,7 @@ export function useCCAgentChat(
         pastedTextRanges?: PastedTextRange[];
         slashCommandRanges?: SlashCommandRange[];
         beforeEnqueue?: () => Promise<boolean>;
+        onInputCreated?: (clientId: string) => void;
         onRemoteOptimisticFailure?: (clientId: string, error?: unknown) => void;
         annotationBurnFailure?: 'abort';
       },
@@ -484,6 +487,7 @@ export function useCCAgentChat(
         pastedTextRanges?: PastedTextRange[];
         slashCommandRanges?: SlashCommandRange[];
         beforeEnqueue?: () => Promise<boolean>;
+        onInputCreated?: (clientId: string) => void;
         onRemoteOptimisticFailure?: (clientId: string, error?: unknown) => void;
         annotationBurnFailure?: 'abort';
       },

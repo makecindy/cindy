@@ -38,6 +38,42 @@ import {
 } from '../../../shared/voiceInputRefinerProfiles.js';
 
 describe('RealtimeAsrWebSocketProvider helpers', () => {
+  it('exposes item identities and commit order even when final transcriptions arrive out of order', async () => {
+    const server = new WebSocketServer({ port: 0 });
+    let socket: WebSocket | undefined;
+    let provider: RealtimeAsrWebSocketProvider | undefined;
+    server.on('connection', (connected) => {
+      socket = connected;
+      connected.on('message', (data) => {
+        if (JSON.parse(data.toString()).type === 'session.update') connected.send(JSON.stringify({ type: 'session.updated' }));
+      });
+    });
+    try {
+      await waitFor(() => server.address() !== null);
+      const address = server.address();
+      if (!address || typeof address === 'string') throw new Error('Expected local test server address.');
+      provider = new RealtimeAsrWebSocketProvider({ accessTokenProvider: async () => 'test-key', realtimeUrl: `ws://127.0.0.1:${address.port}/v1/realtime`, model: 'gpt-realtime-whisper' });
+      const segment = vi.fn(); provider.onSegment(segment); provider.onEvent(() => {});
+      await provider.start();
+      for (const event of [
+        { type: 'input_audio_buffer.committed', item_id: 'a' },
+        { type: 'input_audio_buffer.committed', item_id: 'b' },
+        { type: 'conversation.item.input_audio_transcription.completed', item_id: 'b', transcript: 'second' },
+        { type: 'conversation.item.input_audio_transcription.completed', item_id: 'a', transcript: 'first' },
+      ]) socket!.send(JSON.stringify(event));
+      await waitFor(() => segment.mock.calls.length === 4);
+      expect(segment.mock.calls.map(([value]) => value)).toEqual([
+        { id: 'a', order: 0, text: '', final: false },
+        { id: 'b', order: 1, text: '', final: false },
+        { id: 'b', order: 1, text: 'second', final: true },
+        { id: 'a', order: 0, text: 'first', final: true },
+      ]);
+    } finally {
+      await provider?.stop(); socket?.terminate();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
   it('resamples 16 kHz PCM16 audio to OpenAI realtime 24 kHz PCM16', () => {
     const input = Buffer.alloc(4);
     input.writeInt16LE(0, 0);
