@@ -8,7 +8,7 @@ import {
   getActiveSessionDrag,
   SPLIT_GROUP_SESSION_MIME,
 } from '../../splitGroupDnd';
-import { resolveSessionProjectDrop } from '../sessionProjectDrop';
+import { canOfferSessionProjectMove, resolveSessionProjectDrop } from '../sessionProjectDrop';
 import { PROJECT_DROP_HOVER_MS, useSessionProjectDrop } from '../useSessionProjectDrop';
 
 const task = {
@@ -89,6 +89,8 @@ describe('project drop destinations', () => {
     { agentDeviceId: 'provider-device' },
     { source: 'review' },
     { source: 'bot' },
+    { source: 'cindy-make' },
+    { source: 'cindy-make-merge' },
     { orcaRole: 'worker' },
     { deviceLinkDeviceId: 'owner', deviceLinkConnectionStatus: 'disconnected' },
   ] as Partial<Session>[])('retains existing move restrictions: %o', (patch) => {
@@ -158,9 +160,10 @@ function Harness({
 }
 
 describe('project drag interaction', () => {
-  it.each(['bot', 'review'] as const)('does not advertise or accept a %s task move', (source) => {
+  it.each(['bot', 'review', 'cindy-make', 'cindy-make-merge'] as const)('does not advertise or accept a %s task move', (source) => {
     vi.useFakeTimers();
     const move = vi.fn(), expand = vi.fn(), bubble = vi.fn();
+    expect(canOfferSessionProjectMove({ ...task, source })).toBe(false);
     render(<Harness move={move} expand={expand} bubble={bubble} session={{ ...task, source }} />);
     const transfer = dataTransfer();
     fireEvent.dragStart(screen.getByTestId('source'), { dataTransfer: transfer });
@@ -171,6 +174,7 @@ describe('project drag interaction', () => {
     expect(expand).not.toHaveBeenCalled();
     fireEvent.drop(screen.getByTestId('child'), { dataTransfer: transfer });
     expect(move).not.toHaveBeenCalled();
+    expect(bubble).toHaveBeenCalledOnce();
   });
 
   it('highlights, expands after hover, and moves once before pinned sorting receives the drop', () => {
