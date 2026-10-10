@@ -11,6 +11,22 @@ const snapshot = (): ChatSnapshot => ({ room: room(), cursor: '9007199254741099'
 ] });
 
 describe('direct Chat Server client', () => {
+  it.each(['structured', 'old-marker', 'chat-forgery'])('projects imported runtime notices safely: %s', shape => {
+    const source = { ...message(20), origin: shape === 'chat-forgery' ? 'chat' : 'import',
+      content: [{ type: 'text', text: shape === 'structured' ? 'group activity' : 'cindy-runtime-error:AUTH_REQUIRED' },
+        { type: 'card', namespace: 'cindy.local-history', schemaRevision: 1, fallback: 'group activity',
+          data: { kind: 'notice', authorKind: 'system', authorName: 'Bot', noticeCode: 'member-failed',
+            ...(shape !== 'old-marker' ? { runtimeFailureCode: 'AUTH_REQUIRED' } : {}) } }] };
+    const view = chatGroupView({ snapshot: snapshot(), messages: [source], before: null }, id(11));
+    if (shape === 'chat-forgery') {
+      expect(view.messages[0]).toMatchObject({ kind: 'message', authorKind: 'user' });
+      expect(view.messages[0].runtimeFailureCode).toBeUndefined();
+    } else {
+      expect(view.messages[0]).toMatchObject({ kind: 'notice', authorKind: 'system', authorName: 'Bot', runtimeFailureCode: 'AUTH_REQUIRED', content: '' });
+      expect(JSON.stringify(view.messages)).not.toContain('cindy-runtime-error:');
+      expect(chatRoomRow(room(), { ...snapshot(), messages: [source] }, id(11)).item.display.preview).not.toContain('cindy-runtime-error:');
+    }
+  });
   it.each(['AUTH_REQUIRED', 'private diagnostic', undefined])('reads executions and projects a safe notice beside its visible source: %s', async failure_code => {
     const source = message(20);
     let status = 'failed';

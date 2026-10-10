@@ -28,6 +28,7 @@ import { untrustedJsonBlock } from '../../shared/untrustedPrompt.js';
 import {
   BOT_GROUP_CLIENT_ID, isBotGroupNoReplyText,
   isBotGroupRuntimeFailureCode, type BotGroupRuntimeFailureCode,
+  readImportedBotGroupRuntimeFailureCode,
   type BotGroupDetail, type BotGroupPlanView, type BotGroupFailure, type BotGroupMessageView, type BotGroupAttachment, type ChatServerApi,
 } from '../../shared/botGroupChat.js';
 import type { BotGroupChatService, BotGroupChatServiceDeps, BotGroupLaneTerminal } from './botGroupChatService.js';
@@ -88,7 +89,7 @@ const memberJoinedTrigger = z.object({ type: z.literal('member.joined'), message
 type ExecutionContext = { kind: 'message' } | { kind: 'member.joined'; trigger: z.infer<typeof memberJoinedTrigger> };
 const ordinaryExecution = (execution: Execution) => execution.trigger === undefined && execution.trigger_type == null;
 const groupInput = z.object({ name: z.string().trim().min(1).max(40), botIds: z.array(z.string().min(1)).max(6) });
-const bodyText = (m: Message) => m.deleted ? '（消息已删除）' : m.content.filter(b => b.namespace !== 'cindy.local-history' || b.data?.activity === true).map(b => b.text ?? b.fallback ?? (b.type === 'media' ? `[附件: ${b.caption ?? '文件'}]` : '')).join('\n');
+const bodyText = (m: Message) => m.deleted ? '（消息已删除）' : readImportedBotGroupRuntimeFailureCode(m) ? '' : m.content.filter(b => b.namespace !== 'cindy.local-history' || b.data?.activity === true).map(b => b.text ?? b.fallback ?? (b.type === 'media' ? `[附件: ${b.caption ?? '文件'}]` : '')).join('\n');
 // Presentation only: keep actor IDs and stored names independent of ownership labels.
 const memberName = (m: Member) => m.kind === 'bot' && m.ownerName.trim() ? `${m.name} (${m.ownerName.trim()})` : m.name;
 
@@ -499,6 +500,12 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     const member = members.find(member => member.id === m.authorId);
     const planCard = m.content.find(b => b.namespace === 'cindy.plan');
     const legacy = m.origin === 'import' ? m.content.find(b => b.namespace === 'cindy.local-history')?.data : undefined;
+    const runtimeFailureCode = readImportedBotGroupRuntimeFailureCode(m);
+    if (runtimeFailureCode) return { id: m.id, sequence: Number(m.seq), kind: 'notice', authorKind: 'system', isSelf: false,
+      authorBotId: localBot(m.authorId)?.id ?? m.authorId, authorName: typeof legacy?.authorName === 'string' ? legacy.authorName : '',
+      content: '', threadRootId: m.threadRootId, replyCount: 0, reactions: [], mentions: { all: false, botIds: [] },
+      noticeCode: runtimeFailureCode === 'RUNTIME_TIMEOUT' ? 'member-timeout' : 'member-failed', runtimeFailureCode,
+      planId: null, files: [], attachments: [], createdAt: Date.parse(m.createdAt) };
     return { id: m.id, sequence: Number(m.seq), kind: planCard ? 'plan' : 'message', authorKind: legacy?.authorKind === 'system' ? 'system' : m.author.kind === 'human' ? 'user' : 'bot',
       isSelf: m.authorId === selfId, threadRootId: m.threadRootId, replyCount: m.replyCount ?? 0, reactions: m.reactions ?? [],
       authorBotId: localBot(m.authorId)?.id ?? m.authorId, authorName: legacy?.authorKind === 'system' && typeof legacy.authorName === 'string' ? legacy.authorName : member ? memberName(member) : m.author.name, content: bodyText(m),

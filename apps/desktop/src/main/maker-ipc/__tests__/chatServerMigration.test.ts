@@ -28,6 +28,22 @@ function fixture() {
   return { deps, rows, committed, offline: () => { online = false; } };
 }
 describe('local groups upgrade', () => {
+  it.each(['stored', 'projected'])('imports %s runtime notices as safe metadata rather than marker text', async shape => {
+    const f = fixture(); f.rows.splice(1);
+    Object.assign(f.rows[0], { kind: 'notice', authorKind: 'system', authorName: 'Bot', noticeCode: 'member-failed',
+      content: shape === 'stored' ? 'cindy-runtime-error:AUTH_REQUIRED' : '',
+      ...(shape === 'projected' ? { runtimeFailureCode: 'AUTH_REQUIRED' } : {}) });
+    await migrateLocalGroups(f.deps);
+    const row = [...f.committed.values()][0] as { content: Array<{ type: string; data?: Record<string, unknown> }> };
+    expect(row.content.find(block => block.type === 'card')?.data).toMatchObject({ kind: 'notice', authorKind: 'system', runtimeFailureCode: 'AUTH_REQUIRED' });
+    expect(row.content.some(block => block.type === 'text')).toBe(false);
+    expect(JSON.stringify(row)).not.toContain('cindy-runtime-error:');
+  });
+  it('keeps marker-shaped user text as ordinary history', async () => {
+    const f = fixture(); f.rows.splice(1); f.rows[0].content = 'cindy-runtime-error:AUTH_REQUIRED';
+    await migrateLocalGroups(f.deps);
+    expect(JSON.stringify([...f.committed.values()])).toContain('cindy-runtime-error:AUTH_REQUIRED');
+  });
   it('imports every page in order with original authors/time, then resumes without reposting', async () => {
     const f = fixture();
     expect((await migrateLocalGroups(f.deps)).get(groupId)).toBe(roomId);

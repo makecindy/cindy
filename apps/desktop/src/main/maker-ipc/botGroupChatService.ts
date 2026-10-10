@@ -605,7 +605,7 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
     authorKind: row.authorKind,
     authorBotId: row.authorBotId,
     authorName: row.authorName,
-    content: row.content,
+    content: row.kind === 'notice' && readBotGroupRuntimeFailureDetail(row.content) ? '' : row.content,
     mentions: parseMentions(row.mentionsJson),
     noticeCode: (row.noticeCode as BotGroupNoticeCode | null) ?? null,
     ...(row.kind === 'notice' ? { runtimeFailureCode: readBotGroupRuntimeFailureDetail(row.content) } : {}),
@@ -872,7 +872,7 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
           if (waiters.get(sessionId) === waiter) waiters.delete(sessionId);
           interruptedLanes.add(sessionId);
           void deps.abortLane(sessionId).catch(() => undefined);
-          resolve({ kind: 'failed', notice: 'member-timeout' });
+          resolve({ kind: 'failed', notice: 'member-timeout', failureCode: 'RUNTIME_TIMEOUT' });
         }, timeoutMs);
       };
       arm();

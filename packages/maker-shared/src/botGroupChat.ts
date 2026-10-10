@@ -49,6 +49,36 @@ export function isBotGroupRuntimeFailureCode(value: unknown): value is BotGroupR
   return typeof value === 'string' && BOT_GROUP_RUNTIME_FAILURE_CODES.some(code => code === value);
 }
 
+/** Persisted local notice marker; migration carries the category as card metadata. */
+export const BOT_GROUP_RUNTIME_FAILURE_PREFIX = 'cindy-runtime-error:';
+export function botGroupRuntimeFailureDetail(code: BotGroupRuntimeFailureCode): string {
+  return `${BOT_GROUP_RUNTIME_FAILURE_PREFIX}${code}`;
+}
+export function readBotGroupRuntimeFailureDetail(value: unknown): BotGroupRuntimeFailureCode | undefined {
+  if (typeof value !== 'string' || !value.startsWith(BOT_GROUP_RUNTIME_FAILURE_PREFIX)) return undefined;
+  const code = value.slice(BOT_GROUP_RUNTIME_FAILURE_PREFIX.length);
+  return isBotGroupRuntimeFailureCode(code) ? code : undefined;
+}
+
+/** Only a server-stamped import of a system notice can supply historical failure metadata. */
+export function readImportedBotGroupRuntimeFailureCode(message: {
+  origin?: unknown; deleted?: unknown;
+  content: readonly { type?: unknown; namespace?: unknown; schemaRevision?: unknown; data?: unknown; text?: unknown; fallback?: unknown }[];
+}): BotGroupRuntimeFailureCode | undefined {
+  if (message.origin !== 'import' || message.deleted === true) return undefined;
+  const card = message.content.find(block => block.type === 'card' && block.namespace === 'cindy.local-history' && block.schemaRevision === 1);
+  if (!card?.data || typeof card.data !== 'object' || Array.isArray(card.data)) return undefined;
+  const data = card.data as Record<string, unknown>;
+  if (data.kind !== 'notice' || data.authorKind !== 'system') return undefined;
+  if (isBotGroupRuntimeFailureCode(data.runtimeFailureCode)) return data.runtimeFailureCode;
+  // Compatibility with notices imported before the metadata projection existed.
+  for (const block of message.content) {
+    const code = readBotGroupRuntimeFailureDetail(block.type === 'text' ? block.text : block === card ? block.fallback : undefined);
+    if (code) return code;
+  }
+  return undefined;
+}
+
 export interface BotGroupMention {
   all: boolean;
   botIds: string[];

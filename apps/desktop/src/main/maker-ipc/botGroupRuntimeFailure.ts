@@ -3,7 +3,7 @@ import { isPiImageInputUnsupportedError } from '../../shared/inputError.js';
 import { extractNonSecretErrorSignals, matchesDeterministicUsageExhaustionText } from '@cindy/maker-shared/error-redaction';
 import type { BotGroupChatService } from './botGroupChatService.js';
 
-export const BOT_GROUP_RUNTIME_FAILURE_PREFIX = 'cindy-runtime-error:';
+export { BOT_GROUP_RUNTIME_FAILURE_PREFIX, botGroupRuntimeFailureDetail, readBotGroupRuntimeFailureDetail } from '../../shared/botGroupChat.js';
 
 /** Classify on the executor. Only the fixed category is visible to other group members. */
 export function botGroupRuntimeFailureCode(error: unknown): BotGroupRuntimeFailureCode {
@@ -34,16 +34,6 @@ export function botGroupRuntimeFailureCode(error: unknown): BotGroupRuntimeFailu
     || data?.codexErrorInfo === 'responseStreamDisconnected') return 'NETWORK_ERROR';
   if (/\b(?:ECONNRESET|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|REQUEST_TIMEOUT)\b|fetch failed|socket hang up/i.test(text)) return 'NETWORK_ERROR';
   return 'RUNTIME_ERROR';
-}
-
-export function botGroupRuntimeFailureDetail(code: BotGroupRuntimeFailureCode): string {
-  return `${BOT_GROUP_RUNTIME_FAILURE_PREFIX}${code}`;
-}
-
-export function readBotGroupRuntimeFailureDetail(value: unknown): BotGroupRuntimeFailureCode | undefined {
-  if (typeof value !== 'string' || !value.startsWith(BOT_GROUP_RUNTIME_FAILURE_PREFIX)) return undefined;
-  const code = value.slice(BOT_GROUP_RUNTIME_FAILURE_PREFIX.length);
-  return isBotGroupRuntimeFailureCode(code) ? code : undefined;
 }
 
 /** A persisted input can fail without producing any Agent terminal event. */

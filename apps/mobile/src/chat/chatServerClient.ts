@@ -1,5 +1,5 @@
 /** The existing Chat Server HTTP contract; no device-link or executor registration. */
-import { isBotGroupRuntimeFailureCode, type BotGroupAttachment, type BotGroupMemberView, type BotGroupMessageView, type BotGroupRemoteChatData } from '@cindy/maker-shared/botGroupChat';
+import { isBotGroupRuntimeFailureCode, readImportedBotGroupRuntimeFailureCode, type BotGroupAttachment, type BotGroupMemberView, type BotGroupMessageView, type BotGroupRemoteChatData } from '@cindy/maker-shared/botGroupChat';
 import type { HostedRemoteCollectionItem } from '@/device-link/remoteResources';
 
 export interface ChatRoom {
@@ -44,7 +44,7 @@ export function chatAccessLost(error: unknown): boolean {
 }
 const memberName = (member: ChatMember) => member.kind === 'bot' && member.ownerName?.trim()
   ? `${member.name} (${member.ownerName.trim()})` : member.name;
-const contentText = (message: ChatMessage) => message.deleted ? '' : message.content
+const contentText = (message: ChatMessage) => message.deleted || readImportedBotGroupRuntimeFailureCode(message) ? '' : message.content
   .map(block => block.text ?? block.fallback ?? (block.type === 'media' ? block.caption ?? '' : '')).join('\n');
 
 /** Empty device identity means a server-owned conversation, never a fictitious computer. */
@@ -116,6 +116,12 @@ export function chatGroupView(page: ChatPage, selfId: string): BotGroupRemoteCha
   const sorted = [...new Map(page.messages.map(message => [message.id, message])).values()].filter(message => !message.deleted)
     .sort((a, b) => BigInt(chatCursor(a.seq)) < BigInt(chatCursor(b.seq)) ? -1 : BigInt(a.seq) > BigInt(b.seq) ? 1 : 0);
   const messages: BotGroupMessageView[] = sorted.map((message, index) => {
+    const runtimeFailureCode = readImportedBotGroupRuntimeFailureCode(message);
+    const legacy = runtimeFailureCode ? message.content.find(block => block.type === 'card' && block.namespace === 'cindy.local-history' && block.schemaRevision === 1)?.data : undefined;
+    if (runtimeFailureCode) return { id: message.id, sequence: index + 1, kind: 'notice', authorKind: 'system',
+      authorBotId: message.authorId, authorName: typeof legacy?.authorName === 'string' ? legacy.authorName : '', isSelf: false,
+      content: '', mentions: { all: false, botIds: [] }, noticeCode: runtimeFailureCode === 'RUNTIME_TIMEOUT' ? 'member-timeout' : 'member-failed',
+      runtimeFailureCode, planId: null, files: [], attachments: [], createdAt: Date.parse(message.createdAt) };
     const member = active.find(candidate => candidate.id === message.authorId);
     const joined = message.origin === 'system' && !message.deleted && message.content.find(block =>
       block.type === 'card' && block.namespace === 'cindy.membership' && block.schemaRevision === 1 && block.data?.type === 'member.joined');

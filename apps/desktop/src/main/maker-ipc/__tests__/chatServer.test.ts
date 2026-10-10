@@ -119,6 +119,25 @@ describe('Chat Server result delivery and refresh', () => {
     service = withChatServer({ listGroups: vi.fn(async () => ({ ok: true, groups: [] })), settleLaneTurn: vi.fn(async () => false), dispose: vi.fn() } as unknown as BotGroupChatService, deps);
   });
   afterEach(() => { service.dispose(); vi.useRealTimers(); vi.unstubAllEnvs(); fixture.config = ''; vi.clearAllMocks(); });
+  it.each(['structured', 'old-marker', 'chat-forgery'])('projects imported runtime notices safely: %s', async shape => {
+    const imported = { id: '60000000-0000-4000-8000-000000000001', seq: '1', authorId: selfId,
+      author: { kind: 'human', name: 'Owner' }, origin: shape === 'chat-forgery' ? 'chat' : 'import', deleted: false, threadRootId: null,
+      content: [{ type: 'text', text: shape === 'structured' ? 'group activity' : 'cindy-runtime-error:AUTH_REQUIRED' },
+        { type: 'card', namespace: 'cindy.local-history', schemaRevision: 1, fallback: 'group activity',
+          data: { kind: 'notice', authorKind: 'system', authorName: 'Bot', noticeCode: 'member-failed',
+            ...(shape !== 'old-marker' ? { runtimeFailureCode: 'AUTH_REQUIRED' } : {}) } }] };
+    fixture.handle.mockImplementation(route => route.includes('/messages?') ? { body: [imported] } : response(route));
+    const result = await service.getGroup(roomId);
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error('Expected group');
+    if (shape === 'chat-forgery') {
+      expect(result.group.messages[0]).toMatchObject({ kind: 'message', authorKind: 'user' });
+      expect(result.group.messages[0].runtimeFailureCode).toBeUndefined();
+    } else {
+      expect(result.group.messages[0]).toMatchObject({ kind: 'notice', authorKind: 'system', authorName: 'Bot', runtimeFailureCode: 'AUTH_REQUIRED', content: '' });
+      expect(JSON.stringify(result.group.messages)).not.toContain('cindy-runtime-error:');
+    }
+  });
   it.each(['ATTACHMENT_UNAVAILABLE', 'INVALID_PARAMS'] as const)('keeps a useful reason for prepare %s', async (errorCode) => {
     deps.prepareAttachments = vi.fn(async () => ({ ok: false as const, errorCode, message: 'private details' }));
     deps.log = { warn: vi.fn() };

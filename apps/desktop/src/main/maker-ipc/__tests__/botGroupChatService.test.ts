@@ -463,6 +463,7 @@ describe('botGroupChatService', () => {
     expect(harness.abortLane).toHaveBeenCalledWith('lane-mimi');
     expect(group.messages.filter((m) => m.kind === 'notice').map((m) => [m.noticeCode, m.authorName]))
       .toEqual([['member-timeout', '咪咪']]);
+    expect(group.messages.find((m) => m.kind === 'notice')?.runtimeFailureCode).toBe('RUNTIME_TIMEOUT');
     expect(harness.dispatches.map((call) => call.botId)).toEqual(['mimi', 'xiaoman', 'abu']);
   });
 
@@ -716,6 +717,21 @@ describe('botGroupChatService 分工', () => {
     expect(second.steps.map((step) => step.botName)).toEqual(['小满', '阿布']);
     expect(h.sqlite!.prepare('SELECT request_text AS text FROM bot_group_plans WHERE id = ?').get(second.id))
       .toEqual({ text: '帮我给官网做一个介绍页' });
+  });
+
+  it('preserves the timeout category when a local plan step times out', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const harness = createHarness(() => null, { decidePlan: async () => THREE_STEPS, workDir: fakeWorkDir(), stepTurnTimeoutMs: 1_000 });
+    const groupId = await createGroup(harness);
+    const plan = await proposePlan(harness, groupId);
+    await harness.service.startPlan({ groupId, planId: plan.id });
+    await vi.waitFor(() => expect(harness.dispatches.at(-1)?.sessionId).toBe('plan-mimi'));
+    await vi.advanceTimersByTimeAsync(1_100);
+    const group = await waitForIdle(harness, groupId);
+    expect(harness.abortLane).toHaveBeenCalledWith('plan-mimi');
+    expect(openPlan(group).steps[0].status).toBe('failed');
+    expect(group.messages.find((message) => message.kind === 'notice' && message.planId === plan.id))
+      .toMatchObject({ noticeCode: 'member-timeout', runtimeFailureCode: 'RUNTIME_TIMEOUT', content: '' });
   });
 
   it('runs the steps one at a time in the plan work directory and stops after each', async () => {
