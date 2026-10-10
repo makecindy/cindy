@@ -27,6 +27,7 @@ const project = {
   deviceLinkDeviceId: null,
   deviceLinkConnectionStatus: null,
 } as ProjectNode;
+const nextProject = { ...project, projectKey: '/projects/c', workingDir: '/projects/c' };
 
 afterEach(() => {
   fireEvent.dragEnd(window);
@@ -126,7 +127,7 @@ function Harness({
 }) {
   const drop = useSessionProjectDrop({
     getSession: (id) => (id === session.id ? session : undefined),
-    getProject: (key) => (key === project.projectKey ? project : undefined),
+    getProject: (key) => [project, nextProject].find((candidate) => candidate.projectKey === key),
     expandProject: expand,
     onMoveSession: move,
   });
@@ -149,6 +150,11 @@ function Harness({
       />
       <div data-testid="project" data-session-project-drop={project.projectKey} onDrop={bubble}>
         <span data-testid="child">Project B</span>
+        <span data-testid="sibling">Project B action</span>
+      </div>
+      <div data-testid="space" />
+      <div data-testid="next-project" data-session-project-drop={nextProject.projectKey}>
+        Project C
       </div>
       {drop.showDialogueDrop && (
         <div data-testid="dialogue" data-session-dialogue-drop="source">
@@ -160,6 +166,63 @@ function Harness({
 }
 
 describe('project drag interaction', () => {
+  it('cancels a departing target before the next dragover and accepts a different target', () => {
+    vi.useFakeTimers();
+    const move = vi.fn(),
+      expand = vi.fn();
+    render(<Harness move={move} expand={expand} bubble={vi.fn()} />);
+    const transfer = dataTransfer();
+    fireEvent.dragStart(screen.getByTestId('source'), { dataTransfer: transfer });
+    fireEvent.dragOver(screen.getByTestId('child'), { dataTransfer: transfer });
+    act(() => vi.advanceTimersByTime(PROJECT_DROP_HOVER_MS - 1));
+
+    // The empty space is still inside the sidebar. There need not be another
+    // dragover before the old target's expansion timer would fire.
+    fireEvent(
+      screen.getByTestId('child'),
+      new MouseEvent('dragleave', {
+        bubbles: true,
+        relatedTarget: screen.getByTestId('space'),
+      }),
+    );
+    expect(screen.getByTestId('project').dataset.sessionProjectDropActive).toBeUndefined();
+    act(() => vi.advanceTimersByTime(PROJECT_DROP_HOVER_MS));
+    expect(expand).not.toHaveBeenCalled();
+    expect(move).not.toHaveBeenCalled();
+
+    fireEvent.dragOver(screen.getByTestId('next-project'), { dataTransfer: transfer });
+    expect(screen.getByTestId('next-project').dataset.sessionProjectDropActive).toBe('true');
+    act(() => vi.advanceTimersByTime(PROJECT_DROP_HOVER_MS));
+    expect(expand).toHaveBeenCalledExactlyOnceWith(nextProject.projectKey);
+    fireEvent.drop(screen.getByTestId('next-project'), { dataTransfer: transfer });
+    expect(move).toHaveBeenCalledExactlyOnceWith(task.id, {
+      kind: 'project',
+      workingDir: nextProject.workingDir,
+    });
+    expect(screen.getByTestId('next-project').dataset.sessionProjectDropActive).toBeUndefined();
+  });
+
+  it('keeps the current hover and its original timer while crossing children of one target', () => {
+    vi.useFakeTimers();
+    const expand = vi.fn();
+    render(<Harness move={vi.fn()} expand={expand} bubble={vi.fn()} />);
+    const transfer = dataTransfer();
+    fireEvent.dragStart(screen.getByTestId('source'), { dataTransfer: transfer });
+    fireEvent.dragOver(screen.getByTestId('child'), { dataTransfer: transfer });
+    act(() => vi.advanceTimersByTime(PROJECT_DROP_HOVER_MS - 1));
+    fireEvent(
+      screen.getByTestId('child'),
+      new MouseEvent('dragleave', {
+        bubbles: true,
+        relatedTarget: screen.getByTestId('sibling'),
+      }),
+    );
+    fireEvent.dragOver(screen.getByTestId('sibling'), { dataTransfer: transfer });
+    expect(screen.getByTestId('project').dataset.sessionProjectDropActive).toBe('true');
+    act(() => vi.advanceTimersByTime(1));
+    expect(expand).toHaveBeenCalledExactlyOnceWith(project.projectKey);
+  });
+
   it.each(['bot', 'review', 'cindy-make', 'cindy-make-merge'] as const)('does not advertise or accept a %s task move', (source) => {
     vi.useFakeTimers();
     const move = vi.fn(), expand = vi.fn(), bubble = vi.fn();

@@ -3973,7 +3973,7 @@ function ExpandedView({
                 {projectDrop.showDialogueDrop && (
                   <div
                     data-session-dialogue-drop="source"
-                    className={cn('mx-3 flex min-h-8 items-center rounded-full border border-dashed border-[var(--border-default)] px-3 text-sm text-[var(--sidebar-list-muted)]', PROJECT_DROP_CLASS)}
+                    className={cn('mx-3 flex min-h-8 select-none items-center rounded-full border border-dashed border-[var(--border-default)] px-3 text-sm text-[var(--sidebar-list-muted)]', PROJECT_DROP_CLASS)}
                   >
                     {t('ccAgent.sidebar.sessionMenu.moveToDialogue')}
                   </div>
