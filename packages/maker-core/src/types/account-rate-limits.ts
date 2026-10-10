@@ -21,6 +21,13 @@ export interface AccountCreditsSnapshot {
 export interface AccountRateLimitSnapshot {
   limitId?: string | null;
   limitName?: string | null;
+  /**
+   * Model this bucket serves as a fallback for, e.g. `gpt-5.6-luna` on the
+   * `base_model_inference` reserve. Only the reserve buckets carry it; it is the
+   * only reliable way to bind a reserve to a model, since its `limitName`
+   * (`gpt-reserve`) never matches a model id. Requires codex >= 0.154.
+   */
+  normalModelSlug?: string | null;
   primary?: AccountRateLimitWindow | null;
   secondary?: AccountRateLimitWindow | null;
   credits?: AccountCreditsSnapshot | null;
@@ -82,6 +89,12 @@ export interface AccountRateLimitsResponse {
   rateLimits: AccountRateLimitSnapshot;
   rateLimitsByLimitId: Record<string, AccountRateLimitSnapshot> | null;
   rateLimitResetCredits: AccountRateLimitResetCreditsSummary | null;
+  /**
+   * False once the main quota is spent. A reserve bucket may still serve the
+   * turn, so this must not be treated as "the account is blocked". Absent on
+   * runtimes older than codex 0.154.
+   */
+  ordinaryUsageAllowed?: boolean | null;
 }
 
 /** One logical reset attempt; callers must reuse the key when retrying. */
