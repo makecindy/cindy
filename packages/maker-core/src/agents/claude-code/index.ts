@@ -182,7 +182,11 @@ import { isClaudeResumeSessionNotFound } from './invalid-resume.js';
 import { translateSdkMessage, newRuntimeState, type TurnState, type RuntimeState } from './translator.js';
 import { resetClaudeGenerationTiming } from './generation-timing.js';
 import type { Effort, PermissionMode } from '../../types/common.js';
-import { clampEffortToSupported } from '@cindy/model-providers/effort-resolution';
+import {
+  clampEffortToSupported,
+  claudeThinkingBudgetTokens,
+  isClaudeBudgetThinkingModel,
+} from '@cindy/model-providers/effort-resolution';
 import type {
   ScanAtResourcesOptions,
   ScanAtResourcesResult,
@@ -990,6 +994,8 @@ export class ClaudeCodeAgent extends BaseAgent {
     effort: Effort,
     providerId?: string | null,
   ): ClaudeSdkEffort | undefined {
+    // Haiku 4.5 不收 effort 参数,档位改由 sdkThinkingBudgetForModel 换算成思考预算。
+    if (isClaudeBudgetThinkingModel(model)) return undefined;
     const descriptor = this.capabilities.availableModels.find((m) => m.id === model);
     // 来源不明(null)时不收窄,只保留原有的「无档位模型不下发」判断。
     const routeEfforts = this.routeEffortsForModel(model, providerId);
@@ -997,6 +1003,22 @@ export class ClaudeCodeAgent extends BaseAgent {
     // 会话档位可能来自上一个模型(如 Claude 的 xhigh),原样下发会被只认目录档位的
     // 上游拒绝(GLM-5.3 收到 xhigh 回 400/1210,#5402)。按目标来源声明的档位收窄。
     return clampEffortForClaude((clampEffortToSupported(effort, routeEfforts ?? undefined) as Effort | undefined) ?? effort);
+  }
+
+  /**
+   * 预算型思考模型(Haiku 4.5)的档位 → `--max-thinking-tokens`。null = 不干预思考预算:
+   * 非预算型模型,或该来源没声明档位(如自定义供应商,用户没有可调的档)。
+   */
+  private sdkThinkingBudgetForModel(
+    model: string,
+    effort: Effort,
+    providerId?: string | null,
+  ): number | null {
+    if (!isClaudeBudgetThinkingModel(model)) return null;
+    const efforts = this.routeEffortsForModel(model, providerId)
+      ?? this.capabilities.availableModels.find((m) => m.id === model)?.efforts;
+    if (!efforts?.length) return null;
+    return claudeThinkingBudgetTokens((clampEffortToSupported(effort, efforts) as Effort | undefined) ?? effort);
   }
 
   private sdkMaxEffortFallbackForModel(
@@ -2776,10 +2798,14 @@ export class ClaudeCodeAgent extends BaseAgent {
     };
 
     // ── thinking display 配置（与 vendor/claude/runtime.ts:121-126 等价） ─────
-    const thinkingOpts = opts.displayReasoning === 'summarized'
-      ? { thinking: { type: 'adaptive', display: 'summarized' } as unknown as { type: 'adaptive' } }
-      : {};
     const showThinkingSummaries = opts.displayReasoning === 'summarized';
+    // 预算型思考模型(Haiku 4.5)用 enabled + budgetTokens,SDK 译成 --max-thinking-tokens,
+    // 与热切时的 setMaxThinkingTokens 是同一个开关。
+    const thinkingOptsFor = (budget: number | null) => {
+      const display = showThinkingSummaries ? { display: 'summarized' as const } : {};
+      if (budget !== null) return { thinking: { type: 'enabled' as const, budgetTokens: budget, ...display } };
+      return showThinkingSummaries ? { thinking: { type: 'adaptive' as const, ...display } } : {};
+    };
 
     // Claude Code 把 availableModels 当成组织白名单。目录 + 当前/目标模型都走同一
     // 个 catalog-id → wire-string 映射,启动与热切共用,后加载的网关模型(如
@@ -2885,6 +2911,8 @@ export class ClaudeCodeAgent extends BaseAgent {
       this.sdkEffortForModel(model, effort, providerId);
     const getSdkMaxEffortFallbackForModel = (model: string, providerId: string | null) =>
       this.sdkMaxEffortFallbackForModel(model, providerId);
+    const getSdkThinkingBudgetForModel = (model: string, effort: Effort, providerId: string | null) =>
+      this.sdkThinkingBudgetForModel(model, effort, providerId);
 
     // memoryOverride 闭包以前抽过 getter, buildSettings 接管后直接读 this.memoryOverride。
 
@@ -3271,6 +3299,9 @@ export class ClaudeCodeAgent extends BaseAgent {
     const bridgeStateActive = (): boolean =>
       queuedBridgeTurns > 0 || activeBridgeKind !== null || activeBridgeRewindResumeAt !== undefined;
     let q: Query;
+    // 当前 Query 上生效的 --max-thinking-tokens(null = 未设,走 Claude Code 默认)。
+    // 随 buildQuery 按启动模型重置;热切到 / 离开预算型思考模型时经 setMaxThinkingTokens 更新。
+    let queryThinkingBudget: number | null = null;
     // Query-scoped lifecycle fact: modelUsage is cumulative within the SDK
     // process. A query created without a resume id starts that counter at zero;
     // resumed queries may include prior transcript usage and must establish a
@@ -3588,6 +3619,9 @@ export class ClaudeCodeAgent extends BaseAgent {
       applyClaudeContextWindow(env, workingWindow, this.deps.runtimeConfig.autoCompactThresholdPct);
       if (remoteEnv) applyClaudeContextWindow(remoteEnv, workingWindow, this.deps.runtimeConfig.autoCompactThresholdPct);
       const currentSdkEffort = getSdkEffortForModel(mutableModel, mutableEffort, mutableProviderId);
+      const currentThinkingBudget = getSdkThinkingBudgetForModel(mutableModel, mutableEffort, mutableProviderId);
+      const thinkingOpts = thinkingOptsFor(currentThinkingBudget);
+      queryThinkingBudget = currentThinkingBudget;
       const baseResumeAt = vo.resumeSessionAt as string | undefined;
       const baseFork = vo.forkSession as boolean | undefined;
       const finalResumeAt = extra?.fresh ? undefined : (extra?.resumeSessionAt ?? baseResumeAt);
@@ -6100,7 +6134,23 @@ export class ClaudeCodeAgent extends BaseAgent {
      * max 时实际生效的是回退档,与 mutableEffort 不一定相同;因此切模(含重建回放)后一律
      * 重下发,不按「新旧档位相同」跳过,否则上一个模型的 xhigh 会打给 GLM-5.3(1210,#5402)。
      */
+    /**
+     * 写入思考预算。离开预算型思考模型时传 null 清掉 --max-thinking-tokens,回到 Claude Code
+     * 默认,避免 Haiku 的预算留在下一个模型上。远端 Query 没有 setMaxThinkingTokens:
+     * 只在启动时生效,热切不改(与 stopTask 同款降级)。
+     */
+    async function applyThinkingBudget(budget: number | null): Promise<void> {
+      if (budget === queryThinkingBudget) return;
+      if (typeof q.setMaxThinkingTokens !== 'function') {
+        log.warn('setMaxThinkingTokens unavailable on current query; thinking budget unchanged', { budget });
+        return;
+      }
+      await q.setMaxThinkingTokens(budget);
+      queryThinkingBudget = budget;
+      log.debug('applied thinking budget', { budget });
+    }
     async function applyRouteEffort(model: string, effort: Effort, providerId: string | null): Promise<void> {
+      await applyThinkingBudget(getSdkThinkingBudgetForModel(model, effort, providerId));
       const sdkEffort = getSdkEffortForModel(model, effort, providerId);
       if (!sdkEffort) return;
       const appliedEffort = await applyClaudeEffortFlagSettings(
@@ -7460,8 +7510,14 @@ export class ClaudeCodeAgent extends BaseAgent {
         // maker 的 minimal / ultra 先归一成 Claude 的 low / max；2.1.219 起
         // applyFlagSettings 可原样接收 max，不能再静默降成 xhigh。
         const sdkEffort = getSdkEffortForModel(mutableModel, newEffort, mutableProviderId);
+        const thinkingBudget = getSdkThinkingBudgetForModel(mutableModel, newEffort, mutableProviderId);
         const isControlBlocked = controlRequestsBlocked();
-        log.debug('setEffort', { from: mutableEffort, to: newEffort, sdk: sdkEffort, controlRequestsBlocked: isControlBlocked });
+        log.debug('setEffort', { from: mutableEffort, to: newEffort, sdk: sdkEffort, thinkingBudget, controlRequestsBlocked: isControlBlocked });
+        if (thinkingBudget !== null) {
+          if (!isControlBlocked) await applyThinkingBudget(thinkingBudget);
+          mutableEffort = newEffort;
+          return;
+        }
         if (!sdkEffort) {
           mutableEffort = newEffort;
           return;

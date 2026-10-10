@@ -242,7 +242,10 @@ low / medium / high / max，实际能力仍以实报为准，不把兼容 medium
 保留缺项或显式空值的理由：
 
 - Anthropic 现有分级与[官方表](https://platform.claude.com/docs/en/build-with-claude/effort)一致；
-  Sonnet / Haiku 4.5 不支持 effort，空数组保留。
+  Sonnet / Haiku 4.5 不支持 effort，空数组保留。2026-10-10 起客户端在官方与 XD 来源上
+  给 Haiku 4.5 补低 / 中 / 高三档(默认高)，由运行时换算成思考预算 2048 / 8192 / 16384
+  tokens(Claude Code 走 `--max-thinking-tokens`，Pi 与 Codex 桥本身已按档换算)；目录仍下发
+  空数组，旧客户端不会对 Haiku 发 effort。
 - xAI 现有档位核对[reasoning 文档](https://docs.x.ai/developers/model-capabilities/text/reasoning)；
   普通 Grok 4.20 的旧别名与 multi-agent 档位语义不能互相推导，未获精确证据不增删。
 - MiniMax M3 / M2 系列、Qwen3.6 Plus API、Qwen3.5 / 3.6 本地模型、Gemma 和 Nemotron

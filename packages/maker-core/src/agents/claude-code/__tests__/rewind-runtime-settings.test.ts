@@ -181,6 +181,7 @@ function createFakeQuery(stream = createControlledStream()) {
     setPermissionMode: vi.fn(async () => assertWritable()),
     setModel: vi.fn(async () => assertWritable()),
     applyFlagSettings: vi.fn(async (_settings: Record<string, unknown>) => assertWritable()),
+    setMaxThinkingTokens: vi.fn(async (_tokens: number | null) => assertWritable()),
     interrupt: vi.fn(async () => {}),
     send: vi.fn(async () => {}),
     close: vi.fn(() => {
@@ -736,6 +737,87 @@ describe('ClaudeCodeAgent runtime settings during rewind window', () => {
     expect(handle.getEffort?.()).toBe('max');
 
     await handle.close();
+  });
+
+  describe('Haiku 4.5 thinking budget', () => {
+    const haiku: ModelDescriptor = {
+      id: 'claude-haiku-4-5',
+      displayName: 'Haiku 4.5',
+      contextWindow: 200_000,
+      efforts: ['low', 'medium', 'high'],
+      defaultEffort: 'high',
+    };
+
+    it('starts with a thinking budget instead of an effort parameter', async () => {
+      const { handle } = await startRewindableSession({
+        model: haiku.id,
+        effort: 'medium',
+        availableModels: [...TEST_MODELS, haiku],
+      });
+
+      const options = sdkMock.query.mock.calls[0]?.[0]?.options;
+      expect(options?.effort).toBeUndefined();
+      expect(options?.thinking).toEqual({ type: 'enabled', budgetTokens: 8192 });
+
+      await handle.close();
+    });
+
+    it('turns live effort changes into budgets and clamps a carried-over max to high', async () => {
+      const { handle, firstQuery } = await startRewindableSession({
+        model: haiku.id,
+        effort: 'high',
+        availableModels: [...TEST_MODELS, haiku],
+      });
+
+      await handle.setEffort?.('low');
+      expect(firstQuery.setMaxThinkingTokens).toHaveBeenLastCalledWith(2048);
+      await handle.setEffort?.('max');
+      expect(firstQuery.setMaxThinkingTokens).toHaveBeenLastCalledWith(16384);
+      expect(firstQuery.applyFlagSettings).not.toHaveBeenCalledWith(
+        expect.objectContaining({ effortLevel: expect.anything() }),
+      );
+      expect(handle.getEffort?.()).toBe('max');
+
+      await handle.close();
+    });
+
+    it('sets the budget when switching to Haiku and clears it when switching away', async () => {
+      const { handle, firstQuery } = await startRewindableSession({
+        model: 'claude-sonnet-5',
+        effort: 'medium',
+        availableModels: [...TEST_MODELS, haiku],
+      });
+      expect(sdkMock.query.mock.calls[0]?.[0]?.options?.thinking).toBeUndefined();
+
+      await handle.setModel?.(haiku.id);
+      expect(firstQuery.setMaxThinkingTokens).toHaveBeenLastCalledWith(8192);
+
+      await handle.setModel?.('claude-sonnet-5');
+      expect(firstQuery.setMaxThinkingTokens).toHaveBeenLastCalledWith(null);
+      expect(firstQuery.applyFlagSettings).toHaveBeenLastCalledWith({ effortLevel: 'medium' });
+
+      // Not on a budget model and nothing to clear: no further budget writes.
+      await handle.setEffort?.('high');
+      expect(firstQuery.setMaxThinkingTokens).toHaveBeenCalledTimes(2);
+
+      await handle.close();
+    });
+
+    it('leaves thinking alone when the Haiku route declares no efforts', async () => {
+      const { handle, firstQuery } = await startRewindableSession({
+        model: haiku.id,
+        effort: 'high',
+        availableModels: [...TEST_MODELS, { ...haiku, efforts: [], defaultEffort: null }],
+      });
+
+      const options = sdkMock.query.mock.calls[0]?.[0]?.options;
+      expect(options?.thinking).toBeUndefined();
+      expect(options?.effort).toBeUndefined();
+      await handle.setEffort?.('low');
+      expect(firstQuery.setMaxThinkingTokens).not.toHaveBeenCalled();
+
+      await handle.close();
+    });
   });
 
   it('re-applies on a hot switch even when the selected effort is unchanged, since the runtime may have fallen back (#5402)', async () => {

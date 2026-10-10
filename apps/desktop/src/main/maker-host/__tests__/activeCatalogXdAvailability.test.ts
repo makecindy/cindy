@@ -545,6 +545,26 @@ describe('XD 网关权威模型清单重建', () => {
     setActiveCatalog(BUNDLED_CATALOG);
     setXdGatewayModels([
       {
+        id: 'claude-haiku-5',
+        agents: ['claude-code'],
+        name: 'Haiku 5',
+        efforts: [],
+        supportsFastMode: false,
+      },
+    ]);
+    const cc = xdModels('claude-code');
+    expect(cc[0]).toMatchObject({
+      name: 'Haiku 5',
+      efforts: [],
+      defaultEffort: null,
+      supportsFastMode: false,
+    });
+  });
+
+  it('Haiku 4.5 网关登记 0 档时给思考预算档(运行时换算为 budget_tokens)', () => {
+    setActiveCatalog(BUNDLED_CATALOG);
+    setXdGatewayModels([
+      {
         id: 'claude-haiku-4-5',
         agents: ['claude-code'],
         name: 'Haiku 4.5',
@@ -552,11 +572,10 @@ describe('XD 网关权威模型清单重建', () => {
         supportsFastMode: false,
       },
     ]);
-    const cc = xdModels('claude-code');
-    expect(cc[0]).toMatchObject({
+    expect(xdModels('claude-code')[0]).toMatchObject({
       name: 'Haiku 4.5',
-      efforts: [],
-      defaultEffort: null,
+      efforts: ['low', 'medium', 'high'],
+      defaultEffort: 'high',
       supportsFastMode: false,
     });
   });

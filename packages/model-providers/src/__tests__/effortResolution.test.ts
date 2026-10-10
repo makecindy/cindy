@@ -11,6 +11,8 @@ import {
   resolveIntentReselectEffort,
   resolveProviderSwitchEffort,
   clampEffortToSupported,
+  claudeThinkingBudgetTokens,
+  isClaudeBudgetThinkingModel,
 } from '../effortResolution.js';
 import type { Effort } from '../types.js';
 
@@ -371,5 +373,29 @@ describe('clampEffortToSupported —— 未门控入口按模型能力 clamp(iss
     expect(clampEffortToSupported(null, XHIGH_MODEL)).toBeNull();
     // 空串:不在 EFFORT_ORDER 内,若不透传会被当"未知档"clamp 到模型最高受支持档(#456 review)。
     expect(clampEffortToSupported('', XHIGH_MODEL)).toBe('');
+  });
+});
+
+describe('Haiku 4.5 思考预算档', () => {
+  it('按 id 识别预算型思考模型,兼容日期快照与平台前缀', () => {
+    for (const id of [
+      'claude-haiku-4-5',
+      'claude-haiku-4-5-20251001',
+      'anthropic/claude-haiku-4-5',
+      'anthropic.claude-haiku-4-5-20251001-v1:0',
+    ]) {
+      expect(isClaudeBudgetThinkingModel(id)).toBe(true);
+    }
+    for (const id of ['claude-sonnet-5', 'claude-opus-4-8', 'claude-haiku-5', 'haiku']) {
+      expect(isClaudeBudgetThinkingModel(id)).toBe(false);
+    }
+  });
+
+  it('档位换算与 pi-ai 默认预算一致,越界档就近', () => {
+    expect(claudeThinkingBudgetTokens('minimal')).toBe(2048);
+    expect(claudeThinkingBudgetTokens('low')).toBe(2048);
+    expect(claudeThinkingBudgetTokens('medium')).toBe(8192);
+    expect(claudeThinkingBudgetTokens('high')).toBe(16384);
+    expect(claudeThinkingBudgetTokens('max')).toBe(16384);
   });
 });

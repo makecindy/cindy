@@ -50,6 +50,9 @@ import {
   claudeSubscriptionOnlyForClaudeCode,
   runtimeUserModelMetadata,
   clampEffortToSupported,
+  CLAUDE_BUDGET_THINKING_DEFAULT_EFFORT,
+  CLAUDE_BUDGET_THINKING_EFFORTS,
+  isClaudeBudgetThinkingModel,
   modelDefaultEffort,
   defaultEffortForCapabilities,
   findModelRegistryRoute,
@@ -1910,6 +1913,26 @@ function computeMerged(): Catalog {
       }),
     ])),
   }));
+  // Haiku 4.5 不收 effort 参数(上游、Claude Code 与服务端目录都登记为 0 档),但收思考预算。
+  // 官方与 XD 来源上给它预算档,由各运行时换算成 budget_tokens;服务端目录照旧下发 [],
+  // 不认识预算档的旧客户端仍不会对 Haiku 发 effort。
+  providers = providers.map(provider => {
+    const catalogId = providerCatalogId(provider);
+    if (catalogId !== 'anthropic' && catalogId !== 'xd') return provider;
+    return {
+      ...provider,
+      models: Object.fromEntries(Object.entries(provider.models).map(([agent, models]) => [
+        agent, models?.map(model =>
+          model.efforts.length === 0 && !model.effortsUnknown && isClaudeBudgetThinkingModel(model.id)
+            ? {
+                ...model,
+                efforts: [...CLAUDE_BUDGET_THINKING_EFFORTS],
+                defaultEffort: CLAUDE_BUDGET_THINKING_DEFAULT_EFFORT,
+              }
+            : model),
+      ])),
+    };
+  });
   return { ...b, modelRegistry, providers };
 }
 

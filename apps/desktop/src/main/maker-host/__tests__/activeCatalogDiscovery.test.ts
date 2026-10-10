@@ -1089,3 +1089,24 @@ describe('anthropic 发现条目的 modelRegistry 元数据基线', () => {
     expect(getCindyModelEffortBaseline('claude-fable-5')).toBeNull();
   });
 });
+
+describe('Haiku 4.5 思考预算档', () => {
+  afterEach(() => {
+    setActiveCatalog(BUNDLED_CATALOG);
+    setAnthropicDiscoveredModels([]);
+  });
+
+  it('官方来源发现 0 档的 Haiku 4.5 时给预算档,原始目录基线保持 0 档', () => {
+    setActiveCatalog(BUNDLED_CATALOG);
+    setAnthropicDiscoveredModels([
+      { ...anthro('claude-haiku-4-5', 'Haiku 4.5', 0), efforts: [], defaultEffort: null },
+      { ...anthro('claude-sonnet-4-5', 'Sonnet 4.5', 1), efforts: [], defaultEffort: null },
+    ]);
+    const list = anthropicList();
+    expect(list.find((m) => m.id === 'claude-haiku-4-5')).toMatchObject({
+      efforts: ['low', 'medium', 'high'],
+      defaultEffort: 'high',
+    });
+    expect(list.find((m) => m.id === 'claude-sonnet-4-5')).toMatchObject({ efforts: [], defaultEffort: null });
+  });
+});
