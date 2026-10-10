@@ -96,9 +96,11 @@ export function useSessionProjectDrop(options: Options) {
     latest.current.onMoveSession(result.session.id, result.move);
   };
   const onDragLeaveCapture = (event: DragEvent<HTMLElement>) => {
+    // The next dragover can arrive after the hover timer fires. Leaving the
+    // current target must cancel immediately, even while still in the sidebar.
     if (
       !(event.relatedTarget instanceof Node) ||
-      !event.currentTarget.contains(event.relatedTarget)
+      !highlighted.current?.contains(event.relatedTarget)
     )
       clear();
   };

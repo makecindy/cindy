@@ -1412,7 +1412,7 @@ export function SessionGroupNode({
   const showRunning = collapsed && lamp?.running;
   return (
     <div
-      className={cn('relative flex w-full select-none flex-col rounded-2xl', PROJECT_DROP_CLASS)}
+      className={cn('relative flex w-full select-none flex-col rounded-xl', PROJECT_DROP_CLASS)}
       data-session-dialogue-drop={dialogueDropDevice}
       data-no-drag
     >
