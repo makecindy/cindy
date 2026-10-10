@@ -9,6 +9,8 @@ export interface ProfilePanel {
   action?: RemoteActionDescriptor;
   values: ProfileValues;
   followsDefault?: boolean;
+  /** Optional creation capability; older hosts omit it. */
+  creationModelChain?: string;
   title?: RemoteText;
   entries?: Array<{ id: string; title: RemoteText; resourceId: string; subtitle?: RemoteText; timestamp?: number }>;
   portraits?: Array<{ value: string; uri: string }>;
@@ -93,6 +95,7 @@ export function parseCompanionProfileData(raw: unknown, ref: RemoteResourceRef):
         ? [{ value: portrait.value, uri: portrait.uri }] : [];
     }) : undefined;
     panels.push({ id: block.id, text: block.fallbackMarkdown, action: formAction, values, entries, portraits,
+      ...(block.id === 'create' && string(payload?.creationModelChain, 4000) ? { creationModelChain: payload.creationModelChain as string } : {}),
       ...(string(block.primitive, 64) ? { primitive: block.primitive } : {}),
       ...(Number.isSafeInteger(payload?.count) && Number(payload?.count) >= 0 ? { count: Number(payload?.count) } : {}),
       ...(block.primitive === 'search' && string(payload?.query, 1_000) ? { query: payload?.query as string } : {}),

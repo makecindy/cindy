@@ -302,6 +302,9 @@ describe('Bot entry after deletion', () => {
 describe('Bot settings profile consolidation', () => {
   it.each(['failed', 'welcome'] as const)('keeps model settings accessible while invitation is %s', async (stage) => {
     renderSettings({ invitation: { stage }, canonicalSessionId: undefined });
+    expect(screen.getByLabelText('bots.nameLabel')).toHaveProperty('readOnly', true);
+    expect(screen.getByLabelText('bots.profile.summary')).toHaveProperty('readOnly', true);
+    expect(screen.getByLabelText('bots.profile.personality')).toHaveProperty('readOnly', true);
     fireEvent.click(screen.getByRole('button', { name: 'bots.invitation.changeModel' }));
     fireEvent.click(within(screen.getByTestId('bot-primary-model-controls')).getByTestId('codex-model-selector'));
     await waitFor(() => expect(mocks.updateBotProfile).toHaveBeenCalledWith('bot-1', expect.objectContaining({

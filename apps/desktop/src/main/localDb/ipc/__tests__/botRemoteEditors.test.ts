@@ -37,6 +37,7 @@ function fixture() {
   const deps: BotRemoteEditorDeps = {
     owner: () => owner, assertOwner: captured => { if (captured !== owner) throw Error('OWNER_CHANGED'); },
     read: vi.fn(async () => settings), update: vi.fn(async () => { source.currentVersion++; }),
+    modelDefaults: vi.fn(async () => []),
     create: vi.fn(async () => {}), avatar: vi.fn(async () => {}),
     skills: vi.fn(async () => [skill]), skill: vi.fn(async () => skill), saveSkill: vi.fn(async (_bot, value) => { skill = value; }),
     removeSkill: vi.fn(async () => {}), capabilities: vi.fn(async () => catalog), memory,
@@ -52,6 +53,17 @@ function fixture() {
   return { resource, get, context, send, entries, deps, settings, catalog, memories, teammateWrites, changeSkill: () => { skill = { ...skill, body: '在电脑上修改后的正文。' }; }, owner: (next: string) => { owner = next; } };
 }
 describe('portable teammate editors', () => {
+  it('accepts one explicit creation model without changing the default or losing intent identity', async () => {
+    const f = fixture();
+    const route = { harness: 'pi', model: 'available', providerId: 'provider', effort: '', fastMode: false };
+    const input = { name: 'Nova', avatarImageBase64: 'aGVsbG8=', requestId: 'model-intent-12345678', modelChain: JSON.stringify([route]) };
+    await f.send(await f.resource('create'), input);
+    expect(f.deps.create).toHaveBeenCalledWith(expect.objectContaining({ capabilities: { modelChainOverride: [route] } }));
+    expect(f.deps.update).not.toHaveBeenCalled();
+    await expect(f.send(await f.resource('create'), { ...input, modelChain: '[]' })).rejects.toThrow();
+    await expect(f.send(await f.resource('create'), { ...input, modelChain: JSON.stringify([route, route]) })).rejects.toThrow();
+  });
+
   it('keeps the same durable create identity across a lost ACK, but separates paired controllers and owners', async () => {
     const f = fixture(); const input = { name: '小助手', avatarImageBase64: 'aGVsbG8=', requestId: 'same-intent-12345678' };
     await f.send(await f.resource('create'), input); await f.send(await f.resource('create'), input);

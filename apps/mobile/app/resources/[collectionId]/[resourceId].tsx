@@ -63,14 +63,18 @@ function RemoteResourceResolverScreenContent() {
   const [retrying, setRetrying] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
   const profileOpenRef = useRef(false);
+  const pendingHistory = useRef<string | null>(null);
   useEffect(() => {
     profileOpenRef.current = false;
+    pendingHistory.current = null;
     setProfileOpen(false);
   }, [binding, deviceId, resourceId]);
   // Scoped to the resource binding so another teammate never inherits this notice.
   const [retryFailed, setRetryFailed] = useState<string | null>(null);
   const retryLock = useRef(false);
   const visiblePreparation = preparation?.binding === binding ? preparation : null;
+  const historyTarget = visiblePreparation?.resource.links.find(link => link.rel === 'conversation')?.target as RemoteSessionLinkTarget | undefined;
+  const historySessionId = historyTarget?.kind === 'session' && typeof historyTarget.sessionId === 'string' ? historyTarget.sessionId : null;
   const [attempt, setAttempt] = useState(0);
   const resolveGenerationRef = useRef(0);
 
@@ -225,7 +229,13 @@ function RemoteResourceResolverScreenContent() {
       {visiblePreparation ? <CompanionProfileSheet
         visible={profileOpen}
         onClose={() => setProfileOpen(false)}
-        onClosed={() => { profileOpenRef.current = false; setAttempt(value => value + 1); }}
+        onClosed={() => {
+          const sessionId = pendingHistory.current; pendingHistory.current = null;
+          profileOpenRef.current = false;
+          if (sessionId) router.push({ pathname: '/sessions/[sessionId]', params: { sessionId, deviceId, deviceName, resourceCollectionId: collectionId, resourceId, resourceKind, openSearch: '1' } });
+          else setAttempt(value => value + 1);
+        }}
+        onOpenSearch={historySessionId ? () => { pendingHistory.current = historySessionId; setProfileOpen(false); } : undefined}
         resource={visiblePreparation.resource}
         collectionId={collectionId} deviceId={deviceId} deviceName={deviceName} online={status === 'online'}
         onDeleted={() => goBackGuarded(router)}

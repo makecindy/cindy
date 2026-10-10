@@ -525,6 +525,7 @@ export function BotSettings({
         <div hidden={page !== 'profile'} className="pt-3">
           <BotBasicProfileFields
             centeredAvatar
+            readOnly={!!invitationPending}
             value={{ name, description, avatar, avatarColor }}
             avatarControl={avatarPicker}
             composition={autosave.composition}
@@ -566,6 +567,7 @@ export function BotSettings({
         <div hidden={page !== 'personality'} className="pt-3">
           <Textarea
             aria-label={t('bots.profile.personality')}
+            readOnly={!!invitationPending}
             value={identitySource}
             onChange={(next) => {
               setIdentitySource(next);
