@@ -7077,6 +7077,9 @@ export class PiAgent extends BaseAgent {
         await waitForSessionRpcIdle();
         updateRequestPrefs();
         rejectIfCancelled(sendOpts, 'send');
+        if (closed || piProcessExited || proc.isClosed) {
+          throw new TurnDispatchRejectedError('Pi RPC is unavailable before prompt dispatch');
+        }
         if (sendOpts) handle.validateSendOptions?.(sendOpts);
         // 本轮策略覆盖:无策略显式清 null,不继承上一轮渠道策略(§7.2.5);内部续跑
         // (plan 审批实施轮 / 自动继续)不经 send,仍读这份闭包值继承(§7.10)。
@@ -7192,21 +7195,34 @@ export class PiAgent extends BaseAgent {
             ? await readPiUserEntryIds()
             : null;
           if (!managedPackageRoute.accepted) rejectIfCancelled(sendOpts, 'send');
-          const pendingTurnStartToken = markPiHostTurnStartPending(ctx);
-          promptRequestStarted = true;
           const firstModelRequestStartedAt = firstModelRequestLogged ? undefined : Date.now();
           if (firstModelRequestStartedAt !== undefined) firstModelRequestLogged = true;
           let firstModelRequestStatus: 'ok' | 'degraded' = 'degraded';
           try {
             doctorCommandActivity.enter(isDoctorCommand);
-            const resp = await runExclusivePiRpc(() => proc.request(command, {
-              timeoutMs: PI_PROMPT_ACCEPTANCE_TIMEOUT_MS,
-              // Prompt acceptance may legitimately span multiple compaction
-              // retries. Bound each silent interval, not the whole progressing
-              // preflight, so a healthy long compaction is not killed at 10m.
-              refreshTimeoutOnEvent: (event) =>
-                PI_PROMPT_ACCEPTANCE_PROGRESS_EVENTS.has(event.type),
-            }));
+            const { resp, pendingTurnStartToken } = await runExclusivePiRpc(async () => {
+              // Preparation/queued RPC can outlive the Session admission check.
+              // Register a pending turn only at the actual request boundary.
+              // A completed host package mutation is already accepted work and
+              // must not be reclassified as safe to replay when its pipe dies.
+              if (!managedPackageRoute.accepted) {
+                rejectIfCancelled(sendOpts, 'send');
+                if (closed || piProcessExited || proc.isClosed) {
+                  throw new TurnDispatchRejectedError('Pi RPC is unavailable before prompt dispatch');
+                }
+              }
+              const pendingTurnStartToken = markPiHostTurnStartPending(ctx);
+              promptRequestStarted = true;
+              const resp = await proc.request(command, {
+                timeoutMs: PI_PROMPT_ACCEPTANCE_TIMEOUT_MS,
+                // Prompt acceptance may legitimately span multiple compaction
+                // retries. Bound each silent interval, not the whole progressing
+                // preflight, so a healthy long compaction is not killed at 10m.
+                refreshTimeoutOnEvent: (event) =>
+                  PI_PROMPT_ACCEPTANCE_PROGRESS_EVENTS.has(event.type),
+              });
+              return { resp, pendingTurnStartToken };
+            });
             firstModelRequestStatus = resp.success ? 'ok' : 'degraded';
             if (!resp.success) {
               rollbackPiHostTurnStart(ctx, pendingTurnStartToken);
@@ -7751,8 +7767,10 @@ export class PiAgent extends BaseAgent {
       },
 
       isTurnRunning(): boolean {
-        // ctx.isStreaming 由 agent_start / agent_settled 翻转(translator 维护)。
-        return ctx.isStreaming;
+        // Settled/cancelled tail frames do not reopen an unusable executor for
+        // user work or host continuations. Keep Session admission fenced until
+        // close/exit finalizes, so its existing coordinator can retry/rebuild.
+        return ctx.isStreaming || (!closed && !piProcessExited && proc.isClosed);
       },
 
       async setPlanMode(enabled: boolean): Promise<void> {

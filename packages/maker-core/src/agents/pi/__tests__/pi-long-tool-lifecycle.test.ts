@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { PiTransport } from '../transport.js';
 import type { AgentEvent } from '../../../types/events.js';
-import type { AgentDeps } from '../../base-agent.js';
+import { TurnDispatchRejectedError, type AgentDeps } from '../../base-agent.js';
 import type { Logger } from '../../../interfaces/logger.js';
 
 const fixture = vi.hoisted(() => ({
@@ -316,6 +316,102 @@ describe('Pi long tool lifecycle through real stdio RPC', () => {
     await vi.waitFor(() => expect(session!.getStatus()).toBe('closed'));
     expect(events.some(event => event.type === 'error')).toBe(false);
     expect(events.filter(event => event.type === 'done')).toHaveLength(1);
+  });
+
+  it.each(['stdin-completed', 'stdout-completed', 'cancelled'] as const)('fences the next user/continuation send after %s while executor exit is unconfirmed', async (outcome) => {
+    const { events, transport, handle } = await start(true);
+    const child = fixture.child!;
+    // Deterministically keep exit confirmation pending on every OS, including
+    // Windows where SIGTERM cannot be ignored by the child. Own the cleanup.
+    const kill = vi.spyOn(child, 'kill').mockImplementation(() => true);
+    try {
+      if (outcome === 'cancelled') {
+        await transport.writeLine(JSON.stringify({ type: 'fixture_lose_rpc' }));
+        await vi.waitFor(() => expect(transport.isClosed()).toBe(true));
+        await handle.abort();
+      } else {
+        const finishing = transport.writeLine(JSON.stringify({ type: 'fixture_finish', eof: outcome === 'stdout-completed' }));
+        if (outcome === 'stdin-completed') child.stdin!.emit('error', new Error('EPIPE'));
+        await finishing;
+      }
+      await vi.waitFor(() => expect(events.some(event => event.type === 'done')).toBe(true));
+      await vi.waitFor(() => expect(transport.isClosed()).toBe(true));
+      expect(session!.getStatus()).toBe('active');
+      expect(handle.isTurnRunning?.()).toBe(true);
+      expect(session!.isTurnRunning()).toBe(true);
+      const generation = session!.getTurnGeneration();
+      const send = vi.spyOn(handle, 'send');
+      const write = vi.spyOn(transport, 'writeLine');
+      await expect(session!.send('A new user message')).rejects.toMatchObject({ code: 'SESSION_RUNNING' });
+      await expect(session!.sendHostTurnContinuation('Continue without replaying the build')).rejects.toMatchObject({ code: 'SESSION_RUNNING' });
+      expect(send).not.toHaveBeenCalled();
+      // Direct adapter consumers must also receive a known-undispatched
+      // rejection, not an ambiguous send that force-closes Session.
+      await expect(handle.send({ type: 'user', content: 'Direct follow-up' })).rejects.toBeInstanceOf(TurnDispatchRejectedError);
+      expect(write).not.toHaveBeenCalled();
+      expect(session!.getTurnGeneration()).toBe(generation);
+      await vi.advanceTimersByTimeAsync(250);
+      expect(events.filter(event => event.type === 'done')).toHaveLength(1);
+      expect(events.some(event => event.type === 'error')).toBe(false);
+      expect(events.find(event => event.type === 'done')?.data).toMatchObject({
+        status: outcome === 'cancelled' ? 'cancelled' : 'completed',
+        ...(outcome === 'cancelled' ? {} : { result: 'Build finished.', usage: { outputTokens: 3 } }),
+      });
+    } finally {
+      kill.mockRestore();
+      child.kill('SIGTERM');
+    }
+    await vi.waitFor(() => expect(session!.getStatus()).toBe('closed'));
+    expect(session!.isTurnRunning()).toBe(false);
+  });
+
+  it('rejects a known-undispatched send when pipes disappear after Session reserves the next turn', async () => {
+    const { events, transport } = await start(true);
+    await transport.writeLine(JSON.stringify({ type: 'fixture_finish' }));
+    await vi.waitFor(() => expect(events.some(event => event.type === 'done')).toBe(true));
+    expect(session!.isTurnRunning()).toBe(false);
+    const generation = session!.getTurnGeneration();
+    const write = vi.spyOn(transport, 'writeLine');
+    let verdict: unknown;
+    const sending = session!.send('A new user message', {
+      afterTurnReserved: async () => { fixture.child!.stdin!.emit('error', new Error('EPIPE')); },
+    }).then(result => { verdict = { result }; }, error => { verdict = { error }; });
+    await vi.waitFor(() => expect(verdict).toBeDefined());
+    await sending;
+    expect(verdict).toEqual({ result: { accepted: false, reason: 'provider-rejected-before-dispatch' } });
+    expect(session!.getTurnGeneration()).toBe(generation);
+    expect(write).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(250);
+    await vi.waitFor(() => expect(session!.getStatus()).toBe('closed'));
+    expect(events.filter(event => event.type === 'done')).toHaveLength(1);
+    expect(events.some(event => event.type === 'error')).toBe(false);
+  });
+
+  it('rechecks RPC availability after asynchronous prompt preparation without creating a phantom pending turn', async () => {
+    const { events, transport } = await start(true);
+    await transport.writeLine(JSON.stringify({ type: 'fixture_finish' }));
+    await vi.waitFor(() => expect(events.some(event => event.type === 'done')).toBe(true));
+    const generation = session!.getTurnGeneration();
+    const write = vi.spyOn(transport, 'writeLine');
+    const onTranscriptUserEntry = vi.fn();
+    const unsubscribe = transport.onLine(line => {
+      const frame = JSON.parse(line);
+      if (frame.type === 'response' && frame.command === 'get_entries') {
+        fixture.child!.stdin!.emit('error', new Error('EPIPE'));
+      }
+    });
+    try {
+      await expect(session!.send('A new user message', { onTranscriptUserEntry })).resolves.toEqual({
+        accepted: false, reason: 'provider-rejected-before-dispatch',
+      });
+    } finally { unsubscribe(); }
+    expect(onTranscriptUserEntry).not.toHaveBeenCalled();
+    expect(write.mock.calls.map(([line]) => JSON.parse(line).type)).toEqual(['get_entries']);
+    expect(session!.getTurnGeneration()).toBe(generation);
+    await vi.advanceTimersByTimeAsync(250);
+    await vi.waitFor(() => expect(session!.getStatus()).toBe('closed'));
+    expect(events.filter(event => event.type === 'done')).toHaveLength(1);
+    expect(events.some(event => event.type === 'error')).toBe(false);
   });
 
   it.each(['abort', 'requestGracefulStop'] as const)('keeps %s cancelled when Stop arrives inside the EOF confirmation window', async (stopMethod) => {
