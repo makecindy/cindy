@@ -221,9 +221,33 @@ export function unrubberLightboxTranslation(
 }
 
 /**
+ * 捏合中某一轴的 raw translate:手指下的锚点跟手,越界部分按**当前倍率**的边界阻尼。
+ * 先算「锚点不动」时的画面位移 anchored = start + anchor·(startScale - scale),
+ * 在当前倍率下还原成手指量、加上焦点位移,再按当前倍率套橡皮筋,最后补偿回带
+ * origin 的 raw。不能把起始倍率下还原的手指量跨倍率复用:起点处在越界回弹区时,
+ * 两套边界的差会被 origin 缩放项放大,锚点从手指下滑开。
+ * startTranslate 为捏合开始时 bake 后的画面位移;起点越界且倍率未变时第一帧连续。
+ */
+export function lightboxPinchTranslation(
+  startTranslate: number,
+  anchor: number,
+  startScale: number,
+  scale: number,
+  focalDelta: number,
+  containerSize: number,
+  displayedSize: number,
+): number {
+  'worklet';
+  const anchored = startTranslate + anchor * (startScale - scale);
+  const finger = unrubberLightboxTranslation(anchored, containerSize, scale, displayedSize) + focalDelta;
+  const visual = rubberBandLightboxTranslation(finger, containerSize, scale, displayedSize);
+  return compensateLightboxOrigin(visual, anchor, scale);
+}
+
+/**
  * 跟手位移的橡皮筋:raw translate(可带 origin)先 bake 成画面中心,越界部分阻尼,
  * 再补偿回 raw。origin≠0 时直接处理 raw 会按错误的边界阻尼(画面实际越界量不同),
- * 松手 bake 再跳;origin=0 时 bake/补偿是恒等。捏合用它跟随焦点。
+ * 松手 bake 再跳;origin=0 时 bake/补偿是恒等。标注双指平移与捏合同时进行时用它。
  */
 export function rubberBandLightboxVisualPan(
   translateX: number,

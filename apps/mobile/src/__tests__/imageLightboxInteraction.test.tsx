@@ -505,6 +505,27 @@ describe("image viewer gesture lifecycle", () => {
     expect(after.y + 110 * after.scale).toBeCloseTo(-100, 6);
   });
 
+  it("keeps the point under the fingers when pinching during an edge rebound", () => {
+    mount();
+    doubleTapAtCorner();
+    finishAnimations();
+    // 拖过左边缘松手:回弹尚未落定
+    fire(pan(), "onStart");
+    fire(pan(), "onChange", { changeX: -200, changeY: 0 });
+    fire(pan(), "onFinalize", { velocityX: 0, velocityY: 0 });
+    const start = transform();
+    expect(start.x).toBeLessThan(-300);
+    // 回弹途中在屏幕中心捏到 4x:中心下的图片点 p = (0 - T) / 2.5
+    const pointX = -start.x / 2.5;
+    fire(pinch(), "onStart", { focalX: 200, focalY: 400 });
+    fire(pinch(), "onChange", { focalX: 200, focalY: 400, scale: 1.6 });
+    fire(pinch(), "onFinalize");
+    finishAnimations();
+    const settled = transform();
+    expect(settled.scale).toBe(4);
+    expect(settled.x + pointX * settled.scale).toBeCloseTo(0, 6);
+  });
+
   it("lets a pinch shrink below 1x and springs back to the fitted image", () => {
     mount();
     fire(pinch(), "onStart", { focalX: 200, focalY: 400 });

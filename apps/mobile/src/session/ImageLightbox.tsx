@@ -72,17 +72,16 @@ import {
   lightboxPinchAnchor,
   lightboxPinchOrigin,
   lightboxPinchSettle,
+  lightboxPinchTranslation,
   LIGHTBOX_MAX_SCALE,
   LIGHTBOX_MIN_SCALE,
   LIGHTBOX_TAP_MAX_DISTANCE,
   nextDoubleTapScale,
   reclampLightboxPan,
   rubberBandLightboxScale,
-  rubberBandLightboxVisualPan,
   shouldCloseLightboxOnTap,
   shouldDismissLightbox,
   unrubberLightboxScale,
-  unrubberLightboxVisualPan,
 } from '@/session/imageLightboxModel';
 import {
   ANNOTATION_OUTLINE_COLOR,
@@ -1040,6 +1039,8 @@ const LightboxPage = memo(function LightboxPage({
   const originY = useSharedValue(0);
   const startFocalX = useSharedValue(0);
   const startFocalY = useSharedValue(0);
+  /** 捏合开始时的画面倍率:锚定位移按它与当前倍率之差推算。 */
+  const pinchStartScale = useSharedValue(1);
   const displayedW = useSharedValue(width);
   const displayedH = useSharedValue(height);
   /** 捏合最后的焦点(容器坐标):捏过最大倍率松手时绕它缩回。 */
@@ -1310,7 +1311,7 @@ const LightboxPage = memo(function LightboxPage({
         // 下滑半途改捏合:关掉正在进行的 dismiss 位移,不把图和背景留在半透明上。
         dragY.value = 0;
         dismissY.value = 0;
-        // 起点存「手指量」而非画面量:回弹途中再捏时画面可能处在橡皮筋区,
+        // 倍率起点存「手指量」而非画面量:回弹途中再捏时画面可能处在橡皮筋区,
         // 直接当起点会让第一帧按阻尼重新映射而跳一下。
         savedScale.value = unrubberLightboxScale(scale.value);
         // 锚点取手指下那一点的图片坐标,已放大 / 平移后二次捏合才绕手指缩放。
@@ -1321,19 +1322,11 @@ const LightboxPage = memo(function LightboxPage({
         // 已放大时 origin 会立刻贡献 origin*(1-scale);扣掉等量位移,二次捏合不跳。
         translateX.value = compensateLightboxOrigin(bakedX, originX.value, scale.value);
         translateY.value = compensateLightboxOrigin(bakedY, originY.value, scale.value);
-        const raw = unrubberLightboxVisualPan(
-          translateX.value,
-          translateY.value,
-          originX.value,
-          originY.value,
-          width,
-          height,
-          scale.value,
-          displayedW.value,
-          displayedH.value,
-        );
-        savedTranslateX.value = raw.x;
-        savedTranslateY.value = raw.y;
+        // 起点存 bake 后的画面位移(几何量);每帧按当前倍率的边界换算手指量,
+        // 不跨倍率复用起始倍率下的换算结果(见 lightboxPinchTranslation)。
+        savedTranslateX.value = bakedX;
+        savedTranslateY.value = bakedY;
+        pinchStartScale.value = scale.value;
         startFocalX.value = event.focalX;
         startFocalY.value = event.focalY;
         lastFocalX.value = event.focalX;
@@ -1345,18 +1338,28 @@ const LightboxPage = memo(function LightboxPage({
         lastFocalX.value = event.focalX;
         lastFocalY.value = event.focalY;
         if (annotating) return;
-        // 跟手质心;越过图片边界按橡皮筋阻尼而不是硬钳,焦点附近捏合时图不再「粘」在边上。
-        const next = rubberBandLightboxVisualPan(
-          savedTranslateX.value + (event.focalX - startFocalX.value),
-          savedTranslateY.value + (event.focalY - startFocalY.value),
-          originX.value,
-          originY.value,
-          width,
-          height,
-          scale.value,
-          displayedW.value,
-          displayedH.value,
-        );
+        // 锚点跟手;越过图片边界按当前倍率的边界阻尼而不是硬钳,焦点附近捏合时
+        // 图不再「粘」在边上,回弹途中再捏时锚点也不从手指下滑开。
+        const next = {
+          x: lightboxPinchTranslation(
+            savedTranslateX.value,
+            originX.value,
+            pinchStartScale.value,
+            scale.value,
+            event.focalX - startFocalX.value,
+            width,
+            displayedW.value,
+          ),
+          y: lightboxPinchTranslation(
+            savedTranslateY.value,
+            originY.value,
+            pinchStartScale.value,
+            scale.value,
+            event.focalY - startFocalY.value,
+            height,
+            displayedH.value,
+          ),
+        };
         translateX.value = next.x;
         translateY.value = next.y;
       })

@@ -22,6 +22,7 @@ import {
   lightboxPinchAnchor,
   lightboxPinchOrigin,
   lightboxPinchSettle,
+  lightboxPinchTranslation,
   lightboxRubberBand,
   lightboxRubberBandInverse,
   nextDoubleTapScale,
@@ -187,6 +188,29 @@ describe('imageLightboxModel', () => {
     }
     // 起始帧无跳变:任一图片点的屏幕位置与补偿前一致
     expect(translate + anchor + 2.5 * (10 - anchor)).toBeCloseTo(-195 + 2.5 * 10, 9);
+  });
+
+  it('keeps the pinch anchor under the fingers even when the pinch starts out of bounds', () => {
+    // 2x、画面位移 300(越界,overflow=200),在屏幕中心捏:锚点 = (0 - 300) / 2 = -150
+    const anchor = lightboxPinchAnchor(200, 400, 300, 2);
+    expect(anchor).toBe(-150);
+    const screenOfAnchor = (raw: number) => raw + anchor; // T + o + s·(o - o)
+    // 第一帧(倍率未变、手指未动)与起点连续:bake 回去仍是 300
+    const first = lightboxPinchTranslation(300, anchor, 2, 2, 0, 400, 400);
+    expect(bakeLightboxOrigin(first, anchor, 2)).toBeCloseTo(300, 9);
+    // 捏到 4x:锚定位移 600 恰在 overflow=600 内,锚点必须停在手指下(不漂)
+    const at4 = lightboxPinchTranslation(300, anchor, 2, 4, 0, 400, 400);
+    expect(screenOfAnchor(at4)).toBeCloseTo(0, 9);
+    // 手指往边界内平移时锚点跟手;往外越界则按阻尼少走一截
+    expect(screenOfAnchor(lightboxPinchTranslation(300, anchor, 2, 4, -25, 400, 400))).toBeCloseTo(-25, 9);
+    const outward = screenOfAnchor(lightboxPinchTranslation(300, anchor, 2, 4, 25, 400, 400));
+    expect(outward).toBeGreaterThan(0);
+    expect(outward).toBeLessThan(25);
+    // 锚定位移越过新边界时才阻尼:画面不越过手指目标
+    const at3 = lightboxPinchTranslation(300, anchor, 2, 2.2, 0, 400, 400);
+    const visual = bakeLightboxOrigin(at3, anchor, 2.2);
+    expect(visual).toBeLessThanOrEqual(300 + 150 * 0.2 + 1e-9);
+    expect(visual).toBeGreaterThan(lightboxPanOverflow(400, 400, 2.2));
   });
 
   it('compensates translation when applying a pinch origin onto an existing scale', () => {
