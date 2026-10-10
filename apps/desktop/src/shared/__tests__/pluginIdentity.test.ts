@@ -31,6 +31,7 @@ import {
   resolvePluginLibraryStorageKey,
   resolvePluginNamespaceState,
   sameDeliveryNamespaceState,
+  organizationMarketPlacementError,
 } from '../pluginIdentity.js';
 
 describe('plugin logical identity', () => {
@@ -376,5 +377,39 @@ describe('plugin instance query', () => {
     const namedOrg = { ...org, instanceKey: '_ns__acme__helper' };
     expect(resolvePluginInstanceQuery([namedRoot, namedOrg], 'helper').status).toBe('ambiguous');
     expect(resolvePluginInstanceQuery([namedRoot, namedOrg], '_root__helper')).toMatchObject({ status: 'unique', ghost: namedRoot });
+  });
+});
+
+describe('organization market placement', () => {
+  it('allows a namespaced organization install', () => {
+    expect(organizationMarketPlacementError({
+      scope: 'organization',
+      requestedNamespace: 'acme',
+      installedRelId: '_ns/acme/helper',
+    })).toBeNull();
+  });
+
+  it('refuses to retarget an organization directory at root', () => {
+    expect(organizationMarketPlacementError({
+      scope: 'public',
+      requestedNamespace: null,
+      installedRelId: '_ns/acme/helper',
+    })).toBe('注册表不可用时不能把企业插件更新成 root');
+  });
+
+  it('refuses a new root install for an organization plugin', () => {
+    expect(organizationMarketPlacementError({
+      scope: 'organization',
+      requestedNamespace: null,
+      installedRelId: null,
+    })).toBe('企业插件缺少 namespace，不能按 root 安装');
+  });
+
+  it('allows a public root install', () => {
+    expect(organizationMarketPlacementError({
+      scope: 'public',
+      requestedNamespace: null,
+      installedRelId: 'helper',
+    })).toBeNull();
   });
 });

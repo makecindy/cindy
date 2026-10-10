@@ -186,6 +186,7 @@ import {
   findInstalledGhostForDeliveryTarget,
   installedGhostLogicalIdentity,
   installedGhostPhysicalRelId,
+  organizationMarketPlacementError,
   installedGhostStoragePart,
   installedGhostMutationTargetToken,
   isGhostInstanceId,
@@ -1155,7 +1156,19 @@ function requireGhostAvailableForActiveSession(id: string): void {
 /** Stop any account-managed sandbox before an auth/data-owner boundary switch. */
 export function suspendCindyAccountGhosts(): void {
   if (!runtimeSingleton) return;
-  for (const id of CINDY_ACCOUNT_GHOST_IDS) runtimeSingleton.stop(id);
+  const stopped = new Set<string>();
+  for (const ghost of managerSingleton?.list() ?? []) {
+    if (!CINDY_ACCOUNT_GHOST_IDS.has(ghost.manifest.id)) continue;
+    const key = installedGhostStoragePart(ghost);
+    runtimeSingleton.stop(key);
+    getGhostNodeRuntimeBroker().stop(key);
+    stopped.add(key);
+  }
+  for (const id of CINDY_ACCOUNT_GHOST_IDS) {
+    if (stopped.has(id)) continue;
+    runtimeSingleton.stop(id);
+    getGhostNodeRuntimeBroker().stop(id);
+  }
 }
 
 /**
@@ -1828,6 +1841,17 @@ export function getGhostManager(): GhostManager {
       readUnconfirmedConfirmationEvidence: (record) =>
         getNamespaceMigrationHost().readUnconfirmedConfirmationEvidence(record),
       isNamespaceMigrationBusy: (ghostId) => getNamespaceMigrationHost().isNamespaceMigrationBusy(ghostId),
+      marketIdentityForGhost: (ghostId) => {
+        try {
+          const lookup = getPluginMarketLedger().lookupInstallationsForNamespaceMigration(ghostId);
+          if (lookup.kind !== 'found') return null;
+          const installed = (lookup.records ?? []).filter((record) => record.installed && record.pluginId);
+          if (installed.length !== 1) return null;
+          return { pluginId: installed[0]!.pluginId };
+        } catch {
+          return null;
+        }
+      },
       canResumePendingResidentOffline: (ghostId) => getNamespaceMigrationHost().canResumePendingResidentOffline(ghostId),
       onResumePendingResidentOffline: (ghost) => {
         if (!isGhostAvailableForActiveSession(ghost.manifest.id)) return;
@@ -6861,6 +6885,14 @@ async function installOrUpdateMarketGhostPackageLocked(
     const marketNamespace: string | null = hasDeliveryNamespace(expected) ? expected.namespace : null;
     const installIdentity = createPluginLogicalIdentity(marketNamespace, expected.ghostId);
     const installed = findInstalledGhostByIdentity(manager.list(), installIdentity);
+    const placementError = organizationMarketPlacementError({
+      scope: expected.pendingMarketRecord?.scope ?? null,
+      requestedNamespace: marketNamespace,
+      installedRelId: installed ? installedGhostPhysicalRelId(installed) : null,
+    });
+    if (placementError) {
+      throwIpcError('PRECONDITION_FAILED', placementError);
+    }
     if (expected.manifestCap) {
       const undeclaredCapabilities = unreviewedGhostPermissionItems(
         expected.manifestCap,

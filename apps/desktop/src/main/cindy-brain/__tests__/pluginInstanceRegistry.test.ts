@@ -40,7 +40,55 @@ describe('plugin instance registry', () => {
       contentRelId: 'helper',
       namespace: null,
       namespaceState: 'pending',
+      pluginId: null,
+      source: 'legacy',
     });
+  });
+
+  it('keeps a market plugin id on an upgraded install so another plugin cannot reuse it', () => {
+    const adopted = adoptContentInstall({
+      relId: 'helper',
+      ghostId: 'helper',
+      receipt: {
+        ghostId: 'helper',
+        hasNamespace: false,
+        namespace: null,
+        revision: 'rev-1',
+        packageSha256: 'sha-1',
+      },
+      pendingMigration: true,
+      marketPluginId: 'plugin-a',
+    });
+    expect(adopted).toMatchObject({
+      pluginId: 'plugin-a',
+      source: 'market',
+      namespaceState: 'pending',
+    });
+    const registry = upsertInstance(emptyPluginInstanceRegistry(), { ...adopted!, active: false });
+    expect(findReusableInstance(registry, {
+      ghostId: 'helper', namespace: null, source: 'market', pluginId: 'plugin-a',
+    })?.instanceKey).toBe('helper');
+    expect(findReusableInstance(registry, {
+      ghostId: 'helper', namespace: null, source: 'market', pluginId: 'plugin-b',
+    })).toBeNull();
+  });
+
+  it('does not copy a market plugin id onto a forge install', () => {
+    const adopted = adoptContentInstall({
+      relId: 'helper',
+      ghostId: 'helper',
+      receipt: {
+        ghostId: 'helper',
+        hasNamespace: false,
+        namespace: null,
+        revision: 'rev-1',
+        packageSha256: 'sha-1',
+        installOrigin: 'agent-forge',
+      },
+      pendingMigration: true,
+      marketPluginId: 'plugin-a',
+    });
+    expect(adopted).toMatchObject({ pluginId: null, source: 'agent-forge' });
   });
 
   it('keeps the encoded storage key for an already-migrated directory', () => {

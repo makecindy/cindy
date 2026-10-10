@@ -593,7 +593,7 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
 
 ### 5.1 实例注册表
 
-每个数据所有者一份 `plugin-instances.v1.json`。记录包含 `instanceKey`、目录 `contentRelId`、`ghostId`、`namespace`、`namespaceState`、`pluginId`、`source`、receipt 修订和包 sha。
+每个数据所有者一份 `plugin-instances.v2.json`。记录包含 `instanceKey`、目录 `contentRelId`、`ghostId`、`namespace`、`namespaceState`、`pluginId`、`source`、receipt 修订和包 sha。旧的 `plugin-instances.v1.json` 只在第一次加载时读一次并导入，之后留在磁盘上，不再写入。
 
 `instanceKey` 由安装目录推出，不另分配：旧 root 是 `helper`，新 root 是 `_root__helper`，企业是 `_ns__<namespace>__<ghostId>`。注册表丢失或损坏时按目录重建，KV、密钥和 OAuth 仍挂在这个键上。
 

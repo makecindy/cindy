@@ -133,15 +133,17 @@ export function createNamespaceMigrationHost(deps: NamespaceMigrationHostDeps): 
   }
 
   function schedulePendingResidentMigrationRetry(ghostId: string): void {
-    if (!offlineResidentIdsForActiveScope().has(ghostId) || retryTimers.has(ghostId)) return;
+    // Touch the scope so an account switch clears stale timers. An online
+    // resident is not in the offline set, but it still needs a retry.
+    offlineResidentIdsForActiveScope();
+    if (retryTimers.has(ghostId)) return;
     const ownerScopeKey = deps.activeOwnerScopeKey();
     const attempts = retryAttempts.get(ghostId) ?? 0;
     retryAttempts.set(ghostId, attempts + 1);
     const timer = scheduleTimeout(() => {
       if (retryTimers.get(ghostId) !== timer) return;
       retryTimers.delete(ghostId);
-      if (deps.activeOwnerScopeKey() !== ownerScopeKey ||
-          !offlineResidentIdsForActiveScope().has(ghostId)) return;
+      if (deps.activeOwnerScopeKey() !== ownerScopeKey) return;
       void (async () => {
         let releaseMutation: (() => void) | null = null;
         try {
@@ -203,23 +205,29 @@ export function createNamespaceMigrationHost(deps: NamespaceMigrationHostDeps): 
     },
     async preparePendingResidentForMigration(ghostId: string): Promise<boolean> {
       if (deps.isAppSessionBoundaryPending()) return false;
-      if (!offlineResidentIdsForActiveScope().has(ghostId)) return true;
       const ownerScopeKey = deps.activeOwnerScopeKey();
+      const ghost = deps.getGhostManager().list().find((candidate) =>
+        candidate.namespaceState === 'pending' &&
+        installedGhostPhysicalRelId(candidate as InstalledGhost) === ghostId);
+      const runtimeId = ghost ? installedGhostStoragePart(ghost as InstalledGhost) : ghostId;
+      const state = deps.runtimeState(runtimeId);
+      const running = state === 'starting' || state === 'running' || state === 'stopping' ||
+        deps.nodeRuntimeRunning(runtimeId);
+      const offline = offlineResidentIdsForActiveScope().has(ghostId);
+      // A resident that started while online is not in the offline set. Leaving
+      // it running makes the commit look busy, and the retry used to no-op.
+      if (!offline && !running) return true;
       if (deps.hasPendingWork(ghostId)) return false;
       try {
         if (deps.oauthLockExists(ghostId)) return false;
       } catch {
         return false;
       }
-      const ghost = deps.getGhostManager().list().find((candidate) =>
-        candidate.namespaceState === 'pending' &&
-        installedGhostPhysicalRelId(candidate as InstalledGhost) === ghostId);
       if (!ghost) return false;
-      const runtimeId = installedGhostStoragePart(ghost as InstalledGhost);
       deps.stopRuntime(runtimeId);
       await deps.stopNodeRuntime(runtimeId);
       if (deps.activeOwnerScopeKey() !== ownerScopeKey || deps.isAppSessionBoundaryPending()) {
-        throw new Error('ghost owner changed while stopping an offline resident');
+        throw new Error('ghost owner changed while stopping a pending resident');
       }
       return true;
     },

@@ -120,6 +120,8 @@ export function adoptContentInstall(input: {
   receipt: PluginInstanceReceiptFact | null;
   /** True only while the one-time upgrade census still lists this directory. */
   pendingMigration?: boolean;
+  /** Set when the market ledger has exactly one installed record for this ghost. */
+  marketPluginId?: string | null;
 }): PluginInstanceRecord | null {
   const instanceKey = instanceKeyForExistingContent(input.relId);
   if (!instanceKey || !isValidGhostId(input.ghostId)) return null;
@@ -128,14 +130,17 @@ export function adoptContentInstall(input: {
   const pathNamespace = identity?.namespace ?? null;
   const confirmed = input.receipt?.hasNamespace === true;
   const pending = !confirmed && input.pendingMigration === true;
+  const marketPluginId = origin === 'agent-forge' ? null : input.marketPluginId ?? null;
   return {
     instanceKey,
     contentRelId: input.relId,
     ghostId: input.ghostId,
     namespace: confirmed ? input.receipt!.namespace : pathNamespace,
     namespaceState: confirmed ? 'confirmed' : pending ? 'pending' : 'unconfirmed',
-    pluginId: null,
-    source: origin === 'agent-forge' ? 'agent-forge' : input.receipt ? 'manual' : 'legacy',
+    pluginId: marketPluginId,
+    source: origin === 'agent-forge'
+      ? 'agent-forge'
+      : marketPluginId ? 'market' : input.receipt ? 'manual' : 'legacy',
     receiptRevision: input.receipt?.revision ?? null,
     packageSha256: input.receipt?.packageSha256 ?? null,
     active: true,

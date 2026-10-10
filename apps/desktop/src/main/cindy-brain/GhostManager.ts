@@ -279,6 +279,8 @@ export interface GhostManagerOptions {
   captureLegacyFirstPartyEligibility?: (ghostId: string, approvedPackageSha256: string) => boolean;
   /** True when runtime/OAuth/install work should delay a first-time namespace stamp. */
   isNamespaceMigrationBusy?: (ghostId: string) => boolean;
+  /** Market ledger identity for a ghost that predates pluginId on the receipt. */
+  marketIdentityForGhost?: (ghostId: string) => { pluginId: string } | null;
   canResumePendingResidentOffline?: (ghostId: string) => boolean;
   onResumePendingResidentOffline?: (ghost: InstalledGhost) => void;
   preparePendingResidentForMigration?: (ghostId: string) => Promise<boolean>;
@@ -628,6 +630,7 @@ export class GhostManager {
     recordLegacyEligibility: (relId, revision) => {
       this.receiptStore.captureLegacyFirstPartyEligibilitySync(relId, revision);
     },
+    marketIdentityForGhost: (ghostId) => this.options.marketIdentityForGhost?.(ghostId) ?? null,
     log: {
       warn: (message, meta) => { this.options.log?.warn(message, meta); },
     },

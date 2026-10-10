@@ -526,3 +526,25 @@ export function listGhostsByCommand<
     return ghost.manifest.command !== undefined && ghost.manifest.command.toLowerCase() === fold;
   });
 }
+
+
+/**
+ * A blocked instance registry must not invent a root install for an
+ * organization plugin, or rewrite an organization directory as root.
+ * Returns a user-facing reason, or null when the placement may proceed.
+ */
+export function organizationMarketPlacementError(input: {
+  scope?: string | null;
+  requestedNamespace: string | null;
+  installedRelId?: string | null;
+}): string | null {
+  if (input.requestedNamespace !== null) return null;
+  const installed = input.installedRelId ? parsePluginInstallRelId(input.installedRelId) : null;
+  if (installed?.namespace) {
+    return '注册表不可用时不能把企业插件更新成 root';
+  }
+  if (input.scope === 'organization') {
+    return '企业插件缺少 namespace，不能按 root 安装';
+  }
+  return null;
+}

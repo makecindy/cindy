@@ -6748,6 +6748,11 @@ export interface GhostScheduleDraftPush {
   /** 本次请求 id(renderer 去重用:重复推送不叠开多个面板)。 */
   requestId: string;
   ghostId: string;
+  /**
+   * 已知身份才带上。待迁移、或还没有 namespace 字段的旧安装省略。
+   * 不写入调度存储：给任务表加列是不可回退的 migration，这里只跟着打开面板的推送走。
+   */
+  namespace?: string | null;
   /** 插件展示名(主机填,用于面板上的来源标注)。 */
   ghostName: string;
   iconDataUrl?: string;

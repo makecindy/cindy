@@ -43,6 +43,8 @@ interface PluginInstanceRegistryServiceDeps {
   readApproval(relId: string): CensusApproval;
   captureInstalledLegacy?(ghostId: string, packageSha256: string): boolean;
   recordLegacyEligibility(relId: string, revision: string): void;
+  /** Exactly one installed market record, or null when the ledger cannot say. */
+  marketIdentityForGhost?(ghostId: string): { pluginId: string } | null;
   log?: PluginInstanceRegistryLogger;
 }
 
@@ -210,13 +212,18 @@ export class PluginInstanceRegistryService {
           ghostId,
           receipt: fact,
           pendingMigration: this.isPendingMigrationRel(listed.relId, registry),
+          marketPluginId: this.deps.marketIdentityForGhost?.(ghostId)?.pluginId ?? null,
         });
         if (!adopted) continue;
         registry = upsertInstance(registry, adopted);
         dirty = true;
         continue;
       }
-      const next = reconcileInstanceReceipt(existing, { directoryPresent: true, receipt: fact });
+      let next = reconcileInstanceReceipt(existing, { directoryPresent: true, receipt: fact });
+      const market = this.deps.marketIdentityForGhost?.(existing.ghostId) ?? null;
+      if (market && next.pluginId == null && next.source !== 'agent-forge' && next.source !== 'builtin') {
+        next = { ...next, pluginId: market.pluginId, source: 'market' };
+      }
       if (next !== existing) {
         registry = upsertInstance(registry, next);
         dirty = true;
