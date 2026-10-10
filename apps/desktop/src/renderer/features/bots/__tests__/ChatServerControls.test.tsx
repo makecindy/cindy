@@ -78,6 +78,7 @@ describe('chat interaction controls', () => {
     await waitFor(() => expect(screen.queryByText('bots.groupChat.notice.runtimeFailure.AUTH_REQUIRED')).toBeNull());
     expect(screen.getByText('Earlier reply')).toBeTruthy();
     expect(screen.getByText('Latest reply')).toBeTruthy();
+    expect(mocks.thread.mock.calls.at(-1)?.[0]).toMatchObject({ sourceMessageIds: [older.id, latest.id] });
   });
 
   it('preserves copy and image sharing beside thread replies and reactions in one toolbar', async () => {

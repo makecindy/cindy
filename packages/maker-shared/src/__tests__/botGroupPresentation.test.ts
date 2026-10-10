@@ -7,10 +7,19 @@ import {
   isBotGroupDivisionBlocked,
   mergeBotGroupMessages,
   projectBotGroupExecutionFailures,
+  botGroupExecutionFailureBatches,
 } from '../botGroupPresentation.js';
 import { BOT_GROUP_RUNTIME_FAILURE_CODES, readBotGroupExecutionFailure, type BotGroupErrorCode, type BotGroupExecutionFailureView, type BotGroupMessageView, type BotGroupNoticeCode, type BotGroupPlanView } from '../botGroupChat.js';
 
 describe('execution failures are a projection of the current snapshot', () => {
+  it('reconciles all loaded sources in bounded deduplicated requests', () => {
+    const ids = Array.from({ length: 251 }, (_, n) => `source-${n}`);
+    const batches = botGroupExecutionFailureBatches([...ids, ids[0], ids[250]]);
+    expect(batches.map(batch => batch.length)).toEqual([100, 100, 51]);
+    expect(batches.flat()).toEqual(ids);
+    expect(botGroupExecutionFailureBatches([])).toEqual([]);
+  });
+
   const source = { id: 'source', sequence: 4, kind: 'message', authorKind: 'user', authorBotId: null,
     authorName: 'Owner', content: 'Question', mentions: { all: false, botIds: [] }, noticeCode: null,
     planId: null, files: [], attachments: [], createdAt: 1 } as BotGroupMessageView;

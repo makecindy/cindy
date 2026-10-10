@@ -62,7 +62,7 @@ export function ChatThreadPanel({ group, rootId, onClose }: { group: BotGroupDet
     const version = ++request.current, owner = getDataOwnerGeneration();
     const current = () => version === request.current && isDataOwnerGenerationCurrent(owner);
     try {
-      const result = await api().thread({ groupId: group.id, rootId, before });
+      const result = await api().thread({ groupId: group.id, rootId, before, sourceMessageIds: replies.map(message => message.id) });
       if (!current()) return;
       if (!result.ok) { setError(t(chatErrorKey(result.errorCode))); return; }
       setRoot(result.root); setError('');
@@ -70,7 +70,7 @@ export function ChatThreadPanel({ group, rootId, onClose }: { group: BotGroupDet
       setReplies(previous => mergeBotGroupMessages(previous, result.replies));
       if (before || replies.length === 0) setHasMore(result.hasMore);
     } catch { if (current()) setError(t(key('requestFailed'))); }
-  }, [group.id, rootId, t, replies.length]);
+  }, [group.id, rootId, t, replies]);
   const loadRef = useRef(load); loadRef.current = load;
   useEffect(() => {
     void loadRef.current();

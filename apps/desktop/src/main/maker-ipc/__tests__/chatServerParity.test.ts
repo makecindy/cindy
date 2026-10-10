@@ -63,7 +63,7 @@ describe('server group feature parity', () => {
       return { body: { execution: next } };
     }
     if (route.endsWith('/snapshot')) return { body: { room: room(route.split('/')[2]), members: [], messages: [], cursor: '1' } };
-    if (route.includes('/messages?') || route.endsWith('/executions') || route.endsWith('/execution-failures') || route.includes('/plans')) return { body: [] };
+    if (route.includes('/messages?') || route.endsWith('/executions') || route.includes('/execution-failures?') || route.includes('/plans')) return { body: [] };
     return { body: {} };
   }
   beforeEach(() => {

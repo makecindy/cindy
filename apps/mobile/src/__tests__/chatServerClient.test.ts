@@ -11,6 +11,32 @@ const snapshot = (): ChatSnapshot => ({ room: room(), cursor: '9007199254741099'
 ] });
 
 describe('direct Chat Server client', () => {
+  it('reconciles all loaded message pages in bounded requests and clears an old-source failure on refresh', async () => {
+    const latest = Array.from({ length: 100 }, (_, n) => message(200 - n));
+    const older = Array.from({ length: 100 }, (_, n) => message(100 - n));
+    let status = 'failed';
+    const request = vi.fn().mockImplementation(async (path: string) => {
+      if (path.endsWith('/snapshot')) return snapshot();
+      if (path.includes('/execution-failures?')) {
+        const ids = new URLSearchParams(path.split('?')[1]).get('sourceIds')!.split(',');
+        return ids.includes(id(1)) ? [{ id: id(500), source_message_id: id(1), bot_id: id(10), epoch: 1, status,
+          failure_code: 'AUTH_REQUIRED' }] : [];
+      }
+      return path.includes('&before=') ? older : latest;
+    });
+    const client = createChatServerClient(request);
+    const first = await client.load(id(1));
+    expect(first.failures).toEqual([]);
+    const loaded = await client.older(id(1), first);
+    expect(chatGroupView(loaded, id(11)).messages[1]).toMatchObject({ runtimeFailureCode: 'AUTH_REQUIRED' });
+    const scopes = request.mock.calls.filter(([path]) => path.includes('/execution-failures?'))
+      .map(([path]) => new URLSearchParams(path.split('?')[1]).get('sourceIds')!.split(','));
+    expect(scopes.map(ids => ids.length)).toEqual([100, 100, 100]);
+    expect(scopes.slice(1).flat()).toEqual([...latest, ...older].map(message => message.id));
+    status = 'queued';
+    expect(chatGroupView(await client.load(id(1), older.at(-1)!.seq), id(11)).messages).toHaveLength(200);
+  });
+
   it.each(['structured', 'old-marker', 'chat-forgery'])('projects imported runtime notices safely: %s', shape => {
     const source = { ...message(20), origin: shape === 'chat-forgery' ? 'chat' : 'import',
       content: [{ type: 'text', text: shape === 'structured' ? 'group activity' : 'cindy-runtime-error:AUTH_REQUIRED' },
@@ -32,11 +58,11 @@ describe('direct Chat Server client', () => {
     let status = 'failed';
     const request = vi.fn();
     request.mockImplementation(async (path: string) => path.endsWith('/snapshot') ? snapshot()
-      : path.endsWith('/execution-failures') ? [{ id: id(30), source_message_id: source.id, bot_id: id(10), epoch: 1, status, failure_code }]
+      : path.includes('/execution-failures?') ? [{ id: id(30), source_message_id: source.id, bot_id: id(10), epoch: 1, status, failure_code }]
       : [source]);
     const client = createChatServerClient(request);
     const page = await client.load(id(1));
-    expect(request).toHaveBeenCalledWith(`/conversations/${id(1)}/execution-failures`);
+    expect(request).toHaveBeenCalledWith(`/conversations/${id(1)}/execution-failures?sourceIds=${source.id}`);
     const view = chatGroupView(page, id(11));
     expect(view.messages).toHaveLength(2);
     expect(view.messages[0]).toMatchObject({ id: source.id, kind: 'message' });
@@ -106,7 +132,7 @@ describe('direct Chat Server client', () => {
   it('opens and paginates main history, preserving exact sequence cursors and author identity', async () => {
     const messages = Array.from({ length: 100 }, (_, n) => message(200 - n));
     const request = vi.fn().mockResolvedValueOnce(snapshot()).mockResolvedValueOnce(messages).mockResolvedValueOnce([])
-      .mockResolvedValueOnce([message(100)]).mockResolvedValueOnce([]);
+      .mockResolvedValueOnce([message(100)]).mockResolvedValueOnce([]).mockResolvedValueOnce([]);
     const client = createChatServerClient(request);
     const page = await client.load(id(1));
     expect(page.before).toBe(messages.at(-1)!.seq);
@@ -153,7 +179,7 @@ describe('direct Chat Server client', () => {
   it('reauthorizes and replaces loaded older history on refresh instead of retaining deleted text', async () => {
     const recent = Array.from({ length: 100 }, (_, n) => message(200 - n));
     const request = vi.fn().mockResolvedValueOnce(snapshot()).mockResolvedValueOnce(recent)
-      .mockResolvedValueOnce([{ ...message(100), content: [{ type: 'text', text: 'edited' }] }]).mockResolvedValueOnce([]);
+      .mockResolvedValueOnce([{ ...message(100), content: [{ type: 'text', text: 'edited' }] }]).mockResolvedValueOnce([]).mockResolvedValueOnce([]);
     const page = await createChatServerClient(request).load(id(1), message(100).seq);
     expect(chatGroupView(page, id(10)).messages[0].content).toBe('edited');
     expect(request.mock.calls[2][0]).toContain(`before=${message(101).seq}`);

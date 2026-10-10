@@ -406,6 +406,8 @@ export interface BotGroupGetOptions {
   /** Load messages with a smaller sequence (older page). */
   beforeSequence?: number;
   limit?: number;
+  /** Reconcile execution state for real messages already displayed on older pages. */
+  sourceMessageIds?: string[];
 }
 
 export type BotGroupChange = 'created' | 'updated' | 'deleted' | 'messages' | 'round' | 'plan';
@@ -538,7 +540,7 @@ export interface ChatServerApi {
   ownedBots(): Promise<ChatServerResult<{ bots: Array<{ actorId: string; name: string }> }>>;
   refreshProfile(): Promise<ChatServerResult<Record<never, never>>>;
   status(): Promise<{ enabled: boolean; connected: boolean }>;
-  thread(input: { groupId: string; rootId: string; before?: number }): Promise<ChatServerResult<{
+  thread(input: { groupId: string; rootId: string; before?: number; sourceMessageIds?: string[] }): Promise<ChatServerResult<{
     root: BotGroupMessageView; replies: BotGroupMessageView[]; hasMore: boolean;
     /** Same authoritative state as the main timeline; root and replies use one projection. */
     executionFailures?: BotGroupExecutionFailureView[];

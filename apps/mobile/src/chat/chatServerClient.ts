@@ -1,6 +1,6 @@
 /** The existing Chat Server HTTP contract; no device-link or executor registration. */
 import { readBotGroupExecutionFailure, readImportedBotGroupRuntimeFailureCode, type BotGroupAttachment, type BotGroupMemberView, type BotGroupMessageView, type BotGroupRemoteChatData } from '@cindy/maker-shared/botGroupChat';
-import { projectBotGroupExecutionFailures } from '@cindy/maker-shared/botGroupPresentation';
+import { botGroupExecutionFailureBatches, projectBotGroupExecutionFailures } from '@cindy/maker-shared/botGroupPresentation';
 import type { HostedRemoteCollectionItem } from '@/device-link/remoteResources';
 
 export interface ChatRoom {
@@ -155,15 +155,22 @@ export function chatGroupView(page: ChatPage, selfId: string): BotGroupRemoteCha
 }
 
 export function createChatServerClient(request: ChatRequest) {
-  async function failures(roomId: string): Promise<ChatExecutionFailure[]> {
-    let value: ChatExecutionFailure[];
-    try { value = await request<ChatExecutionFailure[]>(`/conversations/${chatId(roomId)}/execution-failures`); }
+  async function failures(roomId: string, messages: ChatMessage[]): Promise<ChatExecutionFailure[]> {
+    const sources = new Set(messages.map(message => chatId(message.id)));
+    let value: ChatExecutionFailure[] = [];
+    try {
+      for (const batch of botGroupExecutionFailureBatches([...sources])) {
+        const page = await request<ChatExecutionFailure[]>(`/conversations/${chatId(roomId)}/execution-failures?sourceIds=${batch.join(',')}`);
+        if (!Array.isArray(page)) throw new Error('INVALID_CHAT_EXECUTIONS');
+        value.push(...page);
+      }
+    }
     catch (error) {
       if (!error || typeof error !== 'object' || !('status' in error) || error.status !== 404) throw error;
       value = await request<ChatExecutionFailure[]>(`/conversations/${chatId(roomId)}/executions`);
     }
     if (!Array.isArray(value)) throw new Error('INVALID_CHAT_EXECUTIONS');
-    return value;
+    return value.filter(row => sources.has(row.source_message_id));
   }
   return {
     async list(): Promise<ChatRoom[]> {
@@ -212,12 +219,13 @@ export function createChatServerClient(request: ChatRequest) {
         if (next && BigInt(next) >= BigInt(before)) throw new Error('INVALID_CHAT_PAGE');
         messages.push(...batch); before = next;
       }
-      return { snapshot, messages, before, failures: await failures(room) };
+      return { snapshot, messages, before, failures: await failures(room, messages) };
     },
     async older(roomId: string, page: ChatPage): Promise<ChatPage> {
       if (!page.before) return page;
       const messages = await request<ChatMessage[]>(`/conversations/${chatId(roomId)}/messages?limit=100&before=${chatCursor(page.before)}`);
-      return { ...page, messages: [...page.messages, ...messages], failures: await failures(roomId),
+      const loaded = [...page.messages, ...messages];
+      return { ...page, messages: loaded, failures: await failures(roomId, loaded),
         before: messages.length === 100 ? chatCursor(messages.at(-1)!.seq) : null };
     },
     async media(roomId: string, mediaId: string): Promise<BotGroupAttachment> {

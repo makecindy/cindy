@@ -341,6 +341,7 @@ describe('BotGroupChatView', () => {
     await waitFor(() => expect(screen.queryByText('bots.groupChat.notice.runtimeFailure.AUTH_REQUIRED:Bot')).toBeNull());
     expect(screen.getByText('Earlier question')).toBeTruthy();
     expect(screen.getByText('Latest question')).toBeTruthy();
+    expect(mocks.getBotGroup.mock.calls.at(-1)).toEqual(['g1', { sourceMessageIds: [source.id, latest.id] }]);
   });
 
   it('shows another human as a named participant instead of the current user bubble', async () => {

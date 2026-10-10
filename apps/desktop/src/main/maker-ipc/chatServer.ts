@@ -35,6 +35,7 @@ import {
 import type { BotGroupChatService, BotGroupChatServiceDeps, BotGroupLaneTerminal } from './botGroupChatService.js';
 import { readPersistedReplyText } from './botGroupChatService.js';
 import { botGroupRuntimeFailureCode, botGroupRuntimeFailureDetail } from './botGroupRuntimeFailure.js';
+import { botGroupExecutionFailureBatches } from '@cindy/maker-shared/botGroupPresentation';
 
 interface Actor { id: string; kind: string; externalId: string; name: string; avatar?: string | null; avatarSource?: string | null }
 interface Member { id: string; kind: 'human' | 'bot' | 'integration'; name: string; state: string; role: 'owner' | 'admin' | 'member' | 'guest';
@@ -538,12 +539,13 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   }
   async function detail(roomId: string, options?: unknown, summaryOnly = false): Promise<BotGroupDetail> {
     const s = await snapshot(roomId);
-    const o = z.object({ beforeSequence: z.number().int().positive().optional(), limit: z.number().int().min(1).max(100).optional() }).parse(options ?? {});
+    const o = z.object({ beforeSequence: z.number().int().positive().optional(), limit: z.number().int().min(1).max(100).optional(),
+      sourceMessageIds: z.array(id).optional() }).parse(options ?? {});
     const query = new URLSearchParams({ limit: String(o.limit ?? 100) });
     if (o.beforeSequence) query.set('before', String(o.beforeSequence));
     const page = summaryOnly ? s.messages : await api<Message[]>(`/conversations/${roomId}/messages?${query}`);
     const executions = await api<Execution[]>(`/conversations/${roomId}/executions`);
-    const executionFailures = summaryOnly ? undefined : await failureSnapshot(roomId, s.members, executions);
+    const executionFailures = summaryOnly ? undefined : await failureSnapshot(roomId, s.members, [...(o.sourceMessageIds ?? []), ...page.map(m => m.id)], executions);
     const ids = page.flatMap(m => m.content.flatMap(b => b.namespace === 'cindy.plan' && typeof b.data?.planId === 'string' ? [id.parse(b.data.planId)] : []));
     const serverPlans = await api<ServerPlan[]>(`/conversations/${roomId}/plans${ids.length ? `?ids=${ids.join(',')}` : ''}`);
     const workspace = workspaces().read(roomId);
@@ -640,9 +642,16 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   // Compatibility cache for servers which do not yet return failure_code.
   // The server execution status still owns whether a notice is displayed.
   const failureCodes = new Map<string, BotGroupRuntimeFailureCode>();
-  async function failureSnapshot(roomId: string, members: Member[], recent?: Execution[]): Promise<BotGroupExecutionFailureView[]> {
-    let rows: unknown[];
-    try { rows = await api<unknown[]>(`/conversations/${roomId}/execution-failures`); }
+  async function failureSnapshot(roomId: string, members: Member[], sourceIds: string[], recent?: Execution[]): Promise<BotGroupExecutionFailureView[]> {
+    const sources = new Set(sourceIds);
+    let rows: unknown[] = [];
+    try {
+      for (const batch of botGroupExecutionFailureBatches(sourceIds)) {
+        const page = await api<unknown[]>(`/conversations/${roomId}/execution-failures?sourceIds=${batch.join(',')}`);
+        if (!Array.isArray(page)) throw new Error('INVALID_CHAT_RESPONSE');
+        rows.push(...page);
+      }
+    }
     catch (error) {
       // Only a missing route may use the old server's bounded execution list.
       // Permission and network failures must go through normal read recovery.
@@ -652,7 +661,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     if (!Array.isArray(rows)) throw new Error('INVALID_CHAT_RESPONSE');
     return rows.flatMap(row => {
       const failure = readBotGroupExecutionFailure(row, roomId);
-      if (!failure) return [];
+      if (!failure || !sources.has(failure.sourceMessageId)) return [];
       const member = members.find(value => value.id === failure.botId);
       const cachedCode = failureCodes.get(`${failure.executionId}:${failure.epoch}`);
       return [{ ...failure, botId: localBot(failure.botId)?.id ?? failure.botId,
@@ -1041,12 +1050,12 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     }),
     status: async () => ({ enabled: true, connected: current() && connected }),
     thread: input => result(async () => {
-      const i = z.object({ groupId: id, rootId: id, before: z.number().int().positive().optional() }).parse(input);
+      const i = z.object({ groupId: id, rootId: id, before: z.number().int().positive().optional(), sourceMessageIds: z.array(id).optional() }).parse(input);
       i.groupId = await resolveGroup(i.groupId); subscribe(i.groupId);
       const members = await api<Member[]>(`/conversations/${i.groupId}/members`);
       const root = await api<Message>(`/conversations/${i.groupId}/messages/${i.rootId}`);
       const page = await api<Message[]>(`/conversations/${i.groupId}/messages?threadRootId=${i.rootId}&limit=50${i.before ? `&before=${i.before}` : ''}`);
-      const executionFailures = await failureSnapshot(i.groupId, members);
+      const executionFailures = await failureSnapshot(i.groupId, members, [...(i.sourceMessageIds ?? []), root.id, ...page.map(m => m.id)]);
       return { root: (await messageViews(i.groupId, [root], members))[0], executionFailures,
         replies: await messageViews(i.groupId, page.reverse(), members), hasMore: page.length === 50 };
     }),

@@ -71,6 +71,14 @@ export function mergeBotGroupMessages(
   return [...bySequence.values()].sort((a, b) => a.sequence - b.sequence);
 }
 
+/** Bound each HTTP reconciliation request to 100 displayed sources, without truncating loaded history. */
+export function botGroupExecutionFailureBatches(sourceIds: readonly string[]): string[][] {
+  const unique = [...new Set(sourceIds)];
+  const batches: string[][] = [];
+  for (let offset = 0; offset < unique.length; offset += 100) batches.push(unique.slice(offset, offset + 100));
+  return batches;
+}
+
 /** Derive notices once, after pagination, from the latest authorized execution snapshot. */
 export function projectBotGroupExecutionFailures(
   messages: readonly BotGroupMessageView[],

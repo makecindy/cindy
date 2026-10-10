@@ -155,12 +155,13 @@ function BotGroupChatContent({ groupId }: { groupId: string }) {
   const navigate = useNavigate();
   const location = useLocation();
   const [state, setState] = useState<GroupViewState>({ kind: 'loading' });
+  const stateRef = useRef(state); stateRef.current = state;
   const [reloadVersion, setReloadVersion] = useState(0);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [continuing, setContinuing] = useState(false);
   const [planPending, setPlanPending] = useState<PlanPending | null>(null);
   const planPendingRef = useRef(false);
-  const loadRef = useRef<() => void>(() => {});
+  const loadRef = useRef<(additionalSources?: string[]) => void>(() => {});
   const scrollRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const stickToBottomRef = useRef(true);
@@ -174,7 +175,7 @@ function BotGroupChatContent({ groupId }: { groupId: string }) {
   useEffect(() => {
     let cancelled = false;
     let requestVersion = 0;
-    const load = async () => {
+    const load = async (additionalSources: string[] = []) => {
       const version = ++requestVersion;
       const owner = getDataOwnerGeneration();
       const api = botGroupApi();
@@ -185,7 +186,10 @@ function BotGroupChatContent({ groupId }: { groupId: string }) {
         return;
       }
       try {
-        const result = await api.getBotGroup(groupId);
+        const displayed = stateRef.current;
+        const sourceMessageIds = [...new Set([...(displayed.kind === 'ready' && displayed.group.id === groupId
+          ? mergeBotGroupMessages(displayed.older, displayed.group.messages).map(message => message.id) : []), ...additionalSources])];
+        const result = sourceMessageIds.length ? await api.getBotGroup(groupId, { sourceMessageIds }) : await api.getBotGroup(groupId);
         if (!isCurrent()) return;
         if (result.ok) {
           readOwner.current = owner;
@@ -210,7 +214,7 @@ function BotGroupChatContent({ groupId }: { groupId: string }) {
         if (isCurrent()) setState((previous) => (previous.kind === 'ready' ? previous : { kind: 'error' }));
       }
     };
-    loadRef.current = () => void load();
+    loadRef.current = additionalSources => void load(additionalSources);
     void load();
     const unsubscribe =
       botGroupApi()?.onBotGroupChanged?.((payload, ownerStamp) => {
@@ -342,7 +346,8 @@ function BotGroupChatContent({ groupId }: { groupId: string }) {
     const owner = getDataOwnerGeneration();
     setLoadingOlder(true);
     try {
-      const result = await api.getBotGroup(groupId, { beforeSequence: first.sequence });
+      const sourceMessageIds = mergeBotGroupMessages(state.older, state.group.messages).map(message => message.id);
+      const result = await api.getBotGroup(groupId, { beforeSequence: first.sequence, sourceMessageIds });
       if (!isDataOwnerGenerationCurrent(owner)) return;
       if (!result.ok) {
         toast.error(t('bots.groupChat.timeline.loadEarlierFailed'));
@@ -350,6 +355,7 @@ function BotGroupChatContent({ groupId }: { groupId: string }) {
       }
       const element = scrollRef.current;
       if (element) prependAnchorRef.current = { height: element.scrollHeight, top: element.scrollTop };
+      const newerRefresh = stateRef.current.kind === 'ready' && stateRef.current.group !== state.group;
       setState((previous) => {
         if (previous.kind !== 'ready') return previous;
         // A newer push refresh wins over an older in-flight pagination request.
@@ -364,6 +370,8 @@ function BotGroupChatContent({ groupId }: { groupId: string }) {
           olderHasMore: result.group.hasMoreBefore,
         };
       });
+      // A push may have refreshed before these sources were displayed. Reconcile their current state too.
+      if (newerRefresh) loadRef.current(result.group.messages.map(message => message.id));
     } catch {
       toast.error(t('bots.groupChat.timeline.loadEarlierFailed'));
     } finally {
