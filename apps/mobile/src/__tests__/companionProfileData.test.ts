@@ -12,9 +12,19 @@ describe('companion profile finite resource primitives', () => {
     expect(profileFormValid(data.panels[0], { name: '' })).toBe(true);
   });
   it('requires nonblank values only for host-required fields', () => {
-    const data = parseCompanionProfileData({ ...raw(), actions: [{ ...raw().actions[0], fields: [{ id: 'name', kind: 'text', label: 'Name', required: true }] }] }, ref);
-    expect(profileFormValid(data.panels[0], { name: '  ' })).toBe(false);
-    expect(profileFormValid(data.panels[0], { name: 'Nova' })).toBe(true);
+    const source = raw();
+    const data = parseCompanionProfileData({
+      ...source,
+      actions: [{ ...source.actions[0], fields: [
+        { id: 'name', kind: 'text', label: 'Name', required: true },
+        { id: 'enabled', kind: 'toggle', label: 'Enabled', required: true },
+      ] }],
+      blocks: [{ ...source.blocks[0], data: { ...source.blocks[0].data, values: { name: 'Cindy', enabled: false } } }],
+    }, ref);
+    expect(profileFormValid(data.panels[0], { name: '  ', enabled: false })).toBe(false);
+    expect(profileFormValid(data.panels[0], { name: 'Nova' })).toBe(false);
+    expect(profileFormValid(data.panels[0], { name: 'Nova', enabled: false })).toBe(true);
+    expect(profileFormValid(data.panels[0], { name: 'Nova', enabled: true })).toBe(true);
   });
   it('keeps legacy hosts read-only and rejects wrong resource identities', () => {
     expect(parseCompanionProfileData({ ...raw(), actions: undefined, blocks: undefined }, ref).panels).toEqual([]);

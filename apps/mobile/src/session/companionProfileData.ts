@@ -131,6 +131,11 @@ export function profileFormDirty(panel: ProfilePanel | undefined, values: Profil
 
 /** Required host fields must be complete before autosave or navigation may submit the draft. */
 export function profileFormValid(panel: ProfilePanel | undefined, values: ProfileValues): boolean {
-  return !!panel?.action && (panel.action.fields ?? []).every(field => !field.required
-    || (field.kind === 'toggle' ? typeof values[field.id] === 'boolean' : typeof values[field.id] === 'string' && values[field.id].trim().length > 0));
+  return !!panel?.action && (panel.action.fields ?? []).every(field => {
+    if (!field.required) return true;
+    const value = values[field.id];
+    return field.kind === 'toggle'
+      ? typeof value === 'boolean'
+      : typeof value === 'string' && value.trim().length > 0;
+  });
 }
