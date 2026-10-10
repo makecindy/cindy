@@ -48,6 +48,7 @@ function harness(options: {
     resolveMembers: async () => [],
     listCandidates: async () => [],
     readDeviceCatalog: async () => [],
+    memberLabel: (m) => m.label ?? m.key,
     invalidate: vi.fn(),
   };
   const router = createProviderGroupRouter({

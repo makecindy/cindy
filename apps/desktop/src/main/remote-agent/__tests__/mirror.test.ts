@@ -103,42 +103,83 @@ describe('collectAncestorInstructionFiles', () => {
   });
 });
 
+/** 目录链接：Windows 用 junction(不需要管理员权限)。 */
+function linkDir(target: string, link: string): void {
+  fs.mkdirSync(path.dirname(link), { recursive: true });
+  fs.symlinkSync(target, link, process.platform === 'win32' ? 'junction' : 'dir');
+}
+
+/** 文件链接：没有权限创建时返回 false(没开开发者模式的 Windows)。 */
+function linkFile(target: string, link: string): boolean {
+  try {
+    fs.symlinkSync(target, link, 'file');
+    return true;
+  } catch (error) {
+    if (['EPERM', 'EACCES', 'ENOTSUP'].includes((error as NodeJS.ErrnoException).code ?? '')) return false;
+    throw error;
+  }
+}
+
+function decode(files: Array<{ path: string; data: string }>): Record<string, string> {
+  return Object.fromEntries(files.map((file) => [file.path, Buffer.from(file.data, 'base64').toString()]));
+}
+
 describe('collectProjectInstructionFiles', () => {
-  it('rejects directory links so a checkout cannot smuggle files from outside the project', async () => {
+  it('follows directory links the way the Agent does on this computer', async () => {
     const project = path.join(root, 'proj');
-    const outside = path.join(root, 'outside');
+    const shared = path.join(root, 'shared-skills', 'deploy');
     write(path.join(project, 'CLAUDE.md'), 'real rules');
-    write(path.join(outside, 'SKILL.md'), 'secret leak');
-    fs.mkdirSync(path.join(project, '.claude', 'skills'), { recursive: true });
-    // Windows junction 不需要文件 symlink 的管理员权限，目录越界检查仍实跑。
-    fs.symlinkSync(outside, path.join(project, '.claude', 'skills', 'leak'), process.platform === 'win32' ? 'junction' : 'dir');
-    const files = await collectProjectInstructionFiles(project);
-    expect(files.map((file) => file.path)).toEqual(['CLAUDE.md']);
-    expect(files.map((file) => Buffer.from(file.data, 'base64').toString())).toEqual(['real rules']);
+    write(path.join(shared, 'SKILL.md'), 'deploy skill');
+    write(path.join(shared, 'scripts', 'run.sh'), 'echo deploy');
+    linkDir(shared, path.join(project, '.claude', 'skills', 'deploy'));
+    expect(decode(await collectProjectInstructionFiles(project))).toEqual({
+      'CLAUDE.md': 'real rules',
+      '.claude/skills/deploy/SKILL.md': 'deploy skill',
+      '.claude/skills/deploy/scripts/run.sh': 'echo deploy',
+    });
   });
 
-  it('rejects file symlinks when the filesystem supports creating them', async (context) => {
+  it('follows file links when the filesystem supports creating them', async (context) => {
     const project = path.join(root, 'proj');
-    const outside = path.join(root, 'outside');
-    write(path.join(project, 'CLAUDE.md'), 'real rules');
-    write(path.join(outside, 'leak.md'), 'secret leak');
-    write(path.join(outside, '.env'), 'SECRET=1');
-    fs.mkdirSync(path.join(project, '.claude', 'skills'), { recursive: true });
-    // 实际探测文件 symlink 能力；有权限的 Windows 与 macOS/Linux 均保留真实覆盖。
-    try {
-      fs.symlinkSync(path.join(outside, '.env'), path.join(project, 'CLAUDE.local.md'), 'file');
-    } catch (error) {
-      if (['EPERM', 'EACCES', 'ENOTSUP'].includes((error as NodeJS.ErrnoException).code ?? '')) {
-        context.skip();
-        return;
-      }
-      throw error;
+    write(path.join(project, 'AGENTS.md'), 'shared rules');
+    if (!linkFile(path.join(project, 'AGENTS.md'), path.join(project, 'CLAUDE.md'))) {
+      context.skip();
+      return;
     }
-    fs.symlinkSync(path.join(outside, 'leak.md'), path.join(project, '.claude', 'skills', 'leak.md'));
-    const files = await collectProjectInstructionFiles(project);
-    expect(files.map((file) => file.path)).toEqual(['CLAUDE.md']);
-    const decoded = files.map((file) => Buffer.from(file.data, 'base64').toString());
-    expect(decoded).toEqual(['real rules']);
+    expect(decode(await collectProjectInstructionFiles(project))).toEqual({
+      'CLAUDE.md': 'shared rules',
+      'AGENTS.md': 'shared rules',
+    });
+  });
+
+  it('stops at a link back to its own parent and keeps a folder that two links share', async () => {
+    const project = path.join(root, 'proj');
+    const skills = path.join(project, '.claude', 'skills');
+    write(path.join(skills, 'a', 'SKILL.md'), 'a');
+    linkDir(skills, path.join(skills, 'loop'));
+    write(path.join(root, 'common', 'SKILL.md'), 'common');
+    linkDir(path.join(root, 'common'), path.join(skills, 'one'));
+    linkDir(path.join(root, 'common'), path.join(skills, 'two'));
+    expect(decode(await collectProjectInstructionFiles(project))).toEqual({
+      '.claude/skills/a/SKILL.md': 'a',
+      '.claude/skills/one/SKILL.md': 'common',
+      '.claude/skills/two/SKILL.md': 'common',
+    });
+  });
+
+  it('leaves credential files for later on a shared provider, judging links by their real target', async () => {
+    const project = path.join(root, 'proj');
+    write(path.join(project, 'CLAUDE.md'), 'rules');
+    write(path.join(project, '.claude', 'skills', 'deploy', 'SKILL.md'), 'deploy');
+    write(path.join(project, '.claude', 'skills', 'deploy', '.env'), 'TOKEN=1');
+    write(path.join(project, '.claude', 'settings.json'), JSON.stringify({ permissions: { allow: ['Bash(ls)'] } }));
+    write(path.join(root, 'outside', '.aws', 'credentials'), 'aws secret');
+    linkDir(path.join(root, 'outside', '.aws'), path.join(project, '.claude', 'skills', 'cloud'));
+    const own = decode(await collectProjectInstructionFiles(project));
+    expect(own['.claude/skills/deploy/.env']).toBe('TOKEN=1');
+    expect(own['.claude/skills/cloud/credentials']).toBe('aws secret');
+    const shared = decode(await collectProjectInstructionFiles(project, { skipCredentials: true }));
+    expect(Object.keys(shared).sort()).toEqual(['.claude/settings.json', '.claude/skills/deploy/SKILL.md', 'CLAUDE.md']);
   });
 });
 
@@ -167,6 +208,35 @@ describe('collectPersonalConfig', () => {
     expect(personal.permissions).toEqual({ allow: ['Bash(npm test:*)'], deny: ['Read(./.env)'], ask: [] });
     expect(JSON.stringify(personal)).not.toContain('SECRET');
     expect(roots).toContainEqual({ relative: '.claude/skills/mine', local: path.join(home, '.claude', 'skills', 'mine') });
+  });
+
+  it('follows personal Skills that are links, and a skills folder that is itself a link', async () => {
+    const home = path.join(root, 'home');
+    const dotfiles = path.join(root, 'dotfiles');
+    write(path.join(dotfiles, 'skills', 'git', 'SKILL.md'), 'git skill');
+    write(path.join(dotfiles, 'skills', 'git', 'reference.md'), 'git reference');
+    linkDir(path.join(dotfiles, 'skills', 'git'), path.join(home, '.claude', 'skills', 'git'));
+    const linked = await collectPersonalConfig('claude-code', [], { env: {}, home });
+    expect(decode(linked.personal.files)).toEqual({
+      '.claude/skills/git/SKILL.md': 'git skill',
+      '.claude/skills/git/reference.md': 'git reference',
+    });
+    expect(linked.roots).toEqual([{ relative: '.claude/skills/git', local: path.join(home, '.claude', 'skills', 'git') }]);
+
+    const stowed = path.join(root, 'stowed');
+    write(path.join(stowed, '.claude', 'CLAUDE.md'), 'personal memory');
+    linkDir(path.join(dotfiles, 'skills'), path.join(stowed, '.claude', 'skills'));
+    const whole = await collectPersonalConfig('claude-code', [], { env: {}, home: stowed });
+    expect(whole.personal.memory).toBe('personal memory');
+    expect(Object.keys(decode(whole.personal.files)).sort()).toEqual(['.claude/skills/git/SKILL.md', '.claude/skills/git/reference.md']);
+  });
+
+  it('leaves credential files in personal Skills for later on a shared provider', async () => {
+    const home = path.join(root, 'home');
+    write(path.join(home, '.claude', 'skills', 'deploy', 'SKILL.md'), 'deploy');
+    write(path.join(home, '.claude', 'skills', 'deploy', '.env'), 'TOKEN=1');
+    const { personal } = await collectPersonalConfig('claude-code', [], { env: {}, home, skipCredentials: true });
+    expect(decode(personal.files)).toEqual({ '.claude/skills/deploy/SKILL.md': 'deploy' });
   });
 
   it('honours CLAUDE_CONFIG_DIR and syncs nothing when there is no personal config', async () => {

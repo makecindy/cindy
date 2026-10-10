@@ -290,6 +290,7 @@
       "requestedAt": "{{time}} 공유 링크로 요청함",
       "pairingHint": "승인하기 전에 링크를 보낸 곳에서 “보이는 페어링 코드가 뭐예요?”라고 물어볼 수 있습니다. 일치하면 승인하세요.",
       "callout": "승인하면 {{name}}님이 자신의 세션에서 {{provider}} 모델을 사용할 수 있습니다. Agent는 이 컴퓨터에서 실행되고 사용량은 내 {{provider}}에 계산됩니다. ‘{{provider}} 공유’에서 언제든지 일시 중지하거나 삭제할 수 있습니다.",
+      "calloutClaudeEmail": "{{name}}님이 사용하는 동안 Agent가 Claude 로그인에 쓰는 내 이메일 주소를 볼 수 있습니다.",
       "calloutUnknown": "요청한 사람을 모른다면 거절하세요. 거절하면 이 링크는 더 이상 사용할 수 없습니다.",
       "approve": "공유 승인",
       "reject": "요청 거절",
@@ -298,7 +299,6 @@
     "apply": {
       "loading": "공유 링크를 읽는 중…",
       "askTitle": "{{name}}님이 {{provider}}을(를) 공유하려고 합니다",
-      "providerOnDevice": "{{provider}} · {{device}}",
       "factRuns": "Agent는 {{name}}님의 컴퓨터 또는 {{name}}님이 마련한 다른 컴퓨터에서 {{provider}}로 실행됩니다",
       "factRunsDetail": "사용량은 {{name}}님의 {{provider}}에 계산되며 {{name}}님이 내 사용량을 볼 수 있습니다",
       "factFiles": "프로젝트 파일과 명령은 계속 내 컴퓨터에서 실행됩니다",
@@ -384,9 +384,9 @@
       "needsUpdateNote": "상대방이 Cindy를 업데이트해야 이 공유를 사용할 수 있습니다."
     },
     "picker": {
-      "deviceName": "{{device}} · {{owner}}님의 공유",
       "unavailable": "사용할 수 없는 공유",
-      "hostOutdated": "공유한 사람의 컴퓨터에 있는 Cindy 버전이 오래되어 이 모델을 불러올 수 없습니다. 상대방에게 Cindy를 업데이트해 달라고 한 뒤 다시 시도하세요."
+      "hostOutdated": "공유한 사람의 컴퓨터에 있는 Cindy 버전이 오래되어 이 모델을 불러올 수 없습니다. 상대방에게 Cindy를 업데이트해 달라고 한 뒤 다시 시도하세요.",
+      "numbered": "{{name}} ({{index}})"
     },
     "notification": {
       "requestTitle": "새 공유 요청",
@@ -439,6 +439,8 @@
       "local": "이 컴퓨터",
       "sourceDevice": "내 다른 컴퓨터",
       "sourceShare": "{{name}}님의 공유",
+      "shareComputer": "{{name}}님의 컴퓨터",
+      "shareComputerUnknown": "공유된 컴퓨터",
       "runningCount_other": "{{count}}개 실행 중",
       "limitAria": "{{name}}의 동시 실행 한도",
       "limitOption_other": "한도 {{count}}",
@@ -8592,7 +8594,18 @@
         "workdirUnavailable": "{{name}} 님이 작업 디렉터리를 찾지 못했습니다",
         "stepFailed": "{{name}} 님이 오류로 이 단계를 끝내지 못했습니다",
         "stepTimeout": "{{name}} 님의 작업이 너무 오래 걸려 이 단계를 멈췄습니다",
-        "stepUnavailable": "{{name}} 님을 지금 사용할 수 없어 이 단계를 진행할 수 없습니다"
+        "stepUnavailable": "{{name}} 님을 지금 사용할 수 없어 이 단계를 진행할 수 없습니다",
+        "runtimeFailure": {
+          "IMAGE_INPUT_UNSUPPORTED": "{{name}}이(가) 답변하지 못했습니다. 현재 모델은 이미지를 지원하지 않습니다.\n이미지 지원 모델로 전환하거나 설정 → 개인화 → 비전 브리지에서 비전 모델을 활성화하고 설정한 뒤 메시지를 다시 보내세요.",
+          "MODEL_UNAVAILABLE": "{{name}}이(가) 답변하지 못했습니다. 사용 가능한 모델이 없습니다.\n동료 설정에서 연결된 사용 가능한 모델을 선택한 뒤 메시지를 다시 보내세요.",
+          "AUTH_REQUIRED": "{{name}}이(가) 답변하지 못했습니다. 모델 연결에 재인증이 필요합니다.\n설정에서 모델 제공자에 다시 연결한 뒤 메시지를 다시 보내세요.",
+          "RATE_LIMITED": "{{name}}이(가) 답변하지 못했습니다. 모델 요청이 너무 많습니다.\n잠시 후 메시지를 다시 보내거나 다른 사용 가능한 모델을 선택하세요.",
+          "UPSTREAM_OVERLOADED": "{{name}}이(가) 답변할 수 없습니다. 모델 서비스가 일시적으로 혼잡합니다.\n잠시 후 메시지를 다시 보내거나 다른 사용 가능한 모델을 선택해 주세요.",
+          "QUOTA_EXCEEDED": "{{name}}이(가) 답변하지 못했습니다. 모델 사용량 한도에 도달했습니다.\n제공자의 할당량을 확인하거나 다른 사용 가능한 모델을 선택하세요.",
+          "NETWORK_ERROR": "{{name}}이(가) 답변하지 못했습니다. 네트워크 연결에 실패했습니다.\n네트워크나 프록시를 확인한 뒤 메시지를 다시 보내세요.",
+          "RUNTIME_TIMEOUT": "{{name}}의 답변 시간이 초과되었습니다.\n메시지를 다시 보내거나 다른 사용 가능한 모델을 선택하세요.",
+          "RUNTIME_ERROR": "{{name}}이(가) 이번에는 답변하지 못했습니다.\n메시지를 다시 보내세요. 계속 실패하면 로그를 확인하고 문제를 신고하세요."
+        }
       },
       "settings": {
         "open": "그룹 설정",
@@ -9407,7 +9420,9 @@
         "railSameEngine": "{{agent}} 전용",
         "crossEngineWarning": "엔진을 전환하면 컨텍스트가 다시 구성되어 내용이 사라질 수 있습니다",
         "favoritesSyncFailed": "즐겨찾기를 동기화할 수 없습니다. 선택 화면을 다시 여세요. 원격 컴퓨터를 업데이트해야 할 수 있습니다.",
-        "railRemoteProviderGroup": "{{provider}} · {{device}} · 제공자 그룹"
+        "railRemoteProviderGroup": "{{provider}} · {{device}} · 제공자 그룹",
+        "groupNote_other": "제공자 그룹 · 컴퓨터 {{count}}대",
+        "groupNoteMembers_other": "제공자 그룹 · 컴퓨터 {{count}}대: {{names}}"
       }
     },
     "permissionSelector": {
@@ -9736,6 +9751,9 @@
       "editTitle": "붙여넣은 텍스트 편집",
       "cancelEdit": "편집 취소",
       "saveEdit": "텍스트 저장"
+    },
+    "sharedProviderCredential": {
+      "description": "이 작업은 공유받은 제공자를 사용하므로 Agent가 읽은 내용이 공유한 사람의 컴퓨터를 거칩니다. 이 단계는 자격 증명 파일(키, .env 등)과 관련되어 있어 확인한 후에 계속됩니다."
     },
     "mediaDownload": {
       "title": "생성된 미디어를 다운로드할까요?",

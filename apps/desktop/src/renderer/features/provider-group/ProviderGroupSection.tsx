@@ -37,6 +37,7 @@ import {
   type ProviderGroupMemberStatus,
   type ProviderGroupStrategy,
 } from '../../../shared/providerGroup';
+import { providerShareComputerName, useProviderShareOwnerNameOf } from '../provider-share/providerShareNames';
 import { ProviderGroupAddDialog } from './ProviderGroupAddDialog';
 import { useProviderGroup } from './useProviderGroup';
 
@@ -232,12 +233,19 @@ function MemberRow({
   onRemove: (label: string) => void;
 }) {
   const { t, i18n } = useTranslation();
-  const label = member.kind === 'local' ? t('providerGroup.member.local') : (status?.label ?? member.label ?? member.key);
+  const ownerNameOf = useProviderShareOwnerNameOf();
+  // 分享来的电脑只用分享者的昵称称呼，不用电脑名(provider-sharing.md §6)。
+  const ownerName = member.kind === 'share' ? (status?.ownerName ?? ownerNameOf(member.agentDeviceId)) : null;
+  const label = member.kind === 'local'
+    ? t('providerGroup.member.local')
+    : member.kind === 'share'
+      ? providerShareComputerName(t, ownerName)
+      : (status?.label ?? member.label ?? member.key);
   const source = member.kind === 'local'
     ? status?.label
     : member.kind === 'device'
       ? t('providerGroup.member.sourceDevice')
-      : t('providerGroup.member.sourceShare', { name: status?.ownerName ?? '' });
+      : t('providerGroup.member.sourceShare', { name: ownerName ?? '' });
   const ready = status?.state === 'available' || status?.state === 'full';
   const running = status?.running ?? 0;
   // 能用的时候状态词本身就报负载(「空闲」/「N 个任务运行中」)，所以每行永远看得出这台现在跑了几个；

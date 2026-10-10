@@ -6,7 +6,8 @@
  * `codex exec-server --listen stdio://`，命令、读写文件、补丁都在本机执行。
  *
  * 每个请求转给 exec-server 之前先过本机权限上限(与 Claude Code / Pi 同一个闸门)：
- * 凭证类路径与高危命令只认本机用户批准过的同一操作；不通过就直接回 JSON-RPC 错误。
+ * 凭证类路径与高危命令只认本机用户批准过的同一操作；不通过就直接回 JSON-RPC 错误。供应商分享的
+ * 受邀者任务里，凭证类操作没有批准时先在本机弹确认卡，等待期间这条连接后面的消息排在它后面。
  */
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import path from 'node:path';
@@ -35,6 +36,8 @@ export interface ExecServerRelayDeps {
   cwd: string;
   workspace: ExecutorWorkspace;
   authorize(action: ExecutorAction): ExecutorGateDecision;
+  /** 凭证类操作在本机补问(供应商分享的受邀者任务)；允许后再 authorize 一次即放行。 */
+  confirm?(action: ExecutorAction): Promise<boolean>;
   push(frames: RemoteAgentPushFrame[]): Promise<void>;
   env?: NodeJS.ProcessEnv;
   log?: { warn(message: string, meta?: Record<string, unknown>): void };
@@ -44,6 +47,8 @@ interface Connection {
   child: ChildProcessWithoutNullStreams;
   buffer: string;
   closed: boolean;
+  /** 有消息在等本机确认时，后面的消息按顺序排在它后面。 */
+  queue?: Promise<void>;
 }
 
 /** `["/bin/zsh","-lc","cmd"]` → `cmd`；其它形态按空格拼接。 */
@@ -226,21 +231,61 @@ export class ExecServerRelay {
     } catch {
       message = null;
     }
+    let actions: ExecutorAction[] = [];
     if (message && typeof message.method === 'string' && message.id !== undefined) {
       message.params = mapExecServerParams(message.params, this.deps.workspace, message.method);
       data = JSON.stringify(message);
-      for (const action of execServerActions(message.method, message.params, this.deps.cwd)) {
-        const decision = this.deps.authorize(action);
-        if (!decision.ok) {
-          this.sendMessage(connId, JSON.stringify({
-            id: message.id,
-            error: { code: -32001, message: this.deps.workspace.mapTextForAgent(decision.reason ?? 'Not allowed in this workspace.') },
-          }));
-          return;
-        }
+      actions = execServerActions(message.method, message.params, this.deps.cwd);
+    }
+    const id = message?.id;
+    const line = `${data}\n`;
+    if (connection.queue) {
+      this.enqueue(connection, () => this.deliver(connId, connection, id, line, actions));
+      return;
+    }
+    for (const [index, action] of actions.entries()) {
+      const decision = this.deps.authorize(action);
+      if (decision.ok) continue;
+      if (!this.deps.confirm) {
+        this.reject(connId, id, decision);
+        return;
+      }
+      // 等本机用户确认(凭证类)：这一条与之后的消息都按顺序等它。已放行的操作不再检查(批准只能用一次)。
+      const rest = actions.slice(index);
+      this.enqueue(connection, () => this.deliver(connId, connection, id, line, rest));
+      return;
+    }
+    connection.child.stdin.write(line);
+  }
+
+  private enqueue(connection: Connection, task: () => Promise<void>): void {
+    const next = (connection.queue ?? Promise.resolve()).then(task).catch((error: unknown) => {
+      this.deps.log?.warn('remote agent: exec-server message failed', { error: String(error) });
+    });
+    connection.queue = next;
+    void next.then(() => {
+      if (connection.queue === next) connection.queue = undefined;
+    });
+  }
+
+  private async deliver(connId: string, connection: Connection, id: unknown, line: string, actions: ExecutorAction[]): Promise<void> {
+    for (const action of actions) {
+      let decision = this.deps.authorize(action);
+      if (!decision.ok && this.deps.confirm && await this.deps.confirm(action)) decision = this.deps.authorize(action);
+      if (connection.closed) return;
+      if (!decision.ok) {
+        this.reject(connId, id, decision);
+        return;
       }
     }
-    connection.child.stdin.write(`${data}\n`);
+    if (!connection.closed) connection.child.stdin.write(line);
+  }
+
+  private reject(connId: string, id: unknown, decision: ExecutorGateDecision): void {
+    this.sendMessage(connId, JSON.stringify({
+      id,
+      error: { code: -32001, message: this.deps.workspace.mapTextForAgent(decision.reason ?? 'Not allowed in this workspace.') },
+    }));
   }
 
   private projectOutbound(line: string): string {

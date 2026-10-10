@@ -312,7 +312,10 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
           exclude: [...exclude],
         });
         if (pick.kind !== 'member') return { kind: pick.kind };
-        const labelOf = (key: string) => config.members.find((m) => m.key === key)?.label;
+        const labelOf = (key: string) => {
+          const found = config.members.find((m) => m.key === key);
+          return found ? deps.directory.memberLabel(found) || undefined : undefined;
+        };
         // 组设置以组所在电脑为准；本机读到的那份可能稍旧，缺的组员按回包补齐。
         const member = config.members.find((m) => m.key === pick.member.key)
           ?? { ...pick.member, limit: 1, weight: 1, paused: false };
@@ -593,7 +596,8 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
     const tried = router.markTried(sessionId, current.key);
     // 换回本机时：原本就在本机的保留原来的来源写法(可能是隐式来源)，否则用组所属的供应商。
     const localProviderId = current.kind === 'local' ? row.providerId : binding.providerId;
-    let fromLabel = current.label ?? current.key;
+    // 分享来的电脑用分享者的昵称(不用电脑名)；读不到时为空，活动记录退回不写电脑的说法。
+    let fromLabel = deps.directory.memberLabel(current);
 
     for (;;) {
       if (!isCurrent()) return;

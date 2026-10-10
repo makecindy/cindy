@@ -25,6 +25,7 @@ import { useTranslation } from 'react-i18next';
 import { resolveRemoteText } from '@cindy/device-link';
 import {
   BOT_GROUP_REMOTE_COLLECTION_ID,
+  isBotGroupRuntimeFailureCode,
   type BotGroupAttachment,
   type BotGroupMemberView,
   type BotGroupMessageView,
@@ -458,6 +459,11 @@ function BotGroupTimelineItem({
   if (message.kind === 'plan-end') return <BotGroupPlanEndDivider stepCount={plan ? plan.steps.length : null} />;
   if (message.kind === 'notice' || message.authorKind === 'system') {
     const name = message.authorName.trim() || member?.name || '';
+    if (isBotGroupRuntimeFailureCode(message.runtimeFailureCode)) {
+      return <Text style={styles.runtimeFailureNotice} testID="botGroup.notice">{
+        `${t(`groupChat.notice.runtimeFailure.${message.runtimeFailureCode}`, { name })}\n${t('groupChat.notice.runtimeFailureSetupHint')}`
+      }</Text>;
+    }
     const variant = botGroupNoticeVariant(message.noticeCode, message.planId !== null);
     return <Text style={styles.notice} testID="botGroup.notice">{variant ? t(`groupChat.notice.${variant}`, { name }) : message.content}</Text>;
   }
@@ -521,6 +527,8 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   olderNote: { color: colors.textTertiary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption, textAlign: 'center' },
   time: { color: colors.textTertiary, fontSize: typeScale.caption, lineHeight: lineHeight.caption, textAlign: 'center' },
   notice: { color: colors.textTertiary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption, textAlign: 'center' },
+  runtimeFailureNotice: { color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption,
+    fontWeight: fontWeight.regular, textAlign: 'center' },
   dividerText: { flexShrink: 1, color: colors.textTertiary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption, textAlign: 'center' },
   userRow: { flexDirection: 'row', justifyContent: 'flex-end' },
   // Full width so the bubble keeps its 86% cap and attachments their own size limits.

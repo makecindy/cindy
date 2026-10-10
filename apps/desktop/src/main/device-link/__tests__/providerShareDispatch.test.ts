@@ -211,12 +211,31 @@ describe('provider share invoke', () => {
     expect(projected.providers[0]).not.toHaveProperty('group');
     expect(JSON.stringify(projected)).not.toContain('Mini');
   });
+
+  it('tells the guest only how many computers the group has', () => {
+    const sharedGroupSize = vi.fn((providerId: string) => (providerId === 'anthropic' ? 3 : null));
+    setProviderGroupRemoteHandler({ handle: vi.fn(), decorateProviderList: (result) => result, sharedGroupSize });
+    const projected = __testing.projectProviderListForShare({
+      providers: [{
+        id: 'anthropic', name: 'Anthropic', remoteInvocationEnabled: true, groupSize: 99,
+        group: { strategy: 'least', autoSwitch: true, members: [{ key: 'device:mini:a', kind: 'device', agentDeviceId: 'mini', providerId: 'a', label: 'Mini' }] },
+      }],
+    }, 'anthropic') as { providers: Array<Record<string, unknown>> };
+    // 台数只来自本机的组设置，目录里原有的值不算；组内电脑名单照旧不给。
+    expect(projected.providers[0]).toEqual({ id: 'anthropic', name: 'Anthropic', remoteInvocationEnabled: true, groupSize: 3 });
+    expect(sharedGroupSize).toHaveBeenCalledWith('anthropic');
+
+    const ungrouped = __testing.projectProviderListForShare({
+      providers: [{ id: 'openai', name: 'OpenAI', remoteInvocationEnabled: true, groupSize: 2 }],
+    }, 'openai') as { providers: Array<Record<string, unknown>> };
+    expect(ungrouped.providers[0]).not.toHaveProperty('groupSize');
+  });
 });
 
 describe('provider group channel', () => {
   it('serves same-account computers only', async () => {
     const handle = vi.fn(async () => ({ kind: 'none' }));
-    setProviderGroupRemoteHandler({ handle, decorateProviderList: (result) => result });
+    setProviderGroupRemoteHandler({ handle, decorateProviderList: (result) => result, sharedGroupSize: () => null });
     await expect(runInvoke('same-account-mac', { channel: 'provider-group:remote', args: [{ action: 'view', providerId: 'anthropic' }] }))
       .resolves.toEqual({ ok: true, result: { kind: 'none' } });
     expect(handle).toHaveBeenCalledWith('same-account-mac', { action: 'view', providerId: 'anthropic' });

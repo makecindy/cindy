@@ -6,6 +6,7 @@ import { app, BrowserWindow, ipcMain, Notification } from 'electron';
 
 import {
   PROVIDER_SHARE_LINK_TTL_MS,
+  PROVIDER_SHARE_NEUTRAL_DEVICE_NAME,
   PROVIDER_SHARE_RECEIVED_CATALOGS_CHANNEL,
   parseProviderSharePeer,
   scrubProviderShareLabel,
@@ -35,7 +36,6 @@ import { currentLedgerCurrency } from '../usage/ledgerCurrency.js';
 import { getGatewayModelPricing, getModelPriceQuote } from '../usage/modelPricing.js';
 import { computePriceQuoteTurnMoney, normalizeModelIdForPricing } from '../usage/turnCostCalculator.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
-import { deviceName } from './deviceName.js';
 import { providerShareActiveControllers, revokeProviderShareControllers, setProviderShareAccess } from './dispatch.js';
 import { getDeviceLinkInvokeContext } from './invoke-context.js';
 import { fetchIdentityCard, providerShareApi, providerShareLinkFor, sha256Hex } from './providerShareApi.js';
@@ -306,7 +306,8 @@ async function createLink(providerId: string): Promise<ProviderShareLinkCreated>
     providerId,
     // 名称可能自动带上登录身份(如「OpenAI · 邮箱」)，分享出去前去掉。
     providerLabel: scrubProviderShareLabel(provider.name, [provider.subscriptionAccount?.identity, provider.openAiAccount?.identity], provider.id),
-    deviceName: deviceName(),
+    // 电脑名不给受邀者(provider-sharing.md §6)：字段必填(旧版受邀者按必填解析)，填固定占位。
+    deviceName: PROVIDER_SHARE_NEUTRAL_DEVICE_NAME,
     identityCard,
   });
   markProviderShareHostActive();
@@ -392,7 +393,8 @@ async function receivedCatalogs(args: unknown[]): Promise<{ shares: ProviderShar
         shareId: share.shareId,
         providerId: share.providerId,
         providerLabel: share.providerLabel,
-        deviceName: share.deviceName,
+        // 服务端存着旧链接里分享者的电脑名，不转给手机；旧版手机仍按必填解析，填占位。
+        deviceName: PROVIDER_SHARE_NEUTRAL_DEVICE_NAME,
         owner: { displayName: share.owner.displayName, avatarUrl: share.owner.avatarUrl },
         status: share.status,
         hostOnline: share.hostOnline,

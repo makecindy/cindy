@@ -1267,8 +1267,9 @@ export function ChatInput({
   /**
    * 远程控制的被控电脑上的任务(已建任务,或建到被控电脑的新任务草稿),Agent 同样可以在第三台电脑
    * 运行(与手机同一套)。调用方只在被控电脑支持时才传 remoteAgentDevices;SSH 任务与共享任务访客
-   * 不走这条。已建任务里 Agent 现在或挂着的位置是本机读不到目录的地方(被控电脑收到的分享 / 本机
-   * 自己)时,维持原有的被控电脑列表;草稿的落点只会是 remoteAgentDevices 里的电脑。
+   * 不走这条。已建任务里 Agent 现在或挂着的位置是本机读不到目录的地方(本机没收到的分享 / 本机
+   * 自己)时,维持原有的被控电脑列表;草稿的落点只会是 remoteAgentDevices 里的电脑。分享只有在
+   * 调用方确认本机也收到、放进了 remoteAgentDevices 时才算读得到。
    */
   const deviceLinkAgentLocation =
     !!deviceLinkDeviceId &&
@@ -1280,6 +1281,7 @@ export function ChatInput({
         agentDeviceId: _agentDeviceId,
         pendingAgentDeviceId: makerChatStore.getAgentSwitchIntent(sessionId)?.agentDeviceId,
         selfDeviceId,
+        readableShareIds: new Set(remoteAgentDevices.map((device) => device.deviceId)),
       }));
   /** 这个任务的 Agent 位置由本机呈现与切换:本机任务,或上面那种被控电脑上的任务。 */
   const agentLocationAware = !deviceLinkDeviceId || deviceLinkAgentLocation;

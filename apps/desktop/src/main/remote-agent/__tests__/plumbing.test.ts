@@ -9,8 +9,9 @@ import WebSocket from 'ws';
 import { mapClaudeHostedEvent } from '../controller/eventMap';
 import { execServerActions, execServerCommand } from '../controller/execServerRelay';
 import { collectProjectInstructionFiles } from '../controller/projectFiles';
-import { approvalActionsFor, innerShellScript } from '../controller/proxyHandle';
-import { takeGroupSwitchState } from '../controller/startRemote';
+import { approvalActionsFor, createRemoteAgentHandle, innerShellScript } from '../controller/proxyHandle';
+import type { RemoteAgentRunClient } from '../controller/runClient';
+import { credentialConfirmation, takeGroupSwitchState } from '../controller/startRemote';
 import { EventLog, LineSplitter } from '../eventLog';
 import { ExecutorWorkspace } from '../executor/workspace';
 import { createRunTunnel } from '../host/tunnel';
@@ -114,6 +115,45 @@ describe('tunnel', () => {
   });
 });
 
+describe('confirmations raised on this computer', () => {
+  it('use the Agent confirmation channel and accept only a one-time allow', async () => {
+    let next = 0;
+    const controller = createRemoteAgentHandle({
+      client: {} as RemoteAgentRunClient,
+      started: { id: 'sdk-1', agentKind: 'claude-code', model: 'm', shadowDir: '', methods: [], state: {} },
+      workspace: new ExecutorWorkspace({ workingDir: root }),
+      recordApproval: () => undefined,
+      newId: () => `req-${(next += 1)}`,
+      dispose: async () => undefined,
+    });
+    const env = path.join(root, '.env');
+    const request = credentialConfirmation({ kind: 'read', path: env }, 'goes through the sharer');
+    // 交互还没接上：按拒绝处理。
+    expect(await controller.confirm(request)).toBe(false);
+    const seen: unknown[] = [];
+    let behavior: 'allow' | 'deny' = 'allow';
+    controller.handle.setInteractionResolver(async (incoming) => {
+      seen.push(incoming);
+      return { kind: 'permission', behavior };
+    });
+    expect(await controller.confirm(request)).toBe(true);
+    expect(seen).toEqual([{
+      kind: 'permission',
+      requestId: 'req-1',
+      toolName: 'Read',
+      input: { file_path: env },
+      description: 'goes through the sharer',
+      metadata: { hostOwnedConfirmation: 'shared_provider_credential' },
+    }]);
+    behavior = 'deny';
+    expect(await controller.confirm(request)).toBe(false);
+    expect(credentialConfirmation({ kind: 'exec', command: 'cat .env', cwd: root }, 'x')).toMatchObject({
+      toolName: 'Bash',
+      input: { command: 'cat .env' },
+    });
+  });
+});
+
 describe('exec-server relay gate', () => {
   it('maps exec-server requests to the actions checked on this computer', () => {
     expect(execServerCommand(['/bin/zsh', '-lc', 'echo hi'])).toBe('echo hi');
@@ -140,6 +180,10 @@ describe('exec-server relay gate', () => {
     expect(approvalActionsFor({
       kind: 'permission', requestId: 'r', toolName: 'Edit', input: { file_path: 'src/a.ts' },
     }, workspace)).toEqual([{ kind: 'write', path: path.join(root, 'src/a.ts') }]);
+    // 受邀者任务里本机提供的 WebFetch：登记批准过的地址。
+    expect(approvalActionsFor({
+      kind: 'permission', requestId: 'r', toolName: 'mcp__cindy_exec__WebFetch', input: { url: ' http://10.0.0.5/wiki ', prompt: 'x' },
+    }, workspace)).toEqual([{ kind: 'fetch', url: 'http://10.0.0.5/wiki' }]);
     expect(approvalActionsFor({ kind: 'ask_user_question', requestId: 'r', questions: [] }, workspace)).toEqual([]);
   });
 });
@@ -233,6 +277,8 @@ describe('event mapping and project files', () => {
   it('shows the built-in tool names for Claude Code tools that run on this computer', () => {
     expect(mapClaudeHostedEvent({ type: 'tool_use', data: { toolName: 'mcp__cindy_exec__Bash', input: {} } }).data)
       .toEqual({ toolName: 'Bash', input: {} });
+    expect(mapClaudeHostedEvent({ type: 'tool_use', data: { toolName: 'mcp__cindy_exec__WebFetch', input: { url: 'https://a.b' } } }).data)
+      .toEqual({ toolName: 'WebFetch', input: { url: 'https://a.b' } });
     expect(mapClaudeHostedEvent({ type: 'tool_use', data: { toolName: 'mcp__cindy_memory__x' } }).data)
       .toEqual({ toolName: 'mcp__cindy_memory__x' });
   });

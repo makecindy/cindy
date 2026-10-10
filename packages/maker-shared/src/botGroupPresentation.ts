@@ -7,6 +7,7 @@ import {
   isBotGroupPlanOpen,
   type BotGroupDetail,
   type BotGroupErrorCode,
+  type BotGroupExecutionFailureView,
   type BotGroupMemberView,
   type BotGroupMessageView,
   type BotGroupNoticeCode,
@@ -60,15 +61,42 @@ export function continuableRoundEndId(
   return null;
 }
 
-/** Merge an older page under the latest page, keyed by sequence. */
+/** Merge real message pages; current execution state never enters the page cache. */
 export function mergeBotGroupMessages(
   older: readonly BotGroupMessageView[],
   latest: readonly BotGroupMessageView[],
 ): BotGroupMessageView[] {
   const bySequence = new Map<number, BotGroupMessageView>();
-  for (const message of older) bySequence.set(message.sequence, message);
-  for (const message of latest) bySequence.set(message.sequence, message);
+  for (const message of [...older, ...latest]) bySequence.set(message.sequence, message);
   return [...bySequence.values()].sort((a, b) => a.sequence - b.sequence);
+}
+
+/** Bound each HTTP reconciliation request to 100 displayed sources, without truncating loaded history. */
+export function botGroupExecutionFailureBatches(sourceIds: readonly string[]): string[][] {
+  const unique = [...new Set(sourceIds)];
+  const batches: string[][] = [];
+  for (let offset = 0; offset < unique.length; offset += 100) batches.push(unique.slice(offset, offset + 100));
+  return batches;
+}
+
+/** Derive notices once, after pagination, from the latest authorized execution snapshot. */
+export function projectBotGroupExecutionFailures(
+  messages: readonly BotGroupMessageView[],
+  failures: readonly BotGroupExecutionFailureView[] = [],
+): BotGroupMessageView[] {
+  const bySource = new Map<string, BotGroupExecutionFailureView[]>();
+  for (const failure of failures) {
+    const entries = bySource.get(failure.sourceMessageId) ?? [];
+    entries.push(failure);
+    bySource.set(failure.sourceMessageId, entries);
+  }
+  return messages.flatMap(source => [source, ...(source.deleted ? [] : bySource.get(source.id) ?? []).map((failure): BotGroupMessageView => ({
+    id: `execution-failure:${failure.executionId}:${failure.epoch}`, sequence: source.sequence,
+    kind: 'notice', authorKind: 'system', authorBotId: failure.botId, authorName: failure.botName,
+    content: '', noticeCode: failure.code === 'RUNTIME_TIMEOUT' ? 'member-timeout' : 'member-failed',
+    runtimeFailureCode: failure.code, mentions: { all: false, botIds: [] }, planId: failure.planId,
+    threadRootId: source.threadRootId ?? null, files: [], attachments: [], createdAt: failure.updatedAt ?? source.createdAt,
+  }))]);
 }
 
 /** Copy variant for a refused group action; null keeps the caller's own fallback. */

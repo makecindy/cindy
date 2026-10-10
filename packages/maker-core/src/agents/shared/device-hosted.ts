@@ -102,6 +102,11 @@ export function deviceHostedPiMcpBridge(hosted: DeviceHostedSession): NonNullabl
 export const DEVICE_HOSTED_EXEC_MCP_SERVER = 'cindy_exec';
 /** 顶替的工具名(与自带工具同名)。 */
 export const DEVICE_HOSTED_EXEC_TOOL_NAMES = ['Bash', 'BashOutput', 'KillShell', 'Read', 'Write', 'Edit', 'NotebookEdit'] as const;
+/**
+ * 只在受邀者会话里由任务所在电脑提供的顶替工具：自带的 WebFetch 对受邀者关闭，改在受邀者电脑上
+ * 抓取。受邀者电脑上的 Cindy 较旧时不提供，所以不写进给模型的说明，只用于权限按自带工具判定。
+ */
+export const DEVICE_HOSTED_GUEST_EXEC_TOOL_NAMES = ['WebFetch'] as const;
 /** 设备托管时关掉的 Claude Code 自带工具：它们只能操作本机，项目不在这里。 */
 export const DEVICE_HOSTED_DISALLOWED_CLAUDE_TOOLS = [
   'Bash', 'BashOutput', 'KillShell', 'Read', 'Write', 'Edit', 'MultiEdit', 'NotebookEdit',
@@ -114,7 +119,7 @@ export const DEVICE_HOSTED_DISALLOWED_CLAUDE_TOOLS = [
  * 开放给受邀者。Agent 程序以本机用户的身份在本机运行，其余自带工具都直接作用于本机或本机
  * 用户：其他会话(ListAgents / SendMessage)、本机用户的 claude.ai 账号(Artifact、
  * RemoteTrigger、DesignSync 等)、本机文件与命令(Monitor、SendUserFile 等)、本机网络(WebFetch)。
- * 文件与命令由 cindy_exec 回到受邀者电脑执行(MCP 工具不受 `tools` 限制)。
+ * 文件、命令与 WebFetch 由 cindy_exec 回到受邀者电脑执行(MCP 工具不受 `tools` 限制)。
  */
 export const DEVICE_HOSTED_GUEST_CLAUDE_TOOLS = [
   // 子代理。隔离选项另由 deviceHostedGuestAgentDenial 拦下。
@@ -146,7 +151,10 @@ const EXEC_PREFIX = `mcp__${DEVICE_HOSTED_EXEC_MCP_SERVER}__`;
 export function deviceHostedBuiltinToolName(toolName: string): string | null {
   if (!toolName.startsWith(EXEC_PREFIX)) return null;
   const name = toolName.slice(EXEC_PREFIX.length);
-  return (DEVICE_HOSTED_EXEC_TOOL_NAMES as readonly string[]).includes(name) ? name : null;
+  return (DEVICE_HOSTED_EXEC_TOOL_NAMES as readonly string[]).includes(name)
+    || (DEVICE_HOSTED_GUEST_EXEC_TOOL_NAMES as readonly string[]).includes(name)
+    ? name
+    : null;
 }
 
 /** `Bash` → `mcp__cindy_exec__Bash`。 */

@@ -8,6 +8,8 @@ import type { DeviceHostedSession } from '../base-agent.js';
 import {
   DEVICE_HOSTED_DISALLOWED_CLAUDE_TOOLS,
   DEVICE_HOSTED_GUEST_CLAUDE_TOOLS,
+  deviceHostedBuiltinToolName,
+  deviceHostedClaudeNote,
   deviceHostedEnvironmentNote,
   deviceHostedGuestAgentDenial,
   deviceHostedGuestClaudeMdExcludes,
@@ -255,5 +257,14 @@ describe('device-hosted guest Claude tools', () => {
     expect(deviceHostedGuestAgentDenial('Agent', { prompt: 'x' })).toBeNull();
     expect(deviceHostedGuestAgentDenial('Agent', undefined)).toBeNull();
     expect(deviceHostedGuestAgentDenial('WebSearch', { isolation: 'remote' })).toBeNull();
+  });
+
+  it('judges the WebFetch that runs on the guest computer like the built-in one, without promising it to the model', () => {
+    expect(deviceHostedBuiltinToolName('mcp__cindy_exec__WebFetch')).toBe('WebFetch');
+    expect(deviceHostedBuiltinToolName('mcp__cindy_exec__Bash')).toBe('Bash');
+    expect(deviceHostedBuiltinToolName('mcp__cindy_exec__Monitor')).toBeNull();
+    expect(deviceHostedBuiltinToolName('mcp__other__WebFetch')).toBeNull();
+    // 受邀者电脑上的 Cindy 较旧时没有这个工具，说明里不提。
+    expect(deviceHostedClaudeNote(hosted({ guest: true }), '/local')).not.toContain('WebFetch');
   });
 });

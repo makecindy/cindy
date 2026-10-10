@@ -46,6 +46,7 @@ import {
   type BotGroupSummary,
 } from '../../shared/botGroupChat.js';
 import type { BotGroupChatService } from './botGroupChatService.js';
+import { projectBotGroupExecutionFailures } from '@cindy/maker-shared/botGroupPresentation';
 
 const FALLBACK_MESSAGES = 20;
 const FALLBACK_MESSAGE_CHARS = 280;
@@ -184,7 +185,8 @@ export function botGroupRemoteChatData(detail: BotGroupDetail): BotGroupRemoteCh
     projectDir: null,
     projectDirName: detail.projectDir ? path.basename(detail.projectDir) : null,
     plans: detail.plans.map((plan) => ({ ...plan, workDir: null })),
-    messages: detail.messages.map((message) => (message.attachments.length > 0
+    // Older phones consume message views only; derive from this read's state here.
+    messages: projectBotGroupExecutionFailures(detail.messages, detail.executionFailures).map((message) => (message.attachments.length > 0
       ? { ...message, attachments: message.attachments.map((attachment) => ({ ...attachment, path: null })) }
       : message)),
     supportsAttachments: true,

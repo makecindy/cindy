@@ -96,6 +96,9 @@ import { RemoteSourceMark } from '@/components/icons/RemoteSourceMark';
 import { buildUnifiedRail, remoteAgentProviders } from './unifiedModelSelection';
 import { collectRemoteProviderGroups, remoteProviderEntryKey } from '@/lib/remoteProviderGroups';
 import { useLocalProviderGroups } from '@/features/provider-group/useLocalProviderGroups';
+import { providerShareComputerName, useProviderShareOwnerNameOf } from '@/features/provider-share/providerShareNames';
+import { readProviderShareGroupSize } from '@cindy/device-link';
+import type { ProviderGroupConfig } from '../../../shared/providerGroup';
 import { modelPriceDiscountLabelValues, modelPriceDetailRows } from '@/lib/modelPriceFormat';
 import { resolveModelPricePresentation } from '@/lib/modelPricePresentation';
 import {
@@ -1630,7 +1633,9 @@ function ModelSelectorContentView({
       const provider = remoteAgentGroups
         .find((group) => group.deviceId === targetDeviceId)
         ?.providers.find((entry) => entry.id === providerId);
-      const grouped = remoteProviderGroups.groups.has(remoteProviderEntryKey(targetDeviceId, providerId));
+      // 分享来的组只知道是个组(目录里只有台数)，同样标出「供应商组」。
+      const grouped = remoteProviderGroups.groups.has(remoteProviderEntryKey(targetDeviceId, providerId))
+        || readProviderShareGroupSize(provider) !== null;
       return t(
         grouped
           ? 'newChat.modelSelector.unified.railRemoteProviderGroup'
@@ -1642,6 +1647,52 @@ function ModelSelectorContentView({
       );
     },
     [remoteAgentDevices, remoteAgentGroups, remoteProviderGroups, t],
+  );
+
+  // ── 供应商组在模型列表顶部的一行说明(provider-groups.md §10)：组里有几台、是哪几台。
+  // 分享来的组只给台数，不给是哪几台(§8、provider-sharing.md §6)。
+  const shareOwnerNameOf = useProviderShareOwnerNameOf();
+  const listLanguage = resolvedTranslationLanguage(i18n) || undefined;
+  const groupNoteOf = useCallback(
+    (config: ProviderGroupConfig, groupOwnerName: string): string => {
+      const names = config.members.map((member) => {
+        if (member.kind === 'local') return groupOwnerName;
+        if (member.kind === 'share') return providerShareComputerName(t, shareOwnerNameOf(member.agentDeviceId));
+        return (
+          remoteAgentDevices?.find((entry) => entry.deviceId === member.agentDeviceId)?.name
+          || member.label
+          || member.agentDeviceId
+          || member.key
+        );
+      });
+      return t('newChat.modelSelector.unified.groupNoteMembers', {
+        count: names.length,
+        names: new Intl.ListFormat(listLanguage, { style: 'short', type: 'conjunction' }).format(names),
+      });
+    },
+    [listLanguage, remoteAgentDevices, shareOwnerNameOf, t],
+  );
+  const remoteProviderNoteOf = useCallback(
+    (targetDeviceId: string, providerId: string): string | null => {
+      if (isProviderShareAgentDeviceId(targetDeviceId)) {
+        const provider = remoteDeviceCatalogs.get(targetDeviceId)?.providers.find((entry) => entry.id === providerId);
+        const size = readProviderShareGroupSize(provider);
+        return size !== null ? t('newChat.modelSelector.unified.groupNote', { count: size }) : null;
+      }
+      const config = remoteProviderGroups.groups.get(remoteProviderEntryKey(targetDeviceId, providerId));
+      if (!config) return null;
+      const owner = remoteAgentDevices?.find((entry) => entry.deviceId === targetDeviceId)?.name || targetDeviceId;
+      return groupNoteOf(config, owner);
+    },
+    [groupNoteOf, remoteAgentDevices, remoteDeviceCatalogs, remoteProviderGroups, t],
+  );
+  // 本机建的组(本机任务、本机目录)：组所在电脑就是本机。被控电脑上的任务与远程控制视图不在这里说明。
+  const localProviderNoteOf = useCallback(
+    (providerId: string): string | null => {
+      const config = localProviderGroups[providerId];
+      return config ? groupNoteOf(config, t('providerGroup.member.local')) : null;
+    },
+    [groupNoteOf, localProviderGroups, t],
   );
 
   // 官方默认推荐 → 一次性**种子收藏**(Chris 2026-08-16 裁决,替代列表里的「默认」
@@ -3313,6 +3364,12 @@ function ModelSelectorContentView({
                 ? (providerId: string) => remoteAgentLabelOf(remoteBrowse.deviceId, providerId)
                 : unifiedProviderLabel
             }
+            // 供应商组在标题下补一行组里有几台、是哪几台(分享来的只有台数)。
+            {...(remoteBrowse
+              ? { providerNote: (providerId: string) => remoteProviderNoteOf(remoteBrowse.deviceId, providerId) }
+              : !deviceId && !homeDeviceId && !providersOverride
+                ? { providerNote: localProviderNoteOf }
+                : {})}
             effortLabelOf={unifiedEffortLabel}
             {...(constrainedListMaxHeight !== undefined
               ? { listMaxHeight: constrainedListMaxHeight }

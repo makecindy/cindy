@@ -290,6 +290,7 @@
       "requestedAt": "共有リンクから申請: {{time}}",
       "pairingHint": "承認する前に、リンクを送ったのと同じ方法で「表示されているペアリングコードは？」と相手に確認できます。一致したら承認してください。",
       "callout": "承認すると、{{name}} は自分のセッションで {{provider}} のモデルを使えます。Agent はこのパソコンで実行され、使用量はあなたの {{provider}} に計上されます。「{{provider}} を共有」からいつでも停止または削除できます。",
+      "calloutClaudeEmail": "{{name}} が使用している間、Agent はあなたが Claude へのログインに使っているメールアドレスを確認できます。",
       "calloutUnknown": "申請者に心当たりがない場合は拒否してください。拒否するとこのリンクは無効になります。",
       "approve": "共有を承認",
       "reject": "申請を拒否",
@@ -298,7 +299,6 @@
     "apply": {
       "loading": "共有リンクを読み込み中…",
       "askTitle": "{{name}} が {{provider}} をあなたに共有しようとしています",
-      "providerOnDevice": "{{provider}} · {{device}}",
       "factRuns": "Agent は {{name}} のパソコン、または {{name}} が手配した別のパソコンで {{provider}} を使って実行されます",
       "factRunsDetail": "使用量は {{name}} の {{provider}} に計上され、{{name}} はあなたの使用量を確認できます",
       "factFiles": "プロジェクトのファイルとコマンドは引き続きあなたのパソコンで実行されます",
@@ -384,9 +384,9 @@
       "needsUpdateNote": "相手の Cindy が更新されると、この共有を使えるようになります。"
     },
     "picker": {
-      "deviceName": "{{device}} · {{owner}} からの共有",
       "unavailable": "利用できなくなった共有",
-      "hostOutdated": "共有した人のパソコンの Cindy が古いため、これらのモデルを読み込めません。相手に Cindy を更新してもらってから、もう一度お試しください。"
+      "hostOutdated": "共有した人のパソコンの Cindy が古いため、これらのモデルを読み込めません。相手に Cindy を更新してもらってから、もう一度お試しください。",
+      "numbered": "{{name}} ({{index}})"
     },
     "notification": {
       "requestTitle": "新しい共有の申請",
@@ -439,6 +439,8 @@
       "local": "このパソコン",
       "sourceDevice": "自分のほかのパソコン",
       "sourceShare": "{{name}} からの共有",
+      "shareComputer": "{{name}} のパソコン",
+      "shareComputerUnknown": "共有されたパソコン",
       "runningCount_other": "{{count}} 件実行中",
       "limitAria": "{{name}} の同時実行数の上限",
       "limitOption_other": "上限 {{count}}",
@@ -8592,7 +8594,18 @@
         "workdirUnavailable": "{{name}} が作業ディレクトリを見つけられません",
         "stepFailed": "{{name}} はエラーのため、このステップを完了できませんでした",
         "stepTimeout": "{{name}} の作業に時間がかかりすぎたため、このステップを止めました",
-        "stepUnavailable": "{{name}} は現在利用できないため、このステップを進められません"
+        "stepUnavailable": "{{name}} は現在利用できないため、このステップを進められません",
+        "runtimeFailure": {
+          "IMAGE_INPUT_UNSUPPORTED": "{{name}}は返信できませんでした。現在のモデルは画像に対応していません。\n画像対応モデルに切り替えるか、「設定 → パーソナライズ → ビジョンブリッジ」を有効にして視覚モデルを設定し、メッセージを再送してください。",
+          "MODEL_UNAVAILABLE": "{{name}}は返信できませんでした。利用可能なモデルがありません。\n仲間の設定で接続済みの利用可能なモデルを選び、メッセージを再送してください。",
+          "AUTH_REQUIRED": "{{name}}は返信できませんでした。モデルの接続に再認証が必要です。\n設定でモデルのプロバイダーに再接続し、メッセージを再送してください。",
+          "RATE_LIMITED": "{{name}}は返信できませんでした。モデルへのリクエストが多すぎます。\nしばらく待ってメッセージを再送するか、別の利用可能なモデルを選んでください。",
+          "UPSTREAM_OVERLOADED": "{{name}}は返信できませんでした。モデルサービスが一時的に混雑しています。\nしばらく待ってメッセージを再送するか、別の利用可能なモデルを選んでください。",
+          "QUOTA_EXCEEDED": "{{name}}は返信できませんでした。モデルの使用量が上限に達しました。\nプロバイダーのクォータを確認するか、別の利用可能なモデルを選んでください。",
+          "NETWORK_ERROR": "{{name}}は返信できませんでした。ネットワーク接続に失敗しました。\nネットワークやプロキシを確認し、メッセージを再送してください。",
+          "RUNTIME_TIMEOUT": "{{name}}の返信がタイムアウトしました。\nメッセージを再送するか、別の利用可能なモデルを選んでください。",
+          "RUNTIME_ERROR": "{{name}}は今回は返信できませんでした。\nメッセージを再送してください。再度失敗する場合は、ログを確認して問題を報告してください。"
+        }
       },
       "settings": {
         "open": "グループの設定",
@@ -9407,7 +9420,9 @@
         "railSameEngine": "{{agent}} のみ",
         "crossEngineWarning": "エンジンを切り替えるとコンテキストが再構築され、内容が失われる場合があります",
         "favoritesSyncFailed": "お気に入りを同期できません。選択画面を開き直してください。接続先の更新が必要な場合があります。",
-        "railRemoteProviderGroup": "{{provider}} · {{device}} · プロバイダーグループ"
+        "railRemoteProviderGroup": "{{provider}} · {{device}} · プロバイダーグループ",
+        "groupNote_other": "プロバイダーグループ · {{count}} 台のパソコン",
+        "groupNoteMembers_other": "プロバイダーグループ · {{count}} 台のパソコン：{{names}}"
       }
     },
     "permissionSelector": {
@@ -9736,6 +9751,9 @@
       "editTitle": "貼り付けたテキストを編集",
       "cancelEdit": "編集をキャンセル",
       "saveEdit": "テキストを保存"
+    },
+    "sharedProviderCredential": {
+      "description": "このタスクは共有されたプロバイダーを使っているため、Agent が読み取った内容は共有元のパソコンを経由します。この操作は認証情報のファイル（鍵や .env など）に関わるため、確認してから続行します。"
     },
     "mediaDownload": {
       "title": "生成されたメディアをダウンロードしますか？",

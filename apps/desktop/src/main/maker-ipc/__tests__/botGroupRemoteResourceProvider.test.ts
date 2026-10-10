@@ -195,6 +195,16 @@ describe('bot group remote resources', () => {
     expect(plain.blocks?.[0]?.fallbackMarkdown).toContain('**阿布**: 写好了');
   });
 
+  it('projects current failures for existing phones without putting notices into the message cache', () => {
+    const group = detail();
+    const source = group.messages[0]!;
+    group.executionFailures = [{ executionId: 'run', epoch: 1, sourceMessageId: source.id,
+      botId: 'abu', botName: '阿布', code: 'AUTH_REQUIRED', planId: null }];
+    expect(botGroupRemoteChatData(group).messages).toContainEqual(expect.objectContaining({ id: 'execution-failure:run:1', runtimeFailureCode: 'AUTH_REQUIRED' }));
+    expect(group.messages).not.toContainEqual(expect.objectContaining({ kind: 'notice' }));
+    expect(botGroupRemoteChatData({ ...group, executionFailures: [] }).messages).toEqual(group.messages);
+  });
+
   it.each(['member-joined', null] as const)('keeps system notices (%s) visible to old phones through the plain fallback', async noticeCode => {
     const joined = { ...detail().messages[0]!, kind: 'notice' as const, authorKind: 'system' as const,
       noticeCode, authorName: 'Taylor', content: 'Taylor joined the group' };

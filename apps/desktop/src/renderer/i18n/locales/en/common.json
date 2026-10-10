@@ -292,6 +292,7 @@
       "requestedAt": "Requested {{time}} with your share link",
       "pairingHint": "Before approving, you can ask them over the channel you sent the link through: “What pairing code do you see?” Approve if it matches.",
       "callout": "Once approved, {{name}} can use {{provider}} models in their own sessions. The Agent runs on this computer and usage counts toward your {{provider}}. You can pause or remove access anytime in “Share {{provider}}”.",
+      "calloutClaudeEmail": "While {{name}} uses it, the Agent can see the email address you sign in to Claude with.",
       "calloutUnknown": "If you don’t recognize this person, decline; the link stops working once declined.",
       "approve": "Approve Sharing",
       "reject": "Decline Request",
@@ -300,7 +301,6 @@
     "apply": {
       "loading": "Reading share link…",
       "askTitle": "{{name}} Wants to Share {{provider}} with You",
-      "providerOnDevice": "{{provider}} · {{device}}",
       "factRuns": "The Agent runs with {{provider}} on {{name}}’s computer or another computer {{name}} arranges",
       "factRunsDetail": "Usage counts toward {{name}}’s {{provider}}, and {{name}} can see your usage",
       "factFiles": "Your project files and commands still run on your own computer",
@@ -386,9 +386,9 @@
       "needsUpdateNote": "They need to update Cindy before you can use this share."
     },
     "picker": {
-      "deviceName": "{{device}} · Shared by {{owner}}",
       "unavailable": "Unavailable share",
-      "hostOutdated": "The Cindy version on the owner’s computer is too old to list these models. Ask them to update Cindy, then try again."
+      "hostOutdated": "The Cindy version on the owner’s computer is too old to list these models. Ask them to update Cindy, then try again.",
+      "numbered": "{{name}} ({{index}})"
     },
     "notification": {
       "requestTitle": "New Share Request",
@@ -442,6 +442,8 @@
       "local": "This Computer",
       "sourceDevice": "My other computer",
       "sourceShare": "Shared by {{name}}",
+      "shareComputer": "{{name}}'s computer",
+      "shareComputerUnknown": "Shared computer",
       "runningCount_one": "{{count}} task running",
       "runningCount_other": "{{count}} tasks running",
       "limitAria": "Task limit for {{name}}",
@@ -8612,7 +8614,18 @@
         "workdirUnavailable": "{{name}} can’t find the working directory",
         "stepFailed": "{{name}} ran into a problem and didn’t finish this step",
         "stepTimeout": "{{name}} took too long, so this step was stopped",
-        "stepUnavailable": "{{name}} is unavailable and can’t do this step"
+        "stepUnavailable": "{{name}} is unavailable and can’t do this step",
+        "runtimeFailure": {
+          "IMAGE_INPUT_UNSUPPORTED": "{{name}} could not reply: the current model does not support images.\nChoose an image-capable model, or enable and configure Vision Bridge in Settings → Personalization, then send your message again.",
+          "MODEL_UNAVAILABLE": "{{name}} could not reply: no model is available.\nChoose a connected, available model in the teammate settings, then send your message again.",
+          "AUTH_REQUIRED": "{{name}} could not reply: the model connection needs authentication.\nReconnect the model provider in Settings, then send your message again.",
+          "RATE_LIMITED": "{{name}} could not reply: too many model requests.\nSend your message again later, or choose another available model.",
+          "UPSTREAM_OVERLOADED": "{{name}} couldn't reply: the model service is temporarily overloaded.\nTry sending again later, or choose another available model.",
+          "QUOTA_EXCEEDED": "{{name}} could not reply: the model usage limit was reached.\nCheck the provider quota, or choose another available model.",
+          "NETWORK_ERROR": "{{name}} could not reply: the network connection failed.\nCheck your network or proxy, then send your message again.",
+          "RUNTIME_TIMEOUT": "{{name}} did not reply before the timeout.\nSend your message again, or choose another available model.",
+          "RUNTIME_ERROR": "{{name}} could not reply this time.\nSend your message again. If it still fails, check the logs and report the issue."
+        }
       },
       "settings": {
         "open": "Group Settings",
@@ -9427,7 +9440,11 @@
         "railSameEngine": "{{agent}} only",
         "crossEngineWarning": "Switching engines rebuilds context and may lose content",
         "favoritesSyncFailed": "Favorites could not sync. Reopen the picker to retry; the remote computer may need an update.",
-        "railRemoteProviderGroup": "{{provider}} · {{device}} · Provider Group"
+        "railRemoteProviderGroup": "{{provider}} · {{device}} · Provider Group",
+        "groupNote_one": "Provider Group · {{count}} computer",
+        "groupNote_other": "Provider Group · {{count}} computers",
+        "groupNoteMembers_one": "Provider Group · {{count}} computer: {{names}}",
+        "groupNoteMembers_other": "Provider Group · {{count}} computers: {{names}}"
       }
     },
     "permissionSelector": {
@@ -9756,6 +9773,9 @@
       "editTitle": "Edit Pasted Text",
       "cancelEdit": "Cancel Editing",
       "saveEdit": "Save Text"
+    },
+    "sharedProviderCredential": {
+      "description": "This task uses a provider shared with you, so what the Agent reads passes through the sharer's computer. This step involves a credential file (such as a key or .env), so it continues only after you confirm."
     },
     "mediaDownload": {
       "title": "Download the generated media?",

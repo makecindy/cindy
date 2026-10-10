@@ -53,6 +53,19 @@ export function decorateProviderListWithGroups(
   };
 }
 
+/**
+ * 分享出去的供应商建了组时，受邀者只看到组里有几台电脑(provider-groups.md §8)：不给名单、不给状态。
+ * 供应商不再允许被远程调用时分享本身就不可用，不报台数。
+ */
+export function sharedProviderGroupSize(
+  deps: Pick<ProviderGroupRemoteHandlerDeps, 'readGroup' | 'isRemoteAllowed'>,
+  providerId: string,
+): number | null {
+  if (!deps.isRemoteAllowed(providerId)) return null;
+  const count = deps.readGroup(providerId)?.members.length ?? 0;
+  return count > 0 ? count : null;
+}
+
 export async function handleProviderGroupRemote(
   deps: ProviderGroupRemoteHandlerDeps,
   controller: string,

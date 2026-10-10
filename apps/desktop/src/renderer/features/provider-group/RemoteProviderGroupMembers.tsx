@@ -15,6 +15,7 @@ import type {
   ProviderGroupMemberStatus,
   ProviderGroupView,
 } from '../../../shared/providerGroup';
+import { providerShareComputerName, useProviderShareOwnerNameOf } from '../provider-share/providerShareNames';
 import { memberStatusText } from './ProviderGroupSection';
 
 const REFRESH_INTERVAL_MS = 15_000;
@@ -102,12 +103,17 @@ function MemberRow({
   first: boolean;
 }) {
   const { t, i18n } = useTranslation();
-  const label = status?.label ?? member.label ?? member.key;
+  const ownerNameOf = useProviderShareOwnerNameOf();
+  // 分享来的电脑只用分享者的昵称称呼，不用电脑名(provider-sharing.md §6)。
+  const ownerName = member.kind === 'share' ? (status?.ownerName ?? ownerNameOf(member.agentDeviceId)) : null;
+  const label = member.kind === 'share'
+    ? providerShareComputerName(t, ownerName)
+    : (status?.label ?? member.label ?? member.key);
   const source = member.kind === 'local'
     ? t('providerGroup.member.sourceGroupOwner')
     : member.kind === 'device'
       ? t('providerGroup.member.sourceDevice')
-      : t('providerGroup.member.sourceShare', { name: status?.ownerName ?? '' });
+      : t('providerGroup.member.sourceShare', { name: ownerName ?? '' });
   const ready = status?.state === 'available' || status?.state === 'full';
   const running = status?.running ?? 0;
   const appendRunning = running > 0 && status != null && status.state !== 'available' && status.state !== 'full';

@@ -2,7 +2,7 @@
 import { act, createElement as el, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { BotGroupRemoteChatData } from '@cindy/maker-shared/botGroupChat';
+import { BOT_GROUP_RUNTIME_FAILURE_CODES, type BotGroupRemoteChatData } from '@cindy/maker-shared/botGroupChat';
 
 const h = vi.hoisted(() => ({
   chat: null as any,
@@ -331,6 +331,15 @@ describe('group timeline', () => {
     expect(all('botGroup.notice').map(entry => entry.textContent)).toEqual(['groupChat.notice.memberJoined(name=Taylor)']);
     expect(all('botGroup.message.user')).toHaveLength(0);
     expect(all('botGroup.message.bot')).toHaveLength(0);
+  });
+
+  it.each(BOT_GROUP_RUNTIME_FAILURE_CODES)('renders the runtime reason and recovery advice on mobile: %s', async runtimeFailureCode => {
+    await render(group({ messages: [message('failure', 1, { kind: 'notice', authorKind: 'system',
+      authorName: 'Bot', noticeCode: 'member-failed', runtimeFailureCode })] }));
+    const text = all('botGroup.notice')[0]?.textContent;
+    expect(text).toContain(`groupChat.notice.runtimeFailure.${runtimeFailureCode}(name=Bot)`);
+    expect(text).toContain('groupChat.notice.runtimeFailureSetupHint');
+    expect(text).not.toContain('groupChat.notice.memberFailed');
   });
 
   it('renders messages, notices, round ends and plan ends like the desktop timeline', async () => {

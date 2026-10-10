@@ -290,6 +290,7 @@
       "requestedAt": "{{time}}透過你的分享連結申請",
       "pairingHint": "同意前可以透過傳連結的管道問對方一句：「你看到的配對碼是多少？」一致再同意。",
       "callout": "同意後，{{name}} 可以在自己的任務裡使用 {{provider}} 的模型。Agent 在這臺電腦上執行，用量計入你的 {{provider}}。你可以隨時在「分享 {{provider}}」裡關閉或刪除。",
+      "calloutClaudeEmail": "{{name}} 使用時，Agent 能看到你登入 Claude 用的電子郵件地址。",
       "calloutUnknown": "如果你不認識申請人，請拒絕；拒絕後這條連結作廢。",
       "approve": "同意分享",
       "reject": "拒絕申請",
@@ -298,7 +299,6 @@
     "apply": {
       "loading": "正在讀取分享連結…",
       "askTitle": "{{name}} 想把 {{provider}} 分享給你",
-      "providerOnDevice": "{{provider}} · {{device}}",
       "factRuns": "Agent 在 {{name}} 的電腦或 {{name}} 安排的其他電腦上用 {{provider}} 執行",
       "factRunsDetail": "用量計入 {{name}} 的 {{provider}}，{{name}} 能看到你的用量",
       "factFiles": "你的專案檔案和指令仍在你自己的電腦上執行",
@@ -384,9 +384,9 @@
       "needsUpdateNote": "對方的 Cindy 更新後才能使用這個分享。"
     },
     "picker": {
-      "deviceName": "{{device}} · 來自 {{owner}} 的分享",
       "unavailable": "已無法使用的分享",
-      "hostOutdated": "分享者電腦上的 Cindy 版本太舊，讀不到這些模型。請讓對方更新 Cindy 後再試。"
+      "hostOutdated": "分享者電腦上的 Cindy 版本太舊，讀不到這些模型。請讓對方更新 Cindy 後再試。",
+      "numbered": "{{name}} ({{index}})"
     },
     "notification": {
       "requestTitle": "新的分享申請",
@@ -439,6 +439,8 @@
       "local": "本機",
       "sourceDevice": "我的其他電腦",
       "sourceShare": "來自 {{name}} 的分享",
+      "shareComputer": "{{name}} 的電腦",
+      "shareComputerUnknown": "分享來的電腦",
       "runningCount_other": "{{count}} 個任務執行中",
       "limitAria": "{{name}} 的並行上限",
       "limitOption_other": "上限 {{count}}",
@@ -8592,7 +8594,18 @@
         "workdirUnavailable": "{{name}}找不到工作目錄",
         "stepFailed": "{{name}}這一步出錯了，沒做完",
         "stepTimeout": "{{name}}太久沒做完，這一步先停下",
-        "stepUnavailable": "{{name}}現在無法使用，這一步沒辦法做"
+        "stepUnavailable": "{{name}}現在無法使用，這一步沒辦法做",
+        "runtimeFailure": {
+          "IMAGE_INPUT_UNSUPPORTED": "{{name}}無法回覆：目前模型不支援圖片。\n請切換至支援圖片的模型，或在「設定 → 個性化 → 視覺橋」啟用並設定視覺模型後重新傳送。",
+          "MODEL_UNAVAILABLE": "{{name}}無法回覆：目前沒有可用模型。\n請在夥伴設定中選擇已連線的可用模型後重新傳送。",
+          "AUTH_REQUIRED": "{{name}}無法回覆：模型連線需要重新驗證。\n請在設定中重新連線對應的模型來源後重新傳送。",
+          "RATE_LIMITED": "{{name}}無法回覆：模型請求過於頻繁。\n請稍後重新傳送，或選擇其他可用模型。",
+          "UPSTREAM_OVERLOADED": "{{name}}無法回覆：模型服務暫時繁忙。\n請稍後重新傳送，或選擇其他可用模型。",
+          "QUOTA_EXCEEDED": "{{name}}無法回覆：模型用量已達上限。\n請檢查對應來源的配額，或選擇其他可用模型。",
+          "NETWORK_ERROR": "{{name}}無法回覆：網路連線失敗。\n請檢查網路或 Proxy 後重新傳送。",
+          "RUNTIME_TIMEOUT": "{{name}}本次回覆逾時。\n請重新傳送訊息，或選擇其他可用模型。",
+          "RUNTIME_ERROR": "{{name}}這次未能回覆。\n請重新傳送訊息；若仍失敗，請查看記錄並回報問題。"
+        }
       },
       "settings": {
         "open": "群聊設定",
@@ -9406,7 +9419,9 @@
         "railSameEngine": "僅 {{agent}}",
         "crossEngineWarning": "切換引擎會重建上下文，可能遺失內容",
         "favoritesSyncFailed": "收藏未能同步。請重新開啟重試；被控電腦可能需要更新。",
-        "railRemoteProviderGroup": "{{provider}} · {{device}} · 供應商組"
+        "railRemoteProviderGroup": "{{provider}} · {{device}} · 供應商組",
+        "groupNote_other": "供應商組 · {{count}} 台電腦",
+        "groupNoteMembers_other": "供應商組 · {{count}} 台電腦：{{names}}"
       },
       "modelListAria": "模型清單"
     },
@@ -9736,6 +9751,9 @@
       "editTitle": "編輯貼上的文字",
       "cancelEdit": "取消編輯",
       "saveEdit": "儲存文字"
+    },
+    "sharedProviderCredential": {
+      "description": "這個任務用的是分享來的供應商，Agent 讀到的內容會經過分享者的電腦。這一步涉及憑證類檔案（如金鑰、.env），需要你確認後才繼續。"
     },
     "mediaDownload": {
       "title": "允許下載產生的媒體？",

@@ -49,7 +49,6 @@ import {
   stopProviderShareHost,
 } from '../providerShareHost';
 import {
-  describeProviderShareDevice,
   isProviderShareRefusal,
   parseProviderShareAgentDeviceId,
   providerShareAgentDeviceId,
@@ -195,7 +194,6 @@ describe('provider share guest routing', () => {
     state.received = [received('active')];
     startProviderShareGuest({ changed: vi.fn(), settled: vi.fn() });
     await expect(resolveRemoteAgentTargetWhenReady('share:share-1')).resolves.toBe(providerShareHostPeer('share-1', 'owner-mac'));
-    expect(describeProviderShareDevice('share:share-1')).toBe("Magi's Mac Mini");
     expect(() => resolveRemoteAgentTarget('share:share-2')).toThrow(/REMOTE_AGENT_SHARE_REMOVED/);
   });
 

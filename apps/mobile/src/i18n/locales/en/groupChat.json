@@ -87,7 +87,19 @@
     "workdirUnavailable": "{{name}} can’t find the working directory",
     "stepFailed": "{{name}} ran into a problem and didn’t finish this step",
     "stepTimeout": "{{name}} took too long, so this step was stopped",
-    "stepUnavailable": "{{name}} is unavailable and can’t do this step"
+    "stepUnavailable": "{{name}} is unavailable and can’t do this step",
+    "runtimeFailure": {
+      "IMAGE_INPUT_UNSUPPORTED": "{{name}} could not reply: the current model does not support images.\nChoose an image-capable model, or enable and configure Vision Bridge in Settings → Personalization, then send your message again.",
+      "MODEL_UNAVAILABLE": "{{name}} could not reply: no model is available.\nChoose a connected, available model in the teammate settings, then send your message again.",
+      "AUTH_REQUIRED": "{{name}} could not reply: the model connection needs authentication.\nReconnect the model provider in Settings, then send your message again.",
+      "RATE_LIMITED": "{{name}} could not reply: too many model requests.\nSend your message again later, or choose another available model.",
+      "UPSTREAM_OVERLOADED": "{{name}} couldn't reply: the model service is temporarily overloaded.\nTry sending again later, or choose another available model.",
+      "QUOTA_EXCEEDED": "{{name}} could not reply: the model usage limit was reached.\nCheck the provider quota, or choose another available model.",
+      "NETWORK_ERROR": "{{name}} could not reply: the network connection failed.\nCheck your network or proxy, then send your message again.",
+      "RUNTIME_TIMEOUT": "{{name}} did not reply before the timeout.\nSend your message again, or choose another available model.",
+      "RUNTIME_ERROR": "{{name}} could not reply this time.\nSend your message again. If it still fails, check the logs and report the issue."
+    },
+    "runtimeFailureSetupHint": "To change the model or settings, use the computer where this teammate runs."
   },
   "plan": {
     "intro_one": "This takes {{count}} step. Here’s who does it:",

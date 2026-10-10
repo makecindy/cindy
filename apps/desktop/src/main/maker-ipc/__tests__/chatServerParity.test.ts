@@ -63,7 +63,7 @@ describe('server group feature parity', () => {
       return { body: { execution: next } };
     }
     if (route.endsWith('/snapshot')) return { body: { room: room(route.split('/')[2]), members: [], messages: [], cursor: '1' } };
-    if (route.includes('/messages?') || route.endsWith('/executions') || route.includes('/plans')) return { body: [] };
+    if (route.includes('/messages?') || route.endsWith('/executions') || route.includes('/execution-failures?') || route.includes('/plans')) return { body: [] };
     return { body: {} };
   }
   beforeEach(() => {
@@ -192,7 +192,7 @@ describe('server group feature parity', () => {
     finish({ needsPlan: true, steps }); await flush();
     expect(planPosts()).toHaveLength(0);
     const view = await service.getGroup(roomId);
-    expect(view.ok && view.group.planningBotId).toBeNull();
+    expect(view).toMatchObject({ ok: true, group: { planningBotId: null } });
   });
   it('keeps @all on an existing proposal as discussion, not a revision', async () => {
     arrange(proposed);

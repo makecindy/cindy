@@ -58,6 +58,11 @@ export interface ProviderGroupDirectory {
   listCandidates(providerId: string, config: ProviderGroupConfig | null): Promise<ProviderGroupCandidate[]>;
   /** 那台电脑允许被远程调用的供应商(与组内电脑状态共用同一份短时缓存)；读不到时抛错。 */
   readDeviceCatalog(agentDeviceId: string): Promise<ProviderView[]>;
+  /**
+   * 组员给人看的名字(换电脑的活动记录用)：分享来的电脑只用分享者的昵称，不用电脑名
+   * (provider-sharing.md §6)，读不到这条分享时为空；其余沿用加入时的快照。
+   */
+  memberLabel(member: ProviderGroupMember): string;
   /** 忘掉缓存(换账号、组内电脑失败后需要现读)。 */
   invalidate(agentDeviceId?: string): void;
 }
@@ -127,9 +132,11 @@ export function createProviderGroupDirectory(deps: ProviderGroupDirectoryDeps): 
     const agentDeviceId = member.agentDeviceId!;
     const shareId = agentDeviceId.slice(PROVIDER_SHARE_AGENT_DEVICE_PREFIX.length);
     const share = deps.listReceivedShares().find((s) => s.shareId === shareId);
-    if (!share) return { member, label: member.label || shareId, state: 'unavailable', reason: 'share-removed' };
-    const label = share.deviceName || member.label || shareId;
+    // 分享来的电脑只用分享者的昵称称呼，不用电脑名(provider-sharing.md §6)：服务端仍存着旧链接的电脑名，
+    // 旧版本加入时的快照(member.label)也可能是电脑名，都不再用。
+    if (!share) return { member, label: '', state: 'unavailable', reason: 'share-removed' };
     const ownerName = share.owner.displayName;
+    const label = ownerName;
     if (share.status === 'paused') return { member, label, ownerName, state: 'unavailable', reason: 'share-paused' };
     if (!share.hostOnline) return { member, label, ownerName, state: 'offline' };
     let views: ProviderView[];
@@ -198,7 +205,8 @@ export function createProviderGroupDirectory(deps: ProviderGroupDirectoryDeps): 
           kind: 'share' as const,
           agentDeviceId,
           providerId: share.providerId,
-          label: share.deviceName || share.shareId,
+          // 加入组时存下的快照也只用分享者的昵称，不用电脑名(provider-sharing.md §6)。
+          label: share.owner.displayName,
           providerName: share.providerLabel,
           ownerName: share.owner.displayName,
         };
@@ -219,6 +227,12 @@ export function createProviderGroupDirectory(deps: ProviderGroupDirectoryDeps): 
     },
 
     readDeviceCatalog: readCatalog,
+
+    memberLabel(member) {
+      if (member.kind !== 'share') return member.label ?? member.key;
+      const shareId = member.agentDeviceId?.slice(PROVIDER_SHARE_AGENT_DEVICE_PREFIX.length) ?? '';
+      return deps.listReceivedShares().find((s) => s.shareId === shareId)?.owner.displayName ?? '';
+    },
 
     invalidate(agentDeviceId) {
       if (agentDeviceId === undefined) {

@@ -138,7 +138,9 @@ P0 拆成两部分。受邀者身份由 `RemoteAgentHostDeps.controllerTrust` �
 | C0-12 | 真实验证 | 用真实 Claude Code 验证：受邀者项目里的 hooks、`env`、`apiKeyHelper`、`!` 命令、`@` 外部引用、家目录 CLAUDE.md 都不生效（Windows 上 `claudeMdExcludes` 的路径写法需实测） |
 
 受邀者会话的 Agent 自带工具按白名单开放，WebFetch 对受邀者关闭、WebSearch 保留（2026-10-10 裁决，取代
-2026-10-07「联网工具不单独处理」，见产品规则 §9 第 5 条）。
+2026-10-07「联网工具不单独处理」，见产品规则 §9 第 5 条）。同日补充：Claude Code 受邀者的 WebFetch 改由受邀者电脑的
+执行器提供、用受邀者的网络抓取（`apps/desktop/src/main/remote-agent/executor/webFetch.ts`）；分享 Claude 订阅登录时，
+审批弹窗告知分享者「受邀者的 Agent 能看到你登录 Claude 用的邮箱」。
 
 ## 4. P1 同区域 MVP
 

@@ -20,7 +20,8 @@ import type { AgentEvent, AgentSessionHandle, StartSessionOptions } from '@cindy
 
 import { RemoteExecutor, type ExecutorCaptureHooks } from '../executor/executor';
 import type { PdfTextExtractor } from '../executor/files';
-import { ExecutorGate, executorGateModeFor } from '../executor/gate';
+import { ExecutorGate, executorGateModeFor, type ExecutorAction } from '../executor/gate';
+import type { GuardedFetch } from '../executor/webFetch';
 import { ExecutorWorkspace } from '../executor/workspace';
 import type {
   RemoteAgentOpenPayload,
@@ -33,6 +34,7 @@ import {
   createRemoteAgentHandle,
   localizeRemoteError,
   parseStartedInfo,
+  type LocalConfirmation,
   type RemoteAgentHandleController,
 } from './proxyHandle';
 import { ExecServerRelay } from './execServerRelay';
@@ -70,6 +72,17 @@ export interface StartRemoteAgentDeps {
   isGitRepo(workingDir: string): Promise<boolean>;
   /** Read 读 PDF 时取文字(Claude Code)。 */
   extractPdfText?: PdfTextExtractor;
+  /**
+   * 在本机抓取网页的出站通道：给 Claude Code 提供 WebFetch(供应商分享的受邀者任务，自带的
+   * WebFetch 在对方电脑上已关闭)。缺省时不提供。
+   */
+  webFetch?: GuardedFetch;
+  /**
+   * 供应商分享的受邀者任务(docs/product-rules/provider-sharing.md §9 第 7 条)：读写凭证类文件、执行读取
+   * 凭证的命令不论权限档都要本机用户确认，没有批准时在本机弹确认卡；`description` 是卡上的说明。
+   * 同账号任务不提供。
+   */
+  credentialConsent?: { description: string };
   /** 改写来自对方的事件(如工具名)。 */
   mapEvent?: (kind: RemoteAgentKind) => ((event: AgentEvent) => AgentEvent) | undefined;
   /** 本机 Codex 程序(给对方的 Codex 提供 exec-server 执行环境)；缺省时不提供。 */
@@ -157,6 +170,23 @@ export function shadowAliases(
   return aliases;
 }
 
+/** 凭证类操作的确认卡：用与 Agent 自带工具同名的工具显示本机路径或命令。 */
+export function credentialConfirmation(action: ExecutorAction, description: string): LocalConfirmation {
+  const base = { description, metadata: { hostOwnedConfirmation: 'shared_provider_credential' } };
+  switch (action.kind) {
+    case 'exec':
+      return { ...base, toolName: 'Bash', input: { command: action.command } };
+    case 'write':
+      return { ...base, toolName: 'Write', input: { file_path: action.path } };
+    case 'fetch':
+      return { ...base, toolName: 'WebFetch', input: { url: action.url } };
+    default:
+      return action.scope === 'tree'
+        ? { ...base, toolName: 'Grep', input: { path: action.path } }
+        : { ...base, toolName: 'Read', input: { file_path: action.path } };
+  }
+}
+
 function shellName(): string {
   if (process.platform === 'win32') return 'bash';
   return (process.env.SHELL ?? '/bin/bash').split('/').pop() || 'bash';
@@ -174,13 +204,25 @@ export async function startRemoteAgentSession(
   let writableDirs = [...new Set(opts.writableDirs ?? [])];
   const workspace = new ExecutorWorkspace({ workingDir: opts.workingDir, extraDirs: [...extraDirs, ...writableDirs] });
   const applyDirs = () => workspace.setExtraDirs([...new Set([...extraDirs, ...writableDirs])]);
-  const gate = new ExecutorGate(workspace, executorGateModeFor(opts.permissionMode, opts.planMode === true));
+  const credentialConsent = deps.credentialConsent;
+  const gate = new ExecutorGate(workspace, executorGateModeFor(opts.permissionMode, opts.planMode === true), Date.now, {
+    confirmCredentials: credentialConsent !== undefined,
+  });
+  let controller: RemoteAgentHandleController | null = null;
   const executor = new RemoteExecutor({
     workspace,
     gate,
     rgPath: deps.rgPath,
     capture: deps.capture?.({ kind, opts }),
     ...(deps.extractPdfText ? { extractPdfText: deps.extractPdfText } : {}),
+    // 只有 Claude Code 经 cindy_exec 使用这组工具。
+    ...(kind === 'claude-code' && deps.webFetch ? { webFetch: deps.webFetch } : {}),
+    ...(credentialConsent
+      ? {
+          confirm: async (action: ExecutorAction) =>
+            controller?.confirm(credentialConfirmation(action, credentialConsent.description)) ?? false,
+        }
+      : {}),
   });
   let permissionMode = opts.permissionMode;
   let planMode = opts.planMode === true;
@@ -191,7 +233,6 @@ export async function startRemoteAgentSession(
   });
   const router = createReverseHttpRouter({ executor, mcpTarget: (name) => mcp.servers.get(name) });
 
-  let controller: RemoteAgentHandleController | null = null;
   let personalRoots: Array<{ relative: string; local: string }> = [];
   let projectionReady = false;
   const early: Array<{ type: 'event' | 'state'; value: unknown }> = [];
@@ -205,6 +246,7 @@ export async function startRemoteAgentSession(
         cwd: workspace.workingDir,
         workspace,
         authorize: (action) => executor.check(action),
+        ...(credentialConsent ? { confirm: (action: ExecutorAction) => executor.confirm(action) } : {}),
         push: async (frames) => {
           await pushFrames?.(frames);
         },

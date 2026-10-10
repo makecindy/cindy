@@ -9,6 +9,11 @@
  *  - 项目上级目录里的说明文件：本机任务里 Agent 会沿目录向上加载它们；
  *  - 你这台的个人配置(用户级说明、Skill、子代理、命令与权限规则)：个人配置以你这台为准，
  *    那台电脑只提供登录、供应商与网络。
+ *
+ * 符号链接一律跟随，与本机 Agent 加载时一致(CLAUDE.md -> AGENTS.md、链到 dotfiles 的个人 Skill 等)。
+ * 供应商分享的受邀者任务(skipCredentials)：内容会经过分享者的电脑，凭证类文件(按链接目标的真实路径
+ * 再判一次)不在启动时带过去；Agent 用到时经工具回到这台读取，由受邀者在确认卡上允许
+ * (docs/product-rules/provider-sharing.md §9 第 7 条)。
  */
 import fs from 'node:fs/promises';
 import os from 'node:os';
@@ -16,6 +21,7 @@ import path from 'node:path';
 
 import type { RemoteAgentKind } from '@cindy/device-link';
 
+import { isShareCredentialPath } from '../credentials';
 import {
   ANCESTOR_INSTRUCTION_FILES,
   MAX_ANCESTOR_LEVELS,
@@ -32,21 +38,32 @@ const MAX_FILE_BYTES = 512 * 1024;
 const MAX_TOTAL_BYTES = 4 * 1024 * 1024;
 const MAX_DEPTH = 6;
 
+export interface CollectOptions {
+  /** 供应商分享的受邀者任务：凭证类文件不在启动时带过去。 */
+  skipCredentials?: boolean;
+}
+
 interface Budget {
   files: number;
   bytes: number;
+  skipCredentials: boolean;
 }
 
-async function readLimited(file: string, budget: Budget, root: string): Promise<Buffer | null> {
+function newBudget(options: CollectOptions = {}): Budget {
+  return { files: 0, bytes: 0, skipCredentials: options.skipCredentials === true };
+}
+
+/**
+ * 读一个文件(跟随链接)。超出数量与大小上限、不是普通文件，或受邀者任务里的凭证类文件返回 null。
+ * `sanitized`：内容随后只保留权限规则(项目设置)，不按凭证类跳过。
+ */
+async function readLimited(file: string, budget: Budget, sanitized = false): Promise<Buffer | null> {
   if (budget.files >= MAX_FILES) return null;
   try {
-    // 不跟随符号链接：项目里的链接可能指向工作目录外(如 ~/.ssh、.env)，一旦跟随，
-    // 越界字节会被序列化后带到运行 Agent 的那台电脑上。用 lstat 先拒掉链接本身。
-    const stat = await fs.lstat(file);
-    if (stat.isSymbolicLink() || !stat.isFile() || stat.size > MAX_FILE_BYTES || budget.bytes + stat.size > MAX_TOTAL_BYTES) return null;
-    // 规范路径仍须落在真实根目录内(防 `..` 与目录链接借道)。
-    const [realFile, realRoot] = await Promise.all([fs.realpath(file), fs.realpath(root)]);
-    if (realFile !== realRoot && !realFile.startsWith(`${realRoot}${path.sep}`)) return null;
+    const stat = await fs.stat(file);
+    if (!stat.isFile() || stat.size > MAX_FILE_BYTES || budget.bytes + stat.size > MAX_TOTAL_BYTES) return null;
+    if (budget.skipCredentials && !sanitized
+      && (isShareCredentialPath(file) || isShareCredentialPath(await fs.realpath(file)))) return null;
     const data = await fs.readFile(file);
     budget.files += 1;
     budget.bytes += data.length;
@@ -56,6 +73,14 @@ async function readLimited(file: string, budget: Budget, root: string): Promise<
   }
 }
 
+/** 目录链接不能把整个磁盘或用户目录带进来：指向文件系统根、用户目录或其上级时不走。 */
+function isTooBroad(realDir: string): boolean {
+  if (path.dirname(realDir) === realDir) return true;
+  const home = path.resolve(os.homedir());
+  const relative = path.relative(realDir, home);
+  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+}
+
 async function walk(
   root: string,
   relative: string,
@@ -63,26 +88,40 @@ async function walk(
   budget: Budget,
   out: RemoteAgentWireFile[],
   rename: (relative: string) => string = (value) => value,
+  ancestors: ReadonlySet<string> = new Set(),
 ): Promise<void> {
   if (depth > MAX_DEPTH || budget.files >= MAX_FILES) return;
+  const dir = path.join(root, relative);
+  let realDir: string;
   let entries: import('node:fs').Dirent[];
   try {
-    entries = await fs.readdir(path.join(root, relative), { withFileTypes: true });
+    realDir = await fs.realpath(dir);
+    entries = await fs.readdir(dir, { withFileTypes: true });
   } catch {
     return;
   }
+  // 链接绕回自己的上级目录会无限展开；只看这条路径上的上级，同一个目录被两个链接引用时都照常带上。
+  if (ancestors.has(realDir) || isTooBroad(realDir)) return;
+  const inside = new Set(ancestors).add(realDir);
   for (const entry of entries) {
     if (entry.name === '.git' || entry.name === 'node_modules') continue;
-    // 目录与文件的符号链接都不跟随：目标可能落在项目外，readLimited 的根内校验拦不住
-    // “整棵目录是链接”的借道，这里直接跳过。
-    if (entry.isSymbolicLink()) continue;
     const child = `${relative}/${entry.name}`;
     const full = path.join(root, child);
-    const isDir = entry.isDirectory();
-    const isFile = entry.isFile();
-    if (isDir) await walk(root, child, depth + 1, budget, out, rename);
+    let isDir = entry.isDirectory();
+    let isFile = entry.isFile();
+    if (entry.isSymbolicLink()) {
+      // 链接按指向的目标处理(与本机 Agent 加载时一致)；目标不存在的跳过。
+      try {
+        const target = await fs.stat(full);
+        isDir = target.isDirectory();
+        isFile = target.isFile();
+      } catch {
+        continue;
+      }
+    }
+    if (isDir) await walk(root, child, depth + 1, budget, out, rename, inside);
     else if (isFile && isSafeProjectFilePath(rename(child))) {
-      const data = await readLimited(full, budget, root);
+      const data = await readLimited(full, budget);
       if (data) out.push({ path: rename(child), data: data.toString('base64') });
     }
   }
@@ -100,15 +139,19 @@ function sanitizeClaudeSettings(raw: Buffer): Buffer | null {
   }
 }
 
-export async function collectProjectInstructionFiles(workingDir: string): Promise<RemoteAgentWireFile[]> {
-  const budget: Budget = { files: 0, bytes: 0 };
+export async function collectProjectInstructionFiles(
+  workingDir: string,
+  options: CollectOptions = {},
+): Promise<RemoteAgentWireFile[]> {
+  const budget = newBudget(options);
   const out: RemoteAgentWireFile[] = [];
   for (const name of TOP_LEVEL_FILES) {
-    const data = await readLimited(path.join(workingDir, name), budget, workingDir);
+    const data = await readLimited(path.join(workingDir, name), budget);
     if (data) out.push({ path: name, data: data.toString('base64') });
   }
   for (const name of SETTINGS_FILES) {
-    const data = await readLimited(path.join(workingDir, name), budget, workingDir);
+    // 项目设置只带权限规则，受邀者任务也照常同步。
+    const data = await readLimited(path.join(workingDir, name), budget, true);
     const sanitized = data ? sanitizeClaudeSettings(data) : null;
     if (sanitized) out.push({ path: name, data: sanitized.toString('base64') });
   }
@@ -120,8 +163,11 @@ export async function collectProjectInstructionFiles(workingDir: string): Promis
  * 项目上级目录里的说明文件(不含文件系统根)：本机任务里 Claude Code 与 Pi 会沿目录向上加载。
  * Codex 经执行环境在你这台直接读取，不需要同步。
  */
-export async function collectAncestorInstructionFiles(workingDir: string): Promise<RemoteAgentWireAncestorFile[]> {
-  const budget: Budget = { files: 0, bytes: 0 };
+export async function collectAncestorInstructionFiles(
+  workingDir: string,
+  options: CollectOptions = {},
+): Promise<RemoteAgentWireAncestorFile[]> {
+  const budget = newBudget(options);
   const out: RemoteAgentWireAncestorFile[] = [];
   let dir = path.resolve(workingDir);
   for (let up = 1; up <= MAX_ANCESTOR_LEVELS; up += 1) {
@@ -129,7 +175,7 @@ export async function collectAncestorInstructionFiles(workingDir: string): Promi
     if (parent === dir || path.dirname(parent) === parent) break;
     dir = parent;
     for (const name of ANCESTOR_INSTRUCTION_FILES) {
-      const data = await readLimited(path.join(dir, name), budget, dir);
+      const data = await readLimited(path.join(dir, name), budget);
       if (data) out.push({ up, name, data: data.toString('base64') });
     }
   }
@@ -164,16 +210,16 @@ export interface CollectedPersonalConfig {
 export async function collectPersonalConfig(
   kind: RemoteAgentKind,
   projectFiles: readonly RemoteAgentWireFile[],
-  options: { env?: NodeJS.ProcessEnv; home?: string } = {},
+  options: CollectOptions & { env?: NodeJS.ProcessEnv; home?: string } = {},
 ): Promise<CollectedPersonalConfig> {
   const env = options.env ?? process.env;
   const home = options.home ?? os.homedir();
-  const budget: Budget = { files: 0, bytes: 0 };
+  const budget = newBudget(options);
   const personal: RemoteAgentWirePersonal = { files: [] };
   const roots: CollectedPersonalConfig['roots'] = [];
   if (kind === 'claude-code') {
     const configDir = claudeConfigDir(env, home);
-    const memory = await readLimited(path.join(configDir, 'CLAUDE.md'), budget, configDir);
+    const memory = await readLimited(path.join(configDir, 'CLAUDE.md'), budget);
     if (memory) personal.memory = memory.toString('utf8');
     const projectEntries = new Set(projectFiles.map((file) => file.path.split('/').slice(0, 3).join('/')));
     for (const dir of PERSONAL_CLAUDE_DIRECTORIES) {
@@ -197,7 +243,7 @@ export async function collectPersonalConfig(
         if (stat.isDirectory()) {
           await walk(configDir, `${dir}/${entry.name}`, 1, budget, personal.files, (value) => `.claude/${value}`);
         } else if (stat.isFile()) {
-          const data = await readLimited(local, budget, configDir);
+          const data = await readLimited(local, budget);
           if (data) personal.files.push({ path: relative, data: data.toString('base64') });
         }
         if (personal.files.length > before) roots.push({ relative, local });
@@ -218,7 +264,7 @@ export async function collectPersonalConfig(
     const codexHome = codexHomeDir(env, home);
     // 与 Codex 的读取顺序一致：AGENTS.override.md 优先于 AGENTS.md。
     for (const name of ['AGENTS.override.md', 'AGENTS.md']) {
-      const data = await readLimited(path.join(codexHome, name), budget, codexHome);
+      const data = await readLimited(path.join(codexHome, name), budget);
       if (data && data.toString('utf8').trim()) {
         personal.instructions = data.toString('utf8');
         break;

@@ -26,6 +26,7 @@ import { resolveMemoryScopeKey } from '@cindy/maker-core';
 
 import type { ExecutorCaptureHooks } from '../executor/executor';
 import type { PdfTextExtractor } from '../executor/files';
+import type { GuardedFetch } from '../executor/webFetch';
 import { remoteAgentEventMapper } from './eventMap';
 import {
   collectAncestorInstructionFiles,
@@ -67,8 +68,19 @@ export interface DeviceAgentServiceDeps {
     /** 用户亲自接手后的这次发送开始新的一轮(取走即用掉)。 */
     takeNewRound?(sessionId: string): boolean;
   };
+  /** 任务的「Agent 所在电脑」是不是分享来的供应商(受邀者任务)。 */
+  isSharedProviderDevice?(deviceId: string): boolean;
+  /** 受邀者任务在本机抓取网页的出站通道(WebFetch)。 */
+  webFetch?: GuardedFetch;
+  /** 受邀者任务里凭证类操作确认卡上的说明(按界面语言)。 */
+  sharedProviderCredentialNotice?(): string;
   logger: Logger;
 }
+
+/** 没有提供界面语言的说明时用的英文说明。 */
+const SHARED_PROVIDER_CREDENTIAL_NOTICE =
+  "This task uses a provider shared with you, so what the agent reads passes through the sharer's computer. "
+  + 'This involves a credential file, so it needs your confirmation.';
 
 function mcpTargets(extra: PiExtraSpawnConfig | null): Map<string, LocalMcpTarget> {
   const targets = new Map<string, LocalMcpTarget>();
@@ -153,6 +165,13 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
     const sessionId = opts.sessionId;
     const groupSwitch = sessionId && deps.groupSwitch ? deps.groupSwitch : null;
     const switchToken = groupSwitch && sessionId ? groupSwitch.takeForOpen(sessionId) : undefined;
+    // 受邀者任务(分享来的供应商)：内容会经过分享者的电脑。
+    //  - Agent 自带的 WebFetch 在分享者电脑上已关闭，改由本机抓取；
+    //  - 凭证类文件不随启动同步，任务中读写凭证类文件、执行读取凭证的命令不论权限档都要本机确认。
+    // 同账号任务都不提供。
+    const shared = deps.isSharedProviderDevice?.(input.deviceId) === true;
+    const webFetch = deps.webFetch && shared ? deps.webFetch : undefined;
+    const collect = { skipCredentials: shared };
     return startRemoteAgentSession(input.agentKind, opts, {
       invoke: poller.invoke,
       poller,
@@ -167,6 +186,10 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
               takeNewRound: () => groupSwitch.takeNewRound?.(sessionId) ?? false,
             },
           }
+        : {}),
+      ...(webFetch ? { webFetch } : {}),
+      ...(shared
+        ? { credentialConsent: { description: deps.sharedProviderCredentialNotice?.() ?? SHARED_PROVIDER_CREDENTIAL_NOTICE } }
         : {}),
       prepareMcp: async ({ kind, opts: startOpts, vendorOptions }): Promise<PreparedRemoteMcp> => {
         const extra = await deps.prepareMcpBridge(deps.mcpProviders(), deps.logger, {
@@ -196,10 +219,12 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
           noteOpaqueWrite: () => deps.noteOpaqueTurnChange({ sessionId, provider, cwd: startOpts.workingDir }),
         };
       },
-      collectProjectFiles: collectProjectInstructionFiles,
+      collectProjectFiles: (workingDir) => collectProjectInstructionFiles(workingDir, collect),
       // Codex 经执行环境在本机直接读取项目与上级目录的说明，不必同步。
-      collectAncestorFiles: input.agentKind === 'codex' ? undefined : collectAncestorInstructionFiles,
-      collectPersonal: (kind, projectFiles) => collectPersonalConfig(kind, projectFiles),
+      collectAncestorFiles: input.agentKind === 'codex'
+        ? undefined
+        : (workingDir) => collectAncestorInstructionFiles(workingDir, collect),
+      collectPersonal: (kind, projectFiles) => collectPersonalConfig(kind, projectFiles, collect),
       isGitRepo,
       ...(deps.extractPdfText ? { extractPdfText: deps.extractPdfText } : {}),
       mapEvent: deps.mapEvent ?? remoteAgentEventMapper,

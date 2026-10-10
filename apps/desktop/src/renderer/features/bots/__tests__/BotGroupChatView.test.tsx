@@ -407,6 +407,27 @@ describe('BotGroupChatView', () => {
     }
   });
 
+  it('keeps main composer focus and both drafts when leaving thread image sharing', async () => {
+    vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+    mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: true }) });
+    const user = userEvent.setup();
+    renderView();
+    const trigger = (await screen.findAllByRole('button', { name: 'bots.groupChat.server.reply' }))[0]!;
+    const main = trigger.closest('main')!;
+    await user.click(trigger);
+    const panel = screen.getByRole('complementary');
+    await user.type(within(panel).getByRole('textbox'), 'Thread draft');
+    await user.click((await within(panel).findAllByRole('button', { name: 'chat.shareImage.entry' }))[0]!);
+    expect(within(panel).queryByRole('textbox')).toBeNull();
+    const composer = within(main).getByRole('textbox');
+    await user.type(composer, 'Main draft');
+    act(() => shareSelectionStore.exit());
+    expect(document.activeElement).toBe(composer);
+    expect((within(panel).getByRole('textbox') as HTMLTextAreaElement).value).toBe('Thread draft');
+    await user.keyboard(' continues');
+    expect((composer as HTMLTextAreaElement).value).toBe('Main draft continues');
+  });
+
   it('lets Escape dismiss a portalled reaction picker without closing the thread', async () => {
     vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
     mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: true }) });
@@ -420,6 +441,41 @@ describe('BotGroupChatView', () => {
     await user.keyboard('{Escape}');
     expect(screen.queryByRole('button', { name: '🎉' })).toBeNull();
     expect(screen.getByRole('complementary')).toBe(panel);
+  });
+
+  it('keeps a newer push failure snapshot when a stale older-page request finishes later', async () => {
+    const latest = msg({ id: 'latest', sequence: 100, content: 'Latest question' });
+    const source = msg({ id: 'older', sequence: 4, content: 'Earlier question' });
+    const failure = { executionId: 'older', epoch: 1, sourceMessageId: source.id, botId: 'bot', botName: 'Bot', code: 'AUTH_REQUIRED' as const, planId: null };
+    let finish: ((result: { ok: true; group: BotGroupDetail }) => void) | undefined;
+    const pending = new Promise<{ ok: true; group: BotGroupDetail }>(resolve => { finish = resolve; });
+    mocks.getBotGroup.mockResolvedValueOnce({ ok: true, group: detail({ messages: [latest], hasMoreBefore: true, executionFailures: [failure] }) })
+      .mockReturnValueOnce(pending)
+      .mockResolvedValue({ ok: true, group: detail({ name: 'Fresh group', messages: [latest], executionFailures: [] }) });
+    renderView();
+    fireEvent.click(await screen.findByRole('button', { name: 'bots.groupChat.timeline.loadEarlier' }));
+    await act(async () => mocks.pushes.forEach(push => push({ groupId: 'g1', change: 'round' })));
+    await screen.findByText('Fresh group');
+    await act(async () => finish?.({ ok: true, group: detail({ messages: [source], executionFailures: [failure] }) }));
+    expect(screen.getByText('Earlier question')).toBeTruthy();
+    expect(screen.queryByText('bots.groupChat.notice.runtimeFailure.AUTH_REQUIRED:Bot')).toBeNull();
+  });
+
+  it.each([false, true])('clears retried failures on an older timeline page when the newest page is refreshed (initial failure: %s)', async initialFailure => {
+    const source = msg({ id: 'older-source', sequence: 4, content: 'Earlier question' });
+    const failure = { executionId: 'older', epoch: 1, sourceMessageId: source.id, botId: 'bot', botName: 'Bot', code: 'AUTH_REQUIRED' as const, planId: null };
+    const latest = msg({ id: 'latest-source', sequence: 100, content: 'Latest question' });
+    mocks.getBotGroup.mockResolvedValueOnce({ ok: true, group: detail({ messages: [latest], hasMoreBefore: true, executionFailures: initialFailure ? [failure] : [] }) })
+      .mockResolvedValueOnce({ ok: true, group: detail({ messages: [source], hasMoreBefore: false, executionFailures: [failure] }) })
+      .mockResolvedValue({ ok: true, group: detail({ messages: [latest], executionFailures: [] }) });
+    renderView();
+    fireEvent.click(await screen.findByRole('button', { name: 'bots.groupChat.timeline.loadEarlier' }));
+    await screen.findByText('bots.groupChat.notice.runtimeFailure.AUTH_REQUIRED:Bot');
+    act(() => mocks.pushes.forEach(push => push({ groupId: 'g1', change: 'round' })));
+    await waitFor(() => expect(screen.queryByText('bots.groupChat.notice.runtimeFailure.AUTH_REQUIRED:Bot')).toBeNull());
+    expect(screen.getByText('Earlier question')).toBeTruthy();
+    expect(screen.getByText('Latest question')).toBeTruthy();
+    expect(mocks.getBotGroup.mock.calls.at(-1)).toEqual(['g1', { sourceMessageIds: [source.id, latest.id] }]);
   });
 
   it('shows another human as a named participant instead of the current user bubble', async () => {

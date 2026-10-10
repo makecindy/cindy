@@ -77,7 +77,9 @@ describe('listCandidates', () => {
       ['device', 'mini', 'anthropic-1a2b3c4d', null],
       ['share', 'share:s1', 'anthropic', null],
     ]);
-    expect(candidates[1]).toMatchObject({ label: 's1-pc', ownerName: 'Magi' });
+    // 分享来的电脑只用分享者的昵称称呼，不用分享者的电脑名(provider-sharing.md §6)。
+    expect(candidates[1]).toMatchObject({ label: 'Magi', ownerName: 'Magi' });
+    expect(JSON.stringify(candidates)).not.toContain('s1-pc');
   });
 
   it('marks computers already in the group', async () => {
@@ -120,9 +122,21 @@ describe('resolveMembers', () => {
       ['device:mini:anthropic-1a2b3c4d', 'mini-name', 'ok', null],
       ['device:mini:gone', 'mini-name', 'unavailable', 'provider-off'],
       ['device:off:anthropic', 'off-name', 'offline', null],
-      ['share:s2:anthropic', 's2-pc', 'unavailable', 'share-paused'],
-      ['share:s9:anthropic', 'Kai PC', 'unavailable', 'share-removed'],
+      // 分享来的电脑用分享者的昵称；旧版本存下的快照(可能是电脑名)不再用。
+      ['share:s2:anthropic', 'Magi', 'unavailable', 'share-paused'],
+      ['share:s9:anthropic', '', 'unavailable', 'share-removed'],
     ]);
+  });
+
+  it('names members for activity records without the sharer’s computer name', () => {
+    const directory = createProviderGroupDirectory(deps());
+    const member = (patch: Partial<ProviderGroupConfig['members'][number]>) => ({
+      key: 'k', kind: 'device' as const, agentDeviceId: 'mini', providerId: 'anthropic', limit: 4, weight: 1, paused: false, ...patch,
+    });
+    expect(directory.memberLabel(member({ label: 'Mini' }))).toBe('Mini');
+    expect(directory.memberLabel(member({ key: 'local', kind: 'local', agentDeviceId: null }))).toBe('local');
+    expect(directory.memberLabel(member({ kind: 'share', agentDeviceId: 'share:s1', label: 's1-pc' }))).toBe('Magi');
+    expect(directory.memberLabel(member({ kind: 'share', agentDeviceId: 'share:gone', label: 'Kai PC' }))).toBe('');
   });
 
   it('caches catalogs briefly and forgets them on invalidate', async () => {

@@ -163,12 +163,15 @@ describe('mapAnthropicSdkModels', () => {
     const out = mapAnthropicSdkModels([
       { value: 'claude-sonnet-9-unknown', displayName: 'Sonnet 9' },
       { value: 'claude-haiku-9-unknown', displayName: 'Haiku 9' },
+      { value: 'claude-haiku-4-9-unknown', displayName: 'Haiku 4.9' },
     ]);
     // 目录没有该模型、也没有旧缓存明示窗口 → 1M / 200k 是猜的,只能展示。
     expect(out[0].model.contextWindow).toBe(1_000_000);
     expect(out[0].model.contextWindowVerified).toBeUndefined();
-    expect(out[1].model.contextWindow).toBe(200_000);
+    expect(out[1].model.contextWindow).toBe(1_000_000);
     expect(out[1].model.contextWindowVerified).toBeUndefined();
+    expect(out[2].model.contextWindow).toBe(200_000);
+    expect(out[2].model.contextWindowVerified).toBeUndefined();
   });
 
   it('active registry 快照提供窗口和 effort 基线', () => {
@@ -242,17 +245,22 @@ describe('mapAnthropicSdkModels', () => {
     });
   });
 
-  it('目录未知且能力缺席时,非 Haiku 新模型先开放 5 档,Haiku 仍保持 0 档', () => {
+  it('目录未知且能力缺席时,新模型(含 Haiku 5 起)先开放 5 档,Haiku 4 及更早仍保持 0 档', () => {
     const out = mapAnthropicSdkModels([
       { value: 'claude-opus-6', displayName: 'Opus 6' },
       { value: 'claude-haiku-5', displayName: 'Haiku 5' },
+      { value: 'claude-haiku-4-6', displayName: 'Haiku 4.6' },
     ]);
     expect(out[0]).toMatchObject({ hasEffortInfo: false });
-    expect(out[0].model).toMatchObject({
-      efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
-      defaultEffort: 'high',
-    });
-    expect(out[1].model).toMatchObject({
+    for (const entry of out.slice(0, 2)) {
+      expect(entry.model).toMatchObject({
+        contextWindow: 1_000_000,
+        efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+        defaultEffort: 'high',
+      });
+    }
+    expect(out[2].model).toMatchObject({
+      contextWindow: 200_000,
       efforts: [],
       defaultEffort: null,
     });
@@ -1092,5 +1100,22 @@ describe('noteAnthropicSdkSupportedModels(登录态门控 + 合并纪律)', () =
       contextWindowVerified: true,
       efforts: ['low', 'high'],
     });
+  });
+});
+
+describe('Claude 5.5 目录基线', () => {
+  it('Haiku 5.5 / Sonnet 5.5 能力缺席时取目录五档(默认 medium)', () => {
+    setActiveCatalog(BUNDLED_CATALOG);
+    const out = mapAnthropicSdkModels([
+      { value: 'claude-haiku-5-5', displayName: 'Haiku 5.5' },
+      { value: 'claude-sonnet-5-5', displayName: 'Sonnet 5.5' },
+    ]);
+    for (const entry of out) {
+      expect(entry.model).toMatchObject({
+        efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+        defaultEffort: 'medium',
+        contextWindow: 1_000_000,
+      });
+    }
   });
 });

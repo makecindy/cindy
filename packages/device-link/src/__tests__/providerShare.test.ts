@@ -149,6 +149,18 @@ describe('provider share identity scrubbing', () => {
       .toEqual({ id: 'anthropic', name: 'Anthropic' });
   });
 
+  it('keeps only a sane group size for guests', async () => {
+    const { readProviderShareGroupSize, scrubSharedProvider } = await import('../providerShareCatalog.js');
+    expect(scrubSharedProvider({ id: 'anthropic', name: 'Anthropic', groupSize: 3, group: { members: [{ label: 'Mini' }] } }))
+      .toEqual({ id: 'anthropic', name: 'Anthropic', groupSize: 3 });
+    for (const groupSize of [0, -1, 2.5, 513, '3', null]) {
+      expect(scrubSharedProvider({ id: 'anthropic', groupSize })).toEqual({ id: 'anthropic' });
+    }
+    expect(readProviderShareGroupSize({ groupSize: 4 })).toBe(4);
+    expect(readProviderShareGroupSize({ groupSize: '4' })).toBeNull();
+    expect(readProviderShareGroupSize(null)).toBeNull();
+  });
+
   it('drops a login name cut short by the 50-character auto-name limit', async () => {
     const { scrubProviderShareLabel, scrubSharedProvider } = await import('../providerShareCatalog.js');
     const longName = 'Alexandra Konstantinopoulou-Whitfield Junior';

@@ -14,6 +14,7 @@ import {
   decorateProviderListWithGroups,
   handleProviderGroupRemote,
   PROVIDER_GROUP_MAX_REMOTE_COOLDOWN_MS,
+  sharedProviderGroupSize,
   type ProviderGroupRemoteHandlerDeps,
 } from '../remoteHandler';
 import type { ProviderGroupDirectory } from '../directory';
@@ -174,6 +175,7 @@ describe('provider-group:remote', () => {
       },
       listCandidates: async () => [],
       readDeviceCatalog: async () => [],
+      memberLabel: (m) => m.label ?? m.key,
       invalidate: vi.fn(),
     };
     const router = createProviderGroupRouter({
@@ -237,5 +239,29 @@ describe('decorateProviderListWithGroups', () => {
     // 只有本机设置能产生组摘要；没开放的不带。
     expect(result.providers[1]).not.toHaveProperty('group');
     expect(result.providers[2]).not.toHaveProperty('group');
+  });
+
+  it('leaves the sharer’s computer name out of shared members', () => {
+    const shared: ProviderGroupMember = {
+      key: 'share:s1:anthropic', kind: 'share', agentDeviceId: 'share:s1', providerId: 'anthropic',
+      label: "Magi's Mac Mini", limit: 4, weight: 1, paused: false,
+    };
+    const result = decorateProviderListWithGroups(
+      { providers: [{ id: 'anthropic', remoteInvocationEnabled: true }] },
+      () => ({ ...CONFIG, members: [...CONFIG.members, shared] }),
+    ) as { providers: Array<{ group: { members: Array<Record<string, unknown>> } }> };
+    expect(result.providers[0].group.members[2]).toEqual({
+      key: shared.key, kind: 'share', agentDeviceId: 'share:s1', providerId: 'anthropic', paused: false,
+    });
+    expect(JSON.stringify(result)).not.toContain('Mac Mini');
+  });
+});
+
+describe('sharedProviderGroupSize', () => {
+  it('gives guests only the number of computers, and only while the provider stays open', () => {
+    const readGroup = (id: string) => (id === 'anthropic' ? CONFIG : null);
+    expect(sharedProviderGroupSize({ readGroup, isRemoteAllowed: () => true }, 'anthropic')).toBe(2);
+    expect(sharedProviderGroupSize({ readGroup, isRemoteAllowed: () => true }, 'openai')).toBeNull();
+    expect(sharedProviderGroupSize({ readGroup, isRemoteAllowed: () => false }, 'anthropic')).toBeNull();
   });
 });

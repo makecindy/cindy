@@ -250,7 +250,8 @@ export function providerGroupSummaryForWire(config: ProviderGroupConfig): Provid
       kind: m.kind,
       agentDeviceId: m.agentDeviceId,
       providerId: m.providerId,
-      ...(m.label ? { label: m.label } : {}),
+      // 分享来的电脑不带名字：旧版本存的快照是分享者的电脑名(provider-sharing.md §6)，界面按分享者昵称显示。
+      ...(m.label && m.kind !== 'share' ? { label: m.label } : {}),
       paused: m.paused,
     })),
   };

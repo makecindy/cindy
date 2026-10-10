@@ -8,6 +8,7 @@ import {
   encodeSessionTagCatalog,
   decodeSessionTagCatalog,
   scrubSharedProvider,
+  PROVIDER_SHARE_GROUP_SIZE_FIELD,
   CONTROLLER_CAPABILITY_SESSION_LIST_MESSAGES_V1,
   isListMessagePush,
   mapMessageBodies,
@@ -396,12 +397,14 @@ export function setRemoteAgentHandler(handler: RemoteAgentHandler | null): void 
   remoteAgentHandler = handler;
 }
 
-/** 供应商组(docs/product-rules/provider-groups.md)：只服务同账号电脑。 */
+/** 供应商组(docs/product-rules/provider-groups.md)：组摘要只服务同账号电脑。 */
 export interface ProviderGroupRemoteHandler {
   /** `provider-group:remote` 请求。 */
   handle(controller: string, raw: unknown): Promise<unknown>;
   /** 给同账号电脑的 `maker:provider:list` 补上组摘要(组所属供应商的 `group` 字段)。 */
   decorateProviderList(result: unknown): unknown;
+  /** 分享出去的这个供应商建了组时组里有几台电脑(只给受邀者看台数，不给名单)；没有组返回 null。 */
+  sharedGroupSize(providerId: string): number | null;
 }
 let providerGroupRemoteHandler: ProviderGroupRemoteHandler | null = null;
 
@@ -4164,9 +4167,16 @@ function projectProviderListForShare(result: unknown, providerId: string): unkno
   // Never hand the sharer's account identity (subscription / ChatGPT login) to another account,
   // nor this computer's data owner scope: the guest side has no use for it.
   const rest = Object.fromEntries(Object.entries(value).filter(([key]) => key !== 'dataOwnerId' && key !== 'ownerGeneration'));
+  // 建了组时只告诉受邀者组里有几台，不给组内电脑名单(provider-groups.md §8)；只有本机设置能产生它。
+  const groupSize = providerGroupRemoteHandler?.sharedGroupSize(providerId) ?? null;
   return {
     ...rest,
-    providers: providers.map(scrubSharedProvider),
+    providers: providers.map((provider) => {
+      const scrubbed: Record<string, unknown> = { ...scrubSharedProvider(provider) };
+      delete scrubbed[PROVIDER_SHARE_GROUP_SIZE_FIELD];
+      if (groupSize !== null) scrubbed[PROVIDER_SHARE_GROUP_SIZE_FIELD] = groupSize;
+      return scrubbed;
+    }),
     modelVisibilityOverrides: overrides,
     providerOrder: providers.map((provider) => provider.id),
   };

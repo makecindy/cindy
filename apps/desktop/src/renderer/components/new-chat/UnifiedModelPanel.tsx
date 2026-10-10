@@ -133,6 +133,11 @@ export interface UnifiedModelPanelProps {
   /** 价格 / 折扣查询。**modelId 传该引擎的 wire id**(报价表按 wire id 索引)。 */
   priceOf: (providerId: string, modelId: string, agent: AgentKind) => ModelPricePresentation | null;
   providerLabel: (providerId: string) => string;
+  /**
+   * 供应商分组标题下的一行说明(供应商组：「供应商组 · 3 台电脑：A、B、C」，provider-groups.md §10)；
+   * 返回 null 不显示。
+   */
+  providerNote?: (providerId: string) => string | null;
   effortLabelOf: (agent: AgentKind, effort: Effort) => string;
   listMaxHeight?: number;
   interactionDisabled?: boolean;
@@ -319,6 +324,7 @@ export function UnifiedModelPanel({
   agentFastModeCapable,
   priceOf,
   providerLabel,
+  providerNote,
   effortLabelOf,
   listMaxHeight,
   interactionDisabled = false,
@@ -1186,6 +1192,21 @@ export function UnifiedModelPanel({
                 >
                   <span className="truncate">{sectionLabel(section)}</span>
                 </div>
+                {(() => {
+                  const note =
+                    section.group?.type === 'provider' ? (providerNote?.(section.group.providerId) ?? null) : null;
+                  return note ? (
+                    <div
+                      data-group-note
+                      title={note}
+                      // Menu meta text (DESIGN §4): 12px / 400 / --cmd-palette-item-meta. `w-0 min-w-full`
+                      // keeps the note out of the panel's max-content width; it wraps (two lines at most).
+                      className="line-clamp-2 w-0 min-w-full break-words px-2.5 pb-1 text-12 leading-[1.33] text-[var(--cmd-palette-item-meta)]"
+                    >
+                      {note}
+                    </div>
+                  ) : null;
+                })()}
                 {section.rows.map((row) => {
                   const config = withOptimisticConfig(
                     row.anchor,
