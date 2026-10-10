@@ -101,6 +101,19 @@ it('dispatches into the current canonical task through the existing silent runne
   expect((await routineTools.history('bot', routine.id))[0].resultText).toBe('Reviewed PR');
 });
 
+it.skipIf(process.platform === 'win32')('rejects saving a pre-run hook command with a shell syntax error', async () => {
+  const input = {
+    name: 'Broken check',
+    prompt: 'Check',
+    enabled: false,
+    triggers: [{ id: 'tick', kind: 'interval' as const, intervalMs: 60000 }],
+    preRunHook: { command: `node '/a b/x.mjs'//'` },
+  };
+  await expect(routineTools.save('bot', input)).rejects.toThrow(/shell syntax error/);
+  await expect(routineTools.createOnce('bot', input, 'broken-hook-12345')).rejects.toThrow(/shell syntax error/);
+  expect(await routineTools.list('bot')).toEqual([]);
+});
+
 it('blocks enabling and manual runs until imported handover is ready while retaining disabled edits', async () => {
   let ready = false;
   configureRoutineHost({

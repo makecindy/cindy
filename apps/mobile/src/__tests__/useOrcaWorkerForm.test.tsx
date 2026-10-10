@@ -88,6 +88,60 @@ it('does not let a late capability response from A overwrite a model chosen on B
   expect(latest!.modelPicker.flatModelOptions.map((option) => option.id)).toEqual(['b-model']);
 });
 
+function LocationProbe({ maker, lead, selectable }: { maker: MobileMakerTransport; lead: string | null; selectable: boolean }) {
+  latest = useOrcaWorkerForm({
+    maker, prefsScope: 'user-1', active: true, setSheetOpen: () => undefined,
+    leadAgentDeviceId: lead, agentLocationSelectable: selectable,
+  });
+  return null;
+}
+
+// 远程供应商与本机供应商一视同仁(2026-10-10)：Worker 的 Agent 可以放到另一台电脑或分享上。
+it("defaults the Worker to the Lead's Agent computer and follows remote picks without converging them on the controlled computer", async () => {
+  const maker = fakeMaker();
+  await act(async () => { root.render(<LocationProbe maker={maker} lead="agent-pc" selectable />); await flush(); });
+  await act(async () => { latest!.reset(); await flush(); });
+  // Lead 在另一台电脑：位置跟它，本机记忆的模型属于别的目录，回到「默认」。
+  expect(latest!.form.agentDeviceId).toBe('agent-pc');
+  expect(latest!.form.model).toBeNull();
+  expect(latest!.agentLocationSelectable).toBe(true);
+
+  await act(async () => {
+    await latest!.modelPicker.select(
+      { agent: 'codex', modelId: 'remote-only-model', providerId: 'spark', effort: 'high', fast: false },
+      { deviceId: 'share:s1' },
+    );
+    await flush();
+  });
+  // 被控电脑的能力里没有这个模型，换 Agent 列表 / 收敛时也不清掉。
+  await act(async () => { root.render(<LocationProbe maker={maker} lead="agent-pc" selectable />); await flush(); });
+  expect(latest!.form).toMatchObject({ agentDeviceId: 'share:s1', model: { id: 'remote-only-model', providerId: 'spark' } });
+
+  await act(async () => {
+    await latest!.modelPicker.select(
+      { agent: 'codex', modelId: 'codex/gpt-5.5', providerId: 'xd', effort: 'high', fast: false },
+      { deviceId: null },
+    );
+    await flush();
+  });
+  expect(latest!.form.agentDeviceId).toBeNull();
+});
+
+it('leaves the Worker location unset when the controlled computer cannot honor it', async () => {
+  await act(async () => { root.render(<LocationProbe maker={fakeMaker()} lead="agent-pc" selectable={false} />); await flush(); });
+  await act(async () => { latest!.reset(); await flush(); });
+  expect(latest!.form.agentDeviceId).toBeUndefined();
+  // 旧被控端让 Worker 跟 Lead 去那台：模型交给那台按自己的目录解析。
+  expect(latest!.form.model).toBeNull();
+  await act(async () => {
+    await latest!.modelPicker.select(
+      { agent: 'codex', modelId: 'codex/gpt-5.5', providerId: 'xd', effort: 'high', fast: false },
+      { deviceId: 'agent-pc' },
+    );
+  });
+  expect(latest!.form.agentDeviceId).toBeUndefined();
+});
+
 it('keeps local Worker creation available on older Leads without the device-list channel', async () => {
   const lead = { ...fakeMaker(), orca: { listExecutionDevices: vi.fn(async () => { throw new Error('[DEVICE_LINK_CHANNEL_NOT_ALLOWED] old'); }) } } as unknown as MobileMakerTransport;
   await act(async () => { root.render(<ExecutionProbe maker={lead} target={() => fakeMaker()} />); await flush(); });

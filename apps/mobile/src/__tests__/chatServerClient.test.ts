@@ -11,6 +11,101 @@ const snapshot = (): ChatSnapshot => ({ room: room(), cursor: '9007199254741099'
 ] });
 
 describe('direct Chat Server client', () => {
+  it('reconciles all loaded message pages in bounded requests and clears an old-source failure on refresh', async () => {
+    const latest = Array.from({ length: 100 }, (_, n) => message(200 - n));
+    const older = Array.from({ length: 100 }, (_, n) => message(100 - n));
+    let status = 'failed';
+    const request = vi.fn().mockImplementation(async (path: string) => {
+      if (path.endsWith('/snapshot')) return snapshot();
+      if (path.includes('/execution-failures?')) {
+        const ids = new URLSearchParams(path.split('?')[1]).get('sourceIds')!.split(',');
+        return ids.includes(id(1)) ? [{ id: id(500), source_message_id: id(1), bot_id: id(10), epoch: 1, status,
+          failure_code: 'AUTH_REQUIRED' }] : [];
+      }
+      return path.includes('&before=') ? older : latest;
+    });
+    const client = createChatServerClient(request);
+    const first = await client.load(id(1));
+    expect(first.failures).toEqual([]);
+    const loaded = await client.older(id(1), first);
+    expect(chatGroupView(loaded, id(11)).messages[1]).toMatchObject({ runtimeFailureCode: 'AUTH_REQUIRED' });
+    const scopes = request.mock.calls.filter(([path]) => path.includes('/execution-failures?'))
+      .map(([path]) => new URLSearchParams(path.split('?')[1]).get('sourceIds')!.split(','));
+    expect(scopes.map(ids => ids.length)).toEqual([100, 100, 100]);
+    expect(scopes.slice(1).flat()).toEqual([...latest, ...older].map(message => message.id));
+    status = 'queued';
+    expect(chatGroupView(await client.load(id(1), older.at(-1)!.seq), id(11)).messages).toHaveLength(200);
+  });
+
+  it.each(['structured', 'old-marker', 'chat-forgery'])('projects imported runtime notices safely: %s', shape => {
+    const source = { ...message(20), origin: shape === 'chat-forgery' ? 'chat' : 'import',
+      content: [{ type: 'text', text: shape === 'structured' ? 'group activity' : 'cindy-runtime-error:AUTH_REQUIRED' },
+        { type: 'card', namespace: 'cindy.local-history', schemaRevision: 1, fallback: 'group activity',
+          data: { kind: 'notice', authorKind: 'system', authorName: 'Bot', noticeCode: 'member-failed',
+            ...(shape !== 'old-marker' ? { runtimeFailureCode: 'AUTH_REQUIRED' } : {}) } }] };
+    const view = chatGroupView({ snapshot: snapshot(), messages: [source], before: null }, id(11));
+    if (shape === 'chat-forgery') {
+      expect(view.messages[0]).toMatchObject({ kind: 'message', authorKind: 'user' });
+      expect(view.messages[0].runtimeFailureCode).toBeUndefined();
+    } else {
+      expect(view.messages[0]).toMatchObject({ kind: 'notice', authorKind: 'system', authorName: 'Bot', runtimeFailureCode: 'AUTH_REQUIRED', content: '' });
+      expect(JSON.stringify(view.messages)).not.toContain('cindy-runtime-error:');
+      expect(chatRoomRow(room(), { ...snapshot(), messages: [source] }, id(11)).item.display.preview).not.toContain('cindy-runtime-error:');
+    }
+  });
+  it.each(['AUTH_REQUIRED', 'private diagnostic', undefined])('reads executions and projects a safe notice beside its visible source: %s', async failure_code => {
+    const source = message(20);
+    let status = 'failed';
+    const request = vi.fn();
+    request.mockImplementation(async (path: string) => path.endsWith('/snapshot') ? snapshot()
+      : path.includes('/execution-failures?') ? [{ id: id(30), source_message_id: source.id, bot_id: id(10), epoch: 1, status, failure_code }]
+      : [source]);
+    const client = createChatServerClient(request);
+    const page = await client.load(id(1));
+    expect(request).toHaveBeenCalledWith(`/conversations/${id(1)}/execution-failures?sourceIds=${source.id}`);
+    const view = chatGroupView(page, id(11));
+    expect(view.messages).toHaveLength(2);
+    expect(view.messages[0]).toMatchObject({ id: source.id, kind: 'message' });
+    expect(view.messages[1]).toMatchObject({ id: `execution-failure:${id(30)}:1`, sequence: view.messages[0].sequence,
+      kind: 'notice', runtimeFailureCode: failure_code === 'AUTH_REQUIRED' ? failure_code : 'RUNTIME_ERROR' });
+    expect(view.lastMessage?.preview).toBe('20');
+    expect(JSON.stringify(view.messages)).not.toContain('private diagnostic');
+    status = 'queued';
+    expect(chatGroupView(await client.load(id(1)), id(11)).messages).toHaveLength(1);
+    expect(chatGroupView({ ...page, messages: [] }, id(11)).messages).toHaveLength(0);
+    expect(chatGroupView({ ...page, messages: [{ ...source, deleted: true }] }, id(11)).messages).toHaveLength(0);
+  });
+  it('keeps simultaneous failures distinct without changing the source cursor or leaking detail', () => {
+    const source = message(20);
+    const execution = { id: id(30), source_message_id: source.id, bot_id: id(10), epoch: 2, status: 'failed',
+      failure_code: 'RUNTIME_TIMEOUT', detail: { message: 'private diagnostic' } };
+    const view = chatGroupView({ snapshot: snapshot(), messages: [source, message(21)], before: source.seq,
+      failures: [execution, { ...execution, id: id(31), bot_id: id(11), failure_code: 'AUTH_REQUIRED' },
+        { ...execution, id: id(32), conversation_id: id(99) }, { ...execution, id: id(33), epoch: NaN }] }, id(11));
+    expect(view.messages.map(entry => entry.id)).toEqual([source.id, `execution-failure:${id(30)}:2`, `execution-failure:${id(31)}:2`, id(21)]);
+    expect(view.messages.slice(0, 3).map(entry => entry.sequence)).toEqual([1, 1, 1]);
+    expect(view.messages[1].noticeCode).toBe('member-timeout');
+    expect(view.hasMoreBefore).toBe(true);
+    expect(view.lastMessage?.preview).toBe('21');
+    expect(JSON.stringify(view.messages)).not.toContain('private diagnostic');
+  });
+  it('falls back only for a missing endpoint on an older server', async () => {
+    const source = message(20);
+    const request = vi.fn().mockResolvedValueOnce(snapshot()).mockResolvedValueOnce([source])
+      .mockRejectedValueOnce(Object.assign(new Error('NOT_FOUND'), { status: 404 }))
+      .mockResolvedValueOnce([{ id: id(30), source_message_id: source.id, bot_id: id(10), epoch: 1, status: 'failed', failure_code: 'AUTH_REQUIRED' }]);
+    const page = await createChatServerClient(request).load(id(1));
+    expect(request.mock.calls.at(-1)?.[0]).toBe(`/conversations/${id(1)}/executions`);
+    expect(chatGroupView(page, id(11)).messages[1].runtimeFailureCode).toBe('AUTH_REQUIRED');
+  });
+  it('surfaces execution read denial or malformed success through the existing load error path', async () => {
+    const request = vi.fn().mockResolvedValueOnce(snapshot()).mockResolvedValueOnce([message(20)])
+      .mockRejectedValueOnce(Object.assign(new Error('NOT_MEMBER'), { status: 403 }))
+      .mockResolvedValueOnce(snapshot()).mockResolvedValueOnce([message(20)]).mockResolvedValueOnce({});
+    const client = createChatServerClient(request);
+    await expect(client.load(id(1))).rejects.toMatchObject({ status: 403 });
+    await expect(client.load(id(1))).rejects.toThrow('INVALID_CHAT_EXECUTIONS');
+  });
   it('uses the account human actor and rejects a companion identity', async () => {
     const request = vi.fn().mockResolvedValueOnce({ actor: { id: id(10), kind: 'human' } })
       .mockResolvedValueOnce({ actor: { id: id(11), kind: 'bot' } });
@@ -36,12 +131,13 @@ describe('direct Chat Server client', () => {
   });
   it('opens and paginates main history, preserving exact sequence cursors and author identity', async () => {
     const messages = Array.from({ length: 100 }, (_, n) => message(200 - n));
-    const request = vi.fn().mockResolvedValueOnce(snapshot()).mockResolvedValueOnce(messages).mockResolvedValueOnce([message(100)]);
+    const request = vi.fn().mockResolvedValueOnce(snapshot()).mockResolvedValueOnce(messages).mockResolvedValueOnce([])
+      .mockResolvedValueOnce([message(100)]).mockResolvedValueOnce([]).mockResolvedValueOnce([]);
     const client = createChatServerClient(request);
     const page = await client.load(id(1));
     expect(page.before).toBe(messages.at(-1)!.seq);
     const older = await client.older(id(1), page);
-    expect(request.mock.calls[2][0]).toBe(`/conversations/${id(1)}/messages?limit=100&before=${messages.at(-1)!.seq}`);
+    expect(request.mock.calls[3][0]).toBe(`/conversations/${id(1)}/messages?limit=100&before=${messages.at(-1)!.seq}`);
     expect(older.before).toBeNull();
     const view = chatGroupView(older, id(11));
     expect(view.messages).toHaveLength(101);
@@ -83,7 +179,7 @@ describe('direct Chat Server client', () => {
   it('reauthorizes and replaces loaded older history on refresh instead of retaining deleted text', async () => {
     const recent = Array.from({ length: 100 }, (_, n) => message(200 - n));
     const request = vi.fn().mockResolvedValueOnce(snapshot()).mockResolvedValueOnce(recent)
-      .mockResolvedValueOnce([{ ...message(100), content: [{ type: 'text', text: 'edited' }] }]);
+      .mockResolvedValueOnce([{ ...message(100), content: [{ type: 'text', text: 'edited' }] }]).mockResolvedValueOnce([]).mockResolvedValueOnce([]);
     const page = await createChatServerClient(request).load(id(1), message(100).seq);
     expect(chatGroupView(page, id(10)).messages[0].content).toBe('edited');
     expect(request.mock.calls[2][0]).toContain(`before=${message(101).seq}`);

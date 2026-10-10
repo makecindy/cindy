@@ -188,9 +188,12 @@ export function TaskMoveSubmenu({
         ) : (
           localProjects
         )}
+        {/* Agent 在另一台电脑运行的任务可以换项目(那台按任务 id 定址 Agent 工作区)，
+            但不能复制到其他电脑：Agent 会话记录在那台，复制带不走。
+            另一台电脑派来的协同 Worker 同样不复制：协同归属在那台(main 同样拒绝)。 */}
         {['desktop', 'shared', 'feishu'].includes(session.source ?? 'desktop') &&
           session.orcaRole !== 'worker' &&
-          // 另一台电脑派来的协同 Worker：协同归属在那台，不复制到其他电脑(main 同样拒绝)。
+          !session.agentDeviceId &&
           !session.orcaRemoteLead && (
             <>
               <DropdownMenuSeparator />

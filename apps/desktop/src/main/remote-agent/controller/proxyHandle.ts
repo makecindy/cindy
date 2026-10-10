@@ -163,6 +163,10 @@ export function approvalActionsFor(
       // 路径不合法时不登记。
     }
   }
+  // 受邀者任务里本机提供的 WebFetch：登记批准过的地址。
+  if (name === 'webfetch' && typeof input.url === 'string' && input.url.trim()) {
+    actions.push({ kind: 'fetch', url: input.url.trim() });
+  }
   return actions;
 }
 
@@ -187,7 +191,12 @@ export interface RemoteHandleDeps {
   onVendorOptions?: (patch: Record<string, unknown>) => void;
   /** 句柄关闭后释放本机资源(执行器、MCP 身份等)。 */
   dispose(): Promise<void>;
+  /** 供应商组(分享的人)：这次发送要不要告诉对方开始新的一轮(用户亲自接手过)。 */
+  takeGroupNewRound?(): boolean;
 }
+
+/** 本机自己发起的确认的内容(确认卡上显示的工具、参数与说明)。 */
+export type LocalConfirmation = Omit<Extract<InteractionRequest, { kind: 'permission' }>, 'kind' | 'requestId'>;
 
 export interface RemoteAgentHandleController {
   handle: AgentSessionHandle;
@@ -195,6 +204,11 @@ export interface RemoteAgentHandleController {
   onState(state: Record<string, unknown>): void;
   onRequest(request: RemoteAgentReverseRequest): Promise<RemoteAgentReply> | null;
   onClosed(reason: string, message?: string): void;
+  /**
+   * 本机自己发起的确认(不是 Agent 发来的)：走与 Agent 确认同一个确认卡通道，桌面、手机远控与 IM 都能
+   * 处理。只认这一次「允许」，不接受「总是允许」；交互还没接上或任务已结束时按拒绝处理。
+   */
+  confirm(request: LocalConfirmation): Promise<boolean>;
 }
 
 export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHandleController {
@@ -221,6 +235,7 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
 
   async function sendLike(method: 'send' | 'steer', message: UserMessage, opts?: SendOptions): Promise<void> {
     const encoded = await encodeSendOptions(opts, readImage);
+    if (method === 'send' && deps.takeGroupNewRound?.()) encoded.wire.groupNewRound = true;
     const wireMessage = await encodeUserMessage(message, readImage);
     const projectMessage = (wire: typeof wireMessage) => {
       if (typeof wire.content === 'string') wire.content = deps.workspace.mapTextForAgent(wire.content);
@@ -424,6 +439,11 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
         })();
       }
       return null;
+    },
+    async confirm(request) {
+      if (!resolver || disposed) return false;
+      const decision = await resolver({ ...request, kind: 'permission', requestId: deps.newId() });
+      return !disposed && decision.kind === 'permission' && decision.behavior === 'allow';
     },
     onClosed(reason, message) {
       // 'superseded'：同一任务被重新打开、旧实例让位给新实例，不是错误，静默收起。

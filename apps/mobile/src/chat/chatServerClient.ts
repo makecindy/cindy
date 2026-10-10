@@ -1,5 +1,6 @@
 /** The existing Chat Server HTTP contract; no device-link or executor registration. */
-import type { BotGroupAttachment, BotGroupMemberView, BotGroupMessageView, BotGroupRemoteChatData } from '@cindy/maker-shared/botGroupChat';
+import { readBotGroupExecutionFailure, readImportedBotGroupRuntimeFailureCode, type BotGroupAttachment, type BotGroupMemberView, type BotGroupMessageView, type BotGroupRemoteChatData } from '@cindy/maker-shared/botGroupChat';
+import { botGroupExecutionFailureBatches, projectBotGroupExecutionFailures } from '@cindy/maker-shared/botGroupPresentation';
 import type { HostedRemoteCollectionItem } from '@/device-link/remoteResources';
 
 export interface ChatRoom {
@@ -19,7 +20,11 @@ export interface ChatMessage {
     namespace?: string; schemaRevision?: number; data?: Record<string, unknown> }>;
 }
 export interface ChatSnapshot { room: ChatRoom; members: ChatMember[]; messages: ChatMessage[]; cursor: string; reads?: Array<{ thread_key: string; read_seq: string }> }
-export interface ChatPage { snapshot: ChatSnapshot; messages: ChatMessage[]; before: string | null }
+export interface ChatExecutionFailure {
+  id: string; conversation_id?: string; source_message_id: string; bot_id: string; epoch: number; status?: string;
+  failure_code?: unknown; updated_at?: string; plan_id?: string | null;
+}
+export interface ChatPage { snapshot: ChatSnapshot; messages: ChatMessage[]; before: string | null; failures?: ChatExecutionFailure[] }
 export type ChatRequest = <T>(path: string, method?: 'GET' | 'POST', body?: unknown) => Promise<T>;
 
 export function chatId(value: string): string {
@@ -40,7 +45,7 @@ export function chatAccessLost(error: unknown): boolean {
 }
 const memberName = (member: ChatMember) => member.kind === 'bot' && member.ownerName?.trim()
   ? `${member.name} (${member.ownerName.trim()})` : member.name;
-const contentText = (message: ChatMessage) => message.deleted ? '' : message.content
+const contentText = (message: ChatMessage) => message.deleted || readImportedBotGroupRuntimeFailureCode(message) ? '' : message.content
   .map(block => block.text ?? block.fallback ?? (block.type === 'media' ? block.caption ?? '' : '')).join('\n');
 
 /** Empty device identity means a server-owned conversation, never a fictitious computer. */
@@ -112,6 +117,12 @@ export function chatGroupView(page: ChatPage, selfId: string): BotGroupRemoteCha
   const sorted = [...new Map(page.messages.map(message => [message.id, message])).values()].filter(message => !message.deleted)
     .sort((a, b) => BigInt(chatCursor(a.seq)) < BigInt(chatCursor(b.seq)) ? -1 : BigInt(a.seq) > BigInt(b.seq) ? 1 : 0);
   const messages: BotGroupMessageView[] = sorted.map((message, index) => {
+    const runtimeFailureCode = readImportedBotGroupRuntimeFailureCode(message);
+    const legacy = runtimeFailureCode ? message.content.find(block => block.type === 'card' && block.namespace === 'cindy.local-history' && block.schemaRevision === 1)?.data : undefined;
+    if (runtimeFailureCode) return { id: message.id, sequence: index + 1, kind: 'notice', authorKind: 'system',
+      authorBotId: message.authorId, authorName: typeof legacy?.authorName === 'string' ? legacy.authorName : '', isSelf: false,
+      content: '', mentions: { all: false, botIds: [] }, noticeCode: runtimeFailureCode === 'RUNTIME_TIMEOUT' ? 'member-timeout' : 'member-failed',
+      runtimeFailureCode, planId: null, files: [], attachments: [], createdAt: Date.parse(message.createdAt) };
     const member = active.find(candidate => candidate.id === message.authorId);
     const joined = message.origin === 'system' && !message.deleted && message.content.find(block =>
       block.type === 'card' && block.namespace === 'cindy.membership' && block.schemaRevision === 1 && block.data?.type === 'member.joined');
@@ -128,16 +139,39 @@ export function chatGroupView(page: ChatPage, selfId: string): BotGroupRemoteCha
       }), createdAt: Date.parse(message.createdAt) };
   });
   const last = messages.at(-1);
+  const failures = (page.failures ?? []).flatMap(row => {
+    const failure = readBotGroupExecutionFailure(row, room.id);
+    if (!failure) return [];
+    const member = members.find(candidate => candidate.id === failure.botId);
+    return [{ ...failure, botName: member ? memberName(member) : '' }];
+  });
   return { id: room.id, name: room.name, serverBacked: true, archived: room.archived, selfActorId: selfId,
     revision: room.revision, members: memberViews, replyMode: room.response_mode, speakingMode: room.speaking_mode,
     organizerBotId: room.organizer_id ?? null, projectDir: null, projectDirName: null,
     createdAt: Date.parse(room.created_at), updatedAt: Date.parse(room.updated_at),
     lastMessage: last ? { authorKind: last.authorKind, authorName: last.authorName, preview: last.content.slice(0, 80), createdAt: last.createdAt } : null,
-    speakingBotIds: [], planningBotId: null, openPlan: null, plans: [], messages,
+    speakingBotIds: [], planningBotId: null, openPlan: null, plans: [], messages: projectBotGroupExecutionFailures(messages, failures),
     hasMoreBefore: page.before !== null, round: { status: 'idle', speakers: [], canContinue: false }, supportsAttachments: false };
 }
 
 export function createChatServerClient(request: ChatRequest) {
+  async function failures(roomId: string, messages: ChatMessage[]): Promise<ChatExecutionFailure[]> {
+    const sources = new Set(messages.map(message => chatId(message.id)));
+    let value: ChatExecutionFailure[] = [];
+    try {
+      for (const batch of botGroupExecutionFailureBatches([...sources])) {
+        const page = await request<ChatExecutionFailure[]>(`/conversations/${chatId(roomId)}/execution-failures?sourceIds=${batch.join(',')}`);
+        if (!Array.isArray(page)) throw new Error('INVALID_CHAT_EXECUTIONS');
+        value.push(...page);
+      }
+    }
+    catch (error) {
+      if (!error || typeof error !== 'object' || !('status' in error) || error.status !== 404) throw error;
+      value = await request<ChatExecutionFailure[]>(`/conversations/${chatId(roomId)}/executions`);
+    }
+    if (!Array.isArray(value)) throw new Error('INVALID_CHAT_EXECUTIONS');
+    return value.filter(row => sources.has(row.source_message_id));
+  }
   return {
     async list(): Promise<ChatRoom[]> {
       const rooms = new Map<string, ChatRoom>();
@@ -185,12 +219,14 @@ export function createChatServerClient(request: ChatRequest) {
         if (next && BigInt(next) >= BigInt(before)) throw new Error('INVALID_CHAT_PAGE');
         messages.push(...batch); before = next;
       }
-      return { snapshot, messages, before };
+      return { snapshot, messages, before, failures: await failures(room, messages) };
     },
     async older(roomId: string, page: ChatPage): Promise<ChatPage> {
       if (!page.before) return page;
       const messages = await request<ChatMessage[]>(`/conversations/${chatId(roomId)}/messages?limit=100&before=${chatCursor(page.before)}`);
-      return { ...page, messages: [...page.messages, ...messages], before: messages.length === 100 ? chatCursor(messages.at(-1)!.seq) : null };
+      const loaded = [...page.messages, ...messages];
+      return { ...page, messages: loaded, failures: await failures(roomId, loaded),
+        before: messages.length === 100 ? chatCursor(messages.at(-1)!.seq) : null };
     },
     async media(roomId: string, mediaId: string): Promise<BotGroupAttachment> {
       const media = await request<{ name: string; type: string; size: string | number; url: string }>(`/conversations/${chatId(roomId)}/media/${chatId(mediaId)}`);

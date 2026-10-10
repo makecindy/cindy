@@ -3,7 +3,7 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import { classifyProviderGroupSwitchCause } from '../switchCause';
+import { classifyProviderGroupSwitchCause, isProviderGroupConnectionLoss } from '../switchCause';
 
 describe('classifyProviderGroupSwitchCause', () => {
   it('switches on usage limits, quota and billing depletion', () => {
@@ -33,5 +33,22 @@ describe('classifyProviderGroupSwitchCause', () => {
     expect(classifyProviderGroupSwitchCause({ message: 'Permission denied by user' })).toBeNull();
     expect(classifyProviderGroupSwitchCause({ reason: 'turn-failed', message: 'Tool execution failed' })).toBeNull();
     expect(classifyProviderGroupSwitchCause(undefined)).toBeNull();
+  });
+});
+
+describe('isProviderGroupConnectionLoss', () => {
+  it('recognises failures that only say the connection to that computer dropped', () => {
+    expect(isProviderGroupConnectionLoss({ reason: 'remote_agent_closed' })).toBe(true);
+    expect(isProviderGroupConnectionLoss({ message: '[REMOTE_AGENT_DEVICE_UNREACHABLE] unreachable' })).toBe(true);
+    expect(isProviderGroupConnectionLoss({ message: '[REMOTE_AGENT_EXPIRED] session expired' })).toBe(true);
+    expect(isProviderGroupConnectionLoss({ message: '[REMOTE_AGENT_NOT_FOUND] no such session' })).toBe(true);
+  });
+
+  it('does not treat a reachable computer that refuses or cannot run the task as a dropped connection', () => {
+    expect(isProviderGroupConnectionLoss({ message: '[REMOTE_AGENT_UNAVAILABLE] the agent could not start' })).toBe(false);
+    expect(isProviderGroupConnectionLoss({ message: '[REMOTE_AGENT_PROVIDER_NOT_ALLOWED] not allowed' })).toBe(false);
+    expect(isProviderGroupConnectionLoss({ message: '[REMOTE_AGENT_SHARE_PAUSED] paused' })).toBe(false);
+    expect(isProviderGroupConnectionLoss({ sdkError: 'rate_limit' })).toBe(false);
+    expect(isProviderGroupConnectionLoss(undefined)).toBe(false);
   });
 });

@@ -6,7 +6,8 @@
  * `codex exec-server --listen stdio://`，命令、读写文件、补丁都在本机执行。
  *
  * 每个请求转给 exec-server 之前先过本机权限上限(与 Claude Code / Pi 同一个闸门)：
- * 凭证类路径与高危命令只认本机用户批准过的同一操作；不通过就直接回 JSON-RPC 错误。
+ * 凭证类路径与高危命令只认本机用户批准过的同一操作；不通过就直接回 JSON-RPC 错误。供应商分享的
+ * 受邀者任务里，凭证类操作没有批准时先在本机弹确认卡，等待期间这条连接后面的消息排在它后面。
  */
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import path from 'node:path';
@@ -29,21 +30,42 @@ export const EXEC_SERVER_WS_PATH = '/ws/exec-server';
 const MAX_LINE_CHARS = 48 * 1024 * 1024;
 /** 单帧数据上限，留出 JSON 包装余量。 */
 const FRAME_CHARS = REMOTE_AGENT_MAX_INLINE_PAYLOAD_CHARS - 1024;
+/** 一次回推超过这么久算慢链路(每个 Codex 文件请求都要等一次回推)。 */
+const SLOW_PUSH_MS = 2_000;
 
 export interface ExecServerRelayDeps {
   codexPath: string;
   cwd: string;
   workspace: ExecutorWorkspace;
   authorize(action: ExecutorAction): ExecutorGateDecision;
+  /** 凭证类操作在本机补问(供应商分享的受邀者任务)；允许后再 authorize 一次即放行。 */
+  confirm?(action: ExecutorAction): Promise<boolean>;
   push(frames: RemoteAgentPushFrame[]): Promise<void>;
   env?: NodeJS.ProcessEnv;
   log?: { warn(message: string, meta?: Record<string, unknown>): void };
+  now?: () => number;
+}
+
+/**
+ * 中继的往来统计(只含计数与耗时)。任务结束时有慢回推或闸门拒绝就记一条日志：前者说明链路慢
+ * (托管 Codex 启动要等几十次回推，#5764)，后者说明 Agent 有文件或命令没拿到(如任务在子目录时
+ * 上级目录的 Skill 遍历)。
+ */
+export interface ExecServerRelayStats {
+  requests: number;
+  rejected: number;
+  pushes: number;
+  pushMaxMs: number;
+  pushAvgMs: number;
+  slowPushes: number;
 }
 
 interface Connection {
   child: ChildProcessWithoutNullStreams;
   buffer: string;
   closed: boolean;
+  /** 有消息在等本机确认时，后面的消息按顺序排在它后面。 */
+  queue?: Promise<void>;
 }
 
 /** `["/bin/zsh","-lc","cmd"]` → `cmd`；其它形态按空格拼接。 */
@@ -68,9 +90,16 @@ function fromFileUrl(value: unknown, base: string): string | null {
   return path.isAbsolute(value) ? value : path.resolve(base, value);
 }
 
-const READ_METHODS = new Set(['fs/readFile', 'fs/readDirectory', 'fs/readDir', 'fs/listDirectory']);
-/** 只看元数据、不读内容的操作不过闸门。 */
-const METADATA_METHODS = new Set(['fs/getMetadata', 'fs/exists', 'fs/stat']);
+// exec-server 的只读操作按读取过闸门；不在下面几组里的 `fs/` 方法一律按写入处理(新版 Codex 新增的
+// 方法先从严)。`fs/walk`、`fs/canonicalize`、`fs/open` 曾落进写入：计划模式下工作区里的项目 Skill
+// 加载被拒，工作区外的单文件读取也被当成区外写入拒掉(#5764)。
+
+/** 读单个文件或单层目录；fs/open 的显式写入模式在下方按写入处理。 */
+const READ_METHODS = new Set(['fs/readFile', 'fs/open', 'fs/readDirectory', 'fs/readDir', 'fs/listDirectory']);
+/** 递归遍历：按目录级读取过闸门，根在工作区外与本机任务的搜索一样要本机确认。 */
+const TREE_READ_METHODS = new Set(['fs/walk']);
+/** 只看元数据、不读内容的操作不过闸门(`fs/canonicalize` 只解析真实路径)。 */
+const METADATA_METHODS = new Set(['fs/getMetadata', 'fs/exists', 'fs/stat', 'fs/canonicalize']);
 
 /** 把一个 exec-server 请求换成要过闸门的操作。 */
 export function execServerActions(method: string, params: unknown, cwd: string): ExecutorAction[] {
@@ -84,7 +113,12 @@ export function execServerActions(method: string, params: unknown, cwd: string):
   const paths = ['path', 'sourcePath', 'destinationPath', 'source', 'destination', 'from', 'to', 'target']
     .map((key) => fromFileUrl(record[key], cwd))
     .filter((value): value is string => !!value);
-  const kind = READ_METHODS.has(method) ? 'read' : 'write';
+  if (TREE_READ_METHODS.has(method)) return paths.map((target) => ({ kind: 'read', path: target, scope: 'tree' }));
+  // fs/open also handles writes: Codex replace/write mode creates or truncates a file, while
+  // the later fs/writeBlock request carries only a handle and no path. Check the write at open.
+  // An omitted mode is the legacy read-only shape; every explicit unknown mode is fail-closed.
+  const readOnlyOpen = method !== 'fs/open' || record.mode === undefined || record.mode === 'read';
+  const kind = READ_METHODS.has(method) && readOnlyOpen ? 'read' : 'write';
   return paths.map((target) => ({ kind, path: target }) as ExecutorAction);
 }
 
@@ -151,8 +185,14 @@ export class ExecServerRelay {
   private outbox: RemoteAgentPushFrame[] = [];
   private flushing: Promise<void> | null = null;
   private closed = false;
+  private readonly counts = { requests: 0, rejected: 0, pushes: 0, pushTotalMs: 0, pushMaxMs: 0, slowPushes: 0 };
 
   constructor(private readonly deps: ExecServerRelayDeps) {}
+
+  stats(): ExecServerRelayStats {
+    const { requests, rejected, pushes, pushTotalMs, pushMaxMs, slowPushes } = this.counts;
+    return { requests, rejected, pushes, pushMaxMs, pushAvgMs: pushes ? Math.round(pushTotalMs / pushes) : 0, slowPushes };
+  }
 
   handle(item: Extract<RemoteAgentStreamItem, { t: 'ws' }>): void {
     if (this.closed) return;
@@ -173,6 +213,8 @@ export class ExecServerRelay {
     if (this.closed) return;
     this.closed = true;
     for (const connId of [...this.connections.keys()]) this.dropConnection(connId, false);
+    const stats = this.stats();
+    if (stats.slowPushes > 0 || stats.rejected > 0) this.deps.log?.warn('remote agent: exec-server relay summary', { ...stats });
   }
 
   private open(connId: string, wsPath: string): void {
@@ -226,21 +268,63 @@ export class ExecServerRelay {
     } catch {
       message = null;
     }
+    let actions: ExecutorAction[] = [];
     if (message && typeof message.method === 'string' && message.id !== undefined) {
+      this.counts.requests += 1;
       message.params = mapExecServerParams(message.params, this.deps.workspace, message.method);
       data = JSON.stringify(message);
-      for (const action of execServerActions(message.method, message.params, this.deps.cwd)) {
-        const decision = this.deps.authorize(action);
-        if (!decision.ok) {
-          this.sendMessage(connId, JSON.stringify({
-            id: message.id,
-            error: { code: -32001, message: this.deps.workspace.mapTextForAgent(decision.reason ?? 'Not allowed in this workspace.') },
-          }));
-          return;
-        }
+      actions = execServerActions(message.method, message.params, this.deps.cwd);
+    }
+    const id = message?.id;
+    const line = `${data}\n`;
+    if (connection.queue) {
+      this.enqueue(connection, () => this.deliver(connId, connection, id, line, actions));
+      return;
+    }
+    for (const [index, action] of actions.entries()) {
+      const decision = this.deps.authorize(action);
+      if (decision.ok) continue;
+      if (!this.deps.confirm) {
+        this.reject(connId, id, decision);
+        return;
+      }
+      // 等本机用户确认(凭证类)：这一条与之后的消息都按顺序等它。已放行的操作不再检查(批准只能用一次)。
+      const rest = actions.slice(index);
+      this.enqueue(connection, () => this.deliver(connId, connection, id, line, rest));
+      return;
+    }
+    connection.child.stdin.write(line);
+  }
+
+  private enqueue(connection: Connection, task: () => Promise<void>): void {
+    const next = (connection.queue ?? Promise.resolve()).then(task).catch((error: unknown) => {
+      this.deps.log?.warn('remote agent: exec-server message failed', { error: String(error) });
+    });
+    connection.queue = next;
+    void next.then(() => {
+      if (connection.queue === next) connection.queue = undefined;
+    });
+  }
+
+  private async deliver(connId: string, connection: Connection, id: unknown, line: string, actions: ExecutorAction[]): Promise<void> {
+    for (const action of actions) {
+      let decision = this.deps.authorize(action);
+      if (!decision.ok && this.deps.confirm && await this.deps.confirm(action)) decision = this.deps.authorize(action);
+      if (connection.closed) return;
+      if (!decision.ok) {
+        this.reject(connId, id, decision);
+        return;
       }
     }
-    connection.child.stdin.write(`${data}\n`);
+    if (!connection.closed) connection.child.stdin.write(line);
+  }
+
+  private reject(connId: string, id: unknown, decision: ExecutorGateDecision): void {
+    this.counts.rejected += 1;
+    this.sendMessage(connId, JSON.stringify({
+      id,
+      error: { code: -32001, message: this.deps.workspace.mapTextForAgent(decision.reason ?? 'Not allowed in this workspace.') },
+    }));
   }
 
   private projectOutbound(line: string): string {
@@ -301,8 +385,19 @@ export class ExecServerRelay {
         batch.push(this.outbox.shift()!);
         size += length;
       }
+      const now = this.deps.now ?? Date.now;
+      const startedAt = now();
       try {
         await this.deps.push(batch);
+        const elapsed = now() - startedAt;
+        this.counts.pushes += 1;
+        this.counts.pushTotalMs += elapsed;
+        this.counts.pushMaxMs = Math.max(this.counts.pushMaxMs, elapsed);
+        if (elapsed >= SLOW_PUSH_MS) {
+          this.counts.slowPushes += 1;
+          // 第一次慢就记一条(任务可能要很久才结束，汇总那条来得晚)。
+          if (this.counts.slowPushes === 1) this.deps.log?.warn('remote agent: exec-server push slow', { pushMs: elapsed, frames: batch.length });
+        }
       } catch (error) {
         // 批次已从 outbox 取出但交付失败(push 同序号重试耗尽)：不能只记日志就继续发后续帧
         // ——远端 Codex 会永久缺这条 JSON-RPC 回复卡住，丢失的中间分片还会把后续分片拼成

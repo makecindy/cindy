@@ -22,6 +22,7 @@ import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { createLogger } from '../logger.js';
 import { RoutineFileStore } from './store.js';
+import { assertPreRunHookCommandSyntax } from '../scheduler-host/pre-run-hook.js';
 import { untrustedJsonBlock } from '../../shared/untrustedPrompt.js';
 import { getCurrentDbClientSnapshot } from '../localDb/client/current.js';
 import { botProfiles } from '../localDb/schema.js';
@@ -412,16 +413,23 @@ async function withBot<T>(
 }
 
 /** Single management boundary used by desktop, remote resources and all MCP harnesses. */
+/** routine_save、伙伴设置与远程资源共用的保存边界:与调度器保存同一套前置检查语法预检。 */
+async function assertRoutineHookSyntax(input: RoutineInput): Promise<void> {
+  if (input.preRunHook?.command?.trim()) await assertPreRunHookCommandSyntax(input.preRunHook.command);
+}
+
 export const routineTools = {
   list: (botId: string) => withBot(botId, (engine) => engine.list(botId)),
   createOnce: (botId: string, input: RoutineInput, creationId: string) =>
     withBot(botId, async (engine, scope) => {
+      await assertRoutineHookSyntax(input);
       if (input.enabled) await getRoutineHost().assertImportedAutomationReady?.(ownerScopedUserDataPath(), botId, creationId, () => assertScope(scope), { input });
       assertScope(scope);
       return engine.createOnce(botId, input, creationId);
     }),
   save: (botId: string, input: RoutineInput, id?: string, expectedRevision?: number) =>
     withBot(botId, async (engine, scope) => {
+      await assertRoutineHookSyntax(input);
       if (id && input.enabled) {
         const recoveredRevision = await getRoutineHost().assertImportedAutomationReady?.(ownerScopedUserDataPath(), botId, id, () => assertScope(scope), { input, expectedRevision });
         if (recoveredRevision !== undefined) expectedRevision = recoveredRevision;

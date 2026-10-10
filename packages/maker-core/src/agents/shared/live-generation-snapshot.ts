@@ -2,6 +2,7 @@ import type { UsageSnapshot } from '../../types/events.js';
 
 export interface LiveGenerationTiming {
   /** Turn-cumulative output tokens, including reasoning. */
+  responseSpeed?: import("@cindy/maker-shared/usage-format").ResponseSpeedSnapshot;
   outputTokens: number;
   /** Duration captured with outputTokens; sparse usage must not include later in-flight time. */
   durationMs: number;
@@ -26,7 +27,7 @@ export function attachLiveGeneration(
     typeof timing.outputTokens === 'number' && Number.isFinite(timing.outputTokens)
       ? Math.max(0, timing.outputTokens)
       : 0;
-  const next: UsageSnapshot = { ...snapshot, outputTokens };
+  const next: UsageSnapshot = { ...snapshot, outputTokens, ...(timing.responseSpeed ? { responseSpeed: timing.responseSpeed } : {}) };
   if (!timing.reliable) {
     return {
       ...next,

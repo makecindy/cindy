@@ -196,10 +196,8 @@
   },
   "providerShare": {
     "entry": {
-      "manage": "管理分享",
-      "manageWithPending_other": "管理分享 · {{count}} 个待处理申请",
-      "disabledInvocation": "先打开「允许被远程调用」才能分享",
-      "disabledRemoteControl": "先在「远程连接」里允许同账号设备控制本机才能分享",
+      "label": "远程与分享",
+      "pending_other": "{{count}} 个分享申请待处理",
       "remoteControlOff": "这台电脑还没有允许同账号设备远程控制，供应商不能被远程调用或分享。",
       "openRemoteControl": "前往「远程连接」设置",
       "descriptionOff": "开启后，你的其他电脑和你分享的人可以用这个供应商的模型。关闭期间，已有的分享暂时不可用，不会被删除。"
@@ -290,6 +288,7 @@
       "requestedAt": "{{time}}通过你的分享链接申请",
       "pairingHint": "同意前可以通过发链接的渠道问对方一句：「你看到的配对码是多少？」一致再同意。",
       "callout": "同意后，{{name}} 可以在自己的任务里使用 {{provider}} 的模型。Agent 在这台电脑上运行，用量计入你的 {{provider}}。你可以随时在「分享 {{provider}}」里关闭或删除。",
+      "calloutClaudeEmail": "{{name}} 使用时，Agent 能看到你登录 Claude 用的邮箱。",
       "calloutUnknown": "如果你不认识申请人，请拒绝；拒绝后这条链接作废。",
       "approve": "同意分享",
       "reject": "拒绝申请",
@@ -298,12 +297,11 @@
     "apply": {
       "loading": "正在读取分享链接…",
       "askTitle": "{{name}} 想把 {{provider}} 分享给你",
-      "providerOnDevice": "{{provider}} · {{device}}",
-      "factRuns": "Agent 在 {{name}} 的电脑上用 {{provider}} 运行",
+      "factRuns": "Agent 在 {{name}} 的电脑或 {{name}} 安排的其他电脑上用 {{provider}} 运行",
       "factRunsDetail": "用量计入 {{name}} 的 {{provider}}，{{name}} 能看到你的用量",
       "factFiles": "你的项目文件和命令仍在你自己的电脑上执行",
       "factFilesDetail": "由你的任务权限把关",
-      "factPrivacy": "对话内容和 Agent 读取的文件内容会经过并保存在 {{name}} 的电脑上",
+      "factPrivacy": "对话内容和 Agent 读取的文件内容会经过 {{name}} 的电脑，并保存在实际运行任务的那台电脑上",
       "factPrivacyDetail": "{{name}} 只会看到你的昵称和头像",
       "factApproval": "发送申请后，需要 {{name}} 同意才会生效",
       "factApprovalDetail": "{{name}} 可以随时关闭或删除这个分享",
@@ -372,7 +370,7 @@
         "open": "打开链接",
         "cancel": "取消"
       },
-      "detailNote": "Agent 在 {{name}} 的电脑上运行，用的是对方的登录和配额。新建任务时在模型列表里选择它就能用。",
+      "detailNote": "Agent 在 {{name}} 的电脑或 {{name}} 安排的其他电脑上运行，用的是对方的登录和配额。对话内容和 Agent 读取的文件内容会经过 {{name}} 的电脑，并保存在实际运行任务的那台电脑上。新建任务时在模型列表里选择它就能用。",
       "modelsTitle": "可用的模型",
       "modelsLoading": "正在读取对方开放的模型…",
       "modelsRefused": "对方电脑暂时不让读取这个分享：可能没有允许远程控制、关了这个供应商的「允许被远程调用」，也可能对方的 Cindy 刚启动、还没准备好。请稍后重试，或让对方检查这两项设置。",
@@ -384,9 +382,9 @@
       "needsUpdateNote": "对方的 Cindy 更新后才能使用这个分享。"
     },
     "picker": {
-      "deviceName": "{{device}} · 来自 {{owner}} 的分享",
       "unavailable": "已不可用的分享",
-      "hostOutdated": "分享者电脑上的 Cindy 版本太旧，读不到这些模型。请让对方更新 Cindy 后再试。"
+      "hostOutdated": "分享者电脑上的 Cindy 版本太旧，读不到这些模型。请让对方更新 Cindy 后再试。",
+      "numbered": "{{name}} ({{index}})"
     },
     "notification": {
       "requestTitle": "新的分享申请",
@@ -398,13 +396,6 @@
     }
   },
   "providerGroup": {
-    "row": {
-      "label": "供应商组",
-      "description": "把多台电脑上的这个供应商合成一组，自动分配，出问题自动换一台",
-      "summary_other": "{{count}} 台电脑 · {{strategy}}",
-      "setUp": "设置供应商组",
-      "manage": "管理供应商组"
-    },
     "page": {
       "title": "{{provider}} · 远程与分享",
       "shareTitle": "分享"
@@ -416,7 +407,7 @@
       "empty": "加入其他电脑上的 {{provider}}，任务会自动选一台运行",
       "loading": "正在读取供应商组…",
       "loadFailed": "未能读取供应商组",
-      "note": "这台电脑上的任务，Agent 在被选中的电脑上运行"
+      "note": "这台电脑上的任务和分享的人的任务，都由组选一台电脑运行 Agent"
     },
     "strategy": {
       "label": "组策略",
@@ -439,6 +430,15 @@
       "local": "本机",
       "sourceDevice": "我的其他电脑",
       "sourceShare": "来自 {{name}} 的分享",
+      "shareComputer": "{{name}} 的电脑",
+      "shareComputerUnknown": "分享来的电脑",
+      "quota": {
+        "loading": "正在读取配额…",
+        "unavailable": "暂时读不到这台电脑的配额",
+        "none": "这个供应商没有配额信息",
+        "offline": "这台电脑不在线，读不到配额",
+        "share": "别人分享的电脑不显示配额"
+      },
       "runningCount_other": "{{count}} 个任务运行中",
       "limitAria": "{{name}} 的并发上限",
       "limitOption_other": "上限 {{count}}",
@@ -467,7 +467,8 @@
         "description": "之后不再给它分新任务；已经在它上面运行的任务留在那台电脑上。",
         "lastDescription": "它是组里最后一台电脑，移出后会删除 {{provider}} 的供应商组。",
         "confirm": "移出组"
-      }
+      },
+      "sourceGroupOwner": "组所在电脑"
     },
     "deleteConfirm": {
       "title": "删除 {{provider}} 的供应商组？",
@@ -2825,7 +2826,12 @@
         "statusReady": "可用",
         "detailNote": "Agent 在 {{device}} 上运行，用的是那台电脑的登录和配额。新建任务时在模型列表里选择它就能用；要修改这个供应商，请到那台电脑的「设置 → 模型供应商」。",
         "modelsTitle": "可用的模型",
-        "modelsEmpty": "这个供应商在那台电脑上还没有开放可用的模型。"
+        "modelsEmpty": "这个供应商在那台电脑上还没有开放可用的模型。",
+        "rowLabelGroup": "{{provider}} · {{device}} · 供应商组",
+        "groupBadge_other": "供应商组 · {{count}} 台电脑",
+        "groupNote": "{{device}} 把这个供应商建成了供应商组。在模型列表里选它新建任务时，{{device}} 会按组策略把任务分给下面的一台电脑运行，那台出问题时自动换一台继续。要修改组，请到 {{device}} 的「设置 → 模型供应商」。",
+        "groupMembersTitle": "组内电脑",
+        "groupMembersFailed": "暂时读不到组内电脑的状态。"
       },
       "genericOAuth": {
         "subtitle": "订阅账号",
@@ -2873,6 +2879,7 @@
         "remoteAccess": {
           "label": "允许被远程调用",
           "description": "开启后，你的其他电脑和你分享的人可以用这个供应商的模型，Agent 在这台电脑上运行，使用这台电脑的登录和配额。",
+          "descriptionGroup": "开启后，你的其他电脑和你分享的人可以用这个供应商的模型，由供应商组选一台电脑运行 Agent。",
           "ariaLabel": "允许你的其他电脑和你分享的人调用此供应商",
           "writeFailed": "远程调用设置未能保存，请重试"
         },
@@ -8586,7 +8593,18 @@
         "workdirUnavailable": "{{name}}找不到工作目录",
         "stepFailed": "{{name}}这一步出错了，没做完",
         "stepTimeout": "{{name}}太久没做完，这一步先停下",
-        "stepUnavailable": "{{name}}现在不可用，这一步没法做"
+        "stepUnavailable": "{{name}}现在不可用，这一步没法做",
+        "runtimeFailure": {
+          "IMAGE_INPUT_UNSUPPORTED": "{{name}}无法回复：当前模型不支持图片。\n请切换到支持图片的模型，或在「设置 → 个性化 → 视觉桥」开启并配置视觉模型后重新发送。",
+          "MODEL_UNAVAILABLE": "{{name}}无法回复：当前没有可用模型。\n请在伙伴设置中选择已连接的可用模型后重新发送。",
+          "AUTH_REQUIRED": "{{name}}无法回复：模型连接需要重新认证。\n请在设置中重新连接对应模型来源后重新发送。",
+          "RATE_LIMITED": "{{name}}无法回复：模型请求过于频繁。\n请稍后重新发送，或选择其他可用模型。",
+          "UPSTREAM_OVERLOADED": "{{name}}无法回复：模型服务暂时繁忙。\n请稍后重新发送，或选择其他可用模型。",
+          "QUOTA_EXCEEDED": "{{name}}无法回复：模型用量已达上限。\n请检查对应来源的配额，或选择其他可用模型。",
+          "NETWORK_ERROR": "{{name}}无法回复：网络连接失败。\n请检查网络或 Proxy 后重新发送。",
+          "RUNTIME_TIMEOUT": "{{name}}本次回复超时。\n请重新发送消息，或选择其他可用模型。",
+          "RUNTIME_ERROR": "{{name}}这次没能回复。\n请重新发送消息；如果仍失败，请查看日志并反馈问题。"
+        }
       },
       "settings": {
         "open": "群设置",
@@ -9400,7 +9418,9 @@
         "effortEndSmart": "更智能",
         "railSameEngine": "仅 {{agent}}",
         "crossEngineWarning": "切换引擎会重建上下文，可能丢失内容",
-        "favoritesSyncFailed": "收藏未能同步。请重新打开重试；被控电脑可能需要更新。"
+        "favoritesSyncFailed": "收藏未能同步。请重新打开重试；被控电脑可能需要更新。",
+        "railRemoteProviderGroup": "{{provider}} · {{device}} · {{group}}",
+        "providerGroupLabel": "{{provider}} · {{group}}"
       }
     },
     "permissionSelector": {
@@ -9730,6 +9750,9 @@
       "cancelEdit": "取消编辑",
       "saveEdit": "保存文本"
     },
+    "sharedProviderCredential": {
+      "description": "这个任务用的是分享来的供应商，Agent 读到的内容会经过分享者的电脑。这一步涉及凭证类文件（如密钥、.env），需要你确认后才继续。"
+    },
     "mediaDownload": {
       "title": "允许下载生成的媒体？",
       "description": "媒体已生成，需要从下方地址下载。",
@@ -10038,8 +10061,25 @@
       "observedPeak": "峰值",
       "tokenRate": "{{rate}} tok/s",
       "tokenRateUnit": "tok/s",
-      "tokenRateDescription": "最近一段生成速度，不含工具执行与等待。",
-      "tokenCount": "{{tokens}} tok"
+      "tokenRateDescription": "实时速度和峰值为估算。响应结束后用真实用量校准；不计工具执行和请求等待。",
+      "tokenCount": "{{tokens}} tok",
+      "estimatedValue": "约{{value}}",
+      "estimatedTokenRate": "约{{rate}} tok/s",
+      "responseWaiting": "等待 {{seconds}}秒",
+      "waitSeconds": "{{seconds}}秒",
+      "firstResponse": "首响应",
+      "streamWait": "流内等待",
+      "turnWaitDescription": "从本地收到引擎开始到首个文字、思考或工具内容，不等同于网络延迟。",
+      "streamWaitDescription": "从 SDK 流开始到首个内容块，之前的请求等待不可测。",
+      "lastGeneration": "上次生成",
+      "finalAverage": "最终平均",
+      "generationPaused": "生成暂停",
+      "responsePending": "等待响应",
+      "responseFailed": "请求失败",
+      "responseCancelled": "已停止",
+      "responseRetrying": "正在重试",
+      "responseGenerating": "正在生成",
+      "toolRunning": "执行工具中"
     },
     "shareImage": {
       "entry": "分享为图片",
@@ -10509,14 +10549,20 @@
           "auth": "{{from}} 登录已失效，已换到 {{to}} 继续",
           "unavailable": "{{from}} 连不上，已换到 {{to}} 继续",
           "overload": "{{from}} 的服务繁忙，已换到 {{to}} 继续"
-        }
+        },
+        "agentReconnect": {
+          "named": "已重新连上 {{computer}}，继续运行",
+          "unnamed": "已重新连上原来的电脑，继续运行"
+        },
+        "groupSwitch": "已自动换一台电脑继续"
       },
       "autoResumeSeparator": {
         "label": "连接中断，已自动继续"
       },
       "autoResumePending": {
         "label": "重新连接中",
-        "labelWithProgress": "重新连接中 {{attempt}}/{{total}}"
+        "labelWithProgress": "重新连接中 {{attempt}}/{{total}}",
+        "groupSwitch": "正在换一台电脑继续"
       },
       "agentSwitch": {
         "label": "已从 {{from}} 切换到 {{to}}",
@@ -14953,5 +14999,84 @@
     "idempotencyConflict": "此重试标识已用于另一条消息。",
     "privateUnconfirmed": "私聊未确认送达，请使用同一重试标识重试。",
     "verificationUnavailable": "暂时无法核验群聊授权，请在连接恢复后重试。"
+  },
+  "teammateTodo": {
+    "title": "待办",
+    "new": "新建待办",
+    "search": "搜索待办",
+    "open": "未完成",
+    "done": "已完成",
+    "hidden": "已忽略 / 稍后",
+    "empty": "暂无待办",
+    "noMatch": "没有匹配的待办",
+    "loading": "正在读取…",
+    "retry": "重试",
+    "error": "操作未完成，请重试。",
+    "conflict": "待办已更新，请重新查看后再修改。",
+    "received": "已收到",
+    "accepted": "查看进展",
+    "unknown": "核实进展",
+    "failed": "重试下一步",
+    "view": "查看详情",
+    "evidence": "查看依据",
+    "more": "更多操作",
+    "discovered": "发现",
+    "assigned": "交办",
+    "suggested": "建议",
+    "candidate": "待确认",
+    "overdue": "已逾期",
+    "today": "今天",
+    "next": "下一步",
+    "outcome": "完成条件",
+    "value": "为什么值得处理",
+    "sources": "来源依据",
+    "associations": "关联",
+    "deadline": "到期时间",
+    "sourceDeadline": "来源期限",
+    "clearDate": "清除到期",
+    "date": "日期",
+    "time": "确切时间（可选）",
+    "zone": "时区",
+    "save": "保存",
+    "cancel": "取消",
+    "delete": "删除此条",
+    "mute": "此问题不再提示",
+    "later": "稍后处理",
+    "until": "稍后至",
+    "restore": "恢复",
+    "reopen": "重新打开",
+    "complete": "标记完成",
+    "summary": "完成依据",
+    "confirmDate": "确认日期",
+    "deadlineReason": "日期待确认的原因",
+    "override": "你设置的期限",
+    "reminder": "稍后至",
+    "edit": "编辑待办",
+    "name": "标题",
+    "progress": "当前进展",
+    "link": "依据链接（可选）",
+    "saved": "已保存",
+    "page": "{{start}}–{{end}} / {{count}}",
+    "previous": "上一页",
+    "following": "下一页",
+    "order": "排序",
+    "dueOrder": "到期优先",
+    "createdOrder": "创建顺序",
+    "origin": "来源类型",
+    "all": "全部",
+    "close": "关闭",
+    "laterConflict": "稍后处理不延长真实期限",
+    "legacyEvidence": "旧记录的完成依据待核实",
+    "noPermission": "此来源未连接或尚未授权",
+    "copy": "复制",
+    "undo": "撤销",
+    "history": "完成记录",
+    "clockNote": "仅日期按所示时区当天结束；确切时刻保留时区。",
+    "deleted": "已删除",
+    "muted": "不再提示",
+    "deferred": "稍后处理",
+    "continue": "继续",
+    "addTime": "添加时间",
+    "dateOnly": "仅日期"
   }
 }

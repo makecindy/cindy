@@ -1319,6 +1319,108 @@ describe('远程 Agent:选模型时换 Agent 所在电脑', () => {
     expect(h.calls).toEqual([]);
   });
 
+  it('供应商组替分享的人换电脑:位置不变也强制全量交接、新建会话,分隔条不写电脑名', async () => {
+    const h = relocationHarness({ agentDeviceId: 'share:alice-share', providerId: 'alice-anthropic' });
+    const result = await performSessionAgentSwitch(h.deps, {
+      sessionId: 's1',
+      targetAgentKind: 'claude-code',
+      model: 'anthropic/claude-opus-5-5[1m]',
+      providerId: 'alice-anthropic',
+      agentDeviceId: 'share:alice-share',
+      applyNow: true,
+      forceRelocation: true,
+    });
+    expect(result).toMatchObject({ switched: true });
+    expect(h.selectSameAgentModel).not.toHaveBeenCalled();
+    expect(h.findParkedEngineSession).not.toHaveBeenCalled();
+    expect(h.assertAgentDeviceRouteUsable).toHaveBeenCalledWith('share:alice-share', 'claude-code', 'anthropic/claude-opus-5-5[1m]', 'alice-anthropic');
+    expect(h.deps.applyAgentSwitchToDb).toHaveBeenCalledWith('s1', expect.objectContaining({ sdkSessionId: null }));
+    const boundary = vi.mocked(h.deps.insertBoundaryMessage).mock.calls[0][1];
+    expect(boundary).toMatchObject({
+      fromAgentDeviceId: 'share:alice-share',
+      toAgentDeviceId: 'share:alice-share',
+      fromAgentDeviceName: null,
+      toAgentDeviceName: null,
+      resumed: false,
+    });
+    expect(boundary.handoff).toContain('Claude Code (on a different computer)');
+  });
+
+  it('强制换电脑只认内部立即执行:选择器登记与任务所在电脑上的任务都不受影响', async () => {
+    const staged = relocationHarness({ agentDeviceId: 'share:alice-share' });
+    await performSessionAgentSwitch(staged.deps, {
+      ...backToTaskComputer,
+      agentDeviceId: 'share:alice-share',
+      forceRelocation: true,
+    });
+    expect(staged.selectSameAgentModel).toHaveBeenCalledTimes(1);
+    expect(staged.calls).toEqual([]);
+
+    const local = relocationHarness({ agentDeviceId: null });
+    const result = await performSessionAgentSwitch(local.deps, {
+      ...backToTaskComputer,
+      applyNow: true,
+      forceRelocation: true,
+    });
+    expect(result).toMatchObject({ switched: false });
+    expect(local.deps.insertBoundaryMessage).not.toHaveBeenCalled();
+  });
+
+  it('协同任务:只接受供应商组内部的立即换位置(同引擎同模型)', async () => {
+    const lead = relocationHarness({ orcaRole: 'lead', model: 'anthropic/claude-opus-5-5[1m]' });
+    const result = await performSessionAgentSwitch(lead.deps, {
+      ...backToTaskComputer,
+      providerId: 'anthropic',
+      agentDeviceId: 'office-pc',
+      applyNow: true,
+      providerGroupRelocation: true,
+    });
+    expect(result).toMatchObject({ switched: true });
+    expect(lead.deps.applyAgentSwitchToDb).toHaveBeenCalledWith('s1', expect.objectContaining({
+      agentDeviceId: 'office-pc',
+      model: 'anthropic/claude-opus-5-5[1m]',
+      sdkSessionId: null,
+    }));
+
+    const worker = relocationHarness({ orcaRole: 'worker', model: 'anthropic/claude-opus-5-5[1m]' });
+    await expect(performSessionAgentSwitch(worker.deps, {
+      ...backToTaskComputer,
+      agentDeviceId: 'office-pc',
+      applyNow: true,
+      providerGroupRelocation: true,
+    })).resolves.toMatchObject({ switched: true });
+  });
+
+  it('协同任务:用户换位置、登记意图、换模型或换引擎一律拒绝,即使带着组的标记', async () => {
+    const row = { orcaRole: 'worker' as const, model: 'anthropic/claude-opus-5-5[1m]' };
+    const userMove = relocationHarness(row);
+    await expect(performSessionAgentSwitch(userMove.deps, { ...backToTaskComputer, agentDeviceId: 'office-pc' }))
+      .rejects.toThrow(/UNSUPPORTED_CAPABILITY/);
+    const staged = relocationHarness(row);
+    await expect(performSessionAgentSwitch(staged.deps, {
+      ...backToTaskComputer,
+      agentDeviceId: 'office-pc',
+      providerGroupRelocation: true,
+    })).rejects.toThrow(/UNSUPPORTED_CAPABILITY/);
+    const otherModel = relocationHarness(row);
+    await expect(performSessionAgentSwitch(otherModel.deps, {
+      ...backToTaskComputer,
+      model: 'claude-sonnet-5',
+      agentDeviceId: 'office-pc',
+      applyNow: true,
+      providerGroupRelocation: true,
+    })).rejects.toThrow(/UNSUPPORTED_CAPABILITY/);
+    const otherEngine = relocationHarness(row);
+    await expect(performSessionAgentSwitch(otherEngine.deps, {
+      ...backToTaskComputer,
+      targetAgentKind: 'codex',
+      agentDeviceId: 'office-pc',
+      applyNow: true,
+      providerGroupRelocation: true,
+    })).rejects.toThrow(/UNSUPPORTED_CAPABILITY/);
+    for (const h of [userMove, staged, otherModel, otherEngine]) expect(h.calls).toEqual([]);
+  });
+
   it('非法位置参数被拒绝', async () => {
     const h = relocationHarness();
     await expect(performSessionAgentSwitch(h.deps, { ...backToTaskComputer, agentDeviceId: 'bad id!' }))

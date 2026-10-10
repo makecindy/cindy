@@ -6691,3 +6691,60 @@ describe('list message reuse', () => {
     expect(remoteSessionStore.getMessages('s1')).toEqual([]);
   });
 });
+
+it('retains response speed per session at completion, freezes aborts and clears the next turn', () => {
+  remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('tps-one'), session('tps-two')]);
+  const speed = { phase: 'generating', waitOrigin: 'turn', firstResponseMs: 2000, waitingMs: 0,
+    durationMs: 3000, outputTokens: 50, estimated: true, averageRate: 16.7, recentRate: 20,
+    samples: [{ durationMs: 1000, outputTokens: 20, rate: 20 }], sampledAt: 1 };
+  pushMakerStatus('tps-one', { isRunning: true, responseSpeed: speed });
+  remoteSessionStore.applyRemotePush('dev-1', 'maker:event', {
+    sessionId: 'tps-one', event: { type: 'error', data: { message: 'cancelled', isTerminal: true } },
+  });
+  expect(remoteSessionStore.getSessionRunStatus('tps-one').responseSpeed)
+    .toMatchObject({ phase: 'complete', estimated: true, outputTokens: 50 });
+  expect(remoteSessionStore.getSessionRunStatus('tps-two').responseSpeed).toBeUndefined();
+  pushMakerStatus('tps-two', { isRunning: true });
+  expect(remoteSessionStore.getSessionRunStatus('tps-one').responseSpeed?.outputTokens).toBe(50);
+  pushMakerStatus('tps-one', { isRunning: true, responseSpeed: { ...speed, phase: 'waiting',
+    firstResponseMs: null, outputTokens: 0, durationMs: 0, samples: [] } });
+  expect(remoteSessionStore.getSessionRunStatus('tps-one').responseSpeed)
+    .toMatchObject({ phase: 'waiting', firstResponseMs: null, outputTokens: 0, samples: [] });
+  pushMakerStatus('tps-one', { isRunning: false, responseSpeed: { ...speed, phase: 'complete',
+    outputTokens: 300, estimated: false, averageRate: 100, recentRate: 100 } });
+  expect(remoteSessionStore.getSessionRunStatus('tps-one').responseSpeed)
+    .toMatchObject({ phase: 'complete', estimated: false, outputTokens: 300 });
+});
+
+it('keeps response speed failures through terminal tails, distinguishes cancellation and actual retries', () => {
+  remoteSessionStore.clear();
+  remoteSessionStore.setDeviceSessions('dev-1', 'Host', [session('speed-errors')]);
+  remoteSessionStore.enterSessionMessageDetail('speed-errors');
+  const speed = { phase: 'generating', waitOrigin: 'turn', firstResponseMs: 1000, waitingMs: 0,
+    durationMs: 2000, outputTokens: 50, estimated: true, averageRate: 25, recentRate: 30,
+    samples: [{ durationMs: 2000, outputTokens: 50, rate: 30 }], sampledAt: Date.now() };
+  const event = (type: string, data: Record<string, unknown>) => remoteSessionStore.applyRemotePush('dev-1', 'maker:event', {
+    sessionId: 'speed-errors', event: { type, data, source: 'pi' },
+  });
+  pushMakerStatus('speed-errors', { isRunning: true, responseSpeed: speed });
+  event('error', { message: 'temporary warning', isTerminal: false });
+  expect(remoteSessionStore.getSessionRunStatus('speed-errors').responseSpeed?.retrying).not.toBe(true);
+  event('error', { message: 'API unavailable', isTerminal: false, willRetry: true });
+  expect(remoteSessionStore.getSessionRunStatus('speed-errors').responseSpeed).toMatchObject({ retrying: true, recentRate: null });
+  pushMakerStatus('speed-errors', { isRunning: true, responseSpeed: speed });
+  expect(remoteSessionStore.getSessionRunStatus('speed-errors').responseSpeed?.retrying).toBe(true);
+  event('thinking', { stage: 'delta', blockId: 'recovered-thinking', text: 'reasoning resumed' });
+  expect(remoteSessionStore.getSessionRunStatus('speed-errors').responseSpeed?.retrying).toBe(false);
+  event('error', { message: 'API unavailable', isTerminal: true });
+  event('done', {});
+  pushMakerStatus('speed-errors', { isRunning: false, responseSpeed: { ...speed, phase: 'complete', estimated: false } });
+  expect(remoteSessionStore.getSessionRunStatus('speed-errors')).toMatchObject({ isRunning: false, hasTerminalError: true,
+    responseSpeed: { outcome: 'failed', recentRate: null, samples: speed.samples } });
+  pushMakerStatus('speed-errors', { isRunning: true, responseSpeed: speed });
+  expect(remoteSessionStore.getSessionRunStatus('speed-errors').responseSpeed?.outcome).toBeUndefined();
+  event('done', { type: 'pi/agent_settled', status: 'cancelled' });
+  event('error', { message: 'aborted transport', isTerminal: true });
+  expect(remoteSessionStore.getSessionRunStatus('speed-errors')).toMatchObject({ hasTerminalError: false,
+    responseSpeed: { outcome: 'cancelled', recentRate: null } });
+  remoteSessionStore.clear();
+});

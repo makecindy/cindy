@@ -18,7 +18,7 @@ vi.mock('../../remote-agent/controller/deviceCatalog.js', () => ({ readDevicePro
 vi.mock('../bindings.js', () => ({ listProviderGroupBindings: () => ({}) }));
 vi.mock('../store.js', () => ({ readProviderGroup: () => null }));
 
-const { getProviderGroupDirectory, getProviderGroupRouter } = await import('../runtime.js');
+const { getProviderGroupDirectory, getProviderGroupOwnerScope, getProviderGroupRouter } = await import('../runtime.js');
 
 describe('provider group runtime', () => {
   it('keeps cooling and round state per account behind stable handles', () => {
@@ -33,5 +33,17 @@ describe('provider group runtime', () => {
     owner = 'owner-b';
     expect(router.coolingUntil('anthropic', 'local')).toBeNull();
     expect(router.triedThisTurn('s1').size).toBe(0);
+  });
+
+  it('keeps an assignment on the account it started with, even after switching accounts', () => {
+    owner = 'owner-c';
+    const scope = getProviderGroupOwnerScope();
+    expect(scope.isCurrent()).toBe(true);
+    owner = 'owner-d';
+    expect(scope.isCurrent()).toBe(false);
+    // 换账号之后才记上的占用落在 owner-c 那份里，owner-d 看不到。
+    scope.externalLoad.recordPick('laptop', 's1', 'anthropic', 'local');
+    expect(scope.externalLoad.running('anthropic', 'local')).toBe(1);
+    expect(getProviderGroupOwnerScope().externalLoad.running('anthropic', 'local')).toBe(0);
   });
 });

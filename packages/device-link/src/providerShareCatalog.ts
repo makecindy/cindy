@@ -3,9 +3,50 @@
  * 手机读不到另一个账号的电脑，所以由被控电脑代读分享者电脑的 `maker:provider:list` 后转交；
  * 身份只有昵称与头像，目录里分享者的账号身份(登录邮箱等)在每一跳都去掉。
  */
+import { PROVIDER_RUNNING_TURNS_FIELD } from './providerGroup.js';
 import { providerShareIdentifier, sharedTaskDeviceId } from './protocol.js';
 
 export const PROVIDER_SHARE_RECEIVED_CATALOGS_CHANNEL = 'maker:provider-share:received-catalogs';
+
+/**
+ * 分享者电脑的名字不给受邀者(provider-sharing.md §6)：生成链接与转交已收到的分享时，
+ * `deviceName` 一律填这个占位。字段本身不能省，旧版受邀者与手机按必填解析，空了会丢掉整条分享。
+ */
+export const PROVIDER_SHARE_NEUTRAL_DEVICE_NAME = 'Cindy';
+
+/**
+ * 分享出去的目录里，供应商建了组时带上组里有几台电脑(`groupSize`)：受邀者只知道背后是个组、有几台，
+ * 不知道是哪几台。组内电脑的名单(`group`)只给同账号电脑。
+ */
+export const PROVIDER_SHARE_GROUP_SIZE_FIELD = 'groupSize';
+const MAX_SHARE_GROUP_SIZE = 512;
+
+/** 读目录里一条供应商带的组规模；没有组或不是合理的正整数时返回 null。 */
+export function readProviderShareGroupSize(provider: unknown): number | null {
+  if (!provider || typeof provider !== 'object' || Array.isArray(provider)) return null;
+  const value = (provider as Record<string, unknown>)[PROVIDER_SHARE_GROUP_SIZE_FIELD];
+  return typeof value === 'number' && Number.isInteger(value) && value >= 1 && value <= MAX_SHARE_GROUP_SIZE
+    ? value
+    : null;
+}
+
+/**
+ * 分享出去的目录里，读目录的这个受邀者账号(它的每台电脑)此刻在这个分享上正在运行一轮的任务数
+ * (`guestRunning`)：受邀者把这个分享加进自己的供应商组时，组页面据此显示这台在跑几个。只是调用方
+ * 自己的数，不含分享者本人与其他受邀者。
+ */
+export const PROVIDER_SHARE_GUEST_RUNNING_FIELD = 'guestRunning';
+/** 远高于分享者电脑实际允许的任务数，只用来挡异常值。 */
+const MAX_SHARE_GUEST_RUNNING = 4096;
+
+/** 读目录里一条供应商带的受邀者运行数；没有或不是合理的非负整数时返回 null。 */
+export function readProviderShareGuestRunning(provider: unknown): number | null {
+  if (!provider || typeof provider !== 'object' || Array.isArray(provider)) return null;
+  const value = (provider as Record<string, unknown>)[PROVIDER_SHARE_GUEST_RUNNING_FIELD];
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0 && value <= MAX_SHARE_GUEST_RUNNING
+    ? value
+    : null;
+}
 
 export interface ProviderShareReceivedCatalog {
   /** 任务记录里「Agent 在哪台电脑」的值：`share:<shareId>`。 */
@@ -13,6 +54,7 @@ export interface ProviderShareReceivedCatalog {
   shareId: string;
   providerId: string;
   providerLabel: string;
+  /** 兼容字段：新版本固定为 {@link PROVIDER_SHARE_NEUTRAL_DEVICE_NAME}，界面不显示。 */
   deviceName: string;
   owner: { displayName: string; avatarUrl: string | null };
   status: 'active' | 'paused';
@@ -103,11 +145,22 @@ function accountIdentity(value: unknown): string | undefined {
 /**
  * 分享出去的一条供应商：去掉分享者的账号身份字段(`subscriptionAccount` / `openAiAccount`，
  * 含登录邮箱)并清理名称，地址里的用户名密码与查询参数也去掉；其余展示字段沿用同账号投影。
+ * 供应商组摘要(`group`，列着组内电脑)只给同账号电脑，这里也去掉；只留组里有几台(`groupSize`)
+ * 与受邀者自己的运行数(`guestRunning`)，不合理的值一并去掉；这台电脑上的总运行数(`runningTurns`)含分享者
+ * 本人与其他人的任务，只给同账号电脑，这里去掉。
  * 分享者电脑、受邀者电脑与手机都各过一遍。
  */
 export function scrubSharedProvider<T>(provider: T): T {
   if (!provider || typeof provider !== 'object' || Array.isArray(provider)) return provider;
+  const groupSize = readProviderShareGroupSize(provider);
+  const guestRunning = readProviderShareGuestRunning(provider);
   const { subscriptionAccount, openAiAccount, ...fields } = provider as Record<string, unknown>;
+  delete fields.group;
+  delete fields[PROVIDER_RUNNING_TURNS_FIELD];
+  delete fields[PROVIDER_SHARE_GROUP_SIZE_FIELD];
+  delete fields[PROVIDER_SHARE_GUEST_RUNNING_FIELD];
+  if (groupSize !== null) fields[PROVIDER_SHARE_GROUP_SIZE_FIELD] = groupSize;
+  if (guestRunning !== null) fields[PROVIDER_SHARE_GUEST_RUNNING_FIELD] = guestRunning;
   const rest = stripNestedUrlSecrets(fields, 0) as Record<string, unknown>;
   if (typeof rest.name === 'string') {
     rest.name = scrubProviderShareLabel(rest.name, [accountIdentity(subscriptionAccount), accountIdentity(openAiAccount)],

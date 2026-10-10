@@ -66,7 +66,7 @@ it('rejects a previously discovered hidden companion and allows it again after r
 
   await expect(get()).resolves.toMatchObject({
     display: { title: 'Sora' },
-    links: [{ rel: 'conversation', target: { kind: 'session', sessionId: 'session-1' } }],
+    links: expect.arrayContaining([{ rel: 'conversation', target: { kind: 'session', sessionId: 'session-1' } },expect.objectContaining({rel:'todos',target:{kind:'resource',ref:{collectionId:'teammates',kind:'bot',id:'todos:bot-1'}}})]),
   });
   const receiveRemote = vi.fn(async () => ({ ok: false as const, errorCode: 'TEST_RECEIPT', message: 'test' }));
   const verifyRemoteMessage = vi.fn(async () => true);

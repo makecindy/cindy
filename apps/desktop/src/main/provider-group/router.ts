@@ -30,6 +30,11 @@ export interface ProviderGroupRouterDeps {
   listBindings(): Record<string, ProviderGroupBinding>;
   /** 这个任务现在是否正在运行一轮。 */
   isTurnRunning(sessionId: string): boolean;
+  /**
+   * 经本组分出去、但不在本机任务表里的运行中任务(同账号其他电脑报来的、刚选中还没报来的)。
+   * 不提供 = 只算本机任务。
+   */
+  externalRunning?(providerId: string, memberKey: string): number;
   now(): number;
   random(): number;
 }
@@ -39,6 +44,11 @@ export interface ProviderGroupPickInput {
   agentKind: AgentKind;
   model: string;
   exclude?: ReadonlySet<string>;
+  /**
+   * 选中后在同一步(读负载与选电脑之间没有等待)调用，用来立即记上占用：同时来的几个请求各自读到前一个的
+   * 占用，不会全落到同一台。
+   */
+  onPicked?(memberKey: string): void;
 }
 
 export type ProviderGroupPickResult =
@@ -97,7 +107,16 @@ export function createProviderGroupRouter(deps: ProviderGroupRouterDeps): Provid
         count++;
       }
     }
-    return count;
+    return count + (deps.externalRunning?.(providerId, memberKey) ?? 0);
+  }
+
+  /**
+   * 分配与设置页共用的运行数。那台实际跑着的数(本机现算、同账号电脑报来那台的总数、分享来的电脑报来本账号
+   * 在那里的数，都含不经组直接用的)里已包含经组分过去的，取两者较大的：刚选中、还没开始跑的任务仍按经组的
+   * 计数占着；那台较旧报不出时照旧只算经组的。
+   */
+  function memberRunning(providerId: string, resolved: ResolvedProviderGroupMember): number {
+    return Math.max(running(providerId, resolved.member.key), resolved.reportedRunning ?? 0);
   }
 
   /** 那台能为新会话提供这个模型：停用、已退役、需要付费的都不算(与新建任务、切模型同一准入)。 */
@@ -117,7 +136,7 @@ export function createProviderGroupRouter(deps: ProviderGroupRouterDeps): Provid
         key: r.member.key,
         usable: offersModel(r, input.agentKind, input.model) && coolingUntil(input.providerId, r.member.key) === null,
         paused: r.member.paused,
-        running: running(input.providerId, r.member.key),
+        running: memberRunning(input.providerId, r),
         limit: r.member.limit,
         weight: r.member.weight,
       }));
@@ -128,6 +147,7 @@ export function createProviderGroupRouter(deps: ProviderGroupRouterDeps): Provid
       });
       if (!key) return { kind: 'unavailable', resolved };
       lastPicked.set(input.providerId, key);
+      input.onPicked?.(key);
       const chosen = resolved.find((r) => r.member.key === key)!;
       return { kind: 'member', member: chosen.member, label: chosen.label, resolved };
     },
@@ -141,7 +161,7 @@ export function createProviderGroupRouter(deps: ProviderGroupRouterDeps): Provid
         config,
         members: resolved.map((r) => {
           const until = coolingUntil(providerId, r.member.key);
-          const count = running(providerId, r.member.key);
+          const count = memberRunning(providerId, r);
           const state = r.member.paused
             ? 'paused' as const
             : r.state !== 'ok'

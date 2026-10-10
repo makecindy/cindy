@@ -950,6 +950,8 @@ export interface MobileOrcaEnableOptions {
   executionDeviceId?: string;
   workingDir?: string;
   workerPermissionMode: OrcaWorkerPermissionMode;
+  /** 首个 Worker 的 Agent 所在电脑(远程供应商)；null = 被控电脑。只发给声明 supportsOrcaWorkerAgentDevice 的被控端。 */
+  agentDeviceId?: string | null;
 }
 
 export interface MobileOrcaEnableResult {
@@ -973,6 +975,8 @@ export interface MobileOrcaCreateWorkerInput {
   initialTask?: string;
   executionDeviceId?: string;
   workingDir?: string;
+  /** Worker 的 Agent 所在电脑(远程供应商)；null = 被控电脑。只发给声明 supportsOrcaWorkerAgentDevice 的被控端。 */
+  agentDeviceId?: string | null;
 }
 
 export interface MobileOrcaCreateWorkerResult {

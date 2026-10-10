@@ -260,6 +260,7 @@
       "usageReset": "사용량이 복구되어 자동으로 계속했습니다",
       "pending": "다시 연결하는 중…",
       "pendingWithProgress": "다시 연결하는 중 {{attempt}}/{{total}}…",
+      "groupSwitchPending": "다른 컴퓨터로 전환하는 중…",
       "details": "이번 재시도 {{attempt}}/{{total}} · 이 세션에서 재연결 {{count}}회",
       "detail": {
         "reason": "중단 원인",
@@ -271,7 +272,12 @@
         "auth": "{{from}}의 로그인이 만료되어 {{to}}에서 이어서 진행했습니다",
         "unavailable": "{{from}}에 연결할 수 없어 {{to}}에서 이어서 진행했습니다",
         "overload": "{{from}}의 서비스가 혼잡해 {{to}}에서 이어서 진행했습니다"
-      }
+      },
+      "agentReconnect": {
+        "named": "{{computer}}에 다시 연결되어 이어서 진행했습니다",
+        "unnamed": "원래 컴퓨터에 다시 연결되어 이어서 진행했습니다"
+      },
+      "groupSwitch": "다른 컴퓨터로 자동 전환해 이어서 진행했습니다"
     },
     "modelLabel": "모델",
     "sessionLabel": "세션",

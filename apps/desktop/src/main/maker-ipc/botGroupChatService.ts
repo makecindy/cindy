@@ -24,6 +24,7 @@ import {
   type PlanDecisionMode,
 } from './botGroupDivision.js';
 import type { BotGroupWorkDir } from './botGroupWorkDir.js';
+import { botGroupRuntimeFailureCode, botGroupRuntimeFailureDetail, readBotGroupRuntimeFailureDetail } from './botGroupRuntimeFailure.js';
 import {
   BOT_GROUP_ATTACHMENTS_MAX,
   BOT_GROUP_CLIENT_ID,
@@ -53,6 +54,7 @@ import {
   type BotGroupMessageView,
   type BotGroupMutationResult,
   type BotGroupNoticeCode,
+  type BotGroupRuntimeFailureCode,
   type BotGroupPlanAction,
   type BotGroupPlanStatus,
   type BotGroupPlanStepStatus,
@@ -98,6 +100,9 @@ export interface BotGroupLaneTerminal {
   outcome: 'done' | 'error';
   resultText: string;
   resultMessageClientId?: string | null;
+  failureCode?: BotGroupRuntimeFailureCode;
+  /** Delivery failed before an Agent turn existed; discard the hidden queued input. */
+  undispatched?: boolean;
 }
 
 export interface BotGroupChatServiceDeps {
@@ -213,8 +218,14 @@ type StepRow = typeof botGroupPlanSteps.$inferSelect;
 type TurnOutcome =
   | { kind: 'reply'; text: string }
   | { kind: 'silent' }
-  | { kind: 'failed'; notice: BotGroupNoticeCode }
+  | { kind: 'failed'; notice: BotGroupNoticeCode; failureCode?: BotGroupRuntimeFailureCode }
   | { kind: 'cancelled' };
+
+function unavailableLaneOutcome(errorCode: string): Extract<TurnOutcome, { kind: 'failed' }> {
+  const failureCode = botGroupRuntimeFailureCode({ code: errorCode });
+  // Keep the existing unavailable-member notice when preparation has no specific recovery category.
+  return { kind: 'failed', notice: 'member-unavailable', ...(failureCode !== 'RUNTIME_ERROR' ? { failureCode } : {}) };
+}
 
 interface LaneWaiter {
   groupId: string;
@@ -600,9 +611,10 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
     authorKind: row.authorKind,
     authorBotId: row.authorBotId,
     authorName: row.authorName,
-    content: row.content,
+    content: row.kind === 'notice' && readBotGroupRuntimeFailureDetail(row.content) ? '' : row.content,
     mentions: parseMentions(row.mentionsJson),
     noticeCode: (row.noticeCode as BotGroupNoticeCode | null) ?? null,
+    ...(row.kind === 'notice' ? { runtimeFailureCode: readBotGroupRuntimeFailureDetail(row.content) } : {}),
     planId: row.planId ?? null,
     files: parseFiles(row.filesJson),
     attachments: parseAttachments(row.attachmentsJson),
@@ -817,9 +829,10 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
     createdAt: now(),
   });
 
-  const postNotice = async (groupId: string, member: MemberRow, notice: BotGroupNoticeCode, scope?: DataOwnerBroadcastScope) => {
+  const postNotice = async (groupId: string, member: MemberRow, notice: BotGroupNoticeCode, scope?: DataOwnerBroadcastScope, failureCode?: BotGroupRuntimeFailureCode) => {
     if (!scopeIsCurrent(scope)) return;
-    await appendMessage({ groupId, kind: 'notice', authorKind: 'system', authorBotId: member.botId, authorName: member.name, noticeCode: notice });
+    await appendMessage({ groupId, kind: 'notice', authorKind: 'system', authorBotId: member.botId, authorName: member.name, noticeCode: notice,
+      ...(failureCode ? { content: botGroupRuntimeFailureDetail(failureCode) } : {}) });
     emit(groupId, 'messages', scope);
   };
 
@@ -865,7 +878,7 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
           if (waiters.get(sessionId) === waiter) waiters.delete(sessionId);
           interruptedLanes.add(sessionId);
           void deps.abortLane(sessionId).catch(() => undefined);
-          resolve({ kind: 'failed', notice: 'member-timeout' });
+          resolve({ kind: 'failed', notice: 'member-timeout', failureCode: 'RUNTIME_TIMEOUT' });
         }, timeoutMs);
       };
       arm();
@@ -885,7 +898,7 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
   ): Promise<TurnOutcome> => {
     const lane = await deps.ensureLane({ botId: member.botId, groupId: group.id, title: group.name });
     if (round.cancelled || !scopeIsCurrent(scope)) return { kind: 'cancelled' };
-    if (!lane.ok) return { kind: 'failed', notice: 'member-unavailable' };
+    if (!lane.ok) return unavailableLaneOutcome(lane.errorCode);
     // A lane must never act on a stale, looser permission profile than its Bot now has.
     try {
       await deps.syncLanePermission?.(lane.sessionId, member.botId);
@@ -1014,7 +1027,8 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
       if (waiters.get(turn.sessionId) === waiter) waiters.delete(turn.sessionId);
       deps.log?.warn('Bot group turn was not accepted', { groupId: turn.groupId, errorCode: dispatched.errorCode });
       if (turn.isCancelled()) return { kind: 'cancelled' };
-      return { kind: 'failed', notice: dispatched.errorCode === 'BOT_GROUP_WORKDIR_UNAVAILABLE' ? 'workdir-unavailable' : 'member-failed' };
+      return { kind: 'failed', notice: dispatched.errorCode === 'BOT_GROUP_WORKDIR_UNAVAILABLE' ? 'workdir-unavailable' : 'member-failed',
+        ...(dispatched.errorCode !== 'BOT_GROUP_WORKDIR_UNAVAILABLE' ? { failureCode: botGroupRuntimeFailureCode({ code: dispatched.errorCode, message: dispatched.message }) } : {}) };
     }
     await turn.afterDispatch?.().catch(() => undefined);
     if (turn.isCancelled()) {
@@ -1069,7 +1083,7 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
         emit(input.groupId, 'messages', input.scope);
       } else if (outcome.kind === 'failed') {
         round.dropped.add(botId);
-        await postNotice(input.groupId, member, outcome.notice, input.scope);
+        await postNotice(input.groupId, member, outcome.notice, input.scope, outcome.failureCode);
       }
       emit(input.groupId, 'round', input.scope);
       return spoke;
@@ -1360,7 +1374,7 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
     let inFlight: StepNote[] = initialNotes?.notes ?? [];
     const live = () => !active.cancelled && !disposed && scopeIsCurrent(scope) && runtime.step === active;
 
-    const settle = async (outcome: { kind: 'done'; text: string; files: string[] } | { kind: 'failed'; notice: BotGroupNoticeCode }) => {
+    const settle = async (outcome: { kind: 'done'; text: string; files: string[] } | { kind: 'failed'; notice: BotGroupNoticeCode; failureCode?: BotGroupRuntimeFailureCode }) => {
       if (!live()) return;
       if (outcome.kind === 'failed') {
         const unused = [...inFlight, ...active.notes.splice(0)];
@@ -1397,6 +1411,7 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
             authorBotId: step.botId,
             authorName,
             noticeCode: outcome.notice,
+            ...(outcome.failureCode ? { content: botGroupRuntimeFailureDetail(outcome.failureCode) } : {}),
             planId,
           }),
         endMessage: done && isLast ? messageRow({ groupId, kind: 'plan-end', authorKind: 'system', planId }) : null,
@@ -1460,7 +1475,7 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
         plan: { planId, workDir, sessionId: ownerSessionId },
       });
       if (!live()) return;
-      if (!lane.ok) return await settle({ kind: 'failed', notice: 'member-unavailable' });
+      if (!lane.ok) return await settle(unavailableLaneOutcome(lane.errorCode));
       active.sessionId = lane.sessionId;
       emit(groupId, 'round', scope);
       try {
@@ -1495,7 +1510,7 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
           isCancelled: () => !live(),
         });
         if (!live() || outcome.kind === 'cancelled') return;
-        if (outcome.kind === 'failed') return await settle({ kind: 'failed', notice: outcome.notice });
+        if (outcome.kind === 'failed') return await settle({ kind: 'failed', notice: outcome.notice, failureCode: outcome.failureCode });
         text = outcome.kind === 'reply' ? outcome.text : '';
         if (active.notes.length === 0) {
           files = deps.workDir ? await deps.workDir.changedFiles(workDir, before).catch(() => []) : [];
@@ -1677,7 +1692,8 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
     }
     waiters.delete(terminal.sessionId);
     if (terminal.outcome === 'error') {
-      waiter.settle({ kind: 'failed', notice: 'member-failed' });
+      if (terminal.undispatched) await deps.abortLane(terminal.sessionId).catch(() => undefined);
+      waiter.settle({ kind: 'failed', notice: 'member-failed', failureCode: terminal.failureCode ?? 'RUNTIME_ERROR' });
       return true;
     }
     let text = terminal.resultText;

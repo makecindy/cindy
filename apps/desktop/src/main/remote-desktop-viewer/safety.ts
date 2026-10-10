@@ -165,9 +165,11 @@ export class ViewerSafety {
         },
         this.baseline,
       );
+      // Results of a paused or refocused clipboard generation are stale: pauseClipboard stops
+      // the read (DESKTOP_CLIPBOARD_UNAVAILABLE), which must not count as a sync failure.
       try {
         await engine.tick();
-        if (valid()) {
+        if (current()) {
           if (
             ['clipboardSyncFailed', 'clipboardSyncPermission'].includes(
               this.notices.get('clipboardSync') ?? '',
@@ -177,7 +179,7 @@ export class ViewerSafety {
           this.failures = 0;
         }
       } catch (error) {
-        if (!valid()) return this.snapshot();
+        if (!current()) return this.snapshot();
         const failure = clipboardSyncFailure(error, this.failures++);
         if (failure.code === 'DESKTOP_CLIPBOARD_UNAVAILABLE') this.applied.delete('clipboardSync');
         this.notices.set('clipboardSync', failure.notice);

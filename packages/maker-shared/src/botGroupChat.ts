@@ -39,6 +39,74 @@ export type BotGroupNoticeCode =
   | 'workdir-unavailable';
 export type BotGroupMemberStatus = 'active' | 'paused' | 'error' | 'archived' | 'deleting' | 'missing';
 
+/** Public failure categories only; never transport raw Agent errors into a group. */
+export const BOT_GROUP_RUNTIME_FAILURE_CODES = [
+  'IMAGE_INPUT_UNSUPPORTED', 'MODEL_UNAVAILABLE', 'AUTH_REQUIRED', 'RATE_LIMITED', 'UPSTREAM_OVERLOADED',
+  'QUOTA_EXCEEDED', 'NETWORK_ERROR', 'RUNTIME_TIMEOUT', 'RUNTIME_ERROR',
+] as const;
+export type BotGroupRuntimeFailureCode = typeof BOT_GROUP_RUNTIME_FAILURE_CODES[number];
+export function isBotGroupRuntimeFailureCode(value: unknown): value is BotGroupRuntimeFailureCode {
+  return typeof value === 'string' && BOT_GROUP_RUNTIME_FAILURE_CODES.some(code => code === value);
+}
+
+/** Current execution state, separate from persisted/paginated chat messages. */
+export interface BotGroupExecutionFailureView {
+  executionId: string;
+  epoch: number;
+  sourceMessageId: string;
+  botId: string;
+  botName: string;
+  code: BotGroupRuntimeFailureCode;
+  planId: string | null;
+  updatedAt?: number;
+}
+
+/** Decode only public fields from Chat Server; legacy /executions rows also work. */
+export function readBotGroupExecutionFailure(value: unknown, roomId: string): BotGroupExecutionFailureView | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const row = value as Record<string, unknown>;
+  if ((row.status !== undefined && row.status !== 'failed')
+    || (row.conversation_id !== undefined && row.conversation_id !== roomId)
+    || typeof row.id !== 'string' || !row.id || typeof row.source_message_id !== 'string' || !row.source_message_id
+    || typeof row.bot_id !== 'string' || !row.bot_id
+    || typeof row.epoch !== 'number' || !Number.isSafeInteger(row.epoch) || row.epoch < 0) return null;
+  const updatedAt = typeof row.updated_at === 'string' ? Date.parse(row.updated_at) : NaN;
+  return { executionId: row.id, epoch: row.epoch, sourceMessageId: row.source_message_id,
+    botId: row.bot_id, botName: '', code: isBotGroupRuntimeFailureCode(row.failure_code) ? row.failure_code : 'RUNTIME_ERROR',
+    planId: typeof row.plan_id === 'string' ? row.plan_id : null,
+    ...(Number.isFinite(updatedAt) ? { updatedAt } : {}) };
+}
+
+/** Persisted local notice marker; migration carries the category as card metadata. */
+export const BOT_GROUP_RUNTIME_FAILURE_PREFIX = 'cindy-runtime-error:';
+export function botGroupRuntimeFailureDetail(code: BotGroupRuntimeFailureCode): string {
+  return `${BOT_GROUP_RUNTIME_FAILURE_PREFIX}${code}`;
+}
+export function readBotGroupRuntimeFailureDetail(value: unknown): BotGroupRuntimeFailureCode | undefined {
+  if (typeof value !== 'string' || !value.startsWith(BOT_GROUP_RUNTIME_FAILURE_PREFIX)) return undefined;
+  const code = value.slice(BOT_GROUP_RUNTIME_FAILURE_PREFIX.length);
+  return isBotGroupRuntimeFailureCode(code) ? code : undefined;
+}
+
+/** Only a server-stamped import of a system notice can supply historical failure metadata. */
+export function readImportedBotGroupRuntimeFailureCode(message: {
+  origin?: unknown; deleted?: unknown;
+  content: readonly { type?: unknown; namespace?: unknown; schemaRevision?: unknown; data?: unknown; text?: unknown; fallback?: unknown }[];
+}): BotGroupRuntimeFailureCode | undefined {
+  if (message.origin !== 'import' || message.deleted === true) return undefined;
+  const card = message.content.find(block => block.type === 'card' && block.namespace === 'cindy.local-history' && block.schemaRevision === 1);
+  if (!card?.data || typeof card.data !== 'object' || Array.isArray(card.data)) return undefined;
+  const data = card.data as Record<string, unknown>;
+  if (data.kind !== 'notice' || data.authorKind !== 'system') return undefined;
+  if (isBotGroupRuntimeFailureCode(data.runtimeFailureCode)) return data.runtimeFailureCode;
+  // Compatibility with notices imported before the metadata projection existed.
+  for (const block of message.content) {
+    const code = readBotGroupRuntimeFailureDetail(block.type === 'text' ? block.text : block === card ? block.fallback : undefined);
+    if (code) return code;
+  }
+  return undefined;
+}
+
 export interface BotGroupMention {
   all: boolean;
   botIds: string[];
@@ -66,6 +134,8 @@ export interface BotGroupMemberView {
 }
 
 export interface BotGroupMessageView {
+  /** Server tombstone; it cannot anchor a runtime failure notice. */
+  deleted?: boolean;
   isSelf?: boolean;
   threadRootId?: string | null;
   replyCount?: number;
@@ -80,6 +150,8 @@ export interface BotGroupMessageView {
   content: string;
   mentions: BotGroupMention;
   noticeCode: BotGroupNoticeCode | null;
+  /** Localized cause and remedy for a failed execution; raw diagnostics stay on the executor. */
+  runtimeFailureCode?: BotGroupRuntimeFailureCode;
   /** The plan this message belongs to: the 安排卡, a step hand-off or the plan's end. */
   planId: string | null;
   /** Step hand-off files, relative to the plan's work directory (POSIX separators). */
@@ -238,6 +310,8 @@ export interface BotGroupSummary {
 export interface BotGroupDetail extends BotGroupSummary {
   /** Oldest first. */
   messages: BotGroupMessageView[];
+  /** Authorized current failures, independent of message pagination. Local/older hosts omit this. */
+  executionFailures?: BotGroupExecutionFailureView[];
   hasMoreBefore: boolean;
   round: BotGroupRoundView;
   /** Plans referenced by the loaded messages, plus the open plan. */
@@ -332,6 +406,8 @@ export interface BotGroupGetOptions {
   /** Load messages with a smaller sequence (older page). */
   beforeSequence?: number;
   limit?: number;
+  /** Reconcile execution state for real messages already displayed on older pages. */
+  sourceMessageIds?: string[];
 }
 
 export type BotGroupChange = 'created' | 'updated' | 'deleted' | 'messages' | 'round' | 'plan';
@@ -464,8 +540,10 @@ export interface ChatServerApi {
   ownedBots(): Promise<ChatServerResult<{ bots: Array<{ actorId: string; name: string }> }>>;
   refreshProfile(): Promise<ChatServerResult<Record<never, never>>>;
   status(): Promise<{ enabled: boolean; connected: boolean }>;
-  thread(input: { groupId: string; rootId: string; before?: number }): Promise<ChatServerResult<{
+  thread(input: { groupId: string; rootId: string; before?: number; sourceMessageIds?: string[] }): Promise<ChatServerResult<{
     root: BotGroupMessageView; replies: BotGroupMessageView[]; hasMore: boolean;
+    /** Same authoritative state as the main timeline; root and replies use one projection. */
+    executionFailures?: BotGroupExecutionFailureView[];
   }>>;
   reply(input: { groupId: string; rootId: string; text: string; clientId: string; mentions: BotGroupMention }): Promise<ChatServerResult<{ messageId: string }>>;
   react(input: { groupId: string; messageId: string; emoji: string; present: boolean }): Promise<ChatServerResult<Record<never, never>>>;

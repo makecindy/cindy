@@ -1,3 +1,5 @@
+import { todoAccess } from '../../maker-ipc/botTodoAccess.js';
+import type { TodoPatch } from '@cindy/maker-shared/teammate-todo';
 /** Cindy Bots 的 main-side 权威数据边界。
  *
  * Bot profile 与 Session 归属只在这里写入 SQLite；renderer 只读取投影，
@@ -2122,6 +2124,17 @@ export function registerBotIpc(): void {
     owner.assertCurrent();
     return workbench;
   });
+  for (const operation of ['list', 'update', 'act'] as const) {
+    ipcMain.handle(`local-db:bots:todos:${operation}`, async (event, rawBotId: unknown, input: unknown) => {
+      assertTrustedAppRendererEvent(event);
+      const owner = captureBotOperationOwner();
+      const access = await todoAccess(readText(rawBotId, 'botId', 128, true));
+      owner.assertCurrent();
+      const result = operation === 'list' ? await access.list() : operation === 'update' ? await access.patch(input as TodoPatch)
+        : await access.act((input as {id:string}).id, (input as {revision:number}).revision, (input as {requestId:string}).requestId,(input as {locale?:string}).locale);
+      owner.assertCurrent();return result;
+    });
+  }
   ipcMain.handle('local-db:bots:workbench:add-directory', async (event, rawBotId: unknown, rawPath: unknown) => {
     assertTrustedAppRendererEvent(event);
     const botId = readText(rawBotId, 'botId', 128, true);

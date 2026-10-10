@@ -34,8 +34,9 @@ const snapshot = {
   olderCount: 0,
 };
 
-function setup(sessionId: string | null = 'bot-session') {
+function setup(sessionId: string | null = 'bot-session', todos?:BotWorkbenchCallbacks['todos']) {
   const callbacks: BotWorkbenchCallbacks = {
+    ...(todos ? {todos} : {}),
     get: vi.fn(async () => ({ ok: true as const, workbench: snapshot })),
     read: vi.fn(async ({ taskId }: { taskId: string }) => ({
       ok: true as const,
@@ -205,5 +206,22 @@ describe('bot workbench tools', () => {
     for (const name of ['get_workbench', 'read_workbench_task', 'set_workbench_task', 'set_workbench_tasks', 'continue_workbench_task', 'add_workbench_project', 'remove_workbench_project']) {
       expect(reg.has(name)).toBe(true);
     }
+  });
+});
+
+describe('teammate affair discovery tools',()=>{
+  it('registers project-free APIs and binds writes to the canonical caller context',async()=>{
+    const callback=vi.fn(async()=>({ok:true as const,todo:{id:'one'}}));const {reg}=setup('canonical',callback);
+    expect(parse(await reg.call('update_teammate_todo',{patch:{key:'mail:quote',title:'Compare quote',outcome:'User accepts comparison',origin:'discovered'}}))).toMatchObject({ok:true,todo:{id:'one'}});
+    expect(callback).toHaveBeenCalledWith('canonical','update',{key:'mail:quote',title:'Compare quote',outcome:'User accepts comparison',origin:'discovered'});
+    await reg.call('preflight_teammate_todo_events',{events:[{source:'mail',sequence:4,key:'quote'}]});
+    expect(callback).toHaveBeenLastCalledWith('canonical','preflight',[{source:'mail',sequence:4,key:'quote'}]);
+  });
+  it('rejects malformed action/evidence input before invoking the host',async()=>{
+    const callback=vi.fn(async()=>({ok:true as const}));const {reg}=setup(null,callback);
+    expect(parse(await reg.call('list_teammate_todos',{}))).toMatchObject({ok:false,errorCode:'NOT_A_BOT_SESSION'});
+    expect(callback).not.toHaveBeenCalled();
+    const live=setup('canonical',callback);const response=await live.reg.call('update_teammate_todo',{patch:{operation:'complete',completion:{summary:42}}});
+    expect(response.isError).toBe(true);expect(callback).not.toHaveBeenCalled();
   });
 });

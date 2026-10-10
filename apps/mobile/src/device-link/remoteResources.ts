@@ -44,6 +44,7 @@ const RICH_REMOTE_RESOURCE_PRIMITIVES: readonly string[] = [
   BOT_GROUP_CHAT_PRIMITIVE,
   'plugin-capabilities',
   'plugin-card-actions',
+  'teammate-todos',
 ];
 
 /** Routines remain a desktop feature; other portable collections stay available. */
@@ -369,11 +370,13 @@ export async function getRemoteResource(
   ref: RemoteResourceRef,
   locale?: string,
   supportedPrimitives: readonly string[] = [],
+  query?: string,
 ): Promise<RemoteResource> {
   assertMobileRemoteCollectionSupported(ref.collectionId);
   const raw = await invoke<unknown>(target.deviceId, REMOTE_RESOURCE_GET_CHANNEL, [{
     client: { ...clientDescriptor(locale), primitives: [...MOBILE_REMOTE_RESOURCE_PRIMITIVES, ...supportedPrimitives] },
     ref,
+    ...(query ? {query} : {}),
   }]);
   const normalized = normalizeRemoteCollectionItem(raw, ref.collectionId);
   if (!normalized || normalized.ref.kind !== ref.kind || normalized.ref.id !== ref.id) {

@@ -386,6 +386,8 @@ export function createOrcaRemoteWorkerRuntime(deps: OrcaRemoteWorkerRuntimeDeps)
         if (item.role === 'assistant' && typeof item.id === 'string' && !scan.reply) {
           scan.reply = { id: item.id, text: textOf(item.content).slice(-MAX_REPORT_CHARS) };
         } else if (item.role === 'user') {
+          // 自动续跑(额度恢复后、供应商组换电脑后)的隐藏消息接着同一次派活，不是插话：它之后的回复照常收尾。
+          if ((item.agentMeta as { autoResume?: unknown } | null)?.autoResume === true) continue;
           if (typeof item.clientId === 'string' && inputs.has(item.clientId)) {
             return {
               id: scan.reply?.id ?? null,

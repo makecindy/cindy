@@ -9,7 +9,7 @@ import { useHostManagedSession } from '@/session/hostManagedSession';
 import type { RemoteResource } from '@cindy/device-link';
 
 const h = vi.hoisted(() => ({
-  profile: {} as any, dismiss: vi.fn(), chooseMode: vi.fn(), screenOptions: [] as Array<Record<string, unknown>>,
+  todos: {} as any, profile: {} as any, dismiss: vi.fn(), chooseMode: vi.fn(), screenOptions: [] as Array<Record<string, unknown>>,
   auth: { accountGeneration: 1, user: null },
 }));
 vi.mock('react-native', () => ({
@@ -27,10 +27,11 @@ vi.mock('@/theme', async () => {
   const tokens = await import('@/theme/tokens');
   return { ...tokens, useTheme: () => ({ colors: tokens.lightColors }), useThemedStyles: (fn: any) => fn(tokens.lightColors) };
 });
-vi.mock('lucide-react-native', () => ({ ChevronLeft: () => null, Settings2: () => null }));
+vi.mock('lucide-react-native', () => ({ ChevronLeft: () => null, Settings2: () => null, ListTodo: () => null }));
 vi.mock('@/session/HomeHeaderGlassButton', () => ({ HomeHeaderGlassButton: ({ onPress, testID, children, disabled }: any) =>
   createElement('button', { onClick: onPress, disabled, 'data-testid': testID }, children) }));
 vi.mock('@/session/CompanionPresenceRing', () => ({ CompanionPresenceRing: ({ active }: any) => active ? createElement('i', { 'data-testid': 'ring' }) : null }));
+vi.mock('@/session/CompanionTodos', () => ({ CompanionTodos: (props: unknown) => { h.todos = props; return null; } }));
 vi.mock('@/session/CompanionProfileSheet', () => ({ CompanionProfileSheet: (props: unknown) => { h.profile = props; return null; } }));
 vi.mock('@/session/useTeammateNavigation', () => ({ useTeammateNavigation: () => ({ chooseMode: h.chooseMode }) }));
 import { CompanionHeader } from '@/session/CompanionHeader';
@@ -39,7 +40,7 @@ let root: Root; let host: HTMLDivElement;
 const resource = { ref: { kind: 'bot', collectionId: 'bots', id: 'bot' }, display: { title: 'Cindy' } } as RemoteResource;
 const button = (id: string) => host.querySelector<HTMLButtonElement>(`[data-testid="${id}"]`)!;
 beforeEach(() => {
-  vi.clearAllMocks(); h.auth.accountGeneration = 1; h.profile = {}; h.screenOptions = [];
+  vi.clearAllMocks(); h.auth.accountGeneration = 1; h.profile = {}; h.todos = {}; h.screenOptions = [];
   host = document.createElement('div'); root = createRoot(host);
 });
 afterEach(() => act(() => root.unmount()));
@@ -166,4 +167,25 @@ it('opens learning links in the existing profile sheet on the requested page', a
   await act(async () => root.render(<CompanionHeader resource={resource} deviceId="pc" deviceName="PC" online onBack={() => {}} onSearch={() => {}}
     settingsRequest={{ page: 'capabilities', sequence: 2 }} />));
   expect(h.profile).toMatchObject({ visible: true, initialPage: 'capabilities' });
+});
+
+it('only opens Todo for an advertised host capability after entry validation and closes it on account change', async () => {
+  const props = { resource, deviceId: 'pc', deviceName: 'PC', online: true, onBack: vi.fn(), onSearch: vi.fn() };
+  await act(async () => root.render(<CompanionHeader {...props} />));
+  expect(button('companion.todos.open')).toBeNull();
+  const withTodos: RemoteResource = { ...resource, links: [{ rel: 'todos', label: 'Todo', target: { kind: 'resource', ref: { collectionId: 'teammates', kind: 'bot', id: 'todos:bot' } } }] };
+  await act(async () => root.render(<CompanionHeader {...props} resource={withTodos} controlsReady={false} />));
+  expect(button('companion.todos.open').disabled).toBe(true);
+  await act(async () => button('companion.todos.open').click());
+  expect(h.todos.visible).toBe(false);
+  await act(async () => root.render(<CompanionHeader {...props} resource={withTodos} />));
+  await act(async () => button('companion.todos.open').click());
+  expect(h.todos).toMatchObject({ visible: true, deviceId: 'pc', botId: 'bot', online: true });
+  expect(h.profile.visible).toBe(false);
+  await act(async () => h.todos.onClose());
+  expect(h.todos.visible).toBe(false);
+  await act(async () => button('companion.todos.open').click());
+  h.auth.accountGeneration++;
+  await act(async () => root.render(<CompanionHeader {...props} resource={withTodos} />));
+  expect(h.todos.visible).toBe(false);
 });

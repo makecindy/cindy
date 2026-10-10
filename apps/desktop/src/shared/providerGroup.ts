@@ -127,14 +127,20 @@ export type ProviderGroupCommand =
   | { action: 'get'; providerId: string }
   | { action: 'candidates'; providerId: string }
   | { action: 'save'; providerId: string; config: ProviderGroupConfig }
-  | { action: 'delete'; providerId: string };
+  | { action: 'delete'; providerId: string }
+  /** 同账号另一台电脑上这个供应商的组与组内电脑状态(只读)。 */
+  | { action: 'remote-view'; providerId: string; deviceId: string }
+  /** 本机全部组的设置(不读远端)。 */
+  | { action: 'list' };
 
 export type ProviderGroupCommandResult<C extends ProviderGroupCommand> =
-  C extends { action: 'get' } ? ProviderGroupView
+  C extends { action: 'list' } ? Record<string, ProviderGroupConfig>
+  : C extends { action: 'get' } ? ProviderGroupView
     : C extends { action: 'candidates' } ? ProviderGroupCandidate[]
       : C extends { action: 'save' } ? ProviderGroupView
         : C extends { action: 'delete' } ? ProviderGroupView
-          : never;
+          : C extends { action: 'remote-view' } ? ProviderGroupView
+            : never;
 
 const PROVIDER_ID_PATTERN = /^[a-zA-Z0-9._-]{1,128}$/;
 const DEVICE_ID_PATTERN = /^[A-Za-z0-9_.-]{1,128}$/;
@@ -221,4 +227,207 @@ export function normalizeProviderGroupConfig(raw: unknown, groupProviderId: stri
   }
   if (members.length === 0) return null;
   return { strategy, autoSwitch: value.autoSwitch !== false, members };
+}
+
+// ─── 同账号电脑之间(`maker:provider:list` 的 `group` 字段与 `provider-group:remote` 通道) ─────
+
+/**
+ * 组所在电脑的目录里随组所属供应商带出的组摘要：只给同账号电脑，受邀者与共享任务访客看不到。
+ * 组员的坐标是组所在电脑视角(`local` = 组所在电脑自己)。并发上限与权重只在组所在电脑上生效，不外发。
+ */
+export interface ProviderGroupWireSummary {
+  strategy: ProviderGroupStrategy;
+  autoSwitch: boolean;
+  members: Array<Pick<ProviderGroupMember, 'key' | 'kind' | 'agentDeviceId' | 'providerId' | 'label' | 'paused'>>;
+}
+
+export function providerGroupSummaryForWire(config: ProviderGroupConfig): ProviderGroupWireSummary {
+  return {
+    strategy: config.strategy,
+    autoSwitch: config.autoSwitch,
+    members: config.members.map((m) => ({
+      key: m.key,
+      kind: m.kind,
+      agentDeviceId: m.agentDeviceId,
+      providerId: m.providerId,
+      // 分享来的电脑不带名字：旧版本存的快照是分享者的电脑名(provider-sharing.md §6)，界面按分享者昵称显示。
+      ...(m.label && m.kind !== 'share' ? { label: m.label } : {}),
+      paused: m.paused,
+    })),
+  };
+}
+
+/** 读另一台电脑目录里的组摘要；格式不对返回 null(当作没有组)。 */
+export function readProviderGroupSummary(raw: unknown, groupProviderId: string): ProviderGroupConfig | null {
+  return normalizeProviderGroupConfig(raw, groupProviderId);
+}
+
+/** 换电脑的原因里，会让组所在电脑冷却那台的几种(连不上只由发现它的电脑自己避开，不替全组判断)。 */
+export type ProviderGroupRemoteCoolCause = 'usage-limit' | 'auth' | 'overload';
+const REMOTE_COOL_CAUSES: readonly ProviderGroupRemoteCoolCause[] = ['usage-limit', 'auth', 'overload'];
+
+export interface ProviderGroupRemoteLease {
+  sessionId: string;
+  providerId: string;
+  memberKey: string;
+}
+
+export type ProviderGroupRemoteRequest =
+  /** 新任务该用组里哪台；选中即给那台记一个短暂的占用，同时开的几个任务不会全落到同一台。 */
+  | { action: 'pick'; sessionId: string; providerId: string; agentKind: 'claude-code' | 'codex' | 'pi'; model: string; exclude: string[] }
+  /** 那台电脑出了问题(用量上限、登录失效、服务繁忙)：组所在电脑冷却它，不再分新任务。 */
+  | { action: 'cool'; providerId: string; memberKey: string; cause: ProviderGroupRemoteCoolCause; resetAt?: number }
+  /** 这台电脑经组运行、正在跑的任务(整体替换上一份；seq 只增，乱序到达的旧份丢弃)。 */
+  | { action: 'leases'; seq: number; entries: ProviderGroupRemoteLease[] }
+  /** 组内电脑的状态(发送前检查、设置页展示)。 */
+  | { action: 'view'; providerId: string };
+
+export type ProviderGroupRemotePick =
+  /** 那个供应商现在没有组(组被删了或旧版本)：照常直接在组所在电脑上运行。 */
+  | { kind: 'none' }
+  | { kind: 'member'; member: Pick<ProviderGroupMember, 'key' | 'kind' | 'agentDeviceId' | 'providerId'>; label: string }
+  | { kind: 'unavailable' };
+
+/** 一次最多报告的运行中任务数(每台电脑的任务上限远低于此)。 */
+export const PROVIDER_GROUP_REMOTE_MAX_LEASES = 512;
+const REMOTE_SESSION_ID = /^[A-Za-z0-9_-]{1,128}$/;
+const REMOTE_MEMBER_KEY = /^[A-Za-z0-9_.:-]{1,300}$/;
+const REMOTE_AGENT_KINDS = new Set(['claude-code', 'codex', 'pi']);
+
+function invalidRemote(message: string): never {
+  throw new Error(`[INVALID_PARAMS] ${message}`);
+}
+
+function remoteRecord(raw: unknown): Record<string, unknown> {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) invalidRemote('provider group request must be an object');
+  return raw as Record<string, unknown>;
+}
+
+function remoteProviderId(value: unknown): string {
+  if (!isProviderGroupProviderId(value)) invalidRemote('invalid provider id');
+  return value;
+}
+
+function remoteMemberKey(value: unknown): string {
+  if (typeof value !== 'string' || !REMOTE_MEMBER_KEY.test(value)) invalidRemote('invalid member key');
+  return value;
+}
+
+function remoteSessionId(value: unknown): string {
+  if (typeof value !== 'string' || !REMOTE_SESSION_ID.test(value)) invalidRemote('invalid session id');
+  return value;
+}
+
+/** 组所在电脑解析同账号电脑发来的请求；不合法抛 `[INVALID_PARAMS]`。 */
+export function parseProviderGroupRemoteRequest(raw: unknown): ProviderGroupRemoteRequest {
+  const value = remoteRecord(raw);
+  switch (value.action) {
+    case 'pick': {
+      const agentKind = value.agentKind;
+      if (typeof agentKind !== 'string' || !REMOTE_AGENT_KINDS.has(agentKind)) invalidRemote('invalid agent');
+      if (typeof value.model !== 'string' || !value.model || value.model.length > 512) invalidRemote('invalid model');
+      const exclude = value.exclude === undefined ? [] : value.exclude;
+      if (!Array.isArray(exclude) || exclude.length > PROVIDER_GROUP_STORAGE_MEMBER_CAP) invalidRemote('invalid exclude');
+      return {
+        action: 'pick',
+        sessionId: remoteSessionId(value.sessionId),
+        providerId: remoteProviderId(value.providerId),
+        agentKind: agentKind as 'claude-code' | 'codex' | 'pi',
+        model: value.model,
+        exclude: exclude.map(remoteMemberKey),
+      };
+    }
+    case 'cool': {
+      const cause = value.cause;
+      if (!REMOTE_COOL_CAUSES.includes(cause as ProviderGroupRemoteCoolCause)) invalidRemote('invalid cause');
+      const resetAt = typeof value.resetAt === 'number' && Number.isFinite(value.resetAt) && value.resetAt > 0
+        ? value.resetAt
+        : undefined;
+      return {
+        action: 'cool',
+        providerId: remoteProviderId(value.providerId),
+        memberKey: remoteMemberKey(value.memberKey),
+        cause: cause as ProviderGroupRemoteCoolCause,
+        ...(resetAt !== undefined ? { resetAt } : {}),
+      };
+    }
+    case 'leases': {
+      if (!Number.isSafeInteger(value.seq) || (value.seq as number) < 0) invalidRemote('invalid seq');
+      if (!Array.isArray(value.entries) || value.entries.length > PROVIDER_GROUP_REMOTE_MAX_LEASES) invalidRemote('invalid leases');
+      return {
+        action: 'leases',
+        seq: value.seq as number,
+        entries: value.entries.map((entry) => {
+          const lease = remoteRecord(entry);
+          return {
+            sessionId: remoteSessionId(lease.sessionId),
+            providerId: remoteProviderId(lease.providerId),
+            memberKey: remoteMemberKey(lease.memberKey),
+          };
+        }),
+      };
+    }
+    case 'view':
+      return { action: 'view', providerId: remoteProviderId(value.providerId) };
+    default:
+      invalidRemote('unknown provider group action');
+  }
+}
+
+/** 同账号电脑读组所在电脑 `pick` 的回包；格式不对按「没有组」处理。 */
+export function parseProviderGroupRemotePick(raw: unknown, groupProviderId: string): ProviderGroupRemotePick {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { kind: 'none' };
+  const value = raw as Record<string, unknown>;
+  if (value.kind === 'unavailable') return { kind: 'unavailable' };
+  if (value.kind !== 'member') return { kind: 'none' };
+  const member = normalizeMember(value.member, groupProviderId);
+  if (!member) return { kind: 'none' };
+  const label = normalizeLabel(value.label) ?? member.label ?? member.key;
+  return {
+    kind: 'member',
+    member: { key: member.key, kind: member.kind, agentDeviceId: member.agentDeviceId, providerId: member.providerId },
+    label,
+  };
+}
+
+const MEMBER_STATES: readonly ProviderGroupMemberState[] = ['available', 'full', 'paused', 'cooling', 'offline', 'unavailable'];
+const UNAVAILABLE_REASONS: readonly ProviderGroupUnavailableReason[] = ['provider-off', 'disconnected', 'share-paused', 'share-removed'];
+
+/** 同账号电脑读组所在电脑 `view` 的回包(设置页只读展示、发送前检查)；坏条目丢弃。 */
+export function parseProviderGroupRemoteView(raw: unknown, groupProviderId: string): ProviderGroupView {
+  const empty: ProviderGroupView = { providerId: groupProviderId, config: null, members: [] };
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return empty;
+  const value = raw as Record<string, unknown>;
+  const config = normalizeProviderGroupConfig(value.config, groupProviderId);
+  if (!config) return empty;
+  const keys = new Set(config.members.map((m) => m.key));
+  const count = (v: unknown, max: number) =>
+    typeof v === 'number' && Number.isFinite(v) ? Math.min(max, Math.max(0, Math.round(v))) : 0;
+  const members = (Array.isArray(value.members) ? value.members : []).flatMap((entry): ProviderGroupMemberStatus[] => {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return [];
+    const item = entry as Record<string, unknown>;
+    const key = typeof item.key === 'string' && keys.has(item.key) ? item.key : null;
+    const state = MEMBER_STATES.includes(item.state as ProviderGroupMemberState) ? item.state as ProviderGroupMemberState : null;
+    const member = key ? config.members.find((m) => m.key === key)! : null;
+    if (!member || !state) return [];
+    const reason = UNAVAILABLE_REASONS.includes(item.reason as ProviderGroupUnavailableReason)
+      ? item.reason as ProviderGroupUnavailableReason
+      : undefined;
+    const ownerName = normalizeLabel(item.ownerName);
+    const coolingUntil = typeof item.coolingUntil === 'number' && Number.isFinite(item.coolingUntil) ? item.coolingUntil : undefined;
+    return [{
+      key: member.key,
+      kind: member.kind,
+      label: normalizeLabel(item.label) ?? member.label ?? member.key,
+      ...(ownerName ? { ownerName } : {}),
+      state,
+      ...(reason ? { reason } : {}),
+      running: count(item.running, 10_000),
+      limit: member.limit,
+      weight: member.weight,
+      paused: member.paused,
+      ...(coolingUntil !== undefined ? { coolingUntil } : {}),
+    }];
+  });
+  return { providerId: groupProviderId, config, members };
 }

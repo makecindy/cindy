@@ -51,7 +51,35 @@ interface Fixture {
   guestHome?: boolean;
   /** 受邀者启动时用的来源；默认就是分享的供应商(xd)。 */
   providerId?: string;
+  /** app-server 不给功能清单(旧版本或出错)。 */
+  noFeatureList?: boolean;
+  /** 宿主提供的任务隧道往来记录。 */
+  linkActivity?: DeviceHostedSession['linkActivity'];
 }
+
+/** app-server 的功能清单，分两页返回。 */
+const FEATURE_PAGES: Record<string, { data: Array<{ name: string; stage: string; enabled: boolean }>; nextCursor: string | null }> = {
+  first: {
+    data: [
+      { name: 'shell_tool', stage: 'stable', enabled: true },
+      { name: 'view_image', stage: 'stable', enabled: true },
+      { name: 'shell_snapshot', stage: 'stable', enabled: true },
+      { name: 'image_generation', stage: 'stable', enabled: true },
+      { name: 'in_app_local_automation', stage: 'stable', enabled: true },
+      { name: 'network_proxy', stage: 'beta', enabled: false },
+    ],
+    nextCursor: 'page-2',
+  },
+  'page-2': {
+    data: [
+      { name: 'multi_agent', stage: 'stable', enabled: true },
+      { name: 'item_ids', stage: 'removed', enabled: true },
+      { name: 'web_search_request', stage: 'deprecated', enabled: false },
+      { name: 'future_local_tool', stage: 'underDevelopment', enabled: true },
+    ],
+    nextCursor: null,
+  },
+};
 
 const SHARED_PROVIDER = { providerId: 'xd', modelIds: ['gpt-5.5'], routeToken: 'route-token' };
 
@@ -144,6 +172,9 @@ async function startHosted(fixture: Fixture) {
         };
       case Method.EnvironmentAdd:
         return {};
+      case Method.ExperimentalFeatureList:
+        if (fixture.noFeatureList) throw new Error('unknown method');
+        return FEATURE_PAGES[(params as { cursor?: string }).cursor ?? 'first'];
       case Method.ThreadStart:
         return {
           thread: { id: 'start-thread-id', ...(reportedHome !== codexHome ? { path: path.join(reportedHome, 'sessions', 'rollout.jsonl') } : {}) },
@@ -208,6 +239,7 @@ async function startHosted(fixture: Fixture) {
     mirrorRoot,
     ...(fixture.guest ? { guest: true, guestProvider: SHARED_PROVIDER } : {}),
     ...(guestHome ? { guestHome } : {}),
+    ...(fixture.linkActivity ? { linkActivity: fixture.linkActivity } : {}),
   };
   const started = agent.startSession({
     sessionId: 'hosted-session',
@@ -229,6 +261,11 @@ function threadParams(request: ReturnType<typeof vi.fn>, method: string): Record
   const params = request.mock.calls.find(([called]) => called === method)?.[1] as Record<string, unknown> | undefined;
   if (!params) throw new Error(`expected ${method}`);
   return params;
+}
+
+/** host.request 的第三个参数(超时与顺延设置)。 */
+function requestOptions(request: ReturnType<typeof vi.fn>, method: string): Record<string, unknown> | undefined {
+  return request.mock.calls.find(([called]) => called === method)?.[2] as Record<string, unknown> | undefined;
 }
 
 afterEach(async () => {
@@ -268,6 +305,20 @@ describe('Codex device-hosted guest sessions', () => {
     // 联网搜索与同账号托管会话一致，不额外关闭。
     expect(config.web_search).toBeUndefined();
     expect(config['features.multi_agent']).toBeUndefined();
+    // Codex 功能按白名单：名单外的(本机开着的、关着的、Codex 新增的)都写 false；名单内的、已移除的、
+    // 关着的旧开关不动。功能清单逐页取完。
+    expect(config).toMatchObject({
+      'features.image_generation': false,
+      'features.in_app_local_automation': false,
+      'features.network_proxy': false,
+      'features.future_local_tool': false,
+    });
+    // shell 快照由执行环境在受邀者电脑上生成，保持开启。
+    for (const key of ['features.shell_tool', 'features.view_image', 'features.shell_snapshot', 'features.item_ids', 'features.web_search_request']) {
+      expect(config[key]).toBeUndefined();
+    }
+    expect(fixture.request.mock.calls.filter(([method]) => method === Method.ExperimentalFeatureList)
+      .map(([, params]) => (params as { cursor?: string }).cursor)).toEqual([undefined, 'page-2']);
     // 项目说明经执行环境从受邀者电脑读取，项目根的判定与同账号一致。
     expect(config.project_root_markers).toBeUndefined();
     // 本机用户的技能关闭；Codex 自带的与受邀者带来的保留。
@@ -311,9 +362,17 @@ describe('Codex device-hosted guest sessions', () => {
     expect(String(params.developerInstructions)).toContain(GHOST_ROSTER);
     expect(fixture.getContactsPromptState).toHaveBeenCalled();
     expect(fixture.getDisabledSkillPaths).toHaveBeenCalled();
-    // 同账号不检查本机 Skill / MCP 清单(Review 与受邀者才逐项关闭)。
+    // 同账号不检查本机 Skill / MCP 清单(Review 与受邀者才逐项关闭)，Codex 功能也不按白名单收窄。
     expect(fixture.request.mock.calls.some(([method]) => method === Method.McpServerStatusList)).toBe(false);
+    expect(fixture.request.mock.calls.some(([method]) => method === Method.ExperimentalFeatureList)).toBe(false);
+    expect(config['features.image_generation']).toBeUndefined();
     await handle.close();
+  });
+
+  it('refuses a shared user when Codex cannot list its features', async () => {
+    const fixture = await startHosted({ guest: true, noFeatureList: true });
+    await expect(fixture.started).rejects.toThrow(/Cannot start Codex for a shared user safely/);
+    expect(fixture.request.mock.calls.some(([method]) => method === Method.ThreadStart)).toBe(false);
   });
 
   it('refuses a shared user without its own Codex home', async () => {
@@ -360,6 +419,61 @@ describe('Codex device-hosted guest sessions', () => {
     expect(fixture.prepareCodexResumeSession).toHaveBeenCalled();
     expect(fixture.resolveCodexThreadStorage).toHaveBeenCalled();
     expect(fixture.prepareCodexSkills).toHaveBeenCalled();
+    await handle.close();
+  });
+
+  it.each([false, true])('lets thread requests keep waiting while the tunnel still has traffic (#5764, resume: %s)', async (resume) => {
+    const linkActivity = vi.fn(() => ({
+      lastActivityAt: 1_234,
+      execRequests: 4,
+      execResponses: 3,
+      execMaxInFlight: 2,
+      httpInFlight: 0,
+    }));
+    const fixture = await startHosted({ guest: true, resume, linkActivity });
+    const handle = await fixture.started;
+    const optionsOf = (method: string) => requestOptions(fixture.request, method) as {
+      timeoutMs?: number;
+      extendWhileProgress?: { lastProgressAt(): number | null; idleMs: number; maxMs: number; describe?(): string };
+    } | undefined;
+    const thread = optionsOf(resume ? Method.ThreadResume : Method.ThreadStart);
+    expect(thread).toMatchObject({ timeoutMs: 60_000, extendWhileProgress: { idleMs: 30_000, maxMs: 300_000 } });
+    expect(thread?.extendWhileProgress?.lastProgressAt()).toBe(1_234);
+    expect(thread?.extendWhileProgress?.describe?.()).toContain('execution environment answered 3/4 requests');
+    await handle.send({ type: 'user', content: 'hi' });
+    expect(optionsOf(Method.TurnStart)).toMatchObject({ timeoutMs: 60_000, extendWhileProgress: { idleMs: 30_000 } });
+    await handle.close();
+  });
+
+  it('extends hosted workspace profile lifecycle requests with tunnel progress', async () => {
+    const linkActivity = vi.fn(() => ({
+      lastActivityAt: 1_234,
+      execRequests: 4,
+      execResponses: 3,
+      execMaxInFlight: 2,
+      httpInFlight: 0,
+    }));
+    const fixture = await startHosted({ guest: true, linkActivity });
+    const handle = await fixture.started;
+    await handle.setExtraDirs?.(['/shared-profile']);
+    await handle.send({ type: 'user', content: 'use the hosted profile' });
+
+    const replacementCall = fixture.request.mock.calls
+      .filter(([method]) => method === Method.ThreadStart)[1] as unknown as [string, unknown, unknown] | undefined;
+    const replacement = replacementCall?.[2] as Record<string, unknown> | undefined;
+    expect(replacement).toMatchObject({
+      timeoutMs: 60_000,
+      extendWhileProgress: { idleMs: 30_000, maxMs: 300_000 },
+    });
+    await handle.close();
+  });
+
+  it('keeps the fixed limit when the host provides no tunnel activity', async () => {
+    const fixture = await startHosted({ guest: false });
+    const handle = await fixture.started;
+    const options = requestOptions(fixture.request, Method.ThreadStart);
+    expect(options).toMatchObject({ timeoutMs: 60_000 });
+    expect(options).not.toHaveProperty('extendWhileProgress');
     await handle.close();
   });
 

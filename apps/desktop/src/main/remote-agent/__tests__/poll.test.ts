@@ -14,7 +14,7 @@ interface FakeRun {
 }
 
 /** 与 runHost 的 poll 同一套语义的最小被控端(只关心事件流)。 */
-function fakeHost() {
+function fakeHost(maxWaitMs = 200) {
   const runs = new Map<string, FakeRun>();
   const calls: Array<{ runs: Array<{ runId: string; cursor: number }>; waitMs?: number }> = [];
   let failNext: Error | null = null;
@@ -44,7 +44,7 @@ function fakeHost() {
       const ready = live.length < request.runs.length || live.some(({ run, cursor }) => run.log.isReady(cursor));
       if (!ready && (request.waitMs ?? 0) > 0) {
         await new Promise<void>((resolve) => {
-          const timer = setTimeout(finish, Math.min(request.waitMs ?? 0, 200));
+          const timer = setTimeout(finish, Math.min(request.waitMs ?? 0, maxWaitMs));
           const offs = live.map(({ run }) => run.log.onChange(finish));
           function finish() {
             clearTimeout(timer);
@@ -112,6 +112,30 @@ afterEach(() => {
 });
 
 describe('multiplexed poll', () => {
+  it('keeps pulling a run registered during a long wait, without waiting for the old poll to time out', async () => {
+    // 被控端照实挂满等待时间：旧的长等待只覆盖第一个任务。
+    const host = fakeHost(10_000);
+    const poller = new RemoteAgentPoller((args) => host.invoke(args));
+    const first = randomUUID();
+    const second = randomUUID();
+    host.add(first).append({ step: 'started' });
+    const firstSink = collector(first);
+    poller.register(firstSink.run);
+    await until(() => firstSink.text().includes('started'));
+    const secondLog = host.add(second);
+    const secondSink = collector(second);
+    poller.register(secondSink.run);
+    secondLog.append({ step: 'projection' });
+    await until(() => secondSink.text().includes('projection'));
+    const startedAt = Date.now();
+    secondLog.append({ step: 'started' });
+    await until(() => secondSink.text().includes('"started"'), 2_000);
+    expect(Date.now() - startedAt).toBeLessThan(1_000);
+    host.runs.get(first)!.log.end();
+    secondLog.end();
+    await until(() => firstSink.done && secondSink.done);
+  });
+
   it('delivers every run exactly once with at most two polls in flight', async () => {
     const host = fakeHost();
     let inflight = 0;

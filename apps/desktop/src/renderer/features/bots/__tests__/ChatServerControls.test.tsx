@@ -42,6 +42,45 @@ beforeEach(() => {
 afterEach(() => { cleanup(); shareSelectionStore.reset(); vi.unstubAllGlobals(); });
 
 describe('chat interaction controls', () => {
+  it.each([undefined, 'private-diagnostic'])('keeps existing thread notices visible without a valid runtime code: %s', async runtimeFailureCode => {
+    mocks.thread.mockResolvedValue({ ok: true, root: message, replies: [{ ...message, id: 'old-notice', kind: 'notice',
+      content: 'Existing system notice', runtimeFailureCode }], hasMore: false });
+    render(<ChatThreadPanel group={group} rootId="root" onClose={vi.fn()} />);
+    expect(await screen.findByText('Existing system notice')).toBeTruthy();
+    expect(screen.queryByText('private-diagnostic')).toBeNull();
+  });
+
+  it('renders the current root failure beside the root and removes it when a refreshed page clears the failure', async () => {
+    const failure = { executionId: 'root-run', epoch: 1, sourceMessageId: message.id, botId: 'bot', botName: 'Bot', code: 'QUOTA_EXCEEDED', planId: null };
+    mocks.thread.mockResolvedValueOnce({ ok: true, root: message, executionFailures: [failure], replies: [], hasMore: true })
+      .mockResolvedValue({ ok: true, root: message, executionFailures: [], replies: [], hasMore: false });
+    render(<ChatThreadPanel group={group} rootId="root" onClose={vi.fn()} />);
+    const text = 'bots.groupChat.notice.runtimeFailure.QUOTA_EXCEEDED';
+    expect(await screen.findByText(text)).toBeTruthy();
+    expect(screen.getByText('Root message')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'bots.groupChat.timeline.loadEarlier' }));
+    await waitFor(() => expect(screen.queryByText(text)).toBeNull());
+    expect(screen.getByText('Root message')).toBeTruthy();
+  });
+
+  it('clears a retried failure on an older loaded Thread page without dropping its reply', async () => {
+    const latest = { ...message, id: 'latest', sequence: 100, content: 'Latest reply' };
+    const older = { ...message, id: 'older', sequence: 4, content: 'Earlier reply' };
+    const failure = { executionId: 'older-run', epoch: 1, sourceMessageId: older.id, botId: 'bot', botName: 'Bot', code: 'AUTH_REQUIRED', planId: null };
+    mocks.thread.mockResolvedValueOnce({ ok: true, root: message, replies: [latest], hasMore: true, executionFailures: [failure] })
+      .mockResolvedValueOnce({ ok: true, root: message, replies: [older], hasMore: false, executionFailures: [failure] })
+      .mockResolvedValue({ ok: true, root: message, replies: [latest], hasMore: true, executionFailures: [] });
+    render(<ChatThreadPanel group={group} rootId="root" onClose={vi.fn()} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'bots.groupChat.timeline.loadEarlier' }));
+    await screen.findByText('bots.groupChat.notice.runtimeFailure.AUTH_REQUIRED');
+    const root = screen.getByText('Root message').closest('article')!;
+    fireEvent.click(within(root).getByRole('button', { name: k('reactionCount') }));
+    await waitFor(() => expect(screen.queryByText('bots.groupChat.notice.runtimeFailure.AUTH_REQUIRED')).toBeNull());
+    expect(screen.getByText('Earlier reply')).toBeTruthy();
+    expect(screen.getByText('Latest reply')).toBeTruthy();
+    expect(mocks.thread.mock.calls.at(-1)?.[0]).toMatchObject({ sourceMessageIds: [older.id, latest.id] });
+  });
+
   it('preserves copy and image sharing beside thread replies and reactions in one toolbar', async () => {
     const writeText = vi.fn().mockResolvedValue(undefined), reply = vi.fn();
     Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });

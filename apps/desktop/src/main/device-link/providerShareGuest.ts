@@ -146,12 +146,6 @@ export async function resolveRemoteAgentTargetWhenReady(agentDeviceId: string): 
   return resolveRemoteAgentTarget(agentDeviceId);
 }
 
-/** 分隔条与模型列表展示用的电脑名。 */
-export function describeProviderShareDevice(agentDeviceId: string): string | null {
-  const shareId = parseProviderShareAgentDeviceId(agentDeviceId);
-  return shareId ? findReceivedShare(shareId)?.deviceName ?? null : null;
-}
-
 // ─── 已收到的分享 ────────────────────────────────────────────────
 
 function schedule(rt: Runtime): void {

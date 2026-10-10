@@ -59,4 +59,40 @@ describe('list_available_models tool', () => {
 
     expect(listAvailableModels).toHaveBeenCalledWith({ agent: undefined });
   });
+
+  it('lists another Worker Agent location and reports where it listed and what else is available', async () => {
+    const listAvailableModels = vi.fn(async () => ({
+      ok: true as const,
+      agentDeviceId: null,
+      locations: [{ agentDeviceId: 'device-b', name: 'Mac mini' }, { agentDeviceId: 'share:s1', name: 'Claude · Alex' }],
+      codex: [],
+    }));
+    const registry = new XdtHelperToolRegistry();
+    registerListAvailableModelsTool(registry, { listAvailableModels });
+
+    const result = parse(await registry.call('list_available_models', { agent: 'codex', agent_device_id: 'local' }));
+
+    // "local" = 任务所在电脑(host 侧 null)。
+    expect(listAvailableModels).toHaveBeenCalledWith({ agent: 'codex', agentDeviceId: null });
+    expect(result.agent_device_id).toBe('local');
+    expect(result.locations).toEqual([
+      { agent_device_id: 'device-b', name: 'Mac mini' },
+      { agent_device_id: 'share:s1', name: 'Claude · Alex' },
+    ]);
+
+    await registry.call('list_available_models', { agent_device_id: 'device-b' });
+    expect(listAvailableModels).toHaveBeenLastCalledWith({ agent: undefined, agentDeviceId: 'device-b' });
+  });
+
+  it('keeps the reason when that computer or share cannot be read', async () => {
+    const listAvailableModels = vi.fn(async () => ({
+      ok: false as const, errorCode: 'REMOTE_AGENT_SHARE_PAUSED', message: 'paused',
+    }));
+    const registry = new XdtHelperToolRegistry();
+    registerListAvailableModelsTool(registry, { listAvailableModels });
+
+    const result = parse(await registry.call('list_available_models', { agent_device_id: 'share:s1' }));
+
+    expect(result).toMatchObject({ ok: false, errorCode: 'REMOTE_AGENT_SHARE_PAUSED' });
+  });
 });

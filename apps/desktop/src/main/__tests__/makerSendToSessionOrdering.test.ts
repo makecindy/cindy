@@ -99,8 +99,8 @@ describe('sendToSession ordering', () => {
     const serviceDispatchBlock = extractOrcaTeamServiceDispatchResolvedWorkerSource();
     const serviceDepsBlock = extractBetween(
       source,
-      'const orcaTeamService = createOrcaTeamService({',
-      '  });\n  orcaTeamServiceForEvents = orcaTeamService;',
+      'const orcaTeamService = createOrcaTeamService(orcaRemoteWorkers.wrapTeamDeps({',
+      '  }));\n  orcaTeamServiceForEvents = orcaTeamService;',
     );
     const lifecycleDispatchBlock = extractBetween(
       orcaLifecycleServiceSource,
@@ -755,8 +755,8 @@ describe('sendToSession ordering', () => {
     );
     const serviceDepsBlock = extractBetween(
       source,
-      'const orcaTeamService = createOrcaTeamService({',
-      '  });\n  orcaTeamServiceForEvents = orcaTeamService;',
+      'const orcaTeamService = createOrcaTeamService(orcaRemoteWorkers.wrapTeamDeps({',
+      '  }));\n  orcaTeamServiceForEvents = orcaTeamService;',
     );
     const switchFocusIpcBlock = extractBetween(
       source,
@@ -911,8 +911,8 @@ describe('sendToSession ordering', () => {
     );
     const serviceDepsBlock = extractBetween(
       source,
-      'const orcaTeamService = createOrcaTeamService({',
-      '  });\n  orcaTeamServiceForEvents = orcaTeamService;',
+      'const orcaTeamService = createOrcaTeamService(orcaRemoteWorkers.wrapTeamDeps({',
+      '  }));\n  orcaTeamServiceForEvents = orcaTeamService;',
     );
 
     expect(source).toContain('registerOrcaWorkerControlHandlers(createElectronIpcHandlerRegistry(), {');
@@ -979,8 +979,8 @@ describe('sendToSession ordering', () => {
     const serviceDispatchBlock = extractOrcaTeamServiceDispatchResolvedWorkerSource();
     const depsBlock = extractBetween(
       source,
-      'const orcaTeamService = createOrcaTeamService({',
-      '  });\n  orcaTeamServiceForEvents = orcaTeamService;',
+      'const orcaTeamService = createOrcaTeamService(orcaRemoteWorkers.wrapTeamDeps({',
+      '  }));\n  orcaTeamServiceForEvents = orcaTeamService;',
     );
 
     expect(serviceSendBlock).toContain("return dispatchToWorker({ ...params, mode: 'normal' }, assertCurrent)");

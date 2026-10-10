@@ -4197,6 +4197,7 @@ export class PiAgent extends BaseAgent {
      * approvals.
      */
     let piProcessExited = false;
+    let rpcDisconnected = false;
     type PiSubagentStatusSummary = Pick<PiSubagentRunStatus,
       'runId' | 'taskId' | 'state' | 'startedAt' | 'updatedAt' | 'title' | 'description'>;
     const piSubagentStatuses = new Map<string, PiSubagentStatusSummary>();
@@ -5697,8 +5698,39 @@ export class PiAgent extends BaseAgent {
             }
           }
         },
+        onDisconnect: (reason) => {
+          rpcDisconnected = true;
+          // EOF/error is certain RPC loss, not a silent live tool or proof of
+          // process death. Deliver one terminal only for unsettled work, then
+          // retire the executor using the existing confirmed-exit cleanup.
+          // A pending idle prompt belongs to the next generation even before
+          // agent_start. Its predecessor's retry error is not its terminal.
+          const pendingNewTurn = !ctx.isStreaming && ctx.pendingHostTurnStartToken !== null;
+          if (!closed && (pendingNewTurn || (ctx.isStreaming && !ctx.terminalAssistantErrorEmitted))) {
+            queue.push(isCurrentTurnHostAbortRequested(ctx, true) ? {
+              type: 'done', data: { status: 'cancelled' }, source: 'pi',
+            } : {
+              type: 'error',
+              data: {
+                message: `pi RPC disconnected (${reason}); tool outcome is unknown`,
+                reason: 'pi-rpc-disconnected', isTerminal: true,
+              },
+              source: 'pi',
+            });
+          }
+          disposePiTranslateContext(ctx);
+          // A transport can report a previously observed disconnect while the
+          // RPC wrapper is being constructed. Wait until proc is assigned.
+          queueMicrotask(() => {
+            void proc.close().catch((error) => {
+              this.deps.logger.error('pi RPC disconnect cleanup remains unconfirmed', {
+                message: error instanceof Error ? error.message : String(error),
+              });
+            });
+          });
+        },
         onExit: ({ code, signal }) => {
-          const hostAbortRequested = isCurrentTurnHostAbortRequested(ctx);
+          const hostAbortRequested = isCurrentTurnHostAbortRequested(ctx, true);
           piProcessExited = true;
           clearPiSubagentRefreshTimer();
           void deferProxyDisposalForDetachedRuns();
@@ -5712,7 +5744,7 @@ export class PiAgent extends BaseAgent {
           runtimeCapabilityListeners.clear();
           if (!closed) {
             // 非用户 close 的进程死亡:terminal error + 收尾,避免 UI 永久 running。
-            queue.push(hostAbortRequested ? {
+            if (!rpcDisconnected) queue.push(hostAbortRequested ? {
               type: 'done',
               data: { status: 'cancelled' },
               source: 'pi',
@@ -6972,6 +7004,41 @@ export class PiAgent extends BaseAgent {
       mutablePiProviderId = provider;
       activeEffortSnapshot = nextEffortSnapshot;
       mutableProviderId = effectiveProviderId;
+      // pi CLI 在 set_model 后会把思考档位重置成新模型自己的默认（转录实证：声明了档位的
+      // 模型落到 defaultEffort 如 high，未声明的落到 low/medium），而本函数原本只在
+      // setOpts.effort 上做校验、从不下发。不在这里把目标档位重新下发的话，每次切模型
+      // 都会掉回默认档，表现为「推理强度自动变低」。目标档 = 显式 effort > 会话原档位
+      // （mutableEffort）；新模型不支持（含未声明档位）时保持 pi 默认，与能力收敛一致。
+      const restoredEffort = setOpts?.effort ?? mutableEffort;
+      if (
+        restoredEffort &&
+        nextEffortSnapshot && nextEffortSnapshot.length > 0 &&
+        nextEffortSnapshot.includes(restoredEffort)
+      ) {
+        // 恢复请求失败（被拒或超时/链路抛错）都不能让 setModel 失败：模型路由此刻已确认,
+        // 抛错只会跳过下面的子代理快照收尾（pending 卡死委派），档位本身却救不回来。
+        try {
+          const restore = await proc.request({
+            type: 'set_thinking_level',
+            level: effortToPiThinkingLevel(restoredEffort),
+          });
+          if (restore.success) {
+            // mutableEffort 只跟随**已确认生效**的档位：它是对外汇报（getEffort）与后续
+            // 切换恢复的依据；被 Pi 拒绝的目标档不能当成已生效值。
+            mutableEffort = restoredEffort;
+          } else {
+            deps.logger.warn('pi: restore thinking level after model switch failed', {
+              effort: restoredEffort,
+              error: restore.error,
+            });
+          }
+        } catch (err) {
+          deps.logger.warn('pi: restore thinking level after model switch errored', {
+            effort: restoredEffort,
+            message: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
       autoReviewDecisionCache.clear();
       autoReviewUnavailableNotice.reset();
       autoReviewConfirmUndeliveredNotice.reset();
@@ -7045,6 +7112,9 @@ export class PiAgent extends BaseAgent {
         await waitForSessionRpcIdle();
         updateRequestPrefs();
         rejectIfCancelled(sendOpts, 'send');
+        if (closed || piProcessExited || proc.isClosed) {
+          throw new TurnDispatchRejectedError('Pi RPC is unavailable before prompt dispatch');
+        }
         if (sendOpts) handle.validateSendOptions?.(sendOpts);
         // 本轮策略覆盖:无策略显式清 null,不继承上一轮渠道策略(§7.2.5);内部续跑
         // (plan 审批实施轮 / 自动继续)不经 send,仍读这份闭包值继承(§7.10)。
@@ -7160,21 +7230,34 @@ export class PiAgent extends BaseAgent {
             ? await readPiUserEntryIds()
             : null;
           if (!managedPackageRoute.accepted) rejectIfCancelled(sendOpts, 'send');
-          const pendingTurnStartToken = markPiHostTurnStartPending(ctx);
-          promptRequestStarted = true;
           const firstModelRequestStartedAt = firstModelRequestLogged ? undefined : Date.now();
           if (firstModelRequestStartedAt !== undefined) firstModelRequestLogged = true;
           let firstModelRequestStatus: 'ok' | 'degraded' = 'degraded';
           try {
             doctorCommandActivity.enter(isDoctorCommand);
-            const resp = await runExclusivePiRpc(() => proc.request(command, {
-              timeoutMs: PI_PROMPT_ACCEPTANCE_TIMEOUT_MS,
-              // Prompt acceptance may legitimately span multiple compaction
-              // retries. Bound each silent interval, not the whole progressing
-              // preflight, so a healthy long compaction is not killed at 10m.
-              refreshTimeoutOnEvent: (event) =>
-                PI_PROMPT_ACCEPTANCE_PROGRESS_EVENTS.has(event.type),
-            }));
+            const { resp, pendingTurnStartToken } = await runExclusivePiRpc(async () => {
+              // Preparation/queued RPC can outlive the Session admission check.
+              // Register a pending turn only at the actual request boundary.
+              // A completed host package mutation is already accepted work and
+              // must not be reclassified as safe to replay when its pipe dies.
+              if (!managedPackageRoute.accepted) {
+                rejectIfCancelled(sendOpts, 'send');
+                if (closed || piProcessExited || proc.isClosed) {
+                  throw new TurnDispatchRejectedError('Pi RPC is unavailable before prompt dispatch');
+                }
+              }
+              const pendingTurnStartToken = markPiHostTurnStartPending(ctx);
+              promptRequestStarted = true;
+              const resp = await proc.request(command, {
+                timeoutMs: PI_PROMPT_ACCEPTANCE_TIMEOUT_MS,
+                // Prompt acceptance may legitimately span multiple compaction
+                // retries. Bound each silent interval, not the whole progressing
+                // preflight, so a healthy long compaction is not killed at 10m.
+                refreshTimeoutOnEvent: (event) =>
+                  PI_PROMPT_ACCEPTANCE_PROGRESS_EVENTS.has(event.type),
+              });
+              return { resp, pendingTurnStartToken };
+            });
             firstModelRequestStatus = resp.success ? 'ok' : 'degraded';
             if (!resp.success) {
               rollbackPiHostTurnStart(ctx, pendingTurnStartToken);
@@ -7347,13 +7430,26 @@ export class PiAgent extends BaseAgent {
 
       async steer(message: UserMessage, sendOpts?: SendOptions): Promise<void> {
         const answerLifecycle = piAgentLifecycleSequence;
+        const rpcUnavailable = () => closed || piProcessExited || rpcDisconnected || proc.isClosed;
+        const rejectIfUnavailable = (): void => {
+          if (!rpcUnavailable()) return;
+          // isTurnRunning also fences new sends during unconfirmed cleanup.
+          // A settled tail is not an active steer target: let the coordinator
+          // retain ordinary input for normal dispatch/rebuild, before mutation.
+          // Do not claim a still-unsettled turn finished merely from pipe loss.
+          throw new Error(ctx.isStreaming || ctx.pendingHostTurnStartToken !== null
+            ? 'Pi RPC unavailable before steer dispatch'
+            : '[NO_ACTIVE_TURN] No active Pi turn to steer: RPC unavailable');
+        };
         rejectIfCancelled(sendOpts, 'steer');
+        rejectIfUnavailable();
         if (sendOpts) handle.validateSendOptions?.(sendOpts);
         if (reviewMode) {
           await assertReviewMessageContentPaths(message.content, opts.workingDir, reviewReadGrants);
         }
         let { text, images } = await buildPiPrompt(message, { remote });
         rejectIfCancelled(sendOpts, 'steer');
+        rejectIfUnavailable();
         assertImageInputSupported(images);
         setAutoReviewIntent(appendAutoReviewUserIntent(priorAutoReviewIntent(), message.content, sendOpts));
         // A steered channel message can add confirmation requirements to the
@@ -7373,6 +7469,9 @@ export class PiAgent extends BaseAgent {
           sendOpts?.[MAIN_OWNED_SEND_CONTEXT],
         );
         text = managedPackageRoute.text;
+        // The host mutation may have outlived this pipe. Its published receipt
+        // is an irreversible acceptance boundary, not input to retry elsewhere.
+        if (managedPackageRoute.accepted && rpcUnavailable()) return;
         if (!managedPackageRoute.accepted) rejectIfCancelled(sendOpts, 'steer');
         await awaitRuntimeCapabilitiesForSlashCommand(text);
         if (!managedPackageRoute.accepted) rejectIfCancelled(sendOpts, 'steer');
@@ -7397,9 +7496,11 @@ export class PiAgent extends BaseAgent {
         if (images.length > 0) command.images = images;
         const isDoctorCommand = isContextModeDoctorCommandName(managedExtensionCommandName);
         doctorCommandActivity.enter(isDoctorCommand);
-        let resp: Awaited<ReturnType<typeof proc.request>>;
+        let resp: Awaited<ReturnType<typeof proc.request>> | undefined;
         try {
-          resp = await runExclusivePiRpc(() => {
+          resp = await runExclusivePiRpc(async () => {
+            if (managedPackageRoute.accepted && rpcUnavailable()) return undefined;
+            rejectIfUnavailable();
             if (sendOpts?.[ASYNC_QUESTION_ANSWER]) {
               rejectIfCancelled(sendOpts, 'steer');
               if (!ctx.isStreaming || piAgentLifecycleSequence !== answerLifecycle) {
@@ -7408,9 +7509,16 @@ export class PiAgent extends BaseAgent {
             }
             return proc.request(command);
           });
+        } catch (error) {
+          if (!managedPackageRoute.accepted) throw error;
+          deps.logger.warn('pi managed package receipt steer failed after mutation', {
+            message: error instanceof Error ? error.message : String(error),
+          });
+          return;
         } finally {
           doctorCommandActivity.leave(isDoctorCommand);
         }
+        if (!resp) return;
         if (!resp.success) {
           if (managedPackageRoute.accepted) {
             // The host-owned mutation already completed and its deterministic
@@ -7455,15 +7563,18 @@ export class PiAgent extends BaseAgent {
       },
 
       async requestGracefulStop(): Promise<void> {
-        if (proc.isClosed) throw new Error('No active Pi turn to stop');
+        if (closed || piProcessExited || rpcDisconnected) throw new Error('No active Pi turn to stop');
         const hostAbortToken = markPiHostAbortRequested(ctx);
         autoReviewDecisionCache.clear();
         dismissAllPendingPrompts('turn_aborted', 'deny');
+        // EOF may fence writes before its bounded terminal notification. Keep
+        // the user's cancellation intent without writing to the broken pipe.
+        if (proc.isClosed) return;
         let resp: Awaited<ReturnType<typeof proc.request>>;
         try {
           resp = await proc.request({ type: 'abort' });
         } catch (error) {
-          rollbackPiHostAbortRequest(ctx, hostAbortToken);
+          if (!proc.isClosed) rollbackPiHostAbortRequest(ctx, hostAbortToken);
           throw error;
         }
         if (!resp.success) {
@@ -7474,13 +7585,14 @@ export class PiAgent extends BaseAgent {
       },
 
       async abort(): Promise<void> {
-        if (proc.isClosed) return;
+        if (closed || piProcessExited || rpcDisconnected) return;
         const hostAbortToken = markPiHostAbortRequested(ctx);
         autoReviewDecisionCache.clear();
         // 先把等待中的调用 fail-closed 唤醒；即使 abort RPC 失败，也不能让用户刚拒绝/
         // 停止的那次工具继续等一张已失效的卡。policy 仅在 Pi 确认接受 abort 后清空，
         // RPC 失败时继续保留，防止仍在运行的 turn 失去渠道安全边界。
         dismissAllPendingPrompts('turn_aborted', 'deny');
+        if (proc.isClosed) return;
         try {
           const resp = await proc.request({ type: 'abort' });
           if (resp.success) {
@@ -7492,7 +7604,9 @@ export class PiAgent extends BaseAgent {
             });
           }
         } catch (err) {
-          rollbackPiHostAbortRequest(ctx, hostAbortToken);
+          // A pipe failure is not rejection of the user's Stop. The pending
+          // disconnect/exit terminal must still see that cancellation intent.
+          if (!proc.isClosed) rollbackPiHostAbortRequest(ctx, hostAbortToken);
           deps.logger.warn('pi abort request failed', {
             message: err instanceof Error ? err.message : String(err),
           });
@@ -7713,8 +7827,10 @@ export class PiAgent extends BaseAgent {
       },
 
       isTurnRunning(): boolean {
-        // ctx.isStreaming 由 agent_start / agent_settled 翻转(translator 维护)。
-        return ctx.isStreaming;
+        // Settled/cancelled tail frames do not reopen an unusable executor for
+        // user work or host continuations. Keep Session admission fenced until
+        // close/exit finalizes, so its existing coordinator can retry/rebuild.
+        return ctx.isStreaming || (!closed && !piProcessExited && proc.isClosed);
       },
 
       async setPlanMode(enabled: boolean): Promise<void> {

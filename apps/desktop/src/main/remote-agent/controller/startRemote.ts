@@ -8,17 +8,26 @@
 import os from 'node:os';
 import path from 'node:path';
 
-import type { RemoteAgentKind, RemoteAgentReply, RemoteAgentReverseRequest, RemoteAgentStreamItem } from '@cindy/device-link';
+import {
+  REMOTE_AGENT_GROUP_SWITCH_STATE_KEY,
+  REMOTE_AGENT_RELAY_KEY_PATTERN,
+  type RemoteAgentKind,
+  type RemoteAgentReply,
+  type RemoteAgentReverseRequest,
+  type RemoteAgentStreamItem,
+} from '@cindy/device-link';
 import type { AgentEvent, AgentSessionHandle, StartSessionOptions } from '@cindy/maker-core';
 
 import { RemoteExecutor, type ExecutorCaptureHooks } from '../executor/executor';
 import type { PdfTextExtractor } from '../executor/files';
-import { ExecutorGate, executorGateModeFor } from '../executor/gate';
+import { ExecutorGate, executorGateModeFor, type ExecutorAction } from '../executor/gate';
+import type { GuardedFetch } from '../executor/webFetch';
 import { ExecutorWorkspace } from '../executor/workspace';
 import type {
   RemoteAgentOpenPayload,
   RemoteAgentWireAncestorFile,
   RemoteAgentWireFile,
+  RemoteAgentWireImportFile,
   RemoteAgentWirePersonal,
 } from '../wire';
 import { encodeStartOptions } from '../wire';
@@ -26,6 +35,7 @@ import {
   createRemoteAgentHandle,
   localizeRemoteError,
   parseStartedInfo,
+  type LocalConfirmation,
   type RemoteAgentHandleController,
 } from './proxyHandle';
 import { ExecServerRelay } from './execServerRelay';
@@ -60,13 +70,41 @@ export interface StartRemoteAgentDeps {
     personal: RemoteAgentWirePersonal;
     roots: Array<{ relative: string; local: string }>;
   }>;
+  /**
+   * 说明文件里 `@` 导入的文件(只对 Claude Code)；会就地改写传入说明文件里的引用。缺省不同步。
+   */
+  collectImports?(input: {
+    workingDir: string;
+    projectFiles: RemoteAgentWireFile[];
+    ancestorFiles: RemoteAgentWireAncestorFile[];
+    personal: RemoteAgentWirePersonal;
+  }): Promise<RemoteAgentWireImportFile[]>;
   isGitRepo(workingDir: string): Promise<boolean>;
   /** Read 读 PDF 时取文字(Claude Code)。 */
   extractPdfText?: PdfTextExtractor;
+  /**
+   * 在本机抓取网页的出站通道：给 Claude Code 提供 WebFetch(供应商分享的受邀者任务，自带的
+   * WebFetch 在对方电脑上已关闭)。缺省时不提供。
+   */
+  webFetch?: GuardedFetch;
+  /**
+   * 供应商分享的受邀者任务(docs/product-rules/provider-sharing.md §9 第 7 条)：读写凭证类文件、执行读取
+   * 凭证的命令不论权限档都要本机用户确认，没有批准时在本机弹确认卡；`description` 是卡上的说明。
+   * 同账号任务不提供。
+   */
+  credentialConsent?: { description: string };
   /** 改写来自对方的事件(如工具名)。 */
   mapEvent?: (kind: RemoteAgentKind) => ((event: AgentEvent) => AgentEvent) | undefined;
   /** 本机 Codex 程序(给对方的 Codex 提供 exec-server 执行环境)；缺省时不提供。 */
   codexPath?: () => string | undefined;
+  /** 这个任务由供应商组分配到那台：告诉那台直接运行，不再进入它自己的组(防转圈)。 */
+  groupAssigned?: boolean;
+  /**
+   * 供应商组「需要换一台」(分享的人，docs/product-rules/provider-groups.md §6.1)：提供即在打开时声明支持。
+   * `token` 是交接后重新打开时带回的凭证；对方发来新凭证时交给 `offer`；`takeNewRound` 为 true 的那次发送告诉
+   * 对方开始新的一轮(用户亲自接手过)。
+   */
+  groupSwitch?: { token?: string; offer(token: string): void; takeNewRound?(): boolean };
   newId(): string;
   log?: {
     info(message: string, meta?: Record<string, unknown>): void;
@@ -81,6 +119,20 @@ function parentOf(value: string): string | null {
   if (index <= 0) return null;
   const parent = normalized.slice(0, index);
   return /^[A-Za-z]:$/.test(parent) ? null : parent;
+}
+
+/**
+ * 取走对方状态里的「需要换一台」凭证(供应商组，组所在电脑发来)：格式正确才交给 `offer`；凭证不并入任务状态。
+ * 返回剩下的状态，取走后什么都不剩时返回 null。
+ */
+export function takeGroupSwitchState(
+  state: Record<string, unknown>,
+  offer: ((token: string) => void) | undefined,
+): Record<string, unknown> | null {
+  if (!(REMOTE_AGENT_GROUP_SWITCH_STATE_KEY in state)) return state;
+  const { [REMOTE_AGENT_GROUP_SWITCH_STATE_KEY]: token, ...rest } = state;
+  if (typeof token === 'string' && REMOTE_AGENT_RELAY_KEY_PATTERN.test(token)) offer?.(token);
+  return Object.keys(rest).length ? rest : null;
 }
 
 /**
@@ -128,6 +180,23 @@ export function shadowAliases(
   return aliases;
 }
 
+/** 凭证类操作的确认卡：用与 Agent 自带工具同名的工具显示本机路径或命令。 */
+export function credentialConfirmation(action: ExecutorAction, description: string): LocalConfirmation {
+  const base = { description, metadata: { hostOwnedConfirmation: 'shared_provider_credential' } };
+  switch (action.kind) {
+    case 'exec':
+      return { ...base, toolName: 'Bash', input: { command: action.command } };
+    case 'write':
+      return { ...base, toolName: 'Write', input: { file_path: action.path } };
+    case 'fetch':
+      return { ...base, toolName: 'WebFetch', input: { url: action.url } };
+    default:
+      return action.scope === 'tree'
+        ? { ...base, toolName: 'Grep', input: { path: action.path } }
+        : { ...base, toolName: 'Read', input: { file_path: action.path } };
+  }
+}
+
 function shellName(): string {
   if (process.platform === 'win32') return 'bash';
   return (process.env.SHELL ?? '/bin/bash').split('/').pop() || 'bash';
@@ -145,13 +214,25 @@ export async function startRemoteAgentSession(
   let writableDirs = [...new Set(opts.writableDirs ?? [])];
   const workspace = new ExecutorWorkspace({ workingDir: opts.workingDir, extraDirs: [...extraDirs, ...writableDirs] });
   const applyDirs = () => workspace.setExtraDirs([...new Set([...extraDirs, ...writableDirs])]);
-  const gate = new ExecutorGate(workspace, executorGateModeFor(opts.permissionMode, opts.planMode === true));
+  const credentialConsent = deps.credentialConsent;
+  const gate = new ExecutorGate(workspace, executorGateModeFor(opts.permissionMode, opts.planMode === true), Date.now, {
+    confirmCredentials: credentialConsent !== undefined,
+  });
+  let controller: RemoteAgentHandleController | null = null;
   const executor = new RemoteExecutor({
     workspace,
     gate,
     rgPath: deps.rgPath,
     capture: deps.capture?.({ kind, opts }),
     ...(deps.extractPdfText ? { extractPdfText: deps.extractPdfText } : {}),
+    // 只有 Claude Code 经 cindy_exec 使用这组工具。
+    ...(kind === 'claude-code' && deps.webFetch ? { webFetch: deps.webFetch } : {}),
+    ...(credentialConsent
+      ? {
+          confirm: async (action: ExecutorAction) =>
+            controller?.confirm(credentialConfirmation(action, credentialConsent.description)) ?? false,
+        }
+      : {}),
   });
   let permissionMode = opts.permissionMode;
   let planMode = opts.planMode === true;
@@ -162,7 +243,6 @@ export async function startRemoteAgentSession(
   });
   const router = createReverseHttpRouter({ executor, mcpTarget: (name) => mcp.servers.get(name) });
 
-  let controller: RemoteAgentHandleController | null = null;
   let personalRoots: Array<{ relative: string; local: string }> = [];
   let projectionReady = false;
   const early: Array<{ type: 'event' | 'state'; value: unknown }> = [];
@@ -176,6 +256,7 @@ export async function startRemoteAgentSession(
         cwd: workspace.workingDir,
         workspace,
         authorize: (action) => executor.check(action),
+        ...(credentialConsent ? { confirm: (action: ExecutorAction) => executor.confirm(action) } : {}),
         push: async (frames) => {
           await pushFrames?.(frames);
         },
@@ -199,7 +280,11 @@ export async function startRemoteAgentSession(
       if (controller) controller.onEvent(event);
       else early.push({ type: 'event', value: event });
     },
-    onState: (state) => {
+    onState: (incoming) => {
+      // 组所在电脑发来的「需要换一台」凭证(排在那次错误前面)：交给供应商组服务，不进任务状态。
+      const remaining = takeGroupSwitchState(incoming, deps.groupSwitch?.offer);
+      if (!remaining) return;
+      let state = remaining;
       const projection = state.workspaceProjection as Parameters<typeof shadowAliases>[0] | undefined;
       if (projection?.virtualWorkspace === true && typeof projection.shadowDir === 'string') {
         workspace.setAliases(shadowAliases(projection, workspace.workingDir, personalRoots, { extraDirs, writableDirs }));
@@ -244,6 +329,10 @@ export async function startRemoteAgentSession(
   const collectedPersonal = await (deps.collectPersonal?.(kind, projectFiles) ?? Promise.resolve(null))
     .catch(() => null);
   personalRoots = collectedPersonal?.roots ?? [];
+  const personal = collectedPersonal?.personal ?? { files: [] };
+  const importFiles = kind === 'claude-code' && deps.collectImports
+    ? await deps.collectImports({ workingDir: opts.workingDir, projectFiles, ancestorFiles, personal }).catch(() => [])
+    : [];
   const payload: RemoteAgentOpenPayload = {
     sessionId: opts.sessionId,
     virtualWorkspace: true,
@@ -261,8 +350,12 @@ export async function startRemoteAgentSession(
     },
     projectFiles,
     ancestorFiles,
-    personal: collectedPersonal?.personal ?? { files: [] },
+    ...(importFiles.length ? { importFiles } : {}),
+    personal,
     mcpServers: [...mcp.servers.keys()],
+    ...(deps.groupAssigned ? { groupAssigned: true } : {}),
+    ...(deps.groupSwitch ? { acceptsGroupSwitch: true } : {}),
+    ...(deps.groupSwitch?.token ? { groupSwitchToken: deps.groupSwitch.token } : {}),
   };
 
   let startedRaw: Record<string, unknown>;
@@ -292,6 +385,7 @@ export async function startRemoteAgentSession(
     onInvalidResumeSession: opts.onInvalidResumeSession,
     mapEvent: deps.mapEvent?.(kind),
     newId: deps.newId,
+    ...(deps.groupSwitch?.takeNewRound ? { takeGroupNewRound: deps.groupSwitch.takeNewRound } : {}),
     onPermissionMode: (mode) => {
       permissionMode = mode as typeof permissionMode;
       executor.setGateMode(executorGateModeFor(permissionMode, planMode));

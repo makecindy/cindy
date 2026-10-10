@@ -9,6 +9,7 @@ import { z } from 'zod';
 import type { XdtHelperToolRegistry } from '../lizi_xdtHelperToolRegistry.js';
 import type { ControlResult } from '../lizi_xdtHelperMcpServer.js';
 import { okPayload, errorPayload } from './_payload.js';
+import { LOCAL_AGENT_DEVICE, toHostAgentDeviceId } from './create_worker.js';
 
 export interface ModelDescriptor {
   id: string;
@@ -73,11 +74,22 @@ export interface ListAvailableModelsDeps {
   listAvailableModels: (params: {
     agent?: 'claude-code' | 'codex' | 'pi';
     callerSessionId?: string;
+    /** 列哪里的模型：省略 = Lead 所在位置；null = 任务所在电脑；string = 那台电脑或分享。 */
+    agentDeviceId?: string | null;
   }) => Promise<ControlResult<{
+    /** 本次列出的位置(null = 任务所在电脑)；旧 host 不带。 */
+    agentDeviceId?: string | null;
+    /** 还能放 Worker Agent 的其他位置；旧 host 不带。 */
+    locations?: Array<{ agentDeviceId: string; name: string }>;
     codex?: ModelDescriptor[];
     claude_code?: ModelDescriptor[];
     pi?: ModelDescriptor[];
-  }>>;
+  }, string>>;
+}
+
+/** host 的位置(null = 任务所在电脑) → MCP 的 agent_device_id(`local`)。 */
+function toToolAgentDeviceId(value: string | null): string {
+  return value ?? LOCAL_AGENT_DEVICE;
 }
 
 const DESCRIPTION = [
@@ -86,8 +98,10 @@ const DESCRIPTION = [
   '',
   '参数:',
   '- agent: 可选, codex / claude-code / pi; 不传返三者',
+  '- agent_device_id: 可选, 列哪里的模型(Worker 的 Agent 可在别的电脑或分享来的供应商上运行): 取返回的 locations[].agent_device_id, "local" 为这台电脑; 不传列 Lead 所在位置',
   '',
   '返回值:',
+  '- agent_device_id: 本次列出的位置; locations: 其他可选位置 [{agent_device_id, name}]。create_worker 传同一个 agent_device_id 并用这里列出的 model / provider_id',
   '- codex: Codex agent 的可用 model 列表 [{id, label, tier, providers, default_provider_id}]',
   '- claude_code: Claude Code agent 的可用 model 列表 [{id, label, tier, providers, default_provider_id}]',
   '- pi: Pi agent 的可用 model 列表 [{id, label, tier, providers, default_provider_id}]',
@@ -116,17 +130,43 @@ export function registerListAvailableModelsTool(
         .enum(['codex', 'claude-code', 'pi'])
         .optional()
         .describe('可选, 只查某一 agent 的 model 列表; 不传返三者'),
+      agent_device_id: z
+        .string()
+        .trim()
+        .min(1)
+        .max(128)
+        .optional()
+        .describe('可选, 列哪里的模型: locations[].agent_device_id 或 "local"(这台电脑); 不传列 Lead 所在位置'),
     },
-    handler: async ({ agent }) => {
+    handler: async ({ agent, agent_device_id }) => {
       const callerSessionId = deps.getSessionContext?.().sessionId;
-      const result = await deps.listAvailableModels({ agent, ...(callerSessionId ? { callerSessionId } : {}) });
+      const result = await deps.listAvailableModels({
+        agent,
+        ...(callerSessionId ? { callerSessionId } : {}),
+        ...toHostAgentDeviceId(agent_device_id),
+      });
       if (!result.ok) {
         if (result.errorCode === 'HOST_NOT_READY') {
           return errorPayload('HOST_NOT_READY', `${BRAND_NAME} 主进程协同服务尚未就绪。`);
         }
-        return errorPayload('INTERNAL', result.message);
+        // 那台电脑 / 分享不可用时保留原因，Lead 才能如实告诉用户。
+        return errorPayload(
+          result.errorCode.startsWith('REMOTE_AGENT_') ? result.errorCode : 'INTERNAL',
+          result.message,
+        );
       }
       return okPayload({
+        ...(result.agentDeviceId !== undefined
+          ? { agent_device_id: toToolAgentDeviceId(result.agentDeviceId) }
+          : {}),
+        ...(result.locations
+          ? {
+              locations: result.locations.map((location) => ({
+                agent_device_id: location.agentDeviceId,
+                name: location.name,
+              })),
+            }
+          : {}),
         codex: tagTier(result.codex),
         claude_code: tagTier(result.claude_code),
         pi: tagTier(result.pi),

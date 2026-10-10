@@ -1041,21 +1041,28 @@ describe('session runtime control wiring', () => {
     const catchBlock = setModel.slice(rehydrateCall, setModel.indexOf('rehydratedColdPiRuntime = liveSessionBeforeRouteChange;'));
     expect(catchBlock).toContain('} catch (error) {');
     expect(catchBlock).not.toContain('} catch {');
-    // Both the thrown failure and the "not live after bootstrap" case go through the one
+    // Only the "not live after bootstrap" case still goes through the fail-closed
     // reporter, which logs the full reason and throws the IPC error with a safe detail.
-    expect(catchBlock.match(/reportColdPiRehydrationFailure\(/g)).toHaveLength(2);
+    // The rehydration catch itself degrades and continues (dead stored route must not
+    // dead-lock the session); the full reason stays in the main log.
+    expect(catchBlock.match(/reportColdPiRehydrationFailure\(/g)).toHaveLength(1);
     expect(catchBlock).toContain("new ColdPiRehydrationError('runtime-not-live'");
     expect(catchBlock).toContain('log,');
     expect(catchBlock).toContain('throwIpcError,');
-    // The error code and fail-closed outcome are unchanged: still no route change on failure.
-    expect(catchBlock.match(/localModelWindowSwitchErrorCode\('MODEL_WINDOW_CURRENT_CONTEXT_UNKNOWN'\)/g)).toHaveLength(2);
+    expect(catchBlock).toContain("coldPiRehydrationOutcome === 'fail-closed'");
+    // The error code and fail-closed outcome remain only for the non-degrade branch.
+    expect(catchBlock.match(/localModelWindowSwitchErrorCode\('MODEL_WINDOW_CURRENT_CONTEXT_UNKNOWN'\)/g)).toHaveLength(1);
 
     // Raw reasons (which may carry local paths or stderr) stay in the main log; the IPC
     // message only carries the category and the name/code-based detail.
+    const fieldsStart = coldPiRehydrationFailureSource.indexOf('function logColdPiRehydrationFields(');
+    expect(fieldsStart).toBeGreaterThan(-1);
+    const fields = coldPiRehydrationFailureSource.slice(fieldsStart);
+    expect(fields).toContain('reason: failure.reason');
+    expect(fields).toContain('COLD_PI_REHYDRATION_DEGRADED_LOG_MESSAGE');
     const reporterStart = coldPiRehydrationFailureSource.indexOf('export function reportColdPiRehydrationFailure(');
     expect(reporterStart).toBeGreaterThan(-1);
     const reporter = coldPiRehydrationFailureSource.slice(reporterStart);
-    expect(reporter).toContain('reason: failure.reason');
     expect(reporter).toContain('coldPiRehydrationFailureMessage(failure)');
     const messageBuilder = handlerBody(
       coldPiRehydrationFailureSource,
@@ -1064,6 +1071,31 @@ describe('session runtime control wiring', () => {
     );
     expect(messageBuilder).toContain('failure.detail');
     expect(messageBuilder).not.toContain('failure.reason');
+  });
+
+  it('keeps the model switch alive when cold Pi rehydration fails (dead stored route)', () => {
+    const setModel = handlerBody(
+      registerSource,
+      'const handleSetModel = async (',
+      'const recoverRemoteRuntimeAxisPersistence',
+    );
+    // 存量 BYOM 路由已死（provider 被删/不再提供该模型）时冷启动 bootstrap 必然
+    // fail-closed 失败；恢复失败若拒绝切模，发送与切模互相锁死（会话永久卡死）。
+    // catch 必须降级：只记日志，并与「跳过核实」同款语义置位，让目标路由由下一次
+    // 发送懒创建；闸门对未知当前窗口 fail-open 放行热切。
+    const rehydrateCall = setModel.indexOf('await rehydrateColdPiRuntimeForWindowVerification(sessionId)');
+    const postRehydrate = setModel.indexOf(
+      'liveSessionBeforeRouteChange = maker.getSession(sessionId);',
+      rehydrateCall,
+    );
+    expect(rehydrateCall).toBeGreaterThan(-1);
+    expect(postRehydrate).toBeGreaterThan(rehydrateCall);
+    const catchOnly = setModel.slice(rehydrateCall, postRehydrate);
+    expect(catchOnly).toContain('} catch (error) {');
+    expect(catchOnly).toContain('logColdPiRehydrationFailure({ log }, coldPiFailureContext, error);');
+    expect(catchOnly).toContain('coldPiRouteWithoutLiveWindowCheck = true;');
+    expect(catchOnly).not.toContain('throwIpcError');
+    expect(catchOnly).not.toContain('reportColdPiRehydrationFailure');
   });
 
   it('skips the cold Pi window rehydration when the live usage leaves the target headroom', () => {

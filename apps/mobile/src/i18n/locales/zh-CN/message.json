@@ -260,6 +260,7 @@
       "usageReset": "用量已恢复，已自动继续",
       "pending": "重新连接中…",
       "pendingWithProgress": "重新连接中 {{attempt}}/{{total}}…",
+      "groupSwitchPending": "正在换一台电脑继续…",
       "details": "本次重试 {{attempt}}/{{total}} · 本任务累计重连 {{count}} 次",
       "detail": {
         "reason": "中断原因",
@@ -271,7 +272,12 @@
         "auth": "{{from}} 登录已失效，已换到 {{to}} 继续",
         "unavailable": "{{from}} 连不上，已换到 {{to}} 继续",
         "overload": "{{from}} 的服务繁忙，已换到 {{to}} 继续"
-      }
+      },
+      "agentReconnect": {
+        "named": "已重新连上 {{computer}}，继续运行",
+        "unnamed": "已重新连上原来的电脑，继续运行"
+      },
+      "groupSwitch": "已自动换一台电脑继续"
     },
     "modelLabel": "模型",
     "sessionLabel": "任务",

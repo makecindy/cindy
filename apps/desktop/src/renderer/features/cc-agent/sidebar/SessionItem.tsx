@@ -808,8 +808,7 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
     !isEmpty &&
     !session.remoteHostId &&
     !session.deviceLinkDeviceId &&
-    // Agent 在另一台电脑运行：它的会话记录按项目路径存在那台，移动后无法继续。
-    !session.agentDeviceId &&
+    // Agent 在另一台电脑运行的任务也可移动：那台按任务 id 定址 Agent 工作区，与本机路径无关。
     session.status !== 'archived';
 
   // 导出 .cshare 的可见性:draft 无内容、remote 转录在远端、device-link 数据在

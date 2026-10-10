@@ -1,8 +1,7 @@
 /**
- * 分享给我的供应商在模型列表里的「电脑」：`share:<shareId>`，名字写成
- * 「Magi's Mac Mini · 来自 Magi 的分享」。模型列表分组标题沿用 railRemoteProvider
- * (`{{provider}} · {{device}}`)，于是标题成为「Cindy AI · Magi's Mac Mini · 来自 Magi 的分享」
- * (产品规则 §5.1)。
+ * 分享给我的供应商在模型列表里的「电脑」：`share:<shareId>`，名字写成「来自 Magi 的分享」，
+ * 不写分享者的电脑名(provider-sharing.md §5.1、§6)。模型列表分组标题沿用 railRemoteProvider
+ * (`{{provider}} · {{device}}`)，于是标题成为「Anthropic · 来自 Magi 的分享」。
  *
  * 只并进远程 Agent 的候选(remoteAgentDevices)，**不**进设备切换器：分享者的电脑不是可远程
  * 控制的设备。已暂停或已不在的分享只有在它正是任务当前 / 即将使用的位置时才保留，让用户
@@ -13,6 +12,7 @@ import { useTranslation } from 'react-i18next';
 
 import { isProviderShareAgentDeviceId } from '../../../shared/providerShare';
 import { providerShareAgentDeviceId } from './providerShareFormat';
+import { providerShareDisplayNames } from './providerShareNames';
 import { useProviderShareReceived } from './providerShareStore';
 
 export interface ProviderShareAgentDevice {
@@ -31,6 +31,8 @@ export interface ProviderShareAgentDevices {
    * 时返回 true，不把「暂时读不到」当成「已删除」。
    */
   isKnown: (deviceId: string | null | undefined) => boolean;
+  /** 该分享确实在本机已收到的列表里(无论是否暂停)；列表未加载或为空时返回 false。 */
+  isReceived: (deviceId: string | null | undefined) => boolean;
 }
 
 export function useProviderShareAgentDevices(
@@ -41,15 +43,10 @@ export function useProviderShareAgentDevices(
   const keepKey = keepDeviceIds.filter(isProviderShareAgentDeviceId).join('\n');
 
   const names = useMemo(() => {
+    const byShare = providerShareDisplayNames(received, t);
     const map = new Map<string, string>();
     for (const share of received) {
-      map.set(
-        providerShareAgentDeviceId(share.shareId),
-        t('providerShare.picker.deviceName', {
-          device: share.deviceName,
-          owner: share.owner.displayName,
-        }),
-      );
+      map.set(providerShareAgentDeviceId(share.shareId), byShare.get(share.shareId) ?? '');
     }
     return map;
   }, [received, t]);
@@ -60,7 +57,7 @@ export function useProviderShareAgentDevices(
     for (const share of received) {
       const deviceId = providerShareAgentDeviceId(share.shareId);
       if (share.status !== 'active' && !keep.has(deviceId)) continue;
-      list.push({ deviceId, name: names.get(deviceId) ?? share.deviceName });
+      list.push({ deviceId, name: names.get(deviceId) ?? '' });
       keep.delete(deviceId);
     }
     // 任务仍指着、但已不在列表里的分享(被删除或已退出)：保留一行，名字说明已不可用。
@@ -90,5 +87,10 @@ export function useProviderShareAgentDevices(
     [loaded, names],
   );
 
-  return { devices, loaded, nameFor, isKnown };
+  const isReceived = useCallback(
+    (deviceId: string | null | undefined) => !!deviceId && names.has(deviceId),
+    [names],
+  );
+
+  return { devices, loaded, nameFor, isKnown, isReceived };
 }

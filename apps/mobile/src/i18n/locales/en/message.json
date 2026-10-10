@@ -260,6 +260,7 @@
       "usageReset": "Usage reset, continued automatically",
       "pending": "Reconnecting…",
       "pendingWithProgress": "Reconnecting {{attempt}}/{{total}}…",
+      "groupSwitchPending": "Switching to another computer…",
       "details": "Attempt {{attempt}}/{{total}} · {{count}} reconnects in this session",
       "detail": {
         "reason": "Interruption reason",
@@ -271,7 +272,12 @@
         "auth": "{{from}} is signed out; continued on {{to}}",
         "unavailable": "Couldn’t reach {{from}}; continued on {{to}}",
         "overload": "{{from}} was overloaded; continued on {{to}}"
-      }
+      },
+      "agentReconnect": {
+        "named": "Reconnected to {{computer}}; continued there",
+        "unnamed": "Reconnected to the original computer; continued there"
+      },
+      "groupSwitch": "Continued on another computer automatically"
     },
     "modelLabel": "Model",
     "sessionLabel": "Session",

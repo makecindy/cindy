@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 import { MAIN_OWNED_SEND_CONTEXT } from '@cindy/maker-core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -9,8 +10,11 @@ import WebSocket from 'ws';
 import { mapClaudeHostedEvent } from '../controller/eventMap';
 import { execServerActions, execServerCommand } from '../controller/execServerRelay';
 import { collectProjectInstructionFiles } from '../controller/projectFiles';
-import { approvalActionsFor, innerShellScript } from '../controller/proxyHandle';
+import { approvalActionsFor, createRemoteAgentHandle, innerShellScript } from '../controller/proxyHandle';
+import type { RemoteAgentRunClient } from '../controller/runClient';
+import { credentialConfirmation, takeGroupSwitchState } from '../controller/startRemote';
 import { EventLog, LineSplitter } from '../eventLog';
+import { ExecutorGate } from '../executor/gate';
 import { ExecutorWorkspace } from '../executor/workspace';
 import { createRunTunnel } from '../host/tunnel';
 import { decodeOpenPayload, decodeSendOptions, encodeSendOptions, isSafeProjectFilePath } from '../wire';
@@ -76,6 +80,8 @@ describe('tunnel', () => {
       expect((await fetch(`${tunnel.url}/mcp/a?q=1`, { headers: { authorization: `Bearer ${tunnel.token}` } })).status).toBe(200);
       expect((await fetch(`${tunnel.url}/t/${tunnel.token}/mcp/b`)).status).toBe(200);
       expect(seen).toEqual(['/mcp/a?q=1', '/mcp/b']);
+      // Cindy 工具请求也算链路往来，结束后不再计入在途。
+      expect(tunnel.linkActivity()).toMatchObject({ httpInFlight: 0, lastActivityAt: expect.any(Number) });
     } finally {
       await tunnel.close();
     }
@@ -100,16 +106,60 @@ describe('tunnel', () => {
       const good = new WebSocket(`${wsUrl}/ws/exec-server`, { headers: { authorization: `Bearer ${tunnel.token}` } });
       const echoed = new Promise<string>((resolve) => good.on('message', (data) => resolve(String(data))));
       await new Promise<void>((resolve) => good.on('open', () => resolve()));
-      good.send('{"id":1}');
+      good.send('{"id":1,"method":"fs/readFile","params":{}}');
       await new Promise((resolve) => setTimeout(resolve, 50));
       expect(opened).toEqual(['c1:/ws/exec-server']);
-      expect(messages).toEqual(['{"id":1}']);
-      tunnel.sendWs('c1', '{"result":true}');
-      expect(await echoed).toBe('{"result":true}');
+      expect(messages).toEqual(['{"id":1,"method":"fs/readFile","params":{}}']);
+      expect(tunnel.linkActivity()).toMatchObject({ execRequests: 1, execResponses: 0, execOldestPending: { method: 'fs/readFile' } });
+      tunnel.sendWs('c1', '{"id":1,"result":true}');
+      expect(await echoed).toBe('{"id":1,"result":true}');
+      // 隧道两个方向的帧都记进往来(托管 Codex 据此判断慢启动仍在推进)。
+      expect(tunnel.linkActivity()).toMatchObject({ execRequests: 1, execResponses: 1 });
+      expect(tunnel.linkActivity().execOldestPending).toBeUndefined();
+      expect(tunnel.linkActivity().lastActivityAt).toEqual(expect.any(Number));
       good.close();
     } finally {
       await tunnel.close();
     }
+  });
+});
+
+describe('confirmations raised on this computer', () => {
+  it('use the Agent confirmation channel and accept only a one-time allow', async () => {
+    let next = 0;
+    const controller = createRemoteAgentHandle({
+      client: {} as RemoteAgentRunClient,
+      started: { id: 'sdk-1', agentKind: 'claude-code', model: 'm', shadowDir: '', methods: [], state: {} },
+      workspace: new ExecutorWorkspace({ workingDir: root }),
+      recordApproval: () => undefined,
+      newId: () => `req-${(next += 1)}`,
+      dispose: async () => undefined,
+    });
+    const env = path.join(root, '.env');
+    const request = credentialConfirmation({ kind: 'read', path: env }, 'goes through the sharer');
+    // 交互还没接上：按拒绝处理。
+    expect(await controller.confirm(request)).toBe(false);
+    const seen: unknown[] = [];
+    let behavior: 'allow' | 'deny' = 'allow';
+    controller.handle.setInteractionResolver(async (incoming) => {
+      seen.push(incoming);
+      return { kind: 'permission', behavior };
+    });
+    expect(await controller.confirm(request)).toBe(true);
+    expect(seen).toEqual([{
+      kind: 'permission',
+      requestId: 'req-1',
+      toolName: 'Read',
+      input: { file_path: env },
+      description: 'goes through the sharer',
+      metadata: { hostOwnedConfirmation: 'shared_provider_credential' },
+    }]);
+    behavior = 'deny';
+    expect(await controller.confirm(request)).toBe(false);
+    expect(credentialConfirmation({ kind: 'exec', command: 'cat .env', cwd: root }, 'x')).toMatchObject({
+      toolName: 'Bash',
+      input: { command: 'cat .env' },
+    });
   });
 });
 
@@ -125,6 +175,40 @@ describe('exec-server relay gate', () => {
       .toEqual([{ kind: 'read', path: path.join(root, '.env') }]);
     expect(execServerActions('fs/getMetadata', { path: `file://${root}/.git` }, '/w')).toEqual([]);
     expect(execServerActions('initialize', {}, '/w')).toEqual([]);
+    // 只读操作按读取：walk 是目录级读取，open 只开只读句柄，canonicalize 只解析路径。
+    const skills = path.join(root, '.agents', 'skills');
+    expect(execServerActions('fs/walk', { path: pathToFileURL(skills).href, options: { maxDepth: 6 } }, '/w'))
+      .toEqual([{ kind: 'read', path: skills, scope: 'tree' }]);
+    expect(execServerActions('fs/open', { handleId: 'h1', path: pathToFileURL(path.join(root, 'a.png')).href }, '/w'))
+      .toEqual([{ kind: 'read', path: path.join(root, 'a.png') }]);
+    expect(execServerActions('fs/open', { handleId: 'h2', mode: 'replace', path: pathToFileURL(path.join(root, 'a.png')).href }, '/w'))
+      .toEqual([{ kind: 'write', path: path.join(root, 'a.png') }]);
+    expect(execServerActions('fs/canonicalize', { path: pathToFileURL(skills).href }, '/w')).toEqual([]);
+    // 不认识的 fs 方法仍从严按写入。
+    expect(execServerActions('fs/futureMethod', { path: pathToFileURL(skills).href }, '/w'))
+      .toEqual([{ kind: 'write', path: skills }]);
+  });
+
+  it('lets read-only exec-server operations follow the read rules (#5764)', () => {
+    const project = path.join(root, 'game');
+    const client = path.join(project, 'client');
+    fs.mkdirSync(client, { recursive: true });
+    const skills = pathToFileURL(path.join(project, '.agents', 'skills')).href;
+    const agentsMd = pathToFileURL(path.join(project, 'AGENTS.md')).href;
+    const decide = (gate: ExecutorGate, method: string, params: Record<string, unknown>) =>
+      execServerActions(method, params, '/w').map((action) => gate.authorize(action).ok);
+
+    // 计划模式：工作区里的 Skill 遍历与只读打开不再算写入。
+    const plan = new ExecutorGate(new ExecutorWorkspace({ workingDir: project }), 'plan');
+    expect(decide(plan, 'fs/walk', { path: skills })).toEqual([true]);
+    expect(decide(plan, 'fs/open', { handleId: 'h1', path: agentsMd })).toEqual([true]);
+    expect(decide(plan, 'fs/open', { handleId: 'h2', mode: 'replace', path: agentsMd })).toEqual([false]);
+
+    // 任务在子目录：上级目录的单文件读取照读取规则放行，递归遍历仍要本机确认。
+    const sub = new ExecutorGate(new ExecutorWorkspace({ workingDir: client }), 'normal');
+    expect(decide(sub, 'fs/open', { handleId: 'h1', path: agentsMd })).toEqual([true]);
+    expect(decide(sub, 'fs/walk', { path: skills })).toEqual([false]);
+    expect(decide(sub, 'fs/canonicalize', { path: skills })).toEqual([]);
   });
 
   it('matches Codex and Claude Code confirmations to the commands and files that later run', () => {
@@ -139,11 +223,50 @@ describe('exec-server relay gate', () => {
     expect(approvalActionsFor({
       kind: 'permission', requestId: 'r', toolName: 'Edit', input: { file_path: 'src/a.ts' },
     }, workspace)).toEqual([{ kind: 'write', path: path.join(root, 'src/a.ts') }]);
+    // 受邀者任务里本机提供的 WebFetch：登记批准过的地址。
+    expect(approvalActionsFor({
+      kind: 'permission', requestId: 'r', toolName: 'mcp__cindy_exec__WebFetch', input: { url: ' http://10.0.0.5/wiki ', prompt: 'x' },
+    }, workspace)).toEqual([{ kind: 'fetch', url: 'http://10.0.0.5/wiki' }]);
     expect(approvalActionsFor({ kind: 'ask_user_question', requestId: 'r', questions: [] }, workspace)).toEqual([]);
   });
 });
 
 describe('wire payloads', () => {
+  it('accepts imported files with relative paths and personal files in the new Skill and rule folders', () => {
+    const payload = decodeOpenPayload({
+      sessionId: 's1',
+      options: { model: 'm' },
+      workspace: { workingDir: '/p', platform: 'darwin', extraDirs: [], writableDirs: [] },
+      projectFiles: [],
+      importFiles: [
+        { base: 'workspace', path: '../../.claude/style.md', data: 'eA==' },
+        { base: 'session', path: 'RTK.md', data: 'eA==' },
+        { base: 'elsewhere', path: 'x.md', data: 'eA==' },
+        { base: 'workspace', path: '/etc/passwd', data: 'eA==' },
+        { base: 'workspace', path: 'a\\b.md', data: 'eA==' },
+        { base: 'workspace', path: 'a/./b.md', data: 'eA==' },
+      ],
+      personal: {
+        files: [
+          { path: '.claude/rules/tone.md', data: '' },
+          { path: '.agents/skills/review/SKILL.md', data: '' },
+          { path: '.codex/skills/deploy/SKILL.md', data: '' },
+          { path: '.pi/extensions/run.ts', data: '' },
+        ],
+      },
+      mcpServers: [],
+    });
+    expect(payload.importFiles).toEqual([
+      { base: 'workspace', path: '../../.claude/style.md', data: 'eA==' },
+      { base: 'session', path: 'RTK.md', data: 'eA==' },
+    ]);
+    expect(payload.personal.files.map((file) => file.path)).toEqual([
+      '.claude/rules/tone.md',
+      '.agents/skills/review/SKILL.md',
+      '.codex/skills/deploy/SKILL.md',
+    ]);
+  });
+
   it('rejects unsafe project file paths and unknown platforms', () => {
     for (const bad of ['../x', '/etc/passwd', 'a/../../b', '.git/config', 'C:/x', 'a\\b', '']) {
       expect(isSafeProjectFilePath(bad)).toBe(false);
@@ -158,7 +281,33 @@ describe('wire payloads', () => {
     });
     expect(payload.projectFiles.map((file) => file.path)).toEqual(['AGENTS.md']);
     expect(payload.mcpServers).toEqual(['cindy_memory']);
+    expect(payload).not.toHaveProperty('groupAssigned');
+    // 供应商组分配的任务带防转圈标记；只认 true。
+    const base = { sessionId: 's1', options: { model: 'm' }, workspace: { workingDir: '/p', platform: 'darwin' } };
+    expect(decodeOpenPayload({ ...base, groupAssigned: true }).groupAssigned).toBe(true);
+    expect(decodeOpenPayload({ ...base, groupAssigned: 'yes' })).not.toHaveProperty('groupAssigned');
+    // 组所在电脑替受邀者中转的任务带不透明的 relay 键；格式不对丢弃。
+    expect(decodeOpenPayload({ ...base, relay: 'a1b2c3d4e5f60718293a4b5c6d7e8f90' }).relay).toBe('a1b2c3d4e5f60718293a4b5c6d7e8f90');
+    expect(decodeOpenPayload({ ...base, relay: '../x' })).not.toHaveProperty('relay');
+    // 「需要换一台」：声明只认 true，凭证格式不对丢弃。
+    expect(decodeOpenPayload({ ...base, acceptsGroupSwitch: true }).acceptsGroupSwitch).toBe(true);
+    expect(decodeOpenPayload({ ...base, acceptsGroupSwitch: 1 })).not.toHaveProperty('acceptsGroupSwitch');
+    expect(decodeOpenPayload({ ...base, groupSwitchToken: 'Zm9vYmFyYmF6cXV4MTIzNDU2' }).groupSwitchToken).toBe('Zm9vYmFyYmF6cXV4MTIzNDU2');
+    expect(decodeOpenPayload({ ...base, groupSwitchToken: 'short' })).not.toHaveProperty('groupSwitchToken');
     expect(() => decodeOpenPayload({ sessionId: 's', options: { model: 'm' }, workspace: { workingDir: '/p', platform: 'beos' } })).toThrow();
+  });
+
+  it('takes the provider group switch token out of the state instead of merging it', () => {
+    const offered: string[] = [];
+    const offer = (token: string) => offered.push(token);
+    const state = { turnRunning: true };
+    expect(takeGroupSwitchState(state, offer)).toBe(state);
+    expect(takeGroupSwitchState({ providerGroupSwitch: 'Zm9vYmFyYmF6cXV4MTIzNDU2' }, offer)).toBeNull();
+    expect(takeGroupSwitchState({ providerGroupSwitch: 'Zm9vYmFyYmF6cXV4MTIzNDU2', model: 'm' }, offer)).toEqual({ model: 'm' });
+    // 格式不对的凭证丢弃，也不进状态。
+    expect(takeGroupSwitchState({ providerGroupSwitch: { evil: true }, model: 'm' }, offer)).toEqual({ model: 'm' });
+    expect(takeGroupSwitchState({ providerGroupSwitch: 'Zm9vYmFyYmF6cXV4MTIzNDU2' }, undefined)).toBeNull();
+    expect(offered).toEqual(['Zm9vYmFyYmF6cXV4MTIzNDU2', 'Zm9vYmFyYmF6cXV4MTIzNDU2']);
   });
 
   it('restores known per-turn policies and confirms everything for unknown ones', async () => {
@@ -206,6 +355,8 @@ describe('event mapping and project files', () => {
   it('shows the built-in tool names for Claude Code tools that run on this computer', () => {
     expect(mapClaudeHostedEvent({ type: 'tool_use', data: { toolName: 'mcp__cindy_exec__Bash', input: {} } }).data)
       .toEqual({ toolName: 'Bash', input: {} });
+    expect(mapClaudeHostedEvent({ type: 'tool_use', data: { toolName: 'mcp__cindy_exec__WebFetch', input: { url: 'https://a.b' } } }).data)
+      .toEqual({ toolName: 'WebFetch', input: { url: 'https://a.b' } });
     expect(mapClaudeHostedEvent({ type: 'tool_use', data: { toolName: 'mcp__cindy_memory__x' } }).data)
       .toEqual({ toolName: 'mcp__cindy_memory__x' });
   });

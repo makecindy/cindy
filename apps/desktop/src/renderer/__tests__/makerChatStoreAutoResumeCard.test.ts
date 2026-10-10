@@ -298,6 +298,22 @@ describe('applyInputProjection 自愈进行中提示', () => {
     });
   });
 
+  it('供应商组换电脑期间任务仍算运行中，没换成时以错误结束(侧栏红点与失败通知照常)', () => {
+    inputProjectionCb!(projection({
+      autoResumePending: {
+        error: "You've hit your session limit",
+        attempt: 0,
+        maxAttempts: 0,
+        sessionTotal: 0,
+        groupSwitchPending: { cause: 'usage-limit' },
+      },
+    }));
+    expect(makerChatStore.getSnapshot(SID).error).toBeNull();
+    expect(makerChatStore.getRunningSnapshot().get(SID)?.isRunning).toBe(true);
+    inputProjectionCb!(projection({ error: "You've hit your session limit" }));
+    expect(makerChatStore.getRunningSnapshot().get(SID)).toMatchObject({ isRunning: false, hasError: true });
+  });
+
   it('does not classify a normal Continue as recovery when it finishes before projection cleanup', () => {
     makerEventCb!({ sessionId: SID, event: { type: 'status', data: { isRunning: true } } });
     inputProjectionCb!(projection({ continuationInFlightClientId: 'manual-continue' }));
@@ -1047,5 +1063,59 @@ describe('同一次中断事件的多次重连折叠成一行', () => {
     expect(cards).toHaveLength(1);
     expect(cards[0]?.clientId).toBe(PENDING_CARD_ID);
     expect(rows.find((m) => m.clientId === 'r1')?.systemCardType).toBeUndefined();
+  });
+});
+
+describe('供应商组换电脑期间不报错(provider-groups.md §6.1)', () => {
+  const LIMIT_MESSAGE = "You've hit your session limit · resets 12:40am";
+  const switchingCard = (error = LIMIT_MESSAGE) => ({
+    ...serverMessage({ clientId: PENDING_CARD_ID, content: '' }),
+    systemCardType: 'auto-resume-pending' as const,
+    systemCardData: { error, attempt: 0, maxAttempts: 0, sessionTotal: 0, groupSwitchPending: { cause: 'usage-limit' } },
+  }) as ChatMessage;
+  const terminalError = (source: 'claude-code' | 'pi', message = LIMIT_MESSAGE) => ({
+    sessionId: SID,
+    type: 'error' as const,
+    source,
+    data: { message, isTerminal: true },
+  });
+
+  it.each(['claude-code', 'pi'] as const)('%s 的终态错误回声不点亮横幅，也不撤掉「正在换一台电脑继续」', (source) => {
+    const next = handleStreamEvent(
+      { ...EMPTY_SESSION_STATE, messages: [switchingCard()] },
+      terminalError(source),
+    );
+    expect(next.error).toBeNull();
+    expect(next.messages.some((m) => m.clientId === PENDING_CARD_ID)).toBe(true);
+  });
+
+  it('换电脑期间到达的另一次错误照常报错', () => {
+    const next = handleStreamEvent(
+      { ...EMPTY_SESSION_STATE, messages: [switchingCard()] },
+      terminalError('claude-code', 'Something else broke'),
+    );
+    expect(next.error).toBe('Something else broke');
+  });
+
+  it('不是换电脑的接管行不改变非 Codex 错误的呈现', () => {
+    const plainCard = {
+      ...serverMessage({ clientId: PENDING_CARD_ID, content: '' }),
+      systemCardType: 'auto-resume-pending' as const,
+      systemCardData: { ...PENDING_INFO, error: LIMIT_MESSAGE },
+    } as ChatMessage;
+    const next = handleStreamEvent({ ...EMPTY_SESSION_STATE, messages: [plainCard] }, terminalError('claude-code'));
+    expect(next.error).toBe(LIMIT_MESSAGE);
+  });
+
+  it('输入框状态写「正在换一台电脑继续」所需的标记随进行中行带出', () => {
+    const info = findActiveReconnect({
+      messages: [switchingCard()],
+      sessionRunning: false,
+      continuationTurnClientId: null,
+      projectionCapability: 'supported',
+    });
+    expect(info?.groupSwitchPending).toEqual({ cause: 'usage-limit' });
+    // 不是重连：没有次数。
+    expect(info?.attempt).toBeUndefined();
   });
 });

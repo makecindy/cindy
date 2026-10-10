@@ -439,6 +439,18 @@ export async function performSessionAgentSwitch(
     /** Recheck caller CAS after asynchronous validation, before staging any intent. */
     assertSelectionCurrent?: () => void;
     beforeMutation?: () => Promise<void>;
+    /**
+     * 仅限 main 内部(不接受 IPC 传入)：Agent 位置不变也按换电脑重新交接、新建原生会话。供应商组替分享的人
+     * 换电脑时任务的位置仍是同一个分享，实际运行的电脑由组所在电脑重新选(docs/product-rules/provider-groups.md §6.1)。
+     * 只在 applyNow 且 Agent 在另一台电脑上时生效。
+     */
+    forceRelocation?: boolean;
+    /**
+     * 仅限 main 内部(不接受 IPC 传入)：供应商组为这个任务换电脑——引擎与模型不变、只换 Agent 所在位置。
+     * 协同任务(Lead / Worker)不接受用户换引擎或换位置，只接受这一种切换(docs/product-rules/provider-groups.md §6.1)。
+     * 只在 applyNow 时生效。
+     */
+    providerGroupRelocation?: boolean;
   },
 ): Promise<SessionAgentSwitchResult> {
   const { sessionId, targetAgentKind, model, providerId, signal } = params;
@@ -500,7 +512,13 @@ export async function performSessionAgentSwitch(
     // SSH 远程会话:agent 进程在远端机器,cc-manager 链路仅覆盖 Claude,v1 不支持切换。
     throwIpcError('UNSUPPORTED_CAPABILITY', 'agent switch is not supported for remote sessions');
   }
-  if (row.orcaRole) {
+  // 供应商组换电脑：同引擎同模型、只换位置。协同任务只放行这一种(内部 applyNow 调用)。
+  const providerGroupRelocationOnly =
+    params.providerGroupRelocation === true &&
+    params.applyNow === true &&
+    normalizeDbAgentKind(row.agentKind) === makerToDbAgentKind(targetAgentKind) &&
+    row.model === model;
+  if (row.orcaRole && !providerGroupRelocationOnly) {
     // Orca lead/worker:协同运行时对 agent 形态有独立契约(docs/dev-rules/orca-team-architecture.md),不掺和。
     throwIpcError('UNSUPPORTED_CAPABILITY', 'agent switch is not supported for Orca sessions');
   }
@@ -514,9 +532,13 @@ export async function performSessionAgentSwitch(
   const targetAgentDeviceId =
     requestedAgentDeviceId === undefined ? currentAgentDeviceId : requestedAgentDeviceId;
   const agentDeviceChanges = targetAgentDeviceId !== currentAgentDeviceId;
+  // 位置不变的强制换电脑(只认内部 applyNow 调用，且 Agent 在另一台电脑上)：交接、提交、分隔条都按换电脑处理。
+  const forcedRelocation =
+    !agentDeviceChanges && params.forceRelocation === true && params.applyNow === true && targetAgentDeviceId !== null;
+  const relocating = agentDeviceChanges || forcedRelocation;
   // 落到另一台电脑的完整切换(换引擎或换电脑)：登记与落地前都按那台的目录裁决。同引擎同位置
   // 的模型选择走 selectSameAgentModel，在 SET_MODEL 链路里裁决。
-  if (targetAgentDeviceId && (agentDeviceChanges || fromDbKind !== toDbKind)) {
+  if (targetAgentDeviceId && (relocating || fromDbKind !== toDbKind)) {
     await deps.assertAgentDeviceRouteUsable?.(
       targetAgentDeviceId,
       targetAgentKind,
@@ -527,7 +549,7 @@ export async function performSessionAgentSwitch(
     throwIfAgentSwitchAborted(signal);
     params.assertSelectionCurrent?.();
   }
-  if (fromDbKind === toDbKind && !agentDeviceChanges) {
+  if (fromDbKind === toDbKind && !relocating) {
     // Only picker calls stage a model choice here. Internal cross-engine apply/recovery
     // callers retain the existing same-engine no-op; send consumes staged choices below.
     if (deps.selectSameAgentModel && !params.applyNow) {
@@ -624,14 +646,14 @@ export async function performSessionAgentSwitch(
   // Phase 2:目标引擎有停泊原生会话 → resume + 增量交接(只补离开期间的进展,
   // 工作状态区仍按全量历史提取);无绑定 → v1 全量交接 + 全新原生会话。
   // 换电脑时停泊的原生会话在原来那台电脑上，目标电脑接不上，一律全量交接。
-  const parked = deps.findParkedEngineSession && !agentDeviceChanges
+  const parked = deps.findParkedEngineSession && !relocating
     ? await deps.findParkedEngineSession(sessionId, toDbKind)
     : null;
   const fullSourceMessages = await deps.listMessagesForHandoff(sessionId);
   throwIfAgentSwitchAborted(signal);
   const handoffOptsBase = {
     // 同引擎换电脑时两边引擎名相同，标出旧的那段跑在另一台电脑上。
-    fromLabel: agentDeviceChanges
+    fromLabel: relocating
       ? `${agentEngineLabel(fromDbKind)} (on a different computer)`
       : agentEngineLabel(fromDbKind),
     toLabel: agentEngineLabel(toDbKind),
@@ -702,12 +724,13 @@ export async function performSessionAgentSwitch(
       handoff,
       resumed: !!parked,
       consumed: false,
-      ...(agentDeviceChanges
+      ...(relocating
         ? {
             fromAgentDeviceId: currentAgentDeviceId,
             toAgentDeviceId: targetAgentDeviceId,
-            fromAgentDeviceName: deps.describeAgentDevice?.(currentAgentDeviceId) ?? null,
-            toAgentDeviceName: deps.describeAgentDevice?.(targetAgentDeviceId) ?? null,
+            // 强制换电脑时实际运行的电脑由对方选，本机不知道是哪台(也不该显示)：分隔条写「另一台电脑」。
+            fromAgentDeviceName: forcedRelocation ? null : deps.describeAgentDevice?.(currentAgentDeviceId) ?? null,
+            toAgentDeviceName: forcedRelocation ? null : deps.describeAgentDevice?.(targetAgentDeviceId) ?? null,
           }
         : {}),
     };
@@ -845,6 +868,7 @@ export async function performSessionAgentSwitch(
       resumed,
       handoffChars: handoff.length,
       ...(agentDeviceChanges ? { agentDeviceChange: targetAgentDeviceId ? 'other-device' : 'task-device' } : {}),
+      ...(forcedRelocation ? { agentDeviceChange: 'reassigned-by-provider-group' } : {}),
     });
     return {
       switched: true,

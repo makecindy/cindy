@@ -91,7 +91,7 @@ import { OllamaProviderDetail } from './OllamaProviderDetail';
 import {
   OwnRemoteProviderDetail,
   OwnRemoteProviderRows,
-  useOwnRemoteProviders,
+  useOwnRemoteProviderList,
 } from './OwnRemoteProviders';
 import { LlamaCppProviderDetail } from './LlamaCppProviderDetail';
 import { MANAGED_LLAMACPP_PROVIDER_ID } from '../../../shared/llamaCpp';
@@ -110,7 +110,7 @@ import { XDIncMark } from '@/components/icons/XDIncMark';
 import { hasProviderLogo, ProviderLogoMark } from '@/components/icons/ProviderLogoMark';
 import { SortableList } from '@/components/sidebar/SortableList';
 import { ProviderShareEntryButton } from '@/features/provider-share/ProviderShareEntryButton';
-import { ProviderGroupRow } from '@/features/provider-group/ProviderGroupRow';
+import { useLocalProviderGroupsState } from '@/features/provider-group/useLocalProviderGroups';
 import { ProviderShareManagePage } from '@/features/provider-share/ProviderShareManagePage';
 import { ProviderSharePasteButton } from '@/features/provider-share/ProviderSharePasteDialog';
 import {
@@ -162,10 +162,13 @@ function writeProviderDisabled(providerId: string, disabled: boolean, errorText:
 }
 
 /**
- * 「允许被远程调用」(供应商级远程 Agent 授权)。默认关闭。能力逐级开启(产品规则
+ * 「允许被远程调用」(供应商级远程 Agent 授权)与「远程与分享」入口合成的一行。默认关闭。能力逐级开启(产品规则
  * docs/product-rules/provider-sharing.md §3)：允许远程控制 → 允许被远程调用 → 分享。
- * 前两级任一未开启时整行仍显示，但开关或分享入口不可点击，并说明先开启哪一级。
+ * 前两级任一未开启时整行仍显示，但开关不可用，并说明先开启哪一级。
  * 成功后 main 广播 PROVIDER_CHANGED 刷新快照。
+ *
+ * 供应商组不另占一行(2026-10-11 用户反馈详情太长)：组的状态写在开关左侧的入口按钮上，组设置在入口进去的
+ * 「远程与分享」页。组状态取本机组设置快照，第一次读完之前整行不出现，免得先显示「没有组」再跳成组。
  */
 function RemoteProviderAccessRow({
   provider,
@@ -180,20 +183,23 @@ function RemoteProviderAccessRow({
 }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  const localGroups = useLocalProviderGroupsState();
   const [enabled, setEnabled] = useState(provider.remoteInvocationEnabled === true);
   const [busy, setBusy] = useState(false);
   useEffect(() => {
     setEnabled(provider.remoteInvocationEnabled === true);
   }, [provider.remoteInvocationEnabled]);
+  if (!localGroups.ready) return null;
+  const group = localGroups.groups[provider.id] ?? null;
   const gate = providerShareGate({ remoteControlEnabled, invocationEnabled: enabled });
   return (
     <div
       data-testid="provider-remote-access"
       data-share-gate={gate}
-      className="flex shrink-0 items-start justify-between gap-3 border-t px-5 py-3"
+      className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2 border-t px-5 py-3"
       style={{ borderColor: 'var(--settings-theme-card-border)' }}
     >
-      <div className="flex min-w-0 flex-col gap-1">
+      <div className="flex min-w-[min(100%,240px)] flex-1 flex-col gap-1">
         <span className="text-13 font-medium text-[var(--text-primary)]">
           {t('settings.providers.detail.remoteAccess.label')}
         </span>
@@ -211,13 +217,20 @@ function RemoteProviderAccessRow({
             </>
           ) : gate === 'invocation-off' ? (
             t('providerShare.entry.descriptionOff')
+          ) : group ? (
+            // 有组时 Agent 由组选一台运行，不再是「在这台电脑上运行」。
+            t('settings.providers.detail.remoteAccess.descriptionGroup')
           ) : (
             t('settings.providers.detail.remoteAccess.description')
           )}
         </span>
       </div>
-      <div className="flex shrink-0 items-center gap-2">
-        <ProviderShareEntryButton gate={gate} pendingCount={pendingShareRequests} onOpen={onManageShare} />
+      <div className="ml-auto flex shrink-0 items-center gap-3">
+        <ProviderShareEntryButton
+          groupSize={group ? group.members.length : null}
+          pendingCount={pendingShareRequests}
+          onOpen={onManageShare}
+        />
         <Switch
           checked={enabled}
           disabled={busy || !remoteControlEnabled}
@@ -2424,7 +2437,7 @@ export function ProvidersSection() {
   const selectedShare = selectedShareId
     ? receivedShares.find((share) => share.shareId === selectedShareId) ?? null
     : null;
-  const ownRemoteProviders = useOwnRemoteProviders();
+  const { entries: ownRemoteProviders, hiddenShareIds: groupedShareIds } = useOwnRemoteProviderList();
   const selectedRemote = selectedRemoteKey
     ? ownRemoteProviders.find((entry) => entry.key === selectedRemoteKey) ?? null
     : null;
@@ -3129,6 +3142,7 @@ export function ProvidersSection() {
               {/* 分享给我的供应商(受邀者)：单独成组，没有分享时不显示。 */}
               <ProviderShareReceivedRailGroup
                 selectedShareId={selectedShare?.shareId ?? null}
+                hiddenShareIds={groupedShareIds}
                 onSelect={(shareId) => {
                   setFocusedModel(null);
                   selectShare(shareId);
@@ -3293,8 +3307,9 @@ export function ProvidersSection() {
                         />
                       </div>
                     )}
-                  {/* 允许被远程调用 + 管理分享：供应商已连接且能跑 Agent 时出现。本机未允许
-                      远程控制时整行仍显示，但开关与分享入口不可用(provider-sharing.md §3)。 */}
+                  {/* 允许被远程调用 + 「远程与分享」入口(含供应商组)：供应商已连接且能跑 Agent 时出现。
+                      本机未允许远程控制时整行仍显示，但开关不可用(provider-sharing.md §3)；入口始终可用，
+                      只给本机用时也可以建组(provider-groups.md §10)。 */}
                   {remoteControlEnabled !== null &&
                     !effectiveSelected.suspended &&
                     effectiveSelected.connected &&
@@ -3306,16 +3321,6 @@ export function ProvidersSection() {
                         remoteControlEnabled={remoteControlEnabled}
                         pendingShareRequests={pendingShareCounts.get(effectiveSelected.id) ?? 0}
                         onManageShare={() => setShareManageProviderId(effectiveSelected.id)}
-                      />
-                    )}
-                  {/* 供应商组：不依赖「允许被远程调用」，只给本机用时也可以建组(provider-groups.md §10)。 */}
-                  {!effectiveSelected.suspended &&
-                    effectiveSelected.connected &&
-                    effectiveSelected.agents.length > 0 && (
-                      <ProviderGroupRow
-                        key={`provider-group-${effectiveSelected.id}`}
-                        providerId={effectiveSelected.id}
-                        onOpen={() => setShareManageProviderId(effectiveSelected.id)}
                       />
                     )}
                   {!effectiveSelected.suspended &&

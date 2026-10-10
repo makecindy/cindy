@@ -78,6 +78,7 @@ import {
   tryPeerFile,
   tryUploadPeerAttachment,
 } from '../filePeer';
+import { DesktopCaptureWindow } from '../../remote-desktop/captureWindow';
 import { createHash } from 'node:crypto';
 
 describe('peer attachment upload preflight', () => {
@@ -755,6 +756,68 @@ describe('authorized file peer source', () => {
     expect(await read(b.connection, fb.ticket, 0)).toBe(Buffer.from('hello').toString('base64'));
     mock.current = false;
     await expect(read(b.connection, fb.ticket, 5)).rejects.toThrow('CLOSED');
+  });
+  it('finishes every local cleanup when the stored invoke throws on the close notice', async () => {
+    const opened = vi.spyOn(fsPromises, 'open');
+    const dispose = vi.spyOn(DesktopCaptureWindow.prototype, 'dispose');
+    try {
+      const peer = 'stopped-desktop-peer';
+      const remote = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
+      // A stored remote-desktop invoke re-checks its caller first and, once the desktop has
+      // stopped, used to throw synchronously out of stopConnection.
+      const invoke = vi.fn((_peer: string, _channel: string, args: unknown[]) => {
+        const action = (args[0] as { action: string }).action;
+        if (action === 'close') throw new Error('DESKTOP_STOPPED');
+        return Promise.resolve({
+          ok: true,
+          result:
+            action === 'caps'
+              ? { version: 1, streaming: true }
+              : action === 'open'
+                ? { ticket: 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', size: 5, mimeType: 'text/plain' }
+                : { connection: remote, sdp: 'v=0' },
+        });
+      });
+      const tracked = async (index: number) => {
+        const handle = await (opened.mock.results[index].value as ReturnType<
+          typeof fsPromises.open
+        >);
+        const close = handle.close.bind(handle);
+        const state = { closed: false };
+        handle.close = async () => {
+          await close();
+          state.closed = true;
+        };
+        return state;
+      };
+      // Controller side: a receive in flight (open sink file + pending host reply).
+      const transfer = tryPeerFile(peer, 'xdt-file://test', invoke);
+      await vi.waitFor(() => expect(mock.receiving).toBeDefined());
+      const receive = mock.receiving!;
+      await mock.handlers.get('file-peer:host:write')!({}, receive.sink, 0, 'aGU=');
+      const sink = await tracked(opened.mock.calls.findIndex((call) => call[1] === 'wx'));
+      // Host side: another controller's connection with an open source file.
+      const other = await connect('device-b');
+      const before = opened.mock.calls.length;
+      const { ticket } = await open(other.connection, 'device-b');
+      const source = await tracked(before);
+
+      expect(() => stopFilePeers()).not.toThrow();
+
+      expect(invoke).toHaveBeenCalledWith(peer, expect.any(String), [
+        { action: 'close', connection: remote },
+      ]);
+      expect(await transfer).toBeNull();
+      await vi.waitFor(() => expect(sink.closed && source.closed).toBe(true));
+      await expect(read(other.connection, ticket, 0)).rejects.toThrow();
+      await expect(
+        mock.handlers.get('file-peer:host:write')!({}, receive.sink, 2, 'bGxv'),
+      ).rejects.toThrow('FILE_PEER_BLOCK');
+      expect(dispose).toHaveBeenCalled();
+    } finally {
+      opened.mockRestore();
+      dispose.mockRestore();
+    }
   });
   it('keeps a connection alive while a long attachment request is handled, then idles out', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });

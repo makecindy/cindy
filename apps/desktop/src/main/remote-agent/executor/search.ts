@@ -50,11 +50,16 @@ interface RgEvent {
   };
 }
 
+/**
+ * `skipFile`：不输出其中内容的文件(供应商分享的受邀者任务里的凭证类文件：搜索结果会经过分享者的
+ * 电脑，要看内容须单独读取并经本机确认)。
+ */
 export async function piGrep(
   rgPath: string,
   root: string,
   input: PiGrepInput,
   signal?: AbortSignal,
+  skipFile?: (absolutePath: string) => boolean,
 ): Promise<PiGrepResult> {
   const stat = await fsp.stat(root);
   const rootIsDirectory = stat.isDirectory();
@@ -75,6 +80,7 @@ export async function piGrep(
   let stderr = '';
   let lastPath: string | undefined;
   let lastLine = -1;
+  const skipped = new Map<string, boolean>();
 
   await new Promise<void>((resolve, reject) => {
     const child = spawn(rgPath, args, { cwd, stdio: ['ignore', 'pipe', 'pipe'], signal });
@@ -92,6 +98,14 @@ export async function piGrep(
       const file = event.data?.path?.text;
       const lineNumber = event.data?.line_number;
       if (!file || typeof lineNumber !== 'number') return;
+      if (skipFile) {
+        let skip = skipped.get(file);
+        if (skip === undefined) {
+          skip = skipFile(path.resolve(cwd, file));
+          skipped.set(file, skip);
+        }
+        if (skip) return;
+      }
       // rg 的路径在 Windows 上是 `.` 开头的反斜杠形式(`.\src\a.ts`)，统一剥掉前缀并转正斜杠。
       const display = rootIsDirectory ? file.replace(/^\.[\\/]/, '').split(/[\\/]/).join('/') : path.basename(root);
       if (lastPath !== undefined && (display !== lastPath || lineNumber > lastLine + 1) && context > 0) {
@@ -130,7 +144,11 @@ export async function piGrep(
     });
   });
 
-  if (matches === 0) return { text: 'No matches found' };
+  const skippedFiles = [...skipped.values()].filter(Boolean).length;
+  const skippedNotice = skippedFiles > 0
+    ? `matches in ${skippedFiles} credential file(s) left out; reading such a file directly asks the user for confirmation`
+    : null;
+  if (matches === 0) return { text: skippedNotice ? `No matches found\n\n[${skippedNotice}]` : 'No matches found' };
   // 上下文模式下最后一条可能是命中后的上下文，按出现顺序保留。
   let output = outputLines.join('\n');
   let truncated = false;
@@ -160,6 +178,7 @@ export async function piGrep(
     notices.push(`${formatSize(MAX_OUTPUT_BYTES)} limit reached`);
     details.truncated = true;
   }
+  if (skippedNotice) notices.push(skippedNotice);
   if (notices.length > 0) output += `\n\n[${notices.join('. ')}]`;
   return { text: output, ...(Object.keys(details).length > 0 ? { details } : {}) };
 }

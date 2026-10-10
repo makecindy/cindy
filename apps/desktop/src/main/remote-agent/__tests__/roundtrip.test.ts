@@ -314,6 +314,33 @@ describe('remote agent round trip', () => {
     host.dispose();
   });
 
+  it('declares provider group switch support and brings back the token after a handoff', async () => {
+    const host = createHost();
+    const base = makeDeps(host);
+    const opened: Array<Record<string, unknown>> = [];
+    const invoke: StartRemoteAgentDeps['invoke'] = async (args) => {
+      const request = args[0] as { op?: string; payload?: { json?: Record<string, unknown> } };
+      if (request.op === 'open' && request.payload?.json) opened.push(request.payload.json);
+      return base.invoke(args);
+    };
+    const offered: string[] = [];
+    const handle = await startRemoteAgentSession('pi', { sessionId: 's4', workingDir: project, model: 'm' }, {
+      ...base,
+      invoke,
+      groupSwitch: { token: 'Zm9vYmFyYmF6cXV4MTIzNDU2', offer: (token) => offered.push(token) },
+    });
+    expect(opened[0]).toMatchObject({ acceptsGroupSwitch: true, groupSwitchToken: 'Zm9vYmFyYmF6cXV4MTIzNDU2' });
+    await handle.close({ reason: 'navigation' });
+
+    // 没接供应商组的调用方：打开时不声明。
+    const plain = await startRemoteAgentSession('pi', { sessionId: 's5', workingDir: project, model: 'm' }, { ...base, invoke });
+    expect(opened[1]).not.toHaveProperty('acceptsGroupSwitch');
+    expect(opened[1]).not.toHaveProperty('groupSwitchToken');
+    await plain.close({ reason: 'navigation' });
+    expect(offered).toEqual([]);
+    host.dispose();
+  });
+
   it('refuses controllers that are no longer allowed', async () => {
     authorized = false;
     const host = createHost();

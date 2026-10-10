@@ -45,6 +45,13 @@ function chatData(overrides: Record<string, unknown> = {}) {
 }
 
 describe('parseBotGroupChatData', () => {
+  it.each(['AUTH_REQUIRED', 'private diagnostic', undefined])('preserves only allowlisted runtime failure codes from the computer: %s', runtimeFailureCode => {
+    const data = chatData({ messages: [{ id: 'failure', sequence: 1, kind: 'notice', authorKind: 'system',
+      authorName: 'Bot', content: '', createdAt: 1, noticeCode: 'member-failed', runtimeFailureCode }] });
+    const parsed = parseBotGroupChatData(data)!;
+    expect(parsed.messages[0].runtimeFailureCode).toBe(runtimeFailureCode === 'AUTH_REQUIRED' ? runtimeFailureCode : undefined);
+    expect(JSON.stringify(parsed.messages)).not.toContain('private diagnostic');
+  });
   it('preserves server member identities and removal capability', () => {
     const parsed = parseBotGroupChatData(chatData({ serverBacked: true, supportsMemberRemoval: true,
       members: [{ botId: 'human', actorId: 'actor', actorKind: 'human', isOwned: false, name: 'Person', status: 'active' }] }));

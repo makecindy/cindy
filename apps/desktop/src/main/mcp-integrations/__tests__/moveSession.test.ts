@@ -194,6 +194,17 @@ describe('moveSession host', () => {
     },
   );
 
+  it('moves a task whose agent runs on another computer', async () => {
+    h.query.mockResolvedValue([
+      { id: 'target', status: 'active', remoteHostId: null, agentDeviceId: 'device-b', source: null },
+    ]);
+    expect(await run(directory)).toMatchObject({ ok: true, workspaceKind: 'project' });
+    expect(h.saved).toHaveBeenLastCalledWith({
+      workingDir: directory.replaceAll('\\', '/'),
+      workspaceKind: 'project',
+    });
+  });
+
   it('does not report a committed move as rejected when IM attaches after the write', async () => {
     h.saved.mockImplementationOnce(() => {
       h.attached = true;

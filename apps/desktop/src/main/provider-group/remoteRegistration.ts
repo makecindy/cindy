@@ -1,0 +1,30 @@
+/**
+ * 把供应商组接到设备互联(docs/product-rules/provider-groups.md §4)：同账号其他电脑的
+ * `provider-group:remote` 请求，以及给它们的 `maker:provider:list` 补组摘要与运行数。
+ * 组摘要只服务同账号电脑，dispatch 已拒绝受邀者与共享任务访客；受邀者只拿得到组里有几台(§8)。
+ */
+import { setProviderGroupRemoteHandler } from '../device-link/dispatch.js';
+import { isRemoteProviderInvocationAllowed } from '../maker-host/remote-provider-access-store.js';
+import {
+  decorateProviderListWithGroups,
+  handleProviderGroupRemote,
+  sharedProviderGroupSize,
+  type ProviderGroupRemoteHandlerDeps,
+} from './remoteHandler.js';
+import { getProviderGroupOwnerScope, readProviderRunningTurnsByProvider } from './runtime.js';
+import { readProviderGroup } from './store.js';
+
+export function registerProviderGroupRemoteHandler(): void {
+  const deps: ProviderGroupRemoteHandlerDeps = {
+    scope: getProviderGroupOwnerScope,
+    readGroup: readProviderGroup,
+    isRemoteAllowed: isRemoteProviderInvocationAllowed,
+    now: () => Date.now(),
+  };
+  setProviderGroupRemoteHandler({
+    handle: (controller, raw) => handleProviderGroupRemote(deps, controller, raw),
+    decorateProviderList: async (result) =>
+      decorateProviderListWithGroups(result, readProviderGroup, await readProviderRunningTurnsByProvider()),
+    sharedGroupSize: (providerId) => sharedProviderGroupSize(deps, providerId),
+  });
+}

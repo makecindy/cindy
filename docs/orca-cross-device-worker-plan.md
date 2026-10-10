@@ -6,6 +6,9 @@
 > `docs/dev-rules/orca-team-architecture.md`「远端 Worker」。界面首版只在本机 Lead 上提供「运行设备」；
 > 被远程控制的 Lead 仍可由它自己的 Agent 经 `execution_device_id` 创建；SSH 主机上的 Lead 不支持。
 > 来源讨论：issue #5620「远程控制功能疑问」→ 跨设备派活。
+> 后续（2026-10-10）：§2 里「Worker 继承 Lead 的 `agentDeviceId`、不能单独指定」已不成立——每个 Worker 可以单独选
+> Agent 所在位置（远程供应商，任务与文件仍在 Lead 所在电脑），协同任务也归供应商组分配与自动换电脑，见
+> `docs/dev-rules/orca-team-architecture.md`「Worker 运行态」第 11、12 条。
 
 ## 1. 结论
 
@@ -29,6 +32,10 @@
 | 已有的「远程 Agent」                         | 只借用另一台电脑的 Agent 程序、登录与供应商；**命令与文件仍在本机**。Worker 继承 Lead 的 `agentDeviceId`，不能单独指定                       | `protocol-compatibility.md`「远程 Agent」；`orcaWorkerCreationService.ts`      |
 | 被控的电脑能否同时控制另一台                 | 能。远程 Agent 就是 A 作为发起方驱动 B；当前开发会话即为实例：XD-PC 被手机控制，同时把 Agent 放在另一台电脑运行                              | `apps/desktop/src/main/remote-agent/controller/`                               |
 | 在另一台电脑新建任务、发消息、订阅事件的通道 | 已在同账号 allowlist：`maker:create-session`、`maker:send`、`maker:abort-session`、`maker:input:*`、`maker:event`、`maker:mark-orca-role` 等 | `packages/device-link/src/allowlist.ts`                                        |
+
+> 2026-10-10 更新：上表「Worker 继承 Lead 的 `agentDeviceId`，不能单独指定」已改变。用户裁决远程供应商的使用和
+> 表现与本机供应商一致，Worker 的 Agent 位置(远程供应商)可以单独指定、缺省跟 Lead；运行设备 Worker 仍与之互斥。
+> 现行规则见 [`dev-rules/orca-team-architecture.md`](dev-rules/orca-team-architecture.md)「Worker 的 Agent 位置」。
 
 **需要分清两个概念**，界面文案必须区分：
 

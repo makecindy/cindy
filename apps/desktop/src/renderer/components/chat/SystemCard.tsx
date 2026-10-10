@@ -963,11 +963,19 @@ function AutoResumeActionRow({
   //   - 已回填          → ✓ / ✗ 定格,`inFlight` 不参与(终态优先)
   const live = state === 'live' || (inFlight === true && info.outcome === undefined);
   const outcome = live ? undefined : info.outcome;
-  const label = info.agentSwitch
+  const label = info.groupSwitchPending
+    ? t('chat.systemCard.autoResumePending.groupSwitch')
+    : info.agentSwitch
     ? t(`chat.systemCard.autoResume.agentSwitch.${info.agentSwitch.cause}`, {
         from: info.agentSwitch.from,
         to: info.agentSwitch.to,
       })
+    : info.agentReconnect
+    ? info.agentReconnect.computer
+      ? t('chat.systemCard.autoResume.agentReconnect.named', { computer: info.agentReconnect.computer })
+      : t('chat.systemCard.autoResume.agentReconnect.unnamed')
+    : info.groupSwitch
+    ? t('chat.systemCard.autoResume.groupSwitch')
     : usageLimitReset
     ? t('chat.systemCard.autoResume.labelUsageReset')
     : live
@@ -982,8 +990,10 @@ function AutoResumeActionRow({
       : outcome === 'failed'
         ? t('chat.systemCard.autoResume.labelFailed')
         : t('chat.systemCard.autoResume.labelNeutral');
-  const summary = summarizeInterruption(info.error);
-  const canExpand = Boolean(info.error) || hasProgress || showSessionTotal;
+  // 供应商组正在换电脑时错误先不呈现：行内不带原始错误(它只用来认出终态 event 的回声)。
+  const shownError = info.groupSwitchPending ? undefined : info.error;
+  const summary = summarizeInterruption(shownError);
+  const canExpand = Boolean(shownError) || hasProgress || showSessionTotal;
   return (
     <div className="flex flex-col">
       <button

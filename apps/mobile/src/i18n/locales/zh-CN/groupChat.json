@@ -87,7 +87,19 @@
     "workdirUnavailable": "{{name}}找不到工作目录",
     "stepFailed": "{{name}}这一步出错了，没做完",
     "stepTimeout": "{{name}}太久没做完，这一步先停下",
-    "stepUnavailable": "{{name}}现在不可用，这一步没法做"
+    "stepUnavailable": "{{name}}现在不可用，这一步没法做",
+    "runtimeFailure": {
+      "IMAGE_INPUT_UNSUPPORTED": "{{name}}无法回复：当前模型不支持图片。\n请切换到支持图片的模型，或在「设置 → 个性化 → 视觉桥」开启并配置视觉模型后重新发送。",
+      "MODEL_UNAVAILABLE": "{{name}}无法回复：当前没有可用模型。\n请在伙伴设置中选择已连接的可用模型后重新发送。",
+      "AUTH_REQUIRED": "{{name}}无法回复：模型连接需要重新认证。\n请在设置中重新连接对应模型来源后重新发送。",
+      "RATE_LIMITED": "{{name}}无法回复：模型请求过于频繁。\n请稍后重新发送，或选择其他可用模型。",
+      "UPSTREAM_OVERLOADED": "{{name}}无法回复：模型服务暂时繁忙。\n请稍后重新发送，或选择其他可用模型。",
+      "QUOTA_EXCEEDED": "{{name}}无法回复：模型用量已达上限。\n请检查对应来源的配额，或选择其他可用模型。",
+      "NETWORK_ERROR": "{{name}}无法回复：网络连接失败。\n请检查网络或 Proxy 后重新发送。",
+      "RUNTIME_TIMEOUT": "{{name}}本次回复超时。\n请重新发送消息，或选择其他可用模型。",
+      "RUNTIME_ERROR": "{{name}}这次没能回复。\n请重新发送消息；如果仍失败，请查看日志并反馈问题。"
+    },
+    "runtimeFailureSetupHint": "如需调整模型或设置，请在伙伴所属电脑上处理。"
   },
   "plan": {
     "intro_one": "这件事分 {{count}} 步，我这样分工：",

@@ -154,7 +154,22 @@ export type RemoteAgentRequest =
   | { op: 'poll'; runs: Array<{ runId: string; cursor: number }>; waitMs?: number }
   | { op: 'reply'; runId: string; requestId: string; payload: RemoteAgentPayload }
   | { op: 'push'; runId: string; seq: number; frames: RemoteAgentPushFrame[] }
-  | { op: 'close'; runId: string; mode: 'close' | 'detach'; reason: RemoteAgentTeardownReason };
+  | { op: 'close'; runId: string; mode: 'close' | 'detach'; reason: RemoteAgentTeardownReason }
+  /**
+   * 供应商组(组所在电脑 → 组内电脑)：组所在电脑删掉某个受邀者后，请组内电脑清掉替这个受邀者
+   * 运行过的任务留下的会话记录与目录。relay 是组所在电脑为受邀者取的不透明键(打开任务时随载荷带过来)，
+   * 只作用于调用方自己的 relay。旧版组内电脑回 REMOTE_AGENT_INVALID(它从没接过被中转的任务)。
+   */
+  | { op: 'forget'; relay: string };
+
+/** 供应商组为受邀者取的不透明键(组所在电脑按受邀者派生，不含身份信息)；「需要换一台」凭证同一格式。 */
+export const REMOTE_AGENT_RELAY_KEY_PATTERN = /^[A-Za-z0-9_-]{16,64}$/;
+
+/**
+ * 供应商组「需要换一台」：组所在电脑在中转任务的事件流里发出的状态键，值是一次性凭证。只发给打开任务时
+ * 声明了 acceptsGroupSwitch 的控制端，排在那次错误前面；控制端取走凭证、不并入任务状态。
+ */
+export const REMOTE_AGENT_GROUP_SWITCH_STATE_KEY = 'providerGroupSwitch';
 
 /** 与 maker-core AgentSessionTeardownReason 同值。 */
 export const REMOTE_AGENT_TEARDOWN_REASONS = ['navigation', 'account-boundary', 'app-quit'] as const;
@@ -168,6 +183,11 @@ export interface RemoteAgentCaps {
   maxPayloadBytes: number;
   /** 是否支持 opaque 虚拟工作区；不支持时控制端必须拒绝启动以免泄露真实路径。 */
   virtualWorkspace?: boolean;
+  /**
+   * 供应商组：能接受同账号组所在电脑中转过来的受邀者任务(打开时带 relay 键就按受邀者隔离运行)。
+   * 不声明的电脑，组所在电脑不给它分受邀者的任务(否则受邀者会拿到主人级权限)。
+   */
+  guestRelay?: boolean;
 }
 
 export interface RemoteAgentReadResult {
@@ -334,6 +354,9 @@ export function parseRemoteAgentRequest(value: unknown): RemoteAgentRequest {
         mode: oneOf(v.mode, ['close', 'detach'] as const),
         reason: oneOf(v.reason, REMOTE_AGENT_TEARDOWN_REASONS),
       };
+    case 'forget':
+      if (typeof v.relay !== 'string' || !REMOTE_AGENT_RELAY_KEY_PATTERN.test(v.relay)) invalid();
+      return { op: 'forget', relay: v.relay };
     default:
       invalid();
   }
@@ -367,6 +390,7 @@ export function parseRemoteAgentCaps(value: unknown): RemoteAgentCaps {
     uploadChunkBytes: count(v.uploadChunkBytes, REMOTE_AGENT_UPLOAD_CHUNK_BYTES),
     maxPayloadBytes: count(v.maxPayloadBytes, Number.MAX_SAFE_INTEGER),
     ...(v.virtualWorkspace === true ? { virtualWorkspace: true } : {}),
+    ...(v.guestRelay === true ? { guestRelay: true } : {}),
   };
   if (caps.version < 1 || caps.maxRuns < 1 || caps.uploadChunkBytes < 1) invalid();
   return caps;

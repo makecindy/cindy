@@ -115,11 +115,14 @@ function WorkerAvatar({
   status,
   showAttentionDot = false,
   selected = false,
+  remote = false,
 }: {
   agent: WorkerInfo['agent'];
   status: WorkerInfo['status'];
   showAttentionDot?: boolean;
   selected?: boolean;
+  /** Worker 的 Agent 在另一台电脑或分享上运行(远程供应商)：与侧栏远程任务同款波纹。 */
+  remote?: boolean;
 }) {
   const { t } = useTranslation();
   const vendor = agentKindToVendor(agent);
@@ -133,6 +136,8 @@ function WorkerAvatar({
         vendor={vendor}
         size={vendor === 'cc' ? 14 : 13}
         running={status === 'running'}
+        // 右上角正显示未读点时由未读点占位，波纹暂不画(与侧栏任务图标同规则)。
+        remote={remote && !showAttentionDot}
         className={status === 'error' ? 'text-[var(--error-flat)]' : selectedIdleClassName}
       />
       {showAttentionDot && (
@@ -292,6 +297,7 @@ function WorkerSummary({
           status={worker.status}
           showAttentionDot={showAttentionDot}
           selected={selected}
+          remote={Boolean(worker.agentDeviceId)}
         />
         <span
           className={cn(
@@ -642,6 +648,7 @@ function WorkerLayoutMenu({
                             agent={w.agent}
                             status={w.status}
                             showAttentionDot={!isFocused && attention.has(w.workerId)}
+                            remote={Boolean(w.agentDeviceId)}
                           />
                           <span className="font-medium text-[var(--text-primary)]">{w.role}</span>
                           {shouldShowWorkerLabel(w.role, w.label) && (
@@ -1262,7 +1269,7 @@ export function RolePillDropdown({
           setOpenMode((mode) => (mode === 'pinned' ? null : 'pinned'));
         }}
       >
-        <WorkerAvatar agent={worker.agent} status={worker.status} />
+        <WorkerAvatar agent={worker.agent} status={worker.status} remote={Boolean(worker.agentDeviceId)} />
         <span className="font-medium text-[var(--text-primary)]">{worker.role}</span>
         {/* 折叠入口错误徽章(内联, 而非溢出角标 —— trigger 处在会裁剪的容器里, 角标会被切)。
             两种情形都显: (1) 当前 focused worker 自己出错; (2) 有"当前没显示出来的"出错
@@ -1336,6 +1343,7 @@ export function RolePillDropdown({
                         agent={w.agent}
                         status={w.status}
                         showAttentionDot={!isFocused && attention.has(w.workerId)}
+                        remote={Boolean(w.agentDeviceId)}
                       />
                       <span className="font-medium text-[var(--text-primary)]">{w.role}</span>
                       {shouldShowWorkerLabel(w.role, w.label) && (

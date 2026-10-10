@@ -196,10 +196,8 @@
   },
   "providerShare": {
     "entry": {
-      "manage": "共有を管理",
-      "manageWithPending_other": "共有を管理 · 未処理の申請 {{count}} 件",
-      "disabledInvocation": "共有するには、先に「リモート利用を許可」をオンにしてください",
-      "disabledRemoteControl": "共有するには、先に「リモート接続」でこのパソコンの操作を許可してください",
+      "label": "リモートと共有",
+      "pending_other": "未処理の共有申請 {{count}} 件",
       "remoteControlOff": "このパソコンはまだリモート操作を許可していないため、プロバイダーをリモートで利用したり共有したりできません。",
       "openRemoteControl": "「リモート接続」設定を開く",
       "descriptionOff": "オンにすると、あなたの他のパソコンと共有相手がこのプロバイダーのモデルを使えます。オフの間、既存の共有は一時的に使えなくなりますが、削除はされません。"
@@ -290,6 +288,7 @@
       "requestedAt": "共有リンクから申請: {{time}}",
       "pairingHint": "承認する前に、リンクを送ったのと同じ方法で「表示されているペアリングコードは？」と相手に確認できます。一致したら承認してください。",
       "callout": "承認すると、{{name}} は自分のセッションで {{provider}} のモデルを使えます。Agent はこのパソコンで実行され、使用量はあなたの {{provider}} に計上されます。「{{provider}} を共有」からいつでも停止または削除できます。",
+      "calloutClaudeEmail": "{{name}} が使用している間、Agent はあなたが Claude へのログインに使っているメールアドレスを確認できます。",
       "calloutUnknown": "申請者に心当たりがない場合は拒否してください。拒否するとこのリンクは無効になります。",
       "approve": "共有を承認",
       "reject": "申請を拒否",
@@ -298,12 +297,11 @@
     "apply": {
       "loading": "共有リンクを読み込み中…",
       "askTitle": "{{name}} が {{provider}} をあなたに共有しようとしています",
-      "providerOnDevice": "{{provider}} · {{device}}",
-      "factRuns": "Agent は {{name}} のパソコン上で {{provider}} を使って実行されます",
+      "factRuns": "Agent は {{name}} のパソコン、または {{name}} が手配した別のパソコンで {{provider}} を使って実行されます",
       "factRunsDetail": "使用量は {{name}} の {{provider}} に計上され、{{name}} はあなたの使用量を確認できます",
       "factFiles": "プロジェクトのファイルとコマンドは引き続きあなたのパソコンで実行されます",
       "factFilesDetail": "あなたのセッションの権限が適用されます",
-      "factPrivacy": "チャットの内容と Agent が読み取ったファイルの内容は {{name}} のパソコンを経由し、保存されます",
+      "factPrivacy": "チャットの内容と Agent が読み取ったファイルの内容は {{name}} のパソコンを経由し、実際にセッションを実行するパソコンに保存されます",
       "factPrivacyDetail": "{{name}} に表示されるのはあなたのニックネームとアバターだけです",
       "factApproval": "申請を送った後、{{name}} が承認すると有効になります",
       "factApprovalDetail": "{{name}} はこの共有をいつでも停止または削除できます",
@@ -372,7 +370,7 @@
         "open": "リンクを開く",
         "cancel": "キャンセル"
       },
-      "detailNote": "Agent は {{name}} のパソコンで動き、相手のログインとクォータを使います。タスクを新規作成するときにモデル一覧で選ぶと使えます。",
+      "detailNote": "Agent は {{name}} のパソコン、または {{name}} が手配した別のパソコンで動き、相手のログインとクォータを使います。チャットの内容と Agent が読み取ったファイルの内容は {{name}} のパソコンを経由し、実際にセッションを実行するパソコンに保存されます。タスクを新規作成するときにモデル一覧で選ぶと使えます。",
       "modelsTitle": "利用できるモデル",
       "modelsLoading": "相手が公開しているモデルを読み込んでいます…",
       "modelsRefused": "相手のパソコンが今この共有の読み込みを許可していません。リモート操作を許可していないか、このプロバイダーの「リモート利用を許可」がオフになっているか、相手の Cindy が起動したばかりでまだ準備できていない可能性があります。しばらくしてから再試行するか、相手にこの 2 つの設定を確認してもらってください。",
@@ -384,9 +382,9 @@
       "needsUpdateNote": "相手の Cindy が更新されると、この共有を使えるようになります。"
     },
     "picker": {
-      "deviceName": "{{device}} · {{owner}} からの共有",
       "unavailable": "利用できなくなった共有",
-      "hostOutdated": "共有した人のパソコンの Cindy が古いため、これらのモデルを読み込めません。相手に Cindy を更新してもらってから、もう一度お試しください。"
+      "hostOutdated": "共有した人のパソコンの Cindy が古いため、これらのモデルを読み込めません。相手に Cindy を更新してもらってから、もう一度お試しください。",
+      "numbered": "{{name}} ({{index}})"
     },
     "notification": {
       "requestTitle": "新しい共有の申請",
@@ -398,13 +396,6 @@
     }
   },
   "providerGroup": {
-    "row": {
-      "label": "プロバイダーグループ",
-      "description": "複数のパソコンのこのプロバイダーをまとめ、自動で割り当て、問題があれば別のパソコンに切り替えます",
-      "summary_other": "{{count}} 台のパソコン · {{strategy}}",
-      "setUp": "グループを設定",
-      "manage": "グループを管理"
-    },
     "page": {
       "title": "{{provider}} · リモートと共有",
       "shareTitle": "共有"
@@ -416,7 +407,7 @@
       "empty": "ほかのパソコンの {{provider}} を追加すると、セッションが自動でいずれかを選んで実行します",
       "loading": "プロバイダーグループを読み込み中…",
       "loadFailed": "プロバイダーグループを読み込めませんでした",
-      "note": "このパソコンのセッションは、Agent がグループに選ばれたパソコンで実行されます"
+      "note": "このパソコンのセッションと共有相手のセッションは、グループが選んだパソコンで Agent が実行されます"
     },
     "strategy": {
       "label": "グループの割り当て方式",
@@ -439,6 +430,15 @@
       "local": "このパソコン",
       "sourceDevice": "自分のほかのパソコン",
       "sourceShare": "{{name}} からの共有",
+      "shareComputer": "{{name}} のパソコン",
+      "shareComputerUnknown": "共有されたパソコン",
+      "quota": {
+        "loading": "クォータを読み込み中…",
+        "unavailable": "このパソコンのクォータを今は読み取れません",
+        "none": "このプロバイダーにはクォータの情報がありません",
+        "offline": "このパソコンはオフラインのため、クォータを読み取れません",
+        "share": "ほかの人から共有されたパソコンのクォータは表示されません"
+      },
       "runningCount_other": "{{count}} 件実行中",
       "limitAria": "{{name}} の同時実行数の上限",
       "limitOption_other": "上限 {{count}}",
@@ -467,7 +467,8 @@
         "description": "新しいセッションは割り当てられなくなります。すでにそこで実行中のセッションはそのパソコンに残ります。",
         "lastDescription": "グループ内の最後のパソコンです。外すと {{provider}} のプロバイダーグループは削除されます。",
         "confirm": "グループから外す"
-      }
+      },
+      "sourceGroupOwner": "グループを作成したパソコン"
     },
     "deleteConfirm": {
       "title": "{{provider}} のプロバイダーグループを削除しますか？",
@@ -2825,7 +2826,12 @@
         "statusReady": "利用可能",
         "detailNote": "Agent は {{device}} で動き、そのパソコンのログインとクォータを使います。タスクを新規作成するときにモデル一覧で選ぶと使えます。このプロバイダーを変更するには、そのパソコンの「設定 → モデルプロバイダー」を開いてください。",
         "modelsTitle": "利用できるモデル",
-        "modelsEmpty": "このプロバイダーには、そのパソコンで利用できるモデルがまだありません。"
+        "modelsEmpty": "このプロバイダーには、そのパソコンで利用できるモデルがまだありません。",
+        "rowLabelGroup": "{{provider}} · {{device}} · プロバイダーグループ",
+        "groupBadge_other": "プロバイダーグループ · {{count}} 台のパソコン",
+        "groupNote": "{{device}} はこのプロバイダーをプロバイダーグループにしています。モデル一覧で選んでタスクを新規作成すると、{{device}} がグループの割り当て方式に従って下のいずれかのパソコンにタスクを割り当て、そのパソコンで問題が起きたら別のパソコンに切り替えて続けます。グループを変更するには、{{device}} の「設定 → モデルプロバイダー」を開いてください。",
+        "groupMembersTitle": "グループ内のパソコン",
+        "groupMembersFailed": "グループ内のパソコンの状態を今は取得できません。"
       },
       "genericOAuth": {
         "subtitle": "サブスクリプションアカウント",
@@ -2873,6 +2879,7 @@
         "remoteAccess": {
           "label": "リモート利用を許可",
           "description": "オンにすると、あなたの他のパソコンと共有相手がこのプロバイダーのモデルを使えます。Agent はこのパソコン上で、このパソコンのサインインとクォータを使って実行されます。",
+          "descriptionGroup": "オンにすると、あなたの他のパソコンと共有相手がこのプロバイダーのモデルを使えます。Agent はプロバイダーグループが選んだパソコンで実行されます。",
           "ariaLabel": "他のパソコンと共有相手にこのプロバイダーの利用を許可",
           "writeFailed": "リモート利用の設定を保存できませんでした。もう一度お試しください。"
         },
@@ -8586,7 +8593,18 @@
         "workdirUnavailable": "{{name}} が作業ディレクトリを見つけられません",
         "stepFailed": "{{name}} はエラーのため、このステップを完了できませんでした",
         "stepTimeout": "{{name}} の作業に時間がかかりすぎたため、このステップを止めました",
-        "stepUnavailable": "{{name}} は現在利用できないため、このステップを進められません"
+        "stepUnavailable": "{{name}} は現在利用できないため、このステップを進められません",
+        "runtimeFailure": {
+          "IMAGE_INPUT_UNSUPPORTED": "{{name}}は返信できませんでした。現在のモデルは画像に対応していません。\n画像対応モデルに切り替えるか、「設定 → パーソナライズ → ビジョンブリッジ」を有効にして視覚モデルを設定し、メッセージを再送してください。",
+          "MODEL_UNAVAILABLE": "{{name}}は返信できませんでした。利用可能なモデルがありません。\n仲間の設定で接続済みの利用可能なモデルを選び、メッセージを再送してください。",
+          "AUTH_REQUIRED": "{{name}}は返信できませんでした。モデルの接続に再認証が必要です。\n設定でモデルのプロバイダーに再接続し、メッセージを再送してください。",
+          "RATE_LIMITED": "{{name}}は返信できませんでした。モデルへのリクエストが多すぎます。\nしばらく待ってメッセージを再送するか、別の利用可能なモデルを選んでください。",
+          "UPSTREAM_OVERLOADED": "{{name}}は返信できませんでした。モデルサービスが一時的に混雑しています。\nしばらく待ってメッセージを再送するか、別の利用可能なモデルを選んでください。",
+          "QUOTA_EXCEEDED": "{{name}}は返信できませんでした。モデルの使用量が上限に達しました。\nプロバイダーのクォータを確認するか、別の利用可能なモデルを選んでください。",
+          "NETWORK_ERROR": "{{name}}は返信できませんでした。ネットワーク接続に失敗しました。\nネットワークやプロキシを確認し、メッセージを再送してください。",
+          "RUNTIME_TIMEOUT": "{{name}}の返信がタイムアウトしました。\nメッセージを再送するか、別の利用可能なモデルを選んでください。",
+          "RUNTIME_ERROR": "{{name}}は今回は返信できませんでした。\nメッセージを再送してください。再度失敗する場合は、ログを確認して問題を報告してください。"
+        }
       },
       "settings": {
         "open": "グループの設定",
@@ -9400,7 +9418,9 @@
         "effortEndSmart": "高精度",
         "railSameEngine": "{{agent}} のみ",
         "crossEngineWarning": "エンジンを切り替えるとコンテキストが再構築され、内容が失われる場合があります",
-        "favoritesSyncFailed": "お気に入りを同期できません。選択画面を開き直してください。接続先の更新が必要な場合があります。"
+        "favoritesSyncFailed": "お気に入りを同期できません。選択画面を開き直してください。接続先の更新が必要な場合があります。",
+        "railRemoteProviderGroup": "{{provider}} · {{device}} · {{group}}",
+        "providerGroupLabel": "{{provider}} · {{group}}"
       }
     },
     "permissionSelector": {
@@ -9730,6 +9750,9 @@
       "cancelEdit": "編集をキャンセル",
       "saveEdit": "テキストを保存"
     },
+    "sharedProviderCredential": {
+      "description": "このタスクは共有されたプロバイダーを使っているため、Agent が読み取った内容は共有元のパソコンを経由します。この操作は認証情報のファイル（鍵や .env など）に関わるため、確認してから続行します。"
+    },
     "mediaDownload": {
       "title": "生成されたメディアをダウンロードしますか？",
       "description": "メディアが生成されました。以下のアドレスからダウンロードする必要があります。",
@@ -10038,8 +10061,25 @@
       "observedPeak": "ピーク",
       "tokenRate": "{{rate}} tok/s",
       "tokenRateUnit": "tok/s",
-      "tokenRateDescription": "直近の生成区間の速度。ツール実行と待機は除きます。",
-      "tokenCount": "{{tokens}} tok"
+      "tokenRateDescription": "リアルタイム速度とピークは推定値です。応答後に実使用量で補正し、ツール実行とリクエスト待機は除外します。",
+      "tokenCount": "{{tokens}} tok",
+      "estimatedValue": "約{{value}}",
+      "estimatedTokenRate": "約{{rate}} tok/s",
+      "responseWaiting": "待機 {{seconds}}秒",
+      "waitSeconds": "{{seconds}}秒",
+      "firstResponse": "初回応答",
+      "streamWait": "ストリーム内待機",
+      "turnWaitDescription": "ローカルでの実行開始から最初のテキスト、思考、ツール内容まで。ネットワーク遅延とは異なります。",
+      "streamWaitDescription": "SDK ストリーム開始から最初のコンテンツまで。それ以前のリクエスト待機は測定できません。",
+      "lastGeneration": "前回の生成",
+      "finalAverage": "最終平均",
+      "generationPaused": "生成を一時停止",
+      "responsePending": "応答待ち",
+      "responseFailed": "リクエスト失敗",
+      "responseCancelled": "停止済み",
+      "responseRetrying": "再試行中",
+      "responseGenerating": "生成中",
+      "toolRunning": "ツール実行中"
     },
     "shareImage": {
       "entry": "画像として共有",
@@ -10509,14 +10549,20 @@
           "auth": "{{from}} のログインが切れたため、{{to}} で続行しました",
           "unavailable": "{{from}} に接続できないため、{{to}} で続行しました",
           "overload": "{{from}} のサービスが混雑しているため、{{to}} で続行しました"
-        }
+        },
+        "agentReconnect": {
+          "named": "{{computer}} に再接続し、続行しました",
+          "unnamed": "元のパソコンに再接続し、続行しました"
+        },
+        "groupSwitch": "別のパソコンに自動で切り替えて続行しました"
       },
       "autoResumeSeparator": {
         "label": "接続が中断されたため、自動的に再開しました"
       },
       "autoResumePending": {
         "label": "再接続中",
-        "labelWithProgress": "再接続中 {{attempt}}/{{total}}"
+        "labelWithProgress": "再接続中 {{attempt}}/{{total}}",
+        "groupSwitch": "別のパソコンに切り替え中"
       },
       "agentSwitch": {
         "label": "{{from}} から {{to}} に切り替えました",
@@ -14953,5 +14999,84 @@
     "idempotencyConflict": "この再試行識別子は別のメッセージに使用されています。",
     "privateUnconfirmed": "個別メッセージの配信は未確認です。同じ識別子で再試行してください。",
     "verificationUnavailable": "グループの権限を確認できませんでした。接続が回復してから再試行してください。"
+  },
+  "teammateTodo": {
+    "title": "Todo",
+    "new": "Todoを追加",
+    "search": "Todoを検索",
+    "open": "未完了",
+    "done": "完了",
+    "hidden": "非表示 / あとで",
+    "empty": "Todoはありません",
+    "noMatch": "一致するTodoはありません",
+    "loading": "読み込み中…",
+    "retry": "再試行",
+    "error": "操作が完了しませんでした。再試行してください。",
+    "conflict": "Todoが更新されました。確認してから編集してください。",
+    "received": "受付済み",
+    "accepted": "進捗を見る",
+    "unknown": "進捗を確認",
+    "failed": "次の手順を再試行",
+    "view": "詳細を見る",
+    "evidence": "完了の根拠を見る",
+    "more": "その他の操作",
+    "discovered": "見つけた項目",
+    "assigned": "依頼",
+    "suggested": "提案",
+    "candidate": "日付を確認",
+    "overdue": "期限超過",
+    "today": "今日",
+    "next": "次の手順",
+    "outcome": "完了条件",
+    "value": "取り組む理由",
+    "sources": "情報源",
+    "associations": "関連",
+    "deadline": "期限",
+    "sourceDeadline": "情報源の期限",
+    "clearDate": "期限を解除",
+    "date": "日付",
+    "time": "時刻（任意）",
+    "zone": "タイムゾーン",
+    "save": "保存",
+    "cancel": "キャンセル",
+    "delete": "この項目を削除",
+    "mute": "この問題を今後提案しない",
+    "later": "あとで",
+    "until": "延期先",
+    "restore": "復元",
+    "reopen": "再開",
+    "complete": "完了にする",
+    "summary": "完了の根拠",
+    "confirmDate": "日付を確定",
+    "deadlineReason": "日付の確認が必要な理由",
+    "override": "設定した期限",
+    "reminder": "延期先",
+    "edit": "Todoを編集",
+    "name": "タイトル",
+    "progress": "進捗",
+    "link": "根拠のリンク（任意）",
+    "saved": "保存済み",
+    "page": "{{start}}–{{end}} / {{count}}",
+    "previous": "前へ",
+    "following": "次へ",
+    "order": "並び順",
+    "dueOrder": "期限順",
+    "createdOrder": "作成順",
+    "origin": "種類",
+    "all": "すべて",
+    "close": "閉じる",
+    "laterConflict": "延期しても期限は変わりません",
+    "legacyEvidence": "旧記録の完了の根拠は未確認です",
+    "noPermission": "未接続または未承認の情報源です",
+    "copy": "コピー",
+    "undo": "元に戻す",
+    "history": "完了履歴",
+    "clockNote": "日付のみの期限は表示されたタイムゾーンの一日の終わりです。日時にはタイムゾーンが保持されます。",
+    "deleted": "削除済み",
+    "muted": "今後提案しない",
+    "deferred": "延期中",
+    "continue": "続ける",
+    "addTime": "時刻を追加",
+    "dateOnly": "日付のみ"
   }
 }

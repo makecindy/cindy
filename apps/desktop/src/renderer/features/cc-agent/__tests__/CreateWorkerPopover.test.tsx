@@ -88,6 +88,8 @@ const mocks = vi.hoisted(() => ({
   sidebarWindow: false,
   confirm: vi.fn(async () => true),
   directoryPath: '/Users/demo/Interviews',
+  // useDeviceProviders 最近一次读的电脑(Worker 的模型目录按哪台读)。
+  deviceProvidersFor: undefined as string | undefined,
 }));
 
 vi.mock('@/components/new-chat/AddRemoteProjectDialog', () => ({
@@ -128,7 +130,8 @@ vi.mock('@/hooks/useProviders', () => ({
 }));
 
 vi.mock('@/hooks/useDeviceProviders', () => ({
-  useDeviceProviders: () => ({
+  useDeviceProviders: (deviceId?: string) => ({
+    ...((mocks.deviceProvidersFor = deviceId), {}),
     unsupported: mocks.remoteUnsupported,
     providers: mocks.remoteProviders.map((provider) => ({
       ...provider,
@@ -162,9 +165,14 @@ vi.mock('@/components/new-chat/ModelSelector', () => ({
     onFastModeChange?: (enabled: boolean) => void;
     onNavigateToProviders?: () => void;
     modelMemory?: unknown;
+    remoteAgent?: { selectedDeviceId: string | null; homeDeviceId?: string; devices: Array<{ deviceId: string }> };
+    agentDevice?: { deviceId: string } | null;
   }) => (
     <div
       data-testid="model-selector"
+      data-remote-selected={props.remoteAgent ? String(props.remoteAgent.selectedDeviceId) : 'none'}
+      data-remote-home={props.remoteAgent?.homeDeviceId ?? ''}
+      data-agent-device={props.agentDevice?.deviceId ?? ''}
       // onProviderChange 是「供应商分段模式」的开关(面板内部 sourcesEnabled 判据),
       // fastMode/onFastModeChange 是行级配置列的 Fast 开关(替代外置 FastModeToggle)。
       data-sources-enabled={String(props.onProviderChange !== undefined)}
@@ -178,6 +186,9 @@ vi.mock('@/components/new-chat/ModelSelector', () => ({
       {props.modelId}
       <button data-testid="pick-claude-model" onClick={() => props.onUnifiedSelect?.({ engine: 'cc', modelId: 'claude-sonnet-4-6', providerId: 'anthropic', effort: 'high', fast: false, favoriteUid: null })} />
       <button data-testid="pick-codex-config" onClick={() => props.onUnifiedSelect?.({ engine: 'codex', modelId: 'gpt-5.5', providerId: 'xd', effort: 'low', fast: false, favoriteUid: null })} />
+      {/* 远程供应商栏里的行带着它所属的电脑(null = 任务所在电脑)。 */}
+      <button data-testid="pick-remote-codex" onClick={() => (props.onUnifiedSelect as ((selection: unknown) => void) | undefined)?.({ engine: 'codex', modelId: 'codex/gpt-5.5', providerId: 'openai', effort: 'high', fast: false, favoriteUid: null, agentDevice: { deviceId: 'agent-pc', name: 'Agent PC' } })} />
+      <button data-testid="pick-home-codex" onClick={() => (props.onUnifiedSelect as ((selection: unknown) => void) | undefined)?.({ engine: 'codex', modelId: 'codex/gpt-5.5', providerId: 'xd', effort: 'high', fast: false, favoriteUid: null, agentDevice: null })} />
       <button
         type="button"
         data-testid="pick-openai-row"
@@ -1829,6 +1840,132 @@ describe('CreateWorkerPopover execution device', () => {
         }),
       ),
     );
+  });
+});
+
+// 远程供应商与本机供应商一视同仁(2026-10-10)：Worker 的 Agent 可以放到另一台电脑或分享上。
+describe('CreateWorkerPopover remote providers', () => {
+  const devices = [{ deviceId: 'agent-pc', name: 'Agent PC' }];
+  const submit = () => fireEvent.click(screen.getByRole('button', { name: 'orca.createWorker.submit' }));
+
+  beforeEach(() => {
+    window.localStorage.clear();
+    resetProviderModelMemoryForTest();
+    mocks.modelsByAgent.codex = [model('codex/gpt-5.5')];
+    mocks.capabilitiesByAgent.codex = { availableModels: [{ id: 'codex/gpt-5.5' }] };
+    mocks.localProviders = [];
+    mocks.remoteProviders = [];
+    mocks.remoteUnsupported = false;
+    mocks.deviceProvidersFor = undefined;
+  });
+
+  afterEach(() => cleanup());
+
+  it("reads the Lead's remote computer by default and submits that location", async () => {
+    const onCreate = vi.fn();
+    render(
+      <CreateWorkerPopover open onClose={vi.fn()} onCreate={onCreate} leadAgentDeviceId="agent-pc" remoteAgentDevices={devices} />,
+    );
+    // 模型目录按 Lead 的 Agent 所在电脑读，面板列出远程供应商并选中那台，按钮带远程标识。
+    expect(mocks.deviceProvidersFor).toBe('agent-pc');
+    const selector = screen.getByTestId('model-selector');
+    expect(selector.dataset.remoteSelected).toBe('agent-pc');
+    expect(selector.dataset.agentDevice).toBe('agent-pc');
+    submit();
+    await waitFor(() => expect(onCreate).toHaveBeenCalledWith(expect.objectContaining({ agentDeviceId: 'agent-pc' })));
+  });
+
+  it('moves the Worker between this computer and another one from the panel', async () => {
+    const onCreate = vi.fn();
+    render(
+      <CreateWorkerPopover open onClose={vi.fn()} onCreate={onCreate} remoteAgentDevices={devices} />,
+    );
+    expect(mocks.deviceProvidersFor).toBeUndefined();
+    expect(screen.getByTestId('model-selector').dataset.remoteSelected).toBe('null');
+
+    fireEvent.click(screen.getByTestId('pick-remote-codex'));
+    expect(mocks.deviceProvidersFor).toBe('agent-pc');
+    // 那台电脑的档位记在那台的那份记忆里，不写本机的 Worker 偏好。
+    submit();
+    await waitFor(() => expect(onCreate).toHaveBeenLastCalledWith(expect.objectContaining({
+      agentDeviceId: 'agent-pc', model: 'codex/gpt-5.5',
+    })));
+    expect(window.localStorage.getItem('workerCreationPrefs') ?? '').not.toContain('openai');
+
+    fireEvent.click(screen.getByTestId('pick-home-codex'));
+    expect(mocks.deviceProvidersFor).toBeUndefined();
+    submit();
+    await waitFor(() => expect(onCreate).toHaveBeenLastCalledWith(expect.objectContaining({ agentDeviceId: null })));
+  });
+
+  it("keeps following the Lead's location until the user picks one, without wiping the form", async () => {
+    const onCreate = vi.fn();
+    const view = render(
+      <CreateWorkerPopover open onClose={vi.fn()} onCreate={onCreate} leadAgentDeviceId={null} remoteAgentDevices={devices} />,
+    );
+    fireEvent.change(screen.getByPlaceholderText('orca.createWorker.initialTaskPlaceholder'), {
+      target: { value: 'review the diff' },
+    });
+    // Lead 的位置稍后才解析出来：Worker 的位置跟过去，已填的初始任务不清掉。
+    view.rerender(
+      <CreateWorkerPopover open onClose={vi.fn()} onCreate={onCreate} leadAgentDeviceId="agent-pc" remoteAgentDevices={devices} />,
+    );
+    expect(screen.getByTestId('model-selector').dataset.remoteSelected).toBe('agent-pc');
+    submit();
+    await waitFor(() => expect(onCreate).toHaveBeenCalledWith(expect.objectContaining({
+      agentDeviceId: 'agent-pc', initialTask: 'review the diff',
+    })));
+    // 用户自己选过之后不再跟着变。
+    fireEvent.click(screen.getByTestId('pick-home-codex'));
+    view.rerender(
+      <CreateWorkerPopover open onClose={vi.fn()} onCreate={onCreate} leadAgentDeviceId="other-pc" remoteAgentDevices={devices} />,
+    );
+    expect(screen.getByTestId('model-selector').dataset.remoteSelected).toBe('null');
+  });
+
+  it('blocks creation instead of dropping a chosen location the computer can no longer accept', () => {
+    const view = render(
+      <CreateWorkerPopover open onClose={vi.fn()} onCreate={vi.fn()} remoteAgentDevices={devices} />,
+    );
+    fireEvent.click(screen.getByTestId('pick-remote-codex'));
+    // 候选消失(例如任务所在电脑降级)：选中的位置发不出去，不能悄悄按 Lead 的位置建。
+    view.rerender(<CreateWorkerPopover open onClose={vi.fn()} onCreate={vi.fn()} />);
+    const button = screen.getByRole('button', { name: 'orca.createWorker.submit' }) as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+  });
+
+  it('does not offer Worker locations on a controlled computer that cannot honor them', async () => {
+    const onCreate = vi.fn();
+    mocks.capabilitiesByAgent.codex = {
+      availableModels: [{ id: 'codex/gpt-5.5' }],
+      supportsOrcaWorkerPermissionMode: true,
+    };
+    render(
+      <CreateWorkerPopover open onClose={vi.fn()} onCreate={onCreate} deviceId="dev-1" remoteAgentDevices={devices} />,
+    );
+    expect(screen.getByTestId('model-selector').dataset.remoteSelected).toBe('none');
+    submit();
+    await waitFor(() => expect(onCreate).toHaveBeenCalled());
+    expect(onCreate.mock.calls[0]![0]).not.toHaveProperty('agentDeviceId');
+  });
+
+  it('lists the controlled computer as home when it supports Worker locations', () => {
+    mocks.capabilitiesByAgent.codex = {
+      availableModels: [{ id: 'codex/gpt-5.5' }],
+      supportsOrcaWorkerPermissionMode: true,
+    } as typeof mocks.capabilitiesByAgent.codex;
+    // 整台电脑的协议位按那台一定注册的 Claude Code 读，不按 Worker 选的 Agent 读。
+    mocks.capabilitiesByAgent['claude-code'] = {
+      ...mocks.capabilitiesByAgent['claude-code'],
+      supportsOrcaWorkerPermissionMode: true,
+      supportsOrcaWorkerAgentDevice: true,
+    } as typeof mocks.capabilitiesByAgent['claude-code'];
+    render(
+      <CreateWorkerPopover open onClose={vi.fn()} onCreate={vi.fn()} deviceId="dev-1" remoteAgentDevices={devices} />,
+    );
+    const selector = screen.getByTestId('model-selector');
+    expect(selector.dataset.remoteSelected).toBe('null');
+    expect(selector.dataset.remoteHome).toBe('dev-1');
   });
 });
 

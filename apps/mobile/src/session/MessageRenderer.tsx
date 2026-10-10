@@ -5323,11 +5323,19 @@ function MobileAutoResumeActionRow({
     );
   }
 
-  const label = info.agentSwitch
+  const label = info.groupSwitchPending
+    ? t('message.systemCard.autoResume.groupSwitchPending')
+    : info.agentSwitch
     ? t(`message.systemCard.autoResume.agentSwitch.${info.agentSwitch.cause}`, {
         from: info.agentSwitch.from,
         to: info.agentSwitch.to,
       })
+    : info.agentReconnect
+    ? info.agentReconnect.computer
+      ? t('message.systemCard.autoResume.agentReconnect.named', { computer: info.agentReconnect.computer })
+      : t('message.systemCard.autoResume.agentReconnect.unnamed')
+    : info.groupSwitch
+    ? t('message.systemCard.autoResume.groupSwitch')
     : info.usageLimitReset
     ? t('message.systemCard.autoResume.usageReset')
     : state === 'live'

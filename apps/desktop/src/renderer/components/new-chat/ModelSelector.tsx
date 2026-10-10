@@ -94,6 +94,9 @@ import {
 import { useDevicesProviders } from '@/hooks/useDevicesProviders';
 import { RemoteSourceMark } from '@/components/icons/RemoteSourceMark';
 import { buildUnifiedRail, remoteAgentProviders } from './unifiedModelSelection';
+import { collectRemoteProviderGroups, remoteProviderEntryKey } from '@/lib/remoteProviderGroups';
+import { useLocalProviderGroups } from '@/features/provider-group/useLocalProviderGroups';
+import { readProviderShareGroupSize } from '@cindy/device-link';
 import { modelPriceDiscountLabelValues, modelPriceDetailRows } from '@/lib/modelPriceFormat';
 import { resolveModelPricePresentation } from '@/lib/modelPricePresentation';
 import {
@@ -1536,12 +1539,47 @@ function ModelSelectorContentView({
     [remoteAgentDevices],
   );
   const remoteDeviceCatalogs = useDevicesProviders(remoteAgentDeviceIds);
+  // 任务所在电脑那一格:本机任务用本机目录与可见性偏好;被控电脑上的任务用被控电脑的目录与它的
+  // 可见性快照(顺序沿用被控端快照,不套本机排序,同远程控制)。
+  const homeDeviceProviders = useDeviceProviders(homeDeviceId);
+  const localProviderGroups = useLocalProviderGroups();
+  // 供应商组(provider-groups.md §10)：组里的电脑与分享收起，只列组那一项。组可以在其他电脑上
+  // (看它们目录里的组摘要)，也可以是任务所在电脑自己建的(本机任务读本机设置，被控电脑上的任务看那台的
+  // 目录)。当前正在用的那一项不收起。
+  const remoteProviderGroups = useMemo(
+    () => collectRemoteProviderGroups(
+      [
+        ...(remoteAgentDevices ?? []).flatMap((device) => {
+          const catalog = remoteDeviceCatalogs.get(device.deviceId);
+          return catalog ? [{ deviceId: device.deviceId, providers: catalog.providers }] : [];
+        }),
+        ...(homeDeviceId ? [{ deviceId: homeDeviceId, providers: homeDeviceProviders.providers }] : []),
+      ],
+      remoteAgentDeviceId && currentProviderId
+        ? [remoteProviderEntryKey(remoteAgentDeviceId, currentProviderId)]
+        : [],
+      homeDeviceId ? [] : Object.values(localProviderGroups),
+    ),
+    [
+      remoteAgentDevices,
+      remoteDeviceCatalogs,
+      remoteAgentDeviceId,
+      currentProviderId,
+      homeDeviceId,
+      homeDeviceProviders.providers,
+      localProviderGroups,
+    ],
+  );
   const remoteAgentGroups = useMemo(() => {
     if (!remoteAgentDevices) return [];
     return remoteAgentDevices.flatMap((device) => {
       const catalog = remoteDeviceCatalogs.get(device.deviceId);
       // 只列那台电脑开了「允许被远程调用」的供应商；一个都没开的电脑整段不出现。
-      const shared = catalog ? remoteAgentProviders(catalog.providers) : [];
+      const shared = catalog
+        ? remoteAgentProviders(catalog.providers).filter(
+          (provider) => !remoteProviderGroups.hidden.has(remoteProviderEntryKey(device.deviceId, provider.id)),
+        )
+        : [];
       if (!catalog || shared.length === 0) return [];
       const entries = unifiedModelEntries({
         providers: shared,
@@ -1555,11 +1593,8 @@ function ModelSelectorContentView({
         ? [{ deviceId: device.deviceId, providers: shared, providerIds }]
         : [];
     });
-  }, [remoteAgentDevices, remoteDeviceCatalogs]);
+  }, [remoteAgentDevices, remoteDeviceCatalogs, remoteProviderGroups]);
   const hasRemoteAgent = remoteAgent !== undefined;
-  // 任务所在电脑那一格:本机任务用本机目录与可见性偏好;被控电脑上的任务用被控电脑的目录与它的
-  // 可见性快照(顺序沿用被控端快照,不套本机排序,同远程控制)。
-  const homeDeviceProviders = useDeviceProviders(homeDeviceId);
   const homeProviders = homeDeviceId ? homeDeviceProviders.providers : localProviders.providers;
   const homeModelVisibilityOverrides = homeDeviceProviders.modelVisibilityOverrides;
   const remoteAgentLocalRailItems = useMemo(() => {
@@ -1583,12 +1618,27 @@ function ModelSelectorContentView({
     localProviders.providerOrder,
     visibilityVersion,
   ]);
+  // 供应商组在分组标题与左栏提示里带上台数(provider-groups.md §10)：「Anthropic · 供应商组 · 2 台电脑」。
+  // 只算任务所在电脑就是本机时本机建的组；被控电脑上的任务看那台的目录，不在这里标。
+  const localGroupsApply = !deviceId && !homeDeviceId && !providersOverride;
+  const withLocalGroupSize = useCallback(
+    (providerId: string, label: string): string => {
+      const config = localGroupsApply ? localProviderGroups[providerId] : undefined;
+      return config
+        ? t('newChat.modelSelector.unified.providerGroupLabel', {
+          provider: label,
+          group: t('settings.providers.remote.groupBadge', { count: config.members.length }),
+        })
+        : label;
+    },
+    [localGroupsApply, localProviderGroups, t],
+  );
   const remoteAgentLocalLabel = useCallback(
     (providerId: string): string => {
       const provider = homeProviders.find((entry) => entry.id === providerId);
-      return provider ? providerDisplayName(provider, t) : providerId;
+      return withLocalGroupSize(providerId, provider ? providerDisplayName(provider, t) : providerId);
     },
-    [homeProviders, t],
+    [homeProviders, t, withLocalGroupSize],
   );
   const remoteAgentLabelOf = useCallback(
     (targetDeviceId: string, providerId: string): string => {
@@ -1596,12 +1646,22 @@ function ModelSelectorContentView({
       const provider = remoteAgentGroups
         .find((group) => group.deviceId === targetDeviceId)
         ?.providers.find((entry) => entry.id === providerId);
-      return t('newChat.modelSelector.unified.railRemoteProvider', {
+      // 组只写有几台，不写是哪几台(2026-10-10 用户要求)；分享来的组目录里本来就只有台数。
+      const groupSize =
+        remoteProviderGroups.groups.get(remoteProviderEntryKey(targetDeviceId, providerId))?.members.length
+        ?? readProviderShareGroupSize(provider);
+      const values = {
         provider: provider ? providerDisplayName(provider, t) : providerId,
         device: device?.name || targetDeviceId,
-      });
+      };
+      return groupSize != null
+        ? t('newChat.modelSelector.unified.railRemoteProviderGroup', {
+          ...values,
+          group: t('settings.providers.remote.groupBadge', { count: groupSize }),
+        })
+        : t('newChat.modelSelector.unified.railRemoteProvider', values);
     },
-    [remoteAgentDevices, remoteAgentGroups, t],
+    [remoteAgentDevices, remoteAgentGroups, remoteProviderGroups, t],
   );
 
   // 官方默认推荐 → 一次性**种子收藏**(Chris 2026-08-16 裁决,替代列表里的「默认」
@@ -2985,6 +3045,11 @@ function ModelSelectorContentView({
     },
     [providers, t],
   );
+  // 分组标题与左栏提示：本机建的组带上台数，每行的来源名不带。
+  const unifiedProviderHeading = useCallback(
+    (providerId: string): string => withLocalGroupSize(providerId, unifiedProviderLabel(providerId)),
+    [unifiedProviderLabel, withLocalGroupSize],
+  );
   // 档名多语言按**该行自己的引擎**取 capabilities 兜底名(不同 agent 的同名档可能有
   // 各自的英文名),优先仍是 i18n 词表 effortLevels.*。
   const unifiedEffortLabel = useCallback(
@@ -3273,6 +3338,8 @@ function ModelSelectorContentView({
                 ? (providerId: string) => remoteAgentLabelOf(remoteBrowse.deviceId, providerId)
                 : unifiedProviderLabel
             }
+            // 供应商组的分组标题与左栏提示带上台数(其他电脑的组已在 remoteAgentLabelOf 里带上)。
+            {...(remoteBrowse ? {} : { providerHeading: unifiedProviderHeading })}
             effortLabelOf={unifiedEffortLabel}
             {...(constrainedListMaxHeight !== undefined
               ? { listMaxHeight: constrainedListMaxHeight }

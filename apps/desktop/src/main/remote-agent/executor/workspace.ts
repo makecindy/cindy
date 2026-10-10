@@ -246,7 +246,9 @@ export class ExecutorWorkspace {
     if (!aliases.length) return command;
     const patterns = aliases.map((alias) => alias.from.replace(/[\\/]+$/, '').split(/[\\/]/)
       .map((part) => part.replace(/[.*+?^$()|[\\]{}]/g, '\\$&')).join('[/\\\\]'));
-    const pattern = new RegExp('(^|[^A-Za-z0-9_])(' + patterns.join('|') + ')(?=$|[^A-Za-z0-9_])([/\\\\][^\\s\\x60;:|&)<>}\\]]*|)', 'gi');
+    // 路径尾部遇到引号即止：闭合引号属于外层 shell 语法，吞进路径会被按引号上下文转义
+    // ('…mjs' → '…mjs'\'')，留下未闭合的引号。
+    const pattern = new RegExp('(^|[^A-Za-z0-9_])(' + patterns.join('|') + ')(?=$|[^A-Za-z0-9_])([/\\\\][^\\s\\x60\\x27\\x22;:|&)<>}\\]]*|)', 'gi');
     const quoteContext = (input: string, end: number): 'none' | 'single' | 'double' => {
       let quote: 'none' | 'single' | 'double' = 'none';
       let escaped = false;

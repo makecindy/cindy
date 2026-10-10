@@ -8,11 +8,13 @@ import type { ProviderView } from '@cindy/model-providers';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { ProviderGroupConfig, ProviderGroupMember } from '../../../shared/providerGroup';
-import type { ProviderGroupBinding } from '../bindings';
-import type { ProviderGroupDirectory, ResolvedProviderGroupMember } from '../directory';
+import type { ProviderGroupBinding, ProviderGroupRef } from '../bindings';
+import type { ProviderGroupDirectory, ResolvedMemberState, ResolvedProviderGroupMember } from '../directory';
+import { createProviderGroupGuestSwitch, PROVIDER_GROUP_SWITCH_OFFER_TTL_MS } from '../guestSwitch';
 import { createProviderGroupRouter, PROVIDER_GROUP_DEFAULT_COOLDOWN_MS } from '../router';
 import {
   createProviderGroupService,
+  PROVIDER_GROUP_RECONNECT_MAX_ATTEMPTS,
   PROVIDER_GROUP_SUPERSEDED_ERROR,
   PROVIDER_GROUP_UNAVAILABLE_ERROR,
   type ProviderGroupServiceDeps,
@@ -58,6 +60,13 @@ function harness(options: {
   };
   const offline = new Set(options.offline ?? []);
   const bindings = new Map<string, ProviderGroupBinding>();
+  /** 因组内电脑被移出或组被删除而解除过的任务 → 那个组。 */
+  const released = new Map<string, ProviderGroupRef>();
+  // 现读那台的状态：默认与组内电脑状态同一份离线名单，单测按需逐次指定。
+  const probe = vi.fn(async (agentDeviceId: string, providerId: string): Promise<ResolvedMemberState> => {
+    const found = config.members.find((m) => m.agentDeviceId === agentDeviceId && m.providerId === providerId);
+    return found && offline.has(found.key) ? 'offline' : 'ok';
+  });
   const directory: ProviderGroupDirectory = {
     async resolveMembers(_providerId, current) {
       return current.members.map((m): ResolvedProviderGroupMember => offline.has(m.key)
@@ -67,6 +76,11 @@ function harness(options: {
     async listCandidates() {
       return [];
     },
+    async readDeviceCatalog() {
+      return [];
+    },
+    probe,
+    memberLabel: (m) => m.label ?? m.key,
     invalidate: vi.fn(),
   };
   const router = createProviderGroupRouter({
@@ -95,6 +109,13 @@ function harness(options: {
       if (binding) bindings.set(id, { ...binding, at: now });
       else bindings.delete(id);
     }),
+    isReleased: (id: string, group: ProviderGroupRef) => {
+      const entry = released.get(id);
+      return entry?.providerId === group.providerId && (entry.groupDeviceId ?? null) === (group.groupDeviceId ?? null);
+    },
+    markReleased: vi.fn(async (id: string, group: ProviderGroupRef) => {
+      released.set(id, group);
+    }),
     readSessionRow: vi.fn(async () => row),
     resolveImplicitProvider: vi.fn(async () => 'anthropic'),
     persistRoute: vi.fn(async (_id: string, route: { agentDeviceId: string | null; providerId: string | null }) => {
@@ -112,18 +133,21 @@ function harness(options: {
       row.providerId = route.providerId;
     }),
     isTurnRunning: vi.fn(() => false),
+    hasLiveSession: vi.fn((_id: string) => true),
     continueSession: vi.fn(async () => 'resumed' as const),
     fallback: vi.fn(),
     readResetAt: vi.fn(() => null),
     now: () => now,
+    // 等原电脑恢复时的退避不真等。
+    sleep: vi.fn(async (_ms: number) => {}),
     log: { info: vi.fn(), warn: vi.fn() },
   } satisfies ProviderGroupServiceDeps;
   const service = createProviderGroupService(deps);
-  return { service, deps, row, bindings, router, config, offline, advance: (ms: number) => { now += ms; } };
+  return { service, deps, row, bindings, released, router, config, offline, probe, advance: (ms: number) => { now += ms; } };
 }
 
 async function flush() {
-  for (let i = 0; i < 20; i++) await Promise.resolve();
+  for (let i = 0; i < 60; i++) await Promise.resolve();
 }
 
 describe('assignBeforeStart', () => {
@@ -162,6 +186,52 @@ describe('assignBeforeStart', () => {
     expect(await h.service.assignBeforeStart({ sessionId: 's1', agentKind: 'claude-code', model: MODEL })).toBeNull();
     expect(h.deps.persistRoute).not.toHaveBeenCalled();
     expect(h.bindings.get('s1')?.memberKey).toBe('local');
+  });
+
+  it('keeps an old task on its current computer but returns a start context after its live session is gone', async () => {
+    const h = harness({ row: { sdkSessionId: 'native-1' } });
+    h.deps.hasAssistantHistory.mockResolvedValue(true);
+    h.deps.hasLiveSession.mockReturnValue(false);
+
+    const context = await h.service.assignBeforeStart({
+      sessionId: 's1',
+      agentKind: 'claude-code',
+      model: MODEL,
+    });
+
+    expect(context).toMatchObject({
+      member: { key: LOCAL.key },
+      route: { agentDeviceId: null, providerId: LOCAL.providerId },
+    });
+    expect(h.bindings.get('s1')?.memberKey).toBe(LOCAL.key);
+
+    const next = await h.service.nextAfterStartFailure(
+      context!,
+      new Error('[REMOTE_AGENT_UNAVAILABLE] remote computer is gone'),
+    );
+    expect(next?.member.key).toBe(MINI.key);
+    expect(h.deps.persistRoute).toHaveBeenCalledWith('s1', {
+      agentDeviceId: MINI.agentDeviceId,
+      providerId: MINI.providerId,
+    });
+  });
+
+  it('does not return a start context for a released old task even after its live session is gone', async () => {
+    const h = harness({ row: { sdkSessionId: 'native-1' } });
+    h.deps.hasAssistantHistory.mockResolvedValue(true);
+    h.deps.hasLiveSession.mockReturnValue(false);
+    h.released.set('s1', { providerId: 'anthropic', groupDeviceId: null });
+
+    expect(await h.service.assignBeforeStart({ sessionId: 's1', agentKind: 'claude-code', model: MODEL })).toBeNull();
+    expect(h.bindings.has('s1')).toBe(false);
+  });
+
+  it('does not take back a task released when this computer left the group or the group was deleted', async () => {
+    const h = harness();
+    h.deps.hasAssistantHistory.mockResolvedValue(true);
+    h.released.set('s1', { providerId: 'anthropic', groupDeviceId: null });
+    expect(await h.service.assignBeforeStart({ sessionId: 's1', agentKind: 'claude-code', model: MODEL })).toBeNull();
+    expect(h.bindings.has('s1')).toBe(false);
   });
 
   it('does nothing for providers without a group', async () => {
@@ -203,6 +273,48 @@ describe('assignBeforeStart', () => {
     h.bindings.set('s1', { providerId: 'anthropic', memberKey: MINI.key, at: 1 });
     expect(await h.service.assignBeforeStart({ sessionId: 's1', agentKind: 'claude-code', model: MODEL })).toBeNull();
     expect(h.bindings.has('s1')).toBe(false);
+    // 挪到组外不算解除：挪回组那一项时照常纳入。
+    expect(h.released.size).toBe(0);
+  });
+
+  it('remembers a task whose computer was removed from the group, so it is not taken back', async () => {
+    const h = harness({ members: [LOCAL, STUDIO], row: { agentDeviceId: 'mini', providerId: MINI.providerId, sdkSessionId: 'x' } });
+    h.bindings.set('s1', { providerId: 'anthropic', memberKey: MINI.key, at: 1 });
+    expect(await h.service.assignBeforeStart({ sessionId: 's1', agentKind: 'claude-code', model: MODEL })).toBeNull();
+    expect(h.bindings.has('s1')).toBe(false);
+    expect(h.released.get('s1')).toEqual({ providerId: 'anthropic', groupDeviceId: null });
+  });
+
+  it('assigns a brand-new collaboration Worker from its start options before its task record exists', async () => {
+    const h = harness({ offline: ['local'] });
+    h.deps.readSessionRow.mockResolvedValue(null as unknown as ProviderGroupSessionRow);
+    const context = await h.service.assignBeforeStart({
+      sessionId: 'w1',
+      agentKind: 'claude-code',
+      model: MODEL,
+      startRow: { ...h.row },
+    });
+    expect(context?.member.key).toBe(MINI.key);
+    expect(context?.route).toEqual({ agentDeviceId: 'mini', providerId: 'anthropic-1a2b3c4d' });
+    expect(h.bindings.get('w1')).toMatchObject({ providerId: 'anthropic', memberKey: MINI.key });
+  });
+
+  it('prefers the task record over start options once the record exists', async () => {
+    const h = harness({ row: { sdkSessionId: 'native-1' } });
+    expect(await h.service.assignBeforeStart({
+      sessionId: 's1',
+      agentKind: 'claude-code',
+      model: MODEL,
+      startRow: { ...h.row, sdkSessionId: null },
+    })).toBeNull();
+    expect(h.deps.persistRoute).not.toHaveBeenCalled();
+  });
+
+  it('does not assign without a record or start options', async () => {
+    const h = harness();
+    h.deps.readSessionRow.mockResolvedValue(null as unknown as ProviderGroupSessionRow);
+    expect(await h.service.assignBeforeStart({ sessionId: 's1', agentKind: 'claude-code', model: MODEL })).toBeNull();
+    expect(h.deps.writeBinding).not.toHaveBeenCalled();
   });
 });
 
@@ -283,12 +395,43 @@ describe('onTurnError (automatic switch)', () => {
     expect(off.deps.fallback).toHaveBeenCalledTimes(1);
   });
 
-  it('leaves tasks that are not group-bound to the existing handling', async () => {
-    const h = harness();
-    h.service.onTurnError('s1', { sdkError: 'rate_limit' }, 1);
+  it('leaves tasks that are not in any group to the existing handling', async () => {
+    for (const row of [{ providerId: 'openai' }, { agentDeviceId: 'other', providerId: 'anthropic' }]) {
+      const h = harness({ row });
+      h.service.onTurnError('s1', { sdkError: 'rate_limit' }, 1);
+      await flush();
+      expect(h.deps.fallback).toHaveBeenCalledTimes(1);
+      expect(h.deps.leaseRecovery).not.toHaveBeenCalled();
+      expect(h.bindings.size).toBe(0);
+    }
+  });
+
+  it('takes in a task that was already running here before the group existed, then moves it', async () => {
+    const h = harness({ row: { sdkSessionId: 'native-1' } });
+    h.service.onTurnError('s1', { sdkError: 'rate_limit' }, 7);
     await flush();
-    expect(h.deps.fallback).toHaveBeenCalledTimes(1);
-    expect(h.deps.leaseRecovery).not.toHaveBeenCalled();
+    expect(h.router.coolingUntil('anthropic', 'local')).not.toBeNull();
+    expect(h.deps.switchAgentLocation).toHaveBeenCalledWith(
+      's1',
+      expect.objectContaining({ agentDeviceId: 'mini', providerId: MINI.providerId }),
+      expect.anything(),
+    );
+    expect(h.bindings.get('s1')?.memberKey).toBe(MINI.key);
+    expect(h.deps.fallback).not.toHaveBeenCalled();
+  });
+
+  it('does not take in a released or ineligible task when it fails', async () => {
+    const released = harness({ row: { sdkSessionId: 'native-1' } });
+    released.released.set('s1', { providerId: 'anthropic', groupDeviceId: null });
+    const ineligible = harness({ row: { sdkSessionId: 'native-1' } });
+    ineligible.deps.isFailoverEligible.mockResolvedValue(false);
+    for (const h of [released, ineligible]) {
+      h.service.onTurnError('s1', { sdkError: 'rate_limit' }, 1);
+      await flush();
+      expect(h.bindings.size).toBe(0);
+      expect(h.deps.switchAgentLocation).not.toHaveBeenCalled();
+      expect(h.deps.fallback).toHaveBeenCalledTimes(1);
+    }
   });
 
   it('does nothing when the user already took over the error', async () => {
@@ -455,11 +598,167 @@ describe('onTurnError (automatic switch)', () => {
   });
 });
 
+describe('waiting for a computer that cannot be reached before switching (§6.1)', () => {
+  const UNREACHABLE = { message: '[REMOTE_AGENT_DEVICE_UNREACHABLE] unreachable' };
+
+  function onMini() {
+    const h = harness({ members: [MINI, LOCAL], row: { agentDeviceId: 'mini', providerId: MINI.providerId } });
+    h.bindings.set('s1', { providerId: 'anthropic', memberKey: MINI.key, at: 1 });
+    const hooks = { reconnecting: vi.fn(), switching: vi.fn(), resumed: vi.fn(), beforeFallback: vi.fn() };
+    return { ...h, hooks };
+  }
+
+  it('retries with backoff and continues on the same computer once it is back', async () => {
+    const h = onMini();
+    h.probe.mockResolvedValueOnce('offline').mockResolvedValueOnce('offline').mockResolvedValueOnce('ok');
+    await h.service.onTurnError('s1', UNREACHABLE, 7, h.hooks);
+    expect(h.hooks.reconnecting.mock.calls).toEqual([
+      [1, PROVIDER_GROUP_RECONNECT_MAX_ATTEMPTS],
+      [2, PROVIDER_GROUP_RECONNECT_MAX_ATTEMPTS],
+    ]);
+    // 退避：第二次比第一次等得久。
+    const [first, second] = h.deps.sleep.mock.calls.map(([ms]) => ms);
+    expect(second).toBeGreaterThan(first!);
+    // 不交接、不冷却、绑定不动，在原电脑续跑，活动记录写「已重新连上」。
+    expect(h.deps.switchAgentLocation).not.toHaveBeenCalled();
+    expect(h.bindings.get('s1')?.memberKey).toBe(MINI.key);
+    expect(h.router.coolingUntil('anthropic', MINI.key)).toBeNull();
+    expect(h.deps.continueSession).toHaveBeenCalledWith('s1', 99, expect.objectContaining({
+      agentReconnect: { computer: MINI.key },
+    }));
+    expect(h.hooks.resumed).toHaveBeenCalledTimes(1);
+    expect(h.hooks.switching).not.toHaveBeenCalled();
+    expect(h.deps.fallback).not.toHaveBeenCalled();
+  });
+
+  it('switches to the next computer after five failed retries, and says so before switching', async () => {
+    const h = onMini();
+    h.probe.mockResolvedValue('offline');
+    await h.service.onTurnError('s1', UNREACHABLE, 7, h.hooks);
+    expect(h.hooks.reconnecting).toHaveBeenCalledTimes(PROVIDER_GROUP_RECONNECT_MAX_ATTEMPTS);
+    expect(h.deps.sleep).toHaveBeenCalledTimes(PROVIDER_GROUP_RECONNECT_MAX_ATTEMPTS);
+    expect(h.hooks.switching).toHaveBeenCalledTimes(1);
+    expect(h.hooks.switching.mock.invocationCallOrder[0]).toBeGreaterThan(
+      h.hooks.reconnecting.mock.invocationCallOrder.at(-1)!,
+    );
+    expect(h.deps.switchAgentLocation).toHaveBeenCalledWith(
+      's1',
+      expect.objectContaining({ agentDeviceId: null, providerId: 'anthropic' }),
+      expect.anything(),
+    );
+    expect(h.deps.continueSession).toHaveBeenCalledWith('s1', 99, expect.objectContaining({
+      agentSwitch: expect.objectContaining({ to: 'local-name', cause: 'unavailable' }),
+    }));
+    expect(h.hooks.resumed).toHaveBeenCalledTimes(1);
+  });
+
+  it('switches right away when the computer answers but the failure was not about the connection, or its provider cannot be used', async () => {
+    // 远程那边没能启动 Agent 等：那台连得上，问题不在连接。
+    const notConnection = { message: '[REMOTE_AGENT_UNAVAILABLE] the agent could not start' };
+    for (const [signals, state] of [[notConnection, 'ok'], [UNREACHABLE, 'unavailable']] as const) {
+      const h = onMini();
+      h.probe.mockResolvedValue(state);
+      await h.service.onTurnError('s1', signals, 7, h.hooks);
+      expect(h.probe).toHaveBeenCalledTimes(1);
+      expect(h.deps.sleep).not.toHaveBeenCalled();
+      expect(h.hooks.reconnecting).not.toHaveBeenCalled();
+      expect(h.hooks.switching).not.toHaveBeenCalled();
+      expect(h.deps.switchAgentLocation).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it('counts a dropped connection that is already back as one retry and continues on the same computer', async () => {
+    for (const signals of [UNREACHABLE, { reason: 'remote_agent_closed', message: 'remote agent closed' }]) {
+      const h = onMini();
+      h.probe.mockResolvedValue('ok');
+      await h.service.onTurnError('s1', signals, 7, h.hooks);
+      expect(h.deps.sleep).not.toHaveBeenCalled();
+      expect(h.hooks.reconnecting.mock.calls).toEqual([[1, PROVIDER_GROUP_RECONNECT_MAX_ATTEMPTS]]);
+      expect(h.deps.switchAgentLocation).not.toHaveBeenCalled();
+      expect(h.deps.continueSession).toHaveBeenCalledWith('s1', 99, expect.objectContaining({
+        agentReconnect: { computer: MINI.key },
+      }));
+    }
+    // 反复断：这一轮的次数用完就换，不会一直在原电脑上重来。
+    const flapping = onMini();
+    flapping.probe.mockResolvedValue('ok');
+    for (let token = 1; token <= PROVIDER_GROUP_RECONNECT_MAX_ATTEMPTS + 1; token++) {
+      await flapping.service.onTurnError('s1', UNREACHABLE, token, flapping.hooks);
+    }
+    expect(flapping.deps.switchAgentLocation).toHaveBeenCalledTimes(1);
+    const reconnects = (flapping.deps.continueSession.mock.calls as unknown[][])
+      .filter((call) => (call[2] as { agentReconnect?: unknown } | undefined)?.agentReconnect !== undefined);
+    expect(reconnects).toHaveLength(PROVIDER_GROUP_RECONNECT_MAX_ATTEMPTS);
+  });
+
+  it('does not wait for this computer, or for failures that are not about reaching a computer', async () => {
+    const local = harness();
+    local.bindings.set('s1', { providerId: 'anthropic', memberKey: 'local', at: 1 });
+    await local.service.onTurnError('s1', { message: '[REMOTE_AGENT_UNAVAILABLE] gone' }, 1);
+    expect(local.probe).not.toHaveBeenCalled();
+    expect(local.deps.switchAgentLocation).toHaveBeenCalledTimes(1);
+    expect(local.router.coolingUntil('anthropic', 'local')).toBeNull();
+
+    const limited = onMini();
+    await limited.service.onTurnError('s1', { sdkError: 'rate_limit' }, 1, limited.hooks);
+    expect(limited.probe).not.toHaveBeenCalled();
+    expect(limited.hooks.reconnecting).not.toHaveBeenCalled();
+    expect(limited.deps.switchAgentLocation).toHaveBeenCalledTimes(1);
+  });
+
+  it('stops waiting once the user takes over: no switch, no continue, no hand back', async () => {
+    const h = onMini();
+    h.probe.mockResolvedValue('offline');
+    h.deps.sleep.mockImplementationOnce(async () => {
+      h.service.noteUserAction('s1');
+    });
+    await h.service.onTurnError('s1', UNREACHABLE, 7, h.hooks);
+    expect(h.hooks.reconnecting).toHaveBeenCalledTimes(1);
+    expect(h.deps.switchAgentLocation).not.toHaveBeenCalled();
+    expect(h.deps.continueSession).not.toHaveBeenCalled();
+    expect(h.deps.fallback).not.toHaveBeenCalled();
+    expect(h.hooks.beforeFallback).not.toHaveBeenCalled();
+  });
+
+  it('counts retries per round, so a computer that keeps dropping cannot hold the task forever', async () => {
+    const h = onMini();
+    h.probe.mockResolvedValueOnce('offline').mockResolvedValueOnce('offline').mockResolvedValueOnce('ok');
+    await h.service.onTurnError('s1', UNREACHABLE, 7, h.hooks);
+    // 同一轮里又掉线：接着上次的次数，用完就换。
+    h.hooks.reconnecting.mockClear();
+    h.probe.mockResolvedValue('offline');
+    await h.service.onTurnError('s1', UNREACHABLE, 8, h.hooks);
+    expect(h.hooks.reconnecting.mock.calls.map(([attempt]) => attempt)).toEqual([3, 4, 5]);
+    expect(h.deps.switchAgentLocation).toHaveBeenCalledTimes(1);
+  });
+
+  it('starts counting again after the user takes over', async () => {
+    const h = onMini();
+    h.probe.mockResolvedValueOnce('offline').mockResolvedValueOnce('offline').mockResolvedValueOnce('ok');
+    await h.service.onTurnError('s1', UNREACHABLE, 7, h.hooks);
+    h.service.noteUserAction('s1');
+    h.hooks.reconnecting.mockClear();
+    h.probe.mockResolvedValueOnce('offline').mockResolvedValueOnce('offline').mockResolvedValueOnce('ok');
+    await h.service.onTurnError('s1', UNREACHABLE, 8, h.hooks);
+    expect(h.hooks.reconnecting.mock.calls.map(([attempt]) => attempt)).toEqual([1, 2]);
+    expect(h.deps.switchAgentLocation).not.toHaveBeenCalled();
+  });
+});
+
 describe('beforeSend', () => {
-  it('moves a task off a computer that went offline before sending, without an extra continue', async () => {
+  it('moves a task off a computer that stays offline before sending, without an extra continue', async () => {
     const h = harness({ offline: [MINI.key], row: { agentDeviceId: 'mini', providerId: 'anthropic-1a2b3c4d', sdkSessionId: 'native' } });
     h.bindings.set('s1', { providerId: 'anthropic', memberKey: MINI.key, at: 1 });
-    await h.service.beforeSend('s1');
+    const progress = vi.fn();
+    await h.service.beforeSend('s1', { progress });
+    // 先等它恢复：重试用完才换，换之前告诉调用方。
+    expect(progress.mock.calls.map(([state]) => state)).toEqual([
+      ...Array.from({ length: PROVIDER_GROUP_RECONNECT_MAX_ATTEMPTS }, (_, i) => ({
+        attempt: i + 1,
+        maxAttempts: PROVIDER_GROUP_RECONNECT_MAX_ATTEMPTS,
+      })),
+      'switching',
+    ]);
     expect(h.deps.switchAgentLocation).toHaveBeenCalledWith(
       's1',
       { agentKind: 'claude-code', model: MODEL, providerId: 'anthropic', agentDeviceId: null },
@@ -467,6 +766,87 @@ describe('beforeSend', () => {
     );
     expect(h.bindings.get('s1')?.memberKey).toBe('local');
     expect(h.deps.continueSession).not.toHaveBeenCalled();
+  });
+
+  it('waits for an offline computer before sending and sends there once it is back', async () => {
+    const h = harness({ offline: [MINI.key], row: { agentDeviceId: 'mini', providerId: MINI.providerId, sdkSessionId: 'native' } });
+    h.bindings.set('s1', { providerId: 'anthropic', memberKey: MINI.key, at: 1 });
+    // 现读一次仍离线 → 第 1 次重试后仍离线 → 第 2 次重试后恢复。
+    h.probe.mockResolvedValueOnce('offline').mockResolvedValueOnce('offline').mockResolvedValueOnce('ok');
+    const progress = vi.fn();
+    await h.service.beforeSend('s1', { progress });
+    expect(progress.mock.calls).toEqual([
+      [{ attempt: 1, maxAttempts: PROVIDER_GROUP_RECONNECT_MAX_ATTEMPTS }],
+      [{ attempt: 2, maxAttempts: PROVIDER_GROUP_RECONNECT_MAX_ATTEMPTS }],
+    ]);
+    expect(h.deps.switchAgentLocation).not.toHaveBeenCalled();
+    expect(h.bindings.get('s1')?.memberKey).toBe(MINI.key);
+  });
+
+  it('sends right away when a computer shown as offline has already come back', async () => {
+    const h = harness({ offline: [MINI.key], row: { agentDeviceId: 'mini', providerId: MINI.providerId, sdkSessionId: 'native' } });
+    h.bindings.set('s1', { providerId: 'anthropic', memberKey: MINI.key, at: 1 });
+    h.probe.mockResolvedValue('ok');
+    const progress = vi.fn();
+    await h.service.beforeSend('s1', { progress });
+    expect(h.probe).toHaveBeenCalledTimes(1);
+    expect(progress).not.toHaveBeenCalled();
+    expect(h.deps.switchAgentLocation).not.toHaveBeenCalled();
+  });
+
+  it('checks the computer freshly when the send has to reopen the session there', async () => {
+    const options = { members: [MINI, LOCAL], row: { agentDeviceId: 'mini', providerId: MINI.providerId, sdkSessionId: 'native' } };
+    const reopen = harness(options);
+    reopen.bindings.set('s1', { providerId: 'anthropic', memberKey: MINI.key, at: 1 });
+    reopen.deps.hasLiveSession.mockReturnValue(false);
+    reopen.probe.mockResolvedValue('offline');
+    await reopen.service.beforeSend('s1');
+    expect(reopen.probe).toHaveBeenCalledWith('mini', MINI.providerId);
+    expect(reopen.deps.switchAgentLocation).toHaveBeenCalledWith(
+      's1',
+      expect.objectContaining({ agentDeviceId: null }),
+      { beforeSend: true },
+    );
+
+    // 会话还开着：信缓存的状态，不现读。
+    const live = harness(options);
+    live.bindings.set('s1', { providerId: 'anthropic', memberKey: MINI.key, at: 1 });
+    await live.service.beforeSend('s1');
+    expect(live.probe).not.toHaveBeenCalled();
+    expect(live.deps.switchAgentLocation).not.toHaveBeenCalled();
+  });
+
+  it('stops waiting without moving the task when the send is stopped', async () => {
+    const h = harness({ offline: [MINI.key], members: [MINI, LOCAL], row: { agentDeviceId: 'mini', providerId: MINI.providerId } });
+    h.bindings.set('s1', { providerId: 'anthropic', memberKey: MINI.key, at: 1 });
+    const controller = new AbortController();
+    h.deps.sleep.mockImplementationOnce(async () => {
+      controller.abort();
+    });
+    const progress = vi.fn();
+    await h.service.beforeSend('s1', { signal: controller.signal, progress });
+    expect(progress).toHaveBeenCalledTimes(1);
+    expect(progress).not.toHaveBeenCalledWith('switching');
+    expect(h.deps.switchAgentLocation).not.toHaveBeenCalled();
+    expect(h.bindings.get('s1')?.memberKey).toBe(MINI.key);
+  });
+
+  it('stops at once when the send is stopped in the middle of a backoff wait', async () => {
+    const h = harness({ offline: [MINI.key], members: [MINI, LOCAL], row: { agentDeviceId: 'mini', providerId: MINI.providerId } });
+    h.bindings.set('s1', { providerId: 'anthropic', memberKey: MINI.key, at: 1 });
+    const controller = new AbortController();
+    // 退避等很久(不结束)：停止要立刻生效，不等到这次退避结束。
+    h.deps.sleep.mockImplementation(() => new Promise<void>(() => undefined));
+    const done = vi.fn();
+    void h.service.beforeSend('s1', { signal: controller.signal }).then(done);
+    await flush();
+    expect(h.deps.sleep).toHaveBeenCalledTimes(1);
+    expect(done).not.toHaveBeenCalled();
+    controller.abort();
+    await flush();
+    expect(done).toHaveBeenCalledTimes(1);
+    expect(h.probe).toHaveBeenCalledTimes(1);
+    expect(h.deps.switchAgentLocation).not.toHaveBeenCalled();
   });
 
   it('moves a task off a computer that is cooling down', async () => {
@@ -505,5 +885,161 @@ describe('beforeSend', () => {
     h.deps.switchAgentLocation.mockRejectedValueOnce(new Error('unreachable'));
     await h.service.beforeSend('s1');
     expect(h.bindings.get('s1')?.memberKey).toBe('local');
+  });
+});
+
+describe('onTurnError for a shared user (the sharer’s group picks the computer)', () => {
+  const SHARE_ROUTE = 'share:share-from-alice';
+
+  function guestHarness() {
+    let clock = 5_000;
+    const guestSwitch = createProviderGroupGuestSwitch(() => clock);
+    const h = harness({ row: { agentDeviceId: SHARE_ROUTE, providerId: 'alice-anthropic' } });
+    const service = createProviderGroupService({ ...h.deps, guestSwitch });
+    return { ...h, service, guestSwitch, tick: (ms: number) => { clock += ms; } };
+  }
+
+  it('hands off and reopens with the token when the group computer asks to switch', async () => {
+    const h = guestHarness();
+    h.guestSwitch.offer('s1', 'token-aaaaaaaaaaaaaaaa');
+    h.service.onTurnError('s1', { sdkError: 'rate_limit' }, 7);
+    await flush();
+    // 位置仍是同一个分享：强制重新交接。
+    expect(h.deps.switchAgentLocation).toHaveBeenCalledWith('s1', {
+      agentKind: 'claude-code',
+      model: MODEL,
+      providerId: 'alice-anthropic',
+      agentDeviceId: SHARE_ROUTE,
+    }, { isCurrent: expect.any(Function), relocate: true });
+    // 交接时重新打开带上凭证(这里交接是假的，凭证仍在等打开)。
+    expect(h.guestSwitch.takeForOpen('s1')).toBe('token-aaaaaaaaaaaaaaaa');
+    expect(h.deps.continueSession).toHaveBeenCalledWith('s1', 99, expect.objectContaining({
+      groupSwitch: { cause: 'usage-limit' },
+    }));
+    const info = (h.deps.continueSession.mock.calls[0] as unknown[])[2] as Record<string, unknown>;
+    expect(info).not.toHaveProperty('agentSwitch');
+    expect(h.deps.fallback).not.toHaveBeenCalled();
+    // 分享来的电脑不在本机的任何组里：不冷却、不写绑定。
+    expect(h.bindings.size).toBe(0);
+  });
+
+  it('leaves the error to the existing handling without a token from the group computer', async () => {
+    const h = guestHarness();
+    h.service.onTurnError('s1', { message: '[REMOTE_AGENT_SHARE_PAUSED] paused' }, 3);
+    await flush();
+    expect(h.deps.switchAgentLocation).not.toHaveBeenCalled();
+    expect(h.deps.fallback).toHaveBeenCalledWith('s1', { message: '[REMOTE_AGENT_SHARE_PAUSED] paused' }, 3);
+  });
+
+  it('ignores a stale token, a token the user already took over from, and failures any computer would hit', async () => {
+    const stale = guestHarness();
+    stale.guestSwitch.offer('s1', 'token-aaaaaaaaaaaaaaaa');
+    stale.tick(PROVIDER_GROUP_SWITCH_OFFER_TTL_MS + 1);
+    stale.service.onTurnError('s1', { sdkError: 'rate_limit' }, 1);
+    await flush();
+    expect(stale.deps.switchAgentLocation).not.toHaveBeenCalled();
+    expect(stale.deps.fallback).toHaveBeenCalledTimes(1);
+
+    const tookOver = guestHarness();
+    tookOver.guestSwitch.offer('s1', 'token-aaaaaaaaaaaaaaaa');
+    tookOver.service.noteUserAction('s1');
+    tookOver.service.onTurnError('s1', { sdkError: 'rate_limit' }, 1);
+    await flush();
+    expect(tookOver.deps.switchAgentLocation).not.toHaveBeenCalled();
+
+    const sameEverywhere = guestHarness();
+    sameEverywhere.guestSwitch.offer('s1', 'token-aaaaaaaaaaaaaaaa');
+    sameEverywhere.service.onTurnError('s1', { message: 'prompt is too long', sdkError: 'invalid_request' }, 1);
+    await flush();
+    expect(sameEverywhere.deps.switchAgentLocation).not.toHaveBeenCalled();
+    expect(sameEverywhere.deps.fallback).toHaveBeenCalledTimes(1);
+  });
+
+  it('drops the token and hands back when the handoff does not go through', async () => {
+    const h = guestHarness();
+    h.guestSwitch.offer('s1', 'token-aaaaaaaaaaaaaaaa');
+    h.deps.switchAgentLocation.mockRejectedValueOnce(new Error('[REMOTE_AGENT_SHARE_PAUSED] paused'));
+    h.service.onTurnError('s1', { sdkError: 'rate_limit' }, 4);
+    await flush();
+    expect(h.guestSwitch.takeForOpen('s1')).toBeUndefined();
+    expect(h.deps.continueSession).not.toHaveBeenCalled();
+    expect(h.deps.fallback).toHaveBeenCalledWith('s1', { sdkError: 'rate_limit' }, 4);
+  });
+});
+
+describe('no error while switching (mayHandleTurnError + hooks)', () => {
+  const LIMIT = { sdkError: 'rate_limit' };
+
+  it('predicts a switch only for bound tasks in a group that can still move them', () => {
+    const h = harness();
+    // 没归组、也没有分享者的凭证：照常先报错。
+    expect(h.service.mayHandleTurnError('s1', LIMIT)).toBe(false);
+    h.bindings.set('s1', { providerId: 'anthropic', memberKey: 'local', at: 1 });
+    expect(h.service.mayHandleTurnError('s1', LIMIT)).toBe(true);
+    // 换到哪台都一样的失败不换。
+    expect(h.service.mayHandleTurnError('s1', { message: 'prompt is too long', sdkError: 'invalid_request' })).toBe(false);
+
+    const off = harness({ autoSwitch: false });
+    off.bindings.set('s1', { providerId: 'anthropic', memberKey: 'local', at: 1 });
+    expect(off.service.mayHandleTurnError('s1', LIMIT)).toBe(false);
+
+    // 组里只剩这一台电脑：换不了。
+    const alone = harness({ members: [LOCAL] });
+    alone.bindings.set('s1', { providerId: 'anthropic', memberKey: 'local', at: 1 });
+    expect(alone.service.mayHandleTurnError('s1', LIMIT)).toBe(false);
+  });
+
+  it('predicts a switch for a shared task only with a fresh token from the group computer', () => {
+    let clock = 0;
+    const guestSwitch = createProviderGroupGuestSwitch(() => clock);
+    const h = harness({ row: { agentDeviceId: 'share:share-from-alice', providerId: 'alice-anthropic' } });
+    const service = createProviderGroupService({ ...h.deps, guestSwitch });
+    expect(service.mayHandleTurnError('s1', LIMIT)).toBe(false);
+    guestSwitch.offer('s1', 'token-aaaaaaaaaaaaaaaa');
+    expect(service.mayHandleTurnError('s1', LIMIT)).toBe(true);
+    // 只看不取：之后的换电脑仍拿得到凭证。
+    expect(guestSwitch.claim('s1')).toBe(true);
+    guestSwitch.offer('s1', 'token-bbbbbbbbbbbbbbbb');
+    clock += PROVIDER_GROUP_SWITCH_OFFER_TTL_MS + 1;
+    expect(service.mayHandleTurnError('s1', LIMIT)).toBe(false);
+  });
+
+  it('reports a successful switch and never hands back', async () => {
+    const h = harness();
+    h.bindings.set('s1', { providerId: 'anthropic', memberKey: 'local', at: 1 });
+    const hooks = { beforeFallback: vi.fn(), resumed: vi.fn() };
+    await h.service.onTurnError('s1', LIMIT, 7, hooks);
+    expect(hooks.resumed).toHaveBeenCalledTimes(1);
+    expect(hooks.beforeFallback).not.toHaveBeenCalled();
+    expect(h.deps.fallback).not.toHaveBeenCalled();
+  });
+
+  it('lets the caller surface the error right before handing back to the existing handling', async () => {
+    const order: string[] = [];
+    const h = harness({ offline: [MINI.key, STUDIO.key] });
+    h.bindings.set('s1', { providerId: 'anthropic', memberKey: 'local', at: 1 });
+    h.deps.fallback.mockImplementation(() => { order.push('fallback'); });
+    const hooks = { beforeFallback: vi.fn(() => { order.push('surface'); }), resumed: vi.fn() };
+    // 组里没有别的电脑能接：全部试过才报错。
+    await h.service.onTurnError('s1', LIMIT, 7, hooks);
+    expect(order).toEqual(['surface', 'fallback']);
+    expect(hooks.resumed).not.toHaveBeenCalled();
+
+    // 不归组管的错误同样先放出来再交回。
+    const plain = harness({ row: { providerId: 'openai' } });
+    const plainHooks = { beforeFallback: vi.fn(), resumed: vi.fn() };
+    await plain.service.onTurnError('s1', LIMIT, 1, plainHooks);
+    expect(plainHooks.beforeFallback).toHaveBeenCalledTimes(1);
+    expect(plain.deps.fallback).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not report success when the continuation did not go through', async () => {
+    const h = harness();
+    h.bindings.set('s1', { providerId: 'anthropic', memberKey: 'local', at: 1 });
+    h.deps.continueSession.mockResolvedValueOnce('no-progress' as never);
+    const hooks = { beforeFallback: vi.fn(), resumed: vi.fn() };
+    await h.service.onTurnError('s1', LIMIT, 7, hooks);
+    expect(hooks.resumed).not.toHaveBeenCalled();
+    expect(h.deps.cancelContinue).toHaveBeenCalledWith('s1', 99);
   });
 });

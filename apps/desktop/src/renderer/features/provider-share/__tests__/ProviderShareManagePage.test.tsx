@@ -7,6 +7,7 @@ import { ProviderShareManagePage } from '../ProviderShareManagePage';
 import { getProviderSharePendingRequests, resetProviderShareStoreForTests } from '../providerShareStore';
 
 vi.mock('react-i18next', () => ({
+  initReactI18next: { type: '3rdParty', init: () => undefined },
   useTranslation: () => ({
     t: (key: string, options?: Record<string, unknown>) =>
       options && Object.keys(options).length > 0 ? `${key}:${JSON.stringify(options)}` : key,

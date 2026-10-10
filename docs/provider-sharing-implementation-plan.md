@@ -137,7 +137,10 @@ P0 拆成两部分。受邀者身份由 `RemoteAgentHostDeps.controllerTrust` �
 | C0-11 | 插件清单与通讯录说明 | Claude 托管会话目前仍把本机的插件清单（ghost roster）和通讯录说明拼进 system prompt。受邀者会话应去掉；这属于 system prompt 拼接改动，按 `maker-core-and-agent-behavior.md` §4 需先经维护者确认 |
 | C0-12 | 真实验证 | 用真实 Claude Code 验证：受邀者项目里的 hooks、`env`、`apiKeyHelper`、`!` 命令、`@` 外部引用、家目录 CLAUDE.md 都不生效（Windows 上 `claudeMdExcludes` 的路径写法需实测） |
 
-WebFetch、WebSearch 等联网工具不单独处理，与同账号远程供应商的现行逻辑一致（2026-10-07 裁决）。
+受邀者会话的 Agent 自带工具按白名单开放，WebFetch 对受邀者关闭、WebSearch 保留（2026-10-10 裁决，取代
+2026-10-07「联网工具不单独处理」，见产品规则 §9 第 5 条）。同日补充：Claude Code 受邀者的 WebFetch 改由受邀者电脑的
+执行器提供、用受邀者的网络抓取（`apps/desktop/src/main/remote-agent/executor/webFetch.ts`）；分享 Claude 订阅登录时，
+审批弹窗告知分享者「受邀者的 Agent 能看到你登录 Claude 用的邮箱」。
 
 ## 4. P1 同区域 MVP
 
@@ -285,5 +288,6 @@ WebFetch、WebSearch 等联网工具不单独处理，与同账号远程供应�
 
 1. 不限分享人数；链接 5 分钟过期、不限次数生成，不做未使用链接管理；申请提交后 24 小时内有效。
 2. 申请只能在电脑上完成，手机打开链接只提示到电脑上打开。
-3. WebFetch、WebSearch 等联网工具与同账号远程供应商一致，不单独处理。
+3. ~~WebFetch、WebSearch 等联网工具与同账号远程供应商一致，不单独处理。~~ 2026-10-10 改为：受邀者会话的
+   Agent 自带工具按白名单开放，WebFetch 关闭、WebSearch 保留（产品规则 §9 第 5 条）。
 4. 身份只展示昵称和头像，用 auth-server 签发的身份名片（D7）；不展示也不收集邮箱、手机号（含脱敏）、组织、区域；不新增、也不使用任何查看他人资料的能力。
