@@ -1194,7 +1194,7 @@ export function ChatInput({
   onFastModeChange,
   onWorkingDirChange,
   disabled,
-  settingsLocked = false,
+  settingsLocked: settingsLockedProp = false,
   isStreaming = false,
   isAgentBusy,
   onStop,
@@ -1261,6 +1261,8 @@ export function ChatInput({
   // 预测守卫用原始值区分 null vs undefined,下游通路继续用 ?? undefined 归一化。
   const deviceLinkDeviceId = _deviceLinkDeviceId;
   const sharedGuest = isSharedTaskPeer(deviceLinkDeviceId ?? '');
+  // The host owns model, Agent and reasoning settings; guests can still send input.
+  const settingsLocked = settingsLockedProp || sharedGuest;
   const selfDeviceId = useOptionalAuthDeviceId();
   /**
    * 远程控制的被控电脑上的任务(已建任务,或建到被控电脑的新任务草稿),Agent 同样可以在第三台电脑
@@ -6701,7 +6703,7 @@ export function ChatInput({
       // 分支末尾的 isAgentSwitchEchoConfigConsistent)同样返 false —— 三元组落了不等于
       // 这份完整配置落了,调用方挂在 true 上的持久化收尾(清 override / 提交・删除收藏
       // 编辑 / 写收藏锚点)一律不做。只有完整配置原样成为权威意图 / 已应用才返 true。
-      if (!sessionId) return false;
+      if (!sessionId || settingsLocked) return false;
       // 发送的引用水合 / 预检也可能 await。以同步登记的 session 级发送 token 为准，
       // 防止「先点发送、后选引擎」被异步准备反转成先登记切换再 maker:send。
       if (hasPendingAgentSendDispatch(sessionId)) return false;
@@ -7012,6 +7014,7 @@ export function ChatInput({
     },
     [
       sessionId,
+      settingsLocked,
       activeEffort,
       resolveModelEfforts,
       getRememberedEffort,
@@ -9235,6 +9238,7 @@ export function ChatInput({
                         : true
                     }
                     onThinkingChange={async (enabled) => {
+                      if (settingsLocked) return;
                       if (currentModelAgentKind && effectiveSourceId) {
                         if (modelMemory?.setThinking) {
                           modelMemory.setThinking(

@@ -30,6 +30,30 @@ describe('new task remote Agent wiring', () => {
 });
 
 describe('session Agent switch UI wiring', () => {
+  it('locks guest model controls while preserving message and stop controls', () => {
+    const source = readSource('app/sessions/[sessionId].tsx');
+    const modelAccess = source.slice(source.indexOf('const canConfigureSessionModel'), source.indexOf('// 共享模型自造'));
+    expect(modelAccess).toContain('canUseRemoteSessionControls');
+    expect(modelAccess).toContain('!sessionManagedByHost');
+    expect(modelAccess).toContain('!isSharedTaskPeer(deviceId)');
+    expect(source).toContain('disabled={controlBusy || !canConfigureSessionModel}');
+    expect(source).toContain('visible={modelSheetOpen && canConfigureSessionModel}');
+    expect(source).toContain('if (!canConfigureSessionModel) setModelSheetOpen(false);');
+    for (const [start, end] of [
+      ['const setComposerModel', '// 选行 = 原子切'],
+      ['const changeComposerSelectedEffort', 'const changeComposerSelectedFastMode'],
+      ['const changeComposerSelectedFastMode', 'const toggleComposerModelPicker'],
+      ['const toggleComposerModelPicker', '// 账号限额按需拉取'],
+    ]) {
+      const handler = source.slice(source.indexOf(start), source.indexOf(end, source.indexOf(start)));
+      expect(handler).toContain('if (!canConfigureSessionModel)');
+    }
+    const writer = source.slice(source.indexOf('const writeSessionAgentSwitchIntent'), source.indexOf('const setComposerModel'));
+    expect(writer).toContain('if (!deviceId || controlBusy || isSharedTaskPeer(deviceId)) return false;');
+    const controls = source.slice(source.indexOf('const canUseComposer ='), source.indexOf('const canConfigureSessionModel'));
+    expect(controls).not.toContain('isSharedTaskPeer');
+  });
+
   it('keeps pending intent separate from the persisted session fields and rehydrates it', () => {
     const source = readSource('app/sessions/[sessionId].tsx');
     expect(source).toContain('maker.getSessionAgentSwitchIntent(sessionId)');
@@ -201,7 +225,8 @@ describe('session Agent switch UI wiring', () => {
     expect(alertHelper).toContain(
       "{ text: t('models.contextWindowSwitch.cancel'), style: 'cancel' }",
     );
-    expect(helper.match(/return false;/g)).toHaveLength(2);
+    // Read-only guest guard plus the two legacy window-switch rejection paths.
+    expect(helper.match(/return false;/g)).toHaveLength(3);
     expect(helper).not.toContain('setError(');
     expect(controlAction).toContain('applied === false && rollbackPatch && deviceId');
     expect(controlAction).toContain('setError(formatRemoteError(err));');

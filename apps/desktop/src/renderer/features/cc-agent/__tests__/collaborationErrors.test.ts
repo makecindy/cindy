@@ -1,7 +1,10 @@
 import type { TFunction } from 'i18next';
 import { describe, expect, it } from 'vitest';
 
-import { getCollaborationStartErrorMessage } from '../collaborationErrors';
+import {
+  executionDeviceErrorMessage,
+  getCollaborationStartErrorMessage,
+} from '../collaborationErrors';
 
 const t = ((key: string) => key) as unknown as TFunction;
 
@@ -46,4 +49,30 @@ describe('getCollaborationStartErrorMessage', () => {
       ),
     ).toBe('newChat.collaboration.unsupportedRemoteHint');
   });
+});
+
+describe('executionDeviceErrorMessage', () => {
+  it('explains why a Worker could not be created on another computer', () => {
+    expect(
+      executionDeviceErrorMessage(new Error('[REMOTE_AGENT_DEVICE_UNREACHABLE] x'), t, 'Mac mini', false),
+    ).toBe('orca.createWorker.errors.deviceUnreachable');
+    expect(
+      executionDeviceErrorMessage(new Error('[UNSUPPORTED_CAPABILITY] x'), t, 'Mac mini', false),
+    ).toBe('orca.createWorker.errors.deviceOutdated');
+    expect(
+      executionDeviceErrorMessage(new Error('[INVALID_PARAMS] x'), t, 'Mac mini', true),
+    ).toBe('orca.createWorker.errors.dirRejected');
+  });
+
+  it('falls back to the generic collaboration message for anything else', () => {
+    expect(executionDeviceErrorMessage(new Error('[INVALID_PARAMS] x'), t, 'Mac mini', false)).toBeNull();
+    expect(executionDeviceErrorMessage(new Error('[INTERNAL] x'), t, undefined, true)).toBeNull();
+  });
+
+  it.each(['REMOTE_WORKDIR_NOT_FOUND', 'REMOTE_WORKDIR_NOT_DIRECTORY', 'REMOTE_WORKDIR_INVALID', 'REMOTE_WORKDIR_UNAVAILABLE'])(
+    'shows an actionable directory error for %s instead of generic startup failure', (code) => {
+      expect(executionDeviceErrorMessage(new Error(`[${code}] unavailable`), t, 'Mac mini', true))
+        .toBe(code === 'REMOTE_WORKDIR_UNAVAILABLE' ? 'orca.createWorker.errors.dirUnavailable' : 'orca.createWorker.errors.dirRejected');
+    },
+  );
 });

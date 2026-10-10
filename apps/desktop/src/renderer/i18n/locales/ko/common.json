@@ -11472,7 +11472,11 @@
       "untitled": "제목 없는 세션",
       "moreActions": "더 보기",
       "agentDevice": "Agent가 {{device}}에서 실행 중",
-      "agentDeviceOffline": "Agent가 {{device}}에서 실행 중이지만 그 컴퓨터가 오프라인입니다. 다시 연결되면 계속됩니다"
+      "agentDeviceOffline": "Agent가 {{device}}에서 실행 중이지만 그 컴퓨터가 오프라인입니다. 다시 연결되면 계속됩니다",
+      "orcaRemoteLead": "{{device}}에서 온 협업",
+      "orcaRemoteLeadReleased": "협업 종료됨 · {{device}}에서",
+      "orcaRemoteLeadUnknownDevice": "다른 컴퓨터",
+      "orcaRemoteLeadTip": "{{device}}에 있는 “{{lead}}”의 Worker입니다. 작업, 폴더, 명령은 이 컴퓨터에서 실행됩니다. 여기서 보낸 메시지는 Lead에 보고되지 않습니다."
     },
     "gitContext": {
       "detached": "Detached HEAD",
@@ -13535,7 +13539,25 @@
       "optional": "(선택)",
       "initialTaskPlaceholder": "이 Worker 에게 보낼 선택적 첫 작업",
       "enableCollabTitle": "협업 시작",
-      "enableCollabSubmit": "협업 시작"
+      "enableCollabSubmit": "협업 시작",
+      "executionDeviceLabel": "실행 기기",
+      "thisComputer": "이 기기",
+      "deviceOnline": "온라인",
+      "deviceNeedsUpdate": "업데이트 필요",
+      "executionDeviceHint": "같은 계정에서 온라인이고 원격 제어를 켠 컴퓨터만 표시됩니다.",
+      "executionDeviceRemoteHint": "Worker의 작업, 폴더, 명령은 모두 {{device}}에 있습니다.",
+      "remoteDirLabel": "{{device}}의 작업 폴더",
+      "remoteDirChat": "채팅",
+      "remoteDirPath": "폴더 지정",
+      "remoteDirChatHint": "{{device}}에서 프로젝트에 연결하지 않은 채팅 세션을 만듭니다.",
+      "remoteDirPathHint": "{{device}}에서 확인합니다. 없으면 오류가 나며, 이 컴퓨터의 폴더로 대신하지 않습니다.",
+      "remoteDirInvalid": "{{device}}의 절대 경로를 입력하세요.",
+      "errors": {
+        "deviceUnreachable": "{{device}}을(를) 지금 사용할 수 없습니다. 온라인이고 원격 제어가 켜져 있어야 합니다. Worker가 생성되지 않았습니다.",
+        "deviceOutdated": "{{device}}의 Cindy 버전이 오래되었습니다. 업데이트해야 Worker를 실행할 수 있습니다.",
+        "dirRejected": "{{device}}에서 이 폴더를 찾을 수 없거나 사용할 수 없습니다. Worker가 생성되지 않았습니다.",
+        "dirUnavailable": "{{device}}의 폴더를 일시적으로 사용할 수 없습니다. 연결 또는 네트워크 드라이브를 확인한 후 다시 시도하세요. Worker가 생성되지 않았습니다."
+      }
     },
     "rolePill": {
       "unread": "읽지 않은 업데이트",
@@ -13557,13 +13579,19 @@
       "scrollWorkersLeftEdge": "이미 첫 Worker 를 표시하고 있습니다",
       "scrollWorkersRightEdge": "이미 마지막 Worker 를 표시하고 있습니다",
       "errorBadge": "오류",
-      "errorBadgeAria": "오류가 발생한 Worker 가 있습니다"
+      "errorBadgeAria": "오류가 발생한 Worker 가 있습니다",
+      "executionDevice": "{{device}}에서 실행",
+      "deviceUnreachable": "상태를 가져올 수 없음",
+      "unknownDevice": "다른 컴퓨터",
+      "archiveRemoteWorkerConfirmDesc": "이 협업에서 제거하고 {{device}}에서 진행 중인 라운드를 중지합니다. {{device}}의 작업, 기록, 파일은 유지되며 「협업 종료됨」으로 표시되어 그 컴퓨터에서 계속 볼 수 있습니다."
     },
     "split": {
       "leadLabel": "Lead ({{agent}})",
       "workerLabel": "Worker ({{agent}})",
       "leadNotFound": "Orca lead session 을 찾을 수 없습니다",
       "waitingForWorker": "Worker 대기 중",
+      "remoteWorkerLoading": "{{device}}의 작업을 불러오는 중…",
+      "remoteWorkerUnreachable": "{{device}}에 지금 연결할 수 없습니다. 다시 연결되면 이 Worker의 작업이 다시 표시됩니다.",
       "closeAria": "닫기"
     }
   },

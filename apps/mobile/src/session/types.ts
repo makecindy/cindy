@@ -84,6 +84,15 @@ export interface RemoteSession {
   agentSwitchIntent?: RemoteSessionAgentSwitchIntent | null;
   source?: string;
   orcaRole?: 'lead' | 'worker' | string | null;
+  /** 运行设备上的远端 Worker 身份；团队在 Lead 电脑上，不作为本机 orcaRole 使用。旧端缺省。 */
+  orcaRemoteLead?: {
+    leadDeviceId: string;
+    leadDeviceName: string;
+    leadSessionId: string;
+    leadTitle: string;
+    workerLabel: string;
+    releasedAt?: number;
+  } | null;
   parentSessionId?: string | null;
   forkedAtMessageId?: string | null;
   pinnedAt?: string | null;

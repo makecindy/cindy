@@ -11472,7 +11472,11 @@
       "untitled": "未命名任务",
       "moreActions": "更多操作",
       "agentDevice": "Agent 在 {{device}} 上运行",
-      "agentDeviceOffline": "Agent 在 {{device}} 上运行，那台电脑现在离线，连上后才能继续"
+      "agentDeviceOffline": "Agent 在 {{device}} 上运行，那台电脑现在离线，连上后才能继续",
+      "orcaRemoteLead": "来自 {{device}} 的协同",
+      "orcaRemoteLeadReleased": "协同已结束 · 来自 {{device}}",
+      "orcaRemoteLeadUnknownDevice": "另一台电脑",
+      "orcaRemoteLeadTip": "{{device}} 上「{{lead}}」的 Worker。任务、目录和命令都在这台电脑运行；你在这里发的消息不会回报给 Lead。"
     },
     "gitContext": {
       "detached": "分离 HEAD",
@@ -13535,7 +13539,25 @@
       "optional": "（可选）",
       "initialTaskPlaceholder": "给这个 Worker 的可选第一条任务",
       "enableCollabTitle": "开启协同",
-      "enableCollabSubmit": "开启协同"
+      "enableCollabSubmit": "开启协同",
+      "executionDeviceLabel": "运行设备",
+      "thisComputer": "本机",
+      "deviceOnline": "在线",
+      "deviceNeedsUpdate": "版本过旧，需更新",
+      "executionDeviceHint": "只列出同账号、在线并开启远程控制的电脑。",
+      "executionDeviceRemoteHint": "Worker 的任务、目录和命令都在 {{device}}。",
+      "remoteDirLabel": "{{device}} 上的工作目录",
+      "remoteDirChat": "对话",
+      "remoteDirPath": "指定目录",
+      "remoteDirChatHint": "在 {{device}} 上创建对话任务，不绑定项目。",
+      "remoteDirPathHint": "在 {{device}} 上检查；不存在时报错，不会换成这台电脑的目录。",
+      "remoteDirInvalid": "请输入 {{device}} 上的绝对路径。",
+      "errors": {
+        "deviceUnreachable": "{{device}} 当前不可用：需要在线并开启远程控制。Worker 没有创建。",
+        "deviceOutdated": "{{device}} 的 Cindy 版本过旧，更新后才能运行 Worker。",
+        "dirRejected": "{{device}} 上找不到这个目录或不允许使用。Worker 没有创建。",
+        "dirUnavailable": "{{device}} 上的目录暂时无法访问。请检查连接或网络盘后重试。Worker 没有创建。"
+      }
     },
     "rolePill": {
       "unread": "未读更新",
@@ -13557,13 +13579,19 @@
       "scrollWorkersLeftEdge": "已是最左侧的 Worker",
       "scrollWorkersRightEdge": "已是最右侧的 Worker",
       "errorBadge": "错误",
-      "errorBadgeAria": "有 Worker 出错"
+      "errorBadgeAria": "有 Worker 出错",
+      "executionDevice": "在 {{device}} 运行",
+      "deviceUnreachable": "暂时无法获取状态",
+      "unknownDevice": "另一台电脑",
+      "archiveRemoteWorkerConfirmDesc": "它会从这个协同里移除，并停止 {{device}} 上正在进行的这一轮。{{device}} 上的任务、记录和文件都会保留，标注「协同已结束」，可以在那台继续查看。"
     },
     "split": {
       "leadLabel": "Lead ({{agent}})",
       "workerLabel": "Worker ({{agent}})",
       "leadNotFound": "找不到 Orca lead 任务",
       "waitingForWorker": "等待 Worker",
+      "remoteWorkerLoading": "正在读取 {{device}} 上的任务…",
+      "remoteWorkerUnreachable": "{{device}} 当前无法连接，恢复后会自动显示这个 Worker 的任务。",
       "closeAria": "关闭"
     }
   },

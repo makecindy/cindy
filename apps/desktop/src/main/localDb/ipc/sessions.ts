@@ -833,6 +833,8 @@ export interface SessionRowSnapshot {
   agentDeviceId?: string | null;
   /** Hook exact-takeover must reject internal Orca worker sessions. */
   orcaRole?: 'lead' | 'worker' | null;
+  /** 协同远端 Worker 标记(raw JSON);非空时不能再开启协同。 */
+  orcaRemoteLead?: string | null;
   /** Collab policy gate: remote session 的 codex / claude-code 均放行。 */
   agentKind?: string | null;
   /** 会话来源(`bot` = 伙伴会话);限额自动继续据此排除伙伴。 */
@@ -861,6 +863,7 @@ async function selectSessionRowSnapshot(id: string): Promise<SessionRowSnapshot 
       remoteHostId: sessions.remoteHostId,
       agentDeviceId: sessions.agentDeviceId,
       orcaRole: sessions.orcaRole,
+      orcaRemoteLead: sessions.orcaRemoteLead,
       agentKind: sessions.agentKind,
       source: sessions.source,
       model: sessions.model,

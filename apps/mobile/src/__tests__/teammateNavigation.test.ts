@@ -52,19 +52,26 @@ describe('account-scoped home navigation overrides', () => {
   });
 });
 describe('teammate identity navigation', () => {
-  it.each(['index', 'devices/index', 'resources/[collectionId]'])('preserves the actual %s stack entry and collection targets across repeated teammate opens', (name) => {
+  it.each(['index', 'devices/index'])('preserves the actual %s stack entry across repeated teammate opens', (name) => {
     const router = StackRouter({ initialRouteName: name });
     const options = { routeNames: [name, 'sessions/[sessionId]'], routeParamList: { [name]: { collectionId: 'teammates', targets: 'fixture-hosts', title: 'Teammates' } }, routeGetIdList: {}, routeKeyChanges: [] };
     let state = router.getInitialState(options);
     const home = state.routes[0];
     for (let turn = 0; turn < 3; turn++) {
       for (const sessionId of ['a', 'b']) state = router.getRehydratedState(router.getStateForAction(state, StackActions.push('sessions/[sessionId]', { sessionId }), options)!, options);
-      const count = homeDismissCount(state.routes, 'teammates');
+      const count = homeDismissCount(state.routes);
       expect(count).toBe(2);
       state = router.getRehydratedState(router.getStateForAction(state, StackActions.pop(count!), options)!, options);
       expect(state.routes).toEqual([home]);
       expect(state.routes[0]).toBe(home); // Same key and params: React retains the mounted list.
     }
+  });
+  it('replaces a legacy teammate collection entry instead of preserving the retired route', () => {
+    const routes = [
+      { name: 'resources/[collectionId]', params: { collectionId: 'teammates' } },
+      { name: 'sessions/[sessionId]' },
+    ];
+    expect(homeDismissCount(routes)).toBeNull();
   });
   it('uses the conversation as a navigation hint and retains the resource identity for revalidation', () => {
     expect(teammateResourceRoute(row(), 'en')).toEqual({ pathname: '/sessions/[sessionId]', params: {

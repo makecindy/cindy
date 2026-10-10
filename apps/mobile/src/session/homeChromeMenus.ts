@@ -22,6 +22,7 @@ import {
   type HomeTaskInfoField,
   type HomeVendorFilter,
 } from "@/session/homeDisplaySettings";
+import { serializeRemoteResourceTargets, type RemoteHomeCollection } from "@/device-link/remoteResources";
 
 export type { HomeListSortBy, HomeProjectOrder, HomeStatusFilter };
 
@@ -68,6 +69,43 @@ function checkable(
 }
 
 export const HOME_SCOPE_COLLECTION_PREFIX = "scope.collection:";
+
+export function openHomeRemoteCollection({
+  collection,
+  teammateCollectionId,
+  embedded,
+  dismissKeyboard,
+  setMode,
+  push,
+  onModeChange,
+}: {
+  collection: RemoteHomeCollection;
+  teammateCollectionId: string;
+  embedded: boolean;
+  dismissKeyboard(): void;
+  setMode(mode: "teammates"): void | Promise<void>;
+  push(href: string | { pathname: string; params: Record<string, string> }): void;
+  onModeChange?: (mode: "teammates") => void;
+}) {
+  if (collection.id === teammateCollectionId) {
+    dismissKeyboard();
+    if (embedded) {
+      void setMode("teammates");
+      push("/devices");
+    } else {
+      onModeChange?.("teammates");
+    }
+    return;
+  }
+  push({
+    pathname: "/resources/[collectionId]",
+    params: {
+      collectionId: collection.id,
+      title: collection.title,
+      targets: serializeRemoteResourceTargets(collection.targets),
+    },
+  });
+}
 
 export function parseHomeScopePullDownAction(
   id: string,
