@@ -18,14 +18,25 @@ export type DeviceApiKeyStatus = 'present' | 'absent' | 'unknown';
 interface DeviceCache<T> {
   get(deviceId: string): T | undefined;
   fetch(deviceId: string, fetcher: () => Promise<T>): Promise<T | undefined>;
+  /** 强制刷新:忽略缓存命中(仍与在途去重),成功后按当前代次写缓存。 */
+  refresh(deviceId: string, fetcher: () => Promise<T>): Promise<T | undefined>;
   evict(deviceId: string): void;
   clearAll(): void;
+  /** 当前代际;evict/clearAll 自增。消费方用它拒绝晚到的旧结果。 */
+  getGen(deviceId: string): number;
+  /** 订阅该设备的代际变更(evict/clearAll);返回退订函数。 */
+  subscribeGen(deviceId: string, listener: () => void): () => void;
 }
 
 function createDeviceCache<T>(): DeviceCache<T> {
   const cache = new Map<string, T>();
   const inflight = new Map<string, Promise<T | undefined>>();
   const deviceGen = new Map<string, number>();
+  const genListeners = new Map<string, Set<() => void>>();
+
+  const notifyGen = (deviceId: string): void => {
+    for (const listener of genListeners.get(deviceId) ?? []) listener();
+  };
 
   return {
     get: (deviceId) => cache.get(deviceId),
@@ -54,24 +65,68 @@ function createDeviceCache<T>(): DeviceCache<T> {
       inflight.set(deviceId, p);
       return p;
     },
+    refresh(deviceId, fetcher) {
+      // 与 fetch 的差异:不做缓存命中短路——重连后缓存可能来自旧连接代际
+      // (离线宽限期内恢复会取消驱逐),必须重新向被控端拉取。
+      const ip = inflight.get(deviceId);
+      if (ip) return ip;
+      const startGen = deviceGen.get(deviceId) ?? 0;
+      const isCurrent = (): boolean => (deviceGen.get(deviceId) ?? 0) === startGen;
+      const p = fetcher()
+        .then((res) => {
+          if (isCurrent()) {
+            cache.set(deviceId, res);
+            inflight.delete(deviceId);
+          }
+          return res;
+        })
+        .catch(() => {
+          if (isCurrent()) inflight.delete(deviceId);
+          return undefined;
+        });
+      inflight.set(deviceId, p);
+      return p;
+    },
     evict(deviceId) {
       cache.delete(deviceId);
       inflight.delete(deviceId);
       deviceGen.set(deviceId, (deviceGen.get(deviceId) ?? 0) + 1);
+      notifyGen(deviceId);
     },
     clearAll() {
-      const ids = new Set<string>([...cache.keys(), ...inflight.keys(), ...deviceGen.keys()]);
+      const ids = new Set<string>([
+        ...cache.keys(),
+        ...inflight.keys(),
+        ...deviceGen.keys(),
+        ...genListeners.keys(),
+      ]);
       for (const id of ids) {
         deviceGen.set(id, (deviceGen.get(id) ?? 0) + 1);
       }
       cache.clear();
       inflight.clear();
+      for (const id of genListeners.keys()) notifyGen(id);
+    },
+    getGen: (deviceId) => deviceGen.get(deviceId) ?? 0,
+    subscribeGen(deviceId, listener) {
+      const bucket = genListeners.get(deviceId) ?? new Set<() => void>();
+      bucket.add(listener);
+      genListeners.set(deviceId, bucket);
+      return () => {
+        bucket.delete(listener);
+        if (bucket.size === 0) genListeners.delete(deviceId);
+      };
     },
   };
 }
 
 const pricingCache = createDeviceCache<MobileModelPricingMap | null>();
 const keyStatusCache = createDeviceCache<DeviceApiKeyStatus>();
+
+// 缓存写入/采信时的连接代次(providers 同款):重连后缓存命中分支据此判定
+// 「缓存属旧连接」并强制刷新。只在采信成功路径记录;失败保持旧代次,下次
+// effect 重跑仍判定 reconnected → 重试。
+const pricingFetchEpoch = new Map<string, number>();
 
 /** 读单价表缓存命中(同步),供 hook 初始化 state 用。undefined = 未拉过。 */
 export function getCachedDeviceModelPricing(
@@ -85,14 +140,28 @@ export function fetchDeviceModelPricing(
   deviceId: string,
   fetcher: () => Promise<MobileModelPricingMap | null>,
 ): Promise<MobileModelPricingMap | null | undefined> {
-  return pricingCache.fetch(deviceId, async () => {
+  return pricingCache.fetch(deviceId, normalizePricingFetcher(fetcher));
+}
+
+/** 强制刷新单价表:忽略缓存命中(重连后缓存可能属旧连接代际),仍与在途去重。 */
+export function refreshDeviceModelPricing(
+  deviceId: string,
+  fetcher: () => Promise<MobileModelPricingMap | null>,
+): Promise<MobileModelPricingMap | null | undefined> {
+  return pricingCache.refresh(deviceId, normalizePricingFetcher(fetcher));
+}
+
+function normalizePricingFetcher(
+  fetcher: () => Promise<MobileModelPricingMap | null>,
+): () => Promise<MobileModelPricingMap | null> {
+  return async () => {
     const res = await fetcher();
     // 空表与非法形状统一收敛成 null(= 无价格可示),避免下游逐键判空。
     if (!res || typeof res !== 'object' || Array.isArray(res) || Object.keys(res).length === 0) {
       return null;
     }
     return res;
-  });
+  };
 }
 
 /** 读 key presence 缓存命中(同步)。undefined = 未拉过。 */
@@ -111,6 +180,28 @@ export function fetchDeviceApiKeyStatus(
   });
 }
 
+/** 记录/读取单价表缓存所属连接代次;hook 据此判定重连后缓存命中需强制刷新。 */
+export function markDeviceModelPricingFetchEpoch(deviceId: string, epoch: number): void {
+  pricingFetchEpoch.set(deviceId, epoch);
+}
+
+export function getDeviceModelPricingFetchEpoch(deviceId: string): number | undefined {
+  return pricingFetchEpoch.get(deviceId);
+}
+
+/** 读单价表缓存代际;evict/clearAll 自增。hook 用它拒绝晚到的旧结果。 */
+export function getDeviceModelPricingGen(deviceId: string): number {
+  return pricingCache.getGen(deviceId);
+}
+
+/** 订阅单价表缓存代际变更(evict/clearAll);挂载中的 hook 据此清展示并重拉。 */
+export function subscribeDeviceModelPricingGen(
+  deviceId: string,
+  listener: () => void,
+): () => void {
+  return pricingCache.subscribeGen(deviceId, listener);
+}
+
 /** device-link:被控设备切换 / 下线时驱逐其模型元信息缓存(与 evictDeviceProviders 同时机)。 */
 export function evictDeviceModelMeta(deviceId: string): void {
   pricingCache.evict(deviceId);
@@ -121,4 +212,5 @@ export function evictDeviceModelMeta(deviceId: string): void {
 export function clearAllDeviceModelMeta(): void {
   pricingCache.clearAll();
   keyStatusCache.clearAll();
+  pricingFetchEpoch.clear();
 }
