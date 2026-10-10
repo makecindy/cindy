@@ -96,7 +96,11 @@ describe('workdir browse remote safety', () => {
     expect(routeSource).toContain('deviceId={deviceId}');
     // sidebar 侧同理:树 / 文件名索引 / 搜索 / 增删改全部带 remoteHostId,
     // 且"显示所在文件夹"这类本机-only 菜单在 remote 下不可用。
-    expect(sidebarBrowseSource).toContain('useFileTree({ workdir, remoteHostId, deviceId,');
+    // useFileTree 的参数会被格式化折行,取调用块本身断言而不是整行文本。
+    const treeCall = sidebarBrowseSource.match(/useFileTree\(\{[^}]*\}/)?.[0] ?? '';
+    expect(treeCall).toContain('workdir');
+    expect(treeCall).toContain('remoteHostId');
+    expect(treeCall).toContain('deviceId');
     expect(sidebarBrowseSource).toContain('useProjectFileList(workdir, remoteHostId, deviceId, {');
     expect(sidebarBrowseSource).toContain('remoteHostId || deviceId ? undefined : handleRevealInFolder');
   });
@@ -229,5 +233,35 @@ describe('workdir browse remote safety', () => {
 
   it('keeps empty workdir from reading local files', () => {
     expect(fileContentSource).toContain('if (!workdir || !relPath)');
+  });
+
+  it('文件树标题图标钮带可见的键盘焦点环', () => {
+    // G3 全局规则把非输入元素的 outline 一律去掉了(focus-visible:outline-none 必
+    // 自配):纯图标钮若不自带环,键盘 Tab 时就没有任何可见焦点指示 —— 包括新增的
+    // 「显示被忽略的目录」开关(评审 P1)。
+    const source = readFileSync(
+      resolve(
+        __dirname,
+        '..',
+        'features',
+        'cc-agent',
+        'workdir-browse',
+        'fileTreeHeaderButtonClass.ts',
+      ),
+      'utf8',
+    );
+    expect(source).toContain('focus-visible:outline-none');
+    expect(source).toContain('focus-visible:ring-2');
+    expect(source).toContain('focus-visible:ring-[var(--focus-ring)]');
+  });
+
+  it('persists expanded-set rename under the effective reveal scope', () => {    // device-link 老被控端不支持「显示被忽略的目录」时，useFileTree 会退回隐藏态
+    // store；rename 迁移若仍按用户偏好写 reveal scope，迁移会落在不生效的那一格
+    // （隐藏 scope 仍存旧路径，面板重挂载后请求已不存在的目录、新目录展开态丢失）。
+    expect(sidebarBrowseSource).toContain(
+      'const scopedShowIgnoredDirs = showIgnoredDirs && tree.showIgnoredDirsSupported !== false;',
+    );
+    expect(sidebarBrowseSource).not.toMatch(/loadExpandedSet\(workdir, \{ showIgnoredDirs \}\)/);
+    expect(sidebarBrowseSource).not.toMatch(/saveExpandedSet\(workdir, next, \{ showIgnoredDirs \}\)/);
   });
 });
