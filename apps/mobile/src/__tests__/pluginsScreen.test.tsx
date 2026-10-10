@@ -8,6 +8,7 @@ const fixture = vi.hoisted(() => ({
   props: new Map<string, any>(),
   enabled: true,
   online: true,
+  focused: true,
   owner: true,
   invoke: vi.fn(),
   read: vi.fn(),
@@ -55,7 +56,7 @@ vi.mock("expo-router", () => ({
       return null;
     },
   },
-  useIsFocused: () => true,
+  useIsFocused: () => fixture.focused,
   useLocalSearchParams: () => ({}),
   useRouter: () => ({ push: fixture.push }),
 }));
@@ -198,6 +199,7 @@ beforeEach(() => {
   fixture.push.mockClear();
   fixture.enabled = true;
   fixture.online = true;
+  fixture.focused = true;
   fixture.owner = true;
   fixture.platform = "ios";
   fixture.invoke
@@ -369,6 +371,40 @@ it("marks details unconfirmed when a successful state change cannot be read back
   });
   expect(fixture.invoke).toHaveBeenCalledTimes(1);
 });
+it.each(["reconnect", "return"])(
+  "confirms a pending state change after %s without an overlapping automatic read",
+  async (event) => {
+    await openDetail();
+    let finishWrite!: () => void;
+    fixture.invoke.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finishWrite = () => {
+            fixture.enabled = false;
+            resolve();
+          };
+        }),
+    );
+    act(() => fixture.props.get("detail").onEnabledChange(false));
+    if (event === "reconnect") fixture.online = false;
+    else fixture.focused = false;
+    await act(async () => root.render(createElement(PluginsScreen)));
+    fixture.online = true;
+    fixture.focused = true;
+    await act(async () => root.render(createElement(PluginsScreen)));
+    expect(fixture.read).toHaveBeenCalledTimes(1);
+    await act(async () => finishWrite());
+    expect(fixture.read).toHaveBeenCalledTimes(2);
+    expect(fixture.invoke).toHaveBeenCalledTimes(1);
+    expect(fixture.props.get("detail")).toMatchObject({
+      enabled: false,
+      busy: false,
+      model: { status: "disabled", canUseTasks: false },
+    });
+    await act(async () => root.render(createElement(PluginsScreen)));
+    expect(fixture.read).toHaveBeenCalledTimes(2);
+  },
+);
 it("locks duplicate taps, and a rejected write keeps the previous state without replay", async () => {
   await openDetail();
   let reject!: (error: Error) => void;

@@ -317,6 +317,7 @@ function PluginDirectory() {
       selected &&
       detailOpen &&
       selectedOnline &&
+      !enableLock.current &&
       (returned || reconnected || (!detailLoading && !detail && !detailFailed))
     )
       void showDetail(selected.row);
