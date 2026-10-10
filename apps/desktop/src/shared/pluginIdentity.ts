@@ -1,5 +1,5 @@
 import { isValidPluginNamespace } from '@cindy/plugin-protocol';
-import { ghostInstallApprovalToken, isValidGhostId, type GhostInstallApproval } from './ghost.js';
+import { ghostInstallApprovalToken, ghostPartition, isValidGhostId, type GhostInstallApproval } from './ghost.js';
 
 interface InstalledGhostIdentitySource {
   manifest: { id: string };
@@ -258,6 +258,11 @@ function parseInstallRelIdFromDir(dir: string, ghostId: string): string | null {
 export function installedGhostStoragePart(ghost: InstalledGhostIdentitySource): string {
   if (ghost.instanceKey && isPluginInstanceKey(ghost.instanceKey)) return ghost.instanceKey;
   return installedGhostPhysicalKeys(ghost).storagePart;
+}
+
+/** Renderer WebView attach claim. Main matches the physical instance key, not the logical one. */
+export function installedGhostWebviewPartitionClaim(ghost: InstalledGhostIdentitySource): string {
+  return ghostPartition(installedGhostStoragePart(ghost));
 }
 
 /**

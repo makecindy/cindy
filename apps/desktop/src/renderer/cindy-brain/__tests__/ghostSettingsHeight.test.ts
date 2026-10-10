@@ -35,6 +35,12 @@ describe('settings height cache', () => {
     expect(loadGhostSettingsHeight('owner-a', 'g1', '2.0.0')).toBeNull();
   });
 
+  it('keeps an in-place organization height stored under the logical key', () => {
+    saveGhostSettingsHeight('owner-a', '_ns__xd__xd-feishu', '1.0.0', 280);
+    pruneGhostSettingsHeights('owner-a', ['_ns__xd__xd-feishu']);
+    expect(loadGhostSettingsHeight('owner-a', '_ns__xd__xd-feishu', '1.0.0')).toBe(280);
+  });
+
   it('keeps same-name root and organization heights separate', () => {
     saveGhostSettingsHeight('owner-a', 'helper', '1.0.0', 240);
     saveGhostSettingsHeight('owner-a', '_ns__acme__helper', '1.0.0', 320);

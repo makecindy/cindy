@@ -6,8 +6,8 @@ import type { WebviewTag } from 'electron';
 
 import { useAuth } from '@/contexts/AuthContext';
 import { cn } from '@/lib/utils';
-import { GHOST_SCHEME, ghostPartition, ghostInstallApprovalToken, type InstalledGhost } from '../../shared/ghost';
-import { installedGhostLogicalIdentity, pluginStoragePart } from '../../shared/pluginIdentity';
+import { GHOST_SCHEME, ghostInstallApprovalToken, type InstalledGhost } from '../../shared/ghost';
+import { installedGhostLogicalIdentity, installedGhostWebviewPartitionClaim, pluginStoragePart } from '../../shared/pluginIdentity';
 import {
   buildGhostPluginSettingsThemeCss,
   buildGhostSettingsThemeCss,
@@ -145,7 +145,7 @@ function SettingsWebviewBody({
   const hostRef = useRef<HTMLDivElement | null>(null);
   const { manifest } = ghost;
   const settingsHeightKey = pluginStoragePart(installedGhostLogicalIdentity(ghost));
-  const partitionClaim = ghostPartition(settingsHeightKey);
+  const partitionClaim = installedGhostWebviewPartitionClaim(ghost);
   const approvalToken = ghostInstallApprovalToken(ghost.approval);
   const settingsHtml = manifest.settingsHtml;
   const fixedHeight = manifest.settingsHeight;

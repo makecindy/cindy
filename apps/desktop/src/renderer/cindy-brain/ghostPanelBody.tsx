@@ -12,8 +12,8 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { toast } from '@/lib/toast';
 
-import { GHOST_SCHEME, ghostPartition, ghostInstallApprovalToken, type InstalledGhost } from '../../shared/ghost';
-import { installedGhostLogicalIdentity, installedGhostStoragePart, pluginStoragePart } from '../../shared/pluginIdentity';
+import { GHOST_SCHEME, ghostInstallApprovalToken, type InstalledGhost } from '../../shared/ghost';
+import { installedGhostStoragePart, installedGhostWebviewPartitionClaim } from '../../shared/pluginIdentity';
 import { createGhostThemeInjector, observeHostTheme } from './ghostPanelTheme';
 import {
   clearGhostUnread,
@@ -203,7 +203,7 @@ export function GhostWebviewBody({
   const instanceId = installedGhostStoragePart(ghost);
   const approvalToken = ghostInstallApprovalToken(ghost.approval);
   const [crashed, setCrashed] = useState(false);
-  const partitionClaim = ghostPartition(pluginStoragePart(installedGhostLogicalIdentity(ghost)));
+  const partitionClaim = installedGhostWebviewPartitionClaim(ghost);
   const [generation, setGeneration] = useState(0);
   const [mediaMenu, setMediaMenu] = useState<GhostPanelMediaMenuState | null>(null);
   const hostRef = useRef<HTMLDivElement | null>(null);

@@ -109,12 +109,12 @@ describe('GhostSettingsWebview layout ownership', () => {
     view.rerender(<GhostSettingsWebview ghost={{ ...approved, approval: { state: 'approved', revision: 'receipt-b' } }} />);
     expect(view.container.querySelector('webview')).toBe(replacement);
   });
-  it('moves an in-place namespaced settings page off the root WebView partition', () => {
+  it('keeps an in-place settings page on its physical WebView partition', () => {
     const { ghost, view, webview } = renderSettings();
     expect(webview.getAttribute('partition')).toBe('cindy-ghost-example-settings-layout');
-    view.rerender(<GhostSettingsWebview ghost={{ ...ghost, namespace: 'acme' }} />);
+    view.rerender(<GhostSettingsWebview ghost={{ ...ghost, dir: '/ghosts/example-settings-layout', instanceKey: 'example-settings-layout', namespace: 'acme' }} />);
     expect(view.container.querySelector('webview')?.getAttribute('partition'))
-      .toBe('cindy-ghost-_ns__acme__example-settings-layout');
+      .toBe('cindy-ghost-example-settings-layout');
   });
   it('keeps account status visible and the plugin form collapsed without a duplicate title', () => {
     const { ghost, view } = renderSettings();
