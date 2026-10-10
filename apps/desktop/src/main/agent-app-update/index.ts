@@ -107,6 +107,18 @@ function parseMarker(raw: string | null): AgentAppUpdateMarker | null {
       ...(typeof value.targetVersion === 'string' ? { targetVersion: value.targetVersion } : {}),
       requestedAt: value.requestedAt,
       pid: value.pid,
+      ...(value.failure && typeof value.failure === 'object'
+        ? {
+            failure: {
+              ...(typeof value.failure.errorCode === 'string'
+                ? { errorCode: value.failure.errorCode }
+                : {}),
+              ...(typeof value.failure.stagedVersion === 'string'
+                ? { stagedVersion: value.failure.stagedVersion }
+                : {}),
+            },
+          }
+        : {}),
     };
   } catch {
     return null;

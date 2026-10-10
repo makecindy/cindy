@@ -292,8 +292,45 @@ describe('Agent app update install', () => {
     await harness.service.install(caller);
     await flush();
     expect(restartAllowed).toBe(false);
-    expect(harness.deps.marker.clear).toHaveBeenCalledWith(ownerA);
     expect(harness.deps.notify).not.toHaveBeenCalled();
+    // The failure stays in the confirming account's marker until that account is back.
+    expect(harness.deps.marker.write).toHaveBeenLastCalledWith(
+      ownerA,
+      expect.objectContaining({ failure: { errorCode: 'relaunch_cancelled' } }),
+    );
+    harness.switchOwner(ownerA);
+    await harness.service.deliverPendingResult();
+    expect(harness.deps.notify).toHaveBeenCalledOnce();
+    expect(harness.deps.notify).toHaveBeenCalledWith(
+      ownerA,
+      'task-1',
+      expect.stringMatching(/^agent-app-update:/),
+      expect.stringContaining('update.agentInstall.reasons.notRestarted'),
+    );
+    expect(harness.getMarker()).toBeNull();
+  });
+
+  it('keeps an in-process failure until its notice is persisted', async () => {
+    const notify = vi
+      .fn<AgentAppUpdateDeps['notify']>()
+      .mockRejectedValueOnce(new Error('database busy'))
+      .mockResolvedValueOnce('written');
+    const harness = setup({
+      notify,
+      apply: vi.fn(async () => ({
+        status: 'failed' as const,
+        reason: 'x',
+        errorCode: 'download_failed',
+      })),
+    });
+    await harness.service.install(caller);
+    await flush();
+    expect(harness.getMarker()).toMatchObject({ failure: { errorCode: 'download_failed' } });
+    // Same process: a recorded failure is deliverable without a restart.
+    await harness.service.deliverPendingResult();
+    expect(notify).toHaveBeenCalledTimes(2);
+    expect(notify.mock.calls[0]![2]).toBe(notify.mock.calls[1]![2]);
+    expect(harness.getMarker()).toBeNull();
   });
 
   it('refuses to start when no account is active at confirmation', async () => {
