@@ -1,3 +1,4 @@
+import { readEffectiveBotModelChain } from '../../maker-host/bot-model-chain-settings-store.js';
 import type { RemoteResourceHostContext } from '../../device-link/remoteResourceRegistry.js';
 import { botRemoteResourceFromSource } from './botRemoteResourceProjection.js';
 import { inspectAppDefaultModel } from '../../maker-ipc/appDefaultModelControl.js';
@@ -13,6 +14,20 @@ import { decodeBotAvatarImage } from './botAvatarSelection.js';
 import { runRegisteredBotLifecycleAction } from '../../maker-ipc/botLifecycleService.js';
 import { listBotSettingsCapabilities, validateBotCapabilityAdditions } from '../../maker-host/index.js';
 
+function isRouteAvailable(route: BotModelRoute, catalog: Awaited<ReturnType<typeof inspectAppDefaultModel>>) {
+  const entry = catalog.available.find(item => item.route.harness === route.harness && item.route.model === route.model && item.route.providerId === route.providerId);
+  return !!entry && (!route.effort || entry.efforts.some(effort => effort === route.effort)) && (!route.fastMode || entry.supportsFastMode);
+}
+
+async function validateModelChain(chain: BotModelRoute[]) {
+  const scope = activeOwnerScopeKey();
+  const catalog = await inspectAppDefaultModel();
+  if (isAppSessionBoundaryPending() || scope !== activeOwnerScopeKey()) throwIpcError('PRECONDITION_FAILED', 'Account changed');
+  for (const route of chain) {
+    if (!isRouteAvailable(route, catalog)) throwIpcError('INVALID_PARAMS', 'Model route unavailable');
+  }
+}
+
 /** Composition only: profile transactions, skill reads and lifecycle stay with their existing owners. */
 const deps = {
   owner: activeOwnerScopeKey,
@@ -24,13 +39,7 @@ const deps = {
     const owner = activeOwnerScopeKey();
     const capabilities = input.capabilities as { modelChainOverride?: BotModelRoute[] | null } | undefined;
     if (Array.isArray(capabilities?.modelChainOverride)) {
-      const scope = activeOwnerScopeKey();
-      const catalog = await inspectAppDefaultModel();
-      if (isAppSessionBoundaryPending() || scope !== activeOwnerScopeKey()) throwIpcError('PRECONDITION_FAILED', 'Account changed');
-      for (const route of capabilities.modelChainOverride) {
-        const entry = catalog.available.find(item => item.route.harness === route.harness && item.route.model === route.model && item.route.providerId === route.providerId);
-        if (!entry || route.effort && !entry.efforts.some(effort => effort === route.effort) || route.fastMode && !entry.supportsFastMode) throwIpcError('INVALID_PARAMS', 'Model route unavailable');
-      }
+      await validateModelChain(capabilities.modelChainOverride);
     }
     if (isAppSessionBoundaryPending() || owner !== activeOwnerScopeKey()) throwIpcError('PRECONDITION_FAILED', 'Account changed');
     return updateBotProfile(input, version, validateBotCapabilityAdditions);
@@ -41,6 +50,17 @@ const settings = createBotRemoteSettingsResource({ ...deps,
   lifecycle: (botId, action, confirmName, guard) => runRegisteredBotLifecycleAction({ botId, action, confirmName, keepTaskHistory: true, worktreeDisposition: 'retain' }, guard),
 });
 const getEditor = createBotRemoteEditors({ ...deps,
+  async modelDefaults() {
+    const owner = deps.owner();
+    const chain = await readEffectiveBotModelChain({});
+    deps.assertOwner(owner);
+    if (!chain.length) return [];
+    const catalog = await inspectAppDefaultModel();
+    deps.assertOwner(owner);
+    // Creation shows the primary only. Do not silently promote a backup or
+    // rewrite the persisted default when its primary is no longer usable.
+    return isRouteAvailable(chain[0]!, catalog) ? chain : [];
+  },
   async create(input) {
     const owner = deps.owner(); deps.assertOwner(owner);
     let source;
@@ -51,6 +71,16 @@ const getEditor = createBotRemoteEditors({ ...deps,
     }
     deps.assertOwner(owner);
     if (!source) {
+      if (input.capabilities) await validateModelChain(input.capabilities.modelChainOverride);
+      else {
+        const chain = await readEffectiveBotModelChain({});
+        deps.assertOwner(owner);
+        if (!chain.length) throwIpcError('INVALID_PARAMS', 'Model route unavailable');
+        // Match the primary advertised by the creation form, without rejecting
+        // an otherwise usable default because an optional backup is unavailable.
+        await validateModelChain(chain.slice(0, 1));
+      }
+      deps.assertOwner(owner);
       await createBotProfile({ ...input, prepareInvitation: true });
       deps.assertOwner(owner);
       source = await getBotRemoteResourceSource(input.id);

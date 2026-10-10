@@ -15,16 +15,17 @@ import type { RemoteSession } from './types';
 
 /** Follow a companion's current host-owned task on focus/reconnect, retaining its permanent identity. */
 export function useRemoteResourceSession(deviceId: string, deviceName: string, sessionId: string, canMarkRead: boolean, metadataVerified = false) {
-  const params = useLocalSearchParams<{ resourceCollectionId?: string; resourceId?: string; resourceKind?: string }>();
+  const params = useLocalSearchParams<{ resourceCollectionId?: string; resourceId?: string; resourceKind?: string; openSearch?: string }>();
   const collectionId = typeof params.resourceCollectionId === 'string' ? params.resourceCollectionId : '';
   const resourceId = typeof params.resourceId === 'string' ? params.resourceId : '';
   const resourceKind = typeof params.resourceKind === 'string' ? params.resourceKind : '';
+  const historyEntry = params.openSearch === '1';
   const { invoke, connectionEpoch, status, onRemoteResourceChanged, subscribe, unsubscribe } = useDeviceLink();
   const { user, accountGeneration } = useAuth();
   const { t, i18n } = useTranslation();
   const router = useRouter();
   const focused = useIsFocused();
-  const identity = JSON.stringify([accountGeneration, deviceId, sessionId, collectionId, resourceKind, resourceId]);
+  const identity = JSON.stringify([accountGeneration, deviceId, sessionId, collectionId, resourceKind, resourceId, historyEntry]);
   const [display, setDisplay] = useState<{ identity: string; resource: RemoteResource } | null>(null);
   const binding = JSON.stringify([identity, connectionEpoch, i18n.language]);
   const current = useRef(binding); current.current = binding;
@@ -59,7 +60,8 @@ export function useRemoteResourceSession(deviceId: string, deviceName: string, s
         setDisplay({ identity, resource });
         setFailure(null);
         const stage = (resource.blocks?.find(block => block.id === 'invitation' && block.primitive === 'status')?.data as { stage?: string } | undefined)?.stage;
-        if (stage && stage !== 'ready') {
+        const invitationPending = !!stage && stage !== 'ready';
+        if (invitationPending && !historyEntry) {
           setVerified(null);
           router.replace({ pathname: '/resources/[collectionId]/[resourceId]', params: {
             collectionId, resourceId, resourceKind, deviceId, deviceName,
@@ -79,7 +81,9 @@ export function useRemoteResourceSession(deviceId: string, deviceName: string, s
           router.setParams({ sessionId: session.id });
           return; // The replacement task must mount and finish its own message sync first.
         }
-        setVerified(binding);
+        // History remains visible during preparation, but must not enable the
+        // composer, realtime controls or queued sends until the invitation is ready.
+        setVerified(invitationPending ? null : binding);
       } catch (error) {
         if (!valid()) return;
         setVerified(null);
@@ -107,6 +111,6 @@ export function useRemoteResourceSession(deviceId: string, deviceName: string, s
     const appState = AppState.addEventListener('change', (state) => { generation += 1; setVerified(null); if (state === 'active') void load(); });
     void load();
     return () => { disposed = true; setVerified(null); offPush(); offTopic(); appState.remove(); if (timer) clearTimeout(timer); };
-  }, [attempt, binding, collectionId, deviceId, deviceName, identity, invoke, i18n.language, onRemoteResourceChanged, resourceId, resourceKind, router, sessionId, status, subscribe, t, unsubscribe, user?.id]));
+  }, [attempt, binding, historyEntry, collectionId, deviceId, deviceName, identity, invoke, i18n.language, onRemoteResourceChanged, resourceId, resourceKind, router, sessionId, status, subscribe, t, unsubscribe, user?.id]));
   return { resource, ready, markReadThrough, error: failure?.binding === binding ? failure.message : null, retry };
 }

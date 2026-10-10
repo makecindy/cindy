@@ -25,6 +25,7 @@ const mocks = vi.hoisted(() => {
   const sessionGet = vi.fn();
   return {
   navigate: vi.fn(),
+  retryBotInvitation: vi.fn(async (_id: string) => {}),
   onboarding: false,
   readSession: sessionGet,
   initialSearch: '' as string,
@@ -80,6 +81,7 @@ vi.mock('react-router-dom', async (importOriginal) => {
 
 vi.mock('../botStore', () => ({
   updateBotProfile: mocks.updateBotProfile,
+  retryBotInvitation: mocks.retryBotInvitation,
   chooseBotAvatar: mocks.chooseBotAvatar,
   setCanonicalBotSession: vi.fn(),
   useBotProfiles: () => mocks.profiles,
@@ -200,6 +202,7 @@ function renderSettings(overrides: Partial<BotProfile> = {}, initialSearch = 'se
 
 beforeEach(() => {
   mocks.navigate.mockReset();
+  mocks.retryBotInvitation.mockClear();
   mocks.onboarding = false;
   mocks.readSession.mockReset();
   mocks.updateBotProfile.mockReset();
@@ -297,6 +300,44 @@ describe('Bot entry after deletion', () => {
 });
 
 describe('Bot settings profile consolidation', () => {
+  it.each(['failed', 'welcome'] as const)('keeps model settings accessible while invitation is %s', async (stage) => {
+    renderSettings({ invitation: { stage }, canonicalSessionId: undefined });
+    expect(screen.getByLabelText('bots.nameLabel')).toHaveProperty('readOnly', true);
+    expect(screen.getByLabelText('bots.profile.summary')).toHaveProperty('readOnly', true);
+    expect(screen.getByLabelText('bots.profile.personality')).toHaveProperty('readOnly', true);
+    fireEvent.click(screen.getByRole('button', { name: 'bots.invitation.changeModel' }));
+    fireEvent.click(within(screen.getByTestId('bot-primary-model-controls')).getByTestId('codex-model-selector'));
+    await waitFor(() => expect(mocks.updateBotProfile).toHaveBeenCalledWith('bot-1', expect.objectContaining({
+      capabilities: expect.objectContaining({ modelChainOverride: [expect.objectContaining({ model: 'custom-model', harness: 'codex' })] }),
+    })));
+  });
+
+  it('waits for the replacement model to be saved before retrying the same invitation', async () => {
+    let finishSave!: () => void;
+    mocks.updateBotProfile.mockImplementationOnce(async (_id, patch) => {
+      await new Promise<void>(resolve => { finishSave = resolve; });
+      return { id: 'bot-1', currentVersion: 2, ...patch };
+    });
+    renderSettings({ invitation: { stage: 'failed' } });
+    fireEvent.click(screen.getByRole('button', { name: 'bots.invitation.changeModel' }));
+    fireEvent.click(within(screen.getByTestId('bot-primary-model-controls')).getByTestId('codex-model-selector'));
+    fireEvent.click(screen.getByRole('button', { name: 'commonUi.retry' }));
+    await waitFor(() => expect(finishSave).toBeTypeOf('function'));
+    expect(mocks.retryBotInvitation).not.toHaveBeenCalled();
+    await act(async () => finishSave());
+    await waitFor(() => expect(mocks.retryBotInvitation).toHaveBeenCalledWith('bot-1'));
+  });
+
+  it('does not retry with the old model when saving the replacement fails', async () => {
+    mocks.updateBotProfile.mockRejectedValue(new Error('save unavailable'));
+    renderSettings({ invitation: { stage: 'failed' } });
+    fireEvent.click(screen.getByRole('button', { name: 'bots.invitation.changeModel' }));
+    fireEvent.click(within(screen.getByTestId('bot-primary-model-controls')).getByTestId('codex-model-selector'));
+    fireEvent.click(screen.getByRole('button', { name: 'commonUi.retry' }));
+    await screen.findByText('bots.invitation.retryFailed');
+    expect(mocks.retryBotInvitation).not.toHaveBeenCalled();
+  });
+
   it.each([true, false])('opens existing history without a model when onboarding is %s', async (onboarding) => {
     const existing = bot({ capabilities: capabilities({ modelChain: [], model: '' }) });
     mocks.profiles = [existing];

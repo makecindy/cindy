@@ -119,7 +119,10 @@ export function createBotRemoteSettingsResource(deps: BotRemoteSettingsDeps) {
         return { id: operation, primitive: 'markdown', title: copy[operation], fallbackMarkdown: Object.values(values).filter(value => typeof value === 'string').join('\n\n').slice(0, 60_000) };
       }
       const id = issue(context, owner, settings, operation);
+      const preparing = source.invitation && source.invitation.stage !== 'ready'
+        && !(source.invitation.stage === 'avatar' && source.canonicalSessionId);
       actions.push({ id, label: copy[operation], fields,
+        ...(operation === 'profile' && preparing ? { disabled: true } : {}),
         ...(operation === 'permissions' ? { confirmation: { title: copy.permissions, body: copy.permissionWarning, confirmLabel: copy.save } } : {}) });
       return { id: operation, primitive: 'form', title: copy[operation], fallbackMarkdown: operation === 'models' ? settings.modelChain.map(route => [route.model, route.providerId, route.harness, route.effort, `Fast: ${route.fastMode}`].filter(Boolean).join(' · ')).join('\n') : copy[operation].fallback, data: { actionId: id, values } };
     };

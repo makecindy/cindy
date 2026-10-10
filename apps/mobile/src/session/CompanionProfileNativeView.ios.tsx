@@ -57,7 +57,7 @@ export function CompanionProfileNativeView(p: CompanionProfileNativeViewProps) {
       <Text modifiers={[font({ textStyle: 'headline' }), lineLimit(2)]}>{p.name}</Text><Spacer />
     </HStack></Section>
     <Section>{row('profile', 'person.crop.circle')}{row('memory', 'brain')}{row('models', 'slider.horizontal.3')}{row('skills', 'sparkles')}</Section>
-    <Section>{row('artifacts', 'doc.text')}{row('search', 'magnifyingglass', p.onSearch)}{row('permissions', 'hand.raised')}</Section>
+    <Section>{row('artifacts', 'doc.text')}{p.onSearch ? row('search', 'magnifyingglass', p.onSearch) : null}{row('permissions', 'hand.raised')}</Section>
     <Section>{p.data?.panels.filter(item => ['restart', 'resume', 'delete'].includes(item.id) && item.action).map(item => <Button key={item.id} onPress={() => p.onConfirm(item)} modifiers={[buttonStyle('plain'), listRowInsets({ top: 4, bottom: 4, leading: 16, trailing: 16 }), disabled(p.busy || !p.online), frame({ minHeight: 44 }), ...(item.id === 'delete' ? [foregroundStyle(colors.destructive)] : [])]}><HStack modifiers={[frame({ maxWidth: Infinity, minHeight: 44 }), contentShape(shapes.rectangle())]}><Text>{label(item.action!.label)}</Text><Spacer /></HStack></Button>)}</Section>
     {/* Same as Android: a host without the settings forms asks for a Cindy update on that computer. */}
     {p.online && p.data && !p.data.panels.some(item => item.id === 'profile') ? note(tr('hostUpgrade')) : null}

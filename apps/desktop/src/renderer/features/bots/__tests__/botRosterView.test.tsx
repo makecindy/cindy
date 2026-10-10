@@ -38,6 +38,8 @@ vi.mock('../botStore', () => ({
   BotModelSelectionRequiredError: mocks.BotModelSelectionRequiredError,
   addBotProfileAndWait: mocks.addBotProfileAndWait,
   useBotProfiles: () => mocks.profiles,
+  subscribeBotGlobalModel: () => () => {},
+  getEffectiveBotModelChain: () => mocks.defaultModel ? [{ harness: 'codex', model: mocks.defaultModel, providerId: 'openai', effort: 'high', fastMode: false }] : [],
   refreshBotProfiles: vi.fn(),
   retryBotInvitation: vi.fn(),
   getEffectiveBotModelSettings: () => ({
@@ -170,6 +172,25 @@ describe('name-only creation', () => {
     await screen.findByRole('alert');
     expect((screen.getByRole('textbox') as HTMLInputElement).value).toBe('Mika');
     expect(mocks.navigate).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'choose-custom-codex-model' }));
+    fireEvent.click(screen.getByRole('button', { name: 'bots.guided.generate' }));
+    await waitFor(() => expect(mocks.navigate).toHaveBeenCalledWith('/bots/bot-new'));
+    expect(mocks.addBotProfileAndWait).toHaveBeenLastCalledWith(expect.objectContaining({
+      name: 'Mika', avatarImageBase64: 'cG9ydHJhaXQ=',
+      capabilities: expect.objectContaining({ modelChainOverride: [{ harness: 'codex', model: 'custom-model', providerId: 'custom', effort: 'high', fastMode: false }] }),
+    }));
+  });
+
+  it('allows selecting a model before creating when there is no usable default', async () => {
+    mocks.defaultModel = '';
+    render(<BotRosterView inline />);
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'Mika' } });
+    fireEvent.click(screen.getByRole('button', { name: 'choose-custom-model' }));
+    await waitFor(() => expect((screen.getByRole('button', { name: 'bots.guided.generate' }) as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(screen.getByRole('button', { name: 'bots.guided.generate' }));
+    await waitFor(() => expect(mocks.addBotProfileAndWait).toHaveBeenCalledWith(expect.objectContaining({
+      capabilities: expect.objectContaining({ harness: 'pi', model: 'custom-model', providerId: 'custom' }),
+    })));
   });
 
   it('renders creation directly in the empty state and prevents duplicate names', async () => {

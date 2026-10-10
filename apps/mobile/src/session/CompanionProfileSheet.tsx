@@ -45,7 +45,7 @@ export interface CompanionProfileSheetProps {
   deviceName: string;
   online: boolean;
   onDeleted?: () => void;
-  onOpenSearch: () => void;
+  onOpenSearch?: () => void;
 }
 /** Identity-keyed content prevents previous-account drafts and reads from surviving a switch. */
 export function CompanionProfileSheet(props: CompanionProfileSheetProps) {
@@ -380,7 +380,7 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
       <Text accessibilityRole="header" numberOfLines={2} style={styles.name}>{name}</Text>
     </View>
     <View style={styles.group}>{row('profile', Info)}{row('memory', Brain)}{row('models', Sparkles)}{row('skills', Settings2)}</View>
-    <View style={styles.group}>{row('artifacts', FileText)}{row('search', History, onOpenSearch)}{row('permissions', Hand)}</View>
+    <View style={styles.group}>{row('artifacts', FileText)}{onOpenSearch ? row('search', History, onOpenSearch) : null}{row('permissions', Hand)}</View>
     {/* Host order, like iOS: restart / resume / delete are whatever the computer offers now. */}
     {management.length ? <View style={styles.group}>{management.map(item => actionRow(item, () => confirm(item), item.id === 'delete'))}</View> : null}
     {online && data && !actionPanel('profile') ? note('hostUpgrade') : null}
@@ -438,10 +438,12 @@ function CompanionCreateSheetContent({ visible, onClose, onClosed, deviceId, dev
   const { t, i18n } = useTranslation();
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
+  const [modelStage, setModelStage] = useState<'form' | 'closing-form' | 'picker' | 'closing-picker'>('form');
+  const [modelValues, setModelValues] = useState<ProfileValues>({ followsDefault: true, modelChain: '[]' });
   const [importing, setImporting] = useState(false);
   const [openingImport, setOpeningImport] = useState(false);
   const openImport = () => setOpeningImport(true);
-  const creationClosed = () => { if (openingImport) { setOpeningImport(false); setImporting(true); } else onClosed?.(); };
+  const creationClosed = () => { if (modelStage === 'closing-form') { setModelStage('picker'); return; } if (openingImport) { setOpeningImport(false); setImporting(true); } else onClosed?.(); };
   const [data, setData] = useState<CompanionProfileData | null>(null);
   const [values, setValues] = useState<ProfileValues>({ name: '', avatarImageBase64: '' });
   const [loading, setLoading] = useState(false);
@@ -473,19 +475,26 @@ function CompanionCreateSheetContent({ visible, onClose, onClosed, deviceId, dev
     try {
       await openLink(deviceId);
       const next = await loadCompanionProfile(invoke, deviceId, ref, i18n.language);
-      if (current.current === sequence) setData(next);
+      if (current.current === sequence) {
+        setData(next);
+        setModelValues(previous => previous.followsDefault === true && !unconfirmed
+          ? { ...previous, modelChain: next.panels[0]?.creationModelChain ?? '[]' } : previous);
+      }
     } catch { if (current.current === sequence) setError(true); }
     finally { if (current.current === sequence) setLoading(false); }
   };
   useEffect(() => {
-    if (visible) { setImporting(false); setOpeningImport(false); requestId.current = null; setPortraitChanged(false); setNameTaken(false); setUnconfirmed(false); setValues({ name: '', avatarImageBase64: randomCompanionPortrait() }); }
+    if (visible) { setModelStage('form'); setModelValues({ followsDefault: true, modelChain: '[]' }); setImporting(false); setOpeningImport(false); requestId.current = null; setPortraitChanged(false); setNameTaken(false); setUnconfirmed(false); setValues({ name: '', avatarImageBase64: randomCompanionPortrait() }); }
   }, [visible]);
   useEffect(() => {
     setData(null); setError(false);
     if (visible && online) void reload();
     return () => { current.current++; };
   }, [visible, online, deviceId, collectionId]);
-  const dirty = !!String(values.name ?? '').trim() || portraitChanged;
+  const supportsModel = typeof data?.panels[0]?.creationModelChain === 'string';
+  const modelChain = readCompanionModelChain(modelValues.modelChain);
+  const modelMissing = supportsModel && !modelChain.length;
+  const dirty = !!String(values.name ?? '').trim() || portraitChanged || modelValues.followsDefault !== true;
   const change = (next: ProfileValues) => { if (unconfirmed) return; if (next.avatarImageBase64 !== values.avatarImageBase64) setPortraitChanged(true); setValues(next); };
   const close = () => {
     if (inFlight.current) return;
@@ -497,12 +506,12 @@ function CompanionCreateSheetContent({ visible, onClose, onClosed, deviceId, dev
   };
   const submit = async () => {
     const panel = data?.panels[0];
-    if (!panel?.action || panel.action.disabled || inFlight.current || !online || duplicate) return;
+    if (!panel?.action || panel.action.disabled || inFlight.current || !online || duplicate || modelMissing) return;
     inFlight.current = true; setBusy(true); setError(false); setNameTaken(false);
     const sequence = current.current;
     try {
       requestId.current ??= randomUUID();
-      const response = await invokeRemoteResourceAction(invoke, { deviceId, deviceName }, { collectionId, resourceRef: ref, actionId: panel.action.id, input: { ...values, requestId: requestId.current } }, i18n.language);
+      const response = await invokeRemoteResourceAction(invoke, { deviceId, deviceName }, { collectionId, resourceRef: ref, actionId: panel.action.id, input: { ...values, ...(supportsModel && modelValues.followsDefault !== true ? { modelChain: modelValues.modelChain } : {}), requestId: requestId.current } }, i18n.language);
       if (current.current !== sequence) return;
       const navigation = response.effects.find(effect => effect.kind === 'navigate' && effect.target.kind === 'resource');
       if (navigation?.kind !== 'navigate' || navigation.target.kind !== 'resource') throw new Error('Creation receipt missing');
@@ -522,24 +531,31 @@ function CompanionCreateSheetContent({ visible, onClose, onClosed, deviceId, dev
       setBusy(false);
     }
   };
+  const models = supportsModel ? <CompanionModelChain single deviceId={deviceId} values={modelValues}
+    disabled={busy || !online || unconfirmed} onChange={next => { if (!unconfirmed) setModelValues(next); }}
+    onPick={() => setModelStage('closing-form')} /> : null;
+  const modelPicker = <CompanionModelPicker visible={visible && modelStage === 'picker'} deviceId={deviceId} route={modelChain[0]}
+    onClose={() => setModelStage('closing-picker')} onClosed={() => setModelStage('form')}
+    onSelect={route => { setModelValues({ followsDefault: false, modelChain: JSON.stringify([route]) }); return true; }} />;
   if (importing) return <CompanionImportSheet visible={visible} onClose={onClose} onClosed={onClosed} deviceId={deviceId} deviceName={deviceName} online={online} onCreated={onCreated} />;
-  if (Platform.OS === 'ios') return <CompanionCreateNativeView onImport={data?.resource.actions?.some(action => action.id === 'open-agent-import') ? openImport : undefined} deviceName={deviceName} nameTaken={nameTaken} duplicate={duplicate} locked={unconfirmed} visible={visible && !openingImport} onClose={close} onClosed={creationClosed} panel={data?.panels[0]} values={values} onChange={change} onSubmit={() => void submit()} onRetry={() => void reload()} online={online} busy={busy} loading={loading} error={error} dirty={dirty} />;
+  if (Platform.OS === 'ios') return <>{modelPicker}<CompanionCreateNativeView models={models} modelMissing={modelMissing} onImport={data?.resource.actions?.some(action => action.id === 'open-agent-import') ? openImport : undefined} deviceName={deviceName} nameTaken={nameTaken} duplicate={duplicate} locked={unconfirmed} visible={visible && !openingImport && modelStage === 'form'} onClose={close} onClosed={creationClosed} panel={data?.panels[0]} values={values} onChange={change} onSubmit={() => void submit()} onRetry={() => void reload()} online={online} busy={busy} loading={loading} error={error} dirty={dirty} /></>;
   const panel = data?.panels[0];
   const notice = !online ? t('devices.companionProfile.offline', { deviceName }) : error || duplicate ? t(duplicate || nameTaken ? 'devices.companionProfile.nameTaken' : 'devices.companionProfile.createFailed') : null;
   // Same gate as iOS: a live, enabled host action, a name and a portrait.
-  const blocked = busy || !online || !panel?.action || !!panel.action.disabled || typeof values.name !== 'string' || !values.name.trim() || !values.avatarImageBase64 || duplicate;
-  return <CompanionSheet visible={visible && !openingImport} onClose={close} onClosed={creationClosed} preventDismiss={dirty || busy} title={t('devices.companionProfile.create')}>
+  const blocked = busy || !online || !panel?.action || !!panel.action.disabled || typeof values.name !== 'string' || !values.name.trim() || !values.avatarImageBase64 || duplicate || modelMissing;
+  return <>{modelPicker}<CompanionSheet visible={visible && !openingImport && modelStage === 'form'} onClose={close} onClosed={creationClosed} preventDismiss={dirty || busy} title={t('devices.companionProfile.create')}>
     <View style={styles.content}>
       {notice ? <Text accessibilityRole={online ? 'alert' : undefined} style={styles.note}>{notice}</Text> : null}
       {loading ? <ActivityIndicator accessibilityLabel={t('devices.resources.loading')} color={colors.textSecondary} style={styles.spinner} /> : null}
       {panel ? <CompanionProfileForm panel={panel} values={values} onChange={change} disabled={busy || !online || unconfirmed} /> : null}
+      {models}
       {!panel && online && !loading ? <MainWindowActionButton action={{ label: t('devices.resources.retry'), disabled: busy, onPress: () => void reload() }} /> : null}
       {data?.resource.actions?.some(action => action.id === 'open-agent-import') ? <MainWindowActionButton action={{ label: t('devices.companionImport.entry'), disabled: busy || !online || unconfirmed, onPress: openImport }} /> : null}
       <MainWindowActionButton action={{ label: t('devices.companionProfile.create'), busy, disabled: blocked, onPress: () => void submit() }} />
       {/* The explicit exit while a draft blocks dismissal; `close` still asks before discarding. */}
       <MainWindowActionButton action={{ label: t('devices.common.cancel'), disabled: busy, onPress: close }} />
     </View>
-  </CompanionSheet>;
+  </CompanionSheet></>;
 }
 
 /**

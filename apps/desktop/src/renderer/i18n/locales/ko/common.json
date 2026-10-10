@@ -8809,6 +8809,7 @@
       "avatar": "{{name}}이 새 아바타를 고르고 있어요",
       "welcome": "첫인사를 준비하고 있어요",
       "failed": "준비가 잠시 멈췄어요. 완료된 내용은 저장되어 있으니 다시 시도할 수 있어요.",
+      "changeModel": "모델 변경",
       "retryFailed": "지금은 다시 시도할 수 없어요. 잠시 후 시도해 주세요.",
       "leave": "잠시 나가기",
       "avatarSkipped": "지금은 기본 아바타를 사용해요. 언제든 바꿀 수 있어요."
@@ -8849,7 +8850,9 @@
       "generate": "파트너 생성",
       "generating": "파트너를 구상하고 있어요…",
       "generationFailed": "생성하지 못했습니다. 입력 내용은 남아 있으니 다시 시도해 주세요.",
-      "modelRequired": "먼저 Cindy에서 사용 가능한 기본 모델을 선택해 주세요.",
+      "modelRequired": "위에서 사용 가능한 모델을 선택한 후 계속해 주세요.",
+      "modelFollowsDefault": "파트너 기본 모델을 따릅니다.",
+      "modelForThisBot": "이 선택은 이 파트너에게만 적용됩니다.",
       "cindyDescription": "Cindy 사용과 도구 연결을 도와드리고 함께 일을 마무리할게요.",
       "cindySummary": "Cindy 관리, 도구 연결, 일 마무리.",
       "openCindy": "Cindy 열기",
