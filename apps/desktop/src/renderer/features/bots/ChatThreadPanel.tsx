@@ -21,6 +21,16 @@ import { ChatMessageActions, chatErrorKey } from './ChatServerControls';
 const key = (name: string) => `bots.groupChat.server.${name}`;
 const api = () => window.electronAPI.maker.chatServer;
 
+export function animateThreadPanelWidth(panel: HTMLElement, from: string, to: string): Animation | null {
+  const style = getComputedStyle(panel);
+  const token = style.getPropertyValue('--motion-base').trim();
+  const duration = parseFloat(token) * (token.endsWith('ms') ? 1 : 1000);
+  if (!panel.animate || !Number.isFinite(duration) || duration <= 0) return null;
+  return panel.animate([{ width: from }, { width: to }], {
+    duration, easing: style.getPropertyValue('--motion-ease-move').trim() || 'linear', fill: 'forwards',
+  });
+}
+
 function ThreadMessage({ group, message, shareScope, sharing, onChanged }: { group: BotGroupDetail; message: BotGroupMessageView; shareScope: string; sharing: boolean; onChanged: () => void }) {
   const member = group.members.find(m => m.botId === message.authorBotId);
   if (message.kind === 'notice' && isBotGroupRuntimeFailureCode(message.runtimeFailureCode)) return <BotGroupRuntimeFailureNotice name={message.authorName || member?.name || ''} code={message.runtimeFailureCode} />;
@@ -102,7 +112,7 @@ export function ChatThreadPanel({ group, rootId, onClose }: { group: BotGroupDet
     finally { sending.current = false; setBusy(false); }
   }
   return <aside ref={panelRef} aria-labelledby={titleId}
-        className="flex h-full min-w-0 w-1/2 max-w-md shrink-0 flex-col border-l border-[var(--border-default)] bg-[var(--surface)]">
+        className="flex h-full min-w-0 w-1/2 max-w-[min(50%,28rem)] shrink-0 flex-col overflow-hidden border-l border-[var(--border-default)] bg-[var(--surface)]">
         <header className="flex h-14 shrink-0 items-center justify-between border-b border-[var(--border-default)] px-5">
           <h2 id={titleId} className="text-15 font-medium text-[var(--text-primary)]">{t(key('replies'))}</h2>
           <Tip text={t('bots.close')}>
