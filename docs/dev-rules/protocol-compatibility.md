@@ -11,13 +11,16 @@
 
 > **增量适用原则**：wire protocol 兼容对所有跨端改动生效，不因是小改而豁免。
 
-## 任务在执行主机内变更项目
+## 任务在所属主机内变更项目
 
 Desktop 侧栏拖放与右键移动复用 `device-link:task-migration` 的 `move-project` action；
 本机调用传空 device ID，远程控制调用任务所属主机，不把被控端路径传给控制端文件系统。
-拖放只改变同一执行主机上的分组，跨电脑复制仍走原有迁移操作。
+拖放只改变同一任务所属主机上的分组，跨电脑复制仍走原有迁移操作。
+Agent 运行在另一台电脑（含供应商分享）的空闲任务，沿用即时移动路径，不登记后台移动意图
+或要求本机转录文件迁移；其远端工作目录与会话记录按任务 ID 保持不变。这类任务或其 Worker
+运行中时仍拒绝移动，本节的后台迁移不扩大到远程 Agent。
 
-运行中请求在主机保存账号隔离的移动意图，sessions 列表及补丁新增可选
+Agent 在任务所属主机运行时，运行中请求在该主机保存账号隔离的移动意图，sessions 列表及补丁新增可选
 `projectMoveTarget: { workingDir: string | null } | null`。对象只用于侧栏归属，内层 null
 表示对话组；外层 null／缺省表示使用已提交的 `workingDir`／`workspaceKind`。
 文件浏览、执行目录、附件及运行时创建继续读取原字段。主任务和活动 Worker 均空闲，且
@@ -31,9 +34,23 @@ Desktop 侧栏拖放与右键移动复用 `device-link:task-migration` 的 `move
 即时请求失败仅通过请求结果报告，避免重复提示。完整读取不重播旧失败事件。
 
 旧控制端忽略新字段，直到实际迁移提交后显示新项目；旧主机继续拒绝运行中移动，新控制端
-显示现有错误，不在本机代执行。Desktop 的新交互需要执行主机升级，手机无新增拖放入口。
+显示现有错误，不在本机代执行。Desktop 的新交互需要任务所属主机升级，手机无新增拖放入口。
 沿用现有权限、owner fence、sessions topic 与队列恢复，不新增 channel、relay 行为或 SQLite
 迁移；回退旧客户端时未兑现的账号记录保留，升级后按当前源目录重新核对，防止覆盖外部移动。
+
+## 回复速度快照
+
+既有 maker status 可选携带 `responseSpeed`（等待边界、估算计数、最近/平均速度与最多
+60 个采样点）；仅用于显示，不参与费用或上下文计数。新客户端校验该字段，旧主机省略时
+沿用原 usage 路径，旧客户端忽略新增字段。无需服务端更新、新通道、权限或数据库 migration。
+原生重试事件可为快照附加可选 `retrying`；两端亦从既有 error / done / Stop 事件
+附加可选 `outcome` 与 `retrying` 注记，
+只反映明确失败、取消或自动重试；不要求主机发送新事件，不落盘，不更改错误原因或操作契约。
+终态真实 output 与生成 duration 的匹配沿现有消息用量记录处理。详见
+[`response-speed.md`](response-speed.md)。
+Claude 的既有 done payload 可选携带 `turnUsage`，来自 SDK result 用量的本轮增量，
+供历史速度与消息用量配对。原 `usage` 保持会话累计口径；旧端忽略新字段，新端缺字段且无模型增量时
+省略该速度，不将累计用量当本轮输出。费用与上下文仍走原计量路径。
 
 ## 任务列表提前同步聊天正文
 
@@ -101,7 +118,8 @@ Claude Code 终态 error 事件可带 `usageResetAt`（unix ms）。服务端无
 `autoResumeInfo` 新增可选字段 `agentSwitch: { from, to, cause }`(cause 为 `usage-limit` / `auth` /
 `unavailable` / `overload`)，Desktop 与 Mobile 据此显示「{from} {原因}，已换到 {to} 继续」；字段缺失或
 不合法时照常显示 `usage-limit-reset` 的文案，旧客户端忽略该字段。P1 不改远程 Agent 协议：被分配到别的电脑的
-任务就是普通的远程 Agent 任务。
+任务就是普通的远程 Agent 任务。分享的人这边的自动换电脑(P2c，2026-10-10)另加可选字段 `groupSwitch: { cause }`
+(不带电脑名称)，Desktop 与 Mobile 显示「已自动换一台电脑继续」；旧客户端忽略，显示「用量已恢复，已自动继续」。
 
 ## Agent 跨设备历史发现与搜索
 
@@ -626,7 +644,10 @@ handler 无 sender 依赖；不加入共享任务访客白名单，不进入自�
   桌面远程控制 A 上的已建任务(2026-10-09)与手机同口径：A 投影的任务带 `agentDeviceId` 字段(含 null)才开放，
   控制端直接经 device-link 读第三台电脑的 `maker:provider:list`，A 自己的目录照远程控制列全部供应商，换位置同样
   带 `agentDeviceId`(null = A)，换后档位记在控制端为那台电脑单独记的一份(改回 A 时写 A 的镜像)。A 收到的分享与
-  控制端自己作为落点暂不在桌面控制端列出(控制端读不到那份目录)；Agent 正在这类位置上时维持原有的 A 目录列表。
+  控制端自己作为新的落点暂不在桌面控制端列出；Agent 正在控制端读不到目录的位置上时维持原有的 A 目录列表。
+  例外(2026-10-10)：Agent 当前 / 挂着的位置是分享(`share:<id>`)、且控制端自己的已收到列表里也有这条(分享按账号
+  授予，同账号电脑收到的是同一份)时，控制端经自己的分享通道读那份目录与 Agent 能力，模型按钮按分享显示，候选里
+  只并进这一条分享；不经 A、不新增 channel。控制端没收到时维持原样。
   实现见 `apps/desktop/src/renderer/lib/controlledTaskAgentLocation.ts`，回归见
   `controlledTaskRemoteAgentPanel.test.tsx` 与 `remoteAgentRelocationWiring.test.ts`。
   桌面远程控制下新建任务(建到 A 上，2026-10-09)同样开放：判据与手机新建相同(A 的 `maker:provider:list` 带
@@ -655,6 +676,9 @@ handler 无 sender 依赖；不加入共享任务访客白名单，不进入自�
   (旧版分享者回 `CHANNEL_NOT_ALLOWED`，受邀者的模型列表读不到这个分享)，订阅与其他 channel 一律拒绝，撤权后迟到的结果改写为 `ACCESS_REVOKED`。受邀者的任务把 `sessions.agent_device_id`
   记成 `share:<shareId>`(不改 schema)，旧版本读到它按连不上的电脑处理。受邀者对端的 `open` 载荷按白名单复核
   (hooks / env / apiKeyHelper 剥离、越界 `@` 引用与 `!` 命令语法中和、不加载 B 的个人化与托管 Skill)，只能恢复自己建立的会话；
+  B 上受邀者会话的 Agent 自带工具按白名单开放(产品规则 §9 第 5 条，不改 wire)；受邀者电脑上的 `cindy_exec` 在任务的
+  Agent 位置是 `share:` 时为 Claude Code 追加 `WebFetch`(在受邀者电脑抓取，tools/list 追加项)：旧版受邀者不列，受邀者就没有
+  WebFetch；旧版分享者上它与自带 WebFetch 并存。两种组合都不报错，也不改 wire；
   remote-agent wire 本身不变。新错误码 `REMOTE_AGENT_SHARE_PAUSED` / `REMOTE_AGENT_SHARE_REMOVED` / `REMOTE_AGENT_SHARE_UNAVAILABLE`
   只在受邀者本机产生(分享者电脑回 `ACCESS_REVOKED`、relay 回 `REMOTE_DISABLED` 时改写成 `UNAVAILABLE`)；
   控制这台电脑的旧版手机没有对应文案，显示通用的发送失败提示。分享出去的 `maker:provider:list` 去掉分享者的账号身份
@@ -662,8 +686,144 @@ handler 无 sender 依赖；不加入共享任务访客白名单，不进入自�
   分享者电脑、受邀者电脑与手机各过一遍。手机经同账号新 channel `maker:provider-share:received-catalogs`(进同账号 allowlist)
   读取被控电脑收到的分享及其目录；旧版电脑回 `CHANNEL_NOT_ALLOWED`，手机按没有分享处理。跨区域(P3)经服务端开关开放，
   受邀者用第二条 relay 连接(`ProviderShareGuest` 认证)，见契约 §6。
-- **暂不支持**：分叉、审查、移动项目、复制到其他电脑、导出 `.cshare`(Agent 会话记录在 B)，入口隐藏、
+- **暂不支持**：分叉、审查、复制到其他电脑、导出 `.cshare`(Agent 会话记录在 B)，入口隐藏、
   主进程拒绝。
+- **移动项目可用**：B 上的影子目录只按「控制端 + 任务 id」定址(虚拟工作区为必需能力)，与 A 的工作目录
+  无关；A 换目录后关闭空闲 handle，下次发送按新目录重建，B 上的会话记录原样续用。
+
+## 协同远端 Worker：Worker 在另一台电脑运行
+
+与上一节方向相反：协同的 Lead 与团队留在 A，单个 Worker 的任务、目录、命令与文件都在 B(运行设备)。
+B 上的 Worker 是一条普通任务，`sessions.orca_remote_lead`(migration 0124，JSON 见
+`apps/desktop/src/shared/orcaRemoteWorker.ts`)记录派活电脑与 Lead；派活、停止与回报复用现有会话通道。
+方案与产品决策见 [`../orca-cross-device-worker-plan.md`](../orca-cross-device-worker-plan.md)。
+
+- **新增 channel**(`packages/device-link/src/orcaRemoteWorker.ts`，只进同账号 allowlist，不进共享任务清单)：
+  `maker:orca:remote-worker:caps`(能力探测，回 `{ version }`)、`…:open`(按 A 给定的任务 id 新建 Worker 任务，
+  幂等；超时 60s)、`…:release`(结束协同，任务与文件保留，幂等)。B 侧实现见
+  `apps/desktop/src/main/maker-ipc/orcaRemoteWorkerHost.ts`。
+- **幂等 open 的终态检查**：同来源、同 Lead 且未 release 的已有任务也必须仍为 `active`；
+  已归档／软删除时拒绝并返回既有 `PRECONDITION_FAILED`，不新建、不复活。A 保留未确认创建
+  收据，恢复仅解除未关联标记。该检查使用 B 的现有 status 列，不新增 wire 字段或改变版本；
+  旧 B 仍保留原行为，B 更新后生效。
+- **实际档位**：`open` 回包可选 `effort` 是 B 已保存的解析结果，同 ID 重试也从已有任务读取。
+  空字符串保留无档位状态；旧 B 不返回该字段时，A 保留原来的请求值降级规则。字段增量不改协议版本，
+  旧 A 忽略它，新 A 不向旧 B 要求新增请求字段。
+- **实际 Fast 状态**：`open` 回包可选 `fastMode` 是 B 已保存的布尔值，新建和同 ID 重试均取真实任务，
+  A 的代理任务和创建结果沿用它，显式 `false` 不被请求中的 `true` 覆盖。旧 B 缺省时，A 保留请求值的
+  降级规则；旧 A 忽略新增字段，版本与请求不变。完整状态一致性需要 A/B 均更新，服务端无需改动。
+  此字段不改变 B 的模型准入：当前显式开启不支持的 Fast 仍在创建前拒绝，不新增静默降级。
+- **来源身份**：派活电脑取 server 盖章的 `src`(`DeviceLinkInvokeContext.controllerDeviceId`)，不采信载荷自报；
+  非 device-link 调用与共享任务访客一律拒绝。`open` 指定的 `workingDir` 与 `maker:create-session` 同口径经
+  B 的目录守卫(`device-link/dispatch.ts` 的 `PATH_GUARDED_CHANNELS`)；不指定则由 B 分配任务目录。
+- **旧端降级**：旧版 B 没有这三个 channel，回 `CHANNEL_NOT_ALLOWED`；A 据此把该电脑显示为「需要更新」，
+  **不回退**到普通 `maker:create-session`(普通任务没有防嵌套与来源标记)。B 新、A 旧时 B 不受影响。
+- **可选运行设备**：`maker:orca:execution-devices`(只读)由 A 本机界面与控制端共用，返回
+  `{ devices: [{ deviceId, name, platform, supported }] }`；逐台探测 caps，旧版标 `supported:false`，
+  探测失败的不列出。共享任务访客拒绝。
+  Mobile 使用同一只读通道获取 A 视角的设备，模型与 Agent 从所选运行设备读取。
+  新手机连接旧 A 收到 `CHANNEL_NOT_ALLOWED` 时隐藏设备选择，原来的 A 本机 Worker 创建不变。
+  首个与追加 Worker 都沿用既有可选 `executionDeviceId` / `workingDir` 字段；「对话」不传目录，
+  「指定目录」传 B 上的绝对路径，由 B 校验；失败不回退 A。
+- **A 驱动 B 的其余通道**全部是已有同账号 channel：`maker:input:enqueue`(按 `clientId` 幂等，
+  `durableDelivery`)、`maker:input:get-projection`(投递回执)、`maker:list-active`、`local-db:sessions:get`、
+  `local-db:history:messages`、`maker:abort-session`；B 不需要知道「这是协同派活」，只认来源标签。
+- **恢复暂停**：B 的 `INPUT_ENQUEUE` 按已有自动消息来源判据处理 `origin.kind`，Orca 派活不解除
+  崩溃恢复后的队列暂停；普通手机／桌面用户输入仍可解除恢复暂停，用户 Stop 暂停不受影响。
+  不新增 wire 字段或改变版本，A 的既有派活载荷不变；旧 B 保持其原有行为，需更新 B 才有此修复。
+- **收尾限制**：当前 abort/release 不取消未消费的远端派活，结束协同后队列仍可能继续执行。
+  远控入队后的来源不足以可靠区分 Lead 派活与用户输入，本轮不通过清空队列规避；待专门设计
+  持久投递归属、取消回执与释放边界后修复，详见 `orca-team-architecture.md` 的已知限制。
+- **B 侧约束**：带标记的任务不能再开启协同(`assertLeadCollabProjectEnabled` 统一拒绝 Worker 与远端 Worker，
+  覆盖 IPC、远程与 Agent 工具入口)，不能复制到其他电脑(`task-migration/service.ts`)；侧栏照常显示，
+  任务头标注「来自 X 的协同」，结束后显示「协同已结束」。
+
+## 供应商组：同账号直连(P2a)
+
+产品规则见 [`provider-groups.md`](../product-rules/provider-groups.md) §4、§5、§6.1、§10。组所在电脑 O 把某个供应商建成组后，
+同账号另一台电脑 C 上选了 O 的这个供应商的新任务：C 问 O 该用哪台，再自己直接连到选中的组内电脑运行。
+
+- **新 invoke channel `provider-group:remote`**(`packages/device-link/src/providerGroup.ts`，进同账号 allowlist)，被控端
+  `dispatch.ts` 拦截执行，不落 ipcMain handler；供应商分享受邀者(不在 `PROVIDER_SHARE_CHANNELS`)与共享任务访客一律
+  `CHANNEL_NOT_ALLOWED`。请求 `{ action, ... }`，结构与校验在 `apps/desktop/src/shared/providerGroup.ts`(两端同一份)：
+  - `pick { sessionId, providerId, agentKind, model, exclude[] }` → `{ kind: 'member', member: { key, kind, agentDeviceId, providerId }, label }`
+    / `{ kind: 'unavailable' }` / `{ kind: 'none' }`(没有组或供应商没开放远程调用)。组员坐标是 O 视角(`local` = O 自己)，C 换算成
+    本机位置；选中即给那台记 30s 临时占用；
+  - `cool { providerId, memberKey, cause: 'usage-limit' | 'auth' | 'overload', resetAt? }` → O 冷却那台(`resetAt` 最多信 8 天)；
+    连不上不报，只由 C 自己避开；
+  - `leases { seq, entries: [{ sessionId, providerId, memberKey }] }` → 整体替换 C 正在运行的经组任务，`seq` 只增(C 按时间生成，
+    重启后仍增大)，乱序旧包丢弃，150s 不刷新作废；只用于分摊负载；
+  - `view { providerId }` → 组设置与组员状态(`ProviderGroupView`)。
+  旧 O 回 `CHANNEL_NOT_ALLOWED`：`pick` 按 `none` 处理，任务照旧直接在 O 上运行。
+- **`maker:provider:list` 新增可选字段 `group`**：只对同账号调用方、只加在建了组且「允许被远程调用」的供应商上：
+  `{ strategy, autoSwitch, members: [{ key, kind, agentDeviceId, providerId, label?, paused }] }`(并发上限与权重不外发)。
+  组摘要列着组内电脑，受邀者与共享任务访客拿不到：分享投影里去掉，`scrubSharedProvider` 再兜一层(分享者电脑、受邀者电脑与
+  手机各过一遍)。旧控制端与手机不认识就忽略；新控制端据此在模型列表与设置页收起组员(只看在线电脑的目录)。O 改组后经
+  `maker:provider:changed` 推送让同账号电脑重读目录。
+- **远程 Agent open 载荷新增可选 `groupAssigned: true`**(`remote-agent/wire.ts`)：任务由供应商组分配到这台(本机的组或另一台的组)，
+  这台直接运行、不再进入它自己的组(防转圈)。旧被控端解码时丢弃(它本来没有组)。
+- **本地数据**：C 上经另一台电脑的组分配的任务绑定存 `provider-group-remote-bindings.json`(按账号，与本机组的
+  `provider-group-bindings.json` 分开，降级后旧版本读不到它，不会误认成本机的同名组)。不改数据库与服务端。
+- 实现：`apps/desktop/src/main/provider-group/`(`remoteHandler.ts`、`remoteClient.ts`、`externalLoad.ts`、`leaseReporter.ts`、
+  `service.ts` 的组来源)；回归见同目录 `__tests__/remoteGroup.test.ts`、`remoteHandler.test.ts`、`leaseReporter.test.ts`，
+  `device-link/__tests__/providerShareDispatch.test.ts`(受邀者拒绝与不泄露组摘要)。
+
+## 供应商组：受邀者经组所在电脑中转(P2b)
+
+产品规则见 [`provider-groups.md`](../product-rules/provider-groups.md) §4「分享的人(中转)」、§8、§9。受邀者 G 用组所在电脑 O
+分享出去的供应商，而 O 把它建成了组：O 的远程 Agent 被控端按组选一台组内电脑 M，自己作为 M 的控制端中转。G 与 O 之间的
+`maker:remote-agent:v1` 协议完全不变(中转对 G 透明)；O 与 M 之间沿用同一协议，新增下面三项可选内容：
+
+- **open 载荷新增可选 `relay`**(`remote-agent/wire.ts`，`REMOTE_AGENT_RELAY_KEY_PATTERN`，16–64 位 `[A-Za-z0-9_-]`)：O 为受邀者取的
+  不透明键(按受邀者派生，不含分享与成员信息)。M 收到带 `relay` 的 open 一律按受邀者隔离运行(即使控制端是同账号的 O)：
+  受邀者目录、会话索引、续接校验与运行数按(控制端, relay)分开；同一控制端按受邀者各 16 个、合计 64 个任务。只有同账号
+  控制端的 `relay` 才各算一份运行数：受邀者控制端自己填的 `relay` 只把它的数据分开存放，运行数仍按这个受邀者合计 16 个，
+  不能借此放宽额度(分享来的 M 上 O 本身就是受邀者，O 替各受邀者中转的任务在那台合计 16 个)。O 同时带
+  `groupAssigned`，并把 `sessionId` 换成按(受邀者, 任务 id)派生的 id、`providerId` 换成 M 上的供应商。旧 M 丢弃这个字段，
+  所以 O 只把受邀者任务交给 caps 声明了 `guestRelay` 的同账号 M；分享来的 M 本来就把 O 当受邀者隔离，不要求这个能力。
+- **caps 新增可选 `guestRelay: true`**(`RemoteAgentCaps`)：被控端能按受邀者隔离运行(供应商级授权与受邀者出站边界都已接上)。
+- **新 op `forget { relay }`**(`parseRemoteAgentRequest`)：O 删除受邀者后请 M 清掉替它运行过的任务、受邀者目录与会话记录；
+  只作用于调用方自己的 relay。旧 M 回 `REMOTE_AGENT_INVALID`(它从没接过被中转的任务)。
+- O 不信任 G 带来的 `relay` / `groupAssigned`：受邀者的这两个字段只会让任务按普通受邀者在 O 本机隔离运行，不能借此逃出
+  受邀者隔离；O 的组路由只用 O 自己的组设置与记录。
+- `forget` 的通知名单从 O 发出 open 那一刻起记(含启动失败、还没有原生会话 id 的 M)；没通知到的 M 持久记在 O 的受邀者
+  会话索引(`forgetPending`)里，之后自动重发。open 的结果不明(超时、断链)时 O 先用同一个 runId 发 `close` 再换下一台；
+  这些都只用已有的 op。
+- 中转不解码消息与附件、不落盘(载荷原样按同一 callId 转给 M)；推帧按任务串行；M 报出的路径类错误(分享暂停、远程调用
+  关闭、连不上、太忙等)转给 G 时统一成 `REMOTE_AGENT_UNAVAILABLE`。
+- **控制端拉取器修正**(与本节同批，`remote-agent/controller/poller.ts`)：一个 poll 带回数据后，若有任务没被仍在途的 poll
+  覆盖就立刻再发一个。此前同一台电脑上已有空闲任务挂着长等待时，新打开的任务带回第一段数据后要等旧的长等待超时
+  (最长 10s)才能拿到 `started`。只影响控制端本地调度，不改 wire。
+- 不改 relay、服务器与数据库。实现：`remote-agent/host/runHost.ts`(中转与 M 端隔离)、`host/groupRelay.ts`、
+  `provider-group/guestRelay.ts`(选电脑)；回归见 `remote-agent/__tests__/groupRelay.test.ts`(三端同进程)、
+  `provider-group/__tests__/guestRelay.test.ts`、`remote-agent/__tests__/poll.test.ts`。
+
+## 供应商组：受邀者运行中换电脑(P2c)
+
+产品规则见 [`provider-groups.md`](../product-rules/provider-groups.md) §6.1「谁来执行换电脑 · 分享的人」。上一节的中转任务在组内
+电脑 M 上因那台本身的原因失败时，交接要用到对话记录，只能由受邀者 G 执行；组所在电脑 O 只负责告诉 G「需要换一台」并在
+G 重新打开时换一台。G 与 O 之间新增四项可选内容，O 与 M 之间不变：
+
+- **open 载荷新增可选 `acceptsGroupSwitch: true`**(`remote-agent/wire.ts`，只认 `true`)：G 声明认识下面的凭证状态。新 G 打开
+  远程 Agent 任务时一律声明；O 只在中转任务上使用。旧 O 丢弃这个字段。
+- **事件流里的凭证状态 `{ t: 'state', state: { providerGroupSwitch: <token> } }`**(`REMOTE_AGENT_GROUP_SWITCH_STATE_KEY`，
+  凭证格式同 `REMOTE_AGENT_RELAY_KEY_PATTERN`)：O 看到 M 转来的终态错误(或一轮进行中 M 的任务意外结束；组选中 O 本机、任务在
+  O 本机运行时同样适用)、按组口径判定是那台的问题、并确认组里还有能接的电脑后，**先**追加这条状态，**再**转出原来的错误；判定与选电脑期间 M 转来的后续内容按原顺序
+  暂存，不乱序。只发给声明了 `acceptsGroupSwitch` 的 G；旧 G 只看到原来的错误(行为同 P2b)。G 取走凭证、不并入任务状态
+  (`controller/startRemote.ts` `takeGroupSwitchState`)。O 丢弃 M 转来的同名状态，M 不能替 O 发凭证。
+- **open 载荷新增可选 `groupSwitchToken`**：G 自动交接(全量交接 + 全新原生会话)后重新打开时带回凭证。O 只认发给这个受邀者、
+  这个任务(按 O 侧的 `hostSessionId`)且未过期(10 分钟)的凭证，用一次即作废；有效时选电脑避开这一轮已经换下来的组内电脑，
+  无效时按普通新任务选。凭证只影响选哪台，不扩大任何权限；它与 `relay` / `groupAssigned` 一样不转给 M。
+- 同一轮每台组内电脑最多换一次(O 按(受邀者, 任务)记录)；那台上一轮正常结束或距上次换电脑超过 30 分钟算新的一轮。
+- **send 选项新增可选 `groupNewRound: true`**(`RemoteAgentWireSendOptions`，只认 `true`)：G 上的用户亲自接手(发消息、重试、
+  换模型)后、且这个任务收到过凭证时，下一次 `send` 带上它，O 据此清掉这个任务这一轮已经换下来的电脑，也算新的一轮。
+  O 读完即去掉，不交给 Agent、不转给 M；旧 O 丢弃这个字段(手动重试仍沿用旧的一轮，直到正常结束或 30 分钟)。它只影响
+  这个受邀者自己这个任务的换电脑记录，不扩大任何权限。组设置关掉了自动换电脑时 O 照常冷却出问题的那台，但不发凭证。
+- G 只在持有凭证时才换电脑：分享暂停、删除、撤权等来自 O 本身的错误没有凭证，照旧交回原有处理。
+- 不改 relay、服务器与数据库。实现：`remote-agent/host/runHost.ts`(暂存与发凭证、校验凭证)、`host/groupRelay.ts`、
+  `provider-group/guestRelay.ts`(运行中失败的冷却)、`provider-group/guestSwitch.ts` 与 `provider-group/service.ts`(G 侧凭证与
+  自动交接)、`maker-ipc/sessionAgentSwitchHandler.ts`(仅内部可用的 `forceRelocation`)；回归见
+  `remote-agent/__tests__/groupRelay.test.ts`、`provider-group/__tests__/service.test.ts`、`guestSwitch.test.ts`。
 
 ## 事实来源
 

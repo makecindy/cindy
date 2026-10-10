@@ -292,6 +292,7 @@
       "requestedAt": "Requested {{time}} with your share link",
       "pairingHint": "Before approving, you can ask them over the channel you sent the link through: “What pairing code do you see?” Approve if it matches.",
       "callout": "Once approved, {{name}} can use {{provider}} models in their own sessions. The Agent runs on this computer and usage counts toward your {{provider}}. You can pause or remove access anytime in “Share {{provider}}”.",
+      "calloutClaudeEmail": "While {{name}} uses it, the Agent can see the email address you sign in to Claude with.",
       "calloutUnknown": "If you don’t recognize this person, decline; the link stops working once declined.",
       "approve": "Approve Sharing",
       "reject": "Decline Request",
@@ -301,11 +302,11 @@
       "loading": "Reading share link…",
       "askTitle": "{{name}} Wants to Share {{provider}} with You",
       "providerOnDevice": "{{provider}} · {{device}}",
-      "factRuns": "The Agent runs on {{name}}’s computer with {{provider}}",
+      "factRuns": "The Agent runs with {{provider}} on {{name}}’s computer or another computer {{name}} arranges",
       "factRunsDetail": "Usage counts toward {{name}}’s {{provider}}, and {{name}} can see your usage",
       "factFiles": "Your project files and commands still run on your own computer",
       "factFilesDetail": "Your session permissions still apply",
-      "factPrivacy": "Chat content and files the Agent reads pass through and are saved on {{name}}’s computer",
+      "factPrivacy": "Chat content and files the Agent reads pass through {{name}}’s computer and are saved on the computer that runs the session",
       "factPrivacyDetail": "{{name}} only sees your nickname and avatar",
       "factApproval": "After you send the request, it takes effect only once {{name}} approves",
       "factApprovalDetail": "{{name}} can pause or remove this share at any time",
@@ -374,7 +375,7 @@
         "open": "Open Link",
         "cancel": "Cancel"
       },
-      "detailNote": "The agent runs on {{name}}'s computer, using their sign-in and quota. To use it, choose it in the model list when you start a task.",
+      "detailNote": "The agent runs on {{name}}'s computer or another computer {{name}} arranges, using their sign-in and quota. Chat content and files the agent reads pass through {{name}}'s computer and are saved on the computer that runs the session. To use it, choose it in the model list when you start a task.",
       "modelsTitle": "Available Models",
       "modelsLoading": "Loading the models they shared…",
       "modelsRefused": "The owner’s computer isn’t allowing this share right now. It may not allow remote control, “Allow remote use” may be off for this provider, or their Cindy may still be starting. Try again shortly, or ask them to check both settings.",
@@ -419,7 +420,7 @@
       "empty": "Add {{provider}} from your other computers and tasks will pick one automatically",
       "loading": "Loading provider group…",
       "loadFailed": "Couldn’t load the provider group",
-      "note": "For tasks on this computer, the Agent runs on the computer the group picks"
+      "note": "For sessions on this computer and sessions of people you share with, the group picks the computer that runs the Agent"
     },
     "strategy": {
       "label": "Group Strategy",
@@ -454,7 +455,7 @@
       "remove": "Remove from Group",
       "status": {
         "checking": "Checking…",
-        "available": "Available",
+        "idle": "Idle",
         "full": "Full",
         "paused": "Assignments paused",
         "cooling": "Cooling down",
@@ -472,7 +473,8 @@
         "description": "It won’t get new tasks. Tasks already running there stay on that computer.",
         "lastDescription": "It’s the last computer in the group, so removing it deletes the {{provider}} provider group.",
         "confirm": "Remove from Group"
-      }
+      },
+      "sourceGroupOwner": "Hosts the group"
     },
     "deleteConfirm": {
       "title": "Delete the {{provider}} provider group?",
@@ -2832,7 +2834,13 @@
         "statusReady": "Available",
         "detailNote": "The agent runs on {{device}}, using that computer’s sign-in and quota. To use it, choose it in the model list when you start a task. To change this provider, go to Settings → Providers on that computer.",
         "modelsTitle": "Available Models",
-        "modelsEmpty": "This provider has no models available on that computer yet."
+        "modelsEmpty": "This provider has no models available on that computer yet.",
+        "rowLabelGroup": "{{provider}} · {{device}} · Provider Group",
+        "groupBadge_one": "Provider Group · {{count}} computer",
+        "groupBadge_other": "Provider Group · {{count}} computers",
+        "groupNote": "{{device}} made this provider a provider group. When you start a task with it, {{device}} assigns the task to one of the computers below by its group strategy, and moves it to another one if that computer runs into a problem. To change the group, go to Settings → Providers on {{device}}.",
+        "groupMembersTitle": "Computers in the Group",
+        "groupMembersFailed": "Couldn’t get the status of the computers in the group right now."
       },
       "genericOAuth": {
         "subtitle": "Subscription account",
@@ -9419,7 +9427,8 @@
         "effortEndSmart": "Smarter",
         "railSameEngine": "{{agent}} only",
         "crossEngineWarning": "Switching engines rebuilds context and may lose content",
-        "favoritesSyncFailed": "Favorites could not sync. Reopen the picker to retry; the remote computer may need an update."
+        "favoritesSyncFailed": "Favorites could not sync. Reopen the picker to retry; the remote computer may need an update.",
+        "railRemoteProviderGroup": "{{provider}} · {{device}} · Provider Group"
       }
     },
     "permissionSelector": {
@@ -10060,8 +10069,25 @@
       "observedPeak": "Peak",
       "tokenRate": "{{rate}} tok/s",
       "tokenRateUnit": "tok/s",
-      "tokenRateDescription": "Latest generation interval. Excludes tools and waits.",
-      "tokenCount": "{{tokens}} tok"
+      "tokenRateDescription": "Streaming rates and peaks are estimates. Response totals are calibrated with reported usage. Tool execution and request waits are excluded.",
+      "tokenCount": "{{tokens}} tok",
+      "estimatedValue": "≈{{value}}",
+      "estimatedTokenRate": "≈{{rate}} tok/s",
+      "responseWaiting": "Waiting {{seconds}}s",
+      "waitSeconds": "{{seconds}}s",
+      "firstResponse": "First response",
+      "streamWait": "Stream wait",
+      "turnWaitDescription": "From the local provider turn start to the first observed text, thinking or tool content. This is not network latency.",
+      "streamWaitDescription": "From SDK stream start to the first content block. The earlier request wait is not observable.",
+      "lastGeneration": "Last generation",
+      "finalAverage": "Final average",
+      "generationPaused": "Generation paused",
+      "responsePending": "Waiting for response",
+      "responseFailed": "Request failed",
+      "responseCancelled": "Stopped",
+      "responseRetrying": "Retrying",
+      "responseGenerating": "Generating",
+      "toolRunning": "Running tool"
     },
     "shareImage": {
       "entry": "Share as Image",
@@ -10532,7 +10558,8 @@
           "auth": "{{from}} is signed out; continued on {{to}}",
           "unavailable": "Couldn’t reach {{from}}; continued on {{to}}",
           "overload": "{{from}} was overloaded; continued on {{to}}"
-        }
+        },
+        "groupSwitch": "Continued on another computer automatically"
       },
       "autoResumeSeparator": {
         "label": "Connection interrupted — resumed automatically"
@@ -11497,7 +11524,11 @@
       "untitled": "Untitled session",
       "moreActions": "More actions",
       "agentDevice": "Agent runs on {{device}}",
-      "agentDeviceOffline": "Agent runs on {{device}}, which is offline — it continues once that computer is back"
+      "agentDeviceOffline": "Agent runs on {{device}}, which is offline — it continues once that computer is back",
+      "orcaRemoteLead": "Collaboration from {{device}}",
+      "orcaRemoteLeadReleased": "Collaboration ended · from {{device}}",
+      "orcaRemoteLeadUnknownDevice": "another computer",
+      "orcaRemoteLeadTip": "A Worker for “{{lead}}” on {{device}}. Its task, folder and commands run on this computer. Messages you send here are not reported to the Lead."
     },
     "gitContext": {
       "detached": "Detached HEAD",
@@ -13561,7 +13592,25 @@
       "optional": "(optional)",
       "initialTaskPlaceholder": "Optional first task for this worker",
       "enableCollabTitle": "Start Collaboration",
-      "enableCollabSubmit": "Start Collaboration"
+      "enableCollabSubmit": "Start Collaboration",
+      "executionDeviceLabel": "Run on",
+      "thisComputer": "Local",
+      "deviceOnline": "Online",
+      "deviceNeedsUpdate": "Needs update",
+      "executionDeviceHint": "Only computers on this account that are online and have remote control enabled are listed.",
+      "executionDeviceRemoteHint": "The Worker's task, folder and commands all stay on {{device}}.",
+      "remoteDirLabel": "Folder on {{device}}",
+      "remoteDirChat": "Chat",
+      "remoteDirPath": "Specify folder",
+      "remoteDirChatHint": "Create a chat session on {{device}} without linking it to a project.",
+      "remoteDirPathHint": "Checked on {{device}}. If it doesn't exist, creation fails; a folder on this computer is never used instead.",
+      "remoteDirInvalid": "Enter an absolute path on {{device}}.",
+      "errors": {
+        "deviceUnreachable": "{{device}} isn't available: it must be online with remote control enabled. The Worker wasn't created.",
+        "deviceOutdated": "Cindy on {{device}} is out of date. Update it to run Workers there.",
+        "dirRejected": "The folder wasn't found on {{device}} or can't be used. The Worker wasn't created.",
+        "dirUnavailable": "The folder on {{device}} is temporarily unavailable. Check the connection or network drive, then try again. The Worker wasn't created."
+      }
     },
     "rolePill": {
       "unread": "Unread update",
@@ -13584,13 +13633,19 @@
       "scrollWorkersLeftEdge": "Already at the earliest worker",
       "scrollWorkersRightEdge": "Already at the latest worker",
       "errorBadge": "ERR",
-      "errorBadgeAria": "A worker has an error"
+      "errorBadgeAria": "A worker has an error",
+      "executionDevice": "Runs on {{device}}",
+      "deviceUnreachable": "Status unavailable",
+      "unknownDevice": "Another computer",
+      "archiveRemoteWorkerConfirmDesc": "Removes it from this collaboration and stops the current round on {{device}}. The task, history and files on {{device}} are kept and marked “Collaboration ended”, so you can keep viewing them there."
     },
     "split": {
       "leadLabel": "Lead ({{agent}})",
       "workerLabel": "Worker ({{agent}})",
       "leadNotFound": "Orca lead session not found",
       "waitingForWorker": "Waiting for worker",
+      "remoteWorkerLoading": "Loading the task on {{device}}…",
+      "remoteWorkerUnreachable": "{{device}} can't be reached right now. This Worker's task will appear again once it reconnects.",
       "closeAria": "Close"
     }
   },

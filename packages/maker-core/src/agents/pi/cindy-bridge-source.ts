@@ -34,6 +34,7 @@ import {
 } from "../shared/sensitive-credential-paths.js";
 import { projectPiPackageCommandDiagnostic, projectPiManagedCommandFailure } from "../base-agent.js";
 import { shellInputRedirectionParserSource } from "../shared/shell-input-redirections.js";
+import { CINDY_SUBAGENT_TOOL_NAME } from "./cindy-subagent-source.js";
 
 const SHELL_INPUT_REDIRECTION_PARSER_SOURCE = shellInputRedirectionParserSource();
 const CREDENTIAL_WORD_BOUNDARY = '\u0001';
@@ -79,7 +80,7 @@ import * as piCodingAgent from '@earendil-works/pi-coding-agent';
 
 // 设备托管(CINDY_PI_HOSTED)：Pi 在本机运行，任务、项目文件与命令在同账号另一台电脑上。
 // 文件与命令工具改走本机隧道上的执行器；工具与提示里的路径都是那台电脑的真实工作目录。
-type CindyHostedConfig = { url: string; token: string; cwd: string; platform: string; shell: string; mirrorRoot: string };
+type CindyHostedConfig = { url: string; token: string; cwd: string; platform: string; shell: string; mirrorRoot: string; guest: boolean };
 const CINDY_HOSTED: CindyHostedConfig | null = (() => {
   try {
     const raw = process.env.CINDY_PI_HOSTED;
@@ -93,11 +94,35 @@ const CINDY_HOSTED: CindyHostedConfig | null = (() => {
       platform: typeof value.platform === 'string' ? value.platform : '',
       shell: typeof value.shell === 'string' ? value.shell : '',
       mirrorRoot: typeof value.mirrorRoot === 'string' ? value.mirrorRoot : '',
+      // 受邀者(供应商分享的另一个账号)的会话。
+      guest: value.guest === true,
     };
   } catch {
     return null;
   }
 })();
+
+/**
+ * 受邀者会话的工具门：只放行 Cindy 扩展注册的工具。Pi 进程以本机用户的身份在本机运行，Pi 自带而
+ * Cindy 没有替换的工具(如 powershell、codemode)、Pi 内置 MCP 的工具，以及 Pi 升级新增的工具都会
+ * 直接作用于本机，一律拦下。返回的 pi 记下经它注册的工具名，其余 API 原样转发。
+ */
+function createCindyGuestToolGate(api: any, seed: string[]): { pi: any; blocks: (toolName: unknown) => boolean } {
+  const names = new Set<string>(seed);
+  const pi = new Proxy(api, {
+    get(target: any, prop: string | symbol) {
+      const value = Reflect.get(target, prop, target);
+      if (prop === 'registerTool' && typeof value === 'function') {
+        return (tool: any, ...rest: unknown[]) => {
+          if (tool && typeof tool.name === 'string') names.add(tool.name);
+          return value.call(target, tool, ...rest);
+        };
+      }
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
+  return { pi, blocks: (toolName: unknown) => typeof toolName !== 'string' || !names.has(toolName) };
+}
 
 const PERMISSION_TITLE = 'cindy:permission';
 const TURN_CHANGE_CAPTURE_TITLE = 'cindy:turn-change-capture';
@@ -3864,7 +3889,21 @@ function registerCindyHostedTools(
   });
 }
 
-export default async function cindyBridge(pi: any) {
+export default async function cindyBridge(piApi: any) {
+  // 受邀者：只放行 Cindy 扩展注册的工具(本扩展经下面的 pi 注册的，加上子代理扩展的工具)。
+  const guestToolGate = CINDY_HOSTED && CINDY_HOSTED.guest
+    ? createCindyGuestToolGate(piApi, [${JSON.stringify(CINDY_SUBAGENT_TOOL_NAME)}])
+    : null;
+  const pi = guestToolGate ? guestToolGate.pi : piApi;
+  if (guestToolGate) {
+    // 被拦的工具也不交给模型(例如 Pi 自带的 codemode、tool_search)。
+    pi.on('before_agent_start', () => {
+      if (typeof pi.getActiveTools !== 'function' || typeof pi.setActiveTools !== 'function') return;
+      const active: string[] = pi.getActiveTools();
+      const allowed = active.filter((name) => !guestToolGate.blocks(name));
+      if (allowed.length !== active.length) pi.setActiveTools(allowed);
+    });
+  }
   installTextOnlyTurnPolicy(pi);
   const nativeProviderAdapters = await registerCindyNativeProviderAdapters(pi);
   const initialNativeSettings = typeof pi.getSettings === 'function' ? undefined
@@ -4059,8 +4098,9 @@ export default async function cindyBridge(pi: any) {
 
   // Pi v0.84.3 Windows powershell is the same spawn family as bash. Overlay only
   // on Windows and when the runtime exports the factory so 0.83.0 sessions keep loading.
+  // 受邀者会话不注册：它在本机执行，设备托管没有对应的执行器；Pi 自带的 powershell 由工具门拦下。
   const createPowerShellTool = (piCodingAgent as { createPowerShellTool?: typeof createBashTool }).createPowerShellTool;
-  if (process.platform === 'win32' && typeof createPowerShellTool === 'function') {
+  if (process.platform === 'win32' && typeof createPowerShellTool === 'function' && !guestToolGate) {
     const powershellTool = createPowerShellTool(process.cwd(), {
       exposeSessionEnvironment: false,
       spawnHook: ({ command, cwd, env }) => ({
@@ -4243,6 +4283,9 @@ export default async function cindyBridge(pi: any) {
 
   // ── 权限门 ────────────────────────────────────────────────────────────────
   pi.on('tool_call', async (event: any, ctx: any) => {
+    if (guestToolGate && guestToolGate.blocks(event.toolName)) {
+      return { block: true, reason: 'This tool is not available in a task that uses a shared provider.' };
+    }
     if (toolsDisabledForTurn()) {
       return { block: true, reason: 'Tools are disabled for this host-owned text-only turn.' };
     }

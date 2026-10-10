@@ -117,12 +117,8 @@ export async function inspectSessionProjectMove(
   assertCurrent();
   if (!target) throwIpcError('NOT_FOUND', 'Task does not exist in this account.');
   if (target.remoteHostId) throwIpcError('UNSUPPORTED_CAPABILITY', 'Remote tasks cannot be moved.');
-  // The agent's conversation record lives on that computer, keyed by the project path.
-  if (target.agentDeviceId)
-    throwIpcError(
-      'UNSUPPORTED_CAPABILITY',
-      'Tasks whose agent runs on another computer cannot be moved.',
-    );
+  // A remote Agent's workspace and conversation record are keyed by task id.
+  // Its owner may move an idle task without relocating that remote workspace.
   // Worktree metadata, project identity and runtime cwd form one binding.
   // Moving only the session row would detach that binding or run in the main checkout.
   if (worktreeStore.get(sessionId)) {

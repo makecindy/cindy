@@ -235,6 +235,39 @@ describe('moveSession host', () => {
     },
   );
 
+  it.each([
+    ['device-b', 'project'],
+    ['device-b', 'dialogue'],
+    ['share:provider-share', 'project'],
+    ['share:provider-share', 'dialogue'],
+  ] as const)('moves an idle remote Agent task (%s, %s)', async (agentDeviceId, workspaceKind) => {
+    h.query.mockResolvedValue([
+      { id: 'target', status: 'active', remoteHostId: null, agentDeviceId, source: null },
+    ]);
+    const isProject = workspaceKind === 'project';
+    expect(await run(isProject ? directory : null)).toMatchObject({ ok: true, workspaceKind });
+    expect(h.saved).toHaveBeenLastCalledWith(isProject
+      ? { workingDir: directory.replaceAll('\\', '/'), workspaceKind }
+      : { workspaceKind });
+  });
+
+  it.each([
+    ['device-b', 'target'],
+    ['device-b', 'worker'],
+    ['share:provider-share', 'target'],
+    ['share:provider-share', 'worker'],
+  ])('rechecks remote Agent activity before committing (%s, %s)', async (agentDeviceId, runningId) => {
+    h.query.mockResolvedValue([
+      { id: 'target', status: 'active', remoteHostId: null, agentDeviceId, source: null },
+    ]);
+    h.beforeCommit.mockImplementationOnce(() => {
+      if (runningId === 'worker') h.workers = [{ sessionId: 'worker' }];
+      h.running.add(runningId);
+    });
+    expect(await run(directory)).toMatchObject({ ok: false, errorCode: 'PRECONDITION_FAILED' });
+    expect(h.saved).not.toHaveBeenCalled();
+  });
+
   it('does not report a committed move as rejected when IM attaches after the write', async () => {
     h.saved.mockImplementationOnce(() => {
       h.attached = true;

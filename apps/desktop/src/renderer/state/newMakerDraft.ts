@@ -83,6 +83,12 @@ export interface CollabWorkerConfig {
   initialTask?: string;
   /** 当前协同 Team 后续新 Worker 共用的默认权限。 */
   workerPermissionMode?: OrcaWorkerPermissionMode;
+  /**
+   * 首个 Worker 的运行设备与那台上的目录。与 initialTask 一样不跨重启持久化：设备在线与
+   * 版本随时会变，重启后回到这台电脑，由用户重新选择。
+   */
+  executionDeviceId?: string;
+  executionWorkingDir?: string;
 }
 
 export interface CollabDraft {

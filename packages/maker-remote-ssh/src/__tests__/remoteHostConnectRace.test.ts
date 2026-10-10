@@ -281,6 +281,37 @@ describe('RemoteHost arm/disconnect race', () => {
     expect(host.snapshot().lastError).toBeUndefined();
   });
 
+  it('a server rekey after ready keeps the host ready and connect() resolves (#5715)', async () => {
+    h.client = null;
+    const host = new RemoteHost(HOST_CONFIG, { logger: noopLogger });
+
+    const connectP = host.connect();
+    await flush();
+    const client = h.client!;
+    expect(client).toBeTruthy();
+    // First key exchange of the attempt still advances to authenticating.
+    client.emit('handshake');
+    expect(host.getStatus()).toBe('authenticating');
+    client.emit('ready');
+    await connectP;
+    expect(host.getStatus()).toBe('ready');
+    const clientsBefore = h.createClient.mock.calls.length;
+
+    // ssh2 emits 'handshake' again for every later key exchange (Dropbear
+    // rekeys every 8h) and never re-emits 'ready'.
+    client.emit('handshake');
+    expect(host.getStatus()).toBe('ready');
+
+    // Before the fix these joined waitForTerminal() with no attempt in
+    // flight and hung until a manual disconnect.
+    const joined = Promise.all([host.connect(), host.connect()]);
+    const timedOut = new Promise((_, reject) => setTimeout(() => reject(new Error('connect hung after rekey')), 500));
+    await expect(Promise.race([joined, timedOut])).resolves.toBeDefined();
+    expect(host.getStatus()).toBe('ready');
+    expect(h.createClient.mock.calls.length).toBe(clientsBefore);
+    expect(client.ended).toBe(false);
+  });
+
   it('disconnect before SSH ready invalidates late client events', async () => {
     h.client = null;
     const host = new RemoteHost(HOST_CONFIG, { logger: noopLogger });

@@ -11,17 +11,20 @@ import {
   normalizeProviderGroupConfig,
   type ProviderGroupCommand,
   type ProviderGroupConfig,
+  type ProviderGroupView,
 } from '../../shared/providerGroup.js';
+import { tapWindowBroadcast } from '../device-link/broadcast-tap.js';
 import { broadcast } from '../device-link/index.js';
 import { getDeviceLinkInvokeContext } from '../device-link/invoke-context.js';
 import { createLogger } from '../logger.js';
+import { MAKER_PUSH } from '../maker-ipc/channels.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { pruneProviderGroupBindings } from './bindings.js';
 import type { ProviderGroupDirectory } from './directory.js';
 import type { ProviderGroupRouter } from './router.js';
-import { getProviderGroupDirectory, getProviderGroupRouter } from './runtime.js';
-import { readProviderGroup, writeProviderGroup } from './store.js';
+import { getProviderGroupDirectory, getProviderGroupRemoteClient, getProviderGroupRouter } from './runtime.js';
+import { listProviderGroups, readProviderGroup, writeProviderGroup } from './store.js';
 
 const log = createLogger('provider-group');
 
@@ -34,12 +37,19 @@ export interface ProviderGroupCommandDeps {
   pruneBindings(providerId: string, keep: ReadonlySet<string> | null): Promise<void>;
   /** 当前账号：等远端目录期间换了账号时不写入(否则会把上一个账号的组写进新账号)。 */
   ownerKey(): string;
+  /** 另一台电脑上某个供应商的组与组内电脑状态(设置页只读展示)。 */
+  remoteView(deviceId: string, providerId: string): Promise<ProviderGroupView>;
+  /** 本机全部组的设置(不读远端，模型列表据此收起本机组里的远程供应商)。 */
+  listGroups(): Record<string, ProviderGroupConfig>;
   changed(providerId: string): void;
 }
+
+const REMOTE_DEVICE_ID_PATTERN = /^[A-Za-z0-9_.-]{1,128}$/;
 
 export function parseProviderGroupCommand(raw: unknown): ProviderGroupCommand {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throwIpcError('INVALID_PARAMS', 'command required');
   const value = raw as Record<string, unknown>;
+  if (value.action === 'list') return { action: 'list' };
   if (!isProviderGroupProviderId(value.providerId)) throwIpcError('INVALID_PARAMS', 'providerId required');
   const providerId = value.providerId as string;
   switch (value.action) {
@@ -47,6 +57,12 @@ export function parseProviderGroupCommand(raw: unknown): ProviderGroupCommand {
     case 'candidates':
     case 'delete':
       return { action: value.action, providerId };
+    case 'remote-view': {
+      if (typeof value.deviceId !== 'string' || !REMOTE_DEVICE_ID_PATTERN.test(value.deviceId)) {
+        throwIpcError('INVALID_PARAMS', 'deviceId required');
+      }
+      return { action: 'remote-view', providerId, deviceId: value.deviceId as string };
+    }
     case 'save': {
       if (!value.config || typeof value.config !== 'object') throwIpcError('INVALID_PARAMS', 'config required');
       return { action: 'save', providerId, config: value.config as ProviderGroupConfig };
@@ -58,10 +74,13 @@ export function parseProviderGroupCommand(raw: unknown): ProviderGroupCommand {
 
 /** 业务体(依赖注入，单测直接调)。 */
 export async function executeProviderGroupCommand(deps: ProviderGroupCommandDeps, command: ProviderGroupCommand) {
+  if (command.action === 'list') return deps.listGroups();
   const { providerId } = command;
   switch (command.action) {
     case 'get':
       return deps.router.view(providerId);
+    case 'remote-view':
+      return deps.remoteView(command.deviceId, providerId);
     case 'candidates':
       return deps.directory.listCandidates(providerId, deps.readGroup(providerId));
     case 'delete':
@@ -110,14 +129,19 @@ export function registerProviderGroupIpc(): void {
     writeGroup: writeProviderGroup,
     pruneBindings: pruneProviderGroupBindings,
     ownerKey: activeOwnerScopeKey,
+    remoteView: (deviceId, providerId) => getProviderGroupRemoteClient().view(deviceId, providerId),
+    listGroups: listProviderGroups,
     changed: (providerId) => {
       try {
         broadcast(PROVIDER_GROUP_IPC.CHANGED, { providerId });
+        // 同账号其他电脑的模型列表按本机目录里的组摘要收起组内电脑：组变化后让它们重读目录。
+        tapWindowBroadcast(MAKER_PUSH.PROVIDER_CHANGED, {});
       } catch (error) {
         log.warn('provider group broadcast failed', { error: String(error) });
       }
     },
   };
+
   ipcMain.handle(PROVIDER_GROUP_IPC.COMMAND, async (event, raw: unknown) => {
     if (getDeviceLinkInvokeContext()) throwIpcError('PERMISSION_DENIED', 'Provider groups are local only');
     assertTrustedAppRendererEvent(event);

@@ -13,7 +13,6 @@ export function canOfferSessionProjectMove(session: Session): boolean {
     session.status === 'active' &&
     !isEmptyDraftSession(session) &&
     !session.remoteHostId &&
-    !session.agentDeviceId &&
     session.source !== 'review' &&
     session.source !== 'bot' &&
     !isCindyMakeFamilySource(session.source) &&

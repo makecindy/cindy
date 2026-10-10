@@ -1822,7 +1822,9 @@ export async function remoteInvoke(
     if (!client) throw new Error('[DEVICE_LINK_NOT_CONNECTED] device-link client not initialized');
     // 共享任务与供应商分享的对端是另一个账号：只走 relay，不尝试点对点直连。
     if (!isScopedPeer(deviceId)) {
-      const accelerated = await tryPeerInvoke(deviceId, channel, args, (peer, nextChannel, nextArgs) => {
+      // 直连会保存这个回调，之后在空闲关闭等定时器里调用（届时 preSend 可能已失效）。
+      // 必须是 async：失效时返回 rejected promise，不能同步抛出绕过调用方的 .catch。
+      const accelerated = await tryPeerInvoke(deviceId, channel, args, async (peer, nextChannel, nextArgs) => {
         preSend();
         return remoteInvoke(peer, nextChannel, nextArgs, { preSend });
       });

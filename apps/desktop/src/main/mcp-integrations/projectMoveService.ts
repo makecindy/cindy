@@ -180,6 +180,26 @@ export function initializeProjectMoves(deps: {
           true,
         );
         assertCurrent();
+        if (target.agentDeviceId) {
+          // Remote agents keep their native workspace on the execution computer.
+          // Preserve ordinary idle moves without deferring them or requiring a
+          // local resume transcript. The ordinary move rechecks busy state.
+          const result = await moveSessionProject(
+            deps.isBusy,
+            sessionId,
+            sessionId,
+            targetDir,
+            assertCurrent,
+            { routeLockHeld: true },
+          );
+          assertCurrent();
+          if (!result.ok) return result;
+          return {
+            ...result,
+            workspaceKind:
+              result.workspaceKind === 'dialogue' ? ('dialogue' as const) : ('project' as const),
+          };
+        }
         const source = {
           workingDir: target.workingDir,
           workspaceKind:

@@ -98,6 +98,10 @@ const catalogs = vi.hoisted(() => {
           remoteInvocationEnabled: false,
         }),
       ],
+      // 分享来的供应商:控制端经自己的分享通道读到的目录(分享者已收窄到被分享的供应商)。
+      'share:abc': [
+        provider('s-shared', 'S Shared', [['s-model', 'S Model']], { remoteInvocationEnabled: true }),
+      ],
     } as Record<string, unknown[]>,
   };
 });
@@ -246,6 +250,34 @@ describe('被控电脑上的任务:模型面板列出第三台电脑的远程供
     );
     expect(screen.getByRole('button', { name: 'B Main' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'A Local' })).toBeNull();
+  });
+
+  // 2026-10-10 用户反馈:A 远控 B 上 Agent 在分享上的任务,模型显示「模型信息暂不可用」。
+  // 会话视图把本机也收到的那条分享并进候选、目录指向 `share:abc`(判定见 controlledTaskAgentLocation)。
+  it('Agent 在本机也收到了的分享上:打开时停在分享的目录,不显示被控电脑的模型', async () => {
+    const shareDevice = { deviceId: 'share:abc', name: 'Mac Mini · 来自 Magi 的分享' };
+    const { onRelocate } = renderControlledTaskPanel(
+      { devices: [...devices, shareDevice], selectedDeviceId: 'share:abc' },
+      { deviceId: 'share:abc', modelId: 's-model', currentProviderId: 's-shared' },
+    );
+    expect(within(list()).getByText('S Model')).toBeTruthy();
+    expect(within(list()).queryByText('B Model')).toBeNull();
+    expect(
+      screen
+        .getByRole('button', { name: 'S Shared · Mac Mini · 来自 Magi 的分享' })
+        .getAttribute('aria-pressed'),
+    ).toBe('true');
+    // 被控电脑那一格还在,选它的模型 = 改回被控电脑运行。
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'B Main' }));
+    });
+    const row = within(list()).getByText('B Model').closest('[data-unified-anchor]') as HTMLElement;
+    await act(async () => {
+      fireEvent.click(row);
+    });
+    expect(onRelocate).toHaveBeenCalledWith(
+      expect.objectContaining({ providerId: 'b-main', modelId: 'b-model', agentDevice: null }),
+    );
   });
 
   it('Agent 所在的第三台电脑离线:仍能回到被控电脑的目录,选中即改回被控电脑运行', async () => {

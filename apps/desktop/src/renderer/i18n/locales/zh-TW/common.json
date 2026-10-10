@@ -290,6 +290,7 @@
       "requestedAt": "{{time}}透過你的分享連結申請",
       "pairingHint": "同意前可以透過傳連結的管道問對方一句：「你看到的配對碼是多少？」一致再同意。",
       "callout": "同意後，{{name}} 可以在自己的任務裡使用 {{provider}} 的模型。Agent 在這臺電腦上執行，用量計入你的 {{provider}}。你可以隨時在「分享 {{provider}}」裡關閉或刪除。",
+      "calloutClaudeEmail": "{{name}} 使用時，Agent 能看到你登入 Claude 用的電子郵件地址。",
       "calloutUnknown": "如果你不認識申請人，請拒絕；拒絕後這條連結作廢。",
       "approve": "同意分享",
       "reject": "拒絕申請",
@@ -299,11 +300,11 @@
       "loading": "正在讀取分享連結…",
       "askTitle": "{{name}} 想把 {{provider}} 分享給你",
       "providerOnDevice": "{{provider}} · {{device}}",
-      "factRuns": "Agent 在 {{name}} 的電腦上用 {{provider}} 執行",
+      "factRuns": "Agent 在 {{name}} 的電腦或 {{name}} 安排的其他電腦上用 {{provider}} 執行",
       "factRunsDetail": "用量計入 {{name}} 的 {{provider}}，{{name}} 能看到你的用量",
       "factFiles": "你的專案檔案和指令仍在你自己的電腦上執行",
       "factFilesDetail": "由你的任務權限把關",
-      "factPrivacy": "對話內容和 Agent 讀取的檔案內容會經過並儲存在 {{name}} 的電腦上",
+      "factPrivacy": "對話內容和 Agent 讀取的檔案內容會經過 {{name}} 的電腦，並儲存在實際執行任務的那台電腦上",
       "factPrivacyDetail": "{{name}} 只會看到你的暱稱和頭像",
       "factApproval": "傳送申請後，需要 {{name}} 同意才會生效",
       "factApprovalDetail": "{{name}} 可以隨時關閉或刪除這個分享",
@@ -372,7 +373,7 @@
         "open": "開啟連結",
         "cancel": "取消"
       },
-      "detailNote": "Agent 在 {{name}} 的電腦上執行，使用的是對方的登入和配額。新建任務時在模型列表裡選擇它就能用。",
+      "detailNote": "Agent 在 {{name}} 的電腦或 {{name}} 安排的其他電腦上執行，使用的是對方的登入和配額。對話內容和 Agent 讀取的檔案內容會經過 {{name}} 的電腦，並儲存在實際執行任務的那台電腦上。新建任務時在模型列表裡選擇它就能用。",
       "modelsTitle": "可用的模型",
       "modelsLoading": "正在讀取對方開放的模型…",
       "modelsRefused": "對方電腦暫時不讓讀取這個分享：可能沒有允許遠端控制、關了這個供應商的「允許遠端呼叫」，也可能對方的 Cindy 剛啟動、還沒準備好。請稍後重試，或請對方檢查這兩項設定。",
@@ -416,7 +417,7 @@
       "empty": "加入其他電腦上的 {{provider}}，任務會自動選一臺執行",
       "loading": "正在讀取供應商組…",
       "loadFailed": "未能讀取供應商組",
-      "note": "這臺電腦上的任務，Agent 在被選中的電腦上執行"
+      "note": "這臺電腦上的任務和你分享的人的任務，都由組選一台電腦執行 Agent"
     },
     "strategy": {
       "label": "組策略",
@@ -449,7 +450,7 @@
       "remove": "移出組",
       "status": {
         "checking": "正在檢查…",
-        "available": "可用",
+        "idle": "空閒",
         "full": "已滿",
         "paused": "已暫停分配",
         "cooling": "冷卻中",
@@ -467,7 +468,8 @@
         "description": "之後不再給它分新任務；已經在它上面執行的任務留在那臺電腦上。",
         "lastDescription": "它是組裡最後一臺電腦，移出後會刪除 {{provider}} 的供應商組。",
         "confirm": "移出組"
-      }
+      },
+      "sourceGroupOwner": "組所在電腦"
     },
     "deleteConfirm": {
       "title": "刪除 {{provider}} 的供應商組？",
@@ -2825,7 +2827,12 @@
         "statusReady": "可用",
         "detailNote": "Agent 在 {{device}} 上執行，使用的是那台電腦的登入和配額。新建任務時在模型列表裡選擇它就能用；要修改這個供應商，請到那台電腦的「設定 → 模型供應商」。",
         "modelsTitle": "可用的模型",
-        "modelsEmpty": "這個供應商在那台電腦上還沒有開放可用的模型。"
+        "modelsEmpty": "這個供應商在那台電腦上還沒有開放可用的模型。",
+        "rowLabelGroup": "{{provider}} · {{device}} · 供應商組",
+        "groupBadge_other": "供應商組 · {{count}} 台電腦",
+        "groupNote": "{{device}} 把這個供應商建成了供應商組。在模型列表裡選它新建任務時，{{device}} 會依組策略把任務分給下面的一台電腦執行，那台出問題時自動換一台繼續。要修改組，請到 {{device}} 的「設定 → 模型供應商」。",
+        "groupMembersTitle": "組內電腦",
+        "groupMembersFailed": "暫時讀不到組內電腦的狀態。"
       },
       "genericOAuth": {
         "subtitle": "訂閱帳號",
@@ -9399,7 +9406,8 @@
         "effortEndSmart": "更聰明",
         "railSameEngine": "僅 {{agent}}",
         "crossEngineWarning": "切換引擎會重建上下文，可能遺失內容",
-        "favoritesSyncFailed": "收藏未能同步。請重新開啟重試；被控電腦可能需要更新。"
+        "favoritesSyncFailed": "收藏未能同步。請重新開啟重試；被控電腦可能需要更新。",
+        "railRemoteProviderGroup": "{{provider}} · {{device}} · 供應商組"
       },
       "modelListAria": "模型清單"
     },
@@ -10037,8 +10045,25 @@
       "observedPeak": "峰值",
       "tokenRate": "{{rate}} tok/s",
       "tokenRateUnit": "tok/s",
-      "tokenRateDescription": "最近一段生成速度，不含工具執行與等待。",
-      "tokenCount": "{{tokens}} tok"
+      "tokenRateDescription": "即時速度和峰值為估算。回應結束後以實際用量校準；不計工具執行和請求等待。",
+      "tokenCount": "{{tokens}} tok",
+      "estimatedValue": "約{{value}}",
+      "estimatedTokenRate": "約{{rate}} tok/s",
+      "responseWaiting": "等待 {{seconds}}秒",
+      "waitSeconds": "{{seconds}}秒",
+      "firstResponse": "首回應",
+      "streamWait": "流內等待",
+      "turnWaitDescription": "從本機收到引擎開始到首個文字、思考或工具內容，不等同於網路延遲。",
+      "streamWaitDescription": "從 SDK 串流開始到首個內容區塊，之前的請求等待無法測量。",
+      "lastGeneration": "上次生成",
+      "finalAverage": "最終平均",
+      "generationPaused": "生成暫停",
+      "responsePending": "等待回應",
+      "responseFailed": "請求失敗",
+      "responseCancelled": "已停止",
+      "responseRetrying": "正在重試",
+      "responseGenerating": "正在生成",
+      "toolRunning": "執行工具中"
     },
     "shareImage": {
       "entry": "分享為圖片",
@@ -10508,7 +10533,8 @@
           "auth": "{{from}} 登入已失效，已換到 {{to}} 繼續",
           "unavailable": "{{from}} 連不上，已換到 {{to}} 繼續",
           "overload": "{{from}} 的服務繁忙，已換到 {{to}} 繼續"
-        }
+        },
+        "groupSwitch": "已自動換一台電腦繼續"
       },
       "autoResumeSeparator": {
         "label": "連線中斷，已自動繼續"
@@ -11465,7 +11491,11 @@
       "untitled": "未命名任務",
       "moreActions": "更多操作",
       "agentDevice": "Agent 在 {{device}} 上執行",
-      "agentDeviceOffline": "Agent 在 {{device}} 上執行，那臺電腦目前離線，連上後才能繼續"
+      "agentDeviceOffline": "Agent 在 {{device}} 上執行，那臺電腦目前離線，連上後才能繼續",
+      "orcaRemoteLead": "來自 {{device}} 的協同",
+      "orcaRemoteLeadReleased": "協同已結束 · 來自 {{device}}",
+      "orcaRemoteLeadUnknownDevice": "另一臺電腦",
+      "orcaRemoteLeadTip": "{{device}} 上「{{lead}}」的 Worker。任務、目錄和命令都在這臺電腦執行；你在這裡傳送的訊息不會回報給 Lead。"
     },
     "gitContext": {
       "detached": "分離 HEAD",
@@ -13528,7 +13558,25 @@
       "optional": "（可選）",
       "initialTaskPlaceholder": "給這個 Worker 的可選第一條任務",
       "enableCollabTitle": "開啟協同",
-      "enableCollabSubmit": "開啟協同"
+      "enableCollabSubmit": "開啟協同",
+      "executionDeviceLabel": "執行裝置",
+      "thisComputer": "本機",
+      "deviceOnline": "線上",
+      "deviceNeedsUpdate": "版本過舊，需更新",
+      "executionDeviceHint": "只列出同帳號、線上並開啟遠端控制的電腦。",
+      "executionDeviceRemoteHint": "Worker 的任務、目錄和指令都在 {{device}}。",
+      "remoteDirLabel": "{{device}} 上的工作目錄",
+      "remoteDirChat": "對話",
+      "remoteDirPath": "指定目錄",
+      "remoteDirChatHint": "在 {{device}} 上建立對話任務，不連結專案。",
+      "remoteDirPathHint": "在 {{device}} 上檢查；不存在時報錯，不會換成這台電腦的目錄。",
+      "remoteDirInvalid": "請輸入 {{device}} 上的絕對路徑。",
+      "errors": {
+        "deviceUnreachable": "{{device}} 目前無法使用：需要在線並開啟遠端控制。Worker 沒有建立。",
+        "deviceOutdated": "{{device}} 的 Cindy 版本過舊，更新後才能執行 Worker。",
+        "dirRejected": "{{device}} 上找不到這個目錄或不允許使用。Worker 沒有建立。",
+        "dirUnavailable": "{{device}} 上的目錄暫時無法存取。請檢查連線或網路磁碟後重試。Worker 沒有建立。"
+      }
     },
     "rolePill": {
       "unread": "未讀更新",
@@ -13550,13 +13598,19 @@
       "scrollWorkersLeftEdge": "已是最左側的 Worker",
       "scrollWorkersRightEdge": "已是最右側的 Worker",
       "errorBadge": "錯誤",
-      "errorBadgeAria": "有 Worker 出錯"
+      "errorBadgeAria": "有 Worker 出錯",
+      "executionDevice": "在 {{device}} 執行",
+      "deviceUnreachable": "暫時無法取得狀態",
+      "unknownDevice": "另一台電腦",
+      "archiveRemoteWorkerConfirmDesc": "它會從這個協同裡移除，並停止 {{device}} 上正在進行的這一輪。{{device}} 上的任務、記錄和檔案都會保留，標註「協同已結束」，可以在那台繼續查看。"
     },
     "split": {
       "leadLabel": "Lead ({{agent}})",
       "workerLabel": "Worker ({{agent}})",
       "leadNotFound": "找不到 Orca lead 任務",
       "waitingForWorker": "等待 Worker",
+      "remoteWorkerLoading": "正在讀取 {{device}} 上的任務…",
+      "remoteWorkerUnreachable": "{{device}} 目前無法連線，恢復後會自動顯示這個 Worker 的任務。",
       "closeAria": "關閉"
     }
   },

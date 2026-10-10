@@ -84,10 +84,81 @@ describe('project drop destinations', () => {
   });
 
   it.each([
+    { deviceLinkDeviceId: undefined, agentDeviceId: 'agent-device' },
+    { deviceLinkDeviceId: 'task-owner', agentDeviceId: 'agent-device' },
+    { deviceLinkDeviceId: undefined, agentDeviceId: 'share:provider-share' },
+    { deviceLinkDeviceId: 'task-owner', agentDeviceId: 'share:provider-share' },
+  ])('moves by the task owner, not the remote Agent location: %o', (location) => {
+    const remoteAgentTask = { ...task, ...location };
+    const ownerProject = { ...project, deviceLinkDeviceId: location.deviceLinkDeviceId ?? null };
+    expect(canOfferSessionProjectMove(remoteAgentTask)).toBe(true);
+    expect(
+      resolveSessionProjectDrop(remoteAgentTask, { kind: 'project', project: ownerProject }),
+    ).toEqual({ kind: 'project', workingDir: project.workingDir });
+    expect(
+      resolveSessionProjectDrop(remoteAgentTask, {
+        kind: 'dialogue',
+        deviceId: location.deviceLinkDeviceId ?? null,
+      }),
+    ).toEqual({ kind: 'dialogue' });
+    expect(resolveSessionProjectDrop(remoteAgentTask, { kind: 'dialogue' })).toEqual({
+      kind: 'dialogue',
+    });
+
+    // The provider's machine/share is not the task's owner. Its project or Chat
+    // cannot become a destination just because the Agent happens to run there.
+    expect(
+      resolveSessionProjectDrop(remoteAgentTask, {
+        kind: 'project',
+        project: { ...project, deviceLinkDeviceId: location.agentDeviceId },
+      }),
+    ).toBeNull();
+    expect(
+      resolveSessionProjectDrop(remoteAgentTask, {
+        kind: 'dialogue',
+        deviceId: location.agentDeviceId,
+      }),
+    ).toBeNull();
+  });
+
+  it.each(['agent-device', 'share:provider-share'])(
+    'does not bypass owner or destination disconnection for Agent at %s',
+    (agentDeviceId) => {
+      const remoteAgentTask = { ...task, deviceLinkDeviceId: 'task-owner', agentDeviceId };
+      const ownerProject = { ...project, deviceLinkDeviceId: 'task-owner' };
+      const offlineTask = {
+        ...remoteAgentTask,
+        deviceLinkConnectionStatus: 'disconnected' as const,
+      };
+      expect(
+        resolveSessionProjectDrop(offlineTask, { kind: 'project', project: ownerProject }),
+      ).toBeNull();
+      expect(
+        resolveSessionProjectDrop(offlineTask, { kind: 'dialogue', deviceId: 'task-owner' }),
+      ).toBeNull();
+      expect(
+        resolveSessionProjectDrop(remoteAgentTask, {
+          kind: 'project',
+          project: { ...ownerProject, deviceLinkConnectionStatus: 'disconnected' },
+        }),
+      ).toBeNull();
+    },
+  );
+
+  it.each(['cindy-make', 'cindy-make-merge'] as const)(
+    'keeps %s managed while using a shared remote Agent',
+    (source) => {
+      const managedTask = { ...task, source, agentDeviceId: 'share:provider-share' };
+      expect(canOfferSessionProjectMove(managedTask)).toBe(false);
+      expect(resolveSessionProjectDrop(managedTask, { kind: 'project', project })).toBeNull();
+      expect(resolveSessionProjectDrop(managedTask, { kind: 'dialogue' })).toBeNull();
+    },
+  );
+
+  it.each([
     { status: 'archived' },
     { status: 'deleted' },
     { remoteHostId: 'ssh' },
-    { agentDeviceId: 'provider-device' },
     { source: 'review' },
     { source: 'bot' },
     { source: 'cindy-make' },

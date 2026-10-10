@@ -66,6 +66,7 @@ import {
 } from './lib/sessionRemovalNavigation';
 import { resolveSessionRoute } from '@/lib/orcaSessionIdentity';
 import { GitContextBadge } from './GitContextBadge';
+import { OrcaRemoteLeadBadge } from './OrcaRemoteLeadBadge';
 import { SessionRenameInput } from './SessionRenameInput';
 import { useSessionBoundSchedules } from '@/features/scheduler/lib/scheduleSessionBinding';
 import { ScheduleBindingBadge } from './sidebar/ScheduleBindingBadge';
@@ -597,6 +598,8 @@ export function SessionContentHeader({
           <TaskTagDots tags={session.tags} />
         </span>
       )}
+
+      {!isEditing && <OrcaRemoteLeadBadge session={session} />}
 
       {!isEditing && !readOnly && (!sharedGuest || session.status === 'active') && (
         // 菜单打开就把归档/删除的 dirty 预检发出去:用户从展开菜单到点条目至少

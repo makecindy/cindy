@@ -15,6 +15,9 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   clearRateHistoryCache,
   loadCachedRateHistory,
+  responseSpeedActivity,
+  responseSpeedHistory,
+  type ResponseSpeedSnapshot,
 } from "@cindy/maker-shared/usage-format";
 import { useRunningTokenRateHistory } from "../session/useRunningTokenRateHistory";
 import { RunningTokenRatePopover } from "@/session/RunningTokenRatePopover";
@@ -125,6 +128,8 @@ vi.mock("react-i18next", () => ({
     t: (key: string, args?: any) =>
       key.endsWith("tokenRate")
         ? `${args.rate} tok/s`
+        : key.endsWith("estimatedValue")
+          ? `≈${args.value}`
         : key.endsWith("tokenCount")
           ? `${args.tokens} tok`
           : key,
@@ -193,6 +198,8 @@ const bindings = {
   iconStroke: {},
   RunningTokenRatePopover,
   useRunningTokenRateHistory,
+  responseSpeedActivity,
+  responseSpeedHistory,
   formatComposerActivityElapsed: () => "1s",
   formatComposerActivityTokenCount: () => "100",
 };
@@ -200,6 +207,76 @@ const ActivityStatus = new Function(
   ...Object.keys(bindings),
   `${compiledStatus}; return ComposerActivityStatus;`,
 )(...Object.values(bindings));
+
+it.each([
+  { outputTokens: 80, estimated: false, count: '80 tok' },
+  { outputTokens: 80, estimated: true, count: '≈80 tok' },
+  { outputTokens: 0, estimated: false, count: '0 tok' },
+])('keeps the speed card on measured output instead of whole-turn usage ($count)', async ({ outputTokens, estimated, count }) => {
+  const responseSpeed: ResponseSpeedSnapshot = {
+    phase: 'complete', waitOrigin: 'turn', firstResponseMs: 100,
+    waitingMs: 0, durationMs: 2000, outputTokens, estimated,
+    recentRate: null, averageRate: outputTokens / 2,
+    samples: [{ durationMs: 2000, outputTokens, rate: outputTokens / 2 }],
+    sampledAt: Date.now(),
+  };
+  await act(async () => root.render(createElement(ActivityStatus, {
+    ...base, visible: false, tokenUsage: 800, outputTokens: 800,
+    generationDurationMs: 2000, sideTaskRunning: false,
+    reconnectAttempt: null, responseSpeed,
+  })));
+  await gesture('onPressIn');
+  await gesture('onPress');
+  expect(card()!.textContent).toContain(`session.screen.outputTotal${count}`);
+  expect(card()!.textContent).toContain(`session.screen.averageRate${estimated ? '≈' : ''}${outputTokens / 2} tok/s`);
+  expect(card()!.textContent).not.toContain('800 tok');
+  expect(card()!.textContent).not.toContain('400 tok/s');
+});
+
+it('uses whole-turn output in the legacy card when the host omits the speed snapshot', async () => {
+  await act(async () => root.render(createElement(ActivityStatus, {
+    ...base, visible: true, tokenUsage: 800, outputTokens: 800,
+    generationDurationMs: 2000, sideTaskRunning: false, reconnectAttempt: null,
+  })));
+  await gesture('onPressIn');
+  await gesture('onPress');
+  expect(card()!.textContent).toContain('session.screen.outputTotal800 tok');
+  expect(card()!.textContent).toContain('session.screen.averageRate400 tok/s');
+});
+
+it('shows waiting, execution, silent output and retained completion consistently in the status and card', async () => {
+  vi.useFakeTimers();
+  try {
+    const speed: ResponseSpeedSnapshot = { phase: 'waiting', waitOrigin: 'turn', firstResponseMs: null,
+      waitingMs: 1000, durationMs: 0, outputTokens: 0, estimated: false, recentRate: null,
+      averageRate: null, samples: [], sampledAt: Date.now() };
+    const show = async (responseSpeed: ResponseSpeedSnapshot, visible = true) => act(async () =>
+      root.render(createElement(ActivityStatus, { ...base, visible, tokenUsage: 0,
+        sideTaskRunning: false, reconnectAttempt: null, responseSpeed })),
+    );
+    await show(speed);
+    expect(host.textContent).toContain('session.screen.responsePending');
+    await gesture('onPressIn'); await gesture('onPress');
+    expect(card()!.textContent).toContain('session.screen.responsePending');
+    const generating = { ...speed, phase: 'generating' as const, firstResponseMs: 1000,
+      hasRecentOutput: true, durationMs: 2000, outputTokens: 80, estimated: true, recentRate: 40,
+      averageRate: 40, samples: [{ durationMs: 2000, outputTokens: 80, rate: 40 }] };
+    await show(generating);
+    expect(host.textContent).toContain('session.screen.responseGenerating');
+    await act(async () => vi.advanceTimersByTime(1000));
+    expect(host.textContent).toContain('session.screen.responsePending');
+    expect(card()!.textContent).not.toContain('40 tok/s—');
+    await show({ ...generating, phase: 'paused', toolActive: true, recentRate: null });
+    expect(host.textContent).toContain('session.screen.toolRunning');
+    expect(card()!.textContent).toContain('session.screen.toolRunning');
+    await show({ ...generating, phase: 'complete', estimated: false, recentRate: 40 }, false);
+    await act(async () => vi.advanceTimersByTime(60000));
+    expect(host.textContent).toContain('session.screen.lastGeneration');
+    expect(card()!.textContent).toContain('session.screen.finalAverage');
+    await show({ ...speed, sampledAt: Date.now() });
+    expect(host.textContent).not.toContain('session.screen.lastGeneration');
+  } finally { vi.useRealTimers(); }
+});
 
 it.each(["onPress", "onLongPress"])(
   "records the first completed interval before enabling %s, without sampling inactive gaps",
@@ -233,6 +310,10 @@ it.each(["onPress", "onLongPress"])(
     expect(
       loadCachedRateHistory(base.sessionKey)?.samples.map((s) => s.rate),
     ).toEqual([100]);
+    await renderStatus({ startedAt: null, outputTokens: 100, generationDurationMs: 1000, generationActive: false });
+    expect(card()!.textContent).toContain('session.screen.currentRate—');
+    await renderStatus({ startedAt: null, outputTokens: 100, generationDurationMs: 1000, generationActive: true });
+    expect(card()!.textContent).toContain('session.screen.currentRate—');
     for (const inactive of [
       { sideTaskRunning: true },
       { reconnectAttempt: { attempt: 1, maxAttempts: 3 } },
@@ -527,7 +608,7 @@ it("uses paired generation samples, expires recent speed, and isolates a differe
   expect(card()!.textContent).toContain("50");
   expect(card()!.textContent).toContain("75 tok/s");
   expect(card()!.textContent).toContain("100 tok/s");
-  await act(async () => vi.advanceTimersByTime(60_000));
+  await act(async () => vi.advanceTimersByTime(1_000));
   expect(card()!.textContent).toContain("—");
   await render({ key: "other", sessionKey: "account/device/other" });
   expect(card()).toBeNull();
@@ -585,4 +666,22 @@ it("moves screen reader focus into the pinned card and back to the trigger, exce
   await act(async () => harness.outsideTap!.onOutsideTap());
   expect(card()).toBeNull();
   expect(harness.focus).toEqual(["text:session.screen.currentRate"]);
+});
+
+it.each(['failed', 'cancelled', 'retrying'] as const)('shows %s consistently in the mobile retained entry and card', async (activity) => {
+  const terminal = activity !== 'retrying';
+  const key = activity === 'failed' ? 'responseFailed' : activity === 'cancelled' ? 'responseCancelled' : 'responseRetrying';
+  const speed: ResponseSpeedSnapshot = { phase: terminal ? 'complete' : 'paused', waitOrigin: 'turn',
+    firstResponseMs: 1000, waitingMs: 0, durationMs: 2000, outputTokens: 80, estimated: true,
+    recentRate: null, averageRate: 40, samples: [{ durationMs: 2000, outputTokens: 80, rate: 40 }], sampledAt: Date.now(),
+    ...(terminal ? { outcome: activity as 'failed' | 'cancelled' } : { retrying: true }),
+  };
+  await act(async () => root.render(createElement(ActivityStatus, { ...base, visible: !terminal,
+    tokenUsage: 500, sideTaskRunning: false, reconnectAttempt: null, responseSpeed: speed })));
+  expect(host.textContent).toContain(`session.screen.${key}`);
+  expect(host.textContent).not.toContain('session.screen.lastGeneration');
+  await gesture('onPressIn'); await gesture('onPress');
+  expect(card()!.textContent).toContain(`session.screen.${key}`);
+  expect(card()!.textContent).not.toContain('session.screen.finalAverage');
+  expect(card()!.textContent).toContain('40');
 });

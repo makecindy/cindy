@@ -29,6 +29,8 @@ import {
 import {
   assertNoCodexUserInstructions,
   CODEX_DEVICE_HOSTED_GUEST_THREAD_CONFIG,
+  codexGuestFeatureOverrides,
+  listCodexFeatures,
   withoutCodexSpawnModelOverrides,
 } from './device-hosted-guest.js';
 import { LIBRARY_READ_ROOT, withLibraryNativeReadContext } from '../shared/library-native-read.js';
@@ -38,6 +40,7 @@ import { randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import { structuredPatch } from 'diff';
 import { syncCodexArchiveState } from './archive-state.js';
+import { readCodexThreadMcpServerTools } from './mcp-server-tools.js';
 
 import {
   BaseAgent,
@@ -127,6 +130,7 @@ import {
 } from '../shared/auto-review-decision.js';
 import type { ReviewableAction } from '../shared/auto-review.js';
 import { UsageTracker } from '../shared/usage-tracker.js';
+import { calibratedResponseDuration } from '@cindy/maker-shared/usage-format';
 import { attachLiveGeneration, sampleGenerationDuration } from '../shared/live-generation-snapshot.js';
 import { getDefaultImageResizer } from '../shared/image-resizer.js';
 import { formatManagedImageReferences } from '../shared/managed-image-reference.js';
@@ -167,8 +171,8 @@ import {
   classifyCodexError,
   translateErrorNotification,
   translateItemNotification,
+  observeCodexItemTiming,
   beginCodexGenerationTurn,
-  codexGenerationDurationMs,
   finalizeCodexGenerationTurn,
   pauseCodexGeneration,
   resetCodexGenerationTiming,
@@ -3692,6 +3696,7 @@ assertRouteCurrent();
     const usageTracker = new UsageTracker();
     const translatorRt: CodexRuntimeState = newCodexRuntimeState();
     const liveUsageSnapshot = () => attachLiveGeneration(usageTracker.snapshot(), {
+      responseSpeed: translatorRt.responseSpeed.snapshot(),
       outputTokens: usageTracker.getTurnUsage().output,
       durationMs: translatorRt.generationOutputDurationMs,
       openStartedAt: translatorRt.generationStartedAt,
@@ -5504,6 +5509,8 @@ assertRouteCurrent();
     // 设备托管：本机 MCP 一律停用，只用任务所在电脑经隧道提供的 Cindy 工具(令牌放在隧道路径里，
     // 本机 MCP 的 bearer 令牌对隧道无效)。
     let hostedLocalMcpNames: string[] = [];
+    // 受邀者：白名单之外的 Codex 功能在线程配置里逐个关闭(启动时按 app-server 的功能清单生成)。
+    let hostedGuestFeatureConfig: Record<string, false> = {};
     const readHostedMcpConfig = (): Record<string, unknown> => {
       const out: Record<string, unknown> = {};
       for (const name of hostedLocalMcpNames) {
@@ -6459,9 +6466,9 @@ assertRouteCurrent();
               'features.remote_plugin': false,
             }
           : {}),
-        // 受邀者：只关闭本机的插件 / hooks / connectors / 记忆，以及在本机执行代码的工具；
+        // 受邀者：固定关闭本机的插件 / hooks / connectors / 记忆，再按功能清单关闭白名单之外的 Codex 功能；
         // 不含 mcp_servers.* 键，经隧道的 MCP(readHostedMcpConfig)保持启用。联网搜索不变。
-        ...(hostedGuest ? CODEX_DEVICE_HOSTED_GUEST_THREAD_CONFIG : {}),
+        ...(hostedGuest ? { ...CODEX_DEVICE_HOSTED_GUEST_THREAD_CONFIG, ...hostedGuestFeatureConfig } : {}),
         // Review disables only transport-bearing entries discovered above.
         // Its host omits Cindy's MCP bridge, so a bare memory override would
         // create an invalid transport even though the entry is disabled.
@@ -7043,6 +7050,18 @@ assertRouteCurrent();
         log.warn('codex: hosted session could not list local MCP servers', { error: String(error) });
         // 受邀者：确认不了本机 MCP 都已停用就不启动，不能让本机 MCP 留在另一个账号的会话里。
         if (hostedGuest) throw new Error(`Cannot start Codex for a shared user safely: ${String(error)}`);
+      }
+      if (hostedGuest) {
+        // 受邀者：Codex 的功能只开白名单里的。清单取不到就不启动。
+        try {
+          hostedGuestFeatureConfig = codexGuestFeatureOverrides(await listCodexFeatures((cursor) => host.request(
+            Method.ExperimentalFeatureList, { limit: 200, ...(cursor ? { cursor } : {}) },
+            { timeoutMs: CRITICAL_THREAD_RPC_TIMEOUT_MS },
+          )));
+        } catch (error) {
+          throw new Error(`Cannot start Codex for a shared user safely: ${String(error)}`);
+        }
+        assertCurrentHost('experimentalFeature/list');
       }
       assertCurrentHost('environment/add');
       await host.request(Method.EnvironmentAdd, {
@@ -10724,6 +10743,7 @@ assertRouteCurrent();
         text?: unknown;
       } | null | undefined;
       if (!candidate || candidate.type !== 'plan') return false;
+      translatorRt.responseSpeedHasUnobservedOutput = true;
       if (typeof candidate.text === 'string') proposedPlanText = candidate.text;
       return true;
     }
@@ -10895,7 +10915,16 @@ assertRouteCurrent();
       const realTurnUsage = usageTracker.getTurnUsage();
       const realTurnUsageSegments = usageTracker.getTurnUsageSegments();
       finalizeCodexGenerationTurn(translatorRt, turn.id);
-      const generationDurationMs = codexGenerationDurationMs(translatorRt);
+      const unmeasuredOutputOnly = translatorRt.responseSpeedHasUnobservedOutput
+        && translatorRt.responseSpeed.snapshot().outputTokens === 0;
+      // With no sampled units, retain the real total but expose no rate. Mixed
+      // turns retain only their observed estimates, never a whole-turn scale.
+      translatorRt.responseSpeed.finish(realTurnUsageSegments.length > 0
+        && (!translatorRt.responseSpeedHasUnobservedOutput || unmeasuredOutputOnly)
+        ? realTurnUsage.output : undefined);
+      if (!translatorRt.generationTimingReliable || unmeasuredOutputOnly) translatorRt.responseSpeed.invalidate();
+      const speedSnapshot = translatorRt.responseSpeed.snapshot();
+      const generationDurationMs = calibratedResponseDuration(speedSnapshot, realTurnUsage.output);
       const codexDoneUsage = {
         promptTokens: realTurnUsage.input,
         completionTokens: realTurnUsage.output,
@@ -10906,12 +10935,9 @@ assertRouteCurrent();
         cachedTokens: realTurnUsage.cacheRead,
         cacheCreationTokens: realTurnUsage.cacheCreate,
         segments: realTurnUsageSegments,
-        // With usage, exclude post-output finalization. Without usage, retain
-        // the measured duration metadata (zero output cannot produce a rate).
+        // Persist TPS timing only when observed stream time pairs with real turn output.
         ...(generationDurationMs !== undefined ? {
-          durationMs: realTurnUsage.output > 0
-            ? translatorRt.generationOutputDurationMs || undefined
-            : generationDurationMs,
+          durationMs: generationDurationMs,
         } : {}),
         ...(typeof turn.durationMs === 'number' && Number.isFinite(turn.durationMs)
           ? { turnDurationMs: turn.durationMs }
@@ -11115,6 +11141,7 @@ assertRouteCurrent();
           data: {
             status: 'Done',
             ...attachLiveGeneration(endSnap, {
+              responseSpeed: translatorRt.responseSpeed.snapshot(),
               outputTokens: realTurnUsage.output,
               durationMs: translatorRt.generationOutputDurationMs,
               openStartedAt: null,
@@ -12309,10 +12336,12 @@ assertRouteCurrent();
           params.turnId,
           'started',
         );
+        observeCodexItemTiming(translatorRt, 'started', translatedParams);
         pushItemStatus(translatedItem);
         translateItemNotification('started', translatedParams, eventQueue, {
           rt: translatorRt,
           log,
+          timingObserved: true,
           onCompactBoundary: handleCompactBoundary,
         });
         // 重放帧后发:translator 刚推的 running 帧不得把已重放出的终态盖回去。
@@ -12447,6 +12476,12 @@ assertRouteCurrent();
           log,
           onCompactBoundary: handleCompactBoundary,
         });
+        // Close the observed response after translating any final text that
+        // was absent from deltas. A later usage/turn terminal calibrates the
+        // counts without charging its delivery lag as model generation.
+        if (!isLateCollabTerminal && translatedItem.type === 'agentMessage') {
+          translatorRt.responseSpeed.pause();
+        }
         // A late V1 spawn completion is the spawn tool closing, not necessarily
         // the child closing. Reassert a running compact state, or an explicit
         // failed/stopped tracker state; a completed replay would only duplicate
@@ -12482,6 +12517,7 @@ assertRouteCurrent();
         producedOutputTurnIds.add(params.turnId);
         noteRecoveryModelWork(params.turnId);
         translateAgentMessageDelta(params, eventQueue, { rt: translatorRt, log });
+        maybePushUsageRefresh();
       },
       turnPlanUpdated: (params) => {
         if (enqueueIfBufferedTurn(params.turnId, () => handlers.turnPlanUpdated?.(params))) return;
@@ -12497,6 +12533,7 @@ assertRouteCurrent();
         producedOutputTurnIds.add(params.turnId);
         noteRecoveryModelWork(params.turnId);
         translateReasoningSummaryTextDelta(params, eventQueue, { rt: translatorRt, log });
+        maybePushUsageRefresh();
       },
       reasoningSummaryPartAdded: (params) => {
         // thinking 流同样算产出(与非缓冲路径一致)。
@@ -12513,6 +12550,7 @@ assertRouteCurrent();
         producedOutputTurnIds.add(params.turnId);
         noteRecoveryModelWork(params.turnId);
         translateReasoningTextDelta(params, eventQueue, { rt: translatorRt, log });
+        maybePushUsageRefresh();
       },
       accountRateLimitsUpdated: (params) =>
         translateAccountRateLimitsUpdated(params, eventQueue, { rt: translatorRt, log }),
@@ -14082,6 +14120,12 @@ assertRouteCurrent();
           );
         } catch { return null; }
       },
+
+      readMcpServerTools: (serverName: string) => readCodexThreadMcpServerTools(
+        (method, params, requestOpts) => host.request(method, params, requestOpts),
+        threadId,
+        serverName,
+      ),
 
       getUsageSnapshot(): UsageSnapshot {
         return liveUsageSnapshot();

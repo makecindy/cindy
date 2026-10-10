@@ -16,6 +16,8 @@ const h = vi.hoisted(() => ({
     workspaceKind: 'project',
     status: 'active',
     sdkSessionId: null as string | null,
+    agentDeviceId: null as string | null,
+    source: 'desktop',
   },
   workers: [] as Array<{ sessionId: string }>,
   busy: new Set<string>(),
@@ -25,6 +27,7 @@ const h = vi.hoisted(() => ({
   hooks: null as MoveHooks | null,
   projector: null as null | ((id: string) => { workingDir: string | null } | null),
   actualMove: vi.fn(),
+  saveIntent: vi.fn(),
   broadcast: vi.fn(),
   passive: false,
   dbReady: true,
@@ -87,6 +90,7 @@ vi.mock('../deferredProjectMoveJournal.js', () => ({
       },
       save(intent) {
         assertCurrent();
+        h.saveIntent(intent);
         h.records.set(intent.sessionId, intent);
       },
       remove(id, expectedId) {
@@ -156,6 +160,8 @@ describe('project move service wiring', () => {
       workspaceKind: 'project',
       status: 'active',
       sdkSessionId: null,
+      agentDeviceId: null,
+      source: 'desktop',
     };
     h.workers = [];
     h.busy = new Set();
@@ -166,9 +172,18 @@ describe('project move service wiring', () => {
     h.workersLocked = false;
     h.inspect.mockImplementation(async () => ({ target: { ...h.row } }));
     h.actualMove.mockImplementation(
-      async (_busy, _contextId, sessionId, directory, assertCurrent, options) => {
+      async (isBusy, _contextId, sessionId, directory, assertCurrent, options) => {
         assertCurrent();
-        expect(options).toEqual({ routeLockHeld: true, strictTranscriptRelocation: true });
+        expect(options).toEqual(
+          h.row.agentDeviceId
+            ? { routeLockHeld: true }
+            : { routeLockHeld: true, strictTranscriptRelocation: true },
+        );
+        // The real ordinary move owns this pre-write validation; this fake
+        // checks that the service passes its live probe rather than accepting
+        // a busy result as a deferred success.
+        if (isBusy(sessionId) || h.workers.some((worker) => isBusy(worker.sessionId)))
+          return { ok: false, errorCode: 'PRECONDITION_FAILED', message: 'Task is busy.' };
         h.row = {
           ...h.row,
           ...(directory ? { workingDir: directory } : {}),
@@ -209,6 +224,96 @@ describe('project move service wiring', () => {
     expect(h.hooks!.hasPending('task')).toBe(false);
     expect(deps.onSettled).toHaveBeenCalledWith('task');
   });
+
+  it.each([
+    { agentDeviceId: 'device-b', workingDir: '/b', workspaceKind: 'project' },
+    { agentDeviceId: 'device-b', workingDir: null, workspaceKind: 'dialogue' },
+    { agentDeviceId: 'share:provider-share', workingDir: '/b', workspaceKind: 'project' },
+    { agentDeviceId: 'share:provider-share', workingDir: null, workspaceKind: 'dialogue' },
+  ])(
+    'moves idle $agentDeviceId to $workspaceKind without a deferred intent or strict local relocation',
+    async ({ agentDeviceId, workingDir, workspaceKind }) => {
+      h.row.agentDeviceId = agentDeviceId;
+      const assertAuthority = vi.fn();
+
+      expect(await h.move!('task', workingDir, assertAuthority)).toMatchObject({
+        ok: true,
+        sessionId: 'task',
+        workingDir: workingDir ?? '/a',
+        workspaceKind,
+      });
+      expect(h.row).toMatchObject({ workingDir: workingDir ?? '/a', workspaceKind, agentDeviceId });
+      expect(h.actualMove).toHaveBeenCalledExactlyOnceWith(
+        deps.isBusy,
+        'task',
+        'task',
+        workingDir,
+        expect.any(Function),
+        { routeLockHeld: true },
+      );
+      expect(assertAuthority).toHaveBeenCalled();
+      expect(h.saveIntent).not.toHaveBeenCalled();
+      expect(h.records.size).toBe(0);
+      expect(h.projector!('task')).toBeNull();
+      expect(h.hooks!.hasPending('task')).toBe(false);
+      expect(h.broadcast).not.toHaveBeenCalled();
+      expect(deps.drainPersist).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    { agentDeviceId: 'device-b', busyId: 'task', workingDir: '/b' },
+    { agentDeviceId: 'share:provider-share', busyId: 'worker', workingDir: null },
+  ])(
+    'returns the ordinary move refusal when $agentDeviceId becomes busy before writing',
+    async ({ agentDeviceId, busyId, workingDir }) => {
+      h.row.agentDeviceId = agentDeviceId;
+      h.workers = [{ sessionId: 'worker' }];
+      h.inspect.mockImplementationOnce(async () => {
+        h.busy.add(busyId);
+        return { target: { ...h.row } };
+      });
+
+      expect(await h.move!('task', workingDir, () => {})).toMatchObject({
+        ok: false,
+        errorCode: 'PRECONDITION_FAILED',
+      });
+      expect(h.actualMove).toHaveBeenCalledOnce();
+      expect(h.row).toMatchObject({ workingDir: '/a', workspaceKind: 'project' });
+      expect(h.saveIntent).not.toHaveBeenCalled();
+      expect(h.records.size).toBe(0);
+      expect(h.projector!('task')).toBeNull();
+      expect(h.broadcast).not.toHaveBeenCalled();
+      expect(deps.drainPersist).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(['cindy-make', 'cindy-make-merge'])(
+    'honors the managed-workspace preflight refusal before the remote-agent shortcut (%s)',
+    async (source) => {
+      h.row.source = source;
+      h.row.agentDeviceId = 'device-b';
+      // Source policy itself is covered by moveSession.test.ts. This verifies
+      // that the service cannot bypass its preflight with the immediate route.
+      h.inspect.mockRejectedValue(
+        Object.assign(new Error('Managed workspace cannot move'), {
+          code: 'UNSUPPORTED_CAPABILITY',
+        }),
+      );
+      for (const workingDir of ['/b', null]) {
+        expect(await h.move!('task', workingDir, () => {})).toMatchObject({
+          ok: false,
+          errorCode: 'UNSUPPORTED_CAPABILITY',
+        });
+      }
+      expect(h.row).toMatchObject({ workingDir: '/a', workspaceKind: 'project' });
+      expect(h.actualMove).not.toHaveBeenCalled();
+      expect(h.saveIntent).not.toHaveBeenCalled();
+      expect(h.records.size).toBe(0);
+      expect(h.projector!('task')).toBeNull();
+      expect(h.broadcast).not.toHaveBeenCalled();
+    },
+  );
 
   it('rejects an unsupported running task before staging or publishing its destination', async () => {
     h.busy.add('task');

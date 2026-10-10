@@ -72,6 +72,50 @@ it('pauses until old work settles and discards its late success', async () => {
   expect(request).toHaveBeenCalledTimes(1);
 });
 
+it('a window-switch pause keeps the stopped read from updating the notice or failure count', async () => {
+  const { safety, options } = fixture();
+  const now = vi.spyOn(Date, 'now').mockReturnValue(10000);
+  let fail!: (error: Error) => void;
+  const tick = vi
+    .spyOn(ClipboardSync.prototype, 'tick')
+    .mockImplementationOnce(
+      () =>
+        new Promise((_resolve, reject) => {
+          fail = reject;
+        }),
+    )
+    .mockRejectedValueOnce(new Error('DESKTOP_UNAVAILABLE'))
+    .mockResolvedValue(undefined);
+  let focused = true;
+  const sync = {
+    ...options,
+    preferences: { ...options.preferences, clipboardSync: true },
+    clipboardCurrent: () => focused,
+    clipboard: { version: async () => 'v', read: async () => '{}', write: async () => 'v' },
+  };
+  try {
+    const stale = safety.tick(sync);
+    await vi.waitFor(() => expect(tick).toHaveBeenCalledTimes(1));
+    focused = false;
+    const paused = safety.pauseClipboard();
+    // Pausing stops the in-flight read, which then reports the clipboard as unavailable.
+    fail(new Error('DESKTOP_CLIPBOARD_UNAVAILABLE'));
+    expect((await stale).notice).toBeNull();
+    await paused;
+    expect(safety.snapshot().notice).toBeNull();
+
+    // The stale result was not counted: the first real failure backs off 1.5s, not 3s.
+    focused = true;
+    expect((await safety.tick(sync)).notice).toBe('clipboardSyncFailed');
+    now.mockReturnValue(12000);
+    await safety.tick(sync);
+    expect(tick).toHaveBeenCalledTimes(3);
+  } finally {
+    now.mockRestore();
+    tick.mockRestore();
+  }
+});
+
 it('keeps conflict feedback until content is actually synchronized', async () => {
   const { safety, options } = fixture();
   const now = vi.spyOn(Date, 'now').mockReturnValue(10000);

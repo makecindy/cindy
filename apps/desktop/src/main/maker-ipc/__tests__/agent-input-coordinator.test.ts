@@ -37,7 +37,9 @@ import type {
   AgentInputProjection,
   AgentInputQueuedMessage,
 } from '../../../shared/agentInputQueue.js';
-import { HOST_ONLY_AGENT_PREFIX, USAGE_LIMIT_RESET_AUTO_RESUME_REASON } from '../../../shared/agentInputQueue.js';
+import { HOST_ONLY_AGENT_PREFIX, USAGE_LIMIT_RESET_AUTO_RESUME_REASON, isAutomaticInputOriginKind } from '../../../shared/agentInputQueue.js';
+import { buildRemoteWorkerQueuedMessage } from '../orcaRemoteWorkerRuntime.js';
+import { stampMobileClientOrigin } from '../mobileClientPromptNote.js';
 import {
   CONTINUE_AFTER_APP_EXIT_PROMPT,
   CONTINUE_AFTER_ERROR_PROMPT,
@@ -46,6 +48,7 @@ import {
 import type { RecoveryContextSnapshot } from '../recoveryCoordinator.js';
 import {
   stampTrustedDesktopQueuedOrigin,
+  stampTrustedDeviceLinkQueuedOrigin,
   createMakerSendTransaction,
   type MakerSendTransactionSession,
   TRUSTED_DESKTOP_PI_COMMAND_SNAPSHOT,
@@ -67,6 +70,152 @@ const mocks = vi.hoisted(() => {
     touchUserSendInDb: vi.fn(async () => {}),
     logger,
   };
+});
+
+describe('INPUT_ENQUEUE crash-restored remote Worker pause', () => {
+  const source = readFileSync(new URL('../register.ts', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const start = source.indexOf('    MAKER_INVOKE.INPUT_ENQUEUE,');
+  const handlerStart = source.indexOf('    async (event, sessionId: unknown, item: unknown, opts?: unknown) => {', start);
+  const handlerEnd = source.indexOf('\n  );', handlerStart);
+  const handler = source.slice(handlerStart, handlerEnd).trim().replace(/,$/, '');
+  const compiled = transpileModule(`return (${handler});`, {
+    compilerOptions: { target: ScriptTarget.ES2022 },
+  }).outputText;
+
+  function hostInput(h: ReturnType<typeof createHarness>, remote = true, mobile = false) {
+    const noop = () => undefined;
+    const sameItem = (item: AgentInputQueuedMessage) => item;
+    const owner = {};
+    const bindings = {
+      inputCoordinator: h.coordinator,
+      requireSessionId: (id: string) => id,
+      requireQueuedMessage: sameItem,
+      prepareSharedTaskInput: (_sid: string, item: AgentInputQueuedMessage) => item,
+      getCurrentDbClientSnapshot: () => owner,
+      isDeviceLinkInvoke: () => remote,
+      isMobileControllerInvoke: () => mobile,
+      readDeviceLinkInvokeSourceDevice: () => mobile
+        ? { deviceId: 'phone', name: 'Phone', platform: 'android' }
+        : { deviceId: 'lead-computer', name: 'Lead Computer', platform: 'windows' },
+      readClaimedUiLanguage: noop,
+      getResolvedMainLocale: () => 'zh-CN',
+      getInputSessionRow: async () => ({ clearedAt: null }),
+      getMakerIfReady: () => null,
+      remoteInputClientIdWasPersisted: () => false,
+      hasInputDeliveryCancellation: () => false,
+      materializeQueuedOssAttachmentsDeferred: (_sid: string, item: AgentInputQueuedMessage) => ({ item }),
+      hydrateQueuedAgentReferences: sameItem,
+      stampTurnUiLanguage: sameItem,
+      stampTrustedDesktopQueuedOrigin,
+      stampTrustedDeviceLinkQueuedOrigin,
+      stampMobileClientOrigin,
+      isAutomaticInputOriginKind,
+      prepareDeviceLinkAutoTitle: async () => noop,
+      queuedAttachmentOwnership: { activateCurrentOwner: noop },
+      throwIpcError: (code: string, message: string) => { throw Object.assign(new Error(message), { code }); },
+      ...Object.fromEntries([
+        'assertReviewExternalInputAllowed', 'assertTrustedAppRendererEvent', 'withSessionPermissionChange',
+        'awaitAgentInputQueueSnapshotPersistence', 'assertRemoteInputClearNotInFlight',
+        'readRemoteInputClearBoundaryPrecondition', 'observeLocalInputClearBoundary',
+        'assertExpectedRemoteInputClearBoundary', 'registerQueuedAttachmentOwnership',
+        'discardSpecificQueuedAttachmentOwnership', 'markQueuedAttachmentDurableAfterSnapshot',
+      ].map(name => [name, noop])),
+    };
+    expect(start).toBeGreaterThan(0);
+    expect(handlerStart).toBeGreaterThan(start);
+    expect(handlerEnd).toBeGreaterThan(handlerStart);
+    return new Function(...Object.keys(bindings), compiled)(...Object.values(bindings)) as
+      (event: object, sid: string, item: AgentInputQueuedMessage, opts?: unknown) => Promise<AgentInputProjection>;
+  }
+
+  function leadInput(clientId = 'lead-input') {
+    return buildRemoteWorkerQueuedMessage({
+      clientId, rawContent: 'new assignment', createOpts: makeItem('settings', '').createOpts,
+      createdAt: '2026-10-10T00:00:00.000Z',
+    });
+  }
+
+  it('keeps restored and newly delegated input paused through the actual remote enqueue handler', async () => {
+    const h = createHarness();
+    const sid = 'restarted-remote-worker';
+    h.setLoadQueueSnapshot(async () => [makeItem('restored', 'old assignment')]);
+    const enqueue = hostInput(h);
+    await enqueue({}, sid, leadInput(), { resumeRestorePausedQueue: true });
+    await enqueue({}, sid, leadInput()); // Same-client retransmission must not resume or duplicate.
+    await flush();
+    expect(h.coordinator.getProjection(sid)).toMatchObject({ queuePaused: true });
+    expect(h.coordinator.getProjection(sid).pendingQueue.map(item => item.clientId)).toEqual(['restored', 'lead-input']);
+    expect(latestSnapshotClientIds(h.persistQueueSnapshot)).toEqual(['restored', 'lead-input']);
+    expect(h.sendToAgent).not.toHaveBeenCalled();
+
+    h.coordinator.resume(sid);
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledOnce();
+    expect(h.sendToAgent.mock.calls[0]?.[1]).toEqual({ type: 'user', content: 'old assignment' });
+  });
+
+  it.each([['phone', true, true], ['remote desktop', true, false], ['local desktop', false, false]] as const)(
+    'allows explicit %s input to resume the restored Worker queue', async (_name, remote, mobile) => {
+      const h = createHarness();
+      const sid = 'user-resumes-remote-worker';
+      h.setLoadQueueSnapshot(async () => [makeItem('restored', 'old assignment')]);
+      await hostInput(h, remote, mobile)({}, sid, makeItem('user-input', 'continue please'));
+      await flush();
+      expect(h.coordinator.getProjection(sid).queuePaused).toBe(false);
+      expect(h.sendToAgent).toHaveBeenCalledOnce();
+      expect(h.sendToAgent.mock.calls[0]?.[1]).toEqual({ type: 'user', content: 'old assignment' });
+      expect(h.coordinator.getProjection(sid).pendingQueue.map(item => item.clientId)).toEqual(['user-input']);
+    },
+  );
+
+  it('keeps a user-stopped queue paused for both Lead and phone input', async () => {
+    const h = createHarness();
+    const sid = 'stopped-remote-worker';
+    await h.coordinator.ensureQueueRestored(sid);
+    h.setRunning(true);
+    h.coordinator.enqueue(sid, makeItem('before-stop', 'queued before stop'));
+    await flush();
+    h.coordinator.stop(sid, { keepQueue: true, pauseQueue: true });
+    h.setRunning(false);
+    await flush();
+    expect(h.coordinator.getProjection(sid).queuePaused).toBe(true);
+    await hostInput(h)({}, sid, leadInput());
+    await hostInput(h, true, true)({}, sid, makeItem('user-input', 'hello'));
+    await flush();
+    expect(h.coordinator.getProjection(sid).queuePaused).toBe(true);
+    expect(h.sendToAgent).not.toHaveBeenCalled();
+    expect(h.coordinator.getProjection(sid).pendingQueue.map(item => item.clientId)).toEqual(['before-stop', 'lead-input', 'user-input']);
+  });
+
+  it('does not pause an online Worker without a restored queue', async () => {
+    const h = createHarness();
+    await hostInput(h)({}, 'online-worker', leadInput());
+    await flush();
+    expect(h.coordinator.getProjection('online-worker').queuePaused).toBe(false);
+    expect(h.sendToAgent).toHaveBeenCalledOnce();
+  });
+
+  it('still treats local renderer input as explicit after dropping its claimed automatic origin', async () => {
+    const h = createHarness();
+    const sid = 'local-user-input';
+    h.setLoadQueueSnapshot(async () => [makeItem('restored', 'old assignment')]);
+    await hostInput(h, false)({}, sid, leadInput());
+    await flush();
+    expect(h.coordinator.getProjection(sid).queuePaused).toBe(false);
+    expect(h.sendToAgent).toHaveBeenCalledOnce();
+    expect(h.coordinator.getProjection(sid).pendingQueue[0]?.origin).toBeUndefined();
+  });
+
+  it('lets another controller send to another task without releasing the restored Worker', async () => {
+    const h = createHarness();
+    h.setLoadQueueSnapshot(async sid => sid === 'restored-worker' ? [makeItem('restored', 'old assignment')] : []);
+    await hostInput(h)({}, 'restored-worker', leadInput());
+    await hostInput(h, true, true)({}, 'other-task', makeItem('phone-input', 'ordinary input'));
+    await flush();
+    expect(h.coordinator.getProjection('restored-worker').queuePaused).toBe(true);
+    expect(h.sendToAgent).toHaveBeenCalledOnce();
+    expect(h.sendToAgent.mock.calls[0]?.[0]).toBe('other-task');
+  });
 });
 
 describe('queued welcome dispatch receipts', () => {

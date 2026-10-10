@@ -56,6 +56,8 @@ const SHARE_REASON = /^\[REMOTE_AGENT_SHARE_(PAUSED|REMOVED|UNAVAILABLE)\]/;
 export interface ProviderGroupDirectory {
   resolveMembers(providerId: string, config: ProviderGroupConfig): Promise<ResolvedProviderGroupMember[]>;
   listCandidates(providerId: string, config: ProviderGroupConfig | null): Promise<ProviderGroupCandidate[]>;
+  /** 那台电脑允许被远程调用的供应商(与组内电脑状态共用同一份短时缓存)；读不到时抛错。 */
+  readDeviceCatalog(agentDeviceId: string): Promise<ProviderView[]>;
   /** 忘掉缓存(换账号、组内电脑失败后需要现读)。 */
   invalidate(agentDeviceId?: string): void;
 }
@@ -215,6 +217,8 @@ export function createProviderGroupDirectory(deps: ProviderGroupDirectoryDeps): 
       return candidates.sort((a, b) =>
         a.kind === b.kind ? a.label.localeCompare(b.label) : a.kind === 'device' ? -1 : 1);
     },
+
+    readDeviceCatalog: readCatalog,
 
     invalidate(agentDeviceId) {
       if (agentDeviceId === undefined) {
