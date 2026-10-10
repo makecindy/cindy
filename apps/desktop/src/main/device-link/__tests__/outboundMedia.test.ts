@@ -4,6 +4,7 @@
  * 失败传播 / 非媒体 channel 与无附件透传。
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import path from 'node:path';
 
 const uploadLocalFile = vi.hoisted(() => vi.fn());
 const uploadBuffer = vi.hoisted(() => vi.fn());
@@ -19,6 +20,12 @@ vi.mock('../../logger', () => ({
 import { rewriteOutboundMedia, withPeerAttachmentUpload, __testing } from '../outboundMedia';
 import { buildPeerAttachmentRef, parsePeerAttachmentRef } from '@cindy/device-link';
 import { buildUserMessageAttachmentPayload } from '../../../renderer/lib/messageAttachmentPayload';
+import { REVIEW_START_REQUEST_LIMITS } from '../../maker-ipc/reviewStartHandler';
+
+// Authorization/snapshot behavior has its own filesystem-backed regression suite.
+vi.mock('../../maker-ipc/reviewOutboundInput', () => ({
+  withPreparedOutboundReview: (request: unknown, upload: (value: unknown) => unknown) => upload(request),
+}));
 import { withSharedTaskMedia } from '../sharedTaskMediaContext.js';
 import { assertSharedTaskReferences } from '../sharedTaskDispatch.js';
 import { parseAttachmentOssRef, isAttachmentOssRef } from '../../../shared/attachmentOssRef';
@@ -42,6 +49,43 @@ beforeEach(() => {
 });
 
 describe('rewriteOutboundMedia — channel gating', () => {
+  it.each([
+    ['count', () => Array.from({ length: 21 }, () => ({ name: 'a', path: '/controller/a' }))],
+    ['metadata', () => [{ name: 'a', path: '/controller/a' }, { name: 'x'.repeat(4097), path: '/controller/b' }]],
+    ['total metadata', () => Array.from({ length: 5 }, () => ({ name: 'a', url: 'a'.repeat(64 * 1024) }))],
+    ['single inline payload', () => [{ name: 'a', base64: 'a'.repeat(REVIEW_START_REQUEST_LIMITS.attachmentBase64Chars + 1) }]],
+    ['total inline payload', () => Array.from({ length: 3 }, () => ({ name: 'a', base64: 'a'.repeat(24 * 1024 * 1024) }))],
+  ] as const)('rejects Review %s limits before reading, compressing or staging any attachment', async (_label, attachments) => {
+    const peerUpload = vi.fn();
+    await expect(withPeerAttachmentUpload(peerUpload, () => rewriteOutboundMedia('maker:review:start', [{
+      sourceSessionId: 'source', attachments: attachments(),
+    }]))).rejects.toThrow('INVALID_PARAMS');
+    expect(peerUpload).not.toHaveBeenCalled();
+    expect(uploadLocalFile).not.toHaveBeenCalled();
+    expect(uploadBuffer).not.toHaveBeenCalled();
+    expect(resolveSafe).not.toHaveBeenCalled();
+  });
+
+  it('uploads Review attachments and strips controller-local paths without mutating the request', async () => {
+    const request = { sourceSessionId: 'source', focus: 'docs', attachments: [
+      { name: 'notes.md', path: '/controller/notes.md', category: 'text' },
+    ] };
+    const result = await rewriteOutboundMedia('maker:review:start', [request]);
+    const rewritten = result[0] as typeof request;
+    expect(rewritten.sourceSessionId).toBe('source');
+    expect(rewritten.focus).toBe('docs');
+    expect(isAttachmentOssRef(rewritten.attachments[0].path)).toBe(true);
+    expect(JSON.stringify(result)).not.toContain('/controller/notes.md');
+    expect(request.attachments[0].path).toBe('/controller/notes.md');
+    expect(uploadLocalFile).toHaveBeenCalledOnce();
+  });
+
+  it('rejects Review when attachment upload fails', async () => {
+    uploadLocalFile.mockRejectedValue(new Error('upload failed'));
+    await expect(rewriteOutboundMedia('maker:review:start', [{
+      sourceSessionId: 'source', attachments: [{ name: 'notes.md', path: '/controller/notes.md' }],
+    }])).rejects.toThrow('upload failed');
+  });
   it('uses peer staging for exact file bytes, preserves the name and retains OSS fallback', async () => {
     const direct = vi.fn(async () => buildPeerAttachmentRef({ ticket: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', size: 10, sha256: SHA256, mimeType: 'text/plain' }));
     const args = ['session', { type: 'user', content: [{ type: 'file', path: '/controller/a.txt', originalName: 'a.txt' }] }];
@@ -300,6 +344,96 @@ describe('rewriteOutboundMedia — send/steer content-block 形态', () => {
 });
 
 describe('rewriteOutboundMedia — enqueue files 形态', () => {
+  it.each([
+    ['report.pdf', 'pdf', 'application/pdf'],
+    ['demo.mp4', 'file', 'video/mp4'],
+    ['audio.mp3', 'file', 'audio/mpeg'],
+  ] as const)('uploads new remote-draft %s attachments before removing controller paths', async (name, category, mimeType) => {
+    const localPath = path.resolve('controller-files', name);
+    const payload = buildUserMessageAttachmentPayload([{
+      id: name, name, path: localPath, size: 42, ext: path.extname(name), category, mimeType,
+    }]);
+    const item = {
+      clientId: 'new-remote-draft', files: payload.serializedFiles,
+      persistedContent: JSON.stringify({ text: 'read this', files: payload.persistFileRefs }),
+    };
+    uploadLocalFile.mockResolvedValue({ key: `cindy/device-link/u/${name}`, size: 42, contentType: mimeType, sha256: SHA256 });
+    const out = await rewriteOutboundMedia('maker:input:enqueue', ['sess', item]);
+    const rewritten = out[1] as typeof item;
+    expect(uploadLocalFile).toHaveBeenCalledExactlyOnceWith(localPath, { contentType: mimeType });
+    expect(parseAttachmentOssRef(rewritten.files![0].path)).toMatchObject({ originalName: name, mimeType });
+    expect(JSON.stringify(out)).not.toContain(JSON.stringify(localPath).slice(1, -1));
+    expect(item.files![0].path).toBe(localPath);
+    uploadLocalFile.mockRejectedValueOnce(new Error('upload failed'));
+    await expect(rewriteOutboundMedia('maker:input:enqueue', ['sess', item])).rejects.toThrow('upload failed');
+  });
+  it.each([
+    ['maker:input:enqueue', undefined],
+    ['maker:input:steer', { touchUserSend: true }],
+    ['maker:input:steer', { removeFromQueue: false }],
+  ])('uploads a new local HTML attachment for %s with %j', async (channel, opts) => {
+    const localPath = path.resolve('controller-files', 'report.html');
+    const payload = buildUserMessageAttachmentPayload([{
+      id: 'html',
+      name: 'report.html',
+      path: localPath,
+      size: 42,
+      ext: '.html',
+      category: 'text',
+      mimeType: 'text/html',
+    }]);
+    uploadLocalFile.mockResolvedValue({
+      key: 'cindy/device-link/u/report.html',
+      size: 42,
+      contentType: 'text/html',
+      sha256: SHA256,
+    });
+    const item = {
+      clientId: 'new-html',
+      files: payload.serializedFiles,
+      persistedContent: JSON.stringify({ text: 'read this', files: payload.persistFileRefs }),
+    };
+
+    const out = await rewriteOutboundMedia(channel, ['sess', item, opts]);
+    const rewritten = out[1] as typeof item;
+    const ref = rewritten.files![0].path;
+    expect(uploadLocalFile).toHaveBeenCalledExactlyOnceWith(localPath, { contentType: 'text/html' });
+    expect(parseAttachmentOssRef(ref)).toMatchObject({
+      originalName: 'report.html',
+      mimeType: 'text/html',
+      size: 42,
+      sha256: SHA256,
+    });
+    expect(JSON.parse(rewritten.persistedContent).files[0].path).toBe(ref);
+    expect(item.files![0].path).toBe(localPath);
+  });
+
+  it.each([
+    ['cached HTML', 'xdt-image://sess/report.html', 'report.html', 'text/html'],
+    ['absolute PDF path', undefined, 'report.pdf', 'application/pdf'],
+    ['media blob', `cindy-media://blobs/${SHA256}.png`, 'picture.png', 'image/png'],
+  ])('preserves host-owned %s when sending an existing queue item', async (_label, url, name, mimeType) => {
+    // These POSIX paths describe the remote host, regardless of the test platform.
+    const hostPath = `/remote/cache/sess/${name}`;
+    const item = {
+      clientId: 'already-queued',
+      text: 'read this',
+      files: [{ name, path: hostPath, ...(url ? { url } : {}), mimeType }],
+      persistedContent: JSON.stringify({ text: 'read this', files: [{ name, path: hostPath }] }),
+    };
+    const args = ['sess', item, { removeFromQueue: true, expectedClearBoundaryMs: null }];
+    resolveSafe.mockReturnValue({ absPath: path.resolve('missing-controller-cache', name), mimeType });
+    uploadLocalFile.mockRejectedValue(new Error('ENOENT: host attachment is not on the controller'));
+
+    const out = await rewriteOutboundMedia('maker:input:steer', args);
+
+    expect(out).toEqual(args);
+    expect(out[1]).toBe(item);
+    expect(resolveSafe).not.toHaveBeenCalled();
+    expect(uploadLocalFile).not.toHaveBeenCalled();
+    expect(uploadBuffer).not.toHaveBeenCalled();
+  });
+
   it('item.files[] 上传 + url/path 变引用、base64 清掉(buildMakerUserMessage 取 url)', async () => {
     const out = await rewriteOutboundMedia('maker:input:enqueue', [
       'sess',

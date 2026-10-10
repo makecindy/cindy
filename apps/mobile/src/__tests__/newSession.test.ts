@@ -8,8 +8,15 @@ import {
   DEFAULT_NEW_SESSION_DRAFT,
   NEW_SESSION_AGENT_OPTIONS,
   availableNewSessionAgentOptions,
+  canResolveStoredAgentRuntime,
+  assertSubmitModelResolved,
+  isNewSessionRuntimePending,
+  isStoredAgentRestorePending,
+  nextStoredAgentRestoreStep,
+  type StoredAgentRestoreState,
   buildNewSessionCreatePreview,
   buildRecentWorkspaceOptions,
+  applyRemoteAgentPick,
   buildRemoteCreateSessionOptions,
   filterRemoteDirectoryEntries,
   isCurrentRemoteBrowseRequest,
@@ -324,6 +331,226 @@ describe('resolveSubmitGuardCatalog —— 提交终检目录取信(代际安全
   });
 });
 
+describe('stored agent restore gating', () => {
+  const recentOpus = remoteSession('recent', {
+    deviceLinkDeviceId: 'mac',
+    model: 'claude-opus-5-5',
+    effort: 'high',
+  });
+
+  it('waits while neither the catalog nor a recent task for the agent is available', () => {
+    // 冷启动:目录未就绪、任务列表还没到 —— 此刻恢复只能落到内置 Sonnet 4.6。
+    expect(canResolveStoredAgentRuntime({
+      agentKind: 'claude-code',
+      sessions: [],
+      deviceId: 'mac',
+      catalogReady: false,
+      providersUnsupported: false,
+    })).toBe(false);
+    expect(pickAgentDefaultRuntime({
+      agentKind: 'claude-code',
+      sessions: [],
+      modelRows: [],
+      currentEffort: 'medium',
+      deviceId: 'mac',
+      catalogReady: false,
+    })).toMatchObject({ model: '', effort: 'medium' });
+  });
+
+  it('proceeds once a recent task of the stored agent exists on the device', () => {
+    expect(canResolveStoredAgentRuntime({
+      agentKind: 'claude-code',
+      sessions: [recentOpus],
+      deviceId: 'mac',
+      catalogReady: false,
+      providersUnsupported: false,
+    })).toBe(true);
+    // 其他设备或其他 agent 的任务不算。
+    expect(canResolveStoredAgentRuntime({
+      agentKind: 'codex',
+      sessions: [recentOpus],
+      deviceId: 'mac',
+      catalogReady: false,
+      providersUnsupported: false,
+    })).toBe(false);
+    expect(canResolveStoredAgentRuntime({
+      agentKind: 'claude-code',
+      sessions: [recentOpus],
+      deviceId: 'studio',
+      catalogReady: false,
+      providersUnsupported: false,
+    })).toBe(false);
+  });
+
+  it('proceeds once the catalog is ready or explicitly unsupported, or without a device', () => {
+    const base = { agentKind: 'claude-code' as const, sessions: [], deviceId: 'mac' };
+    expect(canResolveStoredAgentRuntime({ ...base, catalogReady: true, providersUnsupported: false })).toBe(true);
+    expect(canResolveStoredAgentRuntime({ ...base, catalogReady: false, providersUnsupported: true })).toBe(true);
+    expect(canResolveStoredAgentRuntime({ ...base, deviceId: '', catalogReady: false, providersUnsupported: false })).toBe(true);
+  });
+
+  it('reports a pending restore only for an unapplied stored agent on the target device', () => {
+    const base = { expectedDeviceId: 'mac', selectedDeviceId: 'mac' };
+    expect(isStoredAgentRestorePending({ ...base, storedAgentKind: 'claude-code', appliedStoredAgentKind: null })).toBe(true);
+    expect(isStoredAgentRestorePending({ ...base, storedAgentKind: 'claude-code', appliedStoredAgentKind: 'claude-code' })).toBe(false);
+    expect(isStoredAgentRestorePending({ ...base, storedAgentKind: null, appliedStoredAgentKind: null })).toBe(false);
+    // 显式路由到别的设备时不恢复,自动默认照常工作。
+    expect(isStoredAgentRestorePending({
+      storedAgentKind: 'claude-code',
+      appliedStoredAgentKind: null,
+      expectedDeviceId: 'mac',
+      selectedDeviceId: 'studio',
+    })).toBe(false);
+    expect(isStoredAgentRestorePending({
+      storedAgentKind: 'codex',
+      appliedStoredAgentKind: null,
+      expectedDeviceId: '',
+      selectedDeviceId: 'studio',
+    })).toBe(true);
+  });
+
+  it('restores the remembered agent immediately and fills its model exactly once when data arrives (codex P1)', () => {
+    // 事件序列:偏好到 → 数据未到 → 数据到 → 之后再有数据变化。
+    let restored: StoredAgentRestoreState | null = null;
+    const apply = (modelReady: boolean) => {
+      const step = nextStoredAgentRestoreStep({ storedAgentKind: 'codex', restored, modelReady });
+      if (step) restored = { agentKind: 'codex', phase: step === 'agent' ? 'agent' : 'done' };
+      return step;
+    };
+    // 目录拉不到、也没有 Codex 最近任务:仍先恢复 agent(旧补丁在这里返回不恢复,草稿停在 Claude)。
+    expect(apply(false)).toBe('agent');
+    expect(apply(false)).toBeNull();
+    expect(apply(true)).toBe('model');
+    expect(apply(true)).toBeNull();
+    expect(apply(false)).toBeNull();
+  });
+
+  it('restores agent and model together when data is already there, and restarts for a different remembered agent', () => {
+    expect(nextStoredAgentRestoreStep({ storedAgentKind: 'pi', restored: null, modelReady: true })).toBe('full');
+    expect(nextStoredAgentRestoreStep({
+      storedAgentKind: 'pi',
+      restored: { agentKind: 'codex', phase: 'done' },
+      modelReady: false,
+    })).toBe('agent');
+  });
+
+  it('gates the stored agent restore on real data and leaves the auto-default unblocked', () => {
+    const source = readTextLf(resolve(process.cwd(), 'app/sessions/new.tsx'), 'utf8');
+    const storedStart = source.indexOf('const storedAgentKind = newSessionPreferences?.agentKind;');
+    const autoStart = source.indexOf('const result = resolveNewSessionAutoDefault({');
+    const storedSource = source.slice(storedStart, source.indexOf('storedAgentRestoreRef.current = restoreState', storedStart));
+    const autoGuardSource = source.slice(source.lastIndexOf('useEffect(() => {', autoStart), autoStart);
+    expect(storedSource).toContain('isStoredAgentRestorePending({');
+    expect(storedSource).toContain('canResolveStoredAgentRuntime({');
+    expect(storedSource).toContain('nextStoredAgentRestoreStep({');
+    // model 步只补模型,不写 agent / 权限。
+    const modelStep = source.slice(source.indexOf("if (step === 'model') {"), source.indexOf('const storedPermissionMode', storedStart));
+    expect(modelStep).not.toContain('permissionMode');
+    expect(modelStep).toContain('current.agentKind === storedAgentKind');
+    expect(storedSource).not.toContain('deviceProviders.loading');
+    // 恢复待落定时不阻断「跟随最近任务」(Greptile P1)。
+    expect(autoGuardSource).not.toContain('isStoredAgentRestorePending(');
+  });
+});
+
+describe('pickAgentDefaultRuntime on hosts without provider:list', () => {
+  const flat = (id: string, marked: boolean): MobileModelOption => ({
+    id, label: id, efforts: ['low', 'high'], effortDisplayNames: {}, defaultEffort: 'high', supportsFastMode: false,
+    ...(marked ? { newSessionDefault: ['claude-code'] } : {}),
+  } as MobileModelOption);
+
+  it('uses the advertised capabilities model instead of settling an empty one', () => {
+    const base = { agentKind: 'claude-code' as const, sessions: [], modelRows: [], currentEffort: 'medium', catalogReady: false };
+    expect(pickAgentDefaultRuntime({ ...base, flatModels: [flat('a', false), flat('b', true)] }))
+      .toMatchObject({ model: 'b', providerId: null, effort: 'high' });
+    expect(pickAgentDefaultRuntime({ ...base, flatModels: [flat('a', false)] })).toMatchObject({ model: 'a', providerId: null });
+    // 能力表也没有时才留空。
+    expect(pickAgentDefaultRuntime({ ...base, flatModels: [] })).toMatchObject({ model: '' });
+    expect(pickAgentDefaultRuntime(base)).toMatchObject({ model: '' });
+  });
+
+  it('passes capabilities models only for unsupported hosts, on both stored-agent restore and agent switch', () => {
+    const source = readTextLf(resolve(process.cwd(), 'app/sessions/new.tsx'), 'utf8');
+    expect(source).toContain('flatModels: flatModelsForUnsupportedHost(selectedDeviceId, storedAgentKind, deviceProvidersRef.current.unsupported),');
+    expect(source).toContain('flatModels: flatModelsForUnsupportedHost(selectedDeviceId, nextKind, deviceProvidersRef.current.unsupported),');
+    expect(source).toContain('if (!providersUnsupported || !deviceId) return undefined;');
+  });
+});
+
+describe('isNewSessionRuntimePending', () => {
+  const base = {
+    settled: false,
+    userTouched: false,
+    remoteAgentPicked: false,
+    selectedDeviceId: 'mac-studio',
+    catalogReady: false,
+    catalogFailed: false,
+    modelRowCount: 0,
+  };
+
+  it('keeps the placeholder model pending until real data settles it', () => {
+    expect(isNewSessionRuntimePending(base)).toBe(true);
+    // 目录就绪但自动默认 / 恢复还没写入:仍是占位。
+    expect(isNewSessionRuntimePending({ ...base, catalogReady: true, modelRowCount: 3 })).toBe(true);
+    expect(isNewSessionRuntimePending({ ...base, settled: true })).toBe(false);
+  });
+
+  it('never blocks a choice the user made', () => {
+    expect(isNewSessionRuntimePending({ ...base, userTouched: true })).toBe(false);
+    expect(isNewSessionRuntimePending({ ...base, remoteAgentPicked: true })).toBe(false);
+  });
+
+  it('falls back to the built-in model when no more data will arrive', () => {
+    expect(isNewSessionRuntimePending({ ...base, selectedDeviceId: '' })).toBe(false);
+    expect(isNewSessionRuntimePending({ ...base, catalogFailed: true })).toBe(false);
+    expect(isNewSessionRuntimePending({ ...base, catalogReady: true, modelRowCount: 0 })).toBe(false);
+  });
+
+  it('rolls back the restore marker and device lock when an automatic write is dropped', () => {
+    const source = readTextLf(resolve(process.cwd(), 'app/sessions/new.tsx'), 'utf8');
+    const storedStart = source.indexOf('const storedAgentKind = newSessionPreferences?.agentKind;');
+    const storedEffect = source.slice(storedStart, source.indexOf('}, [', storedStart));
+    expect(storedEffect).toContain('if (storedAgentRestoreRef.current === restoreState) storedAgentRestoreRef.current = previousRestore;');
+    expect(storedEffect).toContain('autoDefaultDeviceRef.current = previousAutoDefaultDevice;');
+    const autoStart = source.indexOf('const result = resolveNewSessionAutoDefault({');
+    const autoEffect = source.slice(autoStart, source.indexOf('}, [', autoStart));
+    expect(autoEffect).toContain('autoDefaultDeviceRef.current = previousAutoDefaultDevice;');
+  });
+
+  it('binds the settled model to the computer it was settled for', () => {
+    const source = readTextLf(resolve(process.cwd(), 'app/sessions/new.tsx'), 'utf8');
+    // 切到另一台电脑后重新等待,不能沿用上一台电脑落定的模型直接创建。
+    expect(source).toContain('settled: !!selectedDeviceId && runtimeSettledDeviceId === selectedDeviceId,');
+    expect(source).toContain("settleRuntime('stored-agent', deviceAtTrigger);");
+    expect(source).toContain("settleRuntime('stored-agent-model', selectedDeviceId);");
+    expect(source).toContain('result.appliedDeviceId);');
+  });
+
+  it('drops the previous computer\'s auto-picked model on device switch and gates goal creation too', () => {
+    const source = readTextLf(resolve(process.cwd(), 'app/sessions/new.tsx'), 'utf8');
+    const selectStart = source.indexOf('const selectDevice = useCallback(');
+    const selectDevice = source.slice(selectStart, source.indexOf('const handleBack = useCallback(', selectStart));
+    // 用户没手动选过模型时清掉旧电脑的自动选择并重新等待;手动选过的保留。
+    expect(selectDevice).toContain('option.deviceId !== selectedDeviceIdRef.current && !userTouchedRuntimeRef.current');
+    expect(selectDevice).toContain('autoDefaultDeviceRef.current = null;');
+    expect(selectDevice).toContain('setRuntimeSettledDeviceId(null);');
+    expect(selectDevice).toContain("...(clearAutoRuntime ? { model: '', providerId: null, fastMode: false } : {}),");
+    // 目标模式是独立创建入口:表单禁用 + 函数内兜底。
+    const goalStart = source.indexOf('const createGoalSession = useCallback(');
+    expect(source.slice(goalStart, goalStart + 400)).toContain('if (runtimePendingRef.current) return;');
+    expect(source).toContain('disabled={worktreeCreateBlocked || runtimePending}');
+  });
+
+  it('aborts creation instead of sending an empty model after the submit-time catalog check', () => {
+    expect(() => assertSubmitModelResolved({ model: 'claude-opus-5-5' }, 'claude-opus-5-5')).not.toThrow();
+    expect(() => assertSubmitModelResolved({ model: '' }, 'delisted-model'))
+      .toThrow('delisted-model 在这台电脑上已不可用，请重新选择模型后再发送。');
+    // 三处提交终检(创建前两处 + 鉴权后重验)都要经过这道拦截。
+    const source = readTextLf(resolve(process.cwd(), 'app/sessions/new.tsx'), 'utf8');
+    expect(source.split('assertSubmitModelResolved(resolved, effectiveDraft.model);').length - 1).toBe(3);
+  });
+});
+
 describe('pickAgentDefaultRuntime', () => {
   it('follows the target agent\'s most recent session model + effort (reconciled)', () => {
     const runtime = pickAgentDefaultRuntime({
@@ -450,7 +677,7 @@ describe('pickAgentDefaultRuntime', () => {
     expect(runtime).toEqual({ agentKind: 'claude-code', model: 'claude-sonnet-4-6', effort: 'medium', providerId: 'prov-claude-sonnet-4-6' });
   });
 
-  it('falls back to DEFAULT_MODELS + default route when the catalog is ready but empty and the provider is gone', () => {
+  it('leaves the model empty with the default route when the catalog is ready but empty and the provider is gone', () => {
     const runtime = pickAgentDefaultRuntime({
       agentKind: 'codex',
       sessions: [remoteSession('ds', { agentKind: 'codex', model: 'delisted-model', providerId: 'prov-deleted', userSendAt: '2026-01-01T00:00:00.000Z' })],
@@ -459,7 +686,7 @@ describe('pickAgentDefaultRuntime', () => {
       catalogReady: true,
     });
     // 回退内置默认且目录为空 → 省略 effort(codex P2:旧自定义档位对内置模型无效)
-    expect(runtime).toEqual({ agentKind: 'codex', model: 'gpt-5.4', effort: '', providerId: null });
+    expect(runtime).toEqual({ agentKind: 'codex', model: '', effort: '', providerId: null });
   });
 
   it('trusts the recent providerId while modelRows are still loading (empty)', () => {
@@ -483,7 +710,7 @@ describe('pickAgentDefaultRuntime', () => {
     });
     // 目录就绪但为空:来源失效且无人能提供该模型 → model 一并回退内置默认(不留裸模型)
     // + 省略 effort(codex P2:旧自定义档位对内置模型无效)
-    expect(runtime).toEqual({ agentKind: 'claude-code', model: 'claude-sonnet-4-6', effort: '', providerId: null });
+    expect(runtime).toEqual({ agentKind: 'claude-code', model: '', effort: '', providerId: null });
   });
 
   it('reconciles effort with the exact (providerId, modelId) row when multiple providers offer the same model (Copilot)', () => {
@@ -606,21 +833,21 @@ describe('pickAgentDefaultRuntime', () => {
     expect(runtime).toEqual({ agentKind: 'claude-code', model: 'shared-model', effort: 'high', providerId: 'provB' });
   });
 
-  it('falls back to DEFAULT_MODELS and omits effort when the catalog is ready but empty (codex P2)', () => {
+  it('leaves the model empty and omits effort when the catalog is ready but empty (codex P2)', () => {
     expect(pickAgentDefaultRuntime({
       agentKind: 'codex',
       sessions: [],
       modelRows: [],
       currentEffort: 'medium',
       catalogReady: true,
-    })).toEqual({ agentKind: 'codex', model: 'gpt-5.4', effort: '', providerId: null });
+    })).toEqual({ agentKind: 'codex', model: '', effort: '', providerId: null });
     expect(pickAgentDefaultRuntime({
       agentKind: 'claude-code',
       sessions: [],
       modelRows: [],
       currentEffort: 'high',
       catalogReady: true,
-    })).toEqual({ agentKind: 'claude-code', model: 'claude-sonnet-4-6', effort: '', providerId: null });
+    })).toEqual({ agentKind: 'claude-code', model: '', effort: '', providerId: null });
   });
 
   it('skips the top-row branch while the catalog is not ready (stale rows from the previous device, codex P1)', () => {
@@ -632,7 +859,7 @@ describe('pickAgentDefaultRuntime', () => {
       catalogReady: false,
     });
     // 目录未就绪 → 不抄残留目录的首项,落内置默认 + 默认路由
-    expect(runtime).toEqual({ agentKind: 'codex', model: 'gpt-5.4', effort: 'medium', providerId: null });
+    expect(runtime).toEqual({ agentKind: 'codex', model: '', effort: 'medium', providerId: null });
     expect(runtime.providerId).toBeNull();
   });
 
@@ -1050,6 +1277,8 @@ describe('new session default device follows the home device filter', () => {
 });
 
 describe('new session model', () => {
+  const DRAFT_WITH_MODEL = { ...DEFAULT_NEW_SESSION_DRAFT, model: 'claude-sonnet-4-6' };
+
   it('hides dot directories by default and restores them when enabled', () => {
     const entries = [
       { name: '.config', kind: 'dir' as const, path: '/Users/cindy/.config' },
@@ -1125,7 +1354,7 @@ describe('new session model', () => {
 
   it('builds device-link create-session args with desktop remote-project semantics', () => {
     expect(buildRemoteCreateSessionOptions({
-      ...DEFAULT_NEW_SESSION_DRAFT,
+      ...DRAFT_WITH_MODEL,
       workingDir: ' /repo/xdt-maker ',
       firstMessage: 'hello',
       extraDirs: [' /repo/docs ', '/repo/docs', ''],
@@ -1141,9 +1370,28 @@ describe('new session model', () => {
     });
   });
 
+  it('runs the Agent on the picked remote computer or share', () => {
+    const draft = { ...DRAFT_WITH_MODEL, workingDir: '/repo/app', firstMessage: 'hi' };
+    expect(applyRemoteAgentPick(draft, null)).toBe(draft);
+    const remote = applyRemoteAgentPick(draft, {
+      deviceId: 'share:s1', agentKind: 'codex', model: 'gpt-5.5', providerId: 'openai', effort: 'high', fastMode: true,
+    });
+    expect(remote).toMatchObject({
+      agentKind: 'codex', model: 'gpt-5.5', providerId: 'openai', effort: 'high', fastMode: true,
+      agentDeviceId: 'share:s1', workingDir: '/repo/app', firstMessage: 'hi',
+    });
+    expect(buildRemoteCreateSessionOptions(remote)).toMatchObject({
+      agentKind: 'codex', model: 'gpt-5.5', providerId: 'openai', agentDeviceId: 'share:s1',
+    });
+    expect(buildRemoteCreateSessionOptions(draft)).not.toHaveProperty('agentDeviceId');
+    // 乐观会话行一开始就带上 Agent 所在电脑,会话页按那台的目录显示模型。
+    expect(sessionFromCreateResult({ sessionId: 's' }, remote).agentDeviceId).toBe('share:s1');
+    expect(sessionFromCreateResult({ sessionId: 's' }, draft)).not.toHaveProperty('agentDeviceId');
+  });
+
   it('builds folderless dialogue create-session args for controlled-side cwd allocation', () => {
     expect(buildRemoteCreateSessionOptions({
-      ...DEFAULT_NEW_SESSION_DRAFT,
+      ...DRAFT_WITH_MODEL,
       workspaceKind: 'dialogue',
       workingDir: ' /repo/should-not-leak ',
       firstMessage: 'hello',
@@ -1160,7 +1408,7 @@ describe('new session model', () => {
 
   it('omits effort from create-session args when the selected model has no effort control', () => {
     expect(buildRemoteCreateSessionOptions({
-      ...DEFAULT_NEW_SESSION_DRAFT,
+      ...DRAFT_WITH_MODEL,
       workingDir: '/repo/xdt-maker',
       firstMessage: 'hello',
       model: 'claude-haiku-4-6',
@@ -1177,7 +1425,7 @@ describe('new session model', () => {
 
   it('preserves a Codex Auto-review draft when creating the session', () => {
     expect(buildRemoteCreateSessionOptions({
-      ...DEFAULT_NEW_SESSION_DRAFT,
+      ...DRAFT_WITH_MODEL,
       agentKind: 'codex',
       model: 'gpt-5.4',
       permissionMode: 'auto',
@@ -1189,17 +1437,17 @@ describe('new session model', () => {
   });
 
   it('switches agent defaults without carrying a Claude model into Codex', () => {
-    const codex = withAgentDefaults(DEFAULT_NEW_SESSION_DRAFT, 'codex');
+    const codex = withAgentDefaults(DRAFT_WITH_MODEL, 'codex');
     expect(codex).toMatchObject({
       agentKind: 'codex',
-      model: 'gpt-5.4',
+      model: '',
       permissionMode: 'auto',
     });
 
     const claude = withAgentDefaults({ ...codex, fastMode: true }, 'claude-code');
     expect(claude).toMatchObject({
       agentKind: 'claude-code',
-      model: 'claude-sonnet-4-6',
+      model: '',
       permissionMode: 'auto',
       fastMode: false,
     });
@@ -1209,8 +1457,8 @@ describe('new session model', () => {
     expect(NEW_SESSION_AGENT_OPTIONS.map((option) => option.kind)).toEqual([
       'claude-code', 'codex', 'pi',
     ]);
-    const pi = withAgentDefaults({ ...DEFAULT_NEW_SESSION_DRAFT, fastMode: true }, 'pi');
-    expect(pi).toMatchObject({ agentKind: 'pi', model: 'gpt-5.4', fastMode: true });
+    const pi = withAgentDefaults({ ...DRAFT_WITH_MODEL, fastMode: true }, 'pi');
+    expect(pi).toMatchObject({ agentKind: 'pi', model: '', fastMode: true });
     expect(buildRemoteCreateSessionOptions({
       ...pi,
       workingDir: '/repo/xdt-maker',
@@ -1258,27 +1506,29 @@ describe('new session model', () => {
 
   it('validates required path, model and first-message payload', () => {
     expect(validateNewSessionDraft(DEFAULT_NEW_SESSION_DRAFT)).toBe('请输入电脑端项目路径。');
+    // 草稿初值不写死模型:由最近任务 / 目录落定,拿不到时留空让用户选。
+    expect(DEFAULT_NEW_SESSION_DRAFT.model).toBe('');
     expect(validateNewSessionDraft({
-      ...DEFAULT_NEW_SESSION_DRAFT,
+      ...DRAFT_WITH_MODEL,
       workspaceKind: 'dialogue',
     })).toBe('请输入首条消息或添加附件。');
     expect(validateNewSessionDraft({
-      ...DEFAULT_NEW_SESSION_DRAFT,
+      ...DRAFT_WITH_MODEL,
       workingDir: '/repo',
       model: '',
     })).toBe('请输入模型。');
     expect(validateNewSessionDraft({
-      ...DEFAULT_NEW_SESSION_DRAFT,
+      ...DRAFT_WITH_MODEL,
       workingDir: '/repo',
       firstMessage: '',
     })).toBe('请输入首条消息或添加附件。');
     expect(validateNewSessionDraft({
-      ...DEFAULT_NEW_SESSION_DRAFT,
+      ...DRAFT_WITH_MODEL,
       workingDir: '/repo',
       firstMessage: 'run tests',
     })).toBeNull();
     expect(validateNewSessionDraft({
-      ...DEFAULT_NEW_SESSION_DRAFT,
+      ...DRAFT_WITH_MODEL,
       workingDir: '/repo',
       firstMessage: '',
     }, { attachmentCount: 1 })).toBeNull();
@@ -1286,7 +1536,7 @@ describe('new session model', () => {
 
   it('summarizes the mobile create-session draft for the top overview strip', () => {
     expect(summarizeNewSessionDraft({
-      ...DEFAULT_NEW_SESSION_DRAFT,
+      ...DRAFT_WITH_MODEL,
       workingDir: '',
       firstMessage: '',
     })).toMatchObject({
@@ -1299,7 +1549,7 @@ describe('new session model', () => {
     });
 
     expect(summarizeNewSessionDraft({
-      ...DEFAULT_NEW_SESSION_DRAFT,
+      ...DRAFT_WITH_MODEL,
       workingDir: '/repo/xdt-maker',
       firstMessage: 'run tests',
       extraDirs: ['/repo/docs', '/repo/docs', ''],
@@ -1310,7 +1560,7 @@ describe('new session model', () => {
     });
 
     expect(summarizeNewSessionDraft({
-      ...DEFAULT_NEW_SESSION_DRAFT,
+      ...DRAFT_WITH_MODEL,
       workingDir: '/repo/xdt-maker',
       firstMessage: '',
     }, { attachmentCount: 2 })).toMatchObject({
@@ -1319,7 +1569,7 @@ describe('new session model', () => {
     });
 
     expect(summarizeNewSessionDraft({
-      ...DEFAULT_NEW_SESSION_DRAFT,
+      ...DRAFT_WITH_MODEL,
       agentKind: 'codex',
       workspaceKind: 'dialogue',
       workingDir: '',
@@ -1330,14 +1580,14 @@ describe('new session model', () => {
       agentLabel: 'Codex',
       canCreate: true,
       runtimeLabel: 'Codex · gpt-5.4 · medium · Fast',
-      scopeLabel: '电脑端分配对话目录',
+      scopeLabel: '由电脑自动分配工作目录',
       workspaceLabel: '对话',
     });
   });
 
   it('builds a final mobile create preview before sending to the controlled computer', () => {
     expect(buildNewSessionCreatePreview({
-      ...DEFAULT_NEW_SESSION_DRAFT,
+      ...DRAFT_WITH_MODEL,
       workingDir: '',
       firstMessage: '',
     }, 'Carol Mac')).toMatchObject({
@@ -1352,7 +1602,7 @@ describe('new session model', () => {
     });
 
     expect(buildNewSessionCreatePreview({
-      ...DEFAULT_NEW_SESSION_DRAFT,
+      ...DRAFT_WITH_MODEL,
       workspaceKind: 'dialogue',
       workingDir: '',
       firstMessage: '请帮我总结这个项目，并给出下一步建议。',
@@ -1369,7 +1619,7 @@ describe('new session model', () => {
     });
 
     expect(buildNewSessionCreatePreview({
-      ...DEFAULT_NEW_SESSION_DRAFT,
+      ...DRAFT_WITH_MODEL,
       workingDir: '/repo/xdt-maker',
       firstMessage: '',
     }, 'Carol Mac', { attachmentCount: 2 })).toMatchObject({
@@ -1739,7 +1989,7 @@ describe('new session composer surface', () => {
     expect(restoreSource).toContain('firstMessageRef.current = recovered.firstMessage;');
     expect(restoreSource).toContain('firstMessageSelectionRef.current = selection;');
     expect(restoreSource).toContain('setFirstMessageSelection(selection);');
-    expect(newSource).toContain('restoreCreationDraft(stashed.draft, [...stashed.attachments]);');
+    expect(newSource).toContain('restoreCreationDraft(stashed.draft, [...stashed.attachments], undefined, stashed.deviceId || undefined);');
     expect(newSource).toContain('restoreCreationDraft(record.creation.draft,');
   });
 
@@ -1822,7 +2072,7 @@ describe('new session composer surface', () => {
     expect(newSource).toContain("import { MOBILE_VISUAL_MOCK_ENABLED } from '@/config/env';");
     expect(newSource).toContain("const visualFocusComposer = MOBILE_VISUAL_MOCK_ENABLED && readRouteString(params.visualFocusComposer) === '1';");
     expect(newSource).toContain('const visualInitialDraft = MOBILE_VISUAL_MOCK_ENABLED ? readRouteString(params.visualDraft) : null;');
-    expect(newSource).toContain('firstMessage: visualInitialDraft ?? (isRemoteTaskSuggestionId(params.suggestion)');
+    expect(newSource).toContain('firstMessage: visualInitialDraft ?? readRouteString(params.draft) ?? (isRemoteTaskSuggestionId(params.suggestion)');
     expect(newSource).toContain('t(`devices.list.taskSuggestions.items.${params.suggestion}.prompt`)');
     expect(newSource).toContain(': DEFAULT_NEW_SESSION_DRAFT.firstMessage)');
     expect(newComposerSource).toContain('inputTestID="newSession.firstMessageInput"');
@@ -2019,7 +2269,7 @@ describe('new session composer surface', () => {
     expect(createSource).toContain('creatingRef.current = true;');
     expect(createSource.indexOf('creatingRef.current = true;')).toBeLessThan(createSource.indexOf('const latestDraftText = await finishVoiceRecording();'));
     expect(createSource).toContain('const latestDraftText = await finishVoiceRecording();');
-    expect(createSource).toContain('effectiveDraft = { ...draft, firstMessage: latestDraftText };');
+    expect(createSource).toContain('effectiveDraft = { ...effectiveDraft, firstMessage: latestDraftText };');
     expect(createSource).toContain('creatingRef.current = false;');
     expect(createButtonSource).toContain('busy: creating');
     expect(createButtonSource).toContain('|| worktreeBranchPreferenceSaving');
@@ -2124,7 +2374,7 @@ describe('new session worktree wiring (source locks)', () => {
       recovery,
     );
     const sessionId = newSource.indexOf(
-      'const sessionId = recovering?.item.sessionId ?? createNewSessionId();',
+      'const sessionId = recoveryIdentity?.sessionId ?? createNewSessionId();',
       pendingGuard,
     );
     const worktreeCreate = newSource.indexOf(
@@ -2252,7 +2502,7 @@ describe('new session worktree wiring (source locks)', () => {
     expect(worktreeCreate).toBeGreaterThan(gate);
     expect(sessionCreate).toBeGreaterThan(worktreeCreate);
     expect(goalBody).toContain('id: sessionId,');
-    expect(goalBody).toContain('effectiveDraft = { ...draft, workingDir: response.meta.path };');
+    expect(goalBody).toContain('effectiveDraft = { ...effectiveDraft, workingDir: response.meta.path };');
     expect(goalBody).toContain('sessionId: precreatedWorktree!.sessionId');
     expect(goalBody).toContain('sessionId: precreatedWorktree.sessionId');
   });
@@ -2739,5 +2989,25 @@ describe('new.tsx worktree 探测 effect 的离线起始态(#4046,源码契约)'
     ]) {
       expect(deps, `effect deps 应包含 ${dep}`).toContain(dep);
     }
+  });
+});
+
+describe('closed saved model requires reselection', () => {
+  const selected = { model: 'closed', providerId: 'prov-closed' };
+  const visibilityOverrides = { 'codex:prov-closed:closed': false };
+  const rows = [modelRow('replacement', ['medium'], 'medium')];
+  const sessions = [remoteSession('saved', { ...selected, agentKind: 'codex', effort: 'high', deviceLinkDeviceId: 'devA' })];
+  it('preserves the hidden pair during catalog reconciliation and remembered-agent restoration', () => {
+    expect(resolveRecentModelAndProvider(rows, selected, 'codex', true, visibilityOverrides)).toEqual(selected);
+    expect(pickAgentDefaultRuntime({ agentKind: 'codex', sessions, modelRows: rows,
+      currentEffort: 'medium', catalogReady: true, visibilityOverrides })).toMatchObject({ ...selected, effort: 'high' });
+    expect(resolveNewSessionAutoDefault({ userTouched: false, appliedDeviceId: null, selectedDeviceId: 'devA',
+      sessions, modelRows: rows, rowsAgentKind: 'codex', catalogReady: true, visibilityOverrides,
+      currentEffort: 'medium' })?.patch).toMatchObject(selected);
+  });
+  it('carries fresh visibility with its rows through the submit guard', async () => {
+    const result = await resolveSubmitGuardCatalog({ cached: () => undefined, gen: () => 0,
+      fetch: async () => ({ providers: [], modelVisibilityOverrides: visibilityOverrides }), buildRows: () => rows });
+    expect(result).toMatchObject({ catalogKnown: true, rows, visibilityOverrides });
   });
 });

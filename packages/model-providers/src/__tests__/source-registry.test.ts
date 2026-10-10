@@ -115,6 +115,7 @@ describe("resolveCatalogUrl", () => {
     expect(Object.fromEntries(resolved.searchParams)).toEqual({
       region: "cn",
       registryMedia: "1",
+      registryLocalRuntimes: "1",
       registrySchemaVersion: "5",
     });
   });
@@ -146,7 +147,7 @@ describe("resolveCatalogUrl", () => {
     expect(
       resolveCatalogUrl({ baseUrl: "https://model-access.example.com/" }),
     ).toBe(
-      "https://model-access.example.com/api/model-catalog/catalog?registrySchemaVersion=5&registryMedia=1",
+      "https://model-access.example.com/api/model-catalog/catalog?registrySchemaVersion=5&registryMedia=1&registryLocalRuntimes=1",
     );
   });
   it("builds the migration OSS fallback URL", () => {
@@ -1073,7 +1074,7 @@ describe("loadCatalog", () => {
     );
     expect(fetchText).toHaveBeenNthCalledWith(
       1,
-      "https://model-access.example.com/api/model-catalog/catalog?registrySchemaVersion=5&registryMedia=1",
+      "https://model-access.example.com/api/model-catalog/catalog?registrySchemaVersion=5&registryMedia=1&registryLocalRuntimes=1",
       15_000,
     );
     expect(fetchText).toHaveBeenNthCalledWith(
@@ -1133,7 +1134,7 @@ describe("loadCatalog", () => {
     );
     expect(fetchText).toHaveBeenNthCalledWith(
       1,
-      "https://model-access.example.com/api/model-catalog/catalog?registrySchemaVersion=5&registryMedia=1",
+      "https://model-access.example.com/api/model-catalog/catalog?registrySchemaVersion=5&registryMedia=1&registryLocalRuntimes=1",
       15_000,
     );
     expect(fetchText).toHaveBeenNthCalledWith(
@@ -1191,7 +1192,7 @@ describe("loadCatalog", () => {
     );
     expect(fetchText).toHaveBeenNthCalledWith(
       1,
-      "https://model-access.example.com/api/model-catalog/catalog?registrySchemaVersion=5&registryMedia=1",
+      "https://model-access.example.com/api/model-catalog/catalog?registrySchemaVersion=5&registryMedia=1&registryLocalRuntimes=1",
       15_000,
     );
     expect(fetchText).toHaveBeenNthCalledWith(
@@ -1220,7 +1221,7 @@ describe("loadCatalog", () => {
     );
     expect(fetchText).toHaveBeenCalledTimes(1);
     expect(fetchText).toHaveBeenCalledWith(
-      "https://model-access.example.com/api/model-catalog/catalog?registrySchemaVersion=5&registryMedia=1",
+      "https://model-access.example.com/api/model-catalog/catalog?registrySchemaVersion=5&registryMedia=1&registryLocalRuntimes=1",
       15_000,
     );
     expect(cat.version).toBe(BUNDLED_CATALOG.version);

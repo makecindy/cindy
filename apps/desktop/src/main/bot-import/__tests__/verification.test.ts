@@ -8,7 +8,7 @@ import { getMakerIfReady } from '../../maker-host/index.js';
 import { getBotRemoteResourceSource } from '../../localDb/ipc/bots.js';
 import { companionEnvironmentStore } from '../runtime.js';
 import { matchesReadEvidence, readImportHttpEvidence, verifyImportedAutomation } from '../verification.js';
-import { normalizeAutomation } from '../sourceAutomations.js';
+import { indexAutomationDependencies, normalizeAutomation } from '../sourceAutomations.js';
 import { resolveImportEnvironmentDependencies } from '../environmentSelection.js';
 import type { ImportItem, ImportSource } from '../types.js';
 import * as connectionModule from '../connections.js';
@@ -178,7 +178,7 @@ it('rejects an oversized monitor response and cancels its body', async () => {
   expect(cancel).toHaveBeenCalledOnce();
 });
 
-it.each(['hermes', 'openclaw'] as const)('allows a %s reminder with a verified Telegram destination without skipping data or delivery checks', async kind => {
+it.each(['hermes', 'openclaw'] as const)('routes a %s reminder locally without probing its former Telegram destination', async kind => {
   const token = '12345:fixture-private-token';
   const selected: ImportItem[] = [
     { view: { id: 'token', name: 'TELEGRAM_BOT_TOKEN', category: 'connections', selected: true }, env: { TELEGRAM_BOT_TOKEN: token } },
@@ -201,22 +201,22 @@ it.each(['hermes', 'openclaw'] as const)('allows a %s reminder with a verified T
   const reminder = (prompt: string) => resolveImportEnvironmentDependencies([normalizeAutomation(source, {
     id: 'reminder', name: 'Reminder', prompt, payload: { message: prompt }, schedule: { kind: 'interval', minutes: 5 },
     deliver: 'telegram:123', delivery: { mode: 'announce', channel: 'telegram', to: '123' },
-  }, selected, 'UTC')], selected)[0]!;
+  }, indexAutomationDependencies(selected), 'UTC')], selected)[0]!;
   const item = reminder('Remind me to stretch');
-  expect(item.view.dependsOn).toEqual(['telegram']);
+  expect(item.view.dependsOn).toEqual([]);
   expect((await verifyImportedAutomation('/fixture', 'bot', item, () => {}, selected)).verified).toBe(true);
-  expect(fetch.mock.calls.map(([url]) => new URL(url).pathname.split('/').at(-1))).toEqual(['getMe', 'getChat']);
+  expect(fetch).not.toHaveBeenCalled();
   expect(oneShot.mock.calls[0]![1]).not.toContain('TELEGRAM_BOT_TOKEN');
   expect(oneShot.mock.calls[0]![1]).not.toContain(token);
   // A variable also used for data is still required, even if delivery uses it too.
   for (const prompt of ['Read Telegram data using TELEGRAM_BOT_TOKEN', 'Read DATA_URL']) {
     expect((await verifyImportedAutomation('/fixture', 'bot', reminder(prompt), () => {}, selected)).verified).toBe(false);
   }
-  // Delivery validation remains mandatory and must precede planning.
+  // An unavailable former destination does not block local reminders.
   oneShot.mockClear();
   fetch.mockResolvedValue(Response.json({ ok: false }, { status: 403 }));
-  expect((await verifyImportedAutomation('/fixture', 'bot', item, () => {}, selected)).verified).toBe(false);
-  expect(oneShot).not.toHaveBeenCalled();
+  expect((await verifyImportedAutomation('/fixture', 'bot', item, () => {}, selected)).verified).toBe(true);
+  expect(fetch).not.toHaveBeenCalled();
 });
 
 it('finds a second-page read tool, redacts its catalog before planning and forwards its original identity privately', async () => {
@@ -421,4 +421,31 @@ it.skipIf(process.platform === 'win32')('checks a local script without executing
     item.view.dependsOn.push('api');
     expect((await verifyImportedAutomation(root, 'bot', item, () => {}, [...selected, { view: { id: 'api', name: 'API_URL', category: 'connections', selected: true }, env: { API_URL: 'https://example.invalid' } }], root)).verified).toBe(false);
   } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
+
+
+it('does not verify a native command as a local reminder or expose its inline environment secret to planning', async () => {
+  const secret = 'fixture-command-token';
+  vi.mocked(companionEnvironmentStore.read).mockResolvedValue({ version: 1, env: {}, mcp: [], credentials: [], contentRedactions: { command_token: secret } });
+  const oneShot = vi.fn().mockResolvedValue(JSON.stringify({ localReminder: true, reads: [] }));
+  vi.mocked(getMakerIfReady).mockReturnValue({ oneShot, getSessionMeta: vi.fn().mockResolvedValue({ agentKind: 'pi', model: 'fixture-model' }) } as never);
+  vi.mocked(getBotRemoteResourceSource).mockResolvedValue({ canonicalSessionId: 'fixture-session' } as never);
+  const source: ImportSource = { kind: 'openclaw', agentId: 'main', name: 'Fixture', root: '/fixture', workspace: '/fixture/workspace', configFile: '/fixture/openclaw.json' };
+  const item = normalizeAutomation(source, { id: 'command', name: 'Report', payload: { kind: 'command', argv: ['report', '--token', secret], env: { API_TOKEN: secret } }, schedule: { kind: 'every', everyMs: 60000 } }, indexAutomationDependencies([]), 'UTC');
+  expect(await verifyImportedAutomation('/fixture', 'bot', item, () => {})).toMatchObject({ verified: false, reason: 'AUTOMATION_READ_NOT_VERIFIED' });
+  expect(oneShot.mock.calls[0]![1]).toContain('native-command');
+  expect(oneShot.mock.calls[0]![1]).not.toContain(secret);
+});
+
+it('keeps literals that are absent from all credential maps out of the command read planner', async () => {
+  vi.mocked(companionEnvironmentStore.read).mockResolvedValue({ version: 1, env: {}, mcp: [], credentials: [] });
+  const oneShot = vi.fn().mockResolvedValue(JSON.stringify({ reads: [] }));
+  vi.mocked(getMakerIfReady).mockReturnValue({ oneShot, getSessionMeta: vi.fn().mockResolvedValue({ agentKind: 'pi', model: 'fixture-model' }) } as never);
+  vi.mocked(getBotRemoteResourceSource).mockResolvedValue({ canonicalSessionId: 'fixture-session' } as never);
+  const source: ImportSource = { kind: 'openclaw', agentId: 'main', name: 'Fixture', root: '/fixture', workspace: '/fixture/workspace', configFile: '/fixture/openclaw.json' };
+  const item = normalizeAutomation(source, { id: 'command', name: 'Report', payload: { kind: 'command', argv: ['private-executable', '--token', 'argument-only-secret'], cwd: '/private-directory', input: 'stdin-only-secret' }, schedule: { kind: 'every', everyMs: 60000 } }, indexAutomationDependencies([]), 'UTC');
+  expect((await verifyImportedAutomation('/fixture', 'bot', item, () => {})).verified).toBe(false);
+  const prompt = oneShot.mock.calls[0]![1];
+  for (const literal of ['private-executable', 'argument-only-secret', '/private-directory', 'stdin-only-secret']) expect(prompt).not.toContain(literal);
+  expect(prompt).toContain('native-command');
 });

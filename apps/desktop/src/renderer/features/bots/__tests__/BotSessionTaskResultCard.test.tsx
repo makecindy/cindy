@@ -1,7 +1,8 @@
+vi.mock('../BotSessionTaskLink', () => ({ BotSessionTaskLink: () => <span data-testid="original-session-link" /> }));
 import { readBotCollaborationMeta } from '../../../../shared/botCollaboration';
 // @vitest-environment jsdom
-import { render, screen, cleanup } from '@testing-library/react';
-import { afterEach, expect, it, vi } from 'vitest';
+import { render, screen, cleanup, fireEvent } from '@testing-library/react';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { BotSessionTaskResultCard } from '../BotSessionTaskResultCard';
 import { SystemCard } from '@/components/chat/SystemCard';
 import { makerChatStore } from '@/lib/makerChatStore';
@@ -14,9 +15,12 @@ vi.mock('@/components/chat/MarkdownRenderer', () => ({ MarkdownRenderer: ({ cont
 vi.mock('@/components/chat/ChatSessionFileContext', () => ({ useChatSessionFile: () => ({ origin: { kind: 'device', deviceId: 'home' }, sessionId: 'parent', workingDir: '/parent-task' }), ChatSessionFileProvider: ({ children }: any) => children }));
 vi.mock('@/features/bots/BotCollaborationCard', () => ({ BotSessionTaskCard: () => null, BotSessionTaskMessageTrace: () => null }));
 vi.mock('@/features/learn/LearnStatusCard', () => ({ LearnStatusCard: () => null }));
+const live = vi.hoisted(() => ({ row: null as any }));
+vi.mock('../botDelegationLive', () => ({ useBotDelegation: vi.fn(() => live) }));
+beforeEach(() => { live.row = null; });
 afterEach(cleanup);
 const card = { v: 1, role: 'delegation-result', delegationId: 'task-1', fromBotId: 'cindy', fromBotName: 'Cindy', toBotId: null, toBotName: 'Cindy', parentSessionId: 'parent', childSessionId: 'child', objective: 'Report', result: { workingDir: '/child-task', runSequence: 2, status: 'completed', text: 'Second result', artifacts: [{ absolutePath: '/reports/second.pdf' }] } };
-it('keeps the execution result and its files in the receipt, without fetching or restarting', () => {
+it('keeps the execution result and its files in the receipt, without replacing it with live execution data', () => {
   expect(readBotCollaborationMeta(card)).toMatchObject({ role: 'delegation-result' });
   const [mapped] = makerChatStore.__mapServerMessagesForTest([{
     id: 'result-row', clientId: 'result-row', sessionId: 'parent', role: 'assistant', content: '',
@@ -25,7 +29,10 @@ it('keeps the execution result and its files in the receipt, without fetching or
   expect(mapped.systemCardType).toBe('bot-session-task-result');
   expect(mapped.systemCardData).toMatchObject({ role: 'delegation-result', delegationId: 'task-1' });
   const { container } = render(<SystemCard cardType={mapped.systemCardType!} data={mapped.systemCardData} />);
-  expect(container.querySelector('details')?.open).toBe(false);
+  expect(screen.getByRole('button', { name: 'bots.collab.viewResult' }).getAttribute('aria-expanded')).toBe('false');
+  expect(container.querySelector('[hidden]')).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: 'bots.collab.viewResult' }));
+  expect(container.querySelector('[hidden]')).toBeNull();
   expect(screen.getByText('Second result')).toBeTruthy();
   expect(container.querySelector('a')?.dataset.session).toBe('child');
   expect(container.querySelector('a')?.dataset.workdir).toBe('/child-task');
@@ -49,9 +56,42 @@ it('uses human fallback for a stopped task with no result and rejects malformed 
 
 it('keeps frozen failure details behind their own disclosure', () => {
   const { container } = render(<BotSessionTaskResultCard data={{ ...card, result: { ...card.result, status: 'timed-out', error: 'TIMEOUT: upstream did not finish' } }} />);
-  expect(container.querySelector('summary')?.textContent).toContain('bots.collab.status.timed-out');
-  expect(container.querySelector('summary')?.textContent).not.toContain('TIMEOUT:');
+  expect(screen.getByText('bots.collab.status.timed-out')).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: 'bots.collab.viewResult' }));
   const details = screen.getByText('TIMEOUT: upstream did not finish').closest('details');
   expect(details?.open).toBe(false);
   expect(details?.querySelector('summary')?.textContent).toBe('appError.details');
+});
+
+it('uses the explicit frozen title ahead of the current task and instruction', () => {
+  live.row = { title: 'Renamed task', status: 'running', resultSummary: 'New output' };
+  render(<BotSessionTaskResultCard data={{ ...card, objective: 'Long execution instruction', result: { ...card.result, title: 'Prepare report' } }} />);
+  expect(screen.getByText('Prepare report')).toBeTruthy();
+  expect(screen.queryByText('Long execution instruction')).toBeNull();
+  expect(screen.queryByText('Renamed task')).toBeNull();
+  expect(screen.getByText('bots.collab.status.completed')).toBeTruthy();
+  expect(screen.getByText('Second result')).toBeTruthy();
+});
+
+it('recovers a legacy receipt title without taking the live status or result', () => {
+  live.row = { title: 'Prepare report', status: 'running', resultSummary: 'New output' };
+  const { rerender } = render(<BotSessionTaskResultCard data={{ ...card, objective: 'Long instruction' }} />);
+  expect(screen.getByText('Prepare report')).toBeTruthy();
+  expect(screen.getByText('bots.collab.status.completed')).toBeTruthy();
+  expect(screen.getByText('Second result')).toBeTruthy();
+  live.row = null;
+  rerender(<BotSessionTaskResultCard data={{ ...card, objective: 'First line\nFull instruction' }} />);
+  expect(screen.getByText('First line')).toBeTruthy();
+  rerender(<BotSessionTaskResultCard data={{ ...card, objective: '  ' }} />);
+  expect(screen.getByText('bots.collab.backgroundTask')).toBeTruthy();
+});
+
+it.each(['completed', 'failed', 'cancelled', 'timed-out'])('keeps %s readable and expandable', (status) => {
+  const { container } = render(<BotSessionTaskResultCard data={{ ...card, result: { ...card.result, status } }} />);
+  expect(screen.getByText(`bots.collab.status.${status}`)).toBeTruthy();
+  const button = screen.getByRole('button', { name: 'bots.collab.viewResult' });
+  fireEvent.click(button);
+  expect(container.querySelector('[hidden]')).toBeNull();
+  fireEvent.click(button);
+  expect(container.querySelector('[hidden]')).toBeTruthy();
 });

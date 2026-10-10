@@ -8,6 +8,7 @@ import type { ProviderView, UnifiedModelEntry } from '@cindy/model-providers';
 
 import type { AgentKind } from '@/hooks/useAgentCapabilities';
 import { cn } from '@/lib/utils';
+import { COMPOSER_MENU_ROW, menuRowAttrs } from '@/components/ui/menu-row';
 import { providerAccountLabel } from '@/lib/providerDisplayName';
 import type { Effort } from '@/lib/userPreferences.types';
 
@@ -110,6 +111,9 @@ export function UnifiedModelRow({
     'aria-keyshortcuts': paymentRequired ? undefined : 'ArrowLeft',
     tabIndex: interactionDisabled ? -1 : 0,
     'data-model-selected': selected ? ('true' as const) : undefined,
+    // Shared menu row: the panel's glide highlight; the chosen row keeps its static fill (below).
+    ...menuRowAttrs(),
+    'data-state': active ? 'open' : selected ? 'checked' : undefined,
     'data-unified-anchor': anchorKey(anchor),
     onContextMenu: (event: ReactMouseEvent<HTMLDivElement>) => {
       if (interactionDisabled || paymentRequired) return;
@@ -217,9 +221,13 @@ export function UnifiedModelRow({
     <div
       {...rowRootProps}
       className={cn(
-        '[&+[data-unified-anchor]]:mt-1 group/row flex w-full cursor-pointer flex-col rounded-lg px-3 py-2 transition-colors duration-100',
-        'hover:bg-[var(--model-item-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-        (selected || active) && 'bg-[var(--model-item-hover)]',
+        // DESIGN §4 Composer dropdown rows: shared row text and motion; the list's glide
+        // highlight marks the pointer / keyboard-focused row and the row whose config is open.
+        // The model panel is the one exception on the chosen row: whole-row fill, no check.
+        COMPOSER_MENU_ROW,
+        '[&+[data-unified-anchor]]:mt-1 group/row flex w-full cursor-pointer flex-col px-3 py-2',
+        // The glide layer covers the hovered row, so the static fill steps aside there.
+        selected && 'bg-sidebar-item-hover data-[menu-active]:bg-transparent',
         (interactionDisabled || paymentRequired) && 'cursor-not-allowed opacity-50',
       )}
     >
@@ -243,7 +251,7 @@ export function UnifiedModelRow({
           // 字号/字重**不跟设计稿的 13.5px/normal**,按旧选择器恢复(text-14 + medium):
           // Chris 2026-08-13 实测裁决 —— 名字变小去粗后与描述行难以区分。
           title={displayName}
-          className="min-w-0 truncate text-14 font-medium leading-5 text-[var(--model-item-text)]"
+          className="min-w-0 truncate font-medium leading-5"
         >
           {displayName}
         </span>
@@ -269,7 +277,7 @@ export function UnifiedModelRow({
             title={tripleTitle}
             data-unified-triple
             // 颜色恒定,不随「已自定义」提亮(Chris 2026-08-16 裁决,所有行一致)。
-            className="flex max-w-[118px] shrink-0 items-center gap-1 truncate text-12 text-[var(--text-tertiary)]"
+            className="flex max-w-[118px] shrink-0 items-center gap-1 truncate text-12 font-normal text-[var(--text-tertiary)]"
           >
             <engineOption.Mark size={12} className="shrink-0" />
             {configurationEnabled && config.effort && (
@@ -288,7 +296,8 @@ export function UnifiedModelRow({
           {paymentRequiredBadge}
         </span>
         {/* 行尾不放 ✅(Chris 2026-08-13 裁决:选中已有整行底色,再加勾是重复信号,
-            还平白吃掉一列宽度);选中态语义由 aria-selected 承载。 */}
+            还平白吃掉一列宽度);选中态语义由 aria-selected 承载。模型面板是输入框菜单
+            「选中 = 勾 + 500」约定的唯一例外,2026-10-04 用户再次确认保留整行底色、不加勾。 */}
       </div>
       {sourceLabel && entry.providerId !== 'xd' ? (
         <ModelSourceDetails
@@ -307,7 +316,7 @@ export function UnifiedModelRow({
         // 与名字的区分靠名字的 14px/medium,不靠把描述压淡)。
         <div
           title={description}
-          className="min-w-0 max-w-[30ch] truncate pl-[26px] pt-px text-12 leading-[1.4] text-[var(--text-secondary)]"
+          className="min-w-0 max-w-[30ch] truncate pl-[26px] pt-px text-12 font-normal leading-[1.4] text-[var(--text-secondary)]"
         >
           {description}
         </div>

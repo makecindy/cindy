@@ -28,6 +28,7 @@ export function buildDiscordAdapter(
   return {
     channel: 'discord',
     im: discordIm,
+    getBotContextId: () => discordIm.botContextId,
     output: { kind: 'rich-card', im: discordIm },
     config,
     ui,
@@ -47,6 +48,7 @@ export function buildDiscordAdapter(
       }),
     },
     processingEmoji: PROCESSING_EMOJI,
+    queuedEmoji: '👀',
     buildVendorOptions: (userId) => ({ discordChatId: userId, source: 'discord' }),
   };
 }

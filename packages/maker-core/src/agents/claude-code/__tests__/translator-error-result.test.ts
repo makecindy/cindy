@@ -50,6 +50,25 @@ async function drain(queue: ReturnType<typeof createAsyncQueue<AgentEvent>>): Pr
 }
 
 describe('Claude Code translator is_error result guard', () => {
+  it.each(['toolu_child', null])('keeps query failure terminal after an API envelope from %s', async (parent) => {
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createCtx(new UsageTracker());
+    translateSdkMessage({
+      type: 'assistant', uuid: 'error-envelope', parent_tool_use_id: parent,
+      error: 'server_error', message: { content: [{ type: 'text', text: 'Upstream unavailable' }] },
+    }, queue, ctx);
+    translateSdkMessage({ type: 'result', is_error: true }, queue, ctx);
+    const events = await drain(queue);
+    const errors = events.filter((event) => event.type === 'error');
+    expect(errors).toHaveLength(1);
+    expect(errors[0].data).toMatchObject({ message: 'Upstream unavailable', isTerminal: true });
+    expect(errors[0].agentMeta?.parentUuid).toBeUndefined();
+    if (parent) expect(errors[0].agentMeta).toBeUndefined();
+    else expect(errors[0].agentMeta?.uuid).toBe('error-envelope');
+    expect(events.filter((event) => event.type === 'text')).toHaveLength(0);
+    expect(events.at(-1)?.type).toBe('done');
+  });
+
   it.each([
     'Failed to authenticate. API Error: 403 user not allowed to access model. This user can only access models=[private-model]. Tried to access claude-opus-5',
     'API Error: 403 {"error":{"type":"user_model_access_denied","message":"Access denied"}}',
@@ -392,6 +411,57 @@ describe('Claude Code translator is_error result guard', () => {
     expect(JSON.stringify(events)).not.toContain('secret-token');
   });
 
+  describe('rate-limit reset time on limit errors', () => {
+    const limitTurn = async (ctx: ReturnType<typeof createCtx>): Promise<AgentEvent | undefined> => {
+      const queue = createAsyncQueue<AgentEvent>();
+      translateSdkMessage({ type: 'assistant', error: 'rate_limit',
+        message: { content: [{ type: 'text', text: "You've hit your session limit · resets 1:20am" }] } }, queue, ctx);
+      translateSdkMessage({ type: 'result', is_error: true, result: "You've hit your session limit · resets 1:20am" }, queue, ctx);
+      return (await drain(queue)).find((event) => event.type === 'error');
+    };
+    const rateLimitEvent = (
+      ctx: ReturnType<typeof createCtx>,
+      status: string,
+      rateLimitType: string,
+      resetsAt: number,
+    ): void => {
+      translateSdkMessage({ type: 'rate_limit_event', rate_limit_info: { status, resetsAt, rateLimitType } },
+        createAsyncQueue<AgentEvent>(), ctx);
+    };
+
+    it('keeps the rejected window reset across turns until that window recovers', async () => {
+      const ctx = createCtx(new UsageTracker(), 'anthropic');
+      const resetsAtSec = Math.floor(Date.now() / 1000) + 3600;
+      rateLimitEvent(ctx, 'rejected', 'five_hour', resetsAtSec);
+      expect((await limitTurn(ctx))?.data).toMatchObject({ sdkError: 'rate_limit', usageResetAt: resetsAtSec * 1000 });
+      // CLI 已知被拒后本地短路的下一轮不再发事件,仍带同一重置时刻。
+      expect((await limitTurn(ctx))?.data).toMatchObject({ usageResetAt: resetsAtSec * 1000 });
+
+      rateLimitEvent(ctx, 'allowed', 'five_hour', resetsAtSec);
+      expect((await limitTurn(ctx))?.data).not.toHaveProperty('usageResetAt');
+    });
+
+    it('ignores allowed events from other windows and reports the latest rejected reset', async () => {
+      const ctx = createCtx(new UsageTracker(), 'anthropic');
+      const nowSec = Math.floor(Date.now() / 1000);
+      rateLimitEvent(ctx, 'rejected', 'five_hour', nowSec + 3600);
+      rateLimitEvent(ctx, 'allowed_warning', 'seven_day', nowSec + 86_400);
+      expect((await limitTurn(ctx))?.data).toMatchObject({ usageResetAt: (nowSec + 3600) * 1000 });
+
+      rateLimitEvent(ctx, 'rejected', 'seven_day', nowSec + 86_400);
+      expect((await limitTurn(ctx))?.data).toMatchObject({ usageResetAt: (nowSec + 86_400) * 1000 });
+    });
+
+    it('reports a reset time that already passed once, then drops it to avoid an immediate-retry loop', async () => {
+      const ctx = createCtx(new UsageTracker(), 'anthropic');
+      const pastSec = Math.floor(Date.now() / 1000) - 60;
+      rateLimitEvent(ctx, 'rejected', 'five_hour', pastSec);
+      expect((await limitTurn(ctx))?.data).toMatchObject({ usageResetAt: pastSec * 1000 });
+      // 到点后仍被本地短路拒绝、没有新事件:不再带同一个过期时刻。
+      expect((await limitTurn(ctx))?.data).not.toHaveProperty('usageResetAt');
+    });
+  });
+
   it('falls back to reason=turn-failed when is_error carries no result text', async () => {
     const tracker = new UsageTracker();
     const queue = createAsyncQueue<AgentEvent>();
@@ -455,6 +525,12 @@ describe('Claude Code translator is_error result guard', () => {
       ctx,
     );
 
+    const progressIterator = queue[Symbol.asyncIterator]();
+    const progress = await progressIterator.next();
+    expect(progress.value).toMatchObject({ type: 'status', data: {
+      isRunning: true, responseSpeed: { retrying: true, recentRate: null },
+    } });
+    await progressIterator.return?.();
     expect(queue.pending, 'retryable envelope must not close the turn').toBe(0);
 
     translateSdkMessage(

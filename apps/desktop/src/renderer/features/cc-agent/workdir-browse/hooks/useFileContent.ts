@@ -17,6 +17,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { createLogger } from '@/lib/logger';
+import { observeFileTransferProgress } from '@/lib/fileTransferProgress';
 import { fileBrowserApiFor, onFileTreeEventFor } from '@/lib/fileBrowserTransport';
 import {
   getCachedFileContent,
@@ -155,6 +156,7 @@ export function useFileContent(
     }
 
     let cancelled = false;
+    let transferProgress: ReturnType<typeof observeFileTransferProgress> | undefined;
     setState({ workdir, relPath, content: { kind: 'loading' } });
 
     void (async () => {
@@ -167,14 +169,17 @@ export function useFileContent(
           fallback: FileContent,
         ): Promise<void> => {
           setState({ workdir, relPath, content: { kind: 'fetching', received: 0, total: size } });
-          const off = window.electronAPI.fileBrowser.onTransferProgress((e) => {
-            if (cancelled || e.workdir !== workdir || e.relPath !== relPath) return;
+          const progress = observeFileTransferProgress((e) => {
+            if (cancelled) return;
+            // 打包 / 解包阶段只出现在文件夹下载(relPath 键为远端绝对路径),这里收不到。
+            if (e.phase === 'pack' || e.phase === 'extract') return;
             setState({
               workdir,
               relPath,
               content: { kind: 'fetching', received: e.received, total: e.total, phase: e.phase },
             });
           });
+          transferProgress = progress;
           try {
             const res = await window.electronAPI.fileBrowser.fetchRemote({
               workdir,
@@ -183,6 +188,7 @@ export function useFileContent(
               mtimeMs,
               remoteHostId,
               deviceId,
+              requestId: progress.requestId,
             });
             if (cancelled) return;
             if (res.ok) {
@@ -201,7 +207,7 @@ export function useFileContent(
               setState({ workdir, relPath, content: fallback });
             }
           } finally {
-            off();
+            progress.dispose();
           }
         };
 
@@ -327,6 +333,7 @@ export function useFileContent(
 
     return () => {
       cancelled = true;
+      transferProgress?.dispose();
     };
   }, [workdir, relPath, remoteHostId, deviceId, refreshTick]);
 

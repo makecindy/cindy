@@ -19,6 +19,13 @@ const project = (items: RenderItem[], streaming: boolean) =>
   simplifyBotRenderItems(groupWorkRuns(items, streaming), streaming);
 
 describe('teammate final-result presentation', () => {
+  it('keeps coordination input hidden while explicit inputs, results and errors remain visible', () => {
+    const rows = [message('coordination', 'user', '[UI_ACTION_TRIGGER]File agreement', { isSyntheticTrigger: true }),
+      tool('audit'), message('visible-input', 'user', 'Requested status'),
+      message('result', 'assistant', 'Final result', { turnCompleted: true }), message('error', 'error', 'Action required')];
+    expect(allKeys(project(rows, false))).toEqual(['msg-visible-input', 'msg-result', 'msg-error']);
+  });
+
   it('omits all process rows and keeps final answers without mutating history', () => {
     const input = [message('u', 'user'), message('a', 'assistant'), tool('t1'),
       message('b', 'assistant'), tool('t2'), message('final', 'assistant', 'Result', { turnCompleted: true })];
@@ -200,4 +207,68 @@ it('keeps appended result receipts visible while the teammate is busy, across hi
   const result = project(input, true);
   expect(result.filter(item => item.type === 'message' && item.message.systemCardType === 'bot-session-task-result').map(item => item.key))
     .toEqual(['msg-result-1', 'msg-result-2']);
+});
+
+it('nests only explicitly bound results, preserving original anchor and human message order', () => {
+  const card = { v: 1 as const, role: 'delegation-result' as const, delegationId: 'job', fromBotId: 'bot',
+    fromBotName: 'Cindy', toBotId: null, toBotName: '', parentSessionId: 'chat', childSessionId: 'child', objective: 'Report',
+    result: { runSequence: 1, status: 'completed' as const, text: 'Report contents', artifacts: [] } };
+  const receipt = message('receipt', 'assistant', '', { systemCardType: 'bot-session-task-result', systemCardData: card });
+  const anchor = message('anchor', 'assistant', '', { systemCardType: 'bot-session-task' });
+  const final = message('final', 'assistant', 'Summary', { turnCompleted: true, botTaskResults: [card] });
+  const input = [anchor, receipt, message('human', 'user'), message('progress', 'assistant'), tool('t'), final];
+  expect(allKeys(project(input, false))).toEqual(['msg-anchor', 'msg-human', 'msg-final']);
+  expect(final.message.botTaskResults).toEqual([card]);
+  expect(allKeys(project(input.slice(0, -1), false))).toContain('msg-receipt');
+  expect(allKeys(project([receipt, message('unrelated', 'assistant', 'Other', { turnCompleted: true })], false))).toContain('msg-receipt');
+  expect(input[1]).toBe(receipt);
+});
+
+it('keeps explicitly delivered group private messages while the private model is working and after another reply', () => {
+  const input = [message('u', 'user'), message('group', 'assistant', 'Group reply', { sourceGroup: { groupId: 'g-1' } }),
+    message('progress', 'assistant', 'Working'), tool('running')];
+  expect(proseIds(project(input, true))).toEqual(['group']);
+  expect(proseIds(project([...input, message('final', 'assistant', 'Result', { turnCompleted: true })], false))).toEqual(['group', 'final']);
+});
+
+
+describe('provider final streaming', () => {
+  it('keeps incremental final text visible before and after the seal, excluding commentary', () => {
+    const prefix = [message('u', 'user'), message('process', 'assistant', 'Internal', { assistantPhase: 'commentary' })];
+    for (const text of ['A', 'Answer', 'Answer with a reference']) {
+      const final = message('answer', 'assistant', text, { assistantPhase: 'final_answer', isStreaming: true });
+      expect(proseIds(project([...prefix, final], true))).toEqual(['answer']);
+      expect(proseIds(project([...prefix, { ...final, message: { ...final.message, isStreaming: false } }], true))).toEqual(['answer']);
+    }
+    expect(proseIds(project([...prefix, message('answer', 'assistant', 'Answer', { assistantPhase: 'final_answer', turnCompleted: true })], false))).toEqual(['answer']);
+  });
+});
+
+it('does not insert interleaved valid receipts ahead of live final prose and preserves exact host bindings', () => {
+  const card = (id: string) => ({ v: 1 as const, role: 'delegation-result' as const, delegationId: id, fromBotId: 'bot',
+    fromBotName: 'Cindy', toBotId: null, toBotName: '', parentSessionId: 'chat', childSessionId: id, objective: id,
+    result: { runSequence: 1, status: 'completed' as const, text: 'Report', artifacts: [] } });
+  const a = card('a'), b = card('b');
+  const receipt = (id: string, data: ReturnType<typeof card>) => message(id, 'assistant', '', { systemCardType: 'bot-session-task-result', systemCardData: data });
+  const streaming = message('answer', 'assistant', 'First words', { assistantPhase: 'final_answer', isStreaming: true });
+  const input = [message('u', 'user'), streaming, receipt('b-result', b), receipt('a-result', a)];
+  expect(allKeys(project(input, true))).toEqual(['msg-u', 'msg-answer']);
+  const ended = { ...streaming, message: { ...streaming.message, isStreaming: false, turnCompleted: true, botTaskResults: [a] } };
+  const visible = project([input[0], ended, ...input.slice(2)], false);
+  expect(allKeys(visible)).toEqual(['msg-u', 'msg-answer', 'msg-b-result']);
+  expect(ended.message.botTaskResults.map(value => value.childSessionId)).toEqual(['a']);
+  // No final reply: every frozen result has a lightweight fallback once execution settles.
+  expect(allKeys(project(input.slice(2), false))).toEqual(['msg-b-result', 'msg-a-result']);
+});
+
+it('keeps an unanswered historical receipt visible while the next user turn streams', () => {
+  const data = { v: 1, role: 'delegation-result', delegationId: 'd', fromBotId: 'b',
+    fromBotName: 'Cindy', toBotId: null, toBotName: '', parentSessionId: 'chat', childSessionId: 'child', objective: 'Task',
+    result: { runSequence: 1, status: 'completed', text: 'Report', artifacts: [] } };
+  const receipt = message('receipt', 'assistant', '', { systemCardType: 'bot-session-task-result', systemCardData: data });
+  const history = [message('old-user', 'user'), receipt];
+  expect(allKeys(project(history, false))).toContain('msg-receipt');
+  const next = [...history, message('next-user', 'user'),
+    message('next-answer', 'assistant', 'First words', { assistantPhase: 'final_answer', isStreaming: true })];
+  expect(allKeys(project(next, true))).toEqual(['msg-old-user', 'msg-receipt', 'msg-next-user', 'msg-next-answer']);
 });

@@ -9,18 +9,23 @@ export interface ComposerPromptRecommendationVisibilityInput {
   mutationLocked: boolean;
 }
 
-/** Overlay 与 Tab 接受共用的唯一可见性判据。 */
-export function shouldShowComposerPromptRecommendation(
-  input: ComposerPromptRecommendationVisibilityInput,
+/** 生成、Overlay 与 Tab 接受共用输入框资格；草稿和临时锁定不消费候选。 */
+export function isComposerReadyForPromptRecommendation(
+  input: Omit<ComposerPromptRecommendationVisibilityInput, 'prompt'>,
 ): boolean {
   return (
     input.enabled &&
     input.hydrated &&
-    !!input.prompt &&
     !input.hasMessage &&
     !input.hasAttachments &&
     !input.hasBrowserComments &&
     !input.hasVoiceDraftText &&
     !input.mutationLocked
   );
+}
+
+export function shouldShowComposerPromptRecommendation(
+  input: ComposerPromptRecommendationVisibilityInput,
+): boolean {
+  return !!input.prompt && isComposerReadyForPromptRecommendation(input);
 }

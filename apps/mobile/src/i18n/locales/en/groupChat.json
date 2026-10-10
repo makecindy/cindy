@@ -78,6 +78,7 @@
     "olderOnComputer": "Earlier messages are on your computer"
   },
   "notice": {
+    "memberJoined": "{{name}} joined the group",
     "memberFailed": "{{name}} couldn’t reply this time",
     "memberTimeout": "{{name}} took too long to reply and was skipped this time",
     "memberUnavailable": "{{name}} is unavailable and didn’t speak this time",
@@ -110,7 +111,13 @@
     "dismissFailed": "Couldn’t end this plan. Try again.",
     "editFailed": "Couldn’t change this step. Try again.",
     "editStepHint": "Reassign or remove this step",
-    "reassignStepHint": "Reassign this step"
+    "reassignStepHint": "Reassign this step",
+    "eyebrow_one": "Plan · {{count}} step",
+    "eyebrow_other": "Plan · {{count}} steps",
+    "awaitingStart": "Waiting for you",
+    "progressRunning": "Working {{current}} / {{total}}",
+    "progressDone": "Done {{done}} / {{total}}",
+    "allDone": "All done"
   },
   "speaking": {
     "planning": "Splitting the work…",
@@ -153,14 +160,39 @@
     "projectDirNone": "None selected",
     "projectDirNote": "Teammates work here when they split the work. You can leave it empty and they’ll use this group chat’s own folder. If you choose a git project, each work split gets a new worktree and branch, so your own code stays untouched.",
     "add": "Add teammate",
-    "projectDirOnComputer": "Choose or change it on your computer"
+    "projectDirOnComputer": "Choose or change it on your computer",
+    "memberActions": "Actions for {{name}}"
   },
   "errors": {
     "memberLimit": "A group chat needs 2–6 teammates",
     "memberUnavailable": "One of these teammates is unavailable. Choose another and try again.",
+    "mentionUnavailable": "A mentioned member is no longer available. Choose who to mention before sending again.",
     "notFound": "This group chat no longer exists",
     "hostNotReady": "Cindy is still getting ready. Try again in a moment.",
     "planOpen": "A work split is underway. Finish or stop it before starting another.",
-    "planClosed": "This plan has already ended or been updated."
+    "planClosed": "This plan has already ended or been updated.",
+    "invalidAttachment": "This attachment cannot be read. Select it again and send.",
+    "attachmentUnavailable": "Could not retrieve the attachment from your phone. Check the device connection and retry.",
+    "attachmentTooLarge": "The attachment exceeds 100 MB. Choose a smaller file.",
+    "mediaUploadFailed": "Could not upload the attachment to the chat service. Try again later.",
+    "authRequired": "Your sign-in has expired. Sign in again on your computer.",
+    "chatUnavailable": "The chat service is unavailable. Check your connection and retry.",
+    "importPending": "Group history is still syncing. Try again later.",
+    "requestTimeout": "The result is not confirmed yet. Refresh to check before retrying.",
+    "permissionDenied": "You do not have permission to manage this group.",
+    "serviceError": "The chat service could not complete the request. Try again later.",
+    "groupArchived": "This group is archived. This action is unavailable."
+  },
+  "followUp": {
+    "next": "Plan · Next step",
+    "failedStep": "Step {{step}} didn't finish"
+  },
+  "server": {
+    "offline": "Can’t connect to group chat. Try again.",
+    "loadFailed": "Can’t load this group chat right now. Try again.",
+    "loadOlder": "Load Earlier Messages",
+    "attachmentFailed": "Couldn’t open the attachment. Try again.",
+    "previewUnavailable": "Preview unavailable",
+    "endpointUnavailable": "Group chat service configuration is unavailable. Please retry."
   }
 }

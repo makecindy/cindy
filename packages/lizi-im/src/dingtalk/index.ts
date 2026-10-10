@@ -353,6 +353,7 @@ export class DingTalkIM extends BaseIM implements ChannelIM {
     prompt: string,
     parse: (text: string) => T | null,
     timeoutMs = INTERACTION_TIMEOUT_MS,
+    shared?: { result: Promise<T>; decide(value: T): boolean },
   ): Promise<T> {
     if (this.pendingReplies.has(userId)) {
       throw new Error("DINGTALK_INTERACTION_ALREADY_PENDING");
@@ -369,11 +370,16 @@ export class DingTalkIM extends BaseIM implements ChannelIM {
     }, timeoutMs);
     const pending: PendingReply<T> = {
       parse,
-      resolve: resolveReply,
+      resolve: (value) => { if (shared) shared.decide(value); else resolveReply(value); },
       reject: rejectReply,
       timer,
     };
     this.pendingReplies.set(userId, pending as PendingReply);
+    if (shared) void shared.result.then((value) => {
+      if (this.pendingReplies.get(userId) === pending) this.pendingReplies.delete(userId);
+      clearTimeout(timer);
+      resolveReply(value);
+    });
     try {
       await this.sendText(userId, prompt);
     } catch (error) {
@@ -381,6 +387,7 @@ export class DingTalkIM extends BaseIM implements ChannelIM {
         this.pendingReplies.delete(userId);
       }
       clearTimeout(pending.timer);
+      if (shared) return shared.result;
       throw error;
     }
     return reply;
@@ -601,6 +608,7 @@ export class DingTalkIM extends BaseIM implements ChannelIM {
       return;
     }
     if (isGroup && !envelope.mentioned) return;
+    const text = content.text;
 
     const attachments = [];
     const unsupported = [...content.unsupported];
@@ -621,11 +629,16 @@ export class DingTalkIM extends BaseIM implements ChannelIM {
 
     const event: IMMessageEvent = {
       channelName: "dingtalk",
+      interactionSource: {
+        chatName: typeof envelope.raw.conversationTitle === 'string' ? envelope.raw.conversationTitle : envelope.conversationId,
+        senderName: envelope.senderName,
+      },
       senderId: userId,
       chatId: envelope.conversationId,
       contextId: this.appKey,
       messageId: envelope.messageId,
-      text: content.text,
+      text,
+      invoked: isGroup && envelope.mentioned,
       ...(isGroup
         ? {
             speaker: {

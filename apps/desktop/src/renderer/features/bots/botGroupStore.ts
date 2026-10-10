@@ -2,12 +2,13 @@
  * 伙伴群聊列表的 renderer 镜像，以及分工（安排）操作的调用入口。
  *
  * 权威数据在 main（当前账号本地库的 bot_groups / members / messages），这里只缓存
- * `listBotGroups()` 的最新一份摘要，供侧栏「群聊」分组与群设置抽屉读取。main 每次
+ * `listBotGroups()` 的最新一份摘要，供统一侧栏与群设置抽屉读取。main 每次
  * 变更都会推 `onBotGroupChanged`，收到后整表重取；同一时刻只有一个请求在飞，期间
  * 再来的推送合并成一次补取。账号（data owner）切换时立即清空，旧账号的迟到响应
  * 一律丢弃（electron-security-and-process-boundaries §4–5：renderer 不持有真相）。
  */
 import { useSyncExternalStore } from 'react';
+import { seedBotGroupReadState } from './botReadState';
 
 import {
   getDataOwnerGeneration,
@@ -87,6 +88,7 @@ export function refreshBotGroups(): void {
       // Every change kind re-reads the list, including 'plan' (open-plan status in the row).
       const result = await api.listBotGroups();
       if (!isCurrent()) return;
+      if (result.ok) seedBotGroupReadState(result.groups);
       // 失败时保留上一份列表：侧栏不因一次读失败把所有群清空。
       applySnapshot(result.ok ? { groups: result.groups, loaded: true } : { ...snapshot, loaded: true });
     } catch {

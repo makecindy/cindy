@@ -276,6 +276,7 @@ function main() {
       usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 },
       usageSegments: [],
       output: '',
+      resultReady: false,
       outputTruncated: false,
       error: undefined,
       // Approval requests this child is still waiting on, oldest first. The
@@ -368,12 +369,12 @@ function main() {
           toolUses: task.toolUses,
           usage: task.usage,
           usageSegments: task.usageSegments,
-          // message_end is already a complete generation result even if Pi
-          // keeps the RPC process alive for follow-up. Publish it immediately
-          // so the host can hide late Steer before writing a doomed control.
+          // Intermediate commentary is useful progress, not a final result.
+          // Publish its readiness separately so controls never infer it from text.
           output: task.output || (
             task.status === 'running' || task.status === 'queued' ? undefined : ''
           ),
+          resultReady: task.resultReady,
           outputTruncated: task.outputTruncated || undefined,
           error: task.error,
           // Only the oldest unanswered request is published so the status
@@ -595,10 +596,9 @@ function main() {
       let accepted = false;
       for (const task of selected) {
         if (state.stopRequested || task.stopRequested) continue;
-        // A message_end is the immutable result of that completed generation.
-        // Sending steer after it exists makes Pi emit a short acknowledgement
-        // that can replace the real result. Continue via follow_up instead.
-        if (control.action === 'steer' && typeof task.output === 'string' && task.output.trim()) {
+        // Only a final assistant response closes the steering window. A text
+        // preamble followed by tools is still an active, steerable generation.
+        if (control.action === 'steer' && task.resultReady) {
           continue;
         }
         const command = {
@@ -770,6 +770,8 @@ function main() {
       ];
       if (task.model) args.push('--model', task.model);
       if (task.thinking) args.push('--thinking', task.thinking);
+      // 受邀者(另一个账号)的托管会话：不发现本机用户的技能与会话目录之外的说明文件。
+      if (config.guestIsolation === true) args.push('--no-skills', '--no-context-files');
       const childEnv = Object.assign({}, process.env, {
         CINDY_PI_PERMISSION_FILE: config.permissionFile,
         PI_CODING_AGENT_DIR: config.childConfigHome,
@@ -906,6 +908,11 @@ function main() {
           scheduleStatus();
           return;
         }
+        if (event.type === 'agent_start') {
+          task.resultReady = false;
+          scheduleStatus();
+          return;
+        }
         if (event.type === 'tool_execution_start') {
           task.toolUses += 1;
           scheduleStatus();
@@ -913,6 +920,10 @@ function main() {
         }
         if (event.type === 'message_end' && event.message && event.message.role === 'assistant') {
           const text = textOf(event.message);
+          task.resultReady = event.message.stopReason !== 'toolUse'
+            && !(Array.isArray(event.message.content) && event.message.content.some(function (block) {
+              return block && block.type === 'toolCall';
+            }));
           if (event.message.stopReason === 'error') {
             terminalError = typeof event.message.errorMessage === 'string' && event.message.errorMessage.trim()
               ? event.message.errorMessage.trim().slice(0, 4000)
@@ -947,6 +958,10 @@ function main() {
         }
         if (event.type === 'auto_retry_start') {
           terminalError = '';
+          // A failed attempt is not the generation's final answer. Pi keeps
+          // stdin open during retry backoff so corrections must stay eligible.
+          task.resultReady = false;
+          scheduleStatus();
           return;
         }
         if (event.type === 'agent_end') {
@@ -1177,6 +1192,7 @@ function main() {
           agent: task.agent,
           status: task.status,
           output: task.output,
+          resultReady: task.resultReady,
           outputTruncated: task.outputTruncated || undefined,
           error: task.error,
           usage: task.usage,

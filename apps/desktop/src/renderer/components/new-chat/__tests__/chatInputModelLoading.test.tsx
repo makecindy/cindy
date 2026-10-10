@@ -4,6 +4,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { useState, type ComponentProps, type ReactNode } from 'react';
 import type { Editor } from '@tiptap/react';
 import type { ProviderView } from '@cindy/model-providers';
+import { sharedTaskHostPeer } from '@cindy/device-link';
 import { sshNativeCodexProvider, sshModel } from '@/features/cc-agent/__tests__/sshModelFixtures';
 import { ChatInput } from '../ChatInput';
 import * as providerMemory from '@/state/providerModelMemory';
@@ -37,9 +38,9 @@ vi.mock('@/components/sidebar/SortableList', () => ({
     </div>
   ),
 }));
-vi.mock('../ModelSelector', async (original) => ({ ...await original<typeof import('../ModelSelector')>(), ModelSelector: ({ modelId, onModelChange }: { modelId: string; onModelChange: typeof h.selectModel }) => {
+vi.mock('../ModelSelector', async (original) => ({ ...await original<typeof import('../ModelSelector')>(), ModelSelector: ({ modelId, onModelChange, disabled }: { modelId: string; onModelChange: typeof h.selectModel; disabled?: boolean }) => {
   h.selectModel = onModelChange;
-  return <span data-testid="model-selector">{modelId}</span>;
+  return <button data-testid="model-selector" disabled={disabled}>{modelId}</button>;
 } }));
 vi.mock('@/hooks/useSshCodexProviders', () => ({ useSshCodexProviders: () => ({ providers: h.remoteProviders, status: h.remoteStatus, refresh: () => {} }) }));
 vi.mock('../ExtraDirsButton', () => ({ ExtraDirsButton: () => null }));
@@ -95,6 +96,21 @@ const props = {
   vendorKey: 'codex' as const, deviceLinkDeviceId: 'test-host', attachmentState: attachments,
   hideRuntimeControls: true, showFolderPicker: false, disableAutofocus: true,
 };
+
+it('keeps the shared guest model visible but locks selection without locking message input', async () => {
+  const onSend = vi.fn().mockResolvedValue(undefined);
+  const inputProps = { ...props, hideRuntimeControls: false, initialModel: 'gpt-6-sol', onSend };
+  const view = render(<ChatInput {...inputProps} deviceLinkDeviceId={sharedTaskHostPeer('shared', 'host')} />);
+  const selector = () => screen.getByTestId('model-selector') as HTMLButtonElement;
+  expect(selector().textContent).toBe('gpt-6-sol');
+  expect(selector().disabled).toBe(true);
+  await act(async () => { expect(await h.selectModel?.('other-model')).toBe(false); });
+  expect(h.setModel).not.toHaveBeenCalled();
+  expect(h.editor?.isEditable).toBe(true);
+
+  await act(async () => { view.rerender(<ChatInput {...inputProps} deviceLinkDeviceId="host" />); });
+  expect(selector().disabled).toBe(false);
+});
 
 const queuedMessage = {
   clientId: 'queue-edit-test',

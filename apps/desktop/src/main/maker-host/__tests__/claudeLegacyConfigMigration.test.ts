@@ -269,15 +269,36 @@ describe('ensureLegacyClaudeConfigMigrated', () => {
   });
 
   it('waits only once: after the first timeout later calls return immediately', async () => {
-    await seedDevInstance();
+    const { legacyDir } = await seedDevInstance();
     process.env.XDT_USER_DATA_DIR = h.userDataDir;
-    // 补拷卡在目录遍历上,模拟超大旧目录。
-    vi.spyOn(fs, 'readdir').mockImplementation(() => new Promise<Dirent[]>(() => undefined) as never);
-
-    await ensureLegacyClaudeConfigMigrated(5);
-    const started = Date.now();
-    await ensureLegacyClaudeConfigMigrated(10_000);
-    expect(Date.now() - started).toBeLessThan(1_000);
+    let releaseTraversal!: () => void;
+    const traversal = new Promise<Dirent[]>((resolve) => {
+      releaseTraversal = () => resolve([]);
+    });
+    const readdir = vi.spyOn(fs, 'readdir').mockImplementation(() => traversal as never);
+    vi.useFakeTimers();
+    const firstWait = ensureLegacyClaudeConfigMigrated(5);
+    // 在首次超时前挂一个等待者,用于最后收完同一次后台迁移。
+    const migrationFinished = ensureLegacyClaudeConfigMigrated(10_000);
+    try {
+      // 同步推进时钟,固定复现文件系统尚未到 readdir 就已超时的 CI 时序。
+      expect(readdir).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(5);
+      await firstWait;
+      await ensureLegacyClaudeConfigMigrated(10_000);
+      // 后续调用没有新增等待定时器,仅保留上面的迁移收尾等待者。
+      expect(vi.getTimerCount()).toBe(1);
+    } finally {
+      releaseTraversal();
+      try {
+        // 恢复 mock / 删除临时目录前,必须让后台文件系统操作结束。
+        await migrationFinished;
+        await firstWait;
+      } finally {
+        vi.useRealTimers();
+      }
+    }
+    await expect(fs.stat(path.join(legacyDir, MARKER))).resolves.toBeTruthy();
   });
 
   it('never throws when the userData path is unavailable, and does not retry in the same run', async () => {

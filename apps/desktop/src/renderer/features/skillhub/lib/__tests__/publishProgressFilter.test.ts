@@ -45,7 +45,7 @@ describe('publish progress event filter', () => {
     const source = readFileSync(resolve(here, '../../PublishDialog.tsx'), 'utf8')
       .replace(/\r\n/g, '\n');
 
-    expect(source).toContain('absolutePath: skill.discoveredPath ?? eff.absolutePath');
+    expect(source).toContain('absolutePath: renamedToRef.current ? eff.absolutePath : skill.discoveredPath ?? eff.absolutePath');
   });
 
   it('uses the owner-aware event filter in both result consumers', () => {

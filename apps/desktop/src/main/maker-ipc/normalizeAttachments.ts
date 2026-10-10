@@ -590,7 +590,6 @@ async function materializePersistedContent(
 async function materializeQueuedOssAttachmentsInternal(
   sessionId: string,
   item: unknown,
-  deferCleanup: boolean,
 ): Promise<{
   item: unknown;
   cleanupAfterAcceptance?: () => void;
@@ -640,13 +639,14 @@ async function materializeQueuedOssAttachmentsInternal(
   // 可入总仓的媒体(图片等白名单 mime)→ ingest 进 cindy-media 并直接挂
   // session-attachment 引用(入队消息没有草稿期,等价老 lifecycle committed);
   // 媒体附件统一走总仓 ingest(规则 25)。
+  // source 为 Host 自己下载落盘的临时件时按文件流式入仓:附件不限大小,整读进主进程内存
+  // 会让数 GB 的图片压垮 main;控制端指定的本机图片路径仍按原方式整读,不改变其读取语义。
   const ingestIntoBlobStore = async (
-    sourcePath: string,
+    source: { buffer: Buffer } | { filePath: string },
     mimeType: string,
   ): Promise<MaterializedRef> => {
-    const buffer = await fs.readFile(sourcePath);
     const written = await ingestMedia({
-      buffer,
+      ...source,
       mimeType,
       refs: [
         {
@@ -685,7 +685,7 @@ async function materializeQueuedOssAttachmentsInternal(
         const ext = path.extname(refStr).toLowerCase();
         const mimeType = cindyMediaBlobStore.mimeForExt(ext);
         if (!mimeType) throw new Error(`unsupported image ext: ${ext}`);
-        const entry = await ingestIntoBlobStore(refStr, mimeType);
+        const entry = await ingestIntoBlobStore({ buffer: await fs.readFile(refStr) }, mimeType);
         byRef.set(refStr, entry);
         return entry;
       } catch (e) {
@@ -703,16 +703,15 @@ async function materializeQueuedOssAttachmentsInternal(
       await materializeRemoteAttachment(ref, tmp, integrityForRef(ref));
       const mime = ref.mimeType ?? mimeHint;
       let entry: MaterializedRef;
-      // 只收图片进总仓:ingestIntoBlobStore 是整读内存(readFile + sha256),
-      // 手机传的大视频/音频若走这条会让 main 进程内存翻倍(review P1);
-      // 等 blobStore 流式入口落地再放开非图片媒体,现阶段维持老文件级拷贝。
+      // 只收图片进总仓(下载的临时件按文件流式入仓,不整读进 main 内存);
+      // 视频/音频等非图片媒体是否进字节仓另议,现阶段维持老文件级拷贝。
       if (
         mime &&
         mime.startsWith('image/') &&
         cindyMediaBlobStore.supportedMime(mime) &&
         !isDangerousAttachmentName(ref.originalName ?? '')
       ) {
-        entry = await ingestIntoBlobStore(tmp, mime);
+        entry = await ingestIntoBlobStore({ filePath: tmp }, mime);
       } else {
         // 非媒体附件维持历史兼容路径落地;规则 25 明确非媒体不进字节仓。
         const originalName =
@@ -789,7 +788,7 @@ async function materializeQueuedOssAttachmentsInternal(
     };
     return {
       item: materializedItem,
-      ...(deferCleanup && (ossKeys.size > 0 || localCleanupCallbacks.length > 0)
+      ...(ossKeys.size > 0 || localCleanupCallbacks.length > 0
         ? {
             cleanupAfterAcceptance: cleanupOss,
             cleanupBeforeAcceptance,
@@ -802,16 +801,7 @@ async function materializeQueuedOssAttachmentsInternal(
   } catch (err) {
     await cleanupBeforeAcceptance();
     throw err;
-  } finally {
-    if (!deferCleanup) cleanupOss();
   }
-}
-
-export async function materializeQueuedOssAttachments(
-  sessionId: string,
-  item: unknown,
-): Promise<unknown> {
-  return (await materializeQueuedOssAttachmentsInternal(sessionId, item, false)).item;
 }
 
 /**
@@ -832,7 +822,7 @@ export async function materializeQueuedOssAttachmentsDeferred(
   cleanupBeforeAcceptance?: () => Promise<void>;
   cleanupLocalMaterialization?: () => Promise<void>;
 }> {
-  return materializeQueuedOssAttachmentsInternal(sessionId, item, true);
+  return materializeQueuedOssAttachmentsInternal(sessionId, item);
 }
 
 /**
@@ -906,7 +896,6 @@ export async function materializeDirectSendOssAttachments(
       files: projectedFiles,
       ...(typeof persistedContent === 'string' ? { persistedContent } : {}),
     },
-    true,
   );
   const projected = materialized.item as { files?: unknown; persistedContent?: unknown };
   const materializedFiles = Array.isArray(projected.files) ? projected.files : projectedFiles;

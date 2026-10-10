@@ -136,7 +136,7 @@ it('retries an initial capabilities timeout on a legacy host without inventing a
   runtime.post?.({ type: 'streaming', epoch: 'lease-one' });
   expect(snapshot).toMatchObject({ ready: true, controlling: true, error: null });
   expect(current.requests.filter((request) => request.op === 'start')).toEqual([
-    { op: 'start', displayId: 'one' },
+    { op: 'start', displayId: 'one', lockOnExit: false },
   ]);
 });
 
@@ -252,7 +252,7 @@ it('keeps a healthy viewer on the same host connected when another viewer times 
           return {
             version: 1,
             enabled: true,
-            canControl: false,
+            canControl: true,
             automaticReconnect: true,
             displays: [{ id: 'one', width: 1280, height: 720 }],
           };
@@ -265,6 +265,7 @@ it('keeps a healthy viewer on the same host connected when another viewer times 
           };
         }
         if (request.op === 'stop') leases.delete(request.lease);
+        if (request.op === 'control' || request.op === 'heartbeat') return { controlling: true };
         return { controlling: false, jpeg: null };
       },
     } satisfies RemoteDesktopViewerApi;
@@ -312,8 +313,8 @@ it.each([['two'], ['two', 'three']])(
     });
     expect(current.hostLease()).toBe('lease-' + latest);
     expect(current.requests.filter((request) => request.op === 'start')).toEqual([
-      { op: 'start', displayId: 'one' },
-      { op: 'start', displayId: latest },
+      { op: 'start', displayId: 'one', lockOnExit: false },
+      { op: 'start', displayId: latest, lockOnExit: false },
     ]);
   },
 );
@@ -329,6 +330,7 @@ it('still requires explicit confirmation to take over another viewer', async () 
     op: 'start',
     displayId: 'one',
     takeover: true,
+    lockOnExit: false,
   });
 });
 

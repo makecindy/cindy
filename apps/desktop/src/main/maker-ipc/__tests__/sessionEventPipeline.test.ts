@@ -5,6 +5,7 @@ import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import { handleSessionEvent, type SessionEventDependencies } from '../sessionEventPipeline.js';
 import { setMainLocale } from '../../i18n.js';
 import { installSessionTurnObserver } from '../sessionTurnObserver.js';
+import { onChannelTurn } from '../channelTurnSignal.js';
 import { createSessionBindingLifecycle } from '../sessionBindingLifecycle.js';
 import { SessionTurnActivityTracker } from '../sessionTurnActivityTracker.js';
 import { ProductTurnWallClockTracker, ProductTurnUsageTargetTracker } from '../turnWallClock.js';
@@ -29,6 +30,10 @@ const effects = vi.hoisted(() => {
 // Account discovery persistence is outside this runtime/route fixture.
 vi.mock('../../maker-host/model-discovery/xai.js', () => ({
   discardXaiModelsDiskCache: vi.fn(async () => {}),
+}));
+
+vi.mock('../../local-model-runtime/preflight.js', () => ({
+  ensureManagedOllamaReadyForSession: effects.fn('ensureManagedOllamaReadyForSession'),
 }));
 
 vi.mock('../../logger.js', () => ({
@@ -242,6 +247,7 @@ function harness() {
   });
   const activity = new SessionTurnActivityTracker();
   const deps = {
+    onPluginTaskTerminal: vi.fn(),
     onSuccessfulProductTurn: vi.fn(async () => {}),
     onUnsuccessfulProductTurn: vi.fn(async () => {}),
     log,
@@ -297,6 +303,8 @@ function harness() {
     silentStopTurnLeaseGate: { turnLeaseIdForEvent: vi.fn(() => 'instance:1') },
     agentInputCoordinatorHolder: {
       getActiveInputClientId: vi.fn((): string | null => null),
+      getActiveInputClientIds: vi.fn((): string[] => []),
+      isActiveTaskCoordination: vi.fn(() => false),
       getQueueControlSnapshot: vi.fn(() => ({ pendingQueue: [] as unknown[] })),
       onTurnEvent: vi.fn(),
       noteSuppressedTerminalError: vi.fn(),
@@ -393,6 +401,49 @@ function ordered(...names: string[]) {
 }
 
 describe('production Session event pipeline', () => {
+  it('delivers coordination actions without public prose, then preserves ordinary and completion replies', async () => {
+    const h = harness();
+    h.deps.agentInputCoordinatorHolder.isActiveTaskCoordination.mockReturnValue(true);
+    h.deps.agentInputCoordinatorHolder.getActiveInputClientId.mockReturnValue('coordination');
+    try {
+      h.emit(event('text', { text: 'Internal file ownership agreement', isFinal: true }));
+      h.emit(event('text', { text: 'Internal standalone' }, { standaloneText: true }));
+      h.emit(event('thinking', { text: 'Internal reasoning' }));
+      expect(effects.fn('onAssistantTextEvent')).not.toHaveBeenCalled();
+      expect(effects.fn('onStandaloneTextEvent')).not.toHaveBeenCalled();
+      expect(h.deps.broadcastToAllWindows).not.toHaveBeenCalled();
+      h.emit(event('tool_use', { id: 'tool', name: 'read', input: {} }));
+      expect(effects.fn('onToolUseEvent')).toHaveBeenCalledOnce();
+      h.deps.agentInputCoordinatorHolder.onTurnEvent.mockImplementation(() => {
+        h.deps.agentInputCoordinatorHolder.isActiveTaskCoordination.mockReturnValue(false);
+      });
+      h.emit(event('done', { result: 'Internal acknowledgement', finalText: 'Internal acknowledgement' }));
+      expect(h.deps.broadcastToAllWindows).toHaveBeenCalledWith('maker:event', expect.objectContaining({
+        event: expect.objectContaining({ type: 'done', data: expect.objectContaining({ result: '', finalText: '' }),
+          agentMeta: expect.objectContaining({ botPrivateReply: true, botTaskCoordination: true }) }),
+      }));
+      expect(JSON.stringify(h.deps.broadcastToAllWindows.mock.calls)).not.toContain('Internal acknowledgement');
+      h.deps.agentInputCoordinatorHolder.getActiveInputClientId.mockReturnValue('bot-delegation-completion:result');
+      h.emit(event('text', { text: 'User requested final result', isFinal: true }));
+      expect(effects.fn('onAssistantTextEvent')).toHaveBeenCalledOnce();
+    } finally { await h.dispose(); }
+  });
+
+  it('keeps terminal failures and runtime recovery notices visible during coordination', async () => {
+    const h = harness();
+    h.deps.redactEventForRenderer.mockImplementation(value => value);
+    h.deps.agentInputCoordinatorHolder.isActiveTaskCoordination.mockReturnValue(true);
+    h.deps.agentInputCoordinatorHolder.getActiveInputClientId.mockReturnValue('coordination');
+    try {
+      h.emit(event('error', { message: 'User action required' }));
+      expect(h.deps.broadcastToAllWindows).toHaveBeenCalledWith('maker:event', expect.objectContaining({
+        event: expect.objectContaining({ type: 'error', data: expect.objectContaining({ message: 'User action required' }) }),
+      }));
+      h.emit(event('text', { text: 'Recovery requires attention' }, { runtimeRecovery: true }));
+      expect(effects.fn('onAssistantTextEvent')).toHaveBeenCalledOnce();
+    } finally { await h.dispose(); }
+  });
+
   it('suppresses scheduled content before persistence and delivery while preserving unrelated replies', async () => {
     const h = harness();
     const close = beginQuietScheduledOutput('check', 'check-run');
@@ -491,6 +542,24 @@ describe('production Session event pipeline', () => {
       await h.dispose();
     },
   );
+  it.each(['completed', 'failed', 'cancelled', 'interrupted'])(
+    'preserves the plugin terminal %s before generic failure bookkeeping', async status => {
+      const h = harness();
+      h.emit(event('done', { status }, {
+        sessionInstanceId: h.session.instanceId, sessionTurnGeneration: 0,
+      }));
+      await microtasks();
+      expect(h.deps.onPluginTaskTerminal).toHaveBeenCalledWith('task', {
+        instanceId: h.session.instanceId, generation: 0,
+      }, status, undefined);
+      if (status !== 'completed') {
+        expect(h.deps.onPluginTaskTerminal.mock.invocationCallOrder[0]).toBeLessThan(
+          h.deps.onUnsuccessfulProductTurn.mock.invocationCallOrder[0],
+        );
+      }
+      await h.dispose();
+    },
+  );
   it.each([
     ['zh-CN', 'Pi 扩展未能完成刷新。请重启 Cindy 后再使用 Pi。'],
     ['zh-TW', 'Pi 擴充功能未能完成重新整理。請重新啟動 Cindy 後再使用 Pi。'],
@@ -511,7 +580,7 @@ describe('production Session event pipeline', () => {
     effects.fn('onAssistantTextEvent').mockClear();
     effects.fn('broadcast').mockClear();
     h.emit(receipt);
-    expect(effects.fn('onAssistantTextEvent')).toHaveBeenCalledWith('task', { ...data, text }, null);
+    expect(effects.fn('onAssistantTextEvent')).toHaveBeenCalledWith('task', { ...data, text }, null, undefined);
     expect(effects.fn('broadcast')).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
       sessionId: 'task', event: { ...receipt, data: { ...data, text } },
     }));
@@ -541,7 +610,7 @@ describe('production Session event pipeline', () => {
     const h = harness();
     const data = { isFinal: true, text: 'partial: restart-cindy-to-refresh-packages' };
     h.emit(event('text', data, { source: 'pi' }));
-    expect(effects.fn('onAssistantTextEvent')).toHaveBeenCalledWith('task', data, null);
+    expect(effects.fn('onAssistantTextEvent')).toHaveBeenCalledWith('task', data, null, undefined);
     await h.dispose();
   });
 
@@ -936,6 +1005,63 @@ describe('provider turn observer on real Session.send', () => {
       },
     };
   }
+  it('awaits channel output attachment for direct sends and releases an undispatched turn', async () => {
+    const h = harness();
+    const phases: string[] = [];
+    const dispose = installSessionTurnObserver(observerDeps(), h.session);
+    const unsubscribe = onChannelTurn(async (session, phase) => {
+      expect(session).toBe(h.session);
+      await Promise.resolve();
+      phases.push(phase);
+    });
+    try {
+      await expect(h.session.send('peer message', { beforeProviderStart: async () => {
+        expect(phases).toEqual(['starting']);
+        throw new Error('cancel before dispatch');
+      } })).rejects.toThrow('cancel before dispatch');
+      expect(phases).toEqual(['starting', 'undispatched']);
+      expect(h.handle.send).not.toHaveBeenCalled();
+      await h.session.send('automatic task');
+      expect(phases).toEqual(['starting', 'undispatched', 'starting']);
+      expect(h.handle.send).toHaveBeenCalledOnce();
+    } finally { unsubscribe(); dispose(); await h.dispose(); }
+  });
+
+  it('channel attachment failure does not block task execution', async () => {
+    const h = harness();
+    const dispose = installSessionTurnObserver(observerDeps(), h.session);
+    const unsubscribe = onChannelTurn(() => { throw new Error('channel unavailable'); });
+    try {
+      await h.session.send('automatic task');
+      expect(h.handle.send).toHaveBeenCalledOnce();
+    } finally { unsubscribe(); dispose(); await h.dispose(); }
+  });
+
+  it('awaits llama.cpp readiness on an existing task before dispatch and propagates startup failure', async () => {
+    const h = harness();
+    const gate = deferred();
+    effects.fn('getSessionProvider').mockReturnValue('cindy-local-llamacpp');
+    const ready = effects.fn('ensureManagedOllamaReadyForSession').mockImplementation(() => gate.promise);
+    const dispose = installSessionTurnObserver(observerDeps(), h.session);
+    try {
+      const sending = h.session.send('continue existing task');
+      await vi.waitFor(() => expect(ready).toHaveBeenCalledOnce());
+      expect(h.handle.send).not.toHaveBeenCalled();
+      gate.resolve();
+      await sending;
+      expect(ready).toHaveBeenCalledWith({ providerId: 'cindy-local-llamacpp', onlyIfStopped: true });
+      expect(h.handle.send).toHaveBeenCalledOnce();
+      h.emit(event('done', {}));
+      ready.mockRejectedValue(new Error('NOT_INSTALLED'));
+      await expect(h.session.send('next turn')).rejects.toThrow('NOT_INSTALLED');
+      expect(h.handle.send).toHaveBeenCalledOnce();
+    } finally {
+      gate.resolve();
+      dispose();
+      await h.dispose();
+    }
+  });
+
   it('holds the send reservation while waiting for the local project boundary', async () => {
     const harnessState = harness();
     const gate = deferred();
@@ -996,6 +1122,7 @@ describe('provider turn observer on real Session.send', () => {
   it('does not apply the local project boundary to a remote session', async () => {
     const harnessState = harness();
     Object.defineProperty(harnessState.session, 'remoteHostId', { value: 'ssh-host' });
+    effects.fn('getSessionProvider').mockReturnValue('cindy-local-llamacpp');
     const beforeLocalProviderStart = vi.fn(async () => {});
     const dispose = installSessionTurnObserver(
       { ...observerDeps(), beforeLocalProviderStart }, harnessState.session,
@@ -1003,6 +1130,7 @@ describe('provider turn observer on real Session.send', () => {
     try {
       await harnessState.session.send('test');
       expect(beforeLocalProviderStart).not.toHaveBeenCalled();
+      expect(effects.fn('ensureManagedOllamaReadyForSession')).not.toHaveBeenCalled();
       expect(harnessState.handle.send).toHaveBeenCalledOnce();
     } finally {
       dispose();
@@ -1581,4 +1709,16 @@ describe('Bot adapters in the shared event pipeline', () => {
     }));
     expect(h.deps.attemptBotCompactRuntimeRefresh).toHaveBeenCalledWith(h.session, 'event:done');
   });
+});
+
+it('captures task completion inputs before queue advancement and binds only a successful final', async () => {
+  const h = harness();
+  h.deps.agentInputCoordinatorHolder.getActiveInputClientIds.mockReturnValue(['bot-delegation-completion:a', 'human']);
+  h.deps.agentInputCoordinatorHolder.onTurnEvent.mockImplementation(() => {
+    h.deps.agentInputCoordinatorHolder.getActiveInputClientIds.mockReturnValue(['bot-delegation-completion:next']);
+  });
+  effects.fn('consumeLastTopLevelAssistantPersistId').mockReturnValueOnce('summary');
+  h.emit(event('done', { status: 'completed', result: 'Summary' }));
+  expect(effects.fn('markAssistantTurnCompleted')).toHaveBeenCalledWith('task', 'summary', undefined, ['bot-delegation-completion:a']);
+  await h.dispose();
 });

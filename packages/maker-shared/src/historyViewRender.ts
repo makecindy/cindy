@@ -13,6 +13,8 @@ export function renderHistoryView<T extends HistoryMessageSource, TItem>(options
   /** Already displayed assistant identities in observation order, awaiting history. */
   pendingHandoff?: ReadonlySet<string>;
   isLocalUser?(message: T): boolean;
+  /** Ephemeral UI rows that never enter persisted history; retain their local position. */
+  isLocalMessage?(message: T): boolean;
   structure: {
     placeholder(summary: HistoryWorkSummary): T;
     children(item: TItem): readonly TItem[] | undefined;
@@ -67,9 +69,14 @@ export function renderHistoryView<T extends HistoryMessageSource, TItem>(options
       || (id.startsWith('history-live:') && row.clientId === id.slice('history-live:'.length));
     const first = cached.findIndex((row) => matchesReference(row, range.firstMessageId));
     const last = cached.findIndex((row) => matchesReference(row, range.lastMessageId));
+    // A running preview is a sliding tail: new activities move both endpoints
+    // past the cached window. Until that tail is read, keep showing the previous
+    // window — a partial slice would collapse the live list for one read and
+    // shift a bottom-pinned stream up and down.
+    const slidingPreview = preview && last < 0 && cached.length > 0;
     // A visible result can split a previously cached range. Retain only this
     // reference's prefix while its replacement pages are being fetched.
-    const body = (first < 0 ? [] : cached.slice(first, last < first ? undefined : last + 1))
+    const body = (slidingPreview ? cached : first < 0 ? [] : cached.slice(first, last < first ? undefined : last + 1))
       .filter((row) => !sourceIds.has(row.clientId));
     const placeholder = structure.placeholder(summary);
     if (!body.some((row) => row.clientId === placeholder.clientId)) {
@@ -100,8 +107,8 @@ export function renderHistoryView<T extends HistoryMessageSource, TItem>(options
       && (Date.parse(row.createdAt) >= endMs
         || isPendingHandoff(row))) rows.push(row);
   }
-  // Local pending/blocked user bubbles belong to the current UI store, not
-  // persisted history. Anchor them to the same reordered slots used above,
+  // Local pending/blocked user bubbles and ephemeral UI rows belong to the
+  // current UI store, not persisted history. Anchor them to the reordered slots,
   // without trusting device clocks or changing their order relative to each other.
   const renderedIds = new Set(rows.map((row) => row.clientId));
   let beforeClientId: string | undefined;
@@ -109,7 +116,7 @@ export function renderHistoryView<T extends HistoryMessageSource, TItem>(options
     const row = orderedLiveMessages[index];
     if (renderedIds.has(row.clientId)) {
       beforeClientId = row.clientId;
-    } else if (row.role === 'user' && options.isLocalUser?.(row)) {
+    } else if ((row.role === 'user' && options.isLocalUser?.(row)) || options.isLocalMessage?.(row)) {
       const before = beforeClientId === undefined ? -1 : rows.findIndex((item) => item.clientId === beforeClientId);
       rows.splice(before < 0 ? rows.length : before, 0, row);
       renderedIds.add(row.clientId);

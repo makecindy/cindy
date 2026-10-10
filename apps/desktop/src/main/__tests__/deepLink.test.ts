@@ -18,14 +18,8 @@ vi.mock('electron', () => ({
 }));
 
 // logger 依赖 electron-log + app path, 在测试里要么 mock 要么吞日志。给个 noop logger。
-vi.mock('../logger', () => ({
-  createLogger: () => ({
-    info: () => {},
-    warn: () => {},
-    error: () => {},
-    debug: () => {},
-  }),
-}));
+const logs = vi.hoisted(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }));
+vi.mock('../logger', () => ({ createLogger: () => logs }));
 
 import { vi } from 'vitest';
 import {
@@ -46,6 +40,7 @@ import {
   openMainWindowVoiceSettings,
   setDeepLinkMainWindow,
   takePendingDeepLink,
+  takePendingDeepLinkFromRenderer,
 } from '../deepLink';
 
 function providerImportUrl(scheme: 'cindy' | 'xdt-maker'): string {
@@ -63,6 +58,84 @@ function providerImportUrl(scheme: 'cindy' | 'xdt-maker'): string {
   };
   return `${scheme}://provider/import?v=1&data=${Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url')}`;
 }
+
+describe('chat invitation handoff', () => {
+  const token = 'synthetic-invitation-'.padEnd(43, 'a');
+  const link = `cindy://chat-invite/${token}`;
+  it('keeps the invitation for the main frame when secondary windows or subframes try to take it', () => {
+    setDeepLinkMainWindow(null);
+    handleIncomingDeepLink(link, 'open-url');
+    const sender = { mainFrame: {} } as BrowserWindow['webContents'];
+    const secondary = { mainFrame: {} } as BrowserWindow['webContents'];
+    const event = { sender, senderFrame: sender.mainFrame };
+    expect(takePendingDeepLinkFromRenderer(event)).toBeNull();
+    const isDestroyed = vi.fn(() => false);
+    setDeepLinkMainWindow({ isDestroyed, webContents: sender } as unknown as BrowserWindow);
+    expect(takePendingDeepLinkFromRenderer({ sender: secondary, senderFrame: secondary.mainFrame })).toBeNull();
+    expect(takePendingDeepLinkFromRenderer({ sender, senderFrame: secondary.mainFrame })).toBeNull();
+    expect(takePendingDeepLinkFromRenderer({ sender, senderFrame: null })).toBeNull();
+    isDestroyed.mockReturnValue(true);
+    expect(takePendingDeepLinkFromRenderer(event)).toBeNull();
+    isDestroyed.mockReturnValue(false);
+    expect(takePendingDeepLinkFromRenderer(event)).toEqual({ type: 'chat-invite', token });
+    expect(takePendingDeepLinkFromRenderer(event)).toBeNull();
+    setDeepLinkMainWindow(null);
+  });
+  it('recognizes the existing generated link and rejects ambiguous targets', () => {
+    expect(parseDeepLink(link)).toEqual({ type: 'chat-invite', token });
+    expect(parseDeepLink(link.replace('cindy:', 'xdt-maker:'))).toEqual({ type: 'chat-invite', token });
+    for (const value of [link + '/extra', link + '?token=other', link + '#secret', link + 'a', link.slice(0, -1)]) {
+      expect(parseDeepLink(value)).toBeNull();
+    }
+  });
+  it.each(['open-url', 'cold-start-argv', 'second-instance'])('retains %s through login focus and unrelated navigation', source => {
+    setDeepLinkMainWindow(null);
+    handleIncomingDeepLink(link, source);
+    handleIncomingDeepLink(link, source);
+    handleIncomingDeepLink('cindy://focus/desktop-login', 'open-url');
+    handleIncomingDeepLink('cindy://session/ordinary-task', source);
+    expect(takePendingDeepLink()).toEqual({ type: 'chat-invite', token });
+    expect(takePendingDeepLink()).toEqual({ type: 'session', id: 'ordinary-task' });
+    expect(takePendingDeepLink()).toBeNull();
+    expect(JSON.stringify(Object.values(logs).map(log => log.mock.calls))).not.toContain(token);
+  });
+  it('retains invitations while a loaded login page has no consumer, and redacts all argv copies', () => {
+    const send = vi.fn();
+    setDeepLinkMainWindow({ isDestroyed: () => false, isMinimized: () => false,
+      isVisible: () => true, isAlwaysOnTop: () => true, setAlwaysOnTop: vi.fn(), moveTop: vi.fn(), focus: vi.fn(),
+      webContents: { isLoading: () => false, send } } as unknown as BrowserWindow);
+    handleIncomingDeepLink(link, 'open-url');
+    expect(send).toHaveBeenCalledWith('deep-link:navigate', { type: 'chat-invite', token });
+    expect(takePendingDeepLink()).toEqual({ type: 'chat-invite', token });
+    expect(takePendingDeepLink()).toBeNull();
+    const argv = ['cindy.exe', link, 'cindy://chat-invite/invalid-secret'];
+    expect(findDeepLinkInArgv(['cindy.exe', link])).toBe(link);
+    redactConsumedDeepLinkInArgv(argv);
+    expect(argv).toEqual(['cindy.exe', 'cindy://consumed', 'cindy://consumed']);
+    setDeepLinkMainWindow(null);
+  });
+});
+
+describe('shared task invitation handoff', () => {
+  it('buffers until the authenticated renderer takes it, without logging the secret', () => {
+    const invitation = 'A'.repeat(43);
+    const url = 'cindy://shared-task/join?invitation=' + invitation + '&server=https%3A%2F%2Frelay.example.test';
+    setDeepLinkMainWindow(null);
+    handleIncomingDeepLink(url, 'test');
+    expect(takePendingDeepLink()).toEqual({ type: 'shared-task-join', invitation, server: 'https://relay.example.test' });
+    expect(takePendingDeepLink()).toBeNull();
+    expect(JSON.stringify(Object.values(logs).map(log => log.mock.calls))).not.toContain(invitation);
+    const argv = ['cindy.exe', url, 'cindy://shared-task/join?invitation=invalid-secret'];
+    redactConsumedDeepLinkInArgv(argv, url);
+    expect(argv.join(' ')).not.toContain(invitation);
+    expect(argv.join(' ')).not.toContain('invalid-secret');
+  });
+  it('rejects malformed and duplicate invitation fields', () => {
+    const url = 'cindy://shared-task/join?invitation=' + 'A'.repeat(43) + '&server=https%3A%2F%2Frelay.example.test';
+    expect(parseDeepLink(url + '&invitation=' + 'B'.repeat(43))).toBeNull();
+    expect(parseDeepLink(url.replace('https%3A%2F%2Frelay.example.test', 'javascript%3Aalert(1)'))).toBeNull();
+  });
+});
 
 describe('user-initiated main-window focus', () => {
   it('activates and raises the target window before focusing on Windows', () => {
@@ -396,6 +469,13 @@ describe('redactConsumedDeepLinkInArgv', () => {
     redactConsumedDeepLinkInArgv(argv, url);
     expect(argv).toEqual(['electron.exe', '--flag', 'cindy://session/keep', 'cindy://consumed', 'cindy://consumed', 'cindy://consumed']);
     expect(parseDeepLink(url)?.type).toBe('provider-import');
+  });
+  it('parses provider share links and never keeps their invitation in argv', () => {
+    const link = `cindy://provider-share/join?invitation=${'a'.repeat(43)}&server=${encodeURIComponent('https://device-link.cindy.app')}`;
+    expect(parseDeepLink(link)).toEqual({ type: 'provider-share-join', link });
+    const argv = ['electron', link];
+    redactConsumedDeepLinkInArgv(argv);
+    expect(argv).toEqual(['electron', 'cindy://consumed']);
   });
 
   it('releases an overwritten cold-start draft before a renderer ever mounts', () => {

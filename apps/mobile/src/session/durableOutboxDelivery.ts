@@ -2,6 +2,7 @@ import type { InputDeliveryProjection } from "@cindy/device-link";
 import { isExplicitRemoteNotFoundError } from "./newSessionWorktree";
 import {
   createDurableOutbox,
+  isDurableOutboxHandedOff,
   isDurableOutboxSettled,
   isDurableOutboxUnsent,
   type DurableOutboxRecord,
@@ -29,6 +30,8 @@ export interface DurableOutboxDeliveryDeps {
   enqueue(record: DurableOutboxRecord): Promise<InputProjection>;
   cancel(record: DurableOutboxRecord): Promise<boolean>;
   history(record: DurableOutboxRecord): Promise<boolean>;
+  /** A remote row alone cannot release the local bubble before offline history owns it. */
+  cacheHistory?(record: DurableOutboxRecord): Promise<boolean>;
   applyProjection(
     record: DurableOutboxRecord,
     projection: InputProjection,
@@ -55,7 +58,17 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
   const current = (r: DurableOutboxRecord) =>
     !stopped && deps.isCurrent() && deps.store.getSnapshot().includes(r);
   const hasDurableOwnership = (r: DurableOutboxRecord) =>
-    r.state === "host-owned" && r.retrySafe === true;
+    r.state === "host-owned" && isDurableOutboxHandedOff(r);
+  const hasHistory = async (record: DurableOutboxRecord): Promise<boolean> => {
+    try {
+      return await deps.history(record);
+    } catch (error) {
+      // Pending and withdrawn inputs need not have a history row. Absence is
+      // not a delivery failure or proof of cancellation; host receipts decide.
+      if (isExplicitRemoteNotFoundError(error)) return false;
+      throw error;
+    }
+  };
   async function deliver(initial: DurableOutboxRecord) {
     let record = initial;
     due.set(id(record), Date.now() + 5_000);
@@ -74,6 +87,17 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
       await deps.store.remove(record);
       due.delete(id(record));
       attempts.delete(id(record));
+    };
+    const finishHistory = async () => {
+      if (!current(record)) return;
+      if (deps.cacheHistory && !await deps.cacheHistory(record)) {
+        // Even a legacy host has durably accepted this row. Retaining its local
+        // bubble must not block later sends or make the old message retryable.
+        if (current(record) && !record.historyConfirmed)
+          await update({ state: 'host-owned', historyConfirmed: true, error: undefined });
+        return;
+      }
+      if (current(record)) await finish();
     };
     try {
       if (record.draftHandoff) {
@@ -140,8 +164,8 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
         } else if (state === "pending") {
           // Legacy hosts cannot seal a not-yet-arrived enqueue. Keep uncertain cancellation visible.
           await update({ state: "failed", error: deps.confirmationMessage });
-        } else if (await deps.history(record)) {
-          if (current(record)) await finish();
+        } else if (await hasHistory(record)) {
+          await finishHistory();
         } else if (current(record)) {
           await update({ state: "failed", error: deps.confirmationMessage });
         }
@@ -161,19 +185,19 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
       if (durableOwnership) {
         if (record.state !== "host-owned") await deps.accepted?.(record);
         if (!current(record)) return;
-        if (await deps.history(record)) {
-          if (current(record)) await finish();
+        if (await hasHistory(record)) {
+          await finishHistory();
           return;
         }
         if (!current(record)) return;
-        if (!hasDurableOwnership(record))
+        if (!hasDurableOwnership(record) || record.error)
           await update({ state: "host-owned", retrySafe: true, error: undefined });
         due.set(id(record), Date.now() + 5_000);
         return;
       }
       // Even old hosts may already have persisted a user row after the enqueue receipt was lost.
-      if ((record.prepared || state === "pending" || state === "accepted") && (await deps.history(record))) {
-        if (current(record)) await finish();
+      if ((record.prepared || state === "pending" || state === "accepted") && (await hasHistory(record))) {
+        await finishHistory();
         return;
       }
       if (!current(record) || record.state === "failed") return;
@@ -250,7 +274,8 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
           },
           retrySafe: projection.inputDeliveryVersion === 1,
           enqueueStarted: record.enqueueStarted ?? (record.sendAtMs === undefined ? false : undefined),
-          clearBoundaryMs: projection.clearBoundaryMs ?? record.clearBoundaryMs,
+          clearBoundaryMs: projection.clearBoundaryMs !== undefined
+            ? projection.clearBoundaryMs : record.clearBoundaryMs,
           sendAtMs: record.sendAtMs ?? Date.now(),
         });
       }
@@ -315,11 +340,10 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
         // Session FIFO, while one unavailable computer never blocks a different task.
         const candidates = [...groups.values()]
           .flatMap((group) => {
-            const handedOff = (r: DurableOutboxRecord) => hasDurableOwnership(r) || isDurableOutboxSettled(r);
-            const head = group.find((r) => !handedOff(r));
+            const head = group.find((r) => !isDurableOutboxHandedOff(r));
             return [
               ...(head ? [head] : []),
-              ...group.filter(handedOff),
+              ...group.filter(isDurableOutboxHandedOff),
             ];
           })
           .filter((r) => deps.canRun(r) && (due.get(id(r)) ?? 0) <= Date.now());

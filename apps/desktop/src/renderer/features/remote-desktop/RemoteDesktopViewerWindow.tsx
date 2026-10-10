@@ -4,25 +4,69 @@ import {
   SlidersHorizontal,
   Clipboard,
   Shield,
-  AppWindow,
-  LayoutGrid,
   ZoomIn,
   ZoomOut,
   X,
   Monitor,
+  createLucideIcon,
 } from 'lucide-react';
-import type { RemoteDesktopDisplayMode } from '@cindy/device-link';
+import {
+  REMOTE_DESKTOP_VIDEO_QUALITIES,
+  type RemoteDesktopDisplayMode,
+  type RemoteDesktopVideoQuality,
+} from '@cindy/device-link';
 import { WindowControls } from '@/components/title-bar/WindowControls';
 import { useMacFullscreen } from '@/hooks/useMacFullscreen';
 import i18n from '@/i18n';
-import { DesktopViewerController, type ViewerSnapshot } from './viewerController';
+import {
+  clipboardFailureKey,
+  DesktopViewerController,
+  type ViewerSnapshot,
+} from './viewerController';
 import { Select } from '@/components/ui/select';
 import { Button } from '@/components/ui/button';
 import { FormField } from '@/components/ui/form-field';
+import { SegmentedControl } from '@/components/ui/segmented-control';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { Switch } from '@/components/ui/switch';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Tip } from '@/components/ui/tooltip';
+import {
+  fittedChoices,
+  ratioLabel,
+  recommendedFit,
+  sameRatio,
+  tagRecommendedModes,
+  type ResolutionChoice,
+  type ResolutionTier,
+  type Size,
+} from './displayChoices';
+
+// Fullscreen keeps an 8px toolbar strip visible. Electron drag regions swallow
+// hover and macOS slides its own menu bar over the top edge, so reveal is
+// pointer-driven and only collapses once the pointer moves back into the stage.
+const TOOLBAR_REVEAL_EDGE = 8;
+const TOOLBAR_HIDE_MARGIN = 16;
+
+const QUALITY_LABELS = {
+  auto: 'remoteDesktop.viewer.automatic',
+  saver: 'remoteDesktop.viewer.saver',
+  hd: 'remoteDesktop.viewer.hd',
+} as const satisfies Record<RemoteDesktopVideoQuality, string>;
+
+const ASPECT_LABELS = {
+  original: 'remoteDesktop.viewer.aspectOriginal',
+  screen: 'remoteDesktop.viewer.aspectScreen',
+  window: 'remoteDesktop.viewer.aspectWindow',
+  current: 'remoteDesktop.viewer.aspectCurrent',
+} as const;
+
+const TIER_LABELS = {
+  same: 'remoteDesktop.viewer.resolutionSame',
+  larger: 'remoteDesktop.viewer.resolutionLarger',
+  more: 'remoteDesktop.viewer.resolutionMore',
+  max: 'remoteDesktop.viewer.resolutionMax',
+} as const satisfies Record<ResolutionTier, string>;
 
 /** A clean, standalone remote desktop surface. No App, router, agent or task providers. */
 export function RemoteDesktopViewerWindow() {
@@ -30,17 +74,21 @@ export function RemoteDesktopViewerWindow() {
   const { isMac, isFullscreen } = useMacFullscreen();
   const api = window.electronAPI.remoteDesktopViewer;
   const root = useRef<HTMLDivElement>(null),
+    toolbar = useRef<HTMLElement>(null),
     controller = useRef<DesktopViewerController | null>(null);
   const [state, setState] = useState<ViewerSnapshot | null>(null);
   const [settings, setSettings] = useState<'display' | 'clipboard' | 'security' | null>(null),
     [selectOpen, setSelectOpen] = useState(false),
     [notice, setNotice] = useState<string | null>(null),
     [closeGeneration, setCloseGeneration] = useState<number | null>(null);
+  const [toolbarRevealed, setToolbarRevealed] = useState(false);
   const [modes, setModes] = useState<RemoteDesktopDisplayMode[]>([]);
   const [modesStatus, setModesStatus] = useState<'idle' | 'loading' | 'failed'>('idle');
   const generation = useRef(-1);
   const latestState = useRef<ViewerSnapshot | null>(null);
   const activePanel = useRef(settings);
+  // Only the latest clipboard click reports; queued earlier transfers stay silent.
+  const clipboardAttempt = useRef(0);
   activePanel.current = settings;
   const requestClose = useCallback(() => {
     controller.current?.releaseInput();
@@ -56,6 +104,17 @@ export function RemoteDesktopViewerWindow() {
     }
     setCloseGeneration(generation.current);
   }, []);
+  useEffect(() => {
+    setToolbarRevealed(false);
+    if (!isFullscreen) return;
+    const move = (event: PointerEvent) => {
+      if (event.clientY <= TOOLBAR_REVEAL_EDGE) setToolbarRevealed(true);
+      else if (event.clientY > (toolbar.current?.offsetHeight ?? 0) + TOOLBAR_HIDE_MARGIN)
+        setToolbarRevealed(false);
+    };
+    window.addEventListener('pointermove', move, true);
+    return () => window.removeEventListener('pointermove', move, true);
+  }, [isFullscreen]);
   useEffect(() => {
     if (!root.current) return;
     controller.current = new DesktopViewerController(api, root.current, (snapshot) => {
@@ -81,6 +140,7 @@ export function RemoteDesktopViewerWindow() {
     const closeRequested = api.onCloseRequested((value) => {
       if (value === generation.current) requestClose();
     });
+    const hidden = api.onHidden?.((value) => controller.current?.setHidden(value));
     const blur = () => {
       controller.current?.releaseInput();
       void api.inputFocus(generation.current, false).catch(() => {});
@@ -90,7 +150,13 @@ export function RemoteDesktopViewerWindow() {
         .inputFocus(generation.current, (event.target as HTMLElement)?.id === 'keyboard-input')
         .catch(() => {});
     };
+    // Programmatic blur (Ctrl+Alt+Esc, control loss) has no focusin; release shortcuts here too.
+    const focusOut = (event: FocusEvent) => {
+      if ((event.target as HTMLElement)?.id !== 'keyboard-input') return;
+      void api.inputFocus(generation.current, false).catch(() => {});
+    };
     document.addEventListener('focusin', focus);
+    document.addEventListener('focusout', focusOut);
     window.addEventListener('blur', blur);
     void api
       .state()
@@ -107,7 +173,9 @@ export function RemoteDesktopViewerWindow() {
       off();
       locale();
       closeRequested();
+      hidden?.();
       document.removeEventListener('focusin', focus);
+      document.removeEventListener('focusout', focusOut);
       window.removeEventListener('blur', blur);
       controller.current?.dispose();
       controller.current = null;
@@ -117,7 +185,7 @@ export function RemoteDesktopViewerWindow() {
     const owner = generation.current;
     setModesStatus('loading');
     void controller.current
-      ?.displayModes()
+      ?.resolutionModes()
       .then((value) => {
         if (owner !== generation.current) return;
         setModes(value);
@@ -130,11 +198,85 @@ export function RemoteDesktopViewerWindow() {
   const openPanel = (panel: 'display' | 'clipboard' | 'security', open: boolean) => {
     controller.current?.releaseInput();
     setSettings((current) => (open ? panel : current === panel ? null : current));
-    if (open && panel === 'display' && state?.caps?.displayModes) loadModes();
+    if (open && panel === 'display' && (state?.caps?.displayModes || state?.fittedDisplay))
+      loadModes();
   };
   const onSelectOpenChange = (open: boolean) => {
     setSelectOpen(open);
     if (open) controller.current?.releaseInput();
+  };
+  // The choices below read this window and screen; refresh them while the
+  // panel is open and the window is resized or moved to a differently scaled screen.
+  const [viewport, setViewport] = useState(0);
+  useEffect(() => {
+    if (settings !== 'display') return;
+    const update = () => setViewport((value) => value + 1);
+    const scale = window.matchMedia?.(`(resolution: ${window.devicePixelRatio}dppx)`);
+    window.addEventListener('resize', update);
+    scale?.addEventListener('change', update);
+    return () => {
+      window.removeEventListener('resize', update);
+      scale?.removeEventListener('change', update);
+    };
+  }, [settings, viewport]);
+  // Sizes are in this screen's points: one remote pixel per local point looks the same size.
+  const screenSize = { width: window.screen.width, height: window.screen.height };
+  const windowSize =
+    root.current && root.current.clientWidth > 0 && root.current.clientHeight > 0
+      ? { width: root.current.clientWidth, height: root.current.clientHeight }
+      : null;
+  const ownDisplay = state?.caps?.displays.find((display) => display.id === state.displayId);
+  const fitted = state?.fittedDisplay ?? null;
+  const showWindow = !!windowSize && !sameRatio(windowSize, screenSize);
+  const aspectValue = !fitted
+    ? 'original'
+    : sameRatio(fitted, screenSize)
+      ? 'screen'
+      : showWindow && sameRatio(fitted, windowSize)
+        ? 'window'
+        : 'current';
+  // A computer already at this screen's ratio needs no temporary display.
+  const showScreen = aspectValue === 'screen' || !sameRatio(ownDisplay, screenSize);
+  const aspectOption = (
+    value: 'original' | 'screen' | 'window' | 'current',
+    size: Size | null | undefined,
+    recommended = false,
+  ) => {
+    const label = [t(ASPECT_LABELS[value]), size && ratioLabel(size)].filter(Boolean).join(' · ');
+    return {
+      value,
+      label: recommended ? t('remoteDesktop.viewer.recommended', { label }) : label,
+      disabled: value === 'original' && !!fitted && !state?.caps?.viewerDisplayRestore,
+    };
+  };
+  const aspect = {
+    value: aspectValue,
+    options: [
+      aspectOption('original', ownDisplay, !showScreen),
+      ...(showScreen ? [aspectOption('screen', screenSize, true)] : []),
+      ...(showWindow ? [aspectOption('window', windowSize)] : []),
+      ...(aspectValue === 'current' ? [aspectOption('current', fitted)] : []),
+    ],
+  };
+  // The window choice matches this window's size; the others match this screen.
+  const areaFor = (value: string) => (value === 'window' && windowSize ? windowSize : screenSize);
+  const applyRatio = (value: 'screen' | 'window') => {
+    const ratio = areaFor(value);
+    const size = recommendedFit(ratio, ratio);
+    if (!size) return Promise.resolve();
+    return controller.current?.fitDisplay(size.width, size.height, true, undefined, { ratio });
+  };
+  const ratioArea = areaFor(aspectValue);
+  const currentMode = modes.find((mode) => mode.current);
+  const resolutionChoices: ResolutionChoice[] =
+    fitted && currentMode
+      ? fittedChoices(fitted, ratioArea, currentMode, window.devicePixelRatio)
+      : tagRecommendedModes(modes, ratioArea, window.devicePixelRatio);
+  const workspaceAction = (action: 'workspaceLeft' | 'workspaceRight' | 'omarchyMenu') => {
+    const owner = generation.current;
+    void controller.current?.workspaceAction(action).catch(() => {
+      if (owner === generation.current) setNotice(t('remoteDesktop.viewer.actionFailed'));
+    });
   };
   const action = 'remote-viewer-action';
   const network = state?.ready && (
@@ -161,27 +303,6 @@ export function RemoteDesktopViewerWindow() {
         <span className="remote-viewer-latency"> · {Math.round(state.latency)} ms</span>
       )}
     </span>
-  );
-  const controlPrompt = !state?.controlling && (
-    <div className="flex flex-col gap-2" role="status">
-      <p>
-        {t(
-          !state?.ready
-            ? 'remoteDesktop.connecting'
-            : state.controlPending
-              ? 'remoteDesktop.viewer.controlPending'
-              : 'remoteDesktop.viewer.controlRequired',
-        )}
-      </p>
-      <Button
-        variant="secondary"
-        disabled={!state?.ready || !state.caps?.canControl || state.controlPending}
-        loading={state?.controlPending}
-        onClick={() => void controller.current?.setControl(true)}
-      >
-        {t('remoteDesktop.takeControl')}
-      </Button>
-    </div>
   );
   const preference = (key: 'privacyScreen' | 'hostMute' | 'clipboardSync' | 'lockOnExit') =>
     state && (
@@ -225,7 +346,9 @@ export function RemoteDesktopViewerWindow() {
       }}
     >
       <header
+        ref={toolbar}
         className="remote-viewer-toolbar"
+        data-revealed={toolbarRevealed || undefined}
         data-settings-open={!!settings || undefined}
         data-select-open={selectOpen || undefined}
         style={{ paddingLeft: isMac && !isFullscreen ? 82 : 12 }}
@@ -243,8 +366,8 @@ export function RemoteDesktopViewerWindow() {
                       ? 'remoteDesktop.lockingOnExit'
                       : 'remoteDesktop.disconnecting',
                   )
-                : state?.ready
-                  ? t(state.controlling ? 'remoteDesktop.controlling' : 'remoteDesktop.viewOnly')
+                : state?.ready && state.controlling
+                  ? t('remoteDesktop.controlling')
                   : t('remoteDesktop.connecting')}
             </span>
             {state?.ready && (
@@ -268,30 +391,62 @@ export function RemoteDesktopViewerWindow() {
           role="group"
           aria-label={t('remoteDesktop.viewer.controlGroup')}
         >
-          <ViewerTool
-            label={t('remoteDesktop.allWindows')}
-            disabled={!state?.controlling || state.controlPending}
-            onClick={() =>
-              controller.current?.keys(
-                state?.caps?.platform === 'darwin'
-                  ? ['ControlLeft', 'ArrowUp']
-                  : ['MetaLeft', 'Tab'],
-              )
-            }
-          >
-            <LayoutGrid size={16} />
-          </ViewerTool>
-          <ViewerTool
-            label={t('remoteDesktop.showDesktop')}
-            disabled={!state?.controlling || state.controlPending}
-            onClick={() =>
-              controller.current?.keys(
-                state?.caps?.platform === 'darwin' ? ['MetaLeft', 'F3'] : ['MetaLeft', 'KeyD'],
-              )
-            }
-          >
-            <AppWindow size={16} />
-          </ViewerTool>
+          {state?.caps?.workspaceNavigation ? (
+            <>
+              <ViewerTool
+                label={t('remoteDesktop.workspaceLeft')}
+                disabled={!state.controlling || state.controlPending}
+                onClick={() => workspaceAction('workspaceLeft')}
+              >
+                <WorkspaceLeftIcon size={16} />
+              </ViewerTool>
+              <ViewerTool
+                label={t('remoteDesktop.workspaceRight')}
+                disabled={!state.controlling || state.controlPending}
+                onClick={() => workspaceAction('workspaceRight')}
+              >
+                <WorkspaceRightIcon size={16} />
+              </ViewerTool>
+            </>
+          ) : (
+            <>
+              <ViewerTool
+                label={t('remoteDesktop.allWindows')}
+                disabled={!state?.controlling || state.controlPending}
+                onClick={() =>
+                  controller.current?.keys(
+                    state?.caps?.platform === 'darwin'
+                      ? ['ControlLeft', 'ArrowUp']
+                      : ['MetaLeft', 'Tab'],
+                  )
+                }
+              >
+                <AllWindowsIcon size={16} />
+              </ViewerTool>
+              <ViewerTool
+                label={t('remoteDesktop.showDesktop')}
+                disabled={!state?.controlling || state.controlPending}
+                onClick={() =>
+                  // Cmd+F3 only works from the physical Mission Control key; a
+                  // synthesized F3 keycode never triggers it. F11 is the default.
+                  controller.current?.keys(
+                    state?.caps?.platform === 'darwin' ? ['F11'] : ['MetaLeft', 'KeyD'],
+                  )
+                }
+              >
+                <ShowDesktopIcon size={16} />
+              </ViewerTool>
+            </>
+          )}
+          {state?.caps?.omarchyMenu && (
+            <ViewerTool
+              label={t('remoteDesktop.omarchyMenu')}
+              disabled={!state.controlling || state.controlPending}
+              onClick={() => workspaceAction('omarchyMenu')}
+            >
+              <OmarchyMenuIcon size={16} />
+            </ViewerTool>
+          )}
         </div>
         <div className="remote-viewer-zoom-group" role="group" aria-label={t('remoteDesktop.fit')}>
           <ViewerTool
@@ -356,12 +511,11 @@ export function RemoteDesktopViewerWindow() {
             {state?.caps?.videoSettings && (
               <>
                 <FormField label={t('remoteDesktop.viewer.fps')} className="remote-viewer-field">
-                  {({ id }) => (
-                    <Select
-                      id={id}
-                      className="w-full"
-                      label={t('remoteDesktop.viewer.fps')}
-                      value={String(state.settings.fps)}
+                  {() => (
+                    <SegmentedControl
+                      fullWidth
+                      aria-label={t('remoteDesktop.viewer.fps')}
+                      value={String(state.settings.fps) as '30' | '60'}
                       options={[
                         { value: '30', label: '30 fps' },
                         { value: '60', label: '60 fps' },
@@ -369,54 +523,61 @@ export function RemoteDesktopViewerWindow() {
                       onValueChange={(value) =>
                         controller.current?.settings({ fps: Number(value) as 30 | 60 })
                       }
-                      onOpenChange={onSelectOpenChange}
                     />
                   )}
                 </FormField>
                 <FormField
                   label={t('remoteDesktop.viewer.quality')}
+                  hint={t('remoteDesktop.viewer.qualityHint')}
                   className="remote-viewer-field"
                 >
-                  {({ id }) => (
-                    <Select
-                      id={id}
-                      className="w-full"
-                      label={t('remoteDesktop.viewer.quality')}
-                      value={String(state.settings.bitrate)}
-                      options={[0, 2000000, 8000000, 20000000].map((value, index) => ({
-                        value: String(value),
-                        label: t(
-                          `remoteDesktop.viewer.${['automatic', 'smooth', 'balanced', 'clear'][index]}`,
-                        ),
+                  {() => (
+                    <SegmentedControl
+                      fullWidth
+                      aria-label={t('remoteDesktop.viewer.quality')}
+                      value={state.settings.quality}
+                      options={REMOTE_DESKTOP_VIDEO_QUALITIES.map((value) => ({
+                        value,
+                        label: t(QUALITY_LABELS[value]),
                       }))}
-                      onValueChange={(value) =>
-                        controller.current?.settings({
-                          bitrate: Number(value) as 0 | 2000000 | 8000000 | 20000000,
-                        })
-                      }
-                      onOpenChange={onSelectOpenChange}
+                      onValueChange={(quality) => controller.current?.settings({ quality })}
                     />
                   )}
                 </FormField>
               </>
             )}
             {state?.caps?.viewerDisplay && (
-              <div className="flex flex-col gap-2">
-                <Button
-                  variant="secondary"
-                  disabled={!state.controlling || state.controlPending}
-                  onClick={() => {
-                    if (!root.current) return;
-                    void controller.current
-                      ?.fitDisplay(root.current.clientWidth, root.current.clientHeight)
-                      .then(loadModes)
-                      .catch(() => setNotice(t('remoteDesktop.viewer.settingsFailed')));
-                  }}
-                >
-                  {t('remoteDesktop.viewer.fitViewerDisplay')}
-                </Button>
-                <p>{t('remoteDesktop.viewer.fitViewerDisplayHint')}</p>
-              </div>
+              <FormField
+                label={t('remoteDesktop.viewer.aspect')}
+                hint={t('remoteDesktop.viewer.aspectHint')}
+                className="remote-viewer-field remote-viewer-field-wide"
+              >
+                {(control) => (
+                  <Select
+                    {...control}
+                    className="w-full"
+                    label={t('remoteDesktop.viewer.aspect')}
+                    disabled={!state.controlling || state.controlPending}
+                    value={aspect.value}
+                    options={aspect.options}
+                    onValueChange={(value) => {
+                      if (value === 'current') return;
+                      const owner = generation.current;
+                      void (
+                        value === 'original'
+                          ? controller.current?.restoreDisplay()
+                          : applyRatio(value === 'window' ? 'window' : 'screen')
+                      )
+                        ?.then(loadModes)
+                        .catch(() => {
+                          if (owner === generation.current)
+                            setNotice(t('remoteDesktop.viewer.settingsFailed'));
+                        });
+                    }}
+                    onOpenChange={onSelectOpenChange}
+                  />
+                )}
+              </FormField>
             )}
             {modesStatus === 'loading' && (
               <p role="status">{t('remoteDesktop.loadingDisplayModes')}</p>
@@ -429,35 +590,50 @@ export function RemoteDesktopViewerWindow() {
                 </Button>
               </div>
             )}
-            {modes.length > 0 && (
+            {resolutionChoices.length > 0 && (
               <FormField
                 label={t('remoteDesktop.viewer.resolution')}
-                className="remote-viewer-field"
+                hint={
+                  resolutionChoices.some((mode) => mode.tier)
+                    ? t('remoteDesktop.viewer.resolutionTierHint')
+                    : undefined
+                }
+                className="remote-viewer-field remote-viewer-field-wide"
               >
-                {({ id }) => (
+                {(control) => (
                   <Select
-                    id={id}
+                    {...control}
                     className="w-full"
                     label={t('remoteDesktop.viewer.resolution')}
                     disabled={!state?.controlling || state.controlPending}
-                    value={modes.find((mode) => mode.current)?.id ?? ''}
-                    options={modes.map((mode) => ({
+                    value={resolutionChoices.find((mode) => mode.current)?.id ?? ''}
+                    options={resolutionChoices.map((mode) => ({
                       value: mode.id,
-                      label: `${mode.width} × ${mode.height}${mode.native ? ` · ${t('remoteDesktop.nativeResolution')}` : ''}`,
+                      label: [
+                        `${mode.width} × ${mode.height}`,
+                        mode.tier && t(TIER_LABELS[mode.tier]),
+                        mode.native && t('remoteDesktop.nativeResolution'),
+                      ]
+                        .filter(Boolean)
+                        .join(' · '),
                     }))}
-                    onValueChange={(value) =>
+                    onValueChange={(value) => {
+                      const mode = resolutionChoices.find((item) => item.id === value);
+                      if (!mode) return;
                       void controller.current
-                        ?.resolution(value)
+                        ?.resolution(mode)
                         .then(loadModes)
-                        .catch(() => setNotice(t('remoteDesktop.viewer.settingsFailed')))
-                    }
+                        .catch(() => setNotice(t('remoteDesktop.viewer.settingsFailed')));
+                    }}
                     onOpenChange={onSelectOpenChange}
                   />
                 )}
               </FormField>
             )}
 
-            {state?.caps?.displayModes && <p>{t('remoteDesktop.viewer.resolutionHint')}</p>}
+            {(state?.caps?.displayModes || state?.fittedDisplay) && (
+              <p>{t('remoteDesktop.viewer.resolutionHint')}</p>
+            )}
             <div className="remote-viewer-panel-section">
               <label className="remote-viewer-toggle-row" htmlFor="viewer-audio">
                 <span>{t('remoteDesktop.viewer.sound')}</span>
@@ -479,13 +655,11 @@ export function RemoteDesktopViewerWindow() {
               )}
               {preference('hostMute')}
             </div>
-            {controlPrompt}
             {network && <div className="remote-viewer-panel-section">{network}</div>}
           </ViewerPanel>
           <ViewerPanel
             label={t('remoteDesktop.viewer.clipboardPanel')}
             icon={<Clipboard size={16} />}
-            active={state?.preferences.clipboardSync}
             open={settings === 'clipboard'}
             restoreFocus={() => activePanel.current === null}
             onOpenChange={(open) => openPanel('clipboard', open)}
@@ -500,11 +674,18 @@ export function RemoteDesktopViewerWindow() {
                         key={action}
                         variant="secondary"
                         disabled={!state.controlling || state.closing}
-                        onClick={() =>
-                          void controller.current
-                            ?.clipboard(action)
-                            .catch(() => setNotice(t('remoteDesktop.viewer.clipboardFailed')))
-                        }
+                        onClick={() => {
+                          const attempt = ++clipboardAttempt.current;
+                          setNotice(null);
+                          void controller.current?.clipboard(action).catch((error) => {
+                            // A stopped connection already shows its own state.
+                            if (
+                              attempt === clipboardAttempt.current &&
+                              !(error instanceof Error && error.message === 'DESKTOP_STOPPED')
+                            )
+                              setNotice(t(clipboardFailureKey(error, action)));
+                          });
+                        }}
                       >
                         {t(`remoteDesktop.${action}`)}
                       </Button>
@@ -520,15 +701,11 @@ export function RemoteDesktopViewerWindow() {
                 )}
               </>
             )}
-            <p>
-              {t('remoteDesktop.viewer.clipboardShortcutHint', { modifier: isMac ? '⌘' : 'Ctrl' })}
-            </p>
-            {controlPrompt}
+            <p>{t('remoteDesktop.viewer.clipboardShortcutHint')}</p>
           </ViewerPanel>
           <ViewerPanel
             label={t('remoteDesktop.viewer.securityPanel')}
             icon={<Shield size={16} />}
-            active={state?.safety.privacyActive}
             open={settings === 'security'}
             restoreFocus={() => activePanel.current === null}
             onOpenChange={(open) => openPanel('security', open)}
@@ -540,10 +717,7 @@ export function RemoteDesktopViewerWindow() {
                 <>
                   {isMac && state.caps?.platform === 'darwin' && (
                     <div className="flex flex-col gap-2">
-                      <label
-                        className="flex items-center justify-between gap-3"
-                        htmlFor="viewer-autoUnlock"
-                      >
+                      <label className="remote-viewer-toggle-row" htmlFor="viewer-autoUnlock">
                         <span>{t('remoteDesktop.autoUnlock')}</span>
                         <Switch
                           id="viewer-autoUnlock"
@@ -556,10 +730,7 @@ export function RemoteDesktopViewerWindow() {
                       </label>
                       <p>{t('remoteDesktop.autoUnlockHint')}</p>
                       {state.credential?.autoUnlock && (
-                        <label
-                          className="flex items-center justify-between gap-3"
-                          htmlFor="viewer-biometric"
-                        >
+                        <label className="remote-viewer-toggle-row" htmlFor="viewer-biometric">
                           <span>{t('remoteDesktop.biometricVerification')}</span>
                           <Switch
                             id="viewer-biometric"
@@ -595,7 +766,6 @@ export function RemoteDesktopViewerWindow() {
                 </>
               )}
             </div>
-            {controlPrompt}
           </ViewerPanel>
         </div>
         {!isMac && <WindowControls onClose={requestClose} />}
@@ -626,61 +796,65 @@ export function RemoteDesktopViewerWindow() {
             <span id="mouse-wheel-grip" />
           </Button>
         </div>
-        {!state?.closing && (!state?.ready || state?.error || state?.status === 'reconnecting') && (
-          <div className="remote-viewer-connection" role="status">
-            <span>
-              {state?.error
-                ? t(
+        {!state?.closing &&
+          (!state?.ready ||
+            !state.controlling ||
+            state.error ||
+            state.status === 'reconnecting') && (
+            <div className="remote-viewer-connection" role="status">
+              <span>
+                {state?.error
+                  ? t(
+                      state.error === 'connectionBusy' && state.caps?.connectionTakeover
+                        ? 'remoteDesktop.connectionBusyTakeover'
+                        : `remoteDesktop.${state.error}`,
+                    )
+                  : t(
+                      state?.controlPending
+                        ? 'remoteDesktop.viewer.controlPending'
+                        : state?.status === 'reconnecting'
+                          ? 'remoteDesktop.reconnecting'
+                          : 'remoteDesktop.connecting',
+                    )}
+              </span>
+              {state?.error && (
+                <Button
+                  variant="secondary"
+                  className={action}
+                  onClick={() => controller.current?.retry()}
+                >
+                  {t(
                     state.error === 'connectionBusy' && state.caps?.connectionTakeover
-                      ? 'remoteDesktop.connectionBusyTakeover'
-                      : `remoteDesktop.${state.error}`,
-                  )
-                : t(
-                    state?.status === 'reconnecting'
-                      ? 'remoteDesktop.reconnecting'
-                      : 'remoteDesktop.connecting',
+                      ? 'remoteDesktop.takeoverConnection'
+                      : 'remoteDesktop.connect',
                   )}
-            </span>
-            {state?.error && (
-              <Button
-                variant="secondary"
-                className={action}
-                onClick={() => controller.current?.retry()}
-              >
-                {t(
-                  state.error === 'connectionBusy' && state.caps?.connectionTakeover
-                    ? 'remoteDesktop.takeoverConnection'
-                    : 'remoteDesktop.connect',
-                )}
-              </Button>
-            )}
-            {state?.error === 'permissionHint' && (
-              <Button
-                variant="secondary"
-                className={action}
-                onClick={() => {
-                  void controller.current
-                    ?.permissionGuide()
-                    .then(() => setNotice(t('remoteDesktop.permissionGuideOpened')))
-                    .catch(() => setNotice(t('remoteDesktop.permissionActionFailed')));
-                  setSettings('security');
-                }}
-              >
-                {t('remoteDesktop.openGuideOnComputer')}
-              </Button>
-            )}
-          </div>
-        )}
+                </Button>
+              )}
+              {state?.error === 'permissionHint' && (
+                <Button
+                  variant="secondary"
+                  className={action}
+                  onClick={() => {
+                    void controller.current
+                      ?.permissionGuide()
+                      .then(() => setNotice(t('remoteDesktop.permissionGuideOpened')))
+                      .catch(() => setNotice(t('remoteDesktop.permissionActionFailed')));
+                    setSettings('security');
+                  }}
+                >
+                  {t('remoteDesktop.openGuideOnComputer')}
+                </Button>
+              )}
+            </div>
+          )}
         {isFullscreen && network && <div className="remote-viewer-network-overlay">{network}</div>}
-        {(notice || state?.safety.notice || state?.safety.privacyActive) && (
+        {/* Announce the privacy screen to assistive tech without covering the remote picture. */}
+        <span className="sr-only" role="status">
+          {state?.safety.privacyActive ? t('remoteDesktop.privacyActive') : ''}
+        </span>
+        {(notice || state?.safety.notice) && (
           <div className="remote-viewer-feedback" role="status">
-            {state?.safety.privacyActive && <Shield size={14} aria-hidden="true" />}
-            <span>
-              {notice ??
-                (state?.safety.notice
-                  ? t(`remoteDesktop.${state.safety.notice}`)
-                  : t('remoteDesktop.privacyActive'))}
-            </span>
+            <span>{notice ?? t(`remoteDesktop.${state?.safety.notice}`)}</span>
             {state?.safety.notice && (
               <Button
                 variant="secondary"
@@ -697,11 +871,6 @@ export function RemoteDesktopViewerWindow() {
                 <X size={14} />
               </ViewerTool>
             )}
-          </div>
-        )}
-        {state?.clipboardError && (
-          <div className="remote-viewer-notice" role="status">
-            {t('remoteDesktop.viewer.clipboardFailed')}
           </div>
         )}
       </div>
@@ -737,6 +906,47 @@ export function RemoteDesktopViewerWindow() {
     </div>
   );
 }
+
+// Same glyphs as Mobile's remote desktop toolbar
+// (apps/mobile/src/remote-desktop/RemoteDesktopIcons.tsx).
+const WorkspaceLeftIcon = createLucideIcon('RemoteDesktopWorkspaceLeft', [
+  ['rect', { x: '3', y: '3', width: '18', height: '14', rx: '2', key: 'screen' }],
+  ['path', { d: 'M12 17v4M8 21h8M15 10H9m3-3-3 3 3 3', key: 'direction' }],
+]);
+
+const WorkspaceRightIcon = createLucideIcon('RemoteDesktopWorkspaceRight', [
+  ['rect', { x: '3', y: '3', width: '18', height: '14', rx: '2', key: 'screen' }],
+  ['path', { d: 'M12 17v4M8 21h8M9 10h6m-3-3 3 3-3 3', key: 'direction' }],
+]);
+
+// Official Omarchy mark: https://omarchy.org/brand/omarchy-logo.svg
+// Preserve its path and proportions; inherit the toolbar's Light/Dark foreground.
+const OmarchyMenuIcon = createLucideIcon('RemoteDesktopOmarchyMenu', [
+  [
+    'path',
+    {
+      d: 'm1200 1200h-480v-80h400v-1040h-479.996v160h-400v720h720v-720h-80v-80h159.996v880h-400v160h-640v-1200h1200zm-1120-80h480v-80h-400l.004-400h-80.004zm0-560h80.004v-400h400v-80h-480.004z',
+      transform: 'scale(0.02)',
+      fill: 'currentColor',
+      fillRule: 'evenodd',
+      clipRule: 'evenodd',
+      stroke: 'none',
+      key: 'official-mark',
+    },
+  ],
+]);
+
+const AllWindowsIcon = createLucideIcon('RemoteDesktopAllWindows', [
+  ['path', { d: 'M4 16a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v1', key: 'rear' }],
+  ['rect', { x: '7', y: '8', width: '15', height: '13', rx: '2', key: 'front' }],
+  ['path', { d: 'M7 12h15', key: 'titlebar' }],
+]);
+
+const ShowDesktopIcon = createLucideIcon('RemoteDesktopShowDesktop', [
+  ['rect', { x: '2', y: '3', width: '20', height: '14', rx: '2', key: 'screen' }],
+  ['path', { d: 'M8 13h8', key: 'dock' }],
+  ['path', { d: 'M12 17v4M8 21h8', key: 'stand' }],
+]);
 
 function ZoomModeIcon({ actual = false }: { actual?: boolean }) {
   return (
@@ -779,12 +989,12 @@ function ViewerTool({
   disabled?: boolean;
   pressed?: boolean;
 }) {
-  const { t } = useTranslation();
   return (
-    <Tip text={disabled ? t('remoteDesktop.viewer.controlRequired') : label} side="bottom">
+    <Tip text={label} side="bottom">
       <Button
         variant="secondary"
-        className="remote-viewer-icon"
+        tone="quiet"
+        className="remote-viewer-tool"
         aria-label={label}
         aria-pressed={pressed}
         disabled={disabled}
@@ -799,7 +1009,6 @@ function ViewerTool({
 function ViewerPanel({
   label,
   icon,
-  active,
   open,
   restoreFocus,
   onOpenChange,
@@ -807,7 +1016,6 @@ function ViewerPanel({
 }: {
   label: string;
   icon: ReactNode;
-  active?: boolean;
   open: boolean;
   restoreFocus(): boolean;
   onOpenChange(open: boolean): void;
@@ -820,13 +1028,13 @@ function ViewerPanel({
       <PopoverTrigger asChild>
         <Tip text={label} side="bottom">
           <Button
-            variant={open ? 'primary' : 'secondary'}
-            className="remote-viewer-panel-trigger"
+            variant="secondary"
+            tone="quiet"
+            className="remote-viewer-tool"
             aria-label={label}
             aria-pressed={open}
           >
             {icon}
-            {active && <span className="remote-viewer-active-dot" aria-hidden="true" />}
           </Button>
         </Tip>
       </PopoverTrigger>

@@ -1,6 +1,7 @@
 import type { TaskTagRequest, TaskTagResult } from '@cindy/maker-shared';
 
 export type DbTxName =
+  | 'authorization.readProjection'
   | 'taskTags.execute'
   | 'codex.importMessages'
   | 'claude.importMessages'
@@ -260,6 +261,15 @@ export interface EmbeddingEnqueueArgs {
  * orcaTeamStore.addOrUpdateWorker 原同步事务逻辑。可选字段值为 undefined 表示
  * "保留 existing 行的当前值",与原 drizzle 写法语义一致。
  */
+export interface OrcaRemoteWorkerProxySessionSeed {
+  title: string;
+  agentKind: string;
+  model: string;
+  effort: string | null;
+  permissionMode: string;
+  fastMode: boolean;
+}
+
 export interface OrcaUpsertWorkerArgs {
   id: string;
   teamId: string;
@@ -270,6 +280,12 @@ export interface OrcaUpsertWorkerArgs {
   role?: string;
   focused?: boolean;
   idleSince?: number | null;
+  remoteExecution?: {
+    deviceId: string;
+    remoteSessionId: string;
+    /** 新建代理与 Worker 路由一起提交；已有代理的更新可省略。 */
+    proxySession?: OrcaRemoteWorkerProxySessionSeed;
+  };
   now: number;
 }
 
@@ -407,6 +423,8 @@ export interface MessageInsertArgs {
   createdAt: number;
   guarded: boolean;
   expectedClearBoundaryMs?: number | null;
+  /** Host-only publication; stages belong to a connection-local TEMP table. */
+  publication?: 'stage' | 'publish' | 'discard' | 'rollback';
 }
 
 export interface MessageUpdateContentArgs {
@@ -856,6 +874,7 @@ export interface BotGroupsMessageRow {
   clientId: string | null;
   planId?: string | null;
   filesJson?: string;
+  attachmentsJson?: string;
   createdAt: number;
 }
 
@@ -865,6 +884,8 @@ export interface BotGroupsCreatePlanArgs {
     id: string;
     groupId: string;
     requestText: string;
+    /** The request's attachments, handed to every step. */
+    attachmentsJson?: string;
     organizerBotId: string;
     organizerName: string;
   };
@@ -1300,6 +1321,7 @@ export type SkillUsageApplyMutationArgs =
   | { kind: 'promote'; analyzerVersion: string };
 
 export type DbTxArgsByName = {
+  'authorization.readProjection': { sessionId: string; leadId: string };
   'codex.importMessages': CodexImportMessagesArgs;
   'claude.importMessages': ClaudeImportMessagesArgs;
   'rewind.commit': RewindCommitArgs;
@@ -1384,6 +1406,7 @@ export type DbTxArgsByName = {
 };
 
 export type DbTxResultByName = {
+  'authorization.readProjection': import('../../autoReviewProjection.js').StoredAutoReviewProjection;
   'codex.importMessages': { changed: number };
   'claude.importMessages': { changed: number };
   'rewind.commit': undefined;

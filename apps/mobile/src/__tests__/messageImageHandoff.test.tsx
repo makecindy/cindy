@@ -8,7 +8,7 @@ import ts from 'typescript';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { buildMessageContentLayout } from '@/session/messageContentLayout';
 import { attachmentImageDisplaySize, mediaThumbnailPhase, shouldAutoResolveMediaThumbnail } from '@/session/mediaThumbnail';
-import { isDesktopLocalMediaUrl } from '@/session/remoteMedia';
+import { isDesktopLocalMediaUrl, mediaLoadFailureKey } from '@/session/remoteMedia';
 import { spacing } from '@/theme/tokens';
 
 // Run the production components with real React effects; only native image decoding is controlled.
@@ -38,8 +38,9 @@ function fixture() {
     useThemedStyles: () => ({}), makeStyles: () => ({}),
     useRecyclingState: React.useState, useState: React.useState, useLayoutEffect: React.useLayoutEffect,
     useEffect: React.useEffect, useRef: React.useRef, useCallback: React.useCallback,
+    useContext: React.useContext, MessageHeavyContentVisibilityContext: React.createContext(true),
     attachmentIntrinsicSizeCache: cache, ATTACHMENT_INTRINSIC_CACHE_MAX: 500,
-    attachmentImageDisplaySize, mediaThumbnailPhase, shouldAutoResolveMediaThumbnail, isDesktopLocalMediaUrl,
+    attachmentImageDisplaySize, mediaThumbnailPhase, shouldAutoResolveMediaThumbnail, isDesktopLocalMediaUrl, mediaLoadFailureKey,
     getSentAttachmentThumbUri: (ref: string) => durable.get(ref) ?? null,
     MessageContentOpenButton: View,
     buildMediaPayload: (media: unknown) => media,
@@ -61,6 +62,33 @@ function fixture() {
 }
 
 describe('image frame continuity', () => {
+  it('fetches a managed thumbnail automatically, opens the viewer and refreshes a bad cached image only once', async () => {
+    const f = fixture();
+    const url = `cindy-media://blobs/${'a'.repeat(64)}.png`;
+    const open = vi.fn();
+    const resolver = vi.fn(async (_media: unknown, _options: unknown) => ({ url: 'file:///thumb.png', previewable: true }));
+    await act(async () => f.render(<f.MediaPreview layout={f.layout} label="screenshot"
+      media={{ kind: 'image', url, previewable: false }} onResolveRemoteMedia={resolver} onOpen={open} />));
+    expect(resolver).toHaveBeenCalledWith({ kind: 'image', url, previewable: false, thumbnail: true }, expect.objectContaining({ forceRefresh: false }));
+    expect(f.host.querySelector('[data-image]')?.getAttribute('data-image')).toBe('file:///thumb.png');
+    act(() => (f.host.querySelector('[data-testid="message.mediaPreviewButton"]') as HTMLElement).click());
+    expect(open).toHaveBeenCalledOnce();
+    await act(async () => f.handlers.get('file:///thumb.png')!.onError());
+    expect(resolver).toHaveBeenCalledTimes(2);
+    expect(resolver.mock.calls[1][1]).toMatchObject({ forceRefresh: true });
+    await act(async () => f.handlers.get('file:///thumb.png')!.onError());
+    expect(resolver).toHaveBeenCalledTimes(2);
+    expect(f.host.querySelector('[data-testid="message.mediaThumbFallback"]')).not.toBeNull();
+  });
+
+  it('preserves the missing-source explanation from Host', async () => {
+    const f = fixture();
+    const resolver = vi.fn(async () => { throw new Error('[MEDIA_SOURCE_MISSING] missing'); });
+    await act(async () => f.render(<f.MediaPreview layout={f.layout} label="screenshot"
+      media={{ kind: 'image', url: 'cindy-media://blobs/missing.png', previewable: false }} onResolveRemoteMedia={resolver} />));
+    expect(f.host.textContent).toContain('message.lightbox.sourceMissing');
+    expect(resolver).toHaveBeenCalledOnce();
+  });
   it('uses the SVG-capable decoder for thumbnails, measures from load and opens the existing viewer', () => {
     const f = fixture();
     const uri = 'https://example.com/diagram.svg';

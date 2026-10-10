@@ -13,6 +13,11 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Animated, Easing } from 'react-native';
+import { motionEasing } from '@/theme/tokens';
+
+// Shared entrance / exit curves (DESIGN §14.4), same as every other overlay.
+const EASE_IN = Easing.bezier(...motionEasing.out);
+const EASE_OUT = Easing.bezier(...motionEasing.in);
 
 export interface ModalFadeLifecycleOptions {
   /** 进场时长(ms)。docs/design-rules/cindy-design-system.md §14.4:纯透明度过渡 ≤150ms。 */
@@ -48,7 +53,7 @@ export function useModalFadeLifecycle(
   const startIn = useCallback(() => {
     Animated.timing(progress, {
       duration: inMs,
-      easing: Easing.out(Easing.quad),
+      easing: EASE_IN,
       toValue: 1,
       useNativeDriver: true,
     }).start();
@@ -69,7 +74,7 @@ export function useModalFadeLifecycle(
       if (!mountedRef.current) return; // 从未打开/已完全关闭:无需播退场。
       Animated.timing(progress, {
         duration: outMs,
-        easing: Easing.in(Easing.quad),
+        easing: EASE_OUT,
         toValue: 0,
         useNativeDriver: true,
       }).start(({ finished }) => {

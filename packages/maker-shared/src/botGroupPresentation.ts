@@ -73,16 +73,40 @@ export function mergeBotGroupMessages(
 
 /** Copy variant for a refused group action; null keeps the caller's own fallback. */
 export type BotGroupErrorVariant =
+  | 'invalidAttachment'
+  | 'attachmentUnavailable'
+  | 'attachmentTooLarge'
+  | 'mediaUploadFailed'
+  | 'authRequired'
+  | 'chatUnavailable'
+  | 'importPending'
+  | 'requestTimeout'
+  | 'permissionDenied'
+  | 'serviceError'
+  | 'groupArchived'
   | 'memberLimit'
   | 'memberUnavailable'
+  | 'mentionUnavailable'
   | 'notFound'
   | 'hostNotReady'
   | 'planOpen'
   | 'planClosed';
 
 const ERROR_VARIANTS: ReadonlyMap<string, BotGroupErrorVariant> = new Map<BotGroupErrorCode, BotGroupErrorVariant>([
+  ['INVALID_ATTACHMENT', 'invalidAttachment'],
+  ['ATTACHMENT_UNAVAILABLE', 'attachmentUnavailable'],
+  ['ATTACHMENT_TOO_LARGE', 'attachmentTooLarge'],
+  ['MEDIA_UPLOAD_FAILED', 'mediaUploadFailed'],
+  ['AUTH_REQUIRED', 'authRequired'],
+  ['CHAT_UNAVAILABLE', 'chatUnavailable'],
+  ['IMPORT_PENDING', 'importPending'],
+  ['REQUEST_TIMEOUT', 'requestTimeout'],
+  ['PERMISSION_DENIED', 'permissionDenied'],
+  ['SERVICE_ERROR', 'serviceError'],
+  ['GROUP_ARCHIVED', 'groupArchived'],
   ['MEMBER_LIMIT', 'memberLimit'],
   ['MEMBER_UNAVAILABLE', 'memberUnavailable'],
+  ['MENTION_UNAVAILABLE', 'mentionUnavailable'],
   ['NOT_FOUND', 'notFound'],
   ['HOST_NOT_READY', 'hostNotReady'],
   ['PLAN_OPEN', 'planOpen'],
@@ -165,6 +189,7 @@ export function isBotGroupDivisionBlocked(state: BotGroupComposerPlanState | nul
 
 /** Copy variant for a timeline notice; plan-scoped member notices speak about a step. */
 export type BotGroupNoticeVariant =
+  | 'memberJoined'
   | 'memberFailed'
   | 'memberTimeout'
   | 'memberUnavailable'
@@ -176,6 +201,7 @@ export type BotGroupNoticeVariant =
   | 'stepUnavailable';
 
 const NOTICE_VARIANTS: ReadonlyMap<string, BotGroupNoticeVariant> = new Map<BotGroupNoticeCode, BotGroupNoticeVariant>([
+  ['member-joined', 'memberJoined'],
   ['member-failed', 'memberFailed'],
   ['member-timeout', 'memberTimeout'],
   ['member-unavailable', 'memberUnavailable'],

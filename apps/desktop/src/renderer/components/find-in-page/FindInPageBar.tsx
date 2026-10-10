@@ -1,10 +1,13 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { scrollRangeIntoView } from '@/lib/scrollRangeIntoView';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ChevronDown, ChevronUp, X } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 import { useAppShortcut } from '@/hooks/useAppShortcut';
+import { WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 import { isFindInPageClaimed } from './findInPageOwnership';
+import { acquirePageTextAccess, requestPageTextNavigation } from '@/lib/pageTextAccess';
 
 const MATCH_HIGHLIGHT_NAME = 'cindy-find-in-page-match';
 const ACTIVE_HIGHLIGHT_NAME = 'cindy-find-in-page-active';
@@ -372,67 +375,6 @@ function isInsideRoot(node: Node, root: HTMLElement | null): boolean {
   return Boolean(root && (node === root || root.contains(node)));
 }
 
-function getRangeRect(range: Range): DOMRect | null {
-  const rects = typeof range.getClientRects === 'function' ? range.getClientRects() : [];
-  const rect =
-    rects[0] ??
-    (typeof range.getBoundingClientRect === 'function' ? range.getBoundingClientRect() : null);
-  if (!rect) return null;
-  if (rect.width === 0 && rect.height === 0 && rect.top === 0 && rect.bottom === 0) return null;
-  return rect;
-}
-
-function scrollRangeIntoView(range: Range) {
-  const element = range.startContainer.parentElement;
-  if (!element) return;
-
-  let ancestor: HTMLElement | null = element;
-  while (ancestor) {
-    const style = window.getComputedStyle(ancestor);
-    const canScrollY =
-      /(auto|scroll|overlay|hidden)/.test(style.overflowY) &&
-      ancestor.scrollHeight > ancestor.clientHeight;
-    const canScrollX =
-      /(auto|scroll|overlay|hidden)/.test(style.overflowX) &&
-      ancestor.scrollWidth > ancestor.clientWidth;
-    if (!canScrollY && !canScrollX) {
-      ancestor = ancestor.parentElement;
-      continue;
-    }
-
-    const rect = getRangeRect(range);
-    const containerRect = ancestor.getBoundingClientRect();
-    if (!rect) return;
-    if (canScrollY) {
-      if (rect.top < containerRect.top) ancestor.scrollTop -= containerRect.top - rect.top;
-      else if (rect.bottom > containerRect.bottom)
-        ancestor.scrollTop += rect.bottom - containerRect.bottom;
-    }
-    if (canScrollX) {
-      if (rect.left < containerRect.left) ancestor.scrollLeft -= containerRect.left - rect.left;
-      else if (rect.right > containerRect.right)
-        ancestor.scrollLeft += rect.right - containerRect.right;
-    }
-    ancestor = ancestor.parentElement;
-  }
-
-  const rect = getRangeRect(range);
-  if (!rect || typeof window.scrollBy !== 'function') return;
-  const viewportHeight = window.innerHeight;
-  const viewportWidth = window.innerWidth;
-  if (rect.top < 0 || rect.bottom > viewportHeight) {
-    window.scrollBy({
-      top: rect.top < 0 ? rect.top : rect.bottom - viewportHeight,
-      behavior: 'auto',
-    });
-  }
-  if (rect.left < 0 || rect.right > viewportWidth) {
-    window.scrollBy({
-      left: rect.left < 0 ? rect.left : rect.right - viewportWidth,
-      behavior: 'auto',
-    });
-  }
-}
 
 /**
  * F-FIP-1 — Find in Page overlay (Ctrl/Cmd+F).
@@ -449,6 +391,10 @@ function scrollRangeIntoView(range: Range) {
 export function FindInPageBar() {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
+  // Text ranges must cover the logical page, including virtualized row bodies.
+  // Hold them mounted while highlights refer to their text nodes; release on
+  // close/unmount without changing the message store or pagination cursor.
+  useLayoutEffect(() => open ? acquirePageTextAccess() : undefined, [open]);
   const [text, setText] = useState('');
   const [matches, setMatches] = useState(0);
   const [active, setActive] = useState(0);
@@ -483,6 +429,7 @@ export function FindInPageBar() {
       if (!range) return;
       const element = range.startContainer.parentElement;
       if (!element || isInsideRoot(element, rootRef.current)) return;
+      if (requestPageTextNavigation(range)) return;
       scrollRangeIntoView(range);
       if (typeof requestAnimationFrame === 'function') {
         pendingScrollFrameRef.current = requestAnimationFrame(() => {
@@ -663,6 +610,12 @@ export function FindInPageBar() {
         // 关闭走 unmount 直接消失(查找栏关闭要"立即让路",不做 exit)。
         'origin-top-right animate-float-in',
       )}
+      // 页面顶行的窗口拖拽区(新建草稿页的 InvisibleWindowDragStrip、插件页
+      // 页头等)与本栏几何重叠;拖拽区不看 z-index,会把关闭 / 翻页按钮上的
+      // 点击当成拖窗吞掉(#3908)。自身标 no-drag 挖洞,同 GhostPanelBubbleLayer。
+      // ⚠️ 挖洞成立依赖布局树顺序(规则见 windowDrag.tsx 头注):本栏在 App.tsx
+      // 里必须排在承载页面路由的 LoginHandoffHost 之后,别把它挪到路由前面。
+      style={WINDOW_NO_DRAG_STYLE}
       role="dialog"
       aria-label={t('findInPage.dialogAriaLabel')}
     >

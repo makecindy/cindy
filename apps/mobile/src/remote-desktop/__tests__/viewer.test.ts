@@ -14,7 +14,14 @@ const desktopTransform = vm.runInNewContext(
   fx: number,
   fy: number,
   fillHeight?: boolean,
-) => { x: number; y: number; width: number; height: number; scale: number };
+) => {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  scale: number;
+  maxZoom: number;
+};
 
 function viewer(rtc = false, frameCallback = true, nativeMedia = false) {
   const messages: Array<{
@@ -257,6 +264,42 @@ function viewer(rtc = false, frameCallback = true, nativeMedia = false) {
   };
 }
 
+describe("display change with a kept stream", () => {
+  it("only re-lays out the desktop without reconnecting media", () => {
+    const v = viewer(true);
+    v.send({ type: "init", epoch: "one", width: 1920, height: 1080 });
+    const negotiations = () =>
+      v.messages.filter((m) => m.type === "iceConfig").length;
+    const before = negotiations();
+    expect(before).toBe(1);
+    v.send({ type: "mouseButtons", topInset: 0, bottomInset: 100 });
+    v.send({ type: "displayGeometry", width: 800, height: 1000 });
+    expect(v.elements.video.style).toMatchObject({
+      width: "400px",
+      height: "500px",
+    });
+    expect(negotiations()).toBe(before);
+    // Invalid geometry is ignored rather than distorting the layout.
+    v.send({ type: "displayGeometry", width: 100, height: 1000 });
+    expect(v.elements.video.style).toMatchObject({ width: "400px" });
+  });
+
+  it("moves the native video frame to the new geometry", () => {
+    const v = viewer(true, true, true);
+    v.send({ type: "init", epoch: "native", width: 1920, height: 1080 });
+    const viewport = () =>
+      v.messages.findLast((m) => m.type === "nativeViewport") as unknown as {
+        width: number;
+        height: number;
+      };
+    const wide = viewport();
+    v.send({ type: "displayGeometry", width: 900, height: 1600 });
+    const tall = viewport();
+    expect(tall.width / tall.height).toBeCloseTo(900 / 1600, 2);
+    expect(wide.width / wide.height).toBeCloseTo(1920 / 1080, 2);
+  });
+});
+
 describe("native media overlay", () => {
   it("leaves RTC negotiation to native and shares the exact input geometry", () => {
     const v = viewer(true, true, true);
@@ -298,13 +341,13 @@ describe("native media overlay", () => {
     expect(v.elements.image.style.visibility).toBe("hidden");
     expect(v.elements.bg.style.display).toBe("none");
     v.send({ type: "stop" });
-    expect(v.elements.image.style.visibility).toBe("visible");
+    expect(v.elements.image.style.visibility).toBe("");
     v.send({ type: "init", epoch: "next", width: 1920, height: 1080 });
     v.send({ type: "nativeVideo", epoch: "first", active: true });
-    expect(v.elements.image.style.visibility).toBe("visible");
+    expect(v.elements.image.style.visibility).toBe("");
     v.send({ type: "nativeVideo", epoch: "next", active: true });
     v.send({ type: "nativeVideo", epoch: "next", active: false });
-    expect(v.elements.image.style.visibility).toBe("visible");
+    expect(v.elements.image.style.visibility).toBe("");
   });
 });
 
@@ -395,6 +438,52 @@ describe("remote desktop viewport", () => {
     v.flush();
     expect(v.dataChannel.send).toHaveBeenCalledOnce();
     expect(v.messages.filter((m) => m.type === 'inputOverflow')).toHaveLength(1);
+  });
+  it("carries control requests over the live data channel and relays the reply", () => {
+    const v = viewer(true);
+    v.send({ type: "init", epoch: "one", width: 1920, height: 1080 });
+    v.playVideo();
+    const request = { op: "hostMute", lease: "one", enabled: true };
+    v.send({ type: "channelRequest", id: "r1", request });
+    expect(JSON.parse(v.dataChannel.send.mock.calls.at(-1)![0])).toEqual({
+      type: "request",
+      id: "r1",
+      request,
+    });
+    expect(
+      v.messages.findLast((m) => m.type === "channelRequestState"),
+    ).toMatchObject({
+      id: "r1",
+      sent: true,
+      epoch: "one",
+    });
+    (v.dataChannel as any).onmessage({
+      data: JSON.stringify({
+        type: "reply",
+        id: "r1",
+        ok: true,
+        result: { ok: true },
+      }),
+    });
+    expect(v.messages.findLast((m) => m.type === "channelReply")).toMatchObject(
+      {
+        id: "r1",
+        ok: true,
+        result: { ok: true },
+        epoch: "one",
+      },
+    );
+    // A congested channel does not take it: the parent uses the relay instead.
+    v.dataChannel.bufferedAmount = 16384;
+    const sends = v.dataChannel.send.mock.calls.length;
+    v.send({ type: "channelRequest", id: "r2", request });
+    expect(v.dataChannel.send.mock.calls).toHaveLength(sends);
+    expect(
+      v.messages.findLast((m) => m.type === "channelRequestState"),
+    ).toMatchObject({
+      id: "r2",
+      sent: false,
+    });
   });
   it('does not replay a batch through the relay if a data-channel send throws', () => {
     const v = viewer(true);
@@ -840,6 +929,20 @@ describe("remote desktop viewport", () => {
       expect(rect.y + rect.height).toBeLessThanOrEqual(h);
     }
   });
+  it("caps pinch zoom at two viewer points per desktop point", () => {
+    for (const [w, h] of [
+      [393, 760],
+      [852, 340],
+    ]) {
+      const rect = desktopTransform(w, h, 1512, 982, 100, 0.5, 0.5);
+      expect(rect.scale).toBeCloseTo(2);
+      expect(rect.width).toBeCloseTo(1512 * 2);
+    }
+    // A display already shown larger than 2x at fit cannot zoom further.
+    const small = desktopTransform(1366, 1024, 400, 320, 5, 0.5, 0.5);
+    expect(small.maxZoom).toBe(1);
+    expect(small.scale).toBeCloseTo(3.2);
+  });
   it("preserves the focus at the viewport center across rotation and keyboard resize", () => {
     for (const [w, h] of [
       [390, 650],
@@ -958,6 +1061,35 @@ describe("remote desktop viewport", () => {
       expect(v.messages.flatMap((m) => m.events ?? [])).toEqual([]);
     },
   );
+  it("stops a real pinch at 2x and resumes from the new limit after a viewport change", () => {
+    const v = viewer();
+    const width = () => parseFloat(v.elements.image.style.width);
+    v.pointer("pointerdown", 1, 190, 200);
+    v.pointer("pointerdown", 2, 210, 200);
+    v.pointer("pointermove", 1, 150, 200);
+    v.pointer("pointermove", 2, 250, 200);
+    v.frame();
+    v.frame(40);
+    v.pointer("pointermove", 1, 0, 200);
+    v.pointer("pointermove", 2, 400, 200);
+    v.frame();
+    // 400px fit of a 1920px desktop; spreading 20x stops at 2 points per pixel.
+    expect(width()).toBeCloseTo(1920 * 2);
+    v.pointer("pointerup", 1, 0, 200);
+    v.pointer("pointerup", 2, 400, 200);
+    // A wider viewport lowers the zoom limit; the picture stays at 2x.
+    v.elements.stage.clientWidth = 800;
+    v.send({ type: "viewport", fillHeight: false });
+    expect(width()).toBeCloseTo(1920 * 2);
+    // Pinching in responds immediately instead of first unwinding the old zoom.
+    v.pointer("pointerdown", 1, 300, 200);
+    v.pointer("pointerdown", 2, 500, 200);
+    v.pointer("pointermove", 1, 310, 200);
+    v.pointer("pointermove", 2, 490, 200);
+    v.frame();
+    v.frame(40);
+    expect(width()).toBeCloseTo(1920 * 2 * 0.9);
+  });
   it("allows one finger to lead a pinch instead of locking into scroll", () => {
     const v = viewer();
     v.send({ type: "control", enabled: true });
@@ -1010,6 +1142,95 @@ describe("remote desktop viewport", () => {
     expect(v.messages.at(-1)?.events?.every((e) => e.kind === "scroll")).toBe(
       true,
     );
+  });
+  it("aims a touch-mode two-finger scroll at the fingers before scrolling", () => {
+    const v = viewer();
+    v.send({ type: "control", enabled: true });
+    v.send({ type: "mode", mode: "touch" });
+    v.flush();
+    v.ack();
+    v.pointer("pointerdown", 1, 100, 250);
+    v.pointer("pointerdown", 2, 200, 250);
+    v.pointer("pointermove", 1, 100, 230);
+    v.pointer("pointermove", 2, 200, 230);
+    v.frame();
+    v.flush();
+    const [move, scroll] = v.messages
+      .flatMap((m) => m.events ?? [])
+      .filter((e) => e.kind !== "release");
+    // A 1920x1080 desktop fits 400x225 inside the 600px-tall stage.
+    expect(move).toEqual({
+      kind: "move",
+      x: expect.closeTo(0.375),
+      y: expect.closeTo((230 - 187.5) / 225),
+    });
+    expect(scroll).toEqual({ kind: "scroll", dx: 0, dy: 20 });
+  });
+  it("aims a touch-mode scroll that starts in the letterbox once it reaches the desktop", () => {
+    const v = viewer();
+    v.send({ type: "control", enabled: true });
+    v.send({ type: "mode", mode: "touch" });
+    v.flush();
+    v.ack();
+    // The desktop picture spans y 187.5..412.5; start above it.
+    v.pointer("pointerdown", 1, 100, 150);
+    v.pointer("pointerdown", 2, 200, 150);
+    v.pointer("pointermove", 1, 100, 170);
+    v.pointer("pointermove", 2, 200, 170);
+    v.frame();
+    v.flush();
+    expect(v.messages.flatMap((m) => m.events ?? [])).toEqual([
+      { kind: "release" },
+    ]);
+    v.pointer("pointermove", 1, 100, 200);
+    v.pointer("pointermove", 2, 200, 200);
+    v.frame();
+    v.flush();
+    const events = v.messages
+      .flatMap((m) => m.events ?? [])
+      .filter((e) => e.kind !== "release");
+    expect(events).toEqual([
+      {
+        kind: "move",
+        x: expect.closeTo(0.375),
+        y: expect.closeTo((200 - 187.5) / 225),
+      },
+      { kind: "scroll", dx: 0, dy: -30 },
+    ]);
+  });
+  it("keeps the pointer-mode cursor where it is for two-finger scrolls", () => {
+    const v = viewer();
+    v.send({ type: "control", enabled: true });
+    v.pointer("pointerdown", 1, 100, 250);
+    v.pointer("pointerdown", 2, 200, 250);
+    v.pointer("pointermove", 1, 100, 230);
+    v.pointer("pointermove", 2, 200, 230);
+    v.frame();
+    v.flush();
+    expect(v.messages.flatMap((m) => m.events ?? [])).toEqual([
+      { kind: "scroll", dx: 0, dy: 20 },
+    ]);
+  });
+  it("carries sub-pixel two-finger scroll distance instead of dropping it", () => {
+    const v = viewer();
+    v.send({ type: "control", enabled: true });
+    v.pointer("pointerdown", 1, 100, 250);
+    v.pointer("pointerdown", 2, 200, 250);
+    v.pointer("pointermove", 1, 100, 240);
+    v.pointer("pointermove", 2, 200, 240);
+    v.frame();
+    for (let i = 1; i <= 6; i++) {
+      v.pointer("pointermove", 1, 100, 240 - i * 0.5);
+      v.pointer("pointermove", 2, 200, 240 - i * 0.5);
+      v.frame();
+    }
+    v.flush();
+    const dys = v.messages
+      .flatMap((m) => m.events ?? [])
+      .filter((e) => e.kind === "scroll")
+      .map((e) => (e as unknown as { dy: number }).dy);
+    expect(dys.every(Number.isInteger)).toBe(true);
+    expect(dys.reduce((sum, dy) => sum + dy, 0)).toBe(13);
   });
   it("applies the last pinch position before lifting a finger without clicking", () => {
     const v = viewer();
@@ -1126,6 +1347,46 @@ describe("remote desktop network status layer", () => {
     expect(rule).not.toContain("background");
     expect(html).toContain("#image{z-index:2}");
     expect(html).toContain('id="network-status"');
+  });
+
+  it("cuts the native video picture out of the status it would otherwise cover", () => {
+    const v = viewer(false, true, true);
+    const status = v.elements["network-status"];
+    let layoutReads = 0;
+    Object.defineProperties(status, {
+      offsetLeft: { get: () => (layoutReads++, 250) },
+      offsetTop: { get: () => (layoutReads++, 60) },
+    });
+    v.send({ type: "init", epoch: "native", width: 1920, height: 1080 });
+    v.send({ type: "networkStatus", text: "Direct\n1 KB/s", top: 60 });
+    expect(status.style.clipPath ?? "").toBe("");
+    v.send({ type: "nativeVideo", epoch: "native", active: true });
+    const hole = () => {
+      const r = v.messages.findLast(
+        (m) => m.type === "nativeViewport",
+      ) as unknown as { x: number; y: number; width: number; height: number };
+      const [l, t] = [r.x - 250, r.y - 60];
+      const [rt, b] = [l + r.width, t + r.height];
+      return `${l}px ${t}px,${rt}px ${t}px,${rt}px ${b}px,${l}px ${b}px,${l}px ${t}px)`;
+    };
+    expect(status.style.clipPath).toMatch(
+      /^polygon\(evenodd,0 0,100% 0,100% 100%,0 100%,0 0,/,
+    );
+    expect(status.style.clipPath.endsWith(hole())).toBe(true);
+    const width = v.elements.image.style.width;
+    const readsBeforePinch = layoutReads;
+    v.send({ type: "control", enabled: true });
+    v.pointer("pointerdown", 1, 100, 200);
+    v.pointer("pointerdown", 2, 300, 200);
+    v.pointer("pointermove", 1, 40, 200);
+    v.pointer("pointermove", 2, 360, 200);
+    v.frame();
+    v.frame(40);
+    expect(v.elements.image.style.width).not.toBe(width);
+    expect(status.style.clipPath.endsWith(hole())).toBe(true);
+    expect(layoutReads).toBe(readsBeforePinch);
+    v.send({ type: "nativeVideo", epoch: "native", active: false });
+    expect(status.style.clipPath).toBe("");
   });
 });
 

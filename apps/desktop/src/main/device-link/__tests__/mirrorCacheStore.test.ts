@@ -334,6 +334,34 @@ describe('normalizeDeviceSessions', () => {
 });
 
 describe('readMessages / writeMessages', () => {
+  it('merges list arrivals under the page-write lock, preserving history and clear barriers', async () => {
+    const c = rawCache();
+    const token = await c.readMessagesWithInvalidation('dev', 'session');
+    const rows = [row('old', '2026-01-01T00:00:00Z')];
+    const snapshot: HistoryViewSnapshot<typeof rows[number]> = {
+      items: projectHistoryView(rows, false), details: new Map(), expanded: new Set(),
+      nextCursor: 'older', hasMore: true, ready: true, loading: false, error: null,
+    };
+    const history = encodeRemoteHistory(snapshot);
+    const one = row('one', '2026-01-02T00:00:00Z');
+    const two = row('two', '2026-01-03T00:00:00Z');
+    await Promise.all([
+      c.writeMessages('dev', 'session', [], token.invalidation, token.ownerRoot, token.accountCounter, history),
+      c.writeMessages('dev', 'session', [one], token.invalidation, token.ownerRoot, token.accountCounter, undefined, true),
+      c.writeMessages('dev', 'session', [two], token.invalidation, token.ownerRoot, token.accountCounter, undefined, true),
+    ]);
+    const cached = await c.readMessagesWithInvalidation('dev', 'session');
+    expect(cached.messages).toEqual([one, two]);
+    expect(decodeRemoteHistory(cached.historyView)?.items).toEqual(snapshot.items);
+    // An additive prefetch exceeding the file budget cannot delete usable history.
+    await c.writeMessages('dev', 'session', [row('huge', '2026-01-04', { content: 'x'.repeat(MAX_MESSAGE_FILE_BYTES) })],
+      token.invalidation, token.ownerRoot, token.accountCounter, undefined, true);
+    expect(await c.readMessagesWithInvalidation('dev', 'session')).toEqual(cached);
+    await c.writeMessages('dev', 'session', []);
+    await c.writeMessages('dev', 'session', [one], token.invalidation, token.ownerRoot, token.accountCounter, undefined, true);
+    expect((await c.readMessagesWithInvalidation('dev', 'session')).messages).toEqual([]);
+  });
+
   it('round-trips structured history in the existing guarded file and strips live/media data', async () => {
     const c = rawCache();
     const rows = [row('one', '2026-01-01T00:00:00Z', { isStreaming: true, images: [{ base64: 'secret-bytes', url: 'data:image/png;base64,secret' }], retryFiles: ['private'] })];

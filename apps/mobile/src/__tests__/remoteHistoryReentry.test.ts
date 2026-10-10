@@ -51,6 +51,23 @@ describe('history reentry', () => {
     expect(entry.view.getSnapshot()).toMatchObject({ ready: true, items: [] });
   });
 
+  it('retries the projection when a downgraded task is entered again', async () => {
+    const source = reader();
+    source.readHistoryView.mockRejectedValueOnce(new Error('[UNSUPPORTED_CAPABILITY] History view scan budget exceeded'));
+    const entry = getRemoteHistoryView('d', 'downgraded', source);
+    const release = mount(entry, source);
+    await entry.view.refresh();
+    expect(String(entry.view.getSnapshot().error)).toContain('UNSUPPORTED_CAPABILITY');
+    // Within one entry the raw fallback stays put.
+    await entry.view.refresh();
+    expect(source.readHistoryView).toHaveBeenCalledTimes(1);
+    release();
+    mount(entry, source);
+    await entry.view.refresh();
+    expect(entry.view.getSnapshot()).toMatchObject({ ready: true, error: null });
+    expect(JSON.stringify(entry.view.getSnapshot().items)).toContain('unchanged answer');
+  });
+
   it('does not register abandoned renders', () => {
     getRemoteHistoryView('d', 's', reader());
     expect(findRemoteHistoryView('d', 's')).toBeUndefined();

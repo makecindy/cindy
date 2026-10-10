@@ -55,6 +55,8 @@ function wrap<T>(p: Promise<T>): Promise<T> {
 const getInFlight = new Map<string, Promise<Session>>();
 
 export type SessionListOptions = {
+  /** Local list continuation; does not change the default capped query. */
+  before?: { updatedAt: number; id: string };
   includePinned?: boolean;
   /** forceRefresh / status 重拉：绕开 main 侧 in-flight 合并。 */
   fresh?: boolean;
@@ -111,6 +113,11 @@ export async function create(body?: {
   /** Remote codex session (P2): 远端 SSH host alias。设置后 workingDir 须为
    *  远端绝对路径; codex agent 跑在远端机器, 本地不 spawn。 */
   remoteHostId?: string;
+  /**
+   * Agent 在同账号另一台电脑上运行:那台电脑的 deviceId。任务、项目文件与命令仍在本机,
+   * 模型来源由那台电脑解析。与 remoteHostId 互斥。
+   */
+  agentDeviceId?: string;
   /**
    * per-session 来源(供应商)显式选择,落盘 sessions.provider_id(与 update 同列、同语义)。
    * null/undefined = 跟随默认路由。草稿态发送建会话时透传用户在草稿里选定的来源,

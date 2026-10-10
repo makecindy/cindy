@@ -8,7 +8,7 @@ vi.mock('@react-native-async-storage/async-storage', () => ({ default: {
 } }));
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { __testing, normalizeHomeNavigationPreferences, readHomeNavigationPreferences, saveHomeNavigationPreferences } from '@/session/homeViewPreferenceStore';
-import { findLastTeammate, homeDismissCount, orderedTeammates, teammateIdentity, teammateResourceRoute } from '@/session/teammateNavigation';
+import { homeDismissCount, orderedTeammates, teammateIdentity, teammateResourceRoute } from '@/session/teammateNavigation';
 import { StackRouter, StackActions } from 'expo-router/build/react-navigation/routers/StackRouter';
 const row = (deviceId = 'mac', id = 'writer', title = 'Writer', timestamp = 100): HostedRemoteCollectionItem => ({
   key: `${deviceId}:${id}`, host: { deviceId, deviceName: deviceId },
@@ -52,30 +52,31 @@ describe('account-scoped home navigation overrides', () => {
   });
 });
 describe('teammate identity navigation', () => {
-  it.each(['index', 'devices/index', 'resources/[collectionId]'])('preserves the actual %s stack entry and collection targets across repeated teammate opens', (name) => {
+  it.each(['index', 'devices/index'])('preserves the actual %s stack entry across repeated teammate opens', (name) => {
     const router = StackRouter({ initialRouteName: name });
     const options = { routeNames: [name, 'sessions/[sessionId]'], routeParamList: { [name]: { collectionId: 'teammates', targets: 'fixture-hosts', title: 'Teammates' } }, routeGetIdList: {}, routeKeyChanges: [] };
     let state = router.getInitialState(options);
     const home = state.routes[0];
     for (let turn = 0; turn < 3; turn++) {
       for (const sessionId of ['a', 'b']) state = router.getRehydratedState(router.getStateForAction(state, StackActions.push('sessions/[sessionId]', { sessionId }), options)!, options);
-      const count = homeDismissCount(state.routes, 'teammates');
+      const count = homeDismissCount(state.routes);
       expect(count).toBe(2);
       state = router.getRehydratedState(router.getStateForAction(state, StackActions.pop(count!), options)!, options);
       expect(state.routes).toEqual([home]);
       expect(state.routes[0]).toBe(home); // Same key and params: React retains the mounted list.
     }
   });
+  it('replaces a legacy teammate collection entry instead of preserving the retired route', () => {
+    const routes = [
+      { name: 'resources/[collectionId]', params: { collectionId: 'teammates' } },
+      { name: 'sessions/[sessionId]' },
+    ];
+    expect(homeDismissCount(routes)).toBeNull();
+  });
   it('uses the conversation as a navigation hint and retains the resource identity for revalidation', () => {
     expect(teammateResourceRoute(row(), 'en')).toEqual({ pathname: '/sessions/[sessionId]', params: {
       resourceCollectionId: 'teammates', resourceId: 'writer', resourceKind: 'bot', deviceId: 'mac', deviceName: 'mac', sessionId: 'obsolete-session',
     } });
-  });
-  it('never substitutes Cindy or another same-named host for a deleted or missing remembered teammate', () => {
-    const last = teammateIdentity(row());
-    expect(findLastTeammate(last, [row('other'), row('mac', 'cindy', 'Cindy')])).toBeNull();
-    expect(findLastTeammate(null, [row('mac', 'cindy', 'Cindy')])).toBeNull();
-    expect(findLastTeammate(last, [row()])).toEqual(row());
   });
   it('keeps equal names from separate hosts, filters names, and sorts by real activity', () => {
     const first = row('mac', 'writer', 'Writer', 100);

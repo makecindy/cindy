@@ -18,8 +18,13 @@ import { FileTypeIcon } from '@/components/ui/file-type-icon';
  * 存在性门槛(DESIGN.md §14.5「可点必存在」):本地会话渲染前 stat 过滤,不存在
  * 的文件不出 chip,整卡为空则不渲染。远程会话经 verifyRemotePathCached 远端 stat
  * 复核:仅在远端明确确认是普通文件后呈现；检查中、断链或限流都不先展示一张
- * 可能无法打开的完成卡。首屏等检查完成再出现。流式期间只 stat 已完成
- * (ready !== false,或本轮已封口)且尚未确认的路径;内容指纹不变就不发 IPC,
+ * 可能无法打开的完成卡。首屏等检查完成再出现;本机路径若本次运行已 stat 过,重挂载时
+ * 按当前时间窗同步判定先出卡,再整卡复核(见 seedLocalGeneratedFilesFromStatCache);
+ * 复核落地前该 chip 不可交互 —— 历史 stat 不充当当前可点结论(同 §14.5:本机
+ * 会话以真实存在性检查决定可点态)。伙伴成果图片同理:pending 期间占位但不挂
+ * 真实 src,避免复核落地前把旧/替换文件的内容短暂加载出来,也不让这次预取失败
+ * 提前锁死 thumbnailFailed。
+ * 流式期间只 stat 已完成(ready !== false,或本轮已封口)且尚未确认的路径;内容指纹不变就不发 IPC,
  * 已确认的 chip 留在原地,避免 messages 换引用把整页带着跳。
  *
  * 本地文件统一要求时间戳落在本轮 `[turnStartMs, turnEndMs)` 窗口内。tool 来源
@@ -47,7 +52,7 @@ import { isRemoteFileOrigin, toRemoteMediaOrigin } from '@/lib/sessionFileOrigin
 import {
   fetchChatFileWithToasts,
   remotePathVerdictKey,
-  revealRemoteChatFile,
+  downloadRemoteChatEntry,
   subscribeRemotePathVerdictChange,
   type RemotePathVerdict,
   verifyRemotePathCached,
@@ -241,9 +246,12 @@ type GeneratedFilePresentation = 'default' | 'bot-primary' | 'bot-related';
 function GeneratedFileChip({
   file,
   presentation = 'default',
+  pending = false,
 }: {
   file: GeneratedFileRef;
   presentation?: GeneratedFilePresentation;
+  /** 首屏由 stat 缓存点亮、尚未被本次 stat 复核的路径:只占位,不可交互。 */
+  pending?: boolean;
 }) {
   const { t } = useTranslation();
   const fileCtx = useChatSessionFile();
@@ -294,7 +302,7 @@ function GeneratedFileChip({
     }
     if (kind === 'model-local') {
       if (remoteOrigin) {
-        await revealRemoteChatFile(remoteOrigin, fileCtx.workingDir, file.path);
+        await downloadRemoteChatEntry(remoteOrigin, fileCtx.workingDir, file.path);
         return;
       }
       // FBX 无应用内预览且 openPath 有误导弹窗风险(正文链接同款取舍)→ 定位。
@@ -346,17 +354,25 @@ function GeneratedFileChip({
       <button
         type="button"
         title={file.path}
-        onClick={() => void open()}
-        onContextMenu={ctxMenu.onContextMenu}
+        disabled={pending}
+        onClick={pending ? undefined : () => void open()}
+        onContextMenu={pending ? undefined : ctxMenu.onContextMenu}
         className={cn(
           CHAT_FOCUS_CLASS,
           CHAT_COLOR_TRANSITION_CLASS,
           artifact || presentation === 'bot-primary'
             ? [
-                'group block cursor-pointer overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] text-left hover:border-[var(--text-tertiary)]',
+                pending
+                  ? 'block overflow-hidden'
+                  : 'group block cursor-pointer overflow-hidden',
+                'rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] text-left',
+                pending ? undefined : 'hover:border-[var(--text-tertiary)]',
                 artifact ? 'w-full max-w-[420px]' : 'min-w-0 flex-1 basis-[220px]',
               ]
-            : 'inline-flex h-7 max-w-[280px] items-center gap-1.5 rounded-full bg-[var(--msg-md-inline-code-bg)] px-2.5 py-1.5 text-13 font-medium text-[var(--msg-assistant-text)] hover:bg-[var(--cmd-palette-item-hover)]',
+            : cn(
+                'inline-flex h-7 max-w-[280px] items-center gap-1.5 rounded-full bg-[var(--msg-md-inline-code-bg)] px-2.5 py-1.5 text-13 font-medium text-[var(--msg-assistant-text)]',
+                pending ? undefined : 'hover:bg-[var(--cmd-palette-item-hover)]',
+              ),
         )}
       >
         {artifact ? (
@@ -386,7 +402,10 @@ function GeneratedFileChip({
           </>
         ) : botImage ? (
           <>
-            {botThumbnail && !thumbnailFailed ? (
+            {/* pending 期间不挂 src:复核落地前这路径的内容未经确认,先出
+                占位(与真实图片同高,避免复核落地时再跳一次),不预取可能已
+                不属于本轮的旧/替换文件,也不让这次失败预支 thumbnailFailed。 */}
+            {!pending && botThumbnail && !thumbnailFailed ? (
               <img
                 src={botThumbnail}
                 alt={file.name}
@@ -394,7 +413,12 @@ function GeneratedFileChip({
                 className="h-[148px] w-full border-b border-[var(--border-default)] bg-[var(--surface-hover)] object-contain"
               />
             ) : (
-              <span className="flex h-[104px] w-full items-center justify-center border-b border-[var(--border-default)] bg-[var(--surface-hover)] text-[var(--text-tertiary)]">
+              <span
+                className={cn(
+                  'flex w-full items-center justify-center border-b border-[var(--border-default)] bg-[var(--surface-hover)] text-[var(--text-tertiary)]',
+                  pending ? 'h-[148px]' : 'h-[104px]',
+                )}
+              >
                 <FileTypeIcon name={file.name} size={24} aria-hidden="true" />
               </span>
             )}
@@ -467,6 +491,46 @@ interface GeneratedFileStat {
   kind: 'dir' | 'file' | 'missing';
   birthtimeMs?: number;
   mtimeMs?: number;
+}
+
+/**
+ * 本机最近一次 stat 结果(按绝对路径,有界)。卡片的 React 标识取本轮首条消息:运行中的
+ * 长轮次往上补历史时首条消息会变,切换任务也会整卡重挂载。新实例若从空白开始等 IPC,
+ * 贴底的消息区会先被拉下一截再弹回。挂载时用这里的 stat 按**当前**轮次时间窗同步判定,
+ * 判定口径与异步复核完全相同;首个 effect 仍会对全部候选重新 stat。远程会话不走这里,
+ * 渲染态以 remoteFileOpen 的结论缓存为唯一来源。
+ */
+const LOCAL_STAT_CACHE_LIMIT = 500;
+const localGeneratedFileStatCache = new Map<string, GeneratedFileStat>();
+
+function rememberLocalGeneratedFileStat(path: string, stat: GeneratedFileStat | null): void {
+  localGeneratedFileStatCache.delete(path);
+  if (!stat) return;
+  localGeneratedFileStatCache.set(path, stat);
+  if (localGeneratedFileStatCache.size > LOCAL_STAT_CACHE_LIMIT) {
+    const oldest = localGeneratedFileStatCache.keys().next().value;
+    if (oldest !== undefined) localGeneratedFileStatCache.delete(oldest);
+  }
+}
+
+/** 用已缓存的本机 stat 立即得出首屏可见文件;没有任何可确认的文件时保持 null。 */
+export function seedLocalGeneratedFilesFromStatCache(
+  files: readonly GeneratedFileRef[],
+  turnStartMs: number | null,
+  turnEndMs: number | null,
+  turnSealed = false,
+): GeneratedFileRef[] | null {
+  const seeded = files.filter((file) => {
+    if (!isGeneratedFileStatable(file, turnEndMs, turnSealed)) return false;
+    const stat = localGeneratedFileStatCache.get(file.path);
+    return stat !== undefined && isLocalGeneratedFileInTurn(file, stat, turnStartMs, turnEndMs);
+  });
+  return seeded.length > 0 ? seeded : null;
+}
+
+/** Test-only reset for the module-level stat cache. */
+export function _clearLocalGeneratedFileStatCache(): void {
+  localGeneratedFileStatCache.clear();
 }
 
 /**
@@ -711,16 +775,36 @@ export const GeneratedFilesCard = memo(function GeneratedFilesCard({
   const { t } = useTranslation();
   const fileCtx = useChatSessionFile();
   const remoteOrigin = isRemoteFileOrigin(fileCtx.origin) ? fileCtx.origin : null;
-  // 首屏保持 null。之后按内容指纹增量 stat:未完成的 tool_use 不查,
-  // 已确认的路径不重复 IPC,工作目录 / 远端来源变了才整卡重来。
-  const [existing, setExisting] = useState<GeneratedFileRef[] | null>(null);
+  // 首屏保持 null(本机已 stat 过的路径例外,见 seedLocalGeneratedFilesFromStatCache)。
+  // 之后按内容指纹增量 stat:未完成的 tool_use 不查,已确认的路径不重复 IPC,
+  // 工作目录 / 远端来源变了才整卡重来。
+  const [initialVisible] = useState(() =>
+    remoteOrigin
+      ? null
+      : seedLocalGeneratedFilesFromStatCache(files, turnStartMs, turnEndMs, turnSealed),
+  );
+  const [existing, setExisting] = useState<GeneratedFileRef[] | null>(initialVisible);
+  // 由 stat 缓存点亮的首屏路径,在本次 stat 真实落地前不算「已确认存在」
+  // (DESIGN.md §14.5:本机会话以真实存在性检查决定可点态):这些 chip 只占位、
+  // 不可交互,复核落地才点亮为可点。
+  const [pendingPaths, setPendingPaths] = useState<ReadonlySet<string>>(
+    () => new Set((initialVisible ?? []).map((file) => file.path)),
+  );
   const [expanded, setExpanded] = useState(false);
   const [relatedExpanded, setRelatedExpanded] = useState(false);
   const [remoteVerdictGen, setRemoteVerdictGen] = useState(0);
   const checkKey = generatedFilesCheckKey(files, turnStartMs, turnEndMs, turnSealed);
   const filesRef = useRef(files);
   filesRef.current = files;
-  const visibleRef = useRef<GeneratedFileRef[] | null>(null);
+  // onVisibilityChange 取这个快照,不让尚未复核的 seed 被下游(useBotGeneratedFileDeliveries)
+  // 当成已确认成果来隐藏 fallback 正文。
+  const pendingPathsRef = useRef(pendingPaths);
+  pendingPathsRef.current = pendingPaths;
+  const visibleRef = useRef<GeneratedFileRef[] | null>(initialVisible);
+  // 首屏来自缓存的结论仍要整卡复核一次:缓存只负责不留空白帧,不替代本次 stat。
+  // 复核结果真正应用后才收起标记:检查中途被 checkKey 变化取消时,下一轮必须继续
+  // 整卡重查,否则缓存里已被删除的路径会被当成已确认而永远留在屏上。
+  const seededRef = useRef(initialVisible !== null);
   const checkEnvRef = useRef({ remoteOrigin, workingDir: fileCtx.workingDir });
   const turnWindowRef = useRef({ turnStartMs, turnEndMs, turnSealed });
   const remoteVerdictGenRef = useRef(remoteVerdictGen);
@@ -761,7 +845,7 @@ export const GeneratedFilesCard = memo(function GeneratedFilesCard({
       turnWindowRef.current.turnStartMs !== turnStartMs ||
       turnWindowRef.current.turnEndMs !== turnEndMs ||
       turnWindowRef.current.turnSealed !== turnSealed;
-    const forceRestat = remoteVerdictGenRef.current !== remoteVerdictGen;
+    const forceRestat = remoteVerdictGenRef.current !== remoteVerdictGen || seededRef.current;
     checkEnvRef.current = { remoteOrigin, workingDir: fileCtx.workingDir };
     turnWindowRef.current = { turnStartMs, turnEndMs, turnSealed };
     remoteVerdictGenRef.current = remoteVerdictGen;
@@ -778,7 +862,19 @@ export const GeneratedFilesCard = memo(function GeneratedFilesCard({
     visibleRef.current = plan.visible;
     // A remounted viewport starts with unknown visibility. Keep the parent's
     // last confirmation until this check settles instead of reviving prose.
-    if (plan.visible !== null) onVisibilityChange?.(checkKey, plan.visible.length > 0);
+    // A seed that is still pending (not yet re-checked by *this* mount) is
+    // not a fresh confirmation either, so it must not actively assert
+    // visible=true: useBotGeneratedFileDeliveries already keeps a prior
+    // true confirmation across the remount on its own (no jump either way);
+    // what it must not do is derive a *new* true from an unconfirmed seed.
+    // A plan with no visible files at all (confirmed gone, or genuinely new)
+    // is a real verdict and still reports immediately.
+    if (plan.visible !== null) {
+      const pendingNow = pendingPathsRef.current;
+      const hasConfirmedVisible = plan.visible.some((file) => !pendingNow.has(file.path));
+      const pendingOnly = plan.visible.length > 0 && !hasConfirmedVisible;
+      if (!pendingOnly) onVisibilityChange?.(checkKey, plan.visible.length > 0);
+    }
     if (plan.visible === null) {
       setExisting(null);
     } else {
@@ -817,19 +913,25 @@ export const GeneratedFilesCard = memo(function GeneratedFilesCard({
           if (ok) confirmedPaths.add(toStat[index].path);
         });
       } else {
-        const checks = await Promise.all(
+        // 先收集结果、不写入共享缓存:本次检查在 statPath 返回前被 checkKey 变化取消时
+        // (见本 effect 末尾的 cleanup),若这里仍把过期的 stat 写进模块缓存,它可能比
+        // 同路径更新一轮的结果更晚返回、反覆盖那个新结果;下次重挂就会用这个已失效的
+        // 缓存重新点亮已删文件。只有本次未被取消才许写。
+        const statResults = await Promise.all(
           toStat.map(async (file) => {
             try {
               const stat = await window.electronAPI.fsBrowse.statPath(file.path);
-              return isLocalGeneratedFileInTurn(file, stat, turnStartMs, turnEndMs);
+              return { path: file.path, stat, ok: isLocalGeneratedFileInTurn(file, stat, turnStartMs, turnEndMs) };
             } catch {
-              return false;
+              return { path: file.path, stat: null, ok: false };
             }
           }),
         );
-        checks.forEach((ok, index) => {
-          if (ok) confirmedPaths.add(toStat[index].path);
-        });
+        if (cancelled) return;
+        for (const result of statResults) {
+          rememberLocalGeneratedFileStat(result.path, result.stat);
+          if (result.ok) confirmedPaths.add(result.path);
+        }
       }
       if (cancelled) return;
       const merged = mergeGeneratedFileStatResults({
@@ -842,6 +944,19 @@ export const GeneratedFilesCard = memo(function GeneratedFilesCard({
       visibleRef.current = merged;
       onVisibilityChange?.(checkKey, merged.length > 0);
       setExisting((prev) => reuseGeneratedFilesIfUnchanged(prev, merged));
+      // The seeded conclusion is now re-checked by real stats; only then does
+      // the pending-review mark go away.
+      seededRef.current = false;
+      setPendingPaths((previous) => {
+        if (previous.size === 0) return previous;
+        const checkedNow = new Set(toStat.map((file) => file.path));
+        const visibleNow = new Set(merged.map((file) => file.path));
+        const next = new Set<string>();
+        for (const path of previous) {
+          if (visibleNow.has(path) && !checkedNow.has(path)) next.add(path);
+        }
+        return next.size === previous.size ? previous : next;
+      });
     })();
 
     return () => {
@@ -878,7 +993,12 @@ export const GeneratedFilesCard = memo(function GeneratedFilesCard({
             </span>
             <div className="flex flex-wrap gap-2">
               {visiblePrimary.map((file) => (
-                <GeneratedFileChip key={file.path} file={file} presentation="bot-primary" />
+                <GeneratedFileChip
+                  key={file.path}
+                  file={file}
+                  presentation="bot-primary"
+                  pending={pendingPaths.has(file.path)}
+                />
               ))}
             </div>
             {hiddenPrimaryCount > 0 ? (
@@ -921,7 +1041,12 @@ export const GeneratedFilesCard = memo(function GeneratedFilesCard({
             {relatedExpanded ? (
               <div className="flex flex-wrap gap-2">
                 {related.map((file) => (
-                  <GeneratedFileChip key={file.path} file={file} presentation="bot-related" />
+                  <GeneratedFileChip
+                    key={file.path}
+                    file={file}
+                    presentation="bot-related"
+                    pending={pendingPaths.has(file.path)}
+                  />
                 ))}
               </div>
             ) : null}
@@ -948,7 +1073,11 @@ export const GeneratedFilesCard = memo(function GeneratedFilesCard({
       )}
       <div className={cn('flex flex-wrap gap-2', hasArtifacts && 'flex-col')}>
         {visible.map((f) => (
-          <GeneratedFileChip key={f.path} file={f} />
+          <GeneratedFileChip
+            key={f.path}
+            file={f}
+            pending={pendingPaths.has(f.path)}
+          />
         ))}
         {hiddenCount > 0 && (
           <button

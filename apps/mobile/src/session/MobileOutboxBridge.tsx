@@ -39,13 +39,16 @@ import {
 import { buildQueuedTextMessage } from "./inputProjection";
 import { outboxItemAttachments } from "./sessionOutbox";
 import { sessionFromCreateResult } from "./newSession";
-import { getNewSessionCreationTask } from "./newSessionCreation";
+import { dismissRecoveredPrecreatedSession, getNewSessionCreationTask } from "./newSessionCreation";
 import {
   MobileSessionReferenceError,
   prepareMobileQueuedSessionReferences,
 } from "./sessionReferences";
 import { remoteSessionStore } from "./remoteSessionStore";
+import { cacheOutboxHistory } from "./outboxHistoryCache";
+import { findRemoteHistoryView } from "./remoteHistoryViews";
 import {
+  isDurableOutboxHandedOff,
   isDurableOutboxSettled,
   type DurableOutboxRecord,
 } from "./durableOutbox";
@@ -122,11 +125,20 @@ export function MobileOutboxBridge() {
     >();
     const leaseKey = (r: DurableOutboxRecord) =>
       JSON.stringify([r.deviceId, r.item.sessionId]);
+    // Accepted sends remain durable in the outbox while hidden. Neither poll
+    // their history nor pin their raw message windows just for display handoff.
+    const needsReconciliation = (r: DurableOutboxRecord) =>
+      !isDurableOutboxHandedOff(r) || r.cancelRequested
+      || findRemoteHistoryView(r.deviceId, r.item.sessionId)?.isActive() === true;
     const refreshLeases = () => {
       if (!isCurrent()) return;
       const keys = new Set<string>();
       for (const record of mobileDurableOutbox.getSnapshot()) {
         if (isDurableOutboxSettled(record)) continue;
+        if (record.creation?.cancelled) {
+          dismissRecoveredPrecreatedSession({ sessionId: record.item.sessionId, deviceId: record.deviceId });
+          continue;
+        }
         if (
           record.creation &&
           !remoteSessionStore
@@ -145,6 +157,7 @@ export function MobileOutboxBridge() {
             ),
           );
         }
+        if (!needsReconciliation(record)) continue;
         const key = leaseKey(record);
         keys.add(key);
         if (!leases.has(key))
@@ -169,7 +182,8 @@ export function MobileOutboxBridge() {
         AppState.currentState !== "background" &&
         AppState.currentState !== "inactive" &&
         (isDurableOutboxSettled(r) ||
-          (!r.suspended &&
+          (!r.suspended && !r.creation?.cancelled &&
+            needsReconciliation(r) &&
             !isDurableOutboxCreationHeld(r.item.sessionId) &&
             latest.current.link.status === "online" &&
             latest.current.link.getPresenceAvailability(r.deviceId) !== false &&
@@ -317,6 +331,8 @@ export function MobileOutboxBridge() {
           });
         return found;
       },
+      cacheHistory: (r) => cacheOutboxHistory(r.deviceId, r.item.sessionId, r.item.clientId,
+        () => isCurrent() && mobileDurableOutbox.getSnapshot().includes(r)),
       cleanup: (record, cancelled) =>
         cleanupOutboxResources(
           record,

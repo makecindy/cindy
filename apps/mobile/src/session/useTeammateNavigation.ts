@@ -31,9 +31,19 @@ export function useTeammateNavigation() {
       await preferences.setMode(mode);
       if (mounted.current && current.current === accountGeneration) {
         const state = navigation.getState();
-        const count = homeDismissCount(state?.routes.slice(0, state.index + 1) ?? [], mode);
-        // Pop by position: dismissTo would overwrite a legacy collection's target params.
-        if (count === null) router.dismissTo('/devices');
+        const routes = state?.routes.slice(0, state.index + 1) ?? [];
+        const count = homeDismissCount(routes);
+        // Pop by position to preserve the mounted home's state.
+        if (count === null) {
+          const legacyIndex = routes.findIndex(route => route.name === 'resources/[collectionId]'
+            && (route.params as { collectionId?: string } | undefined)?.collectionId === 'teammates');
+          // POP_TO only replaces the top when home is absent, leaving the retired route underneath.
+          if (legacyIndex >= 0) navigation.reset({
+            index: legacyIndex,
+            routes: [...routes.slice(0, legacyIndex), { name: 'devices/index' }],
+          } as never);
+          else router.dismissTo('/devices');
+        }
         else if (count > 0) router.dismiss(count);
       }
     } finally { if (pendingAccount.current === accountGeneration) pendingAccount.current = null; }

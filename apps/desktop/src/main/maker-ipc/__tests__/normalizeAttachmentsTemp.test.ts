@@ -182,6 +182,10 @@ describe('inline attachment temporary files', () => {
         base64: undefined,
       }],
     });
+    // 下载的临时件按文件流式入仓,不整读进 main 内存(附件不限大小)。
+    const ingestParams = vi.mocked(ingestMedia).mock.calls[0][0] as { filePath?: string; buffer?: unknown };
+    expect(ingestParams.filePath).toEqual(expect.any(String));
+    expect(ingestParams.buffer).toBeUndefined();
     materialized.cleanupAfterAcceptance?.();
     expect(removeRemote).toHaveBeenCalledWith('cindy/device-link/user/image.png');
   });
@@ -293,6 +297,10 @@ describe('inline attachment temporary files', () => {
       persistedContent: undefined,
     });
     expect(downloadToFile).not.toHaveBeenCalled();
+    // 控制端指定的本机图片路径保持原读取方式(整读),不改变其读取语义。
+    const ingestParams = vi.mocked(ingestMedia).mock.calls[0][0] as { filePath?: string; buffer?: unknown };
+    expect(ingestParams.filePath).toBeUndefined();
+    expect(Buffer.isBuffer(ingestParams.buffer)).toBe(true);
   });
 
   it('keeps queued images on managed URLs instead of rematerializing their source paths', async () => {

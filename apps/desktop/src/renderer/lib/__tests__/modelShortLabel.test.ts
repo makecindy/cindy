@@ -27,6 +27,7 @@ describe('formatModelShortLabel', () => {
     ['gpt-5.5', 'GPT-5.5'],
     ['gpt-5.4-mini', 'GPT-5.4 Mini'],
     ['codex/gpt-5.5', 'GPT-5.5'],
+    ['openai-codex/gpt-5.5', 'GPT-5.5'],
     // 未知 / 未来模型:Title Case 兜底,永不抛错
     ['some-future-model', 'Some Future Model'],
     ['', ''],

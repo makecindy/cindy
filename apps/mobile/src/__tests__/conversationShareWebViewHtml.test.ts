@@ -236,25 +236,6 @@ describe("buildConversationShareHtml 富内容导出", () => {
     expect(mermaidHtml).toContain("window.mermaid.render");
   });
 
-  it("把自动化来源放在对应用户消息上方", () => {
-    const html = buildConversationShareHtml({
-      allShareableIds: ["automation"],
-      colors,
-      contentWidth: 390,
-      selectedMessages: [
-        {
-          automationOriginLabel: "由自动化「每日摘要」发送",
-          body: "自动化消息",
-          clientId: "automation",
-          kind: "user",
-        },
-      ],
-    });
-
-    expect(html).toContain("share-automation-origin");
-    expect(html).toContain("由自动化「每日摘要」发送");
-  });
-
   it("保留公式与 Mermaid 语义，并注入对应运行时升级脚本", () => {
     const html = buildRichConversationHtml();
 

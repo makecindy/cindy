@@ -40,6 +40,11 @@ vi.mock('electron', () => ({
   safeStorage: { isEncryptionAvailable: () => h.encryptionAvailable },
 }));
 
+// Skill discovery is covered by managed-skills.test.ts, not this runtime/auth fixture.
+vi.mock('../managed-skills.js', () => ({
+  listCindyManagedSkills: async () => [],
+  cindyManagedSkillRoots: async () => [],
+}));
 vi.mock('@cindy/maker-core', () => ({}));
 
 vi.mock('../../appCapabilities.js', () => ({

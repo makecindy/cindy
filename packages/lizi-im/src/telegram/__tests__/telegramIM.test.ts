@@ -14,6 +14,7 @@ import type { IMCardActionEvent, IMHost, IMMessageEvent } from '../../types.js';
 import { TelegramApiError, type TelegramApiClient, type TgUpdate } from '../api.js';
 import { encodeCallbackData, encodeMessageId } from '../codec.js';
 import { TelegramIM, type TelegramGroupWindowEntry } from '../index.js';
+import { PROCESSING_REACTION_POOL } from '../reactionPool.js';
 
 const BOT = { id: 999, is_bot: true, first_name: 'Cindy', username: 'my_cindy_bot' };
 const OWNER_ID = '111';
@@ -333,6 +334,20 @@ describe('TelegramIM', () => {
     await vi.waitFor(() => expect(events).toHaveLength(2));
     expect(events[0]).toMatchObject({ senderId: 'g/-100200', text: '你在?' });
     expect(events[1]).toMatchObject({ senderId: 'g/-100200', text: '帮我看看这个' });
+  });
+
+  it('纯 @bot 无正文仍召唤一轮，单独传递 invoked', async () => {
+    const events: IMMessageEvent[] = [];
+    im.onMessage((e) => events.push(e));
+    await connect();
+    api.pushUpdates([groupMessage({ text: '', fromId: 222, messageId: 33, mentionBot: true })]);
+    await vi.waitFor(() => expect(events).toHaveLength(1));
+    expect(events[0]).toMatchObject({
+      senderId: 'g/-100200',
+      text: '',
+      invoked: true,
+      speaker: { id: '222', isOwner: false },
+    });
   });
 
   it('受保护群的消息一个字都不落本地窗口, 但仍可照常触发一轮', async () => {
@@ -1582,6 +1597,46 @@ describe('TelegramIM', () => {
     expect(api.calls.some((c) => c.method === 'deleteMyCommands')).toBe(true);
   });
 
+  it('randomizes processing reactions quietly, keeps waiting fixed, and clears the actual variant', async () => {
+    await connect();
+    const random = vi.spyOn(Math, 'random');
+    try {
+      for (const [index, emoji] of PROCESSING_REACTION_POOL.entries()) {
+        random.mockReturnValue((index + 0.5) / PROCESSING_REACTION_POOL.length);
+        expect(await im.reactToMessage('111|5', '👨‍💻')).toBe(emoji);
+        const sent = api.calls.filter((call) => call.method === 'setMessageReaction').at(-1)!;
+        expect(sent.params.reaction).toEqual([{ type: 'emoji', emoji }]);
+        expect(sent.params.is_big).toBeUndefined();
+      }
+      expect(await im.reactToMessage('111|5', '👀')).toBe('👀');
+      await im.removeMessageReaction('111|5');
+      expect(
+        api.calls.filter((call) => call.method === 'setMessageReaction').at(-1)!.params.reaction,
+      ).toEqual([]);
+    } finally {
+      random.mockRestore();
+    }
+  });
+
+  it('falls back to the base processing reaction when the group rejects a random variant', async () => {
+    await connect();
+    const random = vi.spyOn(Math, 'random').mockReturnValue(0.999);
+    try {
+      api.failNextCall(
+        'setMessageReaction',
+        new TelegramApiError('setMessageReaction', 400, 'REACTION_INVALID'),
+      );
+      expect(await im.reactToMessage('111|5', '👨‍💻')).toBe('👨‍💻');
+      expect(
+        api.calls
+          .filter((call) => call.method === 'setMessageReaction')
+          .map((call) => call.params.reaction),
+      ).toEqual([[{ type: 'emoji', emoji: '✍' }], [{ type: 'emoji', emoji: '👨‍💻' }]]);
+    } finally {
+      random.mockRestore();
+    }
+  });
+
   it('行为配置: emoji off 不放任何表情; DM replyQuote=first 首条回复挂回', async () => {
     await im.dispose();
     im = new TelegramIM(ctx.host, {
@@ -1594,6 +1649,8 @@ describe('TelegramIM', () => {
     await connect();
     // emoji off: reactToMessage 直接返回 null, 不发 setMessageReaction
     expect(await im.reactToMessage('111|5', '👍')).toBeNull();
+    expect(await im.reactToMessage('111|5', '👨‍💻')).toBeNull();
+    expect(await im.reactToMessage('111|5', '👀')).toBeNull();
     expect(api.calls.some((c) => c.method === 'setMessageReaction')).toBe(false);
     // DM replyQuote=first: 首条回复挂回触发消息, 第二条不挂
     api.pushUpdates([privateMessage('问个事', 111, 95)]);

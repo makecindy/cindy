@@ -201,6 +201,14 @@ export function controllerHasTopic(deviceId: string, topic: string): boolean {
   return registry.get(deviceId)?.topics.has(topic as StoredTopic) === true;
 }
 
+/** 该控制端当前持有及断线恢复记住的全部 topic(去重)。 */
+export function getControllerTopics(deviceId: string): string[] {
+  return [...new Set([
+    ...(registry.get(deviceId)?.topics ?? []),
+    ...(rememberedTopicsByController.get(deviceId) ?? []),
+  ])];
+}
+
 /** 取消订阅指定 topics;该控制端 topic 清空后整条移除。空 topics 为 no-op。 */
 export function unsubscribe(deviceId: string, topics: readonly string[]): void {
   for (const topic of topics) {

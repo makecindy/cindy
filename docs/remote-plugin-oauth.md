@@ -1,7 +1,7 @@
 # 远程插件授权与配置
 
-本功能连接两台已登录同账号、已允许 Device Link 控制的 Desktop。执行任务的 Host
-拥有插件及凭据，控制端 Desktop 提供浏览器和保密卡片。协议及实现正本为
+本功能连接已登录同账号、已允许 Device Link 控制的客户端。执行任务的 Desktop Host
+拥有插件及凭据，控制端 Desktop 或新版 Mobile 提供受信原生配置界面。协议及实现正本为
 `packages/device-link/src/plugin*.ts` 与 `apps/desktop/src/main/plugin-oauth/`。
 它不依赖 CIS、云实例配置、定制发行包或新的服务端接口。
 
@@ -47,7 +47,7 @@ sequenceDiagram
   恶意 relay 同时替换描述符及握手。不得称为独立身份认证、双向设备证明或 CIS 验证。
   执行端对控制端的身份和准入仍依赖既有 Device Link 链路；持久 pin 保护控制端所认的
   执行设备，不把它解释成可抵御账号服务或 relay 冒充控制端的双向独立认证。
-- 执行端使用独立用途的持久 Ed25519 密钥；控制端验签成功后才固定对端公钥。两端
+- 执行端使用独立用途的持久 Ed25519 密钥；控制端验签成功后才固定对端公钥。Desktop 两端
   按 realm/membership/local device 分域，使用 Electron safeStorage 加密落盘，原子写入
   和跨进程锁；不复用通讯录密钥，不在启动/能力投影时访问钥匙串。
 - 文件在 `ownerScopedUserDataPath('plugin-oauth', <scope-sha256>.v1.enc)`，含本机签名
@@ -179,9 +179,14 @@ gh-cli、oidc-token 或账号 vault 写入；临时 Node Secret 卡只允许其�
   保持上游独立 RPC 行为，不自动弹卡或结束后台进程。已停止的调用不能迟到启用新授权。
 - 两端 Desktop 必须支持 v3。旧版仍可使用原本的远控及执行设备本地设置；新授权动作
   不走旧通道/明文降级，不会替用户清空已有凭据。
-- Mobile 是目标电脑的遥控器：配置卡保留查看/取消，并提供进入目标电脑远程桌面的入口。
-  用户在电脑端 UI 完成输入、浏览器登录和授权；回调、交换及凭据保存全部在电脑执行。
-  手机不实现插件凭据表单、OAuth 回调或授权码转发。网站 Cookie/全量 vault 同步不在范围。
+- 新版 Mobile 的原生配置表单经同一个 v3 签名握手与加密通道提交 API Key/PAT、连接地址与
+  Token；支持由 Host 声明的设备码和浏览器确认页。目标、字段展示、当前账号、设备代次及
+  卡片动作在提交前复核，插件 WebView、普通频道和通用 invoke 不能收取这些输入。
+  手机使用 Expo SecureStore 固定执行电脑公钥，按 realm/membership/本手机/执行电脑分域；
+  安全存储失败拒绝，已登记身份换钥直接拒绝，不能通过卡片信任或替换新钥。
+  PKCE 和 loopback 回调仍需电脑端入口；手机不能把电脑 localhost 当作手机地址。
+  旧手机继续查看/取消并通过电脑入口完成。网站 Cookie/全量 vault 同步不在范围。
+  新版路径尚须真实 iOS/Android 验收，单测不代表第三方实际授权成功。
 - Auth、relay、CIS、Model Access 不需要本功能的新服务接口或部署；双方客户端需升级。
 
 ### 各端范围与后续门禁
@@ -189,7 +194,7 @@ gh-cli、oidc-token 或账号 vault 写入；临时 Node Secret 卡只允许其�
 | 场景 | 本 PR 的处理 |
 | --- | --- |
 | Desktop → Desktop Device Link | 已适配：新私有通道经同账号授权、卡片绑定及签名握手；原有 invoke/push 规则不放宽。 |
-| Mobile → Desktop Device Link | 配置卡提供目标电脑远程桌面入口，保留状态与取消；手机仅通过既有远程画面与输入控制电脑。无手机授权桥接，不依赖新的 Google 移动客户端或手机回调；共享任务访客及终态卡片不提供远控入口。 |
+| Mobile → Desktop Device Link | 原生表单和设备码/浏览器确认通过加密 v3 接入；电脑本地 OAuth 回调继续走电脑入口。共享任务访客不提供授权动作；旧端不降级到明文。真实手机授权尚未验收。 |
 | SSH 工作区 | 本 PR 不新增 SSH 凭据转发或远端插件安装。SSH 的 Agent/workdir 仍经 maker-remote-ssh、cc-manager 与 remote-file-service；插件由提供 MCP 的 Desktop Host 管理，授权仅改变该 Host 的连接。SSH 主机没有本桥的 Desktop 身份、OS 密钥存储和 Device Link peer，不能把它当作另一个被控 Desktop，也不向其 HOME/workdir 复制本机凭据。原有远端文件、网络与 Forge 限制保留。 |
 
 故障范围：单卡片取消/超时只收口该事务；单 peer 失效只取消该 peer 的事务；账号退出

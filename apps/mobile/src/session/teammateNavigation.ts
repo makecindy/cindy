@@ -8,14 +8,6 @@ export function teammateIdentity(hosted: HostedRemoteCollectionItem): LastTeamma
     resourceKind: 'bot', resourceId: hosted.item.ref.id,
   } : null;
 }
-export function sameTeammate(a: LastTeammateIdentity | null, b: LastTeammateIdentity | null): boolean {
-  return !!a && !!b && a.deviceId === b.deviceId && a.collectionId === b.collectionId
-    && a.resourceKind === b.resourceKind && a.resourceId === b.resourceId;
-}
-/** Never guess the default from a display name or use another teammate when the saved one is gone. */
-export function findLastTeammate(last: LastTeammateIdentity | null, items: readonly HostedRemoteCollectionItem[]) {
-  return items.find((item) => sameTeammate(last, teammateIdentity(item))) ?? null;
-}
 export function teammateResourceRoute(hosted: HostedRemoteCollectionItem, locale: string) {
   const conversation = hosted.item.links.find(link => link.rel === 'conversation')?.target;
   // The link is a display/navigation hint only. The destination revalidates the
@@ -40,13 +32,11 @@ export function teammateResourceRoute(hosted: HostedRemoteCollectionItem, locale
   };
 }
 
-/** Reuse the actual home route, including legacy collection entry points. */
-export function homeDismissCount(routes: readonly { name: string; params?: unknown }[], mode: string): number | null {
+/** Reuse the actual home route; retired collection routes are replaced. */
+export function homeDismissCount(routes: readonly { name: string; params?: unknown }[]): number | null {
   for (let index = routes.length - 1; index >= 0; index--) {
     const route = routes[index];
-    if (route.name === 'devices/index' || route.name === 'index'
-      || (mode === 'teammates' && route.name === 'resources/[collectionId]'
-        && (route.params as { collectionId?: string } | undefined)?.collectionId === 'teammates')) return routes.length - 1 - index;
+    if (route.name === 'devices/index' || route.name === 'index') return routes.length - 1 - index;
   }
   return null;
 }

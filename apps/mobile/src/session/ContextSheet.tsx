@@ -10,7 +10,7 @@
  */
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ChevronRight } from 'lucide-react-native';
+import { ChevronDown, ChevronRight } from 'lucide-react-native';
 import {
   ActivityIndicator,
   Pressable,
@@ -19,10 +19,13 @@ import {
   useWindowDimensions,
 } from 'react-native';
 import { Text, TextInput } from '@/components/AppText';
+import { MainWindowActionButton } from '@/components/MobilePrimitives';
+import { mobileInteractionStyles } from '@/components/mobileInteractionStyles';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { computeContextSheetSnapHeights, type ContextSheetSnap } from '@/session/contextSheetModel';
 import { SheetModal } from '@/session/SheetModal';
 import { SheetSurface } from '@/session/SheetSurface';
+import { AnchoredPullDownMenu } from '@/platform/chrome/AnchoredPullDownMenu';
 import { fontWeight, iconSize, iconStroke, lineHeight, radius, spacing, typeScale, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 
 export interface ContextSheetProps {
@@ -57,7 +60,6 @@ export function ContextSheet({
   testID,
 }: ContextSheetProps) {
   const styles = useThemedStyles(makeContextSheetStyles);
-  const { colors } = useTheme();
   const { t } = useTranslation();
   const { height: windowHeight } = useWindowDimensions();
   const insets = useSafeAreaInsets();
@@ -115,7 +117,7 @@ export function ContextSheet({
         >
           {media}
           {children}
-          {error ? <Text style={{ color: colors.errorText }}>{error}</Text> : null}
+          {error ? <Text style={styles.errorText}>{error}</Text> : null}
         </SheetSurface>
       </SheetModal>
     </DismissAction.Provider>
@@ -161,6 +163,8 @@ export interface ContextSheetRowProps {
   onLongPress?: () => void;
   /** 'chevron' 表示带二级视图；也可以传自定义 trailing 节点。 */
   trailing?: 'chevron' | ReactNode;
+  /** 自定义尾部图标的方形承载尺寸；文字等尾部内容不传，继续按内容布局。 */
+  trailingSize?: number;
   disabled?: boolean;
   busy?: boolean;
   accessibilityHint?: string;
@@ -178,6 +182,7 @@ export function ContextSheetRow({
   onPress,
   onLongPress,
   trailing,
+  trailingSize,
   disabled,
   busy,
   accessibilityHint,
@@ -211,7 +216,12 @@ export function ContextSheetRow({
           <Text style={[styles.rowLabel, destructive && { color: colors.destructive }]}>{label}</Text>
         )}
       </View>
-      <View style={styles.rowTrailing}>
+      <View style={[
+        styles.rowTrailing,
+        !busy && trailing && trailing !== 'chevron' && trailingSize != null
+          ? { width: trailingSize, height: trailingSize, justifyContent: 'center' as const }
+          : undefined,
+      ]}>
         {busy ? (
           <ActivityIndicator color={colors.textSecondary} size="small" />
         ) : trailing === 'chevron' ? (
@@ -232,7 +242,7 @@ export interface ContextSheetFooterButtonProps {
   testID?: string;
 }
 
-/** footer 槽用的主操作按钮（黑底 pill，对照 Cursor「Add N」）。 */
+/** footer 槽用的主操作按钮:共享主按钮(cta 实心 pill;加载只转圈)。 */
 export function ContextSheetFooterButton({
   label,
   onPress,
@@ -240,28 +250,10 @@ export function ContextSheetFooterButton({
   disabled,
   testID,
 }: ContextSheetFooterButtonProps) {
-  const styles = useThemedStyles(makeContextSheetStyles);
-  const { colors } = useTheme();
   return (
-    <Pressable
-      accessibilityLabel={label}
-      accessibilityRole="button"
-      accessibilityState={{ disabled: disabled || busy }}
-      disabled={disabled || busy}
-      onPress={onPress}
-      style={({ pressed }) => [
-        styles.footerButton,
-        disabled && styles.footerButtonDisabled,
-        pressed && styles.footerButtonPressed,
-      ]}
-      testID={testID}
-    >
-      {busy ? (
-        <ActivityIndicator color={colors.ctaText} size="small" />
-      ) : (
-        <Text style={styles.footerButtonLabel}>{label}</Text>
-      )}
-    </Pressable>
+    <MainWindowActionButton
+      action={{ busy, disabled, label, onPress, testID, tone: 'primary' }}
+    />
   );
 }
 
@@ -284,6 +276,50 @@ export interface ContextSheetChoiceRowProps<T extends string> {
   onChange: (value: T) => void;
   disabled?: boolean;
   testID?: string;
+}
+
+export interface ContextSheetSelectRowProps {
+  label: string;
+  options: readonly { id: string; label: string; detail?: string; disabled?: boolean }[];
+  value: string;
+  onChange(value: string): void;
+  disabled?: boolean;
+  testID?: string;
+}
+
+/** 有界滚动的设备等长列表，不把选项平铺到表单里。iOS 复用原生 menu Picker。 */
+export function ContextSheetSelectRow(props: ContextSheetSelectRowProps) {
+  const { colors } = useTheme();
+  const row = (
+    <ContextSheetRow
+      icon={null}
+      disabled={props.disabled}
+      label={props.options.find((option) => option.id === props.value)?.label ?? props.label}
+      onPress={() => undefined}
+      trailing={<ChevronDown color={colors.textSecondary} size={iconSize.lg} strokeWidth={iconStroke.regular} />}
+    />
+  );
+  if (props.disabled) return row;
+  return (
+    <AnchoredPullDownMenu
+      accessibilityLabel={props.label}
+      actions={props.options.map((option) => ({
+        id: option.id,
+        title: option.label,
+        subtitle: option.detail,
+        disabled: props.disabled || option.disabled,
+        state: option.id === props.value ? 'on' : 'off',
+      }))}
+      onAction={(id) => {
+        if (!props.disabled && props.options.some((option) => option.id === id && !option.disabled)) {
+          props.onChange(id);
+        }
+      }}
+      testID={props.testID}
+    >
+      {row}
+    </AnchoredPullDownMenu>
+  );
 }
 
 /** 单选(pill 组;iOS 版为原生 Picker)。 */
@@ -379,24 +415,12 @@ function makeContextSheetStyles(colors: ThemeColors) {
   return {
     // Modal 外壳样式(背板/内容层/键盘规避)已随 SheetModal 抽出;
     // sheet 表面样式(sheet/dragZone/grabber/header/滚动区/footer 容器)已随 SheetSurface 抽出。
-    footerButton: {
-      alignItems: 'center' as const,
-      backgroundColor: colors.cta,
-      borderRadius: radius.pill,
-      height: 50,
-      justifyContent: 'center' as const,
-    },
-    footerButtonDisabled: {
-      opacity: 0.4,
-    },
-    footerButtonPressed: {
-      opacity: 0.7,
-    },
-    footerButtonLabel: {
-      color: colors.ctaText,
-      fontSize: typeScale.body,
-      lineHeight: lineHeight.body,
-      fontWeight: fontWeight.medium,
+    // 说明、提示、报错(成句的话):footnote 13/18 400。
+    errorText: {
+      color: colors.errorText,
+      fontSize: typeScale.footnote,
+      lineHeight: lineHeight.caption,
+      fontWeight: fontWeight.regular,
     },
     group: {
       paddingTop: spacing.lg,
@@ -416,9 +440,7 @@ function makeContextSheetStyles(colors: ThemeColors) {
       minHeight: ROW_HEIGHT,
       justifyContent: 'space-between' as const,
     },
-    rowPressed: {
-      opacity: 0.6,
-    },
+    rowPressed: mobileInteractionStyles.pressed,
     rowDisabled: {
       opacity: 0.4,
     },

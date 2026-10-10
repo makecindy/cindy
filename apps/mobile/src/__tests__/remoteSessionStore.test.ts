@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { MAKER_EVENT_BATCH_CHANNEL, SESSION_SYNC_CHANNEL } from '@cindy/device-link';
 import { clampLiveRowCreatedAt } from '@/session/messagePaging';
 import { MOBILE_TOOL_INPUT_PROJECTION_THRESHOLD_BYTES } from '@/session/messageToolPayloadProjection';
-import { remoteSessionStore, sessionPendingWrites } from '@/session/remoteSessionStore';
+import { remoteSessionStore, resolveSessionWriteDevices, sessionPendingWrites } from '@/session/remoteSessionStore';
 import type { InputProjection, PendingInteraction, RemoteMessage, RemoteSession } from '@/session/types';
 
 function session(id: string, patch: Partial<RemoteSession> = {}): RemoteSession {
@@ -5082,6 +5082,62 @@ describe('setDeviceSessions 在途元数据写保护(sessionPendingWrites)', () 
   });
 });
 
+describe('upsertDeviceSession 在途元数据写保护(sessionPendingWrites)', () => {
+  beforeEach(() => remoteSessionStore.clear());
+
+  it('归档在途、行已被乐观移出:单条读回的旧行不插回;release 后恢复正常 upsert', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1'), session('s2')]);
+    const release = sessionPendingWrites.track('s1', ['status']);
+    remoteSessionStore.applySessionPatch('dev-1', 's1', { status: 'archived' });
+    // 会话页 getSession 慢回包:被控端还没处理归档,带回旧 status
+    remoteSessionStore.upsertDeviceSession('dev-1', 'Mac', session('s1', { status: 'active' }));
+    expect(remoteSessionStore.getSessions().map((s) => s.id)).toEqual(['s2']);
+    // 失败回滚先 release 再整行插回:不被自己的在途登记挡掉
+    release();
+    remoteSessionStore.upsertDeviceSession('dev-1', 'Mac', session('s1'));
+    expect(remoteSessionStore.getSessions().map((s) => s.id).sort()).toEqual(['s1', 's2']);
+  });
+
+  it('行仍在本地:在途字段保留本地乐观值并留差异痕,其余字段照常吃读回', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1', { title: '旧名' })]);
+    const release = sessionPendingWrites.track('s1', ['title']);
+    remoteSessionStore.applySessionPatch('dev-1', 's1', { title: '新名' });
+    remoteSessionStore.upsertDeviceSession('dev-1', 'Mac', session('s1', {
+      title: '旧名',
+      updatedAt: '2026-01-02T00:00:00.000Z',
+    }));
+    const row = remoteSessionStore.getSessions().find((s) => s.id === 's1');
+    expect(row?.title).toBe('新名');
+    expect(row?.updatedAt).toBe('2026-01-02T00:00:00.000Z');
+    expect(sessionPendingWrites.consumeMaskedPush('s1', ['title'])).toBe(true);
+    release();
+  });
+
+  it('只有非 status 字段在途时,本地缺行的读回照常插入', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', []);
+    const release = sessionPendingWrites.track('s1', ['title']);
+    remoteSessionStore.upsertDeviceSession('dev-1', 'Mac', session('s1'));
+    expect(remoteSessionStore.getSessions().map((s) => s.id)).toEqual(['s1']);
+    release();
+  });
+});
+
+describe('resolveSessionWriteDevices', () => {
+  beforeEach(() => remoteSessionStore.clear());
+
+  it('乐观 patch / 回滚落行所在的物理 shard,出网走规范 id 或调用方指定的路由设备', () => {
+    remoteSessionStore.setDeviceSessions('dev-old', 'Mac', [session('s1')]);
+    const row = { ...remoteSessionStore.getSessions().find((s) => s.id === 's1')!, canonicalDeviceId: 'dev-new' };
+    expect(resolveSessionWriteDevices('s1', row)).toEqual({ rpcDeviceId: 'dev-new', shardId: 'dev-old' });
+    // 会话页:出网沿用路由设备,shard 仍是物理 shard(不是路由 id)
+    expect(resolveSessionWriteDevices('s1', row, 'dev-route')).toEqual({ rpcDeviceId: 'dev-route', shardId: 'dev-old' });
+    // 调用方没有会话对象时按 store 索引解析
+    expect(resolveSessionWriteDevices('s1', null, 'dev-route')).toEqual({ rpcDeviceId: 'dev-route', shardId: 'dev-old' });
+    expect(resolveSessionWriteDevices('missing', null)).toBeNull();
+    expect(resolveSessionWriteDevices('missing', null, 'dev-route')).toEqual({ rpcDeviceId: 'dev-route', shardId: 'dev-route' });
+  });
+});
+
 describe('引用调和(2026-07-18 首页重渲染风暴修复)', () => {
   beforeEach(() => remoteSessionStore.clear());
 
@@ -5298,6 +5354,23 @@ describe('任务消息内存治理', () => {
     expect(remoteSessionStore.getSessionRetention('schedule')).toBe('schedule');
     expect(remoteSessionStore.getSessionRetention('legacy-title')).toBe('regular');
     expect(remoteSessionStore.getSessionRetention('bound')).toBe('regular');
+  });
+
+  it('keeps retention lookup current across patch, shard replacement, removal and ID reuse', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
+    remoteSessionStore.applySessionPatch('dev-1', 's1', { source: 'scheduler' });
+    remoteSessionStore.applySessionPatch('dev-1', 's1', { totalCostUsd: 5 });
+    expect(remoteSessionStore.getSessionRetention('s1')).toBe('schedule');
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
+    expect(remoteSessionStore.getSessionRetention('s1')).toBe('regular');
+    remoteSessionStore.applySessionPatch('dev-1', 's1', { source: 'scheduler' });
+    remoteSessionStore.removeDevice('dev-1');
+    expect(remoteSessionStore.getSessionRetention('s1')).toBe('regular');
+    remoteSessionStore.setDeviceSessions('dev-2', 'PC', [session('s1', { source: 'scheduler' })]);
+    remoteSessionStore.clear();
+    expect(remoteSessionStore.getSessionRetention('s1')).toBe('regular');
+    remoteSessionStore.setDeviceSessions('dev-2', 'PC', [session('s1')]);
+    expect(remoteSessionStore.getSessionRetention('s1')).toBe('regular');
   });
 
   it('旧详情代际的读取在 blur→refocus 后不能覆盖新窗口', () => {
@@ -6594,4 +6667,84 @@ describe('task tag source isolation', () => {
     expect(remoteSessionStore.getSessions().find((row) => row.id === 'a')?.tags).toEqual([]);
     expect(remoteSessionStore.getSessions().find((row) => row.id === 'b')?.tags).toEqual([tag]);
   });
+});
+
+describe('list message reuse', () => {
+  beforeEach(() => remoteSessionStore.clear());
+  it('keeps explicitly prefetched prose after leaving a task, while stale detail pushes remain blocked', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Host', [session('s1')]);
+    const authority = remoteSessionStore.enterSessionMessageDetail('s1');
+    remoteSessionStore.leaveSessionMessageDetail('s1', 'detail-blur', authority);
+    remoteSessionStore.applyRemotePush('dev-1', 'local-db:messages:created', { sessionId: 's1', message: message('stale', 's1') });
+    const content = '完整正文'.repeat(2000);
+    remoteSessionStore.applyRemotePush('dev-1', 'local-db:messages:created', { sessionId: 's1', listMessage: true,
+      message: { ...message('prefetched', 's1'), content } });
+    expect(remoteSessionStore.getMessages('s1').map(row => row.id)).toEqual(['prefetched']);
+    expect(remoteSessionStore.getMessages('s1')[0].content).toBe(content);
+    remoteSessionStore.enterSessionMessageDetail('s1');
+    expect(remoteSessionStore.getMessages('s1')[0].content).toBe(content);
+  });
+
+  it('does not let another device seed the same task ID', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Host', [session('s1')]);
+    remoteSessionStore.applyRemotePush('other', 'local-db:messages:created', { sessionId: 's1', listMessage: true, message: message('wrong', 's1') });
+    expect(remoteSessionStore.getMessages('s1')).toEqual([]);
+  });
+});
+
+it('retains response speed per session at completion, freezes aborts and clears the next turn', () => {
+  remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('tps-one'), session('tps-two')]);
+  const speed = { phase: 'generating', waitOrigin: 'turn', firstResponseMs: 2000, waitingMs: 0,
+    durationMs: 3000, outputTokens: 50, estimated: true, averageRate: 16.7, recentRate: 20,
+    samples: [{ durationMs: 1000, outputTokens: 20, rate: 20 }], sampledAt: 1 };
+  pushMakerStatus('tps-one', { isRunning: true, responseSpeed: speed });
+  remoteSessionStore.applyRemotePush('dev-1', 'maker:event', {
+    sessionId: 'tps-one', event: { type: 'error', data: { message: 'cancelled', isTerminal: true } },
+  });
+  expect(remoteSessionStore.getSessionRunStatus('tps-one').responseSpeed)
+    .toMatchObject({ phase: 'complete', estimated: true, outputTokens: 50 });
+  expect(remoteSessionStore.getSessionRunStatus('tps-two').responseSpeed).toBeUndefined();
+  pushMakerStatus('tps-two', { isRunning: true });
+  expect(remoteSessionStore.getSessionRunStatus('tps-one').responseSpeed?.outputTokens).toBe(50);
+  pushMakerStatus('tps-one', { isRunning: true, responseSpeed: { ...speed, phase: 'waiting',
+    firstResponseMs: null, outputTokens: 0, durationMs: 0, samples: [] } });
+  expect(remoteSessionStore.getSessionRunStatus('tps-one').responseSpeed)
+    .toMatchObject({ phase: 'waiting', firstResponseMs: null, outputTokens: 0, samples: [] });
+  pushMakerStatus('tps-one', { isRunning: false, responseSpeed: { ...speed, phase: 'complete',
+    outputTokens: 300, estimated: false, averageRate: 100, recentRate: 100 } });
+  expect(remoteSessionStore.getSessionRunStatus('tps-one').responseSpeed)
+    .toMatchObject({ phase: 'complete', estimated: false, outputTokens: 300 });
+});
+
+it('keeps response speed failures through terminal tails, distinguishes cancellation and actual retries', () => {
+  remoteSessionStore.clear();
+  remoteSessionStore.setDeviceSessions('dev-1', 'Host', [session('speed-errors')]);
+  remoteSessionStore.enterSessionMessageDetail('speed-errors');
+  const speed = { phase: 'generating', waitOrigin: 'turn', firstResponseMs: 1000, waitingMs: 0,
+    durationMs: 2000, outputTokens: 50, estimated: true, averageRate: 25, recentRate: 30,
+    samples: [{ durationMs: 2000, outputTokens: 50, rate: 30 }], sampledAt: Date.now() };
+  const event = (type: string, data: Record<string, unknown>) => remoteSessionStore.applyRemotePush('dev-1', 'maker:event', {
+    sessionId: 'speed-errors', event: { type, data, source: 'pi' },
+  });
+  pushMakerStatus('speed-errors', { isRunning: true, responseSpeed: speed });
+  event('error', { message: 'temporary warning', isTerminal: false });
+  expect(remoteSessionStore.getSessionRunStatus('speed-errors').responseSpeed?.retrying).not.toBe(true);
+  event('error', { message: 'API unavailable', isTerminal: false, willRetry: true });
+  expect(remoteSessionStore.getSessionRunStatus('speed-errors').responseSpeed).toMatchObject({ retrying: true, recentRate: null });
+  pushMakerStatus('speed-errors', { isRunning: true, responseSpeed: speed });
+  expect(remoteSessionStore.getSessionRunStatus('speed-errors').responseSpeed?.retrying).toBe(true);
+  event('thinking', { stage: 'delta', blockId: 'recovered-thinking', text: 'reasoning resumed' });
+  expect(remoteSessionStore.getSessionRunStatus('speed-errors').responseSpeed?.retrying).toBe(false);
+  event('error', { message: 'API unavailable', isTerminal: true });
+  event('done', {});
+  pushMakerStatus('speed-errors', { isRunning: false, responseSpeed: { ...speed, phase: 'complete', estimated: false } });
+  expect(remoteSessionStore.getSessionRunStatus('speed-errors')).toMatchObject({ isRunning: false, hasTerminalError: true,
+    responseSpeed: { outcome: 'failed', recentRate: null, samples: speed.samples } });
+  pushMakerStatus('speed-errors', { isRunning: true, responseSpeed: speed });
+  expect(remoteSessionStore.getSessionRunStatus('speed-errors').responseSpeed?.outcome).toBeUndefined();
+  event('done', { type: 'pi/agent_settled', status: 'cancelled' });
+  event('error', { message: 'aborted transport', isTerminal: true });
+  expect(remoteSessionStore.getSessionRunStatus('speed-errors')).toMatchObject({ hasTerminalError: false,
+    responseSpeed: { outcome: 'cancelled', recentRate: null } });
+  remoteSessionStore.clear();
 });

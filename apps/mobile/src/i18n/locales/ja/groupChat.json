@@ -78,6 +78,7 @@
     "olderOnComputer": "それより前のメッセージはパソコンで確認できます"
   },
   "notice": {
+    "memberJoined": "{{name}}さんがグループに参加しました",
     "memberFailed": "{{name}} は今回返信できませんでした",
     "memberTimeout": "{{name}} の返信に時間がかかりすぎたため、今回はスキップしました",
     "memberUnavailable": "{{name}} は現在利用できないため、今回は発言しませんでした",
@@ -110,7 +111,13 @@
     "dismissFailed": "この計画を終了できませんでした。もう一度お試しください",
     "editFailed": "このステップを変更できませんでした。もう一度お試しください",
     "editStepHint": "担当を変えるか、このステップを削除します",
-    "reassignStepHint": "このステップの担当を変えます"
+    "reassignStepHint": "このステップの担当を変えます",
+    "eyebrow_one": "分担 · {{count}} ステップ",
+    "eyebrow_other": "分担 · {{count}} ステップ",
+    "awaitingStart": "開始待ち",
+    "progressRunning": "作業中 {{current}} / {{total}}",
+    "progressDone": "完了 {{done}} / {{total}}",
+    "allDone": "すべて完了"
   },
   "speaking": {
     "planning": "役割分担を考えています…",
@@ -153,14 +160,39 @@
     "projectDirNone": "未選択",
     "projectDirNote": "役割分担で作業するとき、仲間はここで作業します。選ばなくてもかまいません。その場合はこのグループチャット専用のフォルダを使います。git プロジェクトを選ぶと、役割分担のたびに新しい worktree とブランチを作るので、手元のコードには触れません。",
     "add": "仲間を追加",
-    "projectDirOnComputer": "パソコンで選択・変更できます"
+    "projectDirOnComputer": "パソコンで選択・変更できます",
+    "memberActions": "{{name}} の操作"
   },
   "errors": {
     "memberLimit": "グループチャットには仲間が 2〜6 人必要です",
     "memberUnavailable": "利用できない仲間がいます。別の仲間を選んで再試行してください",
+    "mentionUnavailable": "メンションしたメンバーは現在利用できません。送信する前に選び直してください。",
     "notFound": "このグループチャットはもう存在しません",
     "hostNotReady": "Cindy の準備がまだ終わっていません。しばらくしてから再試行してください",
     "planOpen": "役割分担の途中です。終わるか停止してから新しく始めてください",
-    "planClosed": "この計画はすでに終了したか、更新されています"
+    "planClosed": "この計画はすでに終了したか、更新されています",
+    "invalidAttachment": "添付ファイルを読み込めません。選び直して送信してください。",
+    "attachmentUnavailable": "スマートフォンから添付ファイルを取得できません。接続を確認して再試行してください。",
+    "attachmentTooLarge": "添付ファイルが 100 MB を超えています。小さいファイルを選んでください。",
+    "mediaUploadFailed": "チャットサービスに添付ファイルをアップロードできません。しばらくしてから再試行してください。",
+    "authRequired": "ログインの有効期限が切れました。パソコンで再度ログインしてください。",
+    "chatUnavailable": "チャットサービスに接続できません。ネットワークを確認して再試行してください。",
+    "importPending": "グループの履歴を同期中です。しばらくしてから再試行してください。",
+    "requestTimeout": "操作の結果をまだ確認できません。更新して結果を確認してから再試行してください。",
+    "permissionDenied": "このグループを管理する権限がありません。",
+    "serviceError": "チャットサービスで処理を完了できません。しばらくしてから再試行してください。",
+    "groupArchived": "このグループはアーカイブ済みのため操作できません。"
+  },
+  "followUp": {
+    "next": "分担 · 次のステップ",
+    "failedStep": "ステップ {{step}} は完了できませんでした"
+  },
+  "server": {
+    "offline": "グループチャットに接続できません。もう一度お試しください。",
+    "loadFailed": "グループチャットを読み込めません。もう一度お試しください。",
+    "loadOlder": "以前のメッセージを読み込む",
+    "attachmentFailed": "添付ファイルを開けませんでした。もう一度お試しください。",
+    "previewUnavailable": "プレビューを読み込めません",
+    "endpointUnavailable": "グループチャットのサービス設定を利用できません。再試行してください。"
   }
 }

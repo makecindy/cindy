@@ -2,7 +2,7 @@ import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { readBackgroundTaskOutputTail, readSessionBackgroundTaskOutputTail } from '../reader';
 
@@ -57,10 +57,20 @@ describe('readBackgroundTaskOutputTail', () => {
 
   it('rejects a link whose real target is not an output file', async () => {
     const target = path.join(dir, 'secret.txt');
-    await fs.writeFile(target, 'secret');
+    // Junctions need no file-symlink privilege on Windows. Canonical extension
+    // validation must reject either target before inspecting or opening it.
+    if (process.platform === 'win32') await fs.mkdir(target);
+    else await fs.writeFile(target, 'secret');
     const link = path.join(dir, 'b6.output');
-    await fs.symlink(target, link);
-    expect(await readBackgroundTaskOutputTail(link)).toEqual({ ok: false, reason: 'forbidden' });
+    await fs.symlink(target, link, process.platform === 'win32' ? 'junction' : 'file');
+    expect((await fs.lstat(link)).isSymbolicLink()).toBe(true);
+    const stat = vi.spyOn(fs, 'stat');
+    const open = vi.spyOn(fs, 'open');
+    try {
+      expect(await readBackgroundTaskOutputTail(link)).toEqual({ ok: false, reason: 'forbidden' });
+      expect(stat).not.toHaveBeenCalled();
+      expect(open).not.toHaveBeenCalled();
+    } finally { stat.mockRestore(); open.mockRestore(); }
   });
 
   it('reads through a symlinked parent directory by checking the canonical path', async () => {
@@ -69,7 +79,7 @@ describe('readBackgroundTaskOutputTail', () => {
     await fs.mkdir(realDir);
     await fs.writeFile(path.join(realDir, 'b7.output'), 'via link\n');
     const linkedDir = path.join(dir, 'linked');
-    await fs.symlink(realDir, linkedDir, 'dir');
+    await fs.symlink(realDir, linkedDir, process.platform === 'win32' ? 'junction' : 'dir');
     expect(await readBackgroundTaskOutputTail(path.join(linkedDir, 'b7.output'))).toMatchObject({
       ok: true,
       text: 'via link\n',

@@ -20,7 +20,7 @@ describe('validateTitleOutput', () => {
     ['사용자: 계속해 주세요', 'Korean role label'],
     ['助手：再补一个回归测试', 'Chinese role label'],
   ])('rejects %s (%s)', (value) => {
-    expect(validateTitleOutput(value, 20)).toBeNull();
+    expect(validateTitleOutput(value, 40)).toBeNull();
   });
 
   it.each([
@@ -45,7 +45,7 @@ describe('validateTitleOutput', () => {
     ['“生成简洁中文标题”。', 'smart-quoted Chinese echo with outside period'],
     ['‘簡潔なタイトル’！', 'smart-quoted Japanese echo with outside exclamation'],
   ])('rejects instruction echo %s (%s)', (value) => {
-    expect(validateTitleOutput(value, 20)).toBeNull();
+    expect(validateTitleOutput(value, 40)).toBeNull();
   });
 
   // one-shot 路径先用 256 上限校验再截 40 字,整行 prompt 回显必须在该口径下也被拒。
@@ -73,6 +73,10 @@ describe('validateTitleOutput', () => {
     ['Write the title in Japanese.', 'verbatim locale instruction for another supported locale'],
     [
       'Use at most 20 characters. Output only the title, without quotation marks or ending punctuation.',
+      'legacy shape instruction',
+    ],
+    [
+      'Use at most 40 characters. Output only the title, without quotation marks or ending punctuation.',
       'verbatim shape instruction',
     ],
     [
@@ -83,19 +87,29 @@ describe('validateTitleOutput', () => {
     expect(validateTitleOutput(value, 256)).toBeNull();
   });
 
+  it('接受讨论其他字符限制的正常标题', () => {
+    expect(validateTitleOutput('Use at most 100 characters', 40)).toBe(
+      'Use at most 100 characters',
+    );
+  });
+
   it('keeps titles that merely mention titles', () => {
-    expect(validateTitleOutput('修复标题生成 bug', 20)).toBe('修复标题生成 bug');
-    expect(validateTitleOutput('优化会话标题样式', 20)).toBe('优化会话标题样式');
+    expect(validateTitleOutput('修复标题生成 bug', 40)).toBe('修复标题生成 bug');
+    expect(validateTitleOutput('优化会话标题样式', 40)).toBe('优化会话标题样式');
     // 尾部标点仅在回显探测时剥离,非回显标题原样保留。
-    expect(validateTitleOutput('优化会话标题样式。', 20)).toBe('优化会话标题样式。');
+    expect(validateTitleOutput('优化会话标题样式。', 40)).toBe('优化会话标题样式。');
   });
 
   it('accepts a concise Unicode title and removes accidental wrapping quotes', () => {
-    expect(validateTitleOutput('  「Codex 子代理测试」  ', 20)).toBe('Codex 子代理测试');
+    expect(validateTitleOutput('  「Codex 子代理测试」  ', 40)).toBe('Codex 子代理测试');
   });
 
   it('uses Unicode code points for the length limit', () => {
     expect(validateTitleOutput('😀😀😀', 3)).toBe('😀😀😀');
     expect(validateTitleOutput('😀😀😀😀', 3)).toBeNull();
+  });
+
+  it('拒绝未超出 40 字符限制的长度指令回显', () => {
+    expect(validateTitleOutput('Use at most 40 characters.', 40)).toBeNull();
   });
 });

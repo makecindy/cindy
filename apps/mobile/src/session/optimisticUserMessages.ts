@@ -2,14 +2,41 @@ import type { QueuedRemoteMessage, RemoteMessage } from './types';
 import { historyViewLeaves, isHistoryViewUnavailable, type HistoryViewSnapshot } from '@cindy/maker-shared/message-window';
 import { pendingSendBubbleText } from './pendingSendItems';
 
+function authoritativeHistoryMessages(
+  snapshot: HistoryViewSnapshot<RemoteMessage>, rawMessages: readonly RemoteMessage[],
+): readonly RemoteMessage[] {
+  return isHistoryViewUnavailable(snapshot.error) ? rawMessages
+    : snapshot.ready ? historyViewLeaves(snapshot.items)
+      .flatMap((item) => item.type === 'messages' ? item.messages : []) : [];
+}
+
 /** A raw push is not a handoff: the first history page may still predate it. */
 export function confirmedHistoryUserClientIds(
   snapshot: HistoryViewSnapshot<RemoteMessage>, rawMessages: readonly RemoteMessage[],
 ): ReadonlySet<string> {
-  const authoritative = isHistoryViewUnavailable(snapshot.error) ? rawMessages
-    : snapshot.ready ? historyViewLeaves(snapshot.items)
-      .flatMap((item) => item.type === 'messages' ? item.messages : []) : [];
-  return new Set(authoritative.filter((message) => message.role === 'user').map((message) => message.clientId));
+  return new Set(authoritativeHistoryMessages(snapshot, rawMessages)
+    .filter((message) => message.role === 'user').map((message) => message.clientId));
+}
+
+/**
+ * 已确认、且其后已出现任何消息(turn 已跑过)的用户消息 clientId。
+ *
+ * 被控端先落库用户行、再跑派发前钩子,之后才有运行信号;只「已确认」不代表已开跑。
+ * 权威历史与实时推送(rawMessages)可能分叉,任一来源里这条后面已有消息就算跑过。
+ */
+export function repliedHistoryUserClientIds(
+  snapshot: HistoryViewSnapshot<RemoteMessage>, rawMessages: readonly RemoteMessage[],
+): ReadonlySet<string> {
+  const confirmed = confirmedHistoryUserClientIds(snapshot, rawMessages);
+  const replied = new Set<string>();
+  for (const source of [authoritativeHistoryMessages(snapshot, rawMessages), rawMessages]) {
+    source.forEach((message, index) => {
+      if (message.role === 'user' && confirmed.has(message.clientId) && index < source.length - 1) {
+        replied.add(message.clientId);
+      }
+    });
+  }
+  return replied;
 }
 
 /** Page-local transcript slots, never persisted or sent over device-link. */

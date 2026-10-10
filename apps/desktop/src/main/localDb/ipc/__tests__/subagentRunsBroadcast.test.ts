@@ -1,3 +1,4 @@
+import path from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const h = vi.hoisted(() => {
@@ -46,7 +47,7 @@ vi.mock('@cindy/maker-core/pi-subagent-runs', () => ({
   isPiSubagentTerminal: (state: string) => ['completed', 'failed', 'stopped'].includes(state),
   listPiSubagentRunDiagnostics: h.listPiSubagentRunDiagnostics,
   listPiSubagentRuns: h.listPiSubagentRuns,
-  piSubagentRunRoot: (agentHome: string, sessionId: string) => `${agentHome}/runtime/pi-subagent-runs/${sessionId}`,
+  piSubagentRunRoot: (agentHome: string, sessionId: string) => path.join(agentHome, 'runtime', 'pi-subagent-runs', sessionId),
   readPiSubagentTranscriptPage: h.readPiSubagentTranscriptPage,
 }));
 vi.mock('../../../appSessionState.js', () => ({
@@ -72,7 +73,7 @@ vi.mock('../../subagentRuns.js', () => ({
   persistSubagentTaskUpdate: h.persistSubagentTaskUpdate,
 }));
 
-import { SUBAGENT_RUNS_CHANGED_CHANNEL } from '@cindy/maker-shared/subagent-workspace';
+import { SUBAGENT_RUNS_CHANGED_CHANNEL, type SubagentRunDetailResponse } from '@cindy/maker-shared/subagent-workspace';
 import {
   __resetSubagentReconcileFingerprintsForTests,
   broadcastSubagentRunsChanged,
@@ -204,6 +205,35 @@ describe('Subagent runs broadcast boundary', () => {
         identityAliases: ['123e4567-e89b-42d3-a456-426614174080-2'],
       },
     ]);
+  });
+
+  it.each([false, true])('preserves explicit readiness and legacy absence in detail (remote=%s)', async (remote) => {
+    h.deviceLinkInvoke = remote;
+    registerSubagentRunsIpc();
+    h.getSubagentRunDetail.mockResolvedValue({
+      id: 'run-1', logicalAgentId: 'parent-tool', provider: 'pi', status: 'running',
+      providerRunIds: [], capabilities: { steer: true },
+    });
+    h.listPiSubagentRuns.mockResolvedValue([{
+      version: 1, runId: '123e4567-e89b-42d3-a456-426614174082', taskId: 'parent-tool',
+      parentSessionId: 'session-1', runnerInstanceId: 'runner-1', state: 'running',
+      startedAt: 1_000, updatedAt: 2_000,
+      tasks: [false, true, undefined].map((resultReady, index) => ({
+        childId: `child-${index}`, sessionId: `pi-session-${index}`, agent: 'worker', status: 'running',
+        output: 'Some output', ...(resultReady === undefined ? {} : { resultReady }),
+      })),
+    }]);
+    const handler = h.ipcHandlers.get('local-db:subagent-runs:detail')!;
+    const response = await handler({}, {
+      sessionId: 'session-1', provider: 'pi', runIdOrAlias: 'parent-tool',
+    }) as SubagentRunDetailResponse;
+    // Exercise the wire representation too: false must survive serialization,
+    // and a legacy record must not gain a fabricated readiness value.
+    const children = JSON.parse(JSON.stringify(response)).run.children;
+    expect(children).toHaveLength(3);
+    expect(children[0]).toMatchObject({ output: 'Some output', resultReady: false });
+    expect(children[1]).toMatchObject({ output: 'Some output', resultReady: true });
+    expect(children[2]).not.toHaveProperty('resultReady');
   });
 
   it('leaves a child that has only ever had one id without aliases', async () => {
@@ -918,7 +948,7 @@ describe('Subagent runs broadcast boundary', () => {
       limit: 25,
     })).resolves.toEqual({ supported: true, entries: [] });
     expect(h.readPiSubagentTranscriptPage).toHaveBeenCalledWith(
-      '/user-data/pi-agent-home/runtime/pi-subagent-runs/session-1',
+      path.join('/user-data', 'pi-agent-home', 'runtime', 'pi-subagent-runs', 'session-1'),
       [
         '123e4567-e89b-42d3-a456-426614174000',
         '123e4567-e89b-42d3-a456-426614174001',

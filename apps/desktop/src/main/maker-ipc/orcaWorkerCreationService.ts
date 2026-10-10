@@ -1,11 +1,12 @@
 import type { AgentKind } from '@cindy/maker-core';
-import type { AuthStrategy } from '@cindy/model-providers';
+import { isCodexGatewayWireModel, type AuthStrategy } from '@cindy/model-providers';
 import path from 'node:path';
 
 import { isCredentialModeSwitchBusyError } from '../maker-host/codex-credential-switch.js';
 import { isSubscriptionDirectModel } from '../../shared/subscriptionModels.js';
 import type { DispatchWorkerTaskResult, OrcaWorkerEffort, OrcaWorkerStatus } from './orcaTeamService.js';
 import type { MakerSessionCreateOpts } from './sessionRequest.js';
+import type { OrcaRemoteWorkerProxySessionSeed } from '../localDb/client/tx/types.js';
 import {
   resolveOrcaWorkerPermissionMode,
   type OrcaWorkerPermissionMode,
@@ -34,6 +35,11 @@ export interface OrcaLeadSessionSnapshot {
    * 本机目录。null = 本地 lead,worker 也是本地。
    */
   remoteHostId: string | null;
+  /**
+   * lead 的 Agent 在同账号另一台电脑上运行时那台电脑的设备 id。worker 继承它(Agent 同样在
+   * 那台运行，模型与来源按那台的目录选)；任务与文件都在本机。缺省 = Agent 在本机。
+   */
+  agentDeviceId?: string | null;
 }
 
 /** worker limit 与 duplicate label 校验只需要 worker 的身份、label 与占槽状态。 */
@@ -77,7 +83,10 @@ export interface OrcaWorkerProviderSnapshot {
    * 元数据,effort 归一保留拍平清单解析(兼容旧组装方)。
    */
   effortMetaByModel?: Readonly<
-    Record<string, { efforts: readonly string[]; defaultEffort: string | null }>
+    Record<
+      string,
+      { efforts: readonly string[]; defaultEffort: string | null; effortsUnknown?: boolean }
+    >
   >;
   /** true 表示该来源必须写入 session provider store 才能注入自己的 API key/OAuth token。 */
   requiresExplicitRoute?: boolean;
@@ -99,8 +108,13 @@ export function providerRouteRequiresExplicitSelection(
 
 /** 同一次 provider registry 快照派生出的可用性与默认模型路由，避免两次读取产生竞态。 */
 export interface OrcaWorkerProviderRoutingContext {
-  /** SSH catalogs own both admission and defaults; never mix controller capabilities. */
+  /**
+   * SSH catalogs own both admission and defaults; never mix controller capabilities.
+   * 运行 Agent 的另一台电脑的目录同理(本机目录里没有那台的模型)。
+   */
   remoteCodexModels?: OrcaWorkerModelCapabilities[];
+  /** 远端目录的 worker 默认值(缺省时沿用 SSH Codex 的默认规则)。 */
+  remoteWorkerDefaults?: (lead: OrcaLeadSessionSnapshot, agent: AgentKind) => OrcaWorkerDefaultsSnapshot;
   availability: Record<AgentKind, OrcaWorkerProviderSnapshot[]>;
   resolveDefaultProviderIdForModel(agent: AgentKind, model: string): string | null;
 }
@@ -110,6 +124,8 @@ export interface OrcaWorkerModelCapabilities {
   id: string;
   efforts?: readonly string[];
   defaultEffort?: string | null;
+  /** true = 没有任何来源声明过档位,efforts 只是占位;显式档位交给引擎裁决而不是拒绝(#5535)。 */
+  effortsUnknown?: boolean;
   supportsFastMode?: boolean;
 }
 
@@ -142,6 +158,14 @@ export type OrcaWorkerCreationErrorCode =
   | 'NO_PROVIDER_FOR_AGENT'
   | 'PROVIDER_ROUTE_UNAVAILABLE'
   | 'BUSY'
+  /** 指定的运行设备离线、未开启远程控制或调用失败。 */
+  | 'REMOTE_AGENT_DEVICE_UNREACHABLE'
+  /** 指定的运行设备版本过旧，不支持协同远端 Worker。 */
+  | 'UNSUPPORTED_CAPABILITY'
+  | 'REMOTE_WORKDIR_NOT_FOUND'
+  | 'REMOTE_WORKDIR_NOT_DIRECTORY'
+  | 'REMOTE_WORKDIR_INVALID'
+  | 'REMOTE_WORKDIR_UNAVAILABLE'
   | 'INTERNAL';
 
 /** worker 创建结果保留首条派活 outcome，让调用方区分 created-but-not-dispatched。 */
@@ -157,6 +181,8 @@ export type OrcaWorkerCreationResult =
       /** initial_task 入队(未直发)时回传:排队消息的可寻址句柄,供 lead 查看/修改/撤回。 */
       queuedMessageId?: string;
       limit?: OrcaWorkerLimitSnapshot;
+      /** 在另一台电脑运行的 Worker 才有；workerSessionId 此时是本机代理任务。 */
+      executionDeviceId?: string;
       resolved: {
         agent: AgentKind;
         model: string;
@@ -191,11 +217,38 @@ export interface OrcaWorkerCreateParams {
    */
   providerId?: string | null;
   initialTask?: string;
-  /** Existing absolute directory on the Worker's host; omission inherits Lead. */
+  /**
+   * Existing absolute directory on the Worker's host; omission inherits Lead.
+   * 指定运行设备时是那台电脑上的目录，缺省由那台按自身设置分配任务目录。
+   */
   workingDir?: string;
   /** 显式值用于本次创建；缺省读取全局 Worker 创建偏好。 */
   workerPermissionMode?: OrcaWorkerPermissionMode;
+  /**
+   * 运行设备：同账号另一台电脑的设备 id。指定时 Worker 的任务、目录与命令都在那台；
+   * 缺省 = 与 Lead 同一台(现有行为)。与 SSH 远端 Lead、远程 Agent Lead 互斥。
+   */
+  executionDeviceId?: string;
 }
+
+/** 运行设备已建好任务；代理数据随后与 Worker 路由一起提交。 */
+export type OrcaRemoteWorkerOpenResult =
+  | {
+      ok: true;
+      proxySessionId: string;
+      proxySession: OrcaRemoteWorkerProxySessionSeed;
+      remoteSessionId: string;
+      agent: AgentKind;
+      model: string;
+      workingDir: string;
+    }
+  | {
+      ok: false;
+      errorCode: Extract<OrcaWorkerCreationErrorCode,
+        'REMOTE_AGENT_DEVICE_UNREACHABLE' | 'UNSUPPORTED_CAPABILITY' | 'INVALID_PARAMS' | 'INTERNAL' |
+        'REMOTE_WORKDIR_NOT_FOUND' | 'REMOTE_WORKDIR_NOT_DIRECTORY' | 'REMOTE_WORKDIR_INVALID' | 'REMOTE_WORKDIR_UNAVAILABLE'>;
+      message: string;
+    };
 
 /** enableOrca 已经创建 team 后，可复用同一 worker 创建内核。 */
 export interface OrcaWorkerCreateInTeamParams extends OrcaWorkerCreateParams {
@@ -203,11 +256,20 @@ export interface OrcaWorkerCreateInTeamParams extends OrcaWorkerCreateParams {
   workerPermissionMode: OrcaWorkerPermissionMode;
 }
 
+export type OrcaWorkerCreationPlanValidator = (
+  params: OrcaWorkerCreateInTeamParams,
+  resolvedWorkingDir?: string,
+  resolvedRoute?: { model: string; providerId: string | null; effort: string | null; fastMode: boolean },
+  assertCurrent?: () => Promise<void>,
+) => Promise<number | null | undefined>;
+
 /** creation service 的 I/O 边界；register.ts 负责把 DB、Maker 与 broadcast 注入进来。 */
 export interface OrcaWorkerCreationDeps {
   getActiveTeamByLead(leadSessionId: string): Promise<OrcaTeamSnapshot | null>;
   listWorkersByLead(leadSessionId: string): Promise<OrcaWorkerListSnapshot[]>;
   isActiveWorkerStatus(status: OrcaWorkerStatus): boolean;
+  withLeadSendLock?<T>(leadSessionId: string, operation: () => Promise<T>): Promise<T>;
+  validateCreationPlan?: OrcaWorkerCreationPlanValidator;
   readCollaborationSettings(): { workerSoftLimit: number; workerHardLimit: number };
   getLeadSessionRow(leadSessionId: string): Promise<OrcaLeadSessionSnapshot | null>;
   getWorkerDefaults(agent: AgentKind): OrcaWorkerDefaultsSnapshot;
@@ -220,7 +282,12 @@ export interface OrcaWorkerCreationDeps {
    * availability 只保留已连接 provider 的最小视图；显式 model 的默认来源解析复用
    * model-providers 的 effectiveSourceIdForModel，避免在创建服务里复制供应商优先级。
    */
-  getProviderRoutingContext(agent?: AgentKind, remoteHostId?: string | null): Promise<OrcaWorkerProviderRoutingContext>;
+  getProviderRoutingContext(
+    agent?: AgentKind,
+    remoteHostId?: string | null,
+    /** lead 的 Agent 在另一台电脑运行时，按那台的目录。 */
+    agentDeviceId?: string | null,
+  ): Promise<OrcaWorkerProviderRoutingContext>;
   readClaudeApiKey(): string | null;
   reserveWorkerCreation(input: {
     reservationId: string;
@@ -267,12 +334,49 @@ export interface OrcaWorkerCreationDeps {
   }): Promise<DispatchWorkerTaskResult>;
   broadcastSessionCreated(sessionId: string): void;
   broadcastOrcaWorkerChanged(leadSessionId: string): void;
+  /**
+   * 协同远端 Worker：在运行设备上新建任务，并在本机写一条不跑 Agent 的代理任务行。
+   * 未注入 = 本机不支持远端 Worker。
+   */
+  openRemoteWorker?(input: {
+    deviceId: string;
+    workerId: string;
+    teamId: string;
+    leadSessionId: string;
+    label: string;
+    role: string;
+    agent: AgentKind;
+    model?: string;
+    providerId?: string;
+    effort?: string;
+    fast?: boolean;
+    permissionMode: OrcaWorkerPermissionMode;
+    workingDir?: string;
+    title: string;
+  }): Promise<OrcaRemoteWorkerOpenResult>;
+  /** 原子写入 Worker 与运行设备路由，再开始轮询。 */
+  recordRemoteWorker?(input: {
+    workerId: string;
+    teamId: string;
+    leadSessionId: string;
+    proxySessionId: string;
+    proxySession: OrcaRemoteWorkerProxySessionSeed;
+    deviceId: string;
+    remoteSessionId: string;
+    label: string;
+    role: string;
+    /** 运行设备上实际使用的工作目录，只做展示。 */
+    workingDir?: string;
+  }): Promise<void>;
+  /** 创建失败时回收：通知运行设备结束协同并归档本机代理行。 */
+  discardRemoteWorker?(input: { proxySessionId: string; deviceId: string; remoteSessionId: string }): Promise<void>;
 }
 
 /** Orca worker 创建服务，只负责创建既有 team 下的新 worker，不负责 team lifecycle。 */
 export interface OrcaWorkerCreationService {
-  createWorker(params: OrcaWorkerCreateParams): Promise<OrcaWorkerCreationResult>;
-  createWorkerInTeam(params: OrcaWorkerCreateInTeamParams): Promise<OrcaWorkerCreationResult>;
+  createWorker(params: OrcaWorkerCreateParams, assertCurrent?: () => Promise<void>): Promise<OrcaWorkerCreationResult>;
+  createWorkerInTeam(params: OrcaWorkerCreateInTeamParams, assertCurrent?: () => Promise<void>,
+    onCreated?: (assertCreatedCurrent: () => Promise<void>) => void): Promise<OrcaWorkerCreationResult>;
 }
 
 function toInternalFailure(err: unknown): Extract<OrcaWorkerCreationResult, { ok: false }> {
@@ -313,6 +417,13 @@ export function normalizeOrcaWorkerLabel(value: string): { ok: true; value: stri
 }
 
 const ORCA_WORKER_CREATION_RESERVATION_LEASE_MS = 5 * 60 * 1000;
+
+/** Worker 任务标题：label 与角色名相同时只写一次(「Worker · reader」而非「Worker · reader · reader」)。 */
+export function orcaWorkerTitle(role: string, label: string): string {
+  return role.trim().toLowerCase() === label.trim().toLowerCase()
+    ? `Worker · ${role}`
+    : `Worker · ${role} · ${label}`;
+}
 
 function isWorkerLabelConstraintError(err: unknown): boolean {
   if (!(err instanceof Error)) return false;
@@ -459,6 +570,9 @@ function normalizeResolvedEffort(params: {
   const defaultEffort = model.defaultEffort ?? null;
   if (effort == null) return { ok: true, effort: defaultEffort };
   if (validEfforts.includes(effort)) return { ok: true, effort };
+  // 未声明档位(#5535):目录与路由来源都没说过这个模型支持什么,[] 只是占位。显式档位
+  // 原样交给引擎/供应商裁决,不再以 valid: none 拒绝;明确无档位(已声明空表)仍走下方拒绝。
+  if (explicit && model.effortsUnknown === true) return { ok: true, effort };
   if (effort === 'minimal' && !explicit && validEfforts.includes('low')) {
     return { ok: true, effort: 'low' };
   }
@@ -520,11 +634,11 @@ function resolveWorkerConfig(params: {
 }
 
 export function budgetModelRequiresApiKey(agent: AgentKind, model: string, hasApiKey: boolean): boolean {
-  return agent === 'codex' && model.startsWith('codex/') && !hasApiKey;
+  return agent === 'codex' && isCodexGatewayWireModel(model) && !hasApiKey;
 }
 
 export function budgetModelRequiresApiKeyMessage(model: string): string {
-  return `模型 "${model}"（codex/ 路由）需要先在设置里连接 Cindy AI 才能使用。`;
+  return `模型 "${model}"（openai-codex/ 或 codex/ 路由）需要先在设置里连接 Cindy AI 才能使用。`;
 }
 
 /** agent 的人类可读名,用于 preflight 失败信息。 */
@@ -595,7 +709,194 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
     await deps.archiveWorkerSession(sessionId).catch(() => undefined);
   }
 
-  async function createWorker(params: OrcaWorkerCreateParams): Promise<OrcaWorkerCreationResult> {
+  /**
+   * 协同远端 Worker：任务、目录、命令都在运行设备上。模型与来源由运行设备按它自己的目录准入
+   * (缺省用那台的默认)，本机不按自身目录预检；本机只占槽、建代理任务行并登记 Worker。
+   */
+  async function createRemoteWorkerInTeam(input: {
+    params: OrcaWorkerCreateInTeamParams;
+    role: string;
+    label: string;
+    lead: OrcaLeadSessionSnapshot;
+    settings: { workerSoftLimit: number; workerHardLimit: number };
+    validatePlan: (workingDir?: string) => Promise<number | null | undefined>;
+    assertCurrent?: () => Promise<void>;
+    onCreated?: (assertCreatedCurrent: () => Promise<void>) => void;
+  }): Promise<OrcaWorkerCreationResult> {
+    const { params, role, label, lead, settings, validatePlan, assertCurrent, onCreated } = input;
+    const deviceId = typeof params.executionDeviceId === 'string' ? params.executionDeviceId.trim() : '';
+    if (!/^[A-Za-z0-9_.:-]{1,128}$/.test(deviceId)) {
+      return { ok: false, errorCode: 'INVALID_PARAMS', message: 'execution_device_id must be a device id' };
+    }
+    if (!deps.openRemoteWorker || !deps.recordRemoteWorker || !deps.discardRemoteWorker) {
+      return { ok: false, errorCode: 'INVALID_PARAMS', message: 'this computer cannot run Workers on other devices' };
+    }
+    if (lead.remoteHostId || lead.agentDeviceId) {
+      return {
+        ok: false,
+        errorCode: 'INVALID_PARAMS',
+        message: 'a Lead on an SSH host or with its Agent on another computer cannot place Workers on other devices',
+      };
+    }
+    let requestedDir: string | undefined;
+    if (params.workingDir !== undefined) {
+      const dir = typeof params.workingDir === 'string' ? params.workingDir : '';
+      // 运行设备的系统未知：POSIX 或 Windows 绝对路径都接受，是否存在由那台校验。
+      if (
+        !dir ||
+        dir.length > 4096 ||
+        /[\0\r\n]/.test(dir) ||
+        !(path.posix.isAbsolute(dir) || path.win32.isAbsolute(dir))
+      ) {
+        return {
+          ok: false,
+          errorCode: 'INVALID_PARAMS',
+          message: 'working_dir must be an absolute directory on the execution device',
+        };
+      }
+      requestedDir = dir;
+    }
+    const permissionMode = resolveOrcaWorkerPermissionMode(params.workerPermissionMode);
+    const explicitSourceId =
+      typeof params.providerId === 'string' && params.providerId.trim() ? params.providerId.trim() : undefined;
+
+    const workerId = deps.createId();
+    let reservation:
+      | { ok: true; occupiedSlotsBefore: number }
+      | { ok: false; errorCode: 'DUPLICATE_LABEL' | 'WORKER_CREATION_IN_PROGRESS' | 'WORKER_LIMIT_HARD_EXCEEDED' };
+    try {
+      const admit = async () => {
+        const latestLimit = await validatePlan(requestedDir);
+        settings.workerHardLimit = deps.readCollaborationSettings().workerHardLimit;
+        if (latestLimit != null) settings.workerHardLimit = Math.min(settings.workerHardLimit, latestLimit);
+        return deps.reserveWorkerCreation({
+          reservationId: workerId,
+          teamId: params.teamId,
+          label,
+          hardLimit: settings.workerHardLimit,
+          leaseMs: ORCA_WORKER_CREATION_RESERVATION_LEASE_MS,
+        });
+      };
+      reservation = deps.withLeadSendLock
+        ? await deps.withLeadSendLock(params.leadSessionId, admit)
+        : await admit();
+    } catch (err) {
+      return toInternalFailure(err);
+    }
+    if (!reservation.ok) {
+      if (reservation.errorCode === 'DUPLICATE_LABEL') {
+        return { ok: false, errorCode: 'DUPLICATE_LABEL', message: `label "${label}" already used in this team` };
+      }
+      if (reservation.errorCode === 'WORKER_CREATION_IN_PROGRESS') {
+        return { ok: false, errorCode: 'WORKER_CREATION_IN_PROGRESS', message: `label "${label}" is currently being created` };
+      }
+      return {
+        ok: false,
+        errorCode: 'WORKER_LIMIT_HARD_EXCEEDED',
+        message: `hard limit ${settings.workerHardLimit} reached`,
+        limit: limitSnapshot(settings.workerHardLimit, settings.workerHardLimit),
+      };
+    }
+    const softLimitExceeded = reservation.occupiedSlotsBefore >= settings.workerSoftLimit;
+    let reservationValid = true;
+    const renewalTimer = setInterval(() => {
+      void deps.renewWorkerCreationReservation(workerId, ORCA_WORKER_CREATION_RESERVATION_LEASE_MS)
+        .then((renewed) => { if (!renewed) reservationValid = false; })
+        .catch(() => { reservationValid = false; });
+    }, Math.floor(ORCA_WORKER_CREATION_RESERVATION_LEASE_MS / 3));
+    renewalTimer.unref?.();
+
+    try {
+      await assertCurrent?.();
+      let opened: Extract<OrcaRemoteWorkerOpenResult, { ok: true }>;
+      try {
+        const result = await deps.openRemoteWorker({
+          deviceId,
+          workerId,
+          teamId: params.teamId,
+          leadSessionId: params.leadSessionId,
+          label,
+          role,
+          agent: params.agent,
+          ...(params.model !== undefined ? { model: params.model } : {}),
+          ...(explicitSourceId ? { providerId: explicitSourceId } : {}),
+          ...(params.effort !== undefined ? { effort: params.effort } : {}),
+          ...(params.fast !== undefined ? { fast: params.fast } : {}),
+          permissionMode,
+          ...(requestedDir ? { workingDir: requestedDir } : {}),
+          title: orcaWorkerTitle(role, label),
+        });
+        if (!result.ok) return { ok: false, errorCode: result.errorCode, message: result.message };
+        opened = result;
+      } catch (err) {
+        return toInternalFailure(err);
+      }
+      const discard = () =>
+        deps.discardRemoteWorker!({
+          proxySessionId: opened.proxySessionId,
+          deviceId,
+          remoteSessionId: opened.remoteSessionId,
+        }).catch(() => undefined);
+
+      const renewed = reservationValid
+        ? await deps.renewWorkerCreationReservation(workerId, ORCA_WORKER_CREATION_RESERVATION_LEASE_MS).catch(() => false)
+        : false;
+      if (!renewed) {
+        await discard();
+        return { ok: false, errorCode: 'INTERNAL', message: 'worker creation reservation expired before persistence' };
+      }
+      try {
+        const finalPlanLimit = await validatePlan(requestedDir);
+        if (finalPlanLimit != null && reservation.occupiedSlotsBefore >= finalPlanLimit) {
+          await discard();
+          return { ok: false, errorCode: 'WORKER_LIMIT_HARD_EXCEEDED', message: 'Registered plan concurrency reached' };
+        }
+        await deps.recordRemoteWorker({
+          workerId,
+          teamId: params.teamId,
+          leadSessionId: params.leadSessionId,
+          proxySessionId: opened.proxySessionId,
+          proxySession: opened.proxySession,
+          deviceId,
+          remoteSessionId: opened.remoteSessionId,
+          label,
+          role,
+          ...(opened.workingDir ? { workingDir: opened.workingDir } : {}),
+        });
+      } catch (err) {
+        await discard();
+        if (isWorkerLabelConstraintError(err)) {
+          return { ok: false, errorCode: 'DUPLICATE_LABEL', message: `label "${label}" already used in this team` };
+        }
+        return toInternalFailure(err);
+      }
+
+      onCreated?.(async () => { await validatePlan(requestedDir); });
+      return {
+        ok: true,
+        teamId: params.teamId,
+        workerId,
+        workerSessionId: opened.proxySessionId,
+        executionDeviceId: deviceId,
+        softLimitExceeded,
+        limit: limitSnapshot(settings.workerHardLimit, reservation.occupiedSlotsBefore + 1),
+        resolved: {
+          agent: opened.agent,
+          model: opened.model,
+          effort: opened.proxySession.effort || null,
+          fastMode: opened.proxySession.fastMode,
+          providerId: explicitSourceId ?? null,
+          role,
+          label,
+        },
+      };
+    } finally {
+      clearInterval(renewalTimer);
+      await deps.releaseWorkerCreationReservation(workerId).catch(() => undefined);
+    }
+  }
+
+  async function createWorker(params: OrcaWorkerCreateParams, assertCurrent?: () => Promise<void>): Promise<OrcaWorkerCreationResult> {
     const team = await deps.getActiveTeamByLead(params.leadSessionId);
     if (!team) {
       return { ok: false, errorCode: 'NOT_FOUND', message: 'no active team for this lead' };
@@ -607,10 +908,11 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
         params.workerPermissionMode === undefined
           ? deps.getWorkerPermissionMode()
           : resolveOrcaWorkerPermissionMode(params.workerPermissionMode),
-    });
+    }, assertCurrent);
   }
 
-  async function createWorkerInTeam(params: OrcaWorkerCreateInTeamParams): Promise<OrcaWorkerCreationResult> {
+  async function createWorkerInTeam(params: OrcaWorkerCreateInTeamParams, assertCurrent?: () => Promise<void>,
+    onCreated?: (assertCreatedCurrent: () => Promise<void>) => void): Promise<OrcaWorkerCreationResult> {
     const role = normalizeRequiredText(params.role, 'role');
     if (!role.ok) return { ok: false, errorCode: 'INVALID_PARAMS', message: role.message };
     if (role.value.length > 32) {
@@ -618,13 +920,22 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
     }
     const label = normalizeOrcaWorkerLabel(params.label);
     if (!label.ok) return { ok: false, errorCode: 'INVALID_PARAMS', message: label.message };
+    params = { ...params, label: label.value };
+    const validatePlan = async (workingDir?: string, route?: Parameters<OrcaWorkerCreationPlanValidator>[2]) => {
+      await assertCurrent?.();
+      // Host validation runs the captured source check before its final synchronous
+      // directory grant check. No trailing await may stale that grant observation.
+      return deps.validateCreationPlan?.(params, workingDir, route, assertCurrent);
+    };
 
     const existing = await deps.listWorkersByLead(params.leadSessionId);
     if (existing.some((worker) => worker.label?.toLowerCase() === label.value)) {
       return { ok: false, errorCode: 'DUPLICATE_LABEL', message: `label "${label.value}" already used in this team` };
     }
 
-    const settings = deps.readCollaborationSettings();
+    const planLimit = await validatePlan();
+    const settings = {...deps.readCollaborationSettings()};
+    if (planLimit != null) settings.workerHardLimit = Math.min(settings.workerHardLimit, planLimit);
     const activeCount = existing.filter((worker) => deps.isActiveWorkerStatus(worker.status)).length;
     if (activeCount >= settings.workerHardLimit) {
       return {
@@ -638,6 +949,18 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
     if (!lead) {
       return { ok: false, errorCode: 'NOT_FOUND', message: `lead session ${params.leadSessionId} not found` };
     }
+    if (params.executionDeviceId !== undefined) {
+      return createRemoteWorkerInTeam({
+        params,
+        role: role.value,
+        label: label.value,
+        lead,
+        settings,
+        validatePlan,
+        assertCurrent,
+        onCreated,
+      });
+    }
     // 标准面板显式选定的来源(非空 string)直接生效,由下方精确 preflight 把关「已连接且
     // 提供该模型」;空串/null/undefined 一律按未显式处理(与 IPC 边界同口径,service 作为
     // 共用内核自防调用方漏归一)。
@@ -645,7 +968,9 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
       typeof params.providerId === 'string' && params.providerId.trim().length > 0
         ? params.providerId.trim()
         : null;
-    const providerRouting = await deps.getProviderRoutingContext(params.agent, lead.remoteHostId);
+    const providerRouting = lead.agentDeviceId
+      ? await deps.getProviderRoutingContext(params.agent, lead.remoteHostId, lead.agentDeviceId)
+      : await deps.getProviderRoutingContext(params.agent, lead.remoteHostId);
     const availableModels = providerRouting.remoteCodexModels ?? deps.getAvailableModels(params.agent);
     const providerAvailability = providerRouting.availability;
     const agentProviders = providerAvailability[params.agent] ?? [];
@@ -707,10 +1032,12 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
     // workingDir), ensureRemoteReadyForSessionStart 对 pi 已支持 silent install +
     // pi-manager 预上传, orca_worker_bridge 工具面经 SSH remote-forward 隧道注入。
     // 与 CC/Codex remote worker 同构;此闸会让 remote pi lead 完全无法使用 pi worker。
-    const defaults: OrcaWorkerDefaultsSnapshot = providerRouting.remoteCodexModels
-      ? { model: lead.agentKind === 'codex' && availableModels.some((model) => model.id === lead.model)
-          ? lead.model : availableModels[0]?.id, providerId: 'openai' }
-      : deps.getWorkerDefaults(params.agent);
+    const defaults: OrcaWorkerDefaultsSnapshot = providerRouting.remoteWorkerDefaults
+      ? providerRouting.remoteWorkerDefaults(lead, params.agent)
+      : providerRouting.remoteCodexModels
+        ? { model: lead.agentKind === 'codex' && availableModels.some((model) => model.id === lead.model)
+            ? lead.model : availableModels[0]?.id, providerId: 'openai' }
+        : deps.getWorkerDefaults(params.agent);
     const workerDefaultProviderId =
       typeof defaults.providerId === 'string' && defaults.providerId.trim()
         ? defaults.providerId.trim()
@@ -864,6 +1191,7 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
           id: resolved.model,
           efforts: routeEffortMeta.efforts,
           defaultEffort: routeEffortMeta.defaultEffort,
+          effortsUnknown: routeEffortMeta.effortsUnknown,
         },
         effort: params.effort ?? defaults.effort ?? lead.effort,
         explicit: params.effort !== undefined,
@@ -987,13 +1315,23 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
       | { ok: true; occupiedSlotsBefore: number }
       | { ok: false; errorCode: 'DUPLICATE_LABEL' | 'WORKER_CREATION_IN_PROGRESS' | 'WORKER_LIMIT_HARD_EXCEEDED' };
     try {
-      reservation = await deps.reserveWorkerCreation({
-        reservationId: workerId,
-        teamId: params.teamId,
-        label: label.value,
-        hardLimit: settings.workerHardLimit,
-        leaseMs: ORCA_WORKER_CREATION_RESERVATION_LEASE_MS,
-      });
+      const admit = async () => {
+        // Preparation may await providers or remote state. Re-read the plan at
+        // the final admission boundary shared with plan registration and input.
+        const latestLimit = await validatePlan(workingDir, resolved);
+        settings.workerHardLimit = deps.readCollaborationSettings().workerHardLimit;
+        if (latestLimit != null) settings.workerHardLimit = Math.min(settings.workerHardLimit, latestLimit);
+        return deps.reserveWorkerCreation({
+          reservationId: workerId,
+          teamId: params.teamId,
+          label: label.value,
+          hardLimit: settings.workerHardLimit,
+          leaseMs: ORCA_WORKER_CREATION_RESERVATION_LEASE_MS,
+        });
+      };
+      reservation = deps.withLeadSendLock
+        ? await deps.withLeadSendLock(params.leadSessionId, admit)
+        : await admit();
     } catch (err) {
       return toInternalFailure(err);
     }
@@ -1021,6 +1359,12 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
     renewalTimer.unref?.();
 
     try {
+      // Registration may race the preflight. Once a reservation exists, a new
+      // plan cannot be registered; reread any plan that won before reservation.
+      const reservedPlanLimit = await validatePlan(workingDir, resolved);
+      if (reservedPlanLimit != null && reservation.occupiedSlotsBefore >= reservedPlanLimit) {
+        return { ok: false, errorCode: 'WORKER_LIMIT_HARD_EXCEEDED', message: 'Registered plan concurrency reached' };
+      }
       const workerSessionId = deps.createSessionId();
       const workerVendorOptions = {
         orcaRole: 'worker' as const,
@@ -1040,13 +1384,15 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
         // remote lead 的 worker 继承 remoteHostId:在同一台远端主机上 spawn,
         // workingDir 在该远端校验；本地 lead 不带此字段（本地 worker）。
         ...(lead.remoteHostId ? { remoteHostId: lead.remoteHostId } : {}),
+        // lead 的 Agent 在另一台电脑运行：worker 的 Agent 也在那台(任务与文件在本机)。
+        ...(lead.agentDeviceId && !lead.remoteHostId ? { agentDeviceId: lead.agentDeviceId } : {}),
         model: resolved.model,
         providerId: resolved.providerId,
         effort: resolved.effort as MakerSessionCreateOpts['effort'],
         fastMode: resolved.fastMode,
         // 所有创建入口先解析 Worker 创建偏好，再统一透传到这里；不继承 Lead 权限。
         permissionMode: resolveOrcaWorkerPermissionMode(params.workerPermissionMode),
-        title: `Worker · ${role.value} · ${label.value}`,
+        title: orcaWorkerTitle(role.value, label.value),
         orcaRole: 'worker',
         vendorOptions: workerVendorOptions,
       });
@@ -1058,6 +1404,7 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
         if (lead.remoteHostId && deps.ensureRemoteReadyForSessionStart) {
           await deps.ensureRemoteReadyForSessionStart({ createOpts: workerOpts });
         }
+        await assertCurrent?.();
         const bootstrapped = await deps.bootstrapSession(workerOpts);
         workerSession = bootstrapped.session;
       } catch (err) {
@@ -1073,6 +1420,13 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
       }
 
       try {
+        // Bootstrap and lease renewal both await external work. Reuse the same
+        // admission validator before recording a Worker that lifecycle can dispatch.
+        const finalPlanLimit = await validatePlan(workingDir, resolved);
+        if (finalPlanLimit != null && reservation.occupiedSlotsBefore >= finalPlanLimit) {
+          await cleanupBootstrappedWorkerSession(workerSession.id);
+          return { ok: false, errorCode: 'WORKER_LIMIT_HARD_EXCEEDED', message: 'Registered plan concurrency reached' };
+        }
         await deps.addOrUpdateWorker({
           id: workerId,
           teamId: params.teamId,
@@ -1092,12 +1446,16 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
 
       try {
         await deps.markOrcaRoleIfNeeded(workerSession.id, 'worker');
+        await validatePlan(workingDir, resolved);
       } catch (err) {
         await cleanupBootstrappedWorkerSession(workerSession.id);
         await deps.removeWorker(workerId).catch(() => undefined);
         return toInternalFailure(err);
       }
 
+      // Carry the resolved spawn facts through lifecycle/accepted callbacks only;
+      // neither the function nor its closure is part of the public result.
+      onCreated?.(async () => { await validatePlan(workingDir, resolved); });
       return {
         ok: true,
         teamId: params.teamId,

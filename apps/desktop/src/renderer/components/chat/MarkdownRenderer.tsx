@@ -12,6 +12,7 @@
  */
 
 import { Tip } from '@/components/ui/tooltip';
+import { useImageLoadFailure } from './useImageLoadFailure';
 import { FileTypeIcon } from '@/components/ui/file-type-icon';
 import { CHAT_CODE_CLASS, CHAT_CODE_SURFACE_CLASS, CHAT_ICON_BUTTON_CLASS } from './chatChrome';
 import { createElement, memo, useCallback, useEffect, useRef, useState, useMemo, isValidElement, type HTMLAttributes, type ReactNode } from 'react';
@@ -19,7 +20,7 @@ import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkCjkFriendly from 'remark-cjk-friendly';
 import remarkMath from 'remark-math';
-import rehypeHighlight from 'rehype-highlight';
+import { rehypeHighlightShared } from './rehypeHighlightShared';
 import rehypeKatex from 'rehype-katex';
 import rehypeSlug from 'rehype-slug';
 import 'katex/dist/katex.min.css';
@@ -92,7 +93,7 @@ import {
   peekRemotePathVerdict,
   peekRemotePathVerdictForRender,
   remotePathVerdictKey,
-  revealRemoteChatFile,
+  downloadRemoteChatEntry,
   subscribeRemotePathVerdictChange,
   verifyRemotePathCached,
 } from '@/lib/remoteFileOpen';
@@ -111,8 +112,11 @@ import { SessionHandoffCard } from './SessionHandoffCard';
 import { SessionLinkChip } from './SessionLinkChip';
 import { ProjectLinkChip } from './ProjectLinkChip';
 import { ImageLightbox } from './ImageLightbox';
+import { useImageClipboard } from './useImageClipboard';
 import { ImageHoverPreview } from './ImageHoverPreview';
 import { ImageMissingPlaceholder } from './ImageMissingPlaceholder';
+import { ChatVideoView } from './ChatVideoView';
+import { isManagedMarkdownVideoUrl, markdownMediaFilename } from './markdownMedia';
 import { MarkdownDiffBlock } from './MarkdownDiffBlock';
 import { MarkdownMermaidBlock } from './MarkdownMermaidBlock';
 import { TextLightbox } from './TextLightbox';
@@ -246,7 +250,7 @@ const REHYPE_PLUGINS: PluggableList = [
   rehypeSlug,
   [rehypeKatex, { strict: 'ignore', errorColor: 'inherit' }],
   rehypeMathBlockMarker,
-  rehypeHighlight,
+  rehypeHighlightShared,
   rehypeFencedCodeMarker,
 ];
 
@@ -294,14 +298,16 @@ const INLINE_CODE_CLASS = 'font-mono text-14 rounded-[6px] px-[0.4em] py-[0.2em]
 const WINDOWS_ABSOLUTE_HREF_RE = /^[A-Za-z]:[\\/]/;
 
 // react-markdown's defaultUrlTransform whitelists only http(s)/ircs/mailto/xmpp
-// and strips everything else to "" (broken <img>). We render local-cache images
-// via the privileged xdt-image:// and xdt-file:// schemes registered in main.
+// and strips everything else to "" (broken <img>). We render local-cache media
+// via the privileged xdt-image:// / xdt-video:// and xdt-file:// schemes
+// registered in main.
 // cindy:// (+ 历史 xdt-maker://) is our internal deep-link protocol (session /
 // project navigation), handled in-renderer by the <a> onClick below — must pass
 // through unsanitized so href reaches the click handler intact.
 const trustedUrlTransform: UrlTransform = (url, key) => {
   if (
     url.startsWith('xdt-image://') ||
+    url.startsWith('xdt-video://') ||
     url.startsWith('cindy-media://') ||
     url.startsWith('xdt-file://') ||
     url.startsWith('xdt-audio://') ||
@@ -837,53 +843,43 @@ function LightboxImage({
   src,
   alt,
   onZoom,
+  streaming = false,
   ...props
 }: {
   src?: string;
   alt?: string;
   onZoom: (src: string) => void;
+  streaming?: boolean;
   [key: string]: unknown;
 }) {
   const { t } = useTranslation();
-  const [hasError, setHasError] = useState(false);
+  const { status: imageStatus, onError } = useImageLoadFailure(src, streaming);
   // Right-click → custom popover menu. We track cursor pos so a 0×0 virtual
   // trigger can anchor the Radix DropdownMenu wherever the user clicked.
   const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null);
 
+  const { canCopy, canReveal: canRevealInFolder, copyImage, revealImage } = useImageClipboard(src ?? '');
+  const showMenu = canCopy || canRevealInFolder;
+
   // image-local-cache F4: when the underlying file is missing (cache cleared,
   // xdt-image:// 404, etc.), swap to the friendly placeholder card. The
   // filename is best-effort: derive it from the URL's last segment.
-  if (hasError) {
-    const fallbackName = src
-      ? decodeURIComponent(src.split(/[\\/]/).pop() ?? 'image')
-      : 'image';
-    return <ImageMissingPlaceholder filename={alt || fallbackName} />;
+  if (imageStatus) {
+    let fallbackName = src?.split(/[\\/]/).pop() ?? 'image';
+    try { fallbackName = decodeURIComponent(fallbackName); } catch { /* malformed link */ }
+    return <ImageMissingPlaceholder filename={alt || fallbackName} status={imageStatus} />;
   }
 
-  // Only locally-managed images (xdt-image:// / cindy-media://) have a
-  // meaningful "open folder" target. Remote https:// images skip the menu.
-  const canRevealInFolder =
-    !!src && (src.startsWith('xdt-image://') || src.startsWith('cindy-media://'));
   const zoomLabel = alt || t('chat.media.clickToZoom');
 
   async function handleRevealInFolder(): Promise<void> {
-    if (!src) return;
-    const res = await window.electronAPI.showItemInFolder({ url: src });
-    if (!res.success) {
-      toast.error(res.error ?? t('chat.media.openFolderFailed'));
-    }
     setMenuPos(null);
+    await revealImage();
   }
 
   async function handleCopyImage(): Promise<void> {
-    if (!src) return;
-    const res = await window.electronAPI.copyMediaToClipboard({ url: src });
-    if (res.success) {
-      toast.success(t('chat.media.imageCopied'));
-    } else {
-      toast.error(res.error ?? t('chat.media.copyFailed'));
-    }
     setMenuPos(null);
+    await copyImage();
   }
 
   return (
@@ -898,7 +894,7 @@ function LightboxImage({
           if (src) onZoom(src);
         }}
         onContextMenu={(e) => {
-          if (!canRevealInFolder) return;
+          if (!showMenu) return;
           e.preventDefault();
           e.stopPropagation();
           setMenuPos({ x: e.clientX, y: e.clientY });
@@ -908,11 +904,11 @@ function LightboxImage({
           src={src}
           alt={alt ?? ''}
           style={{ maxWidth: 'min(100%, 50vw, 480px)', maxHeight: 'min(40vh, 420px)', height: 'auto' }}
-          onError={() => setHasError(true)}
+          onError={onError}
           {...props}
         />
       </button>
-      {canRevealInFolder ? (
+      {showMenu ? (
         <DropdownMenu
           open={menuPos !== null}
           onOpenChange={(open) => {
@@ -934,14 +930,18 @@ function LightboxImage({
             />
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start" sideOffset={2}>
-            <DropdownMenuItem onClick={handleCopyImage}>
-              <Copy className="mr-2 h-4 w-4" />
-              {t('chat.media.copyImage')}
-            </DropdownMenuItem>
-            <DropdownMenuItem onClick={handleRevealInFolder}>
-              <FolderOpen className="mr-2 h-4 w-4" />
-              {t('chat.media.revealImage')}
-            </DropdownMenuItem>
+            {canCopy && (
+              <DropdownMenuItem onClick={handleCopyImage}>
+                <Copy className="mr-2 h-4 w-4" />
+                {t('chat.media.copyImage')}
+              </DropdownMenuItem>
+            )}
+            {canRevealInFolder && (
+              <DropdownMenuItem onClick={handleRevealInFolder}>
+                <FolderOpen className="mr-2 h-4 w-4" />
+                {t('chat.media.revealImage')}
+              </DropdownMenuItem>
+            )}
           </DropdownMenuContent>
         </DropdownMenu>
       ) : null}
@@ -1407,9 +1407,9 @@ async function activateResolvedLocalTarget(
   // 会弹"文件已损坏"的误导弹窗,定位到文件让用户拖进 DCC 才是本意。
   if (target.localKind === 'model') {
     if (remoteOrigin) {
-      // 3D 远程本期不做(xdt-model:// 无远程管线):下载缓存副本并在文件管理
-      // 器定位,不误开本机同路径文件。
-      await revealRemoteChatFile(remoteOrigin, ctx.workingDir, target.absPath);
+      // 3D 远程本期不做(xdt-model:// 无远程管线):下载到本地并在文件管理器
+      // 定位,不误开本机同路径文件。
+      await downloadRemoteChatEntry(remoteOrigin, ctx.workingDir, target.absPath);
       return;
     }
     if (/\.fbx(\?.*)?$/i.test(target.absPath)) {
@@ -1763,10 +1763,23 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
           workingDir,
           allowPrivilegedLinks,
         );
+        if (isManagedMarkdownVideoUrl(normalized)) {
+          // 远程会话里视频 URL 同样指向远端机器，先按来源改写到 cindy-remote-media://
+          // 再交给 ChatVideoView(与下面的图片分支同一条改写路径)。
+          return (
+            <ChatVideoView
+              src={rewriteToRemoteMediaOrigin(normalized, remoteMediaOrigin)}
+              filename={markdownMediaFilename(normalized, alt)}
+              variant="tool-output"
+              sessionId={currentSessionId}
+            />
+          );
+        }
         const imageProps = { ...props };
         delete (imageProps as Record<string, unknown>)[RAW_LOCAL_IMAGE_SRC_PROP];
         return (
           <LightboxImage
+            streaming={isStreaming}
             src={normalized ? rewriteToRemoteMediaOrigin(normalized, remoteMediaOrigin) : normalized}
             alt={alt}
             onZoom={setLightboxSrc}

@@ -1,3 +1,5 @@
+import type { TFunction } from 'i18next';
+import { formatSessionDuration } from '@/lib/sessionDurationFormat';
 /**
  * BackgroundTasksBody —— 「后台任务」tab 的内容区。
  *
@@ -56,6 +58,8 @@ import { getSessionDeviceId, useRemoteDevices } from '@/features/device-link/rem
 import { useSubagentRunStatusIndex } from '@/hooks/useSubagentRunStatusIndex';
 import { makerChatStore, EMPTY_TASK_UPDATES } from '@/lib/makerChatStore';
 import type { AgentTaskUpdate, ChatMessage } from '@/lib/makerChatStore';
+import { canManageBackgroundTasks, stopBackgroundTask } from '@/lib/backgroundTaskStop';
+import { reportBackgroundTaskStopFailure } from '@/lib/backgroundTaskStopFailure';
 import {
   getWorkflowProgressFor,
   isRemoteSessionSticky,
@@ -168,15 +172,11 @@ function statusIcon(status: string): LucideIcon {
   return LoaderCircle;
 }
 
-/** 毫秒 → 紧凑时长文案(与 AgentTaskCard 同口径;该实现未导出,此处内联)。 */
-function formatDuration(ms: number | undefined): string | undefined {
+/** 与 AgentTaskCard 共用长耗时换算,保留亚秒精度。 */
+function formatDuration(ms: number | undefined, t?: TFunction): string | undefined {
   if (typeof ms !== 'number' || !Number.isFinite(ms) || ms < 0) return undefined;
   if (ms < 1000) return `${ms}ms`;
-  const seconds = Math.round(ms / 1000);
-  if (seconds < 60) return `${seconds}s`;
-  const minutes = Math.floor(seconds / 60);
-  const rest = seconds % 60;
-  return rest > 0 ? `${minutes}m ${rest}s` : `${minutes}m`;
+  return formatSessionDuration(ms, t);
 }
 
 /** workflow 行副标题:workflow_agent 条目 done/error 计数 / 总数。 */
@@ -199,19 +199,18 @@ function workflowAgentCounts(
 }
 
 /** 停止按钮 gating(与 AgentTaskCard 同口径):running + claude-code + 有 taskId +
- *  非远程。远程判定用粘滞版:relay 瞬断窗口误判本机会放出假 Stop(本地调用假成功,
- *  任务在被控端继续跑),与水合的粘滞归属同口径。 */
+ *  有后台任务管理权(共享任务访客没有)。远程会话由 stopBackgroundTask 按会话归属
+ *  隧道到被控端执行。 */
 function canStopItem(item: SessionTaskItem, sessionId: string | null): boolean {
   return (
     item.status === 'running' &&
     item.provider === 'claude-code' &&
     Boolean(item.update?.taskId) &&
-    Boolean(sessionId) &&
-    !(sessionId && isRemoteSessionSticky(sessionId))
+    Boolean(sessionId && canManageBackgroundTasks(sessionId))
   );
 }
 
-/** 停止按钮:在飞防连点、失败静默,状态翻转由事件流收口(不改本地状态)。 */
+/** 停止按钮:在飞防连点,状态翻转由事件流收口(不改本地状态)。 */
 function StopButton({ sessionId, taskId }: { sessionId: string; taskId: string }) {
   const { t } = useTranslation();
   const [stopping, setStopping] = useState(false);
@@ -219,17 +218,16 @@ function StopButton({ sessionId, taskId }: { sessionId: string; taskId: string }
     (e: MouseEvent) => {
       // 行点击(进详情 / 聊天定位)不该被停止按钮触发。
       e.stopPropagation();
-      const api = window.electronAPI?.maker;
-      if (!api?.stopAgentTask || stopping) return;
+      if (stopping) return;
       setStopping(true);
-      void api
-        .stopAgentTask(sessionId, taskId)
-        .catch(() => {
-          // 静默:真失败时状态仍是 running,按钮保留可重试。
+      void stopBackgroundTask(sessionId, taskId)
+        .catch((error: unknown) => {
+          // 真失败时状态仍是 running,按钮保留可重试;只有远程电脑版本过旧时提示升级。
+          reportBackgroundTaskStopFailure(error, t);
         })
         .finally(() => setStopping(false));
     },
-    [sessionId, taskId, stopping],
+    [sessionId, taskId, stopping, t],
   );
   const actionLabel = t('rightSidebar.backgroundTasks.stop');
   const label = stopping
@@ -310,7 +308,7 @@ function TaskRow({
       }
     }
     const usage = item.update?.usage;
-    const duration = formatDuration(usage?.durationMs);
+    const duration = formatDuration(usage?.durationMs, t);
     if (duration) parts.push(duration);
     if (typeof usage?.totalTokens === 'number') {
       parts.push(

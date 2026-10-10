@@ -41,6 +41,7 @@ export interface DeviceLinkCreateParams {
   effort: Effort;
   permissionMode: PermissionMode;
   fastMode: boolean;
+  planModeEnabled?: boolean;
   /**
    * 附加只读引用目录(草稿期用户选的)。控制端选的是**本机路径**(extraDirs picker 走本机
    * 原生目录对话框),随 create 透传到被控端后,被控端 create 落地在 bootstrapSession 里按
@@ -54,6 +55,11 @@ export interface DeviceLinkCreateParams {
    * 落 `sessions.provider_id`,使新远程会话首个请求即按所选来源路由(与会话内切来源对称)。
    */
   providerId?: string | null;
+  /**
+   * 远程 Agent:Agent 在同账号另一台电脑运行(被控电脑支持时才会给)。此时 model / providerId
+   * 属于那台电脑的目录,被控电脑把它记进任务、经那台运行 Agent(与手机新建任务同一个参数)。
+   */
+  agentDeviceId?: string | null;
 }
 
 export interface DeviceLinkCreateArgs {
@@ -68,11 +74,14 @@ export interface DeviceLinkCreateArgs {
   effort: Effort;
   permissionMode: PermissionMode;
   fastMode: boolean;
+  planMode?: boolean;
   /** 仅当草稿有非空 extraDirs 时出现;被控端 bootstrapSession 再校验(单一真相源)。 */
   extraDirs?: string[];
   writableDirs?: string[];
   /** 仅当草稿显式选了非空来源时出现(null/空 = 跟随默认路由 → 不放进 args,provider_id 留 NULL)。 */
   providerId?: string;
+  /** 仅当 Agent 在另一台电脑运行时出现;缺省 = Agent 在被控电脑本身。 */
+  agentDeviceId?: string;
 }
 
 export function buildDeviceLinkCreateArgs(p: DeviceLinkCreateParams): DeviceLinkCreateArgs {
@@ -90,11 +99,13 @@ export function buildDeviceLinkCreateArgs(p: DeviceLinkCreateParams): DeviceLink
     effort: p.effort,
     permissionMode: p.permissionMode,
     fastMode: p.fastMode,
+    ...(p.planModeEnabled ? { planMode: true } : {}),
     // 空 / 缺省不放进 args:payload 干净,且被控端 bootstrapSession 也只在非空时才校验。
     ...(p.extraDirs && p.extraDirs.length > 0 ? { extraDirs: p.extraDirs } : {}),
     ...(p.writableDirs && p.writableDirs.length > 0 ? { writableDirs: p.writableDirs } : {}),
     // providerId 同理:仅非空显式来源才放进 args;null/空 → 不带 → 被控端 provider_id 留 NULL(默认路由)。
     ...(p.providerId ? { providerId: p.providerId } : {}),
+    ...(p.agentDeviceId ? { agentDeviceId: p.agentDeviceId } : {}),
   };
 }
 
@@ -109,6 +120,7 @@ export interface DeviceLinkSubmissionCandidate {
   effort: Effort;
   permissionMode: PermissionMode;
   fastMode: boolean;
+  planModeEnabled?: boolean;
   /** 用户显式选中的被控端来源;null / 省略 = 跟随被控端默认路由。 */
   providerId?: string | null;
 }
@@ -120,9 +132,14 @@ export interface DeviceLinkSubmissionParams {
   extraDirs?: string[];
   writableDirs?: string[];
   candidate: DeviceLinkSubmissionCandidate;
-  /** **被控端**供应商目录(useDeviceProviders 经隧道拉到的那一份)。 */
+  /**
+   * 模型目录(useDeviceProviders 经隧道拉到的那一份):通常是**被控端**的;Agent 在另一台电脑运行时
+   * 是那台的(来源也在那份目录里解析)。
+   */
   deviceProviders: ProviderView[];
   capabilityAgentKind: AgentKind;
+  /** 远程 Agent:运行 Agent 的另一台电脑;缺省 = 被控电脑本身。 */
+  agentDeviceId?: string | null;
 }
 
 /**
@@ -160,9 +177,11 @@ export function resolveDeviceLinkSubmission(p: DeviceLinkSubmissionParams): Devi
     effort: p.candidate.effort,
     permissionMode: p.candidate.permissionMode,
     fastMode: p.candidate.fastMode,
+    planModeEnabled: p.candidate.planModeEnabled,
     extraDirs: p.extraDirs,
     writableDirs: p.writableDirs,
     providerId,
+    agentDeviceId: p.agentDeviceId,
   });
 }
 
@@ -215,14 +234,18 @@ export function buildProvisionalRemoteSession(p: ProvisionalRemoteSessionParams)
     contextTokens: 0,
     contextWindow: 0,
     fastMode: p.args.fastMode,
+    planModeEnabled: p.args.planMode ?? false,
     clearedAt: null,
     pinnedAt: null,
-    // 用户此刻正在发第一条消息 —— 与本机路径建完会话就写 userSendAt 同口径,
-    // 侧边栏按这条时间轴排序,新会话该立刻浮到顶部。
-    userSendAt: p.nowIso,
+    // 与被控端刚建出的行一致:首条还没被收下,userSendAt 为空。「用户正在发第一条」由
+    // remoteProjectsStore 的首条发送叠加层在投影层补上 —— 写进分片的话,随后任何一次列表
+    // 回流都会把它冲回 null,会话就先掉进项目外的草稿区、首条落地后再跳回项目。
+    userSendAt: null,
     status: 'active',
     // Session.agentKind 是本机形态('cc' | 'codex' | 'pi'),args 里是 maker-core 形态,这里转回来。
     agentKind: p.args.agentKind === 'claude-code' ? 'cc' : p.args.agentKind,
+    // 乐观行就带上 Agent 所在电脑:会话页的模型按钮与目录从一开始就按那台显示。
+    ...(p.args.agentDeviceId ? { agentDeviceId: p.args.agentDeviceId } : {}),
     extraDirs: p.args.extraDirs ?? [],
     writableDirs: p.args.writableDirs ?? [],
     createdAt: p.nowIso,

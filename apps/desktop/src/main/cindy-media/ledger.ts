@@ -31,6 +31,34 @@ function defaultDb(): LedgerDb {
   return getDbClient().drizzle;
 }
 
+// Publication, reference borrowers and live-message cleanup share one lock.
+// Cleanup must observe a completed publication/rollback, never a provisional pin.
+const sessionMediaRefLocks = new WeakMap<LedgerDb, Map<string, Promise<void>>>();
+export async function withSessionMediaRefLock<T>(
+  db: LedgerDb,
+  sessionId: string,
+  perform: () => Promise<T>,
+): Promise<T> {
+  let locks = sessionMediaRefLocks.get(db);
+  if (!locks) {
+    locks = new Map();
+    sessionMediaRefLocks.set(db, locks);
+  }
+  const previous = locks.get(sessionId) ?? Promise.resolve();
+  let release!: () => void;
+  const next = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  locks.set(sessionId, next);
+  try {
+    await previous;
+    return await perform();
+  } finally {
+    release();
+    if (locks.get(sessionId) === next) locks.delete(sessionId);
+  }
+}
+
 /** Shared task reads use existing provenance; knowing a blob hash grants nothing. */
 export async function sessionCanRead(hash: string, sessionId: string, db: LedgerDb = defaultDb()): Promise<boolean> {
   const rows = await db.select({ one: sql`1` }).from(mediaRefs).where(and(
@@ -70,6 +98,9 @@ export async function sessionCanRead(hash: string, sessionId: string, db: Ledger
  * 由 profileEdit 用 removeRefsExceptHash 清旧引用,恢复默认头像时 removeRefs 清空。
  * 'bot-avatar':伙伴自定义头像,refId = bot id。头像地址与这条引用由
  * bots.updateProfile 在同一数据库事务里切换,删除伙伴时只清它名下的引用。
+ * 'bot-group-attachment':伙伴群聊消息里的图片附件,refId = 群 id。发送时挂上,
+ * 删群时在 botGroups.delete 同一事务里清掉;各伙伴自己的 Session 另挂
+ * session-attachment,互不牵连(docs/product-rules/bot-group-chat.md §3.1)。
  */
 export type MediaRefKind =
   | 'message'
@@ -82,7 +113,8 @@ export type MediaRefKind =
   | 'import'
   | 'integration-cache'
   | 'profile-avatar'
-  | 'bot-avatar';
+  | 'bot-avatar'
+  | 'bot-group-attachment';
 /** 出生来源类型。 */
 export type MediaOriginKind = 'ghost' | 'tool' | 'user' | 'integration';
 
@@ -350,31 +382,34 @@ export async function removeRefs(
  * Remove one session-attachment ref only when no live message in that session
  * still contains the blob hash.  The predicate is part of the DELETE so a
  * concurrent message commit cannot turn a read-then-delete check into data
- * loss; at worst a later commit recreates the coarse session ref.
+ * loss. The session lock also covers task imports that reuse a ref before
+ * publishing their managed URL; the SQL predicate runs after they settle.
  */
 export async function removeSessionAttachmentRefIfUnreferencedByLiveMessage(
   params: { sessionId: string; hash: string },
   db: LedgerDb = defaultDb(),
 ): Promise<number> {
   if (!/^[0-9a-f]{64}$/.test(params.hash)) return 0;
-  const result = await db
-    .delete(mediaRefs)
-    .where(
-      and(
-        eq(mediaRefs.refKind, 'session-attachment'),
-        eq(mediaRefs.refId, params.sessionId),
-        eq(mediaRefs.hash, params.hash),
-        sql`NOT EXISTS (
-          SELECT 1
-            FROM messages
-           WHERE messages.session_id = ${params.sessionId}
-             AND messages.rewind_at IS NULL
-             AND messages.content LIKE ${`%${params.hash}%`}
-        )`,
-      ),
-    )
-    .run();
-  return result.changes;
+  return withSessionMediaRefLock(db, params.sessionId, async () => {
+    const result = await db
+      .delete(mediaRefs)
+      .where(
+        and(
+          eq(mediaRefs.refKind, 'session-attachment'),
+          eq(mediaRefs.refId, params.sessionId),
+          eq(mediaRefs.hash, params.hash),
+          sql`NOT EXISTS (
+            SELECT 1
+              FROM messages
+             WHERE messages.session_id = ${params.sessionId}
+               AND messages.rewind_at IS NULL
+               AND messages.content LIKE ${`%${params.hash}%`}
+          )`,
+        ),
+      )
+      .run();
+    return result.changes;
+  });
 }
 
 /**

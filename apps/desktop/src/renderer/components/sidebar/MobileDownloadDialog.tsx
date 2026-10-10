@@ -353,21 +353,16 @@ export function MobileDownloadDialog({
       <Dialog.Portal>
         <Dialog.Overlay
           className={cn(
-            'fixed inset-0 z-[10000] bg-[var(--overlay-modal)]',
-            'data-[state=open]:animate-confirm-overlay-in',
-            'data-[state=closed]:animate-confirm-overlay-out',
+            'modal-scrim fixed inset-0 z-[10000]',
           )}
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         />
         <Dialog.Content
           onPointerDownOutside={(event) => event.preventDefault()}
           className={cn(
-            'fixed left-1/2 top-1/2 z-[10000] -translate-x-1/2 -translate-y-1/2',
+            'modal-panel fixed left-1/2 top-1/2 z-[10000] -translate-x-1/2 -translate-y-1/2',
             'max-h-[calc(100vh-32px)] w-[400px] max-w-[calc(100vw-32px)] overflow-y-auto overscroll-contain',
-            'select-none rounded-xl p-4',
-            'bg-[var(--confirm-bg)] shadow-[var(--confirm-shadow)]',
-            'data-[state=open]:animate-confirm-content-in',
-            'data-[state=closed]:animate-confirm-content-out',
+            'select-none p-4',
           )}
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
           onOpenAutoFocus={(event) => {

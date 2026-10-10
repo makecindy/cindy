@@ -1,3 +1,4 @@
+import { redactMessageRowForSharedGuest } from '../../../desktop/src/main/device-link/sharedTaskMessageOrigin';
 import { HISTORY_GAP_SPLIT_MS } from '@cindy/maker-shared/history-gap';
 import { expect, it } from 'vitest';
 import { buildMobileMessageRenderItems } from '../session/messageRenderModel';
@@ -116,4 +117,43 @@ it('drops persisted auto-resume separators like Desktop, keeping only the live r
     isSessionStreaming: true, autoResumePending: { attempt: 2, maxAttempts: 3 },
   }));
   expect(live.filter(isResumeCard)).toHaveLength(1);
+});
+
+it('attaches exact frozen results to their final reply across reload and keeps unbound receipts', () => {
+  const card = { v: 1, role: 'delegation-result', delegationId: 'job', fromBotId: 'bot', fromBotName: 'Cindy',
+    toBotId: null, toBotName: '', parentSessionId: 'chat', childSessionId: 'child', objective: 'Report',
+    result: { runSequence: 1, status: 'completed', text: 'Frozen result', artifacts: [] } };
+  const input = [row('r1', 'assistant', 'Frozen result', { botCollaboration: card }),
+    row('u2', 'user', 'Include priorities'), row('a3', 'assistant', 'Checking'),
+    row('t4', 'tool_use', { toolName: 'Read', toolUseId: 't4', input: {} }),
+    row('a5', 'assistant', 'Summary', { turnCompleted: true, botTaskResults: [card] })];
+  const projected = bodies(input, false).filter(item => item.type === 'message');
+  expect(projected.map(item => item.message.body)).toEqual(['Include priorities', 'Summary']);
+  expect(projected.at(-1)?.message.source.agentMeta?.botTaskResults).toEqual([card]);
+  expect(bodies(input.slice(0, -1), false).some(item => item.type === 'message' && item.message.companion)).toBe(true);
+  expect(bodies([input[0], row('a6', 'assistant', 'Other reply', { turnCompleted: true })], false)
+    .some(item => item.type === 'message' && item.message.companion)).toBe(true);
+});
+
+it('keeps explicit group private deliveries while the private model works and after later replies', () => {
+  const messages = [row('g1', 'assistant', 'Group delivery', { sourceGroup: { groupId: 'g-1' } }), ...base];
+  const text = (rows: RemoteMessage[], running: boolean) => bodies(rows, running)
+    .filter(item => item.type === 'message').map(item => item.message.body);
+  expect(text(messages, true)).toContain('Group delivery');
+  expect(text([...messages, row('a4', 'assistant', 'Answer', { turnCompleted: true })], false)).toContain('Group delivery');
+});
+
+it.each([true, false])('keeps guest-safe explicit delivery without sealing adjacent progress (running=%s)', (running) => {
+  const messages = [row('u0', 'user', 'Help'), row('a1', 'assistant', 'Before'),
+    row('g2', 'assistant', 'Private delivery', { sourceGroup: { groupId: 'private-group', name: 'Secret group' } }),
+    row('a3', 'assistant', 'After'),
+    row('t4', 'tool_use', { toolName: 'Read', toolUseId: 't4', input: {} }),
+    ...(!running ? [row('a5', 'assistant', 'Final reply', { turnCompleted: true })] : []),
+  ].map(redactMessageRowForSharedGuest);
+  expect(messages[2].agentMeta).toEqual({ explicitDelivery: true });
+  expect(JSON.stringify(messages)).not.toMatch(/private-group|Secret group/);
+  const text = bodies(messages, running).filter(item => item.type === 'message').map(item => item.message.body);
+  expect(text).toContain('Private delivery');
+  expect(text).not.toContain('Before');
+  expect(text).not.toContain('After');
 });

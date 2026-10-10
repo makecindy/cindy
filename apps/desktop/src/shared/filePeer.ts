@@ -10,7 +10,8 @@ export const FILE_PEER_LOCAL = {
 export type FilePeerCommand =
   | { action: 'offer'; connection: string; servers: DesktopIceServer[]; streaming?: boolean }
   | { action: 'stats'; connection: string }
-  | { action: 'invoke'; connection: string; payload: string }
+  /** `body`: base64 block sent as the RPC binary body (peer advertised streamAttachments). */
+  | { action: 'invoke'; connection: string; payload: string; timeoutMs?: number; body?: string }
   | { action: 'accept'; connection: string; servers: DesktopIceServer[]; sdp: string }
   | { action: 'answer'; connection: string; sdp: string }
   | { action: 'receive'; connection: string; ticket: string; size: number; sink: string }
@@ -21,5 +22,5 @@ export interface FilePeerHostApi {
   reply(id: string, ok: boolean, value?: string): Promise<void>;
   read(connection: string, ticket: string, offset: number): Promise<string>;
   write(sink: string, offset: number, base64: string): Promise<void>;
-  invoke(connection: string, payload: string): Promise<string>;
+  invoke(connection: string, payload: string, body?: Uint8Array): Promise<string>;
 }

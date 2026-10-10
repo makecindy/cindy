@@ -119,7 +119,7 @@ describe('messagePresentation', () => {
       hasTime: true,
       hasTurnCost: true,
       isStreaming: true,
-    }).items).toEqual(['streaming']);
+    }).items).toEqual([]);
   });
 
   it('summarizes tool groups as desktop-style headers without mobile detail badges', () => {
@@ -600,6 +600,13 @@ describe('messagePresentation', () => {
       title: 'Working…',
       header: { title: 'Working…' },
     });
+
+    expect(summarizeWorkGroupPresentation({ ...workGroup, durationMs: 77_516_000 })).toMatchObject({
+      title: 'Worked for 21h 31m',
+      header: { title: 'Worked for 21h 31m' },
+    });
+    expect(summarizeWorkGroupPresentation({ ...workGroup, durationMs: 183_845_000 }).title)
+      .toBe('Worked for 2d 3h 4m');
 
     expect(summarizeWorkGroupPresentation({
       ...workGroup,

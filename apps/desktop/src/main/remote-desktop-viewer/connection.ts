@@ -1,5 +1,8 @@
 import {
+  isRemoteDesktopChannelRequest,
   parseRemoteDesktopRequest,
+  REMOTE_DESKTOP_CHANNEL_TIMEOUT_MS,
+  remoteDesktopVideoSettingsWire,
   isDesktopAttemptId,
   REMOTE_DESKTOP_MAX_CLIPBOARD_CHARS,
   type RemoteDesktopRequest,
@@ -14,6 +17,10 @@ import type {
 } from '../../shared/remoteDesktopViewer.js';
 import {
   DEFAULT_VIEWER_PREFERENCES,
+  parseRememberedViewerResolution,
+  parseRemoteViewerChannelOutcome,
+  type RemoteViewerChannelOutcome,
+  type RememberedViewerResolution,
   type RemoteViewerPreferences,
   type RemoteViewerSafety,
 } from '../../shared/remoteDesktopViewer.js';
@@ -29,7 +36,7 @@ export class RemoteViewerConnection {
   generation = 0;
   private owner = '';
   private lease: string | null = null;
-  private starting = false;
+  private starting: { lockScreen: boolean } | null = null;
   private pending = 0;
   private attempted = false;
   private mediaAttempt: string | null = null;
@@ -43,7 +50,8 @@ export class RemoteViewerConnection {
   private preferencesValue = { ...DEFAULT_VIEWER_PREFERENCES };
   private safetyState = new ViewerSafety();
   private clipboardProgress: number | null = null;
-  private closing = false;
+  private channelRequests = new Map<string, (outcome: RemoteViewerChannelOutcome) => void>();
+  private channelRequestId = 0;
   constructor(
     private readonly deps: {
       owner(): string;
@@ -58,6 +66,14 @@ export class RemoteViewerConnection {
         device: string,
         patch: Partial<RemoteViewerPreferences>,
       ): Promise<RemoteViewerPreferences>;
+      /** Hands a request to the viewer window's media data channel; false when it cannot. */
+      channel?(generation: number, id: string, request: RemoteDesktopRequest): boolean;
+      resolution?(device: string, display: string): RememberedViewerResolution | null;
+      saveResolution?(
+        device: string,
+        display: string,
+        value: RememberedViewerResolution | null,
+      ): Promise<void>;
     },
   ) {}
   bind(target: RemoteViewerTarget): void {
@@ -69,7 +85,6 @@ export class RemoteViewerConnection {
     this.target = target;
     this.attempted = false;
     this.caps = null;
-    this.closing = false;
     this.preferencesValue = this.deps.preferences?.(target.deviceId) ?? {
       ...DEFAULT_VIEWER_PREFERENCES,
     };
@@ -129,8 +144,7 @@ export class RemoteViewerConnection {
     this.lifecycle = tail;
     return pending;
   }
-  deactivate(): void {
-    this.closing = false;
+  deactivate(lockScreen = false): void {
     this.safetyState.invalidate();
     this.clipboardProgress = null;
     this.deps.credentials?.dispose();
@@ -146,12 +160,19 @@ export class RemoteViewerConnection {
     this.controlPending = false;
     this.controlGeneration++;
     this.clipboardPending = null;
-    this.starting = false;
+    this.starting = null;
+    // Their media peer belongs to the retired viewer; the outcome is unknown.
+    for (const settle of [...this.channelRequests.values()])
+      settle({ kind: 'error', code: 'INVOKE_TIMEOUT' });
     if (lease && target && owner === this.deps.owner())
       void this.serializeLifecycle(() =>
-        this.deps.request(target.deviceId, { op: 'stop', lease }, () => {
-          if (owner !== this.deps.owner()) throw new Error('DESKTOP_STOPPED');
-        }),
+        this.deps.request(
+          target.deviceId,
+          { op: 'stop', lease, ...(lockScreen ? { lockScreen: true } : {}) },
+          () => {
+            if (owner !== this.deps.owner()) throw new Error('DESKTOP_STOPPED');
+          },
+        ),
       ).catch(() => {});
   }
   async request(
@@ -161,7 +182,6 @@ export class RemoteViewerConnection {
   ): Promise<RemoteViewerReply> {
     try {
       this.check(generation);
-      if (this.closing) throw new Error('DESKTOP_STOPPED');
       const request = parseRemoteDesktopRequest(value);
       const check = () =>
         request.op === 'offer' || request.op === 'ice'
@@ -184,19 +204,22 @@ export class RemoteViewerConnection {
         owner = this.owner;
       const isStart = request.op === 'start';
       const isControl = request.op === 'control';
-      if (isControl || request.op === 'stop' || isStart) {
+      // Start and display changes may grant control within the same request
+      // (`autoControl`); their reply is a control confirmation like `control`.
+      const grantsControl = 'control' in request && request.control === true;
+      const confirmsControl = isControl || grantsControl;
+      if (confirmsControl || request.op === 'stop' || isStart) {
         this.safetyState.invalidate();
         this.controlGeneration++;
-        this.wantsControl = isControl && request.enabled;
+        this.wantsControl = isControl ? request.enabled : grantsControl;
         this.controlling = false;
-        if (!isControl) this.controlPending = false;
+        if (!confirmsControl) this.controlPending = false;
       }
       const controlGeneration = this.controlGeneration;
       const controlPendingAtStart = this.controlPending;
-      if (isControl) this.controlPending = true;
-      if (isStart) {
-        this.starting = true;
-      }
+      if (confirmsControl) this.controlPending = true;
+      const starting = isStart ? { lockScreen: false } : null;
+      if (isStart) this.starting = starting;
       this.pending++;
       try {
         const execute = async () => {
@@ -204,7 +227,15 @@ export class RemoteViewerConnection {
           if ('lease' in request && request.lease !== this.lease)
             throw new Error('DESKTOP_LEASE_EXPIRED');
           if (isStart) this.attempted = true;
-          const result = await this.deps.request(target.deviceId, request, check);
+          // Parsing normalizes offer settings to `quality`; older hosts still
+          // require the legacy `bitrate`, so restore the wire shape before sending.
+          const outgoing =
+            request.op === 'offer' && request.settings
+              ? { ...request, settings: remoteDesktopVideoSettingsWire(request.settings) }
+              : request.op === 'start' || request.op === 'heartbeat'
+                ? { ...request, lockOnExit: this.preferencesValue.lockOnExit }
+                : request;
+          const result = await this.send(outgoing, check);
           if (request.op === 'capabilities') {
             check();
             this.caps = result as RemoteDesktopCapabilities;
@@ -215,9 +246,17 @@ export class RemoteViewerConnection {
             if (!this.active || generation !== this.generation || owner !== this.deps.owner()) {
               if (owner === this.deps.owner())
                 await this.deps
-                  .request(target.deviceId, { op: 'stop', lease: lease.lease }, () => {
-                    if (owner !== this.deps.owner()) throw new Error('DESKTOP_STOPPED');
-                  })
+                  .request(
+                    target.deviceId,
+                    {
+                      op: 'stop',
+                      lease: lease.lease,
+                      ...(starting?.lockScreen ? { lockScreen: true } : {}),
+                    },
+                    () => {
+                      if (owner !== this.deps.owner()) throw new Error('DESKTOP_STOPPED');
+                    },
+                  )
                   .catch(() => {});
               throw new Error('DESKTOP_STOPPED');
             }
@@ -226,7 +265,7 @@ export class RemoteViewerConnection {
           this.check(generation);
           if (
             controlGeneration === this.controlGeneration &&
-            (isControl ||
+            (confirmsControl ||
               (request.op === 'heartbeat' && !controlPendingAtStart && !this.controlPending))
           ) {
             const wasControlling = this.controlling;
@@ -247,8 +286,9 @@ export class RemoteViewerConnection {
         return { ok: true, result };
       } finally {
         this.pending--;
-        if (isControl && controlGeneration === this.controlGeneration) this.controlPending = false;
-        if (generation === this.generation && isStart) this.starting = false;
+        if (confirmsControl && controlGeneration === this.controlGeneration)
+          this.controlPending = false;
+        if (generation === this.generation && isStart) this.starting = null;
       }
     } catch (error) {
       return viewerFailure(error);
@@ -310,17 +350,15 @@ export class RemoteViewerConnection {
           check,
         )) as { text?: unknown };
         check();
-        if (
-          typeof result.text !== 'string' ||
-          !result.text ||
-          result.text.length > REMOTE_DESKTOP_MAX_CLIPBOARD_CHARS
-        )
+        if (typeof result.text !== 'string') throw new Error('CLIPBOARD_UNSUPPORTED');
+        if (!result.text) throw new Error('CLIPBOARD_EMPTY');
+        if (result.text.length > REMOTE_DESKTOP_MAX_CLIPBOARD_CHARS)
           throw new Error('CLIPBOARD_TOO_LONG');
         this.deps.writeClipboard(result.text);
       } else if (action === 'paste') {
         const text = this.deps.readClipboard();
-        if (!text || text.length > REMOTE_DESKTOP_MAX_CLIPBOARD_CHARS)
-          throw new Error('CLIPBOARD_TOO_LONG');
+        if (!text) throw new Error('CLIPBOARD_EMPTY');
+        if (text.length > REMOTE_DESKTOP_MAX_CLIPBOARD_CHARS) throw new Error('CLIPBOARD_TOO_LONG');
         await this.deps.request(
           this.target!.deviceId,
           { op: 'clipboard', lease, action: 'paste', text },
@@ -350,8 +388,78 @@ export class RemoteViewerConnection {
       const reset = value.clipboardSync !== this.preferencesValue.clipboardSync;
       this.preferencesValue = value;
       this.safetyState.invalidate(reset);
+      if (patch.lockOnExit !== undefined && this.lease) {
+        // Saving is local; a slow or failed sync must not leave the switch
+        // showing the old value. Regular heartbeats also carry this policy.
+        void this.request(generation, { op: 'heartbeat', lease: this.lease });
+      }
     }
     return { ...this.preferencesValue };
+  }
+  /**
+   * Main still decides and checks every request; small ones only ride the
+   * viewer window's live media data channel instead of the relay. Anything the
+   * window did not send uses the relay, and a sent request is never replayed.
+   */
+  private async send(request: RemoteDesktopRequest, check: () => void): Promise<unknown> {
+    const deviceId = this.target!.deviceId;
+    if (
+      !this.deps.channel ||
+      this.caps?.channelRequests !== true ||
+      !('lease' in request) ||
+      request.lease !== this.lease ||
+      !isRemoteDesktopChannelRequest(request)
+    )
+      return this.deps.request(deviceId, request, check);
+    check();
+    const generation = this.generation;
+    const id = `${generation}-${++this.channelRequestId}`;
+    const outcome = await new Promise<RemoteViewerChannelOutcome>((resolve) => {
+      const timer = setTimeout(
+        () => settle({ kind: 'error', code: 'INVOKE_TIMEOUT' }),
+        REMOTE_DESKTOP_CHANNEL_TIMEOUT_MS,
+      );
+      const settle = (value: RemoteViewerChannelOutcome) => {
+        if (this.channelRequests.get(id) !== settle) return;
+        this.channelRequests.delete(id);
+        clearTimeout(timer);
+        resolve(value);
+      };
+      this.channelRequests.set(id, settle);
+      if (!this.deps.channel!(generation, id, request)) settle({ kind: 'relay' });
+    });
+    if (outcome.kind === 'result') return outcome.value;
+    if (outcome.kind === 'error') throw new Error(outcome.code);
+    return this.deps.request(deviceId, request, check);
+  }
+  /** The viewer window's answer for a request handed to its data channel. */
+  channelReply(generation: number, id: unknown, outcome: unknown): void {
+    this.check(generation);
+    const parsed = parseRemoteViewerChannelOutcome(outcome);
+    if (typeof id !== 'string' || !parsed) throw new Error('INVALID_REQUEST');
+    this.channelRequests.get(id)?.(parsed);
+  }
+  /** Remembered display choice for one monitor of the bound target. */
+  async resolution(
+    generation: number,
+    displayId: unknown,
+    value?: unknown,
+  ): Promise<RememberedViewerResolution | null> {
+    this.check(generation);
+    // Only monitors this target reported; the payload never chooses the device.
+    if (
+      typeof displayId !== 'string' ||
+      !this.caps?.displays.some((display) => display.id === displayId)
+    )
+      throw new Error('INVALID_REQUEST');
+    if (value === undefined)
+      return this.deps.resolution?.(this.target!.deviceId, displayId) ?? null;
+    const parsed = value === null ? null : parseRememberedViewerResolution(value);
+    if (value !== null && !parsed) throw new Error('INVALID_REQUEST');
+    if (!this.deps.saveResolution) throw new Error('DESKTOP_UNAVAILABLE');
+    await this.deps.saveResolution(this.target!.deviceId, displayId, parsed);
+    this.check(generation);
+    return parsed;
   }
   async focusChanged(): Promise<void> {
     const generation = this.generation;
@@ -389,7 +497,7 @@ export class RemoteViewerConnection {
             clipboard: this.deps.clipboard,
             request: async (message, check) => {
               check();
-              const result = await this.deps.request(this.target!.deviceId, message, check);
+              const result = await this.send(message, check);
               check();
               return result as never;
             },
@@ -400,7 +508,6 @@ export class RemoteViewerConnection {
   }
   async credential(generation: number, action: unknown, enabled: unknown) {
     this.check(generation);
-    if (this.closing) throw new Error('DESKTOP_STOPPED');
     if (!this.deps.credentials) throw new Error('CREDENTIAL_UNAVAILABLE');
     return this.deps.credentials.run(
       this.target!.deviceId,
@@ -409,37 +516,18 @@ export class RemoteViewerConnection {
       enabled,
       () => {
         this.check(generation);
-        if (this.closing) throw new Error('DESKTOP_STOPPED');
       },
     );
   }
-  async close(generation: number): Promise<void> {
+  close(generation: number): void {
     this.check(generation);
-    if (this.closing) throw new Error('DESKTOP_INPUT_BUSY');
-    this.closing = true;
-    this.deps.credentials?.dispose();
-    const lease = this.lease;
-    if (!lease) return;
     const lockScreen = this.preferencesValue.lockOnExit && this.caps?.lockOnExit === true;
-    this.safetyState.invalidate();
-    this.controlling = false;
-    this.controlGeneration++;
-    try {
-      await this.serializeLifecycle(async () => {
-        this.check(generation);
-        if (this.lease !== lease) return;
-        await this.deps.request(
-          this.target!.deviceId,
-          { op: 'stop', lease, ...(lockScreen ? { lockScreen: true } : {}) },
-          () => this.check(generation),
-        );
-        this.check(generation);
-        if (this.lease === lease) this.lease = null;
-      });
-    } catch (error) {
-      if (generation === this.generation) this.closing = false;
-      throw error;
-    }
+    // A start reply may arrive after close. Its own cleanup must retain the
+    // explicit exit policy even if this window has already opened a new target.
+    if (this.starting) this.starting.lockScreen = lockScreen;
+    // Retire local authority now. Cleanup remains serialized with a later
+    // start for this peer, but its network outcome never gates window close.
+    this.deactivate(lockScreen);
   }
 }
 

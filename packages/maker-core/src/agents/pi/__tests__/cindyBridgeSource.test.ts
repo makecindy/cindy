@@ -62,6 +62,7 @@ it('keeps text-only policy local and ordinary tools independent of host UI failu
   ).outputText;
   runInNewContext(compiled, {
     process: { env: { CINDY_PI_TURN_TOOL_POLICY: 'runtime-token' } },
+    guestToolGate: null,
     currentPermissionState: () => { permissionReads++; return { reviewOnly: false, mode: 'bypassPermissions' }; },
     pi: { on: (event: string, callback: (event: any, ctx: any) => any) => { handlers.set(event, callback); } },
   });
@@ -101,6 +102,47 @@ it('keeps text-only policy local and ordinary tools independent of host UI failu
   expect(await tool({ toolName: 'read' }, ctx)).toMatchObject({ block: true });
   handlers.get('agent_settled')!({}, ctx);
   expect(await tool({ toolName: 'ask_user_question' }, ctx)).toBeUndefined();
+});
+
+it('lets a shared user\'s Pi call only tools that Cindy extensions registered', async () => {
+  const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+  const gateStart = source.indexOf('function createCindyGuestToolGate');
+  const gateEnd = source.indexOf('\nconst PERMISSION_TITLE', gateStart);
+  const handlerStart = source.indexOf("  pi.on('tool_call'");
+  const handlerEnd = source.indexOf('\n  });', handlerStart) + '\n  });'.length;
+  // 子代理扩展的工具名在生成时写进源码。
+  expect(source).toContain('createCindyGuestToolGate(piApi, ["subagent"])');
+  const handlers = new Map<string, (event: any, ctx: any) => any>();
+  const registered: string[] = [];
+  const api = {
+    on: (event: string, callback: (event: any, ctx: any) => any) => { handlers.set(event, callback); },
+    registerTool(tool: { name: string }) { registered.push(tool.name); },
+    getActiveTools() { return ['read']; },
+  };
+  const compiled = ts.transpileModule(
+    source.slice(gateStart, gateEnd)
+      + '\nconst guestToolGate = createCindyGuestToolGate(api, ["subagent"]);\nconst pi = guestToolGate.pi;'
+      + '\npi.registerTool({ name: "read" });\npi.registerTool({ name: "cindy_mcp_call_tool" });\nresult = pi.getActiveTools();\ngate = guestToolGate;\n'
+      + source.slice(handlerStart, handlerEnd),
+    { compilerOptions: { target: ts.ScriptTarget.ES2022 } },
+  ).outputText;
+  const sandbox: Record<string, unknown> = {
+    api, result: undefined, gate: undefined, Proxy, Reflect,
+    toolsDisabledForTurn: () => false,
+    currentPermissionState: () => ({ reviewOnly: false, mode: 'bypassPermissions' }),
+  };
+  runInNewContext(compiled, sandbox);
+  // 注册照常交给 Pi，其余 API 原样转发。
+  expect(registered).toEqual(['read', 'cindy_mcp_call_tool']);
+  expect(sandbox.result).toEqual(['read']);
+  const tool = handlers.get('tool_call')!;
+  const ctx = { ui: { confirm: async () => true }, isIdle: () => true };
+  for (const toolName of ['powershell', 'codemode', 'tool_search', 'mcp__local__run', 'future_builtin', undefined]) {
+    expect(await tool({ toolName, input: {} }, ctx)).toMatchObject({ block: true, reason: expect.stringMatching(/shared provider/) });
+  }
+  // Cindy 扩展注册的(含经 Pi 原名顶替的 read)与子代理工具放行，交给后面的权限门。
+  const gate = sandbox.gate as { blocks: (toolName: unknown) => boolean };
+  for (const toolName of ['read', 'cindy_mcp_call_tool', 'subagent']) expect(gate.blocks(toolName)).toBe(false);
 });
 
 const canLinkFile = (() => {
@@ -254,7 +296,7 @@ function loadBashPackageHomeHelper(): {
   };
 }
 
-function powerShellOverlayEnabled(platform: NodeJS.Platform, factory: unknown): boolean {
+function powerShellOverlayEnabled(platform: NodeJS.Platform, factory: unknown, guest = false): boolean {
   const source = CINDY_BRIDGE_EXTENSION_SOURCE;
   const start = source.indexOf('const createPowerShellTool =');
   const end = source.indexOf('// Cindy owns a separate Pi extension store.', start);
@@ -264,6 +306,7 @@ function powerShellOverlayEnabled(platform: NodeJS.Platform, factory: unknown): 
   return Boolean(runInNewContext(condition, {
     createPowerShellTool: factory,
     process: { platform },
+    guestToolGate: guest ? {} : null,
   }));
 }
 
@@ -1484,6 +1527,8 @@ describe('cindy-bridge extension source', () => {
   it('registers the native PowerShell overlay on Windows when Pi exports its factory', () => {
     expect(powerShellOverlayEnabled('win32', () => undefined)).toBe(true);
     expect(powerShellOverlayEnabled('win32', undefined)).toBe(false);
+    // 受邀者会话不注册：它在本机执行，设备托管没有对应的执行器。
+    expect(powerShellOverlayEnabled('win32', () => undefined, true)).toBe(false);
   });
 
   it.each(['darwin', 'linux'] as const)(
@@ -1838,9 +1883,9 @@ describe('cindy-bridge extension source', () => {
     expect(source).toContain('const controlPlaneWrite = Boolean(');
     expect(source).toContain('...(controlPlaneWrite ? { controlPlaneWrite: true } : {})');
     expect(source).toContain('resolvedWritePath: writeTargetResolved');
-    expect(source).toContain(
-      'resolvedWritableRoots: resolveWritableRootsForHost(permission.writableRoots)',
-    );
+    // 设备托管会话改用任务所在电脑的真实工作目录作可写根(见 CINDY_HOSTED)，其余照旧。
+    expect(source).toContain('resolvedWritableRoots: CINDY_HOSTED');
+    expect(source).toContain(': resolveWritableRootsForHost(permission.writableRoots)');
     expect(source).toContain('event.input.path = writeTargetResolved');
     expect(source).toContain('Cindy could not verify the real file-write target.');
   });
@@ -2321,6 +2366,11 @@ it('routes Bot shortcuts through the scoped helper entry without exposing them t
         required: ['id', 'kind', 'at'], additionalProperties: false,
         properties: { at: { type: 'integer', minimum: 0, maximum: Number.MAX_SAFE_INTEGER } },
       });
+    }
+    if (name === 'start_session_task') {
+      expect(tool.description).toContain('A repository, multiple files, tools, or a deliverable alone is not a reason to delegate');
+      expect(tool.description).toContain('the user explicitly requests an independent task');
+      expect(tool.description).toContain('Follow up with message_session_task on the same task');
     }
     if (name === 'send_to_agent') expect(tool.parameters.properties.target_id.maxLength).toBe(210);
     const resolved = gateway.resolveDirectHelperTool(name, args);

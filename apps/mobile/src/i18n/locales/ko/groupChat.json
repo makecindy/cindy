@@ -78,6 +78,7 @@
     "olderOnComputer": "이전 메시지는 컴퓨터에서 확인하세요"
   },
   "notice": {
+    "memberJoined": "{{name}} 님이 그룹에 참여했습니다",
     "memberFailed": "{{name}} 님이 이번에는 답하지 못했습니다",
     "memberTimeout": "{{name}} 님의 답이 너무 늦어 이번에는 건너뛰었습니다",
     "memberUnavailable": "{{name}} 님을 지금 사용할 수 없어 이번에는 발언하지 않았습니다",
@@ -110,7 +111,13 @@
     "dismissFailed": "이 계획을 끝내지 못했습니다. 다시 시도하세요",
     "editFailed": "이 단계를 바꾸지 못했습니다. 다시 시도하세요",
     "editStepHint": "담당을 바꾸거나 이 단계를 삭제합니다",
-    "reassignStepHint": "이 단계의 담당을 바꿉니다"
+    "reassignStepHint": "이 단계의 담당을 바꿉니다",
+    "eyebrow_one": "분담 · {{count}}단계",
+    "eyebrow_other": "분담 · {{count}}단계",
+    "awaitingStart": "시작 대기",
+    "progressRunning": "진행 중 {{current}} / {{total}}",
+    "progressDone": "완료 {{done}} / {{total}}",
+    "allDone": "모두 완료"
   },
   "speaking": {
     "planning": "역할을 나누는 중…",
@@ -153,14 +160,39 @@
     "projectDirNone": "선택 안 함",
     "projectDirNote": "역할 분담으로 일할 때 동료들이 여기서 작업합니다. 선택하지 않아도 되며, 그러면 이 그룹 채팅 전용 폴더를 사용합니다. git 프로젝트를 선택하면 역할 분담마다 새 worktree와 브랜치를 만들어, 지금 작업 중인 코드는 건드리지 않습니다.",
     "add": "동료 추가",
-    "projectDirOnComputer": "컴퓨터에서 선택하거나 바꿀 수 있습니다"
+    "projectDirOnComputer": "컴퓨터에서 선택하거나 바꿀 수 있습니다",
+    "memberActions": "{{name}} 작업"
   },
   "errors": {
     "memberLimit": "그룹 채팅에는 동료가 2~6명 필요합니다",
     "memberUnavailable": "사용할 수 없는 동료가 있습니다. 다른 동료를 골라 다시 시도하세요",
+    "mentionUnavailable": "멘션한 멤버를 더 이상 사용할 수 없습니다. 다시 선택한 후 보내세요.",
     "notFound": "이 그룹 채팅은 더 이상 존재하지 않습니다",
     "hostNotReady": "Cindy가 아직 준비 중입니다. 잠시 후 다시 시도하세요",
     "planOpen": "역할 분담이 진행 중입니다. 끝내거나 중지한 뒤 새로 시작하세요",
-    "planClosed": "이 계획은 이미 끝났거나 업데이트되었습니다"
+    "planClosed": "이 계획은 이미 끝났거나 업데이트되었습니다",
+    "invalidAttachment": "첨부 파일을 읽을 수 없어요. 다시 선택한 후 보내 주세요.",
+    "attachmentUnavailable": "휴대폰에서 첨부 파일을 가져오지 못했어요. 기기 연결을 확인하고 다시 시도해 주세요.",
+    "attachmentTooLarge": "첨부 파일이 100 MB를 초과해요. 더 작은 파일을 선택해 주세요.",
+    "mediaUploadFailed": "채팅 서비스에 첨부 파일을 업로드하지 못했어요. 잠시 후 다시 시도해 주세요.",
+    "authRequired": "로그인이 만료되었어요. 컴퓨터에서 다시 로그인해 주세요.",
+    "chatUnavailable": "채팅 서비스에 연결할 수 없어요. 네트워크를 확인하고 다시 시도해 주세요.",
+    "importPending": "그룹 기록을 동기화하고 있어요. 잠시 후 다시 시도해 주세요.",
+    "requestTimeout": "아직 작업 결과를 확인하지 못했어요. 새로고침하여 확인한 후 다시 시도해 주세요.",
+    "permissionDenied": "이 그룹을 관리할 권한이 없어요.",
+    "serviceError": "채팅 서비스에서 요청을 처리하지 못했어요. 잠시 후 다시 시도해 주세요.",
+    "groupArchived": "보관된 그룹에서는 이 작업을 수행할 수 없어요."
+  },
+  "followUp": {
+    "next": "분담 · 다음 단계",
+    "failedStep": "{{step}}단계를 끝내지 못했어요"
+  },
+  "server": {
+    "offline": "그룹 채팅에 연결할 수 없습니다. 다시 시도해 주세요.",
+    "loadFailed": "그룹 채팅을 불러올 수 없습니다. 다시 시도해 주세요.",
+    "loadOlder": "이전 메시지 불러오기",
+    "attachmentFailed": "첨부 파일을 열지 못했습니다. 다시 시도해 주세요.",
+    "previewUnavailable": "미리보기를 불러올 수 없습니다",
+    "endpointUnavailable": "그룹 채팅 서비스 설정을 사용할 수 없습니다. 다시 시도해 주세요."
   }
 }

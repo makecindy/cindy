@@ -36,6 +36,9 @@ vi.mock('@/features/bots/BotCollaborationCard', () => ({
   BotSessionTaskCard: () => null,
   BotSessionTaskMessageTrace: () => null,
 }));
+vi.mock('@/features/bots/BotSessionTaskResultCard', () => ({
+  BotSessionTaskResultCard: () => null,
+}));
 
 vi.mock('@/features/learn/LearnStatusCard', () => ({
   LearnStatusCard: () => null,

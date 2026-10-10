@@ -190,3 +190,43 @@ describe('context rebuild 历史投影', () => {
     });
   });
 });
+
+describe('teammate result attachment history', () => {
+  it('loads frozen results from the sealed reply even when the receipt is outside the history page', async () => {
+    const id = sid('result-attachment');
+    const result = {
+      v: 1, role: 'delegation-result', delegationId: 'job', fromBotId: 'bot', fromBotName: 'Cindy',
+      toBotId: null, toBotName: 'Cindy', parentSessionId: id, childSessionId: 'child', objective: 'Report',
+      result: { runSequence: 2, status: 'completed', title: 'Report', text: 'Saved', artifacts: [] },
+    };
+    transportMocks.listMessages.mockResolvedValueOnce([
+      { id: 'progress', clientId: 'progress', sessionId: id, role: 'assistant', content: 'Checking',
+        agentMeta: { botTaskResults: [result] }, createdAt: 1 },
+      { id: 'final', clientId: 'final', sessionId: id, role: 'assistant', content: 'Ready',
+        agentMeta: { turnCompleted: true, botTaskResults: [result, result, {}] }, createdAt: 2 },
+    ] as never);
+    makerChatStore.ensureInitialMessages(id);
+    await vi.waitFor(() => expect(makerChatStore.getSnapshot(id).historyLoaded).toBe(true));
+    const messages = makerChatStore.getSnapshot(id).messages;
+    expect(messages.find(message => message.clientId === 'progress')?.botTaskResults).toBeUndefined();
+    expect(messages.find(message => message.clientId === 'final')?.botTaskResults).toEqual([result]);
+  });
+});
+
+// Both initial history and live message insertion use the same stored-row projection.
+describe('private group reply source', () => {
+  it('keeps group provenance on assistant rows without relabeling normal private replies', async () => {
+    const id = sid('group-private-source');
+    transportMocks.listMessages.mockResolvedValueOnce([
+      { id: 'group-reply', clientId: 'group-reply', sessionId: id, role: 'assistant', content: 'Reply',
+        agentMeta: { sourceGroup: { groupId: 'g-1', name: 'Design' } }, createdAt: Date.now() },
+      { id: 'private-reply', clientId: 'private-reply', sessionId: id, role: 'assistant', content: 'Private',
+        agentMeta: null, createdAt: Date.now() },
+    ] as never);
+    makerChatStore.ensureInitialMessages(id);
+    await vi.waitFor(() => expect(makerChatStore.getSnapshot(id).historyLoaded).toBe(true));
+    const messages = makerChatStore.getSnapshot(id).messages;
+    expect(messages.find(m => m.clientId === 'group-reply')).toMatchObject({ role: 'assistant', sourceGroup: { groupId: 'g-1', name: 'Design' } });
+    expect(messages.find(m => m.clientId === 'private-reply')?.sourceGroup).toBeUndefined();
+  });
+});

@@ -427,17 +427,11 @@ export function TaskListCell({
         <DropdownMenuContent
           align="start"
           sideOffset={2}
-          className={cn(
-            'min-w-[180px] rounded-xl p-1 overflow-hidden',
-            'bg-[var(--cmd-palette-bg)]',
-            'border border-[var(--cmd-palette-border)]',
-            'shadow-[var(--shadow-menu)]',
-          )}
+          className="min-w-[180px]"
         >
           {canRename && (
             <DropdownMenuItem
               onSelect={enterEdit}
-              className="cursor-pointer text-sm hover:bg-[var(--cmd-palette-item-hover)]"
             >
               <Pencil size={13} strokeWidth={2} className="mr-2" />
               {t('scheduler.cell.menu.rename')}
@@ -447,7 +441,6 @@ export function TaskListCell({
             <DropdownMenuItem
               onSelect={() => void onTogglePause(s)}
               disabled={isExpiredSch}
-              className="cursor-pointer text-sm hover:bg-[var(--cmd-palette-item-hover)]"
             >
               {isPausedSch ? (
                 <Play size={13} strokeWidth={2} className="mr-2" />
@@ -459,10 +452,9 @@ export function TaskListCell({
           )}
           {canPromote && (
             <>
-              <DropdownMenuSeparator className="bg-[var(--cmd-palette-border)]" />
+              <DropdownMenuSeparator />
               <DropdownMenuItem
                 onSelect={() => void onPromoteToProject(s)}
-                className="cursor-pointer text-sm hover:bg-[var(--cmd-palette-item-hover)]"
               >
                 <ArrowUpToLine size={13} strokeWidth={2} className="mr-2" />
                 {t('scheduler.list.promote.menu')}
@@ -472,7 +464,6 @@ export function TaskListCell({
           {canEditProject && (
             <DropdownMenuItem
               onSelect={() => void onEditProjectSchedule(s)}
-              className="cursor-pointer text-sm hover:bg-[var(--cmd-palette-item-hover)]"
             >
               <Pencil size={13} strokeWidth={2} className="mr-2" />
               {t('scheduler.list.editProject.menu')}
@@ -481,7 +472,6 @@ export function TaskListCell({
           {canCloneToUser && (
             <DropdownMenuItem
               onSelect={() => void onCloneToUser(s)}
-              className="cursor-pointer text-sm hover:bg-[var(--cmd-palette-item-hover)]"
             >
               <Copy size={13} strokeWidth={2} className="mr-2" />
               {t('scheduler.list.cloneToUser.menu')}
@@ -489,10 +479,9 @@ export function TaskListCell({
           )}
           {canRemoveProject && (
             <>
-              <DropdownMenuSeparator className="bg-[var(--cmd-palette-border)]" />
+              <DropdownMenuSeparator />
               <DropdownMenuItem
                 onSelect={() => void onRemoveProjectSchedule(s)}
-                className="cursor-pointer text-sm hover:bg-[var(--cmd-palette-item-hover)]"
               >
                 <FolderMinus size={13} strokeWidth={2} className="mr-2" />
                 {t('scheduler.list.removeProject.menu')}
@@ -501,11 +490,8 @@ export function TaskListCell({
           )}
           {canDelete && (
             <>
-              <DropdownMenuSeparator className="bg-[var(--cmd-palette-border)]" />
-              <DropdownMenuItem
-                onSelect={() => void onDelete(s)}
-                className="cursor-pointer text-sm hover:bg-[var(--cmd-palette-item-hover)]"
-              >
+              <DropdownMenuSeparator />
+              <DropdownMenuItem variant="danger" onSelect={() => void onDelete(s)}>
                 <Trash2 size={13} strokeWidth={2} className="mr-2" />
                 {t('scheduler.cell.menu.deleteAutomation')}
               </DropdownMenuItem>

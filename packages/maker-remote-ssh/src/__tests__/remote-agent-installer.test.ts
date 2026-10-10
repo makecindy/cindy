@@ -1,9 +1,10 @@
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import codexPackage from '../../../../tools/codex-package/latest.json';
+import { resolvePosixShell } from '../../../../scripts/lib/posix-shell.mjs';
 
 import { BOOTSTRAP_SH, VERIFY_CODEX_LAYOUT_SH } from '../bootstrap/bootstrap-script.js';
 import {
@@ -17,6 +18,21 @@ import {
 import type { RemoteHost } from '../RemoteHost.js';
 
 describe('remote agent installer', () => {
+  let bash: string;
+  beforeAll(() => {
+    const shell = resolvePosixShell('bash');
+    if (!shell) throw new Error('Git Bash is required for the remote bootstrap tests');
+    bash = shell;
+    // Git Bash's first launch on a cold Windows runner can exceed the 5s test
+    // budget. Initialize it once in fixture setup (the default 10s hook budget),
+    // keeping all syntax and behavior assertions under their normal timeout.
+    const result = spawnSync(bash, ['--noprofile', '--norc', '-c', ':'], {
+      encoding: 'utf8', timeout: 8_000, windowsHide: true,
+    });
+    expect(result.error).toBeUndefined();
+    expect(result.status, result.stderr).toBe(0);
+  });
+
   it('passes the pinned Codex release to the remote bootstrap script', async () => {
     const calls: Array<{ command: string; input: string }> = [];
     const host = {
@@ -52,7 +68,7 @@ describe('remote agent installer', () => {
   });
 
   it('keeps the generated bootstrap valid bash', () => {
-    const result = spawnSync('bash', ['-n'], { input: BOOTSTRAP_SH, encoding: 'utf8' });
+    const result = spawnSync(bash, ['-n'], { input: BOOTSTRAP_SH, encoding: 'utf8' });
     expect(result.error).toBeUndefined();
     expect(result.status, result.stderr).toBe(0);
   });
@@ -79,7 +95,7 @@ describe('remote agent installer', () => {
         writeFileSync(destination, '#!/bin/sh\nexit 0\n');
         chmodSync(destination, 0o755);
       }
-      const result = spawnSync('bash', ['-c', `
+      const result = spawnSync(bash, ['-c', `
         BIN_PATH="$PWD/codex"
         uname() { printf '%s\n' '${remoteOs}'; }
         ${VERIFY_CODEX_LAYOUT_SH}
@@ -151,7 +167,7 @@ describe('remote agent installer', () => {
         exec: async (command: string, opts: { input?: string }) => {
           const args = [...command.matchAll(/'([^']*)'/g)].map((match) => match[1]);
           expect(args).toContain(PINNED_CODEX_RELEASE_VERSION);
-          const result = spawnSync('bash', ['-s', '--', ...args], {
+          const result = spawnSync(bash, ['-s', '--', ...args], {
             cwd: root, encoding: 'utf8',
             input: 'export HOME="$PWD"\ncurl() { return 1; }\nwget() { return 1; }\n' + opts.input,
           });

@@ -1,7 +1,8 @@
 import { fingerprint } from './files.js';
-import { CompanionImportError, type ImportItem } from './types.js';
+import { commandArgumentRedactions, commandLiteralRedactions } from './commandRedactions.js';
+import { CompanionImportError, object, type ImportItem } from './types.js';
 import { importedContentRedactions } from './connectionCatalog.js';
-import { environmentRedactions, redactEnvironmentValues } from './process.js';
+import { createEnvironmentRedactor, environmentRedactions } from './process.js';
 
 const variableName = (name: string, platform = process.platform) => platform === 'win32' ? name.toUpperCase() : name;
 
@@ -56,7 +57,7 @@ export function previewImportRedactions(items: ImportItem[]): Record<string, str
 /** Retain masks only for values already present in selected content, never discarded accounts. */
 export function retainedImportRedactions(items: ImportItem[], secrets: Record<string, string>): Record<string, string> {
   const matched = new Set<string>();
-  const text = (value: string) => { redactEnvironmentValues(value, secrets, value => { matched.add(value); }); };
+  const text = createEnvironmentRedactor(secrets, value => { matched.add(value); });
   const visit = (value: unknown): void => {
     if (typeof value === 'string') text(value);
     else if (Buffer.isBuffer(value)) {
@@ -75,7 +76,34 @@ function importRedactions(items: ImportItem[], env: Record<string, string>): Rec
   // Missing variables do not supply a known credential. Actual connection imports
   // still require every selected dependency and use strict reference resolution.
   const resolve = (value: unknown) => resolveImportReferences(value, env, true);
+  const commandEnvironments = items.map(item => Object.fromEntries(
+    Object.entries(object(object(item.automation?.original.payload).env))
+      .filter((entry): entry is [string, string] => typeof entry[1] === 'string'),
+  ));
+  // Env, stdin and argv share form/JSON/URL/header decomposition with execution
+  // output. Env values retain their existing whole-value masks below; public
+  // scalar settings must not gain blanket decoded-literal masks.
+  // Commands receive the selected source env as well as payload.env. Match the
+  // runtime collector without treating ordinary provider-only imports as commands.
+  const inheritedValues = items.some(item => object(item.automation?.original.payload).kind === 'command')
+    ? Object.values(env) : [];
+  const environmentValues = Object.values(commandLiteralRedactions([], [
+    ...inheritedValues,
+    ...commandEnvironments.flatMap(environment => Object.values(environment)).map(value => String(resolve(value))),
+  ], false));
+  const commandValues = items.flatMap(item => {
+    const payload = object(item.automation?.original.payload);
+    if (payload.kind !== 'command') return [];
+    const args = Array.isArray(payload.argv) ? payload.argv.filter((arg): arg is string => typeof arg === 'string') : [];
+    return [
+      ...Object.values(commandLiteralRedactions(typeof payload.input === 'string' ? [String(resolve(payload.input))] : [])),
+      ...Object.values(commandArgumentRedactions(args.map(arg => String(resolve(arg))))),
+    ];
+  });
+  const literalMasks = Object.fromEntries([...new Set([...commandValues, ...environmentValues])].map((value, index) => [`command_input_${index}`, value]));
   return importedContentRedactions({ env,
+    contentRedactions: { ...Object.fromEntries(commandEnvironments.flatMap(environment => Object.entries(environmentRedactions(environment)))
+      .map(([name, value], index) => [`command_${index}_${name}`, value])), ...literalMasks },
     mcp: items.flatMap(item => item.mcp ? [resolve(item.mcp) as NonNullable<typeof item.mcp>] : []),
     credentials: items.flatMap(item => item.credential ? [{ id: item.view.id, ...item.credential, value: resolve(item.credential.value) }] : []),
   });

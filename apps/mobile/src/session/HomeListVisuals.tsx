@@ -2,11 +2,18 @@ import { useEffect, useRef, type ReactNode } from 'react';
 import { Animated, Easing, StyleSheet, View } from 'react-native';
 import { Archive, UsersRound, RadioTower, Pencil } from 'lucide-react-native';
 import { MobileVendorIcon } from '@/components/MobileVendorIcon';
+import { useReduceMotionEnabled } from '@/hooks/useReduceMotion';
 import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { spacing, typeScale, lineHeight, fontWeight, iconSize, iconStroke } from '@/theme/tokens';
+import { sessionAgentRunsOnOtherComputer } from './sessionAgentSwitch';
 import type { RemoteSessionListItem } from './sessionList';
 const HOME_SESSION_ROW_HEIGHT = 78;
 const HOME_SESSION_SINGLE_LINE_ROW_HEIGHT = 60;
+/**
+ * 任务行长按唤起选项的时长(ms)。首页、设备页任务列表都经 HomeSessionRow 消费,
+ * 新增任务行长按入口一律引用这里,不要回落到 RN Pressable 默认 500ms。
+ */
+export const SESSION_ROW_LONG_PRESS_MS = 400;
 /** Shared by the full home list and its persistent, narrow task pane. */
 export function SessionStatusMark({
   item,
@@ -44,6 +51,8 @@ export function SessionStatusMark({
           // Claude 星标 logo 视觉重量偏小,+1px 光学补偿对齐 Codex 标(刻意非阶梯值)。
           size={isClaudeCodeAgentKind(item.session.agentKind) ? 19 : iconSize.lg}
           vendor={item.session.agentKind}
+          // Agent 在被控电脑之外的另一台电脑运行(远程供应商):与桌面侧栏同一个波纹标识。
+          remote={sessionAgentRunsOnOtherComputer(item.session)}
         />
       )}
       {!archived && showDraftIndicator ? (
@@ -56,27 +65,37 @@ export function SessionStatusMark({
   );
 }
 
-function SessionStatusPulse({ children, running }: { children: ReactNode; running: boolean }) {
-  const opacity = useRef(new Animated.Value(running ? 0.3 : 1)).current;
+/**
+ * 运行中呼吸:常驻循环的状态信号,不是交互过渡,不套 motionDuration 交互档位。
+ * 与 MobileVendorIcon 的 RUNNING_BREATH_* 同值,两处行内标志呼吸节奏保持一致;
+ * 减弱动态效果(含首帧未知)下静止在全不透明。
+ */
+const RUNNING_BREATH_HALF_CYCLE_MS = 750;
+const RUNNING_BREATH_MIN_OPACITY = 0.3;
+
+export function SessionStatusPulse({ children, running }: { children: ReactNode; running: boolean }) {
+  const reduceMotion = useReduceMotionEnabled();
+  const animate = running && reduceMotion === false;
+  const opacity = useRef(new Animated.Value(animate ? RUNNING_BREATH_MIN_OPACITY : 1)).current;
   useEffect(() => {
     opacity.stopAnimation();
-    if (!running) {
+    if (!animate) {
       opacity.setValue(1);
       return;
     }
-    opacity.setValue(0.3);
+    opacity.setValue(RUNNING_BREATH_MIN_OPACITY);
     const loop = Animated.loop(
       Animated.sequence([
         Animated.timing(opacity, {
-          duration: 750,
+          duration: RUNNING_BREATH_HALF_CYCLE_MS,
           easing: Easing.inOut(Easing.ease),
           toValue: 1,
           useNativeDriver: true,
         }),
         Animated.timing(opacity, {
-          duration: 750,
+          duration: RUNNING_BREATH_HALF_CYCLE_MS,
           easing: Easing.inOut(Easing.ease),
-          toValue: 0.3,
+          toValue: RUNNING_BREATH_MIN_OPACITY,
           useNativeDriver: true,
         }),
       ]),
@@ -85,7 +104,7 @@ function SessionStatusPulse({ children, running }: { children: ReactNode; runnin
     return () => {
       loop.stop();
     };
-  }, [opacity, running]);
+  }, [animate, opacity]);
 
   return <Animated.View style={{ opacity }}>{children}</Animated.View>;
 }
@@ -168,9 +187,18 @@ export const homeListStyles = (colors: ThemeColors) => StyleSheet.create({
     right: -3,
     width: 12,
   },
+  // 标题与标签色球一组占满行内剩余宽度:标题只取自身文字宽度、过长截断,
+  // 色球紧跟标题(与桌面侧栏一致),来源与时间仍靠右。
+  sessionTitleCluster: {
+    alignItems: 'center',
+    flex: 1,
+    flexDirection: 'row',
+    gap: spacing.sm,
+    minWidth: 0,
+  },
   sessionTitle: {
     color: colors.textPrimary,
-    flex: 1,
+    flexShrink: 1,
     fontSize: typeScale.subtitle,
     fontWeight: fontWeight.medium,
     lineHeight: lineHeight.listTitle,
@@ -198,6 +226,13 @@ export const homeListStyles = (colors: ThemeColors) => StyleSheet.create({
     minHeight: lineHeight.subtitle,
     paddingTop: 3,
   },
+  /** 文字形态(单行)下并到标题行尾的定时 / 置顶标记。 */
+  sessionInlineIcons: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    flexShrink: 0,
+    gap: spacing.xs,
+  },
   sessionTime: {
     color: colors.textTertiary,
     flexShrink: 0,
@@ -209,7 +244,7 @@ export const homeListStyles = (colors: ThemeColors) => StyleSheet.create({
     alignItems: 'center',
     backgroundColor: colors.surface,
     flexDirection: 'row',
-    gap: 8,
+    gap: spacing.sm,
     minHeight: 56,
     paddingLeft: spacing.md,
     paddingRight: spacing.lg,

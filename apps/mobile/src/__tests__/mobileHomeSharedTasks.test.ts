@@ -139,7 +139,7 @@ describe('shared role row wiring', () => {
   });
 
   it('uses a fixed title-side role slot and only renders a crown for owners', () => {
-    expect(source).toContain('const showPreviewLine = !!preview?.trim() || showSchedule || showPinned;');
+    expect(source).toContain('const showPreviewLine = !textMode && (!!group || !!preview?.trim() || showSchedule || showPinned);');
     const row = source.slice(source.indexOf('function HomeSessionRowInner('), source.indexOf('function AutomationGroupChildren('));
     const roleSlot = row.indexOf('testID={`home.sharedRoleSlot.owned.${item.session.id}`}');
     expect(roleSlot).toBeGreaterThan(row.indexOf('<SessionStatusMark'));

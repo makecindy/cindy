@@ -26,6 +26,7 @@ import { serverApiFetch, ServerApiError } from '../serverApiClient';
 import { requireString, throwIpcError } from '../utils/ipcValidate';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer';
 import { isIpcError, type IpcErrorCode } from '../../shared/ipc-errors';
+import { ReviewArtifactAuthorizationError } from '../reviewer/reviewArtifactAuthorization.js';
 import { decodeRemoteHistory } from '../../shared/remoteHistoryCache';
 import {
   DEVICE_LINK_INVOKE,
@@ -44,6 +45,7 @@ import {
   openRemoteLink,
   closeRemoteLink,
   remoteInvoke,
+  providerShareHostInvoke,
   remoteSubscribe,
   remoteUnsubscribe,
   disconnectAllControllers,
@@ -62,9 +64,18 @@ import {
 } from './index';
 import { getActiveControllers } from './dispatch';
 import { rewriteOutboundMedia, withPeerAttachmentUpload } from './outboundMedia';
+import { withOutboundReviewConfirmation } from '../maker-ipc/reviewOutboundInput.js';
+import { confirmReviewArtifacts } from '../reviewer/confirmReviewArtifacts.js';
 import { tryUploadPeerAttachment } from './filePeer';
-import { parseSharedTaskPeer } from '@cindy/device-link';
+import { parseSharedTaskPeer, scrubSharedProviderCatalog } from '@cindy/device-link';
 import { withSharedTaskMedia } from './sharedTaskMediaContext.js';
+import {
+  isProviderShareRefusal,
+  noteProviderShareAccessFailure,
+  parseProviderShareAgentDeviceId,
+  resolveRemoteAgentTargetWhenReady,
+} from './providerShareGuest.js';
+import { crossRegionInvoke, isCrossRegionProviderShareTarget } from './providerShareCrossRegion.js';
 import {
   outboundSessionReferencesRequested,
   rewriteOutboundSessionReferences,
@@ -122,6 +133,8 @@ export interface DeviceLinkIpcDeps {
   openLink(deviceId: string): Promise<LinkAcceptPayload>;
   closeLink(deviceId: string): void;
   invoke(deviceId: string, channel: string, args: unknown[]): Promise<InvokeResultPayload>;
+  /** 分享者电脑的只读请求：先建后台链路再发(relay 只在建链时登记受邀者的电脑)。缺省时用 invoke。 */
+  invokeProviderShareHost?(target: string, channel: string, args: unknown[]): Promise<InvokeResultPayload>;
   subscribe(deviceId: string, topics: string[]): Promise<InvokeResultPayload>;
   unsubscribe(deviceId: string, topics: string[]): Promise<InvokeResultPayload>;
   disconnectAll(): void;
@@ -185,6 +198,7 @@ export function defaultDeps(): DeviceLinkIpcDeps {
       requireDeviceLinkCapability();
       return remoteInvoke(...args);
     },
+    invokeProviderShareHost: providerShareHostInvoke,
     subscribe: remoteSubscribe,
     unsubscribe: remoteUnsubscribe,
     disconnectAll: disconnectAllControllers,
@@ -221,7 +235,7 @@ const DEVICE_LINK_CODE_MAP: Record<string, IpcErrorCode> = {
   NOT_CONNECTED: 'DEVICE_LINK_NOT_CONNECTED',
   LINK_NOT_OPEN: 'DEVICE_LINK_NOT_CONNECTED',
   PEER_RESET: 'DEVICE_LINK_NOT_CONNECTED',
-  BACKPRESSURE: 'DEVICE_LINK_NOT_CONNECTED',
+  BACKPRESSURE: 'DEVICE_LINK_BUSY',
 };
 
 /**
@@ -692,6 +706,17 @@ export async function handleInvoke(
        if (isIpcError(err) && err.code === 'DEVICE_LINK_CHANNEL_NOT_ALLOWED') {
          throw err;
        }
+       // Review 走同一条出方向改写管线, 但它的授权/校验拒绝不是媒体传输失败:
+       // PERMISSION_DENIED(凭证/密钥附件拒绝、授权不可用)、INVALID_PARAMS(整批
+       // 请求校验)与用户取消外部成果授权对话框, 保留原错误码/原语义, 消费端才
+       // 不会把"有意拒绝"当成可重试的传输故障。上传/压缩等真传输路径只抛普通
+       // Error, 不受影响。
+       if (isIpcError(err) && (err.code === 'PERMISSION_DENIED' || err.code === 'INVALID_PARAMS')) {
+         throw err;
+       }
+       if (err instanceof ReviewArtifactAuthorizationError) {
+         throwIpcError('PERMISSION_DENIED', err.message);
+       }
        throwIpcError(
          'DEVICE_LINK_MEDIA_TRANSFER_FAILED',
          err instanceof Error ? err.message : String(err),
@@ -714,6 +739,89 @@ export async function handleInvoke(
     throw new Error(result.error.message);
   }
   throwIpcError(DEVICE_LINK_CODE_MAP[result.error.code] ?? 'INTERNAL', result.error.message);
+}
+
+/**
+ * 分享来的供应商(`share:<id>`)的 Renderer 只读请求：模型列表与发送前检查要读的那几项
+ * (模型目录、Agent 能力、可用 Agent、Agent 就绪)，分享者电脑已按分享的供应商收窄。
+ * Agent 本身由主进程的远程 Agent 客户端连接，不经这里。
+ */
+const PROVIDER_SHARE_RENDERER_CHANNELS: ReadonlySet<string> = new Set([
+  'maker:provider:list',
+  'maker:get-capabilities',
+  'maker:list-available-agents',
+  'maker:agent:status',
+]);
+
+function projectProviderShareResult(channel: string, value: unknown): unknown {
+  // 分享者电脑已去掉账号身份；受邀者这边再过一遍，旧版本分享者也不会把登录邮箱带进界面。
+  if (channel === 'maker:provider:list') return scrubSharedProviderCatalog(value);
+  if (channel === 'maker:agent:status') {
+    // 只认 Agent 是否装好：就绪以分享的模型目录为准，不带对方的登录状态、本机路径与身份。
+    const status = value && typeof value === 'object' ? value as { binaryReady?: unknown } : {};
+    return { binaryReady: status.binaryReady === true };
+  }
+  return value;
+}
+
+/**
+ * 分享来的供应商读不到时在本机日志记下错误(同一分享、同一请求、同一错误每分钟最多一条)。
+ * 界面只能说「暂时读不到」，排查要靠这里和分享者电脑上的拒绝原因。
+ */
+const providerShareReadFailureLoggedAt = new Map<string, number>();
+function logProviderShareReadFailure(agentDeviceId: string, channel: string, code: string, message: string): void {
+  const key = `${agentDeviceId}\u0000${channel}\u0000${code}`;
+  const now = Date.now();
+  if (now - (providerShareReadFailureLoggedAt.get(key) ?? 0) < 60_000) return;
+  if (providerShareReadFailureLoggedAt.size >= 256) providerShareReadFailureLoggedAt.clear();
+  providerShareReadFailureLoggedAt.set(key, now);
+  log.warn(`provider share read failed: ${channel} on ${agentDeviceId}: ${code} ${message.slice(0, 200)}`);
+}
+
+export async function handleProviderShareInvoke(
+  deps: Pick<DeviceLinkIpcDeps, 'invoke' | 'invokeProviderShareHost'>,
+  agentDeviceId: string,
+  channel: unknown,
+  args: unknown,
+): Promise<unknown> {
+  if (typeof channel !== 'string' || !PROVIDER_SHARE_RENDERER_CHANNELS.has(channel)) {
+    throwIpcError('DEVICE_LINK_CHANNEL_NOT_ALLOWED', 'Not available for shared providers');
+  }
+  let target: string;
+  try {
+    target = await resolveRemoteAgentTargetWhenReady(agentDeviceId);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    logProviderShareReadFailure(agentDeviceId, channel, 'RESOLVE', message);
+    throw err;
+  }
+  const callArgs = Array.isArray(args) ? args : [];
+  let result: InvokeResultPayload;
+  try {
+    result = isCrossRegionProviderShareTarget(target)
+      ? await crossRegionInvoke(target, channel, callArgs)
+      : await (deps.invokeProviderShareHost ?? deps.invoke)(target, channel, callArgs);
+  } catch (err) {
+    logProviderShareReadFailure(
+      agentDeviceId,
+      channel,
+      err instanceof DeviceLinkError ? err.code : 'THROWN',
+      err instanceof Error ? err.message : String(err),
+    );
+    if (err instanceof DeviceLinkError && isProviderShareRefusal(err.code, err.message)) refuseProviderShare();
+    rethrowDeviceLinkError(err);
+  }
+  if (result.ok) return projectProviderShareResult(channel, result.result);
+  logProviderShareReadFailure(agentDeviceId, channel, result.error.code, result.error.message);
+  // 分享者电脑拒绝了(暂停、关了远程控制或这个供应商的「允许被远程调用」)：分享专属原因。
+  if (isProviderShareRefusal(result.error.code, result.error.message)) refuseProviderShare();
+  if (result.error.code === 'IPC_ERROR') throw new Error(result.error.message);
+  throwIpcError(DEVICE_LINK_CODE_MAP[result.error.code] ?? 'INTERNAL', result.error.message);
+}
+
+function refuseProviderShare(): never {
+  noteProviderShareAccessFailure();
+  throwIpcError('REMOTE_AGENT_SHARE_UNAVAILABLE', 'The shared provider is not available right now');
 }
 
 /** subscribe/unsubscribe 共用:校验 + 解包 invoke-result(失败按隧道错误码抛给 renderer)。 */
@@ -1061,6 +1169,7 @@ export async function handleMirrorCachePutMessages(
   expectedOwnerToken?: unknown,
   expectedAccountCounter?: unknown,
   historyView?: unknown,
+  mergeListMessage?: unknown,
 ): Promise<{ ok: true; invalidation?: number }> {
   const device = requireCacheId(deviceId, 'deviceId');
   const session = requireCacheId(sessionId, 'sessionId');
@@ -1091,6 +1200,8 @@ export async function handleMirrorCachePutMessages(
       ? expectedAccountCounter
       : undefined;
   try {
+    const historyArgs: [historyView?: string, mergeListMessage?: boolean] = mergeListMessage === true
+      ? [historyView as string | undefined, true] : historyView !== undefined ? [historyView as string] : [];
     const result = await cache.writeMessages(
       device,
       session,
@@ -1098,7 +1209,7 @@ export async function handleMirrorCachePutMessages(
       expected,
       expectedOwner,
       expectedAccount,
-      ...(historyView !== undefined ? [historyView as string] : []),
+      ...historyArgs,
     );
     return { ok: true, invalidation: result.invalidation };
   } catch (err) {
@@ -1404,6 +1515,17 @@ export function registerDeviceLinkIpc(deps: DeviceLinkIpcDeps = defaultDeps()): 
   ipcMain.handle(DEVICE_LINK_INVOKE.INVOKE, (e, payload: unknown) => {
     requireDeviceLinkCapability();
     const p = (payload ?? {}) as { deviceId?: unknown; channel?: unknown; args?: unknown };
+    if (typeof p.deviceId === 'string' && parseProviderShareAgentDeviceId(p.deviceId)) {
+      assertTrustedAppRendererEvent(e);
+      return handleProviderShareInvoke(deps, p.deviceId, p.channel, p.args);
+    }
+    if (p.channel === 'maker:review:start') {
+      assertTrustedAppRendererEvent(e);
+      return withOutboundReviewConfirmation(
+        (items) => confirmReviewArtifacts(e, items),
+        () => handleInvoke(diagnostics.forWindow(deps, e.sender.id), p.deviceId, p.channel, p.args),
+      );
+    }
     return handleInvoke(diagnostics.forWindow(deps, e.sender.id), p.deviceId, p.channel, p.args);
   });
   // 多窗口订阅引用计数:每个发起订阅的窗口(WebContents)挂一次 'destroyed' 清理,
@@ -1486,6 +1608,7 @@ export function registerDeviceLinkIpc(deps: DeviceLinkIpcDeps = defaultDeps()): 
       expectedOwnerToken?: unknown;
       expectedAccountCounter?: unknown;
       historyView?: unknown;
+      mergeListMessage?: unknown;
     };
     return handleMirrorCachePutMessages(
       getMirrorCache(),
@@ -1497,6 +1620,7 @@ export function registerDeviceLinkIpc(deps: DeviceLinkIpcDeps = defaultDeps()): 
       p.expectedOwnerToken,
       p.expectedAccountCounter,
       p.historyView,
+      p.mergeListMessage,
     );
   });
   ipcMain.handle(DEVICE_LINK_INVOKE.MIRROR_CACHE_GET_SESSION_LIST, (e) => {

@@ -136,6 +136,14 @@ export function botGroupsDelete(db: Database.Database, args: BotGroupsDeleteArgs
   return db.transaction(() => {
     const deleted = db.prepare('DELETE FROM bot_groups WHERE id = ?').run(groupId);
     if (deleted.changes !== 1) throw coded('群聊不存在', 'NOT_FOUND');
+    const hasMediaRefs = Boolean(db.prepare(
+      "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'media_refs'",
+    ).get());
+    // The group and its attachment references are one deletion unit; members' own
+    // Sessions keep theirs (bot-group-chat.md §3.1).
+    if (hasMediaRefs) {
+      db.prepare("DELETE FROM media_refs WHERE ref_kind = 'bot-group-attachment' AND ref_id = ?").run(groupId);
+    }
     return { archivedSessionIds: archiveLanes(db, routeKey, null, now, planPrefix) };
   })();
 }
@@ -167,11 +175,11 @@ function insertMessage(db: Database.Database, m: BotGroupsMessageRow): BotGroups
   const createdAt = requireNumber(m.createdAt, 'message.createdAt');
   db.prepare(`INSERT INTO bot_group_messages
     (id, group_id, sequence, kind, author_kind, author_bot_id, author_name, content,
-     mentions_json, notice_code, client_id, plan_id, files_json, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+     mentions_json, notice_code, client_id, plan_id, files_json, attachments_json, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
     .run(requireString(m.id, 'message.id'), groupId, sequence, m.kind, m.authorKind,
       m.authorBotId ?? null, m.authorName, m.content, m.mentionsJson, m.noticeCode ?? null,
-      m.clientId ?? null, m.planId ?? null, m.filesJson ?? '[]', createdAt);
+      m.clientId ?? null, m.planId ?? null, m.filesJson ?? '[]', m.attachmentsJson ?? '[]', createdAt);
   db.prepare('UPDATE bot_groups SET updated_at = ? WHERE id = ?').run(createdAt, groupId);
   return { id: m.id, sequence, created: true };
 }
@@ -202,10 +210,11 @@ export function botGroupsCreatePlan(
     db.prepare(`UPDATE bot_group_plans SET status = 'superseded', updated_at = ?
       WHERE group_id = ? AND status = 'proposed'`).run(now, groupId);
     db.prepare(`INSERT INTO bot_group_plans
-      (id, group_id, status, request_text, organizer_bot_id, organizer_name, current_step,
+      (id, group_id, status, request_text, attachments_json, organizer_bot_id, organizer_name, current_step,
        work_dir, branch, created_at, updated_at)
-      VALUES (?, ?, 'proposed', ?, ?, ?, NULL, NULL, NULL, ?, ?)`)
+      VALUES (?, ?, 'proposed', ?, ?, ?, ?, NULL, NULL, NULL, ?, ?)`)
       .run(planId, groupId, requireString(args.plan.requestText, 'plan.requestText'),
+        args.plan.attachmentsJson ?? '[]',
         requireString(args.plan.organizerBotId, 'plan.organizerBotId'),
         requireString(args.plan.organizerName, 'plan.organizerName'), now, now);
     const insertStep = db.prepare(`INSERT INTO bot_group_plan_steps

@@ -426,6 +426,18 @@ describe('Shared create project picker', () => {
     expect(branchHandler).toContain('setWtBranchPreferenceError(true);');
   });
 
+  it('refreshes both creation callbacks when the remote plan selection changes', () => {
+    for (const handler of ['handleSend', 'handleCreateGoal']) {
+      const start = newMakerDraftRouteSource.indexOf(`const ${handler} = useCallback(`);
+      expect(start).toBeGreaterThan(-1);
+      const end = newMakerDraftRouteSource.indexOf('\n  );', start);
+      const callback = newMakerDraftRouteSource.slice(start, end);
+      const dependencies = callback.slice(callback.lastIndexOf('\n    ['));
+      expect(callback).toContain('planModeEnabled: effectivePlanMode');
+      expect(dependencies).toMatch(/\beffectivePlanMode\s*,/);
+    }
+  });
+
   it('creates managed worktrees before starting either local or device-link goals', () => {
     const goal = newMakerDraftRouteSource.slice(
       newMakerDraftRouteSource.indexOf('const handleCreateGoal = useCallback('),
@@ -559,8 +571,9 @@ describe('Shared create project picker', () => {
 
     // 路由以被控端(deviceId)为准计算 hidden。不可用性变化只收窄可选入口；不得由
     // 监听旧 draft 的 effect 再写回选中值，否则会覆盖同轮刚应用的新默认组合。
+    // 目录所在电脑:远程任务的被控端,或 Agent 在另一台电脑运行时的那台。
     expect(newMakerDraftRouteSource).toMatch(
-      /useAvailableAgents\(\s*effectiveDeviceLinkDeviceId,?\s*\)/,
+      /useAvailableAgents\(\s*catalogDeviceId,?\s*\)/,
     );
     expect(newMakerDraftRouteSource).not.toMatch(
       /hiddenSwitcherVendors\.includes\(draft\.vendor\)/,
@@ -571,7 +584,7 @@ describe('Shared create project picker', () => {
     // 常态路径的门禁。**门禁没放松,只是换了承载物**:ChatInput 按同一个 runtime 注册
     // 结果算出 unifiedAgents 交给联合列表,未注册的引擎连行都不出现。
     expect(newMakerDraftRouteSource).toContain('hiddenVendors={hiddenSwitcherVendors}');
-    expect(chatInputSource).toMatch(/useAvailableAgents\(deviceLinkDeviceId\)/);
+    expect(chatInputSource).toMatch(/useAvailableAgents\(catalogDeviceId\)/);
     expect(chatInputSource).toContain('unifiedAgents={effectiveUnifiedAgents}');
     // fail-open:注册结果没回来之前不隐藏任何引擎;当前引擎恒在列。
     expect(chatInputSource).toContain('if (!runtimeAgentsLoaded) return undefined;');
@@ -890,11 +903,11 @@ describe('Shared create project picker', () => {
     expect(action).toContain(
       'if (deviceChanged || workingDirChanged) stripProjectRelativeMentions();',
     );
-    // 附件是另一个条件 —— 别再把这两件事合回一个 gate。
-    expect(action).toContain('if (deviceChanged) dropPathBackedAttachments();');
-    // 拆分后的两个函数各自绑住自己的解析基准,注释里写明了理由。
+    // 附件由出站上传层搬运，无需随引用一起删除。
+    expect(action).not.toContain('dropPathBackedAttachments');
+    // 项目引用仍随目标目录清理，附件保留。
     expect(newMakerDraftRouteSource).toContain('const stripProjectRelativeMentions = useCallback(');
-    expect(newMakerDraftRouteSource).toContain('const dropPathBackedAttachments = useCallback(');
+    expect(newMakerDraftRouteSource).not.toContain('const dropPathBackedAttachments = useCallback(');
     // 旧的合并式 helper 必须消失,否则又会有人按单一条件调它。断言声明与调用两种形态,
     // 而不是裸名字 —— 拆分后的函数注释里会提到这个旧名作为历史记录。
     expect(newMakerDraftRouteSource).not.toContain('const cleanupCrossFilesystemDraftContext');
@@ -936,7 +949,8 @@ describe('Shared create project picker', () => {
     expect(newMakerDraftRouteSource).toContain(
       'capabilitiesError || (deviceProvidersError && !deviceProvidersUnsupported)',
     );
-    expect(newMakerDraftRouteSource.match(/remoteModelListStatus !== 'ready'/g)).toHaveLength(2);
+    // 发送 + 远程任务的新建目标 + Agent 在另一台电脑时的新建目标。
+    expect(newMakerDraftRouteSource.match(/remoteModelListStatus !== 'ready'/g)).toHaveLength(3);
     expect(newMakerDraftRouteSource).toContain(
       "toast.error(t('newChat.modelSelector.remoteLoadFailed'))",
     );
@@ -1173,11 +1187,15 @@ describe('Shared create project picker', () => {
     expect(remoteSessionHandoffSource).not.toContain('await refreshRemoteDeviceSessions(');
     // 两处调用点都不得 await 它 —— await 一个同步函数不报错,但会把「不要等」这个意图悄悄改回去。
     expect(newMakerDraftRouteSource).not.toContain('await commitRemoteSessionHandoff(');
-    // 而 setPending / setPendingGoal 必须在各自的 handoff 之后仍然发生(交接本体没被搬走)。
+    // 而首条交接必须在各自的 handoff 之后仍然发生(交接本体没被搬走):发送路径先把普通首条
+    // 直接交给 store 发件队列再导航;协同 / 斜杠命令 / 未受理时退回 setPending 再导航。
     const sendPart = newMakerDraftRouteSource.slice(
       newMakerDraftRouteSource.indexOf("logTag: 'draft send'"),
     );
-    expect(sendPart.slice(0, sendPart.indexOf('navigate('))).toContain(
+    const directNavigate = sendPart.indexOf('navigate(');
+    expect(sendPart.slice(0, directNavigate)).toContain('makerChatStore.sendMessage(');
+    const fallbackNavigate = sendPart.indexOf('navigate(', directNavigate + 1);
+    expect(sendPart.slice(directNavigate, fallbackNavigate)).toContain(
       'setPending(remoteSessionId',
     );
     const goalPart = newMakerDraftRouteSource.slice(
@@ -1236,30 +1254,15 @@ describe('Shared create project picker', () => {
     );
   });
 
-  // #807 review 第十七轮:换设备要一并丢掉**路径型**附件。attachment-path-passthrough 之后非图片
-  // 附件只把 path 透传给模型,而 rehomeDraftAttachments 只重整图片 —— 上一台机器的路径会随首条
-  // 消息发到新设备,读不到、或读到同路径下一个毫不相关的文件。
-  it('drops path-backed attachments on every device switch', () => {
-    const helper = newMakerDraftRouteSource.slice(
-      newMakerDraftRouteSource.indexOf('const dropPathBackedAttachments = useCallback('),
+  // Device-link uploads controller-owned files before dispatch; see outboundMedia.test.ts.
+  it('keeps transferable attachments when switching device', () => {
+    const action = newMakerDraftRouteSource.slice(
+      newMakerDraftRouteSource.indexOf('const applyDraftTarget = useCallback('),
+      newMakerDraftRouteSource.indexOf('const applyDraftTarget = useCallback(') + 6000,
     );
-    const body = helper.slice(0, helper.indexOf('}, ['));
-    expect(body).toContain(".filter((f) => f.category !== 'image')");
-    expect(body).toContain('attachmentState.removeFile(f.id)');
-    // 图片不动:它们走 xdt-image:// 缓存,不依赖对端文件系统。
-    expect(body).toContain("t('newChat.deviceSwitcher.attachmentsDropped'");
-    // chip 剥离在**另一个**函数里(不同的解析基准,不同的触发条件)。
-    expect(body).not.toContain('stripLocalMentionChips');
-    expect(newMakerDraftRouteSource).toContain(
-      'const stripProjectRelativeMentions = useCallback(() => {',
-    );
-    // 全文恰好两处非图片过滤,各有明确分工:① 这个换设备时的同步清理;② 第二十四轮加的不变量
-    // 收敛 effect(兜住在途摄入等所有入口)。出现第三处就说明又有人在某条路径上手写了一份。
-    expect(
-      (newMakerDraftRouteSource.match(/\.filter\(\(f\) => f\.category !== 'image'\)/g) ?? [])
-        .length,
-    ).toBe(2);
-    expect(newMakerDraftRouteSource).toContain('「远程草稿绝不携带控制端路径附件」的**收敛器**');
+    expect(action).not.toContain('attachmentState.removeFile');
+    expect(newMakerDraftRouteSource).not.toContain('dropPathBackedAttachments');
+    expect(action).toContain('stripProjectRelativeMentions();');
   });
 
   /**
@@ -1276,6 +1279,7 @@ describe('Shared create project picker', () => {
   it('routes every draft-target transition through the single action', () => {
     // 五条路径:设备 pill、设备域浏览器选项目、工作区 picker、所选设备失效后的自动回落、
     // “对话”分组导航请求。声明本身是 `= useCallback(` 不匹配这个模式,所以数出来的就是调用点。
+    // (远程 Agent 由模型选择器选择、只在本机任务出现,不再经设备菜单转移草稿目标。)
     const calls = newMakerDraftRouteSource.match(/applyDraftTarget\(\{/g) ?? [];
     expect(calls.length).toBe(5);
     // 组件里不得再有任何一处手写这些副作用 —— 手写一处就等于又开了一条绕过推导的路。
@@ -1310,8 +1314,8 @@ describe('Shared create project picker', () => {
     expect(body).toContain(
       'if (deviceChanged || workingDirChanged) stripProjectRelativeMentions();',
     );
-    // 路径型附件存**绝对**路径 → 只有换设备才失效,同机换项目不该丢用户的附件。
-    expect(body).toContain('if (deviceChanged) dropPathBackedAttachments();');
+    // 附件始终属于控制端，换目标设备不丢弃；发送时由上传层转成远端引用。
+    expect(body).not.toContain('dropPathBackedAttachments');
     // 三个无 TTL 快照:绑「指向一台**新**设备」或「用户主动重新验证了这台设备」,
     // **不是**「指向设备就作废」—— 详见下面 does not evict… 那条用例的机制说明。
     expect(body).toContain('if (req.deviceId && (deviceChanged || req.remoteSnapshot)) {');
@@ -1467,40 +1471,11 @@ describe('Shared create project picker', () => {
     expect(remoteSessionHandoffSource).toContain('args: p.createArgs,');
   });
 
-  // #807 review 第二十二轮:换设备时的清理只管「切换那一刻已在托盘里」的附件,**先选设备、之后
-  // 再拖进来**的路径型附件照样会把控制端绝对路径发到对端。两者一起才是「远程草稿绝不携带控制端
-  // 路径附件」这条不变量。
-  it('refuses path-backed attachments added after a remote device is selected', () => {
-    const guard = newMakerDraftRouteSource.slice(
-      newMakerDraftRouteSource.indexOf('const guardedAttachmentState = useMemo('),
-    );
-    const body = guard.slice(0, guard.indexOf('}, ['));
-    // 本机草稿零开销:直接返回原对象,不包装。
-    expect(body).toContain('if (!isDeviceLinkDraft) return attachmentState;');
-    // 判据必须与下游**同口径**(第 29 轮 P1):useAttachments 的分类完全不看 MIME —— 先按扩展名
-    // categorizeFile,认不出来才 peekFileHeader 按魔数推断。原来这里用 `f.type.startsWith('image/')`,
-    // 于是 Electron 给空 / 通用 File.type 时(某些平台与拖拽源如此,重命名过的图片更是必然),
-    // 一张下游明明能识别的图片会被拦掉,而且只在远程草稿下如此,用户切回本机就能加。
-    // 断言旧代码形态而非裸片段 —— 上面那段注释里会逐字提到它作为历史记录。
-    expect(body).not.toContain("incoming.filter((f) => f.type.startsWith('image/'))");
-    expect(body).toContain('const ext = extractExt(f.name);');
-    expect(body).toContain(
-      'const category = ext ? categorizeFile(ext) : categorizeByFilename(f.name);',
-    );
-    // 认不出类别时**放行**,交给下游的文件头推断 + 收敛器兜底 —— 闸门宁可放过,绝不误拒。
-    expect(body).toContain('if (!category) return false;');
-    expect(body).toContain("return category !== 'image';");
-    expect(body).toContain("t('newChat.deviceSwitcher.attachmentsRemoteUnsupported'");
-    // 三个入口(ChatInput + 本路由的拖拽 + 延迟分类的拖拽)都必须走闸门,不能有一个直连原对象。
-    expect(newMakerDraftRouteSource).toContain('attachmentState={guardedAttachmentState}');
-    expect(
-      (newMakerDraftRouteSource.match(/guardedAttachmentState\.addFiles\(/g) ?? []).length,
-    ).toBe(2);
-    // 唯一一处直连原对象的 addFiles 必须是闸门内部那次(放行的那批);此外一处都不许有。
-    expect(
-      (newMakerDraftRouteSource.match(/(?<!guarded)attachmentState\.addFiles\(/g) ?? []).length,
-    ).toBe(1);
-    expect(body).toContain('await attachmentState.addFiles(passed);');
+  // Device-link uploads controller-owned files before dispatch; see outboundMedia.test.ts.
+  it('accepts files from the picker and both drop entry points for remote drafts', () => {
+    expect(newMakerDraftRouteSource).toContain('attachmentState={attachmentState}');
+    expect(newMakerDraftRouteSource).not.toContain('guardedAttachmentState');
+    expect((newMakerDraftRouteSource.match(/attachmentState\.addFiles\(/g) ?? []).length).toBe(2);
   });
 
   // #807 review 第二十二轮:ExtraDirsButton 开的是控制端原生目录对话框,选出来的本机路径发到对端
@@ -1509,8 +1484,20 @@ describe('Shared create project picker', () => {
     expect(newMakerDraftRouteSource).toContain(
       'onExtraDirsChange={isDeviceLinkDraft ? undefined : handleExtraDirsChange}',
     );
-    // 统一建议面板的契约:没有 onExtraDirsChange 就不装配添加/移除引用目录能力。
-    expect(chatInputSource).toContain('if (onExtraDirsChange) {');
+    // The single add entry grants write access only through the local Main picker;
+    // legacy read-only directories retain their independent removal callback.
+    expect(chatInputSource).toMatch(
+      /if \(onWritableDirsChange && writableGrantScope && !remoteHostId && deviceLinkDeviceId === null\)/,
+    );
+    const directoryAction = chatInputSource.slice(
+      chatInputSource.indexOf("id: 'add-extra-dir'"),
+      chatInputSource.indexOf('if (remoteComposerGhosts.failed)'),
+    );
+    expect(directoryAction).toContain('extraDirs: currentWritableDirs');
+    expect(directoryAction).toContain('otherDirs: currentExtraDirs');
+    expect(directoryAction).toContain('writableGrantScope,');
+    expect(directoryAction).toContain('onChange: onWritableDirsChange');
+    expect(chatInputSource).not.toContain("id: 'add-writable-dir'");
     expect(chatInputSource).toMatch(
       /hasReferenceDirs=\{\s*!settingsLocked\s*&&\s*\(onExtraDirsChange !== undefined \|\| onWritableDirsChange !== undefined\)\s*\}/,
     );
@@ -1548,21 +1535,10 @@ describe('Shared create project picker', () => {
     );
   });
 
-  // #807 review 第二十四轮:`useAttachments.addFiles` 对未知扩展名要先 await peekFileHeader,附件是
-  // IPC 回来后才进 state 的 —— 本机草稿下拖入 → 期间切到远程 → 切换清理找不到它 → IPC 回来后被追加,
-  // 且那次调用握的是切换前的真 addFiles,绕过闸门。按入口逐个堵已经漏了三次,改成维护不变量。
-  it('converges the no-controller-path invariant regardless of which entry added the file', () => {
-    const effect = newMakerDraftRouteSource.slice(
-      newMakerDraftRouteSource.indexOf('「远程草稿绝不携带控制端路径附件」的**收敛器**'),
-    );
-    const body = effect.slice(0, effect.indexOf('}, ['));
-    expect(body).toContain('if (!isDeviceLinkDraft) return;');
-    expect(body).toContain(".filter((f) => f.category !== 'image')");
-    expect(body).toContain('attachmentState.removeFile(f.id)');
-    // 依赖 attachments 本身(而非整个 attachmentState 对象)才能在附件晚到时重跑。
-    expect(effect.slice(effect.indexOf('}, ['), effect.indexOf('}, [') + 160)).toContain(
-      'attachmentState.attachments',
-    );
+  // Device-link uploads controller-owned files before dispatch; see outboundMedia.test.ts.
+  it('preserves in-flight attachment ingestion for the remote upload pipeline', () => {
+    expect(newMakerDraftRouteSource).not.toContain('attachmentState.removeFile(f.id)');
+    expect(newMakerDraftRouteSource).toContain('rehomeDraftAttachments(files, remoteSessionId)');
   });
 
   // #807 review 第二十四轮:handleCreateGoal 必须整段持在途锁。上一轮我以为「模态遮罩挡住 pill」就
@@ -1665,7 +1641,7 @@ describe('Shared create project picker', () => {
     expect(seed).toContain('capabilitiesChanged,');
     expect(seed).toContain('if (!capabilities || capabilitiesLoading');
     expect(seed).toContain('controllerTouched: dlRuntimeTouchedRef.current,');
-    expect(seed).toContain('remoteModelChosenByUser: remoteDraftState.value?.modelChosenByUser,');
+    expect(seed).toContain('remoteModelChosenByUser: deviceDraftDefaults?.modelChosenByUser,');
     expect(seed).toContain('modelChosenByUser: true,');
     expect(seed).toContain('current.model,');
 
@@ -1676,7 +1652,9 @@ describe('Shared create project picker', () => {
     // 5 → 6:统一模型选择器(M5)新增 handleUnifiedDraftSelect —— 它同样是一次
     // 控制端对远程运行配置的显式编辑,漏打这个标记的话下一次 capabilities 刷新
     // 会把用户刚选的模型重种回被控端默认。
-    expect((runtimeHandlers.match(/dlRuntimeTouchedRef\.current = true;/g) ?? []).length).toBe(6);
+    // 6 → 7:同一处理器里「选到另一台电脑上的模型」(远程 Agent 换落点)也是显式编辑,
+    // 那台的 capabilities 到达时同样只能夹紧、不能重种。
+    expect((runtimeHandlers.match(/dlRuntimeTouchedRef\.current = true;/g) ?? []).length).toBe(7);
   });
 
   /**
@@ -1694,7 +1672,7 @@ describe('Shared create project picker', () => {
       newMakerDraftRouteSource.indexOf('// 远程草稿展示用:'),
     );
     // 播种 effect 侧的 key 构造(正本)。
-    expect(seed).toContain('const key = `${effectiveDeviceLinkDeviceId}:${capabilityAgentKind}`;');
+    expect(seed).toContain('const key = `${catalogDeviceId}:${capabilityAgentKind}`;');
 
     const unified = newMakerDraftRouteSource.slice(
       newMakerDraftRouteSource.indexOf('const handleUnifiedDraftSelect = useCallback('),
@@ -1702,7 +1680,7 @@ describe('Shared create project picker', () => {
     );
     // 选择侧:同一构造,agent 一维换成**目标引擎**(selection.vendor),且必须在 setDlSel 之前。
     expect(unified).toContain(
-      'dlSeedKeyRef.current = `${effectiveDeviceLinkDeviceId}:${dbToMakerAgentKind(',
+      'dlSeedKeyRef.current = `${catalogDeviceId}:${dbToMakerAgentKind(',
     );
     expect(unified).toContain('normalizeDbAgentKind(selection.vendor),');
     expect(unified.indexOf('dlSeedKeyRef.current =')).toBeLessThan(
@@ -1735,10 +1713,14 @@ describe('Shared create project picker', () => {
     );
     const body = derive.slice(0, derive.indexOf('}, ['));
     // 本机分支行为不变。
-    expect(body).toContain('if (!isDeviceLinkDraft) return localProviderIdForDraft;');
-    // 远程分支按**被控端**目录 + 草稿当前模型复算,用与 main 同源的解析函数。
+    expect(body).toContain('if (!usesDeviceCatalog) return localProviderIdForDraft;');
+    // 远程分支按**模型目录所在电脑**的目录 + 草稿当前模型复算,用与 main 同源的解析函数。
+    // 目录通常就是被控端的;Agent 在另一台电脑运行时只取那台开放了远程调用的供应商(2026-10-09)。
     expect(body).toContain('effectiveSourceIdForModel(');
-    expect(body).toContain('deviceProviders,');
+    expect(body).toContain('agentCatalogProviders,');
+    expect(newMakerDraftRouteSource).toContain(
+      '() => (effectiveAgentDeviceId ? remoteAgentProviders(deviceProviders) : deviceProviders),',
+    );
     expect(body).toContain('draftInitialModel,');
     expect(body).toContain('return deviceLinkInitial?.providerId || effectiveSourceIdForModel(');
   });
@@ -1772,9 +1754,9 @@ describe('New Maker 草稿的 wire model id 口径', () => {
       handlerStart,
       newMakerDraftRouteSource.indexOf('// ─── 用户改 workingDir', handlerStart),
     );
-    // 本地草稿落 lastByVendor(→ createSession)、device-link 草稿落 dlSel —— 两条都用
-    // selection.modelId(wire id),一处都不能换成行 id。
-    expect((handler.match(/model: selection\.modelId,/g) ?? []).length).toBe(2);
+    // 本地草稿落 lastByVendor(→ createSession)、device-link 草稿落 dlSel、远程 Agent 换落点
+    // 时播种那台电脑的 dlSel —— 三条都用 selection.modelId(wire id),一处都不能换成行 id。
+    expect((handler.match(/model: selection\.modelId,/g) ?? []).length).toBe(3);
     // 归一化行 id 不进草稿层,连字段都不该出现在写入实参里。
     expect(handler).not.toContain('rowModelId');
   });

@@ -155,6 +155,7 @@ const PROVIDER_LOGO_KIND_BY_ID: Readonly<Record<string, ProviderLogoKind>> = {
   lmstudio: 'lmstudio',
   'cindy-local-lmstudio': 'lmstudio',
   llamacpp: 'llamacpp',
+  'cindy-local-llamacpp': 'llamacpp',
   vllm: 'vllm',
 };
 

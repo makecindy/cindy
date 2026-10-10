@@ -75,9 +75,12 @@ export function groupWindowEntryOf(m: TgMessage): Omit<TelegramGroupWindowEntry,
 }
 
 /**
- * 群触发判定: @bot 提及(text/caption entities 内的 @username 精确匹配)、
- * 回复 bot 的消息、或 /cmd@botusername 指令。返回剔除@提及后的干净文本;
- * 未触发返回 null。
+ * 群触发判定: @bot 提及(text/caption entities 内的 @username 精确匹配, 或
+ * 按 user id 指向本 bot 的 text_mention)、回复 bot 的消息、或 /cmd@botusername
+ * 指令。返回剔除@提及后的干净文本; 未触发返回 null。
+ *
+ * 纯 @(剥完为空, 如只发一句 "@bot" 让它看上文)仍是召唤: 返回空正文，
+ * 由事件的 invoked 标记保留触发事实，业务层不得将其当成空消息丢掉。
  */
 export function detectGroupTrigger(
   m: TgMessage,
@@ -92,6 +95,13 @@ export function detectGroupTrigger(
   let mentioned = false;
   const strippedRanges: Array<{ start: number; end: number }> = [];
   for (const entity of entities ?? []) {
+    if (entity.type === 'text_mention') {
+      if (entity.user?.id === botId) {
+        mentioned = true;
+        strippedRanges.push({ start: entity.offset, end: entity.offset + entity.length });
+      }
+      continue;
+    }
     if (entity.type !== 'mention' && entity.type !== 'bot_command') continue;
     const value = entitySlice(sourceText, entity);
     if (entity.type === 'mention' && value.toLowerCase() === mentionToken) {
@@ -115,7 +125,8 @@ export function detectGroupTrigger(
 
   let text = stripRanges(sourceText, strippedRanges);
   text = text.replace(new RegExp(`(/[a-zA-Z0-9_]+)@${escapeRegExp(botUsername)}`, 'gi'), '$1');
-  return { text: text.replace(/[ \t]{2,}/g, ' ').trim() };
+  text = text.replace(/[ \t]{2,}/g, ' ').trim();
+  return { text };
 }
 
 /**
@@ -123,7 +134,7 @@ export function detectGroupTrigger(
  *   - `@显示名` 任意位置(如 "@Ivy 你在?" — 大小写不敏感, 后面不能紧跟字母数字);
  *   - 裸显示名在**句首**且后跟分隔符/结尾(如 "Ivy 帮我看看" / "ivy?")。
  * 句中出现名字(如 "我问过 Ivy 了")不算召唤 — 只是聊到它, 避免误触发。
- * 命中后剥掉召唤 token; 剥完为空(纯 "@Ivy")时保留原文让 agent 打招呼。
+ * 命中后剥掉召唤 token；空正文由事件的 invoked 标记保留召唤事实。
  */
 function matchNameSummon(sourceText: string, botName: string): string | null {
   const name = botName.trim();
@@ -141,7 +152,7 @@ function matchNameSummon(sourceText: string, botName: string): string | null {
   }
   if (cleaned === null) return null;
   const text = cleaned.replace(/[ \t]{2,}/g, ' ').trim();
-  return text || sourceText.trim();
+  return text;
 }
 
 /**
@@ -260,11 +271,14 @@ async function collectReplyMedia(
   replied: TgMessage,
   ctx: NormalizeContext,
   attachments: IMAttachment[],
+  unavailable: string[],
 ): Promise<number> {
   const before = attachments.length;
   const sink: IMAttachment[] = [];
-  const discard: IMUnsupportedEntry[] = []; // 被引消息的不可用类型静默丢, 不打扰用户
+  const discard: IMUnsupportedEntry[] = [];
   await collectMedia(replied, ctx, sink, discard);
+  unavailable.push(...discard.map((entry) => `引用附件 ${entry.label}：${entry.type}`));
+  unavailable.push(...sink.slice(MAX_REPLY_ATTACHMENTS).map((entry) => `引用附件 ${entry.originalName}：超过数量上限`));
   for (const attachment of sink.slice(0, MAX_REPLY_ATTACHMENTS)) {
     attachments.push(attachment);
   }
@@ -286,13 +300,20 @@ export async function normalizeMessage(m: TgMessage, ctx: NormalizeContext): Pro
   // 只挡引用带出来的那份, 本条消息自己的附件仍按用户显式发送处理。
   const replyProtected =
     m.reply_to_message?.has_protected_content === true || m.has_protected_content === true;
+  const unavailableAttachments: string[] = [];
   const replyAttachmentCount =
     m.reply_to_message && !replyProtected
-      ? await collectReplyMedia(m.reply_to_message, ctx, attachments)
+      ? await collectReplyMedia(m.reply_to_message, ctx, attachments, unavailableAttachments)
       : 0;
 
   return {
     channelName: 'telegram',
+    interactionSource: {
+      chatName: m.chat.title ?? (m.chat.type === 'private' ? displayNameOf(m.from) : chatId),
+      senderName: displayNameOf(m.from),
+      ...(laneThreadIdOf(m) ? { threadName: laneThreadIdOf(m) } : {}),
+      ...(chatId.startsWith('-100') ? { messageUrl: `https://t.me/c/${chatId.slice(4)}/${m.message_id}` } : {}),
+    },
     senderId: ctx.laneUserId ?? String(m.from?.id ?? ''),
     chatId,
     contextId: ctx.contextId,
@@ -310,6 +331,7 @@ export async function normalizeMessage(m: TgMessage, ctx: NormalizeContext): Pro
           replyContext: {
             ...reply,
             ...(replyAttachmentCount > 0 ? { attachmentCount: replyAttachmentCount } : {}),
+            ...(unavailableAttachments.length ? { unavailableAttachments } : {}),
           },
         }
       : {}),

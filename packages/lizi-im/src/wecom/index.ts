@@ -766,6 +766,7 @@ export class WecomIM extends BaseIM implements TextChannelIM {
       contextId: body.aibotid || this.botId,
       messageId: body.msgid,
       text: normalized.text,
+      invoked: body.chattype === "group",
       attachments: normalized.attachments,
       unsupported: normalized.unsupported,
       ...(body.chattype === "group"
@@ -1126,8 +1127,8 @@ function quoteContext(
       0);
   return {
     author: "引用消息",
-    text: text || "[附件]",
-    ...(attachmentCount ? { attachmentCount } : {}),
+    text: text || (attachmentCount ? "[引用包含附件，本轮未提供文件内容]" : "[引用正文不可用]"),
+    ...(attachmentCount ? { unavailableAttachments: [`引用消息的 ${attachmentCount} 个附件未提供文件内容`] } : {}),
   };
 }
 

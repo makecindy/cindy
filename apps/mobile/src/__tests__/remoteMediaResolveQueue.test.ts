@@ -83,7 +83,7 @@ describe('remoteMediaResolveQueue', () => {
     const queue = createRemoteMediaResolveQueue({ resolve });
 
     // 未命中:立即拒绝,不触发取件,也不写负缓存。
-    await expect(queue.request(imageRequest('a.png'), { cachedOnly: true })).rejects.toThrow('cachedOnly');
+    await expect(queue.request(imageRequest('a.png'), { cachedOnly: true })).rejects.toThrow('这个媒体还没有缓存到手机上');
     expect(resolve).not.toHaveBeenCalled();
 
     // 负缓存未被污染:随后的正常请求照常起飞。
@@ -393,7 +393,7 @@ describe('remoteMediaResolveQueue', () => {
 
     queue.releaseAll();
     // 排队项直接拒绝,resolve 不会为它被调用
-    await expect(p2).rejects.toThrow('远程媒体取件已取消');
+    await expect(p2).rejects.toThrow('已取消取回远程媒体');
     pending[0]?.resolve(resolvedMedia('a.png'));
     await expect(p1).resolves.toMatchObject({ ossKey: 'key/a.png' });
     await flush();

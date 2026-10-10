@@ -48,14 +48,14 @@ describe('sharedTask authorization', () => {
     }
     expect(isSharedTaskAttachment('file:///private/file.png', 'shared')).toBe(false);
   });
-  it.each(['history.read', 'attachment.read', 'attachment.upload', 'input.send', 'agent.configure', 'agent.stop'])(
+  it.each(['history.read', 'attachment.read', 'attachment.upload', 'file.read', 'file.write', 'input.send', 'agent.stop', 'approval.resolve'])(
     'lets an approved guest %s without treating them as the owner', (operation) => {
       expect(authorize(parse(snapshot()), guest, 'session-1', operation)).toMatchObject({ allowed: true, role: 'guest', memberId: 'member-a' });
     },
   );
-  it.each(['approval.resolve', 'permission.configure', 'workdir.configure', 'plugins.configure',
+  it.each(['agent.configure', 'permission.configure', 'workdir.configure', 'plugins.configure',
     'history.delete', 'session.archive', 'session.export', 'session.fork', 'background.create', 'schedule.create', 'sharedTask.manage'])(
-    'requires the owner for %s even when a guest can configure the model', (operation) => {
+    'requires the owner for %s', (operation) => {
       expect(authorize(parse(snapshot()), guest, 'session-1', operation)).toEqual({ allowed: false, reason: 'owner-required' });
       expect(authorize(parse(snapshot()), owner, 'session-1', operation)).toMatchObject({ allowed: true, role: 'host' });
     },

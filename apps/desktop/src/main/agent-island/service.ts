@@ -32,6 +32,7 @@ import {
   AGENT_ISLAND_SET_DISPLAY_TARGET_CHANNEL,
   AGENT_ISLAND_SET_ENABLED_CHANNEL,
   AGENT_ISLAND_SET_MASCOT_SKIN_CHANNEL,
+  AGENT_ISLAND_SET_REMOTE_SESSIONS_CHANNEL,
   AGENT_ISLAND_SET_SOUND_SETTINGS_CHANNEL,
   AGENT_ISLAND_SET_VISIBLE_SESSION_CHANNEL,
   AGENT_ISLAND_SELECT_SOUND_FILE_CHANNEL,
@@ -52,11 +53,13 @@ import {
   normalizeAgentIslandDisplayTarget,
   normalizeAgentIslandSoundChoice,
   normalizeAgentIslandSoundSettings,
+  parseAgentIslandRemoteSessions,
   snapAgentIslandCompactHardwareContentWidth,
   AGENT_ISLAND_SESSION_SNAPSHOTS_CHANNEL,
   type AgentIslandDisplayOption,
   type AgentIslandDisplayState,
   type AgentIslandPillSnapshot,
+  type AgentIslandRemoteSessionInput,
   type AgentIslandSessionActivity,
   type AgentIslandSessionSnapshot,
   type AgentIslandDisplayTarget,
@@ -81,11 +84,13 @@ import {
   buildAllSessionActivitySnapshots,
   closeAgentIslandSessionPreservingUnread,
   completeAgentIslandSessionWithoutAttention,
+  completedReplySummary,
   createAgentIslandUserPromptRollbackToken,
   createAgentIslandState,
   dismissAgentIslandActiveReveal,
   getNextAgentIslandTimerAt,
   hasAgentIslandSessionAttention,
+  isAgentIslandDeviceSession,
   isAgentIslandPendingFocusAck,
   markAgentIslandSessionAttention,
   requestAgentIslandManualCollapse,
@@ -102,6 +107,8 @@ import {
   setAgentIslandStrings,
   setAgentIslandToolWording,
   setAgentIslandVisibleSession,
+  syncAgentIslandDeviceSessions,
+  type AgentIslandDeviceSessionEvent,
   type AgentIslandUserPromptRollbackToken,
 } from './state.js';
 import { createLocalizedToolRowWording } from './toolWording.js';
@@ -124,6 +131,7 @@ import {
   writeAgentIslandLayoutPreferences,
 } from './layoutPreferenceStore.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
+import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { tapWindowBroadcast } from '../device-link/broadcast-tap.js';
 import {
   beginProtectedFolderCheck,
@@ -168,12 +176,15 @@ interface AgentIslandUserPromptDebugMeta {
 }
 
 export interface AgentIslandServiceDeps {
+  isCompletionHandledByTeammate?: (sessionId: string) => Promise<boolean>;
   getMainWindow: () => BrowserWindow | null;
   nativeHost?: AgentIslandNativeRenderer;
   /** Main-process upgrade window used to classify remote daemon shutdowns. */
   isPlannedRemoteDaemonClose?: (sessionId: string) => boolean;
   /** Optional process-local consumer for task activity, such as hardware status lighting. */
   onSessionActivityChange?: (activity: readonly AgentIslandSessionActivity[]) => void;
+  /** 其它设备任务的状态跃迁。灵动岛开启时由岛面展示;关闭时才交给这里发桌面通知。 */
+  onDeviceSessionEvent?: (event: AgentIslandDeviceSessionEvent) => void;
 }
 
 interface AgentIslandNativeRenderer {
@@ -215,6 +226,8 @@ export function initAgentIslandService(deps: AgentIslandServiceDeps): AgentIslan
     ...deps,
     nativeHost: deps.nativeHost ?? (supportsNativeIsland ? undefined : HEADLESS_AGENT_ISLAND_NATIVE_HOST),
   });
+  // 远程任务同步与原生岛面无关:无原生岛的平台也要靠它发桌面通知。
+  serviceSingleton.registerDeviceSessionIpc();
   if (supportsNativeIsland) {
     serviceSingleton.registerIpc();
   } else {
@@ -315,6 +328,8 @@ export class AgentIslandService {
   private readonly silencedRunHadAttention = new Map<string, boolean>();
   private readonly silencedRunClearTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly mutedCompletionSoundSessionIds = new Set<string>();
+  /** 本轮同步首次出现的其它设备任务:进列表但不响铃。publish 后清空。 */
+  private readonly baselineSoundSessionIds = new Set<string>();
   private readonly stoppedSessionIds = new Set<string>();
   private readonly replacementTurnPendingSessionIds = new Set<string>();
   private readonly replacementTurnDispatchingSessionIds = new Set<string>();
@@ -346,15 +361,16 @@ export class AgentIslandService {
     sessionId: string;
     request: Extract<InteractionRequest, { kind: 'permission' }>;
   }>();
-  private readonly sessionActivityRelay = new SessionActivityRelay((payload) => {
-    tapWindowBroadcast(SESSION_ACTIVITY_CHANNEL, payload);
-  });
+  private readonly sessionActivityRelay: SessionActivityRelay;
   private permissionResolver: ((requestId: string, decision: AgentIslandPermissionDecision) => boolean) | null = null;
   private shouldDeferCompletion: ((sessionId: string) => boolean) | null = null;
   private layoutPreferenceWriteTimer: ReturnType<typeof setTimeout> | null = null;
   private streamingPreviewPublishTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(private readonly deps: AgentIslandServiceDeps) {
+    this.sessionActivityRelay = new SessionActivityRelay((payload) => {
+      tapWindowBroadcast(SESSION_ACTIVITY_CHANNEL, payload);
+    }, { isCompletionHandledByTeammate: deps.isCompletionHandledByTeammate });
     // lazy t() 闭包跟随 locale 运行时切换,注入一次即可(strings 仍每次 publish 重建)。
     setAgentIslandToolWording(this.state, createLocalizedToolRowWording());
     this.layoutPreferencesByDisplayId = readAgentIslandLayoutPreferences();
@@ -411,8 +427,9 @@ export class AgentIslandService {
   }
 
   /**
-   * 当某会话的排队工作因 INPUT_REMOVE / INPUT_CLEAR_SESSION 被清空(而非被派发)时调用。
-   * 若该会话有待补发的完成事件(之前因队列非空而被推迟),且现在队列确实为空,则立即补发。
+   * 当某会话的排队工作因 INPUT_REMOVE / INPUT_CLEAR_SESSION 被清空(而非被派发)、
+   * 或 Orca Lead 的最后一份 Worker 回报已结清时调用。若该会话有待补发的完成事件
+   * (之前因推迟判定成立而被压住),且现在推迟判定已不成立,则立即补发。
    */
   notifyQueueEmptied(sessionId: string): void {
     const deferred = this.deferredCompletions.get(sessionId);
@@ -477,6 +494,24 @@ export class AgentIslandService {
     }
 
     this.handleInteractionDismissed(entry.sessionId, requestId);
+  }
+
+  /** 各平台都注册(含无原生岛的 headless):灵动岛关闭时远程任务靠它发桌面通知。 */
+  registerDeviceSessionIpc(): void {
+    ipcMain.handle(AGENT_ISLAND_SET_REMOTE_SESSIONS_CHANNEL, (event, raw: unknown) => {
+      assertTrustedAppRendererEvent(event);
+      // 只认主窗:副窗也挂侧栏,多份输入会让跃迁判定来回抖动。
+      const mainWindow = this.deps.getMainWindow();
+      if (!mainWindow || mainWindow.isDestroyed() || mainWindow.webContents !== event.sender) {
+        return { ok: true };
+      }
+      const inputs = parseAgentIslandRemoteSessions(raw);
+      if (!inputs) {
+        throwIpcError('INVALID_PARAMS', 'remote sessions payload is invalid');
+      }
+      this.setDeviceSessions(inputs);
+      return { ok: true };
+    });
   }
 
   registerIpc(): void {
@@ -626,6 +661,32 @@ export class AgentIslandService {
     this.publish();
   }
 
+  /**
+   * 覆盖岛上的其它设备任务(renderer 已按侧栏「任务范围」裁剪)。这些条目不进入
+   * 本机活动快照,也就不会被 relay 当作本机任务再推给控制端。
+   */
+  setDeviceSessions(inputs: readonly AgentIslandRemoteSessionInput[]): void {
+    setAgentIslandStrings(this.state, buildAgentIslandStrings());
+    const result = syncAgentIslandDeviceSessions(this.state, inputs, Date.now());
+    for (const sessionId of result.baselineSessionIds) this.baselineSoundSessionIds.add(sessionId);
+    if (result.changed) this.publish();
+    if (this.isEnabled()) return;
+    for (const event of result.events) {
+      try {
+        this.deps.onDeviceSessionEvent?.(event);
+      } catch (error) {
+        log.warn('device session event consumer failed', {
+          sessionId: event.sessionId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+  }
+
+  waitForCompletionNotification(sessionId: string): Promise<boolean> | undefined {
+    return this.sessionActivityRelay.waitForCompletionNotification(sessionId);
+  }
+
   resetRuntimeState(): void {
     this.clearPublishTimer();
     this.clearStreamingPreviewPublishTimer();
@@ -644,6 +705,7 @@ export class AgentIslandService {
     this.silencedSessionRunIds.clear();
     this.silencedRunHadAttention.clear();
     this.mutedCompletionSoundSessionIds.clear();
+    this.baselineSoundSessionIds.clear();
     this.stoppedSessionIds.clear();
     this.replacementTurnPendingSessionIds.clear();
     this.replacementTurnDispatchingSessionIds.clear();
@@ -783,15 +845,27 @@ export class AgentIslandService {
       }
     }
     const suppressCompletionAttention = this.isCompletionEventSilenced(hydrated.sessionId, event);
+    if (isCompletionDoneEvent(event) && event.type === 'status') {
+      this.sessionActivityRelay.awaitCompletionTerminal(hydrated.sessionId);
+    }
     const changed = applyAgentIslandEvent(this.state, hydrated, event, now, {
       suppressCompletionAttention,
-      preserveCompletionAttention: suppressCompletionAttention && this.hadAttentionBeforeSilencedRun(hydrated.sessionId),
+      // Direct IM sends bypass handleUserPrompt. Running preserves unread in the
+      // live state/ledger, so use that state (including any intervening read ack).
+      preserveCompletionAttention: suppressCompletionAttention && (
+        event.turnOrigin?.surface === 'im'
+          ? hasAgentIslandSessionAttention(this.state, hydrated.sessionId)
+          : this.hadAttentionBeforeSilencedCompletion(hydrated.sessionId)
+      ),
       allowCompletionAfterTerminalError:
         isRemoteDaemonClosedErrorEvent(event) &&
         this.deps.isPlannedRemoteDaemonClose?.(hydrated.sessionId) === true,
     });
     if (suppressCompletionAttention) {
       this.mutedCompletionSoundSessionIds.add(hydrated.sessionId);
+    }
+    if (isCompletionDoneEvent(event) && event.type === 'done') {
+      this.sessionActivityRelay.completeTerminal(hydrated.sessionId);
     }
     if (!changed) return;
     this.ensureMetadata(hydrated.sessionId);
@@ -1166,6 +1240,13 @@ export class AgentIslandService {
    * pending-alerts 派生收敛)显式带 'explicit' 才能清掉未处理的报错。
    */
   handleSessionAttentionCleared(sessionId: string, source: 'explicit' | 'passive' = 'passive'): void {
+    if (isAgentIslandDeviceSession(this.state, sessionId)) {
+      // 其它设备的任务:只收本机岛面的未读,本机 relay 账本与它无关。
+      if (acknowledgeAgentIslandSessionRead(this.state, sessionId, Date.now(), { source }) === 'cleared') {
+        this.publish();
+      }
+      return;
+    }
     const ack = acknowledgeAgentIslandSessionRead(this.state, sessionId, Date.now(), { source });
     // 未读 error 对 passive 免疫:state / 独立账本都未动,也**不能**给远端发收尾包。
     if (ack === 'error-immune') return;
@@ -1349,9 +1430,12 @@ export class AgentIslandService {
     now: number,
   ): void {
     if (!next.visible || next.smartSuppressed) return;
+    const baseline = this.baselineSoundSessionIds;
     const event = getAgentIslandSoundEventForTransition(
       previous,
-      next,
+      baseline.size > 0
+        ? { ...next, sessions: next.sessions.filter((session) => !baseline.has(session.sessionId)) }
+        : next,
       this.mutedCompletionSoundSessionIds,
       new Set(this.silencedSessionRunIds.keys()),
     );
@@ -1383,7 +1467,8 @@ export class AgentIslandService {
 
   private isCompletionEventSilenced(sessionId: string, event: AgentEvent): boolean {
     if (!isCompletionDoneEvent(event)) return false;
-    return this.silencedSessionRunIds.has(sessionId);
+    return event.agentMeta?.botTaskCoordination === true
+      || event.turnOrigin?.surface === 'im' || this.silencedSessionRunIds.has(sessionId);
   }
 
   private hadAttentionBeforeSilencedRun(sessionId: string): boolean {
@@ -1480,7 +1565,8 @@ export class AgentIslandService {
       }),
       phase: s.phase,
       interactionKind: s.interactionKind,
-      compactDetail: s.compactDetail,
+      // 完成后这份摘要只给其它设备的完成卡片用(本机岛面直接读展示快照)。
+      compactDetail: s.phase === 'completed' ? completedReplySummary(s) : s.compactDetail,
       workingPhase: s.workingPhase,
     }));
   }
@@ -1569,12 +1655,14 @@ export class AgentIslandService {
     const now = Date.now();
     if (!this.enabledSynced) {
       this.mutedCompletionSoundSessionIds.clear();
+      // 开关尚未同步时没有上一帧可比:首次出现的设备任务保留静音,等第一次真正 publish。
       this.clearStreamingPreviewPublishTimer();
       this.clearPublishTimer();
       return;
     }
     if (!this.enabled) {
       this.mutedCompletionSoundSessionIds.clear();
+      this.baselineSoundSessionIds.clear();
       this.clearStreamingPreviewPublishTimer();
       this.lastSoundDisplayState = withAgentIslandConfig(
         buildAgentIslandDisplayState(this.state, now),
@@ -1609,6 +1697,7 @@ export class AgentIslandService {
     this.scheduleNextPublish(now);
     this.playSoundForDisplayTransition(this.lastSoundDisplayState, displayState, now);
     this.mutedCompletionSoundSessionIds.clear();
+    this.baselineSoundSessionIds.clear();
     this.lastSoundDisplayState = displayState;
 
     if (this.nativeHost.failed) {

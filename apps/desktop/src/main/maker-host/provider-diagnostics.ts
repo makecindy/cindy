@@ -34,6 +34,7 @@ import {
   type ProviderErrorCode,
 } from '../../shared/providerErrors.js';
 import { getActiveCatalog } from './active-catalog.js';
+import { withOpenCodeGoSessionHeader } from './opencode-go-session.js';
 import { createMakerLogger } from './logger-adapter.js';
 import { outboundFetch } from './outbound-fetch.js';
 import { hostCredentialEndpointAllowed, invocationModelRecord, probePiProvider, requiresNativeProviderAuth } from './pi-provider-transport.js';
@@ -133,9 +134,12 @@ function normalizedHeaders(headers: Record<string, string> | undefined): Record<
 export function buildProbeRequest(spec: ProviderProbeSpec): { url: string; init: RequestInit } {
   const mustStripCredentialHeaders =
     !!spec.apiKey || spec.authMethod === 'none' || spec.authMethod === 'oauth';
-  const headers = mustStripCredentialHeaders
-    ? withoutCredentialHeaders(spec.headers)
-    : normalizedHeaders(spec.headers);
+  const headers = withOpenCodeGoSessionHeader(
+    mustStripCredentialHeaders
+      ? withoutCredentialHeaders(spec.headers)
+      : normalizedHeaders(spec.headers),
+    { providerId: spec.catalogPresetId ?? '', catalogPresetId: spec.catalogPresetId, upstream: spec.baseUrl },
+  ) ?? {};
   headers['content-type'] = 'application/json';
   if (spec.wireProtocol === 'google-generative-ai') {
     if (spec.apiKey) headers['x-goog-api-key'] = spec.apiKey;

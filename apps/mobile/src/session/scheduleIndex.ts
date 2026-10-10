@@ -94,6 +94,16 @@ interface ScheduleIndexThrottleEntry {
 
 const scheduleIndexThrottleEntries = new Map<string, ScheduleIndexThrottleEntry>();
 const scheduleIndexInvalidationVersions = new Map<string, number>();
+/**
+ * Sessions the last successful index of each device bound to an automation (target sessions and
+ * sessions with runs), with the invalidation version it was loaded under. Lets a task page skip
+ * the index scan for an ordinary task. Schedule events keep it current (see
+ * noteScheduleEventInIndexCache); any other invalidation (link recovery, offline) makes it unknown.
+ */
+const scheduleBoundSessionsByDevice = new Map<string, { sessionIds: ReadonlySet<string>; invalidationVersion: number }>();
+// Bumped on every clear (account switch). Invalidation versions restart at 0 after a clear and
+// device ids are machine-level, so a scan started before the clear must not record bindings.
+let scheduleIndexCacheGeneration = 0;
 
 /**
  * 错误标记匹配:优先结构化 code,兜底 message 文本(review:mobile 各处的
@@ -241,6 +251,33 @@ export function invalidateOfflineScheduleIndexFailureFor(deviceId: string): void
   }
 }
 
+/**
+ * Apply one authoritative schedule event to the shared cache. A run event names the task it binds
+ * to, so the binding record stays usable and just learns that task; a schedule definition change
+ * (create / edit / rebind / unknown event) or a record that was already stale makes it unknown.
+ */
+export function noteScheduleEventInIndexCache(
+  deviceId: string,
+  change: { invalidate: boolean; sessionId: string | null; scheduleListChanged: boolean },
+): void {
+  if (!deviceId) return;
+  const known = scheduleBoundSessionsByDevice.get(deviceId);
+  const wasCurrent = known !== undefined
+    && known.invalidationVersion === getScheduleIndexInvalidationVersion(deviceId);
+  if (change.invalidate) invalidateScheduleIndexForDevice(deviceId);
+  if (!known) return;
+  if (!wasCurrent || change.scheduleListChanged) {
+    scheduleBoundSessionsByDevice.delete(deviceId);
+    return;
+  }
+  scheduleBoundSessionsByDevice.set(deviceId, {
+    sessionIds: change.sessionId && !known.sessionIds.has(change.sessionId)
+      ? new Set([...known.sessionIds, change.sessionId])
+      : known.sessionIds,
+    invalidationVersion: getScheduleIndexInvalidationVersion(deviceId),
+  });
+}
+
 export function invalidateScheduleIndexForDevice(deviceId: string): void {
   if (!deviceId) return;
   const entry = scheduleIndexThrottleEntries.get(deviceId);
@@ -262,10 +299,29 @@ export function getScheduleIndexInvalidationVersion(deviceId: string): number {
   return scheduleIndexInvalidationVersions.get(deviceId) ?? 0;
 }
 
-/** Test-only: clear cache and invalidation generations. */
+/** Clear cache, invalidation generations and binding knowledge (account switch, tests). */
 export function clearSessionScheduleIndexCache(): void {
+  scheduleIndexCacheGeneration += 1;
   scheduleIndexThrottleEntries.clear();
   scheduleIndexInvalidationVersions.clear();
+  scheduleBoundSessionsByDevice.clear();
+}
+
+/**
+ * Whether opening this task needs the device's schedule index (to mark its runs read and show
+ * its failure notice). Only an ordinary task on a device whose current index is known and has
+ * no binding for it can skip the scan; automation-created tasks, tasks bound to an automation
+ * (including ones a later run event named) and devices without a current record still load it.
+ */
+export function sessionMayHaveScheduleRuns(
+  deviceId: string,
+  sessionId: string,
+  source?: string | null,
+): boolean {
+  if (source === 'scheduler') return true;
+  const known = scheduleBoundSessionsByDevice.get(deviceId);
+  if (!known || known.invalidationVersion !== getScheduleIndexInvalidationVersion(deviceId)) return true;
+  return known.sessionIds.has(sessionId);
 }
 
 export function loadDeviceSessionScheduleIndex(
@@ -286,6 +342,8 @@ export async function loadSharedSessionScheduleIndex(
     // Check again when an invalidated in-flight scan finishes. Throw before
     // creating an entry so an abandoned waiter cannot poison active consumers.
     if (!canStart()) throw new Error('Schedule index consumer inactive');
+    const invalidationVersion = getScheduleIndexInvalidationVersion(deviceId);
+    const cacheGeneration = scheduleIndexCacheGeneration;
     return withTransientRemoteRetry(() => {
       if (!canStart()) {
         // Cancellation is not a device failure: discard this pending entry on
@@ -297,6 +355,11 @@ export async function loadSharedSessionScheduleIndex(
         throwOnTransientRunListError: true,
         isDeviceUnresponsive: () => unresponsiveDevicesStore.has(deviceId),
       });
+    }).then((index) => {
+      if (cacheGeneration === scheduleIndexCacheGeneration) {
+        scheduleBoundSessionsByDevice.set(deviceId, { sessionIds: new Set(index.keys()), invalidationVersion });
+      }
+      return index;
     });
   });
 }
@@ -354,6 +417,7 @@ function scheduleInfoEqual(a: RemoteSessionScheduleInfo, b: RemoteSessionSchedul
     && a.running === b.running
     && a.latestRunAt === b.latestRunAt
     && a.scheduleStatus === b.scheduleStatus
+    && a.nextFireAt === b.nextFireAt
     && a.allSchedulesStopped === b.allSchedulesStopped
     && stringListsEqual(a.unreadRunIds, b.unreadRunIds);
 }
@@ -390,7 +454,7 @@ function buildLightweightSessionScheduleIndex(raw: LightweightScheduleSnapshot, 
     if (!value || typeof value !== 'object') throw new Error('Invalid schedule index row');
     const row = value as Record<string, unknown>;
     if (typeof row.scheduleId !== 'string' || typeof row.runId !== 'string' || typeof row.scheduleName !== 'string') throw new Error('Invalid schedule index row');
-    const schedule = normalizeScheduleList([{ id: row.scheduleId, name: row.scheduleName, status: row.scheduleStatus }])[0];
+    const schedule = normalizeScheduleList([{ id: row.scheduleId, name: row.scheduleName, status: row.scheduleStatus, nextFireAt: row.nextFireAt }])[0];
     // The host omits older running rows' binding to preserve latest ownership.
     // Restore only that missing input; the shared builder still owns binding and recency rules.
     const sessionId = row.sessionId || (row.status === 'running' ? inflightSessions.get(row.runId) : undefined);

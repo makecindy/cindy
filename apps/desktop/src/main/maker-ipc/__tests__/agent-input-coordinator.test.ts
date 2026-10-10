@@ -1,6 +1,15 @@
+import { BOT_GROUP_CLIENT_ID } from '../../../shared/botGroupChat.js';
+import { authorizeGroupTool, registerGroupToolAuthority } from '../botGroupToolAuthorization.js';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { ScriptTarget, transpileModule } from 'typescript';
 import { AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT, appendAutoReviewUserIntent } from '@cindy/maker-core';
+import { AUTO_REVIEW_DELEGATED_CONTINUATION, restoreAutoReviewUserIntent, type AutoReviewHistoryMessage } from '../autoReviewUserIntent.js';
+import { createPluginTaskReviewResolver, type PluginReviewSnapshot } from '../pluginTaskReviewContext.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AgentInputCoordinator } from '../agent-input-coordinator.js';
+import { hasAcceptedUserTaskInput } from '../pluginTaskInput.js';
+import { runSchedulerQueuedPreparation } from '../schedulerQueuedPreparation.js';
 import {
   createPiTranslateContext, disposePiTranslateContext, translatePiEvent,
 } from '../../../../../../packages/maker-core/src/agents/pi/translator.js';
@@ -28,6 +37,9 @@ import type {
   AgentInputProjection,
   AgentInputQueuedMessage,
 } from '../../../shared/agentInputQueue.js';
+import { HOST_ONLY_AGENT_PREFIX, USAGE_LIMIT_RESET_AUTO_RESUME_REASON, isAutomaticInputOriginKind } from '../../../shared/agentInputQueue.js';
+import { buildRemoteWorkerQueuedMessage } from '../orcaRemoteWorkerRuntime.js';
+import { stampMobileClientOrigin } from '../mobileClientPromptNote.js';
 import {
   CONTINUE_AFTER_APP_EXIT_PROMPT,
   CONTINUE_AFTER_ERROR_PROMPT,
@@ -36,6 +48,9 @@ import {
 import type { RecoveryContextSnapshot } from '../recoveryCoordinator.js';
 import {
   stampTrustedDesktopQueuedOrigin,
+  stampTrustedDeviceLinkQueuedOrigin,
+  createMakerSendTransaction,
+  type MakerSendTransactionSession,
   TRUSTED_DESKTOP_PI_COMMAND_SNAPSHOT,
   TRUSTED_DESKTOP_QUEUE_ORIGIN,
 } from '../makerSendTransaction.js';
@@ -55,6 +70,152 @@ const mocks = vi.hoisted(() => {
     touchUserSendInDb: vi.fn(async () => {}),
     logger,
   };
+});
+
+describe('INPUT_ENQUEUE crash-restored remote Worker pause', () => {
+  const source = readFileSync(new URL('../register.ts', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const start = source.indexOf('    MAKER_INVOKE.INPUT_ENQUEUE,');
+  const handlerStart = source.indexOf('    async (event, sessionId: unknown, item: unknown, opts?: unknown) => {', start);
+  const handlerEnd = source.indexOf('\n  );', handlerStart);
+  const handler = source.slice(handlerStart, handlerEnd).trim().replace(/,$/, '');
+  const compiled = transpileModule(`return (${handler});`, {
+    compilerOptions: { target: ScriptTarget.ES2022 },
+  }).outputText;
+
+  function hostInput(h: ReturnType<typeof createHarness>, remote = true, mobile = false) {
+    const noop = () => undefined;
+    const sameItem = (item: AgentInputQueuedMessage) => item;
+    const owner = {};
+    const bindings = {
+      inputCoordinator: h.coordinator,
+      requireSessionId: (id: string) => id,
+      requireQueuedMessage: sameItem,
+      prepareSharedTaskInput: (_sid: string, item: AgentInputQueuedMessage) => item,
+      getCurrentDbClientSnapshot: () => owner,
+      isDeviceLinkInvoke: () => remote,
+      isMobileControllerInvoke: () => mobile,
+      readDeviceLinkInvokeSourceDevice: () => mobile
+        ? { deviceId: 'phone', name: 'Phone', platform: 'android' }
+        : { deviceId: 'lead-computer', name: 'Lead Computer', platform: 'windows' },
+      readClaimedUiLanguage: noop,
+      getResolvedMainLocale: () => 'zh-CN',
+      getInputSessionRow: async () => ({ clearedAt: null }),
+      getMakerIfReady: () => null,
+      remoteInputClientIdWasPersisted: () => false,
+      hasInputDeliveryCancellation: () => false,
+      materializeQueuedOssAttachmentsDeferred: (_sid: string, item: AgentInputQueuedMessage) => ({ item }),
+      hydrateQueuedAgentReferences: sameItem,
+      stampTurnUiLanguage: sameItem,
+      stampTrustedDesktopQueuedOrigin,
+      stampTrustedDeviceLinkQueuedOrigin,
+      stampMobileClientOrigin,
+      isAutomaticInputOriginKind,
+      prepareDeviceLinkAutoTitle: async () => noop,
+      queuedAttachmentOwnership: { activateCurrentOwner: noop },
+      throwIpcError: (code: string, message: string) => { throw Object.assign(new Error(message), { code }); },
+      ...Object.fromEntries([
+        'assertReviewExternalInputAllowed', 'assertTrustedAppRendererEvent', 'withSessionPermissionChange',
+        'awaitAgentInputQueueSnapshotPersistence', 'assertRemoteInputClearNotInFlight',
+        'readRemoteInputClearBoundaryPrecondition', 'observeLocalInputClearBoundary',
+        'assertExpectedRemoteInputClearBoundary', 'registerQueuedAttachmentOwnership',
+        'discardSpecificQueuedAttachmentOwnership', 'markQueuedAttachmentDurableAfterSnapshot',
+      ].map(name => [name, noop])),
+    };
+    expect(start).toBeGreaterThan(0);
+    expect(handlerStart).toBeGreaterThan(start);
+    expect(handlerEnd).toBeGreaterThan(handlerStart);
+    return new Function(...Object.keys(bindings), compiled)(...Object.values(bindings)) as
+      (event: object, sid: string, item: AgentInputQueuedMessage, opts?: unknown) => Promise<AgentInputProjection>;
+  }
+
+  function leadInput(clientId = 'lead-input') {
+    return buildRemoteWorkerQueuedMessage({
+      clientId, rawContent: 'new assignment', createOpts: makeItem('settings', '').createOpts,
+      createdAt: '2026-10-10T00:00:00.000Z',
+    });
+  }
+
+  it('keeps restored and newly delegated input paused through the actual remote enqueue handler', async () => {
+    const h = createHarness();
+    const sid = 'restarted-remote-worker';
+    h.setLoadQueueSnapshot(async () => [makeItem('restored', 'old assignment')]);
+    const enqueue = hostInput(h);
+    await enqueue({}, sid, leadInput(), { resumeRestorePausedQueue: true });
+    await enqueue({}, sid, leadInput()); // Same-client retransmission must not resume or duplicate.
+    await flush();
+    expect(h.coordinator.getProjection(sid)).toMatchObject({ queuePaused: true });
+    expect(h.coordinator.getProjection(sid).pendingQueue.map(item => item.clientId)).toEqual(['restored', 'lead-input']);
+    expect(latestSnapshotClientIds(h.persistQueueSnapshot)).toEqual(['restored', 'lead-input']);
+    expect(h.sendToAgent).not.toHaveBeenCalled();
+
+    h.coordinator.resume(sid);
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledOnce();
+    expect(h.sendToAgent.mock.calls[0]?.[1]).toEqual({ type: 'user', content: 'old assignment' });
+  });
+
+  it.each([['phone', true, true], ['remote desktop', true, false], ['local desktop', false, false]] as const)(
+    'allows explicit %s input to resume the restored Worker queue', async (_name, remote, mobile) => {
+      const h = createHarness();
+      const sid = 'user-resumes-remote-worker';
+      h.setLoadQueueSnapshot(async () => [makeItem('restored', 'old assignment')]);
+      await hostInput(h, remote, mobile)({}, sid, makeItem('user-input', 'continue please'));
+      await flush();
+      expect(h.coordinator.getProjection(sid).queuePaused).toBe(false);
+      expect(h.sendToAgent).toHaveBeenCalledOnce();
+      expect(h.sendToAgent.mock.calls[0]?.[1]).toEqual({ type: 'user', content: 'old assignment' });
+      expect(h.coordinator.getProjection(sid).pendingQueue.map(item => item.clientId)).toEqual(['user-input']);
+    },
+  );
+
+  it('keeps a user-stopped queue paused for both Lead and phone input', async () => {
+    const h = createHarness();
+    const sid = 'stopped-remote-worker';
+    await h.coordinator.ensureQueueRestored(sid);
+    h.setRunning(true);
+    h.coordinator.enqueue(sid, makeItem('before-stop', 'queued before stop'));
+    await flush();
+    h.coordinator.stop(sid, { keepQueue: true, pauseQueue: true });
+    h.setRunning(false);
+    await flush();
+    expect(h.coordinator.getProjection(sid).queuePaused).toBe(true);
+    await hostInput(h)({}, sid, leadInput());
+    await hostInput(h, true, true)({}, sid, makeItem('user-input', 'hello'));
+    await flush();
+    expect(h.coordinator.getProjection(sid).queuePaused).toBe(true);
+    expect(h.sendToAgent).not.toHaveBeenCalled();
+    expect(h.coordinator.getProjection(sid).pendingQueue.map(item => item.clientId)).toEqual(['before-stop', 'lead-input', 'user-input']);
+  });
+
+  it('does not pause an online Worker without a restored queue', async () => {
+    const h = createHarness();
+    await hostInput(h)({}, 'online-worker', leadInput());
+    await flush();
+    expect(h.coordinator.getProjection('online-worker').queuePaused).toBe(false);
+    expect(h.sendToAgent).toHaveBeenCalledOnce();
+  });
+
+  it('still treats local renderer input as explicit after dropping its claimed automatic origin', async () => {
+    const h = createHarness();
+    const sid = 'local-user-input';
+    h.setLoadQueueSnapshot(async () => [makeItem('restored', 'old assignment')]);
+    await hostInput(h, false)({}, sid, leadInput());
+    await flush();
+    expect(h.coordinator.getProjection(sid).queuePaused).toBe(false);
+    expect(h.sendToAgent).toHaveBeenCalledOnce();
+    expect(h.coordinator.getProjection(sid).pendingQueue[0]?.origin).toBeUndefined();
+  });
+
+  it('lets another controller send to another task without releasing the restored Worker', async () => {
+    const h = createHarness();
+    h.setLoadQueueSnapshot(async sid => sid === 'restored-worker' ? [makeItem('restored', 'old assignment')] : []);
+    await hostInput(h)({}, 'restored-worker', leadInput());
+    await hostInput(h, true, true)({}, 'other-task', makeItem('phone-input', 'ordinary input'));
+    await flush();
+    expect(h.coordinator.getProjection('restored-worker').queuePaused).toBe(true);
+    expect(h.sendToAgent).toHaveBeenCalledOnce();
+    expect(h.sendToAgent.mock.calls[0]?.[0]).toBe('other-task');
+  });
 });
 
 describe('queued welcome dispatch receipts', () => {
@@ -215,6 +376,44 @@ describe('AgentInputCoordinator Orca priority queue transactions', () => {
       expect.anything(),
       expect.objectContaining({ fromDeviceLinkClient: true }),
     );
+  });
+
+  it('carries host-stamped message sources through drain (device top-level, plugin to the user row)', async () => {
+    const h = createHarness();
+    const sid = 'source-drain';
+    await h.coordinator.ensureQueueRestored(sid);
+    const sourceDevice = { deviceId: 'phone-1', name: 'iPhone', platform: 'mobile' as const };
+    const sourcePlugin = { pluginId: 'gh-1', name: 'Reviewer' };
+    h.coordinator.enqueue(sid, makeItem('source-input', 'hello', { sourceDevice, sourcePlugin }));
+    await flush();
+    const sendOpts = h.sendToAgent.mock.calls[0]?.[3];
+    expect(sendOpts).toMatchObject({ sourceDevice, persistUserMessage: { sourcePlugin } });
+    // 来源不是 maker-core turn origin。
+    expect(sendOpts).not.toHaveProperty('origin');
+  });
+
+  it('carries message sources through steer delivery and the steer user row', async () => {
+    const h = createHarness();
+    const sid = 'source-steer';
+    h.setRunning(true);
+    const sourceDevice = { deviceId: 'pc-1', platform: 'desktop' as const };
+    const origin = { kind: 'session' as const, senderSessionId: 'sender', displayText: 'hello' };
+    const projection = h.coordinator.enqueue(sid, makeItem('source-steer-input', 'hello', {
+      sourceDevice,
+      sourcePlugin: { pluginId: 'gh-1' },
+      origin,
+    }));
+    await expect(h.coordinator.steer(sid, projection.pendingQueue[0]!, { removeFromQueue: true })).resolves.toBe(true);
+    await flush();
+    expect(h.steerToAgent.mock.calls[0]?.[2]).toMatchObject({
+      sourceDevice,
+      sourcePlugin: { pluginId: 'gh-1' },
+      sourceOrigin: origin,
+    });
+    expect(h.steerToAgent.mock.calls[0]?.[2]).not.toHaveProperty('origin');
+    const row = mocks.createMessage.mock.calls.find((call) => (call[1] as { clientId?: string }).clientId === 'source-steer-input')?.[1] as
+      { agentMeta: Record<string, unknown> } | undefined;
+    expect(row?.agentMeta).toMatchObject({ sourceDevice, sourcePlugin: { pluginId: 'gh-1' }, origin });
   });
 
   it('retains host-stamped sharedTask attribution when the queue drains outside the original invoke', async () => {
@@ -438,11 +637,11 @@ describe('AgentInputCoordinator Orca priority queue transactions', () => {
       },
       markWorkerIdleIfStatus: async () => false,
       restoreWorkerDoneIfIdle: async () => false,
-      cancelWorkerSessionOperations: async () => {},
       closeWorkerSession: async () => {},
       closeWorkerSessionIfIdle: async () => true,
       hasPendingWorkerInput: async () => false,
       hasSendToSessionLock: () => false,
+      withSessionSendLock: async (_sessionId, action) => action(),
       archiveWorkerSession: async () => {},
       getManualInterrupt: () => manualInterrupt.current,
       clearManualInterrupt: () => {
@@ -505,6 +704,8 @@ describe('AgentInputCoordinator Orca priority queue transactions', () => {
       ensureWorkerQueueRestored: async () => true,
       removeQueuedMessage: () => false,
       replaceQueuedMessage: () => false,
+      steerStoredQueuedMessage: async () => ({ kind: 'gone' as const }),
+      moveQueuedMessage: () => null,
       mergeQueuedMessages: () => false,
       log: mocks.logger,
     } satisfies OrcaTeamServiceDeps;
@@ -858,6 +1059,9 @@ function createHarness(opts?: {
   const onAcceptedQueuedMessage = vi.fn<
     NonNullable<AgentInputCoordinatorDeps['onAcceptedQueuedMessage']>
   >(() => {});
+  const onSteerAccepted = vi.fn<NonNullable<AgentInputCoordinatorDeps['onSteerAccepted']>>(
+    () => {},
+  );
   const onDispatchedUserTurn = vi.fn<
     NonNullable<AgentInputCoordinatorDeps['onDispatchedUserTurn']>
   >(() => {});
@@ -884,6 +1088,9 @@ function createHarness(opts?: {
   >((signals) => resumableTurnErrorCandidate(signals));
   const onResumableTurnErrorDiscarded = vi.fn<
     NonNullable<AgentInputCoordinatorDeps['onResumableTurnErrorDiscarded']>
+  >(() => {});
+  const onUsageLimitedTurnError = vi.fn<
+    NonNullable<AgentInputCoordinatorDeps['onUsageLimitedTurnError']>
   >(() => {});
   const noteSessionClearBoundary =
     vi.fn<NonNullable<AgentInputCoordinatorDeps['noteSessionClearBoundary']>>();
@@ -986,10 +1193,12 @@ function createHarness(opts?: {
     onUserMessageQueryable,
     onUserMessagePersistenceFailed,
     onAcceptedQueuedMessage,
+    onSteerAccepted,
     onDispatchedUserTurn,
     onResumableTurnError,
     isResumableTurnErrorCandidate,
     onResumableTurnErrorDiscarded,
+    onUsageLimitedTurnError,
     noteSessionClearBoundary,
     resolveSessionReferences,
     refreshAgentReferencesBeforeDispatch,
@@ -1027,10 +1236,12 @@ function createHarness(opts?: {
     onUserMessageQueryable,
     onUserMessagePersistenceFailed,
     onAcceptedQueuedMessage,
+    onSteerAccepted,
     onDispatchedUserTurn,
     onResumableTurnError,
     isResumableTurnErrorCandidate,
     onResumableTurnErrorDiscarded,
+    onUsageLimitedTurnError,
     noteSessionClearBoundary,
     resolveSessionReferences,
     refreshAgentReferencesBeforeDispatch,
@@ -1132,6 +1343,132 @@ function createHarness(opts?: {
     },
   };
 }
+
+describe('agent-chosen control steering', () => {
+  const sid = 'lead-report';
+  function expected(h: ReturnType<typeof createHarness>) {
+    return { session: h.getTurnSessionIdentity(), turnGeneration: 0 };
+  }
+  it('joins a running turn even though ordinary new turns must queue', async () => {
+    const h = createHarness();
+    h.setRunning(true);
+    expect(h.coordinator.shouldQueueNewTurn(sid)).toBe(true);
+    const item = makeItem('report', 'worker result');
+    expect(await h.coordinator.steerControlInput(sid, { item }, expected(h))).toBe('steered');
+    expect(h.steerToAgent).toHaveBeenCalledOnce();
+    expect(h.sendToAgent).not.toHaveBeenCalled();
+    expect(h.coordinator.hasPendingQueueItem(sid, 'report')).toBe(false);
+    expect(h.onSteerAccepted).toHaveBeenCalledWith(sid, expect.objectContaining({ clientId: 'report' }));
+  });
+  it('may pass earlier queued rows because the sender chose to steer', async () => {
+    const h = createHarness();
+    h.setRunning(true);
+    await h.coordinator.ensureQueueRestored(sid);
+    h.coordinator.enqueue(sid, makeItem('human', 'user instruction'));
+    expect(await h.coordinator.steerControlInput(sid, { item: makeItem('report', 'r') }, expected(h)))
+      .toBe('steered');
+    expect(h.coordinator.getQueueControlSnapshot(sid).pendingQueue.map((item) => item.clientId))
+      .toEqual(['human']);
+  });
+  it.each(['pause', 'stop-pause', 'interaction', 'credential', 'generation', 'identity', 'idle', 'restore'])
+    ('does not bypass the %s boundary', async boundary => {
+      const h = createHarness();
+      h.setRunning(true);
+      const turn = expected(h);
+      await h.coordinator.ensureQueueRestored(sid);
+      if (boundary === 'pause') h.coordinator.setExecutionPaused(sid, true);
+      if (boundary === 'stop-pause') {
+        h.coordinator.enqueue(sid, makeItem('human', 'user instruction'));
+        h.coordinator.pausePendingQueueForRewind(sid);
+      }
+      if (boundary === 'interaction') h.setPendingInteraction(true);
+      if (boundary === 'credential') h.setHasPendingCredentialSwitch(() => true);
+      if (boundary === 'generation') h.setTurnGeneration(1);
+      if (boundary === 'identity') h.setTurnSessionIdentity({ instanceId: 'replacement' });
+      if (boundary === 'idle') h.setRunning(false);
+      if (boundary === 'restore') {
+        // A different session has not successfully restored its authoritative queue.
+        h.setLoadQueueSnapshot(async () => { throw new Error('queue unavailable'); });
+      }
+      expect(await h.coordinator.steerControlInput(boundary === 'restore' ? 'unrestored' : sid,
+        { item: makeItem('report', 'result') }, turn)).toBe('not-attempted');
+      expect(h.steerToAgent).not.toHaveBeenCalled();
+    });
+  it('re-checks the boundary after async screening, before provider dispatch', async () => {
+    const h = createHarness();
+    h.setRunning(true);
+    h.setScreenUserMessage(async () => {
+      h.setPendingInteraction(true);
+      return { action: 'allow' };
+    });
+    // Not delivered and nothing retained: safe for ordinary delivery, unlike a screening block.
+    expect(await h.coordinator.steerControlInput(sid, { item: makeItem('report', 'r') }, expected(h)))
+      .toBe('not-attempted');
+    expect(h.steerToAgent).not.toHaveBeenCalled();
+    expect(h.onSteerAccepted).not.toHaveBeenCalled();
+  });
+  it('retains one paused report after an uncertain ACK, including when the turn ends', async () => {
+    const h = createHarness();
+    h.setAgentKind('codex');
+    h.setRunning(true);
+    h.steerToAgent.mockImplementationOnce(async () => {
+      h.setRunning(false);
+      throw new Error('Codex turn/steer did not acknowledge within 10000ms');
+    });
+    expect(await h.coordinator.steerControlInput(sid, { item: makeItem('report', 'result') }, expected(h)))
+      .toBe('queued');
+    const queue = h.coordinator.getQueueControlSnapshot(sid).pendingQueue;
+    expect(queue.map(item => item.clientId)).toEqual(['report']);
+    expect(h.coordinator.isQueuePaused(sid)).toBe(true);
+    h.coordinator.onTurnEvent(sid, 'done');
+    await flush();
+    expect(h.sendToAgent).not.toHaveBeenCalled();
+  });
+  it('reports screened rejection without reviving blocked content as ordinary input', async () => {
+    const h = createHarness();
+    h.setRunning(true);
+    h.setScreenUserMessage(async () => ({ action: 'block', ghostId: 'guard', ghostName: 'guard', reason: 'blocked' }));
+    expect(await h.coordinator.steerControlInput(sid, { item: makeItem('report', 'result') }, expected(h)))
+      .toBe('rejected');
+    expect(h.steerToAgent).not.toHaveBeenCalled();
+    expect(h.coordinator.hasPendingQueueItem(sid, 'report')).toBe(false);
+  });
+  it('promotes a stored queued row without releasing the rest of the queue', async () => {
+    const h = createHarness();
+    h.setRunning(true);
+    await h.coordinator.ensureQueueRestored(sid);
+    h.coordinator.enqueue(sid, makeItem('human', 'user instruction'));
+    h.coordinator.enqueue(sid, makeItem('report', 'worker result'));
+    expect(await h.coordinator.steerControlInput(sid, { queuedClientId: 'report' }, expected(h)))
+      .toBe('steered');
+    expect(h.steerToAgent).toHaveBeenCalledOnce();
+    expect(h.coordinator.getQueueControlSnapshot(sid).pendingQueue.map((item) => item.clientId))
+      .toEqual(['human']);
+    expect(h.onSteerAccepted).toHaveBeenCalledWith(sid, expect.objectContaining({ clientId: 'report' }));
+  });
+  it('leaves an edit-locked or missing stored row alone', async () => {
+    const h = createHarness();
+    h.setRunning(true);
+    await h.coordinator.ensureQueueRestored(sid);
+    h.coordinator.enqueue(sid, makeItem('report', 'worker result'));
+    h.coordinator.setEditLock(sid, 'report', true);
+    expect(await h.coordinator.steerControlInput(sid, { queuedClientId: 'report' }, expected(h)))
+      .toBe('not-attempted');
+    expect(await h.coordinator.steerControlInput(sid, { queuedClientId: 'missing' }, expected(h)))
+      .toBe('rejected');
+    expect(h.steerToAgent).not.toHaveBeenCalled();
+    expect(h.coordinator.hasPendingQueueItem(sid, 'report')).toBe(true);
+  });
+  it('notifies the host when an ordinary UI steer is accepted', async () => {
+    const h = createHarness();
+    h.setRunning(true);
+    await h.coordinator.ensureQueueRestored(sid);
+    h.coordinator.enqueue(sid, makeItem('queued', 'q'));
+    const [queued] = h.coordinator.getQueueControlSnapshot(sid).pendingQueue;
+    expect(await h.coordinator.steer(sid, queued!, { removeFromQueue: true })).toBe(true);
+    expect(h.onSteerAccepted).toHaveBeenCalledOnce();
+  });
+});
 
 function latestSnapshotClientIds(
   persistQueueSnapshot: ReturnType<typeof createHarness>['persistQueueSnapshot'],
@@ -1425,6 +1762,112 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(h.coordinator.getQueueInspectionIfRestored(sid)).toBeUndefined();
   });
 
+  it('keeps reply provenance on consumed inputs, excluding queued work and clearing at the boundary', async () => {
+    const h = createHarness();
+    const sid = 'task-result-attribution';
+    h.sendToAgent.mockImplementationOnce(async () => {
+      h.setRunning(true);
+      return sendSuccess();
+    });
+    h.coordinator.enqueue(sid, makeItem('bot-delegation-completion:first', 'First result'));
+    await flush();
+    h.coordinator.enqueue(sid, makeItem('bot-delegation-completion:queued', 'Queued result'));
+    expect(h.coordinator.getActiveInputClientIds(sid)).toEqual(['bot-delegation-completion:first']);
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(sid, 'done');
+    expect(h.coordinator.getActiveInputClientIds(sid)).toEqual([]);
+  });
+
+  it('retains multiple same-turn completion inputs through a human steer and excludes rejected steering', async () => {
+    const h = createHarness();
+    const sid = 'task-result-steer-attribution';
+    h.sendToAgent.mockImplementationOnce(async () => { h.setRunning(true); return sendSuccess(); });
+    h.coordinator.enqueue(sid, makeItem('bot-delegation-completion:a', 'Result A'));
+    await flush();
+    await h.coordinator.steer(sid, makeItem('bot-delegation-completion:b', 'Result B'));
+    await h.coordinator.steer(sid, makeItem('human', 'Include priorities'));
+    expect(h.coordinator.getActiveInputClientIds(sid)).toEqual(['bot-delegation-completion:a', 'bot-delegation-completion:b', 'human']);
+    expect(h.coordinator.getActiveInputClientIds(sid, 999)).toEqual([]);
+    h.steerToAgent.mockRejectedValueOnce(new Error('failed before delivery'));
+    await h.coordinator.steer(sid, makeItem('bot-delegation-completion:rejected', 'Result C'));
+    expect(h.coordinator.getActiveInputClientIds(sid)).not.toContain('bot-delegation-completion:rejected');
+  });
+
+  it('does not attribute a completion while its steer acceptance is still pending', async () => {
+    const h = createHarness();
+    const sid = 'pending-result-attribution';
+    h.sendToAgent.mockImplementationOnce(async () => { h.setRunning(true); return sendSuccess(); });
+    h.coordinator.enqueue(sid, makeItem('human', 'Current question'));
+    await flush();
+    let reject!: (error: Error) => void;
+    h.steerToAgent.mockImplementationOnce(() => new Promise((_, fail) => { reject = fail; }));
+    const steering = h.coordinator.steer(sid, makeItem('bot-delegation-completion:pending', 'Result'));
+    await flush();
+    expect(h.coordinator.getActiveInputClientIds(sid)).toEqual(['human']);
+    reject(new Error('not consumed'));
+    await steering;
+    expect(h.coordinator.getActiveInputClientIds(sid)).not.toContain('bot-delegation-completion:pending');
+  });
+
+  it('retains plugin provenance while native dispatch acknowledgement is pending', async () => {
+    const h = createHarness(), sid = 'plugin-pending-dispatch-ack';
+    let acknowledge!: () => void;
+    h.sendToAgent.mockImplementationOnce(async () => {
+      h.setRunning(true);
+      await new Promise<void>(resolve => { acknowledge = resolve; });
+      return sendSuccess();
+    });
+    h.coordinator.enqueue(sid, makeItem('plugin-task:run', 'Evaluate'));
+    await flush();
+    expect(h.coordinator.getAcceptedInputProvenance(sid)?.clientId).toBe('plugin-task:run');
+    acknowledge(); await flush();
+    expect(h.coordinator.getAcceptedInputProvenance(sid)?.clientId).toBe('plugin-task:run');
+  });
+
+  it.each([
+    { source: {kind: 'delegated-continuation'} as const, authoredText: undefined },
+    { source: 'My next task', authoredText: 'My next task' },
+  ])('exposes only human text as input takeover evidence: $source', async ({source, authoredText}) => {
+    const h = createHarness(), sid = 'typed-input-provenance';
+    h.sendToAgent.mockImplementationOnce(async () => { h.setRunning(true); return sendSuccess(); });
+    h.coordinator.enqueue(sid, {...makeItem('input', 'Continue'), autoReviewUserText: source});
+    await flush();
+    expect(h.coordinator.getAcceptedInputProvenance(sid)).toMatchObject({clientId: 'input', authoredText});
+    const db = { get drizzle(): never { throw new Error('Current Host source must not borrow older transcript'); } };
+    await expect(hasAcceptedUserTaskInput(db, sid, h.coordinator.getAcceptedInputProvenance(sid)))
+      .resolves.toBe(typeof source === 'string');
+    expect(h.sendToAgent.mock.calls[0]?.[3][AUTO_REVIEW_DELEGATED_CONTINUATION]).toBe(typeof source === 'object' ? true : undefined);
+  });
+
+  it('keeps a Worker Lead directive distinct from accepted human input', async () => {
+    const h = createHarness(), sid = 'worker-input-origin';
+    h.sendToAgent.mockImplementationOnce(async () => { h.setRunning(true); return sendSuccess(); });
+    h.coordinator.enqueue(sid, { ...makeItem('directive', 'Evaluate'), origin: { kind: 'orca', senderLabel: 'Lead' } });
+    await flush();
+    expect(h.coordinator.getAcceptedInputProvenance(sid)).toMatchObject({ clientId: 'directive', originKind: 'orca' });
+    await h.coordinator.steer(sid, { ...makeItem('human', 'New direction'), autoReviewUserText: 'New direction' });
+    expect(h.coordinator.getAcceptedInputProvenance(sid)).toMatchObject({ clientId: 'human', authoredText: 'New direction', originKind: undefined });
+  });
+
+  it('keeps accepted plugin authority through pending and rejected human steering', async () => {
+    const h = createHarness(), sid = 'accepted-plugin-authority';
+    h.sendToAgent.mockImplementationOnce(async () => { h.setRunning(true); return sendSuccess(); });
+    h.coordinator.enqueue(sid, makeItem('plugin-task:run', 'Evaluate'));
+    await flush();
+    let reject!: (error: Error) => void;
+    h.steerToAgent.mockImplementationOnce(() => new Promise((_, fail) => { reject = fail; }));
+    const steering = h.coordinator.steer(sid, makeItem('human-pending', 'New direction'));
+    await flush();
+    expect(h.coordinator.getAcceptedInputProvenance(sid)?.clientId).toBe('plugin-task:run');
+    reject(new Error('not accepted')); await steering;
+    expect(h.coordinator.getAcceptedInputProvenance(sid)?.clientId).toBe('plugin-task:run');
+    await h.coordinator.steer(sid, makeItem('human-accepted', 'New direction'));
+    expect(h.coordinator.getActiveInputClientIds(sid)).toContain('plugin-task:run');
+    expect(h.coordinator.getAcceptedInputProvenance(sid)?.clientId).toBe('human-accepted');
+    h.setRunning(false); h.coordinator.onTurnEvent(sid, 'done');
+    expect(h.coordinator.getAcceptedInputProvenance(sid)).toBeNull();
+  });
+
   it('silently keeps a queue head when dispatch races with an already running turn', async () => {
     const h = createHarness();
     const sid = 'send-session-running-race';
@@ -1457,6 +1900,120 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(projection.error).toBeNull();
     expect(projection.recovery).toBeNull();
   });
+
+  it('restores internal coordination through the durable queue and gives accepted human steering ownership', async () => {
+    const h = createHarness();
+    const sid = 'coordination';
+    await h.coordinator.ensureQueueRestored(sid);
+    h.setRunning(true);
+    const receipt = { delegationId: 'delegation', senderSessionId: 'child', runSequence: 1 };
+    h.coordinator.enqueue(sid, makeItem('internal', '[UI_ACTION_TRIGGER]File agreement', {
+      botTaskCoordination: receipt, agentOmitsTriggerPrefix: true,
+      autoReviewUserText: { kind: 'delegated-continuation' },
+    }));
+    await flush();
+    const snapshot = JSON.parse(JSON.stringify(h.persistQueueSnapshot.mock.calls.at(-1)?.[1] ?? []));
+    expect(snapshot[0].botTaskCoordination).toEqual(receipt);
+    expect(h.coordinator.getProjection(sid).pendingQueue[0]).not.toHaveProperty('botTaskCoordination');
+    const restarted = createHarness();
+    restarted.setLoadQueueSnapshot(async () => snapshot);
+    await restarted.coordinator.ensureQueueRestored(sid);
+    expect(restarted.coordinator.isActiveTaskCoordination(sid)).toBe(false);
+    restarted.sendToAgent.mockImplementationOnce(async (_id, message, _create, opts) => {
+      expect(restarted.coordinator.isActiveTaskCoordination(sid)).toBe(true);
+      expect(message).toMatchObject({ content: expect.stringContaining('Internal task coordination') });
+      expect(message).toMatchObject({ content: expect.stringContaining('File agreement') });
+      expect(opts?.persistUserMessage?.content).toBe('[UI_ACTION_TRIGGER]File agreement');
+      expect(opts?.persistUserMessage?.botTaskCoordination).toEqual(receipt);
+      restarted.setRunning(true);
+      return sendSuccess();
+    });
+    restarted.coordinator.resume(sid);
+    await flush();
+    expect(restarted.sendToAgent).toHaveBeenCalledOnce();
+    expect(restarted.coordinator.isActiveTaskCoordination(sid)).toBe(true);
+    const accepted = deferred<void>();
+    restarted.steerToAgent.mockImplementationOnce(() => accepted.promise);
+    const steering = restarted.coordinator.steer(sid, makeItem('human', 'Please explain the result'));
+    await flush();
+    expect(restarted.coordinator.isActiveTaskCoordination(sid)).toBe(true);
+    accepted.resolve();
+    await steering;
+    expect(restarted.coordinator.isActiveTaskCoordination(sid)).toBe(false);
+    restarted.setRunning(false);
+    restarted.coordinator.onTurnEvent(sid, 'done');
+    expect(restarted.coordinator.isActiveTaskCoordination(sid)).toBe(false);
+  });
+
+  it.each(['policy', 'preparation', 'provider'] as const)(
+    'keeps coordination quiet when human steering fails at %s', async (failure) => {
+      const h = createHarness(), sid = `coordination-steer-${failure}`;
+      h.sendToAgent.mockImplementationOnce(async () => { h.setRunning(true); return sendSuccess(); });
+      h.coordinator.enqueue(sid, makeItem('internal', '[UI_ACTION_TRIGGER]File agreement', {
+        botTaskCoordination: { delegationId: 'd', senderSessionId: 'child', runSequence: 1 },
+      }));
+      await flush();
+      const gate = deferred<void>();
+      if (failure === 'policy') h.setScreenUserMessage(async () => {
+        await gate.promise;
+        return { action: 'block', ghostId: 'guard', ghostName: 'guard', reason: 'blocked' };
+      });
+      if (failure === 'provider') h.steerToAgent.mockImplementationOnce(async () => {
+        await gate.promise;
+        throw new Error('attachment conversion or provider delivery failed');
+      });
+      const steering = h.coordinator.steer(sid, makeItem('human', 'Explain'),
+        failure === 'preparation' ? { beforeMutation: async () => {
+          await gate.promise;
+          throw new Error('preparation rejected');
+        } } : undefined);
+      // Install the rejection handler before releasing the asynchronous boundary.
+      const settled = steering.catch(() => false);
+      await flush();
+      expect(h.coordinator.isActiveTaskCoordination(sid)).toBe(true);
+      gate.resolve();
+      await settled;
+      expect(h.coordinator.isActiveTaskCoordination(sid)).toBe(true);
+      expect(h.coordinator.getAcceptedInputProvenance(sid)?.clientId).toBe('internal');
+    },
+  );
+
+  it.each(['projection', 'control', 'direct'] as const)(
+    'keeps coordination queued instead of injecting it through %s steering', async (entry) => {
+      const h = createHarness(), sid = `coordination-queue-steer-${entry}`;
+      await h.coordinator.ensureQueueRestored(sid);
+      h.coordinator.enqueue(sid, makeItem('human', 'Requested answer'));
+      await flush();
+      const internal = makeItem('internal', '[UI_ACTION_TRIGGER]File agreement', {
+        botTaskCoordination: { delegationId: 'd', senderSessionId: 'child', runSequence: 1 },
+      });
+      h.coordinator.enqueue(sid, internal);
+      await flush();
+      if (entry === 'control') {
+        expect(await h.coordinator.steerControlInput(sid, { queuedClientId: 'internal' }, {
+          session: h.getTurnSessionIdentity(), turnGeneration: 0,
+        })).toBe('queued');
+      } else {
+        const candidate = entry === 'projection'
+          ? h.coordinator.getProjection(sid).pendingQueue[0]!
+          : { ...internal, clientId: 'direct-internal' };
+        expect(await h.coordinator.steer(sid, candidate, { removeFromQueue: entry === 'projection' }))
+          .toBe(false);
+      }
+      expect(h.steerToAgent).not.toHaveBeenCalled();
+      expect(h.coordinator.isActiveTaskCoordination(sid)).toBe(false);
+      expect(h.coordinator.getAcceptedInputProvenance(sid)?.clientId).toBe('human');
+      expect(h.coordinator.getQueueControlSnapshot(sid).pendingQueue[0]?.botTaskCoordination)
+        .toEqual(internal.botTaskCoordination);
+      h.setRunning(false);
+      h.coordinator.onTurnEvent(sid, 'done');
+      await flush();
+      expect(h.beforeDispatchUserTurn).toHaveBeenLastCalledWith(sid,
+        expect.objectContaining({ clientId: 'internal', botTaskCoordination: internal.botTaskCoordination }));
+      expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+      expect(h.coordinator.isActiveTaskCoordination(sid)).toBe(true);
+    },
+  );
 
   it('attributes synchronous provider output to its active input and clears after completion', async () => {
     const h = createHarness();
@@ -4100,6 +4657,42 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({ type: 'user', content: 'next' });
   });
 
+  it('discards a scheduled prompt after preparation fails and lets the next message run', async () => {
+    const h = createHarness();
+    const sid = 'scheduler-preparation-failed';
+    const error = new Error('target window cannot be prepared');
+    const onPreparationFailed = vi.fn();
+    const onPreparing = vi.fn(async () => { throw error; });
+    const preparations = new Map([['scheduled', { onPreparing, onPreparationFailed }]]);
+    const dispatched: string[] = [];
+    h.sendToAgent.mockImplementation(async (sessionId, _message, _create, opts) => {
+      const clientId = opts.persistUserMessage?.clientId;
+      await runSchedulerQueuedPreparation(clientId, preparations, () => {});
+      await persistQueuedUserMessage(sessionId, opts);
+      dispatched.push(clientId!);
+      return sendSuccess();
+    });
+    h.coordinator.enqueue(sid, makeItem('scheduled', 'scheduled work', {
+      origin: { kind: 'scheduler', scheduleId: 'sch-1', scheduleName: 'Check' },
+    }));
+    h.coordinator.enqueue(sid, makeItem('following', 'user message'));
+    await vi.waitFor(() => expect(dispatched).toEqual(['following']));
+
+    expect(onPreparationFailed).toHaveBeenCalledExactlyOnceWith(error);
+    expect(onPreparing).toHaveBeenCalledOnce();
+    expect(h.onDiscardedQueuedMessage).toHaveBeenCalledExactlyOnceWith(
+      sid, expect.objectContaining({ clientId: 'scheduled' }),
+    );
+    expect(h.coordinator.hasQueuedItemWhere(sid, item => item.clientId === 'scheduled',
+      { includeRecovery: true })).toBe(false);
+    expect(latestProjection(h.projections).recovery).toBeNull();
+    expect(dispatched).toEqual(['following']);
+    expect(mocks.createMessage).toHaveBeenCalledTimes(1);
+    h.coordinator.retryLastError(sid);
+    await flush();
+    expect(dispatched).toEqual(['following']);
+  });
+
   it('rolls back every pre-accept send failure to the queue head and retries by typed recovery', async () => {
     const h = createHarness();
     const sid = 'send-rollback';
@@ -5851,6 +6444,37 @@ describe('AgentInputCoordinator stop and drain boundaries', () => {
 });
 
 describe('AgentInputCoordinator steer transaction', () => {
+  it.each(['restore', 'screening', 'references', 'valid'] as const)('runs the host steer authority guard after %s', async boundary => {
+    const h = createHarness();
+    const sid = 'group-steer-guard';
+    h.setRunning(true);
+    let revoked = false;
+    const failure = new Error('Fixture authority revoked');
+    const beforeMutation = vi.fn(async () => { if (revoked) throw failure; });
+    h.setScreenUserMessage(async () => { if (boundary === 'screening') revoked = true; return { action: 'allow' }; });
+    h.resolveSessionReferences.mockImplementationOnce(async () => { if (boundary === 'references') revoked = true; return []; });
+    const source = readFileSync(resolve(__dirname, '../register.ts'), 'utf8');
+    const start = source.indexOf('    steerQueuedMessage: async (sessionId, item, expectedTurn) =>');
+    const end = source.indexOf('    getQueueSnapshot:', start);
+    expect(start).toBeGreaterThan(0); expect(end).toBeGreaterThan(start);
+    const adapter = transpileModule(`return ({${source.slice(start, end)}}).steerQueuedMessage;`, { compilerOptions: { target: ScriptTarget.ES2022 } }).outputText;
+    const host = new Function('inputCoordinator', adapter)({
+      ensureQueueRestored: async () => { if (boundary === 'restore') revoked = true; },
+      steer: h.coordinator.steer.bind(h.coordinator),
+    });
+    const result = host(sid, makeItem('guarded-input', 'Private task input', { sessionRefs: [{ sessionId: 'reference' }] }),
+      { session: h.getTurnSessionIdentity(), turnGeneration: 0, beforeMutation });
+    if (boundary === 'valid') { await expect(result).resolves.toBe(true); expect(h.steerToAgent).toHaveBeenCalledOnce(); }
+    else {
+      await expect(result).rejects.toBe(failure);
+      expect(h.steerToAgent).not.toHaveBeenCalled();
+      expect(h.onSteerAccepted).not.toHaveBeenCalled();
+      expect(h.coordinator.getQueueControlSnapshot(sid).pendingQueue).toEqual([]);
+      expect(h.coordinator.getQueueControlSnapshot(sid).steeringQueueClientIds).toEqual([]);
+    }
+    expect(beforeMutation).toHaveBeenCalledTimes(boundary === 'restore' ? 1 : 2);
+  });
+
   it('rejects a control steer when screening crosses into a new turn generation', async () => {
     const h = createHarness();
     const sid = 'control-steer-screening-turn-race';
@@ -6272,6 +6896,19 @@ describe('AgentInputCoordinator steer transaction', () => {
     expect(appendAutoReviewUserIntent('Send this.', 'decorated', opts)).toBe('Inspect the new image.');
   });
 
+  it('keeps delegated steer distinct from an empty human resource replacement', async () => {
+    const h=createHarness();
+    h.coordinator.enqueue('delegated-steer',makeItem('human','Do not deploy'));
+    await flush();
+    await h.coordinator.steer('delegated-steer',{
+      ...makeItem('agent','Deploy now',{persistedContent:JSON.stringify({orcaSource:'lead',content:'Deploy now'})}),
+      autoReviewUserText:{kind:'delegated-continuation'},
+    });
+    const opts=h.steerToAgent.mock.calls[0][2];
+    expect(opts[AUTO_REVIEW_DELEGATED_CONTINUATION]).toBe(true);
+    expect(opts[AUTO_REVIEW_USER_INTENT]).toBeUndefined();
+  });
+
   it('screens same-turn steers through ghost hooks: rewrite injects and persists the rewritten text', async () => {
     const h = createHarness();
     h.setAgentKind('codex');
@@ -6660,6 +7297,7 @@ describe('AgentInputCoordinator steer transaction', () => {
         fallbackToTurn: false, expectedTurnSession: expected.session, expectedTurnGeneration: expected.turnGeneration,
       }),
       getQueueSnapshot: vi.fn(), replaceQueuedMessage: vi.fn(), removeQueuedMessage: vi.fn(),
+      steerStoredQueuedMessage: vi.fn(), moveQueuedMessage: vi.fn(),
       createId: () => `unexpected-random-ID-${++allocatedIds}`,
     });
     const input = { callerSessionId: 'caller', targetSessionId: sid, message: 'urgent', queuedMessageId: 'stable-ID' };
@@ -6733,6 +7371,7 @@ describe('AgentInputCoordinator steer transaction', () => {
         fallbackToTurn: false, expectedTurnSession: expected.session, expectedTurnGeneration: expected.turnGeneration,
       }),
       getQueueSnapshot: vi.fn(), replaceQueuedMessage: vi.fn(), removeQueuedMessage: vi.fn(),
+      steerStoredQueuedMessage: vi.fn(), moveQueuedMessage: vi.fn(),
       createId: () => `unexpected-random-ID-${++allocatedIds}`,
     });
     const input = { callerSessionId: 'caller', targetSessionId: sid, message: 'urgent', queuedMessageId: 'stable-ID' };
@@ -9636,6 +10275,40 @@ describe('AgentInputCoordinator queue mutations', () => {
 });
 
 describe('AgentInputCoordinator crash-recovery queue snapshots (issue #761)', () => {
+  it.each(['member', 'plan'] as const)('drops restored %s group inputs before a new execution can use their lane', async kind => {
+    const sid = 'reused-group-lane';
+    const oldId = kind === 'member' ? BOT_GROUP_CLIENT_ID.memberTurn('room', 'old-execution', 'bot')
+      : BOT_GROUP_CLIENT_ID.planStep('room', 'plan', 0, 'old-execution');
+    const writer = createHarness();
+    await writer.coordinator.ensureQueueRestored(sid);
+    writer.setRunning(true);
+    writer.coordinator.enqueue(sid, makeItem(oldId, 'Expired group request'));
+    await flush();
+    const snapshot = JSON.parse(JSON.stringify(writer.persistQueueSnapshot.mock.calls.at(-1)![1]));
+    const reader = createHarness();
+    reader.setLoadQueueSnapshot(async () => snapshot);
+    const validate = vi.fn(async () => {});
+    // Same lane, same group grant, but a different execution owns tool authority.
+    const release = registerGroupToolAuthority(sid, { botId: 'bot', mode: 'owner', isCurrent: () => true, validate });
+    try {
+      await expect(authorizeGroupTool(sid, 'bot', 'owner-action')).resolves.toBeTruthy();
+      await reader.coordinator.ensureQueueRestored(sid);
+      await flush();
+      expect(reader.coordinator.getQueueControlSnapshot(sid).pendingQueue).toEqual([]);
+      expect(reader.onDiscardedQueuedMessage).toHaveBeenCalledWith(sid, expect.objectContaining({ clientId: oldId }));
+      expect(latestSnapshotClientIds(reader.persistQueueSnapshot)).toEqual([]);
+      reader.coordinator.resume(sid);
+      await flush();
+      expect(reader.sendToAgent).not.toHaveBeenCalled();
+      const freshId = BOT_GROUP_CLIENT_ID.memberTurn('room', 'new-execution', 'bot');
+      reader.coordinator.enqueue(sid, makeItem(freshId, 'Fresh group request'));
+      await flush();
+      expect(reader.sendToAgent).toHaveBeenCalledOnce();
+      expect(reader.sendToAgent.mock.calls[0][3].persistUserMessage?.clientId).toBe(freshId);
+      expect(reader.onAcceptedQueuedMessage).toHaveBeenCalledWith(sid, expect.objectContaining({ clientId: freshId }));
+    } finally { release(); }
+  });
+
   it('restores the Main-owned authorization for an exact queued Desktop Pi command', async () => {
     const writer = createHarness();
     const sid = 'snapshot-desktop-pi-command';
@@ -11235,6 +11908,99 @@ describe('AgentInputCoordinator replaceQueuedMessage(Orca lead 排队消息修�
       });
     },
   );
+
+  it.each([false, true])('keeps a peer source in memory and uses the current body at dispatch (rewrite=%s)', async (rewrite) => {
+    const h = createHarness();
+    const sid = 'group-envelope-fixture';
+    await h.coordinator.ensureQueueRestored(sid);
+    h.setRunning(true);
+    const body = '[UI_ACTION_TRIGGER]Bounded peer question';
+    const prefix = '[Group source: Fixture Design (fixture-group); lane: fixture-lane]\n';
+    const screen = vi.fn<NonNullable<AgentInputCoordinatorDeps['screenUserMessage']>>(async () => rewrite
+      ? { action: 'rewrite' as const, ghostId: 'fixture-hook', ghostName: 'Fixture hook', text: 'Rewritten question' }
+      : { action: 'allow' as const });
+    h.setScreenUserMessage(screen);
+    h.coordinator.enqueue(sid, { ...makeItem('bot-dm:fixture:message', body),
+      [HOST_ONLY_AGENT_PREFIX]: prefix, agentOmitsTriggerPrefix: true,
+      origin: { kind: 'session', senderSessionId: 'fixture-lane', displayText: body } });
+    await flush();
+    const snapshot = h.persistQueueSnapshot.mock.calls.at(-1)?.[1] ?? [];
+    expect(snapshot).toHaveLength(1);
+    expect(snapshot[0][HOST_ONLY_AGENT_PREFIX]).toBeUndefined();
+    expect(snapshot[0].text).toBe(body);
+    expect(JSON.stringify(snapshot)).not.toMatch(/Group source|Fixture Design|fixture-group/);
+    const projection = h.coordinator.getProjection(sid).pendingQueue[0];
+    expect(projection[HOST_ONLY_AGENT_PREFIX]).toBeUndefined();
+    expect(projection.text).toBe(body);
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(sid, 'done');
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledOnce();
+    expect(screen).toHaveBeenCalledOnce();
+    expect(screen.mock.calls[0]?.[1]).not.toContain('Group source');
+    expect(h.sendToAgent.mock.calls[0]?.[1]).toEqual({ type: 'user', content: prefix + (rewrite ? 'Rewritten question' : 'Bounded peer question') });
+    const message = mocks.createMessage.mock.calls.find(call => (call[1] as { clientId?: string }).clientId === 'bot-dm:fixture:message')?.[1];
+    expect(message).toMatchObject({ content: rewrite ? '[UI_ACTION_TRIGGER]Rewritten question' : body });
+  });
+
+  it('preserves typed plugin receipts from queue snapshot through durable persistence and review', async () => {
+    const h = createHarness();
+    const sid = 'plugin-empty-authorship';
+    await h.coordinator.ensureQueueRestored(sid);
+    h.setRunning(true);
+    h.coordinator.enqueue(sid, { ...makeItem('plugin-input', 'Plugin task'), autoReviewUserText: { kind: 'delegated-continuation' } });
+    await flush();
+    const snapshot = JSON.parse(JSON.stringify(h.persistQueueSnapshot.mock.calls.at(-1)?.[1] ?? []));
+    expect(snapshot[0]).toMatchObject({ autoReviewUserText: { kind: 'delegated-continuation' } });
+    const restarted = createHarness();
+    restarted.setLoadQueueSnapshot(async () => snapshot);
+    await restarted.coordinator.ensureQueueRestored(sid);
+    expect(restarted.coordinator.getQueueControlSnapshot(sid).pendingQueue[0]).toMatchObject({ autoReviewUserText: { kind: 'delegated-continuation' } });
+    const history: AutoReviewHistoryMessage[] = [{clientId:'human',role:'user',createdAt:1,content:{text:'Do not modify files'},agentMeta:{delivery:'turn',autoReviewUserText:'Do not modify files'}}];
+    const session: MakerSendTransactionSession = {
+      id:sid,instanceId:'runtime',agentKind:'codex',workDir:'/answer',remoteHostId:null,isTurnRunning:()=>false,
+      send:vi.fn(async (_message,opts)=>{await opts?.onAccepted?.();return {accepted:true as const};}),
+    };
+    const transaction=createMakerSendTransaction({
+      getSession:()=>session,closeSession:async()=>{},preflightBotRuntimeResources:async()=>{},
+      getSessionMeta:async()=>({}),ensureRemoteReadyForSessionStart:async()=>{},checkWorkDirExists:async()=>true,
+      isOrcaMcpHydrated:()=>true,buildCreateOptsWithStderr:x=>x,synthesizeOrcaVendorOptionsFromDb:async()=>false,
+      readSessionExtraDirsFromDb:async()=>[],readSessionWorkingDirFromDb:async()=>'/answer',
+      readWorkingDirectoryRecoveryCreateOpts:async()=>({agentKind:'codex',workingDir:'/answer',model:'m'}),
+      withRehydrateCloseSuppressed:async(_id,fn)=>fn(),bootstrapSession:async()=>({session,didInjectOrcaInstructions:false,didInjectProjectContext:false}),
+      markOrcaRoleIfNeeded:async()=>{},broadcastSessionCreated:()=>{},prepareSendUserMessage:async(_id,m)=>m as string,
+      createDbMessage:async(_id,row)=>{history.push(JSON.parse(JSON.stringify({...row,createdAt:history.length+1})));},
+      readAutoReviewHistory:async()=>history,isSessionRunningError:()=>false,log:{info:()=>{},warn:()=>{}},
+    });
+    restarted.sendToAgent.mockImplementation(async (...args)=>{
+      const result=await transaction.sendToAgentAccepted(...args);
+      expect(result.accepted).toBe(true);
+      return sendSuccess();
+    });
+    restarted.coordinator.enqueue(sid, makeItem('resume-input', 'Continue'), { resumeRestorePausedQueue: true });
+    await flush();
+    expect(restarted.sendToAgent.mock.calls[0]?.[3][AUTO_REVIEW_SOURCE_CONTENT]).toBe('');
+    expect(restarted.sendToAgent.mock.calls[0]?.[3][AUTO_REVIEW_DELEGATED_CONTINUATION]).toBe(true);
+    await restarted.sendToAgent.mock.results[0]!.value;
+    expect(history[1]?.agentMeta?.autoReviewUserText).toEqual({kind:'delegated-continuation'});
+    const route={agentKind:'codex' as const,providerId:'p',model:'m',effort:'high',fastMode:false};
+    const authority: PluginReviewSnapshot={pluginId:'test',authorized:true,revision:1,registeredRoute:route,
+      session:{workingDir:'/answer',permissionMode:'auto',status:'active',route},lead:{permissionMode:'auto',status:'active'},
+      plan:{task:'Inspect project',items:[],concurrency:null},history,sessionHistory:history,historyComplete:true};
+    const resolve=createPluginTaskReviewResolver(async()=>authority);
+    const live=vi.mocked(session.send).mock.calls[0]![1]![AUTO_REVIEW_USER_INTENT]!;
+    for(const userIntent of [live,restoreAutoReviewUserIntent(history)]){
+      const reviewed=await resolve({sessionId:sid,agentKind:'codex',model:'m',userIntent,workspaceRoots:['/answer'],platform:'linux',action:{kind:'exec',command:'ls',cwd:'/answer'}});
+      expect(reviewed.authorizationError).toBeUndefined();expect(reviewed.userIntent).toBe('Do not modify files');expect(reviewed.delegatedTask).toBeDefined();
+    }
+    // Genuine human resource input, without the Main-only symbol, still resets old consent.
+    await transaction.sendToAgentAccepted(sid,'New attachment',undefined,{
+      [AUTO_REVIEW_SOURCE_CONTENT]:'',
+      persistUserMessage:{clientId:'new-resource',content:JSON.stringify({text:'',files:[{name:'new.txt'}]}),delivery:'turn'},
+    });
+    expect(history.at(-1)?.agentMeta?.autoReviewUserText).toBe('');
+    expect(restoreAutoReviewUserIntent(history)).toBe('');
+  });
 
   it('编辑保留主机接收时间,清空边界后的条目崩溃恢复时不会被误删', async () => {
     const h = createHarness();
@@ -12893,5 +13659,307 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
       expect.objectContaining({ surfaceError: true, owner: expect.any(Object) }),
     );
     expect(h.onResumableTurnError, '落库失败就没有可续跑的目标,不该消耗额度').not.toHaveBeenCalled();
+  });
+});
+
+describe('usage-limit wait (ordinary tasks)', () => {
+  const LIMIT_SIGNALS = { sdkError: 'rate_limit', usageResetAt: 5_000_000 };
+  const INFO = {
+    reason: USAGE_LIMIT_RESET_AUTO_RESUME_REASON,
+    attempt: 1,
+    maxAttempts: 3,
+    sessionTotal: 0,
+  };
+
+  async function failWithLimit(sid: string, progress: boolean) {
+    const h = createHarness();
+    h.setHasAssistantProgressAfter(async () => progress);
+    h.coordinator.enqueue(sid, makeItem('q-first', 'original long task'));
+    await flush();
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(sid, 'error', "You've hit your session limit", LIMIT_SIGNALS);
+    await flush();
+    const candidate = h.onUsageLimitedTurnError.mock.calls.at(-1)?.[3] as number;
+    return { h, candidate };
+  }
+
+  it('reports the limit error with a candidate token and keeps the normal error banner', async () => {
+    const sid = 'usage-wait-notify';
+    const { h, candidate } = await failWithLimit(sid, true);
+    expect(h.onUsageLimitedTurnError).toHaveBeenCalledWith(
+      sid,
+      expect.objectContaining({ message: "You've hit your session limit", ...LIMIT_SIGNALS }),
+      expect.objectContaining({ clientId: 'q-first' }),
+      expect.any(Number),
+    );
+    expect(typeof candidate).toBe('number');
+    const projection = latestProjection(h.projections);
+    expect(projection.error).toBe("You've hit your session limit");
+    // 候选还没排期,不显示等待。
+    expect(projection.usageLimitWait).toBeNull();
+  });
+
+  it('projects the wait alongside the error and continues with the hidden prompt when it fires', async () => {
+    const sid = 'usage-wait-continue';
+    const { h, candidate } = await failWithLimit(sid, true);
+    expect(h.coordinator.armUsageLimitWait(sid, candidate, 9_000_000)).toBe(true);
+    const projection = latestProjection(h.projections);
+    expect(projection.error).not.toBeNull();
+    expect(projection.usageLimitWait).toEqual({ resumeAt: 9_000_000 });
+
+    expect(await h.coordinator.continueAfterUsageLimitReset(sid, candidate, INFO)).toBe('resumed');
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+    expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({
+      type: 'user',
+      content: CONTINUE_AFTER_ERROR_PROMPT,
+    });
+    const persist = h.sendToAgent.mock.calls[1]?.[3]?.persistUserMessage;
+    expect(persist?.autoResume).toBe(true);
+    expect(persist?.autoResumeInfo).toMatchObject({
+      ...INFO,
+      error: "You've hit your session limit",
+    });
+    // 自动动作不冒充用户点击。
+    expect(h.onUiRetry).toHaveBeenLastCalledWith(sid, expect.any(String), 'auto', undefined);
+    expect(latestProjection(h.projections).usageLimitWait).toBeNull();
+  });
+
+  it('restores the error and manual retry if the continuation is dropped before dispatch', async () => {
+    const sid = 'usage-wait-dropped';
+    const { h, candidate } = await failWithLimit(sid, true);
+    expect(h.coordinator.armUsageLimitWait(sid, candidate, 9_000_000)).toBe(true);
+    expect(await h.coordinator.continueAfterUsageLimitReset(sid, candidate, INFO)).toBe('resumed');
+    const clientId = h.onUiRetry.mock.calls.at(-1)?.[1] as string;
+    // 中断自愈的令牌对不上额度续跑项。
+    expect(h.coordinator.restoreAutoResumeRecovery(sid, clientId, 7)).toBe(false);
+    expect(h.coordinator.restoreAutoResumeRecovery(sid, clientId, null)).toBe(true);
+    const projection = h.coordinator.getProjection(sid);
+    expect(projection.error).toBe("You've hit your session limit");
+    expect(projection.recovery?.kind).toBe('active-turn');
+
+    // 已交给 vendor 的续跑不再回滚。
+    const sent = await failWithLimit('usage-wait-dispatched', true);
+    expect(sent.h.coordinator.armUsageLimitWait('usage-wait-dispatched', sent.candidate, 9_000_000)).toBe(true);
+    await sent.h.coordinator.continueAfterUsageLimitReset('usage-wait-dispatched', sent.candidate, INFO);
+    await flush();
+    const sentClientId = sent.h.onUiRetry.mock.calls.at(-1)?.[1] as string;
+    expect(sent.h.coordinator.restoreAutoResumeRecovery('usage-wait-dispatched', sentClientId, null)).toBe(false);
+  });
+
+  it('does not offer a retry when the continuation may already have reached the vendor', async () => {
+    const sid = 'usage-wait-unconfirmed';
+    const { h, candidate } = await failWithLimit(sid, true);
+    expect(h.coordinator.armUsageLimitWait(sid, candidate, 9_000_000)).toBe(true);
+    h.sendToAgent.mockImplementationOnce(async (sessionId, _message, _createOpts, sendOpts) => {
+      await persistQueuedUserMessage(sessionId, sendOpts);
+      throw turnDispatchUnconfirmedError(`Session ${sessionId} terminated before provider acceptance`);
+    });
+    expect(await h.coordinator.continueAfterUsageLimitReset(sid, candidate, INFO)).toBe('resumed');
+    await flush();
+    const clientId = h.onUiRetry.mock.calls.at(-1)?.[1] as string;
+    // 可能已被 vendor 接住:按已派发提交,不回滚成可重试错误。
+    expect(h.onDiscardedQueuedMessage).not.toHaveBeenCalled();
+    expect(h.onUnconfirmedAutoResumeTurn).toHaveBeenCalledTimes(1);
+    expect(h.coordinator.restoreAutoResumeRecovery(sid, clientId, null)).toBe(false);
+    const projection = h.coordinator.getProjection(sid);
+    expect(projection.error).toContain('terminated before provider acceptance');
+    expect(projection.recovery).toBeNull();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+  });
+
+  it('re-sends the original input when the failed turn made no progress', async () => {
+    const sid = 'usage-wait-clone';
+    const { h, candidate } = await failWithLimit(sid, false);
+    expect(h.coordinator.armUsageLimitWait(sid, candidate, 9_000_000)).toBe(true);
+    expect(await h.coordinator.continueAfterUsageLimitReset(sid, candidate, INFO)).toBe('resumed');
+    await flush();
+    expect(h.sendToAgent.mock.calls[1]?.[3]?.persistUserMessage?.autoResume).toBe(true);
+    expect(h.sendToAgent.mock.calls[1]?.[3]?.persistUserMessage?.content).toBe('original long task');
+  });
+
+  it('is invalidated by user actions, an explicit cancel and closing the task', async () => {
+    const cleared = await failWithLimit('usage-wait-clear', true);
+    expect(cleared.h.coordinator.armUsageLimitWait('usage-wait-clear', cleared.candidate, 9_000_000)).toBe(true);
+    cleared.h.coordinator.clearError('usage-wait-clear');
+    expect(latestProjection(cleared.h.projections).usageLimitWait).toBeNull();
+    expect(cleared.h.coordinator.isUsageLimitWaitCurrent('usage-wait-clear', cleared.candidate)).toBe(false);
+    expect(
+      await cleared.h.coordinator.continueAfterUsageLimitReset('usage-wait-clear', cleared.candidate, INFO),
+    ).toBe('superseded');
+
+    const sent = await failWithLimit('usage-wait-user-send', true);
+    expect(sent.h.coordinator.armUsageLimitWait('usage-wait-user-send', sent.candidate, 9_000_000)).toBe(true);
+    sent.h.coordinator.enqueue('usage-wait-user-send', makeItem('q-second', 'do something else'));
+    await flush();
+    expect(sent.h.coordinator.isUsageLimitWaitCurrent('usage-wait-user-send', sent.candidate)).toBe(false);
+
+    const cancelled = await failWithLimit('usage-wait-cancel', true);
+    expect(cancelled.h.coordinator.armUsageLimitWait('usage-wait-cancel', cancelled.candidate, 9_000_000)).toBe(true);
+    const projection = cancelled.h.coordinator.cancelUsageLimitWait('usage-wait-cancel');
+    expect(projection.usageLimitWait).toBeNull();
+    // 错误与手动重试入口保留。
+    expect(projection.error).not.toBeNull();
+    expect(projection.recovery?.kind).toBe('active-turn');
+    expect(
+      await cancelled.h.coordinator.continueAfterUsageLimitReset('usage-wait-cancel', cancelled.candidate, INFO),
+    ).toBe('superseded');
+    expect(cancelled.h.sendToAgent).toHaveBeenCalledTimes(1);
+
+    const closed = await failWithLimit('usage-wait-closed', true);
+    expect(closed.h.coordinator.armUsageLimitWait('usage-wait-closed', closed.candidate, 9_000_000)).toBe(true);
+    closed.h.coordinator.onSessionClosed('usage-wait-closed');
+    expect(closed.h.coordinator.getProjection('usage-wait-closed').usageLimitWait).toBeNull();
+    expect(
+      await closed.h.coordinator.continueAfterUsageLimitReset('usage-wait-closed', closed.candidate, INFO),
+    ).toBe('superseded');
+  });
+
+  it('re-arms the wait after the session is closed for a provider group computer switch', async () => {
+    const sid = 'usage-wait-switch';
+    const { h, candidate } = await failWithLimit(sid, true);
+    const lease = h.coordinator.leaseUsageLimitRecovery(sid, candidate);
+    expect(lease).not.toBeNull();
+    // 交接会关闭旧会话，关闭撤销了限额等待。
+    h.coordinator.onSessionClosed(sid);
+    expect(h.coordinator.armUsageLimitWait(sid, candidate, 9_000_000)).toBe(false);
+    const token = h.coordinator.rearmUsageLimitWait(sid, lease!, 1);
+    expect(typeof token).toBe('number');
+    expect(await h.coordinator.continueAfterUsageLimitReset(sid, token!, INFO)).toBe('resumed');
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+    expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({ type: 'user', content: CONTINUE_AFTER_ERROR_PROMPT });
+  });
+
+  it('can hand the re-armed error back to the reset-time wait as a fresh candidate', async () => {
+    const sid = 'usage-wait-switch-fallback';
+    const { h, candidate } = await failWithLimit(sid, true);
+    const lease = h.coordinator.leaseUsageLimitRecovery(sid, candidate);
+    h.coordinator.onSessionClosed(sid);
+    const token = h.coordinator.rearmUsageLimitWait(sid, lease!, null);
+    // 只登记候选：还不显示等待，直到求出重置时刻再挂上。
+    expect(latestProjection(h.projections).usageLimitWait).toBeNull();
+    expect(h.coordinator.armUsageLimitWait(sid, token!, 9_000_000)).toBe(true);
+    expect(latestProjection(h.projections).usageLimitWait).toEqual({ resumeAt: 9_000_000 });
+  });
+
+  it('does not re-arm after the user took over during the switch', async () => {
+    const cleared = await failWithLimit('usage-wait-switch-clear', true);
+    const lease = cleared.h.coordinator.leaseUsageLimitRecovery('usage-wait-switch-clear', cleared.candidate);
+    cleared.h.coordinator.clearError('usage-wait-switch-clear');
+    expect(cleared.h.coordinator.rearmUsageLimitWait('usage-wait-switch-clear', lease!, 1)).toBeNull();
+
+    const sent = await failWithLimit('usage-wait-switch-send', true);
+    const sentLease = sent.h.coordinator.leaseUsageLimitRecovery('usage-wait-switch-send', sent.candidate);
+    sent.h.coordinator.enqueue('usage-wait-switch-send', makeItem('q-second', 'do something else'));
+    await flush();
+    expect(sent.h.coordinator.rearmUsageLimitWait('usage-wait-switch-send', sentLease!, 1)).toBeNull();
+
+    // 候选令牌对不上(之后又有新错误)时拿不到句柄。
+    const stale = await failWithLimit('usage-wait-switch-stale', true);
+    expect(stale.h.coordinator.leaseUsageLimitRecovery('usage-wait-switch-stale', stale.candidate + 1)).toBeNull();
+  });
+
+  it('does not offer a wait for a shared-task guest turn', async () => {
+    const h = createHarness();
+    const sid = 'usage-wait-guest';
+    h.coordinator.enqueue(sid, {
+      ...makeItem('q-guest', 'guest instruction'),
+      sharedTaskAuthor: {
+        sharedTaskId: 'st-1',
+        sessionId: sid,
+        memberId: 'm-1',
+        accountId: 'a-1',
+        displayName: 'Guest',
+      },
+    });
+    await flush();
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(sid, 'error', "You've hit your session limit", LIMIT_SIGNALS);
+    await flush();
+    // 授权可能在等待期间被撤销:不自动续,错误与房主手动处理保留。
+    expect(h.onUsageLimitedTurnError).not.toHaveBeenCalled();
+    expect(latestProjection(h.projections).error).toBe("You've hit your session limit");
+  });
+
+  // 访客 steer 的两种时序都不得挂等待:ACK 先到时本轮归属换成访客 steer 项(被访客判据挡住);
+  // 终态先到时 steer 仍在途、不形成可续的 recovery,也就不会报告候选。
+  it('does not offer a wait once a guest steer joined the turn, even before its ack', async () => {
+    const guest = (sid: string, clientId: string) => ({
+      ...makeItem(clientId, 'guest steer'),
+      sharedTaskAuthor: {
+        sharedTaskId: 'st-1',
+        sessionId: sid,
+        memberId: 'm-1',
+        accountId: 'a-1',
+        displayName: 'Guest',
+      },
+    });
+    for (const ackBeforeError of [true, false]) {
+      const h = createHarness();
+      const sid = `usage-wait-guest-steer-${ackBeforeError}`;
+      h.sendToAgent.mockImplementationOnce(async () => {
+        h.setRunning(true);
+        return sendSuccess();
+      });
+      h.coordinator.enqueue(sid, makeItem('owner', 'owner task'));
+      await flush();
+      let ack!: () => void;
+      h.steerToAgent.mockImplementationOnce(() => new Promise<void>((resolve) => { ack = resolve; }));
+      const steering = h.coordinator.steer(sid, guest(sid, 'guest-steer'));
+      await flush();
+      if (ackBeforeError) {
+        ack();
+        await steering;
+      }
+      h.setRunning(false);
+      h.coordinator.onTurnEvent(sid, 'error', "You've hit your session limit", LIMIT_SIGNALS);
+      await flush();
+      if (!ackBeforeError) {
+        ack();
+        await steering;
+        await flush();
+      }
+      expect(h.onUsageLimitedTurnError).not.toHaveBeenCalled();
+    }
+
+    // 房主自己的 steer 不影响。
+    const owner = createHarness();
+    const ownerSid = 'usage-wait-owner-steer';
+    owner.sendToAgent.mockImplementationOnce(async () => {
+      owner.setRunning(true);
+      return sendSuccess();
+    });
+    owner.coordinator.enqueue(ownerSid, makeItem('owner', 'owner task'));
+    await flush();
+    await owner.coordinator.steer(ownerSid, makeItem('owner-steer', 'more detail'));
+    await flush();
+    owner.setRunning(false);
+    owner.coordinator.onTurnEvent(ownerSid, 'error', "You've hit your session limit", LIMIT_SIGNALS);
+    await flush();
+    expect(owner.onUsageLimitedTurnError).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects an arm for a superseded candidate even if a newer error is showing', async () => {
+    const sid = 'usage-wait-stale';
+    const { h, candidate } = await failWithLimit(sid, true);
+    // 用户手动重试,随后新的一轮以非限额错误结束。
+    await h.coordinator.retryLastError(sid);
+    await flush();
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(sid, 'error', 'some other failure');
+    await flush();
+    expect(h.coordinator.armUsageLimitWait(sid, candidate, 9_000_000)).toBe(false);
+    expect(latestProjection(h.projections).usageLimitWait).toBeNull();
+  });
+
+  it('only cancels the matching wait when a token is given', async () => {
+    const sid = 'usage-wait-token-cancel';
+    const { h, candidate } = await failWithLimit(sid, true);
+    expect(h.coordinator.armUsageLimitWait(sid, candidate, 9_000_000)).toBe(true);
+    expect(h.coordinator.cancelUsageLimitWait(sid, candidate + 1000).usageLimitWait).toEqual({
+      resumeAt: 9_000_000,
+    });
+    expect(h.coordinator.cancelUsageLimitWait(sid, candidate).usageLimitWait).toBeNull();
   });
 });

@@ -49,6 +49,8 @@ export interface MakerSessionCreateOpts extends CreateSessionOptions {
    * 目前仅 Codex 支持，Claude session 会忽略。
    */
   remoteHostId?: string;
+  /** Agent 在同账号另一台电脑上运行时那台电脑的 deviceId(任务与文件仍在本机)。 */
+  agentDeviceId?: string;
   /**
    * per-session 来源(供应商)显式选择。device-link 远程 create 由控制端透传被控端供应商 id
    * (见 deviceLinkCreateArgs);bootstrapSession 据此把 sessions.provider_id 落库,使新会话首个
@@ -111,6 +113,9 @@ export function readCreateSessionOpts(
     throwIpcError('INVALID_PARAMS', 'createSession opts must be an object');
   }
   const body = requireObject(input, 'createSession opts');
+  if (body.planMode !== undefined && typeof body.planMode !== 'boolean') {
+    throwIpcError('INVALID_PARAMS', 'planMode must be a boolean');
+  }
   if (Array.isArray(body.extraDirs) && body.extraDirs.some((dir) =>
     typeof dir === 'string' && isLibraryExtraDirSlot(dir.trim()))) {
     throwIpcError('INVALID_PARAMS', 'extraDirs must not contain Host-owned library slots');
@@ -136,6 +141,15 @@ export function readCreateSessionOpts(
         deps.now ? deps.now() : Date.now(),
       )
     : requireString(body.workingDir, 'workingDir');
+  // Agent 运行在同账号另一台电脑上：只接受设备 id 形态的值，且不能与 SSH 远端同时使用。
+  if (body.agentDeviceId !== undefined && body.agentDeviceId !== null) {
+    if (typeof body.agentDeviceId !== 'string' || !/^[A-Za-z0-9_.:-]{1,128}$/.test(body.agentDeviceId)) {
+      throwIpcError('INVALID_PARAMS', 'agentDeviceId must be a device id');
+    }
+    if (typeof body.remoteHostId === 'string' && body.remoteHostId.trim()) {
+      throwIpcError('INVALID_PARAMS', 'agentDeviceId cannot be combined with remoteHostId');
+    }
+  }
   return {
     ...body,
     id,

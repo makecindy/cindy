@@ -200,11 +200,10 @@ export function McpServerDialog({ initial, existingIds, onSaved, onClose }: McpS
       }}
     >
       <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 z-[10000] bg-[var(--overlay-modal)]" />
+        <Dialog.Overlay className="modal-scrim fixed inset-0 z-[10000]" />
         <Dialog.Content
           className={cn(
-            'fixed inset-0 z-[10000] m-auto flex h-fit max-h-[88vh] w-[min(600px,calc(100vw-32px))] flex-col rounded-xl outline-none',
-            'border border-[var(--border-default)] bg-[var(--surface-elevated)] shadow-[var(--shadow-menu)]',
+            'modal-panel fixed inset-0 z-[10000] m-auto flex h-fit max-h-[88vh] w-[min(600px,calc(100vw-32px))] flex-col outline-none',
             '[&_button:focus-visible]:outline-none [&_button:focus-visible]:ring-2 [&_button:focus-visible]:ring-[var(--focus-ring)]',
           )}
           onOpenAutoFocus={(event) => {

@@ -143,7 +143,10 @@ export type UseVoiceInputResult = {
   isBusy: boolean;
   getLastSubmittedText: () => string;
   getLastRefinement: () => VoiceInputRefinementSnapshot | null;
-  start: (options?: VoiceInputStartOptions) => Promise<void>;
+  /** 同步读取当前状态，不经过 React 渲染。长按手势靠它判断是否占用了录音。 */
+  getState: () => VoiceInputState;
+  /** 同步 claim 录音后立刻返回是否占用；启动流程（授权确认、采集、连接）在后台继续。 */
+  start: (options?: VoiceInputStartOptions) => boolean;
   stop: (options?: VoiceInputStopOptions) => Promise<void>;
   cancel: () => Promise<void>;
 };
@@ -249,6 +252,8 @@ export function useVoiceInput(
     if (next === 'error') terminalOutcomeRef.current = 'failed';
     setState(next);
   }, []);
+
+  const getState = useCallback(() => stateRef.current, []);
 
   const isActiveStartAttempt = useCallback((attemptId: number) => (
     startAttemptIdRef.current === attemptId
@@ -1231,7 +1236,7 @@ export function useVoiceInput(
     voiceInputSettings.microphoneDeviceId,
   ]);
 
-  const start = useCallback(async (startOptions?: VoiceInputStartOptions) => {
+  const start = useCallback((startOptions?: VoiceInputStartOptions): boolean => {
     const currentState = stateRef.current;
     if (
       disabled ||
@@ -1241,7 +1246,7 @@ export function useVoiceInput(
       currentState === 'submitting' ||
       currentState === 'refining'
     ) {
-      return;
+      return false;
     }
     const timeline = createVoiceInputStartupTimeline('inline', startOptions?.startedAt);
     startupTimelineRef.current = timeline;
@@ -1265,6 +1270,10 @@ export function useVoiceInput(
     sentAudioMsRef.current = 0;
     terminalOutcomeRef.current = 'success';
 
+    // 同步 claim 已经返回,启动流程在后台继续:本地采集与提示音先走,授权确认
+    // （beforeStart）、服务可用性检查与云端连接随后;stop() 通过 start-ready 等待
+    // 这段启动期,松手后立刻进入停止流程,不必等这里的异步步骤全部完成。
+    void (async () => {
     const { elapsedMs } = timeline;
 
     const capturePromise = startVoiceInputCaptureSession({
@@ -1525,6 +1534,12 @@ export function useVoiceInput(
     }
     captureStart.drainPendingChunks();
     resolveStartReadyState(attemptId, result);
+    })().catch((error) => {
+      log.warn('voice input start failed', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+    return true;
   }, [
     appendAudioChunk,
     buildRefinementContext,
@@ -1773,6 +1788,7 @@ export function useVoiceInput(
     isBusy: state === 'listening' || state === 'submitting' || state === 'refining',
     getLastSubmittedText: () => lastSubmittedTextRef.current,
     getLastRefinement: () => lastRefinementRef.current,
+    getState,
     start,
     stop: stopWithGate,
     cancel,

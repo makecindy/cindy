@@ -17,8 +17,17 @@ interface InteractionPromptCardShellProps {
   headerLeading?: ReactNode;
   minimizeDisabled?: boolean;
   children: ReactNode;
+  /**
+   * Rendered between the scroll region and the footer, outside the scrollport
+   * so it stays visible while long content scrolls. Used for permanent entries
+   * that must always remain reachable (see DESIGN.md §4 catalog dialogs).
+   */
+  pinnedContent?: ReactNode;
   footer?: ReactNode;
   className?: string;
+  /** Receives the card's outer element (restore button or expanded card) so a
+   * feature can tell its own controls apart from the rest of the page. */
+  rootRef?: (node: HTMLElement | null) => void;
 }
 
 /**
@@ -39,12 +48,15 @@ export function InteractionPromptCardShell({
   headerLeading,
   minimizeDisabled = false,
   children,
+  pinnedContent,
   footer,
   className,
+  rootRef,
 }: InteractionPromptCardShellProps) {
   if (collapsible && viewerState === 'minimized') {
     return (
       <button
+        ref={rootRef}
         type="button"
         onClick={() => onViewerStateChange('expanded')}
         aria-label={restoreAriaLabel}
@@ -78,6 +90,7 @@ export function InteractionPromptCardShell({
 
   return (
     <div
+      ref={rootRef}
       className={cn(
         'w-full rounded-[12px] border p-[16px]',
         'border-[var(--ask-card-border)] bg-[var(--ask-card-bg)]',
@@ -112,6 +125,7 @@ export function InteractionPromptCardShell({
         >
           {children}
         </div>
+        {pinnedContent}
         {footer}
       </div>
     </div>

@@ -8,17 +8,14 @@
  *
  * Contract invariants (re-stated; full version in tech spec):
  *   1. download() resolves DownloadResult or rejects DownloadError, no other types.
- *   2. onProgress.loaded is monotonic non-decreasing within a single download.
+ *   2. onProgress reports raw transport bytes; callers normalize display progress
+ *      across retries (a server may reject resume and restart from zero).
  *   3. resolve implies SHA256 already verified — no need to re-check.
  */
 
 import path from 'node:path';
 import { Scheduler } from './scheduler';
-import {
-  DownloadError,
-  type DownloadOptions,
-  type DownloadResult,
-} from './types';
+import { DownloadError, type DownloadOptions, type DownloadResult } from './types';
 
 let _scheduler: Scheduler | null = null;
 function getScheduler(): Scheduler {
@@ -38,6 +35,29 @@ function validate(opts: DownloadOptions): void {
   if (typeof opts?.sha256 !== 'string' || !/^[0-9a-fA-F]{64}$/.test(opts.sha256)) {
     throw new DownloadError('INVALID_ARG', 'sha256 must be 64-char hex');
   }
+  for (const value of [opts.expectedSize, opts.maxBytes]) {
+    if (value !== undefined && (!Number.isSafeInteger(value) || value < 0)) {
+      throw new DownloadError('INVALID_ARG', 'Download size must be a nonnegative integer');
+    }
+  }
+  if ((opts.expectedSize ?? 0) > (opts.maxBytes ?? Infinity)) {
+    throw new DownloadError('SIZE', 'Expected download exceeds allowed size');
+  }
+  for (const value of Object.values(opts.timeout ?? {})) {
+    if (!Number.isSafeInteger(value) || value <= 0)
+      throw new DownloadError('INVALID_ARG', 'Invalid download timeout');
+  }
+}
+
+function normalize(opts: DownloadOptions): DownloadOptions {
+  validate(opts);
+  return { ...opts, targetPath: path.resolve(opts.targetPath), sha256: opts.sha256.toLowerCase() };
+}
+
+/** A consumer-owned queue; bulk plugin downloads never queue ahead of app updates. */
+export function createDownloader() {
+  const scheduler = new Scheduler({ maxConcurrent: 1 });
+  return (opts: DownloadOptions): Promise<DownloadResult> => scheduler.enqueue(normalize(opts));
 }
 
 /**
@@ -47,8 +67,7 @@ function validate(opts: DownloadOptions): void {
  * resolves only after the file is at `targetPath` and verified.
  */
 export function download(opts: DownloadOptions): Promise<DownloadResult> {
-  validate(opts);
-  return getScheduler().enqueue({ ...opts, sha256: opts.sha256.toLowerCase() });
+  return getScheduler().enqueue(normalize(opts));
 }
 
 /**
@@ -57,9 +76,7 @@ export function download(opts: DownloadOptions): Promise<DownloadResult> {
  */
 export function cleanup(targetPath: string): Promise<void> {
   if (!path.isAbsolute(targetPath)) {
-    return Promise.reject(
-      new DownloadError('INVALID_ARG', 'targetPath must be absolute'),
-    );
+    return Promise.reject(new DownloadError('INVALID_ARG', 'targetPath must be absolute'));
   }
   return getScheduler().cleanup(targetPath);
 }
@@ -83,5 +100,6 @@ export type {
   RetryConfig,
   TimeoutConfig,
   Logger,
+  DownloadRequest,
 } from './types';
 export { DownloadError } from './types';

@@ -1,3 +1,4 @@
+import { modelNeedsReselection } from './modelReselection';
 /**
  * Shared model and permission selection for new and existing tasks.
  * iOS presents native Form pages inside one system sheet; options and permissions
@@ -10,6 +11,7 @@ import { useTranslation } from 'react-i18next';
 import { ChevronRight, Search, X } from 'lucide-react-native';
 import {
   Animated,
+  Easing,
   Platform,
   Pressable,
   ScrollView,
@@ -52,14 +54,16 @@ import {
   type ProviderModelRow,
 } from '@/session/providerModelSections';
 import { iconSize, iconStroke, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
-import { fontWeight, lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
+import { fontWeight, lineHeight, motionDuration, motionEasing, radius, spacing, typeScale } from '@/theme/tokens';
+import { useReduceMotionEnabled } from '@/hooks/useReduceMotion';
 import {
   mobileAgentLabel,
   type MobileSessionAgentKind,
 } from '@/session/sessionAgentSwitch';
 
-/** 二级 Surface 滑入/滑出时长(对齐 useContextSheetDrag 的 SNAP_ANIMATION_DURATION_MS)。 */
-const SECONDARY_SLIDE_DURATION_MS = 180;
+/** 二级 Surface 是重浮层:入场 enter / 退场 exit(DESIGN.md §14.4);减弱动态效果直接到位。 */
+const SECONDARY_SLIDE_IN_EASING = Easing.bezier(...motionEasing.out);
+const SECONDARY_SLIDE_OUT_EASING = Easing.bezier(...motionEasing.in);
 
 /** provider-aware 模式下传给列表的空 flat 集(身份稳定,防无谓重渲)。 */
 const EMPTY_FLAT_OPTIONS: readonly MobileModelOption[] = [];
@@ -248,6 +252,8 @@ function LegacyModelPickerSheet({
   const noResults = hasQuery && providerRows.length === 0 && effectiveFlatOptions.length === 0;
 
   // —— 二级视图开合(translateY 滑入滑出,动画期间锁重复触发) ——
+  const reduceMotion = useReduceMotionEnabled();
+  const animateSecondary = reduceMotion === false;
   const openSecondary = useCallback(
     (next: ModelPickerSheetView) => {
       if (Platform.OS === 'ios') { setView(next); return; }
@@ -257,14 +263,15 @@ function LegacyModelPickerSheet({
       setView(next);
       secondaryTranslate.setValue(windowHeight);
       Animated.timing(secondaryTranslate, {
-        duration: SECONDARY_SLIDE_DURATION_MS,
+        duration: animateSecondary ? motionDuration.enter : 0,
+        easing: SECONDARY_SLIDE_IN_EASING,
         toValue: 0,
         useNativeDriver: true,
       }).start(() => {
         secondaryAnimatingRef.current = false;
       });
     },
-    [secondaryTranslate, windowHeight],
+    [animateSecondary, secondaryTranslate, windowHeight],
   );
   // 行内配置图标 → 二级「模型选项」:useCallback 稳定引用,避免每次 render 都给
   // MobileModelPickerList 递新函数(破坏其下行组件的 memo 短路)。
@@ -278,14 +285,15 @@ function LegacyModelPickerSheet({
     if (secondaryAnimatingRef.current) return;
     secondaryAnimatingRef.current = true;
     Animated.timing(secondaryTranslate, {
-      duration: SECONDARY_SLIDE_DURATION_MS,
+      duration: animateSecondary ? motionDuration.exit : 0,
+      easing: SECONDARY_SLIDE_OUT_EASING,
       toValue: windowHeight,
       useNativeDriver: true,
     }).start(() => {
       secondaryAnimatingRef.current = false;
       setView({ kind: 'models' });
     });
-  }, [secondaryTranslate, windowHeight]);
+  }, [animateSecondary, secondaryTranslate, windowHeight]);
 
   // Android 返回键 / iOS 关闭手势:两段式(二级先回一级,一级才关浮窗)。
   const handleRequestClose = useCallback(() => {
@@ -370,7 +378,13 @@ function LegacyModelPickerSheet({
     </View>
   );
 
-  const agentContent = (agentSwitch ? (
+  const agentContent = (<>
+      {providersReady && modelNeedsReselection(modelVisibilityOverrides, agentKind, activeModelId, selectedProviderId) ? (
+        <Text style={styles.modelHiddenHint} testID={`${testID}.modelHiddenHint`}>
+          {t('session.common.modelHiddenReselect', { model: activeModelId })}
+        </Text>
+      ) : null}
+      {agentSwitch ? (
         <>
           <MobileAgentSwitcher
             disabled={disabled || agentSwitch.disabled}
@@ -389,7 +403,8 @@ function LegacyModelPickerSheet({
             </Text>
           ) : null}
         </>
-      ) : null);
+      ) : null}
+    </>);
 
   const primaryPinnedTop = (
     <View style={styles.pinnedTop}>
@@ -623,6 +638,13 @@ function makeStyles(colors: ThemeColors) {
     },
     pinnedTop: {
       gap: spacing.sm,
+    },
+    modelHiddenHint: {
+      color: colors.textSecondary,
+      fontSize: typeScale.footnote,
+      lineHeight: lineHeight.caption,
+      fontWeight: fontWeight.regular,
+      paddingHorizontal: spacing.xs,
     },
     agentSwitchHint: {
       color: colors.textTertiary,

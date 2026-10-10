@@ -162,7 +162,8 @@ describe('auth login-flow reset', () => {
     expect(source).toContain("'INVALID_LOGIN_TICKET',");
     expect(source).toContain("'INVALID_BIND_TICKET',");
     expect(source).toContain("'INVALID_SSO_VERIFICATION_TICKET',");
-    expect(source).toContain("? { step: 'error', code, recoverTo: 'identifier' }");
+    expect(source).toContain('const errorState = loginPreparingErrorState(');
+    expect(source).toContain('? errorState');
   });
 
   it('keeps account access tokens in memory while persisting only encrypted refresh sessions', () => {

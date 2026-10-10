@@ -105,12 +105,14 @@ describe('applyListContinuation on a real editor', () => {
 });
 
 describe('applyListBackspace on a real editor', () => {
-  it('deletes the whole empty prefix plus the line break, caret lands at end of previous line', () => {
+  it('deletes only the empty prefix and keeps the line break, caret stays on the emptied line', () => {
     const ed = makeEditor(['1. test', '2. ']);
     expect(applyListBackspace(ed.view)).toBe(true);
-    expect(docText(ed)).toBe('1. test');
-    // 光标在 "1. test" 末尾(pos 1 + 7)
-    expect(ed.state.selection.from).toBe(8);
+    expect(docText(ed)).toBe('1. test\n');
+    // 光标在空行行首(pos 1 + "1. test"(7) + br(1))
+    expect(ed.state.selection.from).toBe(9);
+    // 空行上再按一次不再拦截,交给浏览器原生退格删掉 hardBreak 回到上一行。
+    expect(applyListBackspace(ed.view)).toBe(false);
   });
 
   it('on the first line, deletes only the prefix (exits list, stays on the line)', () => {
@@ -123,7 +125,7 @@ describe('applyListBackspace on a real editor', () => {
   it('keeps indentation-aware deletion (indented empty item)', () => {
     const ed = makeEditor(['- a', '  - ']);
     expect(applyListBackspace(ed.view)).toBe(true);
-    expect(docText(ed)).toBe('- a');
+    expect(docText(ed)).toBe('- a\n');
   });
 
   it('returns false when the item still has content — normal backspace applies', () => {
@@ -150,6 +152,6 @@ describe('applyListBackspace on a real editor', () => {
     // pos = 1 + "1. a"(4) + br(1) + "2. "(3) = 9
     ed.commands.setTextSelection(9);
     expect(applyListBackspace(ed.view)).toBe(true);
-    expect(docText(ed)).toBe('1. a\n3. b');
+    expect(docText(ed)).toBe('1. a\n\n3. b');
   });
 });

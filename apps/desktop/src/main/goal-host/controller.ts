@@ -20,6 +20,7 @@ import { isTurnContinuationBoundaryEvent } from '@cindy/maker-shared/turn-contin
 
 import { buildContinuationDirective, buildFirstTurnDirective } from './directive';
 import { agentHandoffPending } from '../maker-ipc/agentHandoffPendingSingleton';
+import { onUiSessionIntervention } from '../maker-ipc/uiContinuationSignal';
 import { prependHandoffToUserMessage } from '../maker-ipc/agentHandoff';
 import {
   MAX_CONSECUTIVE_OVERLOAD_TURNS,
@@ -27,6 +28,7 @@ import {
   OVERLOAD_RESUME_DELAY_MS,
   classifyTurnOverload,
   classifyTurnUsageLimit,
+  readStructuredUsageResetAt,
 } from './usageLimit';
 import { parseVerdict, type GoalVerdict } from './verdict';
 import {
@@ -350,6 +352,8 @@ export function decideNextGoalState(prev: GoalCounters, outcome: TurnOutcome): G
 // ── 每轮事件累计状态 ─────────────────────────────────────────────────────────
 
 interface TurnAccumulator {
+  /** 创建目标之前已在运行的轮次；只保存在本生命周期内，不计入目标裁决。 */
+  precedingTurn: { session: SessionLike; generation: number } | null;
   text: string;
   sawToolUse: boolean;
   tokensThisTurn: number;
@@ -373,6 +377,7 @@ function freshTurn(
   pendingCompletion: Promise<void> | null = null,
 ): TurnAccumulator {
   return {
+    precedingTurn: null,
     text: '',
     sawToolUse: false,
     tokensThisTurn: 0,
@@ -465,6 +470,7 @@ export class GoalController {
   /** Disposal is two-phase: detach synchronously, then drain old-owner writes. */
   private disposing = false;
   private disposePromise: Promise<void> | null = null;
+  private readonly unsubscribeIntervention: () => void;
 
   /** Throw if the controller has been disposed. */
   private assertActive(): void {
@@ -474,6 +480,11 @@ export class GoalController {
   constructor(private readonly deps: GoalControllerDeps) {
     this.now = deps.now ?? (() => Date.now());
     this.debounceMs = deps.continuationDebounceMs ?? DEFAULT_DEBOUNCE_MS;
+    this.unsubscribeIntervention = onUiSessionIntervention((sessionId) => {
+      // 新消息（包括同一轮内的插话）撤销旧轮豁免，保留原有用户打断语义。
+      const turn = this.turns.get(sessionId);
+      if (turn) turn.precedingTurn = null;
+    });
   }
 
   // ── 公开 API ───────────────────────────────────────────────────────────────
@@ -486,6 +497,19 @@ export class GoalController {
     if (!objective) throw new GoalControllerInputError('objective must not be empty');
     this.cancelDeferredManualResume(sessionId);
     let entryBoundary = this.turns.get(sessionId);
+    const entrySession = this.deps.getSession(sessionId);
+    const entryGeneration = entrySession?.getTurnGeneration?.();
+    if (
+      (!entryBoundary || entryBoundary.cancelled || entryBoundary.pendingCompletion)
+      && entrySession && entryGeneration != null && entryGeneration > 0
+      && this.isBusy(sessionId)
+    ) {
+      // 必须在首次 await 前记住身份，不能把落库期间新开始的一轮也当作旧轮。
+      // Stop 或目标完成清理都可能留下 owner，而普通轮次已启动；保留原取消状态和写入屏障。
+      entryBoundary ??= freshTurn();
+      entryBoundary.precedingTurn = { session: entrySession, generation: entryGeneration };
+      this.turns.set(sessionId, entryBoundary);
+    }
     let rejectionTakeover:
       | {
           retry: { attempts: number; firstRejectedAt: number; retryNotBefore: number };
@@ -526,6 +550,7 @@ export class GoalController {
         entryBoundary.pendingPersistence,
         entryBoundary.pendingCompletion,
       );
+      takeoverBoundary.precedingTurn = entryBoundary.precedingTurn;
       this.stopSession(sessionId);
       this.turns.set(sessionId, takeoverBoundary);
       await this.awaitPendingLifecycle(takeoverBoundary);
@@ -683,6 +708,7 @@ export class GoalController {
       previousBoundary?.pendingPersistence ?? null,
       previousBoundary?.pendingCompletion ?? null,
     );
+    createBoundary.precedingTurn = previousBoundary?.precedingTurn ?? null;
     this.turns.set(sessionId, createBoundary);
     let createdState: GoalState | null = null;
     try {
@@ -1570,6 +1596,7 @@ export class GoalController {
   async dispose(): Promise<void> {
     if (this.disposePromise) return this.disposePromise;
     this.disposing = true;
+    this.unsubscribeIntervention();
     // Snapshot all old-owner persistence barriers before stopSession removes
     // their owners.  The DB may be closed as soon as account teardown returns;
     // dropping either a completion clear or a goal-state write leaves stale
@@ -1771,6 +1798,19 @@ export class GoalController {
       this.turns.set(sessionId, turn);
     }
     if (turn.cancelled) return;
+    const preceding = turn.precedingTurn;
+    if (
+      preceding && this.listenerSessions.get(sessionId) === preceding.session
+      && event.sessionTurnGeneration === preceding.generation
+      && !isTerminalAgentErrorEvent(event)
+    ) {
+      // 旧轮的正文、用量和正常结束都不属于目标首轮。真正错误仍走原有停止路径。
+      // 保留身份以忽略重复/迟到的旧事件；Stop/Clear 换掉生命周期即撤销等待。
+      if (event.type === 'done' && !isTurnContinuationBoundaryEvent(event)) {
+        this.scheduleContinuation(sessionId);
+      }
+      return;
+    }
     switch (event.type) {
       case 'text': {
         const d = event.data as { text?: string; isFinal?: boolean } | null;
@@ -1969,19 +2009,34 @@ export class GoalController {
     let lastReason = decision.lastReason;
     let shouldFire = decision.shouldFire;
     let usageResetAt: number | null = null;
+    const reportedResetAt =
+      outcome.errorKind === 'usage_limit' ? readStructuredUsageResetAt(event.data) : null;
     // 过载改判:上游没容量与账号限流是两种恢复时机。这里用固定短窗口,不去查
     // getAccountLimit——账号并没有被限流,那个接口不会给出可用的 resetAt,查了只会
     // 让目标停在 usageLimited 等人手动 resume。
     if (status === 'usageLimited' && outcome.errorKind === 'overload') {
       usageResetAt = this.now() + OVERLOAD_RESUME_DELAY_MS;
       shouldFire = false;
+    } else if (status === 'usageLimited' && reportedResetAt != null) {
+      // 错误自带重置时刻(Claude 订阅):比账号快照准,直接用。
+      usageResetAt = reportedResetAt;
+      shouldFire = false;
     } else if (status === 'usageLimited' || shouldFire) {
       const limit = this.deps.getAccountLimit
-        ? await this.deps.getAccountLimit(state.agentKind).catch(() => null)
+        ? await this.deps
+            .getAccountLimit(
+              state.agentKind,
+              sessionId,
+              // 报错原文里的时刻要先确认会话属于订阅账号才可信,交给注入端判定。
+              status === 'usageLimited' && outcome.errorKind === 'usage_limit' ? event.data : undefined,
+            )
+            .catch(() => null)
         : null;
       if (!isCurrentTurn()) return;
       if (status === 'usageLimited') {
-        usageResetAt = limit?.resetAtMs ?? null; // 被动:补 resetAt(可能拿不到→null,留待手动 resume)
+        // 被动:补 resetAt。只采纳确认已用满的时刻——未用满窗口的重置时刻与这次限流无关;
+        // 拿不到就 null,留待手动 resume。
+        usageResetAt = limit?.limited ? limit.resetAtMs : null;
         shouldFire = false;
       } else if (limit?.limited) {
         status = 'usageLimited';
@@ -1989,6 +2044,16 @@ export class GoalController {
         usageResetAt = limit.resetAtMs;
         shouldFire = false;
       }
+    }
+
+    // 共享中的任务撞上账号限额不自动恢复(Dash 2026-10-08):停在 usageLimited 由房主手动恢复。
+    if (
+      status === 'usageLimited' &&
+      outcome.errorKind !== 'overload' &&
+      usageResetAt !== null &&
+      this.deps.isSessionShared?.(sessionId)
+    ) {
+      usageResetAt = null;
     }
 
     // 目标改写(Option 1):模型澄清含糊目标后,经 refined_objective 报回更具体的目标。
@@ -2232,6 +2297,11 @@ export class GoalController {
       const state = await this.deps.storage.get(sessionId).catch(() => null);
       if (!isCurrent()) return;
       if (!state || state.status !== 'usageLimited') return; // 用户可能已 clear / 手动 resume
+      // 等待期间开始共享:到点不自动恢复账号限额(过载短窗口照常),留给房主手动恢复。
+      if (state.lastReason !== OVERLOAD_LAST_REASON && this.deps.isSessionShared?.(sessionId)) {
+        this.deps.logger.info('[goal] skipped usage auto resume — task is shared', { sessionId });
+        return;
+      }
       // 预算已经用尽时一条都不该说：下面的 resumeGoal → fireTurn 有 preflight 预算守卫，
       // 会立刻把目标转成 budgetLimited、一轮都不发，而这张卡片已经落库，会在会话里永久
       // 留下一句「正在重试目标 / 用量已恢复」——那次重试根本没发生（review #844 codex P1）。

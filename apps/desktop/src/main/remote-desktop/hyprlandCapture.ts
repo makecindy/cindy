@@ -3,6 +3,7 @@ import { execFile } from 'node:child_process';
 import { accessSync, constants } from 'node:fs';
 import { WAYLAND_DISPLAY_ID, isWaylandDesktop } from './waylandCapture';
 import type { RemoteDesktopCursorFrame, RemoteDesktopVideoSettings } from '@cindy/device-link';
+import { desktopVideoProfile } from '../../shared/remoteDesktopQuality';
 import { linuxMonitor } from './linuxDesktop';
 
 // Use the distribution's helper, never a command supplied by a remote peer or PATH.
@@ -59,7 +60,7 @@ export class HyprlandCapture {
             '-t',
             'jpeg',
             '-q',
-            settings?.bitrate === 20_000_000 ? '95' : settings?.bitrate === 8_000_000 ? '80' : '65',
+            String(Math.round(desktopVideoProfile(settings).jpegQuality * 100)),
             '-s',
             '1',
             ...(output ? ['-o', output.name] : []),

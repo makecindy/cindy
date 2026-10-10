@@ -3,7 +3,7 @@
  *
  * errandSlot(cindy-brain)只负责资格审/频控/任务表;真正的干活链在这里:
  *
- *   解析用户配置(errandPrefsStore,缺省跟随 New Maker 草稿偏好)
+ *   通过普通任务模型校验解析用户配置(pluginTaskPrefsStore)
  *     → 确保专属 errand 会话(映射存 prefs;失效/配置关键项变更则重建;
  *        请求带 sessionKey 时按 ghostId+key 分间——同钥匙同间、异钥匙各间)
  *     → 忙检(errand 会话正被占用即 BUSY,不排队——排队会让结果对不上单)
@@ -12,7 +12,7 @@
  *     → 取最终回复文字(观察器累积为主,DB 最新 assistant 消息兜底)
  *
  * 安全不变量(与 errandSlot 头注释同一契约):任务文本只进普通 user 消息;
- * 权限档只认 plan/acceptEdits/auto(存储层与本层双重钳制,bypassPermissions
+ * 权限档只认 ask/plan/acceptEdits/auto(存储层与本层双重钳制,bypassPermissions
  * 在协议上不存在);errand 会话侧边栏可见,用户可旁观可随时停;工作目录
  * 用户配置优先,插件转述的目录只认 pick 亲选台账(isUserPickedDir),
  * 台账没有即明拒——插件不能凭空指路。
@@ -21,14 +21,14 @@
  */
 
 import {
-  GHOST_ERRAND_PERMISSION_MODES,
   type GhostErrandPermissionMode,
 } from '../../shared/ghost.js';
 import type {
   GhostErrandRunner,
   GhostErrandRunOutcome,
 } from '../cindy-brain/errandSlot.js';
-import type { GhostErrandConfig } from '../cindy-brain/errandPrefsStore.js';
+import { clampPluginTaskPermissionMode, type PluginTaskConfig } from '../cindy-brain/pluginTaskPrefsStore.js';
+import type { SessionExecutionSelection } from './sessionExecutionSelection.js';
 import { observeHookTurn, type ObservableSession } from '../hook-control/turnObserver.js';
 
 /** turn 收口的兜底超时(25 分钟:低于管子 30 分钟天花板,给交卷留余量)。 */
@@ -43,13 +43,16 @@ export interface GhostErrandSessionRow {
   status: string;
   agentKind: string;
   model: string;
+  providerId?: string | null;
+  effort?: string | null;
+  fastMode?: boolean;
   permissionMode: string;
   workingDir: string | null;
   workspaceKind: string;
 }
 
 export interface GhostErrandRunnerDeps {
-  readConfig(ghostId: string): GhostErrandConfig;
+  readConfig(ghostId: string): PluginTaskConfig;
   /** sessionKey 缺省 = 插件共用间;带钥匙 = 该钥匙专属间(映射按 ghostId+key)。 */
   readSessionId(ghostId: string, sessionKey?: string): string | null;
   writeSessionId(ghostId: string, sessionId: string | null, sessionKey?: string): void;
@@ -57,6 +60,7 @@ export interface GhostErrandRunnerDeps {
   /** 建 errand 会话 DB 行(不拉 agent);config 已由本层解析合并完毕。 */
   createSession(params: {
     ghostId: string;
+    shouldContinue?: () => boolean;
     title: string | null;
     agentKind?: 'cc' | 'codex' | 'pi';
     model?: string;
@@ -68,13 +72,9 @@ export interface GhostErrandRunnerDeps {
   }): Promise<string>;
   /** 该插件的展示名(errand 会话默认标题用)。 */
   getGhostName(ghostId: string): string | null;
-  /** 缺省选型来源:New Maker 草稿偏好快照(与 Orca worker 同源)。 */
-  getDraftDefaults(vendor: 'claude-code' | 'codex' | 'pi'): {
-    model?: string;
-    effort?: string;
-    fastMode?: boolean;
-    providerId?: string | null;
-  };
+  /** Shared ordinary-task model policy; errand only adapts its own lifecycle. */
+  resolveExecution(config: PluginTaskConfig, sourceSessionId?: string, existing?: GhostErrandSessionRow): Promise<SessionExecutionSelection>;
+  captureOwner(): () => void;
   /**
    * 目录规范化(与 sessions 落库同一实现):配置目录必须先规范化再与 DB 行
    * 比对,否则"带尾斜杠 vs 不带"会让复用判定永远失败、每单都建新会话。
@@ -87,7 +87,7 @@ export interface GhostErrandRunnerDeps {
   isUserPickedDir(ghostId: string, normalizedDir: string): boolean;
   isSessionBusy(sessionId: string): boolean;
   /** 统一投递通路(sendToSessionInternal 的窄化面)。 */
-  dispatch(params: { targetSessionId: string; message: string }): Promise<
+  dispatch(params: { targetSessionId: string; message: string; ghostId: string }): Promise<
     | { ok: true; wakeKind: 'resumed' | 'already-active' | 'created' | 'queued' }
     | { ok: false; errorCode: string; message: string }
   >;
@@ -114,27 +114,22 @@ function failure(
   return { ok: false, errorCode, message };
 }
 
-/** 权限档钳制:任何来路的值都收敛进白名单,缺省 plan(只读)。 */
-export function clampErrandPermissionMode(value: unknown): GhostErrandPermissionMode {
-  return typeof value === 'string' &&
-    (GHOST_ERRAND_PERMISSION_MODES as readonly string[]).includes(value)
-    ? (value as GhostErrandPermissionMode)
-    : 'plan';
-}
-
 export function createGhostErrandRunner(deps: GhostErrandRunnerDeps): GhostErrandRunner {
   const now = deps.now ?? (() => Date.now());
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
 
-  /** 既有会话还能不能当这单的干活间:关键配置(agent/权限档/目录)变了就换新间。 */
+  /** 既有会话还能不能当这单的干活间:完整模型组合/权限档/目录变了就换新间。 */
   const sessionMatchesConfig = (
     row: GhostErrandSessionRow,
-    cfg: GhostErrandConfig,
+    execution: SessionExecutionSelection,
     permissionMode: GhostErrandPermissionMode,
     effectiveDir: string | undefined,
   ): boolean => {
     if (row.status !== 'active') return false;
-    if (cfg.agentKind && row.agentKind !== cfg.agentKind) return false;
+    if (row.agentKind !== (execution.agentKind === 'claude-code' ? 'cc' : execution.agentKind)) return false;
+    if (row.model !== execution.model || (row.providerId ?? null) !== (execution.providerId ?? null)) return false;
+    if (row.effort && row.effort !== execution.effort) return false;
+    if (!!row.fastMode !== execution.fastMode) return false;
     if (row.permissionMode !== permissionMode) return false;
     // 这单要目录(用户配置或已对账的插件转述):目录不同(或旧间还是
     // dialogue)就换新间;这单不要目录:旧的 project 间不再复用,回到
@@ -148,13 +143,23 @@ export function createGhostErrandRunner(deps: GhostErrandRunnerDeps): GhostErran
   };
 
   return async (request, hooks) => {
-    const cfg = deps.readConfig(request.ghostId);
-    const permissionMode = clampErrandPermissionMode(cfg.permissionMode);
+    const assertOwner = deps.captureOwner();
+    assertOwner();
+    const cfg = { ...deps.readConfig(request.ghostId) };
+    const assertConfig = () => {
+      assertOwner();
+      const current = deps.readConfig(request.ghostId);
+      if ((['agentKind', 'model', 'providerId', 'effort', 'fastMode', 'permissionMode', 'workingDir'] as const)
+        .some(key => current[key] !== cfg[key])) throw new Error('插件任务设置已变化，请重新发起任务');
+    };
+    // Compatibility only: existing errand callers keep their original authority.
+    // New ordinary task creation uses the shared ask default instead.
+    const permissionMode = clampPluginTaskPermissionMode(cfg.permissionMode, 'plan');
     // 与落库同一套规范化再参与比对/创建;规范化失败视为没配(回专属间)。
     const configuredDir = cfg.workingDir
       ? (deps.normalizeWorkingDir(cfg.workingDir) ?? undefined)
       : undefined;
-    // 目录取值:用户在「AI 代办」卡里的配置永远优先;没配置时才看插件在
+    // 目录取值:用户在任务设置卡里的配置永远优先;没配置时才看插件在
     // 请求里转述的目录,且只认 pick 台账里用户亲手选过的——插件不能凭空
     // 指路,否则等于让它借 Agent 的手读任意文件夹。查不到时明拒,不静默
     // 落回专属对话间:静默降级会建出一间看不到代码的会话,插件还以为成了。
@@ -164,7 +169,7 @@ export function createGhostErrandRunner(deps: GhostErrandRunnerDeps): GhostErran
       if (!requested || !deps.isUserPickedDir(request.ghostId, requested)) {
         return failure(
           'INVALID_REQUEST',
-          '这个目录不在用户亲选记录里,不能把 errand 会话建在那里;请引导用户在插件设置里重新选一次该目录(经系统选目录窗口),或在插件详情页「AI 代办」卡里配置工作目录',
+          '这个目录不在用户亲选记录里,不能在那里新建任务;请引导用户在插件设置里重新选一次该目录(经系统选目录窗口),或在插件详情页任务设置卡里配置工作目录',
         );
       }
       effectiveDir = requested;
@@ -173,42 +178,50 @@ export function createGhostErrandRunner(deps: GhostErrandRunnerDeps): GhostErran
     // ── 确保专属 errand 会话(sessionKey 缺省共用间,带钥匙各开各间) ────
     const sessionKey = request.sessionKey;
     let sessionId = deps.readSessionId(request.ghostId, sessionKey);
-    if (sessionId) {
-      const row = await deps.getSessionRow(sessionId);
-      if (!row || !sessionMatchesConfig(row, cfg, permissionMode, effectiveDir)) {
-        // 旧间不可用/配置已变:解除映射换新间(旧会话留在侧边栏,历史可查)。
-        deps.writeSessionId(request.ghostId, null, sessionKey);
-        sessionId = null;
+    const originalSessionId = sessionId;
+    let row: GhostErrandSessionRow | null;
+    let execution: SessionExecutionSelection;
+    try {
+      row = sessionId ? await deps.getSessionRow(sessionId) : null;
+      assertOwner();
+      if (sessionId && deps.isSessionBusy(sessionId)) {
+        hooks?.onSession?.(sessionId);
+        return failure('BUSY', '任务正在使用中，请稍后重试');
       }
+      execution = await deps.resolveExecution(cfg, request.sourceSessionId,
+        row?.status === 'active' ? row : undefined);
+      assertConfig();
+    } catch (error) {
+      return failure('SESSION_UNAVAILABLE', error instanceof Error ? error.message : String(error));
     }
+    if (sessionId && (!row || !sessionMatchesConfig(row, execution, permissionMode, effectiveDir))) sessionId = null;
     if (!sessionId) {
-      // 缺省选型跟随 New Maker 草稿偏好(与 Orca worker / workspace 槽同源);
-      // 配置项逐字段覆盖。model/effort 缺省最终由 mapper 兜底,这里不硬编码。
-      const vendor = cfg.agentKind === 'codex' ? 'codex' : cfg.agentKind === 'pi' ? 'pi' : 'claude-code';
-      const draft = deps.getDraftDefaults(vendor);
       const ghostName = deps.getGhostName(request.ghostId);
       try {
         sessionId = await deps.createSession({
           ghostId: request.ghostId,
-          title: request.title ?? (ghostName ? `${ghostName} · 代办` : null),
-          ...(cfg.agentKind ? { agentKind: cfg.agentKind } : {}),
-          ...(cfg.model ?? draft.model ? { model: cfg.model ?? draft.model } : {}),
-          ...(cfg.effort ?? draft.effort ? { effort: cfg.effort ?? draft.effort } : {}),
-          ...((cfg.fastMode ?? draft.fastMode) !== undefined
-            ? { fastMode: cfg.fastMode ?? draft.fastMode }
-            : {}),
-          ...((cfg.providerId ?? draft.providerId) !== undefined
-            ? { providerId: cfg.providerId ?? draft.providerId }
-            : {}),
+          title: request.title ?? ghostName,
+          ...execution,
+          effort: execution.effort ?? '',
+          agentKind: execution.agentKind === 'claude-code' ? 'cc' : execution.agentKind,
+          shouldContinue: () => { assertConfig(); return true; },
           permissionMode,
           ...(effectiveDir ? { workingDir: effectiveDir } : {}),
         });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         deps.log.warn('ghost errand session create failed', { ghostId: request.ghostId, error: message });
-        return failure('SESSION_UNAVAILABLE', `errand 会话创建失败:${message}`);
+        return failure('SESSION_UNAVAILABLE', `新建任务失败：${message}`);
       }
+      assertOwner();
       deps.writeSessionId(request.ghostId, sessionId, sessionKey);
+    }
+    if (row && sessionId === originalSessionId) {
+      const current = await deps.getSessionRow(sessionId);
+      assertOwner();
+      if (!current || !sessionMatchesConfig(current, execution, permissionMode, effectiveDir)) {
+        return failure('SESSION_UNAVAILABLE', '任务配置已变化，请重新发起；不会使用旧模型继续执行');
+      }
     }
     hooks?.onSession?.(sessionId);
 
@@ -216,10 +229,14 @@ export function createGhostErrandRunner(deps: GhostErrandRunnerDeps): GhostErran
     // 不排队:排队会让"这单的结果"对不上"正在跑的那轮"。errandSlot 已保证
     // 同插件单在途,这里挡的是用户恰好正在这间会话里亲自聊天的情况。
     if (deps.isSessionBusy(sessionId)) {
-      return failure('BUSY', 'errand 会话正被占用(可能正被用户使用),请稍后再试');
+      return failure('BUSY', '任务正被占用，请稍后再试');
+    }
+    try { assertConfig(); } catch (error) {
+      return failure('SESSION_UNAVAILABLE', error instanceof Error ? error.message : String(error));
     }
     const dispatchedAt = now();
-    const dispatched = await deps.dispatch({ targetSessionId: sessionId, message: request.message });
+    const dispatched = await deps.dispatch({ targetSessionId: sessionId, message: request.message, ghostId: request.ghostId });
+    assertOwner();
     if (!dispatched.ok) {
       if (dispatched.errorCode === 'BUSY') return failure('BUSY', dispatched.message);
       if (
@@ -242,13 +259,13 @@ export function createGhostErrandRunner(deps: GhostErrandRunnerDeps): GhostErran
       });
       return failure(
         'BUSY',
-        'errand 会话恰好正忙,本单任务已排队进该会话但结果不再取回;请稍后查看会话或重新提交',
+        '目标任务恰好正忙，本次输入已排队但结果无法自动取回；请稍后打开任务查看结果',
       );
     }
     // ── 收口:观察这一轮直到 done / 终态错误 / 超时 ─────────────────────
     const session = deps.getObservableSession(sessionId);
     if (!session) {
-      return failure('SESSION_UNAVAILABLE', 'errand 会话进程不可用,请稍后再试');
+      return failure('SESSION_UNAVAILABLE', '任务进程不可用，请稍后再试');
     }
     hooks?.onDispatched?.(sessionId);
     const observer = observeHookTurn(session, {
@@ -273,10 +290,10 @@ export function createGhostErrandRunner(deps: GhostErrandRunnerDeps): GhostErran
     } catch (err) {
       observer.stop();
       if (timedOut) {
-        return failure('TIMEOUT', '派活超时(任务可能仍在会话里继续,可打开 errand 会话查看)');
+        return failure('TIMEOUT', '任务超时（可能仍在继续运行，可打开任务查看）');
       }
       const message = err instanceof Error ? err.message : String(err);
-      return failure('TURN_FAILED', `派活这一轮失败:${message}`);
+      return failure('TURN_FAILED', `任务执行失败：${message}。请在任务中检查模型和供应商连接，修复后重试；不会自动更换模型。`);
     } finally {
       if (timer !== undefined) clearTimeout(timer);
     }
@@ -288,11 +305,15 @@ export function createGhostErrandRunner(deps: GhostErrandRunnerDeps): GhostErran
     if (!text) {
       for (let i = 0; i < DB_TEXT_RETRIES && !text; i++) {
         if (i > 0) await sleep(DB_TEXT_RETRY_DELAY_MS);
+        assertOwner();
         text = ((await deps.readLatestAssistantText(sessionId, dispatchedAt)) ?? '').trim();
+        assertOwner();
       }
     }
     if (!text) text = '(本轮没有可取回的文字回复)';
-    const row = await deps.getSessionRow(sessionId);
+    assertOwner();
+    const finalRow = await deps.getSessionRow(sessionId);
+    assertOwner();
     deps.log.info('ghost errand turn finished', {
       ghostId: request.ghostId,
       sessionId,
@@ -303,8 +324,8 @@ export function createGhostErrandRunner(deps: GhostErrandRunnerDeps): GhostErran
       ok: true,
       sessionId,
       text,
-      ...(row?.agentKind ? { agentKind: row.agentKind } : {}),
-      ...(row?.model ? { model: row.model } : {}),
+      ...(finalRow?.agentKind ? { agentKind: finalRow.agentKind } : {}),
+      ...(finalRow?.model ? { model: finalRow.model } : {}),
     };
   };
 }

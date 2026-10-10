@@ -20,7 +20,7 @@ import path from 'node:path';
 import { ManagerServer } from '../server.js';
 import { SessionRegistry, type SdkQueryFactoryOptions, type SdkQueryLike } from '../session-registry.js';
 import { wireSdkHandlers } from '../sdk-handlers.js';
-import { ensureRemoteClaudeConfigDir } from '../remote-claude-env.js';
+import { buildRemoteClaudeSdkEnv, ensureRemoteClaudeConfigDir, stripSensitiveAnthropicEnv } from '../remote-claude-env.js';
 import {
   CC_MGR_BUNDLE_VERSION,
   PROTOCOL_VERSION,
@@ -34,65 +34,6 @@ import {
 } from '../protocol.js';
 
 const MANAGER_VERSION = CC_MGR_BUNDLE_VERSION;
-
-/**
- * Strip Anthropic / Claude auth env keys from this daemon's process.env so
- * the SDK's spawn merge (`{ ...process.env, ...userEnv }`) cannot leak a
- * remote-host-side stale token over the desktop-supplied env.
- *
- * Mirrors `packages/maker-core/src/agents/claude-code/env-builder.ts` —
- * SENSITIVE_ANTHROPIC_ENV_KEYS is the single source of truth on the desktop
- * side; this list MUST stay in sync. Can't `import` cross-package because
- * cc-mgr ships standalone to remote machines (bundled via esbuild, no
- * runtime resolve of maker-core).
- *
- * Why duplicate is acceptable: the list is short, append-only, and any
- * future addition is gated by maker-core review — bundler will pick up the
- * change next desktop release, daemon code gets revisited then.
- *
- * Background: on remote hosts where the user has previously logged in with
- * `claude` CLI (or set ANTHROPIC_API_KEY in shell rc / systemd unit), those
- * envs sit in this daemon's process.env (we inherit shell env via SSH exec).
- * Desktop sends an `env` dict per query/start that overrides specific keys,
- * but SDK does `{ ...process.env, ...userEnv }` — any auth key we don't
- * overwrite leaks. Strip them at boot so the SDK only sees what desktop
- * explicitly sent.
- */
-const SENSITIVE_ANTHROPIC_ENV_KEYS = [
-  'ANTHROPIC_API_KEY',
-  'ANTHROPIC_AUTH_TOKEN',
-  'CLAUDE_CODE_OAUTH_TOKEN',
-  'CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR',
-  'CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR',
-  // 订阅身份元数据(与 OAUTH_TOKEN 配套):远端 SSH shell 的残留值经
-  // { ...process.env, ...userEnv } 合并会给 desktop 递来的凭证挂上错误
-  // scopes/档位 —— 与 desktop 侧 env-builder 同步剥离(sync with
-  // packages/maker-core/src/agents/claude-code/env-builder.ts)。
-  'CLAUDE_CODE_OAUTH_SCOPES',
-  'CLAUDE_CODE_SUBSCRIPTION_TYPE',
-  'CLAUDE_CODE_RATE_LIMIT_TIER',
-  'CLAUDE_CODE_SUBAGENT_MODEL',
-  'ANTHROPIC_BASE_URL',
-  'ANTHROPIC_UNIX_SOCKET',
-  'ANTHROPIC_CUSTOM_HEADERS',
-  'ANTHROPIC_VERTEX_PROJECT_ID',
-  'ANTHROPIC_BEDROCK_BASE_URL',
-  'ANTHROPIC_FOUNDRY_API_KEY',
-  'ANTHROPIC_FOUNDRY_BASE_URL',
-  'ANTHROPIC_FOUNDRY_RESOURCE',
-  'CLAUDE_CONFIG_DIR',
-] as const;
-
-function stripSensitiveAnthropicEnv(): string[] {
-  const stripped: string[] = [];
-  for (const key of SENSITIVE_ANTHROPIC_ENV_KEYS) {
-    if (process.env[key] !== undefined) {
-      delete process.env[key];
-      stripped.push(key);
-    }
-  }
-  return stripped;
-}
 
 /**
  * Prepend the bundled-node directory to `process.env.PATH` so SDK-spawned
@@ -296,9 +237,8 @@ async function runDaemon(socketPath: string): Promise<void> {
   // is equally correct, just easier to see in one place.
   ensureBundledNodeOnPath();
 
-  // Strip remote-host auth env (round-16 fix #4 P2): SDK does
-  // `{ ...process.env, ...userEnv }` on spawn — desktop-sent env only
-  // overrides keys it explicitly sets, but a remote-host stale
+  // Strip remote-host auth env (round-16 fix #4 P2) before SDK import and
+  // before buildRemoteClaudeSdkEnv merges the remote process environment. A stale
   // CLAUDE_CODE_OAUTH_TOKEN / ANTHROPIC_AUTH_TOKEN / ANTHROPIC_API_KEY
   // would leak into the spawned cc CLI and authenticate as the wrong
   // account (or fail with 401). Strip before any SDK call.
@@ -331,7 +271,7 @@ async function runDaemon(socketPath: string): Promise<void> {
       options: {
         cwd,
         model,
-        env,
+        env: buildRemoteClaudeSdkEnv(env),
         ...(mcpServers ? { mcpServers: mcpServers as any } : {}),
         ...(permissionMode ? { permissionMode: permissionMode as any } : {}),
         ...(systemPrompt !== undefined ? { systemPrompt: systemPrompt as any } : {}),

@@ -890,7 +890,7 @@ describe('maker:event hot path ordering', () => {
     );
     expect(codexDoneSource).toContain('const isCustomProviderRoute =');
     expect(codexDoneSource).toContain('turnContext.isUserProviderRoute');
-    expect(codexDoneSource).toMatch(/&&\s*pricingModel\.startsWith\('codex\/'\);/);
+    expect(codexDoneSource).toMatch(/&&\s*isCodexGatewayWireModel\(pricingModel\);/);
     expect(codexDoneSource).toMatch(/&&\s*isExclusiveXaiModelId\(pricingModel\);/);
     expect(codexDoneSource).toContain('const hasGatewayKey = Boolean(readClaudeApiKey());');
     expect(codexDoneSource).toContain('const hasEffectiveGatewayRoute =');
@@ -1023,8 +1023,8 @@ describe('maker:event hot path ordering', () => {
     const claudeCostFallback = claudeDoneSource.slice(
       claudeDoneSource.indexOf("} else if (typeof cumulative === 'number' && cumulative >= 0)"),
     );
-    expect(claudeCostFallback).toMatch(
-      /buildClaudeTurnUsageDetails\(\s*undefined,\s*undefined,\s*resolvedModel,/,
+    expect(claudeCostFallback).not.toMatch(
+      /buildClaudeTurnUsageDetails\(\s*doneData\??\.usage/,
     );
     expect(claudeCostFallback).toContain(
       "if (route !== 'provider-api' || turnContext.accessKind === 'managed')",

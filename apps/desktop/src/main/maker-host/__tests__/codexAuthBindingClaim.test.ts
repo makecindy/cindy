@@ -27,6 +27,12 @@ vi.mock('electron', () => ({
   safeStorage: { isEncryptionAvailable: () => false },
 }));
 
+// Skill discovery is covered separately; keep cold plugin transforms out of auth timing.
+vi.mock('../managed-skills.js', () => ({
+  listCindyManagedSkills: async () => [],
+  cindyManagedSkillRoots: async () => [],
+}));
+
 vi.mock('@cindy/maker-core', () => ({}));
 
 vi.mock('../../authBoundaryQuarantine.js', async (importOriginal) => {
@@ -91,7 +97,7 @@ function readBindingFile(bindingFile: string): Record<string, unknown> {
 }
 
 function writeStableProjectionOwner(ownerId: string | null): void {
-  const markerDir = path.join(os.homedir(), '.cindy');
+  const markerDir = h.userDataDir;
   fs.mkdirSync(markerDir, { recursive: true });
   fs.writeFileSync(
     path.join(markerDir, 'ghost-skill-projection-boundary.json'),

@@ -13,6 +13,11 @@ import { DESKTOP_VISIBLE_SESSION_SOURCES } from '../../shared/sessionSource.js';
 import { getSessionInterruptionBootAt } from './sessionInterruptionBoot';
 import { stripInternalWebCitations } from '@cindy/maker-shared/internal-citation';
 import { markdownPreviewText } from '../../shared/markdownPreviewText.js';
+import {
+  parseOrcaRemoteLead,
+  serializeOrcaRemoteLead,
+  type OrcaRemoteLead,
+} from '../../shared/orcaRemoteWorker.js';
 
 import type {
   sessions,
@@ -267,6 +272,8 @@ export function sessionToCamel(row: SessionRowWithCount): Session {
     extraDirs: safeParseStringArray(row.extraDirs),
     writableDirs: safeParseStringArray(row.writableDirs),
     remoteHostId: row.remoteHostId ?? null,
+    agentDeviceId: row.agentDeviceId ?? null,
+    orcaRemoteLead: parseOrcaRemoteLead(row.orcaRemoteLead ?? null),
     // interrupted-turn-resume:「疑似中断」判定的两个时间戳(unix ms 原样透出,
     // renderer 打开会话时比较 startedAt > endedAt,见 sessionActiveTurn.ts)。
     activeTurnStartedAt: row.activeTurnStartedAt ?? null,
@@ -372,6 +379,10 @@ export function sessionCreateToRow(
         writableDirs?: string[];
         /** Remote codex (P2): 远端 SSH host alias; null/undefined = 本地。 */
         remoteHostId?: string | null;
+        /** Agent 在同账号另一台电脑上运行时那台电脑的 deviceId; null/undefined = Agent 在本机。 */
+        agentDeviceId?: string | null;
+        /** 仅运行设备上的协同远端 Worker 入口写入(见 shared/orcaRemoteWorker.ts)。 */
+        orcaRemoteLead?: OrcaRemoteLead | null;
         /**
          * per-session 来源(供应商)显式选择,落盘 sessions.provider_id(与 update 同列)。
          * null/undefined = 不显式选,跟随该 agent 的原生默认路由(no-break)。草稿态首次
@@ -416,6 +427,9 @@ export function sessionCreateToRow(
     extraDirs: safeStringify(body?.extraDirs ?? []),
     writableDirs: safeStringify(body?.writableDirs ?? []),
     remoteHostId: normalizeRemoteHostId(body?.remoteHostId),
+    // Agent 运行在另一台电脑时与 SSH 远端互斥：两者同时给出时以 SSH 远端为准、不记录设备。
+    agentDeviceId: normalizeRemoteHostId(body?.remoteHostId) ? null : normalizeRemoteHostId(body?.agentDeviceId),
+    orcaRemoteLead: body?.orcaRemoteLead ? serializeOrcaRemoteLead(body.orcaRemoteLead) : null,
     // 显式来源:trim 后非空才入库,其余(undefined / null / 空串 / 纯空白)一律落 null,
     // 与 session-provider-store 的 null 语义对齐(null → 回落默认路由,字节级不变)。
     providerId:

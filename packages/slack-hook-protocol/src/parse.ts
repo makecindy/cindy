@@ -333,6 +333,8 @@ function validateAck(p: Record<string, unknown>): string | null {
 }
 
 function validateTurnEnd(p: Record<string, unknown>): string | null {
+  if (p.background !== undefined && p.background !== true) return 'turn.end.background must be true or absent';
+  if (p.background === true && p.clientFinal !== undefined) return 'background results cannot carry clientFinal';
   if (!isNonEmptyString(p.requestId)) return 'turn.end.requestId must be a non-empty string';
   if (!isNonEmptyString(p.externalKey)) return 'turn.end.externalKey must be a non-empty string';
   if (!isNullableString(p.sessionId)) return 'turn.end.sessionId must be a string or null';
@@ -352,6 +354,11 @@ function validateTurnEnd(p: Record<string, unknown>): string | null {
   const d = p.usage.durationMs;
   if (d !== null && (typeof d !== 'number' || !Number.isFinite(d) || d < 0)) {
     return 'turn.end.usage.durationMs must be a non-negative finite number or null';
+  }
+  if (p.clientFinal !== undefined) {
+    if (!isPlainObject(p.clientFinal) || typeof p.clientFinal.complete !== 'boolean') {
+      return 'turn.end.clientFinal must be { complete: boolean }';
+    }
   }
   return validateAttachments(p.attachments, 'turn.end');
 }
@@ -436,6 +443,57 @@ function validateTurnReopen(p: Record<string, unknown>): string | null {
   return null;
 }
 
+/** msg.op 各 purpose 允许的动作(见 types.ts MessageOpPurpose)。 */
+const MESSAGE_OP_PURPOSE_KINDS: Record<string, readonly string[]> = {
+  'turn-progress': ['send', 'edit', 'delete'],
+  'turn-final': ['send', 'media'],
+  'interaction-card': ['send', 'edit'],
+};
+
+/**
+ * purpose 及其附属字段的联动。附属字段只认对应 purpose: 带错位置的字段一律拒收,
+ * 免得执行器把一条普通 send 当成终稿段 / 卡片登记。
+ */
+function validateMessageOpPurpose(p: Record<string, unknown>, kind: unknown): string | null {
+  const purpose = p.purpose;
+  if (purpose === undefined) {
+    if (p.finalPart !== undefined || p.interactionId !== undefined || p.interactionClosed !== undefined) {
+      return 'msg.op.finalPart / interactionId / interactionClosed require a matching purpose';
+    }
+    return null;
+  }
+  // 只认自有键: 'constructor' / '__proto__' 这类继承属性不能当成合法 purpose。
+  const kinds =
+    typeof purpose === 'string' && Object.hasOwn(MESSAGE_OP_PURPOSE_KINDS, purpose)
+      ? MESSAGE_OP_PURPOSE_KINDS[purpose]
+      : undefined;
+  if (!kinds) return 'msg.op.purpose must be one of: turn-progress, turn-final, interaction-card';
+  // purpose 按 requestId 归属到一轮(服务端据此核验设备归属并登记消息), 缺了它服务端
+  // 无从判断这条消息归谁清理。
+  if (!isNonEmptyString(p.requestId)) return `msg.op.requestId is required when purpose is ${purpose}`;
+  if (!kinds.includes(kind as string)) {
+    return `msg.op.purpose ${purpose} only applies to ${kinds.join('/')}`;
+  }
+  if (purpose === 'turn-final') {
+    if (typeof p.finalPart !== 'number' || !Number.isSafeInteger(p.finalPart) || p.finalPart < 0) {
+      return 'msg.op.finalPart must be a non-negative safe integer when purpose is turn-final';
+    }
+  } else if (p.finalPart !== undefined) {
+    return 'msg.op.finalPart only applies to purpose turn-final';
+  }
+  if (purpose === 'interaction-card') {
+    if (!isNonEmptyString(p.interactionId)) {
+      return 'msg.op.interactionId is required when purpose is interaction-card';
+    }
+    if (p.interactionClosed !== undefined && (typeof p.interactionClosed !== 'boolean' || kind !== 'edit')) {
+      return 'msg.op.interactionClosed must be a boolean on interaction-card edit';
+    }
+  } else if (p.interactionId !== undefined || p.interactionClosed !== undefined) {
+    return 'msg.op.interactionId / interactionClosed only apply to purpose interaction-card';
+  }
+  return null;
+}
+
 /**
  * msg.op: 内容面上收客户端后的消息操作动词。
  *
@@ -465,6 +523,8 @@ function validateMessageOp(p: Record<string, unknown>): string | null {
   if (!isPlainObject(p.action)) return 'msg.op.action must be an object';
   const action = p.action as Record<string, unknown>;
   const kind = action.kind;
+  const purposeError = validateMessageOpPurpose(p, kind);
+  if (purposeError) return purposeError;
   if (kind === 'send' || kind === 'edit') {
     if (typeof action.text !== 'string') return `msg.op.action.text must be a string`;
     if (kind === 'edit' && !isNonEmptyString(action.messageId)) {
@@ -477,6 +537,26 @@ function validateMessageOp(p: Record<string, unknown>): string | null {
       action.tier !== 'plain'
     ) {
       return 'msg.op.action.tier must be one of: rich, html, plain';
+    }
+    if (action.buttons !== undefined) {
+      if (
+        !Array.isArray(action.buttons) ||
+        action.buttons.some(
+          (row) =>
+            !Array.isArray(row) ||
+            row.some(
+              (b) =>
+                !isPlainObject(b) ||
+                !isNonEmptyString((b as Record<string, unknown>).token) ||
+                typeof (b as Record<string, unknown>).label !== 'string',
+            ),
+        )
+      ) {
+        return 'msg.op.action.buttons must be rows of { token, label }';
+      }
+    }
+    if (action.effectId !== undefined && (kind !== 'send' || !isNonEmptyString(action.effectId))) {
+      return 'msg.op.action.effectId must be a non-empty string on send';
     }
     return null;
   }
@@ -541,6 +621,16 @@ function validateMessageOpResult(p: Record<string, unknown>): string | null {
     (typeof p.retryAfterMs !== 'number' || !Number.isFinite(p.retryAfterMs) || p.retryAfterMs < 0)
   ) {
     return 'msg.op.result.retryAfterMs must be a non-negative finite number or null';
+  }
+  if (p.errorCode !== undefined && p.errorCode !== null && !isNonEmptyString(p.errorCode)) {
+    return 'msg.op.result.errorCode must be a non-empty string or null';
+  }
+  if (
+    p.channelErrorCode !== undefined &&
+    p.channelErrorCode !== null &&
+    (typeof p.channelErrorCode !== 'number' || !Number.isInteger(p.channelErrorCode))
+  ) {
+    return 'msg.op.result.channelErrorCode must be an integer or null';
   }
   return null;
 }
@@ -1243,6 +1333,49 @@ function validateProviderBehaviorSet(p: Record<string, unknown>): string | null 
   return null;
 }
 
+const TELEGRAM_COMMAND_NAME = /^[a-z0-9_]{1,32}$/;
+const TELEGRAM_LANGUAGE_CODE = /^[a-z]{2}$/;
+
+/**
+ * provider.commands.set: 只校验 Telegram setMyCommands 的硬限制与"默认菜单有且仅有
+ * 一份"。文案与命令集合由 desktop 注册表决定, 不在协议层判。
+ */
+function validateProviderCommandsSet(p: Record<string, unknown>): string | null {
+  if (p.provider !== 'telegram') return 'provider.commands.set.provider must be telegram';
+  if (!Array.isArray(p.menus) || p.menus.length === 0) {
+    return 'provider.commands.set.menus must be a non-empty array';
+  }
+  const seen = new Set<string>();
+  for (const menu of p.menus) {
+    if (!isPlainObject(menu)) return 'provider.commands.set.menus[] must be objects';
+    const code = menu.languageCode;
+    if (code !== null && (typeof code !== 'string' || !TELEGRAM_LANGUAGE_CODE.test(code))) {
+      return 'provider.commands.set.menus[].languageCode must be a two-letter code or null';
+    }
+    const key = code === null ? '' : code;
+    if (seen.has(key)) return 'provider.commands.set.menus[].languageCode must be unique';
+    seen.add(key);
+    if (!Array.isArray(menu.commands) || menu.commands.length > 100) {
+      return 'provider.commands.set.menus[].commands must be an array of at most 100 items';
+    }
+    for (const item of menu.commands) {
+      if (!isPlainObject(item)) return 'provider.commands.set commands[] must be objects';
+      if (typeof item.command !== 'string' || !TELEGRAM_COMMAND_NAME.test(item.command)) {
+        return 'provider.commands.set commands[].command must match [a-z0-9_]{1,32}';
+      }
+      if (
+        typeof item.description !== 'string' ||
+        item.description.length === 0 ||
+        item.description.length > 256
+      ) {
+        return 'provider.commands.set commands[].description must be 1-256 characters';
+      }
+    }
+  }
+  if (!seen.has('')) return 'provider.commands.set.menus must include the default menu (languageCode null)';
+  return null;
+}
+
 function validateProviderBehaviorState(p: Record<string, unknown>): string | null {
   const selectorError = validateProviderBehaviorSelector(p, 'provider.behavior.state');
   if (selectorError) return selectorError;
@@ -1421,6 +1554,7 @@ const PAYLOAD_VALIDATORS: Record<HookMessageType, (p: Record<string, unknown>) =
   'provider.behavior.get': validateProviderBehaviorGet,
   'provider.behavior.set': validateProviderBehaviorSet,
   'provider.behavior.state': validateProviderBehaviorState,
+  'provider.commands.set': validateProviderCommandsSet,
 };
 
 /**

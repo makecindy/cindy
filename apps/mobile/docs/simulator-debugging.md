@@ -416,6 +416,31 @@ Keyboard covers the composer
 behavior, safe-area insets, and composer bottom spacing together. Do not validate
 keyboard layout with only the hardware keyboard.
 
+## Android Rendering Performance
+
+- Record the running AVD's actual RAM, GPU backend, CPU count, resolution,
+  installed build, source label, and uptime. `config.ini` can differ from the
+  running emulator's command-line overrides (`hardware-qemu.ini`).
+- First repeat a fixed scroll in Android Settings as an environment control.
+  If it also stalls, save `dumpsys gfxinfo`, memory/swap counters and a Perfetto
+  trace before investigating the app. Cold boot the same AVD without loading or
+  saving a snapshot, preserve user data, and repeat the control with the same
+  hardware settings. Do not attribute this recovery to an application patch.
+- For the app, verify the updated bundle was actually loaded after restarting
+  Metro through `mobile:sim:start`. A development client can continue running
+  cached code after Metro exits. Focus/page assertions must pass before each
+  scripted interaction; an aborted sequence is not a performance sample.
+- Warm each version, repeat the same interaction at least three times, and keep
+  builds, animation settings and simulator configuration identical. Do not run
+  builds, type checks or tests concurrently with sampling. Record frame count,
+  missed-deadline count and frame-time percentiles together: adding a native
+  exit animation changes the denominator of the jank percentage.
+- Use Perfetto to separate React/Fabric mount work, Compose recomposition,
+  RenderThread and graphics-buffer waits. `gfxinfo` for a removed popup can omit
+  that window's frames; retain snapshots while the popup is open as well as the
+  process totals. Debug/emulator results identify regressions, but do not prove
+  release-build performance on physical devices.
+
 ## Before Asking For Manual Retest
 
 Run this checklist:

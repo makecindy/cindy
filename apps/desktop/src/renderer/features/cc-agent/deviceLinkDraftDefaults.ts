@@ -145,13 +145,14 @@ export function resolveDeviceLinkDraftDefaults(
   const isActiveModel = chosen.id === remoteDraft?.model;
   // 新建草稿没有 live 会话需要保护:全局模型预设存在时,即使是首页当前显示模型也优先采用。
   // agentKind 缺失时保留旧调用方语义,方便旧测试 / 兼容入口逐步迁移。
-  // 新快照写 `${agent}:${providerId}`，旧快照仍可能只有 `${agent}:*`。
-  const wantedEffort = (providerPreset?.effortByModel[chosen.id] ??
-    globalPreset?.effortByModel[chosen.id] ??
+  // 新快照写 `${agent}:*` 权威槽;旧快照仍可能只有 `${agent}:${providerId}` 来源副本 —— 全局优先,
+  // 来源兜底(两处 doc 都这么承诺,实现必须同序,否则同模型换来源就换回旧档位)。
+  const wantedEffort = (globalPreset?.effortByModel[chosen.id] ??
+    providerPreset?.effortByModel[chosen.id] ??
     (isActiveModel ? remoteDraft?.effort : remoteDraft?.effortByModel?.[chosen.id])) as
     Effort | undefined;
   const presetFast =
-    providerPreset?.fastByModel[chosen.id] ?? globalPreset?.fastByModel[chosen.id];
+    globalPreset?.fastByModel[chosen.id] ?? providerPreset?.fastByModel[chosen.id];
   const wantedFast =
     presetFast ??
     (isActiveModel

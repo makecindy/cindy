@@ -15,9 +15,9 @@ vi.mock('@/device-link/DeviceLinkContext', () => ({
 }));
 vi.mock('@/session/ContextSheetCollabView', () => ({ canSubmitOrcaWorkerForm: () => true }));
 vi.mock('@/session/fullAccessConfirmation', () => ({ confirmFullAccessChange: async () => true }));
-vi.mock('@/session/remoteSessionStore', () => ({ remoteSessionStore: { applySessionPatch: vi.fn() } }));
 
 const { useOrcaTeam } = await import('@/session/useSessionOrcaCollab');
+const { sessionPendingWrites } = await import('@/session/remoteSessionStore');
 
 let root: Root;
 let host: HTMLDivElement;
@@ -139,4 +139,36 @@ it('leaves limits unknown instead of assuming defaults when they were never read
   } as unknown as MobileMakerTransport;
   await act(async () => root.render(<Probe maker={maker} leadSessionId="lead-1" />));
   expect(latest?.settings).toBeNull();
+});
+
+it('hides a Worker whose archive is in flight, even when a refresh brings it back', async () => {
+  const listWorkers = vi.fn(async () => [
+    { id: 'w-1', sessionId: 's-1', status: 'idle' },
+    { id: 'w-2', sessionId: 's-2', status: 'idle' },
+  ]);
+  await act(async () => root.render(<Probe maker={fakeMaker(listWorkers)} leadSessionId="lead-1" />));
+  const release = sessionPendingWrites.track('s-1', ['status']);
+  try {
+    // 在途期间的整表重拉(被控端还没处理归档)不得把它带回来。
+    await act(async () => { await latest!.refresh(); });
+    expect(latest?.workers.map((worker) => worker.workerId)).toEqual(['w-2']);
+  } finally {
+    release();
+  }
+  await act(async () => { await latest!.refresh(); });
+  expect(latest?.workers.map((worker) => worker.workerId)).toEqual(['w-1', 'w-2']);
+});
+
+it('drops a Worker locally and restores it at its original position', async () => {
+  const listWorkers = vi.fn(async () => [
+    { id: 'w-1', sessionId: 's-1' },
+    { id: 'w-2', sessionId: 's-2' },
+  ]);
+  await act(async () => root.render(<Probe maker={fakeMaker(listWorkers)} leadSessionId="lead-1" />));
+  const target = latest!.workers[0]!;
+  let restore: () => void = () => undefined;
+  act(() => { restore = latest!.dropWorker(target); });
+  expect(latest?.workers.map((worker) => worker.workerId)).toEqual(['w-2']);
+  act(() => restore());
+  expect(latest?.workers.map((worker) => worker.workerId)).toEqual(['w-1', 'w-2']);
 });

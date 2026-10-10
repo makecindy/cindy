@@ -73,6 +73,38 @@ export async function inspectAppDefaultModel() {
   return { current, available };
 }
 
+export interface TaskModelSelection {
+  id: string;
+  effort?: string;
+  fastMode?: boolean;
+}
+
+/** Resolve one per-task selection from the live catalog; never mutate picker/default preferences. */
+export async function resolveTaskModelSelection(selection: TaskModelSelection): Promise<BotModelRoute> {
+  const { available } = await inspectAppDefaultModel();
+  const option = available.find(entry => entry.id === selection.id);
+  if (!option) throw new Error('任务模型已不可用，请重新查询可用模型');
+  if (selection.effort !== undefined && !option.efforts.some(effort => effort === selection.effort)) {
+    throw new Error('任务模型不支持所选思考深度，请重新选择');
+  }
+  if (selection.fastMode === true && !option.supportsFastMode) {
+    throw new Error('任务模型不支持 Fast，请重新选择');
+  }
+  return { ...option.route,
+    ...(selection.effort !== undefined ? { effort: selection.effort } : {}),
+    ...(selection.fastMode !== undefined ? { fastMode: selection.fastMode } : {}),
+  };
+}
+
+/** Check a saved full route without changing the application or teammate's primary model. */
+export async function validateTaskModel(route: BotModelRoute): Promise<boolean> {
+  const { available } = await inspectAppDefaultModel();
+  return available.some(entry => entry.route.harness === route.harness
+    && entry.route.model === route.model && entry.route.providerId === route.providerId
+    && (!route.effort || entry.efforts.some(effort => effort === route.effort))
+    && (!route.fastMode || entry.supportsFastMode));
+}
+
 /** Wait for a fresh owner-fenced mirror after the real setter persisted the selected route. */
 export async function changeAppDefaultModel(id: string, effort?: string, assertCaller: () => void = () => {}) {
   assertCaller();

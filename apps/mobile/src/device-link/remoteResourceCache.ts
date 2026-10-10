@@ -3,11 +3,14 @@ import { isMobileRemoteCollectionSupported, normalizeRemoteCollectionItems, pars
 
 const PREFIX = 'cindy.remoteResources.v1.';
 const MAX_CHARS = 256 * 1024;
-type Snapshot = { home: RemoteHomeCollection[]; items: Record<string, HostedRemoteCollectionItem[]>; read: Record<string, number> };
-const empty = (): Snapshot => ({ home: [], items: {}, read: {} });
+type Snapshot = { home: RemoteHomeCollection[]; items: Record<string, HostedRemoteCollectionItem[]>; read: Record<string, number>; readSequences?: Record<string, string> };
+const empty = (): Snapshot => ({ home: [], items: {}, read: {}, readSequences: {} });
+const validSequence = (value: unknown): value is string => typeof value === 'string' && /^\d{1,30}$/.test(value);
 let epoch = 0;
 const writes = new Map<string, Promise<void>>();
 const snapshots = new Map<string, Snapshot>();
+// Users whose last disk write failed; the next update retries it even when unchanged.
+const unsaved = new Set<string>();
 const listeners = new Set<() => void>();
 let revision = 0;
 export const subscribeRemoteResourceCache = (fn: () => void) => { listeners.add(fn); return () => { listeners.delete(fn); }; };
@@ -36,6 +39,9 @@ function normalize(raw: unknown): Snapshot {
   if (value.read && typeof value.read === 'object') for (const [key, at] of Object.entries(value.read).slice(-2000)) {
     if (key.length <= 600 && typeof at === 'number' && Number.isFinite(at) && at >= 0) out.read[key] = at;
   }
+  if (value.readSequences && typeof value.readSequences === 'object') for (const [key, sequence] of Object.entries(value.readSequences).slice(-2000)) {
+    if (key.length <= 600 && validSequence(sequence)) out.readSequences![key] = sequence;
+  }
   return out;
 }
 
@@ -59,13 +65,19 @@ async function update(userId: string, change: (snapshot: Snapshot) => void): Pro
   const next = previous.then(async () => {
     const snapshot = await readRemoteResourceSnapshot(userId);
     if (expected !== epoch) return;
+    const before = JSON.stringify(snapshot);
     change(snapshot);
     const cleaned = normalize(snapshot);
-    snapshots.set(userId, cleaned); emit();
     const raw = JSON.stringify(cleaned);
+    snapshots.set(userId, cleaned);
+    // An unchanged cache must stay silent: subscribers re-render on every emit, and an
+    // open companion chat re-acknowledges its read position on render (a JS render loop).
+    if (raw === before && !unsaved.has(userId)) return;
+    if (raw !== before) emit();
     if (raw.length > MAX_CHARS) return;
-    await AsyncStorage.setItem(PREFIX + userId, raw).catch(() => undefined);
-    if (expected !== epoch) await AsyncStorage.removeItem(PREFIX + userId).catch(() => undefined);
+    const saved = await AsyncStorage.setItem(PREFIX + userId, raw).then(() => true, () => false);
+    if (expected !== epoch) { await AsyncStorage.removeItem(PREFIX + userId).catch(() => undefined); return; }
+    if (saved) unsaved.delete(userId); else unsaved.add(userId);
   });
   writes.set(userId, next);
   await next.finally(() => { if (writes.get(userId) === next) writes.delete(userId); });
@@ -76,15 +88,22 @@ export const cacheRemoteResourceItems = (userId: string, collectionId: string, i
   s.items[collectionId] = items;
   for (const row of items) {
     const key = remoteResourceReadKey(row.host.deviceId, row.item.ref.id);
-    if (row.item.ref.kind === 'bot' && s.read[key] === undefined) s.read[key] = row.item.display.lastReplyAt ?? 0;
+    if ((row.item.ref.kind === 'bot' || row.item.ref.kind === 'bot-group') && s.read[key] === undefined) s.read[key] = row.item.display.lastReplyAt ?? 0;
   }
 });
-export const markRemoteResourceRead = (userId: string, deviceId: string, resourceId: string, at: number) => update(userId, (s) => {
+export const markRemoteResourceRead = (userId: string, deviceId: string, resourceId: string, at: number, sequence?: string) => update(userId, (s) => {
   const key = remoteResourceReadKey(deviceId, resourceId);
   if (Number.isFinite(at) && at >= 0) s.read[key] = Math.max(s.read[key] ?? 0, at);
+  if (validSequence(sequence)) {
+    const sequences = s.readSequences ??= {};
+    if (sequences[key] === undefined || BigInt(sequence) > BigInt(sequences[key])) sequences[key] = sequence;
+  }
 });
-export function isRemoteResourceUnread(userId: string, deviceId: string, resourceId: string, at?: number): boolean {
-  const read = snapshots.get(userId)?.read[remoteResourceReadKey(deviceId, resourceId)];
+export function isRemoteResourceUnread(userId: string, deviceId: string, resourceId: string, at?: number, sequence?: string): boolean {
+  const snapshot = snapshots.get(userId);
+  const key = remoteResourceReadKey(deviceId, resourceId);
+  if (validSequence(sequence)) return BigInt(sequence) > BigInt(snapshot?.readSequences?.[key] ?? '0');
+  const read = snapshot?.read[key];
   return at !== undefined && read !== undefined && at > read;
 }
 /** Name the cached Bot whose conversation link is this task. Presentation only; access stays live. */
@@ -100,7 +119,7 @@ export function cachedBotItem(userId: string, collectionId: string, deviceId: st
     && item.ref.kind === 'bot' && item.ref.id === botId)?.item ?? null;
 }
 export async function clearRemoteResourceCache(): Promise<void> {
-  epoch += 1; snapshots.clear(); emit();
+  epoch += 1; snapshots.clear(); unsaved.clear(); emit();
   await Promise.allSettled([...writes.values()]);
   const keys = await AsyncStorage.getAllKeys().catch(() => []);
   await AsyncStorage.multiRemove(keys.filter((key) => key.startsWith(PREFIX))).catch(() => undefined);

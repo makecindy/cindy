@@ -23,9 +23,11 @@ import {
   actualSourceIdForModel,
   chatEligibleSourcesForModel,
   isExclusiveXaiModelId,
+  isCodexGatewayWireModel,
   resolvePiModelRoute,
   runtimeCustomProviderId,
   storedCustomProviderId,
+  stripCodexGatewayWirePrefix,
   XAI_MODEL_PREFIX,
   type AgentKind,
   type Provider,
@@ -1216,12 +1218,12 @@ export function isHostInjectedAuthSession(sessionId: string, agent: AgentKind): 
 /** 按模型选视觉后端的 agent 面：模型前缀显式指面，否则按 provider.models 归属，最后回退。 */
 function pickVisionAgent(provider: Provider, modelId: string): AgentKind | null {
   // XD 投影给 Codex 的模型本质是 Claude-wire（仅 claude-code 面、无 codex 原生），
-  // `codex/` 只是路由前缀：即使带 `codex/` 前缀也必须走 claude-code 面 / Messages，
+  // `openai-codex/` / `codex/` 只是路由前缀：即使带这些前缀也必须走 claude-code 面 / Messages，
   // 否则误走 Responses 被上游拒（rebase 后 pickVisionAgent 先按前缀选 codex 面）。
   if (provider.id === 'xd' && isXdCodexAnthropicBridgeModel(modelId)) {
     if (provider.routing['claude-code']) return 'claude-code';
   }
-  if (modelId.startsWith('codex/') && provider.routing.codex) return 'codex';
+  if (isCodexGatewayWireModel(modelId) && provider.routing.codex) return 'codex';
   if (
     (modelId.startsWith('claude-') || modelId.startsWith('anthropic/')) &&
     provider.routing['claude-code']
@@ -1240,6 +1242,17 @@ function pickVisionAgent(provider: Provider, modelId: string): AgentKind | null 
   return null;
 }
 
+/**
+ * provider 在某 runtime 由哪个目录预设创建（预设身份随模型投影带出，用户改地址后仍保留）。
+ * 视觉/探测这类直连路径用它识别「从 OpenCode Go 预设创建、但运行时 id 或地址已改」的连接。
+ */
+export function providerRuntimeCatalogPresetId(
+  provider: Provider,
+  agent: AgentKind,
+): string | undefined {
+  return (provider.models[agent] ?? []).find((model) => model.catalogPresetId)?.catalogPresetId;
+}
+
 export function resolveVisionBackendRoute(
   providerId: string,
   modelId: string,
@@ -1253,23 +1266,26 @@ export function resolveVisionBackendRoute(
   /** 路由指定的额外请求头（headerOverride 去掉客户端凭证头后）。视觉桥直连需要它们
    *  （如 anthropic-version / x-api-key / 自定义 provider 头），否则后端会拒请求（P1）。 */
   headers: Record<string, string>;
+  /** 该 runtime 的目录预设身份（如 'opencode-go'）：直连路径据此补会话头。 */
+  catalogPresetId?: string;
 } | null {
   if (isProviderRouteMutationInProgress(providerId)) return null;
   const provider = getActiveCatalog().providers.find((p) => p.id === providerId);
   if (!provider) return null;
-  // 按模型选 agent 面：模型前缀显式指面（codex/ → codex；claude- / anthropic/ → claude-code），
+  // 按模型选 agent 面：模型前缀显式指面（openai-codex/、codex/ → codex；claude- / anthropic/ → claude-code），
   // 否则按 provider.models 归属，最后回退第一个声明 routing 的 agent。对齐视觉桥旧 pickAgent。
   const agent = pickVisionAgent(provider, modelId);
   if (!agent) return null;
   const routing = providerRoutingForModel(provider, agent, modelId);
   if (!routing || routing.disabled) return null;
+  const catalogPresetId = providerRuntimeCatalogPresetId(provider, agent);
 
   // 转发上游前还原 model id（对齐 rewriteModelIdForProvider）。
-  // XD 投影给 Codex 的模型走 Claude Messages 面时，`codex/` 是路由前缀不是后端真实模型名，
+  // XD 投影给 Codex 的模型走 Claude Messages 面时，折扣前缀不是后端真实模型名，
   // 必须剥掉（否则上游 /v1/messages 收到 model:'codex/...' 404）。剥到目录裸 id。
   let model = modelId;
   if (provider.id === 'xd' && isXdCodexAnthropicBridgeModel(modelId)) {
-    model = modelId.replace(/^codex\//, '').replace(/\[1m\]$/, '');
+    model = stripCodexGatewayWirePrefix(modelId).replace(/\[1m\]$/, '');
   }
   const stripPrefix = routing.modelIdRewrite?.stripPrefix;
   if (stripPrefix && model.startsWith(stripPrefix)) {
@@ -1373,7 +1389,7 @@ export function resolveVisionBackendRoute(
     const key = gatewayKeyReader();
     if (key) headers['x-api-key'] = key;
   }
-  return { upstream, requestPath, wireProtocol, model, authorization, headers };
+  return { upstream, requestPath, wireProtocol, model, authorization, headers, ...(catalogPresetId ? { catalogPresetId } : {}) };
 }
 
 /** 当前生效的 XD 网关 key（host 注入；默认空）。 */

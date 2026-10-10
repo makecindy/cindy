@@ -1,6 +1,7 @@
 import { groupWorkRuns } from './workRunGrouping.js';
+import { isContinuationMessage } from './syntheticTrigger.js';
 import { describeToolUse } from './toolUseDescriptor.js';
-import { isAgentPlanToolName, isDeliveryProseText } from './messageRender.js';
+import { isAgentPlanToolName, isDeliveryProseText, isSteerUserRow } from './messageRender.js';
 import { isAgentTaskToolName } from './agentTask.js';
 import { extractPayloadToolResultMedia, extractPayloadToolResultFiles, extractPayloadToolCardIds } from './payloadSummary.js';
 import { isOrcaCommunicationTool, messageContentToPreview, parseMessageToolUse } from './messageNormalize.js';
@@ -194,6 +195,12 @@ function projectHistorySourceView<T extends HistoryMessageSource>(
       revision: `${last.id}:${run.length}:${hash >>> 0}`,
     } };
   };
+  // Consumers read artifacts from leaf summaries only (historyWorkSummaries), so
+  // an outer copy would repeat every child's list once per nesting level.
+  const nest = (result: GroupItem<T>, children: HistoryViewItem<T>[]): GroupItem<T> => {
+    const { artifacts: _leafOnly, ...summary } = result.summary;
+    return { ...result, summary, children };
+  };
   const toViewItem = (item: Item): HistoryViewItem<T> => item.type === 'group'
     ? { type: 'work', key: item.summary.key, summary: item.summary, ...(item.children ? { children: item.children } : {}) }
     : { type: 'messages', key: item.row.clientId || item.row.id, messages: [item.row] };
@@ -213,8 +220,7 @@ function projectHistorySourceView<T extends HistoryMessageSource>(
         else segment.push(item);
       }
       flush();
-      result.children = children;
-      return result;
+      return nest(result, children);
     }
     if (active) {
       const indexes = run.flatMap((item, index) => item.row.role === 'thinking' || item.row.role === 'tool_use' ? [index] : []);
@@ -224,7 +230,8 @@ function projectHistorySourceView<T extends HistoryMessageSource>(
     return result;
   };
   const grouped = groupWorkRuns<Item, SourceItem<T>>(source, streaming, {
-    isUserBoundary: (item) => item.type === 'source' && item.row.role === 'user',
+    isUserBoundary: (item) => item.type === 'source' && item.row.role === 'user' && !isSteerUserRow(item.row),
+    isContinuationBoundary: (item) => item.type === 'source' && isContinuationMessage(item.row),
     isAnswer: (item) => item.type === 'source' && item.row.role === 'assistant'
       && typeof item.row.content === 'string' && !!item.row.content.trim(),
     isSealedAnswer: (item) => item.type === 'source'
@@ -253,8 +260,7 @@ function projectHistorySourceView<T extends HistoryMessageSource>(
         else { flush(); children.push(toViewItem(item)); previous = timestamp(item); }
       }
       flush();
-      result.children = children;
-      return result;
+      return nest(result, children);
     },
   });
   return grouped.map(toViewItem);

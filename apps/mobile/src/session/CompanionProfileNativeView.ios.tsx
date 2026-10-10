@@ -1,7 +1,7 @@
 import { iconSize, spacing } from '@/theme';
 import { Fragment, useEffect } from 'react';
 import { Button, HStack, Image, Picker, ProgressView, RNHostView, Spacer, Text, TextField, Toggle, useNativeState } from '@expo/ui/swift-ui';
-import { accessibilityLabel, alignmentGuide, buttonStyle, contentShape, shapes, disabled, font, foregroundStyle, frame, lineLimit, listRowInsets, pickerStyle, tag } from '@expo/ui/swift-ui/modifiers';
+import { accessibilityLabel, alignmentGuide, buttonStyle, contentShape, shapes, disabled, font, foregroundStyle, frame, lineLimit, listRowInsets, pickerStyle, tag, tint } from '@expo/ui/swift-ui/modifiers';
 import { useTranslation } from 'react-i18next';
 import { resolveRemoteText, type RemoteActionField } from '@cindy/device-link';
 import { View } from 'react-native';
@@ -16,13 +16,14 @@ import { CompanionNativeContent } from './CompanionNativeContent.ios';
 
 export function CompanionNativeField({ field, values, onChange, busy }: { field: RemoteActionField; values: ProfileValues; onChange(values: ProfileValues): void; busy: boolean }) {
   const { i18n } = useTranslation();
+  const { colors } = useTheme();
   const label = resolveRemoteText(field.label, i18n.language);
   const value = typeof values[field.id] === 'string' ? values[field.id] as string : '';
   const text = useNativeState(value);
   useEffect(() => { if (text.get() !== value) text.set(value); }, [value, text]);
   const update = (value: string | boolean) => onChange({ ...values, [field.id]: value });
   if (field.id === 'avatarImageBase64') return <Section title={label}><CompanionNativeContent><CompanionPortraitPicker value={value} onChange={update} disabled={busy} /></CompanionNativeContent></Section>;
-  if (field.kind === 'toggle') return <Toggle label={label} isOn={values[field.id] === true} onIsOnChange={update} modifiers={[disabled(busy)]} />;
+  if (field.kind === 'toggle') return <Toggle label={label} isOn={values[field.id] === true} onIsOnChange={update} modifiers={[disabled(busy), tint(colors.inputCaret)]} />;
   if (field.kind === 'select') return <Picker label={label} selection={value} onSelectionChange={next => update(String(next))} modifiers={[pickerStyle('menu'), disabled(busy)]}>
     {(field.options ?? []).map(option => <Text key={option.value} modifiers={[tag(option.value)]}>{resolveRemoteText(option.label, i18n.language)}</Text>)}
   </Picker>;

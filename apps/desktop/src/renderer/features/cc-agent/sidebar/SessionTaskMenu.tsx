@@ -35,13 +35,7 @@ import {
   type TaskMoveDestination,
 } from './TaskMoveSubmenu';
 import { TaskMigrationDialog } from './TaskMigrationDialog';
-import {
-  MENU_CONTENT_CLASS,
-  MENU_ITEM_CLASS,
-  MENU_ROW_CLASS,
-  MENU_SEPARATOR_CLASS,
-  MENU_SUB_CONTENT_CLASS,
-} from './menuStyles';
+import { MENU_ITEM_CLASS, MENU_ROW_CLASS } from './menuStyles';
 
 interface Props {
   session: Session;
@@ -162,10 +156,12 @@ function ActiveSessionTaskMenu({
             SHARED_TASK_HOST_CHANNEL,
             [command],
           )
-        : window.electronAPI.sharedTask.host(command))) as { invitation: string };
+        : window.electronAPI.sharedTask.host(command))) as { invitation: string; invitationLink?: string };
       if (!current()) return;
       try {
-        await navigator.clipboard.writeText(result.invitation);
+        await navigator.clipboard.writeText(result.invitationLink
+          ? t('sharedTask.invitationMessage', { title: hosted.title || session.title, link: result.invitationLink })
+          : result.invitation);
       } catch {
         if (current()) toast.error(t('sharedTask.invitationCopyFailed'));
         return;
@@ -210,7 +206,7 @@ function ActiveSessionTaskMenu({
       {t(`ccAgent.sidebar.sessionMenu.${key}`)}
     </DropdownMenuItem>
   );
-  const separator = <DropdownMenuSeparator className={MENU_SEPARATOR_CLASS} />;
+  const separator = <DropdownMenuSeparator />;
   return (
     <div
       className="contents"
@@ -221,7 +217,7 @@ function ActiveSessionTaskMenu({
       <DropdownMenuContent
         align="start"
         sideOffset={sideOffset}
-        className={`${MENU_CONTENT_CLASS} min-w-32 overflow-hidden`}
+        className="min-w-32 overflow-hidden"
         onClick={(event) => event.stopPropagation()}
         onCloseAutoFocus={(event) => {
           if (dialog) event.preventDefault();
@@ -251,7 +247,7 @@ function ActiveSessionTaskMenu({
               </DropdownMenuSubTrigger>
               <DropdownMenuSubContent
                 sideOffset={4}
-                className={`${MENU_SUB_CONTENT_CLASS} min-w-40`}
+                className="min-w-40"
               >
                 <DropdownMenuItem
                   className={MENU_ITEM_CLASS}
@@ -287,7 +283,8 @@ function ActiveSessionTaskMenu({
           ))}
         {!guest && (
           <>
-            {!archived && !empty && !session.remoteHostId && (
+            {/* Agent 在另一台电脑运行的任务：Agent 会话记录在那台，移动与复制到其他电脑都会丢失它。 */}
+            {!archived && !empty && !session.remoteHostId && !session.agentDeviceId && (
               <TaskMoveSubmenu
                 session={session}
                 disabled={ownerActionsBlocked}

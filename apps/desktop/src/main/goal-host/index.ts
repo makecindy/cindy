@@ -14,13 +14,21 @@ import { createLogger } from '../logger.js';
 import {
   acquirePendingAgentSwitchForDirectSend,
   isSessionInTurn,
+  resolveSessionRuntimeRoute,
   stopActiveGoalTurnForClear,
 } from '../maker-ipc/register.js';
+import { isSessionSharedTaskActive } from '../device-link/sharedTaskDispatch.js';
 import { createMessage } from '../localDb/ipc/messages.js';
 import { readGoalSettings, writeGoalSettings } from '../maker-host/goal-settings-store.js';
+import { getSessionRowSnapshot } from '../localDb/ipc/sessions.js';
+import {
+  readAccountUsageLimit,
+  sessionUsesOtherMachineAccount,
+  subscriptionFamilyOf,
+} from '../usage/accountUsageLimit.js';
 import { readClaudeAccountUsageSnapshot } from '../usage/claudeAccountUsage.js';
-import { readCodexAccountUsageSnapshot } from '../usageBroadcaster.js';
 import { GoalController } from './controller';
+import { readTurnUsageResetAt } from './usageLimit.js';
 import { restoreSessionForGoal } from './sessionRestore.js';
 import { GoalStorage, type GoalDrizzleDb } from './storage';
 import type { GoalStatusUpdate, SessionLike } from './types';
@@ -89,26 +97,34 @@ export function startGoalController(deps: StartGoalControllerDeps): GoalControll
         agentMeta: { goalCompletion: summary },
       });
     },
-    // 主动配额检测:读对应 agent 的账号用量快照(codex 走 account_usage 事件落库的
-    // snapshot、claude 走 LiteLLM 轮询),判 limited + 取 resetAt(unix ms)。
-    getAccountLimit: async (agentKind) => {
-      if (agentKind === 'codex') {
-        const snap = await readCodexAccountUsageSnapshot().catch(() => null);
-        if (!snap) return null;
-        // 取"已用满(>=100%)窗口里最晚的"重置;都没满则取两窗口里最晚的(宁晚勿早)。
-        // 不能一律取 primary —— 当限流来自周 / 次要窗口时 primary 重置更早,会让目标早醒、
-        // 反复撞同一限额,直到次要窗口真正恢复(reviewer #354)。
-        const windows = [snap.primary, snap.secondary].filter(
-          (w): w is NonNullable<typeof w> => !!w && typeof w.resetsAt === 'number',
-        );
-        const exhausted = windows.filter((w) => w.usedPercent >= 100);
-        const pool = exhausted.length > 0 ? exhausted : windows;
-        const resetsAtSec = pool.length > 0 ? Math.max(...pool.map((w) => w.resetsAt as number)) : null;
-        return {
-          limited: snap.rateLimitReachedType != null,
-          resetAtMs: resetsAtSec != null ? resetsAtSec * 1000 : null,
-        };
+    // 主动配额检测:按会话所用订阅账号读用量快照(ChatGPT 订阅无论跑在 Codex、Claude Code
+    // bridge 还是 Pi 上都读同一份额度),判 limited + 取 resetAt(unix ms)。
+    getAccountLimit: async (agentKind, sessionId, turnError) => {
+      const row = await getSessionRowSnapshot(sessionId);
+      const { providerId, modelId } = resolveSessionRuntimeRoute(sessionId, agentKind, row);
+      if (subscriptionFamilyOf(agentKind, providerId)) {
+        const otherMachineAccount = sessionUsesOtherMachineAccount(row);
+        // 报错原文写明的重置时刻只对订阅账号可信(非订阅来源的是分钟级请求限流)。
+        if (turnError !== undefined) {
+          // SSH 远程会话 / 远程 Agent 的报错用那台机器的本地时间:不带时区的钟点不按本机时区理解。
+          const fromError = readTurnUsageResetAt(turnError, Date.now(), {
+            localTimeZoneTrusted: !otherMachineAccount,
+          });
+          if (fromError !== null) return { limited: true, resetAtMs: fromError };
+        }
+        // SSH 远端主机 / 远程 Agent 所在电脑用自己的登录,本机订阅快照属于另一个账号
+        // (与普通任务同一边界)。
+        if (otherMachineAccount) return null;
       }
+      // 远程 Agent 用 Agent 所在电脑自己的登录与来源:本机的订阅 / 网关快照都不是它的账号。
+      // 那台的独立账号本机目录认不出(上面判不出订阅家族)时也到这里,同样不读。
+      // SSH 沿用原有的网关预算回落。
+      if (row?.agentDeviceId && !row.remoteHostId) return null;
+      const subscription = await readAccountUsageLimit(agentKind, providerId, modelId).catch(
+        () => null,
+      );
+      if (subscription !== undefined) return subscription;
+      // 非订阅的 Claude Code 会话(Cindy 网关):读 LiteLLM 预算周期。
       if (agentKind === 'claude-code') {
         const snap = readClaudeAccountUsageSnapshot();
         if (!snap) return null;
@@ -121,6 +137,7 @@ export function startGoalController(deps: StartGoalControllerDeps): GoalControll
       return null;
     },
     // usageLimited 到点自动续跑时,落一条"用量已恢复,继续目标"提示(渲染成 system card)。
+    isSessionShared: (sessionId) => isSessionSharedTaskActive(sessionId),
     persistGoalNotice: async (sessionId, kind) => {
       await createMessage(sessionId, {
         clientId: randomUUID(),

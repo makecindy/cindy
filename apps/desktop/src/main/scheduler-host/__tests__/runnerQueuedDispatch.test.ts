@@ -18,6 +18,17 @@
  */
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 
+vi.mock('electron', () => ({ app: { getPath: () => '/tmp/cindy-scheduler-test' } }));
+vi.mock('electron-store', () => ({ default: class {
+  get(): unknown { return undefined; }
+  set(): void {}
+  delete(): void {}
+} }));
+vi.mock('original-fs', async () => {
+  const fs = await import('node:fs');
+  return { ...fs, default: fs };
+});
+
 import { AcceptedCallbackDispatchCancelled } from '../../maker-ipc/acceptedCallbackRunner.js';
 
 import type { AgentEvent, Maker, Session, SessionSendResult } from '@cindy/maker-core';
@@ -325,8 +336,11 @@ function createQueueHarness(opts: {
         if (opts.enqueueRetry) return { retry: true as const };
         if (opts.enqueueDuplicate) return { duplicate: true as const };
         enqueueCalls.push(req);
-        if (opts.acceptBeforeEnqueueResolves)
+        if (opts.acceptBeforeEnqueueResolves) {
+          try { await req.onPreparing?.(); }
+          catch (error) { req.onPreparationFailed?.(error); throw error; }
           await req.onAccepted({ permissionMode: 'ask', planMode: false });
+        }
         return { clientId: `client-${enqueueCalls.length}` };
       }),
       removeQueuedPrompt: (sessionId, clientId) => {
@@ -348,6 +362,9 @@ function createQueueHarness(opts: {
       },
     },
     async accept(permissions = { permissionMode: 'ask', planMode: false }) {
+      const request = enqueueCalls.at(-1);
+      try { await request?.onPreparing?.(); }
+      catch (error) { request?.onPreparationFailed?.(error); return; }
       await enqueueCalls.at(-1)?.onAccepted(permissions);
     },
     discard() {
@@ -378,6 +395,7 @@ function createRunnerHarness(
     checkModelRoute?: MakerScheduleRunnerDeps['checkModelRoute'];
     acquirePendingAgentSwitch?: MakerScheduleRunnerDeps['acquirePendingAgentSwitch'];
     resolveModelSelection?: MakerScheduleRunnerDeps['resolveModelSelection'];
+    applyPiModelSelectionUnderLock?: MakerScheduleRunnerDeps['applyPiModelSelectionUnderLock'];
   } = {},
 ) {
   const logger = createLogger();
@@ -415,6 +433,11 @@ function createRunnerHarness(
     schedulerQueue,
     checkModelRoute: opts.checkModelRoute,
     acquirePendingAgentSwitch: opts.acquirePendingAgentSwitch,
+    applyPiModelSelectionUnderLock: opts.applyPiModelSelectionUnderLock ?? (async (_id, model, providerId) => {
+      await liveSession.setModel(model, { providerId });
+      mocks.getSessionProvider.mockReturnValue(providerId);
+      return { status: 'applied' as const };
+    }),
     resolveModelSelection: opts.resolveModelSelection,
   });
   return {
@@ -648,7 +671,8 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
       await queue.accept();
       expect(await result).toBeInstanceOf(Error);
       expect(h.send).not.toHaveBeenCalled();
-      expect(h.session.abort).toHaveBeenCalled();
+      if (failure === 'harness-changed') expect(h.session.abort).not.toHaveBeenCalled();
+      else expect(h.session.abort).toHaveBeenCalled();
     },
   );
 
@@ -768,7 +792,9 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
       expect(req.sessionId).toBe(SESSION_ID);
       expect(req.text).toContain('PR #971 heartbeat prompt');
       expect(req.text).toContain('[Scheduled run context]');
-      expect(req.text).toContain('firedAtEpochMs: 1700000000100');
+      expect(req.text).toContain(
+        '\nschedule: 「PR #971 心跳」(schedule_id: schedule-hb)\nfiredAtEpochMs: 1700000000100',
+      );
       expect(req.text).toContain('firedAtUtc: 2023-11-14T22:13:20.100Z');
       expect(req.text).toContain('firedAtInScheduleTimezone: 2023-11-15T06:13:20[Asia/Hong_Kong]');
       expect(req.text).toContain('[Silent scheduled run]');
@@ -1220,7 +1246,33 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     expect(harness.listenerCount()).toBe(0);
   });
 
-  it('排队 Pi 跨 proxy 身份时本轮沿用当前路由，不热切 setModel', async () => {
+  it('prepares a queued Pi that went cold using its persisted route before acceptance', async () => {
+    const h = createSessionHarness(async () => ({ accepted: true }));
+    (h.session as { agentKind: string }).agentKind = 'pi';
+    (h.session as { model: string }).model = 'old-model';
+    mocks.getSessionProvider.mockReturnValue('byom-a');
+    const queue = createQueueHarness({ busy: true });
+    const transaction = vi.fn(async () => {
+      (h.session as { model: string }).model = 'new-model';
+      mocks.getSessionProvider.mockReturnValue('byom-b');
+      return { status: 'applied' as const };
+    });
+    const { runner, maker } = createRunnerHarness(h.session, queue.deps, {
+      metaModel: 'old-model', applyPiModelSelectionUnderLock: transaction,
+    });
+    const fire = runner.fire(heartbeatSchedule({
+      agentKind: 'pi', model: 'new-model', providerId: 'byom-b',
+    }), createFireContext());
+    await vi.waitFor(() => expect(queue.enqueueCalls.length).toBe(1));
+    vi.mocked(maker.getSession).mockReturnValueOnce(undefined);
+    await queue.accept();
+    expect(transaction).toHaveBeenCalledWith(SESSION_ID, 'new-model', 'byom-b',
+      { model: 'old-model', providerId: 'byom-a' }, { refreshPiConfiguration: true, source: 'agent' });
+    h.emit({ type: 'done', data: {}, source: 'pi' });
+    await expect(fire).resolves.toMatchObject({ sessionId: SESSION_ID });
+  });
+
+  it('排队 Pi 跨 proxy 身份时在发送前热切到目标来源', async () => {
     mocks.getSessionRowSnapshot.mockResolvedValue({
       status: 'active',
       userSendAt: null,
@@ -1247,8 +1299,8 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     await vi.waitFor(() => expect(queue.enqueueCalls.length).toBe(1));
     await queue.accept();
 
-    expect(harness.setModel).not.toHaveBeenCalled();
-    expect(mocks.setSessionProvider).not.toHaveBeenCalled();
+    expect(harness.setModel).toHaveBeenCalledWith('gpt-5.6-sol', { providerId: 'byom-b' });
+    expect(mocks.setSessionProvider).toHaveBeenCalledWith(SESSION_ID, 'byom-b');
     harness.emit({ type: 'done', data: {}, source: 'pi' });
     await expect(firePromise).resolves.toMatchObject({ sessionId: SESSION_ID });
   });
@@ -1315,9 +1367,11 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     await queue.accept();
 
     await expect(firePromise).rejects.toThrow(
-      'schedule Pi route sync failed before queued dispatch',
+      'set_model rejected',
     );
-    expect(harness.session.abort).toHaveBeenCalled();
+    // Preparation failed before a send reservation existed; do not abort another turn.
+    expect(harness.session.abort).not.toHaveBeenCalled();
+    expect(harness.send).not.toHaveBeenCalled();
     expect(mocks.setSessionProvider).not.toHaveBeenCalled();
   });
 
@@ -1450,6 +1504,97 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     expect(harness.session.abort).toHaveBeenCalled();
     expect(harness.setEffort).not.toHaveBeenCalled();
     expect(mocks.setSessionProvider).not.toHaveBeenCalled();
+  });
+
+  it('指定模型时先恢复排队快照，重启后的假忙不再空转顺延', async () => {
+    const h = createSessionHarness(async () => ({ accepted: true }));
+    const setFastMode = vi.fn(async () => {});
+    Object.assign(h.session, { agentKind: 'codex', model: 'shared-model', setFastMode });
+    mocks.getSessionProvider.mockReturnValue('selected');
+    let restored = false;
+    const queue = createQueueHarness({ busy: true });
+    queue.deps.isSessionBusy = () => !restored;
+    queue.deps.ensureQueueRestored = vi.fn(async () => {
+      restored = true;
+      return true;
+    });
+    const { runner } = createRunnerHarness(h.session, queue.deps, {
+      metaModel: 'shared-model',
+      acquirePendingAgentSwitch: async () => ({
+        release: vi.fn(),
+        selection: {
+          agentKind: 'codex',
+          model: 'shared-model',
+          providerId: 'selected',
+          effort: 'high',
+          fastMode: false,
+        },
+      }),
+    });
+
+    const fire = runner.fire(
+      heartbeatSchedule({
+        agentKind: 'codex',
+        modelAgentKind: 'codex',
+        model: 'shared-model',
+      }),
+      createFireContext(),
+    );
+
+    await vi.waitFor(() => expect(queue.enqueueCalls).toHaveLength(1));
+    expect(queue.deps.ensureQueueRestored).toHaveBeenCalledWith(SESSION_ID);
+    await queue.accept();
+    await vi.waitFor(() => expect(h.listenerCount()).toBe(1));
+    h.emit({ type: 'done', data: {}, source: 'pi' });
+    await expect(fire).resolves.toMatchObject({ sessionId: SESSION_ID });
+  });
+
+  it('排队快照恢复失败时顺延，不把未恢复误记成会话正忙后空转', async () => {
+    const h = createSessionHarness(async () => ({ accepted: true }));
+    const queue = createQueueHarness({ busy: true });
+    queue.deps.ensureQueueRestored = vi.fn(async () => false);
+    const { runner, notifier } = createRunnerHarness(h.session, queue.deps, {
+      acquirePendingAgentSwitch: async () => {
+        throw new Error('should not switch before restore');
+      },
+    });
+
+    const result = await runner.fire(
+      heartbeatSchedule({
+        agentKind: 'codex',
+        modelAgentKind: 'codex',
+        model: 'shared-model',
+      }),
+      createFireContext(),
+    );
+
+    expect(result).toMatchObject({ sessionId: SESSION_ID, deferred: true });
+    expect(queue.enqueueCalls).toHaveLength(0);
+    expect(notifier.notify).not.toHaveBeenCalled();
+    expect(queue.deps.ensureQueueRestored).toHaveBeenCalledWith(SESSION_ID);
+  });
+
+  it('恢复后会话仍在跑时，指定模型的心跳继续顺延且不入队', async () => {
+    const h = createSessionHarness(async () => ({ accepted: true }));
+    const queue = createQueueHarness({ busy: true });
+    queue.deps.ensureQueueRestored = vi.fn(async () => true);
+    const { runner } = createRunnerHarness(h.session, queue.deps, {
+      acquirePendingAgentSwitch: async () => {
+        throw new Error('should not switch while the session is still busy');
+      },
+    });
+
+    const result = await runner.fire(
+      heartbeatSchedule({
+        agentKind: 'codex',
+        modelAgentKind: 'codex',
+        model: 'shared-model',
+      }),
+      createFireContext(),
+    );
+
+    expect(result).toMatchObject({ sessionId: SESSION_ID, deferred: true });
+    expect(queue.enqueueCalls).toHaveLength(0);
   });
 
   it('busy 心跳跨 dynamic identity 时不入旧 thread 队列，而是顺延到安全重建点', async () => {

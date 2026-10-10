@@ -30,7 +30,8 @@ describe('mobile session main layer desktop-first noise budget', () => {
     expect(syncingSource).not.toContain('setTimeout');
     expect(rendererSource).toContain('ListEmptyComponent={syncingWhileEmpty');
     expect(rendererSource).toContain('<SyncingMessages />');
-    expect(routeSource).toContain('syncingWhileEmpty={syncingWhileEmpty}');
+    // Also syncing while a window of only hidden rows pages back (hiddenHistoryChase).
+    expect(routeSource).toContain('syncingWhileEmpty={syncingWhileEmpty || chasingHiddenHistory}');
   });
 
   it('keeps the unsynced session state focused on the current action', () => {
@@ -52,7 +53,7 @@ describe('mobile session main layer desktop-first noise budget', () => {
     expect(revokedEnd).toBeGreaterThan(revokedStart);
     expect(source.slice(revokedStart, revokedEnd)).toContain('paddingTop: topOverlayHeight + spacing.lg');
     expect(source.slice(revokedStart, revokedEnd)).toContain('<SharedTaskEndedState');
-    expect(source.slice(revokedStart, revokedEnd)).toContain("router.replace('/shared-session')");
+    expect(source.slice(revokedStart, revokedEnd)).toContain("router.replace('/devices')");
     expect(routeSource).toContain('cachedOnly={showCachedHistoryNotice}');
     expect(source.replace(/\r\n/g, '\n'))
       .toContain('useShowConnectionBanner(\n    status,\n    bannerError,');

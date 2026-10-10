@@ -17,6 +17,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { jsonObjectArg } from './json-object-arg.js';
+import { withAccountDataAccess } from './account-data-access.js';
 
 import { ContactsToolRegistry } from './cindy_contactsToolRegistry.js';
 import {
@@ -67,7 +68,7 @@ const D_CALL_TOOL =
 
 const CATEGORY_ENUM = ['search', 'read', 'write', 'manage'] as const;
 
-function registerListToolsEntry(server: McpServer, registry: ContactsToolRegistry): void {
+function registerListToolsEntry(server: McpServer, registry: ContactsToolRegistry, deps: ContactsMcpDeps): void {
   server.tool(
     'list_tools',
     D_LIST_TOOLS,
@@ -75,7 +76,7 @@ function registerListToolsEntry(server: McpServer, registry: ContactsToolRegistr
       category: z.enum(CATEGORY_ENUM).optional().describe('工具类目, 不传时返回所有类目概览'),
     },
     { readOnlyHint: true, destructiveHint: false },
-    async ({ category }) => {
+    async ({ category }) => withAccountDataAccess(deps.withAccountDataAccess, deps.getSessionContext?.().sessionId, async () => {
       if (category) {
         const tools = registry.list(category);
         // rules 去重: 同类多工具共享同一份规则文本时只下发一次
@@ -114,7 +115,7 @@ function registerListToolsEntry(server: McpServer, registry: ContactsToolRegistr
           },
         ],
       };
-    },
+    }),
   );
 }
 
@@ -126,7 +127,7 @@ function registerCallToolEntry(server: McpServer, registry: ContactsToolRegistry
       name: z.string().describe('工具名, 从 list_tools 获取 (e.g. contacts_resolve / contacts_search)'),
       args: jsonObjectArg('工具参数 JSON; 不确定 schema 可先传 {} 触发反馈'),
     },
-    async ({ name, args }) => {
+    async ({ name, args }) => withAccountDataAccess(deps.withAccountDataAccess, deps.getSessionContext?.().sessionId, async () => {
       const result = await registry.call(name, args);
       // agent 经 MCP 直写同进程 store, 绕过 IPC 层的变更广播 — 这里按类目
       // 兜底通知宿主(write/manage 均可能改库), 让设置页/管理浮层实时刷新
@@ -139,7 +140,7 @@ function registerCallToolEntry(server: McpServer, registry: ContactsToolRegistry
         }
       }
       return result;
-    },
+    }),
   );
 }
 
@@ -174,7 +175,7 @@ export function createCindyContactsMcpServer(deps: ContactsMcpDeps): McpServer {
   registerContactsExportSystemTool(registry, deps);
   registerContactsGroupTools(registry, deps);
 
-  registerListToolsEntry(server, registry);
+  registerListToolsEntry(server, registry, deps);
   registerCallToolEntry(server, registry, deps);
 
   return server;

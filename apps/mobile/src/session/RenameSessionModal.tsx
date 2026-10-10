@@ -1,4 +1,4 @@
-import { Modal, Pressable, StyleSheet } from 'react-native';
+import { Modal, StyleSheet, View } from 'react-native';
 import { ModalContentArea } from '@/platform/ModalContentArea';
 import { useTranslation } from 'react-i18next';
 import { Text, TextInput } from '@/components/AppText';
@@ -27,10 +27,14 @@ export function RenameSessionModal({
   const { t } = useTranslation();
   const canSave = draft.trim().length > 0 && !saving;
   return (
-    <Modal supportedOrientations={["portrait", "portrait-upside-down", "landscape-left", "landscape-right"]} animationType="fade" transparent visible={visible} onRequestClose={onCancel}>
-      <Pressable style={styles.backdrop} onPress={onCancel} testID="home.renameSession.backdrop">
+    <Modal supportedOrientations={["portrait", "portrait-upside-down", "landscape-left", "landscape-right"]} animationType="fade" transparent visible={visible}
+      // 带取消按钮的对话框:点背景不关闭;保存中连 Android 返回键也不关闭。
+      onRequestClose={() => {
+        if (!saving) onCancel();
+      }}>
+      <View style={styles.backdrop} testID="home.renameSession.backdrop">
         <ModalContentArea>
-        <Pressable style={styles.card} onPress={() => undefined} testID="home.renameSession.modal">
+        <View style={styles.card} testID="home.renameSession.modal">
           <Text style={styles.title}>{t('devices.list.renameSession.title')}</Text>
           <TextInput
             autoFocus
@@ -60,16 +64,16 @@ export function RenameSessionModal({
               accessibilityLabel: saving ? t('devices.list.renameSession.savingA11y') : t('devices.list.renameSession.saveA11y'),
               busy: saving,
               disabled: !canSave,
-              label: saving ? t('devices.common.saving') : t('devices.common.save'),
+              label: t('devices.common.save'),
               onPress: onConfirm,
               testID: 'home.renameSession.save',
               tone: 'primary',
             }]}
             testID="home.renameSession.actions"
           />
-        </Pressable>
+        </View>
         </ModalContentArea>
-      </Pressable>
+      </View>
     </Modal>
   );
 }
@@ -98,15 +102,16 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     fontWeight: fontWeight.semibold,
     lineHeight: lineHeight.title,
   },
+  // 单行输入统一胶囊形(与登录、设置的单行输入一致)。
   input: {
     backgroundColor: colors.surface,
     borderColor: colors.border,
-    borderRadius: radius.container,
+    borderRadius: radius.pill,
     borderWidth: StyleSheet.hairlineWidth,
     color: colors.textPrimary,
     fontSize: typeScale.body,
     minHeight: 48,
-    paddingHorizontal: spacing.md,
+    paddingHorizontal: spacing.lg,
     paddingVertical: spacing.sm,
   },
 });

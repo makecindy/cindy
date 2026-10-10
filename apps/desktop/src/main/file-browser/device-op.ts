@@ -59,6 +59,7 @@ import {
   type PushOwnerStamp,
 } from '@cindy/device-link';
 import { WorkdirWatchManager } from '@cindy/remote-file-service';
+import type { FsRpcMethods } from '@cindy/remote-file-service/protocol';
 
 import { createLogger } from '../logger.js';
 import { getDbClient } from '../localDb/client/current.js';
@@ -72,11 +73,20 @@ import {
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { uploadLocalFile } from '../device-link/mediaTransfer.js';
 import { pushToTopicSubscribers } from '../device-link/dispatch.js';
+import { getDeviceLinkInvokeContext } from '../device-link/invoke-context.js';
+import { sharedTaskFileOperation } from '../device-link/sharedTaskDispatch.js';
+import { assertSharedTaskWorkdir } from '../device-link/sharedTaskFileAccess.js';
 import { getSafeDataOwnerPushStamp } from '../device-link/broadcast-tap.js';
 import * as subscriptions from '../device-link/subscriptions.js';
 import { getRipgrepBinaryPath } from '../maker-host/runtime-configs.js';
 import { getRemoteFileBrowser } from './remote-deps.js';
 import { generateFileThumbnail } from './thumbnail.js';
+import {
+  createDirExportDeps,
+  getDirExportStatus,
+  startDirExport,
+  type DirExportDeps,
+} from './dir-export.js';
 
 const log = createLogger('file-browser/device-op');
 
@@ -256,6 +266,7 @@ interface ExportJob {
   uploaded: number;
 }
 const exportJobs = new Map<string, ExportJob>();
+let dirExportDeps: DirExportDeps | undefined;
 
 /** 终态 job 保留时长:覆盖控制端轮询间隔(1.5s)+ 瞬断容忍窗口(~40s)富余。 */
 const EXPORT_JOB_LINGER_MS = 10 * 60 * 1000;
@@ -271,6 +282,7 @@ function setExportJobTerminal(transferId: string, job: ExportJob): void {
 async function sshSearchCollect(
   hostId: string,
   q: { workdir: string; query: string; caseSensitive: boolean; maxMatches: number },
+  gate?: { beforeSend: () => void | Promise<void> },
 ): Promise<{
   matches: SearchMatch[];
   truncated: boolean;
@@ -332,8 +344,10 @@ async function sshSearchCollect(
       resolve({ matches, truncated: true, totalMatches: matches.length, totalFiles: 0 });
     }, SEARCH_COLLECT_TIMEOUT_MS);
     timer.unref?.();
-    void mgr
-      .request(hostId, 'searchStart', q)
+    // 同账号调用保持原三参数形状;共享访客在真正发起搜索前复核授权。
+    void (
+      gate ? mgr.request(hostId, 'searchStart', q, gate) : mgr.request(hostId, 'searchStart', q)
+    )
       .then((r) => {
         searchId = r.searchId;
         // 回放启动窗口内缓冲到的本次事件(可能已含终态)。
@@ -394,6 +408,15 @@ async function handleRemoteOp(args: RemoteOpArgs): Promise<unknown> {
   if (!args || typeof args.op !== 'string' || typeof args.workdir !== 'string' || !args.workdir) {
     return bad('invalid remote-op args');
   }
+  // 共享任务访客:只放行本任务工作目录内的读写(与房主一致);导出类长任务仍只给
+  // 同账号控制端。workdir 必须与本机记录的任务目录一致,先于任何 fs 访问校验。
+  const sharedTask = getDeviceLinkInvokeContext()?.sharedTask;
+  const sharedTaskOperation = sharedTask ? sharedTaskFileOperation(args.op) : null;
+  if (sharedTask && !sharedTaskOperation) return bad('REMOTE_UNSUPPORTED');
+  const sharedTaskEndpoint =
+    sharedTask && sharedTaskOperation && args.op !== 'caps'
+      ? await assertSharedTaskWorkdir(sharedTask, args.workdir, sharedTaskOperation)
+      : null;
   // 能力探测:与 workdir 无关、零 fs 访问,放在 guard 之前。老被控端没有
   // 这个分支,会走到 default 返回 `unknown op: caps`——控制端把它当确定性
   // 的"不支持压缩"信号(见 fileBrowserTransport 的 caps 缓存)。
@@ -403,6 +426,7 @@ async function handleRemoteOp(args: RemoteOpArgs): Promise<unknown> {
       gzip: true as const,
       completeDirectoryListing: true as const,
       fileRead: true as const,
+      dirExport: true as const,
     };
   }
   const guardResult = await checkRemoteWorkingDir(args.workdir);
@@ -411,7 +435,13 @@ async function handleRemoteOp(args: RemoteOpArgs): Promise<unknown> {
     throwIpcError(rejection.code, rejection.message);
   }
 
-  const exec = await resolveWorkdirExecution(args.workdir, guardResult);
+  // 共享访客已从任务记录拿到权威端点,直接按它选择本地或 SSH 执行;只有同账号
+  // 请求才按路径反查全部会话(同一路径在本地与其它 SSH 会话并存时不误判歧义)。
+  const exec: WorkdirExecution = sharedTaskEndpoint
+    ? sharedTaskEndpoint.remoteHostId
+      ? { kind: 'ssh', hostId: sharedTaskEndpoint.remoteHostId }
+      : { kind: 'local' }
+    : await resolveWorkdirExecution(args.workdir, guardResult);
   const workdir = args.workdir;
 
   if (exec.kind === 'unavailable') {
@@ -454,13 +484,42 @@ async function handleRemoteOp(args: RemoteOpArgs): Promise<unknown> {
     }
   }
 
+  if (sharedTask && sharedTaskEndpoint) {
+    // 上面的 guard / 端点判定 / 解压都是 await 边界:房主可能已撤权或移动任务目录。
+    // 落盘或读出前按最新任务记录重新绑定目录与端点(内含成员资格复核)。
+    const current = await assertSharedTaskWorkdir(sharedTask, args.workdir, sharedTaskOperation!);
+    // exec 取自请求开始时的任务端点;任务中途换了端点则拒绝,不落到旧端点。
+    if (current.remoteHostId !== sharedTaskEndpoint.remoteHostId)
+      throw new Error('[PERMISSION_DENIED] Shared task working directory endpoint mismatch');
+  }
+
   // —— SSH 二跳:直接透传给本机的 SSH file-service 路由 ——
   if (exec.kind === 'ssh') {
     const mgr = getRemoteFileBrowser();
     const hostId = exec.hostId;
+    // 共享访客:SSH 建链可能等待数秒,期间房主可能撤权或移动任务目录。每次真正
+    // 发送前按最新任务记录重新绑定目录与端点(内含成员资格复核)。
+    const gate =
+      sharedTask && sharedTaskEndpoint
+        ? {
+            beforeSend: async () => {
+              const latest = await assertSharedTaskWorkdir(
+                sharedTask,
+                args.workdir,
+                sharedTaskOperation!,
+              );
+              if (latest.remoteHostId !== hostId)
+                throw new Error(
+                  '[PERMISSION_DENIED] Shared task working directory endpoint mismatch',
+                );
+            },
+          }
+        : undefined;
+    const request = <M extends keyof FsRpcMethods>(method: M, params: FsRpcMethods[M]['params']) =>
+      gate ? mgr.request(hostId, method, params, gate) : mgr.request(hostId, method, params);
     switch (args.op) {
       case 'listDir': {
-        const { entries } = await mgr.request(hostId, 'listDir', {
+        const { entries } = await request('listDir', {
           workdir,
           relPath: args.relPath ?? '',
           hideMetaFiles: args.hideMetaFiles ?? true,
@@ -472,7 +531,7 @@ async function handleRemoteOp(args: RemoteOpArgs): Promise<unknown> {
       }
       case 'readFile': {
         try {
-          const data = await mgr.request(hostId, 'readFile', {
+          const data = await request('readFile', {
             workdir,
             relPath: args.relPath ?? '',
           });
@@ -484,9 +543,9 @@ async function handleRemoteOp(args: RemoteOpArgs): Promise<unknown> {
         }
       }
       case 'stat':
-        return mgr.request(hostId, 'stat', { workdir, relPath: args.relPath ?? '' });
+        return request('stat', { workdir, relPath: args.relPath ?? '' });
       case 'writeFile': {
-        const r = await mgr.request(hostId, 'writeFile', {
+        const r = await request('writeFile', {
           workdir,
           relPath: args.relPath ?? '',
           content: writeContent ?? '',
@@ -496,33 +555,36 @@ async function handleRemoteOp(args: RemoteOpArgs): Promise<unknown> {
       case 'createFile':
         return {
           ok: true as const,
-          stat: await mgr.request(hostId, 'createFile', { workdir, relPath: args.relPath ?? '' }),
+          stat: await request('createFile', { workdir, relPath: args.relPath ?? '' }),
         };
       case 'createFolder':
         return {
           ok: true as const,
-          stat: await mgr.request(hostId, 'createFolder', { workdir, relPath: args.relPath ?? '' }),
+          stat: await request('createFolder', { workdir, relPath: args.relPath ?? '' }),
         };
       case 'renameEntry':
         return {
           ok: true as const,
-          stat: await mgr.request(hostId, 'renameEntry', {
+          stat: await request('renameEntry', {
             workdir,
             fromRel: args.fromRel ?? '',
             toRel: args.toRel ?? '',
           }),
         };
       case 'deleteEntry':
-        await mgr.request(hostId, 'deleteEntry', { workdir, relPath: args.relPath ?? '' });
+        await request('deleteEntry', { workdir, relPath: args.relPath ?? '' });
         return { ok: true as const };
       case 'listAllFiles':
-        return mgr.request(hostId, 'listAllFiles', { workdir, cap: args.cap });
+        return request('listAllFiles', { workdir, cap: args.cap });
       case 'exportFileStart':
       case 'exportFileStatus':
       case 'fileUrl':
         // 嵌套(device-link 套 SSH)的大文件导出要先经 daemon 分片拉回被控端再
         // 上传 OSS,本期不做——控制端对嵌套会话维持 OVERSIZE 占位。
         return bad('exportFile is not supported for nested SSH workdirs yet');
+      case 'exportDirStart':
+      case 'exportDirStatus':
+        return bad('REMOTE_UNSUPPORTED: nested SSH workdir');
       case 'thumbnail':
         // 嵌套 SSH 的缩略图要先分片拉回原图再缩放,成本与收益不成比例,本期
         // 不做——控制端(手机网格)对嵌套会话回退类型占位图。
@@ -532,15 +594,19 @@ async function handleRemoteOp(args: RemoteOpArgs): Promise<unknown> {
           message: 'nested SSH workdir',
         };
       case 'searchCollect':
-        return sshSearchCollect(hostId, {
-          workdir,
-          query: args.query ?? '',
-          caseSensitive: args.caseSensitive === true,
-          maxMatches: Math.min(
-            args.maxMatches ?? SEARCH_COLLECT_MAX_MATCHES,
-            SEARCH_COLLECT_MAX_MATCHES,
-          ),
-        });
+        return sshSearchCollect(
+          hostId,
+          {
+            workdir,
+            query: args.query ?? '',
+            caseSensitive: args.caseSensitive === true,
+            maxMatches: Math.min(
+              args.maxMatches ?? SEARCH_COLLECT_MAX_MATCHES,
+              SEARCH_COLLECT_MAX_MATCHES,
+            ),
+          },
+          gate,
+        );
       default:
         return bad(`unknown op: ${args.op}`);
     }
@@ -693,6 +759,36 @@ async function handleRemoteOp(args: RemoteOpArgs): Promise<unknown> {
         size: job.size,
         uploaded: job.uploaded,
       };
+    }
+    case 'exportDirStart': {
+      // 文件夹下载(两段式第一段):路径安全与 exportFileStart 同源;打包 + 推送在后台
+      // 跑(dir-export.ts),字节直接推给发起下载的控制端,不经 relay。
+      const ctx = getDeviceLinkInvokeContext();
+      if (!ctx?.controllerDeviceId || ctx.sharedTask) return bad('REMOTE_UNSUPPORTED');
+      try {
+        // relPath 为空 = 下载工作目录本身(statEntry 不接受根,根是目录由 guard 保证)。
+        const relPath = args.relPath ?? '';
+        if (relPath && (await statEntry(workdir, relPath)).type !== 'directory') {
+          return bad('not a directory');
+        }
+        const realAbs = await fsp.realpath(path.resolve(workdir, relPath));
+        const realRoot = await fsp.realpath(workdir);
+        if (realAbs !== realRoot && !realAbs.startsWith(realRoot + path.sep)) {
+          return bad(`path escapes workdir: ${relPath}`);
+        }
+        dirExportDeps ??= createDirExportDeps();
+        return {
+          ok: true as const,
+          transferId: startDirExport(realAbs, ctx.controllerDeviceId, dirExportDeps),
+        };
+      } catch (err) {
+        return bad(String(err));
+      }
+    }
+    case 'exportDirStatus': {
+      const status = getDirExportStatus(args.transferId ?? '');
+      if (!status) return bad(`unknown transfer: ${args.transferId ?? '<none>'}`);
+      return { ok: true as const, ...status };
     }
     case 'searchCollect':
       return localSearchCollect({

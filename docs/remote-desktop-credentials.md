@@ -228,22 +228,27 @@ reject that field; actual modal recovery and user-selection still fail. The only
 submit action remains LUIBUTTON_GO and recovery buttons are never invoked. The
 current Mac preparation probe succeeds with this passive help visible.
 
-### Lock on explicit remote exit
+### Lock on remote exit and connection loss
 
 The Security panel includes a separate, default-off lock-on-exit preference. It is
 a non-secret phone-local boolean override per computer, independent of saved
-passwords and Face ID. Explicit Back/disconnect and route unmount send
-`stop.lockScreen: true` only when the host advertises `lockOnExit`. Ordinary stop,
-media recovery, display changes, background pauses and Face ID inactivity retain
-their original behavior. Network loss or force-quitting the phone cannot promise
-delivery of an exit command. Old hosts retain normal stop behavior.
+passwords and Face ID. Desktop has the same per-computer preference. New viewers
+send optional `lockOnExit` on start and heartbeats, so the host owns the policy
+before a connection fails. Explicit Back/disconnect and route unmount still send
+`stop.lockScreen: true` when supported, including to older hosts. New hosts also
+lock on signaling loss or heartbeat expiry (12-second lease, checked every second),
+without needing an exit command. Live-lease resume/takeover, display changes and
+background viewing with live heartbeats do not trigger locking. Old hosts ignore
+the optional policy fields and still need the explicit exit command.
 
 The existing authenticated Device Link request is bound to its exact peer and
 lease. The host blocks replacement starts during the bounded lock operation,
 releases held input, then the validated native helper sends the fixed macOS lock
 shortcut and confirms the current console session is locked. No password, Face ID,
 server endpoint or account-wide setting is involved. Lock failure is visible on
-the phone; only macOS currently advertises this optional capability.
+the phone; Desktop closes locally without awaiting the remote result. Background
+lock failures are logged on the host. macOS and supported Linux hosts advertise
+this optional capability.
 
 ### Stable mobile controls
 

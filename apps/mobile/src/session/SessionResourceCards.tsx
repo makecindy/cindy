@@ -26,14 +26,15 @@ export function SessionResourceCards({
   const cards = state.resources.filter(
     (resource) => resource.blocks?.length || resource.actions?.length,
   );
-  if (!cards.length && !state.failed && !state.blocked) return null;
+  // Failed reads keep polling, so they present as syncing instead of a manual retry.
+  if (!cards.length && !state.blocked) return null;
   return (
     <ScrollView
       style={{ maxHeight: height * 0.4 }}
       contentContainerStyle={styles.stack}
       keyboardShouldPersistTaps="handled"
     >
-      {!cards.length && state.blocked && !state.failed ? (
+      {!cards.length && state.blocked ? (
         <View style={[styles.card, styles.heading]}>
           <ActivityIndicator color={colors.textSecondary} />
           <Text style={styles.body}>{t('shared.syncing')}</Text>
@@ -58,12 +59,12 @@ export function SessionResourceCards({
             testID="session.resourceCard"
           >
             <View style={styles.heading}>
-              {(busy && state.fresh) || (!state.fresh && !state.failed) ? (
+              {busy || !state.fresh ? (
                 <ActivityIndicator color={colors.textSecondary} />
               ) : null}
               <Text style={styles.title}>{title}</Text>
             </View>
-            {!state.fresh && !state.failed ? (
+            {!state.fresh ? (
               <Text style={styles.body}>{t('shared.syncing')}</Text>
             ) : null}
             {body ? (
@@ -109,17 +110,6 @@ export function SessionResourceCards({
           </View>
         );
       })}
-      {state.failed ? (
-        <View style={styles.card}>
-          <Text style={styles.body}>{t('session.screen.operationFailed')}</Text>
-          <MainWindowActionButton
-            action={{
-              label: t('devices.resources.retry'),
-              onPress: state.refresh,
-            }}
-          />
-        </View>
-      ) : null}
     </ScrollView>
   );
 }

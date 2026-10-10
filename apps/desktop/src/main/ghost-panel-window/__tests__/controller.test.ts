@@ -592,6 +592,50 @@ describe('crash recovery', () => {
   });
 });
 
+describe('open timeout (window rule §3.1)', () => {
+  it('renderer shell not ready at timeout: invalidates and rebuilds with bounded recovery', () => {
+    vi.useFakeTimers();
+    try {
+      const h = makeHarness(new Set(['a']));
+      h.controller.open('a');
+      const win1 = h.created[0].win;
+
+      vi.advanceTimersByTime(5000);
+
+      // shell 未就绪:不得展示空白窗口;作废缓存并重建重开(有界恢复)。
+      expect(win1.isDestroyed()).toBe(true);
+      expect(h.created).toHaveLength(2);
+      expect(h.created[1].win.show).not.toHaveBeenCalled();
+      expect(h.created[1].win.focus).not.toHaveBeenCalled();
+
+      // 恢复额度耗尽:重建窗口再次超时后不再重建,也不展示。
+      vi.advanceTimersByTime(5000);
+      expect(h.created).toHaveLength(2);
+      expect(h.created[1].win.show).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('renderer ready but content pending at timeout: shows the mounted shell', () => {
+    vi.useFakeTimers();
+    try {
+      const h = makeHarness(new Set(['a']));
+      h.controller.open('a');
+      const win = h.created[0].win;
+      h.controller.markRendererReady(win.webContents as unknown as WebContents);
+
+      vi.advanceTimersByTime(5000);
+
+      // 仅 shell 就绪、内容未到:展示已挂载的 Loading 壳(基线允许)。
+      expect(win.show).toHaveBeenCalledTimes(1);
+      expect(win.focus).toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe('dispose', () => {
   it('dispose destroys all windows', () => {
     const h = makeHarness(new Set(['a', 'b']));

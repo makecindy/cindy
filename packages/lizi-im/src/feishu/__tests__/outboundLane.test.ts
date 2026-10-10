@@ -4,6 +4,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const larkMocks = vi.hoisted(() => {
+  const list = vi.fn<() => Promise<{ code: number; data: { items: Array<{
+    message_id: string; thread_id: string; chat_id: string; deleted?: boolean;
+  }> } }>>(async () => ({ code: 0, data: { items: [] } }));
   const create = vi.fn(async (payload: { params: unknown; data: { content: string } }) => {
     void payload;
     return { data: { message_id: 'om_created' } };
@@ -60,7 +63,7 @@ const larkMocks = vi.hoisted(() => {
       return Promise.resolve({ data: { items: [] } });
     },
   );
-  return { create, reply, deleteMessage, getMessage, patch, replyOwners, getOwners, deleteOwners };
+  return { list, create, reply, deleteMessage, getMessage, patch, replyOwners, getOwners, deleteOwners };
 });
 
 vi.mock('@larksuiteoapi/node-sdk', () => ({
@@ -68,6 +71,7 @@ vi.mock('@larksuiteoapi/node-sdk', () => ({
     im = {
       v1: {
         message: {
+          list: larkMocks.list,
           create: larkMocks.create,
           reply: larkMocks.reply,
           delete: larkMocks.deleteMessage,
@@ -155,6 +159,50 @@ describe('feishu outbound lane routing', () => {
 
   it('topic lane without an anchor rejects instead of leaking into the main chat', async () => {
     await expect(outbound.sendText('g/oc_group1/omt_t1', 'x')).rejects.toThrow(/no reply anchor/);
+    expect(larkMocks.create).not.toHaveBeenCalled();
+  });
+
+  it('restores a cold topic anchor before streaming a background result', async () => {
+    larkMocks.list.mockResolvedValueOnce({ code: 0, data: { items: [
+      { message_id: 'om_deleted', thread_id: 'omt_t1', chat_id: 'oc_group1', deleted: true },
+      { message_id: 'om_other', thread_id: 'omt_other', chat_id: 'oc_group1' },
+      { message_id: 'om_saved', thread_id: 'omt_t1', chat_id: 'oc_group1' },
+    ] } });
+    await outbound.sendCardRaw('g/oc_group1/omt_t1', { body: 'background result' });
+    await outbound.sendText('g/oc_group1/omt_t1', 'next result');
+    expect(larkMocks.list).toHaveBeenCalledTimes(1);
+    expect(larkMocks.list).toHaveBeenCalledWith({ params: {
+      container_id_type: 'thread', container_id: 'omt_t1',
+      sort_type: 'ByCreateTimeDesc', page_size: 50,
+    } });
+    expect(larkMocks.reply).toHaveBeenCalledTimes(2);
+    expect(larkMocks.reply).toHaveBeenLastCalledWith(expect.objectContaining({ path: { message_id: 'om_saved' } }));
+    expect(larkMocks.create).not.toHaveBeenCalled();
+  });
+
+  it('keeps a newer inbound anchor when history lookup finishes', async () => {
+    larkMocks.list.mockImplementationOnce(async () => {
+      outbound.pushReplyAnchor('g/oc_group1/omt_t1', 'om_live');
+      return { code: 0, data: { items: [{ message_id: 'om_old', thread_id: 'omt_t1', chat_id: 'oc_group1' }] } };
+    });
+    await outbound.sendCardRaw('g/oc_group1/omt_t1', {});
+    expect(larkMocks.reply).toHaveBeenCalledWith(expect.objectContaining({ path: { message_id: 'om_live' } }));
+  });
+
+  it('rejects anchor lookup completion after account replacement', async () => {
+    larkMocks.list.mockImplementationOnce(async () => {
+      rebindFresh(otherCreds);
+      return { code: 0, data: { items: [{ message_id: 'om_old', thread_id: 'omt_t1', chat_id: 'oc_group1' }] } };
+    });
+    await expect(outbound.sendCardRaw('g/oc_group1/omt_t1', {})).rejects.toThrow(/account replaced/);
+    expect(larkMocks.reply).not.toHaveBeenCalled();
+    expect(larkMocks.create).not.toHaveBeenCalled();
+  });
+
+  it('does not send an already resolved target through a replacement account', async () => {
+    const sending = outbound.sendText('ou_someone', 'old account output');
+    rebindFresh(otherCreds);
+    await expect(sending).rejects.toThrow(/account was replaced/);
     expect(larkMocks.create).not.toHaveBeenCalled();
   });
 
@@ -274,7 +322,10 @@ describe('feishu outbound lane routing', () => {
     });
 
     await expect(outbound.resolveReplyMessage('om_parent_image', 'oc_group1')).resolves.toEqual({
-      replyContext: { author: 'Alice', text: '[图片]' },
+      replyContext: {
+        author: 'Alice', text: '[图片]',
+        unavailableAttachments: ['引用图片：仅提供原消息记录，未下载文件内容'],
+      },
     });
   });
 

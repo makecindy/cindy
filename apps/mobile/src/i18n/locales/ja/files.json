@@ -96,6 +96,8 @@
     "downloadFailed": "ダウンロードに失敗しました",
     "fetchingVideo": "パソコンから動画を取得中…",
     "fetchingAudio": "パソコンから音声を取得中…",
+    "videoBuffering": "バッファリング中…",
+    "videoBufferingPercent": "バッファリング中 {{percent}}%",
     "fetchAvFailed": "取得に失敗しました：{{detail}}",
     "fetchPdfFailed": "PDF の取得に失敗しました：{{detail}}",
     "fetchingPdf": "パソコンから PDF を取得中…",
@@ -131,6 +133,7 @@
     "browserCancelAddress": "編集をキャンセル",
     "browserReturnToFile": "ファイルに戻る",
     "browserCopyAddress": "アドレスをコピー",
+    "browserCopiedAddress": "アドレスをコピーしました",
     "browserInvalidAddress": "有効な http または https アドレスを入力してください。",
     "browserWebsiteFailed": "ウェブページを開けません。再読み込みしてください。"
   },
@@ -140,6 +143,6 @@
     "exportTimeout": "書き出しがタイムアウトしました。もう一度お試しください。"
   },
   "gallery": {
-    "cacheMiss": "リモートメディアのキャッシュミス（cachedOnly）"
+    "cacheMiss": "このメディアはまだスマートフォンにキャッシュされていません。パソコンに接続できるときにもう一度開いてください"
   }
 }

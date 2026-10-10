@@ -186,6 +186,9 @@ export interface ExecStreamHandle {
   onDrain(cb: () => void): () => void;
   onClose(cb: (info: { code: number | null; signal: string | null }) => void): () => void;
   onError(cb: (err: Error) => void): () => void;
+  /** 暂停 / 恢复读取 stdout(背压:下游消费不过来时停读,ssh2 随之停止扩窗,远端暂停发送)。 */
+  pause?(): void;
+  resume?(): void;
   /**
    * Try to terminate the remote process. ssh2's `channel.signal()` is
    * subject to OpenSSH server config (`AcceptEnv` / `PermitSignal`); many
@@ -312,6 +315,8 @@ function wrapChannel(channel: ClientChannel): ExecStreamHandle {
     onDrain: (cb) => { drainListeners.add(cb); return () => { drainListeners.delete(cb); }; },
     onClose: (cb) => { closeListeners.add(cb); return () => { closeListeners.delete(cb); }; },
     onError: (cb) => { errorListeners.add(cb); return () => { errorListeners.delete(cb); }; },
+    pause: () => { channel.pause(); },
+    resume: () => { channel.resume(); },
     kill: (signal = 'TERM') => {
       try { channel.signal(signal); } catch { /* server may reject */ }
       try { channel.close(); } catch { /* already gone */ }
@@ -364,6 +369,7 @@ export class RemoteHost {
    * Reset at the start of every connect attempt.
    */
   private hostKeyError: string | null = null;
+  private hostKeyMismatch: HostSnapshot['hostKeyMismatch'];
   /**
    * 已登记的 remote forwarding 愿望清单 (key = localHost:localPort)。
    * 连接断开不清空 — 重连成功后 doConnect 会逐个 re-arm, 尽量绑回原端口。
@@ -399,6 +405,7 @@ export class RemoteHost {
     if (next.id !== this.cfg.id) {
       throw new Error(`RemoteHost.updateConfig: id mismatch (${next.id} != ${this.cfg.id})`);
     }
+    this.hostKeyMismatch = undefined;
     this.cfg = next;
     this.events.emit('status', this.snapshot());
   }
@@ -408,6 +415,7 @@ export class RemoteHost {
       config: this.cfg,
       status: this.status,
       lastError: this.lastError,
+      hostKeyMismatch: this.hostKeyMismatch ? { ...this.hostKeyMismatch } : undefined,
       lastAuthLabel: this.lastAuthLabel,
       statusChangedAt: this.statusChangedAt,
     };
@@ -1154,11 +1162,14 @@ export class RemoteHost {
     }
     // mismatch
     if (isCurrentAttempt()) {
+      this.hostKeyMismatch = { host: storeKey, trusted: stored!, presented };
       this.hostKeyError =
-        `Remote host key for ${storeKey} changed (${presented}) and no longer matches the ` +
-        `previously trusted key. This can mean the server was reinstalled — or a ` +
-        `man-in-the-middle. Connection refused. If you trust the change, remove the stale ` +
-        `entry from maker's known hosts and reconnect.`;
+        `SSH host key changed for ${storeKey}. Connection refused.\n` +
+        `Previously trusted: ${stored}\nPresented: ${presented}\n` +
+        `This may be a server reinstall or an intercepted connection. Verify the new fingerprint ` +
+        `with the server administrator through a trusted channel, then review the host key in ` +
+        `Cindy Settings > Remote. Cindy uses its own remote-ssh/known-hosts.json, not ` +
+        `~/.ssh/known_hosts. Changing your login key will not fix this error.`;
     }
     this.log.error('ssh host key mismatch — refusing connect', {
       id: this.id,
@@ -1195,6 +1206,7 @@ export class RemoteHost {
     };
     this.setStatus('connecting');
     this.hostKeyError = null;
+    this.hostKeyMismatch = undefined;
     this.lastAuthError = null;
 
     let auth;
@@ -1304,6 +1316,7 @@ export class RemoteHost {
         // Reject with the friendly message so IPC layer's toast also gets
         // the actionable copy (it pulls from `.message`).
         const rejectErr = new Error(this.lastError);
+        if (this.hostKeyMismatch) Object.assign(rejectErr, { code: 'SSH_HOST_KEY_MISMATCH' });
         // Preserve original for tests / debugging that key off message text.
         (rejectErr as Error & { cause?: unknown }).cause = err;
         reject(rejectErr);
@@ -1332,9 +1345,12 @@ export class RemoteHost {
 
       // ssh2 emits 'handshake' before 'ready' — repurpose to advance state
       // so renderer can show "authenticating" instead of staying on
-      // "connecting" throughout auth.
+      // "connecting" throughout auth. ssh2 also emits it after every later
+      // key exchange (server-initiated rekey, e.g. Dropbear every 8h) without
+      // a following 'ready', so only the attempt's first, unsettled handshake
+      // may move the status; a rekey must leave a ready host ready (#5715).
       client.on('handshake', () => {
-        if (isCurrentAttempt()) this.setStatus('authenticating');
+        if (!settled && isCurrentAttempt()) this.setStatus('authenticating');
       });
       client.on('ready', onReady);
       client.on('error', onError);
@@ -1376,6 +1392,11 @@ export class RemoteHost {
       this.setStatus('disconnected');
       return;
     }
+    if (this.hostKeyError) {
+      this.clearReconnectTimer();
+      this.setStatus('failed');
+      return;
+    }
     // Auth failures are deterministic — retrying with the same agent / key
     // produces the same outcome. Fail fast so the user sees the actionable
     // hint immediately instead of waiting 30+ s for the backoff to give up.
@@ -1414,7 +1435,7 @@ export class RemoteHost {
       void this.startConnectAttempt().catch((err) => {
         // doConnect already set status=failed and recorded lastError.
         // If we still have attempts left, schedule again.
-        if (this.userDisconnected) return;
+        if (this.userDisconnected || this.hostKeyError) return;
         if (this.reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
           this.scheduleReconnect();
         } else {

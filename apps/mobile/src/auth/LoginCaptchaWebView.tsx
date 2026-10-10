@@ -91,9 +91,9 @@ export function LoginCaptchaWebView({
           borderColor: login.panelBorder,
           borderRadius: radius.container,
           borderWidth: 1,
-          paddingBottom: 12,
-          paddingHorizontal: 16,
-          paddingTop: 16,
+          paddingBottom: spacing.md,
+          paddingHorizontal: spacing.lg,
+          paddingTop: spacing.lg,
           maxWidth: 340,
           width: '100%',
         }}
@@ -102,8 +102,8 @@ export function LoginCaptchaWebView({
           style={{
             color: login.titleText,
             fontSize: typeScale.body,
-            fontWeight: fontWeight.bold,
-            lineHeight: lineHeight.bodyRelaxed,
+            fontWeight: fontWeight.semibold,
+            lineHeight: lineHeight.body,
           }}
         >
           {loginText('captchaTitle')}
@@ -143,7 +143,7 @@ export function LoginCaptchaWebView({
             )}
           </View>
         ) : (
-          <View style={{ alignSelf: 'stretch', height: 220, marginTop: 8 }}>
+          <View style={{ alignSelf: 'stretch', height: 220, marginTop: spacing.sm }}>
             <WebView
               key={generation}
               source={{ uri: themedUrl }}

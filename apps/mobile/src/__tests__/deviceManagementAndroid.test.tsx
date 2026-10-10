@@ -23,6 +23,7 @@ vi.mock("react-native", () => ({
     captured.pressables.push(props);
     return createElement("div", null, props.children);
   },
+  RefreshControl: () => null,
   ScrollView: ({ children }: { children?: ReactNode }) => createElement("div", null, children),
   StyleSheet: { create: <T,>(styles: T) => styles, hairlineWidth: 1 },
   View: ({ children }: { children?: ReactNode }) => createElement("div", null, children),
@@ -61,14 +62,27 @@ vi.mock("@expo/ui", () => ({
 vi.mock("react-i18next", () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 vi.mock("@/theme", async () => {
   const tokens = await import("@/theme/tokens");
-  return { ...tokens, useTheme: () => ({ colors: tokens.lightColors, mode: "light" }) };
+  return {
+    ...tokens,
+    useTheme: () => ({ colors: tokens.lightColors, mode: "light" }),
+    useThemedStyles: <T,>(make: (colors: typeof tokens.lightColors) => T) => make(tokens.lightColors),
+  };
 });
+vi.mock("@/components/MobilePrimitives", () => ({ StatusDot: () => null }));
+vi.mock("@/session/SettingsGroupRows", () => ({
+  SettingsGroup: ({ children }: { children?: ReactNode }) => createElement("div", null, children),
+  useSettingsRowStyles: () => ({}),
+}));
 
 import { DeviceInformationFields } from "@/device-link/DeviceInformationFields";
 import { DeviceManagementList } from "@/device-link/DeviceManagementList";
 
 function device(id: string, online: boolean): DeviceView {
-  return { deviceId: id, name: `Mac ${id}`, online } as DeviceView;
+  return { deviceId: id, name: `Mac ${id}`, online, lastSeenAt: null } as DeviceView;
+}
+
+function row(target: DeviceView, statusLabel: string, statusDetail: string) {
+  return { device: target, statusDetail, statusLabel, canOpen: target.online, state: target.online ? "ready" as const : "offline" as const };
 }
 
 describe("Android device management follows iOS interactions", () => {
@@ -89,7 +103,8 @@ describe("Android device management follows iOS interactions", () => {
         onDelete,
         onOpen: vi.fn(),
         onRename,
-        rows: [{ device: target, statusDetail: "just now", statusLabel: "Online" }],
+        onRefresh: vi.fn(async () => undefined),
+        rows: [row(target, "Online", "just now")],
       }),
     );
     const rename = captured.pressables.find((p) => p.testID === "deviceManagement.rename.a");
@@ -110,26 +125,28 @@ describe("Android device management follows iOS interactions", () => {
     expect(onDelete).toHaveBeenCalledWith(target);
   });
 
-  it("shows only the status when online and status · detail when offline", () => {
+  // 分组列表:离线分组标题已说明「离线」,行内只留时间;在线行显示「状态 · 说明」。名称始终用主字色。
+  it("keeps status · detail for online rows and only the time inside the offline group", () => {
     renderToStaticMarkup(
       createElement(DeviceManagementList, {
         busy: false,
         onDelete: vi.fn(),
         onOpen: vi.fn(),
         onRename: vi.fn(),
+        onRefresh: vi.fn(async () => undefined),
         rows: [
-          { device: device("on", true), statusDetail: "just now", statusLabel: "Online" },
-          { device: device("off", false), statusDetail: "2h ago", statusLabel: "Offline" },
+          row(device("on", true), "Online", "just now"),
+          row(device("off", false), "Offline", "2h ago"),
         ],
       }),
     );
     const contents = captured.texts.map((text) => text.children);
-    expect(contents).toContain("Online");
-    expect(contents).not.toContain("Online · just now");
-    expect(contents).toContain("Offline · 2h ago");
+    expect(contents).toContain("Online · just now");
+    expect(contents).toContain("2h ago");
+    expect(contents).not.toContain("Offline · 2h ago");
     const offlineName = captured.texts.find((text) => text.children === "Mac off");
     const onlineName = captured.texts.find((text) => text.children === "Mac on");
-    expect(offlineName?.style.color).toBe(lightColors.textSecondary);
+    expect(offlineName?.style.color).toBe(lightColors.textPrimary);
     expect(onlineName?.style.color).toBe(lightColors.textPrimary);
   });
 

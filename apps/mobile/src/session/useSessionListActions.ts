@@ -5,9 +5,9 @@ import { projectDraftSessionTitle } from '@cindy/maker-shared/session-title';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import { humanizeRemoteError } from '@/device-link/remoteStatus';
 import type { SessionMetaPatch } from '@/device-link/mobileMakerTransport';
-import { configureCollapseAnimation } from '@/utils/collapseAnimation';
 import {
   remoteSessionStore,
+  resolveSessionWriteDevices,
   sessionMetaWriteGuard,
   sessionMetaWriteQueue,
   sessionPendingWrites,
@@ -29,7 +29,13 @@ import type { RemoteSession } from '@/session/types';
  * 写序契约与原先首页 patchHomeSession 一致:字段级 LatestWriteGuard + 串行队列 +
  * 乐观 patch + 失败按字段回滚。守卫与队列是 app 级单例,跨页共享。
  */
-export function useSessionListActions() {
+/**
+ * animateListChange:列表页传入的过渡入口(listDisclosureTransition 的 run)。归档 / 置顶
+ * 这类会让行移走或移位的乐观写入与失败回滚经它落地,行的移动与列表让位带动画;
+ * 不传时直接写入。
+ */
+export function useSessionListActions(options?: { animateListChange?: (apply: () => void) => void }) {
+  const animateListChange = options?.animateListChange;
   const { t } = useTranslation();
   const { invoke } = useDeviceLink();
   const swipeRegistry = useMemo(() => createSwipeRowRegistry(), []);
@@ -39,16 +45,17 @@ export function useSessionListActions() {
   const pendingSheetActionRef = useRef<(() => void) | null>(null);
 
   const patchSession = useCallback(async (session: RemoteSession, patch: SessionMetaPatch) => {
-    const rpcDeviceId = session.canonicalDeviceId ?? session.deviceLinkDeviceId
-      ?? remoteSessionStore.getSessionDeviceId(session.id);
-    if (!rpcDeviceId) throw new Error(t('devices.list.error.sessionDeviceNotFound'));
-    const shardId = session.deviceLinkDeviceId ?? remoteSessionStore.getSessionDeviceId(session.id) ?? rpcDeviceId;
+    const devices = resolveSessionWriteDevices(session.id, session);
+    if (!devices) throw new Error(t('devices.list.error.sessionDeviceNotFound'));
+    const { rpcDeviceId, shardId } = devices;
     const fields = Object.keys(patch);
     const write = sessionMetaWriteGuard.begin(session.id, writeGuardFields(patch));
-    if (patch.status !== undefined || patch.pinnedAt !== undefined) {
-      configureCollapseAnimation();
+    const applyOptimistic = () => remoteSessionStore.applySessionPatch(shardId, session.id, patch);
+    if ((patch.status !== undefined || patch.pinnedAt !== undefined) && animateListChange) {
+      animateListChange(applyOptimistic);
+    } else {
+      applyOptimistic();
     }
-    remoteSessionStore.applySessionPatch(shardId, session.id, patch);
     const releasePending = sessionPendingWrites.track(session.id, fields);
     try {
       const updated = await sessionMetaWriteQueue.enqueue(session.id, fields, () => retryPatchWhileLatest(
@@ -79,18 +86,28 @@ export function useSessionListActions() {
             .find((s) => s.deviceLinkDeviceId === shardId)?.deviceLinkDeviceName
             ?? session.deviceLinkDeviceName
             ?? shardId;
-          configureCollapseAnimation();
-          remoteSessionStore.upsertDeviceSession(shardId, shardName, session);
-          remoteSessionStore.requestReseed(shardId);
+          // 先释放本笔在途登记:upsertDeviceSession 会挡掉 status 在途、已被乐观移出的行。
+          releasePending();
+          const rollback = () => {
+            remoteSessionStore.upsertDeviceSession(shardId, shardName, session);
+            remoteSessionStore.requestReseed(shardId);
+          };
+          if (animateListChange) animateListChange(rollback);
+          else rollback();
         } else {
-          const currentUpdatedAt = remoteSessionStore.getSessions()
-            .find((s) => s.id === session.id)?.updatedAt ?? null;
-          remoteSessionStore.applySessionPatch(
-            shardId,
-            session.id,
-            pickWriteFields(session, fields, currentUpdatedAt),
-          );
-          remoteSessionStore.requestReseed(shardId);
+          const rollback = () => {
+            const currentUpdatedAt = remoteSessionStore.getSessions()
+              .find((s) => s.id === session.id)?.updatedAt ?? null;
+            remoteSessionStore.applySessionPatch(
+              shardId,
+              session.id,
+              pickWriteFields(session, fields, currentUpdatedAt),
+            );
+            remoteSessionStore.requestReseed(shardId);
+          };
+          // 置顶失败回滚同样会让行移位。
+          if (fields.includes('pinnedAt') && animateListChange) animateListChange(rollback);
+          else rollback();
         }
       } else {
         remoteSessionStore.requestReseed(shardId);
@@ -99,7 +116,7 @@ export function useSessionListActions() {
     } finally {
       releasePending();
     }
-  }, [invoke, t]);
+  }, [animateListChange, invoke, t]);
 
   const runSwipeAction = useCallback((session: RemoteSession, action: Exclude<SessionSwipeAction, 'rename'>) => {
     void patchSession(session, swipeActionPatch(action)).catch((err: unknown) => {
@@ -131,7 +148,7 @@ export function useSessionListActions() {
     setActionSheetSession(null);
     if (!session) return;
     if (action === 'rename' || action === 'delete') {
-      // Android 自绘 Modal、iOS Expo BottomSheet、系统 Alert 都不能在 Sheet
+      // Android Compose BottomSheet、iOS Expo BottomSheet、系统 Alert 都不能在 Sheet
       // dismiss 过程中再 present,否则会被吞掉或压在后面。
       pendingSheetActionRef.current = () => applySessionSheetAction(session, action);
       return;

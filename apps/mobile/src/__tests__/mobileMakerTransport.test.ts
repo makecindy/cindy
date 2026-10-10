@@ -267,6 +267,31 @@ describe("mobile maker transport", () => {
       "Account scope unsupported",
     );
   });
+  it("reads subscription snapshots by family, scoping only independent accounts", async () => {
+    const calls: Array<[string, unknown[] | undefined]> = [];
+    const invoke: RemoteInvoke = async (_deviceId, channel, args) => {
+      calls.push([channel, args]);
+      return (args?.length ? { providerId: args[0] } : { creditUsagePercent: 1 }) as never;
+    };
+    const maker = createMobileMakerTransport({ deviceId: "dev-1", invoke });
+    await maker.getSubscriptionUsage("claude", "anthropic");
+    await maker.getSubscriptionUsage("xai");
+    await maker.getSubscriptionUsage("xai", "grok-second");
+    await maker.getClaudeSessionRoute("s1");
+    expect(calls).toEqual([
+      ["maker:usage:claude-subscription", []],
+      ["maker:usage:xai-subscription", []],
+      ["maker:usage:xai-subscription", ["grok-second"]],
+      ["maker:claude-session-route:get", ["s1"]],
+    ]);
+    const legacy = createMobileMakerTransport({
+      deviceId: "dev-1",
+      invoke: async () => ({ creditUsagePercent: 1 }) as never,
+    });
+    await expect(legacy.getSubscriptionUsage("xai", "grok-second")).rejects.toThrow(
+      "Account scope unsupported",
+    );
+  });
   it("documents the remote channels used by the mobile transport", () => {
     expect(MOBILE_MAKER_CHANNELS).toEqual([
       "maker:create-session",
@@ -305,6 +330,9 @@ describe("mobile maker transport", () => {
       "local-db:messages:estimatedSessionValue",
       "maker:usage:codex-rate-limits",
       "maker:usage:codex-rate-limit-reset",
+      "maker:usage:claude-subscription",
+      "maker:usage:xai-subscription",
+      "maker:claude-session-route:get",
       "maker:api-key:present",
       "maker:list-agent-commands",
       "maker:list-agent-skills",
@@ -333,6 +361,7 @@ describe("mobile maker transport", () => {
       "maker:session:enable-orca",
       "maker:session:disable-orca",
       "maker:worker:create",
+      "maker:orca:execution-devices",
       "maker:worker:switch-focus",
       "maker:worker:acknowledge-done",
       "maker:worker:archive",
@@ -365,6 +394,7 @@ describe("mobile maker transport", () => {
       "maker:input:resume",
       "maker:input:retry-last-error",
       "maker:input:clear-error",
+      "maker:input:cancel-usage-limit-wait",
       "maker:input:remove",
       "maker:input:update-text",
       "maker:input:update-content",
@@ -381,6 +411,7 @@ describe("mobile maker transport", () => {
       "worktree:suggest-name",
       "worktree:create",
       "worktree:discard-precreated",
+      "worktree:cancel-precreated",
       "text-file:read-preview",
       "file-browser:remote-op",
     ]);
@@ -418,6 +449,7 @@ describe("mobile maker transport", () => {
     const { calls, maker } = harness();
     const options = { workerAgent: "codex" as const, role: "developer", label: "developer", workerPermissionMode: "auto" as const };
 
+    await maker.orca.listExecutionDevices();
     await maker.orca.getCollabPolicy("/repo", "project");
     await maker.orca.enable("lead-1", options);
     await maker.orca.createWorker({ leadSessionId: "lead-1", role: "reviewer", label: "reviewer", agent: "pi", workerPermissionMode: "auto" });
@@ -430,6 +462,7 @@ describe("mobile maker transport", () => {
     await maker.orca.disable("lead-1");
 
     expect(calls.map(({ channel, args }) => ({ channel, args }))).toEqual([
+      { channel: "maker:orca:execution-devices", args: [] },
       { channel: "maker:plugins:get-state", args: ["collab", "/repo", "project"] },
       { channel: "maker:session:enable-orca", args: ["lead-1", options] },
       { channel: "maker:worker:create", args: [{ leadSessionId: "lead-1", role: "reviewer", label: "reviewer", agent: "pi", workerPermissionMode: "auto" }] },
@@ -653,6 +686,28 @@ describe("mobile maker transport", () => {
     ]);
   });
 
+  it("sends the remote-Agent location as the 7th switch-session-agent arg only when given", async () => {
+    const { calls, maker } = harness();
+
+    await maker.switchSessionAgent("s1", "claude-code", "claude-sonnet-4-6", "anthropic", "high", false, {
+      agentDeviceId: null,
+    });
+    await maker.switchSessionAgent("s1", "codex", "gpt-5.5", null, undefined, undefined, {
+      agentDeviceId: null,
+    });
+    await maker.switchSessionAgent("s1", "codex", "gpt-5.5", "openai", "high", true, {});
+    await maker.switchSessionAgent("s1", "codex", "gpt-5.5", "openai", "high", true);
+
+    expect(calls.map((call) => call.args)).toEqual([
+      ["s1", "claude-code", "claude-sonnet-4-6", "anthropic", "high", false, { agentDeviceId: null }],
+      ["s1", "codex", "gpt-5.5", null, null, null, { agentDeviceId: null }],
+      // 未给位置 = 位置不变:与旧 6 参 wire 完全一致,旧被控端无感。
+      ["s1", "codex", "gpt-5.5", "openai", "high", true],
+      ["s1", "codex", "gpt-5.5", "openai", "high", true],
+    ]);
+    expect(calls.every((call) => call.channel === "maker:switch-session-agent")).toBe(true);
+  });
+
   it("fails closed when a legacy Desktop returns model-window confirmation data", async () => {
     const invoke: RemoteInvoke = async () =>
       ({
@@ -717,6 +772,7 @@ describe("mobile maker transport", () => {
     await maker.compactSession("s1", "focus on API design");
     await maker.input.retryLastError("s1");
     await maker.input.clearError("s1");
+    await maker.input.cancelUsageLimitWait("s1");
     await maker.input.updateText("s1", "queued-1", "updated");
     await maker.input.updateContent("s1", "queued-1", {
       clientId: "queued-1",
@@ -794,6 +850,7 @@ describe("mobile maker transport", () => {
       ["maker:compact-session", ["s1", "focus on API design"]],
       ["maker:input:retry-last-error", ["s1"]],
       ["maker:input:clear-error", ["s1"]],
+      ["maker:input:cancel-usage-limit-wait", ["s1"]],
       ["maker:input:update-text", ["s1", "queued-1", "updated"]],
       [
         "maker:input:update-content",
@@ -908,6 +965,15 @@ describe("mobile maker transport", () => {
           },
         ],
       ],
+    ]);
+  });
+
+  it("routes terminal worktree cancellation through its distinct host channel", async () => {
+    const { calls, maker } = harness();
+    const input = { sessionId: "uncertain-create", recoveryKey: "recovery-key-1234567890" };
+    await maker.worktree.cancelPrecreated!(input);
+    expect(calls.map((call) => [call.channel, call.args])).toEqual([
+      ["worktree:cancel-precreated", [input]],
     ]);
   });
 

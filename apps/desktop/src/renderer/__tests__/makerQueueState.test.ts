@@ -79,6 +79,7 @@ const state = (overrides: Partial<SessionChatState> = {}): SessionChatState => (
   errorPersistId: null,
   disposedErrorPersistId: null,
   credentialSwitchWait: null,
+  usageLimitWait: null,
   continuationInFlightClientId: null,
   continuationTurnClientId: null,
   continuationInFlightProjectionCapability: 'unknown',

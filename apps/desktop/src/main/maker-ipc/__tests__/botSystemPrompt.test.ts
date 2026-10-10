@@ -44,6 +44,26 @@ describe('稳定层:能力必须写进提示词', () => {
     enabled.capabilities.botModeEnabled = false;
     expect(buildBotStableTier(enabled)).not.toContain('routine_save');
   });
+  it('只给本机伙伴主任务讲它能管主人的任务,自动化另需挂载', () => {
+    const main = input();
+    main.capabilities.botModeEnabled = true;
+    main.capabilities.sessionControlEnabled = true;
+    const stable = buildBotStableTier(main);
+    expect(stable).toContain('你能看、能管主人的任务');
+    expect(stable).toContain('沿用当前任务的权限档与用户授权');
+    expect(stable).not.toContain('OWNER_TURN_REQUIRED');
+    expect(stable).not.toContain('TASK_OUT_OF_SCOPE');
+    expect(stable).toContain('add_workbench_project');
+    expect(stable).not.toContain('你能建普通自动化');
+    main.capabilities.automationEnabled = true;
+    expect(buildBotStableTier(main)).toContain('schedule_create');
+
+    expect(buildBotStableTier(input())).not.toContain('你能看、能管主人的任务');
+    main.capabilities.botModeEnabled = false;
+    expect(buildBotStableTier(main)).not.toContain('你能看、能管主人的任务');
+    expect(buildBotStableTier(main)).not.toContain('schedule_create');
+  });
+
   it('挂了 docs 就点名文档工具,并写清 PDF 要自检', () => {
     const stable = buildBotStableTier(
       input({
@@ -109,7 +129,10 @@ describe('稳定层:能力必须写进提示词', () => {
     expect(all).toContain('stop_session_task');
     expect(all).toContain('send_to_agent');
     expect(all).toContain('不启动任务');
-    expect(all).toContain('编码实施和中大型工作必须用 `start_session_task`');
+    expect(all).toContain('优先在当前对话完成能清楚收口的工作');
+    expect(all).toContain('用户明确要求独立任务');
+    expect(all).toContain('隔离工作区、并行交付或独立跟踪');
+    expect(all).not.toContain('编码实施和中大型工作');
     expect(all).toContain('不要只为“收到”“好的”互相确认');
     expect(all).not.toContain('collaborate_with_bot');
     expect(all).not.toContain('action=notify');
@@ -121,6 +144,7 @@ describe('稳定层:能力必须写进提示词', () => {
     expect(none).not.toContain('save_teammate_skill');
     expect(none).not.toContain('create_teammate');
     expect(none).not.toContain('make_pptx');
+    expect(none).not.toContain('start_session_task');
   });
 
   it('交付纪律恒在:要真做出来,被挡住说实话,不许编', () => {

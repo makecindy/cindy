@@ -19,6 +19,13 @@ import {
 } from '../authStartupGate';
 
 describe('awaitWithStartupTimeout', () => {
+  it('preserves rate-limit deadlines during provider discovery', () => {
+    expect(
+      mapLoginProvidersLoadFailure(
+        new AuthApiError('RATE_LIMITED', 429, 'limited', 1_800_000_000_000),
+      ),
+    ).toMatchObject({ code: 'RATE_LIMITED', retryAt: 1_800_000_000_000 });
+  });
   beforeEach(() => {
     vi.useFakeTimers();
   });

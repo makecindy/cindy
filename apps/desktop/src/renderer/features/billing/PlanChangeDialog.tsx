@@ -181,12 +181,12 @@ export function PlanChangeTargetDialog({
   return (
     <Dialog.Root open={open} onOpenChange={(nextOpen) => !nextOpen && onClose()}>
       <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 z-[9990] bg-[var(--overlay-modal)]" />
+        <Dialog.Overlay className="modal-scrim fixed inset-0 z-[9990]" />
         <Dialog.Content
           onPointerDownOutside={(event) => event.preventDefault()}
           aria-describedby={undefined}
           className={cn(
-            'fixed left-1/2 top-1/2 z-[9991] flex max-h-[calc(100dvh-48px)] w-[calc(100vw-48px)] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] text-[var(--text-primary)] focus:outline-none',
+            'modal-panel fixed left-1/2 top-1/2 z-[9991] flex max-h-[calc(100dvh-48px)] w-[calc(100vw-48px)] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden text-[var(--text-primary)] focus:outline-none',
             choosingOffer ? 'max-w-[600px]' : 'max-w-[1120px]',
           )}
         >
@@ -445,13 +445,12 @@ export function PlanChangeStatusDialog({
   return (
     <Dialog.Root open={state.open} onOpenChange={(open) => !open && !busy && onClose()}>
       <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 z-[10000] bg-[var(--overlay-modal)]" />
+        <Dialog.Overlay className="modal-scrim fixed inset-0 z-[10000]" />
         <Dialog.Content
           onPointerDownOutside={(event) => event.preventDefault()}
           className={cn(
-            'fixed left-1/2 top-1/2 z-[10001] flex max-h-[calc(100dvh-40px)] w-[calc(100vw-40px)] max-w-[600px] flex-col',
-            '-translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-xl',
-            'border border-[var(--border-default)] bg-[var(--surface-elevated)]',
+            'modal-panel fixed left-1/2 top-1/2 z-[10001] flex max-h-[calc(100dvh-40px)] w-[calc(100vw-40px)] max-w-[600px] flex-col',
+            '-translate-x-1/2 -translate-y-1/2 overflow-hidden',
             'text-[var(--text-primary)] focus:outline-none',
           )}
           aria-describedby={undefined}
@@ -631,9 +630,11 @@ export function PlanChangeStatusDialog({
                   </div>
                   <p className="mt-4 max-w-[340px] text-sm text-[var(--text-secondary)]">
                     {state.error
-                      ? state.quoteFailureReason === 'TARGET_NOT_ALLOWED'
-                        ? t('billing.planChange.quoteRejected')
-                        : t('billing.planChange.requestFailed')
+                      ? state.quoteFailureReason === 'RENEWAL_PREPAID'
+                        ? t('billing.planChange.renewalPrepaid')
+                        : state.quoteFailureReason === 'TARGET_NOT_ALLOWED'
+                          ? t('billing.planChange.quoteRejected')
+                          : t('billing.planChange.requestFailed')
                       : state.phase === 'CANCELED'
                         ? t('billing.planChange.canceledBody')
                         : state.phase === 'EXPIRED'

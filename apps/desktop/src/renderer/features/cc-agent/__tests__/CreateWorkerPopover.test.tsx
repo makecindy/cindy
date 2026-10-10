@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { useState } from 'react';
+import userEvent from '@testing-library/user-event';
 import { renderToString } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -11,7 +13,11 @@ import {
   setProviderModelChoice,
   setProviderModelFast,
 } from '@/state/providerModelMemory';
-import { CreateWorkerPopover } from '../CreateWorkerPopover';
+import {
+  CreateWorkerPopover,
+  isAbsoluteRemoteDir,
+  parseExecutionDevices,
+} from '../CreateWorkerPopover';
 
 const mocks = vi.hoisted(() => ({
   modelsByAgent: {
@@ -81,6 +87,18 @@ const mocks = vi.hoisted(() => ({
   }>,
   sidebarWindow: false,
   confirm: vi.fn(async () => true),
+  directoryPath: '/Users/demo/Interviews',
+}));
+
+vi.mock('@/components/new-chat/AddRemoteProjectDialog', () => ({
+  AddRemoteProjectDialog: (props: {
+    open: boolean; fixedDeviceId: string; onOpenChange(open: boolean): void;
+    onProjectAdded(target: { kind: 'device-link'; deviceId: string; deviceName: string; path: string }): void;
+  }) => props.open ? <button data-testid="choose-worker-folder" data-device={props.fixedDeviceId}
+    onClick={() => {
+      props.onProjectAdded({ kind: 'device-link', deviceId: props.fixedDeviceId, deviceName: 'Mac mini', path: mocks.directoryPath });
+      props.onOpenChange(false);
+    }}>Choose worker folder</button> : null,
 }));
 
 function model(id: string, efforts = ['high'], defaultEffort = 'high') {
@@ -282,12 +300,78 @@ describe('CreateWorkerPopover', () => {
     ) as HTMLTextAreaElement;
     fireEvent.change(initialTask, { target: { value: 'Draft a plan' } });
     const panel = screen.getByText('orca.createWorker.title').closest('.relative.z-10');
-    fireEvent.click(panel!.previousElementSibling!);
+    fireEvent.click(panel!.closest('.modal-scrim')!);
 
     expect(onClose).not.toHaveBeenCalled();
     expect(initialTask.value).toBe('Draft a plan');
 
     fireEvent.click(screen.getByRole('button', { name: 'orca.createWorker.closeAria' }));
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it('focuses the role input, traps Tab, closes with Esc, and returns focus on reopen', async () => {
+    function Harness() {
+      const [open, setOpen] = useState(false);
+      return <><button onClick={() => setOpen(true)}>Add worker</button><CreateWorkerPopover open={open} onClose={() => setOpen(false)} onCreate={vi.fn()} /></>;
+    }
+    const user = userEvent.setup();
+    render(<Harness />);
+    const opener = screen.getByRole('button', { name: 'Add worker' });
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await user.click(opener);
+      expect(document.activeElement).toBe(screen.getByPlaceholderText('orca.createWorker.customRolePlaceholder'));
+      const close = screen.getByRole('button', { name: 'orca.createWorker.closeAria' });
+      const submit = screen.getByRole('button', { name: 'orca.createWorker.submit' });
+      close.focus();
+      await user.tab({ shift: true });
+      expect(document.activeElement).toBe(submit);
+      await user.tab();
+      expect(document.activeElement).toBe(close);
+      await user.keyboard('{Escape}');
+      await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+      await waitFor(() => expect(document.activeElement).toBe(opener));
+    }
+  });
+
+  it.each([
+    ['role', 'orca.createWorker.customRolePlaceholder', { isComposing: true }],
+    ['role', 'orca.createWorker.customRolePlaceholder', { keyCode: 229 }],
+    ['task', 'orca.createWorker.initialTaskPlaceholder', { isComposing: true }],
+    ['task', 'orca.createWorker.initialTaskPlaceholder', { keyCode: 229 }],
+  ] as const)('preserves the %s draft in %s on IME Esc (%j)', (_field, placeholder, ime) => {
+    const onClose = vi.fn();
+    render(<CreateWorkerPopover open onClose={onClose} onCreate={vi.fn()} />);
+    const input = screen.getByPlaceholderText(placeholder) as HTMLInputElement | HTMLTextAreaElement;
+    fireEvent.change(input, { target: { value: 'Worker draft' } });
+    input.focus();
+
+    fireEvent.keyDown(input, { key: 'Escape', ...ime });
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByRole('dialog')).toBeTruthy();
+    expect(input.value).toBe('Worker draft');
+    expect(document.activeElement).toBe(input);
+
+    fireEvent.keyDown(input, { key: 'Escape' });
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it('blocks both Esc and the close button until creation settles', async () => {
+    let finish!: () => void;
+    const onCreate = vi.fn(() => new Promise<void>((resolve) => { finish = resolve; }));
+    const onClose = vi.fn();
+    const user = userEvent.setup();
+    render(<CreateWorkerPopover open onClose={onClose} onCreate={onCreate} />);
+    await user.click(screen.getByRole('button', { name: 'orca.createWorker.submit' }));
+    expect(onCreate).toHaveBeenCalledOnce();
+    const close = screen.getByRole('button', { name: 'orca.createWorker.closeAria' }) as HTMLButtonElement;
+    expect(close.disabled).toBe(true);
+    await user.keyboard('{Escape}');
+    fireEvent.click(close);
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByRole('dialog')).toBeTruthy();
+    await act(async () => finish());
+    expect(close.disabled).toBe(false);
+    await user.keyboard('{Escape}');
     expect(onClose).toHaveBeenCalledOnce();
   });
 
@@ -1478,6 +1562,20 @@ describe('CreateWorkerPopover', () => {
     );
   });
 
+  it('keeps the modal scrim out of the Electron window drag region', () => {
+    // 遮罩标 drag = 整块视口都是拖拽命中区,只给 500px 的 Content 挖洞:模型选择器面板
+    // 按 align=end 贴 trigger、向左探出弹窗边框,探出部分被拖拽区吞掉(2026-10 实测:
+    // 左半点不动、左侧来源 rail 选不了)。同口径见 windowDrag.tsx。
+    render(<CreateWorkerPopover open onClose={vi.fn()} onCreate={vi.fn()} />);
+    const overlay = document.querySelector('.modal-scrim') as HTMLElement | null;
+    const panel = document.querySelector('.modal-panel') as HTMLElement | null;
+    const appRegion = (element: HTMLElement) =>
+      (element.style as CSSStyleDeclaration & { WebkitAppRegion: string }).WebkitAppRegion;
+    expect(overlay).not.toBeNull();
+    expect(appRegion(overlay!)).toBe('no-drag');
+    expect(appRegion(panel!)).toBe('no-drag');
+  });
+
   it('does not wire provider navigation inside the detached sidebar window', async () => {
     // 分离侧栏窗口固定 /sidebar-window 壳路由:本地 navigate 会把辅助窗口整壳替换
     // 成主设置路由,与 OrcaWorkerPanel 的 settingsEnabled={!isSidebarWindow()} 同
@@ -1530,5 +1628,226 @@ describe('CreateWorkerPopover', () => {
         expect.objectContaining({ model: 'gpt-5.5', effort: 'low' }),
       ),
     );
+  });
+});
+
+describe('CreateWorkerPopover execution device', () => {
+  const listExecutionDevices = vi.fn();
+  const originalScrollIntoView = Object.getOwnPropertyDescriptor(
+    HTMLElement.prototype,
+    'scrollIntoView',
+  );
+
+  beforeEach(() => {
+    // Radix Select scrolls the focused option; jsdom does not implement scrolling.
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+      configurable: true,
+      value: vi.fn(),
+    });
+    window.localStorage.clear();
+    resetProviderModelMemoryForTest();
+    mocks.modelsByAgent.codex = [model('codex/gpt-5.5')];
+    mocks.capabilitiesByAgent.codex = { availableModels: [{ id: 'codex/gpt-5.5' }] };
+    mocks.localProviders = [];
+    mocks.remoteProviders = [];
+    mocks.remoteUnsupported = false;
+    listExecutionDevices.mockReset();
+    listExecutionDevices.mockResolvedValue({
+      devices: [
+        { deviceId: 'mac-mini', name: 'Mac mini', platform: 'darwin', supported: true },
+        { deviceId: 'old-pc', name: 'Old PC', platform: 'win32', supported: false },
+      ],
+    });
+    (window as unknown as { electronAPI: unknown }).electronAPI = {
+      localDb: { orcaWorkflows: { listExecutionDevices } },
+    };
+  });
+
+  afterEach(() => {
+    cleanup();
+    delete (window as unknown as { electronAPI?: unknown }).electronAPI;
+    if (originalScrollIntoView) {
+      Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', originalScrollIntoView);
+    } else {
+      delete (HTMLElement.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+    }
+  });
+
+  it('offers other computers only when enabled and the list is not empty', async () => {
+    const { unmount } = render(<CreateWorkerPopover open onClose={vi.fn()} onCreate={vi.fn()} />);
+    expect(listExecutionDevices).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('worker-execution-device')).toBeNull();
+    unmount();
+
+    listExecutionDevices.mockResolvedValueOnce({ devices: [] });
+    render(
+      <CreateWorkerPopover open executionDevicesEnabled onClose={vi.fn()} onCreate={vi.fn()} />,
+    );
+    await waitFor(() => expect(listExecutionDevices).toHaveBeenCalledTimes(1));
+    expect(screen.queryByTestId('worker-execution-device')).toBeNull();
+  });
+
+  it('creates on the chosen computer with its folder and leaves outdated computers unselectable', async () => {
+    const onCreate = vi.fn();
+    render(
+      <CreateWorkerPopover open executionDevicesEnabled onClose={vi.fn()} onCreate={onCreate} />,
+    );
+
+    const devicePicker = await screen.findByRole('combobox', {
+      name: 'orca.createWorker.executionDeviceLabel',
+    });
+    expect(devicePicker.textContent).toContain('orca.createWorker.thisComputer');
+    expect(screen.queryByRole('option')).toBeNull();
+    fireEvent.keyDown(devicePicker, { key: 'ArrowDown' });
+    const oldDevice = await screen.findByRole('option', { name: /Old PC/ });
+    expect(oldDevice.getAttribute('aria-disabled')).toBe('true');
+    fireEvent.click(oldDevice);
+    expect(onCreate).not.toHaveBeenCalled();
+    expect(devicePicker.textContent).toContain('orca.createWorker.thisComputer');
+
+    fireEvent.click(screen.getByRole('option', { name: /Mac mini/ }));
+    // 另一台电脑的模型目录：不接本机来源记忆，也不跳本机供应商设置。
+    expect(screen.getByTestId('model-selector').dataset.memoryWired).toBe('false');
+    expect(screen.getByTestId('model-selector').dataset.navigateWired).toBe('false');
+
+    fireEvent.click(screen.getByRole('radio', { name: 'orca.createWorker.remoteDirPath' }));
+    const dirPicker = screen.getByRole('button', { name: 'orca.createWorker.remoteDirLabel' });
+    const submit = screen.getByRole('button', {
+      name: 'orca.createWorker.submit',
+    }) as HTMLButtonElement;
+    expect(submit.disabled).toBe(true);
+    mocks.directoryPath = 'Interviews';
+    fireEvent.click(dirPicker);
+    expect(screen.getByTestId('choose-worker-folder').dataset.device).toBe('mac-mini');
+    fireEvent.click(screen.getByTestId('choose-worker-folder'));
+    expect(submit.disabled).toBe(true);
+    expect(screen.getByText('orca.createWorker.remoteDirInvalid')).toBeTruthy();
+
+    mocks.directoryPath = '/Users/demo/Interviews';
+    fireEvent.click(dirPicker);
+    fireEvent.click(screen.getByTestId('choose-worker-folder'));
+    expect(submit.disabled).toBe(false);
+    fireEvent.click(submit);
+    await waitFor(() =>
+      expect(onCreate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          executionDeviceId: 'mac-mini',
+          executionDeviceName: 'Mac mini',
+          workingDir: '/Users/demo/Interviews',
+        }),
+      ),
+    );
+  });
+
+  it('creates a chat on the chosen computer without leaking a previously specified folder', async () => {
+    const onCreate = vi.fn();
+    render(
+      <CreateWorkerPopover open executionDevicesEnabled onClose={vi.fn()} onCreate={onCreate} />,
+    );
+    const picker = await screen.findByRole('combobox', {
+      name: 'orca.createWorker.executionDeviceLabel',
+    });
+    fireEvent.keyDown(picker, { key: 'ArrowDown' });
+    fireEvent.click(await screen.findByRole('option', { name: /Mac mini/ }));
+    expect(
+      screen
+        .getByRole('radio', { name: 'orca.createWorker.remoteDirChat' })
+        .getAttribute('aria-checked'),
+    ).toBe('true');
+    fireEvent.click(screen.getByRole('radio', { name: 'orca.createWorker.remoteDirPath' }));
+    mocks.directoryPath = '/Users/demo/Interviews';
+    fireEvent.click(screen.getByRole('button', { name: 'orca.createWorker.remoteDirLabel' }));
+    fireEvent.click(screen.getByTestId('choose-worker-folder'));
+    fireEvent.click(screen.getByRole('radio', { name: 'orca.createWorker.remoteDirChat' }));
+    expect(screen.queryByRole('textbox', { name: 'orca.createWorker.remoteDirLabel' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'orca.createWorker.submit' }));
+    await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
+    expect(onCreate.mock.calls[0]![0]).toMatchObject({ executionDeviceId: 'mac-mini' });
+    expect(onCreate.mock.calls[0]![0]).not.toHaveProperty('workingDir');
+
+    fireEvent.keyDown(picker, { key: 'ArrowDown' });
+    fireEvent.click(await screen.findByRole('option', { name: 'orca.createWorker.thisComputer' }));
+    fireEvent.click(screen.getByRole('button', { name: 'orca.createWorker.submit' }));
+    await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(2));
+    expect(onCreate.mock.calls[1]![0]).not.toHaveProperty('executionDeviceId');
+    expect(onCreate.mock.calls[1]![0]).not.toHaveProperty('workingDir');
+  });
+
+  it('clears the selected folder and resets to chat when switching remote computers', async () => {
+    listExecutionDevices.mockResolvedValueOnce({ devices: [
+      { deviceId: 'mac-mini', name: 'Mac mini', platform: 'darwin', supported: true },
+      { deviceId: 'windows-pc', name: 'Windows PC', platform: 'win32', supported: true },
+    ] });
+    const onCreate = vi.fn();
+    render(<CreateWorkerPopover open executionDevicesEnabled onClose={vi.fn()} onCreate={onCreate} />);
+    const picker = await screen.findByRole('combobox', { name: 'orca.createWorker.executionDeviceLabel' });
+    fireEvent.keyDown(picker, { key: 'ArrowDown' });
+    fireEvent.click(await screen.findByRole('option', { name: /Mac mini/ }));
+    fireEvent.click(screen.getByRole('radio', { name: 'orca.createWorker.remoteDirPath' }));
+    mocks.directoryPath = '/Users/demo/Interviews';
+    fireEvent.click(screen.getByRole('button', { name: 'orca.createWorker.remoteDirLabel' }));
+    fireEvent.click(screen.getByTestId('choose-worker-folder'));
+    fireEvent.keyDown(picker, { key: 'ArrowDown' });
+    fireEvent.click(await screen.findByRole('option', { name: /Windows PC/ }));
+    expect(screen.getByRole('radio', { name: 'orca.createWorker.remoteDirChat' }).getAttribute('aria-checked')).toBe('true');
+    fireEvent.click(screen.getByRole('button', { name: 'orca.createWorker.submit' }));
+    await waitFor(() => expect(onCreate).toHaveBeenCalledOnce());
+    expect(onCreate.mock.calls[0]![0]).toMatchObject({ executionDeviceId: 'windows-pc' });
+    expect(onCreate.mock.calls[0]![0]).not.toHaveProperty('workingDir');
+    fireEvent.click(screen.getByRole('radio', { name: 'orca.createWorker.remoteDirPath' }));
+    expect((screen.getByRole('button', { name: 'orca.createWorker.submit' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('keeps a large device list in the dropdown and locates a device by keyboard typeahead', async () => {
+    listExecutionDevices.mockResolvedValueOnce({
+      devices: Array.from({ length: 100 }, (_, index) => ({
+        deviceId: `device-${index}`,
+        name: `Computer ${String(index).padStart(3, '0')}`,
+        supported: true,
+      })),
+    });
+    const onCreate = vi.fn();
+    render(
+      <CreateWorkerPopover open executionDevicesEnabled onClose={vi.fn()} onCreate={onCreate} />,
+    );
+    const picker = await screen.findByRole('combobox', {
+      name: 'orca.createWorker.executionDeviceLabel',
+    });
+    expect(screen.queryByText('Computer 099')).toBeNull();
+    fireEvent.keyDown(picker, { key: 'ArrowDown' });
+    await screen.findByRole('option', { name: /Computer 099/ });
+    await userEvent.keyboard('Computer 099');
+    await waitFor(() => expect(document.activeElement?.textContent).toContain('Computer 099'));
+    await userEvent.keyboard('{Enter}');
+    expect(picker.textContent).toContain('Computer 099');
+    expect(screen.queryByRole('listbox')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'orca.createWorker.submit' }));
+    await waitFor(() =>
+      expect(onCreate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          executionDeviceId: 'device-99',
+        }),
+      ),
+    );
+  });
+});
+
+describe('execution device helpers', () => {
+  it('parses the device list defensively', () => {
+    expect(parseExecutionDevices(null)).toEqual([]);
+    expect(
+      parseExecutionDevices({
+        devices: [{ deviceId: 'a', name: '', platform: 1, supported: 'yes' }, { name: 'no id' }],
+      }),
+    ).toEqual([{ deviceId: 'a', name: 'a', platform: null, supported: false }]);
+  });
+
+  it('accepts absolute paths for any operating system', () => {
+    expect(isAbsoluteRemoteDir('/Users/demo')).toBe(true);
+    expect(isAbsoluteRemoteDir('D:\\work')).toBe(true);
+    expect(isAbsoluteRemoteDir('C:/work')).toBe(true);
+    expect(isAbsoluteRemoteDir('\\\\nas\\share')).toBe(true);
+    expect(isAbsoluteRemoteDir('~/work')).toBe(false);
+    expect(isAbsoluteRemoteDir('work')).toBe(false);
   });
 });

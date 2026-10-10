@@ -80,10 +80,10 @@ export function parseRoutineInput(value: unknown): RoutineInput {
     throw new Error("enabled must be boolean");
   if (
     !Array.isArray(input.triggers) ||
-    input.triggers.length < 1 ||
+    (input.enabled && input.triggers.length < 1) ||
     input.triggers.length > 32
   ) {
-    throw new Error("A routine requires between 1 and 32 triggers");
+    throw new Error("An enabled routine requires between 1 and 32 triggers; disabled drafts allow none");
   }
   const triggers = input.triggers.map((raw): RoutineTrigger => {
     const trigger = record(raw);

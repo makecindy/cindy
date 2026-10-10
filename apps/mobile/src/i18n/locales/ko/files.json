@@ -96,6 +96,8 @@
     "downloadFailed": "다운로드에 실패했습니다",
     "fetchingVideo": "컴퓨터에서 동영상을 가져오는 중…",
     "fetchingAudio": "컴퓨터에서 오디오를 가져오는 중…",
+    "videoBuffering": "버퍼링 중…",
+    "videoBufferingPercent": "버퍼링 중 {{percent}}%",
     "fetchAvFailed": "가져오기에 실패했습니다: {{detail}}",
     "fetchPdfFailed": "PDF 가져오기에 실패했습니다: {{detail}}",
     "fetchingPdf": "컴퓨터에서 PDF를 가져오는 중…",
@@ -131,6 +133,7 @@
     "browserCancelAddress": "편집 취소",
     "browserReturnToFile": "파일로 돌아가기",
     "browserCopyAddress": "주소 복사",
+    "browserCopiedAddress": "주소를 복사했습니다",
     "browserInvalidAddress": "올바른 http 또는 https 주소를 입력하세요.",
     "browserWebsiteFailed": "웹페이지를 열 수 없습니다. 다시 로드해 주세요."
   },
@@ -140,6 +143,6 @@
     "exportTimeout": "내보내기 시간이 초과되었습니다. 다시 시도하세요."
   },
   "gallery": {
-    "cacheMiss": "원격 미디어 캐시 미스(cachedOnly)"
+    "cacheMiss": "이 미디어는 아직 휴대폰에 캐시되지 않았습니다. 컴퓨터에 연결되면 다시 여세요"
   }
 }

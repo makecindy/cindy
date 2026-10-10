@@ -76,16 +76,9 @@ export function runTaskTagsTransaction(db: Database.Database, raw: unknown): Tas
     }));
   return db.transaction(() => {
     if (!body || typeof body !== 'object') return fail('INVALID_PARAMS');
-    if (body.callerSessionId) {
-      if (
-        !db
-          .prepare(
-            "SELECT id FROM sessions WHERE id=? AND status <> 'deleted' AND coalesce(source,'') <> 'bot' AND NOT EXISTS (SELECT 1 FROM bot_session_links b WHERE b.session_id=sessions.id)",
-          )
-          .get(body.callerSessionId)
-      )
-        return fail('NOT_FOUND');
-    }
+    if (body.callerSessionId && !db.prepare(
+      "SELECT id FROM sessions WHERE id=? AND status <> 'deleted'",
+    ).get(body.callerSessionId)) return fail('NOT_FOUND');
     let affected: string[] = [];
     let deletion: TaskTagResult['deletion'];
     let hasMore: boolean | undefined;

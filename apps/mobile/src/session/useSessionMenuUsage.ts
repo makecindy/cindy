@@ -5,6 +5,7 @@ import { normalizeRemoteMoney, type RemoteMoney } from "@/session/remoteMoney";
 import type { RemoteSession } from "@/session/types";
 import {
   readSessionMenuAccountUsage,
+  unavailableSessionMenuAccountUsage,
   type SessionMenuAccountUsage,
 } from "./readSessionMenuAccountUsage";
 import {
@@ -12,10 +13,19 @@ import {
   type MobileCodexRateLimitsResult,
 } from "@cindy/maker-shared/device-link-contract";
 
-export type SessionMenuUsageReader = Pick<
+/**
+ * Reads of the account this task's Agent consumes. With a remote Agent it is another computer
+ * than the task host (see sessionUsageAccount.ts); task data is still read from the host.
+ */
+export type SessionMenuAccountReader = Pick<
   MobileMakerTransport,
-  "getSessionEstimatedValue" | "getCodexRateLimits" | "getAccountUsage"
+  | "getCodexRateLimits"
+  | "getAccountUsage"
+  | "getSubscriptionUsage"
+  | "getClaudeSessionRoute"
 >;
+export type SessionMenuUsageReader = SessionMenuAccountReader &
+  Pick<MobileMakerTransport, "getSessionEstimatedValue">;
 
 interface UsageState {
   account: SessionMenuAccountUsage | null;
@@ -41,6 +51,8 @@ export function sessionMenuUsageScope(session: RemoteSession): string {
     session.providerId,
     session.agentKind,
     session.remoteHostId,
+    // A remote Agent consumes the account of the computer it runs on; moving it changes owner.
+    session.agentDeviceId,
     session.clearedAt,
     session.runtimeGeneration,
   ].join("\0");
@@ -53,6 +65,8 @@ export function useSessionMenuUsage(
   visible: boolean,
   codexRateLimits: MobileCodexRateLimitsResult | null = null,
   provider?: OpenAiAccountProvider,
+  /** Defaults to the task host; null = this account cannot be read from here (shown unavailable). */
+  accountReader: SessionMenuAccountReader | null = reader,
 ) {
   const taskScope = [
     session.deviceLinkDeviceId,
@@ -97,7 +111,10 @@ export function useSessionMenuUsage(
       inFlight = true;
       update({ loading: true });
       await Promise.allSettled([
-        readSessionMenuAccountUsage(session, reader, provider).then(
+        (accountReader
+          ? readSessionMenuAccountUsage(session, accountReader, provider)
+          : Promise.resolve(unavailableSessionMenuAccountUsage())
+        ).then(
           (account) => update({ account, accountFailed: false }),
           (error) =>
             update({
@@ -142,6 +159,7 @@ export function useSessionMenuUsage(
     scope,
     taskScope,
     reader,
+    accountReader,
     visible,
     refreshKey,
     session.id,

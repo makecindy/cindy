@@ -50,6 +50,17 @@ function deviceProvider(id: string, connected: boolean, modelIds: string[]): Pro
 }
 
 describe('buildDeviceLinkCreateArgs', () => {
+  it.each([undefined, '/remote/project'])('carries initial plan mode through creation and provisional UI (%s)', (workingDir) => {
+    const args = resolveDeviceLinkSubmission({
+      agentKind: 'codex', workingDir, capabilityAgentKind: 'codex', deviceProviders: [],
+      candidate: { model: 'gpt-5.4', effort: 'high', permissionMode: 'auto', fastMode: false, planModeEnabled: true },
+    });
+    expect(args.planMode).toBe(true);
+    expect(args).not.toHaveProperty('planModeEnabled');
+    const row = buildProvisionalRemoteSession({ sessionId: 'remote', workDir: workingDir ?? '/dialogue/remote', args, nowIso: '2026-10-08T00:00:00Z' });
+    expect(row.planModeEnabled).toBe(true);
+  });
+
   it('归属一致核心:workspaceKind 恒为 project(被控端据此挂到项目下,不独立)', () => {
     const args = buildDeviceLinkCreateArgs({
       agentKind: 'cc',
@@ -284,14 +295,14 @@ describe('buildProvisionalRemoteSession', () => {
     expect(row.title).toBe('New Maker');
   });
 
-  it('userSendAt 置为当下:用户此刻正在发第一条,侧边栏该立刻浮到顶部(与本机路径同口径)', () => {
+  it('userSendAt 与被控端新行一致为空:「正在发第一条」交给投影层的首条发送叠加层', () => {
     const row = buildProvisionalRemoteSession({
       sessionId: 's-4',
       workDir: '/w',
       args: dialogue,
       nowIso: NOW,
     });
-    expect(row.userSendAt).toBe(NOW);
+    expect(row.userSendAt).toBeNull();
     expect(row.createdAt).toBe(NOW);
     expect(row.updatedAt).toBe(NOW);
   });
@@ -305,6 +316,72 @@ describe('buildProvisionalRemoteSession', () => {
     });
     expect(row.providerId).toBeNull();
     expect(row.extraDirs).toEqual([]);
+  });
+});
+
+// 远程控制下新建任务,Agent 在同账号第三台电脑运行(与手机新建任务同一个 create-session 参数)。
+describe('Agent 在另一台电脑运行', () => {
+  const NOW = '2026-10-09T03:00:00.000Z';
+  const candidate = {
+    model: 'c-model',
+    effort: 'high' as const,
+    permissionMode: 'default' as const,
+    fastMode: false,
+  };
+  // 模型目录是运行 Agent 的那台电脑的:来源在那份目录里解析。
+  const agentComputerCatalog = [deviceProvider('c-open', true, ['c-model'])];
+
+  it('agentDeviceId 交给被控电脑,来源按那台电脑的目录解析', () => {
+    const args = resolveDeviceLinkSubmission({
+      agentKind: 'cc',
+      workingDir: '/peer/proj',
+      candidate,
+      deviceProviders: agentComputerCatalog,
+      capabilityAgentKind: 'claude-code',
+      agentDeviceId: 'device-c',
+    });
+    expect(args.agentDeviceId).toBe('device-c');
+    expect(args.providerId).toBe('c-open');
+    expect(args.model).toBe('c-model');
+  });
+
+  it('Agent 在被控电脑本身时不带这个字段(旧被控电脑与原有调用不变)', () => {
+    for (const agentDeviceId of [undefined, null, '']) {
+      const args = resolveDeviceLinkSubmission({
+        agentKind: 'cc',
+        candidate,
+        deviceProviders: agentComputerCatalog,
+        capabilityAgentKind: 'claude-code',
+        agentDeviceId,
+      });
+      expect('agentDeviceId' in args).toBe(false);
+    }
+  });
+
+  it('临时行就带上 Agent 所在电脑;不带时不出现这个字段', () => {
+    const remote = buildDeviceLinkCreateArgs({
+      agentKind: 'cc',
+      model: 'c-model',
+      effort: 'high',
+      permissionMode: 'default',
+      fastMode: false,
+      agentDeviceId: 'device-c',
+    });
+    expect(
+      buildProvisionalRemoteSession({ sessionId: 's-6', workDir: '/w', args: remote, nowIso: NOW })
+        .agentDeviceId,
+    ).toBe('device-c');
+    const plain = buildDeviceLinkCreateArgs({
+      agentKind: 'cc',
+      model: 'b-model',
+      effort: 'high',
+      permissionMode: 'default',
+      fastMode: false,
+    });
+    expect(
+      'agentDeviceId' in
+        buildProvisionalRemoteSession({ sessionId: 's-7', workDir: '/w', args: plain, nowIso: NOW }),
+    ).toBe(false);
   });
 });
 

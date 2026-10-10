@@ -220,11 +220,15 @@ describe('NewMakerDraftRoute Orca worker create order', () => {
 
   it('narrows the device-link worker source against the controlled device catalog', () => {
     // 草稿里持久化的来源/模型按**目标设备**的目录收窄:device-link 分支必须用
-    // deviceProviders,拿控制端的 localProviders 收窄等于用错机器的目录。
+    // agentCatalogProviders（从 deviceProviders 过滤远程调用权限），拿控制端的
+    // localProviders 收窄等于用错机器的目录。
     const collapsed = source.replace(/\s+/g, ' ');
+    expect(collapsed).toContain(
+      'const agentCatalogProviders = useMemo( () => (effectiveAgentDeviceId ? remoteAgentProviders(deviceProviders) : deviceProviders), [effectiveAgentDeviceId, deviceProviders], );',
+    );
     expect(
       collapsed.match(
-        /draftEnableOrcaOptions\( effectiveCollab, deviceProviders, !deviceProvidersLoading, true, \)/g,
+        /draftEnableOrcaOptions\( effectiveCollab, agentCatalogProviders, !deviceProvidersLoading, true, \)/g,
       ) ?? [],
     ).toHaveLength(2);
     // 本机 / SSH 仍按控制端目录收窄。五条创建即发送/目标路径都要求 deferred handoff;

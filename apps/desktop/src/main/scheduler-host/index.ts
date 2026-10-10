@@ -24,6 +24,7 @@ import type { FeishuIM } from '@cindy/im';
 
 import { dialogueWorkspaceRoots } from '../localDb/dialogueWorkspace';
 import { sessions } from '../localDb/schema.js';
+import { getDbClient } from '../localDb/client/current';
 import { isReviewSessionSource } from '../../shared/sessionSource.js';
 import { dbToMakerAgentKind } from '../../shared/agentKindConversion.js';
 import { assertScheduledHarnessSupported } from '../maker-ipc/scheduledModelSelection';
@@ -36,10 +37,12 @@ import {
 import { getAgentIslandService } from '../agent-island/service.js';
 import { getDesktopNotificationsEnabled } from '../notificationService.js';
 import {
+  applyPiImModelSelectionUnderLock,
   acquirePendingAgentSwitchForDirectSend,
   broadcastSessionCreated,
   cancelSchedulerAutoResume,
   enqueueSchedulerPrompt,
+  ensureSchedulerQueueRestored,
   hasQueuedSchedulerPrompt,
   isSchedulerAutoResumePending,
   isSchedulerPromptTracked,
@@ -119,20 +122,31 @@ async function startSchedulerInternal(deps: StartSchedulerDeps): Promise<Schedul
     beforeDispatchUserTurn: deps.beforeDispatchUserTurn,
     readAutoReviewHistory: async (sessionId) => {
       await drainPersistQueue();
-      return listMessagesForAgentHandoff(sessionId, 100, undefined, 'authorization');
+      return listMessagesForAgentHandoff(sessionId, null, undefined, 'authorization');
     },
     onUndispatchedUserTurn: deps.onUndispatchedUserTurn,
     acquirePendingAgentSwitch: acquirePendingAgentSwitchForDirectSend,
+    applyPiModelSelectionUnderLock: applyPiImModelSelectionUnderLock,
     resolveModelSelection: resolveScheduledModelSelectionLive,
     onSessionCreated: broadcastSessionCreated,
     // 停用轴裁决:每次 fire 前判保存路由是否已被用户停用(见 runner deps 注释)。
     checkModelRoute: verdictForModelRoute,
+    // Agent 在另一台电脑运行的任务按那台的目录裁决，本机停用轴不适用(读失败按本机任务处理)。
+    isAgentOnOtherDevice: async (sessionId) => {
+      const [row] = await getDbClient()
+        .drizzle.select({ agentDeviceId: sessions.agentDeviceId, remoteHostId: sessions.remoteHostId })
+        .from(sessions)
+        .where(eq(sessions.id, sessionId))
+        .limit(1);
+      return !!row?.agentDeviceId && !row.remoteHostId;
+    },
     // 隐式改道后按落地拷贝 reconcile effort/Fast(见 runner deps 注释,R27)。
     resolveRouteCopyCapabilities,
     resolveDefaultModelRoute: resolveDefaultScheduleRoute,
     // 心跳撞忙排队桥:实现挂在 maker-ipc/register.ts 的 coordinator 装配处
-    // (holder 未就绪时 isSessionBusy 返回 false → runner 走原直发路径)。
+    // 先恢复快照再判忙闲；holder 未就绪时恢复返回 false，由 runner 顺延。
     schedulerQueue: {
+      ensureQueueRestored: ensureSchedulerQueueRestored,
       isSessionBusy: isSchedulerTargetSessionBusy,
       hasQueuedPrompt: hasQueuedSchedulerPrompt,
       enqueuePrompt: enqueueSchedulerPrompt,

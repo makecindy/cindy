@@ -1,3 +1,4 @@
+import { readResponseSpeedSnapshot, stopResponseSpeed, retryResponseSpeed, resumeResponseSpeed, mergeResponseSpeedStatus, type ResponseSpeedSnapshot } from '@cindy/maker-shared/usage-format';
 import { normalizeTaskTags, reconcileTaskTags } from '@cindy/maker-shared';
 import {
   createContext,
@@ -5,10 +6,13 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
+  useMemo,
   useRef,
   useSyncExternalStore,
   type ReactNode,
 } from 'react';
+import { PausableSubscriptions } from './pausableSubscriptions';
 import {
   MAKER_EVENT_BATCH_CHANNEL,
   SESSION_ACTIVITY_CHANNEL,
@@ -46,6 +50,7 @@ import {
 } from '@/session/swipeRowRegistry';
 import {
   cacheSessionMessagesIfCurrent,
+  cacheSessionListMessage,
   captureSessionMessageCacheWriteAuthority,
   getCachedSessionMessages,
   isSessionMessageCacheWriteAuthorityCurrent,
@@ -114,6 +119,26 @@ export const sessionPendingWrites = createPendingWriteTracker();
 export const sessionMetaWriteGuard = createLatestWriteGuard();
 export const sessionMetaWriteQueue = createSessionWriteQueue();
 
+/**
+ * 会话元数据写的两个设备 id(首页 / 设备详情 / 会话页菜单 / 协同 Worker 归档共用):
+ *  - rpcDeviceId:出网目标,默认取展示用规范 id(re-link 后认领回当前设备);调用方已按
+ *    路由连着某台设备(会话页)时传 preferredRpcDeviceId 沿用它;
+ *  - shardId:乐观 patch 与失败回滚落的**物理** shard(行真实所在)。re-link 后两者可能
+ *    不同:按规范 id 落 shard 会让乐观移行落空、回滚插进另一个 shard 成重复行。
+ * 都解析不到时返回 null(调用方按「找不到设备」处理)。
+ */
+export function resolveSessionWriteDevices(
+  sessionId: string,
+  session: Pick<RemoteSession, 'canonicalDeviceId' | 'deviceLinkDeviceId'> | null | undefined,
+  preferredRpcDeviceId?: string | null,
+): { rpcDeviceId: string; shardId: string } | null {
+  const indexedDeviceId = sessionDeviceIndex.get(sessionId);
+  const rpcDeviceId = preferredRpcDeviceId || session?.canonicalDeviceId || session?.deviceLinkDeviceId
+    || indexedDeviceId;
+  if (!rpcDeviceId) return null;
+  return { rpcDeviceId, shardId: session?.deviceLinkDeviceId || indexedDeviceId || rpcDeviceId };
+}
+
 export interface RemoteSessionRunStatus {
   isRunning: boolean;
   /** Terminal failure remains sticky until the next run, even after read acknowledgement. */
@@ -124,6 +149,7 @@ export interface RemoteSessionRunStatus {
   status: string;
   tokenUsage: number;
   outputTokens: number;
+  responseSpeed?: ResponseSpeedSnapshot;
   generationDurationMs: number;
   generationActive: boolean;
   generationReliable: boolean;
@@ -164,6 +190,7 @@ export interface SetLatestMessageWindowOptions {
 }
 
 export interface SessionMessageWriteOptions {
+  listMessage?: boolean;
   authority?: SessionMessageAuthority;
   /** 本行是否携带主机时间域的 createdAt；本地临时卡必须显式关闭。 */
   hostTimeAuthoritative?: boolean;
@@ -816,7 +843,7 @@ function deleteSessionLiveActivity(sessionId: string): boolean {
 }
 
 function sessionById(sessionId: string): RemoteSession | undefined {
-  return mergedSessions.find((session) => session.id === sessionId);
+  return mergedSessionById.get(sessionId);
 }
 
 function retentionForSession(sessionId: string): SessionRetentionKind {
@@ -987,6 +1014,12 @@ function messageWriteAllowed(
   // 拒绝旧订阅/流式 flush，未曾打开的普通任务仍保留既有全局镜像行为。
   if (retentionForSession(sessionId) === 'schedule') return false;
   return !sessionMessageLifecycle.hasEntered(sessionId);
+}
+
+function listMessageWriteAllowed(sessionId: string, deviceId?: string): boolean {
+  const session = mergedSessionById.get(sessionId);
+  return !!session && session.deviceLinkDeviceId === deviceId && session.status === 'active'
+    && retentionForSession(sessionId) === 'regular';
 }
 
 function normalizeWindowForRetention(
@@ -1241,6 +1274,28 @@ function applyMessageWriteRetention(sessionId: string): void {
 }
 
 let mergedSessions: RemoteSession[] = [];
+// Retention and live-row anchoring run for every message write. Looking up each
+// cached window in the full list makes bulk hydration approach cubic work.
+const mergedSessionById = new Map<string, RemoteSession>();
+// List-only projection. Detail consumers keep reading mergedSessions, including
+// live usage. Usage pushes must not rebuild Home's grouping/localization tree.
+let homeSessions: RemoteSession[] = [];
+const SESSION_USAGE_FIELDS = new Set(['totalMoney', 'totalCostUsd', 'totalTokenUsage']);
+
+function reconcileHomeSessions(): void {
+  const previous = new Map(homeSessions.map((session) => [session.id, session]));
+  const next = mergedSessions.map((session) => {
+    const projected = { ...session };
+    delete projected.totalMoney;
+    delete projected.totalCostUsd;
+    delete projected.totalTokenUsage;
+    const old = previous.get(session.id);
+    return old && remoteSessionEqual(old, projected) ? old : projected;
+  });
+  if (sameElementRefs(homeSessions, next)) return;
+  homeSessions = next;
+  bumpHomeStatusVersion();
+}
 let messageVersion = 0;
 let storeVersion = 0;
 // A single remote snapshot often updates both the session shard and its
@@ -1258,7 +1313,7 @@ type LiveRowCreatedAtAnchor = {
 
 function liveRowCreatedAtAnchor(sessionId: string): LiveRowCreatedAtAnchor {
   const pendingHostAnchorIds = pendingHostAnchorLiveAssistantClientIds.get(sessionId);
-  const session = mergedSessions.find((item) => item.id === sessionId);
+  const session = sessionById(sessionId);
   const authoritativeMessages = (messages.get(sessionId) ?? []).filter((message) => {
     const isPendingHostAnchor = pendingHostAnchorIds?.has(message.id) === true
       || pendingHostAnchorIds?.has(message.clientId) === true;
@@ -1287,12 +1342,12 @@ function liveRowCreatedAtAnchor(sessionId: string): LiveRowCreatedAtAnchor {
 }
 
 function latestUserSendAt(sessionId: string): string | undefined {
-  return mergedSessions.find((item) => item.id === sessionId)?.userSendAt ?? undefined;
+  return sessionById(sessionId)?.userSendAt ?? undefined;
 }
 
 function authoritativeSessionDeviceId(sessionId: string): string | undefined {
   if (!deviceList) return undefined;
-  const session = mergedSessions.find((item) => item.id === sessionId);
+  const session = sessionById(sessionId);
   const canonicalDeviceId = session?.canonicalDeviceId;
   if (canonicalDeviceId && deviceList.some((device) => device.deviceId === canonicalDeviceId)) {
     return canonicalDeviceId;
@@ -1501,6 +1556,9 @@ function recomputeSessions(): void {
   // 数组级同样调和:全部元素引用与序都未变时保留旧数组引用——useRemoteSessions 的
   // useSyncExternalStore 快照经 Object.is 即可短路,消费屏对无关 emit 零重渲染。
   mergedSessions = sameElementRefs(mergedSessions, next) ? mergedSessions : next;
+  mergedSessionById.clear();
+  for (const session of mergedSessions) mergedSessionById.set(session.id, session);
+  reconcileHomeSessions();
   let liveRowsReanchored = false;
   for (const session of mergedSessions) {
     bindPendingHostAnchorSendAt(session.id, session.userSendAt);
@@ -3278,13 +3336,37 @@ export const remoteSessionStore = {
   upsertDeviceSession(deviceId: string, deviceName: string, rawSession: RemoteSession): void {
     let stamped = stamp(rawSession, deviceId, deviceName);
     const shard = shards.get(deviceId);
+    const existing = shard?.sessions.find((s) => s.id === rawSession.id);
+    // 在途元数据写保护(与 setDeviceSessions 同口径):单条读回(会话页 getSession、资源页、
+    // 发件箱回包)可能是被控端尚未处理本机写的旧值——
+    //  - 行已被本地乐观移出且 status 在途(归档/删除):不插回,终态由该写的结局负责;
+    //  - 行仍在本地:在途字段用本地当前值覆盖,差异留痕由该写的结局 consume 后 reseed。
+    // 写失败的整行回滚必须先 release 自己的在途登记再 upsert,否则会被这里当成旧读回挡掉。
+    const pendingFields = sessionPendingWrites.pendingFields(rawSession.id);
+    if (pendingFields.length > 0) {
+      if (!existing) {
+        if (pendingFields.includes('status')) return;
+      } else {
+        const overlay: Record<string, unknown> = {};
+        for (const field of pendingFields) {
+          const localValue = (existing as unknown as Record<string, unknown>)[field];
+          overlay[field] = localValue;
+          sessionPendingWrites.noteMaskedValue(
+            rawSession.id,
+            field,
+            (stamped as unknown as Record<string, unknown>)[field],
+            localValue,
+          );
+        }
+        stamped = { ...stamped, ...overlay } as RemoteSession;
+      }
+    }
     if (!shard) {
       shards.set(deviceId, { deviceId, deviceName, sessions: [stamped] });
       recomputeSessions();
       return;
     }
     const next = shard.sessions.filter((s) => s.id !== rawSession.id);
-    const existing = shard.sessions.find((s) => s.id === rawSession.id);
     stamped = preserveSessionRuntimeFields(stamped, existing);
     if (
       existing
@@ -3339,6 +3421,20 @@ export const remoteSessionStore = {
       );
       if (remoteSessionEqual(shard.sessions[idx], patched)) return;
       shard.sessions = shard.sessions.map((s) => (s.id === sessionId ? patched : s));
+      if (Object.keys(patch).every((key) => SESSION_USAGE_FIELDS.has(key))) {
+        // Usage cannot change routing, retention, previews, grouping or unread.
+        // Preserve the canonical shard winner and notify detail selectors only.
+        if (sessionDeviceIndex.get(sessionId) === deviceId) {
+          mergedSessions = mergedSessions.map((session) => {
+            if (session.id !== sessionId) return session;
+            const updated = { ...session, ...patch };
+            mergedSessionById.set(sessionId, updated);
+            return updated;
+          });
+        }
+        emit();
+        return;
+      }
       shouldReseedAfterPatch = wasPinned && unpinned;
     }
     recomputeSessions();
@@ -3720,7 +3816,7 @@ export const remoteSessionStore = {
     message: RemoteMessage,
     options: SessionMessageWriteOptions = {},
   ): void {
-    if (!messageWriteAllowed(sessionId, options.authority)) return;
+    if (!options.listMessage && !messageWriteAllowed(sessionId, options.authority)) return;
     let changed = flushPendingTextDelta(sessionId);
     changed = settleInputProjectionFromMessages(sessionId, [message]) || changed;
     const reanchorAfterMessage = options.hostTimeAuthoritative !== false && message.role === 'user';
@@ -4260,13 +4356,17 @@ export const remoteSessionStore = {
     const sessionId = readString(payload, 'sessionId');
     const event = isRecord(payload.event) ? payload.event : null;
     const persistId = readString(payload, 'persistId') ?? undefined;
-    if (sessionId && event) this.applyMakerEvent(sessionId, event, persistId, deviceId);
+    const fromList = payload.listMessage === true;
+    if (fromList && (!sessionId || !listMessageWriteAllowed(sessionId, deviceId))) return;
+    if (sessionId && event) this.applyMakerEvent(sessionId, event, persistId, deviceId, fromList);
   },
 
   applyRemotePush(deviceId: string, channel: string, payload: unknown): void {
     if (channel === SESSION_SYNC_CHANNEL) {
       consumeRemoteSessionSync(payload, {
-        applyEvent: (event) => this.applyRemotePush(deviceId, 'maker:event', event),
+        applyEvent: (event) => this.applyRemotePush(deviceId, 'maker:event', {
+          ...event, ...(isRecord(payload) && payload.listMessage === true ? { listMessage: true } : {}),
+        }),
         invalidateHistory: (sessionId) => {
           sessionMessageSyncMarkers.delete(sessionId);
           forgetWindowCoverage(sessionId);
@@ -4338,7 +4438,12 @@ export const remoteSessionStore = {
     if (channel === 'local-db:messages:created' && isRecord(payload)) {
       const sessionId = readString(payload, 'sessionId');
       const message = isRecord(payload.message) ? (payload.message as unknown as RemoteMessage) : null;
-      if (sessionId && message) this.appendMessage(sessionId, message);
+      const fromList = payload.listMessage === true;
+      if (fromList && (!sessionId || !listMessageWriteAllowed(sessionId, deviceId))) return;
+      if (sessionId && message) {
+        this.appendMessage(sessionId, message, { listMessage: fromList });
+        if (fromList) void cacheSessionListMessage(deviceId, sessionId, message);
+      }
       return;
     }
     if (channel === 'local-db:messages:deleted' && isRecord(payload)) {
@@ -4615,13 +4720,23 @@ export const remoteSessionStore = {
     event: Record<string, unknown>,
     persistId?: string,
     deviceId?: string,
+    fromList = false,
   ): void {
     markSessionMakerActivity(sessionId);
     const type = readString(event, 'type');
     const reconnectCleared = type !== null && type !== 'error' && type !== 'done'
       ? clearSessionReconnectAttempt(sessionId)
       : false;
-    const fullMessageWriteAllowed = messageWriteAllowed(sessionId);
+    const fullMessageWriteAllowed = fromList || messageWriteAllowed(sessionId);
+    const outputData = isRecord(event.data) ? event.data : null;
+    if (((type === 'text' || type === 'thinking') && readString(outputData, 'text')) || type === 'tool_use') {
+      const current = readSessionRunStatus(sessionId);
+      const responseSpeed = resumeResponseSpeed(current.responseSpeed);
+      if (responseSpeed !== current.responseSpeed) {
+        writeSessionRunStatus(sessionId, { ...current, responseSpeed });
+        emit();
+      }
+    }
     if (type === 'text') {
       if (!fullMessageWriteAllowed) {
         if (reconnectCleared) emit();
@@ -4704,11 +4819,20 @@ export const remoteSessionStore = {
           }
         }
       }
-      const terminalErrorChanged = isTerminalMakerErrorEvent(event)
-        && writeSessionRunStatus(sessionId, {
-          ...readSessionRunStatus(sessionId),
-          hasTerminalError: true,
-        });
+      const terminalData = isRecord(event.data) ? event.data : null;
+      const rawTurn = isRecord(terminalData?.raw) ? terminalData.raw : null;
+      const current = readSessionRunStatus(sessionId);
+      const cancelled = (!current.isRunning && current.responseSpeed?.outcome === 'cancelled') ||
+        terminalData?.cancelled === true || terminalData?.status === 'cancelled' ||
+        terminalData?.reason === 'send_cancelled_before_acceptance' ||
+        terminalData?.reason === 'turn_continuation_cancelled' ||
+        terminalData?.reason === 'user_stop_unconfirmed_wake_tasks';
+      const failed = !cancelled && (isTerminalMakerErrorEvent(event) || rawTurn?.status === 'failed' || terminalData?.status === 'failed');
+      const terminalErrorChanged = writeSessionRunStatus(sessionId, {
+        ...current,
+        ...(cancelled ? { hasTerminalError: false } : failed ? { hasTerminalError: true } : {}),
+        responseSpeed: stopResponseSpeed(current.responseSpeed, cancelled ? 'cancelled' : failed ? 'failed' : undefined),
+      });
       this.setSessionRunning(
         sessionId,
         false,
@@ -4735,6 +4859,7 @@ export const remoteSessionStore = {
         ...current,
         isRunning: true,
         reconnectAttempt,
+        responseSpeed: data?.willRetry === true ? retryResponseSpeed(current.responseSpeed) : current.responseSpeed,
         startedAt: current.startedAt ?? Date.now(),
       });
       if (changed || textFlushed) emit();
@@ -4912,6 +5037,8 @@ export const remoteSessionStore = {
         status: rawStatus ?? current.status,
         tokenUsage,
         outputTokens,
+        responseSpeed: mergeResponseSpeedStatus(current.responseSpeed,
+          readResponseSpeedSnapshot(data?.responseSpeed, Date.now()), isRunning, isTurnStart),
         generationDurationMs,
         generationActive,
         generationReliable,
@@ -5083,6 +5210,11 @@ export const remoteSessionStore = {
     reseedHandlers.clear();
     pendingTitlePreview.clear();
     mergedSessions = [];
+    mergedSessionById.clear();
+    if (homeSessions.length > 0) {
+      homeSessions = [];
+      bumpHomeStatusVersion();
+    }
     deviceList = null;
     bumpMessageVersion();
     emit();
@@ -5116,6 +5248,10 @@ export const remoteSessionStore = {
 
   getSessions(): RemoteSession[] {
     return mergedSessions;
+  },
+
+  getHomeSessions(): RemoteSession[] {
+    return homeSessions;
   },
 
   getMessages(sessionId: string): RemoteMessage[] {
@@ -5483,6 +5619,7 @@ function clearLiveGenerationOnWideRunStart(
   return {
     ...next,
     outputTokens: 0,
+    responseSpeed: undefined,
     generationDurationMs: 0,
     generationActive: false,
     generationReliable: true,
@@ -5503,6 +5640,9 @@ function writeMakerTurnRunning(sessionId: string, running: boolean): boolean {
 
 function writeSessionRunStatus(sessionId: string, next: RemoteSessionRunStatus): boolean {
   const current = readSessionRunStatus(sessionId);
+  if (!next.isRunning && next.responseSpeed?.phase !== 'complete') {
+    next = { ...next, responseSpeed: stopResponseSpeed(next.responseSpeed), generationActive: false };
+  }
   if (next.isRunning && !current.isRunning && current.hasTerminalError) {
     next = { ...next, hasTerminalError: false };
   }
@@ -5677,8 +5817,7 @@ function readNumber(value: unknown, key: string): number | null {
   return typeof raw === 'number' && Number.isFinite(raw) ? raw : null;
 }
 
-const RemoteSessionStoreSubscriptionEnabledContext = createContext(true);
-const INACTIVE_REMOTE_SESSION_STORE_SUBSCRIBE = () => () => undefined;
+const RemoteSessionStoreSubscriptionContext = createContext<PausableSubscriptions | null>(null);
 
 /**
  * Keep a mounted route's remote-session projection stable while it is covered by another screen.
@@ -5693,11 +5832,36 @@ export function RemoteSessionStoreSubscriptionGate({
   children: ReactNode;
   enabled: boolean;
 }) {
+  const gateRef = useRef<PausableSubscriptions | null>(null);
+  if (!gateRef.current) gateRef.current = new PausableSubscriptions(enabled);
+  const gate = gateRef.current;
+  useLayoutEffect(() => {
+    gate.setEnabled(enabled);
+    return () => gate.setEnabled(false);
+  }, [gate, enabled]);
   return createElement(
-    RemoteSessionStoreSubscriptionEnabledContext.Provider,
-    { value: enabled },
+    RemoteSessionStoreSubscriptionContext.Provider,
+    { value: gate },
     children,
   );
+}
+
+const NOOP_SUBSCRIBE = () => () => undefined;
+
+/**
+ * Visibility of the surrounding route (RemoteSessionStoreSubscriptionGate). Covered routes keep
+ * their rows mounted without re-rendering them, so side effects such as remote polling must
+ * check `isActive()` before running and use `onResume` to catch up when the route is shown again.
+ */
+export function useRemoteSessionStoreVisibility(): {
+  isActive: () => boolean;
+  onResume: (callback: () => void) => () => void;
+} {
+  const gate = useContext(RemoteSessionStoreSubscriptionContext);
+  return useMemo(() => ({
+    isActive: () => (gate ? gate.enabled : true),
+    onResume: (callback: () => void) => (gate ? gate.subscribe(NOOP_SUBSCRIBE, callback) : () => undefined),
+  }), [gate]);
 }
 
 function usePausableRemoteSessionStoreSnapshot<T>(
@@ -5705,25 +5869,67 @@ function usePausableRemoteSessionStoreSnapshot<T>(
   getSnapshot: () => T,
   subscribe: (cb: () => void) => () => void = remoteSessionStore.subscribe,
 ): T {
-  const enabled = useContext(RemoteSessionStoreSubscriptionEnabledContext);
+  const gate = useContext(RemoteSessionStoreSubscriptionContext);
   const frozenSnapshotRef = useRef<{ identity: unknown; value: T } | null>(null);
   const readSnapshot = useCallback(() => {
     const frozen = frozenSnapshotRef.current;
-    if (enabled || frozen === null || !Object.is(frozen.identity, identity)) {
+    if (!gate || gate.enabled || frozen === null || !Object.is(frozen.identity, identity)) {
       const next = { identity, value: getSnapshot() };
       frozenSnapshotRef.current = next;
       return next.value;
     }
     return frozen.value;
-  }, [enabled, getSnapshot, identity]);
+  }, [gate, getSnapshot, identity]);
+  const subscribeWhileActive = useCallback(
+    (notify: () => void) => gate ? gate.subscribe(subscribe, notify) : subscribe(notify),
+    [gate, subscribe],
+  );
   return useSyncExternalStore(
-    enabled ? subscribe : INACTIVE_REMOTE_SESSION_STORE_SUBSCRIBE,
+    subscribeWhileActive,
     readSnapshot,
   );
 }
 
 export function useRemoteSessions(): RemoteSession[] {
   return usePausableRemoteSessionStoreSnapshot('sessions', remoteSessionStore.getSessions);
+}
+
+/** Home rows/actions do not consume usage; session details must use useRemoteSessions. */
+export function useRemoteHomeSessions(): RemoteSession[] {
+  return usePausableRemoteSessionStoreSnapshot(
+    'home-sessions', remoteSessionStore.getHomeSessions, remoteSessionStore.subscribeHomeStatus,
+  );
+}
+
+export type RemoteSessionUsage = Pick<RemoteSession, 'totalMoney' | 'totalCostUsd' | 'totalTokenUsage'>;
+const EMPTY_SESSION_USAGE: RemoteSessionUsage = {};
+
+function sessionUsageEqual(a: RemoteSessionUsage, b: RemoteSessionUsage): boolean {
+  return a.totalTokenUsage === b.totalTokenUsage
+    && a.totalCostUsd === b.totalCostUsd
+    && a.totalMoney?.amount === b.totalMoney?.amount
+    && a.totalMoney?.currency === b.totalMoney?.currency
+    && a.totalMoney?.kind === b.totalMoney?.kind
+    && a.totalMoney?.approximate === b.totalMoney?.approximate;
+}
+
+/**
+ * One task's live usage for list rows. Home projections strip usage so usage pushes do not
+ * rebuild grouping; a row that displays tokens or cost subscribes here instead and only
+ * re-renders when its own numbers change.
+ */
+export function useRemoteSessionUsage(sessionId: string, enabled = true): RemoteSessionUsage {
+  const previousRef = useRef<RemoteSessionUsage>(EMPTY_SESSION_USAGE);
+  const readUsage = useCallback(() => {
+    const session = enabled ? sessionById(sessionId) : undefined;
+    const next: RemoteSessionUsage = session
+      ? { totalCostUsd: session.totalCostUsd, totalMoney: session.totalMoney, totalTokenUsage: session.totalTokenUsage }
+      : EMPTY_SESSION_USAGE;
+    if (sessionUsageEqual(previousRef.current, next)) return previousRef.current;
+    previousRef.current = next;
+    return next;
+  }, [enabled, sessionId]);
+  return usePausableRemoteSessionStoreSnapshot(readUsage, readUsage);
 }
 
 /** Device identity can change without changing any session's reconciled reference. */
@@ -5858,10 +6064,14 @@ function useSessionMessageCacheSync(
     clearTimeout(persistTimerRef.current);
     persistTimerRef.current = null;
     const ctx = ctxRef.current;
-    if (!ctx.deviceId || !ctx.sessionId || ctx.messages.length === 0) return;
+    if (!ctx.deviceId || !ctx.sessionId) return;
     if (remoteSessionStore.getSessionRetention(ctx.sessionId) !== 'regular') return;
+    // Store ingress can precede the last React render. A fresh write authority
+    // must use fresh rows, never the render snapshot from before an outbox handoff.
+    const latestMessages = remoteSessionStore.getMessages(ctx.sessionId);
+    if (latestMessages.length === 0) return;
     const cacheAuthority = captureSessionMessageCacheWriteAuthority(ctx.deviceId, ctx.sessionId);
-    void cacheSessionMessagesIfCurrent(cacheAuthority, ctx.messages).catch(() => undefined);
+    void cacheSessionMessagesIfCurrent(cacheAuthority, latestMessages).catch(() => undefined);
   }, []);
 }
 

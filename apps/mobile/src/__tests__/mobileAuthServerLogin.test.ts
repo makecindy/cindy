@@ -737,7 +737,8 @@ describe('mobile auth-server login', () => {
       'utf8',
     );
     expect(screenSource).toContain('() => () => {');
-    expect(screenSource).toContain('void auth.cancelAddAccount();');
+    expect(screenSource).toContain('void auth.cancelAddAccount().catch(() => undefined);');
+    expect(screenSource).not.toContain('cancelAddAccount().finally');
     expect(screenSource).toContain('flowFinishedRef.current');
 
     const beginStart = authSource.indexOf('const beginAddAccount = useCallback');
@@ -768,10 +769,13 @@ describe('mobile auth-server login', () => {
       resolve(process.cwd(), 'src/session/AccountSwitcherSheet.tsx'),
       'utf8',
     );
-    expect(sheetSource).toContain('disabled={switchingKey !== null}');
-    expect(sheetSource).not.toContain(
-      'disabled={auth.accountsLoading || switchingKey !== null}',
+    // 「添加账号」改用共享 MainWindowActionButton(action 对象传 disabled):只在切换账号时禁用,
+    // 不因后台同步 savedAccounts(accountsLoading)而阻塞。
+    expect(sheetSource).toMatch(
+      /testID: 'accountSwitcher\.addAccount'/,
     );
+    expect(sheetSource).toContain('disabled: switchingKey !== null,');
+    expect(sheetSource).not.toMatch(/disabled[=:]\s*\{?auth\.accountsLoading/);
     expect(sheetSource).toContain("t('devices.list.alert.actionFailed')");
     expect(sheetSource).toContain('formatRemoteError(error)');
     expect(sheetSource).not.toContain('.catch(() => undefined)\n        .finally');

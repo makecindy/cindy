@@ -39,6 +39,7 @@ export interface IssueConfirmPayload {
 }
 
 export interface PermissionReviewPresentation {
+  sourceDescription?: string;
   autoReviewUnavailable: boolean;
   canAlwaysAllow: boolean;
   code: string;
@@ -206,12 +207,22 @@ export function buildPermissionReviewPresentation(
   const input = permissionInput(request);
   const riskSummary = permissionRiskSummary(request, localizer);
   const canAlwaysAllow = sessionScopedPermissionSuggestions(request.suggestions).length > 0;
+  const sourceDescription = permissionSourceDescription(request);
+  let description = permissionDescription(request);
+  // IM retains its combined body; UI titles must describe the operation only.
+  if (sourceDescription && description?.startsWith(sourceDescription)) {
+    if (description === sourceDescription) description = null;
+    else if (description.startsWith(`${sourceDescription}\n\n`)) {
+      description = readString(description.slice(sourceDescription.length + 2));
+    }
+  }
 
   return {
     autoReviewUnavailable: permissionAutoReviewUnavailable(request),
+    ...(sourceDescription ? { sourceDescription } : {}),
     canAlwaysAllow,
     code: formatPermissionInput(toolName, input),
-    description: permissionDescription(request),
+    description,
     riskSummary,
     summary: buildPermissionDecisionSummary({ toolName, riskSummary, canAlwaysAllow }, localizer),
     title: permissionTitle(request, localizer),
@@ -838,6 +849,13 @@ export function permissionTitle(
   return presentationText(localizer, 'interaction.presentation.permission.title', `允许使用 ${tool}?`, { tool });
 }
 
+export function permissionSourceDescription(request: InteractionRequestLike): string | null {
+  const metadata = request.metadata;
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return null;
+  const source = (metadata as Record<string, unknown>).imSourceDescription;
+  return typeof source === 'string' ? source : null;
+}
+
 export function permissionDescription(request: InteractionRequestLike): string | null {
   return readString(request.description);
 }
@@ -969,6 +987,44 @@ export function selectionFromAnswer(question: AskQuestion, answer: string | unde
     return { selectedLabels: new Set(), customInput: answer, showCustomInput: true };
   }
   return { selectedLabels: new Set([answer]), customInput: '', showCustomInput: false };
+}
+
+/**
+ * Option labels that are really the model's own "none of these fit" escape
+ * hatch. Claude Code's native AskUserQuestion prompt tells the model not to add
+ * an "Other" option (the host UI provides a free-text entry automatically), but
+ * harnesses whose tool schema carries no such note still produce labels like
+ * "其他（回复说明）" or "Other (please specify)".
+ *
+ * A host question card must replace such an option with its own free-text
+ * entry instead of rendering (and submitting) the literal label: the model wrote
+ * the option expecting the user's explanation, so receiving only the label back
+ * reads as an empty answer. See `visibleAskOptions`.
+ *
+ * Only a leading "other"-style token is recognized, so labels that merely
+ * mention an explanation inside a substantive choice (e.g. "sensor_height 要改
+ * （回复说明数值）" or "其他任务") are not escape hatches and stay selectable.
+ */
+export function isFreeTextAskOptionLabel(label: string): boolean {
+  const normalized = label.trim().toLowerCase();
+  if (!normalized) return false;
+  // "Other" / "Other (please specify)" / "其他（回复说明）" are escape hatches;
+  // "Other tasks" / "その他の質問" are substantive options. A bare space must not
+  // count as the boundary — only end-of-label or a separator/parenthesis does.
+  return /^(?:其他(?:答案|选项)?|其它(?:答案|选项)?|other|others|something else|その他|기타)(?=$|\s*[（(【[：:，,、.。\-—－…])/.test(normalized);
+}
+
+/**
+ * Options one host question card should render.
+ *
+ * Model-authored free-text entries are dropped: they mean the same thing as the
+ * host's own "type your own answer" row, so rendering both would show duplicate
+ * escape hatches and let a click submit the placeholder label as an answer. The
+ * host row is the single entry that remains (it also covers the case where the
+ * filtered list becomes empty — callers fall back to free-form input).
+ */
+export function visibleAskOptions<T extends { label: string }>(options: readonly T[] | undefined): T[] {
+  return (options ?? []).filter((option) => !isFreeTextAskOptionLabel(option.label));
 }
 
 export function buildAskUserQuestionDecision(answers: Record<string, string>): Record<string, unknown> {

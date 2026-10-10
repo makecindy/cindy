@@ -20,6 +20,7 @@ const plan = (overrides: Partial<BotGroupPlanView> = {}): BotGroupPlanView => ({
 
 describe('bot group copy variants (shared by desktop and phone)', () => {
   it('speaks about a step for member notices inside a plan', () => {
+    expect(botGroupNoticeVariant('member-joined', false)).toBe('memberJoined');
     expect(botGroupNoticeVariant('member-failed', false)).toBe('memberFailed');
     expect(botGroupNoticeVariant('member-failed', true)).toBe('stepFailed');
     expect(botGroupNoticeVariant('plan-stopped', true)).toBe('planStopped');
@@ -30,6 +31,7 @@ describe('bot group copy variants (shared by desktop and phone)', () => {
 
   it('names only the refusals the user can act on', () => {
     expect(botGroupErrorVariant('PLAN_OPEN')).toBe('planOpen');
+    expect(botGroupErrorVariant('MENTION_UNAVAILABLE')).toBe('mentionUnavailable');
     expect(botGroupErrorVariant('INTERNAL')).toBeNull();
     expect(botGroupErrorVariant('constructor' as BotGroupErrorCode)).toBeNull();
     expect(botGroupErrorVariant(undefined)).toBeNull();

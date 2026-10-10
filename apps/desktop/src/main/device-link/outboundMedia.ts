@@ -31,6 +31,8 @@ import {
   mayCompressOutboundImage,
 } from './outboundImageCompress';
 import { buildLegacyAttachmentOssRef, parseAttachmentOssRef } from '../../shared/attachmentOssRef';
+import { readStartReviewRequest } from '../maker-ipc/reviewStartHandler.js';
+import { withPreparedOutboundReview } from '../maker-ipc/reviewOutboundInput.js';
 
 const log = createLogger('device-link:outboundMedia');
 
@@ -380,6 +382,27 @@ async function rewriteQueued(item: unknown, existing: ReadonlySet<string> = new 
  * 抛错由 handleInvoke 转 MEDIA_TRANSFER_FAILED。
  */
 export async function rewriteOutboundMedia(channel: string, args: unknown[], existing: ReadonlySet<string> = new Set()): Promise<unknown[]> {
+  if (channel === 'maker:review:start') {
+    // Validate the complete batch before any compression, disk read or upload.
+    const request = readStartReviewRequest(args[0]);
+    return withPreparedOutboundReview(request, async (prepared) => {
+      const rewritten = await rewriteQueued({ files: prepared.attachments }) as { files: unknown[] };
+      return [{ ...prepared, attachments: rewritten.files }, ...args.slice(1)];
+    });
+  }
+  const steerOpts = args[2];
+  if (
+    channel === 'maker:input:steer' &&
+    steerOpts &&
+    typeof steerOpts === 'object' &&
+    !Array.isArray(steerOpts) &&
+    (steerOpts as { removeFromQueue?: unknown }).removeFromQueue === true
+  ) {
+    // The host selects its authoritative queue item by clientId. Attachment
+    // URLs in the projected row belong to that host, not this controller;
+    // uploading them again would resolve remote cache URLs against local disk.
+    return args;
+  }
   if (channel === 'maker:input:update-content') {
     const next = [...args];
     next[2] = await rewriteQueued(next[2], existing);

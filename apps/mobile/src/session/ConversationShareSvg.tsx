@@ -6,7 +6,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { Image as NativeImage, Platform, StyleSheet, View } from "react-native";
+import { Image as NativeImage, PixelRatio, Platform, StyleSheet, View } from "react-native";
 import Svg, {
   ClipPath,
   Defs,
@@ -122,7 +122,11 @@ export const ConversationShareSvg = forwardRef<
     });
   }, [imageKeysByUri, layout.images]);
   const renderSize = useMemo(
-    () => conversationShareSvgRenderSize(layout),
+    () =>
+      conversationShareSvgRenderSize(
+        layout,
+        Platform.OS === "android" ? PixelRatio.get() : 1,
+      ),
     [layout],
   );
   const logoAsset = colors.dark ? shareLogoDarkAsset : shareLogoLightAsset;

@@ -1,3 +1,4 @@
+import { cindyManagedSkillRoots, listCindyManagedSkills } from './managed-skills.js';
 import { retainInvalidatedProviderPresentation, retainProviderPresentationAfterAuthChange } from './provider-presentation-store.js';
 import { subscriptionAccountKind, subscriptionAccountState } from './subscription-account-auth.js';
 /**
@@ -42,7 +43,7 @@ import { prepareSharedGlobalSkillLinks } from './shared-global-skills.js';
 import { PreparationCache } from './preparation-cache.js';
 import {
   prepareBuiltInSkills,
-  refreshBuiltInClaudeSkillLinks,
+  migrateBuiltInGlobalSkillLinks,
   resolveBundledSystemSkillsRoot,
 } from './built-in-skills.js';
 import {
@@ -630,26 +631,17 @@ export class DesktopClaudeAuthAdapter implements AuthAdapter {
           userDataDir: app.getPath('userData'),
           appDataDir: app.getPath('appData'),
         });
+        const migrationWarnings = preparedBuiltIns.projectionSafe
+          ? await migrateBuiltInGlobalSkillLinks({ userDataDir: app.getPath('userData'), appDataDir: app.getPath('appData') })
+          : [];
         const sharedProjection = await prepareSharedGlobalSkillLinks({
           assertOwnerStable: () => assertGhostSkillProjectionBoundaryStableForOwner(ownerId),
         });
-        // Publication already established a usable Claude projection before
-        // switching the active pointer. Reconcile once more after the generic
-        // palette sync so a newly surfaced user-owned ~/.claude winner keeps
-        // precedence; atomic link replacement preserves the usable projection
-        // if this optional refinement fails.
-        const claudePaletteProjection = preparedBuiltIns.projectionSafe
-          ? await refreshBuiltInClaudeSkillLinks({
-              userDataDir: app.getPath('userData'),
-              appDataDir: app.getPath('appData'),
-              descriptors: preparedBuiltIns.descriptors,
-            })
-          : { warnings: [] };
         return {
           warnings: [
             ...preparedBuiltIns.warnings,
+            ...migrationWarnings,
             ...sharedProjection.warnings,
-            ...claudePaletteProjection.warnings,
           ],
         };
       });
@@ -930,10 +922,10 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
 
   /**
    * Plugin capability enforcement is always rechecked after concurrent callers
-   * settle. Only successful Skill/rules preparation has a 30-second TTL.
+   * settle. Skill projections also refresh at each launch so a removed or
+   * disabled approved source cannot survive in a cached Codex discovery root.
    */
   private readonly pendingAssetsPrep = new PreparationCache(0);
-  private readonly skillAssetsPrep = new PreparationCache(30_000);
 
   /**
    * 进行中的 reconcileWithSystemCodex 调用 —— 多个调用点 (构造 / getState / getAuthEnv /
@@ -1371,18 +1363,15 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
   async ensureGlobalCodexAssets(): Promise<void> {
     const scope = preparationScope();
     await this.pendingAssetsPrep.ensure(scope.key, async () => {
-      await this.skillAssetsPrep.ensure(scope.key, async () => {
-        const success = await this.runEnsureGlobalCodexSkills(scope.ownerId);
-        return success && scope.current();
-      });
+      await this.runEnsureGlobalCodexSkills(scope.ownerId);
       await this.runEnsureGlobalCodexPlugins();
       return true;
     });
   }
 
   private async runEnsureGlobalCodexSkills(ownerId: string | null): Promise<boolean> {
-    // Load-bearing order: Codex skill linking scans ~/.agents/skills, so shared
-    // links must populate that directory before prepareCodexGlobalSkillsLinks runs.
+    // Prepare the private built-in roots before Codex snapshots discovery.
+    await desktopClaudeAuthAdapter.ensureSharedGlobalSkills();
     const sharedOutcome = await withSharedGlobalSkillProjectionMutation(ownerId, () =>
       prepareSharedGlobalSkillLinks({
         assertOwnerStable: () => assertGhostSkillProjectionBoundaryStableForOwner(ownerId),
@@ -1393,7 +1382,9 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     );
 
     const [skillsOutcome, rulesOutcome] = await Promise.all([
-      prepareCodexGlobalSkillsLinks(this.codexHome).then(
+      withSharedGlobalSkillProjectionMutation(ownerId, async () =>
+        prepareCodexGlobalSkillsLinks(this.codexHome, { managedRoots: await cindyManagedSkillRoots(), managedSkills: await listCindyManagedSkills() }),
+      ).then(
         (r) => ({ ok: true as const, label: 'skills' as const, warnings: r.warnings }),
         (err: Error) => ({ ok: false as const, label: 'skills' as const, err }),
       ),
@@ -1404,6 +1395,8 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     ]);
 
     const outcomes = [sharedOutcome, skillsOutcome, rulesOutcome];
+    // A failed verified catalog must not fall back to yesterday's projections.
+    if (!skillsOutcome.ok) throw skillsOutcome.err;
     for (const outcome of outcomes) {
       if (!outcome.ok) {
         assetPrepLog.warn('prepare Codex global asset failed', {
@@ -2503,7 +2496,11 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
 
   async getAuthEnv(options?: AuthAdapterOptions): Promise<Record<string, string>> {
     if (isCodexAccountProvider(options?.providerId)) {
-      return { CODEX_HOME: await prepareCodexAccountHome(options!.providerId!) };
+      const ownerId = getActiveAppSession().dataOwnerId;
+      await desktopClaudeAuthAdapter.ensureSharedGlobalSkills();
+      return { CODEX_HOME: await withSharedGlobalSkillProjectionMutation(ownerId, async () =>
+        prepareCodexAccountHome(options!.providerId!, await cindyManagedSkillRoots(), await listCindyManagedSkills()),
+      ) };
     }
     this.ensureInvalidationMarkerLoaded();
     await this.ensureGlobalCodexAssets();

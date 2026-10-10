@@ -10,9 +10,10 @@
  */
 import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { messages, sessions } from '../../schema';
+import { tx as runInprocTx } from '../../worker/opHandlers/tx';
 
 const h = vi.hoisted(() => ({
   db: null as ReturnType<typeof drizzle> | null,
@@ -71,10 +72,13 @@ vi.mock('../../client/current', () => ({
 import { createMessage, updateMessageContent } from '../messages';
 
 function setupDb(): void {
-  const sqlite = new Database(':memory:');
+  const sqlite = new Database(':memory:', { verbose: (sql) => h.queries.push(String(sql)) });
   sqlite.exec(`
     CREATE TABLE sessions (
       id TEXT PRIMARY KEY,
+      list_preview TEXT,
+      list_preview_role TEXT,
+      list_message_count INTEGER,
       cleared_at INTEGER,
       status TEXT NOT NULL DEFAULT 'active'
     );
@@ -95,26 +99,137 @@ function setupDb(): void {
   sqlite.prepare("INSERT INTO sessions (id, cleared_at, status) VALUES ('s1', NULL, 'active')").run();
   const db = drizzle(sqlite, {
     schema: { messages, sessions },
-    logger: {
-      logQuery: (query: string) => {
-        h.queries.push(query);
-      },
-    },
   });
   h.sqlite = sqlite;
   h.db = db;
   h.client = {
     drizzle: db,
+    tx: vi.fn(async (name: string, args: unknown) => {
+      return runInprocTx(sqlite, { name, args });
+    }),
     exec: vi.fn(async (sql: string, params: unknown[] = []) => h.sqlite!.prepare(sql).run(...params)),
     query: vi.fn(async (sql: string, params: unknown[] = []) => h.sqlite!.prepare(sql).all(...params)),
   };
 }
+
+afterEach(() => { h.sqlite?.close(); });
 
 describe('message write paths avoid large-content readback', () => {
   beforeEach(() => {
     h.queries.length = 0;
     h.mediaRefCalls.length = 0;
     setupDb();
+  });
+
+  it.each([false, true])('publishes only after the post-write guard succeeds (revoked=%s)', async revoked => {
+    const { tapWindowBroadcast } = await import('../../../device-link/broadcast-tap');
+    const { onMessageCreated } = await import('../../../embedders/chat-history-embedder');
+    const { recordPrRefsForMessage } = await import('../../../git-context/prRefsStore');
+    vi.mocked(tapWindowBroadcast).mockClear();
+    vi.mocked(onMessageCreated).mockClear();
+    vi.mocked(recordPrRefsForMessage).mockClear();
+    const beforePublish = vi.fn(async () => {
+      const published = beforePublish.mock.calls.length === 2;
+      expect(h.sqlite!.prepare('SELECT count(*) FROM messages').pluck().get()).toBe(published ? 1 : 0);
+      expect(h.sqlite!.prepare('SELECT count(*) FROM temp.cindy_pending_message_publications').pluck().get()).toBe(published ? 0 : 1);
+      expect(tapWindowBroadcast).not.toHaveBeenCalled();
+      expect(h.mediaRefCalls).toEqual([]);
+      expect(onMessageCreated).not.toHaveBeenCalled();
+      expect(recordPrRefsForMessage).not.toHaveBeenCalled();
+      if (revoked) throw new Error('revoked at server');
+    });
+    const sending = createMessage('s1', { clientId: 'private-message', role: 'assistant', content: 'Private result' }, { beforePublish });
+    if (revoked) {
+      await expect(sending).rejects.toThrow('revoked at server');
+      expect(h.sqlite!.prepare('SELECT count(*) FROM messages').pluck().get()).toBe(0);
+      expect(tapWindowBroadcast).not.toHaveBeenCalled();
+      expect(h.mediaRefCalls).toEqual([]);
+      expect(onMessageCreated).not.toHaveBeenCalled();
+      expect(recordPrRefsForMessage).not.toHaveBeenCalled();
+    } else {
+      await expect(sending).resolves.toMatchObject({ clientId: 'private-message', content: 'Private result' });
+      expect(h.sqlite!.prepare('SELECT client_id, rewind_at FROM messages').get()).toEqual({ client_id: 'private-message', rewind_at: null });
+      expect(tapWindowBroadcast).toHaveBeenCalledWith('local-db:messages:created', expect.anything());
+      expect(h.mediaRefCalls).toHaveLength(1);
+      await createMessage('s1', { clientId: 'private-message', role: 'assistant', content: 'Private result' }, { beforePublish });
+      expect(beforePublish).toHaveBeenCalledTimes(2);
+      expect(h.sqlite!.prepare('SELECT count(*) FROM messages').pluck().get()).toBe(1);
+    }
+    expect(h.sqlite!.prepare('SELECT count(*) FROM temp.cindy_pending_message_publications').pluck().get()).toBe(0);
+  });
+
+  it.each([false, true])('rolls back a publication revoked during commit before delivery hooks (lostReceipt=%s)', async lostReceipt => {
+    const { tapWindowBroadcast } = await import('../../../device-link/broadcast-tap');
+    const { onMessageCreated } = await import('../../../embedders/chat-history-embedder');
+    const { recordPrRefsForMessage } = await import('../../../git-context/prRefsStore');
+    vi.mocked(tapWindowBroadcast).mockClear();
+    vi.mocked(onMessageCreated).mockClear();
+    vi.mocked(recordPrRefsForMessage).mockClear();
+    let revoked = false;
+    h.client.tx.mockImplementation(async (name: string, args: { publication?: string }) => {
+      const result = runInprocTx(h.sqlite!, { name, args });
+      if (args.publication === 'publish') {
+        revoked = true;
+        if (lostReceipt) throw new Error('Publication receipt lost');
+      }
+      return result;
+    });
+    const beforePublish = vi.fn(async () => {
+      if (revoked) throw new Error('revoked during commit');
+    });
+    const body = { clientId: 'revoked-publication', role: 'assistant' as const, content: 'Private result' };
+    await expect(createMessage('s1', body, { beforePublish })).rejects.toThrow('revoked during commit');
+    expect(beforePublish).toHaveBeenCalledTimes(2);
+    expect(h.sqlite!.prepare('SELECT count(*) FROM messages').pluck().get()).toBe(0);
+    expect(h.sqlite!.prepare('SELECT count(*) FROM temp.cindy_pending_message_publications').pluck().get()).toBe(0);
+    expect(tapWindowBroadcast).not.toHaveBeenCalled();
+    expect(h.mediaRefCalls).toEqual([]);
+    expect(onMessageCreated).not.toHaveBeenCalled();
+    expect(recordPrRefsForMessage).not.toHaveBeenCalled();
+    // The same client receipt can be retried once permission is available again.
+    h.client.tx.mockImplementation(async (name: string, args: unknown) => runInprocTx(h.sqlite!, { name, args }));
+    revoked = false;
+    await expect(createMessage('s1', body, { beforePublish })).resolves.toMatchObject(body);
+    expect(h.sqlite!.prepare('SELECT count(*) FROM messages').pluck().get()).toBe(1);
+    expect(onMessageCreated).toHaveBeenCalledOnce();
+  });
+
+  it.each(['committed', 'not-committed', 'mismatched'] as const)('recovers only an exact committed publication after a lost receipt: %s', async outcome => {
+    const { tapWindowBroadcast } = await import('../../../device-link/broadcast-tap');
+    const { onMessageCreated } = await import('../../../embedders/chat-history-embedder');
+    const { recordPrRefsForMessage } = await import('../../../git-context/prRefsStore');
+    vi.mocked(tapWindowBroadcast).mockClear();
+    vi.mocked(onMessageCreated).mockClear();
+    vi.mocked(recordPrRefsForMessage).mockClear();
+    h.client.tx.mockImplementation(async (name: string, args: { publication?: string }) => {
+      if (args.publication !== 'publish') return runInprocTx(h.sqlite!, { name, args });
+      if (outcome !== 'not-committed') {
+        runInprocTx(h.sqlite!, { name, args });
+        if (outcome === 'mismatched') h.sqlite!.prepare("UPDATE messages SET content='Different result'").run();
+      }
+      throw new Error('Publication receipt lost');
+    });
+    const beforePublish = vi.fn(async () => {});
+    const body = { clientId: 'lost-receipt', role: 'assistant' as const, content: 'Private result' };
+    const sending = createMessage('s1', body, { beforePublish });
+    if (outcome === 'committed') {
+      const receipt = await sending;
+      expect(receipt).toMatchObject(body);
+      expect(await createMessage('s1', body, { beforePublish })).toEqual(receipt);
+      expect(beforePublish).toHaveBeenCalledTimes(2);
+      expect(vi.mocked(tapWindowBroadcast).mock.calls.filter(([channel]) => channel === 'local-db:messages:created')).toHaveLength(1);
+      expect(h.mediaRefCalls).toHaveLength(1);
+      expect(onMessageCreated).toHaveBeenCalledOnce();
+      expect(recordPrRefsForMessage).toHaveBeenCalledOnce();
+    } else {
+      await expect(sending).rejects.toThrow('Publication receipt lost');
+      expect(tapWindowBroadcast).not.toHaveBeenCalled();
+      expect(h.mediaRefCalls).toEqual([]);
+      expect(onMessageCreated).not.toHaveBeenCalled();
+      expect(recordPrRefsForMessage).not.toHaveBeenCalled();
+    }
+    expect(h.sqlite!.prepare('SELECT count(*) FROM messages').pluck().get()).toBe(outcome === 'not-committed' ? 0 : 1);
+    expect(h.sqlite!.prepare('SELECT count(*) FROM temp.cindy_pending_message_publications').pluck().get()).toBe(0);
   });
 
   describe('createMessage happy path', () => {
@@ -127,10 +242,10 @@ describe('message write paths avoid large-content readback', () => {
         createdAt: 1000,
       });
 
-      const insertIdx = h.queries.findIndex((q) => q.startsWith('insert into "messages"'));
+      const insertIdx = h.queries.findIndex((q) => /^insert into ["`]?messages["`]?\s/i.test(q));
       expect(insertIdx).toBeGreaterThanOrEqual(0);
       expect(
-        h.queries.slice(insertIdx + 1).filter((q) => q.includes('from "messages"')),
+        h.queries.slice(insertIdx + 1).filter((q) => /\bfrom ["`]?messages["`]?\b/i.test(q)),
       ).toEqual([]);
 
       expect(msg.clientId).toBe('c1');
@@ -188,11 +303,11 @@ describe('message write paths avoid large-content readback', () => {
       expect(updated?.role).toBe('tool_result');
 
       const postUpdateSelects = h.queries.filter(
-        (q) => q.startsWith('select') && q.includes('from "messages"'),
+        (q) => /^select\b/i.test(q) && /\bfrom ["`]?messages["`]?\b/i.test(q),
       );
       expect(postUpdateSelects.length).toBeGreaterThan(0);
       for (const q of postUpdateSelects) {
-        expect(q).not.toMatch(/select[^]*"content"[^]*from "messages"/);
+        expect(q).not.toMatch(/select[^]*\bcontent\b[^]*from ["`]?messages/i);
       }
 
       const stored = h.sqlite!

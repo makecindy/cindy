@@ -1,4 +1,5 @@
 import { runTaskTagsTransaction } from './taskTagsTx.js';
+import { batchAutoReviewProjection, readAutoReviewProjectionTransaction } from '../../autoReviewProjection.js';
 import { CLOSE_SHARED_TASKS_FOR_SESSION_SQL } from '../../sharedTaskClosureSql.js';
 import { normalizeBotName } from '../../../../shared/botCreation.js';
 import { inferBotTemplatePresetId } from '../../../../shared/botTemplatePreset.js';
@@ -47,11 +48,18 @@ const MAX_ATTEMPTS = 5;
 const RETRY_BACKOFF_MS = [1_000, 5_000, 30_000, 5 * 60_000, 30 * 60_000];
 
 export function tx(db: Database.Database, args: unknown): unknown {
+  const name = expectString(asRecord(args, 'tx args').name, 'name');
+  return batchAutoReviewProjection(db, name, () => dispatchTransaction(db, args));
+}
+
+function dispatchTransaction(db: Database.Database, args: unknown): unknown {
   const payload = asRecord(args, 'tx args');
   const name = expectString(payload.name, 'name') as DbTxName;
   const txArgs = payload.args;
 
   switch (name) {
+    case 'authorization.readProjection':
+      return readAutoReviewProjectionTransaction(db, txArgs);
     case 'codex.importMessages':
       return codexImportMessages(db, txArgs);
     case 'claude.importMessages':
@@ -1537,7 +1545,28 @@ function messageInsert(db: Database.Database, args: unknown): { changes: number 
       : expectNumber(payload.expectedClearBoundaryMs, 'expectedClearBoundaryMs');
   const transaction = db.transaction(() => {
     let changes = 0;
-    if (guarded) {
+    // Connection-local stages never enter history, counts or persistent FTS.
+    // SQLite discards them automatically when this worker exits.
+    if (payload.publication) {
+      db.exec('CREATE TEMP TABLE IF NOT EXISTS cindy_pending_message_publications (id TEXT PRIMARY KEY, client_id TEXT NOT NULL, session_id TEXT NOT NULL, role TEXT NOT NULL, content TEXT NOT NULL, tool_use_id TEXT, agent_meta TEXT, agent_kind TEXT, created_at INTEGER NOT NULL)');
+    }
+    if (payload.publication === 'publish') {
+      changes = db.prepare(
+        'INSERT INTO messages (id, client_id, session_id, role, content, tool_use_id, agent_meta, agent_kind, created_at) SELECT id, client_id, session_id, role, content, tool_use_id, agent_meta, agent_kind, created_at FROM temp.cindy_pending_message_publications WHERE id = ? AND session_id = ? AND client_id = ?',
+      ).run(id, sessionId, clientId).changes;
+      if (changes > 0) db.prepare('DELETE FROM temp.cindy_pending_message_publications WHERE id = ? AND session_id = ?').run(id, sessionId);
+    } else if (payload.publication === 'rollback') {
+      // CAS the complete published row; never remove a replacement or edited row.
+      changes = db.prepare(
+        'DELETE FROM messages WHERE id = ? AND session_id = ? AND client_id = ? AND role = ? AND content = ? AND tool_use_id IS ? AND agent_meta IS ? AND agent_kind IS ? AND created_at = ? AND rewind_at IS NULL',
+      ).run(id, sessionId, clientId, role, content, toolUseId, agentMeta, agentKind, createdAt).changes;
+    } else if (payload.publication === 'discard') {
+      changes = db.prepare('DELETE FROM temp.cindy_pending_message_publications WHERE id = ? AND session_id = ? AND client_id = ?').run(id, sessionId, clientId).changes;
+    } else if (payload.publication === 'stage') {
+      changes = db.prepare(
+        'INSERT INTO temp.cindy_pending_message_publications (id, client_id, session_id, role, content, tool_use_id, agent_meta, agent_kind, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      ).run(id, clientId, sessionId, role, content, toolUseId, agentMeta, agentKind, createdAt).changes;
+    } else if (guarded) {
       changes = db
         .prepare(
           `INSERT INTO messages (
@@ -1574,7 +1603,7 @@ function messageInsert(db: Database.Database, args: unknown): { changes: number 
         .run(id, clientId, sessionId, role, content, toolUseId, agentMeta, agentKind, createdAt)
         .changes;
     }
-    if (changes > 0) {
+    if (changes > 0 && (!payload.publication || payload.publication === 'publish' || payload.publication === 'rollback')) {
       if (role === 'user' || role === 'assistant') {
         db.prepare(
           'UPDATE sessions SET list_preview = NULL, list_preview_role = NULL, list_message_count = NULL WHERE id = ?',
@@ -3259,13 +3288,18 @@ function orcaRemoveWorker(db: Database.Database, args: unknown): string | null {
   const payload = asRecord(args, 'orca.removeWorker args');
   const workerId = expectString(payload.workerId, 'workerId');
   const now = expectNumber(payload.now, 'now');
-  const selectWorker = db.prepare('SELECT session_id AS sessionId FROM orca_workers WHERE id = ? LIMIT 1');
+  const selectWorker = db.prepare('SELECT session_id AS sessionId, execution_device_id AS deviceId, remote_released_at AS releasedAt FROM orca_workers WHERE id = ? LIMIT 1');
   const deleteWorker = db.prepare('DELETE FROM orca_workers WHERE id = ?');
   const archiveSession = db.prepare("UPDATE sessions SET status = 'archived', orca_role = NULL, updated_at = ? WHERE id = ? AND status != 'deleted'");
   const transaction = db.transaction(() => {
-    const row = selectWorker.get(workerId) as { sessionId: string } | undefined;
+    const row = selectWorker.get(workerId) as { sessionId: string; deviceId: string | null; releasedAt: number | null } | undefined;
     if (!row) return null;
-    deleteWorker.run(workerId);
+    // 回滚先隐藏代理并释放 label；远端 stop/release 未确认前必须保留持久重试路由。
+    if (row.deviceId && row.releasedAt == null) {
+      db.prepare('UPDATE orca_workers SET label = NULL, updated_at = ? WHERE id = ?').run(now, workerId);
+    } else {
+      deleteWorker.run(workerId);
+    }
     const archived = archiveSession.run(now, row.sessionId);
     return archived.changes > 0 ? row.sessionId : null;
   });
@@ -3365,9 +3399,31 @@ function orcaUpsertWorker(db: Database.Database, args: unknown): void {
     if (!activeTeam) {
       throw new Error(`Orca team ${teamId} is no longer active`);
     }
+    if (payload.remoteExecution !== undefined) {
+      const remote = asRecord(payload.remoteExecution, 'remoteExecution');
+      if (remote.proxySession !== undefined) {
+        const proxy = asRecord(remote.proxySession, 'remoteExecution.proxySession');
+        db.prepare("INSERT INTO sessions (id, title, working_dir, workspace_kind, model, effort, permission_mode, fast_mode, status, agent_kind, orca_role, source, created_at, updated_at) VALUES (?, ?, NULL, 'project', ?, ?, ?, ?, 'active', ?, 'worker', 'desktop', ?, ?)").run(
+          sessionId, expectString(proxy.title, 'proxySession.title'),
+          expectString(proxy.model, 'proxySession.model'),
+          proxy.effort == null ? 'high' : expectString(proxy.effort, 'proxySession.effort'),
+          expectString(proxy.permissionMode, 'proxySession.permissionMode'), proxy.fastMode === true ? 1 : 0,
+          expectString(proxy.agentKind, 'proxySession.agentKind'), now, now,
+        );
+      }
+    }
     if (payload.focused === true) {
       db.prepare('UPDATE orca_workers SET focused = 0, updated_at = ? WHERE team_id = ? AND focused = 1').run(now, teamId);
     }
+    const persistRemoteExecution = () => {
+      if (payload.remoteExecution === undefined) return;
+      const remote = asRecord(payload.remoteExecution, 'remoteExecution');
+      const deviceId = expectString(remote.deviceId, 'remoteExecution.deviceId');
+      const remoteSessionId = expectString(remote.remoteSessionId, 'remoteExecution.remoteSessionId');
+      db.prepare('UPDATE orca_workers SET execution_device_id = ?, remote_session_id = ? WHERE session_id = ?').run(deviceId, remoteSessionId, sessionId);
+      db.prepare("UPDATE sessions SET orca_role = 'worker' WHERE id = ?").run(sessionId);
+      db.prepare('DELETE FROM orca_remote_opens WHERE device_id = ? AND remote_session_id = ?').run(deviceId, remoteSessionId);
+    };
     const existing = db.prepare('SELECT * FROM orca_workers WHERE id = ? LIMIT 1').get(id) as Record<string, unknown> | undefined;
     if (existing) {
       db.prepare('UPDATE orca_workers SET team_id = ?, session_id = ?, status = ?, label = ?, worktree_branch = ?, role = ?, focused = ?, idle_since = ?, updated_at = ? WHERE id = ?').run(
@@ -3382,6 +3438,7 @@ function orcaUpsertWorker(db: Database.Database, args: unknown): void {
         now,
         id,
       );
+      persistRemoteExecution();
       return;
     }
     const bySession = db.prepare('SELECT * FROM orca_workers WHERE session_id = ? LIMIT 1').get(sessionId) as Record<string, unknown> | undefined;
@@ -3397,6 +3454,7 @@ function orcaUpsertWorker(db: Database.Database, args: unknown): void {
         now,
         sessionId,
       );
+      persistRemoteExecution();
       return;
     }
     db.prepare('INSERT INTO orca_workers (id, team_id, session_id, status, label, worktree_branch, role, focused, idle_since, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)').run(
@@ -3412,6 +3470,7 @@ function orcaUpsertWorker(db: Database.Database, args: unknown): void {
       now,
       now,
     );
+    persistRemoteExecution();
   })();
 }
 

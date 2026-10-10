@@ -1,6 +1,15 @@
+import {
+  USAGE_LIMIT_RESET_AUTO_RESUME_REASON,
+  type AutoResumeAgentSwitch,
+  type AutoResumeAgentSwitchCause,
+} from '../../shared/agentInputQueue';
 import type { ChatMessage, ContinuationInFlightProjectionCapability } from './makerChatStore';
 
 export interface AutoResumeCardInfo {
+  /** 账号用量上限重置后自动继续（不是重连：不展示重试次数）。 */
+  usageLimitReset?: boolean;
+  /** 供应商组自动换电脑后继续(与 usageLimitReset 同时出现)。 */
+  agentSwitch?: AutoResumeAgentSwitch;
   error?: string;
   attempt?: number;
   maxAttempts?: number;
@@ -11,6 +20,7 @@ export interface AutoResumeCardInfo {
 /** Silent-stop continuations have no interruption context and are not reconnects. */
 export function hasInterruptionContext(info: AutoResumeCardInfo): boolean {
   return (
+    info.usageLimitReset === true ||
     info.error !== undefined ||
     info.attempt !== undefined ||
     info.maxAttempts !== undefined ||
@@ -23,6 +33,8 @@ export function readAutoResumeInfo(data?: Record<string, unknown>): AutoResumeCa
   const num = (value: unknown) =>
     typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : undefined;
   return {
+    ...(data?.reason === USAGE_LIMIT_RESET_AUTO_RESUME_REASON ? { usageLimitReset: true } : {}),
+    ...(readAgentSwitch(data?.agentSwitch) ? { agentSwitch: readAgentSwitch(data?.agentSwitch)! } : {}),
     ...(typeof data?.error === 'string' && data.error.length > 0 ? { error: data.error } : {}),
     ...(num(data?.attempt) !== undefined ? { attempt: num(data?.attempt) } : {}),
     ...(num(data?.maxAttempts) !== undefined ? { maxAttempts: num(data?.maxAttempts) } : {}),
@@ -31,6 +43,16 @@ export function readAutoResumeInfo(data?: Record<string, unknown>): AutoResumeCa
       ? { outcome: data.outcome }
       : {}),
   };
+}
+
+const AGENT_SWITCH_CAUSES: readonly AutoResumeAgentSwitchCause[] = ['usage-limit', 'auth', 'unavailable', 'overload'];
+
+function readAgentSwitch(value: unknown): AutoResumeAgentSwitch | null {
+  if (!value || typeof value !== 'object') return null;
+  const { from, to, cause } = value as Record<string, unknown>;
+  if (typeof from !== 'string' || !from || typeof to !== 'string' || !to) return null;
+  if (!AGENT_SWITCH_CAUSES.includes(cause as AutoResumeAgentSwitchCause)) return null;
+  return { from: from.slice(0, 128), to: to.slice(0, 128), cause: cause as AutoResumeAgentSwitchCause };
 }
 
 /** Synthetic continuation inputs own turns; steering messages do not replace that owner. */
@@ -78,6 +100,8 @@ export function findActiveReconnect(args: {
     if (message.role !== 'user' || message.systemCardType !== 'auto-resume') continue;
     const info = readAutoResumeInfo(message.systemCardData);
     if (
+      // 用量上限重置后的自动继续不是重连：输入框不显示「重新连接中」。
+      !info.usageLimitReset &&
       hasInterruptionContext(info) &&
       info.outcome === undefined &&
       isAutoResumeRowInFlight({

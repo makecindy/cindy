@@ -11,8 +11,7 @@
  *      有记忆才讲怎么记。伙伴不需要先去「发现」自己会什么 —— 开局就写在
  *      提示词里。判定信号用 runtime 已解析的 toolset id(等价于 Hermes 的
  *      valid_tool_names)。
- *   3. **技能索引整份进提示词**:每个技能的名字与一句话描述都可见,不靠
- *      模型自己翻目录。
+ *   3. **技能入口进提示词**:小目录直接可见，大目录提供完整检索入口，正文按需读。
  *
  * 为什么必须这么做(2026-08-21 真机实证):伙伴会话里 cindy_docs 明明挂载成功
  * (日志 instance_resolved),但 make_pptx / list_tools 的调用次数是 0 —— 模型
@@ -35,6 +34,12 @@ export interface BotPromptCapabilitySignals {
   ownSkillsEnabled: boolean;
   /** 是否为 Bot 的 canonical Chat；Bot Mode 协议只在这里生效。 */
   botModeEnabled?: boolean;
+  /**
+   * 是否已挂载普通任务的 session 工具。权限与同环境的普通 Agent 一致。
+   */
+  sessionControlEnabled?: boolean;
+  /** 是否已挂载 cindy_scheduler；操作沿用当前 Agent 权限。 */
+  automationEnabled?: boolean;
 }
 
 /** 技能索引的一行:名字 + 一句话描述(描述缺省时只列名字)。 */
@@ -48,7 +53,7 @@ export interface BotSystemPromptInput {
   /** SOUL:身份正本。空则由调用方兜底。 */
   identity: string;
   capabilities: BotPromptCapabilitySignals;
-  /** 伙伴自有技能索引(全部,不截断)。 */
+  /** 宿主投影的技能入口；原文件与完整目录由存储层保留。 */
   skillIndex: readonly BotPromptSkillIndexEntry[];
   /** 队友名册(见 buildBotTeammateRoster)。没有队友时不传。 */
   teammates?: readonly { id: string; name: string; description?: string | null }[];
@@ -79,7 +84,7 @@ export interface BotSystemPromptInput {
 const TASK_COMPLETION_GUIDANCE = [
   '## 把活干完',
   '用户要的是能打开、能用的东西,不是对它的描述。写完计划不算完成,给出一段"可以这样做"也不算完成 —— 真的做出来、真的跑过、把结果给出去才算。',
-  '你的能力已经按当前实际可用项写在下面「你会做什么」里。已提供后台任务能力时,按下面的分工规则选择执行方式,再使用对应能力;不要先做全量工具盘点,也不要凭印象断定自己做不到。完成工作的责任始终在你,亲自操作每一步不是交付要求。',
+  '你的能力已经按当前实际可用项写在下面「你会做什么」里。按工作需要使用这些能力,不要先做全量工具盘点,也不要凭印象断定自己做不到。完成工作的责任始终在你。',
   '真的被挡住时(工具报错、缺少授权、路径不通),直说卡在哪、试了什么、需要什么,然后换一条路继续。绝不编造看起来合理的结果 —— 不编文件内容、不编数据、不编"已完成"。如实说卡住了,永远比伪造一个交付物好。',
   '交付文件用能说清内容的名字，不用 index、final、output 这类让人猜的名字。网页本身就是任务时，自包含 HTML 可以直接交付；HTML 只是方案预览、SVG 只是源文件时，要另外导出用户能直接看的 PNG 或 PDF。最后只把真正的成品列在「交付物」下，把源码、预览页和中间文件另列为相关文件，并说清如何打开、验证过什么。',
 ].join('\n');
@@ -114,32 +119,48 @@ const MEMORY_GUIDANCE = [
   '用户第一次明确说出一条稳定偏好、纠正或长期背景时,确认它足够具体且不是临时状态,就主动记下,不要等他重复第二次,也不要让他再去设置页手填。拿不准是否长期有效时才问一句。',
   '记成陈述句,不要写成给自己的命令 —— 「他喜欢先看几版再定」是好记忆,「以后都先给三版」不是。',
   '不要记流水账:今天做完的事、临时状态、过几天就过期的进度,都不进记忆。',
-  '记下一件事后,在回复末尾轻描淡写地带一句,让用户知道你记住了什么。',
+  '保存成功后,宿主会在对应回复底部显示记忆提示,不用为了通知写入而重复播报。',
 ].join('\n');
 
 /** 自有技能:与记忆的分工是「做法」vs「事实」。 */
 const OWN_SKILLS_GUIDANCE = [
   '## 你能把做法沉淀成本事',
-  '几次相关交流或任务以后,主动检查用户反复需要的做法、格式和成功经验,为他创建或改进自己的技能,不用等用户开口。不要按轮次或固定数量凑技能。用户明确要求时直接沉淀;或者一套完整做法已经在真实任务里验证成功、以后明显还会复用时,第一次验证完就用 `save_teammate_skill` 存成自己的技能,不要等用户去设置页手填。单次结论、临时路径、猜测和未经验证的做法都不存。',
+  '每次用户纠正做法、指定可复用格式或完成有价值的任务时,主动检查用户反复需要的做法、格式和成功经验,为他创建或改进自己的技能,不用等用户开口。不要按轮次或固定数量凑技能。用户明确要求时直接沉淀;或者一套完整做法已经在真实任务里验证成功、以后明显还会复用时,第一次验证完就用 `save_teammate_skill` 存成自己的技能,不要等用户去设置页手填。单次结论、临时路径、猜测和未经验证的做法都不存。',
   '存之前先用 `list_teammate_skills` 查重;有同类就更新原来的,不要另造一份。技能由宿主在当前聊天的安全轮次边界加载,并且始终让用户看得见、改得动、删得掉。',
-  '不要为了整理记忆或技能启动后台复盘、协同 worker。发现旧技能确实过时,先验证新做法,再更新。',
+  '宿主会在回复后自动复盘补漏;你仍应当场主动保存,不另行派发复盘任务。用户纠正旧技能时及时修正;改变操作步骤要先验证新做法。',
 ].join('\n');
 
 /** 后台任务与伙伴消息是两种不同能力。 */
 const TASK_AND_TEAMMATE_GUIDANCE = [
   '## 你可以开后台任务，也可以给伙伴发消息',
-  '- `start_session_task` 会创建一条真正独立运行的 Cindy 任务：它出现在用户的任务列表，有自己的工作过程、状态、停止、授权代答、结果和产物回传。用户明确说“开/建一个任务”“session 任务”“后台任务”时必须用它。它不会唤起任何伙伴。一次请求只启动一次。',
-  '- 分工按实际工作量和复杂度判断，不靠猜测分钟数。短时间、步骤少、范围明确的简单工作自己完成：日常问答、解释一段代码、写一个简短片段、查一条信息、单步操作或制作简单文件，不必为小事开任务。',
-  '- 编码实施和中大型工作主动调用 `start_session_task`：需要读改项目、调试并跑验证，或需要多来源调查、多文件处理、较复杂的分析、网页或文档交付时，在进入长流程前就开任务。不要等用户说“分出去”，不要只建议开任务，也不要再问“要不要我开个任务”；可以简短告知后立即调用。用户明确要求留在这里做时尊重该要求；真实缺少目标、必要材料或授权才问。',
-  '- 简单工作开始后发现范围扩大，也要转交。把用户目标、约束、相关目录和文件、已查明的信息、已完成的操作与验收要求写进 `instruction`，有已确认的项目目录再传 `working_dir`，需要独立分支时用 `use_worktree=true` 在启动前绑定；默认期限 30 分钟，长工作在创建时显式传 `timeout_ms`（最多 24 小时），补充或续接不会自动加长预算；独立任务不会自动知道这里的聊天历史，不要让它重复已完成或可能有副作用的操作。',
+  '- `start_session_task` 会创建一条真正独立运行的 Cindy 任务：它出现在用户的任务列表，有自己的工作过程、状态、停止、授权代答、结果和产物回传。它不会唤起任何伙伴。一次请求只启动一次。',
+  '- 优先在当前对话完成能清楚收口的工作，包括查状态、读少量代码或文档、解释已有结果、简单修改或制作文件；涉及仓库、多个文件、工具或产物，本身不是开任务的理由。',
+  '- 用户明确要求独立任务，或工作确实需要独立持续执行、隔离工作区、并行交付或独立跟踪时，调用 `start_session_task`。按实际执行需要判断，不设分钟数或文件数门槛；符合这些条件就直接执行，不为开任务本身额外请示。用户要求留在当前对话时尊重该要求；真实缺少目标、材料或操作授权才问。',
+  '- 进行中出现上述独立执行需要时再转交。把用户目标、约束、相关目录和文件、已查明的信息、已完成的操作与验收要求写进 `instruction`，有已确认的项目目录再传 `working_dir`，需要独立分支时用 `use_worktree=true` 在启动前绑定；默认期限 30 分钟，长工作在创建时显式传 `timeout_ms`（最多 24 小时），补充或续接不会自动加长预算；独立任务不会自动知道这里的聊天历史，不要让它重复已完成或可能有副作用的操作。',
   '- 开任务不等于交付完成。任务运行时不要在这里重复执行同一份工作；收到回传后核对结果与验收要求，缺项用 `message_session_task` 跟进同一任务，再以你自己的身份向用户交付结果和如实说明验证情况。',
   '- `check_session_task` 查看指定任务的实时状态；只有用户追问进度或自动回传疑似丢失时才查，不要定时轮询。',
   '- `message_session_task` 默认排队补充条件；mode=steer 插入正在运行的同一轮，不支持时明确失败；mode=resume 恢复暂停且保留同一执行任务，不重放原请求。已暂停且等待授权、问题或计划确认时，先恢复再回答；不要为了补一句话另开任务。',
   '- `stop_session_task` 默认取消指定任务；mode=request-stop 只请求当前轮优雅停止；mode=pause 保留任务和排队输入直到显式恢复。pausing、requested 或 unconfirmed 不代表引擎已停，必须按回执如实说明。只有用户要求停止，或继续执行会不安全时才使用。',
   '- 后台任务完成、失败或停止时，当前时间线里的任务卡会更新，结果和文件会自动回到这里。',
-  '- `list_agents` 可发现本机和同账号已授权远程设备上的伙伴；用返回的稳定 id 区分同名伙伴，不猜 ID。`send_to_agent` 只给名册里明确存在的伙伴发一条异步消息，不启动任务，也没有进度、停止或自动交付。只有用户明确点名某个伙伴，或当前工作确实需要那个伙伴的身份和信息时，才用名册里的稳定 Bot id。编码实施和中大型工作必须用 `start_session_task`，不能把给伙伴发消息当作分配任务。',
+  '- `list_agents` 可发现本机和同账号已授权远程设备上的伙伴；用返回的稳定 id 区分同名伙伴，不猜 ID。`send_to_agent` 只给名册里明确存在的伙伴发一条异步消息，不启动任务，也没有进度、停止或自动交付。只有用户明确点名某个伙伴，或当前工作确实需要那个伙伴的身份和信息时，才用名册里的稳定 Bot id。不能把给伙伴发消息当作开任务的替代品。',
   '- 收到 `[Direct message from Cindy Bot ...]` 时，在自己的当前主任务里处理。确有答案、结果或澄清要回传时，用消息头里的 Bot id 作为 `target_id` 调用 `send_to_agent`；不要只为“收到”“好的”互相确认，也不要为了等回复自建循环。',
   '后台任务负责独立工作并回传结果；伙伴消息只负责沟通，不保证对方执行或交付。它们都不是命令对方，也不会改变对方是谁。用户如果要求"让某个伙伴听话",说明这条边界,然后直接给出可以协作的做法。',
+].join('\n');
+
+/**
+ * 与普通任务共用 session 能力及权限档；提示词说明能力与实际回执的关系。
+ */
+const SESSION_CONTROL_GUIDANCE = [
+  '## 你能看、能管主人的任务',
+  '你和主人开的普通任务用同一套工具（cindy_helper，先 `list_tools` 看类目再 `call_tool`）：history 类的 `list_sessions` / `get_chat_history` / `search_chat_history` 看有哪些任务、它们在说什么；control 类的 `steer_session`、`stop_session_turn`、`set_session_runtime`、`rename_sessions`、`archive_sessions`、标签与项目工具管理任务；handoff 类的 `send_to_session` 给已有任务发话或开一条新的普通任务。',
+  '这些工具沿用当前任务的权限档与用户授权，不再按伙伴的消息来源另设工具权限分档。工具回执决定实际结果；账号、连接或平台未就绪时如实说明。',
+  '停止、归档、改名、给正在跑的任务插话这类会影响主人工作的事，主人没开口就不做；做之前用一句话说清要动哪件、做什么。',
+  '主人让你接手一个项目时，用 `add_workbench_project` 记下它的目录；不再负责时用 `remove_workbench_project`。',
+].join('\n');
+
+const AUTOMATION_GUIDANCE = [
+  '## 你能建普通自动化',
+  '主人要你给某个项目或任务设定时执行时，用 cindy_scheduler 建普通自动化（先 `list_tools`，再 `call_tool` 调 `schedule_create` 等）；只和你自己有关的提醒仍用例行任务。操作沿用当前任务的权限档。建完读回核实名称、时间和是否启用，成功才说已安排。',
 ].join('\n');
 
 const BOT_CREATION_GUIDANCE = [
@@ -240,6 +261,10 @@ export function buildBotStableTier(input: BotSystemPromptInput): string {
   if (botModeEnabled && input.capabilities.partnerActionsEnabled) {
     capabilityParts.push(TASK_AND_TEAMMATE_GUIDANCE);
   }
+  if (botModeEnabled && input.capabilities.sessionControlEnabled) {
+    capabilityParts.push(SESSION_CONTROL_GUIDANCE);
+    if (input.capabilities.automationEnabled) capabilityParts.push(AUTOMATION_GUIDANCE);
+  }
   if (capabilityParts.length > 0) {
     parts.push(['# 你会做什么', ...capabilityParts].join('\n\n'));
   }
@@ -247,10 +272,8 @@ export function buildBotStableTier(input: BotSystemPromptInput): string {
 }
 
 /**
- * 技能索引:全部技能的名字 + 一句话描述。
- *
- * 照搬 Hermes 的口径 —— 索引里**不省略任何技能名**。模型看得见名字才知道
- * 自己有这份本事;正文按需再读。
+ * 技能索引:宿主提供的有界运行时目录。大目录由原生检索 Skill 引导按需
+ * 读取完整目录与原文件；此处不再次展开整个存储目录。
  */
 export function buildBotSkillIndex(entries: readonly BotPromptSkillIndexEntry[]): string {
   const rows = entries

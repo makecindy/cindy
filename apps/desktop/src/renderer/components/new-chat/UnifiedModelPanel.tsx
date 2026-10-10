@@ -1,7 +1,7 @@
 import { useRemoteModelFavorites } from '@/state/useRemoteModelFavorites';
 import { matchesModelName } from '@/lib/modelDisplayNames';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Check, TriangleAlert } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { Check, Loader2, TriangleAlert } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import {
@@ -18,9 +18,12 @@ import type { Effort } from '@/lib/userPreferences.types';
 import { getModelEngineOverride, useModelEnginePrefsVersion } from '@/state/modelEnginePrefs';
 import { useModelFavorites, type ModelFavoriteItem } from '@/state/modelFavorites';
 import { useProviderModelMemoryVersion } from '@/state/providerModelMemory';
+import { useAgentDeviceModelMemoryVersion } from '@/state/agentDeviceModelMemory';
 
 import { flashScrollbar } from '@/lib/scrollbarAutoHide';
 import { MORPH_CONTENT_RESIZE_EVENT } from '@/components/ui/morph-popover';
+
+import { isProviderShareAgentDeviceId } from '../../../shared/providerShare';
 
 import { ModelConfigFlyout, type ModelConfigFlyoutState } from './ModelConfigFlyout';
 // ModelSelector 反过来也 import 本文件 —— ESM 循环 import 在这里安全:两边用到的都是
@@ -28,8 +31,17 @@ import { ModelConfigFlyout, type ModelConfigFlyoutState } from './ModelConfigFly
 import type { ModelMemoryAccessors } from './ModelSelector';
 import { UnifiedFlyoutHost } from './UnifiedFlyoutHost';
 import { UnifiedModelRail } from './UnifiedModelRail';
-import { useUnifiedRowActions } from './useUnifiedRowActions';
+import { useUnifiedRowActions, withOptimisticConfig } from './useUnifiedRowActions';
 import { UnifiedModelRow } from './UnifiedModelRow';
+import { currentFocusedRow } from '@/components/ui/dropdown-menu-highlight';
+import {
+  COMPOSER_MENU_ROW,
+  MenuHighlightLayer,
+  menuPanelAttrs,
+  menuRowAttrs,
+  useMenuPanel,
+  withMenuLabels,
+} from '@/components/ui/menu-row';
 import { ModelSourceUsageProvider } from './ModelSourceDetails';
 import type { ProviderUsageScope } from './useProviderWeeklyQuota';
 import {
@@ -49,6 +61,7 @@ import {
   type UnifiedAnchor,
   type UnifiedEngine,
   type UnifiedRailFilter,
+  type UnifiedRailItem,
   type UnifiedRowConfig,
 } from './unifiedModelSelection';
 
@@ -142,7 +155,7 @@ export interface UnifiedModelPanelProps {
   /**
    * **会话内形态**(规格 §1.6)。传了它 = 这是一个已经在跑的会话:
    *   - 默认展示全部，已有任务把当前模型和同引擎模型提升到「推荐」;
-   *   - 在「全部 / 供应商」视图时，列表顶部显示有损切换警示;
+   *   - 已登记跨 Harness 切换(`pendingTarget`)时，列表顶部显示有损切换警示;
    *   - 「全部」里选中一行若生效引擎 ≠ 当前引擎,走 `onCrossEngineSelect`(调用方执行
    *     performAgentSwitch 那条既有事务链路),而不是普通的 onSelect。
    *
@@ -239,6 +252,34 @@ export interface UnifiedModelPanelProps {
   panelElement: HTMLElement | null;
   overlayClassName?: string;
   /**
+   * 远程 Agent(仅新任务草稿):左侧栏在本机供应商之后列出其他电脑上的供应商。选中那台
+   * 电脑上的模型 = Agent 在那台电脑运行,任务和文件仍在本机。
+   *
+   * 面板只管栏位与选中态;列表数据(`providers` / `deviceId` 及各谓词)由调用方随
+   * `active` 切到那台电脑的目录 —— 所以 `ready` 为 false 的那几帧列表显示加载态,
+   * 绝不拿上一份目录按同名供应商筛出一份「看起来像远程」的列表。
+   */
+  remoteSources?: {
+    /** 本机格(★ / 全部 / 本机供应商)的栏位,按**本机**目录派生。 */
+    localRailItems: readonly UnifiedRailItem[];
+    localProviders: readonly ProviderView[];
+    localProviderLabel: (providerId: string) => string;
+    /** 每台电脑一段:有可用模型的供应商(按那台的目录顺序)。 */
+    groups: readonly {
+      deviceId: string;
+      providers: readonly ProviderView[];
+      providerIds: readonly string[];
+    }[];
+    labelOf: (deviceId: string, providerId: string) => string;
+    /** 正在浏览的远程供应商;null = 正在浏览本机目录。 */
+    active: { deviceId: string; providerId: string } | null;
+    /** 列表数据是否已经是 `active` 那台电脑的目录。 */
+    ready: boolean;
+    /** `active` 那台的目录读取失败时,列表区显示的提示(含重试)。 */
+    failure?: ReactNode;
+    onActivate: (target: { deviceId: string; providerId: string } | null) => void;
+  };
+  /**
    * 面板宽度是**绑在 trigger 上**的(field 形态,DESIGN.md §4 宽度铁则)。
    * 传 true 时关掉定宽 sizer —— 宽度由外部决定,量一份最宽视图既无用也白渲染一遍行
    * (见 widthSizerSections)。composer 的 `w-max` 面板不传 = 开启。
@@ -300,15 +341,18 @@ export function UnifiedModelPanel({
   panelElement,
   overlayClassName,
   panelWidthFluid = false,
+  remoteSources,
 }: UnifiedModelPanelProps) {
   const { t } = useTranslation();
   const storedFavorites = useModelFavorites();
-  const remoteFavorites = useRemoteModelFavorites(deviceId);
+  // 分享来的供应商(`share:<id>`)不是同账号的电脑，没有可同步的收藏：不去读，也不报同步失败。
+  const remoteFavorites = useRemoteModelFavorites(isProviderShareAgentDeviceId(deviceId) ? undefined : deviceId);
   const favorites = selectionPolicy === 'official' ? NO_FAVORITES : deviceId ? remoteFavorites.items : storedFavorites;
   // 引擎 override / 深度 / Fast 三份 store 的版本号:任一变化都要重算行三元组与浮层
-  // (其它窗口的 storage 事件、device-link 推送同样经这两个版本号进来)。
+  // (其它窗口的 storage 事件、device-link 推送同样经这两个版本号进来)。远程 Agent 的档位记忆
+  // 是另一份 store,版本号并进 memoryVersion。
   const enginePrefsVersion = useModelEnginePrefsVersion();
-  const memoryVersion = useProviderModelMemoryVersion();
+  const memoryVersion = useProviderModelMemoryVersion() + useAgentDeviceModelMemoryVersion();
 
   const sessionAgent = sessionEngineFilter?.currentAgent;
 
@@ -325,7 +369,15 @@ export function UnifiedModelPanel({
   const [flyAnchorEl, setFlyAnchorEl] = useState<HTMLElement | null>(null);
   const [justFavorited, setJustFavorited] = useState<string | null>(null);
   const flyoutRef = useRef<HTMLDivElement>(null);
-  const listRef = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLDivElement | null>(null);
+  // Glide highlight on the pointer, the keyboard-focused row, or the row whose config is open.
+  const highlightListRef = useMenuPanel(listRef, {
+    lockWidth: false,
+    options: {
+      current: (rows) =>
+        currentFocusedRow(rows) ?? rows.find((r) => r.getAttribute('data-state') === 'open'),
+    },
+  });
   const favoriteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // 选中行对齐是程序化滚动,它触发的 scroll 事件不代表用户意图,不该收起浮层。
   const suppressScrollDismissRef = useRef(false);
@@ -384,17 +436,53 @@ export function UnifiedModelPanel({
     [providers, agentsKey, scope, sourceVersion, keepModelKey, includePaymentRequired],
   );
 
-  const railItems = useMemo(
-    () => buildUnifiedRail(entries, undefined, providerOrder),
-    [entries, providerOrder],
-  );
+  const localRailItems = remoteSources?.localRailItems;
+  const remoteGroups = remoteSources?.groups;
+  const railItems = useMemo<UnifiedRailItem[]>(() => {
+    if (!localRailItems) return buildUnifiedRail(entries, undefined, providerOrder);
+    // 远程 Agent:本机格按本机目录派生(此刻 entries 可能是某台电脑的目录),
+    // 其后每台电脑一段远程供应商格。
+    return [
+      ...localRailItems,
+      ...(remoteGroups ?? []).flatMap((group) =>
+        group.providerIds.map((providerId) => ({
+          kind: 'remote-provider' as const,
+          deviceId: group.deviceId,
+          providerId,
+        })),
+      ),
+    ];
+  }, [entries, providerOrder, localRailItems, remoteGroups]);
   // rail 上的筛选目标消失(供应商断开 / 收藏清空)时回落「全部」,避免停在空视图。
   useEffect(() => {
     if (rail.kind === 'all') return;
     if (railItems.some((item) => railItemKey(item) === railItemKey(rail))) return;
     setRail({ kind: 'all' });
   }, [rail, railItems]);
-  const effectiveRail = query.trim() ? RAIL_ALL : rail;
+  // 远程供应商格由调用方受控(它决定列表数据是哪台电脑的目录);本机格仍由面板自己记。
+  const remoteActiveDeviceId = remoteSources?.active?.deviceId ?? null;
+  const remoteActiveProviderId = remoteSources?.active?.providerId ?? null;
+  const remoteRail = useMemo<UnifiedRailFilter | null>(
+    () =>
+      remoteActiveDeviceId !== null && remoteActiveProviderId !== null
+        ? { kind: 'remote-provider', deviceId: remoteActiveDeviceId, providerId: remoteActiveProviderId }
+        : null,
+    [remoteActiveDeviceId, remoteActiveProviderId],
+  );
+  const effectiveRail = remoteRail ?? (query.trim() ? RAIL_ALL : rail);
+  // 切到另一台电脑的途中(或读取失败)列表数据还不是那台的目录:列表区只显示状态,不出行。
+  const remoteListPending = remoteRail !== null && !remoteSources?.ready;
+  const handleRailSelect = useCallback(
+    (item: UnifiedRailItem) => {
+      if (item.kind === 'remote-provider') {
+        remoteSources?.onActivate({ deviceId: item.deviceId, providerId: item.providerId });
+        return;
+      }
+      if (remoteSources?.active) remoteSources.onActivate(null);
+      setRail(item);
+    },
+    [remoteSources],
+  );
 
   // ── 行配置合成 ────────────────────────────────────────────────────────────
   // 「正在用的引擎」的口径 = 上面推 keepModel 时用的那一个(liveEngineAgent),不另起一份。
@@ -767,6 +855,7 @@ export function UnifiedModelPanel({
     removeFavorite,
     selectRow,
     pending: actionPending,
+    optimistic: optimisticConfig,
     runExternal,
   } = useUnifiedRowActions({
     favoriteStore: deviceId ? remoteFavorites.store : undefined,
@@ -965,18 +1054,31 @@ export function UnifiedModelPanel({
         providerUsage={providerUsage}
         items={railItems}
         active={effectiveRail}
-        onSelect={setRail}
+        onSelect={handleRailSelect}
         providers={providers}
         providerLabel={providerLabel}
         interactionDisabled={interactionDisabled || actionPending}
+        {...(remoteSources
+          ? {
+              remoteSources: {
+                localProviders: remoteSources.localProviders,
+                localProviderLabel: remoteSources.localProviderLabel,
+                providersOf: (deviceId: string) =>
+                  remoteSources.groups.find((group) => group.deviceId === deviceId)?.providers ?? [],
+                labelOf: remoteSources.labelOf,
+              },
+            }
+          : {})}
       />
 
       <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
         <div
-          ref={listRef}
+          ref={highlightListRef}
           role="listbox"
           aria-label={t('newChat.modelSelector.modelListAria')}
+          {...menuPanelAttrs}
           className={cn(
+            'relative',
             // 设计稿 .model-list:8px 内边距、行与行之间无额外间距(行自身 py 8 提供呼吸感)。
             // 底部加宽到 12px:滚到底时最后一行不贴着面板底边/footer(Chris 2026-08-13:
             // 「最底部稍微放宽一点高度」)。
@@ -1000,6 +1102,7 @@ export function UnifiedModelPanel({
             needsEnsureVisibleRef.current = false;
           }}
         >
+          <MenuHighlightLayer />
           {/* 「跟随会话」行(opt-in,仅 scheduler heartbeat):置于最顶,不属于任何分组。 */}
           {followSession && (
             <>
@@ -1010,25 +1113,25 @@ export function UnifiedModelPanel({
                 role="option"
                 aria-selected={followSession.active}
                 data-follow-session-row
+                {...menuRowAttrs({ checked: followSession.active, disabled: interactionDisabled })}
                 className={cn(
-                  'flex w-full items-center justify-between rounded-lg px-3 py-2 transition-colors',
-                  'hover:bg-[var(--model-item-hover)]',
-                  followSession.active && 'bg-[var(--model-item-hover)]',
+                  COMPOSER_MENU_ROW,
+                  'flex w-full items-center justify-between px-3 py-2',
+                  // Model menu exception (DESIGN §4): the chosen row keeps its fill and check.
+                  followSession.active && 'bg-sidebar-item-hover data-[menu-active]:bg-transparent',
                   interactionDisabled && 'cursor-not-allowed opacity-50',
                 )}
               >
-                <span className="truncate text-13 font-medium text-[var(--model-item-text)]">
-                  {followSession.label}
-                </span>
+                {withMenuLabels(<span className="truncate">{followSession.label}</span>)}
                 {followSession.active && (
                   <Check size={15} className="ml-2 shrink-0 text-[var(--model-item-check)]" />
                 )}
               </button>
-              <div className="mx-1 my-1 h-px bg-[var(--model-dropdown-border)]" />
+              <div className="mx-1 my-1 h-px bg-[var(--cmd-palette-border)]" />
             </>
           )}
-          {/* 离开同引擎视图后提示切换风险；真正切换仍经过确认事务。 */}
-          {sessionEngineFilter && effectiveRail.kind !== 'engine' && (
+          {/* 只在已登记跨 Harness 切换时提示有损;浏览「全部」或同 Harness 换模型不提示。 */}
+          {sessionEngineFilter?.pendingTarget && (
             <div
               role="note"
               data-cross-engine-warning
@@ -1050,7 +1153,17 @@ export function UnifiedModelPanel({
             </div>
           )}
           {deviceId && remoteFavorites.error ? <div role="status" className="px-3 py-2 text-13 text-[var(--text-secondary)]">{t('newChat.modelSelector.unified.favoritesSyncFailed')}</div> : null}
-          {!hasRows ? (
+          {remoteListPending ? (
+            remoteSources?.failure ?? (
+              <div
+                role="status"
+                className="flex items-center justify-center gap-1.5 px-3 py-6 text-13 text-[var(--text-tertiary)]"
+              >
+                <Loader2 size={13} className="shrink-0 animate-spinner motion-reduce:animate-none" />
+                {t('newChat.modelSelector.unified.remoteLoading')}
+              </div>
+            )
+          ) : !hasRows ? (
             <div className="px-3 py-6 text-center text-13 text-[var(--text-tertiary)]">
               {/* ★ 视图的空态是引导语,不是「没有匹配」(设计稿 favEmpty;★ 常驻后必经)。 */}
               {effectiveRail.kind === 'favorites' && !query.trim()
@@ -1065,15 +1178,20 @@ export function UnifiedModelPanel({
                   {...(section.group?.type === 'provider'
                     ? { 'data-group-provider': section.group.providerId }
                     : {})}
+                  // Shared menu group label (DESIGN §4 Menu text): 12px / 500 meta.
                   className={cn(
-                    'flex items-center gap-1.5 px-2.5 text-11 text-[var(--text-tertiary)]',
+                    'flex items-center gap-1.5 px-2.5 text-12 font-medium leading-[1.33] text-[var(--cmd-palette-item-meta)]',
                     'pb-1 pt-2',
                   )}
                 >
                   <span className="truncate">{sectionLabel(section)}</span>
                 </div>
                 {section.rows.map((row) => {
-                  const config = configOf(row.entry, row.favorite);
+                  const config = withOptimisticConfig(
+                    row.anchor,
+                    configOf(row.entry, row.favorite),
+                    optimisticConfig,
+                  );
                   const key = anchorKey(row.anchor);
                   const priceDisplay = priceDisplayOf(row.entry, config);
                   return (
@@ -1143,7 +1261,7 @@ export function UnifiedModelPanel({
             {widthSizerSections.map((section) => (
               <div key={section.key}>
                 {/* 组头也要量:供应商名可能比它组里最长的行还宽。 */}
-                <div className="flex items-center gap-1.5 px-2.5 pb-1 pt-2 text-11">
+                <div className="flex items-center gap-1.5 px-2.5 pb-1 pt-2 text-12 font-medium leading-[1.33]">
                   <span className="truncate">{sectionLabel(section)}</span>
                 </div>
                 {section.rows.map((row) => {
@@ -1195,7 +1313,12 @@ export function UnifiedModelPanel({
         >
           {(() => {
             const target = flyTarget;
-            const config = configOf(target.entry, target.favorite);
+            // 深度 / Fast 写入在途时显示目标值,松手即停在新档(见 withOptimisticConfig)。
+            const config = withOptimisticConfig(
+              target.anchor,
+              configOf(target.entry, target.favorite),
+              optimisticConfig,
+            );
             const state: ModelConfigFlyoutState = target.favorite
               ? 'favorite'
               : config.customized

@@ -8,7 +8,7 @@
  *   5. watch 订阅生命周期:onFsWatchSubscribed → 真实 fs 变更 → push 出口收到事件
  */
 
-import { mkdtemp, mkdir, rm, writeFile as fsWriteFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, realpath, rm, writeFile as fsWriteFile } from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
@@ -94,6 +94,21 @@ vi.mock('../../localDb/client/current.js', () => ({
     },
   }),
 }));
+const sharedWorkdirMock = vi.hoisted(() =>
+  vi.fn<(...args: unknown[]) => Promise<{ remoteHostId: string | null }>>(async () => ({
+    remoteHostId: null,
+  })),
+);
+vi.mock('../../device-link/sharedTaskFileAccess.js', () => ({
+  assertSharedTaskWorkdir: sharedWorkdirMock,
+}));
+const startDirExportMock = vi.hoisted(() => vi.fn<(...args: unknown[]) => string>(() => 'dir_1'));
+vi.mock('../dir-export.js', () => ({
+  createDirExportDeps: () => ({}),
+  startDirExport: startDirExportMock,
+  getDirExportStatus: (id: string) =>
+    id === 'dir_1' ? { state: 'packing', packed: 10, sent: 0, total: 0, skipped: 0 } : null,
+}));
 vi.mock('../../maker-host/runtime-configs.js', () => ({
   getRipgrepBinaryPath: () => '/nonexistent/rg',
 }));
@@ -118,6 +133,7 @@ vi.mock('../remote-deps.js', () => ({
 }));
 
 import { __deviceOpTesting } from '../device-op.js';
+import { runDeviceLinkInvokeContext } from '../../device-link/invoke-context.js';
 
 const { handleRemoteOp, onFsWatchSubscribed, onFsWatchReleased } = __deviceOpTesting;
 
@@ -230,6 +246,214 @@ describe('file-browser device-op', () => {
       await handleRemoteOp({ op: 'deleteEntry', workdir, relPath: 'docs/y.md' }),
     ).toMatchObject({
       ok: true,
+    });
+  });
+
+  describe('shared task guest', () => {
+    let current = true;
+    const sharedTask = {
+      author: { sharedTaskId: 'shared', sessionId: 'task', memberId: 'm', accountId: 'guest', displayName: 'Guest' },
+      isCurrent: () => current,
+      authorize: () => current,
+    };
+    const asGuest = <T>(fn: () => Promise<T>) =>
+      runDeviceLinkInvokeContext(
+        { controllerDeviceId: 'guest', channel: 'file-browser:remote-op', sharedTask },
+        fn,
+      );
+
+    beforeEach(() => {
+      current = true;
+      // Mirrors the real binding: membership is rechecked on every call.
+      sharedWorkdirMock.mockImplementation(async () => {
+        if (!current) throw new Error('[PERMISSION_DENIED] Shared task access changed');
+        return { remoteHostId: null };
+      });
+    });
+
+    it('reads and writes the task workdir like the owner after binding it', async () => {
+      const entries = (await asGuest(() => handleRemoteOp({ op: 'listDir', workdir }))) as Array<{
+        name: string;
+      }>;
+      expect(entries.map((e) => e.name)).toContain('src');
+      expect(sharedWorkdirMock).toHaveBeenCalledWith(sharedTask, workdir, 'file.read');
+      expect(
+        await asGuest(() =>
+          handleRemoteOp({ op: 'writeFile', workdir, relPath: 'src/a.ts', content: 'guest\n' }),
+        ),
+      ).toMatchObject({ ok: true });
+      expect(sharedWorkdirMock).toHaveBeenLastCalledWith(sharedTask, workdir, 'file.write');
+      const read = (await handleRemoteOp({ op: 'readFile', workdir, relPath: 'src/a.ts' })) as {
+        data: { content: string };
+      };
+      expect(read.data.content).toBe('guest\n');
+    });
+
+    it('refuses export jobs, foreign workdirs and a different execution endpoint', async () => {
+      expect(
+        await asGuest(() => handleRemoteOp({ op: 'exportFileStart', workdir, relPath: 'src/a.ts' })),
+      ).toEqual({ ok: false, message: 'REMOTE_UNSUPPORTED' });
+      expect(uploadMock).not.toHaveBeenCalled();
+      sharedWorkdirMock.mockRejectedValueOnce(new Error('[PERMISSION_DENIED] not this task'));
+      await expect(asGuest(() => handleRemoteOp({ op: 'listDir', workdir }))).rejects.toThrow(
+        'PERMISSION_DENIED',
+      );
+      expect(guardMock).not.toHaveBeenCalled();
+    });
+
+    it('gates an SSH search start like every other SSH request', async () => {
+      sharedWorkdirMock.mockImplementation(async () => {
+        if (!current) throw new Error('[PERMISSION_DENIED] Shared task access changed');
+        return { remoteHostId: 'host-1' };
+      });
+      const started = vi.fn();
+      sshRequestMock.mockImplementation(
+        async (
+          _h: string,
+          method: string,
+          _p: unknown,
+          options?: { beforeSend?: () => void | Promise<void> },
+        ) => {
+          current = false;
+          await options?.beforeSend?.();
+          started(method);
+          return { searchId: 's-1' };
+        },
+      );
+      await expect(
+        asGuest(() =>
+          handleRemoteOp({ op: 'searchCollect', workdir: '/remote/proj', query: 'needle' }),
+        ),
+      ).rejects.toThrow('PERMISSION_DENIED');
+      expect(started).not.toHaveBeenCalled();
+      sshRequestMock.mockReset();
+    });
+
+    it('routes by the recorded task endpoint instead of reverse-resolving the path', async () => {
+      // The path exists locally and is also recorded for an SSH session: same-account
+      // controllers still see an ambiguous endpoint, a guest of the local task does not.
+      dbRowsMock.mockReturnValue([{ remoteHostId: 'other-host' }]);
+      await expect(handleRemoteOp({ op: 'listDir', workdir })).rejects.toThrow(/ambiguous/);
+      const entries = (await asGuest(() => handleRemoteOp({ op: 'listDir', workdir }))) as Array<{
+        name: string;
+      }>;
+      expect(entries.map((e) => e.name)).toContain('src');
+      expect(sshRequestMock).not.toHaveBeenCalled();
+      // A task recorded on an SSH host goes to that host even though the path is local.
+      sharedWorkdirMock.mockImplementation(async () => ({ remoteHostId: 'ssh-1' }));
+      sshRequestMock.mockResolvedValue({ entries: [{ name: 'remote.ts' }] });
+      const remote = (await asGuest(() => handleRemoteOp({ op: 'listDir', workdir }))) as Array<{
+        name: string;
+      }>;
+      expect(remote.map((e) => e.name)).toEqual(['remote.ts']);
+      expect(sshRequestMock.mock.calls[0]?.[0]).toBe('ssh-1');
+      sshRequestMock.mockReset();
+    });
+
+    it('does not write when membership ends during the endpoint checks', async () => {
+      guardMock.mockImplementationOnce(async () => {
+        current = false;
+        return { allowed: true, source: 'filesystem' };
+      });
+      await expect(
+        asGuest(() =>
+          handleRemoteOp({ op: 'writeFile', workdir, relPath: 'src/a.ts', content: 'late\n' }),
+        ),
+      ).rejects.toThrow('PERMISSION_DENIED');
+      const read = (await handleRemoteOp({ op: 'readFile', workdir, relPath: 'src/a.ts' })) as {
+        data: { content: string };
+      };
+      expect(read.data.content).toBe('export const a = 1;\n');
+    });
+
+    it('does not send an SSH write when membership ends while the connection is being built', async () => {
+      guardMock.mockResolvedValue({ allowed: false, reason: 'not-found' });
+      dbRowsMock.mockReturnValue([{ remoteHostId: 'host-1' }]);
+      let taskHost = 'host-1';
+      sharedWorkdirMock.mockImplementation(async () => {
+        if (!current) throw new Error('[PERMISSION_DENIED] Shared task access changed');
+        return { remoteHostId: taskHost };
+      });
+      const sent = vi.fn();
+      // The manager awaits getClient, then awaits beforeSend right before sending.
+      sshRequestMock.mockImplementation(
+        async (
+          _h: string,
+          method: string,
+          _p: unknown,
+          options?: { beforeSend?: () => void | Promise<void> },
+        ) => {
+          current = false;
+          await options?.beforeSend?.();
+          sent(method);
+          return { size: 1, mtimeMs: 1 };
+        },
+      );
+      await expect(
+        asGuest(() =>
+          handleRemoteOp({ op: 'writeFile', workdir: '/remote/proj', relPath: 'a.ts', content: 'x' }),
+        ),
+      ).rejects.toThrow('PERMISSION_DENIED');
+      expect(sent).not.toHaveBeenCalled();
+      // The owner moves the task to another SSH host while the connection is built.
+      current = true;
+      sshRequestMock.mockImplementation(
+        async (
+          _h: string,
+          method: string,
+          _p: unknown,
+          options?: { beforeSend?: () => void | Promise<void> },
+        ) => {
+          taskHost = 'host-2';
+          await options?.beforeSend?.();
+          sent(method);
+          return { size: 1, mtimeMs: 1 };
+        },
+      );
+      await expect(
+        asGuest(() =>
+          handleRemoteOp({ op: 'writeFile', workdir: '/remote/proj', relPath: 'a.ts', content: 'x' }),
+        ),
+      ).rejects.toThrow('PERMISSION_DENIED');
+      expect(sent).not.toHaveBeenCalled();
+      // Same-account controllers keep the unchanged three-argument call.
+      sshRequestMock.mockReset();
+      sshRequestMock.mockResolvedValue({ size: 1, mtimeMs: 1 });
+      await handleRemoteOp({ op: 'writeFile', workdir: '/remote/proj', relPath: 'a.ts', content: 'x' });
+      expect(sshRequestMock).toHaveBeenLastCalledWith('host-1', 'writeFile', {
+        workdir: '/remote/proj',
+        relPath: 'a.ts',
+        content: 'x',
+      });
+      sshRequestMock.mockReset();
+    });
+
+    it('rebinds the task workdir and endpoint after the endpoint checks, before touching files', async () => {
+      // The owner moves the task while this write is in flight.
+      guardMock.mockImplementationOnce(async () => {
+        sharedWorkdirMock.mockRejectedValueOnce(new Error('[PERMISSION_DENIED] moved'));
+        return { allowed: true, source: 'filesystem' };
+      });
+      await expect(
+        asGuest(() =>
+          handleRemoteOp({ op: 'writeFile', workdir, relPath: 'src/a.ts', content: 'moved\n' }),
+        ),
+      ).rejects.toThrow('PERMISSION_DENIED');
+      expect(sharedWorkdirMock).toHaveBeenCalledTimes(2);
+      // The task switches to an SSH endpoint for the same path mid-request.
+      guardMock.mockImplementationOnce(async () => {
+        sharedWorkdirMock.mockResolvedValueOnce({ remoteHostId: 'ssh-1' });
+        return { allowed: true, source: 'filesystem' };
+      });
+      await expect(
+        asGuest(() =>
+          handleRemoteOp({ op: 'writeFile', workdir, relPath: 'src/a.ts', content: 'moved\n' }),
+        ),
+      ).rejects.toThrow('PERMISSION_DENIED');
+      const read = (await handleRemoteOp({ op: 'readFile', workdir, relPath: 'src/a.ts' })) as {
+        data: { content: string };
+      };
+      expect(read.data.content).toBe('export const a = 1;\n');
     });
   });
 
@@ -883,11 +1107,76 @@ describe('file-browser device-op', () => {
       gzip: true,
       completeDirectoryListing: true,
       fileRead: true,
+      dirExport: true,
     });
     // 控制端把 unknown op 当"老端不支持压缩"的确定性负信号,形状不能漂。
     expect(await handleRemoteOp({ op: 'nope', workdir })).toEqual({
       ok: false,
       message: 'unknown op: nope',
+    });
+  });
+
+  // ── 文件夹下载(exportDirStart / exportDirStatus)──────────────────────
+
+  it('exportDirStart 只接受来自同账号控制端的目录导出,并把推送目标定为该控制端', async () => {
+    // 没有 device-link 调用上下文(不知道推给谁)→ 拒绝。
+    expect(await handleRemoteOp({ op: 'exportDirStart', workdir, relPath: 'src' })).toEqual({
+      ok: false,
+      message: 'REMOTE_UNSUPPORTED',
+    });
+    const asController = <T>(fn: () => Promise<T>) =>
+      runDeviceLinkInvokeContext(
+        { controllerDeviceId: 'ctrl-1', channel: 'file-browser:remote-op' },
+        fn,
+      );
+    expect(
+      await asController(() => handleRemoteOp({ op: 'exportDirStart', workdir, relPath: 'src' })),
+    ).toEqual({ ok: true, transferId: 'dir_1' });
+    expect(startDirExportMock).toHaveBeenCalledWith(
+      path.join(await realpath(workdir), 'src'),
+      'ctrl-1',
+      expect.anything(),
+    );
+    // 文件不是目录;共享任务访客不放行。
+    expect(
+      await asController(() =>
+        handleRemoteOp({ op: 'exportDirStart', workdir, relPath: 'src/a.ts' }),
+      ),
+    ).toEqual({ ok: false, message: 'not a directory' });
+    expect(
+      await runDeviceLinkInvokeContext(
+        {
+          controllerDeviceId: 'guest',
+          channel: 'file-browser:remote-op',
+          sharedTask: {} as never,
+        },
+        () => handleRemoteOp({ op: 'exportDirStart', workdir, relPath: 'src' }),
+      ),
+    ).toEqual({ ok: false, message: 'REMOTE_UNSUPPORTED' });
+    // 工作目录本身(relPath 为空)也可导出。
+    expect(
+      await asController(() => handleRemoteOp({ op: 'exportDirStart', workdir, relPath: '' })),
+    ).toEqual({ ok: true, transferId: 'dir_1' });
+    expect(startDirExportMock).toHaveBeenLastCalledWith(
+      await realpath(workdir),
+      'ctrl-1',
+      expect.anything(),
+    );
+    expect(startDirExportMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('exportDirStatus 幂等返回进度,未知 transfer 明确失败', async () => {
+    expect(await handleRemoteOp({ op: 'exportDirStatus', workdir, transferId: 'dir_1' })).toEqual({
+      ok: true,
+      state: 'packing',
+      packed: 10,
+      sent: 0,
+      total: 0,
+      skipped: 0,
+    });
+    expect(await handleRemoteOp({ op: 'exportDirStatus', workdir, transferId: 'x' })).toEqual({
+      ok: false,
+      message: 'unknown transfer: x',
     });
   });
 

@@ -55,6 +55,20 @@ export const PI_MODEL_APIS = [
 ] as const;
 export type PiModelApi = (typeof PI_MODEL_APIS)[number];
 
+/**
+ * Cindy 自带鉴权的订阅账号家族(ChatGPT / Claude / SuperGrok)。新增订阅家族只在这里加一项:
+ * 各端按家族读取账号余量的入口都以 `Record<NativeSubscriptionAuth, …>` 声明,漏接会直接
+ * 编译失败(mobile 任务菜单见 readSessionMenuAccountUsage)。
+ */
+export const NATIVE_SUBSCRIPTION_AUTHS = ["codex", "claude", "xai"] as const;
+export type NativeSubscriptionAuth = (typeof NATIVE_SUBSCRIPTION_AUTHS)[number];
+/** 每个订阅家族的内置默认账号 providerId(独立账号另有自己的 id,以 auth.native 标识家族)。 */
+export const NATIVE_SUBSCRIPTION_DEFAULT_PROVIDER_IDS = {
+  codex: "openai",
+  claude: "anthropic",
+  xai: "xai",
+} as const satisfies Record<NativeSubscriptionAuth, string>;
+
 /** Provider runtime 上游实际接受的推理 wire protocol。 */
 export type ProviderWireProtocol =
   "anthropic-messages" | "openai-responses" | "openai-chat" | "google-generative-ai";
@@ -380,6 +394,14 @@ export interface CatalogModel {
   effortDisplayNames?: Partial<Record<Effort, string>>;
   /** 默认 effort；null = 不支持。 */
   defaultEffort: Effort | null;
+  /**
+   * true = 该 (provider, agent) 下没有任何来源声明过推理档位：用户/运行时没填 reasoning，
+   * 目录、发现元数据与用户元数据也都没有 efforts。此时 `efforts: []` 只是占位，不等于
+   * 「明确无档位」（reasoning:false 或已声明空列表）；准入校验不得据此把显式档位判成
+   * valid: none（#5535）。Pi 不标记：Pi 运行时按 efforts 物化 reasoning，自定义 Pi 模型
+   * 在显式开启前就是非推理模型，放行的档位不会生效。
+   */
+  effortsUnknown?: boolean;
   /** 思考只有开/关两档时，选择器显示开关而不是档位列表。 */
   thinkingToggle?: boolean;
   /**
@@ -512,7 +534,7 @@ export interface Provider {
    * OAuth Runner（generic-oauth）；不带描述符的 oauth 供应商 = host bespoke 鉴权
    * （anthropic / openai / xai 现状）。
    */
-  auth: { method: AuthMethod; oauth?: OAuthProviderDescriptor; native?: "codex" | "claude" | "xai" };
+  auth: { method: AuthMethod; oauth?: OAuthProviderDescriptor; native?: NativeSubscriptionAuth };
   /** 用户使用该供应商时的额度来源；旧目录可缺省，由 source 从 bundled 同 id 条目补齐。 */
   access?: ProviderAccess;
   /**
@@ -794,7 +816,7 @@ export interface CustomProviderConfig {
   auth?:
     | { method: "apiKey"; oauth?: never; native?: never }
     | { method: "oauth"; oauth: OAuthProviderDescriptor; native?: never }
-    | { method: "oauth"; native: "codex" | "claude" | "xai"; oauth?: never }
+    | { method: "oauth"; native: NativeSubscriptionAuth; oauth?: never }
     | { method: "none"; oauth?: never; native?: never };
   /** per-runtime 独立配置（键为 agent，只含已配置的 runtime；至少一个）。 */
   runtimes: Partial<Record<AgentKind, CustomProviderRuntimeConfig>>;

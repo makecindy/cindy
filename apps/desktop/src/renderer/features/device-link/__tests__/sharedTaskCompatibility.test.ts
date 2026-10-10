@@ -2,6 +2,12 @@ import { describe, expect, it } from 'vitest';
 import { sharedTaskErrorKey } from '../sharedTaskCompatibility';
 
 describe('shared-task compatibility errors', () => {
+  it('explains self-join after the Electron boundary without treating other conflicts as self-join', () => {
+    expect(sharedTaskErrorKey(Object.assign(new Error('rejected'), { code: 'SHARED_TASK_SELF_JOIN' }), 'join')).toBe('sharedTask.selfJoin');
+    expect(sharedTaskErrorKey(new Error("Error invoking remote method 'shared-task:account': Error: [SHARED_TASK_SELF_JOIN] rejected"), 'join')).toBe('sharedTask.selfJoin');
+    expect(sharedTaskErrorKey(Object.assign(new Error('Use existing same-account device control'), { code: 'CONFLICT' }), 'join')).toBe('sharedTask.retry');
+    expect(sharedTaskErrorKey(new Error('[CONFLICT] Too many member devices'), 'join')).toBe('sharedTask.retry');
+  });
   it.each([['SHARED_TASK_HOST_LIMIT', 'sharedTask.hostLimit'], ['SHARED_TASK_JOIN_LIMIT', 'sharedTask.joinLimit'],
     ['SHARED_TASK_GUEST_LIMIT', 'sharedTask.guestLimit']])('explains %s without suggesting retry', (code, key) => {
     expect(sharedTaskErrorKey(Object.assign(new Error('limit'), { code }))).toBe(key);

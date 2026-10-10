@@ -48,7 +48,9 @@ export async function handlePeerAttachment(peer: string, r: Record<string, unkno
         buildPeerAttachmentRef({ ...r, ticket } as unknown as PeerAttachment),
       );
       if (!parsed) throw new Error('INVALID_PEER_ATTACHMENT');
-      let reserved = 0,
+      // 不设总量上限,只看磁盘:未完成的上传还会继续写入,已写部分已计入可用空间,
+      // 这里按剩余待写字节预留。
+      let pending = 0,
         count = 0;
       for (const name of await fs.readdir(root)) {
         if (!name.endsWith('.json') || !validTicket(name.slice(0, -5))) continue;
@@ -66,16 +68,22 @@ export async function handlePeerAttachment(peer: string, r: Record<string, unkno
             await fs.rm(path.join(root, name.slice(0, -5)), { force: true });
             await fs.rm(path.join(root, name), { force: true });
           } else {
-            reserved += entry.size;
+            if (!entry.complete) {
+              const written = await fs
+                .stat(path.join(root, name.slice(0, -5)))
+                .then((stat) => stat.size)
+                .catch(() => 0);
+              pending += Math.max(0, entry.size - written);
+            }
             count++;
           }
         });
       }
       const space = await fs.statfs(root);
+      // 物化峰值同时存在三份:收件箱保留件、会话临时件、媒体仓/附件缓存的持久副本。
       if (
         count >= 128 ||
-        reserved + parsed.size > 4 * 1024 ** 3 ||
-        space.bavail * space.bsize < parsed.size * 2 + 256 * 1024 ** 2
+        space.bavail * space.bsize < pending + parsed.size * 3 + 256 * 1024 ** 2
       )
         throw new Error('FILE_PEER_STORAGE');
       check();
@@ -101,19 +109,23 @@ export async function handlePeerAttachment(peer: string, r: Record<string, unkno
       return { ok: true };
     }
     if (r.op === 'write') {
+      // Streaming senders deliver raw bytes (attached by the file-peer IPC); older senders base64.
+      const binary = r.data instanceof Uint8Array;
       if (
         entry.complete ||
         !Number.isSafeInteger(r.offset) ||
         Number(r.offset) < 0 ||
-        typeof r.data !== 'string' ||
-        r.data.length > 1400000
+        (!binary && (typeof r.data !== 'string' || r.data.length > 1400000))
       )
         throw new Error('FILE_PEER_BLOCK');
-      const bytes = Buffer.from(r.data, 'base64');
+      const view = r.data as Uint8Array;
+      const bytes = binary
+        ? Buffer.from(view.buffer, view.byteOffset, view.byteLength)
+        : Buffer.from(r.data as string, 'base64');
       if (
         !bytes.length ||
         bytes.length > 1024 * 1024 ||
-        bytes.toString('base64') !== r.data ||
+        (!binary && bytes.toString('base64') !== r.data) ||
         Number(r.offset) + bytes.length > entry.size
       )
         throw new Error('FILE_PEER_BLOCK');
@@ -150,11 +162,15 @@ export async function handlePeerAttachment(peer: string, r: Record<string, unkno
   });
 }
 
-async function copyPeerAttachmentBytes(ref: PeerAttachment, destination: string) {
+async function copyPeerAttachmentBytes(
+  ref: PeerAttachment,
+  destination: string,
+  peer: string | undefined,
+  consume: boolean,
+) {
   const owner = captureDataOwnerBroadcastScope();
   const root = ownerScopedUserDataPath('peer-attachment-inbox');
   const file = path.join(root, ref.ticket);
-  const peer = getDeviceLinkInvokeContext()?.controllerDeviceId;
   if (!peer || !validTicket(ref.ticket)) throw new Error('FILE_PEER_DENIED');
   const entry = JSON.parse(await fs.readFile(file + '.json', 'utf8')) as Entry;
   if (
@@ -166,18 +182,61 @@ async function copyPeerAttachmentBytes(ref: PeerAttachment, destination: string)
   )
     throw new Error('FILE_PEER_DENIED');
   if (!isDataOwnerBroadcastScopeCurrent(owner)) throw new Error('FILE_PEER_CANCELLED');
-  await fs.copyFile(file, destination);
+  if (consume) await fs.rename(file, destination).catch(() => fs.copyFile(file, destination));
+  else await fs.copyFile(file, destination);
   const valid =
     (await fs.stat(destination)).size === ref.size && (await digest(destination)) === ref.sha256;
   if (!isDataOwnerBroadcastScopeCurrent(owner) || !valid) {
     await fs.rm(destination, { force: true });
     throw new Error('FILE_PEER_INTEGRITY');
   }
+  if (consume) {
+    await fs.rm(file, { force: true });
+    await fs.rm(file + '.json', { force: true });
+  }
 }
 
 export async function copyPeerAttachment(ref: PeerAttachment, destination: string) {
+  return materializePeerAttachment(
+    ref,
+    destination,
+    getDeviceLinkInvokeContext()?.controllerDeviceId,
+    false,
+  );
+}
+
+/**
+ * Moves an attachment this device received from `peer` out of the inbox. Used when this device
+ * asked the peer to push the bytes (directory download), so the inbox copy is not kept for days.
+ */
+export async function takePeerAttachment(peer: string, ref: PeerAttachment, destination: string) {
+  const root = ownerScopedUserDataPath('peer-attachment-inbox');
+  return queue(`${root}:${ref.ticket}`, () =>
+    materializePeerAttachment(ref, destination, peer, true),
+  );
+}
+
+/** Drops an attachment `peer` pushed to this device that will never be taken (failed download). */
+export async function discardPeerAttachment(peer: string, ref: PeerAttachment) {
+  if (!validTicket(ref.ticket)) return;
+  const root = ownerScopedUserDataPath('peer-attachment-inbox');
+  const file = path.join(root, ref.ticket);
+  await queue(`${root}:${ref.ticket}`, async () => {
+    const entry = JSON.parse(await fs.readFile(file + '.json', 'utf8')) as Entry;
+    if (entry.peer !== peer || entry.sha256 !== ref.sha256) return;
+    await fs.rm(file, { force: true });
+    await fs.rm(file + '.json', { force: true });
+  }).catch(() => {});
+}
+
+async function materializePeerAttachment(
+  ref: PeerAttachment,
+  destination: string,
+  peer: string | undefined,
+  consume: boolean,
+) {
   try {
-    await copyPeerAttachmentBytes(ref, destination);
+    await copyPeerAttachmentBytes(ref, destination, peer, consume);
   } catch (error) {
     await fs.rm(destination, { force: true }).catch(() => {});
     // Filesystem errors include owner-private paths; never propagate them to remote UI.

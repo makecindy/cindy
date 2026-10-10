@@ -19,10 +19,25 @@ describe('sharedTask input uses the task Agent authority', () => {
     expect(result.createOpts).toEqual(task);
     expect(result.permissionMode).toBe(permissionMode);
     expect(result.workingDir).toBe('host-workdir');
+    expect(result.model).toBe('host-model');
+    expect(result.effort).toBe('');
     expect(result).not.toHaveProperty('vendorOptions');
     expect(result).not.toHaveProperty('turnPermissionPolicy');
     expect(result.sharedTaskAuthor).toEqual(author);
     expect(result.userName).toBe('Guest');
+  });
+  it('strips guest-supplied device / plugin sources; the guest is attributed by sharedTaskAuthor only', () => {
+    const task = { agentKind: 'pi' as const, workingDir: 'host-workdir', model: 'host-model', permissionMode: 'ask' };
+    const result = stampSharedTaskInput({
+      ...item,
+      sourceDevice: { deviceId: 'forged', platform: 'mobile' },
+      sourcePlugin: { pluginId: 'forged' },
+      agentOmitsTriggerPrefix: true,
+    }, capture, task);
+    expect(result).not.toHaveProperty('sourceDevice');
+    expect(result).not.toHaveProperty('sourcePlugin');
+    expect(result).not.toHaveProperty('agentOmitsTriggerPrefix');
+    expect(result.sharedTaskAuthor).toEqual(author);
   });
   it('strips a forged author from ordinary local input and rejects revoked preparation', () => {
     expect(stampSharedTaskInput({ ...item, sharedTaskAuthor: author }, undefined, undefined)).not.toHaveProperty('sharedTaskAuthor');

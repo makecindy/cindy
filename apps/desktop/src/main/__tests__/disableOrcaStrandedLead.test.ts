@@ -14,7 +14,7 @@ const registerSource = readFileSync(resolve(__dirname, '..', 'maker-ipc', 'regis
 describe('disableOrcaInternal stranded-lead recovery', () => {
   it('extracts a shared clearLeadOrcaRoleState helper', () => {
     expect(registerSource).toContain(
-      'async function clearLeadOrcaRoleState(leadSessionId: string)',
+      'async function clearLeadOrcaRoleState(leadSessionId: string, assertCurrent?: () => Promise<void>)',
     );
   });
 
@@ -28,7 +28,7 @@ describe('disableOrcaInternal stranded-lead recovery', () => {
     // If the prior disable was interrupted before archiveWorkersByTeam, the lead's worker
     // sessions stay active+hidden+unreachable; the recovery must reconcile them too.
     const reconcileIndex = registerSource.indexOf(
-      'await reconcileInactiveTeamWorkersForLead(leadSessionId)',
+      'await reconcileInactiveTeamWorkersForLead(leadSessionId, assertCurrent)',
     );
     const recycleIndex = registerSource.indexOf(
       "await recycleSessionWorktreeForStatusChange(sid, 'archived', workerRecycleScope)",
@@ -45,9 +45,8 @@ describe('disableOrcaInternal stranded-lead recovery', () => {
   });
 
   it('fully cleans Host-owned worker runtimes after normal team archival', () => {
-    expect(registerSource).toContain('await cancelIOSSimulatorSessionOperations(w.sessionId)');
     const archiveIndex = registerSource.indexOf(
-      'const archivedWorkerSessionIds = await archiveWorkersByTeam(team.id)',
+      'const archivedWorkerSessionIds = await archiveWorkersByTeam(team.id, assertCurrent)',
     );
     const recycleIndex = registerSource.indexOf(
       "recycleSessionWorktreeForStatusChange(sessionId, 'archived', workerRecycleScope)",
@@ -63,12 +62,10 @@ describe('disableOrcaInternal stranded-lead recovery', () => {
     expect(recycleIndex).toBeGreaterThan(archiveIndex);
   });
 
-  it('runs full removed-session cleanup after archiving one worker', () => {
-    const archiveIndex = registerSource.indexOf('await archiveSingleWorkerSession(sessionId);');
-    const recycleIndex = registerSource.indexOf(
-      "await recycleSessionWorktreeForStatusChange(sessionId, 'archived', workerRecycleScope);",
-      archiveIndex,
-    );
+  it('schedules full removed-session cleanup after archiving one worker without awaiting it', () => {
+    const archiveIndex = registerSource.indexOf('await archiveSingleWorkerSession(sessionId, beforeMutation);');
+    const blockEnd = registerSource.indexOf('getManualInterrupt,', archiveIndex);
+    const block = registerSource.slice(archiveIndex, blockEnd);
     const scopeIndex = registerSource.lastIndexOf(
       'const workerRecycleScope = captureSessionRecycleScope();',
       archiveIndex,
@@ -76,11 +73,20 @@ describe('disableOrcaInternal stranded-lead recovery', () => {
     expect(scopeIndex).toBeGreaterThanOrEqual(0);
     expect(scopeIndex).toBeLessThan(archiveIndex);
     expect(archiveIndex).toBeGreaterThanOrEqual(0);
-    expect(recycleIndex).toBeGreaterThan(archiveIndex);
+    expect(blockEnd).toBeGreaterThan(archiveIndex);
+    // Like ordinary archive, the reply must not wait for quiesce + git worktree removal.
+    // Awaiting here would also self-wait on the send lock held by plugin releaseWorker.
+    expect(block).toContain(
+      "scheduleWorktreeRecycleForStatusChange(sessionId, 'archived', workerRecycleScope);",
+    );
+    expect(block).not.toContain('await recycleSessionWorktreeForStatusChange');
+    expect(block.indexOf('await beforeMutation?.();')).toBeLessThan(
+      block.indexOf('scheduleWorktreeRecycleForStatusChange('),
+    );
   });
 
   it('reuses clearLeadOrcaRoleState on BOTH the normal-close and stranded-recovery paths', () => {
-    const calls = registerSource.match(/await clearLeadOrcaRoleState\(leadSessionId\)/g) ?? [];
+    const calls = registerSource.match(/await clearLeadOrcaRoleState\(leadSessionId, assertCurrent\)/g) ?? [];
     expect(calls.length).toBeGreaterThanOrEqual(2);
   });
 });

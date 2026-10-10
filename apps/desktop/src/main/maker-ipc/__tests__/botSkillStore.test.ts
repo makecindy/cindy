@@ -10,7 +10,6 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
   BOT_SKILL_MAX_BODY_BYTES,
-  BOT_SKILL_MAX_COUNT,
   BotSkillStoreError,
   botSkillRootDir,
   botSkillsDir,
@@ -165,11 +164,11 @@ describe('saveBotSkill — 形成', () => {
     ).rejects.toMatchObject({ errorCode: 'SKILL_NAME_UNUSABLE' });
   });
 
-  it('caps how many skills one Bot can accumulate', async () => {
+  it('preserves more than 142 skills and allows continued learning', async () => {
     // Capture this test's directory so a timed-out continuation cannot use a later fixture.
     const testUserDataDir = userDataDir;
     // Seed existing files directly: saving each one repeatedly scans the growing directory.
-    for (let index = 0; index < BOT_SKILL_MAX_COUNT - 1; index += 1) {
+    for (let index = 0; index < 142 - 1; index += 1) {
       const slug = `skill-${index}`;
       const skillDir = path.join(botSkillsDir(testUserDataDir, 'bot-1'), slug);
       await fs.mkdir(skillDir, { recursive: true });
@@ -180,13 +179,13 @@ describe('saveBotSkill — 形成', () => {
         updatedAt: '2026-08-19T00:00:00.000Z',
       }));
     }
-    const lastSkill = { ...SAMPLE, name: `skill-${BOT_SKILL_MAX_COUNT - 1}` };
+    const lastSkill = { ...SAMPLE, name: `skill-${142 - 1}` };
     expect((await saveBotSkill(testUserDataDir, 'bot-1', lastSkill)).created).toBe(true);
     await expect(
       saveBotSkill(testUserDataDir, 'bot-1', { ...SAMPLE, name: 'one-too-many' }),
-    ).rejects.toMatchObject({ errorCode: 'SKILL_LIMIT_REACHED' });
+    ).resolves.toMatchObject({ created: true });
     expect((await saveBotSkill(testUserDataDir, 'bot-1', lastSkill)).created).toBe(false);
-    expect(await listBotSkills(testUserDataDir, 'bot-1')).toHaveLength(BOT_SKILL_MAX_COUNT);
+    expect(await listBotSkills(testUserDataDir, 'bot-1')).toHaveLength(143);
   });
 
   it('never lets a slug escape the per-bot skills dir', async () => {
@@ -305,4 +304,67 @@ it('imports real skill resources and preserves a user edit when the import is re
   await fs.writeFile(path.join(folder, 'templates/report.txt'), 'User changed it');
   await expect(importBotSkillFiles(userDataDir, 'bot-1', 'imported', files, () => {})).rejects.toThrow('Imported skill was edited');
   expect(await fs.readFile(path.join(folder, 'templates/report.txt'), 'utf8')).toBe('User changed it');
+});
+
+it('retains a disabled imported skill without mounting or re-enabling it when edited', async () => {
+  await importBotSkillFiles(userDataDir, 'bot-1', 'disabled', [{ name: 'SKILL.md', bytes: Buffer.from('# Original'), executable: false }], () => {}, false);
+  expect(await listBotSkills(userDataDir, 'bot-1', false)).toEqual([]);
+  expect(await listBotSkills(userDataDir, 'bot-1')).toMatchObject([{ slug: 'disabled', enabled: false }]);
+  const updated = await saveBotSkill(userDataDir, 'bot-1', { ...SAMPLE, slug: 'disabled' });
+  expect(updated.record.enabled).toBe(false);
+  expect(await listBotSkills(userDataDir, 'bot-1', false)).toEqual([]);
+  expect(await deleteBotSkill(userDataDir, 'bot-1', 'disabled')).toBe(true);
+  expect(await listBotSkills(userDataDir, 'bot-1')).toEqual([]);
+});
+
+it.each([false, true])('preserves the other skill when an import collides across enabled stores (%s)', async enabled => {
+  const files = [{ name: 'SKILL.md', bytes: Buffer.from('# Existing'), executable: false }];
+  await importBotSkillFiles(userDataDir, 'bot-1', 'report', files, () => {}, enabled);
+  await expect(importBotSkillFiles(userDataDir, 'bot-1', 'report', [{ ...files[0]!, bytes: Buffer.from('# Different') }], () => {}, !enabled)).rejects.toThrow('conflicts with an existing skill');
+  expect(await listBotSkills(userDataDir, 'bot-1')).toHaveLength(1);
+  expect((await readBotSkill(userDataDir, 'bot-1', 'report'))?.body).toBe('# Existing');
+});
+
+it('deletes only the read/edit target if older data contains duplicate enabled and disabled slugs', async () => {
+  await saveBotSkill(userDataDir, 'bot-1', { ...SAMPLE, slug: 'report' });
+  const disabled = path.join(botSkillRootDir(userDataDir, 'bot-1'), 'disabled-skills', 'report');
+  await fs.mkdir(disabled, { recursive: true });
+  await fs.writeFile(path.join(disabled, 'SKILL.md'), '# Retain disabled copy');
+  expect(await deleteBotSkill(userDataDir, 'bot-1', 'report')).toBe(true);
+  expect(await fs.readFile(path.join(disabled, 'SKILL.md'), 'utf8')).toBe('# Retain disabled copy');
+  expect(await readBotSkill(userDataDir, 'bot-1', 'report')).toMatchObject({ enabled: false, body: '# Retain disabled copy' });
+});
+
+it('preserves native interpreter links across save/retry and rejects a changed alias', async ctx => {
+  const runtime = path.join(userDataDir, 'runtime-python');
+  await fs.writeFile(runtime, 'fixture-runtime');
+  const probe = path.join(userDataDir, 'link-probe');
+  try { await fs.symlink(runtime, probe, 'file'); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === 'EPERM') { ctx.skip(); return; } throw error; }
+  await fs.unlink(probe);
+  const interpreterName = `.venv/${process.platform === 'win32' ? 'Scripts' : 'bin'}/python`;
+  const files = [
+    { name: 'SKILL.md', bytes: Buffer.from('# Imported'), executable: false },
+    { name: interpreterName, bytes: Buffer.from('fixture-runtime'), executable: true, interpreterLink: runtime },
+  ];
+  await importBotSkillFiles(userDataDir, 'bot', 'native', files, () => {});
+  const alias = path.join(botSkillsDir(userDataDir, 'bot'), 'native', interpreterName);
+  expect(await fs.readlink(alias)).toBe(runtime);
+  await importBotSkillFiles(userDataDir, 'bot', 'native', files, () => {});
+  await fs.unlink(alias); await fs.symlink(path.join(userDataDir, 'other-python'), alias, 'file');
+  await expect(importBotSkillFiles(userDataDir, 'bot', 'native', files, () => {})).rejects.toThrow('Imported interpreter was edited');
+  expect(await fs.readFile(runtime, 'utf8')).toBe('fixture-runtime');
+  await expect(importBotSkillFiles(userDataDir, 'bot', 'unsafe', [{ ...files[0]!, interpreterLink: runtime }], () => {})).rejects.toThrow('Invalid imported interpreter');
+});
+
+
+it('preserves a foreground edit when background learning uses an older snapshot', async () => {
+  const initial = await saveBotSkill(userDataDir, 'bot-1', { ...SAMPLE, now: Date.parse('2026-09-01T00:00:00.000Z') });
+  const results = await Promise.allSettled([
+    saveBotSkill(userDataDir, 'bot-1', { ...SAMPLE, body: 'Human corrected workflow', now: Date.parse('2026-09-02T00:00:00.000Z') }),
+    saveBotSkill(userDataDir, 'bot-1', { ...SAMPLE, body: 'Outdated background proposal', expectedUpdatedAt: initial.record.updatedAt }),
+  ]);
+  expect(results.map(result => result.status)).toEqual(['fulfilled', 'rejected']);
+  expect((await readBotSkill(userDataDir, 'bot-1', 'weekly-report'))?.body).toBe('Human corrected workflow');
+  await expect(saveBotSkill(userDataDir, 'bot-1', { ...SAMPLE, expectedUpdatedAt: null })).rejects.toThrow('Skill changed during review');
 });

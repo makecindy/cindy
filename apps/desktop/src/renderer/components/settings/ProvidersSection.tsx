@@ -47,6 +47,7 @@ import { useClaudeAccountUsageResult } from '@/hooks/useClaudeAccountUsage';
 import { useXdAssetPrimaryAction } from '@/hooks/useXdAssetPrimaryAction';
 import { useReducedMotion } from '@/hooks/useReducedMotion';
 import { Button } from '@/components/ui/button';
+import { Switch } from '@/components/ui/switch';
 import { Tip } from '@/components/ui/tooltip';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { useSignInToCindy } from '@/hooks/useSignInToCindy';
@@ -88,6 +89,13 @@ import { ProviderConnectionDialog } from './ProviderConnectionDialog';
 import { AddProviderWizard, type WizardEntry } from './AddProviderWizard';
 import { OllamaProviderDetail } from './OllamaProviderDetail';
 import {
+  OwnRemoteProviderDetail,
+  OwnRemoteProviderRows,
+  useOwnRemoteProviders,
+} from './OwnRemoteProviders';
+import { LlamaCppProviderDetail } from './LlamaCppProviderDetail';
+import { MANAGED_LLAMACPP_PROVIDER_ID } from '../../../shared/llamaCpp';
+import {
   isLocalRuntimeBetaProviderId,
   MANAGED_LMSTUDIO_PROVIDER_ID,
   MANAGED_OLLAMA_PROVIDER_ID,
@@ -101,6 +109,23 @@ import { OpenAIMark } from '@/components/icons/OpenAIMark';
 import { XDIncMark } from '@/components/icons/XDIncMark';
 import { hasProviderLogo, ProviderLogoMark } from '@/components/icons/ProviderLogoMark';
 import { SortableList } from '@/components/sidebar/SortableList';
+import { ProviderShareEntryButton } from '@/features/provider-share/ProviderShareEntryButton';
+import { ProviderGroupRow } from '@/features/provider-group/ProviderGroupRow';
+import { ProviderShareManagePage } from '@/features/provider-share/ProviderShareManagePage';
+import { ProviderSharePasteButton } from '@/features/provider-share/ProviderSharePasteDialog';
+import {
+  ProviderShareReceivedDetail,
+  ProviderShareReceivedRailGroup,
+} from '@/features/provider-share/ProviderShareReceivedRail';
+import {
+  pendingRequestCountByProvider,
+  providerShareGate,
+} from '@/features/provider-share/providerShareFormat';
+import { PROVIDER_SHARE_MANAGE_PARAM } from '@/features/provider-share/providerShareNavigation';
+import {
+  useProviderSharePendingRequests,
+  useProviderShareReceived,
+} from '@/features/provider-share/providerShareStore';
 
 import { localCliDisplayName, type LocalCliDetection } from '../../../shared/localCliDetect';
 import { isBuiltinRefreshableProviderId } from '../../../shared/providerModelRefresh';
@@ -134,6 +159,128 @@ function writeProviderDisabled(providerId: string, disabled: boolean, errorText:
   void window.electronAPI.maker
     .setModelDisable({ kind: 'provider', providerId, disabled })
     .catch(() => toast.error(errorText));
+}
+
+/**
+ * 「允许被远程调用」(供应商级远程 Agent 授权)。默认关闭。能力逐级开启(产品规则
+ * docs/product-rules/provider-sharing.md §3)：允许远程控制 → 允许被远程调用 → 分享。
+ * 前两级任一未开启时整行仍显示，但开关或分享入口不可点击，并说明先开启哪一级。
+ * 成功后 main 广播 PROVIDER_CHANGED 刷新快照。
+ */
+function RemoteProviderAccessRow({
+  provider,
+  remoteControlEnabled,
+  pendingShareRequests,
+  onManageShare,
+}: {
+  provider: ProviderView;
+  remoteControlEnabled: boolean;
+  pendingShareRequests: number;
+  onManageShare: () => void;
+}) {
+  const { t } = useTranslation();
+  const navigate = useNavigate();
+  const [enabled, setEnabled] = useState(provider.remoteInvocationEnabled === true);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    setEnabled(provider.remoteInvocationEnabled === true);
+  }, [provider.remoteInvocationEnabled]);
+  const gate = providerShareGate({ remoteControlEnabled, invocationEnabled: enabled });
+  return (
+    <div
+      data-testid="provider-remote-access"
+      data-share-gate={gate}
+      className="flex shrink-0 items-start justify-between gap-3 border-t px-5 py-3"
+      style={{ borderColor: 'var(--settings-theme-card-border)' }}
+    >
+      <div className="flex min-w-0 flex-col gap-1">
+        <span className="text-13 font-medium text-[var(--text-primary)]">
+          {t('settings.providers.detail.remoteAccess.label')}
+        </span>
+        <span className="text-12 leading-[1.4] text-[var(--text-tertiary)]">
+          {gate === 'remote-off' ? (
+            <>
+              {t('providerShare.entry.remoteControlOff')}{' '}
+              <button
+                type="button"
+                onClick={() => navigate('/settings?tab=remote-control')}
+                className="text-[var(--text-secondary)] underline underline-offset-2 transition-colors hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+              >
+                {t('providerShare.entry.openRemoteControl')}
+              </button>
+            </>
+          ) : gate === 'invocation-off' ? (
+            t('providerShare.entry.descriptionOff')
+          ) : (
+            t('settings.providers.detail.remoteAccess.description')
+          )}
+        </span>
+      </div>
+      <div className="flex shrink-0 items-center gap-2">
+        <ProviderShareEntryButton gate={gate} pendingCount={pendingShareRequests} onOpen={onManageShare} />
+        <Switch
+          checked={enabled}
+          disabled={busy || !remoteControlEnabled}
+          aria-label={t('settings.providers.detail.remoteAccess.ariaLabel')}
+          onCheckedChange={(next) => {
+            const previous = enabled;
+            setEnabled(next);
+            setBusy(true);
+            void window.electronAPI.maker
+              .setProviderRemoteAccess({ providerId: provider.id, enabled: next })
+              .catch(() => {
+                setEnabled(previous);
+                toast.error(t('settings.providers.detail.remoteAccess.writeFailed'));
+              })
+              .finally(() => setBusy(false));
+          }}
+        />
+      </div>
+    </div>
+  );
+}
+
+/**
+ * 本机是否允许同账号设备远程控制(「允许被远程调用」与分享的第一级)。设备互联没有单独的
+ * 开关变更事件：relay 状态、持有权变化以及窗口回到前台时重读一次，保持与「远程连接」页一致。
+ */
+function useRemoteControlEnabled(): boolean | null {
+  // null = 还没读到：整行先不出现，避免「未开远程控制」的说明闪一下。
+  const [enabled, setEnabled] = useState<boolean | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    let seq = 0;
+    const read = () => {
+      const current = ++seq;
+      // 读不到(设备互联未就绪等)按未开启处理：开关不可用，不影响供应商页其余部分。
+      void Promise.resolve()
+        .then(() => window.electronAPI.deviceLink.getState())
+        .then((state) => {
+          if (!cancelled && current === seq) setEnabled(state.remoteControlEnabled);
+        })
+        .catch(() => {
+          if (!cancelled && current === seq) setEnabled(false);
+        });
+    };
+    read();
+    // 设备互联预加载不可用(旧窗口 / 测试)时只读一次，不订阅。
+    const deviceLink = (window as Partial<Window>).electronAPI?.deviceLink;
+    const offStatus = deviceLink?.onStatusChanged?.(() => read());
+    const offOwnership = deviceLink?.onOwnershipChanged?.(() => read());
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') read();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    window.addEventListener('focus', read);
+    return () => {
+      cancelled = true;
+      offStatus?.();
+      offOwnership?.();
+      document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('focus', read);
+    };
+  }, []);
+  return enabled;
 }
 
 /** 供应商行图标(内置品牌 mark / 首字母 monogram)。 */
@@ -1228,7 +1375,7 @@ function GenericOAuthHeader({
       } else if (r.reason === 'login_cancelled') {
         /* 用户取消,不弹错 */
       } else if (r.reason === 'claude_account_retired') {
-        toast.error(t('settings.providers.claudeAccountRetired'));
+        toast.info(t('settings.providers.claudeAccountRetired'), { duration: 8000 });
       } else {
         toast.error(
           t('settings.providers.genericOAuth.toast.loginFailed', { name: provider.name }),
@@ -1854,7 +2001,42 @@ function XdGatewayHeader({
   );
 }
 
-function OllamaHeader({
+function isManagedLocalProvider(id: string): boolean {
+  return id === MANAGED_OLLAMA_PROVIDER_ID || id === MANAGED_LLAMACPP_PROVIDER_ID;
+}
+
+function useManagedLocalRuntimeLive(providerId: string): boolean | null {
+  const [localLive, setLocalLive] = useState<boolean | null>(null);
+  useEffect(() => {
+    if (!isManagedLocalProvider(providerId)) return;
+    let cancelled = false;
+    if (providerId === MANAGED_LLAMACPP_PROVIDER_ID) {
+      let timer: ReturnType<typeof setTimeout>;
+      const read = async () => {
+        try {
+          const next = await window.electronAPI.maker.llamaCppStatus();
+          if (!cancelled) setLocalLive(next.running);
+        } catch { if (!cancelled) setLocalLive(false); }
+        if (!cancelled) timer = setTimeout(() => void read(), 2000);
+      };
+      void read();
+      return () => { cancelled = true; clearTimeout(timer); };
+    }
+    void window.electronAPI.maker.localModelStatus().then((next) => {
+      if (!cancelled) setLocalLive(next.kind === 'ready' || next.kind === 'pulling');
+    });
+    const off = window.electronAPI.maker.onLocalModelStatus((next) => {
+      setLocalLive(next.kind === 'ready' || next.kind === 'pulling');
+    });
+    return () => {
+      cancelled = true;
+      off();
+    };
+  }, [providerId]);
+  return localLive;
+}
+
+function LocalRuntimeHeader({
   children,
   provider,
   onDelete,
@@ -1864,6 +2046,7 @@ function OllamaHeader({
   onDelete: () => void;
 }) {
   const { t } = useTranslation();
+  const localLive = useManagedLocalRuntimeLive(provider.id);
   return (
     <DetailHeader
       children={children}
@@ -1871,8 +2054,8 @@ function OllamaHeader({
       title={provider.name || t('settings.providers.local.title')}
       subtitle={t('settings.providers.local.subtitle')}
       status={{
-        kind: provider.connected ? 'connected' : 'neutral',
-        label: t('settings.providers.pill.disconnected'),
+        kind: localLive ? 'connected' : 'neutral',
+        label: t(provider.id === MANAGED_LLAMACPP_PROVIDER_ID ? 'settings.providers.llamacpp.startOnUse' : 'settings.providers.pill.disconnected'),
       }}
       provider={provider}
       badge={<BetaTag label={t('settings.providers.local.beta')} />}
@@ -2050,21 +2233,7 @@ function ListRow({
 }) {
   const { t } = useTranslation();
   const management = useProviderManagement(provider);
-  const [ollamaLive, setOllamaLive] = useState<boolean | null>(null);
-  useEffect(() => {
-    if (provider.id !== MANAGED_OLLAMA_PROVIDER_ID) return;
-    let cancelled = false;
-    void window.electronAPI.maker.localModelStatus().then((next) => {
-      if (!cancelled) setOllamaLive(next.kind === 'ready' || next.kind === 'pulling');
-    });
-    const off = window.electronAPI.maker.onLocalModelStatus((next) => {
-      setOllamaLive(next.kind === 'ready' || next.kind === 'pulling');
-    });
-    return () => {
-      cancelled = true;
-      off();
-    };
-  }, [provider.id]);
+  const localLive = useManagedLocalRuntimeLive(provider.id);
   const modelCount = useMemo(
     () => (providerHasModels(provider) ? buildUnionRows(provider).length : null),
     [provider],
@@ -2155,8 +2324,8 @@ function ListRow({
             style={{
               backgroundColor: reconnectRequired
                 ? 'var(--remote-status-failed)'
-                : provider.id === MANAGED_OLLAMA_PROVIDER_ID
-                  ? ollamaLive
+                : isManagedLocalProvider(provider.id)
+                  ? localLive
                     ? 'var(--remote-status-ready)'
                     : 'var(--border-default)'
                   : provider.connected && !provider.suspended
@@ -2236,9 +2405,44 @@ export function ProvidersSection() {
   // OpenAI 的 reconnect-required 是 useCodexAuth 独有状态(目录 connected 此时为 false):
   // 该状态下 OpenAI 行必须留在左栏,否则「重新连接」入口不可达,用户被迫从向导重发现。
   const codexAuth = useCodexAuth();
+  const remoteControlEnabled = useRemoteControlEnabled();
+  // 供应商分享：入口提示点读待审批申请；管理页是本页的子页面(返回回到供应商详情)。
+  const pendingShareRequests = useProviderSharePendingRequests();
+  const pendingShareCounts = useMemo(
+    () => pendingRequestCountByProvider(pendingShareRequests.map((item) => item.share)),
+    [pendingShareRequests],
+  );
+  const [shareManageProviderId, setShareManageProviderId] = useState<string | null>(null);
   const openaiReconnectRequired = codexAuth.state.kind === 'reconnect-required';
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  // 左栏里选中的另一台电脑上的供应商：「分享给我的」一条，或自己其他电脑上的一个(两者互斥)；
+  // 选中本机供应商或登录引导时清空。
+  const [selectedShareId, setSelectedShareId] = useState<string | null>(null);
+  const [selectedRemoteKey, setSelectedRemoteKey] = useState<string | null>(null);
+  const { received: receivedShares } = useProviderShareReceived();
+  const selectedShare = selectedShareId
+    ? receivedShares.find((share) => share.shareId === selectedShareId) ?? null
+    : null;
+  const ownRemoteProviders = useOwnRemoteProviders();
+  const selectedRemote = selectedRemoteKey
+    ? ownRemoteProviders.find((entry) => entry.key === selectedRemoteKey) ?? null
+    : null;
+  const otherDeviceSelected = selectedShare !== null || selectedRemote !== null;
+  // 用户或深链、向导完成、导入完成等「打开某个供应商」时，右栏回到那个供应商(即使它就是当前选中项)。
+  const selectProvider = useCallback((providerId: string) => {
+    setSelectedShareId(null);
+    setSelectedRemoteKey(null);
+    setSelectedId(providerId);
+  }, []);
+  const selectShare = useCallback((shareId: string) => {
+    setSelectedRemoteKey(null);
+    setSelectedShareId(shareId);
+  }, []);
+  const selectRemote = useCallback((key: string) => {
+    setSelectedShareId(null);
+    setSelectedRemoteKey(key);
+  }, []);
   const [pendingProviderOrder, setPendingProviderOrder] = useState<{
     dataOwnerId: string | null;
     ids: string[];
@@ -2274,10 +2478,10 @@ export function ProvidersSection() {
   const finishProviderImport = useCallback(
     (providerId: string) => {
       setProviderImportId(null);
-      setSelectedId(providerId);
+      selectProvider(providerId);
       refetch();
     },
-    [refetch],
+    [refetch, selectProvider],
   );
   const addProviderButtonRef = useRef<HTMLButtonElement>(null);
   const [detections, setDetections] = useState<LocalCliDetection[]>([]);
@@ -2363,6 +2567,7 @@ export function ProvidersSection() {
       if (
         p.source === 'user' &&
         (p.id === MANAGED_OLLAMA_PROVIDER_ID ||
+          p.id === MANAGED_LLAMACPP_PROVIDER_ID ||
           p.id === MANAGED_LMSTUDIO_PROVIDER_ID ||
           providerHasModels(p) ||
           (p.auth.method === 'oauth' && (!!p.auth.oauth || !!p.auth.native)))
@@ -2523,6 +2728,15 @@ export function ProvidersSection() {
    *   - wizard=1 → 打开向导目录第一步。
    */
   const [searchParams, setSearchParams] = useSearchParams();
+  // 分享管理页深链(?shareProvider=<id>，来自审批通知)：一次性消费并从 URL 摘除。
+  useEffect(() => {
+    const target = searchParams.get(PROVIDER_SHARE_MANAGE_PARAM);
+    if (!target) return;
+    setShareManageProviderId(target);
+    const next = new URLSearchParams(searchParams);
+    next.delete(PROVIDER_SHARE_MANAGE_PARAM);
+    setSearchParams(next, { replace: true });
+  }, [searchParams, setSearchParams]);
   useEffect(() => {
     if (loading) return;
     const connect = searchParams.get('connect');
@@ -2535,6 +2749,8 @@ export function ProvidersSection() {
         : undefined;
     const importId = searchParams.get('import');
     if (!connect && !wizardFlag && !importId) return;
+    // 这些深链要显示供应商主页或弹窗：先离开分享管理页，不能被它挡住。
+    setShareManageProviderId(null);
     // 不用一次性 ref:消费后立即删参(下方 replace)即防重放;组件常驻期间
     // 再次带参导航(如二次深链)仍应生效(review 反馈)。
     if (importId) {
@@ -2542,13 +2758,13 @@ export function ProvidersSection() {
     } else if (connect) {
       const target = byId.get(connect);
       if (listProviders.some((p) => p.id === connect)) {
-        setSelectedId(connect);
+        selectProvider(connect);
         setFocusedModel(
           model ? { providerId: connect, modelId: model, ...(agent ? { agent } : {}) } : null,
         );
       } else if (connect === 'xd') {
         // 无账号会话目录不含 xd → 落到登录引导行(不能当 preset 交给向导)。
-        setSelectedId(CINDY_SIGNIN_ID);
+        selectProvider(CINDY_SIGNIN_ID);
       } else if (connect === MANAGED_OLLAMA_PROVIDER_ID) {
         setWizard({});
       } else if (target && target.source === 'builtin') {
@@ -2566,7 +2782,7 @@ export function ProvidersSection() {
     next.delete('agent');
     next.delete('import');
     setSearchParams(next, { replace: true });
-  }, [loading, searchParams, setSearchParams, byId, listProviders]);
+  }, [loading, searchParams, setSearchParams, byId, listProviders, selectProvider]);
 
   // Cindy AI 登录引导:无账号会话目录不含 xd(见 CindySigninRow 头注释),置顶
   // 引导行;列表为空时默认选中它(右栏直接展示登录引导,不留「点击添加」空态)。
@@ -2777,9 +2993,9 @@ export function ProvidersSection() {
         />
       );
     }
-    if (p.id === MANAGED_OLLAMA_PROVIDER_ID) {
+    if (isManagedLocalProvider(p.id)) {
       return (
-        <OllamaHeader children={children} provider={p} onDelete={() => void handleDeleteOllama()} />
+        <LocalRuntimeHeader children={children} provider={p} onDelete={() => void (p.id === MANAGED_OLLAMA_PROVIDER_ID ? handleDeleteOllama() : handleDelete(p))} />
       );
     }
     return (
@@ -2794,18 +3010,44 @@ export function ProvidersSection() {
     );
   };
 
+  // 「分享 {供应商}」管理页：设置内的子页面，返回回到该供应商的详情。只替换主体内容，
+  // 下方的添加 / 编辑 / 导入弹窗层保持挂载，不会因打开管理页而丢失正在填写的内容。
+  const shareManageProvider = shareManageProviderId ? byId.get(shareManageProviderId) ?? null : null;
+  const shareManagePage = shareManageProviderId ? (
+    <ProviderShareManagePage
+      key={shareManageProviderId}
+      providerId={shareManageProviderId}
+      providerName={shareManageProvider?.name ?? shareManageProviderId}
+      providerIcon={shareManageProvider ? providerIcon(shareManageProvider, 18) : null}
+      // 供应商还没加载出来时不判「未开放」；生成链接时 main 会再校验。
+      gate={providerShareGate({
+        remoteControlEnabled,
+        invocationEnabled: !shareManageProvider || shareManageProvider.remoteInvocationEnabled === true,
+      })}
+      onBack={() => {
+        setSelectedId(shareManageProviderId);
+        setShareManageProviderId(null);
+      }}
+    />
+  ) : null;
+
   return (
     <div className="flex h-full min-h-0 flex-col gap-[14px]">
-      <div className="flex shrink-0 flex-col gap-1">
-        <h2
-          className="text-16 font-medium leading-[1.2]"
-          style={{ color: 'var(--settings-section-title)' }}
-        >
-          {t('settings.providers.title')}
-        </h2>
-        <p className="text-13 leading-[1.5]" style={{ color: 'var(--settings-section-desc)' }}>
-          {t('settings.providers.subtitle')}
-        </p>
+      {shareManagePage ?? (<>
+      <div className="flex shrink-0 items-start justify-between gap-3">
+        <div className="flex min-w-0 flex-col gap-1">
+          <h2
+            className="text-16 font-medium leading-[1.2]"
+            style={{ color: 'var(--settings-section-title)' }}
+          >
+            {t('settings.providers.title')}
+          </h2>
+          <p className="text-13 leading-[1.5]" style={{ color: 'var(--settings-section-desc)' }}>
+            {t('settings.providers.subtitle')}
+          </p>
+        </div>
+        {/* 收到别人的供应商分享链接时从这里输入(加入网页唤起 Cindy 失败时也指引到这里)。 */}
+        <ProviderSharePasteButton />
       </div>
 
       {/* 先取数据再渲染卡片(规则 7:首帧即终态高度,不出现连接态翻转的跳变帧)。
@@ -2831,8 +3073,10 @@ export function ProvidersSection() {
             <div className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto p-2">
               {showCindySignin && (
                 <CindySigninRow
-                  selected={cindySigninActive}
-                  onSelect={() => setSelectedId(CINDY_SIGNIN_ID)}
+                  selected={cindySigninActive && !otherDeviceSelected}
+                  onSelect={() => {
+                    selectProvider(CINDY_SIGNIN_ID);
+                  }}
                 />
               )}
               {listProviders.length > 1 && (
@@ -2849,14 +3093,14 @@ export function ProvidersSection() {
                 renderItem={(provider, index) => (
                   <ListRow
                     provider={provider}
-                    selected={!cindySigninActive && effectiveSelected?.id === provider.id}
+                    selected={!otherDeviceSelected && !cindySigninActive && effectiveSelected?.id === provider.id}
                     reconnectRequired={
                       (provider.id === 'openai' && openaiReconnectRequired) ||
                       provider.openAiAccount?.reconnectRequired === true
                     }
                     onSelect={() => {
                       setFocusedModel(null);
-                      setSelectedId(provider.id);
+                      selectProvider(provider.id);
                     }}
                     position={index + 1}
                     total={listProviders.length}
@@ -2873,6 +3117,23 @@ export function ProvidersSection() {
               <span className="sr-only" aria-live="polite" aria-atomic="true">
                 {orderAnnouncement}
               </span>
+              {/* 自己其他电脑上能用的供应商：接在本机供应商后面，图标带远程角标。 */}
+              <OwnRemoteProviderRows
+                entries={ownRemoteProviders}
+                selectedKey={selectedRemote?.key ?? null}
+                onSelect={(key) => {
+                  setFocusedModel(null);
+                  selectRemote(key);
+                }}
+              />
+              {/* 分享给我的供应商(受邀者)：单独成组，没有分享时不显示。 */}
+              <ProviderShareReceivedRailGroup
+                selectedShareId={selectedShare?.shareId ?? null}
+                onSelect={(shareId) => {
+                  setFocusedModel(null);
+                  selectShare(shareId);
+                }}
+              />
               {suggestions.length > 0 && (
                 <>
                   <span
@@ -2913,8 +3174,21 @@ export function ProvidersSection() {
           </div>
 
           {/* 右栏身份固定；说明、资产和模型共用 DetailHeader 的滚动区。 */}
-          <div key={effectiveSelected?.id} className="flex min-h-0 min-w-0 flex-1 flex-col">
-            {cindySigninActive ? (
+          <div
+            key={
+              selectedShare
+                ? `share:${selectedShare.shareId}`
+                : selectedRemote
+                  ? `remote:${selectedRemote.key}`
+                  : effectiveSelected?.id
+            }
+            className="flex min-h-0 min-w-0 flex-1 flex-col"
+          >
+            {selectedShare ? (
+              <ProviderShareReceivedDetail share={selectedShare} />
+            ) : selectedRemote ? (
+              <OwnRemoteProviderDetail entry={selectedRemote} />
+            ) : cindySigninActive ? (
               /* 登录引导是 brand-scale surface(DESIGN §3):48px 标识 → 24px 名字 →
                  一行价值主张 → 赠送余额徽标 → 黑 CTA,间距走 8px 系统。底部留白比
                  顶部多,视觉重心才落在上三分之一。 */
@@ -3019,15 +3293,40 @@ export function ProvidersSection() {
                         />
                       </div>
                     )}
+                  {/* 允许被远程调用 + 管理分享：供应商已连接且能跑 Agent 时出现。本机未允许
+                      远程控制时整行仍显示，但开关与分享入口不可用(provider-sharing.md §3)。 */}
+                  {remoteControlEnabled !== null &&
+                    !effectiveSelected.suspended &&
+                    effectiveSelected.connected &&
+                    effectiveSelected.agents.length > 0 &&
+                    effectiveSelected.remoteInvocationEnabled !== undefined && (
+                      <RemoteProviderAccessRow
+                        key={effectiveSelected.id}
+                        provider={effectiveSelected}
+                        remoteControlEnabled={remoteControlEnabled}
+                        pendingShareRequests={pendingShareCounts.get(effectiveSelected.id) ?? 0}
+                        onManageShare={() => setShareManageProviderId(effectiveSelected.id)}
+                      />
+                    )}
+                  {/* 供应商组：不依赖「允许被远程调用」，只给本机用时也可以建组(provider-groups.md §10)。 */}
+                  {!effectiveSelected.suspended &&
+                    effectiveSelected.connected &&
+                    effectiveSelected.agents.length > 0 && (
+                      <ProviderGroupRow
+                        key={`provider-group-${effectiveSelected.id}`}
+                        providerId={effectiveSelected.id}
+                        onOpen={() => setShareManageProviderId(effectiveSelected.id)}
+                      />
+                    )}
                   {!effectiveSelected.suspended &&
                     (providerHasModels(effectiveSelected) ||
                       isCustomRoutedProvider(effectiveSelected) ||
                       (isBuiltinRefreshableProviderId(effectiveSelected.id) &&
                         !effectiveSelected.modelDiscoveryFailure) ||
-                      effectiveSelected.id === MANAGED_OLLAMA_PROVIDER_ID) && (
+                      isManagedLocalProvider(effectiveSelected.id)) && (
                       <>
                         {(providerHasModels(effectiveSelected) ||
-                          effectiveSelected.id !== MANAGED_OLLAMA_PROVIDER_ID) && (
+                          !isManagedLocalProvider(effectiveSelected.id)) && (
                           <div
                             className="border-t"
                             style={{ borderColor: 'var(--settings-theme-card-border)' }}
@@ -3051,7 +3350,7 @@ export function ProvidersSection() {
                               ? t(
                                   `settings.providers.detail.discoveryFailed.${effectiveSelected.modelDiscoveryFailure.kind}`,
                                 )
-                              : effectiveSelected.id === MANAGED_OLLAMA_PROVIDER_ID
+                              : isManagedLocalProvider(effectiveSelected.id)
                                 ? t('settings.providers.local.emptyInstalled')
                                 : t(
                                     effectiveSelected.connected
@@ -3059,8 +3358,8 @@ export function ProvidersSection() {
                                       : 'settings.providers.detail.emptyModels',
                                   )
                           }
-                          compactWhenEmpty={effectiveSelected.id === MANAGED_OLLAMA_PROVIDER_ID}
-                          compact={effectiveSelected.id === MANAGED_OLLAMA_PROVIDER_ID}
+                          compactWhenEmpty={isManagedLocalProvider(effectiveSelected.id)}
+                          compact={isManagedLocalProvider(effectiveSelected.id)}
                           {...(isBuiltinRefreshableProviderId(effectiveSelected.id)
                             ? {
                                 onRefresh: () => void handleRefreshBuiltinModels(effectiveSelected),
@@ -3068,7 +3367,7 @@ export function ProvidersSection() {
                                 refreshDisabled: refreshingProviderId !== null,
                                 refreshIdleLabel: t('settings.providers.models.refreshBuiltinAria'),
                               }
-                            : effectiveSelected.source === 'user'
+                            : effectiveSelected.source === 'user' && effectiveSelected.id !== MANAGED_LLAMACPP_PROVIDER_ID
                               ? {
                                   onRefresh: () => void handleRefreshModels(effectiveSelected),
                                   refreshing: refreshingProviderId === effectiveSelected.id,
@@ -3081,7 +3380,7 @@ export function ProvidersSection() {
                   {!effectiveSelected.suspended &&
                     !providerHasModels(effectiveSelected) &&
                     !isCustomRoutedProvider(effectiveSelected) &&
-                    effectiveSelected.id !== MANAGED_OLLAMA_PROVIDER_ID &&
+                    !isManagedLocalProvider(effectiveSelected.id) &&
                     (Boolean(effectiveSelected.modelDiscoveryFailure) ||
                       !isBuiltinRefreshableProviderId(effectiveSelected.id)) && (
                       <div className="flex flex-1 flex-col items-center justify-center gap-3 px-8 text-center text-13">
@@ -3117,6 +3416,9 @@ export function ProvidersSection() {
                   {effectiveSelected.id === MANAGED_OLLAMA_PROVIDER_ID && (
                     <OllamaProviderDetail onChanged={refetch} />
                   )}
+                  {effectiveSelected.id === MANAGED_LLAMACPP_PROVIDER_ID && (
+                    <LlamaCppProviderDetail onChanged={refetch} />
+                  )}
                 </>,
               )
             ) : (
@@ -3131,6 +3433,8 @@ export function ProvidersSection() {
         </div>
       )}
 
+      </>)}
+
       {wizard && (
         <AddProviderWizard
           providers={providers}
@@ -3143,7 +3447,7 @@ export function ProvidersSection() {
           onDone={async (providerId) => {
             await refetch();
             setWizard(null);
-            if (providerId) setSelectedId(providerId);
+            if (providerId) selectProvider(providerId);
           }}
         />
       )}

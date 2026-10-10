@@ -16,7 +16,8 @@
  * 跨渠道互不影响。
  */
 
-import type { IMAttachment, IMMessageEvent, InteractiveCardSpec, TextChannelIM } from '@cindy/im';
+import type { IMMessageEvent, InteractiveCardSpec, TextChannelIM } from '@cindy/im';
+import { buildInboundMessageFacts } from '@cindy/im';
 
 import { createLogger } from '../../logger';
 import {
@@ -32,6 +33,10 @@ import type { ImSlashHandlers } from './slashCommands';
 import { looksLikeSlashCommand } from './slashCommands';
 import type { ImTurnRunner } from './turnRunner';
 import type { ImChannelAdapter } from './types';
+import { describeInteractionSource } from './interactionSource';
+import { buildImReplyContextBlock } from './replyContext';
+import { captureImContext } from '../../../shared/imMessageSource';
+import { imChannelNoteSourceFromEvent, type ImChannelNoteSource } from './channelNote';
 
 /**
  * `!stop` 控制指令 — 半角/全角感叹号、大小写不敏感(issue #867)。
@@ -290,7 +295,7 @@ export function createMessageHandler(
     const hasContent = event.text.length > 0 || event.attachments.length > 0;
 
     // ── pure-unsupported: reply directly, do NOT invoke agent ───────────────
-    if (!hasContent && event.unsupported.length > 0) {
+    if (!hasContent && !event.invoked && !event.replyContext && event.unsupported.length > 0) {
       const notice = ui.agent.unsupportedOnly(event.unsupported);
       // 同 !stop: 开场白卡就地 patch 成 unsupported 提示, 消费不了再另发;
       // 仅本条消息自己开了话题(groupContextLane)才消费。
@@ -311,7 +316,7 @@ export function createMessageHandler(
       return;
     }
 
-    if (!hasContent) {
+    if (!hasContent && !event.invoked && !event.replyContext) {
       // empty + no unsupported — should already be filtered upstream, but be safe
       return;
     }
@@ -329,6 +334,19 @@ export function createMessageHandler(
     }
 
     // ── invoke agent ────────────────────────────────────────────────────────
+    // 本条的渠道来源事实(只进模型正文); 取不到按"不写说明"降级, 不阻断消息。与下面的
+    // 群上下文拼装互不依赖, 先发起、派发前再取, 群名查询不额外拖慢首条消息。
+    const channelNoteSourcePromise: Promise<ImChannelNoteSource | null> = (async () => {
+      try {
+        return adapter.channelNoteSourceFor
+          ? await adapter.channelNoteSourceFor(event)
+          : imChannelNoteSourceFromEvent(event);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        log.warn(`channelNoteSourceFor failed (note omitted): ${msg}`);
+        return null;
+      }
+    })();
     // 送模型正文改写钩子(群上下文拼装): 失败按"不改写"降级, 不阻断消息。
     let prepared: Awaited<ReturnType<NonNullable<ImChannelAdapter['prepareAgentTurnText']>>> = null;
     // 「已收到」表情先落, 再拼上下文 —— 群上下文拼装要回翻群历史(可能翻页 + 调
@@ -367,9 +385,15 @@ export function createMessageHandler(
         log.warn(`prepareAgentTurnText failed (degraded to raw text): ${msg}`);
       }
     }
+    const channelNoteSource = await channelNoteSourcePromise;
     // 按事件挂 per-turn 权限策略(telegram 群成员触发 → 破坏性调用强确认)。
     const turnPermissionPolicy = adapter.turnPermissionPolicyFor?.(event);
     const groupHistoryAccess = adapter.groupHistoryAccessFor?.(event);
+    const fallbackReplyPrefix = !adapter.prepareAgentTurnText && event.replyContext
+      ? buildImReplyContextBlock(event.replyContext)
+      : '';
+    const deliveredReply = prepared?.replyContext ??
+      (!adapter.prepareAgentTurnText ? event.replyContext : undefined);
     try {
       await turnRunner.runAgentTurn({
         ...(notificationSessionId ? {
@@ -383,6 +407,8 @@ export function createMessageHandler(
         botContextId: event.contextId,
         userId: event.senderId,
         userMessageId: event.messageId,
+        sourceDescription: describeInteractionSource(event),
+        ...(channelNoteSource ? { channelNoteSource } : {}),
         text: event.text,
         // 受保护群的触发消息照常起 turn, 但不进会话存档(渠道侧已挡住群历史池,
         // 这里挡住第二条路径)。
@@ -401,8 +427,18 @@ export function createMessageHandler(
             }
           : {}),
         ...(prePersisted ? { prePersistedUserMessage: prePersisted } : {}),
-        ...(prepared ? { agentText: prepared.agentText } : {}),
-        ...(prepared?.contextSnapshot ? { contextSnapshot: prepared.contextSnapshot } : {}),
+        agentText: buildInboundMessageFacts({
+          text: event.text,
+          invoked: event.invoked,
+          hasReply: !!event.replyContext,
+          attachmentCount: event.attachments.length + (prepared?.contextAttachments?.length ?? 0),
+          unavailable: [
+            ...event.unsupported.map((entry) => `${entry.type}：${entry.label}`),
+            ...(deliveredReply?.unavailableAttachments ?? []),
+          ],
+        }) + (prepared?.agentText ?? `${fallbackReplyPrefix}${event.text}`),
+        ...(prepared?.contextSnapshot ? { contextSnapshot: prepared.contextSnapshot } : fallbackReplyPrefix
+          ? { contextSnapshot: captureImContext({ replyPrefix: fallbackReplyPrefix, replyMessageCount: 1 }) } : {}),
         // 群历史附件只进模型消息、不落库(见 ImRunAgentTurnArgs.contextAttachments)。
         ...(prepared?.contextAttachments?.length
           ? { contextAttachments: prepared.contextAttachments }
@@ -417,6 +453,8 @@ export function createMessageHandler(
             }
           : {}),
         attachments: event.attachments,
+        // 只取 adapter 实际交给模型的回复投影(可能已被过滤成占位), 不用 event 原值。
+        ...(deliveredReply ? { replyContext: deliveredReply } : {}),
         // threadScoped 渠道: scopeKey = thread root ts(thread = session 路由键)
         scopeKey: notificationSessionId || threadScoped ? event.scopeKey : undefined,
         // Title generation and similar detached work must stay visible to the

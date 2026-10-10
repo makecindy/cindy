@@ -106,6 +106,8 @@ function createDb(initialTitle: string): void {
       workspace_kind TEXT NOT NULL DEFAULT 'project',
       orca_role TEXT,
       remote_host_id TEXT,
+      agent_device_id TEXT,
+      orca_remote_lead TEXT,
       codex_history_has_product_prompt INTEGER,
       codex_plan_json TEXT,
       im_bot_context_id TEXT,

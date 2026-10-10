@@ -1,7 +1,6 @@
 import { createRoot } from 'react-dom/client';
 import { MediaScrubber } from '@/components/ui/media-scrubber';
 import sliderCss from '@/components/ui/slider.css?inline';
-import { Button } from '@/components/ui/button';
 /**
  * GhostToolCard — 消息流「意识卡片」(卡槽③海报模式)。
  *
@@ -39,9 +38,9 @@ import { Check, ChevronDown, Copy, FolderOpen, Ghost, Loader2 } from 'lucide-rea
 
 import { ImageLightbox } from './ImageLightbox';
 import { ModelLightbox } from './ModelLightbox';
+import { GhostCardLinkConfirm, GhostCardPromptPanel } from './GhostCardHostPrompts';
 import { toast } from '@/lib/toast';
 import { registerMedia } from '@/lib/mediaPlaybackBus';
-import { ListComposerTextarea } from '@/components/new-chat/ListComposerTextarea';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -63,7 +62,6 @@ import {
 } from '@/cindy-brain/ghostCardGallery';
 import {
   GHOST_CARD_ACTION_INFLIGHT_MS,
-  GHOST_CARD_ACTION_PROMPT_MAX_LEN,
   GHOST_CARD_HEIGHT_MAX,
   GHOST_CARD_HEIGHT_MIN,
   isGhostCardLinkAllowed,
@@ -647,133 +645,26 @@ function GhostCardCanvas({
         />
       ))}
 
-      {/* ── data-ghost-prompt 输入面板(宿主交互面,与 lightbox 同层;体验与
-          老基座 ChatImageActions 的 imgPrompt popover 一致:textarea + 回车
-          发送/Esc 取消/点外关闭)。锚在被点按钮下方。 */}
+      {/* ── data-ghost-prompt 输入面板 / data-ghost-link 外链确认框(宿主交互面,
+          点外部不关闭,见 GhostCardHostPrompts)。 */}
       {promptAsk ? (
-        <>
-          <div className="fixed inset-0 z-40" onMouseDown={() => setPromptAsk(null)} />
-          <div
-            className="absolute z-50 w-72 rounded-md border p-2"
-            style={{
-              top: promptAsk.top,
-              left: promptAsk.left,
-              backgroundColor: 'var(--surface-elevated)',
-              borderColor: 'var(--border-default)',
-              boxShadow: 'var(--shadow-menu)',
-            }}
-          >
-            <ListComposerTextarea
-              autoFocus
-              rows={3}
-              value={promptText}
-              maxLength={GHOST_CARD_ACTION_PROMPT_MAX_LEN}
-              onChange={(e) => setPromptText(e.target.value)}
-              onKeyDown={(e) => {
-                // 中文输入法组词中的 Enter 不能触发发送(同老基座)。
-                if (e.nativeEvent.isComposing) return;
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault();
-                  submitPrompt();
-                } else if (e.key === 'Escape') {
-                  setPromptAsk(null);
-                }
-              }}
-              placeholder={promptAsk.placeholder || t('chat.mivoAction.promptPlaceholder')}
-              className="w-full resize-none rounded-md border px-2 py-1.5 text-xs outline-none placeholder:text-[var(--text-tertiary)]"
-              style={{
-                backgroundColor: 'var(--msg-tool-card-bg)',
-                borderColor: 'var(--msg-tool-card-border)',
-                color: 'var(--msg-tool-card-text)',
-              }}
-            />
-            <div className="mt-1.5 flex items-center justify-end gap-1.5">
-              <button
-                type="button"
-                onClick={() => setPromptAsk(null)}
-                className="h-6 cursor-pointer rounded-md px-2 text-xs transition-colors"
-                style={{ color: 'var(--text-secondary)' }}
-              >
-                {t('chat.mivoAction.promptCancel')}
-              </button>
-              <button
-                type="button"
-                onClick={submitPrompt}
-                disabled={!promptText.trim()}
-                className={
-                  'h-6 rounded-md border px-2.5 text-xs font-medium transition-colors ' +
-                  (promptText.trim() ? 'cursor-pointer hover:bg-[var(--msg-table-header-bg)]' : 'cursor-not-allowed opacity-40')
-                }
-                style={{
-                  backgroundColor: 'var(--msg-tool-card-bg)',
-                  borderColor: 'var(--msg-tool-card-border)',
-                  color: 'var(--msg-tool-card-text)',
-                }}
-              >
-                {t('chat.mivoAction.promptSend')}
-              </button>
-            </div>
-          </div>
-        </>
+        <GhostCardPromptPanel
+          top={promptAsk.top}
+          left={promptAsk.left}
+          placeholder={promptAsk.placeholder}
+          text={promptText}
+          onTextChange={setPromptText}
+          onSubmit={submitPrompt}
+          onCancel={() => setPromptAsk(null)}
+        />
       ) : null}
-
-      {/* ── data-ghost-link 外链确认框(宿主交互面,与输入面板同层级模式:
-          遮罩点击/Esc 取消)。域名醒目 + 完整链接全量展示——卡内文案归意识,
-          真实去向由宿主如实亮给用户,确认才 openExternal。 */}
       {linkAsk ? (
-        <>
-          <div className="fixed inset-0 z-40" onMouseDown={() => setLinkAsk(null)} />
-          <div
-            className="fixed left-1/2 top-1/2 z-50 w-80 -translate-x-1/2 -translate-y-1/2 rounded-lg border p-3.5"
-            role="alertdialog"
-            aria-label={t('chat.ghostCall.linkConfirmTitle')}
-            onKeyDown={(e) => {
-              if (e.key === 'Escape') setLinkAsk(null);
-            }}
-            style={{
-              backgroundColor: 'var(--surface-elevated)',
-              borderColor: 'var(--border-default)',
-              boxShadow: 'var(--shadow-menu)',
-            }}
-          >
-            <div className="text-13 font-semibold" style={{ color: 'var(--text-primary)' }}>
-              {t('chat.ghostCall.linkConfirmTitle')}
-            </div>
-            <div className="mt-1.5 text-xs" style={{ color: 'var(--text-secondary)' }}>
-              {t('chat.ghostCall.linkConfirmHint')}
-            </div>
-            {linkAskHost ? (
-              <div
-                className="mt-1.5 break-all text-13 font-semibold"
-                style={{ color: 'var(--text-primary)' }}
-              >
-                {linkAskHost}
-              </div>
-            ) : null}
-            <div
-              className="mt-1 max-h-24 overflow-y-auto break-all font-mono text-11 leading-relaxed"
-              style={{ color: 'var(--text-tertiary)' }}
-            >
-              {linkAsk}
-            </div>
-            <div className="mt-2.5 flex items-center justify-end gap-1.5">
-              <Button
-                variant="secondary"
-                tone="quiet"
-                size="xs"
-                compact
-                type="button"
-                autoFocus
-                onClick={() => setLinkAsk(null)}
-              >
-                {t('chat.ghostCall.linkConfirmCancel')}
-              </Button>
-              <Button variant="secondary" size="xs" compact type="button" onClick={confirmOpenLink}>
-                {t('chat.ghostCall.linkConfirmOpen')}
-              </Button>
-            </div>
-          </div>
-        </>
+        <GhostCardLinkConfirm
+          url={linkAsk}
+          host={linkAskHost}
+          onConfirm={confirmOpenLink}
+          onCancel={() => setLinkAsk(null)}
+        />
       ) : null}
 
       {/* ── 卡内图片右键菜单(宿主交互面;fixed 定位到换算后的视口坐标)── */}

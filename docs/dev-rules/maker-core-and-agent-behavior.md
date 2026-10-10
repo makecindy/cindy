@@ -11,6 +11,22 @@ Agent 会话的事件流与 prompt 组装中枢，这里的改动会在用户无
 [`electron-security-and-process-boundaries.md`](electron-security-and-process-boundaries.md)，
 Orca 多 Agent 协同另见 [`orca-team-architecture.md`](orca-team-architecture.md)。
 
+## 启动失败与工作目录占用
+
+Claude Code、Codex、Pi 共用 Maker 的启动失败清理契约：只有明确未启动进程或已确认
+进程退出时，adapter 才返回 `AgentStartupStoppedError`；Maker 释放本次启动的目录租约，
+并向调用方还原原始错误。准备环境失败也必须进入该契约，不能把尚未启动的任务永久
+记为可能仍占用目录。鉴权失败保留原 `AgentNotAuthenticatedError` 类型。
+
+本地 SDK 已接收启动调用、已观察到进程创建、或远端启动请求已发出后，普通异常不是
+退出证明。Pi 在 transport 已创建而 RPC 包装器构造失败时，也必须关闭已取得的
+transport；关闭未确认时复用原有隔离清理记录和 `AgentStartupCleanupPendingError`，
+保留运行期文件与目录保护，重试确认退出后才释放。旧隔离进程的清理失败不能被新一轮
+“尚未启动”的状态覆盖。此恢复只影响失败任务，不重置设备连接或其他任务，不自动重放消息。
+
+回归见 `claude-code/__tests__/startup-cleanup.test.ts`、
+`pi/__tests__/pi-startsession-cleanup.test.ts` 与 `maker.test.ts`。
+
 ## 工具循环与无响应的分工
 
 工具持续返回但反复原地搜索时，复用
@@ -33,8 +49,31 @@ Claude Code 在原有 per-sidechain 回调里检测所有模型；Pi / Codex 在
 （只认字面 `.log` 路径，可串联多个日志读取）；
 失败、混合执行、重定向或源文件读取不套用该例外。等待调用不清空普通调用的循环轨迹。
 这仍是有界启发式，不是任意长度循环的证明，也不以没有文件改动作为失败依据。
-回归见 `loop-guard.test.ts`、`session.tool-loop.test.ts` 和 Claude Code 的
-`upstream-idle-watchdog.test.ts`。
+
+节奏与复核：一次普通调用若距上一次普通调用开始已有至少 30 秒（`sleep` 后再查 CI、
+命令内自带等待或慢推理），视为在等外部进度的节奏轮询，不计入上述重复与窗口判据，
+只续接完全相同结果的连续段。上述判据命中只算“疑似”（`final: false`）：host 通过
+`MakerDeps.toolLoopReviewer`（Pi / Codex）与 `AgentDeps.toolLoopReviewer`（Claude Code）
+注入同一个辅助模型复核入口，由 `agents/shared/tool-loop-review.ts` 的 `ToolLoopMonitor`
+在后台复核，Agent 不暂停。复核 continue → 接下来 20 次普通结果不再报疑似；stop、
+失败、20 秒超时或未注入复核 → 按原样中断。每个 turn 最多复核 3 次（Claude Code 各子代理共用这 3 次），
+用完后疑似直接中断，但进行中的复核会等到结论；放行额度按普通结果计，节奏轮询同样消耗；
+复核结果晚于 turn 结束、接管、关闭或拆离开始到达时丢弃；复核期间若新的普通结果已不再疑似
+（模式被打破），或新结果的调用不属于被复核的调用集合（模式被替换），进行中的复核同样作废；结论到达时
+若仍有在途调用不属于被复核模式（此时流式参数已补齐），结论丢弃；Claude Code 子代理结束后
+（父 Agent 调用已有结果）其迟到结论丢弃，等待/轮询工具与未配对结果不算打破（Session 的同步观察与复核结论共用
+`toolLoopControlFor` 一个前提判据，等人确认期间不中断，Claude Code 对称检查 pending interaction；
+复核终态与同步判定一样，排在已送达完整结果的摘要之后）。以下情况不经复核直接中断（`final: true`）：
+快速完全相同调用连续 30 次、完全相同结果（含节奏轮询）持续 60 分钟、长只读轮转。
+复核只发送最近 12 次调用的摘要：maker-core 只为限制内存截取未脱敏原文（输入保留原结构，
+每个字符串 4000 字符；截取点所在的整行一律丢弃，无换行时丢弃末尾连续串与未闭合引号起的内容），desktop 先在未转义的字符串上逐个（键名像凭证的字段与 argv 中凭证参数名的下一项整项删除）
+对完整截取按凭证种类整类脱敏（`redactSensitiveText`、`git-snapshot/secretRedactor.ts`
+的厂商令牌与私钥、截断私钥块、URL 内嵌凭证、命令行凭证参数、凭证类 HTTP 头，最后以
+含字母和数字的 32 位以上连续串兜底，宁可多删），再截断到每段 400 字符，最后改写分隔标签；
+顺序不能颠倒，否则跨截断点的凭证会留下认不出的前缀。走共享辅助模型链，回答只接受
+CONTINUE / STOP。
+回归见 `loop-guard.test.ts`、`tool-loop-review.test.ts`、`session.tool-loop.test.ts`、
+Claude Code 的 `upstream-idle-watchdog.test.ts` 与 desktop 的 `tool-loop-reviewer.test.ts`。
 
 ## 上下文已满时的引擎边界
 
@@ -107,6 +146,13 @@ Codex 跨凭证优先保留同一个原生线程；仅当目标需要另一个 h
 本地恢复与分叉必须同时固定该线程的原生历史根
 （`CODEX_HOME`，含 `sessions` / `archived_sessions`）和数据库根（`sqlite_home`）；
 仅固定 SQLite 不足以恢复分页祖先，原生按不可变 rollout ID 在历史根内查找祖先。
+归档状态以 Cindy 的 `sessions.status` 为准。Codex 经原生 `thread/archive` /
+`thread/unarchive` 同步历史位置与索引，成功后更新线程位置记录；禁止直接改原生 SQLite
+或搬动 rollout，也不能为归档触发历史复制／重建。启动时补齐存量状态，忙碌任务、离线
+SSH 或暂时失败留待重试；共享原生 ID 的活动任务优先，不关闭其他任务的进程。同步必须
+持有任务路由锁并验证当前 owner，使用原历史根与数据库根。Claude Code 与 Pi 当前没有
+原生归档接口，保持 Cindy 状态；历史扫描及重新导入不得覆盖 Cindy 的归档与归档任务的
+项目目录、额外目录及可写目录范围。手机远控复用宿主同一状态写入路径。
 凭证、代理路由和模型目录仍按本轮选中账号准备，不能把历史根写回全局账号配置。
 跨历史根的原生进程从启动参数要求 `cli_auth_credentials_store="ephemeral"`，清除继承的
 原生身份环境变量；OAuth 通过独立的 external-auth adapter 在进程内安装目标账号 token，
@@ -254,15 +300,57 @@ sessionRunningRetry 就停。每次因 replacement 关闭而重新入队都计�
 - 打算用 prompt 解决某个问题前先自问：这件事用代码能不能做？能就用代码。
 - 把本应由代码保证的确定性逻辑（格式校验、字段抽取、流程跳转、是否调用某个工具等）
   交给模型自由发挥，会引入不可复现的行为漂移，属于本规则明确禁止的做法。
+- Cindy 的目标模式由 `goal-host` 统一管理续跑、预算与暂停／恢复。Codex 创建和恢复线程时
+  使用会话级 `features.goals=false`，避免模型另建原生目标，形成绕过宿主调度与来源标记的
+  第二套循环；不写用户的全局 Codex 配置。不能仅把无来源事件改判为目标事件，否则用户
+  插话和停止边界仍会失真。实现与回归见 `agents/codex/index.ts`、`index.test.ts`；
+  `goal-ownership.native.test.ts` 用隔离的原生运行时验证旧目标恢复后不再自行续跑。
 - **产品 turn 未结算不得结束。** provider `turn/completed` 可以立刻给 SDK turn 落墓碑并
   结算 usage；只有原子挂在该终态边界上的显式 continuation claim 才能挡住产品结束。
-  Codex 提问／计划审阅尚待用户确认时同样保留产品边界：底层可继续独立工作并结束
+  Codex 同步提问／计划审阅尚待用户确认时同样保留产品边界：底层可继续独立工作并结束
   SDK turn，但不能触发完成通知、队列收口或协作任务完成。人工等待使用独立 claim，
   复用 `turnContinuationId`，不能塞进 yield claim 造成回答续跑等待自身。计划审阅必须
   在发布边界前登记；回答／批准后沿原意图续跑，取消／Stop 单次结束且不重复结算 usage。
   起跑回执之前到达的终态先缓冲再核对归属；失败只能走失败终态，不能先以取消回调
   触发定时任务的成功收口。回归见 `agents/codex/index.test.ts` 的 pending confirmation
   与 human continuation 用例，以及 Desktop `sessionEventPipeline.test.ts`。
+  Codex 异步提问使用 `agentMessage.delivery=async` 与结构化 `questions` 接入同一提问
+  流程，不把回退正文当成最终回答。未回答的异步问题不保留产品边界，原轮次结束时自动
+  收起卡片、不代选答案，迟到回答不得续跑。结束前已提交的回答优先通过 `turn/steer`
+  送入原轮次；发送与结束竞态导致原轮次明确拒绝接收时复用人工续跑，发送结果不确定时
+  提示错误且不自动重发。Stop、失败、关闭及被替换问题的迟到回答不得续跑。
+  协议与前缀稳定性实测见 `agents/codex/async-user-input.native.test.ts`，
+  卡片、回传、去重及取消回归见 `agents/codex/index.test.ts`。
+  Claude Code／Pi 通过 `cindy_helper.ask_user_question_async` 复用现有卡片；工具立即返回
+  pending 回执。Codex 只保留原生入口，MCP 按请求时的 harness 隐藏并拒绝这条工具；
+  `Session` 也按实际引擎拒绝 Codex 调用共享入口，防止陈旧上下文创建第二套待回答状态。
+  Claude Code／Pi 的 `Session` 共用 `agents/shared/async-user-questions.ts` 管理问题寿命，
+  不登记阻塞交互或人工续跑。回答只走原执行的 steer，结束／Stop／关闭／替换后作废，
+  发送失败不重投新 turn。Claude 会把已排队的答案合并为下一 SDK 段：仅在答案已被接收
+  时复用现有 continuation claim 保留产品边界，避免提前完成或重复完成；未回答不建 claim。
+  Pi 在原生 RPC 排队后再核对执行代次与取消信号，防止答案串到
+  下一次执行。Claude 的本机 hook 与远端 root-only guard 禁止原生子代理直接提问；工具
+  入口只接受宿主标明 `mcpCallerKind=root` 且 `mcpCallerAttested=true` 的请求，身份未知、
+  缺失或未证实均拒绝；不提供通用 call_tool 别名，避免绕过该判据。
+  SSH、手机沿用既有 MCP／交互传输通道。
+  回归见 `session.async-user-questions.test.ts`、MCP `asyncUserQuestionTool.test.ts`；
+  两种真实 harness 配本地假模型的投递与稳定前缀实测见
+  `agents/shared/async-user-questions.native.test.ts`。
+  同步与异步问题共用卡片时，同步问题优先：已有同步问题等待时不再显示异步卡片，
+  同步问题后到时收起未回答的异步卡片，避免遮住阻塞执行的问题。三个 harness 均只保留
+  最新一张待回答的异步卡片：显示新卡片前先将旧卡片标为被替换，旧答案即使在原轮次
+  结束前到达也不得投递或清除新卡片。Codex 的同步工具结果
+  仅在同步协议别名间按内容去重；异步只按 item id 去重事件，不共用 pending／submitted
+  答案缓存，同轮同文案的新 item 也必须重新询问。答案被接收后，卡片不再属于待回答
+  集合；即使投递尚未完成时遇到结束／Stop／替换，也只能取消投递，不能把已回答卡片
+  再标成过期。异步问题被跳过、取消或没有对应问题的非空答案时，只结算卡片，不更新
+  审查意图、不投递占位答案、不建立 continuation；同批问题至少一个有效答案仍可投递。
+  Codex 复用规范化答案与 `hasSubmittedUserInput` 判据，同步提问的 Skip 行为保持不变。
+  交错回归见上述 Session 与 Codex 测试。
+  原生与共享异步请求均携带 `InteractionRequest.delivery=async`；Session 不把它们计入
+  阻塞交互或生命周期等待，未回答也不能暂停工具循环检测／零事件看门狗。字段缺省仍按
+  同步等待处理；Codex 本机／SSH 共用同一 adapter，手机卡片仍走既有宿主交互通道。
+  回归见 `session.tool-loop.test.ts`、`session.turn-stall.test.ts`。
   Codex `functions.exec` yield 没有协议级 execution handle（cell / wait 活在
   `codex-rs` daemon），近期检测只能是 adapter 内、用真实 rollout fixture 锁死的启发式，
   用来铸造有界 claim，再由宿主确定性开续段让模型 wait 同一 cell。
@@ -324,6 +412,15 @@ sessionRunningRetry 就停。每次因 replacement 关闭而重新入队都计�
 旧历史并标记缺失，不能只留下旧授权、丢掉后续限制。宿主实际拒绝的动作可作为下一条
 同一身份用户补充的指代线索；动作参数与助手解释都不是用户授权。相关行为回归见
 `agents/shared/auto-review-decision.test.ts` 与 `scripts/eval-auto-approval.mts`。
+IM 与官方 Hook 消息另带「用户本条明确指向的内容」：被回复／引用的那条消息与本条附件数。
+它由宿主从渠道 adapter 实际交给模型的回复投影（`prepareAgentTurnText` 返回的 `replyContext`，
+过滤后的占位也照用；模型没看到的回复审阅器也不看），或 Hook dispatcher 在展示截短前从原始 `source.threadContext`
+取出的回复目标（优先按 `replyToMessageId`，排除当前请求）盖章，随 Main 的
+`MAIN_OWNED_SEND_CONTEXT.autoReviewReferences` 进入 `appendAutoReviewUserIntent`，只挂在当前消息上
+（下一条消息即丢弃），经 `projectAutoReviewUserReferences` 独立限长，不占用户原话预算；wire 同名字段一律不收。
+审阅器把它放在 `<review_input>` 之后的独立 `<referenced_content>` 低信任块中，只用于判断指代与只读查询的
+依据，不构成授权；没有引用时审阅 prompt 逐字不变。群背景消息不算用户指向的内容。审阅器暂不接收图片本体，
+只写明张数。回归见 `auto-review-decision.test.ts`、`autoPermissionReviewer.test.ts` 与三个 harness 的 wiring 测试。
 绑定原任务的心跳必须保留其权限与计划模式，包括冷启动恢复与撞忙排队；队列接受边界
 复用既有权限与计划模式稳定快照核验；任一模式切换中或运行时与落盘值不一致时顺延，
 不按旧模式派发。不得把原任务的 Auto／Ask

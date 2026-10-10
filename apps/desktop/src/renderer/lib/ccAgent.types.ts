@@ -5,7 +5,13 @@ import type { TurnUsageDetails } from '../../shared/turnUsageDetails';
 import type { RegionalMoney } from '../../shared/regionalMoney';
 import type { AutoResumeInfo, RecoveryCheckpoint } from '../../shared/agentInputQueue';
 import type { ReviewRunMeta } from '../../shared/reviewRun';
+import type { OrcaRemoteLead } from '../../shared/orcaRemoteWorker';
 import type { AgentTaskTerminalStatus } from '@cindy/maker-shared/agent-task';
+import type {
+  MessageSourceDevice,
+  MessageSourceGroup,
+  MessageSourcePlugin,
+} from '@cindy/maker-shared/message-source';
 import type { ToolLoopErrorDetails } from '@cindy/maker-core';
 
 export type SessionStatus = 'active' | 'archived' | 'deleted';
@@ -36,7 +42,12 @@ export type NativeForkAnchor = {
  */
 export interface MessageSchedulerOrigin {
   kind: 'scheduler';
-  scheduleId: string;
+  /**
+   * 自动化 id。共享任务访客收到的来源已由主机脱敏、不带 id 与名字，此时标签只显示
+   * 「由自动化发送」且不可点击。Hook 渠道消息复用本形态，id 为 `hook:<连接 id>`
+   * （见 isHookSchedulerOrigin），界面显示渠道而不是自动化。
+   */
+  scheduleId?: string;
   scheduleName?: string;
   runId?: string;
 }
@@ -57,6 +68,13 @@ export interface MessageSessionOrigin {
   /** 来源任务属于某个伙伴时：标签显示伙伴名与头像（名字优先取实时资料，其次用快照）。 */
   senderBotId?: string;
   senderBotName?: string;
+  /**
+   * Orca Lead / Worker 互发的消息：发送方角色名（Worker 为其 role）。卡片标题据此写
+   * 「来自 Worker「role」的消息」；来源标签仍只在有 senderSessionId 时出现。
+   */
+  orcaSenderLabel?: string;
+  /** true = 由 Orca 落库来源（kind:'orca'）投影而来。 */
+  orca?: true;
 }
 
 /** 非用户手动输入、需要在气泡上标出来源的消息。 */
@@ -82,6 +100,7 @@ export type StoredMessageOrigin =
  * 只接受 SDK 自己分配的 uuid，所以这是 fork 的唯一主键。
  */
 export interface CcMeta {
+  botLearning?: import('@cindy/maker-shared/bot-learning').BotLearningReceipt[];
   /** Provider text phase, retained to exclude commentary from notification previews. */
   assistantPhase?: string;
   uuid?: string;
@@ -106,6 +125,8 @@ export interface CcMeta {
   // result / host turn 边界
   /** Host 在 done 边界写到该 SDK turn 最后一条 assistant 上的持久化收尾标记。 */
   turnCompleted?: boolean;
+  /** Frozen task results bound by the host to this successful reply. */
+  botTaskResults?: import('../../shared/botCollaboration').BotCollaborationMeta[];
   numTurns?: number;
   durationMs?: number;
   durationApiMs?: number;
@@ -165,6 +186,18 @@ export interface CcMeta {
   hookSource?: ImMessageSource;
   /** Local IM metadata stays separate so older clients retain ordinary user actions. */
   imSource?: ImMessageSource;
+  /**
+   * 手机或另一台电脑远程操作本机时，被控端在 device-link 入口盖章的发送设备。
+   * 本机输入不带；共享任务访客收到的消息已被主机去掉。读取一律走
+   * readMessageSourceDevice（宽容解析）。
+   */
+  sourceDevice?: MessageSourceDevice;
+  /** 插件任务派发的消息（readMessageSourcePlugin 读取）。 */
+  sourcePlugin?: MessageSourcePlugin;
+  /** Group source of an explicitly sent private assistant message. */
+  sourceGroup?: MessageSourceGroup;
+  /** Guest-safe independent assistant delivery; does not seal a model turn. */
+  explicitDelivery?: boolean;
 
   /** 历史 per-turn USD；新数据以 turnCost 为区域金额事实。 */
   turnCostUsd?: number;
@@ -242,6 +275,10 @@ export interface CcMeta {
    */
   /** Automatic reply to a private Bot message; retained without unread attention. */
   botPrivateReply?: boolean;
+  /** Main-owned input receipt, retained for audit; never an authorization grant. */
+  botTaskCoordinationInput?: import('../../shared/botTaskCoordination').BotTaskCoordination;
+  /** Accepted internal coordination turn, used to suppress successful completion attention. */
+  botTaskCoordination?: boolean;
   /** Turn of a Bot's hidden group-chat lane; the group chat surfaces its result and failures. */
   botGroupLane?: boolean;
   botAuthorization?: import('../../shared/botAuthorization').BotAuthorizationCard;
@@ -376,6 +413,17 @@ export interface Session {
    * 是远端路径。null/undefined = 本地。仅 Codex 支持。
    */
   remoteHostId?: string | null;
+  /**
+   * Agent 在同账号另一台电脑上运行时，那台电脑的 deviceId。任务、项目文件与命令仍在本机
+   * (workingDir 是本机路径，文件浏览、改动对比照本机方式工作)；只有 Agent 进程、登录与供应商
+   * 在那台电脑上。null/undefined = Agent 在本机。与 remoteHostId 互斥。
+   */
+  agentDeviceId?: string | null;
+  /**
+   * 本任务是另一台电脑上协同 Lead 派来的 Worker(任务、目录与命令都在本机)。
+   * null/undefined = 普通任务；旧版本 payload 没有该字段。
+   */
+  orcaRemoteLead?: OrcaRemoteLead | null;
   /**
    * device-link 跨设备远程控制:本 session 实际归属的**被控设备 deviceId**。
    * 仅存在于控制端**内存**里(由 remoteProjectsStore 注入),**永不落本地 DB**——

@@ -10,6 +10,26 @@ import {
 } from '../authIpc';
 
 describe('desktop auth IPC validation', () => {
+  it('retains the rate-limit deadline when settling an error with or without state', () => {
+    for (const state of [
+      null,
+      { step: 'error' as const, code: 'RATE_LIMITED', recoverTo: 'identifier' as const },
+    ]) {
+      expect(
+        settleDesktopLoginResult({
+          success: false,
+          code: 'RATE_LIMITED',
+          retryAt: 1_800_000_000_000,
+          state,
+        }),
+      ).toMatchObject({
+        success: false,
+        code: 'RATE_LIMITED',
+        retryAt: 1_800_000_000_000,
+        state: { step: 'error' },
+      });
+    }
+  });
   it('accepts bounded opaque account keys and rejects malformed values', () => {
     expect(parseDesktopAccountKey('["global","membership-1"]')).toBe('["global","membership-1"]');
     expect(parseDesktopAccountKey('')).toBeNull();

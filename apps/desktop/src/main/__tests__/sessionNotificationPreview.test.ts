@@ -26,17 +26,21 @@ afterEach(() => { clearCurrentDbClient(client); sqlite.close(); });
 function add(id: string, role: string, content: string, createdAt: number, meta = {}) {
   sqlite.prepare('INSERT INTO messages (id, client_id, session_id, role, content, created_at, agent_meta) VALUES (?, ?, ?, ?, ?, ?, ?)').run(id, id, 'main', role, content, createdAt, JSON.stringify(meta));
 }
-it('reads canonical teammate identity and this turn final from the durable transcript', async () => {
+it.each([
+  { avatar: '🤖', expected: { kind: 'symbol', value: '🤖' } },
+  { avatar: 'cindy://avatar/preset/dash', expected: { kind: 'preset', value: 'dash' } },
+])('reads canonical teammate identity ($avatar) and this turn final from the durable transcript', async ({ avatar, expected }) => {
+  drizzle(sqlite).update(botProfiles).set({ avatar }).run();
   add('final-2', 'assistant', '**完成**', 150, { turnCompleted: true, assistantPhase: 'final_answer' });
-  expect(await readSessionNotificationPreview('main')).toEqual({ teammateName: 'Cindy', teammateBotId: 'bot-1', reply: { clientId: 'final-2', text: '**完成**' }, eventId: 'turn:100:200' });
+  expect(await readSessionNotificationPreview('main')).toEqual({ teammateName: 'Cindy', teammateBotId: 'bot-1', teammateAvatar: expected, reply: { clientId: 'final-2', text: '**完成**' }, eventId: 'turn:100:200' });
 });
 it('suppresses an old idle event after a new input started', async () => {
   drizzle(sqlite).update(sessions).set({ activeTurnStartedAt: 300 }).run();
-  expect(await readSessionNotificationPreview('main')).toEqual({ teammateName: 'Cindy', teammateBotId: 'bot-1', suppress: true });
+  expect(await readSessionNotificationPreview('main')).toEqual({ teammateName: 'Cindy', teammateBotId: 'bot-1', teammateAvatar: { kind: 'symbol', value: '🤖' }, suppress: true });
 });
 it('does not reuse an older final in a tool-only completed turn', async () => {
   add('old', 'assistant', 'Old answer', 10, { turnCompleted: true });
-  expect(await readSessionNotificationPreview('main')).toEqual({ teammateName: 'Cindy', teammateBotId: 'bot-1', eventId: 'turn:100:200' });
+  expect(await readSessionNotificationPreview('main')).toEqual({ teammateName: 'Cindy', teammateBotId: 'bot-1', teammateAvatar: { kind: 'symbol', value: '🤖' }, reply: undefined, eventId: 'turn:100:200' });
 });
 it('uses insertion order for a tool and final arriving in the same millisecond', async () => {
   add('z-tool', 'tool_result', 'tool output', 150);

@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { BaseIM } from '../BaseIM.js';
+import { processingReaction } from '../processingReactions.js';
 import type { ChannelIM } from '../channelIM.js';
 import type {
   IMCardActionEvent,
@@ -424,26 +425,28 @@ export class DiscordIM extends BaseIM implements ChannelIM {
       const { channelId, messageId: nativeMessageId } = decodeMessageId(messageId);
       const channel = await this.fetchChannel(channelId);
       const message = await channel.messages.fetch(nativeMessageId);
-      await message.react(emoji);
-      return emoji;
+      const reaction = processingReaction(emoji);
+      await message.react(reaction);
+      return reaction;
     } catch {
       return null;
     }
   }
 
   async removeMessageReaction(messageId: string, reactionToken: string): Promise<void> {
-    try {
-      const { channelId, messageId: nativeMessageId } = decodeMessageId(messageId);
-      const channel = await this.fetchChannel(channelId);
-      const message = await channel.messages.fetch(nativeMessageId);
-      await message.reactions.resolve(reactionToken)?.users.remove(this.gateway.client?.user?.id);
-    } catch {
-      /* cleanup is best-effort */
-    }
+    const { channelId, messageId: nativeMessageId } = decodeMessageId(messageId);
+    const channel = await this.fetchChannel(channelId);
+    const message = await channel.messages.fetch(nativeMessageId);
+    await message.reactions.resolve(reactionToken)?.users.remove(this.gateway.client?.user?.id);
   }
 
   getStatus(): IMStatus {
     return this.status;
+  }
+
+  /** Routing identity used by inbound contextId; status.appId is a display tag. */
+  get botContextId(): string {
+    return this.gateway.appId;
   }
 
   private restoreSecret(key: string, previousValue: string | null): void {

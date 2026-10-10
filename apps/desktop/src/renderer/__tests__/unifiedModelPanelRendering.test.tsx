@@ -17,6 +17,9 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+/** 统一面板发起的深度写入带上「面板已串行」标记(见 ModelSelector 的 onEffortChangeLive)。 */
+const FROM_PANEL = { serializedByPanel: true };
+
 vi.mock('react-i18next', async (importOriginal) => ({
   ...(await importOriginal<typeof import('react-i18next')>()),
   useTranslation: () => ({
@@ -563,6 +566,9 @@ describe('统一模型选择器面板', () => {
     renderPanel({ followSession: { active: true, label: '跟随会话', onFollow } });
     const row = screen.getByText('跟随会话').closest('button') as HTMLElement;
     expect(row.getAttribute('aria-selected')).toBe('true');
+    // 模型菜单例外:选中行保留整行底色与勾。
+    expect(row.className).toContain('bg-sidebar-item-hover');
+    expect(row.querySelector('svg.lucide-check')).not.toBeNull();
     await act(async () => {
       fireEvent.click(row);
     });
@@ -603,6 +609,22 @@ describe('统一面板 · 会话内形态', () => {
     const list = screen.getByRole('listbox');
     expect(within(list).queryByRole('group', { name: '推荐' })).toBeNull();
     expect(list.querySelector('[data-group-provider="xd"]')).not.toBeNull();
+  });
+
+  it('选中的模型行保持整行底色、不加勾，名字保持 500(输入框菜单约定里模型面板的例外)', () => {
+    renderPanel({ vendorKey: 'codex', currentProviderId: 'xd', modelId: 'gpt-5.5' });
+    const list = screen.getByRole('listbox');
+    const selected = list.querySelector<HTMLElement>('[data-model-selected="true"]');
+    expect(selected).not.toBeNull();
+    expect(selected!.className).toContain('bg-sidebar-item-hover');
+    // 滑动高亮已盖住悬停行,静态底色在那一刻让位,两层半透明不叠深。
+    expect(selected!.className).toContain('data-[menu-active]:bg-transparent');
+    expect(selected!.querySelector('svg.lucide-check')).toBeNull();
+    expect(selected!.querySelector('span[title].font-medium')).not.toBeNull();
+    const other = Array.from(list.querySelectorAll<HTMLElement>('[data-unified-anchor]')).find(
+      (row) => row !== selected,
+    );
+    expect(other?.className).not.toContain('bg-sidebar-item-hover');
   });
 
   it('收藏置顶但不选中，推荐当前值优先并移除下方空供应商组', () => {
@@ -819,6 +841,11 @@ describe('统一面板 · 会话内形态', () => {
     // 量的是**全量视图**:同引擎视图里看不到的 Opus 5 也在 sizer 里。
     expect(sizer?.textContent).toContain('Opus 5');
     expect(sizer?.textContent).toContain('GPT-5.5');
+    // 组头与真实组头同字号同字重,量出的宽度才可信。
+    const realLabel = container.querySelector('[role="listbox"] [role="group"] > div');
+    const sizerLabel = sizer?.querySelector(':scope > div > div');
+    expect(sizerLabel?.className).toContain('text-12 font-medium leading-[1.33]');
+    expect(realLabel?.className).toContain('text-12 font-medium leading-[1.33]');
     // 不可见、零高度、不进 listbox、不带选中标记(自动对齐永远不会挑中它)。
     expect(sizer?.getAttribute('aria-hidden')).toBe('true');
     expect(sizer?.className).toContain('invisible');
@@ -840,7 +867,11 @@ describe('统一面板 · 会话内形态', () => {
   });
 
   it('跨引擎警示行不参与撑宽(w-0 min-w-full)', async () => {
-    renderPanel({ sessionEngineFilter, currentProviderId: 'xd', modelId: 'gpt-5.5' });
+    renderPanel({
+      sessionEngineFilter: { ...sessionEngineFilter, pendingTarget: 'claude-code' },
+      currentProviderId: 'xd',
+      modelId: 'gpt-5.5',
+    });
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: '全部' }));
     });
@@ -853,16 +884,25 @@ describe('统一面板 · 会话内形态', () => {
     expect(warning.className).toContain('min-w-full');
   });
 
-  it('显式切到「全部」后出现有损警示,且能看到跨引擎模型', async () => {
+  it('「全部」视图未切换 Harness 时不显示有损警示,且能看到跨引擎模型', async () => {
     renderPanel({ sessionEngineFilter, currentProviderId: 'xd', modelId: 'gpt-5.5' });
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: '全部' }));
     });
     const list = screen.getByRole('listbox');
-    expect(list.querySelector('[data-cross-engine-warning]')?.textContent).toContain(
-      '切换引擎会重建上下文',
-    );
+    expect(list.querySelector('[data-cross-engine-warning]')).toBeNull();
     expect(within(list).getByText('Opus 5')).toBeTruthy();
+  });
+
+  it('已登记跨 Harness 切换时显示有损警示', () => {
+    renderPanel({
+      sessionEngineFilter: { ...sessionEngineFilter, pendingTarget: 'claude-code' },
+      currentProviderId: 'xd',
+      modelId: 'gpt-5.5',
+    });
+    expect(
+      screen.getByRole('listbox').querySelector('[data-cross-engine-warning]')?.textContent,
+    ).toContain('切换引擎会重建上下文');
   });
 
   it('选中跨引擎行走 onCrossEngineSelect,不走普通 onSelect', async () => {
@@ -1144,7 +1184,7 @@ describe('统一面板 · 会话内形态', () => {
         key: 'ArrowRight',
       });
     });
-    expect(onEffortChange).toHaveBeenCalledWith('high');
+    expect(onEffortChange).toHaveBeenCalledWith('high', FROM_PANEL);
   });
 });
 
@@ -1241,7 +1281,7 @@ describe('统一面板 · 恢复推荐应用到 live 配置', () => {
     });
     expect(onCrossEngineSelect).not.toHaveBeenCalled();
     expect(getModelEngineOverride('xd', 'gpt-5.5')).toBeUndefined();
-    expect(onEffortChange).toHaveBeenCalledWith('high');
+    expect(onEffortChange).toHaveBeenCalledWith('high', FROM_PANEL);
     expect(onFastModeChange).toHaveBeenCalledWith(false);
   });
 
@@ -1604,7 +1644,7 @@ describe('统一面板 · 删除选中的收藏回落到模型默认', () => {
     });
     // 默认引擎(codex)== 会话引擎 → 无损,不该弹跨引擎确认。
     expect(onCrossEngineSelect).not.toHaveBeenCalled();
-    expect(onEffortChange).toHaveBeenCalledWith('high');
+    expect(onEffortChange).toHaveBeenCalledWith('high', FROM_PANEL);
     expect(onFastModeChange).toHaveBeenCalledWith(false);
     expect(listModelFavorites()).toHaveLength(0);
   });
@@ -1709,7 +1749,7 @@ describe('统一面板 · 同引擎实时写入成功才清存储', () => {
     await act(async () => {
       fireEvent.click(within(flyout).getByText('恢复推荐'));
     });
-    expect(onEffortChange).toHaveBeenCalledWith('high');
+    expect(onEffortChange).toHaveBeenCalledWith('high', FROM_PANEL);
     // 深度没写成 → 整件事放弃:不该留下用户从没选过的「旧档 + 无 Fast」。
     expect(onFastModeChange).not.toHaveBeenCalled();
     expect(getModelEngineOverride('xd', 'gpt-5.5')).toBe('cc');
@@ -1783,7 +1823,7 @@ describe('统一面板 · 同引擎实时写入成功才清存储', () => {
     await act(async () => {
       fireEvent.click(favoriteStar());
     });
-    expect(onEffortChange).toHaveBeenCalledWith('high');
+    expect(onEffortChange).toHaveBeenCalledWith('high', FROM_PANEL);
     // 收藏是用户手存的东西,不可逆:回落配置没落成就绝不能把记录删了。
     expect(listModelFavorites()).toHaveLength(1);
     expect(listModelFavorites()[0]?.uid).toBe(uid);
@@ -1826,7 +1866,7 @@ describe('统一面板 · 两笔实时写入要么都落要么回滚', () => {
       fireEvent.click(within(flyout).getByText('恢复推荐'));
     });
     // 第一笔写推荐档 high,第二笔关 Fast 失败 → 第一笔按进入前的实时深度 low 回滚。
-    expect(onEffortChange.mock.calls).toEqual([['high'], ['low']]);
+    expect(onEffortChange.mock.calls).toEqual([['high', FROM_PANEL], ['low', FROM_PANEL]]);
     expect(onFastModeChange).toHaveBeenCalledWith(false);
     expect(getModelEngineOverride('xd', 'gpt-5.5')).toBe('cc');
   });
@@ -1853,7 +1893,7 @@ describe('统一面板 · 两笔实时写入要么都落要么回滚', () => {
     await act(async () => {
       fireEvent.click(within(flyout).getByText('恢复推荐'));
     });
-    expect(onEffortChange.mock.calls).toEqual([['high'], ['low']]);
+    expect(onEffortChange.mock.calls).toEqual([['high', FROM_PANEL], ['low', FROM_PANEL]]);
     // 回滚失败不改变结论:这次「恢复推荐」没成功,override / 记忆一律原样留着。
     expect(getModelEngineOverride('xd', 'gpt-5.5')).toBe('cc');
   });
@@ -1878,7 +1918,7 @@ describe('统一面板 · 两笔实时写入要么都落要么回滚', () => {
     await waitFor(() => {
       expect(getModelEngineOverride('xd', 'gpt-5.5')).toBeUndefined();
     });
-    expect(onEffortChange.mock.calls).toEqual([['high']]);
+    expect(onEffortChange.mock.calls).toEqual([['high', FROM_PANEL]]);
   });
 });
 
@@ -1928,7 +1968,7 @@ describe('统一面板 · 改模型行的实时配置后收藏不再选中', () 
         key: 'ArrowRight',
       });
     });
-    expect(onEffortChange).toHaveBeenCalledWith('high');
+    expect(onEffortChange).toHaveBeenCalledWith('high', FROM_PANEL);
     await waitFor(() => {
       expect(onUnifiedSelect).toHaveBeenCalledWith({
         providerId: 'xd',
@@ -2227,7 +2267,7 @@ describe('统一面板 · 编辑选中的收藏同步到 live', () => {
         key: 'ArrowRight',
       });
     });
-    expect(onEffortChange).toHaveBeenCalledWith('high');
+    expect(onEffortChange).toHaveBeenCalledWith('high', FROM_PANEL);
     await waitFor(() => {
       expect(listModelFavorites()[0]?.effort).toBe('high');
     });
@@ -2375,7 +2415,7 @@ describe('统一面板 · 编辑选中的收藏同步到 live', () => {
         key: 'ArrowRight',
       });
     });
-    expect(onEffortChange).toHaveBeenCalledWith('high');
+    expect(onEffortChange).toHaveBeenCalledWith('high', FROM_PANEL);
     expect(listModelFavorites()[0]?.effort).toBe('low');
   });
 
@@ -3179,7 +3219,7 @@ describe('统一面板 · 实测回归', () => {
     await act(async () => {
       fireEvent.keyDown(slider, { key: 'ArrowRight' });
     });
-    expect(onEffortChange).toHaveBeenCalledWith('high');
+    expect(onEffortChange).toHaveBeenCalledWith('high', FROM_PANEL);
     // 关键回归点:改完档,浮层与列表都不许消失。
     expect(screen.queryByTestId('unified-model-config-flyout')).not.toBeNull();
     expect(screen.getByRole('listbox')).toBeTruthy();
@@ -3729,18 +3769,18 @@ describe('统一选择器 · 旧偏好与配置变更回归', () => {
     });
   });
 
-  it('编辑收藏的异步 Fast 写入期间，不能再改深度或删除收藏', async () => {
+  it('编辑收藏的异步 Fast 写入期间，改深度与删除收藏排队，落定后按顺序执行', async () => {
     const uid = addModelFavorite({
       providerId: 'xd',
       modelId: 'gpt-5.5',
       agent: 'codex',
       effort: 'low',
     });
-    let finish!: (value: boolean) => void;
+    const fastWrites: Array<(value: boolean) => void> = [];
     const onFastModeChange = vi.fn(
       () =>
         new Promise<boolean>((resolve) => {
-          finish = resolve;
+          fastWrites.push(resolve);
         }),
     );
     const onEffortChange = vi.fn();
@@ -3765,13 +3805,17 @@ describe('统一选择器 · 旧偏好与配置变更回归', () => {
       });
       fireEvent.click(within(favorite).getByRole('button', { name: '取消收藏' }));
     });
+    // 同一时刻只提交一笔:Fast 写入在途时,深度与删除都还没发出。
     expect(onFastModeChange).toHaveBeenCalledTimes(1);
     expect(onEffortChange).not.toHaveBeenCalled();
     expect(listModelFavorites()).toHaveLength(1);
     await act(async () => {
-      finish(true);
+      fastWrites[0]?.(true);
     });
-    expect(listModelFavorites()[0]?.fast).toBe(true);
+    // Fast 落定、收藏副本写入后,才按点击顺序提交排队的深度,最后执行删除;
+    // 全程没有第二笔并发写入。
+    await waitFor(() => expect(listModelFavorites()).toHaveLength(0));
+    expect(onFastModeChange).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -3913,7 +3957,7 @@ describe('统一面板 · 推理滑杆一次拖动只写最终档', () => {
     });
     if (eventType === 'pointerup') {
       expect(onEffortChange).toHaveBeenCalledTimes(1);
-      expect(onEffortChange).toHaveBeenCalledWith('high');
+      expect(onEffortChange).toHaveBeenCalledWith('high', FROM_PANEL);
     } else expect(onEffortChange).not.toHaveBeenCalled();
   });
 });

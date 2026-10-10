@@ -4252,6 +4252,89 @@ describe('streaming response validity gate (#2242)', () => {
     expect(upstream.bodies[1]).toContain('Remember the test code');
   });
 
+  it('accepts a large complete first SSE event without Content-Type', async () => {
+    const created = JSON.stringify({
+      type: 'response.created',
+      response: { instructions: 'large-context-fixture '.repeat(12_000), output: [] },
+    });
+    const body = `event: response.created\ndata: ${created}\n\ndata: {"type":"response.completed"}\n\n`;
+    expect(Buffer.byteLength(body)).toBeGreaterThan(64 * 1024);
+    const upstream = await startFakeUpstream((_idx, _body, res) => {
+      res.writeHead(200); // Intentionally omit Content-Type for the Codex HTTP fallback.
+      res.write(body.slice(0, 80 * 1024));
+      setImmediate(() => res.end(body.slice(80 * 1024)));
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({ upstream: upstream.url });
+
+    const response = await fetch(`${proxy.url}/responses`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'test-model', stream: true }),
+    });
+    const responseText = await response.text();
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toBe('text/event-stream');
+    expect(responseText).toBe(body);
+    expect(upstream.bodies).toHaveLength(1);
+  });
+
+  it('bounds an unfinished inferred SSE event with its dedicated error code', async () => {
+    const body = `event: response.created\ndata: ${'x'.repeat(8 * 1024 * 1024)}`;
+    const upstream = await startFakeUpstream((_idx, _body, res) => {
+      res.writeHead(200); // Intentionally omit Content-Type.
+      res.end(body);
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({ upstream: upstream.url });
+
+    const result = await post(proxy.url, { model: 'test-model', stream: true });
+    expect(result.status).toBe(502);
+    expect(JSON.parse(result.text).error.code).toBe('sse_inference_limit_exceeded');
+  });
+
+  it('commits a complete inferred event before rejecting bytes after its cap', async () => {
+    const prefix = 'event: response.created\ndata: ';
+    const firstEvent = `${prefix}${'x'.repeat(8 * 1024 * 1024 - Buffer.byteLength(prefix) - 18)}\n\n`;
+    const remainder = 'data: {"type":"response.completed"}\n\n';
+    const upstream = await startFakeUpstream((_idx, _body, res) => {
+      res.writeHead(200); // Intentionally omit Content-Type.
+      res.end(`${firstEvent}${remainder}`);
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({ upstream: upstream.url });
+
+    const result = await post(proxy.url, { model: 'test-model', stream: true });
+    expect(result).toEqual({ status: 200, text: `${firstEvent}${remainder}` });
+  });
+
+  it('infers a complete event with mixed LF and CRLF event delimiters', async () => {
+    const body = 'event: response.created\ndata: {}\n\r\n';
+    const upstream = await startFakeUpstream((_idx, _body, res) => {
+      res.writeHead(200); // Intentionally omit Content-Type.
+      res.end(body);
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({ upstream: upstream.url });
+
+    const result = await post(proxy.url, { model: 'test-model', stream: true });
+    expect(result).toEqual({ status: 200, text: body });
+  });
+
+  it('still rejects a large unfinished inferred SSE event below its cap', async () => {
+    const body = `event: response.created\ndata: ${'x'.repeat(128 * 1024)}`;
+    const upstream = await startFakeUpstream((_idx, _body, res) => {
+      res.writeHead(200); // Intentionally omit Content-Type.
+      res.end(body);
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({ upstream: upstream.url });
+
+    const result = await post(proxy.url, { model: 'test-model', stream: true });
+    expect(result.status).toBe(502);
+    expect(JSON.parse(result.text).error.code).toBe('non_sse_stream_response');
+  });
+
   it.each([
     { name: 'JSON without MIME', body: '{"ok":true}', headers: {} },
     { name: 'HTML containing an SSE line', body: '<html>\ndata: fake\n</html>', headers: {} },

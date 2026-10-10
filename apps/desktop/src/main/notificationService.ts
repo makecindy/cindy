@@ -86,6 +86,8 @@ interface ShowSessionEventPayload {
    * 发送侧的防打扰(远程正在看该会话 / 短窗去重)在 device-link 模块内收口。
    */
   channels?: { desktop?: boolean; feishu?: boolean; mobile?: boolean };
+  /** 其它设备的任务传 false:未读归属那台设备,不记本机 Dock 角标。 */
+  markAttention?: boolean;
 }
 
 /**
@@ -97,7 +99,7 @@ interface ShowSessionEventPayload {
 // 时就回收掉，导致 click handler 丢失甚至触发异常事件。用 Set 持引用，等
 // close/click 后再 release。
 const liveNotifications = new Set<Notification>();
-type NotifiedReply = { eventId: string } | { fallbackSentAt: number };
+type NotifiedReply = ({ eventId: string } | { fallbackSentAt: number }) & { handledByTeammate?: true };
 const notifiedReplies = new Map<string, NotifiedReply>();
 const pendingFeishuReplies = new Set<string>();
 const pendingFeishuFallbacks = new Map<string, number>();
@@ -117,7 +119,7 @@ function wasReplyNotified(key: string, eventId: string | undefined): boolean {
   // A turn started afterwards is new, even if it finishes immediately.
   const startedAt = /^turn:(\d+):\d+$/.exec(eventId)?.[1];
   if (startedAt && Number(startedAt) < notified.fallbackSentAt) {
-    notifiedReplies.set(key, { eventId });
+    notifiedReplies.set(key, { eventId, ...(notified.handledByTeammate ? { handledByTeammate: true as const } : {}) });
     return true;
   }
   return false;
@@ -163,15 +165,38 @@ function focusWindow(getWindow: () => BrowserWindow | null, sessionId: string): 
  */
 export function showDesktopSessionEvent(
   getWindow: () => BrowserWindow | null,
-  payload: Pick<ShowSessionEventPayload, 'sessionId' | 'title' | 'kind'> & { body?: string; teammate?: boolean },
+  payload: Pick<ShowSessionEventPayload, 'sessionId' | 'title' | 'kind'> & {
+    body?: string;
+    teammate?: boolean;
+    /** 其它设备的任务传 false:未读归属那台设备,本机 Dock 角标不跟着记。 */
+    markAttention?: boolean;
+  },
 ): boolean {
   const { sessionId, title, kind } = payload;
-  if (sessionId) markSessionNeedsAttention(sessionId);
+  if (sessionId && payload.markAttention !== false) markSessionNeedsAttention(sessionId);
   const safeTitle = title?.trim() || sessionId.slice(0, 8) || getSessionNotificationUntitled();
   return showDesktopToast(safeTitle, kind, () => focusWindow(getWindow, sessionId), payload.body, payload.teammate);
 }
 
+/**
+ * 其它设备(device-link)任务的桌面通知,只在本机灵动岛关闭时由岛服务转交过来。
+ * 正文没有本机记录可读,沿用各 kind 的通用文案;未读归属那台设备,不记本机角标。
+ */
+export function showDeviceSessionDesktopEvent(
+  getWindow: () => BrowserWindow | null,
+  event: { sessionId: string; title: string | null; deviceName: string | null; kind: SessionEventKind },
+): void {
+  if (!desktopNotificationsEnabled) return;
+  showDesktopSessionEvent(getWindow, {
+    sessionId: event.sessionId,
+    title: [event.title ?? getSessionNotificationUntitled(), event.deviceName].filter(Boolean).join(' · '),
+    kind: event.kind,
+    markAttention: false,
+  });
+}
+
 export interface NotificationServiceDeps {
+  isCompletionHandledByTeammate?: (sessionId: string) => Promise<boolean>;
   getWindow: () => BrowserWindow | null;
   /**
    * 飞书 IM 实例,用于飞书通道发消息。来源与 scheduler-host/notifier.ts 相同
@@ -200,6 +225,7 @@ export function initNotificationService(deps: NotificationServiceDeps): void {
       // 去重与「被远程观看则不推」收口。
       assertValidSessionEventPayload(payload);
       const { sessionId, title, kind, channels } = payload;
+      const markAttention = payload.markAttention !== false;
       const generation = getMobileNotifyGeneration();
       // Capture at IPC arrival, not after the asynchronous preview: a newer
       // turn can begin while the current completion waits on persistence.
@@ -211,11 +237,11 @@ export function initNotificationService(deps: NotificationServiceDeps): void {
       const safeTitle = title.trim() || sessionId.slice(0, 8);
       const wantDesktop = channels?.desktop ?? true;
       const wantFeishu = channels?.feishu === true;
-      markSessionNeedsAttention(sessionId);
+      if (markAttention) markSessionNeedsAttention(sessionId);
 
       // Action/error desktop notices have no transcript preview and must be immediate.
       if (wantDesktop && kind !== 'done') {
-        showDesktopSessionEvent(getWindow, { sessionId, title: safeTitle, kind });
+        showDesktopSessionEvent(getWindow, { sessionId, title: safeTitle, kind, markAttention });
       }
       // Content is read from main's transcript. Bound only enrichment, not delivery;
       // a timeout is not a dedupe window and never causes a second late toast.
@@ -293,12 +319,33 @@ export function initNotificationService(deps: NotificationServiceDeps): void {
         const desktopKey = replyNotificationKey(ownerKey, sessionId, 'desktop');
         const mobileKey = replyNotificationKey(generation, sessionId, 'mobile');
         const feishuKey = replyNotificationKey(ownerKey, sessionId, 'feishu');
+        if (kind === 'done' && notifiedReplies.get(desktopKey)?.handledByTeammate && wasReplyNotified(desktopKey, eventId)) return;
+        // Decide at the send boundary, after preview enrichment. The native
+        // receipt and durable completion handoff are authoritative, never titles.
+        const handledByTeammate = kind === 'done' && deps.isCompletionHandledByTeammate
+          ? await deps.isCompletionHandledByTeammate(sessionId).catch((error) => {
+              log.warn('delegation completion notification check failed', { error: String(error) });
+              return false;
+            }) : false;
+        if (!isDataOwnerBroadcastScopeCurrent(ownerScope)) return;
+        if (kind === 'done' && deps.isCompletionHandledByTeammate) {
+          const afterHandoffSignal = getSessionNotificationTurnSignal(sessionId);
+          if (afterHandoffSignal?.id !== signal?.id || (afterHandoffSignal && !afterHandoffSignal.ended)) return;
+        }
+        if (kind === 'done' && handledByTeammate) {
+          // Consume this event in the existing per-channel ledger. Removing a
+          // delegation later must not replay a completion already handed off.
+          for (const key of [desktopKey, mobileKey, feishuKey]) {
+            notifiedReplies.set(key, eventId ? { eventId, handledByTeammate: true } : { fallbackSentAt: Date.now(), handledByTeammate: true });
+          }
+          return;
+        }
         const fallbackBody = teammate ? getTeammateNotificationFallback() : undefined;
         const mobileTeammateBotId = preview?.teammateBotId ?? teammateBotId;
         if (wantDesktop && kind === 'done' && !wasReplyNotified(desktopKey, eventId)) {
           try {
             const accepted = showDesktopSessionEvent(getWindow, {
-              sessionId, title: notificationTitle, kind, teammate,
+              sessionId, title: notificationTitle, kind, teammate, markAttention,
               body: teammate ? notificationPreview(detail ?? '') || fallbackBody : undefined,
             });
             if (accepted) {
@@ -314,6 +361,7 @@ export function initNotificationService(deps: NotificationServiceDeps): void {
               sessionId, title: notificationTitle, kind, generation, ...(detail ? { detail } : {}),
               ...(fallbackBody ? { fallbackBody } : {}), ...(mobileEventId ? { eventId: mobileEventId } : {}),
               ...(mobileTeammateBotId ? { teammateBotId: mobileTeammateBotId } : {}),
+              ...(preview?.teammateAvatar ? { teammateAvatar: preview.teammateAvatar } : {}),
             });
             if (kind === 'done' && accepted) {
               notifiedReplies.set(mobileKey, eventId ? { eventId } : { fallbackSentAt: Date.now() });
@@ -367,7 +415,8 @@ function assertValidSessionEventPayload(
     p.title.length > SESSION_TITLE_MAX_LENGTH ||
     typeof p.kind !== 'string' ||
     !SESSION_EVENT_KINDS.has(p.kind) ||
-    (p.channels !== undefined && (typeof p.channels !== 'object' || p.channels === null))
+    (p.channels !== undefined && (typeof p.channels !== 'object' || p.channels === null)) ||
+    (p.markAttention !== undefined && typeof p.markAttention !== 'boolean')
   ) {
     throw new TypeError('invalid session event payload');
   }

@@ -1,4 +1,5 @@
 import { groupWorkRuns } from './workRunGrouping.js';
+import { isContinuationMessage } from './syntheticTrigger.js';
 export { groupWorkRuns, type WorkRunGroupingAdapter } from './workRunGrouping.js';
 import {
   type AgentTaskTerminalStatus,
@@ -897,11 +898,12 @@ export function applyCodexPlanSnapshotOnDone<
  * (mobile 与 main 侧的原始行保持这个形状),desktop 渲染层把它投影成顶层
  * `delivery` 后丢弃原 meta。只看顶层会让 mobile / main 的所有权回扫在插话行上
  * 提前收手,全勾完的失败计划先按旧数据退场、等 main 的异步印记广播才复活
- * (断连时要等到重新加载,review P2)。计划分组边界与失败回扫共用这一个谓词,
- * 两处不再各自推导"什么算插话"。
+ * (断连时要等到重新加载,review P2)。计划分组、失败回扫与工作过程分组共用
+ * 这一个谓词,不再各自推导"什么算插话"。
  */
-function isSteerUserRow(message: MessageRenderSourceMessageLike): boolean {
-  return message.delivery === 'steer' || message.agentMeta?.delivery === 'steer';
+export function isSteerUserRow(message: { delivery?: string | null; agentMeta?: object | null }): boolean {
+  return message.delivery === 'steer'
+    || (message.agentMeta as { delivery?: unknown } | null)?.delivery === 'steer';
 }
 
 /**
@@ -1523,7 +1525,8 @@ function groupMessageWorkRuns<TMessage extends MessageRenderNormalizedMessage>(
 ): MessageRenderItem<TMessage>[] {
   return groupWorkRuns<MessageRenderItem<TMessage>, MessageRenderWorkChildItem<TMessage>>(
     items, isSessionStreaming, {
-      isUserBoundary: (item) => item.type === 'message' && item.message.kind === 'user',
+      isUserBoundary: (item) => item.type === 'message' && item.message.kind === 'user' && !isSteerUserRow(item.message.source),
+      isContinuationBoundary: (item) => item.type === 'message' && isContinuationMessage(item.message.source),
       isAnswer: isAssistantAnswerCandidate,
       isSealedAnswer: (item) => item.type === 'message' && isCompletedAssistantMessage(item.message),
       isCompactBoundary: isCompactBoundaryItem,
@@ -1778,12 +1781,43 @@ function workRunFallbackEnd<TMessage extends MessageRenderNormalizedMessage>(
   return latest;
 }
 
-export function formatDuration(ms: number): string {
-  const totalSec = Math.max(1, Math.round(ms / 1000));
+/** Promote long durations to hours/days, always retaining minutes (including zero). */
+export function formatDuration(
+  ms: number,
+  {
+    minimumSeconds = 1,
+    alwaysShowRemainder = false,
+    padRemainder = false,
+    formatLongDuration,
+  }: {
+    minimumSeconds?: number;
+    alwaysShowRemainder?: boolean;
+    padRemainder?: boolean;
+    formatLongDuration?: (parts: { days: number; hours: string; minutes: string }) => string;
+  } = {},
+): string {
+  const totalSec = Math.max(minimumSeconds, Math.round((Number.isFinite(ms) ? ms : 0) / 1000));
   if (totalSec < 60) return `${totalSec}s`;
+  const formatRemainder = (value: number) => padRemainder ? String(value).padStart(2, '0') : String(value);
+  if (totalSec >= 3_600) {
+    const days = Math.floor(totalSec / 86_400);
+    const hours = Math.floor((totalSec % 86_400) / 3_600);
+    const minutes = Math.floor((totalSec % 3_600) / 60);
+    if (formatLongDuration) {
+      return formatLongDuration({
+        days,
+        hours: days > 0 ? formatRemainder(hours) : String(hours),
+        minutes: formatRemainder(minutes),
+      });
+    }
+    return days > 0
+      ? `${days}d ${formatRemainder(hours)}h ${formatRemainder(minutes)}m`
+      : `${hours}h ${formatRemainder(minutes)}m`;
+  }
   const minutes = Math.floor(totalSec / 60);
   const seconds = totalSec % 60;
-  return seconds === 0 ? `${minutes}m` : `${minutes}m ${seconds}s`;
+  if (seconds === 0 && !alwaysShowRemainder) return `${minutes}m`;
+  return `${minutes}m ${formatRemainder(seconds)}s`;
 }
 
 function itemTimestamp<

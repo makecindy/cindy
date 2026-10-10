@@ -1,5 +1,6 @@
 import { SHARED_REMOTE_CONTROL_FIXTURE } from '@cindy/maker-shared/fixtures';
 import { projectHistoryView } from '@cindy/maker-shared/message-window';
+import { TASK_TAG_COLORS, type TaskTagRequest, type TaskTagResult } from '@cindy/maker-shared';
 import { ApiError, type ApiFetchOptions } from '@/api/client';
 import type { DeviceView, LinkAcceptPayload } from '@cindy/device-link';
 import type { MobileUser } from '@/auth/AuthContext';
@@ -27,6 +28,7 @@ export const VISUAL_MOCK_OFFLINE_DEVICE_ID = 'cindy-visual-mock-offline-mac';
 const VISUAL_MOCK_REALDATA_DEVICE_ID = 'cindy-realdata-mac';
 const VISUAL_MOCK_REALDATA_DEVICE_NAME = 'CINDY Real Data Mac';
 export const VISUAL_MOCK_SESSION_ID = 'session-primary';
+export const VISUAL_REALDATA_TIMEOUT_MS = 5_000;
 
 interface VisualRealDataSnapshot {
   schema: 'cindy-mobile-visual-realdata-v1';
@@ -53,8 +55,6 @@ export const visualMockUser: MobileUser = {
   name: 'Visual Mock User',
   avatar: null,
   email: 'visual-mock@cindy.local',
-  defaultModel: 'claude-sonnet-4-6',
-  defaultEffort: 'medium',
   membershipKind: 'personal',
   membershipRole: 'owner',
   orgId: null,
@@ -65,12 +65,14 @@ export const visualMockUser: MobileUser = {
 
 let realDataSnapshot: VisualRealDataSnapshot | null = null;
 let realDataLoadPromise: Promise<VisualRealDataSnapshot | null> | null = null;
+let preparedContextPromise: Promise<DeviceLinkContextValue> | null = null;
 let didWarnRealDataLoad = false;
 const deletedDeviceIds = new Set<string>();
 const renamedDevices = new Map<string, string>();
 
 export function visualMockDevices(): DeviceView[] {
   const realData = realDataSnapshot;
+  const awaitingRealData = MOBILE_VISUAL_MOCK_REALDATA_URL && !didWarnRealDataLoad;
   const desktopDevice = realData
     ? {
         deviceId: realData.device.deviceId,
@@ -79,10 +81,10 @@ export function visualMockDevices(): DeviceView[] {
         appVersion: realData.device.appVersion ?? '0.0.0-realdata-preview',
       }
     : {
-        deviceId: MOBILE_VISUAL_MOCK_REALDATA_URL ? VISUAL_MOCK_REALDATA_DEVICE_ID : VISUAL_MOCK_DEVICE_ID,
-        name: MOBILE_VISUAL_MOCK_REALDATA_URL ? VISUAL_MOCK_REALDATA_DEVICE_NAME : VISUAL_MOCK_DEVICE_NAME,
+        deviceId: awaitingRealData ? VISUAL_MOCK_REALDATA_DEVICE_ID : VISUAL_MOCK_DEVICE_ID,
+        name: awaitingRealData ? VISUAL_MOCK_REALDATA_DEVICE_NAME : VISUAL_MOCK_DEVICE_NAME,
         platform: 'darwin',
-        appVersion: MOBILE_VISUAL_MOCK_REALDATA_URL ? '0.0.0-realdata-preview' : '0.0.0-visual-mock',
+        appVersion: awaitingRealData ? '0.0.0-realdata-preview' : '0.0.0-visual-mock',
       };
   return [
     {
@@ -148,12 +150,24 @@ export function seedVisualMockStore(): void {
   });
 }
 
+/** Import before mounting Home: otherwise its cached list races the default
+ * eight demo tasks and a presence snapshot with the placeholder device name.
+ * Sharing the preparation also avoids double seeding under StrictMode. */
+export function prepareVisualMockDeviceLinkContext(): Promise<DeviceLinkContextValue> {
+  preparedContextPromise ??= loadVisualRealDataSnapshot().then(() => {
+    seedVisualMockStore();
+    return createVisualMockDeviceLinkContext();
+  });
+  return preparedContextPromise;
+}
+
 export function createVisualMockDeviceLinkContext(): DeviceLinkContextValue {
   const realData = realDataSnapshot;
+  const awaitingRealData = MOBILE_VISUAL_MOCK_REALDATA_URL && !didWarnRealDataLoad;
   const deviceId = realData?.device.deviceId
-    ?? (MOBILE_VISUAL_MOCK_REALDATA_URL ? VISUAL_MOCK_REALDATA_DEVICE_ID : VISUAL_MOCK_DEVICE_ID);
+    ?? (awaitingRealData ? VISUAL_MOCK_REALDATA_DEVICE_ID : VISUAL_MOCK_DEVICE_ID);
   const deviceName = realData?.device.name
-    ?? (MOBILE_VISUAL_MOCK_REALDATA_URL ? VISUAL_MOCK_REALDATA_DEVICE_NAME : VISUAL_MOCK_DEVICE_NAME);
+    ?? (awaitingRealData ? VISUAL_MOCK_REALDATA_DEVICE_NAME : VISUAL_MOCK_DEVICE_NAME);
   return {
     status: 'online',
     recoveringDeviceIds: new Set(),
@@ -198,6 +212,23 @@ async function visualMockInvoke<T = unknown>(
   args: unknown[] = [],
 ): Promise<T> {
   const realData = await loadVisualRealDataSnapshot();
+  if (channel === 'local-db:task-tags:execute') {
+    const request = args[0] as TaskTagRequest;
+    if (request.action !== 'list' && request.action !== 'get') {
+      throw new Error('Task tag mutations are not implemented in visual mock');
+    }
+    const sessions = realData?.sessions ?? visualMockSessions();
+    const tags = [...new Map(sessions.flatMap((session) => session.tags ?? [])
+      .map((tag) => [tag.id, tag])).values()];
+    return {
+      tags,
+      supportedColors: [...TASK_TAG_COLORS],
+      sessions: request.action === 'get'
+        ? sessions.filter((session) => request.sessionIds.includes(session.id))
+          .map((session) => ({ sessionId: session.id, tags: session.tags ?? [] }))
+        : [],
+    } satisfies TaskTagResult as T;
+  }
   if (realData) {
     switch (channel) {
       case 'local-db:sessions:list':
@@ -319,11 +350,24 @@ async function loadVisualRealDataSnapshot(): Promise<VisualRealDataSnapshot | nu
   if (!MOBILE_VISUAL_MOCK_REALDATA_URL) return null;
   if (realDataSnapshot) return realDataSnapshot;
   if (!realDataLoadPromise) {
-    realDataLoadPromise = fetch(MOBILE_VISUAL_MOCK_REALDATA_URL, { cache: 'no-store' })
-      .then(async (response) => {
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        return normalizeRealDataSnapshot(await response.json());
-      })
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout>;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        reject(new Error('Visual snapshot load timed out'));
+        controller.abort();
+      }, VISUAL_REALDATA_TIMEOUT_MS);
+    });
+    // Bound both fetch and body reading, even if the transport ignores abort.
+    // Publish only the race winner so late responses cannot replace the fallback.
+    const request = (async () => {
+      const response = await fetch(MOBILE_VISUAL_MOCK_REALDATA_URL, {
+        cache: 'no-store', signal: controller.signal,
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      return normalizeRealDataSnapshot(await response.json());
+    })();
+    realDataLoadPromise = Promise.race([request, timeout])
       .then((snapshot) => {
         realDataSnapshot = snapshot;
         return snapshot;
@@ -334,7 +378,8 @@ async function loadVisualRealDataSnapshot(): Promise<VisualRealDataSnapshot | nu
           console.warn('[visualMock] failed to load real data snapshot', error);
         }
         return null;
-      });
+      })
+      .finally(() => clearTimeout(timer));
   }
   return realDataLoadPromise;
 }

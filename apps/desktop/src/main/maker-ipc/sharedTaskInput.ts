@@ -10,6 +10,11 @@ export function stampSharedTaskInput(
   const stamped = { ...item };
   delete stamped.sharedTaskAuthor;
   if (!capture) return stamped;
+  // 访客不是「用户在另一台设备上」,也不是插件:来源只认 sharedTaskAuthor。
+  delete stamped.sourceDevice;
+  delete stamped.sourcePlugin;
+  delete stamped.agentOmitsTriggerPrefix;
+  delete stamped.botTaskCoordination;
   if (!task || !capture.isCurrent() || !capture.authorize('input.send')) {
     throw new Error('[PERMISSION_DENIED] SharedTask task access denied');
   }

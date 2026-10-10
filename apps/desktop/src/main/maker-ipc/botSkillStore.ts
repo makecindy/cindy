@@ -27,12 +27,15 @@
  *   绝不退化成随机名(用户在设置页看到的必须是他能认出来的东西)。
  * - 所有对外入口都用 `resolveSkillDir` 解析并断言落在自己的 `skills/` 下,
  *   `../` 一类穿越在这一步被挡掉,不依赖调用方先做净化。
- * - 单个技能正文与技能条数都有硬上限:模型可以自己写,但不能把用户磁盘写满。
+ * - 单次生成正文有界；存储容量不按技能条数限制。
  */
 
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { createBotSkillFrontmatterReader, isFrontmatterBlock } from './botSkillFrontmatter.js';
+import { invalidateBotSkillRuntime } from './botSkillRuntimeCache.js';
+export { unescapeFrontmatterValue } from './botSkillFrontmatter.js';
 
 /** 一个技能在磁盘上的完整形态。 */
 export interface BotSkillRecord {
@@ -50,17 +53,24 @@ export interface BotSkillRecord {
   dirPath: string;
   /** SKILL.md 的绝对路径。 */
   filePath: string;
+  /** Imported disabled skills are retained outside the native plugin scan. */
+  enabled?: boolean;
 }
 
 /** list 只需要元信息时用的轻量形态(不读正文,省 IO)。 */
-export type BotSkillSummary = Omit<BotSkillRecord, 'body'>;
+export type BotSkillSummary = Omit<BotSkillRecord, 'body'> & {
+  /** Charge the native loader's entire header, including YAML fields we do not interpret. */
+  frontmatterBytes: number;
+  /** One-based line at which a bounded read can skip even a very large header. */
+  bodyStartLine: number;
+  /** Legacy headers that cannot safely be handed to a native Skill parser. */
+  requiresDiscovery?: boolean;
+};
 
 export const BOT_SKILL_MAX_NAME_CHARS = 64;
 export const BOT_SKILL_MAX_DESCRIPTION_CHARS = 280;
 /** 单个 SKILL.md 正文上限。技能是「怎么做」的清单,不是知识库。 */
 export const BOT_SKILL_MAX_BODY_BYTES = 64 * 1024;
-/** 每个伙伴的技能条数上限。超过就必须先删旧的,避免无声膨胀。 */
-export const BOT_SKILL_MAX_COUNT = 100;
 
 export interface BotSkillWriteInput {
   name: string;
@@ -68,6 +78,8 @@ export interface BotSkillWriteInput {
   body: string;
   slug?: string;
   now?: number;
+  /** Review snapshots may only replace the exact version they read (null means create). */
+  expectedUpdatedAt?: string | null;
 }
 
 export type BotSkillErrorCode =
@@ -137,8 +149,8 @@ export function normalizeBotSkillSlug(value: string): string | null {
 }
 
 /** 解析并断言目标目录仍在这个伙伴的 `skills/` 下 —— 路径穿越在这里止步。 */
-function resolveSkillDir(userDataDir: string, botId: string, slug: string): string {
-  const root = path.resolve(botSkillsDir(userDataDir, botId));
+function resolveSkillDir(userDataDir: string, botId: string, slug: string, enabled = true): string {
+  const root = path.resolve(enabled ? botSkillsDir(userDataDir, botId) : path.join(botSkillRootDir(userDataDir, botId), 'disabled-skills'));
   const resolved = path.resolve(root, slug);
   const relative = path.relative(root, resolved);
   if (
@@ -158,17 +170,6 @@ function escapeFrontmatterValue(value: string): string {
     .replace(/\\/g, '\\\\')
     .replace(/"/g, '\\"')
     .replace(/[\r\n]+/g, ' ')}"`;
-}
-
-function unescapeFrontmatterValue(raw: string): string {
-  const trimmed = raw.trim();
-  if (trimmed.startsWith('"') && trimmed.endsWith('"') && trimmed.length >= 2) {
-    return trimmed.slice(1, -1).replace(/\\"/g, '"').replace(/\\\\/g, '\\');
-  }
-  if (trimmed.startsWith("'") && trimmed.endsWith("'") && trimmed.length >= 2) {
-    return trimmed.slice(1, -1).replace(/''/g, "'");
-  }
-  return trimmed;
 }
 
 export function renderBotSkillFile(input: {
@@ -200,16 +201,13 @@ export function parseBotSkillFile(source: string): {
   const normalized = source.replace(/\r\n/g, '\n');
   const match = /^---\n([\s\S]*?)\n---\n?/.exec(normalized);
   if (!match) return { name: '', description: '', updatedAt: '', body: normalized.trim() };
-  const fields: Record<string, string> = {};
-  for (const line of match[1].split('\n')) {
-    const separator = line.indexOf(':');
-    if (separator <= 0) continue;
-    fields[line.slice(0, separator).trim()] = unescapeFrontmatterValue(line.slice(separator + 1));
-  }
+  const metadata = createBotSkillFrontmatterReader();
+  for (const line of match[1].split('\n')) metadata.line(line);
+  const fields = metadata.finish();
   return {
-    name: fields.displayName ?? fields.name ?? '',
-    description: fields.description ?? '',
-    updatedAt: fields.updatedAt ?? '',
+    name: fields.get('displayName') ?? fields.get('name') ?? '',
+    description: fields.get('description') ?? '',
+    updatedAt: fields.get('updatedAt') ?? '',
     body: normalized.slice(match[0].length).trim(),
   };
 }
@@ -219,7 +217,7 @@ export function parseBotSkillFile(source: string): {
  * frontmatter。只迁移这一个可精确识别的三字段旧格式，正文与用户编辑全部保留；
  * 含有任何其它字段的手写 Skill 不动。
  */
-async function readCompatibleBotSkillSource(filePath: string, slug: string): Promise<string> {
+export async function readCompatibleBotSkillSource(filePath: string, slug: string): Promise<string> {
   const source = await fs.readFile(filePath, 'utf8');
   const normalized = source.replace(/\r\n/g, '\n');
   const match = /^---\n([\s\S]*?)\n---\n?/.exec(normalized);
@@ -227,7 +225,7 @@ async function readCompatibleBotSkillSource(filePath: string, slug: string): Pro
   const lines = match[1].split('\n');
   const keys = lines.map((line) => line.slice(0, line.indexOf(':')).trim());
   if (
-    lines.some((line) => /^\s/.test(line) || line.indexOf(':') <= 0) ||
+    lines.some((line) => /^\s/.test(line) || line.indexOf(':') <= 0 || isFrontmatterBlock(line.slice(line.indexOf(':') + 1))) ||
     keys.length !== 3 ||
     !['name', 'description', 'updatedAt'].every((key) => keys.includes(key))
   ) {
@@ -242,6 +240,7 @@ async function readCompatibleBotSkillSource(filePath: string, slug: string): Pro
     body: parsed.body,
   });
   await fs.writeFile(filePath, migrated, 'utf8');
+  invalidateBotSkillRuntime(path.dirname(path.dirname(path.dirname(filePath))));
   return migrated;
 }
 
@@ -296,15 +295,17 @@ async function readSkillFilePath(skillDir: string): Promise<string | null> {
 export async function listBotSkills(
   userDataDir: string,
   botId: string,
+  includeDisabled = true,
+  enabled = true,
 ): Promise<BotSkillSummary[]> {
-  const dir = botSkillsDir(userDataDir, botId);
+  const dir = enabled ? botSkillsDir(userDataDir, botId) : path.join(botSkillRootDir(userDataDir, botId), 'disabled-skills');
   let entries: string[];
   try {
     entries = (await fs.readdir(dir, { withFileTypes: true }))
       .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'))
       .map((entry) => entry.name);
   } catch {
-    return [];
+    entries = [];
   }
   const out: BotSkillSummary[] = [];
   for (const slug of entries.sort()) {
@@ -312,8 +313,15 @@ export async function listBotSkills(
     const filePath = await readSkillFilePath(skillDir);
     if (!filePath) continue;
     let parsed: ReturnType<typeof parseBotSkillFile>;
+    let frontmatterBytes: number;
+    let bodyStartLine: number;
     try {
-      parsed = parseBotSkillFile(await readCompatibleBotSkillSource(filePath, slug));
+      const source = await readCompatibleBotSkillSource(filePath, slug);
+      parsed = parseBotSkillFile(source);
+      const header = /^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/.exec(source)?.[0] ?? '';
+      // A nonstandard header is not safe to hand to a different native parser.
+      frontmatterBytes = Buffer.byteLength(header || source);
+      bodyStartLine = header ? header.split('\n').length : 1;
     } catch {
       continue;
     }
@@ -324,8 +332,12 @@ export async function listBotSkills(
       updatedAt: parsed.updatedAt,
       dirPath: skillDir,
       filePath,
+      frontmatterBytes,
+      bodyStartLine,
+      ...(enabled ? {} : { enabled: false }),
     });
   }
+  if (includeDisabled && enabled) out.push(...await listBotSkills(userDataDir, botId, false, false));
   return out.sort((a, b) => a.name.localeCompare(b.name));
 }
 
@@ -335,8 +347,10 @@ export async function readBotSkill(
   botId: string,
   slug: string,
 ): Promise<BotSkillRecord | null> {
-  const skillDir = resolveSkillDir(userDataDir, botId, slug);
-  const filePath = await readSkillFilePath(skillDir);
+  let skillDir = resolveSkillDir(userDataDir, botId, slug);
+  let filePath = await readSkillFilePath(skillDir);
+  let enabled = true;
+  if (!filePath) { enabled = false; skillDir = resolveSkillDir(userDataDir, botId, slug, false); filePath = await readSkillFilePath(skillDir); }
   if (!filePath) return null;
   const parsed = parseBotSkillFile(await readCompatibleBotSkillSource(filePath, slug));
   return {
@@ -347,6 +361,7 @@ export async function readBotSkill(
     body: parsed.body,
     dirPath: skillDir,
     filePath,
+    ...(enabled ? {} : { enabled: false }),
   };
 }
 
@@ -413,20 +428,13 @@ export async function seedBotSkillIfMissing(
   const existing = await readBotSkill(userDataDir, botId, normalized.slug);
   if (existing) return { record: existing, created: false };
 
-  const skills = await listBotSkills(userDataDir, botId);
-  if (skills.length >= BOT_SKILL_MAX_COUNT) {
-    throw new BotSkillStoreError(
-      'SKILL_LIMIT_REACHED',
-      `this Bot already has ${BOT_SKILL_MAX_COUNT} skills; delete one before adding another`,
-    );
-  }
-
   await ensureLayout(userDataDir, botId);
   const skillDir = resolveSkillDir(userDataDir, botId, normalized.slug);
   await fs.mkdir(skillDir, { recursive: true });
   const filePath = path.join(skillDir, 'SKILL.md');
   try {
     await fs.writeFile(filePath, renderBotSkillFile(normalized), { encoding: 'utf8', flag: 'wx' });
+    invalidateBotSkillRuntime(botSkillRootDir(userDataDir, botId));
   } catch (cause) {
     if ((cause as NodeJS.ErrnoException)?.code !== 'EEXIST') throw cause;
     const raced = await readBotSkill(userDataDir, botId, normalized.slug);
@@ -454,22 +462,28 @@ export async function seedBotSkillIfMissing(
  * 所以这里不做撞名保护,而是原地覆盖并刷新 updatedAt。返回值里的 `created`
  * 让调用方能分辨「学会了」和「改进了」。
  */
+const skillWrites = new Map<string, Promise<unknown>>();
 export async function saveBotSkill(
+  userDataDir: string, botId: string, input: BotSkillWriteInput,
+): Promise<{ record: BotSkillRecord; created: boolean }> {
+  const key = botSkillRootDir(userDataDir, botId);
+  const pending = (skillWrites.get(key) ?? Promise.resolve()).catch(() => {}).then(() => writeBotSkill(userDataDir, botId, input));
+  skillWrites.set(key, pending);
+  try { return await pending; }
+  finally { if (skillWrites.get(key) === pending) skillWrites.delete(key); }
+}
+async function writeBotSkill(
   userDataDir: string,
   botId: string,
   input: BotSkillWriteInput,
 ): Promise<{ record: BotSkillRecord; created: boolean }> {
   const { name, description, body, slug, updatedAt } = normalizeBotSkillWriteInput(input);
-  const existing = await listBotSkills(userDataDir, botId);
-  const created = !existing.some((item) => item.slug === slug);
-  if (created && existing.length >= BOT_SKILL_MAX_COUNT) {
-    throw new BotSkillStoreError(
-      'SKILL_LIMIT_REACHED',
-      `this Bot already has ${BOT_SKILL_MAX_COUNT} skills; delete one before adding another`,
-    );
-  }
+  const previous = await readBotSkill(userDataDir, botId, slug);
+  if (input.expectedUpdatedAt !== undefined && (previous?.updatedAt ?? null) !== input.expectedUpdatedAt)
+    throw new BotSkillStoreError('INVALID_ARGS', 'Skill changed during review');
+  const created = !previous;
   await ensureLayout(userDataDir, botId);
-  const skillDir = resolveSkillDir(userDataDir, botId, slug);
+  const skillDir = resolveSkillDir(userDataDir, botId, slug, previous?.enabled !== false);
   await fs.mkdir(skillDir, { recursive: true });
   const filePath = path.join(skillDir, 'SKILL.md');
   // 只写 SKILL.md,不去删同目录的 skill.md:macOS / Windows 的文件系统大小写不敏感,
@@ -479,37 +493,45 @@ export async function saveBotSkill(
     renderBotSkillFile({ slug, name, description, updatedAt, body }),
     'utf8',
   );
+  invalidateBotSkillRuntime(botSkillRootDir(userDataDir, botId));
   return {
-    record: { slug, name, description, updatedAt, body, dirPath: skillDir, filePath },
+    record: { slug, name, description, updatedAt, body, dirPath: skillDir, filePath, ...(previous?.enabled === false ? { enabled: false } : {}) },
     created,
   };
 }
 
 /** Shared preflight for imports, before creating a profile or persisting its checkpoint. */
 export function validateBotSkillFiles(slug: string,
-  files: readonly { name: string; bytes: Buffer; executable: boolean }[]): void {
+  files: readonly { name: string; bytes: Buffer; executable: boolean; interpreterLink?: string }[]): void {
   if (!normalizeBotSkillSlug(slug) || normalizeBotSkillSlug(slug) !== slug)
     throw new BotSkillStoreError('INVALID_ARGS', 'Invalid imported skill');
   const entrypoint = files.find(file => file.name === 'SKILL.md');
-  if (!entrypoint || entrypoint.bytes.length > BOT_SKILL_MAX_BODY_BYTES)
+  if (!entrypoint || !entrypoint.bytes.length)
     throw new BotSkillStoreError('SKILL_BODY_TOO_LARGE', 'Invalid skill entrypoint');
   for (const file of files) {
     if (file.name.includes('\\') || file.name.split('/').some(part => !part || part === '.' || part === '..') || path.isAbsolute(file.name))
       throw new BotSkillStoreError('INVALID_ARGS', 'Invalid skill resource');
+    if (file.interpreterLink && (!/^(?:\.venv|venv)\/(?:bin|Scripts)\/python(?:[23](?:\.\d+)?)?(?:\.exe)?$/.test(file.name) || !path.isAbsolute(file.interpreterLink)))
+      throw new BotSkillStoreError('INVALID_ARGS', 'Invalid imported interpreter');
   }
 }
 
 /** Import a selected real skill with its scripts/templates; keep the native SKILL.md bytes. */
 export async function importBotSkillFiles(userDataDir: string, botId: string, slug: string,
-  files: readonly { name: string; bytes: Buffer; executable: boolean }[], assertOwner: () => void): Promise<void> {
+  files: readonly { name: string; bytes: Buffer; executable: boolean; interpreterLink?: string }[], assertOwner: () => void, enabled = true): Promise<void> {
   validateBotSkillFiles(slug, files);
-  const existing = await listBotSkills(userDataDir, botId);
-  assertOwner();
-  if (!existing.some(skill => skill.slug === slug) && existing.length >= BOT_SKILL_MAX_COUNT)
-    throw new BotSkillStoreError('SKILL_LIMIT_REACHED', 'Too many selected skills');
   await ensureLayout(userDataDir, botId);
   assertOwner();
-  const target = resolveSkillDir(userDataDir, botId, slug);
+  // Slugs identify one skill across both stores. A source must not create a
+  // second, indistinguishable entry or overwrite a skill learned during retry.
+  try {
+    await fs.lstat(resolveSkillDir(userDataDir, botId, slug, !enabled));
+    throw new BotSkillStoreError('INVALID_ARGS', 'Imported skill conflicts with an existing skill');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  }
+  const target = resolveSkillDir(userDataDir, botId, slug, enabled);
+  await fs.mkdir(path.dirname(target), { recursive: true });
   const temporary = path.join(botSkillRootDir(userDataDir, botId), `.import-skill-${randomUUID()}`);
   await fs.mkdir(temporary, { mode: 0o700 });
   try {
@@ -517,16 +539,25 @@ export async function importBotSkillFiles(userDataDir: string, botId: string, sl
       const output = path.join(temporary, ...file.name.split('/'));
       await fs.mkdir(path.dirname(output), { recursive: true, mode: 0o700 });
       assertOwner();
-      await fs.writeFile(output, file.bytes, { flag: 'wx', mode: file.executable ? 0o700 : 0o600 });
+      if (file.interpreterLink) await fs.symlink(file.interpreterLink, output, 'file');
+      else await fs.writeFile(output, file.bytes, { flag: 'wx', mode: file.executable ? 0o700 : 0o600 });
     }
     assertOwner();
-    try { await fs.rename(temporary, target); }
+    try {
+      await fs.rename(temporary, target);
+      invalidateBotSkillRuntime(botSkillRootDir(userDataDir, botId));
+    }
     catch (error) {
       if (!['EEXIST', 'ENOTEMPTY', 'EPERM'].includes((error as NodeJS.ErrnoException).code ?? '')) throw error;
       // Resume after a committed rename, without overwriting a later user edit.
       if (!(await fs.lstat(target)).isDirectory()) throw new BotSkillStoreError('INVALID_ARGS', 'Invalid imported skill folder');
       for (const file of files) {
         const entry = path.join(target, ...file.name.split('/'));
+        if (file.interpreterLink) {
+          if (!(await fs.lstat(entry)).isSymbolicLink() || await fs.readlink(entry) !== file.interpreterLink)
+            throw new BotSkillStoreError('INVALID_ARGS', 'Imported interpreter was edited');
+          continue;
+        }
         const resolved = await fs.realpath(entry);
         const relative = path.relative(await fs.realpath(target), resolved);
         if (relative.startsWith('..' + path.sep) || path.isAbsolute(relative)) throw new BotSkillStoreError('INVALID_ARGS', 'Invalid imported skill resource');
@@ -545,12 +576,15 @@ export async function deleteBotSkill(
   botId: string,
   slug: string,
 ): Promise<boolean> {
-  const skillDir = resolveSkillDir(userDataDir, botId, slug);
-  try {
-    if (!(await fs.stat(skillDir)).isDirectory()) return false;
-  } catch {
-    return false;
+  // Match read/edit precedence, including any pre-existing duplicate directories.
+  // Deleting one visible skill must never remove another directory implicitly.
+  for (const enabled of [true, false]) {
+    const skillDir = resolveSkillDir(userDataDir, botId, slug, enabled);
+    try { if (!(await fs.stat(skillDir)).isDirectory()) continue; }
+    catch { continue; }
+    await fs.rm(skillDir, { recursive: true, force: true });
+    invalidateBotSkillRuntime(botSkillRootDir(userDataDir, botId));
+    return true;
   }
-  await fs.rm(skillDir, { recursive: true, force: true });
-  return true;
+  return false;
 }

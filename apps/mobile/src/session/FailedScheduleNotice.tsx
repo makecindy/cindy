@@ -5,6 +5,7 @@ import { useEffect, useState } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import { Text } from '@/components/AppText';
+import { mobileInteractionStyles } from '@/components/mobileInteractionStyles';
 import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { iconSize, iconStroke, lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
 
@@ -51,5 +52,5 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth, borderRadius: radius.container },
   text: { flex: 1, color: colors.errorText, fontSize: typeScale.footnote, lineHeight: lineHeight.caption, paddingVertical: spacing.sm },
   close: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center', borderRadius: radius.pill },
-  pressed: { opacity: 0.7 },
+  pressed: mobileInteractionStyles.pressed,
 });

@@ -78,6 +78,7 @@ export async function handleGhostSecretsRequest(args: {
     key: string;
     source: 'gh-cli';
     available: boolean;
+    managedSetup?: boolean;
   }>;
   vault: GhostSecretsVault;
   ghostId: string;
@@ -106,11 +107,13 @@ export async function handleGhostSecretsRequest(args: {
         const tail = saved ? vault.tail(ghostId, key) : null;
         const hostState = hostCredentialStates.get(key);
         const hostFields = hostState
-          ? { hostSource: hostState.source, hostAvailable: hostState.available }
+          ? {
+              hostSource: hostState.source,
+              hostAvailable: hostState.available,
+              ...(hostState.managedSetup ? { hostManagedSetup: true } : {}),
+            }
           : {};
-        return tail
-          ? { key, saved, tail, ...hostFields }
-          : { key, saved, ...hostFields };
+        return tail ? { key, saved, tail, ...hostFields } : { key, saved, ...hostFields };
       });
       // 身份凭证:现读登录邮箱只读展示;identityKeys 为空时不碰登录态。
       const email = identityKeys.length > 0 ? (args.getLoginEmail?.()?.trim() ?? '') : '';

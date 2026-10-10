@@ -134,23 +134,27 @@ export async function resetBotModelChainSettings(
   return readBotModelChainSettingsState(options);
 }
 
-/**
- * A null override means the permanent Bot Profile follows the owner-scoped
- * global route chain. Explicit per-Bot chains remain frozen in its profile.
- */
-export async function readEffectiveBotModelSelection(
-  config: Record<string, unknown>,
-  options?: Parameters<typeof readBotModelChainSettingsState>[0],
-): Promise<{ chain: BotModelRoute[]; followsCindyDefault: boolean }> {
+/** Read only Profile-owned routes; null means resolving this profile needs owner settings. */
+export function readExplicitBotModelChain(config: Record<string, unknown>): BotModelRoute[] | null {
   if (Array.isArray(config.modelChainOverride)) {
     const explicit = normalizeBotModelChain(config.modelChainOverride);
-    if (explicit.length > 0) return { chain: explicit, followsCindyDefault: false };
+    if (explicit.length > 0) return explicit;
   }
   // Preserve old explicit routes; null is the durable follow-default marker.
   if (config.modelChainOverride !== null && config.modelOverride !== null) {
     const legacy = normalizeBotModelChain(config.modelChain, config);
-    if (legacy.length || typeof config.model === 'string') return { chain: legacy, followsCindyDefault: false };
+    if (legacy.length || typeof config.model === 'string') return legacy;
   }
+  return null;
+}
+
+/** A null override follows owner settings; explicit per-Bot routes stay in its Profile. */
+export async function readEffectiveBotModelSelection(
+  config: Record<string, unknown>,
+  options?: Parameters<typeof readBotModelChainSettingsState>[0],
+): Promise<{ chain: BotModelRoute[]; followsCindyDefault: boolean }> {
+  const explicit = readExplicitBotModelChain(config);
+  if (explicit !== null) return { chain: explicit, followsCindyDefault: false };
   const state = await readBotModelChainSettingsState(options);
   return { chain: state.value.modelChain, followsCindyDefault: !state.isCustomized };
 }

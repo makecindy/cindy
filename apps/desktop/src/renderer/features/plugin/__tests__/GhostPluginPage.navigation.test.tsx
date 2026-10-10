@@ -1,7 +1,7 @@
 /** @vitest-environment jsdom */
 
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, useNavigate } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { PluginMarketDetail } from '../../../../shared/pluginMarket';
@@ -21,6 +21,12 @@ const { auth, translation } = vi.hoisted(() => ({
     t: (key: string) => key,
     i18n: { language: 'en', resolvedLanguage: 'en' },
   },
+}));
+
+vi.mock('../GhostPagePanelHost', () => ({
+  GhostPagePanelHost: ({ ghost }: { ghost: { manifest: { id: string } } }) => (
+    <aside data-testid="replacement-panel">{ghost.manifest.id}</aside>
+  ),
 }));
 
 vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => auth }));
@@ -75,6 +81,7 @@ const suggestion: PluginSuggestionRequest = {
 const loadDetail = vi.fn<() => Promise<PluginMarketDetail>>();
 
 beforeEach(() => {
+  vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
   translation.i18n.language = 'en';
   translation.i18n.resolvedLanguage = 'en';
   cancelPendingPluginSuggestion();
@@ -113,9 +120,20 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function page(entry: string) {
+function RetirementNavigation() {
+  const navigate = useNavigate();
+  return (
+    <>
+      <button onClick={() => navigate('/plugins?ghost=ios-simulator')}>Select legacy plugin</button>
+      <button onClick={() => navigate('/plugins?retired=ios-simulator')}>Open retirement notice</button>
+    </>
+  );
+}
+
+function page(entry: string, withRetirementNavigation = false) {
   return (
     <MemoryRouter initialEntries={[entry]}>
+      {withRetirementNavigation && <RetirementNavigation />}
       <GhostPluginPage />
     </MemoryRouter>
   );
@@ -188,5 +206,133 @@ describe('plugin page return navigation', () => {
     expect(screen.getByRole('main').scrollTop).toBe(640);
     expect(screen.queryByRole('button', { name: 'settings.ghosts.detail.backToList' })).toBeNull();
     expect(getPendingPluginSuggestion()).toBeNull();
+  });
+});
+
+describe('retirement migration from the original plugin', () => {
+  const old = {
+    manifest: { ...detail.manifest, id: 'ios-simulator', name: 'Legacy Simulator' },
+    dir: '/tmp/legacy-simulator',
+    enabled: false,
+    approval: { state: 'approved', revision: '00000000-0000-4000-8000-000000000001' },
+    retirement: { id: 'embedded-ios-simulator', eligible: true, unread: true },
+  };
+  const replacement = {
+    ...old,
+    manifest: {
+      ...detail.manifest,
+      id: 'baguette-simulator',
+      name: 'Baguette',
+      command: 'baguette',
+    },
+    retirement: undefined,
+    enabled: false,
+  };
+
+  function installFixture(ghosts: unknown[]) {
+    const bridge = window.electronAPI;
+    Object.assign(bridge.ghosts, {
+      listSync: () => ({ ghosts }),
+      acknowledgeRetirement: vi.fn(async () => ({ ok: true })),
+      setEnabled: vi.fn(async () => ({ ok: true })),
+    });
+    return bridge;
+  }
+
+  it('exits market details and acknowledges the notice only after it is rendered', async () => {
+    const bridge = installFixture([old]);
+    const visibleAtAcknowledgement: boolean[] = [];
+    vi.mocked(bridge.ghosts.acknowledgeRetirement).mockImplementation(async () => {
+      visibleAtAcknowledgement.push(
+        screen.queryByText('settings.ghosts.retirement.embeddedSimulator.title') !== null,
+      );
+      return { ok: true };
+    });
+    render(page('/plugins', true));
+    await openFromCatalog();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Select legacy plugin' }));
+    expect(screen.queryByText('settings.ghosts.retirement.embeddedSimulator.title')).toBeNull();
+    expect(bridge.ghosts.acknowledgeRetirement).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open retirement notice' }));
+    expect(await screen.findByText('settings.ghosts.retirement.embeddedSimulator.title')).toBeTruthy();
+    expect(screen.queryByText(detail.name)).toBeNull();
+    expect(bridge.ghosts.acknowledgeRetirement).toHaveBeenCalledWith('ios-simulator');
+    expect(visibleAtAcknowledgement).toEqual([true]);
+  });
+
+  it('does not let a pending market detail request cover the retirement notice', async () => {
+    installFixture([old]);
+    let finishDetail!: (value: PluginMarketDetail) => void;
+    loadDetail.mockImplementationOnce(() => new Promise((resolve) => { finishDetail = resolve; }));
+    render(page('/plugins', true));
+    fireEvent.click(await screen.findByText(detail.name));
+    await waitFor(() => expect(loadDetail).toHaveBeenCalledOnce());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open retirement notice' }));
+    expect(await screen.findByText('settings.ghosts.retirement.embeddedSimulator.title')).toBeTruthy();
+    await act(async () => { finishDetail(detail); });
+    expect(screen.getByText('settings.ghosts.retirement.embeddedSimulator.title')).toBeTruthy();
+    expect(screen.queryByText(detail.name)).toBeNull();
+  });
+
+  it('marks the notice read and uses the existing market installer with the live release', async () => {
+    const bridge = installFixture([old]);
+    const baguette = {
+      ...detail,
+      pluginId: 'cb93909aaa6ac600bbc2f6b8a',
+      ghostId: 'baguette-simulator',
+      manifest: replacement.manifest,
+    };
+    loadDetail.mockResolvedValue(baguette);
+    const install = vi.fn(async () => ({ ghost: replacement }));
+    Object.assign(bridge.pluginMarket, { install });
+    render(page('/plugins?retired=ios-simulator'));
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'settings.ghosts.retirement.install' }),
+    );
+    await waitFor(() =>
+      expect(install).toHaveBeenCalledWith(
+        baguette.pluginId,
+        expect.objectContaining({
+          expectedReleaseId: baguette.releaseId,
+          expectedManifest: baguette.manifest,
+        }),
+      ),
+    );
+    expect(bridge.ghosts.acknowledgeRetirement).toHaveBeenCalledWith('ios-simulator');
+    expect(document.querySelector('webview')).toBeNull();
+  });
+
+  it('enables an existing replacement without reinstalling it', async () => {
+    const bridge = installFixture([old, replacement]);
+    render(page('/plugins?retired=ios-simulator'));
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'settings.ghosts.retirement.enable' }),
+    );
+    await waitFor(() =>
+      expect(bridge.ghosts.setEnabled).toHaveBeenCalledWith('baguette-simulator', true),
+    );
+    expect(loadDetail).not.toHaveBeenCalled();
+  });
+
+  it('opens an enabled replacement panel from the retirement notice', async () => {
+    installFixture([old, {
+      ...replacement, enabled: true,
+      manifest: { ...replacement.manifest, panel: { html: 'panel.html', position: 'tab' } },
+    }]);
+    render(page('/plugins?retired=ios-simulator'));
+    fireEvent.click(await screen.findByRole('button', { name: 'settings.ghosts.retirement.open' }));
+    expect((await screen.findByTestId('replacement-panel')).textContent).toBe('baguette-simulator');
+    expect(screen.queryByText('settings.ghosts.retirement.embeddedSimulator.title')).toBeNull();
+    expect(loadDetail).not.toHaveBeenCalled();
+  });
+
+  it('does not manufacture a retirement entry for a user without the former installation', () => {
+    installFixture([]);
+    render(page('/plugins?retired=ios-simulator'));
+    expect(screen.queryByText('settings.ghosts.retirement.embeddedSimulator.title')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'settings.ghosts.retirement.install' })).toBeNull();
   });
 });

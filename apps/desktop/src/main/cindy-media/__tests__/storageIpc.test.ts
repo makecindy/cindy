@@ -67,11 +67,11 @@ const OLD_MS = 100 * 60 * 60 * 1000;
 
 async function seedBlob(
   content: string,
-  opts?: { isCache?: boolean; aged?: boolean },
+  opts?: { isCache?: boolean; aged?: boolean; mimeType?: string },
 ): Promise<{ hash: string; ext: string; bytes: number; url: string }> {
   const written = await blobStore.writeBlob({
     buffer: Buffer.from(content),
-    mimeType: 'image/png',
+    mimeType: opts?.mimeType ?? 'image/png',
   });
   await ledger.recordBlob(
     {

@@ -1,10 +1,17 @@
+import { hasAcceptedUserTaskInput } from '../pluginTaskInput.js';
+import { assertPluginWorkerDirectoryScope } from '../pluginWorkerDirectory.js';
+import { runAcceptedCallback } from '../acceptedCallbackRunner.js';
 import path from 'node:path';
+import { readFileSync } from 'node:fs';
+import ts from 'typescript';
+import { PluginTaskError } from '../pluginTaskService.js';
 import { resolveAgentCredentialMode, type AgentKind } from '@cindy/maker-core';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
   buildNoProviderMessage,
   createOrcaWorkerCreationService,
+  orcaWorkerTitle,
   providerRouteRequiresExplicitSelection,
   type OrcaWorkerCreationDeps,
   type OrcaWorkerCreateParams,
@@ -12,12 +19,274 @@ import {
   type OrcaWorkerProviderRoutingContext,
   type OrcaWorkerProviderSnapshot,
 } from '../orcaWorkerCreationService';
-import type { DispatchWorkerTaskResult, OrcaWorkerStatus } from '../orcaTeamService';
+import { createOrcaTeamService, type OrcaTeamServiceDeps, type OrcaWorkerRecordSnapshot, type DispatchWorkerTaskResult, type OrcaWorkerStatus } from '../orcaTeamService';
 import type { MakerSessionCreateOpts } from '../sessionRequest';
 import { CredentialModeSwitchBusyError } from '../../maker-host/codex-credential-switch';
 import { isActiveWorkerStatus } from '../../../shared/orca-worker-status';
-import { sshCodexWorkerRoutingContext } from '../orcaProviderRoutingContext';
+import { deviceAvailableModels, deviceWorkerRoutingContext, sshCodexWorkerRoutingContext } from '../orcaProviderRoutingContext';
 import type { ProviderView } from '@cindy/model-providers';
+import { createOrcaLifecycleService, type OrcaLifecycleDeps } from '../orcaLifecycleService';
+
+describe('Host provenance across Orca creation waits', () => {
+  const source = readFileSync(new URL('../register.ts', import.meta.url), 'utf8');
+  const helper = source.slice(source.indexOf('  const assertPluginWorkerAutoAuthorized ='), source.indexOf('  const orcaWorkerCreationService ='));
+  function callback(start: string, end: string, bindings: Record<string, unknown>) {
+    const from = source.indexOf(start), to = source.indexOf(end, from);
+    expect(from).toBeGreaterThan(0);
+    expect(to).toBeGreaterThan(from);
+    const js = ts.transpileModule(`${helper}\nreturn ({${source.slice(from, to)}});`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+    return new Function('hasAcceptedUserTaskInput', 'assertPluginWorkerDirectoryScope', ...Object.keys(bindings), js)(hasAcceptedUserTaskInput, assertPluginWorkerDirectoryScope, ...Object.values(bindings));
+  }
+  type Action = 'createWorker' | 'enableTeam' | 'startNew' | 'startExisting';
+  const phases: Record<Action, string[]> = {
+    createWorker: ['team-query', 'worker-list', 'bootstrap', 'renewal', 'worker-write'],
+    enableTeam: ['team-query', 'team-create', 'worker-list', 'bootstrap', 'renewal', 'worker-write', 'lead-activation'],
+    startNew: ['team-query', 'team-create', 'lead-activation'],
+    startExisting: ['team-query', 'lead-activation'],
+  };
+  function setup(action: Action, phase: string, change: string, entry = 'task') {
+    let epoch = { client: {} }, enabled = true;
+    const directoryCase = ['config', 'pick'].includes(change);
+    const candidate = path.resolve('synthetic-worker');
+    let configured = change === 'config' ? candidate : undefined, picked = change === 'pick';
+    let directoryResolved = false, directoryReads = 0;
+    let queuedAcceptance: (() => void | Promise<void>) | undefined;
+    let receipt: { operation: string; pluginId: string; payload: string } | null = change === 'ordinary' ? null : {
+      operation: 'create', pluginId: 'plugin', payload: JSON.stringify({ ownershipRevoked: change === 'already-revoked' }),
+    };
+    const task = { revision: 1, status: 'active', permissionMode: 'auto', planModeEnabled: false, workingDir: path.resolve('synthetic-project') };
+    const mutate = (point: string) => {
+      if (point !== phase) return;
+      if (change === 'uninstalled' || change === 'reinstalled') {
+        receipt!.payload = '{"ownershipRevoked":true}'; enabled = change === 'reinstalled';
+      } else if (change === 'owner') receipt!.pluginId = 'other-plugin';
+      else if (change === 'missing') receipt = null;
+      else if (change === 'account') epoch = { client: {} };
+      else if (change === 'ask') task.permissionMode = 'default';
+      else if (change === 'plan') task.planModeEnabled = true;
+      else if (change === 'archived') task.status = 'archived';
+      else if (change === 'disabled') enabled = false;
+      else if (change === 'config') configured = undefined;
+      else if (change === 'pick') picked = false;
+    };
+    const bindings = {
+      maker: {getSession:()=>null}, inputCoordinator: { getAcceptedInputProvenance: () => null },
+      PluginTaskError, readPluginTaskPlanReceipt: JSON.parse, getCurrentDbClientSnapshot: () => epoch,
+      createPluginTaskStore: () => ({ get: async () => receipt && { ...receipt } }),
+      pluginTaskServiceForCurrentOwner: () => ({ get: async (pluginId: string) => {
+        if (directoryResolved) {
+          directoryReads++;
+          if (directoryReads === 2) mutate('final-task');
+          if (directoryReads === 3) mutate('final-source');
+        }
+        if (!receipt || receipt.pluginId !== pluginId || JSON.parse(receipt.payload).ownershipRevoked) throw new PluginTaskError('TASK_NOT_FOUND', 'Revoked');
+        return { ...task };
+      } }),
+      isPluginTaskAuthorized: () => enabled, readPluginTaskConfig: () => ({ permissionMode: 'auto', workingDir: directoryCase ? configured : task.workingDir }),
+      resolvePluginWorkerDirectory: vi.fn(async () => {
+        directoryResolved = true; directoryReads = 0;
+        if (directoryCase && !configured && !picked) throw new PluginTaskError('PERMISSION_DENIED', 'Directory revoked');
+        return directoryCase ? candidate : task.workingDir;
+      }), isGhostPickedDir: () => picked,
+    };
+    const { deps, service: creation } = createDeps(callback('    validateCreationPlan: async (', '    getLeadSessionRow: async (', bindings));
+    for (const [key, point] of [
+      ['listWorkersByLead', 'worker-list'], ['bootstrapSession', 'bootstrap'],
+      ['renewWorkerCreationReservation', 'renewal'], ['addOrUpdateWorker', 'worker-write'],
+      ['markOrcaRoleIfNeeded', 'role-write'], ['releaseWorkerCreationReservation', 'release'],
+    ] as const) {
+      const original = deps[key] as (...args: unknown[]) => Promise<unknown>;
+      (deps as unknown as Record<string, unknown>)[key] = vi.fn(async (...args: unknown[]) => {
+        const result = await original(...args); mutate(point); return result;
+      });
+    }
+    const queuedWorker: OrcaWorkerRecordSnapshot = {
+      id: 'worker-1', teamId: 'team-1', leadSessionId: 'lead-1', sessionId: WORKER_SESSION_ID,
+      status: 'idle', label: 'sample', role: 'eval', focused: false, idleSince: null,
+      session: { title: 'Worker', agentKind: 'codex', model: 'gpt-5.4', effort: null, permissionMode: 'auto', fastMode: false },
+    };
+    const queuedTeamDeps = {
+      getWorkerLinkBySessionId: async () => ({ workerId: queuedWorker.id, teamId: queuedWorker.teamId, workerSessionId: WORKER_SESSION_ID, leadSessionId: 'lead-1' }),
+      listWorkersByLead: async () => [queuedWorker],
+      getLiveSession: () => ({ isTurnRunning: () => true }),
+      getManualInterrupt: () => null, clearManualInterrupt: vi.fn(), broadcastOrcaWorkerChanged: vi.fn(),
+      updateWorkerStatus: vi.fn(async () => undefined), log: { info: vi.fn(), warn: vi.fn() },
+      dispatchWorkerMessage: async ({ onAccepted }) => {
+        queuedAcceptance = onAccepted;
+        return { ok: true, mode: 'queued', clientId: 'queued-1', targetTitle: 'Worker', targetLastUserSendAt: null,
+          dispatchOutcome: { kind: 'session-dispatch', dispatched: true, source: 'test', wakeKind: 'queued' } };
+      },
+    } satisfies Partial<OrcaTeamServiceDeps>;
+    // This fixture exercises only the queued dispatch/accepted path; unexpected
+    // dependencies remain absent so the test cannot silently use another path.
+    const queuedTeam = createOrcaTeamService(queuedTeamDeps as unknown as OrcaTeamServiceDeps);
+    const lifecycleDeps: OrcaLifecycleDeps = {
+      ...callback('    getWorkerPermissionModeOverride: async (', '    setWorkerPermissionMode: applyWorkerPermissionModePreference,', bindings),
+      ...callback('    createWorkerInTeam: (params', '    dispatchWorkerTask: (params', { ...bindings, orcaWorkerCreationService: creation }),
+      getActiveTeamByLead: vi.fn(async () => { mutate('team-query'); return action === 'createWorker' || action === 'startExisting' ? { id: 'team-1', leadSessionId: 'lead-1' } : null; }),
+      createActiveTeam: vi.fn(async () => { mutate('team-create'); return { id: 'new-team', leadSessionId: 'lead-1' }; }),
+      isOrphanedTeamInit: vi.fn(async () => false), getWorkerPermissionMode: () => 'bypassPermissions', setWorkerPermissionMode: vi.fn(),
+      dispatchWorkerTask: async (params, assertCurrent) => {
+        if (entry === 'queued') {
+          return queuedTeam.dispatchWorkerTask(params, assertCurrent);
+        }
+        mutate('accepted'); await assertCurrent?.(); return deps.dispatchWorkerTask(params);
+      }, markTeamEnded: vi.fn(async () => undefined), setSessionOrcaRole: vi.fn(async () => undefined),
+      clearKnownNonOrcaSession: vi.fn(), setLeadVendorOptions: vi.fn(async () => { mutate('lead-activation'); }), clearLeadVendorOptions: vi.fn(async () => undefined),
+      sendWorkerReadyPlaceholder: vi.fn(async (_params, assertCurrent) => { mutate('accepted'); await assertCurrent?.(); }), rollbackCreatedWorker: vi.fn(async () => undefined),
+      broadcastSessionCreated: vi.fn(), broadcastOrcaWorkerChanged: vi.fn(),
+    };
+    const lifecycle = createOrcaLifecycleService(lifecycleDeps);
+    const run = () => action === 'createWorker'
+      ? lifecycle.createWorker({ leadSessionId: 'lead-1', agent: 'codex', role: 'eval', label: 'sample', initialTask: ['task', 'queued'].includes(entry) ? 'Synthetic task' : undefined, ...(directoryCase ? { workingDir: candidate } : {}) })
+      : action === 'enableTeam'
+        ? lifecycle.enableTeam({ leadSessionId: 'lead-1', workerAgent: 'codex', role: 'eval', label: 'sample', delegateTask: entry === 'placeholder' ? undefined : 'Synthetic task', deferDelegateTask: entry === 'deferred', ...(directoryCase ? { workingDir: candidate } : {}) })
+        : lifecycle.startTeam({ leadSessionId: 'lead-1' });
+    return { deps, lifecycleDeps, run, creation, receipt, task,
+      resolveDirectory: bindings.resolvePluginWorkerDirectory, acceptQueued: async () => {
+      expect(queuedAcceptance).toBeTypeOf('function');
+      mutate('accepted');
+      return runAcceptedCallback(queuedAcceptance, WORKER_SESSION_ID, 'queued-1');
+    } };
+  }
+
+  function wireRemoteCreation(deps: OrcaWorkerCreationDeps) {
+    deps.openRemoteWorker = vi.fn(async (input: Parameters<NonNullable<OrcaWorkerCreationDeps['openRemoteWorker']>>[0]) => ({
+      ok: true as const, proxySessionId: 'remote-proxy', remoteSessionId: 'remote-session',
+      agent: input.agent, model: input.model ?? 'remote-default',
+      workingDir: input.workingDir ?? '/remote/dialogue',
+      proxySession: {
+        title: input.title, agentKind: input.agent === 'claude-code' ? 'cc' : input.agent,
+        model: input.model ?? 'remote-default', effort: input.effort ?? null,
+        permissionMode: input.permissionMode, fastMode: input.fast === true,
+      },
+    }));
+    deps.recordRemoteWorker = vi.fn(async () => undefined);
+    deps.discardRemoteWorker = vi.fn(async () => undefined);
+  }
+
+  function registerPlan(receipt: NonNullable<ReturnType<typeof setup>['receipt']>, directory: string) {
+    receipt.payload = JSON.stringify({ teamPlan: { concurrency: 1, items: [{
+      label: 'sample', workingDir: directory,
+      route: { agentKind: 'codex', model: 'gpt-5.5', providerId: 'xd', effort: 'medium', fastMode: false },
+    }] } });
+  }
+
+  it.each([false, true].flatMap(withPlan => ['omitted', 'same-path', 'remote-only'].map(directory => ({ withPlan, directory }))))(
+    'rejects plugin-owned execution devices before directory or remote effects (plan: $withPlan, directory: $directory)', async ({ withPlan, directory }) => {
+      const { deps, creation, receipt, task, resolveDirectory } = setup('createWorker', '', 'healthy');
+      if (withPlan) registerPlan(receipt!, task.workingDir);
+      wireRemoteCreation(deps);
+      const params: OrcaWorkerCreateParams = {
+        leadSessionId: 'lead-1', agent: 'codex', role: 'eval', label: 'sample',
+        executionDeviceId: 'device-b',
+        ...(directory === 'omitted' ? {} : { workingDir: directory === 'same-path' ? task.workingDir : '/device-b-only' }),
+        // The remote branch must not bypass the registered route even when it differs.
+        model: 'remote-only-model', providerId: 'remote-provider', effort: 'high', fast: true,
+      };
+      await expect(creation.createWorker(params)).rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
+      expect(resolveDirectory).not.toHaveBeenCalled();
+      expect(deps.resolveWorkerWorkingDir).not.toHaveBeenCalled();
+      expect(deps.reserveWorkerCreation).not.toHaveBeenCalled();
+      expect(deps.openRemoteWorker).not.toHaveBeenCalled();
+      expect(deps.recordRemoteWorker).not.toHaveBeenCalled();
+      expect(deps.bootstrapSession).not.toHaveBeenCalled();
+      expect(deps.dispatchWorkerTask).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(['ordinary', 'send-receipt', 'already-revoked'])(
+    'preserves user-owned remote creation after $change', async change => {
+      const { deps, creation, receipt, resolveDirectory } = setup('createWorker', '', change);
+      if (change === 'send-receipt') receipt!.operation = 'send';
+      wireRemoteCreation(deps);
+      await expect(creation.createWorker({ leadSessionId: 'lead-1', agent: 'codex', role: 'eval',
+        label: 'sample', executionDeviceId: 'device-b', workingDir: '/device-b-only' })).resolves.toMatchObject({
+        ok: true, workerSessionId: 'remote-proxy', executionDeviceId: 'device-b',
+      });
+      expect(resolveDirectory).not.toHaveBeenCalled();
+      expect(deps.openRemoteWorker).toHaveBeenCalledOnce();
+      expect(deps.recordRemoteWorker).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each([false, true])('still validates a local plugin Worker against its registered route (mismatch: %s)', async mismatch => {
+    const { deps, creation, receipt, task } = setup('createWorker', '', 'healthy');
+    registerPlan(receipt!, task.workingDir);
+    const result = await creation.createWorker({ leadSessionId: 'lead-1', agent: 'codex', role: 'eval',
+      label: 'sample', workingDir: task.workingDir, ...(mismatch ? { model: 'gpt-5.4' } : {}) });
+    expect(result.ok).toBe(!mismatch);
+    if (mismatch) {
+      expect(deps.bootstrapSession).not.toHaveBeenCalled();
+      expect(deps.addOrUpdateWorker).not.toHaveBeenCalled();
+    } else {
+      expect(deps.bootstrapSession).toHaveBeenCalledOnce();
+      expect(deps.addOrUpdateWorker).toHaveBeenCalledOnce();
+    }
+  });
+  const cases = (Object.keys(phases) as Action[]).flatMap(action => phases[action].flatMap(phase =>
+    ['uninstalled', 'reinstalled', 'account'].map(change => ({ action, phase, change }))));
+  cases.push(...(['createWorker', 'enableTeam'] as Action[]).flatMap(action =>
+    ['owner', 'missing', 'ask', 'plan', 'archived', 'disabled'].map(change => ({ action, phase: 'bootstrap', change }))));
+  cases.push(...(['createWorker', 'enableTeam'] as Action[]).flatMap(action =>
+    ['worker-write', 'role-write', 'release', 'final-task', 'final-source', ...(action === 'enableTeam' ? ['lead-activation'] : [])].flatMap(phase =>
+      ['config', 'pick'].map(change => ({ action, phase, change })))));
+  it.each((['createWorker', 'enableTeam'] as const).flatMap(action => ['config', 'pick'].flatMap(change => ['', 'accepted'].map(phase => ({ action, change, phase }))))) (
+    'retains $action $change directory authority after the queued reply: $phase', async ({ action, change, phase }) => {
+      const { run, acceptQueued, deps, lifecycleDeps } = setup(action, phase, change, 'queued');
+      expect(await run()).toMatchObject({ ok: true, dispatched: false });
+      if (phase) await expect(acceptQueued()).rejects.toMatchObject({ name: 'AcceptedCallbackDispatchCancelled' });
+      else await expect(acceptQueued()).resolves.toBeUndefined();
+      expect(deps.dispatchWorkerTask).not.toHaveBeenCalled();
+      expect(lifecycleDeps.rollbackCreatedWorker).not.toHaveBeenCalled();
+      expect(lifecycleDeps.markTeamEnded).not.toHaveBeenCalled();
+    },
+  );
+  it.each(cases)('rejects $action after $change during $phase without dispatch', async ({ action, phase, change }) => {
+    const { deps, lifecycleDeps, run } = setup(action, phase, change);
+    const result = await run().catch(() => ({ ok: false }));
+    expect(result.ok).toBe(false);
+    expect(deps.dispatchWorkerTask).not.toHaveBeenCalled();
+    expect(lifecycleDeps.sendWorkerReadyPlaceholder).not.toHaveBeenCalled();
+    if (phase === 'bootstrap' || phase === 'renewal') {
+      expect(deps.addOrUpdateWorker).not.toHaveBeenCalled();
+      expect(deps.closeWorkerSession).toHaveBeenCalled();
+      expect(deps.releaseWorkerCreationReservation).toHaveBeenCalled();
+    }
+    if (phase === 'worker-write' || (action === 'enableTeam' && phase === 'lead-activation')) {
+      expect(vi.mocked(lifecycleDeps.rollbackCreatedWorker).mock.calls.length + vi.mocked(deps.removeWorker).mock.calls.length).toBeGreaterThan(0);
+    }
+    if (vi.mocked(lifecycleDeps.createActiveTeam).mock.calls.length) expect(lifecycleDeps.markTeamEnded).toHaveBeenCalledWith('new-team', 'failed');
+    else expect(lifecycleDeps.markTeamEnded).not.toHaveBeenCalled();
+    expect(lifecycleDeps.setWorkerPermissionMode).not.toHaveBeenCalled();
+  });
+  it.each((['createWorker', 'enableTeam'] as const).flatMap(action =>
+    (action === 'createWorker' ? ['task', 'placeholder'] : ['task', 'placeholder', 'deferred']).flatMap(entry =>
+      ['config', 'pick'].flatMap(change => ['', 'accepted'].map(phase => ({ action, entry, change, phase }))))))(
+    'retains resolved scope until $action $entry acceptance: $change $phase', async ({ action, entry, change, phase }) => {
+      const { run, deps, lifecycleDeps } = setup(action, phase, change, entry);
+      const result = await run();
+      expect(result.ok).toBe(phase === '');
+      if (phase) {
+        expect(deps.dispatchWorkerTask).not.toHaveBeenCalled();
+        expect(lifecycleDeps.rollbackCreatedWorker).toHaveBeenCalled();
+      }
+      // Public result cannot carry the Host callback or captured authorization facts.
+      expect(JSON.parse(JSON.stringify(result))).toEqual(result);
+    },
+  );
+  it.each((Object.keys(phases) as Action[]).flatMap(action => ['healthy', 'already-revoked'].map(change => ({ action, change }))))(
+    'preserves $change behavior for $action', async ({ action, change }) => {
+      const { deps, lifecycleDeps, run } = setup(action, '', change);
+      expect(await run()).toMatchObject({ ok: true });
+      if (action === 'createWorker' || action === 'enableTeam') {
+        expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({ permissionMode: change === 'healthy' ? 'auto' : 'bypassPermissions' }));
+        expect(deps.dispatchWorkerTask).toHaveBeenCalledTimes(1);
+      }
+      expect(lifecycleDeps.setWorkerPermissionMode).not.toHaveBeenCalled();
+    },
+  );
+});
 
 describe('SSH Codex Worker catalog', () => {
   it.each([undefined, 'remote-next', 'controller-only'])('uses remote membership and defaults for %s', async (model) => {
@@ -45,6 +314,246 @@ describe('SSH Codex Worker catalog', () => {
         model: model ?? 'remote-lead', providerId: 'openai', remoteHostId: 'remote-builder', effort: 'low', fastMode: false,
       }));
     }
+  });
+});
+
+describe('orcaWorkerTitle', () => {
+  it('names the role once when the label repeats it', () => {
+    expect(orcaWorkerTitle('reader', 'reader')).toBe('Worker · reader');
+    expect(orcaWorkerTitle('Reviewer', 'reviewer')).toBe('Worker · Reviewer');
+    expect(orcaWorkerTitle('developer', 'developer-2')).toBe('Worker · developer · developer-2');
+    expect(orcaWorkerTitle('转写', 'transcribe')).toBe('Worker · 转写 · transcribe');
+  });
+});
+
+describe('Worker running on another device (execution device)', () => {
+  const remoteDeps = (overrides: Partial<OrcaWorkerCreationDeps> = {}) => createDeps({
+    openRemoteWorker: vi.fn(async (input) => ({
+      ok: true as const,
+      proxySessionId: 'proxy-1',
+      remoteSessionId: 'remote-1',
+      proxySession: {
+        title: input.title, agentKind: input.agent === 'claude-code' ? 'cc' : input.agent,
+        model: input.model ?? 'device-default-model', effort: input.effort ?? null,
+        permissionMode: input.permissionMode, fastMode: input.fast === true,
+      },
+      agent: input.agent,
+      model: input.model ?? 'device-default-model',
+      workingDir: input.workingDir ?? '/Users/demo/Cindy/dialogues/remote-1',
+    })),
+    recordRemoteWorker: vi.fn(async () => undefined),
+    discardRemoteWorker: vi.fn(async () => undefined),
+    ...overrides,
+  });
+
+  it('creates the task on the device, records a proxy worker and skips local model admission', async () => {
+    const { deps, service } = remoteDeps();
+    const result = await service.createWorker({
+      leadSessionId: 'lead-1', role: '转写', label: 'transcribe', agent: 'claude-code',
+      executionDeviceId: 'mac-mini', workingDir: '/Users/demo/Interviews', model: 'only-on-device',
+    });
+    expect(result).toMatchObject({
+      ok: true,
+      workerSessionId: 'proxy-1',
+      resolved: { agent: 'claude-code', model: 'only-on-device', label: 'transcribe' },
+    });
+    expect(deps.openRemoteWorker).toHaveBeenCalledWith(expect.objectContaining({
+      deviceId: 'mac-mini', workerId: 'worker-1', teamId: 'team-1', leadSessionId: 'lead-1',
+      label: 'transcribe', role: '转写', agent: 'claude-code', model: 'only-on-device',
+      permissionMode: 'auto', workingDir: '/Users/demo/Interviews', title: 'Worker · 转写 · transcribe',
+    }));
+    expect(deps.addOrUpdateWorker).not.toHaveBeenCalled();
+    expect(deps.recordRemoteWorker).toHaveBeenCalledWith({
+      workerId: 'worker-1', teamId: 'team-1', leadSessionId: 'lead-1',
+      proxySessionId: 'proxy-1', deviceId: 'mac-mini', remoteSessionId: 'remote-1',
+      proxySession: expect.objectContaining({ model: 'only-on-device', agentKind: 'cc' }),
+      label: 'transcribe', role: '转写',
+      workingDir: '/Users/demo/Interviews',
+    });
+    expect(deps.getProviderRoutingContext).not.toHaveBeenCalled();
+    expect(deps.bootstrapSession).not.toHaveBeenCalled();
+    expect(deps.resolveWorkerWorkingDir).not.toHaveBeenCalled();
+    expect(deps.releaseWorkerCreationReservation).toHaveBeenCalledWith('worker-1');
+  });
+
+  it('lets the device allocate a directory when none is given and accepts Windows paths', async () => {
+    const { deps, service } = remoteDeps();
+    await service.createWorker({
+      leadSessionId: 'lead-1', role: 'dev', label: 'a', agent: 'codex', executionDeviceId: 'office',
+    });
+    expect(deps.openRemoteWorker).toHaveBeenLastCalledWith(expect.not.objectContaining({ workingDir: expect.anything() }));
+    const windows = await service.createWorker({
+      leadSessionId: 'lead-1', role: 'dev', label: 'b', agent: 'codex', executionDeviceId: 'office',
+      workingDir: 'D:\\projects\\site',
+    });
+    expect(windows.ok).toBe(true);
+  });
+
+  it.each([false, true])('reports admitted remote Fast %s instead of the request after recording the Worker', async fastMode => {
+    const { deps, service } = remoteDeps({
+      openRemoteWorker: vi.fn(async () => ({ ok: true as const,
+        proxySessionId: 'proxy-1', remoteSessionId: 'remote-1', agent: 'codex' as const,
+        model: 'device-model', workingDir: '/remote',
+        proxySession: { title: 'Worker', model: 'device-model', agentKind: 'codex', effort: null,
+          permissionMode: 'auto', fastMode },
+      })),
+    });
+    await expect(service.createWorker({ leadSessionId: 'lead-1', role: 'dev', label: 'a',
+      agent: 'codex', executionDeviceId: 'mac-mini', fast: !fastMode })).resolves.toMatchObject({
+      ok: true, resolved: { fastMode },
+    });
+    expect(deps.recordRemoteWorker).toHaveBeenCalledWith(expect.objectContaining({
+      proxySession: expect.objectContaining({ fastMode }),
+    }));
+  });
+
+  it.each(['medium', 'low', ''])('reports the admitted remote effort %s after recording the Worker', async effort => {
+    const { deps, service } = remoteDeps({
+      openRemoteWorker: vi.fn(async () => ({ ok: true as const,
+        proxySessionId: 'proxy-1', remoteSessionId: 'remote-1', agent: 'codex' as const,
+        model: 'device-model', workingDir: '/remote',
+        proxySession: { title: 'Worker', model: 'device-model', agentKind: 'codex', effort,
+          permissionMode: 'auto', fastMode: false },
+      })),
+    });
+    await expect(service.createWorker({ leadSessionId: 'lead-1', role: 'dev', label: 'a',
+      agent: 'codex', executionDeviceId: 'mac-mini' })).resolves.toMatchObject({
+      ok: true, resolved: { effort: effort || null },
+    });
+    expect(deps.recordRemoteWorker).toHaveBeenCalledWith(expect.objectContaining({
+      proxySession: expect.objectContaining({ effort }),
+    }));
+  });
+
+  it.each([
+    ['relative directory', { workingDir: 'relative/dir' }],
+    ['malformed device id', { executionDeviceId: 'bad id/../' }],
+  ])('rejects a %s before reserving a slot', async (_name, patch) => {
+    const { deps, service } = remoteDeps();
+    const result = await service.createWorker({
+      leadSessionId: 'lead-1', role: 'dev', label: 'a', agent: 'codex', executionDeviceId: 'office', ...patch,
+    });
+    expect(result).toMatchObject({ ok: false, errorCode: 'INVALID_PARAMS' });
+    expect(deps.reserveWorkerCreation).not.toHaveBeenCalled();
+    expect(deps.openRemoteWorker).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['SSH', { remoteHostId: 'host-1' }],
+    ['remote Agent', { agentDeviceId: 'device-b' }],
+  ])('refuses to mix with a Lead on %s', async (_name, leadPatch) => {
+    const { deps, service } = remoteDeps({
+      getLeadSessionRow: vi.fn(async () => ({
+        id: 'lead-1', agentKind: 'codex' as const, workspaceKind: 'project' as const, workingDir: '/repo',
+        model: 'gpt-5.5', effort: 'medium', permissionMode: 'default', fastMode: false, providerId: 'xd',
+        remoteHostId: null, ...leadPatch,
+      })),
+    });
+    const result = await service.createWorker({
+      leadSessionId: 'lead-1', role: 'dev', label: 'a', agent: 'codex', executionDeviceId: 'office',
+    });
+    expect(result).toMatchObject({ ok: false, errorCode: 'INVALID_PARAMS' });
+    expect(deps.openRemoteWorker).not.toHaveBeenCalled();
+  });
+
+  it('passes through device errors without recording a worker', async () => {
+    const { deps, service } = remoteDeps({
+      openRemoteWorker: vi.fn(async () => ({
+        ok: false as const, errorCode: 'UNSUPPORTED_CAPABILITY' as const, message: 'Mac mini 需要更新',
+      })),
+    });
+    const result = await service.createWorker({
+      leadSessionId: 'lead-1', role: 'dev', label: 'a', agent: 'codex', executionDeviceId: 'mac-mini',
+    });
+    expect(result).toEqual({ ok: false, errorCode: 'UNSUPPORTED_CAPABILITY', message: 'Mac mini 需要更新' });
+    expect(deps.addOrUpdateWorker).not.toHaveBeenCalled();
+    expect(deps.releaseWorkerCreationReservation).toHaveBeenCalledWith('worker-1');
+  });
+
+  it('discards the device task when persisting the worker fails', async () => {
+    const { deps, service } = remoteDeps({
+      recordRemoteWorker: vi.fn(async () => { throw new Error('disk full'); }),
+    });
+    const result = await service.createWorker({
+      leadSessionId: 'lead-1', role: 'dev', label: 'a', agent: 'codex', executionDeviceId: 'mac-mini',
+    });
+    expect(result).toMatchObject({ ok: false, errorCode: 'INTERNAL' });
+    expect(deps.discardRemoteWorker).toHaveBeenCalledWith({
+      proxySessionId: 'proxy-1', deviceId: 'mac-mini', remoteSessionId: 'remote-1',
+    });
+    expect(deps.recordRemoteWorker).toHaveBeenCalledOnce();
+    expect(deps.addOrUpdateWorker).not.toHaveBeenCalled();
+    expect(deps.removeWorker).not.toHaveBeenCalled();
+  });
+
+  it('reports remote workers as unsupported when the host did not wire them', async () => {
+    const { service } = createDeps();
+    const result = await service.createWorker({
+      leadSessionId: 'lead-1', role: 'dev', label: 'a', agent: 'codex', executionDeviceId: 'mac-mini',
+    });
+    expect(result).toMatchObject({ ok: false, errorCode: 'INVALID_PARAMS' });
+  });
+});
+
+describe('Worker of a lead whose agent runs on another computer', () => {
+  const sparkModels = ['spark/qwen', 'spark/deepseek'].map((id) => ({
+    id, name: id, efforts: ['low', 'high'], defaultEffort: 'high', supportsFastMode: false,
+  }));
+  const views = [
+    { id: 'spark', name: 'Spark', source: 'user', agents: ['claude-code', 'pi'], connected: true,
+      models: { 'claude-code': sparkModels, pi: sparkModels }, routing: { 'claude-code': {}, pi: {} } },
+    { id: 'offline', name: 'Offline', source: 'user', agents: ['pi'], connected: false,
+      models: { pi: [{ id: 'offline/model', name: 'Offline', efforts: [], defaultEffort: null }] }, routing: { pi: {} } },
+  ] as unknown as ProviderView[];
+  const deviceLead = (overrides: Record<string, unknown> = {}) => ({
+    id: 'lead-1', agentKind: 'pi' as const, workspaceKind: 'project' as const, workingDir: '/Users/me/repo',
+    model: 'spark/qwen', effort: 'high', permissionMode: 'default', fastMode: false, providerId: 'spark',
+    remoteHostId: null, agentDeviceId: 'device-b', ...overrides,
+  });
+
+  it.each([undefined, 'spark/deepseek', 'local-only'])('uses that computer for membership and defaults (%s)', async (model) => {
+    const routing = deviceWorkerRoutingContext(views, 'pi');
+    const { deps, service } = createDeps({
+      getLeadSessionRow: vi.fn(async () => deviceLead()),
+      getProviderRoutingContext: vi.fn(async () => routing),
+      getWorkerDefaults: vi.fn(() => ({ model: 'local-only', providerId: 'xd', effort: 'high' })),
+    });
+    const result = await service.createWorker({ leadSessionId: 'lead-1', role: 'reviewer', label: 'reviewer', agent: 'pi', model });
+    expect(deps.getProviderRoutingContext).toHaveBeenCalledWith('pi', null, 'device-b');
+    expect(deps.getAvailableModels).not.toHaveBeenCalled();
+    expect(deps.getWorkerDefaults).not.toHaveBeenCalled();
+    if (model === 'local-only') {
+      expect(result.ok).toBe(false);
+      expect(deps.bootstrapSession).not.toHaveBeenCalled();
+      return;
+    }
+    expect(result.ok).toBe(true);
+    // Worker 跟 lead 在同一台电脑运行，模型与来源按那台的目录。
+    expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({
+      model: model ?? 'spark/qwen', providerId: 'spark', agentDeviceId: 'device-b',
+    }));
+    expect(deps.buildCreateOptsWithStderr).toHaveBeenCalledWith(expect.objectContaining({ agentDeviceId: 'device-b' }));
+  });
+
+  it("starts from that computer's first model when the lead uses another agent", async () => {
+    const routing = deviceWorkerRoutingContext(views, 'claude-code');
+    const { deps, service } = createDeps({
+      getLeadSessionRow: vi.fn(async () => deviceLead({ agentKind: 'codex', model: 'gpt-5.5', providerId: 'openai' })),
+      getProviderRoutingContext: vi.fn(async () => routing),
+    });
+    const result = await service.createWorker({ leadSessionId: 'lead-1', role: 'reviewer', label: 'reviewer', agent: 'claude-code' });
+    expect(result.ok).toBe(true);
+    expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({
+      agentKind: 'claude-code', model: 'spark/qwen', providerId: 'spark', agentDeviceId: 'device-b',
+    }));
+  });
+
+  it('lists only connected sources of that computer', () => {
+    expect(deviceAvailableModels(views, 'pi')).toEqual([
+      { id: 'spark/qwen', label: 'spark/qwen', providers: [{ id: 'spark', name: 'Spark' }], defaultProviderId: 'spark' },
+      { id: 'spark/deepseek', label: 'spark/deepseek', providers: [{ id: 'spark', name: 'Spark' }], defaultProviderId: 'spark' },
+    ]);
+    expect(deviceAvailableModels(views, 'codex')).toEqual([]);
   });
 });
 
@@ -1284,6 +1793,43 @@ describe('OrcaWorkerCreationService', () => {
     expect(deps.addOrUpdateWorker).not.toHaveBeenCalled();
   });
 
+  it('keeps an explicit effort for a custom model whose capabilities were never declared (#5535)', async () => {
+    // 自定义来源只填了 id/name:目录与路由快照都没有档位声明,[] 只是占位而不是 valid: none。
+    const model = 'custom/step-5-preview';
+    const { deps, service } = createDeps({
+      getAvailableModels: vi.fn((agent: AgentKind) => (
+        agent === 'claude-code'
+          ? [{ id: model, efforts: [], defaultEffort: null, effortsUnknown: true }]
+          : [{ id: 'gpt-5.5', efforts: ['low', 'medium', 'high', 'xhigh'], defaultEffort: 'high', supportsFastMode: true }]
+      )),
+      getProviderRoutingContext: vi.fn(async () => providerRoutingContext({
+        'claude-code': [{
+          id: 'custom-anthropic',
+          name: 'Custom Anthropic Messages',
+          models: [model],
+          effortMetaByModel: { [model]: { efforts: [], defaultEffort: null, effortsUnknown: true } },
+          requiresExplicitRoute: true,
+        }],
+        codex: [{ id: 'xd', name: 'XD Gateway', models: ['gpt-5.5'] }],
+      })),
+    });
+
+    await expect(
+      service.createWorker({
+        leadSessionId: 'lead-1',
+        role: 'reviewer',
+        agent: 'claude-code',
+        label: 'reviewer',
+        model,
+        effort: 'medium',
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      resolved: { model, effort: 'medium' },
+    });
+    expect(deps.buildCreateOptsWithStderr).toHaveBeenCalledWith(expect.objectContaining({ model, effort: 'medium' }));
+  });
+
   it('rejects explicit minimal effort for a Claude Code worker at the creation boundary', async () => {
     const { deps, service } = createDeps();
 
@@ -1499,7 +2045,7 @@ describe('OrcaWorkerCreationService', () => {
       effort: 'high',
       fastMode: true,
       permissionMode: 'auto',
-      title: 'Worker · reviewer · reviewer',
+      title: 'Worker · reviewer',
       orcaRole: 'worker',
       vendorOptions: expect.objectContaining({
         orcaRole: 'worker',
@@ -2723,3 +3269,264 @@ describe('SSH remote worker model/provider compatibility gate (R23 P2)', () => {
       message: expect.stringContaining('not available for SSH remote workers'),
     });
   });
+
+it('applies plan limit in atomic reservation',async()=>{const {deps,service}=createDeps({validateCreationPlan:vi.fn(async()=>2)});await service.createWorker({leadSessionId:'lead-1',role:'eval',agent:'codex',label:'sample'});expect(deps.reserveWorkerCreation).toHaveBeenCalledWith(expect.objectContaining({hardLimit:2}));});
+it('uses one canonical label at every plan check without mutating the caller', async () => {
+  const validateCreationPlan = vi.fn(async (_params: OrcaWorkerCreateParams) => 2);
+  const { service } = createDeps({ validateCreationPlan });
+  const params = Object.freeze({ leadSessionId: 'lead-1', teamId: 'team-1', role: 'eval', agent: 'codex' as const, label: ' SAMPLE ', workerPermissionMode: 'auto' as const });
+  await expect(service.createWorkerInTeam(params)).resolves.toMatchObject({ ok: true });
+  expect(validateCreationPlan).toHaveBeenCalledTimes(5);
+  for (const call of validateCreationPlan.mock.calls) expect(call[0]).toMatchObject({ label: 'sample' });
+  expect(params.label).toBe(' SAMPLE ');
+});
+it('rejects invalid plan before reservation',async()=>{const {deps,service}=createDeps({validateCreationPlan:vi.fn(async()=>{throw Error('not pending');})});await expect(service.createWorker({leadSessionId:'lead-1',role:'eval',agent:'codex',label:'sample'})).rejects.toThrow('not pending');expect(deps.reserveWorkerCreation).not.toHaveBeenCalled();expect(deps.bootstrapSession).not.toHaveBeenCalled();});
+it('revalidates a plan registered during creation preflight and releases the reservation on rejection', async () => {
+  let reserved = false;
+  const {deps, service} = createDeps({validateCreationPlan: vi.fn(async () => {
+    if (reserved) throw new Error('Worker not in newly registered plan');
+    return undefined;
+  })});
+  const reserve = deps.reserveWorkerCreation;
+  deps.reserveWorkerCreation = vi.fn(async input => { const result = await reserve(input); reserved = true; return result; });
+  await expect(service.createWorker({leadSessionId: 'lead-1', role: 'eval', agent: 'codex', label: 'sample'})).rejects.toThrow('newly registered plan');
+  expect(deps.bootstrapSession).not.toHaveBeenCalled();
+  expect(deps.releaseWorkerCreationReservation).toHaveBeenCalledTimes(1);
+});
+it('checks the resolved creation directory before bootstrap and releases a rejected reservation', async () => {
+  const resolved = path.resolve('resolved-candidate');
+  const validateCreationPlan = vi.fn(async (_params, directory?: string) => {
+    if (directory !== undefined && validateCreationPlan.mock.calls.length >= 3) throw new Error('Directory authorization revoked');
+    return undefined;
+  });
+  const {deps, service} = createDeps({validateCreationPlan, resolveWorkerWorkingDir: vi.fn(async () => resolved)});
+  const params = {leadSessionId:'lead-1',role:'eval',agent:'codex' as const,label:'sample',workingDir:path.resolve('candidate')};
+  await expect(service.createWorker(params)).rejects.toThrow('Directory authorization revoked');
+  expect(validateCreationPlan).toHaveBeenLastCalledWith(expect.objectContaining(params), resolved, expect.objectContaining({ model: 'gpt-5.5', providerId: 'xd' }), undefined);
+  expect(deps.bootstrapSession).not.toHaveBeenCalled();
+  expect(deps.releaseWorkerCreationReservation).toHaveBeenCalledTimes(1);
+});
+
+describe('production plugin Auto admission after reservation', () => {
+  const source = readFileSync(new URL('../register.ts', import.meta.url), 'utf8');
+  const helper = source.slice(source.indexOf('  const assertPluginWorkerAutoAuthorized ='), source.indexOf('  const orcaWorkerCreationService ='));
+  const callback = source.slice(source.indexOf('    validateCreationPlan: async ('), source.indexOf('    getLeadSessionRow: async (leadSessionId) => {'));
+  const js = ts.transpileModule(`${helper}\nreturn ({${callback}}).validateCreationPlan;`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+  const override = source.slice(source.indexOf('    getWorkerPermissionModeOverride: async (leadSessionId) => {'), source.indexOf('    setWorkerPermissionMode: applyWorkerPermissionModePreference,'));
+  const overrideJs = ts.transpileModule(`${helper}\nreturn ({${override}}).getWorkerPermissionModeOverride;`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+
+  it.each([false, true].flatMap(planned => ['bootstrap', 'renewal'].flatMap(stage =>
+    ['disabled', 'uninstalled', 'reinstalled', 'account', 'owner', 'missing', 'downgraded', 'plan', 'archived', 'storage', 'healthy'].map(change => ({ planned, stage, change })),
+  )))('rechecks $change after $stage with planned=$planned before persistence and dispatch', async ({ planned, stage, change }) => {
+    let epoch = { client: {} };
+    let enabled = true, missing = false, storageFailed = false;
+    const task = { revision: 1, status: 'active', permissionMode: 'auto', planModeEnabled: false, workingDir: path.resolve('repo') };
+    const receipt = { pluginId: 'plugin', operation: 'create', payload: JSON.stringify(planned ? {
+      teamPlan: { concurrency: 2, items: [{ label: 'sample', workingDir: task.workingDir,
+        route: { agentKind: 'codex', model: 'gpt-5.5', providerId: 'xd', effort: 'medium', fastMode: false } }] },
+    } : {}) };
+    const callbackDeps = {
+      maker: {getSession:()=>null}, inputCoordinator: { getAcceptedInputProvenance: () => null },
+      readPluginTaskPlanReceipt: JSON.parse, assertPluginWorkerDirectoryScope, getCurrentDbClientSnapshot: () => epoch,
+      createPluginTaskStore: () => ({ get: async () => {
+        if (storageFailed) throw new Error('storage unavailable');
+        return missing ? null : structuredClone(receipt);
+      } }),
+      pluginTaskServiceForCurrentOwner: () => ({ get: async () => {
+        if (JSON.parse(receipt.payload).ownershipRevoked) throw new PluginTaskError('TASK_NOT_FOUND', 'Not owned');
+        return { ...task };
+      } }),
+      readPluginTaskConfig: () => ({ permissionMode: 'auto', workingDir: task.workingDir }),
+      isPluginTaskAuthorized: () => enabled,
+      resolvePluginWorkerDirectory: async () => task.workingDir,
+      isGhostPickedDir: () => false, PluginTaskError,
+    };
+    const validateCreationPlan = new Function(...Object.keys(callbackDeps), js)(...Object.values(callbackDeps));
+    const { deps, service } = createDeps({ validateCreationPlan });
+    const mutate = () => {
+      if (change === 'disabled') enabled = false;
+      if (['uninstalled', 'reinstalled'].includes(change)) {
+        receipt.payload = JSON.stringify({ ...JSON.parse(receipt.payload), ownershipRevoked: true });
+        enabled = change === 'reinstalled';
+      }
+      if (change === 'account') epoch = { client: {} };
+      if (change === 'owner') receipt.pluginId = 'other-plugin';
+      if (change === 'missing') missing = true;
+      if (change === 'downgraded') task.permissionMode = 'default';
+      if (change === 'plan') task.planModeEnabled = true;
+      if (change === 'archived') task.status = 'archived';
+      if (change === 'storage') storageFailed = true;
+    };
+    const bootstrap = deps.bootstrapSession;
+    deps.bootstrapSession = vi.fn(async opts => { const result = await bootstrap(opts); if (stage === 'bootstrap') mutate(); return result; });
+    deps.renewWorkerCreationReservation = vi.fn(async () => { if (stage === 'renewal') mutate(); return true; });
+    const markTeamEnded = vi.fn(async () => undefined);
+    const getWorkerPermissionModeOverride = new Function('hasAcceptedUserTaskInput', ...Object.keys(callbackDeps), overrideJs)(hasAcceptedUserTaskInput, ...Object.values(callbackDeps));
+    const lifecycle = createOrcaLifecycleService({
+      getWorkerPermissionModeOverride,
+      getActiveTeamByLead: async () => planned ? null : { id: 'team-1', leadSessionId: 'lead-1' },
+      createActiveTeam: async () => ({ id: 'team-1', leadSessionId: 'lead-1' }),
+      isOrphanedTeamInit: async () => false, getWorkerPermissionMode: () => 'auto',
+      setWorkerPermissionMode: vi.fn(), createWorkerInTeam: service.createWorkerInTeam,
+      dispatchWorkerTask: deps.dispatchWorkerTask, markTeamEnded, setSessionOrcaRole: vi.fn(async () => undefined),
+      clearKnownNonOrcaSession: vi.fn(), setLeadVendorOptions: vi.fn(async () => undefined), clearLeadVendorOptions: vi.fn(async () => undefined),
+      sendWorkerReadyPlaceholder: vi.fn(async () => undefined), rollbackCreatedWorker: vi.fn(async () => undefined),
+      broadcastSessionCreated: deps.broadcastSessionCreated, broadcastOrcaWorkerChanged: deps.broadcastOrcaWorkerChanged,
+    });
+    const result = planned
+      ? await lifecycle.enableTeam({ leadSessionId: 'lead-1', workerAgent: 'codex', role: 'eval', label: 'sample', delegateTask: 'Evaluate sample' })
+      : await lifecycle.createWorker({ leadSessionId: 'lead-1', agent: 'codex', role: 'eval', label: 'sample', initialTask: 'Evaluate sample' });
+    expect(deps.bootstrapSession).toHaveBeenCalledOnce();
+    expect(deps.releaseWorkerCreationReservation).toHaveBeenCalledOnce();
+    if (change === 'healthy') {
+      expect(result.ok).toBe(true);
+      expect(deps.addOrUpdateWorker).toHaveBeenCalledOnce();
+      expect(deps.dispatchWorkerTask).toHaveBeenCalledOnce();
+      expect(deps.closeWorkerSession).not.toHaveBeenCalled();
+    } else {
+      expect(result).toMatchObject({ ok: false, errorCode: 'INTERNAL' });
+      expect(deps.addOrUpdateWorker).not.toHaveBeenCalled();
+      expect(deps.markOrcaRoleIfNeeded).not.toHaveBeenCalled();
+      expect(deps.dispatchWorkerTask).not.toHaveBeenCalled();
+      for (const cleanup of [deps.closeWorkerSession, deps.forgetWorkerSession, deps.archiveWorkerSession]) {
+        expect(cleanup).toHaveBeenCalledExactlyOnceWith(WORKER_SESSION_ID);
+      }
+      if (planned) expect(markTeamEnded).toHaveBeenCalledExactlyOnceWith('team-1', 'failed');
+    }
+  });
+
+  it.each(['uninstalled', 'reinstalled', 'malformed'])('keeps ordinary Worker creation separate from %s plugin receipts', async state => {
+    const epoch = { client: {} }, get = vi.fn(async () => { throw new PluginTaskError('TASK_NOT_FOUND', 'Not owned'); });
+    const callbackDeps = { getCurrentDbClientSnapshot: () => epoch, PluginTaskError, assertPluginWorkerDirectoryScope,
+      createPluginTaskStore: () => ({ get: async () => ({ operation: 'create', pluginId: 'plugin', payload: state === 'malformed' ? '{' : JSON.stringify({ ownershipRevoked: true, teamPlan: { items: [] } }) }) }),
+      pluginTaskServiceForCurrentOwner: () => ({ get }), isPluginTaskAuthorized: () => state === 'reinstalled',
+      readPluginTaskConfig: () => ({ permissionMode: 'auto' }),
+    };
+    const validateCreationPlan = new Function(...Object.keys(callbackDeps), js)(...Object.values(callbackDeps));
+    const { deps, service } = createDeps({ validateCreationPlan });
+    const result = service.createWorker({ leadSessionId: 'lead-1', role: 'worker', label: 'sample', agent: 'codex' });
+    if (state === 'malformed') {
+      await expect(result).rejects.toMatchObject({ code: 'TASK_NOT_FOUND' });
+      expect(deps.bootstrapSession).not.toHaveBeenCalled();
+    } else {
+      await expect(result).resolves.toMatchObject({ ok: true });
+      expect(get).not.toHaveBeenCalled();
+      expect(deps.bootstrapSession).toHaveBeenCalledOnce();
+    }
+  });
+
+  it.each([
+    ...[false, true].flatMap(planned => ['reservation', 'directory', 'receipt', 'final-task', 'task-mode', 'disabled', 'healthy', 'archive-first', 'archive-admission', 'archive-reservation', 'archive-final', 'plan-first', 'plan-reservation', 'plan-final'].map(point => ({ planned, point }))),
+    ...['explicit-match', 'canonical-directory', 'different-model', 'different-directory', 'normalized-fast', 'changed-plan', 'normalized-label', 'settled-label'].map(point => ({ planned: true, point })),
+    ...['queued-plan-excludes', 'queued-plan-route', 'queued-plan-matches'].map(point => ({ planned: false, point })),
+  ])('checks $point with planned=$planned before bootstrap', async ({ planned, point }) => {
+    let reserved = false;
+    let mode = 'auto';
+    let taskMode = 'auto';
+    let taskStatus = point === 'archive-first' ? 'archived' : 'active';
+    let planModeEnabled = point === 'plan-first';
+    let enabled = true;
+    let receiptReads = 0;
+    let reservedTaskReads = 0;
+    const epoch = { client: {} };
+    const revoke = () => { mode = 'acceptEdits'; };
+    const task = () => ({ revision: 1, status: taskStatus, permissionMode: taskMode, planModeEnabled, workingDir: path.resolve('repo') });
+    const planItem = { label: 'sample', workingDir: path.resolve(point === 'canonical-directory' ? 'alias' : point === 'different-directory' ? 'other' : 'repo'), route: { agentKind: 'codex', model: 'gpt-5.5', providerId: 'xd', effort: 'medium', fastMode: point === 'normalized-fast' } };
+    const payload = () => JSON.stringify(planned ? { teamPlan: { concurrency: 2, items: [planItem] }, settledLabels: point === 'settled-label' ? ['sample'] : [] } : {});
+    const receipt = { pluginId: 'plugin', operation: 'create', payload: payload() };
+    const depsForCallback = {
+      readPluginTaskPlanReceipt: JSON.parse,
+      assertPluginWorkerDirectoryScope,
+      getCurrentDbClientSnapshot: () => epoch,
+      createPluginTaskStore: () => ({ get: async () => { if (++receiptReads === 6 && point === 'receipt') revoke(); return structuredClone(receipt); } }),
+      pluginTaskServiceForCurrentOwner: () => ({ get: async () => {
+        if (reserved) ++reservedTaskReads;
+        if (reservedTaskReads === 3 && point === 'final-task') revoke();
+        if (reservedTaskReads === 3 && point === 'task-mode') taskMode = 'plan';
+        if (reservedTaskReads === 3 && point === 'archive-final') taskStatus = 'archived';
+        if (reservedTaskReads === 3 && point === 'plan-final') planModeEnabled = true;
+        // A registration already past its reservation check commits while the
+        // post-reservation service read drains the existing receipt queue.
+        if (reservedTaskReads === 2 && point.startsWith('queued-plan-')) {
+          receipt.payload = JSON.stringify({ teamPlan: { concurrency: 2, items: [{ ...planItem,
+            label: point === 'queued-plan-excludes' ? 'other' : 'sample',
+            route: { ...planItem.route, model: point === 'queued-plan-route' ? 'gpt-5.4' : 'gpt-5.5' },
+          }] } });
+        }
+        return task();
+      } }),
+      readPluginTaskConfig: () => ({ permissionMode: mode, workingDir: path.resolve('repo') }),
+      isPluginTaskAuthorized: () => enabled,
+      resolvePluginWorkerDirectory: async ({requested}: {requested: string}) => { if (reserved && point === 'directory') revoke(); return requested === path.resolve('other') ? requested : path.resolve('repo'); },
+      realpathWorkingDirectory: async (dir: string) => dir === path.resolve('other') ? dir : path.resolve('repo'),
+      isGhostPickedDir: () => false,
+      PluginTaskError,
+    };
+    const validateCreationPlan = new Function(...Object.keys(depsForCallback), js)(...Object.values(depsForCallback));
+    const { deps, service } = createDeps({ validateCreationPlan, withLeadSendLock: async (_id, operation) => {
+      if (point === 'archive-admission') taskStatus = 'archived';
+      return operation();
+    } });
+    if (point === 'normalized-fast') {
+      const models = deps.getAvailableModels;
+      deps.getAvailableModels = agent => models(agent).map(model => ({ ...model, supportsFastMode: false }));
+    }
+    const reserve = deps.reserveWorkerCreation;
+    deps.reserveWorkerCreation = vi.fn(async input => {
+      const result = await reserve(input); reserved = true;
+      if (point === 'reservation') revoke();
+      if (point === 'disabled') enabled = false;
+      if (point === 'archive-reservation') taskStatus = 'archived';
+      if (point === 'plan-reservation') planModeEnabled = true;
+      if (point === 'changed-plan') {
+        planItem.route.model = 'gpt-5.4';
+        receipt.payload = payload();
+      }
+      return result;
+    });
+    const result = service.createWorker({ leadSessionId: 'lead-1', role: 'eval', agent: 'codex', label: ['normalized-label', 'settled-label'].includes(point) ? ' SAMPLE ' : 'sample', workerPermissionMode: 'auto',
+      ...(point === 'explicit-match' ? { model: 'gpt-5.5', providerId: 'xd', effort: 'medium', fast: false, workingDir: path.resolve('repo') } : {}),
+      ...(point === 'different-model' ? { model: 'gpt-5.4' } : {}),
+      ...(point === 'normalized-fast' ? { fast: true } : {}),
+    });
+    if (['healthy', 'explicit-match', 'canonical-directory', 'queued-plan-matches', 'normalized-label'].includes(point)) {
+      await expect(result).resolves.toMatchObject({ ok: true });
+      expect(deps.bootstrapSession).toHaveBeenCalledOnce();
+    } else if (['different-model', 'different-directory', 'normalized-fast', 'archive-admission'].includes(point)) {
+      // The child PR checks under the Lead send lock before reserving too.
+      await expect(result).resolves.toMatchObject({ ok: false, message: point === 'archive-admission' ? 'Archived tasks cannot create Workers' : 'Worker configuration differs from registered plan' });
+      expect(deps.reserveWorkerCreation).not.toHaveBeenCalled();
+      expect(deps.bootstrapSession).not.toHaveBeenCalled();
+    } else {
+      await expect(result).rejects.toMatchObject({ code: point.startsWith('archive-') ? 'TASK_BUSY' : ['different-model', 'different-directory', 'normalized-fast', 'changed-plan', 'queued-plan-excludes', 'queued-plan-route', 'settled-label'].includes(point) ? 'INVALID_REQUEST' : 'PERMISSION_DENIED' });
+      expect(deps.bootstrapSession).not.toHaveBeenCalled();
+    }
+    expect(deps.releaseWorkerCreationReservation).toHaveBeenCalledTimes(reserved ? 1 : 0);
+  });
+});
+it('rechecks a newly registered plan under the Lead send lock before reserving', async () => {
+  let locked = false, limit: number | undefined;
+  const validateCreationPlan = vi.fn(async () => limit);
+  const {deps,service}=createDeps({
+    validateCreationPlan,
+    withLeadSendLock: async (_id, operation) => {
+      limit = 1; locked = true;
+      try { return await operation(); } finally { locked = false; }
+    },
+  });
+  vi.mocked(deps.reserveWorkerCreation).mockImplementation(async input => {
+    expect(locked).toBe(true);expect(input.hardLimit).toBe(1);
+    return {ok:true,occupiedSlotsBefore:0};
+  });
+  const bootstrap=deps.bootstrapSession;
+  deps.bootstrapSession=vi.fn(async (opts: MakerSessionCreateOpts) => {expect(locked).toBe(false);return bootstrap(opts);});
+  await service.createWorker({leadSessionId:'lead-1',role:'eval',agent:'codex',label:'sample'});
+  expect(validateCreationPlan).toHaveBeenCalledTimes(5);
+  expect(deps.reserveWorkerCreation).toHaveBeenCalledOnce();
+});
+it('rejects a plan changed during preparation without reserving or bootstrapping', async () => {
+  const validate=vi.fn().mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('not pending'));
+  const {deps,service}=createDeps({validateCreationPlan:validate,withLeadSendLock:async (_id, operation)=>operation()});
+  const result=await service.createWorker({leadSessionId:'lead-1',role:'eval',agent:'codex',label:'sample'});
+  expect(result.ok).toBe(false);expect(deps.reserveWorkerCreation).not.toHaveBeenCalled();expect(deps.bootstrapSession).not.toHaveBeenCalled();
+});

@@ -16,6 +16,7 @@ import { useRef } from 'react';
 import { Pressable, StyleSheet, View, type StyleProp, type ViewStyle } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import { Text } from '@/components/AppText';
+import { mobileInteractionStyles } from '@/components/mobileInteractionStyles';
 import { Check, SlidersHorizontal } from 'lucide-react-native';
 
 import type { MobileAgentCapabilities, MobileModelOption } from '@/session/agentCapabilities';
@@ -113,9 +114,7 @@ const makeStyles = (c: ThemeColors) =>
     optionRowDisabled: {
       opacity: 0.45,
     },
-    pressed: {
-      opacity: 0.65,
-    },
+    pressed: mobileInteractionStyles.pressed,
     optionMain: {
       flex: 1,
       minWidth: 0,
@@ -233,7 +232,7 @@ export function MobileModelPickerList({
           const selected = row.model.id === activeModelId && row.provider.id === activeSourceId;
           // 对齐桌面 ModelSelector:订阅制来源(Claude.ai / ChatGPT 等)的模型带「订阅」。
           const isSubscription = row.provider.access?.kind === 'subscription';
-          const rowDisabled = budgetRowDisabled(row.model.id, apiKeyStatus);
+          const rowDisabled = budgetRowDisabled(row.model.id, apiKeyStatus, row.provider);
           const fastEditable =
             configEnabled &&
             rowFastEditable({

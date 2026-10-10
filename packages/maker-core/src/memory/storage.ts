@@ -348,6 +348,7 @@ export class MemoryStorage {
     const fullPath = path.join(this.dir, filename);
 
     let nextBody = opts.body;
+    let preserveBody = opts.preserveBody === true;
     let nextFrontmatter: MemoryFrontmatter;
     const mode = opts.mode ?? 'create';
 
@@ -370,6 +371,9 @@ export class MemoryStorage {
         throw new MemoryError('not-found', `${filename} 不存在; 用 mode:'create' 新建`);
       }
       const parsed = parseRawShard(existing, filename);
+      // Editing an imported shard must not silently downgrade its exact-body
+      // format; import retries still need to detect whitespace-only edits.
+      preserveBody ||= parsed.frontmatter.bodyLength !== undefined;
       if (mode === 'append') {
         nextBody = `${parsed.body.trimEnd()}\n\n${opts.body}`;
       }
@@ -390,7 +394,8 @@ export class MemoryStorage {
       );
     }
 
-    const fileText = matter.stringify(nextBody, nextFrontmatter);
+    if (preserveBody) nextFrontmatter.bodyLength = nextBody.length;
+    const fileText = matter.stringify({ content: nextBody }, nextFrontmatter);
     // tryReadRaw 的 await 窗口后、真正写盘前复核 owner scope (review #2388
     // Codex 8th P1): 边界不得把 shard 写入旧 owner 根。
     this.beforeFileWrite?.();
@@ -677,8 +682,14 @@ function parseRawShard(raw: string, filenameForErr: string): ParsedShard {
       description: data.description,
       type: data.type,
       updatedAt: typeof data.updatedAt === 'string' ? data.updatedAt : new Date().toISOString(),
+      ...(Number.isSafeInteger(data.bodyLength) && data.bodyLength! >= 0 ? { bodyLength: data.bodyLength } : {}),
     },
-    body: parsed.content.trim(),
+    // gray-matter appends one newline. Remove only that exact serialization
+    // suffix; an external edit must never be truncated to a stale length.
+    body: Number.isSafeInteger(data.bodyLength) && data.bodyLength! >= 0
+      ? (parsed.content.length === data.bodyLength! + 1 && parsed.content.endsWith('\n')
+        ? parsed.content.slice(0, -1) : parsed.content)
+      : parsed.content.trim(),
   };
 }
 

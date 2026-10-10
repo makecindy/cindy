@@ -13,6 +13,12 @@
 import type { AutoReviewUserIntent } from './agents/shared/auto-review-decision.js';
 import { randomUUID } from 'node:crypto';
 import { ToolLoopGuard } from './agents/shared/loop-guard.js';
+import { AsyncUserQuestions } from './agents/shared/async-user-questions.js';
+import {
+  ToolLoopMonitor,
+  type HardToolLoopVerdict,
+  type ToolLoopReviewer,
+} from './agents/shared/tool-loop-review.js';
 import type { ReviewableAction } from './agents/shared/auto-review.js';
 import type { AutoReviewDecision } from './agents/shared/auto-review-decision.js';
 
@@ -39,6 +45,7 @@ import { NotSupportedError } from './types/capabilities.js';
 import type { VisionBridgeHook } from './types/vision-bridge.js';
 import type {
   AgentEvent,
+  AskUserQuestionItem,
   InteractionRequest,
   InteractionDecision,
   RewindCommitOptions,
@@ -51,7 +58,9 @@ import { isTerminalAgentErrorEvent, parseToolLoopErrorDetails, isTurnWatchdogLiv
 import type { ContextUsageData } from './types/context-usage.js';
 import type { PiRuntimeCapabilityManifest } from './types/pi-runtime-capabilities.js';
 import type {
+  AgentMcpServerToolsReport,
   AgentSessionHandle,
+  PiModelSwitchPreview,
   AgentSessionTeardownOptions,
   BackgroundTaskSnapshot,
   SendOptions,
@@ -60,6 +69,7 @@ import type {
 } from './agents/base-agent.js';
 import {
   AUTO_REVIEW_SOURCE_CONTENT,
+  ASYNC_QUESTION_ANSWER,
   AUTO_REVIEW_USER_INTENT,
   TurnDispatchRejectedError,
   TurnDispatchUnconfirmedError,
@@ -172,6 +182,11 @@ export interface SessionOptions {
    */
   remoteHostId?: string | null;
   /**
+   * 同账号另一台电脑（或 `share:` 分享来源）上运行 Agent 时的设备 id，与 remoteHostId 互斥。
+   * 主进程的发送边界用它判断供应商目录在对端：本机目录不能裁决这类会话的显式来源。
+   */
+  agentDeviceId?: string | null;
+  /**
    * turn 零事件看门狗阈值(ms)。省略 = env / DEFAULT_TURN_STALL_MS；0 = 关闭。
    * 主要供测试注入短阈值，宿主正常不传。
    */
@@ -182,6 +197,11 @@ export interface SessionOptions {
    * （见 docs/vision-bridge-design.md 层 B）。
    */
   visionBridge?: VisionBridgeHook;
+  /**
+   * 可选：工具循环疑似命中时的辅助模型复核入口（host 注入）。缺省 = 疑似即中断，
+   * 与未接入复核前一致。
+   */
+  toolLoopReviewer?: ToolLoopReviewer;
 }
 
 function redactEventForListeners(event: AgentEvent): AgentEvent {
@@ -362,8 +382,10 @@ export type SessionGracefulStopResult =
 
 type TurnControlState = {
   generation: number;
-  toolLoopGuard: ToolLoopGuard | null;
-  pendingToolLoop: { toolUseId: string; verdict: Extract<ReturnType<ToolLoopGuard['onToolResult']>, { kind: 'hard' }> } | null;
+  toolLoopMonitor: ToolLoopMonitor | null;
+  pendingToolLoop: { toolUseId: string; verdict: HardToolLoopVerdict } | null;
+  /** 已送达完整结果、尚未送达结果摘要的工具;终态错误必须排在它们的摘要之后。 */
+  awaitingToolResultSummaries: Set<string>;
   activeToolIds: Set<string>;
   anonymousActiveTools: number;
   pendingInteractionToolIds: Map<string, number>;
@@ -413,11 +435,14 @@ export class Session {
   readonly capabilities: Capabilities;
   /** 见 SessionOptions.remoteHostId。 */
   readonly remoteHostId: string | null;
+  /** 见 SessionOptions.agentDeviceId。 */
+  readonly agentDeviceId: string | null;
 
   private readonly handle: AgentSessionHandle;
   private readonly logger: Logger;
   /** 视觉桥钩子（层 B）。缺省 = 未启用，send 完全跳过。 */
   private readonly visionBridge: VisionBridgeHook | undefined;
+  private readonly toolLoopReviewer: ToolLoopReviewer | undefined;
   private permissionModeStateValue: PermissionModeState;
   private permissionModeChangeChain: Promise<void> = Promise.resolve();
   private permissionModeChangesInFlight = 0;
@@ -518,6 +543,8 @@ export class Session {
   private turnStallSliceStartedAt = 0;
   /** 正在等用户回应的交互数；>0 期间不计 stall 额度（没事件是正常的）。 */
   private pendingInteractions = 0;
+  /** Blocking question cards take precedence over optional async cards. */
+  private pendingUserQuestions = 0;
   /** 最近一次 fan-out 事件的时刻，仅用于日志诊断。 */
   private lastEventAt = 0;
   /**
@@ -536,6 +563,7 @@ export class Session {
   private lastEventType: string | null = null;
   /** 优雅停止所需的 turn 控制事实；不承担 UI/MCP 会话状态投影。 */
   private turnControlState: TurnControlState | null = null;
+  private readonly asyncUserQuestions: AsyncUserQuestions;
 
   constructor(opts: SessionOptions) {
     this.hostStartupPreferences = opts.hostStartupPreferences
@@ -547,6 +575,7 @@ export class Session {
     this.handle = opts.handle;
     this.capabilities = opts.capabilities;
     this.remoteHostId = opts.remoteHostId ?? null;
+    this.agentDeviceId = opts.agentDeviceId ?? null;
     this.logger = opts.logger.child(`s:${this.id}`);
     this.permissionModeStateValue = {
       mode: opts.permissionMode ?? null,
@@ -555,6 +584,18 @@ export class Session {
     this.turnStallMs =
       opts.turnStallMs ?? parseTurnStallMs(process.env.XDT_SESSION_TURN_STALL_MS);
     this.visionBridge = opts.visionBridge;
+    this.toolLoopReviewer = opts.toolLoopReviewer;
+    this.asyncUserQuestions = new AsyncUserQuestions({
+      isActive: (generation) => this.status === 'active' && !this.terminationStarted
+        && generation === this.turnGeneration && this.handle.isTurnRunning?.() === true,
+      resolve: (request) => this.interactionListener!(request),
+      deliver: (text, signal) => this.steer(text, { signal, [ASYNC_QUESTION_ANSWER]: true }),
+      dismiss: (requestId, reason) => this.fanOutEvent({
+        type: 'interaction_dismissed', data: { requestId, reason, resolvedAs: 'deny' }, source: this.agentKind,
+      }),
+      reportError: () => this.fanOutEvent({ type: 'error', source: this.agentKind,
+        data: { message: 'Async question answer delivery failed.', isTerminal: false } }),
+    });
 
     // 注入 InteractionResolver 到底层 handle, 转发到 host 维护的 listener。
     // 没接 listener 时按 kind 给出安全默认: 都视作 deny(host 必须接 listener 才能交互)。
@@ -1128,6 +1169,7 @@ export class Session {
   async abort(): Promise<void> {
     if (this.status === 'closed') return;
     if (this.status === 'error') return;
+    this.asyncUserQuestions.expire('session_aborted');
     const abortGeneration = this.turnGeneration;
     this.cancelSendReservation(this.sendReservation);
     // 中断已在进行:不再计 stall 额度(下一个 turn 的 send 会重新起表)。
@@ -1180,6 +1222,7 @@ export class Session {
   }
 
   async requestGracefulStop(): Promise<SessionGracefulStopResult> {
+    this.asyncUserQuestions.expire('session_stopping');
     const reservation = this.sendReservation;
     if (reservation) return this.requestGracefulStopForReservation(reservation);
     const control = this.turnControlState;
@@ -1357,6 +1400,9 @@ export class Session {
     if (this.status === 'closed') return Promise.resolve();
 
     this.terminationStarted = true;
+    this.asyncUserQuestions.expire('session_closed');
+    // 拆除开始即作废进行中的工具循环复核,迟到结论不得再中断。
+    this.turnControlState?.toolLoopMonitor?.dispose();
     // Reserve before synchronous terminal listeners run, but begin transport
     // shutdown now: a pending send must see its cancellation in this tick.
     let resolve!: () => void;
@@ -1467,6 +1513,7 @@ export class Session {
       this.unacceptedSendGeneration = null;
       this.currentTurnOrigin = null;
       this.currentTurnAttemptToken = null;
+      this.turnControlState?.toolLoopMonitor?.dispose();
       this.turnControlState = null;
       this.eventListeners.clear();
       this.runtimeRecoveryListeners.clear();
@@ -1504,6 +1551,9 @@ export class Session {
     const teardown: AgentSessionTeardownOptions = opts ?? { reason: 'account-boundary' };
     if (this.status === 'closed') return;
     this.terminationStarted = true;
+    this.asyncUserQuestions.expire('session_closed');
+    // 拆除开始即作废进行中的工具循环复核,迟到结论不得再中断。
+    this.turnControlState?.toolLoopMonitor?.dispose();
     // 与 performClose() 对齐：进入拆离立即 abort 未完成的 pre-dispatch reservation
     // （vision bridge 等前置 hook 的 fetch），而不是等 handle.detach()/视觉通道超时——
     // 否则 handle.detach() 慢/挂起时，in-flight 视觉请求会继续拖住退出链。
@@ -1521,6 +1571,7 @@ export class Session {
       this.unacceptedSendGeneration = null;
       this.currentTurnOrigin = null;
       this.currentTurnAttemptToken = null;
+      this.turnControlState?.toolLoopMonitor?.dispose();
       this.turnControlState = null;
       this.clearTerminalErrorDrain();
       this.eventListeners.clear();
@@ -1570,6 +1621,15 @@ export class Session {
   }
 
   /**
+   * The engine's own view of one MCP server in this session. Null when the
+   * engine has no per-session MCP status entry; never starts or calls a server.
+   */
+  async readMcpServerTools(serverName: string): Promise<AgentMcpServerToolsReport | null> {
+    this.ensureActive();
+    return await this.handle.readMcpServerTools?.(serverName) ?? null;
+  }
+
+  /**
    * 当前 session 生命周期状态 ('active' / 'aborting' / 'closed' / 'error')。
    * 这是内存里的 SDK 子进程视角, 不持久化。区分:
    *   - 'active'      : 子进程存活, 可正常 send / 切配置
@@ -1584,12 +1644,16 @@ export class Session {
   }
 
   /**
-   * 底层 agent handle 的会话 id —— cc = SDK session id(也是出站请求的 `x-claude-code-session-id`
-   * header 值);SDK 尚未回填时为 '<pending>'。只读、不触发任何行为,供 host 把 loopback proxy
-   * 看到的请求归属回本会话做 per-session 路由(见 maker-host/anthropic-compat-proxy-host.ts)。
+   * Native identity safe to persist for resume. An unaccepted fork retains its source.
+   * Request routing uses requestSessionId, which may already identify the destination.
    */
   get sdkSessionId(): string {
     return this.handle.id;
+  }
+
+  /** Live request identity, which may precede a fork's durable resume identity. */
+  get requestSessionId(): string {
+    return this.handle.requestSessionId ?? this.handle.id;
   }
 
   /** 当前运行时模型。底层 handle 的 getter 会随 setModel 成功更新。 */
@@ -1720,6 +1784,13 @@ export class Session {
       throw new NotSupportedError('switchModel', { supported: false, reason: 'not-implemented' });
     }
     await this.handle.setModel(model, opts);
+  }
+
+  async previewModelSwitch(
+    model: string,
+    opts?: { providerId?: string | null },
+  ): Promise<PiModelSwitchPreview | undefined> {
+    return this.handle.previewModelSwitch?.(model, opts);
   }
 
   async requiresModelSwitchRebuild(
@@ -2107,12 +2178,21 @@ export class Session {
     request: InteractionRequest,
     resolve: () => Promise<InteractionDecision>,
   ): Promise<InteractionDecision> {
+    // Native async questions use the same card resolver, but never suspend turn
+    // protection or register a waiting interaction with the lifecycle observer.
+    if (request.kind === 'ask_user_question' && request.delivery === 'async') return resolve();
+    const isQuestion = request.kind === 'ask_user_question';
+    if (isQuestion) {
+      this.pendingUserQuestions += 1;
+      this.asyncUserQuestions.expire('superseded');
+    }
     this.pendingInteractions += 1;
     const runtime = this.observeInteractionStarted(request);
     this.armTurnStallWatchdog();
     try {
       return await resolve();
     } finally {
+      if (isQuestion) this.pendingUserQuestions -= 1;
       this.pendingInteractions = Math.max(0, this.pendingInteractions - 1);
       this.observeInteractionSettled(runtime);
       this.armTurnStallWatchdog();
@@ -2121,6 +2201,20 @@ export class Session {
 
   setInteractionListener(listener: InteractionRequestListener | null): void {
     this.interactionListener = listener;
+  }
+
+  /** Display an optional question and return immediately; answers steer only this execution. */
+  askUserQuestionAsync(questions: AskUserQuestionItem[]): string {
+    // Use the live Session identity, even if a stale MCP context claims another
+    // harness. Codex's native adapter is its sole async question owner.
+    if (this.agentKind === 'codex') throw new Error('Codex uses native async questions');
+    this.ensureActive();
+    if (!this.interactionListener) throw new Error('Question UI is unavailable');
+    if (this.pendingUserQuestions > 0) throw new Error('A blocking user question is already pending');
+    if (!this.capabilities.sameTurnSteer.supported) {
+      throw new NotSupportedError('sameTurnSteer', this.capabilities.sameTurnSteer);
+    }
+    return this.asyncUserQuestions.ask(questions, this.turnGeneration);
   }
 
   setTurnLifecycleObserver(observer: SessionTurnLifecycleObserver | null): void {
@@ -2157,18 +2251,26 @@ export class Session {
   }
 
   private beginTurnControl(generation: number): void {
+    this.asyncUserQuestions.expire('superseded');
+    this.turnControlState?.toolLoopMonitor?.dispose();
     this.turnControlState = {
       generation,
       // Claude owns per-sidechain guards before translation. Pi/Codex share
       // the same detector here, paired with this product turn's lifecycle.
-      toolLoopGuard: this.agentKind === 'claude-code' ? null : new ToolLoopGuard({
+      toolLoopMonitor: this.agentKind === 'claude-code' ? null : new ToolLoopMonitor(new ToolLoopGuard({
         // These normalized events do not identify model-response batches.
         // Distinct malformed calls can belong to one parallel attempt, so do
         // not enable the retry-count rule without that evidence. Claude also
         // disables category-only retries; repetition rules stay active.
         contractConsecutiveLimit: Number.POSITIVE_INFINITY,
+      }), {
+        reviewer: this.toolLoopReviewer,
+        context: () => ({ sessionId: this.id, agentKind: this.agentKind, model: this.handle.model }),
+        onReviewedStop: (verdict) => this.interruptReviewedToolLoop(verdict, generation),
+        logger: this.logger,
       }),
       pendingToolLoop: null,
+      awaitingToolResultSummaries: new Set(),
       activeToolIds: new Set(),
       anonymousActiveTools: 0,
       pendingInteractionToolIds: new Map(),
@@ -2179,7 +2281,9 @@ export class Session {
   }
 
   private clearTurnControl(generation: number): void {
-    if (this.turnControlState?.generation === generation) this.turnControlState = null;
+    if (this.turnControlState?.generation !== generation) return;
+    this.turnControlState.toolLoopMonitor?.dispose();
+    this.turnControlState = null;
   }
 
   /**
@@ -2589,6 +2693,9 @@ export class Session {
     const hasPendingContinuation = continuationState !== null;
     const isTerminal =
       (event.type === 'done' && !hasPendingContinuation) || isTerminalAgentErrorEvent(event);
+    if (isTerminal && !isBackgroundEvent) {
+      this.asyncUserQuestions.expire(event.type === 'error' ? 'turn_failed' : 'turn_completed', resolvedGeneration);
+    }
     // A dispatching send is not enough evidence that a terminal event belongs
     // to it: Codex can enqueue the previous turn's terminal error after flipping
     // its handle idle. Only runEventLoop's generation adoption may transfer
@@ -2754,16 +2861,29 @@ export class Session {
     if (isCurrentGeneration) this.observeToolLoop(event, resolvedGeneration);
   }
 
+  /**
+   * 工具循环检测与中断的唯一会话级前提:同步观察与后台复核结论共用,避免两处判据分叉。
+   * 同一 turn、会话仍活跃且未进入拆除、没有等人确认、没有优雅停止。
+   */
+  private toolLoopControlFor(generation: number): TurnControlState | null {
+    const control = this.turnControlState;
+    if (!control?.toolLoopMonitor || control.generation !== generation ||
+      generation !== this.turnGeneration || this.status !== 'active' || this.closePromise ||
+      this.terminationStarted || this.pendingInteractions > 0 ||
+      control.gracefulStopState !== 'none') return null;
+    return control;
+  }
+
   private observeToolLoop(event: AgentEvent, generation: number): void {
     if (event.type !== 'tool_use' && event.type !== 'tool_result_full' && event.type !== 'tool_result') return;
-    const control = this.turnControlState;
-    if (!control?.toolLoopGuard || control.generation !== generation ||
-      generation !== this.turnGeneration || this.status !== 'active' || this.closePromise ||
-      event.turnScope === 'background' || event.sessionInstanceId !== this.instanceId ||
-      this.pendingInteractions > 0 || control.gracefulStopState !== 'none') return;
+    if (event.turnScope === 'background' || event.sessionInstanceId !== this.instanceId) return;
     const data = event.data && typeof event.data === 'object'
       ? event.data as Record<string, unknown> : {};
     if (data.runtimeActivity === 'snapshot') return;
+    // 摘要配对记账不受检测暂停(等人确认等)影响,否则复核终态可能等一个早已送达的摘要。
+    this.trackToolResultSummaries(event, data, generation);
+    const control = this.toolLoopControlFor(generation);
+    if (!control?.toolLoopMonitor) return;
     if (event.type === 'tool_result') {
       const pending = control.pendingToolLoop;
       if (!pending || !Array.isArray(data.toolUseIds) || !data.toolUseIds.includes(pending.toolUseId)) return;
@@ -2773,11 +2893,11 @@ export class Session {
     }
     if (typeof data.toolUseId !== 'string' || control.pendingToolLoop) return;
     if (event.type === 'tool_use') {
-      control.toolLoopGuard.onToolUse(data.toolUseId, data.toolName, data.input);
+      control.toolLoopMonitor.onToolUse(data.toolUseId, data.toolName, data.input);
       return;
     }
     if (event.type !== 'tool_result_full' || typeof data.fullText !== 'string') return;
-    const verdict = control.toolLoopGuard.onToolResult(data.toolUseId, data.fullText, data.isError === true);
+    const verdict = control.toolLoopMonitor.onToolResult(data.toolUseId, data.fullText, data.isError === true);
     if (verdict.kind !== 'hard') return;
     // Both translators enqueue full text before its summary. Let listeners
     // consume both projections before terminal cleanup clears their pairing.
@@ -2785,7 +2905,33 @@ export class Session {
     control.pendingToolLoop = { toolUseId: data.toolUseId, verdict };
   }
 
-  private interruptToolLoop(verdict: Extract<ReturnType<ToolLoopGuard['onToolResult']>, { kind: 'hard' }>, generation: number): void {
+  private trackToolResultSummaries(event: AgentEvent, data: Record<string, unknown>, generation: number): void {
+    const control = this.turnControlState;
+    if (!control || control.generation !== generation) return;
+    if (event.type === 'tool_result_full' && typeof data.toolUseId === 'string') {
+      control.awaitingToolResultSummaries.add(data.toolUseId);
+    } else if (event.type === 'tool_result' && Array.isArray(data.toolUseIds)) {
+      for (const id of data.toolUseIds) if (typeof id === 'string') control.awaitingToolResultSummaries.delete(id);
+    }
+  }
+
+  /**
+   * 后台复核判定 stop 时,结果可能晚于 turn 结束、接管或关闭到达。只有同一 turn
+   * 仍满足 observeToolLoop 的全部前提时才中断;否则丢弃。
+   */
+  private interruptReviewedToolLoop(verdict: HardToolLoopVerdict, generation: number): void {
+    const control = this.toolLoopControlFor(generation);
+    if (!control || control.pendingToolLoop) return;
+    // 与同步判定同一顺序约束:还有完整结果未配上摘要时,等最后一个摘要送达再发终态。
+    const awaiting = [...control.awaitingToolResultSummaries].at(-1);
+    if (awaiting !== undefined) {
+      control.pendingToolLoop = { toolUseId: awaiting, verdict };
+      return;
+    }
+    this.interruptToolLoop(verdict, generation);
+  }
+
+  private interruptToolLoop(verdict: HardToolLoopVerdict, generation: number): void {
     this.fanOutEvent({
       type: 'error',
       data: {
@@ -3175,6 +3321,7 @@ export class Session {
     this.unacceptedSendGeneration = null;
     this.currentTurnOrigin = null;
     this.currentTurnAttemptToken = null;
+    this.turnControlState?.toolLoopMonitor?.dispose();
     this.turnControlState = null;
     this.setStatus('closed');
     this.eventListeners.clear();

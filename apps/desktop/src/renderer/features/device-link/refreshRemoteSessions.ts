@@ -16,6 +16,7 @@
  */
 
 import { projectScheduleSidebarIndex } from '../scheduler/lib/projectScheduleSidebarIndex';
+import { parseScheduleBindings } from '../scheduler/lib/scheduleBindingIndex';
 import type { ScheduleSidebarIndexSnapshot } from '../scheduler/lib/scheduleSidebarIndexRuns';
 import type { Session } from '@/lib/ccAgent.types';
 import { createLogger } from '@/lib/logger';
@@ -406,6 +407,7 @@ async function runRefreshRemoteDeviceSessions(
       if (!remoteProjectsStore.isLatestSnapshotEpoch(deviceId, epoch, status)) return 'superseded';
       if (opts.scope === 'schedule' || opts.scope === 'both') {
         if (unresponsiveDevicesStore.has(deviceId)) return 'gave-up';
+        let scheduleIndexError: unknown;
         try {
           const raw = await window.electronAPI.deviceLink.invoke(
             deviceId,
@@ -428,10 +430,27 @@ async function runRefreshRemoteDeviceSessions(
         } catch (error) {
           // Older peers may not expose this existing channel. Keep the last mirror;
           // failure of optional schedule metadata must not hide a valid session list.
-          if (opts.scope === 'schedule' || String(error).includes(ACCESS_REVOKED_MARKER))
-            throw error;
+          if (String(error).includes(ACCESS_REVOKED_MARKER)) throw error;
+          scheduleIndexError = error;
           log.debug('remote schedule index unavailable');
         }
+        // 与现有首拉、重连及 schedule push 共用刷新与代次保护，每设备一份列表。
+        // 不能从 run 索引猜绑定：尚未首次运行、绑定多个调度、解除绑定都需要当前列表。
+        try {
+          if (!remoteProjectsStore.isLatestSnapshotEpoch(deviceId, epoch, status)) return 'superseded';
+          if (unresponsiveDevicesStore.has(deviceId)) return 'gave-up';
+          const raw = await window.electronAPI.deviceLink.invoke(
+            deviceId, 'maker:schedule:list', [null, { sessionBindings: true }],
+          );
+          if (!remoteProjectsStore.isLatestSnapshotEpoch(deviceId, epoch, status)) return 'superseded';
+          remoteProjectsStore.setDeviceScheduleBindings(deviceId, parseScheduleBindings(raw));
+        } catch (error) {
+          if (String(error).includes(ACCESS_REVOKED_MARKER)) throw error;
+          // 辅助信息读取失败保留上次镜像；后续既有 push/重连重查，不影响任务列表。
+          log.debug('remote schedule bindings unavailable');
+        }
+        // 老端的 run 索引不可用也不阻止读取绑定；索引自身仍沿用原有失败处理。
+        if (scheduleIndexError && opts.scope === 'schedule') throw scheduleIndexError;
       }
       return remoteProjectsStore.isLatestSnapshotEpoch(deviceId, epoch, status)
         ? 'ok'

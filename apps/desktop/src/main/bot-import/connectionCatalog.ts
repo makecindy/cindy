@@ -2,16 +2,65 @@ import type { Tool } from '@modelcontextprotocol/sdk/types.js';
 import type { ImportedMcpServer } from './types.js';
 import type { CompanionEnvironment } from './environment.js';
 import { fingerprint } from './files.js';
-import { environmentRedactions, redactEnvironmentData, redactEnvironmentValues } from './process.js';
+import { environmentRedactions, isPublicImportSetting, redactEnvironmentData, redactEnvironmentValues } from './process.js';
+
+// Explicit transport routes only; arbitrary short/lowercase paths can be bearer credentials.
+const PUBLIC_MCP_ROUTES = new Set(['api', 'v1', 'v2', 'mcp', 'sse', 'messages', 'hooks', 'webhooks']);
+const LOCAL_MCP_ENDPOINTS = new Set(['native-mcp', 'touchdesigner-mcp']);
+const CAPABILITY_PATH_PREFIXES = new Set(['hooks', 'webhooks', 'token', 'secret', 'credential', 'key']);
+// Credential containers use the same classification as their scalar forms.
+// PEM/Base64 suffixes describe key material; metadata such as key paths or
+// format names and public keys must not become global content masks.
+const CREDENTIAL_FIELD = /^(?:keys?|.*(?:api|private|signing|encryption|decryption|secret|access)[_-]?keys?(?:[_-]?(?:pem|base64))?|.*(?:tokens?|secrets?|passwords?|passwds?|pass[_-]?phrases?|credentials?)|auth(?:orization)?|access|refresh|cookies?)$/i;
+
+export function isImportedCredentialField(name: string): boolean { return CREDENTIAL_FIELD.test(name); }
+
+function basicCredentialValues(encoded: string): string[] {
+  // Buffer's decoder ignores invalid characters and padding. Accept only a
+  // canonical standard-base64 payload (with or without its complete padding).
+  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(encoded)) return [];
+  const bytes = Buffer.from(encoded, 'base64');
+  const canonical = bytes.toString('base64');
+  if (encoded !== canonical && encoded !== canonical.replace(/=+$/, '')) return [];
+  // Preserve UTF-8 text and legacy single-byte Basic credentials without
+  // producing replacement characters that were never part of the password.
+  const utf8 = bytes.toString('utf8');
+  const userinfo = Buffer.from(utf8, 'utf8').equals(bytes) ? utf8 : bytes.toString('latin1');
+  const separator = userinfo.indexOf(':');
+  if (separator < 0 || userinfo.length === 1) return [];
+  const password = userinfo.slice(separator + 1);
+  return password ? [userinfo, password] : [userinfo];
+}
+
+/** Shared transport-header decomposition for MCP and imported commands. Cookie
+ * names are application-defined, so every nonempty cookie value stays private. */
+export function headerCredentialValues(name: string, value: string): string[] {
+  const header = name.trim(); const payload = value.trim();
+  const authorization = /^(proxy-)?authorization$/i.test(header);
+  if (!payload || !authorization && !isImportedCredentialField(header)) return [];
+  const values = [payload];
+  if (authorization) {
+    const credential = /^\S+\s+(.+)$/.exec(payload)?.[1];
+    if (credential) values.push(credential);
+    if (credential && /^Basic[\t ]/i.test(payload)) values.push(...basicCredentialValues(credential));
+  }
+  if (/^cookie$/i.test(header)) for (const part of payload.split(';')) {
+    const separator = part.indexOf('=');
+    if (separator <= 0 || !part.slice(0, separator).trim()) continue;
+    const raw = part.slice(separator + 1).trim();
+    const unquoted = raw.startsWith('"') && raw.endsWith('"') ? raw.slice(1, -1) : raw;
+    if (!unquoted) continue;
+    values.push(raw, unquoted);
+    try { values.push(decodeURIComponent(unquoted)); } catch { /* Preserve malformed encodings verbatim. */ }
+  }
+  return [...new Set(values)];
+}
 
 /** Include resolved connection-local values without overwriting same-named imports. */
 export function connectionRedactions(server: ImportedMcpServer, environment: Record<string, string>): Record<string, string> {
   const values = [...Object.values(environmentRedactions(environment)), ...Object.values(environmentRedactions(server.env ?? {})), ...Object.values(server.headers ?? {})];
   for (const [name, value] of Object.entries(server.headers ?? {})) {
-    if (/^(proxy-)?authorization$/i.test(name)) {
-      const credential = /^\S+\s+(.+)$/.exec(value)?.[1];
-      if (credential) values.push(credential);
-    }
+    values.push(...headerCredentialValues(name, value));
   }
   if (server.url) {
     values.push(...urlCredentialValues(server.url, true));
@@ -20,14 +69,38 @@ export function connectionRedactions(server: ImportedMcpServer, environment: Rec
 }
 
 /** URL credentials can be echoed in encoded or decoded form by a remote service. */
-function urlCredentialValues(raw: string, includePath = false): string[] {
+export function urlCredentialValues(raw: string, includePath = false): string[] {
   const values = [raw];
   try {
     const url = new URL(raw);
-    values.push(url.username, url.password, ...url.searchParams.values());
-    // URLSearchParams already decodes once; retain the wire representation too.
-    for (const pair of url.search.slice(1).split('&')) if (pair.includes('=')) values.push(pair.slice(pair.indexOf('=') + 1));
-    if (includePath) values.push(url.pathname, ...url.pathname.split('/').filter(Boolean));
+    values.push(url.username, url.password);
+    // Apply the same setting classification to decoded and wire query values.
+    for (const [name, value] of url.searchParams) if (!isPublicImportSetting(name, value)) values.push(value);
+    for (const pair of url.search.slice(1).split('&')) {
+      if (!pair.includes('=')) continue;
+      const params = new URLSearchParams(pair);
+      const [name, value] = [...params.entries()][0] ?? [];
+      if (name && value && !isPublicImportSetting(name, value)) values.push(pair.slice(pair.indexOf('=') + 1));
+    }
+    // OAuth-style fragments carry named credentials, but ordinary document
+    // anchors and fragment metadata must not become global source-text masks.
+    for (const pair of url.hash.slice(1).split('&')) {
+      if (!pair.includes('=')) continue;
+      const [name, value] = [...new URLSearchParams(pair).entries()][0] ?? [];
+      if (name && value && CREDENTIAL_FIELD.test(name)) values.push(value, pair.slice(pair.indexOf('=') + 1));
+    }
+    if (includePath) {
+      const parts = url.pathname.split('/').filter(Boolean);
+      const local = ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname);
+      let capability = false;
+      for (const part of parts) {
+        const publicRoute = PUBLIC_MCP_ROUTES.has(part)
+          || local && parts.length === 1 && LOCAL_MCP_ENDPOINTS.has(part);
+        if (capability || !publicRoute) values.push(part);
+        // A route-looking value after a credential introducer is still private.
+        if (!publicRoute || CAPABILITY_PATH_PREFIXES.has(part.toLowerCase())) capability = true;
+      }
+    }
   } catch { /* Invalid URLs fail at execution; never publish the literal in errors. */ }
   return [...new Set(values.filter(value => value && value !== '/').flatMap(value => {
     try { return [value, decodeURIComponent(value)]; } catch { return [value]; }
@@ -40,14 +113,27 @@ export function importedContentRedactions(environment: Pick<CompanionEnvironment
     ...Object.values(environment.contentRedactions ?? {}),
     ...environment.mcp.flatMap(server => Object.values(connectionRedactions(server, environment.env))),
     ...monitorUrls.flatMap(url => urlCredentialValues(url, true))];
-  const collect = (value: unknown): void => {
+  const collect = (value: unknown, credentialValue = false, commandEnv = false): void => {
+    if (typeof value === 'string') {
+      if (credentialValue) values.push(value);
+      // Structured command env may put capability URLs under ordinary names
+      // such as endpoint. Ordinary provider config/base URLs are not capability
+      // grants; their public path names must not become global content masks.
+      if (commandEnv && /^[a-z][a-z0-9+.-]*:\/\//i.test(value)) values.push(...urlCredentialValues(value, true));
+      return;
+    }
     if (!value || typeof value !== 'object') return;
     for (const [key, child] of Object.entries(value)) {
-      if (typeof child === 'string' && /^(?:key|api[_-]?key|.*token|.*secret|.*password|authorization|access|refresh)$/i.test(key)) values.push(child);
-      else collect(child);
+      // OAuth token records include public protocol metadata alongside secrets.
+      // Do not turn a scheme name into a global mask for imported source files.
+      // Unknown values and non-scalar descendants retain the private context.
+      if (/^token[_-]?type$/i.test(key) && typeof child === 'string' && /^(?:Bearer|DPoP)$/i.test(child)) continue;
+      // Credential-bearing containers remain private through array indices and
+      // nested objects; unrelated sibling fields keep their own classification.
+      collect(child, credentialValue || CREDENTIAL_FIELD.test(key), commandEnv);
     }
   };
-  for (const credential of environment.credentials) collect(credential.value);
+  for (const credential of environment.credentials) collect(credential.value, false, credential.format === 'command-env');
   const named = environmentRedactions(environment.env);
   const namedValues = new Set(Object.values(named));
   let index = 0;

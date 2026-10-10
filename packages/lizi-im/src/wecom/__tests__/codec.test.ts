@@ -46,6 +46,15 @@ describe("WeCom markdown chunking", () => {
     expect(chunkWecomMarkdown(" \r\n ")).toEqual(["✅ (本轮无文本输出)"]);
   });
 
+  it("preserves code fences and line boundaries in long Markdown replies", () => {
+    const text = "```ts\n" + "const 中文 = '🙂';\n".repeat(1500) + "```";
+    const chunks = chunkWecomMarkdown(text);
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.every((chunk) => Buffer.byteLength(chunk, "utf8") <= 18 * 1024)).toBe(true);
+    expect(chunks.every((chunk) => chunk.startsWith("```ts\n") && chunk.endsWith("```"))).toBe(true);
+    expect(chunks.join("").match(/const 中文 = '🙂';/g)).toHaveLength(1500);
+  });
+
   it("escapes plain text before sending it through markdown", () => {
     expect(escapeWecomMarkdown("**not bold** [link](x)")).toBe(
       "\\*\\*not bold\\*\\* \\[link\\]\\(x\\)",

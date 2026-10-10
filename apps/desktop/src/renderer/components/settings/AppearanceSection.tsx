@@ -38,6 +38,7 @@ import { Slider } from '@/components/ui/slider';
 import { extractIpcError } from '@/utils/ipcError';
 import { FontFamilyPicker, type FontPreset } from './FontFamilyPicker';
 import { LayoutResetControl } from './LayoutResetControl';
+import { WallpaperSection } from './WallpaperSection';
 
 const log = createLogger('settings/AppearanceSection');
 
@@ -621,6 +622,8 @@ export function AppearanceSection() {
           </p>
         ) : null}
       </div>
+
+      <WallpaperSection />
 
       <div id="settings-search-settings-appearance-font-uiFamily-label"
         className={cn(

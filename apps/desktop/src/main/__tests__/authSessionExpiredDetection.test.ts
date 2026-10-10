@@ -40,7 +40,7 @@ describe('desktop auth session-expiry detection', () => {
     expect(body).toContain('treating as transient');
     // 瞬时分支必须重排 refresh 重试:正常 timer 已触发过,不重排则密钥链/IO 抖动
     // 后有效会话在 access token 到期前没有任何后续 refresh(半死)。
-    expect(body).toContain('scheduleRefreshRetryAfterTransientFailure();');
+    expect(body).toContain('scheduleRefreshRetryAfterTransientFailure(refreshEpoch);');
     expect(body.indexOf('isPersistedSecretAbsent(AUTH_SESSION_KEY)')).toBeLessThan(
       body.indexOf("await expireRuntimeAuth(previousUserId, 'credential-lost', {"),
     );
@@ -188,7 +188,10 @@ describe('desktop auth session-expiry detection', () => {
     const end = ghostSource.indexOf('\n}\n', start);
     const body = ghostSource.slice(start, end);
 
-    expect(body).toContain('await removeGhostSkillLinksForRoots(listGhostOwnerProjectionRoots())');
+    expect(body).toContain('const roots = listGhostOwnerProjectionRoots();');
+    expect(body).toContain('await withSharedSkillRootsLock(() =>');
+    expect(body).toContain('removeGhostSkillLinksForRoots(roots, undefined,');
+    expect(body).toContain("roots.map((root) => path.join(ghostSkillPluginRoot(root), 'skills'))");
     expect(body).toContain('throw new Error(`ghost owner skill cleanup incomplete');
     expect(body).not.toContain('AuthBoundaryQuarantine');
 

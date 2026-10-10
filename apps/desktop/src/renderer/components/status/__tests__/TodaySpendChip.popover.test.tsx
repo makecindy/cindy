@@ -962,6 +962,7 @@ describe('TodaySpendChip Claude subscription popover', () => {
           ({
             id,
             auth: { method: 'oauth', native: 'codex' },
+            openAiAccount: { source: 'oauth', identity: `${id}@example.com` },
           }) as ProviderView,
       );
       mocks.accountSnapshots = {
@@ -981,6 +982,8 @@ describe('TodaySpendChip Claude subscription popover', () => {
       );
       act(() => screen.getByRole('button', { name: '打开 Codex 用量页面' }).focus());
       expect(within(screen.getByTestId('quota-hover-card')).getByText('Pro')).toBeTruthy();
+      expect(screen.getByText('account-a@example.com')).toBeTruthy();
+      expect(screen.queryByText('account-b@example.com')).toBeNull();
 
       view.rerender(
         <TodaySpendChip
@@ -994,6 +997,11 @@ describe('TodaySpendChip Claude subscription popover', () => {
         '39%',
       );
       expect(screen.queryByTestId('quota-hover-card')).toBeNull();
+
+      fireEvent.mouseEnter(screen.getByRole('button', { name: '打开 Codex 用量页面' }));
+      act(() => vi.advanceTimersByTime(300));
+      expect(screen.getByText('account-b@example.com')).toBeTruthy();
+      expect(screen.queryByText('account-a@example.com')).toBeNull();
 
       view.rerender(
         <TodaySpendChip
@@ -1024,6 +1032,31 @@ describe('TodaySpendChip Claude subscription popover', () => {
       );
       expect(screen.queryByRole('button', { name: '打开 Codex 用量页面' })).toBeNull();
     }
+  });
+
+  it.each([
+    ['codex', 'openai', 'gpt-6-astra', 'openAiAccount'],
+    ['cc', 'anthropic', 'claude-opus-5', 'subscriptionAccount'],
+    ['pi', 'xai', 'xai/grok-4.6', 'subscriptionAccount'],
+  ] as const)('默认 %s 订阅显示对应账号身份', (vendorKey, id, modelId, accountField) => {
+    mocks.codexAuthInjection = 'oauth-bearer';
+    mocks.providers = [
+      {
+        id,
+        name: id,
+        source: 'builtin',
+        connected: true,
+        agents: [],
+        auth: { method: 'oauth' },
+        routing: {},
+        models: {},
+        [accountField]: { source: 'oauth', identity: `${id}@example.com` },
+      },
+    ];
+    render(<TodaySpendChip vendorKey={vendorKey} modelId={modelId} />);
+    fireEvent.mouseEnter(screen.getByRole('button'));
+    act(() => vi.advanceTimersByTime(300));
+    expect(screen.getByText(`${id}@example.com`)).toBeTruthy();
   });
 
   it('ChatGPT 动态窗口和套餐渲染为与 Claude 相同的进度条', () => {

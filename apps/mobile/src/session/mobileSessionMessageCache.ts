@@ -88,9 +88,10 @@ export function captureSessionMessageCacheWriteAuthority(
 export async function cacheSessionMessagesIfCurrent(
   authority: SessionMessageCacheWriteAuthority | null,
   messages: readonly RemoteMessage[],
-): Promise<void> {
-  if (!isSessionMessageCacheWriteAuthorityCurrent(authority)) return;
+): Promise<boolean> {
+  if (!isSessionMessageCacheWriteAuthorityCurrent(authority)) return false;
   const normalized = normalizeCachedMessages(messages);
+  let written = false;
   await enqueueCacheOperation(authority.key, async () => {
     if (!isSessionMessageCacheWriteAuthorityCurrent(authority)) return;
     if (normalized.length === 0) {
@@ -103,7 +104,9 @@ export async function cacheSessionMessagesIfCurrent(
       messages: normalized,
     };
     await messageCacheStorage.setItem(authority.key, JSON.stringify(payload));
+    written = true;
   });
+  return written && isSessionMessageCacheWriteAuthorityCurrent(authority);
 }
 
 /** 显式替换/删除会推进 key epoch，使已排队但尚未提交的旧 render 快照失效。 */
@@ -111,12 +114,12 @@ export async function replaceCachedSessionMessages(
   deviceId: string,
   sessionId: string,
   messages: readonly RemoteMessage[],
-): Promise<void> {
+): Promise<boolean> {
   const key = safeStorageKey(deviceId, sessionId);
-  if (!key) return;
+  if (!key) return false;
   keyWriteEpochs.set(key, (keyWriteEpochs.get(key) ?? 0) + 1);
   const authority = captureSessionMessageCacheWriteAuthority(deviceId, sessionId);
-  await cacheSessionMessagesIfCurrent(authority, messages);
+  return cacheSessionMessagesIfCurrent(authority, messages);
 }
 
 // 读取某 (host, session) 的缓存消息;无缓存 / 解析失败一律返回空数组(乐观 hydrate 不应抛错)。
@@ -151,6 +154,22 @@ export async function cacheSessionMessages(
   await cacheSessionMessagesIfCurrent(authority, messages);
 }
 
+/** Merge a durable list push with the existing disk window, using its write/delete queue. */
+export async function cacheSessionListMessage(deviceId: string, sessionId: string, message: RemoteMessage): Promise<void> {
+  const authority = captureSessionMessageCacheWriteAuthority(deviceId, sessionId);
+  if (!authority) return;
+  await enqueueCacheOperation(authority.key, async () => {
+    if (!isSessionMessageCacheWriteAuthorityCurrent(authority)) return;
+    const raw = await messageCacheStorage.getItem(authority.key);
+    const parsed: unknown = raw ? JSON.parse(raw) : null;
+    const previous = normalizeCachedMessages(isRecord(parsed) && Array.isArray(parsed.messages) ? parsed.messages : []);
+    const messages = normalizeCachedMessages([...previous.filter(row =>
+      row.id !== message.id && (!message.clientId || row.clientId !== message.clientId)), message]);
+    if (!isSessionMessageCacheWriteAuthorityCurrent(authority)) return;
+    await messageCacheStorage.setItem(authority.key, JSON.stringify({ version: 1, updatedAt: Date.now(), messages }));
+  });
+}
+
 // 登出清空:遍历所有本前缀的 key 一次性删除(AsyncStorage 支持枚举,无需手动维护 host 索引)。
 export function clearCachedSessionMessages(): Promise<void> {
   if (activeGlobalClear) return activeGlobalClear;
@@ -169,6 +188,22 @@ export function clearCachedSessionMessages(): Promise<void> {
     activeGlobalClear = null;
   });
   return activeGlobalClear;
+}
+
+// 文件缓存之前的版本把消息缓存写在 AsyncStorage,按需迁移只覆盖打开过的会话;未打开会话的
+// 旧副本会一直占着安卓 6 MiB 的库,挤掉发件箱 / 草稿写入(#5403)。旧副本里的 mobile-system-*
+// 卡片没有服务端副本,不能直接删,所以逐条迁成文件(成功后才删旧值;已有文件时文件为准,只删旧值)。
+// 迁移只搬运已有内容,不依赖登录身份;与同 key 写删共用队列,登出全清会让排队中的迁移作废。
+export async function migrateLegacySessionMessageCache(): Promise<void> {
+  for (const key of await messageCacheStorage.legacyKeys(STORAGE_KEY_PREFIX)) {
+    if (globalClearInProgress) return;
+    const globalEpoch = globalWriteEpoch;
+    const keyEpoch = keyWriteEpochs.get(key) ?? 0;
+    await enqueueCacheOperation(key, async () => {
+      if (globalEpoch !== globalWriteEpoch || keyEpoch !== (keyWriteEpochs.get(key) ?? 0)) return;
+      await messageCacheStorage.migrateLegacy(key);
+    });
+  }
 }
 
 // 排序(升序 createdAt)+ 按 messageKey 去重(对账:同 id 保留最后一次)+ 取最新 N 条。

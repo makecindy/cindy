@@ -108,6 +108,7 @@ vi.mock('../../resource-usage-window/window', () => ({
 }));
 import { RemoteDesktopViewerWindows } from '../windows';
 import { REMOTE_VIEWER } from '../../../shared/remoteDesktopViewer';
+import { remoteInvoke } from '../../device-link/index';
 let manager: RemoteDesktopViewerWindows;
 afterEach(() => {
   manager?.reset();
@@ -119,6 +120,40 @@ afterEach(() => {
 const event = (win: any) => ({ sender: win.webContents, senderFrame: win.webContents.mainFrame });
 const call = (channel: string, win: any, ...args: unknown[]) =>
   fixture.handlers.get(channel)!(event(win), ...args);
+it.each(['resolve', 'reject'])(
+  'closes immediately while stop is pending and ignores its late %s',
+  async (outcome) => {
+    const sender: any = { id: 100 };
+    manager = new RemoteDesktopViewerWindows((value) => value === sender);
+    manager.register();
+    manager.open(sender, { deviceId: 'a', name: 'A' });
+    const win = fixture.windows[0];
+    call(REMOTE_VIEWER.READY, win);
+    call(REMOTE_VIEWER.PRESENTED, win);
+    const { generation } = call(REMOTE_VIEWER.STATE, win);
+    await call(REMOTE_VIEWER.REQUEST, win, generation, { op: 'start', displayId: 'screen' });
+    let settle!: () => void;
+    vi.mocked(remoteInvoke).mockImplementationOnce(
+      () =>
+        new Promise((resolve, reject) => {
+          settle = () =>
+            outcome === 'resolve'
+              ? resolve({ ok: true, result: {} })
+              : reject(new Error('INVOKE_TIMEOUT'));
+        }),
+    );
+    call(REMOTE_VIEWER.CLOSE, win, generation);
+    expect(win.isVisible()).toBe(false);
+    expect(call(REMOTE_VIEWER.STATE, win).active).toBe(false);
+    manager.open(sender, { deviceId: 'a', name: 'A' });
+    expect(win.isVisible()).toBe(true);
+    settle();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(win.isVisible()).toBe(true);
+    expect(call(REMOTE_VIEWER.STATE, win).active).toBe(true);
+  },
+);
 it('routes native close and the close shortcut to confirmation without ending the lease', async () => {
   const sender: any = { id: 100 };
   manager = new RemoteDesktopViewerWindows((value) => value === sender);
@@ -154,6 +189,65 @@ it('routes native close and the close shortcut to confirmation without ending th
   await call(REMOTE_VIEWER.CLOSE, win, state.generation);
   expect(call(REMOTE_VIEWER.STATE, win).active).toBe(true);
   expect(win.isVisible()).toBe(true);
+});
+it('lets the focused remote keyboard own Cmd/Ctrl+W until focus is released', () => {
+  const sender: any = { id: 100 };
+  manager = new RemoteDesktopViewerWindows((value) => value === sender);
+  manager.register();
+  manager.open(sender, { deviceId: 'a', name: 'A' });
+  const win = fixture.windows[0];
+  call(REMOTE_VIEWER.READY, win);
+  call(REMOTE_VIEWER.PRESENTED, win);
+  const { generation } = call(REMOTE_VIEWER.STATE, win);
+  const press = () => {
+    const preventDefault = vi.fn();
+    win.webContents.emit(
+      'before-input-event',
+      { preventDefault },
+      { type: 'keyDown', code: 'KeyW', meta: true },
+    );
+    return preventDefault;
+  };
+  call(REMOTE_VIEWER.INPUT_FOCUS, win, generation, true);
+  expect(win.webContents.setIgnoreMenuShortcuts).toHaveBeenLastCalledWith(true);
+  expect(press()).not.toHaveBeenCalled();
+  expect(win.webContents.send).not.toHaveBeenCalledWith(REMOTE_VIEWER.CLOSE_REQUESTED, generation);
+  call(REMOTE_VIEWER.INPUT_FOCUS, win, generation, false);
+  expect(win.webContents.setIgnoreMenuShortcuts).toHaveBeenLastCalledWith(false);
+  expect(press()).toHaveBeenCalledOnce();
+  expect(win.webContents.send).toHaveBeenCalledWith(REMOTE_VIEWER.CLOSE_REQUESTED, generation);
+  call(REMOTE_VIEWER.INPUT_FOCUS, win, generation, true);
+  win.emit('blur');
+  expect(win.webContents.setIgnoreMenuShortcuts).toHaveBeenLastCalledWith(false);
+  expect(press()).toHaveBeenCalledOnce();
+});
+it.each([
+  [
+    'a renderer crash',
+    (win: any) => win.webContents.emit('render-process-gone', {}, { reason: 'crashed' }),
+  ],
+  [
+    'a main-frame navigation',
+    (win: any) => win.webContents.emit('did-start-navigation', {}, 'about:blank', false, true),
+  ],
+])('restores the local close shortcut after %s retires a captured viewer', (_name, retire) => {
+  const sender: any = { id: 100 };
+  manager = new RemoteDesktopViewerWindows((value) => value === sender);
+  manager.register();
+  manager.open(sender, { deviceId: 'a', name: 'A' });
+  const win = fixture.windows[0];
+  call(REMOTE_VIEWER.READY, win);
+  call(REMOTE_VIEWER.PRESENTED, win);
+  call(REMOTE_VIEWER.INPUT_FOCUS, win, call(REMOTE_VIEWER.STATE, win).generation, true);
+  retire(win);
+  expect(win.webContents.setIgnoreMenuShortcuts).toHaveBeenLastCalledWith(false);
+  const preventDefault = vi.fn();
+  win.webContents.emit(
+    'before-input-event',
+    { preventDefault },
+    { type: 'keyDown', code: 'KeyW', meta: true },
+  );
+  expect(preventDefault).toHaveBeenCalledOnce();
 });
 it('prewarms without network or focus, reuses the target window and cleans only its lease', async () => {
   const sender: any = { id: 100 };
@@ -250,4 +344,40 @@ it('waits for fullscreen exit and rejects delayed resize after a session replace
   win.setBounds.mockClear();
   win.emit('leave-full-screen');
   expect(win.setBounds).not.toHaveBeenCalled();
+});
+
+it('keeps the session through native hide/minimize, forwards visibility, and ends only on close', async () => {
+  const sender: any = { id: 100 };
+  manager = new RemoteDesktopViewerWindows((value) => value === sender);
+  manager.register();
+  manager.open(sender, { deviceId: 'a', name: 'A' });
+  const win = fixture.windows[0];
+  call(REMOTE_VIEWER.READY, win);
+  call(REMOTE_VIEWER.PRESENTED, win);
+  const state = call(REMOTE_VIEWER.STATE, win);
+  await call(REMOTE_VIEWER.REQUEST, win, state.generation, { op: 'start', displayId: 'screen' });
+  // macOS reports Space switches and native fullscreen transitions as hide/show.
+  win.webContents.send.mockClear();
+  for (const name of ['hide', 'show', 'minimize', 'restore']) win.emit(name);
+  await Promise.resolve();
+  // The page pauses the host's video instead; the lease is untouched.
+  expect(
+    win.webContents.send.mock.calls.filter(
+      ([channel]: [string]) => channel === REMOTE_VIEWER.HIDDEN,
+    ),
+  ).toEqual([
+    [REMOTE_VIEWER.HIDDEN, true],
+    [REMOTE_VIEWER.HIDDEN, false],
+    [REMOTE_VIEWER.HIDDEN, true],
+    [REMOTE_VIEWER.HIDDEN, false],
+  ]);
+  expect(call(REMOTE_VIEWER.STATE, win)).toMatchObject({
+    active: true,
+    generation: state.generation,
+  });
+  expect(fixture.calls.filter((c) => c[2][0].op === 'stop')).toHaveLength(0);
+  await call(REMOTE_VIEWER.CLOSE, win, state.generation);
+  await Promise.resolve();
+  expect(call(REMOTE_VIEWER.STATE, win).active).toBe(false);
+  expect(fixture.calls.filter((c) => c[2][0].op === 'stop')).toHaveLength(1);
 });

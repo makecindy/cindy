@@ -1,4 +1,8 @@
+import { scrollRangeIntoView } from '@/lib/scrollRangeIntoView';
+import { animateFocusScroll } from './animateFocusScroll';
 import { simplifyBotRenderItems } from '@/features/bots/botConversationPresentation';
+import { MessageViewport, type MessageViewportApi } from './MessageViewport';
+import { PAGE_TEXT_NAVIGATION_EVENT } from '@/lib/pageTextAccess';
 export { simplifyBotRenderItems } from '@/features/bots/botConversationPresentation';
 import { placeBotTaskCardsAfterIntroduction } from '@cindy/maker-shared/botCollaboration';
 import { describeToolUse, sourcePathCandidatesFromDescriptor } from '@cindy/maker-shared/tool-use-descriptor';
@@ -46,7 +50,7 @@ import {
 } from '@/lib/makerChatStore';
 import { isCindyMakeCompletionMessage, isCindyMakePreparationMessage } from '@/lib/cindyMakeComposer';
 import { getDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
-import { createPortal } from 'react-dom';
+import { createPortal, flushSync } from 'react-dom';
 import { GitFork } from 'lucide-react';
 import { SelectionQuoteButton } from './SelectionQuoteButton';
 import {
@@ -98,6 +102,12 @@ import { projectRemoteUsers } from '@/lib/remoteUserHandoff';
 import { resolveToolFilePath, type KnownLocalFileRef } from '@/lib/localPathResolver';
 import type { GeneratedFileRef } from '@/lib/generatedFiles';
 import { collectCachedGeneratedFiles } from './generatedFilesProjection';
+import {
+  createMessageMetadataProjection,
+  createRenderItemMetadataProjection,
+  createStreamingMessageProjection,
+  createStreamingWorkGroupProjection,
+} from './streamingMessageProjection';
 import { useTurnChangeSets } from './useTurnChangeSets';
 import {
   canCompensateMessageHeight,
@@ -125,7 +135,8 @@ import { isShareableMessage, useShareSelectionActive } from './shareSelectionSto
 // 80–300ms 卡顿引入临时探针;render-window 重构到 item 轴后(本次)转正成常驻
 // 基线日志 — 任何动 MessageStream 渲染路径的改动可直接对比 `stream:first-paint
 // elapsed=` 字段做回归判定。日志级 debug:DevTools 默认级别下不显示(归 Verbose),
-// dev 的文件日志(main 侧 dev 默认 trace)仍落盘可查;生产(main 默认 info)不落。无 PII。
+// dev 的文件日志(main 侧 dev 默认 trace)仍落盘可查。仅 DEV 打点:生产构建里
+// logToMain 照样走 IPC 再被 main 按级别丢弃,每次切换白付两次 IPC。无 PII。
 const perfLog = createLogger('perf/session-switch');
 
 // jump-down chip 静止隐藏时长 — 用户向下滚动停止后多久淡出。2s 是用户要求,
@@ -297,6 +308,7 @@ function hasNestedScrollableAncestorThatCanScrollDown(
 
 import { UserMessage } from './UserMessage';
 import { AssistantMessage } from './AssistantMessage';
+import { MessageSourceLabels } from './MessageSourceLabels';
 import { AskUserQuestionBubble } from './AskUserQuestionBubble';
 import { ErrorMessageCard } from './ErrorMessageCard';
 import { APP_EXIT_INTERRUPTED_REASON } from '../../../shared/interruptedTurn';
@@ -333,6 +345,7 @@ import {
 import { ChatImageView } from './ChatImageView';
 import { ImageGalleryContext, type GalleryImage } from './ImageGalleryContext';
 import { GhostFulfillmentContext } from './GhostSummonCard';
+import { AgentOnOtherDeviceContext } from './AgentOnOtherDeviceContext';
 import { ChatSessionFileProvider, useChatSessionFileValue } from './ChatSessionFileContext';
 import { toRemoteMediaOrigin } from '@/lib/sessionFileOrigin';
 import { rewriteToRemoteMediaOrigin, type RemoteMediaOrigin } from '@/../shared/remoteMediaUrl';
@@ -348,9 +361,9 @@ import { MessageNavRail } from './MessageNavRail';
 import {
   NAV_RAIL_BACKFILL_MAX_ROUNDS,
   NAV_RAIL_JUMP_TOP_OFFSET_PX,
-  deriveNavRailEntries,
   shouldBackfillForNavRail,
 } from './messageNavRailModel';
+import { createMessageNavigationProjection } from './messageNavigationProjection';
 import { resolveUserDisplayText } from './userMessageDisplayText';
 import { detectScrollAnchoringApplied } from './scrollAnchoringDetect';
 import { resolveMessageStreamIndicatorBottomOffset } from './messageStreamIndicatorPosition';
@@ -413,6 +426,8 @@ interface MessageStreamProps {
    *  so message-level controls can gate features unsupported on remote
    *  (e.g. rewind on cc-remote daemon sessions). */
   remoteHostId?: string | null;
+  /** 任务的 Agent 在另一台电脑运行(消息级分叉暂不可用)。 */
+  agentOnOtherDevice?: boolean;
   /** Task origin. Personal WeChat must not be told to switch to Full access. */
   sessionSource?: string | null;
   /** Session working directory; passed down so MarkdownRenderer / UserMessage
@@ -435,6 +450,7 @@ interface MessageStreamProps {
   simplifiedBotConversation?: boolean;
   /** Bot read position captured before entry marks the conversation read. */
   botUnreadBoundaryAt?: number | null;
+  onBotReadThrough?: (at: number) => void;
   messages: ChatMessage[];
   /** This task's preparation card is shown in the composer, including after history reload. */
   cindyMakeSessionId?: string;
@@ -2317,6 +2333,9 @@ export function buildCachedRenderItems(
     opts?.workingDir,
     opts?.botSessionId,
     opts?.subagentRunStatuses,
+    opts?.historyArtifacts,
+    opts?.cindyMakeSessionId,
+    opts?.cindyMakeCompletionInComposer,
   ];
   const index = recentRenderProjections.findIndex((entry) =>
     entry.dependencies.every((value, i) => Object.is(value, dependencies[i])),
@@ -2586,16 +2605,90 @@ function renderWorkGroupChild(
 // Component
 // ---------------------------------------------------------------------------
 
+type WorkGroupRenderContext = Parameters<typeof renderWorkGroupChild>[1];
+
+/** Stable completed groups skip child mapping, summary projection and React work. */
+export const WorkGroupRenderItemView = memo(function WorkGroupRenderItemView({
+  item,
+  context,
+  compact,
+}: {
+  item: Extract<RenderItem, { type: 'work_group' }>;
+  context: WorkGroupRenderContext;
+  compact: boolean;
+}) {
+  // 完成态外层时间线可包含内层 work_group。递归只负责形状映射,
+  // 具体折叠 / 直接详情逻辑全部复用 WorkGroupBlock。
+  const toWorkGroupChild = (child: WorkGroupChildItem): WorkGroupChild => {
+    if (child.type === 'work_group') {
+      return {
+        kind: 'group',
+        key: child.key,
+        blockId: `work:${child.key.slice('work-'.length)}`,
+        durationMs: child.durationMs,
+        isStreaming: child.isStreaming,
+        startedAtMs: child.startedAtMs,
+        deferred: child.deferred,
+        childItems: child.children.map(toWorkGroupChild),
+      };
+    }
+    if (child.type === 'tool_segment') {
+      return {
+        kind: 'tools',
+        key: child.key,
+        toolCalls: child.toolCalls,
+        resultMap: child.resultMap,
+        settledIds: child.settledIds,
+      };
+    }
+    if (child.type === 'message' && child.message.role === 'thinking') {
+      return { kind: 'thinking', key: child.key, message: child.message };
+    }
+    return {
+      kind: 'rendered',
+      key: child.key,
+      renderNode: () => renderWorkGroupChild(child, context),
+    };
+  };
+  const childItems = item.children.map(toWorkGroupChild);
+  return (
+    // data-message-client-ids:组折叠时子卡片/聚合块整体 unmount,
+    // 精确锚点消失 —— 后台任务面板「点行跳聊天」经 ~= 回退查询
+    // 落到组容器(与 AgentActionsBlock 的容器锚点同一约定)。
+    // 视口子锚点不读这个聚合列表，只认已渲染的 data-message-client-id。
+    <div
+      key={item.key}
+      data-render-item-key={item.key}
+      className="scroll-mt-20"
+      data-message-client-ids={collectWorkGroupClientIds(item.children).join(' ')}
+    >
+      <WorkGroupBlock
+        // 单层前缀约定 `work:<clientId>` — item.key 形如 `work-<cid>`,
+        // 去掉 `work-` 后拼 `<role>:<id>`,与 agent: / thinking: 同构。
+        blockId={`work:${item.key.slice('work-'.length)}`}
+        durationMs={item.durationMs}
+        isStreaming={item.isStreaming}
+        startedAtMs={item.startedAtMs}
+        childItems={childItems}
+        compact={compact}
+        deferred={item.deferred}
+      />
+    </div>
+  );
+});
+
 export function MessageStream({
   sessionId,
   sessionTitle,
   agentKind,
   remoteHostId,
+  agentOnOtherDevice = false,
   sessionSource,
   workingDir,
   assistantAvatar,
   simplifiedBotConversation = false,
   botUnreadBoundaryAt = null,
+  onBotReadThrough,
   messages,
   cindyMakeSessionId,
   cindyMakeCompletionInComposer,
@@ -2797,9 +2890,13 @@ export function MessageStream({
     keysAtJump: readonly string[];
     messageClientIdsAtJump: readonly string[];
     scrollGeneration: number;
+    settling?: boolean;
+    cancelAnimation?: () => void;
   } | null>(null);
   useEffect(
     () => () => {
+      focusJumpRef.current?.cancelAnimation?.();
+      focusJumpRef.current = null;
       if (focusScrollTimerRef.current !== null) {
         window.clearTimeout(focusScrollTimerRef.current);
       }
@@ -2837,10 +2934,23 @@ export function MessageStream({
   // findLastUserMessageClientId 注释)。按子代理归属反查的派生(buildSubagentModelMap)
   // 仍吃原始 messages —— 它要的正是这些被隐藏的行。
   const visibleMessages = useMemo(() => selectVisibleMessages(displayMessages), [displayMessages]);
+  // Text keeps flowing through visibleMessages. Only metadata consumers reuse this snapshot.
+  const metadataProjection = useMemo(createMessageMetadataProjection, [sessionId]);
+  const metadataMessages = metadataProjection(displayMessages);
+  const rawMetadataProjection = useMemo(createMessageMetadataProjection, [sessionId]);
+  const rawMetadataMessages = rawMetadataProjection(messages);
+  const visibleMetadataMessages = useMemo(
+    () => selectVisibleMessages(metadataMessages),
+    [metadataMessages],
+  );
+  const streamProjection = useMemo(createStreamingMessageProjection, [sessionId]);
+  const workGroupProjection = useMemo(createStreamingWorkGroupProjection, [sessionId]);
+  const renderMetadataProjection = useMemo(createRenderItemMetadataProjection, [sessionId]);
+  const visibleMetadataProjection = useMemo(createRenderItemMetadataProjection, [sessionId]);
+  const navigationProjection = useMemo(createMessageNavigationProjection, [sessionId]);
 
-  // 全量 build:折叠 / 丢弃 / 反向膨胀的所有规则一次性吸收 — 窗口看到的就是
-  // 用户看到的。流式中每 token messages 引用变 → 这里跑一次 O(n) 单线性扫描,
-  // 实测 N=1000 < 2ms (Windows),如果未来发现瓶颈再走增量化(out of scope)。
+  // A plain text-only stream update replaces its row in the previous projection.
+  // Every structural/metadata change still runs the complete history rules below.
   const generatedFilesItemCacheRef = useRef(
     new Map<string, Extract<RenderItem, { type: 'generated_files' }>>(),
   );
@@ -2850,16 +2960,39 @@ export function MessageStream({
   // parsed image targets without retaining state beyond the session mount.
   const markdownImageTargetCacheRef = useRef<MarkdownImageTargetCache>(new Map());
   const { items: ungroupedRenderItems, singleResultMap } = useMemo(() => {
-    const built = buildCachedRenderItems(displayMessages, taskUpdates, ghostCardSnapshot, {
-      historyWindowIncomplete: !historyLoaded || Boolean(hasMoreMessages) || historyWindowHasIsland,
-      turnChangeSets,
-      workingDir,
-      botSessionId: simplifiedBotConversation ? sessionId : undefined,
-      markdownImageTargetCache: markdownImageTargetCacheRef.current,
-      cindyMakeSessionId,
-      cindyMakeCompletionInComposer,
-      subagentRunStatuses,
-    });
+    const built = streamProjection(
+      displayMessages,
+      [
+        getDataOwnerGeneration(),
+        taskUpdates,
+        ghostCardSnapshot,
+        ghostCardSnapshot.version,
+        historyLoaded,
+        hasMoreMessages,
+        historyWindowHasIsland,
+        turnChangeSets,
+        workingDir,
+        simplifiedBotConversation,
+        sessionId,
+        cindyMakeSessionId,
+        cindyMakeCompletionInComposer,
+        subagentRunStatuses,
+        historyView,
+      ],
+      () =>
+        buildCachedRenderItems(displayMessages, taskUpdates, ghostCardSnapshot, {
+          historyWindowIncomplete:
+            !historyLoaded || Boolean(hasMoreMessages) || historyWindowHasIsland,
+          turnChangeSets,
+          workingDir,
+          botSessionId: simplifiedBotConversation ? sessionId : undefined,
+          markdownImageTargetCache: markdownImageTargetCacheRef.current,
+          cindyMakeSessionId,
+          cindyMakeCompletionInComposer,
+          subagentRunStatuses,
+        }),
+      !simplifiedBotConversation && !historyView,
+    );
     if (historyView && historySnapshot?.ready) {
       const results = new Map(built.singleResultMap);
       const items = renderHistoryView<HistoryChatMessage, RenderItem>({
@@ -2869,6 +3002,7 @@ export function MessageStream({
         streaming: isSessionStreaming,
         isLive: (row) => row.isStreaming === true,
         pendingHandoff: handoff?.pending,
+        isLocalMessage: (row) => row.isLocalSystemCard === true,
         isLocalUser: (row) =>
           row.role === 'user' &&
           (row.isPendingPersist === true ||
@@ -2879,6 +3013,7 @@ export function MessageStream({
           const chunk = buildRenderItems([...rows], taskUpdates, ghostCardSnapshot, {
             historyWindowIncomplete: true,
             historyArtifacts,
+            turnChangeSets,
             workingDir,
             botSessionId: simplifiedBotConversation ? sessionId : undefined,
             markdownImageTargetCache: markdownImageTargetCacheRef.current,
@@ -2949,27 +3084,28 @@ export function MessageStream({
     workingDir,
     simplifiedBotConversation,
     sessionId,
+    streamProjection,
   ]);
   const assistantsWithFollowingUserBoundary = useMemo(
-    () => collectAssistantsWithFollowingUserBoundary(visibleMessages),
-    [visibleMessages],
+    () => collectAssistantsWithFollowingUserBoundary(visibleMetadataMessages),
+    [visibleMetadataMessages],
   );
   // action bar 只挂每个 turn 的收尾 assistant 正文(见 collectTurnFinalAssistantClientIds)。
   const turnFinalAssistantClientIds = useMemo(
-    () => collectTurnFinalAssistantClientIds(visibleMessages),
-    [visibleMessages],
+    () => collectTurnFinalAssistantClientIds(visibleMetadataMessages),
+    [visibleMetadataMessages],
   );
   // subagent-model-chip: parentToolUseId(Agent/Task 行 id)→ 子代理模型,
   // 供 AgentActionsBlock 给 Agent/Task 行反查并渲染模型 chip。
   const subagentModelByToolUseId = useMemo(() => {
-    const models = buildSubagentModelMap(messages);
+    const models = buildSubagentModelMap(rawMetadataMessages);
     for (const summary of historyWorkSummaries(historySnapshot?.items ?? [])) {
       if (summary.parentToolUseId && summary.model && !models.has(summary.parentToolUseId)) {
         models.set(summary.parentToolUseId, summary.model);
       }
     }
     return models;
-  }, [messages, historySnapshot?.items]);
+  }, [rawMetadataMessages, historySnapshot?.items]);
 
   // work-group pass:把最终回答前的工作过程折叠成 work_group,无最终回答时
   // 继续走旧的 tool_segment + thinking 折叠兼容路径。
@@ -2978,9 +3114,11 @@ export function MessageStream({
     useBotGeneratedFileDeliveries(ungroupedRenderItems, sessionFileValue);
   const allRenderItems = useMemo(() => {
     const grouped = insertForkOriginItem(
-      historySnapshot?.ready
-        ? ungroupedRenderItems
-        : groupWorkRuns(ungroupedRenderItems, isSessionStreaming),
+      workGroupProjection(
+        ungroupedRenderItems,
+        isSessionStreaming,
+        Boolean(historySnapshot?.ready),
+      ),
       forkOrigin,
     );
     return simplifiedBotConversation
@@ -2993,7 +3131,9 @@ export function MessageStream({
     simplifiedBotConversation,
     historySnapshot?.ready,
     visibleGeneratedFileKeys,
+    workGroupProjection,
   ]);
+  const renderMetadataItems = renderMetadataProjection(allRenderItems);
   const botMessageTimeGroups = useMemo(() => {
     if (!simplifiedBotConversation) return new Map<string, number>();
     return collectBotMessageTimeGroups(
@@ -3101,9 +3241,25 @@ export function MessageStream({
     anchoredForwardItems,
   ]);
 
+  const visibleMetadataItems = visibleMetadataProjection(visibleRenderItems);
+
   // 镜像 ref：unmount cleanup / ResizeObserver / 落定回调里读最新值（闭包会 stale）。
   const visibleRenderItemsRef = useRef(visibleRenderItems);
   visibleRenderItemsRef.current = visibleRenderItems;
+  // Keep complex/stateful cards alive. Plain historical message bodies can be
+  // replaced by measured-height placeholders without browser display locking.
+  const viewportEntries = useMemo(() => visibleRenderItems.map(item => ({
+    key: item.key,
+    retain: item.type !== 'message' || item.message.isStreaming === true || Boolean(item.message.systemCardType) ||
+      (item.message.role !== 'user' && item.message.role !== 'assistant') ||
+      item.message.clientId === focusMessageClientId,
+  })), [visibleRenderItems, focusMessageClientId]);
+  const messageViewportRef = useRef<MessageViewportApi>(null);
+  // Child layout effects run before this ancestor's DOM ref attaches on mount.
+  // Connecting here schedules the initial measurement before the first paint.
+  useLayoutEffect(() => { messageViewportRef.current?.connect(); });
+  const syncMessageViewport = useCallback(() => messageViewportRef.current?.syncViewport(), []);
+  const reconcileMessageViewport = useCallback(() => messageViewportRef.current?.reconcileViewport(), []);
   // 量出当前视口顶端 render-item；若它内部还有已渲染的子消息，再记实际跨过视口顶边
   // 的 message clientId。折叠工作组 / 折叠工具块的聚合 data-message-client-ids 只给
   // focus 回退用，不参与视口快照，避免把隐藏 child 当成活锚点。
@@ -3336,6 +3492,7 @@ export function MessageStream({
     } = {}): boolean => {
       const jump = focusJumpRef.current;
       if (!jump) return false;
+      jump.cancelAnimation?.();
       focusJumpRef.current = null;
       if (focusScrollTimerRef.current !== null) {
         window.clearTimeout(focusScrollTimerRef.current);
@@ -3345,7 +3502,7 @@ export function MessageStream({
         window.clearTimeout(focusHighlightTimerRef.current);
         focusHighlightTimerRef.current = null;
       }
-      // 只终止仍由这次 focus 拥有的原生 smooth 动画；过期 focus 不得打断后发滚动。
+      // 只终止仍由这次 focus 拥有的滚动；过期 focus 不得打断后发滚动。
       if (jump.scrollGeneration === programmaticScrollGenerationRef.current) {
         const root = scrollRef.current;
         if (root) root.scrollTo({ top: root.scrollTop, behavior: 'auto' });
@@ -3358,15 +3515,17 @@ export function MessageStream({
     },
     [finishProgrammaticScroll, refreshViewportAnchor],
   );
-  // focus 跳转落定收尾(scrollend 主路径与兜底 timer 共用,幂等):途中布局变化
-  // (删除 / 流式)会让 smooth 落点偏离目标,先瞬时校正回目标;目标在跳转途中被删时
+  // focus 跳转落定收尾(逐帧动画结束与兜底 timer 共用,幂等):动画已跟踪途中高度变化，
+  // 此处只处理最终布局与所有权交接；目标在跳转途中被删时
   // 锚到跳转时序列中它之后第一条存活 item(与删除补偿同语义,落点在窗口外则走窗口
   // 重建 + pending 复位);用户已接管则不校正。下一帧再清 programmatic 标记并刷新
   // 删除前快照——半途量测会把跳变中的位置误存为锚点。
   const settleFocusJump = useCallback(() => {
     const jump = focusJumpRef.current;
-    if (!jump) return;
-    focusJumpRef.current = null;
+    if (!jump || jump.settling) return;
+    jump.cancelAnimation?.();
+    jump.cancelAnimation = undefined;
+    jump.settling = true;
     if (focusScrollTimerRef.current !== null) {
       window.clearTimeout(focusScrollTimerRef.current);
       focusScrollTimerRef.current = null;
@@ -3375,7 +3534,10 @@ export function MessageStream({
       window.clearTimeout(focusHighlightTimerRef.current);
       focusHighlightTimerRef.current = null;
     }
-    if (jump.scrollGeneration !== programmaticScrollGenerationRef.current) return;
+    if (jump.scrollGeneration !== programmaticScrollGenerationRef.current) {
+      focusJumpRef.current = null;
+      return;
+    }
     // settle 前已观察到的删除由当前目标校正消费；同帧后续删除仍走通用重放。
     deferredDeleteCompensationRef.current = false;
     // 邻居锚定分支会显式写入快照(窗口重建的 DOM 下一提交才就绪),此时不得再用
@@ -3388,6 +3550,7 @@ export function MessageStream({
       const target = queryFocusElement(root, jump.clientId);
       if (target) {
         target.scrollIntoView({ block: 'center' });
+        syncMessageViewport();
         const measured = refreshViewportAnchor();
         const rootTop = root.getBoundingClientRect().top;
         const targetRect = target.getBoundingClientRect();
@@ -3446,13 +3609,32 @@ export function MessageStream({
         }
       }
     }
-    requestAnimationFrame(() => {
-      const activeJump = focusJumpRef.current;
-      if (activeJump && activeJump.requestKey !== jump.requestKey) return;
+    let stableFrames = 0;
+    let frames = 0;
+    const finishAfterLayout = () => {
+      if (focusJumpRef.current !== jump) return;
+      if (!snapshotPinned && jump.scrollGeneration === programmaticScrollGenerationRef.current && root) {
+        const target = queryFocusElement(root, jump.clientId);
+        if (target) {
+          const before = root.scrollTop;
+          target.scrollIntoView({ block: 'center' });
+          syncMessageViewport();
+          stableFrames = Math.abs(root.scrollTop - before) <= 1 ? stableFrames + 1 : 0;
+          // A native height/scroll update can arrive after the first scrollend.
+          // Keep ownership while checking consecutive paints, and respect user
+          // cancellation/replacement on every frame. Bound live-stream settling.
+          if (++frames < 8 && stableFrames < 3) {
+            requestAnimationFrame(finishAfterLayout);
+            return;
+          }
+        }
+      }
+      focusJumpRef.current = null;
       const replayingDelete = finishProgrammaticScroll(jump.scrollGeneration);
       if (!snapshotPinned && replayingDelete === false) refreshViewportAnchor();
-    });
-  }, [finishProgrammaticScroll, refreshViewportAnchor, restoreViewportSnapshotOrRebuildWindow]);
+    };
+    requestAnimationFrame(finishAfterLayout);
+  }, [finishProgrammaticScroll, refreshViewportAnchor, restoreViewportSnapshotOrRebuildWindow, syncMessageViewport]);
   // 接管 / 落定监听挂载级注册一次,读 focusJumpRef 判定,无活跃跳转时空转。挂在下面
   // 的 reactive effect 里会被流式重渲染的 cleanup 拆掉且早退分支不再重挂,导致接管
   // 失灵、兜底 timer 落定时把用户拽回目标。
@@ -3472,13 +3654,23 @@ export function MessageStream({
       if (isEditableKeyboardTarget(event.target)) return;
       onUserInput();
     };
-    const onScrollEnd = () => settleFocusJump();
+    let disposed = false;
+    const onScrollEnd = () => {
+      const jump = focusJumpRef.current;
+      if (!jump || jump.cancelAnimation) return;
+      // Per-frame writes also emit scrollend. The live-target animation owns
+      // completion until it releases its handle; then drain pending layout.
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        if (!disposed && focusJumpRef.current === jump) settleFocusJump();
+      }));
+    };
     root.addEventListener('wheel', onUserInput, { passive: true });
     root.addEventListener('touchstart', onUserInput, { passive: true });
     root.addEventListener('mousedown', onUserInput);
     window.addEventListener('keydown', onNavigationKey);
     root.addEventListener('scrollend', onScrollEnd);
     return () => {
+      disposed = true;
       root.removeEventListener('wheel', onUserInput);
       root.removeEventListener('touchstart', onUserInput);
       root.removeEventListener('mousedown', onUserInput);
@@ -3524,6 +3716,11 @@ export function MessageStream({
       return;
     }
     lastMissingFocusRef.current = null;
+    // A search owns the reading position even while rebuilding its window.
+    // Otherwise a newly clamped history window can be mistaken for tail follow.
+    restoringRef.current = false;
+    isNearBottomRef.current = false;
+    setIsNearBottom(false);
     if (!visibleRenderItems.some((item) => item.key === targetKey)) {
       setFirstVisibleItemKey(targetKey);
       setAnchoredForwardItems(RENDER_WINDOW_FIRST_PAINT_ITEMS);
@@ -3533,12 +3730,8 @@ export function MessageStream({
     if (!root) return;
     const el = queryFocusElement(root, focusMessageClientId);
     if (!el) return;
-    restoringRef.current = false;
-    isNearBottomRef.current = false;
-    setIsNearBottom(false);
     const scrollGeneration = beginProgrammaticScroll();
-    // 新跳直接覆盖未落定的旧跳(用户快速连点两条结果):旧跳转态被替换,旧兜底
-    // timer 一并重设,浏览器的旧 smooth 动画由新 scrollIntoView 接管。
+    // 新请求已取消旧动画；保留目标身份与删除前快照，直到逐帧动画完成。
     focusJumpRef.current = {
       requestKey: focusRequestKey,
       clientId: focusMessageClientId,
@@ -3547,7 +3740,17 @@ export function MessageStream({
       messageClientIdsAtJump: collectDeleteAnchorClientIds(allRenderItems),
       scrollGeneration,
     };
-    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    const jump = focusJumpRef.current;
+    jump.cancelAnimation = animateFocusScroll({
+      root,
+      getTarget: () => queryFocusElement(root, jump.clientId),
+      reconcile: syncMessageViewport,
+      onFinish: () => {
+        if (focusJumpRef.current !== jump) return;
+        jump.cancelAnimation = undefined;
+        settleFocusJump();
+      },
+    });
     lastAppliedFocusRef.current = focusRequestKey;
     if (focusScrollTimerRef.current !== null) {
       window.clearTimeout(focusScrollTimerRef.current);
@@ -3555,11 +3758,10 @@ export function MessageStream({
     if (focusHighlightTimerRef.current !== null) {
       window.clearTimeout(focusHighlightTimerRef.current);
     }
-    // 落定主路径是挂载级 scrollend 监听;有 scrollend 时兜底只是安全网(长距离
-    // smooth 常 >800ms,给足 2.5s),无 scrollend 的环境用 800ms 近似落定。
+    // 动画主动完成；timer 仅作为安全网，不依赖原生 scrollend 的到达时机。
     focusScrollTimerRef.current = window.setTimeout(
       settleFocusJump,
-      'onscrollend' in window ? 2500 : 800,
+      2500,
     );
     // 高亮等落定后再点亮(落定回调里做),点亮后不再自动淡出——停在搜索命中处,直到
     // 下次跳转覆盖或切会话。scrollend 未触发(距离为 0 / 环境不支持)时 ~600ms 兜底。
@@ -3575,6 +3777,7 @@ export function MessageStream({
     beginProgrammaticScroll,
     cancelFocusJump,
     settleFocusJump,
+    syncMessageViewport,
   ]);
 
   // 会话内全部图片的有序 src(全量,来自未裁剪的 allRenderItems),下发给
@@ -3592,12 +3795,12 @@ export function MessageStream({
   const sessionImageSrcs = useMemo(
     () =>
       collectSessionImageSrcs(
-        allRenderItems,
+        renderMetadataItems,
         galleryMediaOrigin,
         ghostCardSnapshot,
         isSessionStreaming,
       ),
-    [allRenderItems, galleryMediaOrigin, ghostCardSnapshot, isSessionStreaming],
+    [renderMetadataItems, galleryMediaOrigin, ghostCardSnapshot, isSessionStreaming],
   );
 
   // 把可见窗口往前(更早)推 RENDER_WINDOW_GROWTH_ITEMS 个 item,用于滚到顶时的客户端扩窗。
@@ -3698,7 +3901,10 @@ export function MessageStream({
     // 锚定窗向下扩到真正盖住尾部,且用户已经贴在当前窗口底 → 切回默认尾窗并
     // 恢复跟随。扩窗发生在本次 scroll 之后,同一帧的 handleScroll 还看不到
     // windowCoversEnd=true,没有下一次滚动时会永远停在「已到底、但不跟」。
-    if (!restoringRef.current && !wasCovering && windowCoversEnd && firstVisibleItemKey !== null) {
+    if (
+      !restoringRef.current && !programmaticScrollRef.current &&
+      !wasCovering && windowCoversEnd && firstVisibleItemKey !== null
+    ) {
       const el = scrollRef.current;
       if (!el) return;
       const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
@@ -3934,6 +4140,7 @@ export function MessageStream({
   const perfFirstPaintLoggedRef = useRef<boolean>(false);
   // biome-ignore lint/correctness/useExhaustiveDependencies: mount-only perf baseline；父组件按 sessionId key 重挂载，依赖变化不应重复打 mount 日志。
   useEffect(() => {
+    if (!import.meta.env.DEV) return;
     perfLog.debug(
       `stream:mount sid=${sessionId ?? 'null'} initialMsgs=${messages.length} initialItems=${allRenderItems.length} renderedItems=${visibleRenderItems.length}`,
     );
@@ -3967,6 +4174,7 @@ export function MessageStream({
     // 通过 ref 镜像在 cleanup 时读到最新的位置 / 锚点 / nearBottom。
   }, [saveScrollSnapshot]);
   useLayoutEffect(() => {
+    if (!import.meta.env.DEV) return;
     if (!perfFirstPaintLoggedRef.current && visibleRenderItems.length > 0) {
       perfFirstPaintLoggedRef.current = true;
       perfLog.debug(
@@ -4096,8 +4304,32 @@ export function MessageStream({
   // 显隐（两者同步更新，任何路径都不允许只更新其中一个）。
   // `unreadCount` 在"已离底 + 新 assistant/ask_user/plan_review 消息到达"时递增，
   // 点击按钮 / 自动回底 / 切换会话 → 归零。
-  const [isNearBottom, setIsNearBottom] = useState<boolean>(true);
+  // Restored history starts unfollowed. Initialize the indicator from the same
+  // snapshot as the scroll gate: later input may correctly leave false unchanged.
+  const [isNearBottom, setIsNearBottom] = useState<boolean>(() => isNearBottomRef.current);
   const [unreadCount, setUnreadCount] = useState<number>(0);
+  // Only the rendered tail of a canonical Bot chat acknowledges replies. History
+  // navigation, background windows and streaming work never move its read position.
+  useEffect(() => {
+    if (!onBotReadThrough || !historyLoaded || !isNearBottom || isSessionStreaming) return;
+    const acknowledge = () => {
+      if (restoringRef.current || document.visibilityState !== 'visible' || !document.hasFocus() || !isNearBottomRef.current) return;
+      const at = allRenderItems.reduce((latest, item) => {
+        if (item.type !== 'message' || item.message.role !== 'assistant' || item.message.isStreaming) return latest;
+        const stamp = new Date(item.message.createdAt ?? '').getTime();
+        return Number.isFinite(stamp) ? Math.max(latest, stamp) : latest;
+      }, 0);
+      if (at > 0) onBotReadThrough(at);
+    };
+    const frame = requestAnimationFrame(acknowledge);
+    window.addEventListener('focus', acknowledge);
+    document.addEventListener('visibilitychange', acknowledge);
+    return () => {
+      cancelAnimationFrame(frame);
+      window.removeEventListener('focus', acknowledge);
+      document.removeEventListener('visibilitychange', acknowledge);
+    };
+  }, [onBotReadThrough, historyLoaded, isNearBottom, isSessionStreaming, allRenderItems]);
   /** 上一次 render 已见过的 clientId 集合，用于 O(n) diff 出"首次出现"的消息。 */
   const prevMessageIdsRef = useRef<Set<string>>(new Set());
 
@@ -4294,9 +4526,38 @@ export function MessageStream({
   useEffect(() => {
     const root = scrollRef.current;
     if (!root) return;
+    const navigateText = (event: Event) => {
+      const range = (event as CustomEvent<Range>).detail;
+      const element = range?.startContainer?.parentElement?.closest<HTMLElement>('[data-message-client-id]');
+      const clientId = element?.dataset.messageClientId;
+      if (!element || !clientId || !root.contains(element)) return;
+      event.preventDefault();
+      cancelFocusJump({ consumeDeferredDelete: true });
+      unpinAutoFollowForUserUpIntent();
+      // Keep the exact text below the find bar. Reuse message navigation's
+      // ownership, cancellation and settling, so reaching the oldest loaded
+      // row is not misread as user intent to fetch another history page.
+      scrollRangeIntoView(range, root);
+      const topOffset = Math.min(80, root.clientHeight / 3)
+        - (range.getBoundingClientRect().top - element.getBoundingClientRect().top);
+      beginChipJump({ clientId, selector: 'message', topOffset });
+      root.scrollTop = resolveChipJumpTargetScrollTop({
+        scrollTop: root.scrollTop, containerTop: root.getBoundingClientRect().top,
+        targetTop: element.getBoundingClientRect().top, topOffset,
+      });
+      syncMessageViewport();
+    };
+    root.addEventListener(PAGE_TEXT_NAVIGATION_EVENT, navigateText);
+    return () => root.removeEventListener(PAGE_TEXT_NAVIGATION_EVENT, navigateText);
+  }, [beginChipJump, cancelFocusJump, syncMessageViewport, unpinAutoFollowForUserUpIntent]);
+  useEffect(() => {
+    const root = scrollRef.current;
+    if (!root) return;
     const onScrollEnd = () => {
       settleChipJump();
-      if (chipJumpGenerationRef.current !== null) return;
+      // Each navigation owner finishes its own generation after correcting its
+      // target. Generic scrollend must not invalidate a pending focus settle.
+      if (chipJumpGenerationRef.current !== null || focusJumpRef.current !== null) return;
       if (!programmaticScrollRef.current) return;
       const generation = programmaticScrollGenerationRef.current;
       if (finishProgrammaticScroll(generation) === false) refreshViewportAnchor(true);
@@ -4544,7 +4805,7 @@ export function MessageStream({
   ]);
   useNavigationKeyListener(clearChipJumpSuppression, ownsHardwareScrollActions);
 
-  const pinToBottom = useCallback(() => {
+  const pinToBottom = useCallback((fromLayout = false) => {
     const el = scrollRef.current;
     if (!el) return;
     // 滚动条拖拽中不要钉回,否则滑块上移会被下一帧 pin 吃掉。
@@ -4552,6 +4813,10 @@ export function MessageStream({
     const generation = beginProgrammaticScroll();
     suppressScrollbarActivation(el);
     el.scrollTop = el.scrollHeight;
+    // Layout effects already flush their state updates before paint. Observer
+    // and input callbacks need an explicit commit before the next scroll event.
+    if (fromLayout) reconcileMessageViewport();
+    else syncMessageViewport();
     // Clear the flag on the next frame — after the browser has dispatched
     // the resulting scroll event. We use rAF (not a microtask) because the
     // scroll event is dispatched asynchronously.
@@ -4560,7 +4825,7 @@ export function MessageStream({
         refreshViewportAnchor();
       }
     });
-  }, [beginProgrammaticScroll, finishProgrammaticScroll, refreshViewportAnchor]);
+  }, [beginProgrammaticScroll, finishProgrammaticScroll, refreshViewportAnchor, reconcileMessageViewport, syncMessageViewport]);
   pinToBottomRef.current = pinToBottom;
 
   // Composer send is an explicit "show me the result" intent. Don't wait for
@@ -4581,7 +4846,7 @@ export function MessageStream({
     isNearBottomRef.current = true;
     setIsNearBottom(true);
     setUnreadCount(0);
-    pinToBottom();
+    pinToBottom(true);
   }, [cancelFocusJump, finishChipJump, followLatestRequestKey, pinToBottom]);
 
   // F3: 平滑滚到底的按钮回调。
@@ -4604,8 +4869,9 @@ export function MessageStream({
     isNearBottomRef.current = true;
     const generation = beginProgrammaticScroll();
     // render-window-bidirectional: 清除锚点回到默认尾部窗口（chip/jump-down 语义）。
-    setFirstVisibleItemKey(null);
+    flushSync(() => setFirstVisibleItemKey(null));
     el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
+    syncMessageViewport();
     window.setTimeout(() => {
       if (finishProgrammaticScroll(generation) === false) refreshViewportAnchor();
     }, CHIP_JUMP_SAFETY_MS);
@@ -4615,6 +4881,7 @@ export function MessageStream({
     finishChipJump,
     finishProgrammaticScroll,
     refreshViewportAnchor,
+    syncMessageViewport,
   ]);
 
   // ── Codex Micro 摇杆:按住持续滚动 ──
@@ -4660,6 +4927,7 @@ export function MessageStream({
           } else {
             el.scrollTop += delta;
           }
+          syncMessageViewport();
           joystickScrollFrameRef.current = requestAnimationFrame(step);
         };
         joystickScrollFrameRef.current = requestAnimationFrame(step);
@@ -4692,6 +4960,7 @@ export function MessageStream({
     scrollToBottomSmooth,
     stopJoystickScroll,
     unpinAutoFollowForUserUpIntent,
+    syncMessageViewport,
   ]);
 
   // F2: messages diff → 按角色累计 unreadCount
@@ -4790,7 +5059,7 @@ export function MessageStream({
       restoringRef.current = false;
       isNearBottomRef.current = true;
     }
-    if (decision.pinToBottom && !windowHandoff.deferPinToNextRender) pinToBottom();
+    if (decision.pinToBottom && !windowHandoff.deferPinToNextRender) pinToBottom(true);
 
     const el = scrollRef.current;
     if (el) prevScrollTopRef.current = el.scrollTop;
@@ -5371,13 +5640,16 @@ export function MessageStream({
       if (effectiveNearBottom !== isNearBottomRef.current) {
         isNearBottomRef.current = effectiveNearBottom;
         setIsNearBottom(effectiveNearBottom);
-        if (effectiveNearBottom) setUnreadCount(0);
-      }
-      // render-window-bidirectional P1 fix: 锚定窗口覆盖末尾 + 用户到达底部 →
-      // 切回默认尾窗。必须在 handleScroll 里而不是 layout effect 里做——
-      // 用户从"向上扩窗"滚回底部时 wasCovering 从始至终为 true，layout effect 捕不到。
-      if (effectiveNearBottom && firstVisibleItemKey !== null && windowCoversEnd) {
-        setFirstVisibleItemKey(null);
+        if (effectiveNearBottom) {
+          setUnreadCount(0);
+          // Only shrink history when the reader resumes following the tail.
+          // Ctrl+F / Ctrl+A mount offscreen text and change scroll geometry at
+          // an already-followed tail; those scroll events must preserve the
+          // existing logical window, otherwise find/selection loses its text.
+          if (firstVisibleItemKey !== null && windowCoversEnd) {
+            setFirstVisibleItemKey(null);
+          }
+        }
       }
       if (effectiveNearBottom) {
         // 到底了:无论方向都隐藏 chip,清掉 timer
@@ -5449,11 +5721,11 @@ export function MessageStream({
     // "穿过顶部区间"与"停在顶部继续上滚"的完整触发面)
     if (el.scrollTop >= TOP_HISTORY_TRIGGER_PX) return;
 
-    // chip jump 期间抑制 — chip click 是导航语义不是"想加载更多",而且 smooth
+    // chip / 搜索 focus 期间抑制 — 定位是导航语义不是"想加载更多",而且 smooth
     // 路径穿过顶部时叠加 F-SYNC-2 的 scrollTop+=delta 可能把 viewport 拽飞
     // (长距离跳转踹回底嫌疑)。用户主动 wheel/touch/keydown 会立刻清掉这个 ref
     // (见 mount effect 里的监听),所以"跳完立刻继续往上翻"完全 OK。
-    if (chipJumpInProgressRef.current) {
+    if (chipJumpInProgressRef.current || focusJumpRef.current !== null) {
       return;
     }
 
@@ -5513,7 +5785,7 @@ export function MessageStream({
   const { userMessageIds, previewById } = useMemo(() => {
     const ids: string[] = [];
     const map = new Map<string, string>();
-    for (const it of visibleRenderItems) {
+    for (const it of visibleMetadataItems) {
       if (it.type !== 'message' || it.message.role !== 'user') continue;
       // 合成指令行渲染 null,没有对应 DOM 元素,chip 指向它 scrollIntoView 会
       // 静默失效(review P2)。
@@ -5522,7 +5794,7 @@ export function MessageStream({
       map.set(it.message.clientId, resolveUserDisplayText(it.message));
     }
     return { userMessageIds: ids, previewById: map };
-  }, [visibleRenderItems]);
+  }, [visibleMetadataItems]);
 
   const { displayId: prevUserMsgId, suppressAfterClick } = usePrevUserMessageInView({
     scrollRef,
@@ -5570,7 +5842,10 @@ export function MessageStream({
   // 不挂载组件(卸载时组件自会把 navRailCoversNav 报回 false,chip 兜底回归),
   // 也不做下面的空闲补页。
   const { enabled: navRailEnabled } = useMessageNavRailPreference();
-  const navRailEntries = useMemo(() => deriveNavRailEntries(visibleMessages), [visibleMessages]);
+  const navRailEntries = useMemo(
+    () => navigationProjection(visibleMessages, navRailEnabled),
+    [navigationProjection, visibleMessages, navRailEnabled],
+  );
 
   // 入口去重:导航条**完整覆盖导航**(出场且刻度未截断)时抑制"跳到上一条
   // 提问"chip —— 同一个导航任务只保留一套入口。导航条缺席(短对话 / 窄窗 /
@@ -5701,8 +5976,8 @@ export function MessageStream({
   // 切片,还有老页未加载(hasMoreMessages)时不能把切片首条误判为对话首条
   // (判定逻辑与陷阱见 findFirstUserMessageClientId 注释)。
   const firstUserMessageClientId = useMemo(
-    () => findFirstUserMessageClientId(displayMessages, Boolean(hasMoreMessages)),
-    [displayMessages, hasMoreMessages],
+    () => findFirstUserMessageClientId(metadataMessages, Boolean(hasMoreMessages)),
+    [metadataMessages, hasMoreMessages],
   );
 
   // edit-last-message: 最后一条 user 消息才显示编辑入口(编辑 = rewind 到该条
@@ -5712,23 +5987,23 @@ export function MessageStream({
   // 会把编辑入口从真实的最后一条可见气泡上抢走 —— 与该 helper 里 isSyntheticTrigger
   // 那条同源(review: codex P2)。
   const lastUserMessageClientId = useMemo(
-    () => findLastUserMessageClientId(visibleMessages),
-    [visibleMessages],
+    () => findLastUserMessageClientId(visibleMetadataMessages),
+    [visibleMetadataMessages],
   );
   // 含合成行的"最后一条用户侧输入":自愈重连行据此判断自己是不是仍在飞(见 helper 注释)。
   // 同样走可见序列:子代理内部的 user 行不是父会话某个 turn 的发起者,算进来会让
   // 在飞的重连行被"夺走归属"、提前停转。
   const lastUserInputClientId = useMemo(
-    () => findLastUserInputClientId(visibleMessages),
-    [visibleMessages],
+    () => findLastUserInputClientId(visibleMetadataMessages),
+    [visibleMetadataMessages],
   );
 
   // 使用未过滤子代理的 displayMessages,不走 visibleMessages:子代理消耗的 token 是这个 turn 的
   // 真实花费,过滤掉等于把子代理的账从用量里抹掉(成本失真,比显示问题更糟)。
   // 归属键 turnFinalAssistantClientIds 已按可见序列算出,聚合区间仍落在正确的 turn 内。
   const userTurnUsageDetailsByAssistantId = useMemo(() => {
-    return collectAssistantTurnUsageDetails(displayMessages, turnFinalAssistantClientIds);
-  }, [displayMessages, turnFinalAssistantClientIds]);
+    return collectAssistantTurnUsageDetails(metadataMessages, turnFinalAssistantClientIds);
+  }, [metadataMessages, turnFinalAssistantClientIds]);
 
   // error-tail-banner:尾部未忽略的 error 行由输入框上方红条独家承载,流内需要
   // 知道"是不是最后一条"来跳过重复渲染。走可见序列:尾部挂着子代理内部行时,
@@ -5737,11 +6012,54 @@ export function MessageStream({
     visibleMessages.length > 0 ? visibleMessages[visibleMessages.length - 1].clientId : undefined;
   const previousLocalFileRefsRef = useRef<readonly KnownLocalFileRef[]>([]);
   const localFileRefs = useMemo<readonly KnownLocalFileRef[]>(() => {
-    return collectStableLocalFileRefs(messages, previousLocalFileRefsRef.current);
-  }, [messages]);
+    return collectStableLocalFileRefs(rawMetadataMessages, previousLocalFileRefsRef.current);
+  }, [rawMetadataMessages]);
   useEffect(() => {
     previousLocalFileRefsRef.current = localFileRefs;
   }, [localFileRefs]);
+
+  const workGroupRenderContext = useMemo<WorkGroupRenderContext>(
+    () => ({
+      workingDir,
+      sessionId,
+      sessionTitle,
+      agentKind,
+      remoteHostId,
+      sessionSource,
+      isSessionStreaming,
+      firstUserMessageClientId,
+      lastUserMessageClientId,
+      lastUserInputClientId,
+      continuationTurnClientId,
+      continuationInFlightProjectionCapability,
+      localFileRefs,
+      singleResultMap,
+      assistantsWithFollowingUserBoundary,
+      turnFinalAssistantClientIds,
+      subagentModelByToolUseId,
+      userTurnUsageDetailsByAssistantId,
+    }),
+    [
+      workingDir,
+      sessionId,
+      sessionTitle,
+      agentKind,
+      remoteHostId,
+      sessionSource,
+      isSessionStreaming,
+      firstUserMessageClientId,
+      lastUserMessageClientId,
+      lastUserInputClientId,
+      continuationTurnClientId,
+      continuationInFlightProjectionCapability,
+      localFileRefs,
+      singleResultMap,
+      assistantsWithFollowingUserBoundary,
+      turnFinalAssistantClientIds,
+      subagentModelByToolUseId,
+      userTurnUsageDetailsByAssistantId,
+    ],
+  );
 
   // chip 垂直位置：优先使用父层实测的底部中央避让边界。普通状态行不占中央槽，
   // 步骤 / 接管胶囊在场时则把按钮抬到它们上方；旧调用方保留历史兜底。
@@ -5826,8 +6144,8 @@ export function MessageStream({
   // 走可见序列:归属键是**可见的**那条 user 消息(软提示卡挂在它上面),被隐藏的
   // 子代理 user 行不该成为归属键,否则该 turn 的召唤卡升级不到任何可见气泡上。
   const ghostCallsByUserTurnRaw = useMemo(
-    () => collectGhostCallsByUserTurn(visibleMessages),
-    [visibleMessages],
+    () => collectGhostCallsByUserTurn(visibleMetadataMessages),
+    [visibleMetadataMessages],
   );
   const ghostCallsCacheRef = useRef(ghostCallsByUserTurnRaw);
   if (!ghostCallMapsEqual(ghostCallsCacheRef.current, ghostCallsByUserTurnRaw)) {
@@ -5837,6 +6155,7 @@ export function MessageStream({
 
   return (
     <ChatSessionFileProvider value={sessionFileValue}>
+      <AgentOnOtherDeviceContext.Provider value={agentOnOtherDevice}>
       <GhostFulfillmentContext.Provider value={ghostCallsByUserTurn}>
         <ImageGalleryContext.Provider value={sessionImageSrcs}>
           <div className="relative h-full w-full">
@@ -5887,15 +6206,21 @@ export function MessageStream({
               React `key` 一律取 item.key — stable across builds(派生约定见
               RenderItem 类型注释 / buildRenderItems),复用 DOM 节点避免折叠
               态丢失 / 滚动锚点漂走。 */}
-                <div
+                <MessageViewport apiRef={messageViewportRef} options={{
+                  entries: viewportEntries, scrollRef, itemsRef, followRef: isNearBottomRef,
+                  initialAnchor: restoreSnapshotRef.current?.viewportTopKey,
+                  initialHeights: restoreSnapshotRef.current?.itemHeights?.byKey,
+                  disabled: shareSelectionActive,
+                  // Refresh ownership before virtualization mutates the DOM.
+                  onProgrammaticScroll: () => handleScroll(),
+                }}>{messageViewport => <div
                   ref={itemsRef}
                   data-share-selection-active={shareSelectionActive ? '' : undefined}
                   className={cn(
-                    // msg-stream-items:直接子元素(每条 render item 的根节点)带
-                    // content-visibility:auto(globals.css)—— 视口外条目跳过布局
-                    // 与绘制,切入长 session 的首帧成本从「整个窗口 80 条」降到
-                    // 「一屏」。滚动恢复按条目锚定 + ResizeObserver 纠偏,估高
-                    // (240px)与真实高度的偏差在条目进入视口后被自动纠正。
+                    // #5406: normal layout avoids the row display-locking condition
+                    // reproduced in Blink AX text-fragment serialization.
+                    // Historical bodies mount near the viewport; keyed height
+                    // placeholders preserve the existing scroll/restore geometry.
                     'msg-stream-items flex flex-col gap-3.5',
                     // 分享选择模式:整列内容右移,左侧让出复选框那一列。缩进加在
                     // 容器上(不是逐条消息),工具卡等不可选的 item 也跟着移,
@@ -5904,7 +6229,16 @@ export function MessageStream({
                     'transition-[padding] duration-[var(--motion-base)] ease-[var(--motion-ease-move)] motion-reduce:transition-none',
                   )}
                 >
-                  {visibleRenderItems.map((item) => {
+                  {visibleRenderItems.map((item, itemIndex) => {
+                    if (!messageViewport.shouldMount(viewportEntries[itemIndex])) {
+                      return <div key={item.key} data-render-item-key={item.key}
+                        data-message-client-id={item.type === 'message' ? item.message.clientId : undefined}
+                        // Previous-question navigation must still find offscreen user rows.
+                        data-user-msg-id={item.type === 'message' && item.message.role === 'user'
+                          && !item.message.isSyntheticTrigger ? item.message.clientId : undefined}
+                        data-message-placeholder="" aria-hidden="true"
+                        style={{ height: messageViewport.placeholderHeight(item.key), flexShrink: 0 }} />;
+                    }
                     if (item.type === 'fork_origin') {
                       return (
                         <ForkOriginMarker
@@ -5998,85 +6332,13 @@ export function MessageStream({
                     }
 
                     if (item.type === 'work_group') {
-                      // 完成态外层时间线可包含内层 work_group。递归只负责形状映射,
-                      // 具体折叠 / 直接详情逻辑全部复用 WorkGroupBlock。
-                      const toWorkGroupChild = (child: WorkGroupChildItem): WorkGroupChild => {
-                        if (child.type === 'work_group') {
-                          return {
-                            kind: 'group',
-                            key: child.key,
-                            blockId: `work:${child.key.slice('work-'.length)}`,
-                            durationMs: child.durationMs,
-                            isStreaming: child.isStreaming,
-                            startedAtMs: child.startedAtMs,
-                            deferred: child.deferred,
-                            childItems: child.children.map(toWorkGroupChild),
-                          };
-                        }
-                        if (child.type === 'tool_segment') {
-                          return {
-                            kind: 'tools',
-                            key: child.key,
-                            toolCalls: child.toolCalls,
-                            resultMap: child.resultMap,
-                            settledIds: child.settledIds,
-                          };
-                        }
-                        if (child.type === 'message' && child.message.role === 'thinking') {
-                          return { kind: 'thinking', key: child.key, message: child.message };
-                        }
-                        return {
-                          kind: 'rendered',
-                          key: child.key,
-                          renderNode: () =>
-                            renderWorkGroupChild(child, {
-                              workingDir,
-                              sessionId,
-                              sessionTitle,
-                              agentKind,
-                              remoteHostId,
-                              sessionSource,
-                              isSessionStreaming,
-                              firstUserMessageClientId,
-                              lastUserMessageClientId,
-                              lastUserInputClientId,
-                              continuationTurnClientId,
-                              continuationInFlightProjectionCapability,
-                              localFileRefs,
-                              singleResultMap,
-                              assistantsWithFollowingUserBoundary,
-                              turnFinalAssistantClientIds,
-                              subagentModelByToolUseId,
-                              userTurnUsageDetailsByAssistantId,
-                            }),
-                        };
-                      };
-                      const childItems = item.children.map(toWorkGroupChild);
                       return (
-                        // data-message-client-ids:组折叠时子卡片/聚合块整体 unmount,
-                        // 精确锚点消失 —— 后台任务面板「点行跳聊天」经 ~= 回退查询
-                        // 落到组容器(与 AgentActionsBlock 的容器锚点同一约定)。
-                        // 视口子锚点不读这个聚合列表，只认已渲染的 data-message-client-id。
-                        <div
+                        <WorkGroupRenderItemView
                           key={item.key}
-                          data-render-item-key={item.key}
-                          className="scroll-mt-20"
-                          data-message-client-ids={collectWorkGroupClientIds(item.children).join(
-                            ' ',
-                          )}
-                        >
-                          <WorkGroupBlock
-                            // 单层前缀约定 `work:<clientId>` — item.key 形如 `work-<cid>`,
-                            // 去掉 `work-` 后拼 `<role>:<id>`,与 agent: / thinking: 同构。
-                            blockId={`work:${item.key.slice('work-'.length)}`}
-                            durationMs={item.durationMs}
-                            isStreaming={item.isStreaming}
-                            startedAtMs={item.startedAtMs}
-                            childItems={childItems}
-                            compact={simplifiedBotConversation}
-                            deferred={item.deferred}
-                          />
-                        </div>
+                          item={item}
+                          context={workGroupRenderContext}
+                          compact={simplifiedBotConversation}
+                        />
                       );
                     }
 
@@ -6257,7 +6519,7 @@ export function MessageStream({
                       </div>
                     );
                   })}
-                </div>
+                </div>}</MessageViewport>
               </div>
             </div>
 
@@ -6315,6 +6577,7 @@ export function MessageStream({
           </div>
         </ImageGalleryContext.Provider>
       </GhostFulfillmentContext.Provider>
+      </AgentOnOtherDeviceContext.Provider>
     </ChatSessionFileProvider>
   );
 }
@@ -6449,6 +6712,7 @@ const MessageItem = memo(function MessageItem({
       return (
         <UserMessage
           sharedAuthorName={message.sharedAuthorName}
+          sharedAuthorMemberId={message.sharedAuthorMemberId}
           workingDir={workingDir}
           content={message.content}
           sessionReferences={message.sessionReferences}
@@ -6468,6 +6732,8 @@ const MessageItem = memo(function MessageItem({
           isLastUserMessage={isLastUserMessage}
           automationOrigin={message.automationOrigin}
           hookSource={message.hookSource}
+          sourceDevice={message.sourceDevice}
+          sourcePlugin={message.sourcePlugin}
           delivery={message.delivery}
           goalBadge={message.goalBadge}
           blockedByGhost={message.blockedByGhost}
@@ -6484,7 +6750,7 @@ const MessageItem = memo(function MessageItem({
             workingDir={workingDir}
           />
         );
-        return simplifiedBotConversation && message.systemCardType === 'bot-session-task'
+        return simplifiedBotConversation && (message.systemCardType === 'bot-session-task' || message.systemCardType === 'bot-session-task-result')
           ? withAssistantAvatar(
               assistantAvatar ? (
                 <span aria-hidden="true" className="invisible">
@@ -6498,6 +6764,7 @@ const MessageItem = memo(function MessageItem({
       return withAssistantAvatar(
         assistantAvatar,
         <>
+          <MessageSourceLabels sourceGroup={message.sourceGroup} align="start" />
           <AssistantMessage
             workingDir={workingDir}
             localFileRefs={localFileRefs}
@@ -6525,6 +6792,8 @@ const MessageItem = memo(function MessageItem({
             modelMismatch={message.modelMismatch}
             ghostReplyPending={message.ghostReplyPending}
             simplifiedBotConversation={simplifiedBotConversation}
+            botLearning={message.botLearning}
+            botTaskResults={message.turnCompleted === true ? message.botTaskResults : undefined}
           />
         </>,
       );

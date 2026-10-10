@@ -53,6 +53,23 @@ describe('orcaTeamStore', () => {
     rawDb = null;
   });
 
+  it.each(['team', 'stranded', 'single'])('rechecks %s archive authority after the existing route lock wait', async action => {
+    const store = await import('../orcaTeamStore.js');
+    const client = createTestDbClient();
+    setCurrentDbClient(client, 'test-user');
+    await seedOrcaWorkers(client);
+    if (action === 'stranded') await client.exec('UPDATE orca_teams SET status = ?', ['completed']);
+    let allowed = true;
+    setSessionRouteLockImplementation(async (_id, task) => { allowed = false; return task(); });
+    const assertCurrent = async () => { if (!allowed) throw Error('Revoked'); };
+    const result = action === 'team' ? store.archiveWorkersByTeam('team-1', assertCurrent)
+      : action === 'stranded' ? store.reconcileInactiveTeamWorkersForLead('lead-session-1', assertCurrent)
+      : store.archiveSingleWorkerSession('worker-session-1', assertCurrent);
+    await expect(result).rejects.toThrow('Revoked');
+    expect(await client.queryOne('SELECT status FROM sessions WHERE id = ?', ['worker-session-1'])).toEqual({ status: 'active' });
+    expect(h.runtimeCleanup).not.toHaveBeenCalled();
+  });
+
   it('requires workerId and workerSessionId to match the same row when both are supplied', async () => {
     const { getWorkerLink } = await import('../orcaTeamStore.js');
     const client = createTestDbClient();
@@ -80,6 +97,59 @@ describe('orcaTeamStore', () => {
         providerId: 'openai',
       },
     });
+  });
+
+  it('persists remote pending reports, bridged cursors and stop confirmation across rereads', async () => {
+    const store = await import('../orcaTeamStore.js');
+    const client = createTestDbClient();
+    setCurrentDbClient(client, 'test-user');
+    await seedOrcaWorkers(client);
+    await store.saveRemoteWorkerOpen('device-b', 'remote-1');
+    expect(await store.listOrphanRemoteWorkerOpens()).toHaveLength(1);
+    await store.setWorkerRemoteExecution('worker-1', { deviceId: 'device-b', remoteSessionId: 'remote-1' });
+    expect(await store.listOrphanRemoteWorkerOpens()).toHaveLength(0);
+    const pending = { clientIds: ['c-1'], baselineMessageId: 'old-reply' };
+    await store.saveWorkerRemoteReport('worker-1', pending);
+    expect(await store.getRemoteWorkerByProxySession('worker-session-1')).toMatchObject({ pendingReport: pending });
+    await store.saveWorkerRemoteReport('worker-1', null, 'reply-1');
+    await store.markWorkerRemoteStopConfirmed('worker-1', 1234);
+    expect(await store.getRemoteWorkerByProxySession('worker-session-1')).toMatchObject({ pendingReport: null,
+      lastBridgedMessageId: 'reply-1', remoteStopConfirmedAt: 1234 });
+  });
+
+  it('does not classify an associated remote open as orphaned even if removing its intent was interrupted', async () => {
+    const store = await import('../orcaTeamStore.js');
+    const client = createTestDbClient();
+    setCurrentDbClient(client, 'test-user');
+    await seedOrcaWorkers(client);
+    await store.setWorkerRemoteExecution('worker-1', { deviceId: 'device-b', remoteSessionId: 'remote-1' });
+    await store.saveRemoteWorkerOpen('device-b', 'remote-1');
+    expect(await store.listOrphanRemoteWorkerOpens()).toHaveLength(0);
+    await store.saveRemoteWorkerOpen('device-b', 'orphan-1');
+    expect(await store.listOrphanRemoteWorkerOpens()).toEqual([expect.objectContaining({ remoteSessionId: 'orphan-1' })]);
+  });
+
+  it('keeps a rolled-back remote Worker available for cleanup across database rereads', async () => {
+    const store = await import('../orcaTeamStore.js');
+    const client = createTestDbClient();
+    setCurrentDbClient(client, 'test-user');
+    await seedOrcaWorkers(client);
+    await store.saveRemoteWorkerOpen('device-b', 'remote-1');
+    await store.addRemoteWorker({ workerId: 'worker-1', teamId: 'team-1', proxySessionId: 'worker-session-1',
+      deviceId: 'device-b', remoteSessionId: 'remote-1', label: 'dev', role: 'developer' });
+    expect(await store.listOrphanRemoteWorkerOpens()).toEqual([]);
+    await store.removeWorker('worker-1');
+    expect(await store.listActiveRemoteWorkers()).toEqual([]);
+    expect(await store.listWorkersByLead('lead-session-1')).toHaveLength(1);
+    expect(await store.listUnreleasedEndedRemoteWorkers()).toEqual([
+      expect.objectContaining({ workerId: 'worker-1', deviceId: 'device-b', remoteSessionId: 'remote-1' }),
+    ]);
+    expect(await store.getWorkerRemoteReleaseState('worker-1')).toMatchObject({ removeAfterRelease: true });
+    await store.markWorkerRemoteStopConfirmed('worker-1');
+    await store.markWorkerRemoteReleased('worker-1');
+    await store.removeWorker('worker-1');
+    expect(await store.getRemoteWorkerByProxySession('worker-session-1')).toBeNull();
+    expect(await store.listUnreleasedEndedRemoteWorkers()).toEqual([]);
   });
 
   it('notifies Agent Island when Orca archives worker sessions', async () => {
@@ -416,6 +486,8 @@ describe('orcaTeamStore', () => {
         extra_dirs TEXT NOT NULL DEFAULT '[]',
         writable_dirs TEXT NOT NULL DEFAULT '[]',
         remote_host_id TEXT,
+        agent_device_id TEXT,
+        orca_remote_lead TEXT,
         provider_id TEXT,
         active_turn_started_at INTEGER,
         active_turn_pid INTEGER,
@@ -433,6 +505,11 @@ describe('orcaTeamStore', () => {
         label TEXT NOT NULL,
         created_at INTEGER NOT NULL,
         expires_at INTEGER NOT NULL
+      );
+      CREATE TABLE orca_remote_opens (
+        remote_session_id TEXT PRIMARY KEY,
+        device_id TEXT NOT NULL,
+        created_at INTEGER NOT NULL
       );
       CREATE TABLE orca_teams (
         id TEXT PRIMARY KEY,
@@ -453,6 +530,12 @@ describe('orcaTeamStore', () => {
         role TEXT NOT NULL DEFAULT 'developer',
         focused INTEGER NOT NULL DEFAULT 0,
         idle_since INTEGER,
+        execution_device_id TEXT,
+        remote_session_id TEXT,
+        last_bridged_message_id TEXT,
+        remote_released_at INTEGER,
+      pending_remote_report TEXT,
+      remote_stop_confirmed_at INTEGER,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
       );

@@ -1,3 +1,4 @@
+import { botTaskResultKey, readBotCollaborationMeta } from '@cindy/maker-shared/botCollaboration';
 import { extractRenderedMarkdownImageTargets } from '@/components/chat/markdownImageTargets';
 import { HISTORY_GAP_SPLIT_MS } from '@/lib/historyGap';
 import type { ChatMessage } from '@/lib/makerChatStore';
@@ -36,8 +37,8 @@ function expandWorkGroups(items: readonly RenderItem[]): RenderItem[] {
 
 /** A presentation-only projection. Never mutate messages or infer intent from prose.
  * isFinal from the adapters closes a text block, not a turn (Pi/Claude can call
- * another tool afterwards). Reuse the normal work-group turn seal, omitting
- * unsealed prose while running. The composer owns live action
+ * another tool afterwards). Reuse the normal work-group turn seal, showing provider-marked final prose immediately while keeping
+ * unclassified intermediate prose hidden. The composer owns live action
  * feedback. On stop/error or old history without a seal, expose the last useful
  * prose so an answer or plain-text question cannot disappear permanently.
  */
@@ -66,7 +67,25 @@ export function simplifyBotRenderItems(
     else if (end !== null) previousEnd = previousEnd === null ? end : Math.max(previousEnd, end);
   }
   result.push(...projectWindow(window, isStreaming, visibleGeneratedFileKeys));
-  return result;
+  const attached = new Set(result.flatMap(item => item.type === 'message'
+    && item.message.role === 'assistant' && item.message.turnCompleted === true && item.message.content.trim()
+    ? (item.message.botTaskResults ?? []).map(botTaskResultKey) : []));
+  const lastSealedIndex = result.findLastIndex(item => isProse(item) && isCompletedAssistantMessage(item.message));
+  const lastUserIndex = result.findLastIndex(item => item.type === 'message'
+    && item.message.role === 'user' && item.message.delivery !== 'steer');
+  const fallbackReceipts: RenderItem[] = [];
+  const visible = result.filter((item, index) => {
+    if (item.type !== 'message' || item.message.systemCardType !== 'bot-session-task-result') return true;
+    const card = readBotCollaborationMeta(item.message.systemCardData);
+    if (!card?.result) return true;
+    if (attached.has(botTaskResultKey(card))) return false;
+    // An unrelated later turn must not erase an already historical fallback link.
+    if (index < Math.max(lastSealedIndex, lastUserIndex)) return true;
+    if (!isStreaming) fallbackReceipts.push(item);
+    return false;
+  });
+  // Unanswered/failed deliveries remain reachable without inserting ahead of a live reply.
+  return [...visible, ...fallbackReceipts];
 }
 
 function projectWindow(
@@ -115,7 +134,8 @@ function projectWindow(
       if (item.type === 'message' && item.message.isSyntheticTrigger) return;
       if (isProse(item)) {
         if (!item.message.content.trim() && !hasAttachments(item.message)) return;
-        if (!isCompletedAssistantMessage(item.message) && !sealedAnswers.has(item.message)
+        if (item.message.assistantPhase === 'commentary' && !item.message.explicitDelivery && !hasAttachments(item.message)) return;
+        if (item.message.assistantPhase !== 'final_answer' && !item.message.sourceGroup && !item.message.explicitDelivery && !isCompletedAssistantMessage(item.message) && !sealedAnswers.has(item.message)
           && !hasAttachments(item.message) && index !== fallbackProse
           && extractRenderedMarkdownImageTargets(item.message.content).length === 0) {
           return;

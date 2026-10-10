@@ -10,7 +10,7 @@
 
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({ spawn: vi.fn() }));
 
@@ -27,7 +27,7 @@ function makeChild(pid = 4321) {
     pid: number;
     stdout: EventEmitter;
     stderr: EventEmitter;
-    stdin: { write: ReturnType<typeof vi.fn> };
+    stdin: EventEmitter & { write: ReturnType<typeof vi.fn> };
     kill: ReturnType<typeof vi.fn>;
   };
   child.pid = pid;
@@ -35,7 +35,7 @@ function makeChild(pid = 4321) {
   child.stderr = new EventEmitter();
   Object.assign(child.stdout, { destroy: vi.fn() });
   Object.assign(child.stderr, { destroy: vi.fn() });
-  child.stdin = { write: vi.fn(), destroy: vi.fn() } as typeof child.stdin;
+  child.stdin = Object.assign(new EventEmitter(), { write: vi.fn(), destroy: vi.fn() });
   child.kill = vi.fn();
   return child;
 }
@@ -58,6 +58,8 @@ beforeEach(() => {
   mocks.spawn.mockReset();
 });
 
+afterEach(() => { vi.useRealTimers(); });
+
 describe('createPiStdioTransport', () => {
   it('spawns pi with --mode rpc and piped stdio', () => {
     makeTransport();
@@ -66,6 +68,14 @@ describe('createPiStdioTransport', () => {
       ['--mode', 'rpc'],
       expect.objectContaining({ stdio: ['pipe', 'pipe', 'pipe'] }),
     );
+  });
+
+  // #5173:Windows 上未设 windowsHide 时,每个本机 Pi 会话都会派生一个 conhost.exe,
+  // 与仓库内其它 spawn(binary-version-probe / piSubagentRunnerHost 等)口径不一致。
+  it('spawns pi with windowsHide so Windows sessions do not fork conhost.exe (#5173)', () => {
+    makeTransport();
+    const options = mocks.spawn.mock.calls[0]?.[2] as Record<string, unknown> | undefined;
+    expect(options).toMatchObject({ windowsHide: true });
   });
 
   it('close() is idempotent under concurrency (round 21 H-1 — no twin SIGTERM/SIGKILL)', async () => {
@@ -207,6 +217,138 @@ describe('createPiStdioTransport', () => {
       expect(child.kill.mock.calls.map(([signal]) => signal)).toEqual(signals);
       expect(onClose).toHaveBeenCalledWith(expect.objectContaining({ code: 23, signal: null }));
     } finally { vi.useRealTimers(); }
+  });
+
+  it.each(['end', 'close', 'error'])('reports stdout %s as RPC loss without claiming process exit', async (event) => {
+    vi.useFakeTimers();
+    const dispose = vi.fn();
+    const { transport, child } = makeTransport(() => dispose);
+    const disconnected = vi.fn();
+    const exited = vi.fn();
+    transport.onDisconnect?.(disconnected);
+    transport.onClose(exited);
+    child.stdout.emit(event, new Error('fixture stream error'));
+    child.stdout.emit('close');
+    await vi.advanceTimersByTimeAsync(250);
+    expect(disconnected).toHaveBeenCalledOnce();
+    expect(exited).not.toHaveBeenCalled();
+    expect(dispose).not.toHaveBeenCalled();
+    expect(child.kill).not.toHaveBeenCalled();
+    await expect(transport.writeLine('{}')).rejects.toThrow(/closed/);
+    // RPC unavailability must not make close falsely report successful cleanup.
+    const closing = transport.close();
+    expect(child.kill).toHaveBeenCalledWith('SIGTERM');
+    child.emit('close', 23, null);
+    await closing;
+    expect(exited).toHaveBeenCalledOnce();
+    expect(dispose).toHaveBeenCalledOnce();
+  });
+
+  it('flushes the last JSONL frame before reporting EOF, including to a late subscriber', async () => {
+    vi.useFakeTimers();
+    const { transport, child } = makeTransport();
+    const observed: string[] = [];
+    transport.onLine(line => observed.push(line));
+    transport.onDisconnect?.(reason => observed.push(reason));
+    child.stdout.emit('data', '{"type":"agent_settled"}');
+    child.stdout.emit('end');
+    await vi.advanceTimersByTimeAsync(250);
+    expect(observed).toEqual(['{"type":"agent_settled"}', 'stdout-ended']);
+    const late = vi.fn();
+    transport.onDisconnect?.(late);
+    expect(late).toHaveBeenCalledWith('stdout-ended');
+  });
+
+  it('fences writes before a newline-less EOF tail callback without losing the frame or releasing the process', async () => {
+    vi.useFakeTimers();
+    const dispose = vi.fn();
+    const { transport, child } = makeTransport(() => dispose);
+    const disconnected = vi.fn();
+    const exited = vi.fn();
+    const frames: string[] = [];
+    let tailWrite: Promise<void> | undefined;
+    let fencedAtTail = false;
+    child.stdin.write.mockImplementation((_line, callback) => callback());
+    transport.onDisconnect?.(disconnected);
+    transport.onClose(exited);
+    transport.onLine(line => {
+      frames.push(line);
+      fencedAtTail = transport.isClosed();
+      tailWrite = transport.writeLine('{"type":"extension_ui_response"}');
+    });
+    child.stdout.emit('data', '{"type":"agent_settled"}');
+    child.stdout.emit('end');
+    // Check the actual write result, not only the availability flag.
+    await expect(tailWrite).rejects.toThrow(/closed/);
+    expect(fencedAtTail).toBe(true);
+    expect(child.stdin.write).not.toHaveBeenCalled();
+    expect(frames).toEqual(['{"type":"agent_settled"}']);
+    expect(disconnected).not.toHaveBeenCalled();
+    expect(exited).not.toHaveBeenCalled();
+    expect(dispose).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(250);
+    expect(disconnected).toHaveBeenCalledWith('stdout-ended');
+    expect(dispose).not.toHaveBeenCalled();
+    child.emit('close', 0, null);
+    expect(exited).toHaveBeenCalledOnce();
+    expect(dispose).toHaveBeenCalledOnce();
+  });
+
+  it('reports stdin errors without fabricating an executor exit', async () => {
+    vi.useFakeTimers();
+    const { transport, child } = makeTransport();
+    const disconnected = vi.fn();
+    const exited = vi.fn();
+    transport.onDisconnect?.(disconnected);
+    transport.onClose(exited);
+    child.stdin.emit('error', new Error('EPIPE'));
+    await vi.advanceTimersByTimeAsync(250);
+    expect(disconnected).toHaveBeenCalledWith('stdin-error');
+    expect(exited).not.toHaveBeenCalled();
+  });
+
+  it('fences stdin immediately but drains stdout until the disconnect confirmation window ends', async () => {
+    vi.useFakeTimers();
+    const { transport, child } = makeTransport();
+    const observed: string[] = [];
+    transport.onLine(line => observed.push(JSON.parse(line).type));
+    transport.onDisconnect?.(reason => observed.push(reason));
+    child.stdin.emit('error', new Error('EPIPE'));
+    expect(transport.isClosed()).toBe(true);
+    await expect(transport.writeLine('{}')).rejects.toThrow(/closed/);
+    expect(child.stdin.write).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(249);
+    child.stdout.emit('data', '{"type":"tool_execution_end"}\n{"type":"message_end"}\n{"type":"agent_settled"}\n');
+    expect(observed).toEqual(['tool_execution_end', 'message_end', 'agent_settled']);
+    await vi.advanceTimersByTimeAsync(1);
+    child.stdout.emit('data', '{"type":"late-frame"}\n');
+    expect(observed).toEqual(['tool_execution_end', 'message_end', 'agent_settled', 'stdin-error']);
+  });
+
+  it('prioritizes confirmed process exit when stdout ends just before exit', async () => {
+    vi.useFakeTimers();
+    const { transport, child } = makeTransport();
+    const disconnected = vi.fn();
+    const exited = vi.fn();
+    transport.onDisconnect?.(disconnected);
+    transport.onClose(exited);
+    child.stdout.emit('end');
+    child.emit('exit', 1, null);
+    await vi.advanceTimersByTimeAsync(250);
+    expect(exited).toHaveBeenCalledWith(expect.objectContaining({ code: 1 }));
+    expect(disconnected).not.toHaveBeenCalled();
+  });
+
+  it('does not report pipe loss during confirmed-exit drain or explicit close', async () => {
+    const { transport, child } = makeTransport();
+    const disconnected = vi.fn();
+    transport.onDisconnect?.(disconnected);
+    const closing = transport.close();
+    child.stdout.emit('end');
+    child.stdin.emit('error', new Error('EPIPE'));
+    child.emit('close', 0, null);
+    await closing;
+    expect(disconnected).not.toHaveBeenCalled();
   });
 
   it('writeLine rejects when closed', async () => {

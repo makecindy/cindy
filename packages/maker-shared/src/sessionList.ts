@@ -10,10 +10,28 @@ import { isDefaultDraftSessionTitle } from './sessionTitle.js';
 import { getSessionListCollapseView } from './sessionListCollapse.js';
 import { collapseWorktreeDirForGrouping } from './worktreePaths.js';
 
+let sessionListCollator: Intl.Collator | undefined;
+/** Call when the host resumes after system locale/region preferences may change. */
+export function clearSessionListCollator(): void {
+  sessionListCollator = undefined;
+}
+
+/** Same default-locale ordering as localeCompare, without constructing an ICU
+ * collator for every comparison on Android/Hermes. */
+export function compareSessionListStrings(left: string, right: string): number {
+  sessionListCollator ??= new Intl.Collator();
+  return sessionListCollator.compare(left, right);
+}
+
 export interface RemoteSessionListSessionLike extends SessionInterruptionState {
   tags?: import('./taskTags').TaskTag[];
   _count?: { messages?: number } | null;
   agentKind: 'cc' | 'codex' | string;
+  /**
+   * 远程 Agent:非空 = Agent 在同账号另一台电脑上运行(desktop sessions.agent_device_id),
+   * 任务仍在被控电脑;null / 缺省 = Agent 就在被控电脑(含旧被控端)。
+   */
+  agentDeviceId?: string | null;
   createdAt: string;
   effort?: string | null;
   fastMode?: boolean;
@@ -112,6 +130,8 @@ export interface RemoteSessionScheduleInfo {
   scheduleId: string;
   scheduleName: string;
   scheduleStatus?: RemoteSchedule['status'];
+  /** 该 schedule 的下次自动运行时间(毫秒,宿主时钟);手动、已停止或运行中被清空时缺失。 */
+  nextFireAt?: number;
   /** 同一会话的所有已知 schedule 绑定都已 paused / expired 时为 true；缺失按 false。 */
   allSchedulesStopped?: boolean;
   unreadRunIds: string[];
@@ -388,7 +408,7 @@ function buildProjectSections(
     list.push(item);
     projectGroups.set(key, list);
   }
-  for (const [workingDir, data] of [...projectGroups].sort(([a], [b]) => a.localeCompare(b))) {
+  for (const [workingDir, data] of [...projectGroups].sort(([a], [b]) => compareSessionListStrings(a, b))) {
     sections.push({
       key: `project:${workingDir}`,
       title: projectTitle(workingDir),
@@ -624,6 +644,7 @@ export function buildSessionScheduleIndex(
         scheduleId: schedule.id,
         scheduleName: schedule.name || schedule.id,
         scheduleStatus: schedule.status,
+        ...nextFireAtField(schedule),
         allSchedulesStopped: false,
         unreadRunIds: [],
         unreadCount: 0,
@@ -658,6 +679,7 @@ export function buildSessionScheduleIndex(
         scheduleId: isLatest ? scheduleId : existing.scheduleId,
         scheduleName: isLatest ? schedule?.name || scheduleId : existing.scheduleName,
         scheduleStatus: isLatest ? schedule?.status : existing.scheduleStatus,
+        ...(isLatest ? nextFireAtField(schedule) : existing.nextFireAt !== undefined ? { nextFireAt: existing.nextFireAt } : {}),
         allSchedulesStopped: false,
         unreadRunIds,
         unreadCount: unreadRunIds.length,
@@ -677,6 +699,11 @@ export function buildSessionScheduleIndex(
     index.set(sessionId, { ...info, allSchedulesStopped });
   }
   return index;
+}
+
+function nextFireAtField(schedule: RemoteSchedule | undefined): { nextFireAt?: number } {
+  const nextFireAt = schedule ? toMillis(schedule.nextFireAt) : 0;
+  return nextFireAt > 0 ? { nextFireAt } : {};
 }
 
 export function buildSessionMessagePreviewIndex(
@@ -759,7 +786,7 @@ function normalizeInlinePreview(value: string): string | null {
 function compareSessions(a: RemoteSession, b: RemoteSession): number {
   const pinnedDiff = Number(!!b.pinnedAt) - Number(!!a.pinnedAt);
   if (pinnedDiff !== 0) return pinnedDiff;
-  return lastActivity(b).localeCompare(lastActivity(a));
+  return compareSessionListStrings(lastActivity(b), lastActivity(a));
 }
 
 function normalizeSearchQuery(value: string | undefined): string {
@@ -885,7 +912,7 @@ function toAutomationGroupListItem(
   // 用它的时间会让上游(首页项目卡 latestActivityAt、日期分桶、行右侧时间)把整组排成旧活动。
   const latestActivityAt = group.reduce(
     (latest, item) =>
-      item.lastActivityAt.localeCompare(latest) > 0 ? item.lastActivityAt : latest,
+      compareSessionListStrings(item.lastActivityAt, latest) > 0 ? item.lastActivityAt : latest,
     primary.lastActivityAt,
   );
   return {
