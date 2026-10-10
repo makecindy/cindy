@@ -1691,6 +1691,26 @@ function collectPiUserSettingsPassthrough(content: string | null): Record<string
   return preserved;
 }
 
+/**
+ * 容错解析已存在的 settings.json, 只取要跨重写保留的 modelOverrides。
+ * 损坏/非对象内容返回 undefined(跳过保留, 回落内建默认) —— 不让恢复便利
+ * 读取把投影或 set_model 后的改写炸掉(#3643 对损坏内容容错的同族口径)。
+ */
+export function parsePiModelOverridesToPreserve(content: string): Record<string, unknown> | undefined {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(content);
+  } catch {
+    return undefined;
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return undefined;
+  const overrides = (parsed as { compaction?: { modelOverrides?: Record<string, unknown> } })
+    .compaction?.modelOverrides;
+  return overrides && typeof overrides === 'object' && !Array.isArray(overrides)
+    ? overrides
+    : undefined;
+}
+
 /** 多来源合并,靠后的来源同键覆盖靠前的(稳定根用户文件应排最后)。 */
 export function mergePiUserSettingsPassthrough(
   builtContent: string,
@@ -2146,10 +2166,20 @@ export class PiAgent extends BaseAgent {
     }
     if (opts.fileOps) {
       if (!opts.compactionModelOverrides) {
-        const current = JSON.parse(await opts.fileOps.readFile(settingsJsonPath, 1_000_000));
+        // 保留读容错:settings.json 损坏/半截时跳过 modelOverrides 保留(回落内建
+        // 默认), 不让恢复便利读取炸掉整个投影 —— 与 collectPiUserSettingsPassthrough
+        // 对损坏内容的 #3643 容错口径一致。
+        let currentOverrides: Record<string, unknown> | undefined;
+        try {
+          currentOverrides = parsePiModelOverridesToPreserve(
+            await opts.fileOps.readFile(settingsJsonPath, 1_000_000),
+          );
+        } catch {
+          currentOverrides = undefined;
+        }
         const settings = JSON.parse(built);
-        if (current.compaction?.modelOverrides) {
-          settings.compaction = { ...settings.compaction, modelOverrides: current.compaction.modelOverrides };
+        if (currentOverrides) {
+          settings.compaction = { ...settings.compaction, modelOverrides: currentOverrides };
         }
         return JSON.stringify(settings, null, 2) + '\n';
       }
@@ -2173,7 +2203,7 @@ export class PiAgent extends BaseAgent {
     // Package/resource setup rewrites this private file after the model catalog.
     // Keep the per-model budgets generated with that catalog.
     if (!opts.compactionModelOverrides && sessionContent) {
-      const overrides = JSON.parse(sessionContent).compaction?.modelOverrides;
+      const overrides = parsePiModelOverridesToPreserve(sessionContent);
       if (overrides) mergedSettings.compaction = { ...mergedSettings.compaction, modelOverrides: overrides };
     }
     const merged = JSON.stringify(mergedSettings, null, 2) + '\n';
