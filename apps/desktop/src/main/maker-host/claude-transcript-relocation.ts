@@ -20,8 +20,8 @@
  *   5. 内存 id + DB 旧 id + messages agent_meta 的 DISTINCT sdkSessionId
  *      (rewind fork 历史链)三源并集交给 maker-core 复制。
  *
- * 整体 best-effort:任何失败只记日志,不阻断会话移动主流程(转录可事后手工
- * 迁移,移动失败对用户伤害更大)。
+ * 默认保持 best-effort。延迟移动使用 strict 模式:关闭、复制或 resume 转录
+ * 就位失败必须上抛,由调用方保留原工作目录,避免界面已移动却无法续聊。
  */
 import path from 'node:path';
 
@@ -128,13 +128,14 @@ export interface RelocateForSessionMoveResult {
 
 /**
  * 会话 workingDir 变更后迁移其 Claude CLI 转录(编排顺序见文件头注释)。
- * 仅限本机 cc 会话调用(调用方负责过滤 agentKind / remoteHostId)。不抛错。
+ * 仅限本机 cc 会话调用(调用方负责过滤 agentKind / remoteHostId)。
+ * strict 模式仅在 resume 所需转录已就位后返回;默认失败仅记录日志。
  */
 export async function relocateClaudeTranscriptsForSessionMove(
   sessionId: string,
   oldWorkingDir: string,
   newWorkingDir: string,
-  scope?: { client: DbClient; assertCurrent: () => void },
+  scope?: { client: DbClient; assertCurrent: () => void; strict?: boolean },
 ): Promise<RelocateForSessionMoveResult> {
   let persistedSdkSessionId: string | null = null;
   try {
@@ -193,12 +194,24 @@ export async function relocateClaudeTranscriptsForSessionMove(
       newWorkingDir,
       projectsRoot,
     });
+    scope?.assertCurrent();
     if (result.targetKeyInexact) {
+      if (scope?.strict) {
+        throw new Error('Claude transcript relocation could not resolve the target project');
+      }
       log.warn('transcript relocation skipped: target project key inexact (path too long)', {
         sessionId,
         newWorkingDir,
       });
       return { persistedSdkSessionId };
+    }
+    const activeId = liveId ?? dbId;
+    if (
+      scope?.strict &&
+      activeId &&
+      ![...result.copied, ...result.replaced, ...result.skipped].includes(activeId)
+    ) {
+      throw new Error('Claude transcript relocation did not locate the resume transcript');
     }
     const level = result.missing.length > 0 ? 'warn' : 'info';
     log[level]('relocated Claude transcripts for session move', {
@@ -213,6 +226,9 @@ export async function relocateClaudeTranscriptsForSessionMove(
     });
     return { persistedSdkSessionId };
   } catch (err) {
+    // The strict caller owns rollback/error reporting. In particular, a failed
+    // close must never proceed to copy or commit a new working directory.
+    if (scope?.strict) throw err;
     log.warn('transcript relocation failed (session move proceeds)', {
       sessionId,
       oldWorkingDir,

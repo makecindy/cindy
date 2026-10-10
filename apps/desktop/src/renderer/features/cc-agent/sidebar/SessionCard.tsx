@@ -1,3 +1,4 @@
+import { sidebarSessionProject } from '../lib/sidebarSessionProject';
 import { SessionTaskMenu } from './SessionTaskMenu';
 import { isSharedTaskPeer } from '@cindy/device-link';
 import { TaskTagMenuSection, TaskTagEditor, TaskTagDots } from '@/features/task-tags/TaskTags';
@@ -566,8 +567,8 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
   const moveToProjectSubmenu = canMoveToProject ? (
     <SessionProjectMoveSubmenu
       projectOptions={projectOptions}
-      currentWorkingDir={session.workspaceKind === 'project' ? session.workingDir : null}
-      isDialogue={session.workspaceKind === 'dialogue'}
+      currentWorkingDir={sidebarSessionProject(session).workspaceKind === 'project' ? sidebarSessionProject(session).workingDir : null}
+      isDialogue={sidebarSessionProject(session).workspaceKind === 'dialogue'}
       onSelectProject={handleMoveToProjectSelect}
       onBrowseProject={handleMoveToProjectBrowse}
       onMoveToDialogue={handleMoveToDialogue}

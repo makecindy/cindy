@@ -5,9 +5,9 @@ import { sessionActivityMs } from './dateSessionGrouping';
 import {
   filterPersistentLocalProjectsByLastActivity,
   groupSessions,
-  projectIdentityKeyForSession,
   type PersistentLocalProject,
 } from './projectGrouping';
+import { sidebarSessionProject, sidebarProjectIdentityKeyForSession } from './sidebarSessionProject';
 import { isProjectHidden } from './sidebarProjectVisibility';
 
 type SidebarProjectRestoreHandler = (projectKey: string) => Promise<boolean>;
@@ -115,8 +115,8 @@ export function collectRestorableProjectKeys({
     }
   }
   for (const session of allGroups.pinned) {
-    if (session.workspaceKind === 'dialogue') continue;
-    const projectKey = projectIdentityKeyForSession(session);
+    if (sidebarSessionProject(session).workspaceKind === 'dialogue') continue;
+    const projectKey = sidebarProjectIdentityKeyForSession(session);
     if (projectKey != null) projectKeys.add(projectKey);
   }
 

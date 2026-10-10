@@ -12,6 +12,7 @@ const h = vi.hoisted(() => ({
   workers: [] as Array<{ sessionId: string }>,
   running: new Set<string>(),
   attached: false,
+  worktree: null as { baseRepo: string } | null,
   update: vi.fn(),
   saved: vi.fn(),
   enterLock: vi.fn(),
@@ -54,6 +55,7 @@ vi.mock('../../localDb/ipc/recentWorkdirs.js', async (importOriginal) => {
 });
 vi.mock('../../sidebarSettingsStore.js', () => ({ restoreLocalProjectVisibility: vi.fn() }));
 vi.mock('../../logger.js', () => ({ createLogger: () => ({ warn: vi.fn() }) }));
+vi.mock('../../worktree/worktreeStore.js', () => ({ get: () => h.worktree }));
 vi.mock('../../im/binding.js', () => ({
   bindingStore: { findByTarget: () => (h.attached ? 'im' : null) },
 }));
@@ -73,6 +75,7 @@ describe('moveSession host', () => {
     h.botLinks = [];
     h.botLinkSequence = null;
     h.attached = false;
+    h.worktree = null;
     h.enterLock.mockImplementation(() => undefined);
     h.beforeCommit.mockImplementation(() => undefined);
     h.query.mockResolvedValue([
@@ -90,6 +93,13 @@ describe('moveSession host', () => {
       return { id, workingDir: patch.workingDir ?? '/old', workspaceKind: patch.workspaceKind };
     });
   });
+  it.each(['project', 'dialogue'] as const)('keeps an independent worktree bound when moving to %s', async (kind) => {
+    h.worktree = { baseRepo: path.join(directory, 'original') };
+    const result = await run(kind === 'dialogue' ? null : directory);
+    expect(result).toMatchObject({ ok: false, errorCode: 'UNSUPPORTED_CAPABILITY' });
+    expect(h.saved).not.toHaveBeenCalled();
+  });
+
   afterEach(async () => {
     await rm(directory, { recursive: true, force: true });
   });
@@ -164,15 +174,18 @@ describe('moveSession host', () => {
   it.each([false, true])(
     'rechecks target lifecycle and ownership at commit (project=%s)',
     async (project) => {
-      for (const change of ['archived', 'bot-link', 'im']) {
+      for (const change of ['archived', 'bot-link', 'im', 'cindy-make', 'cindy-make-merge']) {
         h.query.mockResolvedValue([{ id: 'target', status: 'active' }]);
         h.botLinks = [];
         h.attached = false;
+    h.worktree = null;
         h.beforeCommit.mockImplementationOnce(() => {
           if (change === 'archived')
             h.query.mockResolvedValue([{ id: 'target', status: 'archived' }]);
           if (change === 'bot-link') h.botLinks = [{ botId: 'bot' }];
           if (change === 'im') h.attached = true;
+          if (change === 'cindy-make' || change === 'cindy-make-merge')
+            h.query.mockResolvedValue([{ id: 'target', status: 'active', source: change }]);
         });
         expect(await run(project ? directory : null)).toMatchObject({ ok: false });
       }
@@ -194,15 +207,65 @@ describe('moveSession host', () => {
     },
   );
 
-  it('moves a task whose agent runs on another computer', async () => {
+  it.each(['cindy-make', 'cindy-make-merge'])(
+    'keeps %s targets in their managed workspace for UI and agent moves',
+    async (source) => {
+      h.query.mockResolvedValue([{ id: 'target', status: 'active', source }]);
+      for (const workingDir of [directory, null]) {
+        expect(
+          await moveSessionProjectFromHost(() => false, 'target', workingDir, () => {}),
+        ).toMatchObject({ ok: false, errorCode: 'UNSUPPORTED_CAPABILITY' });
+        h.query.mockResolvedValueOnce([{ id: 'caller', source: 'desktop' }]);
+        expect(await run(workingDir)).toMatchObject({
+          ok: false,
+          errorCode: 'UNSUPPORTED_CAPABILITY',
+        });
+      }
+      expect(h.beforeCommit).not.toHaveBeenCalled();
+      expect(h.saved).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(['cindy-make', 'cindy-make-merge'])(
+    'lets a %s caller move an ordinary target',
+    async (source) => {
+      h.query.mockResolvedValueOnce([{ id: 'caller', source }]);
+      expect(await run(directory)).toMatchObject({ ok: true });
+      expect(h.saved).toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    ['device-b', 'project'],
+    ['device-b', 'dialogue'],
+    ['share:provider-share', 'project'],
+    ['share:provider-share', 'dialogue'],
+  ] as const)('moves an idle remote Agent task (%s, %s)', async (agentDeviceId, workspaceKind) => {
     h.query.mockResolvedValue([
-      { id: 'target', status: 'active', remoteHostId: null, agentDeviceId: 'device-b', source: null },
+      { id: 'target', status: 'active', remoteHostId: null, agentDeviceId, source: null },
     ]);
-    expect(await run(directory)).toMatchObject({ ok: true, workspaceKind: 'project' });
-    expect(h.saved).toHaveBeenLastCalledWith({
-      workingDir: directory.replaceAll('\\', '/'),
-      workspaceKind: 'project',
+    const isProject = workspaceKind === 'project';
+    expect(await run(isProject ? directory : null)).toMatchObject({ ok: true, workspaceKind });
+    expect(h.saved).toHaveBeenLastCalledWith(isProject
+      ? { workingDir: directory.replaceAll('\\', '/'), workspaceKind }
+      : { workspaceKind });
+  });
+
+  it.each([
+    ['device-b', 'target'],
+    ['device-b', 'worker'],
+    ['share:provider-share', 'target'],
+    ['share:provider-share', 'worker'],
+  ])('rechecks remote Agent activity before committing (%s, %s)', async (agentDeviceId, runningId) => {
+    h.query.mockResolvedValue([
+      { id: 'target', status: 'active', remoteHostId: null, agentDeviceId, source: null },
+    ]);
+    h.beforeCommit.mockImplementationOnce(() => {
+      if (runningId === 'worker') h.workers = [{ sessionId: 'worker' }];
+      h.running.add(runningId);
     });
+    expect(await run(directory)).toMatchObject({ ok: false, errorCode: 'PRECONDITION_FAILED' });
+    expect(h.saved).not.toHaveBeenCalled();
   });
 
   it('does not report a committed move as rejected when IM attaches after the write', async () => {
@@ -216,6 +279,7 @@ describe('moveSession host', () => {
     h.attached = true;
     expect(await run(null)).toMatchObject({ errorCode: 'PRECONDITION_FAILED' });
     h.attached = false;
+    h.worktree = null;
     h.query.mockResolvedValue([{ id: 'target', status: 'active', orcaRole: 'lead' }]);
     h.workers = [{ sessionId: 'worker' }];
     h.running.add('worker');

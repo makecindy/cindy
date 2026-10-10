@@ -1,3 +1,4 @@
+import { sidebarSessionProject } from '../lib/sidebarSessionProject';
 import { SessionTaskMenu } from './SessionTaskMenu';
 import { TaskTagMenuSection, TaskTagEditor, TaskTagDots } from '@/features/task-tags/TaskTags';
 import { Button } from '@/components/ui/button';
@@ -831,8 +832,8 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
   const moveToProjectSubmenu = canMoveToProject ? (
     <SessionProjectMoveSubmenu
       projectOptions={projectOptions}
-      currentWorkingDir={session.workspaceKind === 'project' ? session.workingDir : null}
-      isDialogue={session.workspaceKind === 'dialogue'}
+      currentWorkingDir={sidebarSessionProject(session).workspaceKind === 'project' ? sidebarSessionProject(session).workingDir : null}
+      isDialogue={sidebarSessionProject(session).workspaceKind === 'dialogue'}
       onSelectProject={handleMoveToProjectSelect}
       onBrowseProject={handleMoveToProjectBrowse}
       onMoveToDialogue={handleMoveToDialogue}

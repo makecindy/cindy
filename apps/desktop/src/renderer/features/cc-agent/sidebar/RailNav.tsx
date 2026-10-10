@@ -32,7 +32,7 @@ import { useReducedMotion } from '@/hooks/useReducedMotion';
 import { useSidebarCardMode } from '@/hooks/useSidebarCardMode';
 import { Tip } from '@/components/ui/tooltip';
 import { isOrcaWorkerSession, resolveSessionRoute } from '@/lib/orcaSessionIdentity';
-import { projectIdentityKeyForSession } from '../lib/projectGrouping';
+import { sidebarSessionProject, sidebarProjectIdentityKeyForSession } from '../lib/sidebarSessionProject';
 import { getSessionDisplayTitle } from '../lib/sessionDisplayTitle';
 import { SessionStatusIcon } from './SessionStatusIcon';
 import { formatSidebarTime } from '../lib/formatSidebarTime';
@@ -191,7 +191,7 @@ export function RailNav({
     () =>
       sessions.filter(
         (s) =>
-          s.workspaceKind === 'dialogue' && s.status !== 'archived' && !isOrcaWorkerSession(s),
+          sidebarSessionProject(s).workspaceKind === 'dialogue' && s.status !== 'archived' && !isOrcaWorkerSession(s),
       ),
     [sessions],
   );
@@ -218,10 +218,10 @@ export function RailNav({
     () =>
       sessions.filter(
         (s) =>
-          s.workspaceKind === 'project' &&
+          sidebarSessionProject(s).workspaceKind === 'project' &&
           s.status !== 'archived' &&
           !isOrcaWorkerSession(s) &&
-          projectIdentityKeyForSession(s) != null,
+          sidebarProjectIdentityKeyForSession(s) != null,
       ),
     [sessions],
   );

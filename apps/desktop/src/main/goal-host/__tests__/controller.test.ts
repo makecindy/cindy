@@ -566,6 +566,38 @@ describe('GoalController', () => {
     });
   });
 
+  it.each(['setGoal', 'resumeOnOpen'] as const)(
+    '%s restores with the direct-send lease it already owns',
+    async (entry) => {
+      const session = new FakeSession('s1', 'pi');
+      let locked = false;
+      const ensureSession = vi.fn<GoalControllerDeps['ensureSession']>(async (_id, options) => {
+        expect(options?.routeLockHeld === true).toBe(locked);
+        return session;
+      });
+      const local = makeController({
+        getSession: () => session,
+        ensureSession,
+        acquirePendingAgentSwitch: async () => {
+          expect(locked).toBe(false);
+          locked = true;
+          return () => { locked = false; };
+        },
+      });
+      if (entry === 'setGoal') {
+        await local.controller.setGoal({ sessionId: 's1', objective: 'use the moved workspace' });
+      } else {
+        await local.storage.set(seededGoal({ status: 'active', objective: 'use the moved workspace' }));
+        await local.controller.resumeOnOpen('s1');
+      }
+
+      expect(session.sends).toHaveLength(1);
+      expect(ensureSession).toHaveBeenCalledWith('s1', { routeLockHeld: true });
+      expect(locked).toBe(false);
+      await local.controller.dispose();
+    },
+  );
+
   it('keeps dispatch owners clean when the route-lock release throws', async () => {
     const releaseAgentSwitchLock = vi.fn(() => {
       throw new Error('route lock release failed');

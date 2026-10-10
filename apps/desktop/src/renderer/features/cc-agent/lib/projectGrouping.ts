@@ -39,6 +39,7 @@
  */
 
 import type { DeviceLinkConnectionStatus, Session } from '@/lib/ccAgent.types';
+import { sidebarSessionProject, sidebarProjectIdentityKeyForSession } from './sidebarSessionProject';
 import { isOrcaLeadSession, isOrcaWorkerSession } from '@/lib/orcaSessionIdentity';
 import { normalizeWorkingDirForGrouping } from '../../../../shared/workingDir';
 import {
@@ -195,14 +196,14 @@ export function buildPersistentLocalProjects(
   const knownKindsByComparisonKey = new Map<string, Set<string>>();
   for (const session of sessions) {
     if (
-      session.workspaceKind === 'dialogue' ||
+      sidebarSessionProject(session).workspaceKind === 'dialogue' ||
       isOrcaWorkerSession(session) ||
       session.remoteHostId != null ||
       session.deviceLinkDeviceId != null
     ) {
       continue;
     }
-    const projectKey = projectIdentityKeyForSession(session);
+    const projectKey = sidebarProjectIdentityKeyForSession(session);
     const comparisonKey = projectKeyComparisonKey(projectKey, localPlatform);
     if (!comparisonKey) continue;
     let kinds = knownKindsByComparisonKey.get(comparisonKey);
@@ -579,7 +580,8 @@ export function groupSessions(
   const groups = new Map<string, Session[]>();
   const identityByKey = new Map<string, ProjectIdentity>();
   for (const s of remaining) {
-    if (s.workspaceKind === 'dialogue') {
+    const displayedProject = sidebarSessionProject(s);
+    if (displayedProject.workspaceKind === 'dialogue') {
       dialogues.push(s);
       continue;
     }
@@ -593,7 +595,7 @@ export function groupSessions(
       if (!botOwners.has(owner.botId)) botOwners.set(owner.botId, owner);
       continue;
     }
-    const dir = normalizeWorkingDir(s.workingDir);
+    const dir = normalizeWorkingDir(displayedProject.workingDir);
     const noPhysicalMessages = (s._count?.messages ?? 0) === 0;
     const isOrcaLead = isOrcaLeadSession(s);
     const isAutoPlacedSession = s.source === 'scheduler' || s.source === 'plugin';

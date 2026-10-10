@@ -133,9 +133,9 @@ export async function create(body?: {
   return wrap(window.electronAPI.localDb.sessions.create(body));
 }
 
-export function get(id: string): Promise<Session> {
+export function get(id: string, options?: { fresh?: boolean }): Promise<Session> {
   const existing = getInFlight.get(id);
-  if (existing) return existing;
+  if (existing && !options?.fresh) return existing;
 
   const request = wrap(window.electronAPI.localDb.sessions.get(id));
   getInFlight.set(id, request);

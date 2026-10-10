@@ -169,6 +169,11 @@ export interface GoalStorageLike {
 }
 
 /** GoalController 注入依赖。 */
+export interface GoalSessionRestoreOptions {
+  /** Direct-send preparation already owns this task's non-reentrant route lock. */
+  routeLockHeld?: boolean;
+}
+
 export interface GoalControllerDeps {
   storage: GoalStorageLike;
   /** ← Maker.getSession(同步只读);未活化返回 undefined。isBusy / attachListener 用。 */
@@ -179,7 +184,7 @@ export interface GoalControllerDeps {
    * (无 meta)返回 undefined。这是修"用户开了对话但没发过消息 → getSession 为空 →
    * goal 设了却发不出第一轮"的关键。
    */
-  ensureSession(sessionId: string): Promise<SessionLike | undefined>;
+  ensureSession(sessionId: string, options?: GoalSessionRestoreOptions): Promise<SessionLike | undefined>;
   /**
    * 锁住本 session、落实 deferred agent switch 并 bootstrap 新 live session。
    * 调用方在重新读取 live session 且 Session.send 返回后执行 release。

@@ -268,3 +268,84 @@ describe('relocateClaudeTranscriptsForSessionMove', () => {
     expect([...args.sdkSessionIds].sort()).toEqual(['sdk-db', 'sdk-meta-1']);
   });
 });
+
+describe('strict session move relocation', () => {
+  function scope(activeId: string | null = DB_ID) {
+    return {
+      strict: true,
+      assertCurrent: vi.fn(),
+      client: {
+        queryOne: vi.fn(async () => ({ sdkSessionId: activeId })),
+        query: vi.fn(async () => []),
+        exec: vi.fn(async () => ({ changes: 1 })),
+      } as unknown as DbClient,
+    };
+  }
+
+  it('rejects a failed runtime close before copying transcripts', async () => {
+    const failure = new Error('runtime close failed');
+    setLiveCcSessionBridge({
+      resolveSdkSessionId: () => DB_ID,
+      closeSession: vi.fn(async () => { throw failure; }),
+    });
+    await expect(
+      relocateClaudeTranscriptsForSessionMove('s1', '/old/dir', '/new/dir', scope()),
+    ).rejects.toBe(failure);
+    expect(h.relocate).not.toHaveBeenCalled();
+  });
+
+  it('propagates copy failures so the caller can retain the old working directory', async () => {
+    const failure = new Error('disk full');
+    h.relocate.mockRejectedValue(failure);
+    await expect(
+      relocateClaudeTranscriptsForSessionMove('s1', '/old/dir', '/new/dir', scope()),
+    ).rejects.toBe(failure);
+  });
+
+  it('rejects an inexact target instead of reporting a successful move', async () => {
+    h.relocate.mockResolvedValue({ copied: [], replaced: [], skipped: [], missing: [], targetKeyInexact: true });
+    await expect(
+      relocateClaudeTranscriptsForSessionMove('s1', '/old/dir', '/new/dir', scope()),
+    ).rejects.toThrow('could not resolve the target project');
+  });
+
+  it('requires the latest live resume transcript, not only the old DB fork', async () => {
+    setLiveCcSessionBridge({ resolveSdkSessionId: () => LIVE_ID, closeSession: vi.fn(async () => undefined) });
+    h.relocate.mockResolvedValue({ copied: [DB_ID], replaced: [], skipped: [], missing: [LIVE_ID], targetKeyInexact: false });
+    const captured = scope();
+    await expect(
+      relocateClaudeTranscriptsForSessionMove('s1', '/old/dir', '/new/dir', captured),
+    ).rejects.toThrow('did not locate the resume transcript');
+    // The newest resume ID remains valid for the old directory after failure.
+    expect(captured.client.exec).toHaveBeenCalledWith(expect.any(String), [LIVE_ID, 's1']);
+  });
+
+  it.each(['copied', 'replaced', 'skipped'])('accepts the resume transcript when it was %s', async (outcome) => {
+    h.relocate.mockResolvedValue({
+      copied: [], replaced: [], skipped: [], missing: [META_ID], targetKeyInexact: false,
+      [outcome]: [DB_ID],
+    });
+    await expect(
+      relocateClaudeTranscriptsForSessionMove('s1', '/old/dir', '/new/dir', scope()),
+    ).resolves.toEqual({ persistedSdkSessionId: null });
+  });
+
+  it('allows a new task without any resume id', async () => {
+    await expect(
+      relocateClaudeTranscriptsForSessionMove('s1', '/old/dir', '/new/dir', scope(null)),
+    ).resolves.toEqual({ persistedSdkSessionId: null });
+    expect(h.relocate).not.toHaveBeenCalled();
+  });
+
+  it('rejects if ownership changes while copying', async () => {
+    const captured = scope();
+    const failure = new Error('account changed');
+    h.relocate.mockImplementation(async () => {
+      captured.assertCurrent.mockImplementation(() => { throw failure; });
+      return { copied: [DB_ID], replaced: [], skipped: [], missing: [], targetKeyInexact: false };
+    });
+    await expect(
+      relocateClaudeTranscriptsForSessionMove('s1', '/old/dir', '/new/dir', captured),
+    ).rejects.toBe(failure);
+  });
+});

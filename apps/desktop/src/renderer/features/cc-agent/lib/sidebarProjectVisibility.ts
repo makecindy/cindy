@@ -1,14 +1,14 @@
 import type { Session } from '@/lib/ccAgent.types';
 
 import {
-  projectIdentityKeyForSession,
   projectKeyComparisonKey,
   type ProjectNode,
 } from './projectGrouping';
+import { sidebarSessionProject, sidebarProjectIdentityKeyForSession } from './sidebarSessionProject';
 
 type SidebarProjectSession = Pick<
   Session,
-  'workingDir' | 'remoteHostId' | 'deviceLinkDeviceId' | 'workspaceKind'
+  'workingDir' | 'remoteHostId' | 'deviceLinkDeviceId' | 'workspaceKind' | 'projectMoveTarget'
 >;
 
 /**
@@ -37,8 +37,8 @@ export function isSessionInHiddenProject(
 ): boolean {
   // Dialogue tasks own a working directory too, but that directory is not a
   // user-added project and must never be hidden by a project tombstone.
-  if (session.workspaceKind === 'dialogue') return false;
-  const projectKey = projectIdentityKeyForSession(session);
+  if (sidebarSessionProject(session).workspaceKind === 'dialogue') return false;
+  const projectKey = sidebarProjectIdentityKeyForSession(session);
   return projectKey != null && isProjectHidden(projectKey, hiddenProjectKeys, localPlatform);
 }
 
@@ -84,10 +84,10 @@ export function isSessionInProjectComparisonSet(
   projectComparisonKeys: ReadonlySet<string>,
   localPlatform: string,
 ): boolean {
-  if (session.workspaceKind === 'dialogue') return false;
+  if (sidebarSessionProject(session).workspaceKind === 'dialogue') return false;
   return projectKeyComparisonSetHas(
     projectComparisonKeys,
-    projectIdentityKeyForSession(session),
+    sidebarProjectIdentityKeyForSession(session),
     localPlatform,
   );
 }
@@ -98,8 +98,8 @@ export function isSessionInProject(
   projectKey: string,
   localPlatform: string,
 ): boolean {
-  if (session.workspaceKind === 'dialogue') return false;
-  const sessionProjectKey = projectIdentityKeyForSession(session);
+  if (sidebarSessionProject(session).workspaceKind === 'dialogue') return false;
+  const sessionProjectKey = sidebarProjectIdentityKeyForSession(session);
   const sessionComparisonKey = projectKeyComparisonKey(sessionProjectKey, localPlatform);
   const projectComparisonKey = projectKeyComparisonKey(projectKey, localPlatform);
   return sessionComparisonKey != null && sessionComparisonKey === projectComparisonKey;
@@ -159,7 +159,7 @@ export function sidebarSessionsWithHiddenProjectsAsDialogues(
       hiddenProjectComparisonKeys,
       localPlatform,
     )
-      ? { ...session, workspaceKind: 'dialogue' }
+      ? { ...session, workspaceKind: 'dialogue', projectMoveTarget: null }
       : session,
   );
 }

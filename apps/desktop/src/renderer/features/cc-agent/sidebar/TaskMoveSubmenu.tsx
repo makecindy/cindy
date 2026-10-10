@@ -1,3 +1,4 @@
+import { sidebarSessionProject } from '../lib/sidebarSessionProject';
 import { useEffect, useState, type ReactNode } from 'react';
 import { ChevronRight, Monitor } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -145,9 +146,6 @@ export function TaskMoveSubmenu({
   const move = (path: string | null) => {
     const owner = getDataOwnerGeneration();
     void moveRemoteTaskProject(session, path)
-      .then(() => {
-        if (isDataOwnerGenerationCurrent(owner)) toast.success(t('taskMove.moved'));
-      })
       .catch((error) => {
         if (!isDataOwnerGenerationCurrent(owner)) return;
         const code = /MIGRATION_[A-Z_]+/.exec(String(error))?.[0];
@@ -178,8 +176,8 @@ export function TaskMoveSubmenu({
             <SessionProjectMoveSubmenu
               heading={t('taskMove.sourceProjects')}
               projectOptions={projects}
-              currentWorkingDir={session.workspaceKind === 'project' ? session.workingDir : null}
-              isDialogue={session.workspaceKind === 'dialogue'}
+              currentWorkingDir={sidebarSessionProject(session).workspaceKind === 'project' ? sidebarSessionProject(session).workingDir : null}
+              isDialogue={sidebarSessionProject(session).workspaceKind === 'dialogue'}
               onSelectProject={move}
               onBrowseProject={onBrowseRemote}
               onMoveToDialogue={() => move(null)}

@@ -1,8 +1,13 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { Session, SessionMeta } from '@cindy/maker-core';
 
 import { restoreSessionForGoal, type RestoreGoalSessionDeps } from '../sessionRestore';
+import {
+  setSessionRouteLockImplementation,
+  withSessionRouteLock,
+  type SessionRouteLock,
+} from '../../localDb/sessionRouteLock';
 
 const META: SessionMeta = {
   id: 'session-1',
@@ -44,6 +49,67 @@ function baseDeps(overrides: Partial<RestoreGoalSessionDeps> = {}): RestoreGoalS
 }
 
 describe('Goal dormant session restore', () => {
+  afterEach(() => setSessionRouteLockImplementation(null));
+
+  function installRouteLock() {
+    let tail = Promise.resolve();
+    const lock: SessionRouteLock = async (_sessionId, run) => {
+      const previous = tail;
+      let release!: () => void;
+      tail = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      await previous;
+      try {
+        return await run();
+      } finally {
+        release();
+      }
+    };
+    setSessionRouteLockImplementation(lock);
+  }
+
+  it('waits for a project move to commit before reading metadata or restoring its runtime', async () => {
+    installRouteLock();
+    let finishMove!: () => void;
+    const moving = new Promise<void>((resolve) => {
+      finishMove = resolve;
+    });
+    let meta = { ...META, workDir: '/old-project' };
+    const deps = baseDeps();
+    vi.mocked(deps.maker.getSessionMeta).mockImplementation(async () => meta);
+    const migration = withSessionRouteLock('session-1', async () => {
+      await moving;
+      meta = { ...meta, workDir: '/new-project' };
+    });
+
+    const restored = restoreSessionForGoal('session-1', deps);
+    await Promise.resolve();
+    expect(deps.maker.getSessionMeta).not.toHaveBeenCalled();
+    expect(deps.maker.createSession).not.toHaveBeenCalled();
+
+    finishMove();
+    await migration;
+    await restored;
+    expect(deps.maker.createSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workingDir: '/new-project',
+      }),
+    );
+  });
+
+  it('restores under an existing direct-send lease without reacquiring its non-reentrant lock', async () => {
+    installRouteLock();
+    const deps = baseDeps();
+
+    await expect(
+      withSessionRouteLock('session-1', () =>
+        restoreSessionForGoal('session-1', deps, { routeLockHeld: true }),
+      ),
+    ).resolves.toMatchObject({ id: 'session-1' });
+    expect(deps.maker.createSession).toHaveBeenCalledOnce();
+  });
+
   it('prepares persisted Orca context before entering Maker singleflight', async () => {
     const order: string[] = [];
     const deps = baseDeps({
