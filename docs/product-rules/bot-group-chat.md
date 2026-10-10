@@ -122,9 +122,13 @@
   保留源消息并移除重试后失效的派生通知。错误提交沿同一 operationId 重试，不重跑伙伴。
   线程根消息的失败提示放在根消息旁，使用可选 `rootFailureNotices` 独立传输，不混入回复分页；
   重试后刷新会移除根消息的旧失败提示，既有非运行时通知仍保留原内容展示。
+  手机设备互联保留白名单错误类别，直连群页重读既有执行列表，仅在可见、未删除的源消息旁派生
+  失败提示；多个伙伴失败不覆盖源消息、预览或未读位置，重试后的新状态移除旧提示。
+  手机显示同一份本地化原因与恢复建议，并说明模型或设置需在伙伴所属电脑上调整。
   新服务器返回安全的 `failure_code`；旧服务器仍接受既有 `detail` 字符串，新客户端在当前执行端
   缓存具体原因，其他设备或重启后降级为通用失败提示。实现与回归见
   `maker-ipc/botGroupRuntimeFailure.ts`、`maker-ipc/__tests__/chatServer.test.ts`。
+  手机回归见 `botGroupRemote.test.ts`、`chatServerClient.test.ts`、`BotGroupChatScreen.test.tsx`。
 - 应用退出或重启会结束进行中的一轮；重启后不自动续跑。
 
 ## 5. 界面

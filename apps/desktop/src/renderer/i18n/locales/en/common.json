@@ -8608,7 +8608,7 @@
         "stepUnavailable": "{{name}} is unavailable and can’t do this step",
         "runtimeFailure": {
           "IMAGE_INPUT_UNSUPPORTED": "{{name}} could not reply: the current model does not support images.\nChoose an image-capable model, or enable and configure Vision Bridge in Settings → Personalization, then send your message again.",
-          "MODEL_UNAVAILABLE": "{{name}} could not reply: no model is available.\nChoose a connected, available model in the companion settings, then send your message again.",
+          "MODEL_UNAVAILABLE": "{{name}} could not reply: no model is available.\nChoose a connected, available model in the teammate settings, then send your message again.",
           "AUTH_REQUIRED": "{{name}} could not reply: the model connection needs authentication.\nReconnect the model provider in Settings, then send your message again.",
           "RATE_LIMITED": "{{name}} could not reply: too many model requests.\nSend your message again later, or choose another available model.",
           "QUOTA_EXCEEDED": "{{name}} could not reply: the model usage limit was reached.\nCheck the provider quota, or choose another available model.",
