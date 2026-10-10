@@ -756,8 +756,8 @@ export function LoginPage({
           </form>
           {/* 「跳过登录」= 面板内文字按钮(新稿 705:1068 容器 680×60 @y430,取代旧游客
               圆钮;LoginSkipEntry ≠ LoginTextLink,见该组件注释):接既有 local mode
-              链路,过协议门(2026-07-29 拍板)。槽位在 error_text(380..430)之下、
-              与其首尾相接,两者同时可见互不重叠;error 出现不推移本入口(均 absolute)。 */}
+              链路,过协议门(2026-07-29 拍板)。槽位在 error_text(394..438,文案居中于 416)之下,
+              两者同时可见时墨迹不相交;error 出现不推移本入口(均 absolute)。 */}
           {!isAddAccount ? (
             <LoginSkipEntry
               testId="login-skip-entry"

@@ -6927,7 +6927,7 @@
       "ORG_SSO_NOT_FOUND": "未找到該企業，或該企業未啟用 SSO 登入",
       "ORG_REALM_AMBIGUOUS": "該企業標識同時存在於兩個區域，請聯絡企業管理員處理",
       "ORG_REALM_UNAVAILABLE": "暫時無法確認企業所在區域，請檢查網路後重試",
-      "SSO_EMAIL_REQUIRED": "該企業身份未提供有效電子郵件，請聯絡企業管理員檢查 IdP 配置",
+      "SSO_EMAIL_REQUIRED": "該企業身分未提供有效電子郵件，請管理員檢查 IdP 設定",
       "INVALID_SSO_VERIFICATION_TICKET": "企業身份驗證已過期，請重新發起 SSO 登入",
       "SOCIAL_TOKEN_INVALID": "第三方授權已失效，請重試",
       "SOCIAL_PROVIDER_DISABLED": "該登入方式當前不可用",
