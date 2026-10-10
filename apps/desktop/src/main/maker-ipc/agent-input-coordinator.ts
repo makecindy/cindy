@@ -1308,7 +1308,8 @@ export class AgentInputCoordinator {
     if (!item || (originKind !== undefined && originKind !== 'desktop')) return false;
     if (item.sourcePlugin || item.sharedTaskAuthor || item.botTaskCoordination) return false;
     if (item.clientId.startsWith('plugin-task:') || item.originalSyntheticTrigger) return false;
-    if (item.autoResume && !item.retrySourceClientId) return false;
+    // Automatic continuations and zero-output retries are never fresh owner input.
+    if (item.autoResume) return false;
     const text = item.autoReviewUserText;
     return typeof text === 'string' && !!text.trim() && !text.startsWith('[UI_ACTION_TRIGGER]');
   }

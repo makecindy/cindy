@@ -8053,7 +8053,6 @@
       "thisTask": "This task restarts with {{appName}} after the current reply finishes.",
       "remote": "Phones and other remote connections disconnect briefly during the restart. Reconnect to see the result in this task.",
       "linuxAuth": "Installing requires your system password on this computer.",
-      "latestVersion": "the new version",
       "succeeded": "{{appName}} is updated to {{version}} (was {{from}}).",
       "failed": "The {{appName}} update did not finish. This computer is still on {{version}}.",
       "retryHint": "Ask me to try again later, or check for updates in Settings → About."

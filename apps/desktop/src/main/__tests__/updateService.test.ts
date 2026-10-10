@@ -495,6 +495,66 @@ describe('agent-facing managed app update check', () => {
       }
     });
 
+    it('reports the version being downloaded instead of an unknown target', async () => {
+      let finishDownload!: () => void;
+      download.mockImplementation(({ targetPath }: { targetPath: string }) => new Promise((resolve) => {
+        finishDownload = () => {
+          fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+          fs.writeFileSync(targetPath, 'update');
+          resolve({ path: targetPath, size: 123 });
+        };
+      }));
+      const service = await freshUpdateService('darwin');
+      try {
+        const staging = service.checkForUpdate();
+        await vi.waitFor(() => { expect(download).toHaveBeenCalledOnce(); });
+        await expect(service.checkAppUpdateForAgent()).resolves.toMatchObject({
+          status: 'downloading', targetVersion: '0.0.65',
+        });
+        finishDownload();
+        await staging;
+      } finally {
+        service.stopUpdateService();
+      }
+    });
+
+    it('reports a Windows updater spawn failure instead of claiming a relaunch', async () => {
+      download.mockImplementation(async ({ targetPath }: { targetPath: string }) => {
+        fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+        fs.writeFileSync(targetPath, 'update');
+        return { path: targetPath, size: 123 };
+      });
+      const service = await freshUpdateService('win32');
+      const resourcesPath = path.join(TEST_ROOT, 'resources');
+      fs.mkdirSync(resourcesPath, { recursive: true });
+      fs.writeFileSync(path.join(resourcesPath, 'cindy-updater.exe'), 'updater');
+      const resourcesDescriptor = Object.getOwnPropertyDescriptor(process, 'resourcesPath');
+      Object.defineProperty(process, 'resourcesPath', { value: resourcesPath, configurable: true });
+      const tmpdirSpy = vi.spyOn(os, 'tmpdir').mockReturnValue(TEST_ROOT);
+      const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+      const childListeners = new Map<string, (...args: unknown[]) => void>();
+      spawnProcess.mockImplementationOnce(() => ({
+        unref: vi.fn(),
+        on: vi.fn((event: string, listener: (...args: unknown[]) => void) => { childListeners.set(event, listener); }),
+      }));
+      try {
+        const pending = service.applyConfirmedAppUpdateForAgent({
+          expectedVersion: '0.0.65', beforeRelaunch: async () => true,
+        });
+        await vi.waitFor(() => { expect(childListeners.has('error')).toBe(true); });
+        childListeners.get('error')?.(Object.assign(new Error('spawn denied'), { code: 'EACCES' }));
+        await vi.advanceTimersByTimeAsync(200);
+        await expect(pending).resolves.toMatchObject({ status: 'failed', errorCode: 'updater_spawn_failed' });
+        expect(exitSpy).not.toHaveBeenCalled();
+      } finally {
+        service.stopUpdateService();
+        tmpdirSpy.mockRestore();
+        exitSpy.mockRestore();
+        if (resourcesDescriptor) Object.defineProperty(process, 'resourcesPath', resourcesDescriptor);
+        else Reflect.deleteProperty(process, 'resourcesPath');
+      }
+    });
+
     it('does not relaunch when the download fails or the build is unsupported', async () => {
       download.mockRejectedValue(new Error('network'));
       const service = await freshUpdateService('darwin');

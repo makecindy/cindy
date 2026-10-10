@@ -1861,6 +1861,7 @@ describe('AgentInputCoordinator send transaction', () => {
     ['a plugin', { sourcePlugin: { pluginId: 'p', name: 'P' } }, false],
     ['a shared-task guest', { sharedTaskAuthor: { sharedTaskId: 't', sessionId: 'owner-authored-input', memberId: 'm', accountId: 'guest', displayName: 'G' } }, false],
     ['an automatic resume', { autoResume: true }, false],
+    ['an automatic retry of a typed message', { autoResume: true, retrySourceClientId: 'typed-1' }, false],
     ['a synthetic UI trigger', { autoReviewUserText: '[UI_ACTION_TRIGGER] continue' }, false],
     ['a delegated continuation', { autoReviewUserText: { kind: 'delegated-continuation' as const } }, false],
   ])('decides whether %s counts as owner-authored for owner-only Host actions', async (_label, patch, expected) => {

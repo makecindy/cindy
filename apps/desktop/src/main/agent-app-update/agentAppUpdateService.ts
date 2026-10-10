@@ -300,10 +300,18 @@ export function createAgentAppUpdateService(deps: AgentAppUpdateDeps) {
       try {
         const check = await deps.check();
         if (!UPDATABLE_STATUSES.has(check.status)) return { ...check };
+        // Every confirmation names a concrete version; the updater installs only that one.
+        if (!check.targetVersion) {
+          return {
+            status: 'target_unknown',
+            currentVersion: check.currentVersion,
+            message:
+              '暂时无法确定要安装的版本（可能无法读取当前渠道信息），未弹出确认；请稍后再试。',
+          };
+        }
         const from = check.currentVersion;
-        // A first background download has no staged version yet.
-        const to = check.targetVersion ?? text('update.agentInstall.latestVersion');
-        flow.targetVersion = check.targetVersion;
+        const to = check.targetVersion;
+        flow.targetVersion = to;
         const outcome = await decide(caller, buildInstallCard(caller, from, to));
         if (outcome !== 'allow') return declined(outcome);
         // The user may have stopped or replaced the task while the card was open.
@@ -316,18 +324,18 @@ export function createAgentAppUpdateService(deps: AgentAppUpdateDeps) {
           requestId: randomUUID(),
           sessionId: caller.sessionId,
           fromVersion: from,
-          ...(check.targetVersion ? { targetVersion: check.targetVersion } : {}),
+          targetVersion: to,
           requestedAt: deps.now(),
           pid: deps.pid,
         };
         deps.marker.write(owner, marker);
-        flow = { kind: 'installing', targetVersion: check.targetVersion };
+        flow = { kind: 'installing', targetVersion: to };
         started = true;
         void runInstall(caller, owner, marker);
         return {
           status: 'started',
           currentVersion: from,
-          targetVersion: check.targetVersion,
+          targetVersion: to,
           message:
             'Cindy 正在通过内置更新器下载并安装更新，本轮回复结束后会自动重启；重启后结果会写回本任务。请简短告知用户，不要再执行其他操作。',
         };

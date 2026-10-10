@@ -274,6 +274,15 @@ describe('Agent app update install', () => {
     expect(harness.deps.marker.write).not.toHaveBeenCalled();
   });
 
+  it('never raises a card without a concrete target version', async () => {
+    const { deps, service } = setup({
+      check: vi.fn(async () => ({ status: 'downloading', currentVersion: '0.1.86' })),
+    });
+    await expect(service.install(caller)).resolves.toMatchObject({ status: 'target_unknown' });
+    expect(deps.requestHostPermission).not.toHaveBeenCalled();
+    expect(deps.apply).not.toHaveBeenCalled();
+  });
+
   it('mentions the Linux password prompt only on Linux', async () => {
     const { deps, service } = setup({ platform: 'linux', countOtherRunningTasks: vi.fn(() => 0) });
     await service.install(caller);

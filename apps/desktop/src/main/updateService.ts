@@ -2113,7 +2113,15 @@ export async function checkAppUpdateForAgent(): Promise<{
   const unsupported = agentUpdateUnsupportedReason();
   if (unsupported) return { status: 'unsupported', currentVersion, reason: unsupported };
   if (currentStatus === 'downloading' || currentStatus === 'superseding') {
-    return { status: 'downloading', currentVersion, targetVersion: readyVersion };
+    // `readyVersion` is unset during a first download and still names the old
+    // patch while superseding; read the version being downloaded from the
+    // manifest (read-only) so a confirmation is always bound to a concrete version.
+    const manifest = await fetchManifest();
+    const downloading = manifest
+      && compareAppUpdateVersions(manifest.app?.version, currentVersion) === 'newer'
+      && resolveUpdateAsset(manifest)
+      ? manifest.app.version : undefined;
+    return { status: 'downloading', currentVersion, targetVersion: downloading };
   }
   if (currentStatus === 'ready' && readyVersion) {
     return { status: 'ready', currentVersion, targetVersion: readyVersion };
@@ -2135,6 +2143,9 @@ export async function checkAppUpdateForAgent(): Promise<{
     reason: '当前渠道没有适用于这台设备的可安装更新；也可能已是最新版本。',
   };
 }
+
+/** Longer than the Windows / Linux updater spawn timeout (5 s). */
+const AGENT_RELAUNCH_SETTLE_MS = 10_000;
 
 const AGENT_UPDATE_FAILURE_REASONS: Record<Exclude<CheckForUpdateResult, 'ready'>, string> = {
   manifest_failed: '无法读取当前渠道的更新信息。',
@@ -2193,9 +2204,15 @@ export async function applyConfirmedAppUpdateForAgent(options: {
   const changedBeforeRelaunch = versionChanged();
   if (changedBeforeRelaunch) return changedBeforeRelaunch;
   const targetVersion = readyVersion;
-  // macOS / Linux exit inside this call once the updater is spawned; Windows
-  // returns with `isRelaunching` still set and exits from its own callbacks.
   await executeRelaunch(resolvedRelaunchTheme);
+  // macOS exits inside the call. Windows and Linux return with `isRelaunching`
+  // still set and settle within their 5 s spawn timeout: success exits via
+  // forceQuit(), failure clears the flag in handleApplyFailure(). Wait for that
+  // outcome so a failed spawn is reported now rather than after a later restart.
+  const settleDeadline = Date.now() + AGENT_RELAUNCH_SETTLE_MS;
+  while (isRelaunching && process.platform !== 'darwin' && Date.now() < settleDeadline) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
   if (isRelaunching) return { status: 'relaunching', targetVersion };
   return {
     status: 'failed',

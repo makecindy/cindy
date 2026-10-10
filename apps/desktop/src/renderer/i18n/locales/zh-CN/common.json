@@ -8045,7 +8045,6 @@
       "thisTask": "本任务会在这轮回复结束后随 {{appName}} 重启。",
       "remote": "重启期间手机等远程连接会暂时断开，重连后可在本任务中查看更新结果。",
       "linuxAuth": "安装时需要在这台电脑上输入系统密码。",
-      "latestVersion": "新版本",
       "succeeded": "{{appName}} 已更新到 {{version}}（原版本 {{from}}）。",
       "failed": "{{appName}} 更新没有完成，当前仍是 {{version}}。",
       "retryHint": "可以稍后再让我更新，或在「设置 → 关于」中检查更新。"
