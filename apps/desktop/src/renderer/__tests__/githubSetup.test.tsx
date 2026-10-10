@@ -35,7 +35,10 @@ describe('GitHub setup UI', () => {
     await screen.findByText(`${key}.stages.preparing.title`);
     await screen.findByText(`${key}.stages.unavailable.title`);
     await screen.findByText(`${key}.done`, {}, { timeout: 2000 });
-    expect(connected).toHaveBeenCalledOnce();
+    // done 文本出现在 commit 里, onConnected 在 passive effect 里 —— 慢机上
+    // findByText 的 MutationObserver 可能在两者之间解析, 断言必须自己等
+    // (CI 分片上反复闪红, 见 #5569; 与本文件 line 60 的同类断言同款)。
+    await waitFor(() => expect(connected).toHaveBeenCalledOnce());
   });
   it('ignores outside clicks during authorization but still allows explicit cancellation', async () => {
     const close = vi.fn();

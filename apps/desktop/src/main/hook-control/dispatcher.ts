@@ -677,9 +677,10 @@ interface PendingReopen {
 /**
  * 官方 legacy adapter 的消息生命周期。
  *
- * Slack / X 继续沿用原路径；只有 Telegram 任务接入共享内核。当前服务端仍由
- * `turn.progress` / `turn.end` 实际发布，所以这里的 sent 表示终态已进入客户端
- * 可靠发布边界，不冒充 Telegram Bot API 的最终回执。
+ * Slack / X 继续沿用原路径；只有 Telegram 任务接入共享内核。未协商
+ * `telegram-*-ops-v1` 时服务端仍由 `turn.progress` / `turn.end` 实际发布（协商后
+ * 由客户端 msg.op 承载，服务端不再渲染这些帧），所以这里的 sent 表示终态已进入
+ * 客户端可靠发布边界，不冒充 Telegram Bot API 的最终回执。
  */
 function telegramLegacyLifecycle(
   connectionId: string,

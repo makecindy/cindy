@@ -34,7 +34,7 @@ Telegram / Slack / X）是同一件事的两套实现：把渠道里的一条消
 | 表情 | `TurnState` 的 ack 句柄 | `ackReactions`（msg.op react） | 渠道适配（出站载体不同，档位语义同源） |
 | 交互 | `beginInteractionRoute` + `pendingInteractions` + 渠道卡片 | `beginInteractionRoute` + `interactions.ts`（30 分钟超时）+ 卡片发布器 | 共用流程（路由与语义层已同源；超时差异见台账缺口 2g） |
 | 收尾 | `handleTurnDoneAsync` / `handleTurnErrorAsync` → 流式 handle finalize | `execute` 收口 → `turnCarrier.publishFinal` → `turn.end`（持久出箱） | 共用流程的收口骨架 + 渠道出站载体 |
-| 停止 | `turnRunner.stopActiveTurn`：清 `sendQueue` + 撤自动续跑 + `abort()`；**不暂停 Goal、不停 coordinator** | `dispatcher.cancel` → `abortSession`：只 `abort()`；**不撤自动续跑、不暂停 Goal** | **公共入口：统一明确停止**（`stopSessionTurnExplicitly`，与桌面 Stop 同一套清理） |
+| 停止 | `turnRunner.stopActiveTurn` → `stopSessionTurnExplicitly`：暂停 Goal + 停 coordinator + 撤自动续跑 + abort（与桌面 Stop 同一套清理） | `dispatcher.cancel` → 注入的 `stopSessionExplicitly`（同 `stopSessionTurnExplicitly`；未注入的老宿主回落纯 `abortSession`） | **公共入口：统一明确停止**（已完成，批次 1；2026-10 起两侧都经 `stopSessionTurnExplicitly`） |
 | 重启恢复 | 无（微信例外：`WechatTaskStore`） | 终稿持久出箱（`requestLedger`，24h） | 渠道适配（终稿必达是 hook 的保障；台账缺口 3） |
 
 ## 2. 状态清单
