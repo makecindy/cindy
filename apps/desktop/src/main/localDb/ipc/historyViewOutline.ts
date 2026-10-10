@@ -63,13 +63,57 @@ export function historyOutlineContent(): SQL<string> {
 }
 
 
+/**
+ * Command artifact inference is CPU work on the main thread, repeated for every
+ * outline page of the same immutable tool_use row (切换伙伴即重算, #5503). Cache the
+ * inferred paths per row; the key carries the command length and a content hash so
+ * a re-used id with different text never serves stale paths.
+ */
+const COMMAND_ARTIFACT_CACHE_LIMIT = 2048;
+const commandArtifactCache = new Map<string, readonly string[]>();
+
+function commandArtifactCacheKey(id: string, command: string): string {
+  let hash = 2166136261;
+  for (let index = 0; index < command.length; index += 1) {
+    hash ^= command.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return `${id}\u0000${command.length}\u0000${hash >>> 0}`;
+}
+
+function cachedCommandArtifacts(id: string, command: string): readonly string[] {
+  const key = commandArtifactCacheKey(id, command);
+  const hit = commandArtifactCache.get(key);
+  if (hit) {
+    // Refresh recency so hot sessions stay cached while old pages age out.
+    commandArtifactCache.delete(key);
+    commandArtifactCache.set(key, hit);
+    return hit;
+  }
+  const paths = extractCommandOutputPathCandidates(command);
+  if (commandArtifactCache.size >= COMMAND_ARTIFACT_CACHE_LIMIT) {
+    const oldest = commandArtifactCache.keys().next().value;
+    if (oldest !== undefined) commandArtifactCache.delete(oldest);
+  }
+  commandArtifactCache.set(key, paths);
+  return paths;
+}
+
+/** Test seam: cache occupancy, and a reset so individual tests start cold. */
+export function commandArtifactCacheSize(): number {
+  return commandArtifactCache.size;
+}
+export function resetCommandArtifactCache(): void {
+  commandArtifactCache.clear();
+}
+
 /** File content/patches never cross the outline query; commands yield only paths on the wire. */
 export function withHistoryArtifacts<T extends HistoryMessageSource>(row: T): T & Pick<HistoryMessageSource, 'historyArtifacts'> {
   if (row.role !== 'tool_use') return row;
   const tool = parseMessageToolUse(row);
   const descriptor = describeToolUse(tool.toolName, tool.input);
   const paths = descriptor.kind === 'command'
-    ? extractCommandOutputPathCandidates(descriptor.command) : createdPathsFromDescriptor(descriptor);
+    ? [...cachedCommandArtifacts(String(row.id), descriptor.command)] : createdPathsFromDescriptor(descriptor);
   const exclusions = descriptor.kind === 'file' && descriptor.action === 'edit'
     ? [{ path: descriptor.filePath, exclude: 'command' as const }]
     : descriptor.kind === 'fileChange' ? descriptor.changes.filter((change) => change.action !== 'add')

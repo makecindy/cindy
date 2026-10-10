@@ -77,3 +77,29 @@ describe('SQLite history outline', () => {
     expect(JSON.stringify(content)).not.toContain('heavy');
   });
 });
+
+describe('history artifact inference cache (#5503)', () => {
+  it('infers command artifacts once per immutable row and keys on command text', async () => {
+    const { commandArtifactCacheSize, resetCommandArtifactCache } = await import('../historyViewOutline');
+    resetCommandArtifactCache();
+    const command = `echo '${'x'.repeat(200000)}' > /work/cached-report.txt`;
+    const content = outline('tool_use', { toolName: 'Bash', input: { command } });
+    const row = { id: 'row-1', clientId: '1', role: 'tool_use' as const, content, createdAt: '2026-09-25T00:00:00Z' };
+    const first = withHistoryArtifacts(row);
+    expect(first.historyArtifacts).toMatchObject([{ path: '/work/cached-report.txt', source: 'command' }]);
+    expect(commandArtifactCacheSize()).toBe(1);
+    const started = performance.now();
+    for (let index = 0; index < 50; index += 1) withHistoryArtifacts(row);
+    expect(performance.now() - started).toBeLessThan(500);
+    expect(commandArtifactCacheSize()).toBe(1);
+    // Same id with different text is a different entry, never a stale hit.
+    const changed = outline('tool_use', { toolName: 'Bash', input: { command: 'echo ok > /work/other.txt' } });
+    expect(withHistoryArtifacts({ ...row, content: changed }).historyArtifacts).toMatchObject([{ path: '/work/other.txt' }]);
+    expect(commandArtifactCacheSize()).toBe(2);
+    // Returned arrays are copies: callers mutating artifacts cannot poison the cache.
+    const again = withHistoryArtifacts(row);
+    again.historyArtifacts!.length = 0;
+    expect(withHistoryArtifacts(row).historyArtifacts).toHaveLength(1);
+    resetCommandArtifactCache();
+  });
+});
