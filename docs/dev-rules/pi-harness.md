@@ -332,8 +332,11 @@ Pi CLI 管理入口、内核自更新与旧工具兼容的执行边界见
   control 判断未结算工作，保留缺终态时的有界 watchdog；已送达的成功终态不能被后续退出
   改判成失败，provider continuation claim 也不能被当作最终结束。
 - 本机 stdio 的 stdout EOF／关闭／错误或 stdin 错误是明确 RPC 失联，不等同于
-  正常长工具静默，也不是进程退出证明。未结算轮次立即报 `pi-rpc-disconnected`，
-  工具结果保持未知；Stop 保持取消，EOF 前已收到的 settled 成功结果不改判。
+  正常长工具静默，也不是进程退出证明。立即禁止新写入，在 250ms 退出确认窗口内
+  继续读取已写出的 stdout 尾帧；未确认退出且轮次仍未结算时才报 `pi-rpc-disconnected`，
+  工具结果保持未知。待开始的新 prompt 不继承上一轮 retry 耗尽的终态判重标记；
+  窗口内 Stop 仍登记对应 generation 的取消意图，不向失联管道写 abort。
+  已收到的 settled 成功结果、最终正文与用量不改判。
   复用原退出确认流程退役 root Pi，不重放输入、不重跑构建、不杀后代进程树；
   退出未确认时仍保留进程登记和 runtime 文件。SSH daemon 断链保活语义不变。
   缺 settled 但 RPC 仍通的情况仍走已有有界 watchdog，丢失工具结果不伪造。

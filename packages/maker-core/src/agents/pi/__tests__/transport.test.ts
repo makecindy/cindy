@@ -272,6 +272,24 @@ describe('createPiStdioTransport', () => {
     expect(exited).not.toHaveBeenCalled();
   });
 
+  it('fences stdin immediately but drains stdout until the disconnect confirmation window ends', async () => {
+    vi.useFakeTimers();
+    const { transport, child } = makeTransport();
+    const observed: string[] = [];
+    transport.onLine(line => observed.push(JSON.parse(line).type));
+    transport.onDisconnect?.(reason => observed.push(reason));
+    child.stdin.emit('error', new Error('EPIPE'));
+    expect(transport.isClosed()).toBe(true);
+    await expect(transport.writeLine('{}')).rejects.toThrow(/closed/);
+    expect(child.stdin.write).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(249);
+    child.stdout.emit('data', '{"type":"tool_execution_end"}\n{"type":"message_end"}\n{"type":"agent_settled"}\n');
+    expect(observed).toEqual(['tool_execution_end', 'message_end', 'agent_settled']);
+    await vi.advanceTimersByTimeAsync(1);
+    child.stdout.emit('data', '{"type":"late-frame"}\n');
+    expect(observed).toEqual(['tool_execution_end', 'message_end', 'agent_settled', 'stdin-error']);
+  });
+
   it('prioritizes confirmed process exit when stdout ends just before exit', async () => {
     vi.useFakeTimers();
     const { transport, child } = makeTransport();

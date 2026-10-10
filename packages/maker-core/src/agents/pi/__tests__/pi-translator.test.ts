@@ -9,6 +9,7 @@ import { rewriteContextModeDoctorPath } from '../context-mode-doctor-path.js';
 import {
   createPiTranslateContext,
   disposePiTranslateContext,
+  isCurrentTurnHostAbortRequested,
   markPiHostAbortRequested,
   markPiHostTurnStartPending,
   rollbackPiHostTurnStart,
@@ -815,7 +816,10 @@ describe('pi translator', () => {
 
     markPiHostTurnStartPending(ctx);
     markPiHostAbortRequested(ctx);
+    expect(isCurrentTurnHostAbortRequested(ctx)).toBe(false);
+    expect(isCurrentTurnHostAbortRequested(ctx, true)).toBe(true);
     translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+    expect(isCurrentTurnHostAbortRequested(ctx)).toBe(true);
     translatePiEvent(
       ev({
         type: 'message_end',
@@ -845,8 +849,10 @@ describe('pi translator', () => {
     const rejectedPrompt = markPiHostTurnStartPending(ctx);
     markPiHostAbortRequested(ctx);
     rollbackPiHostTurnStart(ctx, rejectedPrompt);
+    expect(isCurrentTurnHostAbortRequested(ctx, true)).toBe(false);
 
     markPiHostTurnStartPending(ctx);
+    expect(isCurrentTurnHostAbortRequested(ctx, true)).toBe(false);
     translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
     translatePiEvent(
       ev({

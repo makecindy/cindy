@@ -5703,9 +5703,11 @@ export class PiAgent extends BaseAgent {
           // EOF/error is certain RPC loss, not a silent live tool or proof of
           // process death. Deliver one terminal only for unsettled work, then
           // retire the executor using the existing confirmed-exit cleanup.
-          if (!closed && !ctx.terminalAssistantErrorEmitted &&
-              (ctx.isStreaming || ctx.pendingHostTurnStartToken !== null)) {
-            queue.push(isCurrentTurnHostAbortRequested(ctx) ? {
+          // A pending idle prompt belongs to the next generation even before
+          // agent_start. Its predecessor's retry error is not its terminal.
+          const pendingNewTurn = !ctx.isStreaming && ctx.pendingHostTurnStartToken !== null;
+          if (!closed && (pendingNewTurn || (ctx.isStreaming && !ctx.terminalAssistantErrorEmitted))) {
+            queue.push(isCurrentTurnHostAbortRequested(ctx, true) ? {
               type: 'done', data: { status: 'cancelled' }, source: 'pi',
             } : {
               type: 'error',
@@ -5728,7 +5730,7 @@ export class PiAgent extends BaseAgent {
           });
         },
         onExit: ({ code, signal }) => {
-          const hostAbortRequested = isCurrentTurnHostAbortRequested(ctx);
+          const hostAbortRequested = isCurrentTurnHostAbortRequested(ctx, true);
           piProcessExited = true;
           clearPiSubagentRefreshTimer();
           void deferProxyDisposalForDetachedRuns();
@@ -7485,15 +7487,18 @@ export class PiAgent extends BaseAgent {
       },
 
       async requestGracefulStop(): Promise<void> {
-        if (proc.isClosed) throw new Error('No active Pi turn to stop');
+        if (closed || piProcessExited || rpcDisconnected) throw new Error('No active Pi turn to stop');
         const hostAbortToken = markPiHostAbortRequested(ctx);
         autoReviewDecisionCache.clear();
         dismissAllPendingPrompts('turn_aborted', 'deny');
+        // EOF may fence writes before its bounded terminal notification. Keep
+        // the user's cancellation intent without writing to the broken pipe.
+        if (proc.isClosed) return;
         let resp: Awaited<ReturnType<typeof proc.request>>;
         try {
           resp = await proc.request({ type: 'abort' });
         } catch (error) {
-          rollbackPiHostAbortRequest(ctx, hostAbortToken);
+          if (!proc.isClosed) rollbackPiHostAbortRequest(ctx, hostAbortToken);
           throw error;
         }
         if (!resp.success) {
@@ -7504,13 +7509,14 @@ export class PiAgent extends BaseAgent {
       },
 
       async abort(): Promise<void> {
-        if (proc.isClosed) return;
+        if (closed || piProcessExited || rpcDisconnected) return;
         const hostAbortToken = markPiHostAbortRequested(ctx);
         autoReviewDecisionCache.clear();
         // 先把等待中的调用 fail-closed 唤醒；即使 abort RPC 失败，也不能让用户刚拒绝/
         // 停止的那次工具继续等一张已失效的卡。policy 仅在 Pi 确认接受 abort 后清空，
         // RPC 失败时继续保留，防止仍在运行的 turn 失去渠道安全边界。
         dismissAllPendingPrompts('turn_aborted', 'deny');
+        if (proc.isClosed) return;
         try {
           const resp = await proc.request({ type: 'abort' });
           if (resp.success) {
@@ -7522,7 +7528,9 @@ export class PiAgent extends BaseAgent {
             });
           }
         } catch (err) {
-          rollbackPiHostAbortRequest(ctx, hostAbortToken);
+          // A pipe failure is not rejection of the user's Stop. The pending
+          // disconnect/exit terminal must still see that cancellation intent.
+          if (!proc.isClosed) rollbackPiHostAbortRequest(ctx, hostAbortToken);
           deps.logger.warn('pi abort request failed', {
             message: err instanceof Error ? err.message : String(err),
           });

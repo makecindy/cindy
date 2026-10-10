@@ -292,9 +292,17 @@ export function rollbackPiHostAbortRequest(
   if (ctx.hostAbortRequestTokens.size === 0) ctx.hostAbortRequestGeneration = null;
 }
 
-export function isCurrentTurnHostAbortRequested(ctx: PiTranslateContext): boolean {
-  return ctx.hostAbortRequestGeneration === ctx.turnGeneration
-    && ctx.hostAbortRequestTokens.size > 0;
+export function isCurrentTurnHostAbortRequested(
+  ctx: PiTranslateContext,
+  includePendingTurn = false,
+): boolean {
+  // Native frames classify the started generation. Executor loss can also
+  // terminate an idle pending prompt whose agent_start will never arrive.
+  return ctx.hostAbortRequestTokens.size > 0 && (
+    ctx.hostAbortRequestGeneration === ctx.turnGeneration ||
+    (includePendingTurn && !ctx.isStreaming && ctx.pendingHostTurnStartToken !== null &&
+      ctx.hostAbortRequestGeneration === ctx.turnGeneration + 1)
+  );
 }
 
 function clearPiHostAbortRequests(ctx: PiTranslateContext): void {

@@ -9,7 +9,24 @@ import type { AgentEvent } from '../../../types/events.js';
 import type { AgentDeps } from '../../base-agent.js';
 import type { Logger } from '../../../interfaces/logger.js';
 
-const fixture = vi.hoisted(() => ({ transport: null as PiTransport | null }));
+const fixture = vi.hoisted(() => ({
+  transport: null as PiTransport | null,
+  child: null as import('node:child_process').ChildProcess | null,
+}));
+
+// Retain the real child only to inject an EPIPE at the host stream boundary;
+// stdout framing and all turn lifecycle consumers still run unchanged.
+vi.mock('node:child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:child_process')>();
+  return {
+    ...actual,
+    spawn: (...args: Parameters<typeof actual.spawn>) => {
+      const child = actual.spawn(...args);
+      fixture.child = child;
+      return child;
+    },
+  };
+});
 
 // Replace only the executable. PiAgent, RPC framing, translator, queue and
 // Session are production code. No provider or real build is involved.
@@ -25,6 +42,7 @@ vi.mock('../transport.js', async (importOriginal) => {
         const result = { content: [{ type: 'text', text: 'fixture build complete' }] };
         let rpcLost = false;
         let eofOnAbort = false;
+        let loseNextPrompt = false;
         const finish = (omit) => {
           if (omit !== 'tool_execution_end') output({ type: 'tool_execution_end', toolCallId: 'build-1', toolName: 'bash', result });
           if (omit !== 'message_end') output({ type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: 'Build finished.' }],
@@ -43,6 +61,12 @@ vi.mock('../transport.js', async (importOriginal) => {
           if (cmd.type === 'fixture_retry_exhausted_eof') {
             output({ type: 'auto_retry_end', success: false, finalError: 'The operation timed out.' });
             return process.stdout.end();
+          }
+          if (cmd.type === 'fixture_retry_exhausted_then_next_prompt_eof') {
+            output({ type: 'auto_retry_end', success: false, finalError: 'The operation timed out.' });
+            output({ type: 'agent_settled' });
+            loseNextPrompt = true;
+            return;
           }
           if (cmd.type === 'fixture_lose_rpc') {
             rpcLost = true;
@@ -71,6 +95,7 @@ vi.mock('../transport.js', async (importOriginal) => {
               ? { sessionFile: '/fixture/session.jsonl', model: { id: 'm', provider: 'cindy', contextWindow: 200000 } }
               : { commands: [], entries: [] } });
           if (cmd.type === 'prompt') {
+            if (loseNextPrompt) return process.stdout.end();
             output({ type: 'agent_start' });
             output({ type: 'tool_execution_start', toolCallId: 'build-1', toolName: 'bash', args: { command: 'fixture-build', timeout: 1800 } });
           }
@@ -126,6 +151,7 @@ describe('Pi long tool lifecycle through real stdio RPC', () => {
     session = undefined;
     descendantPid = undefined;
     fixture.transport = null;
+    fixture.child = null;
   });
 
   async function start(fakeClock = false) {
@@ -271,6 +297,83 @@ describe('Pi long tool lifecycle through real stdio RPC', () => {
     });
     expect(events.some(event => event.type === 'error')).toBe(false);
     expect(events.find(event => event.type === 'tool_result_full')?.data).toMatchObject({ fullText: 'fixture build complete' });
+  });
+
+  it('preserves tool result, final answer and usage drained after stdin EPIPE', async () => {
+    const { events, transport } = await start(true);
+    // Put the command in the real pipe before fencing writes. Its response
+    // reaches the real stdout reader only after the injected input error.
+    const finishing = transport.writeLine(JSON.stringify({ type: 'fixture_finish' }));
+    fixture.child!.stdin!.emit('error', new Error('EPIPE'));
+    expect(transport.isClosed()).toBe(true);
+    await finishing;
+    await vi.waitFor(() => expect(events.some(event => event.type === 'done')).toBe(true));
+    expect(events.find(event => event.type === 'tool_result_full')?.data).toMatchObject({ fullText: 'fixture build complete' });
+    expect(events.find(event => event.type === 'done')?.data).toMatchObject({
+      status: 'completed', result: 'Build finished.', usage: { inputTokens: 10, outputTokens: 3 },
+    });
+    await vi.advanceTimersByTimeAsync(250);
+    await vi.waitFor(() => expect(session!.getStatus()).toBe('closed'));
+    expect(events.some(event => event.type === 'error')).toBe(false);
+    expect(events.filter(event => event.type === 'done')).toHaveLength(1);
+  });
+
+  it.each(['abort', 'requestGracefulStop'] as const)('keeps %s cancelled when Stop arrives inside the EOF confirmation window', async (stopMethod) => {
+    const { events, transport, handle } = await start(true);
+    await transport.writeLine(JSON.stringify({ type: 'fixture_lose_rpc' }));
+    await vi.waitFor(() => expect(transport.isClosed()).toBe(true));
+    expect(events.some(event => event.type === 'error')).toBe(false);
+    const write = vi.spyOn(transport, 'writeLine');
+    await handle[stopMethod]!();
+    expect(write).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(250);
+    await vi.waitFor(() => expect(session!.getStatus()).toBe('closed'));
+    expect(events.some(event => event.type === 'error')).toBe(false);
+    expect(events.filter(event => event.type === 'done')).toHaveLength(1);
+    expect(events.find(event => event.type === 'done')?.data).toMatchObject({ status: 'cancelled' });
+  });
+
+  it.each(['abort', 'requestGracefulStop'] as const)('retains %s cancellation when its write fails as the pipe disconnects', async (stopMethod) => {
+    const { events, transport, handle } = await start(true);
+    const write = vi.spyOn(transport, 'writeLine').mockImplementationOnce(async () => {
+      fixture.child!.stdin!.emit('error', new Error('EPIPE'));
+      throw new Error('fixture abort write EPIPE');
+    });
+    const stopping = handle[stopMethod]!();
+    if (stopMethod === 'requestGracefulStop') {
+      await expect(stopping).rejects.toThrow('fixture abort write EPIPE');
+    } else {
+      await stopping;
+    }
+    expect(write).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(250);
+    await vi.waitFor(() => expect(session!.getStatus()).toBe('closed'));
+    expect(events.some(event => event.type === 'error')).toBe(false);
+    expect(events.find(event => event.type === 'done')?.data).toMatchObject({ status: 'cancelled' });
+  });
+
+  it.each([false, true])('does not inherit the previous retry failure before a new prompt agent_start (Stop: %s)', async (stop) => {
+    const { events, transport, nativeFrames, handle } = await start(true);
+    await transport.writeLine(JSON.stringify({ type: 'fixture_retry_exhausted_then_next_prompt_eof' }));
+    await vi.waitFor(() => expect(nativeFrames).toContain('agent_settled'));
+    await vi.waitFor(() => expect(session!.isTurnRunning()).toBe(false));
+    expect(events.filter(event => event.type === 'error')).toHaveLength(1);
+    const turnBoundary = events.length;
+    await session!.send('Start a new fixture build');
+    await vi.waitFor(() => expect(transport.isClosed()).toBe(true));
+    expect(nativeFrames.filter(type => type === 'agent_start')).toHaveLength(1);
+    if (stop) await handle.abort();
+    await vi.advanceTimersByTimeAsync(250);
+    await vi.waitFor(() => expect(session!.getStatus()).toBe('closed'));
+    const nextTurnEvents = events.slice(turnBoundary);
+    if (stop) {
+      expect(nextTurnEvents.some(event => event.type === 'error')).toBe(false);
+      expect(nextTurnEvents.find(event => event.type === 'done')?.data).toMatchObject({ status: 'cancelled' });
+    } else {
+      expect(nextTurnEvents.filter(event => event.type === 'error')).toHaveLength(1);
+      expect(nextTurnEvents.find(event => event.type === 'error')?.data).toMatchObject({ reason: 'pi-rpc-disconnected', isTerminal: true });
+    }
+    expect(nextTurnEvents.some(event => event.type === 'tool_result_full')).toBe(false);
   });
 
   it('does not replace exhausted native retry with a second RPC-loss error', async () => {

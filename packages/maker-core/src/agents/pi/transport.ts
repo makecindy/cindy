@@ -194,10 +194,13 @@ export function createPiStdioTransport(opts: PiStdioTransportOptions): PiTranspo
   };
 
   attachJsonlReader(child.stdout, (line) => {
-    if (closed || disconnected) return;
+    // A broken stdin fences new commands immediately, but stdout can still
+    // carry already-written results/settled during the confirmation window.
+    // Freeze reads only once loss is reported (or executor close is final).
+    if (closed || disconnectNotified) return;
     for (const handler of lineHandlers) handler(line);
   }, () => {
-    if (closed) return;
+    if (closed || disconnectNotified) return;
     for (const handler of oversizedHandlers) handler();
   });
   attachJsonlReader(child.stderr, (line) => {
