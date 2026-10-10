@@ -6,7 +6,7 @@ import { formatSessionDuration } from '@/lib/sessionDurationFormat';
  * 两个视图:
  *  - 列表:Running / Completed 两分区(排序由 listSessionTasks 保证:running 按
  *    启动升序、completed 按完成倒序),行 = kind 图标 + 状态图标 + 标题 + meta
- *    (状态 · 时长 · tokens · 工具调用),running 的 claude-code 任务行尾给 Stop。
+ *    (状态 · 时长 · tokens · 工具调用),running 且可停的任务行尾给 Stop。
  *  - workflow 详情:返回按钮 + 头部(标题 + Stop)+ WorkflowProgressTree 逐 agent
  *    进度树。
  *
@@ -16,12 +16,12 @@ import { formatSessionDuration } from '@/lib/sessionDurationFormat';
  *    useCCAgentChat 的重快照路径,其他字段(流式文本等)高频变更不触发重渲。
  *  - 面板不可见(非激活 tab / 壳子隐藏)时订阅挂空,恢复可见时重订阅自动补读。
  *  - 快照水合:挂载时对本机会话调一次 listSessionBackgroundTasks 经
- *    seedBackgroundTaskSnapshots 补存量(与 useBackgroundBashTasks 同口径,只复用
+ *    seedBackgroundTaskSnapshots 补存量(与 useBackgroundSessionTasks 同口径,只复用
  *    store 公开函数);本机会话同一次快照兼做 stale running 对账(终态事件丢失
  *    的自愈),device-link 远程会话只 seed 不对账(降级空表不可当权威)。
  *  - wf 文件辅源:详情视图挂载时拉一次 getWorkflowProgressFor,任务从 running 翻
  *    终态时再拉一次;不轮询。远程/老被控端自动降级返回 null。
- *  - 停止:gating = running + claude-code + 有 taskId + 非远程会话;在飞防连点、
+ *  - 停止:gating = running + 有可停控制面的 provider + 有 taskId + 非远程会话;在飞防连点、
  *    失败静默,终态交给 task_notification 事件流收口(同 AgentTaskCard 口径)。
  */
 
@@ -198,20 +198,39 @@ function workflowAgentCounts(
   return total > 0 ? { done, total } : null;
 }
 
-/** 停止按钮 gating(与 AgentTaskCard 同口径):running + claude-code + 有 taskId +
- *  有后台任务管理权(共享任务访客没有)。远程会话由 stopBackgroundTask 按会话归属
- *  隧道到被控端执行。 */
+/** 停止按钮 gating(与 AgentTaskCard 同口径):running + (claude-code 或可停的 PI 任务) +
+ *  有 taskId + 有后台任务管理权(共享任务访客没有)。
+ *
+ *  PI 只开放有 durable 控制面的任务:后台命令(local_bash,host-owned 子进程)与
+ *  async durable subagent(pi_subagent);普通前台 subagent 没有 stop 路径。
+ *
+ *  远程镜像会话不再一律隐藏:stopBackgroundTask 按会话归属隧道到被控端执行。归属用
+ *  粘滞判定(relay 瞬断窗口不回退本机,否则本地调用假成功、任务在被控端继续跑)。 */
 function canStopItem(item: SessionTaskItem, sessionId: string | null): boolean {
+  const providerCanStop =
+    item.provider === 'claude-code'
+    || (item.provider === 'pi'
+      && (item.update?.taskType === 'local_bash' || item.update?.taskType === 'pi_subagent'));
   return (
     item.status === 'running' &&
-    item.provider === 'claude-code' &&
+    providerCanStop &&
     Boolean(item.update?.taskId) &&
     Boolean(sessionId && canManageBackgroundTasks(sessionId))
   );
 }
 
-/** 停止按钮:在飞防连点,状态翻转由事件流收口(不改本地状态)。 */
-function StopButton({ sessionId, taskId }: { sessionId: string; taskId: string }) {
+/** 停止按钮:在飞防连点;失败**不静默** —— 回调给行使它把「停止未确认」显示出来
+ *  (host 只会在 SIGKILL 之后仍未确认退出时让 stop 失败),可立即处理的远程失败另外
+ *  给一句统一 toast。状态翻转仍由事件流收口。 */
+function StopButton({
+  sessionId,
+  taskId,
+  onStopFailed,
+}: {
+  sessionId: string;
+  taskId: string;
+  onStopFailed: () => void;
+}) {
   const { t } = useTranslation();
   const [stopping, setStopping] = useState(false);
   const handleStop = useCallback(
@@ -221,13 +240,20 @@ function StopButton({ sessionId, taskId }: { sessionId: string; taskId: string }
       if (stopping) return;
       setStopping(true);
       void stopBackgroundTask(sessionId, taskId)
+        .then(() => {
+          // 与卡片同口径:停止对「main 侧其实已不在」的 id 是静默成功,点完对一次账,
+          // 让僵尸行很快翻成已停止,而不是留给下一次活动熄灭对账。
+          makerChatStore.requestBackgroundTaskReconcile(sessionId);
+        })
         .catch((error: unknown) => {
-          // 真失败时状态仍是 running,按钮保留可重试;只有远程电脑版本过旧时提示升级。
+          // 真失败时状态仍是 running:按钮保留可重试,把提示交给行;远程版本过旧 /
+          // 暂时无响应这两类额外给一句统一 toast。
           reportBackgroundTaskStopFailure(error, t);
+          onStopFailed();
         })
         .finally(() => setStopping(false));
     },
-    [sessionId, taskId, stopping, t],
+    [sessionId, taskId, stopping, t, onStopFailed],
   );
   const actionLabel = t('rightSidebar.backgroundTasks.stop');
   const label = stopping
@@ -286,6 +312,12 @@ function TaskRow({
   const KindIcon = kindIcon(item.kind);
   const StatusIcon = statusIcon(item.status);
   const running = item.status === 'running';
+  const [stopFailed, setStopFailed] = useState(false);
+  const handleStopFailed = useCallback(() => setStopFailed(true), []);
+  // 状态一变(真停了 / 这条行被换掉)就收掉提示:它描述的是上一次点击。
+  useEffect(() => {
+    setStopFailed(false);
+  }, [item.status, item.update?.taskId]);
 
   // meta:状态 · 时长 · tokens · 工具调用(缺项省略);workflow 行前置 agent 进度摘要。
   const metaParts = useMemo(() => {
@@ -320,8 +352,9 @@ function TaskRow({
     if (typeof usage?.toolUses === 'number') {
       parts.push(t('chat.agentTask.toolUses', { count: usage.toolUses }));
     }
+    if (stopFailed) parts.push(t('rightSidebar.backgroundTasks.stopUnconfirmed'));
     return parts;
-  }, [item, t]);
+  }, [item, t, stopFailed]);
 
   // 非 workflow 行的聊天定位:意图 emitter 是 renderer 进程内的,独立侧栏窗口里
   // 没有聊天流也没有跨窗口中转 —— 点了必然无响应,不给假 affordance(跨窗口
@@ -368,7 +401,12 @@ function TaskRow({
             </span>
           </span>
           {metaParts.length > 0 && (
-            <span className="mt-0.5 block truncate text-11 leading-4 text-[var(--text-tertiary)]">
+            // title 兜底:窄侧栏下 meta 会被 truncate,而「停止未确认」这类提示排在末位,
+            // 截掉就等于没提示。
+            <span
+              title={metaParts.join(' · ')}
+              className="mt-0.5 block truncate text-11 leading-4 text-[var(--text-tertiary)]"
+            >
               {metaParts.join(' · ')}
             </span>
           )}
@@ -376,7 +414,11 @@ function TaskRow({
       </button>
       {canStopItem(item, sessionId) && sessionId && item.update?.taskId && (
         <div className="pt-1.5">
-          <StopButton sessionId={sessionId} taskId={item.update.taskId} />
+          <StopButton
+            sessionId={sessionId}
+            taskId={item.update.taskId}
+            onStopFailed={handleStopFailed}
+          />
         </div>
       )}
     </div>
@@ -407,6 +449,12 @@ function WorkflowDetail({
   const { t } = useTranslation();
   const taskId = item.update?.taskId ?? item.taskId ?? null;
   const [fileProgress, setFileProgress] = useState<WorkflowProgress | null>(null);
+  // 与列表行同口径:停止失败(host 只会在 SIGKILL 后仍未确认退出时让 stop 失败)不静默。
+  const [stopFailed, setStopFailed] = useState(false);
+  const handleStopFailed = useCallback(() => setStopFailed(true), []);
+  useEffect(() => {
+    setStopFailed(false);
+  }, [item.status, taskId]);
 
   // wf 文件辅源:挂载读一次;任务翻终态(isTerminal false→true 触发 effect 重跑)
   // 再读一次。任务已终态而文件快照还停在运行中(终态事件先于终局落盘)时做有界
@@ -480,9 +528,20 @@ function WorkflowDetail({
           {title}
         </span>
         {canStopItem(item, sessionId) && sessionId && item.update?.taskId && (
-          <StopButton sessionId={sessionId} taskId={item.update.taskId} />
+          <StopButton
+            sessionId={sessionId}
+            taskId={item.update.taskId}
+            onStopFailed={handleStopFailed}
+          />
         )}
       </div>
+      {/* 与卡片同层级(secondary):这是需要用户注意的失败说明,不是元信息
+          (列表行里嵌进 meta 是空间所限,那里保持 tertiary)。 */}
+      {stopFailed && (
+        <p className="shrink-0 px-2 pt-1 text-11 leading-4 text-[var(--text-secondary)]">
+          {t('rightSidebar.backgroundTasks.stopUnconfirmed')}
+        </p>
+      )}
       <div className="min-h-0 flex-1 overflow-y-auto px-2 py-2">
         {model ? (
           <WorkflowProgressTree model={model} />
@@ -538,7 +597,7 @@ export function BackgroundTasksBody({
   // taskUpdates 后事件流看不到的任务)。listSessionBackgroundTasksFor 按会话来源
   // 路由 —— 本机走本地 IPC,device-link 远程隧道到被控端(任务真身在被控端,
   // 本机快照必空);老被控端无此 channel 时内部降级空表。失败静默,实时事件流
-  // 自然补上(与 useBackgroundBashTasks 的快照失败同口径)。
+  // 自然补上(与 useBackgroundSessionTasks 的快照失败同口径)。
   // taskUpdatesEmpty 参与依赖:reloadMessages(rewind / 远程 origin 对账)会在
   // 面板已挂载时清空 taskUpdates,布尔翻 true 即自动重水合;翻回 false 的那次
   // 重跑只是多一次幂等快照(seed 仅补缺),不会循环。
@@ -569,7 +628,7 @@ export function BackgroundTasksBody({
     // 区分,不可当权威(粘滞判定与 Stop gating 同口径)。
     const staleRunningCandidates = isRemoteSessionSticky(sessionId)
       ? undefined
-      : makerChatStore.captureRunningClaudeTaskIds(sessionId);
+      : makerChatStore.captureReconcilableRunningTaskIds(sessionId);
     void listSessionBackgroundTasksFor(sessionId)
       .then(({ tasks }) => {
         if (disposed || !Array.isArray(tasks)) return;
@@ -591,7 +650,7 @@ export function BackgroundTasksBody({
         );
       })
       .catch(() => {
-        // 静默:与 useBackgroundBashTasks 的快照失败同口径(失败不对账)。
+        // 静默:与 useBackgroundSessionTasks 的快照失败同口径(失败不对账)。
       });
     return () => {
       disposed = true;

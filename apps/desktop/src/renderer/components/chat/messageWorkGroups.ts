@@ -2,6 +2,7 @@
 import { isContinuationMessage } from '@cindy/maker-shared/synthetic-trigger';
 import {
   deriveAgentTaskStatus,
+  isAgentTaskLaunchReceipt,
   subagentSpawnReceiptName,
   subagentSpawnResultIndicatesRunning,
   type AgentTaskStatus,
@@ -195,8 +196,7 @@ function isRunningAgentTask(it: RenderItem): boolean {
     persistedStatus: it.persistedStatus,
     durableStatus: it.durableStatus,
     resultIsLaunchReceipt:
-      subagentSpawnReceiptName(it.toolCall?.toolName, it.toolCall?.toolInput, it.result) !==
-        undefined || subagentSpawnResultIndicatesRunning(it.toolCall?.toolName, it.result),
+      isAgentTaskLaunchReceipt(it.toolCall?.toolName, it.toolCall?.toolInput, it.result),
   });
   return status === 'running';
 }

@@ -24,14 +24,24 @@ import {
 } from '@/lib/backgroundTaskStop';
 import { listSessionBackgroundTasksFor, sessionBackgroundActivityFor } from '@/lib/makerTransport';
 
-import type { RunningBashTask } from './useBackgroundBashTasks';
 import { useDocumentVisible } from './useWindowVisible';
+
+/**
+ * 被控端快照里的后台 Bash 任务。本机那条 hook 已合并成 useBackgroundSessionTasks
+ * (同时覆盖 local_bash 与 pi_subagent),但远程挑选用的是**上游口径**:只认非 PI 的
+ * local_bash —— PI 任务的控制面在别处,不在这张表里。因此这里自带同形类型,不去引用
+ * 本机 hook 的类型(那会带着 kind 字段,含义不同)。
+ */
+export interface RemoteRunningBashTask {
+  taskId: string;
+  title?: string;
+}
 
 const POLL_MS = 15_000;
 
 interface RemoteBackgroundState {
   active: boolean;
-  tasks: RunningBashTask[];
+  tasks: RemoteRunningBashTask[];
 }
 
 const EMPTY_STATE: RemoteBackgroundState = { active: false, tasks: [] };
@@ -42,8 +52,8 @@ const EMPTY_STATE: RemoteBackgroundState = { active: false, tasks: [] };
  */
 export function pickRemoteBashTasks(
   tasks: ReadonlyArray<{ taskId: string; taskType?: string; title?: string; provider?: string }>,
-): RunningBashTask[] {
-  const out = new Map<string, RunningBashTask>();
+): RemoteRunningBashTask[] {
+  const out = new Map<string, RemoteRunningBashTask>();
   for (const task of tasks) {
     if (task.taskType !== 'local_bash' || task.provider === 'pi') continue;
     if (out.has(task.taskId)) continue;
