@@ -1180,7 +1180,9 @@ describe('Chat Server directed sends', () => {
     for (const mode of ['all', 'mentioned'] as const) {
       responseMode = mode;
       for (const mentions of [{ all: true, botIds: [] }, { all: false, botIds: [] }]) {
+        const before = posts().length;
         expect(await send(entry, mentions)).toMatchObject({ ok: true });
+        expect(posts()).toHaveLength(before + 1);
         expect(posts().at(-1)![2].mentions).toEqual(mentions.all ? [botId, humanId] : []);
       }
     }
