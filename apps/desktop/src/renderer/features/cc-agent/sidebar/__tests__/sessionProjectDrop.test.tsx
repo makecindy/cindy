@@ -84,11 +84,16 @@ describe('project drop destinations', () => {
 
   it.each([
     { status: 'archived' },
+    { status: 'deleted' },
     { remoteHostId: 'ssh' },
     { agentDeviceId: 'provider-device' },
+    { source: 'review' },
+    { source: 'bot' },
+    { orcaRole: 'worker' },
     { deviceLinkDeviceId: 'owner', deviceLinkConnectionStatus: 'disconnected' },
   ] as Partial<Session>[])('retains existing move restrictions: %o', (patch) => {
     expect(resolveSessionProjectDrop({ ...task, ...patch }, { kind: 'dialogue' })).toBeNull();
+    expect(resolveSessionProjectDrop({ ...task, ...patch }, { kind: 'project', project })).toBeNull();
   });
 });
 
@@ -110,13 +115,15 @@ function Harness({
   move,
   expand,
   bubble,
+  session = task,
 }: {
   move: ReturnType<typeof vi.fn>;
   expand: ReturnType<typeof vi.fn>;
   bubble: ReturnType<typeof vi.fn>;
+  session?: Session;
 }) {
   const drop = useSessionProjectDrop({
-    getSession: (id) => (id === task.id ? task : undefined),
+    getSession: (id) => (id === session.id ? session : undefined),
     getProject: (key) => (key === project.projectKey ? project : undefined),
     expandProject: expand,
     onMoveSession: move,
@@ -132,7 +139,7 @@ function Harness({
         draggable
         onDragStart={(event) =>
           startSessionDrag(event, {
-            sessionId: task.id,
+            sessionId: session.id,
             enabled: true,
             needsDedicatedHandle: false,
           })
@@ -151,6 +158,21 @@ function Harness({
 }
 
 describe('project drag interaction', () => {
+  it.each(['bot', 'review'] as const)('does not advertise or accept a %s task move', (source) => {
+    vi.useFakeTimers();
+    const move = vi.fn(), expand = vi.fn(), bubble = vi.fn();
+    render(<Harness move={move} expand={expand} bubble={bubble} session={{ ...task, source }} />);
+    const transfer = dataTransfer();
+    fireEvent.dragStart(screen.getByTestId('source'), { dataTransfer: transfer });
+    expect(screen.queryByTestId('dialogue')).toBeNull();
+    fireEvent.dragOver(screen.getByTestId('child'), { dataTransfer: transfer });
+    act(() => vi.advanceTimersByTime(PROJECT_DROP_HOVER_MS));
+    expect(screen.getByTestId('project').dataset.sessionProjectDropActive).toBeUndefined();
+    expect(expand).not.toHaveBeenCalled();
+    fireEvent.drop(screen.getByTestId('child'), { dataTransfer: transfer });
+    expect(move).not.toHaveBeenCalled();
+  });
+
   it('highlights, expands after hover, and moves once before pinned sorting receives the drop', () => {
     vi.useFakeTimers();
     const move = vi.fn(),

@@ -61,6 +61,7 @@
 
 import { useEffect, useMemo, useRef, type AriaRole, type ReactNode } from 'react';
 import Sortable, { type SortableEvent } from 'sortablejs';
+import { isSortableDropClaimed } from '@/lib/sortableDropClaim';
 
 export interface SortableListProps<T> {
   /** 列表项数据（按当前希望渲染的顺序传入）。 */
@@ -141,6 +142,7 @@ export function SortableList<T>({
   // sortable container. Drops on the composer, split panes, or outside Cindy
   // can still leave Sortable's DOM temporarily moved while the gesture passes.
   const nativeDropDispositionRef = useRef<'internal' | 'external' | null>(null);
+  const nativeDropEventRef = useRef<Event | null>(null);
 
   // mount 时创建 Sortable；unmount 时销毁。后续 props 变化通过 option() 更新。
   useEffect(() => {
@@ -181,6 +183,7 @@ export function SortableList<T>({
       // 所以"按下未拖"和"普通 hover"都不会上 grabbing 光标,只有真正拖动中才会。
       onStart: () => {
         nativeDropDispositionRef.current = null;
+        nativeDropEventRef.current = null;
         document.body.classList.add(SORTING_BODY_CLASS);
         onDragActiveChangeRef.current?.(true);
       },
@@ -194,6 +197,8 @@ export function SortableList<T>({
         abortNextEndRef.current = false;
         const dropDisposition = nativeDropDispositionRef.current;
         nativeDropDispositionRef.current = null;
+        const claimedDrop = isSortableDropClaimed(nativeDropEventRef.current);
+        nativeDropEventRef.current = null;
 
         const oldIndex = evt.oldIndex;
         const newIndex = evt.newIndex;
@@ -210,7 +215,7 @@ export function SortableList<T>({
           parent.insertBefore(evt.item, refNode);
         }
 
-        if (aborted || (!forceFallback && dropDisposition !== 'internal')) return;
+        if (aborted || claimedDrop || (!forceFallback && dropDisposition !== 'internal')) return;
         if (oldIndex == null || newIndex == null || oldIndex === newIndex) return;
 
         const currentItems = itemsRef.current;
@@ -231,6 +236,7 @@ export function SortableList<T>({
     // the transient DOM move.
     const markDropDisposition = (event: Event) => {
       if (Sortable.active !== instance) return;
+      nativeDropEventRef.current = event;
       const target = event.target;
       nativeDropDispositionRef.current =
         target instanceof Node && el.contains(target) ? 'internal' : 'external';

@@ -9,6 +9,7 @@ import {
 } from '../splitGroupDnd';
 import { resolveSessionProjectDrop } from './sessionProjectDrop';
 import type { SessionMoveTarget } from './sessionMoveTarget';
+import { claimSortableDrop } from '@/lib/sortableDropClaim';
 
 const DROP_SELECTOR = '[data-session-project-drop], [data-session-dialogue-drop]';
 export const PROJECT_DROP_HOVER_MS = 600;
@@ -91,6 +92,7 @@ export function useSessionProjectDrop(options: Options) {
       return;
     event.preventDefault();
     event.stopPropagation();
+    claimSortableDrop(event.nativeEvent);
     latest.current.onMoveSession(result.session.id, result.move);
   };
   const onDragLeaveCapture = (event: DragEvent<HTMLElement>) => {

@@ -8,10 +8,13 @@ import type { SessionMoveTarget } from './sessionMoveTarget';
 /** The menu and drag affordance share availability; the host remains the authority for moves. */
 export function canOfferSessionProjectMove(session: Session): boolean {
   return (
-    session.status !== 'archived' &&
+    session.status === 'active' &&
     !isEmptyDraftSession(session) &&
     !session.remoteHostId &&
     !session.agentDeviceId &&
+    session.source !== 'review' &&
+    session.source !== 'bot' &&
+    session.orcaRole !== 'worker' &&
     !isSharedTaskPeer(session.deviceLinkDeviceId ?? '')
   );
 }

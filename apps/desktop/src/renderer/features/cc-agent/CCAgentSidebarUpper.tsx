@@ -173,6 +173,7 @@ import {
 import { PinnedSection, type PinnedSidebarEntry } from './sidebar/sections/PinnedSection';
 import { ProjectNode as ProjectNodeView } from './sidebar/sections/ProjectNode';
 import { PROJECT_DROP_CLASS, useSessionProjectDrop } from './sidebar/useSessionProjectDrop';
+import { canOfferSessionProjectMove } from './sidebar/sessionProjectDrop';
 import { moveRemoteTaskProject } from './sidebar/TaskMoveSubmenu';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 import { compareDialogueSessions, type DialogueSortBy } from './sidebar/sections/DialogueSection';
@@ -2873,7 +2874,8 @@ function ExpandedView({
   const handleMoveSession = useCallback(
     async (sessionId: string, target: SessionMoveTarget) => {
       const session = sessionsByIdRef.current.get(sessionId);
-      if (!session) return;
+      if (!session || !canOfferSessionProjectMove(session)) return;
+      const owner = getDataOwnerGeneration();
       if (session.remoteHostId || session.deviceLinkDeviceId) {
         toast.warning(t('ccAgent.sidebar.sessionMenu.moveToProjectRemoteUnsupported'));
         return;
@@ -2905,16 +2907,8 @@ function ExpandedView({
         }
       }
 
-      const oldPatch = {
-        workingDir: session.workingDir,
-        workspaceKind: session.workspaceKind,
-      };
+      if (!isDataOwnerGenerationCurrent(owner)) return;
       if (target.kind !== 'dialogue' && !targetWorkingDir) return;
-      const nextPatch =
-        target.kind === 'dialogue'
-          ? { workspaceKind: 'dialogue' as const }
-          : { workingDir: targetWorkingDir, workspaceKind: 'project' as const };
-      patchLocal(sessionId, nextPatch);
       let expandedProjectKey: string | null = null;
       let wasExpandedProjectCollapsed = false;
       if (targetWorkingDir) {
@@ -2926,7 +2920,19 @@ function ExpandedView({
         }
       }
       try {
-        await sessionService.update(sessionId, nextPatch);
+        // Use the same host authority as remote moves: Bot-linked tasks may
+        // still have source='desktop', so renderer-only checks are insufficient.
+        const result = await window.electronAPI.deviceLink.taskMigration(null, {
+          action: 'move-project',
+          sessionId,
+          workingDir: target.kind === 'dialogue' ? null : targetWorkingDir!,
+        });
+        if (!isDataOwnerGenerationCurrent(owner)) return;
+        if (result.projectMove?.sessionId !== sessionId) throw new Error('MIGRATION_FAILED');
+        patchLocal(sessionId, {
+          workingDir: result.projectMove.workingDir,
+          workspaceKind: result.projectMove.workspaceKind === 'dialogue' ? 'dialogue' : 'project',
+        });
         if (target.kind !== 'dialogue') {
           void recentWorkdirsStore.forceRefresh().catch(() => undefined);
         }
@@ -2938,8 +2944,8 @@ function ExpandedView({
           ),
         );
       } catch (err) {
+        if (!isDataOwnerGenerationCurrent(owner)) return;
         log.error('[session move]', err);
-        patchLocal(sessionId, oldPatch);
         if (expandedProjectKey && wasExpandedProjectCollapsed) {
           collapse.setCollapsed(expandedProjectKey, true);
         }
