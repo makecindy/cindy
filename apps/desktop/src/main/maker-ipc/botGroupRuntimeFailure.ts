@@ -10,13 +10,17 @@ export function botGroupRuntimeFailureCode(error: unknown): BotGroupRuntimeFailu
   if (isPiImageInputUnsupportedError(error)) return 'IMAGE_INPUT_UNSUPPORTED';
   const data = error && typeof error === 'object' ? error as {
     code?: unknown; reason?: unknown; message?: unknown; sdkError?: unknown;
-    errorStatus?: unknown; usageLimit?: unknown; modelAccessDenied?: unknown;
+    errorStatus?: unknown; usageLimit?: unknown; modelAccessDenied?: unknown; codexErrorInfo?: unknown;
   } : null;
   const values = [data?.code, data?.reason, data?.sdkError, data?.message, error instanceof Error ? error.message : error];
   for (const value of values) {
     if (typeof value === 'string' && isPiImageInputUnsupportedError(value)) return 'IMAGE_INPUT_UNSUPPORTED';
     if (isBotGroupRuntimeFailureCode(value)) return value;
   }
+  // Codex translators publish the stable tag even when message text is redacted.
+  if (data?.codexErrorInfo === 'usageLimitExceeded' || data?.codexErrorInfo === 'sessionBudgetExceeded') return 'QUOTA_EXCEEDED';
+  if (data?.codexErrorInfo === 'unauthorized') return 'AUTH_REQUIRED';
+  if (typeof data?.reason === 'string' && /^(?:bridge_)?(?:turn_no_event_timeout|upstream_response_idle_timeout)$/.test(data.reason)) return 'RUNTIME_TIMEOUT';
   const text = values.filter((value): value is string => typeof value === 'string').join('\n');
   const status = typeof data?.errorStatus === 'number' ? data.errorStatus : extractNonSecretErrorSignals(text).errorStatus;
   if (data?.modelAccessDenied === true || /\b(?:MODEL_NOT_FOUND|MODEL_UNAVAILABLE|NO_AVAILABLE_MODEL|BOT_MODEL_REQUIRED|MODEL_REQUIRED|user_model_access_denied)\b/i.test(text)) return 'MODEL_UNAVAILABLE';
@@ -26,6 +30,8 @@ export function botGroupRuntimeFailureCode(error: unknown): BotGroupRuntimeFailu
   if (/\b(?:RATE_LIMITED|RATE_LIMIT_EXCEEDED|rate_limit_error|rate_limit|provider_rate_limit)\b|rate limit(?:ed|ing)?|too many requests/i.test(text)) return 'RATE_LIMITED';
   if (data?.usageLimit === true) return 'QUOTA_EXCEEDED';
   if (status === 429) return 'RATE_LIMITED';
+  if (data?.codexErrorInfo === 'httpConnectionFailed' || data?.codexErrorInfo === 'responseStreamConnectionFailed'
+    || data?.codexErrorInfo === 'responseStreamDisconnected') return 'NETWORK_ERROR';
   if (/\b(?:ECONNRESET|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|REQUEST_TIMEOUT)\b|fetch failed|socket hang up/i.test(text)) return 'NETWORK_ERROR';
   return 'RUNTIME_ERROR';
 }

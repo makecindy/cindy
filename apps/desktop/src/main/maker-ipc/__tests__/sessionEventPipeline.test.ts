@@ -1701,6 +1701,14 @@ describe('Bot adapters in the shared event pipeline', () => {
     [{ errorStatus: 401 }, 'AUTH_REQUIRED'],
     [{ sdkError: 'authentication_failed' }, 'AUTH_REQUIRED'],
     [{ sdkError: 'rate_limit', errorStatus: 429, usageLimit: true }, 'RATE_LIMITED'],
+    [{ codexErrorInfo: 'usageLimitExceeded', message: '[REDACTED]' }, 'QUOTA_EXCEEDED'],
+    [{ codexErrorInfo: 'sessionBudgetExceeded', message: '[REDACTED]' }, 'QUOTA_EXCEEDED'],
+    [{ codexErrorInfo: 'unauthorized', message: '[REDACTED]' }, 'AUTH_REQUIRED'],
+    [{ codexErrorInfo: 'responseStreamDisconnected', message: '[REDACTED]' }, 'NETWORK_ERROR'],
+    [{ reason: 'turn_no_event_timeout', message: '[REDACTED]' }, 'RUNTIME_TIMEOUT'],
+    [{ reason: 'bridge_turn_no_event_timeout', message: '[REDACTED]' }, 'RUNTIME_TIMEOUT'],
+    [{ reason: 'upstream_response_idle_timeout', message: '[REDACTED]' }, 'RUNTIME_TIMEOUT'],
+    [{ reason: 'bridge_upstream_response_idle_timeout', message: '[REDACTED]' }, 'RUNTIME_TIMEOUT'],
   ])('settles a group terminal error with the safe category from structured signals %j', async (data, failureCode) => {
     const h = harness();
     const settleLaneTurn = vi.fn(async () => true);
