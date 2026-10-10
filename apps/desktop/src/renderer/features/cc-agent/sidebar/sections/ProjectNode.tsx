@@ -180,7 +180,7 @@ export const ProjectNode = memo(function ProjectNode({
       data-project-working-dir={project.projectKey}
       data-project-workingdir={project.projectKey}
       data-session-project-drop={project.projectKey}
-      className={cn('relative flex flex-col w-full select-none rounded-2xl', PROJECT_DROP_CLASS)}
+      className={cn('relative flex flex-col w-full select-none rounded-xl', PROJECT_DROP_CLASS)}
     >
       <ProjectHeader
         project={project}
