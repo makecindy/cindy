@@ -2,19 +2,23 @@
 // Uses actual SortableList/CardMasonry, production CSS and native mouse gestures.
 // Optional PINNED_SORT_CHROMIUM_PATH selects an existing Chromium executable.
 // --baseline=<git-ref> additionally verifies that the old CSS blocks project dragging.
+// --export=<directory> writes a standalone interactive HTML, screenshots and results.
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const cp = require('node:child_process');
+const { pathToFileURL } = require('node:url');
 const esbuild = require('esbuild');
 const postcss = require('postcss');
 const tailwind = require('tailwindcss');
 const { chromium } = require('playwright-core');
+const { evidenceHtml } = require('./pinned-sort-evidence.cjs');
 
 const root = path.resolve(__dirname, '../../../../..');
 const renderer = path.join(root, 'apps/desktop/src/renderer');
 const cssPath = 'apps/desktop/src/renderer/styles/globals.css';
 const baseline = process.argv.find((arg) => arg.startsWith('--baseline='))?.slice(11);
+const exportDirectory = process.argv.find((arg) => arg.startsWith('--export='))?.slice(9);
 const extraCss = `
 body{padding:24px;background:var(--surface);color:var(--text-primary)}
 .fixture-list{margin-bottom:24px}.fixture-header{display:flex;align-items:center;gap:8px;padding:8px;min-height:72px}
@@ -85,6 +89,7 @@ async function drag(
     executablePath: process.env.PINNED_SORT_CHROMIUM_PATH || undefined,
   });
   let scenarios = 0;
+  const themeStyles = {};
   try {
     for (const stage of baseline ? ['before', 'after'] : ['after']) {
       const globalCss =
@@ -104,6 +109,13 @@ async function drag(
           { from: undefined },
         )
       ).css;
+      const html = exportDirectory
+        ? evidenceHtml(css, extraCss, bundle.outputFiles[0].text)
+        : `<!doctype html><html><head><style>${css}${extraCss}</style></head><body><div id="root"></div><script>${bundle.outputFiles[0].text.replace(/<\/script/gi, '<\\/script')}</script></body></html>`;
+      if (exportDirectory && stage === 'after') {
+        fs.mkdirSync(exportDirectory, { recursive: true });
+        fs.writeFileSync(path.join(exportDirectory, 'index.html'), html);
+      }
       for (const theme of ['light', 'dark']) {
         for (const [mode, columns] of [
           ['text', 1],
@@ -112,16 +124,22 @@ async function drag(
           ['card', 2],
           ['card', 3],
         ]) {
-          const page = await browser.newPage({ viewport: { width: 1000, height: 700 } });
+          const page = await browser.newPage({
+            viewport: { width: 1000, height: exportDirectory ? 850 : 700 },
+          });
           const errors = [];
           page.on('pageerror', (error) => errors.push(error.message));
           await page.route('http://fixture.local/**', (route) =>
             route.fulfill({
               contentType: 'text/html',
-              body: `<!doctype html><html><head><style>${css}${extraCss}</style></head><body><div id="root"></div><script>${bundle.outputFiles[0].text.replace(/<\/script/gi, '<\\/script')}</script></body></html>`,
+              body: html,
             }),
           );
-          const url = `http://fixture.local/?mode=${mode}&columns=${columns}&theme=${theme}`;
+          const baseUrl =
+            exportDirectory && stage === 'after'
+              ? pathToFileURL(path.resolve(exportDirectory, 'index.html')).href
+              : 'http://fixture.local/';
+          const url = `${baseUrl}?mode=${mode}&columns=${columns}&theme=${theme}`;
           const load = async (suffix = '') => {
             await page.goto(url + suffix);
             await page.getByTestId('project-a-title').waitFor();
@@ -145,6 +163,45 @@ async function drag(
               window.pinnedSortEvents.filter((event) => event.type === 'reorder'),
             );
           await load();
+          const colors = await page.evaluate(() => {
+            const body = getComputedStyle(document.body);
+            const row = getComputedStyle(document.querySelector('.xdt-sortable-row'));
+            return {
+              theme: document.documentElement.dataset.theme,
+              background: body.backgroundColor,
+              text: body.color,
+              rowBackground: row.backgroundColor,
+              rowBorder: row.borderTopColor,
+            };
+          });
+          assert.deepEqual(
+            colors,
+            theme === 'dark'
+              ? {
+                  theme: 'default-dark',
+                  background: 'rgb(31, 31, 30)',
+                  text: 'rgb(212, 212, 212)',
+                  rowBackground: 'rgb(44, 44, 42)',
+                  rowBorder: 'rgb(60, 60, 58)',
+                }
+              : {
+                  theme: 'default-light',
+                  background: 'rgb(248, 248, 246)',
+                  text: 'rgb(38, 38, 38)',
+                  rowBackground: 'rgb(255, 255, 255)',
+                  rowBorder: 'rgb(215, 215, 212)',
+                },
+            'production theme tokens reach the rendered page',
+          );
+          themeStyles[theme] = colors;
+          const capture =
+            exportDirectory && stage === 'after' && (mode !== 'card' || columns === 3);
+          const captureName = `${theme}-${mode}-${columns}`;
+          if (capture) {
+            await page.screenshot({
+              path: path.join(exportDirectory, `${captureName}-initial.png`),
+            });
+          }
           await drag(page, page.getByTestId('project-a-title'), page.getByTestId('project-c'), {
             bottom: true,
           });
@@ -162,6 +219,11 @@ async function drag(
               `${mode}/${columns}: project moves to last`,
             );
             assert.equal((await reorders()).length, 1, 'one persistence callback');
+            if (capture) {
+              await page.screenshot({
+                path: path.join(exportDirectory, `${captureName}-reordered.png`),
+              });
+            }
             assert.equal(
               await page
                 .locator('#ordinary-image')
@@ -264,7 +326,14 @@ async function drag(
         }
       }
     }
-    console.log(JSON.stringify({ passed: true, scenarios }));
+    const result = { passed: true, scenarios, browser: browser.version(), themeStyles };
+    if (exportDirectory) {
+      fs.writeFileSync(
+        path.join(exportDirectory, 'results.json'),
+        JSON.stringify(result, null, 2) + '\n',
+      );
+    }
+    console.log(JSON.stringify(result));
   } finally {
     await browser.close();
   }

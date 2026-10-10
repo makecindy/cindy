@@ -3,6 +3,10 @@ import { createRoot } from 'react-dom/client';
 
 import { SortableList } from '../../../src/renderer/components/sidebar/SortableList';
 import { CardMasonry } from '../../../src/renderer/features/cc-agent/sidebar/CardMasonry';
+import { defaultDark } from '../../../src/renderer/themes/builtin/default-dark';
+import { defaultLight } from '../../../src/renderer/themes/builtin/default-light';
+import '../../../src/renderer/themes/colors';
+import { themeService } from '../../../src/renderer/themes/theme-service';
 
 const params = new URLSearchParams(location.search);
 const mode = params.get('mode') ?? 'text';
@@ -19,7 +23,7 @@ declare global {
 }
 const record = (value: SortEvent) => window.pinnedSortEvents.push(value);
 window.pinnedSortEvents = [];
-document.documentElement.classList.toggle('dark', params.get('theme') === 'dark');
+themeService.applyTheme(params.get('theme') === 'dark' ? defaultDark : defaultLight);
 
 // Keep the production sortable containers and global stylesheet. The synthetic
 // rows reproduce ProjectNode's header/children boundary, with no app or user data.
