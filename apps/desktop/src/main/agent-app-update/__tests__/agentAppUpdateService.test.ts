@@ -293,11 +293,9 @@ describe('Agent app update install', () => {
     await flush();
     expect(restartAllowed).toBe(false);
     expect(harness.deps.notify).not.toHaveBeenCalled();
-    // The failure stays in the confirming account's marker until that account is back.
-    expect(harness.deps.marker.write).toHaveBeenLastCalledWith(
-      ownerA,
-      expect.objectContaining({ failure: { errorCode: 'relaunch_cancelled' } }),
-    );
+    // No restart happened, so no restart record is left on disk.
+    expect(harness.deps.marker.write).not.toHaveBeenCalled();
+    // The notice waits in memory until the confirming account is active again.
     harness.switchOwner(ownerA);
     await harness.service.deliverPendingResult();
     expect(harness.deps.notify).toHaveBeenCalledOnce();
@@ -307,30 +305,93 @@ describe('Agent app update install', () => {
       expect.stringMatching(/^agent-app-update:/),
       expect.stringContaining('update.agentInstall.reasons.notRestarted'),
     );
-    expect(harness.getMarker()).toBeNull();
   });
 
-  it('keeps an in-process failure until its notice is persisted', async () => {
+  it('retries an in-process failure notice without blocking a new install', async () => {
     const notify = vi
       .fn<AgentAppUpdateDeps['notify']>()
       .mockRejectedValueOnce(new Error('database busy'))
-      .mockResolvedValueOnce('written');
+      .mockResolvedValue('written');
+    const apply = vi
+      .fn<AgentAppUpdateDeps['apply']>()
+      .mockResolvedValueOnce({ status: 'failed', reason: 'x', errorCode: 'download_failed' })
+      .mockResolvedValue({ status: 'relaunching' });
+    const harness = setup({ notify, apply });
+    await harness.service.install(caller);
+    await flush();
+    expect(notify).toHaveBeenCalledOnce();
+    expect(harness.getMarker()).toBeNull();
+    // The next install request first retries the pending notice, then proceeds.
+    await expect(harness.service.install(caller)).resolves.toMatchObject({ status: 'started' });
+    expect(notify).toHaveBeenCalledTimes(2);
+    expect(notify.mock.calls[0]![2]).toBe(notify.mock.calls[1]![2]);
+    expect(harness.deps.requestHostPermission).toHaveBeenCalledTimes(2);
+  });
+
+  it('writes the restart record only at the last gate, and clears it if the spawn then fails', async () => {
     const harness = setup({
-      notify,
-      apply: vi.fn(async () => ({
-        status: 'failed' as const,
-        reason: 'x',
-        errorCode: 'download_failed',
-      })),
+      apply: vi.fn(async ({ beforeRelaunch, beforeSpawn }) => {
+        await beforeRelaunch();
+        expect(harness.getMarker()).toBeNull();
+        expect(beforeSpawn?.()).toBe(true);
+        expect(harness.getMarker()).toMatchObject({ sessionId: 'task-1', targetVersion: '0.1.90' });
+        return { status: 'failed' as const, reason: 'x', errorCode: 'updater_spawn_failed' };
+      }),
     });
     await harness.service.install(caller);
     await flush();
-    expect(harness.getMarker()).toMatchObject({ failure: { errorCode: 'download_failed' } });
-    // Same process: a recorded failure is deliverable without a restart.
-    await harness.service.deliverPendingResult();
-    expect(notify).toHaveBeenCalledTimes(2);
-    expect(notify.mock.calls[0]![2]).toBe(notify.mock.calls[1]![2]);
     expect(harness.getMarker()).toBeNull();
+    expect(vi.mocked(harness.deps.notify).mock.calls[0]![3]).toContain(
+      'update.agentInstall.reasons.updaterNotStarted',
+    );
+  });
+
+  it('does not restart when the restart record cannot be written', async () => {
+    let allowed: boolean | undefined;
+    const harness = setup({
+      apply: vi.fn(async ({ beforeSpawn }) => {
+        allowed = beforeSpawn?.();
+        return allowed
+          ? { status: 'relaunching' as const }
+          : { status: 'failed' as const, reason: 'x', errorCode: 'relaunch_cancelled' };
+      }),
+    });
+    vi.mocked(harness.deps.marker.write).mockImplementation(() => {
+      throw new Error('disk full');
+    });
+    await harness.service.install(caller);
+    await flush();
+    expect(allowed).toBe(false);
+    expect(harness.deps.notify).toHaveBeenCalledOnce();
+  });
+
+  it('moves an undelivered earlier restart result to memory instead of overwriting it', async () => {
+    const harness = setup({
+      appVersion: () => '0.1.86',
+      apply: vi.fn(async ({ beforeSpawn }) => {
+        beforeSpawn?.();
+        return { status: 'relaunching' as const };
+      }),
+    });
+    harness.setMarker({
+      requestId: 'earlier',
+      sessionId: 'task-0',
+      fromVersion: '0.1.80',
+      targetVersion: '0.1.86',
+      requestedAt: 900,
+      pid: 99,
+    });
+    vi.mocked(harness.deps.notify).mockRejectedValueOnce(new Error('database busy'));
+    await harness.service.deliverPendingResult();
+    expect(harness.getMarker()).toMatchObject({ requestId: 'earlier' });
+    await harness.service.install(caller);
+    await flush();
+    expect(harness.getMarker()).toMatchObject({ sessionId: 'task-1' });
+    // The earlier task still gets its result from memory.
+    await harness.service.deliverPendingResult();
+    expect(vi.mocked(harness.deps.notify).mock.calls.some((call) => call[1] === 'task-0')).toBe(
+      true,
+    );
   });
 
   it('refuses to start when no account is active at confirmation', async () => {
@@ -351,51 +412,6 @@ describe('Agent app update install', () => {
     await expect(service.install(caller)).resolves.toMatchObject({ status: 'target_unknown' });
     expect(deps.requestHostPermission).not.toHaveBeenCalled();
     expect(deps.apply).not.toHaveBeenCalled();
-  });
-
-  it('delivers a pending earlier result before starting, and never overwrites one it cannot deliver', async () => {
-    const earlier = {
-      requestId: 'earlier',
-      sessionId: 'task-0',
-      fromVersion: '0.1.80',
-      targetVersion: '0.1.85',
-      requestedAt: 900,
-      pid: 100,
-      failure: { errorCode: 'download_failed' },
-    };
-    const notify = vi
-      .fn<AgentAppUpdateDeps['notify']>()
-      .mockRejectedValueOnce(new Error('database busy'))
-      .mockResolvedValue('written');
-    const harness = setup({ notify });
-    harness.setMarker(earlier);
-    await expect(harness.service.install(caller)).resolves.toMatchObject({
-      ok: false,
-      errorCode: 'PREVIOUS_RESULT_PENDING',
-    });
-    expect(harness.deps.requestHostPermission).not.toHaveBeenCalled();
-    expect(harness.getMarker()).toMatchObject({ requestId: 'earlier' });
-    // Next attempt: the earlier result is written first, then the new install proceeds.
-    await expect(harness.service.install(caller)).resolves.toMatchObject({ status: 'started' });
-    expect(notify.mock.calls[1]![1]).toBe('task-0');
-    expect(harness.deps.marker.write).toHaveBeenLastCalledWith(
-      ownerA,
-      expect.objectContaining({ sessionId: 'task-1' }),
-    );
-  });
-
-  it('clears only the marker of the request it delivered', async () => {
-    const harness = setup({
-      apply: vi.fn(async () => ({
-        status: 'failed' as const,
-        reason: 'x',
-        errorCode: 'not_ready',
-      })),
-    });
-    await harness.service.install(caller);
-    await flush();
-    const written = vi.mocked(harness.deps.marker.write).mock.calls.at(-1)![1];
-    expect(harness.deps.marker.clear).toHaveBeenCalledWith(ownerA, written.requestId);
   });
 
   it('mentions the Linux password prompt only on Linux', async () => {

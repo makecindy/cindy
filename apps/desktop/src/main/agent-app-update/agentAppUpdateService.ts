@@ -62,10 +62,8 @@ export interface AgentAppUpdateMarker {
   fromVersion: string;
   targetVersion?: string;
   requestedAt: number;
-  /** Process that wrote the marker; a same-process read is not a restart. */
+  /** Process that attempted the restart; a same-process read means it has not happened. */
   pid: number;
-  /** Set when the install ended without a restart; reportable from any process. */
-  failure?: { errorCode?: string; stagedVersion?: string };
 }
 
 type PermissionRequest = Extract<InteractionRequest, { kind: 'permission' }>;
@@ -143,6 +141,14 @@ const UNDELIVERED_REASONS = new Set([
   'duplicate_request_id',
 ]);
 const MARKER_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+const MAX_PENDING_NOTICES = 20;
+
+interface PendingNotice {
+  owner: AgentAppUpdateOwner;
+  sessionId: string;
+  clientId: string;
+  message: string;
+}
 const UPDATABLE_STATUSES = new Set(['available', 'ready', 'downloading']);
 const HINT_SESSION_LIMIT = 500;
 
@@ -231,44 +237,76 @@ export function createAgentAppUpdateService(deps: AgentAppUpdateDeps) {
     };
   };
 
-  const resultMessage = (marker: AgentAppUpdateMarker): string => {
+  /** Outcome after a restart: compare the running version with the one before it. */
+  const restartMessage = (marker: AgentAppUpdateMarker): string => {
     const version = deps.appVersion();
-    if (!marker.failure && deps.compareVersions(version, marker.fromVersion) === 'newer') {
-      return text('update.agentInstall.succeeded', { version, from: marker.fromVersion });
-    }
-    const reasonKey = marker.failure
-      ? (FAILURE_REASON_KEYS[marker.failure.errorCode ?? ''] ?? 'generic')
-      : null;
-    return [
-      text('update.agentInstall.failed', { version }),
-      reasonKey
-        ? text(`update.agentInstall.reasons.${reasonKey}`, {
-            version: marker.failure?.stagedVersion ?? '',
-            confirmed: marker.targetVersion ?? '',
-          })
-        : '',
+    return deps.compareVersions(version, marker.fromVersion) === 'newer'
+      ? text('update.agentInstall.succeeded', { version, from: marker.fromVersion })
+      : [
+          text('update.agentInstall.failed', { version }),
+          text('update.agentInstall.retryHint'),
+        ].join(' ');
+  };
+
+  const failureMessage = (
+    request: AgentAppUpdateMarker,
+    failure: { errorCode?: string; stagedVersion?: string },
+  ): string =>
+    [
+      text('update.agentInstall.failed', { version: deps.appVersion() }),
+      text(
+        `update.agentInstall.reasons.${FAILURE_REASON_KEYS[failure.errorCode ?? ''] ?? 'generic'}`,
+        {
+          version: failure.stagedVersion ?? '',
+          confirmed: request.targetVersion ?? '',
+        },
+      ),
       text('update.agentInstall.retryHint'),
-    ]
-      .filter(Boolean)
-      .join(' ');
+    ].join(' ');
+
+  /**
+   * Outcomes produced without a restart live only in memory: they are retried
+   * on every owner-ready delivery and on the next install request, and only
+   * while their own account is active. Nothing here blocks a new install.
+   */
+  const pendingNotices: PendingNotice[] = [];
+  const queueNotice = (notice: PendingNotice) => {
+    pendingNotices.push(notice);
+    if (pendingNotices.length > MAX_PENDING_NOTICES) pendingNotices.shift();
+  };
+  const flushNotices = async () => {
+    for (const notice of [...pendingNotices]) {
+      // Never write into whichever account replaced the one that confirmed.
+      if (!deps.isOwnerCurrent(notice.owner)) continue;
+      try {
+        await deps.notify(notice.owner, notice.sessionId, notice.clientId, notice.message);
+      } catch (error) {
+        deps.logger?.warn?.('agent app update notice failed; will retry', { error: String(error) });
+        continue;
+      }
+      pendingNotices.splice(pendingNotices.indexOf(notice), 1);
+    }
   };
 
   /**
-   * The only path that writes a result and clears its marker. The marker is
-   * removed only after the message is persisted or its task is gone; a
-   * transient failure (or a different active account) keeps it for the next
-   * owner-ready delivery.
+   * The disk marker exists only for a restart that was about to happen: it is
+   * written at the last gate before the updater spawns, and read back by the
+   * next process. Cleared once its result is persisted or its task is gone.
    */
-  const deliver = async (owner: AgentAppUpdateOwner, marker: AgentAppUpdateMarker) => {
-    // Never write into whichever account replaced the one that confirmed.
-    if (!deps.isOwnerCurrent(owner)) return;
-    let outcome: AgentAppUpdateNotifyOutcome;
+  const deliverRestartResult = async (owner: AgentAppUpdateOwner) => {
+    const marker = deps.marker.read(owner);
+    // Same process: the restart is still pending (or is being reported as failed).
+    if (!marker || marker.pid === deps.pid) return;
+    if (deps.now() - marker.requestedAt > MARKER_MAX_AGE_MS) {
+      deps.marker.clear(owner, marker.requestId);
+      return;
+    }
     try {
-      outcome = await deps.notify(
+      await deps.notify(
         owner,
         marker.sessionId,
         `agent-app-update:${marker.requestId}`,
-        resultMessage(marker),
+        restartMessage(marker),
       );
     } catch (error) {
       deps.logger?.warn?.('agent app update result notice failed; will retry', {
@@ -277,60 +315,48 @@ export function createAgentAppUpdateService(deps: AgentAppUpdateDeps) {
       return;
     }
     deps.marker.clear(owner, marker.requestId);
-    deps.logger?.info?.('agent app update result delivered', {
-      failed: Boolean(marker.failure),
-      outcome,
-    });
   };
 
-  /** Persist the failure into the owner's marker first, then try to deliver it. */
-  const recordFailure = async (
-    owner: AgentAppUpdateOwner,
-    marker: AgentAppUpdateMarker,
-    failure: { errorCode?: string; stagedVersion?: string },
-  ) => {
-    const failed: AgentAppUpdateMarker = {
-      ...marker,
-      failure: {
-        ...(failure.errorCode ? { errorCode: failure.errorCode } : {}),
-        ...(failure.stagedVersion ? { stagedVersion: failure.stagedVersion } : {}),
-      },
-    };
+  /** Last gate before the updater spawns (synchronous): owner check, then the restart record. */
+  const recordRestart = (owner: AgentAppUpdateOwner, request: AgentAppUpdateMarker): boolean => {
+    if (!deps.isOwnerCurrent(owner)) return false;
+    const previous = deps.marker.read(owner);
+    if (previous && previous.requestId !== request.requestId) {
+      // An earlier restart's result not yet written back moves to memory, not overwritten silently.
+      queueNotice({
+        owner,
+        sessionId: previous.sessionId,
+        clientId: `agent-app-update:${previous.requestId}`,
+        message: restartMessage(previous),
+      });
+    }
     try {
-      deps.marker.write(owner, failed);
+      deps.marker.write(owner, request);
+      return true;
     } catch (error) {
-      deps.logger?.warn?.('agent app update failure marker write failed', { error: String(error) });
+      // Without the record the outcome could not be reported after the restart.
+      deps.logger?.warn?.('agent app update marker write failed; not restarting', {
+        error: String(error),
+      });
+      return false;
     }
-    await deliver(owner, failed);
-  };
-
-  /** Deliver the owner's recorded result if it is reportable now. */
-  const deliverPending = async (owner: AgentAppUpdateOwner) => {
-    const marker = deps.marker.read(owner);
-    // Without a recorded failure, a same-process marker means no restart yet.
-    if (!marker || (!marker.failure && marker.pid === deps.pid)) return;
-    if (deps.now() - marker.requestedAt > MARKER_MAX_AGE_MS) {
-      deps.marker.clear(owner, marker.requestId);
-      return;
-    }
-    await deliver(owner, marker);
   };
 
   const runInstall = async (
     caller: AgentAppUpdateCaller,
     owner: AgentAppUpdateOwner,
-    marker: AgentAppUpdateMarker,
+    request: AgentAppUpdateMarker,
   ) => {
+    let failure: { errorCode?: string; stagedVersion?: string };
     try {
       const result = await deps.apply({
-        ...(marker.targetVersion ? { expectedVersion: marker.targetVersion } : {}),
+        expectedVersion: request.targetVersion,
         beforeRelaunch: async () => {
           await deps.waitForCallerTurnToEnd(caller);
           // Logout or an account switch cancels the restart; the patch stays staged.
           return deps.isOwnerCurrent(owner);
         },
-        // Re-checked again after the updater's Subagent reclaim, right before spawn.
-        beforeSpawn: () => deps.isOwnerCurrent(owner),
+        beforeSpawn: () => recordRestart(owner, request),
       });
       // A relaunch ends this process; the next start reports from the marker.
       if (result.status === 'relaunching') return;
@@ -338,13 +364,22 @@ export function createAgentAppUpdateService(deps: AgentAppUpdateDeps) {
         errorCode: result.errorCode,
         reason: result.reason,
       });
-      await recordFailure(owner, marker, result);
+      failure = result;
     } catch (error) {
       deps.logger?.warn?.('agent app update failed', { error: String(error) });
-      await recordFailure(owner, marker, {});
+      failure = {};
     } finally {
       flow = null;
     }
+    // A spawn that failed after the record was written did not restart anything.
+    deps.marker.clear(owner, request.requestId);
+    queueNotice({
+      owner,
+      sessionId: request.sessionId,
+      clientId: `agent-app-update:${request.requestId}`,
+      message: failureMessage(request, failure),
+    });
+    await flushNotices();
   };
 
   return {
@@ -384,18 +419,7 @@ export function createAgentAppUpdateService(deps: AgentAppUpdateDeps) {
       flow = { kind: 'confirming' };
       let started = false;
       try {
-        // A previous result not yet written back must not be overwritten by this install.
-        const currentOwner = deps.captureOwner();
-        if (currentOwner) {
-          await deliverPending(currentOwner);
-          if (deps.marker.read(currentOwner)) {
-            return {
-              ok: false,
-              errorCode: 'PREVIOUS_RESULT_PENDING',
-              message: '上一次更新的结果还没写回任务，暂不发起新的更新；请稍后再试。',
-            };
-          }
-        }
+        await flushNotices();
         const check = await deps.check();
         if (!UPDATABLE_STATUSES.has(check.status)) return { ...check };
         // Every confirmation names a concrete version; the updater installs only that one.
@@ -418,7 +442,7 @@ export function createAgentAppUpdateService(deps: AgentAppUpdateDeps) {
         if (current !== 'owner') return ownerTurnRequired();
         const owner = deps.captureOwner();
         if (!owner) return callerUnavailable();
-        const marker: AgentAppUpdateMarker = {
+        const request: AgentAppUpdateMarker = {
           requestId: randomUUID(),
           sessionId: caller.sessionId,
           fromVersion: from,
@@ -426,10 +450,9 @@ export function createAgentAppUpdateService(deps: AgentAppUpdateDeps) {
           requestedAt: deps.now(),
           pid: deps.pid,
         };
-        deps.marker.write(owner, marker);
         flow = { kind: 'installing', targetVersion: to };
         started = true;
-        void runInstall(caller, owner, marker);
+        void runInstall(caller, owner, request);
         return {
           status: 'started',
           currentVersion: from,
@@ -490,7 +513,8 @@ export function createAgentAppUpdateService(deps: AgentAppUpdateDeps) {
      */
     async deliverPendingResult(): Promise<void> {
       const owner = deps.captureOwner();
-      if (owner) await deliverPending(owner);
+      if (owner) await deliverRestartResult(owner);
+      await flushNotices();
     },
   };
 }
