@@ -555,6 +555,29 @@ describe('agent-facing managed app update check', () => {
       }
     });
 
+    it('re-checks the caller condition right before the updater spawns', async () => {
+      download.mockImplementation(async ({ targetPath }: { targetPath: string }) => {
+        fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+        fs.writeFileSync(targetPath, 'update');
+        return { path: targetPath, size: 123 };
+      });
+      const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+      const service = await freshUpdateService('darwin');
+      const beforeSpawn = vi.fn(() => false);
+      try {
+        await expect(service.applyConfirmedAppUpdateForAgent({
+          expectedVersion: '0.0.65', beforeRelaunch: async () => true, beforeSpawn,
+        })).resolves.toMatchObject({ status: 'failed', errorCode: 'relaunch_cancelled' });
+        expect(beforeSpawn).toHaveBeenCalledOnce();
+        expect(spawnProcess).not.toHaveBeenCalled();
+        expect(exitSpy).not.toHaveBeenCalled();
+        expect(await service.checkAppUpdateForAgent()).toMatchObject({ status: 'ready', targetVersion: '0.0.65' });
+      } finally {
+        service.stopUpdateService();
+        exitSpy.mockRestore();
+      }
+    });
+
     it('does not relaunch when the download fails or the build is unsupported', async () => {
       download.mockRejectedValue(new Error('network'));
       const service = await freshUpdateService('darwin');

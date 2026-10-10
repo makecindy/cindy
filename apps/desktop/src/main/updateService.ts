@@ -1896,10 +1896,18 @@ function executeUpdateLinux(debPath: string, installation: LinuxUserInstallation
   });
 }
 
-async function executeRelaunch(theme: 'light' | 'dark'): Promise<void> {
+interface RelaunchOptions {
+  /**
+   * Last check after Subagent reclaim, immediately before the platform updater
+   * spawns. Returning false keeps the patch staged and does not restart.
+   */
+  shouldProceed?: () => boolean;
+}
+
+async function executeRelaunch(theme: 'light' | 'dark', options?: RelaunchOptions): Promise<void> {
   if (isCindyPersonalRuntime()) return;
   try {
-    await executeRelaunchUnguarded(theme);
+    await executeRelaunchUnguarded(theme, options);
   } catch (err) {
     log.error('executeRelaunch() failed: %s', err instanceof Error ? err.stack ?? err.message : String(err));
     try {
@@ -1919,7 +1927,10 @@ async function executeRelaunch(theme: 'light' | 'dark'): Promise<void> {
   }
 }
 
-async function executeRelaunchUnguarded(theme: 'light' | 'dark'): Promise<void> {
+async function executeRelaunchUnguarded(
+  theme: 'light' | 'dark',
+  options?: RelaunchOptions,
+): Promise<void> {
   if (isRelaunching) {
     log.info('executeRelaunch() skipped — already in progress');
     return;
@@ -2030,6 +2041,16 @@ async function executeRelaunchUnguarded(theme: 'light' | 'dark'): Promise<void> 
       + 'update relaunch aborted rather than leaving them running unsupervised',
     );
     handleApplyFailure('subagent_reclaim_unconfirmed');
+    return;
+  }
+
+  // The reclaim above can wait several seconds; a caller-bound condition (an
+  // Agent install's confirming account) is re-checked after it, at the last
+  // point where not restarting is still possible.
+  if (options?.shouldProceed && !options.shouldProceed()) {
+    log.info('executeRelaunch() cancelled by caller condition; patch remains staged');
+    isRelaunching = false;
+    autoRelaunchInProgress = false;
     return;
   }
 
@@ -2173,6 +2194,8 @@ export type AgentConfirmedAppUpdateResult =
 export async function applyConfirmedAppUpdateForAgent(options: {
   expectedVersion?: string;
   beforeRelaunch: () => Promise<boolean>;
+  /** Re-checked inside the relaunch, after Subagent reclaim and right before the updater spawns. */
+  beforeSpawn?: () => boolean;
 }): Promise<AgentConfirmedAppUpdateResult> {
   const versionChanged = (): AgentConfirmedAppUpdateResult | null =>
     options.expectedVersion && readyVersion !== options.expectedVersion
@@ -2205,7 +2228,18 @@ export async function applyConfirmedAppUpdateForAgent(options: {
   const changedBeforeRelaunch = versionChanged();
   if (changedBeforeRelaunch) return changedBeforeRelaunch;
   const targetVersion = readyVersion;
-  await executeRelaunch(resolvedRelaunchTheme);
+  // Both bindings are re-checked once more inside the relaunch, after its
+  // Subagent reclaim wait: the confirmed version and the caller's condition.
+  let cancelledBeforeSpawn: AgentConfirmedAppUpdateResult | null = null;
+  await executeRelaunch(resolvedRelaunchTheme, {
+    shouldProceed: () => {
+      cancelledBeforeSpawn = versionChanged() ?? (options.beforeSpawn?.() === false
+        ? { status: 'failed', reason: '更新已下载，但本次没有重启。', errorCode: 'relaunch_cancelled' }
+        : null);
+      return cancelledBeforeSpawn === null;
+    },
+  });
+  if (cancelledBeforeSpawn) return cancelledBeforeSpawn;
   // macOS exits inside the call. Windows and Linux return with `isRelaunching`
   // still set and settle within their 5 s spawn timeout: success exits via
   // forceQuit(), failure clears the flag in handleApplyFailure(). Wait for that

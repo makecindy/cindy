@@ -124,6 +124,8 @@ describe('Agent app update install', () => {
     expect(deps.apply).toHaveBeenCalledOnce();
     expect(deps.waitForCallerTurnToEnd).toHaveBeenCalledWith(caller);
     expect(deps.apply).toHaveBeenCalledWith(expect.objectContaining({ expectedVersion: '0.1.90' }));
+    const { beforeSpawn } = vi.mocked(deps.apply).mock.calls[0]![0];
+    expect(beforeSpawn?.()).toBe(true);
     expect(deps.marker.write).toHaveBeenCalledWith(
       ownerA,
       expect.objectContaining({

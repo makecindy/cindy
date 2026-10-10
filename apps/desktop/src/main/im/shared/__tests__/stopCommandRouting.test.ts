@@ -97,7 +97,12 @@ describe('messageHandler !stop routing', () => {
   let consumePendingOpenerAsCard: ReturnType<typeof vi.fn>;
   let deliver: (event: IMMessageEvent) => void;
 
-  function wire(threadScoped: boolean, notificationSessionId?: string, prepareAgentTurnText?: ImChannelAdapter['prepareAgentTurnText']): void {
+  function wire(
+    threadScoped: boolean,
+    notificationSessionId?: string,
+    prepareAgentTurnText?: ImChannelAdapter['prepareAgentTurnText'],
+    turnPermissionPolicyFor?: ImChannelAdapter['turnPermissionPolicyFor'],
+  ): void {
     stopActiveTurn = vi.fn(async () => ({ stopped: true, droppedQueued: 0 }));
     runAgentTurn = vi.fn(async () => undefined);
     handleSlashCommand = vi.fn(async () => true);
@@ -129,6 +134,7 @@ describe('messageHandler !stop routing', () => {
       ui: slackUi,
       threadScoped,
       ...(prepareAgentTurnText ? { prepareAgentTurnText } : {}),
+      ...(turnPermissionPolicyFor ? { turnPermissionPolicyFor } : {}),
     } as unknown as ImChannelAdapter;
 
     const attach = createMessageHandler(
@@ -202,6 +208,18 @@ describe('messageHandler !stop routing', () => {
     deliver(makeEvent({ text: '更新 Cindy', ...patch } as Partial<IMMessageEvent>));
     await vi.waitFor(() => expect(runAgentTurn).toHaveBeenCalledTimes(1));
     expect(runAgentTurn.mock.calls[0][0].requesterIsOwner).toBe(owner);
+  });
+
+  it.each(['unknown', 'guest'] as const)('lets a channel policy identity (%s) override the private-chat default', async (requesterAuthority) => {
+    wire(true, undefined, undefined, () => ({
+      origin: { kind: 'im', channel: 'wechat', taskId: 't' },
+      autoReviewContext: { requesterAuthority, source: 'direct' },
+      confirmationSurface: 'channel',
+      forceConfirmToolCall: () => false,
+    }));
+    deliver(makeEvent({ text: '更新 Cindy' }));
+    await vi.waitFor(() => expect(runAgentTurn).toHaveBeenCalledTimes(1));
+    expect(runAgentTurn.mock.calls[0][0].requesterIsOwner).toBe(false);
   });
 
   it('still drops an empty event without a summon, quote or attachment', async () => {

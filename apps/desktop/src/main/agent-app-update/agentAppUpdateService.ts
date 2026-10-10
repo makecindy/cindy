@@ -91,6 +91,7 @@ export interface AgentAppUpdateDeps {
   apply(options: {
     expectedVersion?: string;
     beforeRelaunch: () => Promise<boolean>;
+    beforeSpawn?: () => boolean;
   }): Promise<AgentAppUpdateApplyResult>;
   readAutoUpdate(): boolean;
   writeAutoUpdate(enabled: boolean): boolean;
@@ -266,6 +267,8 @@ export function createAgentAppUpdateService(deps: AgentAppUpdateDeps) {
           // Logout or an account switch cancels the restart; the patch stays staged.
           return deps.isOwnerCurrent(owner);
         },
+        // Re-checked again after the updater's Subagent reclaim, right before spawn.
+        beforeSpawn: () => deps.isOwnerCurrent(owner),
       });
       // A relaunch ends this process; the next start reports from the marker.
       if (result.status === 'relaunching') return;
