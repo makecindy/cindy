@@ -405,6 +405,57 @@ it.each(["reconnect", "return"])(
     expect(fixture.read).toHaveBeenCalledTimes(2);
   },
 );
+it.each(["reconnect", "return"])(
+  "confirms Host state when the write reply fails after %s",
+  async (event) => {
+    await openDetail();
+    let failReply!: () => void;
+    fixture.invoke.mockImplementationOnce(
+      () =>
+        new Promise<void>((_resolve, reject) => {
+          failReply = () => {
+            fixture.enabled = false;
+            reject(new Error("reply timed out after Host applied the action"));
+          };
+        }),
+    );
+    act(() => fixture.props.get("detail").onEnabledChange(false));
+    if (event === "reconnect") fixture.online = false;
+    else fixture.focused = false;
+    await act(async () => root.render(createElement(PluginsScreen)));
+    fixture.online = true;
+    fixture.focused = true;
+    await act(async () => root.render(createElement(PluginsScreen)));
+    expect(fixture.read).toHaveBeenCalledTimes(1);
+    await act(async () => failReply());
+    expect(fixture.read).toHaveBeenCalledTimes(2);
+    expect(fixture.props.get("detail")).toMatchObject({
+      enabled: false,
+      busy: false,
+      model: { status: "disabled", canUseTasks: false },
+    });
+    expect(fixture.invoke).toHaveBeenCalledTimes(1);
+    expect(fixture.alert).toHaveBeenCalledWith("plugins.actionFailed");
+  },
+);
+it("offers only a read retry when both the write reply and confirmation read fail", async () => {
+  await openDetail();
+  fixture.invoke.mockImplementationOnce(async () => {
+    fixture.enabled = false;
+    throw new Error("reply timed out");
+  });
+  fixture.read.mockRejectedValueOnce(new Error("read unavailable"));
+  await act(async () => fixture.props.get("detail").onEnabledChange(false));
+  expect(fixture.props.get("detail").model).toMatchObject({
+    status: "loadFailed",
+    statusAction: "retry",
+    canUseTasks: false,
+    canToggle: false,
+  });
+  await act(async () => fixture.props.get("detail").onResolveStatus());
+  expect(fixture.props.get("detail").enabled).toBe(false);
+  expect(fixture.invoke).toHaveBeenCalledTimes(1);
+});
 it("locks duplicate taps, and a rejected write keeps the previous state without replay", async () => {
   await openDetail();
   let reject!: (error: Error) => void;

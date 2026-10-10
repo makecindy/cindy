@@ -602,11 +602,11 @@ function PluginDirectory() {
     setBusy(true);
     try {
       await invokePlugin(invoke, row.host.deviceId, row.item.ref.id, actionId);
-      // A read failure offers a read-only retry, never a replay of the completed write.
-      if (current()) await showDetail(row);
     } catch {
       if (current()) Alert.alert(t("plugins.actionFailed"));
     } finally {
+      // A failed reply may follow an applied write; confirm by reading, never replaying it.
+      if (current()) await showDetail(row);
       enableLock.current = false;
       if (isMobileAuthOwnerCurrent(owner)) setBusy(false);
       void list.refresh();
