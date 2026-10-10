@@ -328,6 +328,35 @@ describe('Agent app update install', () => {
     expect(harness.deps.requestHostPermission).toHaveBeenCalledTimes(2);
   });
 
+  it('never drops an unrelated notice when flushes overlap', async () => {
+    const harness = setup({
+      apply: vi.fn(async ({ beforeRelaunch }) => {
+        harness.switchOwner({ ownerId: 'owner-b' });
+        await beforeRelaunch();
+        return { status: 'failed' as const, reason: 'x', errorCode: 'relaunch_cancelled' };
+      }),
+    });
+    // Two failed installs from two tasks, both queued while their account is away.
+    await harness.service.install(caller);
+    await flush();
+    harness.switchOwner(ownerA);
+    // The second request's opportunistic retry hits a busy database, so task-1 stays queued.
+    vi.mocked(harness.deps.notify).mockRejectedValueOnce(new Error('database busy'));
+    await harness.service.install({ sessionId: 'task-2', sessionInstanceId: 'instance-2' });
+    await flush();
+    harness.switchOwner(ownerA);
+    vi.mocked(harness.deps.notify).mockClear();
+    await Promise.all([
+      harness.service.deliverPendingResult(),
+      harness.service.deliverPendingResult(),
+    ]);
+    const delivered = new Set(vi.mocked(harness.deps.notify).mock.calls.map((call) => call[1]));
+    expect(delivered).toEqual(new Set(['task-1', 'task-2']));
+    vi.mocked(harness.deps.notify).mockClear();
+    await harness.service.deliverPendingResult();
+    expect(harness.deps.notify).not.toHaveBeenCalled();
+  });
+
   it('writes the restart record only at the last gate, and clears it if the spawn then fails', async () => {
     const harness = setup({
       apply: vi.fn(async ({ beforeRelaunch, beforeSpawn }) => {

@@ -594,10 +594,17 @@ describe('agent-facing managed app update check', () => {
         expect(await service.checkForUpdate()).toBe('ready');
         await vi.waitFor(() => { expect(spawnProcess).toHaveBeenCalledOnce(); });
         const beforeRelaunch = vi.fn(async () => true);
-        await expect(service.applyConfirmedAppUpdateForAgent({ expectedVersion: '0.0.66', beforeRelaunch }))
+        const beforeSpawn = vi.fn(() => true);
+        await expect(service.applyConfirmedAppUpdateForAgent({ expectedVersion: '0.0.66', beforeRelaunch, beforeSpawn }))
           .resolves.toMatchObject({ status: 'failed', errorCode: 'version_changed', stagedVersion: '0.0.65' });
-        await expect(service.applyConfirmedAppUpdateForAgent({ expectedVersion: '0.0.65', beforeRelaunch }))
+        expect(beforeSpawn).not.toHaveBeenCalled();
+        // Adopting it still passes the last gate, where the caller records its restart.
+        await expect(service.applyConfirmedAppUpdateForAgent({ expectedVersion: '0.0.65', beforeRelaunch, beforeSpawn }))
           .resolves.toEqual({ status: 'relaunching', targetVersion: '0.0.65' });
+        expect(beforeSpawn).toHaveBeenCalledOnce();
+        await expect(service.applyConfirmedAppUpdateForAgent({
+          expectedVersion: '0.0.65', beforeRelaunch, beforeSpawn: () => false,
+        })).resolves.toMatchObject({ status: 'failed', errorCode: 'relaunch_cancelled' });
         expect(beforeRelaunch).not.toHaveBeenCalled();
         expect(spawnProcess).toHaveBeenCalledOnce();
       } finally {

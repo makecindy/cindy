@@ -276,6 +276,8 @@ export function createAgentAppUpdateService(deps: AgentAppUpdateDeps) {
   };
   const flushNotices = async () => {
     for (const notice of [...pendingNotices]) {
+      // A concurrent flush may already have delivered it.
+      if (!pendingNotices.includes(notice)) continue;
       // Never write into whichever account replaced the one that confirmed.
       if (!deps.isOwnerCurrent(notice.owner)) continue;
       try {
@@ -284,7 +286,9 @@ export function createAgentAppUpdateService(deps: AgentAppUpdateDeps) {
         deps.logger?.warn?.('agent app update notice failed; will retry', { error: String(error) });
         continue;
       }
-      pendingNotices.splice(pendingNotices.indexOf(notice), 1);
+      // Identity-based removal: overlapping flushes never remove another notice.
+      const index = pendingNotices.indexOf(notice);
+      if (index >= 0) pendingNotices.splice(index, 1);
     }
   };
 

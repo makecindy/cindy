@@ -2209,13 +2209,20 @@ export async function applyConfirmedAppUpdateForAgent(options: {
       ...(current ? { stagedVersion: current } : {}),
     };
   };
+  const relaunchCancelled: AgentConfirmedAppUpdateResult = {
+    status: 'failed', reason: '更新已下载，但本次没有重启。', errorCode: 'relaunch_cancelled',
+  };
+  // A relaunch already under way (Settings banner or idle auto-install) counts
+  // as this install only for the confirmed version, and only after the same
+  // last gate a spawn of our own would pass (the caller records its restart there).
+  const adoptRelaunchUnderWay = (): AgentConfirmedAppUpdateResult =>
+    versionChanged()
+      ?? (options.beforeSpawn?.() === false
+        ? relaunchCancelled
+        : { status: 'relaunching', targetVersion: readyVersion });
   const unsupported = agentUpdateUnsupportedReason();
   if (unsupported) return { status: 'failed', reason: unsupported, errorCode: 'unsupported' };
-  // A relaunch already under way (Settings banner or idle auto-install) only
-  // counts as this install when it applies the confirmed version.
-  if (isRelaunching || autoRelaunchInProgress) {
-    return versionChanged() ?? { status: 'relaunching', targetVersion: readyVersion };
-  }
+  if (isRelaunching || autoRelaunchInProgress) return adoptRelaunchUnderWay();
   if (currentStatus !== 'ready') {
     const result = await checkForUpdate();
     if (result !== 'ready') {
@@ -2224,13 +2231,8 @@ export async function applyConfirmedAppUpdateForAgent(options: {
   }
   const changedAfterDownload = versionChanged();
   if (changedAfterDownload) return changedAfterDownload;
-  if (!await options.beforeRelaunch()) {
-    return { status: 'failed', reason: '更新已下载，但本次没有重启。', errorCode: 'relaunch_cancelled' };
-  }
-  // Same rule for a relaunch that started during the wait.
-  if (isRelaunching || autoRelaunchInProgress) {
-    return versionChanged() ?? { status: 'relaunching', targetVersion: readyVersion };
-  }
+  if (!await options.beforeRelaunch()) return relaunchCancelled;
+  if (isRelaunching || autoRelaunchInProgress) return adoptRelaunchUnderWay();
   // A background check may have superseded the staged patch during the wait.
   const changedBeforeRelaunch = versionChanged();
   if (changedBeforeRelaunch) return changedBeforeRelaunch;
@@ -2243,9 +2245,8 @@ export async function applyConfirmedAppUpdateForAgent(options: {
   let cancelledBeforeSpawn: AgentConfirmedAppUpdateResult | null = null;
   await executeRelaunch(resolvedRelaunchTheme, {
     shouldProceed: () => {
-      cancelledBeforeSpawn = versionChanged() ?? (options.beforeSpawn?.() === false
-        ? { status: 'failed', reason: '更新已下载，但本次没有重启。', errorCode: 'relaunch_cancelled' }
-        : null);
+      cancelledBeforeSpawn = versionChanged()
+        ?? (options.beforeSpawn?.() === false ? relaunchCancelled : null);
       return cancelledBeforeSpawn === null;
     },
   });
