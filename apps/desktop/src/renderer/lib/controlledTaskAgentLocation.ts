@@ -46,6 +46,21 @@ export function isControllerReadableAgentDevice(
 }
 
 /**
+ * 被控电脑上的任务 Agent 现在 / 挂着的位置里,本机也收到了的分享(isReceived 由本机的已收到列表
+ * 判定)。没有时返回 undefined。
+ */
+export function controlledTaskReadableShareIds(input: {
+  agentDeviceId: string | null | undefined;
+  pendingAgentDeviceId: string | null | undefined;
+  isReceived: (deviceId: string) => boolean;
+}): ReadonlySet<string> | undefined {
+  const ids = [input.agentDeviceId, input.pendingAgentDeviceId].filter(
+    (id): id is string => !!id && isProviderShareAgentDeviceId(id) && input.isReceived(id),
+  );
+  return ids.length > 0 ? new Set(ids) : undefined;
+}
+
+/**
  * 被控电脑上的任务能不能在本机的模型面板里换 Agent 所在电脑:任务当前与挂着的换位置意图都得是
  * 被控电脑本身(null)或本机读得到目录的电脑。Agent 在本机没收到的分享上、或就在本机时,本机
  * 列不出那份目录,维持原有的被控电脑列表与调用。

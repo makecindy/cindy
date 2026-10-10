@@ -165,6 +165,7 @@ import { useDeviceProviders } from '@/hooks/useDeviceProviders';
 import { useSelectableDevices } from '@/hooks/useControllableDevices';
 import {
   controlledTaskAgentLocationReadable,
+  controlledTaskReadableShareIds,
   controlledTaskSupportsAgentLocation,
   selectControlledTaskAgentDevices,
 } from '@/lib/controlledTaskAgentLocation';
@@ -271,7 +272,6 @@ import { isRemoteSessionWriteBlocked } from './lib/remoteSessionWriteGuard';
 import { getModelById, getDefaultModelForVendor, getModelsForVendor } from '@/lib/modelDefinitions';
 import { resolveDisplayContextWindow } from '@/lib/contextWindow';
 import { resolveSessionContextWindow } from '../../../shared/sessionContextWindow';
-import { isProviderShareAgentDeviceId } from '../../../shared/providerShare';
 import {
   formatRecentOutputTokenRate,
   formatRunningTokenCount,
@@ -2073,13 +2073,17 @@ export function CCAgentSessionView({
   // 被控电脑上的任务 Agent 现在 / 挂着的位置是分享时:分享按账号授予,本机也收到了同一条就经本机
   // 的分享通道读它的目录,模型按钮按分享显示(否则只能读到被控电脑自己的目录,显示「模型信息暂
   // 不可用」)。本机没收到的分享读不到,维持原样。
-  const controlledShareIds = useMemo(() => {
-    if (!remoteDeviceId) return undefined;
-    const ids = [session?.agentDeviceId, pendingAgentDeviceId].filter(
-      (id): id is string => isProviderShareAgentDeviceId(id) && isReceivedProviderShare(id),
-    );
-    return ids.length > 0 ? new Set(ids) : undefined;
-  }, [remoteDeviceId, session?.agentDeviceId, pendingAgentDeviceId, isReceivedProviderShare]);
+  const controlledShareIds = useMemo(
+    () =>
+      remoteDeviceId
+        ? controlledTaskReadableShareIds({
+            agentDeviceId: session?.agentDeviceId,
+            pendingAgentDeviceId,
+            isReceived: isReceivedProviderShare,
+          })
+        : undefined,
+    [remoteDeviceId, session?.agentDeviceId, pendingAgentDeviceId, isReceivedProviderShare],
+  );
   // 远程控制的被控电脑上的任务:被控电脑支持远程 Agent 时,同样列出其他电脑的供应商(与手机同一
   // 套)。共享任务访客读到的是自己账号的设备、与任务无关,SSH 任务不支持;Agent 现在或挂着的位置
   // 在本机读不到目录的地方(本机没收到的分享 / 本机自己)时,维持原有的被控电脑列表。
