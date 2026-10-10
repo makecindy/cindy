@@ -26,6 +26,10 @@ const noSleep = async () => {};
 
 describe('device-link shared contract', () => {
   it('documents mobile remote invoke channels and media special channels', () => {
+    expect(new Set(MOBILE_REMOTE_INVOKE_CHANNELS).size).toBe(MOBILE_REMOTE_INVOKE_CHANNELS.length);
+    expect(MOBILE_REMOTE_INVOKE_CHANNELS).toContain('maker:usage:account');
+    expect(MOBILE_REMOTE_INVOKE_CHANNELS).toContain('maker:usage:claude-subscription');
+    expect(MOBILE_REMOTE_INVOKE_CHANNELS).toContain('maker:usage:xai-subscription');
     expect(DEVICE_LINK_MEDIA_FETCH_CHANNEL).toBe('device-link:media:fetch');
     expect(DEVICE_LINK_VOICE_TRANSCRIBE_CHANNEL).toBe('device-link:voice:transcribe');
     expect(DEVICE_LINK_VOICE_CREDENTIAL_SYNC_CHANNEL).toBe('device-link:voice:credential-sync');

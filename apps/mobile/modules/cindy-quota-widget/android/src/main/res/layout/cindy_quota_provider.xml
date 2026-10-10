@@ -1,0 +1,16 @@
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+ android:id="@+id/provider_root" android:layout_width="match_parent" android:layout_height="wrap_content"
+ android:orientation="vertical" android:padding="@dimen/cindy_widget_inset">
+ <LinearLayout android:id="@+id/provider_header" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:gravity="top">
+  <ImageView android:id="@+id/provider_rings" android:layout_width="@dimen/cindy_widget_ring" android:layout_height="@dimen/cindy_widget_ring" android:importantForAccessibility="no" />
+  <TextView android:layout_width="0dp" android:layout_height="1dp" android:layout_weight="1" />
+  <ImageView android:id="@+id/provider_icon" android:layout_width="14dp" android:layout_height="14dp" android:importantForAccessibility="no" />
+  <LinearLayout android:layout_width="wrap_content" android:layout_height="wrap_content" android:orientation="vertical" android:layout_marginStart="3dp">
+   <TextView android:id="@+id/provider_name" android:layout_width="wrap_content" android:layout_height="wrap_content" android:includeFontPadding="false" android:textSize="@dimen/cindy_widget_brand" />
+   <TextView android:id="@+id/provider_plan" android:layout_width="61dp" android:layout_height="wrap_content" android:minHeight="28dp" android:includeFontPadding="false" android:textSize="@dimen/cindy_widget_brand" android:layout_marginTop="2dp" />
+  </LinearLayout>
+ </LinearLayout>
+ <TextView android:id="@+id/provider_primary" android:layout_width="match_parent" android:layout_height="wrap_content" android:minHeight="@dimen/cindy_widget_primary_height" android:layout_marginTop="8dp" android:includeFontPadding="false" android:textSize="@dimen/cindy_widget_value" android:fontFamily="sans-serif-medium" />
+ <TextView android:id="@+id/provider_secondary" android:layout_width="match_parent" android:layout_height="wrap_content" android:minHeight="@dimen/cindy_widget_secondary_height" android:includeFontPadding="false" android:textSize="@dimen/cindy_widget_detail" />
+ <TextView android:id="@+id/provider_tertiary" android:layout_width="match_parent" android:layout_height="wrap_content" android:minHeight="@dimen/cindy_widget_tertiary_height" android:includeFontPadding="false" android:textSize="@dimen/cindy_widget_detail" />
+</LinearLayout>

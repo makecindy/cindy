@@ -329,6 +329,7 @@ describe("mobile maker transport", () => {
       "maker:usage:model-pricing",
       "local-db:messages:estimatedSessionValue",
       "maker:usage:codex-rate-limits",
+      "maker:usage:account",
       "maker:usage:codex-rate-limit-reset",
       "maker:usage:claude-subscription",
       "maker:usage:xai-subscription",

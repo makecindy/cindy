@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Generated from Mobile tokens / settings translations. Do not edit. -->
+<resources>
+  <string name="cindy_widget_title" formatted="false">訂閱配額小工具</string>
+  <string name="cindy_widget_description" formatted="false">在主畫面查看最近同步的訂閱配額。</string>
+  <string name="cindy_widget_hint" formatted="false">選擇一台電腦。手機 App 開啟時，Cindy 同步各平台首個已連線帳號的配額。小工具顯示已儲存的快照，不是即時監控。</string>
+  <string name="cindy_widget_choose_device" formatted="false">來源電腦</string>
+  <string name="cindy_widget_no_devices" formatted="false">沒有可遠端連線的電腦。請先在裝置頁連線電腦。</string>
+  <string name="cindy_widget_refresh" formatted="false">立即同步</string>
+  <string name="cindy_widget_disable" formatted="false">停止向小工具分享</string>
+  <string name="cindy_widget_failed" formatted="false">同步或儲存失敗，請開啟 Cindy 後重試。</string>
+  <string name="cindy_widget_unsupported" formatted="false">請安裝支援主畫面小工具的版本。</string>
+  <string name="cindy_widget_empty" formatted="false">開啟 Cindy 設定並同步</string>
+  <string name="cindy_widget_unavailable" formatted="false">無法使用</string>
+  <string name="cindy_widget_awaiting_refresh" formatted="false">已到重設時間 · 待更新</string>
+  <string name="cindy_widget_stale" formatted="false">資料已過期</string>
+  <string name="cindy_widget_offline" formatted="false">離線快照</string>
+  <string name="cindy_widget_fresh" formatted="false">已同步</string>
+  <string name="cindy_widget_remaining" formatted="false">剩餘 {{percent}}%</string>
+  <string name="cindy_widget_resets" formatted="false">重設</string>
+  <string name="cindy_widget_updated" formatted="false">更新於</string>
+  <string name="cindy_widget_unknown_time" formatted="false">時間未知</string>
+  <string name="cindy_widget_primary" formatted="false">主要時段</string>
+  <string name="cindy_widget_secondary" formatted="false">次要時段</string>
+  <string name="cindy_widget_five_hour" formatted="false">5 小時</string>
+  <string name="cindy_widget_seven_day" formatted="false">7 天</string>
+  <string name="cindy_widget_week" formatted="false">每週</string>
+  <string name="cindy_widget_minutes" formatted="false">{{count}} 分鐘</string>
+  <string name="cindy_widget_demo" formatted="false">示範</string>
+  <string name="cindy_widget_add_hint" formatted="false">加入 Claude Usage、Codex Usage 或 Grok Usage 小型小工具。Subscription Usage 中型小工具並排顯示前兩個已連線平台。小工具內容使用英文。</string>
+  <string name="cindy_widget_add_hint_android" formatted="false">在桌面的小工具列表中加入 Cindy。寬卡並排顯示兩個平台；較窄時依可用空間垂直排列或減少顯示的平台。調整小工具大小可顯示更多內容。小工具文字為英文。</string>
+  <string name="cindy_widget_account_hint" formatted="false">依電腦上的帳號順序，每個平台取一個。請在電腦上管理帳號順序與連線。</string>
+</resources>

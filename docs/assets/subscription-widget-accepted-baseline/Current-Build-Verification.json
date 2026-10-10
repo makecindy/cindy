@@ -1,0 +1,12 @@
+{
+  "codeHead": "779bf7134d8e94d2574721bc3178309c29dbd0a6",
+  "appBundle": "com.xd.cindy",
+  "extensionBundle": "com.xd.cindy.quota-widget",
+  "appGroup": "group.com.xd.cindy.quota",
+  "fingerprint": "5f8904917a99d0b4daf9a4c301dc18f35982e309",
+  "appExecutableSHA256": "635050d04b54c8bcfe2354d383f259e396474101755e6574b86eb93c366f5e6e",
+  "widgetExecutableSHA256": "c5ba7808ce5e6711a9cb3df7bcf2f975fb8fa0188d860e84ffb857cd53fd53b8",
+  "assetsPresent": true,
+  "buildResult": "success",
+  "buildKind": "Debug iOS Simulator, not signed distribution IPA"
+}

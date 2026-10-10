@@ -1157,7 +1157,8 @@ describe('CodexAgent spawn configuration', () => {
         started.resolve();
         await finish.promise;
         if (method === Method.ModelList) return { data: [], nextCursor: null };
-        if (method === Method.AccountRateLimitsRead || method === Method.MemoryReset) return {};
+        if (method === Method.AccountRateLimitsRead) return { rateLimits: { planType: 'plus' }, rateLimitsByLimitId: null, rateLimitResetCredits: null };
+        if (method === Method.MemoryReset) return {};
         return undefined;
       });
       const operation = method === Method.ModelList ? agent.refreshLocalModels({ credentialMode: 'oauth-bearer' })
@@ -7524,6 +7525,7 @@ describe('CodexAgent MCP thread context hooks', () => {
     });
     await expect(agent.resetMemory()).resolves.toEqual({});
     await expect(agent.readAccountRateLimits()).resolves.toEqual(rateLimits);
+    expect(createdTransports[0].lines.some(line => JSON.parse(line).method === 'account/read')).toBe(false);
     await expect(agent.consumeAccountRateLimitResetCredit({
       idempotencyKey: '018f4ec7-c6d8-7f10-8d43-9f8791d33000',
       creditId: 'credit-earliest',
@@ -7882,6 +7884,97 @@ describe('CodexAgent MCP thread context hooks', () => {
     )).toEqual(['local-control:oauth-bearer']);
     expect(createdTransports[0].lines[0]).toContain('initialize');
     expect(createdTransports[0].lines.some((line) => line.includes('account/rateLimits/read'))).toBe(true);
+    await agent.dispose();
+  });
+
+  it.each(['plus', 'pro'])('fills unknown quota plans from the same account/read host (%s)', async (plan) => {
+    const rateLimits = {
+      rateLimits: { planType: 'unknown', secondary: { usedPercent: 34, windowMinutes: 10080 } },
+      rateLimitsByLimitId: { codex: { planType: 'unknown' }, special: { planType: 'business' } },
+      rateLimitResetCredits: { availableCount: 3, credits: null },
+    };
+    MockCodexTransport.onCreate = transport => {
+      transport.setMockResponse(Method.AccountRateLimitsRead, { result: rateLimits });
+      transport.setMockResponse('account/read', { result: { account: { type: 'chatgpt', planType: plan, email: 'private@example.invalid' } } });
+    };
+    const agent = new CodexAgent(createDeps());
+    const result = await agent.readAccountRateLimits('work-account');
+    expect(result).toEqual({ ...rateLimits,
+      rateLimits: { ...rateLimits.rateLimits, planType: plan },
+      rateLimitsByLimitId: { codex: { planType: plan }, special: { planType: 'business' } },
+    });
+    expect(rateLimits.rateLimits.planType).toBe('unknown');
+    expect(createdTransports).toHaveLength(1);
+    expect(createdTransports[0].lines.map(line => JSON.parse(line)).find(r => r.method === 'account/read')?.params)
+      .toEqual({ refreshToken: false });
+    expect(Array.from((agent as unknown as { hosts: Map<string, unknown> }).hosts.keys()))
+      .toEqual(['local-account:work-account:control-plane']);
+    expect(JSON.stringify(result)).not.toContain('private@example.invalid');
+    await agent.dispose();
+  });
+
+  it.each([
+    null, undefined, {},
+    { account: null },
+    { account: { type: 'apiKey', planType: 'pro' } },
+    { account: { type: 'chatgpt', planType: 'unknown' } },
+    { account: { type: 'chatgpt', planType: 'unrecognized-plan' } },
+    { account: { type: 'chatgpt', planType: 500 } },
+  ])('keeps quota values when account/read cannot establish a plan: %j', async (state) => {
+    const rateLimits = { rateLimits: { planType: 'unknown' }, rateLimitsByLimitId: null, rateLimitResetCredits: null };
+    MockCodexTransport.onCreate = transport => {
+      transport.setMockResponse(Method.AccountRateLimitsRead, { result: rateLimits });
+      transport.setMockResponse('account/read', { result: state });
+    };
+    const agent = new CodexAgent(createDeps());
+    await expect(agent.readAccountRateLimits()).resolves.toEqual(rateLimits);
+    await agent.dispose();
+  });
+
+  it.each([
+    null, undefined, {}, { rateLimits: null }, { rateLimits: [] },
+    { rateLimits: 'invalid' }, { rateLimits: {}, rateLimitsByLimitId: [] },
+    { rateLimits: {}, rateLimitsByLimitId: { codex: null } },
+  ])('rejects malformed quota envelopes without fabricating a plan: %j', async (result) => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    host.request.mockResolvedValueOnce(result);
+    await expect(agent.readAccountRateLimits()).rejects.toThrow('Invalid Codex account/rateLimits/read response');
+    expect(host.request).toHaveBeenCalledTimes(1);
+    expect(host.request).toHaveBeenCalledWith(Method.AccountRateLimitsRead, undefined);
+    const guard = await agent.beginLocalHostCredentialChange('after invalid quota', { allLocalHosts: true });
+    guard.assertIdle();
+    await guard.finalize();
+    await agent.dispose();
+  });
+
+  it.each([null, undefined, '', 500])('fills missing or invalid plan fields from explicit account metadata: %j', async (planType) => {
+    const rateLimits = { rateLimits: { planType }, rateLimitsByLimitId: { codex: { planType } }, rateLimitResetCredits: null };
+    const agent = new CodexAgent(createDeps());
+    installFakeHost(agent, async method => method === Method.AccountRateLimitsRead ? rateLimits
+      : { account: { type: 'chatgpt', planType: 'plus' } });
+    await expect(agent.readAccountRateLimits()).resolves.toEqual({
+      ...rateLimits, rateLimits: { planType: 'plus' }, rateLimitsByLimitId: { codex: { planType: 'plus' } },
+    });
+    await agent.dispose();
+  });
+
+  it('propagates quota RPC failure without attempting an account metadata fallback', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, async () => { throw new Error('quota unavailable'); });
+    await expect(agent.readAccountRateLimits()).rejects.toThrow('quota unavailable');
+    expect(host.request).toHaveBeenCalledTimes(1);
+    await agent.dispose();
+  });
+
+  it('keeps successful quotas when optional account/read fails on an older runtime', async () => {
+    const rateLimits = { rateLimits: {}, rateLimitsByLimitId: null, rateLimitResetCredits: { availableCount: 0, credits: null } };
+    MockCodexTransport.onCreate = transport => {
+      transport.setMockResponse(Method.AccountRateLimitsRead, { result: rateLimits });
+      transport.setMockResponse('account/read', { error: { code: -32601, message: 'Method not found' } });
+    };
+    const agent = new CodexAgent(createDeps());
+    await expect(agent.readAccountRateLimits()).resolves.toEqual(rateLimits);
     await agent.dispose();
   });
 

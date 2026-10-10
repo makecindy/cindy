@@ -2965,8 +2965,35 @@ assertRouteCurrent();
     // This RPC is credential-specific, unlike model/list or memory utilities. Requiring
     // oauth-bearer prevents a gateway/provider host from reading or mutating the wrong
     // account context; getHost refuses to replace a differently-authenticated active host.
-    return this.withStartedAccountHost(providerId,
-      host => host.request<AccountRateLimitsResponse>(Method.AccountRateLimitsRead, undefined));
+    return this.withStartedAccountHost(providerId, async (host) => {
+      const result = await host.request<AccountRateLimitsResponse>(Method.AccountRateLimitsRead, undefined);
+      // The required quota envelope must be present. Do not turn malformed RPC
+      // replies into successful empty quotas merely to obtain optional metadata.
+      const isObject = (value: unknown) => value !== null && typeof value === 'object' && !Array.isArray(value);
+      if (!isObject(result) || !isObject(result.rateLimits)
+        || (result.rateLimitsByLimitId != null && (!isObject(result.rateLimitsByLimitId)
+          || Object.values(result.rateLimitsByLimitId).some(bucket => !isObject(bucket))))) {
+        throw new Error('Invalid Codex account/rateLimits/read response');
+      }
+      const missingPlan = (plan: unknown) => typeof plan !== 'string' || !plan.trim() || plan.trim().toLowerCase() === 'unknown';
+      if (!missingPlan(result.rateLimits.planType)
+        && Object.values(result.rateLimitsByLimitId ?? {}).every(bucket => !missingPlan(bucket.planType))) return result;
+      // Read only this selected host's public account metadata. Unsupported/failed
+      // optional reads preserve the already validated quota response; no auth refresh.
+      const state = await host.request<{ account?: { type?: string; planType?: string } | null } | null>(
+        'account/read', { refreshToken: false }, { timeoutMs: 2_000 }).catch(() => null);
+      const plan = state?.account?.planType;
+      if (state?.account?.type !== 'chatgpt' || typeof plan !== 'string'
+        || !['free', 'go', 'plus', 'pro', 'team', 'business', 'enterprise', 'edu'].includes(plan)) return result;
+      const fillPlan = (bucket: AccountRateLimitsResponse['rateLimits']) => missingPlan(bucket.planType)
+        ? { ...bucket, planType: plan } : bucket;
+      return {
+        ...result,
+        rateLimits: fillPlan(result.rateLimits),
+        rateLimitsByLimitId: result.rateLimitsByLimitId == null ? null
+          : Object.fromEntries(Object.entries(result.rateLimitsByLimitId).map(([key, bucket]) => [key, fillPlan(bucket)])),
+      };
+    });
   }
 
   /** Consume one reset credit on the non-model app-server control plane. */

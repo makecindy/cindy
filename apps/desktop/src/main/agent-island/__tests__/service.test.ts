@@ -624,9 +624,7 @@ describe('AgentIslandService native publishing', () => {
         compactDetail: 'check logs',
       }),
     );
-    // 首个动态 import('../service.js') 在高并行 worker 下可能超过 vitest 默认 5s，
-    // 显式放宽本用例的超时(用例本身是纯同步断言，不是真长跑)。
-  }, 20_000);
+  });
 
   it('exposes the canonical snapshot and emits per-session transition edges', async () => {
     const { AgentIslandService } = await import('../service.js');

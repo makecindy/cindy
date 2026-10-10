@@ -85,6 +85,7 @@ import { useClipboardSharedTaskInvitation } from '@/device-link/useClipboardShar
 import { ClipboardSharedTaskPrompt } from '@/session/ClipboardSharedTaskPrompt';
 import { HomeEntryProvider, useHomeEntrySplashRelease } from '@/session/HomeEntryProvider';
 import { RemoteDesktopHost } from '@/remote-desktop/RemoteDesktopHost';
+import { QuotaWidgetBridge } from '@/widgets/QuotaWidgetBridge';
 
 const holdSplash = () => undefined;
 
@@ -163,6 +164,7 @@ function NavigationGate() {
   return (
     <NavigationThemeProvider value={navigationTheme}>
       <IncomingShareBridge />
+      <QuotaWidgetBridge />
       {/* Android 专用:splash 覆盖层仍在时状态栏保持浅色;淡出开始后切回主题样式 */}
       {Platform.OS === 'android' ? (
         <StatusBar

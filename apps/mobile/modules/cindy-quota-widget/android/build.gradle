@@ -1,0 +1,16 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+group = 'expo.modules.cindyquotawidget'
+version = '0.1.0'
+android {
+  namespace "expo.modules.cindyquotawidget"
+  defaultConfig { versionCode 1; versionName "0.1.0" }
+}
+
+dependencies {
+  testImplementation 'junit:junit:4.13.2'
+  // Android's mockable org.json throws on the JVM; use the real JSON implementation for codec tests.
+  testImplementation 'org.json:json:20240303'
+}

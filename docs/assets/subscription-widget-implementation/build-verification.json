@@ -1,0 +1,56 @@
+{
+  "checkedAt": "2026-10-01T04:21:13.519768+00:00",
+  "build": "Xcode 27.0 27A266a / iOS 27.0 simulator SDK",
+  "hostBundleId": "com.xd.cindy",
+  "extensionBundleId": "com.xd.cindy.quota-widget",
+  "appGroup": "group.com.xd.cindy.quota",
+  "extensionArchitectures": "x86_64 arm64",
+  "extensionSHA256": "9e85f78e17e56f2f3dd623fe1ad5d2e3bee078d3dbcd4d58bc0d57545754c538",
+  "nativeIdentity": {
+    "healthy": true,
+    "code": "native-matched",
+    "installedFingerprint": "a057ee5c92a92e41eddc29324da5ff8934bad5c8",
+    "expectedFingerprint": "a057ee5c92a92e41eddc29324da5ff8934bad5c8"
+  },
+  "runtimeTested": true,
+  "Baguette": "0.2.0 installed by user; errno13/code22 recovered; formal plugin used",
+  "tests": {
+    "postMerge": {
+      "widgetTransportSettings": 104,
+      "designInventory": 52,
+      "mobileTypecheck": "pass",
+      "desktopTypecheck": "pass",
+      "generatedResources": "pass",
+      "mobileScope": "pass"
+    },
+    "preMerge": {
+      "head": "eba687b0ae6f476248c10b14feae6b63e539003b",
+      "mobileFull": 7745,
+      "mobileFullFiles": 609,
+      "desktop": 47,
+      "sharedContract": 9,
+      "SwiftFoundation": "pass",
+      "sharedTypecheck": "8 identical errors reproduced on archived main f7f265ef2"
+    },
+    "demoInsetChange": {
+      "fullSimulatorBuild": "exit 0",
+      "mobileTypecheck": "exit 0",
+      "SwiftFoundationContract": "PASS",
+      "source": "1f0cab853 plus Demo inset patch"
+    }
+  },
+  "mergedMain": "36420c470f275af57103b2da7b03dd5e144333e3",
+  "buildCommand": "pnpm mobile:sim:rebuild -- --build-only --force-build",
+  "buildExitCode": 0,
+  "embeddedExtensions": [
+    "CindyNotificationService.appex",
+    "CindySubscriptionWidget.appex",
+    "expo-sharing-extension.appex"
+  ],
+  "previousHeadCI": {
+    "head": "1f0cab8533dcbce3acf68683b2b7e7d67a61d5fe",
+    "observedAt": "2026-10-01T04:08:00Z",
+    "result": "all client-ci shards, verify, Git integration and DCO passed; draft design check skipped"
+  },
+  "runtimeScope": "Baguette 0.2.0 Air/18Pro SpringBoard small/medium; synthetic fixtures + unauthenticated complete Cindy launch; no real-account E2E"
+}
