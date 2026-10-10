@@ -3176,6 +3176,14 @@
       }
     },
     "gitSafety": {
+      "nonEmptyPrompt": {
+        "title": "为此项目建立文件恢复点？",
+        "message": "此项目已有文件，但没有 Git 历史记录。",
+        "detail": "{{path}}\n\nCindy 会在本次任务修改文件前初始化 Git，并为可纳入的文件建立恢复点。现有文件保持原位，并在项目中创建 `.git` 目录。之后可在 Git 安全设置中关闭新的恢复点；若删除 `.git`，此项目的 Git 历史也会一并删除。安全过滤排除的文件无法通过此恢复点还原。跳过后，此项目没有文件恢复点。拒绝后，此项目不会再次弹出提示，除非重置 Git 安全设置。",
+        "allow": "建立恢复点",
+        "decline": "不为此项目建立",
+        "cancel": "取消"
+      },
       "title": "Git 安全",
       "autoSnapshotTitle": "文件恢复点",
       "description": "选择 Cindy 记录隐藏文件恢复点的范围。这只影响文件恢复成本，不影响对话回退。",
@@ -3183,7 +3191,7 @@
       "modes": {
         "off": "关闭",
         "existingGit": "仅已有 Git 项目",
-        "allProjects": "包括新的空项目"
+        "allProjects": "包括未启用 Git 的项目"
       },
       "toggleAria": "文件恢复点模式",
       "saveFailed": "保存 Git 安全设置失败"

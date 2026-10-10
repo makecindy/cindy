@@ -151,6 +151,25 @@ describe('GitSnapshotCoordinator', () => {
     expect(coordinator.hasPendingTurnStart('s1')).toBe(true);
   });
 
+  it('does not bootstrap a non-Git project after a turn without a baseline', async () => {
+    const deps = makeDeps({
+      getSessionContext: vi.fn().mockResolvedValue({
+        workingDir: '/non-git-project',
+        agentKind: 'codex',
+        workspaceKind: 'project',
+      }),
+      detectRepoRoot: vi.fn().mockResolvedValue(null),
+      initializeProjectGit: vi.fn().mockResolvedValue(null),
+    });
+    const coordinator = new GitSnapshotCoordinator(deps);
+
+    await coordinator.onTurnStart('s1');
+    await coordinator.onTurnEnd('s1');
+
+    expect(deps.initializeProjectGit).toHaveBeenCalledOnce();
+    expect(deps.createShadowSavepoint).not.toHaveBeenCalled();
+  });
+
   it('does not retroactively enable snapshots for a turn that started disabled', async () => {
     let enabled = false;
     const deps = makeDeps({
