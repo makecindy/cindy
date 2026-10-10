@@ -11,6 +11,13 @@ const MAX_DISPLAY_NAME_CHARS = 180;
 
 type WechatMcpDeps = WechatBotMcpHostDeps & {
   getPeerId: () => Promise<string | null> | string | null;
+  /**
+   * 惰性解析当前会话工作目录。Codex / Pi 的 HTTP 桥在 server factory 阶段只有
+   * 全局空 ctx(workingDir 为空), 真实会话只能靠调用期 session context 解析 ——
+   * 与 getPeerId 同一纪律。未注入或解析为空时回落静态 workingDir(测试/直连
+   * 消费方), 两者皆空 → WORKING_DIR_UNAVAILABLE fail-closed。
+   */
+  getWorkingDir?: () => string | undefined;
   workingDir?: string;
 };
 
@@ -108,7 +115,11 @@ async function sendFileToUser(deps: WechatMcpDeps, args: Record<string, unknown>
 
   let safePath: string;
   try {
-    safePath = await resolveFileWithinWorkingDir(parsed.data.absPath, deps.workingDir);
+    // 调用期解析:Codex/Pi factory ctx 的工作目录恒为空, 静态绑定会让该工具在
+    // 这些 harness 上必然 WORKING_DIR_UNAVAILABLE。回调解析为空时回落静态值
+    // (Greptile review:兑现 deps 注释声明的回退契约)。
+    const workingDir = deps.getWorkingDir?.() || deps.workingDir;
+    safePath = await resolveFileWithinWorkingDir(parsed.data.absPath, workingDir);
   } catch (error) {
     const errorCode =
       error instanceof WechatFilePathError
