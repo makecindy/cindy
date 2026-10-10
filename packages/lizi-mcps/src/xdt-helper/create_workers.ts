@@ -153,6 +153,7 @@ export function registerCreateWorkersTool(
           fast: worker.fast,
           label: worker.label,
           ...(worker.working_dir !== undefined ? { workingDir: worker.working_dir } : {}),
+          ...(worker.images ? { initialTaskImages: worker.images } : {}),
           ...(worker.execution_device_id !== undefined ? { executionDeviceId: worker.execution_device_id } : {}),
           initialTask: worker.initial_task,
         });

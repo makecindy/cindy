@@ -179,7 +179,7 @@ describe('dynamic lizi MCP session context', () => {
     const schemaKeys = Object.keys(
       tools(server).send_to_worker.inputSchema?.shape ?? {},
     );
-    expect(schemaKeys).toEqual(['target_session_id', 'message', 'delivery']);
+    expect(schemaKeys).toEqual(['target_session_id', 'message', 'delivery', 'images']);
     expect(schemaKeys).not.toContain('interrupt');
   });
 
@@ -255,6 +255,31 @@ describe('dynamic lizi MCP session context', () => {
     expect(result).toMatchObject({ ok: true, wake_kind: 'already-active' });
     expect(result).not.toHaveProperty('steer_fallback_reason');
     expect(vi.mocked(deps.sendToWorker).mock.calls[0]?.[0]).not.toHaveProperty('delivery');
+  });
+
+  it('forwards send_to_worker images to the host and omits them when absent', async () => {
+    const deps = createOrcaDeps();
+    const server = createOrcaMcpServer(deps, {
+      agentKind: 'codex',
+      workingDir: '/repo',
+      sessionId: 'lead-1',
+      vendorOptions: { orcaRole: 'lead' },
+    });
+
+    await tools(server).send_to_worker.handler({
+      target_session_id: 'worker-session-1',
+      message: 'review this',
+      images: ['/tmp/a.png', '/tmp/b.jpg'],
+    } as never);
+    expect(vi.mocked(deps.sendToWorker).mock.calls[0]?.[0]).toMatchObject({
+      images: ['/tmp/a.png', '/tmp/b.jpg'],
+    });
+
+    await tools(server).send_to_worker.handler({
+      target_session_id: 'worker-session-1',
+      message: 'text only',
+    } as never);
+    expect(vi.mocked(deps.sendToWorker).mock.calls[1]?.[0]).not.toHaveProperty('images');
   });
 
   it('reads the caller own input queue when get_worker_queue_status omits worker_id', async () => {

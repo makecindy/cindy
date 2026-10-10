@@ -68,6 +68,23 @@ describe('create_worker tool', () => {
     expect(createWorker).not.toHaveBeenCalled();
   });
 
+  it('forwards initial_task images to the host and omits them when absent', async () => {
+    const { registry, createWorker } = setup();
+    await registry.call('create_worker', {
+      role: 'developer', agent: 'codex', label: 'worker',
+      initial_task: 'review the screenshots', images: ['/tmp/a.png'],
+    });
+    expect(createWorker).toHaveBeenCalledWith(expect.objectContaining({
+      initialTask: 'review the screenshots',
+      initialTaskImages: ['/tmp/a.png'],
+    }));
+
+    await registry.call('create_worker', {
+      role: 'developer', agent: 'codex', label: 'worker2', initial_task: 'text only',
+    });
+    expect(vi.mocked(createWorker).mock.calls[1]?.[0]).not.toHaveProperty('initialTaskImages');
+  });
+
   it('describes the subagent distinction before creating a worker', () => {
     const { registry } = setup();
 

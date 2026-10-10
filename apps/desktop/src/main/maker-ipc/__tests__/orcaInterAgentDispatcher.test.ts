@@ -315,6 +315,115 @@ describe('Orca lead/worker dispatcher', () => {
     );
   });
 
+  it('attaches validated images as blocks on live send and files on queued entries', async () => {
+    const validateImageAttachments = vi.fn(async (paths: string[]) => ({
+      ok: true as const,
+      images: paths.map((p) => ({
+        path: p, name: p.split(/[\\/]/).pop() ?? p, ext: '.png', size: 10, mimeType: 'image/png',
+      })),
+    }));
+    const live = createHarness({ validateImageAttachments });
+    const result = await live.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage({
+      targetSessionId: 'target-session',
+      rawContent: 'Check this screenshot',
+      source: 'lead',
+      senderLabel: 'Lead',
+      imagePaths: ['C:/tmp/a.png', 'C:/tmp/b.png'],
+      meta: { source: 'orca', context: 'images-live-test' },
+    });
+    expect(result).toMatchObject({ ok: true, mode: 'dispatched' });
+    expect(validateImageAttachments).toHaveBeenCalledWith(['C:/tmp/a.png', 'C:/tmp/b.png']);
+    expect(live.liveSession.send.mock.calls[0]?.[0]).toEqual({
+      type: 'user',
+      content: [
+        { type: 'text', text: expect.stringContaining('Check this screenshot') },
+        { type: 'image', path: 'C:/tmp/a.png', mimeType: 'image/png', pathOrigin: 'desktop-host' },
+        { type: 'image', path: 'C:/tmp/b.png', mimeType: 'image/png', pathOrigin: 'desktop-host' },
+      ],
+    });
+
+    const queued = createHarness({
+      validateImageAttachments,
+      shouldQueueNewTurn: vi.fn(() => true),
+    });
+    await queued.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage({
+      targetSessionId: 'target-session',
+      rawContent: 'Check this screenshot',
+      source: 'lead',
+      senderLabel: 'Lead',
+      imagePaths: ['C:/tmp/a.png'],
+      meta: { source: 'orca', context: 'images-queued-test' },
+    });
+    const item = firstQueuedItem(queued.queuedItems);
+    expect(item.files).toEqual([expect.objectContaining({
+      path: 'C:/tmp/a.png', category: 'image', mimeType: 'image/png', pathOrigin: 'desktop-host',
+    })]);
+  });
+
+  it('rejects images for remote targets and invalid files without sending', async () => {
+    const remote = createHarness({
+      getSessionRowSnapshot: vi.fn(async () => ({
+        title: 'Target Session',
+        status: 'active',
+        userSendAt: Date.parse('2026-06-12T01:02:03.000Z'),
+        remoteHostId: 'host-1',
+      })),
+    });
+    const remoteResult = await remote.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage({
+      targetSessionId: 'target-session',
+      rawContent: 'Look',
+      source: 'lead',
+      senderLabel: 'Lead',
+      imagePaths: ['C:/tmp/a.png'],
+      meta: { source: 'orca', context: 'images-remote-test' },
+    });
+    expect(remoteResult).toMatchObject({ ok: false });
+    expect(remote.liveSession.send).not.toHaveBeenCalled();
+
+    const invalid = createHarness({
+      validateImageAttachments: vi.fn(async () => ({ ok: false as const, message: 'image not found: C:/tmp/missing.png' })),
+    });
+    const invalidResult = await invalid.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage({
+      targetSessionId: 'target-session',
+      rawContent: 'Look',
+      source: 'lead',
+      senderLabel: 'Lead',
+      imagePaths: ['C:/tmp/missing.png'],
+      meta: { source: 'orca', context: 'images-invalid-test' },
+    });
+    expect(invalidResult).toMatchObject({ ok: false });
+    expect(invalid.deps.sendToSessionInternal).not.toHaveBeenCalled();
+    expect(invalid.liveSession.send).not.toHaveBeenCalled();
+  });
+
+  it('queues image attachments for a no-live target instead of failing after rollover', async () => {
+    const validateImageAttachments = vi.fn(async (paths: string[]) => ({
+      ok: true as const,
+      images: paths.map((p) => ({
+        path: p, name: p.split(/[\\/]/).pop() ?? p, ext: '.png', size: 10, mimeType: 'image/png',
+      })),
+    }));
+    const h = createHarness({
+      validateImageAttachments,
+      prepareUnhealthySession: vi.fn(async () => true),
+      getLiveSession: vi.fn(() => null),
+    });
+
+    const result = await h.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage({
+      targetSessionId: 'target-session',
+      rawContent: 'Check after rollover',
+      source: 'lead',
+      senderLabel: 'Lead',
+      imagePaths: ['C:/tmp/a.png'],
+      meta: { source: 'orca', context: 'images-no-live-test' },
+    });
+
+    expect(result).toMatchObject({ ok: true, mode: 'queued', clientId: 'client-1' });
+    const item = firstQueuedItem(h.queuedItems);
+    expect(item.files?.map((file) => file.path)).toEqual(['C:/tmp/a.png']);
+    expect(h.deps.sendToSessionInternal).not.toHaveBeenCalled();
+  });
+
   it('prepares an unhealthy live session before direct send and does not reuse the closed handle', async () => {
     const closed = { current: false };
     const liveSession = createLiveSession(async (_message, opts) => {

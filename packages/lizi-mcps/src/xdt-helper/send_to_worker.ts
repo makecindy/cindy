@@ -27,6 +27,8 @@ export interface SendToWorkerDeps {
     message: string;
     /** 仅调用方显式选择时传入;缺省等价 'queue'(普通直发/排队)。 */
     delivery?: OrcaMessageDelivery;
+    /** 可选, 随消息发给 worker 的本机图片绝对路径; 仅本机 worker 支持, SSH 远端 worker 会被拒绝。 */
+    images?: string[];
   }) => Promise<
     ControlResult<
       {
@@ -68,6 +70,8 @@ const DESCRIPTION =
   'worker 正忙时消息自动排队(wake_kind=queued)并回传 queued_message_id;' +
   '在它被消费前可用 get_worker_queue_status / update_queued_message / cancel_queued_message 查看、修改或撤回。' +
   '纠错或 worker 正在等的信息可用 delivery=steer 插进其当前 turn(返回 steered=true);新任务保持默认。' +
+  '要给 worker 发图片时用 images 传地址(仅本机 worker), 并在 message 里说明每张图是什么;' +
+  '用户在对话里贴的图, 把上下文 <cindy-host-image-references> 里的 uri 原样传入即可。' +
   '没插成时照常直发或排队,排队时附 steer_fallback_reason。' +
   '需要替换 worker 当前任务时改用 interrupt_worker。' +
   '失败码: LEAD_NOT_SUPPORTED / NOT_FOUND / ARCHIVED / DELETED / BUSY / AGENT_NOT_READY。';
@@ -93,8 +97,13 @@ export function registerSendToWorkerTool(
         .enum(['queue', 'steer'])
         .optional()
         .describe('投递方式:queue(默认)= 直发或排队;steer = 尝试插进 worker 当前 turn'),
+      images: z
+        .array(z.string().min(1))
+        .max(8)
+        .optional()
+        .describe('可选, 随消息发给 worker 的图片(png/jpeg/gif/webp, 最多 8 张); 仅本机 worker 支持, SSH 远端 worker 会被拒绝。地址两类: (a) 用户在对话里贴的图 — 把上下文 <cindy-host-image-references> 里的 uri 原样传入; (b) Lead 自己落盘的本机绝对路径'),
     },
-    handler: async ({ target_session_id, message, delivery }) => {
+    handler: async ({ target_session_id, message, delivery, images }) => {
       const ctx = deps.getSessionContext?.();
       if (!ctx?.sessionId) {
         return errorPayload('LEAD_NOT_SUPPORTED', '当前 session 类型不支持作为 Lead, 已拒绝 worker 控制操作。');
@@ -104,6 +113,7 @@ export function registerSendToWorkerTool(
         targetSessionId: target_session_id,
         message,
         ...(delivery ? { delivery } : {}),
+        ...(images ? { images } : {}),
       });
 
       if (!result.ok) {

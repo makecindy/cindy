@@ -107,6 +107,7 @@ export interface OrcaMcpDeps {
     workingDir?: string;
     executionDeviceId?: string;
     initialTask?: string;
+    initialTaskImages?: string[];
   }) => Promise<
     ControlResult<
       { workerId: string; workerSessionId: string; softLimitExceeded?: boolean; dispatched?: boolean; dispatchOutcome?: import('../lizi_xdtHelperMcpServer.js').ControlDispatchOutcome; queuedMessageId?: string },
@@ -131,6 +132,8 @@ export interface OrcaMcpDeps {
     message: string;
     /** 仅模型显式选择时传入;缺省等价 'queue'。 */
     delivery?: OrcaMessageDelivery;
+    /** 可选, 随消息发给 worker 的本机图片绝对路径; 仅本机 worker 支持。 */
+    images?: string[];
   }) => Promise<
     ControlResult<
       {
