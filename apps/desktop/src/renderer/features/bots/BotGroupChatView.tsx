@@ -262,6 +262,10 @@ function BotGroupChatContent({ groupId }: { groupId: string }) {
   const separator = t('bots.groupChat.memberSeparator');
   const [threadRootId, setThreadRootId] = useState<string | null>(null);
   const threadOpenerRef = useRef<HTMLElement | null>(null);
+  const closeThread = () => {
+    setThreadRootId(null);
+    threadOpenerRef.current?.focus();
+  };
   const settingsLabel = t('bots.groupChat.settings.open');
   const headerMembers = group ? memberKey(group.members) : '';
   const header = useMemo(() => {
@@ -518,7 +522,11 @@ function BotGroupChatContent({ groupId }: { groupId: string }) {
     planId && planPending?.planId === planId ? planPending.action : null;
 
   return (
-    <div className="flex h-full min-w-0 overflow-hidden">
+    <div className="flex h-full min-w-0 overflow-hidden" onKeyDown={event => {
+      if (group.serverBacked && threadRootId && event.key === 'Escape' && !event.defaultPrevented && !event.nativeEvent.isComposing && event.keyCode !== 229) {
+        event.stopPropagation(); closeThread();
+      }
+    }}>
     <main
       className="relative flex h-full min-w-0 flex-1 flex-col overflow-hidden bg-[var(--surface)]"
       onDragEnter={(event) => {
@@ -685,10 +693,7 @@ function BotGroupChatContent({ groupId }: { groupId: string }) {
         />
       ) : null}
     </main>
-    {group.serverBacked && threadRootId && <ChatThreadPanel key={`${group.id}:${threadRootId}`} group={group} rootId={threadRootId} onClose={() => {
-      setThreadRootId(null);
-      threadOpenerRef.current?.focus();
-    }} />}
+    {group.serverBacked && threadRootId && <ChatThreadPanel key={`${group.id}:${threadRootId}`} group={group} rootId={threadRootId} onClose={closeThread} />}
     </div>
   );
 }

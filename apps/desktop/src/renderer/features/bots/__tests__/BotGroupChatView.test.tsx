@@ -377,6 +377,51 @@ describe('BotGroupChatView', () => {
     }
   });
 
+  it('closes the thread with Escape after clicking or tabbing into the main group, respecting IME and consumed events', async () => {
+    vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+    mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: true }) });
+    const user = userEvent.setup();
+    renderView();
+    const trigger = (await screen.findAllByRole('button', { name: 'bots.groupChat.server.reply' }))[0]!;
+    const main = trigger.closest('main')!;
+    const composer = within(main).getByRole('textbox');
+    for (const path of ['click', 'tab']) {
+      await user.click(trigger);
+      const panel = screen.getByRole('complementary');
+      if (path === 'click') await user.click(composer);
+      else {
+        within(panel).getByRole('button', { name: 'bots.close' }).focus();
+        await user.tab({ shift: true });
+      }
+      const focused = document.activeElement!;
+      expect(main.contains(focused)).toBe(true);
+      fireEvent.keyDown(focused, { key: 'Escape', isComposing: true, keyCode: 229 });
+      expect(screen.getByRole('complementary')).toBe(panel);
+      const consumed = createEvent.keyDown(focused, { key: 'Escape', bubbles: true, cancelable: true });
+      consumed.preventDefault();
+      fireEvent(focused, consumed);
+      expect(screen.getByRole('complementary')).toBe(panel);
+      await user.keyboard('{Escape}');
+      expect(screen.queryByRole('complementary')).toBeNull();
+      expect(document.activeElement).toBe(trigger);
+    }
+  });
+
+  it('lets Escape dismiss a portalled reaction picker without closing the thread', async () => {
+    vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+    mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: true }) });
+    const user = userEvent.setup();
+    renderView();
+    await user.click((await screen.findAllByRole('button', { name: 'bots.groupChat.server.reply' }))[0]!);
+    const panel = screen.getByRole('complementary');
+    await user.click((await within(panel).findAllByRole('button', { name: 'bots.groupChat.server.addReaction' }))[0]!);
+    const reaction = await screen.findByRole('button', { name: '🎉' });
+    reaction.focus();
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('button', { name: '🎉' })).toBeNull();
+    expect(screen.getByRole('complementary')).toBe(panel);
+  });
+
   it('shows another human as a named participant instead of the current user bubble', async () => {
     mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ messages: [
       msg({ id: 'guest', authorKind: 'user', isSelf: false, authorName: 'Invited human', content: 'Hello from another account' }),

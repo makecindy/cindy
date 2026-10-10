@@ -95,11 +95,6 @@ export function ChatThreadPanel({ group, rootId, onClose }: { group: BotGroupDet
     finally { sending.current = false; setBusy(false); }
   }
   return <aside aria-labelledby={titleId}
-        onKeyDown={e => {
-          if (e.key === 'Escape' && !e.defaultPrevented && !e.nativeEvent.isComposing && e.keyCode !== 229) {
-            e.stopPropagation(); onClose();
-          }
-        }}
         className="flex h-full min-w-0 w-1/2 max-w-md shrink-0 flex-col border-l border-[var(--border-default)] bg-[var(--surface)]">
         <header className="flex h-14 shrink-0 items-center justify-between border-b border-[var(--border-default)] px-5">
           <h2 id={titleId} className="text-15 font-medium text-[var(--text-primary)]">{t(key('replies'))}</h2>

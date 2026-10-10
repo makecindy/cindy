@@ -2,7 +2,6 @@
 import { StrictMode, type ReactNode } from 'react';
 import { cleanup, fireEvent, render as renderUI, screen, waitFor, within } from '@testing-library/react';
 import { Tooltip } from '@/components/ui/tooltip';
-import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChatInviteButton, ChatJoinButton, ChatMessageActions } from '../ChatServerControls';
 import { ChatThreadPanel } from '../ChatThreadPanel';
@@ -47,19 +46,6 @@ describe('chat interaction controls', () => {
     render(<ChatThreadPanel group={{ ...group, archived: true }} rootId="root" onClose={vi.fn()} />);
     expect((screen.getByRole('textbox') as HTMLTextAreaElement).disabled).toBe(true);
     expect(document.activeElement).toBe(screen.getByRole('button', { name: 'bots.close' }));
-  });
-
-  it('lets Escape dismiss a portalled reaction picker without closing the thread', async () => {
-    const onClose = vi.fn();
-    render(<ChatThreadPanel group={group} rootId="root" onClose={onClose} />);
-    const user = userEvent.setup();
-    await user.click(await screen.findByRole('button', { name: k('addReaction') }));
-    const reaction = await screen.findByRole('button', { name: '🎉' });
-    reaction.focus();
-    await user.keyboard('{Escape}');
-    expect(screen.queryByRole('button', { name: '🎉' })).toBeNull();
-    expect(onClose).not.toHaveBeenCalled();
-    expect(screen.getByRole('complementary')).toBeTruthy();
   });
 
   it('closes from the square button surface outside the icon and retains the standard focus treatment', () => {
