@@ -3847,6 +3847,34 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     expect(mocks.persistUserMessage).toHaveBeenCalledTimes(1);
   });
 
+  it.each([1, 2])('expires a questionnaire card delivered after Stop on page %i', async (page) => {
+    const delivery = deferred<{ messageId: string }>();
+    const expired = { body: 'expired', buttons: [] };
+    mocks.buildAskUserCard.mockReturnValue({ body: 'question', buttons: [] });
+    mocks.feishuIm.sendInteractiveCard.mockReset();
+    if (page === 2) mocks.feishuIm.sendInteractiveCard.mockResolvedValueOnce({ messageId: 'first-page' });
+    mocks.feishuIm.sendInteractiveCard.mockImplementationOnce(() => delivery.promise);
+    mocks.registerPending.mockResolvedValue({ kind: 'ask_user_question', answers: { 'First?': 'yes' } });
+    runner = createTurnRunner({ ...fakeAdapter, interactionExpiredNotice: 'expired' }, fakeRepo,
+      { ...fakeCards, buildResolvedCard: vi.fn(() => expired) } as unknown as ImCardBuilders);
+    const h = setupSession(async () => ({ accepted: true }));
+    await runDefaultTurn();
+    const answer = h.dispatchInteraction({
+      kind: 'ask_user_question', requestId: 'late-checklist',
+      questions: [{ question: 'First?', options: [] }, { question: 'Second?', options: [] }],
+    });
+    await waitForAssertion(() => expect(mocks.feishuIm.sendInteractiveCard).toHaveBeenCalledTimes(page));
+    await getRunner().stopActiveTurn({ botContextId: 'cli_test_bot', userId: 'ou_user' });
+    h.emit({ type: 'done', data: {} });
+    await expect(answer).resolves.toMatchObject({ kind: 'ask_user_question' });
+    delivery.resolve({ messageId: 'late-page' });
+    await waitForAssertion(() => expect(mocks.feishuIm.updateInteractiveCard).toHaveBeenCalledWith('late-page', expired));
+    expect(mocks.registerPending).toHaveBeenCalledTimes(page - 1);
+    expect(mocks.feishuIm.sendInteractiveCard).toHaveBeenCalledTimes(page);
+    mocks.feishuIm.sendInteractiveCard.mockReset();
+    mocks.registerPending.mockReset();
+  });
+
   it('bounds disposal when an expiry fails and another channel update stalls', async () => {
     const stalled = deferred<void>();
     const update = vi.fn()

@@ -3570,7 +3570,7 @@ export function createTurnRunner(
     scopeKey?: string,
     confirmationTimeoutMs?: number,
   ) {
-    return async (rawReq: InteractionRequest, sharedPermission?: SharedPermission): Promise<InteractionDecision> => {
+    return async (rawReq: InteractionRequest, sharedPermission?: SharedPermission, signal?: AbortSignal): Promise<InteractionDecision> => {
       // Redact BEFORE anything channel-facing sees the request. This listener
       // replaces the Desktop handler, which does its own redaction, so without
       // this the card builders (interactionCardModel copies `input` verbatim)
@@ -3717,6 +3717,9 @@ export function createTurnRunner(
         sessionStates.get(localSessionId)?.queue[0]?.userMessageId ?? undefined;
       await finalizeActiveStream(localSessionId);
 
+      if (signal?.aborted && req.kind === 'ask_user_question') {
+        return { kind: 'ask_user_question', answers: {}, dismissed: true };
+      }
       let messageId: string;
       try {
         const result = await output.im.sendInteractiveCard(userId, spec, {
@@ -3731,6 +3734,12 @@ export function createTurnRunner(
             : {}),
         });
         messageId = result.messageId;
+        // Stop can win while delivery is in flight, before cancelPending can
+        // find this page. Expire the late card without registering an orphan.
+        if (signal?.aborted && req.kind === 'ask_user_question') {
+          expireInteractionCard(req.requestId, messageId);
+          return { kind: 'ask_user_question', answers: {}, dismissed: true };
+        }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         log.error(`sendInteractiveCard failed: ${msg}`);

@@ -205,7 +205,10 @@ export function registerHookInteraction(opts: {
     pending.set(interactionId, {
       sharedPermission: opts.sharedPermission,
       decisions: composed.decisions,
-      defaultDecision: composed.defaultDecision,
+      // A timeout/cancellation ends the questionnaire; it is not an explicit skip.
+      defaultDecision: composed.defaultDecision.kind === 'ask_user_question'
+        ? { ...composed.defaultDecision, dismissed: true }
+        : composed.defaultDecision,
       fallbackReason: composed.fallbackReason,
       resolve,
       timer,

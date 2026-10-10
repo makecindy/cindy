@@ -6,6 +6,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import type { InteractionRequest } from '@cindy/maker-core';
+import { beginInteractionRoute, requestHostInteraction } from '../../maker-ipc/interactionRouter';
 
 import {
   cancelHookInteraction,
@@ -213,10 +214,46 @@ describe('挂起注册表', () => {
         timeoutMs: 1000,
       });
       await vi.advanceTimersByTimeAsync(1000);
-      await expect(p).resolves.toEqual({ kind: 'ask_user_question', answers: {} });
+      await expect(p).resolves.toEqual({ kind: 'ask_user_question', answers: {}, dismissed: true });
       expect(fallback).toHaveBeenCalledWith(composed.fallbackReason);
       expect(resolveHookInteraction('int-b', 'ask:0')).toBe(false); // 迟到按压被忽略
     } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([1, 2])('ends the whole questionnaire when Hook page %i times out', async (page) => {
+    vi.useFakeTimers();
+    const session = { id: 'hook-timeout-session', setInteractionListener: vi.fn() };
+    const handle = vi.fn((request: InteractionRequest) => registerHookInteraction({
+      interactionId: request.requestId,
+      composed: composeInteractionCard(request)!,
+      timeoutMs: 1000,
+      onFallback: vi.fn(),
+    }));
+    const lease = beginInteractionRoute(session, {
+      route: { sessionId: session.id, turnId: 'hook-turn', origin: { kind: 'hook', source: 'telegram' }, interactionSurface: 'channel-card' },
+      handle,
+      onCancel: id => cancelHookInteraction(id, 'turn ended'),
+    });
+    try {
+      const result = requestHostInteraction(session, {
+        kind: 'ask_user_question', requestId: 'hook-checklist',
+        questions: Array.from({ length: 50 }, (_, i) => ({ question: `Question ${i}`, options: [{ label: 'yes' }] })),
+      }, new AbortController().signal);
+      if (page === 2) {
+        expect(resolveHookInteraction('hook-checklist:question:0', 'ask:0')).toBe(true);
+        await vi.advanceTimersByTimeAsync(0);
+      }
+      await vi.advanceTimersByTimeAsync(1000);
+      await expect(result).resolves.toEqual({
+        kind: 'ask_user_question', dismissed: true,
+        answers: page === 1 ? {} : { 'Question 0': 'yes' },
+      });
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(handle).toHaveBeenCalledTimes(page);
+    } finally {
+      lease.release();
       vi.useRealTimers();
     }
   });
@@ -231,7 +268,7 @@ describe('挂起注册表', () => {
     });
     expect(cancelHookInteraction('int-c', '任务已结束')).toBe(true);
     expect(cancelHookInteraction('int-c', '任务已结束')).toBe(false); // 幂等
-    await expect(p).resolves.toEqual({ kind: 'ask_user_question', answers: {} });
+    await expect(p).resolves.toEqual({ kind: 'ask_user_question', answers: {}, dismissed: true });
     expect(fallback).toHaveBeenCalledWith('任务已结束');
   });
 });

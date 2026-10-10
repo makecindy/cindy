@@ -33,6 +33,8 @@ export interface InteractionRoute {
 export type InteractionHandler = (
   request: InteractionRequest,
   permission?: SharedPermission,
+  /** Cancels an in-flight questionnaire page before its pending entry exists. */
+  signal?: AbortSignal,
 ) => Promise<InteractionDecision>;
 
 export interface InteractionLifecycleObserver {
@@ -213,12 +215,14 @@ class SessionInteractionRouter {
       && request.questions.length > 1
       && active?.route.interactionSurface === 'channel-card';
     let surfaceRequestId = request.requestId;
+    const surfaceController = paginated ? new AbortController() : undefined;
 
     let cancel!: (decision: InteractionDecision) => void;
     let cancelledByRouter = false;
     const cancelled = new Promise<InteractionDecision>((resolve) => {
       cancel = (decision) => {
         cancelledByRouter = true;
+        surfaceController?.abort();
         shared?.settle(decision);
         resolve(decision);
       };
@@ -284,7 +288,11 @@ class SessionInteractionRouter {
             }
             // A late click on a previous card must not answer the next one.
             surfaceRequestId = `${questionnaire.requestId}:question:${index}`;
-            const decision = await handler({ ...questionnaire, requestId: surfaceRequestId, questions: [question] });
+            const decision = await handler(
+              { ...questionnaire, requestId: surfaceRequestId, questions: [question] },
+              undefined,
+              surfaceController?.signal,
+            );
             if (decision.kind !== 'ask_user_question') return safeDecision(questionnaire, 'interaction_handler_failed');
             answers = { ...answers, ...decision.answers };
             if (decision.dismissed) return { ...decision, answers };

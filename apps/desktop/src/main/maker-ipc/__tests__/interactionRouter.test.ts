@@ -104,11 +104,14 @@ describe('session interaction router', () => {
         questions: [{ question: 'First?', options: [] }, { question: 'Second?', options: [] }],
       }, controller.signal);
       expect(channel).toHaveBeenCalledOnce();
+      const surfaceSignal = channel.mock.calls[0][2];
+      expect(surfaceSignal?.aborted).toBe(false);
       const pageId = channel.mock.calls[0][0].requestId;
       if (stop === 'release') lease.release();
       else if (stop === 'abort') controller.abort();
       else await vi.advanceTimersByTimeAsync(100);
       await expect(pending).resolves.toMatchObject({ kind: 'ask_user_question', answers: {} });
+      expect(surfaceSignal?.aborted).toBe(true);
       expect(onCancel).toHaveBeenCalledWith(pageId, expect.objectContaining({ kind: 'ask_user_question' }));
       answer({ kind: 'ask_user_question', answers: { 'First?': 'late' } });
       await vi.runAllTimersAsync();
