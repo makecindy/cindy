@@ -6,6 +6,8 @@
 > 客户端与服务端的工作拆分见 [`docs/provider-sharing-implementation-plan.md`](../provider-sharing-implementation-plan.md)。
 > 读取时机：新增或修改供应商分享、分享链接、分享申请与审批、分享管理页，或受邀者使用
 > 分享供应商的任何路径之前。
+> 分享出去的供应商建了[供应商组](provider-groups.md)时，§1 的运行位置、§4.1 第 3 步的告知、§7.2 管理页、§7.4 用量
+> 与 §9 安全不变量按该文调整（方案阶段，尚未实现）。
 
 ## 1. 定位
 

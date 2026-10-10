@@ -189,7 +189,9 @@ export const DEFAULT_NEW_SESSION_DRAFT: NewSessionDraft = {
   agentKind: 'claude-code',
   workspaceKind: 'project',
   workingDir: '',
-  model: 'claude-sonnet-4-6',
+  // 不写死模型:由最近任务 / 被控端目录落定(见 isNewSessionRuntimePending),
+  // 都拿不到时留空让用户自己选,不替用户挑一个电脑上未必可用的模型。
+  model: '',
   providerId: null,
   effort: 'medium',
   // Claude 保留 Auto-review 种子默认；用户上次在新建页选过的档走
@@ -197,12 +199,6 @@ export const DEFAULT_NEW_SESSION_DRAFT: NewSessionDraft = {
   permissionMode: 'auto',
   fastMode: false,
   firstMessage: '',
-};
-
-const DEFAULT_MODELS: Record<NewSessionAgentKind, string> = {
-  'claude-code': 'claude-sonnet-4-6',
-  codex: 'gpt-5.4',
-  pi: 'gpt-5.4',
 };
 
 /** 新建交互式会话的权限种子默认；三个 agent 都保留 Auto-review。 */
@@ -218,7 +214,7 @@ export function withAgentDefaults(
   return {
     ...draft,
     agentKind,
-    model: DEFAULT_MODELS[agentKind],
+    model: '',
     permissionMode: defaultPermissionModeForNewSessionAgent(agentKind),
     // 换 agent → 来源选择作废(各 agent 的供应商集不同),回到默认路由由被控端定。
     providerId: null,
@@ -460,7 +456,7 @@ export function validateModelProviderId(
  *   1) 来源仍有效(或本来就走默认路由)→ 原样保留;
  *   2) 失效但仍有其他已连接来源提供该模型 → 顶替为该来源(模型照用);
  *   3) 没有任何来源提供该模型 → 落目录首项(连同其 provider);
- *   4) 目录为空 → 该 agent 内置默认模型 + 默认路由;
+ *   4) 目录为空 → 模型留空 + 默认路由,由用户自己选;
  * catalogReady=false 时不评判,维持信任语义(见 validateModelProviderId)。
  * 通用于「跟随最近会话」的自动默认与「提交点 / 目录就绪」的草稿终检(codex review P2:
  * 提交终检时同样联合回退)。
@@ -521,7 +517,17 @@ export function resolveRecentModelAndProvider(
   }
   const top = modelRows[0];
   if (top) return { model: top.model.id, providerId: top.provider.id };
-  return { model: DEFAULT_MODELS[agentKind], providerId: null };
+  return { model: '', providerId: null };
+}
+
+/**
+ * 提交终检不得产出空模型:目录里已没有所选模型、也没有可顶替的行时,
+ * resolveRecentModelAndProvider 会回退为空;电脑端拒收空模型,此时中止创建让用户重选。
+ * 提交路径(创建前终检 / 鉴权后重验)统一经此判断。
+ */
+export function assertSubmitModelResolved(resolved: { model: string }, selectedModel: string): void {
+  if (resolved.model.trim()) return;
+  throw new Error(i18n.t('session.common.modelUnavailableReselect', { model: selectedModel }));
 }
 
 /**
@@ -682,8 +688,8 @@ export function reconcileEffortAfterFallback(
   baseEffort: string,
 ): string {
   const sectionModel = findSectionModelRow(modelRows, next.model, next.providerId)?.model;
-  // 无匹配行 = 回退到内置默认模型(目录为空/loaded-but-empty):旧自定义模型的档位
-  // 对新内置模型无效——省略 effort(创建时省略该字段,由被控端取默认),不得沿用
+  // 无匹配行 = 目录为空/loaded-but-empty,模型已回退为空:旧模型的档位
+  // 对之后选的模型无效——省略 effort(创建时省略该字段,由被控端取默认),不得沿用
   // (Codex review P2:沿用会向不支持该档位的模型发送非法 effort)。
   return sectionModel ? reconcileEffortForModel(sectionModel, baseEffort) : '';
 }
@@ -746,15 +752,16 @@ export function pickMostRecentSessionRuntime(
  *   1) 该 agent 的最近一次会话模型(pickMostRecentSessionRuntime,按 deviceId scope);
  *   2) 否则取区域门控后的新任务默认；无标记再取该 agent 的模型列表最上面那个
  *      (modelRows[0] —— providers 已加载时同步可得,与下拉渲染的第一项一致);
- *   3) 否则该 agent 的内置默认 DEFAULT_MODELS[agentKind]。
+ *   3) 被控端明确不支持目录(旧电脑)时取它能力表里的模型:区域默认标记优先,否则首个;
+ *   4) 否则留空(不写死模型),由用户自己选。
  * providerId 跟随 model 同源:
  *   1) 跟随最近会话 → 继承该会话的来源(validateModelProviderId 校验:目录已就绪且来源
  *      已删/不再提供该模型时清空回默认路由;同设备+同 agent 范围,供应商集天然兼容);
  *   2) 取列表首项 → 该行的 provider(modelRows[0].provider.id);
- *   3) 内置默认兜底 → null(默认路由)。
+ *   3) 能力表模型 / 都没有 → null(默认路由)。
  * effort:reconcile 到目标 model 的合法档(reconcileEffortForModel,base = 最近会话 effort ?? 当前 effort,
  *   SectionModel 按 (providerId, modelId) 精确匹配行——同模型多来源时不串档);
- *   拿不到目标 model 对应的 SectionModel(model 不在 modelRows 里,如走了 DEFAULT_MODELS 兜底或历史模型已下架)
+ *   拿不到目标 model 对应的 SectionModel(model 不在 modelRows 里,如模型留空或历史模型已下架)
  *   时保留 base effort 不动。
  */
 export function pickAgentDefaultRuntime(args: {
@@ -766,8 +773,11 @@ export function pickAgentDefaultRuntime(args: {
   /** 供应商目录是否已就绪(加载完成);未就绪时来源校验信任最近会话(见 validateModelProviderId)。 */
   catalogReady: boolean;
   visibilityOverrides?: Record<string, boolean> | null;
+  /** 仅当被控端明确不支持 provider:list 时传入该 agent 的能力表模型(与 resolveNewSessionAutoDefault 同口径)。 */
+  flatModels?: readonly MobileModelOption[];
 }): NewSessionRuntime {
   const { agentKind, sessions, modelRows, currentEffort, deviceId, catalogReady } = args;
+  let flatModel: MobileModelOption | undefined;
   const recent = pickMostRecentSessionRuntime(sessions, { deviceId, agentKind });
   const baseEffort = recent?.effort ?? currentEffort;
   let model: string;
@@ -793,22 +803,50 @@ export function pickAgentDefaultRuntime(args: {
       ?? modelRows[0];
     model = chosenRow.model.id;
     providerId = chosenRow.provider.id;
+  } else if (args.flatModels?.length) {
+    flatModel = pickRegionalNewSessionDefault(args.flatModels, agentKind) ?? args.flatModels[0];
+    model = flatModel.id;
+    providerId = null;
   } else {
-    model = DEFAULT_MODELS[agentKind];
+    model = '';
     providerId = null;
   }
   // 目录未就绪时不做 effort 校准:catalogReady=false 时 modelRows 可能是上一设备
   // 的残留行,findSectionModelRow 的 modelId 回退会按错误来源校准 effort;新目录
   // 确认原 (provider, model) 有效后组合未变化又不再重校准,用户可能在能力表到达前
   // 提交该来源不支持的档位(codex review P2)。未就绪时保留最近任务的 effort。
-  // catalogReady 且无匹配行 = 回退到内置默认(目录为空/模型下架):旧自定义模型的
-  // 档位对新内置模型无效——省略 effort,由被控端取默认(codex review P2:模型无行
+  // catalogReady 且无匹配行 = 目录为空/模型下架:旧自定义模型的
+  // 档位对之后选的模型无效——省略 effort,由被控端取默认(codex review P2:模型无行
   // 回退时不得沿用旧档位;与 reconcileEffortAfterFallback 的 no-row 口径一致)。
   const sectionModel = catalogReady ? findSectionModelRow(modelRows, model, providerId)?.model : undefined;
   const effort = sectionModel
     ? reconcileEffortForModel(sectionModel, baseEffort)
-    : catalogReady && !modelNeedsReselection(args.visibilityOverrides, agentKind, model, providerId) ? '' : baseEffort;
+    : flatModel
+      ? reconcileEffortForModel(flatModel, baseEffort)
+      : catalogReady && !modelNeedsReselection(args.visibilityOverrides, agentKind, model, providerId) ? '' : baseEffort;
   return { agentKind, model, effort, providerId };
+}
+
+/**
+ * 新建页的模型是否仍在等数据落定(草稿初值为空 / 恢复上次 agent 时数据未到)。
+ * 等待期间模型药丸显示「正在读取模型」且不能创建。
+ * 落定 = 自动默认或恢复上次 agent 已按最近任务 / 目录写入模型,或用户自己改过运行配置。
+ * 数据不会再来时结束等待:目录拉取失败(含旧被控端不支持目录)、或目录已就绪但为空;
+ * 此时若仍没有模型,药丸显示「未选择模型」,由用户自己选。
+ */
+export function isNewSessionRuntimePending(input: {
+  settled: boolean;
+  userTouched: boolean;
+  remoteAgentPicked: boolean;
+  selectedDeviceId: string;
+  catalogReady: boolean;
+  catalogFailed: boolean;
+  modelRowCount: number;
+}): boolean {
+  if (input.settled || input.userTouched || input.remoteAgentPicked) return false;
+  if (!input.selectedDeviceId) return false;
+  if (input.catalogFailed) return false;
+  return !(input.catalogReady && input.modelRowCount === 0);
 }
 
 /**
@@ -855,7 +893,7 @@ export function nextStoredAgentRestoreStep(input: {
 /**
  * 恢复上次的 agent 时,是否已有足够数据选模型(pickAgentDefaultRuntime 的输入):
  * 供应商目录已就绪 / 被控端明确不支持目录,或该设备上已有这个 agent 的最近任务。
- * 两者都没有时 pickAgentDefaultRuntime 只能落到内置兜底模型(Claude 为 Sonnet 4.6),
+ * 两者都没有时 pickAgentDefaultRuntime 选不出模型(留空),
  * 这时只先恢复 agent(见 nextStoredAgentRestoreStep),模型等数据到了再补。
  * 不能用 `loading === false` 代替:useDeviceProviders 的 loading 初值就是 false,拉取失败后也是。
  */

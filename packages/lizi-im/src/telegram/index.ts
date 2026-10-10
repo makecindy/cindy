@@ -1436,6 +1436,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       if (this.disposing || this.configVersion !== acceptedConfigVersion) return;
       this.emitMessage({
         ...event,
+        invoked: !ambient,
         speaker: {
           id: String(m.from.id),
           name:

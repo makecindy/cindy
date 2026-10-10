@@ -230,7 +230,14 @@ export class HistoryViewController<T extends HistoryMessageSource> {
       const completed = this.state.details.get(summary.key);
       if (completed?.complete && completed.revision === summary.revision && !patch.complete) return;
       const details = new Map(this.state.details);
-      details.set(summary.key, { messages: collected.length ? collected : (existing?.messages ?? []), revision: summary.revision,
+      // A reread keeps the previous window until it settles. Publishing each
+      // incoming page would replace the old window with a partial slice of the
+      // new range: the rendered list collapses to the first page and shifts a
+      // bottom-pinned stream before the tail lands.
+      const settled = patch.complete === true;
+      const messages = !settled && existing?.messages?.length ? existing.messages
+        : collected.length ? collected : (existing?.messages ?? []);
+      details.set(summary.key, { messages, revision: summary.revision,
         lastMessageId: summary.lastMessageId, loading: true, complete: false, error: null, ...patch });
       this.publish({ details });
     };

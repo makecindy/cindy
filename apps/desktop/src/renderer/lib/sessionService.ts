@@ -55,6 +55,8 @@ function wrap<T>(p: Promise<T>): Promise<T> {
 const getInFlight = new Map<string, Promise<Session>>();
 
 export type SessionListOptions = {
+  /** Local list continuation; does not change the default capped query. */
+  before?: { updatedAt: number; id: string };
   includePinned?: boolean;
   /** forceRefresh / status 重拉：绕开 main 侧 in-flight 合并。 */
   fresh?: boolean;

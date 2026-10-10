@@ -5,6 +5,7 @@ import {
   findBotGroupMentionQuery,
   insertBotGroupMention,
   resolveBotGroupMentions,
+  retainBotGroupTrackedMentions,
   splitBotGroupMentionSegments,
 } from '../botGroupMentions';
 import {
@@ -70,9 +71,52 @@ describe('resolveBotGroupMentions', () => {
       resolveBotGroupMentions('@小满 在吗', {
         members: duplicates,
         allLabels: [],
-        tracked: [{ botId: 'b', label: '小满' }],
+        tracked: [{ botId: 'b', label: '小满', start: 0 }],
       }).botIds,
     ).toEqual(['b']);
+  });
+});
+
+describe('stale explicit picks', () => {
+  it('routes each same-name token independently and clears only the deleted picked occurrence', () => {
+    const tracked = [{ botId: 'departed', label: 'Ann', start: 0 }];
+    const input = { members: [{ botId: 'current', name: 'Ann' }], allLabels: [], tracked };
+    expect(resolveBotGroupMentions('@Ann @Ann', input).botIds).toEqual(['departed', 'current']);
+    const firstRemoved = retainBotGroupTrackedMentions('@Ann @Ann', '@Ann', { ...input, editStart: 0 });
+    expect(firstRemoved).toEqual([]);
+    expect(resolveBotGroupMentions('@Ann', { ...input, tracked: firstRemoved }).botIds).toEqual(['current']);
+    const secondRemoved = retainBotGroupTrackedMentions('@Ann @Ann', '@Ann', { ...input, editStart: 4 });
+    expect(secondRemoved).toEqual(tracked);
+    expect(resolveBotGroupMentions('@Ann', { ...input, tracked: secondRemoved }).botIds).toEqual(['departed']);
+    // Pasting the same characters over the picked token creates a manual token.
+    expect(retainBotGroupTrackedMentions('@Ann @Ann', '@Ann @Ann', { ...input, editStart: 0, editEnd: 4 })).toEqual([]);
+  });
+
+  it('moves a picked identity with edits before it and discards edits inside its token', () => {
+    const input = { members: [], allLabels: [], tracked: [{ botId: 'departed', label: 'Ann', start: 3 }] };
+    const shifted = retainBotGroupTrackedMentions('hi @Ann', 'hello @Ann', { ...input, editStart: 1 });
+    expect(shifted).toEqual([{ botId: 'departed', label: 'Ann', start: 6 }]);
+    expect(resolveBotGroupMentions('hello @Ann', { ...input, tracked: shifted }).botIds).toEqual(['departed']);
+    expect(retainBotGroupTrackedMentions('hi @Ann', 'hi @Anna', { ...input, editStart: 7 })).toEqual([]);
+    expect(retainBotGroupTrackedMentions('hi @Ann', 'hi @An', { ...input, editStart: 6 })).toEqual([]);
+  });
+
+  it('retains only picked labels that still form mention tokens after a text edit', () => {
+    const tracked = [{ botId: 'departed', label: 'Ann', start: 0 }, { botId: 'picked', label: '小满', start: 11 }];
+    const input = { members: [{ botId: 'longer', name: '小满满' }], allLabels: ['所有人'], tracked };
+    const draft = '@Ann hello @小满';
+    expect(retainBotGroupTrackedMentions(draft, draft, input)).toEqual(tracked);
+    expect(retainBotGroupTrackedMentions(draft, '@所有人 @Anna ann@Ann.com @小满满', input)).toEqual([]);
+    expect(retainBotGroupTrackedMentions(draft, '@Ann hello', input)).toEqual([tracked[0]]);
+  });
+
+  it('retains a selected target after roster removal rather than making it unaddressed or retargeting a namesake', () => {
+    const tracked = [{ botId: 'departed', label: 'Ann', start: 0 }];
+    for (const current of [[], [{ botId: 'namesake', name: 'Ann' }]]) {
+      expect(resolveBotGroupMentions('@Ann hello', { members: current, allLabels: [], tracked })).toEqual({ all: false, botIds: ['departed'] });
+    }
+    expect(resolveBotGroupMentions('hello', { members: [], allLabels: [], tracked })).toEqual({ all: false, botIds: [] });
+    expect(resolveBotGroupMentions('@Anna hello', { members: [], allLabels: [], tracked })).toEqual({ all: false, botIds: [] });
   });
 });
 

@@ -66,6 +66,7 @@ import {
   findBotGroupMentionQuery,
   insertBotGroupMention,
   resolveBotGroupMentions,
+  retainBotGroupTrackedMentions,
   type BotGroupTrackedMention,
 } from './botGroupMentions';
 import {
@@ -157,18 +158,20 @@ export function BotGroupComposer({
   });
   const textRef = useRef(text);
   textRef.current = text;
+  const selectionRef = useRef({ start: 0, end: 0 });
   const attachmentsRef = useRef(attachmentState.attachments);
   attachmentsRef.current = attachmentState.attachments;
   const focusInputOnMenuCloseRef = useRef(false);
   const pendingCaretRef = useRef<number | null>(null);
   const sendingRef = useRef(false);
   const stoppingRef = useRef(false);
-  /** Idempotency key for the text and attachments currently being (re)sent. */
+  /** Idempotency key for the text, targets and attachments currently being (re)sent. */
   const attemptRef = useRef<{
     text: string;
     clientId: string;
     division: boolean;
     attachments: string;
+    mentionSignature: string;
   } | null>(null);
 
   const activeMembers = useMemo(() => members.filter(isActiveBotGroupMember), [members]);
@@ -213,7 +216,10 @@ export function BotGroupComposer({
 
   const syncCaret = () => {
     const element = textareaRef.current;
-    if (element) setCaret(element.selectionStart ?? element.value.length);
+    if (element) {
+      selectionRef.current = { start: element.selectionStart ?? element.value.length, end: element.selectionEnd ?? element.value.length };
+      setCaret(selectionRef.current.start);
+    }
   };
 
   const choose = (option: MentionOption | undefined) => {
@@ -221,14 +227,13 @@ export function BotGroupComposer({
     const next = insertBotGroupMention(text, { start: query.start, end: caret }, option.label);
     pendingCaretRef.current = next.caret;
     setText(next.text);
+    selectionRef.current = { start: next.caret, end: next.caret };
     setCaret(next.caret);
     setHighlight(0);
-    if (option.kind === 'member') {
-      setTracked((current) => [
-        ...current.filter((mention) => mention.botId !== option.member.botId),
-        { botId: option.member.botId, label: option.label },
-      ]);
-    }
+    setTracked(current => {
+      const remaining = retainBotGroupTrackedMentions(text, next.text, { members, allLabels: [allLabel], tracked: current, editStart: query.start, editEnd: caret });
+      return option.kind === 'member' ? [...remaining, { botId: option.member.botId, label: option.label, start: query.start }] : remaining;
+    });
     textareaRef.current?.focus();
   };
 
@@ -243,18 +248,20 @@ export function BotGroupComposer({
     const signature = botGroupAttachmentSignature(files);
     // The tag changes what main does with the text, so it is part of the idempotency key;
     // so are the attachments that go with it.
-    const attempt =
-      attemptRef.current?.text === trimmed &&
-      attemptRef.current.division === division &&
-      attemptRef.current.attachments === signature
-        ? attemptRef.current
-        : { text: trimmed, clientId: crypto.randomUUID(), division, attachments: signature };
-    attemptRef.current = attempt;
-    const mentions = resolveBotGroupMentions(trimmed, {
+    const mentions = resolveBotGroupMentions(text, {
       members,
       allLabels: [allLabel],
       tracked,
     });
+    const mentionSignature = JSON.stringify([mentions.all, mentions.botIds]);
+    const attempt =
+      attemptRef.current?.text === trimmed &&
+      attemptRef.current.division === division &&
+      attemptRef.current.attachments === signature &&
+      attemptRef.current.mentionSignature === mentionSignature
+        ? attemptRef.current
+        : { text: trimmed, clientId: crypto.randomUUID(), division, attachments: signature, mentionSignature };
+    attemptRef.current = attempt;
     const draft = text;
     sendingRef.current = true;
     setSending(true);
@@ -269,7 +276,10 @@ export function BotGroupComposer({
     const owner = getDataOwnerGeneration();
     const restore = () => {
       // The tag comes back only with its own draft, never onto newly typed text.
-      if (attempt.division && !textRef.current) setDivision(true);
+      if (!textRef.current) {
+        if (attempt.division) setDivision(true);
+        setTracked(tracked);
+      }
       setText((current) => (current ? current : draft));
     };
     try {
@@ -497,7 +507,11 @@ export function BotGroupComposer({
             onChange={(event) => {
               const value = event.target.value;
               const nextCaret = event.target.selectionStart ?? value.length;
+              const editStart = Math.min(selectionRef.current.start, nextCaret);
+              const editEnd = selectionRef.current.end;
               setText(value);
+              setTracked(current => retainBotGroupTrackedMentions(text, value, { members, allLabels: [allLabel], tracked: current, editStart, editEnd }));
+              selectionRef.current = { start: nextCaret, end: nextCaret };
               setCaret(nextCaret);
               setHighlight(0);
               // A dismissed picker stays closed only for the `@` it was closed on.

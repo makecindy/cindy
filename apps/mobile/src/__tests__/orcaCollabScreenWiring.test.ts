@@ -20,6 +20,8 @@ describe('mobile Orca collaboration wiring', () => {
     const collabView = read('src/session/ContextSheetCollabView.tsx');
     expect(collabView).not.toMatch(/\.focused\b/);
     expect(collabView).not.toContain('session.collab.focused');
+    // 运行设备不可达时状态未知:行内写「暂时无法获取状态」,右侧不再同时显示「空闲」。
+    expect(collabView).toContain("trailing={worker.executionDevice?.reachable === false ? undefined : (");
   });
 
   it('keeps the Worker model picker separate from the task model', () => {
@@ -29,6 +31,24 @@ describe('mobile Orca collaboration wiring', () => {
     expect(block).toContain('onSelect: collab.workerForm.modelPicker.select');
     expect(block).not.toContain('selectUnifiedComposerModel');
     expect(block).toContain('onClosed={collab.workerForm.modelPicker.closed}');
+    expect(block).toContain('collab.workerForm.maker.getCapabilities(agent)');
+    expect(block).toContain('providersReady={collabDeviceProviders.ready}');
+    expect(block).toContain('pricing={collabModelPricing}');
+  });
+
+  it('wires execution-device selection and the target model catalog in both creation entry points', () => {
+    for (const [file, form] of [['app/sessions/[sessionId].tsx', 'collab.workerForm'], ['app/sessions/new.tsx', 'collabForm']]) {
+      const source = read(file!);
+      expect(source).toContain(`executionDevices={${form}.executionDevices}`);
+      expect(source).toContain(`const collabWorkerDeviceId = ${form}.form.executionDeviceId`);
+      expect(source).toContain('useDeviceProviders(collabWorkerDeviceId');
+      expect(source).toContain(`onPickDirectory={${form}.directoryPicker.openPicker}`);
+      expect(source).toContain(`<OrcaWorkerDirectoryPicker picker={${form}.directoryPicker}`);
+    }
+    const source = read('src/session/ContextSheetCollabView.tsx');
+    expect(source).toContain('<ContextSheetSelectRow');
+    expect(source).toContain('session.collab.remoteDirChat');
+    expect(source).toContain('session.collab.remoteDirPath');
   });
 
   it('shows a collaboration bar for Leads and a way back to the Lead for Workers', () => {

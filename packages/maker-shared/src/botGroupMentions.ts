@@ -2,8 +2,8 @@
  * 群聊输入框里的 @ 点名：纯文本解析，不依赖 React 与 IPC。
  *
  * 输入框是普通 textarea，点名以 `@名字 ` 的形式留在正文里。发送时以正文为准重新解析
- * （手打的 `@小满` 与从候选里选的效果一致），只有「重名」这种正文分辨不了的情况，才用
- * 选择候选时记下的 botId 消歧。宿主按解析结果决定谁回答
+ * （手打的 `@小满` 与从候选里选的效果一致）。选择候选时记下的 botId 用于消歧，
+ * 成员离群后仍保留显式目标，由宿主拒绝失效目标。宿主按解析结果决定谁回答
  * （docs/product-rules/bot-group-chat.md §4.1）。
  */
 import type { BotGroupMention } from './botGroupChat.js';
@@ -20,6 +20,8 @@ export interface BotGroupMentionMember {
 export interface BotGroupTrackedMention {
   botId: string;
   label: string;
+  /** UTF-16 index of this picked token's `@` in the untrimmed draft. */
+  start: number;
 }
 
 export interface BotGroupMentionQuery {
@@ -66,15 +68,6 @@ function buildLabelEntries(
     const label = raw.trim();
     if (label) byLabel.set(label, { label, all: true, botIds: [] });
   }
-  const memberIds = new Set(members.map((member) => member.botId));
-  const trackedByLabel = new Map<string, string[]>();
-  for (const mention of tracked) {
-    const label = mention.label.trim();
-    if (!label || !memberIds.has(mention.botId)) continue;
-    const ids = trackedByLabel.get(label) ?? [];
-    if (!ids.includes(mention.botId)) ids.push(mention.botId);
-    trackedByLabel.set(label, ids);
-  }
   for (const member of members) {
     for (const raw of [member.name, member.nickname || member.displayName || '']) {
       const label = raw.trim();
@@ -84,10 +77,11 @@ function buildLabelEntries(
       byLabel.set(label, entry);
     }
   }
-  // 重名时正文分辨不出是哪一位，才用选择候选时记下的 botId 收窄。
-  for (const [label, ids] of trackedByLabel) {
-    const entry = byLabel.get(label);
-    if (entry && !entry.all) entry.botIds = ids;
+  // Keep an explicit pick even after it disappears from the live roster. This
+  // records intent, not membership: the host must reject unavailable targets.
+  for (const mention of tracked) {
+    const label = mention.label.trim();
+    if (label && !byLabel.has(label)) byLabel.set(label, { label, all: false, botIds: [] });
   }
   // 最长优先：`@小满满` 不能先被 `@小满` 截走。
   return [...byLabel.values()].sort((a, b) => b.label.length - a.label.length);
@@ -123,7 +117,7 @@ function scanMentionTokens(text: string, entries: readonly LabelEntry[]): Mentio
 
 /**
  * Resolve who a group message addresses. Mentions are re-derived from the text
- * at send time; a tracked pick only disambiguates members that share a name.
+ * at send time; a tracked pick also preserves a stale target for host validation.
  */
 export function resolveBotGroupMentions(
   text: string,
@@ -134,17 +128,52 @@ export function resolveBotGroupMentions(
   },
 ): BotGroupMention {
   const entries = buildLabelEntries(input.members, input.allLabels, input.tracked ?? []);
-  const memberIds = new Set(input.members.map((member) => member.botId));
   const botIds: string[] = [];
   let all = false;
   for (const token of scanMentionTokens(text, entries)) {
     if (token.entry.all) all = true;
-    for (const botId of token.entry.botIds) {
-      if (memberIds.has(botId) && !botIds.includes(botId)) botIds.push(botId);
+    const picked = (input.tracked ?? []).filter(mention => !token.entry.all &&
+      mention.start === token.start && mention.label.trim() === token.entry.label);
+    for (const botId of picked.length ? picked.map(mention => mention.botId) : token.entry.botIds) {
+      if (!botIds.includes(botId)) botIds.push(botId);
     }
   }
   // 按正文里点名的先后输出：宿主直接按这个顺序轮流发言（bot-group-chat.md §4.1）。
   return { all, botIds };
+}
+
+/** Move intact picked tokens with a text edit; forget tokens the edit replaces. */
+export function retainBotGroupTrackedMentions(
+  previousText: string,
+  text: string,
+  input: {
+    members: readonly BotGroupMentionMember[];
+    allLabels: readonly string[];
+    tracked: readonly BotGroupTrackedMention[];
+    /** Previous selection start (or new caret after deletion) disambiguates identical tokens. */
+    editStart?: number;
+    /** Selected text is replaced even when its characters also match the new suffix. */
+    editEnd?: number;
+  },
+): BotGroupTrackedMention[] {
+  const prefixLimit = Math.min(previousText.length, text.length, Math.max(0, input.editStart ?? previousText.length));
+  let prefix = 0;
+  while (prefix < prefixLimit && previousText[prefix] === text[prefix]) prefix++;
+  let previousEnd = previousText.length, nextEnd = text.length;
+  const suffixLimit = Math.max(prefix, input.editEnd ?? prefix);
+  while (previousEnd > suffixLimit && nextEnd > prefix && previousText[previousEnd - 1] === text[nextEnd - 1]) {
+    previousEnd--; nextEnd--;
+  }
+  const delta = text.length - previousText.length;
+  const tracked = input.tracked.flatMap(mention => {
+    if (mention.start + 1 + mention.label.trim().length <= prefix) return [mention];
+    if (mention.start >= previousEnd) return [{ ...mention, start: mention.start + delta }];
+    return []; // This particular token was edited or deleted, even if a namesake remains.
+  });
+  const entries = buildLabelEntries(input.members, input.allLabels, tracked);
+  const tokens = scanMentionTokens(text, entries);
+  return tracked.filter(mention => tokens.some(token => !token.entry.all &&
+    token.start === mention.start && token.entry.label === mention.label.trim()));
 }
 
 /** The `@query` being typed right before the caret, if any. */

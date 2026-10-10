@@ -1,4 +1,5 @@
 import { executeTaskTags, TASK_TAG_CHANNEL } from '../localDb/ipc/taskTags.js';
+import { encodeMessageBodies, versionMessageBody } from './sessionMessageReuse.js';
 import type { TaskTagRequest } from '@cindy/maker-shared';
 import {
   FILE_PEER_CHANNEL,
@@ -7,6 +8,11 @@ import {
   encodeSessionTagCatalog,
   decodeSessionTagCatalog,
   scrubSharedProvider,
+  CONTROLLER_CAPABILITY_SESSION_LIST_MESSAGES_V1,
+  isListMessagePush,
+  mapMessageBodies,
+  messageRecord,
+  MESSAGE_BODY_FORMAT,
 } from '@cindy/device-link';
 import { requestFilePeer, stopFilePeers } from './filePeer';
 import { requestTaskMigration } from '../task-migration/service';
@@ -89,7 +95,7 @@ import { isModelVisible } from '@cindy/model-providers/sections';
 import { app } from 'electron';
 import { remoteDesktop, requestRemoteDesktop } from '../remote-desktop';
 import { remoteCredentialHost } from '../remote-desktop/credentialHost';
-import { REMOTE_DESKTOP_CHANNEL } from '@cindy/device-link';
+import { ORCA_REMOTE_WORKER_OPEN_CHANNEL, REMOTE_DESKTOP_CHANNEL } from '@cindy/device-link';
 import type { DeviceLinkClient } from '@cindy/device-link';
 import { isDeferredHistoryPush, deferredToolBoundary } from './historyViewPush';
 import { mapHistoryViewMessages, type HistoryMessageSource, type HistoryViewItem } from '@cindy/maker-shared/message-window';
@@ -192,7 +198,9 @@ const UPDATE_RELAUNCH_NON_BLOCKING_INVOKE_CHANNELS: ReadonlySet<string> = new Se
   'local-db:sessions:get-many',
 ]);
 const textEncoder = new TextEncoder();
-const offlinePushQueue = createOfflinePushQueue();
+// A 200,000-code-unit body can take 1.2 MB after JSON escaping. Keep the existing
+// per-peer queue bounded, with room for that body plus its message envelope.
+const offlinePushQueue = createOfflinePushQueue({ maxBytes: 2 * 1024 * 1024 });
 
 // Serialize the async DB check at the final wire boundary, retaining per-peer
 // order even when replies arrive out of order. Bounds match best-effort push:
@@ -302,6 +310,8 @@ export type { ActiveController } from './subscriptions';
  */
 const PATH_GUARDED_CHANNELS: ReadonlyMap<string, 'workingDir' | 'baseRepo'> = new Map([
   ['maker:create-session', 'workingDir'],
+  // 协同远端 Worker 指定本机目录时同口径收敛；不指定则由本机分配任务目录。
+  [ORCA_REMOTE_WORKER_OPEN_CHANNEL, 'workingDir'],
   ['worktree:create', 'baseRepo'],
 ]);
 
@@ -1601,6 +1611,7 @@ function flushMakerEventBatchSession(
     while (segment.events.length > 0) {
       const slice = takeMakerEventBatchSlice(segment);
       if (slice.length === 0) break;
+      if (!subscriptions.controllerHasTopic(dst, `session:${sessionId}`)) continue;
       // relay 已确认离线:只把缓冲取空(维持强不变量),不再制造成功率恒为 0 的帧。
       if (outcome.offline) {
         outcome.droppedEvents += slice.length;
@@ -1913,6 +1924,17 @@ function clearHistoryNotices(dst: string): void {
   historyNoticeStages.delete(dst);
 }
 
+function receivesListMessages(dst: string): boolean {
+  return !isSharedTaskPeer(dst) && !isProviderSharePeer(dst)
+    && subscriptions.controllerSupports(dst, CONTROLLER_CAPABILITY_SESSION_LIST_MESSAGES_V1)
+    && subscriptions.controllerHasTopic(dst, 'sessions');
+}
+
+function listMessagePayload(dst: string, sessionId: string, payload: unknown): unknown {
+  return receivesListMessages(dst) && !subscriptions.controllerHasTopic(dst, `session:${sessionId}`)
+    ? { ...(payload as object), listMessage: true } : payload;
+}
+
 function forwardPush(channel: string, payload: unknown, ownerStamp?: PushOwnerStamp): void {
   if (!activeClient) return;
   const topic = topicForPush(channel, payload);
@@ -1948,9 +1970,11 @@ function forwardPush(channel: string, payload: unknown, ownerStamp?: PushOwnerSt
     remotePayload = projectInteractionDismissedForRemote(remotePayload);
   }
   const sharedTaskTopic = sharedTaskMetadataTopic(channel, remotePayload);
+  const listMessage = isListMessagePush(channel, remotePayload);
   const targetsFor = (known: boolean): string[] => {
     const lookup = known ? subscriptions.getKnownControllersForTopic : subscriptions.getControllersForTopic;
-    const ordinary = lookup(topic);
+    const ordinary = [...new Set([...lookup(topic), ...(listMessage
+      ? lookup('sessions').filter(receivesListMessages) : [])])];
     if (!sharedTaskTopic) return ordinary;
     const shared = lookup(sharedTaskTopic).filter((dst) => isSharedTaskPeer(dst)
       && captureSharedTaskPush(dst, channel, remotePayload)?.() === true);
@@ -1994,7 +2018,14 @@ function forwardPush(channel: string, payload: unknown, ownerStamp?: PushOwnerSt
   };
   // 共享任务访客只能看见本任务：新消息推送里的来源身份与 invoke 读取同口径脱敏。
   const payloadFor = (dst: string): unknown => {
-    const projected = projectedPayloadFor(dst);
+    let projected = projectedPayloadFor(dst);
+    if (listMessage && receivesListMessages(dst)) {
+      if (channel === 'local-db:messages:created') {
+        const push = projected as { message: Record<string, unknown> };
+        projected = { ...push, message: versionMessageBody(push.message) };
+      }
+      projected = listMessagePayload(dst, readPushSessionId(remotePayload)!, projected);
+    }
     return isSharedTaskPeer(dst) ? redactSharedGuestPush(channel, projected) : projected;
   };
   const historySessionId = readPushSessionId(remotePayload);
@@ -2009,7 +2040,8 @@ function forwardPush(channel: string, payload: unknown, ownerStamp?: PushOwnerSt
       offlinePushQueue.enqueue(dst, {
         channel,
         payload: payloadFor(dst),
-        topic: sharedMetadata ? sharedTaskTopic : topic,
+        topic: sharedMetadata ? sharedTaskTopic : listMessage && receivesListMessages(dst)
+          && !subscriptions.controllerHasTopic(dst, `session:${historySessionId}`) ? 'sessions' : topic,
         ...(ownerStamp ? { ownerStamp } : {}),
       });
     }
@@ -3270,7 +3302,11 @@ function sendInvokeResultSafe(
     channel === 'local-db:messages:list' && normalized.ok && Array.isArray(normalized.result)
       ? { ...normalized, result: projectMobileMessagePage(normalized.result, args?.[1]) }
       : normalized;
-  const attempt = trySendInvokeResult(client, src, requestId, proactive, channel, args);
+  const encoded = proactive.ok && !isSharedTaskPeer(src)
+    ? encodeMessageBodies(channel, args, proactive.result) : undefined;
+  const reused = proactive.ok && encoded !== undefined && encoded !== proactive.result
+    ? { ...proactive, result: encoded } : proactive;
+  const attempt = trySendInvokeResult(client, src, requestId, reused, channel, args);
   // 以真正能上 wire 的结果作为去重真相：超限原结果若被 compact/改成结构化错误，
   // 不能把缓存留在原始大对象上，否则缓存可能自淘汰且重复 requestId 会再次执行。
   // 远程 Agent 的每个 op 自带幂等(poll 按游标、其余按各自 id 去重)，高频的事件流结果不进
@@ -3547,6 +3583,14 @@ function compactInvokeResultForDeviceLink(
   frame: { dst: string; requestId: string },
   args?: unknown[],
 ): InvokeResultPayload | null {
+  if (result.ok && messageRecord(result.result) && result.result.format === MESSAGE_BODY_FORMAT) {
+    const compact = compactInvokeResultForDeviceLink(channel, { ok: true, result: result.result.value }, frame, args);
+    if (!compact?.ok) return null;
+    // Compaction may change a body; never advertise its pre-compaction digest.
+    const wrapped: InvokeResultPayload = { ok: true, result: { format: MESSAGE_BODY_FORMAT,
+      value: mapMessageBodies(compact.result, versionMessageBody) } };
+    return fitsInvokeResultFrame(frame, wrapped) ? wrapped : null;
+  }
   if (result.ok && (channel === 'local-db:messages:view' || channel === 'local-db:messages:work-details')
     && result.result && typeof result.result === 'object') {
     const page = result.result as Record<string, unknown>;
@@ -3640,6 +3684,7 @@ function fitsInvokeResultFrame(frame: { dst: string; requestId: string }, payloa
 function forceCompactRemoteMessageContent(message: unknown): unknown {
   if (!message || typeof message !== 'object' || Array.isArray(message)) return message;
   const record = message as Record<string, unknown>;
+  if (typeof record.remoteBodyVersion === 'string' && !Object.prototype.hasOwnProperty.call(record, 'content')) return record;
   return {
     ...record,
     agentMeta: markRemoteContentTruncated(record.agentMeta),

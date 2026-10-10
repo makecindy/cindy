@@ -1464,6 +1464,15 @@ export function TodaySpendChip({
         : usesXaiQuotaForm
           ? buildXaiUsageCard(xaiSubscriptionUsage, xaiRateLimit, t, windowLabelNowMs)
           : buildClaudeUsageCard(claudeSubscriptionUsage, t);
+      // Identity and quota must come from the same provider on the same execution device.
+      const identityProvider = quotaProviders.find(
+        (provider) =>
+          provider.id ===
+          (providerId ?? (usesCodexQuotaForm ? 'openai' : usesXaiQuotaForm ? 'xai' : 'anthropic')),
+      );
+      account.identity = usesCodexQuotaForm
+        ? identityProvider?.openAiAccount?.identity
+        : identityProvider?.subscriptionAccount?.identity;
     }
   } else {
     const slots = computeMetricSlots(claudeQuota, creditTotals, sessionSegment, t);
@@ -1679,7 +1688,7 @@ export function TodaySpendChip({
             quotaPopoverOpenSourceRef.current = null;
             scheduleQuotaPopoverClose();
           }}
-          className="w-[340px] max-w-[calc(100vw-16px)] border-0 bg-transparent p-0 shadow-none"
+          className="w-auto max-w-[calc(100vw-16px)] border-0 bg-transparent p-0 shadow-none"
         >
           <QuotaHoverCard
             account={account}

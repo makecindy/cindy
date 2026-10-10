@@ -136,7 +136,7 @@ it('retries an initial capabilities timeout on a legacy host without inventing a
   runtime.post?.({ type: 'streaming', epoch: 'lease-one' });
   expect(snapshot).toMatchObject({ ready: true, controlling: true, error: null });
   expect(current.requests.filter((request) => request.op === 'start')).toEqual([
-    { op: 'start', displayId: 'one' },
+    { op: 'start', displayId: 'one', lockOnExit: false },
   ]);
 });
 
@@ -313,8 +313,8 @@ it.each([['two'], ['two', 'three']])(
     });
     expect(current.hostLease()).toBe('lease-' + latest);
     expect(current.requests.filter((request) => request.op === 'start')).toEqual([
-      { op: 'start', displayId: 'one' },
-      { op: 'start', displayId: latest },
+      { op: 'start', displayId: 'one', lockOnExit: false },
+      { op: 'start', displayId: latest, lockOnExit: false },
     ]);
   },
 );
@@ -330,6 +330,7 @@ it('still requires explicit confirmation to take over another viewer', async () 
     op: 'start',
     displayId: 'one',
     takeover: true,
+    lockOnExit: false,
   });
 });
 

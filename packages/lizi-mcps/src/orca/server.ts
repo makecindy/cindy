@@ -105,11 +105,12 @@ export interface OrcaMcpDeps {
     fast?: boolean;
     label: string;
     workingDir?: string;
+    executionDeviceId?: string;
     initialTask?: string;
   }) => Promise<
     ControlResult<
       { workerId: string; workerSessionId: string; softLimitExceeded?: boolean; dispatched?: boolean; dispatchOutcome?: import('../lizi_xdtHelperMcpServer.js').ControlDispatchOutcome; queuedMessageId?: string },
-      'INVALID_PARAMS' | 'NOT_FOUND' | 'WORKER_LIMIT_HARD_EXCEEDED' | 'DUPLICATE_LABEL' | 'WORKER_CREATION_IN_PROGRESS' | 'BUDGET_MODEL_REQUIRES_API_MODE' | 'NO_PROVIDER_FOR_AGENT' | 'PROVIDER_ROUTE_UNAVAILABLE'
+      'INVALID_PARAMS' | 'NOT_FOUND' | 'WORKER_LIMIT_HARD_EXCEEDED' | 'DUPLICATE_LABEL' | 'WORKER_CREATION_IN_PROGRESS' | 'BUDGET_MODEL_REQUIRES_API_MODE' | 'NO_PROVIDER_FOR_AGENT' | 'PROVIDER_ROUTE_UNAVAILABLE' | 'REMOTE_AGENT_DEVICE_UNREACHABLE' | 'UNSUPPORTED_CAPABILITY'
     >
   >;
   /** 列出当前 workflow 所有 worker。 */
@@ -304,6 +305,19 @@ export interface OrcaWorkspaceInfo {
     effort: string | null;
     focused: boolean;
     working_dir: string;
+    /** 跑在另一台电脑上的 Worker 才有；working_dir 是那台电脑上的目录。 */
+    execution_device?: {
+      device_id: string;
+      device_name: string | null;
+      reachable: boolean | null;
+    };
+  }>;
+  /** 可作为 create_worker.execution_device_id 的同账号电脑；宿主不支持时缺省。 */
+  execution_devices?: Array<{
+    device_id: string;
+    name: string;
+    platform: string | null;
+    supported: boolean;
   }>;
 }
 
@@ -397,7 +411,7 @@ function registerOrcaDiagnosticTools(
     name: 'get_workspace_info',
     category: 'control',
     description:
-      'List the current Orca workflow and worker sessions, including whether each worker queue is paused.',
+      'List the current Orca workflow and worker sessions, including whether each worker queue is paused. execution_devices lists other same-account computers a worker can run on (pass device_id as create_worker.execution_device_id only when supported=true); workers running on another computer carry execution_device.',
     inputShape: {},
     handler: async () => {
       const ctx = resolveLeadSessionContext(getSessionContext);
@@ -409,6 +423,7 @@ function registerOrcaDiagnosticTools(
         ui_capacity: result.ui_capacity,
         worker_count: result.worker_count,
         workers: result.workers,
+        ...(result.execution_devices ? { execution_devices: result.execution_devices } : {}),
       });
     },
   });

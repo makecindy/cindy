@@ -23,6 +23,33 @@ export interface WorkerInfo {
   status: OrcaWorkerStatus;
   focused: boolean;
   idleSince: string | null;
+  /** 在同账号另一台电脑运行的 Worker；本机 Worker 无此字段。 */
+  executionDevice?: WorkerExecutionDevice;
+}
+
+export interface WorkerExecutionDevice {
+  deviceId: string;
+  /** 运行设备上的真实任务 id；sessionId 是本机不跑 Agent 的代理任务。 */
+  remoteSessionId: string;
+  deviceName: string | null;
+  /** false = 暂时无法获取状态；null = 尚未探测。 */
+  reachable: boolean | null;
+  workingDir: string | null;
+}
+
+function mapExecutionDevice(raw: unknown): WorkerExecutionDevice | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const value = raw as Record<string, unknown>;
+  if (typeof value.deviceId !== 'string' || typeof value.remoteSessionId !== 'string') {
+    return undefined;
+  }
+  return {
+    deviceId: value.deviceId,
+    remoteSessionId: value.remoteSessionId,
+    deviceName: typeof value.deviceName === 'string' && value.deviceName ? value.deviceName : null,
+    reachable: typeof value.reachable === 'boolean' ? value.reachable : null,
+    workingDir: typeof value.workingDir === 'string' && value.workingDir ? value.workingDir : null,
+  };
 }
 
 export interface WorkersSnapshot {
@@ -166,6 +193,9 @@ function mapWorkerRecord(raw: Record<string, unknown>): WorkerInfo {
     status: (raw.status as WorkerInfo['status']) ?? 'idle',
     focused: (raw.focused as boolean) ?? false,
     idleSince: (raw.idleSince as string | null) ?? null,
+    ...(mapExecutionDevice(raw.executionDevice)
+      ? { executionDevice: mapExecutionDevice(raw.executionDevice) }
+      : {}),
   };
 }
 

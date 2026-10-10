@@ -22,7 +22,11 @@ describe('mobile remote session bootstrap', () => {
     expect(detailSource).toContain('loadSharedSessionScheduleIndex(deviceId, maker, canLoadScheduleIndex)');
     expect(detailSource).not.toContain('{ force: true }');
     expect(eventSource).toContain('projection.refresh.sessionIndex || projection.refresh.scheduleList || clearsUnread');
-    expect(eventSource).toContain('invalidateScheduleIndexForDevice(deviceId)');
+    // Events invalidate the shared index centrally (and keep the task-page binding record current).
+    expect(eventSource).toContain('noteScheduleEventInIndexCache(deviceId, {');
+    expect(eventSource).toContain('invalidate: projection.refresh.sessionIndex || projection.refresh.scheduleList || clearsUnread,');
+    const indexSource = readFileSync(resolve(process.cwd(), 'src/session/scheduleIndex.ts'), 'utf8');
+    expect(indexSource).toContain('if (change.invalidate) invalidateScheduleIndexForDevice(deviceId);');
     expect(detailSource).toContain('scheduleEventSnapshot.scheduleListVersion,');
     expect(detailSource).toContain('scheduleEventSnapshot.unreadClearVersion,');
   });

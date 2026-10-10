@@ -153,7 +153,7 @@ export interface RemoteDesktopCapabilities {
   automaticReconnect?: boolean;
   /** Explicit same-account replacement of the active viewer. */
   connectionTakeover?: boolean;
-  /** Explicit remote exit can lock the host; ordinary stop/recovery is unchanged. */
+  /** Can lock the host on exit. New hosts also honor the lease's lockOnExit policy. */
   lockOnExit?: boolean;
   videoSettings?: boolean;
   trickleIce?: boolean;
@@ -251,8 +251,9 @@ export type RemoteDesktopRequest =
       resume?: boolean;
       takeover?: boolean;
       control?: boolean;
+      lockOnExit?: boolean;
     }
-  | { op: "heartbeat"; lease: string }
+  | { op: "heartbeat"; lease: string; lockOnExit?: boolean }
   | { op: "stop"; lease: string; lockScreen?: boolean }
   | { op: "frame"; lease: string; cursorOverlay?: boolean }
   | { op: "control" | "presentation"; lease: string; enabled: boolean }
@@ -297,6 +298,11 @@ export function parseRemoteDesktopRequest(
   if (!value || typeof value !== "object" || Array.isArray(value))
     throw new Error("INVALID_REQUEST");
   const v = value as Record<string, unknown>;
+  const lockOnExit = () => {
+    if (v.lockOnExit !== undefined && typeof v.lockOnExit !== "boolean")
+      throw new Error("INVALID_REQUEST");
+    return typeof v.lockOnExit === "boolean" ? { lockOnExit: v.lockOnExit } : {};
+  };
   // Optional on start and display changes; older hosts drop it and the viewer
   // asks for control separately.
   const control = () => {
@@ -324,6 +330,7 @@ export function parseRemoteDesktopRequest(
       ...(v.takeover === true ? { takeover: true } : {}),
       ...(typeof v.resume === "boolean" ? { resume: v.resume } : {}),
       ...control(),
+      ...lockOnExit(),
     };
   }
   if (typeof v.lease !== "string" || v.lease.length > 128 || !v.lease)
@@ -410,7 +417,7 @@ export function parseRemoteDesktopRequest(
       ...(v.lockScreen === true ? { lockScreen: true } : {}),
     };
   }
-  if (v.op === "heartbeat") return { op: v.op, lease };
+  if (v.op === "heartbeat") return { op: v.op, lease, ...lockOnExit() };
   if (
     (v.op === "control" || v.op === "presentation") &&
     typeof v.enabled === "boolean"

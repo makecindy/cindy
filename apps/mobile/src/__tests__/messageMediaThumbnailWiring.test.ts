@@ -162,8 +162,9 @@ describe('mobile message media thumbnail wiring', () => {
     expect(lightboxSource).toContain('if (!finished || !doubleTapBusy.value) return');
     // 二次捏合:已有缩放时先补偿 origin,不把 origin*(1-scale) 立刻叠进画面
     expect(lightboxSource).toContain('compensateLightboxOrigin(');
-    // origin≠0 时平移钳的是 bake 后的画面,浏览捏合与标注双指 pan 共用
-    expect(lightboxSource).toContain('clampLightboxVisualPan(');
+    // 越界阻尼按 bake 后的画面与当前倍率边界计算:捏合锚点跟手,标注双指 pan 共用画面阻尼
+    expect(lightboxSource).toContain('lightboxPinchTranslation(');
+    expect(lightboxSource).toContain('dragLightboxVisualPan(');
     // chrome 显隐走共享 motion token,不在组件里写死毫秒
     expect(lightboxSource).toContain('duration: motionDuration.instant');
     expect(lightboxSource).toContain('duration: motionDuration.fast');

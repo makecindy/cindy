@@ -69,9 +69,14 @@ export function renderHistoryView<T extends HistoryMessageSource, TItem>(options
       || (id.startsWith('history-live:') && row.clientId === id.slice('history-live:'.length));
     const first = cached.findIndex((row) => matchesReference(row, range.firstMessageId));
     const last = cached.findIndex((row) => matchesReference(row, range.lastMessageId));
+    // A running preview is a sliding tail: new activities move both endpoints
+    // past the cached window. Until that tail is read, keep showing the previous
+    // window — a partial slice would collapse the live list for one read and
+    // shift a bottom-pinned stream up and down.
+    const slidingPreview = preview && last < 0 && cached.length > 0;
     // A visible result can split a previously cached range. Retain only this
     // reference's prefix while its replacement pages are being fetched.
-    const body = (first < 0 ? [] : cached.slice(first, last < first ? undefined : last + 1))
+    const body = (slidingPreview ? cached : first < 0 ? [] : cached.slice(first, last < first ? undefined : last + 1))
       .filter((row) => !sourceIds.has(row.clientId));
     const placeholder = structure.placeholder(summary);
     if (!body.some((row) => row.clientId === placeholder.clientId)) {

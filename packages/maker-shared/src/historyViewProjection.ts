@@ -1,6 +1,7 @@
 import { groupWorkRuns } from './workRunGrouping.js';
+import { isContinuationMessage } from './syntheticTrigger.js';
 import { describeToolUse } from './toolUseDescriptor.js';
-import { isAgentPlanToolName, isDeliveryProseText } from './messageRender.js';
+import { isAgentPlanToolName, isDeliveryProseText, isSteerUserRow } from './messageRender.js';
 import { isAgentTaskToolName } from './agentTask.js';
 import { extractPayloadToolResultMedia, extractPayloadToolResultFiles, extractPayloadToolCardIds } from './payloadSummary.js';
 import { isOrcaCommunicationTool, messageContentToPreview, parseMessageToolUse } from './messageNormalize.js';
@@ -229,7 +230,8 @@ function projectHistorySourceView<T extends HistoryMessageSource>(
     return result;
   };
   const grouped = groupWorkRuns<Item, SourceItem<T>>(source, streaming, {
-    isUserBoundary: (item) => item.type === 'source' && item.row.role === 'user',
+    isUserBoundary: (item) => item.type === 'source' && item.row.role === 'user' && !isSteerUserRow(item.row),
+    isContinuationBoundary: (item) => item.type === 'source' && isContinuationMessage(item.row),
     isAnswer: (item) => item.type === 'source' && item.row.role === 'assistant'
       && typeof item.row.content === 'string' && !!item.row.content.trim(),
     isSealedAnswer: (item) => item.type === 'source'

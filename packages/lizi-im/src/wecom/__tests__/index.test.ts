@@ -126,6 +126,30 @@ function deferred<T>() {
 }
 
 describe("WecomIM routing and ownership", () => {
+  it("keeps a quote-only invocation empty and does not claim quoted media was delivered", async () => {
+    const { host, secrets } = createHost();
+    secrets.set("wecom-owner-user-id", "owner");
+    const client = new FakeClient();
+    const im = new WecomIM(host, { clientFactory: () => client as never });
+    const received: IMMessageEvent[] = [];
+    im.onMessage((event) => received.push(event));
+    await im.init();
+    const frame = message({ id: "quote-only", sender: "owner", text: "", chatId: "group-1" });
+    client.emit("message.text", {
+      ...frame,
+      body: { ...frame.body, quote: { msgtype: "image", image: { url: "https://example.com/image" } } },
+    });
+    await flush();
+    expect(received).toHaveLength(1);
+    expect(received[0]).toMatchObject({
+      text: "", invoked: true, attachments: [],
+      replyContext: { unavailableAttachments: ["引用消息的 1 个附件未提供文件内容"] },
+    });
+    expect(received[0].replyContext?.attachmentCount).toBeUndefined();
+    expect(client.downloadFile).not.toHaveBeenCalled();
+    await im.dispose();
+  });
+
   it("TOFU-binds the first DM sender and only accepts that owner afterwards", async () => {
     const { host, secrets } = createHost();
     const client = new FakeClient();

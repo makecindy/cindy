@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { findActiveReconnect } from '@/lib/autoResumePresentation';
+import { findActiveReconnect, readAutoResumeInfo } from '@/lib/autoResumePresentation';
 import type { ChatMessage } from '@/lib/makerChatStore';
 
 const row = (overrides: Partial<ChatMessage> = {}): ChatMessage => ({
@@ -116,3 +116,22 @@ describe('usage-limit reset continuation', () => {
   });
 });
 
+
+describe('provider group switch presentation', () => {
+  it('reads the computer switch carried by an auto-continue record', () => {
+    expect(readAutoResumeInfo({
+      reason: 'usage-limit-reset',
+      agentSwitch: { from: 'Mac mini', to: 'Studio-PC', cause: 'usage-limit' },
+    })).toEqual({
+      usageLimitReset: true,
+      agentSwitch: { from: 'Mac mini', to: 'Studio-PC', cause: 'usage-limit' },
+    });
+  });
+
+  it('ignores malformed switch data and keeps the plain usage-limit row', () => {
+    expect(readAutoResumeInfo({ reason: 'usage-limit-reset', agentSwitch: { from: 'A', to: '', cause: 'usage-limit' } }))
+      .toEqual({ usageLimitReset: true });
+    expect(readAutoResumeInfo({ reason: 'usage-limit-reset', agentSwitch: { from: 'A', to: 'B', cause: 'other' } }))
+      .toEqual({ usageLimitReset: true });
+  });
+});

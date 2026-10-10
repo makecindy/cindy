@@ -5,7 +5,7 @@
  *  - pi 上游刻意不内置子代理,社区(`pi-subagents` 等)一律以「扩展 + 子 pi 进程」补齐。
  *    但整包引入等于把第三方代码塞进 `pi-harness.md` §4.2 划定的自包含注入边界,并跟着上游
  *    版本跑。这里参考社区与上游示例的设计,只重做我们需要的部分,代码归 Cindy 所有。
- *  - 沿用 §3 设计原则:直接用 pi 自身能力(`--mode json` 子进程、`--tools` 白名单、
+ *  - 沿用 §3 设计原则:直接用 pi 自身能力(`--mode rpc` 子进程、`--tools` 白名单、
  *    `--append-system-prompt`),不再套一层外部框架、不做二次转义。
  *
  * 这段代码跑在 **pi 子进程**(bun runtime)里,不能 import cindy 任何模块;只依赖 pi 的
@@ -13,7 +13,7 @@
  * 否则 `${...}` 会被外层 String.raw 插值 —— 一律用字符串拼接。
  *
  * 安全形态(重要,别当冗余删掉):
- *  - 子进程**继承 `PI_CODING_AGENT_DIR`**,但显式 `--no-extensions` 关闭隐式发现，再只用
+ *  - 子进程使用独立 `PI_CODING_AGENT_DIR`,显式 `--no-extensions` 关闭隐式发现，再只用
  *    `--extension <runDir>/cindy-bridge.ts` 回装从内部扩展目录复制的权限门。这样 project extension
  *    永远不会执行，bridge 的 tool_call 拦截 + 凭证路径硬拦仍对子代理生效。
  *  - 只读角色固定 read/grep/find/ls；worker/custom-write 才拿 edit/write/bash。Ask/Auto
@@ -21,7 +21,7 @@
  *    Cindy 现有审批 UI，再把 allow/deny 精确回送给对应 child RPC。父任务未加载时不猜测，
  *    请求保持挂起并在恢复后处理；超时仍由 runner fail-closed 收口。
  *  - `CINDY_PI_SUBAGENT_DEPTH` 防递归:达到上限后本扩展不注册工具,子代理无法再派子代理。
- *  - `--no-session`:子代理不写会话文件,不污染 Cindy 的会话 JSONL。
+ *  - 每个子代理持久化独立会话,恢复时沿用原 session id,不写入父任务的会话 JSONL。
  *  - foreground child 仍遵守**父死子亡**，由父存活看门狗 + exit 同步清扫兜底。显式
  *    async 则交给 Cindy detached runner：父 session 导航/卸载只停止 observer，不终止
  *    child；停止、超时和删除均由持有真实 ChildProcess handle 的 runner 执行。
@@ -284,26 +284,70 @@ function enforceIsolation(input) {
   }
 }
 
+// Use Pi's model-visible projection: raw branch entries can resurrect content
+// removed by compaction or context edits. Keep the newest request even when a
+// large tool result follows it; omit image bytes and hidden reasoning.
 function parentContextSnapshot(ctx) {
-  try {
-    const branch = ctx && ctx.sessionManager && typeof ctx.sessionManager.getBranch === 'function'
-      ? ctx.sessionManager.getBranch()
-      : [];
-    const sections = [];
-    for (const entry of branch) {
-      if (!entry || entry.type !== 'message' || !entry.message) continue;
-      const role = entry.message.role;
-      if (role !== 'user' && role !== 'assistant') continue;
-      const content = Array.isArray(entry.message.content) ? entry.message.content : [];
-      const text = content.map(function (block) {
-        return block && block.type === 'text' && typeof block.text === 'string' ? block.text : '';
-      }).join('').trim();
-      if (text) sections.push(String(role).toUpperCase() + ':\n' + text);
-    }
-    return clampText(sections.join('\n\n'), MAX_PARENT_CONTEXT_CHARS);
-  } catch (err) {
-    return '';
+  const manager = ctx && ctx.sessionManager;
+  if (!manager) return '';
+  let messages;
+  if (typeof manager.buildSessionProjection === 'function') {
+    messages = manager.buildSessionProjection().messages;
+  } else if (typeof manager.buildSessionContext === 'function') {
+    messages = manager.buildSessionContext().messages;
+  } else {
+    // Older Pi exposes compaction-aware entries rather than a projection.
+    const entries = typeof manager.buildContextEntries === 'function'
+      ? manager.buildContextEntries()
+      : null;
+    if (!entries) throw new Error('subagent: Pi cannot project the parent context; use context:fresh.');
+    messages = entries.flatMap(function (entry) {
+      if (entry.type === 'message') return [entry.message];
+      if (entry.type === 'compaction' || entry.type === 'branch_summary') {
+        return [{ role: 'summary', content: entry.summary }];
+      }
+      if (entry.type === 'custom_message') return [{ role: 'custom', content: entry.content }];
+      return [];
+    });
   }
+  if (!Array.isArray(messages)) return '';
+  const sections = messages.flatMap(function (message, index) {
+    if (!message || message.role === 'system') return [];
+    const content = message.content;
+    const text = typeof content === 'string' ? content : Array.isArray(content)
+      ? content.map(function (block) {
+          if (block && block.type === 'text') return block.text || '';
+          if (block && block.type === 'image') return '[Image omitted from text snapshot]';
+          if (block && block.type === 'toolCall') return '[Tool call: ' + block.name + ']';
+          return '';
+        }).join('') : typeof message.summary === 'string' ? message.summary : '';
+    if (!text.trim()) return [];
+    return [{ index: index, role: message.role, text: String(message.role).toUpperCase()
+      + (message.toolName ? ' (' + message.toolName + ')' : '') + ':\n' + text.trim() }];
+  });
+  const latestUser = sections.filter(function (section) { return section.role === 'user'; }).pop();
+  const summary = sections.filter(function (section) { return /summary/i.test(section.role); }).pop();
+  const selected = new Map();
+  let budget = MAX_PARENT_CONTEXT_CHARS;
+  function keep(section, limit) {
+    if (!section || selected.has(section.index) || budget < 3) return;
+    const size = Math.min(limit, budget - 2);
+    // Long user messages often put corrections after attachments/logs. Retain
+    // both ends and make omission explicit, rather than silently losing the tail.
+    const text = section.text.length > size && section.role === 'user' && size > 80
+      ? section.text.slice(0, Math.floor((size - 30) / 2)) + '\n[… middle omitted …]\n'
+        + section.text.slice(-Math.floor((size - 30) / 2))
+      : clampText(section.text, size);
+    selected.set(section.index, text);
+    budget -= text.length + 2;
+  }
+  keep(latestUser, 16000);
+  keep(summary, 8000);
+  for (let index = sections.length - 1; index >= 0 && budget > 2; index -= 1) {
+    keep(sections[index], sections[index].role === 'toolResult' ? 4000 : 8000);
+  }
+  return [...selected.entries()].sort(function (a, b) { return a[0] - b[0]; })
+    .map(function (entry) { return entry[1]; }).join('\n\n');
 }
 
 function resolveTaskModelRoutes(tasks, runtime) {
@@ -468,6 +512,18 @@ function writePrivateJson(file, value) {
   try { chmodSync(file, 0o600); } catch (err) { /* best effort on Windows */ }
 }
 
+function readDurableStatus(runId) {
+  const root = process.env[RUN_ROOT_ENV];
+  if (!root || typeof runId !== 'string' || !/^[0-9a-f-]{36}$/i.test(runId)) return null;
+  try {
+    const file = join(root, runId, 'status.json');
+    const stat = statSync(file);
+    if (!stat.isFile() || stat.size > 2 * 1024 * 1024) return null;
+    const status = JSON.parse(readFileSync(file, 'utf8'));
+    return status && status.version === 1 && status.runId === runId ? status : null;
+  } catch (err) { return null; /* transiently unreadable status */ }
+}
+
 function durableStatuses() {
   const root = process.env[RUN_ROOT_ENV];
   const runtimeOwnerId = process.env[OWNER_ID_ENV];
@@ -477,21 +533,10 @@ function durableStatuses() {
   const statuses = [];
   for (const entry of entries) {
     if (!entry.isDirectory() || !/^[0-9a-f-]{36}$/i.test(entry.name)) continue;
-    const file = join(root, entry.name, 'status.json');
-    try {
-      const stat = statSync(file);
-      if (!stat.isFile() || stat.size > 2 * 1024 * 1024) continue;
-      const status = JSON.parse(readFileSync(file, 'utf8'));
-      // Shared userData can contain runs for the same task opened by another
-      // Desktop instance. The in-model management actions are a control plane,
-      // so legacy or foreign ownership must fail closed just like host controls.
-      if (
-        status
-        && status.version === 1
-        && status.runId === entry.name
-        && status.runtimeOwnerId === runtimeOwnerId
-      ) statuses.push(status);
-    } catch (err) { /* unreadable runs fail closed */ }
+    const status = readDurableStatus(entry.name);
+    // Only explicit list/management discovery scans history. Never expose
+    // legacy or foreign-owner results through the model's control plane.
+    if (status && status.runtimeOwnerId === runtimeOwnerId) statuses.push(status);
   }
   return statuses.sort(function (left, right) { return Number(right.startedAt || 0) - Number(left.startedAt || 0); });
 }
@@ -520,56 +565,119 @@ function writeControlRequest(runDir, control) {
     requestedAt: requestedAt,
     ...control,
   });
+  return requestId;
 }
 
-function writeDurableControl(status, action, message) {
+function isTerminalStatus(state) {
+  return state === 'completed' || state === 'failed' || state === 'stopped';
+}
+
+function selectedTasks(status, childId) {
+  const tasks = childId ? status.tasks.filter(function (task) { return task.childId === childId; }) : status.tasks;
+  if (!tasks.length) throw new Error('subagent: childId does not belong to this run');
+  return tasks;
+}
+
+function describeRun(status, childId) {
+  const sections = selectedTasks(status, childId).map(function (task) {
+    return '## ' + (task.title || task.agent) + ' [' + task.status + '] childId=' + task.childId
+      + (task.error ? '\nError: ' + task.error : '')
+      + '\n' + (task.output || '(no output)');
+  });
+  return 'runId=' + status.runId + ' [' + status.state + ']\n' + fitSectionsToBudget(sections).join('\n\n');
+}
+
+async function writeDurableControl(status, action, message, childId, signal) {
   const root = process.env[RUN_ROOT_ENV];
-  if (!root || !status || typeof status.runId !== 'string') return false;
-  writeControlRequest(join(root, status.runId), {
-    action: action,
+  if (!root) throw new Error('subagent: durable storage is unavailable');
+  if (signal && signal.aborted) throw new Error('subagent: control cancelled before delivery');
+  const runDir = join(root, status.runId);
+  const requestId = writeControlRequest(runDir, {
+    action: action, acknowledge: true,
+    ...(childId ? { childId: childId } : {}),
     ...(message ? { message: message } : {}),
   });
-  return true;
+  const receiptFile = join(runDir, 'control-receipts', requestId + '.json');
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline) {
+    let receipt;
+    try { receipt = JSON.parse(readFileSync(receiptFile, 'utf8')); } catch (err) { /* not acknowledged yet */ }
+    if (receipt && receipt.requestId === requestId) {
+      if (receipt.accepted !== true) throw new Error('subagent: ' + action + ' rejected: ' + (receipt.reason || 'not accepted'));
+      return action + ' accepted by the runner for ' + (childId || status.runId) + '.';
+    }
+    if (signal && signal.aborted) break;
+    await new Promise(function (resolve) { setTimeout(resolve, 50); });
+  }
+  // The write may already have been consumed. Never tell the model to replay it.
+  throw new Error('subagent: control receipt unavailable; delivery is uncertain. Inspect the run before retrying. requestId=' + requestId);
 }
 
-function managementResult(params) {
+async function managementResult(params, ctx, signal, delivery) {
   const action = params.action;
-  if (!['list', 'get', 'stop', 'steer', 'follow_up'].includes(action)) {
+  if (action === 'capabilities') {
+    return JSON.stringify({ roles: Object.keys(PROFILES).map(function (agent) {
+      return { agent: agent, tools: toolsFor(agent).split(',') };
+    }), models: Object.keys(readRuntimeSnapshot().modelRoutes || {}),
+      maxTasks: MAX_TASKS, concurrency: MAX_CONCURRENCY, context: ['fresh', 'fork'],
+      actions: ['run', 'list', 'get', 'wait', 'stop', 'steer', 'follow_up', 'resume'] });
+  }
+  if (!['list', 'get', 'wait', 'stop', 'steer', 'follow_up', 'resume'].includes(action)) {
     throw new Error('subagent: unknown management action');
   }
   const statuses = durableStatuses();
   if (action === 'list') {
     if (statuses.length === 0) return 'No durable PI Subagent runs.';
     return statuses.map(function (status) {
-      return status.runId + ' · ' + status.state + ' · ' + (status.title || status.description || status.taskId);
+      return status.runId + ' · ' + status.state + ' · ' + (status.title || status.description || status.taskId)
+        + '\n' + status.tasks.map(function (task) { return '  ' + task.childId + ' · ' + task.agent + ' · ' + task.status; }).join('\n');
     }).join('\n');
   }
   const taskId = typeof params.taskId === 'string' ? params.taskId.trim() : '';
-  if (!taskId) throw new Error('subagent: action ' + action + ' requires taskId or runId');
-  const status = statuses.find(function (entry) {
-    return entry.taskId === taskId || entry.runId === taskId;
-  });
+  if (!taskId) throw new Error('subagent: action ' + action + ' requires taskId (runId or tool call id)');
+  const status = statuses.find(function (entry) { return entry.taskId === taskId || entry.runId === taskId; });
   if (!status) throw new Error('subagent: durable task not found');
+  if (params.childId !== undefined && (typeof params.childId !== 'string' || !params.childId.trim())) {
+    throw new Error('subagent: childId must be a non-empty exact child id');
+  }
+  const childId = typeof params.childId === 'string' ? params.childId.trim() : '';
+  selectedTasks(status, childId);
   if (action === 'get') {
-    const text = status.tasks.map(function (task) {
-      return '## ' + (task.title || task.agent) + ' [' + task.status + ']\n'
-        + (task.output || task.error || '(no output)');
-    }).join('\n\n');
-    return clampText(text, MAX_TOTAL_OUTPUT_CHARS);
+    if (!childId && isTerminalStatus(status.state)) delivery.consume(status.runId);
+    return describeRun(status, childId);
   }
-  if (status.state === 'completed' || status.state === 'failed' || status.state === 'stopped') {
-    throw new Error('subagent: durable task is already terminal');
-  }
-  if (action === 'stop') {
-    writeDurableControl(status, 'stop', '');
-    return 'Stop requested.';
+  if (action === 'wait') {
+    const seconds = params.waitSeconds === undefined ? 30 : params.waitSeconds;
+    if (!Number.isInteger(seconds) || seconds < 0 || seconds > 60) throw new Error('subagent: waitSeconds must be from 0 to 60');
+    const deadline = Date.now() + seconds * 1000;
+    let current = status;
+    while (!selectedTasks(current, childId).every(function (task) { return isTerminalStatus(task.status); })) {
+      if (signal && signal.aborted) throw new Error('subagent: wait cancelled; children remain independently controllable');
+      if (Date.now() >= deadline) break;
+      await new Promise(function (resolve) { setTimeout(resolve, 100); });
+      current = durableStatuses().find(function (entry) { return entry.runId === status.runId; });
+      if (!current) throw new Error('subagent: run is no longer available');
+    }
+    if (!childId && isTerminalStatus(current.state)) delivery.consume(current.runId);
+    return describeRun(current, childId);
   }
   const message = typeof params.message === 'string' ? params.message.trim() : '';
-  if (!message || message.length > MAX_TASK_CHARS) {
-    throw new Error('subagent: steer/follow_up requires a message up to ' + MAX_TASK_CHARS + ' characters');
+  if (action !== 'stop' && (!message || message.length > MAX_TASK_CHARS)) {
+    throw new Error('subagent: ' + action + ' requires a message up to ' + MAX_TASK_CHARS + ' characters');
   }
-  writeDurableControl(status, action, message);
-  return action === 'steer' ? 'Steer requested.' : 'Follow-up queued.';
+  if (action === 'resume') {
+    if (!isTerminalStatus(status.state)) throw new Error('subagent: run is still active; use steer or follow_up');
+    if (signal && signal.aborted) throw new Error('subagent: resume cancelled');
+    const resumed = await requestRunnerControl(ctx, 'resume', status.runId, { message: message, childId: childId || undefined });
+    if (typeof resumed.runId !== 'string' || !/^[0-9a-f-]{36}$/i.test(resumed.runId)) throw new Error('subagent: invalid resume receipt');
+    delivery.track(resumed.runId, undefined, params.notify !== false);
+    return 'Subagent resumed. runId=' + resumed.runId + '. Use wait/get to collect the result.';
+  }
+  if (isTerminalStatus(status.state)) {
+    if (action === 'stop') return 'Subagent is already terminal. ' + describeRun(status, childId);
+    throw new Error('subagent: durable task is already terminal; use action:resume to continue its retained session');
+  }
+  return writeDurableControl(status, action, message, childId, signal);
 }
 
 function writeApprovalControl(runDir, childId, approvalId, response) {
@@ -769,13 +877,13 @@ function launchFenceBlocksSpawn(runRoot, runtimeOwnerId) {
   return fenceNamesLiveHost(join(fenceDir, LEGACY_LAUNCH_FENCE_FILENAME), hostPid, hostStartTimeSec);
 }
 
-async function requestRunnerControl(ctx, action, runId) {
+async function requestRunnerControl(ctx, action, runId, options = {}) {
   if (!ctx || !ctx.ui || typeof ctx.ui.input !== 'function') {
     throw new Error('subagent: Cindy runner control is unavailable.');
   }
   const raw = await ctx.ui.input(
     RUNNER_CONTROL_TITLE,
-    JSON.stringify({ action: action, runId: runId }),
+    JSON.stringify({ ...options, action: action, runId: runId }),
   );
   let response;
   try { response = JSON.parse(typeof raw === 'string' ? raw : '{}'); } catch (err) { response = null; }
@@ -794,7 +902,10 @@ async function requestRunnerControl(ctx, action, runId) {
     );
   }
   if (!response || response.ok !== true) {
-    throw new Error('subagent: Cindy could not ' + action + ' the durable runner.');
+    throw Object.assign(
+      new Error('subagent: Cindy could not ' + action + ' the durable runner.'),
+      { runnerRejected: !!response && response.ok === false && typeof response.error === 'string' },
+    );
   }
   return response;
 }
@@ -1172,6 +1283,114 @@ function mergeUsage(target, source) {
   }
 }
 
+// Pi's pre-settlement boundary keeps the parent's turn (and permission scope)
+// open while async children finish. No idle wake, synthetic user prompt, or
+// host-side scheduler is involved. Bookkeeping survives extension reload.
+function createResultDelivery(pi) {
+  const pending = new Map();
+  const marker = 'cindy-subagent-delivery';
+  const consumed = function (runId) {
+    if (!pending.delete(runId)) return;
+    pi.appendEntry(marker, { runId: runId, state: 'consumed' });
+  };
+  const track = function (runId, deadlineAt, notify) {
+    if (!notify) return;
+    if (!Number.isFinite(deadlineAt)) {
+      let timeoutMs = DEFAULT_TIMEOUT_SECONDS * 1000;
+      try {
+        const config = JSON.parse(readFileSync(join(process.env[RUN_ROOT_ENV], runId, 'config.json'), 'utf8'));
+        if (Number.isFinite(config.timeoutMs) && config.timeoutMs > 0 && config.timeoutMs <= MAX_TIMEOUT_SECONDS * 1000) timeoutMs = config.timeoutMs;
+      } catch (error) { /* resume still has a bounded collection deadline */ }
+      deadlineAt = Date.now() + timeoutMs + 15000;
+    }
+    pending.set(runId, deadlineAt);
+    pi.appendEntry(marker, { runId: runId, state: 'pending', deadlineAt: deadlineAt });
+  };
+  // Older hosts can still load the tool, but cannot promise automatic delivery.
+  if (typeof pi.on === 'function') {
+    pi.on('session_start', function (event, ctx) {
+      pending.clear();
+      const entries = ctx.sessionManager.getBranch();
+      for (const entry of entries) {
+        if (entry.type === 'custom' && entry.customType === marker && entry.data) {
+          const data = entry.data;
+          if (typeof data.runId !== 'string') continue;
+          if (data.state === 'pending' && Number.isFinite(data.deadlineAt)) pending.set(data.runId, data.deadlineAt);
+          else pending.delete(data.runId);
+        }
+        if (entry.type === 'custom_message' && entry.customType === marker && Array.isArray(entry.details?.runIds)) {
+          for (const runId of entry.details.runIds) pending.delete(runId);
+        }
+      }
+    });
+    pi.on('agent_settled', function () {
+      // Aborted/error turns can skip before-settle entirely. Do not revive
+      // their notification intents on the next unrelated user request.
+      for (const runId of Array.from(pending.keys())) consumed(runId);
+    });
+    pi.on('agent_before_settle', async function (event, ctx) {
+      if (!pending.size || event.outcome !== 'completed') return;
+      // User/extension input already queued takes priority over waiting.
+      if (event.context?.pendingMessages?.length) return;
+      let nextHostPoll = 0;
+      while (pending.size) {
+        try {
+          await requestRunnerControl(ctx, 'delivery', pending.keys().next().value);
+        } catch (error) {
+          // Stop, close and account teardown revoke this turn's continuation.
+          // Durable children stay available through explicit list/get/resume.
+          for (const runId of Array.from(pending.keys())) consumed(runId);
+          return;
+        }
+        if (typeof ctx.hasPendingMessages === 'function' && ctx.hasPendingMessages()) return;
+        const ready = [];
+        const runIds = [];
+        const pollHost = Date.now() >= nextHostPoll;
+        if (pollHost) nextHostPoll = Date.now() + 1000;
+        for (const [runId, deadlineAt] of pending) {
+          // Poll only the pending set: completed history can be arbitrarily
+          // large and must not occupy Pi's event loop on every 250 ms tick.
+          const status = readDurableStatus(runId);
+          if (status && (!process.env[OWNER_ID_ENV] || status.runtimeOwnerId !== process.env[OWNER_ID_ENV])) {
+            ready.push('runId=' + runId + ': automatic result collection is unavailable because the run belongs to another runtime owner. Its output was not read into this conversation; this does not confirm the child stopped.');
+            runIds.push(runId);
+          } else if (status && isTerminalStatus(status.state)) {
+            ready.push(describeRun(status));
+            runIds.push(runId);
+          } else if (pollHost) {
+            try { await requestRunnerControl(ctx, 'status', runId); } catch (error) {
+              if (error && (error.runnerExited || error.runnerRejected)) {
+                ready.push('runId=' + runId + ': ' + error.message
+                  + (error.runnerRejected ? ' Automatic collection ended after the host rejected status access; this does not confirm the child stopped.' : ''));
+                runIds.push(runId);
+                continue;
+              }
+            }
+          }
+          if (!runIds.includes(runId) && Date.now() >= deadlineAt) {
+            ready.push('runId=' + runId + ': no terminal result was available before the delivery deadline. Use list/get to inspect; this does not confirm the child stopped.');
+            runIds.push(runId);
+          }
+        }
+        if (runIds.length) {
+          try { await requestRunnerControl(ctx, 'delivery', runIds[0]); } catch (error) {
+            for (const runId of Array.from(pending.keys())) consumed(runId);
+            return;
+          }
+          // The native boundary commits the result and continuation together.
+          // Abort during the hook suppresses continuation in Pi itself.
+          for (const runId of runIds) pending.delete(runId);
+          return { entries: [{ type: 'custom_message', customType: marker,
+            content: fitSectionsToBudget(ready).join('\n\n'), display: false,
+            details: { runIds: runIds } }], continue: true };
+        }
+        await new Promise(function (resolve) { setTimeout(resolve, 250); });
+      }
+    });
+  }
+  return { track: track, consume: consumed };
+}
+
 export default async function cindySubagent(pi: any) {
   // depth > 0 = 本进程自己就是子代理:装上父存活看门狗,父进程(pi 会话)一消失就自杀。
   // 必须在下面的深度早返回**之前**装 —— 子代理正是走那条早返回分支的。
@@ -1184,6 +1403,8 @@ export default async function cindySubagent(pi: any) {
   const runtimeFile = process.env[RUNTIME_FILE_ENV];
   if (typeof runtimeFile !== 'string' || runtimeFile.trim().length === 0) return;
 
+  const delivery = createResultDelivery(pi);
+
   pi.registerTool({
     name: TOOL_NAME,
     label: 'Subagent',
@@ -1191,18 +1412,21 @@ export default async function cindySubagent(pi: any) {
       + 'Available roles: ' + profileNames() + '. Read-only roles cannot edit. worker uses the parent '
       + 'permission mode; Ask/Auto requests are forwarded to Cindy approval. Pass model/thinking to override the '
       + 'parent model for a child. Pass async:true for a detached background run that survives parent navigation. '
+      + 'Results are collected before this parent turn settles; notify:false leaves collection explicit. '
       + 'Pass {agent, task} for one, or {tasks:[{agent, task}, ...]} to fan out in parallel. '
-      + 'Use action:list/get/stop/steer/follow_up for durable runs. Children cannot spawn further subagents.',
+      + 'Use action:capabilities/list/get/wait/stop/steer/follow_up/resume for durable runs. Select childId to control one child. Children cannot spawn further subagents.',
     parameters: {
       type: 'object',
       properties: {
         action: {
           type: 'string',
-          enum: ['run', 'list', 'get', 'stop', 'steer', 'follow_up'],
+          enum: ['run', 'capabilities', 'list', 'get', 'wait', 'stop', 'steer', 'follow_up', 'resume'],
           description: 'Default run; other actions inspect or control durable runs.',
         },
-        taskId: { type: 'string', description: 'Durable run id (or opaque task id) for get/stop/steer/follow_up.' },
-        message: { type: 'string', description: 'Direction for steer (delivered after current tool calls) or follow_up.' },
+        taskId: { type: 'string', description: 'Durable run id (or opaque task id) for get/wait/stop/steer/follow_up/resume.' },
+        childId: { type: 'string', description: 'Optional exact child id from list/get; omitted targets the whole run.' },
+        waitSeconds: { type: 'integer', minimum: 0, maximum: 60, description: 'Bounded wait for a result; default 30 seconds. Timeout does not stop the child.' },
+        message: { type: 'string', description: 'Direction for steer, follow_up (active run), or resume (terminal run).' },
         agent: { type: 'string', description: 'Agent profile: ' + profileNames() },
         task: {
           type: 'string',
@@ -1212,6 +1436,7 @@ export default async function cindySubagent(pi: any) {
         model: { type: 'string', description: 'Optional exact child model id.' },
         thinking: { type: 'string', description: 'Optional thinking level: ' + THINKING_LEVELS },
         async: { type: 'boolean', description: 'Run in Cindy durable background mode.' },
+        notify: { type: 'boolean', description: 'Default true: collect async/resume results before the parent finishes. false: use wait/get explicitly.' },
         timeoutSeconds: {
           type: 'integer',
           minimum: MIN_TIMEOUT_SECONDS,
@@ -1250,7 +1475,7 @@ export default async function cindySubagent(pi: any) {
       const input = params && typeof params === 'object' ? params as Record<string, unknown> : {};
       const action = typeof input.action === 'string' ? input.action : 'run';
       if (action !== 'run') {
-        const text = managementResult(input);
+        const text = await managementResult(input, ctx, signal, delivery);
         return { content: [{ type: 'text', text: text }], details: { action: action } };
       }
       enforceIsolation(input);
@@ -1262,10 +1487,7 @@ export default async function cindySubagent(pi: any) {
         ? invocation.tasks.map(function (task) {
             return Object.assign({}, task, {
               originalTask: task.task,
-              task: clampText(
-                'Parent task snapshot (immutable):\n\n' + snapshot + '\n\nAssignment:\n' + task.task,
-                MAX_TASK_CHARS + MAX_PARENT_CONTEXT_CHARS,
-              ),
+              task: 'Parent task snapshot (immutable):\n\n' + snapshot + '\n\nAssignment:\n' + task.task,
             });
           })
         : invocation.tasks;
@@ -1379,8 +1601,9 @@ export default async function cindySubagent(pi: any) {
         ctx,
       );
       if (wantAsync) {
+        delivery.track(launched.runId, launched.deadlineAt, input.notify !== false);
         return {
-          content: [{ type: 'text', text: LAUNCH_RECEIPT }],
+          content: [{ type: 'text', text: LAUNCH_RECEIPT + ' runId=' + launched.runId + '; taskId=' + taskId + '. Use wait/get for results.' }],
           details: { launched: true, taskId: taskId, runId: launched.runId },
         };
       }
@@ -1405,7 +1628,7 @@ export default async function cindySubagent(pi: any) {
       });
       const results: any[] = durableStatus.tasks.map(function (task) {
         return {
-          text: task.output || task.error || '(no result)',
+          text: (task.error ? 'Error: ' + task.error + '\n' : '') + (task.output || '(no result)'),
           isError: task.status !== 'completed',
           toolUses: Number(task.toolUses || 0),
           tokens: Number(task.usage && (

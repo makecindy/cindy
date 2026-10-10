@@ -189,7 +189,9 @@ export function TaskMoveSubmenu({
           localProjects
         )}
         {['desktop', 'shared', 'feishu'].includes(session.source ?? 'desktop') &&
-          session.orcaRole !== 'worker' && (
+          session.orcaRole !== 'worker' &&
+          // 另一台电脑派来的协同 Worker：协同归属在那台，不复制到其他电脑(main 同样拒绝)。
+          !session.orcaRemoteLead && (
             <>
               <DropdownMenuSeparator />
               <div className="px-3 py-1.5 text-xs text-[var(--cmd-palette-item-meta)]">

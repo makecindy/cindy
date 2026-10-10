@@ -83,7 +83,7 @@ function isPluginEntry(entry: ComposerSuggestionEntry): boolean {
 
 function isAddDirEntry(entry: ComposerSuggestionEntry): boolean {
   return entry.kind === 'action'
-    && (entry.action.id === 'add-extra-dir' || entry.action.id === 'add-writable-dir');
+    && entry.action.id === 'add-extra-dir';
 }
 
 export type AtPanelState =
@@ -125,7 +125,6 @@ const ACTION_ICONS: Record<ComposerSuggestionAction['id'], typeof Paperclip> = {
   'plan-mode': ClipboardList,
   collaboration: UsersRound,
   'add-extra-dir': FolderPlus,
-  'add-writable-dir': FolderPlus,
 };
 
 export function AtMentionPanel({
@@ -174,13 +173,13 @@ export function AtMentionPanel({
   const addDirEntry = isEmptyRootQuery
     ? indexed.find(({ entry }) => entry.kind === 'action' && entry.action.id === 'add-extra-dir')
     : undefined;
-  const addWritableDirEntry = isEmptyRootQuery
-    ? indexed.find(({ entry }) => entry.kind === 'action' && entry.action.id === 'add-writable-dir')
-    : undefined;
+  // Merge presentation only: removal keeps each persisted grant's original path.
+  const directoryRows = [referenceDirs, writableDirs].flatMap((section) =>
+    section ? section.dirs.map((path) => ({ path, onRemove: section.onRemove })) : [],
+  );
   const addSectionVisible = isEmptyRootQuery && addEntries.length > 0;
   const pluginSectionVisible = isEmptyRootQuery && pluginEntries.length > 0;
-  const referenceDirsVisible = isEmptyRootQuery && (!!referenceDirs || !!addDirEntry);
-  const writableDirsVisible = isEmptyRootQuery && (!!writableDirs || !!addWritableDirEntry);
+  const directoriesVisible = isEmptyRootQuery && (directoryRows.length > 0 || !!addDirEntry);
 
   useEffect(() => {
     if (entries.length === 0) return;
@@ -461,9 +460,10 @@ export function AtMentionPanel({
       ? renderActionRow(entry.action, index)
       : renderResourceRow(entry, index);
 
-  const showLoadingSkeleton = state.kind === 'loading' && entries.length === 0;
-  const showErrorState = state.kind === 'error' && entries.length === 0;
-  const showEmptyState = !showLoadingSkeleton && !showErrorState && entries.length === 0;
+  const hasDirectoryRows = isEmptyRootQuery && directoryRows.length > 0;
+  const showLoadingSkeleton = state.kind === 'loading' && entries.length === 0 && !hasDirectoryRows;
+  const showErrorState = state.kind === 'error' && entries.length === 0 && !hasDirectoryRows;
+  const showEmptyState = !showLoadingSkeleton && !showErrorState && entries.length === 0 && !hasDirectoryRows;
 
   return (
     <div
@@ -544,7 +544,7 @@ export function AtMentionPanel({
                 : t('newChat.atMention.noMatch')}
           </div>
         )}
-        {entries.length > 0 && (
+        {(entries.length > 0 || hasDirectoryRows) && (
           <>
             {isEmptyRootQuery ? (
               <>
@@ -552,12 +552,15 @@ export function AtMentionPanel({
                 {addEntries.map(renderEntryRow)}
                 {pluginSectionVisible && renderSectionHeader(t('extraDirs.pluginsTitle'))}
                 {pluginEntries.map(renderEntryRow)}
-                {referenceDirsVisible && (
+                {directoriesVisible && (addSectionVisible || pluginSectionVisible) && (
+                  <div role="separator" className="my-2 border-t border-[var(--cmd-palette-border)]" />
+                )}
+                {directoriesVisible && (
                   <>
-                    {renderSectionHeader(t('extraDirs.sectionTitle'))}
-                    {referenceDirs && referenceDirs.dirs.length > 0 && (
+                    {directoryRows.length > 0 && renderSectionHeader(t('extraDirs.sectionTitle'))}
+                    {directoryRows.length > 0 && (
                       <div role="list" aria-label={t('extraDirs.sectionTitle')}>
-                        {referenceDirs.dirs.map((p) => (
+                        {directoryRows.map(({ path: p, onRemove }) => (
                           <div
                             key={p}
                             {...menuRowAttrs()}
@@ -580,7 +583,7 @@ export function AtMentionPanel({
                               <button
                                 type="button"
                                 onMouseDown={(e) => e.preventDefault()}
-                                onClick={() => referenceDirs.onRemove(p)}
+                                onClick={() => onRemove(p)}
                                 className={cn(
                                   'rounded-full p-1 opacity-0 transition-opacity',
                                   'hover:bg-[var(--cmd-palette-item-hover)]',
@@ -597,59 +600,7 @@ export function AtMentionPanel({
                         ))}
                       </div>
                     )}
-                    {referenceDirs && referenceDirs.dirs.length === 0 && (
-                      <div className="px-[10px] py-[8px] text-12 text-[var(--cmd-palette-item-meta)]">
-                        {t('extraDirs.empty')}
-                      </div>
-                    )}
                     {addDirEntry && renderEntryRow(addDirEntry)}
-                  </>
-                )}
-                {writableDirsVisible && (
-                  <>
-                    {renderSectionHeader(t('extraDirs.writableSectionTitle'))}
-                    {writableDirs && writableDirs.dirs.length > 0 && (
-                      <div role="list" aria-label={t('extraDirs.writableSectionTitle')}>
-                        {writableDirs.dirs.map((p) => (
-                          <div
-                            key={p}
-                            {...menuRowAttrs()}
-                            className={cn(COMPOSER_MENU_ROW, 'group flex h-[44px] items-center gap-2 px-[10px]')}
-                          >
-                            <FolderPlus
-                              size={16}
-                              className="shrink-0 text-[var(--cmd-palette-item-icon)] opacity-60"
-                            />
-                            <Tip text={p} mono side="top">
-                              <span className="min-w-0 flex-1 truncate text-left">
-                                {extraDirBasename(p)}
-                              </span>
-                            </Tip>
-                            <button
-                              type="button"
-                              onMouseDown={(e) => e.preventDefault()}
-                              onClick={() => writableDirs.onRemove(p)}
-                              className={cn(
-                                'rounded-full p-1 opacity-0 transition-opacity',
-                                'hover:bg-[var(--cmd-palette-item-hover)]',
-                                'group-hover:opacity-70 hover:!opacity-100',
-                                'focus-visible:opacity-100 focus-visible:outline-none',
-                                'focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-                              )}
-                              aria-label={t('extraDirs.remove', { name: extraDirBasename(p) })}
-                            >
-                              <X size={12} className="text-[var(--cmd-palette-item-text)]" />
-                            </button>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                    {writableDirs && writableDirs.dirs.length === 0 && (
-                      <div className="px-[10px] py-[8px] text-12 text-[var(--cmd-palette-item-meta)]">
-                        {t('extraDirs.writableEmpty')}
-                      </div>
-                    )}
-                    {addWritableDirEntry && renderEntryRow(addWritableDirEntry)}
                   </>
                 )}
               </>
@@ -659,7 +610,7 @@ export function AtMentionPanel({
             {isEmptyRootQuery && (
               <div
                 className={cn(
-                  'select-none px-[10px] py-[8px] text-12',
+                  'mt-2 border-t border-[var(--cmd-palette-border)] select-none px-[10px] py-[8px] text-12',
                   'text-[var(--cmd-palette-item-meta)]',
                 )}
               >

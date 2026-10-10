@@ -11,6 +11,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   buildNoProviderMessage,
   createOrcaWorkerCreationService,
+  orcaWorkerTitle,
   providerRouteRequiresExplicitSelection,
   type OrcaWorkerCreationDeps,
   type OrcaWorkerCreateParams,
@@ -50,7 +51,7 @@ describe('Host provenance across Orca creation waits', () => {
     let configured = change === 'config' ? candidate : undefined, picked = change === 'pick';
     let directoryResolved = false, directoryReads = 0;
     let queuedAcceptance: (() => void | Promise<void>) | undefined;
-    let receipt: { operation: string; pluginId: string; payload: string } | null = {
+    let receipt: { operation: string; pluginId: string; payload: string } | null = change === 'ordinary' ? null : {
       operation: 'create', pluginId: 'plugin', payload: JSON.stringify({ ownershipRevoked: change === 'already-revoked' }),
     };
     const task = { revision: 1, status: 'active', permissionMode: 'auto', planModeEnabled: false, workingDir: path.resolve('synthetic-project') };
@@ -82,11 +83,11 @@ describe('Host provenance across Orca creation waits', () => {
         return { ...task };
       } }),
       isPluginTaskAuthorized: () => enabled, readPluginTaskConfig: () => ({ permissionMode: 'auto', workingDir: directoryCase ? configured : task.workingDir }),
-      resolvePluginWorkerDirectory: async () => {
+      resolvePluginWorkerDirectory: vi.fn(async () => {
         directoryResolved = true; directoryReads = 0;
         if (directoryCase && !configured && !picked) throw new PluginTaskError('PERMISSION_DENIED', 'Directory revoked');
         return directoryCase ? candidate : task.workingDir;
-      }, isGhostPickedDir: () => picked,
+      }), isGhostPickedDir: () => picked,
     };
     const { deps, service: creation } = createDeps(callback('    validateCreationPlan: async (', '    getLeadSessionRow: async (', bindings));
     for (const [key, point] of [
@@ -141,12 +142,88 @@ describe('Host provenance across Orca creation waits', () => {
       : action === 'enableTeam'
         ? lifecycle.enableTeam({ leadSessionId: 'lead-1', workerAgent: 'codex', role: 'eval', label: 'sample', delegateTask: entry === 'placeholder' ? undefined : 'Synthetic task', deferDelegateTask: entry === 'deferred', ...(directoryCase ? { workingDir: candidate } : {}) })
         : lifecycle.startTeam({ leadSessionId: 'lead-1' });
-    return { deps, lifecycleDeps, run, acceptQueued: async () => {
+    return { deps, lifecycleDeps, run, creation, receipt, task,
+      resolveDirectory: bindings.resolvePluginWorkerDirectory, acceptQueued: async () => {
       expect(queuedAcceptance).toBeTypeOf('function');
       mutate('accepted');
       return runAcceptedCallback(queuedAcceptance, WORKER_SESSION_ID, 'queued-1');
     } };
   }
+
+  function wireRemoteCreation(deps: OrcaWorkerCreationDeps) {
+    deps.openRemoteWorker = vi.fn(async (input: Parameters<NonNullable<OrcaWorkerCreationDeps['openRemoteWorker']>>[0]) => ({
+      ok: true as const, proxySessionId: 'remote-proxy', remoteSessionId: 'remote-session',
+      agent: input.agent, model: input.model ?? 'remote-default',
+      workingDir: input.workingDir ?? '/remote/dialogue',
+      proxySession: {
+        title: input.title, agentKind: input.agent === 'claude-code' ? 'cc' : input.agent,
+        model: input.model ?? 'remote-default', effort: input.effort ?? null,
+        permissionMode: input.permissionMode, fastMode: input.fast === true,
+      },
+    }));
+    deps.recordRemoteWorker = vi.fn(async () => undefined);
+    deps.discardRemoteWorker = vi.fn(async () => undefined);
+  }
+
+  function registerPlan(receipt: NonNullable<ReturnType<typeof setup>['receipt']>, directory: string) {
+    receipt.payload = JSON.stringify({ teamPlan: { concurrency: 1, items: [{
+      label: 'sample', workingDir: directory,
+      route: { agentKind: 'codex', model: 'gpt-5.5', providerId: 'xd', effort: 'medium', fastMode: false },
+    }] } });
+  }
+
+  it.each([false, true].flatMap(withPlan => ['omitted', 'same-path', 'remote-only'].map(directory => ({ withPlan, directory }))))(
+    'rejects plugin-owned execution devices before directory or remote effects (plan: $withPlan, directory: $directory)', async ({ withPlan, directory }) => {
+      const { deps, creation, receipt, task, resolveDirectory } = setup('createWorker', '', 'healthy');
+      if (withPlan) registerPlan(receipt!, task.workingDir);
+      wireRemoteCreation(deps);
+      const params: OrcaWorkerCreateParams = {
+        leadSessionId: 'lead-1', agent: 'codex', role: 'eval', label: 'sample',
+        executionDeviceId: 'device-b',
+        ...(directory === 'omitted' ? {} : { workingDir: directory === 'same-path' ? task.workingDir : '/device-b-only' }),
+        // The remote branch must not bypass the registered route even when it differs.
+        model: 'remote-only-model', providerId: 'remote-provider', effort: 'high', fast: true,
+      };
+      await expect(creation.createWorker(params)).rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
+      expect(resolveDirectory).not.toHaveBeenCalled();
+      expect(deps.resolveWorkerWorkingDir).not.toHaveBeenCalled();
+      expect(deps.reserveWorkerCreation).not.toHaveBeenCalled();
+      expect(deps.openRemoteWorker).not.toHaveBeenCalled();
+      expect(deps.recordRemoteWorker).not.toHaveBeenCalled();
+      expect(deps.bootstrapSession).not.toHaveBeenCalled();
+      expect(deps.dispatchWorkerTask).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(['ordinary', 'send-receipt', 'already-revoked'])(
+    'preserves user-owned remote creation after $change', async change => {
+      const { deps, creation, receipt, resolveDirectory } = setup('createWorker', '', change);
+      if (change === 'send-receipt') receipt!.operation = 'send';
+      wireRemoteCreation(deps);
+      await expect(creation.createWorker({ leadSessionId: 'lead-1', agent: 'codex', role: 'eval',
+        label: 'sample', executionDeviceId: 'device-b', workingDir: '/device-b-only' })).resolves.toMatchObject({
+        ok: true, workerSessionId: 'remote-proxy', executionDeviceId: 'device-b',
+      });
+      expect(resolveDirectory).not.toHaveBeenCalled();
+      expect(deps.openRemoteWorker).toHaveBeenCalledOnce();
+      expect(deps.recordRemoteWorker).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each([false, true])('still validates a local plugin Worker against its registered route (mismatch: %s)', async mismatch => {
+    const { deps, creation, receipt, task } = setup('createWorker', '', 'healthy');
+    registerPlan(receipt!, task.workingDir);
+    const result = await creation.createWorker({ leadSessionId: 'lead-1', agent: 'codex', role: 'eval',
+      label: 'sample', workingDir: task.workingDir, ...(mismatch ? { model: 'gpt-5.4' } : {}) });
+    expect(result.ok).toBe(!mismatch);
+    if (mismatch) {
+      expect(deps.bootstrapSession).not.toHaveBeenCalled();
+      expect(deps.addOrUpdateWorker).not.toHaveBeenCalled();
+    } else {
+      expect(deps.bootstrapSession).toHaveBeenCalledOnce();
+      expect(deps.addOrUpdateWorker).toHaveBeenCalledOnce();
+    }
+  });
   const cases = (Object.keys(phases) as Action[]).flatMap(action => phases[action].flatMap(phase =>
     ['uninstalled', 'reinstalled', 'account'].map(change => ({ action, phase, change }))));
   cases.push(...(['createWorker', 'enableTeam'] as Action[]).flatMap(action =>
@@ -237,6 +314,184 @@ describe('SSH Codex Worker catalog', () => {
         model: model ?? 'remote-lead', providerId: 'openai', remoteHostId: 'remote-builder', effort: 'low', fastMode: false,
       }));
     }
+  });
+});
+
+describe('orcaWorkerTitle', () => {
+  it('names the role once when the label repeats it', () => {
+    expect(orcaWorkerTitle('reader', 'reader')).toBe('Worker · reader');
+    expect(orcaWorkerTitle('Reviewer', 'reviewer')).toBe('Worker · Reviewer');
+    expect(orcaWorkerTitle('developer', 'developer-2')).toBe('Worker · developer · developer-2');
+    expect(orcaWorkerTitle('转写', 'transcribe')).toBe('Worker · 转写 · transcribe');
+  });
+});
+
+describe('Worker running on another device (execution device)', () => {
+  const remoteDeps = (overrides: Partial<OrcaWorkerCreationDeps> = {}) => createDeps({
+    openRemoteWorker: vi.fn(async (input) => ({
+      ok: true as const,
+      proxySessionId: 'proxy-1',
+      remoteSessionId: 'remote-1',
+      proxySession: {
+        title: input.title, agentKind: input.agent === 'claude-code' ? 'cc' : input.agent,
+        model: input.model ?? 'device-default-model', effort: input.effort ?? null,
+        permissionMode: input.permissionMode, fastMode: input.fast === true,
+      },
+      agent: input.agent,
+      model: input.model ?? 'device-default-model',
+      workingDir: input.workingDir ?? '/Users/demo/Cindy/dialogues/remote-1',
+    })),
+    recordRemoteWorker: vi.fn(async () => undefined),
+    discardRemoteWorker: vi.fn(async () => undefined),
+    ...overrides,
+  });
+
+  it('creates the task on the device, records a proxy worker and skips local model admission', async () => {
+    const { deps, service } = remoteDeps();
+    const result = await service.createWorker({
+      leadSessionId: 'lead-1', role: '转写', label: 'transcribe', agent: 'claude-code',
+      executionDeviceId: 'mac-mini', workingDir: '/Users/demo/Interviews', model: 'only-on-device',
+    });
+    expect(result).toMatchObject({
+      ok: true,
+      workerSessionId: 'proxy-1',
+      resolved: { agent: 'claude-code', model: 'only-on-device', label: 'transcribe' },
+    });
+    expect(deps.openRemoteWorker).toHaveBeenCalledWith(expect.objectContaining({
+      deviceId: 'mac-mini', workerId: 'worker-1', teamId: 'team-1', leadSessionId: 'lead-1',
+      label: 'transcribe', role: '转写', agent: 'claude-code', model: 'only-on-device',
+      permissionMode: 'auto', workingDir: '/Users/demo/Interviews', title: 'Worker · 转写 · transcribe',
+    }));
+    expect(deps.addOrUpdateWorker).not.toHaveBeenCalled();
+    expect(deps.recordRemoteWorker).toHaveBeenCalledWith({
+      workerId: 'worker-1', teamId: 'team-1', leadSessionId: 'lead-1',
+      proxySessionId: 'proxy-1', deviceId: 'mac-mini', remoteSessionId: 'remote-1',
+      proxySession: expect.objectContaining({ model: 'only-on-device', agentKind: 'cc' }),
+      label: 'transcribe', role: '转写',
+      workingDir: '/Users/demo/Interviews',
+    });
+    expect(deps.getProviderRoutingContext).not.toHaveBeenCalled();
+    expect(deps.bootstrapSession).not.toHaveBeenCalled();
+    expect(deps.resolveWorkerWorkingDir).not.toHaveBeenCalled();
+    expect(deps.releaseWorkerCreationReservation).toHaveBeenCalledWith('worker-1');
+  });
+
+  it('lets the device allocate a directory when none is given and accepts Windows paths', async () => {
+    const { deps, service } = remoteDeps();
+    await service.createWorker({
+      leadSessionId: 'lead-1', role: 'dev', label: 'a', agent: 'codex', executionDeviceId: 'office',
+    });
+    expect(deps.openRemoteWorker).toHaveBeenLastCalledWith(expect.not.objectContaining({ workingDir: expect.anything() }));
+    const windows = await service.createWorker({
+      leadSessionId: 'lead-1', role: 'dev', label: 'b', agent: 'codex', executionDeviceId: 'office',
+      workingDir: 'D:\\projects\\site',
+    });
+    expect(windows.ok).toBe(true);
+  });
+
+  it.each([false, true])('reports admitted remote Fast %s instead of the request after recording the Worker', async fastMode => {
+    const { deps, service } = remoteDeps({
+      openRemoteWorker: vi.fn(async () => ({ ok: true as const,
+        proxySessionId: 'proxy-1', remoteSessionId: 'remote-1', agent: 'codex' as const,
+        model: 'device-model', workingDir: '/remote',
+        proxySession: { title: 'Worker', model: 'device-model', agentKind: 'codex', effort: null,
+          permissionMode: 'auto', fastMode },
+      })),
+    });
+    await expect(service.createWorker({ leadSessionId: 'lead-1', role: 'dev', label: 'a',
+      agent: 'codex', executionDeviceId: 'mac-mini', fast: !fastMode })).resolves.toMatchObject({
+      ok: true, resolved: { fastMode },
+    });
+    expect(deps.recordRemoteWorker).toHaveBeenCalledWith(expect.objectContaining({
+      proxySession: expect.objectContaining({ fastMode }),
+    }));
+  });
+
+  it.each(['medium', 'low', ''])('reports the admitted remote effort %s after recording the Worker', async effort => {
+    const { deps, service } = remoteDeps({
+      openRemoteWorker: vi.fn(async () => ({ ok: true as const,
+        proxySessionId: 'proxy-1', remoteSessionId: 'remote-1', agent: 'codex' as const,
+        model: 'device-model', workingDir: '/remote',
+        proxySession: { title: 'Worker', model: 'device-model', agentKind: 'codex', effort,
+          permissionMode: 'auto', fastMode: false },
+      })),
+    });
+    await expect(service.createWorker({ leadSessionId: 'lead-1', role: 'dev', label: 'a',
+      agent: 'codex', executionDeviceId: 'mac-mini' })).resolves.toMatchObject({
+      ok: true, resolved: { effort: effort || null },
+    });
+    expect(deps.recordRemoteWorker).toHaveBeenCalledWith(expect.objectContaining({
+      proxySession: expect.objectContaining({ effort }),
+    }));
+  });
+
+  it.each([
+    ['relative directory', { workingDir: 'relative/dir' }],
+    ['malformed device id', { executionDeviceId: 'bad id/../' }],
+  ])('rejects a %s before reserving a slot', async (_name, patch) => {
+    const { deps, service } = remoteDeps();
+    const result = await service.createWorker({
+      leadSessionId: 'lead-1', role: 'dev', label: 'a', agent: 'codex', executionDeviceId: 'office', ...patch,
+    });
+    expect(result).toMatchObject({ ok: false, errorCode: 'INVALID_PARAMS' });
+    expect(deps.reserveWorkerCreation).not.toHaveBeenCalled();
+    expect(deps.openRemoteWorker).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['SSH', { remoteHostId: 'host-1' }],
+    ['remote Agent', { agentDeviceId: 'device-b' }],
+  ])('refuses to mix with a Lead on %s', async (_name, leadPatch) => {
+    const { deps, service } = remoteDeps({
+      getLeadSessionRow: vi.fn(async () => ({
+        id: 'lead-1', agentKind: 'codex' as const, workspaceKind: 'project' as const, workingDir: '/repo',
+        model: 'gpt-5.5', effort: 'medium', permissionMode: 'default', fastMode: false, providerId: 'xd',
+        remoteHostId: null, ...leadPatch,
+      })),
+    });
+    const result = await service.createWorker({
+      leadSessionId: 'lead-1', role: 'dev', label: 'a', agent: 'codex', executionDeviceId: 'office',
+    });
+    expect(result).toMatchObject({ ok: false, errorCode: 'INVALID_PARAMS' });
+    expect(deps.openRemoteWorker).not.toHaveBeenCalled();
+  });
+
+  it('passes through device errors without recording a worker', async () => {
+    const { deps, service } = remoteDeps({
+      openRemoteWorker: vi.fn(async () => ({
+        ok: false as const, errorCode: 'UNSUPPORTED_CAPABILITY' as const, message: 'Mac mini 需要更新',
+      })),
+    });
+    const result = await service.createWorker({
+      leadSessionId: 'lead-1', role: 'dev', label: 'a', agent: 'codex', executionDeviceId: 'mac-mini',
+    });
+    expect(result).toEqual({ ok: false, errorCode: 'UNSUPPORTED_CAPABILITY', message: 'Mac mini 需要更新' });
+    expect(deps.addOrUpdateWorker).not.toHaveBeenCalled();
+    expect(deps.releaseWorkerCreationReservation).toHaveBeenCalledWith('worker-1');
+  });
+
+  it('discards the device task when persisting the worker fails', async () => {
+    const { deps, service } = remoteDeps({
+      recordRemoteWorker: vi.fn(async () => { throw new Error('disk full'); }),
+    });
+    const result = await service.createWorker({
+      leadSessionId: 'lead-1', role: 'dev', label: 'a', agent: 'codex', executionDeviceId: 'mac-mini',
+    });
+    expect(result).toMatchObject({ ok: false, errorCode: 'INTERNAL' });
+    expect(deps.discardRemoteWorker).toHaveBeenCalledWith({
+      proxySessionId: 'proxy-1', deviceId: 'mac-mini', remoteSessionId: 'remote-1',
+    });
+    expect(deps.recordRemoteWorker).toHaveBeenCalledOnce();
+    expect(deps.addOrUpdateWorker).not.toHaveBeenCalled();
+    expect(deps.removeWorker).not.toHaveBeenCalled();
+  });
+
+  it('reports remote workers as unsupported when the host did not wire them', async () => {
+    const { service } = createDeps();
+    const result = await service.createWorker({
+      leadSessionId: 'lead-1', role: 'dev', label: 'a', agent: 'codex', executionDeviceId: 'mac-mini',
+    });
+    expect(result).toMatchObject({ ok: false, errorCode: 'INVALID_PARAMS' });
   });
 });
 
@@ -1790,7 +2045,7 @@ describe('OrcaWorkerCreationService', () => {
       effort: 'high',
       fastMode: true,
       permissionMode: 'auto',
-      title: 'Worker · reviewer · reviewer',
+      title: 'Worker · reviewer',
       orcaRole: 'worker',
       vendorOptions: expect.objectContaining({
         orcaRole: 'worker',
