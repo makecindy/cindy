@@ -137,6 +137,8 @@ function writeSseEvent(res: ServerResponse, ev: AnthropicSseEvent): void {
 }
 
 const MAX_NON_STREAM_BODY_BYTES = 16 * 1024 * 1024;
+// Bound decoded UTF-16 storage (at most 32 MiB of text per SSE event).
+const MAX_SSE_EVENT_CHARS = 16 * 1024 * 1024;
 
 async function readBodyWithLimit(response: Response, limitBytes: number): Promise<string> {
   if (!response.body) return '';
@@ -554,6 +556,13 @@ export function createResponsesHandler(opts: ResponsesHandlerOptions): Responses
     const reader = upstream.body.getReader();
     const decoder = new TextDecoder();
     let buf = '';
+    let eventData: string[] = [];
+    let eventChars = 0;
+    const checkEventSize = (chars: number): void => {
+      if (chars <= MAX_SSE_EVENT_CHARS) return;
+      void reader.cancel().catch((error) => log.warn?.('upstream cancel failed', { reqId, error: String(error) }));
+      throw new Error(`upstream SSE event exceeds ${MAX_SSE_EVENT_CHARS} characters`);
+    };
     // 零事件诊断:整流一条 Anthropic 事件都没写回时,CLI 只能报
     // "empty or malformed response (HTTP 200)" 并盲目重试,真实错误被完全掩盖(#941)。
     // 记录写回事件数与上游正文前缀,收尾时合成一条带上游信息的 error 事件 + warn 日志。
@@ -600,15 +609,24 @@ export function createResponsesHandler(opts: ResponsesHandlerOptions): Responses
           rawPrefix = (rawPrefix + chunkText).slice(0, RAW_PREFIX_LIMIT);
         }
         buf += chunkText;
-        // SSE 事件以空行分隔;逐行取 `data:` 负载。用游标扫描、chunk 末尾一次性 slice ——
+        // SSE 事件以空行分隔，多条 data 行合并为一个负载；chunk 不是事件边界。
+        // 用游标扫描、chunk 末尾一次性 slice ——
         // 避免每行 slice 整个剩余缓冲(大 chunk 数百行时是 O(n²) 拷贝,这是每 token 热路径)。
         let start = 0;
         let nl: number;
         while ((nl = buf.indexOf('\n', start)) >= 0) {
+          eventChars += nl - start + 1;
+          checkEventSize(eventChars);
           const line = buf.slice(start, nl).replace(/\r$/, '');
           start = nl + 1;
-          if (!line.startsWith('data:')) continue;
-          const payload = line.slice(5).trim();
+          if (line.startsWith('data:')) {
+            eventData.push(line.slice(5).trimStart());
+            continue;
+          }
+          if (line !== '') continue;
+          eventChars = 0;
+          const payload = eventData.join('\n').trim();
+          eventData = [];
           if (!payload || payload === '[DONE]') continue;
           let ev: unknown;
           try {
@@ -620,6 +638,7 @@ export function createResponsesHandler(opts: ResponsesHandlerOptions): Responses
           for (const outEv of translator.push(ev)) writeOut(outEv);
         }
         if (start > 0) buf = buf.slice(start);
+        checkEventSize(eventChars + buf.length);
       }
       // 上游干净结束:零事件时合成带上游信息的 error 事件;有事件但没走
       // response.completed 时按截断报错。两条路径都绝不以空 200 / 伪装完成收尾。

@@ -4,7 +4,7 @@
  *   - 上游 SSE → Anthropic SSE 的端到端写回(经真实 ServerResponse)
  *   - count_tokens 本地估算、no-provider 400、buildHeaders 失败 502、未实现 wireProtocol fail-fast
  */
-import { createServer, request as httpRequest, type Server } from 'node:http';
+import { createServer, request as httpRequest, type IncomingMessage, type Server } from 'node:http';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createResponsesHandler, type BridgeSessionPrefs, type ResponsesBridgeHandler } from '../handler.js';
@@ -53,7 +53,7 @@ function providerConfig(overrides?: Partial<BridgeProviderConfig>): BridgeProvid
 async function invoke(
   handler: ResponsesBridgeHandler,
   body: unknown,
-  opts?: { url?: string; prefs?: BridgeSessionPrefs },
+  opts?: { url?: string; prefs?: BridgeSessionPrefs; onData?: (text: string, res: IncomingMessage) => void },
 ): Promise<{ status: number; text: string; headers: Record<string, string | string[] | undefined> }> {
   const server: Server = createServer((req, res) => {
     void handler.handle({
@@ -71,7 +71,10 @@ async function invoke(
     return await new Promise<{ status: number; text: string; headers: Record<string, string | string[] | undefined> }>((resolve, reject) => {
       const req = httpRequest({ hostname: '127.0.0.1', port, method: 'POST', path: '/' }, (res) => {
         const chunks: Buffer[] = [];
-        res.on('data', (c: Buffer) => chunks.push(c));
+        res.on('data', (c: Buffer) => {
+          chunks.push(c);
+          opts?.onData?.(Buffer.concat(chunks).toString('utf8'), res);
+        });
         res.on('end', () => resolve({
           status: res.statusCode ?? 0,
           text: Buffer.concat(chunks).toString('utf8'),
@@ -421,7 +424,7 @@ describe('createResponsesHandler', () => {
     });
   });
 
-  it('stream:false 上游 SSE 事件跨多行 data: → 按空行合并后解析,不误判成坏帧(review 反馈)', async () => {
+  it.each([true, false, undefined])('多行 data: 按事件合并（stream=%s）', async (stream) => {
     // SSE 规范允许同一事件由多条 data: 行组成(以 \n 拼接)。逐行独立 JSON.parse 会在
     // 第一段就抛错,把一个合法响应变成 502。
     const body = [
@@ -447,15 +450,147 @@ describe('createResponsesHandler', () => {
     })));
     const handler = createResponsesHandler({ providers: [providerConfig()] });
 
-    const result = await invoke(handler, { model: 'chatgpt/gpt-5.5', messages: [], stream: false });
+    const result = await invoke(handler, { model: 'chatgpt/gpt-5.5', messages: [], stream });
 
     expect(result.status).toBe(200);
+    if (stream) {
+      expect(result.headers['content-type']).toContain('text/event-stream');
+      expect(result.text).toContain('"text":"hi"');
+      expect(result.text.match(/event: message_stop/g)).toHaveLength(1);
+      expect(result.text).not.toContain('event: error');
+      return;
+    }
     expect(JSON.parse(result.text)).toMatchObject({
       type: 'message',
       role: 'assistant',
       content: [{ type: 'text', text: 'hi' }],
       stop_reason: 'end_turn',
     });
+  });
+
+  it('streams multiline events before EOF across byte, UTF-8 and CRLF boundaries', async () => {
+    const encoder = new TextEncoder();
+    const frame = (json: string) => `: keepalive\r\nevent: response\r\ndata: ${json.replace(',"', ',\r\ndata: "')}\r\n\r\n`;
+    let upstream!: ReadableStreamDefaultController<Uint8Array>;
+    const stream = new ReadableStream<Uint8Array>({ start(controller) { upstream = controller; } });
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(stream, {
+      headers: { 'content-type': 'text/event-stream' },
+    })));
+    // A byte per chunk splits JSON, CRLF and the multibyte text at every boundary.
+    for (const byte of encoder.encode(OK_SSE.slice(0, 3).map(event => frame(event.replace('hi', '你好🌿'))).join(''))) {
+      upstream.enqueue(Uint8Array.of(byte));
+    }
+    let sawDeltaBeforeEof = false;
+    const result = await invoke(createResponsesHandler({ providers: [providerConfig()] }), {
+      model: 'chatgpt/gpt-5.5', messages: [], stream: true,
+    }, { onData(text) {
+      if (sawDeltaBeforeEof || !text.includes('你好🌿')) return;
+      sawDeltaBeforeEof = true;
+      upstream.enqueue(encoder.encode(OK_SSE.slice(3).map(frame).join('') + 'data: [DONE]\r\n\r\n'));
+      upstream.close();
+    } });
+    expect(sawDeltaBeforeEof).toBe(true);
+    expect(result.text).toContain('"text":"你好🌿"');
+    expect(result.text.match(/event: message_stop/g)).toHaveLength(1);
+    expect(result.text).not.toContain('event: error');
+  });
+
+  it('aborts the upstream when the client disconnects during a multiline event', async () => {
+    const encoder = new TextEncoder();
+    let signal: AbortSignal | undefined;
+    const warn = vi.fn();
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, init: RequestInit) => {
+      signal = init.signal!;
+      return new Response(new ReadableStream<Uint8Array>({ start(controller) {
+        controller.enqueue(encoder.encode(`data: ${OK_SSE[0]}\n\ndata: {"type":\n`));
+        signal!.addEventListener('abort', () => controller.error(new Error('cancelled upstream read')), { once: true });
+      } }), { headers: { 'content-type': 'text/event-stream' } });
+    }));
+    let received = '';
+    await expect(invoke(createResponsesHandler({ providers: [providerConfig()], logger: { warn } }), {
+      model: 'chatgpt/gpt-5.5', messages: [], stream: true,
+    }, { onData(text, res) {
+      received = text;
+      res.destroy(new Error('client cancelled'));
+    } })).rejects.toThrow('client cancelled');
+    await vi.waitFor(() => expect(signal?.aborted).toBe(true));
+    expect(received).toContain('message_start');
+    expect(received).not.toContain('message_stop');
+    expect(received).not.toContain('event: error');
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it.each([true, false])('cancels an oversized unfinished SSE event (multiline=%s)', async (multiline) => {
+    const encoder = new TextEncoder();
+    const cancel = vi.fn();
+    const chunk = encoder.encode((multiline ? 'data: ' : '') + 'x'.repeat(1024 * 1024) + (multiline ? '\n' : ''));
+    let pulls = 0;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        controller.enqueue(pulls++ === 0 ? encoder.encode(`data: ${OK_SSE[0]}\n\n`) : chunk);
+      },
+      cancel,
+    });
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(body, { headers: { 'content-type': 'text/event-stream' } })));
+    const result = await invoke(createResponsesHandler({ providers: [providerConfig()] }), {
+      model: 'chatgpt/gpt-5.5', messages: [], stream: true,
+    });
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(pulls).toBeLessThanOrEqual(19);
+    expect(result.text).toContain('upstream SSE event exceeds');
+    expect(result.text).toContain('event: error');
+    expect(result.text).not.toContain('message_stop');
+  });
+
+  it('resets the event limit at each blank line, including within one large chunk', async () => {
+    // More than the per-event limit overall; each complete event is below it.
+    const padding = ': ' + 'x'.repeat(9 * 1024 * 1024) + '\n';
+    const body = OK_SSE.map(event => `${padding}data: ${event}\n\n`).join('');
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(rawStream(body), {
+      headers: { 'content-type': 'text/event-stream' },
+    })));
+    const result = await invoke(createResponsesHandler({ providers: [providerConfig()] }), {
+      model: 'chatgpt/gpt-5.5', messages: [], stream: true,
+    });
+    expect(result.text).toContain('"text":"hi"');
+    expect(result.text).toContain('message_stop');
+    expect(result.text).not.toContain('event: error');
+  });
+
+  it('does not dispatch an unterminated terminal event at EOF', async () => {
+    const body = OK_SSE.slice(0, 3).map(json => `data: ${json}\n\n`).join('')
+      + `data: ${OK_SSE[4]}\n`;
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(rawStream(body), {
+      headers: { 'content-type': 'text/event-stream' },
+    })));
+    const result = await invoke(createResponsesHandler({ providers: [providerConfig()] }), {
+      model: 'chatgpt/gpt-5.5', messages: [], stream: true,
+    });
+    expect(result.text).toContain('stream_truncated');
+    expect(result.text).not.toContain('message_stop');
+  });
+
+  it('translates multiline tool arguments without joining adjacent events', async () => {
+    const events = [
+      JSON.parse(OK_SSE[0]),
+      { type: 'response.output_item.added', output_index: 0, item: { type: 'function_call', id: 'fc', call_id: 'call', name: 'Read' } },
+      { type: 'response.function_call_arguments.delta', output_index: 0, delta: '{"path":' },
+      { type: 'response.function_call_arguments.delta', output_index: 0, delta: '"a.txt"}' },
+      { type: 'response.output_item.done', output_index: 0, item: { type: 'function_call' } },
+      JSON.parse(OK_SSE[4]),
+    ];
+    const body = events.map(event => 'data: ' + JSON.stringify(event, null, 2).split('\n').join('\ndata: ') + '\n\n').join('');
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(rawStream(body), {
+      headers: { 'content-type': 'text/event-stream' },
+    })));
+    const result = await invoke(createResponsesHandler({ providers: [providerConfig()] }), {
+      model: 'chatgpt/gpt-5.5', messages: [], stream: true,
+    });
+    const output = result.text.split('\n').filter(line => line.startsWith('data:')).map(line => JSON.parse(line.slice(5)));
+    expect(output.find(event => event.type === 'content_block_start')?.content_block).toMatchObject({ type: 'tool_use', name: 'Read' });
+    expect(output.filter(event => event.delta?.type === 'input_json_delta').map(event => event.delta.partial_json).join('')).toBe('{"path":"a.txt"}');
+    expect(result.text.match(/event: message_stop/g)).toHaveLength(1);
+    expect(result.text).not.toContain('event: error');
   });
 
   it('stream:false 上游返回流内错误 / 无内容 → 502 带上游原因,不回空 message', async () => {
