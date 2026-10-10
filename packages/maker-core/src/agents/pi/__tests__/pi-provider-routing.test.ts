@@ -286,6 +286,7 @@ describe("Pi provider-aware model routing", () => {
     captured.remoteModels.clear();
     captured.refreshAckMode = 'ok';
     captured.hasRefreshCommand = true;
+    captured.failThinkingLevel = null;
     captured.requestHandler = undefined;
     agentHome = mkdtempSync(path.join(tmpdir(), "pi-provider-home-"));
     cwd = mkdtempSync(path.join(tmpdir(), "pi-provider-cwd-"));
