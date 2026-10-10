@@ -8817,6 +8817,7 @@
       "avatar": "{{name}} 正在挑选新头像",
       "welcome": "正在准备第一声问候",
       "failed": "准备暂时停住了。已经完成的内容会保留，可以再试一次。",
+      "changeModel": "更换模型",
       "retryFailed": "暂时无法重试，请稍后再试。",
       "leave": "先去忙",
       "avatarSkipped": "暂时用了默认头像，你随时可以换一张。"
@@ -8857,7 +8858,9 @@
       "generate": "生成伙伴",
       "generating": "正在构思伙伴…",
       "generationFailed": "暂时没能生成，请保留你的想法再试一次。",
-      "modelRequired": "请先在 Cindy 中选择可用的默认模型。",
+      "modelRequired": "请在上方选择可用模型后继续。",
+      "modelFollowsDefault": "跟随伙伴默认模型。",
+      "modelForThisBot": "此选择仅用于这位伙伴。",
       "cindyDescription": "我会帮你使用 Cindy、连接工具，也会和你一起把事情做完。",
       "cindySummary": "打理 Cindy，连接工具，把事情做完。",
       "openCindy": "打开 Cindy",

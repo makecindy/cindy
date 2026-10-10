@@ -140,8 +140,8 @@ export function BotSettingsDrawer() {
             ) : bot ? (
               <BotPronounProvider bot={bot}>
                 <BotSettings
-                  key={`${bot.id}:${open}:${initialPage}`}
-                  initialPage={initialPage}
+                  key={`${bot.id}:${open}:${requestedPage === 'model' ? 'model' : initialPage}`}
+                  initialPage={requestedPage === 'model' ? 'model' : initialPage}
                   beforeCloseRef={beforeCloseRef}
                   bot={bot}
                   onBack={performClose}

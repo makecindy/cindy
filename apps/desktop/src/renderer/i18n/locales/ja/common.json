@@ -8817,6 +8817,7 @@
       "avatar": "{{name}} が新しいアバターを選んでいます",
       "welcome": "最初の挨拶を準備しています",
       "failed": "準備が一時停止しました。完了した内容は保存されています。もう一度試せます。",
+      "changeModel": "モデルを変更",
       "retryFailed": "再試行できませんでした。少し待ってお試しください。",
       "leave": "いったん離れる",
       "avatarSkipped": "今は初期アバターを使っています。いつでも変更できます。"
@@ -8857,7 +8858,9 @@
       "generate": "パートナーを生成",
       "generating": "パートナーを考えています…",
       "generationFailed": "生成できませんでした。入力内容は残っています。もう一度お試しください。",
-      "modelRequired": "まず Cindy で利用可能な既定のモデルを選択してください。",
+      "modelRequired": "上で利用可能なモデルを選択して続けてください。",
+      "modelFollowsDefault": "パートナーの既定モデルに従います。",
+      "modelForThisBot": "この選択はこのパートナーにのみ適用されます。",
       "cindyDescription": "Cindy の使い方やツールの接続をお手伝いし、一緒にやり遂げます。",
       "cindySummary": "Cindy の管理、ツールの接続、仕事のお手伝い。",
       "openCindy": "Cindy を開く",

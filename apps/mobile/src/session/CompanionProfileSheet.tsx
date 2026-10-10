@@ -45,7 +45,7 @@ export interface CompanionProfileSheetProps {
   deviceName: string;
   online: boolean;
   onDeleted?: () => void;
-  onOpenSearch: () => void;
+  onOpenSearch?: () => void;
 }
 /** Identity-keyed content prevents previous-account drafts and reads from surviving a switch. */
 export function CompanionProfileSheet(props: CompanionProfileSheetProps) {
@@ -380,7 +380,7 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
       <Text accessibilityRole="header" numberOfLines={2} style={styles.name}>{name}</Text>
     </View>
     <View style={styles.group}>{row('profile', Info)}{row('memory', Brain)}{row('models', Sparkles)}{row('skills', Settings2)}</View>
-    <View style={styles.group}>{row('artifacts', FileText)}{row('search', History, onOpenSearch)}{row('permissions', Hand)}</View>
+    <View style={styles.group}>{row('artifacts', FileText)}{onOpenSearch ? row('search', History, onOpenSearch) : null}{row('permissions', Hand)}</View>
     {/* Host order, like iOS: restart / resume / delete are whatever the computer offers now. */}
     {management.length ? <View style={styles.group}>{management.map(item => actionRow(item, () => confirm(item), item.id === 'delete'))}</View> : null}
     {online && data && !actionPanel('profile') ? note('hostUpgrade') : null}
