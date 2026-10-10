@@ -356,11 +356,13 @@ describe('AddProviderWizard — preset 直达', () => {
     vi.mocked(window.electronAPI.maker.listProviderPresets).mockResolvedValue({ presets: [preset] });
     vi.mocked(window.electronAPI.maker.fetchProviderModels).mockResolvedValue({ ok: true, models: [{ id: 'qwen3-8b', name: 'qwen3-8b' }] });
     renderWizard('llamacpp');
-    // 只有 Pi runtime 提供端点输入框，Codex 跟着同一服务的地址走。
+    // Codex / Pi / Claude 各自保留端点输入框（catalog 里都标了可编辑）；按 preset 顺序定位 Pi 那个。
     const inputs = await screen.findAllByDisplayValue('http://127.0.0.1:8080/v1');
-    expect(inputs).toHaveLength(1);
-    fireEvent.change(inputs[0]!, { target: { value: 'http://127.0.0.1:8081/v1' } });
-    expect(screen.getAllByDisplayValue('http://127.0.0.1:8081/v1')).toHaveLength(1);
+    const piInput = inputs[Object.keys(preset.runtimes).indexOf('pi')]!;
+    expect(inputs.length).toBeGreaterThanOrEqual(2);
+    fireEvent.change(piInput, { target: { value: 'http://127.0.0.1:8081/v1' } });
+    // 未单独编辑的 Claude / Codex 跟随同一服务的 Pi 地址。
+    expect(screen.getAllByDisplayValue('http://127.0.0.1:8081/v1').length).toBeGreaterThan(1);
     fireEvent.click(screen.getByText('settings.providers.wizard.next'));
     fireEvent.click(await screen.findByText('qwen3-8b'));
     fireEvent.click(screen.getByText('settings.providers.wizard.finish'));
@@ -766,7 +768,35 @@ describe('AddProviderWizard — preset 直达', () => {
     expect(config.runtimes.codex?.baseUrl).toBe('https://myres.openai.azure.com/openai/v1');
   });
 
-  it('leaves an official same-host Claude endpoint alone when only the Pi endpoint is edited', async () => {
+  it('keeps independent endpoint fields for a self-hosted preset so Claude/Codex can differ from Pi', async () => {
+  const preset = {
+    id: 'independent-slots',
+    name: 'Independent Slots',
+    runtimes: {
+      codex: { baseUrl: 'http://127.0.0.1:8000/v1', baseUrlEditable: true,
+        wireProtocol: 'openai-responses' as const, models: [{ id: 'm', name: 'M' }] },
+      pi: { baseUrl: 'http://127.0.0.1:8000/v1', baseUrlEditable: true,
+        wireProtocol: 'openai-chat' as const, models: [{ id: 'm', name: 'M' }] },
+    },
+  };
+  vi.mocked(window.electronAPI.maker.listProviderPresets).mockResolvedValueOnce({ presets: [preset] });
+  renderWizard('independent-slots');
+  const inputs = await screen.findAllByDisplayValue('http://127.0.0.1:8000/v1');
+  const codexInput = inputs[Object.keys(preset.runtimes).indexOf('codex')]!;
+  const piInput = inputs[Object.keys(preset.runtimes).indexOf('pi')]!;
+  fireEvent.change(piInput, { target: { value: 'http://127.0.0.1:8001/v1' } });
+  fireEvent.change(codexInput, { target: { value: 'http://127.0.0.1:8090/v1' } });
+  fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'self-hosted-key' } });
+  fireEvent.click(screen.getByText('settings.providers.wizard.next'));
+  expect(await screen.findByText('M')).not.toBeNull();
+  fireEvent.click(screen.getByText('settings.providers.wizard.finish'));
+  await waitFor(() => expect(createCustomProvider).toHaveBeenCalledOnce());
+  const config = vi.mocked(createCustomProvider).mock.calls[0][0];
+  expect(config.runtimes.pi?.baseUrl).toBe('http://127.0.0.1:8001/v1');
+  expect(config.runtimes.codex?.baseUrl).toBe('http://127.0.0.1:8090/v1');
+});
+
+it('leaves an official same-host Claude endpoint alone when only the Pi endpoint is edited', async () => {
   const preset = {
     id: 'same-host-official',
     name: 'Same Host Official',
@@ -1537,8 +1567,9 @@ it('sets up Sub2API from one site address and retains discovered capabilities in
   vi.mocked(createCustomProvider).mockResolvedValue({ ok: true });
   renderWizard('sub2api');
   await screen.findByDisplayValue('Sub2API');
-  // 只有 Pi 的端点可改：它绑定到用户填的中转站，Claude / Codex 仍留预设模板。
-  fireEvent.change(await screen.findByDisplayValue('https://{endpoint}/v1'), { target: { value: 'https://relay.example/team' } });
+  // 三个 runtime 各自保留端点输入框（catalog 标了可编辑）；按 preset 顺序定位 Pi 那个。
+  const endpointInputs = await screen.findAllByDisplayValue('https://{endpoint}/v1');
+  fireEvent.change(endpointInputs[Object.keys(preset.runtimes).indexOf('pi')]!, { target: { value: 'https://relay.example/team' } });
   fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'sk-test' } });
   fireEvent.click(screen.getByText('settings.providers.wizard.next'));
   fireEvent.click(await screen.findByText('Private Sol'));

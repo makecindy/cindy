@@ -95,7 +95,7 @@ type Selection =
   | { kind: 'builtinApiKey'; provider: ProviderView }
   | { kind: 'ollama-onboarding' };
 
-type PresetBaseUrls = { pi?: string };
+type PresetBaseUrls = Partial<Record<AgentKind, string>>;
 
 const AGENT_LABEL: Record<AgentKind, string> = {
   'claude-code': 'Claude Code',
@@ -110,9 +110,10 @@ function presetRuntimeBaseUrl(
 ): string {
   const runtime = preset.runtimes[agent];
   if (!runtime) return '';
-  // 只有 Pi runtime 的端点对用户开放改写；Claude / Codex 不给输入框。
-  if (agent === 'pi') return edited.pi !== undefined ? edited.pi.trim() : runtime.baseUrl;
-  // 但 Claude / Codex 的地址仍有两种派生，否则用户只改 Pi 时它们会指向别的服务或建不出来：
+  // 用户直接编辑过的地址优先：Pi 对全部预设开放，Claude / Codex 保留 catalog 里已标可编辑的入口。
+  // 清空到空白也算编辑（视为无效输入），不能回退到预设地址。
+  if (edited[agent] !== undefined) return edited[agent]!.trim();
+  // 未编辑时仍需两种派生，否则用户只改 Pi 时它们会指向别的服务或根本建不出来：
   // 1) 账户 / 位置模板（如 Azure OpenAI 的 {resource}、Vertex 的 {location}）必须绑定，
   //    未绑定的占位符会被主进程拒绝，整个连接创建失败；
   // 2) 自托管 / 网关类预设的多个 runtime 默认指向同一服务，跟随 Pi 填写的地址。
@@ -895,7 +896,7 @@ export function AddProviderWizard({
           }
           setSel({ kind: 'preset', preset: { ...preset, runtimes: config.runtimes } });
           setName(config.name);
-          setPresetBaseUrls({ pi: config.runtimes.pi?.baseUrl });
+          setPresetBaseUrls(Object.fromEntries(Object.entries(config.runtimes).map(([a, rt]) => [a, rt!.baseUrl])));
           setPicks(choices);
           setFetchState({ status: 'done', failed: false, empty: choices.size === 0 });
           setStep(3);
@@ -1989,8 +1990,8 @@ export function AddProviderWizard({
               <div className="flex flex-col gap-2">
                 {presetAgents.map((agent) => {
                   const rt = sel.preset.runtimes[agent];
-                  // 只有 Pi 端点可编辑；Claude / Codex 沿用预设里已核验的地址。
-                  if (rt && agent === 'pi') {
+                  // Pi 对全部预设开放；Claude / Codex 保留 catalog 里已标可编辑的入口，不减少既有能力。
+                  if (rt && (agent === 'pi' || rt.baseUrlEditable)) {
                     const value = presetRuntimeBaseUrl(sel.preset, agent, presetBaseUrls);
                     const valid = isValidEditablePresetBaseUrl(value.trim(), rt.baseUrl);
                     return (
@@ -2009,7 +2010,7 @@ export function AddProviderWizard({
                           onChange={(event) =>
                             setPresetBaseUrls((prev) => ({
                               ...prev,
-                              pi: event.target.value,
+                              [agent]: event.target.value,
                             }))
                           }
                           aria-invalid={!valid}
