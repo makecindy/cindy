@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import * as Dialog from '@radix-ui/react-dialog';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/input';
+import { Tip } from '@/components/ui/tooltip';
 import { MarkdownRenderer } from '@/components/chat/MarkdownRenderer';
 import { ShareSelectionBar } from '@/components/chat/ShareSelectionBar';
 import { ShareMessageCheckbox } from '@/components/chat/ShareMessageCheckbox';
@@ -17,7 +17,6 @@ import { BotAvatar } from './BotAvatar';
 import { ChatMessageActions, chatErrorKey } from './ChatServerControls';
 const key = (name: string) => `bots.groupChat.server.${name}`;
 const api = () => window.electronAPI.maker.chatServer;
-const iconClass = 'flex h-8 w-8 items-center justify-center rounded-full text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]';
 
 function ThreadMessage({ group, message, shareScope, sharing, onChanged }: { group: BotGroupDetail; message: BotGroupMessageView; shareScope: string; sharing: boolean; onChanged: () => void }) {
   const member = group.members.find(m => m.botId === message.authorBotId);
@@ -37,6 +36,7 @@ function ThreadMessage({ group, message, shareScope, sharing, onChanged }: { gro
 
 export function ChatThreadPanel({ group, rootId, onClose }: { group: BotGroupDetail; rootId: string; onClose: () => void }) {
   const { t } = useTranslation();
+  const titleId = useId();
   const shareScope = `bot-group:${group.id}:thread:${rootId}`;
   const sharing = useShareSelectionActive(shareScope);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -94,14 +94,20 @@ export function ChatThreadPanel({ group, rootId, onClose }: { group: BotGroupDet
     } catch { if (isDataOwnerGenerationCurrent(owner)) setError(t(key('requestFailed'))); }
     finally { sending.current = false; setBusy(false); }
   }
-  return <Dialog.Root open onOpenChange={open => !open && onClose()}>
-    <Dialog.Portal><Dialog.Overlay className="modal-scrim fixed inset-0 z-50">
-      <Dialog.Content aria-describedby={undefined} onPointerDownOutside={e => e.preventDefault()}
-        onEscapeKeyDown={e => { if (e.isComposing || e.keyCode === 229) e.preventDefault(); }}
-        className="fixed inset-y-0 right-0 z-50 flex w-full max-w-md flex-col border-l border-[var(--border-default)] bg-[var(--surface)] outline-none">
+  return <aside aria-labelledby={titleId}
+        onKeyDown={e => {
+          if (e.key === 'Escape' && !e.defaultPrevented && !e.nativeEvent.isComposing && e.keyCode !== 229) {
+            e.stopPropagation(); onClose();
+          }
+        }}
+        className="flex h-full min-w-0 w-1/2 max-w-md shrink-0 flex-col border-l border-[var(--border-default)] bg-[var(--surface)]">
         <header className="flex h-14 shrink-0 items-center justify-between border-b border-[var(--border-default)] px-5">
-          <Dialog.Title className="text-15 font-medium text-[var(--text-primary)]">{t(key('replies'))}</Dialog.Title>
-          <Dialog.Close className={iconClass} aria-label={t('bots.close')}><X size={17} /></Dialog.Close>
+          <h2 id={titleId} className="text-15 font-medium text-[var(--text-primary)]">{t(key('replies'))}</h2>
+          <Tip text={t('bots.close')}>
+            <Button autoFocus={group.archived} variant="secondary" tone="quiet" size="md"
+              className="w-8 rounded-none px-0 [&::before]:rounded-full"
+              aria-label={t('bots.close')} onClick={onClose}><X size={17} aria-hidden /></Button>
+          </Tip>
         </header>
         <div ref={contentRef} className="min-h-0 flex-1 space-y-5 overflow-y-auto px-5 py-4">
           {root && <ThreadMessage shareScope={shareScope} sharing={sharing} group={group} message={root} onChanged={() => void loadRef.current()} />}
@@ -112,7 +118,7 @@ export function ChatThreadPanel({ group, rootId, onClose }: { group: BotGroupDet
         {sharing ? <ShareSelectionBar sessionId={shareScope} barWidth="100%"
           getContentWidth={() => contentRef.current?.querySelector('article')?.getBoundingClientRect().width ?? 400} /> : <div className="space-y-3 border-t border-[var(--border-default)] p-4">
           {error && <p role="alert" className="text-13 text-[var(--error-fg)]">{error}</p>}
-          <Textarea aria-label={t(key('replyPlaceholder'))} placeholder={t(key('replyPlaceholder'))} value={text} onChange={value => {
+          <Textarea autoFocus={!group.archived} aria-label={t(key('replyPlaceholder'))} placeholder={t(key('replyPlaceholder'))} value={text} onChange={value => {
             setText(value);
             if (attempt.current?.text !== value) attempt.current = null;
           }}
@@ -121,7 +127,5 @@ export function ChatThreadPanel({ group, rootId, onClose }: { group: BotGroupDet
             }} />
           <div className="flex justify-end"><Button variant="cta" size="sm" loading={busy} disabled={group.archived || !text.trim()} onClick={() => void send()}>{t(key('sendReply'))}</Button></div>
         </div>}
-      </Dialog.Content>
-    </Dialog.Overlay></Dialog.Portal>
-  </Dialog.Root>;
+  </aside>;
 }

@@ -2,6 +2,7 @@
 import { StrictMode, type ReactNode } from 'react';
 import { cleanup, fireEvent, render as renderUI, screen, waitFor, within } from '@testing-library/react';
 import { Tooltip } from '@/components/ui/tooltip';
+import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChatInviteButton, ChatJoinButton, ChatMessageActions } from '../ChatServerControls';
 import { ChatThreadPanel } from '../ChatThreadPanel';
@@ -42,6 +43,37 @@ beforeEach(() => {
 afterEach(() => { cleanup(); shareSelectionStore.reset(); vi.unstubAllGlobals(); });
 
 describe('chat interaction controls', () => {
+  it('focuses the close button when the archived thread reply input is disabled', () => {
+    render(<ChatThreadPanel group={{ ...group, archived: true }} rootId="root" onClose={vi.fn()} />);
+    expect((screen.getByRole('textbox') as HTMLTextAreaElement).disabled).toBe(true);
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'bots.close' }));
+  });
+
+  it('lets Escape dismiss a portalled reaction picker without closing the thread', async () => {
+    const onClose = vi.fn();
+    render(<ChatThreadPanel group={group} rootId="root" onClose={onClose} />);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: k('addReaction') }));
+    const reaction = await screen.findByRole('button', { name: '🎉' });
+    reaction.focus();
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('button', { name: '🎉' })).toBeNull();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByRole('complementary')).toBeTruthy();
+  });
+
+  it('closes from the square button surface outside the icon and retains the standard focus treatment', () => {
+    const onClose = vi.fn();
+    render(<ChatThreadPanel group={group} rootId="root" onClose={onClose} />);
+    const close = screen.getByRole('button', { name: 'bots.close' });
+    expect(close.className).toContain('w-8 rounded-none px-0');
+    expect(close.className).toContain('[&::before]:rounded-full');
+    expect(close.className).toContain('focus-visible:ring-2');
+    expect(close.querySelector('svg')?.getAttribute('aria-hidden')).toBe('true');
+    fireEvent.click(close, { clientX: 1, clientY: 1 });
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
   it('preserves copy and image sharing beside thread replies and reactions in one toolbar', async () => {
     const writeText = vi.fn().mockResolvedValue(undefined), reply = vi.fn();
     Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });

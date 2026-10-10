@@ -2,6 +2,7 @@
 
 import { act, cleanup, createEvent, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { Tooltip } from '@/components/ui/tooltip';
+import userEvent from '@testing-library/user-event';
 import { shareSelectionStore } from '@/components/chat/shareSelectionStore';
 import { queryShareableMessageIds } from '@/lib/shareConversationImage';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -42,6 +43,7 @@ const mocks = vi.hoisted(() => ({
   controlledPush: null as null | ((payload: { controllers: Array<{ deviceId: string; name: string }> }) => void),
   getControlledState: vi.fn(),
   revoke: vi.fn(),
+  thread: vi.fn(),
 }));
 
 // Partial: the shared attachment pieces pull in the app i18n instance, which needs initReactI18next.
@@ -267,6 +269,12 @@ beforeEach(() => {
   mocks.retryBotGroupPlan.mockReset().mockResolvedValue({ ok: true });
   mocks.editBotGroupPlanStep.mockReset().mockResolvedValue({ ok: true });
   mocks.openPath.mockReset().mockResolvedValue({ success: true });
+  mocks.thread.mockReset().mockImplementation(async ({ rootId }: { rootId: string }) => ({
+    ok: true,
+    root: msg({ id: rootId, content: `Thread root ${rootId}` }),
+    replies: [msg({ id: `reply-${rootId}`, content: `Reply to ${rootId}` })],
+    hasMore: false,
+  }));
   Object.defineProperty(window, 'electronAPI', {
     configurable: true,
     value: {
@@ -285,6 +293,7 @@ beforeEach(() => {
       cleanupCachedImages: vi.fn(async () => undefined),
       getFileThumbnail: vi.fn(async () => null),
       maker: {
+        chatServer: { thread: mocks.thread },
         listBotGroups: vi.fn(async () => ({ ok: true, groups: [] })),
         getBotGroup: (...args: unknown[]) => mocks.getBotGroup(...args),
         sendBotGroupMessage: (...args: unknown[]) => mocks.sendBotGroupMessage(...args),
@@ -306,9 +315,68 @@ beforeEach(() => {
   });
 });
 
-afterEach(cleanup);
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 describe('BotGroupChatView', () => {
+  it('expands a sibling thread panel, keeps the group usable, switches threads and restores the layout on close', async () => {
+    vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+    mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: true }) });
+    const user = userEvent.setup();
+    renderView();
+    const main = (await screen.findByText('周六 8:10 有票')).closest('main')!;
+    const composer = within(main).getByRole('textbox');
+    const triggers = within(main).getAllByRole('button', { name: 'bots.groupChat.server.reply' });
+    await user.click(triggers[0]!);
+    const panel = screen.getByRole('complementary', { name: 'bots.groupChat.server.replies' });
+    expect(panel.parentElement).toBe(main.parentElement);
+    expect(main.parentElement?.className).toContain('flex');
+    expect(main.className).toContain('flex-1');
+    expect(panel.className).not.toMatch(/fixed|absolute/);
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(main.closest('[aria-hidden="true"]')).toBeNull();
+    await screen.findByText('Reply to u1');
+    await user.click(composer);
+    await user.type(composer, 'Group remains editable');
+    expect((composer as HTMLTextAreaElement).value).toBe('Group remains editable');
+    await user.click(triggers[1]!);
+    await screen.findByText('Reply to b1');
+    expect(screen.queryByText('Reply to u1')).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'bots.close' }));
+    expect(screen.queryByRole('complementary')).toBeNull();
+    expect(document.activeElement).toBe(triggers[1]);
+    expect(within(main).getByRole('textbox')).toBe(composer);
+    await user.click(triggers[0]!);
+    expect(await screen.findByText('Reply to u1')).toBeTruthy();
+  });
+
+  it('focuses the reply input without trapping Tab; closes by keyboard and ignores IME Escape', async () => {
+    vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+    mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: true }) });
+    const user = userEvent.setup();
+    renderView();
+    const trigger = (await screen.findAllByRole('button', { name: 'bots.groupChat.server.reply' }))[0]!;
+    await user.click(trigger);
+    const panel = screen.getByRole('complementary');
+    const input = within(panel).getByRole('textbox');
+    expect(document.activeElement).toBe(input);
+    fireEvent.keyDown(input, { key: 'Escape', isComposing: true, keyCode: 229 });
+    expect(screen.getByRole('complementary')).toBe(panel);
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('complementary')).toBeNull();
+    expect(document.activeElement).toBe(trigger);
+    for (const key of ['{Enter}', ' ']) {
+      await user.click(trigger);
+      const close = screen.getByRole('button', { name: 'bots.close' });
+      close.focus();
+      await user.tab({ shift: true });
+      expect(screen.getByRole('main').contains(document.activeElement)).toBe(true);
+      close.focus();
+      await user.keyboard(key);
+      expect(screen.queryByRole('complementary')).toBeNull();
+      expect(document.activeElement).toBe(trigger);
+    }
+  });
+
   it('shows another human as a named participant instead of the current user bubble', async () => {
     mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ messages: [
       msg({ id: 'guest', authorKind: 'user', isSelf: false, authorName: 'Invited human', content: 'Hello from another account' }),

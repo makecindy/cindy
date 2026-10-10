@@ -261,6 +261,7 @@ function BotGroupChatContent({ groupId }: { groupId: string }) {
 
   const separator = t('bots.groupChat.memberSeparator');
   const [threadRootId, setThreadRootId] = useState<string | null>(null);
+  const threadOpenerRef = useRef<HTMLElement | null>(null);
   const settingsLabel = t('bots.groupChat.settings.open');
   const headerMembers = group ? memberKey(group.members) : '';
   const header = useMemo(() => {
@@ -517,8 +518,9 @@ function BotGroupChatContent({ groupId }: { groupId: string }) {
     planId && planPending?.planId === planId ? planPending.action : null;
 
   return (
+    <div className="flex h-full min-w-0 overflow-hidden">
     <main
-      className="relative flex h-full min-w-0 flex-col overflow-hidden bg-[var(--surface)]"
+      className="relative flex h-full min-w-0 flex-1 flex-col overflow-hidden bg-[var(--surface)]"
       onDragEnter={(event) => {
         if (!isAttachmentDrag(event)) return;
         event.preventDefault();
@@ -593,7 +595,10 @@ function BotGroupChatContent({ groupId }: { groupId: string }) {
                   actions={message.kind === 'message' ? <ChatMessageActions
                     groupId={group.serverBacked ? group.id : undefined} shareScope={shareScope} message={message}
                     align={message.authorKind === 'user' && message.isSelf !== false ? 'right' : 'left'}
-                    onReply={group.serverBacked ? () => setThreadRootId(message.id) : undefined}
+                    onReply={group.serverBacked ? () => {
+                      threadOpenerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+                      setThreadRootId(message.id);
+                    } : undefined}
                     onChanged={() => loadRef.current()} /> : undefined}
                   member={message.authorBotId ? memberById.get(message.authorBotId) : undefined}
                   members={group.members}
@@ -668,7 +673,6 @@ function BotGroupChatContent({ groupId }: { groupId: string }) {
         }}
       />}
       {group.migrationPending && <p role="status" className="px-4 py-2 text-13 text-[var(--text-secondary)]">{t('bots.groupChat.migrationPending')}</p>}
-      {group.serverBacked && threadRootId && <ChatThreadPanel key={`${group.id}:${threadRootId}`} group={group} rootId={threadRootId} onClose={() => setThreadRootId(null)} />}
       {/* Whole-page drop hint, as over a task's chat area; the card repeats it. */}
       {dragOver ? (
         <div
@@ -681,6 +685,11 @@ function BotGroupChatContent({ groupId }: { groupId: string }) {
         />
       ) : null}
     </main>
+    {group.serverBacked && threadRootId && <ChatThreadPanel key={`${group.id}:${threadRootId}`} group={group} rootId={threadRootId} onClose={() => {
+      setThreadRootId(null);
+      threadOpenerRef.current?.focus();
+    }} />}
+    </div>
   );
 }
 
