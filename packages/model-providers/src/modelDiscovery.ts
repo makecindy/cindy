@@ -2,6 +2,18 @@ import {
   pickModelMetadata,
   type DiscoveredModel,
 } from "./modelMetadataLayers.js";
+import { effortRank } from "./effortResolution.js";
+
+/** Unknown levels must not turn into an explicit disable of cached capabilities. */
+function parseReasoningOptions(value: unknown): unknown {
+  if (!Array.isArray(value)) return undefined;
+  if (value.length === 0) return [];
+  const levels = value.map(option => option && typeof option === 'object'
+    ? option.value ?? option.effort : option);
+  const recognized = levels.filter(level => level === 'none' ||
+    pickModelMetadata({ efforts: [level] }).efforts !== undefined);
+  return recognized.length ? [...new Set(recognized.filter(level => level !== 'none'))] : undefined;
+}
 
 /** OpenRouter exposes one unpaginated catalog; Anthropic headers select a rewritten CLI view. */
 export function isOpenRouterModelsUrl(value: string): boolean {
@@ -9,19 +21,6 @@ export function isOpenRouterModelsUrl(value: string): boolean {
     const url = new URL(value);
     return url.origin === 'https://openrouter.ai' && url.pathname.replace(/\/+$/, '') === '/api/v1/models';
   } catch { return false; }
-}
-
-/** Codex manifests use { effort, description }; Sub2API's Grok list uses { value, label }.
- * Missing/malformed lists remain unknown; an explicit empty or none-only list stays empty.
- */
-function declaredReasoningEfforts(value: unknown, key: "effort" | "value") {
-  if (!Array.isArray(value)) return undefined;
-  const levels = value.map((level: unknown) =>
-    typeof level === "string" ? level
-      : level && typeof level === "object" ? (level as Record<string, unknown>)[key]
-        : undefined,
-  );
-  return pickModelMetadata({ efforts: [...new Set(levels.filter(level => level !== "none"))] }).efforts;
 }
 
 /**
@@ -138,11 +137,12 @@ export function parseModelsListResponse(
         ? reasoning.defaultEffort
         : reasoning?.default_effort !== undefined
           ? reasoning.default_effort
-          : record.default_effort !== undefined
-            ? record.default_effort
-            : record.default_reasoning_level !== undefined
-              ? record.default_reasoning_level
-              : record.reasoningEffort;
+          : [record.default_effort, record.default_reasoning_level, record.reasoningEffort,
+              ...(Array.isArray(record.reasoningEfforts)
+                ? record.reasoningEfforts.filter(option => option && typeof option === 'object' && option.default === true)
+                    .map(option => option.value)
+                : []),
+            ].find(value => value !== undefined);
     const modalities = record.modalities ??
       (Array.isArray(architecture?.input_modalities) && Array.isArray(architecture?.output_modalities)
         ? { input: architecture.input_modalities, output: architecture.output_modalities } : undefined);
@@ -183,9 +183,9 @@ export function parseModelsListResponse(
           ? reasoning.supported_efforts.filter((value) => value !== "none")
           : undefined) ??
         record.supported_efforts ??
-        declaredReasoningEfforts(record.supported_reasoning_levels, "effort") ??
-        (record.supportsReasoningEffort === false
-          ? [] : declaredReasoningEfforts(record.reasoningEfforts, "value")) ??
+        (record.supportsReasoningEffort === false ? [] : undefined) ??
+        parseReasoningOptions(record.supported_reasoning_levels) ??
+        parseReasoningOptions(record.reasoningEfforts) ??
         (isVercel && Array.isArray(record.reasoning_options)
           ? record.reasoning_options.find((option: unknown) =>
               option && typeof option === 'object' && (option as { type?: unknown }).type === 'effort')?.values
@@ -209,6 +209,21 @@ export function parseModelsListResponse(
           ? inputModalities.includes("image")
           : undefined),
     }) };
+    // A scalar declaration proves that one level, not an entire model-family ladder.
+    // Never replace an explicit list (even malformed/unknown) with the default.
+    if (discoveredMetadata.efforts === undefined && [
+      record.efforts, reasoning?.supportedEfforts, reasoning?.supported_efforts,
+      record.supported_efforts, record.supported_reasoning_levels, record.reasoningEfforts,
+      ...(isVercel ? [record.reasoning_options] : []),
+    ].every(value => value === undefined)) {
+      const scalarEffort = pickModelMetadata({ defaultEffort: rawDefault }).defaultEffort;
+      if (scalarEffort) discoveredMetadata.efforts = [scalarEffort];
+    }
+    // Slider consumers use array position as intensity; provider order is not semantic.
+    if (discoveredMetadata.efforts) {
+      discoveredMetadata.efforts = [...discoveredMetadata.efforts]
+        .sort((a, b) => effortRank(a) - effortRank(b));
+    }
     // Check the normalized pair so every spelling (including model_info) obeys
     // the same capacity constraint, without discarding the valid working window.
     if (discoveredMetadata.contextWindowMax !== undefined &&

@@ -1,0 +1,645 @@
+{
+  "build": {
+    "commit": "dcf401d2500fd01a9f315abffeb9368a964d65b0",
+    "main": "5feeb591811b9ff779cbf62d30e7096ac7f18ec1",
+    "platform": "macOS arm64",
+    "mode": "isolated development build",
+    "sandbox": "pr5043",
+    "codexVersion": "0.159.2"
+  },
+  "upstream": {
+    "checkedAt": "2026-10-10T09:50:51.571Z",
+    "endpoint": "original user Sub2API endpoint (hostname redacted)",
+    "codexVersion": "0.159.2",
+    "checks": [
+      {
+        "connection": "Grok",
+        "path": "/v1/models",
+        "status": 200,
+        "models": [
+          {
+            "id": "grok-4.6",
+            "reasoningEfforts": [
+              {
+                "value": "low",
+                "label": "Low"
+              },
+              {
+                "value": "medium",
+                "label": "Medium"
+              },
+              {
+                "value": "high",
+                "label": "High",
+                "default": true
+              },
+              {
+                "value": "xhigh",
+                "label": "xHigh"
+              }
+            ],
+            "reasoningEffort": "high",
+            "supportsReasoningEffort": true
+          },
+          {
+            "id": "grok-4.7",
+            "reasoningEfforts": [
+              {
+                "value": "low",
+                "label": "Low"
+              },
+              {
+                "value": "medium",
+                "label": "Medium"
+              },
+              {
+                "value": "high",
+                "label": "High",
+                "default": true
+              },
+              {
+                "value": "xhigh",
+                "label": "xHigh"
+              }
+            ],
+            "reasoningEffort": "high",
+            "supportsReasoningEffort": true
+          }
+        ]
+      },
+      {
+        "connection": "Grok",
+        "path": "/v1/models?client_version=0.159.2",
+        "status": 200,
+        "models": [
+          {
+            "id": "grok-4.6",
+            "supported_reasoning_levels": [
+              {
+                "effort": "low",
+                "description": "Fast responses with lighter reasoning"
+              },
+              {
+                "effort": "medium",
+                "description": "Balanced reasoning for most coding tasks"
+              },
+              {
+                "effort": "high",
+                "description": "Greater reasoning depth for coding and agent tasks"
+              },
+              {
+                "effort": "xhigh",
+                "description": "Extra-high reasoning depth for difficult tasks"
+              }
+            ],
+            "default_reasoning_level": "high"
+          },
+          {
+            "id": "grok-4.7",
+            "supported_reasoning_levels": [
+              {
+                "effort": "low",
+                "description": "Fast responses with lighter reasoning"
+              },
+              {
+                "effort": "medium",
+                "description": "Balanced reasoning for most coding tasks"
+              },
+              {
+                "effort": "high",
+                "description": "Greater reasoning depth for coding and agent tasks"
+              },
+              {
+                "effort": "xhigh",
+                "description": "Extra-high reasoning depth for difficult tasks"
+              }
+            ],
+            "default_reasoning_level": "high"
+          }
+        ]
+      },
+      {
+        "connection": "Sol-Luna",
+        "path": "/v1/models",
+        "status": 200,
+        "models": [
+          {
+            "id": "gpt-6-luna"
+          },
+          {
+            "id": "gpt-6-sol"
+          }
+        ]
+      },
+      {
+        "connection": "Sol-Luna",
+        "path": "/v1/models?client_version=0.159.2",
+        "status": 200,
+        "models": [
+          {
+            "id": "gpt-6-luna",
+            "supported_reasoning_levels": [
+              {
+                "effort": "low",
+                "description": "Fast responses with lighter reasoning"
+              },
+              {
+                "effort": "medium",
+                "description": "Balanced reasoning for most coding tasks"
+              },
+              {
+                "effort": "high",
+                "description": "Greater reasoning depth for coding and agent tasks"
+              },
+              {
+                "effort": "xhigh",
+                "description": "Extra-high reasoning depth for difficult tasks"
+              },
+              {
+                "effort": "max",
+                "description": "Maximum reasoning depth for complex tasks"
+              }
+            ],
+            "default_reasoning_level": "medium"
+          },
+          {
+            "id": "gpt-6-sol",
+            "supported_reasoning_levels": [
+              {
+                "effort": "low",
+                "description": "Fast responses with lighter reasoning"
+              },
+              {
+                "effort": "medium",
+                "description": "Balanced reasoning for most coding tasks"
+              },
+              {
+                "effort": "high",
+                "description": "Greater reasoning depth for coding and agent tasks"
+              },
+              {
+                "effort": "xhigh",
+                "description": "Extra-high reasoning depth for difficult tasks"
+              },
+              {
+                "effort": "max",
+                "description": "Maximum reasoning depth for complex tasks"
+              }
+            ],
+            "default_reasoning_level": "medium"
+          }
+        ]
+      }
+    ]
+  },
+  "beforeRefresh": [
+    {
+      "id": "pr5043-grok",
+      "name": "PR5043 Grok",
+      "models": [
+        {
+          "id": "grok-4.6",
+          "efforts": [
+            "low",
+            "medium",
+            "high",
+            "xhigh"
+          ],
+          "defaultEffort": "medium",
+          "userModelConfig": {
+            "id": "grok-4.6",
+            "name": "grok-4.6"
+          }
+        },
+        {
+          "id": "grok-4.7",
+          "efforts": [
+            "low",
+            "medium",
+            "high",
+            "xhigh"
+          ],
+          "defaultEffort": "high",
+          "userModelConfig": {
+            "id": "grok-4.7",
+            "name": "grok-4.7"
+          }
+        }
+      ]
+    },
+    {
+      "id": "pr5043-sol-luna",
+      "name": "PR5043 Sol Luna",
+      "models": [
+        {
+          "id": "gpt-6-sol",
+          "efforts": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "defaultEffort": "medium",
+          "userModelConfig": {
+            "id": "gpt-6-sol",
+            "name": "gpt-6-sol"
+          }
+        },
+        {
+          "id": "gpt-6-luna",
+          "efforts": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "defaultEffort": "medium",
+          "userModelConfig": {
+            "id": "gpt-6-luna",
+            "name": "gpt-6-luna"
+          }
+        }
+      ]
+    }
+  ],
+  "afterImplicitCodexRefresh": [
+    {
+      "id": "pr5043-grok",
+      "name": "PR5043 Grok",
+      "models": [
+        {
+          "id": "grok-4.6",
+          "efforts": [
+            "low",
+            "medium",
+            "high",
+            "xhigh"
+          ],
+          "defaultEffort": "high",
+          "discoveredMetadata": {
+            "name": "Grok 4.6",
+            "description": "Grok coding and reasoning model routed through Sub2API.",
+            "contextWindow": 500000,
+            "contextWindowMax": 500000,
+            "efforts": [
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ],
+            "defaultEffort": "high",
+            "supportsFastMode": false,
+            "supportsImageInput": true
+          },
+          "userModelConfig": {
+            "id": "grok-4.6",
+            "name": "grok-4.6",
+            "discoveredMetadata": {
+              "name": "Grok 4.6",
+              "description": "Grok coding and reasoning model routed through Sub2API.",
+              "contextWindow": 500000,
+              "contextWindowMax": 500000,
+              "efforts": [
+                "low",
+                "medium",
+                "high",
+                "xhigh"
+              ],
+              "defaultEffort": "high",
+              "supportsFastMode": false,
+              "supportsImageInput": true
+            },
+            "nameExplicit": true
+          }
+        },
+        {
+          "id": "grok-4.7",
+          "efforts": [
+            "low",
+            "medium",
+            "high",
+            "xhigh"
+          ],
+          "defaultEffort": "high",
+          "discoveredMetadata": {
+            "name": "Grok 4.7",
+            "description": "Grok coding and reasoning model routed through Sub2API.",
+            "contextWindow": 500000,
+            "contextWindowMax": 500000,
+            "efforts": [
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ],
+            "defaultEffort": "high",
+            "supportsFastMode": false,
+            "supportsImageInput": true
+          },
+          "userModelConfig": {
+            "id": "grok-4.7",
+            "name": "grok-4.7",
+            "discoveredMetadata": {
+              "name": "Grok 4.7",
+              "description": "Grok coding and reasoning model routed through Sub2API.",
+              "contextWindow": 500000,
+              "contextWindowMax": 500000,
+              "efforts": [
+                "low",
+                "medium",
+                "high",
+                "xhigh"
+              ],
+              "defaultEffort": "high",
+              "supportsFastMode": false,
+              "supportsImageInput": true
+            },
+            "nameExplicit": true
+          }
+        }
+      ]
+    },
+    {
+      "id": "pr5043-sol-luna",
+      "name": "PR5043 Sol Luna",
+      "models": [
+        {
+          "id": "gpt-6-sol",
+          "efforts": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "defaultEffort": "medium",
+          "discoveredMetadata": {
+            "name": "GPT-6 Sol",
+            "description": "OpenAI GPT coding model routed through Sub2API.",
+            "contextWindow": 272000,
+            "contextWindowMax": 872000,
+            "efforts": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ],
+            "defaultEffort": "medium",
+            "supportsFastMode": true,
+            "supportsImageInput": true
+          },
+          "userModelConfig": {
+            "id": "gpt-6-sol",
+            "name": "gpt-6-sol",
+            "discoveredMetadata": {
+              "name": "GPT-6 Sol",
+              "description": "OpenAI GPT coding model routed through Sub2API.",
+              "contextWindow": 272000,
+              "contextWindowMax": 872000,
+              "efforts": [
+                "low",
+                "medium",
+                "high",
+                "xhigh",
+                "max"
+              ],
+              "defaultEffort": "medium",
+              "supportsFastMode": true,
+              "supportsImageInput": true
+            },
+            "nameExplicit": true
+          }
+        },
+        {
+          "id": "gpt-6-luna",
+          "efforts": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "defaultEffort": "medium",
+          "discoveredMetadata": {
+            "name": "GPT-6 Luna",
+            "description": "OpenAI GPT coding model routed through Sub2API.",
+            "contextWindow": 272000,
+            "contextWindowMax": 872000,
+            "efforts": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ],
+            "defaultEffort": "medium",
+            "supportsFastMode": true,
+            "supportsImageInput": true
+          },
+          "userModelConfig": {
+            "id": "gpt-6-luna",
+            "name": "gpt-6-luna",
+            "discoveredMetadata": {
+              "name": "GPT-6 Luna",
+              "description": "OpenAI GPT coding model routed through Sub2API.",
+              "contextWindow": 272000,
+              "contextWindowMax": 872000,
+              "efforts": [
+                "low",
+                "medium",
+                "high",
+                "xhigh",
+                "max"
+              ],
+              "defaultEffort": "medium",
+              "supportsFastMode": true,
+              "supportsImageInput": true
+            },
+            "nameExplicit": true
+          }
+        }
+      ]
+    }
+  ],
+  "afterExplicitOrdinaryGrokRefresh": [
+    {
+      "id": "grok-4.6",
+      "efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ],
+      "defaultEffort": "high",
+      "discoveredMetadata": {
+        "name": "Grok 4.6",
+        "efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh"
+        ],
+        "defaultEffort": "high"
+      },
+      "userModelConfig": {
+        "id": "grok-4.6",
+        "name": "grok-4.6",
+        "discoveredMetadata": {
+          "name": "Grok 4.6",
+          "efforts": [
+            "low",
+            "medium",
+            "high",
+            "xhigh"
+          ],
+          "defaultEffort": "high"
+        },
+        "nameExplicit": true
+      }
+    },
+    {
+      "id": "grok-4.7",
+      "efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ],
+      "defaultEffort": "high",
+      "discoveredMetadata": {
+        "name": "Grok 4.7",
+        "efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh"
+        ],
+        "defaultEffort": "high"
+      },
+      "userModelConfig": {
+        "id": "grok-4.7",
+        "name": "grok-4.7",
+        "discoveredMetadata": {
+          "name": "Grok 4.7",
+          "efforts": [
+            "low",
+            "medium",
+            "high",
+            "xhigh"
+          ],
+          "defaultEffort": "high"
+        },
+        "nameExplicit": true
+      }
+    }
+  ],
+  "userSingleLevelOverrideAfterRefresh": {
+    "id": "gpt-6-luna",
+    "efforts": [
+      "high"
+    ],
+    "defaultEffort": "high",
+    "discoveredMetadata": {
+      "name": "GPT-6 Luna",
+      "description": "OpenAI GPT coding model routed through Sub2API.",
+      "contextWindow": 272000,
+      "contextWindowMax": 872000,
+      "efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "defaultEffort": "medium",
+      "supportsFastMode": true,
+      "supportsImageInput": true
+    },
+    "userModelConfig": {
+      "id": "gpt-6-luna",
+      "name": "gpt-6-luna",
+      "efforts": [
+        "high"
+      ],
+      "defaultEffort": "high",
+      "discoveredMetadata": {
+        "name": "GPT-6 Luna",
+        "description": "OpenAI GPT coding model routed through Sub2API.",
+        "contextWindow": 272000,
+        "contextWindowMax": 872000,
+        "efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "defaultEffort": "medium",
+        "supportsFastMode": true,
+        "supportsImageInput": true
+      },
+      "nameExplicit": true
+    }
+  },
+  "sliderChecks": [
+    {
+      "model": "gpt-6-sol",
+      "levels": [
+        {
+          "index": "0",
+          "text": "低"
+        },
+        {
+          "index": "1",
+          "text": "中"
+        },
+        {
+          "index": "2",
+          "text": "高"
+        },
+        {
+          "index": "3",
+          "text": "超高"
+        },
+        {
+          "index": "4",
+          "text": "最高"
+        }
+      ]
+    },
+    {
+      "model": "gpt-6-luna",
+      "labels": [
+        "低",
+        "中",
+        "高",
+        "超高",
+        "最高"
+      ],
+      "sliderMax": "4"
+    },
+    {
+      "model": "grok-4.6",
+      "labels": [
+        "低",
+        "中",
+        "高",
+        "超高"
+      ],
+      "sliderMax": "3"
+    },
+    {
+      "model": "grok-4.7",
+      "labels": [
+        "低",
+        "中",
+        "高",
+        "超高"
+      ],
+      "sliderMax": "3"
+    }
+  ]
+}
