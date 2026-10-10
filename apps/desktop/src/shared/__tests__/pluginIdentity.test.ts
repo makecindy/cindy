@@ -6,6 +6,7 @@ import {
   findConflictingGhostCommand,
   findInstalledGhostByIdentity,
   findInstalledGhostByInstanceId,
+  findInstalledRootGhostForFileImport,
   findInstalledGhostForLocalUpdate,
   findInstalledGhostForDeliveryTarget,
   isGhostInstanceId,
@@ -419,5 +420,39 @@ describe('blocked instance registry', () => {
   it('refuses every market install and update while the registry is blocked', () => {
     expect(blockedInstanceRegistryMarketError(true)).toBe('插件注册表暂不可用，市场安装和更新已暂停，请稍后重试');
     expect(blockedInstanceRegistryMarketError(false)).toBeNull();
+  });
+});
+
+describe('findInstalledRootGhostForFileImport', () => {
+  const ghost = (overrides: Record<string, unknown>) => ({
+    manifest: { id: 'helper' },
+    ...overrides,
+  });
+
+  it('updates a confirmed or unconfirmed root and a pending legacy directory', () => {
+    const fresh = ghost({ namespace: null, namespaceState: 'confirmed', instanceKey: '_root__helper' });
+    const legacy = ghost({ namespaceState: 'pending', instanceKey: 'helper' });
+    const unconfirmed = ghost({ namespace: null, namespaceState: 'unconfirmed', instanceKey: '_root__helper' });
+    expect(findInstalledRootGhostForFileImport([fresh], 'helper')).toBe(fresh);
+    expect(findInstalledRootGhostForFileImport([legacy], 'helper')).toBe(legacy);
+    expect(findInstalledRootGhostForFileImport([unconfirmed], 'helper')).toBe(unconfirmed);
+  });
+
+  it('does not select a confirmed or namespaced organization install', () => {
+    const named = ghost({
+      manifest: { id: 'xd-feishu' },
+      namespace: 'xd',
+      namespaceState: 'confirmed',
+      instanceKey: 'xd-feishu',
+    });
+    const relocated = ghost({ namespace: 'xd', namespaceState: 'confirmed', instanceKey: '_ns__xd__helper' });
+    expect(findInstalledRootGhostForFileImport([named], 'xd-feishu')).toBeNull();
+    expect(findInstalledRootGhostForFileImport([relocated], 'helper')).toBeNull();
+  });
+
+  it('returns null when two roots would match', () => {
+    const fresh = ghost({ namespace: null, namespaceState: 'confirmed', instanceKey: '_root__helper' });
+    const legacy = ghost({ namespaceState: 'pending', instanceKey: 'helper' });
+    expect(findInstalledRootGhostForFileImport([fresh, legacy], 'helper')).toBeNull();
   });
 });

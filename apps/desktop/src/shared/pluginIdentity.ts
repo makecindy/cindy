@@ -338,6 +338,30 @@ export function findInstalledGhostByIdentity<T extends {
  * Exact instance key or the content path of that same install.
  * Does not fall through to a logical namespace alias.
  */
+
+/**
+ * Local file import updates a root install of this ghost id, never an
+ * organization instance. Pending legacy directories have no namespace field
+ * and stay on the update path; Main still rejects an organization package.
+ * Confirmed or unconfirmed root uses namespace null. More than one match
+ * is not a root update.
+ */
+export function findInstalledRootGhostForFileImport<
+  T extends {
+    manifest: { id: string };
+    namespace?: string | null;
+    namespaceState?: 'confirmed' | 'unconfirmed' | 'pending';
+  },
+>(ghosts: readonly T[], ghostId: string): T | null {
+  const matches = ghosts.filter((ghost) => {
+    if (ghost.manifest.id !== ghostId) return false;
+    if ((ghost.namespaceState === 'confirmed' || ghost.namespaceState === 'unconfirmed') &&
+        ghost.namespace === null) return true;
+    return ghost.namespaceState === 'pending' && !hasDeliveryNamespace(ghost);
+  });
+  return matches.length === 1 ? matches[0]! : null;
+}
+
 export function findInstalledGhostByInstanceId<T extends InstalledGhostIdentitySource>(
   ghosts: readonly T[],
   instanceId: string,

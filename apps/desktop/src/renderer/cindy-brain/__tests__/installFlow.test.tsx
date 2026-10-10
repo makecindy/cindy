@@ -149,7 +149,10 @@ describe('installFlow · 本地包安装', () => {
   it('同 id 已安装时直接原位更新，并绑定当前安装 receipt', async () => {
     const installed = {
       manifest: { ...baseManifest, version: '0.9.0' },
-      dir: '/tmp/installed',
+      dir: '/tmp/brain/node-ghost',
+      instanceKey: 'node-ghost',
+      namespace: null,
+      namespaceState: 'confirmed' as const,
       enabled: false,
       approval: {
         state: 'approved',
@@ -170,6 +173,94 @@ describe('installFlow · 本地包安装', () => {
     });
   });
 
+
+  it('updates a new root install instead of starting another one', async () => {
+    const installed = {
+      manifest: { ...baseManifest, version: '0.9.0' },
+      dir: '/tmp/brain/_ns/_root/node-ghost',
+      instanceKey: '_root__node-ghost',
+      namespace: null,
+      namespaceState: 'confirmed' as const,
+      approval: { state: 'approved', revision: 'root-receipt' },
+    };
+    const { install, update } = setupWindow(baseManifest, [installed]);
+    await installGhostFromFile('/tmp/node.cindy', { t: ((key: string) => key) as never });
+    expect(install).not.toHaveBeenCalled();
+    expect(update).toHaveBeenCalledWith('/tmp/node.cindy', expect.objectContaining({
+      expectedInstalledInstanceId: '_root__node-ghost',
+    }));
+  });
+
+  it('updates a pending legacy directory', async () => {
+    const installed = {
+      manifest: { ...baseManifest, version: '0.9.0' },
+      dir: '/tmp/brain/node-ghost',
+      instanceKey: 'node-ghost',
+      namespaceState: 'pending' as const,
+      approval: { state: 'approved', revision: 'legacy-receipt' },
+    };
+    const { install, update } = setupWindow(baseManifest, [installed]);
+    await installGhostFromFile('/tmp/node.cindy', { t: ((key: string) => key) as never });
+    expect(install).not.toHaveBeenCalled();
+    expect(update).toHaveBeenCalledWith('/tmp/node.cindy', expect.objectContaining({
+      expectedInstalledInstanceId: 'node-ghost',
+    }));
+  });
+
+  it('installs a new root beside an organization instance', async () => {
+    const installed = {
+      manifest: baseManifest,
+      dir: '/tmp/brain/_ns/xd/node-ghost',
+      instanceKey: '_ns__xd__node-ghost',
+      namespace: 'xd',
+      namespaceState: 'confirmed' as const,
+      approval: { state: 'approved', revision: 'org-receipt' },
+    };
+    const { install, update } = setupWindow(baseManifest, [installed]);
+    await installGhostFromFile('/tmp/node.cindy', { t: ((key: string) => key) as never });
+    expect(update).not.toHaveBeenCalled();
+    expect(install).toHaveBeenCalled();
+  });
+
+  it('installs a new root beside an in-place confirmed organization plugin', async () => {
+    const installed = {
+      manifest: { ...baseManifest, id: 'xd-feishu', name: 'Feishu' },
+      dir: '/tmp/brain/xd-feishu',
+      instanceKey: 'xd-feishu',
+      namespace: 'xd',
+      namespaceState: 'confirmed' as const,
+      approval: { state: 'approved', revision: 'org-receipt' },
+    };
+    const { install, update } = setupWindow({ ...baseManifest, id: 'xd-feishu', name: 'Feishu' }, [installed]);
+    await installGhostFromFile('/tmp/xd-feishu.cindy', { t: ((key: string) => key) as never });
+    expect(update).not.toHaveBeenCalled();
+    expect(install).toHaveBeenCalled();
+  });
+
+  it('still updates only the instance named by the detail page', async () => {
+    const root = {
+      manifest: baseManifest,
+      dir: '/tmp/brain/_ns/_root/node-ghost',
+      instanceKey: '_root__node-ghost',
+      namespace: null,
+      namespaceState: 'confirmed' as const,
+      approval: { state: 'approved', revision: 'root-receipt' },
+    };
+    const org = {
+      manifest: baseManifest,
+      dir: '/tmp/brain/_ns/xd/node-ghost',
+      instanceKey: '_ns__xd__node-ghost',
+      namespace: 'xd',
+      namespaceState: 'confirmed' as const,
+      approval: { state: 'approved', revision: 'org-receipt' },
+    };
+    const { update } = setupWindow(baseManifest, [root, org]);
+    await pickAndUpdateGhost('_ns__xd__node-ghost', { t: ((key: string) => key) as never });
+    expect(update).toHaveBeenCalledWith('/tmp/node.cindy', expect.objectContaining({
+      expectedInstalledInstanceId: '_ns__xd__node-ghost',
+      expectedInstalledApproval: 'approved:org-receipt',
+    }));
+  });
   it('本地包不由客户端按 minCindyVersion 二次拦截', async () => {
     const incompatibleManifest = { ...baseManifest, minCindyVersion: '2.0.0' };
     const { install } = setupWindow(incompatibleManifest);
