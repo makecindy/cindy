@@ -67,6 +67,7 @@ export {
   buildBotMemoryScopeKey,
   parseBotMemoryScopeKey,
   memoryScopeDirName,
+  isRemoteScopeDirName,
   buildFilename,
   parseFilename,
   validateSlug,
