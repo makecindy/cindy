@@ -15,14 +15,20 @@ const fixture = vi.hoisted(() => ({
   packageToken: undefined as string | undefined,
 }));
 
-// Retain the real child only to inject an EPIPE at the host stream boundary;
-// stdout framing and all turn lifecycle consumers still run unchanged.
+// Retain the real child to inject EPIPE, and expose a real extra stdio pipe as
+// fixture stdout. Windows libuv intentionally skips fs.close for fd 0-2; fd 3
+// can produce actual EOF while the executor remains alive. Never emit a fake
+// Host end event; framing and all turn lifecycle consumers run unchanged.
 vi.mock('node:child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:child_process')>();
   return {
     ...actual,
     spawn: (...args: Parameters<typeof actual.spawn>) => {
-      const child = actual.spawn(...args);
+      const [command, argv, options] = args;
+      const child = actual.spawn(command, argv ?? [], {
+        ...options, stdio: ['pipe', 'ignore', 'pipe', 'pipe'],
+      });
+      child.stdout = child.stdio[3] as import('node:stream').Readable;
       fixture.child = child;
       return child;
     },
@@ -40,13 +46,13 @@ vi.mock('../transport.js', async (importOriginal) => {
         const { spawn } = require('node:child_process');
         const readline = require('node:readline');
         const { writeSync, closeSync } = require('node:fs');
-        // Standard stdout has a non-closing destroy hook. end() can leave the
-        // Windows pipe open while this fixture is still alive. Use the actual
-        // fd without creating process.stdout, and close it only after writes.
-        const output = frame => writeSync(1, JSON.stringify(frame) + '\\n');
+        // Use the closeable extra pipe, not Windows' protected standard fd 1.
+        // The spawn fixture exposes this real pipe to the production reader.
+        const outputFd = 3;
+        const output = frame => writeSync(outputFd, JSON.stringify(frame) + '\\n');
         const endOutput = tail => {
-          if (tail !== undefined) writeSync(1, tail);
-          closeSync(1);
+          if (tail !== undefined) writeSync(outputFd, tail);
+          closeSync(outputFd);
         };
         const result = { content: [{ type: 'text', text: 'fixture build complete' }] };
         let rpcLost = false;
@@ -89,13 +95,13 @@ vi.mock('../transport.js', async (importOriginal) => {
               // This fixture specifically needs a surviving pipe owner; production
               // spawn options remain unchanged, and afterEach owns its cleanup.
               detached: process.platform === 'win32',
-              stdio: ['ignore', process.stdout, process.stderr], env: process.env
+              stdio: ['ignore', outputFd, 2], env: process.env
             });
             child.once('spawn', () => {
               output({ type: 'fixture_descendant', pid: child.pid });
-              // Drain the fixture metadata before exiting, leaving both pipes
+              // output writes synchronously before exit, leaving both pipes
               // open in the descendant exactly as a shell/build child can.
-              process.stdout.write('', () => process.exit(23));
+              process.exit(23);
             });
             return;
           }
