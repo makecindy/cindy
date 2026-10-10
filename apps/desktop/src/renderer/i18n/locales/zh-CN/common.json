@@ -467,7 +467,8 @@
         "description": "之后不再给它分新任务；已经在它上面运行的任务留在那台电脑上。",
         "lastDescription": "它是组里最后一台电脑，移出后会删除 {{provider}} 的供应商组。",
         "confirm": "移出组"
-      }
+      },
+      "sourceGroupOwner": "组所在电脑"
     },
     "deleteConfirm": {
       "title": "删除 {{provider}} 的供应商组？",
@@ -2825,7 +2826,12 @@
         "statusReady": "可用",
         "detailNote": "Agent 在 {{device}} 上运行，用的是那台电脑的登录和配额。新建任务时在模型列表里选择它就能用；要修改这个供应商，请到那台电脑的「设置 → 模型供应商」。",
         "modelsTitle": "可用的模型",
-        "modelsEmpty": "这个供应商在那台电脑上还没有开放可用的模型。"
+        "modelsEmpty": "这个供应商在那台电脑上还没有开放可用的模型。",
+        "rowLabelGroup": "{{provider}} · {{device}} · 供应商组",
+        "groupBadge_other": "供应商组 · {{count}} 台电脑",
+        "groupNote": "{{device}} 把这个供应商建成了供应商组。在模型列表里选它新建任务时，{{device}} 会按组策略把任务分给下面的一台电脑运行，那台出问题时自动换一台继续。要修改组，请到 {{device}} 的「设置 → 模型供应商」。",
+        "groupMembersTitle": "组内电脑",
+        "groupMembersFailed": "暂时读不到组内电脑的状态。"
       },
       "genericOAuth": {
         "subtitle": "订阅账号",
@@ -9400,7 +9406,8 @@
         "effortEndSmart": "更智能",
         "railSameEngine": "仅 {{agent}}",
         "crossEngineWarning": "切换引擎会重建上下文，可能丢失内容",
-        "favoritesSyncFailed": "收藏未能同步。请重新打开重试；被控电脑可能需要更新。"
+        "favoritesSyncFailed": "收藏未能同步。请重新打开重试；被控电脑可能需要更新。",
+        "railRemoteProviderGroup": "{{provider}} · {{device}} · 供应商组"
       }
     },
     "permissionSelector": {

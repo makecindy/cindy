@@ -67,6 +67,8 @@ export interface StartRemoteAgentDeps {
   mapEvent?: (kind: RemoteAgentKind) => ((event: AgentEvent) => AgentEvent) | undefined;
   /** 本机 Codex 程序(给对方的 Codex 提供 exec-server 执行环境)；缺省时不提供。 */
   codexPath?: () => string | undefined;
+  /** 这个任务由供应商组分配到那台：告诉那台直接运行，不再进入它自己的组(防转圈)。 */
+  groupAssigned?: boolean;
   newId(): string;
   log?: {
     info(message: string, meta?: Record<string, unknown>): void;
@@ -263,6 +265,7 @@ export async function startRemoteAgentSession(
     ancestorFiles,
     personal: collectedPersonal?.personal ?? { files: [] },
     mcpServers: [...mcp.servers.keys()],
+    ...(deps.groupAssigned ? { groupAssigned: true } : {}),
   };
 
   let startedRaw: Record<string, unknown>;

@@ -467,7 +467,8 @@
         "description": "新しいセッションは割り当てられなくなります。すでにそこで実行中のセッションはそのパソコンに残ります。",
         "lastDescription": "グループ内の最後のパソコンです。外すと {{provider}} のプロバイダーグループは削除されます。",
         "confirm": "グループから外す"
-      }
+      },
+      "sourceGroupOwner": "グループを作成したパソコン"
     },
     "deleteConfirm": {
       "title": "{{provider}} のプロバイダーグループを削除しますか？",
@@ -2825,7 +2826,12 @@
         "statusReady": "利用可能",
         "detailNote": "Agent は {{device}} で動き、そのパソコンのログインとクォータを使います。タスクを新規作成するときにモデル一覧で選ぶと使えます。このプロバイダーを変更するには、そのパソコンの「設定 → モデルプロバイダー」を開いてください。",
         "modelsTitle": "利用できるモデル",
-        "modelsEmpty": "このプロバイダーには、そのパソコンで利用できるモデルがまだありません。"
+        "modelsEmpty": "このプロバイダーには、そのパソコンで利用できるモデルがまだありません。",
+        "rowLabelGroup": "{{provider}} · {{device}} · プロバイダーグループ",
+        "groupBadge_other": "プロバイダーグループ · {{count}} 台のパソコン",
+        "groupNote": "{{device}} はこのプロバイダーをプロバイダーグループにしています。モデル一覧で選んでタスクを新規作成すると、{{device}} がグループの割り当て方式に従って下のいずれかのパソコンにタスクを割り当て、そのパソコンで問題が起きたら別のパソコンに切り替えて続けます。グループを変更するには、{{device}} の「設定 → モデルプロバイダー」を開いてください。",
+        "groupMembersTitle": "グループ内のパソコン",
+        "groupMembersFailed": "グループ内のパソコンの状態を今は取得できません。"
       },
       "genericOAuth": {
         "subtitle": "サブスクリプションアカウント",
@@ -9400,7 +9406,8 @@
         "effortEndSmart": "高精度",
         "railSameEngine": "{{agent}} のみ",
         "crossEngineWarning": "エンジンを切り替えるとコンテキストが再構築され、内容が失われる場合があります",
-        "favoritesSyncFailed": "お気に入りを同期できません。選択画面を開き直してください。接続先の更新が必要な場合があります。"
+        "favoritesSyncFailed": "お気に入りを同期できません。選択画面を開き直してください。接続先の更新が必要な場合があります。",
+        "railRemoteProviderGroup": "{{provider}} · {{device}} · プロバイダーグループ"
       }
     },
     "permissionSelector": {

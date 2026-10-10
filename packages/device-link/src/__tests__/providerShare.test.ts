@@ -144,6 +144,9 @@ describe('provider share identity scrubbing', () => {
     };
     expect(scrubSharedProvider(provider)).toEqual({ id: 'openai-2', name: 'OpenAI', connected: true });
     expect(JSON.stringify(scrubSharedProviderCatalog({ providers: [provider], providerOrder: ['openai-2'] }))).not.toContain('alice');
+    // 供应商组摘要列着组内电脑，只给同账号电脑。
+    expect(scrubSharedProvider({ id: 'anthropic', name: 'Anthropic', group: { members: [{ label: 'Mini' }] } }))
+      .toEqual({ id: 'anthropic', name: 'Anthropic' });
   });
 
   it('drops a login name cut short by the 50-character auto-name limit', async () => {

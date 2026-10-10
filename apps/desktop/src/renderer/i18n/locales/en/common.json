@@ -472,7 +472,8 @@
         "description": "It won’t get new tasks. Tasks already running there stay on that computer.",
         "lastDescription": "It’s the last computer in the group, so removing it deletes the {{provider}} provider group.",
         "confirm": "Remove from Group"
-      }
+      },
+      "sourceGroupOwner": "Hosts the group"
     },
     "deleteConfirm": {
       "title": "Delete the {{provider}} provider group?",
@@ -2832,7 +2833,13 @@
         "statusReady": "Available",
         "detailNote": "The agent runs on {{device}}, using that computer’s sign-in and quota. To use it, choose it in the model list when you start a task. To change this provider, go to Settings → Providers on that computer.",
         "modelsTitle": "Available Models",
-        "modelsEmpty": "This provider has no models available on that computer yet."
+        "modelsEmpty": "This provider has no models available on that computer yet.",
+        "rowLabelGroup": "{{provider}} · {{device}} · Provider Group",
+        "groupBadge_one": "Provider Group · {{count}} computer",
+        "groupBadge_other": "Provider Group · {{count}} computers",
+        "groupNote": "{{device}} made this provider a provider group. When you start a task with it, {{device}} assigns the task to one of the computers below by its group strategy, and moves it to another one if that computer runs into a problem. To change the group, go to Settings → Providers on {{device}}.",
+        "groupMembersTitle": "Computers in the Group",
+        "groupMembersFailed": "Couldn’t get the status of the computers in the group right now."
       },
       "genericOAuth": {
         "subtitle": "Subscription account",
@@ -9419,7 +9426,8 @@
         "effortEndSmart": "Smarter",
         "railSameEngine": "{{agent}} only",
         "crossEngineWarning": "Switching engines rebuilds context and may lose content",
-        "favoritesSyncFailed": "Favorites could not sync. Reopen the picker to retry; the remote computer may need an update."
+        "favoritesSyncFailed": "Favorites could not sync. Reopen the picker to retry; the remote computer may need an update.",
+        "railRemoteProviderGroup": "{{provider}} · {{device}} · Provider Group"
       }
     },
     "permissionSelector": {

@@ -30,6 +30,11 @@ export interface ProviderGroupRouterDeps {
   listBindings(): Record<string, ProviderGroupBinding>;
   /** 这个任务现在是否正在运行一轮。 */
   isTurnRunning(sessionId: string): boolean;
+  /**
+   * 经本组分出去、但不在本机任务表里的运行中任务(同账号其他电脑报来的、刚选中还没报来的)。
+   * 不提供 = 只算本机任务。
+   */
+  externalRunning?(providerId: string, memberKey: string): number;
   now(): number;
   random(): number;
 }
@@ -97,7 +102,7 @@ export function createProviderGroupRouter(deps: ProviderGroupRouterDeps): Provid
         count++;
       }
     }
-    return count;
+    return count + (deps.externalRunning?.(providerId, memberKey) ?? 0);
   }
 
   /** 那台能为新会话提供这个模型：停用、已退役、需要付费的都不算(与新建任务、切模型同一准入)。 */

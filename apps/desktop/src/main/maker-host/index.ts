@@ -116,6 +116,7 @@ import {
   wireSessionToIpc,
 } from '../maker-ipc/register.js';
 import { MAKER_PUSH } from '../maker-ipc/channels.js';
+import { readProviderGroupBinding } from '../provider-group/bindings.js';
 import { tapWindowBroadcast } from '../device-link/broadcast-tap.js';
 import { remoteBackgroundInvoke, remoteInvoke } from '../device-link/index.js';
 import { handleListDevices, defaultDeps as deviceDirectoryDeps } from '../device-link/ipc.js';
@@ -2710,6 +2711,8 @@ export function getMaker(): Maker {
           maxPages: lastPage,
           maxInputBytes: REMOTE_AGENT_PDF_MAX_BYTES,
         }),
+        // 供应商组分配到那台的任务：告诉那台直接运行，不再进入它自己的组(provider-groups.md §4 防转圈)。
+        isGroupAssigned: (sessionId) => readProviderGroupBinding(sessionId) !== null,
         logger: desktopMakerLogger,
       }),
       makerMemory: makerMemoryManager,

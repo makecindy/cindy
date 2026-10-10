@@ -27,8 +27,19 @@ import { describeProviderShareDevice } from '../device-link/providerShareGuest.j
 import { readDeviceProviderViews } from '../remote-agent/controller/deviceCatalog.js';
 import { checkDeviceRoute } from '../remote-agent/controller/deviceRouteCheck.js';
 import { isProviderShareAgentDeviceId } from '../../shared/providerShare.js';
-import { readProviderGroupBinding, writeProviderGroupBinding } from '../provider-group/bindings.js';
-import { getProviderGroupDirectory, getProviderGroupRouter, setProviderGroupTurnProbe } from '../provider-group/runtime.js';
+import {
+  listRemoteProviderGroupBindings,
+  readProviderGroupBinding,
+  writeProviderGroupBinding,
+} from '../provider-group/bindings.js';
+import { createProviderGroupLeaseReporter, type ProviderGroupLeaseReporter } from '../provider-group/leaseReporter.js';
+import {
+  getProviderGroupDirectory,
+  getProviderGroupRemoteClient,
+  getProviderGroupRemoteGroups,
+  getProviderGroupRouter,
+  setProviderGroupTurnProbe,
+} from '../provider-group/runtime.js';
 import {
   createProviderGroupService,
   PROVIDER_GROUP_SUPERSEDED_ERROR,
@@ -3710,6 +3721,7 @@ function resolveSwitchedSessionVendorOptions(sessionId: string): Record<string, 
 }
 let gitSnapshotCoordinator: GitSnapshotCoordinator | null = null;
 const sessionTurnActivityTracker = new SessionTurnActivityTracker();
+let providerGroupLeaseReporter: ProviderGroupLeaseReporter | null = null;
 const reviewRunOwner: ReviewRunOwner = { instanceId: randomUUID(), processId: process.pid };
 const sessionTurnLeaseTracker = new SessionTurnLeaseTracker({
   getDbClient,
@@ -7436,14 +7448,22 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   async function applyProviderGroupAssignment(o: CreateOpts): Promise<ProviderGroupStartContext | null> {
     if (!providerGroupService || !o.id || o.remoteHostId) return null;
     if (typeof o.model !== 'string' || !o.model) return null;
-    // 没有建任何组时不读数据库，启动路径与没有这个功能时完全一致。
-    if (Object.keys(listProviderGroups()).length === 0) return null;
+    // 本机没有建组、任务不指向同账号另一台电脑(那台可能建了组)、也没有归组时不读数据库，
+    // 启动路径与没有这个功能时完全一致。
+    const pointsAtOtherComputer = Boolean(o.agentDeviceId) && !isProviderShareAgentDeviceId(o.agentDeviceId);
+    if (Object.keys(listProviderGroups()).length === 0 && !pointsAtOtherComputer && !readProviderGroupBinding(o.id)) {
+      return null;
+    }
     const context = await providerGroupService.assignBeforeStart({
       sessionId: o.id,
       agentKind: o.agentKind,
       model: o.model,
     });
-    if (context?.route.agentDeviceId && o.agentDeviceId === undefined) {
+    if (context?.overrideRoute) {
+      // 另一台电脑上的组选中的可能是任何一台，包括这台自己(改回本机运行)。
+      o.agentDeviceId = context.route.agentDeviceId ?? undefined;
+      o.providerId = context.route.providerId;
+    } else if (context?.route.agentDeviceId && o.agentDeviceId === undefined) {
       o.agentDeviceId = context.route.agentDeviceId;
       o.providerId = context.route.providerId;
     }
@@ -7483,7 +7503,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       typeof o.id === 'string' ? getSessionRuntimeControlSnapshot(o.id).effectiveOverride : null;
     if (runtimeOverride && runtimeOverride.agentKind === o.agentKind) {
       o.model = runtimeOverride.model;
-      o.providerId = runtimeOverride.providerId;
+      // 供应商组分配到另一台电脑(或经另一台电脑的组改到这里)时，来源由那次分配决定：选中的那台上这个
+      // 供应商的 id 可能与原来不同，不让临时调整盖掉。留在本机的照旧按临时调整。
+      const groupDecidesSource = providerGroupStart !== null
+        && (providerGroupStart.overrideRoute || providerGroupStart.route.agentDeviceId !== null);
+      if (!groupDecidesSource) o.providerId = runtimeOverride.providerId;
       o.effort = runtimeOverride.effort ?? undefined;
       o.fastMode = runtimeOverride.fastMode;
     }
@@ -9311,6 +9335,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     router: getProviderGroupRouter(),
     directory: getProviderGroupDirectory(),
     readGroup: readProviderGroup,
+    // 同账号另一台电脑上的组(docs/product-rules/provider-groups.md §4「同账号直连」)。
+    remote: getProviderGroupRemoteGroups(),
+    localDeviceId: getSelfDeviceId,
     readBinding: readProviderGroupBinding,
     writeBinding: (sessionId, binding) => writeProviderGroupBinding(sessionId, binding),
     readSessionRow: readProviderGroupSessionRow,
@@ -9372,6 +9399,17 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     log,
   });
   setProviderGroupTurnProbe((sessionId) => maker.getSession(sessionId)?.isTurnRunning() ?? false);
+  // 经另一台电脑上的组运行的任务：开始 / 结束一轮时报告给组所在电脑，让它的分配看到真实负载。
+  providerGroupLeaseReporter?.dispose();
+  providerGroupLeaseReporter = createProviderGroupLeaseReporter({
+    listRemoteBindings: listRemoteProviderGroupBindings,
+    isTurnRunning: (sessionId) => maker.getSession(sessionId)?.isTurnRunning() ?? false,
+    send: (ownerDeviceId, seq, entries) => getProviderGroupRemoteClient().leases(ownerDeviceId, seq, entries),
+    now: () => Date.now(),
+    log,
+  });
+  const leaseReporter = providerGroupLeaseReporter;
+  sessionTurnActivityTracker.setSessionTurnChangeListener((sessionId) => leaseReporter.notify(sessionId));
   registerMakerMessageDeleteHandler(makerSessionRegistry, {
     getSessionRow: async (sessionId) => {
       const [row] = await getDbClient()

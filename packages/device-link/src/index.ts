@@ -43,6 +43,7 @@ export * from "./providerShareApi.js";
 export * from "./providerShareInvitation.js";
 export * from "./providerShareCatalog.js";
 export * from "./providerShareEnvelope.js";
+export * from "./providerGroup.js";
 export * from "./modelFavorites.js";
 export * from "./sessionListTransport.js";
 export * from './sessionMessageReuse.js';

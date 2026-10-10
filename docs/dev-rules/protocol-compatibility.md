@@ -641,6 +641,36 @@ handler 无 sender 依赖；不加入共享任务访客白名单，不进入自�
 - **暂不支持**：分叉、审查、移动项目、复制到其他电脑、导出 `.cshare`(Agent 会话记录在 B)，入口隐藏、
   主进程拒绝。
 
+## 供应商组：同账号直连(P2a)
+
+产品规则见 [`provider-groups.md`](../product-rules/provider-groups.md) §4、§5、§6.1、§10。组所在电脑 O 把某个供应商建成组后，
+同账号另一台电脑 C 上选了 O 的这个供应商的新任务：C 问 O 该用哪台，再自己直接连到选中的组内电脑运行。
+
+- **新 invoke channel `provider-group:remote`**(`packages/device-link/src/providerGroup.ts`，进同账号 allowlist)，被控端
+  `dispatch.ts` 拦截执行，不落 ipcMain handler；供应商分享受邀者(不在 `PROVIDER_SHARE_CHANNELS`)与共享任务访客一律
+  `CHANNEL_NOT_ALLOWED`。请求 `{ action, ... }`，结构与校验在 `apps/desktop/src/shared/providerGroup.ts`(两端同一份)：
+  - `pick { sessionId, providerId, agentKind, model, exclude[] }` → `{ kind: 'member', member: { key, kind, agentDeviceId, providerId }, label }`
+    / `{ kind: 'unavailable' }` / `{ kind: 'none' }`(没有组或供应商没开放远程调用)。组员坐标是 O 视角(`local` = O 自己)，C 换算成
+    本机位置；选中即给那台记 30s 临时占用；
+  - `cool { providerId, memberKey, cause: 'usage-limit' | 'auth' | 'overload', resetAt? }` → O 冷却那台(`resetAt` 最多信 8 天)；
+    连不上不报，只由 C 自己避开；
+  - `leases { seq, entries: [{ sessionId, providerId, memberKey }] }` → 整体替换 C 正在运行的经组任务，`seq` 只增(C 按时间生成，
+    重启后仍增大)，乱序旧包丢弃，150s 不刷新作废；只用于分摊负载；
+  - `view { providerId }` → 组设置与组员状态(`ProviderGroupView`)。
+  旧 O 回 `CHANNEL_NOT_ALLOWED`：`pick` 按 `none` 处理，任务照旧直接在 O 上运行。
+- **`maker:provider:list` 新增可选字段 `group`**：只对同账号调用方、只加在建了组且「允许被远程调用」的供应商上：
+  `{ strategy, autoSwitch, members: [{ key, kind, agentDeviceId, providerId, label?, paused }] }`(并发上限与权重不外发)。
+  组摘要列着组内电脑，受邀者与共享任务访客拿不到：分享投影里去掉，`scrubSharedProvider` 再兜一层(分享者电脑、受邀者电脑与
+  手机各过一遍)。旧控制端与手机不认识就忽略；新控制端据此在模型列表与设置页收起组员(只看在线电脑的目录)。O 改组后经
+  `maker:provider:changed` 推送让同账号电脑重读目录。
+- **远程 Agent open 载荷新增可选 `groupAssigned: true`**(`remote-agent/wire.ts`)：任务由供应商组分配到这台(本机的组或另一台的组)，
+  这台直接运行、不再进入它自己的组(防转圈)。旧被控端解码时丢弃(它本来没有组)。
+- **本地数据**：C 上经另一台电脑的组分配的任务绑定存 `provider-group-remote-bindings.json`(按账号，与本机组的
+  `provider-group-bindings.json` 分开，降级后旧版本读不到它，不会误认成本机的同名组)。不改数据库与服务端。
+- 实现：`apps/desktop/src/main/provider-group/`(`remoteHandler.ts`、`remoteClient.ts`、`externalLoad.ts`、`leaseReporter.ts`、
+  `service.ts` 的组来源)；回归见同目录 `__tests__/remoteGroup.test.ts`、`remoteHandler.test.ts`、`leaseReporter.test.ts`，
+  `device-link/__tests__/providerShareDispatch.test.ts`(受邀者拒绝与不泄露组摘要)。
+
 ## 事实来源
 
 | 内容                     | 权威来源                                                                                                                                                                                   |

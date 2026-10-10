@@ -158,6 +158,11 @@ describe('wire payloads', () => {
     });
     expect(payload.projectFiles.map((file) => file.path)).toEqual(['AGENTS.md']);
     expect(payload.mcpServers).toEqual(['cindy_memory']);
+    expect(payload).not.toHaveProperty('groupAssigned');
+    // 供应商组分配的任务带防转圈标记；只认 true。
+    const base = { sessionId: 's1', options: { model: 'm' }, workspace: { workingDir: '/p', platform: 'darwin' } };
+    expect(decodeOpenPayload({ ...base, groupAssigned: true }).groupAssigned).toBe(true);
+    expect(decodeOpenPayload({ ...base, groupAssigned: 'yes' })).not.toHaveProperty('groupAssigned');
     expect(() => decodeOpenPayload({ sessionId: 's', options: { model: 'm' }, workspace: { workingDir: '/p', platform: 'beos' } })).toThrow();
   });
 

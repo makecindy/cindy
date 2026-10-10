@@ -91,7 +91,7 @@ import { OllamaProviderDetail } from './OllamaProviderDetail';
 import {
   OwnRemoteProviderDetail,
   OwnRemoteProviderRows,
-  useOwnRemoteProviders,
+  useOwnRemoteProviderList,
 } from './OwnRemoteProviders';
 import { LlamaCppProviderDetail } from './LlamaCppProviderDetail';
 import { MANAGED_LLAMACPP_PROVIDER_ID } from '../../../shared/llamaCpp';
@@ -2424,7 +2424,7 @@ export function ProvidersSection() {
   const selectedShare = selectedShareId
     ? receivedShares.find((share) => share.shareId === selectedShareId) ?? null
     : null;
-  const ownRemoteProviders = useOwnRemoteProviders();
+  const { entries: ownRemoteProviders, hiddenShareIds: groupedShareIds } = useOwnRemoteProviderList();
   const selectedRemote = selectedRemoteKey
     ? ownRemoteProviders.find((entry) => entry.key === selectedRemoteKey) ?? null
     : null;
@@ -3129,6 +3129,7 @@ export function ProvidersSection() {
               {/* 分享给我的供应商(受邀者)：单独成组，没有分享时不显示。 */}
               <ProviderShareReceivedRailGroup
                 selectedShareId={selectedShare?.shareId ?? null}
+                hiddenShareIds={groupedShareIds}
                 onSelect={(shareId) => {
                   setFocusedModel(null);
                   selectShare(shareId);

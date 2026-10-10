@@ -67,6 +67,9 @@ function harness(options: {
     async listCandidates() {
       return [];
     },
+    async readDeviceCatalog() {
+      return [];
+    },
     invalidate: vi.fn(),
   };
   const router = createProviderGroupRouter({
@@ -123,7 +126,7 @@ function harness(options: {
 }
 
 async function flush() {
-  for (let i = 0; i < 20; i++) await Promise.resolve();
+  for (let i = 0; i < 60; i++) await Promise.resolve();
 }
 
 describe('assignBeforeStart', () => {

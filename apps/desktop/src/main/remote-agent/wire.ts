@@ -143,6 +143,11 @@ export interface RemoteAgentOpenPayload {
   sessionId: string;
   /** 能力增量：Agent 使用本机虚拟工作区；新控制端在 open 前必须确认对端 caps 支持。 */
   virtualWorkspace?: boolean;
+  /**
+   * 这个任务已由供应商组分配到这台(docs/product-rules/provider-groups.md §4 防转圈)：直接在这台运行，
+   * 不再进入这台自己的供应商组。可选字段，旧版本解码时丢弃(它本来没有组)。
+   */
+  groupAssigned?: boolean;
   options: RemoteAgentWireStartOptions;
   workspace: RemoteAgentWireWorkspace;
   projectFiles: RemoteAgentWireFile[];
@@ -283,6 +288,7 @@ export function decodeOpenPayload(value: unknown): RemoteAgentOpenPayload {
   return {
     sessionId,
     ...(value.virtualWorkspace === true ? { virtualWorkspace: true } : {}),
+    ...(value.groupAssigned === true ? { groupAssigned: true } : {}),
     options: decodeStartOptions(value.options),
     workspace: decodeWorkspace(value.workspace),
     projectFiles,

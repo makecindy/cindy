@@ -103,7 +103,7 @@ import { createLogger } from '../logger';
 import { projectMobileMessagePage, projectMobileToolPush } from './mobileToolProjection';
 import { normalizeSessionProviderId } from '../maker-host/session-provider-store.js';
 import { readDeviceLinkSettings } from './settings-store';
-import { PLUGIN_OAUTH_CHANNEL } from '@cindy/device-link';
+import { PLUGIN_OAUTH_CHANNEL, PROVIDER_GROUP_REMOTE_CHANNEL } from '@cindy/device-link';
 import { requestPluginOauth, invalidatePluginOauth } from '../plugin-oauth/runtime.js';
 import { dispatchLocalInvoke } from './invoke-registry';
 import {
@@ -391,6 +391,24 @@ let remoteAgentHandler: RemoteAgentHandler | null = null;
 
 export function setRemoteAgentHandler(handler: RemoteAgentHandler | null): void {
   remoteAgentHandler = handler;
+}
+
+/** 供应商组(docs/product-rules/provider-groups.md)：只服务同账号电脑。 */
+export interface ProviderGroupRemoteHandler {
+  /** `provider-group:remote` 请求。 */
+  handle(controller: string, raw: unknown): Promise<unknown>;
+  /** 给同账号电脑的 `maker:provider:list` 补上组摘要(组所属供应商的 `group` 字段)。 */
+  decorateProviderList(result: unknown): unknown;
+}
+let providerGroupRemoteHandler: ProviderGroupRemoteHandler | null = null;
+
+export function setProviderGroupRemoteHandler(handler: ProviderGroupRemoteHandler | null): void {
+  providerGroupRemoteHandler = handler;
+}
+
+/** 组摘要只给同账号电脑：分享受邀者与共享任务访客是其他账号，看不到组内电脑。 */
+function isSameAccountController(src: string): boolean {
+  return !isProviderSharePeer(src) && !isSharedTaskPeer(src);
 }
 
 // Local renderer IPC keeps its sender guard; remote mutations enter the shared action here.
@@ -4247,6 +4265,26 @@ async function executeRemoteInvoke(src: string, payload: InvokePayload | undefin
       };
     }
   }
+  if (payload.channel === PROVIDER_GROUP_REMOTE_CHANNEL) {
+    // 供应商组只给同账号电脑：受邀者的通道清单与共享任务的清单里都没有它，这里再兜一层。
+    if (!isSameAccountController(src)) {
+      return { ok: false, error: { code: 'CHANNEL_NOT_ALLOWED', message: `channel '${payload.channel}' not allowed` } };
+    }
+    const handler = providerGroupRemoteHandler;
+    if (!handler) return { ok: false, error: { code: 'IPC_ERROR', message: '[UNAVAILABLE] provider groups are not ready yet' } };
+    try {
+      return {
+        ok: true,
+        result: await timing.measure('handler', () => runDeviceLinkInvokeContext(
+          { controllerDeviceId: src, channel: payload.channel },
+          () => handler.handle(src, payload.args?.[0]),
+        )),
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return { ok: false, error: { code: 'IPC_ERROR', message: /^\[[A-Z_]+\]/.test(message) ? message : '[INTERNAL] provider group request failed' } };
+    }
+  }
   if (payload.channel === REMOTE_DESKTOP_CHANNEL) {
     try { return { ok: true, result: await timing.measure('handler', () => requestRemoteDesktop(src, payload.args?.[0])) }; }
     catch (error) { return { ok: false, error: { code: 'IPC_ERROR', message: error instanceof Error ? error.message : 'DESKTOP_UNAVAILABLE' } }; }
@@ -4478,8 +4516,12 @@ async function executeRemoteInvoke(src: string, payload: InvokePayload | undefin
         || listingCapabilities.includes(CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2),
         args,
       ));
+    // 供应商组摘要只给同账号电脑(受邀者与共享任务访客另有投影，这里不加，scrubSharedProvider 再兜一层)。
+    const decorated = payload.channel === 'maker:provider:list' && isSameAccountController(src) && providerGroupRemoteHandler
+      ? providerGroupRemoteHandler.decorateProviderList(projected)
+      : projected;
     if (!broadcastTap.isDataOwnerBroadcastScopeCurrent(invocationOwner)) throw new Error('[NOT_FOUND] Session does not exist');
-    return { ok: true, result: projected };
+    return { ok: true, result: decorated };
   } catch (err) {
     // 被控端 handler 的 throwIpcError `[CODE] message` 原样透传,
     // 控制端 renderer 继续用 extractIpcError 解码
@@ -4564,6 +4606,7 @@ export const __testing = {
     inFlightRemoteInvokeCount = 0;
     completedRemoteInvokeResults.clear();
     providerShareDenialLoggedAt.clear();
+    providerGroupRemoteHandler = null;
     completedRemoteInvokeResultBytes = 0;
     inFlightRemoteInvokeResults.clear();
     inFlightRemoteInvokeBytes = 0;

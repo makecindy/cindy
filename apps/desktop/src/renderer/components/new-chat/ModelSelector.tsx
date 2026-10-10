@@ -94,6 +94,8 @@ import {
 import { useDevicesProviders } from '@/hooks/useDevicesProviders';
 import { RemoteSourceMark } from '@/components/icons/RemoteSourceMark';
 import { buildUnifiedRail, remoteAgentProviders } from './unifiedModelSelection';
+import { collectRemoteProviderGroups, remoteProviderEntryKey } from '@/lib/remoteProviderGroups';
+import { useLocalProviderGroups } from '@/features/provider-group/useLocalProviderGroups';
 import { modelPriceDiscountLabelValues, modelPriceDetailRows } from '@/lib/modelPriceFormat';
 import { resolveModelPricePresentation } from '@/lib/modelPricePresentation';
 import {
@@ -1536,12 +1538,47 @@ function ModelSelectorContentView({
     [remoteAgentDevices],
   );
   const remoteDeviceCatalogs = useDevicesProviders(remoteAgentDeviceIds);
+  // 任务所在电脑那一格:本机任务用本机目录与可见性偏好;被控电脑上的任务用被控电脑的目录与它的
+  // 可见性快照(顺序沿用被控端快照,不套本机排序,同远程控制)。
+  const homeDeviceProviders = useDeviceProviders(homeDeviceId);
+  const localProviderGroups = useLocalProviderGroups();
+  // 供应商组(provider-groups.md §10)：组里的电脑与分享收起，只列组那一项。组可以在其他电脑上
+  // (看它们目录里的组摘要)，也可以是任务所在电脑自己建的(本机任务读本机设置，被控电脑上的任务看那台的
+  // 目录)。当前正在用的那一项不收起。
+  const remoteProviderGroups = useMemo(
+    () => collectRemoteProviderGroups(
+      [
+        ...(remoteAgentDevices ?? []).flatMap((device) => {
+          const catalog = remoteDeviceCatalogs.get(device.deviceId);
+          return catalog ? [{ deviceId: device.deviceId, providers: catalog.providers }] : [];
+        }),
+        ...(homeDeviceId ? [{ deviceId: homeDeviceId, providers: homeDeviceProviders.providers }] : []),
+      ],
+      remoteAgentDeviceId && currentProviderId
+        ? [remoteProviderEntryKey(remoteAgentDeviceId, currentProviderId)]
+        : [],
+      homeDeviceId ? [] : Object.values(localProviderGroups),
+    ),
+    [
+      remoteAgentDevices,
+      remoteDeviceCatalogs,
+      remoteAgentDeviceId,
+      currentProviderId,
+      homeDeviceId,
+      homeDeviceProviders.providers,
+      localProviderGroups,
+    ],
+  );
   const remoteAgentGroups = useMemo(() => {
     if (!remoteAgentDevices) return [];
     return remoteAgentDevices.flatMap((device) => {
       const catalog = remoteDeviceCatalogs.get(device.deviceId);
       // 只列那台电脑开了「允许被远程调用」的供应商；一个都没开的电脑整段不出现。
-      const shared = catalog ? remoteAgentProviders(catalog.providers) : [];
+      const shared = catalog
+        ? remoteAgentProviders(catalog.providers).filter(
+          (provider) => !remoteProviderGroups.hidden.has(remoteProviderEntryKey(device.deviceId, provider.id)),
+        )
+        : [];
       if (!catalog || shared.length === 0) return [];
       const entries = unifiedModelEntries({
         providers: shared,
@@ -1555,11 +1592,8 @@ function ModelSelectorContentView({
         ? [{ deviceId: device.deviceId, providers: shared, providerIds }]
         : [];
     });
-  }, [remoteAgentDevices, remoteDeviceCatalogs]);
+  }, [remoteAgentDevices, remoteDeviceCatalogs, remoteProviderGroups]);
   const hasRemoteAgent = remoteAgent !== undefined;
-  // 任务所在电脑那一格:本机任务用本机目录与可见性偏好;被控电脑上的任务用被控电脑的目录与它的
-  // 可见性快照(顺序沿用被控端快照,不套本机排序,同远程控制)。
-  const homeDeviceProviders = useDeviceProviders(homeDeviceId);
   const homeProviders = homeDeviceId ? homeDeviceProviders.providers : localProviders.providers;
   const homeModelVisibilityOverrides = homeDeviceProviders.modelVisibilityOverrides;
   const remoteAgentLocalRailItems = useMemo(() => {
@@ -1596,12 +1630,18 @@ function ModelSelectorContentView({
       const provider = remoteAgentGroups
         .find((group) => group.deviceId === targetDeviceId)
         ?.providers.find((entry) => entry.id === providerId);
-      return t('newChat.modelSelector.unified.railRemoteProvider', {
-        provider: provider ? providerDisplayName(provider, t) : providerId,
-        device: device?.name || targetDeviceId,
-      });
+      const grouped = remoteProviderGroups.groups.has(remoteProviderEntryKey(targetDeviceId, providerId));
+      return t(
+        grouped
+          ? 'newChat.modelSelector.unified.railRemoteProviderGroup'
+          : 'newChat.modelSelector.unified.railRemoteProvider',
+        {
+          provider: provider ? providerDisplayName(provider, t) : providerId,
+          device: device?.name || targetDeviceId,
+        },
+      );
     },
-    [remoteAgentDevices, remoteAgentGroups, t],
+    [remoteAgentDevices, remoteAgentGroups, remoteProviderGroups, t],
   );
 
   // 官方默认推荐 → 一次性**种子收藏**(Chris 2026-08-16 裁决,替代列表里的「默认」

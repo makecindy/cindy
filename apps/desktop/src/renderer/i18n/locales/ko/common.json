@@ -467,7 +467,8 @@
         "description": "새 세션이 더 이상 배정되지 않습니다. 이미 그 컴퓨터에서 실행 중인 세션은 그대로 남습니다.",
         "lastDescription": "그룹의 마지막 컴퓨터입니다. 제외하면 {{provider}} 제공자 그룹이 삭제됩니다.",
         "confirm": "그룹에서 제외"
-      }
+      },
+      "sourceGroupOwner": "그룹을 만든 컴퓨터"
     },
     "deleteConfirm": {
       "title": "{{provider}} 제공자 그룹을 삭제할까요?",
@@ -2825,7 +2826,12 @@
         "statusReady": "사용 가능",
         "detailNote": "Agent는 {{device}}에서 실행되며 그 컴퓨터의 로그인과 할당량을 씁니다. 새 작업을 만들 때 모델 목록에서 선택하면 사용할 수 있습니다. 이 제공자를 바꾸려면 그 컴퓨터의 「설정 → 모델 제공자」로 가세요.",
         "modelsTitle": "사용 가능한 모델",
-        "modelsEmpty": "이 제공자는 그 컴퓨터에서 아직 사용 가능한 모델을 공개하지 않았습니다."
+        "modelsEmpty": "이 제공자는 그 컴퓨터에서 아직 사용 가능한 모델을 공개하지 않았습니다.",
+        "rowLabelGroup": "{{provider}} · {{device}} · 제공자 그룹",
+        "groupBadge_other": "제공자 그룹 · 컴퓨터 {{count}}대",
+        "groupNote": "{{device}}에서 이 제공자를 제공자 그룹으로 만들었습니다. 모델 목록에서 선택해 새 작업을 만들면 {{device}}가 그룹 배정 방식에 따라 아래 컴퓨터 중 한 대에 작업을 배정하고, 그 컴퓨터에 문제가 생기면 다른 컴퓨터로 바꿔 계속합니다. 그룹을 바꾸려면 {{device}}의 「설정 → 모델 제공자」로 가세요.",
+        "groupMembersTitle": "그룹의 컴퓨터",
+        "groupMembersFailed": "지금은 그룹의 컴퓨터 상태를 가져올 수 없습니다."
       },
       "genericOAuth": {
         "subtitle": "구독 계정",
@@ -9400,7 +9406,8 @@
         "effortEndSmart": "더 똑똑하게",
         "railSameEngine": "{{agent}} 전용",
         "crossEngineWarning": "엔진을 전환하면 컨텍스트가 다시 구성되어 내용이 사라질 수 있습니다",
-        "favoritesSyncFailed": "즐겨찾기를 동기화할 수 없습니다. 선택 화면을 다시 여세요. 원격 컴퓨터를 업데이트해야 할 수 있습니다."
+        "favoritesSyncFailed": "즐겨찾기를 동기화할 수 없습니다. 선택 화면을 다시 여세요. 원격 컴퓨터를 업데이트해야 할 수 있습니다.",
+        "railRemoteProviderGroup": "{{provider}} · {{device}} · 제공자 그룹"
       }
     },
     "permissionSelector": {

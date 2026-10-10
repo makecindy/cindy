@@ -337,7 +337,8 @@ function MemberRow({
   );
 }
 
-function memberStatusText(
+/** 组内电脑的状态词(本机的组与另一台电脑上的组的只读列表共用)。 */
+export function memberStatusText(
   t: ReturnType<typeof useTranslation>['t'],
   status: ProviderGroupMemberStatus | undefined,
   locale: string,

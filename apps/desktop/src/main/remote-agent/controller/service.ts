@@ -55,6 +55,8 @@ export interface DeviceAgentServiceDeps {
   mapEvent?: (kind: AgentKind) => ((event: AgentEvent) => AgentEvent) | undefined;
   /** Read 读 PDF 时取文字。 */
   extractPdfText?: PdfTextExtractor;
+  /** 这个任务由供应商组分配(本机的组或另一台电脑上的组)：打开时告诉那台不要再进入它自己的组。 */
+  isGroupAssigned?(sessionId: string): boolean;
   logger: Logger;
 }
 
@@ -128,6 +130,7 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
       poller,
       rgPath: deps.rgPath(),
       codexPath: () => deps.codexPath?.(),
+      ...(opts.sessionId && deps.isGroupAssigned?.(opts.sessionId) ? { groupAssigned: true } : {}),
       prepareMcp: async ({ kind, opts: startOpts, vendorOptions }): Promise<PreparedRemoteMcp> => {
         const extra = await deps.prepareMcpBridge(deps.mcpProviders(), deps.logger, {
           agentKind: kind,

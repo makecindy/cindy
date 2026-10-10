@@ -467,7 +467,8 @@
         "description": "之後不再給它分新任務；已經在它上面執行的任務留在那臺電腦上。",
         "lastDescription": "它是組裡最後一臺電腦，移出後會刪除 {{provider}} 的供應商組。",
         "confirm": "移出組"
-      }
+      },
+      "sourceGroupOwner": "組所在電腦"
     },
     "deleteConfirm": {
       "title": "刪除 {{provider}} 的供應商組？",
@@ -2825,7 +2826,12 @@
         "statusReady": "可用",
         "detailNote": "Agent 在 {{device}} 上執行，使用的是那台電腦的登入和配額。新建任務時在模型列表裡選擇它就能用；要修改這個供應商，請到那台電腦的「設定 → 模型供應商」。",
         "modelsTitle": "可用的模型",
-        "modelsEmpty": "這個供應商在那台電腦上還沒有開放可用的模型。"
+        "modelsEmpty": "這個供應商在那台電腦上還沒有開放可用的模型。",
+        "rowLabelGroup": "{{provider}} · {{device}} · 供應商組",
+        "groupBadge_other": "供應商組 · {{count}} 台電腦",
+        "groupNote": "{{device}} 把這個供應商建成了供應商組。在模型列表裡選它新建任務時，{{device}} 會依組策略把任務分給下面的一台電腦執行，那台出問題時自動換一台繼續。要修改組，請到 {{device}} 的「設定 → 模型供應商」。",
+        "groupMembersTitle": "組內電腦",
+        "groupMembersFailed": "暫時讀不到組內電腦的狀態。"
       },
       "genericOAuth": {
         "subtitle": "訂閱帳號",
@@ -9399,7 +9405,8 @@
         "effortEndSmart": "更聰明",
         "railSameEngine": "僅 {{agent}}",
         "crossEngineWarning": "切換引擎會重建上下文，可能遺失內容",
-        "favoritesSyncFailed": "收藏未能同步。請重新開啟重試；被控電腦可能需要更新。"
+        "favoritesSyncFailed": "收藏未能同步。請重新開啟重試；被控電腦可能需要更新。",
+        "railRemoteProviderGroup": "{{provider}} · {{device}} · 供應商組"
       },
       "modelListAria": "模型清單"
     },

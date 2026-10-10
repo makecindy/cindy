@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  PROVIDER_GROUP_REMOTE_CHANNEL,
   REMOTE_AGENT_CHANNEL,
   REMOTE_AGENT_MAX_INLINE_PAYLOAD_CHARS,
   REMOTE_AGENT_UPLOAD_CHUNK_BYTES,
@@ -22,6 +23,8 @@ describe('remote agent channel', () => {
   // Shared-task guests are refused by the desktop shared-task gate (not in its channel list).
   it('is registered on the same-account allowlist', () => {
     expect(REMOTE_INVOKE_ALLOWLIST.has(REMOTE_AGENT_CHANNEL)).toBe(true);
+    // 供应商组：同账号电脑问组所在电脑该用哪台(受邀者在 Desktop dispatch 被拒)。
+    expect(REMOTE_INVOKE_ALLOWLIST.has(PROVIDER_GROUP_REMOTE_CHANNEL)).toBe(true);
   });
 
   it('parses every op and drops unknown fields', () => {

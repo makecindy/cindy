@@ -5,7 +5,10 @@
  * 目录缓存、冷却、轮询位置都属于当前账号：换账号后另起一份，旧账号还在路上的远端读取只落进旧的那份，
  * 新账号看不到旧账号的电脑与冷却。调用方拿到的是固定的门面，每次调用按当前账号转发。
  */
+import type { ProviderView } from '@cindy/model-providers';
+
 import { activeOwnerScopeKey } from '../appSessionState.js';
+import { readProviderGroupSummary } from '../../shared/providerGroup.js';
 import { getReceivedShares } from '../device-link/providerShareGuest.js';
 import { handleListDevices, defaultDeps as deviceDirectoryDeps } from '../device-link/ipc.js';
 import { remoteBackgroundInvoke } from '../device-link/index.js';
@@ -15,13 +18,17 @@ import { getDesktopProviderService } from '../maker-host/createDesktopProviderSe
 import { readDeviceProviderViews } from '../remote-agent/controller/deviceCatalog.js';
 import { listProviderGroupBindings } from './bindings.js';
 import { createProviderGroupDirectory, type ProviderGroupDirectory } from './directory.js';
+import { createProviderGroupExternalLoad, type ProviderGroupExternalLoad } from './externalLoad.js';
+import { createProviderGroupRemoteClient, type ProviderGroupRemoteClient } from './remoteClient.js';
 import { createProviderGroupRouter, type ProviderGroupRouter } from './router.js';
+import type { ProviderGroupRemoteGroups } from './service.js';
 import { readProviderGroup } from './store.js';
 
 interface OwnerRuntime {
   owner: string;
   directory: ProviderGroupDirectory;
   router: ProviderGroupRouter;
+  externalLoad: ProviderGroupExternalLoad;
 }
 
 let current: OwnerRuntime | null = null;
@@ -39,22 +46,32 @@ function runtimeForActiveOwner(): OwnerRuntime {
     isMobilePlatform: (platform) => isMobilePlatform(platform),
     now: () => Date.now(),
   });
+  const externalLoad = createProviderGroupExternalLoad({ now: () => Date.now() });
   const router = createProviderGroupRouter({
     directory,
     readGroup: readProviderGroup,
     listBindings: listProviderGroupBindings,
     isTurnRunning: (sessionId) => isTurnRunning(sessionId),
+    externalRunning: (providerId, memberKey) => externalLoad.running(providerId, memberKey),
     now: () => Date.now(),
     random: () => Math.random(),
   });
-  current = { owner, directory, router };
+  current = { owner, directory, router, externalLoad };
   return current;
 }
 
 const directoryFacade: ProviderGroupDirectory = {
   resolveMembers: (providerId, config) => runtimeForActiveOwner().directory.resolveMembers(providerId, config),
   listCandidates: (providerId, config) => runtimeForActiveOwner().directory.listCandidates(providerId, config),
+  readDeviceCatalog: (agentDeviceId) => runtimeForActiveOwner().directory.readDeviceCatalog(agentDeviceId),
   invalidate: (agentDeviceId) => runtimeForActiveOwner().directory.invalidate(agentDeviceId),
+};
+
+const externalLoadFacade: ProviderGroupExternalLoad = {
+  running: (providerId, memberKey) => runtimeForActiveOwner().externalLoad.running(providerId, memberKey),
+  recordPick: (controller, sessionId, providerId, memberKey) =>
+    runtimeForActiveOwner().externalLoad.recordPick(controller, sessionId, providerId, memberKey),
+  replaceLeases: (controller, seq, entries) => runtimeForActiveOwner().externalLoad.replaceLeases(controller, seq, entries),
 };
 
 const routerFacade: ProviderGroupRouter = {
@@ -74,6 +91,42 @@ export function getProviderGroupDirectory(): ProviderGroupDirectory {
 
 export function getProviderGroupRouter(): ProviderGroupRouter {
   return routerFacade;
+}
+
+export function getProviderGroupExternalLoad(): ProviderGroupExternalLoad {
+  return externalLoadFacade;
+}
+
+let remoteClient: ProviderGroupRemoteClient | null = null;
+
+/** 问其他电脑上的组(无状态，按调用时的账号经设备互联发出)。 */
+export function getProviderGroupRemoteClient(): ProviderGroupRemoteClient {
+  remoteClient ??= createProviderGroupRemoteClient(remoteBackgroundInvoke);
+  return remoteClient;
+}
+
+/**
+ * 任务生命周期用的「另一台电脑上的组」：组设置读那台目录里的组摘要(与组内电脑状态共用同一份短时缓存)，
+ * 选电脑、冷却与状态经 `provider-group:remote` 问那台。
+ */
+export function getProviderGroupRemoteGroups(): ProviderGroupRemoteGroups {
+  const client = getProviderGroupRemoteClient();
+  return {
+    async readGroup(ownerDeviceId, providerId) {
+      let views: ProviderView[];
+      try {
+        views = await directoryFacade.readDeviceCatalog(ownerDeviceId);
+      } catch {
+        return undefined;
+      }
+      const view = views.find((candidate) => candidate.id === providerId);
+      return view ? readProviderGroupSummary((view as { group?: unknown }).group, providerId) : null;
+    },
+    pick: (ownerDeviceId, input) => client.pick(ownerDeviceId, input),
+    cool: (ownerDeviceId, input) => client.cool(ownerDeviceId, input),
+    view: (ownerDeviceId, providerId) => client.view(ownerDeviceId, providerId),
+    invalidate: (ownerDeviceId) => directoryFacade.invalidate(ownerDeviceId),
+  };
 }
 
 /** register 装配会话表后注入：分配器据此统计「正在运行」。 */
