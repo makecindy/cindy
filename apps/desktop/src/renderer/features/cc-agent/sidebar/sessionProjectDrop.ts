@@ -1,5 +1,6 @@
 import { isSharedTaskPeer } from '@cindy/device-link';
 import type { Session } from '@/lib/ccAgent.types';
+import { isCindyMakeFamilySource } from '../../../../shared/cindyMakeMerge';
 import { isEmptyDraftSession } from '../lib/sessionDisplayTitle';
 import { isRemoteSessionWriteBlocked } from '../lib/remoteSessionWriteGuard';
 import { normalizeWorkingDir, type ProjectNode } from '../lib/projectGrouping';
@@ -15,6 +16,7 @@ export function canOfferSessionProjectMove(session: Session): boolean {
     !session.agentDeviceId &&
     session.source !== 'review' &&
     session.source !== 'bot' &&
+    !isCindyMakeFamilySource(session.source) &&
     session.orcaRole !== 'worker' &&
     !isSharedTaskPeer(session.deviceLinkDeviceId ?? '')
   );

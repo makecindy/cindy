@@ -210,6 +210,25 @@ describe('project move service wiring', () => {
     expect(deps.onSettled).toHaveBeenCalledWith('task');
   });
 
+  it('rejects an unsupported running task before staging or publishing its destination', async () => {
+    h.busy.add('task');
+    h.inspect.mockRejectedValueOnce(
+      Object.assign(new Error('Managed workspace cannot move'), {
+        code: 'UNSUPPORTED_CAPABILITY',
+      }),
+    );
+    expect(await h.move!('task', '/b', () => {})).toMatchObject({
+      ok: false,
+      errorCode: 'UNSUPPORTED_CAPABILITY',
+    });
+    expect(h.row.workingDir).toBe('/a');
+    expect(h.records.size).toBe(0);
+    expect(h.projector!('task')).toBeNull();
+    expect(h.hooks!.hasPending('task')).toBe(false);
+    expect(h.broadcast).not.toHaveBeenCalled();
+    expect(h.actualMove).not.toHaveBeenCalled();
+  });
+
   it('keeps recovered intents until the owner database becomes ready after startup', async () => {
     dispose!();
     h.records.set('task', {

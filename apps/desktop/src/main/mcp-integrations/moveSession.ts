@@ -1,5 +1,6 @@
 import { and, eq } from 'drizzle-orm';
 import type { XdtHelperMcpDeps } from '@cindy/mcps';
+import { isCindyMakeFamilySource } from '../../shared/cindyMakeMerge.js';
 import { sessions, orcaTeams, orcaWorkers, botSessionLinks } from '../localDb/schema.js';
 import { updateSessionInDb } from '../localDb/ipc/sessions.js';
 import * as worktreeStore from '../worktree/worktreeStore.js';
@@ -132,6 +133,12 @@ export async function inspectSessionProjectMove(
   // Review immutability is also enforced by updateSessionInDb for all callers.
   if (target.source === 'review')
     throwIpcError('UNSUPPORTED_CAPABILITY', 'Review task settings are fixed to the source task.');
+  // Make continuation, completion and cleanup rely on this managed workspace binding.
+  if (isCindyMakeFamilySource(target.source))
+    throwIpcError(
+      'UNSUPPORTED_CAPABILITY',
+      'Cindy Make tasks must stay in their managed workspace.',
+    );
   // Bot runtime resolves its workspace from the ownership link, including legacy tasks.
   const [botLink] = await context.client.drizzle
     .select({ botId: botSessionLinks.botId })

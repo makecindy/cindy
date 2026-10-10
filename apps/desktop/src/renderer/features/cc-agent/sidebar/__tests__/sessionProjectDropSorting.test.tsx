@@ -48,14 +48,16 @@ function Harness({
   fallback,
   move,
   reorder,
+  session = task,
 }: {
   cards: boolean;
   fallback: boolean;
   move: ReturnType<typeof vi.fn>;
   reorder: ReturnType<typeof vi.fn>;
+  session?: Session;
 }) {
   const drop = useSessionProjectDrop({
-    getSession: () => task,
+    getSession: () => session,
     getProject: () => project,
     expandProject: vi.fn(),
     onMoveSession: move,
@@ -74,7 +76,7 @@ function Harness({
           id === 'task'
             ? (event: DragEvent) =>
                 startSessionDrag(event, {
-                  sessionId: task.id,
+                  sessionId: session.id,
                   enabled: true,
                   needsDedicatedHandle: false,
                 })
@@ -182,4 +184,52 @@ describe('task moves composed with pinned sorting', () => {
       expect(reorder).toHaveBeenCalledOnce();
     },
   );
+
+  it.each([
+    ['cindy-make', false],
+    ['cindy-make', true],
+    ['cindy-make-merge', false],
+    ['cindy-make-merge', true],
+  ] as const)('keeps ordinary pin sorting for %s (cards=%s)', (sessionSource, cards) => {
+    const move = vi.fn(),
+      reorder = vi.fn();
+    render(
+      <Harness
+        cards={cards}
+        fallback={false}
+        move={move}
+        reorder={reorder}
+        session={{ ...task, source: sessionSource }}
+      />,
+    );
+    const instances = sortableMock.MockSortable.instances;
+    const source = instances[0]!,
+      target = instances.at(-1)!;
+    const moved = source.el.children[0] as HTMLElement;
+    const data = new Map<string, string>();
+    const transfer = {
+      get types() {
+        return [...data.keys()];
+      },
+      effectAllowed: '',
+      setData: (key: string, value: string) => data.set(key, value),
+      getData: (key: string) => data.get(key) ?? '',
+      clearData: () => data.clear(),
+    };
+    sortableMock.MockSortable.active = source;
+    fireEvent.dragStart(screen.getByTestId('task'), { dataTransfer: transfer });
+    (source.options.onStart as () => void)();
+    target.el.append(moved);
+    fireEvent.drop(screen.getByTestId('other'), { dataTransfer: transfer });
+    (source.options.onEnd as (event: unknown) => void)({
+      item: moved,
+      from: source.el,
+      to: target.el,
+      oldIndex: 0,
+      newIndex: target.el.children.length - 1,
+      newDraggableIndex: target.el.children.length - 1,
+    });
+    expect(move).not.toHaveBeenCalled();
+    expect(reorder).toHaveBeenCalledOnce();
+  });
 });
