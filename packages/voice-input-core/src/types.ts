@@ -170,6 +170,15 @@ export type DictationRefinementContext = {
   selectionAfter?: string;
 };
 
+/**
+ * Refinement requests the current managed voice session accepts. `sessionKey`
+ * changes when a reconnect allocates a new session, which starts a fresh count.
+ */
+export type RefineRequestBudget = {
+  sessionKey: string;
+  limit: number;
+};
+
 export type VoiceTimelineEvent =
   | { type: 'start_clicked'; runId: string; at: number }
   | { type: 'first_audio_chunk'; runId: string; at: number; elapsedMs: number }
@@ -187,6 +196,16 @@ export type VoiceTimelineEvent =
   | { type: 'stable_received'; runId: string; at: number; text: string }
   | { type: 'submitted'; runId: string; at: number; text: string; source: 'stable' | 'partial' }
   | { type: 'refine_requested'; runId: string; at: number; text: string }
+  | {
+      type: 'speculative_refine_skipped';
+      runId: string;
+      at: number;
+      /** 'pause': refinement during a speech pause; 'stop': speculative request before ASR finalizes. */
+      stage: 'pause' | 'stop';
+      reason: 'final_request_reserved';
+      requestLimit: number;
+      requestsStarted: number;
+    }
   | { type: 'refine_discarded'; runId: string; at: number; reason: 'final_text_changed' | 'stale_run' | 'cancelled' | 'no_submitted_text' | 'no_editable_range' | 'run_failed'; basedOnText: string }
   | { type: 'refine_accepted'; runId: string; at: number; basedOnText: string; refinedText: string; elapsedMs: number }
   | {
