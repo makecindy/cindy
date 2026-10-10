@@ -28,6 +28,7 @@ import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import { DESKTOP_LOCAL, type RemoteDesktopApi } from '../shared/remoteDesktop';
 import { DEVICE_LINK_PUSH } from '../shared/deviceLinkIpc';
 import { PROVIDER_SHARE_IPC, type ProviderShareCommand } from '../shared/providerShare';
+import { PROVIDER_GROUP_IPC, type ProviderGroupCommand } from '../shared/providerGroup';
 import type { MobileCodexRateLimitsResult } from '@cindy/maker-shared/device-link-contract';
 import type { AppearanceSettings } from '../shared/appearanceSettings';
 import type { DialogueWorkspaceSettingsState } from '../shared/dialogueWorkspaceSettings';
@@ -827,6 +828,7 @@ const fanOutDeviceLinkAccessRevoked = createIpcFanOut('device-link:access-revoke
 const fanOutDeviceLinkControlTargetChanged = createIpcFanOut('device-link:control-target-changed');
 const fanOutDeviceLinkKeepAwakeChanged = createIpcFanOut('device-link:keep-awake-changed');
 const fanOutProviderShareOwnedChanged = createIpcFanOut(PROVIDER_SHARE_IPC.OWNED_CHANGED);
+const fanOutProviderGroupChanged = createIpcFanOut(PROVIDER_GROUP_IPC.CHANGED);
 const fanOutProviderShareReceivedChanged = createIpcFanOut(PROVIDER_SHARE_IPC.RECEIVED_CHANGED);
 const fanOutProviderShareRequested = createIpcFanOut(PROVIDER_SHARE_IPC.REQUESTED);
 const fanOutProviderShareSettled = createIpcFanOut(PROVIDER_SHARE_IPC.SETTLED);
@@ -4536,6 +4538,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     onOpenJoin: fanOutProviderShareOpenJoin,
     onOpenManage: fanOutProviderShareOpenManage,
   },
+  // 供应商组：这台电脑上某个供应商的组设置(只接受本机应用窗口)。
+  providerGroup: {
+    command: (command: ProviderGroupCommand): Promise<unknown> =>
+      ipcRenderer.invoke(PROVIDER_GROUP_IPC.COMMAND, command),
+    onChanged: fanOutProviderGroupChanged,
+  },
   deviceLink: {
     taskMigration: (deviceId: string | null, request: import('@cindy/device-link').TaskMigrationRequest): Promise<import('@cindy/device-link').TaskMigrationView> =>
       ipcRenderer.invoke(TASK_MIGRATION_LOCAL_CHANNEL, deviceId, request),
@@ -4667,6 +4675,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
         expectedOwnerToken?: string,
         expectedAccountCounter?: number,
         historyView?: string,
+        mergeListMessage?: boolean,
       ): Promise<{ ok: true; invalidation?: number }> =>
         ipcRenderer.invoke('device-link:mirror-cache:messages:put', {
           deviceId,
@@ -4676,6 +4685,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
           expectedOwnerToken,
           expectedAccountCounter,
           historyView,
+          mergeListMessage,
         }),
       /** 读侧边栏远程会话列表快照 */
       getSessionList: (): Promise<{
@@ -4772,6 +4782,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     }): Promise<{ host: unknown }> => ipcRenderer.invoke('maker:remote-ssh:update', host),
     remove: (id: string): Promise<{ ok: true }> =>
       ipcRenderer.invoke('maker:remote-ssh:remove', { id }),
+    reviewHostKey: (id: string): Promise<{ updated: boolean }> =>
+      ipcRenderer.invoke('maker:remote-ssh:review-host-key', { id }),
     connect: (id: string): Promise<{ host: unknown }> =>
       ipcRenderer.invoke('maker:remote-ssh:connect', { id }),
     disconnect: (id: string): Promise<{ host: unknown }> =>

@@ -11,6 +11,27 @@
 
 > **增量适用原则**：wire protocol 兼容对所有跨端改动生效，不因是小改而豁免。
 
+## 任务列表提前同步聊天正文
+
+同账号控制端声明 `session-list-messages-v1` 后，`sessions` 订阅同时接收普通用户／助手
+已保存的完整正文、状态与删除事件，复用原有 channel。仅列表接收的 payload
+带 `listMessage: true`，不建立活跃控制意图，也不因正文到达自动拉取整段历史。工具正文、
+思考、附件及超过 200,000 字符的异常长消息仍按需读取；列表显示行数不变。
+共享任务访客和供应商分享不扩展订阅范围。旧控制端未声明能力时保持原来的路由。
+流式增量、SDK 收尾与在途正文补偿只走详情订阅；列表仍显示原活动简介，不缓存未完成前缀。
+列表离线补发按 `sessions` topic 回放，现有每设备队列上限为 2 MiB，容纳 200,000 字符
+正文最坏情况下的 JSON 转义体积；仍受 128 条／5 分钟限制，超预算或过期后由打开时的
+历史核对补齐，不承诺无期限离线预收。桌面预收正文在现有
+缓存写锁内合并并保留结构化历史，从未打开的任务同样计入现有内存回收预算。
+
+`messages:list` / `messages:view` 的 options 可选携带 `messageBodies: { version: 1, known }`，
+known 是消息 ID 与主机提供的 SHA-256 正文指纹对。支持的主机在授权、净化之后返回
+`message-bodies-v1` 包装，只省略指纹吻合的正文，顺序、分页与消息元数据始终重新读取。
+共享 DeviceLinkClient 从本次请求固定的正文快照还原后再交给两端界面。缓存不命中或正文
+变更时仍发送全文；旧主机返回普通页面，新控制端兼容；旧控制端不请求此格式。
+传输去重仅保留有界内存，两端持久展示缓存继续使用原有账号隔离与删除屏障。
+不修改 relay、不新增权限、数据库 migration 或 Mobile 原生指纹。
+
 ## 支付宝已付下一期的升级拒绝
 
 升级报价和确认可返回 HTTP 409 `PLAN_CHANGE_RENEWAL_PREPAID`。Desktop Main 仅放行该
@@ -52,6 +73,11 @@ transport 与 device-link 的 core / review-input / mobile allowlist 均已登�
 该调用。自动继续复用既有 `CONTINUE_AFTER_ERROR_PROMPT` 与 `agentMeta.autoResume`，
 `autoResumeInfo.reason` 新值 `usage-limit-reset`，旧客户端按普通自动续跑行显示。
 Claude Code 终态 error 事件可带 `usageResetAt`（unix ms）。服务端无需改动。
+供应商组自动换电脑(2026-10-09，`docs/product-rules/provider-groups.md` §6.1)复用同一条续跑路径，
+`autoResumeInfo` 新增可选字段 `agentSwitch: { from, to, cause }`(cause 为 `usage-limit` / `auth` /
+`unavailable` / `overload`)，Desktop 与 Mobile 据此显示「{from} {原因}，已换到 {to} 继续」；字段缺失或
+不合法时照常显示 `usage-limit-reset` 的文案，旧客户端忽略该字段。P1 不改远程 Agent 协议：被分配到别的电脑的
+任务就是普通的远程 Agent 任务。
 
 ## Agent 跨设备历史发现与搜索
 

@@ -120,6 +120,9 @@ describe('mobileHomeListCache', () => {
         extraDirs: ['/a', '/b'],
         providerId: 'anthropic',
         totalTokenUsage: 99999,
+        totalCostUsd: 1.5,
+        totalMoney: { amount: 12, currency: 'CNY', approximate: false, kind: 'actual-cost' },
+        contextTokens: 4000,
         attached: true,
         deviceLinkAttached: true,
         hasDraft: true,
@@ -139,6 +142,10 @@ describe('mobileHomeListCache', () => {
     expect(cached.worktreePath).toBe('/repo/demo/.claude/worktrees/x');
     expect(cached.hasDraft).toBe(true);
     expect(cached.hasPausedQueue).toBe(true);
+    // 显示菜单「任务信息」的 Token / 费用在行内展示,冷启动也要有。
+    expect(cached.totalTokenUsage).toBe(99999);
+    expect(cached.totalCostUsd).toBe(1.5);
+    expect(cached.totalMoney).toEqual({ amount: 12, currency: 'CNY', approximate: false, kind: 'actual-cost' });
     // live-only / 大字段被剥除:缓存的设备不是 live 设备,不缓存在线态;统计字段列表行不消费。
     expect(cached.attached).toBeUndefined();
     expect(cached.deviceLinkAttached).toBeUndefined();
@@ -146,7 +153,7 @@ describe('mobileHomeListCache', () => {
     expect(cached.sdkSessionId).toBeUndefined();
     expect(cached.extraDirs).toBeUndefined();
     expect(cached.providerId).toBeUndefined();
-    expect(cached.totalTokenUsage).toBeUndefined();
+    expect(cached.contextTokens).toBeUndefined();
   });
 
   it('drops orca worker sessions, deleted sessions and unstamped sessions', async () => {

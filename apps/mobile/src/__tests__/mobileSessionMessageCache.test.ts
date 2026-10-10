@@ -179,6 +179,19 @@ describe('mobileSessionMessageCache', () => {
     expect(cached[1].content).toBe('second');
   });
 
+  it('merges list messages without losing earlier history and serializes rapid updates', async () => {
+    const { cacheSessionMessages, cacheSessionListMessage, getCachedSessionMessages } = await import('@/session/mobileSessionMessageCache');
+    await cacheSessionMessages('host-a', 'session-1', [makeMessage({ id: 'old', clientId: 'old', createdAt: isoAt(1) })]);
+    const content = '未截断的聊天正文。'.repeat(2000);
+    await Promise.all([
+      cacheSessionListMessage('host-a', 'session-1', makeMessage({ id: 'new', clientId: 'new', createdAt: isoAt(2), content: 'first' })),
+      cacheSessionListMessage('host-a', 'session-1', makeMessage({ id: 'new', clientId: 'new', createdAt: isoAt(2), content })),
+    ]);
+    const rows = await getCachedSessionMessages('host-a', 'session-1');
+    expect(rows.map(row => row.id)).toEqual(['old', 'new']);
+    expect(rows[1].content).toBe(content);
+  });
+
   it('returns [] for missing cache or blank ids', async () => {
     const { getCachedSessionMessages, cacheSessionMessages } = await import('@/session/mobileSessionMessageCache');
 

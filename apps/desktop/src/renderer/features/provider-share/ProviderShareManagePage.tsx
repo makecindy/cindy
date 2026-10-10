@@ -1,6 +1,6 @@
 /**
- * 「分享 {供应商}」管理页(设计稿场景 2；产品规则 §7.2)。从设置 → 模型供应商的「管理分享」
- * 进入，可返回。只列**这台电脑**上的分享：待审批申请、已分享的人与按模型的用量。
+ * 「{供应商} · 远程与分享」页(供应商分享 §7.2；供应商组 §10)。从设置 → 模型供应商的「管理分享」
+ * 或「供应商组」进入，可返回。只列**这台电脑**上的设置：供应商组、待审批申请、已分享的人与按模型的用量。
  *
  * 打开期间每次 OWNED_CHANGED 都按当前时间段重读(main 因此保持快速拉取，申请能尽快出现)；
  * 关闭、恢复、删除、同意、拒绝都立即生效，结果以 toast 说明。
@@ -18,6 +18,7 @@ import { toast } from '@/lib/toast';
 import { formatModelShort } from '@/lib/usageFormat';
 import { cn } from '@/lib/utils';
 import { mapIpcErrorToI18nKey } from '@/utils/ipcError';
+import { ProviderGroupSection } from '@/features/provider-group/ProviderGroupSection';
 
 import type {
   ProviderShareMemberView,
@@ -204,9 +205,24 @@ export function ProviderShareManagePage({
         </div>
         <div className="flex min-w-[240px] flex-1 flex-col gap-1">
           <h2 className="text-16 font-medium leading-[1.3] text-[var(--settings-section-title)]">
-            {t('providerShare.manage.title', { provider: providerName })}
+            {t('providerGroup.page.title', { provider: providerName })}
           </h2>
           <p className="text-13 leading-[1.5] text-[var(--settings-section-desc)]">
+            {selfDeviceName
+              ? t('providerGroup.page.descriptionWithDevice', { provider: providerName, device: selfDeviceName })
+              : t('providerGroup.page.description', { provider: providerName })}
+          </p>
+        </div>
+      </div>
+
+      <ProviderGroupSection providerId={providerId} providerName={providerName} />
+
+      <div className="mt-8 flex shrink-0 flex-wrap items-start gap-3">
+        <div className="flex min-w-[240px] flex-1 flex-col gap-1">
+          <h3 className="text-13 font-medium text-[var(--settings-section-title)]">
+            {t('providerGroup.page.shareTitle')}
+          </h3>
+          <p className="text-12 leading-[1.5] text-[var(--settings-section-desc)]">
             {selfDeviceName
               ? t('providerShare.manage.descriptionWithDevice', { provider: providerName, device: selfDeviceName })
               : t('providerShare.manage.description', { provider: providerName })}

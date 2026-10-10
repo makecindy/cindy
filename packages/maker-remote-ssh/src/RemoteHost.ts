@@ -380,6 +380,7 @@ export class RemoteHost {
    * Reset at the start of every connect attempt.
    */
   private hostKeyError: string | null = null;
+  private hostKeyMismatch: HostSnapshot['hostKeyMismatch'];
   /**
    * 已登记的 remote forwarding 愿望清单 (key = localHost:localPort)。
    * 连接断开不清空 — 重连成功后 doConnect 会逐个 re-arm, 尽量绑回原端口。
@@ -416,6 +417,7 @@ export class RemoteHost {
     if (next.id !== this.cfg.id) {
       throw new Error(`RemoteHost.updateConfig: id mismatch (${next.id} != ${this.cfg.id})`);
     }
+    this.hostKeyMismatch = undefined;
     this.cfg = next;
     this.events.emit('status', this.snapshot());
   }
@@ -425,6 +427,7 @@ export class RemoteHost {
       config: this.cfg,
       status: this.status,
       lastError: this.lastError,
+      hostKeyMismatch: this.hostKeyMismatch ? { ...this.hostKeyMismatch } : undefined,
       lastAuthLabel: this.lastAuthLabel,
       statusChangedAt: this.statusChangedAt,
     };
@@ -1176,6 +1179,7 @@ export class RemoteHost {
     }
     // mismatch
     if (isCurrentAttempt()) {
+      this.hostKeyMismatch = { host: storeKey, trusted: stored!, presented };
       this.hostKeyError = this.hostKeyFailure({
         kind: 'mismatch', host: storeKey, filePath: store.filePath, fingerprint: presented,
       });
@@ -1204,8 +1208,8 @@ export class RemoteHost {
         `\nThe entry key is "${details.host}".\nIf you have verified that this change is trustworthy, quit Cindy, ` +
         `remove only this entry, keep the file and all other hosts, then reconnect. ` +
         `The new fingerprint will be saved on first connection. Do not delete the entire file.`
-      : '\nVerify the change with the server administrator before updating the trusted host key store.';
-    return `Remote host key for ${details.host} changed (${details.fingerprint}) and no longer matches the ` +
+      : '\nCindy does not read ~/.ssh/known_hosts. Verify the change with the server administrator before updating the trusted host key store.';
+    return `SSH host key changed for ${details.host} (${details.fingerprint}) and no longer matches the ` +
       `key previously trusted by Cindy. This may mean the server was reinstalled or a man-in-the-middle attack. ` +
       `Connection refused.${recovery}`;
   }
@@ -1236,6 +1240,7 @@ export class RemoteHost {
     };
     this.setStatus('connecting');
     this.hostKeyError = null;
+    this.hostKeyMismatch = undefined;
     this.lastAuthError = null;
 
     let auth;
@@ -1345,6 +1350,7 @@ export class RemoteHost {
         // Reject with the friendly message so IPC layer's toast also gets
         // the actionable copy (it pulls from `.message`).
         const rejectErr = new Error(this.lastError);
+        if (this.hostKeyMismatch) Object.assign(rejectErr, { code: 'SSH_HOST_KEY_MISMATCH' });
         // Preserve original for tests / debugging that key off message text.
         (rejectErr as Error & { cause?: unknown }).cause = err;
         reject(rejectErr);
@@ -1417,6 +1423,11 @@ export class RemoteHost {
       this.setStatus('disconnected');
       return;
     }
+    if (this.hostKeyError) {
+      this.clearReconnectTimer();
+      this.setStatus('failed');
+      return;
+    }
     // Auth failures are deterministic — retrying with the same agent / key
     // produces the same outcome. Fail fast so the user sees the actionable
     // hint immediately instead of waiting 30+ s for the backoff to give up.
@@ -1455,7 +1466,7 @@ export class RemoteHost {
       void this.startConnectAttempt().catch((err) => {
         // doConnect already set status=failed and recorded lastError.
         // If we still have attempts left, schedule again.
-        if (this.userDisconnected) return;
+        if (this.userDisconnected || this.hostKeyError) return;
         if (this.reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
           this.scheduleReconnect();
         } else {

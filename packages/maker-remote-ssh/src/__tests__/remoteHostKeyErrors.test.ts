@@ -51,6 +51,7 @@ describe("SSH host key connection errors", () => {
     const host = new RemoteHost(config, { logger, hostKeys: store });
     const error = await host.connect().catch((e: Error) => e);
     expect(error).toBeInstanceOf(Error);
+    expect(error).toMatchObject({ code: "SSH_HOST_KEY_MISMATCH" });
     const message = (error as Error).message;
     expect(message).toContain(filePath);
     expect(message).toContain('"example.com:2222"');
@@ -59,6 +60,11 @@ describe("SSH host key connection errors", () => {
     expect(message).toContain("Do not delete the entire file");
     expect(message).not.toContain("maker's known hosts");
     expect(host.snapshot().lastError).toBe(message);
+    expect(host.snapshot().hostKeyMismatch).toEqual({
+      host: "example.com:2222",
+      trusted: "SHA256:old",
+      presented: hostKeyFingerprint(Buffer.from("changed-key")),
+    });
     expect(store.set).not.toHaveBeenCalled();
   });
 

@@ -45,6 +45,7 @@ export * from "./providerShareCatalog.js";
 export * from "./providerShareEnvelope.js";
 export * from "./modelFavorites.js";
 export * from "./sessionListTransport.js";
+export * from './sessionMessageReuse.js';
 
 export * from "./clipboardSync.js";
 export * from "./clipboardSyncFailure.js";

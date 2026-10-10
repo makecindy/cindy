@@ -11,12 +11,13 @@
  *     this card, since the lightbox is meant to magnify a known-good image.
  */
 
-import { ImageOff } from 'lucide-react';
+import { ImageOff, LoaderCircle } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils';
 import { Tooltip } from '@/components/ui/tooltip';
 
 interface ImageMissingPlaceholderProps {
+  status?: 'loading' | 'missing' | 'unavailable';
   filename: string;
   className?: string;
   /** Pixel cap to roughly match the original image bounds. */
@@ -24,6 +25,7 @@ interface ImageMissingPlaceholderProps {
 }
 
 export function ImageMissingPlaceholder({
+  status = 'unavailable',
   filename,
   className,
   maxWidth = 280,
@@ -40,14 +42,29 @@ export function ImageMissingPlaceholder({
       )}
       style={{ maxWidth, minHeight: 140 }}
     >
-      <ImageOff className="h-8 w-8 opacity-60" aria-hidden="true" />
-      <div className="text-xs font-medium">{t('chat.imageMissing.title')}</div>
+      {status === 'loading' ? (
+        <span
+          className="inline-flex animate-spin motion-reduce:animate-none opacity-60"
+          aria-hidden="true"
+        >
+          <LoaderCircle className="h-8 w-8" />
+        </span>
+      ) : (
+        <ImageOff className="h-8 w-8 opacity-60" aria-hidden="true" />
+      )}
+      <div className="text-xs font-medium">
+        {t(
+          status === 'missing'
+            ? 'chat.imageMissing.title'
+            : status === 'loading'
+              ? 'chat.imageMissing.loading'
+              : 'chat.imageMissing.unavailable',
+        )}
+      </div>
       {/* v5: 原生 title 替换为 Radix Tooltip(mono) — 文件名走 mono 风格。 */}
       <Tooltip.Root>
         <Tooltip.Trigger asChild>
-          <div className="max-w-full truncate text-11 opacity-75">
-            {filename}
-          </div>
+          <div className="max-w-full truncate text-11 opacity-75">{filename}</div>
         </Tooltip.Trigger>
         <Tooltip.Content variant="mono">{filename}</Tooltip.Content>
       </Tooltip.Root>

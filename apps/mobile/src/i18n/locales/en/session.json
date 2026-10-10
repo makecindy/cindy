@@ -7,6 +7,7 @@
   },
   "common": {
     "modelHiddenReselect": "{{model}} is turned off. Choose an enabled model before sending.",
+    "modelUnavailableReselect": "{{model}} is no longer available on this computer. Choose another model before sending.",
     "cancel": "Cancel",
     "dismissRecommendation": "Dismiss recommendation",
     "delete": "Delete",
@@ -301,6 +302,7 @@
     "selectDeviceError": "Select a device.",
     "enterProjectPath": "Enter the project path on the computer.",
     "enterModel": "Enter a model.",
+    "modelLoading": "Loading model…",
     "enterFirstMessageOrAttachment": "Enter a first message or add an attachment.",
     "noSessionIdReturned": "Could not confirm that the new session was created on the remote computer. Sync again to check.",
     "sessionIdNotAdopted": "The Cindy version on the remote computer is incompatible. Update it and try again.",
@@ -528,6 +530,7 @@
     "taskAlreadyCreated": "This task already exists on the computer. Its saved messages will resume there."
   },
   "remoteError": {
+    "REMOTE_AGENT_GROUP_UNAVAILABLE": "No computer in the provider group can run this task right now. They may be offline, paused, cooling down, or missing this model. Check the group on this provider’s Remote & Sharing page on the computer.",
     "REMOTE_DAEMON_CLOSED": "The remote connection dropped, possibly during an update. This turn has ended. Send the message again.",
     "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "Local file/image attachments aren't accessible in remote sessions. Paste the content directly instead.",
     "AUTO_REVIEW_UNAVAILABLE": "Auto approve could not reach a decision, so actions that need approval now need your confirmation. Switch this session to Full access if you would rather not be interrupted. That mode is higher risk.",

@@ -7,6 +7,7 @@
   },
   "common": {
     "modelHiddenReselect": "{{model}} 已關閉，請選擇已開啟的模型後再傳送。",
+    "modelUnavailableReselect": "{{model}} 在這台電腦上已無法使用，請重新選擇模型後再傳送。",
     "cancel": "取消",
     "dismissRecommendation": "關閉推薦",
     "delete": "刪除",
@@ -301,6 +302,7 @@
     "selectDeviceError": "請選擇裝置。",
     "enterProjectPath": "請輸入電腦端專案路徑。",
     "enterModel": "請輸入模型。",
+    "modelLoading": "正在讀取模型…",
     "enterFirstMessageOrAttachment": "請輸入首條訊息或新增附件。",
     "noSessionIdReturned": "無法確認遠端電腦上的新任務已建立，請重新同步後查看。",
     "sessionIdNotAdopted": "遠端電腦上的 Cindy 版本不相容，請更新後重試。",
@@ -528,6 +530,7 @@
     "taskAlreadyCreated": "電腦上已建立這個任務，已保存的訊息會在原任務中繼續傳送。"
   },
   "remoteError": {
+    "REMOTE_AGENT_GROUP_UNAVAILABLE": "供應商組裡的電腦現在都不能執行這個任務：可能都離線、已暫停分配、正在冷卻，或沒有這個模型。可以在電腦上這個供應商的「遠端與分享」頁查看組內電腦。",
     "REMOTE_DAEMON_CLOSED": "遠端連線中斷了，可能正在更新。這一輪已經結束，請重新傳送。",
     "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "遠端任務無法存取本地檔案或圖片附件。請直接貼上內容。",
     "AUTO_REVIEW_UNAVAILABLE": "自動審批暫時無法給出判斷，需要審批的操作已改為由你確認。想少被打斷，可以把任務切到「完全訪問」，但風險更高。",

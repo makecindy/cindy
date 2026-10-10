@@ -205,7 +205,6 @@
       "descriptionOff": "開啟後，你的其他電腦和你分享的人可以用這個供應商的模型。關閉期間，已有的分享暫時無法使用，不會被刪除。"
     },
     "manage": {
-      "title": "分享 {{provider}}",
       "description": "分享給他人後，對方可以在自己的任務裡選用 {{provider}} 的模型。Agent 在這臺電腦上執行，用量計入你的 {{provider}}；對方的檔案和指令仍在對方電腦上執行。",
       "descriptionWithDevice": "分享給他人後，對方可以在自己的任務裡選用 {{provider}} 的模型。Agent 在這臺電腦（{{device}}）上執行，用量計入你的 {{provider}}；對方的檔案和指令仍在對方電腦上執行。",
       "createLink": "產生分享連結",
@@ -396,6 +395,109 @@
       "approvedBody": "{{name}} 已同意分享 {{provider}}",
       "rejectedTitle": "分享申請未通過",
       "rejectedBody": "{{name}} 沒有同意分享 {{provider}}"
+    }
+  },
+  "providerGroup": {
+    "row": {
+      "label": "供應商組",
+      "description": "把多臺電腦上的這個供應商合成一組，自動分配，出問題自動換一臺",
+      "summary_other": "{{count}} 臺電腦 · {{strategy}}",
+      "setUp": "設定供應商組",
+      "manage": "管理供應商組"
+    },
+    "page": {
+      "title": "{{provider}} · 遠端與分享",
+      "description": "這臺電腦上 {{provider}} 的供應商組與分享設定。",
+      "descriptionWithDevice": "這臺電腦（{{device}}）上 {{provider}} 的供應商組與分享設定。",
+      "shareTitle": "分享"
+    },
+    "section": {
+      "title": "供應商組",
+      "addComputer": "新增電腦",
+      "delete": "刪除供應商組",
+      "empty": "還沒有供應商組。加入其他電腦上的 {{provider}}，這臺電腦上的任務會自動選一臺執行。",
+      "loading": "正在讀取供應商組…",
+      "loadFailed": "未能讀取供應商組",
+      "note": "這臺電腦上的任務按組分配，Agent 在被選中的電腦上執行；你的其他電腦和你分享的人經這臺電腦使用時，暫時仍在這臺電腦上執行。"
+    },
+    "strategy": {
+      "label": "組策略",
+      "least": "最少佔用",
+      "round": "輪詢",
+      "order": "依順序",
+      "weight": "依權重",
+      "description": {
+        "least": "新任務給正在執行任務最少的那臺",
+        "round": "新任務依序分給可用的電腦",
+        "order": "排在前面的優先，前面的不可用才用後面的",
+        "weight": "依權重比例分配新任務"
+      }
+    },
+    "autoSwitch": {
+      "label": "自動換電腦",
+      "description": "組裡的電腦達到用量上限、登入失效或連不上時，自動換一臺接著執行"
+    },
+    "member": {
+      "local": "本機",
+      "sourceDevice": "我的其他電腦",
+      "sourceShare": "來自 {{name}} 的分享",
+      "runningLabel": "執行中 / 上限",
+      "limitAria": "{{name}} 的並行上限",
+      "limitOption_other": "最多 {{count}} 個",
+      "weightAria": "{{name}} 的權重",
+      "weightOption": "權重 {{weight}}",
+      "localAria": "本機參與分配",
+      "pause": "暫停分配",
+      "resume": "恢復分配",
+      "remove": "移出組",
+      "status": {
+        "checking": "正在檢查…",
+        "available": "可用",
+        "full": "已滿",
+        "paused": "已暫停分配",
+        "cooling": "冷卻中",
+        "coolingUntil": "冷卻中 · 約 {{time}} 恢復",
+        "offline": "離線",
+        "unavailable": {
+          "provider-off": "那臺電腦沒有對這個供應商開啟「允許遠端呼叫」",
+          "disconnected": "供應商未連線或已停用",
+          "share-paused": "分享已暫停",
+          "share-removed": "分享已刪除"
+        }
+      },
+      "removeConfirm": {
+        "title": "把 {{name}} 移出供應商組？",
+        "description": "之後不再給它分新任務；已經在它上面執行的任務留在那臺電腦上。",
+        "lastDescription": "它是組裡最後一臺電腦，移出後會刪除 {{provider}} 的供應商組。",
+        "confirm": "移出組"
+      }
+    },
+    "deleteConfirm": {
+      "title": "刪除 {{provider}} 的供應商組？",
+      "description": "之後這臺電腦上的新任務都在本機執行；已經分到其他電腦的任務留在那臺電腦上。",
+      "confirm": "刪除供應商組"
+    },
+    "add": {
+      "title": "把電腦加入 {{provider}} 的供應商組",
+      "sourceAria": "電腦來源",
+      "tabAvailable": "已經能用的",
+      "tabLink": "分享連結",
+      "availableDescription": "這臺電腦已經能用的 {{provider}}：你的其他電腦和別人分享給你的，與模型清單裡的遠端供應商一致。勾選即可加入，不需要再申請。",
+      "loading": "正在尋找可以加入的電腦…",
+      "loadFailed": "未能讀取可以加入的電腦",
+      "empty": "沒有可以加入的電腦。在其他電腦上對 {{provider}} 開啟「允許遠端呼叫」，或用別人的分享連結申請。",
+      "alreadyMember": "已在組裡",
+      "confirm": "加入供應商組",
+      "cancel": "取消",
+      "linkDescription": "貼上別人分享的 {{provider}} 連結，對方同意後，回到「已經能用的」裡勾選加入。",
+      "pasteLink": "貼上分享連結"
+    },
+    "toast": {
+      "added_other": "已把 {{count}} 臺電腦加入 {{provider}} 的供應商組",
+      "removed": "已把 {{name}} 移出供應商組",
+      "paused": "已暫停給 {{name}} 分配任務",
+      "resumed": "已恢復給 {{name}} 分配任務",
+      "deleted": "已刪除 {{provider}} 的供應商組"
     }
   },
   "privacyExit": {
@@ -633,7 +735,8 @@
     "PROVIDER_SHARE_CROSS_REGION_DISABLED": "暫不支援跨區域分享。這個連結來自另一個區域的 Cindy 服務。",
     "REMOTE_AGENT_SHARE_PAUSED": "模型未切換：對方已暫停對你的分享。請換一個模型。",
     "REMOTE_AGENT_SHARE_REMOVED": "模型未切換：這個分享已無法使用（對方刪除了分享或你已退出）。請換一個模型。",
-    "REMOTE_AGENT_SHARE_UNAVAILABLE": "模型未切換：分享的供應商暫時無法使用（對方電腦不在線，或對方暫時關閉了分享）。請稍後再試或換一個模型。"
+    "REMOTE_AGENT_SHARE_UNAVAILABLE": "模型未切換：分享的供應商暫時無法使用（對方電腦不在線，或對方暫時關閉了分享）。請稍後再試或換一個模型。",
+    "SSH_HOST_KEY_MISMATCH": "SSH 主機金鑰已變更"
   },
   "providerError": {
     "AUTH_INVALID": "API 金鑰無效或已過期（401），請檢查金鑰後重試",
@@ -1047,6 +1150,15 @@
         "preparingRuntime": "正在為遠端 {{hostId}} 準備執行時…",
         "installingAgent": "正在遠端 {{hostId}} 安裝 {{agent}}…",
         "failed": "遠端 {{hostId}} 安裝 {{agent}} 失敗：{{message}}。請到 設定 → 遠端機器 → 展開 {{hostId}} 檢視完整日誌。"
+      },
+      "hostKey": {
+        "title": "SSH 主機金鑰已變更",
+        "review": "核對主機金鑰",
+        "explanation": "{{host}} 的身分金鑰與 Cindy 儲存的記錄不一致。請先向伺服器管理員核實新指紋，再更新信任記錄。",
+        "details": "原指紋：{{trusted}}\n新指紋：{{presented}}\n\n伺服器重裝或連線遭冒充都可能導致此變更。請透過伺服器主控台等可信管道核對新指紋。\n\nCindy 信任記錄：{{file}}\nCindy 不讀取 ~/.ssh/known_hosts。更換登入金鑰或刪除後重新新增主機都無法解決此問題。\n\n更新信任後，只替換這台主機的指紋並重新連線，不影響其他主機。",
+        "cancel": "保留原金鑰",
+        "trust": "信任新金鑰並重新連線",
+        "updateFailed": "無法更新主機信任記錄。連線資訊或已存金鑰可能已變更，也可能無法寫入記錄檔。請重新連線以更新指紋，並檢查檔案權限"
       }
     },
     "appearance": {
@@ -9875,7 +9987,9 @@
       "label": "基於原任務建立"
     },
     "imageMissing": {
-      "title": "圖片已丟失"
+      "title": "圖片已丟失",
+      "unavailable": "圖片暫時無法顯示",
+      "loading": "正在載入圖片…"
     },
     "visionBridge": {
       "analyzing": "正在辨識圖片中…（{{count}} 張）",
@@ -10402,6 +10516,12 @@
           "reason": "中斷原因",
           "attempt": "本次重試 {{attempt}}/{{total}}",
           "sessionTotal": "本任務累計重連 {{count}} 次"
+        },
+        "agentSwitch": {
+          "usage-limit": "{{from}} 達到用量上限，已換到 {{to}} 繼續",
+          "auth": "{{from}} 登入已失效，已換到 {{to}} 繼續",
+          "unavailable": "{{from}} 連不上，已換到 {{to}} 繼續",
+          "overload": "{{from}} 的服務繁忙，已換到 {{to}} 繼續"
         }
       },
       "autoResumeSeparator": {
@@ -10663,7 +10783,8 @@
       "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "那臺電腦沒有允許遠端呼叫這個供應商。請在那臺電腦的「設定 → 模型供應商」裡開啟「允許遠端呼叫」，或換一個模型。",
       "REMOTE_AGENT_SHARE_PAUSED": "對方已暫停對你的分享，恢復前不能使用這些模型。可以換成其他模型繼續。",
       "REMOTE_AGENT_SHARE_REMOVED": "這個分享已無法使用（對方刪除了分享或你已退出）。可以換成其他模型繼續。",
-      "REMOTE_AGENT_SHARE_UNAVAILABLE": "分享的供應商暫時無法使用：對方電腦可能不在線，或對方暫時關閉了分享。可以稍後再試，或換成其他模型繼續。"
+      "REMOTE_AGENT_SHARE_UNAVAILABLE": "分享的供應商暫時無法使用：對方電腦可能不在線，或對方暫時關閉了分享。可以稍後再試，或換成其他模型繼續。",
+      "REMOTE_AGENT_GROUP_UNAVAILABLE": "供應商組裡的電腦現在都不能執行這個任務：可能都離線、已暫停分配、正在冷卻，或沒有這個模型。可以到這個供應商的「遠端與分享」頁查看組內電腦。"
     },
     "generatedFiles": {
       "title": "本條訊息生成的檔案",
@@ -13474,17 +13595,12 @@
     "pluginDisabled": "未生效",
     "pluginAgentInvoked": "Agent 自動呼叫",
     "pluginNoCommand": "不可直接使用",
-    "sectionTitle": "引用目錄(只讀)",
+    "sectionTitle": "目錄",
     "empty": "還沒有引用目錄",
     "add": "新增目錄…",
     "addReadOnly": "新增唯讀目錄…",
-    "addWritable": "新增可讀寫目錄…",
-    "writableSectionTitle": "可讀寫目錄",
-    "writableEmpty": "還沒有可讀寫目錄",
     "atLimit": "已達上限 {{max}} 個",
     "remove": "移除 {{name}}",
-    "parentConfirmTitle": "新增父目錄？",
-    "parentConfirmDescription": "選中的目錄是當前工作目錄的父級或祖先。這會擴大 Agent 的可見範圍，使其能看到工作目錄之外的內容。\n\n仍要新增嗎？\n\n{{path}}",
     "writableParentConfirmTitle": "允許讀寫父目錄？",
     "writableParentConfirmDescription": "選中的目錄是當前工作目錄的父級或祖先。Agent 將能讀取、建立、修改和刪除其中的檔案。\n\n仍要允許嗎？\n\n{{path}}",
     "parentConfirmAccept": "仍然新增",

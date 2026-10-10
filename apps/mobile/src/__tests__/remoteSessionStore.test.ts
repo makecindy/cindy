@@ -6668,3 +6668,26 @@ describe('task tag source isolation', () => {
     expect(remoteSessionStore.getSessions().find((row) => row.id === 'b')?.tags).toEqual([tag]);
   });
 });
+
+describe('list message reuse', () => {
+  beforeEach(() => remoteSessionStore.clear());
+  it('keeps explicitly prefetched prose after leaving a task, while stale detail pushes remain blocked', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Host', [session('s1')]);
+    const authority = remoteSessionStore.enterSessionMessageDetail('s1');
+    remoteSessionStore.leaveSessionMessageDetail('s1', 'detail-blur', authority);
+    remoteSessionStore.applyRemotePush('dev-1', 'local-db:messages:created', { sessionId: 's1', message: message('stale', 's1') });
+    const content = '完整正文'.repeat(2000);
+    remoteSessionStore.applyRemotePush('dev-1', 'local-db:messages:created', { sessionId: 's1', listMessage: true,
+      message: { ...message('prefetched', 's1'), content } });
+    expect(remoteSessionStore.getMessages('s1').map(row => row.id)).toEqual(['prefetched']);
+    expect(remoteSessionStore.getMessages('s1')[0].content).toBe(content);
+    remoteSessionStore.enterSessionMessageDetail('s1');
+    expect(remoteSessionStore.getMessages('s1')[0].content).toBe(content);
+  });
+
+  it('does not let another device seed the same task ID', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Host', [session('s1')]);
+    remoteSessionStore.applyRemotePush('other', 'local-db:messages:created', { sessionId: 's1', listMessage: true, message: message('wrong', 's1') });
+    expect(remoteSessionStore.getMessages('s1')).toEqual([]);
+  });
+});

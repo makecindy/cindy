@@ -170,6 +170,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
         expectedOwnerToken?: string,
         expectedAccountCounter?: number,
         historyView?: string,
+        mergeListMessage?: boolean,
       ): Promise<unknown> =>
         ipcRenderer.invoke(DEVICE_LINK_INVOKE.MIRROR_CACHE_PUT_MESSAGES, {
           deviceId,
@@ -179,6 +180,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
           expectedOwnerToken,
           expectedAccountCounter,
           historyView,
+          mergeListMessage,
         }),
       getSessionList: (): Promise<unknown> =>
         ipcRenderer.invoke(DEVICE_LINK_INVOKE.MIRROR_CACHE_GET_SESSION_LIST),

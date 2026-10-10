@@ -110,6 +110,7 @@ import { XDIncMark } from '@/components/icons/XDIncMark';
 import { hasProviderLogo, ProviderLogoMark } from '@/components/icons/ProviderLogoMark';
 import { SortableList } from '@/components/sidebar/SortableList';
 import { ProviderShareEntryButton } from '@/features/provider-share/ProviderShareEntryButton';
+import { ProviderGroupRow } from '@/features/provider-group/ProviderGroupRow';
 import { ProviderShareManagePage } from '@/features/provider-share/ProviderShareManagePage';
 import { ProviderSharePasteButton } from '@/features/provider-share/ProviderSharePasteDialog';
 import {
@@ -3305,6 +3306,16 @@ export function ProvidersSection() {
                         remoteControlEnabled={remoteControlEnabled}
                         pendingShareRequests={pendingShareCounts.get(effectiveSelected.id) ?? 0}
                         onManageShare={() => setShareManageProviderId(effectiveSelected.id)}
+                      />
+                    )}
+                  {/* 供应商组：不依赖「允许被远程调用」，只给本机用时也可以建组(provider-groups.md §10)。 */}
+                  {!effectiveSelected.suspended &&
+                    effectiveSelected.connected &&
+                    effectiveSelected.agents.length > 0 && (
+                      <ProviderGroupRow
+                        key={`provider-group-${effectiveSelected.id}`}
+                        providerId={effectiveSelected.id}
+                        onOpen={() => setShareManageProviderId(effectiveSelected.id)}
                       />
                     )}
                   {!effectiveSelected.suspended &&

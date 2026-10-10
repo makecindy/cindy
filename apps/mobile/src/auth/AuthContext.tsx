@@ -223,8 +223,6 @@ export interface MobileUser {
   name: string;
   avatar: string | null;
   email: string | null;
-  defaultModel: string;
-  defaultEffort: string;
   membershipKind: 'personal' | 'org';
   membershipRole: 'owner' | 'admin' | 'member';
   orgId: string | null;

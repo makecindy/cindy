@@ -4601,7 +4601,9 @@ export function ChatInput({
         },
       });
     }
-    if (onExtraDirsChange) {
+    // A new directory uses the existing Main-issued writable grant. The local
+    // picker cannot authorize paths on an SSH or device-link execution host.
+    if (onWritableDirsChange && writableGrantScope && !remoteHostId && deviceLinkDeviceId === null) {
       const currentExtraDirs = extraDirs ?? [];
       const currentWritableDirs = writableDirs ?? [];
       const totalDirs =
@@ -4611,44 +4613,7 @@ export function ChatInput({
         label:
           totalDirs >= MAX_EXTRA_DIRS
             ? t('extraDirs.atLimit', { max: MAX_EXTRA_DIRS })
-            : t('extraDirs.addReadOnly'),
-        disabled: composerMutationLocked || totalDirs >= MAX_EXTRA_DIRS,
-        run: () => {
-          void pickAndAddExtraDir({
-            extraDirs: currentExtraDirs,
-            otherDirs: currentWritableDirs,
-            workingDir,
-            onChange: onExtraDirsChange,
-            confirm: confirmDialog,
-            parentDirectoryConfirm: {
-              title: t('extraDirs.parentConfirmTitle'),
-              description: (path) => t('extraDirs.parentConfirmDescription', { path }),
-              confirmText: t('extraDirs.parentConfirmAccept'),
-              cancelText: t('extraDirs.parentConfirmCancel'),
-            },
-          });
-        },
-      });
-    }
-    // 远端已有授权仍通过 onWritableDirsChange 展示并可撤销；但这里调用的是控制端
-    // 原生目录选择器，只能在已确认本机会话中提供，不能把本机绝对路径发给 SSH/
-    // device-link 被控端。undefined 表示归属尚未解析，同样 fail closed。
-    if (
-      onWritableDirsChange &&
-      writableGrantScope &&
-      !remoteHostId &&
-      deviceLinkDeviceId === null
-    ) {
-      const currentExtraDirs = extraDirs ?? [];
-      const currentWritableDirs = writableDirs ?? [];
-      const totalDirs =
-        countUserExtraDirs(currentExtraDirs) + countUserExtraDirs(currentWritableDirs);
-      actions.push({
-        id: 'add-writable-dir',
-        label:
-          totalDirs >= MAX_EXTRA_DIRS
-            ? t('extraDirs.atLimit', { max: MAX_EXTRA_DIRS })
-            : t('extraDirs.addWritable'),
+            : t('extraDirs.add'),
         disabled: composerMutationLocked || totalDirs >= MAX_EXTRA_DIRS,
         run: () => {
           void pickAndAddExtraDir({

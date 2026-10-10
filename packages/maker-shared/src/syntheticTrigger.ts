@@ -63,3 +63,27 @@ export function syntheticTriggerKind(text: string): 'continue' | 'generic' | nul
     ? 'continue'
     : 'generic';
 }
+
+/** Raw history and desktop projections identify the same recovery boundary. */
+export function isContinuationMessage(message: {
+  role?: string | null;
+  content?: unknown;
+  agentMeta?: object | null;
+  systemCardType?: string;
+  isContinuationTrigger?: boolean;
+}): boolean {
+  if (message.role !== 'user') return false;
+  if (message.isContinuationTrigger === true
+    || (message.agentMeta as { autoResume?: unknown } | null)?.autoResume === true
+    || message.systemCardType === 'auto-resume') return true;
+  // Mobile persists user text as a JSON envelope; live/desktop rows may already
+  // contain the decoded object or plain text. Only unwrap the outer envelope.
+  let content = message.content;
+  if (typeof content === 'string' && content.trimStart().startsWith('{')) {
+    try { content = JSON.parse(content) as unknown; }
+    catch { return false; }
+  }
+  const text = typeof content === 'string' ? content
+    : (content as { text?: unknown } | null)?.text;
+  return typeof text === 'string' && syntheticTriggerKind(text) === 'continue';
+}

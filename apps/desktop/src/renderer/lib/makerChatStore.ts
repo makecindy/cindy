@@ -151,7 +151,7 @@ import {
   requestRemoteReseed,
 } from '@/features/device-link/remoteProjectsStore';
 import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOrigin';
-import { clearCachedMessages, readCachedMessages } from '@/features/device-link/mirrorCacheClient';
+import { clearCachedMessages, readCachedMessages, persistListMessage } from '@/features/device-link/mirrorCacheClient';
 import {
   noteRemoteSessionSyncCompleted,
   noteRemoteSessionSyncStarted,
@@ -606,6 +606,8 @@ export interface ChatMessage {
    * 但 MessageStream 渲染 null、content 置空不外泄原文。
    */
   isSyntheticTrigger?: boolean;
+  /** Recovery identity retained after the synthetic prompt body is hidden. */
+  isContinuationTrigger?: boolean;
   /**
    * image-local-cache: image attachments for rendering in the message stream.
    * Two shapes coexist:
@@ -8940,7 +8942,12 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
         inboundEvent?.type === 'text' &&
         inboundEvent.data?.isFinal === false &&
         inboundEvent.data?.isFullText !== true;
-      if (push.deviceId && inboundSid && isDurableMessagePush && !isOrdinaryStreamingTextDelta) {
+      const listMessage = (push.payload as { listMessage?: unknown } | null)?.listMessage === true;
+      if (listMessage && inboundSid && !_activeViewSessions.has(inboundSid)) {
+        if (!_lastViewedAt.has(inboundSid)) _lastViewedAt.set(inboundSid, Date.now());
+        _ensureSoftEvictionTimer();
+      }
+      if (push.deviceId && inboundSid && isDurableMessagePush && !isOrdinaryStreamingTextDelta && !listMessage) {
         scheduleRemoteMessageRepair(inboundSid);
       }
       if (inboundSid && isRemoteHeavyInboundChannel(push.channel)) _markInboundEvent(inboundSid);
@@ -8962,6 +8969,11 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
             invalidateHistory: (sessionId) => {
               const state = sessions.get(sessionId);
               if (!state) return;
+              if (listMessage) {
+                bumpMessagesEpoch(sessionId);
+                setState(sessionId, current => ({ ...current, historyLoaded: false }));
+                return;
+              }
               if (getRemoteHistoryView(sessionId)) {
                 // resyncRequired also repairs unrelated durable rows; a full
                 // text snapshot only protects its own live block.
@@ -9003,6 +9015,10 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
         case 'local-db:messages:created':
           // 远程会话的持久化消息(接管路径)→ 注入 in-memory state(同本机)。
           handleMessageCreatedRaw(push.payload, remoteIngress);
+          if (listMessage && push.deviceId && inboundSid) {
+            const row = (push.payload as { message?: Message }).message;
+            if (row && !isBeforeOrAtRendererClearBoundary(inboundSid, row.createdAt)) persistListMessage(push.deviceId, inboundSid, row);
+          }
           break;
         case 'local-db:messages:deleted':
           handleMessageDeletedRaw(push.payload, remoteIngress);
@@ -17067,6 +17083,7 @@ import {
   syntheticTriggerKind,
   UI_ACTION_TRIGGER_PREFIX,
 } from '../../shared/interruptedTurn.js';
+import { isContinuationMessage } from '@cindy/maker-shared/synthetic-trigger';
 export { UI_ACTION_TRIGGER_PREFIX };
 
 /**
@@ -18656,6 +18673,7 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
           content: '',
           isStreaming: false,
           isSyntheticTrigger: true,
+          isContinuationTrigger: isContinuationMessage(m),
           // 中断自动续跑补发的续跑指令带 [UI_ACTION_TRIGGER] 前缀(复用人工「继续」
           // 那条常量),会先命中本分支 —— 但它同样是**自动**动作,必须渲染「已自动
           // 继续」分隔线(MessageStream 对 systemCardType 的处理刻意优先于 synthetic
@@ -18684,6 +18702,7 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
           isStreaming: false,
           isSyntheticTrigger: true,
           systemCardType: 'auto-resume' as const,
+          isContinuationTrigger: true,
           // 展示信息只有「中断自愈」那条路径带(silent-stop 本身没有 error / 次数)。
           // SystemCard 据此二选一:带信息 → 三态重连行;不带 → silent-stop 原来的
           // 「已自动继续」分隔条(见 hasInterruptionContext)。

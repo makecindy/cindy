@@ -13666,6 +13666,51 @@ describe('usage-limit wait (ordinary tasks)', () => {
     ).toBe('superseded');
   });
 
+  it('re-arms the wait after the session is closed for a provider group computer switch', async () => {
+    const sid = 'usage-wait-switch';
+    const { h, candidate } = await failWithLimit(sid, true);
+    const lease = h.coordinator.leaseUsageLimitRecovery(sid, candidate);
+    expect(lease).not.toBeNull();
+    // 交接会关闭旧会话，关闭撤销了限额等待。
+    h.coordinator.onSessionClosed(sid);
+    expect(h.coordinator.armUsageLimitWait(sid, candidate, 9_000_000)).toBe(false);
+    const token = h.coordinator.rearmUsageLimitWait(sid, lease!, 1);
+    expect(typeof token).toBe('number');
+    expect(await h.coordinator.continueAfterUsageLimitReset(sid, token!, INFO)).toBe('resumed');
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+    expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({ type: 'user', content: CONTINUE_AFTER_ERROR_PROMPT });
+  });
+
+  it('can hand the re-armed error back to the reset-time wait as a fresh candidate', async () => {
+    const sid = 'usage-wait-switch-fallback';
+    const { h, candidate } = await failWithLimit(sid, true);
+    const lease = h.coordinator.leaseUsageLimitRecovery(sid, candidate);
+    h.coordinator.onSessionClosed(sid);
+    const token = h.coordinator.rearmUsageLimitWait(sid, lease!, null);
+    // 只登记候选：还不显示等待，直到求出重置时刻再挂上。
+    expect(latestProjection(h.projections).usageLimitWait).toBeNull();
+    expect(h.coordinator.armUsageLimitWait(sid, token!, 9_000_000)).toBe(true);
+    expect(latestProjection(h.projections).usageLimitWait).toEqual({ resumeAt: 9_000_000 });
+  });
+
+  it('does not re-arm after the user took over during the switch', async () => {
+    const cleared = await failWithLimit('usage-wait-switch-clear', true);
+    const lease = cleared.h.coordinator.leaseUsageLimitRecovery('usage-wait-switch-clear', cleared.candidate);
+    cleared.h.coordinator.clearError('usage-wait-switch-clear');
+    expect(cleared.h.coordinator.rearmUsageLimitWait('usage-wait-switch-clear', lease!, 1)).toBeNull();
+
+    const sent = await failWithLimit('usage-wait-switch-send', true);
+    const sentLease = sent.h.coordinator.leaseUsageLimitRecovery('usage-wait-switch-send', sent.candidate);
+    sent.h.coordinator.enqueue('usage-wait-switch-send', makeItem('q-second', 'do something else'));
+    await flush();
+    expect(sent.h.coordinator.rearmUsageLimitWait('usage-wait-switch-send', sentLease!, 1)).toBeNull();
+
+    // 候选令牌对不上(之后又有新错误)时拿不到句柄。
+    const stale = await failWithLimit('usage-wait-switch-stale', true);
+    expect(stale.h.coordinator.leaseUsageLimitRecovery('usage-wait-switch-stale', stale.candidate + 1)).toBeNull();
+  });
+
   it('does not offer a wait for a shared-task guest turn', async () => {
     const h = createHarness();
     const sid = 'usage-wait-guest';

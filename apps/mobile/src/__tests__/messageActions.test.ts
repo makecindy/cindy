@@ -63,7 +63,7 @@ describe('messageActions', () => {
       isTurnFinalAssistant: true,
     })).toBe(true);
 
-    // turn 中间句不挂;流式 assistant 只显示「生成中」也不挂。
+    // turn 中间句与流式 assistant 都不挂操作行。
     expect(mobileMessageShowsActionBar({ ...base, kind: 'assistant' })).toBe(false);
     expect(mobileMessageShowsActionBar({
       ...base,
