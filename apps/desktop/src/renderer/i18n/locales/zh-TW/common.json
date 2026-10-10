@@ -2532,6 +2532,7 @@
           "nameRequired": "請填寫顯示名稱",
           "runtimeRequired": "請至少配置一個 Runtime（填寫它的基礎 URL 和模型）",
           "baseUrlInvalid": "基礎 URL 必須是合法的 http(s) 地址",
+          "baseUrlRequired": "請填寫該 Runtime 的基礎 URL，或把協議改回預設",
           "contextWindowInvalid": "上下文視窗必須是合法的正整數（數字組之間可用分隔符）",
           "requestPathInvalid": "精確請求路徑需以單個 / 開頭，不含片段標識或 .、.. 路徑段；空格和不安全字元請使用百分號編碼",
           "modelRequired": "請至少新增一個模型",
