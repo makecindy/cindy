@@ -3,6 +3,7 @@ import { beforeEach, afterEach, expect, it, vi } from 'vitest';
 const audio = vi.hoisted(() => ({ getMuted: vi.fn(), setMuted: vi.fn() }));
 vi.mock('loudness', () => ({ default: audio }));
 vi.mock('../../logger.js', () => ({ createLogger: () => ({ info: vi.fn(), warn: vi.fn() }) }));
+vi.mock('../../lifecycle', () => ({ onQuit: vi.fn() }));
 
 beforeEach(() => {
   vi.resetModules();
@@ -39,6 +40,47 @@ it('allows a failed last-owner restore to be retried without another mute', asyn
   audio.setMuted.mockRejectedValueOnce(new Error('OS unavailable'));
   await expect(guard.restore(1)).rejects.toThrow();
   await guard.restore(1);
+  expect(audio.setMuted.mock.calls).toEqual([[true], [false], [false]]);
+});
+
+it.each([true, false])('shutdown restores the original mute=%s state for all owners', async (muted) => {
+  audio.getMuted.mockResolvedValue(muted);
+  const { SystemAudioMuteGuard } = await import('../SystemAudioMuteGuard');
+  const guard = new SystemAudioMuteGuard();
+  await guard.mute(1);
+  await guard.mute('remote-desktop');
+  await guard.shutdown();
+  expect(audio.setMuted).toHaveBeenLastCalledWith(muted);
+  const writes = audio.setMuted.mock.calls.length;
+  await expect(guard.mute(2)).rejects.toThrow('SYSTEM_AUDIO_SHUTTING_DOWN');
+  await guard.shutdown();
+  expect(audio.setMuted).toHaveBeenCalledTimes(writes);
+});
+
+it('drains an in-flight mute before restoring and rejects queued mute requests', async () => {
+  let finishRead!: (muted: boolean) => void;
+  audio.getMuted.mockImplementationOnce(() => new Promise<boolean>((resolve) => { finishRead = resolve; }));
+  const { SystemAudioMuteGuard } = await import('../SystemAudioMuteGuard');
+  const guard = new SystemAudioMuteGuard();
+  const muting = guard.mute(1);
+  await vi.waitFor(() => expect(audio.getMuted).toHaveBeenCalledOnce());
+  const queued = expect(guard.mute(2)).rejects.toThrow('SYSTEM_AUDIO_SHUTTING_DOWN');
+  const stopping = guard.shutdown();
+  const late = expect(guard.mute('remote-desktop')).rejects.toThrow('SYSTEM_AUDIO_SHUTTING_DOWN');
+  expect(audio.setMuted).not.toHaveBeenCalled();
+  finishRead(false);
+  await Promise.all([muting, queued, stopping, late]);
+  expect(audio.setMuted.mock.calls).toEqual([[true], [false]]);
+});
+
+it('keeps a failed shutdown restoration available for retry without admitting new mutes', async () => {
+  const { SystemAudioMuteGuard } = await import('../SystemAudioMuteGuard');
+  const guard = new SystemAudioMuteGuard();
+  await guard.mute(1);
+  audio.setMuted.mockRejectedValueOnce(new Error('OS unavailable'));
+  await expect(guard.shutdown()).rejects.toThrow('OS unavailable');
+  await expect(guard.mute(2)).rejects.toThrow('SYSTEM_AUDIO_SHUTTING_DOWN');
+  await guard.shutdown();
   expect(audio.setMuted.mock.calls).toEqual([[true], [false], [false]]);
 });
 

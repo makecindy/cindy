@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 
 import { createLogger } from '../logger.js';
+import { onQuit } from '../lifecycle';
 
 const log = createLogger('voice-input:system-audio');
 
@@ -59,10 +60,12 @@ export class SystemAudioMuteGuard {
   private readonly owners = new Set<AudioMuteOwner>();
   private snapshot: AudioSnapshot | null = null;
   private tail: Promise<void> = Promise.resolve();
+  private shuttingDown = false;
 
   async mute(ownerId: AudioMuteOwner): Promise<void> {
     if (!SUPPORTS_MUTE) return;
     await this.enqueue(async () => {
+      if (this.shuttingDown) throw new Error('SYSTEM_AUDIO_SHUTTING_DOWN');
       if (this.owners.has(ownerId)) return;
       if (this.snapshot === null) {
         this.snapshot = await muteOutputAndReadSnapshot();
@@ -104,6 +107,12 @@ export class SystemAudioMuteGuard {
     });
   }
 
+  shutdown(): Promise<void> {
+    // Close admission before waiting for an in-flight OS operation to finish.
+    this.shuttingDown = true;
+    return this.restoreAll();
+  }
+
   private enqueue(job: () => Promise<void>): Promise<void> {
     const next = this.tail.then(job, job);
     this.tail = next.catch((error) => {
@@ -116,6 +125,13 @@ export class SystemAudioMuteGuard {
 }
 
 export const systemAudioMuteGuard = new SystemAudioMuteGuard();
+
+let shutdownRegistered = false;
+export function registerSystemAudioMuteShutdown(): void {
+  if (shutdownRegistered) return;
+  shutdownRegistered = true;
+  onQuit('voice-input-system-audio', () => systemAudioMuteGuard.shutdown(), 'async');
+}
 
 async function muteOutputAndReadSnapshot(): Promise<AudioSnapshot> {
   if (process.platform === 'darwin') {

@@ -89,7 +89,7 @@ import {
   resolveMicrophonePermissionSnapshot,
   type VoiceInputMicrophonePermissionCache,
 } from './permissions.js';
-import { systemAudioMuteGuard } from './SystemAudioMuteGuard.js';
+import { registerSystemAudioMuteShutdown, systemAudioMuteGuard } from './SystemAudioMuteGuard.js';
 import {
   awaitGlobalOverlayPasteContext,
   getVoiceInputAccessibilityPermissionSnapshot,
@@ -293,7 +293,6 @@ export type DictionaryAdviceIpcResult =
 
 const activeByWebContentsId = new Map<number, ActiveVoiceInput>();
 const destroyedWebContentsListeners = new Set<number>();
-let appRestoreRegistered = false;
 let cachedMicrophonePermission: VoiceInputMicrophonePermissionCache | null = null;
 let rendererVerifiedMicrophonePermission = false;
 let cachedVoiceInputReadiness: VoiceInputReadiness | null = null;
@@ -1875,13 +1874,8 @@ export async function transcribeVoiceInputAudioFile(
  * state transitions, and timeline logging.
  */
 export function registerVoiceInputIpc(): void {
+  registerSystemAudioMuteShutdown();
   registerVoiceInputDataStoreIpc();
-  if (!appRestoreRegistered) {
-    appRestoreRegistered = true;
-    app.once('before-quit', () => {
-      void systemAudioMuteGuard.restoreAll();
-    });
-  }
   const modelSelection = readActiveVoiceInputModelSelection('register');
   log.info('voice input model selection active', {
     path: getVoiceInputModelSelectionConfigPath(),

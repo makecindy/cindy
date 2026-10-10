@@ -6,7 +6,7 @@
  *   - async 并发, 整体超时兜底
  *   - post-async 串行, 必须晚于 async (用于 db close 这种依赖 async 产物的清理)
  *
- * installQuitHandler 只覆盖不触发真实退出的异常分支；真实 process / app 信号路径仍走集成验证。
+ * installQuitHandler 用替身验证退出等待；真实 Electron / OS 行为仍走实机验证。
  */
 
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
@@ -17,7 +17,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import ts from 'typescript';
 
 // lifecycle.ts 里 import { app } from 'electron' —— 用最小 stub 喂给它。
-// 真实退出路径 (信号 / before-quit) 不在本文件覆盖。
+// app.exit 只记录调用，不退出测试进程。
 vi.mock('electron', () => ({
   app: {
     on: vi.fn(),
@@ -25,6 +25,7 @@ vi.mock('electron', () => ({
     quit: vi.fn(),
     exit: vi.fn(),
   },
+  session: { defaultSession: { flushStorageData: vi.fn() } },
 }));
 
 const nativePopupWebContentsIds = vi.hoisted(() => new Set<number>());
@@ -74,7 +75,10 @@ const mocks = vi.hoisted(() => ({
   // render-process-gone 等用例会真的 spawn `sleep 20; kill -9 <vitest pid>`,
   // 慢跑/watch 模式下会把测试进程杀掉。
   spawn: vi.fn(() => ({ unref: vi.fn() })),
+  audio: { getMuted: vi.fn(), setMuted: vi.fn() },
 }));
+
+vi.mock('loudness', () => ({ default: mocks.audio }));
 
 vi.mock('node:child_process', () => ({
   spawn: mocks.spawn,
@@ -114,6 +118,7 @@ async function freshLifecycle() {
 type ProcessEventName =
   | 'SIGINT'
   | 'SIGTERM'
+  | 'SIGBREAK'
   | 'exit'
   | 'uncaughtException'
   | 'unhandledRejection';
@@ -720,6 +725,88 @@ describe('installQuitHandler render-process-gone', () => {
       expect(mocks.spawn).toHaveBeenCalledTimes(1);
     } finally {
       restore();
+    }
+  });
+});
+
+describe('system audio restoration during quit', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useFakeTimers();
+    // Exercise the Windows audio adapter with an in-memory OS replacement.
+    vi.spyOn(process, 'platform', 'get').mockReturnValue('win32');
+    mocks.audio.getMuted.mockResolvedValue(false);
+    mocks.audio.setMuted.mockResolvedValue(undefined);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it('restores audio even when voice-input startup fails while registering its data store', async () => {
+    const { runQuitDisposers } = await freshLifecycle();
+    const { systemAudioMuteGuard, registerSystemAudioMuteShutdown } = await import('../voice-input/SystemAudioMuteGuard');
+    await systemAudioMuteGuard.mute(1);
+    const source = ts.createSourceFile('voice-input/index.ts', readFileSync(join(__dirname, '../voice-input/index.ts'), 'utf8'), ts.ScriptTarget.Latest, true);
+    const entry = source.statements.find((node): node is ts.FunctionDeclaration =>
+      ts.isFunctionDeclaration(node) && node.name?.text === 'registerVoiceInputIpc');
+    expect(entry?.body).toBeDefined();
+    // Execute the production entry body up to its injected startup failure.
+    // This covers cleanup ordering, not full Electron bootstrap / IPC integration.
+    const body = ts.transpileModule(entry!.body!.getText(source), {
+      compilerOptions: { target: ts.ScriptTarget.ESNext },
+    }).outputText;
+    const register = new Function('registerSystemAudioMuteShutdown', 'registerVoiceInputDataStoreIpc', body);
+    expect(() => register(registerSystemAudioMuteShutdown, () => {
+      throw new Error('data store startup failed');
+    })).toThrow('data store startup failed');
+    await runQuitDisposers();
+    expect(mocks.audio.setMuted.mock.calls).toEqual([[true], [false]]);
+  });
+
+  it.each([
+    ['before-quit', 'resolve'], ['uncaughtException', 'resolve'],
+    ['before-quit', 'reject'], ['uncaughtException', 'reject'],
+    ['before-quit', 'timeout'], ['uncaughtException', 'timeout'],
+  ] as const)('%s waits for audio restoration (%s)', async (entry, outcome) => {
+    const listeners = snapshotProcessListeners([
+      'SIGINT', 'SIGTERM', 'SIGBREAK', 'exit', 'uncaughtException', 'unhandledRejection',
+    ]);
+    try {
+      const { onQuit, installQuitHandler } = await freshLifecycle();
+      const { systemAudioMuteGuard, registerSystemAudioMuteShutdown } = await import('../voice-input/SystemAudioMuteGuard');
+      const { app } = await import('electron');
+      registerSystemAudioMuteShutdown();
+      registerSystemAudioMuteShutdown();
+      await systemAudioMuteGuard.mute(1);
+      await systemAudioMuteGuard.mute('remote-desktop');
+      let complete!: () => void;
+      let fail!: (error: Error) => void;
+      mocks.audio.setMuted.mockImplementationOnce(() => new Promise<void>((resolve, reject) => {
+        complete = resolve;
+        fail = reject;
+      }));
+      onQuit('failing-peer', async () => { throw new Error('another disposer failed'); }, 'async');
+      installQuitHandler(50);
+      const quit = (vi.mocked(app.on).mock.calls as unknown as Array<[string, (event: unknown) => void]>)
+        .find(([name]) => name === 'before-quit')![1];
+      const fatal = listeners.added('uncaughtException')[0];
+      const trigger = () => entry === 'before-quit'
+        ? quit({ preventDefault: vi.fn() })
+        : fatal(new Error('fatal test error'), 'uncaughtException');
+      trigger();
+      trigger();
+      await vi.advanceTimersByTimeAsync(49);
+      expect(mocks.audio.setMuted.mock.calls).toEqual([[true], [false]]);
+      expect(app.exit).not.toHaveBeenCalled();
+      if (outcome === 'resolve') complete();
+      if (outcome === 'reject') fail(new Error('OS restore failed'));
+      await vi.advanceTimersByTimeAsync(outcome === 'timeout' ? 1 : 0);
+      expect(app.exit).toHaveBeenCalledExactlyOnceWith(entry === 'before-quit' ? 0 : 1);
+      if (outcome === 'timeout') complete();
+      await vi.advanceTimersByTimeAsync(0);
+    } finally {
+      listeners.restore();
     }
   });
 });
