@@ -94,6 +94,10 @@ vi.mock('../hooks/useOrcaWorkerSelection', () => ({
     workerSessionId: null,
     createOpen: false,
     setCreateOpen: mocks.setCreateOpen,
+    editWorker: null,
+    handleOpenEditWorker: vi.fn(),
+    handleCloseEditWorker: vi.fn(),
+    handleUpdateWorker: vi.fn(),
     handleCreateWorker: vi.fn(),
     handleSwitchFocus: vi.fn(),
     handleArchiveWorker: vi.fn(),
@@ -193,11 +197,13 @@ describe('OrcaWorkerPanel settings navigation wiring', () => {
   it('wires settings navigation for local leads', () => {
     render(<OrcaWorkerPanel leadSessionId="lead-1" deviceId={null} viewVisible />);
     expect(mocks.toolbarProps.onOpenSettings).toBeTypeOf('function');
+    expect(mocks.toolbarProps.onEditWorker).toBeTypeOf('function');
   });
 
   it('fails closed for unresolved device ownership', () => {
     render(<OrcaWorkerPanel leadSessionId="lead-1" viewVisible />);
     expect(mocks.toolbarProps.onOpenSettings).toBeUndefined();
+    expect(mocks.toolbarProps.onEditWorker).toBeUndefined();
   });
 });
 

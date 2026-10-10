@@ -13552,6 +13552,19 @@
         "dirUnavailable": "{{device}} 上的目錄暫時無法存取。請檢查連線或網路磁碟後重試。Worker 沒有建立。"
       }
     },
+    "editWorker": {
+      "title": "編輯 Worker",
+      "submit": "儲存",
+      "closeAria": "關閉編輯 Worker 彈窗",
+      "labelLabel": "標識",
+      "labelHint": "標識用於在團隊內唯一識別這個 Worker，只能包含字母、數字、連字號與底線；改動後 Lead 與各處引用會依新標識定位。",
+      "labelHintAria": "標識說明",
+      "labelPlaceholder": "Worker 標識（留空表示不變更）",
+      "labelInvalid": "標識只能包含字母、數字、連字號與底線",
+      "duplicateLabel": "標識 {{label}} 已被本團隊其他 Worker 使用",
+      "saveFailed": "儲存失敗，請重試",
+      "labelLocked": "該 Worker 的標識已被活躍的插件團隊計畫引用，計畫結束前不能修改；可改角色名，或先釋放該 Worker。"
+    },
     "rolePill": {
       "unread": "未讀更新",
       "worker": "Worker",
@@ -13559,6 +13572,7 @@
       "workerCountSummary_other": "{{totalCount}} 個 Worker · {{activeCount}} 執行中",
       "statusAria": "狀態 {{status}}",
       "archiveWorkerAria": "歸檔 Worker {{name}}",
+      "editWorkerAria": "編輯 Worker {{name}}",
       "createWorker": "建立新 Worker",
       "hardLimitHint": "已達硬上限 {{count}} 個 · 歸檔現有 Worker 後可繼續建立",
       "hardLimitSettingsHint": "已達硬上限 {{count}} 個 · 點擊前往協同設定調整",

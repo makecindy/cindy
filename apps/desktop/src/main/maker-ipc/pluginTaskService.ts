@@ -68,6 +68,39 @@ export function readPluginTaskPlanReceipt(payload: string): { teamPlan?: PluginT
     throw new PluginTaskError('INVALID_REQUEST', 'Team plan exceeds the supported size');
   return data;
 }
+
+/**
+ * true = 给定 label 中被已登记计划的**未结算**条目引用。
+ * 计划整体不可变，且 label 是 Worker 归属与委派自动授权的寻址键；
+ * 活动计划引用到的 label 不允许改名，否则 releaseWorker 与自动授权都会找不到条目。
+ */
+export function isTeamPlanLabelLocked(
+  plan: PluginTeamPlan | undefined,
+  settledLabels: readonly string[] | undefined,
+  labels: ReadonlyArray<string | null>,
+): boolean {
+  if (!plan) return false;
+  const settled = new Set(settledLabels ?? []);
+  const locked = new Set(
+    plan.items.filter((item) => !settled.has(item.label)).map((item) => item.label),
+  );
+  return labels.some((label) => label !== null && locked.has(label));
+}
+
+/**
+ * 收据级计划锁：只有当插件仍安装（pluginInstalled，任务归属未被卸载撤销）时才锁定 label。
+ * 插件卸载后，原插件任务按普通 Orca 任务继续使用，releaseWorker 已不可用，
+ * 保留的收据不得继续禁止改名；停用 / 未批准可恢复，重新启用后计划仍会继续，故仍锁定。
+ */
+export function isTeamPlanLabelLockedByReceipt(
+  receipt: Pick<PluginTaskReceipt, 'payload' | 'operation'> | undefined,
+  pluginInstalled: boolean,
+  labels: ReadonlyArray<string | null>,
+): boolean {
+  if (!receipt || receipt.operation !== 'create' || !pluginInstalled) return false;
+  const data = readPluginTaskPlanReceipt(receipt.payload);
+  return isTeamPlanLabelLocked(data.teamPlan, data.settledLabels, labels);
+}
 /** Service failures must reject the public task API, without exposing internal diagnostics. */
 export function assertPluginTaskResult(result: { ok: boolean; errorCode?: string }, message: string): void {
   if (!result.ok) throw new PluginTaskError(result.errorCode || 'HOST_NOT_READY', message);

@@ -650,6 +650,7 @@ describe('AgentInputCoordinator Orca priority queue transactions', () => {
       restoreManualInterrupt: (_sessionId, snapshot) => {
         manualInterrupt.current = snapshot;
       },
+      updateWorkerIdentity: async () => ({ ok: true as const }),
       broadcastOrcaWorkerChanged: () => {},
       dispatchWorkerMessage: async (params) => {
         await params.onAccepted?.();

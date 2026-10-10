@@ -13585,6 +13585,19 @@
         "dirUnavailable": "The folder on {{device}} is temporarily unavailable. Check the connection or network drive, then try again. The Worker wasn't created."
       }
     },
+    "editWorker": {
+      "title": "Edit worker",
+      "submit": "Save",
+      "closeAria": "Close edit worker dialog",
+      "labelLabel": "Label",
+      "labelHint": "The label uniquely identifies this worker inside the team. Use letters, numbers, hyphens and underscores only; after saving, the Lead and other references locate the worker by the new label.",
+      "labelHintAria": "About worker label",
+      "labelPlaceholder": "Worker label (leave empty to keep)",
+      "labelInvalid": "Label may only contain letters, numbers, hyphens and underscores",
+      "duplicateLabel": "Label {{label}} is already used by another worker in this team",
+      "saveFailed": "Failed to save. Please try again.",
+      "labelLocked": "This worker's label is referenced by an active plugin team plan and can't be changed until the plan finishes. Change the role name, or release the worker first."
+    },
     "rolePill": {
       "unread": "Unread update",
       "worker": "Worker",
@@ -13593,6 +13606,7 @@
       "workerCountSummary_other": "{{totalCount}} workers · {{activeCount}} active",
       "statusAria": "status {{status}}",
       "archiveWorkerAria": "Archive worker {{name}}",
+      "editWorkerAria": "Edit worker {{name}}",
       "createWorker": "Create new worker",
       "hardLimitHint": "Hard limit reached: {{count}}. Archive an existing worker to create another one.",
       "hardLimitSettingsHint": "Hard limit reached: {{count}}. Click to adjust in collaboration settings.",

@@ -70,6 +70,90 @@ describe('orcaTeamStore', () => {
     expect(h.runtimeCleanup).not.toHaveBeenCalled();
   });
 
+  it('updates worker identity and rewrites only the generated session title', async () => {
+    const { updateWorkerIdentity } = await import('../orcaTeamStore.js');
+    const client = createTestDbClient();
+    setCurrentDbClient(client, 'test-user');
+    await seedOrcaWorkers(client);
+    await client.exec('UPDATE orca_workers SET role = ?, label = ? WHERE id = ?', [
+      'developer',
+      'developer-2',
+      'worker-1',
+    ]);
+    await client.exec('UPDATE sessions SET title = ? WHERE id = ?', [
+      'Worker · developer · developer-2',
+      'worker-session-1',
+    ]);
+
+    await expect(
+      updateWorkerIdentity({
+        workerId: 'worker-1',
+        role: 'reviewer',
+        label: 'reviewer-2',
+        previousRole: 'developer',
+        previousLabel: 'developer-2',
+      }),
+    ).resolves.toEqual({ ok: true });
+
+    await expect(
+      client.queryOne('SELECT role, label FROM orca_workers WHERE id = ?', ['worker-1']),
+    ).resolves.toEqual({ role: 'reviewer', label: 'reviewer-2' });
+    await expect(
+      client.queryOne('SELECT title FROM sessions WHERE id = ?', ['worker-session-1']),
+    ).resolves.toEqual({ title: 'Worker · reviewer · reviewer-2' });
+    expect(h.tapWindowBroadcast).toHaveBeenCalledWith('local-db:sessions:patched', {
+      sessionId: 'worker-session-1',
+      patch: { title: 'Worker · reviewer · reviewer-2' },
+    });
+  });
+
+  it('keeps a customized session title and rejects a duplicate label with zero side effects', async () => {
+    const { updateWorkerIdentity } = await import('../orcaTeamStore.js');
+    const client = createTestDbClient();
+    setCurrentDbClient(client, 'test-user');
+    await seedOrcaWorkers(client);
+    await client.exec('UPDATE orca_workers SET role = ?, label = ? WHERE id = ?', [
+      'developer',
+      'developer-2',
+      'worker-1',
+    ]);
+    await client.exec('UPDATE sessions SET title = ? WHERE id = ?', [
+      'My custom title',
+      'worker-session-1',
+    ]);
+
+    await expect(
+      updateWorkerIdentity({
+        workerId: 'worker-1',
+        role: 'reviewer',
+        label: 'reviewer-2',
+        previousRole: 'developer',
+        previousLabel: 'developer-2',
+      }),
+    ).resolves.toEqual({ ok: true });
+    await expect(
+      client.queryOne('SELECT title FROM sessions WHERE id = ?', ['worker-session-1']),
+    ).resolves.toEqual({ title: 'My custom title' });
+    expect(h.tapWindowBroadcast).not.toHaveBeenCalledWith('local-db:sessions:patched', {
+      sessionId: 'worker-session-1',
+      patch: { title: 'Worker · reviewer · reviewer-2' },
+    });
+
+    await client.exec('UPDATE orca_workers SET label = ? WHERE id = ?', ['tester-2', 'worker-2']);
+    await expect(
+      updateWorkerIdentity({
+        workerId: 'worker-1',
+        role: 'reviewer',
+        label: 'tester-2',
+        previousRole: 'reviewer',
+        previousLabel: 'reviewer-2',
+      }),
+    ).resolves.toEqual({ ok: false, errorCode: 'DUPLICATE_LABEL' });
+    await expect(
+      client.queryOne('SELECT role, label FROM orca_workers WHERE id = ?', ['worker-1']),
+    ).resolves.toEqual({ role: 'reviewer', label: 'reviewer-2' });
+  });
+
   it('requires workerId and workerSessionId to match the same row when both are supplied', async () => {
     const { getWorkerLink } = await import('../orcaTeamStore.js');
     const client = createTestDbClient();
@@ -539,6 +623,7 @@ describe('orcaTeamStore', () => {
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
       );
+      CREATE UNIQUE INDEX uniq_orca_workers_team_label ON orca_workers (team_id, lower(label));
     `);
     const db = drizzle(dbHandle, { schema });
     const client: DbClient = {

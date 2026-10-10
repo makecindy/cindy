@@ -1,4 +1,5 @@
 import type { AgentKind } from '@cindy/maker-core';
+import { normalizeOrcaWorkerLabel, normalizeOrcaWorkerRole } from '@cindy/maker-shared/orca-team';
 
 import type { AgentInputQueuedMessage } from '../../shared/agentInputQueue.js';
 import { createHostSendFailure } from '../maker-host/send-outcome.js';
@@ -149,6 +150,20 @@ export type DispatchWorkerTaskResult =
 export type OrcaOkResult =
   { ok: true; workerId?: string } | { ok: false; errorCode: string; message: string };
 
+/** update_worker 的 domain result：worker 展示角色名与 team 内唯一 label。 */
+export type UpdateWorkerResult =
+  | { ok: true; workerId: string; role: string; label: string | null }
+  | {
+      ok: false;
+      errorCode:
+        | 'WORKER_NOT_FOUND'
+        | 'INVALID_PARAMS'
+        | 'DUPLICATE_LABEL'
+        | 'WORKER_STATE_CHANGED'
+        | 'INTERNAL';
+      message: string;
+    };
+
 /** worker 排队消息控制(list/update/cancel)对外暴露的失败码。 */
 export type WorkerQueuedMessageFailureCode =
   | 'WORKER_NOT_FOUND'
@@ -260,6 +275,22 @@ export interface OrcaTeamServiceDeps {
     worker: OrcaWorkerRecordSnapshot,
     link: OrcaWorkerLinkSnapshot,
   ): Promise<void>;
+  /** 修订 worker 的 role/label；label 唯一性由 store 的唯一索引把关。 */
+  updateWorkerIdentity: (input: {
+    workerId: string;
+    role: string;
+    label: string | null;
+    previousRole: string;
+    previousLabel: string | null;
+  }) => Promise<{ ok: true } | { ok: false; errorCode: 'NOT_FOUND' | 'DUPLICATE_LABEL' }>;
+  /**
+   * true = 这些 label 中被当前 lead 的插件 team plan 未结算条目引用，改名会破坏计划归属与委派自动授权。
+   * 非插件任务 / 无计划 / 已结算时不锁定。可选：未注入时不做计划锁。
+   */
+  isWorkerLabelLockedByPlan?: (params: {
+    leadSessionId: string;
+    labels: ReadonlyArray<string | null>;
+  }) => Promise<boolean>;
   updateWorkerStatus(workerId: string, status: OrcaWorkerStatus): Promise<void>;
   markWorkerIdle(workerId: string): Promise<void>;
   markWorkerIdleIfStatus(workerId: string, expectedStatus: 'done'): Promise<boolean>;
@@ -377,6 +408,13 @@ export interface OrcaTeamService {
   }, opts?: { deferredRetry?: boolean; assertCurrent?: () => Promise<void> }): Promise<OrcaOkResult>;
   /** 外部调用边界：按 caller lead 校验 worker 可见性。 */
   archiveWorker(params: { callerLeadSessionId: string; workerId: string; onlyIfIdle?: boolean; beforeArchive?: () => Promise<void> }): Promise<OrcaOkResult>;
+  /** 外部调用边界：修改 worker 的展示角色名(role)与 team 内唯一标识(label)，不改执行单元本身。 */
+  updateWorker(params: {
+    callerLeadSessionId: string;
+    workerId: string;
+    role?: string;
+    label?: string;
+  }): Promise<UpdateWorkerResult>;
   /** 外部调用边界：列出目标 worker 输入队列中的排队消息(lead 自己的条目含正文)。 */
   /** workerRef 省略时读取 Lead 自己的输入队列(Worker 回报在 Lead 忙时排在这里)。 */
   listWorkerQueuedMessages(params: {
@@ -476,6 +514,11 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
   });
   /** Per-worker transition tails serialize dispatch reservations against implicit done acknowledgement. */
   const workerTransitionTails = new Map<string, Promise<void>>();
+  /**
+   * Per-worker identity tails serialize rename read-modify-write；否则 UI 改 role 与 Lead 改 label
+   * 并发的两个请求会各自基于同一份旧快照回写完整 role+label，后者静默覆盖前者。
+   */
+  const workerIdentityTails = new Map<string, Promise<void>>();
   /** Active dispatch count stays positive from pre-resume reservation through host dispatch settlement. */
   const activeWorkerDispatches = new Map<string, number>();
   type ProvisionalDispatchSettlement =
@@ -1376,6 +1419,112 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     return params.onlyIfIdle ? withWorkerTransition(params.workerId,perform) : perform();
   }
 
+  async function updateWorker(params: {
+    callerLeadSessionId: string;
+    workerId: string;
+    role?: string;
+    label?: string;
+  }): Promise<UpdateWorkerResult> {
+    const initial = await resolveWorkerRef(params.callerLeadSessionId, params.workerId);
+    if (!initial.ok) {
+      if (initial.errorCode === 'NOT_FOUND') {
+        return { ok: false, errorCode: 'WORKER_NOT_FOUND', message: `worker ${params.workerId} not found` };
+      }
+      return { ok: false, errorCode: 'INTERNAL', message: initial.message };
+    }
+    // 用解析出的 worker.id 串行化：worker_id / session_id 两种 ref 都落到同一把锁。
+    // 读-改-写整体在锁内，后到者重新读到前一次的结果，部分字段更新不会互相覆盖。
+    return withWorkerIdentityUpdate(initial.worker.id, async () => {
+      const found = await resolveWorkerRef(params.callerLeadSessionId, params.workerId);
+      if (!found.ok) {
+        if (found.errorCode === 'NOT_FOUND') {
+          return { ok: false as const, errorCode: 'WORKER_NOT_FOUND' as const, message: `worker ${params.workerId} not found` };
+        }
+        return { ok: false as const, errorCode: 'INTERNAL' as const, message: found.message };
+      }
+      const { link, worker } = found;
+      if (params.role === undefined && params.label === undefined) {
+        return { ok: false as const, errorCode: 'INVALID_PARAMS' as const, message: 'role or label required' };
+      }
+
+      let role = worker.role;
+      if (params.role !== undefined) {
+        const normalized = normalizeOrcaWorkerRole(params.role);
+        if (!normalized.ok) return { ok: false as const, errorCode: 'INVALID_PARAMS' as const, message: normalized.message };
+        role = normalized.value;
+      }
+      let label = worker.label;
+      if (params.label !== undefined) {
+        const normalized = normalizeOrcaWorkerLabel(params.label);
+        if (!normalized.ok) return { ok: false as const, errorCode: 'INVALID_PARAMS' as const, message: normalized.message };
+        label = normalized.value;
+      }
+
+      // 幂等：值没变时不写库、不广播（MCP 重试与 UI 重复提交都落到这里）。
+      if (role === worker.role && label === worker.label) {
+        return { ok: true as const, workerId: worker.id, role, label };
+      }
+
+      // 插件 team plan 以 label 冻结 Worker 归属与委派自动授权且登记后不可变；
+      // 活动（未结算）计划引用到旧/新 label 时必须拒绝改 label，只放过 role 改名。
+      if (label !== worker.label && deps.isWorkerLabelLockedByPlan) {
+        const locked = await deps.isWorkerLabelLockedByPlan({
+          leadSessionId: link.leadSessionId,
+          labels: [worker.label, label],
+        });
+        if (locked) {
+          return {
+            ok: false as const,
+            errorCode: 'WORKER_STATE_CHANGED' as const,
+            message:
+              'worker label is referenced by the active plugin team plan and cannot be changed; change the role or release the worker first',
+          };
+        }
+      }
+
+      const updated = await deps.updateWorkerIdentity({
+        workerId: worker.id,
+        role,
+        label,
+        previousRole: worker.role,
+        previousLabel: worker.label,
+      });
+      if (!updated.ok) {
+        if (updated.errorCode === 'DUPLICATE_LABEL') {
+          return {
+            ok: false as const,
+            errorCode: 'DUPLICATE_LABEL' as const,
+            message: `label "${label}" already used in this team`,
+          };
+        }
+        return { ok: false as const, errorCode: 'WORKER_NOT_FOUND' as const, message: `worker ${params.workerId} not found` };
+      }
+      deps.broadcastOrcaWorkerChanged(link.leadSessionId);
+      return { ok: true as const, workerId: worker.id, role, label };
+    });
+  }
+
+  async function withWorkerIdentityUpdate<T>(
+    workerId: string,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    const previous = workerIdentityTails.get(workerId) ?? Promise.resolve();
+    let release!: () => void;
+    const current = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    workerIdentityTails.set(workerId, current);
+    await previous;
+    try {
+      return await operation();
+    } finally {
+      release();
+      if (workerIdentityTails.get(workerId) === current) {
+        workerIdentityTails.delete(workerId);
+      }
+    }
+  }
+
   /** 排队消息 source 判定:worker 队列里 orca 条目只可能来自其 lead(通信拓扑为 Lead↔Worker)。 */
   function queuedMessageSource(
     item: AgentInputQueuedMessage,
@@ -1730,6 +1879,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     interruptWorker,
     idleWorker,
     archiveWorker,
+    updateWorker,
     listWorkerQueuedMessages,
     updateWorkerQueuedMessage,
     cancelWorkerQueuedMessage,

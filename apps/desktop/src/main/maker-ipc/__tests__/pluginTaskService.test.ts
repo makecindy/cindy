@@ -5,6 +5,8 @@ import ts from 'typescript';
 import {
   createPluginTaskService,
   isPluginTaskPermissionAllowed,
+  isTeamPlanLabelLocked,
+  isTeamPlanLabelLockedByReceipt,
   PluginTaskError,
   assertPluginTaskResult,
   readPluginTaskPlanReceipt,
@@ -12,9 +14,41 @@ import {
   type PluginTaskStore,
   type PluginTaskServiceDeps,
 } from '../pluginTaskService.js';
-import type { PluginTaskView } from '../../../shared/pluginTasks.js';
+import type { PluginTeamPlan, PluginTaskView } from '../../../shared/pluginTasks.js';
 import { controlOwnedSessionExecution, isSameSessionExecution, withdrawOwnedSessionInputs } from '../sessionExecutionOwnership.js';
 import { PLUGIN_TEAM_PLAN_MAX_JSON_CHARS, PLUGIN_TASK_RECEIPT_MAX_JSON_CHARS } from '../../../shared/pluginTasks.js';
+
+it('locks only unsettled team-plan labels for worker rename', () => {
+  const route = {} as never;
+  const plan = {
+    concurrency: 2,
+    items: [
+      { label: 'w0', workingDir: '/answer', route },
+      { label: 'w1', workingDir: '/answer', route },
+    ],
+  } as unknown as PluginTeamPlan;
+  expect(isTeamPlanLabelLocked(plan, [], ['w0'])).toBe(true);
+  expect(isTeamPlanLabelLocked(plan, [], ['w1', null])).toBe(true);
+  expect(isTeamPlanLabelLocked(plan, ['w0'], ['w0'])).toBe(false);
+  expect(isTeamPlanLabelLocked(plan, ['w0'], ['w1'])).toBe(true);
+  expect(isTeamPlanLabelLocked(plan, [], ['other'])).toBe(false);
+  expect(isTeamPlanLabelLocked(undefined, [], ['w0'])).toBe(false);
+});
+
+it('releases the plan label lock only after the plugin is uninstalled', () => {
+  const route = {} as never;
+  const plan = {
+    concurrency: 1,
+    items: [{ label: 'w0', workingDir: '/answer', route }],
+  } as unknown as PluginTeamPlan;
+  const receipt = { payload: JSON.stringify({ teamPlan: plan }), operation: 'create' as const };
+  expect(isTeamPlanLabelLockedByReceipt(receipt, true, ['w0'])).toBe(true);
+  // 插件卸载（任务归属确实撤销）后，保留的收据不再锁定改名；
+  // 停用 / 未批准仍传入 true（可恢复），继续锁定由上层保证。
+  expect(isTeamPlanLabelLockedByReceipt(receipt, false, ['w0'])).toBe(false);
+  expect(isTeamPlanLabelLockedByReceipt({ payload: receipt.payload, operation: 'send' }, true, ['w0'])).toBe(false);
+  expect(isTeamPlanLabelLockedByReceipt(undefined, true, ['w0'])).toBe(false);
+});
 
 it('rejects oversized plans before saving and refuses oversized legacy receipts without truncation', async () => {
   const f=fixture(), task=await f.create();

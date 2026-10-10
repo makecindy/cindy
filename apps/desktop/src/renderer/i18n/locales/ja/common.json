@@ -13552,6 +13552,19 @@
         "dirUnavailable": "{{device}} のフォルダーは一時的に使用できません。接続やネットワークドライブを確認して再試行してください。Worker は作成されていません。"
       }
     },
+    "editWorker": {
+      "title": "Worker を編集",
+      "submit": "保存",
+      "closeAria": "Worker 編集ダイアログを閉じる",
+      "labelLabel": "識別子",
+      "labelHint": "識別子はチーム内でこの Worker を一意に識別するために使います。使用できるのは英数字・ハイフン・アンダースコアのみです。保存後、Lead などの参照は新しい識別子で Worker を特定します。",
+      "labelHintAria": "識別子について",
+      "labelPlaceholder": "Worker 識別子（空欄なら変更しません）",
+      "labelInvalid": "識別子は英数字・ハイフン・アンダースコアのみ使用できます",
+      "duplicateLabel": "識別子 {{label}} はこのチームの別の Worker が使用しています",
+      "saveFailed": "保存に失敗しました。もう一度お試しください。",
+      "labelLocked": "この Worker の識別子は進行中のプラグインのチーム計画から参照されているため、計画の完了まで変更できません。役割名の変更か、先に Worker を解放してください。"
+    },
     "rolePill": {
       "unread": "未読の更新",
       "worker": "Worker",
@@ -13559,6 +13572,7 @@
       "workerCountSummary_other": "Worker 合計 {{totalCount}} · 稼働中 {{activeCount}}",
       "statusAria": "ステータス {{status}}",
       "archiveWorkerAria": "Worker {{name}} をアーカイブ",
+      "editWorkerAria": "Worker {{name}} を編集",
       "createWorker": "新しい Worker を作成",
       "hardLimitHint": "ハード上限 {{count}} に達しました。既存 Worker をアーカイブすると追加できます。",
       "hardLimitSettingsHint": "ハード上限 {{count}} に達しました。クリックして協同設定を調整します。",

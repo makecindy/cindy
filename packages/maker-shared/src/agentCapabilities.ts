@@ -29,6 +29,8 @@ export interface MobileAgentCapabilities {
   supportsSessionAgentSwitch?: boolean;
   /** host 是否支持创建 Orca Worker 时显式选择 Worker 权限；旧 host 缺省 false(不得开启协同)。 */
   supportsOrcaWorkerPermissionMode?: boolean;
+  /** host 是否支持创建后修改 Orca Worker 的角色名/标识(update_worker)；旧 host 缺省 false。 */
+  supportsOrcaWorkerUpdate?: boolean;
   /** host 是否在 set-model 内执行强制模型窗口保护；旧 host 缺省 false。 */
   supportsModelWindowSwitchGuard?: boolean;
 }
@@ -162,6 +164,7 @@ export function normalizeMobileAgentCapabilities(value: unknown): MobileAgentCap
     supportsSessionAgentSwitch: value.supportsSessionAgentSwitch === true,
     supportsModelWindowSwitchGuard: value.supportsModelWindowSwitchGuard === true,
     supportsOrcaWorkerPermissionMode: value.supportsOrcaWorkerPermissionMode === true,
+    supportsOrcaWorkerUpdate: value.supportsOrcaWorkerUpdate === true,
   };
 }
 

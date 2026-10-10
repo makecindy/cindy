@@ -289,10 +289,12 @@ export function agentCapabilitiesForDevice(
 ): Promise<{
   supportsOrcaWorkerPermissionMode?: boolean;
   supportsDeferredOrcaUiAssignment?: boolean;
+  supportsOrcaWorkerUpdate?: boolean;
 }> {
   return invokeRemote(deviceId, 'maker:get-capabilities', [agentKind]) as Promise<{
     supportsOrcaWorkerPermissionMode?: boolean;
     supportsDeferredOrcaUiAssignment?: boolean;
+    supportsOrcaWorkerUpdate?: boolean;
   }>;
 }
 
@@ -906,6 +908,8 @@ export interface RoutableOrcaWorkflows {
   switchFocus: FullOrca['switchFocus'];
   idleWorker: FullOrca['idleWorker'];
   archiveWorker: FullOrca['archiveWorker'];
+  /** 修改 worker 的展示角色名与 team 内唯一标识。 */
+  updateWorker: FullOrca['updateWorker'];
   endTeam: FullOrca['endTeam'];
   getCollaborationSettings: FullOrca['getCollaborationSettings'];
   listExecutionDevices: FullOrca['listExecutionDevices'];
@@ -950,6 +954,12 @@ function remoteOrcaWorkflows(deviceId: string): RoutableOrcaWorkflows {
       invokeRemote(deviceId, 'maker:worker:archive', [
         { leadSessionId, workerId },
       ])) as FullOrca['archiveWorker'],
+    updateWorker: ((input: {
+      leadSessionId: string;
+      workerId: string;
+      role?: string;
+      label?: string;
+    }) => invokeRemote(deviceId, 'maker:worker:update', [input])) as FullOrca['updateWorker'],
     endTeam: t('maker:team:end') as FullOrca['endTeam'],
     getCollaborationSettings: t(
       'maker:collaboration-settings:get',

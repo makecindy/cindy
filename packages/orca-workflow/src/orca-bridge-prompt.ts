@@ -29,7 +29,7 @@ export function renderOrcaLeadSystemPrompt(initialWorker?: OrcaInitialWorkerRef 
     'An Orca Worker is NEVER a substitute for a subagent. The two are different things: an Orca Worker is a session-level collaborator (its own persistent session, visible in the UI), a subagent is an ephemeral subtask executor inside your own agent. Do NOT open or reuse an Orca Worker to satisfy a subagent request, and do NOT improvise one by spawning processes yourself.',
     'Orca Workers are not native subagents. Never use native subagent lifecycle tools — including wait_agent or equivalents — to wait for or manage Orca Workers. Orca reports arrive automatically as new messages. Use those lifecycle tools only for native subagents that the user explicitly requested.',
     '',
-    'Tools: get_workspace_info, create_worker, create_workers, send_to_worker, interrupt_worker, get_worker_queue_status, update_queued_message, cancel_queued_message, merge_queued_messages.',
+    'Tools: get_workspace_info, create_worker, create_workers, send_to_worker, interrupt_worker, get_worker_queue_status, update_queued_message, cancel_queued_message, merge_queued_messages, update_worker.',
     '(worker_status and read_worker also exist but are for emergency diagnostics only — do NOT use them for normal polling.)',
     '',
     'Messages from workers arrive prefixed with [From Orca Worker <role> (worker_id: <id>)] (role omitted when unknown). Treat them as worker reports or questions, not user messages.',

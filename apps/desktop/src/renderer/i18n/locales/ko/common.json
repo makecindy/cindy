@@ -13552,6 +13552,19 @@
         "dirUnavailable": "{{device}}의 폴더를 일시적으로 사용할 수 없습니다. 연결 또는 네트워크 드라이브를 확인한 후 다시 시도하세요. Worker가 생성되지 않았습니다."
       }
     },
+    "editWorker": {
+      "title": "Worker 편집",
+      "submit": "저장",
+      "closeAria": "Worker 편집 대화상자 닫기",
+      "labelLabel": "식별자",
+      "labelHint": "식별자는 팀 안에서 이 Worker를 고유하게 식별하는 데 씁니다. 영문, 숫자, 하이픈, 밑줄만 사용할 수 있습니다. 저장하면 Lead를 비롯한 참조가 새 식별자로 Worker를 찾습니다.",
+      "labelHintAria": "식별자 안내",
+      "labelPlaceholder": "Worker 식별자(비우면 변경하지 않음)",
+      "labelInvalid": "식별자는 영문, 숫자, 하이픈, 밑줄만 사용할 수 있습니다",
+      "duplicateLabel": "식별자 {{label}}은(는) 이 팀의 다른 Worker가 사용 중입니다",
+      "saveFailed": "저장하지 못했습니다. 다시 시도해 주세요.",
+      "labelLocked": "이 Worker의 식별자는 진행 중인 플러그인 팀 계획에서 참조하고 있어 계획이 끝날 때까지 변경할 수 없습니다. 역할 이름을 바꾸거나 먼저 Worker를 릴리스하세요."
+    },
     "rolePill": {
       "unread": "읽지 않은 업데이트",
       "worker": "Worker",
@@ -13559,6 +13572,7 @@
       "workerCountSummary_other": "전체 Worker {{totalCount}} · 활성 {{activeCount}}",
       "statusAria": "상태 {{status}}",
       "archiveWorkerAria": "Worker {{name}} 아카이브",
+      "editWorkerAria": "Worker {{name}} 편집",
       "createWorker": "새 Worker 만들기",
       "hardLimitHint": "하드 제한 {{count}} 에 도달했습니다. 기존 Worker 를 아카이브하면 더 만들 수 있습니다.",
       "hardLimitSettingsHint": "하드 제한 {{count}} 에 도달했습니다. 클릭하여 협업 설정을 조정합니다.",

@@ -5743,6 +5743,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
       },
       archiveWorker: (leadSessionId: string, workerId: string): Promise<unknown> =>
         ipcRenderer.invoke('maker:worker:archive', { leadSessionId, workerId }),
+      updateWorker: (input: {
+        leadSessionId: string;
+        workerId: string;
+        role?: string;
+        label?: string;
+      }): Promise<unknown> => ipcRenderer.invoke('maker:worker:update', input),
       endTeam: (leadSessionId: string): Promise<unknown> =>
         ipcRenderer.invoke('maker:team:end', leadSessionId),
       getCollaborationSettings: (): Promise<unknown> =>

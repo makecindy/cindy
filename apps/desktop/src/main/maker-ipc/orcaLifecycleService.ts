@@ -1,9 +1,9 @@
 import type { AgentKind } from '@cindy/maker-core';
 
+import { normalizeOrcaWorkerLabel } from '@cindy/maker-shared/orca-team';
 import { createHostSendFailure } from '../maker-host/send-outcome.js';
 import { buildUiAssignmentInitialTask } from './orcaUiAssignment.js';
 import type { DispatchWorkerTaskResult, OrcaWorkerEffort } from './orcaTeamService.js';
-import { normalizeOrcaWorkerLabel } from './orcaWorkerCreationService.js';
 import type {
   OrcaTeamSnapshot,
   OrcaWorkerCreateInTeamParams,

@@ -405,6 +405,7 @@ const EXTENDED_INVOKE_CHANNELS: readonly string[] = [
   'maker:worker:idle',
   'maker:worker:acknowledge-done',
   'maker:worker:archive',
+  'maker:worker:update',
   'maker:team:end',
   'maker:session:enable-orca',
   'maker:session:disable-orca',
