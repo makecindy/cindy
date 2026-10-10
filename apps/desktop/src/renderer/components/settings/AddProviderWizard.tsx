@@ -1,5 +1,5 @@
 import { providerSetupLink, providerPresetOAuth, providerPresetOAuthRuntimes, buildUserProvider, isMimoTokenPlanPreset } from '@cindy/model-providers';
-import { bindProviderPresetRuntime, providerEndpointBindings, bindProviderEndpoint } from '@cindy/model-providers';
+import { bindProviderPresetRuntime, providerEndpointBindings } from '@cindy/model-providers';
 /**
  * AddProviderWizard —— 「添加供应商」三步向导(2026-07 模型供应商重构)。
  *
@@ -95,7 +95,7 @@ type Selection =
   | { kind: 'builtinApiKey'; provider: ProviderView }
   | { kind: 'ollama-onboarding' };
 
-type PresetBaseUrls = Partial<Record<AgentKind, string>>;
+type PresetBaseUrls = { pi?: string };
 
 const AGENT_LABEL: Record<AgentKind, string> = {
   'claude-code': 'Claude Code',
@@ -110,18 +110,8 @@ function presetRuntimeBaseUrl(
 ): string {
   const runtime = preset.runtimes[agent];
   if (!runtime) return '';
-  if (!runtime.baseUrlEditable) return runtime.baseUrl;
-  if (edited[agent] !== undefined) return edited[agent]!.trim();
-  for (const [sourceAgent, endpoint] of Object.entries(edited)) {
-    const source = preset.runtimes[sourceAgent as AgentKind];
-    if (!source || !endpoint) continue;
-    // 默认地址相同的运行时指向同一服务(如本机 llama.cpp 的 Codex / Pi),未单独编辑时跟随已编辑的那个。
-    if (source.baseUrl === runtime.baseUrl) return endpoint.trim();
-    const bindings = providerEndpointBindings(source.baseUrl, endpoint.trim());
-    if (bindings && source.baseUrl.includes('{')) {
-      return bindProviderEndpoint(runtime.baseUrl, bindings, endpoint.trim());
-    }
-  }
+  // 只有 Pi runtime 的端点对用户开放改写；Claude / Codex 保持预设里已核验的地址。
+  if (agent === 'pi' && edited.pi !== undefined) return edited.pi.trim();
   return runtime.baseUrl;
 }
 
@@ -894,7 +884,7 @@ export function AddProviderWizard({
           }
           setSel({ kind: 'preset', preset: { ...preset, runtimes: config.runtimes } });
           setName(config.name);
-          setPresetBaseUrls(Object.fromEntries(Object.entries(config.runtimes).map(([a, rt]) => [a, rt!.baseUrl])));
+          setPresetBaseUrls({ pi: config.runtimes.pi?.baseUrl });
           setPicks(choices);
           setFetchState({ status: 'done', failed: false, empty: choices.size === 0 });
           setStep(3);
@@ -957,10 +947,9 @@ export function AddProviderWizard({
     const agents = configuredPresetAgents(preset);
     const editableBaseUrlsValid = agents.every((agent) => {
       const rt = preset.runtimes[agent];
-      return (
-        !rt?.baseUrlEditable ||
-        isValidEditablePresetBaseUrl(presetRuntimeBaseUrl(preset, agent, presetBaseUrls), rt.baseUrl)
-      );
+      // 只有 Pi 端点可被用户改写；其余 runtime 的值恒等于预设地址，无需校验。
+      if (agent !== 'pi' || !rt) return true;
+      return isValidEditablePresetBaseUrl(presetRuntimeBaseUrl(preset, agent, presetBaseUrls), rt.baseUrl);
     });
     if (!editableBaseUrlsValid) return;
     // Curated presets use omission as their legacy default-on; generated catalog additions
@@ -1442,7 +1431,9 @@ export function AddProviderWizard({
           (!runtime.modelsUrl?.trim() || isLoopbackProviderUrl(runtime.modelsUrl.trim()))
         );
       }
-      return !runtime.baseUrlEditable || isValidEditablePresetBaseUrl(value, runtime.baseUrl);
+      // 只有 Pi 端点可改写；Claude / Codex 的值恒等于预设地址，无需校验。
+      if (agent !== 'pi') return true;
+      return isValidEditablePresetBaseUrl(value, runtime.baseUrl);
     });
   const presetCanContinue =
     sel?.kind === 'preset' &&
@@ -1989,7 +1980,8 @@ export function AddProviderWizard({
               <div className="flex flex-col gap-2">
                 {presetAgents.map((agent) => {
                   const rt = sel.preset.runtimes[agent];
-                  if (rt?.baseUrlEditable) {
+                  // 只有 Pi 端点可编辑；Claude / Codex 沿用预设里已核验的地址。
+                  if (rt && agent === 'pi') {
                     const value = presetRuntimeBaseUrl(sel.preset, agent, presetBaseUrls);
                     const valid = isValidEditablePresetBaseUrl(value.trim(), rt.baseUrl);
                     return (
@@ -2008,7 +2000,7 @@ export function AddProviderWizard({
                           onChange={(event) =>
                             setPresetBaseUrls((prev) => ({
                               ...prev,
-                              [agent]: event.target.value,
+                              pi: event.target.value,
                             }))
                           }
                           aria-invalid={!valid}

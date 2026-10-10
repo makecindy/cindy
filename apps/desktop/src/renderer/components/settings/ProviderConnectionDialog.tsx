@@ -1171,7 +1171,8 @@ export function ProviderConnectionDialog({
   const boundPreset = presets.find(preset => preset.id === f.catalogPresetId);
   const templateBound = Boolean(f.catalogPresetId);
   const endpointTemplate = boundPreset?.runtimes[activeTab]?.baseUrl;
-  const fixedTemplateEndpoint = templateBound && !endpointTemplate?.includes('{');
+  // 只有 Pi runtime 的端点对用户开放改写；Claude / Codex 的模板绑定端点保持只读。
+  const fixedTemplateEndpoint = activeTab !== 'pi' && templateBound && !endpointTemplate?.includes('{');
   // Google inference and discovery already resolve to this native endpoint. The old
   // compatibility base remains stored as a template reference, never an editable choice.
   const displayedBaseUrl = fixedTemplateEndpoint && f.catalogPresetId === 'google-gemini-api'

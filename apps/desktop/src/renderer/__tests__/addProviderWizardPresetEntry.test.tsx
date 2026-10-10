@@ -78,10 +78,10 @@ const liteLlmPreset = {
   name: 'LiteLLM Proxy',
   authMethod: 'none' as const,
   runtimes: {
-    codex: {
+    pi: {
       baseUrl: 'http://127.0.0.1:4000/v1',
       baseUrlEditable: true,
-      requestPath: '/tenant/acme/infer',
+      wireProtocol: 'openai-chat' as const,
       models: [],
     },
   },
@@ -156,7 +156,7 @@ const editableDiscoveryPreset = {
   id: 'editable-discovery',
   name: 'Editable Discovery',
   runtimes: {
-    codex: {
+    pi: {
       baseUrl: 'https://editable.example/api/v4',
       baseUrlEditable: true,
       wireProtocol: 'openai-chat' as const,
@@ -351,22 +351,23 @@ describe('AddProviderWizard — preset 直达', () => {
     expect(window.electronAPI.maker.llamaCppInstall).not.toHaveBeenCalled();
     expect(window.electronAPI.maker.llamaCppStart).not.toHaveBeenCalled();
   });
-  it('keeps the Codex and Pi addresses of an existing llama.cpp server in sync until one is edited separately', async () => {
+  it('keeps the Codex address of an existing llama.cpp server read-only while Pi stays editable', async () => {
     const preset = BUNDLED_CATALOG.presets!.find(p => p.id === 'llamacpp')!;
     vi.mocked(window.electronAPI.maker.listProviderPresets).mockResolvedValue({ presets: [preset] });
     vi.mocked(window.electronAPI.maker.fetchProviderModels).mockResolvedValue({ ok: true, models: [{ id: 'qwen3-8b', name: 'qwen3-8b' }] });
     renderWizard('llamacpp');
-    const [first] = await screen.findAllByDisplayValue('http://127.0.0.1:8080/v1');
-    fireEvent.change(first!, { target: { value: 'http://127.0.0.1:8081/v1' } });
-    expect(screen.getAllByDisplayValue('http://127.0.0.1:8081/v1').length).toBeGreaterThan(1);
-    expect(screen.queryAllByDisplayValue('http://127.0.0.1:8080/v1')).toHaveLength(0);
+    // 只有 Pi runtime 提供端点输入框，Codex 沿用预设里已核验的地址。
+    const inputs = await screen.findAllByDisplayValue('http://127.0.0.1:8080/v1');
+    expect(inputs).toHaveLength(1);
+    fireEvent.change(inputs[0]!, { target: { value: 'http://127.0.0.1:8081/v1' } });
+    expect(screen.getAllByDisplayValue('http://127.0.0.1:8081/v1')).toHaveLength(1);
     fireEvent.click(screen.getByText('settings.providers.wizard.next'));
     fireEvent.click(await screen.findByText('qwen3-8b'));
     fireEvent.click(screen.getByText('settings.providers.wizard.finish'));
     await waitFor(() => expect(createCustomProvider).toHaveBeenCalledOnce());
     const config = vi.mocked(createCustomProvider).mock.calls[0][0];
-    expect(Object.values(config.runtimes).map(rt => rt?.baseUrl)).toEqual(Object.keys(config.runtimes).map(() => 'http://127.0.0.1:8081/v1'));
     expect(config.runtimes.pi?.baseUrl).toBe('http://127.0.0.1:8081/v1');
+    expect(config.runtimes.codex?.baseUrl).toBe('http://127.0.0.1:8080/v1');
   });
   it('connects an existing llama.cpp server from the preset deep link without touching the managed runtime', async () => {
     const preset = BUNDLED_CATALOG.presets!.find(p => p.id === 'llamacpp')!;
@@ -683,15 +684,20 @@ describe('AddProviderWizard — preset 直达', () => {
     expect(keys.pi).toBeUndefined();
   });
 
-  it('editable preset saves the edited base URL and exact request path', async () => {
+  it('editable Pi preset saves the edited base URL while Codex keeps the preset endpoint and path', async () => {
     const editablePreset = {
       id: 'local-gateway',
       name: 'Local Gateway',
       runtimes: {
         codex: {
           baseUrl: 'http://127.0.0.1:4000/v1',
-          baseUrlEditable: true,
           requestPath: '/tenant/acme/infer',
+          models: [{ id: 'local-model', name: 'Local model' }],
+        },
+        pi: {
+          baseUrl: 'http://127.0.0.1:4000/v1',
+          baseUrlEditable: true,
+          wireProtocol: 'openai-chat' as const,
           models: [{ id: 'local-model', name: 'Local model' }],
         },
       },
@@ -708,18 +714,24 @@ describe('AddProviderWizard — preset 直达', () => {
 
     await waitFor(() => expect(screen.getByText('Local model')).not.toBeNull());
     expect(window.electronAPI.maker.fetchProviderModels).toHaveBeenCalledWith(
-      expect.objectContaining({ baseUrl: 'http://localhost:11434/custom' }),
+      expect.objectContaining({ agent: 'pi', baseUrl: 'http://localhost:11434/custom' }),
+    );
+    expect(window.electronAPI.maker.fetchProviderModels).toHaveBeenCalledWith(
+      expect.objectContaining({ agent: 'codex', baseUrl: 'http://127.0.0.1:4000/v1' }),
     );
     fireEvent.click(screen.getByText('settings.providers.wizard.finish'));
 
     await waitFor(() => expect(createCustomProvider).toHaveBeenCalledTimes(1));
-    expect(vi.mocked(createCustomProvider).mock.calls[0][0].runtimes.codex).toMatchObject({
+    expect(vi.mocked(createCustomProvider).mock.calls[0][0].runtimes.pi).toMatchObject({
       baseUrl: 'http://localhost:11434/custom',
+    });
+    expect(vi.mocked(createCustomProvider).mock.calls[0][0].runtimes.codex).toMatchObject({
+      baseUrl: 'http://127.0.0.1:4000/v1',
       requestPath: '/tenant/acme/infer',
     });
   });
 
-  it('copies a filled account slot across editable engines', async () => {
+  it('offers the endpoint field for Pi only and leaves the Codex slot on the preset template', async () => {
     const preset = {
       id: 'azure-slots',
       name: 'Azure Slots',
@@ -732,7 +744,6 @@ describe('AddProviderWizard — preset 直达', () => {
         },
         codex: {
           baseUrl: 'https://{resource}.openai.azure.com/openai/v1',
-          baseUrlEditable: true,
           wireProtocol: 'openai-responses' as const,
           models: [{ id: 'm', name: 'M' }],
         },
@@ -741,9 +752,10 @@ describe('AddProviderWizard — preset 直达', () => {
     vi.mocked(window.electronAPI.maker.listProviderPresets).mockResolvedValueOnce({ presets: [preset] });
     renderWizard('azure-slots');
     const inputs = await screen.findAllByDisplayValue('https://{resource}.openai.azure.com/openai/v1');
-    expect(inputs).toHaveLength(2);
-    fireEvent.change(inputs[0], { target: { value: 'https://myres.openai.azure.com/openai/v1' } });
-    expect(screen.getAllByDisplayValue('https://myres.openai.azure.com/openai/v1')).toHaveLength(2);
+    expect(inputs).toHaveLength(1);
+    const [piInput] = inputs;
+    fireEvent.change(piInput!, { target: { value: 'https://myres.openai.azure.com/openai/v1' } });
+    expect(screen.getAllByDisplayValue('https://myres.openai.azure.com/openai/v1')).toHaveLength(1);
   });
 
   it('accepts the official Vertex global host and rejects an unrelated host on the Vertex template', async () => {
@@ -759,7 +771,6 @@ describe('AddProviderWizard — preset 直达', () => {
         },
         codex: {
           baseUrl: 'https://{location}-aiplatform.googleapis.com',
-          baseUrlEditable: true,
           wireProtocol: 'google-generative-ai' as const,
           models: [{ id: 'gemini-3.8-flash', name: 'Gemini 3.8 Flash' }],
         },
@@ -768,15 +779,16 @@ describe('AddProviderWizard — preset 直达', () => {
     vi.mocked(window.electronAPI.maker.listProviderPresets).mockResolvedValueOnce({ presets: [preset] });
     renderWizard('google-vertex');
     const inputs = await screen.findAllByDisplayValue('https://{location}-aiplatform.googleapis.com');
+    expect(inputs).toHaveLength(1);
     const next = screen.getByText('settings.providers.wizard.next').closest('button') as HTMLButtonElement;
     fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'vertex-key' } });
     expect(next.disabled).toBe(true);
 
-    fireEvent.change(inputs[0], { target: { value: 'https://attacker.example' } });
+    fireEvent.change(inputs[0]!, { target: { value: 'https://attacker.example' } });
     expect(next.disabled).toBe(true);
 
-    fireEvent.change(inputs[0], { target: { value: 'https://aiplatform.googleapis.com' } });
-    expect(screen.getAllByDisplayValue('https://aiplatform.googleapis.com')).toHaveLength(2);
+    fireEvent.change(inputs[0]!, { target: { value: 'https://aiplatform.googleapis.com' } });
+    expect(screen.getAllByDisplayValue('https://aiplatform.googleapis.com')).toHaveLength(1);
     expect(next.disabled).toBe(false);
   });
 
@@ -800,7 +812,7 @@ describe('AddProviderWizard — preset 直达', () => {
     );
     expect(window.electronAPI.maker.fetchProviderModels).toHaveBeenCalledWith(
       expect.objectContaining({
-        agent: 'codex',
+        agent: 'pi',
         baseUrl: 'http://localhost:4100/v1',
         authMethod: 'none',
         apiKey: null,
@@ -816,9 +828,8 @@ describe('AddProviderWizard — preset 直达', () => {
       expect.objectContaining({
         auth: { method: 'none' },
         runtimes: {
-          codex: expect.objectContaining({
+          pi: expect.objectContaining({
             baseUrl: 'http://localhost:4100/v1',
-            requestPath: '/tenant/acme/infer',
             models: [{ id: 'local-model', name: 'local-model', discoveredMetadata: {} }],
           }),
         },
@@ -1046,7 +1057,7 @@ describe('AddProviderWizard — preset 直达', () => {
         apiKey: 'edited-key',
       }),
     );
-    expect(vi.mocked(createCustomProvider).mock.calls[0][0].runtimes.codex?.models).toEqual([
+    expect(vi.mocked(createCustomProvider).mock.calls[0][0].runtimes.pi?.models).toEqual([
       { id: 'chat-model', name: 'Chat Model', discoveredMetadata: {} },
       {
         discoveredMetadata: { name: 'Responses Model' },
@@ -1085,7 +1096,7 @@ describe('AddProviderWizard — preset 直达', () => {
     expect(window.electronAPI.maker.fetchProviderModels).not.toHaveBeenCalledWith(
       expect.objectContaining({ baseUrl: 'https://editable.example/api/v1' }),
     );
-    expect(vi.mocked(createCustomProvider).mock.calls[0][0].runtimes.codex).toMatchObject({
+    expect(vi.mocked(createCustomProvider).mock.calls[0][0].runtimes.pi).toMatchObject({
       baseUrl: 'https://self-hosted.example/v4',
       models: [
         { id: 'chat-model', name: 'Chat Model', discoveredMetadata: {} },
@@ -1477,7 +1488,8 @@ it('sets up Sub2API from one site address and retains discovered capabilities in
   vi.mocked(createCustomProvider).mockResolvedValue({ ok: true });
   renderWizard('sub2api');
   await screen.findByDisplayValue('Sub2API');
-  fireEvent.change(screen.getAllByDisplayValue('https://{endpoint}/v1')[0], { target: { value: 'https://relay.example/team' } });
+  // 只有 Pi 的端点可改：它绑定到用户填的中转站，Claude / Codex 仍留预设模板。
+  fireEvent.change(await screen.findByDisplayValue('https://{endpoint}/v1'), { target: { value: 'https://relay.example/team' } });
   fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'sk-test' } });
   fireEvent.click(screen.getByText('settings.providers.wizard.next'));
   fireEvent.click(await screen.findByText('Private Sol'));
@@ -1486,10 +1498,12 @@ it('sets up Sub2API from one site address and retains discovered capabilities in
   const config = vi.mocked(createCustomProvider).mock.calls[0][0];
   for (const agent of ['claude-code', 'codex', 'pi'] as const) {
     const rt = config.runtimes[agent]!;
-    expect(rt.baseUrl).toBe('https://relay.example/team/v1');
-    expect(rt.modelsUrl).toBe('https://relay.example/team/v1/models?client_version=0.147.0');
     expect(rt.catalogPresetId).toBe('sub2api');
     expect(rt.models[0].discoveredMetadata).toMatchObject({ efforts: ['low', 'high'],
       contextWindow: 272000, contextWindowMax: 1050000, supportsFastMode: true, supportsImageInput: true });
   }
+  expect(config.runtimes.pi?.baseUrl).toBe('https://relay.example/team/v1');
+  expect(config.runtimes.pi?.modelsUrl).toBe('https://relay.example/team/v1/models?client_version=0.147.0');
+  expect(config.runtimes['claude-code']?.baseUrl).toBe('https://{endpoint}/v1');
+  expect(config.runtimes.codex?.baseUrl).toBe('https://{endpoint}/v1');
 });
