@@ -294,6 +294,7 @@ describe("mobile maker transport", () => {
   });
   it("documents the remote channels used by the mobile transport", () => {
     expect(MOBILE_MAKER_CHANNELS).toEqual([
+      "ghosts:composer-list",
       "maker:create-session",
       "maker:get-capabilities",
       "maker:provider:list",

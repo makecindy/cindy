@@ -31,7 +31,12 @@
     "openMicPermission": "마이크 권한 설정 열기",
     "maxAttachments": "첨부는 최대 {{max}}개까지 가능합니다.",
     "voiceStopRecording": "녹음 중지",
-    "capabilitiesUnsupported": "컴퓨터에서 명령과 리소스 목록을 불러오지 못했습니다. 컴퓨터의 Cindy를 업데이트한 후 다시 시도하세요"
+    "capabilitiesUnsupported": "컴퓨터에서 명령과 리소스 목록을 불러오지 못했습니다. 컴퓨터의 Cindy를 업데이트한 후 다시 시도하세요",
+    "plugins": "플러그인",
+    "pluginsChooseDevice": "기기 선택",
+    "pluginsLoading": "플러그인 불러오는 중…",
+    "pluginsEmpty": "설치된 플러그인 없음",
+    "pluginsReload": "플러그인 다시 불러오기"
   },
   "presentation": {
     "collaboration": {

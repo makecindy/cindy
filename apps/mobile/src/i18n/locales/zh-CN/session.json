@@ -31,7 +31,12 @@
     "openMicPermission": "打开麦克风权限设置",
     "maxAttachments": "最多添加 {{max}} 个附件。",
     "voiceStopRecording": "停止录音",
-    "capabilitiesUnsupported": "无法读取电脑端的命令和资源列表，请更新电脑上的 Cindy 后重试"
+    "capabilitiesUnsupported": "无法读取电脑端的命令和资源列表，请更新电脑上的 Cindy 后重试",
+    "plugins": "插件",
+    "pluginsChooseDevice": "请先选择设备",
+    "pluginsLoading": "正在加载插件…",
+    "pluginsEmpty": "暂无已安装插件",
+    "pluginsReload": "重新加载插件"
   },
   "presentation": {
     "collaboration": {
