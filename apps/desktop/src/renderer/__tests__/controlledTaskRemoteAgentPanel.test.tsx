@@ -151,6 +151,7 @@ vi.mock('@/hooks/useRemoteClaudeSubscriptionUsage', () => ({
 import { ModelSelectorContent } from '@/components/new-chat/ModelSelector';
 import { __resetForTest as resetEnginePrefs } from '@/state/modelEnginePrefs';
 import { __resetForTest as resetFavorites } from '@/state/modelFavorites';
+import { __resetForTest as resetRecentModels, listRecentModels } from '@/state/recentModels';
 
 const devices = [{ deviceId: 'device-c', name: 'Studio' }];
 
@@ -190,6 +191,7 @@ const list = () => screen.getByRole('listbox');
 beforeEach(() => {
   resetEnginePrefs();
   resetFavorites();
+  resetRecentModels();
 });
 
 afterEach(() => {
@@ -395,5 +397,66 @@ describe('本机任务不受影响', () => {
     expect(screen.queryByRole('button', { name: 'B Main' })).toBeNull();
     expect(within(list()).getByText('A Model')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'C Open · Studio' })).toBeTruthy();
+  });
+});
+
+// 「最近使用」记录没有设备字段:浏览其他电脑的目录时选中不得写进本机流水(2026-10-08 review P1)。
+// 任务归属判不出草稿 —— 本机草稿的 deviceLinkDeviceId 是 null,所以按**当前浏览的目录**再禁一次。
+describe('本机草稿:浏览其他电脑的目录后选中不写本机「最近」', () => {
+  function renderLocalDraftPanel(
+    remoteAgent: Partial<React.ComponentProps<typeof ModelSelectorContent>['remoteAgent']> = {},
+    props: Partial<React.ComponentProps<typeof ModelSelectorContent>> = {},
+  ) {
+    const onUnifiedSelect = vi.fn(async () => true);
+    render(
+      React.createElement(ModelSelectorContent, {
+        modelId: 'a-model',
+        effort: 'high',
+        onModelChange: vi.fn(),
+        onEffortChange: vi.fn(),
+        currentProviderId: 'a-local',
+        onProviderChange: vi.fn(),
+        onUnifiedSelect,
+        // 对话入口开的记录开关(草稿 / 已建任务 / 任务内切换都开;定时任务 / IM 等不开)。
+        recordRecentUsage: true,
+        remoteAgent: { devices, selectedDeviceId: null, ...remoteAgent },
+        ...props,
+      }),
+    );
+    return { onUnifiedSelect };
+  }
+
+  it('Agent 落在第三台电脑:浏览那台的目录并选中不记本机历史', async () => {
+    // Agent 在那台电脑 = 目录也跟着那台(deviceId 指向被浏览的电脑)。
+    const { onUnifiedSelect } = renderLocalDraftPanel({ selectedDeviceId: 'device-c' }, {
+      deviceId: 'device-c',
+      modelId: 'c-model',
+      currentProviderId: 'c-open',
+    });
+    expect(within(list()).getByText('C Model')).toBeTruthy();
+    const row = within(list()).getByText('C Model').closest('[data-unified-anchor]') as HTMLElement;
+    await act(async () => {
+      fireEvent.click(row);
+    });
+    // 选择本身照常生效(那条模型就在那台电脑跑),只是不落本机「最近」:两台电脑若有同来源
+    // 同模型 id,回到本机会把这条远程记录解析成本机模型,点击就用错运行位置。
+    expect(onUnifiedSelect).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerId: 'c-open',
+        modelId: 'c-model',
+        agentDevice: { deviceId: 'device-c', name: 'Studio' },
+      }),
+    );
+    expect(listRecentModels()).toEqual([]);
+  });
+
+  it('对照:Agent 在本机,选本机目录里的模型照常记(禁记只针对浏览的远程目录)', async () => {
+    renderLocalDraftPanel({ selectedDeviceId: null });
+    const row = within(list()).getByText('A Model').closest('[data-unified-anchor]') as HTMLElement;    await act(async () => {
+      fireEvent.click(row);
+    });
+    expect(listRecentModels().map((item) => `${item.providerId}:${item.modelId}`)).toEqual([
+      'a-local:a-model',
+    ]);
   });
 });
