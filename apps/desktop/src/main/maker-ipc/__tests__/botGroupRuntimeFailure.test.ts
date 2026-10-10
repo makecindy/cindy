@@ -3,6 +3,7 @@ import { botGroupRuntimeFailureCode, readBotGroupRuntimeFailureDetail, settleUnd
 
 describe('group runtime failure diagnostics', () => {
   it.each([
+    ['NO_MODEL', 'MODEL_UNAVAILABLE'],
     ['[PI_IMAGE_INPUT_UNSUPPORTED] private model details', 'IMAGE_INPUT_UNSUPPORTED'],
     ['[MODEL_NOT_FOUND] private route', 'MODEL_UNAVAILABLE'],
     ['[INVALID_TOKEN] private token', 'AUTH_REQUIRED'],
@@ -39,6 +40,7 @@ describe('group runtime failure diagnostics', () => {
     [{ message: 'Too many requests', errorStatus: 429, usageLimit: true }, 'RATE_LIMITED'],
     [{ sdkError: 'rate_limit', message: 'ExceededBudget', errorStatus: 429, usageLimit: true }, 'QUOTA_EXCEEDED'],
     [{ sdkError: 'model_not_found' }, 'MODEL_UNAVAILABLE'],
+    [{ code: 'NO_MODEL', message: 'private preparation details' }, 'MODEL_UNAVAILABLE'],
     [{ modelAccessDenied: true, errorStatus: 403 }, 'MODEL_UNAVAILABLE'],
     [{ sdkError: 'user_model_access_denied' }, 'MODEL_UNAVAILABLE'],
     [{ codexErrorInfo: 'usageLimitExceeded', message: '[REDACTED]' }, 'QUOTA_EXCEEDED'],

@@ -24,7 +24,7 @@ export function botGroupRuntimeFailureCode(error: unknown): BotGroupRuntimeFailu
     || (typeof data?.reason === 'string' && /^(?:bridge_)?(?:turn_no_event_timeout|upstream_response_idle_timeout)$/.test(data.reason))) return 'RUNTIME_TIMEOUT';
   const text = values.filter((value): value is string => typeof value === 'string').join('\n');
   const status = typeof data?.errorStatus === 'number' ? data.errorStatus : extractNonSecretErrorSignals(text).errorStatus;
-  if (data?.modelAccessDenied === true || /\b(?:MODEL_NOT_FOUND|MODEL_UNAVAILABLE|NO_AVAILABLE_MODEL|BOT_MODEL_REQUIRED|MODEL_REQUIRED|user_model_access_denied)\b/i.test(text)) return 'MODEL_UNAVAILABLE';
+  if (data?.modelAccessDenied === true || /\b(?:NO_MODEL|MODEL_NOT_FOUND|MODEL_UNAVAILABLE|NO_AVAILABLE_MODEL|BOT_MODEL_REQUIRED|MODEL_REQUIRED|user_model_access_denied)\b/i.test(text)) return 'MODEL_UNAVAILABLE';
   if (status === 401 || status === 403 || /\b(?:AUTH_REQUIRED|INVALID_TOKEN|TOKEN_EXPIRED|UNAUTHORIZED|invalid_api_key|authentication_error|authentication_failed|provider_auth_or_access)\b/i.test(text)) return 'AUTH_REQUIRED';
   if (status === 402 || matchesDeterministicUsageExhaustionText(text) || /\b(?:QUOTA_EXCEEDED|USAGE_LIMIT_EXCEEDED|INSUFFICIENT_BALANCE|insufficient_quota|billing_error|provider_quota_limit|usageLimitExceeded|sessionBudgetExceeded)\b/i.test(text)) return 'QUOTA_EXCEEDED';
   // usageLimit also accompanies temporary rate limits; an explicit rate signal wins.

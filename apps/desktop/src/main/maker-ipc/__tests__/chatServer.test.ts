@@ -196,6 +196,21 @@ describe('Chat Server result delivery and refresh', () => {
   const deliveries = () => fixture.handle.mock.calls.filter(([, , body]) => body?.action === 'complete');
 
   it.each([
+    ['NO_MODEL', 'MODEL_UNAVAILABLE'],
+    ['MEMBER_UNAVAILABLE', 'RUNTIME_ERROR'],
+  ])('settles the lane preparation failure %s without dispatching or exposing details', async (errorCode, failureCode) => {
+    fixture.profiles = [{ id: 'local-bot', displayName: 'Bot', avatar: null, status: 'active' }];
+    deps.ensureLane = vi.fn(async () => ({ ok: false as const, errorCode, message: 'private preparation details' }));
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(deps.dispatch).not.toHaveBeenCalled();
+    expect(deps.abortLane).not.toHaveBeenCalled();
+    const failures = fixture.handle.mock.calls.filter(([, , body]) => body?.action === 'fail');
+    expect(failures).toHaveLength(1);
+    expect(failures[0][2]).toMatchObject({ detail: `cindy-runtime-error:${failureCode}` });
+    expect(JSON.stringify(failures)).not.toContain('private preparation details');
+  });
+
+  it.each([
     ['authentication_failed private credential', 'AUTH_REQUIRED'],
     ['ECONNRESET private endpoint', 'NETWORK_ERROR'],
     ['pi rpc timeout after 30000ms: prompt /private/path', 'RUNTIME_TIMEOUT'],

@@ -221,6 +221,12 @@ type TurnOutcome =
   | { kind: 'failed'; notice: BotGroupNoticeCode; failureCode?: BotGroupRuntimeFailureCode }
   | { kind: 'cancelled' };
 
+function unavailableLaneOutcome(errorCode: string): Extract<TurnOutcome, { kind: 'failed' }> {
+  const failureCode = botGroupRuntimeFailureCode({ code: errorCode });
+  // Keep the existing unavailable-member notice when preparation has no specific recovery category.
+  return { kind: 'failed', notice: 'member-unavailable', ...(failureCode !== 'RUNTIME_ERROR' ? { failureCode } : {}) };
+}
+
 interface LaneWaiter {
   groupId: string;
   clientId: string;
@@ -892,7 +898,7 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
   ): Promise<TurnOutcome> => {
     const lane = await deps.ensureLane({ botId: member.botId, groupId: group.id, title: group.name });
     if (round.cancelled || !scopeIsCurrent(scope)) return { kind: 'cancelled' };
-    if (!lane.ok) return { kind: 'failed', notice: 'member-unavailable' };
+    if (!lane.ok) return unavailableLaneOutcome(lane.errorCode);
     // A lane must never act on a stale, looser permission profile than its Bot now has.
     try {
       await deps.syncLanePermission?.(lane.sessionId, member.botId);
@@ -1469,7 +1475,7 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
         plan: { planId, workDir, sessionId: ownerSessionId },
       });
       if (!live()) return;
-      if (!lane.ok) return await settle({ kind: 'failed', notice: 'member-unavailable' });
+      if (!lane.ok) return await settle(unavailableLaneOutcome(lane.errorCode));
       active.sessionId = lane.sessionId;
       emit(groupId, 'round', scope);
       try {
