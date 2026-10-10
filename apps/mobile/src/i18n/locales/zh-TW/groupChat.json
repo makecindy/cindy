@@ -166,10 +166,22 @@
   "errors": {
     "memberLimit": "一個群聊需要 2–6 位夥伴",
     "memberUnavailable": "有夥伴現在無法使用，換一位再試",
+    "mentionUnavailable": "點名的成員已無法使用，請重新選擇後傳送",
     "notFound": "這個群聊已不存在",
     "hostNotReady": "Cindy 還在準備中，請稍後重試",
     "planOpen": "正在分工，做完或停止後才能安排新的",
-    "planClosed": "這個安排已經結束或更新了"
+    "planClosed": "這個安排已經結束或更新了",
+    "invalidAttachment": "附件無法讀取，請重新選擇後傳送。",
+    "attachmentUnavailable": "未能從手機取回附件，請檢查裝置連線後重試。",
+    "attachmentTooLarge": "附件超過 100 MB，請選擇較小的檔案。",
+    "mediaUploadFailed": "附件未能上傳到群聊服務，請稍後重試。",
+    "authRequired": "登入已失效，請在電腦上重新登入。",
+    "chatUnavailable": "群聊服務暫時無法連線，請檢查網路後重試。",
+    "importPending": "群歷史記錄仍在同步，請稍後重試。",
+    "requestTimeout": "還未確認操作結果，請重新整理查看後再重試。",
+    "permissionDenied": "你沒有執行此操作的群管理權限。",
+    "serviceError": "群聊服務處理失敗，請稍後重試。",
+    "groupArchived": "本群已封存，無法執行此操作。"
   },
   "followUp": {
     "next": "分工 · 下一步",

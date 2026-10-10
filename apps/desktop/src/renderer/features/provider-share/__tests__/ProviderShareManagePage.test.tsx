@@ -82,7 +82,14 @@ beforeEach(() => {
     throw new Error(`unexpected ${cmd.action}`);
   });
   Object.assign(window, {
-    electronAPI: { providerShare: { command, onOwnedChanged: () => () => undefined } },
+    electronAPI: {
+      providerShare: { command, onOwnedChanged: () => () => undefined },
+      // 页面上方的供应商组一块(由 ProviderGroupSection 自己的测试覆盖)：这里只给一个空组。
+      providerGroup: {
+        command: async (cmd: { providerId: string }) => ({ providerId: cmd.providerId, config: null, members: [] }),
+        onChanged: () => () => undefined,
+      },
+    },
   });
 });
 

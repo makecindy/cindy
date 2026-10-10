@@ -1169,6 +1169,7 @@ export async function handleMirrorCachePutMessages(
   expectedOwnerToken?: unknown,
   expectedAccountCounter?: unknown,
   historyView?: unknown,
+  mergeListMessage?: unknown,
 ): Promise<{ ok: true; invalidation?: number }> {
   const device = requireCacheId(deviceId, 'deviceId');
   const session = requireCacheId(sessionId, 'sessionId');
@@ -1199,6 +1200,8 @@ export async function handleMirrorCachePutMessages(
       ? expectedAccountCounter
       : undefined;
   try {
+    const historyArgs: [historyView?: string, mergeListMessage?: boolean] = mergeListMessage === true
+      ? [historyView as string | undefined, true] : historyView !== undefined ? [historyView as string] : [];
     const result = await cache.writeMessages(
       device,
       session,
@@ -1206,7 +1209,7 @@ export async function handleMirrorCachePutMessages(
       expected,
       expectedOwner,
       expectedAccount,
-      ...(historyView !== undefined ? [historyView as string] : []),
+      ...historyArgs,
     );
     return { ok: true, invalidation: result.invalidation };
   } catch (err) {
@@ -1605,6 +1608,7 @@ export function registerDeviceLinkIpc(deps: DeviceLinkIpcDeps = defaultDeps()): 
       expectedOwnerToken?: unknown;
       expectedAccountCounter?: unknown;
       historyView?: unknown;
+      mergeListMessage?: unknown;
     };
     return handleMirrorCachePutMessages(
       getMirrorCache(),
@@ -1616,6 +1620,7 @@ export function registerDeviceLinkIpc(deps: DeviceLinkIpcDeps = defaultDeps()): 
       p.expectedOwnerToken,
       p.expectedAccountCounter,
       p.historyView,
+      p.mergeListMessage,
     );
   });
   ipcMain.handle(DEVICE_LINK_INVOKE.MIRROR_CACHE_GET_SESSION_LIST, (e) => {

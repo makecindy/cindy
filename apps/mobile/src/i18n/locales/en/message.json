@@ -265,6 +265,12 @@
         "reason": "Interruption reason",
         "attempt": "Attempt {{attempt}}/{{total}}",
         "sessionTotal": "{{count}} reconnects in this session"
+      },
+      "agentSwitch": {
+        "usage-limit": "{{from}} hit its usage limit; continued on {{to}}",
+        "auth": "{{from}} is signed out; continued on {{to}}",
+        "unavailable": "Couldn’t reach {{from}}; continued on {{to}}",
+        "overload": "{{from}} was overloaded; continued on {{to}}"
       }
     },
     "modelLabel": "Model",

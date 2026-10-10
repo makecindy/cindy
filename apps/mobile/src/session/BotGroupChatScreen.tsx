@@ -461,7 +461,7 @@ function BotGroupTimelineItem({
     const variant = botGroupNoticeVariant(message.noticeCode, message.planId !== null);
     return <Text style={styles.notice} testID="botGroup.notice">{variant ? t(`groupChat.notice.${variant}`, { name }) : message.content}</Text>;
   }
-  if (message.authorKind === 'user' && message.isSelf !== false) {
+  if (message.kind === 'message' && message.authorKind === 'user' && message.isSelf !== false) {
     // Older computers send no attachments; a message with only attachments has no bubble.
     const attachments = message.attachments ?? [];
     const bubble = message.content.trim().length > 0 || attachments.length === 0;
@@ -478,9 +478,13 @@ function BotGroupTimelineItem({
       </View>
     </View>;
   }
-  // Name snapshot from when it was said; the avatar follows the live profile.
-  const author = identityFor(message.authorBotId ?? '', message.authorName || member?.name || '');
+  // Server plans retain the human creator as author, but the card belongs to its organizer.
   const isPlanCard = message.kind === 'plan';
+  const organizer = isPlanCard ? members.find(candidate => candidate.botId === plan?.organizerBotId) : undefined;
+  const author = isPlanCard
+    ? identityFor(plan?.organizerBotId ?? '', organizer?.name || plan?.organizerName || '')
+    : identityFor(message.authorBotId ?? '', message.authorName || member?.name || '');
+  if (isPlanCard) continued = false;
   return <View style={[styles.botRow, continued && styles.botRowContinued]} testID={isPlanCard ? 'botGroup.message.plan' : 'botGroup.message.bot'}>
     {continued ? <View style={styles.avatarSpacer} /> : <View style={styles.avatarSlot}>
       <BotGroupAvatar deviceId={deviceId} identity={author} size={BOT_GROUP_MESSAGE_AVATAR_SIZE} online={online} />

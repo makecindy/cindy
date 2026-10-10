@@ -334,6 +334,7 @@ Worker turn 被 vendor 报终止型 error，但 interrupted-turn auto-resume 仍
 
 7. **中断是“预留下条输入 + 优雅停旧 turn”的单次原子操作（状态：不变量）**<br>
    `send_to_worker` 公开 schema 保持普通直发／排队语义，不带 interrupt 字段；`interrupt_worker` 是唯一公开中断入口。两者进入 `OrcaTeamService` 同一个私有 dispatch 路径，以内部 normal／interrupt mode 分流，不能把 `interrupt_worker` 实现成 stop + send 两次工具调用。interrupt 必须复用 `buildQueuedOrcaInterAgentMessage`、accepted 回调、host acceptance stamp、clientId 去重与持久化链路；队列恢复完成后，在无 await 的 coordinator 临界区把新消息插到现有 pending 队首，并在 emit／drain 之前同步发起旧 turn 的 graceful stop。消息在 `unsupported`／`unconfirmed` 时仍保留队首，不硬 abort；用户暂停态不得被解除；stop adapter 抛错／拒绝或结果为 `unconfirmed` 时，`queue_paused` 必须读取 coordinator 当前投影，不得默认成 `false`。`lead_interrupt` 必须在旧 terminal 唤醒 drain 前同步捕获，旧 turn 不 auto-bridge，也不得覆盖已 accepted 的新 turn 状态；下一次 accepted dispatch 清理标记。整个流程从预留前到 stop 结果确认都计入 `activeWorkerDispatches`，与 done 确认互斥。
+   `onReserved` 可返回同一次停止请求的等待票据：本机 coordinator 仍同步调用，远端适配器等待票据后再投递替换消息，不能额外调用第二次 abort。票据吸收错误仅为等待结算，真实停止结果仍由 TeamService 原 stopPromise 返回。
 
 8. **多条合并必须一次校验、一次交换、一次持久化（状态：不变量）**<br>
    `merge_queued_messages` 只接受至少两个不重复、按活队列顺序连续、pending、非 consuming／steering、由当前 Lead 发出的消息。durable restore 必须先成功；之后同步重读到一次性数组交换之间不得 await。任一消息缺失、次序变化、非连续、非 Lead 或已 consuming 时，整次零修改并返回 `QUEUE_CHANGED` 与最新完整队列，不能部分合并。survivor 保留最前目标的 clientId、队列位置与 `hostAcceptedAtMs`；移除项必须逐条走 discard settlement 结清 accepted 回调；最终只 emit／持久化一次，不暴露中间快照。`update_queued_message`、`cancel_queued_message` 继续保持单条语义，不得多步模拟合并。
@@ -383,7 +384,55 @@ Worker turn 被 vendor 报终止型 error，但 interrupted-turn auto-resume 仍
 9. **Lead 的完成以团队收口为准（状态：不变量）**
    Lead 派完活结束本轮时，团队仍在干活，这一轮不是完成：灵动岛保持 Lead 为运行中（不出完成卡片、不响完成音、不记未读），Work Louder 键盘、侧栏卡片与远程会话列表读同一份活动快照，因此一起保持运行中；renderer 不发完成通知（桌面／手机／飞书）、不亮完成角标。Worker 回报送达后 Lead 被唤起，那一轮的 done 才是团队完成。判据只有一份，在 Main：以「仍有 accepted 派活欠 Lead 回报」（auto-bridge pending）为准，最后一份回报送达或被丢弃（手动停止、归档等）时，若 Lead 空闲则补发被推迟的完成；renderer 不自行推算 Worker 状态，完成去抖落地时读灵动岛活动快照，Main 仍把该会话保持为 `running` 就不算完成（暂停的输入队列同样会让灵动岛保持运行中，但保留原有完成提醒，故排除）。Worker 自身仍不进灵动岛、不单独发通知。已知边界（刻意不处理，保持简单）：派给正忙 Worker、尚在其队列里未被接收的任务还没有待回报记录（Worker 正忙通常意味着已有同一 Lead 的待回报记录）；静默完成（如静默的自动运行）不走推迟，Lead 活动会直接变为完成。实现指针：`orcaTeamService.ts` 的 `hasPendingWorkerReports` / `deletePendingReport` / `onLeadWorkerReportsSettled`，`register.ts` 的 `setCompletionDeferResolver` 与 `onLeadWorkerReportsSettled` wiring，`agent-island/service.ts` 的 `notifyQueueEmptied`，renderer `state/agentIslandActivity.ts` 的 `isSessionCompletionHeldByAgentIsland` 与 `useSessionRunningStatus.ts` 的 done debounce。
 
+10. **远端 Worker 只在运行设备上跑（状态：不变量）**
+   Worker 可以放到同账号另一台电脑（运行设备）上运行：真实任务在那台，本机只有一条不跑 Agent、`working_dir` 为空的代理任务行，`orca_workers.execution_device_id` / `remote_session_id` 记录位置。代理行承接计槽、状态机、auto-bridge 与归档，任何路径都不得在本机为它起 Agent（`bootstrapSession` 对远端 Worker 直接拒绝）、不得把它复制到其他电脑；派活、停止与存活查询经 `orcaRemoteWorkers.ts` 的 `wrapTeamDeps` 分流到运行设备，其余依赖原样透传，不另造状态机。回报靠轮询：派出的消息已进入对话（投递回执 accepted）且设备不在跑时，分页读取 user / assistant 历史，按派活 user 的 clientId 定位对应的最后一条 assistant 回复并按消息 id 去重；后续用户插话的回复和异常状态不得归给此前派活，历史读取期间的新派活不得被旧回报清除。每轮最多扫描 2000 行，预算不足时保留游标下一轮续读，不误判缺少回复；宿主 onAccepted / onAcceptedCommit 完成后才冻结回报身份并允许轮询收尾，accepted 回调失败恢复上一代等待状态，保存旧结果期间不得消费新派活身份或写入其捕获文本。同一远端 Worker 的 enqueue、accepted / commit 和身份确认复用现成 session 发送锁串行执行，避免并发回调与投递顺序错位。用户在运行设备上直接发的消息算插话，不触发回报。设备不可达只是运行期投影（`executionDevice.reachable`），不扩展 `OrcaWorkerStatus`；派活时不可达直接失败，不回退到本机。首版远端 Worker 没有 `send_to_lead` 桥，也不支持 steer / 队列编辑。界面：创建弹窗的「运行设备」只在本机 Lead 上出现（`CreateWorkerPopover` 的 `executionDevicesEnabled`），复用标准下拉列表，以有界滚动和键盘按名称定位应对多设备；选了其他电脑后，工作目录提供「对话 / 指定目录」，「对话」不传 `workingDir`、在运行设备创建不绑定项目的任务，「指定目录」只使用那台电脑上的绝对路径。手机版的新任务「开启协同」与 Lead「创建 Worker」共用设备下拉列表和两种目录模式；设备列表从 Lead 所在电脑读取，Agent、模型和供应商目录从所选运行设备读取。协同面板对远端 Worker 展示运行设备上的真实任务（`RemoteWorkerSessionPane`，先登记归属再读写）。实现指针：`orcaRemoteWorkerRuntime.ts`、`orcaRemoteWorkers.ts`、`orcaWorkerCreationService.ts` 的 `createRemoteWorkerInTeam`、运行设备侧 `orcaRemoteWorkerHost.ts`；协议见 `protocol-compatibility.md`「协同远端 Worker」。
+
 ### 测试与回归清单
+
+远端回报身份在 enqueue 前保存于 `orca_workers.pending_remote_report`，恢复时重建 TeamService
+待回报身份；同一数据库 owner 的重复启动不清空派活。只有 Lead 接受回报或该捕获身份已被
+结清/替换后，才原子更新去重游标与对应等待记录；拒收或落盘失败继续重试，不清掉新派活。
+远端派活先保存未冻结的待回报身份，再执行 Lead 的 `onAccepted` 权限／状态复核；成功后
+再次核对 owner 与派发身份，才向运行设备入队。复核拒绝时不发送，恢复上一代等待记录并
+按既有 accepted 回滚恢复 Lead 状态；回滚次生错误记日志，不覆盖原始拒绝异常。
+明确投递失败也回滚已暂存的 accepted 状态；投递成功或结果未知后才 commit 并冻结身份。
+这不改变 queued 派活尚未消费就提交回报身份的已知缺口，也不提供跨设备事务或撤销已执行输入。
+结束协同不依赖缓存 running：先确认停止并保存 `remote_stop_confirmed_at`，再解除协同标记；
+清理单飞且读取最新阶段，后续只补未完成阶段。归档提交成功后才取消远端路由。
+创建回执丢失时使用同一 sessionId 核对，未确认身份保存在 `orca_remote_opens`；孤儿清理与
+Worker 关联共用任务锁，锁内复查后仅解除未关联标记，保留任务、文件及用户发起的工作。
+本机代理任务行在 Worker 关联时才创建，与 Worker、远端路由及 open 收据在同一事务提交；
+open 成功后未关联即退出时，本机没有半成品代理，仅按持久 open 身份解除远端标记。
+同 ID open 仅对来源匹配、尚未 release 且 `status = active` 的任务返回成功；用户已归档或
+软删除的任务返回 `PRECONDITION_FAILED`，不复活、不关联或派活。创建收据保留供孤儿清理
+仅解除来源标记，清理不停止或删除任务。回归覆盖丢回执后归档／删除再重试及 Host 重建。
+运行设备的真实任务与 `orcaRemoteLead` 在同一 INSERT 写入，再启动 Agent；启动失败或
+进程在两者之间退出时，同一来源与 Lead 仍能按任务 ID 对账，不留下无来源标记的普通任务。
+实现见 `orcaRemoteWorkerHost.ts` 的 `createOrcaRemoteWorkerSessionOpener`，回归见
+`apps/desktop/src/main/localDb/__tests__/sessionOpening.test.ts`。
+新建和同 ID 重试的 open 回包带运行设备实际保存的 `fastMode`，本机代理与创建结果共同沿用；
+旧运行设备缺少该可选字段时才按请求值降级，不用本机目录猜测远端 Fast 能力。
+恢复完成前派发和本机启动入口
+不得按缺失的运行期路由回退到本机，读取失败或 owner 改变时应拒绝继续。
+创建回滚原子归档代理并释放名称与名额，未确认释放的 Worker 行保留供重启补发；正常
+结束协同仍保留历史 link，回滚行只在 stop/release 已确认后删除。
+运行设备上的真实任务通过 `orcaRemoteLead` 识别，不伪装为本机 `orcaRole='worker'`；
+Desktop 和 Mobile 均隐藏协同入口，保留 `releasedAt` 的历史来源标记也不允许嵌套协同。
+Mobile 的入口读取和残留表单提交都检查该身份，元数据补齐标记后返回主面板；
+回归见 `apps/mobile/src/__tests__/orcaTeam.test.ts` 与 `useOrcaWorkerForm.test.tsx`。
+
+当前停止补偿的已知限制：`maker:abort-session` 只接受任务 ID，没有目标轮次与持久请求
+身份；若运行设备已停止但回执丢失，后续补偿可能停止用户新发起的轮次。现有传输去重
+不能覆盖新的请求或运行设备重启。不能把超时当成功、取消所有补偿，或用先查空闲再停止
+代替解决；后续应在 Orca 专用边界设计持久幂等停止、目标轮次条件与旧端能力协商，覆盖
+丢回执后新轮次、重启、并发重试及账号切换。当前实现尚未消除此风险。
+
+当前结束协同的另一已知限制：abort 只停止当前轮次，release 只写结束标记，尚未执行的
+远端 Lead 派活可能仍留在持久队列并随后执行。当前远控入队会剥离 Orca 语义来源，来源
+设备也不能区分同一设备发出的用户消息与自动派活；仅用最后一个 clientId 无法覆盖多条
+未消费输入。不直接清空整队列，以免丢失用户消息。完整修复须先建立可持久核对的 Lead
+投递归属及释放边界，再持久化取消回执和队列快照；覆盖多条派活、用户混排、消费竞态、
+丢回执、重启与其它控制端。该问题本轮未修复，不能视为结束协同已保证清除待执行派活。
 
 当前文档要求保留以下回归方向：
 

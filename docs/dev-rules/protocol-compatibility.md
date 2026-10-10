@@ -11,6 +11,27 @@
 
 > **增量适用原则**：wire protocol 兼容对所有跨端改动生效，不因是小改而豁免。
 
+## 任务列表提前同步聊天正文
+
+同账号控制端声明 `session-list-messages-v1` 后，`sessions` 订阅同时接收普通用户／助手
+已保存的完整正文、状态与删除事件，复用原有 channel。仅列表接收的 payload
+带 `listMessage: true`，不建立活跃控制意图，也不因正文到达自动拉取整段历史。工具正文、
+思考、附件及超过 200,000 字符的异常长消息仍按需读取；列表显示行数不变。
+共享任务访客和供应商分享不扩展订阅范围。旧控制端未声明能力时保持原来的路由。
+流式增量、SDK 收尾与在途正文补偿只走详情订阅；列表仍显示原活动简介，不缓存未完成前缀。
+列表离线补发按 `sessions` topic 回放，现有每设备队列上限为 2 MiB，容纳 200,000 字符
+正文最坏情况下的 JSON 转义体积；仍受 128 条／5 分钟限制，超预算或过期后由打开时的
+历史核对补齐，不承诺无期限离线预收。桌面预收正文在现有
+缓存写锁内合并并保留结构化历史，从未打开的任务同样计入现有内存回收预算。
+
+`messages:list` / `messages:view` 的 options 可选携带 `messageBodies: { version: 1, known }`，
+known 是消息 ID 与主机提供的 SHA-256 正文指纹对。支持的主机在授权、净化之后返回
+`message-bodies-v1` 包装，只省略指纹吻合的正文，顺序、分页与消息元数据始终重新读取。
+共享 DeviceLinkClient 从本次请求固定的正文快照还原后再交给两端界面。缓存不命中或正文
+变更时仍发送全文；旧主机返回普通页面，新控制端兼容；旧控制端不请求此格式。
+传输去重仅保留有界内存，两端持久展示缓存继续使用原有账号隔离与删除屏障。
+不修改 relay、不新增权限、数据库 migration 或 Mobile 原生指纹。
+
 ## 支付宝已付下一期的升级拒绝
 
 升级报价和确认可返回 HTTP 409 `PLAN_CHANGE_RENEWAL_PREPAID`。Desktop Main 仅放行该
@@ -52,6 +73,11 @@ transport 与 device-link 的 core / review-input / mobile allowlist 均已登�
 该调用。自动继续复用既有 `CONTINUE_AFTER_ERROR_PROMPT` 与 `agentMeta.autoResume`，
 `autoResumeInfo.reason` 新值 `usage-limit-reset`，旧客户端按普通自动续跑行显示。
 Claude Code 终态 error 事件可带 `usageResetAt`（unix ms）。服务端无需改动。
+供应商组自动换电脑(2026-10-09，`docs/product-rules/provider-groups.md` §6.1)复用同一条续跑路径，
+`autoResumeInfo` 新增可选字段 `agentSwitch: { from, to, cause }`(cause 为 `usage-limit` / `auth` /
+`unavailable` / `overload`)，Desktop 与 Mobile 据此显示「{from} {原因}，已换到 {to} 继续」；字段缺失或
+不合法时照常显示 `usage-limit-reset` 的文案，旧客户端忽略该字段。P1 不改远程 Agent 协议：被分配到别的电脑的
+任务就是普通的远程 Agent 任务。
 
 ## Agent 跨设备历史发现与搜索
 
@@ -194,6 +220,18 @@ relay 类型、allowlist 或持久化 schema，服务端无需改动；Mobile �
 
 标签的可选 `nameCustomized` 标记区分显式改名与预设本地化。新版更新请求仅在明确改名时
 提交 `nameCustomized: true`；旧端换色时携带相同原名不会误置标记。缺省字段沿用旧显示规则。
+
+## 远程桌面退出与断线锁屏
+
+远程桌面的 `start` / `heartbeat` 可追加布尔 `lockOnExit`。新版 Desktop 与 Mobile
+提前同步退出锁屏策略，被控端在本机断开、信令断开或现有心跳过期时本地执行锁屏；
+存活连接的 resume / takeover 和显示器切换不触发。锁屏期间重复断开或心跳过期
+不能取消锁屏，撤权与认证身份变化仍可取消。旧请求缺少字段时保留原行为（旧手机的
+`privacyScreen.lockOnExit` 继续兼容），新字段优先于该隐私屏幕附带偏好。
+旧被控端忽略新字段，主动退出仍发送原 `stop.lockScreen`；断网兜底需要被控端升级。
+不带 `lockScreen` 的协议 `stop` 仍用于重连和切显示器的清理，不执行锁屏。
+Desktop 本地关窗不等待远端停止回执，后台清理只作用于原 peer / lease，不重置共享链路。
+此扩展沿用已有业务通道，不改变 relay、服务端协议或权限范围。
 
 ## 远程桌面临时分辨率
 
@@ -602,6 +640,53 @@ handler 无 sender 依赖；不加入共享任务访客白名单，不进入自�
   受邀者用第二条 relay 连接(`ProviderShareGuest` 认证)，见契约 §6。
 - **暂不支持**：分叉、审查、移动项目、复制到其他电脑、导出 `.cshare`(Agent 会话记录在 B)，入口隐藏、
   主进程拒绝。
+
+## 协同远端 Worker：Worker 在另一台电脑运行
+
+与上一节方向相反：协同的 Lead 与团队留在 A，单个 Worker 的任务、目录、命令与文件都在 B(运行设备)。
+B 上的 Worker 是一条普通任务，`sessions.orca_remote_lead`(migration 0124，JSON 见
+`apps/desktop/src/shared/orcaRemoteWorker.ts`)记录派活电脑与 Lead；派活、停止与回报复用现有会话通道。
+方案与产品决策见 [`../orca-cross-device-worker-plan.md`](../orca-cross-device-worker-plan.md)。
+
+- **新增 channel**(`packages/device-link/src/orcaRemoteWorker.ts`，只进同账号 allowlist，不进共享任务清单)：
+  `maker:orca:remote-worker:caps`(能力探测，回 `{ version }`)、`…:open`(按 A 给定的任务 id 新建 Worker 任务，
+  幂等；超时 60s)、`…:release`(结束协同，任务与文件保留，幂等)。B 侧实现见
+  `apps/desktop/src/main/maker-ipc/orcaRemoteWorkerHost.ts`。
+- **幂等 open 的终态检查**：同来源、同 Lead 且未 release 的已有任务也必须仍为 `active`；
+  已归档／软删除时拒绝并返回既有 `PRECONDITION_FAILED`，不新建、不复活。A 保留未确认创建
+  收据，恢复仅解除未关联标记。该检查使用 B 的现有 status 列，不新增 wire 字段或改变版本；
+  旧 B 仍保留原行为，B 更新后生效。
+- **实际档位**：`open` 回包可选 `effort` 是 B 已保存的解析结果，同 ID 重试也从已有任务读取。
+  空字符串保留无档位状态；旧 B 不返回该字段时，A 保留原来的请求值降级规则。字段增量不改协议版本，
+  旧 A 忽略它，新 A 不向旧 B 要求新增请求字段。
+- **实际 Fast 状态**：`open` 回包可选 `fastMode` 是 B 已保存的布尔值，新建和同 ID 重试均取真实任务，
+  A 的代理任务和创建结果沿用它，显式 `false` 不被请求中的 `true` 覆盖。旧 B 缺省时，A 保留请求值的
+  降级规则；旧 A 忽略新增字段，版本与请求不变。完整状态一致性需要 A/B 均更新，服务端无需改动。
+  此字段不改变 B 的模型准入：当前显式开启不支持的 Fast 仍在创建前拒绝，不新增静默降级。
+- **来源身份**：派活电脑取 server 盖章的 `src`(`DeviceLinkInvokeContext.controllerDeviceId`)，不采信载荷自报；
+  非 device-link 调用与共享任务访客一律拒绝。`open` 指定的 `workingDir` 与 `maker:create-session` 同口径经
+  B 的目录守卫(`device-link/dispatch.ts` 的 `PATH_GUARDED_CHANNELS`)；不指定则由 B 分配任务目录。
+- **旧端降级**：旧版 B 没有这三个 channel，回 `CHANNEL_NOT_ALLOWED`；A 据此把该电脑显示为「需要更新」，
+  **不回退**到普通 `maker:create-session`(普通任务没有防嵌套与来源标记)。B 新、A 旧时 B 不受影响。
+- **可选运行设备**：`maker:orca:execution-devices`(只读)由 A 本机界面与控制端共用，返回
+  `{ devices: [{ deviceId, name, platform, supported }] }`；逐台探测 caps，旧版标 `supported:false`，
+  探测失败的不列出。共享任务访客拒绝。
+  Mobile 使用同一只读通道获取 A 视角的设备，模型与 Agent 从所选运行设备读取。
+  新手机连接旧 A 收到 `CHANNEL_NOT_ALLOWED` 时隐藏设备选择，原来的 A 本机 Worker 创建不变。
+  首个与追加 Worker 都沿用既有可选 `executionDeviceId` / `workingDir` 字段；「对话」不传目录，
+  「指定目录」传 B 上的绝对路径，由 B 校验；失败不回退 A。
+- **A 驱动 B 的其余通道**全部是已有同账号 channel：`maker:input:enqueue`(按 `clientId` 幂等，
+  `durableDelivery`)、`maker:input:get-projection`(投递回执)、`maker:list-active`、`local-db:sessions:get`、
+  `local-db:history:messages`、`maker:abort-session`；B 不需要知道「这是协同派活」，只认来源标签。
+- **恢复暂停**：B 的 `INPUT_ENQUEUE` 按已有自动消息来源判据处理 `origin.kind`，Orca 派活不解除
+  崩溃恢复后的队列暂停；普通手机／桌面用户输入仍可解除恢复暂停，用户 Stop 暂停不受影响。
+  不新增 wire 字段或改变版本，A 的既有派活载荷不变；旧 B 保持其原有行为，需更新 B 才有此修复。
+- **收尾限制**：当前 abort/release 不取消未消费的远端派活，结束协同后队列仍可能继续执行。
+  远控入队后的来源不足以可靠区分 Lead 派活与用户输入，本轮不通过清空队列规避；待专门设计
+  持久投递归属、取消回执与释放边界后修复，详见 `orca-team-architecture.md` 的已知限制。
+- **B 侧约束**：带标记的任务不能再开启协同(`assertLeadCollabProjectEnabled` 统一拒绝 Worker 与远端 Worker，
+  覆盖 IPC、远程与 Agent 工具入口)，不能复制到其他电脑(`task-migration/service.ts`)；侧栏照常显示，
+  任务头标注「来自 X 的协同」，结束后显示「协同已结束」。
 
 ## 事实来源
 
@@ -1017,6 +1102,34 @@ Mobile 据此区分已关闭与已删除的旧选择：保留任务或草稿原�
 这是执行主机的投影修复，旧 Mobile 和远控 Desktop 无需新增能力协商即可接收。
 不增加分页、客户端重组或重试，不提高传输大小上限；本机 Desktop 设置仍读取完整目录。
 “关闭后必须重选”的提示与发送前检查随 Mobile 更新；旧版控制端仍沿用各自既有选择处理。
+
+### 伙伴群聊成员操作与发送错误（#5604–#5606）
+
+`bot-group-chat` 数据追加可选 `supportsMemberRemoval`；仅为 true 时手机调用
+`remove-member({ actorId })`，主机复用现有 Chat Server 单成员 remove 与管理权限校验。
+成员投影中的 actorId/actorKind 在手机保留，真人不作为分工负责人/步骤候选；缺字段的
+旧本地伙伴保持原行为。旧手机继续用 `set-members`，新主机只校验其中新增的本机伙伴，
+不丢弃既有真人/外来伙伴 ID。新版手机连旧主机时不调用新动作，伙伴管理沿用旧入口；
+真人移出需升级主机，不能用整份伙伴名单差分假报成功。
+
+群错误仍以稳定码作为 Remote Resource 错误 message，新增附件、鉴权、群服务不可达、
+历史迁移、权限、归档及结果未确认等分类；新版双端本地化，旧端遇到未知码保留原通用失败提示。
+不透传服务器正文或异常文本。仅群 send 的 invoke 预算增加到 180 秒，不改变其他动作、
+共享连接、自动重试或授权。超时不能证明操作未执行，重试沿用 clientId；当前账号主机进程
+合并相同在途请求并缓存最近成功回执，服务器 operationId 仍是最终幂等依据。
+不新增 IPC channel、数据库迁移或 Mobile 原生指纹输入。
+
+### 服务器伙伴群讨论与分工补全
+
+Chat Server `/me` 追加 `capabilities.groupDiscussionParity: 1`。Desktop 只在该能力存在时发送
+可选 `mentionsAll`、`planningMode`，辅助判断后用 `continue({automatic:true})`，停止判断用
+`messages/:id/cancel-planning`。旧服务器继续收到旧形状；能力协商并不恢复旧服务端缺失的行为。
+整个服务端集群升级后再发布客户端，不能在新旧副本混用时提前承诺该能力。
+
+领取执行追加可选 `attachment_after_seq`，按伙伴/群/授权版本/分工步骤隔离成功投递水位。
+缺字段时沿用旧读取范围；新客户端以此翻页收集未见附件，保留每轮 40 个上限及缺失名称提示。
+`cindy.group-notice` v1 的 integration 卡映射到已有 plan-failed/member-failed/member-timeout
+展示提示，仅承担文案，不授予执行权限。Mobile 继续消费主机既有群资源投影，无新增原生能力。
 
 ## 委派任务的完成通知归属
 

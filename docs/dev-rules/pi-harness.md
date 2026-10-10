@@ -68,6 +68,8 @@ Cindy 以 `pi --mode rpc` spawn pi 二进制(JSONL/stdio),`translator.ts` 把 pi
   时从本机 session JSONL 校正（只打开启动时 `--session-dir` 真身内的普通文件，
   并有字节/时间预算，超限回退 RPC）；远端仍走 `get_entries`。
 
+> Cindy 自有子代理的委派、控制、结果收口与测试边界见 [Pi 子代理设计](../research/pi-subagent-delegation.md)。与 Orca 协作模式分别维护。
+
 ### 原生请求 Fast 偏好
 
 支持 Fast 的原生模型在 `before_provider_request` 中经现有 RPC 通道发出

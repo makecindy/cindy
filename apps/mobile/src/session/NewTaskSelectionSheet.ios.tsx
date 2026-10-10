@@ -22,6 +22,7 @@ export function NewTaskSelectionSheet(p: NewTaskSelectionSheetProps) {
     <ComposerSheet
       visible={p.page !== null}
       onClose={p.onClose}
+      onClosed={p.onClosed}
       onBack={browsing ? p.onBack : undefined}
       backLabel={t('shared.back')}
       title={t(p.page === 'device' ? 'session.new.selectControlledDevice' : browsing ? 'session.new.chooseOtherFolder' : 'session.new.selectWorkspace')}

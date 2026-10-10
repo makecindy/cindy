@@ -1,3 +1,4 @@
+vi.mock('../BotSessionTaskLink', () => ({ BotSessionTaskLink: () => <span data-testid="original-session-link" /> }));
 import { readBotCollaborationMeta } from '../../../../shared/botCollaboration';
 // @vitest-environment jsdom
 import { render, screen, cleanup, fireEvent } from '@testing-library/react';

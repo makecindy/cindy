@@ -449,7 +449,16 @@ export function QuotaHoverCard({
   const embedded = variant === 'embedded';
   // 测试可只注入 t；运行时再优先跟随应用当前语言格式化日期。
   const locale = i18n?.resolvedLanguage ?? i18n?.language;
-  const { title, planLabel, windows, details = [], notices = [], emptyText, updatedAt } = account;
+  const {
+    title,
+    identity,
+    planLabel,
+    windows,
+    details = [],
+    notices = [],
+    emptyText,
+    updatedAt,
+  } = account;
   // Use observation time for pace so a stale snapshot cannot drift as the card renders.
   const paceNowMs = typeof updatedAt === 'number' && Number.isFinite(updatedAt) ? updatedAt : null;
   const staleMinutes =
@@ -475,7 +484,9 @@ export function QuotaHoverCard({
         'flex select-none flex-col pb-2 text-13 leading-5 text-[var(--text-primary)]',
         variant === 'embedded'
           ? 'w-full min-w-0'
-          : 'max-h-[min(calc(100vh-16px),var(--radix-popover-content-available-height,100vh))] w-[340px] max-w-[calc(100vw-16px)] overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)]',
+          : 'max-h-[min(calc(100vh-16px),var(--radix-popover-content-available-height,100vh))] max-w-[calc(100vw-16px)] overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)]',
+        !embedded &&
+          (identity ? 'w-max min-w-[min(340px,calc(100vw-16px))]' : 'w-[340px]'),
       )}
       style={variant === 'popover' ? { boxShadow: 'var(--shadow-menu)' } : undefined}
     >
@@ -492,11 +503,18 @@ export function QuotaHoverCard({
         {title && (!embedded || !hideIdentity) ? (
           <>
             <div className="flex items-center gap-2 px-4 pb-2 pt-3 text-12 text-[var(--text-secondary)]">
-              <span className="min-w-0 break-words font-medium">{title}</span>
+              <div className="flex min-w-0 flex-1 items-center gap-2">
+                <span className="shrink-0 font-medium">{title}</span>
+                {identity ? (
+                  <span className="min-w-0 truncate text-[var(--text-primary)]">
+                    {identity}
+                  </span>
+                ) : null}
+              </div>
               {planLabel ? (
                 <span
                   data-testid="quota-plan-badge"
-                  className="ml-auto max-w-[65%] break-words rounded-full border border-[var(--border-default)] px-[7px] py-px text-11 font-medium"
+                  className="ml-auto max-w-[65%] shrink-0 break-words rounded-full border border-[var(--border-default)] px-[7px] py-px text-11 font-medium"
                 >
                   {planLabel}
                 </span>

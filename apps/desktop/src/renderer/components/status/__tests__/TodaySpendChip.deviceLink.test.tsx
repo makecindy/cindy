@@ -13,10 +13,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ClaudeSubscriptionUsageSnapshot } from '../../../../shared/claudeSubscriptionUsage';
 import type { SessionUsageMoney } from '@/hooks/useSessionUsageMoney';
+import type { ProviderView } from '@cindy/model-providers';
+
+type TestProvider = Pick<ProviderView, 'id' | 'openAiAccount' | 'subscriptionAccount'> & {
+  auth: { native: string };
+};
 
 const mocks = vi.hoisted(() => ({
-  localProviders: [] as Array<{ id: string; auth: { native: string } }>,
-  deviceProviders: [] as Array<{ id: string; auth: { native: string } }>,
+  localProviders: [] as TestProvider[],
+  deviceProviders: [] as TestProvider[],
   remoteProviderIds: [] as Array<string | undefined>,
   localClaudeSnapshot: null as ClaudeSubscriptionUsageSnapshot | null,
   remoteClaudeSnapshot: null as ClaudeSubscriptionUsageSnapshot | null,
@@ -300,6 +305,20 @@ describe('TodaySpendChip device-link remote sessions', () => {
   });
 
   it('远程 codex 会话按订阅形态渲染被控端账号窗口(组合 payload 选桶)', () => {
+    mocks.localProviders = [
+      {
+        id: 'openai',
+        auth: { native: 'codex' },
+        openAiAccount: { source: 'oauth', identity: 'local@example.com' },
+      },
+    ];
+    mocks.deviceProviders = [
+      {
+        id: 'openai',
+        auth: { native: 'codex' },
+        openAiAccount: { source: 'oauth', identity: 'remote@example.com' },
+      },
+    ];
     mocks.remoteCodexPayload = {
       source: 'codex-app-server',
       limitId: 'codex',
@@ -329,6 +348,10 @@ describe('TodaySpendChip device-link remote sessions', () => {
     expect(container.textContent).toContain('5h 剩余 88%');
     expect(container.textContent).toContain('7天 剩余 66%');
     expect(mocks.remoteCodexDeviceIds).toContain('device-abc');
+    fireEvent.mouseEnter(screen.getByRole('button'));
+    act(() => vi.advanceTimersByTime(300));
+    expect(screen.getByText('remote@example.com')).toBeTruthy();
+    expect(screen.queryByText('local@example.com')).toBeNull();
   });
 
   it('窗口刚重置时倒计时以窗口长度封顶,不显示「8天」', () => {

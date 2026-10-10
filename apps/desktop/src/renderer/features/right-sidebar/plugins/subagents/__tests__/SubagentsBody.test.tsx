@@ -121,6 +121,7 @@ describe('SubagentsBody', () => {
     if (channel === 'local-db:subagent-runs:detail') {
       return { supported: true, run: currentDetail };
     }
+    if (channel === 'maker:pi-subagent:control') return { ok: true, controlled: 1 };
     return { supported: false, run: null, entries: [] };
   };
   const deviceInvoke = vi.fn(defaultDeviceInvoke);
@@ -1873,6 +1874,57 @@ describe('SubagentsBody', () => {
     });
     // The visible send button is the plain queue path.
     expect(screen.getByLabelText('rightSidebar.subagents.controlActions.follow_up')).toBeTruthy();
+  });
+
+  describe.each([null, 'device-1'])('child composer readiness (device=%s)', (deviceLinkDeviceId) => {
+    it.each([
+      { resultReady: false, output: 'Checking with a tool', expectedAction: 'steer' },
+      { resultReady: true, output: 'Final answer', expectedAction: 'follow_up' },
+      { resultReady: true, output: '', expectedAction: 'follow_up' },
+      { resultReady: undefined, output: 'Legacy answer', expectedAction: 'follow_up' },
+      { resultReady: undefined, output: '', expectedAction: 'steer' },
+    ])('routes modifier send to $expectedAction with readiness=$resultReady and output="$output"', async ({ resultReady, output, expectedAction }) => {
+      currentDetail = {
+        ...detail('running'),
+        capabilities: { ...detail('running').capabilities, viewFullTranscript: true, steer: true },
+        children: [{
+          id: 'child-1', role: 'worker', status: 'running', output,
+          ...(resultReady === undefined ? {} : { resultReady }),
+        }],
+      };
+      render(
+        <SubagentsBody
+          state={{ selectedRunId: 'run-1', selectedProvider: 'pi' }}
+          ctx={{
+            tabId: 'tab-1', sessionId: 'session-1', workdir: '/workspace',
+            remoteHostId: null, deviceLinkDeviceId, patchState: vi.fn(),
+            onVisibilityChange: vi.fn(), setCloseInterceptor: vi.fn(() => () => undefined),
+          }}
+        />,
+      );
+      const input = await screen.findByPlaceholderText(expectedAction === 'steer'
+        ? 'rightSidebar.subagents.composerPlaceholders.runningWithSteer'
+        : 'rightSidebar.subagents.composerPlaceholders.follow_up');
+      const expectControl = async (action: string, message: string) => {
+        const request = { sessionId: 'session-1', taskId: 'task-1', childId: 'child-1', action, message };
+        await waitFor(() => {
+          if (deviceLinkDeviceId) {
+            expect(deviceInvoke).toHaveBeenCalledWith(deviceLinkDeviceId, 'maker:pi-subagent:control', [request]);
+            expect(controlPiSubagent).not.toHaveBeenCalled();
+          } else {
+            expect(controlPiSubagent).toHaveBeenCalledWith(request);
+          }
+        });
+        await waitFor(() => expect((input as HTMLTextAreaElement).value).toBe(''));
+      };
+      fireEvent.change(input, { target: { value: 'Use the corrected target' } });
+      fireEvent.keyDown(input, { key: 'Enter', ctrlKey: true });
+      await expectControl(expectedAction, 'Use the corrected target');
+      // Explicit readiness changes interjection eligibility, never plain send.
+      fireEvent.change(input, { target: { value: 'Then verify the result' } });
+      fireEvent.keyDown(input, { key: 'Enter' });
+      await expectControl('follow_up', 'Then verify the result');
+    });
   });
 
   it('dispatches a follow-up automatically once the child has settled output', async () => {

@@ -99,6 +99,7 @@ export interface CodexRuntimeState {
   itemDeltaText: Map<string, string>;
   /** item.id → item/started 或 item/updated 最新原始全文快照。 */
   itemSnapshotText: Map<string, string>;
+  itemMessagePhase: Map<string, 'commentary' | 'final_answer'>;
   /** 已经 emit 过 tool_use 的 item.id (避免 started + 第一次 updated 重复)。 */
   emittedToolUse: Set<string>;
   /** 尚未 emit 的 Web Search 候选输入，供跨 started/updated/completed 快照补全。 */
@@ -140,6 +141,7 @@ export function newCodexRuntimeState(): CodexRuntimeState {
     itemRawText: new Map(),
     itemDeltaText: new Map(),
     itemSnapshotText: new Map(),
+    itemMessagePhase: new Map(),
     emittedToolUse: new Set(),
     pendingWebSearchInput: new Map(),
     emittedWebSearchInput: new Map(),
@@ -1106,7 +1108,9 @@ function emitAgentMessageProgress(
   if (delta.length === 0) return;
   queue.push({
     type: 'text',
-    data: { text: delta, isFinal: false, agentMessageId: itemId },
+    data: { text: delta, isFinal: false, agentMessageId: itemId,
+      ...(ctx.rt.itemMessagePhase.has(itemId) ? { phase: ctx.rt.itemMessagePhase.get(itemId) } : {}),
+    },
     source: 'codex',
   });
 }
@@ -1178,12 +1182,14 @@ function handleAgentMessage(
   ctx: CodexTranslateContext,
 ): void {
   const rawText = item.text ?? '';
+  if (item.phase) ctx.rt.itemMessagePhase.set(item.id, item.phase);
 
   if (phase === 'completed') {
     ctx.rt.itemTextLen.delete(item.id);
     ctx.rt.itemRawText.delete(item.id);
     ctx.rt.itemDeltaText.delete(item.id);
     ctx.rt.itemSnapshotText.delete(item.id);
+    ctx.rt.itemMessagePhase.delete(item.id);
     // 既有契约:completed 只出 final 全文、不补 delta(desktop codexTranslator.test
     // 钉死 3 事件形状)。boundary 按住的尾段与「completed 才首次出现的文本」同一待遇:
     // 不进 delta 流,由 final 全文兜底(main 落库层 onAssistantTextEvent 的 isFinal

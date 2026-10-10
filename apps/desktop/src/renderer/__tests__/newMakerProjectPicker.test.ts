@@ -1484,8 +1484,20 @@ describe('Shared create project picker', () => {
     expect(newMakerDraftRouteSource).toContain(
       'onExtraDirsChange={isDeviceLinkDraft ? undefined : handleExtraDirsChange}',
     );
-    // 统一建议面板的契约:没有 onExtraDirsChange 就不装配添加/移除引用目录能力。
-    expect(chatInputSource).toContain('if (onExtraDirsChange) {');
+    // The single add entry grants write access only through the local Main picker;
+    // legacy read-only directories retain their independent removal callback.
+    expect(chatInputSource).toMatch(
+      /if \(onWritableDirsChange && writableGrantScope && !remoteHostId && deviceLinkDeviceId === null\)/,
+    );
+    const directoryAction = chatInputSource.slice(
+      chatInputSource.indexOf("id: 'add-extra-dir'"),
+      chatInputSource.indexOf('if (remoteComposerGhosts.failed)'),
+    );
+    expect(directoryAction).toContain('extraDirs: currentWritableDirs');
+    expect(directoryAction).toContain('otherDirs: currentExtraDirs');
+    expect(directoryAction).toContain('writableGrantScope,');
+    expect(directoryAction).toContain('onChange: onWritableDirsChange');
+    expect(chatInputSource).not.toContain("id: 'add-writable-dir'");
     expect(chatInputSource).toMatch(
       /hasReferenceDirs=\{\s*!settingsLocked\s*&&\s*\(onExtraDirsChange !== undefined \|\| onWritableDirsChange !== undefined\)\s*\}/,
     );

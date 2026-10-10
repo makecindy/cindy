@@ -29,6 +29,11 @@ export function throwOrcaServiceFailure(result: { ok: false; errorCode: string; 
       return throwIpcError('PROVIDER_ROUTE_UNAVAILABLE', result.message);
     case 'BUSY':
       return throwIpcError('SESSION_RUNNING', result.message);
+    // 协同远端 Worker：运行设备不可达 / 版本过旧。device-link 控制端按既有规则降级。
+    case 'REMOTE_AGENT_DEVICE_UNREACHABLE':
+      return throwIpcError('REMOTE_AGENT_DEVICE_UNREACHABLE', result.message);
+    case 'UNSUPPORTED_CAPABILITY':
+      return throwIpcError('UNSUPPORTED_CAPABILITY', result.message);
     default:
       return throwIpcError('INTERNAL', result.message);
   }

@@ -518,6 +518,7 @@ export function registerSubagentRunsIpc(
             ...(task.pendingApproval ? { awaitingApproval: true } : {}),
             output: task.output,
             outputTruncated: task.outputTruncated,
+            ...(typeof task.resultReady === 'boolean' ? { resultReady: task.resultReady } : {}),
             error: task.error,
           })),
         };

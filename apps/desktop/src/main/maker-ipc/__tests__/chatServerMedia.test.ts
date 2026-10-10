@@ -21,6 +21,20 @@ describe('chat private media', () => {
     expect(f.fetch).toHaveBeenLastCalledWith('https://upload.example.test/signed', expect.objectContaining({ redirect: 'error', headers: { 'Content-Type': 'image/png' } }));
     expect(vi.mocked(api).mock.calls.at(-1)?.[0]).toBe('/conversations/room/media/media/complete');
   });
+  it.each(['prepare', 'upload', 'complete'])('reports the failing %s stage without signed URLs or filenames', async (stage) => {
+    f.read.mockResolvedValue({ buffer: Buffer.from('png') });
+    const log = { warn: vi.fn() };
+    f.fetch.mockResolvedValue(new Response('', { status: stage === 'upload' ? 403 : 200 }));
+    const api = vi.fn(async (route: string) => {
+      if (stage === 'prepare' && route.endsWith('/media') || stage === 'complete' && route.endsWith('/complete'))
+        throw Object.assign(new Error('REQUEST_FAILED'), { status: 500 });
+      return { id: 'media', uploadUrl: 'https://upload.example.test/private?token=secret' };
+    }) as unknown as ChatApi;
+    await expect(createChatMedia(api, () => true, log).upload('room', 'operation', [attachment], 'actor')).rejects.toThrow();
+    expect(log.warn).toHaveBeenCalledWith('Chat media upload failed', expect.objectContaining({ stage, status: stage === 'upload' ? 403 : 500 }));
+    expect(JSON.stringify(log.warn.mock.calls)).not.toMatch(/secret|picture.png|https:/);
+  });
+
   it('does not upload bytes when the owner changes during local file reading', async () => {
     let current = true;
     f.fetch.mockClear();
@@ -44,4 +58,14 @@ describe('chat private media', () => {
     await expect(media.download('room', 'media')).rejects.toThrow('CONVERSATION_NOT_FOUND');
     expect(api).toHaveBeenCalledTimes(2);
   });
+  it('permits exact loopback media only for the explicitly isolated adapter', async () => {
+    f.read.mockResolvedValue({ buffer: Buffer.from('png') });f.fetch.mockResolvedValue(new Response('', { status: 200 }));
+    let uploadUrl = 'http://127.0.0.1:3018/dev-media/fixture';
+    const api = vi.fn(async () => ({ id: 'media', uploadUrl })) as unknown as ChatApi;
+    await expect(createChatMedia(api, () => true).upload('room','op',[attachment],'actor')).rejects.toThrow('INVALID_MEDIA_URL');
+    await expect(createChatMedia(api, () => true, undefined, { allowLoopback: true }).upload('room','op',[attachment],'actor')).resolves.toHaveLength(1);
+    uploadUrl = 'http://127.0.0.1:3019/private';
+    await expect(createChatMedia(api, () => true, undefined, { allowLoopback: true }).upload('room','op',[attachment],'actor')).rejects.toThrow('INVALID_MEDIA_URL');
+  });
+
 });

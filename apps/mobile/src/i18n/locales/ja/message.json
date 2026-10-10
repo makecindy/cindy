@@ -265,6 +265,12 @@
         "reason": "中断の理由",
         "attempt": "今回の再試行 {{attempt}}/{{total}}",
         "sessionTotal": "このセッションでの再接続 {{count}} 回"
+      },
+      "agentSwitch": {
+        "usage-limit": "{{from}} が使用量の上限に達したため、{{to}} で続行しました",
+        "auth": "{{from}} のログインが切れたため、{{to}} で続行しました",
+        "unavailable": "{{from}} に接続できないため、{{to}} で続行しました",
+        "overload": "{{from}} のサービスが混雑しているため、{{to}} で続行しました"
       }
     },
     "modelLabel": "モデル",

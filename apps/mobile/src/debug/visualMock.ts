@@ -55,8 +55,6 @@ export const visualMockUser: MobileUser = {
   name: 'Visual Mock User',
   avatar: null,
   email: 'visual-mock@cindy.local',
-  defaultModel: 'claude-sonnet-4-6',
-  defaultEffort: 'medium',
   membershipKind: 'personal',
   membershipRole: 'owner',
   orgId: null,

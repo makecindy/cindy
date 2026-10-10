@@ -162,6 +162,8 @@ export interface PiSubagentTaskStatus {
   };
   output?: string;
   outputTruncated?: boolean;
+  /** Final assistant response, distinct from intermediate output before tools. */
+  resultReady?: boolean;
   error?: string;
   pendingApproval?: {
     id: string;
@@ -2214,7 +2216,7 @@ export async function controlPiSubagentRuns(
       if (action === 'approval') {
         return task.pendingApproval?.id === options.approvalId;
       }
-      if (action === 'steer' && task.output?.trim()) return false;
+      if (action === 'steer' && task.resultReady === true) return false;
       return task.status === 'queued' || task.status === 'running';
     },
   );

@@ -205,7 +205,6 @@
       "descriptionOff": "开启后，你的其他电脑和你分享的人可以用这个供应商的模型。关闭期间，已有的分享暂时不可用，不会被删除。"
     },
     "manage": {
-      "title": "分享 {{provider}}",
       "description": "分享给他人后，对方可以在自己的任务里选用 {{provider}} 的模型。Agent 在这台电脑上运行，用量计入你的 {{provider}}；对方的文件和命令仍在对方电脑上执行。",
       "descriptionWithDevice": "分享给他人后，对方可以在自己的任务里选用 {{provider}} 的模型。Agent 在这台电脑（{{device}}）上运行，用量计入你的 {{provider}}；对方的文件和命令仍在对方电脑上执行。",
       "createLink": "生成分享链接",
@@ -396,6 +395,104 @@
       "approvedBody": "{{name}} 已同意分享 {{provider}}",
       "rejectedTitle": "分享申请未通过",
       "rejectedBody": "{{name}} 没有同意分享 {{provider}}"
+    }
+  },
+  "providerGroup": {
+    "row": {
+      "label": "供应商组",
+      "description": "把多台电脑上的这个供应商合成一组，自动分配，出问题自动换一台",
+      "summary_other": "{{count}} 台电脑 · {{strategy}}",
+      "setUp": "设置供应商组",
+      "manage": "管理供应商组"
+    },
+    "page": {
+      "title": "{{provider}} · 远程与分享",
+      "shareTitle": "分享"
+    },
+    "section": {
+      "title": "供应商组",
+      "addComputer": "添加电脑",
+      "delete": "删除组",
+      "empty": "加入其他电脑上的 {{provider}}，任务会自动选一台运行",
+      "loading": "正在读取供应商组…",
+      "loadFailed": "未能读取供应商组",
+      "note": "这台电脑上的任务，Agent 在被选中的电脑上运行"
+    },
+    "strategy": {
+      "label": "组策略",
+      "least": "最少占用",
+      "round": "轮询",
+      "order": "按顺序",
+      "weight": "按权重",
+      "description": {
+        "least": "给最闲的那台",
+        "round": "依次轮流",
+        "order": "排前面的优先",
+        "weight": "按权重比例"
+      }
+    },
+    "autoSwitch": {
+      "label": "自动换电脑",
+      "description": "撞上限、连不上或登录失效时自动换一台"
+    },
+    "member": {
+      "local": "本机",
+      "sourceDevice": "我的其他电脑",
+      "sourceShare": "来自 {{name}} 的分享",
+      "runningCount_other": "{{count}} 个任务运行中",
+      "limitAria": "{{name}} 的并发上限",
+      "limitOption_other": "上限 {{count}}",
+      "weightAria": "{{name}} 的权重",
+      "weightOption": "权重 {{weight}}",
+      "assignAria": "给 {{name}} 分配任务",
+      "moreAria": "{{name}} 的更多操作",
+      "remove": "移出组",
+      "status": {
+        "checking": "正在检查…",
+        "idle": "空闲",
+        "full": "已满",
+        "paused": "已暂停分配",
+        "cooling": "冷却中",
+        "coolingUntil": "冷却中 · 约 {{time}} 恢复",
+        "offline": "不在线",
+        "unavailable": {
+          "provider-off": "那台电脑没有对这个供应商打开「允许被远程调用」",
+          "disconnected": "供应商未连接或已停用",
+          "share-paused": "分享已暂停",
+          "share-removed": "分享已删除"
+        }
+      },
+      "removeConfirm": {
+        "title": "把 {{name}} 移出供应商组？",
+        "description": "之后不再给它分新任务；已经在它上面运行的任务留在那台电脑上。",
+        "lastDescription": "它是组里最后一台电脑，移出后会删除 {{provider}} 的供应商组。",
+        "confirm": "移出组"
+      }
+    },
+    "deleteConfirm": {
+      "title": "删除 {{provider}} 的供应商组？",
+      "description": "之后这台电脑上的新任务都在本机运行；已经分到其他电脑的任务留在那台电脑上。",
+      "confirm": "删除供应商组"
+    },
+    "add": {
+      "title": "把电脑加入 {{provider}} 的供应商组",
+      "sourceAria": "电脑来源",
+      "tabAvailable": "已经能用的",
+      "tabLink": "分享链接",
+      "availableDescription": "你的其他电脑和别人分享给你的，勾选即可加入，不用再申请",
+      "loading": "正在查找可以加入的电脑…",
+      "loadFailed": "未能读取可以加入的电脑",
+      "empty": "没有可以加入的电脑。在其他电脑上对 {{provider}} 打开「允许被远程调用」，或用别人的分享链接申请。",
+      "alreadyMember": "已在组里",
+      "confirm": "加入供应商组",
+      "cancel": "取消",
+      "linkDescription": "粘贴别人分享的 {{provider}} 链接，对方同意后，回到「已经能用的」里勾选加入。",
+      "pasteLink": "粘贴分享链接"
+    },
+    "toast": {
+      "added_other": "已把 {{count}} 台电脑加入 {{provider}} 的供应商组",
+      "removed": "已把 {{name}} 移出供应商组",
+      "deleted": "已删除 {{provider}} 的供应商组"
     }
   },
   "privacyExit": {
@@ -633,7 +730,8 @@
     "PROVIDER_SHARE_CROSS_REGION_DISABLED": "暂不支持跨区域分享。这个链接来自另一个区域的 Cindy 服务。",
     "REMOTE_AGENT_SHARE_PAUSED": "模型未切换：对方已暂停对你的分享。请换一个模型。",
     "REMOTE_AGENT_SHARE_REMOVED": "模型未切换：这个分享已不可用（对方删除了分享或你已退出）。请换一个模型。",
-    "REMOTE_AGENT_SHARE_UNAVAILABLE": "模型未切换：分享的供应商暂时不可用（对方电脑不在线，或对方暂时关闭了分享）。请稍后再试或换一个模型。"
+    "REMOTE_AGENT_SHARE_UNAVAILABLE": "模型未切换：分享的供应商暂时不可用（对方电脑不在线，或对方暂时关闭了分享）。请稍后再试或换一个模型。",
+    "SSH_HOST_KEY_MISMATCH": "SSH 主机密钥已变化"
   },
   "providerError": {
     "AUTH_INVALID": "API 密钥无效或已过期（401），请检查密钥后重试",
@@ -1038,6 +1136,15 @@
         "preparingRuntime": "正在为远端 {{hostId}} 准备运行时…",
         "installingAgent": "正在远端 {{hostId}} 安装 {{agent}}…",
         "failed": "远端 {{hostId}} 安装 {{agent}} 失败：{{message}}。请到 设置 → 远端机器 → 展开 {{hostId}} 查看完整日志。"
+      },
+      "hostKey": {
+        "title": "SSH 主机密钥已变化",
+        "review": "核对主机密钥",
+        "explanation": "{{host}} 的身份密钥与 Cindy 保存的记录不一致。请先向服务器管理员核实新指纹，再更新信任记录。",
+        "details": "原指纹：{{trusted}}\n新指纹：{{presented}}\n\n服务器重装或连接被冒充都可能导致这一变化。请通过服务器控制台等可信渠道核对新指纹。\n\nCindy 信任记录：{{file}}\nCindy 不读取 ~/.ssh/known_hosts。更换登录密钥或删除后重新添加主机都无法解决此问题。\n\n更新信任后，仅替换这台主机的指纹并重新连接，不影响其他主机。",
+        "cancel": "保留原密钥",
+        "trust": "信任新密钥并重连",
+        "updateFailed": "无法更新主机信任记录。连接信息或已存密钥可能已变化，也可能无法写入记录文件。请重新连接以刷新指纹，并检查文件权限"
       }
     },
     "appearance": {
@@ -8523,10 +8630,22 @@
       "errors": {
         "memberLimit": "一个群需要 2–6 位伙伴",
         "memberUnavailable": "有伙伴现在不可用，换一位再试",
+        "mentionUnavailable": "点名的成员已不可用，请重新选择后发送",
         "notFound": "这个群聊已不存在",
         "hostNotReady": "Cindy 还在准备中，请稍后重试",
         "planOpen": "正在分工，做完或停止后才能安排新的",
-        "planClosed": "这个安排已经结束或更新了"
+        "planClosed": "这个安排已经结束或更新了",
+        "invalidAttachment": "附件无法读取，请重新选择后发送。",
+        "attachmentUnavailable": "未能从手机取回附件，请检查设备连接后重试。",
+        "attachmentTooLarge": "附件超过 100 MB，请选择较小的文件。",
+        "mediaUploadFailed": "附件未能上传到群聊服务，请稍后重试。",
+        "authRequired": "登录已失效，请在电脑上重新登录。",
+        "chatUnavailable": "群聊服务暂时无法连接，请检查网络后重试。",
+        "importPending": "群历史记录仍在同步，请稍后重试。",
+        "requestTimeout": "还未确认操作结果，请刷新查看后再重试。",
+        "permissionDenied": "你没有执行此操作的群管理权限。",
+        "serviceError": "群聊服务处理失败，请稍后重试。",
+        "groupArchived": "本群已归档，不能执行此操作。"
       },
       "organizer": "负责人",
       "plan": {
@@ -8567,7 +8686,14 @@
         "reactionCount": "{{emoji}} · {{count}} 人回应",
         "invite": "邀请加入群聊",
         "join": "加入群聊",
-        "inviteDescription": "链接 24 小时内有效，只能使用一次。对方接受后会成为群成员，可阅读群聊记录。",
+        "inviteDescription": "对方接受邀请后会成为群成员，可阅读群聊记录。",
+        "revokeLink": "撤销此链接",
+        "revokeDescription": "此链接将无法再用于加入群聊。其他邀请链接和已加入的成员不受影响。",
+        "revokedLink": "此邀请链接已撤销。",
+        "revokeUnsupported": "当前服务不支持撤销邀请链接。",
+        "reusableLink": "长期有效 · 多人可重复使用",
+        "singleUseUntil": "只能使用一次 · {{date}} 到期",
+        "expiredLink": "邀请链接已过期。",
         "joinDescription": "粘贴邀请链接，查看群聊后再确认加入。",
         "inviteLink": "邀请链接",
         "pasteLink": "粘贴邀请链接…",
@@ -8578,7 +8704,7 @@
         "accept": "接受并加入",
         "openGroup": "打开群聊",
         "previewInvite": "查看邀请",
-        "invalidInvite": "邀请无效、已使用或已过期，请获取新的邀请链接。",
+        "invalidInvite": "邀请无效、已使用、已过期或已撤销，请获取新的邀请链接。",
         "notAllowed": "当前账号没有权限，请检查账号或联系群主。",
         "loginRequired": "请先登录当前账号，再重试。",
         "requestFailed": "群聊服务暂时无法连接，请稍后重试。",
@@ -9850,7 +9976,9 @@
       "label": "基于原任务创建"
     },
     "imageMissing": {
-      "title": "图片已丢失"
+      "title": "图片已丢失",
+      "unavailable": "图片暂时无法显示",
+      "loading": "正在加载图片…"
     },
     "visionBridge": {
       "analyzing": "正在识别图片中…（{{count}} 张）",
@@ -10380,6 +10508,12 @@
           "reason": "中断原因",
           "attempt": "本次重试 {{attempt}}/{{total}}",
           "sessionTotal": "本任务累计重连 {{count}} 次"
+        },
+        "agentSwitch": {
+          "usage-limit": "{{from}} 撞到用量上限，已换到 {{to}} 继续",
+          "auth": "{{from}} 登录已失效，已换到 {{to}} 继续",
+          "unavailable": "{{from}} 连不上，已换到 {{to}} 继续",
+          "overload": "{{from}} 的服务繁忙，已换到 {{to}} 继续"
         }
       },
       "autoResumeSeparator": {
@@ -10641,7 +10775,8 @@
       "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "那台电脑没有允许远程调用这个供应商。请在那台电脑的「设置 → 模型供应商」里打开「允许被远程调用」，或换一个模型。",
       "REMOTE_AGENT_SHARE_PAUSED": "对方已暂停对你的分享，恢复前不能使用这些模型。可以换成其他模型继续。",
       "REMOTE_AGENT_SHARE_REMOVED": "这个分享已不可用（对方删除了分享或你已退出）。可以换成其他模型继续。",
-      "REMOTE_AGENT_SHARE_UNAVAILABLE": "分享的供应商暂时不可用：对方电脑可能不在线，或对方暂时关闭了分享。可以稍后再试，或换成其他模型继续。"
+      "REMOTE_AGENT_SHARE_UNAVAILABLE": "分享的供应商暂时不可用：对方电脑可能不在线，或对方暂时关闭了分享。可以稍后再试，或换成其他模型继续。",
+      "REMOTE_AGENT_GROUP_UNAVAILABLE": "供应商组里的电脑现在都不能运行这个任务：可能都不在线、已暂停分配、正在冷却，或没有这个模型。可以到这个供应商的「远程与分享」页查看组内电脑。"
     },
     "generatedFiles": {
       "title": "本条消息生成的文件",
@@ -11335,7 +11470,11 @@
       "untitled": "未命名任务",
       "moreActions": "更多操作",
       "agentDevice": "Agent 在 {{device}} 上运行",
-      "agentDeviceOffline": "Agent 在 {{device}} 上运行，那台电脑现在离线，连上后才能继续"
+      "agentDeviceOffline": "Agent 在 {{device}} 上运行，那台电脑现在离线，连上后才能继续",
+      "orcaRemoteLead": "来自 {{device}} 的协同",
+      "orcaRemoteLeadReleased": "协同已结束 · 来自 {{device}}",
+      "orcaRemoteLeadUnknownDevice": "另一台电脑",
+      "orcaRemoteLeadTip": "{{device}} 上「{{lead}}」的 Worker。任务、目录和命令都在这台电脑运行；你在这里发的消息不会回报给 Lead。"
     },
     "gitContext": {
       "detached": "分离 HEAD",
@@ -13398,7 +13537,25 @@
       "optional": "（可选）",
       "initialTaskPlaceholder": "给这个 Worker 的可选第一条任务",
       "enableCollabTitle": "开启协同",
-      "enableCollabSubmit": "开启协同"
+      "enableCollabSubmit": "开启协同",
+      "executionDeviceLabel": "运行设备",
+      "thisComputer": "本机",
+      "deviceOnline": "在线",
+      "deviceNeedsUpdate": "版本过旧，需更新",
+      "executionDeviceHint": "只列出同账号、在线并开启远程控制的电脑。",
+      "executionDeviceRemoteHint": "Worker 的任务、目录和命令都在 {{device}}。",
+      "remoteDirLabel": "{{device}} 上的工作目录",
+      "remoteDirChat": "对话",
+      "remoteDirPath": "指定目录",
+      "remoteDirChatHint": "在 {{device}} 上创建对话任务，不绑定项目。",
+      "remoteDirPathHint": "在 {{device}} 上检查；不存在时报错，不会换成这台电脑的目录。",
+      "remoteDirInvalid": "请输入 {{device}} 上的绝对路径。",
+      "errors": {
+        "deviceUnreachable": "{{device}} 当前不可用：需要在线并开启远程控制。Worker 没有创建。",
+        "deviceOutdated": "{{device}} 的 Cindy 版本过旧，更新后才能运行 Worker。",
+        "dirRejected": "{{device}} 上找不到这个目录或不允许使用。Worker 没有创建。",
+        "dirUnavailable": "{{device}} 上的目录暂时无法访问。请检查连接或网络盘后重试。Worker 没有创建。"
+      }
     },
     "rolePill": {
       "unread": "未读更新",
@@ -13420,13 +13577,19 @@
       "scrollWorkersLeftEdge": "已是最左侧的 Worker",
       "scrollWorkersRightEdge": "已是最右侧的 Worker",
       "errorBadge": "错误",
-      "errorBadgeAria": "有 Worker 出错"
+      "errorBadgeAria": "有 Worker 出错",
+      "executionDevice": "在 {{device}} 运行",
+      "deviceUnreachable": "暂时无法获取状态",
+      "unknownDevice": "另一台电脑",
+      "archiveRemoteWorkerConfirmDesc": "它会从这个协同里移除，并停止 {{device}} 上正在进行的这一轮。{{device}} 上的任务、记录和文件都会保留，标注「协同已结束」，可以在那台继续查看。"
     },
     "split": {
       "leadLabel": "Lead ({{agent}})",
       "workerLabel": "Worker ({{agent}})",
       "leadNotFound": "找不到 Orca lead 任务",
       "waitingForWorker": "等待 Worker",
+      "remoteWorkerLoading": "正在读取 {{device}} 上的任务…",
+      "remoteWorkerUnreachable": "{{device}} 当前无法连接，恢复后会自动显示这个 Worker 的任务。",
       "closeAria": "关闭"
     }
   },
@@ -13451,17 +13614,12 @@
     "pluginDisabled": "已停用",
     "pluginAgentInvoked": "Agent 自动调用",
     "pluginNoCommand": "不可直接使用",
-    "sectionTitle": "引用目录(只读)",
+    "sectionTitle": "目录",
     "empty": "还没有引用目录",
     "add": "添加目录…",
     "addReadOnly": "添加只读目录…",
-    "addWritable": "添加可读写目录…",
-    "writableSectionTitle": "可读写目录",
-    "writableEmpty": "还没有可读写目录",
     "atLimit": "已达上限 {{max}} 个",
     "remove": "移除 {{name}}",
-    "parentConfirmTitle": "添加父目录？",
-    "parentConfirmDescription": "选中的目录是当前工作目录的父级或祖先。这会扩大 Agent 的可见范围，使其能看到工作目录之外的内容。\n\n仍要添加吗？\n\n{{path}}",
     "writableParentConfirmTitle": "允许读写父目录？",
     "writableParentConfirmDescription": "选中的目录是当前工作目录的父级或祖先。Agent 将能读取、创建、修改和删除其中的文件。\n\n仍要允许吗？\n\n{{path}}",
     "parentConfirmAccept": "仍然添加",

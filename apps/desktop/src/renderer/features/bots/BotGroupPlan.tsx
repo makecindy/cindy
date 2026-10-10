@@ -162,7 +162,7 @@ function EditableStepRow({
   onEdit: (step: BotGroupPlanStepView, action: 'reassign' | 'remove', botId?: string) => void;
 }) {
   const { t } = useTranslation();
-  const candidates = members.filter(isActiveBotGroupMember);
+  const candidates = members.filter(member => isActiveBotGroupMember(member) && (!member.actorKind || member.actorKind === 'bot'));
   const lastStep = plan.steps.length <= 1;
   return (
     <DropdownMenu>

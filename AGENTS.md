@@ -75,6 +75,10 @@
   分享管理页，或受邀者使用分享供应商的任何路径前，必须先读
   `docs/product-rules/provider-sharing.md`；它为远程 Agent 通道新增跨账号授权，并允许
   中国大陆版与 Global 互享，与共享任务是两套独立授权。
+- 新增或修改供应商组（把多台电脑上的同一个供应商合成一组）、组策略、组内电脑的添加与状态、
+  经供应商组的任务分配或转发，或「远程与分享」页的组与用量前，必须先读
+  `docs/product-rules/provider-groups.md`：Agent 始终在被选中的组内电脑上运行，组所在电脑
+  只选电脑与转发，并负责按使用方隔离。
 - 新增或修改任何界面、组件、布局、样式、动效或 UI 文案前，必须先读权威设计规范
   `docs/design-rules/DESIGN.md`；设计文档索引见
   `docs/design-rules/cindy-design-system.md`。

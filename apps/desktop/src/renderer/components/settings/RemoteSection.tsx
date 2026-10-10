@@ -50,6 +50,7 @@ interface RowProps {
   onDisconnect: () => void;
   onRemove: () => void;
   onSetupKey: () => void;
+  onReviewHostKey: () => void;
   onEdit: () => void;
   onToggleAutoConnect: (next: boolean) => void;
 }
@@ -81,6 +82,7 @@ function HostRow({
   onDisconnect,
   onRemove,
   onSetupKey,
+  onReviewHostKey,
   onEdit,
   onToggleAutoConnect,
 }: RowProps) {
@@ -99,7 +101,10 @@ function HostRow({
   const via = snap.lastAuthLabel
     ? ` · ${t('settings.remote.viaAuth', { label: snap.lastAuthLabel })}`
     : '';
-  const subtitle = snap.lastError && snap.status === 'failed'
+  const keyMismatch = snap.status === 'failed' ? snap.hostKeyMismatch : undefined;
+  const subtitle = keyMismatch
+    ? t('settings.remote.hostKey.explanation', { host: keyMismatch.host })
+    : snap.lastError && snap.status === 'failed'
     ? snap.lastError
     : `${snap.config.user}@${snap.config.hostname}:${snap.config.port}${via}`;
 
@@ -199,7 +204,12 @@ function HostRow({
           />
           <span className="text-12">{t('settings.remote.button.autoConnect')}</span>
         </label>
-        {snap.status === 'failed' && (
+        {keyMismatch && (
+          <Button variant="secondary" size="md" compact type="button" onClick={onReviewHostKey} disabled={busy}>
+            {t('settings.remote.hostKey.review')}
+          </Button>
+        )}
+        {snap.status === 'failed' && !keyMismatch && (
           <Button
             variant="secondary"
             size="md"
@@ -1077,7 +1087,9 @@ export function RemoteSection({ showTitle = true }: { showTitle?: boolean } = {}
       // instead of the generic i18n key, so the user sees the exact
       // command they need to run.
       const ipc = extractIpcError(err);
-      if (ipc?.code === 'SSH_AUTH_FAILED') {
+      if (ipc?.code === 'SSH_HOST_KEY_MISMATCH') {
+        toast.error(t('settings.remote.hostKey.title'));
+      } else if (ipc?.code === 'SSH_AUTH_FAILED') {
         toast.error(ipc.message);
       } else if (ipc?.code === 'SSH_KEY_FILE_NOT_FOUND') {
         // Local key-path problem (fs ENOENT on the configured identityFile),
@@ -1094,6 +1106,18 @@ export function RemoteSection({ showTitle = true }: { showTitle?: boolean } = {}
       setBusy(id, false);
     }
   }, [setBusy, t]);
+
+  const handleReviewHostKey = useCallback(async (id: string) => {
+    setBusy(id, true);
+    try {
+      const result = await window.electronAPI.remoteSsh.reviewHostKey(id);
+      if (result.updated) await handleConnect(id);
+    } catch {
+      toast.error(t('settings.remote.hostKey.updateFailed'));
+    } finally {
+      setBusy(id, false);
+    }
+  }, [handleConnect, setBusy, t]);
 
   const handleDisconnect = useCallback(async (id: string) => {
     setBusy(id, true);
@@ -1356,6 +1380,7 @@ export function RemoteSection({ showTitle = true }: { showTitle?: boolean } = {}
                 onDisconnect={() => handleDisconnect(snap.config.id)}
                 onRemove={() => handleRemove(snap.config.id)}
                 onSetupKey={() => setKeySetupHostId(snap.config.id)}
+                onReviewHostKey={() => void handleReviewHostKey(snap.config.id)}
                 onEdit={() => setEditingId(snap.config.id)}
                 onToggleAutoConnect={(next) => void handleSetAutoConnect(snap.config.id, next)}
               />

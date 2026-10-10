@@ -325,10 +325,9 @@ export function LoginScreen({
       !auth.initialized ||
       (!additionalAccount && auth.isAuthenticated) ||
       initializedLoginRef.current
-    )
-      return;
+    ) return;
     initializedLoginRef.current = true;
-    void auth.dispatchLoginAction({ type: 'reset' });
+    void auth.dispatchLoginAction({ type: 'initialize' });
   }, [additionalAccount, auth]);
 
   useEffect(() => {

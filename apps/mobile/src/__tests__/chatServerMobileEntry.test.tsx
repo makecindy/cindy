@@ -118,6 +118,40 @@ it('resolves everyone using authorized members at send time instead of the displ
   expect(h.auth.apiFetch).toHaveBeenCalledWith(`/v1/conversations/${id}/messages`, expect.objectContaining({ method: 'POST', body: { operationId: 'fixture-new-member', content: [{ type: 'text', text: 'everyone' }], mentions: [joined] } }));
 });
 
+it.each([
+  ['human', false], ['human', true], ['bot', false], ['bot', true],
+] as const)('refuses any unavailable explicit %s target before sending (everyone=%s)', async (kind, all) => {
+  const target = '00000000-0000-4000-8000-000000000003';
+  const available = '00000000-0000-4000-8000-000000000004';
+  const original = h.auth.apiFetch.getMockImplementation()!;
+  let membership = 'joined';
+  h.auth.apiFetch.mockImplementation(async (path, options) => {
+    const value = await original(path, options);
+    const members = [{ id: target, kind, state: membership, name: 'Ann', ownerActorId: self, ownerName: '', role: 'member', avatar: null },
+      { id: available, kind: 'bot', state: 'joined', name: 'Available', ownerActorId: self, ownerName: '', role: 'member', avatar: null }];
+    if (path.endsWith('/members')) return [...value, ...members.filter(member => member.state !== 'missing')];
+    return path.endsWith('/snapshot') ? { ...value, members: [...value.members, ...members] } : value;
+  });
+  showChat = true; await render();
+  for (membership of ['left', 'removed', 'banned', 'invited', 'missing']) {
+    for (const botIds of [[target], [available, target]]) {
+      await act(async () => {
+        await expect(chat.act('send', { text: '@Ann hello', clientId: 'fixture-stale-target', mentions: { all, botIds } }))
+          .rejects.toThrow('MENTION_UNAVAILABLE');
+      });
+      expect(chat.online).toBe(true);
+      expect(chat.state.kind).toBe('ready');
+      expect(h.auth.apiFetch.mock.calls.some(([, options]) => options.method === 'POST')).toBe(false);
+    }
+  }
+  await act(async () => {
+    await chat.act('send', { text: '@Available hello', clientId: 'fixture-reselected', mentions: { all, botIds: [available] } });
+  });
+  expect(h.auth.apiFetch).toHaveBeenCalledWith(`/v1/conversations/${id}/messages`, expect.objectContaining({
+    method: 'POST', body: { operationId: 'fixture-reselected', content: [{ type: 'text', text: '@Available hello' }], mentions: [available] },
+  }));
+});
+
 it('keeps REST sending available after the group WebSocket disconnects', async () => {
   vi.useFakeTimers();
   const sockets: any[] = [];

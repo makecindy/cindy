@@ -342,13 +342,7 @@
       "switchConfirm": "계속"
     },
     "menu": {
-      "groupByProject": "프로젝트별 그룹화",
-      "groupDialogue": "대화 묶기",
-      "sortByTime": "시간순",
-      "sortByPriority": "우선순위",
-      "statusActive": "활성",
-      "statusArchived": "보관됨",
-      "statusAll": "전체",
+      "groupDialogue": "채팅",
       "dialogueFolder": "채팅",
       "search": "검색",
       "settings": "설정",
@@ -356,14 +350,65 @@
       "displaySettings": "표시 설정",
       "groupHeading": "그룹",
       "sortHeading": "작업 정렬",
-      "projectOrderHeading": "프로젝트 순서",
-      "projectOrderActivity": "최근 활동순",
-      "projectOrderManual": "수동",
+      "projectOrderHeading": "프로젝트 정렬",
       "projectOrderManualTip": "프로젝트 행을 길게 누른 뒤 드래그하면 순서를 바꿀 수 있습니다. 그룹 안 작업은 위 정렬을 따릅니다.",
-      "statusHeading": "상태",
+      "statusHeading": "작업 상태",
       "showDeviceTasks": "작업 보기",
       "openDevice": "열기",
-      "renameDevice": "이름 변경"
+      "renameDevice": "이름 변경",
+      "groupProject": "프로젝트",
+      "sortBy": {
+        "priority": "우선순위",
+        "recency": "최근 활동",
+        "created": "생성 시간"
+      },
+      "sortByPriorityTip": "확인이 필요한 항목 먼저, 다음 읽지 않음, 실행 중, 나머지는 시간순",
+      "projectOrder": {
+        "activity": "작업 따르기",
+        "custom": "수동"
+      },
+      "status": {
+        "active": "활성",
+        "archived": "보관됨",
+        "all": "전체"
+      },
+      "filterHeading": "필터",
+      "filterSummaryActive": "{{count}}개 적용 중",
+      "filterReset": "필터 초기화",
+      "filterAll": "전체",
+      "filterProjectsHeading": "프로젝트",
+      "filterAllProjects": "모든 프로젝트",
+      "filterSelectedProjects": "{{count}}개 선택됨",
+      "filterVendorHeading": "Harness",
+      "filterVendor": {
+        "all": "전체",
+        "cc": "Claude Code",
+        "codex": "Codex",
+        "pi": "Pi"
+      },
+      "filterLastActivityHeading": "최근 활동",
+      "filterLastActivity": {
+        "1d": "1일",
+        "3d": "3일",
+        "7d": "7일",
+        "30d": "30일",
+        "all": "전체"
+      },
+      "displayHeading": "표시",
+      "view": {
+        "text": "텍스트",
+        "list": "리스트"
+      },
+      "taskInfoHeading": "작업 정보",
+      "taskInfo": {
+        "time": "시간",
+        "pr": "PR 상태",
+        "tokens": "토큰",
+        "cost": "비용"
+      },
+      "summaryNone": "없음",
+      "summarySeparator": ", ",
+      "filterEmptyCopy": "표시 설정의 필터에서 조정하거나 재설정할 수 있습니다."
     },
     "search": {
       "placeholder": "제목 또는 내용 검색…",

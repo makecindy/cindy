@@ -2348,6 +2348,32 @@
       "note": "受邀者打开分享链接、确认后发给分享者的请求；分享者「同意分享 / 拒绝申请」。受邀者可以「撤回申请」。"
     },
     {
+      "id": "provider-group",
+      "status": "proposed",
+      "en": "Provider Group",
+      "translations": {
+        "zh-CN": "供应商组",
+        "zh-TW": "供應商組",
+        "ja": "プロバイダーグループ",
+        "ko": "제공자 그룹"
+      },
+      "checkCase": false,
+      "note": "某台电脑上某个供应商的一组运行位置：本机、我的其他电脑、通过分享链接加入的电脑（docs/product-rules/provider-groups.md）。这个供应商的使用都按组策略选一台组内电脑运行 Agent。中文用「供应商组」，不单用「分组」，避免与模型列表和设置页的模型分组混淆；组里的电脑称「组内电脑」。"
+    },
+    {
+      "id": "group-strategy",
+      "status": "proposed",
+      "en": "Group Strategy",
+      "translations": {
+        "zh-CN": "组策略",
+        "zh-TW": "組策略",
+        "ja": "グループの割り当て方式",
+        "ko": "그룹 배정 방식"
+      },
+      "checkCase": false,
+      "note": "供应商组为新任务选择组内电脑的规则：最少占用、轮询、按顺序、按权重。只决定新任务分到哪台，已开始的任务不迁移。"
+    },
+    {
       "id": "pairing-code",
       "status": "proposed",
       "en": "Pairing Code",

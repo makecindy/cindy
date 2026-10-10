@@ -661,8 +661,8 @@ export async function downloadToFile(
 ): Promise<void> {
   const { getUrl } = await presignGet(key);
   const resp = await net.fetch(getUrl, { method: 'GET', signal });
-  if (!resp.ok) throw new Error(`OSS GET 失败 (${resp.status})`);
-  if (!resp.body) throw new Error('OSS GET 响应无 body');
+  if (!resp.ok) throw Object.assign(new Error(`OSS GET 失败 (${resp.status})`), { code: 'OSS_DOWNLOAD_FAILED', status: resp.status });
+  if (!resp.body) throw Object.assign(new Error('OSS GET 响应无 body'), { code: 'OSS_DOWNLOAD_EMPTY', status: resp.status });
   const partPath = `${destPath}.${randomUUID()}.part`;
   const hasher = createHash('sha256');
   let size = 0;
