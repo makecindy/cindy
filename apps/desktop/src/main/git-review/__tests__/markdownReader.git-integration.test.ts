@@ -11,6 +11,7 @@ import { readCommitDiff } from '../commitReader';
 import { readDiffs } from '../diffReader';
 import { runGit } from '../gitRunner';
 import {
+  MARKDOWN_PREVIEW_BEFORE_MAX_BYTES,
   MARKDOWN_PREVIEW_MAX_BYTES,
   isPreviewableMarkdownDiff,
   readMarkdownPreview,
@@ -136,6 +137,8 @@ describe('git-review markdownReader', () => {
 
     expect(preview.reason).toBeNull();
     expect(preview.content).toBe('# Worktree\n');
+    // before 侧取自 index（对齐 diff 的 old 侧），不是后来的 worktree 内容。
+    expect(preview.beforeContent).toBe('# Base\n');
     expect(preview.baseDir).toBe(path.join(repoPath, 'docs'));
   });
 
@@ -151,6 +154,7 @@ describe('git-review markdownReader', () => {
 
     expect(preview.reason).toBeNull();
     expect(preview.content).toBe('# Staged\n');
+    expect(preview.beforeContent).toBe('# Base\n');
   });
 
   it('reads commit markdown from the selected commit blob, not the worktree', async () => {
@@ -168,6 +172,7 @@ describe('git-review markdownReader', () => {
     expect(diff.source).toBe('commit');
     expect(preview.reason).toBeNull();
     expect(preview.content).toBe('# Commit content\n');
+    expect(preview.beforeContent).toBe('# Base\n');
   });
 
   it('reads branch markdown from HEAD, not the worktree', async () => {
@@ -186,6 +191,96 @@ describe('git-review markdownReader', () => {
     expect(diff.source).toBe('branch');
     expect(preview.reason).toBeNull();
     expect(preview.content).toBe('# Feature HEAD\n');
+    expect(preview.beforeContent).toBe('# Base\n');
+  });
+
+  it('anchors the branch baseline to the merge base when the base ref advances', async () => {
+    await writeRepoFile('docs/readme.md', '# Base\n');
+    await commitAll('add markdown');
+    await runGit(['checkout', '-b', 'feature'], { cwd: repoPath });
+    await writeRepoFile('docs/readme.md', '# Feature HEAD\n');
+    await commitAll('modify markdown on feature');
+    // 分支切出后上游又改了同一文件：base ref 的 tip 已经不是 merge-base。
+    await runGit(['checkout', 'main'], { cwd: repoPath });
+    await writeRepoFile('docs/readme.md', '# Upstream moved on\n');
+    await commitAll('advance main');
+    await runGit(['checkout', 'feature'], { cwd: repoPath });
+
+    const branchDiff = await readBranchDiff(scope('feature'), 'main');
+    const diff = branchDiff.diffs.find((item) => item.path === 'docs/readme.md');
+    if (!diff) throw new Error('missing branch markdown diff');
+    const preview = await readMarkdownPreview(scope('feature'), { diff, branchBaseRef: 'main' });
+
+    // before 必须取 merge-base（# Base），而不是 base ref 的 tip
+    // （# Upstream moved on）：branch diff 本身就是 merge-base..HEAD，拿 tip
+    // 当基线会把上游的改动伪造成本分支的插入 / 删除。
+    expect(branchDiff.mergeBaseOid).not.toBe(branchDiff.baseOid);
+    expect(preview.beforeContent).toBe('# Base\n');
+  });
+
+  it('pins the branch baseline to the diff-time merge-base snapshot (regression)', async () => {
+    // 快照场景：分支随后把 base 合并进来，merge-base 前进了 —— 现场重算会拿到别的
+    // 基线，与界面里那份 diff 对不上；带上生成 diff 时的 merge-base OID 就固定住了。
+    await writeRepoFile('docs/readme.md', '# Base\n');
+    await commitAll('add markdown');
+    await runGit(['checkout', '-b', 'feature'], { cwd: repoPath });
+    await writeRepoFile('docs/readme.md', '# Feature\n');
+    await commitAll('modify markdown on feature');
+    await runGit(['checkout', 'main'], { cwd: repoPath });
+    await writeRepoFile('docs/readme.md', '# Upstream moved on\n');
+    await commitAll('advance main');
+    await runGit(['checkout', 'feature'], { cwd: repoPath });
+
+    const branchDiff = await readBranchDiff(scope('feature'), 'main');
+    const diff = branchDiff.diffs.find((item) => item.path === 'docs/readme.md');
+    if (!diff) throw new Error('missing branch markdown diff');
+    const snapshot = branchDiff.mergeBaseOid;
+    if (!snapshot) throw new Error('missing merge base snapshot');
+
+    // 分支把 base 合并进来（同文件冲突用 -X ours 解）：merge-base 前进到 main 的 tip。
+    await runGit(['merge', '--no-ff', '--no-gpg-sign', '-X', 'ours', '-m', 'merge main', 'main'], {
+      cwd: repoPath,
+    });
+
+    // 带快照：before 仍是生成 diff 那一刻的 merge-base（# Base）。
+    const pinned = await readMarkdownPreview(scope('feature'), {
+      diff,
+      branchBaseRef: 'main',
+      branchMergeBaseOid: snapshot,
+    });
+    expect(pinned.beforeContent).toBe('# Base\n');
+
+    // 不带快照（旧端 / 无快照）：现场重算 —— 基线已经漂到 # Upstream moved on。
+    const drifted = await readMarkdownPreview(scope('feature'), { diff, branchBaseRef: 'main' });
+    expect(drifted.beforeContent).toBe('# Upstream moved on\n');
+  });
+
+  it('keeps the snapshot baseline even after the base ref disappears (regression)', async () => {
+    // base ref 被删除 / 重置后现场重算会失败（before 变 null，删除标记全丢）；
+    // 带快照时基线不受当前 ref 影响 —— 这正是“快照绑定”要保证的事。
+    await writeRepoFile('docs/readme.md', '# Base\n');
+    await commitAll('add markdown');
+    await runGit(['checkout', '-b', 'feature'], { cwd: repoPath });
+    await writeRepoFile('docs/readme.md', '# Feature\n');
+    await commitAll('modify markdown on feature');
+
+    const branchDiff = await readBranchDiff(scope('feature'), 'main');
+    const diff = branchDiff.diffs.find((item) => item.path === 'docs/readme.md');
+    if (!diff) throw new Error('missing branch markdown diff');
+    const snapshot = branchDiff.mergeBaseOid;
+    if (!snapshot) throw new Error('missing merge base snapshot');
+
+    await runGit(['branch', '-D', 'main'], { cwd: repoPath });
+
+    const pinned = await readMarkdownPreview(scope('feature'), {
+      diff,
+      branchBaseRef: 'main',
+      branchMergeBaseOid: snapshot,
+    });
+    expect(pinned.beforeContent).toBe('# Base\n');
+
+    const withoutSnapshot = await readMarkdownPreview(scope('feature'), { diff, branchBaseRef: 'main' });
+    expect(withoutSnapshot.beforeContent).toBeNull();
   });
 
   it('pins branch markdown preview to the diff blob after HEAD advances', async () => {
@@ -228,6 +323,48 @@ describe('git-review markdownReader', () => {
     expect(branchDiff.baseOid).toBe(baseOid);
     expect(preview.reason).toBeNull();
     expect(preview.content).toBe('# Feature HEAD\n');
+  });
+
+  it('resolves before content through the old path for a staged rename', async () => {
+    await writeRepoFile('docs/old-name.md', '# Renamed doc\n');
+    await commitAll('add old name');
+    await runGit(['mv', 'docs/old-name.md', 'docs/new-name.md'], { cwd: repoPath });
+
+    const diff = await currentDiff('staged', 'docs/new-name.md');
+    const preview = await readMarkdownPreview(scope(), { diff });
+
+    expect(diff.status).toBe('renamed');
+    expect(preview.reason).toBeNull();
+    expect(preview.content).toBe('# Renamed doc\n');
+    expect(preview.beforeContent).toBe('# Renamed doc\n');
+  });
+
+  it('returns no before content for newly added markdown', async () => {
+    await writeRepoFile('docs/new.md', '# Brand new\n');
+    await runGit(['add', 'docs/new.md'], { cwd: repoPath });
+
+    const diff = await currentDiff('staged', 'docs/new.md');
+    const preview = await readMarkdownPreview(scope(), { diff });
+
+    expect(diff.status).toBe('added');
+    expect(preview.reason).toBeNull();
+    expect(preview.content).toBe('# Brand new\n');
+    expect(preview.beforeContent).toBeNull();
+  });
+
+  it('drops an oversized before side without losing the preview body', async () => {
+    const bigBefore = 'A'.repeat(MARKDOWN_PREVIEW_BEFORE_MAX_BYTES + 1);
+    const bigAfter = 'B'.repeat(MARKDOWN_PREVIEW_BEFORE_MAX_BYTES + 1);
+    await writeRepoFile('docs/big.md', bigBefore);
+    await commitAll('add big markdown');
+    await writeRepoFile('docs/big.md', bigAfter);
+
+    const diff = await currentDiff('unstaged', 'docs/big.md');
+    const preview = await readMarkdownPreview(scope(), { diff });
+
+    expect(preview.reason).toBeNull();
+    expect(preview.content).toBe(bigAfter);
+    expect(preview.beforeContent).toBeNull();
   });
 
   it('returns structured fallback data for deleted and unsafe paths', async () => {

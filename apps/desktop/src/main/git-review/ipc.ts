@@ -601,6 +601,12 @@ export function parseMarkdownPreviewPayload(payload: unknown): { sessionId: stri
   const diff = parsePreviewDiffPayload(obj.diff);
   const commitOid = typeof obj.commitOid === 'string' && obj.commitOid ? obj.commitOid : null;
   const branchBaseRef = typeof obj.branchBaseRef === 'string' && obj.branchBaseRef.trim() ? obj.branchBaseRef.trim() : null;
+  // merge-base 快照：非法值降级为 null（不报错）—— 它只影响基线的“固定”与“重算”，
+  // 不值得因为一个坏字段让整个预览失败。
+  const branchMergeBaseOid =
+    typeof obj.branchMergeBaseOid === 'string' && isSafeGitObjectOid(obj.branchMergeBaseOid)
+      ? obj.branchMergeBaseOid
+      : null;
   if (commitOid && !isSafeGitObjectOid(commitOid)) throwIpcError('INVALID_PARAMS', 'commitOid must be a commit hash');
   if (diff.source === 'commit' && !commitOid) throwIpcError('INVALID_PARAMS', 'commitOid is required for markdown preview');
   if (diff.source === 'branch') {
@@ -613,6 +619,7 @@ export function parseMarkdownPreviewPayload(payload: unknown): { sessionId: stri
       diff,
       commitOid,
       branchBaseRef,
+      branchMergeBaseOid,
     },
   };
 }
