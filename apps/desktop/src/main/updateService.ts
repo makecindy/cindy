@@ -2208,7 +2208,11 @@ export async function applyConfirmedAppUpdateForAgent(options: {
       : null;
   const unsupported = agentUpdateUnsupportedReason();
   if (unsupported) return { status: 'failed', reason: unsupported, errorCode: 'unsupported' };
-  if (isRelaunching || autoRelaunchInProgress) return { status: 'relaunching', targetVersion: readyVersion };
+  // A relaunch already under way (Settings banner or idle auto-install) only
+  // counts as this install when it applies the confirmed version.
+  if (isRelaunching || autoRelaunchInProgress) {
+    return versionChanged() ?? { status: 'relaunching', targetVersion: readyVersion };
+  }
   if (currentStatus !== 'ready') {
     const result = await checkForUpdate();
     if (result !== 'ready') {
@@ -2220,7 +2224,10 @@ export async function applyConfirmedAppUpdateForAgent(options: {
   if (!await options.beforeRelaunch()) {
     return { status: 'failed', reason: '更新已下载，但本次没有重启。', errorCode: 'relaunch_cancelled' };
   }
-  if (isRelaunching || autoRelaunchInProgress) return { status: 'relaunching', targetVersion: readyVersion };
+  // Same rule for a relaunch that started during the wait.
+  if (isRelaunching || autoRelaunchInProgress) {
+    return versionChanged() ?? { status: 'relaunching', targetVersion: readyVersion };
+  }
   if (currentStatus !== 'ready' || !readyVersion) {
     return { status: 'failed', reason: '已下载的更新不再可用，请重新检查更新。', errorCode: 'not_ready' };
   }

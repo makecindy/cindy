@@ -578,6 +578,32 @@ describe('agent-facing managed app update check', () => {
       }
     });
 
+    it('treats a relaunch already under way as this install only for the confirmed version', async () => {
+      // Idle auto-install is on and starts applying 0.0.65 as soon as it is staged.
+      readAutoUpdateSettings.mockReturnValue({ autoRelaunchOnIdle: true });
+      download.mockImplementation(async ({ targetPath }: { targetPath: string }) => {
+        fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+        fs.writeFileSync(targetPath, 'update');
+        return { path: targetPath, size: 123 };
+      });
+      const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+      const service = await freshUpdateService('darwin');
+      try {
+        expect(await service.checkForUpdate()).toBe('ready');
+        await vi.waitFor(() => { expect(spawnProcess).toHaveBeenCalledOnce(); });
+        const beforeRelaunch = vi.fn(async () => true);
+        await expect(service.applyConfirmedAppUpdateForAgent({ expectedVersion: '0.0.66', beforeRelaunch }))
+          .resolves.toMatchObject({ status: 'failed', errorCode: 'version_changed', stagedVersion: '0.0.65' });
+        await expect(service.applyConfirmedAppUpdateForAgent({ expectedVersion: '0.0.65', beforeRelaunch }))
+          .resolves.toEqual({ status: 'relaunching', targetVersion: '0.0.65' });
+        expect(beforeRelaunch).not.toHaveBeenCalled();
+        expect(spawnProcess).toHaveBeenCalledOnce();
+      } finally {
+        service.stopUpdateService();
+        exitSpy.mockRestore();
+      }
+    });
+
     it('does not relaunch when the download fails or the build is unsupported', async () => {
       download.mockRejectedValue(new Error('network'));
       const service = await freshUpdateService('darwin');
