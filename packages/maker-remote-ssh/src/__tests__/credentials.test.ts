@@ -14,6 +14,9 @@
  */
 
 import { describe, expect, it } from 'vitest';
+import { promises as fs } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
 import {
   KEY_FILE_NOT_FOUND_CODE,
@@ -24,8 +27,11 @@ import {
   previewAgentEndpoint,
   resolveAgentEndpoint,
   SSH_AGENT_UNAVAILABLE_CODE,
+  resolveIdentityFingerprints,
 } from '../sshAuthentication.js';
 import type { HostConfig } from '../types.js';
+const TEST_PUBLIC_KEY = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPFqmiBYVCrZsGBJy/djBu4yIr1lYkTuOXI0A9vPN/lD cindy-test\n';
+const TEST_PUBLIC_KEY_2 = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIkv84ni34F924G7htx9qVI7CcGG5xYDJQoabgKUbMiv cindy-test-2\n';
 
 function keyHost(over: Partial<HostConfig> & Pick<HostConfig, 'identityFile'>): HostConfig {
   return {
@@ -156,10 +162,55 @@ describe('resolveAuth OpenSSH agent metadata', () => {
           ? '\\\\.\\pipe\\openssh-ssh-agent'
           : '/tmp/cindy-test-agent.sock',
         label: 'ssh-agent',
+        // #4201: an unfiltered agent pins nothing, so the failure hint must not
+        // name the external IdentityFile entries that never reached the agent.
+        pinnedIdentityFiles: [],
       });
     } finally {
       if (previous === undefined) delete process.env.SSH_AUTH_SOCK;
       else process.env.SSH_AUTH_SOCK = previous;
+    }
+  });
+
+  it('pins only the configured identity files whose public key is in the fingerprint set (#4201)', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-pin-'));
+    const previous = process.env.SSH_AUTH_SOCK;
+    process.env.SSH_AUTH_SOCK = '/tmp/cindy-test-agent.sock';
+    try {
+      const pinned = path.join(dir, 'id_ed25519');
+      const other = path.join(dir, 'id_ecdsa');
+      const missing = path.join(dir, 'id_rsa');
+      await fs.writeFile(`${pinned}.pub`, TEST_PUBLIC_KEY);
+      await fs.writeFile(`${other}.pub`, TEST_PUBLIC_KEY_2);
+      const { fingerprints } = await resolveIdentityFingerprints(pinned);
+      const resolved = await resolveAuth({
+        id: 'lab',
+        hostname: '192.0.2.10',
+        port: 22,
+        user: 'developer',
+        authMethod: 'agent',
+        source: 'ssh-config',
+        managedByCindy: false,
+        sshAuthentication: {
+          identitiesOnly: true,
+          // sshConfig lists every default path, but only `pinned` produced a fingerprint.
+          configuredIdentityFiles: [missing, pinned, other],
+          identityFileDirectiveSeen: false,
+          identityFileNoneSeen: false,
+          allowedAgentFingerprints: fingerprints,
+        },
+      });
+      expect(resolved.label).toBe('ssh-agent[filtered]');
+      expect(resolved.pinnedIdentityFiles).toEqual([pinned]);
+      expect(resolved.readAgentAuthOutcome?.()).toEqual({
+        offeredCount: null,
+        signedCount: 0,
+        signFailureCount: 0,
+      });
+    } finally {
+      if (previous === undefined) delete process.env.SSH_AUTH_SOCK;
+      else process.env.SSH_AUTH_SOCK = previous;
+      await fs.rm(dir, { recursive: true, force: true });
     }
   });
 
