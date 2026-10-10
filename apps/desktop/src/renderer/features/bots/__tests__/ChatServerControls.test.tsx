@@ -51,9 +51,9 @@ describe('chat interaction controls', () => {
   });
 
   it('renders the current root failure beside the root and removes it when a refreshed page clears the failure', async () => {
-    const failure = { ...message, id: 'execution-failure:root:1', kind: 'notice', content: '', runtimeFailureCode: 'QUOTA_EXCEEDED' };
-    mocks.thread.mockResolvedValueOnce({ ok: true, root: message, rootFailureNotices: [failure], replies: [], hasMore: true })
-      .mockResolvedValue({ ok: true, root: message, rootFailureNotices: [], replies: [], hasMore: false });
+    const failure = { executionId: 'root-run', epoch: 1, sourceMessageId: message.id, botId: 'bot', botName: 'Bot', code: 'QUOTA_EXCEEDED', planId: null };
+    mocks.thread.mockResolvedValueOnce({ ok: true, root: message, executionFailures: [failure], replies: [], hasMore: true })
+      .mockResolvedValue({ ok: true, root: message, executionFailures: [], replies: [], hasMore: false });
     render(<ChatThreadPanel group={group} rootId="root" onClose={vi.fn()} />);
     const text = 'bots.groupChat.notice.runtimeFailure.QUOTA_EXCEEDED';
     expect(await screen.findByText(text)).toBeTruthy();
@@ -66,10 +66,10 @@ describe('chat interaction controls', () => {
   it('clears a retried failure on an older loaded Thread page without dropping its reply', async () => {
     const latest = { ...message, id: 'latest', sequence: 100, content: 'Latest reply' };
     const older = { ...message, id: 'older', sequence: 4, content: 'Earlier reply' };
-    const failure = { ...older, id: 'execution-failure:older:1', kind: 'notice', content: '', runtimeFailureCode: 'AUTH_REQUIRED' };
-    mocks.thread.mockResolvedValueOnce({ ok: true, root: message, replies: [latest], hasMore: true, activeExecutionFailureIds: [failure.id] })
-      .mockResolvedValueOnce({ ok: true, root: message, replies: [older, failure], hasMore: false, activeExecutionFailureIds: [failure.id] })
-      .mockResolvedValue({ ok: true, root: message, replies: [latest], hasMore: true, activeExecutionFailureIds: [] });
+    const failure = { executionId: 'older-run', epoch: 1, sourceMessageId: older.id, botId: 'bot', botName: 'Bot', code: 'AUTH_REQUIRED', planId: null };
+    mocks.thread.mockResolvedValueOnce({ ok: true, root: message, replies: [latest], hasMore: true, executionFailures: [failure] })
+      .mockResolvedValueOnce({ ok: true, root: message, replies: [older], hasMore: false, executionFailures: [failure] })
+      .mockResolvedValue({ ok: true, root: message, replies: [latest], hasMore: true, executionFailures: [] });
     render(<ChatThreadPanel group={group} rootId="root" onClose={vi.fn()} />);
     fireEvent.click(await screen.findByRole('button', { name: 'bots.groupChat.timeline.loadEarlier' }));
     await screen.findByText('bots.groupChat.notice.runtimeFailure.AUTH_REQUIRED');

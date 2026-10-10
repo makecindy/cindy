@@ -88,6 +88,7 @@ import {
   botGroupPlanFollowUp,
   continuableRoundEndId,
   mergeBotGroupMessages,
+  projectBotGroupExecutionFailures,
   mergeBotGroupPlans,
   openBotGroupPlan,
 } from './botGroupPresentation';
@@ -233,7 +234,7 @@ function BotGroupChatContent({ groupId }: { groupId: string }) {
 
   const group = state.kind === 'ready' ? state.group : null;
   const messages = useMemo(
-    () => (state.kind === 'ready' ? mergeBotGroupMessages(state.older, state.group.messages, state.group.activeExecutionFailureIds) : []),
+    () => (state.kind === 'ready' ? projectBotGroupExecutionFailures(mergeBotGroupMessages(state.older, state.group.messages), state.group.executionFailures) : []),
     [state],
   );
   const acknowledge = useCallback(() => {
@@ -352,13 +353,13 @@ function BotGroupChatContent({ groupId }: { groupId: string }) {
       setState((previous) => {
         if (previous.kind !== 'ready') return previous;
         // A newer push refresh wins over an older in-flight pagination request.
-        const activeIds = previous.group === state.group
-          ? result.group.activeExecutionFailureIds ?? previous.group.activeExecutionFailureIds
-          : previous.group.activeExecutionFailureIds;
+        const executionFailures = previous.group === state.group
+          ? result.group.executionFailures ?? previous.group.executionFailures
+          : previous.group.executionFailures;
         return {
           ...previous,
-          group: { ...previous.group, activeExecutionFailureIds: activeIds },
-          older: mergeBotGroupMessages(previous.older, result.group.messages, activeIds),
+          group: { ...previous.group, executionFailures },
+          older: mergeBotGroupMessages(previous.older, result.group.messages),
           olderPlans: mergeBotGroupPlans(result.group.plans, previous.olderPlans),
           olderHasMore: result.group.hasMoreBefore,
         };

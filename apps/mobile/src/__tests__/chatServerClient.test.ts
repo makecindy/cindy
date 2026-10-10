@@ -32,11 +32,11 @@ describe('direct Chat Server client', () => {
     let status = 'failed';
     const request = vi.fn();
     request.mockImplementation(async (path: string) => path.endsWith('/snapshot') ? snapshot()
-      : path.endsWith('/executions') ? [{ id: id(30), source_message_id: source.id, bot_id: id(10), epoch: 1, status, failure_code }]
+      : path.endsWith('/execution-failures') ? [{ id: id(30), source_message_id: source.id, bot_id: id(10), epoch: 1, status, failure_code }]
       : [source]);
     const client = createChatServerClient(request);
     const page = await client.load(id(1));
-    expect(request).toHaveBeenCalledWith(`/conversations/${id(1)}/executions`);
+    expect(request).toHaveBeenCalledWith(`/conversations/${id(1)}/execution-failures`);
     const view = chatGroupView(page, id(11));
     expect(view.messages).toHaveLength(2);
     expect(view.messages[0]).toMatchObject({ id: source.id, kind: 'message' });
@@ -54,7 +54,7 @@ describe('direct Chat Server client', () => {
     const execution = { id: id(30), source_message_id: source.id, bot_id: id(10), epoch: 2, status: 'failed',
       failure_code: 'RUNTIME_TIMEOUT', detail: { message: 'private diagnostic' } };
     const view = chatGroupView({ snapshot: snapshot(), messages: [source, message(21)], before: source.seq,
-      executions: [execution, { ...execution, id: id(31), bot_id: id(11), failure_code: 'AUTH_REQUIRED' },
+      failures: [execution, { ...execution, id: id(31), bot_id: id(11), failure_code: 'AUTH_REQUIRED' },
         { ...execution, id: id(32), conversation_id: id(99) }, { ...execution, id: id(33), epoch: NaN }] }, id(11));
     expect(view.messages.map(entry => entry.id)).toEqual([source.id, `execution-failure:${id(30)}:2`, `execution-failure:${id(31)}:2`, id(21)]);
     expect(view.messages.slice(0, 3).map(entry => entry.sequence)).toEqual([1, 1, 1]);
@@ -62,6 +62,15 @@ describe('direct Chat Server client', () => {
     expect(view.hasMoreBefore).toBe(true);
     expect(view.lastMessage?.preview).toBe('21');
     expect(JSON.stringify(view.messages)).not.toContain('private diagnostic');
+  });
+  it('falls back only for a missing endpoint on an older server', async () => {
+    const source = message(20);
+    const request = vi.fn().mockResolvedValueOnce(snapshot()).mockResolvedValueOnce([source])
+      .mockRejectedValueOnce(Object.assign(new Error('NOT_FOUND'), { status: 404 }))
+      .mockResolvedValueOnce([{ id: id(30), source_message_id: source.id, bot_id: id(10), epoch: 1, status: 'failed', failure_code: 'AUTH_REQUIRED' }]);
+    const page = await createChatServerClient(request).load(id(1));
+    expect(request.mock.calls.at(-1)?.[0]).toBe(`/conversations/${id(1)}/executions`);
+    expect(chatGroupView(page, id(11)).messages[1].runtimeFailureCode).toBe('AUTH_REQUIRED');
   });
   it('surfaces execution read denial or malformed success through the existing load error path', async () => {
     const request = vi.fn().mockResolvedValueOnce(snapshot()).mockResolvedValueOnce([message(20)])

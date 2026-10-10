@@ -10,11 +10,11 @@ import { ShareMessageCheckbox } from '@/components/chat/ShareMessageCheckbox';
 import { shareSelectionStore, useShareSelectionActive } from '@/components/chat/shareSelectionStore';
 import { SHARE_SESSION_ATTR, SHARE_MESSAGE_ATTR } from '@/lib/shareConversationImage';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent, isDataOwnerPushCurrent } from '@/contexts/dataOwnerGeneration';
-import type { BotGroupDetail, BotGroupMention, BotGroupMessageView } from '../../../shared/botGroupChat';
+import type { BotGroupDetail, BotGroupExecutionFailureView, BotGroupMention, BotGroupMessageView } from '../../../shared/botGroupChat';
 import { isBotGroupRuntimeFailureCode } from '../../../shared/botGroupChat';
 import { resolveBotGroupMentions } from './botGroupMentions';
 import { refreshBotGroups } from './botGroupStore';
-import { mergeBotGroupMessages } from './botGroupPresentation';
+import { mergeBotGroupMessages, projectBotGroupExecutionFailures } from './botGroupPresentation';
 import { BotAvatar } from './BotAvatar';
 import { BotGroupRuntimeFailureNotice } from './BotGroupRuntimeFailureNotice';
 import { ChatMessageActions, chatErrorKey } from './ChatServerControls';
@@ -49,7 +49,7 @@ export function ChatThreadPanel({ group, rootId, onClose }: { group: BotGroupDet
     return () => { if (shareSelectionStore.isActive(shareScope)) shareSelectionStore.exit(); };
   }, [shareScope]);
   const [root, setRoot] = useState<BotGroupMessageView | null>(null);
-  const [rootFailureNotices, setRootFailureNotices] = useState<BotGroupMessageView[]>([]);
+  const [executionFailures, setExecutionFailures] = useState<BotGroupExecutionFailureView[]>([]);
   const [replies, setReplies] = useState<BotGroupMessageView[]>([]);
   const [hasMore, setHasMore] = useState(false);
   const [text, setText] = useState('');
@@ -66,10 +66,8 @@ export function ChatThreadPanel({ group, rootId, onClose }: { group: BotGroupDet
       if (!current()) return;
       if (!result.ok) { setError(t(chatErrorKey(result.errorCode))); return; }
       setRoot(result.root); setError('');
-      setRootFailureNotices(result.rootFailureNotices ?? []);
-      setReplies(previous => {
-        return mergeBotGroupMessages(previous, result.replies, result.activeExecutionFailureIds);
-      });
+      setExecutionFailures(result.executionFailures ?? []);
+      setReplies(previous => mergeBotGroupMessages(previous, result.replies));
       if (before || replies.length === 0) setHasMore(result.hasMore);
     } catch { if (current()) setError(t(key('requestFailed'))); }
   }, [group.id, rootId, t, replies.length]);
@@ -108,11 +106,10 @@ export function ChatThreadPanel({ group, rootId, onClose }: { group: BotGroupDet
           <Dialog.Close className={iconClass} aria-label={t('bots.close')}><X size={17} /></Dialog.Close>
         </header>
         <div ref={contentRef} className="min-h-0 flex-1 space-y-5 overflow-y-auto px-5 py-4">
-          {root && <ThreadMessage shareScope={shareScope} sharing={sharing} group={group} message={root} onChanged={() => void loadRef.current()} />}
-          {rootFailureNotices.map(message => <ThreadMessage key={message.id} shareScope={shareScope} sharing={sharing} group={group} message={message} onChanged={() => void loadRef.current()} />)}
+          {projectBotGroupExecutionFailures(root ? [root] : [], executionFailures).map(message => <ThreadMessage key={message.id} shareScope={shareScope} sharing={sharing} group={group} message={message} onChanged={() => void loadRef.current()} />)}
           <div className="border-t border-[var(--border-default)] pt-3 text-12 text-[var(--text-tertiary)]">{t(key('replies'))}</div>
           {hasMore && <Button variant="secondary" size="sm" onClick={() => void loadRef.current(replies[0]?.sequence)}>{t('bots.groupChat.timeline.loadEarlier')}</Button>}
-          {replies.map(message => <ThreadMessage key={message.id} shareScope={shareScope} sharing={sharing} group={group} message={message} onChanged={() => void loadRef.current()} />)}
+          {projectBotGroupExecutionFailures(replies, executionFailures).map(message => <ThreadMessage key={message.id} shareScope={shareScope} sharing={sharing} group={group} message={message} onChanged={() => void loadRef.current()} />)}
         </div>
         {sharing ? <ShareSelectionBar sessionId={shareScope} barWidth="100%"
           getContentWidth={() => contentRef.current?.querySelector('article')?.getBoundingClientRect().width ?? 400} /> : <div className="space-y-3 border-t border-[var(--border-default)] p-4">

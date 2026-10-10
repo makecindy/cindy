@@ -1,5 +1,6 @@
 /** The existing Chat Server HTTP contract; no device-link or executor registration. */
-import { isBotGroupRuntimeFailureCode, readImportedBotGroupRuntimeFailureCode, type BotGroupAttachment, type BotGroupMemberView, type BotGroupMessageView, type BotGroupRemoteChatData } from '@cindy/maker-shared/botGroupChat';
+import { readBotGroupExecutionFailure, readImportedBotGroupRuntimeFailureCode, type BotGroupAttachment, type BotGroupMemberView, type BotGroupMessageView, type BotGroupRemoteChatData } from '@cindy/maker-shared/botGroupChat';
+import { projectBotGroupExecutionFailures } from '@cindy/maker-shared/botGroupPresentation';
 import type { HostedRemoteCollectionItem } from '@/device-link/remoteResources';
 
 export interface ChatRoom {
@@ -19,11 +20,11 @@ export interface ChatMessage {
     namespace?: string; schemaRevision?: number; data?: Record<string, unknown> }>;
 }
 export interface ChatSnapshot { room: ChatRoom; members: ChatMember[]; messages: ChatMessage[]; cursor: string; reads?: Array<{ thread_key: string; read_seq: string }> }
-export interface ChatExecution {
-  id: string; conversation_id?: string; source_message_id: string; bot_id: string; epoch: number; status: string;
+export interface ChatExecutionFailure {
+  id: string; conversation_id?: string; source_message_id: string; bot_id: string; epoch: number; status?: string;
   failure_code?: unknown; updated_at?: string; plan_id?: string | null;
 }
-export interface ChatPage { snapshot: ChatSnapshot; messages: ChatMessage[]; before: string | null; executions?: ChatExecution[] }
+export interface ChatPage { snapshot: ChatSnapshot; messages: ChatMessage[]; before: string | null; failures?: ChatExecutionFailure[] }
 export type ChatRequest = <T>(path: string, method?: 'GET' | 'POST', body?: unknown) => Promise<T>;
 
 export function chatId(value: string): string {
@@ -138,39 +139,29 @@ export function chatGroupView(page: ChatPage, selfId: string): BotGroupRemoteCha
       }), createdAt: Date.parse(message.createdAt) };
   });
   const last = messages.at(-1);
-  // Execution status owns these notices; they never replace a real message or its preview.
-  const visible = new Map(messages.map(message => [message.id, message]));
-  const failures: BotGroupMessageView[] = (page.executions ?? []).flatMap(execution => {
-    if (!execution || execution.status !== 'failed'
-      || (execution.conversation_id !== undefined && execution.conversation_id !== room.id)
-      || typeof execution.id !== 'string' || typeof execution.bot_id !== 'string'
-      || !Number.isSafeInteger(execution.epoch) || execution.epoch < 0) return [];
-    const source = visible.get(execution.source_message_id);
-    if (!source) return [];
-    const member = members.find(candidate => candidate.id === execution.bot_id);
-    const code = isBotGroupRuntimeFailureCode(execution.failure_code) ? execution.failure_code : 'RUNTIME_ERROR';
-    const updatedAt = typeof execution.updated_at === 'string' ? Date.parse(execution.updated_at) : NaN;
-    return [{ id: `execution-failure:${execution.id}:${execution.epoch}`, sequence: source.sequence,
-      kind: 'notice', authorKind: 'system', authorBotId: execution.bot_id, authorName: member ? memberName(member) : '',
-      content: '', noticeCode: code === 'RUNTIME_TIMEOUT' ? 'member-timeout' : 'member-failed', runtimeFailureCode: code,
-      mentions: { all: false, botIds: [] }, planId: typeof execution.plan_id === 'string' ? execution.plan_id : null,
-      threadRootId: source.threadRootId ?? null, files: [], attachments: [],
-      createdAt: Number.isFinite(updatedAt) ? updatedAt : source.createdAt }];
+  const failures = (page.failures ?? []).flatMap(row => {
+    const failure = readBotGroupExecutionFailure(row, room.id);
+    if (!failure) return [];
+    const member = members.find(candidate => candidate.id === failure.botId);
+    return [{ ...failure, botName: member ? memberName(member) : '' }];
   });
-  messages.push(...failures);
-  messages.sort((a, b) => a.sequence - b.sequence);
   return { id: room.id, name: room.name, serverBacked: true, archived: room.archived, selfActorId: selfId,
     revision: room.revision, members: memberViews, replyMode: room.response_mode, speakingMode: room.speaking_mode,
     organizerBotId: room.organizer_id ?? null, projectDir: null, projectDirName: null,
     createdAt: Date.parse(room.created_at), updatedAt: Date.parse(room.updated_at),
     lastMessage: last ? { authorKind: last.authorKind, authorName: last.authorName, preview: last.content.slice(0, 80), createdAt: last.createdAt } : null,
-    speakingBotIds: [], planningBotId: null, openPlan: null, plans: [], messages,
+    speakingBotIds: [], planningBotId: null, openPlan: null, plans: [], messages: projectBotGroupExecutionFailures(messages, failures),
     hasMoreBefore: page.before !== null, round: { status: 'idle', speakers: [], canContinue: false }, supportsAttachments: false };
 }
 
 export function createChatServerClient(request: ChatRequest) {
-  async function executions(roomId: string): Promise<ChatExecution[]> {
-    const value = await request<ChatExecution[]>(`/conversations/${chatId(roomId)}/executions`);
+  async function failures(roomId: string): Promise<ChatExecutionFailure[]> {
+    let value: ChatExecutionFailure[];
+    try { value = await request<ChatExecutionFailure[]>(`/conversations/${chatId(roomId)}/execution-failures`); }
+    catch (error) {
+      if (!error || typeof error !== 'object' || !('status' in error) || error.status !== 404) throw error;
+      value = await request<ChatExecutionFailure[]>(`/conversations/${chatId(roomId)}/executions`);
+    }
     if (!Array.isArray(value)) throw new Error('INVALID_CHAT_EXECUTIONS');
     return value;
   }
@@ -221,12 +212,12 @@ export function createChatServerClient(request: ChatRequest) {
         if (next && BigInt(next) >= BigInt(before)) throw new Error('INVALID_CHAT_PAGE');
         messages.push(...batch); before = next;
       }
-      return { snapshot, messages, before, executions: await executions(room) };
+      return { snapshot, messages, before, failures: await failures(room) };
     },
     async older(roomId: string, page: ChatPage): Promise<ChatPage> {
       if (!page.before) return page;
       const messages = await request<ChatMessage[]>(`/conversations/${chatId(roomId)}/messages?limit=100&before=${chatCursor(page.before)}`);
-      return { ...page, messages: [...page.messages, ...messages], executions: await executions(roomId),
+      return { ...page, messages: [...page.messages, ...messages], failures: await failures(roomId),
         before: messages.length === 100 ? chatCursor(messages.at(-1)!.seq) : null };
     },
     async media(roomId: string, mediaId: string): Promise<BotGroupAttachment> {

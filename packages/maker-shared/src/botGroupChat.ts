@@ -49,6 +49,34 @@ export function isBotGroupRuntimeFailureCode(value: unknown): value is BotGroupR
   return typeof value === 'string' && BOT_GROUP_RUNTIME_FAILURE_CODES.some(code => code === value);
 }
 
+/** Current execution state, separate from persisted/paginated chat messages. */
+export interface BotGroupExecutionFailureView {
+  executionId: string;
+  epoch: number;
+  sourceMessageId: string;
+  botId: string;
+  botName: string;
+  code: BotGroupRuntimeFailureCode;
+  planId: string | null;
+  updatedAt?: number;
+}
+
+/** Decode only public fields from Chat Server; legacy /executions rows also work. */
+export function readBotGroupExecutionFailure(value: unknown, roomId: string): BotGroupExecutionFailureView | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const row = value as Record<string, unknown>;
+  if ((row.status !== undefined && row.status !== 'failed')
+    || (row.conversation_id !== undefined && row.conversation_id !== roomId)
+    || typeof row.id !== 'string' || !row.id || typeof row.source_message_id !== 'string' || !row.source_message_id
+    || typeof row.bot_id !== 'string' || !row.bot_id
+    || typeof row.epoch !== 'number' || !Number.isSafeInteger(row.epoch) || row.epoch < 0) return null;
+  const updatedAt = typeof row.updated_at === 'string' ? Date.parse(row.updated_at) : NaN;
+  return { executionId: row.id, epoch: row.epoch, sourceMessageId: row.source_message_id,
+    botId: row.bot_id, botName: '', code: isBotGroupRuntimeFailureCode(row.failure_code) ? row.failure_code : 'RUNTIME_ERROR',
+    planId: typeof row.plan_id === 'string' ? row.plan_id : null,
+    ...(Number.isFinite(updatedAt) ? { updatedAt } : {}) };
+}
+
 /** Persisted local notice marker; migration carries the category as card metadata. */
 export const BOT_GROUP_RUNTIME_FAILURE_PREFIX = 'cindy-runtime-error:';
 export function botGroupRuntimeFailureDetail(code: BotGroupRuntimeFailureCode): string {
@@ -106,6 +134,8 @@ export interface BotGroupMemberView {
 }
 
 export interface BotGroupMessageView {
+  /** Server tombstone; it cannot anchor a runtime failure notice. */
+  deleted?: boolean;
   isSelf?: boolean;
   threadRootId?: string | null;
   replyCount?: number;
@@ -280,8 +310,8 @@ export interface BotGroupSummary {
 export interface BotGroupDetail extends BotGroupSummary {
   /** Oldest first. */
   messages: BotGroupMessageView[];
-  /** All currently failed execution/epoch IDs, including sources outside this page. Older/local hosts omit this. */
-  activeExecutionFailureIds?: string[];
+  /** Authorized current failures, independent of message pagination. Local/older hosts omit this. */
+  executionFailures?: BotGroupExecutionFailureView[];
   hasMoreBefore: boolean;
   round: BotGroupRoundView;
   /** Plans referenced by the loaded messages, plus the open plan. */
@@ -510,10 +540,8 @@ export interface ChatServerApi {
   status(): Promise<{ enabled: boolean; connected: boolean }>;
   thread(input: { groupId: string; rootId: string; before?: number }): Promise<ChatServerResult<{
     root: BotGroupMessageView; replies: BotGroupMessageView[]; hasMore: boolean;
-    /** Derived root failures stay beside the root and never count toward reply pagination. */
-    rootFailureNotices?: BotGroupMessageView[];
-    /** Conversation-wide failure snapshot, independent of reply pagination. */
-    activeExecutionFailureIds?: string[];
+    /** Same authoritative state as the main timeline; root and replies use one projection. */
+    executionFailures?: BotGroupExecutionFailureView[];
   }>>;
   reply(input: { groupId: string; rootId: string; text: string; clientId: string; mentions: BotGroupMention }): Promise<ChatServerResult<{ messageId: string }>>;
   react(input: { groupId: string; messageId: string; emoji: string; present: boolean }): Promise<ChatServerResult<Record<never, never>>>;

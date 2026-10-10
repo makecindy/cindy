@@ -188,28 +188,6 @@ describe('group presentation', () => {
     expect(continuableRoundEndId(messages, { status: 'running', canContinue: true })).toBeNull();
   });
 
-  it('keeps every failed companion notice alongside its source and removes stale failures after retry', () => {
-    const source = message({ id: 'source', sequence: 4 });
-    const failure = (id: string) => message({ id: `execution-failure:${id}:1`, sequence: 4, kind: 'notice', runtimeFailureCode: 'IMAGE_INPUT_UNSUPPORTED' });
-    const merged = mergeBotGroupMessages([], [source, failure('first'), failure('second')]);
-    expect(merged.map(item => item.id)).toEqual(['source', 'execution-failure:first:1', 'execution-failure:second:1']);
-    expect(mergeBotGroupMessages(merged, [source]).map(item => item.id)).toEqual(['source']);
-    expect(mergeBotGroupMessages(merged, [message({ id: 'newer', sequence: 5 })])).toHaveLength(4);
-  });
-
-  it('reconciles failures outside the refreshed page against the full execution snapshot', () => {
-    const source = message({ id: 'source', sequence: 4 });
-    const failed = (id: string) => message({ id, sequence: 4, kind: 'notice', runtimeFailureCode: 'AUTH_REQUIRED' });
-    const first = failed('execution-failure:first:1'), second = failed('execution-failure:second:1');
-    const latest = [message({ id: 'newer', sequence: 100 })];
-    expect(mergeBotGroupMessages([source, first, second], latest, [second.id]).map(item => item.id))
-      .toEqual(['source', second.id, 'newer']);
-    expect(mergeBotGroupMessages([source, first, second], latest, []).map(item => item.id)).toEqual(['source', 'newer']);
-    expect(mergeBotGroupMessages([source, first], latest, ['execution-failure:first:2']).map(item => item.id))
-      .toEqual(['source', 'newer']);
-    expect(mergeBotGroupMessages([], [source, first], []).map(item => item.id)).toEqual(['source']);
-  });
-
   it('merges pages by sequence and sorts groups by latest activity', () => {
     const merged = mergeBotGroupMessages(
       [message({ id: 'a', sequence: 1 }), message({ id: 'b', sequence: 2 })],

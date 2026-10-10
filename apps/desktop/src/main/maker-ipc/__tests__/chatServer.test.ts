@@ -42,6 +42,7 @@ vi.mock('ws', async () => {
   } };
 });
 import { withChatServer } from '../chatServer.js';
+import { projectBotGroupExecutionFailures } from '@cindy/maker-shared/botGroupPresentation';
 import { settleUndispatchedBotGroupTurn } from '../botGroupRuntimeFailure.js';
 import { authorizeGroupTool } from '../botGroupToolAuthorization.js';
 import type { BotGroupChatService, BotGroupChatServiceDeps } from '../botGroupChatService.js';
@@ -100,7 +101,7 @@ describe('Chat Server result delivery and refresh', () => {
       return { body: { execution: next } };
     }
     if (route.endsWith('/snapshot')) return { body: { room: room(route.split('/')[2]), members: [], messages: [], cursor: '1' } };
-    if (route.includes('/messages?') || route.endsWith('/executions') || route.includes('/plans')) return { body: [] };
+    if (route.includes('/messages?') || route.endsWith('/executions') || route.endsWith('/execution-failures') || route.includes('/plans')) return { body: [] };
     return { body: {} };
   }
   beforeEach(() => {
@@ -253,39 +254,84 @@ describe('Chat Server result delivery and refresh', () => {
     expect(deps.dispatch).toHaveBeenCalledOnce();
   });
 
+  it('settles once when a pre-dispatch rejection is followed by a late dispatch exception and SDK terminal', async () => {
+    let failures = 0;
+    fixture.handle.mockImplementation((route, method, body) => {
+      if (body?.action === 'fail' && ++failures === 1) throw new Error('ECONNRESET');
+      return response(route);
+    });
+    deps.dispatch = vi.fn(async input => {
+      await settleUndispatchedBotGroupTurn(service, input.targetSessionId, input.clientId, 'failed', '[PI_IMAGE_INPUT_UNSUPPORTED] local diagnostic');
+      throw new Error('late network error');
+    });
+    await start();
+    await service.settleLaneTurn({ ...terminal, activeInputClientId: vi.mocked(deps.dispatch).mock.calls[0][0].clientId, outcome: 'error', failureCode: 'NETWORK_ERROR' });
+    expect(deps.abortLane).toHaveBeenCalledExactlyOnceWith('lane');
+    await vi.advanceTimersByTimeAsync(16_000);
+    const attempts = fixture.handle.mock.calls.filter(([, , body]) => body?.action === 'fail');
+    expect(attempts).toHaveLength(2);
+    expect(attempts[1][2]).toEqual(attempts[0][2]);
+    expect(attempts[1][2]).toMatchObject({ detail: 'cindy-runtime-error:IMAGE_INPUT_UNSUPPORTED' });
+    expect(deliveries()).toEqual([]);
+    expect(deps.dispatch).toHaveBeenCalledOnce();
+  });
+
   it.each(['IMAGE_INPUT_UNSUPPORTED', 'private token and path'])('projects a failed execution from its visible source with a safe code %s', async code => {
     const source = { id: execution.source_message_id, seq: '7', authorId: selfId, author: { kind: 'human', name: 'Owner' },
       content: [{ type: 'text', text: 'Question' }], origin: 'user', deleted: false, threadRootId: null, createdAt: '2026-10-03T00:00:00Z' };
     fixture.handle.mockImplementation((route, method, body) => {
       if (route.endsWith('/snapshot')) return { body: { room: room(roomId), members: [], messages: [source], cursor: '7' } };
       if (route.includes('/messages?')) return { body: [source] };
-      if (route.endsWith('/executions')) return { body: [{ ...execution, status: 'failed', failure_code: code }] };
+      if (route.endsWith('/executions') || route.endsWith('/execution-failures')) return { body: [{ ...execution, status: 'failed', failure_code: code }] };
       return response(route);
     });
     const result = await service.getGroup(roomId);
     expect(result).toMatchObject({ ok: true, group: { round: { status: 'idle', speakers: [] } } });
     if (!result.ok) throw new Error('group missing');
-    const notice = result.group.messages.find(message => message.kind === 'notice');
+    expect(result.group.messages).toHaveLength(1);
+    const notice = projectBotGroupExecutionFailures(result.group.messages, result.group.executionFailures)[1];
     expect(notice).toMatchObject({ sequence: 7, authorName: 'Bot', runtimeFailureCode: code === 'IMAGE_INPUT_UNSUPPORTED' ? code : 'RUNTIME_ERROR' });
     expect(JSON.stringify(notice)).not.toContain('private token and path');
   });
 
-  it.each(['failed', 'queued', 'running', 'completed', 'cancelled'])('returns all active failure IDs beyond the requested page (status: %s)', async status => {
+  it.each(['failed', 'queued', 'running', 'succeeded', 'cancelled'])('returns failure state separately from the requested message page (status: %s)', async status => {
     fixture.handle.mockImplementation(route => {
       if (route.endsWith('/members')) return { body: [] };
       if (route.endsWith(`/messages/${execution.source_message_id}`)) return { body: { id: execution.source_message_id, seq: '7',
         authorId: selfId, author: { kind: 'human', name: 'Owner' }, content: [], origin: 'user', deleted: false,
         threadRootId: null, createdAt: '2026-10-03T00:00:00Z' } };
       if (route.includes('/messages?')) return { body: [] };
-      if (route.endsWith('/executions')) return { body: [{ ...execution, status, epoch: 2, failure_code: 'AUTH_REQUIRED' }] };
+      if (route.endsWith('/executions') || route.endsWith('/execution-failures')) return { body: [{ ...execution, status, epoch: 2, failure_code: 'AUTH_REQUIRED' }] };
       return response(route);
     });
     const result = await service.getGroup(roomId);
     if (!result.ok) throw new Error('group missing');
     expect(result.group.messages).toEqual([]);
-    expect(result.group.activeExecutionFailureIds).toEqual(status === 'failed' ? [`execution-failure:${execution.id}:2`] : []);
+    expect(result.group.executionFailures).toEqual(status === 'failed' ? [expect.objectContaining({ executionId: execution.id, epoch: 2, code: 'AUTH_REQUIRED' })] : []);
     const thread = await service.chatServer!.thread({ groupId: roomId, rootId: execution.source_message_id });
-    expect(thread).toMatchObject({ ok: true, activeExecutionFailureIds: result.group.activeExecutionFailureIds });
+    expect(thread).toMatchObject({ ok: true, executionFailures: result.group.executionFailures });
+  });
+
+  it('reads old failures from the authoritative snapshot even when absent from the recent execution list', async () => {
+    fixture.handle.mockImplementation(route => {
+      if (route.endsWith('/executions')) return { body: Array.from({ length: 100 }, (_, n) => ({ ...execution, id: `newer-${n}`, status: 'succeeded' })) };
+      if (route.endsWith('/execution-failures')) return { body: [{ id: execution.id, conversation_id: roomId,
+        bot_id: botId, source_message_id: execution.source_message_id, epoch: 3, failure_code: 'AUTH_REQUIRED' }] };
+      return response(route);
+    });
+    const result = await service.getGroup(roomId);
+    expect(result).toMatchObject({ ok: true, group: { messages: [], executionFailures: [
+      { executionId: execution.id, epoch: 3, sourceMessageId: execution.source_message_id, code: 'AUTH_REQUIRED' },
+    ] } });
+  });
+
+  it('does not turn a failure snapshot denial into an empty state or legacy fallback', async () => {
+    fixture.handle.mockImplementation(route => route.endsWith('/execution-failures')
+      ? { status: 403, body: { code: 'NOT_MEMBER' } } : response(route));
+    const result = await service.getGroup(roomId);
+    expect(result.ok).toBe(false);
+    // One recent-list read is needed for round status; a denial must not read it again as fallback.
+    expect(fixture.handle.mock.calls.filter(([route]) => route.endsWith('/executions'))).toHaveLength(1);
   });
 
   it.each([false, true])('does not project failures for paged-out or deleted sources (deleted: %s)', async deleted => {
@@ -293,15 +339,15 @@ describe('Chat Server result delivery and refresh', () => {
       content: [], origin: 'user', deleted, threadRootId: null, createdAt: '2026-10-03T00:00:00Z' };
     fixture.handle.mockImplementation((route, method, body) => {
       if (route.includes('/messages?')) return { body: deleted ? [source] : [] };
-      if (route.endsWith('/executions')) return { body: [{ ...execution, status: 'failed', failure_code: 'IMAGE_INPUT_UNSUPPORTED' }] };
+      if (route.endsWith('/executions') || route.endsWith('/execution-failures')) return { body: [{ ...execution, status: 'failed', failure_code: 'IMAGE_INPUT_UNSUPPORTED' }] };
       return response(route);
     });
     const result = await service.getGroup(roomId);
     if (!result.ok) throw new Error('group missing');
-    expect(result.group.messages.some(message => message.kind === 'notice')).toBe(false);
+    expect(projectBotGroupExecutionFailures(result.group.messages, result.group.executionFailures).some(message => message.kind === 'notice')).toBe(false);
   });
 
-  it.each([false, true])('keeps root failure notices separate from reply pagination and clears them on retry (deleted: %s)', async deleted => {
+  it.each([false, true])('uses the same failure snapshot for root and replies without affecting pagination and clears them on retry (deleted: %s)', async deleted => {
     const root = { id: execution.source_message_id, seq: '7', authorId: selfId, author: { kind: 'human', name: 'Owner' },
       content: [{ type: 'text', text: 'Root question' }], origin: 'user', deleted, threadRootId: null, createdAt: '2026-10-03T00:00:00Z' };
     const replies = Array.from({ length: 50 }, (_, i) => ({ ...root, id: `reply-${i}`, seq: String(i + 8), deleted: false, threadRootId: root.id }));
@@ -310,7 +356,7 @@ describe('Chat Server result delivery and refresh', () => {
       if (route.endsWith(`/messages/${root.id}`)) return { body: root };
       if (route.includes('/messages?')) return { body: [...replies].reverse() };
       if (route.endsWith('/members')) return { body: [] };
-      if (route.endsWith('/executions')) return { body: [{ ...execution, status, failure_code: 'IMAGE_INPUT_UNSUPPORTED' }] };
+      if (route.endsWith('/executions') || route.endsWith('/execution-failures')) return { body: [{ ...execution, status, failure_code: 'IMAGE_INPUT_UNSUPPORTED' }] };
       return response(route);
     });
     const result = await service.chatServer!.thread({ groupId: roomId, rootId: root.id });
@@ -318,10 +364,10 @@ describe('Chat Server result delivery and refresh', () => {
     expect(result.hasMore).toBe(true);
     expect(result.replies).toHaveLength(50);
     expect(result.replies.some(message => message.kind === 'notice')).toBe(false);
-    expect(result.rootFailureNotices).toEqual(deleted ? [] : [expect.objectContaining({ sequence: 7, runtimeFailureCode: 'IMAGE_INPUT_UNSUPPORTED' })]);
+    expect(projectBotGroupExecutionFailures([result.root], result.executionFailures).slice(1)).toEqual(deleted ? [] : [expect.objectContaining({ sequence: 7, runtimeFailureCode: 'IMAGE_INPUT_UNSUPPORTED' })]);
     status = 'queued';
     const retry = await service.chatServer!.thread({ groupId: roomId, rootId: root.id, before: 8 });
-    expect(retry).toMatchObject({ ok: true, rootFailureNotices: [], hasMore: true });
+    expect(retry).toMatchObject({ ok: true, executionFailures: [], hasMore: true });
   });
 
   it('keeps the specific local failure on an older server and clears the notice after retry', async () => {
@@ -332,16 +378,17 @@ describe('Chat Server result delivery and refresh', () => {
     let status = 'failed';
     fixture.handle.mockImplementation((route, method, body) => {
       if (route.includes('/messages?')) return { body: [source] };
+      if (route.endsWith('/execution-failures')) return { status: 404, body: { code: 'NOT_FOUND' } };
       if (route.endsWith('/executions')) return { body: [{ ...execution, status }] };
       return response(route);
     });
     const failed = await service.getGroup(roomId);
     if (!failed.ok) throw new Error('group missing');
-    expect(failed.group.messages.find(message => message.kind === 'notice')).toMatchObject({ runtimeFailureCode: 'IMAGE_INPUT_UNSUPPORTED' });
+    expect(projectBotGroupExecutionFailures(failed.group.messages, failed.group.executionFailures)[1]).toMatchObject({ runtimeFailureCode: 'IMAGE_INPUT_UNSUPPORTED' });
     status = 'queued';
     const retrying = await service.getGroup(roomId);
     if (!retrying.ok) throw new Error('group missing');
-    expect(retrying.group.messages.some(message => message.kind === 'notice')).toBe(false);
+    expect(projectBotGroupExecutionFailures(retrying.group.messages, retrying.group.executionFailures).some(message => message.kind === 'notice')).toBe(false);
   });
   const joinedTrigger = () => ({ type: 'member.joined', messageId: execution.source_message_id, actorId: selfId, displayName: 'New member' });
   const joinedSource = () => ({ id: execution.source_message_id, seq: '1', authorId: selfId,
@@ -532,7 +579,7 @@ describe('Chat Server result delivery and refresh', () => {
 
   it('keeps welcome executions out of the continue-discussion source selection', async () => {
     fixture.handle.mockImplementation(route => {
-      if (route.endsWith('/executions')) return { body: [{ ...execution, status: 'succeeded', trigger_type: 'member.joined', trigger: joinedTrigger() }] };
+      if (route.endsWith('/executions') || route.endsWith('/execution-failures')) return { body: [{ ...execution, status: 'succeeded', trigger_type: 'member.joined', trigger: joinedTrigger() }] };
       if (route.endsWith('/snapshot')) return { body: { ...response(route).body, messages: [joinedSource()] } };
       if (route.includes('/messages?')) return { body: [joinedSource()] };
       return response(route);
