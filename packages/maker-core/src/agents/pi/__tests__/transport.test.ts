@@ -259,6 +259,41 @@ describe('createPiStdioTransport', () => {
     expect(late).toHaveBeenCalledWith('stdout-ended');
   });
 
+  it('fences writes before a newline-less EOF tail callback without losing the frame or releasing the process', async () => {
+    vi.useFakeTimers();
+    const dispose = vi.fn();
+    const { transport, child } = makeTransport(() => dispose);
+    const disconnected = vi.fn();
+    const exited = vi.fn();
+    const frames: string[] = [];
+    let tailWrite: Promise<void> | undefined;
+    let fencedAtTail = false;
+    child.stdin.write.mockImplementation((_line, callback) => callback());
+    transport.onDisconnect?.(disconnected);
+    transport.onClose(exited);
+    transport.onLine(line => {
+      frames.push(line);
+      fencedAtTail = transport.isClosed();
+      tailWrite = transport.writeLine('{"type":"extension_ui_response"}');
+    });
+    child.stdout.emit('data', '{"type":"agent_settled"}');
+    child.stdout.emit('end');
+    // Check the actual write result, not only the availability flag.
+    await expect(tailWrite).rejects.toThrow(/closed/);
+    expect(fencedAtTail).toBe(true);
+    expect(child.stdin.write).not.toHaveBeenCalled();
+    expect(frames).toEqual(['{"type":"agent_settled"}']);
+    expect(disconnected).not.toHaveBeenCalled();
+    expect(exited).not.toHaveBeenCalled();
+    expect(dispose).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(250);
+    expect(disconnected).toHaveBeenCalledWith('stdout-ended');
+    expect(dispose).not.toHaveBeenCalled();
+    child.emit('close', 0, null);
+    expect(exited).toHaveBeenCalledOnce();
+    expect(dispose).toHaveBeenCalledOnce();
+  });
+
   it('reports stdin errors without fabricating an executor exit', async () => {
     vi.useFakeTimers();
     const { transport, child } = makeTransport();

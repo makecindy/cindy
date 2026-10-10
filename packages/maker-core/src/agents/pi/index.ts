@@ -7395,13 +7395,26 @@ export class PiAgent extends BaseAgent {
 
       async steer(message: UserMessage, sendOpts?: SendOptions): Promise<void> {
         const answerLifecycle = piAgentLifecycleSequence;
+        const rpcUnavailable = () => closed || piProcessExited || rpcDisconnected || proc.isClosed;
+        const rejectIfUnavailable = (): void => {
+          if (!rpcUnavailable()) return;
+          // isTurnRunning also fences new sends during unconfirmed cleanup.
+          // A settled tail is not an active steer target: let the coordinator
+          // retain ordinary input for normal dispatch/rebuild, before mutation.
+          // Do not claim a still-unsettled turn finished merely from pipe loss.
+          throw new Error(ctx.isStreaming || ctx.pendingHostTurnStartToken !== null
+            ? 'Pi RPC unavailable before steer dispatch'
+            : '[NO_ACTIVE_TURN] No active Pi turn to steer: RPC unavailable');
+        };
         rejectIfCancelled(sendOpts, 'steer');
+        rejectIfUnavailable();
         if (sendOpts) handle.validateSendOptions?.(sendOpts);
         if (reviewMode) {
           await assertReviewMessageContentPaths(message.content, opts.workingDir, reviewReadGrants);
         }
         let { text, images } = await buildPiPrompt(message, { remote });
         rejectIfCancelled(sendOpts, 'steer');
+        rejectIfUnavailable();
         assertImageInputSupported(images);
         setAutoReviewIntent(appendAutoReviewUserIntent(priorAutoReviewIntent(), message.content, sendOpts));
         // A steered channel message can add confirmation requirements to the
@@ -7421,6 +7434,9 @@ export class PiAgent extends BaseAgent {
           sendOpts?.[MAIN_OWNED_SEND_CONTEXT],
         );
         text = managedPackageRoute.text;
+        // The host mutation may have outlived this pipe. Its published receipt
+        // is an irreversible acceptance boundary, not input to retry elsewhere.
+        if (managedPackageRoute.accepted && rpcUnavailable()) return;
         if (!managedPackageRoute.accepted) rejectIfCancelled(sendOpts, 'steer');
         await awaitRuntimeCapabilitiesForSlashCommand(text);
         if (!managedPackageRoute.accepted) rejectIfCancelled(sendOpts, 'steer');
@@ -7445,9 +7461,11 @@ export class PiAgent extends BaseAgent {
         if (images.length > 0) command.images = images;
         const isDoctorCommand = isContextModeDoctorCommandName(managedExtensionCommandName);
         doctorCommandActivity.enter(isDoctorCommand);
-        let resp: Awaited<ReturnType<typeof proc.request>>;
+        let resp: Awaited<ReturnType<typeof proc.request>> | undefined;
         try {
-          resp = await runExclusivePiRpc(() => {
+          resp = await runExclusivePiRpc(async () => {
+            if (managedPackageRoute.accepted && rpcUnavailable()) return undefined;
+            rejectIfUnavailable();
             if (sendOpts?.[ASYNC_QUESTION_ANSWER]) {
               rejectIfCancelled(sendOpts, 'steer');
               if (!ctx.isStreaming || piAgentLifecycleSequence !== answerLifecycle) {
@@ -7456,9 +7474,16 @@ export class PiAgent extends BaseAgent {
             }
             return proc.request(command);
           });
+        } catch (error) {
+          if (!managedPackageRoute.accepted) throw error;
+          deps.logger.warn('pi managed package receipt steer failed after mutation', {
+            message: error instanceof Error ? error.message : String(error),
+          });
+          return;
         } finally {
           doctorCommandActivity.leave(isDoctorCommand);
         }
+        if (!resp) return;
         if (!resp.success) {
           if (managedPackageRoute.accepted) {
             // The host-owned mutation already completed and its deterministic

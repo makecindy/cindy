@@ -6,12 +6,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { PiTransport } from '../transport.js';
 import type { AgentEvent } from '../../../types/events.js';
-import { TurnDispatchRejectedError, type AgentDeps } from '../../base-agent.js';
+import { MAIN_OWNED_SEND_CONTEXT, TurnDispatchRejectedError, type AgentDeps } from '../../base-agent.js';
 import type { Logger } from '../../../interfaces/logger.js';
 
 const fixture = vi.hoisted(() => ({
   transport: null as PiTransport | null,
   child: null as import('node:child_process').ChildProcess | null,
+  packageToken: undefined as string | undefined,
 }));
 
 // Retain the real child only to inject an EPIPE at the host stream boundary;
@@ -57,6 +58,7 @@ vi.mock('../transport.js', async (importOriginal) => {
             if (cmd.eof) process.stdout.end();
             return;
           }
+          if (cmd.type === 'fixture_eof_tail') return process.stdout.end(JSON.stringify(cmd.frame));
           if (cmd.type === 'fixture_eof_on_abort') { eofOnAbort = true; return; }
           if (cmd.type === 'fixture_retry_exhausted_eof') {
             output({ type: 'auto_retry_end', success: false, finalError: 'The operation timed out.' });
@@ -109,6 +111,7 @@ vi.mock('../transport.js', async (importOriginal) => {
       for (const key of ['PATH', 'Path', 'SystemRoot', 'SYSTEMROOT', 'TMPDIR', 'TEMP', 'TMP']) {
         if (process.env[key] !== undefined) env[key] = process.env[key];
       }
+      fixture.packageToken = opts.env.CINDY_PI_PACKAGE_MANAGEMENT;
       fixture.transport = actual.createPiStdioTransport({
         ...opts, binaryPath: process.execPath, args: ['-e', program], env,
       });
@@ -152,9 +155,14 @@ describe('Pi long tool lifecycle through real stdio RPC', () => {
     descendantPid = undefined;
     fixture.transport = null;
     fixture.child = null;
+    fixture.packageToken = undefined;
   });
 
-  async function start(fakeClock = false) {
+  async function start(
+    fakeClock = false,
+    overrides: Partial<AgentDeps> = {},
+    sessionOpts: Partial<Parameters<PiAgent['startSession']>[0]> = {},
+  ) {
     root = mkdtempSync(path.join(tmpdir(), 'pi-long-tool-'));
     const deps: AgentDeps = {
       auth: {
@@ -169,8 +177,8 @@ describe('Pi long tool lifecycle through real stdio RPC', () => {
         { id: 'm', displayName: 'fixture', contextWindow: 200000, efforts: [], defaultEffort: null },
       ] },
     };
-    const agent = new PiAgent(deps);
-    const handle = await agent.startSession({ sessionId: 'long-tool', workingDir: root, model: 'm' });
+    const agent = new PiAgent({ ...deps, ...overrides });
+    const handle = await agent.startSession({ sessionId: 'long-tool', workingDir: root, model: 'm', ...sessionOpts });
     const transport = fixture.transport!;
     const nativeFrames: string[] = [];
     transport.onLine(line => {
@@ -319,7 +327,8 @@ describe('Pi long tool lifecycle through real stdio RPC', () => {
   });
 
   it.each(['stdin-completed', 'stdout-completed', 'cancelled'] as const)('fences the next user/continuation send after %s while executor exit is unconfirmed', async (outcome) => {
-    const { events, transport, handle } = await start(true);
+    const mutatePiManagedPackage = vi.fn(async () => ({ changed: true }));
+    const { events, transport, handle } = await start(true, { mutatePiManagedPackage });
     const child = fixture.child!;
     // Deterministically keep exit confirmation pending on every OS, including
     // Windows where SIGTERM cannot be ignored by the child. Own the cleanup.
@@ -348,6 +357,17 @@ describe('Pi long tool lifecycle through real stdio RPC', () => {
       // Direct adapter consumers must also receive a known-undispatched
       // rejection, not an ambiguous send that force-closes Session.
       await expect(handle.send({ type: 'user', content: 'Direct follow-up' })).rejects.toBeInstanceOf(TurnDispatchRejectedError);
+      // Cleanup fencing is not steer admission. The established no-active-turn
+      // error lets the input coordinator retain ordinary input for rebuild.
+      await expect(session!.steer('Ordinary composer steer')).rejects.toThrow(/no active .*turn/i);
+      const command = 'pi install npm:fixture-extension';
+      await expect(session!.steer(command, {
+        [MAIN_OWNED_SEND_CONTEXT]: { origin: { kind: 'desktop' }, rawChannelText: command },
+      })).rejects.toThrow(/no active .*turn/i);
+      await expect(handle.steer({ type: 'user', content: command }, {
+        [MAIN_OWNED_SEND_CONTEXT]: { origin: { kind: 'desktop' }, rawChannelText: command },
+      })).rejects.toThrow(/no active .*turn/i);
+      expect(mutatePiManagedPackage).not.toHaveBeenCalled();
       expect(write).not.toHaveBeenCalled();
       expect(session!.getTurnGeneration()).toBe(generation);
       await vi.advanceTimersByTimeAsync(250);
@@ -363,6 +383,93 @@ describe('Pi long tool lifecycle through real stdio RPC', () => {
     }
     await vi.waitFor(() => expect(session!.getStatus()).toBe('closed'));
     expect(session!.isTurnRunning()).toBe(false);
+  });
+
+  it('rechecks steer availability after asynchronous preparation before any host-owned mutation', async () => {
+    const mutatePiManagedPackage = vi.fn(async () => ({ changed: true }));
+    const { events, transport, handle } = await start(true, { mutatePiManagedPackage });
+    await transport.writeLine(JSON.stringify({ type: 'fixture_finish' }));
+    await vi.waitFor(() => expect(events.some(event => event.type === 'done')).toBe(true));
+    const write = vi.spyOn(transport, 'writeLine');
+    const command = 'pi install npm:fixture-extension';
+    const steering = handle.steer({ type: 'user', content: command }, {
+      [MAIN_OWNED_SEND_CONTEXT]: { origin: { kind: 'desktop' }, rawChannelText: command },
+    });
+    // steer passed its initial guard and yielded in buildPiPrompt.
+    fixture.child!.stdin!.emit('error', new Error('EPIPE'));
+    await expect(steering).rejects.toThrow(/no active .*turn/i);
+    expect(mutatePiManagedPackage).not.toHaveBeenCalled();
+    expect(write).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(250);
+    await vi.waitFor(() => expect(session!.getStatus()).toBe('closed'));
+  });
+
+  it('rejects unavailable steer without claiming an unsettled build already finished', async () => {
+    const mutatePiManagedPackage = vi.fn(async () => ({ changed: true }));
+    const { events, transport } = await start(true, { mutatePiManagedPackage });
+    fixture.child!.stdin!.emit('error', new Error('EPIPE'));
+    const write = vi.spyOn(transport, 'writeLine');
+    const command = 'pi install npm:fixture-extension';
+    await expect(session!.steer(command, {
+      [MAIN_OWNED_SEND_CONTEXT]: { origin: { kind: 'desktop' }, rawChannelText: command },
+    })).rejects.toThrow('Pi RPC unavailable before steer dispatch');
+    expect(mutatePiManagedPackage).not.toHaveBeenCalled();
+    expect(write).not.toHaveBeenCalled();
+    expect(events.some(event => event.type === 'done' || event.type === 'error')).toBe(false);
+    await vi.advanceTimersByTimeAsync(250);
+    await vi.waitFor(() => expect(session!.getStatus()).toBe('closed'));
+    expect(events.find(event => event.type === 'error')?.data).toMatchObject({
+      reason: 'pi-rpc-disconnected', isTerminal: true,
+    });
+    expect(events.some(event => event.type === 'done')).toBe(false);
+  });
+
+  it.each(['during-mutation', 'during-receipt-write'])('keeps an accepted host steer mutation non-replayable when RPC fails %s', async (boundary) => {
+    const mutatePiManagedPackage = vi.fn(async () => {
+      if (boundary === 'during-mutation') fixture.child!.stdin!.emit('error', new Error('EPIPE'));
+      return { changed: true };
+    });
+    const { events, transport } = await start(true, { mutatePiManagedPackage });
+    const write = vi.spyOn(transport, 'writeLine');
+    if (boundary === 'during-receipt-write') {
+      write.mockImplementationOnce(async () => {
+        fixture.child!.stdin!.emit('error', new Error('EPIPE'));
+        throw new Error('fixture receipt write EPIPE');
+      });
+    }
+    const command = 'pi install npm:fixture-extension';
+    await expect(session!.steer(command, {
+      [MAIN_OWNED_SEND_CONTEXT]: { origin: { kind: 'desktop' }, rawChannelText: command },
+    })).resolves.toBeUndefined();
+    expect(mutatePiManagedPackage).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(events.some(event => event.type === 'text'
+      && (event.data as { text?: string }).text?.includes('npm:fixture-extension'))).toBe(true));
+    expect(write.mock.calls.map(([line]) => JSON.parse(line).type)).toEqual(
+      boundary === 'during-mutation' ? [] : ['steer'],
+    );
+    await vi.advanceTimersByTimeAsync(250);
+    await vi.waitFor(() => expect(session!.getStatus()).toBe('closed'));
+    expect(mutatePiManagedPackage).toHaveBeenCalledOnce();
+  });
+
+  it.each(['cindy:request-preferences', 'cindy:pi-package'])('fences an unterminated EOF %s tail before responses or host mutations', async (title) => {
+    const mutatePiManagedPackage = vi.fn(async () => ({ changed: true }));
+    const { transport, nativeFrames } = await start(true, { mutatePiManagedPackage }, {
+      permissionMode: 'bypassPermissions',
+    });
+    expect(fixture.packageToken).toBeTypeOf('string');
+    const write = vi.spyOn(transport, 'writeLine');
+    const frame = { type: 'extension_ui_request', id: 'eof-request', method: 'input', title,
+      placeholder: JSON.stringify(title === 'cindy:pi-package'
+        ? { action: 'install', source: 'npm:fixture-extension', token: fixture.packageToken }
+        : { provider: 'cindy', model: 'm' }) };
+    await transport.writeLine(JSON.stringify({ type: 'fixture_eof_tail', frame }));
+    await vi.waitFor(() => expect(nativeFrames).toContain('extension_ui_request'));
+    expect(mutatePiManagedPackage).not.toHaveBeenCalled();
+    expect(write.mock.calls.map(([line]) => JSON.parse(line).type)).toEqual(['fixture_eof_tail']);
+    expect(transport.isClosed()).toBe(true);
+    await vi.advanceTimersByTimeAsync(250);
+    await vi.waitFor(() => expect(session!.getStatus()).toBe('closed'));
   });
 
   it('rejects a known-undispatched send when pipes disappear after Session reserves the next turn', async () => {
@@ -458,6 +565,13 @@ describe('Pi long tool lifecycle through real stdio RPC', () => {
     await session!.send('Start a new fixture build');
     await vi.waitFor(() => expect(transport.isClosed()).toBe(true));
     expect(nativeFrames.filter(type => type === 'agent_start')).toHaveLength(1);
+    // A pending accepted prompt is still unsettled even before agent_start.
+    // Steer must not tell the coordinator this generation already finished.
+    const write = vi.spyOn(transport, 'writeLine');
+    await expect(session!.steer('Do not replay this pending build')).rejects.toThrow(
+      'Pi RPC unavailable before steer dispatch',
+    );
+    expect(write).not.toHaveBeenCalled();
     if (stop) await handle.abort();
     await vi.advanceTimersByTimeAsync(250);
     await vi.waitFor(() => expect(session!.getStatus()).toBe('closed'));

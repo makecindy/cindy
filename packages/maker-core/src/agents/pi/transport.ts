@@ -193,29 +193,9 @@ export function createPiStdioTransport(opts: PiStdioTransportOptions): PiTranspo
     return () => { stderrHandlers.delete(handler); };
   };
 
-  attachJsonlReader(child.stdout, (line) => {
-    // A broken stdin fences new commands immediately, but stdout can still
-    // carry already-written results/settled during the confirmation window.
-    // Freeze reads only once loss is reported (or executor close is final).
-    if (closed || disconnectNotified) return;
-    for (const handler of lineHandlers) handler(line);
-  }, () => {
-    if (closed || disconnectNotified) return;
-    for (const handler of oversizedHandlers) handler();
-  });
-  attachJsonlReader(child.stderr, (line) => {
-    if (line.trim().length === 0) return;
-    // 轮 40-w3 HIGH:本地 stderr 进日志前做凭证脱敏 —— spawnEnv 合入了 gateway/
-    // BYOM/MCP header 真值, 子进程崩溃 dump 可能把它们打到 stderr(远端 daemon
-    // 路径已 scrub, 本地与远端必须一致)。
-    const redacted = redactSensitiveText(line);
-    logger.warn('pi stderr', { line: redacted.slice(0, 2000) });
-    fireStderr(redacted);
-  });
-
-  // Register after the JSONL reader so an EOF tail (including settled) is
-  // delivered first. Losing a pipe fences RPC but retains the process lease;
-  // only the existing exit/close confirmation may release runtime resources.
+  // Fence writes before the JSONL reader's EOF flush invokes tail callbacks.
+  // Keep reads open through the confirmation window so settled/results survive;
+  // only confirmed executor exit/close may release the process lease.
   const disconnect = (reason: PiDisconnectReason): void => {
     if (closed || closing || exitInfo || disconnected) return;
     disconnected = reason;
@@ -237,6 +217,26 @@ export function createPiStdioTransport(opts: PiStdioTransportOptions): PiTranspo
   child.stdout.on('close', () => disconnect('stdout-closed'));
   child.stdout.on('error', () => disconnect('stdout-error'));
   child.stdin.on('error', () => disconnect('stdin-error'));
+
+  attachJsonlReader(child.stdout, (line) => {
+    // A broken stdin fences new commands immediately, but stdout can still
+    // carry already-written results/settled during the confirmation window.
+    // Freeze reads only once loss is reported (or executor close is final).
+    if (closed || disconnectNotified) return;
+    for (const handler of lineHandlers) handler(line);
+  }, () => {
+    if (closed || disconnectNotified) return;
+    for (const handler of oversizedHandlers) handler();
+  });
+  attachJsonlReader(child.stderr, (line) => {
+    if (line.trim().length === 0) return;
+    // 轮 40-w3 HIGH:本地 stderr 进日志前做凭证脱敏 —— spawnEnv 合入了 gateway/
+    // BYOM/MCP header 真值, 子进程崩溃 dump 可能把它们打到 stderr(远端 daemon
+    // 路径已 scrub, 本地与远端必须一致)。
+    const redacted = redactSensitiveText(line);
+    logger.warn('pi stderr', { line: redacted.slice(0, 2000) });
+    fireStderr(redacted);
+  });
 
   child.on('error', (err) => {
     logger.error('pi process error', { message: err.message });
