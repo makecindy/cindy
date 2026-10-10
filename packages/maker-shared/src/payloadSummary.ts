@@ -506,6 +506,16 @@ function* sourceContextTokens(text: string): Generator<{
       }
     }
     const start = index;
+    // Bare `/*` / `//` inside prose and tool output are path globs and double
+    // slashes (`/tmp/*`, `/tmp//cache`), not comments — an unclosed one used to
+    // mask everything to end-of-text and swallow later file deliveries on that
+    // text. Require the comment opener to follow a non-word character (space,
+    // punctuation, line start), mirroring the scheme guards below; real code
+    // comments after `)`, `;`, whitespace and at line start keep masking.
+    const before = index > 0 ? text[index - 1] : '';
+    // Path continuations end in more than word chars: '-', '+', '~', '=' and
+    // non-ASCII segments ('releases-/*', '文件/*') are globs, not comments.
+    const commentOpener = before !== '/' && before !== ':' && !/[\w$\-+=~\u0080-\uFFFF]/.test(before);
     const quote = text[index];
     if (quote === '"' || quote === "'" || quote === '`') {
       // Python triple quotes delimit one literal, including internal single or
@@ -525,11 +535,11 @@ function* sourceContextTokens(text: string): Generator<{
         }
       }
       yield { start, end: index, comment: false, closed };
-    } else if (text.startsWith('/*', index)) {
+    } else if (commentOpener && text.startsWith('/*', index)) {
       const closing = text.indexOf('*/', index + 2);
       index = closing < 0 ? text.length : closing + 2;
       yield { start, end: index, comment: true, closed: closing >= 0 };
-    } else if (text.startsWith('//', index) && text[index - 1] !== ':' && text[index - 1] !== '/') {
+    } else if (commentOpener && text.startsWith('//', index)) {
       index += 2;
       while (index < text.length && text[index] !== '\r' && text[index] !== '\n') index++;
       yield { start, end: index, comment: true, closed: true };
