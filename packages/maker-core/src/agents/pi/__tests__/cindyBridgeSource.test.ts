@@ -2347,12 +2347,19 @@ it('judges loaded disclosure keys against their load-time catalog snapshot, clos
 
     // Greptile P1 scenario: this instance loads keys from catalog A; while it is
     // still waiting for MCP connections, a parallel instance rewrites the shared
-    // state file under catalog B. Reconcile must judge the snapshot the keys were
-    // loaded against (A), not the file's current content (B).
+    // state file under the live catalog B. Reconcile must judge the snapshot the
+    // keys were loaded against (A), not the file's current content (B). The
+    // external rewrite is what makes this test distinguish the snapshot fix from
+    // the old double-read implementation (which would see B and keep A's keys).
     writeFileSync(stateFile, JSON.stringify({ piVersion: 'test', catalog: 'catalog-A', keys: ['s\u0000y'] }));
     const victim = new context.Gateway(stateFile);
     expect([...victim.disclosedSchemas]).toEqual(['s\u0000y']);
     victim.add('s', client, mkTools());
+    writeFileSync(stateFile, JSON.stringify({
+      piVersion: 'test',
+      catalog: victim.disclosureCatalogFingerprint(),
+      keys: [],
+    }));
     victim.register(piStub);
     expect(victim.disclosedSchemas.size).toBe(0);
     const persisted = JSON.parse(readFileSync(stateFile, 'utf8')) as { catalog?: string; keys?: string[] };
