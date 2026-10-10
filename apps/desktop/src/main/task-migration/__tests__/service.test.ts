@@ -6,6 +6,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { createHash } from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { ipcMain } from 'electron';
 import {
   parseAttachmentOssRef,
   TASK_MIGRATION_ESTIMATE_TIMEOUT_MS,
@@ -26,6 +27,8 @@ const state = vi.hoisted(() => ({
   close: vi.fn(),
   remove: vi.fn(),
   boundaryBusy: false,
+  relayReady: true,
+  ownerGeneration: 0,
   drain: vi.fn(),
   exported: vi.fn(),
   uploadedProgress: vi.fn(),
@@ -103,7 +106,7 @@ function device() {
 }
 vi.mock('../../appSessionState', () => ({
   ownerScopedUserDataPath: (...parts: string[]) => path.join(state.root, device(), ...parts),
-  activeOwnerScopeKey: () => `${device()}:owner`,
+  activeOwnerScopeKey: () => `${device()}:owner:${state.ownerGeneration}`,
   isAppSessionBoundaryPending: () => false,
 }));
 vi.mock('../../localDb/client/current', () => ({
@@ -127,7 +130,7 @@ vi.mock('../../device-link/settings-store', () => ({
   readDeviceLinkSettings: () => ({ remoteControlEnabled: true, revokedControllers: [] }),
 }));
 vi.mock('../../device-link', () => ({
-  getSelfDeviceId: device,
+  getSelfDeviceId: () => (state.relayReady ? device() : null),
   remoteInvoke: async (
     target: string,
     _channel: string,
@@ -337,6 +340,9 @@ describe('resumable cross-computer copy', () => {
       { isBusy: () => state.boundaryBusy, drain: state.drain },
     );
     state.boundaryBusy = false;
+    state.relayReady = true;
+    state.ownerGeneration = 0;
+    vi.mocked(moveSessionProjectFromHost).mockReset();
     state.drain.mockReset();
     state.exported.mockClear();
     state.uploadedProgress.mockReset();
@@ -404,6 +410,8 @@ describe('resumable cross-computer copy', () => {
       });
   });
   afterEach(async () => {
+    state.relayReady = true;
+    state.ownerGeneration = 0;
     // A failed assertion must not tear down directories while a background transfer writes.
     for (const [device, rows] of state.rows) {
       await state.context.run({ device }, async () => {
@@ -414,6 +422,10 @@ describe('resumable cross-computer copy', () => {
   });
   const start = () =>
     requestTaskMigration({ action: 'start', sessionId: 'fork', targetDeviceId: 'B' });
+  const localHandler = () =>
+    vi
+      .mocked(ipcMain.handle)
+      .mock.calls.findLast(([channel]) => channel === TASK_MIGRATION_LOCAL_CHANNEL)![1];
 
   async function team() {
     const rows = state.rows.get('A')!;
@@ -478,6 +490,100 @@ describe('resumable cross-computer copy', () => {
     });
     expect(state.snapshot).not.toHaveBeenCalled();
     expect(state.imports).not.toHaveBeenCalled();
+  });
+  it.each([
+    { workingDir: '/another', workspaceKind: 'project' as const },
+    { workingDir: null, workspaceKind: 'dialogue' as const },
+  ])(
+    'acknowledges a local move to $workspaceKind before the first relay handshake',
+    async ({ workingDir, workspaceKind }) => {
+      state.relayReady = false;
+      const committedDir = workingDir ?? path.join(state.root, 'dialogues', 'fork');
+      const row = state.rows.get('A')!.get('fork')!;
+      vi.mocked(moveSessionProjectFromHost).mockImplementationOnce(
+        async (_running, sessionId, targetDir, assertAuthority) => {
+          assertAuthority();
+          expect(targetDir).toBe(workingDir);
+          Object.assign(row, { workingDir: committedDir, workspaceKind });
+          return { ok: true, sessionId, workingDir: committedDir, workspaceKind };
+        },
+      );
+      const result = await localHandler()({} as never, null, {
+        action: 'move-project',
+        sessionId: 'fork',
+        workingDir,
+      });
+      expect(result).toEqual({
+        supported: true,
+        projectMove: { sessionId: 'fork', workingDir: committedDir, workspaceKind },
+      });
+      expect(row).toMatchObject({ workingDir: committedDir, workspaceKind });
+      expect(state.snapshot).not.toHaveBeenCalled();
+      expect(state.imports).not.toHaveBeenCalled();
+    },
+  );
+  it('keeps local move failures visible without requiring a relay identity', async () => {
+    state.relayReady = false;
+    vi.mocked(moveSessionProjectFromHost).mockResolvedValueOnce({
+      ok: false,
+      errorCode: 'PRECONDITION_FAILED',
+      message: 'Task is running.',
+    });
+    await expect(
+      localHandler()({} as never, null, {
+        action: 'move-project',
+        sessionId: 'fork',
+        workingDir: '/another',
+      }),
+    ).rejects.toThrow('MIGRATION_PROJECT_PRECONDITION_FAILED');
+    expect(state.rows.get('A')!.get('fork')!.workingDir).toBe(path.join(state.root, 'shared'));
+  });
+  it('rejects a local move when its captured owner changes before the host writes', async () => {
+    state.relayReady = false;
+    const write = vi.fn();
+    vi.mocked(moveSessionProjectFromHost).mockImplementationOnce(
+      async (_running, sessionId, workingDir, assertAuthority) => {
+        state.ownerGeneration++;
+        assertAuthority();
+        write();
+        return { ok: true, sessionId, workingDir, workspaceKind: 'project' };
+      },
+    );
+    await expect(
+      localHandler()({} as never, null, {
+        action: 'move-project',
+        sessionId: 'fork',
+        workingDir: '/another',
+      }),
+    ).rejects.toThrow('MIGRATION_OWNER_CHANGED');
+    expect(write).not.toHaveBeenCalled();
+  });
+  it('rejects a wire move without its host identity before any host side effect', async () => {
+    state.relayReady = false;
+    await expect(
+      state.context.run({ device: 'A', peer: 'B' }, () =>
+        requestTaskMigration({ action: 'move-project', sessionId: 'fork', workingDir: '/another' }),
+      ),
+    ).rejects.toThrow('MIGRATION_NOT_CONNECTED');
+    expect(moveSessionProjectFromHost).not.toHaveBeenCalled();
+    expect(state.snapshot).not.toHaveBeenCalled();
+    expect(state.imports).not.toHaveBeenCalled();
+  });
+  it('uses the captured wire identity if the relay client disappears during a move', async () => {
+    vi.mocked(moveSessionProjectFromHost).mockImplementationOnce(async () => {
+      state.relayReady = false;
+      return { ok: true, sessionId: 'fork', workingDir: '/another', workspaceKind: 'project' };
+    });
+    const result = await localHandler()({} as never, 'B', {
+      action: 'move-project',
+      sessionId: 'fork',
+      workingDir: '/another',
+    });
+    expect(result).toEqual({
+      supported: true,
+      deviceId: 'B',
+      projectMove: { sessionId: 'fork', workingDir: '/another', workspaceKind: 'project' },
+    });
   });
   it('replaces only preparation staging on retry instead of accumulating archive copies', async () => {
     state.noSpace = true;
