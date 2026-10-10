@@ -331,6 +331,13 @@ Pi CLI 管理入口、内核自更新与旧工具兼容的执行边界见
 - provider idle、进程退出、事件流结束都不是成功证明。Session 用已有 turn generation／
   control 判断未结算工作，保留缺终态时的有界 watchdog；已送达的成功终态不能被后续退出
   改判成失败，provider continuation claim 也不能被当作最终结束。
+- 本机 stdio 的 stdout EOF／关闭／错误或 stdin 错误是明确 RPC 失联，不等同于
+  正常长工具静默，也不是进程退出证明。未结算轮次立即报 `pi-rpc-disconnected`，
+  工具结果保持未知；Stop 保持取消，EOF 前已收到的 settled 成功结果不改判。
+  复用原退出确认流程退役 root Pi，不重放输入、不重跑构建、不杀后代进程树；
+  退出未确认时仍保留进程登记和 runtime 文件。SSH daemon 断链保活语义不变。
+  缺 settled 但 RPC 仍通的情况仍走已有有界 watchdog，丢失工具结果不伪造。
+  回归见 `pi-long-tool-lifecycle.test.ts`、`transport.test.ts` 与 `rpc-client.test.ts`。
 - Pi 的 `Request was aborted` 只在无当前 generation 的 Host Stop 时归入请求断流失败；
   无错误正文的 bare abort 仍保持取消。复用既有错误收口及重试预算，不重放包命令或工具。
 - Pi 未归类的缺码临时服务故障（如 `Service temporarily unavailable` 或明确的模型

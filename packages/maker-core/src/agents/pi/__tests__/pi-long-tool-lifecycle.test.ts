@@ -24,6 +24,7 @@ vi.mock('../transport.js', async (importOriginal) => {
         const output = frame => process.stdout.write(JSON.stringify(frame) + '\\n');
         const result = { content: [{ type: 'text', text: 'fixture build complete' }] };
         let rpcLost = false;
+        let eofOnAbort = false;
         const finish = (omit) => {
           if (omit !== 'tool_execution_end') output({ type: 'tool_execution_end', toolCallId: 'build-1', toolName: 'bash', result });
           if (omit !== 'message_end') output({ type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: 'Build finished.' }],
@@ -33,7 +34,16 @@ vi.mock('../transport.js', async (importOriginal) => {
         readline.createInterface({ input: process.stdin }).on('line', line => {
           const cmd = JSON.parse(line);
           if (rpcLost) return process.exit(23);
-          if (cmd.type === 'fixture_finish') return finish(cmd.omit);
+          if (cmd.type === 'fixture_finish') {
+            finish(cmd.omit);
+            if (cmd.eof) process.stdout.end();
+            return;
+          }
+          if (cmd.type === 'fixture_eof_on_abort') { eofOnAbort = true; return; }
+          if (cmd.type === 'fixture_retry_exhausted_eof') {
+            output({ type: 'auto_retry_end', success: false, finalError: 'The operation timed out.' });
+            return process.stdout.end();
+          }
           if (cmd.type === 'fixture_lose_rpc') {
             rpcLost = true;
             output({ type: 'fixture_rpc_losing' });
@@ -64,7 +74,10 @@ vi.mock('../transport.js', async (importOriginal) => {
             output({ type: 'agent_start' });
             output({ type: 'tool_execution_start', toolCallId: 'build-1', toolName: 'bash', args: { command: 'fixture-build', timeout: 1800 } });
           }
-          if (cmd.type === 'abort') output({ type: 'agent_settled' });
+          if (cmd.type === 'abort') {
+            if (eofOnAbort) process.stdout.end();
+            else output({ type: 'agent_settled' });
+          }
         });
       `;
       const env: Record<string, string | undefined> = {};
@@ -228,16 +241,56 @@ describe('Pi long tool lifecycle through real stdio RPC', () => {
     expect(events.find(event => event.type === 'error')?.data).toMatchObject({ reason: 'turn_no_event_timeout' });
   });
 
-  it('distinguishes RPC EOF with a live executor from confirmed process exit', async () => {
-    const { events, transport, nativeFrames } = await start(true);
+  it('settles definite RPC EOF promptly without replaying the accepted build or inventing its result', async () => {
+    const { events, transport, nativeFrames } = await start();
+    const write = vi.spyOn(transport, 'writeLine');
+    const exit = vi.fn();
+    transport.onClose(exit);
     await transport.writeLine(JSON.stringify({ type: 'fixture_lose_rpc' }));
     await vi.waitFor(() => expect(nativeFrames).toContain('fixture_rpc_losing'));
-    expect(() => process.kill(transport.pid!, 0)).not.toThrow();
+    await vi.waitFor(() => expect(events.some(event => event.type === 'error')).toBe(true), { timeout: 2000 });
+    expect(events.filter(event => event.type === 'error')).toHaveLength(1);
+    expect(events.find(event => event.type === 'error')?.data).toMatchObject({
+      isTerminal: true, reason: 'pi-rpc-disconnected',
+      message: expect.stringContaining('tool outcome is unknown'),
+    });
+    expect(events.some(event => event.type === 'tool_result_full')).toBe(false);
+    await vi.waitFor(() => expect(exit).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(session!.getStatus()).toBe('closed'));
+    expect(events.filter(event => event.type === 'error')).toHaveLength(1);
+    expect(write.mock.calls.map(([line]) => JSON.parse(line).type)).toEqual(['fixture_lose_rpc']);
+  });
+
+  it('preserves the completed result when settled is followed by RPC EOF', async () => {
+    const { events, transport } = await start();
+    await transport.writeLine(JSON.stringify({ type: 'fixture_finish', eof: true }));
+    await vi.waitFor(() => expect(session!.getStatus()).toBe('closed'));
+    expect(events.filter(event => event.type === 'done')).toHaveLength(1);
+    expect(events.find(event => event.type === 'done')?.data).toMatchObject({
+      status: 'completed', result: 'Build finished.', usage: { outputTokens: 3 },
+    });
     expect(events.some(event => event.type === 'error')).toBe(false);
-    // EOF alone currently has no native executor-exit proof. Characterize the
-    // existing fallback honestly; the new exit drain must not kill a live tool.
-    await vi.advanceTimersByTimeAsync(45 * 60_000 + 1);
-    expect(events.find(event => event.type === 'error')?.data).toMatchObject({ reason: 'turn_no_event_timeout' });
+    expect(events.find(event => event.type === 'tool_result_full')?.data).toMatchObject({ fullText: 'fixture build complete' });
+  });
+
+  it('does not replace exhausted native retry with a second RPC-loss error', async () => {
+    const { events, transport } = await start();
+    await transport.writeLine(JSON.stringify({ type: 'fixture_retry_exhausted_eof' }));
+    await vi.waitFor(() => expect(session!.getStatus()).toBe('closed'));
+    expect(events.filter(event => event.type === 'error')).toHaveLength(1);
+    expect(events.find(event => event.type === 'error')?.data).toMatchObject({ reason: 'pi-gateway-drop' });
+  });
+
+  it('keeps Stop cancelled when RPC disappears without a settled frame', async () => {
+    const { events, transport } = await start();
+    await transport.writeLine(JSON.stringify({ type: 'fixture_eof_on_abort' }));
+    const write = vi.spyOn(transport, 'writeLine');
+    await session!.abort();
+    await vi.waitFor(() => expect(session!.getStatus()).toBe('closed'));
+    expect(events.filter(event => event.type === 'done')).toHaveLength(1);
+    expect(events.find(event => event.type === 'done')?.data).toMatchObject({ status: 'cancelled' });
+    expect(events.some(event => event.type === 'error')).toBe(false);
+    expect(write.mock.calls.map(([line]) => JSON.parse(line).type)).toEqual(['abort']);
   });
 
   it('honors Stop without issuing another prompt or reviving the tool', async () => {

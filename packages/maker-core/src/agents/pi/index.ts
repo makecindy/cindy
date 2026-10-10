@@ -4197,6 +4197,7 @@ export class PiAgent extends BaseAgent {
      * approvals.
      */
     let piProcessExited = false;
+    let rpcDisconnected = false;
     type PiSubagentStatusSummary = Pick<PiSubagentRunStatus,
       'runId' | 'taskId' | 'state' | 'startedAt' | 'updatedAt' | 'title' | 'description'>;
     const piSubagentStatuses = new Map<string, PiSubagentStatusSummary>();
@@ -5697,6 +5698,35 @@ export class PiAgent extends BaseAgent {
             }
           }
         },
+        onDisconnect: (reason) => {
+          rpcDisconnected = true;
+          // EOF/error is certain RPC loss, not a silent live tool or proof of
+          // process death. Deliver one terminal only for unsettled work, then
+          // retire the executor using the existing confirmed-exit cleanup.
+          if (!closed && !ctx.terminalAssistantErrorEmitted &&
+              (ctx.isStreaming || ctx.pendingHostTurnStartToken !== null)) {
+            queue.push(isCurrentTurnHostAbortRequested(ctx) ? {
+              type: 'done', data: { status: 'cancelled' }, source: 'pi',
+            } : {
+              type: 'error',
+              data: {
+                message: `pi RPC disconnected (${reason}); tool outcome is unknown`,
+                reason: 'pi-rpc-disconnected', isTerminal: true,
+              },
+              source: 'pi',
+            });
+          }
+          disposePiTranslateContext(ctx);
+          // A transport can report a previously observed disconnect while the
+          // RPC wrapper is being constructed. Wait until proc is assigned.
+          queueMicrotask(() => {
+            void proc.close().catch((error) => {
+              this.deps.logger.error('pi RPC disconnect cleanup remains unconfirmed', {
+                message: error instanceof Error ? error.message : String(error),
+              });
+            });
+          });
+        },
         onExit: ({ code, signal }) => {
           const hostAbortRequested = isCurrentTurnHostAbortRequested(ctx);
           piProcessExited = true;
@@ -5712,7 +5742,7 @@ export class PiAgent extends BaseAgent {
           runtimeCapabilityListeners.clear();
           if (!closed) {
             // 非用户 close 的进程死亡:terminal error + 收尾,避免 UI 永久 running。
-            queue.push(hostAbortRequested ? {
+            if (!rpcDisconnected) queue.push(hostAbortRequested ? {
               type: 'done',
               data: { status: 'cancelled' },
               source: 'pi',
