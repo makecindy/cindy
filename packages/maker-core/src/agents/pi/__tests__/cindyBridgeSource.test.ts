@@ -6,6 +6,7 @@ import {
   mkdirSync,
   opendirSync,
   readFileSync,
+  renameSync,
   realpathSync,
   rmSync,
   statSync,
@@ -2318,6 +2319,57 @@ it('re-surfaces the disclosure set once after compaction instead of editing ever
   gateway.disclosedSchemas.clear();
   handlers.get('session_compact')!({ reason: 'manual' });
   expect(handlers.get('before_agent_start')!({ systemPrompt: 'base' })).toBeUndefined();
+});
+
+it('judges loaded disclosure keys against their load-time catalog snapshot, closing the load/reconcile TOCTOU', () => {
+  const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+  const compiled = ts.transpileModule(
+    source.slice(source.indexOf('const CINDY_MCP_LIST_TOOLS'), source.indexOf('async function connectServer'))
+      + '\n(globalThis as any).Gateway = CindyMcpGateway;',
+    { compilerOptions: { module: ts.ModuleKind.None, target: ts.ScriptTarget.ES2022 } },
+  ).outputText;
+  const dir = mkdtempSync(path.join(tmpdir(), 'cindy-gw-race-'));
+  const stateFile = path.join(dir, 'state.json');
+  try {
+    const context: Record<string, any> = {
+      recordInput: (value: unknown) => value && typeof value === 'object' ? value : {},
+      mcpContentToPi: (content: unknown) => content,
+      piCodingAgent: { VERSION: 'test' },
+      readFileSync,
+      writeFileSync,
+      renameSync,
+      process: { pid: 4711 },
+    };
+    runInNewContext(compiled, context);
+    const client = { request: async () => ({ content: [] }) };
+    const mkTools = () => [{ name: 'y', description: 'd', inputSchema: { type: 'object' } }];
+    const piStub = { registerTool: () => {}, on: () => {} };
+
+    // Greptile P1 scenario: this instance loads keys from catalog A; while it is
+    // still waiting for MCP connections, a parallel instance rewrites the shared
+    // state file under catalog B. Reconcile must judge the snapshot the keys were
+    // loaded against (A), not the file's current content (B).
+    writeFileSync(stateFile, JSON.stringify({ piVersion: 'test', catalog: 'catalog-A', keys: ['s\u0000y'] }));
+    const victim = new context.Gateway(stateFile);
+    expect([...victim.disclosedSchemas]).toEqual(['s\u0000y']);
+    victim.add('s', client, mkTools());
+    victim.register(piStub);
+    expect(victim.disclosedSchemas.size).toBe(0);
+    const persisted = JSON.parse(readFileSync(stateFile, 'utf8')) as { catalog?: string; keys?: string[] };
+    expect(persisted.catalog).not.toBe('catalog-A');
+    expect(persisted.keys).toEqual([]);
+
+    // Positive: keys loaded from a snapshot matching the live catalog survive,
+    // even though the file is not re-read during register().
+    const liveCatalog = victim.disclosureCatalogFingerprint();
+    writeFileSync(stateFile, JSON.stringify({ piVersion: 'test', catalog: liveCatalog, keys: ['s\u0000y'] }));
+    const survivor = new context.Gateway(stateFile);
+    survivor.add('s', client, mkTools());
+    survivor.register(piStub);
+    expect([...survivor.disclosedSchemas]).toEqual(['s\u0000y']);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 it('routes Bot shortcuts through the scoped helper entry without exposing them to ordinary Pi tasks', async () => {
