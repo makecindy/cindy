@@ -46,6 +46,7 @@ const captured = vi.hoisted(() => ({
   remoteModels: new Map<string, string>(),
   refreshAckMode: 'ok' as 'ok' | 'invalid',
   hasRefreshCommand: true,
+  failThinkingLevel: null as null | 'reject' | 'throw',
   requestHandler: undefined as
     | undefined
     | ((command: Record<string, unknown>) => Promise<{
@@ -130,6 +131,12 @@ vi.mock("../rpc-client.js", () => {
         }
         if (command.type === 'refresh_models' || command.type === 'set_compaction_reserve_tokens') {
           return { success: false, error: `Unknown command: ${command.type}` };
+        }
+        if (command.type === 'set_thinking_level' && captured.failThinkingLevel === 'reject') {
+          return { success: false, error: 'mock reject' };
+        }
+        if (command.type === 'set_thinking_level' && captured.failThinkingLevel === 'throw') {
+          throw new Error('mock rpc timeout');
         }
         const response = captured.requestHandler
           ? await captured.requestHandler(command)
@@ -400,13 +407,79 @@ describe("Pi provider-aware model routing", () => {
     // ② 不带 effort 切回：恢复会话原档位（mutableEffort 已被①更新为 low）。
     const beforeRestore = thinkingCalls().length;
     await handle.setModel!('model-a', { providerId: 'native-a' });
-    console.log('DBG ② rpc tail:', JSON.stringify(captured.requests.slice(beforeRestore)));
     expect(captured.requests.slice(beforeRestore)).toContainEqual({
       type: 'set_model', provider: 'native-a', modelId: 'model-a',
     });
     expect(thinkingCalls().slice(beforeRestore)).toContainEqual({
       type: 'set_thinking_level', level: 'low',
     });
+
+    await handle.close();
+  });
+
+  it('effort 恢复失败不阻断已确认的模型切换，也不把被拒档位记成已生效', async () => {
+    const deps: AgentDeps = {
+      auth: {
+        getState: async () => ({ authenticated: true, identity: 'test', authSource: 'api-key' as const }),
+        triggerLogin: async () => ({ authenticated: true }),
+        logout: async () => {},
+        getAuthEnv: async () => ({}),
+      },
+      runtimeConfig: { endpoint: 'http://127.0.0.1:9' },
+      binaryPath: path.join(agentHome, 'pi'),
+      logger: noopLogger,
+      capabilityAdditions: {
+        availableModels: [
+          {
+            id: 'model-a',
+            displayName: 'Model A',
+            contextWindow: 200_000,
+            efforts: ['low', 'high', 'max'],
+            defaultEffort: 'high',
+          },
+          {
+            id: 'model-b',
+            displayName: 'Model B',
+            contextWindow: 200_000,
+            efforts: ['low', 'high', 'max'],
+            defaultEffort: 'high',
+          },
+        ],
+      },
+      resolvePiAgentHome: () => agentHome,
+      resolvePiNativeProviders: async () => ({
+        providers: [
+          { id: 'native-a', name: 'Native A', baseUrl: 'http://a.test', api: 'openai-completions', models: [{ id: 'model-a', reasoning: true, thinkingLevelMap: { low: 'low', medium: 'medium', high: 'high', max: 'max' } }] },
+          { id: 'native-b', name: 'Native B', baseUrl: 'http://b.test', api: 'openai-completions', models: [{ id: 'model-b', reasoning: true, thinkingLevelMap: { low: 'low', medium: 'medium', high: 'high', max: 'max' } }] },
+        ],
+        env: {},
+      }),
+    };
+    const agent = new PiAgent(deps);
+    const handle = await agent.startSession({
+      sessionId: 'model-switch-effort-restore-fail',
+      workingDir: cwd,
+      model: 'model-a',
+      providerId: 'native-a',
+      effort: 'max',
+    });
+
+    // ① set_thinking_level 超时/链路抛错：模型路由已确认，setModel 必须照常完成，
+    //    不能把已成功的切换变成失败（否则子代理快照收尾被跳过，pending 卡死委派）。
+    captured.failThinkingLevel = 'throw';
+    await expect(handle.setModel!('model-b', { providerId: 'native-b', effort: 'low' }))
+      .resolves.toBeUndefined();
+    expect(handle.getEffort!()).toBe('max');
+
+    // ② set_thinking_level 被拒：mutableEffort 不跟随未生效的目标档。
+    captured.failThinkingLevel = 'reject';
+    await handle.setModel!('model-a', { providerId: 'native-a', effort: 'low' });
+    expect(handle.getEffort!()).toBe('max');
+
+    // ③ 成功路径不受影响：恢复生效后 getEffort 报新档。
+    captured.failThinkingLevel = null;
+    await handle.setModel!('model-b', { providerId: 'native-b', effort: 'low' });
+    expect(handle.getEffort!()).toBe('low');
 
     await handle.close();
   });

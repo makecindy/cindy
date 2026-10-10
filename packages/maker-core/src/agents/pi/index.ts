@@ -6983,19 +6983,29 @@ export class PiAgent extends BaseAgent {
         nextEffortSnapshot && nextEffortSnapshot.length > 0 &&
         nextEffortSnapshot.includes(restoredEffort)
       ) {
-        const restore = await proc.request({
-          type: 'set_thinking_level',
-          level: effortToPiThinkingLevel(restoredEffort),
-        });
-        if (!restore.success) {
-          deps.logger.warn('pi: restore thinking level after model switch failed', {
+        // 恢复请求失败（被拒或超时/链路抛错）都不能让 setModel 失败：模型路由此刻已确认,
+        // 抛错只会跳过下面的子代理快照收尾（pending 卡死委派），档位本身却救不回来。
+        try {
+          const restore = await proc.request({
+            type: 'set_thinking_level',
+            level: effortToPiThinkingLevel(restoredEffort),
+          });
+          if (restore.success) {
+            // mutableEffort 只跟随**已确认生效**的档位：它是对外汇报（getEffort）与后续
+            // 切换恢复的依据；被 Pi 拒绝的目标档不能当成已生效值。
+            mutableEffort = restoredEffort;
+          } else {
+            deps.logger.warn('pi: restore thinking level after model switch failed', {
+              effort: restoredEffort,
+              error: restore.error,
+            });
+          }
+        } catch (err) {
+          deps.logger.warn('pi: restore thinking level after model switch errored', {
             effort: restoredEffort,
-            error: restore.error,
+            message: err instanceof Error ? err.message : String(err),
           });
         }
-        // mutableEffort 必须跟随实际下发值：它是对外汇报（getEffort）与后续切换恢复的依据,
-        // 不同步的话下一次切换又会拿旧值恢复。
-        mutableEffort = restoredEffort;
       }
       autoReviewDecisionCache.clear();
       autoReviewUnavailableNotice.reset();
