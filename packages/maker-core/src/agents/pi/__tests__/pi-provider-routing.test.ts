@@ -340,6 +340,77 @@ describe("Pi provider-aware model routing", () => {
     expect(JSON.parse(query({ provider: 'relay', model: 'private-sol' })).fast).toBe(false);
   });
 
+  it('re-asserts the session effort after a full-path model switch (pi resets it to the model default)', async () => {
+    const deps: AgentDeps = {
+      auth: {
+        getState: async () => ({ authenticated: true, identity: 'test', authSource: 'api-key' as const }),
+        triggerLogin: async () => ({ authenticated: true }),
+        logout: async () => {},
+        getAuthEnv: async () => ({}),
+      },
+      runtimeConfig: { endpoint: 'http://127.0.0.1:9' },
+      binaryPath: path.join(agentHome, 'pi'),
+      logger: noopLogger,
+      capabilityAdditions: {
+        availableModels: [
+          {
+            id: 'model-a',
+            displayName: 'Model A',
+            contextWindow: 200_000,
+            efforts: ['low', 'high', 'max'],
+            defaultEffort: 'high',
+          },
+          {
+            id: 'model-b',
+            displayName: 'Model B',
+            contextWindow: 200_000,
+            efforts: ['low', 'high', 'max'],
+            defaultEffort: 'high',
+          },
+        ],
+      },
+      resolvePiAgentHome: () => agentHome,
+      resolvePiNativeProviders: async () => ({
+        providers: [
+          { id: 'native-a', name: 'Native A', baseUrl: 'http://a.test', api: 'openai-completions', models: [{ id: 'model-a', reasoning: true, thinkingLevelMap: { low: 'low', medium: 'medium', high: 'high', max: 'max' } }] },
+          { id: 'native-b', name: 'Native B', baseUrl: 'http://b.test', api: 'openai-completions', models: [{ id: 'model-b', reasoning: true, thinkingLevelMap: { low: 'low', medium: 'medium', high: 'high', max: 'max' } }] },
+        ],
+        env: {},
+      }),
+    };
+    const agent = new PiAgent(deps);
+    const handle = await agent.startSession({
+      sessionId: 'model-switch-effort',
+      workingDir: cwd,
+      model: 'model-a',
+      providerId: 'native-a',
+      effort: 'max',
+    });
+    const thinkingCalls = () =>
+      captured.requests.filter((request) => request.type === 'set_thinking_level');
+    expect(thinkingCalls().at(-1)).toEqual({ type: 'set_thinking_level', level: 'max' });
+
+    // ① 带显式 effort 的跨模型切换：set_model 后下发该档。
+    const afterStartup = thinkingCalls().length;
+    await handle.setModel!('model-b', { providerId: 'native-b', effort: 'low' });
+    expect(thinkingCalls().slice(afterStartup)).toContainEqual({
+      type: 'set_thinking_level', level: 'low',
+    });
+
+    // ② 不带 effort 切回：恢复会话原档位（mutableEffort 已被①更新为 low）。
+    const beforeRestore = thinkingCalls().length;
+    await handle.setModel!('model-a', { providerId: 'native-a' });
+    console.log('DBG ② rpc tail:', JSON.stringify(captured.requests.slice(beforeRestore)));
+    expect(captured.requests.slice(beforeRestore)).toContainEqual({
+      type: 'set_model', provider: 'native-a', modelId: 'model-a',
+    });
+    expect(thinkingCalls().slice(beforeRestore)).toContainEqual({
+      type: 'set_thinking_level', level: 'low',
+    });
+
+    await handle.close();
+  });
+
   it("uses providerId as the primary key when duplicate model ids exist", async () => {
     const authProviderIds: Array<string | null | undefined> = [];
     const apiResolver = vi.fn((providerId: string | null | undefined) =>

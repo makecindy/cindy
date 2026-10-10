@@ -6972,6 +6972,31 @@ export class PiAgent extends BaseAgent {
       mutablePiProviderId = provider;
       activeEffortSnapshot = nextEffortSnapshot;
       mutableProviderId = effectiveProviderId;
+      // pi CLI 在 set_model 后会把思考档位重置成新模型自己的默认（转录实证：声明了档位的
+      // 模型落到 defaultEffort 如 high，未声明的落到 low/medium），而本函数原本只在
+      // setOpts.effort 上做校验、从不下发。不在这里把目标档位重新下发的话，每次切模型
+      // 都会掉回默认档，表现为「推理强度自动变低」。目标档 = 显式 effort > 会话原档位
+      // （mutableEffort）；新模型不支持（含未声明档位）时保持 pi 默认，与能力收敛一致。
+      const restoredEffort = setOpts?.effort ?? mutableEffort;
+      if (
+        restoredEffort &&
+        nextEffortSnapshot && nextEffortSnapshot.length > 0 &&
+        nextEffortSnapshot.includes(restoredEffort)
+      ) {
+        const restore = await proc.request({
+          type: 'set_thinking_level',
+          level: effortToPiThinkingLevel(restoredEffort),
+        });
+        if (!restore.success) {
+          deps.logger.warn('pi: restore thinking level after model switch failed', {
+            effort: restoredEffort,
+            error: restore.error,
+          });
+        }
+        // mutableEffort 必须跟随实际下发值：它是对外汇报（getEffort）与后续切换恢复的依据,
+        // 不同步的话下一次切换又会拿旧值恢复。
+        mutableEffort = restoredEffort;
+      }
       autoReviewDecisionCache.clear();
       autoReviewUnavailableNotice.reset();
       autoReviewConfirmUndeliveredNotice.reset();
