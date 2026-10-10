@@ -830,7 +830,7 @@ export interface MobileMakerTransport {
     enqueue(
       sessionId: string,
       item: QueuedRemoteMessage,
-      opts?: { sendAtMs?: number },
+      opts?: { sendAtMs?: number; expectedClearBoundaryMs?: number | null },
     ): Promise<InputProjection>;
     compact(sessionId: string): Promise<InputProjection>;
     steer(

@@ -1,9 +1,39 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import ts from 'typescript';
 import { sharedTaskHostPeer } from '@cindy/device-link';
 import { buildGhostToolsJson, expandGhostCommand } from '@cindy/maker-shared/ghost-command';
 import { createMobileMakerTransport, type RemoteInvoke } from '@/device-link/mobileMakerTransport';
 import { setMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import type { QueuedRemoteMessage } from '@/session/types';
+import type { DurableOutboxRecord } from '@/session/durableOutbox';
+
+const bridgeSource = ts.createSourceFile('MobileOutboxBridge.tsx', readFileSync(resolve(
+  process.cwd(), 'src/session/MobileOutboxBridge.tsx'), 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+let enqueueSource = '';
+function findOutboxEnqueue(node: ts.Node) {
+  if (ts.isCallExpression(node) && node.expression.getText(bridgeSource) === 'createDurableOutboxDelivery') {
+    const options = node.arguments[0];
+    if (ts.isObjectLiteralExpression(options)) {
+      const enqueue = options.properties.find((property) => property.name?.getText(bridgeSource) === 'enqueue');
+      if (enqueue && ts.isPropertyAssignment(enqueue)) enqueueSource = enqueue.initializer.getText(bridgeSource);
+    }
+  }
+  ts.forEachChild(node, findOutboxEnqueue);
+}
+findOutboxEnqueue(bridgeSource);
+if (!enqueueSource) throw new Error('Missing durable outbox enqueue callback');
+
+function outboxSender(invokeOwned: (record: DurableOutboxRecord) => RemoteInvoke) {
+  const maker = (record: DurableOutboxRecord) => createMobileMakerTransport({
+    deviceId: record.deviceId, invoke: invokeOwned(record),
+  });
+  const compiled = ts.transpileModule(`function create(maker, invokeOwned) { return ${enqueueSource}; }`,
+    { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+  return new Function(`${compiled}; return create;`)()(maker, invokeOwned) as
+    (record: DurableOutboxRecord) => Promise<unknown>;
+}
 
 const plugin = { manifest: { id: 'art', name: 'Art', command: 'art',
   tools: [{ name: 'draw', description: 'Draw an image', parameters: { type: 'object' } }] }, enabled: true };
@@ -18,6 +48,56 @@ function harness(catalog: unknown = [plugin], deviceId = 'task-host') {
   return { invoke, maker: createMobileMakerTransport({ deviceId, invoke: invoke as RemoteInvoke }) };
 }
 afterEach(() => vi.unstubAllGlobals());
+
+describe('actual durable outbox plugin delivery', () => {
+  function record(newTask = false): DurableOutboxRecord {
+    return { version: 1, accountId: 'owner', deviceId: 'task-host', createdAt: 1,
+      state: 'sending', uploads: [], prepared: item(), sendAtMs: 123, clearBoundaryMs: 100,
+      item: { sessionId: newTask ? 'new-task' : 'existing-task' } as DurableOutboxRecord['item'] };
+  }
+  it.each([[false, 100], [true, null]] as const)('expands the actual send callback for new task = %s without mutating durable drafts', async (newTask, clearBoundaryMs) => {
+    const row = record(newTask);
+    row.clearBoundaryMs = clearBoundaryMs;
+    const original = structuredClone(row);
+    const { invoke } = harness();
+    await outboxSender(() => invoke as RemoteInvoke)(row);
+    expect(invoke.mock.calls[0]).toEqual(['task-host', 'ghosts:composer-list', ['/project']]);
+    const [device, channel, args] = invoke.mock.calls.at(-1)!;
+    expect([device, channel]).toEqual(['task-host', 'maker:input:enqueue']);
+    expect(args).toEqual([row.item.sessionId, { ...row.prepared, text: expandGhostCommand('$art cat', [plugin]) },
+      { sendAtMs: 123, expectedClearBoundaryMs: clearBoundaryMs }]);
+    expect(row).toEqual(original);
+  });
+  it('keeps the original dollar text on unsupported hosts and expands only the wire copy on retry', async () => {
+    const row = record();
+    const { invoke } = harness();
+    invoke.mockRejectedValueOnce(Object.assign(new Error('unsupported'), { code: 'CHANNEL_NOT_ALLOWED' }));
+    const send = outboxSender(() => invoke as RemoteInvoke);
+    await send(row);
+    expect((invoke.mock.calls.at(-1)![2][1] as QueuedRemoteMessage).text).toBe('$art cat');
+    await send(row);
+    expect((invoke.mock.calls.at(-1)![2][1] as QueuedRemoteMessage).text).toBe(expandGhostCommand('$art cat', [plugin]));
+    expect(row.prepared!.text).toBe('$art cat');
+  });
+  it.each(['account', 'record'])('does not dispatch after %s invalidation during catalog reading', async (reason) => {
+    setMobileAuthOwner('owner-a');
+    let owned = true;
+    const invoke = vi.fn(async (_device, channel, _args) => {
+      if (channel === 'ghosts:composer-list') {
+        if (reason === 'account') setMobileAuthOwner('owner-b');
+        else owned = false;
+        return [plugin];
+      }
+      return {};
+    });
+    const invokeOwned = () => (async (...args: Parameters<RemoteInvoke>) => {
+      if (!owned) throw new Error('OUTBOX_STALE_WRITE');
+      return invoke(...args);
+    }) as RemoteInvoke;
+    await expect(outboxSender(invokeOwned)(record())).rejects.toThrow();
+    expect(invoke.mock.calls.filter((call) => call[1] === 'maker:input:enqueue')).toHaveLength(0);
+  });
+});
 
 describe('mobile plugin catalog and send routing', () => {
   it('reads the existing task-host channel and validates its public projection', async () => {

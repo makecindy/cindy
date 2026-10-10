@@ -52,7 +52,6 @@ import {
   isDurableOutboxSettled,
   type DurableOutboxRecord,
 } from "./durableOutbox";
-import type { InputProjection } from "./types";
 
 /** Runs only while the OS gives the app execution time; foreground/reconnect resume the same ledger. */
 export function MobileOutboxBridge() {
@@ -292,16 +291,16 @@ export function MobileOutboxBridge() {
           : attachment;
       },
       enqueue: (r) =>
-        invokeOwned(r)<InputProjection>(r.deviceId, "maker:input:enqueue", [
+        maker(r).input.enqueue(
           r.item.sessionId,
-          r.prepared,
+          r.prepared!,
           {
             sendAtMs: r.sendAtMs,
             ...(r.clearBoundaryMs !== undefined
               ? { expectedClearBoundaryMs: r.clearBoundaryMs }
               : {}),
           },
-        ]),
+        ),
       cancel: async (r) => {
         const result = await invokeOwned(r)<{
           inputDeliveryCancelled?: boolean;
