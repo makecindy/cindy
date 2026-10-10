@@ -4,7 +4,7 @@
  */
 import { EventEmitter } from 'node:events';
 
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 
 const h = vi.hoisted(() => ({
   binary: '/opt/cindy/claude' as string | null,
@@ -35,6 +35,8 @@ vi.mock('../claude-cli-proxy-bridge.js', () => ({ ensureClaudeCliProxyBridge: h.
 vi.mock('node:child_process', () => ({ spawn: h.spawn }));
 
 import {
+  buildWindowsVisibleConsoleSpawn,
+  CLAUDE_LOGIN_CLI_ENV,
   claudeCliNetworkEnv,
   parseClaudeCliLoginStatus,
   parseClaudeCliPlanUsageLine,
@@ -231,7 +233,10 @@ describe('runClaudeCliLogin', () => {
     expect(argsOf(h.spawn.mock.calls[0])).toEqual(['auth', 'status', '--json']);
   });
 
-  it('拉起 `claude auth login --claudeai`,完成后以重读的登录态为结论', async () => {
+  it('拉起 `claude auth login --claudeai`,完成后以重读的登录态为结论(macOS / Linux 直接拉起)', async () => {
+    const realPlatform = process.platform;
+    Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true });
+    onTestFinished(() => { Object.defineProperty(process, 'platform', { value: realPlatform, configurable: true }); });
     h.spawn
       .mockImplementationOnce(() => fakeChild({ stdout: LOGGED_OUT }))
       .mockImplementationOnce(() => fakeChild({ stdout: 'Login successful.', code: 0 }))
@@ -254,6 +259,56 @@ describe('runClaudeCliLogin', () => {
     abort.abort();
     await expect(pending).resolves.toEqual({ ok: false, reason: 'login_cancelled' });
     expect(login.kill).toHaveBeenCalled();
+  });
+
+  // #5769:Windows 上浏览器没打开授权页时,隐藏子进程的备用链接与授权码输入用户看不到。
+  describe('Windows 可见控制台登录', () => {
+    const realPlatform = process.platform;
+    const setPlatform = (value: NodeJS.Platform) => Object.defineProperty(process, 'platform', { value, configurable: true });
+    beforeEach(() => {
+      setPlatform('win32');
+      h.binary = 'C:\\Users\\a%OS%b!c\\AppData\\Roaming\\Cindy\\claude.exe';
+    });
+    afterEach(() => setPlatform(realPlatform));
+
+    it('经 System32 的 cmd `start /wait` 拉起官方 CLI 的独立控制台;CLI 路径只经环境变量传入', async () => {
+      h.spawn
+        .mockImplementationOnce(() => fakeChild({ stdout: LOGGED_OUT }))
+        .mockImplementationOnce(() => fakeChild({ code: 0 }))
+        .mockImplementationOnce(() => fakeChild({ stdout: SUBSCRIPTION }));
+      await expect(runClaudeCliLogin(new AbortController().signal)).resolves.toMatchObject({ ok: true });
+      const [statusFile, , statusOptions] = h.spawn.mock.calls[0]!;
+      expect(statusFile).toBe(h.binary);
+      expect(statusOptions).toMatchObject({ windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+      const [file, args, options] = h.spawn.mock.calls[1]!;
+      expect(file).toMatch(/System32[\\/]cmd\.exe$/i);
+      expect(args).toEqual(['/d', '/s', '/v:off', '/c', `"start "Claude Code" /wait "%${CLAUDE_LOGIN_CLI_ENV}%" auth login --claudeai"`]);
+      // 含 %OS% / ! 的路径不进命令文本,避免 cmd 展开改写可执行路径。
+      expect((args as string[]).join(' ')).not.toContain('%OS%');
+      expect((args as string[]).join(' ')).not.toContain('!');
+      expect(options).toMatchObject({
+        stdio: 'ignore',
+        windowsHide: true,
+        windowsVerbatimArguments: true,
+        env: expect.objectContaining({ [CLAUDE_LOGIN_CLI_ENV]: h.binary }),
+      });
+      expect(buildWindowsVisibleConsoleSpawn(h.binary!, ['auth', 'login', '--claudeai']).env).toEqual({ [CLAUDE_LOGIN_CLI_ENV]: h.binary });
+    });
+
+    it('取消时只经进程句柄结束根 cmd,不按 PID 结束进程树(不波及 CLI 拉起的浏览器)', async () => {
+      const login = Object.assign(fakeChild('hang'), { pid: 4242, exitCode: null, signalCode: null });
+      h.spawn
+        .mockImplementationOnce(() => fakeChild({ stdout: LOGGED_OUT }))
+        .mockImplementationOnce(() => login);
+      const abort = new AbortController();
+      const pending = runClaudeCliLogin(abort.signal);
+      await vi.waitFor(() => expect(h.spawn).toHaveBeenCalledTimes(2));
+      abort.abort();
+      await expect(pending).resolves.toEqual({ ok: false, reason: 'login_cancelled' });
+      expect(login.kill).toHaveBeenCalledOnce();
+      // 没有任何 taskkill(或其它按 PID 的进程)被拉起。
+      expect(h.spawn).toHaveBeenCalledTimes(2);
+    });
   });
 
   it('内置 CLI 不可用 → local_unavailable', async () => {
