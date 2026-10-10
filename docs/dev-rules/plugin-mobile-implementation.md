@@ -95,17 +95,24 @@ DEV visual mock 可用 cindy://plugins?preview=<fixture-id>[-settings] 定位演
 直接相关用例覆盖页面/控制端隔离、确认与未读、资源替换、任务归属、模型配置、卡片动作、
 原生授权密码学互通和身份固定，以及移动桥接脚本、预览查询和媒体临时文件回收。
 浏览器模拟宿主、JSDOM、原生边界 mock 和局部类型检查均不能替代手机实机验收。
-本次未启动 Desktop DEV、Metro 或原生构建；iOS、Android、iPad 的键盘、系统浏览器返回、
-断线恢复及 Light/Dark 实机视觉仍待验证。未执行整仓测试和整包构建，完整门禁交 CI。
+验收按各 PR 的当前提交记录，不能沿用历史接入时的未验证结论。
+[已装插件页面验收](../design-evidence/2026-10-09/mobile-installed-plugins.md)记录了
+iOS 原生构建、Metro 与真实 PocketMind 数据，以及 Android Debug 包的 Demo 验收。
+最新 iOS 原生包重复目检为 Light；Dark 证据来自主干同步前。Android 真实账号联动、
+iPad、旧 iOS、VoiceOver，以及真实启停期间的断线恢复尚未实测。
+启停与回读竞态另有定向回归，不能替代运行验收；完整单测门禁由 PR CI 执行。
 
 ## 兼容、冷更与回退
 
 现有插件不需要重装、重新批准或重配凭证；mobile 为可选扩展，新增远程集合由能力协商发现。
 插件批准格式、安装布局、旧任务偏好文件和 Library 数据未迁移。插件基座改动合并前需白名单明确批准。
 
-新增纯 JavaScript `@noble/curves@1.9.7` 复用现有 Expo 随机数与 AES，未新增原生模块，
-但依赖仍改变 runtime fingerprint，必须按冷更发布新安装包并由指定把关人明确批准。
+历史移动插件接入新增纯 JavaScript `@noble/curves@1.9.7`，复用现有 Expo 随机数与 AES，
+未新增原生模块，但当时依赖变更改变了 runtime fingerprint，需要冷更与指定把关人明确批准。
 iOS 指纹从 `d8cd3b87cb7dcf418004eeb36b0ff1b8f29a44c7` 变为
 `25a5a753aaf7740670f9588e976b4770b0817999`；Android 从
 `c2eb49bea3303f89edf8de95af3a0cf45179faca` 变为 `d1d89bd866a64c681f3ded59075536abccb84c9a`。
-旧安装保持原能力，不向旧 runtime 投送本次 OTA。回退客户端代码即可撤销移动入口；不删除插件数据。
+这些指纹记录属于历史接入，不能作为后续页面调整的冷更判据。已装插件页面调整 PR #5730
+未修改原生配置、依赖或 runtime fingerprint 输入；本地重建用于匹配现有基线，不代表新增冷更。
+发布仍按实际构建与目标 runtime 核对兼容性，不向不匹配的旧 runtime 投送 OTA。
+回退客户端代码即可撤销移动入口；不删除插件数据。
