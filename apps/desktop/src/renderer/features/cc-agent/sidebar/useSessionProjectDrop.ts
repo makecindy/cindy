@@ -14,7 +14,7 @@ import { claimSortableDrop } from '@/lib/sortableDropClaim';
 const DROP_SELECTOR = '[data-session-project-drop], [data-session-dialogue-drop]';
 export const PROJECT_DROP_HOVER_MS = 600;
 export const PROJECT_DROP_CLASS =
-  'data-[session-project-drop-active=true]:bg-sidebar-item-hover data-[session-project-drop-active=true]:ring-1 data-[session-project-drop-active=true]:ring-inset data-[session-project-drop-active=true]:ring-[var(--focus-ring-soft)]';
+  'data-[session-project-drop-active=true]:bg-sidebar-item-hover data-[session-project-drop-active=true]:ring-1 data-[session-project-drop-active=true]:ring-inset data-[session-project-drop-active=true]:ring-[var(--border-default)]';
 
 interface Options {
   getSession(id: string): Session | undefined;
