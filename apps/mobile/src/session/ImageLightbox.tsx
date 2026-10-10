@@ -1052,7 +1052,7 @@ const LightboxPage = memo(function LightboxPage({
   const panSettling = useSharedValue(0);
   /** 本次按下接住了滑行;若没形成拖动就抬手,要补一次回弹,不能停在越界处。 */
   const panCaught = useSharedValue(0);
-  /** 倍率回弹(捏过两端松手)进行中:此时位移已有一致的目标,平移松手不另起回弹。 */
+  /** 松手回弹(springToTransform)进行中:位移已有一致的目标,平移松手不另起回弹;落定前锁住翻页。 */
   const zoomSettling = useSharedValue(0);
   const dragY = useSharedValue(0);
   /**
@@ -1188,17 +1188,33 @@ const LightboxPage = memo(function LightboxPage({
       savedScale.value = target.scale;
       savedTranslateX.value = target.x;
       savedTranslateY.value = target.y;
-      if (scale.value !== target.scale) {
-        scale.value = withSpring(target.scale, LIGHTBOX_SETTLE_SPRING, (finished) => {
-          'worklet';
-          if (finished) zoomSettling.value = 0;
-        });
-        // 赋值新动画会以 finished=false 回调掉旧动画,标记必须在赋值之后置位。
-        zoomSettling.value = 1;
+      const scaleMoves = scale.value !== target.scale;
+      const xMoves = translateX.value !== target.x;
+      const yMoves = translateY.value !== target.y;
+      const animating = scaleMoves || xMoves || yMoves;
+      // 落定回调只挂在一条动画上;被新手势打断(finished=false)时由接管方负责翻页锁。
+      const onSettled = (finished?: boolean) => {
+        'worklet';
+        if (!finished) return;
+        zoomSettling.value = 0;
+        runOnJS(reportZoomed)(isLightboxZoomed(savedScale.value));
+      };
+      if (scaleMoves) scale.value = withSpring(target.scale, LIGHTBOX_SETTLE_SPRING, onSettled);
+      if (xMoves) {
+        translateX.value = withSpring(target.x, LIGHTBOX_SETTLE_SPRING, scaleMoves ? undefined : onSettled);
       }
-      if (translateX.value !== target.x) translateX.value = withSpring(target.x, LIGHTBOX_SETTLE_SPRING);
-      if (translateY.value !== target.y) translateY.value = withSpring(target.y, LIGHTBOX_SETTLE_SPRING);
-      runOnJS(reportZoomed)(isLightboxZoomed(target.scale));
+      if (yMoves) {
+        translateY.value = withSpring(
+          target.y,
+          LIGHTBOX_SETTLE_SPRING,
+          scaleMoves || xMoves ? undefined : onSettled,
+        );
+      }
+      // 赋值新动画会以 finished=false 回调掉旧动画,标记必须在赋值之后置位。
+      if (animating) zoomSettling.value = 1;
+      // 回弹到 1x 期间继续锁住翻页,落定后才放开(与双击缩回同一约定):
+      // 否则缩小松手后立刻横划,会被翻页抢走、在回弹中途切走当前图。
+      runOnJS(reportZoomed)(animating || isLightboxZoomed(target.scale));
     };
     const settlePinch = () => {
       'worklet';
@@ -1390,9 +1406,10 @@ const LightboxPage = memo(function LightboxPage({
         savedTranslateY.value = translateY.value;
         panBusy.value = 0;
         if (!pinchBusy.value) {
-          // 倍率回弹进行中时位移已随之弹向一致落点,这里不另起动画抢它。
+          // 回弹进行中时位移已随之弹向一致落点,这里不另起动画抢它。
           if (!zoomSettling.value) settlePan(event.velocityX ?? 0, event.velocityY ?? 0);
-          runOnJS(reportZoomed)(isLightboxZoomed(zoomSettling.value ? savedScale.value : scale.value));
+          // 回弹(含刚由 settlePan 发起的)由 springToTransform 管翻页锁,落定时再上报。
+          if (!zoomSettling.value) runOnJS(reportZoomed)(isLightboxZoomed(scale.value));
         }
         maybeShowChrome();
       });

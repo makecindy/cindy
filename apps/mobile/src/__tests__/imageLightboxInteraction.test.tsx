@@ -512,6 +512,8 @@ describe("image viewer gesture lifecycle", () => {
     expect(transform().scale).toBeLessThan(1);
     expect(transform().scale).toBeGreaterThan(0.5);
     fire(pinch(), "onFinalize");
+    // 回弹到 1x 落定前不放开翻页:快速横划不能在回弹中途切走当前图。
+    expect(runtime.nodes.get("FlatList").scrollEnabled).toBe(false);
     finishAnimations();
     expect(transform()).toEqual({ x: 0, y: 0, scale: 1 });
     expect(runtime.nodes.get("FlatList").scrollEnabled).toBe(true);
