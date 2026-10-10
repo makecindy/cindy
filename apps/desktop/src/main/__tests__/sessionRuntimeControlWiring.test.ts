@@ -1049,16 +1049,17 @@ describe('session runtime control wiring', () => {
     expect(catchBlock).toContain("new ColdPiRehydrationError('runtime-not-live'");
     expect(catchBlock).toContain('log,');
     expect(catchBlock).toContain('throwIpcError,');
-    expect(catchBlock).toContain('if (!coldPiRouteWithoutLiveWindowCheck) {');
+    expect(catchBlock).toContain("coldPiRehydrationOutcome === 'fail-closed'");
     // The error code and fail-closed outcome remain only for the non-degrade branch.
     expect(catchBlock.match(/localModelWindowSwitchErrorCode\('MODEL_WINDOW_CURRENT_CONTEXT_UNKNOWN'\)/g)).toHaveLength(1);
 
     // Raw reasons (which may carry local paths or stderr) stay in the main log; the IPC
     // message only carries the category and the name/code-based detail.
-    const fieldsStart = coldPiRehydrationFailureSource.indexOf('function logColdPiRehydrationFailureFields(');
+    const fieldsStart = coldPiRehydrationFailureSource.indexOf('function logColdPiRehydrationFields(');
     expect(fieldsStart).toBeGreaterThan(-1);
     const fields = coldPiRehydrationFailureSource.slice(fieldsStart);
     expect(fields).toContain('reason: failure.reason');
+    expect(fields).toContain('COLD_PI_REHYDRATION_DEGRADED_LOG_MESSAGE');
     const reporterStart = coldPiRehydrationFailureSource.indexOf('export function reportColdPiRehydrationFailure(');
     expect(reporterStart).toBeGreaterThan(-1);
     const reporter = coldPiRehydrationFailureSource.slice(reporterStart);

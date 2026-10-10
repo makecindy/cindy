@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createIpcError } from '../../../shared/ipc-errors';
 import {
+  COLD_PI_REHYDRATION_DEGRADED_LOG_MESSAGE,
   COLD_PI_REHYDRATION_FAILURE_LOG_MESSAGE,
   ColdPiRehydrationError,
   coldPiRehydrationFailureMessage,
@@ -194,10 +195,10 @@ describe('cold Pi rehydration failure diagnostics (#5508)', () => {
 
     expect(warn).toHaveBeenCalledTimes(1);
     const [message, fields] = warn.mock.calls[0] as [string, Record<string, unknown>];
-    expect(message).toBe(COLD_PI_REHYDRATION_FAILURE_LOG_MESSAGE);
+    expect(message).toBe(COLD_PI_REHYDRATION_DEGRADED_LOG_MESSAGE);
+    // 降级继续时不能复用“runtime selection unchanged”文案，否则会被读成切模被拒。
+    expect(message).not.toContain('runtime selection unchanged');
     expect(fields).toMatchObject({
-      ...context,
-      category: 'bootstrap-failed',
       detail: 'Error',
     });
     // 完整原因（含本机路径）只进 Main 日志；没有 IPC 错误出口。

@@ -141,12 +141,18 @@ export interface ColdPiRehydrationFailureLoggerDeps {
 export const COLD_PI_REHYDRATION_FAILURE_LOG_MESSAGE =
   'set-model: cold Pi runtime rehydration failed; runtime selection unchanged';
 
-function logColdPiRehydrationFailureFields(
+// 降级继续的日志文案不能复用上面的“runtime selection unchanged”：切模没有失败，
+// 草率写 unchanged 会让排障者以为选择被拒，指向错误的方向。
+export const COLD_PI_REHYDRATION_DEGRADED_LOG_MESSAGE =
+  'set-model: cold Pi window verification degraded; continuing with the selected route';
+
+function logColdPiRehydrationFields(
   log: { warn(...args: unknown[]): void },
+  message: string,
   context: ColdPiRehydrationFailureContext,
   failure: ColdPiRehydrationFailure,
 ): void {
-  log.warn(COLD_PI_REHYDRATION_FAILURE_LOG_MESSAGE, {
+  log.warn(message, {
     sessionId: context.sessionId,
     category: failure.category,
     reason: failure.reason,
@@ -168,7 +174,12 @@ export function logColdPiRehydrationFailure(
   context: ColdPiRehydrationFailureContext,
   error: unknown,
 ): void {
-  logColdPiRehydrationFailureFields(deps.log, context, describeColdPiRehydrationFailure(error));
+  logColdPiRehydrationFields(
+    deps.log,
+    COLD_PI_REHYDRATION_DEGRADED_LOG_MESSAGE,
+    context,
+    describeColdPiRehydrationFailure(error),
+  );
 }
 
 /**
@@ -182,6 +193,6 @@ export function reportColdPiRehydrationFailure(
   error: unknown,
 ): never {
   const failure = describeColdPiRehydrationFailure(error);
-  logColdPiRehydrationFailureFields(deps.log, context, failure);
+  logColdPiRehydrationFields(deps.log, COLD_PI_REHYDRATION_FAILURE_LOG_MESSAGE, context, failure);
   return deps.throwIpcError(deps.errorCode, coldPiRehydrationFailureMessage(failure));
 }

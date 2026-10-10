@@ -462,7 +462,7 @@ import {
 } from '../../shared/orca-worker-permission-mode.js';
 import { t } from '../i18n.js';
 import { createLogger } from '../logger.js';
-import { createColdPiRehydrationForWindowVerification } from './coldPiRehydration.js';
+import { createColdPiRehydrationForWindowVerification, classifyColdPiRehydrationOutcome } from './coldPiRehydration.js';
 import { ColdPiRehydrationError, logColdPiRehydrationFailure, reportColdPiRehydrationFailure } from './coldPiRehydrationFailure.js';
 import {
   desktopClaudeAuthAdapter,
@@ -19470,6 +19470,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               currentProviderId,
               nextProviderId: targetRouteProviderId,
             };
+            let coldPiRehydrationFailed = false;
             try {
               await rehydrateColdPiRuntimeForWindowVerification(sessionId);
             } catch (error) {
@@ -19480,24 +19481,28 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               // fail-open 放行热切，目标路由由下一次发送懒创建；届时 bootstrap 失败
               // 会带真实原因浮现。完整原因仍进 Main 日志（#5508）。
               logColdPiRehydrationFailure({ log }, coldPiFailureContext, error);
+              coldPiRehydrationFailed = true;
               coldPiRouteWithoutLiveWindowCheck = true;
             }
             liveSessionBeforeRouteChange = maker.getSession(sessionId);
-            if (!liveSessionBeforeRouteChange) {
-              if (!coldPiRouteWithoutLiveWindowCheck) {
-                // bootstrap 声称成功却没有活会话：这不是「存量路由死掉」的降级形状，
-                // 保留原 fail-closed（完整原因写 Main 日志，IPC 只带类别与脱敏概述）。
-                reportColdPiRehydrationFailure(
-                  {
-                    log,
-                    throwIpcError,
-                    errorCode: localModelWindowSwitchErrorCode('MODEL_WINDOW_CURRENT_CONTEXT_UNKNOWN'),
-                  },
-                  coldPiFailureContext,
-                  new ColdPiRehydrationError('runtime-not-live', 'rehydrated Pi runtime is not live after bootstrap'),
-                );
-              }
-            } else {
+            // 落点分支表见 classifyColdPiRehydrationOutcome：只有「bootstrap 声称成功
+            // 却没有活会话」这种非降级形状保留原 fail-closed 出口。
+            const coldPiRehydrationOutcome = classifyColdPiRehydrationOutcome({
+              rehydrationFailed: coldPiRehydrationFailed,
+              liveAfterBootstrap: liveSessionBeforeRouteChange !== undefined,
+            });
+            if (coldPiRehydrationOutcome === 'fail-closed') {
+              reportColdPiRehydrationFailure(
+                {
+                  log,
+                  throwIpcError,
+                  errorCode: localModelWindowSwitchErrorCode('MODEL_WINDOW_CURRENT_CONTEXT_UNKNOWN'),
+                },
+                coldPiFailureContext,
+                new ColdPiRehydrationError('runtime-not-live', 'rehydrated Pi runtime is not live after bootstrap'),
+              );
+            }
+            if (coldPiRehydrationOutcome === 'verified' && liveSessionBeforeRouteChange) {
               rehydratedColdPiRuntime = liveSessionBeforeRouteChange;
               currentRuntimeModel = liveSessionBeforeRouteChange.model;
               runtimeRouteChanged =
