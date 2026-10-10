@@ -79,6 +79,17 @@ export interface FinishSessionTerminalEventDeps {
     | 'consumeFailedTurnCompletionTail'
     | 'hasSuppressedError'
   >;
+  /**
+   * 供应商组正在为这次失败换电脑(协调器登记了先不呈现)：error 行改为暂存，换成了就丢掉，没换成再补落
+   * (provider-group/heldTurnErrors.ts)。返回 false = 不是被暂存的那次失败，照常落库。
+   * `agentMeta` 是失败那一轮的事件身份：补落时不再读当时正在进行的那一轮。
+   */
+  readonly stashProviderGroupHeldError?: (
+    sessionId: string,
+    holdId: number,
+    data: unknown,
+    agentMeta: unknown,
+  ) => boolean;
   readonly productTurnUsageTargetTracker: Pick<
     ProductTurnUsageTargetTracker,
     'remember' | 'finish'
@@ -136,7 +147,7 @@ export function finishSessionTerminalEvent(
     isRemoteAuthRetry,
     isGatewayProxyTokenRecovery,
   } = prepared;
-  const { persistId, workerTerminalCapture } = delivery;
+  const { persistId, workerTerminalCapture, providerGroupHoldId } = delivery;
   const terminalOwner =
     event.type === 'done' || isTerminalTurnErrorEvent(event)
       ? captureProductTurnFailureOwner(session, event, eventAgentMeta)
@@ -347,16 +358,25 @@ export function finishSessionTerminalEvent(
       !isGatewayProxyTokenRecovery &&
       !autoResumeSuppressesPersist
     ) {
-      onTurnErrorEvent(
-        session.id,
-        attributedEvent.data as {
-          message?: unknown;
-          reason?: unknown;
-          sdkError?: unknown;
-        } | null,
-        eventAgentMeta,
-        persistId,
-      );
+      // 供应商组正在为这次失败换电脑：先不落库，换成了就丢掉，没换成再补落。登记期间到达的另一条不同错误
+      // 不归这次暂存，照常落库。
+      if (
+        providerGroupHoldId !== null &&
+        deps.stashProviderGroupHeldError?.(session.id, providerGroupHoldId, attributedEvent.data, eventAgentMeta) === true
+      ) {
+        if (persistId) releaseReservedTurnErrorPersistId(session.id, persistId);
+      } else {
+        onTurnErrorEvent(
+          session.id,
+          attributedEvent.data as {
+            message?: unknown;
+            reason?: unknown;
+            sdkError?: unknown;
+          } | null,
+          eventAgentMeta,
+          persistId,
+        );
+      }
     } else if (persistId) {
       releaseReservedTurnErrorPersistId(session.id, persistId);
     }
@@ -391,10 +411,13 @@ export function finishSessionTerminalEvent(
     // renderer 会稍后调 persistTurnErrorDeferred IPC。在 resetTurnPersistState 清掉
     // _turnStartedAtBySession 之前保存一份，让 deferred 路径能正确做 /clear 竞态 cap。
     // 自愈压住 error 行时同理:补落发生在 resetTurnPersistState 之后(退避 3–20 秒,
-    // 或决策推迟的那一小段),不先存一份会让 /clear 竞态 cap 判错。
+    // 或决策推迟的那一小段),不先存一份会让 /clear 竞态 cap 判错。供应商组换电脑暂存 error 行时同理。
     if (
       event.type === 'error' &&
-      (isRemoteAuthRetry || isGatewayProxyTokenRecovery || autoResumeSuppressesPersist)
+      (isRemoteAuthRetry ||
+        isGatewayProxyTokenRecovery ||
+        autoResumeSuppressesPersist ||
+        providerGroupHoldId !== null)
     ) {
       saveTurnStartedAtForDeferred(session.id);
     }

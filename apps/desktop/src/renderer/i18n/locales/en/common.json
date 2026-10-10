@@ -196,11 +196,9 @@
   },
   "providerShare": {
     "entry": {
-      "manage": "Manage Sharing",
-      "manageWithPending_one": "Manage Sharing · {{count}} pending request",
-      "manageWithPending_other": "Manage Sharing · {{count}} pending requests",
-      "disabledInvocation": "Turn on “Allow remote use” to share this provider",
-      "disabledRemoteControl": "Allow remote control in Remote Connection settings to share this provider",
+      "label": "Remote & Sharing",
+      "pending_one": "{{count}} share request waiting",
+      "pending_other": "{{count}} share requests waiting",
       "remoteControlOff": "This computer doesn’t allow remote control yet, so its providers can’t be used remotely or shared.",
       "openRemoteControl": "Open Remote Connection Settings",
       "descriptionOff": "When on, your other computers and the people you share with can use this provider’s models. While it’s off, existing shares are paused, not deleted."
@@ -400,14 +398,6 @@
     }
   },
   "providerGroup": {
-    "row": {
-      "label": "Provider Group",
-      "description": "Combine this provider across your computers. Tasks are assigned automatically and move to another computer when one fails.",
-      "summary_one": "{{count}} computer · {{strategy}}",
-      "summary_other": "{{count}} computers · {{strategy}}",
-      "setUp": "Set Up Group",
-      "manage": "Manage Group"
-    },
     "page": {
       "title": "{{provider}} · Remote & Sharing",
       "shareTitle": "Sharing"
@@ -2896,6 +2886,7 @@
         "remoteAccess": {
           "label": "Allow remote use",
           "description": "When on, your other computers and the people you share with can use this provider’s models. The Agent runs on this computer, using this computer’s sign-in and quota.",
+          "descriptionGroup": "When on, your other computers and the people you share with can use this provider’s models. The provider group picks the computer that runs the Agent.",
           "ariaLabel": "Allow your other computers and the people you share with to use this provider",
           "writeFailed": "Couldn't save the remote access setting. Please try again."
         },
@@ -10592,7 +10583,8 @@
       },
       "autoResumePending": {
         "label": "Reconnecting",
-        "labelWithProgress": "Reconnecting {{attempt}}/{{total}}"
+        "labelWithProgress": "Reconnecting {{attempt}}/{{total}}",
+        "groupSwitch": "Switching to another computer"
       },
       "agentSwitch": {
         "label": "Switched from {{from}} to {{to}}",

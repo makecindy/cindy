@@ -41,6 +41,8 @@ export interface MobileAutoResumeInfo {
   agentSwitch?: MobileAutoResumeAgentSwitch;
   /** 分享的人这边的自动换电脑:活动行写「已自动换一台电脑继续」。 */
   groupSwitch?: MobileAutoResumeGroupSwitch;
+  /** 进行中:供应商组正在为这次失败换电脑,错误先不呈现,写「正在换一台电脑继续」。 */
+  groupSwitchPending?: MobileAutoResumeGroupSwitch;
   error?: string;
   attempt?: number;
   maxAttempts?: number;
@@ -67,11 +69,16 @@ export function readMobileAutoResumeInfo(data?: Record<string, unknown>): Mobile
   const sessionTotal = usageLimitReset ? undefined : number(data?.sessionTotal);
   const agentSwitch = readAgentSwitch(data?.agentSwitch);
   const groupSwitch = readGroupSwitch(data?.groupSwitch);
+  const groupSwitchPending = readGroupSwitch(data?.groupSwitchPending);
   return {
     ...(usageLimitReset ? { usageLimitReset: true } : {}),
     ...(agentSwitch ? { agentSwitch } : {}),
     ...(groupSwitch ? { groupSwitch } : {}),
-    ...(typeof data?.error === 'string' && data.error.trim() ? { error: data.error } : {}),
+    ...(groupSwitchPending ? { groupSwitchPending } : {}),
+    // 正在换电脑时错误先不呈现:行内不带原始错误。
+    ...(!groupSwitchPending && typeof data?.error === 'string' && data.error.trim()
+      ? { error: data.error }
+      : {}),
     ...(attempt !== undefined ? { attempt } : {}),
     ...(maxAttempts !== undefined ? { maxAttempts } : {}),
     ...(sessionTotal !== undefined ? { sessionTotal } : {}),

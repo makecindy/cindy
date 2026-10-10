@@ -9,11 +9,13 @@ function readSource(relativePath: string): string {
 describe('new task remote Agent wiring', () => {
   it('lists remote and shared providers and creates the task with the Agent there', () => {
     const source = readSource('app/sessions/new.tsx');
-    // 被控电脑支持远程 Agent 时,模型列表接上其他电脑与分享的供应商;协同草稿与之互斥。
+    // 被控电脑支持远程 Agent 时,模型列表接上其他电脑与分享的供应商;被控电脑支持给 Worker 选 Agent
+    // 位置时协同草稿与之不互斥,旧被控电脑仍互斥。
     expect(source).toContain('const remoteAgentCatalogs = useRemoteAgentCatalogs({');
-    expect(source).toContain('...(remoteAgentSupported && !collabDraft');
+    expect(source).toContain('...(remoteAgentSupported && (!collabDraft || workerAgentLocationSupported)');
     expect(source).toContain('remote: { catalogs: remoteAgentCatalogs, selectedDeviceId: remoteAgentPick?.deviceId ?? null }');
-    expect(source).toContain('const collabEligible = isOrcaCollabEligible(collabTarget) && remoteAgentPick === null;');
+    expect(source).toContain('&& (remoteAgentPick === null || workerAgentLocationSupported);');
+    expect(source).toContain('&& capabilities?.supportsOrcaWorkerAgentDevice === true;');
     // 选中远程行单独记;选本机行清掉。
     const select = source.slice(source.indexOf('const selectUnifiedModel = useCallback'), source.indexOf('const selectFlatModel'));
     expect(select).toContain('const remoteDeviceId = source?.deviceId ?? null;');

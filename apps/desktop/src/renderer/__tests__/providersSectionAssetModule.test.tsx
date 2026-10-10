@@ -48,8 +48,6 @@ const {
   },
 }));
 
-// 供应商组一行有自己的测试(features/provider-group)；这里只验证详情页其余部分。
-vi.mock('@/features/provider-group/ProviderGroupRow', () => ({ ProviderGroupRow: () => null }));
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
     t: (key: string) => key,

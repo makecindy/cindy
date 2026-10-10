@@ -2,11 +2,12 @@
  * 组内电脑的实时情况：哪些电脑能加进组、组里每台现在能不能用。
  *
  * 数据都来自现有通道：同账号电脑读 device-link 设备列表 + 那台的 `maker:provider:list`
- * (只留开了「允许被远程调用」的供应商)，分享来的读收到的分享 + `share:<id>` 的目录(新版分享者在目录里
- * 带上本账号在那台正在运行的任务数 `guestRunning`)。目录短时缓存，避免设置页刷新与连续分配时反复读远端。
+ * (只留开了「允许被远程调用」的供应商；新版在目录里带上那台用这个供应商正在运行的任务数 `runningTurns`)，
+ * 分享来的读收到的分享 + `share:<id>` 的目录(新版分享者带上本账号在那台正在运行的任务数 `guestRunning`)。
+ * 目录短时缓存，避免设置页刷新与连续分配时反复读远端。
  */
 import type { ProviderView } from '@cindy/model-providers';
-import { readProviderShareGuestRunning, type ProviderShareReceived } from '@cindy/device-link';
+import { readProviderRunningTurns, readProviderShareGuestRunning, type ProviderShareReceived } from '@cindy/device-link';
 
 import {
   PROVIDER_SHARE_AGENT_DEVICE_PREFIX,
@@ -32,6 +33,8 @@ export interface ProviderGroupDirectoryDeps {
   readDeviceProviders(agentDeviceId: string): Promise<ProviderView[]>;
   listReceivedShares(): readonly ProviderShareReceived[];
   isMobilePlatform(platform: string | null): boolean;
+  /** 本机这个供应商正在运行一轮的任务数(localLoad.ts)；不提供或读不到时为 null。 */
+  localRunning?(providerId: string): Promise<number | null>;
   now(): number;
 }
 
@@ -46,8 +49,8 @@ export interface ResolvedProviderGroupMember {
   /** 那台电脑上的这个供应商(state 为 ok 时一定有)。 */
   view?: ProviderView;
   /**
-   * 分享来的电脑报来的：本账号(每台电脑，含不经组直接用的)此刻在这个分享上正在运行一轮的任务数。
-   * 分享者电脑较旧给不出、或不是分享来的电脑时没有。
+   * 那台电脑上这个供应商实际正在运行一轮的任务数，含不经组直接用的：本机现算；同账号电脑报来那台的总数；
+   * 分享来的电脑报来本账号(每台电脑)在那里的数。那台较旧给不出时没有。
    */
   reportedRunning?: number;
 }
@@ -113,7 +116,8 @@ export function createProviderGroupDirectory(deps: ProviderGroupDirectoryDeps): 
     const label = deps.localDeviceName();
     const view = await localGroupProvider(member.providerId);
     if (!view || !view.connected || view.suspended) return { member, label, state: 'unavailable', reason: 'disconnected' };
-    return { member, label, state: 'ok', view };
+    const reportedRunning = await deps.localRunning?.(member.providerId).catch(() => null);
+    return { member, label, state: 'ok', view, ...(typeof reportedRunning === 'number' ? { reportedRunning } : {}) };
   }
 
   async function resolveDevice(
@@ -130,7 +134,9 @@ export function createProviderGroupDirectory(deps: ProviderGroupDirectoryDeps): 
     } catch {
       return { member, label, state: 'offline' };
     }
-    return withView(member, label, undefined, views);
+    const resolved = withView(member, label, undefined, views);
+    const reportedRunning = resolved.view ? readProviderRunningTurns(resolved.view) : null;
+    return reportedRunning === null ? resolved : { ...resolved, reportedRunning };
   }
 
   async function resolveShare(member: ProviderGroupMember): Promise<ResolvedProviderGroupMember> {

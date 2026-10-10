@@ -620,22 +620,6 @@ export default function NewRemoteSessionScreen() {
     (targetDeviceId: string) => createMobileMakerTransport({ deviceId: targetDeviceId, invoke }),
     [invoke],
   );
-  const collabForm = useOrcaWorkerForm({
-    maker,
-    executionMakerForDevice,
-    executionDevicesEnabled: true,
-    // 按区域限定的账号键:Global 与中国大陆版同号不同人,记忆(含完全访问)不能串。
-    prefsScope: outboxOwner.accountKey || null,
-    active: contextSheetOpen && contextSheetView === 'collab',
-    setSheetOpen: setContextSheetOpen,
-    connectionEpoch,
-  });
-  const collabTarget = useMemo(() => ({
-    orcaRole: null,
-    workspaceKind: draft.workspaceKind,
-    workingDir: draft.workingDir || null,
-    remoteHostId: null,
-  }), [draft.workingDir, draft.workspaceKind]);
   // 远程 Agent / 供应商分享(与已建任务、桌面新建同一套):选中另一台电脑或分享来的模型 = Agent
   // 在那里运行。单独存,不进草稿:草稿的模型 / 来源一直按被控电脑的目录校准,创建时再整体覆盖。
   const [remoteAgentChoice, setRemoteAgentChoice] = useState<{
@@ -649,8 +633,34 @@ export default function NewRemoteSessionScreen() {
     && remoteAgentChoice.pick.agentKind === draft.agentKind
     ? remoteAgentChoice.pick
     : null;
-  // 协同首个 Worker 的模型从被控电脑的目录里选,与 Agent 在另一台电脑运行还对不上:两者先互斥。
-  const collabEligible = isOrcaCollabEligible(collabTarget) && remoteAgentPick === null;
+  // 被控电脑支持给协同 Worker 单独选 Agent 所在电脑(远程供应商)时，Worker 与任务一样可以选其他
+  // 电脑 / 分享的供应商，协同也不再与「任务的 Agent 在另一台电脑」互斥。
+  const workerAgentLocationSupported = !!selectedDeviceId
+    && !isSharedTaskPeer(selectedDeviceId)
+    && capabilities?.supportsOrcaWorkerAgentDevice === true;
+  const collabForm = useOrcaWorkerForm({
+    maker,
+    executionMakerForDevice,
+    executionDevicesEnabled: true,
+    // 按区域限定的账号键:Global 与中国大陆版同号不同人,记忆(含完全访问)不能串。
+    prefsScope: outboxOwner.accountKey || null,
+    active: contextSheetOpen && contextSheetView === 'collab',
+    setSheetOpen: setContextSheetOpen,
+    connectionEpoch,
+    // Worker 默认跟任务(Lead)的 Agent 所在电脑。
+    leadAgentDeviceId: remoteAgentPick?.deviceId ?? null,
+    agentLocationSelectable: workerAgentLocationSupported,
+  });
+  const collabTarget = useMemo(() => ({
+    orcaRole: null,
+    workspaceKind: draft.workspaceKind,
+    workingDir: draft.workingDir || null,
+    remoteHostId: null,
+  }), [draft.workingDir, draft.workspaceKind]);
+  // 旧被控电脑不支持给 Worker 选 Agent 位置：首个 Worker 只能从被控电脑的目录里选，与任务的
+  // Agent 在另一台电脑运行对不上，两者仍互斥。
+  const collabEligible = isOrcaCollabEligible(collabTarget)
+    && (remoteAgentPick === null || workerAgentLocationSupported);
   // 换设备 / 换工作区后,草稿里的协同设置属于旧目标:丢弃,避免在新目标上静默开启。
   // 按草稿武装时的目标比对(而不是「目标一变就清」):返回编辑恢复草稿时目标与草稿一起回填,
   // 不会被这里误清。
@@ -1117,6 +1127,17 @@ export default function NewRemoteSessionScreen() {
     controlledDeviceId: selectedDeviceId,
     keepDeviceIds: remoteAgentKeepDeviceIds,
     keepOnly: !modelSheetOpen,
+  });
+  // 协同首个 Worker 的模型选择器:与任务模型列表同一份远程供应商，只在 Worker 选择器打开时读。
+  const workerAgentKeepDeviceIds = useMemo(
+    () => [...new Set([remoteAgentPick?.deviceId, collabForm.form.agentDeviceId]
+      .filter((id): id is string => !!id))],
+    [remoteAgentPick?.deviceId, collabForm.form.agentDeviceId],
+  );
+  const workerAgentCatalogs = useRemoteAgentCatalogs({
+    enabled: remoteAgentSupported && collabForm.agentLocationSelectable && collabForm.modelPicker.open,
+    controlledDeviceId: selectedDeviceId,
+    keepDeviceIds: workerAgentKeepDeviceIds,
   });
   const remoteAgentCatalog = remoteAgentPick
     ? remoteAgentCatalogs.find((catalog) => catalog.deviceId === remoteAgentPick.deviceId) ?? null
@@ -6900,8 +6921,8 @@ export default function NewRemoteSessionScreen() {
           },
           onSelect: selectUnifiedModel,
           // 远程 Agent / 供应商分享:其他电脑开放了远程调用的供应商与别人分享给这台电脑的供应商接在
-          // 后面,每个供应商一段、标题带电脑名。协同草稿与它们互斥(见 collabEligible)。
-          ...(remoteAgentSupported && !collabDraft
+          // 后面,每个供应商一段、标题带电脑名。旧被控电脑上协同草稿与它们互斥(见 collabEligible)。
+          ...(remoteAgentSupported && (!collabDraft || workerAgentLocationSupported)
             ? { remote: { catalogs: remoteAgentCatalogs, selectedDeviceId: remoteAgentPick?.deviceId ?? null } }
             : {}),
         }}
@@ -6957,6 +6978,15 @@ export default function NewRemoteSessionScreen() {
               return result;
             },
             onSelect: collabForm.modelPicker.select,
+            // 远程供应商:与任务模型列表同一套，选中 = Worker 的 Agent 在那台运行。
+            ...(remoteAgentSupported && collabForm.agentLocationSelectable
+              ? {
+                  remote: {
+                    catalogs: workerAgentCatalogs,
+                    selectedDeviceId: collabForm.form.agentDeviceId ?? null,
+                  },
+                }
+              : {}),
           }}
           activeModelId={collabForm.form.model?.id ?? ''}
           activePermissionMode=""

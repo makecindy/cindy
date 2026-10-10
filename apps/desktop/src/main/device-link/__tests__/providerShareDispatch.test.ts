@@ -279,6 +279,33 @@ describe('provider group channel', () => {
       .resolves.toMatchObject({ ok: false, error: { code: 'CHANNEL_NOT_ALLOWED' } });
     expect(handle).not.toHaveBeenCalled();
   });
+
+  it('gives this computer’s running counts to same-account computers only', async () => {
+    const decorateProviderList = vi.fn(async (result: unknown) => {
+      const value = result as { providers: Array<Record<string, unknown>> };
+      return { ...value, providers: value.providers.map((p) => ({ ...p, runningTurns: 2 })) };
+    });
+    setProviderGroupRemoteHandler({ handle: vi.fn(), decorateProviderList, sharedGroupSize: () => null });
+    const { __testing: registry } = await import('../invoke-registry');
+    registry.reset();
+    registry.register('maker:provider:list', async () => ({
+      providers: [{ id: 'anthropic', name: 'Anthropic', remoteInvocationEnabled: true, runningTurns: 9 }],
+    }));
+    try {
+      const listed = await runInvoke('same-account-mac', { channel: 'maker:provider:list', args: [] }) as { ok: true; result: { providers: Array<Record<string, unknown>> } };
+      expect(listed.result.providers[0]).toMatchObject({ id: 'anthropic', runningTurns: 2 });
+
+      // 受邀者看不到分享者电脑上的总运行数(含分享者本人与其他受邀者的任务)。
+      state.access = ACCESS;
+      decorateProviderList.mockClear();
+      const guest = await runInvoke(GUEST, { channel: 'maker:provider:list', args: [] }) as { ok: true; result: { providers: Array<Record<string, unknown>> } };
+      expect(guest.result.providers[0]).toMatchObject({ id: 'anthropic' });
+      expect(guest.result.providers[0]).not.toHaveProperty('runningTurns');
+      expect(decorateProviderList).not.toHaveBeenCalled();
+    } finally {
+      registry.reset();
+    }
+  });
 });
 
 describe('provider share revoke', () => {

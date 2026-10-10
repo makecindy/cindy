@@ -196,10 +196,8 @@
   },
   "providerShare": {
     "entry": {
-      "manage": "共有を管理",
-      "manageWithPending_other": "共有を管理 · 未処理の申請 {{count}} 件",
-      "disabledInvocation": "共有するには、先に「リモート利用を許可」をオンにしてください",
-      "disabledRemoteControl": "共有するには、先に「リモート接続」でこのパソコンの操作を許可してください",
+      "label": "リモートと共有",
+      "pending_other": "未処理の共有申請 {{count}} 件",
       "remoteControlOff": "このパソコンはまだリモート操作を許可していないため、プロバイダーをリモートで利用したり共有したりできません。",
       "openRemoteControl": "「リモート接続」設定を開く",
       "descriptionOff": "オンにすると、あなたの他のパソコンと共有相手がこのプロバイダーのモデルを使えます。オフの間、既存の共有は一時的に使えなくなりますが、削除はされません。"
@@ -398,13 +396,6 @@
     }
   },
   "providerGroup": {
-    "row": {
-      "label": "プロバイダーグループ",
-      "description": "複数のパソコンのこのプロバイダーをまとめ、自動で割り当て、問題があれば別のパソコンに切り替えます",
-      "summary_other": "{{count}} 台のパソコン · {{strategy}}",
-      "setUp": "グループを設定",
-      "manage": "グループを管理"
-    },
     "page": {
       "title": "{{provider}} · リモートと共有",
       "shareTitle": "共有"
@@ -2888,6 +2879,7 @@
         "remoteAccess": {
           "label": "リモート利用を許可",
           "description": "オンにすると、あなたの他のパソコンと共有相手がこのプロバイダーのモデルを使えます。Agent はこのパソコン上で、このパソコンのサインインとクォータを使って実行されます。",
+          "descriptionGroup": "オンにすると、あなたの他のパソコンと共有相手がこのプロバイダーのモデルを使えます。Agent はプロバイダーグループが選んだパソコンで実行されます。",
           "ariaLabel": "他のパソコンと共有相手にこのプロバイダーの利用を許可",
           "writeFailed": "リモート利用の設定を保存できませんでした。もう一度お試しください。"
         },
@@ -10568,7 +10560,8 @@
       },
       "autoResumePending": {
         "label": "再接続中",
-        "labelWithProgress": "再接続中 {{attempt}}/{{total}}"
+        "labelWithProgress": "再接続中 {{attempt}}/{{total}}",
+        "groupSwitch": "別のパソコンに切り替え中"
       },
       "agentSwitch": {
         "label": "{{from}} から {{to}} に切り替えました",

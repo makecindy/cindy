@@ -6731,6 +6731,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
         executionDeviceId?: string;
         /** 运行设备上的工作目录；缺省由那台分配。 */
         workingDir?: string;
+        /** 首个 Worker 的 Agent 所在电脑(远程供应商)；null = 任务所在电脑，缺省 = 跟 Lead。 */
+        agentDeviceId?: string | null;
       },
       // main handler 实际返回 teamId(见 enableOrcaInternal);此前类型写成 workflowId 是漂移。
     ): Promise<{

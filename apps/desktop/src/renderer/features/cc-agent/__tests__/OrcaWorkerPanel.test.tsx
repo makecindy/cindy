@@ -20,6 +20,11 @@ const mocks = vi.hoisted(() => ({
   sessions: [] as Array<{ id: string; agentDeviceId?: string | null; orcaRole?: 'lead' }>,
   sessionsLoading: false,
   sidebarWindow: false,
+  workerAgentInput: null as Record<string, unknown> | null,
+  workerAgentDevices: {
+    leadAgentDeviceId: 'agent-pc' as string | null,
+    devices: [{ deviceId: 'agent-pc', name: 'Agent PC' }] as Array<{ deviceId: string; name: string }> | undefined,
+  },
 }));
 
 vi.mock('react-router-dom', async (importOriginal) => ({
@@ -60,6 +65,12 @@ vi.mock('../CCAgentSessionView', () => ({
   CCAgentSessionView: (props: Record<string, unknown>) => {
     mocks.sessionViewProps = props;
     return null;
+  },
+}));
+vi.mock('../hooks/useWorkerAgentDevices', () => ({
+  useWorkerAgentDevices: (input: Record<string, unknown>) => {
+    mocks.workerAgentInput = input;
+    return mocks.workerAgentDevices;
   },
 }));
 vi.mock('../CreateWorkerPopover', () => ({
@@ -275,6 +286,20 @@ describe('OrcaWorkerPanel worker on another computer', () => {
     expect(mocks.createProps.executionDevicesEnabled).toBe(false);
     rerender(<OrcaWorkerPanel leadSessionId="lead-1" viewVisible />);
     expect(mocks.createProps.executionDevicesEnabled).toBe(false);
+  });
+
+  it("hands the Lead's Agent location and the other computers to the Worker dialog", () => {
+    const { rerender } = render(
+      <OrcaWorkerPanel leadSessionId="lead-1" deviceId={null} agentDeviceId="agent-pc" viewVisible />,
+    );
+    expect(mocks.workerAgentInput).toMatchObject({ controlledDeviceId: null, leadAgentDeviceId: 'agent-pc' });
+    expect(mocks.createProps).toMatchObject({
+      leadAgentDeviceId: 'agent-pc',
+      remoteAgentDevices: [{ deviceId: 'agent-pc', name: 'Agent PC' }],
+    });
+    // Lead 的 Agent 位置还没解析时不按任何一台读候选。
+    rerender(<OrcaWorkerPanel leadSessionId="lead-1" deviceId="dev-1" viewVisible />);
+    expect(mocks.workerAgentInput).toMatchObject({ controlledDeviceId: undefined });
   });
 });
 

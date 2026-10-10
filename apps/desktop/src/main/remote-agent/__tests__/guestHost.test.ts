@@ -552,6 +552,25 @@ describe('guest provider access and usage', () => {
     expect(host.turnRunningControllers()).toEqual([]);
     host.dispose();
   });
+
+  it('lists the local provider of each run in a turn, whoever started it', async () => {
+    const busy = new Set<string>([hostSessionIdFor(GUEST, 'task-1'), hostSessionIdFor(OWNER, 'task-2')]);
+    const started: Started[] = [];
+    const host = makeHost(started, { isTurnRunning: (input) => busy.has(input.hostSessionId) });
+    await host.handle(GUEST, { op: 'open', runId: RUN_1, agentKind: 'claude-code', payload: { json: openPayload('task-1') } });
+    await host.handle(OWNER, {
+      op: 'open',
+      runId: RUN_2,
+      agentKind: 'claude-code',
+      payload: { json: openPayload('task-2', { options: { model: 'claude-opus', providerId: 'anthropic' } }) },
+    });
+    await vi.waitFor(() => expect(started).toHaveLength(2), { timeout: 10_000 });
+    // 组所在电脑据此显示这台在跑几个：受邀者与本账号其他电脑的任务都算，按本机实际用的供应商。
+    await vi.waitFor(() => expect(host.turnRunningProviders().sort()).toEqual(['anthropic', 'shared-provider']), { timeout: 10_000 });
+    busy.delete(hostSessionIdFor(GUEST, 'task-1'));
+    expect(host.turnRunningProviders()).toEqual(['anthropic']);
+    host.dispose();
+  });
 });
 
 describe('purgeController', () => {

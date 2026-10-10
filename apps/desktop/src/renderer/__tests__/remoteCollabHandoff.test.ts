@@ -58,6 +58,19 @@ describe('enableRemoteCollabForSession', () => {
     expect(enableOrca).not.toHaveBeenCalled();
   });
 
+  it('首个 Worker 带 Agent 位置时：按被控端一定注册的 Claude Code 复核，降级就失败不静默建错', async () => {
+    const withLocation = { ...params, options: { workerAgent: 'pi' as const, agentDeviceId: 'office' } };
+    getCapabilities.mockResolvedValue({ supportsOrcaWorkerPermissionMode: true });
+    await expect(enableRemoteCollabForSession(withLocation)).rejects.toThrow('DEVICE_LINK_CHANNEL_NOT_ALLOWED');
+    expect(getCapabilities).toHaveBeenCalledWith('dev-1', 'claude-code');
+    expect(enableOrca).not.toHaveBeenCalled();
+
+    getCapabilities.mockResolvedValue({ supportsOrcaWorkerPermissionMode: true, supportsOrcaWorkerAgentDevice: true });
+    enableOrca.mockResolvedValue({ workerSessionId: 'worker-1' });
+    await expect(enableRemoteCollabForSession(withLocation)).resolves.toEqual({ focusWorkerSessionId: 'worker-1' });
+    expect(enableOrca).toHaveBeenCalledWith('lead-1', expect.objectContaining({ agentDeviceId: 'office' }));
+  });
+
   it('成功路径:回传 worker session,并 fire-and-forget 刷镜像', async () => {
     enableOrca.mockResolvedValue({
       workerSessionId: 'worker-1',

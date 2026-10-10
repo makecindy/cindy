@@ -111,8 +111,9 @@ export function createProviderGroupRouter(deps: ProviderGroupRouterDeps): Provid
   }
 
   /**
-   * 分配与设置页共用的运行数。分享来的电脑报来本账号在那台实际跑着的数(含不经组直接用的)，经组分过去的
-   * 都在其中，取两者较大的：刚选中、还没开始跑的任务仍按经组的计数占着。
+   * 分配与设置页共用的运行数。那台实际跑着的数(本机现算、同账号电脑报来那台的总数、分享来的电脑报来本账号
+   * 在那里的数，都含不经组直接用的)里已包含经组分过去的，取两者较大的：刚选中、还没开始跑的任务仍按经组的
+   * 计数占着；那台较旧报不出时照旧只算经组的。
    */
   function memberRunning(providerId: string, resolved: ResolvedProviderGroupMember): number {
     return Math.max(running(providerId, resolved.member.key), resolved.reportedRunning ?? 0);

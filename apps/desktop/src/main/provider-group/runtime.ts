@@ -33,6 +33,7 @@ interface OwnerRuntime {
 
 let current: OwnerRuntime | null = null;
 let isTurnRunning: (sessionId: string) => boolean = () => false;
+let localLoad: (() => Promise<ReadonlyMap<string, number>>) | null = null;
 
 function runtimeForActiveOwner(): OwnerRuntime {
   const owner = activeOwnerScopeKey();
@@ -44,6 +45,7 @@ function runtimeForActiveOwner(): OwnerRuntime {
     readDeviceProviders: (agentDeviceId) => readDeviceProviderViews(remoteBackgroundInvoke, agentDeviceId),
     listReceivedShares: () => getReceivedShares(),
     isMobilePlatform: (platform) => isMobilePlatform(platform),
+    localRunning: async (providerId) => (await readProviderRunningTurnsByProvider())?.get(providerId) ?? null,
     now: () => Date.now(),
   });
   const externalLoad = createProviderGroupExternalLoad({ now: () => Date.now() });
@@ -142,4 +144,19 @@ export function getProviderGroupRemoteGroups(): ProviderGroupRemoteGroups {
 /** register 装配会话表后注入：分配器据此统计「正在运行」。 */
 export function setProviderGroupTurnProbe(probe: (sessionId: string) => boolean): void {
   isTurnRunning = probe;
+}
+
+/** register 装配会话表后注入：这台电脑上每个供应商正在运行一轮的任务数(localLoad.ts)。 */
+export function setProviderGroupLocalLoad(probe: (() => Promise<ReadonlyMap<string, number>>) | null): void {
+  localLoad = probe;
+}
+
+/** 这台电脑上每个供应商正在运行一轮的任务数；还没装配或读不到时返回 null(调用方照旧只算经组的)。 */
+export async function readProviderRunningTurnsByProvider(): Promise<ReadonlyMap<string, number> | null> {
+  if (!localLoad) return null;
+  try {
+    return await localLoad();
+  } catch {
+    return null;
+  }
 }

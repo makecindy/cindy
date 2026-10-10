@@ -13,6 +13,8 @@ export interface AutoResumeCardInfo {
   agentSwitch?: AutoResumeAgentSwitch;
   /** 分享者的供应商组替分享的人换了一台电脑后继续(不知道是哪台，不显示电脑名称)。 */
   groupSwitch?: AutoResumeGroupSwitch;
+  /** 进行中：供应商组正在为这次失败换电脑(错误先不呈现)。 */
+  groupSwitchPending?: AutoResumeGroupSwitch;
   error?: string;
   attempt?: number;
   maxAttempts?: number;
@@ -39,6 +41,9 @@ export function readAutoResumeInfo(data?: Record<string, unknown>): AutoResumeCa
     ...(data?.reason === USAGE_LIMIT_RESET_AUTO_RESUME_REASON ? { usageLimitReset: true } : {}),
     ...(readAgentSwitch(data?.agentSwitch) ? { agentSwitch: readAgentSwitch(data?.agentSwitch)! } : {}),
     ...(readGroupSwitch(data?.groupSwitch) ? { groupSwitch: readGroupSwitch(data?.groupSwitch)! } : {}),
+    ...(readGroupSwitch(data?.groupSwitchPending)
+      ? { groupSwitchPending: readGroupSwitch(data?.groupSwitchPending)! }
+      : {}),
     ...(typeof data?.error === 'string' && data.error.length > 0 ? { error: data.error } : {}),
     ...(num(data?.attempt) !== undefined ? { attempt: num(data?.attempt) } : {}),
     ...(num(data?.maxAttempts) !== undefined ? { maxAttempts: num(data?.maxAttempts) } : {}),

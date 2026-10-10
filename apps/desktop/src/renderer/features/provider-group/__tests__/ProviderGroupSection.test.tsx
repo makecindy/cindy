@@ -1,14 +1,16 @@
 // @vitest-environment jsdom
 /**
- * 「远程与分享」页的供应商组一块：建组(本机默认在组里)、组内电脑状态、参与分配开关、组策略与自动换电脑。
+ * 「远程与分享」页的供应商组一块：建组(本机默认在组里)、组内电脑状态、参与分配开关、组策略与自动换电脑；
+ * 再次打开时先显示已知的组，不从「读取中」重来。
  */
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, renderHook, screen, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ProviderGroupConfig, ProviderGroupView } from '../../../../shared/providerGroup';
-import { ProviderGroupRow } from '../ProviderGroupRow';
 import { ProviderGroupSection } from '../ProviderGroupSection';
+import { __testing as localGroupsTesting, useLocalProviderGroupsState } from '../useLocalProviderGroups';
+import { __testing as groupViewTesting } from '../useProviderGroup';
 
 vi.mock('react-i18next', () => ({
   initReactI18next: { type: '3rdParty', init: () => undefined },
@@ -89,9 +91,12 @@ function viewOf(config: ProviderGroupConfig | null): ProviderGroupView {
 beforeEach(() => {
   stored = null;
   running = null;
+  localGroupsTesting.reset();
+  groupViewTesting.reset();
   confirmSpy.mockClear();
   command.mockReset();
   command.mockImplementation(async (cmd: { action: string; config?: ProviderGroupConfig }) => {
+    if (cmd.action === 'list') return stored ? { anthropic: stored } : {};
     if (cmd.action === 'get') return viewOf(stored);
     if (cmd.action === 'candidates') {
       return [
@@ -207,16 +212,48 @@ describe('ProviderGroupSection', () => {
   });
 });
 
-describe('ProviderGroupRow', () => {
-  it('summarizes the group or offers to set one up', async () => {
-    const onOpen = vi.fn();
-    const { unmount } = render(<ProviderGroupRow providerId="anthropic" onOpen={onOpen} />);
-    expect(await screen.findByRole('button', { name: 'providerGroup.row.setUp' })).toBeTruthy();
-    unmount();
-    stored = { strategy: 'order', autoSwitch: true, members: [LOCAL, MINI] };
-    render(<ProviderGroupRow providerId="anthropic" onOpen={onOpen} />);
-    fireEvent.click(await screen.findByRole('button', { name: 'providerGroup.row.manage' }));
-    expect(onOpen).toHaveBeenCalled();
-    expect(screen.getByTestId('provider-group-summary').textContent).toContain('"count":2');
+describe('ProviderGroupSection reopened', () => {
+  /** 让下一次「读组」(要逐台问状态，可能很慢)一直不回来。 */
+  function holdNextGet() {
+    command.mockImplementationOnce(() => new Promise(() => undefined));
+  }
+
+  it('shows the group it read last time right away while refreshing', async () => {
+    stored = { strategy: 'least', autoSwitch: true, members: [LOCAL, MINI] };
+    const first = render(<ProviderGroupSection providerId="anthropic" providerName="Anthropic" />);
+    expect(await screen.findAllByTestId('provider-group-member')).toHaveLength(2);
+    first.unmount();
+
+    holdNextGet();
+    render(<ProviderGroupSection providerId="anthropic" providerName="Anthropic" />);
+    const rows = screen.getAllByTestId('provider-group-member');
+    expect(rows).toHaveLength(2);
+    expect(rows[0].getAttribute('data-member-state')).toBe('available');
+    expect(screen.queryByText('providerGroup.section.loading')).toBeNull();
+  });
+
+  it('lays out the computers from the local group settings before their live state arrives', async () => {
+    stored = { strategy: 'least', autoSwitch: true, members: [LOCAL, MINI] };
+    const local = renderHook(() => useLocalProviderGroupsState());
+    await waitFor(() => expect(local.result.current.ready).toBe(true));
+
+    holdNextGet();
+    render(<ProviderGroupSection providerId="anthropic" providerName="Anthropic" />);
+    const rows = screen.getAllByTestId('provider-group-member');
+    expect(rows).toHaveLength(2);
+    // 状态还没读回来：先写「检查中」，不是「读取中」或「未设置」。
+    expect(rows[1].getAttribute('data-member-state')).toBe('loading');
+    expect(within(rows[1]).getByText('providerGroup.member.status.checking')).toBeTruthy();
+    expect(screen.queryByText(/providerGroup\.section\.empty/)).toBeNull();
+  });
+
+  it('shows the empty state at once when the local settings say there is no group', async () => {
+    const local = renderHook(() => useLocalProviderGroupsState());
+    await waitFor(() => expect(local.result.current.ready).toBe(true));
+
+    holdNextGet();
+    render(<ProviderGroupSection providerId="anthropic" providerName="Anthropic" />);
+    expect(screen.getByText(/providerGroup\.section\.empty/)).toBeTruthy();
+    await act(async () => undefined);
   });
 });

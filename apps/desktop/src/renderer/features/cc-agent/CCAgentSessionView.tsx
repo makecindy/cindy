@@ -315,7 +315,7 @@ import {
   getDroppedFileItems,
   type DroppedFileItems,
 } from '@/lib/fileDrop';
-import { getCollaborationStartErrorMessage } from './collaborationErrors';
+import { getCollaborationStartErrorMessage, workerAgentDeviceErrorMessage } from './collaborationErrors';
 import { useCollabProjectPolicy } from './hooks/useCollabProjectPolicy';
 import { resolveCollabEntryPolicy } from './collabEntryPolicy';
 import { consumePendingRemoteCollab, enableRemoteCollabForSession } from './remoteCollabHandoff';
@@ -2272,7 +2272,9 @@ export function CCAgentSessionView({
     [messages, agentStatus.isRunning, isStreaming, continuationTurnClientId, continuationInFlightProjectionCapability],
   );
   const reconnectStatus = activeReconnect
-    ? activeReconnect.attempt !== undefined && activeReconnect.maxAttempts !== undefined
+    ? activeReconnect.groupSwitchPending
+      ? t('chat.systemCard.autoResumePending.groupSwitch')
+      : activeReconnect.attempt !== undefined && activeReconnect.maxAttempts !== undefined
       ? t('chat.systemCard.autoResumePending.labelWithProgress', {
           attempt: activeReconnect.attempt,
           total: activeReconnect.maxAttempts,
@@ -3078,6 +3080,8 @@ export function CCAgentSessionView({
                 ...(form.workingDir ? { workingDir: form.workingDir } : {}),
               }
             : {}),
+          // 首个 Worker 的 Agent 所在电脑(远程供应商)；面板只在任务所在电脑支持时才带。
+          ...(form.agentDeviceId !== undefined ? { agentDeviceId: form.agentDeviceId } : {}),
         };
         const orcaDeviceId = getStickySessionDeviceId(collabSessionId);
         if (orcaDeviceId) {
@@ -3107,9 +3111,10 @@ export function CCAgentSessionView({
         setCollabWorker(previousWorker);
         log.error('enableOrca failed', err);
         toast.error(
-          getCollaborationStartErrorMessage(err, t, {
-            remoteDevice: Boolean(remoteDeviceId),
-          }),
+          (form.agentDeviceId && workerAgentDeviceErrorMessage(err, t))
+            || getCollaborationStartErrorMessage(err, t, {
+              remoteDevice: Boolean(remoteDeviceId),
+            }),
         );
       } finally {
         setEnableBusy(false);
@@ -5946,6 +5951,10 @@ export function CCAgentSessionView({
         executionDevicesEnabled={
           !remoteDeviceId && !session?.remoteHostId && !session?.agentDeviceId
         }
+        // Worker 的 Agent 默认跟 Lead 的 Agent 所在电脑(远程供应商)，模型目录也先按那台读；
+        // 面板里列出与输入框同一份其他电脑 / 分享的供应商，可以换到本机或别处。
+        leadAgentDeviceId={agentDeviceId ?? controlledAgentDeviceId ?? null}
+        remoteAgentDevices={remoteAgentDevices}
       />
 
       {/* 来自 Automations 的入口浮动返回按钮：固定在聊天区左上角，

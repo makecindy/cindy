@@ -638,6 +638,8 @@ interface OrcaWorkerRecord {
     permissionMode: string;
     fastMode: boolean;
     sdkSessionId?: string;
+    /** Worker 的 Agent 在另一台电脑或分享上运行(远程供应商)；null = 任务所在电脑。旧端缺省。 */
+    agentDeviceId?: string | null;
   };
 }
 
@@ -5991,6 +5993,8 @@ interface ElectronAPI {
         executionDeviceId?: string;
         /** 运行设备上的工作目录；缺省由那台分配。 */
         workingDir?: string;
+        /** 首个 Worker 的 Agent 所在电脑(远程供应商)；null = 任务所在电脑，缺省 = 跟 Lead。 */
+        agentDeviceId?: string | null;
       },
     ) => Promise<{
       teamId: string;

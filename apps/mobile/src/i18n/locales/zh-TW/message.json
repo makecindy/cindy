@@ -260,6 +260,7 @@
       "usageReset": "用量已恢復，已自動繼續",
       "pending": "重新連線中…",
       "pendingWithProgress": "重新連線中 {{attempt}}/{{total}}…",
+      "groupSwitchPending": "正在換一台電腦繼續…",
       "details": "本次重試 {{attempt}}/{{total}} · 本任務累計重連 {{count}} 次",
       "detail": {
         "reason": "中斷原因",

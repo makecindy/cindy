@@ -2142,6 +2142,8 @@ export default function SessionScreen() {
     setSheetView: setContextSheetView,
     setSheetOpen: setContextSheetOpen,
     openSession: openCollabSession,
+    // 远程供应商：被控电脑声明支持时，Worker 可以像任务一样选其他电脑 / 分享的供应商。
+    workerAgentLocationSelectable: capabilities?.supportsOrcaWorkerAgentDevice === true,
   });
   const composerDeviceProviders = useDeviceProviders(
     deviceId || undefined,
@@ -2630,6 +2632,21 @@ export default function SessionScreen() {
     controlledDeviceId: deviceId,
     keepDeviceIds: remoteAgentKeepDeviceIds,
     keepOnly: !(agentLocationMovable && modelSheetOpen),
+  });
+  // 协同 Worker 的模型选择器:与任务模型列表同一份远程供应商(其他电脑与分享)，Worker 的 Agent
+  // 现在选的位置即使掉线也保留。只在 Worker 选择器打开时读。
+  const workerAgentKeepDeviceIds = useMemo(
+    () => [...new Set([currentAgentDeviceId, collab.workerForm.form.agentDeviceId]
+      .filter((id): id is string => !!id))],
+    [currentAgentDeviceId, collab.workerForm.form.agentDeviceId],
+  );
+  const workerAgentCatalogs = useRemoteAgentCatalogs({
+    enabled: !!deviceId
+      && !isSharedTaskPeer(deviceId)
+      && collab.workerForm.agentLocationSelectable
+      && collab.workerForm.modelPicker.open,
+    controlledDeviceId: deviceId,
+    keepDeviceIds: workerAgentKeepDeviceIds,
   });
   // Agent 在另一台电脑时,模型 / 来源都属于那台的目录:展示与校验按那份,读不到时按加载中处理。
   const agentCatalogFor = useCallback((agentDeviceId: string | null) => {
@@ -9707,6 +9724,16 @@ export default function SessionScreen() {
                 return result;
               },
               onSelect: collab.workerForm.modelPicker.select,
+              // 远程供应商:其他电脑上开放了远程调用的供应商与分享接在后面(与任务模型列表同一套)，
+              // 选中 = Worker 的 Agent 在那台运行。
+              ...(collab.workerForm.agentLocationSelectable
+                ? {
+                    remote: {
+                      catalogs: workerAgentCatalogs,
+                      selectedDeviceId: collab.workerForm.form.agentDeviceId ?? null,
+                    },
+                  }
+                : {}),
             }}
             activeModelId={collab.workerForm.form.model?.id ?? ''}
             activePermissionMode=""

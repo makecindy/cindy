@@ -7,11 +7,12 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import type { ProviderGroupConfig, ProviderGroupMember, ProviderGroupView } from '../../../shared/providerGroup';
-import type { ProviderGroupBinding } from '../bindings';
+import type { ProviderGroupBinding, ProviderGroupRef } from '../bindings';
 import type { ProviderGroupDirectory } from '../directory';
 import { createProviderGroupRouter } from '../router';
 import {
   createProviderGroupService,
+  PROVIDER_GROUP_ADOPT_TIMEOUT_MS,
   PROVIDER_GROUP_BEFORE_SEND_TIMEOUT_MS,
   PROVIDER_GROUP_UNAVAILABLE_ERROR,
   type ProviderGroupRemoteGroups,
@@ -44,6 +45,8 @@ function harness(options: {
     : { strategy: 'least', autoSwitch: true, members: [OWNER_LOCAL, SELF, STUDIO, SHARED] };
   const picks = [...(options.picks ?? [STUDIO])];
   const bindings = new Map<string, ProviderGroupBinding>();
+  /** 因组内电脑被移出或组被删除而解除过的任务 → 那个组。 */
+  const released = new Map<string, ProviderGroupRef>();
   const directory: ProviderGroupDirectory = {
     resolveMembers: async () => [],
     listCandidates: async () => [],
@@ -105,6 +108,13 @@ function harness(options: {
       if (binding) bindings.set(id, { providerId: binding.providerId, memberKey: binding.memberKey, ...(binding.groupDeviceId ? { groupDeviceId: binding.groupDeviceId } : {}), at: 1 });
       else bindings.delete(id);
     }),
+    isReleased: (id: string, group: ProviderGroupRef) => {
+      const entry = released.get(id);
+      return entry?.providerId === group.providerId && (entry.groupDeviceId ?? null) === (group.groupDeviceId ?? null);
+    },
+    markReleased: vi.fn(async (id: string, group: ProviderGroupRef) => {
+      released.set(id, group);
+    }),
     readSessionRow: vi.fn(async () => row),
     resolveImplicitProvider: vi.fn(async () => 'anthropic'),
     persistRoute: vi.fn(async (_id: string, route: { agentDeviceId: string | null; providerId: string | null }) => {
@@ -128,7 +138,7 @@ function harness(options: {
     now: () => 1_000,
     log: { info: vi.fn(), warn: vi.fn() },
   } satisfies ProviderGroupServiceDeps;
-  return { service: createProviderGroupService(deps), deps, remote, row, bindings };
+  return { service: createProviderGroupService(deps), deps, remote, row, bindings, released };
 }
 
 async function flush() {
@@ -178,11 +188,58 @@ describe('assigning through a group on another computer', () => {
     await expect(h.service.assignBeforeStart(START)).rejects.toThrow(PROVIDER_GROUP_UNAVAILABLE_ERROR);
   });
 
-  it('never moves a task that already ran on the group computer, and leaves shares alone', async () => {
-    for (const row of [{ sdkSessionId: 'native-1' }, { agentDeviceId: 'share:s9' }, { providerId: null }]) {
+  it('takes in a task that already ran on the group computer without moving it, and leaves shares alone', async () => {
+    const ran = harness({ row: { sdkSessionId: 'native-1' } });
+    expect(await ran.service.assignBeforeStart(START)).toBeNull();
+    expect(ran.remote.pick).not.toHaveBeenCalled();
+    expect(ran.deps.persistRoute).not.toHaveBeenCalled();
+    expect(ran.bindings.get('s1')).toMatchObject({ providerId: 'anthropic', memberKey: OWNER_LOCAL.key, groupDeviceId: OWNER });
+
+    // 运行过之后才换到组那一项的老任务(换过去后还没有原生会话，但已经有过回复)也一样。
+    const switchedIn = harness();
+    switchedIn.deps.hasAssistantHistory.mockResolvedValue(true);
+    expect(await switchedIn.service.assignBeforeStart(START)).toBeNull();
+    expect(switchedIn.remote.pick).not.toHaveBeenCalled();
+    expect(switchedIn.bindings.get('s1')).toMatchObject({ memberKey: OWNER_LOCAL.key, groupDeviceId: OWNER });
+
+    for (const row of [{ agentDeviceId: 'share:s9' }, { providerId: null }]) {
       const h = harness({ row });
       expect(await h.service.assignBeforeStart(START)).toBeNull();
       expect(h.remote.pick).not.toHaveBeenCalled();
+      expect(h.bindings.size).toBe(0);
+    }
+  });
+
+  it('leaves an old task alone when the computer has no group, cannot answer, or the task was released from it', async () => {
+    for (const options of [{ config: null }, { config: undefined }]) {
+      const h = harness({ ...options, row: { sdkSessionId: 'native-1' } });
+      expect(await h.service.assignBeforeStart(START)).toBeNull();
+      expect(h.bindings.size).toBe(0);
+    }
+    const released = harness({ row: { sdkSessionId: 'native-1' } });
+    released.released.set('s1', { providerId: 'anthropic', groupDeviceId: OWNER });
+    expect(await released.service.assignBeforeStart(START)).toBeNull();
+    expect(released.bindings.size).toBe(0);
+    expect(released.remote.readGroup).not.toHaveBeenCalled();
+    // 解除的是别的组：不影响这个组。
+    const otherGroup = harness({ row: { sdkSessionId: 'native-1' } });
+    otherGroup.released.set('s1', { providerId: 'anthropic', groupDeviceId: null });
+    await otherGroup.service.assignBeforeStart(START);
+    expect(otherGroup.bindings.get('s1')).toMatchObject({ groupDeviceId: OWNER });
+  });
+
+  it('starts as usual without waiting when the group computer does not answer in time for an old task', async () => {
+    vi.useFakeTimers();
+    try {
+      const h = harness({ row: { sdkSessionId: 'native-1' } });
+      h.remote.readGroup.mockImplementation(() => new Promise(() => undefined));
+      const done = vi.fn();
+      void h.service.assignBeforeStart(START).then(done);
+      await vi.advanceTimersByTimeAsync(PROVIDER_GROUP_ADOPT_TIMEOUT_MS);
+      expect(done).toHaveBeenCalledWith(null);
+      expect(h.bindings.size).toBe(0);
+    } finally {
+      vi.useRealTimers();
     }
   });
 
@@ -264,6 +321,15 @@ describe('switching computers within a group on another computer', () => {
     expect(failing.bindings.has('s1')).toBe(false);
     expect(failing.deps.switchAgentLocation).not.toHaveBeenCalled();
     expect(failing.deps.fallback).toHaveBeenCalled();
+    expect(failing.released.get('s1')).toEqual({ providerId: 'anthropic', groupDeviceId: OWNER });
+    // 重建同一个组后，即使任务挪到了组那一项，也不再自动纳入(§9.4)。
+    failing.remote.readGroup.mockResolvedValue({ strategy: 'least', autoSwitch: true, members: [OWNER_LOCAL, STUDIO] });
+    Object.assign(failing.row, { agentDeviceId: OWNER, providerId: 'anthropic' });
+    failing.service.onTurnError('s1', { sdkError: 'rate_limit' }, 4);
+    await flush();
+    expect(failing.bindings.has('s1')).toBe(false);
+    expect(failing.deps.switchAgentLocation).not.toHaveBeenCalled();
+    expect(failing.deps.fallback).toHaveBeenCalledTimes(2);
 
     const sending = bound({ config: null });
     await sending.service.beforeSend('s1');
@@ -294,6 +360,18 @@ describe('switching computers within a group on another computer', () => {
     expect(h.bindings.has('s1')).toBe(false);
     expect(h.deps.switchAgentLocation).not.toHaveBeenCalled();
     expect(h.deps.fallback).toHaveBeenCalled();
+    // 挪到组外不算解除：挪回组那一项时照常纳入。
+    expect(h.released.has('s1')).toBe(false);
+  });
+
+  it('does not take a task back once its computer was removed from the group', async () => {
+    const h = bound({ config: { strategy: 'least', autoSwitch: true, members: [OWNER_LOCAL, SELF] } });
+    h.service.onTurnError('s1', { sdkError: 'rate_limit' }, 3);
+    await flush();
+    expect(h.bindings.has('s1')).toBe(false);
+    expect(h.released.get('s1')).toEqual({ providerId: 'anthropic', groupDeviceId: OWNER });
+    expect(h.deps.switchAgentLocation).not.toHaveBeenCalled();
+    expect(h.deps.fallback).toHaveBeenCalled();
   });
 
   it('moves the task before sending when the group computer says its computer is offline', async () => {
@@ -307,5 +385,48 @@ describe('switching computers within a group on another computer', () => {
     const healthy = bound();
     await healthy.service.beforeSend('s1');
     expect(healthy.deps.switchAgentLocation).not.toHaveBeenCalled();
+  });
+});
+
+describe('old tasks already running on the group computer', () => {
+  it('takes the task in when it hits the usage limit there, then moves it and continues', async () => {
+    const h = harness({ row: { sdkSessionId: 'native-1' }, picks: [STUDIO] });
+    h.service.onTurnError('s1', { sdkError: 'rate_limit' }, 3);
+    await flush();
+    expect(h.remote.cool).toHaveBeenCalledWith(OWNER, { providerId: 'anthropic', memberKey: OWNER_LOCAL.key, cause: 'usage-limit', resetAt: 5_000 });
+    expect(h.deps.switchAgentLocation).toHaveBeenCalledWith(
+      's1',
+      expect.objectContaining({ agentDeviceId: 'studio', providerId: STUDIO.providerId }),
+      expect.anything(),
+    );
+    expect(h.deps.continueSession).toHaveBeenCalledWith('s1', 7, expect.objectContaining({
+      agentSwitch: { from: 'Mac Mini', to: 'Studio', cause: 'usage-limit' },
+    }));
+    expect(h.bindings.get('s1')).toMatchObject({ memberKey: STUDIO.key, groupDeviceId: OWNER });
+    expect(h.deps.fallback).not.toHaveBeenCalled();
+  });
+
+  it('hands the error back when the task is not on the group, was released, or is not eligible', async () => {
+    const noGroup = harness({ config: null, row: { sdkSessionId: 'native-1' } });
+    const released = harness({ row: { sdkSessionId: 'native-1' } });
+    released.released.set('s1', { providerId: 'anthropic', groupDeviceId: OWNER });
+    const ineligible = harness({ row: { sdkSessionId: 'native-1' } });
+    ineligible.deps.isFailoverEligible.mockResolvedValue(false);
+    for (const h of [noGroup, released, ineligible]) {
+      h.service.onTurnError('s1', { sdkError: 'rate_limit' }, 3);
+      await flush();
+      expect(h.bindings.size).toBe(0);
+      expect(h.deps.switchAgentLocation).not.toHaveBeenCalled();
+      expect(h.deps.fallback).toHaveBeenCalledWith('s1', { sdkError: 'rate_limit' }, 3);
+    }
+  });
+
+  it('does not take the task in for failures any computer would hit', async () => {
+    const h = harness({ row: { sdkSessionId: 'native-1' } });
+    h.service.onTurnError('s1', { message: 'prompt is too long', sdkError: 'invalid_request' }, 3);
+    await flush();
+    expect(h.remote.readGroup).not.toHaveBeenCalled();
+    expect(h.bindings.size).toBe(0);
+    expect(h.deps.fallback).toHaveBeenCalledTimes(1);
   });
 });

@@ -34,6 +34,23 @@ describe('autoResumePresentation', () => {
     expect(isMobileAutoResumeRowInFlight({ ...args, projectionCapability: 'unknown' })).toBe(false);
   });
 
+  it('shows a provider group switch as live without the held error or attempt counts', () => {
+    const presentation = getMobileAutoResumePresentation({
+      error: "You've hit your session limit",
+      attempt: 0,
+      maxAttempts: 0,
+      sessionTotal: 0,
+      groupSwitchPending: { cause: 'usage-limit' },
+      live: true,
+    });
+    expect(presentation.state).toBe('live');
+    expect(presentation.info.groupSwitchPending).toEqual({ cause: 'usage-limit' });
+    expect(presentation.info.error).toBeUndefined();
+    expect(presentation.summary).toBeUndefined();
+    expect(presentation.hasProgress).toBe(false);
+    expect(presentation.canExpand).toBe(false);
+  });
+
   it('lets terminal outcomes win over a stale in-flight signal', () => {
     expect(getMobileAutoResumePresentation({ ...info, outcome: 'succeeded' }, true).state).toBe('succeeded');
     expect(getMobileAutoResumePresentation({ ...info, outcome: 'failed' }, true).state).toBe('failed');

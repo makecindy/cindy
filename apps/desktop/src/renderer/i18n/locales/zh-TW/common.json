@@ -196,10 +196,8 @@
   },
   "providerShare": {
     "entry": {
-      "manage": "管理分享",
-      "manageWithPending_other": "管理分享 · {{count}} 個待處理申請",
-      "disabledInvocation": "先開啟「允許遠端呼叫」才能分享",
-      "disabledRemoteControl": "先在「遠端連線」裡允許同帳號裝置控制本機才能分享",
+      "label": "遠端與分享",
+      "pending_other": "{{count}} 個分享申請待處理",
       "remoteControlOff": "這臺電腦還沒有允許同帳號裝置遠端控制，供應商不能被遠端呼叫或分享。",
       "openRemoteControl": "前往「遠端連線」設定",
       "descriptionOff": "開啟後，你的其他電腦和你分享的人可以用這個供應商的模型。關閉期間，已有的分享暫時無法使用，不會被刪除。"
@@ -398,13 +396,6 @@
     }
   },
   "providerGroup": {
-    "row": {
-      "label": "供應商組",
-      "description": "把多臺電腦上的這個供應商合成一組，自動分配，出問題自動換一臺",
-      "summary_other": "{{count}} 臺電腦 · {{strategy}}",
-      "setUp": "設定供應商組",
-      "manage": "管理供應商組"
-    },
     "page": {
       "title": "{{provider}} · 遠端與分享",
       "shareTitle": "分享"
@@ -2888,6 +2879,7 @@
         "remoteAccess": {
           "label": "允許遠端呼叫",
           "description": "開啟後，你的其他電腦和你分享的人可以用這個供應商的模型，Agent 在這臺電腦上執行，使用這臺電腦的登入和配額。",
+          "descriptionGroup": "開啟後，你的其他電腦和你分享的人可以用這個供應商的模型，由供應商組選一台電腦執行 Agent。",
           "ariaLabel": "允許你的其他電腦和你分享的人呼叫此供應商",
           "writeFailed": "遠端呼叫設定未能儲存，請重試"
         },
@@ -10567,7 +10559,8 @@
       },
       "autoResumePending": {
         "label": "重新連線中",
-        "labelWithProgress": "重新連線中 {{attempt}}/{{total}}"
+        "labelWithProgress": "重新連線中 {{attempt}}/{{total}}",
+        "groupSwitch": "正在換一台電腦繼續"
       },
       "agentSwitch": {
         "label": "已從 {{from}} 切換到 {{to}}",

@@ -1001,6 +1001,7 @@ function unsupportedChatBridgeImageError(feature = "input content part 'input_im
 
 function createHarness(opts?: {
   getRecoveryContextSnapshot?: (sessionId: string, userClientId: string) => Promise<RecoveryContextSnapshot>;
+  providerGroupSwitchCandidate?: AgentInputCoordinatorDeps['providerGroupSwitchCandidate'];
 }) {
   let running = false;
   let liveRunningOverride: boolean | null | 'unknown' = null;
@@ -1199,6 +1200,9 @@ function createHarness(opts?: {
     isResumableTurnErrorCandidate,
     onResumableTurnErrorDiscarded,
     onUsageLimitedTurnError,
+    ...(opts?.providerGroupSwitchCandidate
+      ? { providerGroupSwitchCandidate: opts.providerGroupSwitchCandidate }
+      : {}),
     noteSessionClearBoundary,
     resolveSessionReferences,
     refreshAgentReferencesBeforeDispatch,
@@ -13961,5 +13965,109 @@ describe('usage-limit wait (ordinary tasks)', () => {
       resumeAt: 9_000_000,
     });
     expect(h.coordinator.cancelUsageLimitWait(sid, candidate).usageLimitWait).toBeNull();
+  });
+});
+
+describe('provider group computer switch hold', () => {
+  const LIMIT_SIGNALS = { sdkError: 'rate_limit', usageResetAt: 5_000_000 };
+  const MESSAGE = "You've hit your session limit";
+  const INFO = {
+    reason: USAGE_LIMIT_RESET_AUTO_RESUME_REASON,
+    attempt: 1,
+    maxAttempts: 1,
+    sessionTotal: 0,
+  };
+
+  async function failWhileSwitching(sid: string, cause: 'usage-limit' | null = 'usage-limit') {
+    const candidate = vi.fn<NonNullable<AgentInputCoordinatorDeps['providerGroupSwitchCandidate']>>(
+      () => cause,
+    );
+    const h = createHarness({ providerGroupSwitchCandidate: candidate });
+    h.setHasAssistantProgressAfter(async () => true);
+    h.coordinator.enqueue(sid, makeItem('q-first', 'original long task'));
+    await flush();
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(sid, 'error', MESSAGE, LIMIT_SIGNALS);
+    await flush();
+    const token = h.onUsageLimitedTurnError.mock.calls.at(-1)?.[3] as number;
+    return { h, candidate, token };
+  }
+
+  it('shows "switching computer" instead of the error while the group tries the next computer', async () => {
+    const sid = 'group-hold';
+    const { h, candidate } = await failWhileSwitching(sid);
+    expect(candidate).toHaveBeenCalledWith(
+      sid,
+      expect.objectContaining({ message: MESSAGE, ...LIMIT_SIGNALS }),
+      expect.objectContaining({ clientId: 'q-first' }),
+    );
+    // 登记先于第一次投影：一帧红横幅都不出。
+    expect(h.projections.every((projection) => projection.error === null)).toBe(true);
+    const projection = latestProjection(h.projections);
+    expect(projection.autoResumePending).toMatchObject({
+      error: MESSAGE,
+      groupSwitchPending: { cause: 'usage-limit' },
+    });
+    expect(projection.usageLimitWait).toBeNull();
+    // 重试入口与限额候选仍绑定这次错误，换电脑的交接照常拿得到句柄。
+    expect(projection.recovery?.kind).toBe('active-turn');
+    expect(h.onUsageLimitedTurnError).toHaveBeenCalledTimes(1);
+    expect(h.coordinator.getProviderGroupSwitchHoldId(sid)).toEqual(expect.any(Number));
+  });
+
+  it('surfaces the error once the switch gives up', async () => {
+    const sid = 'group-hold-release';
+    const { h, token } = await failWhileSwitching(sid);
+    const holdId = h.coordinator.getProviderGroupSwitchHoldId(sid)!;
+    expect(h.coordinator.releaseProviderGroupSwitchHold(sid, holdId + 1)).toBe(false);
+    expect(latestProjection(h.projections).error).toBeNull();
+    expect(h.coordinator.releaseProviderGroupSwitchHold(sid, holdId)).toBe(true);
+    const projection = latestProjection(h.projections);
+    expect(projection.error).toBe(MESSAGE);
+    expect(projection.autoResumePending).toBeUndefined();
+    expect(h.coordinator.getProviderGroupSwitchHoldId(sid)).toBeNull();
+    // 交回额度重置后自动继续：仍能挂上等待。
+    expect(h.coordinator.armUsageLimitWait(sid, token, 9_000_000)).toBe(true);
+    expect(latestProjection(h.projections).usageLimitWait).toEqual({ resumeAt: 9_000_000 });
+  });
+
+  it('never shows the error when the task continues on another computer', async () => {
+    const sid = 'group-hold-resumed';
+    const { h, token } = await failWhileSwitching(sid);
+    const holdId = h.coordinator.getProviderGroupSwitchHoldId(sid)!;
+    const lease = h.coordinator.leaseUsageLimitRecovery(sid, token);
+    expect(lease).not.toBeNull();
+    // 交接关闭旧会话，再凭句柄挂上续跑。
+    h.coordinator.onSessionClosed(sid);
+    const continueToken = h.coordinator.rearmUsageLimitWait(sid, lease!, 1);
+    expect(continueToken).toEqual(expect.any(Number));
+    expect(latestProjection(h.projections).error).toBeNull();
+    expect(await h.coordinator.continueAfterUsageLimitReset(sid, continueToken!, INFO)).toBe('resumed');
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+    expect(h.coordinator.getProviderGroupSwitchHoldId(sid)).toBeNull();
+    // 迟到的结算碰不到已续上的这一轮。
+    expect(h.coordinator.releaseProviderGroupSwitchHold(sid, holdId)).toBe(false);
+    expect(h.projections.every((projection) => projection.error === null)).toBe(true);
+  });
+
+  it('keeps the normal error when the group will not switch', async () => {
+    const sid = 'group-hold-none';
+    const { h } = await failWhileSwitching(sid, null);
+    expect(latestProjection(h.projections).error).toBe(MESSAGE);
+    expect(latestProjection(h.projections).autoResumePending).toBeUndefined();
+    expect(h.coordinator.getProviderGroupSwitchHoldId(sid)).toBeNull();
+  });
+
+  it('ends the hold when the user takes over', async () => {
+    const sid = 'group-hold-user';
+    const { h } = await failWhileSwitching(sid);
+    const holdId = h.coordinator.getProviderGroupSwitchHoldId(sid)!;
+    h.coordinator.enqueue(sid, makeItem('q-second', 'do something else'));
+    await flush();
+    expect(h.coordinator.getProviderGroupSwitchHoldId(sid)).toBeNull();
+    expect(latestProjection(h.projections).autoResumePending?.groupSwitchPending).toBeUndefined();
+    // 错误已不是当前状态：结算只清登记，不再弹横幅。
+    expect(h.coordinator.releaseProviderGroupSwitchHold(sid, holdId)).toBe(false);
   });
 });

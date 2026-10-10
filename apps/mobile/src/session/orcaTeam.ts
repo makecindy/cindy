@@ -53,6 +53,16 @@ export interface OrcaWorkerFormValue {
   executionDeviceId?: string;
   remoteDirMode?: 'dialogue' | 'path';
   remoteDir?: string;
+  /**
+   * Worker 的 Agent 所在电脑(远程供应商)：string = 另一台电脑或分享，模型与来源属于那台的目录；
+   * null = 任务所在电脑；缺省 = 被控电脑不支持选择，不发送，Worker 跟 Lead。
+   */
+  agentDeviceId?: string | null;
+}
+
+/** Worker 的 Agent 在另一台电脑或分享上运行：模型与来源属于那台的目录，不按被控电脑的目录收敛 / 收窄。 */
+export function orcaWorkerAgentElsewhere(form: Pick<OrcaWorkerFormValue, 'agentDeviceId'>): boolean {
+  return typeof form.agentDeviceId === 'string';
 }
 
 export function parseOrcaExecutionDevices(value: unknown): OrcaExecutionDeviceView[] {
@@ -134,7 +144,8 @@ export function narrowOrcaWorkerProvider(
   providers: readonly ProviderView[] | null,
 ): OrcaWorkerFormValue {
   const model = form.model;
-  if (!model || !providers) return form;
+  // 另一台电脑(远程供应商)的选择来自那台的目录，已在选择器里按那份收窄过。
+  if (!model || !providers || orcaWorkerAgentElsewhere(form)) return form;
   const views = [...providers];
   const providerId = model.providerId
     && chatEligibleSourcesForModel(views, model.id, form.agent).some((candidate) => candidate.id === model.providerId)
@@ -201,6 +212,8 @@ function formWireFields(form: OrcaWorkerFormValue) {
       executionDeviceId: form.executionDeviceId,
       ...(form.remoteDirMode === 'path' ? { workingDir: form.remoteDir?.trim() } : {}),
     } : {}),
+    // Worker 的 Agent 所在电脑：只在被控电脑支持时由表单带上(缺省不发，旧被控端会静默丢掉)。
+    ...(form.agentDeviceId !== undefined ? { agentDeviceId: form.agentDeviceId } : {}),
   };
 }
 
@@ -259,6 +272,10 @@ function isAmbiguousTimeout(error: unknown): boolean {
 export function describeOrcaError(error: unknown, fallbackKey: string | null): string {
   if (isOrcaUnsupportedError(error)) return i18n.t('session.collab.errors.unsupported');
   const text = formatRemoteError(error);
+  // 运行 Worker 的 Agent 的那台电脑 / 分享不可用：与任务里远程 Agent 出错同一套文案。
+  if (text.includes('REMOTE_AGENT_DEVICE_UNREACHABLE')) return i18n.t('session.remoteError.REMOTE_AGENT_UNAVAILABLE');
+  const shareCode = /REMOTE_AGENT_SHARE_(?:PAUSED|REMOVED|UNAVAILABLE)/.exec(text)?.[0];
+  if (shareCode) return i18n.t(`session.remoteError.${shareCode}`);
   const code = ORCA_ERROR_CODES.find((candidate) => text.includes(candidate));
   if (code) return i18n.t(`session.collab.errors.${code}`);
   const generic = humanizeRemoteError(error);
@@ -347,16 +364,22 @@ const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve,
 async function assertWorkerPermissionSupported(
   maker: MobileMakerTransport,
   agent: OrcaWorkerAgentKind,
-  executionDeviceId?: string,
+  placement: { executionDeviceId?: string; agentDeviceId?: string | null },
 ): Promise<void> {
-  // 权限协议位属于 Lead 宿主。远端 Worker 的 Agent 可以只安装在运行设备上，
+  // 权限协议位属于 Lead 宿主。远端 Worker / 远程供应商 Worker 的 Agent 可以只安装在另一台电脑上，
   // 因此用 Lead 已注册的 Agent 查询宿主能力，不要求 Lead 也安装该 Worker Agent。
-  const probeAgent = executionDeviceId ? (await maker.listAvailableAgents())[0] : agent;
+  const probeAgent = placement.executionDeviceId || typeof placement.agentDeviceId === 'string'
+    ? (await maker.listAvailableAgents())[0]
+    : agent;
   const capabilities = probeAgent
     ? normalizeMobileAgentCapabilities(await maker.getCapabilities(probeAgent))
     : null;
   if (capabilities?.supportsOrcaWorkerPermissionMode !== true) {
     throw new Error('[DEVICE_LINK_CHANNEL_NOT_ALLOWED] controlled device does not support Orca Worker permission mode');
+  }
+  // 旧被控端会静默丢掉 agentDeviceId，把 Worker 建在别处：表单展示后被控端降级时同样 fail-closed。
+  if (placement.agentDeviceId !== undefined && capabilities?.supportsOrcaWorkerAgentDevice !== true) {
+    throw new Error('[DEVICE_LINK_CHANNEL_NOT_ALLOWED] controlled device does not support choosing the Worker agent location');
   }
 }
 
@@ -385,7 +408,7 @@ export async function enableOrcaTeam(
   leadSessionId: string,
   options: MobileOrcaEnableOptions,
 ): Promise<{ workerSessionId: string | null }> {
-  await assertWorkerPermissionSupported(maker, options.workerAgent, options.executionDeviceId);
+  await assertWorkerPermissionSupported(maker, options.workerAgent, options);
   try {
     const result = await maker.orca.enable(leadSessionId, options);
     return { workerSessionId: typeof result?.workerSessionId === 'string' ? result.workerSessionId : null };
@@ -412,7 +435,7 @@ export async function createOrcaWorker(
   form: OrcaWorkerFormValue,
   existingWorkers: readonly OrcaTeamWorker[],
 ): Promise<{ workerSessionId: string | null }> {
-  await assertWorkerPermissionSupported(maker, form.agent, form.executionDeviceId);
+  await assertWorkerPermissionSupported(maker, form.agent, form);
   const role = form.role.trim() || 'developer';
   const submit = async (label: string) => {
     try {

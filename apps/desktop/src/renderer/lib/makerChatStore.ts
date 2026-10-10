@@ -4593,6 +4593,15 @@ function hasMatchingAutoResumePendingError(messages: ChatMessage[], data: unknow
   );
 }
 
+/** 进行中行是「供应商组正在换电脑」：这次失败先不呈现，不论哪种 Agent(provider-groups.md §6.1)。 */
+function hasProviderGroupSwitchPendingCard(messages: ChatMessage[]): boolean {
+  return messages.some(
+    (item) =>
+      item.clientId === AUTO_RESUME_PENDING_CLIENT_ID &&
+      Boolean(item.systemCardData?.groupSwitchPending),
+  );
+}
+
 function applyInputProjection(
   projection: AgentInputProjection,
   opts: { supersedeQueries?: boolean } = {},
@@ -6447,8 +6456,8 @@ export function handleStreamEvent(
       const finalized = finalizeStreamingInState(state);
       const derivedRetryText = deriveErrorRetryText(finalized);
       const suppressAutoResumeBroadcastError =
-        event.source === 'codex' &&
-        !isCodexUserActionableRetryError(event.data) &&
+        ((event.source === 'codex' && !isCodexUserActionableRetryError(event.data)) ||
+          hasProviderGroupSwitchPendingCard(finalized.messages)) &&
         hasMatchingAutoResumePendingError(finalized.messages, event.data);
       // main coordinator 在终止型 error 时**先**同步 emit projection(errorRetryText
       // = projectionRetryText 的权威 retry token,active-turn 恢复恒非空)再 broadcast

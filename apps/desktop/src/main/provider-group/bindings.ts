@@ -8,6 +8,9 @@
  * 两份文件：本机的组(`provider-group-bindings.json`)与同账号另一台电脑上的组
  * (`provider-group-remote-bindings.json`，多记组所在电脑)。分开存放，降级到旧版本时旧版本只读得到
  * 本机的那份，不会把另一台电脑上的组误当成本机的同名组。
+ *
+ * 另记一份「因组内电脑被移出或组被删除而解除过」的任务(`provider-group-released.json`)：没归过组、
+ * 正用着组那一项的老任务会被纳入组(service.ts)，这些任务不纳入(§9.4)。旧版本不读它，也不改写它。
  */
 import { activeOwnerScopeKey, ownerScopedUserDataPath } from '../appSessionState.js';
 import { desktopMakerLogger } from '../maker-host/logger-adapter.js';
@@ -29,6 +32,23 @@ interface BindingFile {
   sessions: Record<string, ProviderGroupBinding>;
 }
 
+/** 哪个组：组所属的供应商，组在另一台电脑上时再加那台的设备 id(本机的组为 null)。 */
+export interface ProviderGroupRef {
+  providerId: string;
+  groupDeviceId?: string | null;
+}
+
+/** 一个任务因组内电脑被移出或组被删除而解除了哪个组的绑定。 */
+export interface ProviderGroupRelease {
+  providerId: string;
+  groupDeviceId?: string;
+  at: number;
+}
+
+interface ReleaseFile {
+  sessions: Record<string, ProviderGroupRelease>;
+}
+
 const SESSION_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
 const MEMBER_KEY_PATTERN = /^[A-Za-z0-9_.:-]{1,300}$/;
 const DEVICE_ID_PATTERN = /^[A-Za-z0-9_.-]{1,128}$/;
@@ -46,7 +66,17 @@ function normalizeBinding(raw: unknown, remote: boolean): ProviderGroupBinding |
   return { providerId: value.providerId, memberKey: value.memberKey, groupDeviceId: value.groupDeviceId, at };
 }
 
-function prune(sessions: Record<string, ProviderGroupBinding>): Record<string, ProviderGroupBinding> {
+function normalizeRelease(raw: unknown): ProviderGroupRelease | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const value = raw as Record<string, unknown>;
+  if (!isProviderGroupProviderId(value.providerId)) return null;
+  const at = typeof value.at === 'number' && Number.isFinite(value.at) && value.at > 0 ? value.at : 0;
+  if (value.groupDeviceId === undefined) return { providerId: value.providerId, at };
+  if (typeof value.groupDeviceId !== 'string' || !DEVICE_ID_PATTERN.test(value.groupDeviceId)) return null;
+  return { providerId: value.providerId, groupDeviceId: value.groupDeviceId, at };
+}
+
+function prune<T extends { at: number }>(sessions: Record<string, T>): Record<string, T> {
   const entries = Object.entries(sessions);
   if (entries.length <= MAX_PROVIDER_GROUP_BINDINGS) return sessions;
   entries.sort((a, b) => b[1].at - a[1].at);
@@ -68,6 +98,22 @@ function normalizeFile(raw: unknown, remote: boolean): BindingFile {
 const normalize = (raw: unknown) => normalizeFile(raw, false);
 const normalizeRemote = (raw: unknown) => normalizeFile(raw, true);
 
+function normalizeReleased(raw: unknown): ReleaseFile {
+  const sessions = (raw as Partial<ReleaseFile> | null)?.sessions;
+  if (!sessions || typeof sessions !== 'object' || Array.isArray(sessions)) return { sessions: {} };
+  const out: Record<string, ProviderGroupRelease> = {};
+  for (const [sessionId, value] of Object.entries(sessions)) {
+    if (!SESSION_ID_PATTERN.test(sessionId)) continue;
+    const release = normalizeRelease(value);
+    if (release) out[sessionId] = release;
+  }
+  return { sessions: prune(out) };
+}
+
+function sameGroup(release: ProviderGroupRelease, group: ProviderGroupRef): boolean {
+  return release.providerId === group.providerId && (release.groupDeviceId ?? null) === (group.groupDeviceId ?? null);
+}
+
 const log = desktopMakerLogger.child('provider-group-bindings');
 const store = createOverrideSettingsFile<BindingFile>({
   filePath: () => ownerScopedUserDataPath('provider-group-bindings.json'),
@@ -86,6 +132,16 @@ const remoteStore = createOverrideSettingsFile<BindingFile>({
   normalize: normalizeRemote,
   log,
   label: 'provider-group-remote-bindings',
+  maxBytes: 2 * 1024 * 1024,
+  logLoadedValue: false,
+});
+const releasedStore = createOverrideSettingsFile<ReleaseFile>({
+  filePath: () => ownerScopedUserDataPath('provider-group-released.json'),
+  scopeKey: activeOwnerScopeKey,
+  defaults: { sessions: {} },
+  normalize: normalizeReleased,
+  log,
+  label: 'provider-group-released',
   maxBytes: 2 * 1024 * 1024,
   logLoadedValue: false,
 });
@@ -135,6 +191,44 @@ export async function writeProviderGroupBinding(
   if (binding && !normalized) throw new Error('Invalid provider group binding');
   await writeIn(remote ? remoteStore : store, sessionId, normalized);
   await writeIn(remote ? store : remoteStore, sessionId, null);
+  // 重新由同一个组分配(例如清空后当作新任务)：之前解除过的记录作废。
+  const release = normalized ? releasedStore.read().sessions[sessionId] : undefined;
+  if (normalized && release && sameGroup(release, normalized)) {
+    await releasedStore.updateAtomic(({ value }) => {
+      const current = value.sessions[sessionId];
+      if (!current || !sameGroup(current, normalized)) return {};
+      const sessions = { ...value.sessions };
+      delete sessions[sessionId];
+      return { sessions };
+    });
+  }
+}
+
+/** 这个任务曾因组内电脑被移出或这个组被删除而解除过这个组的绑定：不再自动纳入这个组(§9.4)。 */
+export function isProviderGroupReleased(sessionId: string, group: ProviderGroupRef): boolean {
+  if (!SESSION_ID_PATTERN.test(sessionId)) return false;
+  const release = releasedStore.read().sessions[sessionId];
+  return release !== undefined && sameGroup(release, group);
+}
+
+async function writeReleases(sessionIds: readonly string[], group: ProviderGroupRef, now: number): Promise<void> {
+  const release = normalizeRelease({ ...group, groupDeviceId: group.groupDeviceId ?? undefined, at: now });
+  const ids = sessionIds.filter((id) => SESSION_ID_PATTERN.test(id));
+  if (!release || ids.length === 0) return;
+  await releasedStore.updateAtomic(({ value }) => {
+    const sessions = { ...value.sessions };
+    for (const id of ids) sessions[id] = release;
+    return { sessions: prune(sessions) };
+  });
+}
+
+/** 记下这个任务因组内电脑被移出或组被删除而解除了这个组的绑定。 */
+export async function markProviderGroupReleased(
+  sessionId: string,
+  group: ProviderGroupRef,
+  now: number = Date.now(),
+): Promise<void> {
+  await writeReleases([sessionId], group, now);
 }
 
 /**
@@ -145,18 +239,21 @@ export async function writeProviderGroupBinding(
 export async function pruneProviderGroupBindings(
   providerId: string,
   keepMemberKeys: ReadonlySet<string> | null,
+  now: number = Date.now(),
 ): Promise<void> {
+  const released: string[] = [];
   await store.updateAtomic(({ value }) => {
     const sessions = { ...value.sessions };
-    let changed = false;
+    released.length = 0;
     for (const [sessionId, binding] of Object.entries(sessions)) {
       if (binding.providerId !== providerId) continue;
       if (keepMemberKeys?.has(binding.memberKey)) continue;
       delete sessions[sessionId];
-      changed = true;
+      released.push(sessionId);
     }
-    return changed ? { sessions } : {};
+    return released.length > 0 ? { sessions } : {};
   });
+  await writeReleases(released, { providerId }, now);
 }
 
-export const __testing = { normalize, normalizeRemote, prune };
+export const __testing = { normalize, normalizeRemote, normalizeReleased, prune };

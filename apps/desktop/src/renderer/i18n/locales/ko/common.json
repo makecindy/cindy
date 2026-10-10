@@ -196,10 +196,8 @@
   },
   "providerShare": {
     "entry": {
-      "manage": "공유 관리",
-      "manageWithPending_other": "공유 관리 · 대기 중인 요청 {{count}}개",
-      "disabledInvocation": "공유하려면 먼저 원격 사용 허용을 켜세요",
-      "disabledRemoteControl": "공유하려면 먼저 원격 연결에서 이 컴퓨터의 제어를 허용하세요",
+      "label": "원격 및 공유",
+      "pending_other": "대기 중인 공유 요청 {{count}}개",
       "remoteControlOff": "이 컴퓨터는 아직 원격 제어를 허용하지 않아 제공자를 원격으로 사용하거나 공유할 수 없습니다.",
       "openRemoteControl": "원격 연결 설정 열기",
       "descriptionOff": "켜면 내 다른 컴퓨터와 공유받은 사람이 이 제공자의 모델을 사용할 수 있습니다. 꺼져 있는 동안 기존 공유는 일시적으로 사용할 수 없지만 삭제되지는 않습니다."
@@ -398,13 +396,6 @@
     }
   },
   "providerGroup": {
-    "row": {
-      "label": "제공자 그룹",
-      "description": "여러 컴퓨터의 이 제공자를 하나로 묶어 자동으로 배정하고, 문제가 생기면 다른 컴퓨터로 전환합니다",
-      "summary_other": "컴퓨터 {{count}}대 · {{strategy}}",
-      "setUp": "그룹 설정",
-      "manage": "그룹 관리"
-    },
     "page": {
       "title": "{{provider}} · 원격 및 공유",
       "shareTitle": "공유"
@@ -2888,6 +2879,7 @@
         "remoteAccess": {
           "label": "원격 사용 허용",
           "description": "켜면 내 다른 컴퓨터와 공유받은 사람이 이 제공자의 모델을 사용할 수 있습니다. Agent는 이 컴퓨터에서 이 컴퓨터의 로그인과 할당량으로 실행됩니다.",
+          "descriptionGroup": "켜면 내 다른 컴퓨터와 공유받은 사람이 이 제공자의 모델을 사용할 수 있습니다. Agent는 제공자 그룹이 선택한 컴퓨터에서 실행됩니다.",
           "ariaLabel": "내 다른 컴퓨터와 공유받은 사람이 이 제공자를 사용하도록 허용",
           "writeFailed": "원격 사용 설정을 저장하지 못했습니다. 다시 시도해 주세요."
         },
@@ -10568,7 +10560,8 @@
       },
       "autoResumePending": {
         "label": "다시 연결하는 중",
-        "labelWithProgress": "다시 연결하는 중 {{attempt}}/{{total}}"
+        "labelWithProgress": "다시 연결하는 중 {{attempt}}/{{total}}",
+        "groupSwitch": "다른 컴퓨터로 전환하는 중"
       },
       "agentSwitch": {
         "label": "{{from}}에서 {{to}}(으)로 전환됨",

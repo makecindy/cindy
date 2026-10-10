@@ -36,8 +36,9 @@ export interface OrcaLeadSessionSnapshot {
    */
   remoteHostId: string | null;
   /**
-   * lead 的 Agent 在同账号另一台电脑上运行时那台电脑的设备 id。worker 继承它(Agent 同样在
-   * 那台运行，模型与来源按那台的目录选)；任务与文件都在本机。缺省 = Agent 在本机。
+   * lead 的 Agent 在同账号另一台电脑上运行时那台电脑的设备 id(或分享 `share:<id>`)。Worker 未指定
+   * 自己的位置时跟它一样(Agent 同样在那台运行，模型与来源按那台的目录选)；任务与文件都在本机。
+   * 缺省 = Agent 在本机。
    */
   agentDeviceId?: string | null;
 }
@@ -158,8 +159,12 @@ export type OrcaWorkerCreationErrorCode =
   | 'NO_PROVIDER_FOR_AGENT'
   | 'PROVIDER_ROUTE_UNAVAILABLE'
   | 'BUSY'
-  /** 指定的运行设备离线、未开启远程控制或调用失败。 */
+  /** 指定的运行设备或 Worker 的 Agent 所在电脑离线、未开启远程控制或调用失败。 */
   | 'REMOTE_AGENT_DEVICE_UNREACHABLE'
+  /** Worker 用的分享来的供应商已暂停 / 已不可用 / 暂时不可用。 */
+  | 'REMOTE_AGENT_SHARE_PAUSED'
+  | 'REMOTE_AGENT_SHARE_REMOVED'
+  | 'REMOTE_AGENT_SHARE_UNAVAILABLE'
   /** 指定的运行设备版本过旧，不支持协同远端 Worker。 */
   | 'UNSUPPORTED_CAPABILITY'
   | 'REMOTE_WORKDIR_NOT_FOUND'
@@ -191,6 +196,8 @@ export type OrcaWorkerCreationResult =
         providerId: string | null;
         role: string;
         label: string;
+        /** Worker 的 Agent 所在电脑(远程供应商)；null = 任务所在电脑。运行设备 Worker 不带。 */
+        agentDeviceId?: string | null;
       };
     }
   | {
@@ -229,6 +236,13 @@ export interface OrcaWorkerCreateParams {
    * 缺省 = 与 Lead 同一台(现有行为)。与 SSH 远端 Lead、远程 Agent Lead 互斥。
    */
   executionDeviceId?: string;
+  /**
+   * Worker 的 Agent 在哪运行(远程供应商)，与普通任务的 `agentDeviceId` 同一含义：任务、目录与命令
+   * 始终在 Lead 所在电脑，只有 Agent 在那台运行，模型与来源按那台允许被远程调用的目录选。
+   * undefined = 与 Lead 相同(旧调用方与旧控制端的行为)；null = 任务所在电脑；string = 同账号另一台
+   * 电脑的设备 id 或分享来的供应商(`share:<id>`)。SSH Lead 与运行设备 Worker 只接受 undefined / null。
+   */
+  agentDeviceId?: string | null;
 }
 
 /** 运行设备已建好任务；代理数据随后与 Worker 路由一起提交。 */
@@ -285,9 +299,14 @@ export interface OrcaWorkerCreationDeps {
   getProviderRoutingContext(
     agent?: AgentKind,
     remoteHostId?: string | null,
-    /** lead 的 Agent 在另一台电脑运行时，按那台的目录。 */
+    /**
+     * Worker 的 Agent 在另一台电脑(或分享)运行时，按那台允许被远程调用的目录。读不到时抛错，
+     * 消息带 `[REMOTE_AGENT_SHARE_*]` 前缀的按分享原因处理，其余按那台连不上。
+     */
     agentDeviceId?: string | null,
   ): Promise<OrcaWorkerProviderRoutingContext>;
+  /** 本机设备 id 判定：Worker 指向本机时按任务所在电脑处理。缺省 = 不判定。 */
+  isSelfDeviceId?(deviceId: string): boolean;
   readClaudeApiKey(): string | null;
   reserveWorkerCreation(input: {
     reservationId: string;
@@ -462,12 +481,14 @@ function selectWorkerModel(params: {
   input: OrcaWorkerCreateParams;
   lead: OrcaLeadSessionSnapshot;
   defaults: OrcaWorkerDefaultsSnapshot;
+  /** Worker 那一处的目录里有 Lead 的模型(或与 Lead 同一处)时才沿用它；缺省沿用。 */
+  inheritLeadModel?: boolean;
 }): string {
-  const { input, lead, defaults } = params;
+  const { input, lead, defaults, inheritLeadModel = true } = params;
   return input.model
     ?? defaults.model
     // pi 显式列出(与 model-defaults.ts 对齐,避免将来改 cc 默认时 pi 静默跟随)。
-    ?? (input.agent === lead.agentKind ? lead.model
+    ?? (input.agent === lead.agentKind && inheritLeadModel ? lead.model
         : input.agent === 'codex' ? 'gpt-5.5'
         : input.agent === 'pi' ? 'claude-sonnet-4-6'
         : 'claude-sonnet-4-6');
@@ -688,6 +709,69 @@ function buildProviderRouteUnavailableMessage(
     return `${agentDisplayName(agent)} Worker 选择的供应商 "${providerId}" 当前未连接或不支持该 agent,请在「设置 → 模型供应商」检查后重试。`;
   }
   return `${agentDisplayName(agent)} Worker 选择的供应商 "${provider.name}" 不提供模型 "${model}",请调整供应商或模型后重试。`;
+}
+
+/** 与 create-session 的 agentDeviceId 同一格式(设备 id 或 `share:<id>`)。 */
+const AGENT_DEVICE_ID_PATTERN = /^[A-Za-z0-9_.:-]{1,128}$/;
+
+/**
+ * IPC / 远程入口的 Worker Agent 位置：null = 任务所在电脑，非空 string = 那台电脑或分享；
+ * 其余(缺省 / 空白 / 异型)一律不带，跟 Lead，与旧控制端行为一致。格式由创建服务校验。
+ */
+export function pickWorkerAgentDeviceId(value: unknown): { agentDeviceId?: string | null } {
+  if (value === null) return { agentDeviceId: null };
+  if (typeof value === 'string' && value.trim()) return { agentDeviceId: value.trim() };
+  return {};
+}
+
+/** Lead 的 Agent 所在位置：SSH Lead 的 Agent 在 SSH 主机上，不按电脑算。 */
+function leadAgentDeviceId(lead: OrcaLeadSessionSnapshot): string | null {
+  return lead.remoteHostId ? null : (lead.agentDeviceId ?? null);
+}
+
+/**
+ * 解析 Worker 的 Agent 所在位置(null = 任务所在电脑)。不指定时跟 Lead；SSH Lead 与运行设备 Worker
+ * 不能把 Agent 放到另一台电脑。
+ */
+function resolveWorkerAgentDeviceId(
+  params: OrcaWorkerCreateParams,
+  lead: OrcaLeadSessionSnapshot,
+  isSelfDeviceId: ((deviceId: string) => boolean) | undefined,
+): { ok: true; agentDeviceId: string | null } | { ok: false; message: string } {
+  const requested = params.agentDeviceId;
+  if (requested === undefined) return { ok: true, agentDeviceId: leadAgentDeviceId(lead) };
+  if (requested === null) return { ok: true, agentDeviceId: null };
+  const deviceId = typeof requested === 'string' ? requested.trim() : '';
+  if (!AGENT_DEVICE_ID_PATTERN.test(deviceId)) {
+    return { ok: false, message: 'agent_device_id must be a device id or a shared provider id' };
+  }
+  if (isSelfDeviceId?.(deviceId)) return { ok: true, agentDeviceId: null };
+  if (lead.remoteHostId) {
+    return { ok: false, message: 'Workers of an SSH Lead run their Agent on the SSH host; agent_device_id is not supported' };
+  }
+  if (params.executionDeviceId !== undefined) {
+    return { ok: false, message: 'execution_device_id and agent_device_id cannot be combined' };
+  }
+  return { ok: true, agentDeviceId: deviceId };
+}
+
+const SHARE_ROUTE_REJECTION = /\[(REMOTE_AGENT_SHARE_(?:PAUSED|REMOVED|UNAVAILABLE))\]/;
+
+/** 读不到 Worker 的 Agent 所在电脑的目录：分享保留具体原因，其余按那台连不上。 */
+export function agentDeviceCatalogFailure(err: unknown): Extract<OrcaWorkerCreationResult, { ok: false }> {
+  const message = err instanceof Error ? err.message : String(err);
+  const share = SHARE_ROUTE_REJECTION.exec(message)?.[1] as
+    | 'REMOTE_AGENT_SHARE_PAUSED'
+    | 'REMOTE_AGENT_SHARE_REMOVED'
+    | 'REMOTE_AGENT_SHARE_UNAVAILABLE'
+    | undefined;
+  return share
+    ? { ok: false, errorCode: share, message: `the shared provider for this Worker is not available: ${message}` }
+    : {
+        ok: false,
+        errorCode: 'REMOTE_AGENT_DEVICE_UNREACHABLE',
+        message: `the computer that would run this Worker's Agent is not reachable: ${message}`,
+      };
 }
 
 export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): OrcaWorkerCreationService {
@@ -949,6 +1033,10 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
     if (!lead) {
       return { ok: false, errorCode: 'NOT_FOUND', message: `lead session ${params.leadSessionId} not found` };
     }
+    const workerLocation = resolveWorkerAgentDeviceId(params, lead, deps.isSelfDeviceId);
+    if (!workerLocation.ok) {
+      return { ok: false, errorCode: 'INVALID_PARAMS', message: workerLocation.message };
+    }
     if (params.executionDeviceId !== undefined) {
       return createRemoteWorkerInTeam({
         params,
@@ -968,9 +1056,23 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
       typeof params.providerId === 'string' && params.providerId.trim().length > 0
         ? params.providerId.trim()
         : null;
-    const providerRouting = lead.agentDeviceId
-      ? await deps.getProviderRoutingContext(params.agent, lead.remoteHostId, lead.agentDeviceId)
-      : await deps.getProviderRoutingContext(params.agent, lead.remoteHostId);
+    const workerAgentDeviceId = workerLocation.agentDeviceId;
+    // Lead 的模型与来源属于它自己所在位置的目录：Worker 换了位置就不沿用 Lead 的来源(来源 id 在
+    // 不同电脑上不是一回事)，只在同一位置时继承；模型只在那一处也有时沿用。
+    const sameLocationAsLead = workerAgentDeviceId === leadAgentDeviceId(lead);
+    const routeLead: OrcaLeadSessionSnapshot = sameLocationAsLead
+      ? lead
+      : { ...lead, providerId: null };
+    let providerRouting: OrcaWorkerProviderRoutingContext;
+    if (workerAgentDeviceId) {
+      try {
+        providerRouting = await deps.getProviderRoutingContext(params.agent, lead.remoteHostId, workerAgentDeviceId);
+      } catch (err) {
+        return agentDeviceCatalogFailure(err);
+      }
+    } else {
+      providerRouting = await deps.getProviderRoutingContext(params.agent, lead.remoteHostId);
+    }
     const availableModels = providerRouting.remoteCodexModels ?? deps.getAvailableModels(params.agent);
     const providerAvailability = providerRouting.availability;
     const agentProviders = providerAvailability[params.agent] ?? [];
@@ -1033,7 +1135,7 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
     // pi-manager 预上传, orca_worker_bridge 工具面经 SSH remote-forward 隧道注入。
     // 与 CC/Codex remote worker 同构;此闸会让 remote pi lead 完全无法使用 pi worker。
     const defaults: OrcaWorkerDefaultsSnapshot = providerRouting.remoteWorkerDefaults
-      ? providerRouting.remoteWorkerDefaults(lead, params.agent)
+      ? providerRouting.remoteWorkerDefaults(routeLead, params.agent)
       : providerRouting.remoteCodexModels
         ? { model: lead.agentKind === 'codex' && availableModels.some((model) => model.id === lead.model)
             ? lead.model : availableModels[0]?.id, providerId: 'openai' }
@@ -1050,10 +1152,11 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
       input: params,
       lead,
       defaults,
+      inheritLeadModel: sameLocationAsLead || availableModels.some((model) => model.id === lead.model),
     });
     const leadProviderId =
-      params.agent === lead.agentKind && typeof lead.providerId === 'string' && lead.providerId.trim()
-        ? lead.providerId.trim()
+      params.agent === routeLead.agentKind && typeof routeLead.providerId === 'string' && routeLead.providerId.trim()
+        ? routeLead.providerId.trim()
         : null;
     const leadProviderSnapshot = leadProviderId === null
       ? undefined
@@ -1207,8 +1310,10 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
 
     // codex/ 预算模型依赖 Cindy AI API key；XD/default 路由即使因 provider 缺失，
     // 也要先返回这条可操作的凭证错误，避免被下方通用的精确路由失败遮蔽。
+    // Agent 在另一台电脑运行时用的是那台的登录与供应商，不按本机的 key 判。
     if (
-      budgetModelRequiresApiKey(params.agent, resolved.model, deps.readClaudeApiKey() != null)
+      !workerAgentDeviceId
+      && budgetModelRequiresApiKey(params.agent, resolved.model, deps.readClaudeApiKey() != null)
       && (budgetRouteProviderId === null || budgetRouteProviderId === 'xd')
     ) {
       return {
@@ -1384,8 +1489,8 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
         // remote lead 的 worker 继承 remoteHostId:在同一台远端主机上 spawn,
         // workingDir 在该远端校验；本地 lead 不带此字段（本地 worker）。
         ...(lead.remoteHostId ? { remoteHostId: lead.remoteHostId } : {}),
-        // lead 的 Agent 在另一台电脑运行：worker 的 Agent 也在那台(任务与文件在本机)。
-        ...(lead.agentDeviceId && !lead.remoteHostId ? { agentDeviceId: lead.agentDeviceId } : {}),
+        // Worker 的 Agent 在另一台电脑(或分享)运行：任务与文件仍在本机。缺省跟 Lead。
+        ...(workerAgentDeviceId ? { agentDeviceId: workerAgentDeviceId } : {}),
         model: resolved.model,
         providerId: resolved.providerId,
         effort: resolved.effort as MakerSessionCreateOpts['effort'],
@@ -1471,6 +1576,7 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
           providerId: resolved.providerId,
           role: role.value,
           label: label.value,
+          agentDeviceId: workerAgentDeviceId,
         },
       };
     } finally {

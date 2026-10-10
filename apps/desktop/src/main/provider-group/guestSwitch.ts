@@ -21,6 +21,8 @@ const MAX_TRACKED_SESSIONS = 512;
 export interface ProviderGroupGuestSwitch {
   /** 组所在电脑发来凭证(任务的事件流里)。 */
   offer(sessionId: string, token: string): void;
+  /** 只看不取：有没有还新鲜的凭证(终态错误那一刻判断要不要先不呈现这次错误)。 */
+  hasOffer(sessionId: string): boolean;
   /** 这次错误要不要换一台：有新鲜的凭证则取走，登记给下一次打开，返回 true。 */
   claim(sessionId: string): boolean;
   /** 打开任务时带上的凭证(取走即用掉)；没有返回 undefined。 */
@@ -61,6 +63,11 @@ export function createProviderGroupGuestSwitch(now: () => number = Date.now): Pr
         seen.delete(oldest);
         newRound.delete(oldest);
       }
+    },
+
+    hasOffer(sessionId) {
+      const entry = offered.get(sessionId);
+      return entry !== undefined && now() - entry.at <= PROVIDER_GROUP_SWITCH_OFFER_TTL_MS;
     },
 
     claim(sessionId) {

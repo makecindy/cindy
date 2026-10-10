@@ -2121,6 +2121,16 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
           : (safeCall(run.handle?.isTurnRunning?.bind(run.handle)) ?? run.turnRunning) === true))
         .map((run) => run.controller);
     },
+    /**
+     * 在本机 Agent 上正在运行一轮的任务用的本机供应商(每个任务一项)：组所在电脑据此显示组里这台在跑几个。
+     * 转给组内电脑的不算(在那台运行，由那台报)；没接供应商授权、不知道用哪个供应商的不算。
+     */
+    turnRunningProviders(): string[] {
+      return [...runs.values()]
+        .filter((run) => run.closedAt === undefined && !run.closing && !run.relay && run.providerId)
+        .filter((run) => (safeCall(run.handle?.isTurnRunning?.bind(run.handle)) ?? run.turnRunning) === true)
+        .map((run) => run.providerId!);
+    },
     /** 测试与诊断用。 */
     runCount(): number {
       return [...runs.values()].filter((run) => run.closedAt === undefined).length;

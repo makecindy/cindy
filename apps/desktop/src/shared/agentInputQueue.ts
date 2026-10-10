@@ -214,6 +214,12 @@ export interface AutoResumeInfo {
    * 电脑继续」，不出现电脑名称(docs/product-rules/provider-groups.md §8)。旧端忽略该字段。
    */
   groupSwitch?: AutoResumeGroupSwitch;
+  /**
+   * 只出现在投影的进行中行：供应商组正在为这次失败换电脑，错误先不呈现，行内显示「正在换一台电脑继续」
+   * (provider-groups.md §6.1)。此时 attempt / maxAttempts / sessionTotal 都是 0(不是重连，不显示次数)；
+   * 旧端忽略该字段，显示成「重新连接中」。
+   */
+  groupSwitchPending?: AutoResumeGroupSwitch;
 }
 
 export interface AutoResumeGroupSwitch {

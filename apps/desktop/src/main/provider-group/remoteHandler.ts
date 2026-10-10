@@ -7,6 +7,8 @@
  * 只服务同账号电脑(dispatch 已拒绝受邀者与共享任务访客)，且只对仍「允许被远程调用」的供应商提供组：
  * 没开放的供应商对其他电脑本来就不可见。
  */
+import { PROVIDER_RUNNING_TURNS_FIELD } from '@cindy/device-link';
+
 import {
   parseProviderGroupRemoteRequest,
   providerGroupSummaryForWire,
@@ -30,12 +32,14 @@ export interface ProviderGroupRemoteHandlerDeps {
 }
 
 /**
- * 给同账号电脑的 `maker:provider:list` 补组摘要：只加在仍允许被远程调用、且建了组的供应商上。
- * 结果里已有的 `group` 一律先去掉，只有本机设置能产生它。
+ * 给同账号电脑的 `maker:provider:list` 补组摘要与运行数，都只加在仍允许被远程调用的供应商上：
+ * 建了组的带 `group`；`running`(这台电脑上每个供应商正在运行一轮的任务数，localLoad.ts)给出时每个都带
+ * `runningTurns`，没在跑的为 0，读不到(null)时不带。结果里已有的这两个字段一律先去掉，只有本机能产生它们。
  */
 export function decorateProviderListWithGroups(
   result: unknown,
   readGroup: (providerId: string) => ProviderGroupConfig | null,
+  running: ReadonlyMap<string, number> | null = null,
 ): unknown {
   if (!result || typeof result !== 'object' || Array.isArray(result)) return result;
   const value = result as { providers?: unknown };
@@ -46,8 +50,11 @@ export function decorateProviderListWithGroups(
       if (!provider || typeof provider !== 'object' || Array.isArray(provider)) return provider;
       const entry = { ...(provider as Record<string, unknown>) };
       delete entry.group;
-      const config = entry.remoteInvocationEnabled === true && typeof entry.id === 'string' ? readGroup(entry.id) : null;
+      delete entry[PROVIDER_RUNNING_TURNS_FIELD];
+      if (entry.remoteInvocationEnabled !== true || typeof entry.id !== 'string') return entry;
+      const config = readGroup(entry.id);
       if (config) entry.group = providerGroupSummaryForWire(config);
+      if (running) entry[PROVIDER_RUNNING_TURNS_FIELD] = running.get(entry.id) ?? 0;
       return entry;
     }),
   };

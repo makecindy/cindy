@@ -93,6 +93,45 @@ describe('provider group bindings', () => {
     expect(bindings.readProviderGroupBinding('c')).not.toBeNull();
   });
 
+  it('remembers, per group, the tasks released by removing a computer or deleting the group', async () => {
+    await bindings.writeProviderGroupBinding('x1', { providerId: 'anthropic', memberKey: 'device:mini:x' }, 1);
+    await bindings.writeProviderGroupBinding('x2', { providerId: 'anthropic', memberKey: 'local' }, 2);
+    await bindings.pruneProviderGroupBindings('anthropic', new Set(['local']), 10);
+    expect(bindings.isProviderGroupReleased('x1', { providerId: 'anthropic' })).toBe(true);
+    expect(bindings.isProviderGroupReleased('x1', { providerId: 'anthropic', groupDeviceId: 'mini' })).toBe(false);
+    expect(bindings.isProviderGroupReleased('x1', { providerId: 'openai' })).toBe(false);
+    expect(bindings.isProviderGroupReleased('x2', { providerId: 'anthropic' })).toBe(false);
+
+    await bindings.markProviderGroupReleased('x3', { providerId: 'anthropic', groupDeviceId: 'mini' }, 11);
+    expect(bindings.isProviderGroupReleased('x3', { providerId: 'anthropic', groupDeviceId: 'mini' })).toBe(true);
+    expect(bindings.isProviderGroupReleased('x3', { providerId: 'anthropic', groupDeviceId: null })).toBe(false);
+    // 单独一个文件：旧版本只读绑定文件，读不到也改写不到它。
+    expect(fs.existsSync(path.join(tmpDir, 'provider-group-released.json'))).toBe(true);
+
+    // 由同一个组重新分配(例如清空后当作新任务)时作废；别的组的分配不影响。
+    await bindings.writeProviderGroupBinding('x1', { providerId: 'openai', memberKey: 'local' }, 12);
+    expect(bindings.isProviderGroupReleased('x1', { providerId: 'anthropic' })).toBe(true);
+    await bindings.writeProviderGroupBinding('x1', { providerId: 'anthropic', memberKey: 'local' }, 13);
+    expect(bindings.isProviderGroupReleased('x1', { providerId: 'anthropic' })).toBe(false);
+  });
+
+  it('keeps only well-formed release records', () => {
+    expect(bindings.__testing.normalizeReleased({
+      sessions: {
+        a: { providerId: 'anthropic', at: 1 },
+        b: { providerId: 'anthropic', groupDeviceId: 'mini', at: 2 },
+        c: { providerId: 'bad id', at: 3 },
+        d: { providerId: 'anthropic', groupDeviceId: 'bad id', at: 4 },
+        'e e': { providerId: 'anthropic', at: 5 },
+      },
+    })).toEqual({
+      sessions: {
+        a: { providerId: 'anthropic', at: 1 },
+        b: { providerId: 'anthropic', groupDeviceId: 'mini', at: 2 },
+      },
+    });
+  });
+
   it('keeps bindings to a group on another computer in their own file, one group per task', async () => {
     await bindings.writeProviderGroupBinding('r1', { providerId: 'anthropic', memberKey: 'local', groupDeviceId: 'mini' }, 7);
     expect(bindings.readProviderGroupBinding('r1')).toEqual({ providerId: 'anthropic', memberKey: 'local', groupDeviceId: 'mini', at: 7 });

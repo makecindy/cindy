@@ -255,6 +255,24 @@ describe('decorateProviderListWithGroups', () => {
     });
     expect(JSON.stringify(result)).not.toContain('Mac Mini');
   });
+
+  it('adds this computer’s running count to every provider open for remote use', () => {
+    const providers = [
+      { id: 'anthropic', remoteInvocationEnabled: true },
+      { id: 'openai', remoteInvocationEnabled: true, runningTurns: 9 },
+      { id: 'deepseek', remoteInvocationEnabled: false, runningTurns: 9 },
+    ];
+    const result = decorateProviderListWithGroups(
+      { providers },
+      () => null,
+      new Map([['anthropic', 3], ['deepseek', 1]]),
+    ) as { providers: Array<Record<string, unknown>> };
+    // 没在跑的为 0；结果里原有的值不认；没开放的不带。
+    expect(result.providers.map((p) => p.runningTurns ?? null)).toEqual([3, 0, null]);
+    // 读不到运行数时都不带，组所在电脑照旧只算经组的。
+    const unknown = decorateProviderListWithGroups({ providers }, () => null) as { providers: Array<Record<string, unknown>> };
+    expect(unknown.providers.every((p) => !('runningTurns' in p))).toBe(true);
+  });
 });
 
 describe('sharedProviderGroupSize', () => {

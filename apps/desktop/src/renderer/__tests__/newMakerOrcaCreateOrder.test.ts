@@ -226,9 +226,10 @@ describe('NewMakerDraftRoute Orca worker create order', () => {
     expect(collapsed).toContain(
       'const agentCatalogProviders = useMemo( () => (effectiveAgentDeviceId ? remoteAgentProviders(deviceProviders) : deviceProviders), [effectiveAgentDeviceId, deviceProviders], );',
     );
+    // 并告诉它这份目录属于哪一处：Worker 选的位置不是这一处时不拿它收窄。
     expect(
       collapsed.match(
-        /draftEnableOrcaOptions\( effectiveCollab, agentCatalogProviders, !deviceProvidersLoading, true, \)/g,
+        /draftEnableOrcaOptions\( effectiveCollab, agentCatalogProviders, !deviceProvidersLoading, true, \/\/ [^\n]*? effectiveAgentDeviceId \?\? null, \)/g,
       ) ?? [],
     ).toHaveLength(2);
     // 本机 / SSH 仍按控制端目录收窄。五条创建即发送/目标路径都要求 deferred handoff;

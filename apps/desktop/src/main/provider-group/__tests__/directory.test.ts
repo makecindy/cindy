@@ -156,6 +156,50 @@ describe('resolveMembers', () => {
     expect(resolved.map((r) => r.reportedRunning ?? null)).toEqual([null, 3, null, null]);
   });
 
+  it('takes the running count of this computer and of same-account computers', async () => {
+    const catalogs: Record<string, ProviderView[]> = {
+      mini: [view('anthropic-1a2b3c4d', 'Claude', { runningTurns: 2 } as unknown as Partial<ProviderView>)],
+      studio: [view('anthropic', 'Anthropic', { runningTurns: 2.5 } as unknown as Partial<ProviderView>)],
+      old: [view('anthropic', 'Anthropic')],
+      'share:s1': [view('anthropic', 'Anthropic', { runningTurns: 7 } as unknown as Partial<ProviderView>)],
+    };
+    const localRunning = vi.fn(async (providerId: string) => (providerId === 'anthropic' ? 4 : null));
+    const directory = createProviderGroupDirectory(deps({
+      listDevices: async () => [device('mini'), device('studio'), device('old')],
+      readDeviceProviders: async (id: string) => catalogs[id] ?? [],
+      listReceivedShares: () => [share('s1')],
+      localRunning,
+    }));
+    const member = (key: string, kind: 'local' | 'device' | 'share', agentDeviceId: string | null, providerId: string) => ({
+      key, kind, agentDeviceId, providerId, limit: 4, weight: 1, paused: false,
+    });
+    const resolved = await directory.resolveMembers('anthropic', {
+      strategy: 'least',
+      autoSwitch: true,
+      members: [
+        member('local', 'local', null, 'anthropic'),
+        member('device:mini:anthropic-1a2b3c4d', 'device', 'mini', 'anthropic-1a2b3c4d'),
+        member('device:studio:anthropic', 'device', 'studio', 'anthropic'),
+        member('device:old:anthropic', 'device', 'old', 'anthropic'),
+        member('share:s1:anthropic', 'share', 'share:s1', 'anthropic'),
+      ],
+    });
+    // 本机现算；同账号电脑只认合理值，旧版不报时没有；分享来的电脑只认本账号的数，不认那台的总数。
+    expect(resolved.map((r) => r.reportedRunning ?? null)).toEqual([4, 2, null, null, null]);
+    expect(localRunning).toHaveBeenCalledWith('anthropic');
+  });
+
+  it('leaves the local count out when it cannot be read', async () => {
+    const directory = createProviderGroupDirectory(deps({ localRunning: async () => { throw new Error('db busy'); } }));
+    const [resolved] = await directory.resolveMembers('anthropic', {
+      strategy: 'least',
+      autoSwitch: true,
+      members: [{ key: 'local', kind: 'local', agentDeviceId: null, providerId: 'anthropic', limit: 4, weight: 1, paused: false }],
+    });
+    expect(resolved).toMatchObject({ state: 'ok' });
+    expect(resolved.reportedRunning).toBeUndefined();
+  });
+
   it('names members for activity records without the sharer’s computer name', () => {
     const directory = createProviderGroupDirectory(deps());
     const member = (patch: Partial<ProviderGroupConfig['members'][number]>) => ({

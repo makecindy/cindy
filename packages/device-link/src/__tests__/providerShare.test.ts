@@ -174,6 +174,21 @@ describe('provider share identity scrubbing', () => {
     expect(readProviderShareGuestRunning(null)).toBeNull();
   });
 
+  it('keeps the computer-wide running count out of shared catalogs', async () => {
+    const { scrubSharedProvider } = await import('../providerShareCatalog.js');
+    const { readProviderRunningTurns } = await import('../providerGroup.js');
+    // 那台的总数含分享者本人与其他受邀者的任务，只给同账号电脑。
+    expect(scrubSharedProvider({ id: 'anthropic', runningTurns: 5, guestRunning: 1 }))
+      .toEqual({ id: 'anthropic', guestRunning: 1 });
+    expect(readProviderRunningTurns({ runningTurns: 0 })).toBe(0);
+    expect(readProviderRunningTurns({ runningTurns: 12 })).toBe(12);
+    for (const runningTurns of [-1, 2.5, 4097, '3', null]) {
+      expect(readProviderRunningTurns({ runningTurns })).toBeNull();
+    }
+    expect(readProviderRunningTurns([])).toBeNull();
+    expect(readProviderRunningTurns(null)).toBeNull();
+  });
+
   it('drops a login name cut short by the 50-character auto-name limit', async () => {
     const { scrubProviderShareLabel, scrubSharedProvider } = await import('../providerShareCatalog.js');
     const longName = 'Alexandra Konstantinopoulou-Whitfield Junior';

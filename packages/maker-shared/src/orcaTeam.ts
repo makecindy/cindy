@@ -103,6 +103,11 @@ export interface OrcaTeamWorker {
   effort: string | null;
   title: string | null;
   /**
+   * Worker 的 Agent 在另一台电脑或分享上运行(远程供应商)时那台的 id；任务仍在被控电脑。
+   * Agent 在被控电脑或旧被控端不返回时缺省。
+   */
+  agentDeviceId?: string;
+  /**
    * 在同账号另一台电脑运行的 Worker：那台的设备 id 与真实任务 id(sessionId 是本机不跑
    * Agent 的代理任务)。旧被控端不返回，按本机 Worker 处理。
    */
@@ -189,6 +194,7 @@ export function parseOrcaTeamWorkers(value: unknown): OrcaTeamWorker[] {
       model: text(session?.model),
       effort: text(session?.effort),
       title: text(session?.title),
+      ...(text(session?.agentDeviceId) ? { agentDeviceId: text(session?.agentDeviceId)! } : {}),
       ...(executionDevice(row.executionDevice)
         ? { executionDevice: executionDevice(row.executionDevice) }
         : {}),

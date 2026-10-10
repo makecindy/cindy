@@ -30,6 +30,10 @@
 | 被控的电脑能否同时控制另一台                 | 能。远程 Agent 就是 A 作为发起方驱动 B；当前开发会话即为实例：XD-PC 被手机控制，同时把 Agent 放在另一台电脑运行                              | `apps/desktop/src/main/remote-agent/controller/`                               |
 | 在另一台电脑新建任务、发消息、订阅事件的通道 | 已在同账号 allowlist：`maker:create-session`、`maker:send`、`maker:abort-session`、`maker:input:*`、`maker:event`、`maker:mark-orca-role` 等 | `packages/device-link/src/allowlist.ts`                                        |
 
+> 2026-10-10 更新：上表「Worker 继承 Lead 的 `agentDeviceId`，不能单独指定」已改变。用户裁决远程供应商的使用和
+> 表现与本机供应商一致，Worker 的 Agent 位置(远程供应商)可以单独指定、缺省跟 Lead；运行设备 Worker 仍与之互斥。
+> 现行规则见 [`dev-rules/orca-team-architecture.md`](dev-rules/orca-team-architecture.md)「Worker 的 Agent 位置」。
+
 **需要分清两个概念**，界面文案必须区分：
 
 - **Agent 所在电脑**（已有）：模型与登录在那台，干活还在本机。

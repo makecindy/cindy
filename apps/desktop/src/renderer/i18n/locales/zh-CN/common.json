@@ -196,10 +196,8 @@
   },
   "providerShare": {
     "entry": {
-      "manage": "管理分享",
-      "manageWithPending_other": "管理分享 · {{count}} 个待处理申请",
-      "disabledInvocation": "先打开「允许被远程调用」才能分享",
-      "disabledRemoteControl": "先在「远程连接」里允许同账号设备控制本机才能分享",
+      "label": "远程与分享",
+      "pending_other": "{{count}} 个分享申请待处理",
       "remoteControlOff": "这台电脑还没有允许同账号设备远程控制，供应商不能被远程调用或分享。",
       "openRemoteControl": "前往「远程连接」设置",
       "descriptionOff": "开启后，你的其他电脑和你分享的人可以用这个供应商的模型。关闭期间，已有的分享暂时不可用，不会被删除。"
@@ -398,13 +396,6 @@
     }
   },
   "providerGroup": {
-    "row": {
-      "label": "供应商组",
-      "description": "把多台电脑上的这个供应商合成一组，自动分配，出问题自动换一台",
-      "summary_other": "{{count}} 台电脑 · {{strategy}}",
-      "setUp": "设置供应商组",
-      "manage": "管理供应商组"
-    },
     "page": {
       "title": "{{provider}} · 远程与分享",
       "shareTitle": "分享"
@@ -2888,6 +2879,7 @@
         "remoteAccess": {
           "label": "允许被远程调用",
           "description": "开启后，你的其他电脑和你分享的人可以用这个供应商的模型，Agent 在这台电脑上运行，使用这台电脑的登录和配额。",
+          "descriptionGroup": "开启后，你的其他电脑和你分享的人可以用这个供应商的模型，由供应商组选一台电脑运行 Agent。",
           "ariaLabel": "允许你的其他电脑和你分享的人调用此供应商",
           "writeFailed": "远程调用设置未能保存，请重试"
         },
@@ -10568,7 +10560,8 @@
       },
       "autoResumePending": {
         "label": "重新连接中",
-        "labelWithProgress": "重新连接中 {{attempt}}/{{total}}"
+        "labelWithProgress": "重新连接中 {{attempt}}/{{total}}",
+        "groupSwitch": "正在换一台电脑继续"
       },
       "agentSwitch": {
         "label": "已从 {{from}} 切换到 {{to}}",

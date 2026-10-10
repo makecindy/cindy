@@ -13,7 +13,7 @@ import {
 } from '@/lib/silencedSessionDoneStore';
 import { markSessionStarting, resetSessionStartingStoreForTests } from '@/lib/sessionStartingStore';
 import { useSessionRunningStatus } from '@/hooks/useSessionRunningStatus';
-import { noteSessionTurnStartedForAlerts } from '@/hooks/usePendingAlertAttention';
+import { noteSessionTurnStartedForAlerts, refreshPendingAlerts } from '@/hooks/usePendingAlertAttention';
 import {
   addSessionAttention,
   clearSessionAttention,
@@ -69,6 +69,7 @@ vi.mock('@/lib/sessionAttentionStore', () => ({
 
 vi.mock('@/hooks/usePendingAlertAttention', () => ({
   noteSessionTurnStartedForAlerts: vi.fn(),
+  refreshPendingAlerts: vi.fn(async () => {}),
 }));
 
 function status(isRunning: boolean, hasError = false, sideTask?: boolean): SessionStatusInfo {
@@ -823,5 +824,79 @@ describe('useSessionRunningStatus silenced completion handling', () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(600); });
 
     expect(onSessionDone).toHaveBeenCalledExactlyOnceWith('paused');
+  });
+});
+
+describe('useSessionRunningStatus stale error dot', () => {
+  afterEach(() => {
+    storeMock.snapshot = new Map();
+    storeMock.listeners.clear();
+    storeMock.terminalErrorSessions.clear();
+    vi.clearAllMocks();
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  it('retires the error dot when the next turn finishes cleanly after the start missed it', async () => {
+    vi.useFakeTimers();
+    let kind: ReturnType<typeof getSessionAttentionKind>;
+    vi.mocked(addSessionAttention).mockImplementation((_sessionId, next) => {
+      kind = next;
+    });
+    vi.mocked(clearSessionAttention).mockImplementation(() => {
+      kind = undefined;
+      return true;
+    });
+    vi.mocked(getSessionAttentionKind).mockImplementation(() => kind);
+    renderHook(() => useSessionRunningStatus(undefined));
+    await emitSnapshot(new Map([['s', status(true)]]));
+    storeMock.terminalErrorSessions.add('s');
+    await emitSnapshot(new Map([['s', status(false, true)]]));
+    expect(kind).toBe('error');
+
+    // 自动续跑(换电脑后继续、额度恢复后继续)启动那一刻还读到旧错误：当时没收掉。
+    await emitSnapshot(new Map([['s', status(true)]]));
+    expect(kind).toBe('error');
+    storeMock.terminalErrorSessions.clear();
+    await emitSnapshot(new Map([['s', status(false)]]));
+    expect(clearSessionAttention).toHaveBeenCalledWith('s', { intent: 'explicit' });
+    // 派生账本重算：仍有未处置的错误尾行会重新点亮。
+    expect(refreshPendingAlerts).toHaveBeenCalled();
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+    expect(kind).toBe('done');
+  });
+
+  it('stops owning its dot once the user handled it, so a later dot from elsewhere stays', async () => {
+    vi.useFakeTimers();
+    let kind: ReturnType<typeof getSessionAttentionKind>;
+    vi.mocked(addSessionAttention).mockImplementation((_sessionId, next) => {
+      kind = next;
+    });
+    vi.mocked(getSessionAttentionKind).mockImplementation(() => kind);
+    renderHook(() => useSessionRunningStatus(undefined));
+    await emitSnapshot(new Map([['s', status(true)]]));
+    storeMock.terminalErrorSessions.add('s');
+    await emitSnapshot(new Map([['s', status(false, true)]]));
+    // 用户关掉横幅：红点被处置。
+    kind = undefined;
+    storeMock.terminalErrorSessions.clear();
+    await emitSnapshot(new Map([['s', status(true)]]));
+    // 这一轮里别的来源(如 Make 卡片失败)点了红点，但这一轮本身正常结束。
+    kind = 'error';
+    vi.mocked(clearSessionAttention).mockClear();
+    await emitSnapshot(new Map([['s', status(false)]]));
+    expect(clearSessionAttention).not.toHaveBeenCalledWith('s', { intent: 'explicit' });
+  });
+
+  it('leaves an error dot it did not set to the pending-alert ledger', async () => {
+    vi.useFakeTimers();
+    vi.mocked(getSessionAttentionKind).mockReturnValue('error');
+    renderHook(() => useSessionRunningStatus(undefined));
+    storeMock.terminalErrorSessions.add('s');
+    await emitSnapshot(new Map([['s', status(true)]]));
+    storeMock.terminalErrorSessions.clear();
+    await emitSnapshot(new Map([['s', status(false)]]));
+    expect(clearSessionAttention).not.toHaveBeenCalledWith('s', { intent: 'explicit' });
+    expect(refreshPendingAlerts).toHaveBeenCalled();
   });
 });

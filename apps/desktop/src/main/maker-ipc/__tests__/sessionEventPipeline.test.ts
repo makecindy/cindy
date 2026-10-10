@@ -311,6 +311,7 @@ function harness() {
       onExternalTurnSettled: vi.fn(),
       isAutoResumePending: vi.fn(() => false),
       isAutoResumeDeferred: vi.fn(() => false),
+      getProviderGroupSwitchHoldId: vi.fn((): number | null => null),
       getAutoResumeAttemptToken: vi.fn(() => 5),
       getAutoResumeDeferredOwner: vi.fn(() => null),
     },
@@ -756,6 +757,36 @@ describe('production Session event pipeline', () => {
       await h.dispose();
     },
   );
+
+  it('holds the error row while a provider group switches computers instead of writing it', async () => {
+    const h = harness();
+    const stashProviderGroupHeldError = vi.fn(() => true);
+    (h.deps as { stashProviderGroupHeldError?: unknown }).stashProviderGroupHeldError = stashProviderGroupHeldError;
+    h.deps.agentInputCoordinatorHolder.getProviderGroupSwitchHoldId.mockReturnValue(3);
+    const agentMeta = { uuid: 'failed-turn-uuid' };
+    h.emit(event('error', { message: "You've hit your session limit", sdkError: 'rate_limit' }, { agentMeta } as Partial<AgentEvent>));
+    expect(effects.fn('reserveTurnErrorPersistId')).not.toHaveBeenCalled();
+    expect(effects.fn('onTurnErrorEvent')).not.toHaveBeenCalled();
+    // 带上失败那一轮的身份：补落时不再读当时正在进行的那一轮。
+    expect(stashProviderGroupHeldError).toHaveBeenCalledWith(
+      'task',
+      3,
+      expect.objectContaining({ message: "You've hit your session limit" }),
+      agentMeta,
+    );
+    // 补落发生在 turn 状态重置之后：先存一份 turn 开始时刻。
+    expect(effects.fn('saveTurnStartedAtForDeferred')).toHaveBeenCalledTimes(1);
+    await h.dispose();
+  });
+
+  it('writes a different error that arrives while a switch is held as usual', async () => {
+    const h = harness();
+    (h.deps as { stashProviderGroupHeldError?: unknown }).stashProviderGroupHeldError = vi.fn(() => false);
+    h.deps.agentInputCoordinatorHolder.getProviderGroupSwitchHoldId.mockReturnValue(3);
+    h.emit(event('error', { message: 'Something else broke', sdkError: 'api_error' }));
+    expect(effects.fn('onTurnErrorEvent')).toHaveBeenCalledTimes(1);
+    await h.dispose();
+  });
 
   it('keeps deferred error and its paired done out of Orca terminal handling and preserves the failure seal', async () => {
     const h = harness();

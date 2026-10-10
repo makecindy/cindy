@@ -555,6 +555,92 @@ describe('Worker of a lead whose agent runs on another computer', () => {
     ]);
     expect(deviceAvailableModels(views, 'codex')).toEqual([]);
   });
+
+  // 远程供应商与本机供应商一视同仁(2026-10-10)：每个 Worker 可以单独选 Agent 所在电脑。
+  describe('when the Worker picks its own Agent location', () => {
+    const create = (service: ReturnType<typeof createDeps>['service'], patch: Partial<OrcaWorkerCreateParams>) =>
+      service.createWorker({ leadSessionId: 'lead-1', role: 'reviewer', label: 'reviewer', agent: 'pi', ...patch });
+
+    it("runs a local Lead's Worker on another computer with that computer's catalog", async () => {
+      const routing = deviceWorkerRoutingContext(views, 'pi');
+      const { deps, service } = createDeps({ getProviderRoutingContext: vi.fn(async () => routing) });
+      const result = await create(service, { model: 'spark/deepseek', agentDeviceId: 'device-b' });
+      expect(result).toMatchObject({ ok: true, resolved: { model: 'spark/deepseek', providerId: 'spark', agentDeviceId: 'device-b' } });
+      expect(deps.getProviderRoutingContext).toHaveBeenCalledWith('pi', null, 'device-b');
+      expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({
+        model: 'spark/deepseek', providerId: 'spark', agentDeviceId: 'device-b',
+      }));
+    });
+
+    it("runs a remote Lead's Worker on the task computer when asked", async () => {
+      const { deps, service } = createDeps({ getLeadSessionRow: vi.fn(async () => deviceLead({ agentKind: 'codex', model: 'gpt-5.5', providerId: 'xd' })) });
+      const result = await service.createWorker({
+        leadSessionId: 'lead-1', role: 'dev', label: 'dev', agent: 'codex', model: 'gpt-5.4', agentDeviceId: null,
+      });
+      expect(result).toMatchObject({ ok: true, resolved: { agentDeviceId: null } });
+      expect(deps.getProviderRoutingContext).toHaveBeenCalledWith('codex', null);
+      const opts = vi.mocked(deps.bootstrapSession).mock.calls[0]![0];
+      expect(opts).not.toHaveProperty('agentDeviceId');
+    });
+
+    it("does not carry the Lead's model to a computer that lacks it", async () => {
+      const { service } = createDeps({
+        getLeadSessionRow: vi.fn(async () => deviceLead({ agentKind: 'codex', model: 'gpt-only-on-b', providerId: 'xd' })),
+      });
+      const result = await service.createWorker({
+        leadSessionId: 'lead-1', role: 'dev', label: 'dev', agent: 'codex', agentDeviceId: null,
+      });
+      expect(result).toMatchObject({ ok: true, resolved: { model: 'gpt-5.5', agentDeviceId: null } });
+    });
+
+    it("does not carry the Lead's source to a different computer", async () => {
+      // Lead 在 device-b 用的来源 other 在 device-c 上不存在：跟 Lead 同位置时会按「Lead 来源不可用」拒绝，
+      // 换了位置就按那台的默认来源。
+      const routing = deviceWorkerRoutingContext(views, 'pi');
+      const { deps, service } = createDeps({
+        getLeadSessionRow: vi.fn(async () => deviceLead({ providerId: 'other' })),
+        getProviderRoutingContext: vi.fn(async () => routing),
+      });
+      const result = await create(service, { agentDeviceId: 'device-c' });
+      expect(result).toMatchObject({ ok: true, resolved: { model: 'spark/qwen', providerId: 'spark', agentDeviceId: 'device-c' } });
+      expect(deps.getProviderRoutingContext).toHaveBeenCalledWith('pi', null, 'device-c');
+    });
+
+    it.each([
+      ['[REMOTE_AGENT_SHARE_PAUSED] the owner has paused this share', 'REMOTE_AGENT_SHARE_PAUSED'],
+      ['[DEVICE_LINK_NOT_CONNECTED] offline', 'REMOTE_AGENT_DEVICE_UNREACHABLE'],
+    ])('fails before reserving a slot when that catalog cannot be read (%s)', async (message, errorCode) => {
+      const { deps, service } = createDeps({
+        getProviderRoutingContext: vi.fn(async () => { throw new Error(message); }),
+      });
+      const result = await create(service, { agentDeviceId: 'share:abc' });
+      expect(result).toMatchObject({ ok: false, errorCode });
+      expect(deps.reserveWorkerCreation).not.toHaveBeenCalled();
+      expect(deps.bootstrapSession).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['an SSH Lead', { lead: { remoteHostId: 'host-1' }, params: {} }],
+      ['a run-on-device Worker', { lead: {}, params: { executionDeviceId: 'office' } }],
+      ['a malformed id', { lead: {}, params: { agentDeviceId: 'bad id/..' } }],
+    ])('rejects another computer for %s', async (_name, { lead, params }) => {
+      const { deps, service } = createDeps({
+        getLeadSessionRow: vi.fn(async () => deviceLead({ agentDeviceId: null, ...lead })),
+      });
+      const result = await create(service, { agentDeviceId: 'device-b', ...params });
+      expect(result).toMatchObject({ ok: false, errorCode: 'INVALID_PARAMS' });
+      expect(deps.reserveWorkerCreation).not.toHaveBeenCalled();
+    });
+
+    it('treats this computer as the task computer', async () => {
+      const { deps, service } = createDeps({ isSelfDeviceId: (id) => id === 'self-pc' });
+      const result = await service.createWorker({
+        leadSessionId: 'lead-1', role: 'dev', label: 'dev', agent: 'codex', agentDeviceId: 'self-pc',
+      });
+      expect(result).toMatchObject({ ok: true, resolved: { agentDeviceId: null } });
+      expect(deps.getProviderRoutingContext).toHaveBeenCalledWith('codex', null);
+    });
+  });
 });
 
 const UUID_V4_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;

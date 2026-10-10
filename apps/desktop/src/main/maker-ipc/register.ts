@@ -27,7 +27,9 @@ import { readDeviceProviderViews } from '../remote-agent/controller/deviceCatalo
 import { checkDeviceRoute } from '../remote-agent/controller/deviceRouteCheck.js';
 import { isProviderShareAgentDeviceId } from '../../shared/providerShare.js';
 import {
+  isProviderGroupReleased,
   listRemoteProviderGroupBindings,
+  markProviderGroupReleased,
   readProviderGroupBinding,
   writeProviderGroupBinding,
 } from '../provider-group/bindings.js';
@@ -38,8 +40,11 @@ import {
   getProviderGroupRemoteClient,
   getProviderGroupRemoteGroups,
   getProviderGroupRouter,
+  setProviderGroupLocalLoad,
   setProviderGroupTurnProbe,
 } from '../provider-group/runtime.js';
+import { countProviderRunningTurns, type ProviderLocalLoadRoute } from '../provider-group/localLoad.js';
+import { remoteAgentHostRunningProviders } from '../remote-agent/host/service.js';
 import {
   createProviderGroupService,
   PROVIDER_GROUP_SUPERSEDED_ERROR,
@@ -47,7 +52,10 @@ import {
   type ProviderGroupService,
   type ProviderGroupSessionRow,
   type ProviderGroupStartContext,
+  type ProviderGroupTurnErrorHooks,
 } from '../provider-group/service.js';
+import { createProviderGroupHeldTurnErrors } from '../provider-group/heldTurnErrors.js';
+import { classifyProviderGroupSwitchCause } from '../provider-group/switchCause.js';
 import { listProviderGroups, readProviderGroup } from '../provider-group/store.js';
 import {
   isRemoteProviderInvocationAllowed,
@@ -131,6 +139,7 @@ import {
   storedCustomProviderId,
   isLocalOnlyProviderForAgent,
   isOrganizationManagedProvider,
+  type ProviderView,
 } from '@cindy/model-providers';
 import { createId } from '@paralleldrive/cuid2';
 import {
@@ -634,6 +643,7 @@ import {
 } from '../maker-host/session-storage.js';
 import { libraryExtraDirSyncTargets } from './libraryExtraDirSyncTargets.js';
 import {
+  captureDeferredTurnError,
   clearSessionPersistState,
   clearSessionThinkingSnapshots,
   consumeLastAssistantPersistId,
@@ -654,10 +664,12 @@ import {
   sealAssistantBlockForLateFinal,
   markAutoResumeOutcome,
   onTurnErrorEvent,
+  persistDeferredTurnError,
   prepareSyntheticToolEventForBroadcast,
   redactToolInputForUntrustedBoundary,
   resetTurnPersistState,
   saveTurnStartedAtForDeferred,
+  type DeferredTurnErrorRow,
 } from '../messagePersistBroadcaster.js';
 import { ensureCcManagerInstalledOrInstall } from '../remote-ssh/cc-manager-install.js';
 import {
@@ -869,8 +881,10 @@ import {
   type WorkerTerminalTurnCapture,
 } from './orcaTeamService.js';
 import {
+  agentDeviceCatalogFailure,
   createOrcaWorkerCreationService,
   normalizeOrcaWorkerLabel,
+  pickWorkerAgentDeviceId,
 } from './orcaWorkerCreationService.js';
 import {
   resolveSendToSessionExecutionConfig,
@@ -904,7 +918,8 @@ import {
   createOrcaRemoteWorkerSessionOpener,
   registerOrcaRemoteWorkerHandlers,
 } from './orcaRemoteWorkerHost.js';
-import { createOrcaRemoteWorkers, type OrcaRemoteWorkers } from './orcaRemoteWorkers.js';
+import { createOrcaRemoteWorkers, isExecutionDeviceCandidate, type OrcaRemoteWorkers } from './orcaRemoteWorkers.js';
+import { getReceivedShares, providerShareAgentDeviceId } from '../device-link/providerShareGuest.js';
 import { ORCA_EXECUTION_DEVICES_CHANNEL } from '@cindy/device-link';
 import {
   parseOrcaRemoteLead,
@@ -1612,6 +1627,33 @@ const autoResumeBookkeeping = new AutoResumeBookkeeping({
 });
 
 /**
+ * 供应商组自动换电脑期间先不呈现的那次失败(provider-group/heldTurnErrors.ts)：error 行暂存在这里，换成了丢掉，
+ * 没换成补落并放出横幅与 Agent Island 提醒。
+ */
+const providerGroupHeldErrors = createProviderGroupHeldTurnErrors<DeferredTurnErrorRow>({
+  // 暂存那一刻(仍在失败那一轮里)取好补落要用的一切；补落只写这一行，不碰那时正在进行的一轮，
+  // 按出错的时刻排序：换电脑途中用户发了新消息，补落的错误卡仍排在那条消息之前。
+  capture: (sessionId, data, agentMeta) =>
+    captureDeferredTurnError(
+      sessionId,
+      data as { message?: unknown; reason?: unknown; sdkError?: unknown; toolLoop?: unknown } | null,
+      (agentMeta ?? null) as AgentMeta | null,
+    ),
+  persist: (sessionId, row) => {
+    persistDeferredTurnError(sessionId, row);
+  },
+  surface: (sessionId, detail) => surfaceSuppressedAutoResumeErrorInAgentIsland(sessionId, detail),
+  // holder 是可变绑定,必须懒读。
+  releaseHold: (sessionId, holdId) =>
+    agentInputCoordinatorHolder?.releaseProviderGroupSwitchHold(sessionId, holdId) ?? false,
+  ownerKey: () => activeOwnerScopeKey(),
+  log: (message, meta) => log.info(message, meta),
+});
+
+/** 换电脑这一趟久久没有结局(交接卡住等)时不再瞒着：先把错误放出来，换成了照常续跑。 */
+const PROVIDER_GROUP_SWITCH_HOLD_MAX_MS = 3 * 60_000;
+
+/**
  * Continuation-only auto-retry is scheduled against the current runtime
  * Session, but stall abort recovery, terminal-error drain, or a Codex
  * interrupt ACK failure may close/rebuild that exact instance before the
@@ -2241,6 +2283,9 @@ interface OrcaCollabService {
     label: string;
     workingDir?: string;
     initialTask?: string;
+    executionDeviceId?: string;
+    /** Worker 的 Agent 所在位置；语义见 OrcaWorkerCreateParams.agentDeviceId。 */
+    agentDeviceId?: string | null;
   }) => Promise<
     | {
         ok: true;
@@ -2415,9 +2460,18 @@ interface OrcaCollabService {
   }) => Promise<
     { ok: true; workerId?: string } | { ok: false; errorCode: string; message: string }
   >;
-  listAvailableModels: (params: { agent?: AgentKind; callerSessionId?: string }) => Promise<
+  listAvailableModels: (params: {
+    agent?: AgentKind;
+    callerSessionId?: string;
+    /** 列哪里的模型：缺省 = Lead 所在位置；null = 任务所在电脑；string = 那台电脑或分享。 */
+    agentDeviceId?: string | null;
+  }) => Promise<
     | {
         ok: true;
+        /** 本次列出的位置(null = 任务所在电脑)。 */
+        agentDeviceId?: string | null;
+        /** 可以放 Worker Agent 的其他位置(同账号电脑与收到的分享)。 */
+        locations?: Array<{ agentDeviceId: string; name: string }>;
         codex?: Array<{
           id: string;
           label: string;
@@ -2459,6 +2513,8 @@ interface EnableOrcaOptions {
   executionDeviceId?: string;
   /** 运行设备上的工作目录；缺省由那台分配。只在指定运行设备时生效。 */
   workingDir?: string;
+  /** 首个 Worker 的 Agent 所在位置(远程供应商)；语义见 OrcaWorkerCreateParams.agentDeviceId。 */
+  agentDeviceId?: string | null;
 }
 
 let orcaCollabServiceHolder: OrcaCollabService | null = null;
@@ -4285,9 +4341,11 @@ function handleAgentIslandEventAfterBroadcast(
       return;
     }
     const terminalError = event.type === 'error' && isTerminalTurnErrorEvent(event);
+    // 供应商组正在为这次失败换电脑：与中断自愈同样先不提醒，没换成时由 providerGroupHeldErrors 补上。
     const autoResumePendingOrDeferred =
       agentInputCoordinatorHolder?.isAutoResumePending(session.id) === true ||
-      agentInputCoordinatorHolder?.isAutoResumeDeferred(session.id) === true;
+      agentInputCoordinatorHolder?.isAutoResumeDeferred(session.id) === true ||
+      (agentInputCoordinatorHolder?.getProviderGroupSwitchHoldId(session.id) ?? null) !== null;
     const autoResumeOwnsError =
       autoResumePendingOrDeferred ||
       autoResumeBookkeeping.shouldSuppressAgentIslandError(session.id);
@@ -5168,6 +5226,8 @@ const sessionEventDependencies: SessionEventDependencies = {
   get autoResumeBookkeeping() {
     return autoResumeBookkeeping;
   },
+  stashProviderGroupHeldError: (sessionId, holdId, data, agentMeta) =>
+    providerGroupHeldErrors.stash(sessionId, holdId, data, agentMeta),
   get pendingFailedTurnAssistantPersistId() {
     return pendingFailedTurnAssistantPersistId;
   },
@@ -6017,6 +6077,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // 新控制端只有看到此位，才会让被控端延后 UI initial_task 并在 Lead 首条
       // 输入 accepted 且历史可查询后走 WORKER_DISPATCH_UI_ASSIGNMENT；旧端继续即时派发。
       supportsDeferredOrcaUiAssignment: true,
+      // 新控制端只有看到此位，才在 Worker 的模型面板里列出远程供应商并给创建 / 开启协同带
+      // agentDeviceId(Worker 的 Agent 所在电脑)；旧 desktop 会静默丢掉这个字段，把 Worker 建在
+      // 与 Lead 相同的位置，所以缺省 false 时控制端不提供。
+      supportsOrcaWorkerAgentDevice: true,
       // 调度更新支持 intervalMs:null 的显式清空表达(IPC 入口归一化成引擎的
       // 「带 key 的 undefined」)。旧 desktop 缺省为 false——旧引擎会把 null 当
       // 已设间隔算出 now+null 立即触发,mobile 必须据此回退旧 wire 形态(省略
@@ -7478,6 +7542,28 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       remoteHostId: row.remoteHostId ?? null,
       sdkSessionId: row.sdkSessionId ?? null,
     };
+  }
+
+  async function readProviderLocalLoadRoutes(sessionIds: readonly string[]): Promise<ProviderLocalLoadRoute[]> {
+    const rows = await getDbClient()
+      .drizzle.select({
+        id: sessions.id,
+        agentKind: sessions.agentKind,
+        model: sessions.model,
+        providerId: sessions.providerId,
+        agentDeviceId: sessions.agentDeviceId,
+        remoteHostId: sessions.remoteHostId,
+      })
+      .from(sessions)
+      .where(inArray(sessions.id, [...sessionIds]));
+    return rows.map((row) => ({
+      id: row.id,
+      agentKind: dbToMakerAgentKind(row.agentKind),
+      model: row.model ?? null,
+      providerId: row.providerId ?? null,
+      agentDeviceId: row.agentDeviceId ?? null,
+      remoteHostId: row.remoteHostId ?? null,
+    }));
   }
 
   async function resolveProviderGroupImplicitProvider(agentKind: AgentKind, model: string): Promise<string | null> {
@@ -9483,6 +9569,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     localDeviceId: getSelfDeviceId,
     readBinding: readProviderGroupBinding,
     writeBinding: (sessionId, binding) => writeProviderGroupBinding(sessionId, binding),
+    isReleased: isProviderGroupReleased,
+    markReleased: (sessionId, group) => markProviderGroupReleased(sessionId, group),
     readSessionRow: readProviderGroupSessionRow,
     resolveImplicitProvider: resolveProviderGroupImplicitProvider,
     persistRoute: persistProviderGroupRoute,
@@ -9546,6 +9634,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     log,
   });
   setProviderGroupTurnProbe((sessionId) => maker.getSession(sessionId)?.isTurnRunning() ?? false);
+  // 这台电脑上每个供应商正在运行一轮的任务数：组里「本机」这台显示它，同账号电脑读目录时也带上(§5)。
+  setProviderGroupLocalLoad(() => countProviderRunningTurns({
+    listTurnRunningSessions: () => maker.listActiveSessions().filter((s) => s.isTurnRunning()).map((s) => s.id),
+    readSessionRoutes: readProviderLocalLoadRoutes,
+    resolveImplicitProvider: resolveProviderGroupImplicitProvider,
+    hostRunningProviders: remoteAgentHostRunningProviders,
+  }));
   // 经另一台电脑上的组运行的任务：开始 / 结束一轮时报告给组所在电脑，让它的分配看到真实负载。
   providerGroupLeaseReporter?.dispose();
   providerGroupLeaseReporter = createProviderGroupLeaseReporter({
@@ -9720,6 +9815,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             ...(opts.workingDir ? { workingDir: opts.workingDir } : {}),
           }
         : {}),
+      ...(opts.agentDeviceId !== undefined ? { agentDeviceId: opts.agentDeviceId } : {}),
     });
     if (!result.ok) throwOrcaServiceFailure(result);
     log.info('enableOrca done', {
@@ -12473,6 +12569,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         deferDelegateTask?: unknown;
         executionDeviceId?: unknown;
         workingDir?: unknown;
+        agentDeviceId?: unknown;
       };
       const workerAgent: AgentKind =
         body.workerAgent === 'codex' ? 'codex' : body.workerAgent === 'pi' ? 'pi' : 'claude-code';
@@ -12510,6 +12607,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
                 : {}),
             }
           : {}),
+        // 首个 Worker 的 Agent 所在位置(远程供应商)；旧控制端不带 = 跟 Lead。
+        ...pickWorkerAgentDeviceId(body.agentDeviceId),
       });
     },
   );
@@ -12779,6 +12878,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               : {}),
           }
         : {}),
+      // Worker 的 Agent 所在位置(远程供应商)；旧控制端不带 = 跟 Lead。
+      ...pickWorkerAgentDeviceId(b.agentDeviceId),
     });
     if (!result.ok) throwOrcaServiceFailure(result);
     return {
@@ -13135,6 +13236,31 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     return { devices: await orcaRemoteWorkers.listExecutionDevices() };
   });
 
+  /**
+   * Lead 的 list_available_models 给出的 Worker Agent 位置(远程供应商)：同账号在线、开了远程控制的
+   * 电脑，以及收到的、未暂停的分享。只列位置不读目录；那台没开放供应商时按位置再列模型会是空的。
+   * 分享不写分享者的电脑名(provider-sharing.md §6)，写「供应商 · 分享者」。
+   */
+  async function listWorkerAgentLocations(): Promise<Array<{ agentDeviceId: string; name: string }>> {
+    const { devices } = await handleListDevices(deviceDirectoryDeps()).catch(() => ({ devices: [] }));
+    const shares = getReceivedShares().filter((share) => share.status === 'active');
+    return [
+      ...devices
+        .filter(isExecutionDeviceCandidate)
+        .map((device) => ({ agentDeviceId: device.deviceId, name: device.name || device.deviceId })),
+      ...shares.flatMap((share) => {
+        try {
+          return [{
+            agentDeviceId: providerShareAgentDeviceId(share.shareId),
+            name: `${share.providerLabel} · ${share.owner.displayName}`,
+          }];
+        } catch {
+          return [];
+        }
+      }),
+    ];
+  }
+
   const getProviderRoutingContext = () =>
     readOrcaWorkerProviderRoutingContext({
       providerService: getDesktopProviderService(),
@@ -13215,6 +13341,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // paths on another device. Reject before directory lookup or remote creation.
       if (params.executionDeviceId !== undefined) {
         throw new PluginTaskError('PERMISSION_DENIED', 'Plugin-owned tasks cannot create Workers on another device');
+      }
+      // 插件登记的路由不含 Agent 所在电脑：Worker 只能跟 Lead(或留在本机)，不能指定别的电脑。
+      // 指向本机自己按留在本机算(与创建服务同口径)。
+      if (
+        typeof params.agentDeviceId === 'string'
+        && params.agentDeviceId !== getSelfDeviceId()
+        && params.agentDeviceId !== await readSessionAgentDeviceId(params.leadSessionId)
+      ) {
+        throw new PluginTaskError('PERMISSION_DENIED', 'Plugin-owned tasks cannot run a Worker Agent on another computer');
       }
       const cfg = readPluginTaskConfig(receipt.pluginId);
       const resolveAuthorizedDirectory = (requested: string) => resolvePluginWorkerDirectory({
@@ -13297,11 +13432,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     getAvailableModels: (agent) => maker.getCapabilities(agent).availableModels,
     getProviderRoutingContext: async (agent, remoteHostId, agentDeviceId) => agentDeviceId && !remoteHostId
-      // lead 的 Agent 在另一台电脑运行：worker 的模型与来源按那台的目录。
+      // Worker 的 Agent 在另一台电脑(或分享)运行：模型与来源按那台的目录。
       ? deviceWorkerRoutingContext(await readDeviceProviderViews(remoteBackgroundInvoke, agentDeviceId), agent ?? 'claude-code')
       : agent === 'codex' && remoteHostId
         ? sshCodexWorkerRoutingContext(await readSshCodexModelList({ id: remoteHostId }, listSshCodexProviders))
         : getProviderRoutingContext(),
+    isSelfDeviceId: (deviceId) => deviceId === getSelfDeviceId(),
     readClaudeApiKey,
     reserveWorkerCreation,
     renewWorkerCreationReservation,
@@ -14767,15 +14903,31 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         };
       }
     },
-    listAvailableModels: async ({ agent, callerSessionId }) => {
+    listAvailableModels: async ({ agent, callerSessionId, agentDeviceId: requestedAgentDeviceId }) => {
       try {
         const agents: AgentKind[] = agent ? [agent] : ['codex', 'claude-code', 'pi'];
-        // Agent 在另一台电脑运行的任务：Worker 也在那台运行，列那台的模型与来源。
-        const agentDeviceId = callerSessionId ? await readSessionAgentDeviceId(callerSessionId) : null;
+        // 不指定位置时列 Lead 所在位置(Lead 的 Agent 在另一台电脑运行就列那台)，与 create_worker
+        // 不指定位置时 Worker 跟 Lead 同一口径；指定了就列那里(null = 任务所在电脑)。
+        const leadAgentDeviceId = callerSessionId ? await readSessionAgentDeviceId(callerSessionId) : null;
+        const agentDeviceId = requestedAgentDeviceId === undefined
+          ? leadAgentDeviceId
+          : requestedAgentDeviceId && requestedAgentDeviceId !== getSelfDeviceId()
+            ? requestedAgentDeviceId
+            : null;
+        // SSH Lead 的 Worker 在 SSH 主机上运行 Agent，不能放到别的电脑：不列可选位置。
+        const sshLead = callerSessionId ? Boolean(await readSessionRemoteHostIdCached(callerSessionId)) : false;
+        const locations = sshLead ? undefined : await listWorkerAgentLocations();
         if (agentDeviceId) {
-          const views = await readDeviceProviderViews(remoteBackgroundInvoke, agentDeviceId);
+          let views: ProviderView[];
+          try {
+            views = await readDeviceProviderViews(remoteBackgroundInvoke, agentDeviceId);
+          } catch (err) {
+            return agentDeviceCatalogFailure(err);
+          }
           return {
             ok: true,
+            agentDeviceId,
+            ...(locations ? { locations } : {}),
             ...Object.fromEntries(agents.map((a) => [
               a === 'codex' ? 'codex' : a === 'pi' ? 'pi' : 'claude_code',
               deviceAvailableModels(views, a),
@@ -14806,7 +14958,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             defaultProviderId: providerRouting.resolveDefaultProviderIdForModel(a, m.id),
           }));
         }
-        return { ok: true, ...result };
+        return { ok: true, agentDeviceId: null, ...(locations ? { locations } : {}), ...result };
       } catch (err) {
         return {
           ok: false,
@@ -16383,10 +16535,45 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // 两处必须同判据 —— 否则会出现"按住了却永远不接管"或"没按住却接管"的错配。
     isResumableTurnErrorCandidate: canRecoverTurn,
     // 被按住的 error 最终没接管 → 只补落 error 行(横幅 coordinator 自己设)。
+    // 纯判定：供应商组会先试着换电脑时，这次错误先不呈现(provider-groups.md §6.1)。
+    providerGroupSwitchCandidate: (sessionId, signals) =>
+      providerGroupService?.mayHandleTurnError(sessionId, signals)
+        ? classifyProviderGroupSwitchCause(signals)
+        : null,
     onUsageLimitedTurnError: (sessionId, signals, _item, candidateToken) => {
       // 供应商组分配的任务先试自动换电脑，不换时由它交回额度重置后自动继续。
-      if (providerGroupService) providerGroupService.onTurnError(sessionId, signals, candidateToken);
-      else usageLimitAutoResume.onTurnError(sessionId, signals, candidateToken);
+      if (!providerGroupService) {
+        usageLimitAutoResume.onTurnError(sessionId, signals, candidateToken);
+        return;
+      }
+      // 先不呈现的那次错误：换成了丢掉，不换了先放出来再交回原有处理；一直没有结局时到点放出来。
+      const holdId = inputCoordinator.getProviderGroupSwitchHoldId(sessionId);
+      let hooks: ProviderGroupTurnErrorHooks | undefined;
+      let holdTimer: ReturnType<typeof setTimeout> | undefined;
+      if (holdId !== null) {
+        hooks = {
+          beforeFallback: () => providerGroupHeldErrors.release(sessionId, holdId),
+          resumed: () => providerGroupHeldErrors.discard(sessionId, holdId),
+        };
+        holdTimer = setTimeout(
+          () => providerGroupHeldErrors.release(sessionId, holdId),
+          PROVIDER_GROUP_SWITCH_HOLD_MAX_MS,
+        );
+      }
+      void providerGroupService
+        .onTurnError(sessionId, signals, candidateToken, hooks)
+        .catch((error: unknown) => {
+          log.warn('provider group: handling a failed turn did not complete', {
+            sessionId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        })
+        .finally(() => {
+          if (holdId === null) return;
+          clearTimeout(holdTimer);
+          // 用户中途接手、错误已被新的一轮换掉等：补落 error 行，错误已不是当前状态时不再呈现。
+          providerGroupHeldErrors.release(sessionId, holdId);
+        });
     },
     onResumableTurnErrorDiscarded: (
       sessionId: string,

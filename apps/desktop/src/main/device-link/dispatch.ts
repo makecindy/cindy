@@ -404,8 +404,11 @@ export function setRemoteAgentHandler(handler: RemoteAgentHandler | null): void 
 export interface ProviderGroupRemoteHandler {
   /** `provider-group:remote` 请求。 */
   handle(controller: string, raw: unknown): Promise<unknown>;
-  /** 给同账号电脑的 `maker:provider:list` 补上组摘要(组所属供应商的 `group` 字段)。 */
-  decorateProviderList(result: unknown): unknown;
+  /**
+   * 给同账号电脑的 `maker:provider:list` 补上组摘要(组所属供应商的 `group` 字段)与这台电脑上每个开放的
+   * 供应商正在运行的任务数(`runningTurns`)。
+   */
+  decorateProviderList(result: unknown): unknown | Promise<unknown>;
   /** 分享出去的这个供应商建了组时组里有几台电脑(只给受邀者看台数，不给名单)；没有组返回 null。 */
   sharedGroupSize(providerId: string): number | null;
 }
@@ -4609,9 +4612,9 @@ async function executeRemoteInvoke(src: string, payload: InvokePayload | undefin
         || listingCapabilities.includes(CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2),
         args,
       ));
-    // 供应商组摘要只给同账号电脑(受邀者与共享任务访客另有投影，这里不加，scrubSharedProvider 再兜一层)。
+    // 供应商组摘要与运行数只给同账号电脑(受邀者与共享任务访客另有投影，这里不加，scrubSharedProvider 再兜一层)。
     const decorated = payload.channel === 'maker:provider:list' && isSameAccountController(src) && providerGroupRemoteHandler
-      ? providerGroupRemoteHandler.decorateProviderList(projected)
+      ? await providerGroupRemoteHandler.decorateProviderList(projected)
       : projected;
     if (!broadcastTap.isDataOwnerBroadcastScopeCurrent(invocationOwner)) throw new Error('[NOT_FOUND] Session does not exist');
     return { ok: true, result: decorated };

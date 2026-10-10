@@ -32,6 +32,13 @@ export function throwOrcaServiceFailure(result: { ok: false; errorCode: string; 
     // 协同远端 Worker：运行设备不可达 / 版本过旧。device-link 控制端按既有规则降级。
     case 'REMOTE_AGENT_DEVICE_UNREACHABLE':
       return throwIpcError('REMOTE_AGENT_DEVICE_UNREACHABLE', result.message);
+    // Worker 用分享来的供应商：分享已暂停 / 已不可用 / 暂时不可用。
+    case 'REMOTE_AGENT_SHARE_PAUSED':
+      return throwIpcError('REMOTE_AGENT_SHARE_PAUSED', result.message);
+    case 'REMOTE_AGENT_SHARE_REMOVED':
+      return throwIpcError('REMOTE_AGENT_SHARE_REMOVED', result.message);
+    case 'REMOTE_AGENT_SHARE_UNAVAILABLE':
+      return throwIpcError('REMOTE_AGENT_SHARE_UNAVAILABLE', result.message);
     case 'UNSUPPORTED_CAPABILITY':
       return throwIpcError('UNSUPPORTED_CAPABILITY', result.message);
     default:

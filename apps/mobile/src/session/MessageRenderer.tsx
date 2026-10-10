@@ -5323,7 +5323,9 @@ function MobileAutoResumeActionRow({
     );
   }
 
-  const label = info.agentSwitch
+  const label = info.groupSwitchPending
+    ? t('message.systemCard.autoResume.groupSwitchPending')
+    : info.agentSwitch
     ? t(`message.systemCard.autoResume.agentSwitch.${info.agentSwitch.cause}`, {
         from: info.agentSwitch.from,
         to: info.agentSwitch.to,

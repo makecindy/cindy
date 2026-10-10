@@ -182,6 +182,11 @@ export function installRemoteAgentHost(options: { getMaker: () => Maker; userDat
   });
 }
 
+/** 本机替其他电脑运行、正在运行一轮的远程 Agent 任务用的本机供应商(每个任务一项)；服务没起来时为空。 */
+export function remoteAgentHostRunningProviders(): string[] {
+  return host?.turnRunningProviders() ?? [];
+}
+
 /** 退出时结束全部远程 Agent 任务。 */
 export function disposeRemoteAgentHost(): void {
   setRemoteAgentHandler(null);

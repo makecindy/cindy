@@ -3,6 +3,7 @@
  * 手机读不到另一个账号的电脑，所以由被控电脑代读分享者电脑的 `maker:provider:list` 后转交；
  * 身份只有昵称与头像，目录里分享者的账号身份(登录邮箱等)在每一跳都去掉。
  */
+import { PROVIDER_RUNNING_TURNS_FIELD } from './providerGroup.js';
 import { providerShareIdentifier, sharedTaskDeviceId } from './protocol.js';
 
 export const PROVIDER_SHARE_RECEIVED_CATALOGS_CHANNEL = 'maker:provider-share:received-catalogs';
@@ -145,7 +146,8 @@ function accountIdentity(value: unknown): string | undefined {
  * 分享出去的一条供应商：去掉分享者的账号身份字段(`subscriptionAccount` / `openAiAccount`，
  * 含登录邮箱)并清理名称，地址里的用户名密码与查询参数也去掉；其余展示字段沿用同账号投影。
  * 供应商组摘要(`group`，列着组内电脑)只给同账号电脑，这里也去掉；只留组里有几台(`groupSize`)
- * 与受邀者自己的运行数(`guestRunning`)，不合理的值一并去掉。
+ * 与受邀者自己的运行数(`guestRunning`)，不合理的值一并去掉；这台电脑上的总运行数(`runningTurns`)含分享者
+ * 本人与其他人的任务，只给同账号电脑，这里去掉。
  * 分享者电脑、受邀者电脑与手机都各过一遍。
  */
 export function scrubSharedProvider<T>(provider: T): T {
@@ -154,6 +156,7 @@ export function scrubSharedProvider<T>(provider: T): T {
   const guestRunning = readProviderShareGuestRunning(provider);
   const { subscriptionAccount, openAiAccount, ...fields } = provider as Record<string, unknown>;
   delete fields.group;
+  delete fields[PROVIDER_RUNNING_TURNS_FIELD];
   delete fields[PROVIDER_SHARE_GROUP_SIZE_FIELD];
   delete fields[PROVIDER_SHARE_GUEST_RUNNING_FIELD];
   if (groupSize !== null) fields[PROVIDER_SHARE_GROUP_SIZE_FIELD] = groupSize;
