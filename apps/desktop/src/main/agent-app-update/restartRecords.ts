@@ -47,9 +47,13 @@ function readRecords(file: string, mode: 'lenient' | 'before-write'): AgentAppUp
   try {
     const parsed = JSON.parse(raw) as { records?: unknown };
     if (!Array.isArray(parsed.records)) throw new Error('records missing');
-    return parsed.records
-      .map(parseRecord)
-      .filter((record): record is AgentAppUpdateMarker => !!record);
+    const records = parsed.records.map(parseRecord);
+    // Before a write, one invalid entry makes the whole file untrusted: move it
+    // aside intact rather than rewriting it without that entry.
+    if (mode === 'before-write' && records.some((record) => !record)) {
+      throw new Error('invalid record');
+    }
+    return records.filter((record): record is AgentAppUpdateMarker => !!record);
   } catch {
     if (mode === 'before-write') {
       // Unparseable content is moved aside rather than overwritten: nothing is
@@ -65,7 +69,7 @@ function readRecords(file: string, mode: 'lenient' | 'before-write'): AgentAppUp
   }
 }
 
-function writeRecords(file: string, records: AgentAppUpdateMarker[]): void {
+function writeRecords(file: string, records: readonly unknown[]): void {
   if (records.length === 0) {
     for (const target of [file, `${file}.bak`]) fs.rmSync(target, { force: true });
     return;
@@ -86,10 +90,27 @@ export function addRestartRecord(file: string, record: AgentAppUpdateMarker): vo
 }
 
 export function removeRestartRecord(file: string, requestId: string): void {
-  const records = readRecords(file, 'lenient');
-  const remaining = records.filter((record) => record.requestId !== requestId);
-  // Nothing of ours (or an unreadable file): leave it untouched.
-  if (remaining.length === records.length) return;
+  // Works on the raw entries so an entry this module cannot parse is kept intact.
+  let entries: unknown[];
+  try {
+    const raw = readAtomicFileSync(file);
+    if (!raw) return;
+    const parsed = JSON.parse(raw) as { records?: unknown };
+    if (!Array.isArray(parsed.records)) return;
+    entries = parsed.records;
+  } catch (error) {
+    log.warn('agent app update marker read failed', { error: String(error) });
+    return;
+  }
+  const remaining = entries.filter(
+    (entry) =>
+      !(
+        entry &&
+        typeof entry === 'object' &&
+        (entry as { requestId?: unknown }).requestId === requestId
+      ),
+  );
+  if (remaining.length === entries.length) return;
   try {
     writeRecords(file, remaining);
   } catch (error) {

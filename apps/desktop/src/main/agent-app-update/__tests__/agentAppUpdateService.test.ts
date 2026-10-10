@@ -360,6 +360,24 @@ describe('Agent app update install', () => {
     expect(harness.deps.notify).not.toHaveBeenCalled();
   });
 
+  it('keeps every undelivered failure notice, however many there are', async () => {
+    const harness = setup({
+      apply: vi.fn(async () => {
+        harness.switchOwner(null);
+        return { status: 'failed' as const, reason: 'x', errorCode: 'download_failed' };
+      }),
+    });
+    for (let i = 0; i < 25; i += 1) {
+      harness.switchOwner(ownerA);
+      await harness.service.install({ sessionId: `task-${i}`, sessionInstanceId: `instance-${i}` });
+      await flush();
+    }
+    harness.switchOwner(ownerA);
+    await harness.service.deliverPendingResult();
+    // Every task got its notice (some on a later request's retry), none was dropped.
+    expect(new Set(vi.mocked(harness.deps.notify).mock.calls.map((call) => call[1])).size).toBe(25);
+  });
+
   it('writes the restart record only at the last gate, and clears it if the spawn then fails', async () => {
     const harness = setup({
       apply: vi.fn(async ({ beforeRelaunch, beforeSpawn }) => {

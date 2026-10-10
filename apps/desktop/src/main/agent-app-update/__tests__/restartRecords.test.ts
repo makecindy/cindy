@@ -66,3 +66,22 @@ describe('restart records capacity', () => {
     expect(listRestartRecords(file)[0]!.requestId).toBe('r0');
   });
 });
+
+describe('restart records with an invalid entry', () => {
+  const withInvalid = () =>
+    fs.writeFileSync(file, JSON.stringify({ records: [record('a'), { requestId: 'broken' }] }));
+
+  it('moves the whole file aside before appending instead of dropping the entry', () => {
+    withInvalid();
+    addRestartRecord(file, record('new'));
+    expect(listRestartRecords(file).map((entry) => entry.requestId)).toEqual(['new']);
+    const aside = fs.readdirSync(dir).filter((name) => name.includes('.corrupt-'));
+    expect(JSON.parse(fs.readFileSync(path.join(dir, aside[0]!), 'utf8')).records).toHaveLength(2);
+  });
+
+  it('keeps the invalid entry when removing a delivered one', () => {
+    withInvalid();
+    removeRestartRecord(file, 'a');
+    expect(JSON.parse(fs.readFileSync(file, 'utf8')).records).toEqual([{ requestId: 'broken' }]);
+  });
+});

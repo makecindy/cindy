@@ -142,7 +142,6 @@ const UNDELIVERED_REASONS = new Set([
   'duplicate_request_id',
 ]);
 const MARKER_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
-const MAX_PENDING_NOTICES = 20;
 
 interface PendingNotice {
   /** Account id, not a captured scope: a later sign-in of the same account still matches. */
@@ -272,9 +271,9 @@ export function createAgentAppUpdateService(deps: AgentAppUpdateDeps) {
    * while their own account is active. Nothing here blocks a new install.
    */
   const pendingNotices: PendingNotice[] = [];
+  // Never truncated: a notice leaves only once written or its task is gone.
   const queueNotice = (notice: PendingNotice) => {
     pendingNotices.push(notice);
-    if (pendingNotices.length > MAX_PENDING_NOTICES) pendingNotices.shift();
   };
   const flushNotices = async () => {
     const owner = deps.captureOwner();
