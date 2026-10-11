@@ -67,8 +67,7 @@ export function useOwnRemoteProviderList(): OwnRemoteProviderList {
         const catalog = catalogs.get(device.deviceId);
         return catalog ? [{ deviceId: device.deviceId, providers: catalog.providers }] : [];
       }),
-      [],
-      Object.values(localGroups),
+      localGroups,
     );
     const entries = devices.flatMap((device) => {
       const catalog = catalogs.get(device.deviceId);

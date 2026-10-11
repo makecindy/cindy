@@ -8,7 +8,7 @@
 import type { ProviderView } from '@cindy/model-providers';
 
 import { activeOwnerScopeKey } from '../appSessionState.js';
-import { readProviderGroupSummary } from '../../shared/providerGroup.js';
+import { readProviderGroupSummary, type ProviderGroupSessionGroup } from '../../shared/providerGroup.js';
 import { getReceivedShares } from '../device-link/providerShareGuest.js';
 import { handleListDevices, defaultDeps as deviceDirectoryDeps } from '../device-link/ipc.js';
 import { remoteBackgroundInvoke } from '../device-link/index.js';
@@ -34,6 +34,7 @@ interface OwnerRuntime {
 let current: OwnerRuntime | null = null;
 let isTurnRunning: (sessionId: string) => boolean = () => false;
 let localLoad: (() => Promise<ReadonlyMap<string, number>>) | null = null;
+let sessionGroupReader: ((sessionId: string) => Promise<ProviderGroupSessionGroup>) | null = null;
 
 function runtimeForActiveOwner(): OwnerRuntime {
   const owner = activeOwnerScopeKey();
@@ -145,6 +146,21 @@ export function getProviderGroupRemoteGroups(): ProviderGroupRemoteGroups {
 /** register 装配会话表后注入：分配器据此统计「正在运行」。 */
 export function setProviderGroupTurnProbe(probe: (sessionId: string) => boolean): void {
   isTurnRunning = probe;
+}
+
+/** register 装配供应商组服务后注入：任务此刻归哪个组(模型列表用)。 */
+export function setProviderGroupSessionGroupReader(reader: ((sessionId: string) => Promise<ProviderGroupSessionGroup>) | null): void {
+  sessionGroupReader = reader;
+}
+
+/** 任务此刻归哪个组；还没装配或读不到时按没归组处理。 */
+export async function readProviderGroupOfSession(sessionId: string): Promise<ProviderGroupSessionGroup> {
+  if (!sessionGroupReader) return null;
+  try {
+    return await sessionGroupReader(sessionId);
+  } catch {
+    return null;
+  }
 }
 
 /** register 装配会话表后注入：这台电脑上每个供应商正在运行一轮的任务数(localLoad.ts)。 */

@@ -43,6 +43,7 @@ import {
   getProviderGroupRemoteGroups,
   getProviderGroupRouter,
   setProviderGroupLocalLoad,
+  setProviderGroupSessionGroupReader,
   setProviderGroupTurnProbe,
 } from '../provider-group/runtime.js';
 import { countProviderRunningTurns, type ProviderLocalLoadRoute } from '../provider-group/localLoad.js';
@@ -9737,6 +9738,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     log,
   });
   setProviderGroupTurnProbe((sessionId) => maker.getSession(sessionId)?.isTurnRunning() ?? false);
+  // 模型列表把归组的任务显示在组那一项下(provider-groups.md §10)。
+  const sessionGroupService = providerGroupService;
+  setProviderGroupSessionGroupReader((sessionId) => sessionGroupService.sessionGroup(sessionId));
   // 这台电脑上每个供应商正在运行一轮的任务数：组里「本机」这台显示它，同账号电脑读目录时也带上(§5)。
   setProviderGroupLocalLoad(() => countProviderRunningTurns({
     listTurnRunningSessions: () => maker.listActiveSessions().filter((s) => s.isTurnRunning()).map((s) => s.id),

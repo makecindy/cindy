@@ -408,6 +408,7 @@ import { createWorkLouderCodexVoiceGesture } from '@/lib/workLouderCodexVoiceGes
 import { appendMentionChip } from './mentionChipInsertion';
 // device-link 远程会话:设置变更不落本地 DB(会 404),改写远程内存层 + 运行时隧道。
 import { getSessionDeviceId } from '@/features/device-link/remoteProjectsStore';
+import { readSessionProviderGroup } from '@/features/provider-group/sessionProviderGroup';
 import { makerApiFor, makerApiForDevice, makerApiForSticky, subscribeRemoteCredentialSwitchOutcome } from '@/lib/makerTransport';
 import { SESSION_LINK_DROP_MIME } from '@/lib/sessionLinkDrop';
 
@@ -7191,6 +7192,11 @@ export function ChatInput({
       ...(deviceLinkDeviceId ? { homeDeviceId: deviceLinkDeviceId } : {}),
       ...(taskComputerModelMemory ? { localModelMemory: taskComputerModelMemory } : {}),
       deviceModelMemory: agentDeviceModelMemoryAccessors,
+      // 归组的任务在组那一项下显示与选择(provider-groups.md §10)。组的绑定记在任务所在电脑上，被控电脑上的
+      // 任务不读(那台的绑定不对控制端开放)，按没归组的处理；挂着换位置的意图时下一条消息就不在原处了，也不按组显示。
+      ...(!deviceLinkDeviceId && intentAgentDeviceId === undefined
+        ? { readProviderGroup: () => readSessionProviderGroup(sessionId) }
+        : {}),
       onRelocate: async (selection) => {
         if (!(await confirmAgentRelocation(selection.agentDevice))) return false;
         return performAgentSwitchRef.current(selection.agent, selection.modelId, selection.providerId, {
@@ -7209,6 +7215,7 @@ export function ChatInput({
     sessionEngineFilter,
     remoteAgentDevices,
     effectiveAgentDeviceId,
+    intentAgentDeviceId,
     confirmAgentRelocation,
   ]);
 

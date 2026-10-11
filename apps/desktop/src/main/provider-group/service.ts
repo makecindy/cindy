@@ -30,6 +30,7 @@ import type {
   ProviderGroupMember,
   ProviderGroupRemoteCoolCause,
   ProviderGroupRemotePick,
+  ProviderGroupSessionGroup,
   ProviderGroupView,
 } from '../../shared/providerGroup.js';
 import { providerGroupMemberKey } from '../../shared/providerGroup.js';
@@ -238,6 +239,12 @@ export interface ProviderGroupService {
   beforeSend(sessionId: string, options?: ProviderGroupBeforeSendOptions): Promise<void>;
   /** 用户亲自接手：这一轮重新从头试。 */
   noteUserAction(sessionId: string): void;
+  /**
+   * 任务此刻归哪个组(模型列表据此把它显示在组那一项下，provider-groups.md §10)：有绑定、且任务记录里的
+   * 位置就是绑定的那台时返回组；没归组、位置与绑定对不上(挪到了别处，等下次核对)时返回 null。只读本机记录，
+   * 不问组所在电脑。
+   */
+  sessionGroup(sessionId: string): Promise<ProviderGroupSessionGroup>;
 }
 
 export interface ProviderGroupBeforeSendOptions {
@@ -630,8 +637,11 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
   }
 
   /**
-   * 以任务记录为准核对绑定：用户手动把任务挪到了别处时修正或解除绑定，并返回 null——之后的自动换电脑
-   * 不能覆盖用户的选择，也不能把别处的失败记到组内电脑头上。一致时返回当前组内电脑。
+   * 以任务记录为准核对绑定，返回任务此刻所在的组内电脑。
+   * - 用户把任务挪到了组外：解除绑定并返回 null——之后的自动换电脑不能覆盖用户的选择，也不能把别处的
+   *   失败记到组内电脑头上。
+   * - 挪到了组里另一台(模型选择里选组那一项、换电脑交接后任务记录先变)：仍在组里，绑定跟着更新(§6)，
+   *   照常返回那台——这次失败同样要换电脑，不能因为绑定刚改过就跳过一次(2026-10-11 用户反馈)。
    */
   async function verifyBinding(
     sessionId: string,
@@ -649,10 +659,7 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
       if (!config || located === binding.memberKey) await deps.markReleased(sessionId, groupOf(source, binding.providerId));
       return null;
     }
-    if (key !== binding.memberKey) {
-      await deps.writeBinding(sessionId, bindingFor(source, binding.providerId, key));
-      return null;
-    }
+    if (key !== binding.memberKey) await deps.writeBinding(sessionId, bindingFor(source, binding.providerId, key));
     return config!.members.find((m) => m.key === key) ?? null;
   }
 
@@ -1422,6 +1429,18 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
       for (const run of runningSwitches.get(sessionId) ?? []) run.superseded = true;
       resetRound(sessionId);
       deps.guestSwitch?.drop(sessionId);
+    },
+
+    async sessionGroup(sessionId) {
+      const binding = deps.readBinding(sessionId);
+      if (!binding) return null;
+      const source = sourceFor(binding.groupDeviceId);
+      const row = source ? await deps.readSessionRow(sessionId) : null;
+      if (!source || !row) return null;
+      const located = await locatedMemberKey(source, binding.providerId, row);
+      return located === binding.memberKey
+        ? { groupDeviceId: binding.groupDeviceId ?? null, providerId: binding.providerId }
+        : null;
     },
   };
 }

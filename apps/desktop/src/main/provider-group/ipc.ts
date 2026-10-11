@@ -11,6 +11,7 @@ import {
   normalizeProviderGroupConfig,
   type ProviderGroupCommand,
   type ProviderGroupConfig,
+  type ProviderGroupSessionGroup,
   type ProviderGroupView,
 } from '../../shared/providerGroup.js';
 import { tapWindowBroadcast } from '../device-link/broadcast-tap.js';
@@ -23,7 +24,12 @@ import { throwIpcError } from '../utils/ipcValidate.js';
 import { pruneProviderGroupBindings } from './bindings.js';
 import type { ProviderGroupDirectory } from './directory.js';
 import type { ProviderGroupRouter } from './router.js';
-import { getProviderGroupDirectory, getProviderGroupRemoteClient, getProviderGroupRouter } from './runtime.js';
+import {
+  getProviderGroupDirectory,
+  getProviderGroupRemoteClient,
+  getProviderGroupRouter,
+  readProviderGroupOfSession,
+} from './runtime.js';
 import { listProviderGroups, readProviderGroup, writeProviderGroup } from './store.js';
 
 const log = createLogger('provider-group');
@@ -41,15 +47,24 @@ export interface ProviderGroupCommandDeps {
   remoteView(deviceId: string, providerId: string): Promise<ProviderGroupView>;
   /** 本机全部组的设置(不读远端，模型列表据此收起本机组里的远程供应商)。 */
   listGroups(): Record<string, ProviderGroupConfig>;
+  /** 这个任务此刻归哪个组(只读本机记录)。 */
+  sessionGroup(sessionId: string): Promise<ProviderGroupSessionGroup>;
   changed(providerId: string): void;
 }
 
 const REMOTE_DEVICE_ID_PATTERN = /^[A-Za-z0-9_.-]{1,128}$/;
+const SESSION_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
 
 export function parseProviderGroupCommand(raw: unknown): ProviderGroupCommand {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throwIpcError('INVALID_PARAMS', 'command required');
   const value = raw as Record<string, unknown>;
   if (value.action === 'list') return { action: 'list' };
+  if (value.action === 'session-group') {
+    if (typeof value.sessionId !== 'string' || !SESSION_ID_PATTERN.test(value.sessionId)) {
+      throwIpcError('INVALID_PARAMS', 'sessionId required');
+    }
+    return { action: 'session-group', sessionId: value.sessionId as string };
+  }
   if (!isProviderGroupProviderId(value.providerId)) throwIpcError('INVALID_PARAMS', 'providerId required');
   const providerId = value.providerId as string;
   switch (value.action) {
@@ -75,6 +90,7 @@ export function parseProviderGroupCommand(raw: unknown): ProviderGroupCommand {
 /** 业务体(依赖注入，单测直接调)。 */
 export async function executeProviderGroupCommand(deps: ProviderGroupCommandDeps, command: ProviderGroupCommand) {
   if (command.action === 'list') return deps.listGroups();
+  if (command.action === 'session-group') return deps.sessionGroup(command.sessionId);
   const { providerId } = command;
   switch (command.action) {
     case 'get':
@@ -131,6 +147,7 @@ export function registerProviderGroupIpc(): void {
     ownerKey: activeOwnerScopeKey,
     remoteView: (deviceId, providerId) => getProviderGroupRemoteClient().view(deviceId, providerId),
     listGroups: listProviderGroups,
+    sessionGroup: readProviderGroupOfSession,
     changed: (providerId) => {
       try {
         broadcast(PROVIDER_GROUP_IPC.CHANGED, { providerId });

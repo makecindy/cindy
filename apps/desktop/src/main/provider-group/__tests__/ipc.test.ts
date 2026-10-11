@@ -4,7 +4,12 @@
 import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('electron', () => ({ ipcMain: { handle: vi.fn() } }));
-vi.mock('../runtime.js', () => ({ getProviderGroupDirectory: vi.fn(), getProviderGroupRouter: vi.fn() }));
+vi.mock('../runtime.js', () => ({
+  getProviderGroupDirectory: vi.fn(),
+  getProviderGroupRouter: vi.fn(),
+  getProviderGroupRemoteClient: vi.fn(),
+  readProviderGroupOfSession: vi.fn(),
+}));
 vi.mock('../store.js', () => ({ readProviderGroup: vi.fn(), writeProviderGroup: vi.fn() }));
 vi.mock('../bindings.js', () => ({ pruneProviderGroupBindings: vi.fn() }));
 vi.mock('../../appSessionState.js', () => ({ activeOwnerScopeKey: () => 'owner-a' }));
@@ -65,6 +70,13 @@ describe('parseProviderGroupCommand', () => {
     expect(() => parseProviderGroupCommand({ action: 'remote-view', providerId: 'anthropic' })).toThrow();
     expect(() => parseProviderGroupCommand({ action: 'remote-view', providerId: 'anthropic', deviceId: 'bad id' })).toThrow();
   });
+
+  it('accepts asking which group a task is in, without a provider id', () => {
+    expect(parseProviderGroupCommand({ action: 'session-group', sessionId: 'db5a0a2c-3084-408c-9f78-234fe3c6745c' }))
+      .toEqual({ action: 'session-group', sessionId: 'db5a0a2c-3084-408c-9f78-234fe3c6745c' });
+    expect(() => parseProviderGroupCommand({ action: 'session-group' })).toThrow();
+    expect(() => parseProviderGroupCommand({ action: 'session-group', sessionId: '../x' })).toThrow();
+  });
 });
 
 describe('executeProviderGroupCommand reads', () => {
@@ -77,6 +89,15 @@ describe('executeProviderGroupCommand reads', () => {
     expect(d.router.view).not.toHaveBeenCalled();
     await executeProviderGroupCommand(d, { action: 'remote-view', providerId: 'anthropic', deviceId: 'mini' });
     expect(remoteView).toHaveBeenCalledWith('mini', 'anthropic');
+  });
+
+  it('answers which group a task is in from the service', async () => {
+    const d = deps([]);
+    const sessionGroup = vi.fn(async () => ({ groupDeviceId: 'mini', providerId: 'anthropic' }));
+    Object.assign(d, { sessionGroup });
+    expect(await executeProviderGroupCommand(d, { action: 'session-group', sessionId: 's1' }))
+      .toEqual({ groupDeviceId: 'mini', providerId: 'anthropic' });
+    expect(sessionGroup).toHaveBeenCalledWith('s1');
   });
 });
 

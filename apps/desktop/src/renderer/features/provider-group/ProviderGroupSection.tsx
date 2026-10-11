@@ -12,6 +12,7 @@ import { ChevronRight, CircleMinus, Monitor, MoreHorizontal } from 'lucide-react
 import { useCallback, useId, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import { formatQuotaResetAt } from '@/components/status/usageCardModel';
 import { Button } from '@/components/ui/button';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import {
@@ -378,6 +379,7 @@ export function memberStatusText(
   t: ReturnType<typeof useTranslation>['t'],
   status: ProviderGroupMemberStatus | undefined,
   locale: string,
+  nowMs: number = Date.now(),
 ): string {
   if (!status) return t('providerGroup.member.status.checking');
   switch (status.state) {
@@ -390,12 +392,13 @@ export function memberStatusText(
       return t('providerGroup.member.status.full');
     case 'paused':
       return t('providerGroup.member.status.paused');
-    case 'cooling':
-      return status.coolingUntil
-        ? t('providerGroup.member.status.coolingUntil', {
-            time: new Intl.DateTimeFormat(locale, { hour: '2-digit', minute: '2-digit' }).format(status.coolingUntil),
-          })
+    case 'cooling': {
+      // 不在今天恢复的(周上限等)带上日期，不让「约 16:00 恢复」看起来像今天就能用。
+      const time = status.coolingUntil ? formatQuotaResetAt(status.coolingUntil / 1000, nowMs, locale) : null;
+      return time
+        ? t('providerGroup.member.status.coolingUntil', { time })
         : t('providerGroup.member.status.cooling');
+    }
     case 'offline':
       return t('providerGroup.member.status.offline');
     case 'unavailable':

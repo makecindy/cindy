@@ -37,13 +37,28 @@ describe('collectRemoteProviderGroups', () => {
     expect(result.hidden.has(remoteProviderEntryKey('studio', 'openai'))).toBe(false);
   });
 
-  it('keeps both groups when two groups contain each other, and keeps the entry in use', () => {
+  it('keeps both groups when two groups contain each other', () => {
     const result = collectRemoteProviderGroups([
       { deviceId: 'mini', providers: [provider('anthropic', { group: group([{ kind: 'device', agentDeviceId: 'studio', providerId: 'anthropic' }]) })] },
       { deviceId: 'studio', providers: [provider('anthropic', { group: group([{ kind: 'device', agentDeviceId: 'mini', providerId: 'anthropic' }, { kind: 'device', agentDeviceId: 'laptop', providerId: 'anthropic' }]) })] },
-    ], [remoteProviderEntryKey('laptop', 'anthropic')]);
-    expect(result.hidden.size).toBe(0);
+    ]);
+    expect([...result.hidden]).toEqual([remoteProviderEntryKey('laptop', 'anthropic')]);
     expect(result.groups.size).toBe(2);
+  });
+
+  it('collapses every member into its group, including the one the task runs on, and says which group it is in', () => {
+    // 2026-10-11：任务被组换到 grok-bot-vm 上运行后，那台不再单独出现，归在 Mac mini 的组那一项下。
+    const result = collectRemoteProviderGroups([
+      { deviceId: 'mini', providers: [provider('anthropic', { group: group([
+        { kind: 'device', agentDeviceId: 'vm-1', providerId: 'anthropic' },
+        { kind: 'share', agentDeviceId: 'share:s1', providerId: 'anthropic' },
+      ]) })] },
+      { deviceId: 'vm-1', providers: [provider('anthropic'), provider('fp')] },
+    ]);
+    expect(result.hidden.has(remoteProviderEntryKey('vm-1', 'anthropic'))).toBe(true);
+    expect(result.memberOf.get(remoteProviderEntryKey('vm-1', 'anthropic'))).toEqual({ deviceId: 'mini', providerId: 'anthropic' });
+    expect(result.memberOf.get(remoteProviderEntryKey('share:s1', 'anthropic'))).toEqual({ deviceId: 'mini', providerId: 'anthropic' });
+    expect(result.hidden.has(remoteProviderEntryKey('vm-1', 'fp'))).toBe(false);
   });
 
   it('also hides the remote members of groups this computer created', () => {
@@ -55,8 +70,10 @@ describe('collectRemoteProviderGroups', () => {
         { key: 'device:studio:anthropic', kind: 'device' as const, agentDeviceId: 'studio', providerId: 'anthropic', limit: 4, weight: 1, paused: false },
       ],
     };
-    const result = collectRemoteProviderGroups([{ deviceId: 'studio', providers: [provider('anthropic')] }], [], [local]);
+    const result = collectRemoteProviderGroups([{ deviceId: 'studio', providers: [provider('anthropic')] }], { anthropic: local });
     expect([...result.hidden]).toEqual([remoteProviderEntryKey('studio', 'anthropic')]);
+    // 组那一项是这台电脑自己的供应商(本机那一栏)。
+    expect(result.memberOf.get(remoteProviderEntryKey('studio', 'anthropic'))).toEqual({ deviceId: null, providerId: 'anthropic' });
     expect(result.groups.size).toBe(0);
   });
 

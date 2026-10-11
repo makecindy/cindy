@@ -131,7 +131,15 @@ export type ProviderGroupCommand =
   /** 同账号另一台电脑上这个供应商的组与组内电脑状态(只读)。 */
   | { action: 'remote-view'; providerId: string; deviceId: string }
   /** 本机全部组的设置(不读远端)。 */
-  | { action: 'list' };
+  | { action: 'list' }
+  /** 这个任务此刻归哪个组(模型列表把它显示在组那一项下)。 */
+  | { action: 'session-group'; sessionId: string };
+
+/**
+ * 任务此刻归的组：`groupDeviceId` 为组所在电脑，null = 这台电脑自己建的组；`providerId` 是组那一项在组所在电脑上的
+ * 供应商 id。没归组(或位置与绑定对不上)为 null。
+ */
+export type ProviderGroupSessionGroup = { groupDeviceId: string | null; providerId: string } | null;
 
 export type ProviderGroupCommandResult<C extends ProviderGroupCommand> =
   C extends { action: 'list' } ? Record<string, ProviderGroupConfig>
@@ -140,7 +148,8 @@ export type ProviderGroupCommandResult<C extends ProviderGroupCommand> =
       : C extends { action: 'save' } ? ProviderGroupView
         : C extends { action: 'delete' } ? ProviderGroupView
           : C extends { action: 'remote-view' } ? ProviderGroupView
-            : never;
+            : C extends { action: 'session-group' } ? ProviderGroupSessionGroup
+              : never;
 
 const PROVIDER_ID_PATTERN = /^[a-zA-Z0-9._-]{1,128}$/;
 const DEVICE_ID_PATTERN = /^[A-Za-z0-9_.-]{1,128}$/;

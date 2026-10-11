@@ -305,6 +305,33 @@ describe('switching computers within a group on another computer', () => {
     expect(h.deps.fallback).not.toHaveBeenCalled();
   });
 
+  it('tells the model list which group the task is in only while it runs on the bound computer', async () => {
+    const h = bound();
+    expect(await h.service.sessionGroup('s1')).toEqual({ groupDeviceId: OWNER, providerId: 'anthropic' });
+    // 挪到了组外(或还没核对的别处)：不按组显示。
+    h.row.agentDeviceId = 'elsewhere';
+    expect(await h.service.sessionGroup('s1')).toBeNull();
+    // 任务就在这台(组里的「我的电脑」)运行。
+    h.row.agentDeviceId = null;
+    h.row.providerId = 'anthropic';
+    h.bindings.set('s1', { providerId: 'anthropic', memberKey: SELF.key, groupDeviceId: OWNER, at: 1 });
+    expect(await h.service.sessionGroup('s1')).toEqual({ groupDeviceId: OWNER, providerId: 'anthropic' });
+    expect(await h.service.sessionGroup('no-binding')).toBeNull();
+    expect(h.remote.readGroup).not.toHaveBeenCalled();
+  });
+
+  it('still switches when the task was just moved to another computer in the group', async () => {
+    // 2026-10-11：交接到 Studio 后，任务又被挪回组所在电脑(绑定还写着 Studio)，那台撞到周上限。
+    const h = bound({ row: { agentDeviceId: OWNER, providerId: 'anthropic', sdkSessionId: 'native-2' }, picks: [STUDIO] });
+    h.service.onTurnError('s1', { sdkError: 'rate_limit' }, 3);
+    await flush();
+    expect(h.remote.cool).toHaveBeenCalledWith(OWNER, expect.objectContaining({ memberKey: 'local', cause: 'usage-limit' }));
+    expect(h.remote.pick).toHaveBeenCalledWith(OWNER, expect.objectContaining({ exclude: expect.arrayContaining(['local']) }));
+    expect(h.deps.switchAgentLocation).toHaveBeenCalledWith('s1', expect.objectContaining({ agentDeviceId: 'studio' }), expect.anything());
+    expect(h.bindings.get('s1')).toMatchObject({ memberKey: STUDIO.key, groupDeviceId: OWNER });
+    expect(h.deps.fallback).not.toHaveBeenCalled();
+  });
+
   it('only avoids an unreachable computer itself instead of cooling it for the whole group', async () => {
     const h = bound({ picks: [SELF] });
     await h.service.onTurnError('s1', { message: '[REMOTE_AGENT_DEVICE_UNREACHABLE] gone' }, 3);

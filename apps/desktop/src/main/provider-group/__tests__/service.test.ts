@@ -574,6 +574,31 @@ describe('onTurnError (automatic switch)', () => {
     expect(h.deps.switchAgentLocation).toHaveBeenCalledWith('s1', expect.objectContaining({ agentDeviceId: null }), expect.anything());
   });
 
+  it('reports the group of a task bound to this computer’s group', async () => {
+    const h = harness({ row: { agentDeviceId: 'mini', providerId: MINI.providerId } });
+    h.bindings.set('s1', { providerId: 'anthropic', memberKey: MINI.key, at: 1 });
+    expect(await h.service.sessionGroup('s1')).toEqual({ groupDeviceId: null, providerId: 'anthropic' });
+    h.row.agentDeviceId = null;
+    expect(await h.service.sessionGroup('s1')).toBeNull();
+  });
+
+  it('keeps managing a task that was moved to another computer in the group', async () => {
+    // 绑定还写着 MINI，任务已在本机(组里的另一台)：绑定跟着更新，这次失败照常换电脑。
+    const h = harness({ row: { agentDeviceId: null, providerId: 'anthropic' } });
+    h.bindings.set('s1', { providerId: 'anthropic', memberKey: MINI.key, at: 1 });
+    h.service.onTurnError('s1', { sdkError: 'rate_limit' }, 1);
+    await flush();
+    expect(h.router.coolingUntil('anthropic', 'local')).not.toBeNull();
+    expect(h.router.coolingUntil('anthropic', MINI.key)).toBeNull();
+    expect(h.deps.switchAgentLocation).toHaveBeenCalledWith(
+      's1',
+      expect.objectContaining({ agentDeviceId: 'mini', providerId: MINI.providerId }),
+      expect.anything(),
+    );
+    expect(h.bindings.get('s1')?.memberKey).toBe(MINI.key);
+    expect(h.deps.fallback).not.toHaveBeenCalled();
+  });
+
   it('respects a manual move: the binding is dropped and the task is not moved back', async () => {
     const h = harness({ row: { agentDeviceId: 'studio-not-in-group', providerId: 'anthropic' } });
     h.bindings.set('s1', { providerId: 'anthropic', memberKey: MINI.key, at: 1 });

@@ -94,7 +94,11 @@ import {
 import { useDevicesProviders } from '@/hooks/useDevicesProviders';
 import { RemoteSourceMark } from '@/components/icons/RemoteSourceMark';
 import { buildUnifiedRail, remoteAgentProviders } from './unifiedModelSelection';
-import { collectRemoteProviderGroups, remoteProviderEntryKey } from '@/lib/remoteProviderGroups';
+import {
+  collectRemoteProviderGroups,
+  remoteProviderEntryKey,
+  type RemoteProviderGroupEntry,
+} from '@/lib/remoteProviderGroups';
 import { useLocalProviderGroups } from '@/features/provider-group/useLocalProviderGroups';
 import { readProviderShareGroupSize } from '@cindy/device-link';
 import { modelPriceDiscountLabelValues, modelPriceDetailRows } from '@/lib/modelPriceFormat';
@@ -692,6 +696,12 @@ export interface RemoteAgentSelectorOptions {
    * 草稿不传(草稿走 onUnifiedSelect,行带 agentDevice)。
    */
   onRelocate?: (selection: RemoteAgentRelocation) => Promise<boolean>;
+  /**
+   * 已建任务传:这个任务此刻归哪个供应商组(组那一项的位置,provider-groups.md §10)。面板每次打开读一次。
+   * 归组的任务在组那一项下显示为「正在用的」,在组那一项里选模型 = 留在此刻运行的那台、只换模型,
+   * 不把 Agent 挪到组所在电脑。不传 / 读到 null = 没归组。
+   */
+  readProviderGroup?: () => Promise<RemoteProviderGroupEntry | null>;
 }
 
 interface ModelSelectorProps {
@@ -1545,7 +1555,7 @@ function ModelSelectorContentView({
   const localProviderGroups = useLocalProviderGroups();
   // 供应商组(provider-groups.md §10)：组里的电脑与分享收起，只列组那一项。组可以在其他电脑上
   // (看它们目录里的组摘要)，也可以是任务所在电脑自己建的(本机任务读本机设置，被控电脑上的任务看那台的
-  // 目录)。当前正在用的那一项不收起。
+  // 目录)。任务此刻正在组员上运行也照样收起，显示在组那一项下(2026-10-11 用户要求：组里的都聚合成一项)。
   const remoteProviderGroups = useMemo(
     () => collectRemoteProviderGroups(
       [
@@ -1555,21 +1565,73 @@ function ModelSelectorContentView({
         }),
         ...(homeDeviceId ? [{ deviceId: homeDeviceId, providers: homeDeviceProviders.providers }] : []),
       ],
-      remoteAgentDeviceId && currentProviderId
-        ? [remoteProviderEntryKey(remoteAgentDeviceId, currentProviderId)]
-        : [],
-      homeDeviceId ? [] : Object.values(localProviderGroups),
+      homeDeviceId ? {} : localProviderGroups,
     ),
-    [
-      remoteAgentDevices,
-      remoteDeviceCatalogs,
-      remoteAgentDeviceId,
-      currentProviderId,
-      homeDeviceId,
-      homeDeviceProviders.providers,
-      localProviderGroups,
-    ],
+    [remoteAgentDevices, remoteDeviceCatalogs, homeDeviceId, homeDeviceProviders.providers, localProviderGroups],
   );
+  // 组那一项在面板里的位置：任务所在电脑自己的供应商(被控电脑上的任务即被控电脑的)在本机那一栏，记为 null。
+  const groupEntryAt = useCallback(
+    (entry: RemoteProviderGroupEntry | undefined | null): RemoteProviderGroupEntry | null =>
+      entry ? (entry.deviceId === homeDeviceId ? { deviceId: null, providerId: entry.providerId } : entry) : null,
+    [homeDeviceId],
+  );
+  // 这个任务此刻归哪个组(面板每次打开读一次，位置或来源变了再读)。
+  const readProviderGroup = remoteAgent?.readProviderGroup;
+  const [boundGroup, setBoundGroup] = useState<RemoteProviderGroupEntry | null>(null);
+  useEffect(() => {
+    if (!readProviderGroup) {
+      setBoundGroup(null);
+      return;
+    }
+    let cancelled = false;
+    readProviderGroup().then(
+      (entry) => !cancelled && setBoundGroup(entry),
+      () => !cancelled && setBoundGroup(null),
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [readProviderGroup, remoteAgentDeviceId, currentProviderId]);
+  // 归的组那一项此刻在列表里(组所在电脑在线、组还在)才按组显示；不然照常列出任务实际所在的那台。
+  const boundEntry = useMemo(() => {
+    if (!boundGroup) return null;
+    const visible = boundGroup.deviceId === null
+      ? !homeDeviceId && localProviderGroups[boundGroup.providerId] !== undefined
+      : remoteProviderGroups.groups.has(remoteProviderEntryKey(boundGroup.deviceId, boundGroup.providerId));
+    return visible ? boundGroup : null;
+  }, [boundGroup, homeDeviceId, localProviderGroups, remoteProviderGroups]);
+  /**
+   * 任务归组、此刻却不在组那一项本身上运行(被组分到或换到了组里另一台)：在组那一项里选模型 = 留在那台只换
+   * 模型，组那一项显示为正在用的(§10)。
+   */
+  const stayInGroup =
+    boundEntry !== null &&
+    !(boundEntry.deviceId === remoteAgentDeviceId && boundEntry.providerId === currentProviderId);
+  // 面板不停在收起的组员上：任务正跑在组员上时打开即停在组那一项(没归组的任务只是这样显示，选它照旧是
+  // 把 Agent 挪过去)；归组的任务即使就在这台运行，第一次打开也先停在组那一项。用户自己点过别的格之后不再挪。
+  const [remoteBrowseTouched, setRemoteBrowseTouched] = useState(false);
+  const [groupBrowseShown, setGroupBrowseShown] = useState<string | null>(null);
+  const browseHiddenEntry = remoteBrowse
+    ? groupEntryAt(remoteProviderGroups.memberOf.get(remoteProviderEntryKey(
+        remoteBrowse.deviceId,
+        remoteBrowse.providerId ?? (remoteBrowse.deviceId === remoteAgentDeviceId ? (currentProviderId ?? '') : ''),
+      )))
+    : null;
+  const boundEntryKey = boundEntry ? remoteProviderEntryKey(boundEntry.deviceId ?? '', boundEntry.providerId) : null;
+  const groupBrowseTarget =
+    browseHiddenEntry ??
+    (stayInGroup && !remoteBrowseTouched && groupBrowseShown !== boundEntryKey ? boundEntry : null);
+  if (groupBrowseTarget) {
+    if (boundEntryKey !== null && groupBrowseShown !== boundEntryKey) setGroupBrowseShown(boundEntryKey);
+    setRemoteBrowse(
+      groupBrowseTarget.deviceId
+        ? { deviceId: groupBrowseTarget.deviceId, providerId: groupBrowseTarget.providerId }
+        : null,
+    );
+  }
+  /** 正在浏览归的组那一项所在的目录：那一项里的模型显示为正在用的，选中时留在此刻运行的那台。 */
+  const browsingBoundGroupEntry =
+    stayInGroup && boundEntry !== null && (remoteBrowse?.deviceId ?? null) === boundEntry.deviceId;
   const remoteAgentGroups = useMemo(() => {
     if (!remoteAgentDevices) return [];
     return remoteAgentDevices.flatMap((device) => {
@@ -3166,10 +3228,22 @@ function ModelSelectorContentView({
       : null;
     // 选中直通带上这一行属于哪台电脑(仅远程 Agent 入口);落点不同由调用方连运行位置一起换。
     const withAgentDevice = remoteAgent ? { agentDevice: remoteBrowseDevice } : {};
-    // 浏览的不是草稿当前落点的目录时,没有任何一行是「正在用的那一行」。
+    // 浏览的不是草稿当前落点的目录时,没有任何一行是「正在用的那一行」;归组的任务在组那一项里显示为正在用的。
     const panelSelection = browsingSelectedCatalog
       ? { providerId: activeSourceId, modelId }
-      : { providerId: null, modelId: '' };
+      : browsingBoundGroupEntry
+        ? { providerId: boundEntry!.providerId, modelId }
+        : { providerId: null, modelId: '' };
+    const browsingLiveCatalog = browsingSelectedCatalog || browsingBoundGroupEntry;
+    // 归组的任务在组那一项里选模型:留在此刻运行的那台(换成那台上这个供应商的 id),只换模型,不挪 Agent。
+    const currentAgentDevice: UnifiedSelectionAgentDevice = remoteAgentDeviceId
+      ? {
+          deviceId: remoteAgentDeviceId,
+          name:
+            remoteAgentDevices?.find((device) => device.deviceId === remoteAgentDeviceId)?.name ||
+            remoteAgentDeviceId,
+        }
+      : null;
     // 已建任务浏览的不是 Agent 落点那台的目录:选中的行要连运行位置一起换,同引擎 / 跨引擎
     // 两条会话链路都按当前落点的目录工作,这里一律改道给 onRelocate。
     const relocate =
@@ -3180,7 +3254,13 @@ function ModelSelectorContentView({
       row: { providerId: string; modelId: string; agent: AgentKind; effort?: Effort; fast: boolean },
       dismiss: boolean,
     ): Promise<boolean> =>
-      runLiveWrite(() => relocate!({ ...row, agentDevice: remoteBrowseDevice })).then((applied) => {
+      runLiveWrite(() =>
+        relocate!(
+          browsingBoundGroupEntry && row.providerId === boundEntry!.providerId && currentProviderId
+            ? { ...row, providerId: currentProviderId, agentDevice: currentAgentDevice }
+            : { ...row, agentDevice: remoteBrowseDevice },
+        ),
+      ).then((applied) => {
         if (applied && dismiss) {
           closeOptionsPanel();
           onDismiss?.();
@@ -3290,11 +3370,11 @@ function ModelSelectorContentView({
             selected={panelSelection}
             selectedFavoriteUid={browsingSelectedCatalog ? selectedFavoriteUid : null}
             liveAgentKind={
-              unifiedSelectionPolicy === 'official' || !browsingSelectedCatalog ? null : currentAgentKind
+              unifiedSelectionPolicy === 'official' || !browsingLiveCatalog ? null : currentAgentKind
             }
-            fastMode={unifiedSelectionPolicy === 'official' || !browsingSelectedCatalog ? false : fastMode}
+            fastMode={unifiedSelectionPolicy === 'official' || !browsingLiveCatalog ? false : fastMode}
             selectedEffort={
-              unifiedSelectionPolicy === 'official' || !browsingSelectedCatalog ? undefined : effort
+              unifiedSelectionPolicy === 'official' || !browsingLiveCatalog ? undefined : effort
             }
             {...(modelMemory ? { modelMemory } : {})}
             {...(remoteAgent && remoteAgentLocalRailItems
@@ -3325,6 +3405,7 @@ function ModelSelectorContentView({
                       : {}),
                     onActivate: (target: { deviceId: string; providerId: string } | null) => {
                       closeOptionsPanel();
+                      setRemoteBrowseTouched(true);
                       setRemoteBrowse(target);
                     },
                   },

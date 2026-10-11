@@ -8,7 +8,7 @@ import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ProviderGroupConfig, ProviderGroupView } from '../../../../shared/providerGroup';
-import { ProviderGroupSection } from '../ProviderGroupSection';
+import { memberStatusText, ProviderGroupSection } from '../ProviderGroupSection';
 import { __testing as localGroupsTesting, useLocalProviderGroupsState } from '../useLocalProviderGroups';
 import { __testing as groupViewTesting } from '../useProviderGroup';
 
@@ -255,5 +255,23 @@ describe('ProviderGroupSection reopened', () => {
     render(<ProviderGroupSection providerId="anthropic" providerName="Anthropic" />);
     expect(screen.getByText(/providerGroup\.section\.empty/)).toBeTruthy();
     await act(async () => undefined);
+  });
+});
+
+describe('memberStatusText', () => {
+  const t = ((key: string, options?: Record<string, unknown>) =>
+    options ? `${key}:${JSON.stringify(options)}` : key) as unknown as Parameters<typeof memberStatusText>[0];
+  const cooling = (coolingUntil: number) => ({
+    key: 'device:mini:anthropic', kind: 'device' as const, label: 'Mac mini', state: 'cooling' as const,
+    running: 0, limit: 4, weight: 1, paused: false, coolingUntil,
+  });
+
+  it('shows only the time for a cooldown that ends today, and the date for a later one', () => {
+    const now = new Date(2026, 9, 11, 9, 30).getTime();
+    expect(memberStatusText(t, cooling(new Date(2026, 9, 11, 16, 0).getTime()), 'en-US', now))
+      .toBe('providerGroup.member.status.coolingUntil:{"time":"16:00"}');
+    // 周上限：10 月 15 日才恢复，不能只写 16:00。
+    expect(memberStatusText(t, cooling(new Date(2026, 9, 15, 16, 0).getTime()), 'en-US', now))
+      .toBe('providerGroup.member.status.coolingUntil:{"time":"Oct 15 16:00"}');
   });
 });
