@@ -698,6 +698,99 @@ describe("PiAgent native auto-compaction ownership", () => {
     await handle.close();
   });
 
+  it("never depends on the non-official reserve RPC when a task budget changes", async () => {
+    const handle = await start();
+    knobs.rpcCalls = [];
+    await handle.setModel!("n", { contextWindowBudget: 32_000 }).catch(() => undefined);
+    expect(knobs.rpcCalls.some((call) => call.type === "set_compaction_reserve_tokens")).toBe(false);
+    expect(knobs.rpcCalls.some((call) => call.type === "refresh_models")).toBe(false);
+    await handle.close();
+  });
+
+  // 任务级预算的按模型保留量（buildPiSettingsJsonContent 的 pct=75）：
+  //   reserve = ceil(window - budget * 0.75)
+  const budgetReserve = (window: number, budget: number): number =>
+    Math.ceil(window - budget * 0.75);
+
+  async function startWithBudget(budget: number): Promise<AgentSessionHandle> {
+    return new PiAgent(buildDeps()).startSession({
+      sessionId: "budgeted",
+      workingDir: cwd,
+      model: "m",
+      contextWindowBudget: budget,
+    });
+  }
+
+  it("writes the task budget into every selectable model's reserve at startup", async () => {
+    const handle = await startWithBudget(50_000);
+    try {
+      // 官方 Pi 1.0 切模时按 modelOverrides 选保留量：预算必须落在**每个**可选模型上，
+      // 只写顶层 reserveTokens 会被同模型的 model-level override 盖掉。
+      expect(knobs.nativeSettings?.compaction?.modelOverrides).toMatchObject({
+        "cindy/m": { reserveTokens: budgetReserve(200_000, 50_000) },
+        "cindy/n": { reserveTokens: budgetReserve(100_000, 50_000) },
+      });
+      expect(readLatestPiSettings().compaction?.reserveTokens).toBe(budgetReserve(200_000, 50_000));
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it("keeps the task budget hot-switching across models instead of demanding a rebuild", async () => {
+    const handle = await startWithBudget(50_000);
+    try {
+      // 启动快照已按预算写好每个模型的保留量 ⇒ 切到另一个模型命中同保留量，保持热切。
+      const preview = await handle.previewModelSwitch?.("n");
+      expect(["hot", "refresh"]).toContain(preview?.action);
+      await handle.setModel!("n");
+      // 切换后生效窗口仍然是本任务的预算（而不是 n 自己的模型级上限 100_000）。
+      expect(handle.getUsageSnapshot().contextWindow).toBe(50_000);
+      // 切后写盘与 ctx.workingContextWindow 仍按任务预算，不能被模型级上限顶掉。
+      expect(await handle.getContextUsage!()).toMatchObject({ maxTokens: 50_000 });
+      expect(readLatestPiSettings().compaction?.reserveTokens).toBe(budgetReserve(100_000, 50_000));
+      expect(await handle.requiresModelSwitchRebuild?.("n")).toBe(false);
+      expect(knobs.rpcCalls.some((call) => call.type === "switch_session")).toBe(false);
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it("previews a rebuild when the live reserve does not match the required one", async () => {
+    const handle = await startWithBudget(50_000);
+    try {
+      // 运行中 Pi 实际配置与要求不一致（例如被控端版本旧 / 快照被别的路径改过）：
+      // 预演必须返回 rebuild，而不是谎称文件改写已生效。
+      knobs.nativeSettings = {
+        ...(knobs.nativeSettings as { compaction?: Record<string, unknown> }),
+        compaction: {
+          ...(knobs.nativeSettings?.compaction as Record<string, unknown>),
+          modelOverrides: { "cindy/n": { reserveTokens: 1 } },
+        },
+      };
+      expect(await handle.previewModelSwitch?.("n")).toMatchObject({
+        action: "rebuild",
+        reason: expect.stringMatching(/native compaction settings/),
+      });
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it("previews a rebuild when the task budget changes mid-session", async () => {
+    const handle = await startWithBudget(50_000);
+    try {
+      expect(await handle.previewModelSwitch?.("n")).toMatchObject({ action: expect.any(String) });
+      expect(["hot", "refresh"]).toContain((await handle.previewModelSwitch?.("n"))?.action);
+      // 预算改成另一个值 ⇒ 要求的保留量与运行中配置不再相同，走既有重建分支。
+      await expect(
+        handle.setModel!("n", { contextWindowBudget: 10_000 }),
+      ).rejects.toThrow(/native compaction settings/);
+      expect(knobs.rpcCalls.some((call) => call.type === "set_model")).toBe(false);
+    } finally {
+      await handle.close();
+    }
+  });
+
   it("rejects an unexpected runtime window rather than claiming an unapplied reserve", async () => {
     const deps = buildDeps();
     deps.runtimeConfig = {

@@ -780,6 +780,19 @@ describe('sendToSession ordering', () => {
       'const opts = buildCreateOptsWithStderr({',
     );
     expectOrder(resumeBranch, '...directoryGrantsForRuntime(storedExtraDirs),', 'await bootstrapSession(opts);');
+    // 任务级窗口预算：worker 唤醒自己拼 opts，不经 createSession 的 prepareStartOptions 钩子。
+    // 缺这一步，预算会在引擎进程重启时丢失（2026-09-30 实测：档位卡仍显示 50%，而 Pi 的
+    // compaction.reserveTokens 被写成无预算值 → 阈值退回满窗，跑到预算窗口 100% 以上也不压缩）。
+    expectOrder(
+      resumeBranch,
+      '...directoryGrantsForRuntime(storedExtraDirs),',
+      'await applySessionContextWindowBudgetToCreateOpts(target.sessionId, opts, getActiveCatalog());',
+    );
+    expectOrder(
+      resumeBranch,
+      'await applySessionContextWindowBudgetToCreateOpts(target.sessionId, opts, getActiveCatalog());',
+      'await bootstrapSession(opts);',
+    );
     expect(serviceDepsBlock).toContain('resumeWorkerSession: async (target) => {');
     expect(serviceDepsBlock).toContain('await resumeOrcaWorkerSessionIfMissing(target);');
     expect(switchFocusIpcBlock).toContain('const didResume = await resumeOrcaWorkerSessionIfMissing(target);');
