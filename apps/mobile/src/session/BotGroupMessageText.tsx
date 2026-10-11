@@ -16,11 +16,14 @@ type Styles = ReturnType<typeof makeStyles>;
 function renderInlines(inlines: readonly MobileMarkdownInline[], styles: Styles): ReactNode[] {
   return inlines.map((inline, index) => {
     // 强调里的链接 / 代码等:外层套一层带强调样式的 Text,嵌套 Text 继承样式。
+    // 删除线里的链接:内层 underline 会盖掉外层 line-through(单值属性),改用合并值。
     if (inline.marks?.length) {
       const markStyles = { strong: styles.strong, emphasis: styles.emphasis, strikethrough: styles.strike };
       return (
         <Text key={index} style={inline.marks.map((mark) => markStyles[mark])}>
-          {renderInlines([{ ...inline, marks: undefined }], styles)}
+          {inline.type === 'link' && inline.marks.includes('strikethrough')
+            ? <Text style={styles.linkStrike}>{inline.text}</Text>
+            : renderInlines([{ ...inline, marks: undefined }], styles)}
         </Text>
       );
     }
@@ -97,6 +100,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   emphasis: { fontStyle: 'italic' },
   strike: { textDecorationLine: 'line-through' },
   link: { textDecorationLine: 'underline' },
+  linkStrike: { textDecorationLine: 'underline line-through' },
   inlineCode: { fontFamily: monoFont, fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodyLarge, backgroundColor: colors.surfaceChip },
   quote: { borderLeftWidth: 2, borderLeftColor: colors.border, paddingLeft: spacing.md },
   quoteText: { color: colors.textSecondary },

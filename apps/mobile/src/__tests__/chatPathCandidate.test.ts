@@ -691,7 +691,7 @@ describe('路径 chip 的可点信号(源码级守卫)', () => {
     expect(body, '未复用 label 形态判定').toContain('chatPathLabelReadsAsFileReference');
     // 两个分支都在:套 chip 的与不套的。
     expect(body, '缺少套等宽 chip 的分支').toMatch(/markdownInlineCode[\s\S]*markdownPathChip/);
-    expect(body, '缺少不套等宽的分支').toMatch(/\[baseStyle, styles\.markdownPathChip\]/);
+    expect(body, '缺少不套等宽的分支').toMatch(/\[baseStyle, underlineDecoration\(styles, baseStyle, styles\.markdownPathChip\)\]/);
   });
 
   // ── 收敛检查点(PR #1144 两轮 review 各捉到一个「有下划线却点不动」) ──
@@ -705,7 +705,10 @@ describe('路径 chip 的可点信号(源码级守卫)', () => {
     const helperEnd = src.indexOf('\n}', helperStart);
     const helperBody = src.slice(helperStart, helperEnd);
     // helper 自己必须按 onPress 决定下划线。
-    expect(helperBody, 'helper 未按 onPress 分流').toMatch(/onPress \? styles\.markdownLink : undefined/);
+    // 下划线经 underlineDecoration 叠加(外层删除线时合并成两条线),仍只在有 onPress 时出现。
+    expect(helperBody, 'helper 未按 onPress 分流').toMatch(
+      /onPress \? underlineDecoration\(styles, base, styles\.markdownLink\) : undefined/,
+    );
     // 除 helper 自身外,全文件不应再出现 styles.markdownLink 的**用法**。
     // 注释行(含 helper 的 JSDoc,它会引用这个名字来说明规则)不算用法。
     const lines = src.split('\n');
@@ -724,6 +727,26 @@ describe('路径 chip 的可点信号(源码级守卫)', () => {
       others.map((o) => `${o.no}: ${o.line.trim()}`),
       '有 case 分支绕过 clickableInlineStyle 直接用 markdownLink —— 会造出「有下划线却点不动」',
     ).toEqual([]);
+  });
+
+  // `~~链接~~` / `~~src/a.ts~~`:RN textDecorationLine 是单值,直接叠 underline 会盖掉外层
+  // line-through。可点下划线一律经 underlineDecoration,遇到删除线合并成两条线。
+  it('可点下划线经 underlineDecoration 叠加,外层删除线时合并为 underline line-through', () => {
+    const src = readRenderer();
+    const merged = /markdownUnderlineStrike:\s*\{([^}]*)\}/.exec(src);
+    expect(merged, '未找到 markdownUnderlineStrike 样式定义').not.toBeNull();
+    expect(merged![1]).toMatch(/textDecorationLine:\s*'underline line-through'/);
+    const helperStart = src.indexOf('function underlineDecoration');
+    expect(helperStart, '未找到 underlineDecoration').toBeGreaterThan(-1);
+    const helperBody = src.slice(helperStart, src.indexOf('\n}', helperStart));
+    expect(helperBody).toMatch(/textDecorationLine === 'line-through'/);
+    expect(helperBody).toContain('styles.markdownUnderlineStrike');
+    // markdownPathChip 的每处用法都经 underlineDecoration(样式定义行除外)。
+    const direct = src
+      .split('\n')
+      .filter((line) => line.includes('styles.markdownPathChip'))
+      .filter((line) => !line.includes('underlineDecoration(styles, baseStyle, styles.markdownPathChip)'));
+    expect(direct, '有路径 chip 绕过 underlineDecoration 直接叠下划线').toEqual([]);
   });
 
   it('可点 inline 的 onPress 与样式取同一个值(不出现一边条件、一边无条件)', () => {

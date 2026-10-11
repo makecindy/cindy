@@ -1108,6 +1108,11 @@ function parseInlines(
   return out.length > 0 ? out : [{ type: 'text', text: input }];
 }
 
+/** 该 inline 是否呈现为某种强调:自身就是该类型,或被外层同类强调包裹(marks)。样式消费方统一用它判断。 */
+export function mobileMarkdownInlineHasMark(inline: MobileMarkdownInline, mark: MobileMarkdownInlineMark): boolean {
+  return inline.type === mark || inline.marks?.includes(mark) === true;
+}
+
 function isMarkedInline(
   inline: MobileMarkdownInline,
 ): inline is Extract<MobileMarkdownInline, { type: MobileMarkdownInlineMark }> {
