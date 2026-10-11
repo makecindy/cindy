@@ -94,6 +94,7 @@ import {
 } from './manager.js';
 import { createHookTransport } from './transport.js';
 import { registerSlackToolBridge, unregisterSlackToolBridge } from './slackToolBridge.js';
+import { createTelegramDeliveryBridge, purgeTelegramDeliveryJournals, registerTelegramDeliveryBridge, type TelegramDeliveryBridge } from './telegramDelivery.js';
 import { createHookBindingStore } from './bindings.js';
 import { createHookRequestLedger } from './requestLedger.js';
 import {
@@ -125,6 +126,8 @@ let codexMcpRefreshPending = false;
 let codexMcpRefreshRunning = false;
 let codexMcpRefreshRetryTimer: NodeJS.Timeout | null = null;
 let latestSlackToolProviderEnabled = false;
+/** Owner-scoped journal directory of the active Telegram delivery bridge (sent text lives in `.sent`). */
+let telegramDeliveryDirectory: string | null = null;
 
 const CODEX_MCP_REFRESH_RETRY_MS = 2_000;
 
@@ -435,6 +438,10 @@ function ensureInstances(): { store: SlackHookStore; manager: HookControlManager
     });
   }
   if (!manager) {
+    let telegramDelivery: TelegramDeliveryBridge | null = null;
+    const deliveryBindings = createHookBindingStore({
+      filePath: ownerScopedUserDataPath('hook-bindings.json'), log,
+    });
     const dispatcher = createHookDispatcher({
       // 两个 provider 复用 dispatcher，但连接身份和服务地址彼此隔离。
       getConnection: (connectionId) => {
@@ -566,6 +573,8 @@ function ensureInstances(): { store: SlackHookStore; manager: HookControlManager
     manager = createHookControlManager({
       store,
       isAvailable: hookControlAvailable,
+      onTelegramDeliveryResult: (result) => telegramDelivery?.onResult(result),
+      listTelegramDeliveryKeys: (connectionId) => deliveryBindings.listKeys?.(connectionId) ?? [],
       createTransport: createHookTransport,
       getTelegramUrl: () => getClientEndpoint('telegramHookWsUrl'),
       getXUrl: () => getClientEndpoint('xHookWsUrl'),
@@ -659,6 +668,13 @@ function ensureInstances(): { store: SlackHookStore; manager: HookControlManager
     // Slack 网关工具桥: lizi_slack provider 经叶子注册表取用(不直接 import
     // 本模块, 避免 mcp-providers <-> ipc 的静态引用闭环)
     const m = manager;
+    telegramDeliveryDirectory = ownerScopedUserDataPath('telegram-delivery-receipts');
+    telegramDelivery = createTelegramDeliveryBridge({
+      directory: telegramDeliveryDirectory,
+      status: () => m.telegramDeliveryStatus(),
+      send: (payload) => m.sendTelegramDelivery(payload),
+    });
+    registerTelegramDeliveryBridge(telegramDelivery);
     registerSlackToolBridge({
       availability: () =>
         hookControlAvailable()
@@ -1215,6 +1231,16 @@ export async function stopHookControlAccount(): Promise<void> {
 export function resetHookControlOwnerBoundary(options?: { clearPersisted?: boolean }): void {
   mirrorWorkspacePrefs.invalidateOwnerBoundary();
   unregisterSlackToolBridge();
+  registerTelegramDeliveryBridge(null);
+  // Account deletion removes the owner's delivery journals (`.sent` keeps the actual Telegram
+  // text and entities). The bridge is unregistered first and journal writes are synchronous, so
+  // nothing recreates the directory afterwards; a late in-flight result write fails on the
+  // missing directory instead. Ordinary logout / quit keep the journals for idempotent replay.
+  const deliveryDirectory = telegramDeliveryDirectory;
+  telegramDeliveryDirectory = null;
+  void purgeTelegramDeliveryJournals(deliveryDirectory, options?.clearPersisted).catch((error: unknown) => {
+    log.warn(`telegram delivery journal purge failed: ${String(error)}`);
+  });
   resetGroupContextCursorsSafely(options);
   resetTelegramSpeakerRegistrationCache();
   manager?.dispose();
