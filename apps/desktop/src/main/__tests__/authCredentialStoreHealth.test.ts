@@ -163,7 +163,7 @@ describe('authManager credential-store escalation wiring', () => {
     expect(probe(null, 'EIO')).toBe(true);
   });
 
-  it('retains startup failure across all owner cleanup paths and exposes it before loading providers', () => {
+  it('retains startup failure across owner cleanup while keeping explicit login available', () => {
     const recovery = authSource.slice(
       authSource.indexOf('async function withAccountFreeOwnerCommit'),
       authSource.indexOf('interface CloudOwnerDataReservation'),
@@ -186,12 +186,13 @@ describe('authManager credential-store escalation wiring', () => {
       authSource.indexOf('export async function getLoginState()'),
       authSource.indexOf('async function completeLogin('),
     );
-    expect(login.indexOf('credentialStoreHealth.unavailable')).toBeLessThan(
-      login.indexOf('await loadLoginProviders'),
+    expect(login).not.toContain('credentialStoreHealth.unavailable');
+    expect(login).toContain('await loadLoginProviders(expectedLoginFlowEpoch)');
+    const actions = authSource.slice(
+      authSource.indexOf('async function runLoginAction('),
+      authSource.indexOf('export function dispatchLoginAction('),
     );
-    expect(login).toContain(
-      "state: { step: 'error', code: 'CREDENTIAL_STORE_UNAVAILABLE', recoverTo: 'identifier' }",
-    );
+    expect(actions).not.toContain('return getLoginState();');
   });
 
   it('transient-unreadable 分支喂失败计数并在翻转时广播,但仍保持瞬时语义', () => {
@@ -242,5 +243,102 @@ describe('authManager credential-store escalation wiring', () => {
     expect(authSource.slice(loggedOutStart, loggedOutEnd)).toContain(
       'credentialStoreUnavailable: false',
     );
+  });
+
+  it('allows explicit login to fall back to a main-process-only session', () => {
+    const completeStart = authSource.indexOf('async function completeLogin(');
+    const completeEnd = authSource.indexOf(
+      '\n}\n\nasync function acceptLoginOutcome',
+      completeStart,
+    );
+    const complete = authSource.slice(completeStart, completeEnd);
+
+    expect(complete).toContain(
+      '(credentialStoreHealth.unavailable || credentialEncryptionUnavailable)',
+    );
+    expect(complete).toContain("error.code !== 'CREDENTIAL_STORE_UNAVAILABLE'");
+    expect(complete).toContain('error instanceof CredentialStoreRollbackError');
+    expect(complete).toContain('await publishVolatileLogin();');
+    expect(complete).toContain(': { realm: committedRealm, refreshToken: outcome.refreshToken }');
+    expect(complete).toContain(
+      'lastAcceptedRefreshToken = persistCredentials ? outcome.refreshToken : null;',
+    );
+    const volatileGuard = complete.indexOf('if (!sessionIsVolatile) {');
+    expect(volatileGuard).toBeGreaterThan(-1);
+    const volatileGuardBody = complete.slice(
+      volatileGuard,
+      complete.indexOf('scheduleRefresh(outcome.accessToken);', volatileGuard),
+    );
+    expect(volatileGuardBody).toContain('migrateLocalProviderBindingsAfterCloudCommit');
+    expect(volatileGuardBody).toContain('scheduleCanaryFlagSync');
+    expect(volatileGuardBody).toContain('scheduleXdOrgBetaDefault');
+    expect(volatileGuardBody).toContain('getProviderSecretStore().reconcileOwner');
+    expect(complete).toContain(
+      'canaryFlagStore.setProcessOverride(persistCredentials ? null : false);',
+    );
+  });
+
+  it('blocks volatile fallback when a durable credential rollback is incomplete', () => {
+    expect(authSource).toContain('class CredentialStoreRollbackError extends AuthApiError');
+    const transaction = authSource.slice(
+      authSource.indexOf('async function transactAuthAccountVault'),
+      authSource.indexOf('async function mutateAuthAccountVault'),
+    );
+    expect(transaction).toContain('credentialStoreRollbackError(');
+    const restore = authSource.slice(
+      authSource.indexOf('function restorePersistedAuthSessionIfCurrent('),
+      authSource.indexOf(
+        '/**\n * 过渡期镜像',
+        authSource.indexOf('function restorePersistedAuthSessionIfCurrent('),
+      ),
+    );
+    expect(restore).toContain('credentialStoreRollbackError(');
+    expect(restore).toContain("if (removed !== 'deleted')");
+  });
+
+  it('refreshes and logs out an in-memory session without touching saved credentials', () => {
+    const refreshStart = authSource.indexOf('export async function refresh(): Promise<boolean> {');
+    const persistedRead = authSource.indexOf(
+      'const persistedSession = readPersistedAuthSession();',
+      refreshStart,
+    );
+    const volatileRefresh = authSource.slice(refreshStart, persistedRead);
+    expect(volatileRefresh).toContain('const volatileSession = volatileRefreshSession;');
+    expect(volatileRefresh).toContain('await requestAuthRefresh(');
+    expect(volatileRefresh).toContain('refreshToken: data.refreshToken');
+    expect(volatileRefresh).not.toContain('commitDesktopRefreshCredentials(');
+
+    const logoutStart = authSource.indexOf('export async function logout(): Promise<void> {');
+    const vaultRead = authSource.indexOf('savedVault = readAuthAccountVault();', logoutStart);
+    const volatileLogout = authSource.slice(logoutStart, vaultRead);
+    expect(volatileLogout).toContain('if (volatileRefreshSession) {');
+    expect(volatileLogout).toContain('preservePersistedRefreshToken: true');
+    expect(volatileLogout).toContain("reason: 'logout-in-memory-session'");
+  });
+
+  it('preserves unreadable saved credentials when an in-memory session ends', () => {
+    const invalidateStart = authSource.indexOf('export function invalidateSession(');
+    const invalidateEnd = authSource.indexOf('\n}\n\nexport function hasSession', invalidateStart);
+    const invalidate = authSource.slice(invalidateStart, invalidateEnd);
+    expect(invalidate).toContain('const wasVolatileSession = volatileRefreshSession !== null;');
+    expect(invalidate).toContain('preservePersistedRefreshToken: wasVolatileSession');
+    expect(invalidate).toContain('preservePersistedAccountState: wasVolatileSession');
+
+    const localStart = authSource.indexOf('export async function enterLocalMode()');
+    const localEnd = authSource.indexOf('\n}\n\nexport async function exitLocalMode', localStart);
+    const local = authSource.slice(localStart, localEnd);
+    expect(local).toContain(
+      'const preservePersistedRefreshToken = volatileRefreshSession !== null;',
+    );
+    expect(local).toContain('preservePersistedRefreshToken,');
+    expect(local).toContain('preservePersistedAccountState: preservePersistedRefreshToken');
+
+    const clearStart = authSource.indexOf('function clearAuth(');
+    const clearEnd = authSource.indexOf('\n}\n\n/**\n * Expire a live cloud session', clearStart);
+    const clear = authSource.slice(clearStart, clearEnd);
+    expect(clear).toContain(
+      'if (!opts.preservePersistedAccountState && !isPassiveSharedUserDataInstance())',
+    );
+    expect(clear).toContain('canaryFlagStore.setProcessOverride(null);');
   });
 });
