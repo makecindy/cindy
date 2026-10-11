@@ -982,6 +982,88 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     expect(isHeadlessGhostSetupTurn('feishu-session')).toBe(false);
   });
 
+  it.each(['wechat', 'wecom'] as const)(
+    'collects all free-text answers from the single-question %s adapter',
+    async (channel) => {
+      const h = setupSession(async () => ({ accepted: true }));
+      const handleTextInteraction = vi.fn(async (_userId: string, request: InteractionRequest): Promise<InteractionDecision> => {
+        if (request.kind !== 'ask_user_question') throw new Error('Expected question');
+        return { kind: 'ask_user_question', answers: { [request.questions[0].question]: 'answer' } };
+      });
+      const localRunner = createTurnRunner({
+        ...fakeAdapter, channel,
+        output: { kind: 'chunked-text', im: mocks.feishuIm as unknown as ChannelIM, commitFinal: vi.fn(async () => undefined) },
+        handleTextInteraction,
+      }, fakeRepo, fakeCards);
+      try {
+        await localRunner.runAgentTurn({ botContextId: 'cli_test_bot', userId: 'ou_user', userMessageId: 'text-pages', text: 'ask', attachments: [] });
+        const request: InteractionRequest = { kind: 'ask_user_question', requestId: 'text-pages', questions: [{ question: 'Name?' }, { question: 'City?' }] };
+        await expect(h.dispatchInteraction(request)).resolves.toEqual({ kind: 'ask_user_question', answers: { 'Name?': 'answer', 'City?': 'answer' } });
+        expect(handleTextInteraction).toHaveBeenCalledTimes(2);
+        expect(handleTextInteraction.mock.calls.map(([, req]) => req.requestId)).toEqual(['text-pages:question:0', 'text-pages:question:1']);
+      } finally {
+        h.emit({ type: 'done', data: {} });
+        await localRunner.disposeAllSessions();
+      }
+    },
+  );
+
+  it.each(['wechat', 'wecom'] as const)(
+    'collects every question when %s takes over a Desktop questionnaire',
+    async (channel) => {
+      setupAttachedSession(async () => ({ accepted: true }));
+      const resolve = vi.fn();
+      const handleTextInteraction = vi.fn(async (_userId: string, request: InteractionRequest): Promise<InteractionDecision> => {
+        if (request.kind !== 'ask_user_question') throw new Error('Expected question');
+        return { kind: 'ask_user_question', answers: { [request.questions[0].question]: 'answer' } };
+      });
+      mocks.takePendingInteractionsForSession.mockReturnValueOnce([{
+        requestId: 'text-takeover', request: { kind: 'ask_user_question', requestId: 'text-takeover', questions: [{ question: 'Name?' }, { question: 'City?' }] },
+        resolve, signal: new AbortController().signal,
+      }]);
+      const localRunner = createTurnRunner({
+        ...fakeAdapter, channel,
+        output: { kind: 'chunked-text', im: mocks.feishuIm as unknown as ChannelIM, commitFinal: vi.fn(async () => undefined) },
+        handleTextInteraction,
+      }, fakeRepo, fakeCards);
+      try {
+        await localRunner.runAgentTurn({ botContextId: 'cli_test_bot', userId: 'ou_user', userMessageId: 'text-takeover', text: 'ask', attachments: [] });
+        await waitForAssertion(() => expect(resolve).toHaveBeenCalledOnce());
+        expect(resolve).toHaveBeenCalledWith({ kind: 'ask_user_question', answers: { 'Name?': 'answer', 'City?': 'answer' } });
+        expect(handleTextInteraction).toHaveBeenCalledTimes(2);
+      } finally { await localRunner.disposeAllSessions(); }
+    },
+  );
+
+  it('cancels the current text page when its Desktop owner cancels a migrated questionnaire', async () => {
+    setupAttachedSession(async () => ({ accepted: true }));
+    const controller = new AbortController();
+    const resolve = vi.fn();
+    const handleTextInteraction = vi.fn(async (_userId: string, request: InteractionRequest): Promise<InteractionDecision> => {
+      if (request.kind !== 'ask_user_question') throw new Error('Expected question');
+      if (request.questions[0].question === 'First?') return { kind: 'ask_user_question', answers: { 'First?': 'answer' } };
+      return new Promise(() => {});
+    });
+    const cancelTextInteraction = vi.fn(() => true);
+    mocks.takePendingInteractionsForSession.mockReturnValueOnce([{
+      requestId: 'text-cancel', request: { kind: 'ask_user_question', requestId: 'text-cancel', questions: ['First?', 'Second?', 'Third?'].map(question => ({ question })) },
+      resolve, signal: controller.signal,
+    }]);
+    const localRunner = createTurnRunner({
+      ...fakeAdapter, channel: 'wechat',
+      output: { kind: 'chunked-text', im: mocks.feishuIm as unknown as ChannelIM, commitFinal: vi.fn(async () => undefined) },
+      handleTextInteraction, cancelTextInteraction,
+    }, fakeRepo, fakeCards);
+    try {
+      await localRunner.runAgentTurn({ botContextId: 'cli_test_bot', userId: 'ou_user', userMessageId: 'text-cancel', text: 'ask', attachments: [] });
+      await waitForAssertion(() => expect(handleTextInteraction).toHaveBeenCalledTimes(2));
+      controller.abort();
+      await waitForAssertion(() => expect(resolve).toHaveBeenCalledWith({ kind: 'ask_user_question', answers: { 'First?': 'answer' }, dismissed: true }));
+      expect(cancelTextInteraction).toHaveBeenCalledExactlyOnceWith('ou_user', 'text-cancel:question:1', expect.objectContaining({ dismissed: true }));
+      expect(handleTextInteraction).toHaveBeenCalledTimes(2);
+    } finally { await localRunner.disposeAllSessions(); }
+  });
+
   it('preserves complete free-text questionnaires on chunked-text adapters', async () => {
     const h = setupSession(async () => ({ accepted: true }));
     const answer: InteractionDecision = { kind: 'ask_user_question', answers: { 'Name?': 'Alice', 'City?': 'Paris' } };
@@ -989,6 +1071,7 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     const localRunner = createTurnRunner({
       ...fakeAdapter,
       channel: 'dingtalk',
+      supportsMultiQuestionInput: true,
       output: { kind: 'chunked-text', im: mocks.feishuIm as unknown as ChannelIM, commitFinal: vi.fn(async () => undefined) },
       handleTextInteraction,
     }, fakeRepo, fakeCards);

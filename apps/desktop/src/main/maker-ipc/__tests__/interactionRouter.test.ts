@@ -97,6 +97,23 @@ describe('session interaction router', () => {
     } finally { lease.release(); }
   });
 
+  it.each([0, 1])('stops a text questionnaire when the adapter times out on page %i', async index => {
+    const host = makeSession();
+    const channel = vi.fn<InteractionHandler>(async (request): Promise<InteractionDecision> => {
+      if (request.kind !== 'ask_user_question') throw new Error('Expected question');
+      return { kind: 'ask_user_question', answers: channel.mock.calls.length - 1 === index ? {} : { [request.questions[0].question]: 'answer' } };
+    });
+    const lease = beginInteractionRoute(host.session, {
+      route: { sessionId: host.session.id, turnId: 'text-timeout', origin: { kind: 'im', channel: 'wechat' }, interactionSurface: 'channel-card', supportsFreeTextInput: true },
+      handle: channel,
+    });
+    try {
+      await expect(host.dispatch({ kind: 'ask_user_question', requestId: 'text-timeout', questions: ['First?', 'Second?', 'Third?'].map(question => ({ question })) }))
+        .resolves.toEqual({ kind: 'ask_user_question', answers: index === 0 ? {} : { 'First?': 'answer' }, dismissed: true });
+      expect(channel).toHaveBeenCalledTimes(index + 1);
+    } finally { lease.release(); }
+  });
+
   it.each(['timeout', 'release', 'abort'] as const)('retains completed pages on router %s', async stop => {
     vi.useFakeTimers();
     const host = makeSession();

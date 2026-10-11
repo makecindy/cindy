@@ -1414,7 +1414,8 @@ export function createTurnRunner(
                     turnId: item.turn.turnId,
                     origin: effectiveTurnPolicy?.origin ?? { kind: 'im', channel },
                     interactionSurface: 'channel-card',
-                    supportsMultiQuestionInput: !richIm && !!adapter.handleTextInteraction,
+                    supportsMultiQuestionInput: !richIm && !!adapter.handleTextInteraction && adapter.supportsMultiQuestionInput === true,
+                    supportsFreeTextInput: !richIm && !!adapter.handleTextInteraction,
                     sourceDescription: item.turn.sourceDescription,
                     ...(effectiveTurnPolicy?.confirmationTimeoutMs
                       ? { timeoutMs: effectiveTurnPolicy.confirmationTimeoutMs }
@@ -2018,6 +2019,33 @@ export function createTurnRunner(
       `publishMigrated kind=${req.kind} requestId=...${req.requestId.slice(-8)} session=...${localSessionId.slice(-8)}`,
     );
 
+    if (req.kind === 'ask_user_question' && req.delivery !== 'async' && req.questions.length > 1
+      && (richIm || !adapter.supportsMultiQuestionInput)) {
+      let pageId = req.requestId;
+      const cancelPage = () => {
+        if (!richIm) {
+          adapter.cancelTextInteraction?.(userId, pageId, { kind: 'ask_user_question', answers: {}, dismissed: true });
+        } else {
+          dropInteractionCard(pageId, 'session_aborted');
+        }
+      };
+      entry.signal?.addEventListener('abort', cancelPage, { once: true });
+      try {
+        const handle = handleInteractionFor(localSessionId, userId, scopeKey);
+        const decision = await presentChannelQuestionnaire(
+          req, (page, signal) => handle(page, undefined, signal), entry.signal,
+          requestId => { pageId = requestId; },
+          !richIm && !!adapter.handleTextInteraction,
+        );
+        resolve(decision);
+      } catch {
+        resolve({ kind: 'ask_user_question', answers: {}, dismissed: true });
+      } finally {
+        entry.signal?.removeEventListener('abort', cancelPage);
+      }
+      return;
+    }
+
     if (!richIm) {
       try {
         if (adapter.handleTextInteraction) {
@@ -2038,25 +2066,6 @@ export function createTurnRunner(
             ? { kind, answers: {} }
             : { kind, behavior: 'deny', reason: `text interaction failed: ${msg}` },
         );
-      }
-      return;
-    }
-
-    if (req.kind === 'ask_user_question' && req.delivery !== 'async' && req.questions.length > 1) {
-      let pageId = req.requestId;
-      const cancelPage = () => { dropInteractionCard(pageId, 'session_aborted'); };
-      entry.signal?.addEventListener('abort', cancelPage, { once: true });
-      try {
-        const handle = handleInteractionFor(localSessionId, userId, scopeKey);
-        const decision = await presentChannelQuestionnaire(
-          req, (page, signal) => handle(page, undefined, signal), entry.signal,
-          requestId => { pageId = requestId; },
-        );
-        resolve(decision);
-      } catch {
-        resolve({ kind: 'ask_user_question', answers: {}, dismissed: true });
-      } finally {
-        entry.signal?.removeEventListener('abort', cancelPage);
       }
       return;
     }

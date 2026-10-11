@@ -8,12 +8,13 @@ export async function presentChannelQuestionnaire(
   present: (page: Questionnaire, signal?: AbortSignal) => Promise<InteractionDecision>,
   signal?: AbortSignal,
   onPage?: (requestId: string) => void,
+  supportsFreeTextInput = false,
 ): Promise<InteractionDecision> {
   let answers: Record<string, string> = {};
   const dismissed = (): InteractionDecision => ({ kind: 'ask_user_question', answers, dismissed: true });
   // These card surfaces cannot collect free text. Never substitute a blank
   // "continue" answer, or partially dispatch a questionnaire we cannot finish.
-  if (request.questions.some(question => !question.options?.length) || signal?.aborted) return dismissed();
+  if ((!supportsFreeTextInput && request.questions.some(question => !question.options?.length)) || signal?.aborted) return dismissed();
 
   let abort!: () => void;
   const cancelled = new Promise<InteractionDecision>(resolve => {
@@ -30,6 +31,8 @@ export async function presentChannelQuestionnaire(
         cancelled,
       ]);
       if (signal?.aborted || decision.kind !== 'ask_user_question') return dismissed();
+      // Text adapters return no answer when their own reply wait expires.
+      if (supportsFreeTextInput && !Object.hasOwn(decision.answers, question.question)) return dismissed();
       answers = { ...answers, ...decision.answers };
       if (decision.dismissed) return { ...decision, answers };
     }

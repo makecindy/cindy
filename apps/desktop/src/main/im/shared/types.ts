@@ -193,13 +193,16 @@ export interface ImChannelAdapter {
   buildVendorOptions(userId: string, scopeKey?: string): Record<string, unknown>;
   /**
    * Text-only channels can still resolve agent interactions without rich cards.
-   * The callback owns channel-specific correlation and parsing.
+   * The callback owns channel-specific correlation and parsing. Only adapters
+   * that collect every question themselves may enable supportsMultiQuestionInput.
    */
   handleTextInteraction?(
     userId: string,
     request: InteractionRequest,
     options?: { timeoutMs?: number; sharedPermission?: import('../../maker-ipc/sharedPermission').SharedPermission },
   ): Promise<InteractionDecision>;
+  /** Whether handleTextInteraction collects all questions instead of only the first. */
+  supportsMultiQuestionInput?: boolean;
   /**
    * Cancel a channel-owned text interaction when the central route times out,
    * the turn stops, or the session closes. Return true when the adapter found

@@ -28,6 +28,8 @@ export interface InteractionRoute {
   timeoutMs?: number;
   /** Text-input adapters can collect the complete questionnaire themselves. */
   supportsMultiQuestionInput?: boolean;
+  /** Single-question text adapters can accept free text while being paginated. */
+  supportsFreeTextInput?: boolean;
   /** Main-owned source text, shared by Desktop and channel presentations. */
   sourceDescription?: string;
   onStateChange?(state: InteractionRouteState): void;
@@ -289,6 +291,7 @@ class SessionInteractionRouter {
           (page, pageSignal) => handler(page, undefined, pageSignal),
           surfaceController?.signal,
           requestId => { surfaceRequestId = requestId; },
+          active?.route.supportsFreeTextInput,
         );
       } else {
         handled = handler(request);

@@ -72,6 +72,7 @@ export function buildDingTalkAdapter(
     processingEmoji: '',
     silentQueue: true,
     buildVendorOptions: (userId) => ({ dingtalkChatId: userId, source: 'dingtalk' }),
+    supportsMultiQuestionInput: true,
     handleTextInteraction: (userId, request, options) =>
       handleDingTalkTextInteraction(dingtalkIm, userId, request, options),
     // 对齐 Telegram / 飞书的边界：主人私聊完全遵循 session.permissionMode，
