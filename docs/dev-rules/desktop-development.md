@@ -194,6 +194,12 @@ pnpm test:unit
   对应规则，不以本页命令替代专项验证。
 - 记录实际执行和结果；未执行的高相关检查必须说明原因。
 
+## Windows 窗口恢复实验
+
+Windows 偶发黑屏/灰屏的后台节流对照实验见
+[窗口恢复对照](../../apps/desktop/scripts/render-recovery/README.md)。它按需使用 GitHub
+Windows runner，独立于默认单测；短流程通过和完整 Cindy 故障已修复必须分开判断。
+
 ## Windows 安装目录与授权
 
 NSIS 安装器保留当前用户／所有用户两种范围。普通用户可写的目录无需提权；选择受保护的

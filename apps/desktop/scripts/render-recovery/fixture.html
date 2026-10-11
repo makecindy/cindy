@@ -1,0 +1,51 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'unsafe-inline'"
+    />
+    <title>Render recovery fixture</title>
+    <style>
+      body {
+        margin: 0;
+        background: #183048;
+        color: white;
+        font: 20px sans-serif;
+      }
+      .swatch {
+        position: absolute;
+        top: 20px;
+        width: 80px;
+        height: 80px;
+      }
+      #red {
+        left: 20px;
+        background: #e02040;
+      }
+      #green {
+        left: 120px;
+        background: #20d060;
+      }
+      #blue {
+        left: 220px;
+        background: #3060e0;
+      }
+      button {
+        position: absolute;
+        left: 40px;
+        top: 120px;
+        width: 200px;
+        height: 40px;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="red" class="swatch"></div>
+    <div id="green" class="swatch"></div>
+    <div id="blue" class="swatch"></div>
+    <button id="input">Input probe: 0</button>
+    <script src="renderer.js"></script>
+  </body>
+</html>

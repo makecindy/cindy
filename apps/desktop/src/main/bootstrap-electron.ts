@@ -940,6 +940,7 @@ import { registerFileBrowserDeviceOp } from './file-browser/device-op.js';
 import { registerSearchIpc } from './file-browser/search/index.js';
 import { registerVoiceInputIpc } from './voice-input/index.js';
 import { installWindowHiddenBroadcast } from './windowHiddenBroadcast.js';
+import { getRenderWatchdogContext } from './renderWatchdogContext.js';
 import {
   isSecondaryAppWindow,
   openSessionInNewWindow,
@@ -4502,14 +4503,21 @@ const registerIpcHandlers = () => {
   ipcMain.on(
     'renderer:log',
     (
-      _e,
+      event,
       level: 'trace' | 'debug' | 'info' | 'warn' | 'error' | 'fatal',
       scope: string,
       msg: string,
     ) => {
       // renderer 能发日志 = JS 已跑起来 → 解除 dev 启动看门狗(见 renderer-boot-guard.ts)。
       rendererBootGuard?.markAlive();
-      writeFromRenderer(level, scope, msg);
+      // 原生状态在收到告警时从真正的 sender 读取,无需增加 renderer 查询 IPC。
+      if (scope === 'render-watchdog') {
+        const win = event.sender.isDestroyed() ? null : BrowserWindow.fromWebContents(event.sender);
+        const context = getRenderWatchdogContext(event.sender, win);
+        writeFromRenderer(level, scope, `${msg} ${JSON.stringify(context)}`);
+      } else {
+        writeFromRenderer(level, scope, msg);
+      }
     },
   );
 

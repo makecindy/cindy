@@ -34,6 +34,7 @@ function createHarness(initialVisibility: DocumentVisibilityState = 'visible') {
   const timeouts = new Map<number, () => void>();
   const rafs = new Map<number, FrameRequestCallback>();
   const visibilityListeners = new Set<() => void>();
+  const nativeHiddenListeners = new Set<(hidden: boolean) => void>();
   let nextHandle = 1;
 
   const target: RenderLoopWatchdogTarget = {
@@ -49,6 +50,12 @@ function createHarness(initialVisibility: DocumentVisibilityState = 'visible') {
       },
     },
     window: {
+      electronAPI: {
+        onWindowHiddenChange: (cb) => {
+          nativeHiddenListeners.add(cb);
+          return () => nativeHiddenListeners.delete(cb);
+        },
+      },
       setInterval: ((cb: () => void) => {
         const id = nextHandle++;
         intervals.set(id, cb);
@@ -86,6 +93,10 @@ function createHarness(initialVisibility: DocumentVisibilityState = 'visible') {
       visibility = v;
       for (const cb of [...visibilityListeners]) cb();
     },
+    setNativeHidden(hidden: boolean) {
+      for (const cb of nativeHiddenListeners) cb(hidden);
+    },
+    nativeListenerCount: () => nativeHiddenListeners.size,
     fireInterval() {
       for (const cb of [...intervals.values()]) cb();
     },
@@ -184,7 +195,7 @@ describe('renderLoopWatchdog', () => {
     h.flushTimeouts(); // 探针超时,帧一直没来
 
     expect(loggerMock.warn).toHaveBeenCalledWith(
-      '页面可见但帧管线无输出(疑似白屏)',
+      '可见状态下动画帧探针超时',
       expect.objectContaining({ probeTimeoutMs: 2_000 }),
     );
 
@@ -198,7 +209,7 @@ describe('renderLoopWatchdog', () => {
     h.advance(3_000);
     h.flushFrames();
     expect(loggerMock.warn).toHaveBeenCalledWith(
-      '帧管线恢复出帧',
+      '动画帧回调恢复',
       expect.objectContaining({ stalledDurationMs: expect.any(Number) }),
     );
     dispose();
@@ -238,6 +249,7 @@ describe('renderLoopWatchdog', () => {
     expect(h.pendingIntervalCount()).toBe(0);
     expect(h.pendingRafCount()).toBe(0);
     expect(h.pendingTimeoutCount()).toBe(0);
+    expect(h.nativeListenerCount()).toBe(0);
   });
 
   it('重复 install 会先卸载旧实例(disposer key 幂等)', () => {
@@ -245,8 +257,88 @@ describe('renderLoopWatchdog', () => {
     installRenderLoopWatchdog(h.target);
     installRenderLoopWatchdog(h.target);
     expect(h.pendingIntervalCount()).toBe(1);
-    (h.target.window as { __xdtRenderLoopWatchdogDisposer?: () => void })
-      .__xdtRenderLoopWatchdogDisposer?.();
+    (
+      h.target.window as { __xdtRenderLoopWatchdogDisposer?: () => void }
+    ).__xdtRenderLoopWatchdogDisposer?.();
     expect(h.pendingIntervalCount()).toBe(0);
+  });
+
+  it('原生隐藏但网页仍 visible 时取消探针,隐藏期漂移不告警', () => {
+    const h = createHarness();
+    const dispose = installRenderLoopWatchdog(h.target);
+    h.fireInterval();
+    h.setNativeHidden(true);
+    h.advance(60_000);
+    h.flushTimeouts();
+    h.fireInterval();
+    expect(h.pendingRafCount()).toBe(0);
+    expect(loggerMock.warn).not.toHaveBeenCalled();
+    dispose();
+  });
+
+  it('原生恢复而网页没有 visibilitychange 时立即探测,跳过隐藏期漂移', () => {
+    const h = createHarness();
+    const dispose = installRenderLoopWatchdog(h.target);
+    h.setNativeHidden(true);
+    h.advance(60_000);
+    h.setNativeHidden(false);
+    expect(h.pendingRafCount()).toBe(1);
+    h.advance(2_000);
+    h.flushTimeouts();
+    expect(loggerMock.warn).toHaveBeenCalledWith(
+      '可见状态下动画帧探针超时',
+      expect.objectContaining({
+        observedAt: 62_000,
+        probeStartedAt: 60_000,
+        documentVisibility: 'visible',
+        nativeHidden: false,
+        nativeStateReceivedAt: 60_000,
+      }),
+    );
+    loggerMock.warn.mockClear();
+    h.advance(55_000);
+    h.fireInterval();
+    expect(loggerMock.warn).not.toHaveBeenCalled();
+    dispose();
+  });
+
+  it('原生显示不覆盖页面隐藏,页面显示也不覆盖原生隐藏', () => {
+    const h = createHarness('hidden');
+    const dispose = installRenderLoopWatchdog(h.target);
+    h.setNativeHidden(false);
+    expect(h.pendingRafCount()).toBe(0);
+    h.setNativeHidden(true);
+    h.setVisibility('visible');
+    expect(h.pendingRafCount()).toBe(0);
+    h.setNativeHidden(false);
+    expect(h.pendingRafCount()).toBe(1);
+    dispose();
+  });
+
+  it('停顿后原生隐藏终止旧 episode,恢复后不会误报旧探针恢复', () => {
+    const h = createHarness();
+    const dispose = installRenderLoopWatchdog(h.target);
+    h.fireInterval();
+    h.advance(2_000);
+    h.flushTimeouts();
+    loggerMock.warn.mockClear();
+    h.setNativeHidden(true);
+    h.setNativeHidden(false);
+    h.flushFrames();
+    expect(loggerMock.warn).not.toHaveBeenCalled();
+    dispose();
+  });
+
+  it('隐藏时 HMR 重装保留原生状态且只保留一个监听', () => {
+    const h = createHarness();
+    installRenderLoopWatchdog(h.target);
+    h.setNativeHidden(true);
+    const dispose = installRenderLoopWatchdog(h.target);
+    h.advance(60_000);
+    h.fireInterval();
+    expect(h.nativeListenerCount()).toBe(1);
+    expect(h.pendingRafCount()).toBe(0);
+    expect(loggerMock.warn).not.toHaveBeenCalled();
+    dispose();
   });
 });

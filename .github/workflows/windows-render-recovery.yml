@@ -1,0 +1,73 @@
+name: Windows render recovery comparison
+
+on:
+  # 新 workflow 合并前也能按需验证:给同仓 PR 加此标签,不对每次 push 跑长测试。
+  pull_request:
+    types: [labeled]
+  workflow_dispatch:
+    inputs:
+      idle_seconds:
+        description: "恢复后不操作的秒数（正式对照至少 900）"
+        default: "900"
+        required: true
+        type: string
+      hidden_seconds:
+        description: "关闭节流后保持隐藏的秒数（长时对照可用 8100）"
+        default: "3"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  compare:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.label.name == 'test:windows-render-recovery' &&
+       github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: windows-2025
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        electron: ["41.10.3", "43.7.9"]
+        scenario: [hide, minimize]
+        surface: [window, view]
+    env:
+      RENDER_PROBE_IDLE_SECONDS: ${{ inputs.idle_seconds || '900' }}
+      RENDER_PROBE_HIDDEN_SECONDS: ${{ inputs.hidden_seconds || '3' }}
+      RENDER_PROBE_SCENARIO: ${{ matrix.scenario }}
+      RENDER_PROBE_SURFACE: ${{ matrix.surface }}
+      ELECTRON_VERSION: ${{ matrix.electron }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+      - name: Prepare isolated paths and validate durations
+        shell: pwsh
+        run: |
+          "RENDER_PROBE_ELECTRON_DIR=$env:RUNNER_TEMP/render-probe-electron" >> $env:GITHUB_ENV
+          "RENDER_PROBE_OUTPUT=$env:RUNNER_TEMP/render-probe-results" >> $env:GITHUB_ENV
+          if ($env:RENDER_PROBE_IDLE_SECONDS -notmatch '^\d+$' -or [int]$env:RENDER_PROBE_IDLE_SECONDS -lt 1 -or [int]$env:RENDER_PROBE_IDLE_SECONDS -gt 1800) { throw 'idle_seconds must be 1..1800' }
+          if ($env:RENDER_PROBE_HIDDEN_SECONDS -notmatch '^\d+$' -or [int]$env:RENDER_PROBE_HIDDEN_SECONDS -lt 1 -or [int]$env:RENDER_PROBE_HIDDEN_SECONDS -gt 8100) { throw 'hidden_seconds must be 1..8100' }
+      - name: Install isolated Electron (no Cindy dependencies or credentials)
+        shell: pwsh
+        run: |
+          npm install --prefix "$env:RENDER_PROBE_ELECTRON_DIR" --ignore-scripts --no-audit --no-fund "electron@$env:ELECTRON_VERSION"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node "$env:RENDER_PROBE_ELECTRON_DIR/node_modules/electron/install.js"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Observe real window recovery
+        run: node apps/desktop/scripts/render-recovery/run.mjs
+      - name: Retain synthetic screenshots and diagnostic reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: render-${{ matrix.electron }}-${{ matrix.scenario }}-${{ matrix.surface }}
+          path: ${{ env.RENDER_PROBE_OUTPUT }}
+          retention-days: 14
+          if-no-files-found: warn
