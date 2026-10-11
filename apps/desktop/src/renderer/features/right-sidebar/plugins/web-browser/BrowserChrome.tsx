@@ -41,6 +41,8 @@ import {
   Link as LinkIcon,
   Lock,
   MessageSquarePlus,
+  Minus,
+  Plus,
   RotateCw,
   Unlock,
   X as XIcon,
@@ -50,13 +52,23 @@ import { useTranslation } from 'react-i18next';
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { Tip } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
 
 import { parseOmnibox } from './lib/parseOmnibox';
+import {
+  DEFAULT_BROWSER_ZOOM_FACTOR,
+  formatBrowserZoomFactor,
+  nextBrowserZoomFactor,
+  normalizeBrowserZoomFactor,
+  previousBrowserZoomFactor,
+} from './lib/browserZoom';
 
 export interface BrowserChromeProps {
   url: string;
@@ -86,6 +98,9 @@ export interface BrowserChromeProps {
   onOpenInSystemBrowser: () => void;
   /** 「更多」菜单项:复制当前页链接到剪贴板(反馈 toast 由 TabBody 做)。 */
   onCopyLink: () => void;
+  zoomFactor: number;
+  /** Apply a standard page-zoom step to this browser tab only. */
+  onZoomChange: (zoomFactor: number) => void;
   /** 原生 popup view 必须在 renderer portal 打开时暂时让出层叠空间。 */
   onOverlayOpenChange?: (open: boolean) => void;
 }
@@ -115,6 +130,8 @@ export const BrowserChrome = forwardRef<BrowserChromeHandle, BrowserChromeProps>
       canOpenInSystemBrowser,
       onOpenInSystemBrowser,
       onCopyLink,
+      zoomFactor,
+      onZoomChange,
       onOverlayOpenChange,
     },
     ref,
@@ -211,6 +228,17 @@ export const BrowserChrome = forwardRef<BrowserChromeHandle, BrowserChromeProps>
     // 当前协议/页面类型有对应的安全 IPC 能力。比如本地 HTML 走 openFileInBrowser,
     // 其它 file/data/custom scheme 不应显示一个点击必失败的可用菜单项。
     const hasValidLink = Boolean(url) && url !== 'about:blank';
+    const normalizedZoomFactor = normalizeBrowserZoomFactor(zoomFactor);
+    const previousZoomFactor = previousBrowserZoomFactor(normalizedZoomFactor);
+    const nextZoomFactor = nextBrowserZoomFactor(normalizedZoomFactor);
+
+    const keepMenuOpen = useCallback(
+      (event: Event, nextFactor: number | null) => {
+        event.preventDefault();
+        if (nextFactor !== null) onZoomChange(nextFactor);
+      },
+      [onZoomChange],
+    );
 
     return (
       <div className="flex h-10 shrink-0 items-center gap-1 border-b border-[var(--border-default)] bg-content-area px-2">
@@ -321,6 +349,39 @@ export const BrowserChrome = forwardRef<BrowserChromeHandle, BrowserChromeProps>
             </Tip>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="min-w-[9rem]">
+            <DropdownMenuLabel className="px-2 py-1 text-xs font-medium text-[var(--text-secondary)]">
+              {t('rightSidebar.browser.pageZoom')}
+            </DropdownMenuLabel>
+            <DropdownMenuGroup className="flex items-center gap-1 px-1 pb-1">
+              <DropdownMenuItem
+                aria-label={t('rightSidebar.browser.zoomOut')}
+                title={t('rightSidebar.browser.zoomOut')}
+                disabled={previousZoomFactor === null}
+                onSelect={(event) => keepMenuOpen(event, previousZoomFactor)}
+                className="flex size-7 justify-center rounded-full p-0"
+              >
+                <Minus size={14} strokeWidth={2} />
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                aria-label={t('rightSidebar.browser.resetZoom')}
+                title={t('rightSidebar.browser.resetZoom')}
+                disabled={normalizedZoomFactor === DEFAULT_BROWSER_ZOOM_FACTOR}
+                onSelect={(event) => keepMenuOpen(event, DEFAULT_BROWSER_ZOOM_FACTOR)}
+                className="flex h-7 flex-1 justify-center rounded-full px-2 text-xs"
+              >
+                {formatBrowserZoomFactor(normalizedZoomFactor)}
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                aria-label={t('rightSidebar.browser.zoomIn')}
+                title={t('rightSidebar.browser.zoomIn')}
+                disabled={nextZoomFactor === null}
+                onSelect={(event) => keepMenuOpen(event, nextZoomFactor)}
+                className="flex size-7 justify-center rounded-full p-0"
+              >
+                <Plus size={14} strokeWidth={2} />
+              </DropdownMenuItem>
+            </DropdownMenuGroup>
+            <DropdownMenuSeparator className="bg-[var(--border-default)]" />
             <DropdownMenuItem
               disabled={!hasValidLink || !canOpenInSystemBrowser}
               onSelect={onOpenInSystemBrowser}
