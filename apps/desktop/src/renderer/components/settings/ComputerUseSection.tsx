@@ -8,10 +8,10 @@
  * 以及「直接操作电脑」能力 (cindy_computer MCP, machine-wide opt-in).
  *
  * 数据流:
- *   - mount → 并行拉 plugins.getState('browser', workingDir) (取 browser 开关态)
- *     + browser.status()。注意 browser 是 HOSTED_ELSEWHERE, 不在 plugins.list()
- *     里, 必须按 id 直接读单个状态, 否则 find() 永远 undefined。
- *   - 基础配置到位后渲染;电脑权限与浏览器健康检测独立补齐,不阻塞整页。
+ *   - mount → 立即渲染各卡片的基础 UI，并行拉取插件、浏览器、电脑与 backend 状态。
+ *   - 每项状态只解锁它所属的控件或详情；慢的探测不阻塞整页首屏。
+ *   - browser 是 HOSTED_ELSEWHERE，不在 plugins.list() 里，必须按 id
+ *     直接读单个状态，否则 find() 永远 undefined。
  * 浏览器开关读写完全复用 builtin plugin IPC, 不新造持久化通道。
  */
 
@@ -178,6 +178,7 @@ export function ComputerUseSection({
   const [driverCheckPending, setDriverCheckPending] = useState(false);
   const [driverCheckFailed, setDriverCheckFailed] = useState(false);
   const [driverUpdatePending, setDriverUpdatePending] = useState(false);
+  const [initialDriverJoinPending, setInitialDriverJoinPending] = useState(false);
   // main 侧采样广播的下载进度;null = 未开始/已结束(显示通用「更新中…」)。
   const [driverUpdateProgress, setDriverUpdateProgress] =
     useState<ComputerDriverUpdateProgress | null>(null);
@@ -502,35 +503,43 @@ export function ComputerUseSection({
         return { health: null, error };
       }
     })();
-    void (async () => {
-      const [browserState, computerState, avail, backendState] = await Promise.all([
-        // `browser` is hidden from plugins.list() (HOSTED_ELSEWHERE), so read its
-        // enable state directly by id — list().find() would always be undefined
-        // and the toggle would wrongly reset to enabled on every remount.
-        window.electronAPI.maker.plugins.getState(BROWSER_PLUGIN_ID, workingDir).catch((err) => {
-          log.warn('plugins.getState(browser) failed', err);
-          return null;
-        }),
-        window.electronAPI.maker.plugins.getState(COMPUTER_PLUGIN_ID).catch((err) => {
-          log.warn('plugins.getState(computer) failed', err);
-          return null;
-        }),
-        window.electronAPI.maker.browser.status().catch((err) => {
-          log.warn('browser.status failed', err);
-          return { detected: false, browserKind: null, executablePath: null } as BrowserAvailability;
-        }),
-        window.electronAPI.browserBackend?.getState?.().catch((err) => {
-          log.warn('browserBackend.getState failed', err);
-          return null;
-        }) ?? Promise.resolve(null),
-      ]);
+    // Each base read owns its own render stage. A slow browser/process probe
+    // must not hold back already available plugin or backend state.
+    void window.electronAPI.maker.plugins.getState(BROWSER_PLUGIN_ID, workingDir)
+      .then((browserState) => {
+        if (!cancelled) setBrowserEnabled(browserState.effectiveEnabled);
+      })
+      .catch((err) => {
+        log.warn('plugins.getState(browser) failed', err);
+        if (!cancelled) setBrowserEnabled(true);
+      });
+    void window.electronAPI.maker.plugins.getState(COMPUTER_PLUGIN_ID)
+      .then((computerState) => {
+        if (!cancelled) setComputerEnabled(computerState.effectiveEnabled);
+      })
+      .catch((err) => {
+        log.warn('plugins.getState(computer) failed', err);
+        if (!cancelled) setComputerEnabled(false);
+      });
+    void window.electronAPI.maker.browser.status()
+      .then((avail) => {
+        if (!cancelled) setAvailability(avail);
+      })
+      .catch((err) => {
+        log.warn('browser.status failed', err);
+        if (!cancelled) {
+          setAvailability({
+            detected: false,
+            browserKind: null,
+            executablePath: null,
+          } as BrowserAvailability);
+        }
+      });
+    void (window.electronAPI.browserBackend?.getState?.().catch((err) => {
+      log.warn('browserBackend.getState failed', err);
+      return null;
+    }) ?? Promise.resolve(null)).then(async (backendState) => {
       if (cancelled) return;
-      // Browser keeps the builtin default-on behavior. Direct computer control
-      // reflects the persisted machine-wide opt-in; readiness is shown separately.
-      setBrowserEnabled(browserState ? browserState.effectiveEnabled : true);
-      const effectiveComputerEnabled = computerState ? computerState.effectiveEnabled : false;
-      setComputerEnabled(effectiveComputerEnabled);
-      setAvailability(avail);
       // Phase 5: backend kind 拉不到时(老版本 preload / IPC 缺失)安全 fallback
       // 到 'external',保持现有 Chrome 探测 / 登录 UI 可见 — 总比因为 IPC 失败
       // 让卡片整张瘫成内置态强。
@@ -546,7 +555,7 @@ export function ComputerUseSection({
             ? browserBackendHealthFallback(activeBackend)
             : null,
       );
-    })();
+    });
     return () => {
       cancelled = true;
     };
@@ -775,8 +784,21 @@ export function ComputerUseSection({
     }
   }, [computerEnabled, refreshDriverUpdateCheck, t]);
 
+  const joinDriverUpdateRef = useRef(joinDriverUpdate);
   useEffect(() => {
-    if (!computerStatus?.installed || driverUpdateCheckedRef.current) return;
+    joinDriverUpdateRef.current = joinDriverUpdate;
+  }, [joinDriverUpdate]);
+
+  useEffect(() => {
+    if (!initialDriverJoinPending || computerEnabled === null) return;
+    setInitialDriverJoinPending(false);
+    setDriverUpdatePending(true);
+    void joinDriverUpdateRef.current(true);
+  }, [initialDriverJoinPending, computerEnabled]);
+
+  useEffect(() => {
+    if (!computerStatus?.installed || driverUpdateCheckedRef.current)
+      return;
     driverUpdateCheckedRef.current = true;
     let cancelled = false;
     let settled = false;
@@ -787,8 +809,9 @@ export function ComputerUseSection({
         if (result.updating) {
           // 上次面板关闭前发起的更新还在 main 侧跑:恢复「更新中」态并以
           // join-only 语义重挂结果(安装恰好已完成时只读状态,不起新安装)。
-          setDriverUpdatePending(true);
-          void joinDriverUpdate(true);
+          // The passive check need not wait for opt-in, but permission recovery
+          // after joining must see the persisted setting rather than null.
+          setInitialDriverJoinPending(true);
         }
       })
       .catch((err) => {
@@ -797,11 +820,11 @@ export function ComputerUseSection({
       });
     return () => {
       cancelled = true;
-      // Loading the opt-in state can replace joinDriverUpdate before this
-      // request settles. Let the next effect consume the shared main check.
+      // Retry only if this status effect is replaced before the check settles.
+      // Opt-in changes update the join callback ref without cancelling a check.
       if (!settled) driverUpdateCheckedRef.current = false;
     };
-  }, [computerStatus?.installed, joinDriverUpdate, refreshDriverUpdateCheck]);
+  }, [computerStatus?.installed, refreshDriverUpdateCheck]);
 
   const handleUpdateDriver = useCallback(() => {
     if (driverUpdatePending || driverCheckPending) return;
@@ -1277,16 +1300,6 @@ export function ComputerUseSection({
     }
   }, [refreshComputerPermissionStatus, t]);
 
-  const automationViewLoading =
-    browserEnabled === null
-    || computerEnabled === null
-    || availability === null;
-
-  // Only base configuration gates the page; runtime probes update independently.
-  if (automationViewLoading) {
-    return null;
-  }
-
   const computerAccessibilityGranted = isComputerAccessibilityPermissionReady(computerStatus);
   const computerScreenRecordingGranted = isComputerScreenRecordingPermissionReady(computerStatus);
   const computerAccessibilityPending = computerPermissionPending && !computerAccessibilityGranted;
@@ -1295,17 +1308,28 @@ export function ComputerUseSection({
     computerAccessibilityGranted &&
     !computerScreenRecordingGranted;
   const computerReady =
-    computerStatus?.installed && isComputerPermissionReady(computerStatus);
+    computerStatus?.installed === true && isComputerPermissionReady(computerStatus);
+  // Browser/backend and computer probes can insert rows above the lower cards.
+  // Keep those lower controls inert until that initial geometry is settled so
+  // an async row cannot move an enabled action out from under the pointer.
+  const lowerControlsLayoutPending =
+    browserBackendKind === null
+    || (browserBackendKind === 'external' && availability === null)
+    || computerStatus === null;
   // Persisted opt-in and runtime readiness are separate states. Keeping an
   // unavailable enabled configuration checked lets the user turn it off
   // instead of forcing the only interaction back into onboarding.
   const computerSwitchChecked = getComputerPermissionSwitchChecked(
-    computerEnabled,
+    computerEnabled ?? false,
     computerTogglePending,
     computerEnableIntentRef.current,
   );
   const computerSwitchDisabled =
-    computerStatus === null || computerTogglePending || computerInstallPending || computerPermissionPending;
+    lowerControlsLayoutPending
+    || computerEnabled === null
+    || computerTogglePending
+    || computerInstallPending
+    || computerPermissionPending;
 
   const configuredDefaultAndroidDevice =
     androidConfig?.value.defaultDeviceSerial
@@ -1388,8 +1412,8 @@ export function ComputerUseSection({
             </div>
           </div>
           <Switch
-            checked={browserEnabled}
-            disabled={togglePending}
+            checked={browserEnabled ?? false}
+            disabled={browserEnabled === null || togglePending}
             onCheckedChange={handleToggleBrowser}
             aria-label={t('settings.computerUse.browser.toggleAria')}
           />
@@ -1417,7 +1441,7 @@ export function ComputerUseSection({
         ) : null}
         {/* 只在 backend === 'external' 时展示 Chrome 探测 + 登录入口。内置 webview
             backend 用 Electron 自带 Chromium,这些 UI 对它都没有意义。 */}
-        {browserBackendKind === 'external' ? (
+        {browserBackendKind === 'external' && availability !== null ? (
           <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--settings-theme-card-border)] px-4 py-[14px]">
             <p className="min-w-0 text-12 leading-[1.5] text-[var(--settings-section-desc)]">
               {availability.detected
@@ -1447,7 +1471,7 @@ export function ComputerUseSection({
         ) : null}
       </div>
 
-      {browserBackendKind === 'external' && availability.detected ? (
+      {browserBackendKind === 'external' && availability?.detected ? (
         <p className="text-12 leading-[1.5] text-[var(--settings-section-desc)]">
           {t('settings.computerUse.browser.openForLoginHint')}
         </p>
@@ -1780,7 +1804,7 @@ export function ComputerUseSection({
           </div>
           <Switch
             checked={androidEnabled ?? false}
-            disabled={androidEnabled === null || androidTogglePending}
+            disabled={lowerControlsLayoutPending || androidEnabled === null || androidTogglePending}
             onCheckedChange={handleToggleAndroid}
             aria-label={t('settings.computerUse.android.toggleAria')}
           />
@@ -1799,7 +1823,7 @@ export function ComputerUseSection({
               <DropdownMenuTrigger asChild>
                 <button
                   type="button"
-                  disabled={androidDevicePending || !androidStatus}
+                  disabled={lowerControlsLayoutPending || androidDevicePending || !androidStatus}
                   className={cn(ACTION_BUTTON_CLASS, 'max-w-[260px] px-2.5')}
                   aria-label={t('settings.computerUse.android.device.ariaLabel')}
                   title={configuredDefaultAndroidDevice ?? undefined}
@@ -1888,7 +1912,7 @@ export function ComputerUseSection({
               loading={androidStatusPending}
               type="button"
               onClick={() => void handleRefreshAndroidStatus()}
-              disabled={androidStatusPending}
+              disabled={lowerControlsLayoutPending || androidStatusPending}
             >
               <RefreshCw size={12} className="shrink-0" />
               {t('settings.computerUse.android.refresh')}
@@ -1946,7 +1970,7 @@ export function ComputerUseSection({
                 setAndroidAdbPathDraft(event.target.value);
                 setAndroidAdbPathEdited(true);
               }}
-              disabled={androidAdbPathBusy}
+              disabled={lowerControlsLayoutPending || androidAdbPathBusy}
               placeholder={t('settings.computerUse.android.adb.placeholder')}
               aria-label={t('settings.computerUse.android.adb.pathAria')}
               className={cn(
@@ -1964,7 +1988,7 @@ export function ComputerUseSection({
               className="px-3"
               type="button"
               onClick={() => void handleSaveAndroidAdbPath()}
-              disabled={!androidAdbPathCanSave || androidAdbPathBusy}
+              disabled={lowerControlsLayoutPending || !androidAdbPathCanSave || androidAdbPathBusy}
             >
               {t('settings.computerUse.android.adb.save')}
             </Button>
@@ -1974,7 +1998,7 @@ export function ComputerUseSection({
               className="px-3"
               type="button"
               onClick={() => void handleUseDefaultAndroidAdbPath()}
-              disabled={androidAdbPathBusy}
+              disabled={lowerControlsLayoutPending || androidAdbPathBusy}
             >
               {t('settings.computerUse.android.adb.useDefault')}
             </Button>
