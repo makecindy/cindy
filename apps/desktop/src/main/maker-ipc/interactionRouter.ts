@@ -27,6 +27,11 @@ export interface InteractionRoute {
   timeoutMs?: number;
   /** Main-owned source text, shared by Desktop and channel presentations. */
   sourceDescription?: string;
+  /**
+   * Main-verified sender of the turn's triggering message. Only 'owner' unlocks
+   * owner-only Host actions; channels that cannot prove it leave it unset.
+   */
+  requesterAuthority?: 'owner' | 'guest' | 'unknown';
   onStateChange?(state: InteractionRouteState): void;
 }
 
@@ -63,7 +68,11 @@ type RouteRegistration =
       onCancel?: (requestId: string, decision: InteractionDecision) => boolean | void;
     };
 
-type ActiveRoute = RouteRegistration & { token: symbol };
+type ActiveRoute = RouteRegistration & {
+  token: symbol;
+  /** Other input was steered into this turn; the triggering sender no longer speaks for it. */
+  steered?: boolean;
+};
 
 interface PendingRequest {
   shared?: SharedPermission;
@@ -121,6 +130,18 @@ class SessionInteractionRouter {
 
   setLifecycleObserver(observer: InteractionLifecycleObserver | null): void {
     this.lifecycleObserver = observer;
+  }
+
+  getActiveRoute(): InteractionRoute | null {
+    const active = this.activeRoute;
+    if (!active) return null;
+    return active.steered && active.route.requesterAuthority !== undefined
+      ? { ...active.route, requesterAuthority: 'unknown' }
+      : active.route;
+  }
+
+  noteSteer(): void {
+    if (this.activeRoute) this.activeRoute.steered = true;
   }
 
   private notifyState(route: InteractionRoute | undefined, state: InteractionRouteState): void {
@@ -313,6 +334,19 @@ export function requestHostInteraction(
   signal: AbortSignal,
 ): Promise<InteractionDecision> {
   return routerFor(session).dispatch(request, signal);
+}
+
+/**
+ * Read-only view of the live non-Desktop route; null for ordinary Desktop turns.
+ * Once other input is steered into the turn, `requesterAuthority` reads 'unknown'.
+ */
+export function getActiveInteractionRoute(session: InteractionSession): InteractionRoute | null {
+  return routers.get(session as object)?.getActiveRoute() ?? null;
+}
+
+/** Called before a steer reaches the provider; the route stops vouching for the sender. */
+export function noteInteractionRouteSteer(session: InteractionSession): void {
+  routers.get(session as object)?.noteSteer();
 }
 
 export function installInteractionLifecycleObserver(

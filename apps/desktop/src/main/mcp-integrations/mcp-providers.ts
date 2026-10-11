@@ -44,7 +44,7 @@ import { feishuIm, wechatIm } from '../im';
 import { sendFeishuSessionNotification } from '../im/feishu/notificationOrigin';
 import { getSlackToolBridge } from '../hook-control/slackToolBridge.js';
 import { createLogger } from '../logger.js';
-import { checkAppUpdateForAgent } from '../updateService.js';
+import { createAgentAppUpdateCallbacks } from '../agent-app-update/index.js';
 import { getScheduler } from '../scheduler-host/index.js';
 import { stabilizeHookCommand } from '../scheduler-host/hook-script-generator.js';
 import { assertPreRunHookCommandSyntax } from '../scheduler-host/pre-run-hook.js';
@@ -473,11 +473,9 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
     // (LLM 调工具时) registerMakerIpc 早已执行完毕, holder 已 ready。
     xdtHelper: {
       runtimeCapabilities: deps.runtimeCapabilities,
-      appUpdate: {
-        isCurrentSession: (sessionId, sessionInstanceId) =>
-          deps.isCurrentLocalSessionInstance?.(sessionId, sessionInstanceId) === true,
-        check: checkAppUpdateForAgent,
-      },
+      // Install / auto-update requests become owner-only Host cards (see agent-app-update/).
+      appUpdate: createAgentAppUpdateCallbacks((sessionId, sessionInstanceId) =>
+        deps.isCurrentLocalSessionInstance?.(sessionId, sessionInstanceId) === true),
       logger: createLogger('mcp/cindy_helper'),
       grokLogin: {
         start: async (context) => {

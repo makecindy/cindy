@@ -85,7 +85,9 @@ import { getWorkerLink, updateWorkerStatus } from '../localDb/orcaTeamStore.js';
 import { cleanupSessionTempAttachments } from '../maker-ipc/normalizeAttachments.js';
 import { resolveGhostFsSessionSnapshot } from '../maker-ipc/ghostFsSessionSnapshot.js';
 import { HOST_CONFIRM_TIMEOUT_MS } from '../maker-ipc/hostConfirmTiming.js';
-import { requestHostInteraction } from '../maker-ipc/interactionRouter.js';
+import { getActiveInteractionRoute, requestHostInteraction } from '../maker-ipc/interactionRouter.js';
+import { setAgentAppUpdateSessionHost } from '../agent-app-update/index.js';
+import { isAppUpdateOwnerTurn } from '../agent-app-update/callerAuthority.js';
 import { markKnownOrcaWorkerSession } from '../maker-ipc/orcaManualInterrupt.js';
 import { markOrcaMcpHydratedIfNeeded } from '../maker-ipc/orcaMcpHydrationCache.js';
 import { preparePersistedOrcaSessionStart } from '../maker-ipc/orcaSessionStartOptions.js';
@@ -112,6 +114,7 @@ import { prepareBotWorkspaceRuntime } from '../maker-ipc/botWorkspaceRuntime.js'
 import type { MakerSessionCreateOpts } from '../maker-ipc/sessionRequest.js';
 import {
   dispatchInterAgentMessage,
+  isActiveInputOwnerAuthored,
   isSessionInTurn,
   wireSessionToIpc,
 } from '../maker-ipc/register.js';
@@ -394,6 +397,8 @@ type RemoteCcQuery = Awaited<
 >;
 
 let _maker: Maker | null = null;
+/** Upper bound for letting the confirming turn finish its reply before an Agent-approved restart. */
+const AGENT_APP_UPDATE_TURN_DRAIN_MS = 2 * 60 * 1000;
 /** Prepared Bot runtime records waiting for the matching Maker startup result. */
 const pendingBotRuntimeSnapshots = new Map<string, BotProfileRuntimeSnapshot>();
 // Maker copies start options for every runtime, including rebuilds of one task.
@@ -976,7 +981,7 @@ export function getMaker(): Maker {
         return { ...result, permission: session.stablePermissionModeState,
           hostCapabilities: Object.fromEntries(Object.entries(session.capabilities)
             .filter(([, value]) => value && typeof value === 'object' && 'supported' in value)),
-          hostCapabilitiesNote: '宿主支持的交互能力，不等于有同名 Agent 工具。Cindy 应用安装更新和重启须通过内置更新界面；check_app_update 仅检查更新。' };
+          hostCapabilitiesNote: '宿主支持的交互能力，不等于有同名 Agent 工具。安装 Cindy 更新须调用 install_app_update，由宿主向用户确认后经内置更新器完成；check_app_update 仅检查更新。' };
       },
       botCapabilities: createDesktopBotCapabilityService(),
       createMediaDownloadContext: (sessionId: string, sessionInstanceId: string) => {
@@ -1058,6 +1063,37 @@ export function getMaker(): Maker {
           requestHostInteraction(session, request, bounded));
       },
     };
+    // Agent app update: live-session facts for owner-only confirmation cards.
+    const liveLocalSession = (sessionId: string, sessionInstanceId: string) => {
+      const session = _maker?.getSession(sessionId);
+      return session && session.instanceId === sessionInstanceId && session.getStatus() === 'active'
+        && !session.remoteHostId ? session : null;
+    };
+    setAgentAppUpdateSessionHost({
+      resolveCaller: ({ sessionId, sessionInstanceId }) => {
+        const session = liveLocalSession(sessionId, sessionInstanceId);
+        if (!session || isAppSessionBoundaryPending()) return 'unavailable';
+        return isAppUpdateOwnerTurn({
+          turnRunning: session.isTurnRunning(),
+          turnOrigin: session.getCurrentTurnOrigin(),
+          route: getActiveInteractionRoute(session),
+          ownerAuthoredInput: () => isActiveInputOwnerAuthored(sessionId),
+        }) ? 'owner' : 'not-owner';
+      },
+      countOtherRunningTasks: (callerSessionId) => (_maker?.listActiveSessions() ?? [])
+        .filter((session) => session.id !== callerSessionId
+          && (isSessionInTurn(session.id) || session.isTurnRunning())).length,
+      requestHostPermission: makerMemoryProviderDeps.requestHostPermission,
+      // Let the confirming turn deliver its reply first; never block the restart longer than the bound.
+      waitForCallerTurnToEnd: async ({ sessionId, sessionInstanceId }) => {
+        const deadline = Date.now() + AGENT_APP_UPDATE_TURN_DRAIN_MS;
+        while (Date.now() < deadline) {
+          const session = liveLocalSession(sessionId, sessionInstanceId);
+          if (!session || (!session.isTurnRunning() && !isSessionInTurn(sessionId))) return;
+          await new Promise((resolve) => setTimeout(resolve, 500));
+        }
+      },
+    });
     const orcaTeamStoreAdapter = createDesktopOrcaTeamStoreAdapter({
       getWorkerLink,
       updateWorkerStatus,

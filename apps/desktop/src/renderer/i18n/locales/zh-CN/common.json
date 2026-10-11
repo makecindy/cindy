@@ -8036,6 +8036,39 @@
       "message": "将 {{appName}} 移动到「应用程序」文件夹可获得更好的体验，包括自动更新。",
       "move": "移动（推荐）",
       "later": "暂不"
+    },
+    "agentInstall": {
+      "title": "更新 {{appName}} 到 {{version}}？",
+      "versions": "从 {{from}} 更新到 {{to}}。确认后 {{appName}} 会用内置更新器下载并安装，然后自动重启。",
+      "otherTasks": "另有 {{count}} 个任务正在运行，重启会中断它们；重启后可在对应任务中点「继续」恢复。",
+      "backgroundWork": "还有后台工作正在进行（如后台命令、媒体生成、Subagent 或自动化运行），重启也会中断它们。",
+      "noOtherTasks": "目前没有其他正在运行的任务。",
+      "thisTask": "本任务会在这轮回复结束后随 {{appName}} 重启。",
+      "remote": "重启期间手机等远程连接会暂时断开，重连后可在本任务中查看更新结果。",
+      "linuxAuth": "安装时需要在这台电脑上输入系统密码。",
+      "succeeded": "{{appName}} 已更新到 {{version}}（原版本 {{from}}）。",
+      "failed": "{{appName}} 更新没有完成，当前仍是 {{version}}。",
+      "retryHint": "可以稍后再让我更新，或在「设置 → 关于」中检查更新。",
+      "reasons": {
+        "downloadFailed": "下载更新失败，请稍后重试。",
+        "manifestFailed": "无法读取当前渠道的更新信息。",
+        "manualDownload": "当前安装需要手动下载新版本。",
+        "noUpdate": "当前渠道没有适用于这台设备的可安装更新。",
+        "versionChanged": "当前渠道的新版本已变成 {{version}}，与确认的 {{confirmed}} 不同，本次没有安装。",
+        "notRestarted": "更新已下载，但本次没有重启（例如期间退出或切换了账号）。",
+        "notReady": "已下载的更新不再可用。",
+        "updaterNotStarted": "更新器没有启动，{{appName}} 未重启。",
+        "unsupported": "当前安装环境不支持应用内更新。",
+        "generic": "安装过程中出现错误。",
+        "relaunchInProgress": "{{appName}} 已经在通过设置页或空闲自动安装重启更新，本次请求没有另外安装。"
+      }
+    },
+    "agentAutoUpdate": {
+      "enableTitle": "开启空闲时自动安装更新？",
+      "disableTitle": "关闭空闲时自动安装更新？",
+      "enableDescription": "开启后，更新下载完成时，如果这台电脑已空闲 10 分钟且没有正在运行的任务，{{appName}} 会自动重启完成安装。",
+      "disableDescription": "关闭后，更新下载完成时需要你手动重启才会安装。",
+      "settingsHint": "也可以随时在「设置 → 关于」中修改。"
     }
   },
   "sidebar": {

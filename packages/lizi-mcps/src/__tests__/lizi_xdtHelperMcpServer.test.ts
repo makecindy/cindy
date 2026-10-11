@@ -75,6 +75,49 @@ describe("cindy_helper MCP server", () => {
       await server.close();
     }
   });
+  it('routes install and auto-update requests to the Host with the bound caller', async () => {
+    let current = true;
+    const caller = { sessionId: 'local-task', sessionInstanceId: 'instance-1' };
+    const check = vi.fn(async () => ({ status: 'available', currentVersion: '0.1.86', targetVersion: '0.1.90' }));
+    const install = vi.fn(async () => ({ status: 'started', targetVersion: '0.1.90' }));
+    const setAutoUpdate = vi.fn(async (_caller: unknown, enabled: boolean) => enabled
+      ? { status: 'updated', autoUpdateEnabled: true }
+      : { ok: false, errorCode: 'OWNER_TURN_REQUIRED', message: 'owner only' });
+    const server = createXdtHelperMcpServer({
+      resolveSurface: async () => 'default',
+      appUpdate: { isCurrentSession: () => current, check, install, setAutoUpdate },
+    }, {
+      agentKind: 'claude-code', workingDir: '/repo', sessionId: 'local-task',
+      getSessionContext: () => ({ agentKind: 'claude-code', workingDir: '/repo', ...caller }),
+    });
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: 'app-install-test', version: '0.0.0' });
+    await Promise.all([server.connect(st), client.connect(ct)]);
+    const call = async (name: string, args: Record<string, unknown> = {}) => parsePayload(await client.callTool({
+      name: 'call_tool', arguments: { name, args },
+    }));
+    try {
+      const tools = parsePayload(await client.callTool({ name: 'list_tools', arguments: { category: 'app_update' } }));
+      expect((tools.tools as Array<{ name: string }>).map((tool) => tool.name)).toEqual([
+        'check_app_update', 'install_app_update', 'set_app_auto_update',
+      ]);
+      expect(await call('check_app_update')).toMatchObject({ ok: true, status: 'available' });
+      expect(check).toHaveBeenCalledWith(caller);
+      expect(await call('install_app_update')).toMatchObject({ ok: true, status: 'started', targetVersion: '0.1.90' });
+      expect(install).toHaveBeenCalledWith(caller);
+      expect(await call('set_app_auto_update', { enabled: true })).toMatchObject({ ok: true, autoUpdateEnabled: true });
+      expect(await call('set_app_auto_update', { enabled: false })).toMatchObject({
+        ok: false, errorCode: 'OWNER_TURN_REQUIRED', data: { hint: 'owner only' },
+      });
+      expect(setAutoUpdate).toHaveBeenNthCalledWith(1, caller, true);
+      current = false;
+      expect(await call('install_app_update')).toMatchObject({ ok: false, errorCode: 'STALE_SESSION' });
+      expect(install).toHaveBeenCalledOnce();
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
   it('hides app updates from a remote Pi task while retaining its other helper categories', async () => {
     let remoteHostId: string | undefined;
     const check = vi.fn(async () => ({ status: 'ready', currentVersion: '0.1.86', targetVersion: '0.1.90' }));

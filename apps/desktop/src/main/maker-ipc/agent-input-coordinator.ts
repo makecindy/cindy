@@ -1296,6 +1296,24 @@ export class AgentInputCoordinator {
       retrySourceClientId: item.retrySourceClientId ?? item.supersedesUserClientId };
   }
 
+  /**
+   * Owner-only Host actions (app update) require the active input itself to be text
+   * this account's user typed on Desktop or a same-account remote device. Automation,
+   * other tasks, Orca, plugins, shared-task guests and automatic resumes never qualify.
+   */
+  isActiveInputOwnerAuthored(sessionId: string): boolean {
+    const item = this.states.get(sessionId)?.activeTurn?.item;
+    // A trusted Desktop receipt (`origin.kind === 'desktop'`) is still owner input.
+    const originKind = (item?.origin as { kind?: unknown } | undefined)?.kind;
+    if (!item || (originKind !== undefined && originKind !== 'desktop')) return false;
+    if (item.sourcePlugin || item.sharedTaskAuthor || item.botTaskCoordination) return false;
+    if (item.clientId.startsWith('plugin-task:') || item.originalSyntheticTrigger) return false;
+    // Automatic continuations and zero-output retries are never fresh owner input.
+    if (item.autoResume) return false;
+    const text = item.autoReviewUserText;
+    return typeof text === 'string' && !!text.trim() && !text.startsWith('[UI_ACTION_TRIGGER]');
+  }
+
   /** Inputs consumed by this native turn, excluding queued work and stale generations. */
   getActiveInputClientIds(sessionId: string, vendorGeneration?: number): string[] {
     const active = this.states.get(sessionId)?.activeTurn;

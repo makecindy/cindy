@@ -71,6 +71,7 @@ function productionSteer(session: FakeSession, deliver: () => Promise<void>, rej
     MAIN_OWNED_SEND_CONTEXT: Symbol(), AUTO_REVIEW_SOURCE_CONTENT: Symbol(),
     AUTO_REVIEW_DELEGATED_CONTINUATION: Symbol(), AUTO_REVIEW_USER_INTENT: Symbol(),
     publishUiSessionIntervention,
+    noteInteractionRouteSteer: () => {},
     summarizeIpcUserMessage: () => ({}),
     log: { info: () => {}, warn: () => {}, debug: () => {} },
     throwIpcError: (code: string, message: string) => { throw new Error(`${code}: ${message}`); },

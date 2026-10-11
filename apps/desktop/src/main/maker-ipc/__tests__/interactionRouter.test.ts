@@ -3,9 +3,11 @@ import type { InteractionDecision, InteractionRequest } from '@cindy/maker-core'
 
 import {
   beginInteractionRoute,
+  getActiveInteractionRoute,
   requestHostInteraction,
   installDesktopInteractionHandler,
   installInteractionLifecycleObserver,
+  noteInteractionRouteSteer,
   type InteractionHandler,
 } from '../interactionRouter';
 
@@ -57,6 +59,85 @@ describe('session interaction router', () => {
       expect(remote).toHaveBeenCalledOnce();
       expect(desktop).toHaveBeenCalledOnce();
       expect(host.setInteractionListener).toHaveBeenCalledOnce();
+    } finally { lease.release(); }
+  });
+
+  it('exposes the live route and its owner evidence for owner-only Host actions', async () => {
+    const host = makeSession();
+    installDesktopInteractionHandler(host.session, vi.fn<InteractionHandler>((_request, shared) => shared!.result));
+    expect(getActiveInteractionRoute(host.session)).toBeNull();
+    const lease = beginInteractionRoute(host.session, {
+      route: {
+        sessionId: host.session.id, turnId: 'turn-owner', origin: { kind: 'im', channel: 'telegram' },
+        interactionSurface: 'channel-card', requesterAuthority: 'owner',
+      },
+      handle: vi.fn(async (): Promise<InteractionDecision> => ({ kind: 'permission', behavior: 'deny' })),
+    });
+    expect(getActiveInteractionRoute(host.session)).toMatchObject({
+      origin: { kind: 'im', channel: 'telegram' }, requesterAuthority: 'owner',
+    });
+    lease.release();
+    expect(getActiveInteractionRoute(host.session)).toBeNull();
+  });
+
+  it('stops vouching for the IM sender once other input is steered into the turn', () => {
+    const host = makeSession();
+    installDesktopInteractionHandler(host.session, vi.fn<InteractionHandler>((_request, shared) => shared!.result));
+    noteInteractionRouteSteer(host.session);
+    const lease = beginInteractionRoute(host.session, {
+      route: {
+        sessionId: host.session.id, turnId: 'turn-steered', origin: { kind: 'im', channel: 'telegram' },
+        interactionSurface: 'channel-card', requesterAuthority: 'owner',
+      },
+      handle: vi.fn(async (): Promise<InteractionDecision> => ({ kind: 'permission', behavior: 'deny' })),
+    });
+    try {
+      // A steer before this route began does not touch it.
+      expect(getActiveInteractionRoute(host.session)?.requesterAuthority).toBe('owner');
+      noteInteractionRouteSteer(host.session);
+      expect(getActiveInteractionRoute(host.session)).toMatchObject({
+        origin: { kind: 'im', channel: 'telegram' }, requesterAuthority: 'unknown',
+      });
+      expect(lease.route.requesterAuthority).toBe('owner');
+    } finally { lease.release(); }
+    const next = beginInteractionRoute(host.session, {
+      route: {
+        sessionId: host.session.id, turnId: 'turn-next', origin: { kind: 'im', channel: 'telegram' },
+        interactionSurface: 'channel-card', requesterAuthority: 'owner',
+      },
+      handle: vi.fn(async (): Promise<InteractionDecision> => ({ kind: 'permission', behavior: 'deny' })),
+    });
+    try {
+      expect(getActiveInteractionRoute(host.session)?.requesterAuthority).toBe('owner');
+    } finally { next.release(); }
+  });
+
+  it('lets the phone/Desktop or the IM card answer an app update card; the first answer wins', async () => {
+    const host = makeSession();
+    let desktopShared: Parameters<InteractionHandler>[1];
+    const desktop = vi.fn<InteractionHandler>((_request, shared) => {
+      desktopShared = shared;
+      return shared!.result;
+    });
+    const channel = vi.fn<InteractionHandler>((_request, shared) => shared!.result);
+    installDesktopInteractionHandler(host.session, desktop);
+    const lease = beginInteractionRoute(host.session, {
+      route: {
+        sessionId: host.session.id, turnId: 'turn-update', origin: { kind: 'im', channel: 'telegram' },
+        interactionSurface: 'channel-card', requesterAuthority: 'owner',
+      },
+      handle: channel,
+    });
+    try {
+      const request = { ...permission('app-update-1'), toolName: 'cindy.app.update', input: { from: '1', to: '2' } } as InteractionRequest;
+      const pending = requestHostInteraction(host.session, request, new AbortController().signal);
+      await vi.waitFor(() => { expect(channel).toHaveBeenCalledOnce(); });
+      // Same-account phone answers through the Desktop pending entry; a late IM click cannot override it.
+      desktopShared!.decide({ kind: 'permission', behavior: 'allow' });
+      const [, channelShared] = channel.mock.calls[0]!;
+      expect(channelShared!.decide({ kind: 'permission', behavior: 'deny' })).toBe(false);
+      await expect(pending).resolves.toMatchObject({ behavior: 'allow' });
+      expect(desktop).toHaveBeenCalledOnce();
     } finally { lease.release(); }
   });
 

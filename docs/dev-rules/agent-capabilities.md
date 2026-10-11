@@ -26,7 +26,7 @@
 
 读取内置 server 的真实 schema 与渐进目录。没有 `scope` 时保留原产品说明查询行为。
 
-指定由引擎自己连接的 server（自定义 MCP 等）时，宿主经发起查询的 Session 读取引擎在本任务中的状态：Codex 用带本任务 `threadId` 的 `mcpServerStatus/list`（不拿共享 app-server 的进程级清单代替），Claude Code 用 `mcpServerStatus()`。有工具时返回服务端原始工具名与截短说明；否则返回 `ok: false` 和明确的 `engineState`——`not-mounted`（本任务引擎未挂载，常见于任务开始后才增改）、`no-tools`（已配置但未报告工具，Codex 无法区分启动失败与本无工具）、`failed`、`needs-auth`、`pending`、`disabled`；引擎没有该入口（Pi、SSH 远端 Claude、远程 Agent）报 `HARNESS_DISCOVERY_UNAVAILABLE`，读取失败或超时报 `HARNESS_DISCOVERY_FAILED`。不转发引擎的失败原文，避免带出连接地址。实现见 `apps/desktop/src/main/maker-host/agentCapabilityCatalog.ts` 与 `packages/maker-core/src/agents/{codex,claude-code}/mcp-server-tools.ts`。宿主交互能力不等于 Agent 已有可调用接口；例如应用安装更新、重启没有正式 Agent 接口，`check_app_update` 只查询当前更新渠道。
+指定由引擎自己连接的 server（自定义 MCP 等）时，宿主经发起查询的 Session 读取引擎在本任务中的状态：Codex 用带本任务 `threadId` 的 `mcpServerStatus/list`（不拿共享 app-server 的进程级清单代替），Claude Code 用 `mcpServerStatus()`。有工具时返回服务端原始工具名与截短说明；否则返回 `ok: false` 和明确的 `engineState`——`not-mounted`（本任务引擎未挂载，常见于任务开始后才增改）、`no-tools`（已配置但未报告工具，Codex 无法区分启动失败与本无工具）、`failed`、`needs-auth`、`pending`、`disabled`；引擎没有该入口（Pi、SSH 远端 Claude、远程 Agent）报 `HARNESS_DISCOVERY_UNAVAILABLE`，读取失败或超时报 `HARNESS_DISCOVERY_FAILED`。不转发引擎的失败原文，避免带出连接地址。实现见 `apps/desktop/src/main/maker-host/agentCapabilityCatalog.ts` 与 `packages/maker-core/src/agents/{codex,claude-code}/mcp-server-tools.ts`。宿主交互能力不等于 Agent 已有可调用接口。应用更新例外地提供 `cindy_helper` 的 `install_app_update` / `set_app_auto_update`：每次都由宿主向主人弹确认卡，确认后才经内置更新器执行（见 [`../product-rules/agent-app-update.md`](../product-rules/agent-app-update.md)）；`check_app_update` 只查询当前更新渠道。
 
 ## 伙伴默认配置
 

@@ -1853,6 +1853,44 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(h.coordinator.getAcceptedInputProvenance(sid)).toMatchObject({ clientId: 'human', authoredText: 'New direction', originKind: undefined });
   });
 
+  it.each([
+    ['owner-typed text', {}, true],
+    ['another task', { origin: { kind: 'session' as const, senderSessionId: 'other', displayText: 'update' } }, false],
+    ['automation', { origin: { kind: 'scheduler' as const, scheduleId: 's', scheduleName: 'n' } }, false],
+    ['Orca Lead', { origin: { kind: 'orca' as const, senderLabel: 'Lead' } }, false],
+    ['a plugin', { sourcePlugin: { pluginId: 'p', name: 'P' } }, false],
+    ['a shared-task guest', { sharedTaskAuthor: { sharedTaskId: 't', sessionId: 'owner-authored-input', memberId: 'm', accountId: 'guest', displayName: 'G' } }, false],
+    ['an automatic resume', { autoResume: true }, false],
+    ['an automatic retry of a typed message', { autoResume: true, retrySourceClientId: 'typed-1' }, false],
+    ['a synthetic UI trigger', { autoReviewUserText: '[UI_ACTION_TRIGGER] continue' }, false],
+    ['a delegated continuation', { autoReviewUserText: { kind: 'delegated-continuation' as const } }, false],
+  ])('decides whether %s counts as owner-authored for owner-only Host actions', async (_label, patch, expected) => {
+    const h = createHarness(), sid = 'owner-authored-input';
+    h.sendToAgent.mockImplementationOnce(async () => { h.setRunning(true); return sendSuccess(); });
+    expect(h.coordinator.isActiveInputOwnerAuthored(sid)).toBe(false);
+    h.coordinator.enqueue(sid, { ...makeItem('input', 'Update Cindy'), autoReviewUserText: 'Update Cindy', ...patch } as AgentInputQueuedMessage);
+    await flush();
+    expect(h.coordinator.isActiveInputOwnerAuthored(sid)).toBe(expected);
+    h.setRunning(false); h.coordinator.onTurnEvent(sid, 'done');
+    expect(h.coordinator.isActiveInputOwnerAuthored(sid)).toBe(false);
+  });
+
+  it('judges owner authority by the latest accepted steer, in both directions', async () => {
+    const h = createHarness(), sid = 'owner-authority-steer';
+    h.sendToAgent.mockImplementationOnce(async () => { h.setRunning(true); return sendSuccess(); });
+    h.coordinator.enqueue(sid, { ...makeItem('typed', 'Update Cindy'), autoReviewUserText: 'Update Cindy' });
+    await flush();
+    expect(h.coordinator.isActiveInputOwnerAuthored(sid)).toBe(true);
+    await h.coordinator.steer(sid, {
+      ...makeItem('from-task', 'please update'),
+      autoReviewUserText: 'please update',
+      origin: { kind: 'session', senderSessionId: 'other', displayText: 'please update' },
+    } as AgentInputQueuedMessage);
+    expect(h.coordinator.isActiveInputOwnerAuthored(sid)).toBe(false);
+    await h.coordinator.steer(sid, { ...makeItem('typed-again', 'Yes, update'), autoReviewUserText: 'Yes, update' });
+    expect(h.coordinator.isActiveInputOwnerAuthored(sid)).toBe(true);
+  });
+
   it('keeps accepted plugin authority through pending and rejected human steering', async () => {
     const h = createHarness(), sid = 'accepted-plugin-authority';
     h.sendToAgent.mockImplementationOnce(async () => { h.setRunning(true); return sendSuccess(); });

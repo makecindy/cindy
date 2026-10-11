@@ -408,6 +408,11 @@ export function createMessageHandler(
         userId: event.senderId,
         userMessageId: event.messageId,
         sourceDescription: describeInteractionSource(event),
+        // A channel policy's own identity verdict wins (personal WeChat is always
+        // `unknown`); otherwise the control-command owner check applies.
+        requesterIsOwner: turnPermissionPolicy?.autoReviewContext
+          ? turnPermissionPolicy.autoReviewContext.requesterAuthority === 'owner'
+          : isCommandAuthorized(event),
         ...(channelNoteSource ? { channelNoteSource } : {}),
         text: event.text,
         // 受保护群的触发消息照常起 turn, 但不进会话存档(渠道侧已挡住群历史池,

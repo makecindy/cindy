@@ -8036,6 +8036,39 @@
       "message": "將 {{appName}} 移動到「應用程式」資料夾可獲得更好的體驗，包括自動更新。",
       "move": "移動（推薦）",
       "later": "暫不"
+    },
+    "agentInstall": {
+      "title": "將 {{appName}} 更新到 {{version}}？",
+      "versions": "從 {{from}} 更新到 {{to}}。確認後 {{appName}} 會用內建更新器下載並安裝，然後自動重新啟動。",
+      "otherTasks": "另有 {{count}} 個任務正在執行，重新啟動會中斷它們；重新啟動後可在對應任務中點「繼續」恢復。",
+      "backgroundWork": "還有背景工作正在進行（如背景命令、媒體生成、Subagent 或自動化執行），重新啟動也會中斷它們。",
+      "noOtherTasks": "目前沒有其他正在執行的任務。",
+      "thisTask": "本任務會在這輪回覆結束後隨 {{appName}} 重新啟動。",
+      "remote": "重新啟動期間手機等遠端連線會暫時中斷，重新連線後可在本任務中查看更新結果。",
+      "linuxAuth": "安裝時需要在這台電腦上輸入系統密碼。",
+      "succeeded": "{{appName}} 已更新到 {{version}}（原版本 {{from}}）。",
+      "failed": "{{appName}} 更新沒有完成，目前仍是 {{version}}。",
+      "retryHint": "可以稍後再讓我更新，或在「設定 → 關於」中檢查更新。",
+      "reasons": {
+        "downloadFailed": "下載更新失敗，請稍後重試。",
+        "manifestFailed": "無法讀取目前頻道的更新資訊。",
+        "manualDownload": "目前的安裝需要手動下載新版本。",
+        "noUpdate": "目前頻道沒有適用於這台裝置的可安裝更新。",
+        "versionChanged": "目前頻道的新版本已變成 {{version}}，與確認的 {{confirmed}} 不同，這次沒有安裝。",
+        "notRestarted": "更新已下載，但這次沒有重新啟動（例如期間登出或切換了帳號）。",
+        "notReady": "已下載的更新不再可用。",
+        "updaterNotStarted": "更新器沒有啟動，{{appName}} 未重新啟動。",
+        "unsupported": "目前的安裝環境不支援應用程式內更新。",
+        "generic": "安裝過程中發生錯誤。",
+        "relaunchInProgress": "{{appName}} 已經在透過設定頁或閒置自動安裝重新啟動更新，這次請求沒有另外安裝。"
+      }
+    },
+    "agentAutoUpdate": {
+      "enableTitle": "開啟閒置時自動安裝更新？",
+      "disableTitle": "關閉閒置時自動安裝更新？",
+      "enableDescription": "開啟後，更新下載完成時，如果這台電腦已閒置 10 分鐘且沒有正在執行的任務，{{appName}} 會自動重新啟動完成安裝。",
+      "disableDescription": "關閉後，更新下載完成時需要你手動重新啟動才會安裝。",
+      "settingsHint": "也可以隨時在「設定 → 關於」中修改。"
     }
   },
   "sidebar": {

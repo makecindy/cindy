@@ -410,6 +410,265 @@ describe('agent-facing managed app update check', () => {
     expect(spawnProcess).not.toHaveBeenCalled();
   });
 
+  describe('confirmed Agent install', () => {
+    beforeEach(() => {
+      // Keep the idle auto-relaunch out of the way; the Agent path relaunches explicitly.
+      readAutoUpdateSettings.mockReturnValue({ autoRelaunchOnIdle: false });
+      fetchManifest.mockResolvedValue(updateManifest());
+    });
+
+    it('stages through checkForUpdate and relaunches with the built-in updater', async () => {
+      download.mockImplementation(async ({ targetPath }: { targetPath: string }) => {
+        fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+        fs.writeFileSync(targetPath, 'update');
+        return { path: targetPath, size: 123 };
+      });
+      const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+      const service = await freshUpdateService('darwin');
+      const order: string[] = [];
+      const beforeRelaunch = vi.fn(async () => {
+        order.push(`before:${download.mock.calls.length}:${spawnProcess.mock.calls.length}`);
+        return true;
+      });
+      try {
+        await expect(service.applyConfirmedAppUpdateForAgent({ beforeRelaunch }))
+          .resolves.toEqual({ status: 'relaunching', targetVersion: '0.0.65' });
+        expect(download).toHaveBeenCalledOnce();
+        expect(order).toEqual(['before:1:0']);
+        expect(spawnProcess).toHaveBeenCalledOnce();
+        // A second request while relaunching neither downloads nor spawns again.
+        await expect(service.applyConfirmedAppUpdateForAgent({ beforeRelaunch }))
+          .resolves.toMatchObject({ status: 'failed', errorCode: 'relaunch_in_progress' });
+        expect(download).toHaveBeenCalledOnce();
+        expect(spawnProcess).toHaveBeenCalledOnce();
+      } finally {
+        service.stopUpdateService();
+        exitSpy.mockRestore();
+      }
+    });
+
+    it('joins concurrent requests onto one download and keeps the patch when relaunch is skipped', async () => {
+      let finishDownload!: () => void;
+      download.mockImplementation(({ targetPath }: { targetPath: string }) => new Promise((resolve) => {
+        finishDownload = () => {
+          fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+          fs.writeFileSync(targetPath, 'update');
+          resolve({ path: targetPath, size: 123 });
+        };
+      }));
+      const service = await freshUpdateService('darwin');
+      try {
+        const beforeRelaunch = vi.fn(async () => false);
+        const first = service.applyConfirmedAppUpdateForAgent({ beforeRelaunch });
+        const second = service.applyConfirmedAppUpdateForAgent({ beforeRelaunch });
+        await vi.waitFor(() => { expect(download).toHaveBeenCalledOnce(); });
+        finishDownload();
+        await expect(first).resolves.toMatchObject({ status: 'failed', errorCode: 'relaunch_cancelled' });
+        await expect(second).resolves.toMatchObject({ status: 'failed', errorCode: 'relaunch_cancelled' });
+        expect(download).toHaveBeenCalledOnce();
+        expect(spawnProcess).not.toHaveBeenCalled();
+        expect(await service.checkAppUpdateForAgent()).toMatchObject({ status: 'ready', targetVersion: '0.0.65' });
+      } finally {
+        service.stopUpdateService();
+      }
+    });
+
+    it('does not install a different version than the one the owner confirmed', async () => {
+      download.mockImplementation(async ({ targetPath }: { targetPath: string }) => {
+        fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+        fs.writeFileSync(targetPath, 'update');
+        return { path: targetPath, size: 123 };
+      });
+      // The card showed 0.0.66, but the channel now stages 0.0.65.
+      const service = await freshUpdateService('darwin');
+      const beforeRelaunch = vi.fn(async () => true);
+      try {
+        await expect(
+          service.applyConfirmedAppUpdateForAgent({ expectedVersion: '0.0.66', beforeRelaunch }),
+        ).resolves.toMatchObject({ status: 'failed', errorCode: 'version_changed' });
+        expect(beforeRelaunch).not.toHaveBeenCalled();
+        expect(spawnProcess).not.toHaveBeenCalled();
+        // The staged patch is kept for the built-in banner.
+        expect(await service.checkAppUpdateForAgent()).toMatchObject({ status: 'ready', targetVersion: '0.0.65' });
+      } finally {
+        service.stopUpdateService();
+      }
+    });
+
+    it('reports the version actually being downloaded, not the latest manifest', async () => {
+      let finishDownload!: () => void;
+      download.mockImplementation(({ targetPath }: { targetPath: string }) => new Promise((resolve) => {
+        finishDownload = () => {
+          fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+          fs.writeFileSync(targetPath, 'update');
+          resolve({ path: targetPath, size: 123 });
+        };
+      }));
+      const service = await freshUpdateService('darwin');
+      try {
+        const staging = service.checkForUpdate();
+        await vi.waitFor(() => { expect(download).toHaveBeenCalledOnce(); });
+        // The channel moves on mid-download; the in-flight download is still 0.0.65.
+        fetchManifest.mockResolvedValue(updateManifest('0.0.66'));
+        await expect(service.checkAppUpdateForAgent()).resolves.toMatchObject({
+          status: 'downloading', targetVersion: '0.0.65',
+        });
+        finishDownload();
+        await staging;
+      } finally {
+        service.stopUpdateService();
+      }
+    });
+
+    it('reports a Windows updater spawn failure instead of claiming a relaunch', async () => {
+      download.mockImplementation(async ({ targetPath }: { targetPath: string }) => {
+        fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+        fs.writeFileSync(targetPath, 'update');
+        return { path: targetPath, size: 123 };
+      });
+      const service = await freshUpdateService('win32');
+      const resourcesPath = path.join(TEST_ROOT, 'resources');
+      fs.mkdirSync(resourcesPath, { recursive: true });
+      fs.writeFileSync(path.join(resourcesPath, 'cindy-updater.exe'), 'updater');
+      const resourcesDescriptor = Object.getOwnPropertyDescriptor(process, 'resourcesPath');
+      Object.defineProperty(process, 'resourcesPath', { value: resourcesPath, configurable: true });
+      const tmpdirSpy = vi.spyOn(os, 'tmpdir').mockReturnValue(TEST_ROOT);
+      const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+      const childListeners = new Map<string, (...args: unknown[]) => void>();
+      spawnProcess.mockImplementationOnce(() => ({
+        unref: vi.fn(),
+        on: vi.fn((event: string, listener: (...args: unknown[]) => void) => { childListeners.set(event, listener); }),
+      }));
+      try {
+        const pending = service.applyConfirmedAppUpdateForAgent({
+          expectedVersion: '0.0.65', beforeRelaunch: async () => true,
+        });
+        await vi.waitFor(() => { expect(childListeners.has('error')).toBe(true); });
+        childListeners.get('error')?.(Object.assign(new Error('spawn denied'), { code: 'EACCES' }));
+        await vi.advanceTimersByTimeAsync(200);
+        await expect(pending).resolves.toMatchObject({ status: 'failed', errorCode: 'updater_spawn_failed' });
+        expect(exitSpy).not.toHaveBeenCalled();
+      } finally {
+        service.stopUpdateService();
+        tmpdirSpy.mockRestore();
+        exitSpy.mockRestore();
+        if (resourcesDescriptor) Object.defineProperty(process, 'resourcesPath', resourcesDescriptor);
+        else Reflect.deleteProperty(process, 'resourcesPath');
+      }
+    });
+
+    it('re-checks the caller condition right before the updater spawns', async () => {
+      download.mockImplementation(async ({ targetPath }: { targetPath: string }) => {
+        fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+        fs.writeFileSync(targetPath, 'update');
+        return { path: targetPath, size: 123 };
+      });
+      const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+      const service = await freshUpdateService('darwin');
+      const beforeSpawn = vi.fn(() => false);
+      try {
+        await expect(service.applyConfirmedAppUpdateForAgent({
+          expectedVersion: '0.0.65', beforeRelaunch: async () => true, beforeSpawn,
+        })).resolves.toMatchObject({ status: 'failed', errorCode: 'relaunch_cancelled' });
+        expect(beforeSpawn).toHaveBeenCalledOnce();
+        expect(spawnProcess).not.toHaveBeenCalled();
+        expect(exitSpy).not.toHaveBeenCalled();
+        expect(await service.checkAppUpdateForAgent()).toMatchObject({ status: 'ready', targetVersion: '0.0.65' });
+      } finally {
+        service.stopUpdateService();
+        exitSpy.mockRestore();
+      }
+    });
+
+    it('does not claim a relaunch that is already under way', async () => {
+      // Idle auto-install is on and starts applying 0.0.65 as soon as it is staged.
+      readAutoUpdateSettings.mockReturnValue({ autoRelaunchOnIdle: true });
+      download.mockImplementation(async ({ targetPath }: { targetPath: string }) => {
+        fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+        fs.writeFileSync(targetPath, 'update');
+        return { path: targetPath, size: 123 };
+      });
+      const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+      const service = await freshUpdateService('darwin');
+      try {
+        expect(await service.checkForUpdate()).toBe('ready');
+        await vi.waitFor(() => { expect(spawnProcess).toHaveBeenCalledOnce(); });
+        const beforeRelaunch = vi.fn(async () => true);
+        const beforeSpawn = vi.fn(() => true);
+        await expect(service.applyConfirmedAppUpdateForAgent({ expectedVersion: '0.0.65', beforeRelaunch, beforeSpawn }))
+          .resolves.toMatchObject({ status: 'failed', errorCode: 'relaunch_in_progress' });
+        expect(beforeRelaunch).not.toHaveBeenCalled();
+        expect(beforeSpawn).not.toHaveBeenCalled();
+        expect(spawnProcess).toHaveBeenCalledOnce();
+      } finally {
+        service.stopUpdateService();
+        exitSpy.mockRestore();
+      }
+    });
+
+    it('never restarts into the confirmed version while a newer one is superseding it', async () => {
+      let finishSecond: (() => void) | undefined;
+      download.mockImplementation(({ targetPath }: { targetPath: string }) => {
+        const write = () => {
+          fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+          fs.writeFileSync(targetPath, 'update');
+          return { path: targetPath, size: 123 };
+        };
+        if (download.mock.calls.length === 1) return Promise.resolve(write());
+        return new Promise((resolve) => { finishSecond = () => resolve(write()); });
+      });
+      const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+      const service = await freshUpdateService('darwin');
+      try {
+        const result = await service.applyConfirmedAppUpdateForAgent({
+          expectedVersion: '0.0.65',
+          beforeRelaunch: async () => {
+            // A background poll starts downloading 0.0.66 over the staged 0.0.65.
+            void service.checkForUpdate(updateManifest('0.0.66'));
+            await vi.waitFor(() => { expect(download).toHaveBeenCalledTimes(2); });
+            return true;
+          },
+        });
+        expect(result).toMatchObject({ status: 'failed', errorCode: 'version_changed', stagedVersion: '0.0.66' });
+        expect(spawnProcess).not.toHaveBeenCalled();
+        expect(exitSpy).not.toHaveBeenCalled();
+        finishSecond?.();
+      } finally {
+        service.stopUpdateService();
+        exitSpy.mockRestore();
+      }
+    });
+
+    it('does not relaunch when the download fails or the build is unsupported', async () => {
+      download.mockRejectedValue(new Error('network'));
+      const service = await freshUpdateService('darwin');
+      const beforeRelaunch = vi.fn(async () => true);
+      try {
+        await expect(service.applyConfirmedAppUpdateForAgent({ beforeRelaunch }))
+          .resolves.toMatchObject({ status: 'failed', errorCode: 'download_failed' });
+        isDev.mockReturnValue(true);
+        download.mockClear();
+        await expect(service.applyConfirmedAppUpdateForAgent({ beforeRelaunch }))
+          .resolves.toMatchObject({ status: 'failed', errorCode: 'unsupported' });
+        expect(download).not.toHaveBeenCalled();
+        expect(beforeRelaunch).not.toHaveBeenCalled();
+        expect(spawnProcess).not.toHaveBeenCalled();
+      } finally {
+        service.stopUpdateService();
+      }
+    });
+
+    it('reads and writes the existing idle auto-install switch', async () => {
+      const { writeAutoRelaunchOnIdle } = await import('../auto-update-settings-store');
+      const service = await freshUpdateService('darwin');
+      expect(service.readAutoRelaunchOnIdleForAgent()).toBe(false);
+      readAutoUpdateSettings.mockReturnValue({ autoRelaunchOnIdle: true });
+      expect(service.setAutoRelaunchOnIdleForAgent(true)).toBe(true);
+      expect(writeAutoRelaunchOnIdle).toHaveBeenCalledWith(true);
+      service.stopUpdateService();
+    });
+  });
+
   it('does not advertise an invalid or asset-free manifest as an installable update', async () => {
     const service = await freshUpdateService('darwin');
     fetchManifest.mockResolvedValueOnce(updateManifest('not-semver'));
