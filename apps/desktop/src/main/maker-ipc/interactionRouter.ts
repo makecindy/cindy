@@ -13,6 +13,7 @@ import type {
   TurnPermissionOrigin,
 } from '@cindy/maker-core';
 import { createSharedPermission, type SharedPermission } from './sharedPermission';
+import { presentChannelQuestionnaire } from './channelQuestionnaire';
 
 export type TurnOrigin = TurnPermissionOrigin;
 
@@ -25,6 +26,10 @@ export interface InteractionRoute {
   origin: TurnOrigin;
   interactionSurface: InteractionSurface;
   timeoutMs?: number;
+  /** Text-input adapters can collect the complete questionnaire themselves. */
+  supportsMultiQuestionInput?: boolean;
+  /** Single-question text adapters can accept free text while being paginated. */
+  supportsFreeTextInput?: boolean;
   /** Main-owned source text, shared by Desktop and channel presentations. */
   sourceDescription?: string;
   onStateChange?(state: InteractionRouteState): void;
@@ -33,6 +38,8 @@ export interface InteractionRoute {
 export type InteractionHandler = (
   request: InteractionRequest,
   permission?: SharedPermission,
+  /** Cancels an in-flight questionnaire page before its pending entry exists. */
+  signal?: AbortSignal,
 ) => Promise<InteractionDecision>;
 
 export interface InteractionLifecycleObserver {
@@ -69,6 +76,8 @@ interface PendingRequest {
   shared?: SharedPermission;
   routeToken: symbol | null;
   request: InteractionRequest;
+  surfaceRequestId(): string;
+  paginated: boolean;
   cancel(decision: InteractionDecision): void;
 }
 
@@ -159,12 +168,12 @@ class SessionInteractionRouter {
         released = true;
         if (this.activeRoute?.token !== active.token) return;
         this.activeRoute = null;
-        for (const [requestId, pending] of this.pending) {
+        for (const pending of this.pending.values()) {
           if (pending.routeToken !== active.token) continue;
           const decision = safeDecision(pending.request, reason);
-          if (pending.shared) pending.cancel(decision);
+          if (pending.shared || pending.paginated) pending.cancel(decision);
           const handledBySurface = callSafely(
-            () => active.onCancel?.(requestId, decision) === true,
+            () => active.onCancel?.(pending.surfaceRequestId(), decision) === true,
           ) === true;
           if (!pending.shared && !handledBySurface) pending.cancel(decision);
         }
@@ -203,27 +212,41 @@ class SessionInteractionRouter {
     // channel using this router automatically shares ordinary tool permissions.
     const shared = request.kind === 'permission' && active?.route.interactionSurface === 'channel-card'
       ? createSharedPermission() : undefined;
+    // Hook and several IM renderers only present the first question. Even
+    // multi-question cards can exceed the platform payload budget for a long
+    // checklist. Keep one logical interaction, but send one question per card.
+    const paginated = request.kind === 'ask_user_question'
+      && request.delivery !== 'async'
+      && request.questions.length > 1
+      && active?.route.interactionSurface === 'channel-card'
+      && !active.route.supportsMultiQuestionInput;
+    let surfaceRequestId = request.requestId;
+    const surfaceController = paginated ? new AbortController() : undefined;
 
     let cancel!: (decision: InteractionDecision) => void;
     let cancelledByRouter = false;
     const cancelled = new Promise<InteractionDecision>((resolve) => {
       cancel = (decision) => {
         cancelledByRouter = true;
+        surfaceController?.abort();
         shared?.settle(decision);
-        resolve(decision);
+        // The paginator owns accumulated answers; its abort result must win.
+        if (!paginated) resolve(decision);
       };
     });
     this.pending.set(request.requestId, {
       shared,
       routeToken: active?.token ?? null,
       request,
+      surfaceRequestId: () => surfaceRequestId,
+      paginated,
       cancel,
     });
     const abort = () => {
       const decision = safeDecision(request, 'session_aborted');
       cancel(decision);
       if (active?.route.interactionSurface === 'channel-card' || active?.route.interactionSurface === 'headless') {
-        callSafely(() => active.onCancel?.(request.requestId, decision));
+        callSafely(() => active.onCancel?.(surfaceRequestId, decision));
       } else {
         callSafely(() => this.desktopCancel?.(request.requestId, decision));
       }
@@ -240,8 +263,9 @@ class SessionInteractionRouter {
               shared.decide(decision);
               return;
             }
+            if (paginated) cancel(decision);
             const handledBySurface = callSafely(
-              () => active?.onCancel?.(request.requestId, decision) === true,
+              () => active?.onCancel?.(surfaceRequestId, decision) === true,
             ) === true;
             if (!handledBySurface) cancel(decision);
           }, timeoutMs)
@@ -261,6 +285,14 @@ class SessionInteractionRouter {
           catch { fail(); }
         }
         handled = shared.result;
+      } else if (paginated && request.kind === 'ask_user_question') {
+        handled = presentChannelQuestionnaire(
+          request,
+          (page, pageSignal) => handler(page, undefined, pageSignal),
+          surfaceController?.signal,
+          requestId => { surfaceRequestId = requestId; },
+          active?.route.supportsFreeTextInput,
+        );
       } else {
         handled = handler(request);
       }

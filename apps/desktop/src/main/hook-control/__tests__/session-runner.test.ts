@@ -3064,7 +3064,7 @@ describe('交互卡链路(interaction listener 覆盖)', () => {
     h.eventCbs.get('sess-new')!({ type: 'done', data: null });
     const outcome = await p;
     expect(outcome.status).toBe('ok');
-    await expect(decisionPromise).resolves.toEqual({ kind: 'ask_user_question', answers: {} });
+    await expect(decisionPromise).resolves.toEqual({ kind: 'ask_user_question', answers: {}, dismissed: true });
     expect(cancels).toEqual([{ interactionId: 'int-z', reason: '任务已结束, 此交互已失效' }]);
   });
 });

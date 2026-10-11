@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { InteractionDecision, InteractionRequest } from '@cindy/maker-core';
+import { buildInteractiveCardV1 } from '../../../../../../packages/lizi-im/src/feishu/cards';
+import { createCardBuilders } from '../../im/shared/cardBuilders';
+import { ui as feishuUi } from '../../im/feishu/uiText';
+
+vi.mock('../../i18n', () => ({ t: (key: string) => key }));
 
 import {
   beginInteractionRoute,
@@ -22,7 +27,7 @@ function ask(requestId: string): InteractionRequest {
   return {
     kind: 'ask_user_question',
     requestId,
-    questions: [{ question: 'Which?', options: [] }],
+    questions: [{ question: 'Which?', options: [{ label: 'yes', description: '' }] }],
   } as InteractionRequest;
 }
 
@@ -42,6 +47,95 @@ function makeSession() {
 }
 
 describe('session interaction router', () => {
+  it('collects every questionnaire answer from a first-question-only channel', async () => {
+    const host = makeSession();
+    const questions = Array.from({ length: 50 }, (_, index) => ({ question: `Question ${index}`, options: [{ label: 'yes', description: '' }] }));
+    const channel = vi.fn<InteractionHandler>(async (request) => {
+      if (request.kind !== 'ask_user_question') throw new Error('unexpected request');
+      return { kind: 'ask_user_question', answers: { [request.questions[0].question]: 'yes' } };
+    });
+    const lease = beginInteractionRoute(host.session, {
+      route: { sessionId: host.session.id, turnId: 'turn-1', origin: { kind: 'hook', source: 'slack' }, interactionSurface: 'channel-card' },
+      handle: channel,
+    });
+    try {
+      await expect(host.dispatch({ kind: 'ask_user_question', requestId: 'checklist', questions }))
+        .resolves.toEqual({ kind: 'ask_user_question', answers: Object.fromEntries(questions.map(q => [q.question, 'yes'])) });
+      expect(channel).toHaveBeenCalledTimes(50);
+      const requests = channel.mock.calls.map(([request]) => request);
+      expect(new Set(requests.map(request => request.requestId)).size).toBe(50);
+      expect(requests.every(request => request.kind === 'ask_user_question' && request.questions.length === 1)).toBe(true);
+    } finally { lease.release(); }
+  });
+
+  it.each([0, 1])('dismisses a questionnaire with free-text item %i before sending cards', async index => {
+    const host = makeSession();
+    const channel = vi.fn<InteractionHandler>();
+    const questions = [0, 1].map(i => ({ question: `Question ${i}`, options: i === index ? [] : [{ label: 'yes', description: '' }] }));
+    const lease = beginInteractionRoute(host.session, {
+      route: { sessionId: host.session.id, turnId: 'turn-1', origin: { kind: 'im', channel: 'feishu' }, interactionSurface: 'channel-card' },
+      handle: channel,
+    });
+    try {
+      await expect(host.dispatch({ kind: 'ask_user_question', requestId: 'free-text', questions }))
+        .resolves.toEqual({ kind: 'ask_user_question', answers: {}, dismissed: true });
+      expect(channel).not.toHaveBeenCalled();
+    } finally { lease.release(); }
+  });
+
+  it('keeps free-text questionnaires together for text input surfaces', async () => {
+    const host = makeSession();
+    const request: InteractionRequest = { kind: 'ask_user_question', requestId: 'text-input', questions: [{ question: 'Name?' }, { question: 'City?' }] };
+    const channel = vi.fn<InteractionHandler>(async () => ({ kind: 'ask_user_question', answers: { 'Name?': 'Alice', 'City?': 'Paris' } }));
+    const lease = beginInteractionRoute(host.session, {
+      route: { sessionId: host.session.id, turnId: 'text-turn', origin: { kind: 'im', channel: 'dingtalk' }, interactionSurface: 'channel-card', supportsMultiQuestionInput: true },
+      handle: channel,
+    });
+    try {
+      await expect(host.dispatch(request)).resolves.toEqual({ kind: 'ask_user_question', answers: { 'Name?': 'Alice', 'City?': 'Paris' } });
+      expect(channel).toHaveBeenCalledExactlyOnceWith(request);
+    } finally { lease.release(); }
+  });
+
+  it.each([0, 1])('stops a text questionnaire when the adapter times out on page %i', async index => {
+    const host = makeSession();
+    const channel = vi.fn<InteractionHandler>(async (request): Promise<InteractionDecision> => {
+      if (request.kind !== 'ask_user_question') throw new Error('Expected question');
+      return { kind: 'ask_user_question', answers: channel.mock.calls.length - 1 === index ? {} : { [request.questions[0].question]: 'answer' } };
+    });
+    const lease = beginInteractionRoute(host.session, {
+      route: { sessionId: host.session.id, turnId: 'text-timeout', origin: { kind: 'im', channel: 'wechat' }, interactionSurface: 'channel-card', supportsFreeTextInput: true },
+      handle: channel,
+    });
+    try {
+      await expect(host.dispatch({ kind: 'ask_user_question', requestId: 'text-timeout', questions: ['First?', 'Second?', 'Third?'].map(question => ({ question })) }))
+        .resolves.toEqual({ kind: 'ask_user_question', answers: index === 0 ? {} : { 'First?': 'answer' }, dismissed: true });
+      expect(channel).toHaveBeenCalledTimes(index + 1);
+    } finally { lease.release(); }
+  });
+
+  it.each(['timeout', 'release', 'abort'] as const)('retains completed pages on router %s', async stop => {
+    vi.useFakeTimers();
+    const host = makeSession();
+    const controller = new AbortController();
+    const channel = vi.fn<InteractionHandler>()
+      .mockResolvedValueOnce({ kind: 'ask_user_question', answers: { 'First?': 'yes' } })
+      .mockImplementation(() => new Promise(() => {}));
+    const lease = beginInteractionRoute(host.session, {
+      route: { sessionId: host.session.id, turnId: 'partial-turn', origin: { kind: 'im', channel: 'feishu' }, interactionSurface: 'channel-card', timeoutMs: 100 },
+      handle: channel,
+    });
+    try {
+      const pending = requestHostInteraction(host.session, { kind: 'ask_user_question', requestId: 'partial', questions: ['First?', 'Second?'].map(question => ({ question, options: [{ label: 'yes', description: '' }] })) }, controller.signal);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(channel).toHaveBeenCalledTimes(2);
+      if (stop === 'timeout') await vi.advanceTimersByTimeAsync(100);
+      else if (stop === 'release') lease.release();
+      else controller.abort();
+      await expect(pending).resolves.toEqual({ kind: 'ask_user_question', answers: { 'First?': 'yes' }, dismissed: true });
+    } finally { lease.release(); vi.useRealTimers(); }
+  });
+
   it('routes Host download permissions through the active channel without replacing the listener', async () => {
     const host = makeSession();
     const desktop = vi.fn<InteractionHandler>((_request, shared) => shared!.result);
@@ -57,6 +151,104 @@ describe('session interaction router', () => {
       expect(remote).toHaveBeenCalledOnce();
       expect(desktop).toHaveBeenCalledOnce();
       expect(host.setInteractionListener).toHaveBeenCalledOnce();
+    } finally { lease.release(); }
+  });
+
+  it.each(['release', 'timeout', 'abort'] as const)('stops channel pagination on %s and ignores late answers', async (stop) => {
+    vi.useFakeTimers();
+    const host = makeSession();
+    const controller = new AbortController();
+    let answer!: (decision: InteractionDecision) => void;
+    const channel = vi.fn<InteractionHandler>(() => new Promise(resolve => { answer = resolve; }));
+    const onCancel = vi.fn(() => true);
+    const lease = beginInteractionRoute(host.session, {
+      route: { sessionId: host.session.id, turnId: 'turn-1', origin: { kind: 'hook', source: 'slack' }, interactionSurface: 'channel-card', timeoutMs: 100 },
+      handle: channel,
+      onCancel,
+    });
+    try {
+      const pending = requestHostInteraction(host.session, {
+        kind: 'ask_user_question', requestId: 'cancel-checklist',
+        questions: [{ question: 'First?', options: [{ label: 'yes', description: '' }] }, { question: 'Second?', options: [{ label: 'yes', description: '' }] }],
+      }, controller.signal);
+      expect(channel).toHaveBeenCalledOnce();
+      const surfaceSignal = channel.mock.calls[0][2];
+      expect(surfaceSignal?.aborted).toBe(false);
+      const pageId = channel.mock.calls[0][0].requestId;
+      if (stop === 'release') lease.release();
+      else if (stop === 'abort') controller.abort();
+      else await vi.advanceTimersByTimeAsync(100);
+      await expect(pending).resolves.toMatchObject({ kind: 'ask_user_question', answers: {} });
+      expect(surfaceSignal?.aborted).toBe(true);
+      expect(onCancel).toHaveBeenCalledWith(pageId, expect.objectContaining({ kind: 'ask_user_question' }));
+      answer({ kind: 'ask_user_question', answers: { 'First?': 'late' } });
+      await vi.runAllTimersAsync();
+      expect(channel).toHaveBeenCalledOnce();
+    } finally {
+      lease.release();
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps Desktop questionnaires together', async () => {
+    const host = makeSession();
+    const desktop = vi.fn<InteractionHandler>(async () => ({ kind: 'ask_user_question', answers: {} }));
+    installDesktopInteractionHandler(host.session, desktop);
+    const request: InteractionRequest = {
+      kind: 'ask_user_question', requestId: 'desktop-checklist',
+      questions: [{ question: 'First?', options: [{ label: 'yes', description: '' }] }, { question: 'Second?', options: [{ label: 'yes', description: '' }] }],
+    };
+    await host.dispatch(request);
+    expect(desktop).toHaveBeenCalledExactlyOnceWith(request);
+  });
+
+  it('keeps serialized Feishu cards below 30 KB for a 50-item questionnaire', async () => {
+    const host = makeSession();
+    const cards = createCardBuilders(feishuUi, () => 'high');
+    const questions = Array.from({ length: 50 }, (_, index) => ({
+      header: `Item ${index}`,
+      question: `Question ${index}: ${'说明'.repeat(100)}`,
+      options: ['A', 'B', 'C'].map(label => ({ label: `${label}: ${'选项'.repeat(15)}`, description: '' })),
+      multiSelect: false,
+    }));
+    const request: Extract<InteractionRequest, { kind: 'ask_user_question' }> = {
+      kind: 'ask_user_question', requestId: 'feishu-checklist', questions,
+    };
+    const bytes = (req: typeof request) => Buffer.byteLength(JSON.stringify(buildInteractiveCardV1(cards.buildAskUserCard(req)!)));
+    expect(bytes(request)).toBeGreaterThan(30_000);
+    const sizes: number[] = [];
+    const lease = beginInteractionRoute(host.session, {
+      route: { sessionId: host.session.id, turnId: 'turn-1', origin: { kind: 'im', channel: 'feishu' }, interactionSurface: 'channel-card' },
+      handle: async req => {
+        if (req.kind !== 'ask_user_question') throw new Error('unexpected request');
+        sizes.push(bytes(req));
+        return { kind: 'ask_user_question', answers: { [req.questions[0].question]: req.questions[0].options![0].label } };
+      },
+    });
+    try {
+      const result = await host.dispatch(request);
+      expect(sizes).toHaveLength(50);
+      expect(Math.max(...sizes)).toBeLessThan(30_000);
+      expect(result.kind === 'ask_user_question' && Object.keys(result.answers)).toHaveLength(50);
+    } finally { lease.release(); }
+  });
+
+  it('keeps a skipped item empty and stops on channel dismissal', async () => {
+    const host = makeSession();
+    const channel = vi.fn<InteractionHandler>()
+      .mockResolvedValueOnce({ kind: 'ask_user_question', answers: {} })
+      .mockResolvedValueOnce({ kind: 'ask_user_question', answers: { 'Second?': 'yes' } })
+      .mockResolvedValueOnce({ kind: 'ask_user_question', answers: {}, dismissed: true });
+    const lease = beginInteractionRoute(host.session, {
+      route: { sessionId: host.session.id, turnId: 'turn-1', origin: { kind: 'im', channel: 'feishu' }, interactionSurface: 'channel-card' },
+      handle: channel,
+    });
+    try {
+      await expect(host.dispatch({
+        kind: 'ask_user_question', requestId: 'skip-checklist',
+        questions: ['First?', 'Second?', 'Third?', 'Fourth?'].map(question => ({ question, options: [{ label: 'yes', description: '' }] })),
+      })).resolves.toEqual({ kind: 'ask_user_question', answers: { 'Second?': 'yes' }, dismissed: true });
+      expect(channel).toHaveBeenCalledTimes(3);
     } finally { lease.release(); }
   });
 

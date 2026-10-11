@@ -83,7 +83,7 @@ function harness() {
     hold: (id: string, held: boolean) => string[];
     answer: (id: string, decision: InteractionDecision) => boolean;
     cleanup: (id: string, reason: string) => void;
-    take: (id: string) => Array<{ resolve: (decision: InteractionDecision) => void; sharedPermission?: SharedPermission }>;
+    take: (id: string) => Array<{ resolve: (decision: InteractionDecision) => void; sharedPermission?: SharedPermission; signal?: AbortSignal }>;
     resolveFromIpc: (event: unknown, id: string, decision: InteractionDecision) => Promise<{ accepted: boolean }>;
   };
   const request = (id = 'permission', sessionId = 'task', kind: InteractionRequest['kind'] = 'permission', channel?: InteractionHandler) => {
@@ -96,7 +96,7 @@ function harness() {
       onCancel: () => true,
     }) : undefined;
     const settled = vi.fn();
-    const promise = listeners.get(sessionId)!({ kind, requestId: id, toolName: 'Shell', input: {} } as InteractionRequest);
+    const promise = listeners.get(sessionId)!({ kind, requestId: id, toolName: 'Shell', input: {}, questions: [{ question: 'choice', options: [{ label: 'yes', description: '' }] }] } as InteractionRequest);
     void promise.then(settled);
     return { promise, settled, lease };
   };
@@ -318,6 +318,16 @@ describe('permission timeout follows the task pause lifecycle', () => {
     await vi.advanceTimersByTimeAsync(20 * MINUTE);
     expect(p.settled).toHaveBeenCalledExactlyOnceWith({ kind: 'permission', behavior: 'allow' });
     expect(h.dismiss).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['session_aborted', 'session_closed'])('aborts the migrated presentation signal on %s', async reason => {
+    const h = harness();
+    const pending = h.request('questionnaire', 'task', 'ask_user_question');
+    const [taken] = h.take('task');
+    expect(taken.signal?.aborted).toBe(false);
+    h.cleanup('task', reason);
+    expect(taken.signal?.aborted).toBe(true);
+    await pending.promise;
   });
 
   it.each(['permission', 'ask_user_question', 'plan_review'] as const)('defers a migrated %s answer until resume and ignores duplicates', async kind => {

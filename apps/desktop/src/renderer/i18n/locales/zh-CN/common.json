@@ -4842,6 +4842,7 @@
       "standbyHint": "本机另一 Cindy 实例正在使用远程连接。关闭它后，本实例会自动接管。"
     },
     "imBot": {
+    "interactionExpired": "此交互已失效。",
       "beta": "Beta",
       "groups": {
         "cindy": "官方",

@@ -32,6 +32,8 @@ import { createLocalImSource, type ImContextSnapshot } from '../../../shared/imM
  */
 
 import { createHash, randomUUID } from 'node:crypto';
+import { t } from '../../i18n';
+import { presentChannelQuestionnaire } from '../../maker-ipc/channelQuestionnaire';
 import path from 'node:path';
 import { isImAccountScopeClosedError } from '../accountBoundary';
 import { bindRuntimeRecoveryNotice } from './runtimeRecoveryNotice';
@@ -1412,6 +1414,8 @@ export function createTurnRunner(
                     turnId: item.turn.turnId,
                     origin: effectiveTurnPolicy?.origin ?? { kind: 'im', channel },
                     interactionSurface: 'channel-card',
+                    supportsMultiQuestionInput: !richIm && !!adapter.handleTextInteraction && adapter.supportsMultiQuestionInput === true,
+                    supportsFreeTextInput: !richIm && !!adapter.handleTextInteraction,
                     sourceDescription: item.turn.sourceDescription,
                     ...(effectiveTurnPolicy?.confirmationTimeoutMs
                       ? { timeoutMs: effectiveTurnPolicy.confirmationTimeoutMs }
@@ -1996,6 +2000,7 @@ export function createTurnRunner(
   async function publishMigratedInteraction(
     entry: {
       sharedPermission?: SharedPermission;
+      signal?: AbortSignal;
       requestId: string;
       request: InteractionRequest;
       resolve: (decision: InteractionDecision) => void;
@@ -2013,6 +2018,33 @@ export function createTurnRunner(
     log.info(
       `publishMigrated kind=${req.kind} requestId=...${req.requestId.slice(-8)} session=...${localSessionId.slice(-8)}`,
     );
+
+    if (req.kind === 'ask_user_question' && req.delivery !== 'async' && req.questions.length > 1
+      && (richIm || !adapter.supportsMultiQuestionInput)) {
+      let pageId = req.requestId;
+      const cancelPage = () => {
+        if (!richIm) {
+          adapter.cancelTextInteraction?.(userId, pageId, { kind: 'ask_user_question', answers: {}, dismissed: true });
+        } else {
+          dropInteractionCard(pageId, 'session_aborted');
+        }
+      };
+      entry.signal?.addEventListener('abort', cancelPage, { once: true });
+      try {
+        const handle = handleInteractionFor(localSessionId, userId, scopeKey);
+        const decision = await presentChannelQuestionnaire(
+          req, (page, signal) => handle(page, undefined, signal), entry.signal,
+          requestId => { pageId = requestId; },
+          !richIm && !!adapter.handleTextInteraction,
+        );
+        resolve(decision);
+      } catch {
+        resolve({ kind: 'ask_user_question', answers: {}, dismissed: true });
+      } finally {
+        entry.signal?.removeEventListener('abort', cancelPage);
+      }
+      return;
+    }
 
     if (!richIm) {
       try {
@@ -2916,8 +2948,8 @@ export function createTurnRunner(
   }
 
   function expireInteractionCard(requestId: string, messageId: string): void {
-    const notice = adapter.interactionExpiredNotice;
-    if (!notice || !richIm) return;
+    if (!richIm) return;
+    const notice = adapter.interactionExpiredNotice ?? t('settings.imBot.interactionExpired');
     const im = richIm;
     let cancelled = false;
     const done = enqueueAskCardPatch(requestId, async () => {
@@ -3570,7 +3602,7 @@ export function createTurnRunner(
     scopeKey?: string,
     confirmationTimeoutMs?: number,
   ) {
-    return async (rawReq: InteractionRequest, sharedPermission?: SharedPermission): Promise<InteractionDecision> => {
+    return async (rawReq: InteractionRequest, sharedPermission?: SharedPermission, signal?: AbortSignal): Promise<InteractionDecision> => {
       // Redact BEFORE anything channel-facing sees the request. This listener
       // replaces the Desktop handler, which does its own redaction, so without
       // this the card builders (interactionCardModel copies `input` verbatim)
@@ -3717,6 +3749,9 @@ export function createTurnRunner(
         sessionStates.get(localSessionId)?.queue[0]?.userMessageId ?? undefined;
       await finalizeActiveStream(localSessionId);
 
+      if (signal?.aborted && req.kind === 'ask_user_question') {
+        return { kind: 'ask_user_question', answers: {}, dismissed: true };
+      }
       let messageId: string;
       try {
         const result = await output.im.sendInteractiveCard(userId, spec, {
@@ -3731,12 +3766,18 @@ export function createTurnRunner(
             : {}),
         });
         messageId = result.messageId;
+        // Stop can win while delivery is in flight, before cancelPending can
+        // find this page. Expire the late card without registering an orphan.
+        if (signal?.aborted && req.kind === 'ask_user_question') {
+          expireInteractionCard(req.requestId, messageId);
+          return { kind: 'ask_user_question', answers: {}, dismissed: true };
+        }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         log.error(`sendInteractiveCard failed: ${msg}`);
         const kind = req.kind as InteractionDecision['kind'];
         if (kind === 'ask_user_question') {
-          return { kind, answers: {} };
+          return { kind, answers: {}, dismissed: true };
         }
         return { kind, behavior: 'deny', reason: `card send failed: ${msg}` };
       }
@@ -3781,7 +3822,7 @@ export function createTurnRunner(
         log.error(`pending interaction failed: ${msg}`);
         const kind = req.kind as InteractionDecision['kind'];
         if (kind === 'ask_user_question') {
-          return { kind, answers: {} };
+          return { kind, answers: {}, dismissed: true };
         }
         return { kind, behavior: 'deny', reason: `pending failed: ${msg}` };
       }

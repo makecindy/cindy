@@ -4842,6 +4842,7 @@
       "standbyHint": "이 컴퓨터의 다른 Cindy 인스턴스가 원격 연결을 사용하고 있습니다. 그것을 닫으면 이 인스턴스가 자동으로 이어받습니다."
     },
     "imBot": {
+    "interactionExpired": "이 상호작용은 만료되었습니다.",
       "beta": "Beta",
       "groups": {
         "cindy": "공식",

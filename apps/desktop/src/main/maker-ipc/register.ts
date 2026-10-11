@@ -2797,6 +2797,7 @@ interface PendingInteractionEntry {
   timeoutRemainingMs?: number;
   /** IM owns presentation/timeouts; Host retains the execution and cancellation boundary. */
   migrated?: boolean;
+  migrationController?: AbortController;
   deferredDecision?: InteractionDecision;
 }
 
@@ -2947,6 +2948,7 @@ function clearPendingInteraction(requestId: string): PendingInteractionEntry | n
   const entry = pendingInteractionResolvers.get(requestId);
   if (!entry) return null;
   pendingInteractionResolvers.delete(requestId);
+  entry.migrationController?.abort();
   if (entry.timeoutId) clearTimeout(entry.timeoutId);
   return entry;
 }
@@ -3301,6 +3303,7 @@ function cleanupPendingInteractionsForSession(sessionId: string, reason: string)
  */
 export function takePendingInteractionsForSession(sessionId: string): Array<{
   sharedPermission?: SharedPermission;
+  signal?: AbortSignal;
   requestId: string;
   request: InteractionRequest;
   resolve: (decision: InteractionDecision) => void;
@@ -3310,6 +3313,7 @@ export function takePendingInteractionsForSession(sessionId: string): Array<{
   );
   const taken: Array<{
     sharedPermission?: SharedPermission;
+    signal?: AbortSignal;
     requestId: string;
     request: InteractionRequest;
     resolve: (decision: InteractionDecision) => void;
@@ -3328,7 +3332,8 @@ export function takePendingInteractionsForSession(sessionId: string): Array<{
     if (entry.timeoutId) clearTimeout(entry.timeoutId);
     entry.timeoutId = undefined;
     entry.migrated = true;
-    taken.push({ requestId, request: entry.request, resolve: decision => {
+    entry.migrationController = new AbortController();
+    taken.push({ requestId, request: entry.request, signal: entry.migrationController.signal, resolve: decision => {
       if (pendingInteractionResolvers.get(requestId) !== entry || entry.deferredDecision) return;
       if (agentInputCoordinatorHolder?.isExecutionPaused(sessionId)) {
         entry.deferredDecision = decision;

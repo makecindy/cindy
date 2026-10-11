@@ -18043,7 +18043,7 @@ describe('CodexAgent MCP thread context hooks', () => {
         description?: string;
         inputSchema?: {
           properties?: {
-            questions?: { description?: string };
+            questions?: { description?: string; maxItems?: number };
           };
         };
       }>;
@@ -18056,7 +18056,10 @@ describe('CodexAgent MCP thread context hooks', () => {
     ]);
     expect(startParams.dynamicTools?.[0]?.description).toContain('the user asks to choose');
     expect(startParams.dynamicTools?.[0]?.description).toContain('provide a generic list');
-    expect(startParams.dynamicTools?.[0]?.description).toContain('Ask 1 to 3 short questions in a single call');
+    expect(startParams.dynamicTools?.[0]?.description).toContain('For ordinary clarification, ask 1 to 3');
+    expect(startParams.dynamicTools?.[0]?.description).toContain('complete known checklist');
+    expect(startParams.dynamicTools?.[0]?.description).not.toContain('follow-up call only when');
+    expect(startParams.dynamicTools?.[0]?.inputSchema?.properties?.questions?.maxItems).toBe(50);
     expect(startParams.dynamicTools?.[0]?.description).toContain('returns the awaited result as a JSON string');
     expect(startParams.dynamicTools?.[0]?.description).toContain('JSON.parse(raw)');
     expect(startParams.dynamicTools?.[0]?.description).toContain('Do not read .content or .structuredContent');
@@ -19311,6 +19314,94 @@ describe('CodexAgent MCP thread context hooks', () => {
     } finally {
       nowSpy.mockRestore();
     }
+  });
+
+  it.each([5, 50])('keeps all %i questionnaire items in one blocking interaction and returns every answer', async (count) => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-questionnaire', model: 'gpt-6-astra', workingDir: '/repo',
+    });
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.dynamicToolCall) throw new Error('expected dynamicToolCall');
+    const questions = Array.from({ length: count }, (_, i) => ({
+      id: `contract-${i + 1}`, question: `Confirm contract field ${i + 1}?`,
+    }));
+    const decision = deferred<InteractionDecision>();
+    const resolve = vi.fn(() => decision.promise);
+    handle.setInteractionResolver(resolve);
+    try {
+      const result = handlers.dynamicToolCall({
+        threadId: 'start-thread-id', turnId: 'turn-1', callId: 'questionnaire-call',
+        namespace: null, tool: 'cindy__ask_user_question', arguments: { questions },
+      }, { requestId: 'questionnaire-request' });
+      const settled = vi.fn();
+      void result.then(settled);
+      await Promise.resolve();
+      expect(resolve).toHaveBeenCalledOnce();
+      expect(resolve).toHaveBeenCalledWith(expect.objectContaining({
+        kind: 'ask_user_question',
+        questions: questions.map(({ question }) => expect.objectContaining({ question })),
+      }));
+      expect(settled).not.toHaveBeenCalled();
+      decision.resolve({ kind: 'ask_user_question', answers: Object.fromEntries(
+        questions.map((q, i) => [q.question, `Value ${i + 1}`]),
+      ) });
+      await expect(result).resolves.toEqual({ success: true, contentItems: [{
+        type: 'inputText', text: JSON.stringify(Object.fromEntries(
+          questions.map((q, i) => [q.id, { answers: [`Value ${i + 1}`] }]),
+        )),
+      }] });
+    } finally { await handle.close(); }
+  });
+
+  it('rejects an oversized questionnaire instead of silently asking only its prefix', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-questionnaire-limit', model: 'gpt-6-astra', workingDir: '/repo',
+    });
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.dynamicToolCall) throw new Error('expected dynamicToolCall');
+    const resolve = vi.fn(async () => ({ kind: 'ask_user_question' as const, answers: {} }));
+    handle.setInteractionResolver(resolve);
+    try {
+      const result = await handlers.dynamicToolCall({
+        threadId: 'start-thread-id', turnId: 'turn-1', callId: 'oversized-call',
+        namespace: 'cindy', tool: 'ask_user_question', arguments: {
+          questions: Array.from({ length: 51 }, (_, i) => ({ question: `Field ${i + 1}?` })),
+        },
+      }, { requestId: 'oversized-request' });
+      expect(result.success).toBe(false);
+      expect(result.contentItems).toEqual([{ type: 'inputText', text: expect.stringContaining('50') }]);
+      expect(resolve).not.toHaveBeenCalled();
+    } finally { await handle.close(); }
+  });
+
+  it.each([
+    [{ id: 'same', question: 'First?' }, { id: 'same', question: 'Second?' }],
+    [{ id: 'first', question: 'Same?' }, { id: 'second', question: 'Same?' }],
+    [{ question: 'First?' }, { id: 'question-1', question: 'Second?' }],
+    [{ question: 'a'.repeat(1_000) + ' first' }, { question: 'a'.repeat(1_000) + ' second' }],
+  ])('rejects ambiguous questionnaire answer keys: %j', async (...questions) => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-questionnaire-keys', model: 'gpt-6-astra', workingDir: '/repo',
+    });
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.dynamicToolCall) throw new Error('expected dynamicToolCall');
+    const resolve = vi.fn(async () => ({ kind: 'ask_user_question' as const, answers: {} }));
+    handle.setInteractionResolver(resolve);
+    try {
+      const result = await handlers.dynamicToolCall({
+        threadId: 'start-thread-id', turnId: 'turn-1', callId: 'ambiguous-call',
+        namespace: 'cindy', tool: 'ask_user_question', arguments: { questions },
+      }, { requestId: 'ambiguous-request' });
+      expect(result.success).toBe(false);
+      expect(result.contentItems).toEqual([{ type: 'inputText', text: expect.stringContaining('distinct') }]);
+      expect(resolve).not.toHaveBeenCalled();
+    } finally { await handle.close(); }
   });
 
   it('routes dynamic ask_user_question tool calls through ask_user_question', async () => {
