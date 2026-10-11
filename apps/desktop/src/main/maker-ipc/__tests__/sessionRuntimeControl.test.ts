@@ -663,6 +663,58 @@ describe('session runtime fallback selection', () => {
     });
   });
 
+  it('skips an exact-name bridge and keeps searching native Responses defaults', () => {
+    const bridge = provider('bridge', [{ id: 'gpt-main' }]);
+    bridge.routing.codex!.wireProtocol = 'openai-chat';
+    const result = pickSessionRuntimeFallback({
+      providers: [provider('openai', [{ id: 'gpt-main' }]), bridge,
+        provider('native', [{ id: 'recommended', defaults: true }])],
+      current, visitedRoutes: [], currentHop: 0, maxHops: 2,
+    });
+    expect(result).toMatchObject({ providerId: 'native', model: 'recommended' });
+  });
+
+  it('honors explicit model routes over provider defaults on both sides of fallback', () => {
+    const source = provider('openai', [{ id: 'gpt-main' }]);
+    source.routing.codex!.wireProtocol = 'openai-chat';
+    source.models.codex![0]!.route = {
+      baseUrl: 'https://example.com/v1', wireProtocol: 'openai-responses',
+    };
+    const chat = provider('chat', [{ id: 'gpt-main' }]);
+    chat.routing.codex!.wireProtocol = 'openai-chat';
+    const native = provider('native', [{ id: 'gpt-main' }]);
+    native.routing.codex!.wireProtocol = 'openai-chat';
+    native.models.codex![0]!.route = {
+      baseUrl: 'https://example.com/v1', wireProtocol: 'openai-responses',
+    };
+    expect(pickSessionRuntimeFallback({
+      providers: [source, chat, native],
+      current, visitedRoutes: [], currentHop: 0, maxHops: 2,
+    })).toMatchObject({ providerId: 'native', model: 'gpt-main' });
+
+    const bridge = provider('bridge', [{ id: 'gpt-main' }]);
+    bridge.models.codex![0]!.route = {
+      baseUrl: 'https://example.com/v1', wireProtocol: 'openai-chat',
+    };
+    expect(pickSessionRuntimeFallback({
+      providers: [provider('openai', [{ id: 'gpt-main' }]), bridge],
+      current, visitedRoutes: [], currentHop: 0, maxHops: 2,
+    })).toBeNull();
+  });
+
+  it('honors model-level bridge overrides and fails closed without the current route', () => {
+    const mixed = provider('mixed', [{ id: 'gpt-main' }]);
+    mixed.models.codex![0]!.codexCompatibilityWireProtocol = 'openai-chat';
+    for (const providers of [
+      [provider('openai', [{ id: 'gpt-main' }]), mixed],
+      [provider('native', [{ id: 'gpt-main' }])],
+    ]) {
+      expect(pickSessionRuntimeFallback({
+        providers, current, visitedRoutes: [], currentHop: 0, maxHops: 2,
+      })).toBeNull();
+    }
+  });
+
   it('ignores disconnected sources even when they offer the same model', () => {
     const disconnected = provider('disconnected', [{ id: 'gpt-main' }]);
     disconnected.connected = false;
@@ -717,7 +769,7 @@ describe('session runtime fallback selection', () => {
           ]),
           provider('chat-default', [{ id: 'chat-recommended', defaults: true }]),
         ],
-        current: { ...current, model: 'missing-model' },
+        current,
         visitedRoutes: [],
         currentHop: 0,
         maxHops: 2,
@@ -736,7 +788,7 @@ describe('session runtime fallback selection', () => {
             'user',
           ),
         ],
-        current: { ...current, model: 'missing-model' },
+        current,
         visitedRoutes: [],
         currentHop: 0,
         maxHops: 2,
