@@ -41,6 +41,7 @@ describe('AuthContext auth-state races', () => {
       'setProviderModelMemoryOwner(state.dataOwnerId);',
       'setModelEnginePrefsOwner(state.dataOwnerId);',
       'setModelFavoritesOwner(state.dataOwnerId);',
+      'setRecentModelsOwner(state.dataOwnerId);',
     ]) {
       expect(applyBlock).toContain(call);
     }
