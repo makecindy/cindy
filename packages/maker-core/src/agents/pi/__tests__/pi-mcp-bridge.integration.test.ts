@@ -18,7 +18,7 @@
  */
 
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from 'node:http';
-import { mkdtempSync, existsSync, rmSync } from 'node:fs';
+import { mkdtempSync, existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -246,6 +246,30 @@ function scriptedAnthropicTurn(requestBody: string): string {
       });
     }
     return anthropicTextTurn(3, 'Bot Memory maintenance complete');
+  }
+  if (requestBody.includes('persisted disclosure first boot')) {
+    if (toolResultCount === 0) {
+      return anthropicToolTurn(1, 'cindy_mcp_list_tools', {
+        server: 'cindy_echo', tool: 'echo',
+      });
+    }
+    return anthropicTextTurn(2, 'first boot inspected echo');
+  }
+  if (requestBody.includes('persisted disclosure second boot')) {
+    if (toolResultCount === 0) {
+      return anthropicToolTurn(1, 'cindy_mcp_call_tool', {
+        server: 'cindy_echo', tool: 'echo', args: { text: 'persist-echo' },
+      });
+    }
+    return anthropicTextTurn(2, 'second boot blind call executed');
+  }
+  if (requestBody.includes('persisted disclosure stale catalog')) {
+    if (toolResultCount === 0) {
+      return anthropicToolTurn(1, 'cindy_mcp_call_tool', {
+        server: 'cindy_echo', tool: 'echo', args: { text: 'stale-echo' },
+      });
+    }
+    return anthropicTextTurn(2, 'stale catalog re-gated the blind call');
   }
   if (requestBody.includes('unknown gateway tool')) {
     return toolResultCount === 0
@@ -688,7 +712,7 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
 
   function buildDeps(
     bridgeMode:
-        | 'local' | 'local-multi' | 'bot-memory' | 'remote' | 'remote-sse' | 'remote-paginated' | 'remote-failures' = 'local',
+        | 'local' | 'local-echo-plus' | 'local-multi' | 'bot-memory' | 'remote' | 'remote-sse' | 'remote-paginated' | 'remote-failures' = 'local',
     logger: Logger = noopLogger,
   ): AgentDeps {
     return {
@@ -833,6 +857,23 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
             mcpEnv: { CINDY_PI_REMOTE_MCP_SECRET_0: `Bearer ${REMOTE_BEARER}` },
           };
         }
+        if (bridgeMode === 'local-echo-plus') {
+          // Same echo server as 'local' plus one more server: the tool-catalog
+          // fingerprint differs from a pure 'local' boot while cindy_echo/echo
+          // stays resolvable — used to prove stale disclosure state is dropped.
+          const sessionQuery = ctx?.sessionId
+            ? `?session=${encodeURIComponent(ctx.sessionId)}`
+            : '';
+          return {
+            mcpBridge: {
+              token: MCP_TOKEN,
+              servers: [
+                { name: 'cindy_echo', url: `${mcpUrl}${sessionQuery}` },
+                { name: 'cindy_workspace', url: `${mcpUrl}/workspace${sessionQuery}` },
+              ],
+            },
+          };
+        }
         if (bridgeMode === 'local-multi') {
           const sessionQuery = ctx?.sessionId
             ? `?session=${encodeURIComponent(ctx.sessionId)}`
@@ -881,8 +922,9 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
     permissionMode: 'ask' | 'bypassPermissions',
     resolver: (req: InteractionRequest) => Promise<InteractionDecision>,
     bridgeMode:
-        | 'local' | 'local-multi' | 'bot-memory' | 'remote' | 'remote-sse' | 'remote-paginated' = 'local',
+        | 'local' | 'local-echo-plus' | 'local-multi' | 'bot-memory' | 'remote' | 'remote-sse' | 'remote-paginated' = 'local',
     prompt = 'call the echo tool',
+    opts: { sessionId?: string; keepDisclosureState?: boolean } = {},
   ): Promise<{
     events: AgentEvent[];
     permissionAsked: boolean;
@@ -891,13 +933,19 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
   }> {
     const agent = new PiAgent(buildDeps(bridgeMode));
     const cwd = mkdtempSync(path.join(tmpdir(), 'pi-mcp-cwd-'));
+    const sid = opts.sessionId ?? `mcp-itest-${permissionMode}`;
+    // Schema-disclosure state persists per sid in agentHome/runtime across pi process
+    // restarts — clear it unless a test deliberately continues the previous boot.
+    if (!opts.keepDisclosureState) {
+      rmSync(path.join(agentHome, 'runtime', `mcp-disclosed-${sid}.json`), { force: true });
+    }
     const requestStart = modelRequests.length;
     const requestBodyStart = modelRequestBodies.length;
     let handle: AgentSessionHandle | null = null;
     let permissionAsked = false;
     try {
       handle = await agent.startSession({
-        sessionId: `mcp-itest-${permissionMode}`,
+        sessionId: sid,
         workingDir: cwd,
         model: 'pi-test-model',
         permissionMode,
@@ -1380,6 +1428,114 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
       expect(requestBodies[1]).toContain('Inspect this tool before execution');
       expect(requestBodies[2]).toContain('inputSchema');
       await waitFor(() => opaqueTurnCaptures.length === 1);
+    },
+  );
+
+  it(
+    'schema disclosure persists across pi process restarts of the same session',
+    { timeout: 120_000 },
+    async () => {
+      echoCalls.length = 0;
+      const sid = 'mcp-itest-disclose-persist';
+      // First boot: inspect echo through the normal flow, then finish. This writes
+      // the per-session disclosure state file under agentHome/runtime.
+      await runOneTurn(
+        'ask',
+        async () => ({ kind: 'permission', behavior: 'allow' }),
+        'local',
+        'persisted disclosure first boot',
+        { sessionId: sid },
+      );
+      const stateFile = path.join(agentHome, 'runtime', `mcp-disclosed-${sid}.json`);
+      expect(existsSync(stateFile)).toBe(true);
+      const state = JSON.parse(readFileSync(stateFile, 'utf8')) as { keys?: string[] };
+      expect(Array.isArray(state.keys)).toBe(true);
+      expect(state.keys?.some((key) => key.includes('cindy_echo'))).toBe(true);
+
+      // Second boot (fresh pi process, same session id): the blind call must execute
+      // instead of being gated — the schema was already inspected in first boot.
+      echoCalls.length = 0;
+      const { requestBodies } = await runOneTurn(
+        'ask',
+        async () => ({ kind: 'permission', behavior: 'allow' }),
+        'local',
+        'persisted disclosure second boot',
+        { sessionId: sid, keepDisclosureState: true },
+      );
+      expect(echoCalls).toEqual([{ text: 'persist-echo' }]);
+      expect(requestBodies.join('\n')).not.toContain('Inspect this tool before execution');
+    },
+  );
+
+  it(
+    'schema disclosure state is dropped when the tool catalog changes across restarts',
+    { timeout: 120_000 },
+    async () => {
+      echoCalls.length = 0;
+      const sid = 'mcp-itest-disclose-stale';
+      // First boot on the plain echo catalog: inspect echo, state file written.
+      await runOneTurn(
+        'ask',
+        async () => ({ kind: 'permission', behavior: 'allow' }),
+        'local',
+        'persisted disclosure first boot',
+        { sessionId: sid },
+      );
+      // Second boot on a different catalog (echo + workspace): the fingerprint
+      // mismatch must drop the persisted key, so the blind call is gated again
+      // instead of running on a schema remembered from the previous catalog.
+      const { requestBodies } = await runOneTurn(
+        'ask',
+        async () => ({ kind: 'permission', behavior: 'allow' }),
+        'local-echo-plus',
+        'persisted disclosure stale catalog',
+        { sessionId: sid, keepDisclosureState: true },
+      );
+      expect(echoCalls).toEqual([]);
+      expect(requestBodies.join('\n')).toContain('Inspect this tool before execution');
+      const state = JSON.parse(readFileSync(path.join(agentHome, 'runtime', `mcp-disclosed-${sid}.json`), 'utf8')) as { keys?: string[] };
+      expect(state.keys).toEqual([]);
+    },
+  );
+
+  it(
+    'invalid disclosure snapshots (missing catalog or wrong pi version) fall back to the gate',
+    { timeout: 180_000 },
+    async () => {
+      const sid = 'mcp-itest-disclose-invalid';
+      const stateFile = path.join(agentHome, 'runtime', `mcp-disclosed-${sid}.json`);
+      const blindCallPrompt = 'persisted disclosure stale catalog';
+
+      const bootAndMutate = async (mutate: (snapshot: Record<string, unknown>) => void): Promise<void> => {
+        echoCalls.length = 0;
+        // Normal first boot: inspect echo, producing a fully valid state file.
+        await runOneTurn(
+          'ask',
+          async () => ({ kind: 'permission', behavior: 'allow' }),
+          'local',
+          'persisted disclosure first boot',
+          { sessionId: sid },
+        );
+        const snapshot = JSON.parse(readFileSync(stateFile, 'utf8')) as Record<string, unknown>;
+        mutate(snapshot);
+        writeFileSync(stateFile, JSON.stringify(snapshot));
+        // Second boot with the mutated snapshot: the blind call must NOT run on it.
+        const { requestBodies } = await runOneTurn(
+          'ask',
+          async () => ({ kind: 'permission', behavior: 'allow' }),
+          'local',
+          blindCallPrompt,
+          { sessionId: sid, keepDisclosureState: true },
+        );
+        expect(echoCalls).toEqual([]);
+        expect(requestBodies.join('\n')).toContain('Inspect this tool before execution');
+      };
+
+      // Snapshot with keys but no catalog field: must be treated as invalid, not
+      // honored on faith.
+      await bootAndMutate((snapshot) => { delete snapshot.catalog; });
+      // Snapshot with matching catalog but tampered pi version: same fallback.
+      await bootAndMutate((snapshot) => { snapshot.piVersion = '0.0.0-wrong'; });
     },
   );
 

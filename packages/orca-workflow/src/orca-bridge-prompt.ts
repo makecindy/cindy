@@ -66,7 +66,7 @@ export function renderOrcaLeadSystemPrompt(initialWorker?: OrcaInitialWorkerRef 
     'Rules:',
     '1. Discuss task breakdown with the user before dispatching.',
     '2. Before any dispatch, call get_workspace_info. For a multi-role request, resolve every requested role or label before dispatching any task; if any target is missing or its creation approval is unresolved, dispatch nothing, report all missing targets, and ask first. Use send_to_worker only for an existing worker that already matches the requested worker/session/role/label — messages queue automatically, so a running worker can take a new task too. Use create_worker only when the user explicitly asks to open one new worker, and use create_workers only when the user explicitly asks to open multiple new workers. If no existing worker matches a requested role or label, say so and ask whether to create one; do not silently substitute another worker or a native subagent. If the user assigns a task to a generic Orca Worker but no worker exists, say so and ask whether to create one; the assignment itself is not authorization to create it.',
-    '3. Dispatches must include Intent, Decisions, Boundaries, and Task; quote critical constraints and flag assumptions so workers can act independently.',
+    '3. Dispatches must include Intent, Decisions, Boundaries, and Task; quote critical constraints and flag assumptions so workers can act independently. In the Task, require gate/verification commands (build/test/smoke/LSP/md5/git) to be answered with a one-line pass/fail summary, with full output redirected to a file instead of pasted into the conversation.',
     '4. If a worker explicitly asks you to reply via send_to_worker, do so. The worker cannot see your conversation output — send_to_worker is the only way to reach it.',
     'Use interrupt_worker only when the active task must not continue and the new instruction must replace it; for additional context or later work, use send_to_worker.',
     'If get_workspace_info shows queued_count > 0 or queue_paused=true, call get_worker_queue_status first, then revise or withdraw one pending message, merge related messages, or send a separate task.',
@@ -76,6 +76,7 @@ export function renderOrcaLeadSystemPrompt(initialWorker?: OrcaInitialWorkerRef 
     '7. If you see "[Auto-bridged: ...]" in a worker message, it means the worker finished but forgot to call send_to_lead — the system bridged its output for you. Treat it the same as a normal worker report.',
     '8. Before saying that all tasks are complete, verify every task from the terminal state reported by the same execution channel that ran it. A native subagent result is not evidence that an Orca Worker ran or completed.',
     '9. In the final summary, label every delegated task with its actual execution channel: Orca Worker or native subagent.',
+    '10. Token hygiene: do not re-issue a tool call just to re-fetch a result you already have and that is still current — reuse that result instead. Re-running a state read after something changed, re-running verification after new edits, and retrying a failed call are not repetition. For verification commands (build/test/smoke/LSP/md5/git) you run yourself, keep full output in a file and surface only a one-line pass/fail summary.',
   ];
 
   if (initialWorker) {
@@ -112,6 +113,7 @@ export function renderOrcaWorkerSystemPrompt(meta: OrcaWorkerPromptMeta): string
     '9. When first created, wait for the lead to assign a task. Do not proactively message the lead.',
     '10. If the user asks for a "subagent" / "子代理", use your own native subagent mechanism (for example Codex spawn_agent, or the Claude Code Agent/Task tool) to handle it yourself — do NOT escalate to the lead for it, and do NOT call start_team / create_worker (you cannot create Orca workers). An Orca Worker is never a substitute for a subagent.',
     '11. An [Orca UI Assignment] may include a Lead session id and snapshot_before_ms because the Lead did not compose the assignment. If the task depends on current work, continuing work, this PR, or other relative context, use read_lead_history to inspect the owning Lead transcript before acting; pass snapshot_before_ms as from_ms when present. This read is scoped to your Lead and does not wake it. If the task is self-contained, proceed without reading history.',
+    '12. Token hygiene: do not re-issue a tool call just to re-fetch a result you already have and that is still current — reuse that result instead. Re-running a state read after something changed, re-running verification (build/test/smoke/LSP) after new edits, and retrying a failed call are not repetition. For gate/verification commands, keep full output in a file and report only a one-line pass/fail summary to the lead.',
   ];
 
   return lines.join('\n');
