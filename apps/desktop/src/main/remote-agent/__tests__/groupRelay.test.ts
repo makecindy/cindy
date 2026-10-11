@@ -9,6 +9,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 
 import { REMOTE_AGENT_MAX_RUNS_PER_CONTROLLER } from '@cindy/device-link';
 import type { AgentEvent, AgentSessionHandle } from '@cindy/maker-core';
@@ -205,8 +206,18 @@ beforeEach(() => {
   root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-group-relay-')));
 });
 
-afterEach(() => {
-  fs.rmSync(root, { recursive: true, force: true });
+afterEach(async () => {
+  // The hosts persist run directories and guest-session state in fire-and-forget promises
+  // (mkdir + tmp + rename), so a write can still be landing when a test ends: a one-shot rmdir
+  // sees ENOTEMPTY, and a removal that wins the race is undone when the write recreates `root`.
+  // Remove asynchronously so those writes can finish, and only stop once `root` stays gone for a
+  // quiet window; if something keeps recreating it, fail instead of leaking the directory.
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    await fs.promises.rm(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
+    await delay(50);
+    if (!fs.existsSync(root)) return;
+  }
+  throw new Error(`test directory ${root} kept being recreated after cleanup`);
 });
 
 let runSeq = 0;
