@@ -679,8 +679,8 @@ export interface ProviderPresetRuntime {
   /** 绑定时除 runtime 主目录外追加拉取的模型目录。 */
   modelDiscovery?: ProviderModelDiscoverySource[];
   /**
-   * 标记该 runtime 的预填 base URL 对用户可改写。添加向导只对 Pi runtime 开放端点输入框，
-   * Claude / Codex 一律沿用预设里已核验的地址，防用户无意改坏。
+   * 允许添加向导编辑预填 base URL。仅用于本机 / 自托管网关类预设；普通官方渠道保持只读，
+   * 防用户无意改坏已核验端点。
    */
   baseUrlEditable?: boolean;
   /** 对应 `pi.dev/api/models/providers/<id>`；创建连接时快照，旧连接不自动补。 */

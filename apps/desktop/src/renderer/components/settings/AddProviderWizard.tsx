@@ -110,20 +110,18 @@ function presetRuntimeBaseUrl(
 ): string {
   const runtime = preset.runtimes[agent];
   if (!runtime) return '';
-  // 用户直接编辑过的地址优先：Pi 对全部预设开放，Claude / Codex 保留 catalog 里已标可编辑的入口。
-  // 清空到空白也算编辑（视为无效输入），不能回退到预设地址。
+  if (!runtime.baseUrlEditable) return runtime.baseUrl;
   if (edited[agent] !== undefined) return edited[agent]!.trim();
-  // 未编辑时仍需两种派生，否则用户只改 Pi 时它们会指向别的服务或根本建不出来：
-  // 1) 账户 / 位置模板（如 Azure OpenAI 的 {resource}、Vertex 的 {location}）必须绑定，
-  //    未绑定的占位符会被主进程拒绝，整个连接创建失败；
-  // 2) 自托管 / 网关类预设的多个 runtime 默认指向同一服务，跟随 Pi 填写的地址。
-  //    官方渠道不走这条：它们的多个 runtime 虽可能同址，用户只换 Pi 时也不该把官方端点一起改走。
-  const piRuntime = preset.runtimes.pi;
-  const piEndpoint = edited.pi?.trim();
-  if (!piRuntime || !piEndpoint) return runtime.baseUrl;
-  const bindings = providerEndpointBindings(piRuntime.baseUrl, piEndpoint);
-  if (bindings && runtime.baseUrl.includes('{')) return bindProviderEndpoint(runtime.baseUrl, bindings, piEndpoint);
-  if (runtime.baseUrl === piRuntime.baseUrl && piRuntime.baseUrlEditable) return piEndpoint;
+  for (const [sourceAgent, endpoint] of Object.entries(edited)) {
+    const source = preset.runtimes[sourceAgent as AgentKind];
+    if (!source || !endpoint) continue;
+    // 默认地址相同的运行时指向同一服务(如本机 llama.cpp 的 Codex / Pi),未单独编辑时跟随已编辑的那个。
+    if (source.baseUrl === runtime.baseUrl) return endpoint.trim();
+    const bindings = providerEndpointBindings(source.baseUrl, endpoint.trim());
+    if (bindings && source.baseUrl.includes('{')) {
+      return bindProviderEndpoint(runtime.baseUrl, bindings, endpoint.trim());
+    }
+  }
   return runtime.baseUrl;
 }
 
@@ -959,9 +957,10 @@ export function AddProviderWizard({
     const agents = configuredPresetAgents(preset);
     const editableBaseUrlsValid = agents.every((agent) => {
       const rt = preset.runtimes[agent];
-      if (!rt) return true;
-      // 含 Pi 派生出来的 Claude / Codex 地址也要校验，它们同样会进入请求与保存。
-      return isValidEditablePresetBaseUrl(presetRuntimeBaseUrl(preset, agent, presetBaseUrls), rt.baseUrl);
+      return (
+        !rt?.baseUrlEditable ||
+        isValidEditablePresetBaseUrl(presetRuntimeBaseUrl(preset, agent, presetBaseUrls), rt.baseUrl)
+      );
     });
     if (!editableBaseUrlsValid) return;
     // Curated presets use omission as their legacy default-on; generated catalog additions
@@ -1443,7 +1442,7 @@ export function AddProviderWizard({
           (!runtime.modelsUrl?.trim() || isLoopbackProviderUrl(runtime.modelsUrl.trim()))
         );
       }
-      return isValidEditablePresetBaseUrl(value, runtime.baseUrl);
+      return !runtime.baseUrlEditable || isValidEditablePresetBaseUrl(value, runtime.baseUrl);
     });
   const presetCanContinue =
     sel?.kind === 'preset' &&
@@ -1990,8 +1989,7 @@ export function AddProviderWizard({
               <div className="flex flex-col gap-2">
                 {presetAgents.map((agent) => {
                   const rt = sel.preset.runtimes[agent];
-                  // Pi 对全部预设开放；Claude / Codex 保留 catalog 里已标可编辑的入口，不减少既有能力。
-                  if (rt && (agent === 'pi' || rt.baseUrlEditable)) {
+                  if (rt?.baseUrlEditable) {
                     const value = presetRuntimeBaseUrl(sel.preset, agent, presetBaseUrls);
                     const valid = isValidEditablePresetBaseUrl(value.trim(), rt.baseUrl);
                     return (
