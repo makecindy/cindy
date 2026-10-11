@@ -40,6 +40,7 @@ import {
   Bot,
   Check,
   ClipboardList,
+  Crop,
   Folder as FolderIcon,
   FolderPlus,
   Globe2,
@@ -121,6 +122,7 @@ interface AtMentionPanelProps {
 const ACTION_ICONS: Record<ComposerSuggestionAction['id'], typeof Paperclip> = {
   'retry-plugins': RotateCw,
   'attach-files': Paperclip,
+  'capture-region': Crop,
   'new-goal': Target,
   'plan-mode': ClipboardList,
   collaboration: UsersRound,

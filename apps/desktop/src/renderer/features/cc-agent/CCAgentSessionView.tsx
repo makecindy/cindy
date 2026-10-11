@@ -1,3 +1,4 @@
+import { registerRegionCaptureRouteOwner } from '@/hooks/useRegionCaptureShortcut';
 import { responseSpeedActivity, type ResponseSpeedSnapshot } from "@cindy/maker-shared/usage-format";
 import { formatSessionDuration } from '@/lib/sessionDurationFormat';
 import { shouldShowOpenPathError } from '../../../shared/openPathResult';
@@ -530,6 +531,22 @@ interface CCAgentSessionViewProps {
   /** Entry-time read boundary for a Bot chat; preserved after the live read position advances. */
   botUnreadBoundaryAt?: number | null;
   onBotReadThrough?: (at: number) => void;
+}
+
+function RegionCaptureRouteRegistration({
+  pathname,
+  sessionId,
+  draftKey,
+}: {
+  pathname: string;
+  sessionId: string;
+  draftKey: string;
+}) {
+  useLayoutEffect(
+    () => registerRegionCaptureRouteOwner(pathname, sessionId, draftKey),
+    [pathname, sessionId, draftKey],
+  );
+  return null;
 }
 
 /**
@@ -4892,6 +4909,13 @@ export function CCAgentSessionView({
       ) : null}
       {/* 右栏在场声明：与上方 header 注册同一「主实例」判据。仅全屏聊天视图声明，
           内嵌实例不声明（否则会在 doc rail / 协同面板上误开右栏）。 */}
+      {ownsRoute && !readOnly && session && sessionId && (
+        <RegionCaptureRouteRegistration
+          pathname={location.pathname}
+          sessionId={sessionId}
+          draftKey={composerDraftKey ?? sessionId}
+        />
+      )}
       {ownsRoute && !readOnly && setRightSidebarAvailable && (
         <RightSidebarAvailabilityRegistration declare={setRightSidebarAvailable} />
       )}
@@ -5650,7 +5674,7 @@ export function CCAgentSessionView({
                   onEffortDidChange={handleEffortDidChange}
                   onPermissionModeDidChange={handlePermissionModeDidChange}
                   attachmentState={attachmentState}
-                  draftKey={composerDraftKey}
+                  draftKey={composerDraftKey ?? sessionId}
                   externalDragOver={isDragOver}
                   onComposerDropHandled={resetFullAreaDragState}
                   vendorKey={normalizeDbAgentKind(displayAgentKind)}

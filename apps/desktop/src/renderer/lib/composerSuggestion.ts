@@ -21,6 +21,7 @@ import {
 export type ComposerSuggestionActionId =
   | 'retry-plugins'
   | 'attach-files'
+  | 'capture-region'
   | 'new-goal'
   | 'plan-mode'
   | 'collaboration'
