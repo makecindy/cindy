@@ -65,6 +65,7 @@ export interface BrowserChromeProps {
   canGoForward: boolean;
   onNavigate: (url: string) => void;
   onReload: () => void;
+  onHardReload: () => void;
   onStop: () => void;
   onGoBack: () => void;
   onGoForward: () => void;
@@ -105,6 +106,7 @@ export const BrowserChrome = forwardRef<BrowserChromeHandle, BrowserChromeProps>
       canGoForward,
       onNavigate,
       onReload,
+      onHardReload,
       onStop,
       onGoBack,
       onGoForward,
@@ -321,6 +323,10 @@ export const BrowserChrome = forwardRef<BrowserChromeHandle, BrowserChromeProps>
             </Tip>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="min-w-[9rem]">
+            <DropdownMenuItem disabled={!hasValidLink} onSelect={onHardReload}>
+              <RotateCw size={14} strokeWidth={2} className="mr-2 shrink-0" />
+              {t('rightSidebar.browser.hardReload')}
+            </DropdownMenuItem>
             <DropdownMenuItem
               disabled={!hasValidLink || !canOpenInSystemBrowser}
               onSelect={onOpenInSystemBrowser}
