@@ -6,7 +6,7 @@ import path from 'node:path';
 import { resolveOauthPeerIdentity } from '../identityResolver.js';
 import { createHash } from 'node:crypto';
 import { WebSocket, WebSocketServer } from 'ws';
-import { expect, it, vi } from 'vitest';
+import { expect, it, onTestFinished, vi } from 'vitest';
 import { DeviceLinkClient, PLUGIN_OAUTH_CHANNEL, type Envelope } from '@cindy/device-link';
 import type { GhostSetupAssessment } from '../../../shared/ghost.js';
 import { GhostOauthAccountManager } from '../../cindy-brain/ghostOauthAccounts.js';
@@ -18,9 +18,8 @@ import { initializePluginOauthCards } from '../cards.js';
 import { handleAssistPluginOauth } from '../localIpc.js';
 import { invalidatePluginOauth, requestPluginOauth } from '../runtime.js';
 
-it('carries a real setup card through DeviceLinkClient/WebSocket, loopback and cloud vault commit', async ({
-  onTestFinished,
-}) => {
+it.each(['test-plugin', '_ns__' + 'a'.repeat(128) + '__test-plugin'])(
+  'carries %s through DeviceLinkClient/WebSocket, loopback and cloud vault commit', async (ghostId) => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-oauth-transport-'));
   onTestFinished(() => fs.rmSync(directory, { recursive: true, force: true }));
   const identityStore = testOauthIdentityStore(directory);
@@ -143,7 +142,7 @@ it('carries a real setup card through DeviceLinkClient/WebSocket, loopback and c
     onAccountConnected: () => {
       connected = true;
       // Exercises card close/readiness racing with the controller's next status poll.
-      bus.emit('test-plugin', { source: 'oauth', ref: 'account' });
+      bus.emit(ghostId, { source: 'oauth', ref: 'account' });
     },
   });
   const assessment = (): GhostSetupAssessment => ({
@@ -172,7 +171,7 @@ it('carries a real setup card through DeviceLinkClient/WebSocket, loopback and c
     changeBus: bus,
     assess: assessment,
     validateTarget: () => ({ ok: true }),
-    getGhostIdentity: () => ({ id: 'test-plugin', name: 'Provider' }),
+    getGhostIdentity: () => ({ id: ghostId, name: 'Provider' }),
     executeAction: async () => {
       const remote = getRemoteOauthContext()!;
       const authorize = remote.authorize.bind(remote);
@@ -185,7 +184,7 @@ it('carries a real setup card through DeviceLinkClient/WebSocket, loopback and c
         return authorize(offer, signal);
       });
       const result = await account.connectAccount(
-        'test-plugin',
+        ghostId,
         'account',
         {
           authorizeUrl: 'https://provider.example/authorize',
@@ -233,7 +232,7 @@ it('carries a real setup card through DeviceLinkClient/WebSocket, loopback and c
   });
   const setup = coordinator.ensureReady({
     sessionId: 'cloud-session',
-    ghostId: 'test-plugin',
+    ghostId,
     tool: 'read',
   });
   try {
@@ -283,7 +282,7 @@ it('carries a real setup card through DeviceLinkClient/WebSocket, loopback and c
       },
       {
         deviceId: 'cloud',
-        ghostId: 'test-plugin',
+        ghostId,
         requestId: snapshot.requestId,
         actionId: snapshot.steps[0].action!.id,
         expectedRevision: snapshot.revision,

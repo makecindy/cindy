@@ -22,6 +22,7 @@ import { promisify } from 'node:util';
 import JSZip from 'jszip';
 
 import {
+  authorDeclaredNamespaceReason,
   PLUGIN_MEMBER_UPLOAD_MAX_ARCHIVE_BYTES,
   PLUGIN_MEMBER_UPLOAD_MAX_UNCOMPRESSED_BYTES,
   PLUGIN_MEMBER_UPLOAD_MAX_ZIP_ENTRIES,
@@ -35,6 +36,7 @@ import {
   GHOST_MANIFEST_FILE,
   GHOST_MANIFEST_SUMMARY_MAX_CHARS,
   GHOST_SKILL_MD_MAX_BYTES,
+  isValidNewGhostId,
   validateGhostManifest,
   type GhostManifest,
 } from '../../shared/ghost.js';
@@ -672,12 +674,37 @@ export async function scaffoldGhostDir(
   if (typeof manifestRaw !== 'string') {
     return { ok: false, errorCode: 'INTERNAL', message: 'scaffold manifest 必须是 JSON 字符串' };
   }
-  const validation = validateGhostManifest(JSON.parse(manifestRaw));
+  let scaffoldManifest: unknown;
+  try {
+    scaffoldManifest = JSON.parse(manifestRaw);
+  } catch {
+    return {
+      ok: false,
+      errorCode: 'INVALID_INPUT',
+      message: '插件信息不合格:ghost.json 不是合法 JSON',
+    };
+  }
+  const reservedScaffoldNamespace = authorDeclaredNamespaceReason(scaffoldManifest);
+  if (reservedScaffoldNamespace) {
+    return {
+      ok: false,
+      errorCode: 'INVALID_INPUT',
+      message: `插件信息不合格:${reservedScaffoldNamespace}`,
+    };
+  }
+  const validation = validateGhostManifest(scaffoldManifest);
   if (!validation.ok) {
     return {
       ok: false,
       errorCode: 'INVALID_INPUT',
       message: `插件信息不合格:${validation.reason}`,
+    };
+  }
+  if (!isValidNewGhostId(validation.manifest.id)) {
+    return {
+      ok: false,
+      errorCode: 'INVALID_INPUT',
+      message: '新建插件 id 必须以小写字母开头，只能包含小写字母、数字和连字符，最长 32 个字符',
     };
   }
   const brokerPortIssue = brokerRedirectPortDeclarationIssue(validation.manifest);
@@ -881,6 +908,10 @@ async function buildGhostPackage(
         // 采用紧凑 JSON，避免仅为 overlay 重排空白就把清单推过安装侧上限。
         manifestBytes = Buffer.from(`${JSON.stringify(manifestRaw)}\n`, 'utf-8');
       }
+    }
+    const reservedNamespace = authorDeclaredNamespaceReason(manifestRaw);
+    if (reservedNamespace) {
+      return { ok: false, errorCode: 'MANIFEST_INVALID', message: `清单不合格:${reservedNamespace}` };
     }
     const v = validateGhostManifest(manifestRaw);
     if (!v.ok) {
@@ -1948,7 +1979,7 @@ node 详单**不接受** \`command\` / \`args\` / \`shell\` / \`env\` 或其它�
       "extraAuthorizeParams": { "access_type": "offline", "prompt": "consent" },  // 可选 ≤8 条:服务商特有授权参数(协议保留参数禁写)
       "identity": { "url": "https://api.example.com/userinfo", "labelPath": "email", "displayTemplate": "{team} · {user}", "avatarPath": "data.avatar_thumb" },  // 可选:授权后拉一次身份端点给账号打标签(设置页"已连接为 xxx";url 域名须命中 hosts)。labelPath 应指向**唯一且稳定**字段(如邮箱 / user_id)——它是重复授权时的同身份合并判定键,选 name 这类可重名可改名字段会误合并。displayTemplate 可选:人类可读展示名模板,\`{点分路径}\` 占位符从同一份身份响应取值(至少一个占位符,≤200 字符),任一占位符取不到值整体降级为空、回落显示 labelPath 的值——labelPath 的稳定字段不可读(如 Slack 的 user_id)时声明它,设置页与账号工具展示的就是渲染后的名字(邮箱这类本身可读的服务商不需要)。avatarPath 可选:头像 URL 在身份响应里的点分路径(如飞书的 "data.avatar_thumb")——主机取 https 地址后**不带凭证**下载小图(仅 png/jpeg/webp/gif、≤256KB)转 data URL 存库,\`/oauth\` 回查里以 account.avatarDataUrl 给你的 settingsHtml 展示(<img> 直接用)。**下载仅对第一方官方意识生效**(头像地址不受 hosts 白名单约束,第三方声明合法但恒降级 null)——所以页面必须能没头像也好看(如回落姓名首字圆片)
       "redirectPort": 53682,                        // 可选:loopback 回调固定端口(1024–65535);声明 tokenBroker 时必填。服务商要求回调 URI 与注册值精确匹配(如 Atlassian)时声明,回调恒为 http://127.0.0.1:<端口>/callback;非 broker 模式缺省 = 随机端口(Google 等允许任意 loopback 端口的服务商不用声明)
-      "tokenBroker": "jira",                        // 可选:三路资格:静态官方前缀照旧放行;当前组织的服务端 organization market 包满足来源/组织/前缀/整包 sha256 绑定;或企业作者用 ghost_forge_install 明确安装且 id 命中本组织已登记前缀。后两路只给 Broker 与 oidc-token,不给宿主原语;手动导入与个人身份不放行。声明时必须同时声明 redirectPort;code/refresh 交换经 Cindy 服务端 broker 完成(client secret 在服务端,不随包分发),与 clientSecret 互斥;设置页不再支持自填 client
+      "tokenBroker": "jira",                        // 可选:三路资格:随包官方种子或受信任公开市场的官方插件(名称本身不构成资格);当前组织的服务端 organization market 包满足来源/组织/namespace/整包 sha256 绑定;或企业作者用 ghost_forge_install 明确安装到当前组织 namespace。后两路只给 Broker 与 oidc-token,不给宿主原语;手动导入与个人身份不放行。声明时必须同时声明 redirectPort;code/refresh 交换经 Cindy 服务端 broker 完成(client secret 在服务端,不随包分发),与 clientSecret 互斥;设置页不再支持自填 client
       "brokerBounce": { "path": "/example/bounce", "callbackPath": "/example/callback" }  // 可选:双地址弹跳回调(服务商后台只收 https redirect、不收 http loopback 时用)。必须与 tokenBroker、redirectPort 同时声明;报给服务商的 redirect_uri = broker 服务基地址 + path(主机运行时拼,清单不落域名),浏览器授权后由弹跳路由 302 回 http://127.0.0.1:<redirectPort><callbackPath>
     }
   }],
@@ -3145,13 +3176,12 @@ PAT。支持宿主管理连接入口时还返回可选的 \`hostManagedSetup:tru
 **Cindy 企业身份断言(source:"oidc-token",可选)**:适用于接入 Cindy Connection
 Auth 的企业服务。主机只在当前登录账号属于组织 Membership，且满足以下任一安装基座时
 按需向 auth-server 换取短时 Connection JWT：①当前组织的 Plugin Market organization
-安装记录(source 必须是服务端 \`market\`)，且安装 manifest digest 与记录一致；②企业作者
-显式调用 \`ghost_forge_install\` 安装，插件 id 命中当前组织已登记前缀，且批准 receipt
+安装记录(source 必须是服务端 \`market\`)，且 namespace 属于当前组织、已批准整包 sha256 与记录一致；②企业作者
+显式调用 \`ghost_forge_install\` 安装到当前组织 namespace，且批准 receipt
 保有本次包的完整 sha256。两路都要求清单声明目标服务域名。
 audience 与组织身份由主机推导,插件清单和运行时代码都不能选择、读取或保存
 audience/token；audience 固定为 \`\${orgSlug}:\${ghostId}\`,总长不得超过 64 字符。
-个人身份与手动导入默认不签发。点名例外：\`ghostId\` 精确等于 \`mivo-canvas\` 的组织成员本地安装，
-在已装清单声明的精确 oidc-token host 仅为 \`mivo-canvas.dsworks.cn\` 时可解析 audience；其它本地插件、其它精确 host 仍不签发。已有市场
+个人身份与手动导入不签发。临时例外，只对 root 实例生效：\`ghostId\` 精确等于 \`mivo-canvas\`、namespace 为 null 或尚未确认的旧 root 安装，且已装清单声明的精确 oidc-token host 仅为 \`mivo-canvas.dsworks.cn\` 时可解析 audience；企业 namespace 下的同名插件、其它本地插件、其它精确 host 仍不签发。已有市场
 organization 记录（含 installed:false）时必须仍走 digest，不得借例外跳过。市场账本损坏、schema 不认或该 ghostId 记录校验失败时 fail-closed，不得当成无记录。企业身份的 Forge 安装前会展示插件名、id 与精确域名，并要求手输相同 id
 确认。市场与 Forge 两条组织基座都只给 Broker 与 oidc-token、不给宿主原语。
 该凭证必须固定声明
@@ -3240,12 +3270,13 @@ identity.displayTemplate 时,\`/oauth\` 回查与连接结果里 account.label �
   即可;第一方官方内置意识会先自动结束占用进程并重试,第三方意识不享受此回收
   ——请选一个不易撞车的端口)。声明 \`tokenBroker\` 时必须提供；非 broker 模式下，
   Google 这类允许任意 loopback 端口的服务商不用声明。
-- \`tokenBroker\`:资格有三路:①静态官方前缀命中,照旧放行；②当前组织的服务端
+- \`tokenBroker\`:资格有三路:①随包官方种子或受信任公开市场的官方插件,名称本身不构成资格；②当前组织的服务端
   organization market 包已安装、source 为 \`market\`、organizationId 与当前组织一致,
-  id 命中本组织已登记前缀,且 release sha256 与批准 receipt 的 packageSha256 相等。
-  ③企业作者通过 \`ghost_forge_install\` 明确安装，且 id 命中当前组织已登记前缀；是否已有
-  同 id 市场记录不影响这条自测路径。后两路不接受个人身份或别的组织前缀，且只给 Broker
-  与 oidc-token，不给宿主原语；手动导入不属于 Forge 路径。
+  namespace 与当前组织的可信身份一致，且 release sha256 与批准 receipt 的 packageSha256 相等。
+  ③企业作者通过 \`ghost_forge_install\` 明确安装，Host 绑定当前组织 namespace；只有真实
+  存量待迁移安装仍使用本组织已登记前缀核对。是否已有同 id 市场记录不影响这条自测路径。
+  后两路不接受个人身份或别的组织身份；Forge 只给 Broker 与 oidc-token，不给宿主原语，
+  可信 XD 企业市场安装的宿主能力另按可信组织身份核验，不依赖名称前缀。手动导入不属于 Forge 路径。
   code/refresh 交换改经 Cindy 服务端 broker 完成,client secret 由服务端持有、不随包
   分发,且要求用户已登录 Cindy。声明它时必须同时声明 redirectPort,并与 clientSecret
   互斥;PKCE 缺省开(verifier
@@ -4446,6 +4477,8 @@ if (!opened.ok) console.warn(opened.errorCode, opened.message);
 以下只解释存量包的兼容形态,用于维护与迁移,**不要照抄到新插件**。存量插件装入且
 启用后,主机把每个技能目录投影到 Cindy 的账号隔离目录,分别接入 Claude Code、
 Codex、Pi,不写入用户的全局技能目录;停用/卸载即撤销这些入口。
+已知企业 namespace 的实例用 \`_ns__<namespace>__<插件id>--<技能name>\`，
+root 和存量未标记 namespace 的实例继续沿用旧链接名。
 
 目录形态(每条 item 一个目录,内必须有 SKILL.md):
 
@@ -4773,13 +4806,14 @@ Cindy 统一归类、随机选择与排序，同批每个场景和每个插件�
    产生的确切包：首次安装、以及权限比已装版本变多的更新，会先在任务里弹确认卡列出权限，
    用户允许后才落位；用户拒绝返回 \`MUTATION_CANCELLED\`，不要重试，除非用户再次要求。
    首次安装会启用，同 id 已安装时原位更新并保留启用状态、配置、
-   数据与面板位置，同版本也可覆盖。不要因为 scaffold 或 pack 成功就自动调用本工具。
+   数据与面板位置，同版本也可覆盖。同来源更新延续旧数据；从市场等不同来源切换到 Forge
+   时旧账号、密钥及数据隔离保留，新来源需要重新连接。不要因为 scaffold 或 pack 成功就自动调用本工具。
    企业身份下若清单声明 \`source:"oidc-token"\`，提交安装前会展示插件名、id 与精确请求
    域名，并要求用户手输相同 id；取消不会安装。个人与企业身份下的明确 Forge 安装都会标记为
    作者本地自测并受组织默认插件自动接管保护；但 Connection JWT 资格仍只来自当前企业身份、
    组织前缀与 OIDC 窄确认，个人身份下的 Forge 安装绝不会仅凭自测标记取得 Broker 或 Connection 权限，
    普通手动导入也不取得这项资格。
-   本地安装另有一条点名例外，见 §4.7：仅 \`ghostId\` 精确等于 \`mivo-canvas\` 且精确 oidc-token host 仅为 \`mivo-canvas.dsworks.cn\` 的组织成员本地安装可解析 audience；
+   本地安装另有一条临时例外，只对 root 实例生效，见 §4.7：仅 \`ghostId\` 精确等于 \`mivo-canvas\`、namespace 为 null 或尚未确认，且精确 oidc-token host 仅为 \`mivo-canvas.dsworks.cn\` 的组织成员本地安装可解析 audience；
 4. 安装后再让用户 \`$<command> <内容>\` 试一单，看聊天图卡/面板是否符合预期。
 
 企业组织成员需要发布时，调用 \`ghost_forge_pack({ dir: '<绝对路径>', intent: 'publish' })\`。
@@ -4855,7 +4889,9 @@ Cindy 统一归类、随机选择与排序，同批每个场景和每个插件�
 - agent 详单格式错(background / errand / schedule 存在但不是 true；基础点击触发请写 \`agent: {}\`)
 - node 详单格式错(entry 不是包内 CommonJS .js/.cjs、protocol 不在 json-rpc-stdio / mcp-stdio、
   resident 又写 idleTimeoutSeconds)；未知 command/args/shell/env 只保留，不传给进程启动器
-- id 用了 \`cindy-\` / \`filo-\` / \`xd-\` 前缀(官方保留,正式版用户通道拒装;给自己的意识换个前缀)
+- id 用了 \`cindy-\` 前缀(平台保留,正式版用户通道拒装)。\`filo-\` / \`xd-\` 只是普通名称，不授予官方资格
+- ghost.json 声明了 namespace(包括 null)。namespace 由可信交付及 Host 安装事实决定，作者不能自报
+- 企业发布遵循当前服务端准入。S1 或 S2 尚未开启时仍保留旧认领和前缀命名流程，不能把收到 namespace 当作自由命名已开放
 - network 详单格式错(hosts 缺失/裸 TLD/IP/带端口/通配不在最左、secret 缺 inject、
   inject.format 没有 {value} 占位、inject.header 用了 Host/Cookie 等协议关键头、
   inject.hosts 不是 hosts 声明条目的子集、

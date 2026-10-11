@@ -155,4 +155,13 @@ describe('feature retirement upgrade', () => {
     });
     expect(manager().list()).toEqual([]);
   });
+  it('keeps same-name retirement receipts on separate instance keys', () => {
+    const store = new FeatureRetirementStore(() => state);
+    expect(store.observe('ios-simulator', '_root__helper', true).unread).toBe(true);
+    expect(store.observe('ios-simulator', '_ns__acme__helper', true).unread).toBe(true);
+    store.acknowledge('ios-simulator', '_root__helper');
+    expect(store.observe('ios-simulator', '_root__helper', true).unread).toBe(false);
+    expect(store.observe('ios-simulator', '_ns__acme__helper', true).unread).toBe(true);
+  });
+
 });

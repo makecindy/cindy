@@ -492,14 +492,14 @@ export function PluginPage({
         try {
           url = new URL(
             message.url,
-            `cindy-ghost://${pluginId}/${documentRef.current?.entry ?? ""}`,
+            `cindy-ghost://${documentRef.current?.pluginId}/${documentRef.current?.entry ?? ""}`,
           );
         } catch {
           return;
         }
         if (
           url.protocol === "cindy-ghost:" &&
-          url.hostname === pluginId &&
+          url.hostname === documentRef.current?.pluginId &&
           url.pathname.startsWith("/preview/")
         ) {
           await call("media:open", { url: url.href });

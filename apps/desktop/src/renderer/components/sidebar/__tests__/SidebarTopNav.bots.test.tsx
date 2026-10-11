@@ -14,7 +14,7 @@ import {
 
 const OWNER = 'owner-1';
 const searchMock = vi.hoisted(() => ({ query: '', lockedProjectKey: null as string | null }));
-type MainViewMock = { ghostId: string; title: string; icon: 'globe'; manifest: { name: string } };
+type MainViewMock = { ghostId: string; instanceId: string; title: string; icon: 'globe'; manifest: { name: string } };
 const mainViewsMock = vi.hoisted(() => ({
   routeCapable: [] as MainViewMock[],
   sidebarVisible: [] as MainViewMock[],
@@ -25,7 +25,7 @@ vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => ({ dataOwnerId: authMo
 const installedMock = vi.hoisted(() => ({ ghosts: [{ manifest: { id: 'bundled' } }] as unknown[] }));
 vi.mock('@/cindy-brain/useInstalledGhosts', () => ({ useInstalledGhosts: () => installedMock.ghosts }));
 const SITES: MainViewMock = {
-  ghostId: 'xd-sites', title: '站点', icon: 'globe', manifest: { name: 'XD Sites' },
+  ghostId: 'xd-sites', instanceId: 'xd-sites', title: '站点', icon: 'globe', manifest: { name: 'XD Sites' },
 };
 
 vi.mock('react-i18next', () => ({
@@ -326,16 +326,6 @@ describe('Sidebar teammate return action', () => {
     openMore();
     expect(screen.queryByRole('menuitem', { name: /站点/ })).toBeNull();
   });
-  it('keeps a plugin without a top-level placement in More and opens its page', () => {
-    seedKnownPlugins(['xd-sites']);
-    mainViewsMock.routeCapable = [SITES];
-    mainViewsMock.sidebarVisible = [SITES];
-    render(<Harness initialPath="/cc-agent" />);
-    expect(screen.queryByRole('button', { name: '站点' })).toBeNull();
-    openMore();
-    fireEvent.click(screen.getByRole('menuitem', { name: /站点/ }));
-    expect(screen.getByTestId('location').textContent).toBe('/apps/xd-sites');
-  });
   it('leaves a plugin out of the sidebar and More once its own switch is off', () => {
     mainViewsMock.routeCapable = [SITES];
     render(<Harness initialPath="/cc-agent" />);
@@ -355,20 +345,43 @@ describe('Sidebar teammate return action', () => {
     }));
     expect(screen.queryByRole('button', { name: '站点' })).toBeNull();
   });
-  it('keeps the plugin manage action on its More item', () => {
-    seedKnownPlugins(['xd-sites']);
-    mainViewsMock.routeCapable = [SITES];
-    mainViewsMock.sidebarVisible = [SITES];
+  it.each(['xd-sites', '_root__xd-sites', '_ns__acme__xd-sites'])(
+    'opens the page and manage action for the exact %s instance in More', (instanceId) => {
+    seedKnownPlugins([instanceId]);
+    const sites = { ...SITES, instanceId };
+    mainViewsMock.routeCapable = [sites];
+    mainViewsMock.sidebarVisible = [sites];
     render(<Harness initialPath="/cc-agent" />);
+    expect(screen.queryByRole('button', { name: '站点' })).toBeNull();
     openMore();
     const item = screen.getByRole('menuitem', { name: /站点/ });
     const manage = within(item).getByRole('button', { name: 'settings.ghosts.page.manageAria: XD Sites' });
     fireEvent.click(manage);
-    expect(screen.getByTestId('location').textContent).toBe('/settings?tab=ghosts&ghost=xd-sites');
+    expect(screen.getByTestId('location').textContent).toBe('/settings?tab=ghosts&ghost=' + instanceId);
     // The flag is one-shot: the next plain selection opens the plugin page again.
     openMore();
     fireEvent.click(screen.getByRole('menuitem', { name: /站点/ }));
-    expect(screen.getByTestId('location').textContent).toBe('/apps/xd-sites');
+    expect(screen.getByTestId('location').textContent).toBe('/apps/' + instanceId);
+  });
+  it('keeps same-name root and enterprise arrivals separate in More', () => {
+    const root = { ...SITES, instanceId: '_root__xd-sites', title: 'Root sites' };
+    const organization = { ...SITES, instanceId: '_ns__acme__xd-sites', title: 'Enterprise sites' };
+    seedKnownPlugins([root.instanceId]);
+    mainViewsMock.routeCapable = [root, organization];
+    mainViewsMock.sidebarVisible = [root, organization];
+    render(<Harness initialPath="/cc-agent" />);
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'sidebar.navigation.more · sidebar.navigation.new' }), {
+      button: 0,
+      ctrlKey: false,
+    });
+    const rootEntry = screen.getByRole('menuitem', { name: /Root sites/ });
+    const orgEntry = screen.getByRole('menuitem', { name: /Enterprise sites/ });
+    expect(rootEntry.textContent).not.toContain('sidebar.navigation.new');
+    expect(orgEntry.textContent).toContain('sidebar.navigation.new');
+    fireEvent.click(orgEntry);
+    expect(screen.getByTestId('location').textContent).toBe('/apps/' + organization.instanceId);
+    expect(JSON.parse(localStorage.getItem('sidebar-navigation:apps:v1')!)[OWNER].known)
+      .toEqual([root.instanceId, organization.instanceId]);
   });
   it('lists only unchecked entries and Customize in More', () => {
     render(<Harness initialPath="/cc-agent" />);
@@ -540,8 +553,8 @@ describe('Narrow rail navigation', () => {
   });
 
   it('lays out plugin main views in the saved order and keeps hidden ones in More', () => {
-    const other: MainViewMock = { ghostId: 'other', title: 'Other', icon: 'globe', manifest: { name: 'Other' } };
-    const off: MainViewMock = { ghostId: 'off', title: 'Off', icon: 'globe', manifest: { name: 'Off' } };
+    const other: MainViewMock = { ghostId: 'other', instanceId: 'other', title: 'Other', icon: 'globe', manifest: { name: 'Other' } };
+    const off: MainViewMock = { ghostId: 'off', instanceId: 'off', title: 'Off', icon: 'globe', manifest: { name: 'Off' } };
     seedKnownPlugins(['xd-sites', 'other']);
     mainViewsMock.routeCapable = [SITES, other, off];
     mainViewsMock.sidebarVisible = [SITES, other];
@@ -615,7 +628,7 @@ describe('Narrow rail navigation', () => {
 });
 
 describe('Plugins joining the sidebar', () => {
-  const NEWCOMER: MainViewMock = { ghostId: 'newcomer', title: 'Newcomer', icon: 'globe', manifest: { name: 'Newcomer' } };
+  const NEWCOMER: MainViewMock = { ghostId: 'newcomer', instanceId: 'newcomer', title: 'Newcomer', icon: 'globe', manifest: { name: 'Newcomer' } };
   const renderNav = () => render(
     <MainViewHistoryProvider>
       <MemoryRouter initialEntries={['/cc-agent']}>

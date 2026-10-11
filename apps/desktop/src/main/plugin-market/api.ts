@@ -1,4 +1,5 @@
 import {
+  assertPluginListOrganizationNamespace,
   CINDY_CLIENT_VERSION_HEADER,
   parseGetPluginResponse,
   parseListPluginsResponse,
@@ -79,6 +80,11 @@ export class PluginMarketApi {
       // `currentOrganization` 并没有写进契约(PLAN §6 没有这一条),若它只在首页带，
       // 逐页覆盖会让第二页的 null 把身份事实抹掉——多页目录的组织就永远缓存不到前缀。
       // 两种服务端行为下这个写法都对，且结果确定。
+      if (currentOrganization && response.currentOrganization &&
+          (currentOrganization.organizationId !== response.currentOrganization.organizationId ||
+            currentOrganization.orgSlug !== response.currentOrganization.orgSlug)) {
+        throw new Error('Plugin 市场分页 currentOrganization 不一致');
+      }
       currentOrganization ??= response.currentOrganization;
       if (!response.nextCursor) {
         // 在架优先(契约:通告与**任一页** plugins 有交集即作废)的作用域是
@@ -91,6 +97,7 @@ export class PluginMarketApi {
           });
           return false;
         });
+        assertPluginListOrganizationNamespace(currentOrganization, plugins, removals);
         return { plugins, removals, currentOrganization };
       }
       if (response.nextCursor === cursor) throw new Error('Plugin 市场分页游标未前进');

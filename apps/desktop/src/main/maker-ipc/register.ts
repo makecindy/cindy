@@ -11,7 +11,7 @@ import { pluginWorkerCompletedAt } from './pluginWorkerCompletion.js';
 import { createPluginTaskStore } from './pluginTaskStore.js';
 import { hasAcceptedUserTaskInput } from './pluginTaskInput.js';
 import { controlOwnedSessionExecution, isSameSessionExecution, withdrawOwnedSessionInputs } from './sessionExecutionOwnership.js';
-import { showMobilePluginTaskPermission, setPluginTaskHandler, getPluginTaskSourceSessionId, setPluginTaskUninstaller, isPluginTaskAuthorized, getPluginTaskInstallRevision, pluginTaskAuthorizationRevision } from '../cindy-brain/index.js';
+import { showMobilePluginTaskPermission, setPluginTaskHandler, getPluginTaskSourceSessionId, setPluginTaskUninstaller, setPluginTaskRelocator, isPluginTaskAuthorized, getPluginTaskInstallRevision, pluginTaskAuthorizationRevision } from '../cindy-brain/index.js';
 import type { PluginTaskRoute, PluginTaskRequest } from '../../shared/pluginTasks.js';
 import { createHash as pluginTaskConfigHash } from 'node:crypto';
 import { finishCompanionEnvironmentRemoval } from '../bot-import/runtime.js';
@@ -236,11 +236,17 @@ import {
   executeGhostSetupAction,
   executeGhostSetupInlineAction,
   bindGhostSetupConnectionAction,
+  findGhostForInstanceId,
+  ghostInstallMutationTargetFor,
   getGhostManager,
   getGhostPipeDispatcher,
   getGhostSetupAssessment,
   isGhostAvailableForActiveSession,
 } from '../cindy-brain/index.js';
+import {
+  hasDeliveryNamespace,
+  installedGhostStoragePart,
+} from '../../shared/pluginIdentity.js';
 import {
   assertTrustedAppRendererEvent,
   isTrustedAppRendererEvent,
@@ -2883,18 +2889,29 @@ const ghostSetupInteractionBridge = initGhostSetupInteractionBridge({
 });
 
 initGhostSetupCoordinator({
+  getTargetToken: ghostInstallMutationTargetFor,
   remoteConnection: true,
   changeBus: getGhostSetupChangeBus(),
   bridge: ghostSetupInteractionBridge,
+  resolveStoreId: (ghostId) => {
+    const ghost = findGhostForInstanceId(ghostId);
+    return ghost ? installedGhostStoragePart(ghost) : ghostId;
+  },
   assess: (ghostId) => getGhostSetupAssessment(ghostId),
   validateTarget: (ghostId, tool, workingDir) => {
     // Coordinator 的 UI 只消费 TARGET_UNAVAILABLE 状态；这里的 message 会随
     // ensureReady 结果回到模型，因此与 ghost_info / ghost_call 共用同一口径。
-    const visibility = classifyGhostVisibility(ghostId, workingDir ?? null, {
-      listGhosts: () => getGhostManager().list(),
-      isAvailableForActiveSession: isGhostAvailableForActiveSession,
-      isDisabledForWorkdir: isGhostDisabledForWorkdir,
-    });
+    const instance = findGhostForInstanceId(ghostId);
+    const visibility = classifyGhostVisibility(
+      instance?.manifest.id ?? ghostId,
+      workingDir ?? null,
+      {
+        listGhosts: () => getGhostManager().list(),
+        isAvailableForActiveSession: isGhostAvailableForActiveSession,
+        isDisabledForWorkdir: isGhostDisabledForWorkdir,
+      },
+      instance && hasDeliveryNamespace(instance) ? instance.namespace : undefined,
+    );
     if (!visibility.ok) return visibility;
     const ghost = visibility.ghost;
     if (tool && !(ghost.manifest.tools ?? []).some((candidate) => candidate.name === tool)) {
@@ -2907,22 +2924,20 @@ initGhostSetupCoordinator({
     return { ok: true };
   },
   getGhostIdentity: (ghostId) => {
-    const ghost = getGhostManager()
-      .list()
-      .find((candidate) => candidate.manifest.id === ghostId);
-    return ghost
-      ? {
-          id: ghostId,
-          name: ghost.manifest.name,
-          ...(ghost.iconDataUrl ? { iconDataUrl: ghost.iconDataUrl } : {}),
-        }
-      : null;
+    const ghost = findGhostForInstanceId(ghostId);
+    if (!ghost) return null;
+    return {
+      id: installedGhostStoragePart(ghost),
+      name: ghost.manifest.name,
+      ...(ghost.iconDataUrl ? { iconDataUrl: ghost.iconDataUrl } : {}),
+    };
   },
-  executeAction: ({ sessionId, ghostId, action, responseTarget }) =>
+  executeAction: ({ sessionId, ghostId, action, responseTarget, assertCurrent }) =>
     executeGhostSetupAction({
       sessionId,
       ghostId,
       action,
+      assertCurrent,
       ...(responseTarget ? { responseTarget } : {}),
     }),
   executeInlineAction: executeGhostSetupInlineAction,
@@ -12274,6 +12289,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   };
   setPluginTaskHandler(handlePluginTask);
   setPluginTaskUninstaller((pluginId, remove) => pluginTaskServiceForCurrentOwner!().withUninstall(pluginId, remove));
+  setPluginTaskRelocator((from, to) => pluginTaskServiceForCurrentOwner!().relocatePlugin(from, to));
 
   // Local task UI only. The plugin and device-link protocols have no recovery operation.
   const pluginWriteAccessFromHost = async (event: Electron.IpcMainInvokeEvent, taskId: unknown, retry: boolean) => {

@@ -122,6 +122,8 @@ export interface CindyGhostSetupPlan {
 /** ghost_info / ghost_list 共用的单段意识条目。 */
 export interface CindyGhostInfo {
   id: string;
+  /** null is root; a string is the organization slug. Omitted only on legacy hosts. */
+  namespace?: string | null;
   name: string;
   /** 显式触发指令(用户敲 /<command> 点名调用);未声明则省略。 */
   command?: string;
@@ -141,6 +143,7 @@ export interface CindyGhostInfo {
 /** ghost_call 的结构化失败分类(host 侧产生,总机原样透传给 agent)。 */
 export type CindyGhostCallErrorCode =
   | 'GHOST_NOT_FOUND' // 未装入或已抽离
+  | 'GHOST_AMBIGUOUS' // 同名多实例，需指定 namespace
   | 'GHOST_ASLEEP' // 沉睡中(用户可在主界面侧边栏「插件」中唤醒)
   | 'GHOST_RETIRED' // 功能已下线，不可唤醒或重试
   | 'GHOST_DISABLED_IN_WORKDIR' // 用户在当前工作目录停用了该意识(不要重试)
@@ -155,13 +158,13 @@ export type CindyGhostCallErrorCode =
 
 export type CindyGhostInfoErrorCode = Extract<
   CindyGhostCallErrorCode,
-  'GHOST_NOT_FOUND' | 'GHOST_ASLEEP' | 'GHOST_DISABLED_IN_WORKDIR' | 'GHOST_RETIRED'
+  'GHOST_NOT_FOUND' | 'GHOST_AMBIGUOUS' | 'GHOST_ASLEEP' | 'GHOST_DISABLED_IN_WORKDIR' | 'GHOST_RETIRED'
 >;
 
 /** host 可见性判序回调(getAwakeGhost)的返回:只产可见性错误,不产 INTERNAL。 */
 export type CindyGhostInfoHostResult =
   | { ok: true; ghost: CindyGhostInfo }
-  | { ok: false; errorCode: CindyGhostInfoErrorCode; message: string };
+  | { ok: false; errorCode: CindyGhostInfoErrorCode; message: string; candidates?: Array<{ ghostId: string; namespace: string | null }> };
 
 /** ghost_info 给模型的 wire 结果:host 结果之上,handler 兜底 catch 可产 INTERNAL。 */
 export type CindyGhostInfoResult =
@@ -355,7 +358,7 @@ export interface CindyGhostsMcpDeps {
   searchMarket?(query: string): Promise<Record<string, unknown>>;
   installMarket?(request: { pluginId: string; releaseId: string }, signal?: AbortSignal): Promise<Record<string, unknown>>;
   /** Host-owned connection card. No URLs or credentials may be supplied by the model. */
-  connectAccount?(target: { kind: 'plugin'; id: string; reauthorize?: boolean } | { kind: 'host'; id: 'grok'; reauthorize?: boolean }, signal?: AbortSignal): Promise<Record<string, unknown>>;
+  connectAccount?(target: { kind: 'plugin'; id: string; namespace?: string | null; reauthorize?: boolean } | { kind: 'host'; id: 'grok'; reauthorize?: boolean }, signal?: AbortSignal): Promise<Record<string, unknown>>;
   /** Cindy Core 原生媒体调用器；能力本身不依赖任何插件。 */
   callMedia?(request: CindyMediaToolRequest): Promise<Record<string, unknown>>;
   /**
@@ -367,12 +370,13 @@ export interface CindyGhostsMcpDeps {
    * 按 id 现查单个当前可用插件；与 ghost_call 共享同一可见性判定。
    * 判序：不存在 → 未登录 → 当前工作目录停用 → 未启用。
    */
-  getAwakeGhost(ghostId: string): Promise<CindyGhostInfoHostResult>;
+  getAwakeGhost(ghostId: string, namespace?: string | null): Promise<CindyGhostInfoHostResult>;
   /**
    * 读取已声明的随包手册；Host 每次调用都重新执行插件可见性判定，且不启动沙箱。
    */
   readGhostManual(request: {
     ghostId: string;
+    namespace?: string | null;
     path?: string;
   }): Promise<CindyGhostManualResult>;
   /**
@@ -381,6 +385,7 @@ export interface CindyGhostsMcpDeps {
    */
   callGhostTool(request: {
     ghostId: string;
+    namespace?: string | null;
     tool: string;
     args: Record<string, unknown>;
     /** Host-only cancellation from the MCP request; never enters plugin args. */
@@ -445,7 +450,7 @@ export interface CindyGhostsMcpDeps {
    * 会话内工具定义恒定(prompt 缓存安全);装/卸/唤醒/沉睡在新会话生效,
    * 实时清单仍以 ghost_list 为准。缺省 = 不注入(描述与今日基线一致)。
    */
-  getRosterItems?(): Array<Pick<CindyGhostInfo, 'id' | 'name' | 'command' | 'recall'>>;
+  getRosterItems?(): Array<Pick<CindyGhostInfo, 'id' | 'name' | 'command' | 'recall' | 'namespace'>>;
   /** 意识编写手册(markdown,随主机版本走;agent 写意识前先读)。 */
   forgeGuide(): Promise<string>;
   /**

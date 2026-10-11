@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import i18n from '../../../../i18n';
-import { GHOST_OFFICIAL_ID_PREFIXES } from '../../../../../shared/ghost';
+import { GHOST_OFFICIAL_ID_PREFIX } from '../../../../../shared/ghost';
 import { pluginMarketErrorKey } from '../pluginMarketErrorKey';
 
 function serializedIpcError(code: string): Error {
@@ -64,7 +64,7 @@ describe('pluginMarketErrorKey', () => {
       // The raw resource check excludes a missing locale being hidden by English fallback.
       expect(rawMessage).toEqual(expect.any(String));
       // These assertions exclude a broken defaultVariables path leaving a literal placeholder.
-      expect(message).toContain(GHOST_OFFICIAL_ID_PREFIXES.join(' / '));
+      expect(message).toContain(GHOST_OFFICIAL_ID_PREFIX);
       expect(message).not.toContain('{{');
       // This excludes the market channel silently falling back to its generic retry toast.
       expect(message).not.toBe(i18n.getFixedT(locale)('settings.ghosts.market.errors.generic'));

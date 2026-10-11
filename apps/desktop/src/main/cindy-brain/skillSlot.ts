@@ -18,10 +18,14 @@ import matter from 'gray-matter';
 
 import {
   GHOST_SKILL_NAME_RE,
-  isValidGhostId,
   type GhostSkillItem,
   type InstalledGhost,
 } from '../../shared/ghost.js';
+import {
+  installedGhostStoragePart,
+  parsePluginInstallRelId,
+  parsePluginStoragePart,
+} from '../../shared/pluginIdentity.js';
 import { parseAndValidateFrontmatter } from '../skillhub/frontmatterValidation.js';
 import { sharedGlobalSkillsPaths } from '../maker-host/shared-global-skills.js';
 
@@ -270,7 +274,8 @@ function targetLooksGhostManaged(
   if (splitAt <= 0) return false;
   const ghostId = linkName.slice(0, splitAt);
   const skillName = linkName.slice(splitAt + 2);
-  if (!isValidGhostId(ghostId) || !GHOST_SKILL_NAME_RE.test(skillName)) return false;
+  const identity = parsePluginStoragePart(ghostId);
+  if (!identity || !GHOST_SKILL_NAME_RE.test(skillName)) return false;
 
   // 目标结构必须命中**我们铺过的两种布局之一**,且布局里的 id 段必须等于链接名里
   // 的 ghostId —— 单看"路径里有个段叫 cindy-brain"会把用户指向自己项目目录
@@ -280,15 +285,20 @@ function targetLooksGhostManaged(
   //   新模型:                       .../<状态根名>/skill-snapshots/<ghostId>/<revision>/...
   const segments = target.split(/[\\/]/).map((segment) => segment.toLowerCase());
   const stateDirName = approvalStateDirName.toLowerCase();
-  const idLower = ghostId.toLowerCase();
+  const idLower = identity.ghostId.toLowerCase();
   const normalizedTarget = normalizeForCompare(target);
   if (!managedRoots.some((root) => isSameOrInside(normalizedTarget, root))) return false;
   return segments.some(
-    (segment, index) =>
-      (segment === 'cindy-brain' && segments[index + 1] === idLower) ||
-      (segment === stateDirName &&
-        segments[index + 1] === 'skill-snapshots' &&
-        segments[index + 2] === idLower),
+    (segment, index) => {
+      if (segment === 'cindy-brain' && segments[index + 1] === idLower) return true;
+      if (segment !== stateDirName || segments[index + 1] !== 'skill-snapshots') return false;
+      if (segments[index + 2] === idLower) return true;
+      const relId = segments.slice(index + 2, index + 5).join('/');
+      const targetIdentity = parsePluginInstallRelId(relId);
+      return targetIdentity !== null && targetIdentity.ghostId === identity.ghostId &&
+        (targetIdentity.namespace === null ? identity.namespace === null
+          : identity.namespace === null || targetIdentity.namespace === identity.namespace);
+    },
   );
 }
 
@@ -362,7 +372,9 @@ export async function reconcileGhostSkillLinks(
       a.name.localeCompare(b.name),
     );
     for (const item of sortedItems) {
-      const linkName = ghostSkillLinkName(ghost.manifest.id, item.name);
+      const linkName = ghostSkillLinkName(
+        installedGhostStoragePart(ghost), item.name,
+      );
       if (desired.has(linkName)) {
         warnings.push(`技能链接名冲突 ${linkName},保留先到者`);
         continue;

@@ -7,6 +7,11 @@ import {
   type GhostManifest,
   type InstalledGhost,
 } from '../../shared/ghost';
+import {
+  findInstalledGhostByInstanceId,
+  findInstalledRootGhostForFileImport,
+  installedGhostStoragePart,
+} from '../../shared/pluginIdentity';
 import { ghostInstallErrorKey } from './installErrorKey';
 
 /**
@@ -32,11 +37,21 @@ async function showInstallError(error: unknown, deps: InstallFlowDeps): Promise<
   toast.error(deps.t(ghostInstallErrorKey(code)));
 }
 
-/** 同 id 已装清单查询(sendSync,极小)。 */
+/** 详情页更新按实例键精确查找。 */
 function findInstalled(id: string): InstalledGhost | null {
   try {
     const { ghosts } = window.electronAPI.ghosts.listSync();
-    return ghosts.find((g) => g.manifest.id === id) ?? null;
+    return findInstalledGhostByInstanceId(ghosts, id) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** 拖入或双击只更新 root，不选中同名企业实例。 */
+function findInstalledRootForFile(ghostId: string): InstalledGhost | null {
+  try {
+    const { ghosts } = window.electronAPI.ghosts.listSync();
+    return findInstalledRootGhostForFileImport(ghosts, ghostId);
   } catch {
     return null;
   }
@@ -54,6 +69,7 @@ async function runUpdate(
     const { ghost } = await window.electronAPI.ghosts.update(lizFilePath, {
       expectedPackageSha256: packageSha256,
       expectedInstalledApproval: ghostInstallApprovalToken(installed.approval),
+      expectedInstalledInstanceId: installedGhostStoragePart(installed),
     });
     toast.success(
       t('settings.ghosts.toast.updated', {
@@ -86,7 +102,7 @@ export async function installGhostFromFile(
 
   // 1.5) 同 id 已装 → 转更新分支(拖入/双击/装入按钮选到新版包时不再报
   // "已经注入",直接原位更新)。
-  const installed = findInstalled(manifest.id);
+  const installed = findInstalledRootForFile(manifest.id);
   if (installed) {
     await runUpdate(lizFilePath, packageSha256, installed, deps);
     return;
@@ -102,7 +118,7 @@ export async function installGhostFromFile(
     });
     toast.success(t('settings.ghosts.toast.installed', { name: ghost.manifest.name }));
     if (willOpenPanel) {
-      deps.openPluginPanel?.(ghost.manifest.id);
+      deps.openPluginPanel?.(installedGhostStoragePart(ghost));
     }
   } catch (err) {
     await showInstallError(err, deps);
@@ -118,23 +134,40 @@ export async function pickAndUpdateGhost(expectedId: string, deps: InstallFlowDe
   const picked = await window.electronAPI.ghosts.pickFile().catch(() => null);
   if (!picked || 'canceled' in picked) return;
 
+  const installed = findInstalled(expectedId);
   let manifest: GhostManifest;
   let packageSha256: string;
   try {
-    const inspected = await window.electronAPI.ghosts.inspect(picked.filePath);
+    const inspected = await window.electronAPI.ghosts.inspect(
+      picked.filePath,
+      installed
+        ? {
+            expectedInstalledInstanceId: installedGhostStoragePart(installed),
+            expectedInstalledApproval: ghostInstallApprovalToken(installed.approval),
+          }
+        : undefined,
+    );
     manifest = inspected.manifest;
     packageSha256 = inspected.packageSha256;
   } catch (err) {
     await showInstallError(err, deps);
     return;
   }
-  if (manifest.id !== expectedId) {
+  if (installed && manifest.id !== installed.manifest.id) {
+    toast.error(
+      t('settings.ghosts.errors.updateIdMismatch', {
+        id: manifest.id,
+        expected: installed.manifest.id,
+      }),
+    );
+    return;
+  }
+  if (!installed && manifest.id !== expectedId) {
     toast.error(
       t('settings.ghosts.errors.updateIdMismatch', { id: manifest.id, expected: expectedId }),
     );
     return;
   }
-  const installed = findInstalled(expectedId);
   if (!installed) {
     // 详情页开着的意识刚被别处抽离——极端竞态,按通用错误提示。
     toast.error(t('settings.ghosts.errors.generic'));

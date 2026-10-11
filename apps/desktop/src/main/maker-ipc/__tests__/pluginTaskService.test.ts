@@ -58,6 +58,13 @@ function fixture() {
   const tasks = new Map<string, PluginTaskView>();
   const copy = <T>(v: T): T => structuredClone(v);
   const store: PluginTaskStore = {
+    relocatePlugin: async (from, to) => {
+      if (from === to) return;
+      for (const row of rows.values()) if (row.pluginId === from) {
+        row.pluginId = to;
+        row.revision++;
+      }
+    },
     revokePlugin: async pluginId => {
       for (const row of rows.values()) if (row.pluginId === pluginId && row.operation === 'create') {
         row.payload = JSON.stringify({...JSON.parse(row.payload),ownershipRevoked:true});
@@ -153,6 +160,29 @@ function fixture() {
     },
   };
 }
+
+it('serializes source archival behind creation and keeps old tasks inaccessible to the replacement', async () => {
+  const fixtureState = fixture();
+  let started!: () => void;
+  const entered = new Promise<void>(resolve => { started = resolve; });
+  let finish!: () => void;
+  const gate = new Promise<void>(resolve => { finish = resolve; });
+  fixtureState.deps.resolveRoute = async () => { started(); await gate; return fixtureState.route; };
+  const move = vi.spyOn(fixtureState.deps.store, 'relocatePlugin');
+  const creating = fixtureState.create();
+  await entered;
+  const archiving = fixtureState.service.relocatePlugin('p', 'archive');
+  expect(move).not.toHaveBeenCalled();
+  finish();
+  const task = await creating;
+  await archiving;
+  expect(move).toHaveBeenCalledWith('p', 'archive');
+  expect((await fixtureState.service.list('p')).items).toEqual([]);
+  await expect(fixtureState.service.get('p', task.taskId)).rejects.toMatchObject({ code: 'TASK_NOT_FOUND' });
+  expect(fixtureState.tasks.has(task.taskId)).toBe(true);
+  const replacement = await fixtureState.create();
+  expect(replacement.taskId).not.toBe(task.taskId);
+});
 
 it.each(['completed','failed','cancelled','interrupted'] as const)('prefers a newly persisted %s terminal over stale inspection for getRun and listRuns', async status => {
   for (const kind of ['getRun','listRuns'] as const) {

@@ -40,7 +40,7 @@ export type SidebarNavigationAppEntryId = `app:${string}`;
 export type SidebarNavigationEntryId = SidebarNavigationItemId | SidebarNavigationAppEntryId;
 
 const APP_ENTRY_PREFIX = 'app:';
-const MAX_APP_ENTRY_LENGTH = APP_ENTRY_PREFIX.length + 128;
+const MAX_APP_ENTRY_LENGTH = APP_ENTRY_PREFIX.length + 256;
 
 export function appEntryId(ghostId: string): SidebarNavigationAppEntryId {
   return `${APP_ENTRY_PREFIX}${ghostId}`;

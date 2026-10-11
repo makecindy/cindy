@@ -39,6 +39,14 @@ function harness(ghostId = 'mail-suite', name = 'Google Gmail') {
 }
 
 describe('Agent plugin discovery and installation', () => {
+  it.each([undefined, null, 'acme'])('preserves delivery namespace %s', async (namespace) => {
+    const h = harness();
+    if (namespace !== undefined) h.detail.namespace = namespace;
+    const result = await h.tools.search('gmail');
+    const item = (result.items as Array<Record<string, unknown>>)[0];
+    expect('namespace' in item).toBe(namespace !== undefined);
+    expect(item.namespace).toBe(namespace);
+  });
   it.each([['mail-suite', 'Google Gmail', 'gmail'], ['image-studio', 'Image creation', 'image']])(
     'discovers and installs %s through the same catalog contract', async (id, name, query) => {
       const h = harness(id, name);
@@ -53,6 +61,15 @@ describe('Agent plugin discovery and installation', () => {
       expect(h.release).toHaveBeenCalledOnce();
     },
   );
+
+  it('returns the committed namespace for a namespaced install', async () => {
+    const h = harness();
+    h.market.install.mockResolvedValue({
+      ghost: { manifest: h.detail.manifest, enabled: true, namespace: 'acme' } as InstalledGhost,
+    });
+    expect(await h.tools.install({ pluginId: 'catalog-id', releaseId: 'release-1' }))
+      .toMatchObject({ ok: true, status: 'installed', ghost_id: 'mail-suite', namespace: 'acme' });
+  });
 
   it.each([null, 'GHOST_ASLEEP', 'GHOST_DISABLED_IN_WORKDIR', 'GHOST_NOT_FOUND'])('preserves an existing installation and reports %s', async (errorCode) => {
     const h = harness(); h.state.installed = true; h.state.errorCode = errorCode;

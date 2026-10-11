@@ -48,6 +48,13 @@ const push = (callId: string, over: Partial<Parameters<typeof ingestCardPush>[0]
 });
 
 describe('ghostCardStore', () => {
+  it('preserves the logical identity of an in-place plugin on its live card', () => {
+    ingestCardPush(push('org', { ghostId: 'helper', logicalGhostId: '_ns__acme__helper' }));
+    expect(getGhostCardSnapshot().liveCards[0]).toMatchObject({
+      ghostId: 'helper', logicalGhostId: '_ns__acme__helper',
+    });
+  });
+
   it('推送入库:ready 条目 + 活卡登记;换海报只刷内容不重复登记', () => {
     ingestCardPush(push('c1', { toolUseId: 'tu1' }));
     let snap = getGhostCardSnapshot();

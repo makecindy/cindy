@@ -148,10 +148,49 @@ describe('market Ghost session boundary', () => {
     const body = source.slice(start, end);
     expect(body).toContain('if (isAppSessionBoundaryPending()) return [];');
     expect(source).toContain(
-      'return availableGhosts().find((ghost) => ghost.manifest.id === id) ?? null;',
+      'const resolved = resolveInstalledGhost(availableGhosts(), id, namespace);',
     );
-    expect(source.match(/getGhost: findAvailableGhost/g)?.length ?? 0).toBeGreaterThanOrEqual(3);
-    expect(source).toContain('return findAvailableGhost(id)?.manifest.name ?? null;');
+    const resolverStart = source.indexOf('export function findGhostForInstanceId(');
+    const resolverBody = source.slice(resolverStart, source.indexOf('\n}', resolverStart));
+    expect(resolverBody.match(/availableGhosts\(\)/g)).toHaveLength(1);
+    expect(resolverBody).toContain('resolvePluginInstanceQuery(availableGhosts(), id, namespace)');
+    expect(resolverBody).not.toContain('findInstalledGhostByInstanceId');
+    expect(resolverBody).not.toContain('if (namespace === undefined)');
+    expect(source.match(/getGhost: findAvailableGhost/g)?.length ?? 0).toBe(0);
+    expect(source.match(/getGhost: findGhostForInstanceId/g)?.length ?? 0).toBeGreaterThanOrEqual(12);
+    expect(resolverBody).toContain(
+      "return resolved.status === 'unique' ? resolved.ghost : null;",
+    );
+    expect(source).toContain('availableByInstanceId.get(entry.ghostId)');
+    expect(source).toContain('hasCardSlot: (ghostId) => {');
+    expect(source).toContain('const g = findGhostForPhysicalStoragePart(ghostId);');
+    expect(source).toContain(
+      'export async function getGhostLibraryOverview(ghostId: string): Promise<GhostLibraryOverview> {',
+    );
+    const overviewStart = source.indexOf(
+      'export async function getGhostLibraryOverview(ghostId: string)',
+    );
+    expect(source.slice(overviewStart, overviewStart + 280)).toContain(
+      'const ghost = findGhostForInstanceId(ghostId);',
+    );
+    const assessStart = source.indexOf(
+      'export function getGhostSetupAssessment(ghostId: string)',
+    );
+    const assessBody = source.slice(assessStart, assessStart + 1600);
+    expect(assessBody).toContain('const ghost = findGhostForInstanceId(ghostId);');
+    expect(assessBody).toContain('const storeId = installedGhostStoragePart(ghost);');
+    expect(assessBody).toContain('oauthManager.listAccounts(storeId, key)');
+    expect(assessBody).not.toContain('oauthManager.listAccounts(ghostId, key)');
+    expect(source).toContain('return findGhostForInstanceId(id)?.manifest.name ?? null;');
+  });
+
+  it('blocks relocation and source archival while a private filesystem request is in flight', () => {
+    const start = source.indexOf('function assertGhostRelocationIdle(part: string): void {');
+    const guard = source.slice(start, source.indexOf('\n}', start));
+    expect(guard).toContain('fsSlotSingleton?.hasInFlightRequests(part)');
+    expect(source).toContain('assertGhostRelocationIdle(fromPart);');
+    expect(source).toContain('if (sourceChanged) assertGhostRelocationIdle(instanceId);');
+    expect(source).toContain('if (expected.sourceChanged) assertGhostRelocationIdle(installedGhostStoragePart(installed));');
   });
 
   it('allows explicit local replacement and detaches market routing before landing', () => {
@@ -171,7 +210,7 @@ describe('market Ghost session boundary', () => {
     const helperBody = source.slice(helperStart, helperEnd);
 
     const ledgerReadIndex = helperBody.indexOf(
-      'marketLedger.installationForGhost(inspected.manifest.id)',
+      '= readLocalGhostUpdateSource(',
     );
     const captureIndex = updateBody.indexOf('const mutationOwner = captureGhostMutationOwner();');
     const inspectIndex = updateBody.indexOf('await manager.inspect(lizFilePath)');
@@ -181,16 +220,18 @@ describe('market Ghost session boundary', () => {
     const detachDecisionIndex = helperBody.indexOf(
       'const detachMarketRecord = Boolean(marketRecord?.installed)',
     );
-    const runtimeStopIndex = helperBody.indexOf('runtime.stop(inspected.manifest.id)');
+    const runtimeStopIndex = helperBody.indexOf(
+      'runtime.stop(instanceId)',
+    );
     const stopAndWaitIndex = helperBody.indexOf(
-      'await getGhostNodeRuntimeBroker().stopAndWait(inspected.manifest.id);',
+      'await getGhostNodeRuntimeBroker().stopAndWait(instanceId);',
     );
     const oauthLockIndex = helperBody.indexOf(
-      'result = await withActiveOwnerGhostOauthMutationLock(inspected.manifest.id',
+      'result = await withActiveOwnerGhostOauthMutationLock(',
     );
     const managerUpdateIndex = helperBody.indexOf('manager.update(cindyFilePath,');
     const detachIndex = helperBody.indexOf(
-      'marketLedger.markRemoved(inspected.manifest.id, null)',
+      'marketLedger.markRemovedRecord(marketRecord, null)',
     );
 
     expect(captureIndex).toBeGreaterThan(-1);
@@ -199,7 +240,8 @@ describe('market Ghost session boundary', () => {
     expect(helperCallIndex).toBeGreaterThan(leaseIndex);
     expect(ledgerBindIndex).toBeGreaterThan(-1);
     expect(runtimeStopIndex).toBeGreaterThan(ledgerBindIndex);
-    expect(ledgerReadIndex).toBeGreaterThan(stopAndWaitIndex);
+    expect(ledgerReadIndex).toBeGreaterThan(ledgerBindIndex);
+    expect(ledgerReadIndex).toBeLessThan(runtimeStopIndex);
     expect(detachDecisionIndex).toBeGreaterThan(ledgerReadIndex);
     expect(stopAndWaitIndex).toBeGreaterThan(runtimeStopIndex);
     // 只有确认旧进程退出，才切断旧市场的自动更新路由；等待失败时保留原路由，
@@ -210,6 +252,7 @@ describe('market Ghost session boundary', () => {
     expect(oauthLockIndex).toBeGreaterThan(detachIndex);
     expect(managerUpdateIndex).toBeGreaterThan(oauthLockIndex);
     expect(helperBody).toContain('marketLedger.restoreInstallation(');
+    expect(helperBody).toContain('...deliveryNamespaceFields(previousGhost)');
     expect(helperBody).not.toContain('marketLedger.isDefaultInstallSuppressed(');
     expect(helperBody).not.toContain('marketInstallSubject');
     expect(helperBody).toContain('用户显式卸载，不得产生 default-install opt-out');
@@ -238,16 +281,24 @@ describe('market Ghost session boundary', () => {
     expect(body.match(/expected\.beforeCommitInLock\?\.\(\);/g)).toHaveLength(1);
 
     const waitIndex = body.indexOf(
-      'await getGhostNodeRuntimeBroker().stopAndWait(expected.ghostId);',
+      'await getGhostNodeRuntimeBroker().stopAndWait(',
     );
     const oauthLockIndex = body.indexOf(
-      'await withActiveOwnerGhostOauthMutationLock(expected.ghostId',
+      'await withActiveOwnerGhostOauthMutationLock(installedGhostStoragePart(installed)',
     );
     const updateIndex = body.indexOf('manager.update(cindyFilePath,');
 
     expect(waitIndex).toBeGreaterThan(-1);
     expect(waitIndex).toBeLessThan(oauthLockIndex);
     expect(oauthLockIndex).toBeLessThan(updateIndex);
+    expect(body).toContain('runtime.stop(installedGhostStoragePart(installed));');
+    expect(body).toContain(
+      'await getGhostNodeRuntimeBroker().stopAndWait(installedGhostStoragePart(installed));',
+    );
+    expect(body).toContain('runtime.resetFuse(installedGhostStoragePart(result.ghost));');
+    expect(body).not.toContain(
+      'pluginStoragePart(createPluginLogicalIdentity(expected.namespace ?? null, expected.ghostId))',
+    );
     const restoreIndex = body.indexOf('spawnIfResident(installed);');
     expect(restoreIndex).toBeGreaterThan(updateIndex);
   });
@@ -264,14 +315,14 @@ describe('market Ghost session boundary', () => {
     const helperBody = source.slice(helperStart, helperEnd);
 
     const waitIndex = helperBody.indexOf(
-      'await getGhostNodeRuntimeBroker().stopAndWait(inspected.manifest.id);',
+      'await getGhostNodeRuntimeBroker().stopAndWait(instanceId);',
     );
     const oauthLockIndex = helperBody.indexOf(
-      'result = await withActiveOwnerGhostOauthMutationLock(inspected.manifest.id',
+      'result = await withActiveOwnerGhostOauthMutationLock(',
     );
     const updateIndex = helperBody.indexOf('manager.update(cindyFilePath');
     const restoreIndex = helperBody.indexOf(
-      'if (previousGhost) spawnIfResident(previousGhost);',
+      'spawnIfResident(previousGhost);',
     );
 
     // stopAndWait must be called before manager.update (safe directory
@@ -284,7 +335,12 @@ describe('market Ghost session boundary', () => {
     // stopAndWait (rollback if provenance check fails).
     expect(restoreIndex).toBeGreaterThan(waitIndex);
     expect(updateBody).toContain('finally {\n      releaseMutation();');
-    expect(helperBody).toContain("throwIpcError('INTERNAL', 'Unable to verify the installed Plugin source');");
+    const provenanceStart = source.indexOf('function readLocalGhostUpdateSource(');
+    const provenanceBody = source.slice(provenanceStart, helperStart);
+    expect(provenanceBody).toContain("throwIpcError('INTERNAL', 'Unable to verify the installed Plugin source');");
+    expect(provenanceBody).toContain('installationForPlugin({');
+    expect(provenanceBody).toContain('...deliveryNamespaceFields(previousGhost)');
+    expect(helperBody.indexOf('= readLocalGhostUpdateSource(')).toBeLessThan(waitIndex);
     expect(helperBody).toContain("throwIpcError('INTERNAL', 'Unable to detach the installed Plugin source');");
   });
 
@@ -322,10 +378,13 @@ describe('market Ghost session boundary', () => {
     // 捕获)。它的落仓路径(ghost-gallery 作品归属 + recordGhostCallMedia)必须同样
     // 有本地 owner 守卫 + assertStillValid + 补偿 journal,否则账号切换期间的
     // as:'media' fetch 仍可能落仓到错误 owner 的画廊。
-    const networkStart = source.indexOf('saveGhostMedia: async ({ ghostId, buffer, mimeType, label, callId }) =>');
+    const networkStart = source.indexOf('saveGhostMedia: async ({ ghostId, buffer, mimeType, label, callId, assertStillValid }) =>');
     expect(networkStart).toBeGreaterThan(-1);
     const networkBody = source.slice(networkStart, networkStart + 1800);
     expect(networkBody).toContain('const ownerScopeKey = activeOwnerScopeKey();');
+    expect(networkBody).toContain('assertStillValid?.();');
+    expect(source).toContain('captureRequestGuard: captureGhostNetworkRequestGuard');
+    expect(source).toContain('networkSlotSingleton?.hasInFlightRequests(part)');
     expect(networkBody).toContain('isGhostBoundaryPending() || activeOwnerScopeKey() !== ownerScopeKey');
     expect(networkBody).toContain('assertStillValid: assertOwnerScopeCurrent');
     expect(networkBody).toContain('refCompensationScope: captureMediaRefCompensationScope(ownerScopeKey)');

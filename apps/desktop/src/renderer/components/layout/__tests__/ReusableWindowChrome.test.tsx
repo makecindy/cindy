@@ -13,6 +13,9 @@ const mocks = vi.hoisted(() => ({
   ghostVisibilityListener: null as ((payload: { visible: boolean }) => void) | null,
   ghostMinimizeListener: null as (() => void) | null,
   ghostMinimizeEnabled: true,
+  confirm: vi.fn(() => Promise.resolve(false)),
+  ghostCloseListener: null as (() => void) | null,
+  ghostApprovalRevision: '00000000-0000-4000-8000-000000000001',
   sidebarShellVisible: undefined as boolean | undefined,
   sidebarShellSessionId: undefined as string | null | undefined,
   sidebarLightboxSessionId: undefined as string | undefined,
@@ -96,6 +99,7 @@ vi.mock('@/cindy-brain/useInstalledGhosts', () => ({
   useInstalledGhosts: () => [
     {
       enabled: true,
+      approval: { state: 'approved', revision: mocks.ghostApprovalRevision },
       manifest: {
         id: 'test-ghost',
         name: 'Test Ghost',
@@ -110,7 +114,7 @@ vi.mock('@/cindy-brain/useInstalledGhosts', () => ({
   ],
 }));
 vi.mock('@/components/ui/confirm-dialog-provider', () => ({
-  useConfirmDialog: () => ({ confirm: vi.fn(() => Promise.resolve(false)) }),
+  useConfirmDialog: () => ({ confirm: mocks.confirm }),
 }));
 vi.mock('@/hooks/useAppShortcut', () => ({ useAppShortcut: vi.fn() }));
 vi.mock('@/hooks/useCloseWindowShortcut', () => ({ useCloseShortcutShellOwner: vi.fn() }));
@@ -154,6 +158,9 @@ describe('reusable auxiliary window chrome', () => {
     mocks.ghostVisibilityListener = null;
     mocks.ghostMinimizeListener = null;
     mocks.ghostMinimizeEnabled = true;
+    mocks.confirm.mockReset().mockResolvedValue(false);
+    mocks.ghostCloseListener = null;
+    mocks.ghostApprovalRevision = '00000000-0000-4000-8000-000000000001';
     mocks.sidebarShellVisible = undefined;
     mocks.sidebarShellSessionId = undefined;
     mocks.sidebarLightboxSessionId = undefined;
@@ -195,7 +202,10 @@ describe('reusable auxiliary window chrome', () => {
             mocks.ghostVisibilityListener = listener;
             return vi.fn();
           }),
-          onCloseRequested: vi.fn(() => vi.fn()),
+          onCloseRequested: vi.fn((listener) => {
+            mocks.ghostCloseListener = listener;
+            return vi.fn();
+          }),
           onMinimizeRequested: vi.fn((listener) => {
             mocks.ghostMinimizeListener = listener;
             return vi.fn();
@@ -209,6 +219,19 @@ describe('reusable auxiliary window chrome', () => {
   });
 
   afterEach(() => cleanup());
+
+  it('keeps the detached close bound to the approval shown before confirmation', async () => {
+    let confirmClose!: (confirmed: boolean) => void;
+    mocks.confirm.mockReturnValue(new Promise<boolean>((resolve) => { confirmClose = resolve; }));
+    const view = render(<GhostPanelWindowLayout />);
+    act(() => mocks.ghostCloseListener?.());
+    mocks.ghostApprovalRevision = '00000000-0000-4000-8000-000000000002';
+    view.rerender(<GhostPanelWindowLayout />);
+    await act(async () => confirmClose(true));
+    expect(window.electronAPI.ghosts.setEnabled).toHaveBeenCalledExactlyOnceWith(
+      'test-ghost', false, 'approved:00000000-0000-4000-8000-000000000001',
+    );
+  });
 
   it('remounts right-sidebar controls when the cached window is hidden', async () => {
     render(<SidebarWindowLayout />);

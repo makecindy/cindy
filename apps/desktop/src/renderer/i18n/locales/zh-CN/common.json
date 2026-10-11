@@ -5714,7 +5714,7 @@
         "installed": "已安装",
         "replace": "替换",
         "replaceAria": "使用此市场版本替换 {{name}}",
-        "replaceDescription": "已安装相同标识的插件；继续安装会用此市场版本替换，并保留插件数据。",
+        "replaceDescription": "已安装相同标识的插件；继续安装会切换来源。原来源的数据将隔离保留，新来源不会继承原账号和密钥，需要重新连接。",
         "unavailable": "插件市场暂时不可用；已安装插件仍可正常管理和使用。",
         "customSourcesUnavailable": "以下自定义市场暂时不可用：{{names}}。其他市场不受影响。",
         "authenticationRequired": "登录 Cindy 后才能查看插件市场。",

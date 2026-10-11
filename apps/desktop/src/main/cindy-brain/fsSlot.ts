@@ -67,6 +67,7 @@ import {
   type InstalledGhost,
 } from '../../shared/ghost.js';
 import type { GhostGrantConfirmDecision, GhostGrantConfirmPayload } from './ghostGrantConfirmBridge.js';
+import { installedGhostMutationTargetToken } from '../../shared/pluginIdentity.js';
 
 /** 会话快照:fs 槽 workdir 档守门要看的全部字段。 */
 export interface FsSessionSnapshot {
@@ -286,6 +287,7 @@ export class GhostFsSlot {
    * 纯内存、进程生命周期内,不落盘)。
    */
   private readonly workdirGrants = new Set<string>();
+  private readonly inFlightRequests = new Map<string, number>();
 
   private sessionSnapshotResolver: FsSlotDeps['getSessionSnapshot'];
 
@@ -298,8 +300,13 @@ export class GhostFsSlot {
     this.sessionSnapshotResolver = resolve;
   }
 
+  hasInFlightRequests(ghostId: string): boolean {
+    return this.inFlightRequests.has(ghostId);
+  }
+
   /** 处理一条 fs-request(ghost-pipe:send 的 invoke 返回值即本结果)。 */
   async handleFsRequest(ghostId: string, payload: unknown): Promise<GhostPipeFsResult> {
+    this.inFlightRequests.set(ghostId, (this.inFlightRequests.get(ghostId) ?? 0) + 1);
     try {
       return await this.dispatch(ghostId, payload);
     } catch (err) {
@@ -309,6 +316,10 @@ export class GhostFsSlot {
         error: err instanceof Error ? err.message : String(err),
       });
       return fail('写文件失败(主机内部错误)');
+    } finally {
+      const remaining = this.inFlightRequests.get(ghostId)! - 1;
+      if (remaining > 0) this.inFlightRequests.set(ghostId, remaining);
+      else this.inFlightRequests.delete(ghostId);
     }
   }
 
@@ -641,7 +652,9 @@ export class GhostFsSlot {
     if (verdict === 'confirm') {
       const parentDir = path.dirname(target);
       const memoryKey = `${info.sessionId} ${ghostId} ${foldCase(parentDir)}`;
-      if (automaticReview || !this.workdirGrants.has(memoryKey)) {
+      const targetToken = installedGhostMutationTargetToken(ghost, '');
+      const bindingKey = memoryKey + '\u0000' + targetToken;
+      if (automaticReview || targetToken === null || !this.workdirGrants.has(bindingKey)) {
         const decision = await this.deps.requestWriteConfirm(info.sessionId, {
           ghostId,
           ghostName: ghost.manifest.name || ghostId,
@@ -655,7 +668,7 @@ export class GhostFsSlot {
           if (decision.reason === 'cancelled') return fail('用户拒绝了本次工作目录写入');
           return fail('确认通道未就绪或会话已关闭,本次工作目录写入未执行');
         }
-        if (!automaticReview) confirmedMemoryKey = memoryKey;
+        if (!automaticReview && targetToken !== null) confirmedMemoryKey = bindingKey;
       }
     }
 

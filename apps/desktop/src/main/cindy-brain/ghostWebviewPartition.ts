@@ -1,4 +1,6 @@
-import { GHOST_PARTITION_PREFIX, isValidGhostId, parseGhostPartition } from '../../shared/ghost.js';
+import { createHash } from 'node:crypto';
+import { GHOST_PARTITION_PREFIX, ghostInstallApprovalToken, parseGhostPartition, type GhostInstallApproval } from '../../shared/ghost.js';
+import { installedGhostStoragePart, isPluginInstanceKey } from '../../shared/pluginIdentity.js';
 import { dataOwnerStorageKey, type ActiveAppSession } from '../appSessionState.js';
 
 const GHOST_OWNER_PARTITION_PREFIX = `${GHOST_PARTITION_PREFIX}owner:`;
@@ -12,9 +14,26 @@ export interface ResolvedGhostWebviewPartition {
 export function ownerScopedGhostPartition(
   ghostId: string,
   owner: Pick<ActiveAppSession, 'mode' | 'dataOwnerId'>,
+  knownRoot = false,
 ): string | null {
-  if (!isValidGhostId(ghostId) || owner.mode === 'signed-out' || !owner.dataOwnerId) return null;
-  return `${GHOST_OWNER_PARTITION_PREFIX}${owner.mode}:${dataOwnerStorageKey(owner.dataOwnerId)}:${ghostId}`;
+  if (!isPluginInstanceKey(ghostId) || owner.mode === 'signed-out' || !owner.dataOwnerId) return null;
+  return `${GHOST_OWNER_PARTITION_PREFIX}${owner.mode}:${dataOwnerStorageKey(owner.dataOwnerId)}:${ghostId}${knownRoot ? ':root' : ''}`;
+}
+
+export function ownerScopedGhostPartitionForInstalledGhost(
+  ghost: { manifest: { id: string }; namespace?: string | null; approval?: GhostInstallApproval; dir?: string },
+  owner: Pick<ActiveAppSession, 'mode' | 'dataOwnerId'> & Partial<Pick<ActiveAppSession, 'generation'>>,
+): string | null {
+  const partition = ownerScopedGhostPartition(
+    installedGhostStoragePart(ghost),
+    owner,
+    ghost.namespace === null,
+  );
+  if (!partition || ghost.approval?.state !== 'approved') return partition;
+  const receipt = createHash('sha256')
+    .update(JSON.stringify([ghostInstallApprovalToken(ghost.approval), ghost.dir ?? null, owner.generation ?? null]))
+    .digest('hex');
+  return partition + ':receipt:' + receipt;
 }
 
 /**

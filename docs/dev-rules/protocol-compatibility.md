@@ -75,8 +75,9 @@ Chat Server 新增只读 `/conversations/:roomId/execution-failures`：按成员
 ## Desktop 远程新建菜单
 
 同账号控制端通过新增只读 `ghosts:composer-list(workingDir?)` 异步取得执行主机的插件菜单。
-响应仅含名称、ID、指令、工具声明、图标、Skill 存在标记与目录过滤后的启用状态，不传安装路径、
-批准记录、配置或凭证。无项目时不传参数；共享任务访客不开放此通道。
+响应仅含名称、ID、实例键、namespace、指令、工具声明、图标、Skill 存在标记与目录过滤后的启用状态，
+不传安装路径、批准记录、配置或凭证。目录禁用按实例键匹配，不用裸 ID；旧主机可以不带实例键和 namespace。
+无项目时不传参数；共享任务访客不开放此通道。
 远程清单按序列化后的 UTF-8 字节限制为 1 MiB，为传输封装预留空间；保留所有插件的基础信息，
 先容纳工具声明、再容纳图标。超出剩余预算的可选字段整项省略，工具声明缺失时复用现有
 `ghost_list` 按需查询，图标缺失时显示通用图标。基础信息本身超限则明确失败，不截断插件列表；
@@ -119,6 +120,14 @@ Claude Code 终态 error 事件可带 `usageResetAt`（unix ms）。服务端无
 `autoResumeInfo` 新增可选字段 `agentReconnect: { computer }`(读不到名称时为空串)，新 Desktop 与 Mobile 显示
 「已重新连上 {电脑}，继续运行」；旧客户端忽略该字段，显示「用量已恢复，已自动继续」(与 `agentSwitch` 相同)。
 同样只改投影与记录内容，服务端无需改动。
+
+## 插件远程授权的实例身份
+
+远程授权中的 `ghostId` 绑定实际安装的物理 storage part，不使用裸逻辑 ID 替代企业实例。
+企业键 `_ns__<namespace>__<id>` 最长 167 字符；只对该合法键扩展校验，其他 OAuth
+事务、设备与启动 ID 仍限 128 字符。签名 transcript、v3 字段及频道不变，不能截断或
+增加 alias fallback。Desktop 与 Mobile 复用同一握手 parser；长企业键要求控制端也具备
+该校验能力，旧端的短键行为保持不变。
 
 ## Agent 跨设备历史发现与搜索
 

@@ -16,6 +16,7 @@ import {
 import { desktopMakerLogger } from '../maker-host/logger-adapter.js';
 import { createOverrideSettingsFile } from '../maker-host/override-settings-file.js';
 import { ownerScopedUserDataPath } from '../appSessionState.js';
+import { assertGhostPrefsWritable, relocateGhostPreferenceMaps } from './ghostPreferenceRelocation.js';
 
 /** User-owned plugin task permission policy. A model source never grants authority. */
 export function clampPluginTaskPermissionMode(value: unknown, fallback: GhostErrandPermissionMode = 'ask'): GhostErrandPermissionMode {
@@ -24,6 +25,12 @@ export function clampPluginTaskPermissionMode(value: unknown, fallback: GhostErr
 }
 
 const log = desktopMakerLogger.child('errand-prefs-store');
+
+export async function relocateGhostErrandPrefs(from: string, to: string): Promise<void> {
+  await relocateGhostPreferenceMaps('ghost-errand-prefs.json', ['errand', 'sessions'], from, to, () => {
+    store = createStore();
+  });
+}
 
 /** 插件任务可选的 agent 种类(与 sessions.agent_kind 同词汇表)。 */
 export const PLUGIN_TASK_AGENT_KINDS = ['cc', 'codex', 'pi'] as const;
@@ -120,13 +127,18 @@ function normalize(raw: unknown): PluginTaskPrefs {
   return { errand, sessions };
 }
 
-const store = createOverrideSettingsFile<PluginTaskPrefs>({
-  filePath: () => ownerScopedUserDataPath('ghost-errand-prefs.json'),
-  defaults: DEFAULTS,
-  normalize,
-  log,
-  label: 'ghost-errand-prefs',
-});
+function createStore() {
+  return createOverrideSettingsFile<PluginTaskPrefs>({
+    filePath: () => ownerScopedUserDataPath('ghost-errand-prefs.json'),
+    defaults: DEFAULTS,
+    normalize,
+    log,
+    label: 'ghost-errand-prefs',
+    preserveUnreadableFile: true,
+  });
+}
+
+let store = createStore();
 
 // Register owns the runtime catalog; configuration persistence never builds another picker.
 let validateSelection: ((config: PluginTaskConfig) => Promise<void>) | null = null;
@@ -160,6 +172,7 @@ export function readPluginTaskConfig(ghostId: string): PluginTaskConfig {
  * 形状粗筛,逐字段值域清洗统一在这里(单一执法点)。返回清洗后的落盘值。
  */
 export function writePluginTaskConfig(ghostId: string, config: unknown): PluginTaskConfig {
+  assertGhostPrefsWritable('ghost-errand-prefs.json');
   store.invalidateIfChanged();
   const errand = { ...store.read().errand };
   const cfg = config === null ? {} : normalizeConfig(config);
@@ -182,6 +195,7 @@ export function writeGhostErrandSessionId(
   sessionId: string | null,
   sessionKey?: string,
 ): void {
+  assertGhostPrefsWritable('ghost-errand-prefs.json');
   store.invalidateIfChanged();
   const key = sessionMapKey(ghostId, sessionKey);
   const sessions = { ...store.read().sessions };

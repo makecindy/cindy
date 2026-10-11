@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import path from 'node:path';
 import type { InstalledGhost } from '../../../shared/ghost';
 import { validateGhostManifest } from '../../../shared/ghost';
 import { buildGhostRecommendationSnapshot } from '../ghostRecommendationSnapshot';
@@ -6,18 +7,22 @@ import { buildGhostRecommendationSnapshot } from '../ghostRecommendationSnapshot
 const state = vi.hoisted(() => ({
   owner: 'owner-a',
   buckets: new Map<string, Record<string, unknown>>(),
+  failRecentWrite: false,
+  failRecommendationRead: false,
 }));
-vi.mock('../../appSessionState.js', () => ({ ownerScopedUserDataPath: () => state.owner }));
+vi.mock('../../appSessionState.js', () => ({ ownerScopedUserDataPath: (...parts: string[]) => path.join(state.owner, ...parts) }));
 vi.mock('electron-store', () => ({
   default: class {
-    constructor(private options: { cwd: string; defaults: Record<string, unknown> }) {
+    constructor(private options: { cwd: string; name: string; defaults: Record<string, unknown> }) {
       if (!state.buckets.has(options.cwd))
         state.buckets.set(options.cwd, structuredClone(options.defaults));
     }
     get(key: string) {
+      if (state.failRecommendationRead && this.options.name === 'ghost-recommendations') throw new Error('read unavailable');
       return state.buckets.get(this.options.cwd)?.[key];
     }
     set(key: string, value: unknown) {
+      if (state.failRecentWrite && this.options.name === 'ghost-recent-usage') throw new Error('disk unavailable');
       state.buckets.get(this.options.cwd)![key] = structuredClone(value);
     }
   },
@@ -36,8 +41,10 @@ const ghost = {
 } as unknown as InstalledGhost;
 beforeEach(() => {
   state.owner = 'owner-a';
-  state.buckets.set('owner-a', { entries: [] });
-  state.buckets.set('owner-b', { entries: [] });
+  state.failRecentWrite = false;
+  state.failRecommendationRead = false;
+  state.buckets.set('owner-a', { entries: [], ids: [] });
+  state.buckets.set('owner-b', { entries: [], ids: [] });
 });
 describe('plugin recommendation state', () => {
   it('replaces, withdraws, preserves install priority and isolates owners', () => {
@@ -61,6 +68,23 @@ describe('plugin recommendation state', () => {
     ).toBeNull();
     forgetGhostRecommendations('example');
     expect(readGhostRecommendationEntries()).toEqual([]);
+  });
+  it('accepts namespaced instance ids used by the pipe binding', () => {
+    expect(replaceGhostRecommendations('_ns__xd__helper', [item])).toEqual({ ok: true });
+    expect(readGhostRecommendationEntries()[0].id).toBe('_ns__xd__helper');
+  });
+  it('keeps same-name root and organization recommendations and history separate', () => {
+    const root = { ...ghost, manifest: { ...ghost.manifest, id: 'helper', name: 'Root' }, dir: '/ghosts/helper', namespace: null };
+    const org = { ...ghost, manifest: { ...ghost.manifest, id: 'helper', name: 'Org' }, dir: '/ghosts/_ns/acme/helper', namespace: 'acme' };
+    replaceGhostRecommendations('helper', [{ ...item, id: 'root' }]);
+    replaceGhostRecommendations('_ns__acme__helper', [{ ...item, id: 'org' }]);
+    markGhostRecommendationInstalled('_ns__acme__helper');
+    const snapshot = buildGhostRecommendationSnapshot('owner-a', [root, org], readGhostRecommendationEntries(), ['_ns__acme__helper']);
+    expect(snapshot.sources.map((source) => [source.ghostId, source.items?.[0]?.id])).toEqual([
+      ['helper', 'root'], ['_ns__acme__helper', 'org'],
+    ]);
+    expect(snapshot.recentIds).toEqual(['_ns__acme__helper']);
+    expect(snapshot.newlyInstalledId).toBe('_ns__acme__helper');
   });
   it('rejects invalid replacement without losing previous tasks', () => {
     replaceGhostRecommendations('example', [item]);

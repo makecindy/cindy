@@ -5721,7 +5721,7 @@
         "installed": "Installed",
         "replace": "Replace",
         "replaceAria": "Replace {{name}} with this marketplace version",
-        "replaceDescription": "A plugin with the same ID is already installed. Continuing will replace it with this marketplace version and keep its data.",
+        "replaceDescription": "A plugin with the same ID is already installed. Continuing switches its source. Existing data is kept separately; the new source does not inherit accounts or secrets and must be connected again.",
         "unavailable": "The plugin market is temporarily unavailable. Installed plugins remain available.",
         "customSourcesUnavailable": "These custom marketplaces are temporarily unavailable: {{names}}. Other marketplaces are unaffected.",
         "authenticationRequired": "Sign in to Cindy to view the plugin market.",

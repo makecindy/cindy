@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('../secrets/providerSecretStore', () => ({ readGhostSecret: vi.fn() }));
 vi.mock('../maker-host/outbound-fetch', () => ({ outboundFetch: vi.fn() }));
 vi.mock('../appSessionState', () => ({ activeOwnerScopeKey: () => 'test-owner' }));
@@ -8,10 +8,12 @@ const mocks = vi.hoisted(() => ({
   start: vi.fn(),
   invalidate: vi.fn(),
   send: vi.fn(),
+  readToken: vi.fn(),
+  disposers: [] as Array<() => void>,
   connected: undefined as undefined | (() => void),
 }));
 vi.mock('electron', () => ({
-  app: { getPath: () => '/test/userData', once: vi.fn() },
+  app: { getPath: () => '/test/userData', once: (_event: string, dispose: () => void) => mocks.disposers.push(dispose) },
   ipcMain: {
     handle: (name: string, fn: (...args: any[]) => unknown) => mocks.handlers.set(name, fn),
   },
@@ -22,7 +24,7 @@ vi.mock('electron', () => ({
 vi.mock('../security/trustedAppRenderer', () => ({ assertTrustedAppRendererEvent: mocks.guard }));
 vi.mock('../git-context/ghBinary', () => ({ configureManagedGhRoot: vi.fn() }));
 vi.mock('../git-context/ghCliTokenSource', () => ({
-  getSharedGhCliTokenSource: () => ({ invalidate: mocks.invalidate }),
+  getSharedGhCliTokenSource: () => ({ invalidate: mocks.invalidate, readToken: mocks.readToken }),
 }));
 vi.mock('../git-context/githubSetup', () => ({
   createGithubSetup: (_root: string, connected: () => void) => {
@@ -31,8 +33,44 @@ vi.mock('../git-context/githubSetup', () => ({
   },
 }));
 import { registerGithubSetupIpc } from '../git-context/githubSetupIpc';
+import { readGhostSecret } from '../secrets/providerSecretStore';
+import { outboundFetch } from '../maker-host/outbound-fetch';
+import { getGhostSetupChangeBus } from '../cindy-brain/ghostSetupChangeBus';
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  vi.mocked(readGhostSecret).mockReset();
+  vi.mocked(outboundFetch).mockReset();
+  mocks.readToken.mockResolvedValue(null);
+});
+afterEach(() => mocks.disposers.splice(0).forEach(dispose => dispose()));
 
 describe('GitHub setup IPC boundary', () => {
+  it.each(['cindy-github', '_root__cindy-github'])(
+    'verifies the PAT and refreshes connected windows for %s', async (instanceId) => {
+      const invalidate = vi.fn();
+      vi.mocked(readGhostSecret).mockImplementation((id) => id === instanceId ? 'synthetic-pat' : null);
+      vi.mocked(outboundFetch).mockResolvedValue(new Response('{"login":"test-user"}'));
+      registerGithubSetupIpc(invalidate);
+      const connection = mocks.handlers.get('git-context:github-setup:connection')!;
+      await expect(connection({})).resolves.toEqual({ status: 'connected', source: 'token', login: 'test-user' });
+      expect(outboundFetch).toHaveBeenCalledWith('https://api.github.com/user',
+        expect.objectContaining({ headers: expect.objectContaining({ Authorization: 'Bearer synthetic-pat' }) }));
+      getGhostSetupChangeBus().emit(instanceId, { source: 'secret', ref: 'github_pat' });
+      expect(invalidate).toHaveBeenCalledOnce();
+      expect(mocks.send).toHaveBeenCalledWith('git-context:github-connected');
+    },
+  );
+  it('does not verify or subscribe to a same-name enterprise credential', async () => {
+    const instanceId = '_ns__acme__cindy-github';
+    vi.mocked(readGhostSecret).mockImplementation((id) => id === instanceId ? 'synthetic-enterprise-pat' : null);
+    registerGithubSetupIpc(vi.fn());
+    const connection = mocks.handlers.get('git-context:github-setup:connection')!;
+    await expect(connection({})).resolves.toEqual({ status: 'missing' });
+    getGhostSetupChangeBus().emit(instanceId, { source: 'secret', ref: 'github_pat' });
+    expect(outboundFetch).not.toHaveBeenCalled();
+    expect(mocks.send).not.toHaveBeenCalled();
+  });
   it('rejects untrusted callers and arbitrary payloads before invoking the installer', () => {
     registerGithubSetupIpc(vi.fn());
     const start = mocks.handlers.get('git-context:github-setup:start')!;

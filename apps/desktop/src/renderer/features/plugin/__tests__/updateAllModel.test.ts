@@ -49,8 +49,8 @@ describe('buildUpdateAllRows', () => {
         marketItem({ pluginId: 'p4', ghostId: 'g4', version: '0.2.0' }),
       ],
       new Map([
-        ['g1', '1.0.0'],
-        ['g4', '0.1.0'],
+        ['p1', '1.0.0'],
+        ['p4', '0.1.0'],
       ]),
     );
 
@@ -61,6 +61,12 @@ describe('buildUpdateAllRows', () => {
       toVersion: '2.0.0',
       status: 'pending',
     });
+    expect(rows[0]).not.toHaveProperty('namespace');
+    const namespaced = buildUpdateAllRows(
+      [marketItem({ pluginId: 'org-helper', ghostId: 'helper', namespace: 'xd' })],
+      new Map([['org-helper', '1.0.0']]),
+    );
+    expect(namespaced[0]).toMatchObject({ ghostId: 'helper', namespace: 'xd' });
   });
 });
 
@@ -107,6 +113,12 @@ describe('updateRoundKey', () => {
     expect(
       updateRoundKey([...a, marketItem({ ghostId: 'g9', installState: 'installed' })]),
     ).toBe(updateRoundKey(a));
+    const sameGhost = [
+      marketItem({ pluginId: 'public-helper', ghostId: 'helper', version: '1.1.0' }),
+      marketItem({ pluginId: 'org-helper', ghostId: 'helper', version: '1.1.0' }),
+    ];
+    expect(updateRoundKey(sameGhost)).toContain('public-helper');
+    expect(updateRoundKey(sameGhost)).toContain('org-helper');
   });
 });
 

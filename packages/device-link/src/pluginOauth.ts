@@ -52,6 +52,11 @@ function exact(v: Record<string, unknown>, keys: string[]) {
 export function oauthId(v: unknown): v is string {
   return typeof v === "string" && /^[a-zA-Z0-9_-]{1,128}$/.test(v);
 }
+export function oauthGhostId(value: unknown): value is string {
+  return oauthId(value) ||
+    (typeof value === "string" &&
+      /^_ns__[a-z0-9](?:[a-z0-9-]{0,126}[a-z0-9])?__[a-z0-9][a-z0-9-]{0,31}$/.test(value));
+}
 export function parsePluginOauthAction(
   value: unknown,
 ): PluginOauthAction | null {

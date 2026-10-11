@@ -13,6 +13,7 @@ import {
   type RemoteCollectionItem,
 } from '@cindy/device-link';
 import type { InstalledGhost } from '../../shared/ghost.js';
+import { installedGhostStoragePart } from '../../shared/pluginIdentity.js';
 import type { GhostConfirmShowParams } from './confirmSlot.js';
 import {
   RemoteResourceRegistryError,
@@ -107,7 +108,7 @@ export class MobilePluginPages {
     return this.deps.now?.() ?? Date.now();
   }
   private ghost(id: string) {
-    return this.deps.list().find((g) => g.manifest.id === id) ?? fail();
+    return this.deps.list().find((g) => installedGhostStoragePart(g) === id) ?? fail();
   }
   private check(page: Page, enabled = true): InstalledGhost {
     const ghost = this.ghost(page.plugin);
@@ -296,10 +297,11 @@ export class MobilePluginPages {
   }
   private item(ghost: InstalledGhost): RemoteCollectionItem {
     const m = ghost.manifest;
+    const id = installedGhostStoragePart(ghost);
     const mobile = parsePluginMobileDeclaration(m.mobile);
-    const unread = ghost.enabled ? this.deps.unread(m.id) : null;
+    const unread = ghost.enabled ? this.deps.unread(id) : null;
     return {
-      ref: { collectionId: PLUGIN_COLLECTION, kind: 'plugin', id: m.id },
+      ref: { collectionId: PLUGIN_COLLECTION, kind: 'plugin', id },
       revision: this.deps.revision(ghost),
       display: {
         title: m.name,
@@ -491,7 +493,7 @@ export class MobilePluginPages {
           this.pages.set(page.id, page);
           const result: PluginPageDocument = {
             pageId: page.id,
-            pluginId: id,
+            pluginId: installedGhostStoragePart(ghost),
             title: ghost.manifest.name,
             surface,
             entry,

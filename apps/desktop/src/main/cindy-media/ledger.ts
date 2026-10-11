@@ -17,7 +17,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { and, asc, desc, eq, exists, lt, ne, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, exists, inArray, lt, ne, or, sql } from 'drizzle-orm';
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 
 import { getDbClient } from '../localDb/client/current';
@@ -57,6 +57,24 @@ export async function withSessionMediaRefLock<T>(
     release();
     if (locks.get(sessionId) === next) locks.delete(sessionId);
   }
+}
+
+const ghostOwnedRefKinds = [
+  'ghost-gallery', 'ghost-grant', 'ghost-tool-grant', 'ghost-deposit',
+] as const;
+
+export async function relocateGhostMediaRefs(
+  fromId: string,
+  toId: string,
+  db: LedgerDb = defaultDb(),
+): Promise<void> {
+  if (fromId === toId) return;
+  const ownedOrigin = and(eq(mediaRefs.originKind, 'ghost'), eq(mediaRefs.originId, fromId));
+  const ownedRef = and(inArray(mediaRefs.refKind, ghostOwnedRefKinds), eq(mediaRefs.refId, fromId));
+  await db.update(mediaRefs).set({
+    originId: sql`case when ${ownedOrigin} then ${toId} else ${mediaRefs.originId} end`,
+    refId: sql`case when ${ownedRef} then ${toId} else ${mediaRefs.refId} end`,
+  }).where(or(ownedOrigin, ownedRef)).run();
 }
 
 /** Shared task reads use existing provenance; knowing a blob hash grants nothing. */

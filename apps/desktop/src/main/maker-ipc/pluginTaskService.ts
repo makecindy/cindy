@@ -48,6 +48,7 @@ export interface PluginTaskStore {
   discardUncreated(row: PluginTaskReceipt): Promise<void>;
   save(row: PluginTaskReceipt): Promise<void>;
   revokePlugin(pluginId: string): Promise<void>;
+  relocatePlugin(from: string, to: string): Promise<void>;
 }
 export class PluginTaskError extends Error {
   constructor(
@@ -230,6 +231,10 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
     });
   };
   return {
+    relocatePlugin: (from: string, to: string) => exclusive(async () => {
+      await deps.store.relocatePlugin(from, to);
+      deps.assertCurrent();
+    }),
     // Host-only native lifecycle work shares send/cancel's drain. Do not use
     // exclusive here: native close callbacks may enqueue receipt writes.
     completeOperation,

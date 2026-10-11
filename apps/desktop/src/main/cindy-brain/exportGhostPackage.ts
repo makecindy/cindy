@@ -37,7 +37,8 @@ import path from 'node:path';
 
 import JSZip from 'jszip';
 
-import { isValidGhostId, type InstalledGhost } from '../../shared/ghost.js';
+import { type InstalledGhost } from '../../shared/ghost.js';
+import { findInstalledGhostByInstanceId, isGhostInstanceId } from '../../shared/pluginIdentity.js';
 import {
   MAX_BASIC_CINDY_FILE_BYTES,
   MAX_BASIC_UNCOMPRESSED_BYTES,
@@ -529,10 +530,10 @@ export async function exportGhostPackage(
   id: unknown,
   deps: ExportGhostPackageDeps,
 ): Promise<ExportGhostPackageResult> {
-  if (typeof id !== 'string' || !isValidGhostId(id)) {
+  if (typeof id !== 'string' || !isGhostInstanceId(id)) {
     return { status: 'invalid_id' };
   }
-  const ghost = deps.listInstalled().find((candidate) => candidate.manifest.id === id);
+  const ghost = findInstalledGhostByInstanceId(deps.listInstalled(), id);
   if (!ghost) return { status: 'not_installed' };
 
   // 双保险:dir 来自 GhostManager 扫描,这里再确认它是真实目录(lstat

@@ -8,7 +8,7 @@
 
 import Store from 'electron-store';
 
-import { isValidGhostId } from '../../shared/ghost.js';
+import { isArchiveInstanceKey, isGhostInstanceId } from '../../shared/pluginIdentity.js';
 import { ownerScopedUserDataPath } from '../appSessionState.js';
 
 interface GhostRecentUsageShape {
@@ -41,7 +41,11 @@ export function normalizeGhostRecentIds(value: unknown): string[] {
   const seen = new Set<string>();
   const ids: string[] = [];
   for (const candidate of value) {
-    if (typeof candidate !== 'string' || !isValidGhostId(candidate) || seen.has(candidate)) {
+    if (
+      typeof candidate !== 'string' ||
+      (!isGhostInstanceId(candidate) && !isArchiveInstanceKey(candidate)) ||
+      seen.has(candidate)
+    ) {
       continue;
     }
     seen.add(candidate);
@@ -70,4 +74,26 @@ export function forgetGhostRecentUsage(id: string): string[] {
   const next = loadGhostRecentIds().filter((candidate) => candidate !== id);
   getStore().set('ids', next);
   return next;
+}
+
+/** Rename one history entry when its instance is archived. Order is preserved. */
+export function relocateGhostRecentUsage(fromId: string, toId: string): void {
+  if (fromId === toId) return;
+  if (
+    (!isGhostInstanceId(fromId) && !isArchiveInstanceKey(fromId)) ||
+    (!isGhostInstanceId(toId) && !isArchiveInstanceKey(toId))
+  ) {
+    throw new Error('Invalid plugin identity');
+  }
+  const ids = loadGhostRecentIds();
+  if (!ids.includes(fromId)) return;
+  const next: string[] = [];
+  const seen = new Set<string>();
+  for (const id of ids) {
+    const renamed = id === fromId ? toId : id;
+    if (seen.has(renamed)) continue;
+    seen.add(renamed);
+    next.push(renamed);
+  }
+  getStore().set('ids', next);
 }

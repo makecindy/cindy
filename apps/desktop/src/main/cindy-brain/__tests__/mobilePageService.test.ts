@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import { MobilePluginPages } from '../mobilePageService.js';
 import type { InstalledGhost } from '../../../shared/ghost.js';
+import { installedGhostStoragePart } from '../../../shared/pluginIdentity.js';
+import { parseRemoteResourceGetRequest, type PluginPageDocument } from '@cindy/device-link';
 
 function setup() {
   let owner = 'a',
@@ -16,6 +18,12 @@ function setup() {
     },
     enabled: true,
   } as InstalledGhost;
+  const ghosts = [ghost];
+  const setEnabled = vi.fn(async (id: string, enabled: boolean) => {
+    const target = ghosts.find((candidate) => installedGhostStoragePart(candidate) === id);
+    if (target) target.enabled = enabled;
+  });
+  const taskSettings = { read: vi.fn(() => ({} as never)), update: vi.fn(async () => ({} as never)) };
   const clearUnread = vi.fn(),
     post = vi.fn(),
     disconnect = vi.fn(async () => {}),
@@ -30,7 +38,7 @@ function setup() {
       const captured = peerGeneration;
       return () => captured === peerGeneration;
     },
-    list: () => [ghost],
+    list: () => ghosts,
     revision: () => revision,
     captureOwner: () => {
       const expected = owner;
@@ -38,9 +46,8 @@ function setup() {
     },
     unread: () => ({ at: unreadAt, summary: 'New course' }),
     clearUnread,
-    setEnabled: async (_id, enabled) => {
-      ghost.enabled = enabled;
-    },
+    setEnabled,
+    taskSettings,
     bundle: async () => [{ path: 'panel.html', mime: 'text/html', size: 3 }],
     asset: async () => ({ mime: 'text/html', base64: 'YWJj' }),
     connect: async () => {},
@@ -74,6 +81,9 @@ function setup() {
     invoke,
     open,
     ghost,
+    ghosts,
+    setEnabled,
+    taskSettings,
     clearUnread,
     post,
     disconnect,
@@ -97,6 +107,40 @@ function setup() {
   };
 }
 describe('mobile plugin pages', () => {
+  it.each([true, false])('keeps same-name resource details and mutations instance-bound (root first: %s)', async (rootFirst) => {
+    const fixture = setup();
+    const root = { ...fixture.ghost, namespace: null, dir: '/ghosts/_ns/_root/practice',
+      manifest: { ...fixture.ghost.manifest, name: 'Root', agent: { tasks: true } } } as InstalledGhost;
+    const organization = { ...fixture.ghost, namespace: 'acme', dir: '/ghosts/practice',
+      manifest: { ...fixture.ghost.manifest, name: 'Organization', agent: { tasks: true } } } as InstalledGhost;
+    fixture.ghosts.splice(0, 1, ...(rootFirst ? [root, organization] : [organization, root]));
+    const context = { controllerDeviceId: 'phone-a' };
+    const client = { protocolVersion: 1, primitives: ['plugin-page'] };
+    const list = await fixture.provider.list(context, { collectionId: 'plugins', client });
+    expect(new Set(list.items.map((item) => item.ref.id)).size).toBe(2);
+    const ref = list.items.find((item) => item.display.title === 'Root')!.ref;
+    expect((await fixture.provider.get!(context, { ref, client })).display.title).toBe('Root');
+    const opened = await fixture.provider.invoke!(context, { collectionId: 'plugins', resourceRef: ref,
+      actionId: 'open:panel', input: {}, client });
+    expect((opened.result as PluginPageDocument).pluginId).toBe('_root__practice');
+    await fixture.provider.invoke!(context, { collectionId: 'plugins', resourceRef: ref,
+      actionId: 'task-settings:set', input: { permissionMode: 'auto' }, client });
+    expect(fixture.taskSettings.update).toHaveBeenCalledWith('_root__practice', 'r1', { permissionMode: 'auto' }, expect.any(Function));
+    await fixture.provider.invoke!(context, { collectionId: 'plugins', resourceRef: ref, actionId: 'disable', input: {}, client });
+    expect(fixture.setEnabled).toHaveBeenCalledWith('_root__practice', false);
+    expect(organization.enabled).toBe(true);
+  });
+  it('keeps the longest valid physical identity usable through the wire parser', async () => {
+    const fixture = setup();
+    fixture.ghost.namespace = 'a'.repeat(128);
+    fixture.ghost.manifest.id = 'p'.repeat(32);
+    fixture.ghost.dir = '/ghosts/_ns/' + fixture.ghost.namespace + '/' + fixture.ghost.manifest.id;
+    const context = { controllerDeviceId: 'phone-a' }, client = { protocolVersion: 1, primitives: ['plugin-page'] };
+    const list = await fixture.provider.list(context, { collectionId: 'plugins', client });
+    const request = parseRemoteResourceGetRequest({ ref: list.items[0].ref, client });
+    expect(request).not.toBeNull();
+    expect((await fixture.provider.get!(context, request!)).display.title).toBe('Practice');
+  });
   it('keeps a covered native preview readable but rejects source writes, unread consumption and another controller', async () => {
     const h = setup(),
       page = await h.open();

@@ -22,6 +22,8 @@ function scheduleGhost(
     schedule?: boolean;
     enabled?: boolean;
     background?: boolean;
+    namespace?: string | null;
+    namespaceState?: 'confirmed' | 'unconfirmed' | 'pending';
   } = {},
 ): InstalledGhost {
   const agentNeeds = {
@@ -41,6 +43,8 @@ function scheduleGhost(
     dir: '/fake/sched-ghost',
     enabled: options.enabled ?? true,
     iconDataUrl: 'data:image/png;base64,AAAA',
+    ...(options.namespaceState !== undefined ? { namespaceState: options.namespaceState } : {}),
+    ...(options.namespace !== undefined ? { namespace: options.namespace } : {}),
   } as InstalledGhost;
 }
 
@@ -147,7 +151,9 @@ describe('GhostScheduleSlot 载荷校验', () => {
     });
     expect(res).toEqual({ ok: true });
     expect(pushes[0].name).toHaveLength(GHOST_SCHEDULE_DRAFT_NAME_MAX_CHARS);
-    expect(pushes[0].prompt).toHaveLength(GHOST_SCHEDULE_DRAFT_PROMPT_MAX_CHARS);
+    // 用户原文截到上限；寻址说明接在后面，不能被截掉。
+    const address = '\n\n调用这个插件时只传 ghost_id「sched-ghost」，不要传 namespace。';
+    expect(pushes[0].prompt).toBe('p'.repeat(GHOST_SCHEDULE_DRAFT_PROMPT_MAX_CHARS) + address);
   });
 });
 
@@ -201,6 +207,36 @@ describe('GhostScheduleSlot 骚扰钳制', () => {
 });
 
 describe('GhostScheduleSlot 推送内容', () => {
+  it('企业实例的预填提示带上 namespace', () => {
+    const { slot, pushes } = makeSlot({
+      getGhost: () => scheduleGhost({ namespace: 'acme', namespaceState: 'confirmed' }),
+    });
+    expect(slot.handleRequest('sched-ghost', validReq)).toEqual({ ok: true });
+    expect(pushes[0]).toMatchObject({
+      ghostId: 'sched-ghost',
+      namespace: 'acme',
+    });
+    expect(pushes[0].prompt).toContain('namespace 传「acme」');
+  });
+
+  it('待迁移实例不在草稿上写 namespace', () => {
+    const { slot, pushes } = makeSlot({
+      getGhost: () => scheduleGhost({ namespaceState: 'pending' }),
+    });
+    expect(slot.handleRequest('sched-ghost', validReq)).toEqual({ ok: true });
+    expect(pushes[0].namespace).toBeUndefined();
+    expect(pushes[0].prompt).toContain('不要传 namespace');
+  });
+
+  it('已确认 root 显式带上 namespace null', () => {
+    const { slot, pushes } = makeSlot({
+      getGhost: () => scheduleGhost({ namespace: null, namespaceState: 'confirmed' }),
+    });
+    expect(slot.handleRequest('sched-ghost', validReq)).toEqual({ ok: true });
+    expect(pushes[0].namespace).toBeNull();
+    expect(pushes[0].prompt).toContain('namespace 传 null');
+  });
+
   it('身份由主机按已装清单填,沙箱伪装不了', () => {
     const { slot, pushes } = makeSlot();
     slot.handleRequest('sched-ghost', {

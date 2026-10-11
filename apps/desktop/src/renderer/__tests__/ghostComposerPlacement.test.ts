@@ -86,6 +86,15 @@ describe('placeGhostAtComposerStart', () => {
     expect(editor.state.selection.to).toBe(editor.state.doc.content.size - 1);
   });
 
+  it('qualifies a namespaced Plugin command', () => {
+    const editor = editorWith('keep going');
+    const selected = ghost('draw', 'art');
+    selected.namespace = 'acme';
+    selected.dir = '/tmp/_ns/acme/art';
+    expect(placeGhostAtComposerStart(editor, selected, [selected])).toBe(true);
+    expect(editor.getText()).toBe('$draw/acme keep going');
+  });
+
   it('replaces an existing Plugin command instead of stacking commands', () => {
     const current = ghost('mivo');
     const selected = ghost('feishu');

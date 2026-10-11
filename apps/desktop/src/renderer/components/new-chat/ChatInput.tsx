@@ -189,15 +189,17 @@ import { SlashCommandPalette } from './SlashCommandPalette';
 import {
   expandGhostCommand,
   findGhostByCommand,
-  parseGhostCommandWord,
+  formatGhostCommandToken,
+  parseGhostCommandToken,
 } from '@/cindy-brain/ghostCommand';
+import { findInstalledGhostByInstanceId, installedGhostStoragePart } from '../../../shared/pluginIdentity';
 import { filterGhostsForWorkdir, getWorkdirDisabledGhostIds } from '@/cindy-brain/ghostWorkdirFilter';
 import { useInstalledGhosts } from '@/cindy-brain/useInstalledGhosts';
 import { useRemoteComposerGhosts } from '@/cindy-brain/useRemoteComposerGhosts';
 import { projectGhostComposerEntries, type GhostCommandSource } from '../../../shared/ghostComposer';
 import {
   attachGhostMediaToSession,
-  getGhostMediaUriFromDataTransfer,
+  getGhostMediaHandoverFromDataTransfer,
 } from '@/cindy-brain/ghostMediaHandover';
 import { AtMentionPanel, type AtPanelState } from './AtMentionPanel';
 import { MentionChipNode, type MentionChipAttrs } from './MentionChipNode';
@@ -3098,7 +3100,11 @@ export function ChatInput({
   const ghostsForCommand = pluginsForMenu;
   const pluginAvailableIds = useMemo(
     () =>
-      new Set(ghostsForCommand.filter((ghost) => ghost.enabled).map((ghost) => ghost.manifest.id)),
+      new Set(
+        ghostsForCommand
+          .filter((ghost) => ghost.enabled)
+          .map((ghost) => installedGhostStoragePart(ghost)),
+      ),
     [ghostsForCommand],
   );
   // 统一建议面板的插件条目(旧 `+` 菜单口径的并集):可用项可选,无指令或
@@ -3107,7 +3113,8 @@ export function ChatInput({
     return pluginsForMenu.map((ghost) => {
       const hasCommand = !!ghost.manifest.command;
       const hasComposerEntry = hasCommand;
-      const selectable = pluginAvailableIds.has(ghost.manifest.id) && hasComposerEntry;
+      const instanceId = installedGhostStoragePart(ghost);
+      const selectable = pluginAvailableIds.has(instanceId) && hasComposerEntry;
       const entryKey = ghost.manifest.command ?? '';
       return {
         item: {
@@ -3115,19 +3122,19 @@ export function ChatInput({
           name: ghost.manifest.name,
           relPath:
             ghost.manifest.command ??
-            `cindy://plugin/${ghost.manifest.id}`,
-          pluginId: ghost.manifest.id,
+            `cindy://plugin/${instanceId}`,
+          pluginId: instanceId,
           ...(ghost.iconDataUrl ? { iconDataUrl: ghost.iconDataUrl } : {}),
           sourceLabel: entryKey,
           _nameLower: `${ghost.manifest.name} ${entryKey}`.toLowerCase(),
-          _relPathLower: `${entryKey} ${ghost.manifest.id}`.toLowerCase(),
+          _relPathLower: `${entryKey} ${instanceId}`.toLowerCase(),
         },
         ...(selectable
           ? {}
           : {
               disabled: true,
               disabledReason: t(
-                !pluginAvailableIds.has(ghost.manifest.id)
+                !pluginAvailableIds.has(instanceId)
                   ? 'extraDirs.pluginDisabled'
                   : ghost.hasSkill
                     ? 'extraDirs.pluginAgentInvoked'
@@ -4116,9 +4123,7 @@ export function ChatInput({
     if (!draft) return;
 
     if (draft.pendingGhostId) {
-      const ghost = ghostsForCommand.find(
-        (candidate) => candidate.manifest.id === draft.pendingGhostId,
-      );
+      const ghost = findInstalledGhostByInstanceId(ghostsForCommand, draft.pendingGhostId);
       if (!ghost) return;
       saveComposerDraft(
         storageKey,
@@ -4129,7 +4134,7 @@ export function ChatInput({
         },
         { silent: true },
       );
-      placeGhostAtComposerStart(editor, ghost, installedGhosts);
+      placeGhostAtComposerStart(editor, ghost, ghostsForCommand);
       return;
     }
 
@@ -4143,7 +4148,7 @@ export function ChatInput({
       { silent: true },
     );
     focusComposerEndNextFrame(editor);
-  }, [editor, ghostsForCommand, installedGhosts, storageKey, deviceLinkDeviceId, remoteHostId]);
+  }, [editor, ghostsForCommand, storageKey, deviceLinkDeviceId, remoteHostId]);
 
   // browser-comment-chip:挂载 / 会话切换时从草稿恢复评论胶囊。
   useEffect(() => {
@@ -4404,8 +4409,8 @@ export function ChatInput({
         (g) =>
           ({
             kind: 'desktop',
-            name: g.manifest.command!,
-            description: `${g.manifest.name} · ${t('settings.ghosts.commandPaletteTag')}`,
+            name: formatGhostCommandToken(g, ghostsForCommand)!,
+            description: `${g.manifest.name} · ${t('settings.ghosts.commandPaletteTag')}${g.namespace ? ` · ${g.namespace}` : ''}`,
           }) as UnifiedCommand,
       );
   }, [ghostsForCommand, isGhostSigil, t]);
@@ -5031,8 +5036,9 @@ export function ChatInput({
       if (selectedItem.type === 'file-picker') return;
       if (selectedItem.type === 'plugin-command') {
         if (!selectedItem.pluginId) return;
-        const ghost = composerGhostsRef.current.find(
-          (candidate) => candidate.manifest.id === selectedItem.pluginId,
+        const ghost = findInstalledGhostByInstanceId(
+          composerGhostsRef.current,
+          selectedItem.pluginId,
         );
         if (!ghost?.enabled) return;
 
@@ -5538,8 +5544,10 @@ export function ChatInput({
           installedGhostsRef.current,
           workingDirRef.current,
         );
-        const ghostCommandWord = parseGhostCommandWord(text);
-        const usedGhost = ghostCommandWord ? findGhostByCommand(eligibleGhosts, ghostCommandWord) : null;
+        const ghostCommandToken = parseGhostCommandToken(text);
+        const usedGhost = ghostCommandToken
+          ? findGhostByCommand(eligibleGhosts, ghostCommandToken.word, ghostCommandToken.namespace)
+          : null;
         const routedText = expandGhostCommand(text, eligibleGhosts);
         const sendSnapshot = captureComposerSendSnapshot(
           editor.getJSON(),
@@ -5568,7 +5576,7 @@ export function ChatInput({
         const markRecentPluginUsage = () => {
           if (!usedGhost || recentUsageMarked || sourceRemoteGhosts) return;
           recentUsageMarked = true;
-          void window.electronAPI.ghosts.markUsed(usedGhost.manifest.id).catch((error) => {
+          void window.electronAPI.ghosts.markUsed(installedGhostStoragePart(usedGhost)).catch((error) => {
             log.warn(
               'failed to persist recent Plugin usage:',
               error instanceof Error ? error.message : String(error),
@@ -8806,7 +8814,7 @@ export function ChatInput({
               // main 验归属后,图片落图片附件、视频落路径引用的 file 附件(托盘可见)。
               // 键用 storageKey(= draftKey ?? sessionId):新建会话草稿态没有
               // sessionId,附件落草稿命名空间,发送时 rehomeDraftAttachments 迁移。
-              const ghostMediaUri = getGhostMediaUriFromDataTransfer(e.dataTransfer);
+              const ghostMediaUri = getGhostMediaHandoverFromDataTransfer(e.dataTransfer);
               if (ghostMediaUri) {
                 if (storageKey) void attachGhostMediaToSession(ghostMediaUri, storageKey, t);
                 return;

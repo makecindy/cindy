@@ -167,6 +167,13 @@ describe('remote resource discovery', () => {
 });
 
 describe('remote resource response boundaries', () => {
+  it('retains maximum-length namespace instance refs while bounding malformed ids', () => {
+    const id = '_ns__' + 'a'.repeat(128) + '__' + 'p'.repeat(32);
+    const item = (value: string) => ({ ref: { collectionId: 'plugins', kind: 'plugin', id: value },
+      display: { title: 'Plugin' }, links: [], revision: '1' });
+    expect(normalizeRemoteCollectionItems({ items: [item(id), item('x'.repeat(257))] }, 'plugins')
+      .map((entry) => entry.ref.id)).toEqual([id]);
+  });
   it('keeps valid additive items and drops malformed or cross-collection items', () => {
     expect(normalizeRemoteCollectionItems({ items: [
       {

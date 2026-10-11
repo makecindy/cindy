@@ -58,6 +58,7 @@ function harness() {
             card.sessionId === sessionId &&
             card.target.kind === target.kind &&
             card.target.id === target.id &&
+            (card.target.kind !== 'plugin' || card.target.namespace === (target.kind === 'plugin' ? target.namespace : undefined)) &&
             !!card.target.reauthorize === !!target.reauthorize &&
             !card.snapshot.terminal,
         ) ?? null,
@@ -105,6 +106,68 @@ async function flush() {
 beforeEach(() => vi.useFakeTimers());
 afterEach(() => vi.useRealTimers());
 describe('Bot authorization transcript lifecycle (Grok parity)', () => {
+  it('refreshes a legacy card before binding it to the current installation', async () => {
+    const h = harness();
+    await h.service.request('s', { kind: 'plugin', id: 'p' });
+    const old = structuredClone(h.card());
+    h.service.invalidatePlugin('service');
+    h.deps.adapter.mockImplementation(async () => ({ ...h.adapter, pluginApprovalToken: 'current' }));
+    const command = { kind: 'plugin_setup' as const, action: 'run_action' as const,
+      actionId: 'connect', expectedRevision: old.snapshot.revision };
+    try {
+      expect(await h.service.resolve(old.snapshot.requestId, command, h.sender)).toBe(true);
+      expect(h.card().pluginApprovalToken).toBe('current');
+      expect(h.card().snapshot.revision).toBeGreaterThan(old.snapshot.revision);
+      expect(h.adapter.execute).not.toHaveBeenCalled();
+      expect(await h.service.resolve(old.snapshot.requestId, { ...command,
+        expectedRevision: h.card().snapshot.revision }, h.sender)).toBe(true);
+      await flush();
+      expect(h.adapter.execute).toHaveBeenCalledOnce();
+    } finally { await h.service.dispose(); }
+  });
+  it.each(['same-process', 'restart'])('rejects an old durable card after same-key replacement (%s)', async (mode) => {
+    const h = harness();
+    let pluginApprovalToken = 'source-A';
+    h.deps.adapter.mockImplementation(async () => ({ ...h.adapter, pluginApprovalToken }));
+    await h.service.request('s', { kind: 'plugin', id: 'p', namespace: null });
+    const old = structuredClone(h.card());
+    h.service.invalidatePlugin('service');
+    pluginApprovalToken = 'source-B';
+    if (mode === 'restart') await h.service.dispose();
+    const current = mode === 'restart' ? new BotAuthorizationService(h.deps) : h.service;
+    try {
+      expect(await current.resolve(old.snapshot.requestId, {
+        kind: 'plugin_setup', action: 'run_action', actionId: 'connect', expectedRevision: old.snapshot.revision,
+      }, h.sender)).toBe(false);
+      await flush();
+      expect(h.adapter.execute).not.toHaveBeenCalled();
+      expect(h.card().snapshot).toMatchObject({ terminal: true });
+    } finally { await current.dispose(); }
+  });
+  it('does not merge concurrent OAuth flows for omitted, root and organization namespace', async () => {
+    const h = harness();
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => { release = resolve; });
+    h.adapter.execute = vi.fn(async () => { await pending; return { ok: true as const, waitingExternal: true }; });
+    try {
+      for (const fields of [{}, { namespace: null }, { namespace: 'acme' }]) {
+        await h.service.request('s', { kind: 'plugin', id: 'p', ...fields });
+      }
+      expect(h.stored.size).toBe(3);
+      for (const card of h.stored.values()) {
+        await h.service.resolve(card.snapshot.requestId, {
+          kind: 'plugin_setup', action: 'run_action', actionId: 'connect', expectedRevision: card.snapshot.revision,
+        }, h.sender);
+      }
+      await flush();
+      expect(h.adapter.execute).toHaveBeenCalledTimes(3);
+      release();
+      await flush();
+    } finally {
+      release();
+      await h.service.dispose();
+    }
+  });
   it('dedicates the bridge to current plugin OAuth cards, without a fake Renderer sender', async () => {
     const h = harness();
     const context: RemoteOauthContext = { scope: 'tx', assertCurrent: vi.fn(), authorize: vi.fn(), finish: vi.fn() };
@@ -133,6 +196,26 @@ describe('Bot authorization transcript lifecycle (Grok parity)', () => {
       expect(local.adapter.execute).not.toHaveBeenCalled();
     } finally { await local.service.dispose(); }
   });
+  it.each([
+    { namespace: undefined, instanceId: 'p' },
+    { namespace: null, instanceId: '_root__p' },
+    { namespace: 'acme', instanceId: '_ns__acme__p' },
+  ])('binds remote OAuth to the displayed $instanceId instance', async ({ namespace, instanceId }) => {
+    const fixture = harness();
+    fixture.adapter.identity.id = instanceId;
+    try {
+      await fixture.service.request('s', { kind: 'plugin', id: 'p',
+        ...(namespace === undefined ? {} : { namespace }) });
+      const card = fixture.card();
+      const binding = await fixture.service.bindRemoteOauth({ requestId: card.snapshot.requestId,
+        actionId: 'connect', expectedRevision: card.snapshot.revision });
+      expect(card.snapshot.ghost.id).toBe(instanceId);
+      expect(binding?.ghostId).toBe(card.snapshot.ghost.id);
+      expect(binding?.current()).toBe(true);
+      await fixture.service.dispose();
+      expect(binding?.current()).toBe(false);
+    } finally { await fixture.service.dispose(); }
+  });
   it('returns the card without opening a browser or holding the model turn; duplicate requests reuse it', async () => {
     const h = harness();
     const result = await h.service.request('s', { kind: 'host', id: 'grok' });
@@ -140,6 +223,17 @@ describe('Bot authorization transcript lifecycle (Grok parity)', () => {
     expect(h.adapter.execute).not.toHaveBeenCalled();
     expect(await h.service.request('s', { kind: 'host', id: 'grok' })).toEqual(result);
     expect(h.stored.size).toBe(1);
+    await h.service.dispose();
+  });
+  it('keeps root and organization authorization cards separate for the same id', async () => {
+    const h = harness();
+    const root = await h.service.request('s', { kind: 'plugin', id: 'p', namespace: null });
+    const organization = await h.service.request('s', { kind: 'plugin', id: 'p', namespace: 'acme' });
+    expect(root).toMatchObject({ ok: false, errorCode: 'SETUP_REQUIRED' });
+    expect(organization).toMatchObject({ ok: false, errorCode: 'SETUP_REQUIRED' });
+    expect(h.stored.size).toBe(2);
+    expect([...h.stored.values()].map((card) => card.target.kind === 'plugin' ? card.target.namespace : undefined))
+      .toEqual([null, 'acme']);
     await h.service.dispose();
   });
   it('an old unclicked card remains usable after the one-hour fallback expires', async () => {
@@ -153,6 +247,17 @@ describe('Bot authorization transcript lifecycle (Grok parity)', () => {
     expect(h.deps.resume).toHaveBeenCalledTimes(1);
     expect(h.card().snapshot.terminal).toBe(true);
     await h.service.dispose();
+  });
+  it('does not merge concurrent legacy, root and organization authorization requests', async () => {
+    const h = harness();
+    try {
+      const requests = [undefined, null, 'acme'].map((namespace) =>
+        h.service.request('s', { kind: 'plugin', id: 'p', ...(namespace === undefined ? {} : { namespace }) }),
+      );
+      await Promise.all(requests);
+      expect(new Set(requests).size).toBe(3);
+      expect(h.stored.size).toBe(3);
+    } finally { await h.service.dispose(); }
   });
   it('watch timeout retains the card and late completion still resumes through the fallback listener', async () => {
     const h = harness();
@@ -432,6 +537,28 @@ describe('authorization completion races', () => {
     finish();
     await flush();
     expect(h.deps.resume).toHaveBeenCalledTimes(2);
+    await h.service.dispose();
+  });
+  it('does not share an OAuth flight between same-id plugins in different namespaces', async () => {
+    const h = harness();
+    const finish: Array<() => void> = [];
+    h.adapter.execute = vi.fn(async () => {
+      await new Promise<void>((resolve) => finish.push(resolve));
+      return { ok: true as const };
+    });
+    await h.service.request('s', { kind: 'plugin', id: 'p', namespace: null });
+    await h.service.request('s', { kind: 'plugin', id: 'p', namespace: 'acme' });
+    for (const card of h.stored.values()) {
+      await h.service.resolve(card.snapshot.requestId, {
+        kind: 'plugin_setup', action: 'run_action', actionId: 'connect',
+        expectedRevision: card.snapshot.revision,
+      }, h.sender);
+    }
+    await flush();
+    expect(h.adapter.execute).toHaveBeenCalledTimes(2);
+    h.setReady();
+    for (const settle of finish) settle();
+    await flush();
     await h.service.dispose();
   });
 });

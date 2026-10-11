@@ -690,4 +690,119 @@ describe('plugin delivery contract', () => {
     });
     expect(response).not.toHaveProperty('currentOrganization');
   });
+
+  const namespacePlugin = {
+    id: pluginId,
+    ghostId: validManifest.id,
+    name: validManifest.name,
+    description: null,
+    author: null,
+    scope: 'organization' as const,
+    organizationId: 'org-1',
+    defaultInstall: false,
+    currentRelease: {
+      id: 'release-org',
+      version: validManifest.version,
+      sha256: 'a'.repeat(64),
+      sizeBytes: 1024,
+      publishedAt: '2026-07-19T00:00:00.000Z',
+    },
+  };
+
+  it('keeps enterprise namespace distinct from root and validates detail identity', () => {
+    const response = parseGetPluginResponse({
+      schemaVersion: PLUGIN_API_SCHEMA_VERSION,
+      plugin: {
+        ...namespacePlugin,
+        namespace: 'acme',
+        defaultInstall: true,
+        currentRelease: {
+          ...namespacePlugin.currentRelease,
+          id: 'release-namespace',
+          manifest: { ...validManifest, namespace: 'acme' },
+        },
+      },
+    });
+    expect(response.plugin.namespace).toBe('acme');
+    expect(response.plugin.currentRelease.manifest.namespace).toBe('acme');
+  });
+
+  it('rejects omitted organization namespace when currentOrganization.orgSlug is present', () => {
+    expect(() =>
+      parseListPluginsResponse({
+        schemaVersion: PLUGIN_API_SCHEMA_VERSION,
+        plugins: [namespacePlugin],
+        nextCursor: null,
+        currentOrganization: { organizationId: 'org-1', orgSlug: 'acme', pluginPrefix: null },
+      }),
+    ).toThrow(PluginProtocolError);
+    expect(
+      parseListPluginsResponse({
+        schemaVersion: PLUGIN_API_SCHEMA_VERSION,
+        plugins: [namespacePlugin],
+        nextCursor: null,
+        currentOrganization: { organizationId: 'org-1', pluginPrefix: null },
+      }).plugins[0],
+    ).not.toHaveProperty('namespace');
+    expect(
+      parseListPluginsResponse({
+        schemaVersion: PLUGIN_API_SCHEMA_VERSION,
+        plugins: [{ ...namespacePlugin, namespace: 'acme' }],
+        nextCursor: null,
+        currentOrganization: { organizationId: 'org-1', orgSlug: 'acme', pluginPrefix: null },
+      }).plugins[0]?.namespace,
+    ).toBe('acme');
+  });
+
+  it('rejects a namespace that disagrees with scope or manifest', () => {
+    const plugin = {
+      ...namespacePlugin,
+      scope: 'public',
+      organizationId: null,
+      currentRelease: {
+        ...namespacePlugin.currentRelease,
+        id: 'release-root',
+        manifest: { ...validManifest, namespace: 'acme' },
+      },
+    };
+    expect(() =>
+      parseGetPluginResponse({
+        schemaVersion: PLUGIN_API_SCHEMA_VERSION,
+        plugin: { ...plugin, namespace: 'acme' },
+      }),
+    ).toThrow(PluginProtocolError);
+    expect(() =>
+      parseGetPluginResponse({
+        schemaVersion: PLUGIN_API_SCHEMA_VERSION,
+        plugin: {
+          ...plugin,
+          scope: 'organization',
+          organizationId: 'org-1',
+          namespace: 'acme',
+          currentRelease: {
+            ...plugin.currentRelease,
+            manifest: { ...validManifest, namespace: 'other' },
+          },
+        },
+      }),
+    ).toThrow(PluginProtocolError);
+  });
+
+  it('accepts additive download identity while preserving legacy responses', () => {
+    const legacy = {
+      url: 'https://example.com/plugin.cindy?signature=example',
+      expiresAt: '2026-07-19T00:05:00.000Z',
+      sha256: 'c'.repeat(64),
+      sizeBytes: 1024,
+    };
+    const response = parsePluginDownloadResponse({
+      ...legacy,
+      pluginId,
+      releaseId: 'release-namespace',
+      ghostId: validManifest.id,
+      namespace: 'acme',
+    });
+    expect(response.namespace).toBe('acme');
+    expect(parsePluginDownloadResponse(legacy)).not.toHaveProperty('namespace');
+  });
 });

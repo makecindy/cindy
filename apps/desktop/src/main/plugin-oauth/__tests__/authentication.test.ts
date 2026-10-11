@@ -13,7 +13,7 @@ const action: PluginOauthAction = {
   actionId: 'oauth_connect:account',
   expectedRevision: 1,
 };
-function fixture() {
+function fixture(ghostId = 'test-plugin') {
   let now = Date.now(),
     owner: string | null = 'membership:g1';
   const identity = {
@@ -31,7 +31,7 @@ function fixture() {
     identity: () => identity,
     owner: () => owner,
     available: () => true,
-    bind: async () => ({ ghostId: 'test-plugin', current: () => true }),
+    bind: async () => ({ ghostId, current: () => true }),
     request,
     now: () => now,
   });
@@ -49,7 +49,7 @@ function fixture() {
     target,
     peer: 'desktop',
     action,
-    ghostId: 'test-plugin',
+    ghostId,
     invoke,
     assertCurrent: () => {},
     now: () => now,
@@ -70,19 +70,20 @@ function fixture() {
 }
 
 describe('signed OAuth transport with explicit peer trust', () => {
-  it('authenticates before any side effect and encrypts all subsequent request/reply bodies', async () => {
-    const f = fixture(),
-      call = await authenticateOauthController(f.options);
-    expect(f.request).not.toHaveBeenCalled();
+  it.each(['test-plugin', '_root__test-plugin', '_ns__' + 'a'.repeat(128) + '__test-plugin'])(
+    'authenticates %s before side effects and encrypts subsequent bodies', async (ghostId) => {
+    const context = fixture(ghostId),
+      call = await authenticateOauthController(context.options);
+    expect(context.request).not.toHaveBeenCalled();
     await expect(call({ op: 'capabilities' })).resolves.toMatchObject({
       marker: 'synthetic-private-result',
     });
-    expect(JSON.stringify(f.invoke.mock.calls)).not.toContain('capabilities');
-    const frame = f.invoke.mock.calls[1][0];
-    expect(JSON.stringify(await f.host.request('desktop', frame))).not.toContain(
+    expect(JSON.stringify(context.invoke.mock.calls)).not.toContain('capabilities');
+    const frame = context.invoke.mock.calls[1][0];
+    expect(JSON.stringify(await context.host.request('desktop', frame))).not.toContain(
       'synthetic-private-result',
     );
-    expect(f.request).toHaveBeenCalledTimes(1); // identical retry returns the cached ciphertext, without replaying work
+    expect(context.request).toHaveBeenCalledTimes(1); // identical retry returns the cached ciphertext, without replaying work
   });
   it('rejects the former raw v1 transport', async () => {
     const f = fixture();
