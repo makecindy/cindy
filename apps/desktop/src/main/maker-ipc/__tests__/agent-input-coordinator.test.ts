@@ -11966,6 +11966,7 @@ describe('AgentInputCoordinator replaceQueuedMessage(Orca lead 排队消息修�
       send:vi.fn(async (_message,opts)=>{await opts?.onAccepted?.();return {accepted:true as const};}),
     };
     const transaction=createMakerSendTransaction({
+      statDirectory:async()=>({isDirectory:()=>true}),
       getSession:()=>session,closeSession:async()=>{},preflightBotRuntimeResources:async()=>{},
       getSessionMeta:async()=>({}),ensureRemoteReadyForSessionStart:async()=>{},checkWorkDirExists:async()=>true,
       isOrcaMcpHydrated:()=>true,buildCreateOptsWithStderr:x=>x,synthesizeOrcaVendorOptionsFromDb:async()=>false,
