@@ -21,6 +21,10 @@ import {
   type TaskMigrationRequest,
   type TaskMigrationView,
 } from '@cindy/device-link';
+import type {
+  LocalTaskProjectMoveReceipt,
+  TaskProjectMoveRequest,
+} from '../../shared/taskMigrationIpc';
 import { getDbClient, tryGetDbClient } from '../localDb/client/current';
 import { dialogueWorkspaceDayKey } from '../localDb/dialogueWorkspace';
 import { upsertRecentWorkdir } from '../localDb/ipc/recentWorkdirs';
@@ -1291,26 +1295,35 @@ async function activate(scope: Scope, record: IncomingMigration) {
   return view(scope, active);
 }
 
+async function moveProjectWithinScope(
+  scope: Scope,
+  request: TaskProjectMoveRequest,
+): Promise<LocalTaskProjectMoveReceipt> {
+  if (!moveProjectOnHost) throw new Error('MIGRATION_HOST_NOT_READY');
+  const result = await moveProjectOnHost(
+    request.sessionId,
+    request.workingDir,
+    scope.assertCurrent,
+  );
+  scope.assertCurrent();
+  if (!result.ok) throw new Error(`MIGRATION_PROJECT_${result.errorCode}`);
+  return {
+    supported: true,
+    projectMove: {
+      sessionId: result.sessionId,
+      workingDir: result.workingDir,
+      workspaceKind: result.workspaceKind,
+    },
+  };
+}
+
 export async function requestTaskMigration(raw: unknown): Promise<TaskMigrationView> {
   const request = parseTaskMigrationRequest(raw),
     scope = captureScope();
   if (request.action === 'move-project') {
-    if (!moveProjectOnHost) throw new Error('MIGRATION_HOST_NOT_READY');
-    const result = await moveProjectOnHost(
-      request.sessionId,
-      request.workingDir,
-      scope.assertCurrent,
-    );
-    scope.assertCurrent();
-    if (!result.ok) throw new Error(`MIGRATION_PROJECT_${result.errorCode}`);
-    return {
-      ...view(scope, null),
-      projectMove: {
-        sessionId: result.sessionId,
-        workingDir: result.workingDir,
-        workspaceKind: result.workspaceKind,
-      },
-    };
+    // A wire response needs the host identity. Resolve it before the move commits.
+    const response = view(scope, null);
+    return { ...response, ...(await moveProjectWithinScope(scope, request)) };
   }
   if (request.action === 'estimate') {
     const members = await sourceGroup(scope, request.sessionId);
@@ -1493,6 +1506,10 @@ export function registerTaskMigrationIpc(
     if (request.action === 'receive' || request.action === 'receipt')
       throwIpcError('PERMISSION_DENIED', 'MIGRATION_ACCESS_REVOKED');
     try {
+      // Local regrouping must work before Device Link has ever connected. Only this
+      // trusted IPC branch may omit deviceId; remote replies still use the wire view.
+      if (device == null && request.action === 'move-project')
+        return await moveProjectWithinScope(captureScope(), request);
       if (device == null || device === getSelfDeviceId())
         return await requestTaskMigration(request);
       if (

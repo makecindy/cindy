@@ -164,7 +164,7 @@ describe('moveSession host', () => {
   it.each([false, true])(
     'rechecks target lifecycle and ownership at commit (project=%s)',
     async (project) => {
-      for (const change of ['archived', 'bot-link', 'im']) {
+      for (const change of ['archived', 'bot-link', 'im', 'cindy-make', 'cindy-make-merge']) {
         h.query.mockResolvedValue([{ id: 'target', status: 'active' }]);
         h.botLinks = [];
         h.attached = false;
@@ -173,6 +173,8 @@ describe('moveSession host', () => {
             h.query.mockResolvedValue([{ id: 'target', status: 'archived' }]);
           if (change === 'bot-link') h.botLinks = [{ botId: 'bot' }];
           if (change === 'im') h.attached = true;
+          if (change === 'cindy-make' || change === 'cindy-make-merge')
+            h.query.mockResolvedValue([{ id: 'target', status: 'active', source: change }]);
         });
         expect(await run(project ? directory : null)).toMatchObject({ ok: false });
       }
@@ -191,6 +193,34 @@ describe('moveSession host', () => {
       if (signal === 'link') h.botLinkSequence = [[{ botId: 'bot' }], []];
       expect(await run(directory)).toMatchObject({ ok: true });
       expect(h.update).toHaveBeenCalled();
+    },
+  );
+
+  it.each(['cindy-make', 'cindy-make-merge'])(
+    'keeps %s targets in their managed workspace for UI and agent moves',
+    async (source) => {
+      h.query.mockResolvedValue([{ id: 'target', status: 'active', source }]);
+      for (const workingDir of [directory, null]) {
+        expect(
+          await moveSessionProjectFromHost(() => false, 'target', workingDir, () => {}),
+        ).toMatchObject({ ok: false, errorCode: 'UNSUPPORTED_CAPABILITY' });
+        h.query.mockResolvedValueOnce([{ id: 'caller', source: 'desktop' }]);
+        expect(await run(workingDir)).toMatchObject({
+          ok: false,
+          errorCode: 'UNSUPPORTED_CAPABILITY',
+        });
+      }
+      expect(h.beforeCommit).not.toHaveBeenCalled();
+      expect(h.saved).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(['cindy-make', 'cindy-make-merge'])(
+    'lets a %s caller move an ordinary target',
+    async (source) => {
+      h.query.mockResolvedValueOnce([{ id: 'caller', source }]);
+      expect(await run(directory)).toMatchObject({ ok: true });
+      expect(h.saved).toHaveBeenCalled();
     },
   );
 
