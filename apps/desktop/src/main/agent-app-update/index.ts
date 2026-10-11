@@ -24,6 +24,7 @@ import { sessions } from '../localDb/schema.js';
 import { t } from '../i18n.js';
 import { createMessage } from '../localDb/ipc/messages.js';
 import { createLogger } from '../logger.js';
+import { readRelaunchBackgroundActivity } from '../relaunchBusyActivityIpc.js';
 import {
   applyConfirmedAppUpdateForAgent,
   checkAppUpdateForAgent,
@@ -103,6 +104,7 @@ function getService(): AgentAppUpdateService {
     writeAutoUpdate: setAutoRelaunchOnIdleForAgent,
     resolveCaller: (caller) => sessionHost?.resolveCaller(caller) ?? 'unavailable',
     countOtherRunningTasks: (sessionId) => requireSessionHost().countOtherRunningTasks(sessionId),
+    hasBackgroundWork: async () => (await readRelaunchBackgroundActivity()).busy,
     requestHostPermission: (...args) => requireSessionHost().requestHostPermission(...args),
     waitForCallerTurnToEnd: (caller) => requireSessionHost().waitForCallerTurnToEnd(caller),
     captureOwner,

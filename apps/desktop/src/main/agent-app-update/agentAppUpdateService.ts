@@ -99,6 +99,8 @@ export interface AgentAppUpdateDeps {
   /** 'owner' only for a live local turn the account owner started (see callerAuthority.ts). */
   resolveCaller(caller: AgentAppUpdateCaller): 'owner' | 'not-owner' | 'unavailable';
   countOtherRunningTasks(callerSessionId: string): number;
+  /** Background work a restart would also stop (see relaunchBusyActivity.ts); unknown is true. */
+  hasBackgroundWork(): Promise<boolean>;
   /** Host permission card on the calling task; null when that task is gone. */
   requestHostPermission(
     sessionId: string,
@@ -212,17 +214,18 @@ export function createAgentAppUpdateService(deps: AgentAppUpdateDeps) {
     };
   };
 
-  const buildInstallCard = (
+  const buildInstallCard = async (
     caller: AgentAppUpdateCaller,
     from: string,
     to: string,
-  ): PermissionRequest => {
+  ): Promise<PermissionRequest> => {
     const others = deps.countOtherRunningTasks(caller.sessionId);
+    const background = await deps.hasBackgroundWork().catch(() => true);
     const lines = [
       text('update.agentInstall.versions', { from, to }),
-      others > 0
-        ? text('update.agentInstall.otherTasks', { count: others })
-        : text('update.agentInstall.noOtherTasks'),
+      ...(others > 0 ? [text('update.agentInstall.otherTasks', { count: others })] : []),
+      ...(background ? [text('update.agentInstall.backgroundWork')] : []),
+      ...(others === 0 && !background ? [text('update.agentInstall.noOtherTasks')] : []),
       text('update.agentInstall.thisTask'),
       text('update.agentInstall.remote'),
       ...(deps.platform === 'linux' ? [text('update.agentInstall.linuxAuth')] : []),
@@ -431,7 +434,7 @@ export function createAgentAppUpdateService(deps: AgentAppUpdateDeps) {
         const from = check.currentVersion;
         const to = check.targetVersion;
         flow.targetVersion = to;
-        const outcome = await decide(caller, buildInstallCard(caller, from, to));
+        const outcome = await decide(caller, await buildInstallCard(caller, from, to));
         if (outcome !== 'allow') return declined(outcome);
         // The user may have stopped or replaced the task while the card was open.
         const current = deps.resolveCaller(caller);

@@ -44,6 +44,7 @@ function setup(overrides: Partial<AgentAppUpdateDeps> = {}) {
     }),
     resolveCaller: vi.fn(() => 'owner' as const),
     countOtherRunningTasks: vi.fn(() => 2),
+    hasBackgroundWork: vi.fn(async () => false),
     requestHostPermission: vi.fn(async () => allow()),
     waitForCallerTurnToEnd: vi.fn(async () => undefined),
     captureOwner: vi.fn(() => activeOwner),
@@ -481,6 +482,28 @@ describe('Agent app update install', () => {
     const card = vi.mocked(deps.requestHostPermission).mock.calls[0]![2];
     expect(card.description).toContain('update.agentInstall.noOtherTasks');
     expect(card.description).toContain('update.agentInstall.linuxAuth');
+  });
+
+  it('warns about background work instead of claiming nothing else is running', async () => {
+    const { deps, service } = setup({
+      countOtherRunningTasks: vi.fn(() => 0),
+      hasBackgroundWork: vi.fn(async () => true),
+    });
+    await service.install(caller);
+    const card = vi.mocked(deps.requestHostPermission).mock.calls[0]![2];
+    expect(card.description).toContain('update.agentInstall.backgroundWork');
+    expect(card.description).not.toContain('update.agentInstall.noOtherTasks');
+  });
+
+  it('treats an unreadable background probe as background work', async () => {
+    const { deps, service } = setup({
+      countOtherRunningTasks: vi.fn(() => 0),
+      hasBackgroundWork: vi.fn(async () => { throw new Error('probe failed'); }),
+    });
+    await service.install(caller);
+    const card = vi.mocked(deps.requestHostPermission).mock.calls[0]![2];
+    expect(card.description).toContain('update.agentInstall.backgroundWork');
+    expect(card.description).not.toContain('update.agentInstall.noOtherTasks');
   });
 });
 
