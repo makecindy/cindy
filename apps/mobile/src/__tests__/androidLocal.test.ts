@@ -7,6 +7,10 @@ import { join } from 'node:path';
 import { rootCertificates } from 'node:tls';
 import {
   androidGradleTasksForArtifacts,
+  patchBuildGradleDistributionFlavors,
+  GOOGLE_PLAY_MANIFEST_OVERLAY,
+  assertAndroidInstallPermissionPresent,
+  assertGooglePlayInstallPermissionAbsent,
   assertAndroidUploadCertificateSha256,
   normalizeAndroidCertificateSha256,
   readAndroidVersionCode,
@@ -45,10 +49,35 @@ describe('androidGradleTasksForArtifacts', () => {
   it('把产物确定性映射到 release tasks', () => {
     expect(androidGradleTasksForArtifacts(['apk'])).toEqual(['assembleRelease']);
     expect(androidGradleTasksForArtifacts(['apk', 'aab'])).toEqual(['assembleRelease', 'bundleRelease']);
+    expect(androidGradleTasksForArtifacts(['apk', 'aab'], { splitGooglePlay: true }))
+      .toEqual(['assembleWebsiteRelease', 'bundlePlayRelease']);
   });
 
   it('空产物集合 fail closed', () => {
     expect(() => androidGradleTasksForArtifacts([])).toThrow(/至少需要一种/);
+  });
+});
+
+describe('Global Android distribution manifests', () => {
+  it('官网和 Play 使用独立变体，Play overlay 移除安装权限', () => {
+    const source = 'android {\n    signingConfigs {\n    }\n}\n';
+    const patched = patchBuildGradleDistributionFlavors(source);
+    expect(patched).toContain('website { dimension "distribution" }');
+    expect(patched).toContain('play { dimension "distribution" }');
+    expect(patchBuildGradleDistributionFlavors(patched)).toBe(patched);
+    expect(GOOGLE_PLAY_MANIFEST_OVERLAY).toContain('android.permission.REQUEST_INSTALL_PACKAGES" tools:node="remove"');
+    expect(() => patchBuildGradleDistributionFlavors('missing')).toThrow(/android/);
+  });
+
+  it('验证最终 APK 有权限，AAB 无权限', () => {
+    expect(() => assertAndroidInstallPermissionPresent('android.permission.REQUEST_INSTALL_PACKAGES'))
+      .not.toThrow();
+    expect(() => assertAndroidInstallPermissionPresent('android.permission.INTERNET'))
+      .toThrow(/缺少/);
+    expect(() => assertGooglePlayInstallPermissionAbsent(Buffer.from('manifest'))).not.toThrow();
+    expect(() => assertGooglePlayInstallPermissionAbsent(Buffer.from('android.permission.REQUEST_INSTALL_PACKAGES')))
+      .toThrow(/仍包含/);
+    expect(() => assertGooglePlayInstallPermissionAbsent(Buffer.alloc(0))).toThrow(/无法读取/);
   });
 });
 
