@@ -80,6 +80,8 @@ function genState(): string {
 
 // ── 存储 blob ───────────────────────────────────────────────────────────────────
 export interface GrokTokenBlob {
+  /** Opaque login identity for durable video tasks; never derived from a token. */
+  videoSessionId?: string;
   identity?: string;
   access_token: string;
   refresh_token?: string;
@@ -316,6 +318,7 @@ function blobFromTokenResponse(t: TokenResponse, prev?: GrokTokenBlob | null): G
         return prev?.identity;
       }
     })(),
+    videoSessionId: prev?.videoSessionId ?? randomBytes(24).toString('hex'),
     access_token: t.access_token,
     // 刷新响应可能省略 refresh_token / scope → 沿用旧值;expires_at 绝不沿用(见上)。
     refresh_token: t.refresh_token ?? prev?.refresh_token,
@@ -654,6 +657,16 @@ function createGrokAccount(providerId: string) {
     _blobCache = b;
   }
 
+  /** 非秘密随机登录标识；旧授权首次使用时补齐，刷新保留，重新登录则更换。 */
+  function getGrokOAuthVideoSessionId(): string {
+    if (!hasGrokOAuthLogin()) throw new Error('SuperGrok login unavailable');
+    const blob = readBlob()!;
+    if (!blob.videoSessionId) {
+      writeBlob({ ...blob, videoSessionId: randomBytes(24).toString('hex') });
+    }
+    return readBlob()!.videoSessionId!;
+  }
+
   /** 本机是否已登录 xAI(有可用 access_token)。供应商连接态用。 */
   function hasGrokOAuthLogin(): boolean {
     if (!(currentScope() && (providerId !== 'xai' || isNativeProviderAuthBound('xai'))))
@@ -957,7 +970,6 @@ function createGrokAccount(providerId: string) {
         result = { blob: fresh, outcome: 'failed' };
         return;
       }
-      const next = blobFromTokenResponse(tok, fresh);
       // 落盘前复核:刷新 fetch / res.json() 期间用户可能已登出(blob 被清)或已重登(blob 被改写)。
       // 清了 → 不回写(否则等于撤销 logoutGrok),本次用旧 token 自然失败;改了 → 以新登录状态为准,
       // 丢弃本次刷新结果。
@@ -970,6 +982,9 @@ function createGrokAccount(providerId: string) {
         result = { blob: beforeWrite, outcome: 'superseded' };
         return;
       }
+      // prepare may have attached a legacy login's durable video nonce while
+      // this refresh awaited the network. Preserve the latest same-login blob.
+      const next = blobFromTokenResponse(tok, beforeWrite);
       writeBlob(next);
       result = { blob: next, outcome: 'refreshed' };
     });
@@ -1097,6 +1112,7 @@ function createGrokAccount(providerId: string) {
 
   return {
     getGrokOAuthCredentialGeneration,
+    getGrokOAuthVideoSessionId,
     resetGrokOAuthMemoryCache,
     hasGrokOAuthLogin,
     hasGrokOAuthLoginUnbound,
@@ -1118,6 +1134,8 @@ function account(providerId = 'xai') {
   }
   return value;
 }
+export const getGrokOAuthVideoSessionId = (providerId = 'xai') =>
+  account(providerId).getGrokOAuthVideoSessionId();
 export const getGrokOAuthCredentialGeneration = (providerId = 'xai') =>
   account(providerId).getGrokOAuthCredentialGeneration();
 export function resetGrokOAuthMemoryCache(providerId?: string): void {

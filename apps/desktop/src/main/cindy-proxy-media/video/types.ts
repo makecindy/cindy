@@ -189,6 +189,17 @@ export interface VideoProvider {
   /** Stable provider id (e.g. 'seedance', 'kling', 'luma'). */
   readonly id: string;
   readonly capabilities: VideoProviderCapabilities;
+  /** 非秘密的订阅身份代次；prepare 后更换账号不能借旧 invocation 发起新单。 */
+  captureScope?(): { ownerScopeKey: string; credentialGeneration: number; credentialSessionId: string };
+  /** Rebind only after the durable login identity has matched; process epochs remain private. */
+  restoreHandle?(handle: VideoTaskHandle, credentialSessionId: string): VideoTaskHandle;
+  /** Core 复用统一安全下载/入库；旧执行器仍可使用 download。 */
+  resolveDownload?(videoUrl: string, credentialSessionId?: string): {
+    url: string;
+    allowedUrlHosts: string[];
+    assertActive(): void;
+    networkPolicy?: 'xai-video';
+  };
   /** Submit a generation task. The provider translates `req` to its own body
    *  shape and POSTs. Returns a handle the handler uses for polling. */
   submit(
@@ -207,4 +218,12 @@ export interface VideoProvider {
     videoUrl: string,
     signal?: AbortSignal,
   ): VideoMaybePromise<{ buffer: Buffer; mimeType: string }>;
+}
+
+/** HTTP 明确拒绝和提交结果未知分开，调用方不得按普通异常自动重提。 */
+export class VideoProviderHttpError extends Error {
+  constructor(readonly status: number, message: string) {
+    super(message);
+    this.name = 'VideoProviderHttpError';
+  }
 }
