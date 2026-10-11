@@ -51,6 +51,17 @@ describe('restart records file', () => {
     expect(fs.readFileSync(path.join(dir, aside[0]!), 'utf8')).toBe('{"records": [ broken');
   });
 
+  it('keeps a leftover backup next to the moved-aside file instead of overwriting it', () => {
+    fs.writeFileSync(file, '{"records": [ broken');
+    const backup = JSON.stringify({ records: [record('in-backup')] });
+    fs.writeFileSync(`${file}.bak`, backup);
+    addRestartRecord(file, record('new'));
+    expect(listRestartRecords(file).map((entry) => entry.requestId)).toEqual(['new']);
+    const asideBackup = fs.readdirSync(dir).filter((name) => /\.corrupt-\d+\.bak$/.test(name));
+    expect(asideBackup).toHaveLength(1);
+    expect(fs.readFileSync(path.join(dir, asideBackup[0]!), 'utf8')).toBe(backup);
+  });
+
   it('leaves a corrupt file untouched when only reading or removing', () => {
     fs.writeFileSync(file, 'not json');
     expect(listRestartRecords(file)).toEqual([]);

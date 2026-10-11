@@ -60,6 +60,9 @@ function readRecords(file: string, mode: 'lenient' | 'before-write'): AgentAppUp
       // destroyed, and a damaged file cannot block every later update either.
       // A failed move throws, which cancels the restart.
       const aside = `${file}.corrupt-${Date.now()}`;
+      // A leftover `.bak` goes with it: the next atomic write would otherwise restore
+      // and then replace it, losing whatever records that backup still holds.
+      if (fs.existsSync(`${file}.bak`)) fs.renameSync(`${file}.bak`, `${aside}.bak`);
       fs.renameSync(file, aside);
       log.warn('agent app update marker was corrupt; moved aside', { path: maskPath(aside) });
     } else {
