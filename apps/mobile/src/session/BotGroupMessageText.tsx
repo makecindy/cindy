@@ -15,6 +15,15 @@ type Styles = ReturnType<typeof makeStyles>;
 
 function renderInlines(inlines: readonly MobileMarkdownInline[], styles: Styles): ReactNode[] {
   return inlines.map((inline, index) => {
+    // 强调里的链接 / 代码等:外层套一层带强调样式的 Text,嵌套 Text 继承样式。
+    if (inline.marks?.length) {
+      const markStyles = { strong: styles.strong, emphasis: styles.emphasis, strikethrough: styles.strike };
+      return (
+        <Text key={index} style={inline.marks.map((mark) => markStyles[mark])}>
+          {renderInlines([{ ...inline, marks: undefined }], styles)}
+        </Text>
+      );
+    }
     switch (inline.type) {
       case 'strong': return <Text key={index} style={styles.strong}>{inline.text}</Text>;
       case 'emphasis': return <Text key={index} style={styles.emphasis}>{inline.text}</Text>;

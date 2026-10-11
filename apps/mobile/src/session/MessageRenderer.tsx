@@ -219,6 +219,7 @@ import {
   type MobileMarkdownBlock,
   type MobileMarkdownBlockGroup,
   type MobileMarkdownInline,
+  type MobileMarkdownInlineMark,
   type MobileMarkdownTextRunGroupingOptions,
 } from '@/session/messageMarkdown';
 import { MarkdownBlockContent } from '@/session/MarkdownBlockContent';
@@ -6124,6 +6125,15 @@ function clickableInlineStyle(
   return [base, onPress ? styles.markdownLink : undefined, extra];
 }
 
+function markdownMarkStyle(
+  styles: ReturnType<typeof makeStyles>,
+  mark: MobileMarkdownInlineMark,
+): StyleProp<TextStyle> {
+  if (mark === 'strong') return styles.markdownStrong;
+  if (mark === 'emphasis') return styles.markdownEmphasis;
+  return styles.markdownStrike;
+}
+
 /** 本地路径链接形态的路径 chip 包装:candidate 按 url memo,保证引用稳定——
  *  renderInline 是普通函数,若在其内直接 classify 会每次 render 产新对象,
  *  击穿 ChatPathChipSpan 的 memo/effect 依赖,unknown verdict(不落缓存)的
@@ -6224,6 +6234,13 @@ function renderInline(
     streaming?: boolean;
   } = {},
 ): ReactNode {
+  // 强调里的链接 / 代码等:外层强调样式叠进 baseStyle,其余照常渲染(span 平铺,不嵌套)。
+  if (inline.marks?.length) {
+    return renderInline({ ...inline, marks: undefined }, index, styles, {
+      ...ctx,
+      baseStyle: [ctx.baseStyle, ...inline.marks.map((mark) => markdownMarkStyle(styles, mark))],
+    });
+  }
   const SpanText = ctx.SpanText ?? MessageBodyText;
   const openImage = ctx.onOpenImage ?? (ctx.onOpenPayload
     ? (url: string, alt?: string) => {
