@@ -165,6 +165,15 @@ describe('buildSelectableMarkdownHtml 本地路径不出死链', () => {
     expect(html).toContain('<a href="https://example.com/a.ts">站点</a>');
   });
 
+  it('加粗 / 删除线里的 http(s) 链接仍是可点 <a>,外层套强调标签', () => {
+    expect(buildSelectableMarkdownHtml('打开 **https://example.com/a** 看')).toContain(
+      '<strong><a href="https://example.com/a">https://example.com/a</a></strong>',
+    );
+    expect(buildSelectableMarkdownHtml('**~~https://example.com/b~~**')).toContain(
+      '<strong><del><a href="https://example.com/b">https://example.com/b</a></del></strong>',
+    );
+  });
+
   it('会话深链渲染成不可点的 chip:保留 chip 观感,但不是 <a>、也不带 href', () => {
     const html = buildSelectableMarkdownHtml('[某会话](cindy://session/abc123)');
     expect(html).toContain('xdt-session-chip');

@@ -3,6 +3,7 @@ import {
   parseMobileMarkdown,
   type MobileMarkdownBlock,
   type MobileMarkdownInline,
+  type MobileMarkdownInlineMark,
 } from '@/session/messageMarkdown';
 import { tokenizeCode } from '@/session/codeHighlight';
 import { parseSessionDeepLinkUrl, shortSessionId } from '@/session/sessionLinks';
@@ -499,7 +500,20 @@ function renderInlines(inlines: readonly MobileMarkdownInline[], ctx: RenderCont
   return inlines.map((inline) => renderInline(inline, ctx)).join('');
 }
 
+const MARK_TAGS: Record<MobileMarkdownInlineMark, string> = {
+  strong: 'strong',
+  emphasis: 'em',
+  strikethrough: 'del',
+};
+
 function renderInline(inline: MobileMarkdownInline, ctx: RenderContext = {}): string {
+  // 强调里的链接 / 代码等:先按原类型渲染,再由内到外套上外层强调标签。
+  if (inline.marks?.length) {
+    return inline.marks.reduceRight(
+      (html, mark) => `<${MARK_TAGS[mark]}>${html}</${MARK_TAGS[mark]}>`,
+      renderInline({ ...inline, marks: undefined }, ctx),
+    );
+  }
   switch (inline.type) {
     case 'text':
       return escapeHtml(inline.text);

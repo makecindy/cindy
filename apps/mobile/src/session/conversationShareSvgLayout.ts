@@ -7,6 +7,7 @@ import {
   type ShareSvgRect,
 } from "@/session/conversationShareRichSvg";
 import {
+  mobileMarkdownInlineHasMark,
   parseMobileMarkdown,
   type MobileMarkdownBlock,
   type MobileMarkdownInline,
@@ -424,7 +425,7 @@ function markdownInlineParts(
           inline.alt.trim() || i18n.t("message.renderer.imageFallbackTitle")
         );
       }
-      if (inline.type === "strikethrough") {
+      if (mobileMarkdownInlineHasMark(inline, "strikethrough")) {
         return `~~${inline.text}~~`;
       }
       return inline.text;

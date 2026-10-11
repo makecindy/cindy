@@ -13,7 +13,14 @@ import {
 import { DEEP_LINK_SCHEME_GROUP } from '@/session/sessionLinks';
 import { i18n } from '@/i18n';
 
-export type MobileMarkdownInline =
+// 加粗 / 斜体 / 删除线里的内容会继续按行内语法解析(`**https://…**` 的链接照样可点,
+// 与桌面 remark 同口径),结果拍平进同一层 inline 列表:里面的纯文本就是该强调类型本身,
+// 其余 token(链接、路径、代码、公式;图片除外,见 parseMarkedInlines)带 marks 标出外层
+// 强调,由渲染层叠加样式。拍平而不是做成树,分段、图集收集、长度估算等按单层列表遍历的
+// 逻辑都不用改。
+export type MobileMarkdownInlineMark = 'strong' | 'emphasis' | 'strikethrough';
+
+export type MobileMarkdownInline = (
   | { type: 'text'; text: string }
   // bare:这条 link 是从正文纯文本里切出来的裸路径(matchBareFilePathLink),不是作者
   // 手写的 `[label](url)`。渲染层据此决定点亮后是否套等宽 chip —— 裸路径的未点亮态是
@@ -29,7 +36,8 @@ export type MobileMarkdownInline =
   // 原生 Text 流渲染时经 latexToUnicodeApproximation 近似;WebView 面(文件
   // 阅读器)可用 KaTeX 精确渲染。
   | { type: 'math'; text: string }
-  | MobileMarkdownImageInline;
+  | MobileMarkdownImageInline
+) & { marks?: MobileMarkdownInlineMark[] };
 
 // 正文图片:来自 ![alt](url) 或模型常用的 raw HTML <img src="..." width="150">(见桌面端 remarkHtmlImages)。
 // Markdown 图片还可保留桌面本地/相对路径;会话渲染时再结合被控端 workdir
@@ -1071,6 +1079,14 @@ export function parseMobileMarkdownInlines(
   input: string,
   startsInsideHtmlComment = false,
 ): MobileMarkdownInline[] {
+  return parseInlines(input, startsInsideHtmlComment, false);
+}
+
+function parseInlines(
+  input: string,
+  startsInsideHtmlComment: boolean,
+  imagesAsText: boolean,
+): MobileMarkdownInline[] {
   const out: MobileMarkdownInline[] = [];
   let cursor = 0;
   while (cursor < input.length) {
@@ -1080,10 +1096,47 @@ export function parseMobileMarkdownInlines(
       break;
     }
     if (token.index > cursor) pushText(out, input.slice(cursor, token.index));
-    out.push(token.inline);
+    if (isMarkedInline(token.inline)) {
+      out.push(...parseMarkedInlines(token.inline.type, token.inline.text, input, token.index, startsInsideHtmlComment));
+    } else if (imagesAsText && token.inline.type === 'image') {
+      pushText(out, input.slice(token.index, token.end));
+    } else {
+      out.push(token.inline);
+    }
     cursor = token.end;
   }
   return out.length > 0 ? out : [{ type: 'text', text: input }];
+}
+
+/** 该 inline 是否呈现为某种强调:自身就是该类型,或被外层同类强调包裹(marks)。样式消费方统一用它判断。 */
+export function mobileMarkdownInlineHasMark(inline: MobileMarkdownInline, mark: MobileMarkdownInlineMark): boolean {
+  return inline.type === mark || inline.marks?.includes(mark) === true;
+}
+
+function isMarkedInline(
+  inline: MobileMarkdownInline,
+): inline is Extract<MobileMarkdownInline, { type: MobileMarkdownInlineMark }> {
+  return inline.type === 'strong' || inline.type === 'emphasis' || inline.type === 'strikethrough';
+}
+
+// 强调内容再解析一遍并拍平(见 MobileMarkdownInlineMark 的说明)。内层文本严格短于外层,
+// 递归必然收敛;强调起点在 HTML 注释里时内层也按注释内处理,注释里的裸路径不会被点亮。
+// 强调里的图片保持原文:GitHub review 常见 `**<sub>![P2 Badge](…)</sub> 标题**`,渲染成
+// 图片预览会把小徽章撑成大图并打断可选中的正文;原文仍整段占位,`[alt](url)` 不会被当成链接。
+function parseMarkedInlines(
+  mark: MobileMarkdownInlineMark,
+  text: string,
+  input: string,
+  index: number,
+  startsInsideHtmlComment: boolean,
+): MobileMarkdownInline[] {
+  const innerStartsInsideHtmlComment = (startsInsideHtmlComment || input.includes('<!--'))
+    && isInsideHtmlComment(blankEscapedAngles(blankCodeSpans(input)), index, startsInsideHtmlComment);
+  return parseInlines(text, innerStartsInsideHtmlComment, true).map((inline) => (
+    inline.type === 'text'
+      ? { type: mark, text: inline.text }
+      : { ...inline, marks: [mark, ...(inline.marks ?? [])] }
+  ));
 }
 
 /** Mobile 只把 `~~` 当删除线，单个 `~` 是普通字符，不能当 URL 包裹标记。 */

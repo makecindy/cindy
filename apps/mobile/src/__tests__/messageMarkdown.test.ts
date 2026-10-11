@@ -123,7 +123,7 @@ describe('messageMarkdown', () => {
     const blocks = parseMobileMarkdown(PR_WATCH_EXPANDED_BLANK_FIXTURE);
 
     expect(blocks.length).toBeGreaterThan(1);
-    // badge Markdown 位于 strong 标记内,当前解析为文本而非图片;空白不是图片尺寸撑高导致。
+    // badge Markdown 位于 strong 标记内,强调里的图片按原文显示(不成图片);空白不是图片尺寸撑高导致。
     expect(collectMobileMarkdownImages(PR_WATCH_EXPANDED_BLANK_FIXTURE)).toEqual([]);
     expect(blocks.some((block) => block.type === 'code')).toBe(true);
   });
@@ -537,6 +537,45 @@ describe('messageMarkdown', () => {
       { type: 'text', text: ', ' },
       { type: 'link', text: 'docs', url: 'https://example.com/docs' },
       { type: 'text', text: '.' },
+    ]);
+  });
+
+  it('keeps links and other inline tokens inside emphasis, flattened with marks', () => {
+    expect(parseMobileMarkdownInlines('打开 **https://example.com/abc/** 安装')).toEqual([
+      { type: 'text', text: '打开 ' },
+      { type: 'link', text: 'https://example.com/abc/', url: 'https://example.com/abc/', marks: ['strong'] },
+      { type: 'text', text: ' 安装' },
+    ]);
+    expect(parseMobileMarkdownInlines('**看 [文档](https://example.com/docs) 和 `a.ts`**')).toEqual([
+      { type: 'strong', text: '看 ' },
+      { type: 'link', text: '文档', url: 'https://example.com/docs', marks: ['strong'] },
+      { type: 'strong', text: ' 和 ' },
+      { type: 'code', text: 'a.ts', marks: ['strong'] },
+    ]);
+    expect(parseMobileMarkdownInlines('*见 https://example.com/x*')).toEqual([
+      { type: 'emphasis', text: '见 ' },
+      { type: 'link', text: 'https://example.com/x', url: 'https://example.com/x', marks: ['emphasis'] },
+    ]);
+    expect(parseMobileMarkdownInlines('**~~https://example.com/old~~**')).toEqual([
+      { type: 'link', text: 'https://example.com/old', url: 'https://example.com/old', marks: ['strong', 'strikethrough'] },
+    ]);
+  });
+
+  it('keeps images inside emphasis as literal text and does not linkify their [alt](url)', () => {
+    expect(parseMobileMarkdownInlines(
+      '**<sub>![P2 Badge](https://img.shields.io/badge/P2-yellow)</sub> 标题 https://example.com/y**',
+    )).toEqual([
+      { type: 'strong', text: '<sub>![P2 Badge](https://img.shields.io/badge/P2-yellow)</sub> 标题 ' },
+      { type: 'link', text: 'https://example.com/y', url: 'https://example.com/y', marks: ['strong'] },
+    ]);
+  });
+
+  it('keeps bare paths inside emphasis within an HTML comment as plain text', () => {
+    expect(parseMobileMarkdownInlines('<!-- **src/a.ts** --> **src/b.ts**')).toEqual([
+      { type: 'text', text: '<!-- ' },
+      { type: 'strong', text: 'src/a.ts' },
+      { type: 'text', text: ' --> ' },
+      { type: 'link', text: 'src/b.ts', url: 'src/b.ts', bare: true, marks: ['strong'] },
     ]);
   });
 
@@ -1553,11 +1592,9 @@ describe('bare file paths(正文纯文本形态)', () => {
     ]);
   });
 
-  it('已知取舍:被强调包裹的路径不成 chip(手机 inline 模型扁平,不支持嵌套)', () => {
-    // 桌面 remark 能在 strong 的子 text 里继续 linkify;手机端 inline 无嵌套,
-    // 强调整段吃掉。属既有架构限制,本次不扩,先把现状钉住。
+  it('被强调包裹的路径同样识别,带外层强调标记(与桌面 remark 在 strong 子节点里 linkify 同口径)', () => {
     expect(parseMobileMarkdownInlines('**src/App.tsx**')).toEqual([
-      { type: 'strong', text: 'src/App.tsx' },
+      { type: 'link', text: 'src/App.tsx', url: 'src/App.tsx', bare: true, marks: ['strong'] },
     ]);
   });
 
