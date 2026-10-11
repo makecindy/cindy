@@ -1773,7 +1773,31 @@ it('keeps a template connection editable without offering protocol or path switc
   expect(JSON.stringify(customProviderMocks.updateCustomProvider.mock.calls[0])).not.toContain('other.example');
 });
 
- it('allows a cloud account endpoint but rejects changing its fixed host pattern', async () => {
+ it('lets an existing preset connection edit the Pi endpoint while Codex keeps the preset address', async () => {
+  const preset = { id: 'preset-endpoint', name: 'Preset Endpoint', runtimes: {
+    codex: { baseUrl: 'https://codex.example.test/v1', wireProtocol: 'openai-responses' as const,
+      models: [{ id: 'm', name: 'M' }] },
+    pi: { baseUrl: 'https://pi.example.test/v1', wireProtocol: 'openai-chat' as const,
+      models: [{ id: 'm', name: 'M' }] },
+  } };
+  vi.mocked(window.electronAPI.maker.listProviderPresets).mockResolvedValue({ presets: [preset] });
+  customProviderMocks.readCustomProviderKey.mockResolvedValue(null);
+  render(<ProviderConnectionDialog initial={{ id: 'preset-endpoint-live', name: 'Live', runtimes: {
+    codex: { ...preset.runtimes.codex, catalogPresetId: preset.id },
+    pi: { ...preset.runtimes.pi, catalogPresetId: preset.id },
+  } }} focusAgent="pi" onSaved={vi.fn()} onClose={vi.fn()} />);
+  await waitForInitialDialogFocus();
+  const endpoint = screen.getByLabelText('settings.providers.custom.fields.baseUrl') as HTMLInputElement;
+  await waitFor(() => expect(endpoint.readOnly).toBe(false));
+  fireEvent.change(endpoint, { target: { value: 'https://relay.example.test/v1' } });
+  fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.save' }));
+  await waitFor(() => expect(customProviderMocks.updateCustomProvider).toHaveBeenCalledOnce());
+  const saved = customProviderMocks.updateCustomProvider.mock.calls[0][0];
+  expect(saved.runtimes.pi.baseUrl).toBe('https://relay.example.test/v1');
+  expect(saved.runtimes.codex.baseUrl).toBe('https://codex.example.test/v1');
+});
+
+it('allows a cloud account endpoint but rejects changing its fixed host pattern', async () => {
   const preset = { id: 'cloud-account', name: 'Cloud account', authMethod: 'apiKey' as const,
     runtimes: { codex: { baseUrl: 'https://{account}.example.test/v1', wireProtocol: 'openai-responses' as const,
       models: [{ id: 'deployment', name: 'Deployment' }] } } };
