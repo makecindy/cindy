@@ -10,6 +10,7 @@ import {
   syncNewMakerDraftCache,
   getNewMakerModelTuning,
   setProviderModelMemoryCache,
+  setThinkingEnabledInMemory,
   type NewMakerDraftSnapshot,
 } from '../newMakerDefaultsCache.js';
 
@@ -132,6 +133,78 @@ describe('getRemoteNewMakerDefaults (device-link 远程草稿镜像)', () => {
     ).toBe(false);
     expect(getThinkingEnabledFromMemory('pi', 'cindy-local-ollama', 'gpt-oss:20b')).toBeUndefined();
     expect(getThinkingEnabledFromMemory('pi', null, 'qwen3.8:27b-mxfp8')).toBeUndefined();
+  });
+
+  it('writes a single thinking switch into the mirror without dropping other entries', () => {
+    setProviderModelMemoryCache({
+      'pi:cindy-local-ollama': {
+        effortByModel: { 'qwen3.8:27b-mxfp8': 'high' },
+        fastByModel: { 'qwen3.8:27b-mxfp8': true },
+        thinkingByModel: { 'qwen3.8:27b-mxfp8': false },
+      },
+      'codex:openai': { effortByModel: {}, fastByModel: {} },
+    });
+
+    // 跨引擎切换提交后主进程局部写入：普通 send 的 lazy-create 只读该镜像。
+    setThinkingEnabledInMemory('pi', 'cindy-local-ollama', 'qwen3.8:27b-mxfp8', true);
+
+    expect(getThinkingEnabledFromMemory('pi', 'cindy-local-ollama', 'qwen3.8:27b-mxfp8')).toBe(true);
+    expect(getThinkingEnabledFromMemory('codex', 'openai', 'gpt-5')).toBeUndefined();
+
+    // renderer 随后追上该选择（快照带上同一个值）：钉子撤销，不再是压住后续改动。
+    setProviderModelMemoryCache({
+      'pi:cindy-local-ollama': {
+        effortByModel: { 'qwen3.8:27b-mxfp8': 'high' },
+        fastByModel: { 'qwen3.8:27b-mxfp8': true },
+        thinkingByModel: { 'qwen3.8:27b-mxfp8': true },
+      },
+    });
+    expect(getThinkingEnabledFromMemory('pi', 'cindy-local-ollama', 'qwen3.8:27b-mxfp8')).toBe(true);
+  });
+
+  it('keeps a committed thinking switch across a stale full-snapshot push until the renderer catches up', () => {
+    setProviderModelMemoryCache({
+      'pi:cindy-local-ollama': {
+        effortByModel: {},
+        fastByModel: {},
+        thinkingByModel: { 'qwen3.8:27b-mxfp8': true },
+      },
+    });
+    // 跨引擎提交写入 off，而 renderer 的全量快照可能仍基于尚未学习到该选择的状态。
+    setThinkingEnabledInMemory('pi', 'cindy-local-ollama', 'qwen3.8:27b-mxfp8', false);
+
+    // 迟到的旧快照不得抹掉刚提交的选择。
+    setProviderModelMemoryCache({
+      'pi:cindy-local-ollama': {
+        effortByModel: {},
+        fastByModel: {},
+        thinkingByModel: { 'qwen3.8:27b-mxfp8': true },
+      },
+    });
+    expect(getThinkingEnabledFromMemory('pi', 'cindy-local-ollama', 'qwen3.8:27b-mxfp8')).toBe(false);
+
+    // 快照连该模型的键都还没带上，也不能抹掉。
+    setProviderModelMemoryCache({
+      'pi:cindy-local-ollama': { effortByModel: {}, fastByModel: {} },
+    });
+    expect(getThinkingEnabledFromMemory('pi', 'cindy-local-ollama', 'qwen3.8:27b-mxfp8')).toBe(false);
+
+    // renderer 追上该选择后撤钉：之后 renderer 的新改动重新生效。
+    setProviderModelMemoryCache({
+      'pi:cindy-local-ollama': {
+        effortByModel: {},
+        fastByModel: {},
+        thinkingByModel: { 'qwen3.8:27b-mxfp8': false },
+      },
+    });
+    setProviderModelMemoryCache({
+      'pi:cindy-local-ollama': {
+        effortByModel: {},
+        fastByModel: {},
+        thinkingByModel: { 'qwen3.8:27b-mxfp8': true },
+      },
+    });
+    expect(getThinkingEnabledFromMemory('pi', 'cindy-local-ollama', 'qwen3.8:27b-mxfp8')).toBe(true);
   });
 
   it('providerModelMemory 镜像就绪时随返回(device-link 草稿列表行的真实读源)', () => {

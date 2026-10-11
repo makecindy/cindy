@@ -773,6 +773,49 @@ describe('session runtime control wiring', () => {
     );
   });
 
+  it('carries the Pi thinking intent through every staged selection replay', () => {
+    const body = handlerBody(
+      registerSource,
+      'const handleSetModel = async (',
+      'const recoverRemoteRuntimeAxisPersistence',
+    );
+    const early = body.slice(body.indexOf('// A picker click'), body.indexOf('const axisPatch:'));
+    // 点选暂存：intent 必须带上思考意图，否则发送时回放会丢档位。
+    expect(early).toContain('{ thinking: atomicSelection.thinking }');
+    // 发送回放 / deferred 结算另两条重建链也不能丢。
+    expect(registerSource).toContain('{ thinking: intent.thinking }');
+    expect(registerSource).toContain('{ thinking: pending.thinking }');
+    expect(
+      registerSource.split('{ thinking: atomicSelection.thinking }').length,
+    ).toBeGreaterThanOrEqual(3);
+    // 回合中延期（deferLockedSelection）的两条登记都要暂存思考意图：只靠结算侧回放
+    // pending.thinking 不够，登记时不写就恒为 undefined，原症状会在「回合中切模」
+    // 场景原样复现。
+    const defer = body.slice(
+      body.indexOf('const deferLockedSelection = async () =>'),
+      body.indexOf('if (runtimeStatus.remoteHostId && isSessionInTurn(sessionId)) {'),
+    );
+    expect(defer).toContain('acceptSessionRuntimeMutation({');
+    expect(defer).toContain('deferSessionRuntimeAxisMutation({');
+    expect(
+      defer.split('{ thinking: atomicSelection.thinking }').length - 1,
+    ).toBeGreaterThanOrEqual(2);
+    // 非 Pi 引擎绝不能收到 thinkingEnabled（只有 Pi 的 set_model 会消费它）。
+    expect(registerSource).toContain(
+      "runtimeAgentKind === 'pi' && atomicSelection?.thinking !== undefined",
+    );
+    // 提交写入镜像后同步本机 renderer 记忆：renderer 的全量快照才会带上该选择，
+    // 镜像里的钉子得以撤销（否则会长期压住被控端后来的显式改动）。
+    const rememberThinking = registerSource.slice(
+      registerSource.indexOf('rememberThinkingIntent: ({'),
+      registerSource.indexOf('bootstrapSwitchedSession: async (sessionId, opts)'),
+    );
+    expect(rememberThinking).toContain(
+      'setThinkingEnabledInMemory(agentKind, providerId, model, thinking)',
+    );
+    expect(rememberThinking).toContain('DRAFT_PREF_APPLY');
+  });
+
   it('only relinks retained cross-host writers without rewriting native history', () => {
     const body = handlerBody(registerSource, 'const handleSetModel = async (', 'const recoverRemoteRuntimeAxisPersistence');
     expect(body).toContain('requiresCodexThreadRelink: () => maker.requiresCodexThreadHostTransfer(');
