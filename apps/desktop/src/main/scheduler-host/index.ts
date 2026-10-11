@@ -53,6 +53,7 @@ import {
 import { DrizzleScheduleStorage, type SchedulerDrizzleDb } from './storage';
 import { ProjectAutomationLoader } from './project-automation-loader';
 import { MakerScheduleRunner } from './runner';
+import { setSilencedRunProbe } from './silent-output';
 import { listMessagesForAgentHandoff } from '../localDb/ipc/messages.js';
 import { drainPersistQueue } from '../messagePersistBroadcaster.js';
 import { buildForcedFailureRun } from './forcedFailureRun';
@@ -257,6 +258,7 @@ async function startSchedulerInternal(deps: StartSchedulerDeps): Promise<Schedul
     },
   });
   _scheduler = scheduler;
+  setSilencedRunProbe((runId) => scheduler.isRunSilenced(runId));
   void getRoutineEngine().catch((error) => deps.logger.warn?.('routine startup failed', { error: String(error) }));
   _loader = loader;
   deps.logger.info?.(`[scheduler-host] started${passive ? ' (passive: auto-fire disabled)' : ''}`);
@@ -318,6 +320,7 @@ export async function resetScheduler(): Promise<void> {
       // Superseded startup rejects after stopping itself; teardown continues.
     }
   }
+  setSilencedRunProbe(null);
   if (_scheduler) {
     await _scheduler.stop();
   }

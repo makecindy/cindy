@@ -52,6 +52,7 @@ import {
   validateExtraDirs,
 } from './extraDirsValidator.js';
 import type { MakerSessionCreateOpts } from './sessionRequest.js';
+import { channelTurnSourceFor, withChannelTurnSource } from './channelTurnSignal.js';
 import type { CindyLearnInvocationGrant } from '../learn-host/invocationGrant.js';
 import { AUTO_REVIEW_DELEGATED_CONTINUATION, currentAutoReviewResourceIntent, readAutoReviewUserText, restoreAutoReviewUserIntent, type AutoReviewHistoryMessage } from './autoReviewUserIntent.js';
 
@@ -1543,7 +1544,11 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         const retryTranscriptUserEntryId = sess.agentKind === 'pi' && so.retryUserClientId
           ? await deps.readPiUserEntry?.(sessionId, so.retryUserClientId)
           : undefined;
-        const sendResult = await sess.send(outgoing as never, {
+        // Other-task mail is the only non-scheduler turn whose reply IM relays (channelTurnSignal).
+        const sendResult = await withChannelTurnSource(sess.id, channelTurnSourceFor(
+          persistUserMessage?.origin,
+          persistUserMessage?.botTaskCoordination !== undefined,
+        ), () => sess.send(outgoing as never, {
           ...(retryTranscriptUserEntryId ? { retryTranscriptUserEntryId } : {}),
           ...(resolveScheduledIntent ? { resolveAutoReviewUserIntent: resolveScheduledIntent } : {}),
           [AUTO_REVIEW_SOURCE_CONTENT]: autoReviewSourceContent,
@@ -1711,7 +1716,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
               );
             }
           },
-        });
+        }));
         sendAccepted = sendResult.accepted;
         if (sendAccepted) {
           cleanupAfterAcceptance?.();

@@ -268,8 +268,12 @@ hook 侧既有的逐轮 `[渠道说明]`，两者措辞不同但都向模型说�
 
 适用范围：个人飞书/Lark、Telegram、Discord、微信、企业微信、钉钉，以及官方 Telegram、Slack；X 不参与。
 
-个人渠道通过 `im/shared/turnRunner.ts` 回传非 IM 入站轮次的输出，
-包括自动任务、其它任务发送消息触发的回复；无需先 `/ctr` 接管。自动任务保留任务名，
+只回传自动执行的轮次：自动任务（scheduler `turnOrigin`），以及其它任务经 `send_to_session` 等
+发来的可见消息触发的回复。桌面里直接输入的消息、伙伴委派的内部协调输入都不回传。其它任务来信由
+主进程在派发它的那次 `Session.send` 期间盖章（`maker-ipc/channelTurnSignal.ts`），随该轮的开始信号
+交给两条路径，只作用于这一轮；不改 maker-core 的 `SendOrigin`，以免插件钩子等把它当作非用户轮次。
+
+个人渠道通过 `im/shared/turnRunner.ts` 回传上述轮次的输出，无需先 `/ctr` 接管。自动任务保留任务名，
 其它来源直接显示回复正文，目的地沿用该任务原聊天和话题。正常 IM 入站轮次仍只发送一次；
 子代理和旧轮次的后台事件不转播。纯文本渠道通过适配器使用现有有效聊天上下文发送最终结果。
 个人后台正文与普通回复、官方后台结果共用 `stripInternalWebCitations` 清理内部引用标记，
@@ -291,9 +295,15 @@ bot 身份按入站使用的稳定 ID 校验；Discord 取 gateway application i
 
 官方 Telegram、Slack 复用已有 hook binding、轮次观察和附件收集；双方宣告 `session-result-v1`
 后，后台回传与任务派发共用渠道 key 判定，兼容既有 Slack 前缀、team-slack、旧频道和 DM key；X 不回传。
-结果用 `turn.end(background: true)` 发送，服务端在原私聊或话题新发消息。普通 IM 轮次和
+轮次终态时按来源决定是否发送（scheduler 来源，或开始时盖了其它任务来信章）。结果用 `turn.end(background: true)` 发送，服务端在原私聊或话题新发消息。普通 IM 轮次和
 已有 retry/reopen 轮次不另发一份。发送前复核账号代次、连接、目录授权与会话绑定；服务端
 再核对设备绑定、聊天归属及 `/new` 代次。Telegram 保存新消息 route，回复结果仍回到原 lane。
+
+静默的自动任务轮次不回传，两条路径同判据：轮次终态时读 scheduler 该 run 的静默标记
+（`scheduler-host/silent-output.ts` 的 `isSilencedSchedulerTurn`），与桌面完成通知一致——
+静默运行默认静默，`schedule_notify_current_run` 解除，`schedule_silence_current_run` 设为静默；
+失败照常回传。个人渠道对开始即静默的轮次不开流式卡，仅累积；收口仍静默则整轮不发，
+已请求提醒则一次性发终稿。中途才静默且已开卡的轮次照常收口，不留半截卡。
 
 两条路径均为在线尽力投递，不增加离线补发或持久化出箱。官方能力需客户端与服务端同时支持，
 旧版本通过能力协商保持原行为；本地测试通过不代表服务端已经部署或真实渠道已联调。

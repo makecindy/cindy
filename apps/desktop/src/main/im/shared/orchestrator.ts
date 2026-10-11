@@ -50,7 +50,7 @@ const registry = new Map<ImChannelName, ImOrchestrator>();
 
 // Background sends can be the first activity after restart: restore only output
 // routing from the saved channel identity, without creating/resuming a session.
-onChannelTurn(async (session, phase) => {
+onChannelTurn(async (session, phase, source) => {
   if (phase !== 'starting') return;
   const generation = captureImAccountGeneration();
   if (generation === null || ![...registry.values()].some((o) => o.adapter.im.getStatus().kind === 'connected')) return;
@@ -69,7 +69,7 @@ onChannelTurn(async (session, phase) => {
   if (userId) orchestrator.turnRunner.attachSessionOutput(session, userId, {
     attached: binding !== null,
     scopeKey: binding?.scopeKey,
-  });
+  }, source);
 });
 
 /**

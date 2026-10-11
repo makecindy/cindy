@@ -1,5 +1,25 @@
-import type { AgentEvent } from '@cindy/maker-core';
+import type { AgentEvent, SendOrigin } from '@cindy/maker-core';
 import type { Schedule } from '@cindy/maker-scheduler';
+
+/** Live scheduler policy, registered by the scheduler host; IM relays read it without loading the host. */
+let silencedRunProbe: ((runId: string) => boolean) | null = null;
+
+export function setSilencedRunProbe(probe: ((runId: string) => boolean) | null): void {
+  silencedRunProbe = probe;
+}
+
+/**
+ * Whether this scheduler turn's run is currently silenced. Read it synchronously at the turn's
+ * terminal event: the run is still in flight then, and the agent's notify/silence call is final.
+ * Unknown runs (restart, hook origins without runId) are not silenced, matching completion alerts.
+ */
+export function isSilencedSchedulerTurn(origin: SendOrigin | undefined): boolean {
+  return (
+    origin?.kind === 'scheduler' &&
+    typeof origin.runId === 'string' &&
+    silencedRunProbe?.(origin.runId) === true
+  );
+}
 
 /** Ordinary tasks keep their transcript even when completion notifications are silent. */
 export function hidesScheduledTranscript(

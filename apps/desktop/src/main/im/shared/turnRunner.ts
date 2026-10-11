@@ -123,6 +123,8 @@ import { agentHandoffPending } from '../../maker-ipc/agentHandoffPendingSingleto
 import { prependHandoffToUserMessage, prependNoteToWireUserMessage } from '../../maker-ipc/agentHandoff';
 import { buildPlanReconcileNote, summarizeOpenPlan } from '../../maker-ipc/planReconcile';
 import { peekGoalInactiveNote } from '../../goal-host/inactiveNote';
+import { isSilencedSchedulerTurn } from '../../scheduler-host/silent-output';
+import type { ChannelTurnSource } from '../../maker-ipc/channelTurnSignal';
 import { listMessagesForAgentHandoff } from '../../localDb/ipc/messages';
 import {
   enqueueDurableWrite,
@@ -369,6 +371,11 @@ interface SessionState {
   scheduledTranspond: ScheduledTranspond | null;
   /** Agent execution ended, but its background output is still being delivered. */
   pendingTranspondFinals: number;
+  /**
+   * 正在开始的非 IM 轮次由其它任务的可见来信发起(channelTurnSignal 盖章)。桌面输入等
+   * 其它来源不回传；在该轮终态清除，避免沿用到下一轮。
+   */
+  otherTaskTurn: boolean;
 }
 
 /**
@@ -379,6 +386,13 @@ interface ScheduledTranspond {
   silentStopSettleUnsub: (() => void) | null;
   /** 仅 scheduler 轮次显示自动任务标题，其它来源直接回复正文。 */
   header: string | null;
+  /** 首条事件的来源；静默判据在收口时按它的 runId 读。 */
+  origin: AgentEvent['turnOrigin'];
+  /**
+   * 首条事件时 run 已静默(静默运行任务)：只累积不开卡，收口时仍静默就整轮不发；
+   * 中途请求提醒则收口时一次性发终稿。
+   */
+  held: boolean;
   activity: TurnActivityState;
   activityTicker: ReturnType<typeof setInterval> | null;
   /** 自动任务这一轮 agent 的回复文本累加。 */
@@ -513,7 +527,12 @@ export type ImTurnDispatch =
 
 /** createTurnRunner 返回的编排实例 — per channel 一个。 */
 export interface ImTurnRunner {
-  attachSessionOutput(session: MakerSession, userId: string, route?: { attached: boolean; scopeKey?: string }): void;
+  attachSessionOutput(
+    session: MakerSession,
+    userId: string,
+    route?: { attached: boolean; scopeKey?: string },
+    source?: ChannelTurnSource,
+  ): void;
   runAgentTurn(args: ImRunAgentTurnArgs): Promise<void>;
   /**
    * 把渠道用户消息**提前**写进本地 messages 表 —— 只给「dispatch 之前还有重活」
@@ -1941,6 +1960,7 @@ export function createTurnRunner(
       attached,
       scheduledTranspond: null,
       pendingTranspondFinals: 0,
+      otherTaskTurn: false,
     };
     sessionStates.set(row.id, state);
 
@@ -2401,12 +2421,14 @@ export function createTurnRunner(
       if (!state) return;
       const turn = state.queue[0];
       if (!turn) {
-        // 渠道自有任务始终把回复送回自己的聊天；跨任务消息没有 scheduler
-        // turnOrigin，也不能丢弃。通知回复只临时使用普通任务，不建立持续转播。
-        // 接管普通任务仍仅转播 scheduler，保留其桌面输入的原有可见性。
+        // 只回传自动执行：scheduler 轮次，以及渠道自有任务里其它任务来信触发的轮次。
+        // 桌面输入留在桌面。通知回复只临时使用普通任务，不建立持续转播；接管普通任务
+        // 仍仅转播 scheduler。已开始的转播持续到收口(含 silent-stop 自动续跑)。
+        const channelOwned = !state.preserveSessionConfig;
         if (
-          !state.preserveSessionConfig ||
-          (state.attached && event.turnOrigin?.kind === 'scheduler')
+          state.scheduledTranspond !== null ||
+          (event.turnOrigin?.kind === 'scheduler' && (channelOwned || state.attached)) ||
+          (channelOwned && state.otherTaskTurn)
         ) {
           transpondScheduledEvent(state, event);
         }
@@ -2414,6 +2436,7 @@ export function createTurnRunner(
         // 非终止 error 表示底层仍在自动恢复，不能抢跑下一条消息（放行排队消息会让
         // 下一条撞上 SESSION_RUNNING）。
         if (isProductTurnDoneEvent(event) || isTerminalAgentErrorEvent(event)) {
+          state.otherTaskTurn = false;
           maybeDispatchNextQueued(state, userId);
           return;
         }
@@ -2693,7 +2716,7 @@ export function createTurnRunner(
 
   function refreshTranspondCard(state: SessionState): void {
     const t = state.scheduledTranspond;
-    if (!t || !richIm) return;
+    if (!t || !richIm || t.held) return;
     void ensureTranspondHandle(state, t)
       .then((h) => {
         if (state.scheduledTranspond === t) h.replace(composeTranspondView(state, t, false));
@@ -2717,6 +2740,8 @@ export function createTurnRunner(
         header: origin?.kind === 'scheduler'
           ? ui.agent.scheduledTaskHeader(origin.scheduleName ?? null)
           : null,
+        origin,
+        held: isSilencedSchedulerTurn(origin),
         activity: createTurnActivity(Date.now()),
         activityTicker: null,
         buffer: '',
@@ -2730,7 +2755,7 @@ export function createTurnRunner(
       case 'tool_result_full': {
         if (state.makerSession.remoteHostId) return;
         const paths = collectToolResultImages(t.mediaAbsPaths, event);
-        if (paths.length && richIm) {
+        if (paths.length && richIm && !t.held) {
           void ensureTranspondHandle(state, t).then((handle) => {
             if (sessionStates.get(state.makerSession.id) !== state) return;
             for (const absPath of paths) handle.addExtraImageAbsPath?.(absPath);
@@ -2761,7 +2786,7 @@ export function createTurnRunner(
           typeof data.toolUseId === 'string' ? data.toolUseId : undefined,
         );
         // 低频 ticker 刷新耗时(只刷已存在的卡)。
-        if (richIm && !t.activityTicker) {
+        if (richIm && !t.held && !t.activityTicker) {
           t.activityTicker = setInterval(() => {
             t.streamingHandle?.replace(composeTranspondView(state, t, false));
           }, ACTIVITY_TICK_MS);
@@ -2808,6 +2833,8 @@ export function createTurnRunner(
     const t = state.scheduledTranspond;
     if (!t) return;
     state.scheduledTranspond = null; // 防重入(下一条 stray 不会再命中)
+    // 静默须在终态事件同步读(run 此时仍在跑)。失败照发；已开卡的不留半截卡。
+    const silenced = !errMsg && isSilencedSchedulerTurn(t.origin);
     state.pendingTranspondFinals += 1;
     clearSilentStopSettleWait(t);
     clearTranspondTicker(t);
@@ -2821,6 +2848,7 @@ export function createTurnRunner(
       if (!t.streamingHandle && t.buffer.length === 0 && t.mediaAbsPaths.length === 0 && t.activity.totalSteps === 0 && !errMsg) {
         return;
       }
+      if (silenced && !t.streamingHandlePromise) return;
       if (output.kind === 'chunked-text' && !state.makerSession.remoteHostId && t.buffer.includes('![')) {
         const materialized = await materializeLocalMarkdownImages({
           text: t.buffer, workingDir: state.workingDir, sessionId: state.makerSession.id,
@@ -2846,6 +2874,7 @@ export function createTurnRunner(
       }
       const handle = await ensureTranspondHandle(state, t);
       if (sessionStates.get(state.makerSession.id) !== state) return;
+      if (t.held) for (const absPath of t.mediaAbsPaths) handle.addExtraImageAbsPath?.(absPath);
       await handle.finalize(body);
     } catch (err) {
       log.warn(
@@ -4085,9 +4114,10 @@ export function createTurnRunner(
   }
 
   return {
-    attachSessionOutput: (session, userId, route) => {
+    attachSessionOutput: (session, userId, route, source) => {
       const existing = sessionStates.get(session.id);
       if (existing) {
+        existing.otherTaskTurn = source === 'other-task';
         const userChanged = existing.userId !== userId;
         if (route?.attached) {
           existing.attached = true;
@@ -4114,6 +4144,7 @@ export function createTurnRunner(
         attached: route?.attached === true,
         scheduledTranspond: null,
         pendingTranspondFinals: 0,
+        otherTaskTurn: source === 'other-task',
       };
       sessionStates.set(session.id, state);
       state.unsubscribers.push(session.onEvent(handleEventFor(session.id, userId)));

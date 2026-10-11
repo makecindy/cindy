@@ -3552,6 +3552,24 @@ describe('watchContinuation: 观察桌面端续跑并回流', () => {
     expect(ends[0]?.errorMessage).toBeNull();
   });
 
+  it('轮次收口时把这一轮的来源同步交给 onSettling(后台回传据此读静默态)', async () => {
+    fakeMaker.getSession.mockReturnValueOnce(makeManualSession('sess-live'));
+    const runner = createMakerHookSessionRunner({ log });
+    const settled: unknown[] = [];
+    const { req, events } = watchReq({ onSettling: (origin?: unknown) => settled.push(origin) });
+    runner.watchContinuation!(req as never);
+
+    const origin = { kind: 'scheduler', scheduleId: 's1', runId: 'r1' };
+    const cb = h.eventCbs.get('sess-live')!;
+    cb({ type: 'text', data: { text: '巡检完成', isFinal: true }, turnOrigin: origin } as never);
+    cb({ type: 'done', data: null, turnOrigin: origin } as never);
+    // 终态事件当拍同步拿到来源, 早于异步收口。
+    expect(settled[0]).toEqual(origin);
+    expect(events).not.toContain('end:ok');
+    await flush();
+    expect(events.at(-1)).toBe('end:ok');
+  });
+
   it('续跑轮同样吃到多消息累积语义: 两条 claude 消息都在, 不只剩最后一条', async () => {
     // run() 与 watchContinuation 共用 observeHookTurn, 所以 2026-07-28 那个
     // 「先回一句 → 思考 → 终答 只剩最后一条」的修订对续跑轮自动生效。抽取若
