@@ -573,6 +573,14 @@ handler 无 sender 依赖；不加入共享任务访客白名单，不进入自�
 
 ## 远程 Agent：Agent 在另一台电脑运行
 
+三个 harness 冷恢复回退的 `caps.requireExistingSession` 为可选能力；只有显式为 `true` 才发送
+带 `vendorOptions.requireExistingSession: true` 的 `open`。新端原样传递并禁止原生
+resume 失败后新建空会话；旧端缺字段时控制端在 `open` 前拒绝。供应商组中转也必须在
+组内电脑的 `open` 前核对同一能力，不能只核对组所在电脑；严格恢复失败不换电脑。
+未请求该约束的普通启动、
+旧控制端和已有 live Session 的回退保持原行为，不改变协议版本、channel 或服务端。
+回归见 Desktop `remote-agent/__tests__/roundtrip.test.ts` 与 `groupRelay.test.ts`。
+
 同账号的 A(任务、项目文件与命令所在)可以让 B(打开了「允许远程控制」)用 B 自己的 Agent 程序、
 登录(含 Claude 订阅)、供应商与网络运行 Agent。新增 invoke channel `maker:remote-agent:v1`
 (`packages/device-link/src/remoteAgent.ts`)，只进同账号 allowlist，不进共享任务清单；被控端

@@ -6162,6 +6162,9 @@ export class PiAgent extends BaseAgent {
     try {
       // Resume:pi 的会话钥匙是 session JSONL 绝对路径(get_state.sessionFile),
       // 落库 sdk_session_id 存的就是它;切换失败走 invalid-resume CAS 协定。
+      if (opts.vendorOptions?.requireExistingSession === true && !opts.resumeSessionId) {
+        throw new Error('Pi history is required for rewind');
+      }
       if (opts.resumeSessionId) {
         // Pi 对不存在的路径会“成功”创建一条同名空会话，不能把历史丢失伪装成
         // resume 成功。Cindy 先做本地文件存在性检查，再决定是否允许 fresh fallback。
@@ -6172,6 +6175,9 @@ export class PiAgent extends BaseAgent {
           resumeFileExists = false;
         }
         if (!resumeFileExists) {
+          if (opts.vendorOptions?.requireExistingSession === true) {
+            throw new Error(`Pi history is missing: ${opts.resumeSessionId}`);
+          }
           // 轮 25 CRITICAL:session 文件缺失 = 历史数据已不存在, fresh 是唯一
           // 合理选择 —— 不因 onInvalidResumeSession 的 CAS 结果(防并发覆盖的
           // claude 语义)拒绝 fallback。CAS 仍执行(清 DB 残留 id), 但返回值
@@ -6187,6 +6193,9 @@ export class PiAgent extends BaseAgent {
             sessionPath: opts.resumeSessionId,
           });
           if (!switched.success) {
+            if (opts.vendorOptions?.requireExistingSession === true) {
+              throw new Error(`Pi history could not be resumed: ${switched.error ?? 'unknown'}`);
+            }
             // 轮 25 CRITICAL:switch 失败也允许 fallback(同文件缺失理由)——
             // CAS 结果不作门禁, fresh 比卡死强。CAS 仍执行清 DB 残留。
             // 轮 42 P2(codex-connector):fresh fallback 前**必须**检查 CAS 结果
@@ -6267,6 +6276,9 @@ export class PiAgent extends BaseAgent {
         // 轮 40-w4-t4:不再用 pi-${Date.now()} 掩盖 —— 拿不到真实 session 身份
         // 就 fail-closed(伪 id 会让 resume 指向不存在的路径)。
         throw new Error('pi get_state returned no sessionFile/sessionId — refusing to start');
+      }
+      if (opts.vendorOptions?.requireExistingSession === true && stateData.sessionFile !== opts.resumeSessionId) {
+        throw new Error('Pi history identity changed while resuming for rewind');
       }
       sdkSessionId = validateSdkSessionId(stateData.sessionFile || stateData.sessionId!);
       queue.push({ type: 'session_id', data: sdkSessionId, source: 'pi' });

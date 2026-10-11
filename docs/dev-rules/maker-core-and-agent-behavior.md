@@ -199,6 +199,14 @@ vitest run src/agents/codex/app-server/external-auth.native.test.ts`，覆盖分
 `/clear` 之后的新消息。实现见 Desktop `maker-orchestration/rewind.ts` 与 maker-core
 `agents/codex/index.ts` 的 `commitRewindFiles`，回归见 `rewind.test.ts`、`fork.test.ts`、
 `rewindNativeBoundarySqlite.test.ts`、`tx.test.ts` 与 `index.test.ts`。
+Claude Code、Codex、Pi 的编辑重发与回退预览／提交在任务没有 live Session 时，按持久化配置恢复原生会话，
+不发送唤醒消息。恢复与回退共用任务发送锁，归档／删除任务不激活；严格历史恢复保持原供应商与
+Agent 所在电脑，不参加供应商组启动分配或启动失败后的自动换电脑。历史操作的
+`requireExistingSession` 启动约束禁止把缺失历史降级为空会话，也不清除原有历史标识；Claude 运行期恢复失败同样不得进入 fresh 重试。Pi 会话树复用同一
+宿主历史恢复函数，其原有入口语义不变。实现与回归见 Desktop `sessionHistoryResume.ts`、
+`sessionTreeProviderResume.test.ts` 与 `rewind-ipc.test.ts`。通过设备互联控制任务仍走所属
+Desktop；若 Agent 程序本身在另一台电脑运行，则需那台声明同名能力，旧端在 `open` 前
+拒绝本次历史恢复，不回退到本机或自动重放输入。
 查询与 fork 使用同一隔离控制面 host，关闭其写入进程后才发布子线程身份。
 HTTP 回退遇到缺失 `Content-Type` 的成功响应时，只允许从明文 SSE 前缀（可带注释心跳）
 确认事件流并补齐响应头；显式非 SSE 类型、HTML／JSON、空响应与只有心跳的正文不能放行。

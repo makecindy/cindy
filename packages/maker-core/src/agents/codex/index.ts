@@ -3598,6 +3598,14 @@ assertRouteCurrent();
     registerFailedCustomContextStartupCleanup: (cleanup: (() => Promise<void>) | null) => void,
     startup: { signal: AbortSignal; threadDispatched: boolean; cleanup?: () => Promise<void> },
   ): Promise<AgentSessionHandle> {
+    const isLikelyValidThreadId = (id: string | undefined): id is string =>
+      typeof id === 'string' && id.length > 0 && !id.startsWith('<') && /^[0-9a-fA-F-]+$/.test(id);
+    // Reject invalid history before acquiring a host or its binding lease. A
+    // history operation must never fall back to creating an empty thread.
+    if (opts.vendorOptions?.requireExistingSession === true &&
+      (!opts.resumeSessionId || !isLikelyValidThreadId(opts.resumeSessionId))) {
+      throw new CodexResumePreparationBlockedError('Codex rewind requires an existing thread');
+    }
     // scope 带完整 s:<sessionId> 前缀 → host logger 落盘时提取 business sessionId,
     // 路由到 sessions/<id>/<date>.ndjson (logger.ts extractSessionId / sessionAgentSlot)。
     const sid = opts.sessionId ?? '';
@@ -6756,8 +6764,6 @@ assertRouteCurrent();
             ? host.getRemoteCompactionProviderId?.() ?? undefined
             : undefined;
 
-    const isLikelyValidThreadId = (id: string | undefined): id is string =>
-      typeof id === 'string' && id.length > 0 && !id.startsWith('<') && /^[0-9a-fA-F-]+$/.test(id);
     // Resolve the canonical history before asking a new account host about a thread
     // it has not loaded yet. The same path must be used for metadata and resume.
     let preparedResumePath: string | void = undefined;
@@ -7150,7 +7156,7 @@ assertRouteCurrent();
           // 我们能拿到的最佳目录线索(与下方 wire 规范化不同,后者不更新它)。
           mutableCatalogModel = resp.model;
         }
-        if ((preparedResumePath || sessionStorage?.rolloutPath) && resp.thread.id !== opts.resumeSessionId) {
+        if ((vo.requireExistingSession === true || preparedResumePath || sessionStorage?.rolloutPath) && resp.thread.id !== opts.resumeSessionId) {
           throw new Error('Codex resumed an unexpected thread');
         }
         // A missing indexed path is not permission to select an older copy by ID.
@@ -7214,7 +7220,7 @@ assertRouteCurrent();
       } catch (e) {
         if (!startup.threadDispatched && (e instanceof CodexRouteSelectionChangedError || startup.signal.aborted)) throw e;
         let freshThreadStarted = false;
-        if (!preparedResumePath && (!indexedRolloutMissing || indexedThreadAbsent)
+        if (vo.requireExistingSession !== true && !preparedResumePath && (!indexedRolloutMissing || indexedThreadAbsent)
           && isExactNoRolloutThreadResumeError(e, opts.resumeSessionId)) {
           // For indexed threads, both native metadata and rollout must be absent.
           // A no-rollout error alone also occurs after persisted history is lost.

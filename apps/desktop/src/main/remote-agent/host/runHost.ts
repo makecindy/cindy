@@ -1341,6 +1341,9 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
         if (caps.virtualWorkspace !== true || (current.sameAccount && caps.guestRelay !== true)) {
           throw new Error('[REMOTE_AGENT_PEER_TOO_OLD] the computer in the provider group cannot take shared tasks yet');
         }
+        if (payload.options.vendorOptions?.requireExistingSession === true && caps.requireExistingSession !== true) {
+          throw new Error('[REMOTE_AGENT_UNSUPPORTED] The computer in the provider group must be updated before restoring history for rewind.');
+        }
         // 等 caps 期间任务已经结束(撤权、受邀者关闭)：不再打开(收尾已经放掉了这次尝试的负载)。
         if (run.closing) return;
         // 发打开之前先记下这台：它在启动 Agent 之前就会建受邀者目录与会话记录，启动失败、还没有原生会话 id
@@ -1839,6 +1842,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
           virtualWorkspace: true,
           // 能按受邀者隔离运行(供应商级授权与出站边界都已接上)，才接受组所在电脑中转过来的受邀者任务。
           ...(deps.providerAccess && deps.bindGuestProviderRoute ? { guestRelay: true } : {}),
+          requireExistingSession: true,
         };
         return caps;
       }

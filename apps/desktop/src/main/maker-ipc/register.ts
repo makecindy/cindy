@@ -152,6 +152,7 @@ import {
   redactSensitiveText,
 } from '@cindy/maker-shared/error-redaction';
 import { permissionModeOrAsk } from '@cindy/maker-shared/permission-mode';
+import { getOrResumeHistorySession } from './sessionHistoryResume.js';
 import {
   isProductTurnCompletionTailEvent,
   isTurnContinuationBoundaryEvent,
@@ -3930,6 +3931,16 @@ const productTurnWallClockTracker = new ProductTurnWallClockTracker();
 const productTurnUsageTargetTracker = new ProductTurnUsageTargetTracker();
 const claudeOutputLagTimingGuard = new ClaudeOutputLagTimingGuard();
 
+let resumeSessionForRewindHolder: ((sessionId: string) => Promise<void>) | null = null;
+
+/** Caller holds the session send lock; resume history without dispatching a turn. */
+export async function resumeSessionForRewind(sessionId: string): Promise<void> {
+  if (!resumeSessionForRewindHolder) {
+    throwIpcError('INTERNAL', 'Agent session bootstrap is not initialized');
+  }
+  await resumeSessionForRewindHolder(sessionId);
+}
+
 /**
  * Own the session input boundary while rewind stops an active turn and changes
  * history. Queued messages survive the operation but stay paused afterwards.
@@ -7659,6 +7670,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
    * 不归组管时原样返回 null。
    */
   async function applyProviderGroupAssignment(o: CreateOpts): Promise<ProviderGroupStartContext | null> {
+    // History belongs to its saved computer; rewind must not enroll in startup failover.
+    if (o.vendorOptions?.requireExistingSession === true) return null;
     if (!providerGroupService || !o.id || o.remoteHostId) return null;
     if (typeof o.model !== 'string' || !o.model) return null;
     // 本机没有建组、任务不指向同账号另一台电脑(那台可能建了组)、也没有归组时不读数据库，
@@ -21237,78 +21250,40 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
   );
 
-  /**
-   * 会话树是历史浏览入口，不能要求用户先发一条消息把旧 Pi 会话唤醒。
-   * 这里按持久化元数据恢复同一原生 session；Maker.createSession 自带 per-id singleflight。
-   */
-  async function getOrResumeSessionTreeSession(sessionId: string) {
-    const live = maker.getSession(sessionId);
-    if (live) return live;
-    const meta = await maker.getSessionMeta(sessionId).catch(() => null);
-    if (!meta || meta.agentKind !== 'pi') return null;
-    const db = getDbClient().drizzle;
-    const [row] = await db
-      .select({
-        providerId: sessions.providerId,
-        effort: sessions.effort,
-        fastMode: sessions.fastMode,
-        permissionMode: sessions.permissionMode,
-        remoteHostId: sessions.remoteHostId,
-        orcaRole: sessions.orcaRole,
-        status: sessions.status,
-      })
-      .from(sessions)
-      .where(eq(sessions.id, sessionId))
-      .limit(1);
-    if (!row) return null;
-    // 轮 40-w3 MEDIUM:会话树是历史浏览入口, lazy resume 会**复活**会话
-    // (重建 desktop 内存 session + 远端 daemon session)。已归档/软删除的
-    // 会话必须保持死态 —— 只允许 active 会话被懒恢复, 否则「查看会话树」
-    // 这个只读动作会让产品持久态(归档/删除)与运行态(活跃进程)分叉。
-    if (row.status !== 'active') {
-      log.debug('session-tree: skip lazy resume for non-active session', {
-        sessionId,
-        status: row.status,
-      });
-      return null;
-    }
-    const createOpts = buildCreateOptsWithStderr({
-      id: sessionId,
-      agentKind: 'pi',
-      workingDir: meta.workDir,
-      model: meta.model,
-      // providerId=null 是显式的 Cindy 默认路由；undefined 才允许 Pi 按同名模型
-      // 反查原生 BYOM。会话树懒恢复必须原样保留 DB 的三态契约。
-      providerId: row.providerId,
-      resumeSessionId: meta.sdkSessionId,
-      effort: row.effort as CreateOpts['effort'],
-      fastMode: !!row.fastMode,
-      permissionMode: permissionModeOrAsk(row.permissionMode),
-      title: meta.title,
-      remoteHostId: row.remoteHostId ?? undefined,
-      orcaRole: row.orcaRole as CreateOpts['orcaRole'],
+  // Both history entry points use the normal bootstrap without sending input.
+  async function getOrResumeSessionTreeSession(sessionId: string, operation: 'pi-tree' | 'rewind' = 'pi-tree') {
+    return getOrResumeHistorySession(sessionId, operation, {
+      maker,
+      assertOwner: captureSessionOwner(),
+      readSettings: async () => {
+        const [row] = await getDbClient().drizzle.select().from(sessions)
+          .where(eq(sessions.id, sessionId)).limit(1);
+        return row ?? null;
+      },
+      prepare: async (createOpts) => {
+        Object.assign(createOpts, buildCreateOptsWithStderr(createOpts));
+        if (!await checkWorkDirExists(sessionId, createOpts.workingDir, createOpts.agentKind, createOpts.remoteHostId)) {
+          return false;
+        }
+        await synthesizeOrcaVendorOptionsFromDb(sessionId, createOpts);
+        const extraDirs = await readSessionExtraDirsFromDb(sessionId);
+        if (extraDirs.length > 0) Object.assign(createOpts, directoryGrantsForRuntime(extraDirs));
+        const writableDirs = await readSessionWritableDirsFromDb(sessionId);
+        if (writableDirs.length > 0) createOpts.writableDirs = writableDirs;
+        await ensureRemoteReadyForSessionStart({ createOpts });
+        return true;
+      },
+      bootstrap: async (createOpts, assertOwner) => {
+        const { session } = await bootstrapSession(createOpts, assertOwner);
+        await markOrcaRoleIfNeeded(session.id, createOpts.orcaRole);
+        return session;
+      },
     });
-    const workDirReady = await checkWorkDirExists(
-      sessionId,
-      createOpts.workingDir,
-      createOpts.agentKind,
-      createOpts.remoteHostId,
-    );
-    if (!workDirReady) return null;
-    await synthesizeOrcaVendorOptionsFromDb(sessionId, createOpts);
-    const extraDirs = await readSessionExtraDirsFromDb(sessionId).catch(() => []);
-    if (extraDirs.length > 0) Object.assign(createOpts, directoryGrantsForRuntime(extraDirs));
-    const writableDirs = await readSessionWritableDirsFromDb(sessionId).catch(() => []);
-    if (writableDirs.length > 0) createOpts.writableDirs = writableDirs;
-    await ensureRemoteReadyForSessionStart({ createOpts });
-    const { session: resumed } = await bootstrapSession(createOpts);
-    await markOrcaRoleIfNeeded(resumed.id, createOpts.orcaRole);
-    log.info('session-tree: lazily resumed Pi session', {
-      sessionId,
-      sdkSessionId: meta.sdkSessionId ?? null,
-    });
-    return resumed;
   }
+
+  resumeSessionForRewindHolder = async (sessionId) => {
+    await getOrResumeSessionTreeSession(sessionId, 'rewind');
+  };
 
   ipcMain.handle(MAKER_INVOKE.GET_SESSION_TREE, async (event, sessionId: unknown) => {
     // getOrResumeSessionTreeSession 会 lazy resume(spawn Agent)→ 有副作用。非

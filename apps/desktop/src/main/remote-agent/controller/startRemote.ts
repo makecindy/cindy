@@ -364,6 +364,10 @@ export async function startRemoteAgentSession(
     if (caps.virtualWorkspace !== true) {
       throw new Error('[REMOTE_AGENT_UNSUPPORTED] The other computer does not support the virtual workspace required to protect local paths.');
     }
+    if (opts.vendorOptions?.requireExistingSession === true &&
+      caps.requireExistingSession !== true) {
+      throw new Error('[REMOTE_AGENT_UNSUPPORTED] The other computer must be updated before restoring history for rewind.');
+    }
     startedRaw = await client.open(kind, payload);
   } catch (error) {
     client.abandon('start-failed');

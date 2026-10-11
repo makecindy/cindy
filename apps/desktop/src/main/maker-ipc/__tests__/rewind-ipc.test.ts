@@ -7,6 +7,9 @@ const mocks = vi.hoisted(() => ({
   commitRewindAtMessage: vi.fn(),
   drainPersistQueue: vi.fn(),
   withSessionInputStoppedForRewind: vi.fn(),
+  resumeSessionForRewind: vi.fn(),
+  assertTrustedAppRendererEvent: vi.fn(),
+  isDeviceLinkInvoke: vi.fn(() => false),
   ownerScope: { ownerScopeKey: 'owner-1' },
   broadcastSubagentRunsInvalidated: vi.fn(),
   beginSubagentRewindFence: vi.fn(),
@@ -34,6 +37,14 @@ vi.mock('../../messagePersistBroadcaster.js', () => ({
 
 vi.mock('../register.js', () => ({
   withSessionInputStoppedForRewind: mocks.withSessionInputStoppedForRewind,
+  resumeSessionForRewind: mocks.resumeSessionForRewind,
+}));
+
+vi.mock('../../security/trustedAppRenderer.js', () => ({
+  assertTrustedAppRendererEvent: mocks.assertTrustedAppRendererEvent,
+}));
+vi.mock('../../device-link/invoke-context.js', () => ({
+  isDeviceLinkInvoke: mocks.isDeviceLinkInvoke,
 }));
 
 vi.mock('../../goal-host/index.js', () => ({
@@ -73,8 +84,13 @@ function sessionRunningError(): Error & { code: 'SESSION_RUNNING' } {
 describe('maker rewind IPC stop-then-rewind', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.previewRewindAtMessage.mockReset();
+    mocks.commitRewindAtMessage.mockReset();
+    mocks.assertTrustedAppRendererEvent.mockReset();
+    mocks.isDeviceLinkInvoke.mockReturnValue(false);
     mocks.handlers.clear();
     mocks.drainPersistQueue.mockResolvedValue(undefined);
+    mocks.resumeSessionForRewind.mockResolvedValue(undefined);
     mocks.withSessionInputStoppedForRewind.mockImplementation(
       async (_sessionId: string, action: () => Promise<unknown>) => action(),
     );
@@ -84,6 +100,60 @@ describe('maker rewind IPC stop-then-rewind', () => {
     });
     mocks.listVisibleSubagentObservationIdentities.mockResolvedValue([]);
     registerMakerRewindIpc();
+  });
+
+  it.each([MAKER_INVOKE.REWIND_PREVIEW, MAKER_INVOKE.REWIND_COMMIT])(
+    'rejects untrusted local callers before resuming for %s, preserving device-link access',
+    async (channel) => {
+      mocks.assertTrustedAppRendererEvent.mockImplementation(() => { throw new Error('untrusted renderer'); });
+      await expect(mocks.handlers.get(channel)!({}, 'session-1', 'message-1')).rejects.toThrow('untrusted renderer');
+      expect(mocks.resumeSessionForRewind).not.toHaveBeenCalled();
+      mocks.isDeviceLinkInvoke.mockReturnValue(true);
+      await mocks.handlers.get(channel)!({}, 'session-1', 'message-1');
+      expect(mocks.resumeSessionForRewind).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each([MAKER_INVOKE.REWIND_PREVIEW, MAKER_INVOKE.REWIND_COMMIT])(
+    'resumes a restored task before %s without sending a wake-up message',
+    async (channel) => {
+      let live = false;
+      mocks.resumeSessionForRewind.mockImplementation(async () => { live = true; });
+      const operation = channel === MAKER_INVOKE.REWIND_PREVIEW
+        ? mocks.previewRewindAtMessage : mocks.commitRewindAtMessage;
+      const result = { id: 'session-1' };
+      operation.mockImplementation(async () => {
+        if (!live) throw Object.assign(new Error('Session is inactive'), { code: 'NO_LIVE_QUERY' });
+        return result;
+      });
+      await expect(mocks.handlers.get(channel)!({}, 'session-1', 'message-1')).resolves.toBe(result);
+      expect(mocks.resumeSessionForRewind).toHaveBeenCalledWith('session-1');
+    },
+  );
+
+  it.each([MAKER_INVOKE.REWIND_PREVIEW, MAKER_INVOKE.REWIND_COMMIT])(
+    'serializes cold resume with sends and route changes for %s',
+    async (channel) => {
+      const release = await acquireSendToSessionLock('session-1');
+      const rewinding = mocks.handlers.get(channel)!({}, 'session-1', 'message-1');
+      try {
+        for (let i = 0; i < 20; i++) await Promise.resolve();
+        expect(mocks.resumeSessionForRewind).not.toHaveBeenCalled();
+      } finally {
+        release();
+      }
+      await rewinding;
+      expect(mocks.resumeSessionForRewind).toHaveBeenCalledOnce();
+    },
+  );
+
+  it('does not commit or advance rewind generation when cold resume fails', async () => {
+    const generation = getSessionRewindGeneration('session-1');
+    mocks.resumeSessionForRewind.mockRejectedValue(new Error('native history unavailable'));
+    await expect(mocks.handlers.get(MAKER_INVOKE.REWIND_COMMIT)!({}, 'session-1', 'message-1'))
+      .rejects.toThrow('native history unavailable');
+    expect(mocks.commitRewindAtMessage).not.toHaveBeenCalled();
+    expect(getSessionRewindGeneration('session-1')).toBe(generation);
   });
 
   it('does not commit rewind while authorization owns the session send boundary', async () => {

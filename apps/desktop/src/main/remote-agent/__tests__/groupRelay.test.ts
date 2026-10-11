@@ -288,14 +288,50 @@ describe('provider group relay for shared users', () => {
     await first.client.close('close', 'navigation');
     await waitFor(() => env.members.mini.runCount() === 0);
 
-    const resumed = await openAsGuest(env, GUEST_A, openPayload(SESSION, { options: { resumeSessionId: nativeId } }));
+    const resumed = await openAsGuest(env, GUEST_A, openPayload(SESSION, {
+      options: { resumeSessionId: nativeId, vendorOptions: { requireExistingSession: true } },
+    }));
     expect(env.relay.plan).toHaveBeenCalledTimes(1);
     expect(env.memberStarted.mini).toHaveLength(2);
     expect(env.memberStarted.mini[1].input.options.resumeSessionId).toBe(nativeId);
+    expect(env.memberStarted.mini[1].input.options.vendorOptions?.requireExistingSession).toBe(true);
     await resumed.client.close('close', 'navigation');
 
     await expect(openAsGuest(env, GUEST_B, openPayload(SESSION, { options: { resumeSessionId: nativeId } })))
       .rejects.toThrow(/cannot be resumed/);
+  });
+
+  it('refuses strict history restoration on an older member before opening or choosing another computer', async () => {
+    const memberOpens = vi.fn();
+    const env = setup({
+      intercept: async (_device, request, forward) => {
+        if (request.op === 'open') memberOpens();
+        const result = await forward();
+        if (request.op === 'caps') {
+          const caps = result as Record<string, unknown>;
+          delete caps.requireExistingSession;
+        }
+        return result;
+      },
+    });
+    const first = await openAsGuest(env, GUEST_A, openPayload(SESSION));
+    const nativeId = first.started.id as string;
+    await first.client.close('close', 'navigation');
+    await waitFor(() => env.members.mini.runCount() === 0);
+
+    await expect(openAsGuest(env, GUEST_A, openPayload(SESSION, {
+      options: { resumeSessionId: nativeId, vendorOptions: { requireExistingSession: true } },
+    }))).rejects.toThrow(/REMOTE_AGENT_UNSUPPORTED/);
+    expect(memberOpens).toHaveBeenCalledTimes(1);
+    expect(env.memberStarted.mini).toHaveLength(1);
+    expect(env.memberStarted.studio).toHaveLength(0);
+    expect(env.ownerStarted).toHaveLength(0);
+    expect(env.relay.plan).toHaveBeenCalledTimes(1);
+
+    // Ordinary resume remains compatible with members that predate strict restoration.
+    const resumed = await openAsGuest(env, GUEST_A, openPayload(SESSION, { options: { resumeSessionId: nativeId } }));
+    expect(env.memberStarted.mini[1].input.options.resumeSessionId).toBe(nativeId);
+    await resumed.client.close('close', 'navigation');
   });
 
   it('moves on to the next computer when the first cannot isolate shared users', async () => {

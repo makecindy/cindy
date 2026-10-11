@@ -23794,6 +23794,51 @@ describe('CodexAgent resume preparation', () => {
     expect(host.request.mock.calls.filter(([method]) => method === Method.ThreadStart)).toHaveLength(0);
   });
 
+  it('never starts an empty replacement when rewind requires existing history', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.ThreadResume) throw exactNoRolloutError();
+      return undefined;
+    });
+    await expect(agent.startSession({
+      sessionId: 'session-rewind-missing-history',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      resumeSessionId,
+      vendorOptions: { requireExistingSession: true },
+    })).rejects.toThrow('Failed to resume Codex thread');
+    expect(host.request.mock.calls.filter(([method]) => method === Method.ThreadResume)).toHaveLength(1);
+    expect(host.request.mock.calls.filter(([method]) => method === Method.ThreadStart)).toHaveLength(0);
+    expect(host.request.mock.calls.filter(([method]) => method === Method.TurnStart)).toHaveLength(0);
+    await agent.dispose();
+  });
+
+  it.each([undefined, '<pending>', 'invalid-thread'])('rejects an invalid rewind source (%s) before native thread creation', async (nativeId) => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    await expect(agent.startSession({
+      sessionId: 'session-rewind-invalid-source', model: 'gpt-5.4', workingDir: '/repo',
+      resumeSessionId: nativeId, vendorOptions: { requireExistingSession: true },
+    })).rejects.toThrow('Codex rewind requires an existing thread');
+    expect(host.request.mock.calls.some(([method]) => method === Method.ThreadStart || method === Method.ThreadResume)).toBe(false);
+    // A rejected history operation must not leave a binding lease that blocks
+    // later credential/configuration changes on the otherwise idle shared host.
+    await expect(agent.disposeLocalHostForCredentialChange()).resolves.toBeUndefined();
+    await agent.dispose();
+  });
+
+  it('requires the original native identity when resuming for rewind', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method) => method === Method.ThreadResume
+      ? { thread: { id: 'unexpected-thread' }, model: 'gpt-5.4' } : undefined);
+    await expect(agent.startSession({
+      sessionId: 'session-rewind-wrong-source', model: 'gpt-5.4', workingDir: '/repo',
+      resumeSessionId, vendorOptions: { requireExistingSession: true },
+    })).rejects.toThrow('Codex resumed an unexpected thread');
+    expect(host.request.mock.calls.some(([method]) => method === Method.ThreadStart || method === Method.TurnStart)).toBe(false);
+    await agent.dispose();
+  });
+
   it('falls back to thread/start only when resume proves the thread has no rollout', async () => {
     const agent = new CodexAgent(createDeps({ systemPrompt: 'runtime developer instructions' }));
     const host = installFakeHost(agent, (method) => {
@@ -24784,6 +24829,30 @@ describe('CodexAgent.forkSdkSession', () => {
 });
 
 describe('CodexAgent rewind', () => {
+  it('resumes existing history and rewinds at its native boundary without a wake-up turn', async () => {
+    const resumeSessionId = '123e4567-e89b-12d3-a456-426614174000';
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method) => method === Method.ThreadResume
+      ? { thread: { id: resumeSessionId }, model: 'gpt-5.4' } : undefined,
+    { userAgent: 'mock-codex/0.156.0' });
+    const handle = await agent.startSession({
+      sessionId: 'restored-rewind', model: 'gpt-5.4', workingDir: '/repo',
+      resumeSessionId, vendorOptions: { requireExistingSession: true },
+    });
+    try {
+      if (!handle.commitRewindFiles) throw new Error('expected rewind support');
+      await expect(handle.commitRewindFiles('', '', { tailTurnsToDrop: 1, lastTurnId: 'prior-turn' }))
+        .resolves.toEqual({ sdkSessionId: 'fork-thread-id' });
+      expect(host.request).toHaveBeenCalledWith(Method.ThreadFork, expect.objectContaining({
+        threadId: resumeSessionId, lastTurnId: 'prior-turn',
+      }));
+      expect(host.request.mock.calls.some(([method]) => method === Method.ThreadStart || method === Method.TurnStart)).toBe(false);
+    } finally {
+      await handle.close();
+      await agent.dispose();
+    }
+  });
+
   it('previews as conversation-only and commits via thread/rollback', async () => {
     const agent = new CodexAgent(createDeps());
     const host = installFakeHost(agent);

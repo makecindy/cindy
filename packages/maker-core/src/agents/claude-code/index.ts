@@ -3173,6 +3173,9 @@ export class ClaudeCodeAgent extends BaseAgent {
     usageTracker.setContextWindow(appliedContextWindow ?? 0);
 
     // ── 跨 turn 共享状态 ───────────────────────────────────────────────────
+    if (vo.requireExistingSession === true && !opts.resumeSessionId) {
+      throw new Error('Claude history is required for rewind');
+    }
     let configuredResumeSessionId: string | undefined = opts.resumeSessionId;
     let sdkSessionId: string | undefined = configuredResumeSessionId;
     let durableSdkSessionId: string | undefined = configuredResumeSessionId;
@@ -4234,6 +4237,9 @@ export class ClaudeCodeAgent extends BaseAgent {
             }
           }
           if (outcome === 'missing') {
+            if (vo.requireExistingSession === true) {
+              throw new Error(`Claude history is missing: ${resumeSdkSid}`);
+            }
             const cleared = await clearInvalidResumeSession(resumeSdkSid, 'transcript_preflight');
             if (cleared) {
               // 本地 CLI 没有转录就不可能恢复。spawn 前转 fresh，当前用户消息尚未
@@ -4252,6 +4258,7 @@ export class ClaudeCodeAgent extends BaseAgent {
             }
           }
         } catch (e) {
+          if (vo.requireExistingSession === true) throw e;
           log.warn('resume transcript bootstrap failed (continuing)', {
             resumeSdkSid,
             error: e instanceof Error ? e.message : String(e),
@@ -5901,7 +5908,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       expectedResumeSessionId: string,
       source: 'transcript_preflight' | 'sdk_runtime',
     ): Promise<boolean> {
-      if (resumeRecoveryAttempted || !opts.onInvalidResumeSession) return false;
+      if (vo.requireExistingSession === true || resumeRecoveryAttempted || !opts.onInvalidResumeSession) return false;
       try {
         const cleared = await opts.onInvalidResumeSession(expectedResumeSessionId);
         if (!cleared) {
@@ -7706,6 +7713,7 @@ export class ClaudeCodeAgent extends BaseAgent {
           // /compact bridge or start a product turn.
           await rebuildCancelledContinuationQuery(undefined, { queueCompactBridge: false });
         }
+        if (vo.requireExistingSession === true && closed) throw new Error('Claude history session closed before rewind');
         log.info('previewRewindFiles', { userUuid, sdkSessionId });
         try {
           const result = await q.rewindFiles(userUuid, { dryRun: true });
@@ -7743,6 +7751,7 @@ export class ClaudeCodeAgent extends BaseAgent {
           // compact bridge so rewindFiles retains its checkpoint semantics.
           await rebuildCancelledContinuationQuery(undefined, { queueCompactBridge: false });
         }
+        if (vo.requireExistingSession === true && closed) throw new Error('Claude history session closed before rewind');
         log.info('commitRewindFiles ▶', { userUuid, priorAssistantUuid, sdkSessionId });
         // ① 立即把文件回滚到 target 时点 (失败 warn + 继续, forkSession=true 兜底)
         try {
@@ -7753,6 +7762,7 @@ export class ClaudeCodeAgent extends BaseAgent {
             error: err instanceof Error ? err.message : String(err),
           });
         }
+        if (vo.requireExistingSession === true && closed) throw new Error('Claude history session closed during rewind');
         // ② **先**设 rewind transition 再 close —— q.close() 会让正在跑的 forward loop
         //    for-await 抛 "Claude Code process aborted by user", 这是预期行为不是错误。
         //    pendingRewindTo 是共享标记,会在新 q 接管后清掉;因此还要把当前 q 放进

@@ -221,7 +221,7 @@ const START_BOOL_FIELDS = [
 ] as const;
 
 /** vendorOptions 里只有这些是可序列化、对另一台电脑有意义的。 */
-const VENDOR_OPTION_KEYS = new Set(['source', 'resumeSessionAt', 'forkSession']);
+const VENDOR_OPTION_KEYS = new Set(['source', 'resumeSessionAt', 'forkSession', 'requireExistingSession']);
 
 export function encodeStartOptions(opts: StartSessionOptions): RemoteAgentWireStartOptions {
   const record = opts as unknown as Record<string, unknown>;

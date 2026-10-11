@@ -1166,7 +1166,7 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
   );
 
   it(
-    'precise rewind forks at the selected Pi turn and the replacement session resumes',
+    'cold-resumed rewind forks at the selected Pi turn without a wake-up and the replacement resumes',
     { timeout: 60_000 },
     async () => {
       const agent = new PiAgent(buildDeps());
@@ -1184,6 +1184,15 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
         handle = await agent.startSession({ sessionId: 'rewind-source', workingDir, model: 'pi-test-model' });
         await sendAndWait(handle, 'turn one');
         await sendAndWait(handle, 'turn two');
+        const sourceId = handle.id;
+        await handle.close();
+        handle = null;
+        const requestsBeforeRewind = seenRequests.length;
+        handle = await agent.startSession({
+          sessionId: 'rewind-source', workingDir, model: 'pi-test-model',
+          resumeSessionId: sourceId, vendorOptions: { requireExistingSession: true },
+        });
+        expect(handle.id).toBe(sourceId);
         expect(await handle.previewRewindFiles?.('')).toMatchObject({ canRewind: true });
 
         // 捕获 rewind 前的原始 session 文件:替代文件必须与它不同。handle.id 现在是动态
@@ -1193,6 +1202,7 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
         const result = await handle.commitRewindFiles?.('', '', { tailTurnsToDrop: 1 });
         expect(result?.sdkSessionId).toBeTruthy();
         expect(result?.sdkSessionId).not.toBe(originalSessionId);
+        expect(seenRequests).toHaveLength(requestsBeforeRewind);
         // handle.id getter 跟随闭包,rewind 后指向新的替代 session 文件。
         expect(handle.id).toBe(result?.sdkSessionId);
         await handle.close();

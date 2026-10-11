@@ -188,6 +188,8 @@ export interface RemoteAgentCaps {
    * 不声明的电脑，组所在电脑不给它分受邀者的任务(否则受邀者会拿到主人级权限)。
    */
   guestRelay?: boolean;
+  /** History operations can require native resume without a fresh-session fallback. */
+  requireExistingSession?: boolean;
 }
 
 export interface RemoteAgentReadResult {
@@ -391,6 +393,7 @@ export function parseRemoteAgentCaps(value: unknown): RemoteAgentCaps {
     maxPayloadBytes: count(v.maxPayloadBytes, Number.MAX_SAFE_INTEGER),
     ...(v.virtualWorkspace === true ? { virtualWorkspace: true } : {}),
     ...(v.guestRelay === true ? { guestRelay: true } : {}),
+    ...(v.requireExistingSession === true ? { requireExistingSession: true } : {}),
   };
   if (caps.version < 1 || caps.maxRuns < 1 || caps.uploadChunkBytes < 1) invalid();
   return caps;

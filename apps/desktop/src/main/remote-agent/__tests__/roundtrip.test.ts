@@ -181,6 +181,43 @@ function createHost() {
 }
 
 describe('remote agent round trip', () => {
+  it.each([
+    ['codex', true], ['codex', false], ['pi', true], ['pi', false],
+    ['claude-code', true], ['claude-code', false],
+  ] as const)('requires native-history resume support before a cold %s rewind (supported=%s)', async (kind, supported) => {
+    const host = createHost();
+    const deps = makeDeps(host);
+    const invoke = deps.invoke;
+    deps.invoke = async (args) => {
+      const reply = await invoke(args);
+      if ((args[0] as { op?: string }).op === 'caps' && !supported) {
+        const oldCaps = { ...reply as Record<string, unknown> };
+        delete oldCaps.requireExistingSession;
+        return oldCaps;
+      }
+      return reply;
+    };
+    try {
+      const started = startRemoteAgentSession(kind, {
+        sessionId: 'cold-codex', workingDir: project, model: 'm',
+        resumeSessionId: 'existing-thread', vendorOptions: { requireExistingSession: true },
+      }, deps);
+      if (!supported) {
+        await expect(started).rejects.toThrow('REMOTE_AGENT_UNSUPPORTED');
+        expect(hostInputs).toHaveLength(0);
+      } else {
+        const handle = await started;
+        expect(hostInputs[0]?.options).toMatchObject({
+          resumeSessionId: 'existing-thread', vendorOptions: { requireExistingSession: true },
+        });
+        await handle.close();
+      }
+      expect(hostSends).toHaveLength(0);
+    } finally {
+      host.dispose();
+    }
+  });
+
   it('runs a turn on the other computer while files, commands and confirmations stay here', async () => {
     const host = createHost();
     const handle = await startRemoteAgentSession('pi', {

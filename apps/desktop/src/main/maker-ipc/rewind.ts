@@ -10,6 +10,8 @@ import { withSendToSessionLock, advanceSessionRewindGeneration } from './sendToS
  */
 
 import { ipcMain } from 'electron';
+import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
+import { isDeviceLinkInvoke } from '../device-link/invoke-context.js';
 
 import { createLogger } from '../logger.js';
 import { previewRewindAtMessage, commitRewindAtMessage } from '../maker-orchestration/rewind.js';
@@ -31,7 +33,7 @@ import { isIpcError, type IpcErrorCode } from '../../shared/ipc-errors.js';
 import { requireString, throwIpcError } from '../utils/ipcValidate.js';
 
 import { MAKER_INVOKE } from './channels.js';
-import { withSessionInputStoppedForRewind } from './register.js';
+import { resumeSessionForRewind, withSessionInputStoppedForRewind } from './register.js';
 import { agentHandoffPending } from './agentHandoffPendingSingleton.js';
 
 const log = createLogger('maker-ipc/rewind');
@@ -68,6 +70,7 @@ async function commitAfterPersistBarrier(
   // reload its target and transaction boundary from the durable store.
   await drainPersistQueue();
   return withSendToSessionLock(sessionId, async () => {
+    await resumeSessionForRewind(sessionId);
     const result = await commitRewindAtMessage(sessionId, clientId, opts);
     advanceSessionRewindGeneration(sessionId);
     return result;
@@ -84,14 +87,18 @@ export function registerMakerRewindIpc(): void {
   ipcMain.handle(
     MAKER_INVOKE.REWIND_PREVIEW,
     async (
-      _event: Electron.IpcMainInvokeEvent,
+      event: Electron.IpcMainInvokeEvent,
       sessionId: unknown,
       clientId: unknown,
     ) => {
+      if (!isDeviceLinkInvoke()) assertTrustedAppRendererEvent(event);
       const sid = requireString(sessionId, 'sessionId');
       const cid = requireString(clientId, 'clientId');
       try {
-        return await previewRewindAtMessage(sid, cid);
+        return await withSendToSessionLock(sid, async () => {
+          await resumeSessionForRewind(sid);
+          return previewRewindAtMessage(sid, cid);
+        });
       } catch (err) {
         log.warn('rewind:preview failed', { sid, cid, error: String(err) });
         wrapErr(err);
@@ -102,11 +109,12 @@ export function registerMakerRewindIpc(): void {
   ipcMain.handle(
     MAKER_INVOKE.REWIND_COMMIT,
     async (
-      _event: Electron.IpcMainInvokeEvent,
+      event: Electron.IpcMainInvokeEvent,
       sessionId: unknown,
       clientId: unknown,
       opts?: unknown,
     ) => {
+      if (!isDeviceLinkInvoke()) assertTrustedAppRendererEvent(event);
       const sid = requireString(sessionId, 'sessionId');
       const cid = requireString(clientId, 'clientId');
       const ownerScope = captureDataOwnerBroadcastScope();

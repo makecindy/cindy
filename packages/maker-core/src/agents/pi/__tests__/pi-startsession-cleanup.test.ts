@@ -37,6 +37,8 @@ const knobs = vi.hoisted(() => ({
   transportCloseRejects: false,
   transportCloseCount: 0,
   getStateRejects: false,
+  resumeRejected: false,
+  sessionFile: '/mock/session.jsonl',
   abortRejects: false,
   getStateGate: null as Promise<void> | null,
   closeRejects: false,
@@ -101,8 +103,10 @@ vi.mock('../rpc-client.js', () => ({
         const gate = knobs.getStateGate;
         if (gate) await gate;
         if (knobs.getStateRejects) throw new Error('get_state rejected (mock)');
-        return { success: true, data: { sessionFile: '/mock/session.jsonl', model: { contextWindow: 200000 } } };
+        return { success: true, data: { sessionFile: knobs.sessionFile, model: { contextWindow: 200000 } } };
       }
+      if (cmd.type === 'switch_session' && knobs.resumeRejected) return { success: false, error: 'cannot resume' };
+      if (cmd.type === 'get_fork_messages') return { success: true, data: { messages: [{ entryId: 'user-id' }] } };
       if (cmd.type === 'abort' && knobs.abortRejects) {
         return { success: false, error: 'abort rejected (mock)' };
       }
@@ -167,6 +171,8 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     knobs.transportCloseRejects = false;
     knobs.transportCloseCount = 0;
     knobs.getStateRejects = false;
+    knobs.resumeRejected = false;
+    knobs.sessionFile = '/mock/session.jsonl';
     knobs.abortRejects = false;
     knobs.getStateGate = null;
     knobs.closeRejects = false;
@@ -524,6 +530,8 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
 
     knobs.closeRejects = false;
     knobs.getStateRejects = false;
+    knobs.resumeRejected = false;
+    knobs.sessionFile = '/mock/session.jsonl';
     const handle = await agent.startSession(opts());
     expect(knobs.spawnedEnvs).toHaveLength(2);
     expect(stopped).toHaveBeenCalledOnce();
@@ -2587,6 +2595,39 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
       ),
     ]);
     await reviewHandle.close();
+  });
+
+  it.each(['missing', 'rejected', 'different identity'] as const)('preserves Pi history on %s cold rewind failure', async (failure) => {
+    const resumeFile = path.join(cwd, 'source.jsonl');
+    if (failure !== 'missing') writeFileSync(resumeFile, '{}');
+    knobs.resumeRejected = failure === 'rejected';
+    if (failure !== 'different identity') knobs.sessionFile = resumeFile;
+    const clear = vi.fn(async () => true);
+    await expect(new PiAgent(buildDeps()).startSession({
+      ...opts(), resumeSessionId: resumeFile, onInvalidResumeSession: clear,
+      vendorOptions: { requireExistingSession: true },
+    })).rejects.toThrow('history');
+    expect(clear).not.toHaveBeenCalled();
+    expect(knobs.sent).toHaveLength(0);
+    expect(knobs.closeCount).toBe(1);
+  });
+
+  it('cold-resumes Pi and forks the requested rewind boundary without sending input', async () => {
+    const resumeFile = path.join(cwd, 'source.jsonl');
+    writeFileSync(resumeFile, '{}');
+    knobs.sessionFile = resumeFile;
+    const handle = await new PiAgent(buildDeps()).startSession({
+      ...opts(), resumeSessionId: resumeFile,
+      vendorOptions: { requireExistingSession: true },
+    });
+    try {
+      expect(handle.id).toBe(resumeFile);
+      await handle.previewRewindFiles!('user-id');
+      await handle.commitRewindFiles!('user-id', '', { tailTurnsToDrop: 1 });
+      expect(knobs.requests).toContain('switch_session');
+      expect(knobs.requests).toContain('fork');
+      expect(knobs.sent).toHaveLength(0);
+    } finally { await handle.close(); }
   });
 
   it('still loads project resources when a local root session resumes a fork jsonl', async () => {

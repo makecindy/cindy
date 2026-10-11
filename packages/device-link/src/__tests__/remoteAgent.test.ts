@@ -35,6 +35,9 @@ describe('remote agent channel', () => {
     const caps = { version: 1, agents: [], maxRuns: 16, uploadChunkBytes: 1024, maxPayloadBytes: 2048 };
     expect(parseRemoteAgentCaps({ ...caps, guestRelay: true }).guestRelay).toBe(true);
     expect(parseRemoteAgentCaps({ ...caps, guestRelay: 'yes' })).not.toHaveProperty('guestRelay');
+    expect(parseRemoteAgentCaps({ ...caps, guestRelay: true, requireExistingSession: true }))
+      .toMatchObject({ guestRelay: true, requireExistingSession: true });
+    expect(parseRemoteAgentCaps({ ...caps, requireExistingSession: 'yes' })).not.toHaveProperty('requireExistingSession');
   });
 
   it('parses every op and drops unknown fields', () => {

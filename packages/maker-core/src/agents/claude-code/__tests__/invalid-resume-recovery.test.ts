@@ -148,6 +148,7 @@ async function startHarness(args: {
   transcriptExists: boolean;
   onInvalidResumeSession: StartSessionOptions['onInvalidResumeSession'];
   forkSession?: boolean;
+  requireExistingSession?: boolean;
 }) {
   const configDir = await makeTempDir();
   const workingDir = await makeTempDir();
@@ -188,7 +189,7 @@ async function startHarness(args: {
     permissionMode: 'acceptEdits',
     resumeSessionId: args.resumeSessionId,
     onInvalidResumeSession: args.onInvalidResumeSession,
-    vendorOptions: args.forkSession ? { forkSession: true } : undefined,
+    vendorOptions: { forkSession: args.forkSession, requireExistingSession: args.requireExistingSession },
   });
   const events: AgentEvent[] = [];
   const collected = (async () => {
@@ -394,6 +395,61 @@ describe('Claude invalid-resume recovery', () => {
     await h.handle.close();
     for (const stream of h.streams) stream.end();
     await h.collected;
+  });
+
+  it('refuses missing history for rewind without clearing its identity or opening a fresh query', async () => {
+    const clear = vi.fn(async () => true);
+    await expect(startHarness({
+      resumeSessionId: 'missing-history', transcriptExists: false,
+      onInvalidResumeSession: clear, requireExistingSession: true,
+    })).rejects.toThrow('history');
+    expect(clear).not.toHaveBeenCalled();
+    expect(sdkMock.query).not.toHaveBeenCalled();
+  });
+
+  it('cold-resumes for rewind without input and preserves the fork source on the next send', async () => {
+    const clear = vi.fn(async () => true);
+    const h = await startHarness({
+      resumeSessionId: 'existing-history', transcriptExists: true,
+      onInvalidResumeSession: clear, requireExistingSession: true,
+    });
+    try {
+      await h.handle.previewRewindFiles!('user-id');
+      await h.handle.commitRewindFiles!('user-id', 'prior-assistant');
+      expect(h.queries[0].rewindFiles.mock.calls).toEqual([
+        ['user-id', { dryRun: true }], ['user-id', { dryRun: false }],
+      ]);
+      expect(h.consumedInputs.flat()).toHaveLength(0);
+      await h.handle.send({ type: 'user', content: 'unchanged text' });
+      expect(h.queryOptions[1]).toMatchObject({
+        resume: 'existing-history', resumeSessionAt: 'prior-assistant', forkSession: true,
+      });
+      expect(clear).not.toHaveBeenCalled();
+    } finally {
+      await h.handle.close();
+      h.streams.forEach(stream => stream.end());
+      await h.collected;
+    }
+  });
+
+  it('does not replace an unresumable history session or commit a rewind after it closes', async () => {
+    const clear = vi.fn(async () => true);
+    const h = await startHarness({
+      resumeSessionId: 'unresumable-history', transcriptExists: true,
+      onInvalidResumeSession: clear, requireExistingSession: true,
+    });
+    try {
+      h.streams[0].fail(new Error('No conversation found with session ID: unresumable-history'));
+      await vi.waitFor(() => expect(h.events.some(e => e.type === 'error')).toBe(true));
+      await expect(h.handle.commitRewindFiles!('user-id', 'prior-assistant')).rejects.toThrow();
+      expect(clear).not.toHaveBeenCalled();
+      expect(h.queryOptions).toHaveLength(1);
+      expect(h.consumedInputs.flat()).toHaveLength(0);
+    } finally {
+      await h.handle.close();
+      h.streams.forEach(stream => stream.end());
+      await h.collected;
+    }
   });
 
   it('preflight missing clears the old id and starts fresh before any turn is sent', async () => {
