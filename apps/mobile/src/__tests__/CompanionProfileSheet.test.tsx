@@ -41,72 +41,97 @@ let root: Root | undefined;
 async function render() { root ??= createRoot(document.createElement('div')); await act(async () => root!.render(createElement(CompanionProfileSheet, { visible: true, resource, collectionId: 'teammates', deviceId: 'host', deviceName: 'Mac', online: true, onClose: h.close, onClosed: h.closed, onDeleted: h.deleted, onOpenSearch() {} }))); }
 beforeEach(() => { vi.clearAllMocks(); h.account = 1; h.read.mockResolvedValue({ resource, panels: [panel, { ...panel, id: 'models', values: { modelChain: '[]', followsDefault: false }, action: { id: 'model-grant', fields: [{ id: 'modelChain', kind: 'multiline' }, { id: 'followsDefault', kind: 'toggle' }] } }] }); h.invoke.mockResolvedValue({ effects: [] }); });
 afterEach(() => { act(() => root?.unmount()); root = undefined; });
-it('does not save a dirty draft when dismissing the sheet', async () => {
+it('debounces a rapid Chinese input sequence for 1.2 seconds and saves only the final value', async () => {
+  vi.useFakeTimers();
+  try {
+    await render(); await act(async () => h.view.onOpen('profile'));
+    await act(async () => h.view.onChange({ name: 'zhong' }, 'text'));
+    await act(async () => vi.advanceTimersByTimeAsync(600));
+    expect(h.invoke).not.toHaveBeenCalled();
+    h.read.mockResolvedValue({ resource: { ...resource, revision: 'v2' }, panels: [{ ...panel, values: { name: '中文' } }] });
+    await act(async () => h.view.onChange({ name: '中文' }, 'text'));
+    await act(async () => vi.advanceTimersByTimeAsync(1_199));
+    expect(h.invoke).not.toHaveBeenCalled();
+    await act(async () => vi.advanceTimersByTimeAsync(1));
+    expect(h.invoke).toHaveBeenCalledOnce();
+    expect(h.invoke.mock.calls[0][2].input).toEqual({ name: '中文' });
+    expect(h.view.values.name).toBe('中文'); expect(h.view.dirty).toBe(false);
+  } finally { vi.useRealTimers(); }
+});
+it('coalesces same-tick discrete changes into one latest save', async () => {
   await render(); await act(async () => h.view.onOpen('profile'));
-  await act(async () => h.view.onChange({ name: 'Unsaved' }));
+  h.read.mockResolvedValue({ resource: { ...resource, revision: 'v2' }, panels: [{ ...panel, values: { name: 'Latest' } }] });
+  await act(async () => { h.view.onChange({ name: 'First' }, 'instant'); h.view.onChange({ name: 'Latest' }, 'instant'); });
+  await act(async () => new Promise(resolve => setTimeout(resolve, 0)));
+  expect(h.invoke).toHaveBeenCalledOnce(); expect(h.invoke.mock.calls[0][2].input).toEqual({ name: 'Latest' });
+});
+it('serializes a trailing change behind an in-flight save without dropping it', async () => {
+  await render(); await act(async () => h.view.onOpen('profile'));
+  let release!: (value: unknown) => void;
+  h.invoke.mockReturnValueOnce(new Promise(resolve => { release = resolve; })).mockResolvedValue({ effects: [] });
+  h.read.mockImplementation(async () => ({ resource: { ...resource, revision: h.invoke.mock.calls.length > 1 ? 'v3' : 'v2' }, panels: [{ ...panel, values: { name: h.invoke.mock.calls.length > 1 ? 'Latest' : 'First' } }] }));
+  await act(async () => h.view.onChange({ name: 'First' }, 'instant'));
+  await act(async () => new Promise(resolve => setTimeout(resolve, 0)));
+  expect(h.invoke).toHaveBeenCalledOnce();
+  await act(async () => h.view.onChange({ name: 'Latest' }, 'instant'));
+  await act(async () => release({ effects: [] }));
+  await act(async () => new Promise(resolve => setTimeout(resolve, 0)));
+  expect(h.invoke).toHaveBeenCalledTimes(2);
+  expect(h.invoke.mock.calls[1][2].input).toEqual({ name: 'Latest' });
+  expect(h.view.values.name).toBe('Latest'); expect(h.view.dirty).toBe(false);
+});
+it('flushes a text draft before closing or entering a child page', async () => {
+  await render(); await act(async () => h.view.onOpen('profile'));
+  h.read.mockResolvedValue({ resource: { ...resource, revision: 'v2' }, panels: [{ ...panel, values: { name: 'Saved before close' } }] });
+  await act(async () => h.view.onChange({ name: 'Saved before close' }, 'text'));
   await act(async () => h.view.onClose());
-  expect(h.invoke).not.toHaveBeenCalled(); expect(h.close).not.toHaveBeenCalled();
-  expect(h.view.values.name).toBe('Unsaved'); expect(h.view.dirty).toBe(true);
-  const { Alert } = await import('react-native');
-  const discard = vi.mocked(Alert.alert).mock.calls[0][2]!.find(button => button.style === 'destructive')!;
-  await act(async () => discard.onPress!());
-  expect(h.invoke).not.toHaveBeenCalled(); expect(h.close).toHaveBeenCalledOnce();
-});
-it('keeps a dirty draft when canceling back navigation and discards it on confirmation', async () => {
+  expect(h.invoke).toHaveBeenCalledOnce(); expect(h.close).toHaveBeenCalledOnce();
+
+  h.close.mockClear(); h.invoke.mockClear();
   await render(); await act(async () => h.view.onOpen('profile'));
-  await act(async () => h.view.onChange({ name: 'Unsaved' }));
-  await act(async () => h.view.onBack());
-  const { Alert } = await import('react-native');
-  const cancel = vi.mocked(Alert.alert).mock.calls[0][2]!.find(button => button.style === 'cancel')!;
-  await act(async () => cancel.onPress?.());
-  expect(h.view.page).toBe('profile'); expect(h.view.dirty).toBe(true); expect(h.invoke).not.toHaveBeenCalled();
-  await act(async () => h.view.onBack());
-  const discard = vi.mocked(Alert.alert).mock.calls[1][2]!.find(button => button.style === 'destructive')!;
-  await act(async () => discard.onPress!());
-  expect(h.view.page).toBe('home'); expect(h.view.dirty).toBe(false); expect(h.invoke).not.toHaveBeenCalled();
-});
-it('does not save a dirty draft before opening a profile subpage', async () => {
-  await render(); await act(async () => h.view.onOpen('profile'));
-  await act(async () => h.view.onChange({ name: 'Unsaved' }));
+  h.read.mockResolvedValue({ resource: { ...resource, revision: 'v3' }, panels: [{ ...panel, values: { name: 'Saved before child' } }] });
+  await act(async () => h.view.onChange({ name: 'Saved before child' }, 'text'));
   await act(async () => h.view.onOpen('avatar'));
-  expect(h.view.page).toBe('profile'); expect(h.invoke).not.toHaveBeenCalled();
-  const { Alert } = await import('react-native');
-  const discard = vi.mocked(Alert.alert).mock.calls[0][2]!.find(button => button.style === 'destructive')!;
-  await act(async () => discard.onPress!());
-  expect(h.invoke).not.toHaveBeenCalled(); expect(h.view.page).toBe('editor');
+  expect(h.invoke).toHaveBeenCalledOnce(); expect(h.view.page).toBe('editor');
 });
-it('does not renew a dirty draft against a newer remote revision', async () => {
+it('keeps a failed draft visible and retries it', async () => {
   await render(); await act(async () => h.view.onOpen('profile'));
-  await act(async () => h.view.onChange({ name: 'Local edit' }));
+  h.invoke.mockRejectedValueOnce(new Error('offline'));
+  await act(async () => h.view.onChange({ name: 'Retry me' }, 'text'));
+  await act(async () => h.view.onTextBlur());
+  expect(h.view.saveStatus).toBe('error'); expect(h.view.values.name).toBe('Retry me'); expect(h.view.dirty).toBe(true);
+  h.read.mockResolvedValue({ resource: { ...resource, revision: 'v2' }, panels: [{ ...panel, values: { name: 'Retry me' } }] });
+  await act(async () => h.view.onSaveRetry());
+  expect(h.invoke).toHaveBeenCalledTimes(2); expect(h.view.saveStatus).toBe('saved'); expect(h.view.dirty).toBe(false);
+});
+it('does not submit an incomplete required field', async () => {
+  const required = { ...panel, action: { ...panel.action, fields: [{ ...panel.action.fields[0], required: true }] } };
+  h.read.mockResolvedValue({ resource, panels: [required] });
+  await render(); await act(async () => h.view.onOpen('profile'));
+  await act(async () => h.view.onChange({ name: ' ' }, 'text'));
+  await act(async () => h.view.onTextBlur());
+  expect(h.invoke).not.toHaveBeenCalled(); expect(h.view.saveStatus).toBe('invalid'); expect(h.view.dirty).toBe(true);
+});
+it('keeps a conflicted draft and blocks navigation or resubmission', async () => {
+  await render(); await act(async () => h.view.onOpen('profile'));
+  await act(async () => h.view.onChange({ name: 'Local edit' }, 'text'));
   h.read.mockResolvedValue({ resource: { ...resource, revision: 'v2' }, panels: [{ ...panel, values: { name: 'Desktop edit' } }] });
   await act(async () => h.view.onRetry());
-  expect(h.view.conflict).toBe(true); expect(h.view.values.name).toBe('Local edit');
-  await act(async () => h.view.onSubmit(h.view.panel)); expect(h.invoke).not.toHaveBeenCalled();
-});
-it('asks to discard a conflicted draft on back instead of ignoring the gesture', async () => {
-  await render(); await act(async () => h.view.onOpen('profile'));
-  await act(async () => h.view.onChange({ name: 'Local edit' }));
-  h.read.mockResolvedValue({ resource: { ...resource, revision: 'v2' }, panels: [{ ...panel, values: { name: 'Desktop edit' } }] });
-  await act(async () => h.view.onRetry());
-  const { Alert } = await import('react-native');
   await act(async () => h.view.onBack());
-  expect(Alert.alert).toHaveBeenCalledOnce(); expect(h.invoke).not.toHaveBeenCalled();
-  const discard = vi.mocked(Alert.alert).mock.calls[0][2]!.find(button => button.style === 'destructive')!;
-  await act(async () => discard.onPress!());
-  expect(h.view.page).toBe('home'); expect(h.close).not.toHaveBeenCalled();
-  // The discarded draft gives way to the newer copy already read, not the stale one.
-  await act(async () => h.view.onOpen('profile'));
-  expect(h.view.values.name).toBe('Desktop edit'); expect(h.view.conflict).toBe(false);
+  expect(h.view.page).toBe('profile'); expect(h.invoke).not.toHaveBeenCalled();
+  expect(h.view.values.name).toBe('Local edit'); expect(h.view.conflict).toBe(true);
+  await act(async () => h.view.onSaveRetry()); expect(h.invoke).not.toHaveBeenCalled();
 });
 it('waits for native dismissal before presenting the model picker and preserves the draft on return', async () => {
   await render(); await act(async () => h.view.onOpen('models'));
   await act(async () => h.model.onPick(0));
   expect(h.view.visible).toBe(false); expect(h.picker.visible).toBe(false);
   await act(async () => h.view.onClosed()); expect(h.picker.visible).toBe(true); expect(h.closed).not.toHaveBeenCalled();
+  h.read.mockResolvedValue({ resource: { ...resource, revision: 'v2' }, panels: [panel, { ...panel, id: 'models', values: { modelChain: JSON.stringify([{ harness: 'pi', model: 'real-model', providerId: 'provider', effort: '', fastMode: false }]), followsDefault: false }, action: { id: 'model-grant', fields: [{ id: 'modelChain', kind: 'multiline' }, { id: 'followsDefault', kind: 'toggle' }] } }] });
   await act(async () => h.picker.onSelect({ harness: 'pi', model: 'real-model', providerId: 'provider', effort: '', fastMode: false }));
   await act(async () => h.picker.onClose()); expect(h.view.visible).toBe(false);
   await act(async () => h.picker.onClosed());
-  expect(h.view.visible).toBe(true); expect(h.view.page).toBe('models'); expect(h.view.dirty).toBe(true);
+  expect(h.view.visible).toBe(true); expect(h.view.page).toBe('models'); expect(h.view.dirty).toBe(false);
   expect(JSON.parse(h.view.values.modelChain)[0].model).toBe('real-model');
 });
 it('keeps the primary route while choosing a task model with a different harness', async () => {
@@ -119,21 +144,30 @@ it('keeps the primary route while choosing a task model with a different harness
   expect(h.model.single).toBe(true); expect(h.model.values.followsDefault).toBe(true);
   await act(async () => h.model.onPick(0));
   await act(async () => h.view.onClosed());
+  h.read.mockResolvedValue({ resource: { ...resource, revision: 'v2' }, panels: [{ ...panel, id: 'models',
+    values: { modelChain: JSON.stringify([primary]), followsDefault: false, taskFollowsPrimary: false, taskModel: JSON.stringify([task]) },
+    action: { id: 'model-grant', fields: ['modelChain', 'followsDefault', 'taskModel', 'taskFollowsPrimary'].map(id => ({ id, kind: 'text' })) } }] });
   await act(async () => h.picker.onSelect(task));
   await act(async () => h.picker.onClose()); await act(async () => h.picker.onClosed());
   expect(JSON.parse(h.view.values.modelChain)).toEqual([primary]);
   expect(JSON.parse(h.view.values.taskModel)).toEqual([task]);
   expect(h.view.values.taskFollowsPrimary).toBe(false);
-  await act(async () => h.view.onSubmit(h.view.panel));
+  await act(async () => new Promise(resolve => setTimeout(resolve, 0)));
   expect(h.invoke).toHaveBeenCalledWith(expect.anything(), { deviceId: 'host', deviceName: 'Mac' }, expect.objectContaining({
     actionId: 'model-grant', input: { taskModel: JSON.stringify([task]), taskFollowsPrimary: false },
   }), 'en');
 });
-it('ignores a late explicit save response after changing accounts', async () => {
+it('cancels a pending old-account draft and ignores a late in-flight response after switching accounts', async () => {
   await render(); await act(async () => h.view.onOpen('profile'));
-  await act(async () => h.view.onChange({ name: 'Old account draft' }));
+  await act(async () => h.view.onChange({ name: 'Canceled old draft' }, 'text'));
+  h.account++; await render();
+  await new Promise(resolve => setTimeout(resolve, 1_250));
+  expect(h.invoke).not.toHaveBeenCalled();
+
+  await act(async () => h.view.onOpen('profile'));
   let done!: (v: unknown) => void; h.invoke.mockReturnValue(new Promise(resolve => { done = resolve; }));
-  await act(async () => h.view.onSubmit(h.view.panel));
+  await act(async () => h.view.onChange({ name: 'Old account draft' }, 'text'));
+  await act(async () => h.view.onTextBlur());
   h.account++; await render();
   await act(async () => done({ effects: [{ kind: 'toast', message: 'Saved' }] }));
   expect(h.close).not.toHaveBeenCalled(); expect(h.view.page).toBe('home'); expect(h.view.receipt).toBeNull(); expect(h.view.dirty).toBe(false);
@@ -185,7 +219,7 @@ it('keeps a dirty skill draft when deletion confirmation is canceled', async () 
   const remove = { id: 'remove', values: {}, action: { id: 'skill-remove', label: 'Delete', confirmation: { title: 'Delete' } } };
   h.read.mockResolvedValue({ resource: { ...resource, ref: { ...resource.ref, id: 'settings:bot/skills/learned' } }, panels: [skill, remove] });
   await act(async () => h.view.onEditor('settings:bot/skills/learned'));
-  await act(async () => h.view.onChange({ body: 'Keep my draft' }));
+  await act(async () => h.view.onChange({ body: 'Keep my draft' }, 'text'));
   await act(async () => h.view.onConfirm(remove));
   await act(async () => h.view.onConfirm(null));
   expect(h.view.values.body).toBe('Keep my draft'); expect(h.view.dirty).toBe(true); expect(h.invoke).not.toHaveBeenCalled();
@@ -193,7 +227,7 @@ it('keeps a dirty skill draft when deletion confirmation is canceled', async () 
 
 it('reopens the host link on refresh and keeps the unsaved draft', async () => {
   await render(); await act(async () => h.view.onOpen('profile'));
-  await act(async () => h.view.onChange({ name: 'Reconnect draft' }));
+  await act(async () => h.view.onChange({ name: 'Reconnect draft' }, 'text'));
   h.openLink.mockRejectedValueOnce(new Error('LINK_NOT_OPEN'));
   await act(async () => h.view.onRetry());
   expect(h.view.error).toBe(true);
@@ -235,35 +269,36 @@ it('keeps the upgrade path when the host has no saved-memories page', async () =
   expect(h.view.hasMemoryEntries).toBe(false);
   expect(h.read.mock.calls.every(call => !String(call[2]?.id).includes('/memory'))).toBe(true);
 });
-it('saves a changed memory toggle before leaving for the saved-memories page', async () => {
+it('retries a failed immediate toggle save before entering saved memories', async () => {
   h.read.mockResolvedValue({ resource, panels: [panel, memoryForm, memoriesEntry] });
   await render(); await act(async () => h.view.onOpen('memory'));
-  await act(async () => h.view.onChange({ ...memoryForm.values, memory: false }));
   h.invoke.mockRejectedValueOnce(new Error('offline'));
+  await act(async () => h.view.onChange({ ...memoryForm.values, memory: false }, 'instant'));
+  await act(async () => new Promise(resolve => setTimeout(resolve, 0)));
+  expect(h.invoke).toHaveBeenCalledOnce(); expect(h.view.page).toBe('memory'); expect(h.view.dirty).toBe(true);
   await act(async () => h.view.onOpen('memoryEntries'));
-  expect(h.view.page).toBe('memory'); expect(h.view.dirty).toBe(true);
-  await act(async () => h.view.onOpen('memoryEntries'));
+  expect(h.invoke).toHaveBeenCalledTimes(2);
   expect(h.invoke.mock.calls.at(-1)?.[2]).toMatchObject({ actionId: 'memory-grant', input: { memory: false } });
   expect(h.view.page).toBe('memoryEntries');
 });
 
 it('explains a rename collision instead of an ambiguous save failure', async () => {
   await render(); await act(async () => h.view.onOpen('profile'));
-  await act(async () => h.view.onChange({ name: 'Aster' }));
+  await act(async () => h.view.onChange({ name: 'Aster' }, 'text'));
   h.invoke.mockRejectedValueOnce(new Error('[ALREADY_EXISTS] teammate name'));
   await act(async () => h.view.onSubmit(h.view.panel));
   expect(h.view.error).toBe(true);
   expect(h.view.errorLabel).toBe('devices.companionProfile.nameTaken');
   expect(h.view.values.name).toBe('Aster');
   // The next attempt starts without the stale collision notice.
-  await act(async () => h.view.onChange({ name: 'Aster 2' }));
+  await act(async () => h.view.onChange({ name: 'Aster 2' }, 'text'));
   await act(async () => h.view.onSubmit(h.view.panel));
   expect(h.view.errorLabel).toBeUndefined();
 });
 
 it('turns a stale save into the existing conflict choice and keeps the draft', async () => {
   await render(); await act(async () => h.view.onOpen('profile'));
-  await act(async () => h.view.onChange({ name: 'Local edit' }));
+  await act(async () => h.view.onChange({ name: 'Local edit' }, 'text'));
   h.read.mockResolvedValue({ resource: { ...resource, revision: 'v2' }, panels: [{ ...panel, values: { name: 'Desktop edit' } }] });
   h.invoke.mockRejectedValueOnce(new Error('[PRECONDITION_FAILED] resource changed'));
   await act(async () => h.view.onSubmit(h.view.panel));
@@ -277,7 +312,7 @@ it('offers the conflict choice when an editor save is stale, instead of failing 
   const skill = { id: 'skill', values: { body: 'Original' }, action: { id: 'skill-save', label: 'Save', fields: [{ id: 'body', label: 'Content', kind: 'multiline' }] } };
   h.read.mockResolvedValue({ resource: { ...resource, ref: skillRef }, panels: [skill] });
   await act(async () => h.view.onEditor('settings:bot/skills/learned'));
-  await act(async () => h.view.onChange({ body: 'My edit' }));
+  await act(async () => h.view.onChange({ body: 'My edit' }, 'text'));
   h.read.mockResolvedValue({ resource: { ...resource, ref: skillRef, revision: 'v2' }, panels: [{ ...skill, values: { body: 'Desktop edit' } }] });
   h.invoke.mockRejectedValueOnce(new Error('[PRECONDITION_FAILED] resource changed'));
   const reads = h.read.mock.calls.length;

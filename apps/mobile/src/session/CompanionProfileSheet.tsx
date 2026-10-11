@@ -21,14 +21,15 @@ import { fontWeight, iconSize, lineHeight, radius, spacing, typeScale, useTheme,
 import { CompanionModelChain, CompanionModelPicker, readCompanionModelChain } from './CompanionModelChain';
 import { CompanionCreateNativeView } from './CompanionCreateNativeView';
 import { CompanionPortraitPicker, randomCompanionPortrait } from './CompanionPortraitPicker';
-import { CompanionProfileNativeView } from './CompanionProfileNativeView';
+import { CompanionProfileNativeView, type CompanionProfileSaveStatus } from './CompanionProfileNativeView';
 import { CompanionProfileArtifacts } from './CompanionProfileArtifacts';
-import { loadCompanionProfile, profileFormDirty, type CompanionProfileData, type ProfilePanel, type ProfileValues } from './companionProfileData';
+import { loadCompanionProfile, profileFormDirty, profileFormValid, type CompanionProfileData, type ProfilePanel, type ProfileValues } from './companionProfileData';
 import { CompanionMemoryPage } from './CompanionMemoryPage';
 import { useCompanionMemory } from './useCompanionMemory';
 
 // Same identity block as iOS: a 48pt avatar and the name, not a navigation target.
 const AVATAR_SIZE = 48;
+const PROFILE_TEXT_SAVE_DELAY_MS = 1_200;
 /** Same limits as iOS and the host editor (`botRemoteEditors.ts` rejects a longer skill body). */
 const fieldMaxLength = (id: string) => id === 'name' || id === 'confirmName' ? 200 : id === 'body' ? 55000 : 12000;
 /** Same identity rule as the host and Desktop `normalizeBotName`. */
@@ -77,6 +78,7 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
   const [values, setValues] = useState<ProfileValues>({});
   const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [saveStatus, setSaveStatus] = useState<CompanionProfileSaveStatus>('idle');
   const [error, setError] = useState(false);
   const [deleteFailure, setDeleteFailure] = useState(false);
   const [conflict, setConflict] = useState<{ page: string; next: CompanionProfileData } | null>(null);
@@ -87,6 +89,11 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
   const [deleted, setDeleted] = useState(false);
   const draftBase = useRef<ProfileValues>({});
   const inFlight = useRef(false);
+  const saveFlight = useRef<Promise<boolean> | null>(null);
+  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const instantSavePending = useRef(false);
+  const composing = useRef(false);
+  const valuesRef = useRef<ProfileValues>({});
   const generation = useRef(0);
   const current = useRef('');
   const binding = `${accountGeneration}:${deviceId}:${collectionId}:${resource?.ref.kind}:${resource?.ref.id}:${visible}`;
@@ -96,6 +103,7 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
   const dirty = editing && profileFormDirty(panel ? { ...panel, values: draftBase.current } : undefined, values);
   const draftScope = useRef({ dirty, page, base: page === 'editor' ? editor : data });
   draftScope.current = { dirty, page, base: page === 'editor' ? editor : data };
+  valuesRef.current = values;
   const label = (value: RemoteText) => resolveRemoteText(value, i18n.language);
   const name = label(data?.resource.display.title ?? resource?.display.title ?? '');
   // Saved memories are a host page of their own; hosts without it keep the upgrade note.
@@ -125,58 +133,68 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
     }
   }, [binding, read]);
   useEffect(() => {
-    setModelStage('profile'); setConflict(null); setEditor(null); setEditorPanel(null); setEditorLoading(false); setData(null); setPage(props.initialPage === 'memory' ? 'memoryEntries' : props.initialPage === 'capabilities' ? 'skills' : 'home'); setValues({}); setReceipt(null); setConfirmation(null); setDeleted(false); setError(false); setDeleteFailure(false); setNameTakenOnSave(false); setEditing(false); setBusy(false);
-    return () => { generation.current++; };
+    setModelStage('profile'); setConflict(null); setEditor(null); setEditorPanel(null); setEditorLoading(false); setData(null); setPage(props.initialPage === 'memory' ? 'memoryEntries' : props.initialPage === 'capabilities' ? 'skills' : 'home'); setValues({}); setReceipt(null); setConfirmation(null); setDeleted(false); setError(false); setDeleteFailure(false); setNameTakenOnSave(false); setEditing(false); setBusy(false); setSaveStatus('idle');
+    return () => {
+      generation.current++;
+      if (saveTimer.current !== null) clearTimeout(saveTimer.current);
+      saveTimer.current = null; instantSavePending.current = false; composing.current = false;
+    };
   }, [binding]);
   useEffect(() => { if (visible && online) void refresh(); }, [visible, online, refresh]);
 
   const openEditor = async (resourceId: string) => {
     if (inFlight.current || !online || !resource) return;
     const started = binding; const sequence = ++generation.current;
-    setConflict(null); setEditorResourceId(resourceId); setPage('editor'); setEditor(null); setEditorPanel(null); setEditorLoading(true); setEditing(false); setError(false); setDeleteFailure(false); setNameTakenOnSave(false);
+    setConflict(null); setEditorResourceId(resourceId); setPage('editor'); setEditor(null); setEditorPanel(null); setEditorLoading(true); setEditing(false); setError(false); setDeleteFailure(false); setNameTakenOnSave(false); setSaveStatus('idle');
     try {
       await openLink(deviceId);
       const next = await loadCompanionProfile(invoke, deviceId, { ...resource.ref, collectionId, id: resourceId }, i18n.language);
       if (current.current !== started || sequence !== generation.current) return;
       setEditor(next);
       if ((next.panels.length === 1 || next.panels.length === 2 && next.panels[1]?.id === 'remove') && next.panels[0]?.action) {
-        setEditorPanel(next.panels[0].id); setValues(next.panels[0].values);
+        setEditorPanel(next.panels[0].id); setValues(next.panels[0].values); valuesRef.current = next.panels[0].values; draftBase.current = next.panels[0].values;
       }
     } catch { if (current.current === started) setError(true); }
     finally { if (current.current === started && sequence === generation.current) setEditorLoading(false); }
   };
-  const open = (next: string) => {
-    if (inFlight.current) return;
-    if (next === 'memoryEntries') {
-      void settleDraft(() => {
-        setReceipt(null); setError(false); setDeleteFailure(false); setNameTakenOnSave(false); setConfirmation(null); setEditing(false); setPage(next);
-      }); return;
-    }
-    if (next === 'avatar' || next === 'connections' || next === 'personalSkills') {
-      confirmDiscard(() => openEditor(`settings:${resource?.ref.id}/${next === 'personalSkills' ? 'skills' : next}`));
-      return;
-    }
-    setConflict(null); setEditor(null); setEditorPanel(null); setPage(next); setReceipt(null); setError(false); setDeleteFailure(false); setNameTakenOnSave(false); setConfirmation(null); setEditing(false);
-    setValues(data?.panels.find(item => item.id === next)?.values ?? {});
-  };
-  const submit = async (target: ProfilePanel, confirmed = false): Promise<boolean> => {
+  const submit = async (target: ProfilePanel, confirmed = false, autosaveValues?: ProfileValues, autosaveBase?: ProfileValues): Promise<boolean> => {
     if (!target.action || target.action.disabled || inFlight.current || !online || !resource || conflict?.page === page) return false;
     if (target.action.confirmation && !confirmed) { setConfirmation(target); return false; }
+    const autosave = !!autosaveValues;
+    const submittedValues = autosaveValues ?? (editing ? values : target.values);
+    const submittedBase = autosaveBase ?? draftBase.current;
     inFlight.current = true; generation.current++; setBusy(true); setError(false); setDeleteFailure(false); setNameTakenOnSave(false); setReceipt(null);
+    if (autosave) setSaveStatus('saving');
     const started = binding;
+    const applySavedValues = (savedValues: ProfileValues) => {
+      if (!autosave) {
+        setValues(savedValues); valuesRef.current = savedValues; draftBase.current = savedValues; setEditing(false);
+        return;
+      }
+      // A final native input event may arrive after the request starts. Advance the baseline to the
+      // host copy, but keep fields changed since this request's snapshot for one trailing save.
+      const liveValues = valuesRef.current;
+      const merged = { ...savedValues };
+      for (const field of target.action?.fields ?? []) {
+        if ((liveValues[field.id] ?? '') !== (submittedValues[field.id] ?? '')) merged[field.id] = liveValues[field.id] ?? '';
+      }
+      const remainsDirty = profileFormDirty({ ...target, values: savedValues }, merged);
+      setValues(merged); valuesRef.current = merged; draftBase.current = savedValues; setEditing(remainsDirty);
+      setSaveStatus(remainsDirty ? 'idle' : 'saved');
+    };
     // A version conflict re-reads only after the submit lock is released; the readers refuse to run under it.
     let rereadAfterConflict = false;
     try {
       const response = await invokeRemoteResourceAction(invoke, { deviceId, deviceName }, {
         collectionId, resourceRef: page === 'editor' ? editor!.resource.ref : resource.ref, actionId: target.action.id,
         input: Object.fromEntries((target.action.fields ?? [])
-          .filter(field => target.id === 'delete' || (values[field.id] ?? '') !== (draftBase.current[field.id] ?? ''))
-          .map(field => [field.id, (editing ? values[field.id] : target.values[field.id]) ?? ''])),
+          .filter(field => target.id === 'delete' || (submittedValues[field.id] ?? '') !== (submittedBase[field.id] ?? ''))
+          .map(field => [field.id, submittedValues[field.id] ?? ''])),
       }, i18n.language);
       if (current.current !== started) return false;
       const toast = response.effects.find(effect => effect.kind === 'toast');
       if (toast?.kind === 'toast') setReceipt(toast.message);
-      setConfirmation(null); setEditing(false);
+      setConfirmation(null);
       if (target.id === 'delete') { pendingDeleted.current = true; setDeleted(true); return true; }
       if (page === 'editor' && editor) {
         let ref = editor.resource.ref;
@@ -186,27 +204,31 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
           const next = await loadCompanionProfile(invoke, deviceId, ref, i18n.language);
           if (current.current !== started) return false;
           setEditorResourceId(ref.id); setEditor(next); const nextPanel = next.panels.find(item => item.id === target.id && item.action);
-          setEditorPanel(nextPanel?.id ?? null); setValues(nextPanel?.values ?? {});
+          const savedValues = nextPanel?.values ?? submittedValues;
+          setEditorPanel(nextPanel?.id ?? null); applySavedValues(savedValues);
           const root = await read(); if (current.current === started) setData(root);
-        } catch { if (current.current === started) setError(true); }
+        } catch { if (current.current === started) { applySavedValues(submittedValues); setError(true); } }
         return true;
       }
       // A returned receipt is authoritative; a subsequent read failure is not a failed mutation.
       try {
         const next = await read();
         if (current.current !== started) return false;
-        setData(next); setValues(next?.panels.find(item => item.id === target.id)?.values ?? {});
-      } catch { setError(true); }
+        const savedValues = next?.panels.find(item => item.id === target.id)?.values ?? submittedValues;
+        setData(next); applySavedValues(savedValues);
+      } catch { applySavedValues(submittedValues); setError(true); }
       return true;
     } catch (cause) {
       if (current.current === started) {
         const message = cause instanceof Error ? cause.message : String(cause);
         setConfirmation(null);
-        if (target.id !== 'delete' && message.includes('ALREADY_EXISTS')) { setNameTakenOnSave(true); setError(true); }
+        if (target.id !== 'delete' && message.includes('ALREADY_EXISTS')) { setNameTakenOnSave(true); if (autosave) setSaveStatus('error'); else setError(true); }
         else if (target.id !== 'delete' && message.includes('PRECONDITION_FAILED')) {
           // The teammate changed meanwhile. Keep the draft; the re-read offers the latest version.
+          if (autosave) setSaveStatus('idle');
           rereadAfterConflict = true;
-        } else { setError(true); setDeleteFailure(target.id === 'delete'); }
+        } else if (autosave) setSaveStatus('error');
+        else { setError(true); setDeleteFailure(target.id === 'delete'); }
       }
       return false;
     } finally {
@@ -217,20 +239,67 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
       }
     }
   };
+  const clearSaveTimer = () => {
+    if (saveTimer.current !== null) clearTimeout(saveTimer.current);
+    saveTimer.current = null; instantSavePending.current = false;
+  };
+  const flushDraft = async (): Promise<boolean> => {
+    clearSaveTimer();
+    if (saveFlight.current) await saveFlight.current;
+    const draft = draftScope.current;
+    const target = draft.page === 'editor'
+      ? draft.base?.panels.find(item => item.id === editorPanel)
+      : draft.base?.panels.find(item => item.id === draft.page);
+    if (!draft.dirty || !target) return true;
+    if (!profileFormValid(target, valuesRef.current)) { setSaveStatus('invalid'); return false; }
+    if (!online || !resource || !target.action || target.action.disabled || conflict?.page === draft.page) {
+      if (conflict?.page !== draft.page) setSaveStatus('error');
+      return false;
+    }
+    const attempt = submit(target, false, { ...valuesRef.current }, { ...draftBase.current });
+    saveFlight.current = attempt;
+    const saved = await attempt;
+    if (saveFlight.current === attempt) saveFlight.current = null;
+    return saved;
+  };
+  const scheduleDraft = (trigger: 'text' | 'instant') => {
+    if (trigger === 'text' && composing.current) return;
+    if (trigger === 'text' && instantSavePending.current) return;
+    if (saveTimer.current !== null) clearTimeout(saveTimer.current);
+    instantSavePending.current = trigger === 'instant';
+    saveTimer.current = setTimeout(() => {
+      saveTimer.current = null; instantSavePending.current = false;
+      void flushDraft();
+    }, trigger === 'instant' ? 0 : PROFILE_TEXT_SAVE_DELAY_MS);
+  };
+  const settleDraft = async (proceed: () => void | Promise<void>) => {
+    if (await flushDraft()) await proceed();
+  };
+  const open = (next: string) => {
+    const proceed = async () => {
+      if (next === 'avatar' || next === 'connections' || next === 'personalSkills') {
+        await openEditor(`settings:${resource?.ref.id}/${next === 'personalSkills' ? 'skills' : next}`);
+        return;
+      }
+      setConflict(null); setEditor(null); setEditorPanel(null); setPage(next); setReceipt(null); setError(false); setDeleteFailure(false); setNameTakenOnSave(false); setConfirmation(null); setEditing(false); setSaveStatus('idle');
+      const nextValues = data?.panels.find(item => item.id === next)?.values ?? {};
+      setValues(nextValues); valuesRef.current = nextValues; draftBase.current = nextValues;
+    };
+    void settleDraft(proceed);
+  };
   const leave = async (close: boolean) => {
-    if (inFlight.current) return;
     if (confirmation) { setConfirmation(null); return; }
     if (page === 'memoryEntries') {
       if (close) { if (await memory.flush()) onClose(); }
       else if (!(await memory.back())) open('memory');
       return;
     }
-    confirmDiscard(() => leavePage(close));
+    await settleDraft(() => leavePage(close));
   };
   const leavePage = async (close: boolean) => {
     if (close) { onClose(); return; }
     if (page === 'editor' && editor) {
-      if (editorPanel && editor.panels.filter(item => item.action && item.id !== 'remove').length > 1) { setEditorPanel(null); setEditing(false); return; }
+      if (editorPanel && editor.panels.filter(item => item.action && item.id !== 'remove').length > 1) { setEditorPanel(null); setEditing(false); setSaveStatus('idle'); return; }
       const parts = editor.resource.ref.id.split('/');
       if (parts.length > 2) { await openEditor(parts.slice(0, -1).join('/')); return; }
       open(parts[1] === 'skills' || parts[1] === 'connections' ? 'skills' : parts[1] === 'models' ? 'settings' : 'home');
@@ -251,40 +320,6 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
       } else { setEditor(next); setError(false); }
     } catch { if (current.current === started && generation.current === sequence) setError(true); }
   };
-  const confirmDiscard = (proceed: () => void | Promise<void>) => {
-    if (!dirty || !panel) { void proceed(); return; }
-    const started = binding;
-    Alert.alert(t('devices.companions.automation.unsavedTitle'), t('devices.companions.automation.unsavedBody'), [
-      { text: t('devices.common.cancel'), style: 'cancel' },
-      { text: t('devices.companions.automation.discard'), style: 'destructive', onPress: () => {
-        if (current.current !== started || inFlight.current) return;
-        if (conflict?.page === page) {
-          if (page === 'editor') setEditor(conflict.next); else setData(conflict.next);
-        }
-        setEditing(false); setConflict(null); void proceed();
-      } },
-    ]);
-  };
-  // The memory toggle retains main's existing save-before-navigation contract.
-  const settleDraft = async (proceed: () => void | Promise<void>) => {
-    if (!dirty || !panel) { await proceed(); return; }
-    if (online && resource && panel.action && !panel.action.disabled && conflict?.page !== page) {
-      if (await submit(panel)) await proceed();
-      return;
-    }
-    const started = binding;
-    Alert.alert(t('devices.companions.automation.unsavedTitle'), t('devices.companions.automation.unsavedBody'), [
-      { text: t('devices.common.cancel'), style: 'cancel' },
-      { text: t('devices.companions.automation.discard'), style: 'destructive', onPress: () => {
-        if (current.current !== started || inFlight.current) return;
-        // Discarding a conflicted draft adopts the newer copy already read, as 「放弃编辑并重新加载」 does.
-        if (conflict?.page === page) {
-          if (page === 'editor') setEditor(conflict.next); else setData(conflict.next);
-        }
-        setEditing(false); setConflict(null); void proceed();
-      } },
-    ]);
-  };
   const discardDraft = (reload: boolean) => {
     Alert.alert(t('devices.companions.automation.unsavedTitle'), t('devices.companions.automation.unsavedBody'), [
       { text: t('devices.common.cancel'), style: 'cancel' },
@@ -293,9 +328,10 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
         if (reload && conflict?.page === page) {
           const nextPanel = conflict.next.panels.find(item => item.id === (page === 'editor' ? editorPanel : page));
           if (page === 'editor') setEditor(conflict.next); else setData(conflict.next);
-          setValues(nextPanel?.values ?? {}); draftBase.current = nextPanel?.values ?? {};
-          setEditing(false); setConflict(null); setError(false);
-        } else { setEditing(false); onClose(); }
+          const nextValues = nextPanel?.values ?? {};
+          setValues(nextValues); valuesRef.current = nextValues; draftBase.current = nextValues;
+          setEditing(false); setConflict(null); setError(false); setSaveStatus('idle');
+        } else { clearSaveTimer(); setEditing(false); setSaveStatus('idle'); onClose(); }
       } },
     ]);
   };
@@ -313,7 +349,17 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
 
   const memoryPage = <CompanionMemoryPage memory={memory} online={online} botName={name} memoryEnabled={actionPanel('memory')?.values.memory !== false} />;
   const modelValues = editing ? values : panel?.values ?? {};
-  const changeValues = (next: ProfileValues) => { if (!editing) draftBase.current = panel?.values ?? {}; setValues(next); setEditing(true); };
+  const changeValues = (next: ProfileValues, trigger: 'text' | 'instant' = 'instant') => {
+    if (!editing) draftBase.current = panel?.values ?? {};
+    valuesRef.current = next;
+    draftScope.current = { ...draftScope.current, dirty: profileFormDirty(panel ? { ...panel, values: draftBase.current } : undefined, next) };
+    setValues(next); setEditing(true); setSaveStatus('idle'); scheduleDraft(trigger);
+  };
+  const textBlur = () => { composing.current = false; void flushDraft(); };
+  const compositionChange = (active: boolean) => {
+    composing.current = active;
+    if (active) clearSaveTimer(); else scheduleDraft('text');
+  };
   const taskValues = {
     modelChain: modelValues.taskFollowsPrimary === true
       ? JSON.stringify(readCompanionModelChain(modelValues.modelChain).slice(0, 1))
@@ -321,7 +367,7 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
     followsDefault: modelValues.taskFollowsPrimary === true,
   };
   const pickModel = (purpose: 'primary' | 'task', index: number) => {
-    setModelPurpose(purpose); setModelIndex(index); setModelStage('closing-profile');
+    void settleDraft(() => { setModelPurpose(purpose); setModelIndex(index); setModelStage('closing-profile'); });
   };
   const models = <View style={{ gap: spacing.lg }}>
     <CompanionModelChain deviceId={deviceId} values={modelValues} disabled={busy || !online || !panel?.action} onChange={changeValues}
@@ -346,7 +392,7 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
   // Home management confirmations (restart / resume / delete) start from empty fields so a
   // leftover form value with the same id is never submitted with them.
   const confirm = (target: ProfilePanel | null) => { setConfirmation(target); if (target && (target.id === 'delete' || page === 'home')) { setValues({}); setEditing(false); } };
-  const selectEditorPanel = (item: ProfilePanel) => { setEditorPanel(item.id); setValues(item.values); setEditing(false); };
+  const selectEditorPanel = (item: ProfilePanel) => { void settleDraft(() => { setEditorPanel(item.id); setValues(item.values); valuesRef.current = item.values; draftBase.current = item.values; setEditing(false); setSaveStatus('idle'); }); };
   const retry = () => { if (page === 'editor') void retryEditor(); else void refresh(); };
   const modelPicker = <CompanionModelPicker visible={visible && modelStage === 'picker'} deviceId={deviceId} route={readCompanionModelChain(modelPurpose === 'task' ? taskValues.modelChain : modelValues.modelChain)[modelIndex]}
     onClose={() => setModelStage('closing-picker')} onClosed={() => setModelStage('profile')}
@@ -362,25 +408,23 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
     visible={visible && modelStage === 'profile'} title={confirmation?.action?.confirmation ? label(confirmation.action.confirmation.title) : page === 'editor' && editor ? label(editor.resource.display.title) : t(`devices.companionProfile.${titleKey}`)}
     name={name} page={page} deviceId={deviceId} deviceName={deviceName} resource={resource} data={data} editor={editor} panel={panel}
     values={editing ? values : panel?.values ?? values} busy={busy || memory.busy} online={online} dirty={dirty || memory.dirty} loading={editorLoading}
-    error={error} errorLabel={deleteFailure ? t('devices.companionProfile.deleteFailed') : nameTakenOnSave ? t('devices.companionProfile.nameTaken') : undefined} conflict={conflict?.page === page} receipt={receipt && !confirmation ? label(receipt) : null} confirmation={confirmation} deleted={deleted}
+    error={error} errorLabel={deleteFailure ? t('devices.companionProfile.deleteFailed') : nameTakenOnSave ? t('devices.companionProfile.nameTaken') : undefined} conflict={conflict?.page === page} receipt={receipt && !confirmation ? label(receipt) : null} saveStatus={saveStatus} confirmation={confirmation} deleted={deleted}
     artifacts={sessionId && resource ? <CompanionProfileArtifacts deviceId={deviceId} botId={resource.ref.id} sessionId={sessionId} online={online} onOpenTask={openArtifactTask} /> : note('artifactsRecovery')}
     memoryPage={memoryPage} hasMemoryEntries={!!memoryList}
     onClose={dismiss} onClosed={afterClosed} onBack={page !== 'home' || confirmation ? () => void leave(false) : undefined}
     onOpen={open}
     onChange={changeValues}
+    onTextBlur={textBlur}
     onSubmit={(target, confirmed) => { void submit(target, confirmed); }}
     onConfirm={confirm}
-    onRetry={retry} onDiscard={discardDraft}
+    onRetry={retry} onSaveRetry={() => void flushDraft()} onDiscard={discardDraft}
     onEditor={id => void openEditor(id)} onEditorPanel={selectEditorPanel}
     onSearch={onOpenSearch} /></>;
 
-  // Android mirrors the iOS page map, entry order and save rules; only the surface is platform-drawn.
-  const save = (target: ProfilePanel, blocked: boolean) => <MainWindowActionButton action={{ label: t('devices.companionProfile.save'), busy,
-    disabled: blocked || !online || !dirty || conflict?.page === page, onPress: () => void submit(target) }} />;
+  // Android mirrors the iOS page map, entry order and autosave rules; only the surface is platform-drawn.
   const formPanel = (target: ProfilePanel | undefined) => target?.action ? <>
     {target.id === 'capability' && target.text ? noteText(target.text) : null}
-    <CompanionProfileForm panel={target} values={editing ? values : target.values} onChange={changeValues} disabled={busy || !online || !!target.action.disabled} />
-    {save(target, !!target.action.disabled)}
+    <CompanionProfileForm panel={target} values={editing ? values : target.values} onChange={changeValues} onTextBlur={textBlur} onCompositionChange={compositionChange} disabled={busy || !online || !!target.action.disabled} />
   </> : target?.text ? <Text selectable style={styles.body}>{target.text}</Text> : !data && online ? spinner : note('hostUpgrade');
   const actionRow = (item: ProfilePanel, onPress: () => void, destructive = false) => <ContextSheetRow key={item.id} icon={null} disabled={busy || !online}
     destructive={destructive} label={label(item.action!.label)} onPress={onPress} testID={`companionProfile.action.${item.id}`} />;
@@ -414,16 +458,20 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
       {error ? <View accessibilityRole="alert">{note(deleteFailure ? 'deleteFailed' : nameTakenOnSave ? 'nameTaken' : 'readFailed')}<MainWindowActionButton action={{ label: t('devices.resources.retry'), disabled: busy || !online, onPress: retry }} />
         {dirty ? <MainWindowActionButton action={{ label: t('devices.companions.automation.discard'), tone: 'danger', disabled: busy, onPress: () => discardDraft(false) }} /> : null}
       </View> : null}
+      {saveStatus === 'saving' ? <View accessibilityLiveRegion="polite">{note('saving')}</View>
+        : saveStatus === 'saved' ? <View accessibilityLiveRegion="polite">{note('saved')}</View>
+        : saveStatus === 'invalid' ? <View accessibilityRole="alert">{note('invalid')}</View>
+        : saveStatus === 'error' ? <View accessibilityRole="alert">{note(nameTakenOnSave ? 'nameTaken' : 'saveFailed')}<MainWindowActionButton action={{ label: t('devices.resources.retry'), disabled: busy || !online, onPress: () => void flushDraft() }} /></View> : null}
       {conflict?.page === page ? <View accessibilityRole="alert">{note('changed')}<MainWindowActionButton action={{ label: t('devices.companionProfile.discardAndReload'), tone: 'danger', disabled: busy, onPress: () => discardDraft(true) }} /></View> : null}
       {receipt && !confirmation ? <Text accessibilityLiveRegion="polite" style={styles.note}>{label(receipt)}</Text> : null}
       {deleted ? <MainWindowActionButton action={{ label: t('shared.closePanel'), onPress: onClose }} /> : confirmation?.action?.confirmation ? <>
         <Text selectable style={styles.body}>{label(confirmation.action.confirmation.body ?? confirmation.action.label)}</Text>
         {/* Any confirmed action may ask for input (delete's typed name is one case), as on iOS. */}
-        {confirmation.action.fields?.length ? <CompanionProfileForm panel={confirmation} values={values} onChange={changeValues} disabled={busy || !online} /> : null}
+        {confirmation.action.fields?.length ? <CompanionProfileForm panel={confirmation} values={values} onChange={next => { valuesRef.current = next; setValues(next); setEditing(true); }} disabled={busy || !online} /> : null}
         <MainWindowActionButton action={{ label: label(confirmation.action.confirmation.confirmLabel ?? confirmation.action.label), busy, disabled: !online || confirmation.id === 'delete' && values.confirmName !== name, tone: confirmation.action.tone === 'destructive' ? 'danger' : 'primary', onPress: () => void submit(confirmation, true) }} />
         <MainWindowActionButton action={{ label: t('devices.common.cancel'), disabled: busy, onPress: () => confirm(null) }} />
       </> : page === 'home' ? home : editorLoading ? spinner : page === 'editor' ? editorView
-        : page === 'models' ? panel?.action ? <>{models}{save(panel, false)}</> : noteText(panel?.text || t('devices.companionProfile.hostUpgrade', { deviceName }))
+        : page === 'models' ? panel?.action ? models : noteText(panel?.text || t('devices.companionProfile.hostUpgrade', { deviceName }))
         : page === 'settings' ? <View style={styles.group}>{row('permissions', Hand)}</View>
         : page === 'skills' ? <>
           {skills?.entries?.length ? <View style={styles.group}>{row('personalSkills', Settings2)}</View> : noteText(skills?.text || t('devices.companionProfile.skillsEmpty'))}
@@ -558,7 +606,10 @@ function CompanionCreateSheetContent({ visible, onClose, onClosed, deviceId, dev
  * Host-described fields, laid out like the iOS form: a select or toggle is one inline row
  * (label · value), text and pictures take a heading. Selects open the system menu.
  */
-function CompanionProfileForm({ panel, values, onChange, disabled }: { panel: ProfilePanel; values: ProfileValues; onChange: (values: ProfileValues) => void; disabled: boolean }) {
+function CompanionProfileForm({ panel, values, onChange, onTextBlur, onCompositionChange, disabled }: {
+  panel: ProfilePanel; values: ProfileValues; onChange: (values: ProfileValues, trigger?: 'text' | 'instant') => void;
+  onTextBlur?(): void; onCompositionChange?(composing: boolean): void; disabled: boolean;
+}) {
   const { i18n } = useTranslation();
   const { colors } = useTheme();
   const styles = useThemedStyles(makeStyles);
@@ -584,7 +635,7 @@ function CompanionProfileForm({ panel, values, onChange, disabled }: { panel: Pr
           }
         } else { next[`effort${slot}`] = ''; next[`fast${slot}`] = false; }
       }
-      onChange(next);
+      onChange(next, field.kind === 'text' || field.kind === 'multiline' ? 'text' : 'instant');
     };
     if (field.kind === 'toggle') return <View key={field.id} style={styles.inline}>
       <Text style={[styles.heading, styles.flex]}>{label}</Text>
@@ -595,7 +646,10 @@ function CompanionProfileForm({ panel, values, onChange, disabled }: { panel: Pr
     return <View key={field.id} style={styles.field}>
       <Text style={styles.heading}>{label}</Text>
       {field.id === 'avatarImageBase64' ? <CompanionPortraitPicker value={String(values[field.id] ?? '')} onChange={change} disabled={disabled} /> : field.id === 'portrait' && panel.portraits ? <View style={styles.choices}>{panel.portraits.map(portrait => <Pressable key={portrait.value} accessibilityRole="button" accessibilityLabel={`${label} ${Number(portrait.value) + 1}`} accessibilityState={{ selected: values[field.id] === portrait.value, disabled }} disabled={disabled} onPress={() => change(portrait.value)} style={[styles.portrait, values[field.id] === portrait.value && { borderColor: colors.textPrimary }]}><Image source={{ uri: portrait.uri }} style={styles.portraitImage} /></Pressable>)}</View>
-        : <TextInput accessibilityLabel={label} editable={!disabled} multiline={field.kind === 'multiline'} maxLength={fieldMaxLength(field.id)} onChangeText={change} value={typeof values[field.id] === 'string' ? values[field.id] as string : ''} placeholderTextColor={colors.textPlaceholder} style={[styles.input, field.kind === 'multiline' && styles.multiline]} />}
+        : <TextInput accessibilityLabel={label} editable={!disabled} multiline={field.kind === 'multiline'} maxLength={fieldMaxLength(field.id)}
+          onChange={event => onCompositionChange?.(Boolean((event.nativeEvent as { isComposing?: boolean }).isComposing))}
+          onChangeText={change} onBlur={onTextBlur} value={typeof values[field.id] === 'string' ? values[field.id] as string : ''}
+          placeholderTextColor={colors.textPlaceholder} style={[styles.input, field.kind === 'multiline' && styles.multiline]} />}
     </View>;
   })}</>;
 }

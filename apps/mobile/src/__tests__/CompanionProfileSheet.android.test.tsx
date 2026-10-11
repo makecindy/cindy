@@ -114,20 +114,22 @@ it('renders confirmation fields for any confirmed action, not only delete', asyn
 });
 
 it('keeps Settings to Permissions and opens selects through the system menu without a search box', async () => {
-  const models = form('models', [{ id: 'route0', label: 'Route', kind: 'select', options: [{ value: '', label: 'None' }, { value: 'a', label: 'Model A' }] }], { route0: 'a' });
-  h.read.mockImplementation(async (_invoke: unknown, _device: string, target: { id: string }) => target.id === 'settings:bot/avatar'
-    ? { resource: { ...resource, ref: { ...ref, id: 'settings:bot/models' }, display: { title: 'Models' } }, panels: [models] } : home());
+  let modelValue = 'a';
+  const models = () => form('models', [{ id: 'route0', label: 'Route', kind: 'select', options: [{ value: '', label: 'None' }, { value: 'a', label: 'Model A' }] }], { route0: modelValue });
+  h.read.mockImplementation(async (_invoke: unknown, _device: string, target: { id: string }) => target.id.startsWith('settings:bot/')
+    ? { resource: { ...resource, ref: { ...ref, id: 'settings:bot/models' }, display: { title: 'Models' }, revision: modelValue ? 'v1' : 'v2' }, panels: [models()] } : home());
+  h.invoke.mockImplementation(async (_invoke: unknown, _target: unknown, request: { input?: { route0?: string } }) => { modelValue = request.input?.route0 ?? modelValue; return { effects: [] }; });
   await render(); await press(byTest('companionProfile.profile')); await press(byTest('companionProfile.avatar'));
   expect(h.sheet.title).toBe('Models');
   const choice = h.choices.at(-1);
   expect(choice).toMatchObject({ label: 'Route', value: 'a', disabled: false, options: [{ value: '', label: 'None', disabled: false }, { value: 'a', label: 'Model A', disabled: false }] });
   expect(container.querySelector('input[aria-label*="searchOptions"]')).toBeNull();
-  await act(async () => choice.onChange(''));
-  expect(h.sheet.preventDismiss).toBe(true);
+  await act(async () => choice.onChange('')); await settle();
+  expect(h.invoke.mock.calls[0][2]).toMatchObject({ actionId: 'models-grant', input: { route0: '' } });
+  expect(h.sheet.preventDismiss).toBe(false);
+  expect(byText('devices.companionProfile.save')).toBeUndefined();
   await act(async () => h.sheet.onBack()); await settle();
-  expect(h.invoke).not.toHaveBeenCalled(); expect(h.alert).toHaveBeenCalledOnce();
-  const discard = h.alert.mock.calls[0][2].find((button: { style?: string }) => button.style === 'destructive');
-  await act(async () => discard.onPress()); await settle();
+  expect(h.alert).not.toHaveBeenCalled();
   const rows = buttons().map(node => node.dataset.testid).filter(Boolean);
   expect(rows).toEqual(['companionProfile.permissions']); expect(byTest('companionProfile.permissions')!.dataset.icon).toBe('Hand');
 });

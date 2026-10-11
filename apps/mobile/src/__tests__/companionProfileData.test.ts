@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { companionArtifactRows, loadCompanionProfile, parseCompanionProfileData, profileFormDirty } from '../session/companionProfileData';
+import { companionArtifactRows, loadCompanionProfile, parseCompanionProfileData, profileFormDirty, profileFormValid } from '../session/companionProfileData';
 const ref = { collectionId: 'teammates', kind: 'bot', id: 'bot-a' };
 const raw = () => ({ ref, revision: 'v1', display: { title: 'Cindy' }, links: [], actions: [{ id: 'opaque-token', label: 'Save', fields: [{ id: 'name', kind: 'text', label: 'Name' }] }], blocks: [{ id: 'profile', primitive: 'form', fallbackMarkdown: 'Profile', data: { actionId: 'opaque-token', values: { name: 'Cindy', privateField: 'ignored' } } }] });
 describe('companion profile finite resource primitives', () => {
@@ -9,6 +9,12 @@ describe('companion profile finite resource primitives', () => {
     expect(data.panels[0].action?.id).toBe('opaque-token');
     expect(profileFormDirty(data.panels[0], { name: 'Cindy' })).toBe(false);
     expect(profileFormDirty(data.panels[0], { name: 'New' })).toBe(true);
+    expect(profileFormValid(data.panels[0], { name: '' })).toBe(true);
+  });
+  it('requires nonblank values only for host-required fields', () => {
+    const data = parseCompanionProfileData({ ...raw(), actions: [{ ...raw().actions[0], fields: [{ id: 'name', kind: 'text', label: 'Name', required: true }] }] }, ref);
+    expect(profileFormValid(data.panels[0], { name: '  ' })).toBe(false);
+    expect(profileFormValid(data.panels[0], { name: 'Nova' })).toBe(true);
   });
   it('keeps legacy hosts read-only and rejects wrong resource identities', () => {
     expect(parseCompanionProfileData({ ...raw(), actions: undefined, blocks: undefined }, ref).panels).toEqual([]);

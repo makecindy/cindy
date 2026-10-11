@@ -60,10 +60,6 @@ async function openProfile() {
   // 与 iOS 相同,个人资料从首页「个人资料」行进入。
   await act(async () => h.pressables['companionProfile.profile'].onPress());
 }
-function alertButton(label: string) {
-  const buttons = h.alert.mock.calls.at(-1)?.[2] as { text: string; onPress?: () => void }[];
-  return buttons.find(button => button.text === label)!;
-}
 beforeEach(() => {
   vi.clearAllMocks(); h.inputs = {}; h.buttons = {}; h.pressables = {};
   h.read.mockResolvedValue({ resource, panels: [profilePanel()] });
@@ -75,37 +71,45 @@ it('keeps a host-disabled action read-only like iOS', async () => {
   h.read.mockResolvedValue({ resource, panels: [profilePanel(true)] });
   await render(); await openProfile();
   expect(h.inputs.Name.editable).toBe(false);
-  expect(h.buttons['devices.companionProfile.save'].disabled).toBe(true);
+  expect(h.buttons['devices.companionProfile.save']).toBeUndefined();
 });
 
-it('asks to discard an offline draft on back instead of trapping the page', async () => {
+it('does not save Android marked text and debounces the committed Chinese value', async () => {
+  vi.useFakeTimers();
+  try {
+    await render(); await openProfile();
+    await act(async () => { h.inputs.Name.onChange({ nativeEvent: { isComposing: true } }); h.inputs.Name.onChangeText('zhong'); });
+    await act(async () => vi.advanceTimersByTimeAsync(2_000));
+    expect(h.invoke).not.toHaveBeenCalled();
+    h.read.mockResolvedValue({ resource: { ...resource, revision: 'v2' }, panels: [{ ...profilePanel(), values: { name: '中文' } }] });
+    await act(async () => { h.inputs.Name.onChangeText('中文'); h.inputs.Name.onChange({ nativeEvent: { isComposing: false } }); });
+    await act(async () => vi.advanceTimersByTimeAsync(1_199)); expect(h.invoke).not.toHaveBeenCalled();
+    await act(async () => vi.advanceTimersByTimeAsync(1));
+    expect(h.invoke.mock.calls[0][2].input).toEqual({ name: '中文' });
+  } finally { vi.useRealTimers(); }
+});
+
+it('keeps an offline draft on back and exposes retry instead of discarding it', async () => {
   await render(); await openProfile();
   await act(async () => h.inputs.Name.onChangeText('Unsaved'));
   await render(false);
   await act(async () => h.sheet.onBack());
-  expect(h.alert).toHaveBeenCalledOnce(); expect(h.invoke).not.toHaveBeenCalled();
-  // Keep editing: the draft and page stay.
-  alertButton('devices.common.cancel').onPress?.();
+  expect(h.alert).not.toHaveBeenCalled(); expect(h.invoke).not.toHaveBeenCalled();
   expect(h.inputs.Name.value).toBe('Unsaved'); expect(h.sheet.onBack).toBeDefined();
-  await act(async () => h.sheet.onBack());
-  await act(async () => alertButton('devices.companions.automation.discard').onPress!());
-  expect(h.sheet.onBack).toBeUndefined(); expect(h.close).not.toHaveBeenCalled();
+  expect(h.buttons['devices.resources.retry']).toBeDefined(); expect(h.close).not.toHaveBeenCalled();
 });
 
-it('closes only after discarding either an offline or online draft', async () => {
+it('closes only after an online draft is saved and retains an offline draft', async () => {
   await render(); await openProfile();
   await act(async () => h.inputs.Name.onChangeText('Unsaved'));
   await render(false);
   await act(async () => h.sheet.onClose());
-  await act(async () => alertButton('devices.companions.automation.discard').onPress!());
-  expect(h.close).toHaveBeenCalledOnce(); expect(h.invoke).not.toHaveBeenCalled();
+  expect(h.close).not.toHaveBeenCalled(); expect(h.invoke).not.toHaveBeenCalled();
 
-  h.close.mockClear(); h.alert.mockClear();
+  h.read.mockResolvedValue({ resource: { ...resource, revision: 'v2' }, panels: [{ ...profilePanel(), values: { name: 'Unsaved online' } }] });
   await render(true); await openProfile();
   await act(async () => h.inputs.Name.onChangeText('Unsaved online'));
   await act(async () => h.sheet.onClose());
-  expect(h.alert).toHaveBeenCalledOnce(); expect(h.invoke).not.toHaveBeenCalled(); expect(h.close).not.toHaveBeenCalled();
-  await act(async () => alertButton('devices.companions.automation.discard').onPress!());
-  expect(h.invoke).not.toHaveBeenCalled();
+  expect(h.alert).not.toHaveBeenCalled(); expect(h.invoke).toHaveBeenCalledOnce();
   expect(h.close).toHaveBeenCalledOnce();
 });
