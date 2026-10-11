@@ -553,7 +553,7 @@ function ensureInstances(): { store: SlackHookStore; manager: HookControlManager
       // 「用户在桌面端点了重试 / 继续任务」信号 -> 把那一轮接回渠道原消息
       // (turn.reopen, 协议阶段 18)。信号由 maker 的发送事务发布。
       subscribeUiContinuation: onUiContinuation,
-      subscribeChannelTurn: (listener) => onChannelTurn((session, phase) => listener(session.id, session.workDir, phase)),
+      subscribeChannelTurn: (listener) => onChannelTurn((session, phase, source) => listener(session.id, session.workDir, phase, source)),
       subscribeUiSessionIntervention: onUiSessionIntervention,
       subscribeUiTurnDispatching: onUiTurnDispatching,
       subscribeUiTurnUndispatched: onUiTurnUndispatched,

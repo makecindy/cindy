@@ -271,8 +271,9 @@ describe('background results during normal turn delivery', () => {
     signal(req.sessionId, req.workingDir, 'starting');
     expect(watches).toHaveLength(0);
     req.onTurnTerminal?.();
-    signal(req.sessionId, req.workingDir, 'starting');
+    signal(req.sessionId, req.workingDir, 'starting', 'other-task');
     expect(watches).toHaveLength(1);
+    watches[0]!.onSettling?.();
     watches[0]!.onEnd({ status: 'ok', finalText: 'next result', errorMessage: null, durationMs: 1 });
     fr.finish({ finalText: 'original result' });
     await tick();

@@ -1263,6 +1263,7 @@ import {
   publishUiTurnDispatching,
   publishUiTurnUndispatched,
 } from './uiContinuationSignal.js';
+import { channelTurnSourceFor, noteChannelTurnSource } from './channelTurnSignal.js';
 import { readSilentStopAutoResumeSettings } from '../maker-host/silent-stop-auto-resume-store.js';
 import {
   AutoResumeBookkeeping,
@@ -10011,6 +10012,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       const outgoingMessage: UserMessage = sourceNote
         ? (prependNoteToWireUserMessage(withHandoff as HandoffWireMessage, sourceNote) as UserMessage)
         : withHandoff;
+      // Idle direct sends never carry internal coordination (that is force-queued).
+      const releaseTurnSource = noteChannelTurnSource(session.id, channelTurnSourceFor(source?.origin, false));
       try {
         const sendResult = await session.send(outgoingMessage, {
           ...opts,
@@ -10050,6 +10053,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           gitSnapshotCoordinator?.onTurnAbort(session.id);
         }
         throw err;
+      } finally {
+        releaseTurnSource();
       }
     };
     return session.remoteHostId

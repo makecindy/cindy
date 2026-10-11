@@ -21,7 +21,7 @@
  * 本模块只碰事件流与定时器, 不做 IO —— 图片旁路、附件收集、落库都留在调用方。
  */
 
-import type { AgentEvent, TurnContinuationState } from '@cindy/maker-core';
+import type { AgentEvent, SendOrigin, TurnContinuationState } from '@cindy/maker-core';
 import { isTerminalAgentErrorEvent } from '@cindy/maker-core';
 
 import {
@@ -93,8 +93,8 @@ export interface HookTurnObserverDeps {
   flushProgressOnDone?: boolean;
   /** tool_result 全文旁路(出站图片收集留在调用方, 观察器不碰 IO)。 */
   onToolResult?: (fullText: string) => void;
-  /** 完整 turn（含后台续跑）收口时同步通知，早于 finished settle。 */
-  onTurnTerminal?: () => void;
+  /** 完整 turn（含后台续跑）收口时同步通知，早于 finished settle；附这一轮最后见到的来源。 */
+  onTurnTerminal?: (origin: SendOrigin | undefined) => void;
   /** silent-stop 自动续跑守卫的 settle 订阅(生产为 maker-ipc 的同名函数)。 */
   onSilentStopSettled: (
     sessionId: string,
@@ -156,6 +156,7 @@ export function observeHookTurn(
   });
 
   let errorReason: string | null = null;
+  let turnOrigin: SendOrigin | undefined;
   let stopListening: (() => void) | undefined;
   const finished = new Promise<void>((resolve, reject) => {
     let turnTerminalNotified = false;
@@ -165,7 +166,7 @@ export function observeHookTurn(
       if (turnTerminalNotified) return;
       turnTerminalNotified = true;
       try {
-        onTurnTerminal?.();
+        onTurnTerminal?.(turnOrigin);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         log.warn(`[hook-runner] onTurnTerminal failed: ${message}`);
@@ -203,6 +204,7 @@ export function observeHookTurn(
     });
     const off = session.onEvent((ev: AgentEvent) => {
       if (isImSubagentEvent(ev) || ev.turnScope === 'background') return;
+      if (ev.turnOrigin) turnOrigin = ev.turnOrigin;
       if (ev.type === 'text') {
         // 正文累积(isFinal 逐条契约 / 定稿段按消息切开 / fallbackTail 自成段 /
         // uuid 缺失退 requestId)都在 presenter 的 finalized-segments 策略里。
