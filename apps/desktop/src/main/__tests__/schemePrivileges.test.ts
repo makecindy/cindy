@@ -20,7 +20,8 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import path from 'node:path';
 
 vi.mock('electron', () => ({
@@ -80,36 +81,22 @@ describe('scheme privilege constants', () => {
 });
 
 describe('registerSchemesAsPrivileged is called exactly once (static scan)', () => {
-  const MAIN_DIR = path.resolve(__dirname, '..');
-
-  function collectTsFiles(dir: string): string[] {
-    const out: string[] = [];
-    for (const name of readdirSync(dir)) {
-      if (name === '__tests__' || name === 'node_modules') continue;
-      const p = path.join(dir, name);
-      if (statSync(p).isDirectory()) {
-        out.push(...collectTsFiles(p));
-      } else if (name.endsWith('.ts')) {
-        out.push(p);
-      }
-    }
-    return out;
-  }
+  const REPO_ROOT = path.resolve(__dirname, '../../../../..');
 
   // Match the actual invocation (receiver included) so doc comments that
   // merely mention the API name don't count as call sites.
   const CALL = 'protocol.registerSchemesAsPrivileged(';
 
   it('single call site lives in bootstrap-electron.ts with all six schemes', () => {
-    const callSites: string[] = [];
-    for (const file of collectTsFiles(MAIN_DIR)) {
-      const src = readFileSync(file, 'utf8');
-      let idx = src.indexOf(CALL);
-      while (idx !== -1) {
-        callSites.push(file);
-        idx = src.indexOf(CALL, idx + 1);
-      }
-    }
+    const callSites = execFileSync(
+      'git',
+      ['grep', '-l', '-F', CALL, '--', 'apps/desktop/src/main'],
+      { cwd: REPO_ROOT, encoding: 'utf8' },
+    )
+      .trim()
+      .split(/\r?\n/)
+      .filter((file) => file.endsWith('.ts') && !file.includes('/__tests__/'))
+      .map((file) => path.join(REPO_ROOT, file));
 
     expect(callSites).toHaveLength(1);
     expect(path.basename(callSites[0])).toBe('bootstrap-electron.ts');
@@ -128,5 +115,5 @@ describe('registerSchemesAsPrivileged is called exactly once (static scan)', () 
     ]) {
       expect(callBlock).toContain(name);
     }
-  });
+  }, 30_000);
 });

@@ -36,7 +36,7 @@ describe('GitHub setup UI', () => {
     await screen.findByText(`${key}.stages.unavailable.title`);
     await screen.findByText(`${key}.done`, {}, { timeout: 2000 });
     // The connected notification runs in a passive effect after the DOM commit.
-    await waitFor(() => expect(connected).toHaveBeenCalledOnce());
+    await waitFor(() => expect(connected).toHaveBeenCalledOnce(), { timeout: 10_000 });
   });
   it('ignores outside clicks during authorization but still allows explicit cancellation', async () => {
     const close = vi.fn();

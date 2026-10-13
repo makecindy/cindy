@@ -31,6 +31,41 @@ vi.mock('electron', () => ({
 // 同 providerOneShot.test:剪断 maker-core runtime 图,只保留 auth-adapters 需要的类型面。
 vi.mock('@cindy/maker-core', () => ({}));
 
+// Operational dependencies are exercised by their own tests. This guard intentionally keeps the
+// adapter module, Electron boundary, logger, and PreparationCache real while cutting method-only
+// runtime graphs so the dynamic import measures singleton construction instead of the entire host.
+vi.mock('../managed-skills.js', () => ({}));
+vi.mock('../provider-presentation-store.js', () => ({}));
+vi.mock('../subscription-account-auth.js', () => ({}));
+vi.mock('../codex-account-auth.js', () => ({}));
+vi.mock('../../agent-binaries/index.js', () => ({}));
+vi.mock('../codex-global-skills.js', () => ({}));
+vi.mock('../codex-global-rules.js', () => ({}));
+vi.mock('../codex-global-plugins.js', () => ({}));
+vi.mock('../capability-routing.js', () => ({}));
+vi.mock('../shared-global-skills.js', () => ({}));
+vi.mock('../built-in-skills.js', () => ({}));
+vi.mock('../codex-auth-link.js', () => ({}));
+vi.mock('../codex-shared-auth.js', () => ({}));
+vi.mock('../codex-auth-invalidation.js', () => ({}));
+vi.mock('../codex-auth-state.js', () => ({}));
+vi.mock('../codex-gateway-config.js', () => ({}));
+vi.mock('../claude-gateway-config.js', () => ({}));
+vi.mock('../claude-native-auth.js', () => ({}));
+vi.mock('../claude-native-connection.js', () => ({}));
+vi.mock('../claude-native-cli.js', () => ({}));
+vi.mock('../claude-legacy-config-migration.js', () => ({}));
+vi.mock('../anthropic-compat-proxy-host.js', () => ({
+  isAnthropicCompatProxyHandleReady: () => false,
+}));
+vi.mock('../runtime-configs.js', () => ({}));
+vi.mock('../../secrets/providerSecretStore.js', () => ({}));
+vi.mock('../../appCapabilities.js', () => ({}));
+vi.mock('../../appSessionState.js', () => ({}));
+vi.mock('../../authBoundaryQuarantine.js', () => ({}));
+vi.mock('../nativeProviderAuthBinding.js', () => ({}));
+vi.mock('../../cindy-brain/ghostSetupChangeBus.js', () => ({}));
+
 describe('auth-adapters import purity', () => {
   // Keep the side-effect assertions intact while allowing the full auth graph's
   // cold transform on Linux under the eight-worker desktop unit pool.

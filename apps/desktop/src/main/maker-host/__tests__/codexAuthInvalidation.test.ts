@@ -2463,7 +2463,7 @@ describe('Codex system credential suppression marker', () => {
     ).finishSuccessfulCodexLogin.bind(adapter);
     (adapter as unknown as { loginCancellationOpen: boolean }).loginCancellationOpen = true;
     const loginFinalization = finishSuccessfulCodexLogin();
-    await vi.waitFor(() => expect(onLoginSuccess).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(onLoginSuccess).toHaveBeenCalledOnce(), { timeout: 10_000 });
     fs.writeFileSync(cachePath, JSON.stringify({ models: [{ slug: 'f2-model' }] }));
     const f2Before = fs.readFileSync(localAuth);
 

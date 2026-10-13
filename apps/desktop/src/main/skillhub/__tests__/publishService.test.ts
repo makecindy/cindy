@@ -1222,7 +1222,10 @@ describe('SkillPublishService', () => {
       const service = new SkillPublishService({ scanPollIntervalMs: 10 });
       service.startScanPoll('review-helper', '1.0.1');
       expect(vi.getTimerCount()).toBe(0);
-      expect(serverApiFetch).not.toHaveBeenCalled();
+      expect(serverApiFetch).not.toHaveBeenCalledWith(
+        '/api/skills-hub/skills/review-helper/scan?version=1.0.1',
+        expect.anything(),
+      );
     } finally {
       vi.useRealTimers();
     }

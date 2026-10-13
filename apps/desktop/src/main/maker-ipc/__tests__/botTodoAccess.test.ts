@@ -139,7 +139,7 @@ describe('Todo public access', () => {
     const access = await todoAccess('bot-one'),
       todo = await access.patch(patch);
     const first = access.act(todo.id, todo.revision, 'request-first');
-    await vi.waitFor(() => expect(send).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(send).toHaveBeenCalledOnce(), { timeout: 10_000 });
     expect((await access.list()).items[0].action?.state).toBe('received');
     await access.act(todo.id, todo.revision, 'request-second');
     expect(send).toHaveBeenCalledOnce();

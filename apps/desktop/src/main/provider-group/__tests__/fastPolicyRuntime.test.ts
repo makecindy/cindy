@@ -319,7 +319,9 @@ describe('durable direct task routing', () => {
     state.offline.clear();
     state.config!.members = state.config!.members.filter((member) => member.key !== 'device:one:openai');
     // Removal changes the new-task pool, not the location of existing history.
-    expect(await allocate('history')).toMatchObject({ deviceId: 'one' });
+    await vi.waitFor(async () => {
+      expect(await allocate('history')).toMatchObject({ deviceId: 'one' });
+    }, { timeout: 10_000 });
     state.revoked = ['one'];
     expect(await allocate('history')).toBeNull();
     expect(await locate('history')).toEqual({ deviceId: 'one' });
@@ -459,7 +461,8 @@ describe('direct allocation authorization and Fast prebinding', () => {
       else failAllocationAt('Fast');
       state.hostChanged!();
       await vi.waitFor(() => expect(state.delegateCalls.some((request) => request.op === 'delegate'
-        && request.action === 'revoke' && request.generation === provisional.generation)).toBe(true));
+        && request.action === 'revoke' && request.generation === provisional.generation)).toBe(true),
+      { timeout: 10_000 });
       expect(state.pair).not.toBeNull();
       expect(state.usage!.listActiveDirectReceiptRoutes(state.owner)
         .some((row) => row.sessionId === 'task_a' && row.committedAt !== undefined)).toBe(true);

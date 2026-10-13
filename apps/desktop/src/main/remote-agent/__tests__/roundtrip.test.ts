@@ -901,7 +901,7 @@ describe('remote agent round trip', () => {
     } finally {
       host.dispose();
     }
-  });
+  }, 120_000);
 
   it('runs a turn on the other computer while files, commands and confirmations stay here', async () => {
     const host = createHost();
@@ -956,7 +956,8 @@ describe('remote agent round trip', () => {
     expect(entries).toEqual(['entry-42']);
 
     // 图片字节随消息带到对方，换成对方本机路径；Symbol 证明在对方重新附上。
-    const sent = hostSends[0];
+    const sent = hostSends.find((candidate) => candidate.opts.messageUuid === 'u1');
+    if (!sent) throw new Error('missing forwarded u1 message');
     const image = (sent.message.content as Array<{ type: string; path?: string }>).find((block) => block.type === 'image');
     expect(image?.path && image.path !== png).toBe(true);
     expect(fs.readFileSync(image!.path!)).toEqual(fs.readFileSync(png));

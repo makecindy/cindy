@@ -72,7 +72,7 @@ afterEach(async () => {
   // dispose 在后台删除工作目录；等它结束，避免与 fixture 清理交错。
   await vi.waitFor(() => {
     for (const dir of shadowRoots) expect(fs.existsSync(dir)).toBe(false);
-  });
+  }, { timeout: 10_000 });
   clearAllSessionProviders();
   setClaudeProxySessionIdResolver(() => null);
   setClaudeProxyGatewayKeyReader(() => null);

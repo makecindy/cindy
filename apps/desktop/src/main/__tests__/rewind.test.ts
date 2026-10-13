@@ -22,7 +22,6 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-
 import { enqueueGitRepoWrite } from '../git-snapshot/gitRepoWriteQueue';
 const attemptJournal = vi.hoisted(() => ({ read: vi.fn<() => Promise<Array<{ id: string; anchor?: string }> | null>>() }));
 vi.mock('../git-snapshot/snapshotAttemptStore', () => ({ SnapshotAttemptStore: class { read = attemptJournal.read; } }));
@@ -175,8 +174,8 @@ vi.mock('../localDb/client/current', () => ({
   getDbClient: () => ({ drizzle: fakeDb, tx: txMock, queryOne: queryOneMock }),
 }));
 
-let commitRewindAtMessage: typeof import('../maker-orchestration/rewind').commitRewindAtMessage;
-let previewRewindAtMessage: typeof import('../maker-orchestration/rewind').previewRewindAtMessage;
+const { commitRewindAtMessage, previewRewindAtMessage } = await import('../maker-orchestration/rewind');
+
 const originalClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
 const tempDirs: string[] = [];
 
@@ -240,11 +239,6 @@ beforeEach(async () => {
   getSessionMetaMock.mockImplementation(async () =>
     fakeSession ? { sdkSessionId: fakeSession.sdkSessionId } : null,
   );
-  if (!commitRewindAtMessage) {
-    const mod = await import('../maker-orchestration/rewind');
-    commitRewindAtMessage = mod.commitRewindAtMessage;
-    previewRewindAtMessage = mod.previewRewindAtMessage;
-  }
 });
 
 afterEach(async () => {

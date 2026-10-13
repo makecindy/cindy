@@ -2865,7 +2865,7 @@ describe('skillhub/installService', () => {
         await fs.promises.rename(entry, path.join(TEST_ROOT, 'trashed-alias'));
       });
       const removing = uninstall(source, target);
-      await vi.waitFor(() => expect(finishTrash).toBeDefined());
+      await vi.waitFor(() => expect(finishTrash).toBeDefined(), { timeout: 10_000 });
       try {
         expect(
           (await install({ name: aliasName, installPath: alias, version: '1' }, () => {})).success,

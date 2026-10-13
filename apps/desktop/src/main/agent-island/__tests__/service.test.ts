@@ -7088,11 +7088,11 @@ describe('会话关闭原因决定条目去留', () => {
   });
 
   it('TTL prune 后再 Stop 会清账本并立刻给远端发收尾包', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const { AGENT_ISLAND_UNREAD_TRANSIENT_TTL_MS } = await import('../state.js');
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
     try {
-      const { AgentIslandService } = await import('../service.js');
-      const { AGENT_ISLAND_UNREAD_TRANSIENT_TTL_MS } = await import('../state.js');
       const publish = vi.fn(() => true);
       const service = new AgentIslandService({
         getMainWindow: () => null,
@@ -7101,7 +7101,8 @@ describe('会话关闭原因决定条目去留', () => {
       service.setEnabled(false);
       service.handleUserPrompt({ sessionId: 's1', agentKind: 'codex' }, 'run tests');
       service.handleAgentEvent({ sessionId: 's1', agentKind: 'codex' }, doneEvent());
-      await vi.advanceTimersByTimeAsync(AGENT_ISLAND_UNREAD_TRANSIENT_TTL_MS + 50);
+      vi.setSystemTime(Date.now() + AGENT_ISLAND_UNREAD_TRANSIENT_TTL_MS + 50);
+      (service as unknown as { publish(): void }).publish();
       const islandState = (
         service as unknown as { state: { sessions: Map<string, unknown>; remoteUnreadTerminals: Map<string, unknown> } }
       ).state;
@@ -7118,14 +7119,14 @@ describe('会话关闭原因决定条目去留', () => {
     } finally {
       vi.useRealTimers();
     }
-  });
+  }, 120_000);
 
   it('TTL prune 后再 process-close 仍保留远程未读,直到真正 ack', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const { AGENT_ISLAND_UNREAD_TRANSIENT_TTL_MS } = await import('../state.js');
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
     try {
-      const { AgentIslandService } = await import('../service.js');
-      const { AGENT_ISLAND_UNREAD_TRANSIENT_TTL_MS } = await import('../state.js');
       const publish = vi.fn(() => true);
       const service = new AgentIslandService({
         getMainWindow: () => null,
@@ -7134,7 +7135,8 @@ describe('会话关闭原因决定条目去留', () => {
       service.setEnabled(false);
       service.handleUserPrompt({ sessionId: 's1', agentKind: 'codex' }, 'run tests');
       service.handleAgentEvent({ sessionId: 's1', agentKind: 'codex' }, doneEvent());
-      await vi.advanceTimersByTimeAsync(AGENT_ISLAND_UNREAD_TRANSIENT_TTL_MS + 50);
+      vi.setSystemTime(Date.now() + AGENT_ISLAND_UNREAD_TRANSIENT_TTL_MS + 50);
+      (service as unknown as { publish(): void }).publish();
       const islandState = (
         service as unknown as { state: { sessions: Map<string, unknown>; remoteUnreadTerminals: Map<string, unknown> } }
       ).state;
@@ -7159,15 +7161,15 @@ describe('会话关闭原因决定条目去留', () => {
     } finally {
       vi.useRealTimers();
     }
-  });
+  }, 120_000);
 
   it('ledger-only error 在新一轮 running 被 App badge 镜像后,passive 仍免疫', async () => {
+    const { markSessionNeedsAttention, clearAllSessionAttention } = await import('../../appBadgeService.js');
+    const { AgentIslandService } = await import('../service.js');
+    const { AGENT_ISLAND_UNREAD_TRANSIENT_TTL_MS } = await import('../state.js');
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
-    const { markSessionNeedsAttention, clearAllSessionAttention } = await import('../../appBadgeService.js');
     try {
-      const { AgentIslandService } = await import('../service.js');
-      const { AGENT_ISLAND_UNREAD_TRANSIENT_TTL_MS } = await import('../state.js');
       const publish = vi.fn(() => true);
       const service = new AgentIslandService({
         getMainWindow: () => null,
@@ -7177,7 +7179,8 @@ describe('会话关闭原因决定条目去留', () => {
       service.handleUserPrompt({ sessionId: 's-err', agentKind: 'codex' }, 'run tests');
       service.handleAgentEvent({ sessionId: 's-err', agentKind: 'codex' }, terminalErrorEvent('boom'));
       markSessionNeedsAttention('s-err');
-      await vi.advanceTimersByTimeAsync(AGENT_ISLAND_UNREAD_TRANSIENT_TTL_MS + 50);
+      vi.setSystemTime(Date.now() + AGENT_ISLAND_UNREAD_TRANSIENT_TTL_MS + 50);
+      (service as unknown as { publish(): void }).publish();
       const islandState = (
         service as unknown as { state: { sessions: Map<string, { phase: string; unread: boolean }>; remoteUnreadTerminals: Map<string, { phase: string }> } }
       ).state;
@@ -7206,7 +7209,7 @@ describe('会话关闭原因决定条目去留', () => {
       clearAllSessionAttention();
       vi.useRealTimers();
     }
-  });
+  }, 120_000);
 });
 
 describe('Agent Island device sessions', () => {

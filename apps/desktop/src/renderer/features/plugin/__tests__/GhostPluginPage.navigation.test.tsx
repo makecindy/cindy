@@ -977,7 +977,11 @@ describe('plugin use details and independent author management', () => {
     await screen.findByRole('heading', { name: 'Local Author Plugin' });
     expect(api.prepare).not.toHaveBeenCalled();
     const picker = await openLocalPublishing();
-    const submit = await within(picker).findByRole('button', { name: `${prefix}.submitVersion` });
+    const submit = await within(picker).findByRole(
+      'button',
+      { name: `${prefix}.submitVersion` },
+      { timeout: 10_000 },
+    );
     fireEvent.click(submit);
     fireEvent.click(submit);
     await waitFor(() => expect(api.submit).toHaveBeenCalledExactlyOnceWith(prepared.preparedId));

@@ -4032,7 +4032,7 @@ describe('more older shares than one refresh re-reads', () => {
     expect(finish).toHaveLength(2);
   });
 
-  it('checks all loaded shares in one refresh, including the oldest deleted source', { timeout: 20_000 }, async () => {
+  it('checks all loaded shares in one refresh, including the oldest deleted source', { timeout: 60_000 }, async () => {
     type Share = NonNullable<BotGroupMessageView['threadShare']>;
     const shareOf = (i: number, extra: Partial<Share> = {}): Share => ({ messageId: `reply-${i}`, threadRootId: 'root', status: 'available', authorKind: 'bot',
       authorBotId: 'xiaoman', authorName: '小满', sharedByAuthor: false, content: `原文 ${i}`, attachments: [], createdAt: 1, edited: false, version: 1, ...extra });

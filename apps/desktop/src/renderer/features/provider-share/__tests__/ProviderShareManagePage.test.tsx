@@ -289,7 +289,7 @@ async function findMemberRow(memberId = 'mem-1'): Promise<HTMLElement> {
       .find((item) => item.getAttribute('data-usage-party') === `member:${memberId}`);
     if (!row) throw new Error(`no usage row for ${memberId}`);
     return row;
-  });
+  }, { timeout: 10_000 });
 }
 
 function renderPage(

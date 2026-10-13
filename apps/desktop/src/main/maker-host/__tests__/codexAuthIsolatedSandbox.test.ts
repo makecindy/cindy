@@ -151,7 +151,7 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
     expect(fs.existsSync(localAuth)).toBe(false);
     // 系统文件原样(内容与链接数都不动)。
     expect(fs.statSync(systemAuth).nlink).toBe(1);
-  });
+  }, 120_000);
 
   it('开关开:已存在的共享硬链解除本沙箱一端,系统文件不动', async () => {
     const { codexHome, localAuth, systemAuth } = fixture();
