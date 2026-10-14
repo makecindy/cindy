@@ -321,6 +321,7 @@ function PresetDropdown({
   locale,
   open,
   onOpenChange,
+  portalContainer,
 }: {
   presets: ProviderPreset[];
   appliedPreset: string | null;
@@ -330,6 +331,7 @@ function PresetDropdown({
   locale: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  portalContainer: HTMLDivElement | null;
 }) {
   const selected = presets.find((p) => p.id === appliedPreset) ?? null;
   return (
@@ -357,6 +359,7 @@ function PresetDropdown({
         </button>
       </PopoverTrigger>
       <PopoverContent
+        portalContainer={portalContainer}
         side="bottom"
         align="start"
         sideOffset={6}
@@ -370,7 +373,8 @@ function PresetDropdown({
           // z-[10001]: 宿主弹窗 overlay 是 z-[10000],默认 z-50 会被盖住。
           // 底/hover 用 cmd-palette 菜单 token 对——settings-menu-bg-hover 在深色下
           // 与卡片底同色,hover 会看不出来。
-          'z-[10001] max-h-[280px] w-[var(--radix-popover-trigger-width)] overflow-y-auto rounded-xl p-2',
+          'z-[10001] max-h-[min(280px,var(--radix-popover-content-available-height))] w-[var(--radix-popover-trigger-width)] overflow-y-auto overscroll-contain rounded-xl p-2',
+          '[&::-webkit-scrollbar-thumb]:bg-[var(--msg-scrollbar)]',
           'border border-[var(--cmd-palette-border)]',
           'bg-[var(--cmd-palette-bg)] shadow-[var(--shadow-menu)]',
         )}
@@ -2085,6 +2089,7 @@ export function ProviderConnectionDialog({
             <div className="flex flex-col gap-2">
               <FieldLabel>{t('settings.providers.custom.presets.label')}</FieldLabel>
               <PresetDropdown
+                portalContainer={dialogPanelRef.current}
                 presets={presets}
                 appliedPreset={appliedPreset}
                 onApply={applyPreset}
