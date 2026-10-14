@@ -390,8 +390,8 @@ describe('ProviderConnectionDialog preset locale ownership', () => {
   });
 
   it.each([
-    ['settings.providers.custom.wireProtocol.piChat', 'openai-chat'],
-    ['settings.providers.custom.wireProtocol.piAnthropic', 'anthropic-messages'],
+    'settings.providers.custom.wireProtocol.piChat',
+    'settings.providers.custom.wireProtocol.piAnthropic',
   ] as const)(
     'hides %s for a bound PI preset and preserves its model override',
     async (buttonName) => {
