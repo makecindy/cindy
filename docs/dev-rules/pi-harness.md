@@ -443,8 +443,33 @@ Pi CLI 管理入口、内核自更新与旧工具兼容的执行边界见
       `bypassPermissions` 的契约测试已补；Pi bridge 的 auto allow/deny 也用真二进制覆盖。
 - [x] **resume 边界**:已用 Pi v0.82.1 真二进制创建 JSONL，再由 v0.83.0 恢复；
       invalid resume 在适配层先校验文件存在并遵守 CAS，precise rewind/fork 后 resume 有真二进制测试。
-- [x] **prompt cache**:Pi 子进程默认注入 `PI_CACHE_RETENTION=long`；不支持的 provider
-      忽略该选项。已用 ChatGPT 订阅实例确认 `cacheRead` 命中会端到端落库与展示。
+- [x] **prompt cache**:Pi 子进程默认注入 `PI_CACHE_RETENTION=long`；明确拒收该可选字段的
+      provider 由 compat 自愈学习并关掉该字段(见下条)。已用 ChatGPT 订阅实例确认 `cacheRead`
+      命中会端到端落库与展示。
+- [x] **provider compat 自愈**:上游以 `invalid_request_error` 明确拒收某个可选请求字段时
+      (已知形态:Console Go / OpenCode Zen-Go 的 GLM 上游拒收 `prompt_cache_retention`,提示改用
+      `prompt_cache_options`;自定义政企/内网网关只拒 `prompt_cache_key`
+      ，见 issue #5878),Pi translator 打稳定 reason `unsupported-request-option`。
+      仅接受被点名字段与明确拒收关系；普通 400、鉴权、限流、其他参数错误不学习。
+      Desktop 先将 `supportsLongCacheRetention: false` 原子记入
+      `<userData>/pi-native-compat-overrides.json` 的 `routes` 表；键为 JSON 数组
+      `[连接 ID, wire 模型 ID, SHA256(协议 + 真实端点)]`，端点包含路径、端口、查询参数，
+      不保存原始 URL 或错误正文。连接、端点或协议变化均不复用旧记录；无身份不学习，
+      损坏文件保留原样且不授权恢复。未发布 #4791 的无端点记录无法精确归属，不自动套用。
+      当前运行时另持有启动/原生 registry 刷新成功时的应用快照；磁盘已学习不代表旧进程
+      已应用。成功落盘后仅退役空闲的旧实例，新进程重建 models.json 并校验同一路由已应用。
+      Pi 1.0.2 普通 URL 下 compat 会移除两字段，但 URL 含 api.openai.com 时 key 仍可发送；
+      因此既有 before_provider_request hook 按私有运行时规则的 provider/model/baseUrl 精确
+      删除这两个字段，其他路由保持原生行为。原生子代理冻结继承相同规则；刷新失败回滚
+      models/settings 与规则文件，不保留半套配置。
+      自动恢复只对本地 `source=desktop` Pi：整轮无文字/思考/工具调用或执行，原输入仍是
+      最新输入，实例/轮次未更换、未取消、未切路由且无外部恢复 owner。同一输入最多一次，
+      必须存在原生 user entry，使用原生分支重试以保持一条有效输入；缺失 entry 或应用确认
+      时直接失败，禁止追加重复输入。恢复后仍拒收正常报错，不循环、不自动扩展降级。
+      外部派单可学习并退役空闲旧实例，重试由原 owner 负责；原生子代理继承已有学习但不将
+      子错误归给父任务学习/重放。SSH 不消费本地记录；设备互联/手机控制本地桌面任务走同一
+      宿主路径，无新 IPC/UI。恢复只影响出错任务的空闲 Pi 实例，不重启应用、连接或其它任务。
+      删除精确记录并重新创建运行时可重新探测；无后台探测、无自动到期，避免恢复失败循环。
 
 ## 7. 上线后路线图(已与 Chris 对齐)
 

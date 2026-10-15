@@ -38,6 +38,7 @@ import {
   createContextOverflowRollover,
   isContextOverflowErrorData,
   isOversizedHistoryErrorData,
+  isUnsupportedRequestOptionErrorData,
 } from './contextOverflowRollover.js';
 import { isTerminalTurnErrorEvent } from './sessionTurnActivityTracker.js';
 import { botGroupRuntimeFailureCode } from './botGroupRuntimeFailure.js';
@@ -155,6 +156,7 @@ export function finishSessionTerminalEvent(
   const {
     event,
     attributedEvent,
+    broadcastEvent,
     eventAgentMeta,
     isContinuationBoundary,
     isPlannedUpgradeClose,
@@ -296,10 +298,13 @@ export function finishSessionTerminalEvent(
       !isPlannedUpgradeClose &&
       !isRemoteAuthRetry &&
       !isGatewayProxyTokenRecovery &&
-      !autoResumeSuppressesPersist &&
-      (isContextOverflowErrorData(attributedEvent.data) ||
-        isOversizedHistoryErrorData(attributedEvent.data))
-        ? (deps.contextOverflowRolloverHolder?.claim(session.id) ?? 'idle')
+      !autoResumeSuppressesPersist
+        ? (deps.contextOverflowRolloverHolder?.claim(session.id, {
+            instanceId: event.sessionInstanceId,
+            generation: event.sessionTurnGeneration,
+          }, isContextOverflowErrorData(attributedEvent.data)
+            || isOversizedHistoryErrorData(attributedEvent.data)
+            || isUnsupportedRequestOptionErrorData(attributedEvent.data)) ?? 'idle')
         : 'idle';
     const deferUnsuccessfulProductTurn = (): void => {
       if (terminalOwner) deps.deferUnsuccessfulProductTurn?.(terminalOwner);
@@ -327,6 +332,10 @@ export function finishSessionTerminalEvent(
     }
     if (overflowClaim === 'claimed') {
       const overflowErrorData = attributedEvent.data;
+      // Duplicate terminals can replace the session-indexed stash while this
+      // promise is pending. Keep this claim's own broadcast for failure.
+      const claimedBroadcast = deps.overflowSuppressedBroadcasts.get(session.id);
+      const ownedBroadcast = claimedBroadcast?.event === broadcastEvent ? claimedBroadcast : undefined;
       let overflowFailureSurfaced = false;
       const surfaceOverflowFailure = (): void => {
         if (overflowFailureSurfaced) return;
@@ -341,23 +350,29 @@ export function finishSessionTerminalEvent(
           overflowErrorPayload,
           eventAgentMeta,
         );
-        const stashed = deps.overflowSuppressedBroadcasts.get(session.id);
-        deps.overflowSuppressedBroadcasts.delete(session.id);
-        if (stashed) {
+        if (deps.overflowSuppressedBroadcasts.get(session.id)?.event === broadcastEvent) {
+          deps.overflowSuppressedBroadcasts.delete(session.id);
+        }
+        if (ownedBroadcast) {
           deps.broadcastToAllWindows(MAKER_PUSH.EVENT, {
-            ...stashed,
-            persistId: overflowPersistId ?? stashed.persistId,
+            ...ownedBroadcast,
+            persistId: overflowPersistId ?? ownedBroadcast.persistId,
           });
-          deps.handleAgentIslandEventAfterBroadcast(session, stashed.event);
+          deps.handleAgentIslandEventAfterBroadcast(session, ownedBroadcast.event);
         }
         onTurnErrorEvent(session.id, overflowErrorPayload, eventAgentMeta, overflowPersistId);
         notifyUnsuccessfulProductTurn();
       };
       void deps.contextOverflowRolloverHolder
-        ?.tryRecover(session.id, overflowErrorData)
+        ?.tryRecover(session.id, overflowErrorData, {
+          instanceId: event.sessionInstanceId,
+          generation: event.sessionTurnGeneration,
+        })
         .then((recovered) => {
           if (recovered) {
-            deps.overflowSuppressedBroadcasts.delete(session.id);
+            if (deps.overflowSuppressedBroadcasts.get(session.id)?.event === broadcastEvent) {
+              deps.overflowSuppressedBroadcasts.delete(session.id);
+            }
             return;
           }
           surfaceOverflowFailure();
@@ -371,6 +386,9 @@ export function finishSessionTerminalEvent(
         });
     } else if (overflowClaim === 'in-flight') {
       // 同一 turn 的重复终态 error：继续压住，避免污染历史。
+      if (deps.overflowSuppressedBroadcasts.get(session.id)?.event === broadcastEvent) {
+        deps.overflowSuppressedBroadcasts.delete(session.id);
+      }
       if (persistId) releaseReservedTurnErrorPersistId(session.id, persistId);
     } else if (
       event.type === 'error' &&
@@ -379,6 +397,20 @@ export function finishSessionTerminalEvent(
       !isGatewayProxyTokenRecovery &&
       !autoResumeSuppressesPersist
     ) {
+      // 投递层为 overflow/oversized/compat 终态错误压住了广播；走到这里说明没有 claim
+      // owner（rollover holder 未装配）会去 surface/丢弃它。补出广播，否则错误行写了
+      // 但用户看不到横幅，且 map 里的条目永不清理。
+      const stashed = deps.overflowSuppressedBroadcasts.get(session.id);
+      if (stashed) {
+        deps.overflowSuppressedBroadcasts.delete(session.id);
+        // 只补当前事件的广播：stash 按 session 索引，可能残留更早 turn 的条目（例如
+        // autoResume 压住、owner 路径不碰这个 map 的情形）。把过期事件盖着当前 persistId
+        // 播出去会让横幅文案与错误行对不上；过期条目直接丢弃（它自己的 owner 已负责过它）。
+        if (stashed.event === broadcastEvent) {
+          deps.broadcastToAllWindows(MAKER_PUSH.EVENT, stashed);
+          deps.handleAgentIslandEventAfterBroadcast(session, stashed.event);
+        }
+      }
       // 供应商组正在为这次失败换电脑：先不落库，换成了就丢掉，没换成再补落。登记期间到达的另一条不同错误
       // 不归这次暂存，照常落库。
       if (

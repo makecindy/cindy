@@ -2366,8 +2366,9 @@ describe('buildPiNativeProvidersFromConfigs', () => {
     );
     expect(providers).toHaveLength(1);
     expect(providers[0]).toMatchObject({ api, baseUrl: 'http://127.0.0.1:9999',
+      cacheIdentityBaseUrl: 'https://openrouter.ai/api/v1',
       headers: { 'x-cindy-pi-provider-id': 'openrouter-test', 'x-cindy-pi-session-token': '$CINDY_PI_SESSION_TOKEN' },
-      models: [{ id: 'google/gemini-test', baseUrl: 'http://127.0.0.1:9999' }],
+      models: [{ id: 'google/gemini-test', baseUrl: 'http://127.0.0.1:9999', cacheIdentityBaseUrl: 'https://openrouter.ai/api/v1' }],
     });
     expect(env).toEqual({});
   });

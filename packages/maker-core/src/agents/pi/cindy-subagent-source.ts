@@ -1036,6 +1036,14 @@ async function launchDurableRun(binary, tasks, runtime, taskId, mode, context, d
     try { chmodSync(permissionFile, 0o600); } catch (err) { /* best effort on Windows */ }
     mkdirSync(childConfigHome, { recursive: true, mode: 0o700 });
     copyFileSync(join(configHome, 'models.json'), join(childConfigHome, 'models.json'));
+    // Freeze the same learned rules as models.json for durable children.
+    const childCacheRules = join(childConfigHome, 'pi-cache-compatibility.json');
+    try {
+      copyFileSync(join(configHome, 'pi-cache-compatibility.json'), childCacheRules);
+      chmodSync(childCacheRules, 0o600);
+    } catch (error) {
+      if (!error || error.code !== 'ENOENT') throw error;
+    }
     // Parent configHome is ephemeral. Durable children outlive it, so Pi native
     // grep (PI_CODING_AGENT_DIR/bin) and the Cindy find override need a private copy.
     copyManagedRipgrep(configHome, childConfigHome);

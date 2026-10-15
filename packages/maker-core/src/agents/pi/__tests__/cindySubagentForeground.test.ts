@@ -154,6 +154,8 @@ describe('Cindy PI Subagent foreground durable path', () => {
     'waits for the runner and forwards Ask approval through the parent UI',
     async () => {
     const f = await fixture();
+    const cacheRules = [{ provider: 'fixture', id: 'fixture-model', baseUrl: 'https://fixture.invalid/v1' }];
+    await writeFile(path.join(f.configHome, 'pi-cache-compatibility.json'), JSON.stringify(cacheRules));
     const previous = { ...process.env };
     Object.assign(process.env, {
       [CINDY_SUBAGENT_ENV.binary]: process.execPath,
@@ -208,6 +210,7 @@ describe('Cindy PI Subagent foreground durable path', () => {
         `foreground approved result:${expectedRouteToken}`,
       );
       const [runId] = await readdir(f.runRoot);
+      expect(JSON.parse(await readFile(path.join(f.runRoot, runId, 'pi-home', 'pi-cache-compatibility.json'), 'utf8'))).toEqual(cacheRules);
       const configText = await readFile(path.join(f.runRoot, runId, 'config.json'), 'utf8');
       const config = JSON.parse(configText);
       expect(config.tasks[0]).toMatchObject({

@@ -1,5 +1,6 @@
 import {
   CodexResumePreparationBlockedError,
+  PI_CACHE_RECOVERY_EXPECTATION,
   AUTO_REVIEW_SOURCE_CONTENT,
   AUTO_REVIEW_USER_INTENT,
   INHERITED_CAPABILITY_SELECTION,
@@ -734,6 +735,19 @@ describe('maker SEND transaction', () => {
     });
     expect(deps.readPiUserEntry).toHaveBeenCalledWith('session-1', 'plain-client');
     expect(vi.mocked(session.send).mock.lastCall?.[1]?.retryTranscriptUserEntryId).toBe('pi-user-entry');
+  });
+
+  it('relinks the existing user row when cache recovery accepts a replacement native entry', async () => {
+    const { deps, session } = createDeps();
+    session.agentKind = 'pi';
+    deps.readPiUserEntry = vi.fn(async () => 'old-entry');
+    const transaction = createMakerSendTransaction(deps);
+    await transaction.sendToAgentAccepted('session-1', { type: 'user', content: 'Original input' }, undefined, {
+      retryUserClientId: 'original-client',
+      [PI_CACHE_RECOVERY_EXPECTATION]: { providerId: 'strict', modelId: 'model', wireModelId: 'model', routeKey: 'a'.repeat(64), applied: false },
+    });
+    expect(deps.linkPiUserEntry).toHaveBeenCalledExactlyOnceWith('session-1', 'original-client', 'pi-user-entry');
+    expect(deps.createDbMessage).not.toHaveBeenCalled();
   });
 
   it('threads scheduler origin into session.send opts and persisted agentMeta', async () => {
