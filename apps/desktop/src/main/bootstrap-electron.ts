@@ -4568,7 +4568,8 @@ const createWindow = () => {
       return;
     }
     // Windows and Linux ask once on first close, then reuse the persisted choice.
-    // Hyprland has no native minimize surface, so it uses the Linux tray.
+    // The keep-running action follows each platform: tray on Windows, minimize on
+    // Linux X11, hide-to-tray on Linux Wayland (compositors ignore minimize).
     event.preventDefault();
     if (process.platform === 'win32') {
       const behavior = readWindowBehaviorSettings().windowsCloseBehavior;

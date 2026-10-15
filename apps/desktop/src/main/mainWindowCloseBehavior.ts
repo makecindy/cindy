@@ -16,19 +16,20 @@ interface MinimizableWindow extends LinuxCloseBehaviorWindow, WindowsTrayWindow 
   ): unknown;
 }
 
-/** Hyprland has no native minimize surface, including for XWayland windows. */
-export function isHyprlandDesktop(env: NodeJS.ProcessEnv): boolean {
-  const desktop =
-    env.XDG_CURRENT_DESKTOP?.trim() ||
-    env.XDG_SESSION_DESKTOP?.trim() ||
-    env.DESKTOP_SESSION?.trim();
-  if (desktop) {
-    return desktop.split(':').some((name) => name.trim().toLowerCase() === 'hyprland');
-  }
-  return Boolean(env.HYPRLAND_INSTANCE_SIGNATURE?.trim());
+/**
+ * True when running under a Wayland session. `XDG_SESSION_TYPE` is the primary
+ * signal; a set `WAYLAND_DISPLAY` covers display managers that leave it unset.
+ */
+export function isWaylandSession(env: NodeJS.ProcessEnv): boolean {
+  if (env.XDG_SESSION_TYPE) return env.XDG_SESSION_TYPE === 'wayland';
+  return Boolean(env.WAYLAND_DISPLAY);
 }
 
-/** Keep all main-window minimize entry points on the same compositor policy. */
+/**
+ * Keep all main-window minimize entry points on the same compositor policy:
+ * Wayland compositors ignore toplevel minimize requests, so the main window
+ * hides to tray there; every other platform and window keeps native minimize.
+ */
 export function minimizeDesktopWindow(
   window: MinimizableWindow,
   options: {
@@ -40,7 +41,7 @@ export function minimizeDesktopWindow(
   },
 ): void {
   cancelPendingWindowHide(window);
-  if (options.platform !== 'linux' || !options.isMainWindow || !isHyprlandDesktop(options.env)) {
+  if (options.platform !== 'linux' || !options.isMainWindow || !isWaylandSession(options.env)) {
     window.minimize();
     return;
   }
