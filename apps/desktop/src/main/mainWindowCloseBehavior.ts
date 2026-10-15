@@ -18,10 +18,14 @@ interface MinimizableWindow extends LinuxCloseBehaviorWindow, WindowsTrayWindow 
 
 /**
  * True when running under a Wayland session. `XDG_SESSION_TYPE` is the primary
- * signal; a set `WAYLAND_DISPLAY` covers display managers that leave it unset.
+ * signal, but compositors started from a TTY (Hyprland, Sway) can leave it at
+ * `tty`, so any value other than an explicit `x11` falls back to a set
+ * `WAYLAND_DISPLAY` — the same independent positive signal as
+ * remote-desktop/waylandCapture.ts `isWaylandDesktop`.
  */
 export function isWaylandSession(env: NodeJS.ProcessEnv): boolean {
-  if (env.XDG_SESSION_TYPE) return env.XDG_SESSION_TYPE === 'wayland';
+  if (env.XDG_SESSION_TYPE === 'x11') return false;
+  if (env.XDG_SESSION_TYPE === 'wayland') return true;
   return Boolean(env.WAYLAND_DISPLAY);
 }
 

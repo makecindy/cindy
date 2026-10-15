@@ -228,18 +228,21 @@ describe('main window close behavior prompt', () => {
   it.each([
     ['wayland session', { XDG_SESSION_TYPE: 'wayland' }],
     ['wayland display fallback', { WAYLAND_DISPLAY: 'wayland-0' }],
+    ['tty session on a wayland compositor', { XDG_SESSION_TYPE: 'tty', WAYLAND_DISPLAY: 'wayland-1' }],
+    ['unclassified session on a wayland compositor', { XDG_SESSION_TYPE: 'mir', WAYLAND_DISPLAY: 'wayland-1' }],
   ])('detects a %s', (_label, env) => {
     expect(isWaylandSession(env)).toBe(true);
   });
 
   it.each([
     ['x11 session', { XDG_SESSION_TYPE: 'x11' }],
+    ['tty session without a wayland display', { XDG_SESSION_TYPE: 'tty' }],
     ['session type unset without wayland display', {}],
   ])('does not treat %s as Wayland', (_label, env) => {
     expect(isWaylandSession(env)).toBe(false);
   });
 
-  it('prefers XDG_SESSION_TYPE over WAYLAND_DISPLAY when both are set', () => {
+  it('prefers an explicit x11 session over WAYLAND_DISPLAY when both are set', () => {
     expect(
       isWaylandSession({ XDG_SESSION_TYPE: 'x11', WAYLAND_DISPLAY: 'wayland-0' }),
     ).toBe(false);
