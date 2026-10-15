@@ -1511,6 +1511,18 @@
         "cancel": "Keep Existing Key",
         "trust": "Trust New Key and Reconnect",
         "updateFailed": "Could not update host trust. The connection details or saved key may have changed, or the trust file could not be written. Reconnect to refresh the fingerprints and check the file permissions."
+      },
+      "authFailure": {
+        "identitySeparator": ", ",
+        "identitySet": " (IdentityFile: {{identities}})",
+        "cause": " (ssh: {{cause}})",
+        "agentNotLoaded": "Authentication failed for {{target}}: none of the configured identities{{identitySet}} is currently loaded in ssh-agent, so no key was offered. Load it with `ssh-add`, or re-add this host with the identity that is loaded.",
+        "agentSignFailed": "Authentication failed for {{target}}: ssh-agent could not sign with the configured identity{{identitySet}} (agent locked, hardware-key confirmation refused, or signer error). Unlock the agent or retry the key confirmation, then try again.",
+        "agentSignedNotAccepted": "Authentication failed for {{target}}: the remote was willing to accept a key from the configured identity set{{identitySet}} and ssh-agent signed with it, but authentication still did not complete. The server may require an additional authentication method or may have rejected the signature; check the server’s sshd log.",
+        "agentPinned": "Authentication failed for {{target}} with the configured identity set{{identitySet}}. Verify that identity’s public key is installed on the remote, re-add this host with the right identity, or load the matching key with `ssh-add` if it is not in the agent.",
+        "agentUnpinned": "SSH agent has no key the remote accepts. Run `{{command}}` from your terminal to install your pubkey, or re-add this host with “Identity file” auth.",
+        "keyRejected": "The configured identity file{{identitySet}} was rejected by the remote. Verify it is the right key for {{target}}, or run `{{command}}` with its matching public key.",
+        "generic": "Authentication failed connecting as {{target}}."
       }
     },
     "appearance": {

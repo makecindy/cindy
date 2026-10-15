@@ -1488,6 +1488,18 @@
         "cancel": "保留原密钥",
         "trust": "信任新密钥并重连",
         "updateFailed": "无法更新主机信任记录。连接信息或已存密钥可能已变化，也可能无法写入记录文件。请重新连接以刷新指纹，并检查文件权限"
+      },
+      "authFailure": {
+        "identitySeparator": "、",
+        "identitySet": "（IdentityFile：{{identities}}）",
+        "cause": "（ssh：{{cause}}）",
+        "agentNotLoaded": "{{target}} 认证失败：配置的身份{{identitySet}}都没有加载到 ssh-agent，因此没有提供任何密钥。请用 `ssh-add` 加载，或用已加载的身份重新添加这台主机。",
+        "agentSignFailed": "{{target}} 认证失败：ssh-agent 无法用配置的身份{{identitySet}}签名（ssh-agent 已锁定、硬件密钥确认被拒绝，或签名程序出错）。请解锁 ssh-agent 或重新确认密钥后再试。",
+        "agentSignedNotAccepted": "{{target}} 认证失败：远端表示可以接受配置的身份集合{{identitySet}}中的一把密钥，ssh-agent 也已用它签名，但认证仍未完成。服务器可能要求额外的认证方式，或拒绝了该签名；请查看服务器的 sshd 日志。",
+        "agentPinned": "使用配置的身份集合{{identitySet}}连接 {{target}} 时认证失败。请确认该身份的公钥已安装到远端，或用正确的身份重新添加这台主机；如果对应私钥不在 ssh-agent 中，请用 `ssh-add` 加载。",
+        "agentUnpinned": "ssh-agent 中没有远端接受的密钥。请在终端运行 `{{command}}` 安装你的公钥，或改用「私钥文件」认证重新添加这台主机。",
+        "keyRejected": "配置的私钥文件{{identitySet}}被远端拒绝。请确认它是 {{target}} 对应的密钥，或用与它匹配的公钥运行 `{{command}}`。",
+        "generic": "以 {{target}} 连接时认证失败。"
       }
     },
     "appearance": {

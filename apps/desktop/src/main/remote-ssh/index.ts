@@ -40,6 +40,7 @@ import {
   pushRemoteCodexAuth,
   expandHome,
   effectiveAuthenticationFingerprint,
+  redactAuthFailureDetail,
   redactSshSensitiveText,
   MANAGED_CONFIG_CONCURRENT_MODIFICATION_CODE,
   MANAGED_CONFIG_OWNERSHIP_REQUIRED_CODE,
@@ -47,6 +48,7 @@ import {
   FileHostKeyStore,
   RemoteHost,
   type AddHostInput,
+  type AuthFailureDetail,
   type CodexAuthState,
   type HostConfig,
   type HostSnapshot,
@@ -836,9 +838,11 @@ type RendererHostConfig = Pick<HostConfig,
   identityFileName?: string;
 };
 
-export type HostSnapshotWithPrefs = Omit<HostSnapshot, 'config' | 'lastError'> & {
+export type HostSnapshotWithPrefs = Omit<HostSnapshot, 'config' | 'lastError' | 'authFailure'> & {
   config: RendererHostConfig;
   lastError?: string;
+  /** Structured auth failure for renderer-side i18n; redacted like lastError. */
+  authFailure?: AuthFailureDetail;
   autoConnect: boolean;
   /** 未开启 / 未配置 → null。 */
   agentProxy: SshHostAgentProxyPref | null;
@@ -885,6 +889,9 @@ function withPrefs(snapshot: HostSnapshot): HostSnapshotWithPrefs {
     ...(snapshot.lastError
       ? { lastError: redactHostLocalPaths(snapshot.config, snapshot.lastError) }
       : {}),
+    authFailure: snapshot.authFailure
+      ? redactAuthFailureDetail(snapshot.config, snapshot.authFailure)
+      : undefined,
     autoConnect: getSshHostAutoConnect(id),
     agentProxy: getSshHostAgentProxy(id),
     agentProxyTunnel: getAgentProxyTunnelState(id),

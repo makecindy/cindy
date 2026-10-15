@@ -180,7 +180,9 @@ export interface ClassifiedSshError {
  * best-effort 分类 deps.ensureReady / host.exec 抛出的错误。
  * 认证失败的 message 内含 authFailureHint 的可操作提示（如 ssh-copy-id 指引），
  * 去掉 main-only 凭证路径后透传进 hint 让 agent 转告用户——认证失败是确定性的，
- * 不要重试。
+ * 不要重试。语言策略：hint 面向模型而非界面，提示正文保持 authFailureHint 的
+ * 英文正本（命令、IdentityFile 与 ssh2 原因原样保留），由模型按用户语言转述；
+ * 界面上的多语言文案由 renderer 用结构化的 HostSnapshot.authFailure 渲染（#4201）。
  */
 export function classifySshError(
   err: unknown,

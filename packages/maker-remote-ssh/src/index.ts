@@ -6,7 +6,14 @@
  * claude/codex over an exec channel + session ingest.
  */
 
-export { RemoteHost, isAuthFailure, authFailureHint, DEFAULT_REMOTE_FORWARD_PORT_BASE } from './RemoteHost.js';
+export {
+  RemoteHost,
+  isAuthFailure,
+  authFailureHint,
+  authFailureDetail,
+  formatAuthFailureHint,
+  DEFAULT_REMOTE_FORWARD_PORT_BASE,
+} from './RemoteHost.js';
 export type {
   RemoteHostDeps,
   StatusListener,
@@ -148,6 +155,8 @@ export {
 
 export type {
   AddHostInput,
+  AuthFailureDetail,
+  AuthFailureKind,
   AuthMethod,
   HostConfig,
   HostSnapshot,
@@ -156,4 +165,4 @@ export type {
   SshAuthenticationMetadata,
 } from './types.js';
 
-export { redactSshSensitiveText } from './sshRedaction.js';
+export { redactAuthFailureDetail, redactSshSensitiveText } from './sshRedaction.js';

@@ -1488,6 +1488,18 @@
         "cancel": "保留原金鑰",
         "trust": "信任新金鑰並重新連線",
         "updateFailed": "無法更新主機信任記錄。連線資訊或已存金鑰可能已變更，也可能無法寫入記錄檔。請重新連線以更新指紋，並檢查檔案權限"
+      },
+      "authFailure": {
+        "identitySeparator": "、",
+        "identitySet": "（IdentityFile：{{identities}}）",
+        "cause": "（ssh：{{cause}}）",
+        "agentNotLoaded": "{{target}} 認證失敗：設定的身分{{identitySet}}都沒有載入到 ssh-agent，因此沒有提供任何金鑰。請用 `ssh-add` 載入，或用已載入的身分重新新增這台主機。",
+        "agentSignFailed": "{{target}} 認證失敗：ssh-agent 無法用設定的身分{{identitySet}}簽章（ssh-agent 已鎖定、硬體金鑰確認被拒絕，或簽章程式出錯）。請解鎖 ssh-agent 或重新確認金鑰後再試。",
+        "agentSignedNotAccepted": "{{target}} 認證失敗：遠端表示可以接受設定的身分集合{{identitySet}}中的一把金鑰，ssh-agent 也已用它簽章，但認證仍未完成。伺服器可能要求額外的認證方式，或拒絕了該簽章；請查看伺服器的 sshd 日誌。",
+        "agentPinned": "使用設定的身分集合{{identitySet}}連線 {{target}} 時認證失敗。請確認該身分的公鑰已安裝到遠端，或用正確的身分重新新增這台主機；如果對應私鑰不在 ssh-agent 中，請用 `ssh-add` 載入。",
+        "agentUnpinned": "ssh-agent 中沒有遠端接受的金鑰。請在終端機執行 `{{command}}` 安裝你的公鑰，或改用「私鑰檔案」認證重新新增這台主機。",
+        "keyRejected": "設定的私鑰檔案{{identitySet}}被遠端拒絕。請確認它是 {{target}} 對應的金鑰，或用與它相符的公鑰執行 `{{command}}`。",
+        "generic": "以 {{target}} 連線時認證失敗。"
       }
     },
     "appearance": {

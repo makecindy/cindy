@@ -1488,6 +1488,18 @@
         "cancel": "기존 키 유지",
         "trust": "새 키 신뢰 및 다시 연결",
         "updateFailed": "호스트 신뢰 기록을 업데이트할 수 없습니다. 연결 정보나 저장된 키가 변경되었거나 기록 파일에 쓸 수 없을 수 있습니다. 다시 연결하여 지문을 새로 확인하고 파일 권한을 확인하세요."
+      },
+      "authFailure": {
+        "identitySeparator": ", ",
+        "identitySet": " (IdentityFile: {{identities}})",
+        "cause": " (ssh: {{cause}})",
+        "agentNotLoaded": "{{target}} 인증에 실패했습니다. 설정된 키{{identitySet}}가 하나도 ssh-agent 에 로드되어 있지 않아 제시된 키가 없습니다. `ssh-add` 로 로드하거나, 로드된 키로 이 호스트를 다시 추가하세요.",
+        "agentSignFailed": "{{target}} 인증에 실패했습니다. ssh-agent 가 설정된 키{{identitySet}}로 서명하지 못했습니다(ssh-agent 잠김, 하드웨어 키 확인 거부 또는 서명 오류). ssh-agent 잠금을 해제하거나 키 확인을 다시 한 뒤 재시도하세요.",
+        "agentSignedNotAccepted": "{{target}} 인증에 실패했습니다. 원격 서버가 설정된 키{{identitySet}} 중 하나를 받아들일 수 있다고 응답했고 ssh-agent 도 그 키로 서명했지만, 인증이 완료되지 않았습니다. 서버가 추가 인증 방식을 요구하거나 서명을 거부했을 수 있습니다. 서버의 sshd 로그를 확인하세요.",
+        "agentPinned": "설정된 키{{identitySet}}로 {{target}} 인증에 실패했습니다. 해당 키의 공개 키가 원격 서버에 설치되어 있는지 확인하거나 올바른 키로 이 호스트를 다시 추가하세요. 해당 키가 ssh-agent 에 없으면 `ssh-add` 로 로드하세요.",
+        "agentUnpinned": "ssh-agent 에 원격 서버가 허용하는 키가 없습니다. 터미널에서 `{{command}}` 를 실행해 공개 키를 설치하거나, “개인 키 파일” 인증으로 이 호스트를 다시 추가하세요.",
+        "keyRejected": "설정된 개인 키 파일{{identitySet}}이 원격 서버에서 거부되었습니다. {{target}} 에 맞는 키인지 확인하거나, 짝이 되는 공개 키로 `{{command}}` 를 실행하세요.",
+        "generic": "{{target}}(으)로 연결하는 중 인증에 실패했습니다."
       }
     },
     "appearance": {

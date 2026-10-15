@@ -1488,6 +1488,18 @@
         "cancel": "元の鍵を保持",
         "trust": "新しい鍵を信頼して再接続",
         "updateFailed": "ホストの信頼記録を更新できませんでした。接続情報や保存済みの鍵が変更されたか、記録ファイルに書き込めない可能性があります。再接続してフィンガープリントを再取得し、ファイルの権限を確認してください。"
+      },
+      "authFailure": {
+        "identitySeparator": "、",
+        "identitySet": " (IdentityFile: {{identities}})",
+        "cause": " (ssh: {{cause}})",
+        "agentNotLoaded": "{{target}} の認証に失敗しました。設定された鍵{{identitySet}}はいずれも ssh-agent に登録されていないため、鍵が提示されませんでした。`ssh-add` で登録するか、登録済みの鍵でこのホストを追加し直してください。",
+        "agentSignFailed": "{{target}} の認証に失敗しました。ssh-agent が設定された鍵{{identitySet}}で署名できませんでした (ssh-agent のロック、ハードウェアキーの確認拒否、または署名処理のエラー)。ssh-agent のロックを解除するか、鍵の確認をやり直してから再試行してください。",
+        "agentSignedNotAccepted": "{{target}} の認証に失敗しました。リモートは設定された鍵{{identitySet}}のうち 1 本を受け入れ可能と応答し、ssh-agent もその鍵で署名しましたが、認証は完了しませんでした。サーバーが追加の認証方式を要求しているか、署名を拒否した可能性があります。サーバーの sshd ログを確認してください。",
+        "agentPinned": "設定された鍵{{identitySet}}で {{target}} の認証に失敗しました。その鍵の公開鍵がリモートに登録されているか確認するか、正しい鍵でこのホストを追加し直してください。対応する鍵が ssh-agent にない場合は `ssh-add` で登録してください。",
+        "agentUnpinned": "ssh-agent にリモートが受け入れる鍵がありません。ターミナルで `{{command}}` を実行して公開鍵をインストールするか、「秘密鍵ファイル」認証でこのホストを追加し直してください。",
+        "keyRejected": "設定された秘密鍵ファイル{{identitySet}}がリモートに拒否されました。{{target}} 用の正しい鍵か確認するか、対応する公開鍵を指定して `{{command}}` を実行してください。",
+        "generic": "{{target}} として接続する際に認証に失敗しました。"
       }
     },
     "appearance": {

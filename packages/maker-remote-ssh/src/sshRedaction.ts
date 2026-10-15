@@ -1,4 +1,5 @@
 import { previewAgentEndpoint } from './sshAuthentication.js';
+import type { AuthFailureDetail } from './types.js';
 
 interface SensitiveSshConfig {
   identityFile?: string;
@@ -28,6 +29,24 @@ export function redactSshSensitiveText(
     redacted = redacted.split(value).join(replacement);
   }
   return redacted;
+}
+
+/**
+ * `redactSshSensitiveText` applied field by field to a structured auth failure
+ * before it crosses IPC, so it is redacted exactly like the `lastError` text
+ * it mirrors (#4201).
+ */
+export function redactAuthFailureDetail(
+  config: SensitiveSshConfig,
+  detail: AuthFailureDetail,
+): AuthFailureDetail {
+  const redact = (value: string): string => redactSshSensitiveText(config, value);
+  return {
+    ...detail,
+    identities: detail.identities.map(redact),
+    ...(detail.command !== undefined ? { command: redact(detail.command) } : {}),
+    ...(detail.cause !== undefined ? { cause: redact(detail.cause) } : {}),
+  };
 }
 
 function credentialReplacements(

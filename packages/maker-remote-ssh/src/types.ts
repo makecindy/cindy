@@ -79,11 +79,54 @@ export interface HostKeyMismatch {
   presented: string;
 }
 
+/**
+ * Which auth-failure explanation applies. Chosen from local facts only (auth
+ * shape + what the filtered agent recorded), never from server-provided text.
+ *  - `agent-not-loaded`: pinned agent, none of the pinned keys was in the agent
+ *  - `agent-sign-failed`: pinned agent, the agent failed to sign (local problem)
+ *  - `agent-signed-not-accepted`: pinned agent signed after the server said it
+ *    would accept that key, yet authentication still did not complete
+ *  - `agent-pinned`: pinned agent, outcome unknown → neutral wording
+ *  - `agent-unpinned`: unfiltered agent → install the pubkey with ssh-copy-id
+ *  - `key-rejected`: identity-file auth was rejected
+ *  - `generic`: any other auth shape
+ */
+export type AuthFailureKind =
+  | 'agent-not-loaded'
+  | 'agent-sign-failed'
+  | 'agent-signed-not-accepted'
+  | 'agent-pinned'
+  | 'agent-unpinned'
+  | 'key-rejected'
+  | 'generic';
+
+/**
+ * Structured form of `authFailureHint()` so the renderer can localize the
+ * explanation (#4201). `lastError` keeps the canonical English text for logs,
+ * failure classification (`isAuthFailure`) and the cindy_ssh MCP hint.
+ */
+export interface AuthFailureDetail {
+  kind: AuthFailureKind;
+  user: string;
+  hostname: string;
+  /**
+   * Display labels of the identities the attempt was limited to (`~/.ssh/x`
+   * or a basename; never a raw absolute path). Empty when none is known.
+   */
+  identities: string[];
+  /** Shell command the user can run. English by design (it is a command). */
+  command?: string;
+  /** Underlying ssh2 failure text, verbatim (library text, English). */
+  cause?: string;
+}
+
 /** Snapshot of a host's runtime state for renderer. */
 export interface HostSnapshot {
   config: HostConfig;
   status: RemoteStatus;
   lastError?: string;
+  /** Present only while `lastError` is an auth-failure hint built from it. */
+  authFailure?: AuthFailureDetail;
   hostKeyMismatch?: HostKeyMismatch;
   /**
    * Human-readable label for the credential that succeeded on the most

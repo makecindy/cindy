@@ -103,6 +103,8 @@ type RemoteHostSnapshot = {
   };
   status: import('@cindy/maker-remote-ssh').RemoteStatus;
   lastError?: string;
+  /** Main 投影的结构化认证失败（已脱敏），renderer 按语言渲染。 */
+  authFailure?: import('@cindy/maker-remote-ssh').AuthFailureDetail;
   hostKeyMismatch?: import('@cindy/maker-remote-ssh').HostSnapshot['hostKeyMismatch'];
   lastAuthLabel?: string;
   statusChangedAt: number;

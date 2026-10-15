@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { previewAgentEndpoint } from '../sshAuthentication.js';
-import { redactSshSensitiveText } from '../sshRedaction.js';
+import { redactAuthFailureDetail, redactSshSensitiveText } from '../sshRedaction.js';
 import type { HostConfig } from '../types.js';
 
 const originalAgent = process.env.SSH_AUTH_SOCK;
@@ -73,5 +73,38 @@ describe('redactSshSensitiveText', () => {
       .toBe('ordinary text');
     expect(redactSshSensitiveText(config(''), 'ordinary text'))
       .toBe('ordinary text');
+  });
+});
+
+describe('redactAuthFailureDetail (#4201)', () => {
+  it('redacts every string field the same way as the lastError text, leaving kind/user/host intact', () => {
+    const cfg = config();
+    const detail = redactAuthFailureDetail(cfg, {
+      kind: 'key-rejected',
+      user: 'developer',
+      hostname: 'lab',
+      identities: ['/private/tmp/agent/identity', 'id_other'],
+      command: 'ssh-copy-id -i /private/tmp/agent/identity.pub developer@lab',
+      cause: 'failed reading /private/tmp/agent/identity',
+    });
+    expect(detail).toEqual({
+      kind: 'key-rejected',
+      user: 'developer',
+      hostname: 'lab',
+      identities: ['<identity-file>', 'id_other'],
+      command: 'ssh-copy-id -i <identity-file> developer@lab',
+      cause: 'failed reading <identity-file>',
+    });
+  });
+
+  it('does not invent optional fields', () => {
+    const detail = redactAuthFailureDetail(config(), {
+      kind: 'agent-pinned',
+      user: 'developer',
+      hostname: 'lab',
+      identities: [],
+    });
+    expect(detail).not.toHaveProperty('command');
+    expect(detail).not.toHaveProperty('cause');
   });
 });
